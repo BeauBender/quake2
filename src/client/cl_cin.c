@@ -328,6 +328,7 @@ SCR_ReadNextFrame(void)
 	byte *pic;
 	cblock_t in, huf1;
 	int start, end, count;
+	long long bytes;
 
 	/* read the next frame */
 	r = FS_FRead(&command, 4, 1, cl.cinematic_file);
@@ -375,14 +376,16 @@ SCR_ReadNextFrame(void)
 	end = (cl.cinematicframe + 1) * cin.s_rate / 14;
 	count = end - start;
 
-	if (count < 0 || (long long)count * cin.s_width * cin.s_channels > (long long)sizeof(samples))
+	bytes = (long long)count * cin.s_width * cin.s_channels;
+
+	if (count < 0 || bytes < 0 || bytes > (long long)sizeof(samples))
 	{
 		Com_Printf("Cinematic: bad sound parameters (%i samples, width %i, %i channels)\n",
 				count, cin.s_width, cin.s_channels);
 		return NULL;
 	}
 
-	FS_Read(samples, count * cin.s_width * cin.s_channels,
+	FS_Read(samples, (int)bytes,
 			cl.cinematic_file);
 
 	if (cin.s_width == 2)
@@ -731,6 +734,17 @@ SCR_PlayCinematic(char *arg)
 		(long long)cin.width * (long long)cin.height > 16 * 1024 * 1024)
 	{
 		Com_Printf("Cinematic %s has bad size %i x %i\n", name, cin.width, cin.height);
+		SCR_StopCinematic();
+		SCR_FinishCinematic();
+		return;
+	}
+
+	if (cin.s_rate <= 0 || cin.s_rate > 22050 ||
+		(cin.s_width != 1 && cin.s_width != 2) ||
+		(cin.s_channels != 1 && cin.s_channels != 2))
+	{
+		Com_Printf("Cinematic %s has bad sound format (%i Hz, width %i, %i channels)\n",
+				name, cin.s_rate, cin.s_width, cin.s_channels);
 		SCR_StopCinematic();
 		SCR_FinishCinematic();
 		return;
