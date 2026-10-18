@@ -1314,14 +1314,12 @@ PM_UpdateUnderwaterSfx()
 	{
 		underwater = 1;
 		snd_is_underwater = 1;
-
 	}
 
 	if ((pm->waterlevel < 3) && underwater)
 	{
 		underwater = 0;
 		snd_is_underwater = 0;
-
 	}
 }
 #endif
