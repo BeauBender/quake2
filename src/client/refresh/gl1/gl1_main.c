@@ -1700,8 +1700,9 @@ RI_Init(void)
 	 * this requires mtex support, so may not work on VERY old GL ES 1.0 devices (1.1 is safe).
 	 * Watch out in low VRAM situations.
 	 *
-	 * 2.- Discard framebuffers / glClear before rendering every frame: explained above in
-	 * "Discard framebuffer".
+	 * 2.- Discard framebuffers / glClear before rendering every frame:
+	 * Tile rendering avoids clearing and reuploading framebuffer contents
+	 * on tile-based GPUs.
 	*/
 
 	Com_Printf("Optimizations target: ");
