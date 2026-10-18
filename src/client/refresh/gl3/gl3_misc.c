@@ -33,9 +33,6 @@ gl3image_t *gl3_particletexture; /* little dot for particles */
 void
 GL3_SetDefaultState(void)
 {
-	// in GLES this is only supported with an extension:
-	// https://www.khronos.org/registry/OpenGL/extensions/EXT/EXT_multisample_compatibility.txt
-	// but apparently it's just enabled by default if set in the context?
 	glDisable(GL_MULTISAMPLE);
 	glCullFace(GL_FRONT);
 
@@ -43,7 +40,6 @@ GL3_SetDefaultState(void)
 	glDisable(GL_CULL_FACE);
 	glDisable(GL_BLEND);
 
-	// in GLES GL_FILL is the only supported mode
 	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
 	// TODO: gl1_texturealphamode?

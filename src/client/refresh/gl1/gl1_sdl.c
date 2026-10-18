@@ -199,7 +199,7 @@ RI_UpdateGamma(void)
 // Hardware gamma / gamma ramps are no longer supported with SDL3.
 // There's no replacement and sdl2-compat won't support it either.
 // See https://github.com/libsdl-org/SDL/pull/6617 for the rational.
-// Gamma works with a lookup table when using SDL3 (or GLES1).
+// Gamma works with a lookup table when using SDL3.
 #ifndef GL1_GAMMATABLE
 	float gamma = (vid_gamma->value);
 

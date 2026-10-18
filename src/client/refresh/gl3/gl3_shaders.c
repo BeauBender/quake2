@@ -70,7 +70,7 @@ CompileShader(GLenum shaderType, const char* shaderSrc, const char* shaderSrc2)
 		{
 			case GL_VERTEX_SHADER:   shaderTypeStr = "Vertex"; break;
 			case GL_FRAGMENT_SHADER: shaderTypeStr = "Fragment"; break;
-			// we don't use geometry shaders and GLES3.0 doesn't support them
+			// we don't use geometry shaders
 			// case GL_GEOMETRY_SHADER: shaderTypeStr = "Geometry"; break;
 			/* not supported in OpenGL3.2 and we're unlikely to need/use them anyway
 			case GL_COMPUTE_SHADER:  shaderTypeStr = "Compute"; break;

@@ -44,7 +44,6 @@ qboolean IsHighDPIaware = false;
 
 enum {
 	// Not all GL.h header know about GL_DEBUG_SEVERITY_NOTIFICATION_*.
-	// DG: yes, it's the same value in GLES3.2
 	QGL_DEBUG_SEVERITY_NOTIFICATION = 0x826B
 };
 

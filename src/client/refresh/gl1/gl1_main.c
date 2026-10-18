@@ -142,7 +142,7 @@ static cvar_t *gl_znear;
 static cvar_t *gl1_multitexture;
 static cvar_t *gl1_waterwarp;
 
-static cvar_t *gl1_tilerendering;	// this is always "forced on" in GLES1
+static cvar_t *gl1_tilerendering;
 
 refimport_t ri;
 
@@ -1469,13 +1469,6 @@ R_SetMode(void)
 	return true;
 }
 
-// just to avoid too many preprocessor directives in RI_Init()
-typedef enum
-{
-	rf_opengl14,
-	rf_opengles10
-} refresher_t;
-
 qboolean
 RI_Init(void)
 {
@@ -1484,7 +1477,6 @@ RI_Init(void)
 	extern float r_turbsin[256];
 
 #define GLEXTENSION_NPOT	"GL_ARB_texture_non_power_of_two"
-	static const refresher_t refresher = rf_opengl14;
 
 	Swap_Init();
 
@@ -1536,8 +1528,7 @@ RI_Init(void)
 
 	sscanf(gl_config.version_string, "%d.%d", &gl_config.major_version, &gl_config.minor_version);
 
-	if ( refresher == rf_opengl14 &&
-		gl_config.major_version == 1 && gl_config.minor_version < 4 )
+	if ( gl_config.major_version == 1 && gl_config.minor_version < 4 )
 	{
 		QGL_Shutdown();
 		Com_Printf("Support for OpenGL 1.4 is not available\n");
@@ -1552,8 +1543,7 @@ RI_Init(void)
 	/* Point parameters */
 	Com_Printf(" - Point parameters: ");
 
-	if ( refresher == rf_opengles10 ||
-		strstr(gl_config.extensions_string, "GL_ARB_point_parameters") ||
+	if ( strstr(gl_config.extensions_string, "GL_ARB_point_parameters") ||
 		strstr(gl_config.extensions_string, "GL_EXT_point_parameters") )	// should exist for all OGL 1.4 hw...
 	{
 		qglPointParameterf = (void (APIENTRY *)(GLenum, GLfloat))RI_GetProcAddress ( "glPointParameterf" );
@@ -1666,7 +1656,7 @@ RI_Init(void)
 
 	Com_Printf(" - Multitexturing: ");
 
-	if ( refresher == rf_opengles10 || strstr(gl_config.extensions_string, "GL_ARB_multitexture") )
+	if ( strstr(gl_config.extensions_string, "GL_ARB_multitexture") )
 	{
 		qglActiveTexture = (void (APIENTRY *)(GLenum))RI_GetProcAddress ("glActiveTexture");
 		qglClientActiveTexture = (void (APIENTRY *)(GLenum))RI_GetProcAddress ("glClientActiveTexture");
@@ -1694,18 +1684,6 @@ RI_Init(void)
 	{
 		Com_Printf("Disabled\n");
 	}
-
-	// ----
-
-	/* Discard framebuffer: Enables the use of a "performance hint" to the graphic
-	 * driver in GLES1, to get rid of the contents of the different framebuffers.
-	 * Useful for some GPUs that may attempt to keep them and/or write them back to
-	 * external/uniform memory, actions that are useless for Quake 2 rendering path.
-	 * https://registry.khronos.org/OpenGL/extensions/EXT/EXT_discard_framebuffer.txt
-	 * Regardless of the existence of this extension, if gl_config.tilerendering is
-	 * true, glClear() will run at the start of each frame, helping mobile GPUs.
-	 */
-
 
 	// ----
 

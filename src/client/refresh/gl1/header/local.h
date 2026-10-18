@@ -69,8 +69,8 @@
 /* fall over */
 #define ROLL 2
 
-#if defined(USE_SDL3) || defined(YQ2_GL1_GLES)
-// Use internal lookup table instead of SDL2 hw gamma funcs for GL1/GLES1
+#if defined(USE_SDL3)
+// Use internal lookup table instead of SDL2 hw gamma funcs for GL1
 #define GL1_GAMMATABLE
 #endif
 

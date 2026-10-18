@@ -1275,7 +1275,6 @@ GL3_DrawParticles(void)
 		glDepthMask(GL_FALSE);
 		glEnable(GL_BLEND);
 
-		// GLES doesn't have this, maybe it's always enabled? (https://gamedev.stackexchange.com/a/15528 says it works)
 		// luckily we don't use glPointSize() but set gl_PointSize in shader anyway
 		glEnable(GL_PROGRAM_POINT_SIZE);
 
