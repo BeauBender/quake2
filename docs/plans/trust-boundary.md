@@ -153,3 +153,37 @@ Common practice for a long-lived fork, which this plan adopts:
    stb_image, GL3, SDL3 vendoring, CI platform scope.
 4. Audits on what remains; manifest and hash check into the gate.
 5. Fork documentation throughout, finalised after the removals settle.
+
+## Repository access
+
+Policy: the fork stays public and read-only for everyone except the owner.
+Nobody else can push, open issues or pull requests, or comment; `main`
+cannot be force-pushed or deleted, enforced server-side. There are no
+collaborators by decision, so "collaborators only" means "owner only".
+Recorded by TASK26 on 2026-10-18 from the owner's own `gh` login.
+
+| Control | State on 2026-10-18 | How it was checked |
+|---|---|---|
+| Issue creation | `COLLABORATORS_ONLY` (verified) | GraphQL `repository.issueCreationPolicy` |
+| Pull request creation | `COLLABORATORS_ONLY` (verified) | GraphQL `repository.pullRequestCreationPolicy` |
+| Issues / Pull requests enabled | both `true` (the loop files cards and lands work through them) | same read |
+| Interaction limit | `collaborators_only`, expires 2027-04-18T17:57:18Z | `GET repos/BeauBender/quake2/interaction-limits` |
+| Ruleset `main-protect` on `main` | **owner applies**: `gh api repos/BeauBender/quake2/rulesets --method POST --input .github/rulesets/main-protect.json` | the agent session's permission policy does not allow repository-settings writes; the file in this directory is the exact payload (rules `deletion` + `non_fast_forward`, target `~DEFAULT_BRANCH`, enforcement `active`, no bypass actors on purpose: the agent runs as the owner, so an owner bypass would exempt it too) |
+| Conversation locks | 34 earlier conversations locked on 2026-10-18; issues and PRs #35–#49 created later are **unlocked**, owner locks them: `for n in $(gh api "repos/BeauBender/quake2/issues?state=all&per_page=100" --jq '.[]|select(.locked|not)|.number'); do gh api -X PUT repos/BeauBender/quake2/issues/$n/lock --silent; done` | same permission limit; locks never expire; new conversations arrive unlocked until [redacted] [redacted] (lock-on-create, interaction-limit renewal) ships |
+| GitHub Apps with access | not listable with a user OAuth token (`GET user/installations` returns 403) | owner reviews Settings → Integrations → GitHub Apps and records the list here |
+| Code review limits ("Limit to users explicitly granted read or higher access") | owner action pending | UI only: Settings → Moderation → Code review limits |
+
+Deferred on purpose:
+
+- `main-require-pr.json` (require a pull request before merging): the memory
+  sync Stop hook and the breakdown plan-anchor commit still push straight
+  to `main`; enabling it would break the loop until those paths change.
+- Required status checks: Actions has never run on this fork, and a required
+  check that never reports blocks every merge.
+- Going private: not possible for a fork ("You cannot change the visibility
+  of a fork by itself").
+
+Renewal: the interaction limit is six months at most by GitHub design; the
+same `PUT` re-applies it. [redacted] on [redacted] is the automation that
+keeps locks and the limit current; until it ships, renewal is a manual
+owner step recorded here.
