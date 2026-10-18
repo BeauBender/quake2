@@ -1865,6 +1865,12 @@ CM_LoadMap(const char *name, qboolean clientload, unsigned *checksum)
 		Com_Error(ERR_DROP, "Couldn't load %s", name);
 	}
 
+	if (length < (int)sizeof(dheader_t))
+	{
+		Com_Error(ERR_DROP, "%s: Map %s is too small (%d bytes)",
+				__func__, name, length);
+	}
+
 	last_checksum = LittleLong(Com_BlockChecksum(buf, length));
 	*checksum = last_checksum;
 
