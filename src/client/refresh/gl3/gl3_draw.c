@@ -623,10 +623,6 @@ void GL3_EndFrame(void)
 		GL3_DrawCurrent2Dbatch();
 	}
 
-#ifdef YQ2_GL3_GLES
-	static const GLenum attachments[] = {GL_COLOR_ATTACHMENT0, GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT};
-	glInvalidateFramebuffer(GL_FRAMEBUFFER, 3, attachments);
-#endif
 
 	GL3_SwapWindow();
 }

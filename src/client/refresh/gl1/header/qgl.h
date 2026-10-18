@@ -33,15 +33,11 @@
 #include <windows.h>
 #endif
 
-#ifdef YQ2_GL1_GLES
-#include "../glad-gles1/include/glad/glad.h"
-#else
 #if defined(__APPLE__)
 #define GL_SILENCE_DEPRECATION
 #include <OpenGL/gl.h>
 #else
 #include <GL/gl.h>
-#endif
 #endif
 
 #ifndef APIENTRY

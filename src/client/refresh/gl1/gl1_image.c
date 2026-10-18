@@ -43,11 +43,7 @@ extern cvar_t *gl1_minlight;
 #define Q2_GL_SOLID_FORMAT GL_RGB
 #define Q2_GL_ALPHA_FORMAT GL_RGBA
 
-#ifdef YQ2_GL1_GLES
-#define DEFAULT_SOLID_FORMAT GL_RGBA
-#else
 #define DEFAULT_SOLID_FORMAT GL_RGB
-#endif
 
 int gl_tex_solid_format = DEFAULT_SOLID_FORMAT;
 int gl_tex_alpha_format = GL_RGBA;
@@ -78,19 +74,6 @@ typedef struct
 	int mode;
 } gltmode_t;
 
-#ifdef YQ2_GL1_GLES
-
-static const gltmode_t gl_alpha_modes[] = {
-	{"default", GL_RGBA},
-	{"GL_RGBA", GL_RGBA},
-};
-
-static const gltmode_t gl_solid_modes[] = {
-	{"default", GL_RGBA},
-	{"GL_RGBA", GL_RGBA},
-};
-
-#else
 
 static const gltmode_t gl_alpha_modes[] = {
 	{"default", GL_RGBA},
@@ -110,7 +93,6 @@ static const gltmode_t gl_solid_modes[] = {
 	{"GL_R3_G3_B2", GL_R3_G3_B2},
 };
 
-#endif
 
 static int upload_width, upload_height;
 static qboolean uploaded_paletted;

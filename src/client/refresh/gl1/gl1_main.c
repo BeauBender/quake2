@@ -142,9 +142,7 @@ static cvar_t *gl_znear;
 static cvar_t *gl1_multitexture;
 static cvar_t *gl1_waterwarp;
 
-#ifndef YQ2_GL1_GLES
 static cvar_t *gl1_tilerendering;	// this is always "forced on" in GLES1
-#endif
 
 refimport_t ri;
 
@@ -1219,11 +1217,7 @@ R_Strings_f(void)
 	R_Strings(true);
 }
 
-#ifdef YQ2_GL1_GLES
-#define ONLY_ENABLED_IN_GL1   "0"
-#else
 #define ONLY_ENABLED_IN_GL1   "1"
-#endif
 
 void
 R_Register(void)
@@ -1281,9 +1275,7 @@ R_Register(void)
 	gl1_palettedtexture = ri.Cvar_Get("r_palettedtextures", "0", CVAR_ARCHIVE);
 	gl1_pointparameters = ri.Cvar_Get("gl1_pointparameters", ONLY_ENABLED_IN_GL1, CVAR_ARCHIVE);
 	gl1_multitexture = ri.Cvar_Get("gl1_multitexture", "1", CVAR_ARCHIVE);
-#ifndef YQ2_GL1_GLES
 	gl1_tilerendering = ri.Cvar_Get("gl1_tilerendering", "0", CVAR_ARCHIVE);
-#endif
 
 	gl_drawbuffer = ri.Cvar_Get("gl_drawbuffer", "GL_BACK", 0);
 	r_vsync = ri.Cvar_Get("r_vsync", "1", CVAR_ARCHIVE);
@@ -1491,13 +1483,8 @@ RI_Init(void)
 	byte *colormap;
 	extern float r_turbsin[256];
 
-#ifdef YQ2_GL1_GLES
-#define GLEXTENSION_NPOT	"GL_OES_texture_npot"
-	static const refresher_t refresher = rf_opengles10;
-#else
 #define GLEXTENSION_NPOT	"GL_ARB_texture_non_power_of_two"
 	static const refresher_t refresher = rf_opengl14;
-#endif
 
 	Swap_Init();
 
@@ -1719,24 +1706,6 @@ RI_Init(void)
 	 * true, glClear() will run at the start of each frame, helping mobile GPUs.
 	 */
 
-#ifdef YQ2_GL1_GLES
-	Com_Printf(" - Discard framebuffer: ");
-
-	if (strstr(gl_config.extensions_string, "GL_EXT_discard_framebuffer"))
-	{
-		qglDiscardFramebufferEXT = (void (APIENTRY *)(GLenum, GLsizei, const GLenum *))
-				RI_GetProcAddress ("glDiscardFramebufferEXT");
-	}
-
-	if (qglDiscardFramebufferEXT)	// enough to verify availability
-	{
-		Com_Printf("Okay\n");
-	}
-	else
-	{
-		Com_Printf("Failed\n");
-	}
-#endif
 
 	// ----
 
@@ -1761,9 +1730,7 @@ RI_Init(void)
 	gl_config.tilerendering = false;
 
 	if ( gl_config.multitexture
-#ifndef YQ2_GL1_GLES
 		&& gl1_tilerendering->value
-#endif
 	)
 	{
 		gl_config.tilerendering = true;
@@ -1918,7 +1885,6 @@ RI_BeginFrame(float camera_separation)
 	{
 		gl_drawbuffer->modified = false;
 
-#ifndef YQ2_GL1_GLES
 		if ((gl_state.camera_separation == 0) || gl_state.stereo_mode != STEREO_MODE_OPENGL)
 		{
 			if (Q_stricmp(gl_drawbuffer->string, "GL_FRONT") == 0)
@@ -1930,7 +1896,6 @@ RI_BeginFrame(float camera_separation)
 				glDrawBuffer(GL_BACK);
 			}
 		}
-#endif
 	}
 
 	/* texturemode stuff */
