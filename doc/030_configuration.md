@@ -147,7 +147,6 @@ original ones.
 
 The new sound effects can be disabled with:
 
-* `s_doppler` set to `0` disables the doppler effect.
 * `s_underwater` set to `0` disables the underwater effect.
 
 
