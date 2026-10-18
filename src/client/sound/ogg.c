@@ -46,7 +46,6 @@ static cvar_t *ogg_shuffle;       /* Shuffle playback */
 static cvar_t *ogg_ignoretrack0;  /* Toggle track 0 playing */
 static cvar_t *ogg_volume;        /* Music volume. */
 static int ogg_curfile;           /* Index of currently played file. */
-static int ogg_numbufs;           /* Number of buffers for OpenAL */
 static int ogg_numsamples;        /* Number of sambles read from the current file */
 static int ogg_mapcdtrack;        /* Index of current map cdtrack */
 static ogg_status_t ogg_status;   /* Status indicator. */
@@ -294,14 +293,13 @@ static OGG_Read(void)
 	}
 	else
 	{
-		// We cannot call OGG_Stop() here. It flushes the OpenAL sample
-		// queue, thus about 12 seconds of music are lost. Instead we
+		// We cannot call OGG_Stop() here. It flushes the sample
+		// queue. Instead we
 		// just set the OGG state to stop and open a new file. The new
 		// files content is added to the sample queue after the remaining
 		// samples from the old file.
 		stb_vorbis_close(ogg_file);
 		ogg_status = STOP;
-		ogg_numbufs = 0;
 		ogg_numsamples = 0;
 
 		OGG_PlayTrack(va("%d", ogg_curfile), false, false);
@@ -341,29 +339,6 @@ OGG_Stream(void)
 
 	if (ogg_status == PLAY)
 	{
-#ifdef USE_OPENAL
-		if (sound_started == SS_OAL)
-		{
-			/* Calculate the number of buffers used
-			   for storing decoded OGG/Vorbis data.
-			   We take the number of active buffers
-			   and add 256. 256 are about 12 seconds
-			   worth of sound, more than enough to
-			   be resilent against underruns. */
-			if (ogg_numbufs == 0 || active_buffers < ogg_numbufs - 256)
-			{
-				ogg_numbufs = active_buffers + 256;
-			}
-
-			/* active_buffers are all active OpenAL buffers,
-			   buffering normal sfx _and_ ogg/vorbis samples. */
-			while (active_buffers <= ogg_numbufs)
-			{
-				OGG_Read();
-			}
-		}
-		else /* using SDL */
-#endif
 		{
 			if (sound_started == SS_SDL)
 			{
@@ -670,16 +645,9 @@ OGG_Stop(void)
 		return;
 	}
 
-#ifdef USE_OPENAL
-	if (sound_started == SS_OAL)
-	{
-		AL_UnqueueRawSamples();
-	}
-#endif
 
 	stb_vorbis_close(ogg_file);
 	ogg_status = STOP;
-	ogg_numbufs = 0;
 }
 
 /*
@@ -691,14 +659,6 @@ OGG_TogglePlayback(void)
 	if (ogg_status == PLAY)
 	{
 		ogg_status = PAUSE;
-		ogg_numbufs = 0;
-
-#ifdef USE_OPENAL
-		if (sound_started == SS_OAL)
-		{
-			AL_UnqueueRawSamples();
-		}
-#endif
 	}
 	else if (ogg_status == PAUSE)
 	{

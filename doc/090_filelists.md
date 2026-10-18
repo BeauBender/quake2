@@ -28,7 +28,6 @@ level.
 
 # Shared libaries (Windows only):
 /curl.dll
-/openal32.dll
 /SDL2.DLL
 
 # Renderer libraries:

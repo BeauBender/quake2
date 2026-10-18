@@ -215,12 +215,6 @@ M_PushMenu(menuframework_s* menu)
 		Cvar_Set("paused", "1");
 	}
 
-#ifdef USE_OPENAL
-	if (cl.cinematic_file && sound_started == SS_OAL)
-	{
-		AL_UnqueueRawSamples();
-	}
-#endif
 
 	/* pause music */
 	if (Cvar_VariableValue("ogg_pausewithgame") == 1 &&
@@ -2312,7 +2306,6 @@ static menuslider_s s_options_sfxvolume_slider;
 static menulist_s s_options_oggshuffle_box;
 static menuslider_s s_options_oggvolume_slider;
 static menulist_s s_options_oggenable_box;
-static menulist_s s_options_quality_list;
 static menulist_s s_options_console_action;
 
 static void
@@ -2377,7 +2370,6 @@ ControlsSetMenuItemValues(void)
 {
 	s_options_oggshuffle_box.curvalue = Cvar_VariableValue("ogg_shuffle");
 	s_options_oggenable_box.curvalue = (Cvar_VariableValue("ogg_enable") != 0);
-	s_options_quality_list.curvalue = (Cvar_VariableValue("s_openal") == 0);
 	s_options_alwaysrun_box.curvalue = (cl_run->value != 0);
 	s_options_invertmouse_box.curvalue = (m_pitch->value < 0);
 	s_options_lookstrafe_box.curvalue = (lookstrafe->value != 0);
@@ -2501,24 +2493,6 @@ ConsoleFunc(void *unused)
 }
 
 static void
-UpdateSoundBackendFunc(void *unused)
-{
-	Cvar_Set("s_openal", (s_options_quality_list.curvalue == 0)? "1":"0" );
-
-	Menu_StartPopup(&m_popup,
-		"Restarting the sound system. This\n"
-		"could take up to a minute, so\n"
-		"please be patient.",
-		2000);
-	Menu_DrawPopup(320, 240, &m_popup);
-
-	/* the text box won't show up unless we do a buffer swap */
-	R_EndFrame();
-
-	CL_Snd_Restart_f();
-}
-
-static void
 Options_MenuInit(void)
 {
 	extern qboolean show_gamepad;
@@ -2537,11 +2511,6 @@ Options_MenuInit(void)
 		"disabled",
 		"enabled",
 		NULL
-	};
-
-	static const char *sound_items[] =
-	{
-		"openal", "sdl", NULL
 	};
 
 	static const char *yesno_names[] =
@@ -2611,13 +2580,6 @@ Options_MenuInit(void)
 	s_options_oggshuffle_box.generic.name = "OGG playback mode";
 	s_options_oggshuffle_box.generic.callback = OGGShuffleFunc;
 	s_options_oggshuffle_box.itemnames = ogg_shuffle_items;
-
-	s_options_quality_list.generic.type = MTYPE_SPINCONTROL;
-	s_options_quality_list.generic.x = 0;
-	s_options_quality_list.generic.y = (y += 10);
-	s_options_quality_list.generic.name = "sound backend";
-	s_options_quality_list.generic.callback = UpdateSoundBackendFunc;
-	s_options_quality_list.itemnames = sound_items;
 
 	s_options_sensitivity_slider.generic.type = MTYPE_SLIDER;
 	s_options_sensitivity_slider.generic.x = 0;
@@ -2705,7 +2667,6 @@ Options_MenuInit(void)
 	Menu_AddItem(&s_options_menu, (void *)&s_options_oggvolume_slider);
 	Menu_AddItem(&s_options_menu, (void *)&s_options_oggenable_box);
 	Menu_AddItem(&s_options_menu, (void *)&s_options_oggshuffle_box);
-	Menu_AddItem(&s_options_menu, (void *)&s_options_quality_list);
 	Menu_AddItem(&s_options_menu, (void *)&s_options_sensitivity_slider);
 	Menu_AddItem(&s_options_menu, (void *)&s_options_alwaysrun_box);
 	Menu_AddItem(&s_options_menu, (void *)&s_options_invertmouse_box);

@@ -141,12 +141,6 @@ Qcommon_Buildstring(void)
 	printf(" - cURL HTTP downloads\n");
 #endif
 
-#ifdef USE_OPENAL
-	printf(" + OpenAL audio\n");
-#else
-	printf(" - OpenAL audio\n");
-#endif
-
 #ifdef SYSTEMWIDE
 	printf(" + Systemwide installation\n");
 #else
