@@ -3,3 +3,4 @@
 (seeded by /dev-loop:init -- LOOP11)
 - [yquake2 fork review](project-yquake2-fork-review.md) — repo is an unmodified yquake2 mirror; review verdict and caveats
 - [Review the fork itself](feedback-review-the-fork-itself.md) — audit the tree directly, no upstream comparison or builds without asking
+- [dev-loop workflow preferences](feedback-devloop-workflow.md) — orchestrate via dev-loop, INFORM for decisions, no installs without approval, say where things were filed
