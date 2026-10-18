@@ -8,7 +8,7 @@ Yamagi Quake II (yquake2): a GPL-2 Quake II engine descended from id Software's 
 
 ## Build
 
-GNU Make is the primary build (`Makefile`); CMake (`CMakeLists.txt`) is the alternative. Both produce the same set of binaries. On macOS the client needs `brew install sdl3` (or `sdl2`); the dedicated server and game module need nothing beyond the system toolchain.
+GNU Make (`Makefile`) is the only build system. On macOS the client needs `brew install sdl3` (or `sdl2`); the dedicated server and game module need nothing beyond the system toolchain.
 
 ```sh
 make                      # all: client, server, game, ref_gl1, ref_gl3, ref_gles3, ref_soft -> release/
