@@ -4,7 +4,7 @@ Yamagi Quake II is an enhanced client for id Software's Quake II with
 focus on offline and coop gameplay. Both the gameplay and the graphics
 are unchanged, but many bugs in the last official release were fixed and
 some nice to have features like widescreen support, reliable support for
-high framerates, a modern sound backend based upon OpenAL, support for
+high framerates, a modern SDL based sound backend, support for
 modern game controllers and a modern OpenGL 3.2 renderer were added.
 Unlike most other Quake II source ports Yamagi Quake II is fully 64-bit
 clean. It works perfectly on modern processors and operating systems.

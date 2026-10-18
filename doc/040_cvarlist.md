@@ -177,7 +177,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 
 * **cl_limitsparksounds**: If set to `1` the number of sound generated
   when shooting into power screen and power shields is limited to 16.
-  This works around global volume drops in some OpenAL implementations
+  This works around global volume drops
   if too many sounds are played at the same time. This was the default
   behavior between Yamagi Quake II 7.10 and 7.45. Defaults to `0`.
 
@@ -329,14 +329,6 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 
 ## Audio
 
-* **al_device**: OpenAL device to use. In most cases there's no need to
-  change this, since the default device is normally the correct choice.
-
-* **al_driver**: OpenAL library to use. This is useful if for some
-   reasons several OpenAL libraries are available and Quake II picks the
-   wrong one. The given value is the name of the library, for example
-   `libopenal.so.1`.
-
 * **ogg_enable**: Enable Ogg/Vorbis music playback.
 
 * **ogg_ignoretrack0**: Normally Quake II disables the background music
@@ -353,18 +345,9 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   - `2`: Play all available tracks in a linear sequence.
   - `3`: Shuffle through the available tracks.
 
-* **s_doppler**: If set to `1` doppler effects are enabled. This is only
-  supported by the OpenAL sound backend.
-
 * **s_muteonfocusloss**: If set to `1` (the default) all sounds are
   muted when the game looses focus. Sound are unmuted when the game
   regains focus.
-
-* **s_openal**: Use OpenAL for sound playback. This is enabled by
-  default. OpenAL gives a huge quality boost over the classic sound
-  system and supports surround speakers and HRTF for headphones. OpenAL
-  is much more reliable than the classic sound system, especially on
-  modern systems like Windows 10 or Linux with PulseAudio or Pipewire.
 
 * **s_sdldriver**: Can be set to the name of a SDL audio driver. If set
   to `auto` (the default), SDL chooses the driver. If set to anything
@@ -372,16 +355,6 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   platform or not.
 
 * **s_underwater**: Dampen sounds if submerged. Enabled by default.
-
-* **s_occlusion_strength**: If set bigger than `0` sound occlusion effects
-  are enabled. This is only supported by the OpenAL sound backend. By
-  default this cvar is disabled (set to 0).
-
-* **s_reverb_preset**: Enable reverb effect. By default this cvar is
-  disabled (set to `-1`). Possible values:
-  - `-2`: Auto reverb effect select,
-  - `-1`: Disable reverb effect,
-  - `>=0`: select predefined effect.
 
 * **s_bsp_soundpos**: Controls the positioning of sounds played by BSP
   entities (doors, elevators, ...). Internally the game treats the

@@ -69,9 +69,6 @@ cvar_t *s_show;
 cvar_t *s_ambient;
 cvar_t* s_underwater;
 cvar_t* s_underwater_gain_hf;
-cvar_t* s_doppler;
-cvar_t* s_occlusion_strength;
-cvar_t* s_reverb_preset;
 static cvar_t* s_ps_sorting;
 static cvar_t* s_feedback_kind;
 
@@ -1599,11 +1596,7 @@ S_Init(void)
 	s_ambient = Cvar_Get("s_ambient", "1", 0);
 	s_underwater = Cvar_Get("s_underwater", "1", CVAR_ARCHIVE);
 	s_underwater_gain_hf = Cvar_Get("s_underwater_gain_hf", "0.25", CVAR_ARCHIVE);
-	s_doppler = Cvar_Get("s_doppler", "0", CVAR_ARCHIVE);
 	s_ps_sorting = Cvar_Get("s_ps_sorting", "1", CVAR_ARCHIVE);
-	/* Reverb and occlusion is fully disabled by default */
-	s_reverb_preset = Cvar_Get("s_reverb_preset", "-1", CVAR_ARCHIVE);
-	s_occlusion_strength = Cvar_Get("s_occlusion_strength", "0", CVAR_ARCHIVE);
 	/* Feedback kind: 0 - rumble, 1 - haptic */
 	s_feedback_kind = Cvar_Get("s_feedback_kind", "0", CVAR_ARCHIVE);
 
