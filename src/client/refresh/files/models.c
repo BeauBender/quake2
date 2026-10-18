@@ -45,6 +45,13 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 	int		ofs_end;
 	int		i, j;
 
+	if (modfilelen < (int)sizeof(dmdl_t))
+	{
+		Com_Printf("%s: model %s is too small (%d bytes)\n",
+				__func__, mod_name, modfilelen);
+		return NULL;
+	}
+
 	pinmodel = (dmdl_t *)buffer;
 
 	version = LittleLong (pinmodel->version);
@@ -119,6 +126,32 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 				mod_name, pheader->num_skins, MAX_MD2SKINS);
 		pheader->num_skins = MAX_MD2SKINS;
 	}
+
+	/* validate inner offsets and sizes against ofs_end. 64 bit math
+	   keeps count * size from overflowing. */
+	if (pheader->num_skins < 0 || pheader->num_glcmds <= 0
+		|| pheader->framesize < (int)(sizeof(daliasframe_t)
+			+ (pheader->num_xyz - 1) * sizeof(dtrivertx_t)))
+	{
+		Com_Printf("%s: model %s has bad counts or frame size\n",
+				__func__, mod_name);
+		return NULL;
+	}
+
+#define MD2_RANGE_BAD(ofs, cnt, size) \
+	((ofs) < 0 || (long long)(ofs) + (long long)(cnt) * (long long)(size) > (long long)ofs_end)
+
+	if (MD2_RANGE_BAD(pheader->ofs_skins, pheader->num_skins, MAX_SKINNAME)
+		|| MD2_RANGE_BAD(pheader->ofs_st, pheader->num_st, sizeof(dstvert_t))
+		|| MD2_RANGE_BAD(pheader->ofs_tris, pheader->num_tris, sizeof(dtriangle_t))
+		|| MD2_RANGE_BAD(pheader->ofs_frames, pheader->num_frames, pheader->framesize)
+		|| MD2_RANGE_BAD(pheader->ofs_glcmds, pheader->num_glcmds, sizeof(int)))
+	{
+		Com_Printf("%s: model %s has offsets outside of the file\n",
+				__func__, mod_name);
+		return NULL;
+	}
+#undef MD2_RANGE_BAD
 
 	//
 	// load base s and t vertices (not used in gl version)
