@@ -28,7 +28,7 @@ jobs:
     - name: Install build dependencies
       run: |
         brew update
-        brew install sdl3 openal-soft make
+        brew install sdl3 make
     - name: Check out repository code
       uses: actions/checkout@v7
     - name: Build
