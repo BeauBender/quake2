@@ -93,9 +93,7 @@ typedef struct playsound_s
 /*
  * Interface to pass data and metadata
  * between the frontend and the backends.
- * Mainly used by the SDL backend, since
- * the OpenAL backend has it's own AL
- * based magic.
+ * Used by the SDL backend.
  */
 typedef struct
 {
@@ -149,8 +147,7 @@ typedef struct
 typedef enum
 {
 	SS_NOT = 0, /* soundsystem not started */
-	SS_SDL,     /* soundsystem started, using SDL */
-	SS_OAL      /* soundsystem started, using OpenAL */
+	SS_SDL      /* soundsystem started, using SDL */
 } sndstarted_t;
 
 /*

@@ -21,16 +21,14 @@
  *
  * The upper layer of the Quake II sound system. This is merely more
  * than an interface between the client and a backend. Currently only
- * two backends are supported:
- * - OpenAL, renders sound with OpenAL.
- * - SDL, has the same features than the original sound system.
+ * the SDL backend is supported, it has the same features than the
+ * original sound system.
  *
  * =======================================================================
  */
 
 #include "../header/client.h"
 #include "header/local.h"
-#include "header/qal.h"
 #include "header/vorbis.h"
 
 /* During registration it is possible to have more sounds
@@ -1209,7 +1207,7 @@ S_StartSound(vec3_t origin, int entnum, int entchannel, sfx_t *sfx,
 			}
 
 			// The following may be ugly: cache length in SDL is much, much bigger
-			// than the one in OpenAL, so much that it's definitely not in ms.
+			// than a duration in ms.
 			// If that changes in the future, this must be removed.
 			if (sound_started == SS_SDL)
 			{
