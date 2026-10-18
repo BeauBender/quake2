@@ -7,8 +7,13 @@
 # backend. The client and renderers need SDL/OpenAL and are not built here.
 #
 # Usage: scripts/test.sh            (from anywhere; exits non-zero on failure)
+#
+# -B forces a full rebuild: the Makefile does not emit header dependencies
+# on Darwin (no -MMD), so an incremental build can leave stale objects and
+# report success for a commit that does not compile. The full build of these
+# two targets takes a few seconds.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-make -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)" server game
+make -B -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)" server game

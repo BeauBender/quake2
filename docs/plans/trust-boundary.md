@@ -76,9 +76,9 @@ Principles, in priority order:
 
 | Dependency | Where | Decision | Confidence | Card |
 |---|---|---|---|---|
-| libcurl (HTTP downloads) | `src/client/curl/`, `cl_download.c`, `cl_http_*` cvars | REMOVE code and switch | High: dlopen-only, feature only serves untrusted servers; UDP downloads remain | TASK |
+| libcurl (HTTP downloads) | `src/client/curl/`, HTTP branches of `src/client/cl_download.c`, `cl_http_*` cvars | REMOVE code and switch | High: dlopen-only, feature only serves untrusted servers; UDP downloads remain | TASK |
 | OpenAL (3D audio) | `src/client/sound/openal.c`, `qal.c` | REMOVE; SDL audio backend remains | High: SDL backend is complete; loses HRTF/positional audio | TASK |
-| GLES1 / GLES3 renderers + their glad copies | `refresh/gles1`, `refresh/gles3`, `gl1/glad-gles1`, `gl3/glad-gles3` | REMOVE | High: mobile targets, no macOS value | TASK |
+| GLES1 / GLES3 renderers + their glad copies | the `YQ2_GL1_GLES` / `YQ2_GL3_GLES*` `#ifdef` branches inside `refresh/gl1/` and `refresh/gl3/` (there are no separate gles directories), `gl1/glad-gles1`, `gl3/glad-gles3`, and the `ref_gles1`/`ref_gles3` Makefile targets | REMOVE | High: mobile targets, no macOS value | TASK |
 | CMake build, winbuild scripts, macOS app-bundle zip | `CMakeLists.txt`, `stuff/cmake`, `stuff/winbuild`, `stuff/osx/quake2-appbundle.zip` | REMOVE | High: Makefile is primary; zip contains unsigned 2012 binaries; winbuild downloads without checksums | TASK |
 | GitHub Actions on mutable tags, Coverity workflow | `.github/workflows` | PIN actions to commit SHAs, remove Coverity (external secret); platform scope is INFORM | High for pin/remove | TASK + INFORM |
 | minizip + miniz (pk3/zip packs, PNG screenshot deflate) | `src/common/unzip/` | REMOVE; `.pak` only | High: owner endorsed; compiled into q2ded too | TASK |
@@ -89,7 +89,7 @@ Principles, in priority order:
 | SDL2 code paths (parallel to SDL3) | `input/sdl2.c`, `vid/glimp_sdl2.c`, `WITH_SDL3` switch | REMOVE; SDL3 only | High: near-duplicate files, halves the glue to audit | TASK |
 | SDL3 itself | system library | KEEP, unavoidable. Provenance decision: vendor source at a pinned tag with recorded hash and build statically, versus Homebrew | INFORM, then TASK |
 | gyro.c (MIT, 700 lines), md4.c (public domain), rand.c, glob.c, savegame tables | small in-tree files | KEEP, audit in full, record hashes | High | TASK (audit) |
-| OpenGL 1.x (system) | `refresh/gl1` | KEEP for now (system framework, deprecated by Apple); superseded by the Metal renderer plan | n/a | see metal-raytracing epic |
+| OpenGL 1.x (system) | `refresh/gl1` | KEEP for now (system framework, deprecated by Apple); superseded by the Metal renderer plan | n/a | see the `metal-renderer` epic, `docs/plans/metal-renderer.md` |
 | Windows / Linux backends | `src/backends/windows`, `src/win-wrapper`, unix backend | KEEP source (id-derived, small); CI scope is INFORM | Medium | INFORM |
 
 ## Security residuals to fix first
