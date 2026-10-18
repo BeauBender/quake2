@@ -14,7 +14,6 @@
 #                                                        #
 # Optional dependencies:                                 #
 #  - CURL                                                #
-#  - OpenAL                                              #
 #                                                        #
 # Platforms:                                             #
 #  - FreeBSD                                             #
@@ -65,17 +64,9 @@ WITH_CURL:=yes
 # crashes.
 WITH_EXECINFO:=yes
 
-# WITH_OPENAL
-# Enables the optional OpenAL sound system.
-# To use it your system needs libopenal.so.1
-# or openal32.dll (we recommend openal-soft)
-# installed
-WITH_OPENAL:=yes
-
 # WITH_RPATH
 # Sets an RPATH to $ORIGIN/lib. It can be used to
-# inject custom libraries, e.g. a patches libSDL.so
-# or libopenal.so. Not supported on Windows.
+# inject custom libraries, e.g. a patches libSDL.so. Not supported on Windows.
 WITH_RPATH:=yes
 
 # WITH_SDL3
@@ -493,7 +484,6 @@ config:
 	@echo "============================"
 	@echo "YQ2_ARCH = $(YQ2_ARCH), YQ2_OSTYPE = $(YQ2_OSTYPE), COMPILER = $(COMPILER)"
 	@echo "WITH_CURL = $(WITH_CURL)"
-	@echo "WITH_OPENAL = $(WITH_OPENAL)"
 	@echo "WITH_RPATH = $(WITH_RPATH)"
 	@echo "WITH_SDL3 = $(WITH_SDL3)"
 	@echo "WITH_SYSTEMWIDE = $(WITH_SYSTEMWIDE)"
@@ -547,10 +537,6 @@ ifeq ($(WITH_CURL),yes)
 $(BINDIR)/yquake2.exe : CFLAGS += -DUSE_CURL
 endif
 
-ifeq ($(WITH_OPENAL),yes)
-$(BINDIR)/yquake2.exe : CFLAGS += -DUSE_OPENAL -DDEFAULT_OPENAL_DRIVER='"openal32.dll"'
-endif
-
 else # not Windows
 
 client:
@@ -578,18 +564,6 @@ $(BINDIR)/quake2 : CFLAGS += -Wno-unused-result
 
 ifeq ($(WITH_CURL),yes)
 $(BINDIR)/quake2 : CFLAGS += -DUSE_CURL
-endif
-
-ifeq ($(WITH_OPENAL),yes)
-ifeq ($(YQ2_OSTYPE), OpenBSD)
-$(BINDIR)/quake2 : CFLAGS += -DUSE_OPENAL -DDEFAULT_OPENAL_DRIVER='"libopenal.so"'
-else ifeq ($(YQ2_OSTYPE), Darwin)
-OPENAL_PATH ?= $(shell brew --prefix openal-soft)
-$(BINDIR)/quake2 : CFLAGS += -DUSE_OPENAL -DDEFAULT_OPENAL_DRIVER='"libopenal.dylib"' -I$(OPENAL_PATH)/include
-$(BINDIR)/quake2 : LDFLAGS += -L$(OPENAL_PATH)/lib -rpath $(OPENAL_PATH)/lib
-else
-$(BINDIR)/quake2 : CFLAGS += -DUSE_OPENAL -DDEFAULT_OPENAL_DRIVER='"libopenal.so.1"'
-endif
 endif
 
 ifeq ($(WITH_EXECINFO),yes)
@@ -1028,8 +1002,6 @@ CLIENT_OBJS_ := \
 	src/client/menu/qmenu.o \
 	src/client/menu/videomenu.o \
 	src/client/sound/ogg.o \
-	src/client/sound/openal.o \
-	src/client/sound/qal.o \
 	src/client/sound/sdl.o \
 	src/client/sound/sound.o \
 	src/client/sound/wave.o \

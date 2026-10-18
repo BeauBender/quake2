@@ -8,7 +8,7 @@ Yamagi Quake II (yquake2): a GPL-2 Quake II engine descended from id Software's 
 
 ## Build
 
-GNU Make is the primary build (`Makefile`); CMake (`CMakeLists.txt`) is the alternative. Both produce the same set of binaries. On macOS the client needs `brew install sdl3 openal-soft` (or `sdl2`); the dedicated server and game module need nothing beyond the system toolchain.
+GNU Make is the primary build (`Makefile`); CMake (`CMakeLists.txt`) is the alternative. Both produce the same set of binaries. On macOS the client needs `brew install sdl3` (or `sdl2`); the dedicated server and game module need nothing beyond the system toolchain.
 
 ```sh
 make                      # all: client, server, game, ref_gl1, ref_gl3, ref_gles3, ref_soft -> release/
@@ -20,9 +20,9 @@ make config               # print the resolved WITH_* / CFLAGS configuration
 make clean                # remove objects; cleanall also removes release/ debug/
 ```
 
-Feature switches are `WITH_*` variables (`WITH_CURL`, `WITH_OPENAL`, `WITH_SDL3`, `WITH_SYSTEM_MINIZIP`, `WITH_SYSTEMWIDE`, `WITH_XDG`, `WITH_EXECINFO`, `WITH_RPATH`). Pass them on the command line or put them in an untracked `config.mk`, which the Makefile includes. `-j` is safe.
+Feature switches are `WITH_*` variables (`WITH_CURL`, `WITH_SDL3`, `WITH_SYSTEM_MINIZIP`, `WITH_SYSTEMWIDE`, `WITH_XDG`, `WITH_EXECINFO`, `WITH_RPATH`). Pass them on the command line or put them in an untracked `config.mk`, which the Makefile includes. `-j` is safe.
 
-There is no test suite. CI (`.github/workflows/`) only compiles on each platform plus CodeQL/Coverity. The repo's gate is `scripts/test.sh`, which force-rebuilds `q2ded` and the game module (the targets that need no SDL or OpenAL); it must pass on every commit. Beyond that, verification is building the affected targets, ideally with `ASAN=1`, and running the game against real data: `release/quake2 +set basedir /path/to/quake2 -portable` (`-portable` keeps config and saves next to the binary instead of `~/.local/share/YamagiQ2` with XDG, or `~/.yq2` without).
+There is no test suite. CI (`.github/workflows/`) only compiles on each platform plus CodeQL/Coverity. The repo's gate is `scripts/test.sh`, which force-rebuilds `q2ded` and the game module (the targets that need no SDL); it must pass on every commit. Beyond that, verification is building the affected targets, ideally with `ASAN=1`, and running the game against real data: `release/quake2 +set basedir /path/to/quake2 -portable` (`-portable` keeps config and saves next to the binary instead of `~/.local/share/YamagiQ2` with XDG, or `~/.yq2` without).
 
 ## Architecture
 
@@ -31,7 +31,7 @@ The engine is split into separately built, dynamically loaded modules with versi
 - **Engine executable** (`quake2`, `q2ded`): `src/common` (cvars, command buffer, filesystem, network messages, collision BSP), `src/server`, `src/client`, and `src/backends/{unix,windows,generic}` for OS specifics. `src/common/header/common.h` and `src/common/shared/shared.c` are shared with the other modules.
 - **Game module** (`baseq2/game.so|dylib|dll`, `src/game`): all gameplay, monsters, weapons, savegame serialization. Loaded by `Sys_GetGameAPI` (`src/backends/*/system.c`) from the first filesystem search path that contains it; it exports `GetGameAPI` and the two sides exchange `game_import_t`/`game_export_t` (`src/game/header/game.h`, `GAME_API_VERSION`). Addons (xatrix, rogue, ctf) are separate repos that implement this same API, so the engine side of it is effectively frozen.
 - **Renderers** (`ref_gl1`, `ref_gl3`, `ref_gles1`, `ref_gles3`, `ref_soft` in `src/client/refresh/`): selected by the `vid_renderer` cvar, loaded from the binary's own directory by `VID_LoadRenderer` (`src/client/vid/vid.c`), exporting `GetRefAPI` (`src/client/vid/header/ref.h`, `API_VERSION`). `src/client/refresh/files/` holds the loaders shared by all renderers (BSP, MD2/MD5 models, PCX/WAL/TGA/PNG via stb_image). The software renderer is the most faithful to the 2001 code and has no OpenGL dependency.
-- **Sound** (`src/client/sound/`): `sound.c` is the frontend; `sdl.c` (software mixer) and `openal.c` + `qal.c` (OpenAL loaded at runtime via `dlopen`) are the backends. OGG music is decoded by the vendored `stb_vorbis.h`.
+- **Sound** (`src/client/sound/`): `sound.c` is the frontend; `sdl.c` is the software mixer backend. OGG music is decoded by the vendored `stb_vorbis.h`.
 - **HTTP downloads** (`src/client/curl/`): libcurl is also `dlopen`ed at runtime, never linked. The protocol-level download logic and the path filter live in `src/client/cl_download.c`, not under `curl/`.
 
 Things that are not obvious from a single file:

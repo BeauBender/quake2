@@ -23,7 +23,6 @@ if(YQUAKE2LIBS)
 		set(ENV{CMAKE_PREFIX_PATH} ${YQUAKE2LIBS})
 	endif()
 
-	set(ENV{OPENALDIR} ${YQUAKE2LIBS})
 	set(ENV{SDL2DIR} ${YQUAKE2LIBS})
 endif()
 
@@ -62,7 +61,6 @@ endif()
 
 # Compilation time options.
 option(CURL_SUPPORT "cURL support" ON)
-option(OPENAL_SUPPORT "OpenAL support" ON)
 option(SYSTEMWIDE_SUPPORT "Enable systemwide installation of game assets" OFF)
 option(SDL3_SUPPORT "Build against SDL 3 instead of SDL2" ON)
 option(GL1_RENDERER "Build the GL1 renderer" ON)
@@ -230,26 +228,6 @@ if (${CURL_SUPPORT})
 	find_package(CURL REQUIRED)
 	include_directories(${CURL_INCLUDE_DIR})
 	add_definitions(-DUSE_CURL)
-endif()
-
-# OpenAL support.
-if(${OPENAL_SUPPORT})
-	find_package(OpenAL)
-
-	if(${OPENAL_FOUND})
-		list(APPEND yquake2IncludeDirectories "${OPENAL_INCLUDE_DIR}")
-		list(APPEND yquake2ClientLinkerFlags ${OPENAL_LIBRARY})
-
-		if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
-			add_definitions(-DUSE_OPENAL -DDEFAULT_OPENAL_DRIVER="openal32.dll")
-		elseif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-			add_definitions(-DUSE_OPENAL -DDEFAULT_OPENAL_DRIVER="libopenal.dylib")
-		elseif((${CMAKE_SYSTEM_NAME} MATCHES "FreeBSD") OR (${CMAKE_SYSTEM_NAME} MATCHES "OpenBSD"))
-			add_definitions(-DUSE_OPENAL -DDEFAULT_OPENAL_DRIVER="libopenal.so")
-		else()
-			add_definitions(-DUSE_OPENAL -DDEFAULT_OPENAL_DRIVER="libopenal.so.1")
-		endif()
-	endif()
 endif()
 
 # General linker flags.
@@ -457,8 +435,6 @@ set(Client-Source
 	${CLIENT_SRC_DIR}/menu/qmenu.c
 	${CLIENT_SRC_DIR}/menu/videomenu.c
 	${CLIENT_SRC_DIR}/sound/ogg.c
-	${CLIENT_SRC_DIR}/sound/openal.c
-	${CLIENT_SRC_DIR}/sound/qal.c
 	${CLIENT_SRC_DIR}/sound/sdl.c
 	${CLIENT_SRC_DIR}/sound/sound.c
 	${CLIENT_SRC_DIR}/sound/wave.c
@@ -521,7 +497,6 @@ set(Client-Header
 	${CLIENT_SRC_DIR}/input/header/input.h
 	${CLIENT_SRC_DIR}/menu/header/qmenu.h
 	${CLIENT_SRC_DIR}/sound/header/local.h
-	${CLIENT_SRC_DIR}/sound/header/qal.h
 	${CLIENT_SRC_DIR}/sound/header/sound.h
 	${CLIENT_SRC_DIR}/sound/header/stb_vorbis.h
 	${CLIENT_SRC_DIR}/sound/header/vorbis.h

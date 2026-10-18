@@ -275,7 +275,6 @@ To compile Yamagi Quake II from source the following dependencies
 * *MinGW-w64* or *Visual Studio (2015 or newer)* for Windows or a
   GCC compatible compiler like *gcc* or *clang* for other platforms.
 * A LibGL implementation with system headers.
-* An OpenAL implementation, *openal-soft* is highly recommended.
 * libcurl.
 * SDL 3.0.
 
@@ -296,17 +295,17 @@ be started through *start_x86.bat* or the 64 bit version through
 
 The build dependencies can be installed with:
 
-* On Arch Linux based distributions: `pacman -S base-devel mesa openal
+* On Arch Linux based distributions: `pacman -S base-devel mesa
   curl sdl3`
 * On Debian based distributions: `apt install build-essential
-  libgl1-mesa-dev libsdl3-dev libopenal-dev libcurl4-openssl-dev`
-* On FreeBSD: `pkg install gmake libGL sdl3 openal-soft curl`
-* On NetBSD: `pkgin install gmake SDL2 openal-soft curl`
-* On OpenBSD: `pkg_add gmake sdl3 openal curl`
-* On Solaris/Illumos: `pkg install sdl3 openal curl`
-* On Haiku: `pkgman libsdl3_devel openal_devel curl_devel`
+  libgl1-mesa-dev libsdl3-dev libcurl4-openssl-dev`
+* On FreeBSD: `pkg install gmake libGL sdl3 curl`
+* On NetBSD: `pkgin install gmake SDL2 curl`
+* On OpenBSD: `pkg_add gmake sdl3 curl`
+* On Solaris/Illumos: `pkg install sdl3 curl`
+* On Haiku: `pkgman libsdl3_devel curl_devel`
 * On MacOS the dependencies can be installed with Homebrew (from
-  https://brew.sh): `brew install sdl3 openal-soft`
+  https://brew.sh): `brew install sdl3`
 
 Other distributions or platforms often have package named similar to the
 Debian or FreeBSD packages.
@@ -337,7 +336,7 @@ is copied to the corresponding directory in the Quake II installation.
 To compile with Visual Studio, CMake is required.  
 We only support VS2015 and newer, though VS2019 version 16.8 or newer is recommended.
 
-Furthermore you'll need **SDL3**, **openal-soft** and **libcurl** to link against.  
+Furthermore you'll need **SDL3** and **libcurl** to link against.  
 The easiest way to get those dependencies is using the
 [dhewm3-libs](https://github.com/dhewm/dhewm3-libs/) together with the
 `YQUAKE2LIBS` CMake variable.  

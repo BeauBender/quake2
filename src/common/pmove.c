@@ -1314,20 +1314,12 @@ PM_UpdateUnderwaterSfx()
 	{
 		underwater = 1;
 		snd_is_underwater = 1;
-
-#ifdef USE_OPENAL
-		AL_Underwater();
-#endif
 	}
 
 	if ((pm->waterlevel < 3) && underwater)
 	{
 		underwater = 0;
 		snd_is_underwater = 0;
-
-#ifdef USE_OPENAL
-		AL_Overwater();
-#endif
 	}
 }
 #endif
