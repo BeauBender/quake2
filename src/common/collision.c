@@ -1791,8 +1791,7 @@ CMod_CheckReferences(const char *name)
 	{
 		const cbrush_t *b = &map_brushes[i];
 
-		if (b->numsides < 0 || b->firstbrushside < 0 ||
-			(long long)b->firstbrushside + b->numsides > numbrushsides)
+		if ((long long)b->firstbrushside + b->numsides > numbrushsides)
 		{
 			Com_Error(ERR_DROP, "%s: Map %s brush %d has bad brushside range %d+%d (%d brushsides)",
 				__func__, name, i, b->firstbrushside, b->numsides, numbrushsides);
