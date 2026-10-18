@@ -49,10 +49,6 @@ typedef struct
 	int loopstart;
 	int speed;
 	int width;
-#if USE_OPENAL
-	int size;
-	int bufnum;
-#endif
 	int stereo;
 	/* effect length */
 	/* begin<->attack..fade<->end */
@@ -131,11 +127,6 @@ typedef struct
 	int master_vol;             /* 0-255 master volume */
 	qboolean fixed_origin;      /* use origin instead of fetching entnum's origin */
 	qboolean autosound;         /* from an entity->sound, cleared each frame */
-#if USE_OPENAL
-	int autoframe;
-	float oal_vol;
-	int srcnum;
-#endif
 } channel_t;
 
 /*
@@ -284,79 +275,4 @@ void SDL_Spatialize(channel_t *ch);
 
 /* ----------------------------------------------------------------- */
 
-#if USE_OPENAL
-
- /* Only begin attenuating sound volumes
-    when outside the FULLVOLUME range */
- #define     SOUND_FULLVOLUME 1.0
- #define     SOUND_LOOPATTENUATE 0.003
-
-/* number of buffers in flight (needed for ogg) */
-extern int active_buffers;
-
-/*
- * Informations about the
- * OpenAL backend
- */
-void AL_SoundInfo(void);
-
-/* Initializes the OpenAL backend
- */
-qboolean AL_Init(void);
-
-/*
- * Shuts the OpenAL backend down
- */
-void AL_Shutdown(void);
-
-/*
- * Upload ("cache") one sample
- * into OpenAL
- */
-sfxcache_t *AL_UploadSfx(sfx_t *s, wavinfo_t *s_info, byte *data, short volume,
-						 int begin_length, int  end_length,
-						 int attack_length, int fade_length);
-
-/*
- * Deletes one sample from OpenAL
- */
-void AL_DeleteSfx(sfx_t *s);
-
-/*
- * Stops playback of a channel
- */
-void AL_StopChannel(channel_t *ch);
-
-/*
- * Starts playback of a channel
- */
-void AL_PlayChannel(channel_t *ch);
-
-/*
- * Stops playback of all channels
- */
-void AL_StopAllChannels(void);
-
-/*
- * Perform caculations and fill
- * OpenALs buffer
- */
-void AL_Update(void);
-
-/*
- * Plays raw samples
- */
-void AL_RawSamples(int samples, int rate, int width,
-		int channels, const byte *data, float volume);
-
-/*
- * Unqueues any raw samples
- * still in flight
- */
-void AL_UnqueueRawSamples();
-
-void AL_Underwater();
-void AL_Overwater();
-
-#endif /* USE_OPENAL */
 #endif /* CL_SOUND_LOCAL_H */

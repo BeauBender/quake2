@@ -528,15 +528,6 @@ S_LoadSound(sfx_t *s)
 		info.width, info.channels, sound_volume, &begin_length, &end_length,
 		&attack_length, &fade_length);
 
-#if USE_OPENAL
-	if (sound_started == SS_OAL)
-	{
-		sc = AL_UploadSfx(s, &info, data + info.dataofs, sound_volume,
-						  begin_length, end_length,
-						  attack_length, fade_length);
-	}
-	else
-#endif
 	{
 		if (sound_started == SS_SDL)
 		{
@@ -941,13 +932,6 @@ S_PickChannel(int entnum, int entchannel)
 
 	ch = &channels[first_to_die];
 
-#if USE_OPENAL
-	if ((sound_started == SS_OAL) && ch->sfx)
-	{
-		/* Make sure the channel is dead */
-		AL_StopChannel(ch);
-	}
-#endif
 
 	memset(ch, 0, sizeof(*ch));
 	return ch;
@@ -1056,15 +1040,6 @@ S_IssuePlaysound(playsound_t *ps)
 	VectorCopy(ps->origin, ch->origin);
 	ch->fixed_origin = ps->fixed_origin;
 
-#if USE_OPENAL
-	if (sound_started == SS_OAL)
-	{
-		/* This is clamped to 1.0 in AL_PlayChannel() */
-		ch->oal_vol = ps->volume * (s_volume->value);
-		AL_PlayChannel(ch);
-	}
-	else
-#endif
 	{
 		if (sound_started == SS_SDL)
 		{
@@ -1253,14 +1228,6 @@ S_StartSound(vec3_t origin, int entnum, int entchannel, sfx_t *sfx,
 	ps->attenuation = attenuation;
 	ps->sfx = sfx;
 
-#if USE_OPENAL
-	if (sound_started == SS_OAL)
-	{
-		ps->begin = paintedtime + timeofs * 1000;
-		ps->volume = fvol;
-	}
-	else
-#endif
 	{
 		if (sound_started == SS_SDL)
 		{
@@ -1364,13 +1331,6 @@ S_StopAllSounds(void)
 		s_playsounds[i].next->prev = &s_playsounds[i];
 	}
 
-#if USE_OPENAL
-	if (sound_started == SS_OAL)
-	{
-		AL_StopAllChannels();
-	}
-	else
-#endif
 	{
 		if (sound_started == SS_SDL)
 		{
@@ -1434,13 +1394,6 @@ S_RawSamples(int samples, int rate, int width,
 		s_rawend = paintedtime;
 	}
 
-#if USE_OPENAL
-	if (sound_started == SS_OAL)
-	{
-		AL_RawSamples(samples, rate, width, channels, data, volume);
-	}
-	else
-#endif
 	{
 		if (sound_started == SS_SDL)
 		{
@@ -1473,13 +1426,6 @@ S_Update(vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
 	VectorCopy(right, listener_right);
 	VectorCopy(up, listener_up);
 
-#if USE_OPENAL
-	if (sound_started == SS_OAL)
-	{
-		AL_Update();
-	}
-	else
-#endif
 	{
 		if (sound_started == SS_SDL)
 		{
@@ -1608,13 +1554,6 @@ S_SoundInfo_f(void)
 		return;
 	}
 
-#if USE_OPENAL
-	if (sound_started == SS_OAL)
-	{
-		QAL_SoundInfo(true);
-	}
-	else
-#endif
 	{
 		SDL_SoundInfo();
 	}
@@ -1675,15 +1614,6 @@ S_Init(void)
 	Cmd_AddCommand("soundlist", S_SoundList);
 	Cmd_AddCommand("soundinfo", S_SoundInfo_f);
 
-#if USE_OPENAL
-	cv = Cvar_Get("s_openal", "1", CVAR_ARCHIVE);
-
-	if (cv->value && AL_Init())
-	{
-		sound_started = SS_OAL;
-	}
-	else
-#endif
 	{
 		if (SDL_BackendInit())
 		{
@@ -1735,12 +1665,6 @@ S_Shutdown(void)
 			continue;
 		}
 
-#if USE_OPENAL
-		if (sound_started == SS_OAL)
-		{
-			AL_DeleteSfx(sfx);
-		}
-#endif
 
 		if (sfx->cache)
 		{
@@ -1756,13 +1680,6 @@ S_Shutdown(void)
 	memset(known_sfx, 0, sizeof(known_sfx));
 	num_sfx = 0;
 
-#if USE_OPENAL
-	if (sound_started == SS_OAL)
-	{
-		AL_Shutdown();
-	}
-	else
-#endif
 	{
 		if (sound_started == SS_SDL)
 		{

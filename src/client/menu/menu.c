@@ -215,12 +215,6 @@ M_PushMenu(menuframework_s* menu)
 		Cvar_Set("paused", "1");
 	}
 
-#ifdef USE_OPENAL
-	if (cl.cinematic_file && sound_started == SS_OAL)
-	{
-		AL_UnqueueRawSamples();
-	}
-#endif
 
 	/* pause music */
 	if (Cvar_VariableValue("ogg_pausewithgame") == 1 &&
