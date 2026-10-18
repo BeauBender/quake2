@@ -4,3 +4,14 @@
 *.mk
 *.user
 *.d
+.claude/.pull-mode
+.claude/.last-reflect
+.claude/.expected-branch
+.claude/.iteration-blocked
+.claude/worktrees/
+.claude/.*.log
+.claude/.*.jsonl
+.claude/.*.tsv
+.claude/.pr-checks/
+.claude/.receipts/
+.claude/signing.local
