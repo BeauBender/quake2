@@ -506,9 +506,7 @@ VID_CheckChanges(void)
 {
 	static const char *r_order[] = {
 		"gl3",
-		"gles3",
 		"gl1",
-		"gles1",
 		"soft"
 	};
 	static const int r_order_len = ARRLEN(r_order);

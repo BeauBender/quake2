@@ -17,11 +17,6 @@ Yamagi Quake II ships with 4 renderers:
   rendering looks mostly the same on all GPU drivers. Depending on the
   display, the default lighting may be too bright or too dark, it can be
   adjusted through the menu or through the *vid_gamma* cvar.
-* The **OpenGL ES3** renderer: This is pretty much the same as the
-  OpenGL 3.2 renderer (and uses the same cvars for configuration), but
-  uses OpenGL ES 3.0 instead of "desktop" OpenGL, so it also works on
-  the Raspberry Pi 4, for example. Reportedly it also has slightly
-  better performance on Wayland, at least with the open source AMD drivers.
 * The **OpenGL 1.4** renderer: This is a slightly enhanced version of
   the original OpenGL renderer shipped in 1997 with the retail release.
   It's provided for older graphics cards, not able to run the OpenGL 3.2

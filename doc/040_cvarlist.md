@@ -8,8 +8,8 @@ have been renamed. The prefixes are:
 * No prefix: General stuff.
 * `cl_`: Client.
 * `gl_`: Common to all OpenGL renderers.
-* `gl1_`: OpenGL 1.4 and OpenGL ES1 renderers.
-* `gl3_`: OpenGL 3.2 and OpenGL ES3 renderers.
+* `gl1_`: OpenGL 1.4 renderer.
+* `gl3_`: OpenGL 3.2 renderer.
 * `ogg_`: Ogg/Vorbis music playback.
 * `r_`: Common to all renderers.
 * `s_`: Sound system.
@@ -475,7 +475,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   has 59.95hz.
 
 * **vid_gamma**: The value used for gamma correction. Higher values look
-  brighter. The OpenGL 3.2, OpenGL ES3 and Vulkan renderers apply this to
+  brighter. The OpenGL 3.2 and Vulkan renderers apply this to
   the window in realtime via shaders (on all platforms). When the game
   is built against SDL2, the OpenGL 1.4 renderer uses "hardware gamma"
   when available, increasing the brightness of the whole screen. When
@@ -517,9 +517,8 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   will unpause right when its window gets back to being on focus.
 
 * **vid_renderer**: Selects the renderer library. Possible options are
-  `gl3` (the default) for the OpenGL 3.2 renderer, `gles3` for the
-  OpenGL ES3 renderer, `gl1` for the original OpenGL 1.4 renderer and
-  `soft` for the software renderer.
+  `gl3` (the default) for the OpenGL 3.2 renderer, `gl1` for the
+  original OpenGL 1.4 renderer and `soft` for the software renderer.
 
 
 ## Graphics (GL renderers only)
@@ -552,7 +551,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   `GL_NEAREST_MIPMAP_LINEAR`, `GL_LINEAR_MIPMAP_LINEAR`
 
 
-## Graphics (OpenGL 1.4 and OpenGL ES1 only)
+## Graphics (OpenGL 1.4 only)
 
 * **gl1_intensity**: Sets the color intensity. Must be a floating point
   value, at least `1.0` - default is `2.0`. Applied when textures are
@@ -586,13 +585,13 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   disables it (Vanilla Quake II look). Default `1.0`.
 
 * **gl1_tilerendering**: Available only in GL1, this controls whether
-  the optimizations included in GLES1 for *tile-based* rendering devices
+  the optimizations meant for *tile-based* rendering devices
   (mainly SBCs) are also applied in GL1. These optimizations may backfire
   on traditional *immediate mode* GPUs (desktop), so by default this is
   `0`. Enabling this requires `gl1_multitexture 1` & `vid_restart`.
 
 
-## Graphics (OpenGL 3.2 and OpenGL ES3 only)
+## Graphics (OpenGL 3.2 only)
 
 * **gl3_debugcontext**: Enables the OpenGL 3.2 renderers debug context,
   e.g. prints warnings and errors emitted by the GPU driver.  Not

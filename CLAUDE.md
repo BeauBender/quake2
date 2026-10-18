@@ -11,7 +11,7 @@ Yamagi Quake II (yquake2): a GPL-2 Quake II engine descended from id Software's 
 GNU Make (`Makefile`) is the only build system. On macOS the client needs `brew install sdl3` (or `sdl2`); the dedicated server and game module need nothing beyond the system toolchain.
 
 ```sh
-make                      # all: client, server, game, ref_gl1, ref_gl3, ref_gles3, ref_soft -> release/
+make                      # all: client, server, game, ref_gl1, ref_gl3, ref_soft -> release/
 make client game ref_soft # a subset; targets are independent
 make server               # q2ded dedicated server, no SDL
 make DEBUG=1              # -O0 -g, output goes to debug/ instead of release/
@@ -30,7 +30,7 @@ The engine is split into separately built, dynamically loaded modules with versi
 
 - **Engine executable** (`quake2`, `q2ded`): `src/common` (cvars, command buffer, filesystem, network messages, collision BSP), `src/server`, `src/client`, and `src/backends/{unix,windows,generic}` for OS specifics. `src/common/header/common.h` and `src/common/shared/shared.c` are shared with the other modules.
 - **Game module** (`baseq2/game.so|dylib|dll`, `src/game`): all gameplay, monsters, weapons, savegame serialization. Loaded by `Sys_GetGameAPI` (`src/backends/*/system.c`) from the first filesystem search path that contains it; it exports `GetGameAPI` and the two sides exchange `game_import_t`/`game_export_t` (`src/game/header/game.h`, `GAME_API_VERSION`). Addons (xatrix, rogue, ctf) are separate repos that implement this same API, so the engine side of it is effectively frozen.
-- **Renderers** (`ref_gl1`, `ref_gl3`, `ref_gles1`, `ref_gles3`, `ref_soft` in `src/client/refresh/`): selected by the `vid_renderer` cvar, loaded from the binary's own directory by `VID_LoadRenderer` (`src/client/vid/vid.c`), exporting `GetRefAPI` (`src/client/vid/header/ref.h`, `API_VERSION`). `src/client/refresh/files/` holds the loaders shared by all renderers (BSP, MD2/MD5 models, PCX/WAL/TGA/PNG via stb_image). The software renderer is the most faithful to the 2001 code and has no OpenGL dependency.
+- **Renderers** (`ref_gl1`, `ref_gl3`, `ref_soft` in `src/client/refresh/`): selected by the `vid_renderer` cvar, loaded from the binary's own directory by `VID_LoadRenderer` (`src/client/vid/vid.c`), exporting `GetRefAPI` (`src/client/vid/header/ref.h`, `API_VERSION`). `src/client/refresh/files/` holds the loaders shared by all renderers (BSP, MD2/MD5 models, PCX/WAL/TGA/PNG via stb_image). The software renderer is the most faithful to the 2001 code and has no OpenGL dependency.
 - **Sound** (`src/client/sound/`): `sound.c` is the frontend; `sdl.c` is the software mixer backend. OGG music is decoded by the vendored `stb_vorbis.h`.
 - **HTTP downloads** (`src/client/curl/`): libcurl is also `dlopen`ed at runtime, never linked. The protocol-level download logic and the path filter live in `src/client/cl_download.c`, not under `curl/`.
 
