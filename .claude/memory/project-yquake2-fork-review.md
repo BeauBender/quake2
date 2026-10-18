@@ -13,7 +13,7 @@ Kanban (GitHub Issues on BeauBender/quake2, enabled 2026-10-18): INFORM1-7 are o
 
 Hardware tiers: this Mac is a VM ("Apple Paravirtual device", macOS 27, Xcode 27): Metal families apple1-5 + mac2 only, no RT, no Metal 3. T1 = bare-metal Apple silicon without HW RT (M1 Max): Metal RT API available in compute from apple6, so all RT code can be built there. T2 = M3+ (owner's M6 mini): hardware RT, supportsRaytracingFromRender; reserve for perf validation and TASK25.
 
-Onboarding branch worktree-devloop-gate (CLAUDE.md, .claude/dev-loop.json, scripts/test.sh gate = make server game, plan anchors) pushed; PR pending review panel as of 2026-10-18. The Stop hook already auto-pushed .claude/memory to main (7a8684ec). Plugin bugs found during init filed on BeauBender/claude-plugins as #192-#195.
+Onboarding PR #33 (CLAUDE.md, .claude/dev-loop.json, scripts/test.sh gate = make -B server game, plan anchors) was squash-merged to main as 390e5907 on 2026-10-18; its worktree and branch are deleted. Implementer worktrees can now branch from origin/main. The main checkout carries one uncommitted .gitignore line (.claude/.issues-ready-cache.tsv) written by the plugin. Plugin bugs found during init filed on BeauBender/claude-plugins as #192-#195.
 
 **Why:** Avoid re-deriving the comparison, the card graph and the hardware constraints.
 **How to apply:** Pull ready cards with /dev-loop:orchestrate; INFORM cards unblock dependents when the owner closes them. See [[feedback-review-the-fork-itself]] and [[feedback-devloop-workflow]].
