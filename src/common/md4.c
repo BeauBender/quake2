@@ -110,6 +110,17 @@ PerformMD4(const unsigned char *buf, int length, unsigned char *digest)
 	int i, j;
 	const unsigned char *ptr = buf;
 
+	/* a negative length has no meaningful digest; return all zeros */
+	if (length < 0)
+	{
+		for (i = 0; i < 16; i++)
+		{
+			digest[i] = 0;
+		}
+
+		return;
+	}
+
 	/* initialize the MD buffer */
 	A = 0x67452301;
 	B = 0xEFCDAB89;
@@ -120,8 +131,8 @@ PerformMD4(const unsigned char *buf, int length, unsigned char *digest)
 	{
 		for (j = 0; j < 16; j++)
 		{
-			X[j] = ((ptr[0] << 0) | (ptr[1] << 8) |
-					(ptr[2] << 16) | (ptr[3] << 24));
+			X[j] = ((uint32_t)ptr[0] << 0) | ((uint32_t)ptr[1] << 8) |
+				((uint32_t)ptr[2] << 16) | ((uint32_t)ptr[3] << 24);
 
 			ptr += 4;
 		}
@@ -133,8 +144,8 @@ PerformMD4(const unsigned char *buf, int length, unsigned char *digest)
 
 	for (j = 0; j < i; j++)
 	{
-		X[j] = ((ptr[0] << 0) | (ptr[1] << 8) |
-				(ptr[2] << 16) | (ptr[3] << 24));
+		X[j] = ((uint32_t)ptr[0] << 0) | ((uint32_t)ptr[1] << 8) |
+			((uint32_t)ptr[2] << 16) | ((uint32_t)ptr[3] << 24);
 
 		ptr += 4;
 	}
@@ -145,15 +156,14 @@ PerformMD4(const unsigned char *buf, int length, unsigned char *digest)
 			X[j] = 0x80U;
 			break;
 		case 1:
-			X[j] = ((ptr[0] << 0) | ((0x80U) << 8));
+			X[j] = ((uint32_t)ptr[0] << 0) | (0x80U << 8);
 			break;
 		case 2:
-			X[j] = ((ptr[0] << 0) | (ptr[1] << 8) | ((0x80U) << 16));
+			X[j] = ((uint32_t)ptr[0] << 0) | ((uint32_t)ptr[1] << 8) | (0x80U << 16);
 			break;
 		case 3:
-			X[j] =
-				((ptr[0] <<
-				  0) | (ptr[1] << 8) | (ptr[2] << 16) | ((0x80U) << 24));
+			X[j] = ((uint32_t)ptr[0] << 0) | ((uint32_t)ptr[1] << 8) |
+				((uint32_t)ptr[2] << 16) | (0x80U << 24);
 			break;
 	}
 
@@ -176,8 +186,8 @@ PerformMD4(const unsigned char *buf, int length, unsigned char *digest)
 		X[j] = 0;
 	}
 
-	X[14] = (length & 0x1FFFFFFF) << 3;
-	X[15] = (length & ~0x1FFFFFFF) >> 29;
+	X[14] = ((uint32_t)length & 0x1FFFFFFFu) << 3;
+	X[15] = ((uint32_t)length & ~0x1FFFFFFFu) >> 29;
 
 	DoMD4();
 
@@ -209,13 +219,22 @@ PerformMD4(const unsigned char *buf, int length, unsigned char *digest)
 	}
 }
 
+/*
+ * The digest words are folded in host byte order, so the value depends
+ * on endianness. The BSP checksum is sent to clients as CS_MAPCHECKSUM
+ * (see src/common/collision.c, src/server/sv_init.c and
+ * src/client/cl_download.c) and compared with the client's own
+ * computation, so client and server must share endianness. Every current
+ * target is little-endian.
+ */
 unsigned
-Com_BlockChecksum(void *buffer, int length)
+Com_BlockChecksum(const void *buffer, int length)
 {
 	uint32_t digest[4];
 	unsigned val;
 
-	PerformMD4((unsigned char *)buffer, length, (unsigned char *)digest);
+	PerformMD4((const unsigned char *)buffer, length,
+		(unsigned char *)digest);
 
 	val = digest[0] ^ digest[1] ^ digest[2] ^ digest[3];
 
