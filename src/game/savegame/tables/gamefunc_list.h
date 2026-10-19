@@ -529,6 +529,7 @@ static const fnlist_entry_t fnentries_mv_end[] =
 	{"plat_hit_top", (byte *)plat_hit_top},
 	{"plat_hit_bottom", (byte *)plat_hit_bottom},
 	{"door_secret_done", (byte *)door_secret_done},
+	{"plat_go_up", (byte *)plat_go_up},
 };
 static const functionList_t fnlist_mv_end =
 {
