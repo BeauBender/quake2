@@ -160,26 +160,31 @@ Policy: the fork stays public and read-only for everyone except the owner.
 Nobody else can push, open issues or pull requests, or comment; `main`
 cannot be force-pushed or deleted, enforced server-side. There are no
 collaborators by decision, so "collaborators only" means "owner only".
-Recorded by TASK26 on 2026-10-18 from the owner's own `gh` login.
+Recorded by TASK26 on 2026-10-18 from the owner's own `gh` login, completed
+2026-10-19.
 
-| Control | State on 2026-10-18 | How it was checked |
+| Control | State | How it was checked |
 |---|---|---|
-| Issue creation | `COLLABORATORS_ONLY` (verified) | GraphQL `repository.issueCreationPolicy` |
-| Pull request creation | `COLLABORATORS_ONLY` (verified) | GraphQL `repository.pullRequestCreationPolicy` |
+| Issue creation | `COLLABORATORS_ONLY` (verified 2026-10-18 and 2026-10-19) | GraphQL `repository.issueCreationPolicy` |
+| Pull request creation | `COLLABORATORS_ONLY` (verified 2026-10-18 and 2026-10-19) | GraphQL `repository.pullRequestCreationPolicy` |
 | Issues / Pull requests enabled | both `true` (the loop files cards and lands work through them) | same read |
 | Interaction limit | `collaborators_only`, expires 2027-04-18T17:57:18Z | `GET repos/BeauBender/quake2/interaction-limits` |
-| Ruleset `main-protect` on `main` | **owner applies**: `gh api repos/BeauBender/quake2/rulesets --method POST --input .github/rulesets/main-protect.json` | the agent session's permission policy does not allow repository-settings writes; the file in this directory is the exact payload (rules `deletion` + `non_fast_forward`, target `~DEFAULT_BRANCH`, enforcement `active`, no bypass actors on purpose: the agent runs as the owner, so an owner bypass would exempt it too) |
-| Conversation locks | 34 earlier conversations locked on 2026-10-18; issues and PRs #35–#49 created later are **unlocked**, owner locks them: `for n in $(gh api "repos/BeauBender/quake2/issues?state=all&per_page=100" --jq '.[]|select(.locked|not)|.number'); do gh api -X PUT repos/BeauBender/quake2/issues/$n/lock --silent; done` | same permission limit; locks never expire; new conversations arrive unlocked until lock-on-create automation exists |
-| GitHub Apps with access | not listable with a user OAuth token (`GET user/installations` returns 403) | owner reviews Settings → Integrations → GitHub Apps and records the list here |
-| Code review limits ("Limit to users explicitly granted read or higher access") | owner action pending | UI only: Settings → Moderation → Code review limits |
+| Ruleset `main-protect` on `main` | active since 2026-10-19 (applied by the owner, ruleset id 25424093): rules `deletion` + `non_fast_forward`, target `~DEFAULT_BRANCH`, no bypass actors on purpose (the agent runs as the owner, so an owner bypass would exempt it too) | `GET repos/BeauBender/quake2/rules/branches/main` lists exactly those two rules; the live ruleset's name, target, enforcement, conditions, rules and bypass list are identical to `.github/rulesets/main-protect.json` |
+| Conversation locks | every issue and PR locked: #1–#34 on 2026-10-18, #35–#76 on 2026-10-19 | `GET repos/BeauBender/quake2/issues?state=all` returns no unlocked conversation; locks never expire, but new conversations arrive unlocked, so each new card or PR is locked right after it is created (`gh api -X PUT repos/BeauBender/quake2/issues/<n>/lock`) |
+| GitHub Apps with access | reviewed by the owner on 2026-10-19; the list is kept out of this public record, because it names the third-party credentials that can reach the repo. Removing an app is the owner's decision | not listable with a user OAuth token (`GET user/installations` returns 403); the owner read Settings → Integrations → GitHub Apps |
+| Code review limits ("Limit to users explicitly granted read or higher access") | applied by the owner on 2026-10-19 | UI only: Settings → Moderation → Code review limits |
 
 Deferred on purpose:
 
 - `main-require-pr.json` (require a pull request before merging): the memory
   sync Stop hook and the breakdown plan-anchor commit still push straight
   to `main`; enabling it would break the loop until those paths change.
-- Required status checks: Actions has never run on this fork, and a required
-  check that never reports blocks every merge.
+- Required status checks: Actions now runs on every pull request, and the
+  loop already refuses to merge on a red or pending check
+  (`merge.ciChecks: require` in `.claude/dev-loop.json`). Making checks
+  required server-side is not decided yet; GitHub sometimes cancels the
+  macOS job for lack of a runner, and a required check that never reports
+  blocks the merge.
 - Going private: not possible for a fork ("You cannot change the visibility
   of a fork by itself").
 
