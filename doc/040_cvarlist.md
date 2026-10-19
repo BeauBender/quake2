@@ -142,31 +142,6 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   choose a packet framerate that's *both* a fraction of *vid_maxfps*
   (or display refreshrate if vsync is on) *and* between 45 and 90.
   
-* **cl_http_downloads**: Allow HTTP download. Set to `1` by default, set
-  to `0` to disable.
-
-* **cl_http_filelists**: Allow downloading and processing of filelists.
-  A filelist can contain an arbitrary number of files which are
-  downloaded as soon asthe filelist is found on the server. Set to `1`
-  by default, set to `0` to disable.
-
-* **cl_http_max_connections**: Maximum number of parallel downloads. Set
-  to `4` by default. A higher number may help with slow servers.
-
-* **cl_http_verifypeer**: SSL certificate validation. Set to `1`
-  by default, set to `0` to disable.
-
-* **cl_http_proxy**: Proxy to use, empty by default.
-
-* **cl_http_show_dw_progress**: Show a HTTP download progress bar.
-
-* **cl_http_bw_limit_rate**: Average speed transfer threshold for
-`cl_http_bw_limit_tmout` variable. Set `0` by default.
-
-* **cl_http_bw_limit_tmout**: Seconds before the download is aborted
-  when the speed transfer is below the var set by
-  `cl_http_bw_limit_rate`. Set `0` by default.
-
 * **cl_kickangles**: If set to `0` angle kicks (weapon recoil, damage
   hits and the like) are ignored. Cheat-protected. Defaults to `1`.
 

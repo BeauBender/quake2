@@ -8,7 +8,7 @@ This file is the fork's dependency manifest. It lists the system libraries the b
 |---------|---------|----------------|--------|
 | SDL3 (preferred) or SDL2 | client: window, input, gamepad and gyro, audio (`src/client/input/sdl3.c`, `sdl2.c`, `src/client/vid/glimp_sdl3.c`, `glimp_sdl2.c`, `src/client/sound/sdl.c`) | Linked at build time (`WITH_SDL3=yes` by default, SDL2 as the alternative). The dedicated server (`q2ded`) and the game module do not need it. On macOS: `brew install sdl3`. | Kept. SDL2 and SDL3 code paths are parallel implementations. |
 | OpenAL | formerly `src/client/sound/openal.c` and `qal.c` | Was loaded at runtime with `dlopen`. | Removed by TASK4; SDL audio is the only sound backend. |
-| libcurl | `src/client/curl/` (HTTP downloads) | Loaded at runtime with `dlopen`, never linked. | Being removed by TASK3. |
+| libcurl | `src/client/curl/` (HTTP downloads) | Loaded at runtime with `dlopen`, never linked. | Removed by TASK3. |
 | bcrypt (Windows) | `src/backends/windows/system.c` `Sys_GetRandomBytes` | Linked at build time (Makefile LDLIBS) | Kept: OS random source |
 | OpenGL (system framework / libGL) | `ref_gl1`, `ref_gl3` via the vendored glad loader and the `qgl` function table | Function pointers for the GL renderers, resolved through the vendored glad loader and the `qgl` table. | Kept for now; superseded by the Metal renderer plan (`docs/plans/metal-renderer.md`) |
 

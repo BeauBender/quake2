@@ -13,7 +13,6 @@
 #  - Vulkan headers                                      #
 #                                                        #
 # Optional dependencies:                                 #
-#  - CURL                                                #
 #                                                        #
 # Platforms:                                             #
 #  - FreeBSD                                             #
@@ -52,11 +51,6 @@
 
 # User configurable options
 # -------------------------
-
-# WITH_CURL
-# Enables HTTP support through cURL. Used for
-# HTTP download.
-WITH_CURL:=yes
 
 # WITH_EXECINFO
 # Enables backtraces through execinfo on supported platforms.
@@ -479,7 +473,6 @@ config:
 	@echo "Build configuration"
 	@echo "============================"
 	@echo "YQ2_ARCH = $(YQ2_ARCH), YQ2_OSTYPE = $(YQ2_OSTYPE), COMPILER = $(COMPILER)"
-	@echo "WITH_CURL = $(WITH_CURL)"
 	@echo "WITH_RPATH = $(WITH_RPATH)"
 	@echo "WITH_SDL3 = $(WITH_SDL3)"
 	@echo "WITH_SYSTEMWIDE = $(WITH_SYSTEMWIDE)"
@@ -529,10 +522,6 @@ $(BUILDDIR)/client/%.o: %.c
 
 $(BINDIR)/yquake2.exe : LDFLAGS += -mwindows
 
-ifeq ($(WITH_CURL),yes)
-$(BINDIR)/yquake2.exe : CFLAGS += -DUSE_CURL
-endif
-
 else # not Windows
 
 client:
@@ -557,10 +546,6 @@ $(BUILDDIR)/client/%.o: %.c
 endif
 
 $(BINDIR)/quake2 : CFLAGS += -Wno-unused-result
-
-ifeq ($(WITH_CURL),yes)
-$(BINDIR)/quake2 : CFLAGS += -DUSE_CURL
-endif
 
 ifeq ($(WITH_EXECINFO),yes)
 ifeq ($(YQ2_OSTYPE), Linux)
@@ -891,8 +876,6 @@ CLIENT_OBJS_ := \
 	src/client/cl_screen.o \
 	src/client/cl_tempentities.o \
 	src/client/cl_view.o \
-	src/client/curl/download.o \
-	src/client/curl/qcurl.o \
 	src/client/input/gyro.o \
 	src/client/menu/menu.o \
 	src/client/menu/qmenu.o \

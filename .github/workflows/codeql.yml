@@ -43,7 +43,7 @@ jobs:
       if: matrix.build-mode == 'manual'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libgl1-mesa-dev libsdl2-dev libcurl4-openssl-dev
+        sudo apt-get install -y libgl1-mesa-dev libsdl2-dev
         make -j4 WITH_SDL3=no client server game ref_gl1 ref_gl3 ref_soft
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4.38.0
