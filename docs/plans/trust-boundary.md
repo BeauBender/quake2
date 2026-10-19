@@ -169,7 +169,7 @@ Recorded by TASK26 on 2026-10-18 from the owner's own `gh` login.
 | Issues / Pull requests enabled | both `true` (the loop files cards and lands work through them) | same read |
 | Interaction limit | `collaborators_only`, expires 2027-04-18T17:57:18Z | `GET repos/BeauBender/quake2/interaction-limits` |
 | Ruleset `main-protect` on `main` | **owner applies**: `gh api repos/BeauBender/quake2/rulesets --method POST --input .github/rulesets/main-protect.json` | the agent session's permission policy does not allow repository-settings writes; the file in this directory is the exact payload (rules `deletion` + `non_fast_forward`, target `~DEFAULT_BRANCH`, enforcement `active`, no bypass actors on purpose: the agent runs as the owner, so an owner bypass would exempt it too) |
-| Conversation locks | 34 earlier conversations locked on 2026-10-18; issues and PRs #35–#49 created later are **unlocked**, owner locks them: `for n in $(gh api "repos/BeauBender/quake2/issues?state=all&per_page=100" --jq '.[]|select(.locked|not)|.number'); do gh api -X PUT repos/BeauBender/quake2/issues/$n/lock --silent; done` | same permission limit; locks never expire; new conversations arrive unlocked until [redacted] [redacted] (lock-on-create, interaction-limit renewal) ships |
+| Conversation locks | 34 earlier conversations locked on 2026-10-18; issues and PRs #35–#49 created later are **unlocked**, owner locks them: `for n in $(gh api "repos/BeauBender/quake2/issues?state=all&per_page=100" --jq '.[]|select(.locked|not)|.number'); do gh api -X PUT repos/BeauBender/quake2/issues/$n/lock --silent; done` | same permission limit; locks never expire; new conversations arrive unlocked until lock-on-create automation exists |
 | GitHub Apps with access | not listable with a user OAuth token (`GET user/installations` returns 403) | owner reviews Settings → Integrations → GitHub Apps and records the list here |
 | Code review limits ("Limit to users explicitly granted read or higher access") | owner action pending | UI only: Settings → Moderation → Code review limits |
 
@@ -184,6 +184,6 @@ Deferred on purpose:
   of a fork by itself").
 
 Renewal: the interaction limit is six months at most by GitHub design; the
-same `PUT` re-applies it. [redacted] on [redacted] is the automation that
-keeps locks and the limit current; until it ships, renewal is a manual
+same `PUT` re-applies it. No automation keeps locks and the limit current yet: lock-on-create and
+interaction-limit renewal automation does not exist, so renewal is a manual
 owner step recorded here.
