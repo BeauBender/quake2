@@ -810,6 +810,12 @@ CL_ParseFrame(void)
 
 	/* read areabits */
 	len = MSG_ReadByte(&net_message);
+
+	if (len > sizeof(cl.frame.areabits))
+	{
+		Com_Error(ERR_DROP, "CL_ParseFrame: bad areabits length %d", len);
+	}
+
 	MSG_ReadData(&net_message, &cl.frame.areabits, len);
 
 	/* read playerinfo */

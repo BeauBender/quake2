@@ -219,14 +219,37 @@ Huff1Decompress(cblock_t in)
 	byte *out_p;
 	int nodenum;
 	int count;
+	unsigned ucount;
+	long long maxcount;
 	cblock_t out;
 	int inbyte;
 	int *hnodes, *hnodesbase;
 
-	/* get decompressed count */
-	count = in.data[0] + (in.data[1] << 8) + (in.data[2] << 16) + (in.data[3] << 24);
+	memset(&out, 0, sizeof(out));
+
+	if (in.count < 4)
+	{
+		Com_Printf("Cinematic: compressed frame too small (%i bytes)\n", in.count);
+		return out;
+	}
+
+	/* get decompressed count, it can never exceed one picture */
+	ucount = (unsigned)in.data[0] | ((unsigned)in.data[1] << 8) |
+			((unsigned)in.data[2] << 16) | ((unsigned)in.data[3] << 24);
+	maxcount = (long long)cin.width * (long long)cin.height;
+
+	if (ucount == 0 || (long long)ucount > maxcount)
+	{
+		Com_Printf("Cinematic: bad decompressed size %u (picture is %i x %i)\n",
+				ucount, cin.width, cin.height);
+		return out;
+	}
+
+	count = (int)ucount;
 	input = in.data + 4;
-	out_p = out.data = Z_Malloc(count);
+
+	/* the picture is always width * height bytes, Z_Malloc zeroes */
+	out_p = out.data = Z_Malloc((int)maxcount);
 
 	/* read bits */
 	hnodesbase = cin.hnodes1 - 256 * 2; /* nodes 0-255 aren't stored */
@@ -236,6 +259,16 @@ Huff1Decompress(cblock_t in)
 
 	while (count)
 	{
+		/* one byte of overread is tolerated, see below */
+		if (input - in.data > in.count)
+		{
+			Com_Printf("Cinematic: decompression ran past the compressed data\n");
+			Z_Free(out.data);
+			out.data = NULL;
+			out.count = 0;
+			return out;
+		}
+
 		inbyte = *input++;
 
 		int i = 0;
@@ -257,6 +290,16 @@ Huff1Decompress(cblock_t in)
 
 			nodenum = hnodes[nodenum * 2 + (inbyte & 1)];
 			inbyte >>= 1;
+
+			/* nodes 0-510 exist, -1 marks an unfinished tree */
+			if (nodenum < 0 || nodenum > 510)
+			{
+				Com_Printf("Cinematic: bad huffman node %i\n", nodenum);
+				Z_Free(out.data);
+				out.data = NULL;
+				out.count = 0;
+				return out;
+			}
 		}
 	}
 
@@ -280,11 +323,12 @@ SCR_ReadNextFrame(void)
 	// so we need to make sure to align it correctly
 	YQ2_ALIGNAS_TYPE(short) byte samples[22050 / 14 * 4];
 
-	byte compressed[0x20000];
+	byte compressed[0x20000 + 1]; /* one spare byte for the tolerated overread */
 	int size;
 	byte *pic;
 	cblock_t in, huf1;
 	int start, end, count;
+	long long bytes;
 
 	/* read the next frame */
 	r = FS_FRead(&command, 4, 1, cl.cinematic_file);
@@ -319,19 +363,30 @@ SCR_ReadNextFrame(void)
 	FS_Read(&size, 4, cl.cinematic_file);
 	size = LittleLong(size);
 
-	if (((size_t)size > sizeof(compressed)) || (size < 1))
+	if (((size_t)size > sizeof(compressed) - 1) || (size < 1))
 	{
 		Com_Error(ERR_DROP, "Bad compressed frame size");
+		return NULL; /* not reached: Com_Error does not return; keeps MSVC's analyzer from assuming the read below runs unguarded */
 	}
 
 	FS_Read(compressed, size, cl.cinematic_file);
+	compressed[size] = 0;
 
 	/* read sound */
 	start = cl.cinematicframe * cin.s_rate / 14;
 	end = (cl.cinematicframe + 1) * cin.s_rate / 14;
 	count = end - start;
 
-	FS_Read(samples, count * cin.s_width * cin.s_channels,
+	bytes = (long long)count * cin.s_width * cin.s_channels;
+
+	if (count < 0 || bytes < 0 || bytes > (long long)sizeof(samples))
+	{
+		Com_Printf("Cinematic: bad sound parameters (%i samples, width %i, %i channels)\n",
+				count, cin.s_width, cin.s_channels);
+		return NULL;
+	}
+
+	FS_Read(samples, (int)bytes,
 			cl.cinematic_file);
 
 	if (cin.s_width == 2)
@@ -351,6 +406,11 @@ SCR_ReadNextFrame(void)
 	huf1 = Huff1Decompress(in);
 
 	pic = huf1.data;
+
+	if (!pic)
+	{
+		return NULL; /* bad frame, the caller stops the cinematic */
+	}
 
 	cl.cinematicframe++;
 
@@ -670,6 +730,26 @@ SCR_PlayCinematic(char *arg)
 	cin.s_width = LittleLong(cin.s_width);
 	FS_Read(&cin.s_channels, 4, cl.cinematic_file);
 	cin.s_channels = LittleLong(cin.s_channels);
+
+	if (cin.width <= 0 || cin.height <= 0 ||
+		(long long)cin.width * (long long)cin.height > 16 * 1024 * 1024)
+	{
+		Com_Printf("Cinematic %s has bad size %i x %i\n", name, cin.width, cin.height);
+		SCR_StopCinematic();
+		SCR_FinishCinematic();
+		return;
+	}
+
+	if (cin.s_rate <= 0 || cin.s_rate > 22050 ||
+		(cin.s_width != 1 && cin.s_width != 2) ||
+		(cin.s_channels != 1 && cin.s_channels != 2))
+	{
+		Com_Printf("Cinematic %s has bad sound format (%i Hz, width %i, %i channels)\n",
+				name, cin.s_rate, cin.s_width, cin.s_channels);
+		SCR_StopCinematic();
+		SCR_FinishCinematic();
+		return;
+	}
 
 	Huff1TableInit();
 

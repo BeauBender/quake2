@@ -1308,11 +1308,28 @@ CMod_LoadNodes(const char *name, lump_t *l)
 
 	for (i = 0; i < count; i++, out++, in++)
 	{
-		out->plane = map_planes + LittleLong(in->planenum);
+		int planenum = LittleLong(in->planenum);
+
+		if (planenum < 0 || planenum >= numplanes)
+		{
+			Com_Error(ERR_DROP, "%s: Map %s node %d has bad plane index %d (%d planes)",
+				__func__, name, i, planenum, numplanes);
+		}
+
+		out->plane = map_planes + planenum;
 
 		for (j = 0; j < 2; j++)
 		{
 			child = LittleLong(in->children[j]);
+
+			/* negative children are leafs: -(leaf + 1) */
+			if ((child >= 0 && child >= count) ||
+				(child < 0 && (-1 - child) >= numleafs))
+			{
+				Com_Error(ERR_DROP, "%s: Map %s node %d has bad child %d (%d nodes, %d leafs)",
+					__func__, name, i, child, count, numleafs);
+			}
+
 			out->children[j] = child;
 		}
 	}
@@ -1542,7 +1559,14 @@ CMod_LoadBrushSides(lump_t *l)
 
 	for (i = 0; i < count; i++, in++, out++)
 	{
-		num = LittleShort(in->planenum);
+		num = (unsigned short)LittleShort(in->planenum);
+
+		if (num >= numplanes)
+		{
+			Com_Error(ERR_DROP, "Mod_LoadBrushSides: brushside %d has bad plane index %d (%d planes)",
+				i, num, numplanes);
+		}
+
 		out->plane = &map_planes[num];
 		j = LittleShort(in->texinfo);
 
@@ -1712,6 +1736,81 @@ CMod_LoadEntityString(const lump_t *l, const char *name)
 }
 
 /*
+ * Checks that every lump lies completely inside the file.
+ */
+static void
+CMod_CheckLumps(const char *name, const dheader_t *header, int length)
+{
+	int i;
+
+	for (i = 0; i < HEADER_LUMPS; i++)
+	{
+		const lump_t *l = &header->lumps[i];
+
+		if (l->fileofs < 0 || l->filelen < 0 ||
+			(long long)l->fileofs + (long long)l->filelen > (long long)length)
+		{
+			Com_Error(ERR_DROP, "%s: Map %s lump %d (ofs %d, len %d) lies outside the file (%d bytes)",
+				__func__, name, i, l->fileofs, l->filelen, length);
+		}
+	}
+}
+
+/*
+ * Cross checks indices that refer to lumps
+ * which were not yet loaded when the
+ * referring lump was read.
+ */
+static void
+CMod_CheckReferences(const char *name)
+{
+	int i;
+
+	for (i = 0; i < numleafs; i++)
+	{
+		const cleaf_t *l = &map_leafs[i];
+
+		if (l->numleafbrushes > 0 &&
+			(int)l->firstleafbrush + (int)l->numleafbrushes > numleafbrushes)
+		{
+			Com_Error(ERR_DROP, "%s: Map %s leaf %d has bad leafbrush range %d+%d (%d leafbrushes)",
+				__func__, name, i, l->firstleafbrush, l->numleafbrushes, numleafbrushes);
+		}
+	}
+
+	for (i = 0; i < numleafbrushes; i++)
+	{
+		if (map_leafbrushes[i] >= numbrushes)
+		{
+			Com_Error(ERR_DROP, "%s: Map %s leafbrush %d has bad brush index %d (%d brushes)",
+				__func__, name, i, map_leafbrushes[i], numbrushes);
+		}
+	}
+
+	for (i = 0; i < numbrushes; i++)
+	{
+		const cbrush_t *b = &map_brushes[i];
+
+		if ((long long)b->firstbrushside + b->numsides > numbrushsides)
+		{
+			Com_Error(ERR_DROP, "%s: Map %s brush %d has bad brushside range %d+%d (%d brushsides)",
+				__func__, name, i, b->firstbrushside, b->numsides, numbrushsides);
+		}
+	}
+
+	for (i = 0; i < numcmodels; i++)
+	{
+		const cmodel_t *m = &map_cmodels[i];
+
+		if (m->headnode >= numnodes || (m->headnode < 0 && (-1 - m->headnode) >= numleafs))
+		{
+			Com_Error(ERR_DROP, "%s: Map %s submodel %d has bad headnode %d",
+				__func__, name, i, m->headnode);
+		}
+	}
+}
+
+/*
  * Loads in the map and all submodels
  */
 cmodel_t *
@@ -1765,6 +1864,12 @@ CM_LoadMap(const char *name, qboolean clientload, unsigned *checksum)
 		Com_Error(ERR_DROP, "Couldn't load %s", name);
 	}
 
+	if (length < (int)sizeof(dheader_t))
+	{
+		Com_Error(ERR_DROP, "%s: Map %s is too small (%d bytes)",
+				__func__, name, length);
+	}
+
 	last_checksum = LittleLong(Com_BlockChecksum(buf, length));
 	*checksum = last_checksum;
 
@@ -1782,6 +1887,8 @@ CM_LoadMap(const char *name, qboolean clientload, unsigned *checksum)
 				name, header.version, BSPVERSION);
 	}
 
+	CMod_CheckLumps(name, &header, length);
+
 	cmod_base = (byte *)buf;
 
 	/* load into heap */
@@ -1793,6 +1900,7 @@ CM_LoadMap(const char *name, qboolean clientload, unsigned *checksum)
 	CMod_LoadBrushSides(&header.lumps[LUMP_BRUSHSIDES]);
 	CMod_LoadSubmodels(name, &header.lumps[LUMP_MODELS]);
 	CMod_LoadNodes(name, &header.lumps[LUMP_NODES]);
+	CMod_CheckReferences(name);
 	CMod_LoadAreas(&header.lumps[LUMP_AREAS]);
 	CMod_LoadAreaPortals(&header.lumps[LUMP_AREAPORTALS]);
 	CMod_LoadVisibility(&header.lumps[LUMP_VISIBILITY]);
