@@ -9,6 +9,7 @@ This file is the fork's dependency manifest. It lists the system libraries the b
 | SDL3 (preferred) or SDL2 | client: window, input, gamepad and gyro, audio (`src/client/input/sdl3.c`, `sdl2.c`, `src/client/vid/glimp_sdl3.c`, `glimp_sdl2.c`, `src/client/sound/sdl.c`) | Linked at build time (`WITH_SDL3=yes` by default, SDL2 as the alternative). The dedicated server (`q2ded`) and the game module do not need it. On macOS: `brew install sdl3`. | Kept. SDL2 and SDL3 code paths are parallel implementations. |
 | OpenAL | formerly `src/client/sound/openal.c` and `qal.c` | Was loaded at runtime with `dlopen`. | Removed by TASK4; SDL audio is the only sound backend. |
 | libcurl | `src/client/curl/` (HTTP downloads) | Loaded at runtime with `dlopen`, never linked. | Being removed by TASK3. |
+| bcrypt (Windows) | `src/backends/windows/system.c` `Sys_GetRandomBytes` | Linked at build time (Makefile LDLIBS and CMake) | Kept: OS random source |
 | OpenGL (system framework / libGL) | `ref_gl1`, `ref_gl3` via the vendored glad loader and the `qgl` function table | Function pointers for the GL renderers, resolved through the vendored glad loader and the `qgl` table. | Kept for now; superseded by the Metal renderer plan (`docs/plans/metal-renderer.md`) |
 
 ## In-tree third-party files
@@ -20,7 +21,7 @@ Audited items (small files that stay) first, then the larger vendored files that
 | `src/client/input/gyro.c` | Julian "Jibb" Smart, Nicolas Lessard, ceski (gyro helper lineage); no URL in the file | not stated | MIT | `dbaf3b1c65526b8c0c5dc5a28d5e7f47cef8163ae1cfa11c4edf50bd58b1591e` | Audited, KEEP (TASK15) |
 | `src/client/input/header/gyro.h` | Julian "Jibb" Smart, Nicolas Lessard, ceski (gyro helper lineage); no URL in the file | not stated | MIT | `29385259dc66177c07ccb53fdc6059fef41cda4c49a5d81f68226c42cbafd60b` | Audited with gyro.c, KEEP (TASK15) |
 | `src/common/md4.c` | RFC 1320 implementation by Steven Fuller, http://www.faqs.org/rfcs/rfc1320.html | not stated | Public domain | `7caa4ac6279e567bec2912ba561d2a95a8627a70df647f5e749e97bdf56ac0b9` | Audited, KEEP (TASK15) |
-| `src/common/shared/rand.c` | KISS PRNG by Marsaglia, via Shinobu (zuttobenkyou.wordpress.com), modified by Yamagi | not stated | Public domain | `70aa5ae4a1279c409e4a82ec848d14d09d135dc8aa6e801751ae1a570a1d01c6` | Audited, KEEP (TASK15) |
+| `src/common/shared/rand.c` | KISS PRNG by Marsaglia, via Shinobu (zuttobenkyou.wordpress.com), modified by Yamagi | not stated | Public domain | `ae7ed8037c3b4e33913b57d5796701ba3bb275b96e633b2e2294f47fae20786f` | Audited, KEEP (TASK15); modified by FIX4 |
 | `src/common/glob.c` | Global string matcher carried in id Software's Quake II source; no separate URL in the file | not stated | GPL-2-or-later (id Software header) | `8c7b2dd033417cda3208fb55b60e21df5bf73262788d6ab552814451808be67e` | Audited, KEEP (TASK15) |
 | `src/game/savegame/tables/clientfields.h` | Project file (id Software, Yamagi); hand-written | n/a | GPL-2-or-later | `cc1e6c2e0f3b6c141e8f2a56312b8b16f9f7d8747c13481a99f254e4f4e60a68` | Audited, KEEP (TASK15) |
 | `src/game/savegame/tables/entfields.h` | Project file; hand-written | n/a | GPL-2-or-later | `52f0079e81e4c93e927a5eb8f6661a2568218c63b12e484a62629c54477a79b7` | Audited, KEEP (TASK15) |

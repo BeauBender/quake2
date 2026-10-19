@@ -41,8 +41,11 @@
 #define FNDELAY O_NDELAY
 #endif
 
-#ifdef __linux__
+#if defined(__linux__) && defined(__has_include)
+#if __has_include(<sys/random.h>)
 #include <sys/random.h>
+#define HAVE_GETRANDOM 1
+#endif
 #endif
 
 #ifdef __APPLE__
@@ -253,18 +256,36 @@ Sys_ConsoleOutput(char *string)
 static void
 Sys_RandomFallback(void *buf, size_t len)
 {
+	static uint64_t fallback_state;
+	static uint64_t counter;
+	static qboolean warned;
 	unsigned char *out = buf;
-	int stackvar = 0;
-	uint64_t state = (uint64_t)time(NULL) ^ ((uint64_t)(uint64_t)getpid() << 32)
-			^ (uint64_t)(uintptr_t)&stackvar;
 	size_t i;
 
-	Com_Printf("WARNING: No OS random source, falling back to weak seed.\n");
+	if (!fallback_state)
+	{
+		int stackvar = 0;
+
+		fallback_state = (uint64_t)time(NULL) ^ ((uint64_t)(uint64_t)getpid() << 32)
+				^ ((uint64_t)clock() << 16) ^ (uint64_t)(uintptr_t)&stackvar;
+		fallback_state |= 1;
+	}
+
+	counter++;
+
+	if (!warned)
+	{
+		warned = true;
+		Com_Printf("WARNING: No OS random source, falling back to weak seed.\n");
+	}
+
+	fallback_state ^= counter * 0x9E3779B97F4A7C15ULL;
+	fallback_state ^= (uint64_t)Sys_Microseconds();
 
 	for (i = 0; i < len; i++)
 	{
-		state = state * 6364136223846793005ULL + 1442695040888963407ULL;
-		out[i] = (unsigned char)(state >> 56);
+		fallback_state = fallback_state * 6364136223846793005ULL + 1442695040888963407ULL;
+		out[i] = (unsigned char)(fallback_state >> 56);
 	}
 }
 #endif
@@ -282,7 +303,7 @@ Sys_GetRandomBytes(void *buf, size_t len)
 	size_t done = 0;
 	FILE *f;
 
-#ifdef __linux__
+#ifdef HAVE_GETRANDOM
 	while (done < len)
 	{
 		ssize_t r = getrandom(out + done, len - done, 0);

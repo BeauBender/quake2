@@ -45,10 +45,13 @@ int meansOfDeath;
 edict_t *g_edicts;
 
 /*
- * The engine's Sys_GetRandomBytes() is not reachable from
- * the game module, but shared/rand.c needs it to seed the
- * PRNG. Gameplay randomness needs no unpredictability, so
- * this only has to differ between process starts.
+ * shared/rand.c needs Sys_GetRandomBytes() to seed the PRNG.
+ * On Linux the Makefile links the engine with -rdynamic, so
+ * the module's call binds to the engine's definition by ELF
+ * preemption. This copy is the definition actually used on
+ * Windows and whenever the engine symbol is not exported.
+ * Gameplay randomness is not security-relevant, so it only
+ * has to differ between process starts.
  */
 void
 Sys_GetRandomBytes(void *buf, size_t len)
@@ -56,11 +59,23 @@ Sys_GetRandomBytes(void *buf, size_t len)
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 	arc4random_buf(buf, len);
 #else
+	static uint64_t state;
+	static uint64_t counter;
 	unsigned char *out = buf;
-	int stackvar = 0;
-	uint64_t state = (uint64_t)time(NULL) ^ ((uint64_t)clock() << 32)
-			^ (uint64_t)(uintptr_t)&stackvar;
 	size_t i;
+
+	if (!state)
+	{
+		int stackvar = 0;
+
+		state = (uint64_t)time(NULL) ^ ((uint64_t)clock() << 32)
+				^ (uint64_t)(uintptr_t)&stackvar;
+		state |= 1;
+	}
+
+	counter++;
+	state ^= counter * 0x9E3779B97F4A7C15ULL;
+	state ^= (uint64_t)clock();
 
 	for (i = 0; i < len; i++)
 	{
