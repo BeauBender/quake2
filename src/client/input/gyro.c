@@ -26,6 +26,7 @@
 //----------------------------------------------------------------------------
 
 #include "header/gyro.h"
+#include <math.h>
 
 #define EPSILONF 1.0e-6f
 #define DEG2RAD(x) (float)((x) * M_PI / 180.0)
@@ -417,6 +418,12 @@ void IN_GYRO_Process(float delta_time, float *out_pitch_rate,
 
 void IN_GYRO_AccumulateAccelSamples(vec3_t accelerometer_data)
 {
+	/* a NaN or infinite sample is ignored, state is unchanged */
+	if (!isfinite(accelerometer_data[0]) || !isfinite(accelerometer_data[1]) || !isfinite(accelerometer_data[2]))
+	{
+		return;
+	}
+
 	if (!samples.accel_count)
 	{
 		memset(samples.accel, 0, sizeof(samples.accel));
@@ -428,6 +435,12 @@ void IN_GYRO_AccumulateAccelSamples(vec3_t accelerometer_data)
 
 void IN_GYRO_AccumulateGyroSamples(vec3_t gyro_data)
 {
+	/* a NaN or infinite sample is ignored, state is unchanged */
+	if (!isfinite(gyro_data[0]) || !isfinite(gyro_data[1]) || !isfinite(gyro_data[2]))
+	{
+		return;
+	}
+
 	if (!samples.gyro_count)
 	{
 		memset(samples.gyro, 0, sizeof(samples.gyro));
@@ -486,18 +499,42 @@ void IN_GYRO_ResetState(void)
 
 void IN_GYRO_UpdateGyroSpace(float gyro_space)
 {
+	/* a NaN or infinite cvar value is treated as 0 */
+	if (!isfinite(gyro_space))
+	{
+		gyro_space = 0.0f;
+	}
+
 	motion.gyro_space =
 		lroundf(Q_clamp(gyro_space, GYRO_SPACE_LOCAL, GYRO_SPACE_WORLD));
 }
 
 void IN_GYRO_UpdateLocalRoll(float local_roll)
 {
+	/* a NaN or infinite cvar value is treated as 0 */
+	if (!isfinite(local_roll))
+	{
+		local_roll = 0.0f;
+	}
+
 	motion.local_roll = lroundf(
 		Q_clamp(local_roll, GYRO_LOCAL_ROLL_OFF, GYRO_LOCAL_ROLL_INVERT));
 }
 
 void IN_GYRO_UpdateSensitivity(float pitch_sens, float yaw_sens)
 {
+	/* a NaN or infinite cvar value is treated as 0 */
+	if (!isfinite(pitch_sens))
+	{
+		pitch_sens = 0.0f;
+	}
+
+	/* a NaN or infinite cvar value is treated as 0 */
+	if (!isfinite(yaw_sens))
+	{
+		yaw_sens = 0.0f;
+	}
+
 	motion.min_pitch_sens = Q_clamp(pitch_sens, GYRO_MIN_SENS, GYRO_MAX_SENS);
 	motion.min_yaw_sens = Q_clamp(yaw_sens, GYRO_MIN_SENS, GYRO_MAX_SENS);
 	motion.max_pitch_sens = motion.min_pitch_sens * motion.accel_mult;
@@ -506,6 +543,12 @@ void IN_GYRO_UpdateSensitivity(float pitch_sens, float yaw_sens)
 
 void IN_GYRO_UpdateTightening(float tightening)
 {
+	/* a NaN or infinite cvar value is treated as 0 */
+	if (!isfinite(tightening))
+	{
+		tightening = 0.0f;
+	}
+
 	motion.tightening =
 		Q_clamp(tightening, GYRO_MIN_TIGHT_THRESH, GYRO_MAX_TIGHT_THRESH);
 	motion.tightening = DEG2RAD(motion.tightening);
@@ -514,6 +557,12 @@ void IN_GYRO_UpdateTightening(float tightening)
 
 void IN_GYRO_UpdateSmoothing(float smoothing)
 {
+	/* a NaN or infinite cvar value is treated as 0 */
+	if (!isfinite(smoothing))
+	{
+		smoothing = 0.0f;
+	}
+
 	motion.upper_smooth =
 		Q_clamp(smoothing, GYRO_MIN_SMOOTH_THRESH, GYRO_MAX_SMOOTH_THRESH);
 	motion.upper_smooth = DEG2RAD(motion.upper_smooth);
@@ -522,6 +571,12 @@ void IN_GYRO_UpdateSmoothing(float smoothing)
 
 void IN_GYRO_UpdateSmoothingWindow(float smoothing_window)
 {
+	/* a NaN or infinite cvar value is treated as 0 */
+	if (!isfinite(smoothing_window))
+	{
+		smoothing_window = 0.0f;
+	}
+
 	motion.smooth_window = Q_clamp(smoothing_window, GYRO_MIN_SMOOTH_WINDOW,
 								   GYRO_MAX_SMOOTH_WINDOW);
 	motion.use_smoothing = (motion.smooth_window > EPSILONF);
@@ -529,6 +584,12 @@ void IN_GYRO_UpdateSmoothingWindow(float smoothing_window)
 
 void IN_GYRO_UpdateAcceleration(float use_acceleration)
 {
+	/* a NaN or infinite cvar value is treated as 0 */
+	if (!isfinite(use_acceleration))
+	{
+		use_acceleration = 0.0f;
+	}
+
 	motion.accel_requested = lroundf(Q_clamp(use_acceleration, 0.0f, 1.0f));
 	motion.use_acceleration =
 		(motion.accel_requested
@@ -537,6 +598,12 @@ void IN_GYRO_UpdateAcceleration(float use_acceleration)
 
 void IN_GYRO_UpdateAccelMult(float accel_mult)
 {
+	/* a NaN or infinite cvar value is treated as 0 */
+	if (!isfinite(accel_mult))
+	{
+		accel_mult = 0.0f;
+	}
+
 	motion.accel_mult =
 		Q_clamp(accel_mult, GYRO_MIN_ACCEL_MULT, GYRO_MAX_ACCEL_MULT);
 	motion.max_pitch_sens = motion.min_pitch_sens * motion.accel_mult;
@@ -548,6 +615,18 @@ void IN_GYRO_UpdateAccelMult(float accel_mult)
 
 void IN_GYRO_UpdateAccelThresh(float lower_accel, float upper_accel)
 {
+	/* a NaN or infinite cvar value is treated as 0 */
+	if (!isfinite(lower_accel))
+	{
+		lower_accel = 0.0f;
+	}
+
+	/* a NaN or infinite cvar value is treated as 0 */
+	if (!isfinite(upper_accel))
+	{
+		upper_accel = 0.0f;
+	}
+
 	motion.lower_accel =
 		Q_clamp(lower_accel, GYRO_MIN_ACCEL_THRESH, GYRO_MAX_ACCEL_THRESH);
 	motion.upper_accel =
@@ -558,6 +637,23 @@ void IN_GYRO_UpdateAccelThresh(float lower_accel, float upper_accel)
 
 void IN_GYRO_UpdateCalibration(float accel_magnitude, vec3_t gyro_offset)
 {
+	int i;
+
+	/* a NaN or infinite cvar value is treated as 0 */
+	if (!isfinite(accel_magnitude))
+	{
+		accel_magnitude = 0.0f;
+	}
+
+	/* NaN or infinite offset components are treated as 0 */
+	for (i = 0; i < 3; i++)
+	{
+		if (!isfinite(gyro_offset[i]))
+		{
+			gyro_offset[i] = 0.0f;
+		}
+	}
+
 	motion.accel_magnitude = accel_magnitude;
 	VectorCopy(gyro_offset, motion.gyro_offset);
 }
