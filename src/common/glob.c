@@ -28,48 +28,194 @@
 #include "header/glob.h"
 
 /*
+ * Matches one non-star pattern element at *PP against the text
+ * character TC (which must not be NUL) and advances *PP past the
+ * element. A backslash at the very end of the pattern is a literal
+ * backslash. Returns 1 on match, 0 on mismatch and -1 if the pattern
+ * is malformed (unterminated set); the pattern pointer never moves
+ * past the terminating NUL.
+ */
+static int
+glob_match_element(char **pp, char tc)
+{
+	char *p = *pp;
+	char c = *p++;
+
+	switch (c)
+	{
+		case '?':
+			*pp = p;
+			return 1;
+
+		case '\\':
+
+			if (*p != '\0')
+			{
+				c = *p++;
+			}
+
+			*pp = p;
+			return c == tc;
+
+		case '[':
+		{
+			int invert, matched = 0;
+
+			invert = ((*p == '!') || (*p == '^'));
+
+			if (invert)
+			{
+				p++;
+			}
+
+			/* The first character is always a set member, even ']'. */
+			c = *p;
+
+			while (1)
+			{
+				char cstart, cend;
+
+				if (c == '\0')
+				{
+					*pp = p;
+					return -1;
+				}
+
+				p++;
+				cstart = cend = c;
+
+				if (c == '\\')
+				{
+					if (*p == '\0')
+					{
+						*pp = p;
+						return -1;
+					}
+
+					cstart = cend = *p++;
+				}
+
+				c = *p;
+
+				if ((c == '-') && (p[1] != ']') && (p[1] != '\0'))
+				{
+					p++;
+					cend = *p++;
+
+					if (cend == '\\')
+					{
+						if (*p == '\0')
+						{
+							*pp = p;
+							return -1;
+						}
+
+						cend = *p++;
+					}
+
+					c = *p;
+				}
+
+				if ((tc >= cstart) && (tc <= cend))
+				{
+					matched = 1;
+				}
+
+				if (c == ']')
+				{
+					p++;
+					break;
+				}
+			}
+
+			*pp = p;
+			return matched != invert;
+		}
+
+		default:
+			*pp = p;
+			return c == tc;
+	}
+}
+
+/*
+ * Iterative matcher with a single backtrack point (the most recent
+ * star), O(strlen(pattern) * strlen(text)) in the worst case. If
+ * STAR is set the pattern is treated as if it followed a star.
+ */
+static int
+glob_run(char *pattern, char *text, int star)
+{
+	char *p = pattern, *t = text;
+	char *star_p = NULL, *star_t = NULL;
+
+	if (star)
+	{
+		star_p = p;
+		star_t = t;
+	}
+
+	while (1)
+	{
+		if (*p == '*')
+		{
+			while (*p == '*')
+			{
+				p++;
+			}
+
+			if (*p == '\0')
+			{
+				return 1;
+			}
+
+			star_p = p;
+			star_t = t;
+			continue;
+		}
+
+		if (*p == '\0')
+		{
+			if (*t == '\0')
+			{
+				return 1;
+			}
+		}
+		else if (*t != '\0')
+		{
+			int r = glob_match_element(&p, *t);
+
+			if (r < 0)
+			{
+				return 0;
+			}
+
+			if (r)
+			{
+				t++;
+				continue;
+			}
+		}
+
+		/* Mismatch: let the last star swallow one more character. */
+		if ((star_p == NULL) || (*star_t == '\0'))
+		{
+			return 0;
+		}
+
+		star_t++;
+		t = star_t;
+		p = star_p;
+	}
+}
+
+/*
  * Like glob_match, but match PATTERN against any final segment of TEXT.
  */
 static int
 glob_match_after_star(char *pattern, char *text)
 {
-	register char *p = pattern, *t = text;
-	register char c, c1;
-
-	while ((c = *p++) == '?' || c == '*')
-	{
-		if ((c == '?') && (*t++ == '\0'))
-		{
-			return 0;
-		}
-	}
-
-	if (c == '\0')
-	{
-		return 1;
-	}
-
-	if (c == '\\')
-	{
-		c1 = *p;
-	}
-	else
-	{
-		c1 = c;
-	}
-
-	while (1)
-	{
-		if (((c == '[') || (*t == c1)) && glob_match(p - 1, t))
-		{
-			return 1;
-		}
-
-		if (*t++ == '\0')
-		{
-			return 0;
-		}
-	}
+	return glob_run(pattern, text, 1);
 }
 
 /* Match the pattern PATTERN against the string TEXT;
@@ -92,148 +238,10 @@ glob_match_after_star(char *pattern, char *text)
 int
 glob_match(char *pattern, char *text)
 {
-	register char *p = pattern, *t = text;
-	register char c;
-
-	while ((c = *p++) != '\0')
+	if (*pattern == '*')
 	{
-		switch (c)
-		{
-			case '?':
-
-				if (*t == '\0')
-				{
-					return 0;
-				}
-				else
-				{
-					++t;
-				}
-
-				break;
-
-			case '\\':
-
-				if (*p++ != *t++)
-				{
-					return 0;
-				}
-
-				break;
-
-			case '*':
-				return glob_match_after_star(p, t);
-
-			case '[':
-			{
-				register char c1 = *t++;
-				int invert;
-
-				if (!c1)
-				{
-					return 0;
-				}
-
-				invert = ((*p == '!') || (*p == '^'));
-
-				if (invert)
-				{
-					p++;
-				}
-
-				c = *p++;
-
-				while (1)
-				{
-					register char cstart = c, cend = c;
-
-					if (c == '\\')
-					{
-						cstart = *p++;
-						cend = cstart;
-					}
-
-					if (c == '\0')
-					{
-						return 0;
-					}
-
-					c = *p++;
-
-					if ((c == '-') && (*p != ']'))
-					{
-						cend = *p++;
-
-						if (cend == '\\')
-						{
-							cend = *p++;
-						}
-
-						if (cend == '\0')
-						{
-							return 0;
-						}
-
-						c = *p++;
-					}
-
-					if ((c1 >= cstart) && (c1 <= cend))
-					{
-						goto match;
-					}
-
-					if (c == ']')
-					{
-						break;
-					}
-				}
-
-				if (!invert)
-				{
-					return 0;
-				}
-
-				break;
-
-			match:
-
-				/* Skip the rest of the [...] construct that already matched.  */
-				while (c != ']')
-				{
-					if (c == '\0')
-					{
-						return 0;
-					}
-
-					c = *p++;
-
-					if (c == '\0')
-					{
-						return 0;
-					}
-					else if (c == '\\')
-					{
-						++p;
-					}
-				}
-
-				if (invert)
-				{
-					return 0;
-				}
-
-				break;
-			}
-
-			default:
-
-				if (c != *t++)
-				{
-					return 0;
-				}
-		}
+		return glob_match_after_star(pattern + 1, text);
 	}
 
-	return *t == '\0';
+	return glob_run(pattern, text, 0);
 }
-
