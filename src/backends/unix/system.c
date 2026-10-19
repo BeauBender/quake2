@@ -31,6 +31,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 #include <time.h>
 #include <unistd.h>
 #include <errno.h>
@@ -38,6 +39,10 @@
 #include <sys/select.h> /* for fd_set */
 #ifndef FNDELAY
 #define FNDELAY O_NDELAY
+#endif
+
+#ifdef __linux__
+#include <sys/random.h>
 #endif
 
 #ifdef __APPLE__
@@ -238,6 +243,83 @@ Sys_ConsoleOutput(char *string)
 }
 
 /* ================================================================ */
+
+/*
+ * Last resort entropy: time, pid and a stack address
+ * mixed through a small LCG. Not secure, but different
+ * for every process start.
+ */
+#if !(defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__))
+static void
+Sys_RandomFallback(void *buf, size_t len)
+{
+	unsigned char *out = buf;
+	int stackvar = 0;
+	uint64_t state = (uint64_t)time(NULL) ^ ((uint64_t)(uint64_t)getpid() << 32)
+			^ (uint64_t)(uintptr_t)&stackvar;
+	size_t i;
+
+	Com_Printf("WARNING: No OS random source, falling back to weak seed.\n");
+
+	for (i = 0; i < len; i++)
+	{
+		state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+		out[i] = (unsigned char)(state >> 56);
+	}
+}
+#endif
+
+/*
+ * Fills buf with len bytes from the OS random source.
+ */
+void
+Sys_GetRandomBytes(void *buf, size_t len)
+{
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+	arc4random_buf(buf, len);
+#else
+	unsigned char *out = buf;
+	size_t done = 0;
+	FILE *f;
+
+#ifdef __linux__
+	while (done < len)
+	{
+		ssize_t r = getrandom(out + done, len - done, 0);
+
+		if (r < 0)
+		{
+			if (errno == EINTR)
+			{
+				continue;
+			}
+
+			break;
+		}
+
+		done += (size_t)r;
+	}
+
+	if (done == len)
+	{
+		return;
+	}
+#endif
+
+	f = fopen("/dev/urandom", "rb");
+
+	if (f != NULL)
+	{
+		done += fread(out + done, 1, len - done, f);
+		fclose(f);
+	}
+
+	if (done != len)
+	{
+		Sys_RandomFallback(out + done, len - done);
+	}
+#endif
+}
 
 long long
 Sys_Microseconds(void)

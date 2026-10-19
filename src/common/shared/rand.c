@@ -13,7 +13,10 @@
  * =======================================================================
  */
 
+#include <stddef.h>
 #include <stdint.h>
+
+void Sys_GetRandomBytes(void *buf, size_t len);
 
 #define QSIZE 0x200000
 #define CNG (cng = 6906969069ULL * cng + 13579)
@@ -40,17 +43,12 @@ B64MWC(void)
 
 /*
  * Generate a pseudorandom
- * integer >0.
+ * non-negative integer.
  */
 int
 randk(void)
 {
-	int r;
-
-	r = (int)KISS;
-	r = (r < 0) ? (r * -1) : r;
-
-	return r;
+	return (int)(KISS & 0x7fffffff);
 }
 
 /*
@@ -80,6 +78,15 @@ void
 randk_seed(void)
 {
 	uint64_t i;
+
+	/* Seed the generators from the OS, never leave xs at 0 */
+	Sys_GetRandomBytes(&xs, sizeof(xs));
+	Sys_GetRandomBytes(&cng, sizeof(cng));
+
+	if (xs == 0)
+	{
+		xs = 0x9E3779B97F4A7C15ULL;
+	}
 
 	/* Seed QARY[] with CNG+XS: */
 	for (i = 0; i < QSIZE; i++)

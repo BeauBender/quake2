@@ -407,7 +407,7 @@ LDLIBS ?= -lm
 else ifeq ($(YQ2_OSTYPE),OpenBSD)
 LDLIBS ?= -lm
 else ifeq ($(YQ2_OSTYPE),Windows)
-LDLIBS ?= -lws2_32 -lwinmm -static-libgcc
+LDLIBS ?= -lws2_32 -lbcrypt -lwinmm -static-libgcc
 else ifeq ($(YQ2_OSTYPE), Darwin)
 LDLIBS ?= -arch $(YQ2_ARCH)
 else ifeq ($(YQ2_OSTYPE), Haiku)

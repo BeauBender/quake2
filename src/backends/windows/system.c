@@ -34,6 +34,9 @@
 #include <stdio.h>
 #include <wchar.h>
 #include <windows.h>
+#include <bcrypt.h>
+#include <stdint.h>
+#include <time.h>
 
 #include "../../common/header/common.h"
 #include "header/resource.h"
@@ -269,6 +272,42 @@ Sys_ConsoleOutput(char *string)
 }
 
 /* ================================================================ */
+
+/*
+ * Last resort entropy: time, pid and a stack address
+ * mixed through a small LCG. Not secure, but different
+ * for every process start.
+ */
+static void
+Sys_RandomFallback(void *buf, size_t len)
+{
+	unsigned char *out = buf;
+	int stackvar = 0;
+	uint64_t state = (uint64_t)time(NULL) ^ ((uint64_t)(uint64_t)GetCurrentProcessId() << 32)
+			^ (uint64_t)(uintptr_t)&stackvar;
+	size_t i;
+
+	Com_Printf("WARNING: No OS random source, falling back to weak seed.\n");
+
+	for (i = 0; i < len; i++)
+	{
+		state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+		out[i] = (unsigned char)(state >> 56);
+	}
+}
+
+/*
+ * Fills buf with len bytes from the OS random source.
+ */
+void
+Sys_GetRandomBytes(void *buf, size_t len)
+{
+	if (BCryptGenRandom(NULL, (PUCHAR)buf, (ULONG)len,
+			BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0)
+	{
+		Sys_RandomFallback(buf, len);
+	}
+}
 
 long long
 Sys_Microseconds(void)
