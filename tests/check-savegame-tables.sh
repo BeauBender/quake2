@@ -18,13 +18,26 @@ tables=src/game/savegame/tables
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/sgtables.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
+# Pairs of (list, name). The loader looks a pointer up only in the list for
+# its field (think -> fnentries_think, monsterinfo.stand ->
+# fnentries_mi_stand, moveinfo.endfunc -> fnentries_mv_end), so a name
+# listed under another field does not count.
 # func and afterwaitfunc are local function-pointer variables, not game
 # functions; the fngen README tells the maintainer to drop them too.
 grep -rhoE '(->|\.)(think|touch|use|pain|die|blocked|prethink|endfunc|stand|idle|search|walk|run|dodge|attack|melee|sight|checkattack)[[:space:]]*=[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*;' \
 	src/game --include='*.c' |
-	sed -E 's/.*=[[:space:]]*([A-Za-z_][A-Za-z0-9_]*).*/\1/' |
-	grep -vxE 'NULL|func|afterwaitfunc' | sort -u > "$tmp/assigned"
-grep -oE '"[A-Za-z_][A-Za-z0-9_]*"' "$tables/gamefunc_list.h" | tr -d '"' | sort -u > "$tmp/funcs"
+	sed -E 's/^(->|\.)([a-z_]+)[[:space:]]*=[[:space:]]*([A-Za-z_][A-Za-z0-9_]*).*/\2 \3/' |
+	awk '$2 != "NULL" && $2 != "func" && $2 != "afterwaitfunc" {
+		f = $1
+		if (f ~ /^(think|touch|use|pain|die|blocked|prethink)$/) l = f
+		else if (f == "endfunc") l = "mv_end"
+		else l = "mi_" f
+		print "fnentries_" l, $2
+	}' | sort -u > "$tmp/assigned"
+awk '/fnentries_[a-z_]+\[\][[:space:]]*=/ { match($0, /fnentries_[a-z_]+/); l = substr($0, RSTART, RLENGTH) }
+	/^};/ { l = "" }
+	l != "" && /\{"/ { match($0, /"[^"]+"/); print l, substr($0, RSTART + 1, RLENGTH - 2) }' \
+	"$tables/gamefunc_list.h" | sort -u > "$tmp/funcs"
 
 grep -rhoE '^[[:space:]]*(static[[:space:]]+)?mmove_t[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' \
 	src/game --include='*.c' | awk '{print $NF}' | sort -u > "$tmp/mmoves"
@@ -33,7 +46,7 @@ grep -oE '"[A-Za-z_][A-Za-z0-9_]*"' "$tables/gamemmove_list.h" | tr -d '"' | sor
 fail=0
 missing=$(comm -23 "$tmp/assigned" "$tmp/funcs")
 if [ -n "$missing" ]; then
-	echo "check-savegame-tables: functions assigned to savable fields but missing from $tables/gamefunc_list.h:"
+	echo "check-savegame-tables: (list, function) pairs assigned in src/game but missing from $tables/gamefunc_list.h:"
 	echo "$missing" | sed 's/^/  /'
 	fail=1
 fi

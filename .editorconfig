@@ -1,0 +1,25 @@
+# Editor defaults matching the house style (stuff/misc/uncrustify.cfg
+# describes the C formatting in full).
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true
+charset = utf-8
+
+[*.{c,h}]
+indent_style = tab
+tab_width = 4
+
+[{Makefile,*.mk}]
+indent_style = tab
+
+[*.sh]
+indent_style = tab
+
+[.githooks/*]
+indent_style = tab
+
+[*.{yml,yaml,json}]
+indent_style = space
+indent_size = 2

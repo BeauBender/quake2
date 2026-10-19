@@ -1,0 +1,11 @@
+{
+  "name": "quake2",
+  "image": "debian:testing",
+  "postCreateCommand": "apt-get update && apt-get install -y --no-install-recommends build-essential ca-certificates git gh libgl1-mesa-dev libsdl3-dev cppcheck shellcheck",
+  "remoteUser": "root",
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-vscode.cpptools"]
+    }
+  }
+}

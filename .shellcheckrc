@@ -1,0 +1,4 @@
+# shellcheck defaults for scripts/, tests/, .githooks/ and .claude/ hook
+# scripts. They are POSIX sh unless their shebang says otherwise.
+shell=sh
+source-path=SCRIPTDIR
