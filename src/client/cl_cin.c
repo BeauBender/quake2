@@ -366,6 +366,7 @@ SCR_ReadNextFrame(void)
 	if (((size_t)size > sizeof(compressed) - 1) || (size < 1))
 	{
 		Com_Error(ERR_DROP, "Bad compressed frame size");
+		return NULL; /* not reached: Com_Error does not return; keeps MSVC's analyzer from assuming the read below runs unguarded */
 	}
 
 	FS_Read(compressed, size, cl.cinematic_file);
