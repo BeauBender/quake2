@@ -18,9 +18,9 @@ Audited items (small files that stay) first, then the larger vendored files that
 
 | Path | Upstream project and URL as stated in the file | Version | License | sha256 | Status |
 |------|-----------------------------------------------|---------|---------|--------|--------|
-| `src/client/input/gyro.c` | Julian "Jibb" Smart, Nicolas Lessard, ceski (gyro helper lineage); no URL in the file | not stated | MIT | `b2b981ed841452615f42ceb4745e0242e2bf61e25c9bb5d41d0c646c89c095d6` | Audited, KEEP (TASK15) |
+| `src/client/input/gyro.c` | Julian "Jibb" Smart, Nicolas Lessard, ceski (gyro helper lineage); no URL in the file | not stated | MIT | `7a6080abf74a7ea286a5e58a9efbbbd94cb3fed012440b541ec6755d11d9ef2b` | Audited, KEEP (TASK15) |
 | `src/client/input/header/gyro.h` | Julian "Jibb" Smart, Nicolas Lessard, ceski (gyro helper lineage); no URL in the file | not stated | MIT | `29385259dc66177c07ccb53fdc6059fef41cda4c49a5d81f68226c42cbafd60b` | Audited with gyro.c, KEEP (TASK15) |
-| `src/common/md4.c` | RFC 1320 implementation by Steven Fuller, http://www.faqs.org/rfcs/rfc1320.html | not stated | Public domain | `7caa4ac6279e567bec2912ba561d2a95a8627a70df647f5e749e97bdf56ac0b9` | Audited, KEEP (TASK15) |
+| `src/common/md4.c` | RFC 1320 implementation by Steven Fuller, http://www.faqs.org/rfcs/rfc1320.html | not stated | Public domain | `c7c312a7e82267760b3c46b2e3333494bd8efdd2295b813d054bbb456406724e` | Audited, KEEP (TASK15) |
 | `src/common/shared/rand.c` | KISS PRNG by Marsaglia, via Shinobu (zuttobenkyou.wordpress.com), modified by Yamagi | not stated | Public domain | `ae7ed8037c3b4e33913b57d5796701ba3bb275b96e633b2e2294f47fae20786f` | Audited, KEEP (TASK15); modified by FIX4 |
 | `src/common/glob.c` | Global string matcher carried in id Software's Quake II source; no separate URL in the file | not stated | GPL-2-or-later (id Software header) | `8c7b2dd033417cda3208fb55b60e21df5bf73262788d6ab552814451808be67e` | Audited, KEEP (TASK15) |
 | `src/game/savegame/tables/clientfields.h` | Project file (id Software, Yamagi); hand-written | n/a | GPL-2-or-later | `cc1e6c2e0f3b6c141e8f2a56312b8b16f9f7d8747c13481a99f254e4f4e60a68` | Audited, KEEP (TASK15) |

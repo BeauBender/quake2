@@ -186,8 +186,8 @@ PerformMD4(const unsigned char *buf, int length, unsigned char *digest)
 		X[j] = 0;
 	}
 
-	X[14] = (length & 0x1FFFFFFF) << 3;
-	X[15] = (length & ~0x1FFFFFFF) >> 29;
+	X[14] = ((uint32_t)length & 0x1FFFFFFFu) << 3;
+	X[15] = ((uint32_t)length & ~0x1FFFFFFFu) >> 29;
 
 	DoMD4();
 
@@ -220,11 +220,12 @@ PerformMD4(const unsigned char *buf, int length, unsigned char *digest)
 }
 
 /*
- * The digest is folded into one word using the host's native byte
- * order, so the value is host-endian. It is only ever compared on the
- * same host (BSP map checksums, recognition of the stock quit.pcx) and
- * must not be stored in a file or sent to a machine of another
- * endianness.
+ * The digest words are folded in host byte order, so the value depends
+ * on endianness. The BSP checksum is sent to clients as CS_MAPCHECKSUM
+ * (see src/common/collision.c, src/server/sv_init.c and
+ * src/client/cl_download.c) and compared with the client's own
+ * computation, so client and server must share endianness. Every current
+ * target is little-endian.
  */
 unsigned
 Com_BlockChecksum(const void *buffer, int length)

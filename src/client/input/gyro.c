@@ -418,8 +418,9 @@ void IN_GYRO_Process(float delta_time, float *out_pitch_rate,
 
 void IN_GYRO_AccumulateAccelSamples(vec3_t accelerometer_data)
 {
-	/* a NaN or infinite sample is ignored, state is unchanged */
-	if (!isfinite(accelerometer_data[0]) || !isfinite(accelerometer_data[1]) || !isfinite(accelerometer_data[2]))
+	// a NaN or infinite sample is ignored, state is unchanged
+	if (!isfinite(accelerometer_data[0]) || !isfinite(accelerometer_data[1]) ||
+		!isfinite(accelerometer_data[2]))
 	{
 		return;
 	}
@@ -435,8 +436,9 @@ void IN_GYRO_AccumulateAccelSamples(vec3_t accelerometer_data)
 
 void IN_GYRO_AccumulateGyroSamples(vec3_t gyro_data)
 {
-	/* a NaN or infinite sample is ignored, state is unchanged */
-	if (!isfinite(gyro_data[0]) || !isfinite(gyro_data[1]) || !isfinite(gyro_data[2]))
+	// a NaN or infinite sample is ignored, state is unchanged
+	if (!isfinite(gyro_data[0]) || !isfinite(gyro_data[1]) ||
+		!isfinite(gyro_data[2]))
 	{
 		return;
 	}
@@ -499,7 +501,7 @@ void IN_GYRO_ResetState(void)
 
 void IN_GYRO_UpdateGyroSpace(float gyro_space)
 {
-	/* a NaN or infinite cvar value is treated as 0 */
+	// a NaN or infinite cvar value is treated as 0
 	if (!isfinite(gyro_space))
 	{
 		gyro_space = 0.0f;
@@ -511,7 +513,7 @@ void IN_GYRO_UpdateGyroSpace(float gyro_space)
 
 void IN_GYRO_UpdateLocalRoll(float local_roll)
 {
-	/* a NaN or infinite cvar value is treated as 0 */
+	// a NaN or infinite cvar value is treated as 0
 	if (!isfinite(local_roll))
 	{
 		local_roll = 0.0f;
@@ -523,13 +525,13 @@ void IN_GYRO_UpdateLocalRoll(float local_roll)
 
 void IN_GYRO_UpdateSensitivity(float pitch_sens, float yaw_sens)
 {
-	/* a NaN or infinite cvar value is treated as 0 */
+	// a NaN or infinite cvar value is treated as 0
 	if (!isfinite(pitch_sens))
 	{
 		pitch_sens = 0.0f;
 	}
 
-	/* a NaN or infinite cvar value is treated as 0 */
+	// a NaN or infinite cvar value is treated as 0
 	if (!isfinite(yaw_sens))
 	{
 		yaw_sens = 0.0f;
@@ -543,7 +545,7 @@ void IN_GYRO_UpdateSensitivity(float pitch_sens, float yaw_sens)
 
 void IN_GYRO_UpdateTightening(float tightening)
 {
-	/* a NaN or infinite cvar value is treated as 0 */
+	// a NaN or infinite cvar value is treated as 0
 	if (!isfinite(tightening))
 	{
 		tightening = 0.0f;
@@ -557,7 +559,7 @@ void IN_GYRO_UpdateTightening(float tightening)
 
 void IN_GYRO_UpdateSmoothing(float smoothing)
 {
-	/* a NaN or infinite cvar value is treated as 0 */
+	// a NaN or infinite cvar value is treated as 0
 	if (!isfinite(smoothing))
 	{
 		smoothing = 0.0f;
@@ -571,7 +573,7 @@ void IN_GYRO_UpdateSmoothing(float smoothing)
 
 void IN_GYRO_UpdateSmoothingWindow(float smoothing_window)
 {
-	/* a NaN or infinite cvar value is treated as 0 */
+	// a NaN or infinite cvar value is treated as 0
 	if (!isfinite(smoothing_window))
 	{
 		smoothing_window = 0.0f;
@@ -584,7 +586,7 @@ void IN_GYRO_UpdateSmoothingWindow(float smoothing_window)
 
 void IN_GYRO_UpdateAcceleration(float use_acceleration)
 {
-	/* a NaN or infinite cvar value is treated as 0 */
+	// a NaN or infinite cvar value is treated as 0
 	if (!isfinite(use_acceleration))
 	{
 		use_acceleration = 0.0f;
@@ -598,7 +600,7 @@ void IN_GYRO_UpdateAcceleration(float use_acceleration)
 
 void IN_GYRO_UpdateAccelMult(float accel_mult)
 {
-	/* a NaN or infinite cvar value is treated as 0 */
+	// a NaN or infinite cvar value is treated as 0
 	if (!isfinite(accel_mult))
 	{
 		accel_mult = 0.0f;
@@ -615,13 +617,13 @@ void IN_GYRO_UpdateAccelMult(float accel_mult)
 
 void IN_GYRO_UpdateAccelThresh(float lower_accel, float upper_accel)
 {
-	/* a NaN or infinite cvar value is treated as 0 */
+	// a NaN or infinite cvar value is treated as 0
 	if (!isfinite(lower_accel))
 	{
 		lower_accel = 0.0f;
 	}
 
-	/* a NaN or infinite cvar value is treated as 0 */
+	// a NaN or infinite cvar value is treated as 0
 	if (!isfinite(upper_accel))
 	{
 		upper_accel = 0.0f;
@@ -639,13 +641,13 @@ void IN_GYRO_UpdateCalibration(float accel_magnitude, vec3_t gyro_offset)
 {
 	int i;
 
-	/* a NaN or infinite cvar value is treated as 0 */
+	// a NaN or infinite cvar value is treated as 0
 	if (!isfinite(accel_magnitude))
 	{
 		accel_magnitude = 0.0f;
 	}
 
-	/* NaN or infinite offset components are treated as 0 */
+	// NaN or infinite offset components are treated as 0
 	for (i = 0; i < 3; i++)
 	{
 		if (!isfinite(gyro_offset[i]))
