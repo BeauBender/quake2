@@ -14,7 +14,7 @@ This file is the fork's dependency manifest. It lists the system libraries the b
 
 ## In-tree third-party files
 
-Audited items (small files that stay) first, then the larger vendored files that still exist in the tree. Version is given only where the file states one. Status names the card that removes the file or decides whether it stays.
+Audited items (small files that stay) first, then the larger vendored files that exist in the tree. Version is given only where the file states one. Status names the card that removes the file or decides whether it stays.
 
 | Path | Upstream project and URL as stated in the file | Version | License | sha256 | Status |
 |------|-----------------------------------------------|---------|---------|--------|--------|
@@ -33,20 +33,6 @@ Audited items (small files that stay) first, then the larger vendored files that
 | `src/game/savegame/tables/spawnfunc_decs.h` | Project file; hand-written | n/a | GPL-2-or-later | `16197400c4a940b363ac680ca31cd44a5ba134344491ef1420ba74c6ed18dfbf` | Audited, KEEP (TASK15) |
 | `src/game/savegame/tables/spawnfunc_list.h` | Project file; hand-written | n/a | GPL-2-or-later | `1d9cbed8dcc8fe20e4905f917837ab520a0f0f90d1b4e2bc1dd4c0cd46c85c4e` | Audited, KEEP (TASK15) |
 | `src/game/savegame/tables/stfields.h` | Project file; hand-written | n/a | GPL-2-or-later | `e5f8fe9accf0c61038db32de73a94584b5566b624070eccac7755f9ba24b1400` | Audited, KEEP (TASK15) |
-| `src/common/unzip/ioapi.c` | MiniZip, http://www.winimage.com/zLibDll/minizip.html (Gilles Vollant, Even Rouault, Mathias Svensson) | not stated | zlib-style (MiniZip; unzip.c header also references the Info-ZIP license) | `d3aaaaf34e45610deed2fcf401642cee428aa89649a6cad592c4654113630177` | Removal or replacement decided by TASK8 |
-| `src/common/unzip/ioapi.h` | MiniZip, as above | not stated | zlib-style (MiniZip; unzip.c header also references the Info-ZIP license) | `b3784ac939008d677a1cccd6a7a5a1047466ac28f446cfef90f54506f9a011c2` | TASK8 |
-| `src/common/unzip/unzip.c` | MiniZip, as above | 1.1 (Feb 2010) | zlib-style (MiniZip; unzip.c header also references the Info-ZIP license) | `13d35465d1f6719170187c7c79954b07a18ff82cb5c30d80e1db30384e16ccc1` | TASK8 |
-| `src/common/unzip/unzip.h` | MiniZip, as above | 1.1 (Feb 2010) | zlib-style (MiniZip; unzip.c header also references the Info-ZIP license) | `e0655ccbd8fb8c7e234a1f3789fcaa0eb8c277886e8380f7a74a109351f2131f` | TASK8 |
-| `src/common/unzip/miniz/miniz.h` | miniz, Rich Geldreich (RAD Game Tools and Valve Software) | header says 3.0.2; `MZ_VERSION` says 11.0.2 | Public domain / Unlicense by reference (line 2 points to a statement that now lives at the end of miniz.c) | `805b8d77e6586435bfae55420c73bb322729db99d8b6f5559c3b5583b56131a5` | TASK8 |
-| `src/common/unzip/miniz/miniz.c` | miniz, as above | as above | MIT (header, lines 1-26) and Unlicense (lines 622-647) | `d8b837863cc6536a270751893a9778c4241467d8906719ae6cb787a62fa797bc` | TASK8 |
-| `src/common/unzip/miniz/miniz_common.h` | miniz, as above | as above | MIT or Unlicense (see miniz.c and miniz.h) | `8b60e76e726dfcf41a338c3a4c54c70038041a21e6314aa54fd3b7f729ea3412` | TASK8 |
-| `src/common/unzip/miniz/miniz_export.h` | miniz, as above | as above | MIT or Unlicense (see miniz.c and miniz.h) | `206c5f576e573f6ea2bd49403db905753777d43ac41cc89d2fd43db46e12ad1a` | TASK8 |
-| `src/common/unzip/miniz/miniz_tdef.c` | miniz, as above | as above | MIT or Unlicense (see miniz.c and miniz.h) | `851c039200f5277a9788730be13ce698881ef4b34038a6a1345871ba68647570` | TASK8 |
-| `src/common/unzip/miniz/miniz_tdef.h` | miniz, as above | as above | MIT or Unlicense (see miniz.c and miniz.h) | `12b09b189c27aa7d0b0ebe0be2f3021a3bab26fe7b19e9b3b6f5c4df7c21e9df` | TASK8 |
-| `src/common/unzip/miniz/miniz_tinfl.c` | miniz, as above | as above | MIT or Unlicense (see miniz.c and miniz.h) | `9b7edc1fab708166e10f5e90a618a91c95a91496c4692e38160fdae810c1149a` | TASK8 |
-| `src/common/unzip/miniz/miniz_tinfl.h` | miniz, as above | as above | MIT or Unlicense (see miniz.c and miniz.h) | `040aad2d9ca23c487652c150277d950be12e72c5453ae1f7c6713ed2efd16b4e` | TASK8 |
-| `src/common/unzip/miniz/miniz_zip.h` | miniz, as above | as above | MIT or Unlicense (see miniz.c and miniz.h) | `c9343f0d251d92f3730d5fe684d4af67aa0bed25d2d1d39d5fd4746a3c63f796` | TASK8 |
-| `src/common/unzip/miniz/minizconf.h` | Project file (Yamagi Burmeister, 2018); glue between minizip and miniz | n/a | BSD-2-Clause (stated in file) | `87f51dffa82b1f600c5f7967b272f5afec0bb3da06b33dda749d709ea5626bde` | TASK8 |
 | `src/client/refresh/files/stb_image.h` | stb, http://nothings.org/stb (Sean Barrett) | v2.30 | Public domain / MIT (dual, stated in file) | `3b0ea6220d9645445721432b37e76d0c438eee0590f5bac2aa1b739d51b944b4` | Keep-or-replace decision: INFORM2 / TASK11 |
 | `src/client/refresh/files/stb_image_resize.h` | stb, http://github.com/nothings/stb | v0.97 | Public domain / MIT (dual, stated in file) | `6a0e75adbabb48df9031c2e39ccd97437bb226fe31e7d4a01c7bf70a18d32ec6` | Same decision as stb_image: INFORM2 / TASK11 |
 | `src/client/vid/header/stb_image_write.h` | stb, http://nothings.org/stb | v1.16 | Public domain / MIT (dual, stated in file) | `5320669a283c2945d53276c18e22ca431f098f7dfc356b9ff46b899766dd9b40` | Removal: TASK9 |
@@ -66,5 +52,12 @@ Audited items (small files that stay) first, then the larger vendored files that
 Notes:
 
 - `src/client/input/gyro.c` and `gyro.h` are also reproduced in the top-level `LICENSE`.
-- License cells for minizip and miniz were checked against the files: `ioapi.c` and `ioapi.h` carry no license grant (copyright lines and a pointer to `MiniZip_info.txt`); the zlib-style grant appears only in `unzip.h` ("Condition of use and distribution are the same than zlib"). The Unlicense text for miniz is at the end of `miniz.c` (lines 622-647), not in `miniz.h`. The full audit of those files belongs to TASK8.
 - `src/client/refresh/files/stb_image_resize.h` is decided together with `stb_image.h` under INFORM2 / TASK11.
+
+## Removed from the tree
+
+| Path or component | Removed by | Date | Where the record lives |
+|-------------------|------------|------|------------------------|
+| `src/common/unzip/` (minizip 1.1 + miniz) | TASK8 | 2026-10-18 | git history: the TASK8 removal commit; hashes were listed in this file before that commit |
+| `src/client/sound/openal.c`, `qal.c`, `header/qal.h` | TASK4 | 2026-10-18 | git history |
+| `src/client/curl/` | TASK3 | 2026-10-18 | git history (in flight) |

@@ -67,10 +67,6 @@ WITH_RPATH:=yes
 # When disabled SDL 2 is used instead of SDL 3.
 WITH_SDL3:=yes
 
-# WITH_SYSTEM_MINIZIP
-# When disabled, an included copy of minizip and miniz is used.
-WITH_SYSTEM_MINIZIP:=no
-
 # WITH_SYSTEMWIDE
 # Enable systemwide installation of game assets.
 WITH_SYSTEMWIDE:=no
@@ -313,28 +309,6 @@ endif
 
 # ----------
 
-# We don't support encrypted ZIP files.
-ZIPCFLAGS := -DNOUNCRYPT
-
-# Just set IOAPI_NO_64 on everything that's not Linux or Windows,
-# otherwise minizip will use fopen64(), fseek64() and friends that
-# may be unavailable. This is - of course - not really correct, in
-# a better world we would set -DIOAPI_NO_64 to force everything to
-# fopen(), fseek() and so on and -D_FILE_OFFSET_BITS=64 to let the
-# libc headers do their work. Currently we can't do that because
-# Quake II uses nearly everywere int instead of off_t...
-#
-# This may have the side effect that ZIP files larger than 2GB are
-# unsupported. But I doubt that anyone has such large files, they
-# would likely hit other internal limits.
-ifneq ($(YQ2_OSTYPE),Windows)
-ifneq ($(YQ2_OSTYPE),Linux)
-ZIPCFLAGS += -DIOAPI_NO_64
-endif
-endif
-
-# ----------
-
 # Extra CFLAGS for SDL.
 ifeq ($(WITH_SDL3),yes)
 SDLCFLAGS := $(shell $(PKG_CONFIG) --cflags sdl3)
@@ -518,7 +492,7 @@ $(BUILDDIR)/client/%.o: %.c
 		echo "===> CC $<";\
 	fi
 	${Q}mkdir -p $(@D)
-	${Q}$(CC) -c $(CFLAGS) $(SDLCFLAGS) $(ZIPCFLAGS) $(INCLUDE) -o $@ $<
+	${Q}$(CC) -c $(CFLAGS) $(SDLCFLAGS) $(INCLUDE) -o $@ $<
 
 $(BINDIR)/yquake2.exe : LDFLAGS += -mwindows
 
@@ -535,14 +509,14 @@ $(BUILDDIR)/client/%.o : %.c
 		echo "===> CC $<";\
 	fi
 	${Q}mkdir -p $(@D)
-	${Q}$(CC) -arch $(YQ2_ARCH) -x objective-c -c $(CFLAGS) $(SDLCFLAGS) $(ZIPCFLAGS) $(INCLUDE)  $< -o $@
+	${Q}$(CC) -arch $(YQ2_ARCH) -x objective-c -c $(CFLAGS) $(SDLCFLAGS) $(INCLUDE)  $< -o $@
 else
 $(BUILDDIR)/client/%.o: %.c
 	@if [ -z $(QUIET) ]; then\
 		echo "===> CC $<";\
 	fi
 	${Q}mkdir -p $(@D)
-	${Q}$(CC) -c $(CFLAGS) $(SDLCFLAGS) $(ZIPCFLAGS) $(INCLUDE) -o $@ $<
+	${Q}$(CC) -c $(CFLAGS) $(SDLCFLAGS) $(INCLUDE) -o $@ $<
 endif
 
 $(BINDIR)/quake2 : CFLAGS += -Wno-unused-result
@@ -596,7 +570,7 @@ $(BUILDDIR)/server/%.o: %.c
 		echo "===> CC $<";\
 	fi
 	${Q}mkdir -p $(@D)
-	${Q}$(CC) -c $(CFLAGS) $(ZIPCFLAGS) $(INCLUDE) -o $@ $<
+	${Q}$(CC) -c $(CFLAGS) $(INCLUDE) -o $@ $<
 
 $(BINDIR)/q2ded.exe : CFLAGS += -DDEDICATED_ONLY
 
@@ -612,7 +586,7 @@ $(BUILDDIR)/server/%.o: %.c
 		echo "===> CC $<";\
 	fi
 	${Q}mkdir -p $(@D)
-	${Q}$(CC) -c $(CFLAGS) $(ZIPCFLAGS) $(INCLUDE) -o $@ $<
+	${Q}$(CC) -c $(CFLAGS) $(INCLUDE) -o $@ $<
 
 $(BINDIR)/q2ded : CFLAGS += -DDEDICATED_ONLY -Wno-unused-result
 
@@ -914,18 +888,6 @@ CLIENT_OBJS_ := \
 	src/server/sv_user.o \
 	src/server/sv_world.o
 
-ifeq ($(WITH_SYSTEM_MINIZIP),yes)
-$(BINDIR)/quake2 : CFLAGS += -DUSE_SYSTEM_MINIZIP
-$(BINDIR)/quake2 : LDLIBS += -lminizip -lz
-else
-CLIENT_OBJS_ += \
-	src/common/unzip/ioapi.o \
-	src/common/unzip/unzip.o \
-	src/common/unzip/miniz/miniz.o \
-	src/common/unzip/miniz/miniz_tdef.o \
-	src/common/unzip/miniz/miniz_tinfl.o
-endif
-
 ifeq ($(WITH_SDL3),yes)
 CLIENT_OBJS_ += \
 	src/client/input/sdl3.o \
@@ -1092,18 +1054,6 @@ SERVER_OBJS_ := \
 	src/server/sv_send.o \
 	src/server/sv_user.o \
 	src/server/sv_world.o
-
-ifeq ($(WITH_SYSTEM_MINIZIP),yes)
-$(BINDIR)/q2ded : CFLAGS += -DUSE_SYSTEM_MINIZIP
-$(BINDIR)/q2ded : LDLIBS += -lminizip
-else
-SERVER_OBJS_ += \
-	src/common/unzip/ioapi.o \
-	src/common/unzip/unzip.o \
-	src/common/unzip/miniz/miniz.o \
-	src/common/unzip/miniz/miniz_tdef.o \
-	src/common/unzip/miniz/miniz_tinfl.o
-endif
 
 ifeq ($(YQ2_OSTYPE), Windows)
 SERVER_OBJS_ += \
