@@ -274,7 +274,6 @@ To compile Yamagi Quake II from source the following dependencies
 
 * A GCC compatible compiler like *gcc*, *clang* or *MinGW-w64*.
 * A LibGL implementation with system headers.
-* libcurl.
 * SDL 3.0.
 
 
@@ -283,14 +282,14 @@ To compile Yamagi Quake II from source the following dependencies
 The build dependencies can be installed with:
 
 * On Arch Linux based distributions: `pacman -S base-devel mesa
-  curl sdl3`
+  sdl3`
 * On Debian based distributions: `apt install build-essential
-  libgl1-mesa-dev libsdl3-dev libcurl4-openssl-dev`
-* On FreeBSD: `pkg install gmake libGL sdl3 curl`
-* On NetBSD: `pkgin install gmake SDL2 curl`
-* On OpenBSD: `pkg_add gmake sdl3 curl`
-* On Solaris/Illumos: `pkg install sdl3 curl`
-* On Haiku: `pkgman libsdl3_devel curl_devel`
+  libgl1-mesa-dev libsdl3-dev`
+* On FreeBSD: `pkg install gmake libGL sdl3`
+* On NetBSD: `pkgin install gmake SDL2`
+* On OpenBSD: `pkg_add gmake sdl3`
+* On Solaris/Illumos: `pkg install sdl3`
+* On Haiku: `pkgman libsdl3_devel`
 * On MacOS the dependencies can be installed with Homebrew (from
   https://brew.sh): `brew install sdl3`
 
