@@ -1,9 +1,10 @@
 #!/bin/sh
 # dev-loop gate entry point (gate.test in .claude/dev-loop.json).
 #
-# The repo has no test suite; the gate is a build of the parts that need
-# nothing beyond the system toolchain: the dedicated server (q2ded) and the
-# game module. This compiles src/common, src/server, src/game and the unix
+# The repo has no unit tests. The gate first runs the repo invariants in
+# tests/check-*.sh (each takes well under a second and can be run on its
+# own), then builds the parts that need nothing beyond the system
+# toolchain: the dedicated server (q2ded) and the game module. This compiles src/common, src/server, src/game and the unix
 # backend. The client and renderers need SDL and are not built here.
 #
 # Usage: scripts/test.sh            (from anywhere; exits non-zero on failure)
@@ -15,5 +16,9 @@
 set -eu
 
 cd "$(dirname "$0")/.."
+
+for check in tests/check-*.sh; do
+	"$check"
+done
 
 make -B -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)" server game
