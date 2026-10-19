@@ -8,7 +8,7 @@ Yamagi Quake II (yquake2): a GPL-2 Quake II engine descended from id Software's 
 
 ## Build
 
-GNU Make is the primary build (`Makefile`); CMake (`CMakeLists.txt`) is the alternative. Both produce the same set of binaries. On macOS the client needs `brew install sdl3` (or `sdl2`); the dedicated server and game module need nothing beyond the system toolchain.
+GNU Make (`Makefile`) is the only build system. On macOS the client needs `brew install sdl3` (or `sdl2`); the dedicated server and game module need nothing beyond the system toolchain.
 
 ```sh
 make                      # all: client, server, game, ref_gl1, ref_gl3, ref_gles3, ref_soft -> release/
@@ -22,7 +22,7 @@ make clean                # remove objects; cleanall also removes release/ debug
 
 Feature switches are `WITH_*` variables (`WITH_CURL`, `WITH_SDL3`, `WITH_SYSTEM_MINIZIP`, `WITH_SYSTEMWIDE`, `WITH_XDG`, `WITH_EXECINFO`, `WITH_RPATH`). Pass them on the command line or put them in an untracked `config.mk`, which the Makefile includes. `-j` is safe.
 
-There is no test suite. CI (`.github/workflows/`) only compiles on each platform plus CodeQL/Coverity. The repo's gate is `scripts/test.sh`, which force-rebuilds `q2ded` and the game module (the targets that need no SDL); it must pass on every commit. Beyond that, verification is building the affected targets, ideally with `ASAN=1`, and running the game against real data: `release/quake2 +set basedir /path/to/quake2 -portable` (`-portable` keeps config and saves next to the binary instead of `~/.local/share/YamagiQ2` with XDG, or `~/.yq2` without).
+There is no test suite. CI (`.github/workflows/`) only compiles on Linux and macOS, plus CodeQL. The repo's gate is `scripts/test.sh`, which force-rebuilds `q2ded` and the game module (the targets that need no SDL); it must pass on every commit. Beyond that, verification is building the affected targets, ideally with `ASAN=1`, and running the game against real data: `release/quake2 +set basedir /path/to/quake2 -portable` (`-portable` keeps config and saves next to the binary instead of `~/.local/share/YamagiQ2` with XDG, or `~/.yq2` without).
 
 ## Architecture
 

@@ -80,7 +80,7 @@ the homepage:
 
 * [Homepage](https://www.yamagi.org/quake2/)
 
-Our CI builds **unsupported** Linux, MacOS and Windows binaries at every
+Our CI builds **unsupported** Linux and MacOS binaries at every
 commit. The artifacts can be found here:
 
 * [Github Actions](https://github.com/yquake2/yquake2/actions)

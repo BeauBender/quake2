@@ -30,18 +30,21 @@ jobs:
         - language: actions
           build-mode: none
         - language: c-cpp
-          build-mode: autobuild
+          build-mode: manual
     steps:
     - name: Checkout repository
       uses: actions/checkout@v7
-    - name: Set SDL2 default
-      run: |
-        sed -i 's|option(SDL3_SUPPORT "Build against SDL 3 instead of SDL2" ON)|option(SDL3_SUPPORT "Build against SDL 3 instead of SDL2" OFF)|g' CMakeLists.txt
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v4.38.0
       with:
         languages: ${{ matrix.language }}
         build-mode: ${{ matrix.build-mode }}
+    - name: Build
+      if: matrix.build-mode == 'manual'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgl1-mesa-dev libsdl2-dev libcurl4-openssl-dev
+        make -j4 WITH_SDL3=no client server game ref_gl1 ref_gl3 ref_soft
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4.38.0
       with:
