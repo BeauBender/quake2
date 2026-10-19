@@ -187,4 +187,6 @@ retexturing pack at a later time set `r_retexturing` to `0`.
   https://github.com/Calinou/quake2-neural-upscale/releases
 
 Retexturing packs can be installed by placing the pak files in
-the *baseq2* directory.
+the *baseq2* directory. Archives distributed as `.pk3` or zip files must
+be extracted into the game directory as loose files, or repacked as
+`.pak`, because this fork loads only `.pak` archives.
