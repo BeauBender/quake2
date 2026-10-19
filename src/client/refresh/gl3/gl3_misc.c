@@ -33,22 +33,14 @@ gl3image_t *gl3_particletexture; /* little dot for particles */
 void
 GL3_SetDefaultState(void)
 {
-#ifndef YQ2_GL3_GLES
-	// in GLES this is only supported with an extension:
-	// https://www.khronos.org/registry/OpenGL/extensions/EXT/EXT_multisample_compatibility.txt
-	// but apparently it's just enabled by default if set in the context?
 	glDisable(GL_MULTISAMPLE);
-#endif
 	glCullFace(GL_FRONT);
 
 	glDisable(GL_DEPTH_TEST);
 	glDisable(GL_CULL_FACE);
 	glDisable(GL_BLEND);
 
-#ifndef YQ2_GL3_GLES
-	// in GLES GL_FILL is the only supported mode
 	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-#endif
 
 	// TODO: gl1_texturealphamode?
 	GL3_TextureMode(gl_texturemode->string);
@@ -63,13 +55,11 @@ GL3_SetDefaultState(void)
 
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-#ifndef YQ2_GL3_GLES // see above
 	if (gl_msaa_samples->value)
 	{
 		glEnable(GL_MULTISAMPLE);
 		// glHint(GL_MULTISAMPLE_FILTER_HINT_NV, GL_NICEST); TODO what is this for?
 	}
-#endif
 }
 
 static byte dottexture[8][8] = {
@@ -125,14 +115,7 @@ GL3_ScreenShot(void)
 {
 	int w=vid.width, h=vid.height;
 
-#ifdef YQ2_GL3_GLES
-	// My RPi4's GLES3 doesn't like GL_RGB, so use GL_RGBA with GLES
-	// TODO: we could convert the screenshot to RGB before writing
-	//       so the resulting file is smaller
-	static const int comps = 4;
-#else // Desktop GL
 	static const int comps = 3;
-#endif
 	byte *buffer = malloc(w*h*comps);
 
 	if (!buffer)

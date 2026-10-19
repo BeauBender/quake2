@@ -464,19 +464,15 @@ endif
 # ----------
 
 # Phony targets
-.PHONY : all client game icon server ref_gl1 ref_gl3 ref_gles1 ref_gles3 ref_soft
+.PHONY : all client game icon server ref_gl1 ref_gl3 ref_soft
 
 # ----------
 
-# Builds everything but the GLES1 renderer
-all: config client server game ref_gl1 ref_gl3 ref_gles3 ref_soft
+# Builds everything
+all: config client server game ref_gl1 ref_gl3 ref_soft
 
 # ----------
 
-# Builds everything, including the GLES1 renderer
-with_gles1: all ref_gles1
-
-# ----------
 
 # Print config values
 config:
@@ -689,49 +685,6 @@ $(BUILDDIR)/ref_gl1/%.o: %.c
 
 # ----------
 
-# The OpenGL ES 1.0 renderer lib
-
-ifeq ($(YQ2_OSTYPE), Windows)
-
-ref_gles1:
-	@echo "===> Building ref_gles1.dll"
-	$(MAKE) $(BINDIR)/ref_gles1.dll
-
-$(BINDIR)/ref_gles1.dll : GLAD_INCLUDE = -Isrc/client/refresh/gl1/glad-gles1/include
-$(BINDIR)/ref_gles1.dll : CFLAGS += -DYQ2_GL1_GLES
-$(BINDIR)/ref_gles1.dll : LDFLAGS += -shared
-
-else ifeq ($(YQ2_OSTYPE), Darwin)
-
-ref_gles1:
-	@echo "===> Building ref_gles1.dylib"
-	$(MAKE) $(BINDIR)/ref_gles1.dylib
-
-$(BINDIR)/ref_gles1.dylib : GLAD_INCLUDE = -Isrc/client/refresh/gl1/glad-gles1/include
-$(BINDIR)/ref_gles1.dylib : CFLAGS += -DYQ2_GL1_GLES
-$(BINDIR)/ref_gles1.dylib : LDFLAGS += -shared
-
-else # not Windows or Darwin
-
-ref_gles1:
-	@echo "===> Building ref_gles1.so"
-	$(MAKE) $(BINDIR)/ref_gles1.so
-
-$(BINDIR)/ref_gles1.so : GLAD_INCLUDE = -Isrc/client/refresh/gl1/glad-gles1/include
-$(BINDIR)/ref_gles1.so : CFLAGS += -DYQ2_GL1_GLES -fPIC
-$(BINDIR)/ref_gles1.so : LDFLAGS += -shared
-
-endif # OS specific ref_gles1 stuff
-
-$(BUILDDIR)/ref_gles1/%.o: %.c
-	@if [ -z $(QUIET) ]; then\
-		echo "===> CC $<";\
-	fi
-	${Q}mkdir -p $(@D)
-	${Q}$(CC) -c $(CFLAGS) $(SDLCFLAGS) $(INCLUDE) $(GLAD_INCLUDE) -o $@ $<
-
-# ----------
-
 # The OpenGL 3.x renderer lib
 
 ifeq ($(YQ2_OSTYPE), Windows)
@@ -765,63 +718,6 @@ $(BINDIR)/ref_gl3.so : LDFLAGS += -shared
 endif # OS specific ref_gl3 stuff
 
 $(BUILDDIR)/ref_gl3/%.o: %.c
-	@if [ -z $(QUIET) ]; then\
-		echo "===> CC $<";\
-	fi
-	${Q}mkdir -p $(@D)
-	${Q}$(CC) -c $(CFLAGS) $(SDLCFLAGS) $(INCLUDE) $(GLAD_INCLUDE) -o $@ $<
-
-# ----------
-
-# The OpenGL ES 3.0 renderer lib
-
-ifeq ($(YQ2_OSTYPE), Windows)
-
-ref_gles3:
-	@echo "===> Building ref_gles3.dll"
-	$(MAKE) $(BINDIR)/ref_gles3.dll
-
-$(BINDIR)/ref_gles3.dll : GLAD_INCLUDE = -Isrc/client/refresh/gl3/glad-gles3/include
-
-# YQ2_GL3_GLES3 is for GLES3, DYQ2_GL3_GLES is for things that are identical
-# in both GLES3 and GLES2 (in case we ever support that)
-$(BINDIR)/ref_gles3.dll : CFLAGS += -DYQ2_GL3_GLES3 -DYQ2_GL3_GLES
-
-$(BINDIR)/ref_gles3.dll : LDFLAGS += -shared
-
-else ifeq ($(YQ2_OSTYPE), Darwin)
-
-ref_gles3:
-	@echo "===> Building ref_gles3.dylib"
-	$(MAKE) $(BINDIR)/ref_gles3.dylib
-
-$(BINDIR)/ref_gles3.dylib : GLAD_INCLUDE = -Isrc/client/refresh/gl3/glad-gles3/include
-
-# YQ2_GL3_GLES3 is for GLES3, DYQ2_GL3_GLES is for things that are identical
-# in both GLES3 and GLES2 (in case we ever support that)
-$(BINDIR)/ref_gles3.dylib : CFLAGS += -DYQ2_GL3_GLES3 -DYQ2_GL3_GLES
-
-$(BINDIR)/ref_gles3.dylib : LDFLAGS += -shared
-
-else # not Windows or Darwin
-
-ref_gles3:
-	@echo "===> Building ref_gles3.so"
-	$(MAKE) $(BINDIR)/ref_gles3.so
-
-$(BINDIR)/ref_gles3.so : GLAD_INCLUDE = -Isrc/client/refresh/gl3/glad-gles3/include
-
-# YQ2_GL3_GLES3 is for GLES3, DYQ2_GL3_GLES is for things that are identical
-# in both GLES3 and GLES2 (in case we ever support that)
-$(BINDIR)/ref_gles3.so : CFLAGS += -DYQ2_GL3_GLES3 -DYQ2_GL3_GLES -fPIC
-
-$(BINDIR)/ref_gles3.so : LDFLAGS += -shared
-
-GLAD_INCLUDE = -Isrc/client/refresh/gl3/glad-gles3/include
-
-endif # OS specific ref_gl3 stuff
-
-$(BUILDDIR)/ref_gles3/%.o: %.c
 	@if [ -z $(QUIET) ]; then\
 		echo "===> CC $<";\
 	fi
@@ -1099,9 +995,6 @@ REFGL1_OBJS_ := \
 	src/common/shared/shared.o \
 	src/common/md4.o
 
-REFGL1_OBJS_GLADEES_ := \
-	src/client/refresh/gl1/glad-gles1/src/glad.o
-
 ifeq ($(YQ2_OSTYPE), Windows)
 REFGL1_OBJS_ += \
 	src/backends/windows/shared/hunk.o
@@ -1137,9 +1030,6 @@ REFGL3_OBJS_ := \
 
 REFGL3_OBJS_GLADE_ := \
 	src/client/refresh/gl3/glad/src/glad.o
-
-REFGL3_OBJS_GLADEES_ := \
-	src/client/refresh/gl3/glad-gles3/src/glad.o
 
 ifeq ($(YQ2_OSTYPE), Windows)
 REFGL3_OBJS_ += \
@@ -1252,12 +1142,8 @@ endif
 # Rewrite paths to our object directory.
 CLIENT_OBJS = $(patsubst %,$(BUILDDIR)/client/%,$(CLIENT_OBJS_))
 REFGL1_OBJS = $(patsubst %,$(BUILDDIR)/ref_gl1/%,$(REFGL1_OBJS_))
-REFGLES1_OBJS = $(patsubst %,$(BUILDDIR)/ref_gles1/%,$(REFGL1_OBJS_))
-REFGLES1_OBJS += $(patsubst %,$(BUILDDIR)/ref_gles1/%,$(REFGL1_OBJS_GLADEES_))
 REFGL3_OBJS = $(patsubst %,$(BUILDDIR)/ref_gl3/%,$(REFGL3_OBJS_))
 REFGL3_OBJS += $(patsubst %,$(BUILDDIR)/ref_gl3/%,$(REFGL3_OBJS_GLADE_))
-REFGLES3_OBJS = $(patsubst %,$(BUILDDIR)/ref_gles3/%,$(REFGL3_OBJS_))
-REFGLES3_OBJS += $(patsubst %,$(BUILDDIR)/ref_gles3/%,$(REFGL3_OBJS_GLADEES_))
 REFSOFT_OBJS = $(patsubst %,$(BUILDDIR)/ref_soft/%,$(REFSOFT_OBJS_))
 SERVER_OBJS = $(patsubst %,$(BUILDDIR)/server/%,$(SERVER_OBJS_))
 GAME_OBJS = $(patsubst %,$(BUILDDIR)/baseq2/%,$(GAME_OBJS_))
@@ -1268,9 +1154,7 @@ GAME_OBJS = $(patsubst %,$(BUILDDIR)/baseq2/%,$(GAME_OBJS_))
 CLIENT_DEPS= $(CLIENT_OBJS:.o=.d)
 GAME_DEPS= $(GAME_OBJS:.o=.d)
 REFGL1_DEPS= $(REFGL1_OBJS:.o=.d)
-REFGLES1_DEPS= $(REFGLES1_OBJS:.o=.d)
 REFGL3_DEPS= $(REFGL3_OBJS:.o=.d)
-REFGLES3_DEPS= $(REFGLES3_OBJS:.o=.d)
 REFSOFT_DEPS= $(REFSOFT_OBJS:.o=.d)
 SERVER_DEPS= $(SERVER_OBJS:.o=.d)
 
@@ -1278,9 +1162,7 @@ SERVER_DEPS= $(SERVER_OBJS:.o=.d)
 -include $(CLIENT_DEPS)
 -include $(GAME_DEPS)
 -include $(REFGL1_DEPS)
--include $(REFGLES1_DEPS)
 -include $(REFGL3_DEPS)
--include $(REFGLES3_DEPS)
 -include $(SERVER_DEPS)
 
 # ----------
@@ -1324,21 +1206,6 @@ $(BINDIR)/ref_gl1.so : $(REFGL1_OBJS)
 	${Q}$(CC) $(LDFLAGS) $(REFGL1_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
 endif
 
-# ref_gles1.so
-ifeq ($(YQ2_OSTYPE), Windows)
-$(BINDIR)/ref_gles1.dll : $(REFGLES1_OBJS)
-	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(REFGLES1_OBJS) $(LDLIBS) $(DLL_SDLLDFLAGS) -o $@
-else ifeq ($(YQ2_OSTYPE), Darwin)
-$(BINDIR)/ref_gles1.dylib : $(REFGLES1_OBJS)
-	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(REFGLES1_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
-else
-$(BINDIR)/ref_gles1.so : $(REFGLES1_OBJS)
-	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(REFGLES1_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
-endif
-
 # ref_gl3.so
 ifeq ($(YQ2_OSTYPE), Windows)
 $(BINDIR)/ref_gl3.dll : $(REFGL3_OBJS)
@@ -1352,21 +1219,6 @@ else
 $(BINDIR)/ref_gl3.so : $(REFGL3_OBJS)
 	@echo "===> LD $@"
 	${Q}$(CC) $(LDFLAGS) $(REFGL3_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
-endif
-
-# ref_gles3.so
-ifeq ($(YQ2_OSTYPE), Windows)
-$(BINDIR)/ref_gles3.dll : $(REFGLES3_OBJS)
-	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(REFGLES3_OBJS) $(LDLIBS) $(DLL_SDLLDFLAGS) -o $@
-else ifeq ($(YQ2_OSTYPE), Darwin)
-$(BINDIR)/ref_gles3.dylib : $(REFGLES3_OBJS)
-	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(REFGLES3_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
-else
-$(BINDIR)/ref_gles3.so : $(REFGLES3_OBJS)
-	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(REFGLES3_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
 endif
 
 # ref_soft.so

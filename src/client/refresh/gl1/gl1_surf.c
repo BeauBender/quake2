@@ -586,9 +586,7 @@ R_RegenAllLightmaps()
 	static qboolean altered[MAX_LIGHTMAPS][MAX_LIGHTMAP_COPIES];
 
 	int i, lmtex;
-#ifndef YQ2_GL1_GLES
 	qboolean pixelstore_set = false;
-#endif
 
 	if ( !gl_config.multitexture || r_fullbright->value || !gl1_dynamic->value )
 	{
@@ -709,26 +707,15 @@ dynamic_surf:
 			}
 		}
 
-#ifndef YQ2_GL1_GLES
 		if (!pixelstore_set)
 		{
 			glPixelStorei(GL_UNPACK_ROW_LENGTH, BLOCK_WIDTH);
 			pixelstore_set = true;
 		}
-#endif
 
 		// upload changes
 		base = gl_lms.lightmap_buffer[i];
 
-#ifdef YQ2_GL1_GLES
-		base += (best.top * BLOCK_WIDTH) * LIGHTMAP_BYTES;
-
-		R_Bind(gl_state.lightmap_textures + i + lmtex);
-
-		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, best.top,
-			BLOCK_WIDTH, best.bottom - best.top,
-			GL_LIGHTMAP_FORMAT, GL_UNSIGNED_BYTE, base);
-#else
 		base += (best.top * BLOCK_WIDTH + best.left) * LIGHTMAP_BYTES;
 
 		R_Bind(gl_state.lightmap_textures + i + lmtex);
@@ -736,15 +723,12 @@ dynamic_surf:
 		glTexSubImage2D(GL_TEXTURE_2D, 0, best.left, best.top,
 			best.right - best.left, best.bottom - best.top,
 			GL_LIGHTMAP_FORMAT, GL_UNSIGNED_BYTE, base);
-#endif
 	}
 
-#ifndef YQ2_GL1_GLES
 	if (pixelstore_set)
 	{
 		glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 	}
-#endif
 }
 
 static void

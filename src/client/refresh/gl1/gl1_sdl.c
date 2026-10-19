@@ -48,14 +48,6 @@ RI_EndFrame(void)
 {
 	R_ApplyGLBuffer();	// to draw buffered 2D text
 
-#ifdef YQ2_GL1_GLES
-	static const GLenum attachments[] = {GL_COLOR_EXT, GL_DEPTH_EXT, GL_STENCIL_EXT};
-
-	if (qglDiscardFramebufferEXT && gl_config.tilerendering)
-	{
-		qglDiscardFramebufferEXT(GL_FRAMEBUFFER_OES, 3, attachments);
-	}
-#endif
 
 	SDL_GL_SwapWindow(window);
 }
@@ -105,11 +97,6 @@ int RI_PrepareForWindow(void)
 		gl_state.stencil = false;
 	}
 
-#ifdef YQ2_GL1_GLES
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 1);
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-#endif
 
 	// Let's see if the driver supports MSAA.
 	int msaa_samples = 0;
@@ -212,7 +199,7 @@ RI_UpdateGamma(void)
 // Hardware gamma / gamma ramps are no longer supported with SDL3.
 // There's no replacement and sdl2-compat won't support it either.
 // See https://github.com/libsdl-org/SDL/pull/6617 for the rational.
-// Gamma works with a lookup table when using SDL3 (or GLES1).
+// Gamma works with a lookup table when using SDL3.
 #ifndef GL1_GAMMATABLE
 	float gamma = (vid_gamma->value);
 
@@ -254,20 +241,6 @@ int RI_InitContext(void* win)
 		return false;
 	}
 
-#ifdef YQ2_GL1_GLES
-
-	// Load GL pointers through GLAD and check context.
-	if( !gladLoadGLES1Loader( (void * (*)(const char *)) SDL_GL_GetProcAddress ) )
-	{
-		Com_Printf("%s ERROR: loading OpenGL ES function pointers failed!\n", __func__);
-		return false;
-	}
-
-	gl_config.major_version = GLVersion.major;
-	gl_config.minor_version = GLVersion.minor;
-	Com_Printf("Initialized OpenGL ES version %d.%d context\n", gl_config.major_version, gl_config.minor_version);
-
-#else
 
 	// Check if it's really OpenGL 1.4.
 	const char* glver = (char *)glGetString(GL_VERSION);
@@ -280,7 +253,6 @@ int RI_InitContext(void* win)
 		return false;
 	}
 
-#endif
 
 	// Check if we've got the requested MSAA.
 	int msaa_samples = 0;
@@ -321,11 +293,7 @@ int RI_InitContext(void* win)
 	// Window title - set here so we can display renderer name in it.
 	char title[40] = {0};
 
-#ifdef YQ2_GL1_GLES
-	snprintf(title, sizeof(title), "Yamagi Quake II %s - OpenGL ES 1.0", YQ2VERSION);
-#else
 	snprintf(title, sizeof(title), "Yamagi Quake II %s - OpenGL 1.4", YQ2VERSION);
-#endif
 	SDL_SetWindowTitle(window, title);
 
 #if SDL_VERSION_ATLEAST(2, 26, 0)

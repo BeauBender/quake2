@@ -80,14 +80,14 @@ static menuaction_s s_apply_action;
 
 // --------
 
-// gl1, gl3, gles1, gles3, gl4, vk, soft
-#define MAXRENDERERS 7
+// gl1, gl3, gl4, vk, soft
+#define MAXRENDERERS 6
 
 typedef enum
 {
 	ref_custom,
-	ref_gl1,	// encompasses gl1 and gles1
-	ref_gl3,	// encompasses gl3 and gles3
+	ref_gl1,
+	ref_gl3,
 	ref_gl4,
 	ref_vk,
 	ref_soft
@@ -107,9 +107,7 @@ Renderer_FillRenderdef(void)
 {
 	static const renderer fulllist[] = {
 		{"[OpenGL 1.4]", "gl1"},
-		{"[OpenGL ES1]", "gles1"},
 		{"[OpenGL 3.2]", "gl3"},
-		{"[OpenGL ES3]", "gles3"},
 		{"[OpenGL 4.6]", "gl4"},
 		{"[Vulkan    ]", "vk"},
 		{"[Software  ]", "soft"},
@@ -247,11 +245,11 @@ ResetDefaults(void *unused)
 static renderer_type
 CurrentRendererByCvar(void)
 {
-	if (Q_stricmp(vid_renderer->string, "gl3") == 0 || Q_stricmp(vid_renderer->string, "gles3") == 0)
+	if (Q_stricmp(vid_renderer->string, "gl3") == 0)
 	{
 		return ref_gl3;
 	}
-	if (Q_stricmp(vid_renderer->string, "gl1") == 0 || Q_stricmp(vid_renderer->string, "gles1") == 0)
+	if (Q_stricmp(vid_renderer->string, "gl1") == 0)
 	{
 		return ref_gl1;
 	}
@@ -441,14 +439,12 @@ ApplyChanges(void *unused)
 static void
 RestartNeededSDL3Msg(void *unused)
 {
-	if (
 #ifdef USE_SDL3
-		Q_stricmp(vid_renderer->string, "gl1") == 0 ||
-#endif
-		Q_stricmp(vid_renderer->string, "gles1") == 0 )
+	if (Q_stricmp(vid_renderer->string, "gl1") == 0)
 	{
 		Menu_SetStatusBar(&s_opengl_menu, "apply required");
 	}
+#endif
 }
 
 static void
