@@ -4,7 +4,7 @@ FROM ubuntu:24.04 AS build
 
 WORKDIR /yquake2
 RUN apt-get update
-RUN apt-get install libcurl4-openssl-dev build-essential -y
+RUN apt-get install build-essential -y
 COPY . .
 
 RUN make server game
