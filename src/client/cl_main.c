@@ -626,17 +626,6 @@ CL_InitLocal(void)
 
 	cl_vwep = Cvar_Get("cl_vwep", "1", CVAR_ARCHIVE);
 
-#ifdef USE_CURL
-	cl_http_verifypeer = Cvar_Get("cl_http_verifypeer", "1", CVAR_ARCHIVE);
-	cl_http_proxy = Cvar_Get("cl_http_proxy", "", CVAR_ARCHIVE);
-	cl_http_filelists = Cvar_Get("cl_http_filelists", "1", 0);
-	cl_http_downloads = Cvar_Get("cl_http_downloads", "1", CVAR_ARCHIVE);
-	cl_http_max_connections = Cvar_Get("cl_http_max_connections", "4", 0);
-	cl_http_show_dw_progress = Cvar_Get("cl_http_show_dw_progress", "0", 0);
-	cl_http_bw_limit_rate = Cvar_Get("cl_http_bw_limit_rate", "0", 0);
-	cl_http_bw_limit_tmout = Cvar_Get("cl_http_bw_limit_tmout", "0", 0);
-#endif
-
 	/* register our commands */
 	Cmd_AddCommand("cmd", CL_ForwardToServer_f);
 	Cmd_AddCommand("pause", CL_Pause_f);
@@ -863,14 +852,6 @@ CL_Frame(int packetdelta, int renderdelta, int timedelta, qboolean packetframe, 
 		}
 	}
 
-	// Run HTTP downloads more often while connecting.
-#ifdef USE_CURL
-	if (cls.state == ca_connected)
-	{
-		CL_RunHTTPDownloads();
-	}
-#endif
-
 	// Update input stuff.
 	if (packetframe || renderframe)
 	{
@@ -900,11 +881,6 @@ CL_Frame(int packetdelta, int renderdelta, int timedelta, qboolean packetframe, 
 	{
 		CL_SendCmd();
 		CL_CheckForResend();
-
-		// Run HTTP downloads during game.
-#ifdef USE_CURL
-		CL_RunHTTPDownloads();
-#endif
 	}
 
 	if (renderframe)
@@ -999,10 +975,6 @@ CL_Init(void)
 
 	M_Init();
 
-#ifdef USE_CURL
-	CL_InitHTTPDownloads();
-#endif
-
 	cls.disable_screen = true; /* don't draw yet */
 
 	CL_InitLocal();
@@ -1024,10 +996,6 @@ CL_Shutdown(void)
 	}
 
 	isdown = true;
-
-#ifdef USE_CURL
-	CL_HTTP_Cleanup(true);
-#endif
 
 	CL_WriteConfiguration();
 

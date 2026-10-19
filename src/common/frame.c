@@ -135,12 +135,6 @@ Qcommon_Buildstring(void)
 #ifndef DEDICATED_ONLY
 	printf("Client build options:\n");
 
-#ifdef USE_CURL
-	printf(" + cURL HTTP downloads\n");
-#else
-	printf(" - cURL HTTP downloads\n");
-#endif
-
 #ifdef SYSTEMWIDE
 	printf(" + Systemwide installation\n");
 #else

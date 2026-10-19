@@ -52,7 +52,6 @@
 
 #include "../../common/header/common.h"
 
-#include "../curl/header/download.h"
 #include "../sound/header/sound.h"
 #include "../sound/header/vorbis.h"
 #include "../vid/header/ref.h"
@@ -253,14 +252,6 @@ typedef struct
 	qboolean	demowaiting; /* don't record until a non-delta message is received */
 	FILE		*demofile;
 
-#ifdef USE_CURL
-	/* http downloading */
-	dlqueue_t  downloadQueue; /* queues with files to download. */
-	dlhandle_t HTTPHandles[MAX_HTTP_HANDLES]; /* download handles. */
-	char	   downloadServer[512]; /* URL prefix to dowload from .*/
-	char	   downloadServerRetry[512]; /* retry count. */
-	char	   downloadReferer[32]; /* referer string. */
-#endif
 } client_static_t;
 
 extern client_static_t	cls;
