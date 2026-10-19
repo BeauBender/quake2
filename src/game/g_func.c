@@ -688,6 +688,7 @@ Touch_Plat_Center(edict_t *ent, edict_t *other, const cplane_t *plane /* unused 
 	if (ent->moveinfo.state == STATE_BOTTOM)
 	{
 		wait_and_change(ent, plat_go_up);
+		/* ->moveinfo.endfunc = plat_go_up; */
 	}
 	else if (ent->moveinfo.state == STATE_TOP)
 	{
