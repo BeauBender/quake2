@@ -9,3 +9,4 @@
 - [No paid CI](feedback-no-paid-ci.md) — no paid Actions: keep CI on free standard runners
 - [Rework directives](feedback-rework-directives.md) — prescribe properties and proven primitives, not hand-built security/concurrency mechanisms
 - [quake2 work only](feedback-no-private-cards-on-public.md) — this public repo holds quake2 cards and context only; nothing about other repos
+- [One agent at a time](feedback-one-agent-at-a-time.md) — until Fri 2026-10-23 9 AM PT: at most one subagent live, review passes sequential
