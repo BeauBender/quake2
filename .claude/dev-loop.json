@@ -3,7 +3,9 @@
   "enabled": true,
   "cardPrefixes": ["TASK"],
   "kanban": { "repo": "BeauBender/quake2" },
-  "gate": { "test": "scripts/test.sh", "stampCommands": ["scripts/test.sh"] },
+  "gate": { "test": "scripts/test.sh", "merge": "scripts/test.sh", "stampCommands": ["scripts/test.sh"] },
+  "merge": { "ciChecks": "require" },
+  "risk": { "autoMergeCap": "H" },
   "worktree": { "required": true },
   "memory": { "shared": true }
 }
