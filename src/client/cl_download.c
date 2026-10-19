@@ -792,6 +792,15 @@ CL_ParseDownload(void)
 		return;
 	}
 
+	/* the chunk must lie inside the received message */
+	if ((size < 0) || (size > net_message.cursize - net_message.readcount))
+	{
+		Com_Printf("Bad download chunk size %i, only %i bytes in message.\n",
+				size, net_message.cursize - net_message.readcount);
+		Com_Error(ERR_DROP, "CL_ParseDownload: bad download chunk size");
+		return;
+	}
+
 	second_try = false;
 
 	/* open the file if not opened yet */
