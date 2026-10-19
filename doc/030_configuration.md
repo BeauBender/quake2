@@ -186,5 +186,5 @@ retexturing pack at a later time set `r_retexturing` to `0`.
 * And there's an AI upscale of the original textures:
   https://github.com/Calinou/quake2-neural-upscale/releases
 
-Retexturing packs can be installed by placing the pak or zip files in
+Retexturing packs can be installed by placing the pak files in
 the *baseq2* directory.

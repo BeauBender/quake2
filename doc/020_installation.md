@@ -179,7 +179,9 @@ report them to us through our GitHub repositories.
 Yamagi Quake II has optional support for monster footstep sounds. These
 require some custom audio files. Download the pak file with the sounds
 from https://deponie.yamagi.org/quake2/assets/footsteps.pkz and copy
-the file into the *baseq2/* directory.
+the file into the *baseq2/* directory. Note that only `.pak` archives
+are loaded, `.pkz` and other ZIP based packs are no longer supported;
+the sounds must be repacked as a `.pak` or placed as loose files.
 
 The footstep sounds are included with the official Windows release.
 
