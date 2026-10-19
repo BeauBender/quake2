@@ -26,6 +26,12 @@
 
 #include "header/local.h"
 
+#include <stdint.h>
+#include <time.h>
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+#include <stdlib.h>
+#endif
+
 game_locals_t game;
 level_locals_t level;
 game_import_t gi;
@@ -37,6 +43,47 @@ int snd_fry;
 int meansOfDeath;
 
 edict_t *g_edicts;
+
+/*
+ * shared/rand.c needs Sys_GetRandomBytes() to seed the PRNG.
+ * On Linux the Makefile links the engine with -rdynamic, so
+ * the module's call binds to the engine's definition by ELF
+ * preemption. This copy is the definition actually used on
+ * Windows and whenever the engine symbol is not exported.
+ * Gameplay randomness is not security-relevant, so it only
+ * has to differ between process starts.
+ */
+void
+Sys_GetRandomBytes(void *buf, size_t len)
+{
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+	arc4random_buf(buf, len);
+#else
+	static uint64_t state;
+	static uint64_t counter;
+	unsigned char *out = buf;
+	size_t i;
+
+	if (!state)
+	{
+		int stackvar = 0;
+
+		state = (uint64_t)time(NULL) ^ ((uint64_t)clock() << 32)
+				^ (uint64_t)(uintptr_t)&stackvar;
+		state |= 1;
+	}
+
+	counter++;
+	state ^= counter * 0x9E3779B97F4A7C15ULL;
+	state ^= (uint64_t)clock();
+
+	for (i = 0; i < len; i++)
+	{
+		state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+		out[i] = (unsigned char)(state >> 56);
+	}
+#endif
+}
 
 cvar_t *deathmatch;
 cvar_t *coop;

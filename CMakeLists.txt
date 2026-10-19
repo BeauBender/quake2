@@ -712,7 +712,7 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
 			RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/release
 			)
 	target_link_libraries(yquake2 ${yquake2LinkerFlags} ${yquake2ClientLinkerFlags}
-			${yquake2SDLLinkerFlags} ${yquake2ZLibLinkerFlags} ws2_32 winmm)
+			${yquake2SDLLinkerFlags} ${yquake2ZLibLinkerFlags} ws2_32 winmm bcrypt)
 	if(SDL3_SUPPORT)
 		target_link_libraries(yquake2 SDL3::SDL3)
 	endif()
@@ -751,7 +751,7 @@ set_target_properties(q2ded PROPERTIES
 	RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/release
 	)
 if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
-	target_link_libraries(q2ded ${yquake2LinkerFlags} ${yquake2ZLibLinkerFlags} ws2_32 winmm)
+	target_link_libraries(q2ded ${yquake2LinkerFlags} ${yquake2ZLibLinkerFlags} ws2_32 winmm bcrypt)
 else()
 	target_link_libraries(q2ded ${yquake2LinkerFlags} ${yquake2ServerLinkerFlags} ${yquake2ZLibLinkerFlags})
 endif()

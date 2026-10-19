@@ -132,7 +132,11 @@ SVC_GetChallenge(void)
 	if (i == MAX_CHALLENGES)
 	{
 		/* overwrite the oldest */
-		svs.challenges[oldest].challenge = randk() & 0x7fff;
+		int rnd = 0;
+
+		/* unpredictable, and independent of the gameplay randk() stream */
+		Sys_GetRandomBytes(&rnd, sizeof(rnd));
+		svs.challenges[oldest].challenge = rnd & 0x7fff;
 		svs.challenges[oldest].adr = net_from;
 		svs.challenges[oldest].time = curtime;
 		i = oldest;
