@@ -234,6 +234,9 @@ glob_match_after_star(char *pattern, char *text)
  *
  * To suppress the special syntactic significance of any of `[]*?!-\',
  * and match the character exactly, precede it with a `\'.
+ *
+ * A trailing unescaped backslash matches a literal backslash, and an
+ * unterminated `[' set never matches.
  */
 int
 glob_match(char *pattern, char *text)
