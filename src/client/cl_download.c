@@ -39,30 +39,10 @@ extern int precache_model_skin;
 
 extern byte *precache_model;
 
-// Forces all downloads to UDP.
-static qboolean forceudp;
-
-// Gives HTTP downloads a second chance after
-// we've fallen trough to UDP downloads.
-static qboolean httpSecondChance = true;
-
-/* This - and some more code down below - is the 'Crazy Fallback
-   Magic'. First we're trying to download all files over HTTP with
-   r1q2-style URLs. If we encountered errors we reset the complete
-   precacher state and retry with HTTP and q2pro-style URLs. If we
-   still got errors we're falling back to UDP. So:
-     - 0: Virgin state, r1q2-style URLs.
-     - 1: Second iteration, q2pro-style URL.
-     - 3: Third iteration, UDP downloads. */
-static unsigned int precacherIteration;
-
 /* Another quirk: Don't restart texture downloading from the beginning,
    instead continue after the last requested texture. This is used to
    skip over a texture missing on the server. */
 static qboolean dont_restart_texture_stage;
-
-// r1q2 searches the global filelist at /, q2pro at /gamedir...
-static qboolean gamedirForFilelist;
 
 static const char *env_suf[6] = {"rt", "bk", "lf", "ft", "up", "dn"};
 
@@ -78,43 +58,6 @@ CL_RequestNextDownload(void)
 	unsigned int map_checksum; /* for detecting cheater maps */
 	char fn[MAX_OSPATH];
 	dmdl_t *pheader;
-
-	if (precacherIteration == 0)
-	{
-#if USE_CURL
-		// r1q2-style URLs.
-		Q_strlcpy(dlquirks.gamedir, cl.gamedir, sizeof(dlquirks.gamedir));
-#endif
-	}
-	else if (precacherIteration == 1)
-	{
-#if USE_CURL
-		// q2pro-style URLs.
-		if (cl.gamedir[0] == '\0')
-		{
-			Q_strlcpy(dlquirks.gamedir, BASEDIRNAME, sizeof(dlquirks.gamedir));
-		}
-		else
-		{
-			Q_strlcpy(dlquirks.gamedir, cl.gamedir, sizeof(dlquirks.gamedir));
-		}
-
-		// Force another try with the filelist.
-		dlquirks.filelist = true;
-		gamedirForFilelist = true;
-#endif
-	}
-	else if (precacherIteration == 2)
-	{
-		// UDP Fallback.
-		forceudp = true;
-	}
-	else
-	{
-		// Cannot get here.
-		assert(1 && "Recursed from UDP fallback case");
-	}
-
 
 	if (cls.state != ca_connected)
 	{
@@ -164,14 +107,6 @@ CL_RequestNextDownload(void)
 
 					precache_model_skin = 1;
 				}
-
-#ifdef USE_CURL
-				/* Wait for the models to download before checking * skins. */
-				if (CL_PendingHTTPDownloads())
-				{
-					return;
-				}
-#endif
 
 				/* checking for skins in the model */
 				if (!precache_model)
@@ -410,26 +345,6 @@ CL_RequestNextDownload(void)
 	}
 
 
-#ifdef USE_CURL
-	/* Wait for pending downloads. */
-	if (CL_PendingHTTPDownloads())
-	{
-		return;
-	}
-
-
-	if (dlquirks.error)
-	{
-		dlquirks.error = false;
-
-		/* Mkay, there were download errors. Let's start over. */
-		precacherIteration++;
-		CL_ResetPrecacheCheck();
-		CL_RequestNextDownload();
-		return;
-	}
-#endif
-
 	/* precache phase completed */
 	if (!dont_restart_texture_stage)
 	{
@@ -505,24 +420,8 @@ CL_RequestNextDownload(void)
 		precache_check = TEXTURE_CNT + 999;
 	}
 
-#ifdef USE_CURL
-	/* Wait for pending downloads. */
-	if (CL_PendingHTTPDownloads())
-	{
-		return;
-	}
-#endif
-
 	/* This map is done, start over for next map. */
-	forceudp = false;
-	precacherIteration = 0;
-	gamedirForFilelist = false;
-	httpSecondChance = true;
 	dont_restart_texture_stage = false;
-
-#ifdef USE_CURL
-	dlquirks.filelist = true;
-#endif
 
 	CL_RegisterSounds();
 	CL_PrepRefresh();
@@ -628,51 +527,6 @@ CL_CheckOrDownloadFile(const char *filename)
 		return true;
 	}
 
-#ifdef USE_CURL
-	if (!forceudp)
-	{
-		if (CL_QueueHTTPDownload(filename, gamedirForFilelist))
-		{
-			/* We return true so that the precache check
-			   keeps feeding us more files. Since we have
-			   multiple HTTP connections we want to
-			   minimize latency and be constantly sending
-			   requests, not one at a time. */
-			return true;
-		}
-	}
-	else
-	{
-		/* There're 2 cases:
-			- forceudp was set after a 404. In this case we
-			  want to retry that single file over UDP and
-			  all later files over HTTP.
-			- forceudp was set after another error code.
-			  In that case the HTTP code aborts all HTTP
-			  downloads and CL_QueueHTTPDownload() returns
-			  false. */
-		forceudp = false;
-
-		/* This is one of the nasty special cases. A r1q2
-		   server might miss only one file. This missing
-		   file may lead to a fallthrough to q2pro URLs,
-		   since it isn't a q2pro server all files would
-		   yield error 404 and we're falling back to UDP
-		   downloads. To work around this we need to start
-		   over with the r1q2 case and see what happens.
-		   But we can't do that unconditionally, because
-		   we would run in endless loops r1q2 -> q2pro ->
-		   UDP -> r1q2. So hack in a variable that allows
-		   for one and only one second chance. If the r1q2
-		   server is missing more than file we've lost and
-		   we're doing unnecessary UDP downloads. */
-		if (httpSecondChance)
-		{
-			precacherIteration = 0;
-			httpSecondChance = false;
-		}
-	}
-#endif
 	Q_strlcpy(cls.downloadname, filename, sizeof(cls.downloadname));
 
 	/* download to a temp name, and only rename
