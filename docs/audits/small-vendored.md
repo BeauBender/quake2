@@ -12,6 +12,8 @@ Scope: the small third-party or generated files that stay in the tree. Each file
 | `src/common/glob.c` | GPL-2-or-later (id Software header) | 239 | `8c7b2dd033417cda3208fb55b60e21df5bf73262788d6ab552814451808be67e` | KEEP (defects noted below) |
 | `src/game/savegame/tables/*` (10 files) | GPL-2-or-later (id Software / Yamagi headers) | 2026 total | see section | KEEP (defects noted below) |
 
+Hashes in this document are those of the audited revision; current hashes live in docs/DEPENDENCIES.md.
+
 ## src/client/input/gyro.c
 
 - License header: yes, MIT. Copyright 2018-2021 Julian "Jibb" Smart, 2021-2024 Nicolas Lessard, 2025 ceski. The same text is reproduced in the repo `LICENSE` ("Gyro source code (gyro.c, gyro.h)").
@@ -141,7 +143,7 @@ Verdict: KEEP (defects noted below)
 
 ## Defects found
 
-None of these were filed or fixed by this card.
+None of these were filed or fixed by TASK15; later FIX cards record their resolution in the What cell.
 
 | # | Location (file:function) | What | Severity |
 |---|--------------------------|------|----------|
@@ -149,7 +151,7 @@ None of these were filed or fixed by this card.
 | 2 | `src/game/savegame/tables/gamefunc_list.h` (`fnentries_mv_end`) | `door_secret_done` is assigned to `moveinfo.endfunc` through `Move_Calc` (`g_func.c:2858`) but is missing from the `mv_end` table. A save made while a secret door is in its final move stores no end function; on load the function is NULL, so the door never reaches `door_secret_done` (health and areaportal state not set). Fixed in FIX6: door_secret_done and plat_go_up added to fnentries_mv_end; SAVEGAMEVER deliberately not bumped (only names were added to the lookup table, the on-disk format is unchanged, older saves still load); the marker-comment rule is documented in stuff/fngen/README.md. | Low (rare timing, mod-compatible fix) |
 | 3 | `src/common/shared/rand.c:randk_seed` and `src/server/sv_conless.c` (challenge, `randk() & 0x7fff`) | `randk_seed()` uses no entropy: `cng` and `xs` start at 0, so the PRNG state at startup is a constant, and the connectionless challenge is a function of how many `randk()` calls ran before it. An attacker who can count server frames can predict challenges, weakening the address-ownership proof. Fix: seed `cng`/`xs` from the OS (time plus `getrandom`/`arc4random`) at least for the challenge, or use an OS random source for challenges. Note the challenge is only 15 bits by protocol. | Medium for a public server (spoofed `connect`), low otherwise (FIXED by card FIX4) |
 | 4 | `src/common/shared/rand.c:randk` | `r * -1` overflows (undefined behaviour) when `(int)KISS == INT_MIN`, probability 2^-32 per call; comment says result is positive but 0 is possible. | Low (UBSAN only) (FIXED by card FIX4) |
-| 5 | `src/common/md4.c:Com_BlockChecksum` | Digest is written as bytes into `uint32_t[4]` and read back as native words, so the folded checksum differs between little- and big-endian hosts; `collision.c` applies `LittleLong` afterwards which does not compensate. Header prototype is `const void *`, definition `void *`. | Low (latent, all current targets are little-endian) |
-| 6 | `src/common/md4.c:PerformMD4` | `ptr[3] << 24` promotes to signed `int` and overflows for bytes 0x80 and above: undefined behaviour in strict C, flagged by UBSAN. Negative `length` is not rejected and leaves `X[j]` uninitialised. Neither is reachable from current callers. | Low |
-| 7 | `src/client/input/gyro.c` (`CalcGravityVector`, `IN_GYRO_Update*`) | No rejection of NaN or infinite sensor samples or cvar values. One NaN sample poisons the persistent `gravity`, `smooth_accel` and `shakiness` until `IN_GYRO_ResetState`; `lroundf(NaN)` feeding the enum fields is unspecified. No memory-safety impact found. | Low |
+| 5 | `src/common/md4.c:Com_BlockChecksum` | Digest is written as bytes into `uint32_t[4]` and read back as native words, so the folded checksum differs between little- and big-endian hosts; `collision.c` applies `LittleLong` afterwards which does not compensate. Header prototype is `const void *`, definition `void *`. FIXED (FIX7). | Low (latent, all current targets are little-endian) |
+| 6 | `src/common/md4.c:PerformMD4` | `ptr[3] << 24` promotes to signed `int` and overflows for bytes 0x80 and above: undefined behaviour in strict C, flagged by UBSAN. Negative `length` is not rejected and leaves `X[j]` uninitialised. Neither is reachable from current callers. FIXED (FIX7). | Low |
+| 7 | `src/client/input/gyro.c` (`CalcGravityVector`, `IN_GYRO_Update*`) | No rejection of NaN or infinite sensor samples or cvar values. One NaN sample poisons the persistent `gravity`, `smooth_accel` and `shakiness` until `IN_GYRO_ResetState`; `lroundf(NaN)` feeding the enum fields is unspecified. No memory-safety impact found. FIXED (FIX7). | Low |
 | 8 | `src/common/glob.c:glob_match_after_star` | Backtracking is O(n^k) for k `*` groups on a near-miss text; local denial of service with a crafted pattern. | Low |
