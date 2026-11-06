@@ -60,6 +60,16 @@ outside the repo (`$PINS_STORE`, or `pins.store` in `.claude/dev-loop.json`).
 `tests/check-pins.sh` (synthetic frames). Real pins are run by the agent
 inside the card, never by CI.
 
+
+## Analysis and design documents (written 2026-11-06, read before starting a card)
+
+| Document | Feeds |
+|---|---|
+| `docs/analysis/gl1-state-inventory.md` | TASK21, TASK28: the 61 GL entry points, draw-time state space, pipeline-state keys, implementation order |
+| `docs/plans/metal-shim-design.md` | TASK21: shim module layout, PSO cache, ring buffers, readback, frame sync, first cards |
+| `docs/plans/metal-raytracing-design.md` | TASK24, TASK25: acceleration structures, the three effects, G-buffer needs, hardware gating, sub-cards |
+| `docs/plans/refapi-record-replay.md` | TASK27 remainder: proxy refexport_t, deep copy rules, on-disk format, replay driver, header sketch |
+
 ## Order of work for an unattended agent
 
 1. TASK27 remainder: recorder and replayer behind `GetRefAPI`; acceptance,

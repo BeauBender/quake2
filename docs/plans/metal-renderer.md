@@ -22,6 +22,12 @@ Work cards:
 
 # Plan: a Metal renderer as the base for ray tracing and the other Apple platforms
 
+Harness and designs (2026-11-06): the operating procedure is
+`docs/plans/metal-port-harness.md`; it links the GL-state inventory, the shim
+design, the ray-tracing design and the record/replay design. TASK27's core
+(capture hook, cadence, driver, diff, scenarios, gate check) is in the tree.
+
+
 ## The questions asked
 
 Can ray tracing be added to this fork without pulling in the untrusted
