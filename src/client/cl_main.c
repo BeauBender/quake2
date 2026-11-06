@@ -806,6 +806,34 @@ CL_UpdateWindowedMouse(void)
 	}
 }
 
+/*
+ * Pin harness (TASK27). pins_capture N: during demo playback, request a
+ * screenshot every N client frames (the frame goes to the pin store when
+ * pins_dir is set, see VID_WriteScreenshot); once playback ends, quit.
+ */
+static void
+CL_PinsFrame(void)
+{
+	static cvar_t *pins_capture;
+	static qboolean was_playing;
+	int every;
+
+	if (!pins_capture) { pins_capture = Cvar_Get("pins_capture", "0", 0); }
+	every = (int)pins_capture->value;
+	if (every <= 0) return;
+
+	if (cl.attractloop && cls.state == ca_active)
+	{
+		was_playing = true;
+		if ((cls.framecount % every) == 0) { Cbuf_AddText("screenshot tga\n"); }
+	}
+	else if (was_playing && cls.state == ca_disconnected)
+	{
+		was_playing = false;
+		Cbuf_AddText("quit\n");
+	}
+}
+
 void
 CL_Frame(int packetdelta, int renderdelta, int timedelta, qboolean packetframe, qboolean renderframe)
 {
@@ -917,6 +945,10 @@ CL_Frame(int packetdelta, int renderdelta, int timedelta, qboolean packetframe, 
 
 		/* Update framecounter */
 		cls.framecount++;
+
+		/* Pin harness (TASK27): capture on a fixed cadence while a demo
+		 * plays and quit when it ends, so a scenario run is unattended. */
+		CL_PinsFrame();
 
 		if (log_stats->value)
 		{

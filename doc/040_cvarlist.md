@@ -791,3 +791,19 @@ like.
 * **toggle <cvar> [val0] [val1]**: Toggle the given cvar between `0` and
   `1`. If the optional arguments `val0` and `val1` are given, the cvar
   is toggled between them.
+
+## Pin harness (TASK27)
+
+These are set by `scripts/pins.sh`, never by a player. With none of them set
+the engine behaves exactly as before.
+
+* **pins_dir**: When set to a directory, every screenshot is written there as an
+  uncompressed 24-bit TGA named `<pins_scenario>-<frame>.tga` plus a line in
+  `manifest.txt`, and `scrnshot/` is not touched. Default: empty.
+
+* **pins_scenario**: The file-name prefix for frames written by `pins_dir`.
+  Default: `pin`.
+
+* **pins_capture**: During demo playback, request a screenshot every N client
+  frames; when playback ends, quit so a scenario run is unattended. `0`
+  (the default) disables both.

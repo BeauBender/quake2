@@ -44,8 +44,63 @@
  * RGB or RGBA. The pixels must be given row-wise, stating at the top
  * left.
  */
+/*
+ * Pin harness (TASK27, INFORM8/INFORM9): when the cvar pins_dir is set, a
+ * screenshot is written as an uncompressed 24-bit TGA straight into the pin
+ * store, named by scenario and frame index, and scrnshot/ is never touched.
+ * No stb here on purpose: this path must survive TASK9. Returns true when
+ * it handled the frame.
+ */
+static qboolean
+VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
+{
+	static cvar_t *pins_dir, *pins_scenario;
+	static int frame;
+	char path[MAX_OSPATH];
+	unsigned char hdr[18];
+	FILE *f;
+	int x, y;
+
+	if (!pins_dir) { pins_dir = Cvar_Get("pins_dir", "", 0); pins_scenario = Cvar_Get("pins_scenario", "pin", 0); }
+	if (!pins_dir->string[0]) return false;
+	if (comp != 3 && comp != 4) return false;
+
+	Com_sprintf(path, sizeof(path), "%s/%s-%06d.tga", pins_dir->string, pins_scenario->string, frame);
+	f = Q_fopen(path, "wb");
+	if (!f) { Com_Printf("pins: cannot write %s\n", path); return false; }
+
+	memset(hdr, 0, sizeof(hdr));
+	hdr[2] = 2;                 /* uncompressed truecolor */
+	hdr[12] = width & 255;  hdr[13] = (width >> 8) & 255;
+	hdr[14] = height & 255; hdr[15] = (height >> 8) & 255;
+	hdr[16] = 24;
+	hdr[17] = 0x20;             /* rows stored top-down, as the renderer hands them over */
+	fwrite(hdr, 1, sizeof(hdr), f);
+	for (y = 0; y < height; y++)
+	{
+		const unsigned char *row = data + (size_t)y * width * comp;
+		for (x = 0; x < width; x++)
+		{
+			unsigned char bgr[3] = { row[x * comp + 2], row[x * comp + 1], row[x * comp + 0] };
+			fwrite(bgr, 1, 3, f);
+		}
+	}
+	fclose(f);
+
+	Com_sprintf(path, sizeof(path), "%s/manifest.txt", pins_dir->string);
+	f = Q_fopen(path, "ab");
+	if (f) { fprintf(f, "%s-%06d.tga %s %dx%d\n", pins_scenario->string, frame, vid_renderer ? vid_renderer->string : "?", width, height); fclose(f); }
+	frame++;
+	return true;
+}
+
 void VID_WriteScreenshot(int width, int height, int comp, const void* data)
 {
+	if (VID_WritePinFrame(width, height, comp, (const unsigned char *)data))
+	{
+		return;
+	}
+
 	char picname[80];
 	char checkname[MAX_OSPATH];
 	int i, success = 0;
