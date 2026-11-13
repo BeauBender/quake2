@@ -60,6 +60,13 @@ n=$(awk '
 	END { print n + 0 }' "$vid")
 [ "$n" = 0 ] || bad "$vid: R_IsVSyncActive is hooked; GLimp-path members are not recorded"
 
+# and nothing else under src/client may call into the recorder: the other
+# GLimp-path members (PrepareForWindow, InitContext, GetDrawableSize,
+# ShutdownContext) are not recorded either
+others=$(grep -rl 'RefRec_' src/client | grep -v -e '^src/client/vid/vid\.c$' \
+	-e '^src/client/vid/refrecord\.c$' -e '^src/client/vid/header/refrecord\.h$' || true)
+[ -z "$others" ] || bad "RefRec_ is used outside vid.c and refrecord.[ch]: $others"
+
 if [ "$fail" = 0 ]; then
 	echo "check-refrecord: ok ($(tail -n 1 "$tmp/out" | sed 's/^refrecord: //'))"
 fi

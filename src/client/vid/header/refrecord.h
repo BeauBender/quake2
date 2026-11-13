@@ -108,7 +108,7 @@ typedef struct {
 
 /*
  * Every record other than REC_RENDERFRAME and REC_CVARS in memory. Which
- * fields a type carries is fixed per type (refrec.c, rec_layout):
+ * fields a type carries is fixed per type (refrecord.c, rec_layout):
  *
  *   REC_BEGINREG     name (map)
  *   REC_MODEL, REC_SKIN, REC_PIC   id, name
