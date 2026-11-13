@@ -301,6 +301,14 @@ CL_DeltaEntity(frame_t *frame, int newnum, const entity_state_t *old, int bits)
 		ent = &dummy;
 	}
 
+	/* A frame holds at most one state per entity number. Consumers
+	   size their per-frame arrays by MAX_EDICTS (and the ring
+	   cl_parse_entities has the same size), so refuse more. */
+	if (frame->num_entities >= MAX_EDICTS)
+	{
+		Com_Error(ERR_DROP, "%s: too many entities in frame\n", __func__);
+	}
+
 	state = &cl_parse_entities[cl.parse_entities & (MAX_PARSE_ENTITIES - 1)];
 	cl.parse_entities++;
 	frame->num_entities++;

@@ -209,7 +209,7 @@ channel_t *S_PickChannel(int entnum, int entchannel);
  * Builds a list of all
  * sound still in flight
  */
-void S_BuildSoundList(int *sounds);
+void S_BuildSoundList(int *sounds, int maxsounds);
 
 /* ----------------------------------------------------------------- */
 

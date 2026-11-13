@@ -681,6 +681,7 @@ SDL_AddLoopSounds(void)
 {
 	int i;
 	int sounds[MAX_EDICTS];
+	int numsounds;
 
 	if ((cls.state != ca_active) || (cl_paused->value && cl_audiopaused->value) ||
 	    !cl.sound_prepped || !s_ambient->value)
@@ -689,9 +690,13 @@ SDL_AddLoopSounds(void)
 	}
 
 	memset(&sounds, 0, sizeof(int) * MAX_EDICTS);
-	S_BuildSoundList(sounds);
+	S_BuildSoundList(sounds, MAX_EDICTS);
 
-	for (i = 0; i < cl.frame.num_entities; i++)
+	/* never walk past the local array, whatever the frame says */
+	numsounds = (cl.frame.num_entities < MAX_EDICTS) ?
+			cl.frame.num_entities : MAX_EDICTS;
+
+	for (i = 0; i < numsounds; i++)
 	{
 		int left, right, left_total, right_total;
 		channel_t *ch;
@@ -732,7 +737,7 @@ SDL_AddLoopSounds(void)
 		/* find the total contribution of all sounds of this type */
 		SDL_SpatializeOrigin(org, 255.0f, SDL_LOOPATTENUATE, &left_total, &right_total);
 
-		for (j = i + 1; j < cl.frame.num_entities; j++)
+		for (j = i + 1; j < numsounds; j++)
 		{
 			if (sounds[j] != sounds[i])
 			{
