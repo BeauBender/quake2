@@ -97,9 +97,16 @@ CL_AddPacketEntities(frame_t *frame)
 			ent.frame = cl.time / 100;
 		}
 
-		else
+		else if (s1->frame >= 0)
 		{
 			ent.frame = s1->frame;
+		}
+		else
+		{
+			/* Negative frame from the server: the renderers index
+			   texture chains and sprite frames with it, use the first
+			   frame like the alias model code does for a bad frame. */
+			ent.frame = 0;
 		}
 
 		/* quad and pent can do different things on client */
@@ -220,7 +227,10 @@ CL_AddPacketEntities(frame_t *frame)
 			}
 			else
 			{
-				ent.skinnum = s1->skinnum;
+				/* A negative skin would index before the skins
+				   array of the model; use the first skin, as the
+				   software renderer does for a bad skin. */
+				ent.skinnum = (s1->skinnum >= 0) ? s1->skinnum : 0;
 				ent.skin = NULL;
 				ent.model = cl.model_draw[s1->modelindex];
 			}
@@ -413,7 +423,7 @@ CL_AddPacketEntities(frame_t *frame)
 				ci = &cl.clientinfo[s1->skinnum & 0xff];
 				i = (s1->skinnum >> 8); /* 0 is default weapon model */
 
-				if (!cl_vwep->value || (i > MAX_CLIENTWEAPONMODELS - 1))
+				if (!cl_vwep->value || (i < 0) || (i > MAX_CLIENTWEAPONMODELS - 1))
 				{
 					i = 0;
 				}
