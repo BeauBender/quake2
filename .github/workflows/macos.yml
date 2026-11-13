@@ -63,6 +63,7 @@ jobs:
         cp doc/060_multiplayer.md publish/quake2-macos-${{github.sha}}/misc/docs/060_multiplayer.txt
         cp doc/070_packaging.md publish/quake2-macos-${{github.sha}}/misc/docs/070_packaging.txt
         cp doc/080_contributing.md publish/quake2-macos-${{github.sha}}/misc/docs/080_contributing.txt
+        cp doc/085_unittests.md publish/quake2-macos-${{github.sha}}/misc/docs/085_unittests.txt
         cp doc/090_filelists.md publish/quake2-macos-${{github.sha}}/misc/docs/090_filelists.md
     - name: Create tarball package
       run: |
