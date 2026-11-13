@@ -8,7 +8,10 @@
 ## Cards generated
 
 Decision record (owner-gated, `manual:BeauBender`):
-- INFORM7 — Ray-tracing approach: do not import Q2RTXM; Metal rasterizer first, hybrid RT on real hardware
+- INFORM7 — Ray-tracing approach: do not import Q2RTXM; Metal rasterizer first, hybrid RT on real hardware (closed, accepted by the owner on 2026-11-12)
+- INFORM8 (#35) — Metal path: pin at two seams, grow an in-tree OpenGL-subset shim first, then specialize into native `ref_metal` (closed, accepted by the owner on 2026-11-12)
+- INFORM9 (#36) — Pin fixtures: reference frames and traces come from the owner's game data on a Mac where `ref_gl1` runs, kept in a local pin store; CI runs only synthetic traces (closed, accepted by the owner on 2026-11-12)
+- INFORM11 (#101) — the look of the four ray-traced effects, accepted by the owner from the frames RT3 to RT6 captured (owner-gated, `gate:manual:BeauBender`) — depends on TASK55, TASK56, TASK57, TASK58
 
 Work cards:
 - TASK20 — Static-link build mode (platform) — tier T0
@@ -17,10 +20,50 @@ Work cards:
 - TASK23 — Apple TV and Apple Vision Pro targets (platform) — tier T0 simulators; depends on TASK22
 - TASK24 — Hybrid ray tracing, compute-based (raytracing) — tier T1 to build, T2 to validate; depends on TASK21, INFORM7
 - TASK25 — Render-stage ray queries and hardware-RT tuning (raytracing) — tier T2 only; depends on TASK24
+- TASK27 (#37) — Pin harness: capture hook, capture before present, unattended quit, `scripts/pins.sh`, comparator, scenarios, gate check; real-data pins and record/replay follow as TASK39 to TASK46 — depends on INFORM8, INFORM9, TASK29
+- TASK28 (#38) — Specialize into native `ref_metal`: replace the shim at gl1's 441 call sites with direct Metal, concept by concept, frame pins as acceptance — depends on TASK21, TASK27
+
+Cards filed from `docs/plans/metal-port-cards.md` on 2026-11-12 (dependencies
+inside the manifest; each card also carries its group's parent dependencies):
+
+- TASK39 (#81) — First capture on real data: link the client with the capture hooks and record `ref_soft` references for the four scenarios — tier T0
+- TASK40 (#82) — Remaining scenarios and the user page: sky and water, cinematics, and a `doc/` page for the harness — tier T0; depends on TASK39
+- TASK41 (#83) — `ref_gl1` references and the thresholds at which `soft` and `gl1` agree — tier T1, after checking whether `ref_gl1` renders on the VM; depends on TASK39, TASK40
+- TASK42 (#84) — Record serializers and pass-through hooks in the `vid.c` wrappers, recording off — tier T0; depends on TASK39
+- TASK43 (#85) — Recording: handle map, `refdef_t` deep copy, string table, frame index — tier T0; depends on TASK42
+- TASK44 (#86) — Replay driver: registration from the string table, frame feed, capture at the recorded cadence, quit — tier T0; depends on TASK43
+- TASK45 (#87) — Determinism: cvar snapshot and restore, a fixed PRNG seed behind a cvar, the `refdef_t.time` check — tier T0; depends on TASK44
+- TASK46 (#88) — `scripts/pins.sh replay` and cross-renderer compare from one trace — tier T0; depends on TASK45
+- TASK47 (#89) — Shim skeleton and readback: build selection, context, present, clear, the state struct, `glGetString`, `glGetError`, `glReadPixels`, the pin hook on the shim — tier T0
+- TASK48 (#90) — 2D path: RGBA textures, samplers, replace and modulate, blend, alpha test, the 2D batch, cinematic uploads — tier T0; depends on TASK47, TASK41
+- TASK49 (#91) — World: matrices, depth, cull, the classic lightmap pass, two-unit combine with overbright, dynamic lightmap sub-uploads, polygon offset — tier T0; depends on TASK48
+- TASK50 (#92) — Translucent surfaces, water and sky — tier T0; depends on TASK49
+- TASK51 (#93) — Alias models, the view weapon, dynamic lights, flashes and stencil shadows — tier T0; depends on TASK49
+- TASK52 (#94) — Particles, beams, sprites and the screen blend — tier T0; depends on TASK51
+- TASK53 (#95) — Acceleration structures: world and model triangle extraction, per-map and per-model structures, per-frame instances, counts logged; no visual change — tier T1
+- TASK54 (#96) — G-buffer in `ref_metal` and a lighting resolve that reproduces the stock result — tier T1; depends on TASK53
+- TASK55 (#97) — Ray-traced shadows from dynamic lights, replacing the term `R_AddDynamicLights` adds when on — tier T1; depends on TASK54
+- TASK56 (#98) — Sun and sky shadow with a per-map direction table — tier T1; depends on TASK55
+- TASK57 (#99) — Ambient occlusion — tier T1; depends on TASK55
+- TASK58 (#100) — Water reflections, one bounce — tier T1; depends on TASK55
+- TASK59 (#102) — Temporal accumulation and the denoiser — tier T1; depends on INFORM11
+- TASK60 (#103) — Hardware gating and fallbacks, with ray tracing forced off on the VM — tier T0 and T1; depends on TASK54
+- TASK61 (#104) — Render-stage ray queries on M3 or later, compute path kept for older families — tier T2; depends on TASK59
+- TASK62 (#105) — Refit against rebuild tuning and resolution-scale defaults per GPU family — tier T2; depends on TASK61
 
 ---
 
 # Plan: a Metal renderer as the base for ray tracing and the other Apple platforms
+
+Harness and designs (2026-11-06): the operating procedure is
+`docs/plans/metal-port-harness.md`; it links the GL-state inventory, the shim
+design, the ray-tracing design and the record/replay design. TASK27's core
+(capture hook, cadence, driver, diff, scenarios, gate check) is in the tree.
+INFORM7, INFORM8 and INFORM9 were closed as accepted by the owner on
+2026-11-12.
+The cards filed for the harness, the shim and ray tracing (2026-11-12),
+with dependencies, acceptance and ids, are in `docs/plans/metal-port-cards.md`.
+
 
 ## The questions asked
 

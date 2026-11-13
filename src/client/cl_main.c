@@ -806,6 +806,32 @@ CL_UpdateWindowedMouse(void)
 	}
 }
 
+/*
+ * With pin capture on, quit once demo playback has ended, so a scenario
+ * run is unattended. The capture itself happens in SCR_UpdateScreen
+ * (SCR_PinsCapture), before the frame is presented.
+ */
+static void
+CL_PinsFrame(void)
+{
+	static qboolean was_playing;
+
+	if (CL_PinsCapture() <= 0)
+	{
+		return;
+	}
+
+	if (cl.attractloop && (cls.state == ca_active))
+	{
+		was_playing = true;
+	}
+	else if (was_playing && (cls.state == ca_disconnected))
+	{
+		was_playing = false;
+		Cbuf_AddText("quit\n");
+	}
+}
+
 void
 CL_Frame(int packetdelta, int renderdelta, int timedelta, qboolean packetframe, qboolean renderframe)
 {
@@ -917,6 +943,9 @@ CL_Frame(int packetdelta, int renderdelta, int timedelta, qboolean packetframe, 
 
 		/* Update framecounter */
 		cls.framecount++;
+
+		/* Pin harness: quit when demo playback has ended. */
+		CL_PinsFrame();
 
 		if (log_stats->value)
 		{

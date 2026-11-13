@@ -445,6 +445,12 @@ void CL_Quit_f (void);
 
 void CL_Init (void);
 
+/* Pin harness: values latched from the command line by CL_PinsLatch */
+const char *CL_PinsDir(void);
+const char *CL_PinsScenario(void);
+int CL_PinsCapture(void);
+qboolean CL_PinsInvalid(void);
+
 void CL_FixUpGender(void);
 void CL_Disconnect (void);
 void CL_Disconnect_f (void);

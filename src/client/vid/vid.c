@@ -44,8 +44,137 @@
  * RGB or RGBA. The pixels must be given row-wise, stating at the top
  * left.
  */
+/* Appends one line to <dir>/manifest.txt; silent when it cannot. */
+static void
+VID_PinManifest(const char *dir, const char *fmt, ...)
+{
+	char path[MAX_OSPATH];
+	va_list ap;
+	FILE *f;
+	int len;
+
+	len = snprintf(path, sizeof(path), "%s/manifest.txt", dir);
+	if ((len < 0) || (len >= (int)sizeof(path)))
+	{
+		return;
+	}
+
+	f = Q_fopen(path, "ab");
+	if (f)
+	{
+		va_start(ap, fmt);
+		vfprintf(f, fmt, ap);
+		va_end(ap);
+		fclose(f);
+	}
+}
+
+/*
+ * Pin harness (INFORM8/INFORM9): when a pin store directory was given on
+ * the command line (CL_PinsDir, latched by CL_PinsLatch; never a cvar), a
+ * screenshot is written as an uncompressed 24-bit TGA straight into the
+ * store, named by scenario and frame index, and scrnshot/ is never
+ * touched. No stb here on purpose: this path must survive TASK9. Returns
+ * true when it handled the frame.
+ */
+static qboolean
+VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
+{
+	static int frame;
+	const char *dir = CL_PinsDir();
+	const char *scenario = CL_PinsScenario();
+	char path[MAX_OSPATH];
+	unsigned char hdr[18];
+	FILE *f;
+	int x, y, ok, len, idx;
+
+	if (CL_PinsInvalid())
+	{
+		Com_Printf("pins: a pins_* argument was refused, nothing written\n");
+		return true;
+	}
+
+	if (!dir[0])
+	{
+		return false;
+	}
+
+	if ((comp != 3) && (comp != 4))
+	{
+		return false;
+	}
+
+	/* Belt and braces: CL_PinsLatch refused these already. */
+	if (strstr(dir, "..") || strpbrk(scenario, "/\\:") || strstr(scenario, ".."))
+	{
+		Com_Printf("pins: pins_dir or pins_scenario holds a forbidden character, nothing written\n");
+		return true;
+	}
+
+	/*
+	 * The frame index always advances, so a failed write never shifts
+	 * the names of the frames after it. A failure is recorded in
+	 * manifest.txt as "FAILED <name>", which scripts/pins.sh record
+	 * treats as an incomplete pin. If the manifest cannot be written
+	 * either, its line count no longer matches the frames and record
+	 * fails on that.
+	 */
+	idx = frame++;
+
+	/* Never open a truncated path. */
+	len = snprintf(path, sizeof(path), "%s/%s-%06d.tga", dir, scenario, idx);
+	if ((len < 0) || (len >= (int)sizeof(path)))
+	{
+		Com_Printf("pins: the frame path does not fit %d bytes, nothing written\n", (int)sizeof(path));
+		VID_PinManifest(dir, "FAILED %s-%06d.tga\n", scenario, idx);
+		return true;
+	}
+
+	f = Q_fopen(path, "wb");
+	if (!f)
+	{
+		Com_Printf("pins: cannot write %s\n", path);
+		VID_PinManifest(dir, "FAILED %s-%06d.tga\n", scenario, idx);
+		return true;   /* handled: scrnshot/ stays untouched while pins_dir is set */
+	}
+
+	memset(hdr, 0, sizeof(hdr));
+	hdr[2] = 2;                 /* uncompressed truecolor */
+	hdr[12] = width & 255;  hdr[13] = (width >> 8) & 255;
+	hdr[14] = height & 255; hdr[15] = (height >> 8) & 255;
+	hdr[16] = 24;
+	hdr[17] = 0x20;             /* rows stored top-down, as the renderer hands them over */
+	ok = fwrite(hdr, 1, sizeof(hdr), f) == sizeof(hdr);
+	for (y = 0; ok && y < height; y++)
+	{
+		const unsigned char *row = data + (size_t)y * width * comp;
+		for (x = 0; x < width; x++)
+		{
+			unsigned char bgr[3] = { row[x * comp + 2], row[x * comp + 1], row[x * comp + 0] };
+			if (fwrite(bgr, 1, 3, f) != 3) { ok = 0; break; }
+		}
+	}
+	if (fclose(f) != 0) ok = 0;
+	if (!ok)
+	{
+		remove(path);
+		Com_Printf("pins: short write, removed %s\n", path);
+		VID_PinManifest(dir, "FAILED %s-%06d.tga\n", scenario, idx);
+		return true;
+	}
+
+	VID_PinManifest(dir, "%s-%06d.tga %s %dx%d\n", scenario, idx,
+		vid_renderer ? vid_renderer->string : "?", width, height);
+	return true;
+}
+
 void VID_WriteScreenshot(int width, int height, int comp, const void* data)
 {
+	if (VID_WritePinFrame(width, height, comp, (const unsigned char *)data))
+	{
+		return;
+	}
+
 	char picname[80];
 	char checkname[MAX_OSPATH];
 	int i, success = 0;
@@ -518,6 +647,15 @@ VID_CheckChanges(void)
 		while (!VID_LoadRenderer())
 		{
 			int next_test = 0;
+
+			/* Pin harness: frames filed under one renderer's name must
+			   come from that renderer, so never fall back while capturing. */
+			if (CL_PinsCapture() > 0)
+			{
+				Com_Error(ERR_FATAL, "pins: renderer %s failed to load, no fallback while capturing\n",
+						vid_renderer->string);
+				return;
+			}
 
 			for (int i = 0; i < r_order_len; i++)
 			{

@@ -66,6 +66,7 @@ int curtime;
 
 #ifndef DEDICATED_ONLY
 void Key_Init(void);
+void CL_PinsLatch(void);
 void Key_Shutdown(void);
 void SCR_EndLoadingPlaque(void);
 #endif
@@ -303,6 +304,13 @@ Qcommon_Init(int argc, char **argv)
 
 	// Start early subsystems.
 	COM_InitArgv(argc, argv);
+
+#ifndef DEDICATED_ONLY
+	/* Pin harness: latch its arguments before Cbuf_AddEarlyCommands blanks
+	   them and before any config file or command can run. */
+	CL_PinsLatch();
+#endif
+
 	Swap_Init();
 	Cbuf_Init();
 	Cmd_Init();
