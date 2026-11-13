@@ -105,8 +105,8 @@ before the loop's test (D12), that is the bug to look for.
 | `crc.c` `COM_BlockSequenceCRCByte` `memcpy(chkb,base,length)` | `length` from caller | copy into `chkb[64]` | `length > 60` clamped to 60 before copy; `sequence < 0` → `Sys_Error` | ok |
 | `cmdparser.c` `Cmd_TokenizeString` / `Cmd_Argv` | tokenized peer string | `cmd_argv[]`, count | `cmd_argc < MAX_STRING_TOKENS` on fill; `Cmd_Argv((unsigned)arg >= cmd_argc)` returns `""` | ok |
 | `shared.c` `COM_Parse` `com_token[len]` | token chars | index into `com_token[MAX_TOKEN_CHARS]` | `len < MAX_TOKEN_CHARS` guards each write; `len == MAX_TOKEN_CHARS` reset to 0 — see Hardening H1 (off-by-one terminator) | hardening |
-| `shared.c` `Info_ValueForKey` | key/value scan | `Q_strlcpy` into `value[2][MAX_INFO_VALUE]` | `vlen` clamped to `MAX_INFO_VALUE`; `Q_strlcpy` truncates | ok |
-| `shared.c` `Info_SetValueForKey` / `Info_RemoveKey` | key/value | builds into `s` | `Info_ValidateKeyValue` bounds key/value < MAX_INFO_KEY/VALUE; `Q_strlcpy_ascii` with `MAX_INFO_STRING - slen` and overflow check | ok |
+| `shared.c` `Info_ValueForKey` | key/value scan | `Q_strlcpy` into `value[2][MAX_INFO_VALUE]` | `vlen` clamped to `MAX_INFO_VALUE`; `Q_strlcpy` truncates; in bounds. Returns the **first** pair with the key, which the engine-set `ip` key relies on → Defect D17 | defect (D17) |
+| `shared.c` `Info_SetValueForKey` / `Info_RemoveKey` | key/value | builds into `s` | `Info_ValidateKeyValue` bounds key/value < MAX_INFO_KEY/VALUE; `Q_strlcpy_ascii` with `MAX_INFO_STRING - slen` and overflow check; in bounds. `Info_RemoveKey` removes only the **first** matching pair, the new pair is appended at the end, and a pair that does not fit is dropped ("Info string length exceeded"), so setting a key does not make it unique or present → Defect D17 | defect (D17) |
 | `backends/unix/network.c` `NET_GetPacket` `recvfrom(..., maxsize, ...)` | datagram | `cursize = ret` | `ret == maxsize` → "Oversize packet" dropped; buffer is `MAX_MSGLEN` | ok |
 | `backends/unix/network.c` `NET_GetLoopPacket` `memcpy(data, loop->msgs[i].data, datalen)` | loopback | `cursize` | local loopback, length set by `NET_SendLoopPacket` from engine | ok |
 
@@ -211,7 +211,7 @@ before the loop's test (D12), that is the bug to look for.
 | `sv_user.c` `SV_BeginDownload_f` `name` | `Cmd_Argv(1)` | `FS_LoadFile(name)`, path | denylist `..`, `\`, `:`, leading `.`/`/`, must contain `/` | ok (see By design: denylist, not the client allowlist) |
 | `sv_user.c` `SV_BeginDownload_f` `offset` | `Cmd_Argv(2)`→`strtol` | `downloadcount = offset`; then `SV_NextDownload_f` reads `download + downloadcount - r` | clamp only on the `>` side: `if (offset > downloadsize) downloadcount = downloadsize`; **negative `offset` passes** → Defect D6 | defect (D6) |
 | `sv_conless.c` `SVC_DirectConnect` `version`/`qport`/`challenge` | `Cmd_Argv`→`strtol` | compared / stored | version and challenge checked; qport stored | ok |
-| `sv_conless.c` `SVC_DirectConnect` userinfo | `Cmd_Argv(4)` | `Q_strlcpy` into `userinfo[MAX_INFO_STRING]`; `Info_SetValueForKey` | truncates; `Info_SetValueForKey` validates | ok |
+| `sv_conless.c` `SVC_DirectConnect` userinfo, `Info_SetValueForKey(userinfo, "ip", NET_AdrToString(net_from))` | `Cmd_Argv(4)` | `Q_strlcpy` into `userinfo[MAX_INFO_STRING]`; engine forces the `ip` key; passed to `ge->ClientConnect` | copy truncates, in bounds; **nothing makes the engine's `ip` pair the only one, or present** → Defect D17 | defect (D17) |
 | `sv_conless.c` `SVC_Info` `version` | `Cmd_Argv(1)`→`strtol` | compared; `Com_sprintf(string, 64, ...)` | **bug-adjacent**: wrong-version branch calls `Com_sprintf(string, sizeof(string), "%s: wrong version\n", hostname->string, sizeof(string))` — extra arg, benign; Hardening H6 | hardening |
 | `sv_conless.c` `SVC_RemoteCommand` `net_message.data + 4` | raw packet tail | `Com_Printf("%s", ...)` before the password check | **nothing NUL-terminates the receive buffer**; the print can run past `net_message_buffer` → Defect D13 | defect (D13) |
 | `sv_conless.c` `SVC_RemoteCommand` args | `Cmd_Argv(i)` | `Q_strlcat` into `remaining[1024]`; `Cmd_ExecuteString` | `Q_strlcat` bounded; gated on `Rcon_Validate` password | ok (rcon by design) |
@@ -223,7 +223,7 @@ before the loop's test (D12), that is the bug to look for.
 | `sv_conless.c` `Rcon_Validate` `Cmd_Argv(1)` | tokenized | `strcmp` with `rcon_password` | empty password disables rcon; timing see By design | ok |
 | `sv_main.c` `SV_UserinfoChanged` `Info_ValueForKey(userinfo,"rate")` | userinfo value | `strtol` → clamped 100..15000 | clamped | ok |
 | game `g_svcmds.c` `StringToFilter` `num[j++]` | `gi.argv(2)` of `sv addip` / `sv removeip` (server console or rcon; a token of up to 1023 characters) | write into `char num[128]` | **`j` unbounded** while the input is digits → Defect D7 | defect (D7) |
-| game `g_svcmds.c` `SV_FilterPacket` `m[i]` | userinfo `ip` (set by the engine from `net_from` in `SVC_DirectConnect`) | octet bytes `m[4]` | `i < 4` loop bound; does not call `StringToFilter` | ok |
+| game `client.c` `ClientConnect` → `g_svcmds.c` `SV_FilterPacket(Info_ValueForKey(userinfo, "ip"))` `m[i]` | userinfo `ip`: the first `ip` pair, which need not be the one the engine set from `net_from` | octet bytes `m[4]`, then `*(unsigned *)m` against the filter list | `i < 4` loop bound keeps the writes in bounds; does not call `StringToFilter`; **the value can be peer-chosen or absent**, and with fewer than four dotted parts (or none) some of `m[]` is never written before it is read → Defect D17 | defect (D17) |
 | game `client.c` `ClientUserinfoChanged` skin → `configstring(CS_PLAYERSKINS+playernum, va("%s\\%s", name, s))` | userinfo | configstring | `playernum = ent - g_edicts - 1`, engine-assigned; name/skin validated by `Info_Validate` | ok |
 
 ## By design (noted, not filed)
@@ -667,6 +667,38 @@ origin used as an image). Same class as D10 and D11. Fix: treat a negative
 frame as 0 before the remainder in the three sprite functions, or where
 `ent.frame` is set (the D11 fix at that point covers both).
 
+### D17: the engine-set userinfo `ip` key is neither unique nor guaranteed present when the game filters on it (medium, high confidence) [FIX30 (#131)]
+
+Site: `SVC_DirectConnect` (`sv_conless.c`) copies the connecting peer's
+userinfo and then forces the `ip` key with `Info_SetValueForKey(userinfo,
+"ip", NET_AdrToString(net_from))`, so that the game can filter on the source
+address. `Info_SetValueForKey` (`shared.c`) calls `Info_RemoveKey`, which
+removes only the first pair with that key, and then appends the new pair at
+the end of the string; when the new pair does not fit it prints "Info string
+length exceeded" and stores nothing. `Info_ValueForKey` returns the first
+pair with the key. The game's `ClientConnect` (`src/game/player/client.c`)
+passes `Info_ValueForKey(userinfo, "ip")` to `SV_FilterPacket`
+(`src/game/g_svcmds.c`).
+
+Property not enforced: that the `ip` pair the game reads is the one the engine
+set, i.e. that it is unique and present. The userinfo is chosen by the peer
+before the engine's pair is added, and nothing removes every peer-supplied
+`ip` pair or refuses the connect when the engine's pair is dropped.
+
+Consequence: a connecting peer can make the game's IP filter see a value it
+chose, or no value. With `filterban 1` (the default, a ban list) it evades a
+ban on its address; with `filterban 0` (an allow list) it can claim a listed
+address. In the no-value case, and for any value with fewer than four dotted
+parts, `SV_FilterPacket` reads octet bytes of its stack array `m[4]` that were
+never written (an uninitialised read, in bounds). The memory accesses stay in
+bounds; the defect is an access-control bypass by an unauthenticated peer.
+Severity medium: the scale has no row for a bypass of an operator's address
+filter, it is not a takeover of a connection or a memory-safety fault, and the
+closest row is an unvalidated peer value that seeds state the game relies on.
+Confidence high (static trace). Fix: in `SVC_DirectConnect`, remove every
+`ip` pair before setting the engine's and refuse the connect when it cannot be
+stored; initialise `m[]` in `SV_FilterPacket`.
+
 ## Hardening (low severity)
 
 Carried on FIX28 (#129) except D4, which is on FIX13 (#109).
@@ -715,6 +747,7 @@ them.
 | FIX27 | #128 | D14 | high |
 | FIX28 | #129 | H1, H2, H3, H4, H6, H7 | low |
 | FIX29 | #130 | D15 | critical (Windows builds only) |
+| FIX30 | #131 | D17 | medium |
 
 D9, D10, D11 and D16 share a card because they are one class (a server-supplied
 entity or effect field reaching an array index or loop count with a check on
