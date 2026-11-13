@@ -1,7 +1,7 @@
 # Portmanbeau Quake II Console Variables
 
-This lists explains most console variables (cvars) added by Portmanbeau
-Quake II. Most of the original clients (Vanilla Quake II) cvars are
+This lists explains most console variables (cvars) added by Yamagi
+Quake II and inherited by Portmanbeau Quake II. Most of the original clients (Vanilla Quake II) cvars are
 still in place, however due to architectural changes some of them
 have been renamed. The prefixes are:
 

@@ -5,7 +5,8 @@ Icculus Quake II and id Software's Quake II source release. It is a
 long-lived fork, an enhanced client for id Software's Quake II. It exists
 for two reasons: to run and extend the game on code that can be read and
 verified in full, and to give it a native renderer on Apple platforms.
-Bug reports go to <https://github.com/BeauBender/quake2>.
+The project's home is <https://github.com/BeauBender/quake2>. Bug reports
+and patches are not accepted there.
 
 The fork was taken from Yamagi Quake II at upstream commit `9dbf6992`
 (2026-10-15) and was byte-identical to it at that point. Gameplay and look
@@ -54,7 +55,7 @@ need only the system toolchain. CI builds on Linux and macOS.
 ## Contributing
 
 The repository is public to read. Issues and pull requests are open to its
-owner only, so reports and patches cannot be accepted here.
+owner only, so bug reports and patches are not accepted here.
 
 ## Upstream and credits
 

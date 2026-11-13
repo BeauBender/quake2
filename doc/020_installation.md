@@ -171,7 +171,8 @@ reading the comment section at the top (lines starting with "//").
 #### Reporting Map Bugs
 
 If you know of any map bugs that are not addressed here, by all means
-report them to us through our GitHub repositories.
+note that this fork does not accept bug reports or patches; the
+repository at <https://github.com/BeauBender/quake2> is its home only.
 
 
 ### Monster Footstep Sounds
@@ -184,7 +185,7 @@ loose files, or repack them as a `.pak` archive and copy that instead.
 This fork does not load `.pkz`, `.pk3` or other ZIP based archives;
 only `.pak` archives and loose files are read.
 
-The footstep sounds are included with the official Windows release.
+The footstep sounds are included with the Yamagi Quake II Windows release.
 
 
 ## The Demo Version
@@ -218,14 +219,13 @@ The MD5 checksums of the pakfiles are:
 How the Portmanbeau Quake II executables are installed depends on the
 platform:
 
-- For Windows a prebuild package with all Portmanbeau Quake II executables
-  and the required libraries is provided.
-- Most Linux distributions and BSD systems provide Portmanbeau Quake II
-  packages. Theses packages may be outdated, see below for compiling
-  the executables.
+- This fork publishes no binary packages. Compile it from source, see
+  below.
+- Most Linux distributions and BSD systems provide Yamagi Quake II
+  packages, which are not this fork. Theses packages may be outdated.
 
 **Please note:** The addons needs their own game library. The libraries
-are included with the official Windows release. Linux distributions
+are included with the Yamagi Quake II Windows release. Linux distributions
 often package them in a distinced package. If you want to compile from
 source, have a look at the README files supplied with the addons.
 
@@ -251,14 +251,15 @@ There're two executables:
 
 If Windows Defender is activated, that's the default on Windows 8 and
 Windows 10, it may complain that Portmanbeau Quake II is untrusted and should
-not be started. That's because we're shipping unsigned binaries. You can
+not be started. That's because Yamagi Quake II ships unsigned binaries, and so would any
+build of this fork. You can
 force Windows to start it anyways.
 
 
 ### Binary Package from Linux distributions or BSD systems
 
-Most Linux distributions and BSD systems provide Portmanbeau Quake II
-packages. Please refer to the documentation of the distribution or
+Most Linux distributions and BSD systems provide Yamagi Quake II
+packages, which are not this fork. Please refer to the documentation of the distribution or
 system. The gamedata is searched at:
 
 - A global directory specified by the package.
