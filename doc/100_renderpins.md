@@ -189,7 +189,7 @@ the script copy or the log is a symbolic link.
 
 The one script so far, `water`, loads `base1`, puts the camera over its
 large pool and then under the surface, and records `water.dm2`. A run
-took 21 to 47 seconds on a shared host (load average 88 to 232). Run it
+took 17 to 47 seconds on a shared host (load average 6 to 232). Run it
 once:
 
 ```sh
@@ -206,7 +206,10 @@ messages it must give, in a `// pins: messages <low> <high>` line, and
 `<name>.dm2.failed`. From a `water.dm2` in range, `skywater` at the
 default `PINS_EVERY` 30 shows the pool from just above its surface on the
 first half of its frames and from under it on the second half (4 frames,
-2 and 2, in every record so far). When a run fails for the range, make
+2 and 2, in every record so far). The range follows from the capture: a
+demo of N messages renders N-5 frames and a capture falls on every 30th
+rendered frame, so 96 to 125 messages give 4 captures; the stated range,
+97 to 124, keeps one message inside each edge. When a run fails for the range, make
 the demo again when the host is quieter.
 
 A script may use only console commands that exist in this tree, must

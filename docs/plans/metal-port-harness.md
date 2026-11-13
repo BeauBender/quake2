@@ -291,7 +291,12 @@ throughout (load averages from `uptime` given per item), `soft` at
    232) gave 100 or 101 messages. 5 runs made while this task's own
    mutant runs of the selftest shared the host (load 88 to 195) gave 103
    and 118 (passed) and 140, 165 and 189 (failed for the range). A run
-   took 21 to 47 seconds.
+   took 21 to 47 seconds. Re-measured on a quieter host (TASK70 rework):
+   15 runs at load 5.8 to 28.0 gave 99 or 100 messages in 17 to 21
+   seconds; 7 runs with the engine stopped (`kill -STOP` and `-CONT` on
+   its pid) for 0.1 to 0.5 s of every second from its start, at load 7.5
+   to 13.2, gave 110 to 126 messages in 20 to 33 seconds (one of 126
+   failed for the range).
 3. Why no walking: a walk timed by waits would end in a different place
    on another host. A teleport lands on fixed coordinates. In `noclip` the
    player has no gravity, so it stays there, and the teleport's pause
@@ -309,7 +314,18 @@ throughout (load averages from `uptime` given per item), `soft` at
    underside of the surface above. The move under water falls between
    the second and the third capture, and a longer or shorter demo inside
    the range scales both holds alike, which is what the range is chosen
-   for.
+   for. The rework measured it over the range (the 22 runs of item 2, a
+   record at `PINS_EVERY` 30 and one at `PINS_EVERY` 1 of each demo): a
+   demo of N messages rendered N-5 frames in all 22, and the move under
+   water fell on rendered frame 41 to 53, 0.44 to 0.45 of the frames. The
+   21 demos of 99 to 122 messages each gave 4 captures, 2 from above and 2
+   from under the surface; the one of 126 messages rendered 121 frames and
+   gave 5 (2 and 3), the fifth falling on frame 120. Captures fall on
+   rendered frames 0, 30, 60, 90 and 120, so 4 captures need 91 to 120
+   rendered frames, 96 to 125 messages; the script's range, 97 to 124,
+   keeps one message inside each edge against a change in the 5-message
+   lead (none seen in 22 runs), and the move under water stays at least
+   11 frames after the second capture and 7 before the third.
 5. Run to run: records of one demo file compared at score 0 and bad
    fraction 0 in all 27 pairs measured (6 pairs at load 192 to 197 and
    15 pairs at load 182 to 184 from a 103-message demo, 6 pairs at load
