@@ -236,7 +236,7 @@ int RI_InitContext(void* win)
 	vid_gamma->modified = true;
 
 	// Window title - set here so we can display renderer name in it.
-	char title[40] = {0};
+	char title[80] = {0};
 
 	snprintf(title, sizeof(title), DISPLAYNAME " %s - OpenGL 1.4", YQ2VERSION);
 	SDL_SetWindowTitle(window, title);

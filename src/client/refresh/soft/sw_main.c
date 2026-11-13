@@ -1982,7 +1982,7 @@ int vid_buffer_width = 0;
 static int
 RE_InitContext(void *win)
 {
-	char title[40] = {0};
+	char title[80] = {0};
 
 	if (win == NULL)
 	{
