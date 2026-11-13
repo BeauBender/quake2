@@ -35,15 +35,91 @@
 // Screenshots
 // -----------
 
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "header/stb_image_write.h"
-
 /*
- * Writes a screenshot. This function is called with raw image data of
- * width*height pixels, each pixel has comp bytes. Must be 3 or 4, for
- * RGB or RGBA. The pixels must be given row-wise, stating at the top
- * left.
+ * Writes an uncompressed 24-bit TGA. data holds width*height pixels of
+ * comp bytes (3 or 4, RGB or RGBA), row-wise, starting at the top left.
+ * Returns true on success.
  */
+static qboolean
+VID_WriteTGA(const char *path, int width, int height, int comp, const unsigned char *data)
+{
+	unsigned char hdr[18];
+	unsigned char *row;
+	FILE *f;
+	int x, y;
+	qboolean ok = true;
+
+	if ((comp != 3 && comp != 4) || width < 1 || height < 1 || width > 65535 || height > 65535)
+	{
+		return false;
+	}
+
+	row = malloc((size_t)width * 3);
+
+	if (!row)
+	{
+		return false;
+	}
+
+	f = Q_fopen(path, "wb");
+
+	if (!f)
+	{
+		free(row);
+		return false;
+	}
+
+	memset(hdr, 0, sizeof(hdr));
+	hdr[2] = 2;                 /* uncompressed truecolor */
+	hdr[12] = width & 255;
+	hdr[13] = (width >> 8) & 255;
+	hdr[14] = height & 255;
+	hdr[15] = (height >> 8) & 255;
+	hdr[16] = 24;
+	hdr[17] = 0x20;             /* rows stored top-down, as the renderer hands them over */
+
+	if (fwrite(hdr, 1, sizeof(hdr), f) != sizeof(hdr))
+	{
+		ok = false;
+	}
+
+	for (y = 0; ok && y < height; y++)
+	{
+		const unsigned char *src = data + (size_t)y * width * comp;
+
+		for (x = 0; x < width; x++)
+		{
+			row[x * 3 + 0] = src[x * comp + 2];
+			row[x * 3 + 1] = src[x * comp + 1];
+			row[x * 3 + 2] = src[x * comp + 0];
+		}
+
+		if (fwrite(row, 1, (size_t)width * 3, f) != (size_t)width * 3)
+		{
+			ok = false;
+		}
+	}
+
+	free(row);
+
+	if (fclose(f) != 0)
+	{
+		ok = false;
+	}
+
+	/*
+	 * The file was opened (and so created or truncated) by this function:
+	 * do not leave a truncated TGA behind. Failures before the open
+	 * above remove nothing, as the path may be somebody else's file.
+	 */
+	if (!ok)
+	{
+		remove(path);
+	}
+
+	return ok;
+}
+
 /* Appends one line to <dir>/manifest.txt; silent when it cannot. */
 static void
 VID_PinManifest(const char *dir, const char *fmt, ...)
@@ -74,8 +150,8 @@ VID_PinManifest(const char *dir, const char *fmt, ...)
  * the command line (CL_PinsDir, latched by CL_PinsLatch; never a cvar), a
  * screenshot is written as an uncompressed 24-bit TGA straight into the
  * store, named by scenario and frame index, and scrnshot/ is never
- * touched. No stb here on purpose: this path must survive TASK9. Returns
- * true when it handled the frame.
+ * touched. Uses the same writer as the screenshot command. Returns true
+ * when it handled the frame.
  */
 static qboolean
 VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
@@ -84,9 +160,7 @@ VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 	const char *dir = CL_PinsDir();
 	const char *scenario = CL_PinsScenario();
 	char path[MAX_OSPATH];
-	unsigned char hdr[18];
-	FILE *f;
-	int x, y, ok, len, idx;
+	int len, idx;
 
 	if (CL_PinsInvalid())
 	{
@@ -101,7 +175,8 @@ VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 
 	if ((comp != 3) && (comp != 4))
 	{
-		return false;
+		Com_Printf("pins: unsupported pixel format (%d bytes), nothing written\n", comp);
+		return true;
 	}
 
 	/* Belt and braces: CL_PinsLatch refused these already. */
@@ -130,37 +205,12 @@ VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 		return true;
 	}
 
-	f = Q_fopen(path, "wb");
-	if (!f)
+	if (!VID_WriteTGA(path, width, height, comp, data))
 	{
+		/* VID_WriteTGA removed what it created; nothing else is touched here. */
 		Com_Printf("pins: cannot write %s\n", path);
 		VID_PinManifest(dir, "FAILED %s-%06d.tga\n", scenario, idx);
-		return true;   /* handled: scrnshot/ stays untouched while pins_dir is set */
-	}
-
-	memset(hdr, 0, sizeof(hdr));
-	hdr[2] = 2;                 /* uncompressed truecolor */
-	hdr[12] = width & 255;  hdr[13] = (width >> 8) & 255;
-	hdr[14] = height & 255; hdr[15] = (height >> 8) & 255;
-	hdr[16] = 24;
-	hdr[17] = 0x20;             /* rows stored top-down, as the renderer hands them over */
-	ok = fwrite(hdr, 1, sizeof(hdr), f) == sizeof(hdr);
-	for (y = 0; ok && y < height; y++)
-	{
-		const unsigned char *row = data + (size_t)y * width * comp;
-		for (x = 0; x < width; x++)
-		{
-			unsigned char bgr[3] = { row[x * comp + 2], row[x * comp + 1], row[x * comp + 0] };
-			if (fwrite(bgr, 1, 3, f) != 3) { ok = 0; break; }
-		}
-	}
-	if (fclose(f) != 0) ok = 0;
-	if (!ok)
-	{
-		remove(path);
-		Com_Printf("pins: short write, removed %s\n", path);
-		VID_PinManifest(dir, "FAILED %s-%06d.tga\n", scenario, idx);
-		return true;
+		return true;   /* handled: scrnshot/ stays untouched while pins are active */
 	}
 
 	VID_PinManifest(dir, "%s-%06d.tga %s %dx%d\n", scenario, idx,
@@ -168,97 +218,44 @@ VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 	return true;
 }
 
+/*
+ * Writes a screenshot as an uncompressed TGA. This function is called
+ * with raw image data of width*height pixels, each pixel has comp bytes.
+ * Must be 3 or 4, for RGB or RGBA. The pixels must be given row-wise,
+ * starting at the top left.
+ */
 void VID_WriteScreenshot(int width, int height, int comp, const void* data)
 {
+	char picname[80];
+	char checkname[MAX_OSPATH];
+	int i;
+	int argc = Cmd_Argc();
+	const char* gameDir = FS_Gamedir();
+
 	if (VID_WritePinFrame(width, height, comp, (const unsigned char *)data))
 	{
 		return;
 	}
 
-	char picname[80];
-	char checkname[MAX_OSPATH];
-	int i, success = 0;
-	static const char* supportedFormats[] = { "tga", "bmp", "png", "jpg" };
-	static const int numFormats = ARRLEN(supportedFormats);
-	int format = 0; // 0=tga, 1=bmp, 2=png, 3=jpg
-	int quality = 85;
-	int argc = Cmd_Argc();
-	const char* gameDir = FS_Gamedir();
+	// FS_InitFilesystem() made sure the screenshots dir exists.
 
-	// FS_InitFilesystem() made sure the screenshots dir exists./
-
-	if (argc > 1)
+	if (argc > 1 && (argc > 2 || Q_stricmp(Cmd_Argv(1), "tga") != 0))
 	{
-		const char* maybeFormat = Cmd_Argv(1);
-
-		for (i = 0; i < numFormats; ++i)
-		{
-			if (Q_stricmp(maybeFormat, supportedFormats[i]) == 0)
-			{
-				format = i;
-				break;
-			}
-		}
-
-		if (i == numFormats)
-		{
-			Com_Printf("the (optional) second argument to 'screenshot' is the format, one of \"tga\", \"bmp\", \"png\", \"jpg\"\n");
-			return;
-		}
-
-		if (argc > 2)
-		{
-			const char* q = Cmd_Argv(2);
-			size_t qualityStrLen = strlen(q);
-
-			for (i = 0; i < qualityStrLen; ++i)
-			{
-				if (q[i] < '0' || q[i] > '9')
-				{
-					Com_Printf("The (optional!) third argument to 'screenshot' is jpg quality, a number between 1 and 100\n");
-					Com_Printf("  or png compression level, between 0 and 9!\n");
-
-					return;
-				}
-			}
-
-			quality = atoi(q);
-
-			if (format == 2) // png
-			{
-				if (quality < 0)
-				{
-					quality = 0;
-				}
-				else if (quality > 9)
-				{
-					quality = 9;
-				}
-			}
-			else if(format == 3) // jpg
-			{
-				if (quality < 1)
-				{
-					quality = 1;
-				}
-				else if (quality > 100)
-				{
-					quality = 100;
-				}
-			}
-		}
+		Com_Printf("screenshot only writes TGA files; the (optional) argument must be \"tga\"\n");
+		return;
 	}
 
 	/* find a file name to save it to */
 	for (i = 0; i <= 9999; i++)
 	{
 		FILE *f;
-		Com_sprintf(checkname, sizeof(checkname), "%s/scrnshot/q2_%04d.%s", gameDir, i, supportedFormats[format]);
+		Com_sprintf(checkname, sizeof(checkname), "%s/scrnshot/q2_%04d.tga", gameDir, i);
 		f = Q_fopen(checkname, "rb");
 
 		if (!f)
 		{
-			Com_sprintf(picname, sizeof(picname), "q2_%04d.%s", i, supportedFormats[format]);
+			Com_sprintf(picname, sizeof(picname), "q2_%04d.tga", i);
+			/* Also lands here for an existing file that cannot be opened, so the writer never removes a file it did not open itself. */
 			break; /* file doesn't exist */
 		}
 
@@ -271,24 +268,7 @@ void VID_WriteScreenshot(int width, int height, int comp, const void* data)
 		return;
 	}
 
-	switch (format) // 0=tga, 1=bmp, 2=png, 3=jpg
-	{
-		case 0:
-			success = stbi_write_tga(checkname, width, height, comp, data);
-			break;
-		case 1:
-			success = stbi_write_bmp(checkname, width, height, comp, data);
-			break;
-		case 2:
-			stbi_write_png_compression_level = (quality < 10) ? quality : 7;
-			success = stbi_write_png(checkname, width, height, comp, data, 0);
-			break;
-		case 3:
-			success = stbi_write_jpg(checkname, width, height, comp, data, quality);
-			break;
-	}
-
-	if(success)
+	if (VID_WriteTGA(checkname, width, height, comp, (const unsigned char *)data))
 	{
 		Com_Printf("Wrote %s\n", picname);
 	}
@@ -298,7 +278,6 @@ void VID_WriteScreenshot(int width, int height, int comp, const void* data)
 	}
 }
 
-// --------
 
 // Video mode array
 // ----------------

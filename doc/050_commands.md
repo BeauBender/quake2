@@ -42,6 +42,10 @@ original clients (Vanilla Quake II) commands are still in place.
   to set a "panic button". E.g. the following will select your best
   shotgun: `prefweap weapon_supershotgun weapon_shotgun`.
 
+* **screenshot <tga>**: Writes the current frame to `scrnshot/q2_NNNN.tga`
+  as an uncompressed 24-bit TGA. TGA is the only format; the argument is
+  optional and, if given, must be `tga`.
+
 * **spawnentity classname x y z <angle_x angle_y angle_z> <flags>**:
   Spawn new entity of `classname` at `x y z` coordinates.
 

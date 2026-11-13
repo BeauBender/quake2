@@ -6,7 +6,7 @@ copys of each license:
 - Info-ZIP
 - zlib
 - Cocoa SDL entry points
-- stb_image.h, stb_image_write.h, stb_image_resize.h, stb_vorbis.h
+- stb_image.h, stb_image_resize.h, stb_vorbis.h
 - miniz
 - GLAD
 
@@ -473,7 +473,7 @@ Feel free to customize this file to suit your needs
 ===============================================================================
 
  stb single-file public domain libraries
- (stb_image.h, stb_image_resize.h, stb_image_write.h, stb_vorbis.h)
+ (stb_image.h, stb_image_resize.h, stb_vorbis.h)
  https://github.com/nothings/stb/
  Dual-Licensed: Public Domain (Unlicense) or MIT License:
  
