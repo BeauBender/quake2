@@ -64,7 +64,9 @@
 # A scenario is a list of "set <cvar> <value>" lines
 # (scripts/pins/scenarios/*.cfg); any other line, and a line setting a cvar
 # the driver sets itself (pins_*, vid_renderer, vid_fullscreen, r_mode,
-# r_customwidth, r_customheight, s_initsound), is refused. The driver passes
+# r_customwidth, r_customheight, s_initsound) or one that chooses a directory
+# or the game module (basedir, cddir, game, datadir, cfgdir), is refused, as
+# is a value holding ".." or starting with "-" that is not a number. The driver passes
 # each line to the engine as a "+set" argument, then its own settings, then
 # starts the demo with +demomap. Nothing is written into the game data: with
 # -portable the engine writes beside its binary (qconsole.log,
@@ -169,8 +171,11 @@ difftool() {
 build_args() {
     local renderer=$1 scenario=$2 out=$3 line verb name value extra n=0
     engine_args=(-datadir "${PINS_BASEDIR:-}" -portable)
-    # every line is exactly "set <cvar> <value>"; the cvars the driver sets
-    # itself are refused, so a scenario can never override them
+    # every line is exactly "set <cvar> <value>". Refused: the cvars the driver
+    # sets itself and the ones that choose a data or config directory or the
+    # game module, a value holding "..", and a value starting with "-" unless
+    # it is a plain number. That is all the filter guarantees; the cvars that
+    # remain are the scenario author's to reason about.
     set -f
     while IFS= read -r line || [ -n "$line" ]; do
         n=$((n+1))
@@ -181,6 +186,10 @@ build_args() {
         case $name in ''|*[!a-z0-9_]*) die "$scenario.cfg line $n: the cvar must match [a-z0-9_]+, got '$name'";; esac
         case $name in pins_*|vid_renderer|vid_fullscreen|r_mode|r_customwidth|r_customheight|s_initsound)
             die "$scenario.cfg line $n: $name is set by the driver, a scenario may not set it";; esac
+        case $name in basedir|cddir|game|datadir|cfgdir)
+            die "$scenario.cfg line $n: $name chooses a directory or the game module, a scenario may not set it";; esac
+        case $value in *..*) die "$scenario.cfg line $n: the value must not contain '..': $value";; esac
+        case $value in -*) [[ $value =~ ^-([0-9]+\.?[0-9]*|\.[0-9]+)$ ]] || die "$scenario.cfg line $n: a value starting with - must be a number: $value";; esac
         check_arg "$scenario.cfg value" "$value" value
         engine_args+=(+set "$name" "$value")
     done < "$scen_dir/$scenario.cfg"
@@ -535,7 +544,11 @@ st_scenario_lines() { # TASK39 (b, c): only "set <cvar> <value>", never a driver
     printf '%s\n' '// ok' 'set timedemo 1' 'set cl_gun 0' > "$tmp/scen/good.cfg"
     local line; line=$(PINS_DRYRUN=1 cmd_record gl1 good) || st_fail "a plain scenario must pass" || return 1
     case $line in *"+set cl_gun 0 "*"+set pins_dir "*"+set pins_capture 30 +demomap demo1.dm2") ;; *) st_fail "the driver's own arguments must follow the scenario's: $line"; return 1;; esac
+    printf '%s\n' 'set timedemo 1' 'set cl_gun -1' 'set cl_gun -0.5' 'set cl_gun -.5' > "$tmp/scen/neg.cfg"
+    PINS_DRYRUN=1 cmd_record gl1 neg >/dev/null || st_fail "negative numbers must be accepted" || return 1
     for bad in 'set pins_capture 1' 'set pins_dir /tmp/x' 'set vid_renderer gl1' 'set r_customwidth 9' 'set s_initsound 1' \
+        'set basedir /opt/x' 'set cddir /opt/x' 'set game mymod' 'set datadir /opt/x' 'set cfgdir /opt/x' \
+        'set timedemo ../x' 'set timedemo a..b' 'set timedemo -datadir' 'set timedemo -cfgdir' 'set timedemo -b' 'set timedemo -1x' 'set timedemo -' \
         'exec evil.cfg' 'quit' '+set timedemo 1' 'set timedemo' 'set timedemo 1 2' 'set TimeDemo 1' 'set time-demo 1' ' set timedemo 1'; do
         printf '%s\n' 'set timedemo 1' "$bad" > "$tmp/scen/bad.cfg"
         if (PINS_DRYRUN=1 cmd_record gl1 bad) >/dev/null 2>&1; then st_fail "scenario line '$bad' must be refused"; return 1; fi
@@ -644,5 +657,5 @@ case "${1:-}" in
     compare)  [ $# -ge 3 ] || die "usage: pins.sh compare <renderer> <scenario> [--ref r] [--ref-id d] [--run N | --cand-id d] [--threshold t] [--bad-threshold b]"; shift; cmd_compare "$@";;
     list)     cmd_list;;
     selftest) cmd_selftest;;
-    *) sed -n '2,73p' "$0" | sed 's/^# \{0,1\}//'; exit 1;;
+    *) sed -n '2,75p' "$0" | sed 's/^# \{0,1\}//'; exit 1;;
 esac
