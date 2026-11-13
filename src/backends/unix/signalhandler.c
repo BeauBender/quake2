@@ -44,7 +44,7 @@ printBacktrace(int sig)
 	size = backtrace(array, 15);
 	strings = backtrace_symbols(array, size);
 
-	printf("Product:      Yamagi Quake II\n");
+	printf("Product:      " DISPLAYNAME " (" DISPLAYCREDIT ")\n");
 	printf("Version:      %s\n", YQ2VERSION);
 	printf("Platform:     %s\n", YQ2OSTYPE);
 	printf("Architecture: %s\n", YQ2ARCH);
@@ -65,7 +65,7 @@ printBacktrace(int sig)
 static void
 printBacktrace(int sig)
 {
-	printf("Product:      Yamagi Quake II\n");
+	printf("Product:      " DISPLAYNAME " (" DISPLAYCREDIT ")\n");
 	printf("Version:      %s\n", YQ2VERSION);
 	printf("Platform:     %s\n", YQ2OSTYPE);
 	printf("Architecture: %s\n", YQ2ARCH);
@@ -81,10 +81,10 @@ static void
 signalhandler(int sig)
 {
 	printf("\n=======================================================\n");
-	printf("\nYamagi Quake II crashed! This should not happen...\n");
+	printf("\n" DISPLAYNAME " crashed! This should not happen...\n");
 	printf("\nMake sure that you're using the last version. It can\n");
-	printf("be found at http://www.yamagi.org/quake2. If you do,\n");
-	printf("send a bug report to quake2@yamagi.org and include:\n\n");
+	printf("be found at https://github.com/BeauBender/quake2. If you\n");
+	printf("do, report the crash there and include:\n\n");
 	printf(" - This output\n");
 	printf(" - The conditions that triggered the crash\n");
 	printf(" - How to reproduce the crash (if known)\n");
@@ -95,8 +95,8 @@ signalhandler(int sig)
 	printf("      when the game crashed. baseq2/game.so for the\n");
 	printf("      main game)\n\n");
 	printf(" - Any other data which you think might be useful\n");
-	printf("\nThank you very much for your help, making Yamagi Quake\n");
-	printf("II an even better source port. It's much appreciated.\n");
+	printf("\nThank you very much for your help, making this an even\n");
+	printf("better source port. It's much appreciated.\n");
 	printf("\n=======================================================\n\n");
 
 	printBacktrace(sig);

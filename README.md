@@ -1,9 +1,11 @@
-# quake2
+# Portmanbeau Quake II
 
-A long-lived fork of Yamagi Quake II, an enhanced client for id Software's
-Quake II. It exists for two reasons: to run and extend the game on code
-that can be read and verified in full, and to give it a native renderer on
-Apple platforms.
+Portmanbeau Quake II is based on Yamagi Quake II, which descends from
+Icculus Quake II and id Software's Quake II source release. It is a
+long-lived fork, an enhanced client for id Software's Quake II. It exists
+for two reasons: to run and extend the game on code that can be read and
+verified in full, and to give it a native renderer on Apple platforms.
+Bug reports go to <https://github.com/BeauBender/quake2>.
 
 The fork was taken from Yamagi Quake II at upstream commit `9dbf6992`
 (2026-10-15) and was byte-identical to it at that point. Gameplay and look
@@ -61,5 +63,6 @@ owner only, so reports and patches cannot be accepted here.
 * Icculus Quake II, on which Yamagi Quake II is built.
 * id Software's Quake II 3.21 source release.
 
-Released under the GPL version 2; see [LICENSE](LICENSE). The copyright
+The files in this repository are modified from upstream; the git history
+is the record of every change. Released under the GPL version 2; see [LICENSE](LICENSE). The copyright
 notices are upstream's and are unchanged.

@@ -1,6 +1,6 @@
 # Installation
 
-This guide shows how to install Yamagi Quake II from scratch. All fully
+This guide shows how to install Portmanbeau Quake II from scratch. All fully
 supported platforms, both the full and the demo version are covered.
 
 
@@ -14,7 +14,7 @@ Over the years Quake II was distributed in a myriad of ways:
 * Through GOG.com.
 * etc.
 
-Yamagi Quake II is compatible with all of these versions. While some of
+Portmanbeau Quake II is compatible with all of these versions. While some of
 these versions come with all patches applied, it's highly recommended to
 follow this guide step by step and to reapply the patch by hand. Not all
 distributors patched the game correctly, leading to severe problems like
@@ -23,7 +23,7 @@ missing assets or even crashes.
 
 ### Game Data Setup
 
-The easiest way to install Yamagi Quake II is to start with the patch.
+The easiest way to install Portmanbeau Quake II is to start with the patch.
 Please note that the patch is **required** for all full versions of the
 game. Without the patch the game will not work correctly!
 
@@ -37,7 +37,7 @@ game. Without the patch the game will not work correctly!
 
 Now remove the following files from the extracted patch. They're the
 original executables, documentation and so on. They aren't needed for
-Yamagi Quake II and just waste space:
+Portmanbeau Quake II and just waste space:
 
 * *3.20_Changes.txt*
 * *quake2.exe*
@@ -78,16 +78,16 @@ The MD5 checksums of the pakfiles are:
 
 The retail releases of Quake II and both addons contain up to 11 Audio
 CD tracks as soundtrack. Since modern computers lack the ability for
-direct CD playback, Yamagi Quake II reads the music from OGG/Vorbis
+direct CD playback, Portmanbeau Quake II reads the music from OGG/Vorbis
 files.
 
 Later Quake II releases, for example the one included with Quake IV and
 the one available through Steam, lack the soundtrack. Nevertheless
-Yamagi Quake II can play it if the files are copied into the directories
+Portmanbeau Quake II can play it if the files are copied into the directories
 mentioned below.
 
 Some digital distributed versions are special, they includes the
-soundtrack as OGG/Vorbis files, but in a non standard format. Yamagi
+soundtrack as OGG/Vorbis files, but in a non standard format. Portmanbeau
 Quake II can read this format for the GOG.com release. Other releases
 may be supported in the future.
 
@@ -132,14 +132,14 @@ Unixoid systems are case sensitive. On them the files should be named
 
 ### Alternate Startup Configuration
 
-Yamagi Quake II ships with an alternative startup config that overrides
+Portmanbeau Quake II ships with an alternative startup config that overrides
 some global settings to saner defaults. To use it copy *stuff/yq2.cfg*
 into the *baseq2/* directory.
 
 
 ### Fixed Map Data Files
 
-As an optional feature, Yamagi Quake II provides fixed map data files
+As an optional feature, Portmanbeau Quake II provides fixed map data files
 (.ent files). These files provide a replacement entity list in order
 to fix some map bugs that have been discovered by players over the
 years.
@@ -176,7 +176,7 @@ report them to us through our GitHub repositories.
 
 ### Monster Footstep Sounds
 
-Yamagi Quake II has optional support for monster footstep sounds. These
+Portmanbeau Quake II has optional support for monster footstep sounds. These
 require some custom audio files. Download the footsteps archive from
 https://deponie.yamagi.org/quake2/assets/footsteps.pkz and extract it.
 Copy the extracted sound directories into the *baseq2/* directory as
@@ -189,7 +189,7 @@ The footstep sounds are included with the official Windows release.
 
 ## The Demo Version
 
-A free demo version of Quake II is available and supported by Yamagi
+A free demo version of Quake II is available and supported by Portmanbeau
 Quake II. This demo contains the first few levels, but no videos and
 no soundtrack.
 
@@ -215,12 +215,12 @@ The MD5 checksums of the pakfiles are:
 
 ## Download and Extract the Executables
 
-How the Yamagi Quake II executables are installed depends on the
+How the Portmanbeau Quake II executables are installed depends on the
 platform:
 
-- For Windows a prebuild package with all Yamagi Quake II executables
+- For Windows a prebuild package with all Portmanbeau Quake II executables
   and the required libraries is provided.
-- Most Linux distributions and BSD systems provide Yamagi Quake II
+- Most Linux distributions and BSD systems provide Portmanbeau Quake II
   packages. Theses packages may be outdated, see below for compiling
   the executables.
 
@@ -232,13 +232,14 @@ source, have a look at the README files supplied with the addons.
 
 ### Windows
 
-1. Get the latest release from https://www.yamagi.org/quake2
+1. Get a Windows build of Portmanbeau Quake II. This fork publishes no
+   binary releases yet; build it from source (see below).
 2. Extract it into the gamedata directory created above. *quake2.exe*
    must be placed next to the *baseq2/* subdirectory.
 
-On Windows the Yamagi Quake II installation is fully portable, the
+On Windows the Portmanbeau Quake II installation is fully portable, the
 installation directory can be moved the installation directory wherever
-and whenever it's necessary. To update Yamagi Quake II just overwrite
+and whenever it's necessary. To update Portmanbeau Quake II just overwrite
 the old files with the new ones.
 
 There're two executables:
@@ -249,14 +250,14 @@ There're two executables:
   but in background!
 
 If Windows Defender is activated, that's the default on Windows 8 and
-Windows 10, it may complain that Yamagi Quake II is untrusted and should
+Windows 10, it may complain that Portmanbeau Quake II is untrusted and should
 not be started. That's because we're shipping unsigned binaries. You can
 force Windows to start it anyways.
 
 
 ### Binary Package from Linux distributions or BSD systems
 
-Most Linux distributions and BSD systems provide Yamagi Quake II
+Most Linux distributions and BSD systems provide Portmanbeau Quake II
 packages. Please refer to the documentation of the distribution or
 system. The gamedata is searched at:
 
@@ -272,7 +273,7 @@ the [Packaging Guide](070_packaging.md).
 
 ## Compiling from source
 
-To compile Yamagi Quake II from source the following dependencies
+To compile Portmanbeau Quake II from source the following dependencies
 (including development headers) are needed:
 
 * A GCC compatible compiler like *gcc*, *clang* or *MinGW-w64*.
@@ -302,13 +303,12 @@ Debian or FreeBSD packages.
 
 ### Compiling with GCC, Clang or MinGW
 
-Download the latest release from https://www.yamagi.org/quake2 or clone
-the source from https://github.com/yquake2/yquake2.git, change into the
-*yquake2/* source directory and type *make* (Linux, MacOS, Haiku and Windows)
+Clone the source from https://github.com/BeauBender/quake2.git, change
+into the *quake2/* source directory and type *make* (Linux, MacOS, Haiku and Windows)
 or *gmake* (FreeBSD, NetBSD, OpenBSD). Note on Solaris systems, *make*
  or *gmake* can be used, the latter provides in addition parallel build.
 After the build finished, copy everything from the *release/* directory
-to the Yamagi Quake II installation directory.
+to the Portmanbeau Quake II installation directory.
 
 For the addons download or clone their source, change into the source
 directory and type *make* (Linux, MacOS, Windows) or *gmake* (FreeBSD,

@@ -121,7 +121,7 @@ Qcommon_Buildstring(void)
 	const char* versionString;
 
 
-	versionString = va("Yamagi Quake II v%s", YQ2VERSION);
+	versionString = va(DISPLAYNAME " v%s (" DISPLAYCREDIT ")", YQ2VERSION);
 	verLen = strlen(versionString);
 
 	printf("\n%s\n", versionString);
@@ -243,7 +243,7 @@ static qboolean checkForHelp(int argc, char **argv)
 		{
 			if (Q_stricmp(arg, helpArgs[h]) == 0)
 			{
-				printf("Yamagi Quake II v%s\n", YQ2VERSION);
+				printf(DISPLAYNAME " v%s (" DISPLAYCREDIT ")\n", YQ2VERSION);
 				printf("Most interesting commandline arguments:\n");
 				printf("-h or --help: Show this help\n");
 				printf("-cfgdir <path>\n");
@@ -428,7 +428,7 @@ Qcommon_Init(int argc, char **argv)
 	}
 #endif
 
-	Com_Printf("==== Yamagi Quake II Initialized ====\n\n");
+	Com_Printf("==== " DISPLAYNAME " Initialized ====\n\n");
 	Com_Printf("*************************************\n\n");
 
 	// Call the main loop

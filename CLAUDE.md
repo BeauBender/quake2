@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Yamagi Quake II (yquake2): a GPL-2 Quake II engine descended from id Software's 2001 source release via Icculus Quake II. Pure C. Game data (`.pak` files) is not in the repo and is required to run anything; see `doc/020_installation.md`. The project is deliberately conservative: gameplay and look must stay unchanged, no breaking changes, backward-compatible savegames and network protocol.
+Portmanbeau Quake II (the repository is `quake2`; based on Yamagi Quake II, yquake2): a GPL-2 Quake II engine descended from id Software's 2001 source release via Icculus Quake II. Pure C. Game data (`.pak` files) is not in the repo and is required to run anything; see `doc/020_installation.md`. The project is deliberately conservative: gameplay and look must stay unchanged, no breaking changes, backward-compatible savegames and network protocol.
 
 ## Build
 
