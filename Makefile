@@ -1171,7 +1171,8 @@ endif
 # main.c; tests/unit/main.c supplies main(). Six client objects
 # (cl_download, cl_entities, cl_network, cl_parse, cl_screen and the sound
 # frontend sound.c) are linked against the stubs in tests/unit/stub_client.c
-# and stub_client_full.c; none of it includes SDL. Needs no SDL and no game
+# and stub_client_full.c, and one renderer object, refresh/files/surf.c,
+# which needs only shared.c; none of it includes SDL. Needs no SDL and no game
 # data. `make test` builds and runs it; UPDATE_PINS=1 (exactly 1, any
 # other value is ignored) rewrites the pins under tests/pins/unit/
 # instead of comparing; TEST_ARGS passes options or test-name filters to
@@ -1210,6 +1211,7 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(TESTDIR)/src/client/cl_parse.o \
 	$(TESTDIR)/src/client/cl_screen.o \
 	$(TESTDIR)/src/client/sound/sound.o \
+	$(TESTDIR)/src/client/refresh/files/surf.o \
 	$(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS))
 TEST_BIN = $(TESTDIR)/yq2test
 
