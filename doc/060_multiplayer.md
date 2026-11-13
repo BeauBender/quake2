@@ -28,6 +28,10 @@ file to your computer and given the rather fragile state of the command
 parsers chances are high that there are remote code execution
 vulnerabilities. Only connect to trustworthy servers!
 
+The client connects only when the server replies from exactly the address
+and port it was given, so a server that answers from a different address
+(some multihomed hosts) must be addressed by the one it answers from.
+
 
 
 ## Map rotation
