@@ -11,13 +11,14 @@
  * Downloads and save directories: CL_DownloadFilter (the only gate on a
  * path a server can make the client write, src/client/cl_download.c),
  * the chunk-size check in CL_ParseDownload, and the savedir check in
- * SV_Loadgame_f (both fixed in TASK1). cl_download.c is linked on its own
- * with the client state stubs in stub_client.c.
+ * SV_Loadgame_f (both fixed in TASK1). cl_download.c is linked
+ * with the client state stubs in stub_client.c (and, with other client files,
+ * stub_client_full.c).
  *
  * Not reachable here: SV_Savegame_f's savedir check comes after "must be
  * in a game", which needs a loaded game module and map. The server side
- * of downloads (SV_BeginDownload_f, sv_user.c) needs a connected client;
- * its offset handling is FIX15 (#111), whose author should add a test.
+ * of downloads (SV_BeginDownload_f, sv_user.c) is tested in
+ * test_sv_download.c.
  *
  * =======================================================================
  */

@@ -1168,10 +1168,11 @@ endif
 # The unit-test suite (tests/unit, see doc/085_unittests.md). The test
 # binary links the dedicated server's own objects (SERVER_OBJS_ below,
 # built with q2ded's flags into a tree of their own) except the unix
-# main.c; tests/unit/main.c supplies main(). One client object,
-# cl_download.c, is linked on its own against the client state stubs in
-# tests/unit/stub_client.c (it includes no SDL), and one renderer object,
-# refresh/files/surf.c, which needs only shared.c. Needs no SDL and no game
+# main.c; tests/unit/main.c supplies main(). Six client objects
+# (cl_download, cl_entities, cl_network, cl_parse, cl_screen and the sound
+# frontend sound.c) are linked against the stubs in tests/unit/stub_client.c
+# and stub_client_full.c, and one renderer object, refresh/files/surf.c,
+# which needs only shared.c; none of it includes SDL. Needs no SDL and no game
 # data. `make test` builds and runs it; UPDATE_PINS=1 (exactly 1, any
 # other value is ignored) rewrites the pins under tests/pins/unit/
 # instead of comparing; TEST_ARGS passes options or test-name filters to
@@ -1193,6 +1194,11 @@ TEST_COVFLAGS :=
 endif
 
 TEST_CFLAGS := -DDEDICATED_ONLY -Wno-unused-result $(TEST_COVFLAGS)
+# An undefined-behaviour report ends the test run instead of being printed
+# and passed over. Only the test objects get this, never a shipped binary.
+ifdef UBSAN
+TEST_CFLAGS += -fno-sanitize-recover=undefined
+endif
 ifeq ($(WITH_XDG),yes)
 TEST_CFLAGS += -DUSE_XDG
 endif
@@ -1200,6 +1206,11 @@ endif
 TEST_SRCS := $(sort $(wildcard tests/unit/*.c))
 TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SERVER_OBJS_))) \
 	$(TESTDIR)/src/client/cl_download.o \
+	$(TESTDIR)/src/client/cl_entities.o \
+	$(TESTDIR)/src/client/cl_network.o \
+	$(TESTDIR)/src/client/cl_parse.o \
+	$(TESTDIR)/src/client/cl_screen.o \
+	$(TESTDIR)/src/client/sound/sound.o \
 	$(TESTDIR)/src/client/refresh/files/surf.o \
 	$(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS))
 TEST_BIN = $(TESTDIR)/yq2test
