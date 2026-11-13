@@ -1024,7 +1024,7 @@ st_make_demo_script() { # TASK70: a demo script holds only commands of this tree
     for bad in 'nosuchcmd' 'record other' 'record bad' 'map base2' 'map ../x' 'exec x.cfg' '// a; quit' '// a "b' 'teleport ../x' ' wait' 'wait  ' 'echo "x"' \
         'alias w8 "w2;nosuchcmd"' 'alias w8 "w2; wait"' 'bind x "quit"' 'wait;quit' '// pins: messages 10 20' \
         '// pins: messages 0 999' '// pins: messages 097 124' '// pins: messages  97 124' '// pins: messages 97  124' '// pins: messages 97 124 ' \
-        '// pins: messages 97' '// pins: messages' '// pins:messages 97 124' '// pins: message 97 124' '// pins: messages 1234567890 1234567891'; do
+        '// pins: messages 97' '// pins: messages' '// pins: messages  ' '// pins:messages 97 124' '// pins: message 97 124' '// pins: messages 1234567890 1234567891'; do
         printf '%s\n' "$good" | sed 's/^record good$/record bad/' | awk -v b="$bad" '$0 == "teleport 1 -2 3.5" {print b; next} {print}' > "$tmp/ds/bad.cfg"
         if (check_demo_script "$tmp/ds/bad.cfg" bad) >/dev/null 2>&1; then st_fail "demo script line '$bad' must be refused"; return 1; fi
     done
