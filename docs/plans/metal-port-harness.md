@@ -26,14 +26,17 @@ renderer is judged with it, and what the first run on real data found.
 | Comparator | `scripts/pins/framediff.c` | selftest green; run on real frames (TASK39) |
 | Scenarios, one per feature | `scripts/pins/scenarios/*.cfg` | all four run on `soft` (TASK39) |
 | Argument limit raised: `MAX_NUM_ARGVS` in `src/common/argproc.c` is 128 (was 50); `record` passes 66 to 69 words and the engine refused more than 50 at startup | `scripts/pins.sh selftest` case `argcount` and `tests/check-pins-latch.sh` feed every scenario's command line to the real `COM_InitArgv` | green in `scripts/test.sh`; the engine accepts 69 words (TASK39) |
+| Renderer-API record serializers and the 22 wrapper hooks in `vid.c`, recording off | `src/client/vid/refrecord.c`, `src/client/vid/header/refrecord.h`, `tests/check-refrecord.sh` | every record type round-trips through a buffer in `tests/check-refrecord.sh` (green in `scripts/test.sh`); observed on one host: the `world` scenario recorded on `soft` with a build of the base commit and with a build of the hooks gave 23 frames each, and all 23 frame files and the manifest compared byte-identical with `cmp` (TASK42) |
 | Gate checks, no game data needed | `tests/check-pins.sh`, `tests/check-pins-latch.sh` | green in `scripts/test.sh` |
 
 The client and `ref_soft` link and run on macOS arm64 against SDL3
 3.4.20 (`make client ref_soft game` with an untracked `config.mk`). `ref_gl1`
 and `ref_gl3` build there too; `gl1` references are card P3's.
 
-Not in the tree from TASK27: the renderer-API recorder and replayer (design
-in `docs/plans/refapi-record-replay.md`, including `pins.sh replay`), the
+In the tree from the renderer-API recorder (design in
+`docs/plans/refapi-record-replay.md`): the record serializers and the wrapper
+hooks, with recording off. Not in the tree from TASK27: the handle map, the
+`refdef_t` deep copy, recording and replay (including `pins.sh replay`), the
 sky-and-water and cinematics scenarios, and every reference frame.
 
 ## Pin arguments
