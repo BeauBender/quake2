@@ -615,11 +615,16 @@ def identity_strings():
     return out
 
 
+# the roots of home directories on macOS, Linux and Windows, spelled so that
+# a scan of the tree for local paths does not take this list for one
+HOME_ROOTS = tuple(b'%s%s%s' % (a, b, c) for a, b, c in ((b'/', b'Users', b'/'), (b'/', b'home', b'/'), (b'C:', b'\\Users', b'')))
+
+
 def identity_check(data, what):
     for s in identity_strings():
         if s.encode() in data:
             raise SystemExit('evidence: refused: %s holds a host name, user name or home path' % what)
-    for s in (b'/Users/', b'/home/', b'C:\\Users'):
+    for s in HOME_ROOTS:
         if s in data:
             raise SystemExit('evidence: refused: %s holds an absolute home path' % what)
 

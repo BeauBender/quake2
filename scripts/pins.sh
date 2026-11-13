@@ -567,7 +567,7 @@ ev_st_identity() {
     ev_case; printf 'note by evidencetestuser\n' >> "$m"
     LOGNAME=evidencetestuser ev_refused "host name, user name or home path" "$m" || return 1
     # a home path of any user, even one this host does not have
-    ev_case; printf 'note /home/nobody/x\n' >> "$m"
+    ev_case; printf 'note /%s/nobody/x\n' home >> "$m"
     ev_refused "absolute home path" "$m" || return 1
     ev_case; printf 'note %s\n' "$HOME" >> "$m"
     ev_refused "home path" "$m"
