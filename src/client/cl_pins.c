@@ -58,9 +58,11 @@ CL_PinsCopy(char *dst, size_t size, const char *src)
 /*
  * Called from Qcommon_Init right after COM_InitArgv, before
  * Cbuf_AddEarlyCommands blanks the "+set" arguments it consumes. Pairs
- * "+set <name> <value>" exactly as Cbuf_AddEarlyCommands does; the last
- * occurrence wins. Any refused value switches the harness off: nothing
- * is captured and nothing is written.
+ * "+set <name> <value>" exactly as Cbuf_AddEarlyCommands does. When an
+ * argument is given more than once the last occurrence is used, but any
+ * refused occurrence turns the harness off for good (pins_invalid is
+ * sticky, a later valid one does not clear it): nothing is captured and
+ * nothing is written.
  */
 void
 CL_PinsLatch(void)

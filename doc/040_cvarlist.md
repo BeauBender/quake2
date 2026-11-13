@@ -798,7 +798,9 @@ before any config file runs, and keeps the values where nothing else can
 change them. A `set` of the same name in a config file, on the console
 or from a server's stufftext (with or without flags such as `a`) only
 creates an unrelated cvar that the engine never reads. Their values name
-files, which is why. If any of them holds a refused value (see below),
+files, which is why. When one is given more than once the last occurrence is used, but any
+refused occurrence switches the harness off for the whole run, even if a
+later one is valid. If any of them holds a refused value (see below),
 the harness is off and no screenshot is written at all. With none of
 them given the engine behaves exactly as before.
 
