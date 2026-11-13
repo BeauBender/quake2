@@ -1,0 +1,135 @@
+# Card manifest: Metal port and ray tracing
+
+Status: **not filed.** Each table row below is one card to file under the
+epic `metal-renderer`. The keys in the first column (P1, R1, S1, RT1 and so
+on) are placeholders, not card ids. An id is minted when a card is filed and
+written into the row's "Filed as" cell; a row with an id there is never
+filed again.
+
+This manifest is the authoritative card list. The four design documents
+keep their own sub-card lists as the detailed scope behind each row; where
+a list there differs from this file, this file wins.
+
+## Filing rules
+
+1. One issue per row, in the order listed, so a `depends` label can name an
+   id that already exists.
+2. Title `<id> — <title>`. Labels: `state:backlog`, `epic:metal-renderer`,
+   `id:<id>`, `model:<model>`, and one `depends:<id>` per dependency, with
+   keys translated to the minted ids.
+3. Every card in a group also carries its parent's current `depends`
+   labels, listed under the group heading. The "Depends" column holds only
+   the dependencies inside this manifest.
+4. Body in the shape the existing cards use: a `Plan anchor:` line naming
+   `docs/plans/metal-renderer.md` and the design reference from the row,
+   the hardware tier, then `## Goal`, `## Context / rationale`,
+   `## Scope (directional, not line-pinned)` and
+   `## Acceptance criteria (outcome-level)`. Goal and acceptance come from
+   the row. Context and scope come from the design section the row cites.
+   Every acceptance list ends with "`scripts/test.sh` green".
+5. Lock each new card right after creating it
+   (`docs/plans/trust-boundary.md`, "Repository access").
+6. When a group is filed, add one `depends:<child id>` label per child to
+   the parent card. The parent is then pulled last, and what remains of it
+   is its own acceptance list checked end to end.
+7. Record the ids in the "Filed as" cells here and in the "Cards generated"
+   list of `docs/plans/metal-renderer.md`.
+
+Hardware tiers are the plan's: T0 is any Mac or the build VM, T1 a
+bare-metal Mac where `ref_gl1` renders, T2 an M3 or later.
+
+## Corrections to existing cards (edit them, file nothing)
+
+| Card | Correction | Source |
+|---|---|---|
+| TASK21 (#28) | The title says 61 entry points. Measured: 54 called directly at 435 sites, plus 5 loaded by pointer at 6 sites. gl1 has no `glBegin`/`glEnd`; it draws through vertex arrays (19 `glDrawArrays` sites and one `glDrawElements` in `R_ApplyGLBuffer`) | `docs/analysis/gl1-state-inventory.md` section 1 |
+| TASK28 (#38) | The title says 444 call sites. Measured: 441 | same |
+| INFORM8 (#35) | Its context quotes the same two numbers. The decision does not depend on them | same |
+| TASK27 (#37) | The core is in the tree: capture hook, capture before present, unattended quit, `scripts/pins.sh`, the comparator, four scenarios, the gate check. Groups P and R below are what remains | `docs/plans/metal-port-harness.md` |
+
+## Group P: pins on real game data (parent TASK27, #37)
+
+Parent dependencies carried by every card: INFORM8, INFORM9, TASK29.
+
+| Key | Title | Depends | Tier | Model | Design reference | Acceptance | Filed as |
+|---|---|---|---|---|---|---|---|
+| P1 | First capture on real data: link the client with the capture hooks and record `ref_soft` references for the four scenarios | none | T0 | opus | `docs/plans/metal-port-harness.md`, "Not yet run" | `make client ref_soft` links on macOS. `scripts/pins.sh record soft <scenario>` exits 0 for all four scenarios and the engine quits by itself. Two consecutive records of `world`, `models` and `hud2d` compare at score 0.000000 on every frame. The run-to-run score of `particles` is measured and recorded as its threshold. Every item in "Not yet run" is answered in the runbook. Nothing derived from game data is committed | |
+| P2 | Remaining scenarios and the user page: sky and water, cinematics, and a `doc/` page for the harness | P1 | T0 | sonnet | TASK27 (#37) scope list; `scripts/pins/scenarios/README.md` | Two new scenario files pass `scripts/pins.sh selftest`. Each records on `soft` and self-compares at score 0. A page in `doc/` lists the scenarios, the environment variables and how to record and compare | |
+| P3 | `ref_gl1` references and the thresholds at which `soft` and `gl1` agree | P1, P2 | T1, after checking whether `ref_gl1` renders on the VM | opus | INFORM9 (#36) | `ref_gl1` references for every scenario are in the pin store of a machine where gl1 renders. `scripts/pins.sh compare soft <scenario> --ref gl1` has been run for each, and the score at which the two agree is recorded per scenario in the runbook. If gl1 does not render on the VM, the card says so with the engine log line and waits for a T1 host | |
+
+## Group R: renderer-API record and replay (parent TASK27, #37)
+
+Parent dependencies carried by every card: INFORM8, INFORM9, TASK29.
+Design: `docs/plans/refapi-record-replay.md`. On a host where only `soft`
+runs, "each renderer" below means `soft`.
+
+| Key | Title | Depends | Tier | Model | Design reference | Acceptance | Filed as |
+|---|---|---|---|---|---|---|---|
+| R1 | Record serializers and pass-through hooks in the `vid.c` wrappers, recording off | P1 | T0 | opus | sections 1, 5; sub-card a | Frames of the `world` scenario are byte-identical to the build without the hooks. `tests/check-refrecord.sh` round-trips every record type through a buffer | |
+| R2 | Recording: handle map, `refdef_t` deep copy, string table, frame index | R1 | T0 | opus | sections 2, 3; sub-card b | A record run with `pins_record` set leaves a trace whose frame count equals the captured frame count and whose string table names every model, skin and pic the engine registered | |
+| R3 | Replay driver: registration from the string table, frame feed, capture at the recorded cadence, quit | R2 | T0 | opus | section 4; sub-card c | A replay produces the same number of frames as the live record, with no server and no demo file | |
+| R4 | Determinism: cvar snapshot and restore, a fixed PRNG seed behind a cvar, the `refdef_t.time` check | R3 | T0 | opus | section 4; sub-card d | Live against replay scores 0.000000 on every frame for each renderer on the same machine, `particles` included | |
+| R5 | `scripts/pins.sh replay` and cross-renderer compare from one trace | R4 | T0 | opus | sub-card e | `scripts/pins.sh replay <renderer> world` from another renderer's trace, followed by `compare`, runs with the game module absent | |
+
+## Group S: the OpenGL-subset shim on Metal (parent TASK21, #28)
+
+Parent dependencies carried by every card: INFORM8, TASK13, TASK27, TASK29.
+Design: `docs/plans/metal-shim-design.md` and
+`docs/analysis/gl1-state-inventory.md`. The six cards consolidate the ten
+stages of the inventory's section 6 and the three cards of the shim
+design's section 6. `gl1-metal` is the name the harness records under when
+`ref_gl1` is built with the shim. gl1's C files are not edited by any card
+in this group.
+
+| Key | Title | Depends | Tier | Model | Design reference | Acceptance | Filed as |
+|---|---|---|---|---|---|---|---|
+| S1 | Shim skeleton and readback: build selection, context, present, clear, the state struct, `glGetString`, `glGetError`, `glReadPixels`, the pin hook on the shim | none | T0 | opus | shim design sections 1 to 3; inventory stages a, j | `ref_gl1` built with the shim links without the OpenGL framework (`otool -L` shows Metal and no OpenGL). The engine boots to the console and quits under `pins_capture`. A frame captured through `pins_dir` is byte-identical to the shim's own `glReadPixels` of that frame | |
+| S2 | 2D path: RGBA textures, samplers, replace and modulate, blend, alpha test, the 2D batch, cinematic uploads | S1, P3 | T0 | opus | inventory stages b, c | `scripts/pins.sh compare gl1-metal hud2d --ref gl1` passes on every frame at the threshold recorded for `hud2d` | |
+| S3 | World: matrices, depth, cull, the classic lightmap pass, two-unit combine with overbright, dynamic lightmap sub-uploads, polygon offset | S2 | T0 | opus | inventory stages d, e | `compare gl1-metal world --ref gl1` passes on every frame with `gl1_multitexture` 0 and with 1 | |
+| S4 | Translucent surfaces, water and sky | S3 | T0 | opus | inventory stage f | The `world` frames that contain water or sky pass, and so does the sky-and-water scenario from P2 | |
+| S5 | Alias models, the view weapon, dynamic lights, flashes and stencil shadows | S3 | T0 | opus | inventory stages g, h | `compare gl1-metal models --ref gl1` passes, also with `gl1_stencilshadow 1` | |
+| S6 | Particles, beams, sprites and the screen blend | S5 | T0 | opus | inventory stage i | `compare gl1-metal particles --ref gl1` passes at the threshold recorded for `particles` | |
+
+## TASK28, TASK20, TASK22, TASK23
+
+No sub-cards here. TASK28 (native `ref_metal`) is decomposed when it is
+pulled, one GL concept at a time, from the concept map in the inventory's
+section 5 and the pipeline-state keys in its section 2. The frame pins are
+its acceptance after every concept.
+
+## Group RT: ray tracing (parents TASK24, #31, and TASK25, #32)
+
+Parent dependencies carried by RT1 to RT8 and RTA: INFORM7, TASK28. RT9 and
+RT10 belong to TASK25 and carry TASK24. Design:
+`docs/plans/metal-raytracing-design.md`.
+
+| Key | Title | Depends | Tier | Model | Design reference | Acceptance | Filed as |
+|---|---|---|---|---|---|---|---|
+| RT1 | Acceleration structures: world and model triangle extraction, per-map and per-model structures, per-frame instances, counts logged; no visual change | none | T1 | opus | section 1; row RT1 | All gl1 pins unchanged. Triangle and byte counts for the demo maps are printed and recorded in the design document | |
+| RT2 | G-buffer in `ref_metal` and a lighting resolve that reproduces the stock result | RT1 | T1 | opus | section 3; row RT2 | All gl1 pins unchanged at the accepted threshold, 0.005 at most | |
+| RT3 | Ray-traced shadows from dynamic lights, replacing the term `R_AddDynamicLights` adds when on | RT2 | T1 | opus | section 2; row RT3 | Effect off: pins unchanged. Effect on: an `rt-shadows` scenario records, the dynamic-light term is not counted twice, fps from the timedemo line is stated | |
+| RT4 | Sun and sky shadow with a per-map direction table | RT3 | T1 | opus | section 2; row RT4 | As RT3 with `rt-sun`. Maps under the sky-area threshold render byte-identical to effect off | |
+| RT5 | Ambient occlusion | RT3 | T1 | opus | section 2; row RT5 | As RT3 with `rt-ao`. No pixel falls below the configured floor times the lightmap | |
+| RT6 | Water reflections, one bounce | RT3 | T1 | opus | section 2; row RT6 | As RT3 with `rt-water`. Pixels that are not water are byte-identical to effect off | |
+| RTA | INFORM: the look of the four ray-traced effects, accepted by the owner from the frames RT3 to RT6 captured (owner-gated, `gate:manual:BeauBender`) | RT3, RT4, RT5, RT6 | none | opus | section 5 | The owner closes the card. The commit accepted becomes the reference each effect scenario is pinned against | |
+| RT7 | Temporal accumulation and the denoiser | RTA | T1 | opus | section 2; row RT7 | Pins unchanged with temporal accumulation off. Every effect on: the fps target in the design document is met on the T1 host and the number is recorded | |
+| RT8 | Hardware gating and fallbacks, with ray tracing forced off on the VM | RT2 | T0 and T1 | opus | section 4; row RT8 | On the VM every `r_rt_*` cvar reads 0 with a report line at start-up, and all pins are unchanged there | |
+| RT9 | Render-stage ray queries on M3 or later, compute path kept for older families | RT7 | T2 | opus | section 4; row RT9 | Both paths produce the same pins within 0.005. fps on the T2 host at native resolution is recorded in `docs/audits/rt-performance.md` | |
+| RT10 | Refit against rebuild tuning and resolution-scale defaults per GPU family | RT9 | T2 | opus | row RT10 | A per-pass timing table for each host is in `docs/audits/rt-performance.md`. No pin changes | |
+
+## Order of work and what gates it
+
+1. Land the branch that carries this file.
+2. TASK13 and TASK9, then TASK29. These existing cards gate the harness
+   through TASK27's labels.
+3. Owner gates: INFORM8 and INFORM9 for groups P, R and S; INFORM7 for
+   group RT.
+4. P1, P2, P3 and R1 to R5, then TASK27 itself.
+5. S1 to S6, then TASK21.
+6. TASK28.
+7. RT1 to RT8 with RTA, then TASK24; RT9 and RT10, then TASK25.
+
+What the build VM can finish alone: P1, P2, R1 to R5 on `soft`, S1 and
+RT8's VM half. P3 and everything after S1 need `ref_gl1` references, which
+need a T1 host unless gl1 turns out to render on the VM. Group RT needs T1
+and T2 hardware.

@@ -2,7 +2,8 @@
 
 Plan anchor: `docs/plans/metal-renderer.md` as revised by INFORM8 (#35), card
 TASK27 (#37). Companion to `docs/plans/metal-port-harness.md`, which ships
-the frame side (`VID_WritePinFrame`, `CL_PinsFrame`, `scripts/pins.sh`).
+the frame side (`VID_WritePinFrame`, `SCR_PinsCapture`, `CL_PinsFrame`,
+`scripts/pins.sh`).
 This document is the design for the other half: record what the client
 hands the renderer, replay it into any renderer with the game not running,
 and judge the frames through the same pin hook.
@@ -116,9 +117,9 @@ the store, never committed (INFORM9: it embeds asset-derived data).
    records in order, `R_EndWorldRenderpass` where it was recorded,
    `R_EndFrame`.
 4. Frames whose index is a multiple of the recorded `pins_capture` cadence
-   get `Cbuf_AddText("screenshot tga\n")` executed before `R_EndFrame`, the
-   same place the live run captures (gl1's `R_ScreenShot` reads the back
-   buffer at command time), so `VID_WritePinFrame` writes them to
+   run the `screenshot` command synchronously before `R_EndFrame`, the same
+   place the live run captures (`SCR_PinsCapture`; gl1's `R_ScreenShot`
+   reads the back buffer at command time), so `VID_WritePinFrame` writes them to
    `pins_dir` with the same frame numbering.
 5. At the last frame, `quit`.
 
@@ -218,6 +219,9 @@ New cvars: `pins_record <path>` (recorder on), `pins_replay <path>`
 `tests/check-cvar-docs.sh` fails.
 
 ## 6. Sub-cards, in dependency order
+
+Filing: `docs/plans/metal-port-cards.md` is the authoritative card list; the
+list below is the detailed scope behind its rows.
 
 | Card | Scope | Acceptance (one line) |
 |---|---|---|

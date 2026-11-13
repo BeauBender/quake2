@@ -204,6 +204,9 @@ a shared buffer; `GL_POINTS` -> expanded quads.
 
 ## 6. Sub-cards for TASK21 (each verifiable by a pin)
 
+Filing: `docs/plans/metal-port-cards.md` is the authoritative card list; the
+list below is the detailed scope behind its rows.
+
 1. **TASK21a, context and clear.** Stage 1 entry points. Acceptance: `scripts/pins.sh compare gl1 hud2d` on the shim renders the cleared frame and the console background with score 0 against an all-black-plus-conback reference captured on real GL.
 2. **TASK21b, RGBA textures and samplers.** Stage 2. Acceptance: pic uploads round-trip bit-exact through `glReadPixels` of a 1:1 `RDraw_PicScaled`; `hud2d` frames within threshold except text (scrap) regions.
 3. **TASK21c, 2D batch and the ring buffer.** Stage 3 (`buf_2d`, `RDraw_*`). Acceptance: every `hud2d` frame within threshold; the stereo mask path untested but compiles.

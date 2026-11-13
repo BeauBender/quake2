@@ -138,6 +138,9 @@ Metal provides, no separate code path.
 
 ## 6. Sub-cards
 
+Filing: `docs/plans/metal-port-cards.md` is the authoritative card list; the
+list below is the detailed scope behind its rows.
+
 Dependency order is the listed order unless stated. Each is one PR, gate
 green, pins as stated.
 

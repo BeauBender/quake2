@@ -26,6 +26,8 @@ Harness and designs (2026-11-06): the operating procedure is
 `docs/plans/metal-port-harness.md`; it links the GL-state inventory, the shim
 design, the ray-tracing design and the record/replay design. TASK27's core
 (capture hook, cadence, driver, diff, scenarios, gate check) is in the tree.
+The cards still to file, with dependencies and acceptance, are in
+`docs/plans/metal-port-cards.md`.
 
 
 ## The questions asked

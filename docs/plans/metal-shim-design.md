@@ -1,7 +1,7 @@
 # Design: the OpenGL-subset-on-Metal shim for `ref_gl1` (TASK21)
 
 Plan anchor: `docs/plans/metal-renderer.md` as revised by INFORM8 (#35, pin at
-two seams, shim first). Oracles: the plugin's GL-call pins for each entry
+two seams, shim first). Oracles: the GL-call pins (INFORM8) for each entry
 point, and the frame pins from `scripts/pins.sh` (`docs/plans/metal-port-harness.md`).
 Rule of the card: `src/client/refresh/gl1/*.c` is not edited. Everything
 below is additive and selected by one Makefile variable.
@@ -178,7 +178,7 @@ sees them only as the GL calls they make.
 
 ## 4. Growth order, driven by the pins
 
-The GL-call pins (plugin) are grown in trace-frequency order; the frame
+The GL-call pins (INFORM8) are grown in trace-frequency order; the frame
 pins (`scripts/pins.sh`) accept each stage. Suggested stages, each a
 `DrawArrays` family the shim must handle before the stage's scenario can pass:
 
@@ -211,6 +211,9 @@ OpenGL (T1 references, INFORM9).
 | Readback coordinate conventions (GL bottom-up vs Metal top-down) | handled once in `glReadPixels`; the pin harness compares shim frames against real-GL frames, so a flip error fails every pin on stage 1 and is caught immediately |
 
 ## 6. Size and the first three cards
+
+Filing: `docs/plans/metal-port-cards.md` is the authoritative card list; the
+list below is the detailed scope behind its rows.
 
 | Component | Estimate |
 |---|---|
