@@ -289,7 +289,7 @@ The build dependencies can be installed with:
 * On Debian based distributions: `apt install build-essential
   libgl1-mesa-dev libsdl3-dev`
 * On FreeBSD: `pkg install gmake libGL sdl3`
-* On NetBSD: `pkgin install gmake SDL2`
+* On NetBSD: `pkgin install gmake sdl3`
 * On OpenBSD: `pkg_add gmake sdl3`
 * On Solaris/Illumos: `pkg install sdl3`
 * On Haiku: `pkgman libsdl3_devel`

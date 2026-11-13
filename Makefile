@@ -8,7 +8,7 @@
 #  - Renderer libraries (gl1, gl3, soft)                 #
 #                                                        #
 # Base dependencies:                                     #
-#  - SDL 2 or SDL 3                                      #
+#  - SDL 3                                               #
 #  - libGL                                               #
 #  - Vulkan headers                                      #
 #                                                        #
@@ -62,10 +62,6 @@ WITH_EXECINFO:=yes
 # Sets an RPATH to $ORIGIN/lib. It can be used to
 # inject custom libraries, e.g. a patches libSDL.so. Not supported on Windows.
 WITH_RPATH:=yes
-
-# WITH_SDL3
-# When disabled SDL 2 is used instead of SDL 3.
-WITH_SDL3:=yes
 
 # WITH_SYSTEMWIDE
 # Enable systemwide installation of game assets.
@@ -310,12 +306,7 @@ endif
 # ----------
 
 # Extra CFLAGS for SDL.
-ifeq ($(WITH_SDL3),yes)
 SDLCFLAGS := $(shell $(PKG_CONFIG) --cflags sdl3)
-SDLCFLAGS += -DUSE_SDL3
-else
-SDLCFLAGS := $(shell sdl2-config --cflags)
-endif
 
 ifdef NO_SDL_GYRO
 SDLCFLAGS += -DNO_SDL_GYRO
@@ -400,23 +391,15 @@ endif
 # ----------
 
 # Extra LDFLAGS for SDL
-ifeq ($(WITH_SDL3),yes)
 ifeq ($(YQ2_OSTYPE), Darwin)
 SDLLDFLAGS := -lSDL3
 else
 SDLLDFLAGS := $(shell $(PKG_CONFIG) --libs sdl3)
 endif
-else
-ifeq ($(YQ2_OSTYPE), Darwin)
-SDLLDFLAGS := -lSDL2
-else
-SDLLDFLAGS := $(shell sdl2-config --libs)
-endif
-endif
 
-# The renderer libs don't need libSDL2main, libmingw32 or -mwindows.
+# The renderer libs don't need libmingw32 or -mwindows.
 ifeq ($(YQ2_OSTYPE), Windows)
-DLL_SDLLDFLAGS = $(subst -mwindows,,$(subst -lmingw32,,$(subst -lSDL2main,,$(SDLLDFLAGS))))
+DLL_SDLLDFLAGS = $(subst -mwindows,,$(subst -lmingw32,,$(SDLLDFLAGS)))
 endif
 
 # ----------
@@ -448,7 +431,6 @@ config:
 	@echo "============================"
 	@echo "YQ2_ARCH = $(YQ2_ARCH), YQ2_OSTYPE = $(YQ2_OSTYPE), COMPILER = $(COMPILER)"
 	@echo "WITH_RPATH = $(WITH_RPATH)"
-	@echo "WITH_SDL3 = $(WITH_SDL3)"
 	@echo "WITH_SYSTEMWIDE = $(WITH_SYSTEMWIDE)"
 	@echo "WITH_SYSTEMDIR = $(WITH_SYSTEMDIR)"
 	@echo "WITH_XDG = $(WITH_XDG)"
@@ -889,15 +871,9 @@ CLIENT_OBJS_ := \
 	src/server/sv_user.o \
 	src/server/sv_world.o
 
-ifeq ($(WITH_SDL3),yes)
 CLIENT_OBJS_ += \
 	src/client/input/sdl3.o \
 	src/client/vid/glimp_sdl3.o
-else
-CLIENT_OBJS_ += \
-	src/client/input/sdl2.o \
-	src/client/vid/glimp_sdl2.o
-endif
 
 ifeq ($(YQ2_OSTYPE), Windows)
 CLIENT_OBJS_ += \

@@ -31,16 +31,16 @@ jobs:
     - name: Install build dependencies
       run: |
         apt update
-        apt install -y libgl1-mesa-dev libsdl2-dev \
+        apt install -y libgl1-mesa-dev libsdl3-dev \
             build-essential cppcheck
     - name: Check out repository code
       uses: actions/checkout@v7
     - name: Build
       run: |
         # Public runners come with 4 CPUs.
-        make WITH_SDL3=no -j4
+        make -j4
         # Debug version
-        make WITH_SDL3=no DEBUG=1 -j4
+        make DEBUG=1 -j4
     - name: Create testbuild package
       run: |
         # Create release directory tree

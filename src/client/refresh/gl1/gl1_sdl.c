@@ -27,11 +27,7 @@
 
 #include "header/local.h"
 
-#ifdef USE_SDL3
 #include <SDL3/SDL.h>
-#else
-#include <SDL2/SDL.h>
-#endif
 
 static SDL_Window* window = NULL;
 static SDL_GLContext context = NULL;
@@ -84,11 +80,7 @@ int RI_PrepareForWindow(void)
 	SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 	SDL_GL_SetAttribute(SDL_GL_ACCELERATED_VISUAL, 1);
 
-#ifdef USE_SDL3
 	if (SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8))
-#else
-	if (SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8) == 0)
-#endif
 	{
 		gl_state.stencil = true;
 	}
@@ -105,11 +97,7 @@ int RI_PrepareForWindow(void)
 	{
 		msaa_samples = gl_msaa_samples->value;
 
-#ifdef USE_SDL3
 		if (!SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1))
-#else
-		if (SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1) < 0)
-#endif
 		{
 			Com_Printf("MSAA is unsupported: %s\n", SDL_GetError());
 
@@ -118,11 +106,7 @@ int RI_PrepareForWindow(void)
 			SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);
 			SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
 		}
-#ifdef USE_SDL3
 		else if (!SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, msaa_samples))
-#else
-		else if (SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, msaa_samples) < 0)
-#endif
 		{
 			Com_Printf("MSAA %ix is unsupported: %s\n", msaa_samples, SDL_GetError());
 
@@ -159,11 +143,7 @@ void RI_SetVsync(void)
 		vsync = -1;
 	}
 
-#ifdef USE_SDL3
 	if (!SDL_GL_SetSwapInterval(vsync))
-#else
-	if (SDL_GL_SetSwapInterval(vsync) == -1)
-#endif
 	{
 		if (vsync == -1)
 		{
@@ -174,7 +154,6 @@ void RI_SetVsync(void)
 		}
 	}
 
-#ifdef USE_SDL3
 	int vsyncState;
 	if (!SDL_GL_GetSwapInterval(&vsyncState))
 	{
@@ -185,32 +164,6 @@ void RI_SetVsync(void)
 	{
 		vsyncActive = vsyncState ? true : false;
 	}
-#else
-	vsyncActive = SDL_GL_GetSwapInterval() != 0;
-#endif
-}
-
-/*
- * Updates the gamma ramp. Only used with SDL2.
- */
-void
-RI_UpdateGamma(void)
-{
-// Hardware gamma / gamma ramps are no longer supported with SDL3.
-// There's no replacement and sdl2-compat won't support it either.
-// See https://github.com/libsdl-org/SDL/pull/6617 for the rational.
-// Gamma works with a lookup table when using SDL3.
-#ifndef GL1_GAMMATABLE
-	float gamma = (vid_gamma->value);
-
-	Uint16 ramp[256];
-	SDL_CalculateGammaRamp(gamma, ramp);
-
-	if (SDL_SetWindowGammaRamp(window, ramp, ramp, ramp) != 0)
-	{
-		Com_Printf("Setting gamma failed: %s\n", SDL_GetError());
-	}
-#endif
 }
 
 /*
@@ -259,11 +212,7 @@ int RI_InitContext(void* win)
 
 	if (gl_msaa_samples->value)
 	{
-#ifdef USE_SDL3
 		if (SDL_GL_GetAttribute(SDL_GL_MULTISAMPLESAMPLES, &msaa_samples))
-#else
-		if (SDL_GL_GetAttribute(SDL_GL_MULTISAMPLESAMPLES, &msaa_samples) == 0)
-#endif
 		{
 			ri.Cvar_SetValue("r_msaa_samples", msaa_samples);
 		}
@@ -277,11 +226,7 @@ int RI_InitContext(void* win)
 
 	if (gl_state.stencil)
 	{
-#ifdef USE_SDL3
 		if (!SDL_GL_GetAttribute(SDL_GL_STENCIL_SIZE, &stencil_bits) || stencil_bits < 8)
-#else
-		if (SDL_GL_GetAttribute(SDL_GL_STENCIL_SIZE, &stencil_bits) < 0 || stencil_bits < 8)
-#endif
 		{
 			gl_state.stencil = false;
 		}
@@ -296,15 +241,9 @@ int RI_InitContext(void* win)
 	snprintf(title, sizeof(title), "Yamagi Quake II %s - OpenGL 1.4", YQ2VERSION);
 	SDL_SetWindowTitle(window, title);
 
-#if SDL_VERSION_ATLEAST(2, 26, 0)
 	// Figure out if we are high dpi aware.
 	int flags = SDL_GetWindowFlags(win);
-#ifdef USE_SDL3
 	IsHighDPIaware = (flags & SDL_WINDOW_HIGH_PIXEL_DENSITY) ? true : false;
-#else
-	IsHighDPIaware = (flags & SDL_WINDOW_ALLOW_HIGHDPI) ? true : false;
-#endif
-#endif
 
 	return true;
 }
@@ -314,11 +253,7 @@ int RI_InitContext(void* win)
  */
 void RI_GetDrawableSize(int* width, int* height)
 {
-#ifdef USE_SDL3
 	SDL_GetWindowSizeInPixels(window, width, height);
-#else
-	SDL_GL_GetDrawableSize(window, width, height);
-#endif
 }
 
 /*
@@ -331,11 +266,7 @@ RI_ShutdownContext(void)
 	{
 		if(context)
 		{
-#ifdef USE_SDL3
 			SDL_GL_DestroyContext(context);
-#else
-			SDL_GL_DeleteContext(context);
-#endif
 			context = NULL;
 		}
 	}
@@ -348,12 +279,6 @@ RI_ShutdownContext(void)
  */
 int RI_GetSDLVersion()
 {
-#ifdef USE_SDL3
 	int version = SDL_GetVersion();
 	return SDL_VERSIONNUM_MAJOR(version);
-#else
-	SDL_version ver;
-	SDL_VERSION(&ver);
-	return ver.major;
-#endif
 }

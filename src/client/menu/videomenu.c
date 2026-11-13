@@ -439,12 +439,10 @@ ApplyChanges(void *unused)
 static void
 RestartNeededSDL3Msg(void *unused)
 {
-#ifdef USE_SDL3
 	if (Q_stricmp(vid_renderer->string, "gl1") == 0)
 	{
 		Menu_SetStatusBar(&s_opengl_menu, "apply required");
 	}
-#endif
 }
 
 static void
