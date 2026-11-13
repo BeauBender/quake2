@@ -1201,6 +1201,10 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS))
 TEST_BIN = $(TESTDIR)/yq2test
 
+# Header dependencies of the test objects (-MMD, not on Darwin), so that
+# an incremental `make test` after a header edit rebuilds what uses it.
+-include $(TEST_OBJS:.o=.d)
+
 .PHONY : test
 
 test: $(TEST_BIN)

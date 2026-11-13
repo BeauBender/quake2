@@ -5,8 +5,13 @@
 # Values are whole percent, rounded down from the measured total.
 #
 # llvm-cov: measured 33.12% with Apple clang 21 on macOS arm64 (TASK29).
-# gcov: not yet measured (no gcc toolchain where TASK29 was written); set
-# below the llvm-cov value as a start, to be raised to what the Linux CI
-# job prints.
+# gcov: NOT measured. TASK29 was written on a host without gcc, and the
+# Linux CI job only runs on a pull request. 25 is a conservative lower
+# bound chosen below the llvm-cov measurement (gcov counts lines a little
+# differently, but not by eight points). The first Linux CI run measures
+# it: the "Coverage" step of .github/workflows/linux_x86_64.yml prints
+# "TOTAL NN.NN% of N lines" and, when that is a whole percent or more
+# above this floor, "set the 'gcov' line in scripts/coverage-floor to N".
+# Raise the line below to that N then.
 llvm-cov 33
 gcov 25

@@ -97,15 +97,22 @@ if [ "$tool" = llvm-cov ]; then
 			/^LF:/ { n = substr($0, 4) }
 			/^LH:/ { if (f ~ /^src\/.*\.c$/) print f, n, n - substr($0, 4) }' > "$summary"
 else
+	# One gcov run per object, over the .gcno notes files: an object whose
+	# code never ran still counts (gcov reports it at 0%). LC_ALL=C: gcov's
+	# report is translated otherwise. The awk is POSIX (mawk on Debian).
 	: > "$summary"
-	for gcda in $(find "$outdir/src" -name '*.gcda' | sort); do
-		obj=${gcda%.gcda}
+	find "$outdir/src" -name '*.gcno' | LC_ALL=C sort | while IFS= read -r gcno; do
+		obj=${gcno%.gcno}
 		src=${obj#"$outdir"/}.c
-		"$gcov" -n -o "$(dirname "$gcda")" "$src" 2>/dev/null |
-			awk -v want="$src" '
-				/^File / { f = $2; gsub(/\047/, "", f); next }
+		LC_ALL=C "$gcov" -n -o "$(dirname "$gcno")" "$src" 2>/dev/null |
+			awk -v want="$src" -v root="$PWD/" -v q="'" '
+				/^File / {
+					f = substr($0, 6); gsub(q, "", f)
+					if (index(f, root) == 1) f = substr(f, length(root) + 1)
+					next
+				}
 				/^Lines executed:/ && f == want {
-					split($2, a, ":"); pct = a[2]; sub(/%/, "", pct)
+					pct = $2; sub(/^executed:/, "", pct); sub(/%$/, "", pct)
 					n = $NF
 					hit = int(pct * n / 100 + 0.5)
 					print f, n, n - hit
@@ -150,14 +157,16 @@ awk '
 
 total=$(awk '/^TOTAL/ { sub(/%/, "", $2); print $2 }' "$outdir/profiles/report.txt")
 
-if awk -v t="$total" -v f="$floor" 'BEGIN { exit !(t < f) }'; then
+if awk -v t="$total" -v f="$floor" 'BEGIN { exit !(t + 0 < f + 0) }'; then
 	echo "coverage: FAIL: total $total% is below the floor of $floor% ($tool) in $floorfile" >&2
 	exit 1
 fi
 
-if awk -v t="$total" -v f="$floor" 'BEGIN { exit !(int(t) > f) }'; then
-	echo "coverage: total $total% is above the floor of $floor%; ratchet it up:"
-	echo "coverage:   set the '$tool' line in $floorfile to $(awk -v t="$total" 'BEGIN { print int(t) }')"
+# The same on every platform and for both tools: CI logs show this line,
+# and on Linux it is the only way to learn the gcov value.
+if awk -v t="$total" -v f="$floor" 'BEGIN { exit !(int(t + 0) > f + 0) }'; then
+	echo "coverage: RATCHET: measured total $total% ($tool) is at least one whole percent above the floor of $floor%"
+	echo "coverage:   set the '$tool' line in $floorfile to $(awk -v t="$total" 'BEGIN { print int(t + 0) }')"
 fi
 
 echo "coverage: ok ($total% >= floor $floor%, $tool)"
