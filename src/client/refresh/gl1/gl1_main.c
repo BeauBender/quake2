@@ -175,6 +175,13 @@ R_DrawSpriteModel(entity_t *currententity, const model_t *currentmodel)
 	   a single polygon without a surface cache */
 	psprite = (dsprite_t *)currentmodel->extradata;
 
+	/* A negative frame would leave a negative remainder and index
+	   before frames[] and skins[]; use the first frame. */
+	if (currententity->frame < 0)
+	{
+		currententity->frame = 0;
+	}
+
 	currententity->frame %= psprite->numframes;
 	frame = &psprite->frames[currententity->frame];
 

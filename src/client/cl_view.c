@@ -97,7 +97,10 @@ V_AddParticle(vec3_t org, unsigned int color, float alpha)
 
 	p = &r_particles[r_numparticles++];
 	VectorCopy(org, p->origin);
-	p->color = color;
+	/* The renderers index 256 entry colour tables with this; the
+	   random offsets of the effects can push a server chosen colour
+	   past 255. */
+	p->color = color & 0xFF;
 	p->alpha = alpha;
 }
 

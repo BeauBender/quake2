@@ -40,6 +40,14 @@ R_DrawSprite(entity_t *currententity, const model_t *currentmodel)
 	image_t		*skin;
 
 	s_psprite = (dsprite_t *)currentmodel->extradata;
+
+	/* A negative frame would leave a negative remainder and index
+	   before frames[] and skins[]; use the first frame. */
+	if (currententity->frame < 0)
+	{
+		currententity->frame = 0;
+	}
+
 	currententity->frame %= s_psprite->numframes;
 
 	s_psprframe = &s_psprite->frames[currententity->frame];

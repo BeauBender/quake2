@@ -43,9 +43,10 @@ packet receiver in `src/backends/unix/network.c`. The game-module consumers
 `StringToFilter`) were read because the server hands them peer userinfo or
 command arguments.
 
-The renderers are not fed only from bounded client arrays: entity `skinnum`
-and `frame` and particle colours pass from the server through
-`CL_AddPacketEntities` and `V_AddParticle` into `refdef` unchanged. The
+The renderers are not fed only from bounded client arrays: at the audit
+base, entity `skinnum` and `frame` and particle colours passed from the
+server through `CL_AddPacketEntities` and `V_AddParticle` into `refdef`
+unchanged (FIX25 bounds them since). The
 renderer code that indexes by those fields was therefore read
 (`gl1_mesh.c`, `gl3_mesh.c`, `sw_alias.c` skin and frame selection,
 `files/surf.c` `R_TextureAnimation`, the sprite functions in `gl1_main.c`,
@@ -127,6 +128,7 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_parse.c` `CL_ParsePlayerstate` `state->stats[i]` | long `statbits`, shorts | `stats[i]`, `i` in `0..MAX_STATS` loop | `i < MAX_STATS` | ok |
 | `cl_parse.c` `CL_ParsePlayerstate` other fields (`pm_type`, origin, velocity, `pm_time`, `pm_flags`, gravity, `delta_angles`, view and kick angles, `gunframe`, gun offset and angles, blend, `fov`, `rdflags`) | byte/char/short/angle reads | stored as values in `player_state_t` | not used as indices (`gunindex` is covered in the entity rows) | ok |
 | `cl_parse.c` `CL_ParseFrame` `serverframe`, `surpressCount`, `svc_playerinfo`/`svc_packetentities` bytes | `MSG_ReadLong`, `MSG_ReadByte` | `cl.frames[serverframe & UPDATE_MASK]`; command bytes compared | masked; a wrong command byte → `ERR_DROP` | ok |
+| `cl_parse.c` `CL_ParseFrame` `cl.frame.servertime = serverframe * 100` | `MSG_ReadLong` (no sign or range test) | `cl.time` is clamped into `servertime - 100 .. servertime` (here and in `CL_AddEntities`), so a negative frame number gives a negative client time; from it: the frame of an `EF_ANIM_ALL` (`2 * cl.time / 1000`) or `EF_ANIM_ALLFAST` (`cl.time / 100`) entity in `CL_AddPacketEntities`, and `refdef.time`, from which every renderer derives the world entity's animation frame (`(int)(r_newrefdef.time * 2)` in `gl1_surf.c`, `gl3_surf.c`, `sw_main.c`, `sw_bsp.c`); both reach `R_TextureAnimation` and the entity frame reaches the sprite functions (D11, D16) | was a path to D11 and D16, now: the frame sinks treat a negative frame as 0 (`CL_AddPacketEntities` after the whole frame selection, `R_TextureAnimation`, the three sprite functions). Open, on FIX39 (#157): the light-style step in `cl_lights.c` `CL_RunLightStyles` (`map[ofs % length]` with `ofs = cl.time / 100`) is negative for a negative client time, an out-of-bounds read of nearby client memory shown as a light value; and the product overflows `int` for a frame number outside about ±21474836 (and `2 * cl.time` for a client time past 2^30 ms), undefined behaviour that the bounds above make harmless for the frame sinks but do not remove | open (FIX39); frame sinks bounded by FIX25 |
 | `cl_parse.c` `CL_ParseFrame` `cl.frame.deltaframe` | `MSG_ReadLong` | `cl.frames[deltaframe & UPDATE_MASK]` | masked; validity checks | ok |
 | `cl_parse.c` `CL_ParseFrame` areabits `len` | `MSG_ReadByte` | `MSG_ReadData` into `areabits[MAX_MAP_AREAS/8]` | `len > sizeof(areabits)` → `Com_Error(ERR_DROP)` (fixed in TASK2/#9) | ok (already carded/fixed) |
 | `cl_parse.c` `CL_ParseServerData` `cl.playernum` | `MSG_ReadShort` | `cl.playernum+1` used as entity number across client | **no range check at read** → Defect D2 | defect (D2) |
@@ -157,10 +159,10 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_tempentities.c` sustain `id` | `MSG_ReadShort` | `s->id`, compared only | not an index | ok |
 | `cl_tempentities.c` `CL_ParseTEnt` and helpers (`CL_ParseLaser`, `CL_ParseNuke`, `CL_ParseWidow`, `CL_ParseHeatBeam`, `CL_ParseBeam`) positions, directions, counts, `magnitude` | `MSG_ReadPos`, `MSG_ReadDir`, `MSG_ReadByte`, `MSG_ReadShort` | vectors, particle counts, speeds | counts are loop bounds over the free-particle list (allocation stops when it is empty); `MSG_ReadDir` bounds its index | ok |
 | `cl_tempentities.c` `CL_ParseParticles` | `MSG_ReadPos`, `MSG_ReadDir`, `MSG_ReadByte` ×2 | `CL_ParticleEffect` | the function has no caller (dead code); its colour would be the same class as D9 | ok (unreachable) |
-| `cl_tempentities.c` `TE_LASER_SPARKS`/`TE_WELDING_SPARKS` `color`, `CL_ParseSteam` `r` | `MSG_ReadByte` | particle colour plus a small random offset, which can exceed 255 | none; reaches the renderers unmasked → Defect D9 | defect (D9) |
+| `cl_tempentities.c` `TE_LASER_SPARKS`/`TE_WELDING_SPARKS` `color`, `CL_ParseSteam` `r` | `MSG_ReadByte` | particle colour plus a small random offset, which can exceed 255 | was Defect D9, now: the colour is masked with `& 0xFF` once, in `V_AddParticle`, before any renderer sees it | ok (fixed by FIX25) |
 | `cl_tempentities.c` `TE_TUNNEL_SPARKS`, `TE_FORCEWALL` `color` | `MSG_ReadByte` | particle colour used as is (0..255) | in range | ok |
-| `sw_part.c` `R_DrawParticle` `vid_alphamap[(color << 8) + pdest]` / `[color + (pdest << 8)]` | `particle_t.color` | translucency table index | **no mask** → Defect D9 | defect (D9) |
-| `gl1_main.c` `R_DrawParticles2` `colortable[p->color]` | `particle_t.color` | `d_8to24table[256]` index | **no mask** (the point-sprite path and gl3 mask `& 0xFF`) → Defect D9 | defect (D9) |
+| `sw_part.c` `R_DrawParticle` `vid_alphamap[(color << 8) + pdest]` / `[color + (pdest << 8)]` | `particle_t.color` | translucency table index | was Defect D9, now: covered by the mask in `V_AddParticle` | ok (fixed by FIX25) |
+| `gl1_main.c` `R_DrawParticles2` `colortable[p->color]` | `particle_t.color` | `d_8to24table[256]` index | was Defect D9, now: covered by the mask in `V_AddParticle` | ok (fixed by FIX25) |
 | `cl_network.c` `CL_ConnectionlessPacket` `Cmd_Argv(0)` and the logged command name | `MSG_ReadStringLine` → `Cmd_TokenizeString` | dispatch; `Com_Printf("%s: %s\n", ...)` | string bounded 2048; tokenizer bounded | ok |
 | `cl_network.c` `client_connect` | command name only | `Netchan_Setup(..., net_from, ...)`, `cls.state = ca_connected`, sends `new` | accepted only in `ca_connecting` and only from the address being connected to, which is also the address the netchan is set up with, since FIX27 (#139), was Defect D14 | ok (fixed by FIX27) |
 | `cl_network.c` `challenge` `Cmd_Argv(1)` | tokenized | `strtol` → `cls.challenge`; `CL_SendConnectPacket` to `cls.servername` | numeric; the connect goes to the configured server, not the sender; accepted only in `ca_connecting` from the address being connected to since FIX27 (#139), was the same class as D14 | ok (fixed by FIX27) |
@@ -178,11 +180,12 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_screen.c` `DrawHUDStringScaled` `line[width++]` | `COM_Parse` token chars to `\n` | index into `line[1024]` | no bound on `width` in the function; its only live callers (`cstring`, `cstring2` layout tokens) pass a `COM_Parse` token, at most `MAX_TOKEN_CHARS - 1` = 1023 characters, so `line[1023]` is the furthest write; not reachable today; `width` capped since FIX13 (#137), was D4 | ok (fixed by FIX13) |
 | `cl_entities.c` `CL_AddPacketEntities` `cl.model_draw[s1->modelindex]` (and `modelindex2/3/4`) | modelindex bytes | model pointer | no explicit check; `CL_ParseDelta` reads each with `MSG_ReadByte`, so 0..255 against `model_draw[MAX_MODELS]` (256); `-1` only on a short read, which drops the connection before the frame is used (see D5); see Hardening H2 | ok (hardening H2) |
 | `cl_entities.c` `ci = &cl.clientinfo[s1->skinnum & 0xff]` | skinnum | clientinfo index | masked `& 0xff`, `MAX_CLIENTS == 256` | ok |
-| `cl_entities.c` custom weapon `ci->weaponmodel[s1->skinnum >> 8]` | skinnum (`int`, byte/short/long on the wire) | model pointer | with `cl_vwep` non-zero (the default), only `i > MAX_CLIENTWEAPONMODELS - 1` rejected; **negative `i` passes** → Defect D10 | defect (D10) |
-| `cl_entities.c` `ent.skinnum = s1->skinnum` → `gl1_mesh.c`/`gl3_mesh.c` `currentmodel->skins[skinnum]` | skinnum | image pointer | only `skinnum >= MAX_MD2SKINS` tested; **negative passes** → Defect D10 (`sw_alias.c` tests both sides) | defect (D10) |
+| `cl_entities.c` custom weapon `ci->weaponmodel[s1->skinnum >> 8]` | skinnum (`int`, byte/short/long on the wire) | model pointer | was Defect D10, now: a negative `i` takes the default weapon model | ok (fixed by FIX25) |
+| `cl_entities.c` `ent.skinnum = s1->skinnum` → `gl1_mesh.c`/`gl3_mesh.c` `currentmodel->skins[skinnum]` | skinnum | image pointer | was Defect D10, now: a negative skin is replaced by 0 where `ent.skinnum` is set | ok (fixed by FIX25) |
 | `cl_entities.c` beam `ent.skinnum = (s1->skinnum >> (...)) & 0xff` → `d_8to24table[e->skinnum & 0xFF]` | skinnum | palette index | masked at both ends | ok |
-| `cl_entities.c` `ent.frame = s1->frame` → `files/surf.c` `R_TextureAnimation` `frame % numframes`, called by all three renderers (`gl1_surf.c`, `gl3_surf.c`; soft `sw_edge.c` and `sw_poly.c` through `D_CacheSurface` in `sw_surf.c`) | frame (signed short) | count of `tex->next` steps | **negative frame gives a negative count**; the loop runs about 2^32 steps or reaches `NULL` → Defect D11 (alias models test both sides) | defect (D11) |
-| `cl_entities.c` `ent.frame = s1->frame` → sprite models: `gl1_main.c` `R_DrawSpriteModel`, `gl3_main.c` `GL3_DrawSpriteModel`, `sw_sprite.c` `R_DrawSprite`: `frame %= numframes`, then `psprite->frames[frame]` and `currentmodel->skins[frame]` | frame (signed short) | sprite frame record and image pointer | the remainder of a negative frame is zero or negative, so for a sprite with two or more frames **the index is negative** → Defect D16 | defect (D16) |
+| `cl_entities.c` `ent.frame` (`s1->frame`, or from the client time under `EF_ANIM_ALL` and `EF_ANIM_ALLFAST`) and the world entity's frame (`(int)(r_newrefdef.time * 2)` in each renderer) → `files/surf.c` `R_TextureAnimation` `frame % numframes`, called by all three renderers (`gl1_surf.c`, `gl3_surf.c`; soft `sw_edge.c` and `sw_poly.c` through `D_CacheSurface` in `sw_surf.c`) | frame (signed short), or a negative client time (see the `servertime` row) | count of `tex->next` steps | was Defect D11, now: `CL_AddPacketEntities` replaces a negative frame by 0 after the whole frame selection, and `R_TextureAnimation` itself treats a negative frame as 0 and takes at most `numframes - 1` steps (the chain length counted at load), stopping at the end of a chain that is not circular | ok (fixed by FIX25) |
+| `cl_entities.c` `ent.frame` (same writers) → sprite models: `gl1_main.c` `R_DrawSpriteModel`, `gl3_main.c` `GL3_DrawSpriteModel`, `sw_sprite.c` `R_DrawSprite`: `frame %= numframes`, then `psprite->frames[frame]` and `currentmodel->skins[frame]` | frame (signed short), or a negative client time | sprite frame record and image pointer | was Defect D16, now: replaced by 0 in `CL_AddPacketEntities` as above, and each of the three functions treats a negative frame as 0 before the remainder, so the index is `0 .. numframes - 1` (`numframes` capped at `MAX_MD2SKINS` at load) | ok (fixed by FIX25) |
+| `cl_entities.c` `ent.oldframe = cent->prev.frame` | frame (signed short) | previous alias frame | not bounded in the client; read only by the alias-model code, which tests it on both sides in each renderer (`gl1_mesh.c` and `gl3_mesh.c` cull and draw functions, `sw_alias.c` `R_AliasSetupFrames`); no sprite or brush path reads it | ok |
 | `cl_entities.c` `cl.model_draw[ps->gunindex]` | `gunindex` (`MSG_ReadByte` in `CL_ParsePlayerstate`) | gun model | 0..255 by the byte type vs `MAX_MODELS` | ok (by the byte type) |
 | `cl_entities.c` `bfg_lightramp[s1->frame]` | frame (`U_FRAME8` byte or `U_FRAME16` signed short) | index into `static int[6]` | reached when `effects & EF_BFG` is set without `EF_ANIM_ALLFAST`; checked on both sides since FIX14 (the table is read only for a frame inside it; any other frame adds no light), was Defect D5 | ok (fixed by FIX14) |
 | `cl_prediction.c` `cl.model_clip[ent->modelindex]` | modelindex byte | clip model | reached when `ent->solid == 31`; 0..255 by the byte type against `model_clip[MAX_MODELS]`; see Hardening H2 | ok (hardening H2) |
@@ -455,6 +458,8 @@ checks one side of a server value). Fix: also reject `value < 0`, as the
 
 ### D9: server-chosen particle colours above 255 index the software renderer's translucency table out of bounds (high, medium confidence) [FIX25 (#126)]
 
+Fixed by FIX25: see the per-site rows in the tables above.
+
 Trace: `CL_ParseTEnt` (`cl_tempentities.c`) reads a colour with
 `MSG_ReadByte` (0..255) for `TE_LASER_SPARKS` and `TE_WELDING_SPARKS`
 (passed to `CL_ParticleEffect2`, `cl_particles.c`) and for `TE_STEAM`
@@ -502,6 +507,8 @@ renderers consume it (as gl3 and the gl1 point path already do), or at
 
 ### D10: a negative entity `skinnum` passes one-sided checks into `weaponmodel[]` and the GL model skin arrays (high, high confidence) [FIX25 (#126)]
 
+Fixed by FIX25: see the per-site rows in the tables above.
+
 `entity_state_t.skinnum` is an `int` read by `CL_ParseDelta` as a byte, a
 signed short, or (with both `U_SKIN8` and `U_SKIN16`) a full signed long, so
 the server can send any negative value.
@@ -528,6 +535,16 @@ custom-weapon path and add the `< 0` test to the two GL skin selections, as
 `sw_alias.c` already has.
 
 ### D11: a negative brush-entity `frame` makes `R_TextureAnimation` walk the texture chain about 2^32 times (high, high confidence) [FIX25 (#126)]
+
+Fixed by FIX25. Besides the normal path below, a negative frame also came
+from a negative client time (a negative server frame number, see the
+`servertime` row): through the `EF_ANIM_ALL` and `EF_ANIM_ALLFAST` branches
+of `CL_AddPacketEntities` and through the world entity's frame, which every
+renderer derives from `refdef.time`. The bound is therefore at the sink:
+`R_TextureAnimation` treats a negative frame as 0 and its walk takes at most
+`numframes - 1` steps for any frame; `CL_AddPacketEntities` also replaces a
+negative frame by 0 after the whole frame selection. See the per-site rows
+in the tables above.
 
 On the normal path of `CL_AddPacketEntities` (no `EF_ANIM*` effect) the
 entity's `ent.frame` is `s1->frame`, a server-chosen value that can be
@@ -680,6 +697,13 @@ the temporary name does not fit.
 
 ### D16: a negative entity `frame` on a sprite model indexes the sprite frame and skin arrays below zero (high, high confidence) [FIX25 (#126)]
 
+Fixed by FIX25. The negative frame also came from a negative client time
+through the `EF_ANIM_ALL` and `EF_ANIM_ALLFAST` branches (see D11). Each of
+the three sprite functions now treats a negative frame as 0 before the
+remainder, with the same test, and `CL_AddPacketEntities` replaces a
+negative frame by 0 after the whole frame selection. See the per-site rows
+in the tables above.
+
 The same server-chosen `ent.frame` (`U_FRAME16` signed short, set on the
 normal path of `CL_AddPacketEntities`) reaches the sprite drawing code of all
 three renderers: `R_DrawSpriteModel` (`gl1_main.c`), `GL3_DrawSpriteModel`
@@ -780,6 +804,7 @@ unfixed finding above is on one of them.
 | FIX15 | #111 | D6 | high |
 | FIX16 | #112 | D7 | medium |
 | FIX25 | #126 | D9, D10, D11, D16 | high |
+| FIX39 | #157 | client time from the server frame number: sign, range, the light-style step | medium |
 | FIX26 | #127 | D12, D13 | low |
 | FIX27 | #128 | D14 | high |
 | FIX28 | #129 | H1, H2, H3, H4, H6, H7 | low |
@@ -787,6 +812,8 @@ unfixed finding above is on one of them.
 | FIX30 | #131 | D17 | medium |
 
 Fixed: FIX11 (D1, #136), FIX13 (D3, D4, D8, #137), FIX14 (D5), FIX15 (D6, #138), FIX27 (D14, #139).
+
+Fixed: FIX25 (D9, D10, D11, D16).
 
 D9, D10, D11 and D16 share a card because they are one class (a server-supplied
 entity or effect field reaching an array index or loop count with a check on

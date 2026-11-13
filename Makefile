@@ -1170,7 +1170,8 @@ endif
 # built with q2ded's flags into a tree of their own) except the unix
 # main.c; tests/unit/main.c supplies main(). One client object,
 # cl_download.c, is linked on its own against the client state stubs in
-# tests/unit/stub_client.c (it includes no SDL). Needs no SDL and no game
+# tests/unit/stub_client.c (it includes no SDL), and one renderer object,
+# refresh/files/surf.c, which needs only shared.c. Needs no SDL and no game
 # data. `make test` builds and runs it; UPDATE_PINS=1 (exactly 1, any
 # other value is ignored) rewrites the pins under tests/pins/unit/
 # instead of comparing; TEST_ARGS passes options or test-name filters to
@@ -1199,6 +1200,7 @@ endif
 TEST_SRCS := $(sort $(wildcard tests/unit/*.c))
 TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SERVER_OBJS_))) \
 	$(TESTDIR)/src/client/cl_download.o \
+	$(TESTDIR)/src/client/refresh/files/surf.o \
 	$(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS))
 TEST_BIN = $(TESTDIR)/yq2test
 
