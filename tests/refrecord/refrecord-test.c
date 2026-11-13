@@ -1784,7 +1784,7 @@ HandlesCb(refrec_type_t type, const refrec_call_t *c, const refrec_frame_t *f, v
 
 	if ((type == REC_STRETCHPIC || type == REC_PICSCALEDCOL) && x->ndraw < 4)
 	{
-		snprintf(x->draw_names[x->ndraw++], 32, "%s", c->name);
+		snprintf(x->draw_names[x->ndraw++], 32, "%.31s", c->name);
 	}
 
 	if (type == REC_PICSCALEDCOL)
