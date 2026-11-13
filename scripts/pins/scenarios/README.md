@@ -55,10 +55,16 @@ Added by TASK70: a demo that shows water, made from the game data by a
 committed console script and never committed itself.
 `scripts/pins.sh make-demo water` runs `scripts/pins/demos/water.cfg` and
 leaves `water.dm2` beside the binary (`release/baseq2/demos/`); record
-`skywater` from it with `PINS_DEMO=water.dm2`. Observed on one host
-(`soft`, the default `PINS_EVERY` 30): six frames, frames 0 to 2 the
-pool of `base1` from just above its surface, frames 3 to 5 from under
-it; two records of one demo file compare at score 0. A script under
+`skywater` from it with `PINS_DEMO=water.dm2`. A console `wait` is a
+lower bound on time, so the demo is longer on a busy host; the script
+states the message range it must give and `make-demo` fails a demo
+outside it. From a demo in range (`soft`, the default `PINS_EVERY` 30)
+the first half of the frames show the pool of `base1` from just above
+its surface and the second half from under it: 4 frames, 2 and 2, in
+every record made so far. Records of one demo file compared at score 0
+in 27 pairs, but differ slightly when the engine stalls, so `skywater`
+from `water.dm2` is accepted at `--bad-threshold 0.03` (its
+`// nondeterministic:` line and the runbook). A script under
 `scripts/pins/demos/` may use only commands that exist in `src/`; the
 driver checks that before it runs one, and the selftest checks every
 committed script.
