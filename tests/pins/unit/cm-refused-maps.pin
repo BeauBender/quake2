@@ -1,0 +1,60 @@
+# Pin "cm-refused-maps", produced by test cm_refused_maps (tests/unit/test_collision.c).
+# Generated from real engine output by `make test UPDATE_PINS=1`
+# (build/<release|debug>/test/yq2test --update-pins). Do not edit by
+# hand: a change to the body below is a behaviour change and its commit
+# says why. The body starts after the separator line.
+# ---
+header cut short:
+  CM_LoadMap: Map <map> is too small (159 bytes)
+wrong version:
+  CMod_LoadBrushModel: <map> has wrong version number (37 should be 38)
+lump past end of file (TASK2):
+  CMod_CheckLumps: Map <map> lump 8 (ofs 336, len 468) lies outside the file (468 bytes)
+lump negative offset (TASK2):
+  CMod_CheckLumps: Map <map> lump 1 (ofs -4, len 20) lies outside the file (468 bytes)
+lump negative length (TASK2):
+  CMod_CheckLumps: Map <map> lump 3 (ofs 0, len -1) lies outside the file (468 bytes)
+lump offset+length wraps (TASK2):
+  CMod_CheckLumps: Map <map> lump 0 (ofs 2147483632, len 32) lies outside the file (468 bytes)
+planes lump not a multiple:
+  Mod_LoadPlanes: funny lump size
+leafs lump not a multiple:
+  CMod_LoadLeafs: funny lump size
+no planes:
+  Map with no planes
+no leafs:
+  CMod_LoadLeafs: Map with no leafs
+leaf 0 not solid:
+  Map leaf 0 is not CONTENTS_SOLID
+no empty leaf:
+  Map does not have an empty leaf
+no texinfo:
+  CMod_LoadSurfaces: Map with no surfaces
+no nodes:
+  CMod_LoadNodes: Map <map> with no nodes
+no models:
+  CMod_LoadSubmodels: Map <map> with no models
+no leafbrushes:
+  Map with no planes
+node plane index too high (TASK2):
+  CMod_LoadNodes: Map <map> node 0 has bad plane index 1 (1 planes)
+node plane index negative (TASK2):
+  CMod_LoadNodes: Map <map> node 0 has bad plane index -1 (1 planes)
+node child node out of range (TASK2):
+  CMod_LoadNodes: Map <map> node 0 has bad child 1 (1 nodes, 2 leafs)
+node child leaf out of range (TASK2):
+  CMod_LoadNodes: Map <map> node 0 has bad child -3 (1 nodes, 2 leafs)
+brushside plane out of range (TASK2):
+  Mod_LoadBrushSides: brushside 0 has bad plane index 1 (1 planes)
+brushside texinfo out of range:
+  Bad brushside texinfo
+leaf leafbrush range (TASK2):
+  CMod_CheckReferences: Map <map> leaf 0 has bad leafbrush range 0+2 (1 leafbrushes)
+leafbrush brush index (TASK2):
+  CMod_CheckReferences: Map <map> leafbrush 0 has bad brush index 1 (1 brushes)
+brush brushside range (TASK2):
+  CMod_CheckReferences: Map <map> brush 0 has bad brushside range 0+2 (1 brushsides)
+submodel headnode node (TASK2):
+  CMod_CheckReferences: Map <map> submodel 0 has bad headnode 1
+submodel headnode leaf (TASK2):
+  CMod_CheckReferences: Map <map> submodel 0 has bad headnode -3
