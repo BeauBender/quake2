@@ -1654,8 +1654,10 @@ SCR_Framecounter(void)
  * Pin harness (TASK27). pins_capture N: while a demo plays, every Nth
  * rendered frame is captured by running the renderer's own screenshot
  * command here, after the frame is complete and before it is presented.
- * The pixels read are then this frame's on every renderer; reading the
- * GL back buffer after the swap is undefined. The frame lands in the pin
+ * Reading the GL back buffer after the swap is undefined, so this runs
+ * before R_EndFrame. gl1 batches 2D quads and flushes them at the end of
+ * the frame, so its screenshot command flushes that batch first
+ * (R_ScreenShot in gl1_misc.c); gl3 and soft draw 2D immediately. The frame lands in the pin
  * store when pins_dir is set (VID_WriteScreenshot in vid.c).
  */
 static void

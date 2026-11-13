@@ -121,7 +121,11 @@ void
 R_ScreenShot(void)
 {
 	int w=vid.width, h=vid.height;
-	byte *buffer = malloc(w*h*3);
+	byte *buffer;
+
+	R_ApplyGLBuffer();	// draw the batched 2D quads, or they are missing from the read
+
+	buffer = malloc(w*h*3);
 
 	if (!buffer)
 	{
