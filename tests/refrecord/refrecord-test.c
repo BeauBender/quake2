@@ -28,7 +28,8 @@
  *   refrecord-test <scratch dir>              the tests
  *   refrecord-test --read <trace> [--names]   reads a trace end to end and
  *       prints counts only (records per type, frames, captures, strings);
- *       with --names the string table, one "kind name" per line
+ *       with --names the string table, one "kind name" per line; every
+ *       name and engine id byte outside 0x20..0x7e is printed as \xNN
  *
  * =======================================================================
  */
@@ -1450,6 +1451,32 @@ typedef struct {
 	char err[128];
 } tracefile_t;
 
+/*
+ * Writes up to max bytes of s, stopping at a NUL, with every byte outside
+ * 0x20..0x7e and the backslash itself as \xNN: names and the engine id
+ * come from the game, a server or a demo, and must not reach a terminal
+ * raw.
+ */
+static void
+PrintEscaped(FILE *out, const char *s, size_t max)
+{
+	size_t i;
+
+	for (i = 0; i < max && s[i]; i++)
+	{
+		unsigned char ch = (unsigned char)s[i];
+
+		if (ch < 0x20 || ch > 0x7e || ch == '\\')
+		{
+			fprintf(out, "\\x%02x", ch);
+		}
+		else
+		{
+			fputc(ch, out);
+		}
+	}
+}
+
 typedef void (*tracefile_cb_t)(refrec_type_t type, const refrec_call_t *call,
 		const refrec_frame_t *frame, void *ctx);
 
@@ -1631,7 +1658,9 @@ ReadTrace(const char *path, tracefile_t *t, tracefile_cb_t cb, void *ctx, FILE *
 
 		if (names)
 		{
-			fprintf(names, "%u %s\n", kind, name);
+			fprintf(names, "%u ", kind);
+			PrintEscaped(names, name, MAX_QPATH);
+			fputc('\n', names);
 		}
 	}
 
@@ -1673,16 +1702,19 @@ static const char *const type_names[REC_LAST + 1] = {
 	"PALETTE", "CVARS", "WARN", "CAPTURE"
 };
 
-/* --read: counts only (and with --names the string table, kind and name per line) */
+/*
+ * --read: counts only (and with --names the string table, kind and name
+ * per line), to out. Names and the engine id are printed escaped.
+ */
 static int
-ReadMode(const char *path, qboolean names)
+ReadMode(const char *path, qboolean names, FILE *out)
 {
 	tracefile_t t;
 	int i;
 
-	if (!ReadTrace(path, &t, NULL, NULL, names ? stdout : NULL))
+	if (!ReadTrace(path, &t, NULL, NULL, names ? out : NULL))
 	{
-		printf("trace: refused: %s\n", t.err);
+		fprintf(out, "trace: refused: %s\n", t.err);
 		return 1;
 	}
 
@@ -1691,30 +1723,32 @@ ReadMode(const char *path, qboolean names)
 		return 0;
 	}
 
-	printf("trace: %u bytes, %u frames, %u captures, flags %u, %ux%u, capture every %u, api %u, run %.16s-%u\n",
+	fprintf(out, "trace: %u bytes, %u frames, %u captures, flags %u, %ux%u, capture every %u, api %u, run ",
 			t.size, t.h.frame_count, t.captures, t.h.flags, t.h.width, t.h.height, t.h.capture_every,
-			t.h.api_version, t.h.engine_sha, t.h.scenario_hash);
-	printf("strings: %u (models %u, skins %u, pics %u, skies %u, maps %u)\n", t.strings,
+			t.h.api_version);
+	PrintEscaped(out, t.h.engine_sha, sizeof(t.h.engine_sha));
+	fprintf(out, "-%u\n", t.h.scenario_hash);
+	fprintf(out, "strings: %u (models %u, skins %u, pics %u, skies %u, maps %u)\n", t.strings,
 			t.kinds[REFREC_KIND_MODEL], t.kinds[REFREC_KIND_SKIN], t.kinds[REFREC_KIND_PIC],
 			t.kinds[REFREC_KIND_SKY], t.kinds[REFREC_KIND_MAP]);
-	printf("records:");
+	fprintf(out, "records:");
 
 	for (i = REC_FIRST; i <= REC_LAST; i++)
 	{
-		printf(" %s=%u", type_names[i], t.types[i]);
+		fprintf(out, " %s=%u", type_names[i], t.types[i]);
 	}
 
-	printf("\nwarnings:");
+	fprintf(out, "\nwarnings:");
 
 	for (i = 1; i < 16; i++)
 	{
 		if (t.warns[i])
 		{
-			printf(" %d=%u", i, t.warns[i]);
+			fprintf(out, " %d=%u", i, t.warns[i]);
 		}
 	}
 
-	printf("\n");
+	fprintf(out, "\n");
 
 	return 0;
 }
@@ -2645,6 +2679,68 @@ TestRecordHandlesFull(void)
 			t.warns[REFREC_WARN_UNKNOWN_HANDLE]);
 }
 
+/*
+ * --read and --read --names print every name byte and engine id byte
+ * outside 0x20..0x7e (and the backslash) escaped: a server or a demo
+ * chooses those bytes.
+ */
+static void
+TestReadEscapes(void)
+{
+	static const char sky[] = "s\x1b[2J\x01\x7f\xff\\e";
+	char sub[32], buf[4096];
+	const float rot[4] = { 0, 0, 0, 1.0f };
+	const char *path;
+	size_t n, i;
+	qboolean clean = true;
+	FILE *out;
+	int pass;
+
+	snprintf(sub, sizeof(sub), "e%cx-42", 0x1b);
+	path = TracePath(sub);
+	RefRec_StartRecord(path, 640, 480, 0);
+	RefRec_Registration(REC_BEGINREG, "maps/m\x07.bsp", NULL);
+	RefRec_Draw(REC_SKY, NULL, 0, rot, 4, sky, NULL, 0);
+	RefRec_StopRecord();
+
+	for (pass = 0; pass < 2; pass++)
+	{
+		out = tmpfile();
+
+		if (!out)
+		{
+			CHECK(0, "escapes: tmpfile");
+			return;
+		}
+
+		CHECK(ReadMode(path, pass == 1, out) == 0, "escapes: --read refused the trace");
+		rewind(out);
+		n = fread(buf, 1, sizeof(buf) - 1, out);
+		buf[n] = '\0';
+		fclose(out);
+
+		for (i = 0; i < n; i++)
+		{
+			if ((buf[i] < 0x20 || buf[i] > 0x7e) && buf[i] != '\n')
+			{
+				clean = false;
+			}
+		}
+
+		if (pass == 0)
+		{
+			CHECK(strstr(buf, "run e\\x1bx-42\n") != NULL, "escapes: engine id not escaped: %s", buf);
+		}
+		else
+		{
+			CHECK(strstr(buf, "4 s\\x1b[2J\\x01\\x7f\\xff\\x5ce\n") != NULL &&
+					strstr(buf, "5 maps/m\\x07.bsp\n") != NULL, "escapes: names not escaped: %s", buf);
+		}
+	}
+
+	CHECK(clean, "escapes: a byte outside 0x20..0x7e reached the output");
+}
+
 /* The string table and frame index readers refuse malformed entries. */
 static void
 TestTableReaders(void)
@@ -2702,7 +2798,7 @@ main(int argc, char **argv)
 {
 	if (argc >= 3 && strcmp(argv[1], "--read") == 0)
 	{
-		return ReadMode(argv[2], argc >= 4 && strcmp(argv[3], "--names") == 0);
+		return ReadMode(argv[2], argc >= 4 && strcmp(argv[3], "--names") == 0, stdout);
 	}
 
 	if (argc != 2 || strlen(argv[1]) >= sizeof(test_dir))
@@ -2732,6 +2828,7 @@ main(int argc, char **argv)
 	TestRecordWriteError();
 	TestRecordHandlesFull();
 	TestRecordStopSweep();
+	TestReadEscapes();
 	TestTableReaders();
 
 	printf("refrecord: %d checks, %d failed\n", checks, failures);
