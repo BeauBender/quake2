@@ -18,7 +18,9 @@ This builds `build/release/test/yq2test` (or `build/debug/test/` with
 dedicated server `q2ded`, built with the same flags, plus
 `src/client/cl_download.c`; only `main()` is replaced by the test
 runner. The last line says how many tests ran and how many failed; the
-exit status is non-zero on any failure. `make clean` removes the build.
+exit status is 1 when a test failed and 2 when no test ran at all (a
+name filter that matches nothing, or a usage error), so a run that
+proved nothing never passes. `make clean` removes the build.
 
 Options for the runner go into `TEST_ARGS`:
 
@@ -28,8 +30,13 @@ make test TEST_ARGS="--verbose msg_"  # run tests whose name contains msg_,
                                       # and print what the engine printed
 ```
 
+`--list` only prints the test names and exits 0; it is not a test run.
+
 The suite also runs as part of `scripts/test.sh`, the check every commit
-must pass.
+must pass. The gate calls `make test UPDATE_PINS= TEST_ARGS=`, so
+neither variable set in the environment reaches it: the gate always
+runs every test and only ever compares against the pins, it never
+rewrites them. `scripts/coverage.sh` does the same.
 
 ## Pins
 
@@ -48,6 +55,9 @@ the pins and review the diff:
 make test UPDATE_PINS=1
 git diff tests/pins/unit/
 ```
+
+Only the exact value `1` turns this on; `UPDATE_PINS=0` or any other
+value compares as usual.
 
 Commit the changed pins together with the change that caused them and
 say in the commit message why the output changed. A pin diff nobody

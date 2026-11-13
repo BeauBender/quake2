@@ -9,7 +9,9 @@
 # are not built here. Last it builds and runs the unit-test suite
 # (make test: tests/unit against the real q2ded objects, pins under
 # tests/pins/unit; see doc/085_unittests.md). Coverage is a separate,
-# slower command: scripts/coverage.sh.
+# slower command: scripts/coverage.sh. UPDATE_PINS= TEST_ARGS= on the make
+# command line override anything the environment holds: the gate never
+# rewrites a pin and never runs a filtered subset of the suite.
 #
 # Usage: scripts/test.sh            (from anywhere; exits non-zero on failure)
 #
@@ -26,4 +28,4 @@ for check in tests/check-*.sh; do
 done
 
 make -B -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)" server game
-make -B -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)" test
+make -B -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)" UPDATE_PINS= TEST_ARGS= test

@@ -80,9 +80,10 @@ fi
 
 # -B for the same reason as in scripts/test.sh: no header dependencies
 # on Darwin. %m merges the profiles of the forked children (t_expect_exit)
-# into the parent's file.
+# into the parent's file. UPDATE_PINS= TEST_ARGS= as in scripts/test.sh:
+# the environment cannot turn the run into a pin rewrite or a subset.
 LLVM_PROFILE_FILE="$PWD/$outdir/profiles/yq2test-%m.profraw" \
-	make -B -j"$jobs" COVERAGE=1 CC="$cc" test
+	make -B -j"$jobs" COVERAGE=1 CC="$cc" UPDATE_PINS= TEST_ARGS= test
 
 # Per-file "<path> <lines> <missed>" for engine sources (not tests/).
 summary="$outdir/profiles/files.txt"

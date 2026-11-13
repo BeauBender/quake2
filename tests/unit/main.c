@@ -507,6 +507,7 @@ main(int argc, char **argv)
 	t_case_t **list, *tc;
 	int i, n = 0, failed = 0, ran = 0;
 	int list_only = 0;
+	int filtered = 0;
 	const char *tmpbase;
 
 	for (i = 1; i < argc; i++)
@@ -532,6 +533,10 @@ main(int argc, char **argv)
 			fprintf(stderr, "usage: %s [--update-pins] [--pins DIR] [--verbose] [--list] [NAME...]\n", argv[0]);
 			return 2;
 		}
+		else
+		{
+			filtered = 1;
+		}
 	}
 
 	list = malloc(sizeof(*list) * (t_ncases + 1));
@@ -543,6 +548,9 @@ main(int argc, char **argv)
 
 	qsort(list, n, sizeof(*list), t_case_cmp);
 
+	/* --list is not a test run and exits 0. The gate cannot reach this:
+	   scripts/test.sh and scripts/coverage.sh run `make ... TEST_ARGS= test`,
+	   so no runner option from the environment gets through. */
 	if (list_only)
 	{
 		for (i = 0; i < n; i++)
@@ -662,5 +670,21 @@ main(int argc, char **argv)
 	}
 
 	printf("yq2test: %d tests, %d failed\n", ran, failed);
+
+	/* A run that ran nothing proved nothing: never report it as a pass. */
+	if (ran == 0)
+	{
+		if (filtered)
+		{
+			fprintf(stderr, "yq2test: no test name matches the filter\n");
+		}
+		else
+		{
+			fprintf(stderr, "yq2test: no tests are registered\n");
+		}
+
+		return 2;
+	}
+
 	return failed ? 1 : 0;
 }

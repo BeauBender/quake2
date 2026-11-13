@@ -1170,9 +1170,11 @@ endif
 # main.c; tests/unit/main.c supplies main(). One client object,
 # cl_download.c, is linked on its own against the client state stubs in
 # tests/unit/stub_client.c (it includes no SDL). Needs no SDL and no game
-# data. `make test` builds and runs it; UPDATE_PINS=1 rewrites the pins
-# under tests/pins/unit/ instead of comparing; TEST_ARGS passes options
-# or test-name filters to the runner. COVERAGE=1 builds an instrumented
+# data. `make test` builds and runs it; UPDATE_PINS=1 (exactly 1, any
+# other value is ignored) rewrites the pins under tests/pins/unit/
+# instead of comparing; TEST_ARGS passes options or test-name filters to
+# the runner. scripts/test.sh and scripts/coverage.sh clear both on the
+# make command line, so the gate always compares and runs every test. COVERAGE=1 builds an instrumented
 # copy under build/coverage (scripts/coverage.sh drives that).
 ifneq ($(YQ2_OSTYPE), Windows)
 
@@ -1203,7 +1205,7 @@ TEST_BIN = $(TESTDIR)/yq2test
 
 test: $(TEST_BIN)
 	@echo "===> TEST $(TEST_BIN)"
-	${Q}$(TEST_BIN) $(if $(UPDATE_PINS),--update-pins) $(TEST_ARGS)
+	${Q}$(TEST_BIN) $(if $(filter 1,$(UPDATE_PINS)),--update-pins) $(TEST_ARGS)
 
 $(TESTDIR)/%.o: %.c
 	@if [ -z $(QUIET) ]; then\
