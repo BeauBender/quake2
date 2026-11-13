@@ -14,3 +14,5 @@ them (record 0004); one becomes a record here when it is settled.
 | [0001](0001-remove-optional-dependencies.md) | Remove optional external and vendored dependencies |
 | [0002](0002-gnu-make-only.md) | GNU Make is the only build system |
 | [0004](0004-no-human-tier.md) | No change waits for a person: the loop merges everything that passes review and the gates |
+
+Number 0003 is taken by a record that lands separately.
