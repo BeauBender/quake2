@@ -42,11 +42,74 @@ cinematic and areabits bounds that this audit treats as the baseline.
 
 ## Method and coverage
 
-Filled in at the end of the audit.
+Each loader was located by symbol, read in full (not grepped), and every value
+read from a file that is later used as a size, count, loop bound, index,
+pointer offset, allocation size or path was tabled with the check that guards
+it or the note that none does. Where a function compiles without SDL or GL, a
+throwaway host-side harness (in a scratch directory, not committed) linked the
+real function against minimal stubs and ran crafted in-memory inputs under
+`-fsanitize=address`; its output is quoted in the relevant section. Harnesses
+were built for `collision.c` (the earlier commits), `files/models.c`,
+`files/pvs.c` and `gl1/gl1_warp.c`. Renderer surface, light and sound code
+pulls in SDL/GL or the full client import struct and was not harnessed; those
+findings are static traces with a stated confidence.
+
+Files read in full: `src/common/collision.c`, `src/common/filesystem.c`,
+`src/client/refresh/files/{models.c,pcx.c,wal.c,stb.c,pvs.c,surf.c,common.c}`,
+`src/client/refresh/{gl1,gl3,soft}/*_model.c`, the `_surf.c`, `_light.c`,
+`_lightmap.c`, `_mesh.c`, `_warp.c`, `_image.c`, `sw_alias.c`, `sw_poly.c`,
+`sw_polyset.c`, `sw_rast.c`, `sw_bsp.c`, `sw_sprite.c` consumers of the fields
+the loaders set, `src/client/sound/{wave.c,sound.c,sdl.c}`,
+`src/client/cl_cin.c`, `src/game/g_spawn.c`, `src/common/shared/shared.c`
+(`COM_Parse`), and `src/client/cl_download.c`.
+
+Out of scope, not read as loaders: the vendored `stb_image.h`,
+`stb_image_resize.h` and `stb_vorbis.h` internals (cards exist to remove them;
+only the repo code that calls them is audited), the gl3 GLSL shader text, and
+the OGG decode path in `sound/ogg.c` beyond the `wavinfo_t` it produces (it is
+`stb_vorbis`, vendored). The savegame reader (`src/game/savegame/savegame.c`)
+is a separate trust story (local files) and is not an asset loader.
 
 ## Where each asset can come from
 
-Filled in at the end of the audit.
+This sets the severity of every finding, so it is stated precisely and
+verified in `src/client/cl_download.c`.
+
+On the client, the model, sound and image names are the server's
+configstrings (`cl.configstrings[CS_MODELS..]`, `CS_SOUNDS..`, `CS_IMAGES..`,
+plus the sky in `CS_SKY` and player skins). `CL_RequestNextDownload` walks
+those configstrings and, for each name, calls `CL_CheckOrDownloadFile`, whose
+only gate is `CL_DownloadFilter`. That filter rejects a name that starts with
+`.` or `/`, contains `:` or `..`, ends in a library extension
+(`.dll`, `.dylib`, `.lib`, `.so`, `.a`), or matches the `cl_nodownload_list`
+cvar. It does **not** restrict the asset extension: a server can name a
+`.md2`, `.sp2`, `.bsp`, `.pcx`, `.wal`, `.m8`, `.m32`, `.tga`, `.png`, `.jpg`,
+`.wav` or `.cin` file in a configstring, the client downloads it to the game
+directory, and the matching loader then parses it. `allow_download` is created
+with default `"1"` (`Cvar_Get("allow_download", "1", CVAR_ARCHIVE)` in
+`sv_main.c`, shared with the client in the integrated engine), and the
+per-type `allow_download_models` / `_sounds` / `_maps` gate only whether that
+class is fetched, not what is accepted. So with stock settings effectively
+every format in this audit can arrive over the network from a server the user
+connected to, as a downloaded file that a loader then reads.
+
+Even with `allow_download 0`, the same loaders run on whatever files are
+already in the search path, and a map, model or sound referenced by the server
+is loaded from a `.pak` or loose file the user may have installed from an
+untrusted source (custom maps and mods are routinely shared as `.pak`). The
+`.pak` directory itself (`FS_LoadPAK`) is parsed from any `*.pak` that lands in
+a search directory, including the write directory a download writes to.
+
+On the server, the untrusted asset is the map: `CM_LoadMap` parses the BSP and
+its entity string, and the `.ent` override is a loose file. A dedicated server
+that loads a community map runs the collision and entity-string parsers over
+attacker-authored bytes.
+
+The practical conclusion: the renderer BSP, MD2/SP2, image, WAV and cinematic
+findings are all reachable from a malicious or compromised server against a
+default client, which is why the memory-corruption ones (D8, D9, D10, D18,
+D25, D26) are rated high. The pak-directory findings (D4, D5, D6) need a
+hostile `.pak` in a search path, a lower but real bar.
 
 ## Collision BSP (`src/common/collision.c`)
 
@@ -537,3 +600,171 @@ example an out-of-range `style` on `func_areaportal`, which becomes a
 section (D3). No host harness was run: `g_spawn.c` is the game module and links
 against the full `game_import_t`; the writes were traced to the `fields[]`
 table, which is compile-time data.
+
+## By design / out of scope
+
+- **`svc_stufftext` runs arbitrary console commands on the client.** This is
+  the engine's design (`CLAUDE.md`, "Security-relevant boundaries") and is not
+  a loader defect; it is why the save-name and download filters matter, but it
+  is not filtered here.
+- **`FS_FOpenFile` does not strip `..` from an asset name.** A server-named
+  model/sound/image path can read a file outside the search paths. The bytes
+  are parsed as an asset and never sent back, so this is a read-only
+  information path, noted as hardening in the filesystem section, not a new
+  defect. Downloads (the write path) are filtered by `CL_DownloadFilter`.
+- **Vendored `stb_image`, `stb_image_resize`, `stb_vorbis`.** The TGA/PNG/JPG
+  and OGG decoders are third-party code slated for removal; only the repo code
+  around their calls is audited. A fuzzing pass on the stb internals belongs
+  with the removal cards, not here.
+- **Misaligned loads.** Several loaders cast `cmod_base + fileofs` or
+  `mod_base + fileofs` to typed structs without an alignment check. This is
+  undefined behaviour that UBSAN flags but is harmless on x86-64 and arm64;
+  listed as hardening, not carded.
+- **Unterminated fixed-size name fields** (`texinfo.texture[32]`, MD2/SP2 skin
+  names, surface names) read to the next NUL. `FS_LoadFile` appends one zero
+  byte past the buffer, which bounds the worst case; listed as hardening.
+- **Savegames** (`savegame.c`) read local files the user chose and are a
+  different trust model; not an asset loader.
+
+## Defects
+
+Severity is `sev` (low/medium/high) for the memory-safety impact against the
+reachability in [Where each asset can come from](#where-each-asset-can-come-from);
+`conf` is confidence that the finding is real.
+
+| ID | Where | One line | sev | conf |
+|---|---|---|---|---|
+| D1 | `collision.c` `CM_DecompressVis` | input never bounded by `numvisibility`; a zero-length run writes a full `row` past the 8192-byte output when `row` is large | medium | high (ASAN) |
+| D2 | `collision.c` `CM_InitBoxHull` | box-hull leaf written past `map_leafs` when the map uses every leaf slot | high | high (ASAN) — **fixed in this branch** |
+| D3 | `collision.c` `CM_SetAreaPortalState` | `portalnum` has no lower bound and an off-by-one upper bound | medium | high (ASAN) — negative side **fixed in this branch**; off-by-one remains |
+| D4 | `filesystem.c` `FS_LoadPAK` | directory read past EOF leaves `info` uninitialised; `Q_strlcpy` then over-reads an unterminated pack name | medium | high |
+| D5 | `filesystem.c` `FS_LoadPAK` | a 12-byte header asks for a ~2 GB `malloc` plus ~2.4 GB `calloc`; failure is `ERR_FATAL` | medium | high |
+| D6 | `filesystem.c` `FS_FOpenFile`/`FS_LoadFile2` | pack entry `offset`/`size` never bounded by the file; negative size leaks the handle, oversize size `ERR_FATAL`s | medium | high |
+| D7 | renderer `Mod_ForName` | 1-2 byte model file read up to 2 bytes past the `length + 1` allocation at the format switch | low | high |
+| D8 | renderer `Mod_ClusterPVS`/`Mod_DecompressVis` | vis offsets and `numclusters` unbounded; the `static decompressed[8192]` overflows on write | high | high (ASAN) |
+| D9 | renderer `Mod_NumberLeafs` | a node DAG (shared children, no cycle) walks a leaf 2^n times, overrunning two `int[MAX_MAP_LEAFS]` stack arrays | high | high (ASAN) |
+| D10 | gl1/gl3 `R_SubdivideSurface` | a `SURF_WARP` face with >64 edges overruns `vec3_t verts[64]` on the stack before the vertex-count check | high | high (ASAN) |
+| D11 | renderer faces/edges | `numedges`/`firstedge`/surfedge/`edge.v[]` indices unbounded against `numsurfedges`/`numedges`/`numvertexes`; negative `numedges` gives a negative `Hunk_Alloc` | high | high (static) |
+| D12 | renderer `Mod_LoadFaces` | `lightofs` only tested for `-1`; any other value offsets `lightdata` and is read and uploaded as lightmap texels | medium | high (static) |
+| D13 | renderer `Mod_LoadTexinfo` | `nexttexinfo` unbounded; a chain that loops hangs the frame-count walk, a large value reads a wild pointer | medium | high (ASAN) |
+| D14 | renderer nodes/submodels | node `firstface`/`numfaces`, submodel `headnode`/`firstface` unbounded against `numsurfaces`/`numnodes`; stray surface pointer is written into a texture chain | high | high (static) |
+| D15 | soft `Mod_LoadMarksurfaces` | a negative leaf-face index wrote `visframe` before the surfaces array | medium | high — **fixed in this branch** |
+| D16 | MD2 `lightnormalindex` | a vertex normal index 162..255 reads up to ~1 KB past the 162-row `r_avertexnormals` table | low | high (static) |
+| D17 | MD2 soft skin path | `skinwidth`/`skinheight` unchecked (div, scale); `st` coords never bounded by the skin size, over-reading texels in the rasterizer | medium | medium (static) |
+| D18 | SP2 `Mod_LoadSP2` | no length check (reads/writes past a short file); `numframes` zero divides, negative indexes `skins[]`/`frames[]` out of range | high | high (ASAN for the over-read) |
+| D19 | PCX `PCX_Decode` | `full_size = (h+1)*(w+1)[*4]` is `int` and overflows for near-max dimensions, undersizing the decode buffer | medium | high (static) |
+| D20 | PCX 1/2/4-bit path | `line[x / div]` can exceed a `bytes_per_line`-byte row when `bytes_per_line` is tiny | low | medium (static) |
+| D21 | `GetPCXInfo` | reads `xmax`/`ymax` without a header-size check; over-reads a short file | low | high (static) |
+| D22 | `R_LoadImage`/soft scale | `width * height` (and `* 4`) is `int` and can overflow for large stb dimensions; the gl renderers guard the scale product, soft and the copy length do not | medium | medium (static) |
+| D23 | `wave.c` chunk walk | `GetLittleLong`/`strncmp` read a few bytes past `iff_end` at a chunk boundary | low | high (static) |
+| D24 | `wave.c` cue `loopstart` | loop point unbounded; `SDL_Cache` turns it into a mixer `pos`/`end` past the cached sample | medium | medium (static) |
+| D25 | `wave.c` data chunk | the data-length word and `dataofs` are trusted without comparison to `wavlength`; four consumers read `info.samples` elements from `data + dataofs` | high | high (static) |
+| D26 | `cl_cin.c` `SCR_PlayCinematic` | still-image name copied into `char namewe[256]` by length; `MAX_OSPATH` is 4096 on non-Apple Unix, so a long server name overruns the stack buffer | high | high (static) |
+
+Fixed in this branch: D2, D3 (negative side), D15 — each a one-line bound
+check in its loader, committed separately and noted in its row.
+
+## Cards to file
+
+One card per defect class. Acceptance names a regression check that runs
+without the engine: a crafted in-memory file passed to the real loader through
+a host-side harness under ASAN, the same shape used to prove several findings
+here. The author does not file these.
+
+### Card 1 — Harden the renderer BSP loaders against file-sourced counts, offsets and indices
+- **Severity:** high. **Covers:** D7, D8, D9, D10, D11, D12, D13, D14 in
+  `files/models.c`, `files/pvs.c`, `gl1/gl1_model.c`, `gl3/gl3_model.c`,
+  `soft/sw_model.c`, `gl1/gl1_warp.c`, `gl3/gl3_warp.c`.
+- Goal: the renderer must bound every file-sourced edge, surfedge, vertex,
+  face, leaf-face, lightofs, texinfo link, node/submodel face range and vis
+  offset itself, not rely on `CM_LoadMap` running first on the same file.
+- Scope: add range checks in the shared and per-renderer brush loaders
+  (`Com_Error(ERR_DROP, ...)` on a bad value); bound the warp subdivision
+  before the vertex copy; bound `Mod_DecompressVis` output by the destination
+  and input by the lump; make `Mod_NumberLeafs` reject a re-entered node.
+- Acceptance: each path rejects an out-of-range value; a host-side harness
+  loads a crafted BSP per defect and ASAN reports no overflow; stock maps load
+  (trace). `scripts/test.sh` green.
+- Suggested model: opus (many sites, three renderers, easy to break rendering).
+
+### Card 2 — Validate MD2 vertex/skin indices and SP2 length and frame count
+- **Severity:** high. **Covers:** D16, D17, D18 in `files/models.c` (with soft
+  consumers in `sw_alias.c`, `sw_polyset.c`).
+- Goal: MD2 and SP2, loaded only by the renderer, reject malformed counts and
+  dimensions before any consumer reads them.
+- Scope: bound MD2 `lightnormalindex` (clamp or validate against
+  `NUMVERTEXNORMALS`), reject `skinwidth`/`skinheight <= 0`, bound `st`
+  coordinates to the skin; in `Mod_LoadSP2` check the file length against
+  `numframes` records and reject `numframes <= 0`.
+- Acceptance: a crafted MD2 (bad normal index, zero skin size) and a 12-byte
+  SP2 claiming 32 frames are rejected under a host harness with no ASAN error;
+  stock models load. `scripts/test.sh` green.
+- Suggested model: sonnet.
+
+### Card 3 — Fix integer overflow and over-reads in the image loaders
+- **Severity:** medium. **Covers:** D19, D20, D21, D22 in `files/pcx.c`,
+  `files/stb.c`, `soft/sw_image.c`.
+- Goal: image dimensions cannot overflow a size computation, and the PCX line
+  decode cannot read past its row.
+- Scope: compute `full_size` and `width * height` in 64-bit with a cap
+  (`R_Convert8to32` already shows the pattern) in PCX_Decode, `R_LoadImage`,
+  `LoadHiColorImage` and the soft scale2x path; bound the 1/2/4-bit `line`
+  index; add a header-size check to `GetPCXInfo`.
+- Acceptance: a PCX with near-`INT_MAX` dimensions is rejected, not
+  wrapped; a 2-bit PCX with `bytes_per_line == 1` does not over-read (harness +
+  ASAN); real textures load. `scripts/test.sh` green.
+- Suggested model: sonnet.
+
+### Card 4 — Bound the WAV header against the file length
+- **Severity:** high. **Covers:** D23, D24, D25 in `sound/wave.c`, with the
+  consumers in `sound/sound.c` and `sound/sdl.c`.
+- Goal: `GetWavinfo` cannot report more samples, or a data offset, than the
+  file holds, and the chunk walk cannot read past the buffer.
+- Scope: in `GetWavinfo`, bound every chunk read against `iff_end`; reject
+  `dataofs > wavlength` and `samples > (wavlength - dataofs) / (width *
+  channels)`; clamp `loopstart` to `samples`.
+- Acceptance: a `.wav` whose data-length word exceeds the file is rejected or
+  clamped, and `S_GetVolume`/`SDL_Cache` read only in-bounds (harness over the
+  extracted `GetWavinfo` plus a reader stub, under ASAN); real sounds load.
+  `scripts/test.sh` green.
+- Suggested model: sonnet.
+
+### Card 5 — Fix the cinematic still-image name buffer overflow
+- **Severity:** high (low effort). **Covers:** D26 in `cl_cin.c`.
+- Goal: a server-supplied cinematic name cannot overflow `namewe` on
+  platforms where `MAX_OSPATH` is 4096.
+- Scope: size `namewe` as `MAX_OSPATH` (or build it with `Q_strlcpy` /
+  `COM_StripExtension` into a bounded buffer) in `SCR_PlayCinematic`.
+- Acceptance: a ~4000-character `.pcx` cinematic name does not overflow
+  (ASAN build, `+exec` of a crafted `svc_playerinfo`, or a direct unit call to
+  `SCR_PlayCinematic`); normal cinematics still play. `scripts/test.sh` green.
+- Suggested model: haiku.
+
+### Card 6 — Validate the pak directory against the pack file size
+- **Severity:** high. **Covers:** D4, D5, D6 in `filesystem.c` (`FS_LoadPAK`,
+  `FS_FOpenFile`, `FS_LoadFile2`).
+- Goal: a `.pak` in a search path cannot drive an over-read of its directory,
+  an unbounded allocation, or an out-of-range file read.
+- Scope: check the `fread` return for header and directory; bound `dirofs +
+  dirlen` and `numFiles` against the on-disk size; reject or bound each
+  entry's `filepos`/`filelen` against the pack size; close the handle on the
+  negative-size early return in `FS_LoadFile2`.
+- Acceptance: a 12-byte and a truncated-directory `.pak` are rejected without
+  over-read or giant allocation (harness over `FS_LoadPAK` with a stubbed
+  file layer, ASAN); stock `pak0.pak` loads. `scripts/test.sh` green.
+- Suggested model: sonnet.
+
+### Card 7 — Close the remaining collision BSP gaps (vis input bound, areaportal off-by-one)
+- **Severity:** medium. **Covers:** D1 and the remaining off-by-one of D3 in
+  `collision.c`, distinct from FIX3 (#44) and FIX10 (#73).
+- Goal: `CM_DecompressVis` cannot be driven past its output or input buffer
+  even when the vis offset check from FIX3 is in place, and
+  `CM_SetAreaPortalState` cannot write at `portalopen[numareaportals]`.
+- Scope: bound the `CM_DecompressVis` input pointer by `numvisibility` and the
+  output by `row <= sizeof(buffer)` including the zero-run case; change the
+  `portalnum > numareaportals` test to `>=`.
+- Acceptance: a 12-byte visibility lump that satisfies a FIX3-style offset
+  check still does not overflow `map_visibility` (harness, ASAN), and
+  `CM_SetAreaPortalState(numareaportals, true)` is rejected; stock maps load.
+  `scripts/test.sh` green.
+- Suggested model: sonnet.
