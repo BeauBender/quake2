@@ -1650,6 +1650,42 @@ SCR_Framecounter(void)
  * This is called every frame, and can also be called
  * explicitly to flush text to the screen.
  */
+/*
+ * Pin harness (TASK27). pins_capture N: while a demo plays, every Nth
+ * rendered frame is captured by running the renderer's own screenshot
+ * command here, after the frame is complete and before it is presented.
+ * The pixels read are then this frame's on every renderer; reading the
+ * GL back buffer after the swap is undefined. The frame lands in the pin
+ * store when pins_dir is set (VID_WriteScreenshot in vid.c).
+ */
+static void
+SCR_PinsCapture(void)
+{
+	static cvar_t *pins_capture;
+	static int demoframe;
+	char cmd[] = "screenshot tga";
+	int every;
+
+	if (!pins_capture)
+	{
+		pins_capture = Cvar_Get("pins_capture", "0", 0);
+	}
+
+	every = (int)pins_capture->value;
+
+	if ((every <= 0) || !cl.attractloop || (cls.state != ca_active) ||
+		!cl.refresh_prepped)
+	{
+		demoframe = 0;
+		return;
+	}
+
+	if ((demoframe++ % every) == 0)
+	{
+		Cmd_ExecuteString(cmd);
+	}
+}
+
 void
 SCR_UpdateScreen(void)
 {
@@ -1798,6 +1834,7 @@ SCR_UpdateScreen(void)
 	}
 
 	SCR_Framecounter();
+	SCR_PinsCapture();
 	R_EndFrame();
 }
 

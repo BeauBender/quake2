@@ -1,8 +1,9 @@
 /*
  * scripts/pins/framediff.c -- tolerant frame comparator for the pin harness
- * (TASK27). Stand-in for the dev-loop pin plugin's diff tool: same CLI
- * contract (PINS_DIFF a.tga b.tga -> "score=<0..1>" on stdout, exit 0 when
- * score <= threshold, 2 when above, 3 on a format or size mismatch).
+ * (TASK27). The default comparator. Another one with the same CLI contract
+ * can replace it through PINS_DIFF: "<diff> a.tga b.tga --threshold T"
+ * prints "score=<0..1>" on stdout and exits 0 when score <= threshold, 2
+ * when above, 3 on a format or size mismatch.
  *
  * Reads uncompressed 24/32-bit TGA (type 2), the format the engine's pin
  * capture writes. Portable C99, no dependencies: cc -O2 -o framediff framediff.c

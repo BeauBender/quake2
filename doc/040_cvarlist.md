@@ -804,6 +804,6 @@ the engine behaves exactly as before.
 * **pins_scenario**: The file-name prefix for frames written by `pins_dir`.
   Default: `pin`.
 
-* **pins_capture**: During demo playback, request a screenshot every N client
-  frames; when playback ends, quit so a scenario run is unattended. `0`
-  (the default) disables both.
+* **pins_capture**: While a demo plays, capture every Nth rendered frame, after
+  the frame is complete and before it is presented; when playback ends,
+  quit so a scenario run is unattended. `0` (the default) disables both.
