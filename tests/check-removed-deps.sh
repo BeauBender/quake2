@@ -15,7 +15,7 @@ cd "$(dirname "$0")/.."
 export LC_ALL=C
 
 fail=0
-for path in src/client/curl src/common/unzip src/client/sound/openal.c src/client/sound/qal.c \
+for path in src/client/curl src/common/unzip src/client/sound/openal.c src/client/sound/qal.c src/client/vid/header/stb_image_write.h \
 	src/client/refresh/gl3/glad-gles3 CMakeLists.txt; do
 	if [ -e "$path" ]; then
 		echo "check-removed-deps: $path is back"
