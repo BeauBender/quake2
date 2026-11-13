@@ -437,11 +437,13 @@ demo_cmds() {
 # check_demo_script <file> <name>: every line is a comment, an alias of
 # commands, or "<command> [<argument>...]" whose command exists in src/ (or
 # is an alias defined above it); one "map <map>" line, exactly one
-# "record <name>", and the script ends with stop, then quit
+# "record <name>", and the script ends with stop, then quit. Every line
+# beginning "// pins:" must be the one range line; it sets demo_lo and demo_hi
 check_demo_script() {
     local file=$1 name=$2 line n=0 cmd piece known aliases=" " records=0 maps=0 last="" prev="" aname body
     local re_alias='^alias ([a-z0-9_]+) "([a-z0-9_]+(;[a-z0-9_]+)*)"$'
-    local re_range='^// pins: messages ([1-9][0-9]*) ([1-9][0-9]*)$' ranges=0
+    local re_range='^// pins: messages ([1-9][0-9]{0,8}) ([1-9][0-9]{0,8})$' ranges=0
+    demo_lo=""; demo_hi=""
     known=$(demo_cmds)
     [ -n "$known" ] || die "cannot read the console commands from $root/src"
     while IFS= read -r line || [ -n "$line" ]; do
@@ -449,11 +451,13 @@ check_demo_script() {
         case $line in
             '') continue;;
             //*) case $line in *\;*|*\"*) die "$name.cfg line $n: a comment must not hold ; or a quote (the engine splits commands on them): $line";; esac
-                if [[ $line =~ $re_range ]]; then
+                case $line in '// pins:'*)
+                    [[ $line =~ $re_range ]] ||
+                        die "$name.cfg line $n: a '// pins:' line must be exactly '// pins: messages <low> <high>', two positive integers without a leading zero, single spaces: $line"
                     [ "${BASH_REMATCH[1]}" -ge 10 ] && [ "${BASH_REMATCH[1]}" -le "${BASH_REMATCH[2]}" ] ||
                         die "$name.cfg line $n: the message range must start at 10 or more and not end below its start: $line"
-                    ranges=$((ranges+1))
-                fi
+                    ranges=$((ranges+1)); demo_lo=${BASH_REMATCH[1]}; demo_hi=${BASH_REMATCH[2]};;
+                esac
                 continue;;
         esac
         case $line in *..*) die "$name.cfg line $n: must not contain '..': $line";; esac
@@ -483,8 +487,9 @@ check_demo_script() {
     [ "$ranges" -eq 1 ] || die "$name.cfg: needs exactly one '// pins: messages <low> <high>' line, has $ranges"
     [ "$prev" = stop ] && [ "$last" = quit ] || die "$name.cfg: must end with 'stop', then 'quit'"
 }
-# demo_range <file>: "<low> <high>", the number of messages a demo of it must hold
-demo_range() { sed -n 's|^// pins: messages \([0-9]*\) \([0-9]*\)$|\1 \2|p' "$1"; }
+# demo_in_range <messages> <low> <high>: true only when all three are integers
+# and low <= messages <= high; a comparison that errors is false, never a pass
+demo_in_range() { [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]; }
 # demo_blocks <file>: the number of message blocks before the end marker
 # (a length of -1), or "cut" when the file ends first
 demo_blocks() {
@@ -533,8 +538,9 @@ cmd_make_demo() {
     local script="$demo_dir/$name.cfg"
     [ -f "$script" ] || die "no demo script $name (see $demo_dir)"
     check_demo_script "$script" "$name"
-    local map range lo hi; map=$(sed -n 's/^map \([a-z0-9_]*\)$/\1/p' "$script")
-    range=$(demo_range "$script"); lo=${range% *}; hi=${range#* }
+    local map lo=$demo_lo hi=$demo_hi; map=$(sed -n 's/^map \([a-z0-9_]*\)$/\1/p' "$script")
+    [[ $lo =~ ^[1-9][0-9]{0,8}$ ]] && [[ $hi =~ ^[1-9][0-9]{0,8}$ ]] && [ "$lo" -le "$hi" ] ||
+        die "$name.cfg: the message range must be two positive integers, low first, got '$lo' and '$hi'"
     [ -z "${PINS_BIN:-}" ] || [ -f "$PINS_BIN" ] || die "no engine binary at $PINS_BIN (build the client, or set PINS_BIN)"
     if [ -n "${PINS_BASEDIR:-}" ]; then check_arg PINS_BASEDIR "$PINS_BASEDIR" path; fi
     # with -portable the engine writes into <binary dir>/baseq2
@@ -586,7 +592,7 @@ cmd_make_demo() {
     elif [ ! -f "$demo" ]; then reason="the engine wrote no demo at $demo"
     elif [ "$blocks" = cut ]; then reason="the demo $demo ends before its end marker"
     elif [ "$blocks" -lt 10 ]; then reason="the demo $demo holds only $blocks messages"
-    elif [ "$blocks" -lt "$lo" ] || [ "$blocks" -gt "$hi" ]; then
+    elif ! demo_in_range "$blocks" "$lo" "$hi"; then
         reason="the demo holds $blocks messages, outside $lo to $hi ($name.cfg): its waits lasted longer than the script means, so a record of it would not capture the frames documented; make it again on a quieter host"
     fi
     if [ -n "$reason" ]; then
@@ -1011,7 +1017,9 @@ st_make_demo_script() { # TASK70: a demo script holds only commands of this tree
     printf '%s\n' "$good" | sed 's/^record good$/record bad/' > "$tmp/ds/bad.cfg"
     (check_demo_script "$tmp/ds/bad.cfg" bad) || st_fail "the unchanged script recording its own name must pass" || return 1
     for bad in 'nosuchcmd' 'record other' 'record bad' 'map base2' 'map ../x' 'exec x.cfg' '// a; quit' '// a "b' 'teleport ../x' ' wait' 'wait  ' 'echo "x"' \
-        'alias w8 "w2;nosuchcmd"' 'alias w8 "w2; wait"' 'bind x "quit"' 'wait;quit' '// pins: messages 10 20'; do
+        'alias w8 "w2;nosuchcmd"' 'alias w8 "w2; wait"' 'bind x "quit"' 'wait;quit' '// pins: messages 10 20' \
+        '// pins: messages 0 999' '// pins: messages 097 124' '// pins: messages  97 124' '// pins: messages 97  124' '// pins: messages 97 124 ' \
+        '// pins: messages 97' '// pins: messages' '// pins:messages 97 124' '// pins: message 97 124' '// pins: messages 1234567890 1234567891'; do
         printf '%s\n' "$good" | sed 's/^record good$/record bad/' | awk -v b="$bad" '$0 == "teleport 1 -2 3.5" {print b; next} {print}' > "$tmp/ds/bad.cfg"
         if (check_demo_script "$tmp/ds/bad.cfg" bad) >/dev/null 2>&1; then st_fail "demo script line '$bad' must be refused"; return 1; fi
     done
@@ -1026,6 +1034,25 @@ st_make_demo_script() { # TASK70: a demo script holds only commands of this tree
     for s in '/^\/\/ pins: messages/d' 's/^\/\/ pins: messages 10 20$/\/\/ pins: messages 20 10/' 's/^\/\/ pins: messages 10 20$/\/\/ pins: messages 5 20/'; do
         printf '%s\n' "$good" | sed 's/^record good$/record bad/' | sed "$s" > "$tmp/ds/bad.cfg"
         if (check_demo_script "$tmp/ds/bad.cfg" bad) >/dev/null 2>&1; then st_fail "a script whose message range is edited by '$s' must be refused"; return 1; fi
+    done
+    # the range make-demo compares with comes from the check, and is verified again before the engine starts
+    (check_demo_script "$tmp/ds/good.cfg" good; [ "$demo_lo $demo_hi" = "10 20" ]) || st_fail "the script check must set the range it accepted" || return 1
+    for s in '97|124' 'x|124' '097|124' '124|97' '0|999' "97 124
+0|124" '|' '97|'; do
+        if (demo_dir="$root/scripts/pins/demos"; check_demo_script() { demo_lo=${s%|*}; demo_hi=${s#*|}; }
+            PINS_DRYRUN=1 PINS_BASEDIR="$tmp/gd" cmd_make_demo water) >/dev/null 2>&1; then
+            [ "$s" = '97|124' ] && continue
+            st_fail "make-demo must refuse the message range '$s' before the engine starts"; return 1
+        elif [ "$s" = '97|124' ]; then st_fail "a dry run with the range 97 124 must pass"; return 1
+        fi
+    done
+    # a comparison that errors is never in range
+    demo_in_range 100 97 124 && demo_in_range 97 97 124 && demo_in_range 124 97 124 || st_fail "100, 97 and 124 are in 97 to 124" || return 1
+    for s in '96|97|124' '125|97|124' "500|97 124
+0|124" '500|97|124
+0 999' 'cut|97|124' '|97|124' '100|x|124' '100|97|'; do
+        local m=${s%%|*} l=${s#*|}; l=${l%|*}
+        if demo_in_range "$m" "$l" "${s##*|}" 2>/dev/null; then st_fail "demo_in_range must be false for '$s'"; return 1; fi
     done
 }
 st_make_demo_run() { # TASK70: make-demo passes only with a whole demo, and fails fast on a missing map
