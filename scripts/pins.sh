@@ -17,8 +17,8 @@
 #                 Default: ~/.quake2-pins
 #   PINS_BASEDIR  the directory holding baseq2/ (owner game data, never committed)
 #   PINS_BIN      engine binary. Default: release/quake2 of this checkout, which
-#                 record refuses when a file under src/ or the Makefile is
-#                 newer than it or its renderer module. A binary named here
+#                 record refuses when "make -q" says it or its renderer
+#                 module is out of date with the source. A binary named here
 #                 adds its checksum to the pin id; compare needs the same value.
 #   PINS_DEMO     the demo every scenario plays, a file name under demos/:
 #                 [A-Za-z0-9_][A-Za-z0-9_.-]*.dm2. Default: demo1.dm2
@@ -134,14 +134,16 @@ engine_sha() {
     if [ -n "${PINS_BIN:-}" ]; then sha="$sha-b$(cksum < "$PINS_BIN" 2>/dev/null | awk '{print $1}')"; fi
     echo "$sha"
 }
-# stale_engine <bin> <renderer>: names a file under src/ or the Makefile newer
-# than the binary or its renderer module, empty when the build is current
+# stale_engine <bin> <renderer>: names the binary or renderer module of this
+# checkout that "make -q" says is out of date with its sources, empty when
+# the build is current (or make is missing)
 stale_engine() {
-    local m f
+    local m
+    command -v make >/dev/null 2>&1 || return 0
     for m in "$1" "$(dirname "$1")/ref_$2".so "$(dirname "$1")/ref_$2".dylib "$(dirname "$1")/ref_$2".dll; do
         [ -f "$m" ] || continue
-        f=$(find "$root/src" "$root/Makefile" -type f -newer "$m" 2>/dev/null | head -n 1)
-        if [ -n "$f" ]; then echo "${f#"$root"/} is newer than $m"; return; fi
+        case $m in "$root"/*) ;; *) continue;; esac
+        if ! make -C "$root" -q "${m#"$root"/}" >/dev/null 2>&1; then echo "${m#"$root"/} is out of date"; return; fi
     done
 }
 scenario_hash() {
@@ -212,7 +214,7 @@ cmd_record() {
     [ -n "${PINS_BASEDIR:-}" ] && [ -d "$PINS_BASEDIR/baseq2" ] || die "PINS_BASEDIR must hold baseq2/ (owner game data, never committed)"
     if [ -z "${PINS_BIN:-}" ]; then
         local stale; stale=$(stale_engine "$bin" "$renderer")
-        [ -z "$stale" ] || die "the build is older than the source ($stale); rebuild before recording"
+        [ -z "$stale" ] || die "the build is out of date ($stale); rebuild before recording"
     fi
     if [ -f "$out/complete" ] && [ "$replace" -ne 1 ]; then
         die "a complete pin already exists at $out; record with --run N for another run, or --replace to overwrite it"
@@ -592,13 +594,19 @@ st_engine_id() { # TASK39 (h): the id sees uncommitted source, untracked source 
     d=$(root="$r" PINS_BIN="$tmp/fake-ok" engine_sha)
     case $d in "$a"-b*) ;; *) st_fail "PINS_BIN must add -b<hash>: $d"; return 1;; esac
     [ "$d" != "$(root="$r" PINS_BIN="$tmp/fake-crash" engine_sha)" ] || st_fail "two binaries must give two ids" || return 1
-    printf 'x' > "$r/quake2"; printf 'x' > "$r/ref_gl1.so"
-    touch -t 202001010000 "$r/quake2" "$r/ref_gl1.so"
-    [ -n "$(root="$r" stale_engine "$r/quake2" gl1)" ] || st_fail "a binary older than src/ must be stale" || return 1
-    touch -t 203001010000 "$r/quake2"
-    [ -n "$(root="$r" stale_engine "$r/quake2" gl1)" ] || st_fail "a renderer module older than src/ must be stale" || return 1
-    touch -t 203001010000 "$r/ref_gl1.so"
-    [ -z "$(root="$r" stale_engine "$r/quake2" gl1)" ] || st_fail "a current build must not be stale" || return 1
+    command -v make >/dev/null 2>&1 || { echo "       stale build: no make, skipped"; return 0; }
+    local m="$tmp/mk"
+    mkdir -p "$m/src"; printf 'int a;\n' > "$m/src/a.c"; printf 'int r;\n' > "$m/src/r.c"
+    printf 'quake2: src/a.c\n\ttouch quake2\nref_gl1.so: src/r.c\n\ttouch ref_gl1.so\n' > "$m/Makefile"
+    printf 'x' > "$m/quake2"; printf 'x' > "$m/ref_gl1.so"
+    touch -t 202001010000 "$m/quake2" "$m/ref_gl1.so"
+    [ -n "$(root="$m" stale_engine "$m/quake2" gl1)" ] || st_fail "a binary older than its sources must be stale" || return 1
+    touch -t 203001010000 "$m/quake2"
+    [ -n "$(root="$m" stale_engine "$m/quake2" gl1)" ] || st_fail "a renderer module older than its sources must be stale" || return 1
+    touch -t 203001010000 "$m/ref_gl1.so"
+    [ -z "$(root="$m" stale_engine "$m/quake2" gl1)" ] || st_fail "a current build must not be stale" || return 1
+    touch -t 202501010000 "$m/src/a.c"; touch -t 202601010000 "$m/ref_gl1.so"; touch -t 202801010000 "$m/src/r.c" "$m/quake2"
+    [ -n "$(root="$m" stale_engine "$m/quake2" gl1)" ] || st_fail "the module's own source newer than the module must be stale" || return 1
 }
 
 cmd_selftest() {
