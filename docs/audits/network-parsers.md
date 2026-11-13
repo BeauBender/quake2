@@ -59,11 +59,12 @@ the shared-code rows); the remaining 222 are in the scope files
 (`cl_parse.c` 98, `cl_tempentities.c` 96, `sv_user.c` 8, `cl_effects.c` 4,
 `cl_network.c` 4, `netchan.c` 3, `sv_main.c` 3, `cl_download.c` 2,
 `sv_conless.c` 2, `cl_inventory.c` 1, `cl_main.c` 1). `git grep -n
-'Cmd_Argv *(' -- src/server src/client/cl_network.c src/client/cl_parse.c`
-returns 49 hits: 26 in the scope files (`cl_network.c` 9, `sv_user.c` 9,
-`sv_conless.c` 8) and 23 in `sv_cmd.c` (15) and `sv_save.c` (8). Every one of
-the 248 in-scope hits is covered: each sits in a function that has a row below
-naming the value it reads.
+'Cmd_Argv *(' -- src/server src/client/cl_network.c src/client/cl_parse.c
+src/client/cl_download.c` returns 50 hits: 27 in the scope files
+(`cl_network.c` 9, `sv_user.c` 9, `sv_conless.c` 8, `cl_download.c` 1) and 23
+in `sv_cmd.c` (15) and `sv_save.c` (8). Every one of the 249 in-scope hits is
+covered: each sits in a function that has a row below naming the value it
+reads.
 
 Deliberately out of scope: `sv_cmd.c` and `sv_save.c` (server console
 commands such as `map`, `gamemap`, `savegame`, `loadgame`, `serverrecord`;
@@ -143,6 +144,8 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_parse.c` `CL_ParseStartSoundPacket` `flags`, volume, attenuation, offset, position | `MSG_ReadByte`, `MSG_ReadPos` | scaled floats and a vector | not indices | ok |
 | `cl_inventory.c` `CL_ParseInventory` `cl.inventory[i]` | `MSG_ReadShort` ×`MAX_ITEMS` | `inventory[i]` | `i` in `0..MAX_ITEMS` loop | ok |
 | `cl_download.c` `CL_ParseDownload` `size`, `percent` | `MSG_ReadShort`, `MSG_ReadByte` | chunk length for `fwrite`; progress | `size == -1` is "no such file"; otherwise `size < 0` or larger than the bytes left in the message → `ERR_DROP` (fixed in TASK1/#8); `percent` is only displayed | ok (fixed by TASK1) |
+| `cl_download.c` `CL_Download_f` `Cmd_Argv(1)` | console token (user, or a server through `svc_stufftext`; at most 1023 characters) | `Com_sprintf` into `filename[MAX_OSPATH]`; `strcpy` into `cls.downloadname[MAX_OSPATH]`; `COM_StripExtension` into `cls.downloadtempname[MAX_OSPATH]`; `strcat(..., ".tmp")` | `CL_DownloadFilter`; the first copy truncates; **the append is unbounded**: where `MAX_OSPATH` is 256 (Windows) a name that fills the buffer with no extension leaves no room for the suffix → Defect D15; the sibling `CL_CheckOrDownloadFile` uses `Q_strlcpy`/`Q_strlcat` for the same steps | defect (D15) |
+| `cl_download.c` `CL_RequestNextDownload` `strcpy(model, p)`, `strcpy(skin, p)` | `cl.configstrings[CS_PLAYERSKINS + i]` (server) | copies into `char model[MAX_QPATH]`, `skin[MAX_QPATH]` | unbounded copies, in bounds only because `CL_ParseConfigString` refuses a string of `MAX_QPATH` or more characters for every row outside the statusbar range, and `p` and the `skin` source point inside that string | ok |
 | `cl_effects.c` `CL_AddMuzzleFlash` `i` | `MSG_ReadShort` | `CL_AllocEntity(i)` | `i < 1 || i > MAX_CL_ENTNUM` → `Com_Error` | ok |
 | `cl_effects.c` `CL_AddMuzzleFlash` `weapon` | `MSG_ReadByte` | `switch`, no array index | `-1` hits default | ok |
 | `cl_effects.c` `CL_AddMuzzleFlash2` `flash_number` | `MSG_ReadByte` | `monster_flash_offset[flash_number]` | `flash_number` is `unsigned`, so `-1` is rejected too; `flash_number > 210` → print+return, a literal below the table size (`flash.c`) — Hardening H4 | ok (H4) |
@@ -598,6 +601,35 @@ Fix (client-side only, no protocol change): accept `client_connect` and
 `challenge` only in `ca_connecting` and only when `net_from` equals the
 resolved address of `cls.servername`.
 
+### D15: the `download` command appends `.tmp` past `cls.downloadtempname` where `MAX_OSPATH` is 256 (critical by the scale, medium confidence) [FIX29 (#130)]
+
+`CL_Download_f` (`cl_download.c`) formats `Cmd_Argv(1)` into
+`filename[MAX_OSPATH]` with `Com_sprintf` (truncating), passes it through
+`CL_DownloadFilter`, copies it into `cls.downloadname` with `strcpy`, strips
+the extension into `cls.downloadtempname[MAX_OSPATH]` with
+`COM_StripExtension` (which copies up to the first `.` and has no size
+parameter), and then runs `strcat(cls.downloadtempname, ".tmp")` with no
+bound. `MAX_OSPATH` is 256 on Windows builds and 4096 elsewhere
+(`src/common/header/shared.h`). On a Windows build, a name that fills
+`filename` and has no extension reaches `COM_StripExtension` whole, so the
+stripped name already fills `cls.downloadtempname` and the append writes four
+bytes past the array, into the adjacent `cls.downloadname` member of the
+client state. Where `MAX_OSPATH` is 4096 it is not reachable: a console token
+is at most 1023 characters. The sibling `CL_CheckOrDownloadFile` performs the
+same steps with `Q_strlcpy` and `Q_strlcat`.
+
+Hostile input and reachability: `download` is a client console command, so a
+server reaches it through `svc_stufftext` (by design, see By design); the
+filter refuses `..`, `:`, a leading `.` or `/` and library extensions, none
+of which the name needs. The written bytes are the fixed suffix, not chosen
+by the server, and they land in the next member of the same static struct
+(the download name is overwritten), not in stack or heap metadata. The scale
+rates any out-of-bounds write driven by a remote peer critical; that is the
+rating here, with the impact limited as described. Confidence medium: a
+static trace only, since no Windows build is available here. Fix: use the
+bounded copies `CL_CheckOrDownloadFile` uses, and refuse the download when
+the temporary name does not fit.
+
 ## Hardening (low severity)
 
 Carried on FIX28 (#129) except D4, which is on FIX13 (#109).
@@ -645,6 +677,7 @@ them.
 | FIX26 | #127 | D12, D13 | low |
 | FIX27 | #128 | D14 | high |
 | FIX28 | #129 | H1, H2, H3, H4, H6, H7 | low |
+| FIX29 | #130 | D15 | critical (Windows builds only) |
 
 D9, D10 and D11 share a card because they are one class (a server-supplied
 entity or effect field reaching an array index or loop count with a check on
