@@ -451,6 +451,27 @@ TestWriteRefusals(void)
 	CHECK(!RefRec_WriteCall(&w, &c), "StretchRaw with 0 columns was written");
 	RefRec_WriterFree(&w);
 
+	/* one column or row over the limit, with a payload of exactly the size it implies */
+	{
+		static uint8_t wide[REFREC_MAX_RAW_DIM + 1];
+
+		memset(&c, 0, sizeof(c));
+		c.type = REC_STRETCHRAW;
+		c.ints[4] = REFREC_MAX_RAW_DIM + 1;
+		c.ints[5] = 1;
+		c.ints[6] = 8;
+		c.data = wide;
+		c.datalen = REFREC_MAX_RAW_DIM + 1;
+		RefRec_WriterInit(&w);
+		CHECK(!RefRec_WriteCall(&w, &c), "StretchRaw with 4097 columns was written");
+		RefRec_WriterFree(&w);
+		c.ints[4] = 1;
+		c.ints[5] = REFREC_MAX_RAW_DIM + 1;
+		RefRec_WriterInit(&w);
+		CHECK(!RefRec_WriteCall(&w, &c), "StretchRaw with 4097 rows was written");
+		RefRec_WriterFree(&w);
+	}
+
 	/* data on a type that has none, and a palette of the wrong size */
 	memset(&c, 0, sizeof(c));
 	c.type = REC_FILL;
@@ -951,6 +972,269 @@ FrameOverLimit(int which, uint32_t elemsize, const char *what)
 	RefRec_WriterFree(&w);
 }
 
+/*
+ * Byte-layout pin for a whole REC_RENDERFRAME and the file header. The
+ * expected bytes are built in the order the format puts them on disk, one
+ * distinct value per field, and the frame fields take their values from the
+ * same calls. A field order changed consistently in a writer and its reader
+ * therefore no longer matches.
+ */
+static uint8_t pin_bytes[REFREC_REC_SIZE + 4 * 1100];
+static uint32_t pin_len;
+static uint32_t pin_seq;
+
+static uint32_t
+PinWord(uint32_t v)
+{
+	SetU32(pin_bytes + pin_len, v);
+	pin_len += 4;
+
+	return v;
+}
+
+static int32_t
+PinI(void)
+{
+	return (int32_t)PinWord(0x01000000u + ++pin_seq * 0x101u);
+}
+
+static float
+PinF(void)
+{
+	return FromBits(PinWord(0x3f000000u + ++pin_seq * 0x10101u));
+}
+
+static void
+TestFramePin(void)
+{
+	static refrec_frame_t f, back;
+	refrec_writer_t w;
+	refrec_refdef_t *rd = &f.refdef;
+	refrec_entity_t *e = &f.entities[0];
+	refrec_header_t h;
+	int i, j;
+
+	memset(&f, 0, sizeof(f));
+	pin_len = REFREC_REC_SIZE;	/* the record header is filled in last */
+	pin_seq = 0;
+
+	rd->x = PinI();
+	rd->y = PinI();
+	rd->width = PinI();
+	rd->height = PinI();
+	rd->fov_x = PinF();
+	rd->fov_y = PinF();
+
+	for (i = 0; i < 3; i++)
+	{
+		rd->vieworg[i] = PinF();
+	}
+
+	for (i = 0; i < 3; i++)
+	{
+		rd->viewangles[i] = PinF();
+	}
+
+	for (i = 0; i < 4; i++)
+	{
+		rd->blend[i] = PinF();
+	}
+
+	rd->time = PinF();
+	rd->rdflags = PinI();
+	rd->has_areabits = 1;
+	PinWord(1);
+
+	for (i = 0; i < REFREC_AREABYTES; i++)
+	{
+		rd->areabits[i] = (uint8_t)(0xa0 + i);
+		pin_bytes[pin_len++] = rd->areabits[i];
+	}
+
+	for (i = 0; i < MAX_LIGHTSTYLES; i++)
+	{
+		for (j = 0; j < 3; j++)
+		{
+			rd->lightstyles[i].rgb[j] = PinF();
+		}
+
+		rd->lightstyles[i].white = PinF();
+	}
+
+	rd->num_entities = 1;
+	rd->num_dlights = 1;
+	rd->num_particles = 1;
+	PinWord(1);
+	PinWord(1);
+	PinWord(1);
+
+	e->model_id = PinWord(0x4d4f4400u);
+	e->skin_id = PinWord(0x534b4e00u);
+
+	for (j = 0; j < 3; j++)
+	{
+		e->angles[j] = PinF();
+	}
+
+	for (j = 0; j < 3; j++)
+	{
+		e->origin[j] = PinF();
+	}
+
+	for (j = 0; j < 3; j++)
+	{
+		e->oldorigin[j] = PinF();
+	}
+
+	e->backlerp = PinF();
+	e->alpha = PinF();
+	e->frame = PinI();
+	e->oldframe = PinI();
+	e->skinnum = PinI();
+	e->lightstyle = PinI();
+	e->flags = PinI();
+
+	for (j = 0; j < 3; j++)
+	{
+		f.dlights[0].origin[j] = PinF();
+	}
+
+	for (j = 0; j < 3; j++)
+	{
+		f.dlights[0].color[j] = PinF();
+	}
+
+	f.dlights[0].intensity = PinF();
+
+	for (j = 0; j < 3; j++)
+	{
+		f.particles[0].origin[j] = PinF();
+	}
+
+	f.particles[0].color = PinI();
+	f.particles[0].alpha = PinF();
+
+	pin_bytes[0] = (uint8_t)REC_RENDERFRAME;
+	pin_bytes[1] = 0;
+	pin_bytes[2] = 0;
+	pin_bytes[3] = 0;
+	SetU32(pin_bytes + 4, pin_len - REFREC_REC_SIZE);
+	CHECK(pin_len <= sizeof(pin_bytes), "frame pin: buffer too small");
+
+	RefRec_WriterInit(&w);
+	CHECK(RefRec_WriteRenderFrame(&w, &f), "frame pin: write refused");
+	CHECK(w.cursize == pin_len, "frame pin: %u bytes, expected %u", w.cursize, pin_len);
+
+	if (w.ok && w.cursize == pin_len)
+	{
+		refrec_type_t type;
+		uint8_t *keep;
+
+		for (i = 0; i < (int)pin_len; i++)
+		{
+			if (w.data[i] != pin_bytes[i])
+			{
+				CHECK(0, "frame pin: byte %d is %02x, expected %02x", i, w.data[i], pin_bytes[i]);
+				break;
+			}
+		}
+
+		/* and the reader must take exactly these bytes back */
+		CHECK(ReadExact(pin_bytes, pin_len, &type, NULL, &back, NULL, NULL, &keep), "frame pin: read refused");
+		CompareFrame("frame pin", &f, &back);
+		free(keep);
+	}
+
+	RefRec_WriterFree(&w);
+
+	/* the header: every field distinct, all 64 bytes */
+	{
+		static const uint8_t hdr[REFREC_HEADER_SIZE] = {
+			'Q', '2', 'R', 'E', 'F', 'R', 'E', 'C',
+			1, 0, 0, 0,	/* version */
+			8, 0, 0, 0,	/* api_version */
+			0x11, 0x12, 0x13, 0x14,	/* flags */
+			0x21, 0x22, 0x23, 0x24,	/* string_table_offset */
+			0x31, 0x32, 0x33, 0x34,	/* frame_index_offset */
+			0x41, 0x42, 0x43, 0x44,	/* frame_count */
+			'0', '1', '2', '3', '4', '5', '6', '7',	/* engine_sha */
+			'8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+			0x51, 0x52, 0x53, 0x54,	/* scenario_hash */
+			0x61, 0x62,	/* width */
+			0x71, 0x72,	/* height */
+			0x81, 0x82, 0x83, 0x84,	/* capture_every */
+			0, 0, 0, 0	/* reserved */
+		};
+		refrec_reader_t r;
+		refrec_header_t h2;
+		uint8_t *copy;
+
+		memset(&h, 0, sizeof(h));
+		memcpy(h.magic, "Q2REFREC", 8);
+		h.version = 1;
+		h.api_version = 8;
+		h.flags = 0x14131211u;
+		h.string_table_offset = 0x24232221u;
+		h.frame_index_offset = 0x34333231u;
+		h.frame_count = 0x44434241u;
+		memcpy(h.engine_sha, "0123456789abcdef", 16);
+		h.scenario_hash = 0x54535251u;
+		h.width = 0x6261;
+		h.height = 0x7271;
+		h.capture_every = 0x84838281u;
+		RefRec_WriterInit(&w);
+		CHECK(RefRec_WriteHeader(&w, &h) && w.cursize == REFREC_HEADER_SIZE, "header pin: write");
+		CHECK(w.cursize == REFREC_HEADER_SIZE && memcmp(w.data, hdr, REFREC_HEADER_SIZE) == 0,
+				"header pin: the 64 bytes differ");
+		RefRec_WriterFree(&w);
+
+		/* the reader takes the pinned bytes back field by field */
+		copy = malloc(REFREC_HEADER_SIZE);
+		memcpy(copy, hdr, REFREC_HEADER_SIZE);
+		RefRec_ReaderInit(&r, copy, REFREC_HEADER_SIZE);
+		memset(&h2, 0, sizeof(h2));
+		CHECK(RefRec_ReadHeader(&r, &h2), "header pin: read refused");
+		CHECK(h2.flags == h.flags && h2.string_table_offset == h.string_table_offset &&
+				h2.frame_index_offset == h.frame_index_offset && h2.frame_count == h.frame_count &&
+				h2.scenario_hash == h.scenario_hash && h2.width == h.width &&
+				h2.height == h.height && h2.capture_every == h.capture_every &&
+				memcmp(h2.engine_sha, h.engine_sha, 16) == 0, "header pin: read fields differ");
+		free(copy);
+	}
+}
+
+/* has_areabits 0 with stale areabits[] in the input: written as zeros, read back as zeros */
+static void
+TestStaleAreabits(void)
+{
+	static refrec_frame_t in, out;
+	refrec_writer_t w;
+	refrec_type_t type;
+	uint8_t *keep;
+	int i;
+
+	FillFrame(&in, 0, 0, 0, false);
+
+	for (i = 0; i < REFREC_AREABYTES; i++)
+	{
+		in.refdef.areabits[i] = (uint8_t)(0x80 | i);
+	}
+
+	memset(&out, 0xcc, sizeof(out));
+	RefRec_WriterInit(&w);
+	CHECK(RefRec_WriteRenderFrame(&w, &in), "stale areabits: write refused");
+	CHECK(ReadExact(w.data, w.cursize, &type, NULL, &out, NULL, NULL, &keep), "stale areabits: read refused");
+	CHECK(out.refdef.has_areabits == 0, "stale areabits: flag set");
+
+	for (i = 0; i < REFREC_AREABYTES; i++)
+	{
+		CHECK(out.refdef.areabits[i] == 0, "stale areabits: byte %d is %02x", i, out.refdef.areabits[i]);
+	}
+
+	free(keep);
+	RefRec_WriterFree(&w);
+}
+
 static void
 TestFrames(void)
 {
@@ -1124,6 +1408,8 @@ main(void)
 	TestWriteRefusals();
 	TestLayout();
 	TestFrames();
+	TestFramePin();
+	TestStaleAreabits();
 	TestCvars();
 	TestStream();
 	TestRecorderOff();
