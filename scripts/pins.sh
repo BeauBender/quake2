@@ -36,7 +36,8 @@
 # settings, with "-r<N>" appended for --run N (N >= 2), so a second run of
 # the same engine and scenario does not replace the first. A record is
 # complete only when the engine exited 0 within PINS_TIMEOUT, captured at
-# least one frame, and every frame in manifest.txt was rendered by the
+# least one frame, manifest.txt holds no FAILED line (the engine's mark for a
+# frame it could not write) and every frame in it was rendered by the
 # requested renderer (the engine refuses renderer fallback while capturing);
 # the file "complete" is then written last. A failed record leaves
 # "incomplete" with the reason instead.
@@ -153,6 +154,7 @@ cmd_record() {
     elif [ "$status" -ne 0 ]; then reason="engine exited with status $status"
     elif [ "$n" -eq 0 ]; then reason="no frames captured"
     elif [ ! -f "$out/manifest.txt" ]; then reason="no manifest.txt"
+    elif grep -q '^FAILED ' "$out/manifest.txt"; then reason="the engine could not write a frame ($(grep -m1 '^FAILED ' "$out/manifest.txt"))"
     elif [ "$(wc -l < "$out/manifest.txt" | tr -d ' ')" -ne "$n" ]; then reason="manifest.txt does not list the $n frames"
     else
         bad=$(awk -v r="$renderer" '$2 != r {print $2; exit}' "$out/manifest.txt")
@@ -226,7 +228,12 @@ cmd_compare() {
     [ "$fails" -eq 0 ]
 }
 
-cmd_list() { local s; s=$(store); echo "store: $s"; find "$s" -name '*.tga' 2>/dev/null | sed "s|$s/||" | awk -F/ '{print $1"/"$2"/"$3}' | sort | uniq -c; }
+cmd_list() {
+    local s line; s=$(store); echo "store: $s"
+    # the prefix is stripped by parameter expansion: the store path is never part of a program text
+    find "$s" -name '*.tga' 2>/dev/null | while IFS= read -r line; do echo "${line#"$s"/}"; done |
+        awk -F/ '{print $1"/"$2"/"$3}' | sort | uniq -c
+}
 
 # ---- selftest -------------------------------------------------------------
 
@@ -340,6 +347,22 @@ st_record_engine() {
 st_timeout() { # C-I2c: fake-hang exits 0 on TERM, like the engine; only the timeout flag can fail the record
     if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-hang" PINS_TIMEOUT=2 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "record must fail when the engine hangs until PINS_TIMEOUT"; return 1; fi
 }
+st_frame_failed() { # R3-N3: a failed frame write is a FAILED manifest line; record must not complete
+    fake_engine "$tmp/fake-failed" - 'echo "FAILED $s-000001.tga" >> "$d/manifest.txt"; exit 0'
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-failed" cmd_record gl1 world) >/dev/null 2>&1; then st_fail "record must fail when manifest.txt holds a FAILED line"; return 1; fi
+    [ ! -f "$PINS_STORE/world/gl1/$cid/complete" ] && grep -q 'FAILED' "$PINS_STORE/world/gl1/$cid/incomplete" || st_fail "the pin must be marked incomplete, naming the failed frame" || return 1
+    # the manifest itself unwritable: the frame exists but no line was appended
+    fake_engine "$tmp/fake-nomanifest" - 'rm -f "$d/manifest.txt"; exit 0'
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-nomanifest" cmd_record gl1 world) >/dev/null 2>&1; then st_fail "record must fail when the manifest is missing"; return 1; fi
+    # a frame of two where the manifest line of the first is missing: the counts disagree
+    fake_engine "$tmp/fake-shifted" - 'cp "$d/$s-000000.tga" "$d/$s-000001.tga"; exit 0'
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-shifted" cmd_record gl1 world) >/dev/null 2>&1; then st_fail "record must fail when a frame has no manifest line"; return 1; fi
+}
+st_list() { # R3-N2: the store path is data, whatever characters it holds
+    local d="$tmp/s|a&b"; mkdir -p "$d/world/gl1/x"; touch "$d/world/gl1/x/a.tga" "$d/world/gl1/x/b.tga"
+    local rep; rep=$(PINS_STORE="$d" cmd_list 2>&1) || st_fail "list must work with a store path holding | and &: $rep" || return 1
+    case $rep in *"2 world/gl1/x"*) ;; *) st_fail "list must count the frames under the store: $rep"; return 1;; esac
+}
 st_fallback() { # C-B2
     if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-other" cmd_record gl1 world) >/dev/null 2>&1; then st_fail "record must fail when the frames were rendered by another renderer"; return 1; fi
 }
@@ -435,7 +458,7 @@ cmd_selftest() {
     fake_engine "$tmp/fake-hang" - 'trap "exit 0" TERM; while :; do sleep 1; done'
     local c failed=""
     for c in framediff framediff_block compare_basic compare_bad_threshold ref_mtime missing_frame self_compare \
-        two_runs incomplete record_engine timeout fallback names cmdline thresholds scenarios argcount; do
+        two_runs incomplete record_engine timeout fallback names cmdline thresholds scenarios argcount frame_failed list; do
         rm -rf "$PINS_STORE/world"
         if ( set -e; "st_$c" ); then echo "  ok   $c"; else echo "  FAIL $c"; failed="$failed $c"; fi
     done

@@ -44,6 +44,31 @@
  * RGB or RGBA. The pixels must be given row-wise, stating at the top
  * left.
  */
+/* Appends one line to <dir>/manifest.txt; silent when it cannot. */
+static void
+VID_PinManifest(const char *dir, const char *fmt, ...)
+{
+	char path[MAX_OSPATH];
+	va_list ap;
+	FILE *f;
+	int len;
+
+	len = snprintf(path, sizeof(path), "%s/manifest.txt", dir);
+	if ((len < 0) || (len >= (int)sizeof(path)))
+	{
+		return;
+	}
+
+	f = Q_fopen(path, "ab");
+	if (f)
+	{
+		va_start(ap, fmt);
+		vfprintf(f, fmt, ap);
+		va_end(ap);
+		fclose(f);
+	}
+}
+
 /*
  * Pin harness (INFORM8/INFORM9): when a pin store directory was given on
  * the command line (CL_PinsDir, latched by CL_PinsLatch; never a cvar), a
@@ -61,7 +86,7 @@ VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 	char path[MAX_OSPATH];
 	unsigned char hdr[18];
 	FILE *f;
-	int x, y, ok, len;
+	int x, y, ok, len, idx;
 
 	if (CL_PinsInvalid())
 	{
@@ -86,11 +111,22 @@ VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 		return true;
 	}
 
+	/*
+	 * The frame index always advances, so a failed write never shifts
+	 * the names of the frames after it. A failure is recorded in
+	 * manifest.txt as "FAILED <name>", which scripts/pins.sh record
+	 * treats as an incomplete pin. If the manifest cannot be written
+	 * either, its line count no longer matches the frames and record
+	 * fails on that.
+	 */
+	idx = frame++;
+
 	/* Never open a truncated path. */
-	len = snprintf(path, sizeof(path), "%s/%s-%06d.tga", dir, scenario, frame);
+	len = snprintf(path, sizeof(path), "%s/%s-%06d.tga", dir, scenario, idx);
 	if ((len < 0) || (len >= (int)sizeof(path)))
 	{
 		Com_Printf("pins: the frame path does not fit %d bytes, nothing written\n", (int)sizeof(path));
+		VID_PinManifest(dir, "FAILED %s-%06d.tga\n", scenario, idx);
 		return true;
 	}
 
@@ -98,6 +134,7 @@ VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 	if (!f)
 	{
 		Com_Printf("pins: cannot write %s\n", path);
+		VID_PinManifest(dir, "FAILED %s-%06d.tga\n", scenario, idx);
 		return true;   /* handled: scrnshot/ stays untouched while pins_dir is set */
 	}
 
@@ -122,16 +159,12 @@ VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 	{
 		remove(path);
 		Com_Printf("pins: short write, removed %s\n", path);
+		VID_PinManifest(dir, "FAILED %s-%06d.tga\n", scenario, idx);
 		return true;
 	}
 
-	len = snprintf(path, sizeof(path), "%s/manifest.txt", dir);
-	if ((len >= 0) && (len < (int)sizeof(path)))
-	{
-		f = Q_fopen(path, "ab");
-		if (f) { fprintf(f, "%s-%06d.tga %s %dx%d\n", scenario, frame, vid_renderer ? vid_renderer->string : "?", width, height); fclose(f); }
-	}
-	frame++;
+	VID_PinManifest(dir, "%s-%06d.tga %s %dx%d\n", scenario, idx,
+		vid_renderer ? vid_renderer->string : "?", width, height);
 	return true;
 }
 
