@@ -536,17 +536,22 @@ to `S_GetVolume`, `S_GetStatistics`, `S_IsShortSilence` and `SDL_Cache`
 | `FindNextChunk` | `iff_chunk_len` | `last_chunk = data_p + 8 + ((iff_chunk_len + 1) & ~1)` | `if (iff_chunk_len < 0)` stops; no upper bound, but the next loop's `data_p >= iff_end` catches an overshoot before another read | ok (given the next-iteration check) |
 | `GetWavinfo` | "RIFF"/"WAVE" | `strncmp(data_p + 8, "WAVE", 4)` | `data_p` is non-NULL, but `data_p + 8 .. + 11` is not bounded against `iff_end` | D23 |
 | `GetWavinfo` | `fmt ` body | `data_p += 8`, then `GetLittleShort`/`GetLittleLong` for `format`, `channels`, `rate`, `width` | no check that the `fmt ` chunk holds these 16 bytes inside the file | D23 |
-| `GetWavinfo` | `format` | `if (format != 1)` | ok |
-| `GetWavinfo` | `width = GetLittleShort() / 8` | divisor of `samples`, element size in every reader | `if (info.width <= 0)`; later `sound.c` accepts any positive width though only 1 and 2 are handled by the readers (a width of 3 or 4 reads `((short *)data)[srcsample]` with the wrong stride) | hardening |
+| `GetWavinfo` | `format` | format gate | `if (format != 1)` | ok |
+| `GetWavinfo` | `channels` | `sc->stereo = channels - 1`, the `len * width * channels` allocation in `SDL_Cache`, divisor in `S_GetStatistics` | none in `GetWavinfo`; `S_LoadSound` (`sound.c`) refuses `info.channels < 1 \|\| info.channels > 2` before any consumer runs | ok |
+| `GetWavinfo` | `rate` (`GetLittleLong`) | `SDL_Cache`: `stepscale = (float)info->rate / sound.speed`, `len = (int)(info->samples / stepscale)`, `len = len * info->width * info->channels`, `Z_Malloc(len + sizeof(sfxcache_t))`, then the resample loop `for (i = 0; i < (int)(info->samples / stepscale); i++)` writes `sc->data[i]`; `sc->begin = begin_length * 1000 / info->rate` and three more integer divisions; `S_IsShortSilence`: `(info->samples * 1000) / info->rate` | none anywhere (only the cinematic path bounds its own `s_rate`) | **defect D28** (a low rate inflates the frame count; the `int` product wraps to a small positive allocation while the loop bound is recomputed from the un-multiplied count, a heap overflow write that the D25 clamp does not close) and **defect D29** (a zero rate reaches integer divisions by zero) |
+| `GetWavinfo` | `width = GetLittleShort() / 8` | divisor of `samples`, element size in every reader | `if (info.width <= 0)`; nothing refuses a width other than 1 or 2. `S_GetVolume` and `S_GetStatistics` skip such a width, and `SDL_Cache` takes its byte branch (`data[srcsample]`, `srcsample` below `info.samples`, which was divided by the width) and writes bytes into an allocation of `len * width * channels`, so a width of 3 or 4 decodes wrong audio but stays in bounds | hardening (carded under FIX20: refuse a width other than 1 or 2) |
 | `GetWavinfo` | `cue ` body, `LIST`/`mark` | `data_p += 32`, `GetLittleLong` for `loopstart`; `data_p += 24`, `GetLittleLong` for loop samples | the `mark` read is guarded by `((data_p - wav) + 32 <= wavlength)`, but the `cue ` `data_p += 32; GetLittleLong()` for `loopstart` is not bounded | D23 |
 | `GetWavinfo` | `loopstart` | `info.samples = loopstart + i`; `sc->loopstart` in `SDL_Cache`, used as a replay offset in `sdl.c` `S_PaintChannels` | no range check; a loopstart past the sample count makes `SDL_PaintChannelFrom*` read `sc->data` out of range during mixing | **defect D24** (the loop offset is divided by `stepscale` and used as `ch->pos`/`ch->end`; a crafted cue loop points the mixer past the cached sample) |
-| `GetWavinfo` | data chunk length | `samples = GetLittleLong() / info.width` | `data_p += 4` then the read; `samples` is never compared with `wavlength - dataofs`, so the field alone sets how many samples every consumer believes exist | **defect D25** |
+| `GetWavinfo` | data chunk length | `samples = GetLittleLong() / info.width` | `data_p += 4` then the read; `samples` is never compared with `wavlength - dataofs`, so the field alone sets how many samples every consumer believes exist; a negative length word gives a negative `samples` | **defect D25**; negative values **D30** |
+| `GetWavinfo` | early returns | `return info` after "Missing data chunk" (and the earlier failures) | `info` is returned as filled so far: when a `cue `/`LIST`/`mark` sequence was found, `info.samples = info.loopstart + i` is already set and `dataofs` is still 0, and `channels` is valid, so `S_LoadSound` accepts it and every consumer reads `info.samples` elements from the start of the file buffer; nothing validates on any return path | **defect D30** |
 | `GetWavinfo` | `samples` vs `info.samples` (cue) | loop-length sanity | `if (samples < info.samples) Com_Error(...)` only when a cue set `info.samples`; otherwise `info.samples = samples` unchecked | D25 |
 | `GetWavinfo` | `dataofs = data_p - wav` | base pointer `data + info.dataofs` for all consumers | no check that `dataofs <= wavlength` | **defect D25** (feeds the over-read below) |
 | `S_GetVolume` (`sound.c`) | `info.samples` | `sound_end = sound_data + sound_length`, reads every element | none; trusts `info.samples` | **defect D25** (heap over-read) |
 | `S_GetStatistics` (`sound.c`) | `info.samples` | four scans over `[sound_data, sound_data + sound_length]` | none | **defect D25** |
-| `S_IsShortSilence` (`sound.c`) | `info.samples` | `sample_count = info.samples * info.width`, reads each | tests `info.samples > rate * S_MAX_LEN...` to skip long sounds, but the short-silence branch still reads `sample_count` bytes for a sound whose `rate` is large | **defect D25** |
-| `SDL_Cache` (`sdl.c`) | `info.samples`, `info.rate` | `len = info.samples / stepscale`, resample loop reads `data[srcsample]` / `((short *)data)[srcsample]` for `srcsample` up to about `info.samples` | `stepscale = info.rate / sound.speed`; zero-length rejected; the loop index is driven by `info.samples`, so an inflated count reads past `data` and writes a correspondingly large `sc` | **defect D25** (heap over-read on the source; the destination `Z_Malloc(len ...)` is sized from the same inflated count, so it is large but matched) |
+| `S_IsShortSilence` (`sound.c`) | `info.samples` | `sample_count = info.samples * info.width`, reads each | tests `info.samples > rate * S_MAX_LEN...` to skip long sounds, but the short-silence branch still reads `sample_count` bytes for a sound whose `rate` is large; the first test divides by `info->rate` unchecked (reached only for a mono sound under one of the muzzle-flash names listed in `S_IsSilencedMuzzleFlash`) | **defect D25**; the division **D29** |
+| `SDL_Cache` (`sdl.c`) | `info.samples` | resample loop reads `data[srcsample]` / `((short *)data)[srcsample]` for `srcsample` up to about `info.samples` | zero-length rejected; nothing compares `info.samples` with the data actually present | **defect D25** (heap over-read on the source) |
+| `SDL_Cache` (`sdl.c`) | `len * info->width * info->channels` | `Z_Malloc(len + sizeof(sfxcache_t))` for a loop that writes `(int)(info->samples / stepscale)` elements of `sc->width` bytes | `int` multiplication with no overflow test, and the loop bound is recomputed from the un-multiplied frame count, so the destination is not matched to the loop once the product wraps; a negative product becomes a huge `size_t` and `Z_TagMalloc` fails with `ERR_FATAL` | **defect D28** (heap overflow write; with `info.samples` consistent with the file, so D25's clamp leaves it open) |
+| `SDL_Cache` (`sdl.c`) | `info->rate == 0` | `stepscale = 0`, `(int)(info->samples / 0.0f)` (undefined conversion of infinity), then `begin_length * 1000 / info->rate` and the `end`, `fade`, `attack` lines | none | **defect D29** (integer division by zero: SIGFPE on x86-64, a silent 0 on arm64; the float path gives an undefined frame count) |
 
 D25 is the substantive WAV finding: the data-chunk length word, and the
 `dataofs`, are trusted without any comparison to `wavlength`. A `.wav` named
@@ -554,14 +559,45 @@ in a server sound configstring, downloadable with `allow_download_sounds`,
 sets `info.samples` to any 31-bit value, and four consumers then read that many
 elements from `data + info.dataofs`. Static trace, high confidence. D23 and
 D24 are the same class (unbounded chunk reads, unbounded loop point); D23 is a
-few bytes, D24 reaches the mixer. The minimal fix is a clamp in `GetWavinfo`:
+few bytes, D24 reaches the mixer. The clamp for D25 alone is not enough:
 reject `dataofs > wavlength`, and `samples > (wavlength - dataofs) / (width *
 channels)`; and bound `loopstart` to `samples`.
+
+D28 is independent of D25. `info.rate` is read and never checked. In
+`SDL_Cache`, `stepscale = rate / sound.speed`, so a rate far below the output
+rate makes the resampled frame count `(int)(samples / stepscale)` many times
+`samples`; `len * width * channels` is then an `int` product that wraps, and
+the allocation can come out small and positive while the loop still writes
+the full frame count into `sc->data`. The source index stays near 0 (the
+step rounds to 0), so the reads stay inside a file whose `samples` is honest
+and only the write overflows. Checked numerically with the same expressions
+for a stereo 16-bit file of a few tens of KB at the two usual output rates:
+at 48 kHz the product wraps to about 313 MB allocated for about 2.3 GB of
+writes; at 44.1 kHz it wraps negative and `Z_TagMalloc` fails with
+`ERR_FATAL`. A `.wav` is requested from a server as `sound/%s` for every
+`CS_SOUNDS` configstring, so D28 is server-reachable: high, static trace with
+high confidence (the arithmetic was checked, `SDL_Cache` was not run). D29 is
+the zero rate: `begin_length * 1000 / info->rate` and its three siblings in
+`SDL_Cache` (every SDL-loaded sound) and the first test of
+`S_IsShortSilence` divide by zero; that is a SIGFPE crash on x86-64 and a
+silent 0 on arm64, so medium (denial of service), high confidence. D30 is
+`GetWavinfo` handing back a partly filled `info` from an early return (a cue
+loop length but no data chunk leaves `samples` set and `dataofs` 0) or a
+negative `samples` from a negative length word; medium, high confidence.
+
+FIX20 therefore validates the complete `wavinfo_t` on every return path of
+`GetWavinfo` (or in one place in `S_LoadSound` before any consumer): rate in
+a sane range (for example 1 kHz to 192 kHz), width 1 or 2, channels 1 or 2,
+`samples > 0`, `dataofs` and `samples * width * channels` inside the file,
+`loopstart` below `samples`; and `SDL_Cache` computes its allocation in
+64-bit and compares it with a limit before allocating, deriving the loop
+bound from the same value.
 
 No host harness was run: `wave.c`, `sound.c` and `sdl.c` include the client
 and SDL sound headers and do not link standalone without a large stub surface.
 The reads above were traced by hand from `info.samples`/`info.dataofs` to each
-`sound_end`/`srcsample` use.
+`sound_end`/`srcsample` use, and the D28 wrap was checked with a standalone
+program evaluating the same `float` and `int` expressions.
 
 ## Cinematics (`src/client/cl_cin.c`)
 
@@ -703,6 +739,9 @@ reachability in [Where each asset can come from](#where-each-asset-can-come-from
 | D25 | `wave.c` data chunk | the data-length word and `dataofs` are trusted without comparison to `wavlength`; four consumers read `info.samples` elements from `data + dataofs` | high | high (static) | FIX20 |
 | D26 | `cl_cin.c` `SCR_PlayCinematic` | still-image name copied into `char namewe[256]` by length; `MAX_OSPATH` is 4096 on non-Apple Unix, so a long server name overruns the stack buffer | high | high (static) | FIX21 |
 | D27 | M32 `LoadM32` | `width * 4` wraps in the body-size check, so a hostile width passes against a few-byte body; gl1 then rewrites `width * height` pixels in place past the file buffer (gl3 over-reads) | high | high (static) | FIX19 |
+| D28 | `sdl.c` `SDL_Cache` (rate from `wave.c`) | `info.rate` unchecked; a low rate inflates the resampled frame count, `len * width * channels` wraps in `int` to a small allocation, and the loop writes the full count: heap overflow write not closed by the D25 clamp | high | high (static, arithmetic checked) | FIX20 |
+| D29 | `sdl.c` `SDL_Cache`, `sound.c` `S_IsShortSilence` | a zero `info.rate` reaches integer divisions (`begin_length * 1000 / info->rate` and siblings, `(info->samples * 1000) / info->rate`) | medium | high (static) | FIX20 |
+| D30 | `wave.c` `GetWavinfo` return paths | `info` is returned partly filled from early returns (a cue loop length with no data chunk leaves `samples` set and `dataofs` 0) and a negative data-length word gives negative `samples`; nothing validates on any path | medium | high (static) | FIX20 |
 
 Fixed in this branch: D2, D3 (negative side), D15 — each a one-line bound
 check in its loader, committed separately and noted in its row.
@@ -721,7 +760,7 @@ here (no harness is committed).
 | FIX17 | #115 | D7, D8, D9, D10, D11, D12, D13, D14 (renderer BSP loaders) | high |
 | FIX18 | #116 | D16, D17, D18 (MD2 and SP2) | high |
 | FIX19 | #117 | D19, D20, D21, D22, D27 (image loaders), plus hardening: non-positive dimensions from `GetWalInfo`/`GetM8Info`/`GetM32Info` | high |
-| FIX20 | #118 | D23, D24, D25 (WAV) | high |
+| FIX20 | #118 | D23, D24, D25, D28, D29, D30 (WAV and the SDL resampler), plus hardening: refuse a sample width other than 1 or 2 | high |
 | FIX21 | #119 | D26 (cinematic still-image name) | high |
 | FIX22 | #120 | D4, D5, D6 (pak directory) | high |
 | FIX23 | #121 | D1 and the remaining D3 off-by-one (collision BSP), distinct from FIX3 (#44) / FIX10 (#73) | medium |
