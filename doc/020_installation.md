@@ -277,7 +277,8 @@ To compile Yamagi Quake II from source the following dependencies
 
 * A GCC compatible compiler like *gcc*, *clang* or *MinGW-w64*.
 * A LibGL implementation with system headers.
-* SDL 3.0.
+* SDL 3.0. On MacOS it is not needed: SDL 3 is built from the source
+  in *third_party/SDL3/* as part of the client build.
 
 
 ### Prerequisites on Unixoid Platforms
@@ -293,8 +294,9 @@ The build dependencies can be installed with:
 * On OpenBSD: `pkg_add gmake sdl3`
 * On Solaris/Illumos: `pkg install sdl3`
 * On Haiku: `pkgman libsdl3_devel`
-* On MacOS the dependencies can be installed with Homebrew (from
-  https://brew.sh): `brew install sdl3`
+* On MacOS only the Xcode command line tools are needed (they provide
+  *clang* and *make*). SDL 3 is built from the copy in
+  *third_party/SDL3/*, so neither Homebrew nor a system SDL is used.
 
 Other distributions or platforms often have package named similar to the
 Debian or FreeBSD packages.
