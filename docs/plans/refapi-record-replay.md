@@ -11,7 +11,7 @@ and judge the frames through the same pin hook.
 ## 1. The seam
 
 `src/client/vid/vid.c` already owns the only copy of `refexport_t re`
-(`re = GetRefAPI(ri)` in `VID_LoadRefresh`) and exposes it to the rest of
+(`re = GetRefAPI(ri)` in `VID_LoadRenderer`) and exposes it to the rest of
 the client through named wrappers. No client file touches `re.` directly
 (verified: the only `re.` hits outside vid.c are `re.wav` strings). The
 recorder therefore lives in those wrappers; no second function table, no
@@ -19,7 +19,7 @@ change to `API_VERSION 8`, no change to any renderer.
 
 | `refexport_t` member | vid.c wrapper | Class | Recorded as |
 |---|---|---|---|
-| `Init`, `Shutdown` | `VID_LoadRefresh`, `VID_ShutdownRenderer` | control | session open/close |
+| `Init`, `Shutdown` | `VID_LoadRenderer`, `VID_ShutdownRenderer` | control | session open/close |
 | `PrepareForWindow`, `InitContext`, `GetDrawableSize`, `ShutdownContext`, `IsVSyncActive` | GLimp path | control | not recorded (window plumbing) |
 | `BeginRegistration(map)` | `R_BeginRegistration` | registration | `REC_BEGINREG` + map name |
 | `RegisterModel(name)` | `R_RegisterModel` | registration | `REC_MODEL` name, handle id |
@@ -83,10 +83,16 @@ records at 32 B = 1.3 KB). Worst case with 4096 particles: ~97 KB.
 One file per record run, `<store>/<scenario>/<renderer>/<sha>-<hash>/trace.q2r`.
 
 - Header (64 B): magic `Q2REFREC`, `u32 version = 1`, `u32 api_version`
-  (8), `u32 flags`, `u32 string_table_offset`, `u32 frame_count`,
-  `char engine_sha[16]`, `u32 scenario_hash` (same `cksum` as
-  `scripts/pins.sh`), `u16 width, height`, `u32 pins_capture` cadence.
-- Records: `u16 type`, `u16 pad`, `u32 length`, payload. Little-endian,
+  (8), `u32 flags`, `u32 string_table_offset`, `u32 frame_index_offset`,
+  `u32 frame_count`, `char engine_sha[16]`, `u32 scenario_hash` (same
+  `cksum` as `scripts/pins.sh`), `u16 width, height`, `u32 pins_capture`
+  cadence. That is 60 bytes of fields followed by 4 reserved bytes, written
+  as zero; the reader refuses a header in which they are not zero.
+- Records: `u16 type`, `u16 pad`, `u32 length`, payload. The payload layout
+  of each record type, and the limits a record must meet
+  (`REFREC_MAX_STRING`, `REFREC_MAX_CVARS`, `REFREC_MAX_RAW_DIM`), are
+  defined in `src/client/vid/header/refrecord.h`, which is authoritative.
+  Little-endian,
   4-byte alignment, fixed-width integers, floats as IEEE-754 bits. Written
   with explicit serializers, never `fwrite(&struct)`, so the format does not
   depend on the compiler's layout.
@@ -205,18 +211,50 @@ void RefRec_CloseReplay(void);
 #endif
 ```
 
-vid.c insertion points (by function): `VID_LoadRefresh` after
-`re = GetRefAPI(ri)` succeeds → `RefRec_StartRecord` when `pins_record` is
-set, and the `REC_CVARS` snapshot; `VID_ShutdownRenderer` →
-`RefRec_StopRecord`; `R_BeginRegistration`, `R_RegisterModel`,
-`R_RegisterSkin`, `R_SetSky`, `R_EndRegistration`, `Draw_FindPic` →
-`RefRec_Registration` with the returned handle; `R_RenderFrame` →
-`RefRec_RenderFrame(fd)` before forwarding; every `Draw_*` → `RefRec_Draw`;
-`R_SetPalette`, `R_BeginFrame`, `R_EndWorldRenderpass`, `R_EndFrame` →
-`RefRec_Control`. Each is one line guarded by `RefRec_Recording()`.
+vid.c insertion points (by function), as built by TASK27a:
+`VID_LoadRenderer` after `re.Init()` succeeds records the `REC_CVARS`
+snapshot (a failed `Init` opens no session, and the renderer's cvars exist
+by then); `VID_ShutdownRenderer` → `RefRec_StopRecord`;
+`R_BeginRegistration`, `R_RegisterModel`, `R_RegisterSkin`,
+`R_EndRegistration`, `Draw_FindPic` → `RefRec_Registration` with the
+returned handle; `R_SetSky` and `R_SetPalette` go through `RefRec_Draw`
+instead, because `RefRec_Registration(t, name, handle)` and
+`RefRec_Control(t, float)` cannot carry their arguments (rotate and axis;
+the palette bytes); `R_RenderFrame` → `RefRec_RenderFrame(fd)` before
+forwarding; every `Draw_*` → `RefRec_Draw`; `R_BeginFrame`,
+`R_EndWorldRenderpass`, `R_EndFrame` → `RefRec_Control`. Each is one block
+guarded by `RefRec_Recording()`. `RefRec_StartRecord` is not called from
+vid.c yet: the next card calls it from the session-open point in
+`VID_LoadRenderer`, before the `REC_CVARS` snapshot and outside the
+`RefRec_Recording()` guard, since recording is off until it has run.
 New cvars: `pins_record <path>` (recorder on), `pins_replay <path>`
 (replayer on), both documented in `doc/040_cvarlist.md` or
 `tests/check-cvar-docs.sh` fails.
+
+### For the next cards
+
+TASK27a only serializes and hooks; these obligations pass to the cards that
+record and replay, and are not implemented yet.
+
+- The replayer must bound every value it reads from a file before forwarding
+  it to a renderer: the viewport and `rdflags`, every float, handles and ids,
+  entity `frame`, `oldframe`, `skinnum` and `lightstyle`, and 2D draw
+  coordinates. It must check the header's offsets and counts against the
+  file size, and refuse a file of 4 GiB or more (`RefRec_ReaderInit` takes a
+  `uint32_t` size). The readers validate framing, not meaning.
+- `refrec_call_t.data` points into the reader's buffer after a read; the
+  replayer keeps that buffer alive and unmodified until the call has been
+  forwarded.
+- The recorder copies names bounded and NUL-terminated, and handles a NULL
+  name (several hooks pass none). It treats a writer whose `ok` is false as
+  the end of the recording, not as one skipped record. It needs a defined
+  behaviour for a `Draw_StretchRaw` image above `REFREC_MAX_RAW_DIM` in
+  either dimension, which the writer refuses (a `REC_WARN`, not a dead
+  writer).
+- The `Draw_GetPicSize` hook reads `*w` and `*h` after forwarding, and the
+  `Draw_PicScaledCol` hook reads `color[0..2]` before the existing NULL test
+  of `re.DrawPicScaledCol`; both are dereferences the base wrappers did not
+  make and must be made safe when recording is switched on.
 
 ## 6. Sub-cards, in dependency order
 
