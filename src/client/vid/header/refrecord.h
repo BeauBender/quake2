@@ -236,9 +236,15 @@ qboolean RefRec_NextFrameIndex(refrec_reader_t *r, uint32_t *frame, uint64_t *of
  * limit (REFREC_MAX_TRACE, REFREC_MAX_FRAMES) finishes the trace early
  * with REFREC_FLAG_TRUNCATED. A trace whose string_table_offset is 0 was
  * never finished. RefRec_StartRecord while recording does nothing.
+ * A recording may end inside any of the calls below; the call then
+ * returns normally and every later call does nothing. The recorder frees
+ * its buffers only when the outermost of these calls returns.
  */
 void RefRec_SetPrint(void (*print)(const char *fmt, ...));
 void RefRec_SetLimit(uint32_t bytes);	/* lowers REFREC_MAX_TRACE for the next recording (tests); 0 restores it */
+void RefRec_SetFrameLimit(uint32_t frames);	/* lowers REFREC_MAX_FRAMES for the next recording (tests); 0 restores it */
+void RefRec_SetHandleLimit(uint32_t handles);	/* lowers REFREC_MAX_HANDLES for the next recording (tests); 0 restores it */
+void RefRec_SetWriteFault(uint32_t n);	/* the n-th write, seek or close of the next recording fails (tests); 0 none */
 void RefRec_StartRecord(const char *path, int width, int height, int capture_every);
 void RefRec_StopRecord(void);                  /* writes string table, index, patches header */
 qboolean RefRec_Recording(void);

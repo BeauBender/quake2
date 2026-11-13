@@ -1179,11 +1179,37 @@ Rec_DefaultPrint(const char *fmt, ...)
 
 static void (*rec_print)(const char *fmt, ...) = Rec_DefaultPrint;
 
+/*
+ * Recorder state.
+ *
+ * A recording ends in one of these ways: a recorder limit (records past
+ * the byte limit, frames past the frame limit) or a failed frame-index
+ * allocation, through Rec_Finish with truncated; a failed write, seek or
+ * close, or a record that cannot be serialized, through Rec_Fail;
+ * RefRec_StopRecord (vid.c calls it at renderer shutdown), through
+ * Rec_Finish. The first two can happen deep inside a call, for example
+ * while a REC_WARN is written from the middle of Rec_Register, with the
+ * handle map in use further up the stack.
+ *
+ * So ending a recording never frees anything. It turns on off first
+ * (before any message is printed, so a print function that draws cannot
+ * record), finishes or abandons the file, and leaves every buffer in
+ * place. Every helper checks on before it records and finds the buffers
+ * valid either way. The buffers are released in one place, Rec_Release,
+ * only when no public entry point is on the call stack: each entry point
+ * runs between Rec_Enter and Rec_Leave, and the outermost Rec_Leave
+ * releases them.
+ */
 static struct {
-	qboolean on;
+	qboolean on;		/* the hooks record; off from the first moment of any stop */
+	qboolean writing;	/* the file is open and the trace neither finished nor failed */
 	FILE *f;
 	uint32_t pos;		/* bytes in the file, the offset of the next record */
 	uint32_t limit;		/* bytes of records allowed, REFREC_MAX_TRACE */
+	uint32_t framelimit;	/* complete frames allowed, REFREC_MAX_FRAMES */
+	uint32_t handlelimit;	/* handle map entries allowed, REFREC_MAX_HANDLES */
+	uint32_t fileops;	/* writes, seeks and closes done */
+	uint32_t fault;		/* the file operation that fails (tests), 0 none */
 	refrec_header_t header;
 	refrec_writer_t w;	/* the record being written, one at a time */
 
@@ -1197,9 +1223,53 @@ static struct {
 	uint32_t framestart;
 } rec;
 
+static int rec_depth;	/* public entry points on the call stack */
+
 static uint32_t rec_limit = REFREC_MAX_TRACE;
+static uint32_t rec_frame_limit = REFREC_MAX_FRAMES;
+static uint32_t rec_handle_limit = REFREC_MAX_HANDLES;
+static uint32_t rec_fault;
 
 static void Rec_Finish(qboolean truncated);
+
+/* true while the recorder holds buffers, recording or not */
+static qboolean
+Rec_Held(void)
+{
+	return rec.handles || rec.hash || rec.frames || rec.w.data;
+}
+
+/*
+ * The one place the recorder's buffers are freed: only when the
+ * recording has ended and no entry point is still running.
+ */
+static void
+Rec_Release(void)
+{
+	if (rec.on || rec.writing || rec_depth > 0 || !Rec_Held())
+	{
+		return;
+	}
+
+	RefRec_WriterFree(&rec.w);
+	free(rec.handles);
+	free(rec.hash);
+	free(rec.frames);
+	memset(&rec, 0, sizeof(rec));
+}
+
+static void
+Rec_Enter(void)
+{
+	rec_depth++;
+}
+
+static void
+Rec_Leave(void)
+{
+	rec_depth--;
+	Rec_Release();
+}
 
 void
 RefRec_SetPrint(void (*print)(const char *fmt, ...))
@@ -1213,58 +1283,90 @@ RefRec_SetLimit(uint32_t bytes)
 	rec_limit = (bytes && bytes < REFREC_MAX_TRACE) ? bytes : REFREC_MAX_TRACE;
 }
 
+void
+RefRec_SetFrameLimit(uint32_t frames)
+{
+	rec_frame_limit = (frames && frames < REFREC_MAX_FRAMES) ? frames : REFREC_MAX_FRAMES;
+}
+
+void
+RefRec_SetHandleLimit(uint32_t handles)
+{
+	rec_handle_limit = (handles && handles < REFREC_MAX_HANDLES) ? handles : REFREC_MAX_HANDLES;
+}
+
+void
+RefRec_SetWriteFault(uint32_t n)
+{
+	rec_fault = n;
+}
+
 qboolean
 RefRec_Recording(void)
 {
 	return rec.on;
 }
 
-static void
-Rec_Free(void)
-{
-	RefRec_WriterFree(&rec.w);
-	free(rec.handles);
-	free(rec.hash);
-	free(rec.frames);
-	memset(&rec, 0, sizeof(rec));
-}
-
 /*
  * A write failed: the recording ends here, reported once. The header is
  * left as written at the start (no string table, no frame index), which
- * a reader recognises as an unfinished trace.
+ * a reader recognises as an unfinished trace. Frees nothing.
  */
 static void
 Rec_Fail(const char *what)
 {
-	if (!rec.on)
+	if (!rec.writing)
 	{
 		return;
 	}
 
-	rec_print("refrec: %s; recording stopped, the trace is unfinished\n", what);
+	rec.on = false;
+	rec.writing = false;
 
 	if (rec.f)
 	{
 		fclose(rec.f);
+		rec.f = NULL;
 	}
 
-	Rec_Free();
+	rec_print("refrec: %s; recording stopped, the trace is unfinished\n", what);
+}
+
+/* counts one write, seek or close; true when the test knob fails this one */
+static qboolean
+Rec_Fault(void)
+{
+	rec.fileops++;
+
+	return rec.fault && rec.fileops == rec.fault;
+}
+
+static qboolean
+Rec_Write(const void *src, uint32_t n)
+{
+	if (Rec_Fault())
+	{
+		return false;
+	}
+
+	return fwrite(src, 1, n, rec.f) == n;
 }
 
 /*
- * Writes what rec.w holds, then empties it. Records count against the
- * limit; reaching it finishes the trace early (Rec_Finish with
- * truncated). The trailer (string table, frame index) is not limited:
- * its size is bounded by REFREC_MAX_HANDLES and REFREC_MAX_FRAMES.
+ * Writes what rec.w holds, then empties it. Records (limited) are written
+ * only while recording and count against the limit; reaching it finishes
+ * the trace early (Rec_Finish with truncated). The trailer (string table,
+ * frame index) is written while the file is open and is not limited: its
+ * size is bounded by REFREC_MAX_HANDLES and REFREC_MAX_FRAMES.
  */
 static qboolean
 Rec_Flush(qboolean limited, uint32_t extra)
 {
 	uint32_t n = rec.w.cursize;
 
-	if (!rec.on)
+	if (!rec.writing || (limited && !rec.on))
 	{
+		rec.w.cursize = 0;
 		return false;
 	}
 
@@ -1282,7 +1384,7 @@ Rec_Flush(qboolean limited, uint32_t extra)
 		return false;
 	}
 
-	if (n && fwrite(rec.w.data, 1, n, rec.f) != n)
+	if (n && !Rec_Write(rec.w.data, n))
 	{
 		Rec_Fail("cannot write the trace");
 		return false;
@@ -1298,7 +1400,12 @@ Rec_Flush(qboolean limited, uint32_t extra)
 static qboolean
 Rec_Raw(const void *src, uint32_t n)
 {
-	if (n && fwrite(src, 1, n, rec.f) != n)
+	if (!rec.on || !rec.writing)
+	{
+		return false;
+	}
+
+	if (n && !Rec_Write(src, n))
 	{
 		Rec_Fail("cannot write the trace");
 		return false;
@@ -1326,6 +1433,11 @@ Rec_Warn(refrec_warn_t code, const char *msg)
 {
 	refrec_call_t c;
 
+	if (!rec.on)
+	{
+		return;
+	}
+
 	memset(&c, 0, sizeof(c));
 	c.type = REC_WARN;
 	c.ints[0] = code;
@@ -1335,7 +1447,8 @@ Rec_Warn(refrec_warn_t code, const char *msg)
 
 /*
  * Copies name into out (REFREC_MAX_STRING bytes), bounded: a NULL name is
- * recorded empty and an over-long one cut, each with a REC_WARN.
+ * recorded empty and an over-long one cut, each with a REC_WARN. Touches
+ * no recorder state after the warning.
  */
 static void
 Rec_Name(char *out, const char *name)
@@ -1376,11 +1489,22 @@ Rec_Slot(const void *ptr, uint32_t kind)
 	return (uint32_t)(v + kind) & (REC_HASH_SLOTS - 1);
 }
 
-/* the hash slot holding (ptr, kind), or the empty slot where it belongs */
+/*
+ * The hash slot holding (ptr, kind), or the empty slot where it belongs;
+ * NULL once the recording has ended. A retired entry (ptr NULL, see
+ * Rec_Register) never matches and the probe goes on past it.
+ */
 static uint32_t *
 Rec_Find(const void *ptr, uint32_t kind)
 {
-	uint32_t i = Rec_Slot(ptr, kind), n;
+	uint32_t i, n;
+
+	if (!rec.on || !rec.hash)
+	{
+		return NULL;
+	}
+
+	i = Rec_Slot(ptr, kind);
 
 	/* the table is at most half full, so an empty slot is always found */
 	for (n = 0; n < REC_HASH_SLOTS; n++)
@@ -1408,13 +1532,18 @@ Rec_Find(const void *ptr, uint32_t kind)
  * The id for a handle. The same pointer and name of one kind always get
  * the same id; the same pointer under a new name (the renderer reused
  * the memory after EndRegistration) gets a new id. Sky and map entries
- * (ptr NULL) are kept once per name.
+ * (ptr NULL) are kept once per name. 0 once the recording has ended.
  */
 static uint32_t
 Rec_Register(uint32_t kind, const char *name, const void *ptr)
 {
 	rec_handle_t *h;
 	uint32_t *slot = NULL, i;
+
+	if (!rec.on)
+	{
+		return 0;
+	}
 
 	if (ptr)
 	{
@@ -1427,6 +1556,8 @@ Rec_Register(uint32_t kind, const char *name, const void *ptr)
 	}
 	else
 	{
+		/* only sky and map kinds come here; a retired model, skin or
+		   pic entry also has ptr NULL but never their kind */
 		for (i = 0; i < rec.numhandles; i++)
 		{
 			h = &rec.handles[i];
@@ -1438,10 +1569,32 @@ Rec_Register(uint32_t kind, const char *name, const void *ptr)
 		}
 	}
 
-	if (rec.numhandles >= REFREC_MAX_HANDLES || (ptr && !slot))
+	if (rec.numhandles >= rec.handlelimit || (ptr && !slot))
 	{
+		/*
+		 * The pointer's entry names another file now. Retire it, so a
+		 * later lookup of the pointer misses and warns instead of
+		 * finding the stale id; the entry stays in the string table for
+		 * the records that already carry its id.
+		 */
+		if (slot && *slot)
+		{
+			rec.handles[*slot - 1].ptr = NULL;
+		}
+
 		Rec_Warn(REFREC_WARN_HANDLES_FULL, "handle map full, recorded as id 0");
 		return 0;
+	}
+
+	/* the record keeps the whole name; the table holds MAX_QPATH - 1 bytes */
+	if (strlen(name) >= MAX_QPATH)
+	{
+		Rec_Warn(REFREC_WARN_NAME, "name longer than MAX_QPATH, cut in the string table");
+
+		if (!rec.on)
+		{
+			return 0;
+		}
 	}
 
 	h = &rec.handles[rec.numhandles++];
@@ -1449,15 +1602,9 @@ Rec_Register(uint32_t kind, const char *name, const void *ptr)
 	h->ptr = ptr;
 	h->kind = kind;
 
-	/* the record keeps the whole name; the table holds MAX_QPATH - 1 bytes */
 	for (i = 0; i < MAX_QPATH - 1 && name[i]; i++)
 	{
 		h->name[i] = name[i];
-	}
-
-	if (name[i])
-	{
-		Rec_Warn(REFREC_WARN_NAME, "name longer than MAX_QPATH, cut in the string table");
 	}
 
 	if (slot)
@@ -1474,7 +1621,7 @@ Rec_Lookup(const void *ptr, uint32_t kind, uint32_t alt)
 {
 	uint32_t *slot;
 
-	if (!ptr)
+	if (!ptr || !rec.on)
 	{
 		return 0;
 	}
@@ -1555,10 +1702,11 @@ Rec_RunId(const char *path, refrec_header_t *h)
 			(size_t)(hash - 1 - base) : sizeof(h->engine_sha));
 }
 
-void
-RefRec_StartRecord(const char *path, int width, int height, int capture_every)
+static void
+Rec_StartRecord(const char *path, int width, int height, int capture_every)
 {
-	if (rec.on)
+	/* buffers still held here belong to an entry point further up the stack */
+	if (rec.on || Rec_Held())
 	{
 		rec_print("refrec: already recording, %s not opened\n", path ? path : "(null)");
 		return;
@@ -1573,13 +1721,15 @@ RefRec_StartRecord(const char *path, int width, int height, int capture_every)
 	memset(&rec, 0, sizeof(rec));
 	RefRec_WriterInit(&rec.w);
 	rec.limit = rec_limit;
+	rec.framelimit = rec_frame_limit;
+	rec.handlelimit = rec_handle_limit;
+	rec.fault = rec_fault;
 	rec.handles = calloc(REFREC_MAX_HANDLES, sizeof(*rec.handles));
 	rec.hash = calloc(REC_HASH_SLOTS, sizeof(*rec.hash));
 
 	if (!rec.handles || !rec.hash)
 	{
 		rec_print("refrec: out of memory, not recording\n");
-		Rec_Free();
 		return;
 	}
 
@@ -1588,7 +1738,6 @@ RefRec_StartRecord(const char *path, int width, int height, int capture_every)
 	if (!rec.f)
 	{
 		rec_print("refrec: cannot open %s, not recording\n", path);
-		Rec_Free();
 		return;
 	}
 
@@ -1601,26 +1750,43 @@ RefRec_StartRecord(const char *path, int width, int height, int capture_every)
 	Rec_RunId(path, &rec.header);
 
 	/* offsets and counts stay zero until Rec_Finish patches the header */
+	rec.writing = true;
 	rec.on = true;
 	RefRec_WriteHeader(&rec.w, &rec.header);
 	Rec_Flush(false, 0);
+}
+
+void
+RefRec_StartRecord(const char *path, int width, int height, int capture_every)
+{
+	/* what an earlier recording left is released here at the latest */
+	Rec_Release();
+	Rec_Enter();
+	Rec_StartRecord(path, width, height, capture_every);
+	Rec_Leave();
 }
 
 /*
  * Writes the string table and the frame index after the last record and
  * patches the header. Truncated: a recorder limit was reached; the
  * frames recorded so far are kept and REFREC_FLAG_TRUNCATED is set.
+ * Recording is off from the first line; the buffers stay until
+ * Rec_Release.
  */
 static void
 Rec_Finish(qboolean truncated)
 {
 	uint32_t i;
+	qboolean fault;
 	FILE *f;
 
-	if (!rec.on)
+	if (!rec.writing)
 	{
 		return;
 	}
+
+	rec.on = false;
+	rec.w.cursize = 0;	/* a record cut short by the stop is not written */
 
 	if (truncated)
 	{
@@ -1632,18 +1798,22 @@ Rec_Finish(qboolean truncated)
 	rec.header.string_table_offset = rec.pos;
 	W_U32(&rec.w, rec.numhandles);
 
-	for (i = 0; i < rec.numhandles && rec.on; i++)
+	for (i = 0; i < rec.numhandles && rec.writing; i++)
 	{
 		W_U32(&rec.w, rec.handles[i].kind);
 		W_U32(&rec.w, i + 1);
 		W_Bytes(&rec.w, rec.handles[i].name, MAX_QPATH);
-		Rec_Flush(false, 0);
+
+		if (rec.w.cursize >= 4096)
+		{
+			Rec_Flush(false, 0);
+		}
 	}
 
 	Rec_Flush(false, 0);
 	rec.header.frame_index_offset = rec.pos;
 
-	for (i = 0; i < rec.numframes && rec.on; i++)
+	for (i = 0; i < rec.numframes && rec.writing; i++)
 	{
 		W_U32(&rec.w, i);
 		W_U32(&rec.w, rec.frames[i]);
@@ -1662,7 +1832,7 @@ Rec_Finish(qboolean truncated)
 
 	rec.header.frame_count = rec.numframes;
 
-	if (fseek(rec.f, 0, SEEK_SET) != 0)
+	if (Rec_Fault() || fseek(rec.f, 0, SEEK_SET) != 0)
 	{
 		Rec_Fail("cannot seek to the trace header");
 		return;
@@ -1670,42 +1840,47 @@ Rec_Finish(qboolean truncated)
 
 	RefRec_WriteHeader(&rec.w, &rec.header);
 
-	if (!rec.w.ok || fwrite(rec.w.data, 1, rec.w.cursize, rec.f) != rec.w.cursize)
+	if (!rec.w.ok || !Rec_Write(rec.w.data, rec.w.cursize))
 	{
 		Rec_Fail("cannot write the trace header");
 		return;
 	}
 
+	rec.w.cursize = 0;
 	f = rec.f;
 	rec.f = NULL;
+	fault = Rec_Fault();
 
-	if (fclose(f) != 0)
+	if (fclose(f) != 0 || fault)
 	{
 		Rec_Fail("cannot close the trace");
 		return;
 	}
 
+	rec.writing = false;
 	rec_print("refrec: trace written: %u frames, %u names, %u bytes\n",
 			rec.header.frame_count, rec.numhandles, rec.pos);
-	Rec_Free();
 }
 
 void
 RefRec_StopRecord(void)
 {
-	Rec_Finish(false);
-}
-
-void
-RefRec_Registration(refrec_type_t t, const char *name, const void *handle)
-{
-	refrec_call_t c;
-	uint32_t kind;
-
+	/* after any other stop there is nothing left to finish */
 	if (!rec.on)
 	{
 		return;
 	}
+
+	Rec_Enter();
+	Rec_Finish(false);
+	Rec_Leave();
+}
+
+static void
+Rec_Registration(refrec_type_t t, const char *name, const void *handle)
+{
+	refrec_call_t c;
+	uint32_t kind;
 
 	memset(&c, 0, sizeof(c));
 	c.type = t;
@@ -1738,6 +1913,19 @@ RefRec_Registration(refrec_type_t t, const char *name, const void *handle)
 	Rec_Call(&c);
 }
 
+void
+RefRec_Registration(refrec_type_t t, const char *name, const void *handle)
+{
+	if (!rec.on)
+	{
+		return;
+	}
+
+	Rec_Enter();
+	Rec_Registration(t, name, handle);
+	Rec_Leave();
+}
+
 /* the entity, dlight and particle count to copy: 0..max, clamped with a warning */
 static int32_t
 Rec_Count(int n, int max, const void *array)
@@ -1757,17 +1945,12 @@ Rec_Count(int n, int max, const void *array)
 	return n;
 }
 
-void
-RefRec_RenderFrame(const refdef_t *fd)
+static void
+Rec_RenderFrame(const refdef_t *fd)
 {
 	static refrec_frame_t f;
 	refrec_refdef_t *rd = &f.refdef;
 	int i;
-
-	if (!rec.on)
-	{
-		return;
-	}
 
 	if (!fd)
 	{
@@ -1811,7 +1994,8 @@ RefRec_RenderFrame(const refdef_t *fd)
 	rd->num_dlights = Rec_Count(fd->num_dlights, MAX_DLIGHTS, fd->dlights);
 	rd->num_particles = Rec_Count(fd->num_particles, MAX_PARTICLES, fd->particles);
 
-	for (i = 0; i < rd->num_entities; i++)
+	/* the lookups stop warning (and return 0) once a warning ended the recording */
+	for (i = 0; i < rd->num_entities && rec.on; i++)
 	{
 		const entity_t *e = &fd->entities[i];
 		refrec_entity_t *o = &f.entities[i];
@@ -1830,6 +2014,11 @@ RefRec_RenderFrame(const refdef_t *fd)
 		o->flags = e->flags;
 	}
 
+	if (!rec.on)
+	{
+		return;
+	}
+
 	if (rd->num_dlights)
 	{
 		memcpy(f.dlights, fd->dlights, (size_t)rd->num_dlights * sizeof(dlight_t));
@@ -1840,11 +2029,21 @@ RefRec_RenderFrame(const refdef_t *fd)
 		memcpy(f.particles, fd->particles, (size_t)rd->num_particles * sizeof(particle_t));
 	}
 
-	if (rec.on)
+	RefRec_WriteRenderFrame(&rec.w, &f);
+	Rec_Flush(true, 0);
+}
+
+void
+RefRec_RenderFrame(const refdef_t *fd)
+{
+	if (!rec.on)
 	{
-		RefRec_WriteRenderFrame(&rec.w, &f);
-		Rec_Flush(true, 0);
+		return;
 	}
+
+	Rec_Enter();
+	Rec_RenderFrame(fd);
+	Rec_Leave();
 }
 
 /*
@@ -1858,6 +2057,11 @@ Rec_StretchRaw(const refrec_call_t *c)
 	static const uint8_t zero[4];
 	uint32_t pad = (4 - (c->datalen & 3)) & 3;
 	int i;
+
+	if (!rec.on)
+	{
+		return;
+	}
 
 	W_U16(&rec.w, REC_STRETCHRAW);
 	W_U16(&rec.w, 0);
@@ -1876,15 +2080,15 @@ Rec_StretchRaw(const refrec_call_t *c)
 	}
 }
 
-void
-RefRec_Draw(refrec_type_t t, const int32_t *ints, int nints, const float *floats,
+static void
+Rec_Draw(refrec_type_t t, const int32_t *ints, int nints, const float *floats,
 		int nfloats, const char *name, const void *data, uint32_t datalen)
 {
 	const rec_layout_t *l;
 	refrec_call_t c;
 	int i;
 
-	if (!rec.on || !IsCallType(t))
+	if (!IsCallType(t))
 	{
 		return;
 	}
@@ -1944,14 +2148,23 @@ RefRec_Draw(refrec_type_t t, const int32_t *ints, int nints, const float *floats
 }
 
 void
-RefRec_Control(refrec_type_t t, float arg)
+RefRec_Draw(refrec_type_t t, const int32_t *ints, int nints, const float *floats,
+		int nfloats, const char *name, const void *data, uint32_t datalen)
 {
-	refrec_call_t c;
-
 	if (!rec.on)
 	{
 		return;
 	}
+
+	Rec_Enter();
+	Rec_Draw(t, ints, nints, floats, nfloats, name, data, datalen);
+	Rec_Leave();
+}
+
+static void
+Rec_Control(refrec_type_t t, float arg)
+{
+	refrec_call_t c;
 
 	memset(&c, 0, sizeof(c));
 	c.type = t;
@@ -1964,7 +2177,7 @@ RefRec_Control(refrec_type_t t, float arg)
 				Rec_Warn(REFREC_WARN_FRAME, "REC_BEGINFRAME inside a frame; the open frame is dropped from the index");
 			}
 
-			if (rec.numframes >= REFREC_MAX_FRAMES)
+			if (rec.on && rec.numframes >= rec.framelimit)
 			{
 				Rec_Finish(true);
 				return;
@@ -2036,6 +2249,19 @@ RefRec_Control(refrec_type_t t, float arg)
 		default:
 			return;
 	}
+}
+
+void
+RefRec_Control(refrec_type_t t, float arg)
+{
+	if (!rec.on)
+	{
+		return;
+	}
+
+	Rec_Enter();
+	Rec_Control(t, arg);
+	Rec_Leave();
 }
 
 /* ---- replayer ---- */
