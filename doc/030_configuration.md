@@ -1,14 +1,14 @@
 # Configuration Guide
 
-Yamagi Quake II provides a lot of configuration options. This guides
-shows how to configure Yamagi Quake II to match you needs. This guide
+Portmanbeau Quake II provides a lot of configuration options. This guides
+shows how to configure Portmanbeau Quake II to match you needs. This guide
 is for advanced users, if you just want to play you're likely happy
 with the defaults and the options that can be set through the menu.
 
 
 ## Choosing a Renderer
 
-Yamagi Quake II ships with 3 renderers:
+Portmanbeau Quake II ships with 3 renderers:
 
 * The **OpenGL 3.2** renderer: This renderer was developed for the needs
   of modern graphics hardware and is usually the best choice for OpenGL
@@ -34,13 +34,13 @@ Yamagi Quake II ships with 3 renderers:
 
 ## Choosing a Sound System
 
-Yamagi Quake II plays sound through SDL. The **SDL** sound system
+Portmanbeau Quake II plays sound through SDL. The **SDL** sound system
 provides an experience like the original client. The audio driver can be
 chosen with the `s_sdldriver` cvar.
 
 ## Tuning for Precise Timings
 
-Yamagi Quake II comes with a highly evolved asynchronous client. While
+Portmanbeau Quake II comes with a highly evolved asynchronous client. While
 the default settings are usually good, some players may want to tune for
 more precise timing or better vertical synchronization accuracy.
 
@@ -52,7 +52,7 @@ We're unable to fix all those inaccuracies, because the game data, the
 network protocol and the whole look and feel depends on them. We can
 just try work around them.
 
-If your computer is **fast enough** to reach at least 60fps in Yamagi Quake II
+If your computer is **fast enough** to reach at least 60fps in Portmanbeau Quake II
 (this should be the case for most machines these days, including Laptops
  with integrated GPUs; a notable exception are Raspberry PIs),
 the following settings should give you the best results:
@@ -91,7 +91,7 @@ has some more information on the asynchronous client.
 
 ## Getting a classic look and feel
 
-Yamagi Quake II has some features to provide a better experience on
+Portmanbeau Quake II has some features to provide a better experience on
 modern hardware. For example widescreen support, HUD scaling or FOV
 alterations. Not all users may like these changes.
 
@@ -114,8 +114,8 @@ for example.
 
 ### Field of View
 
-Yamagi Quake II has a different FOV calculation then the original
-client. Yamagi Quake II determines the optimal FOV (horizontal and
+Portmanbeau Quake II has a different FOV calculation then the original
+client. Portmanbeau Quake II determines the optimal FOV (horizontal and
 vertical) with the *Horplus* algorithm and the gun is rendered always
 with a static FOV of 80, the original client only had a vertical FOV
 applied to everything.
@@ -131,13 +131,13 @@ applied to everything.
 ### 4/3 Cinematics
 
 While the original Quake II client stretched cinematics over the whole
-window, Yamagi Quake II always renders them with 4/3 aspect. The old
+window, Portmanbeau Quake II always renders them with 4/3 aspect. The old
 behavior can be enforced by setting `cin_force43` to `0`.
 
 
 ### Sound system
 
-Yamagi Quake II has some new sound effects in addition to the
+Portmanbeau Quake II has some new sound effects in addition to the
 original ones.
 
 The new sound effects can be disabled with:
@@ -147,7 +147,7 @@ The new sound effects can be disabled with:
 
 ### Renderer
 
-While Yamagi Quake II still supports the Software renderer, configuring
+While Portmanbeau Quake II still supports the Software renderer, configuring
 one of the OpenGL renderers to give a classic look and feel is often the
 better choice. The OpenGL renderers are much faster, more reliable and
 support colored lighting.
@@ -177,7 +177,7 @@ The OpenGL 3.2 renderer:
 
 ## Retexturing Packs
 
-Yamagi Quake II has full support for retexturing packs. They just need
+Portmanbeau Quake II has full support for retexturing packs. They just need
 to be installed and should be picked up automatically. To disable the
 retexturing pack at a later time set `r_retexturing` to `0`.
 

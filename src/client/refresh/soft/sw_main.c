@@ -1982,7 +1982,7 @@ int vid_buffer_width = 0;
 static int
 RE_InitContext(void *win)
 {
-	char title[40] = {0};
+	char title[80] = {0};
 
 	if (win == NULL)
 	{
@@ -1993,7 +1993,7 @@ RE_InitContext(void *win)
 	window = (SDL_Window *)win;
 
 	/* Window title - set here so we can display renderer name in it */
-	snprintf(title, sizeof(title), "Yamagi Quake II %s - Soft Render", YQ2VERSION);
+	snprintf(title, sizeof(title), DISPLAYNAME " %s - Soft Render", YQ2VERSION);
 	SDL_SetWindowTitle(window, title);
 
 	if (r_vsync->value)

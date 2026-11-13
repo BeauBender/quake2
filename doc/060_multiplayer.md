@@ -1,6 +1,6 @@
 # Multiplayer Servers
 
-In general running a Yamagi Quake II server is the same as running a
+In general running a Portmanbeau Quake II server is the same as running a
 Vanilla Quake2 server, so the old guides should still apply.
 
 One thing to keep in mind is that the server must be restarted at least

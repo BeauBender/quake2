@@ -1,6 +1,6 @@
 # File Listings
 
-These are listings of all assets of a correct Yamagi Quake II
+These are listings of all assets of a correct Portmanbeau Quake II
 installation. These may be used to verify if the installation
 is complete.
 
