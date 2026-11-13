@@ -8,10 +8,12 @@
 #     mgl_read_contract), mgl_state.c (validators, matrix stacks) and
 #     mgl_tex.c (glPixelStorei), with ASAN and UBSAN when the compiler has
 #     them, and run. No SDL, no Metal, no game data.
-# (b) Only on Darwin with the Metal compiler (xcrun -f metal) and SDL 3
-#     configured (the Makefile's SDLCFLAGS, config.mk included, compile
-#     <SDL3/SDL.h>): "make ref_gl1 WITH_METAL_SHIM=yes" in a scratch copy
-#     of Makefile, config.mk and src/, so release/ and build/ of this
+# (b) Only on Darwin with the Metal compiler (xcrun -f metal) and the
+#     vendored SDL 3 headers (the Makefile's SDLCFLAGS there is
+#     -Ithird_party/SDL3/include; they must compile <SDL3/SDL.h>):
+#     "make ref_gl1 WITH_METAL_SHIM=yes" in a scratch copy of Makefile,
+#     third_party/sdl3.make and src/ (third_party/SDL3 is linked, not
+#     copied), so release/ and build/ of this
 #     checkout are not touched; the dylib must link Metal and not OpenGL.
 #     Otherwise one line "check-metal-shim: build skipped: <reason>".
 set -eu
@@ -62,7 +64,7 @@ else
 	printf '#include <SDL3/SDL.h>\nint main(void){return 0;}\n' > "$tmp/sdl.c"
 	# shellcheck disable=SC2086 # SDLCFLAGS is a word list
 	if [ -z "$sdlcflags" ] || ! $cc $sdlcflags -fsyntax-only "$tmp/sdl.c" >/dev/null 2>&1; then
-		skip="SDL 3 is not configured (SDLCFLAGS cannot compile <SDL3/SDL.h>)"
+		skip="the vendored SDL 3 headers are missing (SDLCFLAGS cannot compile <SDL3/SDL.h>)"
 	fi
 fi
 
@@ -72,7 +74,9 @@ if [ -n "$skip" ]; then
 else
 	mkdir "$tmp/tree"
 	cp -R Makefile src "$tmp/tree/"
-	[ ! -f config.mk ] || cp config.mk "$tmp/tree/"
+	mkdir "$tmp/tree/third_party"
+	cp third_party/sdl3.make "$tmp/tree/third_party/"
+	ln -s "$PWD/third_party/SDL3" "$tmp/tree/third_party/SDL3"
 	jobs=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
 	if ! (unset MAKEFLAGS GNUMAKEFLAGS MFLAGS; make -C "$tmp/tree" -j"$jobs" ref_gl1 WITH_METAL_SHIM=yes) > "$tmp/build.out" 2>&1; then
 		tail -n 30 "$tmp/build.out"

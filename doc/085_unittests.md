@@ -1,6 +1,6 @@
 # Unit Tests, Pins And Coverage
 
-Yamagi Quake II has a small unit-test suite for the engine code that
+Portmanbeau Quake II has a small unit-test suite for the engine code that
 reads untrusted data and drives the console: network messages, the
 tokenizer and info strings, downloads, the filesystem and `.pak` files,
 the collision BSP loader, cvars and the command buffer. It needs nothing

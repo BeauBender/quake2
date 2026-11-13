@@ -134,7 +134,7 @@ Sys_Init(void)
 		((vinfo.dwMajorVersion == 5) &&
 			(vinfo.dwMinorVersion >= 1))))
 	{
-		Sys_Error("Yamagi Quake II needs Windows XP or higher!\n");
+		Sys_Error(DISPLAYNAME " needs Windows XP or higher!\n");
 	}
 
 

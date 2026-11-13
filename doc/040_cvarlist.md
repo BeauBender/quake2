@@ -1,7 +1,7 @@
-# Yamagi Quake II Console Variables
+# Portmanbeau Quake II Console Variables
 
 This lists explains most console variables (cvars) added by Yamagi
-Quake II. Most of the original clients (Vanilla Quake II) cvars are
+Quake II and inherited by Portmanbeau Quake II. Most of the original clients (Vanilla Quake II) cvars are
 still in place, however due to architectural changes some of them
 have been renamed. The prefixes are:
 
@@ -176,7 +176,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   default. Note that some substrings are always forbidden, for security
   reasons these cannot be overridden: '.dll', '.dylib' and '.so' to
   prevent downloading of libraries which could be injected into the
-  Yamagi Quake II process. '..' or ':' inside filenames and '/' or '.'
+  Portmanbeau Quake II process. '..' or ':' inside filenames and '/' or '.'
   at the beginning of filenames to prevent downloading files into
   arbitrary directories.
 
@@ -198,7 +198,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 * **cl_centertime**: Time in ms that takes the `centerview` command to
   finish. `0` is immediate (Vanilla Q2 behaviour). Default `180`.
 
-* **in_grab**: Defines how the mouse is grabbed by Yamagi Quake IIs
+* **in_grab**: Defines how the mouse is grabbed by Portmanbeau Quake IIs
   window. If set to `0` the mouse is never grabbed and if set to `1`
   it's always grabbed. If set to `2` (the default) the mouse is grabbed
   during gameplay and released otherwise (in menu, videos, console or if
@@ -363,7 +363,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   is omitted. If set to `1` the gun is only drawn if the FOV is equal
   or smaller than 90. This was the default with Vanilla Quake II. If set
   to `2` the gun is drawn regardless of the FOV. This is the default
-  in Yamagi Quake II.
+  in Portmanbeau Quake II.
 
 * **fov**: Sets the field of view.
 
@@ -829,3 +829,20 @@ them given the engine behaves exactly as before.
   ends before its end marker. Needs `pins_dir`. Must be a non-negative
   integer of digits only (no sign, no spaces). `0` (the default)
   disables all of this.
+
+* **pins_record**: When given, every call the client makes into the
+  renderer during the first renderer session of the run is recorded to
+  a trace file of this name inside `pins_dir` (`scripts/pins.sh record`
+  passes `trace.q2r`): registrations with stable ids in place of the
+  renderer's pointers, each `refdef_t` copied in full, every 2D draw,
+  the point of each captured frame, a string table naming the models,
+  skins and pics registered, and a frame index. A renderer restart is not
+  recorded again. The file is streamed to disk; a failed write or a
+  recorder limit (1 GiB of records) ends the recording with one message
+  and the game carries on. The trace embeds data derived from the game
+  data: it stays in the pin store and is never committed or uploaded.
+  Must be a plain file name matching `[A-Za-z0-9_][A-Za-z0-9_.-]*` and
+  ending in `.q2r` (so it never names a pin frame or the manifest), at
+  most 63 characters, without `..` or a directory part. Needs
+  `pins_dir`. Default: not given, nothing is recorded and no file is
+  opened.

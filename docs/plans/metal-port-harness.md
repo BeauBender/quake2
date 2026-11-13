@@ -15,7 +15,7 @@ renderer is judged with it, and what the first run on real data found.
 
 | Piece | Where | Verified |
 |---|---|---|
-| Command-line latch of the three pin arguments | `CL_PinsLatch` in `src/client/cl_pins.c`, called from `Qcommon_Init` | `tests/check-pins-latch.sh` green; run inside the engine on real data (TASK39) |
+| Command-line latch of the four pin arguments | `CL_PinsLatch` in `src/client/cl_pins.c`, called from `Qcommon_Init` | `tests/check-pins-latch.sh` green; run inside the engine on real data (TASK39) |
 | Frame writer, no stb | `VID_WritePinFrame` in `src/client/vid/vid.c` | run on `soft`: 23 frames per scenario, 640x480, upright (TASK39) |
 | No renderer fallback while capturing | `VID_CheckChanges` in `src/client/vid/vid.c` | compiles and links; the failure path has not been provoked |
 | Capture before present | `SCR_PinsCapture` in `src/client/cl_screen.c` | run on `soft`: complete frames with the status bar (TASK39); not run on `gl1` |
@@ -28,22 +28,24 @@ renderer is judged with it, and what the first run on real data found.
 | Cinematic capture: every Nth cinematic frame, quit at its end, exit 1 when it cannot be opened | `SCR_PinsCapture` in `src/client/cl_screen.c`, `SCR_CinematicEnd` in `src/client/cl_cin.c`, `CL_PinsFrame` in `src/client/cl_main.c` | run on `soft` with `idlog.cin` and a missing cinematic (TASK40) |
 | Argument limit raised: `MAX_NUM_ARGVS` in `src/common/argproc.c` is 128 (was 50); `record` passes 66 to 69 words and the engine refused more than 50 at startup | `scripts/pins.sh selftest` case `argcount` and `tests/check-pins-latch.sh` feed every scenario's command line to the real `COM_InitArgv` | green in `scripts/test.sh`; the engine accepts 69 words (TASK39) |
 | Renderer-API record serializers and the 22 wrapper hooks in `vid.c`, recording off | `src/client/vid/refrecord.c`, `src/client/vid/header/refrecord.h`, `tests/check-refrecord.sh` | every record type round-trips through a buffer in `tests/check-refrecord.sh` (green in `scripts/test.sh`); observed on one host: the `world` scenario recorded on `soft` with a build of the base commit and with a build of the hooks gave 23 frames each, and all 23 frame files and the manifest compared byte-identical with `cmp` (TASK42) |
+| Renderer-API recording behind `pins_record`: handle map, `refdef_t` deep copy, string table, frame index, header patched at stop | `RefRec_*` recorder in `src/client/vid/refrecord.c`, `VID_StartRecord` in `src/client/vid/vid.c`, `pins_record` in `CL_PinsLatch`, `pins.sh record` (`PINS_TRACE=0` for none) | `tests/check-refrecord.sh` records traces and reads them back whole, failure paths included; observed on one host: `world` and `hud2d` on `soft` each left a 707-frame trace (about 4.4 MB) with 23 `REC_CAPTURE` records for the 23 frames captured, a 162-entry string table equal to the 162 distinct names a debug listing of the registration wrappers logged (to repeat: the trace side is `refrecord-test --read <trace> --names`, one `kind name` line per entry, from the test binary `tests/check-refrecord.sh` builds; the engine side was a temporary print, not in the tree, in `R_BeginRegistration`, `R_RegisterModel`, `R_RegisterSkin`, `Draw_FindPic` and `R_SetSky` of `vid.c`, logging the kind and name of each registration; registrations that returned a NULL handle were excluded, since they get no table entry by design; the two sets of distinct kind and name pairs were compared), and frames byte-identical (`cmp`) to a run with `PINS_TRACE=0` (TASK43) |
 | Gate checks, no game data needed | `tests/check-pins.sh`, `tests/check-pins-latch.sh` | green in `scripts/test.sh` |
 
 The client and `ref_soft` link and run on macOS arm64 against SDL3
-3.4.20 (`make client ref_soft game` with an untracked `config.mk`). `ref_gl1`
+3.4.20 (`make client ref_soft game`, SDL 3 built from `third_party/SDL3/`). `ref_gl1`
 and `ref_gl3` build there too; `gl1` references are card P3's.
 
 In the tree from the renderer-API recorder (design in
-`docs/plans/refapi-record-replay.md`): the record serializers and the wrapper
-hooks, with recording off. Not in the tree from TASK27: the handle map, the
-`refdef_t` deep copy, recording and replay (including `pins.sh replay`), and
+`docs/plans/refapi-record-replay.md`): the record serializers, the wrapper
+hooks and recording (`pins_record`: handle map, `refdef_t` deep copy, string
+table, frame index). Not in the tree from TASK27: replay (including
+`pins.sh replay`), the cvar snapshot contents and the fixed `randk` seed, and
 every reference frame. The sky-and-water and cinematics scenarios came with
 TASK40. The user-facing page is `doc/100_renderpins.md`.
 
 ## Pin arguments
 
-`pins_dir`, `pins_scenario` and `pins_capture` look like cvars but are not:
+`pins_dir`, `pins_scenario`, `pins_capture` and `pins_record` look like cvars but are not:
 the engine reads them once from its own command line, exactly as
 `+set <name> <value>`, before any config file runs, and keeps them where
 nothing else can change them. A `set` of these names from a config file,
@@ -65,6 +67,12 @@ the user-facing description.
   When playback ends the engine quits. If the requested renderer fails to load, the engine stops
   with an error instead of falling back to another one. `0`, the default,
   disables all three.
+- `pins_record <name>`: the first renderer session of the run is recorded
+  to `<pins_dir>/<name>`, a plain file name (`[A-Za-z0-9_][A-Za-z0-9_.-]*`
+  ending in `.q2r`, no `..`, no directory). `pins.sh record` passes `trace.q2r`, so the trace
+  lies beside the frames; `PINS_TRACE=0` records none. The trace embeds
+  data derived from the game data (INFORM9) and is never committed or
+  uploaded.
 
 A refused value turns the harness off and suppresses every screenshot
 write. With none of them given the engine behaves as before.
@@ -74,7 +82,8 @@ write. With none of them given the engine behaves as before.
 `scripts/pins.sh record <renderer> <scenario> [--run N] [--replace]`
 starts the engine with `-datadir $PINS_BASEDIR -portable`, every `set`
 line of the scenario as a `+set` argument, then the driver's own: the
-renderer, a fixed window size, sound off and the three pin arguments, and
+renderer, a fixed window size, sound off and the four pin arguments
+(`pins_record` left out with `PINS_TRACE=0`), and
 last `+demomap $PINS_DEMO` (default `demo1.dm2`). A scenario line that is
 not exactly `set <cvar> <value>`, or that sets a cvar the driver sets
 itself (`pins_*`, `vid_renderer`, `vid_fullscreen`, `r_mode`,

@@ -6,12 +6,34 @@ This file is the fork's dependency manifest. It lists the system libraries the b
 
 | Library | Used by | How it is used | Status |
 |---------|---------|----------------|--------|
-| SDL3 | client: window, input, gamepad and gyro, audio (`src/client/input/sdl3.c`, `src/client/vid/glimp_sdl3.c`, `src/client/sound/sdl.c`) | Linked at build time (via `pkgconf` sdl3). The dedicated server (`q2ded`) and the game module do not need it. On macOS: `brew install sdl3`. | Kept. SDL2 support was removed by TASK13; SDL3 is the only SDL. |
+| SDL3 | client: window, input, gamepad and gyro, audio (`src/client/input/sdl3.c`, `src/client/vid/glimp_sdl3.c`, `src/client/sound/sdl.c`); renderers: GL context, window, `SDL_Renderer` | macOS: built from the vendored source (see "Vendored libraries" below) and linked statically; no system, Homebrew or `pkgconf` SDL is used. Linux, the BSDs and Windows: still the system SDL3, linked at build time via `pkgconf` sdl3. The dedicated server (`q2ded`) and the game module do not need it. | Kept. SDL2 support was removed by TASK13; SDL3 is the only SDL. Vendored and built from source on macOS by TASK14; the other platforms follow in a later card. |
 | OpenAL | formerly `src/client/sound/openal.c` and `qal.c` | Was loaded at runtime with `dlopen`. | Removed by TASK4; SDL audio is the only sound backend. |
 | libcurl | `src/client/curl/` (HTTP downloads) | Loaded at runtime with `dlopen`, never linked. | Removed by TASK3. |
 | bcrypt (Windows) | `src/backends/windows/system.c` `Sys_GetRandomBytes` | Linked at build time (Makefile LDLIBS) | Kept: OS random source |
 | OpenGL (system framework / libGL) | `ref_gl1`, `ref_gl3` via the vendored glad loader and the `qgl` function table | Function pointers for the GL renderers, resolved through the vendored glad loader and the `qgl` table. | Kept for now; superseded by the Metal renderer plan (`docs/plans/metal-renderer.md`) |
 | Metal, QuartzCore, Foundation (macOS system frameworks) and the Metal shader compiler (`xcrun metal`, a separate Xcode component) | `ref_gl1` only, when built with `WITH_METAL_SHIM=yes` (Makefile `WITH_METAL_SHIM` rules) | The three frameworks are linked at build time; the Metal toolchain is needed at build time only. Off by default; a default build links none of them. | Kept, optional: off by default. |
+
+## Vendored libraries
+
+### SDL3
+
+| Field | Value |
+|-------|-------|
+| Path | `third_party/SDL3/` (upstream files, unmodified) plus the fork's `third_party/SDL3/README.md` and `third_party/SDL3/MANIFEST.sha256`; build rules in `third_party/sdl3.make` |
+| Upstream | https://github.com/libsdl-org/SDL |
+| Version | SDL 3.4.20, tag `release-3.4.20` |
+| Upstream commit | `f00dc919ca35b9756316e86c4777392de442f9b2` (the tag is lightweight and points at this commit; `REVISION.txt` reads `release-3.4.20-0-gf00dc919c`) |
+| Source | release asset `SDL3-3.4.20.tar.gz`, https://github.com/libsdl-org/SDL/releases/tag/release-3.4.20, fetched once on 2026-11-13 under INFORM4 |
+| Tarball sha256 | `f3bb06f55bed9557227a700af2ea62e49497ebdf58037732a731a5fb3ef8581f` (computed locally; equal to the `digest` GitHub's release API reports for the asset) |
+| Signature | `SDL3-3.4.20.tar.gz.sig` sha256 `776200b5c71f8c0168c0e89d8fb78103623dc15e284e9daf0a0eceb4e43d5533` (equal to the API digest). The signature itself was **not verified**: `gpg` is not installed on the import machine. |
+| License | zlib (`third_party/SDL3/LICENSE.txt`, reproduced in the top-level `LICENSE`). Some bundled parts carry their own notices in the files (e.g. `src/hidapi`, `src/video/yuv2rgb`, the Khronos headers in `src/video/khronos`). |
+| Subset | `src/` without `src/hidapi/documentation/` and `src/hidapi/testgui/`; `include/`; `LICENSE.txt`, `REVISION.txt`, `WhatsNew.txt`, `CREDITS.md`. 1431 files, about 31 MB. Not vendored: tests, examples, docs, CMake/Xcode/Visual Studio/Android project trees, `wayland-protocols/`, upstream's `README.md`, `INSTALL.md`, `AGENTS.md`, `CLAUDE.md`. The reasons are in `third_party/SDL3/README.md`: the library builds from `src/` and `include/`; the rest is upstream's own build systems, tests and documentation, and the two hidapi directories hold only images and a test app. |
+| Verification | `third_party/SDL3/MANIFEST.sha256` lists the sha256 of every vendored file, generated from the extracted tarball. `scripts/check-vendored.sh` (run by the gate through `tests/check-vendored.sh`, offline) fails on a missing or changed file, an unlisted file, a manifest that does not match the pin below, and on `third_party/SDL3` being a symlink or anything under it that is neither a regular file nor a directory (symlinks, including symlinked directories, devices, FIFOs, sockets). Not checked: file modes (the executable bit), and anything outside `third_party/SDL3`. The manifest and the pin below are an in-repository trust root: a diff that changes `MANIFEST.sha256` or the pin line passes the check by construction, so the reviewer must re-derive it from the upstream tarball. |
+| Manifest pin | `third_party/SDL3/MANIFEST.sha256` sha256: `1394662cc437fc54ba80d311b40cabb9310df9c777442ae2a65e20b6795f67aa` |
+| Built on | macOS only, as a static `libSDL3.a` (`build/<release\|debug>/sdl3/`), with the stock `include/build_config/SDL_build_config_macos.h` and the source list, header paths, ARC and frameworks of the tarball's Xcode project. Linux, BSD and Windows builds still link the system SDL3 found by `pkgconf`. |
+| Linking | The client executable links all of `libSDL3.a` (`-force_load`) and exports the SDL API. The renderer dylibs contain no SDL; their `_SDL_*` imports are bound at load time to the executable's copy (`-Wl,-U,<symbol>`), so one SDL instance serves the process. |
+| Update procedure | `third_party/SDL3/README.md`, "Update procedure". |
+| Note | SDL's dynamic API (`src/dynapi`) stays enabled, as upstream ships it: setting the environment variable `SDL3_DYNAMIC_API` to a library path makes the statically linked SDL forward every call to that library. It cannot be disabled by a compiler flag: `SDL_dynapi.h` refuses a command-line define. It can be neutralised without touching vendored files by clearing the `SDL3_DYNAMIC_API` environment variable in the engine's `main` before the first SDL call; doing so is left to a follow-up card. |
 
 ## In-tree third-party files
 
