@@ -25,7 +25,7 @@ removal". Threat model: the "Security-relevant boundaries" section of
 10. [Entity strings and map-fix overrides](#entity-strings-and-map-fix-overrides)
 11. [By design / out of scope](#by-design--out-of-scope)
 12. [Defects](#defects)
-13. [Cards to file](#cards-to-file)
+13. [Cards filed](#cards-filed)
 
 Verdicts: `ok` (a check bounds the value before the use), `ok-by-construction`
 (the value cannot be out of range, reason given), `defect` (a malformed file
@@ -191,7 +191,7 @@ ERROR: AddressSanitizer: global-buffer-overflow
 WRITE of size 4 ... #0 in CM_SetAreaPortalState collision.c:193
 ... located 4 bytes before global variable 'portalopen' ... of size 4096
 
-mode 3 (12-byte visibility lump: numclusters 1, bitofs {12, 12}; CM_ClusterPVS(0)):
+mode 3 (visibility lump whose cluster offsets point at its very end; CM_ClusterPVS(0)):
 ERROR: AddressSanitizer: global-buffer-overflow
 READ of size 1 ... #0 in CM_DecompressVis collision.c:2019  #1 in CM_ClusterPVS collision.c:2052
 ... located 0 bytes after global variable 'map_visibility' ... of size 1048576
@@ -200,8 +200,8 @@ READ of size 1 ... #0 in CM_DecompressVis collision.c:2019  #1 in CM_ClusterPVS 
 After the fixes, modes 1 and 2 end in `Com_Error` ("Not enough room for box
 tree", "areaportal > numareaportals"); mode 3 still overflows (filed, not fixed).
 Mode 3 passes even a strict FIX3-style `bitofs < numvisibility` check if the
-lump carries two extra zero bytes for the offset to point at, so D1 is distinct
-from FIX3 item 3.
+lump carries a little padding after the offsets for the offset to point at, so
+D1 is distinct from FIX3 item 3.
 
 ## Pak directory and paths (`src/common/filesystem.c`)
 
@@ -214,10 +214,10 @@ start. `fsPackFile_t` holds `name[MAX_QPATH]`, `size`, `offset`; a
 
 | Function | Field | Use | Check (quoted) or absence | Verdict |
 |---|---|---|---|---|
-| `FS_LoadPAK` | header read | `fread(&header, 1, sizeof(dpackheader_t), handle)` | return value ignored; a file shorter than 12 bytes leaves `dirofs`/`dirlen` as uninitialised stack | hardening (the ident test catches most short files; a 4-byte `PACK` file does not) |
+| `FS_LoadPAK` | header read | `fread(&header, 1, sizeof(dpackheader_t), handle)` | return value ignored; a file shorter than 12 bytes leaves `dirofs`/`dirlen` as uninitialised stack | hardening (the ident test catches most short files; a file holding only the ident does not) |
 | `FS_LoadPAK` | `ident` | format gate | `LittleLong(header.ident) != IDPAKHEADER` raises `ERR_FATAL` | ok for memory; a garbage `.pak` in the write directory stops the engine at every start (see D5) |
 | `FS_LoadPAK` | `dirlen`, `dirofs` | `numFiles = header.dirlen / sizeof(dpackfile_t)`, `malloc(header.dirlen)`, `fseek(handle, header.dirofs, SEEK_SET)` | `(numFiles == 0) \|\| (header.dirlen < 0) \|\| (header.dirofs < 0)` | ok for sign; no upper bound against the file size (see next rows) |
-| `FS_LoadPAK` | `numFiles` | `Z_Malloc(numFiles * sizeof(fsPackFile_t))` | `numFiles > MAX_FILES_IN_PACK` only prints a message; the product is computed in `size_t` and cannot wrap on 64-bit hosts (at most 33 554 431 entries of 72 bytes, about 2.4 GB) | **defect D5** (resource exhaustion: up to 2 GB `malloc` plus 2.4 GB `calloc` from a 12-byte header; `Z_TagMalloc` turns a failed allocation into `ERR_FATAL`) |
+| `FS_LoadPAK` | `numFiles` | `Z_Malloc(numFiles * sizeof(fsPackFile_t))` | `numFiles > MAX_FILES_IN_PACK` only prints a message; the product is computed in `size_t` and cannot wrap on 64-bit hosts (at most 33 554 431 entries of 72 bytes, about 2.4 GB) | **defect D5** (resource exhaustion: up to 2 GB `malloc` plus 2.4 GB `calloc` from a header alone; `Z_TagMalloc` turns a failed allocation into `ERR_FATAL`) |
 | `FS_LoadPAK` | directory bytes | `fread(info, 1, header.dirlen, handle)` into `malloc`ed (not zeroed) memory | return value ignored; a directory that runs past the end of the file leaves the tail of `info` uninitialised | **defect D4** (feeds the next row) |
 | `FS_LoadPAK` | `name[56]` | `Q_strlcpy(files[i].name, info[i].name, Q_min(sizeof(files[i].name), sizeof(files[i].name)))` | the destination is bounded (the `Q_min` compares the same size twice, presumably meant to name the 56-byte source), but `Q_strlcpy` reads the source up to its NUL; a name with no NUL in the last entry, or uninitialised bytes from the short read above, reads past the end of the `info` allocation | **defect D4** (heap over-read in a loader of a downloadable file) |
 | `FS_LoadPAK` | `filepos`, `filelen` | `files[i].offset`, `files[i].size` | none; neither is compared with the pack file size, and negatives are accepted | **defect D6** (see `FS_FOpenFile` and `FS_LoadFile2` rows) |
@@ -294,7 +294,7 @@ several rows below cite FIX3.
 | `R_MarkLeaves` (gl1, gl3) | `numleafs` | `memcpy(fatvis, vis, (numleafs + 7) / 8)` and an `int` OR loop into an 8192-byte stack array | none in the renderer; collision limits leafs to 65536, exactly the array | ok-by-construction (collision-first order) |
 | `Mod_LoadNodes` | `planenum`, `children[2]` | `planes + planenum`, child pointers | `planenum < 0 \|\| planenum >= numplanes`; a child `>= *numnodes` or a leaf `>= numleafs` is refused | ok for range |
 | `Mod_LoadNodes` | child graph | `Mod_SetParent`, `Mod_NumberLeafs` (recursive), `Mod_PointInLeaf` (loop) | a cycle recurses until the stack is gone, or loops forever | carded as FIX3 item 4 (a collision cycle check refuses the map first) |
-| `Mod_NumberLeafs` | child graph | writes `r_leaftovis[leafnum]` and `r_vistoleaf[*numvisleafs]`, two `int [MAX_MAP_LEAFS]` arrays on the stack of `Mod_LoadNodes` | none; without any cycle, nodes that share children (a DAG) are walked once per path, so 17 nodes whose two children are both the next node reach the last leaf 2^17 times and `numvisleafs` runs past 65536 | **defect D9** (stack buffer overflow write; a depth-bound fix for FIX3 item 4 does not refuse a DAG; both arrays are unused after the walk) |
+| `Mod_NumberLeafs` | child graph | writes `r_leaftovis[leafnum]` and `r_vistoleaf[*numvisleafs]`, two `int [MAX_MAP_LEAFS]` arrays on the stack of `Mod_LoadNodes` | none; without any cycle, nodes that share children (a DAG) are walked once per path, so a chain of nodes whose two children both name the next node reaches the last leaf exponentially often and `numvisleafs` runs past 65536 | **defect D9** (stack buffer overflow write; a depth-bound fix for FIX3 item 4 does not refuse a DAG; both arrays are unused after the walk) |
 | `Mod_LoadNodes` | `firstface`, `numfaces` (unsigned short) | `surfaces + node->firstsurface` for `numsurfaces` entries in `R_RecursiveWorldNode` (gl1, gl3, soft), `R_MarkSurfaceLights`, `R_RecursiveLightPoint` (gl1, gl3, soft) | none against `numsurfaces` | **defect D14** (heap over-read; gl1/gl3 `R_RecursiveWorldNode` links a surface whose `visframe` matches into `image->texturechain`, a write through the stray pointer) |
 | `Mod_LoadSubmodels` | `headnode` | `nodes + firstnode` for `R_MarkLights` in `R_DrawBrushModel` (gl1, gl3) and `R_PushDlights` (soft) | `if (out->firstnode >= loadmodel->numnodes)`; no lower bound, and collision accepts a negative headnode that names a leaf | **defect D14** (a pointer before the node array, read as a node) |
 | `Mod_LoadSubmodels` | `firstface`, `numfaces` (int) | `&surfaces[firstmodelsurface]` for `nummodelsurfaces` entries in `R_DrawInlineBModel` (gl1, gl3), `R_DrawSolidClippedSubmodelPolygons` and `R_DrawSubmodelPolygons` (soft) | none | **defect D14** |
@@ -307,29 +307,29 @@ and `gl1/gl1_warp.c` with stubs for `Hunk_Alloc`, `Com_Error` and the GL
 entry points and ran them under `-fsanitize=address`:
 
 ```text
-Mod_LoadNodes, 17 nodes, both children of node i = node i+1, last node -> leaf 1:
+Mod_LoadNodes, a short chain of nodes with shared children reaching a leaf:
 ERROR: AddressSanitizer: stack-buffer-overflow ... WRITE of size 4
     #0 in Mod_NumberLeafs models.c:385  #1..#3 in Mod_NumberLeafs models.c:390
 Address ... is located in stack of thread T0 at offset 524576 in frame
     #0 in Mod_LoadNodes models.c:405
 
-Mod_LoadVisibility, 4-byte lump with numclusters = 1000000:
+Mod_LoadVisibility, a lump far shorter than its numclusters implies:
 ERROR: AddressSanitizer: heap-buffer-overflow ... READ of size 4
     #0 in Mod_LoadVisibility models.c:508
 ... located 0 bytes after 4-byte region
 
-Mod_LoadTexinfo, texinfo 0 -> 1 -> 1 -> ...: no return (killed by a 10 s timeout)
+Mod_LoadTexinfo, a texinfo whose nexttexinfo chain loops: no return (killed by a 10 s timeout)
 
-Mod_LoadTexinfo, one texinfo with nexttexinfo = 100000:
+Mod_LoadTexinfo, a nexttexinfo far beyond the texinfo count:
 ERROR: AddressSanitizer: BUS on unknown address ... READ memory access
     #0 in Mod_LoadTexinfo models.c:651
 
-Mod_DecompressVis, row 25000 (numclusters 200000), literal 0x41 bytes:
+Mod_DecompressVis, a row length far above the 8192-byte output buffer:
 ERROR: AddressSanitizer: global-buffer-overflow ... WRITE of size 1
     #0 in Mod_DecompressVis pvs.c:60
 ... located 0 bytes after global variable 'Mod_DecompressVis.decompressed' ... of size 8192
 
-R_SubdivideSurface, one SURF_WARP face with 200 edges:
+R_SubdivideSurface, one SURF_WARP face with far more edges than the 64-entry array:
 ERROR: AddressSanitizer: stack-buffer-overflow ... WRITE of size 4
     #0 in R_SubdivideSurface gl1_warp.c:271
 Address ... is located in stack of thread T0 at offset 800 in frame
@@ -391,8 +391,8 @@ lies inside `ofs_end` in the file also lies inside the copy.
 | `Mod_LoadSP2` | frame `name[64]` | `find_image(name, it_sprite)` | `memcpy` of 64 bytes, not terminated | hardening |
 | `R_DrawSprite` (soft) | frame `width`, `height`, `origin_x`, `origin_y` | polygon size and texel span | `Q_min(s_psprframe->width, skin->width)` and the same for height bound the texel reads; gl1/gl3 use them only as float geometry | ok |
 
-Proof for D18, with the harness from the renderer BSP section: a 12-byte
-SP2 that claims 32 frames.
+Proof for D18, with the harness from the renderer BSP section: an SP2 file
+holding only its header, whose frame count claims more records than the file has.
 
 ```text
 ERROR: AddressSanitizer: heap-buffer-overflow ... READ of size 4
@@ -432,7 +432,7 @@ it through `PCX_RLE_Decode`, which bounds both ends of every run.
 | `PCX_RLE_Decode` | run byte, data byte | writes `pix[x++]`, reads `*raw++` | `if (raw >= raw_max)` before each read, `if (pix_max <= (pix + x))` before each write; both set `image_issues` and stop | ok |
 | `PCX_Decode` (24/32-bit) | `line[x + bytes_per_line * j]` | plane assembly into `pix[4*x+j]` | `line` is `malloc(Q_max(bytes_per_line, pcx_width+1) * color_planes)`, and the inner index stays below that; `bytes_per_line <= pcx_width` only sets `image_issues` | ok |
 | `PCX_Decode` (8-bit palette) | palette at `pcx + len - 768`, marker at `pcx + len - 769` | `memcpy(*palette, ..., 768)` | guarded by `if (len > 768)`; else `image_issues` | ok |
-| `PCX_Decode` (1/2/4-bit) | `line[i * bytes_per_line + (x >> 3)]`, `line[x / div]` | bit unpack | `line` is `bytes_per_line * color_planes` (or `bytes_per_line`); `x <= pcx_width` and `bytes_per_line > 0` keep the index inside, since `x/div <= pcx_width` is only safe when `bytes_per_line > pcx_width/div` — a `bytes_per_line` of 1 with a large width reads `line[x/div]` past the 1-byte row | **defect D20** (heap over-read of the decode line buffer; low severity, read only, bounded by `pcx_width`) |
+| `PCX_Decode` (1/2/4-bit) | `line[i * bytes_per_line + (x >> 3)]`, `line[x / div]` | bit unpack | `line` is `bytes_per_line * color_planes` (or `bytes_per_line`); `x <= pcx_width` and `bytes_per_line > 0` keep the index inside, since `x/div <= pcx_width` is only safe when `bytes_per_line > pcx_width/div` — a tiny `bytes_per_line` with a large width reads `line[x/div]` past the 1-byte row | **defect D20** (heap over-read of the decode line buffer; low severity, read only, bounded by `pcx_width`) |
 | `PCX_Decode` | trailing-data check | `if (data - (byte *)pcx > len)` frees and nulls | after the fact | ok |
 | `fixQuitScreen` | fixed offsets into a 320x240 buffer | `memcpy` of 11 rows | reached only when `LoadPCX` confirms `width == 320 && height == 240` and the block checksum matches `pics/quit.pcx` | ok-by-construction |
 | `GetPCXInfo` | `xmax`, `ymax` | `*width = xmax + 1`, `*height = ymax + 1` | no header-size check before the read (`FS_LoadFile` returned the bytes, but a file shorter than `pcx_t` is read past its end) | **defect D21** (over-read of up to `sizeof(pcx_t)` bytes; the values seed `realwidth`/`realheight` in `LoadHiColorImage`, which only gates whether a hi-res replacement is used) |
@@ -533,7 +533,7 @@ rows are `ok`; the exception is the file-name handling.
 
 | Function | Field | Use | Check (quoted) or absence | Verdict |
 |---|---|---|---|---|
-| `SCR_PlayCinematic` | `arg` (server string), still-image branch | `memcpy(namewe, name, strlen(name) - strlen(dot))` into `char namewe[256]` | the length is `5 + offset-of-first-dot-in-arg`; `name` is `MAX_OSPATH`, which is 256 on Windows/macOS but **4096** on other Unix, so there a `"<4000 chars>.pcx"` name overruns the 256-byte stack buffer | **defect D26** (stack buffer overflow, server-triggered, on `MAX_OSPATH == 4096` platforms; reached only for a name ending exactly `.pcx`/`.tga`/`.jpg`/`.png` because the branch uses `strcmp(dot, ...)`) |
+| `SCR_PlayCinematic` | `arg` (server string), still-image branch | `memcpy(namewe, name, strlen(name) - strlen(dot))` into `char namewe[256]` | the length is `5 + offset-of-first-dot-in-arg`; `name` is `MAX_OSPATH`, which is 256 on Windows/macOS but **4096** on other Unix, so there a name of several thousand characters ending in the still-image extension overruns the 256-byte stack buffer | **defect D26** (stack buffer overflow, server-triggered, on `MAX_OSPATH == 4096` platforms; reached only for a name ending exactly `.pcx`/`.tga`/`.jpg`/`.png` because the branch uses `strcmp(dot, ...)`) |
 | `SCR_PlayCinematic` | `arg`, video branch | `Com_sprintf(name, sizeof(name), "video/%s", arg)`, `FS_FOpenFile` | `Com_sprintf` truncates to `MAX_OSPATH`; `FS_FOpenFile` applies the path rules audited in the filesystem section | ok |
 | `SCR_PlayCinematic` | `width`, `height` | `cin.width`, `cin.height`, `maxcount` in decompress, image size | `cin.width <= 0 \|\| cin.height <= 0 \|\| (long long)width * height > 16 * 1024 * 1024` | ok |
 | `SCR_PlayCinematic` | `s_rate`, `s_width`, `s_channels` | sound chunk size per frame, `S_RawSamples` | `s_rate <= 0 \|\| s_rate > 22050`, `s_width != 1 && != 2`, `s_channels != 1 && != 2` | ok |
@@ -632,139 +632,53 @@ Severity is `sev` (low/medium/high) for the memory-safety impact against the
 reachability in [Where each asset can come from](#where-each-asset-can-come-from);
 `conf` is confidence that the finding is real.
 
-| ID | Where | One line | sev | conf |
-|---|---|---|---|---|
-| D1 | `collision.c` `CM_DecompressVis` | input never bounded by `numvisibility`; a zero-length run writes a full `row` past the 8192-byte output when `row` is large | medium | high (ASAN) |
-| D2 | `collision.c` `CM_InitBoxHull` | box-hull leaf written past `map_leafs` when the map uses every leaf slot | high | high (ASAN) — **fixed in this branch** |
-| D3 | `collision.c` `CM_SetAreaPortalState` | `portalnum` has no lower bound and an off-by-one upper bound | medium | high (ASAN) — negative side **fixed in this branch**; off-by-one remains |
-| D4 | `filesystem.c` `FS_LoadPAK` | directory read past EOF leaves `info` uninitialised; `Q_strlcpy` then over-reads an unterminated pack name | medium | high |
-| D5 | `filesystem.c` `FS_LoadPAK` | a 12-byte header asks for a ~2 GB `malloc` plus ~2.4 GB `calloc`; failure is `ERR_FATAL` | medium | high |
-| D6 | `filesystem.c` `FS_FOpenFile`/`FS_LoadFile2` | pack entry `offset`/`size` never bounded by the file; negative size leaks the handle, oversize size `ERR_FATAL`s | medium | high |
-| D7 | renderer `Mod_ForName` | 1-2 byte model file read up to 2 bytes past the `length + 1` allocation at the format switch | low | high |
-| D8 | renderer `Mod_ClusterPVS`/`Mod_DecompressVis` | vis offsets and `numclusters` unbounded; the `static decompressed[8192]` overflows on write | high | high (ASAN) |
-| D9 | renderer `Mod_NumberLeafs` | a node DAG (shared children, no cycle) walks a leaf 2^n times, overrunning two `int[MAX_MAP_LEAFS]` stack arrays | high | high (ASAN) |
-| D10 | gl1/gl3 `R_SubdivideSurface` | a `SURF_WARP` face with >64 edges overruns `vec3_t verts[64]` on the stack before the vertex-count check | high | high (ASAN) |
-| D11 | renderer faces/edges | `numedges`/`firstedge`/surfedge/`edge.v[]` indices unbounded against `numsurfedges`/`numedges`/`numvertexes`; negative `numedges` gives a negative `Hunk_Alloc` | high | high (static) |
-| D12 | renderer `Mod_LoadFaces` | `lightofs` only tested for `-1`; any other value offsets `lightdata` and is read and uploaded as lightmap texels | medium | high (static) |
-| D13 | renderer `Mod_LoadTexinfo` | `nexttexinfo` unbounded; a chain that loops hangs the frame-count walk, a large value reads a wild pointer | medium | high (ASAN) |
-| D14 | renderer nodes/submodels | node `firstface`/`numfaces`, submodel `headnode`/`firstface` unbounded against `numsurfaces`/`numnodes`; stray surface pointer is written into a texture chain | high | high (static) |
-| D15 | soft `Mod_LoadMarksurfaces` | a negative leaf-face index wrote `visframe` before the surfaces array | medium | high — **fixed in this branch** |
-| D16 | MD2 `lightnormalindex` | a vertex normal index 162..255 reads up to ~1 KB past the 162-row `r_avertexnormals` table | low | high (static) |
-| D17 | MD2 soft skin path | `skinwidth`/`skinheight` unchecked (div, scale); `st` coords never bounded by the skin size, over-reading texels in the rasterizer | medium | medium (static) |
-| D18 | SP2 `Mod_LoadSP2` | no length check (reads/writes past a short file); `numframes` zero divides, negative indexes `skins[]`/`frames[]` out of range | high | high (ASAN for the over-read) |
-| D19 | PCX `PCX_Decode` | `full_size = (h+1)*(w+1)[*4]` is `int` and overflows for near-max dimensions, undersizing the decode buffer | medium | high (static) |
-| D20 | PCX 1/2/4-bit path | `line[x / div]` can exceed a `bytes_per_line`-byte row when `bytes_per_line` is tiny | low | medium (static) |
-| D21 | `GetPCXInfo` | reads `xmax`/`ymax` without a header-size check; over-reads a short file | low | high (static) |
-| D22 | `R_LoadImage`/soft scale | `width * height` (and `* 4`) is `int` and can overflow for large stb dimensions; the gl renderers guard the scale product, soft and the copy length do not | medium | medium (static) |
-| D23 | `wave.c` chunk walk | `GetLittleLong`/`strncmp` read a few bytes past `iff_end` at a chunk boundary | low | high (static) |
-| D24 | `wave.c` cue `loopstart` | loop point unbounded; `SDL_Cache` turns it into a mixer `pos`/`end` past the cached sample | medium | medium (static) |
-| D25 | `wave.c` data chunk | the data-length word and `dataofs` are trusted without comparison to `wavlength`; four consumers read `info.samples` elements from `data + dataofs` | high | high (static) |
-| D26 | `cl_cin.c` `SCR_PlayCinematic` | still-image name copied into `char namewe[256]` by length; `MAX_OSPATH` is 4096 on non-Apple Unix, so a long server name overruns the stack buffer | high | high (static) |
+| ID | Where | One line | sev | conf | Card |
+|---|---|---|---|---|---|
+| D1 | `collision.c` `CM_DecompressVis` | input never bounded by `numvisibility`; a zero-length run writes a full `row` past the 8192-byte output when `row` is large | medium | high (ASAN) | FIX23 |
+| D2 | `collision.c` `CM_InitBoxHull` | box-hull leaf written past `map_leafs` when the map uses every leaf slot | high | high (ASAN) — **fixed in this branch** | fixed |
+| D3 | `collision.c` `CM_SetAreaPortalState` | `portalnum` has no lower bound and an off-by-one upper bound | medium | high (ASAN) — negative side **fixed in this branch**; off-by-one remains | FIX23 (off-by-one) |
+| D4 | `filesystem.c` `FS_LoadPAK` | directory read past EOF leaves `info` uninitialised; `Q_strlcpy` then over-reads an unterminated pack name | medium | high | FIX22 |
+| D5 | `filesystem.c` `FS_LoadPAK` | a bare header asks for a ~2 GB `malloc` plus ~2.4 GB `calloc`; failure is `ERR_FATAL` | medium | high | FIX22 |
+| D6 | `filesystem.c` `FS_FOpenFile`/`FS_LoadFile2` | pack entry `offset`/`size` never bounded by the file; negative size leaks the handle, oversize size `ERR_FATAL`s | medium | high | FIX22 |
+| D7 | renderer `Mod_ForName` | 1-2 byte model file read up to 2 bytes past the `length + 1` allocation at the format switch | low | high | FIX17 |
+| D8 | renderer `Mod_ClusterPVS`/`Mod_DecompressVis` | vis offsets and `numclusters` unbounded; the `static decompressed[8192]` overflows on write | high | high (ASAN) | FIX17 |
+| D9 | renderer `Mod_NumberLeafs` | a node DAG (shared children, no cycle) walks a leaf 2^n times, overrunning two `int[MAX_MAP_LEAFS]` stack arrays | high | high (ASAN) | FIX17 |
+| D10 | gl1/gl3 `R_SubdivideSurface` | a `SURF_WARP` face with >64 edges overruns `vec3_t verts[64]` on the stack before the vertex-count check | high | high (ASAN) | FIX17 |
+| D11 | renderer faces/edges | `numedges`/`firstedge`/surfedge/`edge.v[]` indices unbounded against `numsurfedges`/`numedges`/`numvertexes`; negative `numedges` gives a negative `Hunk_Alloc` | high | high (static) | FIX17 |
+| D12 | renderer `Mod_LoadFaces` | `lightofs` only tested for `-1`; any other value offsets `lightdata` and is read and uploaded as lightmap texels | medium | high (static) | FIX17 |
+| D13 | renderer `Mod_LoadTexinfo` | `nexttexinfo` unbounded; a chain that loops hangs the frame-count walk, a large value reads a wild pointer | medium | high (ASAN) | FIX17 |
+| D14 | renderer nodes/submodels | node `firstface`/`numfaces`, submodel `headnode`/`firstface` unbounded against `numsurfaces`/`numnodes`; stray surface pointer is written into a texture chain | high | high (static) | FIX17 |
+| D15 | soft `Mod_LoadMarksurfaces` | a negative leaf-face index wrote `visframe` before the surfaces array | medium | high — **fixed in this branch** | fixed |
+| D16 | MD2 `lightnormalindex` | a vertex normal index 162..255 reads up to ~1 KB past the 162-row `r_avertexnormals` table | low | high (static) | FIX18 |
+| D17 | MD2 soft skin path | `skinwidth`/`skinheight` unchecked (div, scale); `st` coords never bounded by the skin size, over-reading texels in the rasterizer | medium | medium (static) | FIX18 |
+| D18 | SP2 `Mod_LoadSP2` | no length check (reads/writes past a short file); `numframes` zero divides, negative indexes `skins[]`/`frames[]` out of range | high | high (ASAN for the over-read) | FIX18 |
+| D19 | PCX `PCX_Decode` | `full_size = (h+1)*(w+1)[*4]` is `int` and overflows for near-max dimensions, undersizing the decode buffer | medium | high (static) | FIX19 |
+| D20 | PCX 1/2/4-bit path | `line[x / div]` can exceed a `bytes_per_line`-byte row when `bytes_per_line` is tiny | low | medium (static) | FIX19 |
+| D21 | `GetPCXInfo` | reads `xmax`/`ymax` without a header-size check; over-reads a short file | low | high (static) | FIX19 |
+| D22 | `R_LoadImage`/soft scale | `width * height` (and `* 4`) is `int` and can overflow for large stb dimensions; the gl renderers guard the scale product, soft and the copy length do not | medium | medium (static) | FIX19 |
+| D23 | `wave.c` chunk walk | `GetLittleLong`/`strncmp` read a few bytes past `iff_end` at a chunk boundary | low | high (static) | FIX20 |
+| D24 | `wave.c` cue `loopstart` | loop point unbounded; `SDL_Cache` turns it into a mixer `pos`/`end` past the cached sample | medium | medium (static) | FIX20 |
+| D25 | `wave.c` data chunk | the data-length word and `dataofs` are trusted without comparison to `wavlength`; four consumers read `info.samples` elements from `data + dataofs` | high | high (static) | FIX20 |
+| D26 | `cl_cin.c` `SCR_PlayCinematic` | still-image name copied into `char namewe[256]` by length; `MAX_OSPATH` is 4096 on non-Apple Unix, so a long server name overruns the stack buffer | high | high (static) | FIX21 |
 
 Fixed in this branch: D2, D3 (negative side), D15 — each a one-line bound
 check in its loader, committed separately and noted in its row.
 
-## Cards to file
+## Cards filed
 
-One card per defect class. Acceptance names a regression check that runs
-without the engine: a crafted in-memory file passed to the real loader through
-a host-side harness under ASAN, the same shape used to prove several findings
-here. The author does not file these.
+One card per defect class, filed as GitHub Issues under the `trust-boundary`
+epic and locked; each issue holds the goal, rationale, scope and acceptance
+criteria. Acceptance in every card names the fix plus an engine-free
+regression check: a crafted in-memory file passed to the real loader through a
+host-side harness under ASAN, the same shape used to prove several findings
+here (no harness is committed).
 
-### Card 1 — Harden the renderer BSP loaders against file-sourced counts, offsets and indices
-- **Severity:** high. **Covers:** D7, D8, D9, D10, D11, D12, D13, D14 in
-  `files/models.c`, `files/pvs.c`, `gl1/gl1_model.c`, `gl3/gl3_model.c`,
-  `soft/sw_model.c`, `gl1/gl1_warp.c`, `gl3/gl3_warp.c`.
-- Goal: the renderer must bound every file-sourced edge, surfedge, vertex,
-  face, leaf-face, lightofs, texinfo link, node/submodel face range and vis
-  offset itself, not rely on `CM_LoadMap` running first on the same file.
-- Scope: add range checks in the shared and per-renderer brush loaders
-  (`Com_Error(ERR_DROP, ...)` on a bad value); bound the warp subdivision
-  before the vertex copy; bound `Mod_DecompressVis` output by the destination
-  and input by the lump; make `Mod_NumberLeafs` reject a re-entered node.
-- Acceptance: each path rejects an out-of-range value; a host-side harness
-  loads a crafted BSP per defect and ASAN reports no overflow; stock maps load
-  (trace). `scripts/test.sh` green.
-- Suggested model: opus (many sites, three renderers, easy to break rendering).
-
-### Card 2 — Validate MD2 vertex/skin indices and SP2 length and frame count
-- **Severity:** high. **Covers:** D16, D17, D18 in `files/models.c` (with soft
-  consumers in `sw_alias.c`, `sw_polyset.c`).
-- Goal: MD2 and SP2, loaded only by the renderer, reject malformed counts and
-  dimensions before any consumer reads them.
-- Scope: bound MD2 `lightnormalindex` (clamp or validate against
-  `NUMVERTEXNORMALS`), reject `skinwidth`/`skinheight <= 0`, bound `st`
-  coordinates to the skin; in `Mod_LoadSP2` check the file length against
-  `numframes` records and reject `numframes <= 0`.
-- Acceptance: a crafted MD2 (bad normal index, zero skin size) and a 12-byte
-  SP2 claiming 32 frames are rejected under a host harness with no ASAN error;
-  stock models load. `scripts/test.sh` green.
-- Suggested model: sonnet.
-
-### Card 3 — Fix integer overflow and over-reads in the image loaders
-- **Severity:** medium. **Covers:** D19, D20, D21, D22 in `files/pcx.c`,
-  `files/stb.c`, `soft/sw_image.c`.
-- Goal: image dimensions cannot overflow a size computation, and the PCX line
-  decode cannot read past its row.
-- Scope: compute `full_size` and `width * height` in 64-bit with a cap
-  (`R_Convert8to32` already shows the pattern) in PCX_Decode, `R_LoadImage`,
-  `LoadHiColorImage` and the soft scale2x path; bound the 1/2/4-bit `line`
-  index; add a header-size check to `GetPCXInfo`.
-- Acceptance: a PCX with near-`INT_MAX` dimensions is rejected, not
-  wrapped; a 2-bit PCX with `bytes_per_line == 1` does not over-read (harness +
-  ASAN); real textures load. `scripts/test.sh` green.
-- Suggested model: sonnet.
-
-### Card 4 — Bound the WAV header against the file length
-- **Severity:** high. **Covers:** D23, D24, D25 in `sound/wave.c`, with the
-  consumers in `sound/sound.c` and `sound/sdl.c`.
-- Goal: `GetWavinfo` cannot report more samples, or a data offset, than the
-  file holds, and the chunk walk cannot read past the buffer.
-- Scope: in `GetWavinfo`, bound every chunk read against `iff_end`; reject
-  `dataofs > wavlength` and `samples > (wavlength - dataofs) / (width *
-  channels)`; clamp `loopstart` to `samples`.
-- Acceptance: a `.wav` whose data-length word exceeds the file is rejected or
-  clamped, and `S_GetVolume`/`SDL_Cache` read only in-bounds (harness over the
-  extracted `GetWavinfo` plus a reader stub, under ASAN); real sounds load.
-  `scripts/test.sh` green.
-- Suggested model: sonnet.
-
-### Card 5 — Fix the cinematic still-image name buffer overflow
-- **Severity:** high (low effort). **Covers:** D26 in `cl_cin.c`.
-- Goal: a server-supplied cinematic name cannot overflow `namewe` on
-  platforms where `MAX_OSPATH` is 4096.
-- Scope: size `namewe` as `MAX_OSPATH` (or build it with `Q_strlcpy` /
-  `COM_StripExtension` into a bounded buffer) in `SCR_PlayCinematic`.
-- Acceptance: a ~4000-character `.pcx` cinematic name does not overflow
-  (ASAN build, `+exec` of a crafted `svc_playerinfo`, or a direct unit call to
-  `SCR_PlayCinematic`); normal cinematics still play. `scripts/test.sh` green.
-- Suggested model: haiku.
-
-### Card 6 — Validate the pak directory against the pack file size
-- **Severity:** high. **Covers:** D4, D5, D6 in `filesystem.c` (`FS_LoadPAK`,
-  `FS_FOpenFile`, `FS_LoadFile2`).
-- Goal: a `.pak` in a search path cannot drive an over-read of its directory,
-  an unbounded allocation, or an out-of-range file read.
-- Scope: check the `fread` return for header and directory; bound `dirofs +
-  dirlen` and `numFiles` against the on-disk size; reject or bound each
-  entry's `filepos`/`filelen` against the pack size; close the handle on the
-  negative-size early return in `FS_LoadFile2`.
-- Acceptance: a 12-byte and a truncated-directory `.pak` are rejected without
-  over-read or giant allocation (harness over `FS_LoadPAK` with a stubbed
-  file layer, ASAN); stock `pak0.pak` loads. `scripts/test.sh` green.
-- Suggested model: sonnet.
-
-### Card 7 — Close the remaining collision BSP gaps (vis input bound, areaportal off-by-one)
-- **Severity:** medium. **Covers:** D1 and the remaining off-by-one of D3 in
-  `collision.c`, distinct from FIX3 (#44) and FIX10 (#73).
-- Goal: `CM_DecompressVis` cannot be driven past its output or input buffer
-  even when the vis offset check from FIX3 is in place, and
-  `CM_SetAreaPortalState` cannot write at `portalopen[numareaportals]`.
-- Scope: bound the `CM_DecompressVis` input pointer by `numvisibility` and the
-  output by `row <= sizeof(buffer)` including the zero-run case; change the
-  `portalnum > numareaportals` test to `>=`.
-- Acceptance: a 12-byte visibility lump that satisfies a FIX3-style offset
-  check still does not overflow `map_visibility` (harness, ASAN), and
-  `CM_SetAreaPortalState(numareaportals, true)` is rejected; stock maps load.
-  `scripts/test.sh` green.
-- Suggested model: sonnet.
+| Card | Issue | Defects covered | Severity |
+|---|---|---|---|
+| FIX17 | #115 | D7, D8, D9, D10, D11, D12, D13, D14 (renderer BSP loaders) | high |
+| FIX18 | #116 | D16, D17, D18 (MD2 and SP2) | high |
+| FIX19 | #117 | D19, D20, D21, D22 (image loaders) | medium |
+| FIX20 | #118 | D23, D24, D25 (WAV) | high |
+| FIX21 | #119 | D26 (cinematic still-image name) | high |
+| FIX22 | #120 | D4, D5, D6 (pak directory) | high |
+| FIX23 | #121 | D1 and the remaining D3 off-by-one (collision BSP), distinct from FIX3 (#44) / FIX10 (#73) | medium |
