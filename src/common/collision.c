@@ -185,7 +185,7 @@ FloodAreaConnections(void)
 void
 CM_SetAreaPortalState(int portalnum, qboolean open)
 {
-	if (portalnum > numareaportals)
+	if ((portalnum < 0) || (portalnum > numareaportals))
 	{
 		Com_Error(ERR_DROP, "areaportal > numareaportals");
 	}
