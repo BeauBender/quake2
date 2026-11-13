@@ -57,16 +57,53 @@
 #define REFREC_MAX_INTS		8
 #define REFREC_MAX_FLOATS	4
 
+/* string table and frame index (section 3 of the design) */
+#define REFREC_STRING_SIZE	(8 + MAX_QPATH)	/* u32 kind, u32 id, char name[MAX_QPATH] */
+#define REFREC_INDEX_SIZE	12	/* u32 frame, u64 offset */
+
+/*
+ * Recorder limits. A run that reaches one stops recording cleanly: the
+ * trace is finished with what it holds and REFREC_FLAG_TRUNCATED set.
+ * The trace stays far below 4 GiB, so the u32 offsets of the header hold.
+ */
+#define REFREC_MAX_TRACE	(1024u * 1024u * 1024u)	/* bytes of records */
+#define REFREC_MAX_FRAMES	(1u << 20)	/* frame index entries, 12 MiB */
+#define REFREC_MAX_HANDLES	8192	/* string table entries */
+
+/* header flags */
+#define REFREC_FLAG_TRUNCATED	1	/* a recorder limit ended the recording early */
+
+/* string table kinds */
+typedef enum {
+	REFREC_KIND_MODEL = 1, REFREC_KIND_SKIN, REFREC_KIND_PIC,
+	REFREC_KIND_SKY, REFREC_KIND_MAP
+} refrec_kind_t;
+
+#define REFREC_KIND_FIRST	REFREC_KIND_MODEL
+#define REFREC_KIND_LAST	REFREC_KIND_MAP
+
+/* REC_WARN codes */
+typedef enum {
+	REFREC_WARN_UNKNOWN_HANDLE = 1,	/* a model or skin pointer not in the handle map, recorded as id 0 */
+	REFREC_WARN_RAW_TOO_BIG,	/* a Draw_StretchRaw the format cannot carry; the draw is not recorded */
+	REFREC_WARN_COUNT,	/* a refdef_t count out of range, recorded clamped to the engine maximum */
+	REFREC_WARN_NULL_ARRAY,	/* a refdef_t array was NULL; recorded empty or zero */
+	REFREC_WARN_NAME,	/* a NULL or over-long name, recorded empty or cut */
+	REFREC_WARN_HANDLES_FULL,	/* the handle map is full; the handle is recorded as id 0 */
+	REFREC_WARN_FRAME,	/* an REC_ENDFRAME without REC_BEGINFRAME, or a second REC_BEGINFRAME */
+	REFREC_WARN_COLOR	/* Draw_PicScaledCol without a color; recorded as white */
+} refrec_warn_t;
+
 typedef enum {
 	REC_BEGINREG = 1, REC_MODEL, REC_SKIN, REC_PIC, REC_SKY, REC_ENDREG,
 	REC_BEGINFRAME, REC_RENDERFRAME, REC_ENDWORLD, REC_ENDFRAME,
 	REC_PICSIZE, REC_PICSCALED, REC_PICSCALEDCOL, REC_STRETCHPIC,
 	REC_CHARSCALED, REC_TILECLEAR, REC_FILL, REC_FADESCREEN, REC_STRETCHRAW,
-	REC_PALETTE, REC_CVARS, REC_WARN
+	REC_PALETTE, REC_CVARS, REC_WARN, REC_CAPTURE
 } refrec_type_t;
 
 #define REC_FIRST	REC_BEGINREG
-#define REC_LAST	REC_WARN
+#define REC_LAST	REC_CAPTURE
 
 /* 64 bytes on disk: the fields below in order, then 4 reserved zero bytes */
 typedef struct {
@@ -124,7 +161,9 @@ typedef struct {
  *   REC_STRETCHRAW   ints x, y, w, h, cols, rows, bits; data of
  *                    cols * rows * (bits / 8) bytes, bits 8 or 32
  *   REC_PALETTE      data of 0 bytes (NULL palette) or REFREC_PALETTE_SIZE
- *   REC_WARN         int code; name (message)
+ *   REC_WARN         int code (refrec_warn_t); name (message)
+ *   REC_CAPTURE      int pin frame number: the live run wrote
+ *                    <scenario>-<number>.tga at this point of the frame
  *
  * A read leaves data pointing into the reader's buffer.
  */
@@ -176,7 +215,55 @@ qboolean RefRec_ReadRecord(refrec_reader_t *r, refrec_type_t *type,
 		refrec_reader_t *cvars, uint32_t *ncvars);
 qboolean RefRec_NextCvar(refrec_reader_t *cvars, char *name, char *value);	/* each REFREC_MAX_STRING */
 
-/* recorder: called from the vid.c wrappers */
+/*
+ * The string table and the frame index. RefRec_ReadStringTable reads the
+ * count and checks that count entries fit in what is left; each
+ * RefRec_NextString then reads one entry (kind in range, name
+ * NUL-terminated within MAX_QPATH and zero after it). RefRec_NextFrameIndex
+ * reads one index entry.
+ */
+qboolean RefRec_ReadStringTable(refrec_reader_t *r, uint32_t *count);
+qboolean RefRec_NextString(refrec_reader_t *r, uint32_t *kind, uint32_t *id, char *name);	/* MAX_QPATH */
+qboolean RefRec_NextFrameIndex(refrec_reader_t *r, uint32_t *frame, uint64_t *offset);
+
+/*
+ * The layout of a whole trace file of file_size bytes: false unless the
+ * header's offsets describe a finished trace (the records, the string
+ * table at a 4-aligned string_table_offset, the frame index at a
+ * 4-aligned frame_index_offset holding exactly frame_count entries up to
+ * the end of the file; under 4 GiB). With frame_offset, also false
+ * unless that frame-index offset lies inside the records, past the
+ * header, 4-aligned and room for a record header. Neither the header
+ * reader nor the index reader checks this; anything that seeks by these
+ * offsets (the replayer) must call it first, for the header and for
+ * every index entry, and also check that the offset names a
+ * REC_BEGINFRAME. A REFREC_FLAG_TRUNCATED trace can end with an open
+ * frame after the last indexed one: a replay stops at the last indexed
+ * frame. The string table reader must be given exactly the bytes between
+ * string_table_offset and frame_index_offset, which is what bounds the
+ * table.
+ */
+qboolean RefRec_CheckLayout(const refrec_header_t *h, uint64_t file_size, const uint64_t *frame_offset);
+
+/*
+ * recorder: called from the vid.c wrappers. Records are streamed to the
+ * file one at a time; memory held is one record (at most a full
+ * REC_RENDERFRAME, about 97 KB; Draw_StretchRaw pixels are written from
+ * the caller's buffer), the handle map and the frame index. A failed
+ * write ends the recording and is reported once through the print
+ * function (stderr until RefRec_SetPrint names another); a recorder
+ * limit (REFREC_MAX_TRACE, REFREC_MAX_FRAMES) finishes the trace early
+ * with REFREC_FLAG_TRUNCATED. A trace whose string_table_offset is 0 was
+ * never finished. RefRec_StartRecord while recording does nothing.
+ * A recording may end inside any of the calls below; the call then
+ * returns normally and every later call does nothing. The recorder frees
+ * its buffers only when the outermost of these calls returns.
+ */
+void RefRec_SetPrint(void (*print)(const char *fmt, ...));
+void RefRec_SetLimit(uint32_t bytes);	/* lowers REFREC_MAX_TRACE for the next recording (tests); 0 restores it */
+void RefRec_SetFrameLimit(uint32_t frames);	/* lowers REFREC_MAX_FRAMES for the next recording (tests); 0 restores it */
+void RefRec_SetHandleLimit(uint32_t handles);	/* lowers REFREC_MAX_HANDLES for the next recording (tests); 0 restores it */
+void RefRec_SetWriteFault(uint32_t n);	/* the n-th write, seek or close of the next recording fails (tests); 0 none; defined only when REFREC_TEST_WRITE_FAULT is */
 void RefRec_StartRecord(const char *path, int width, int height, int capture_every);
 void RefRec_StopRecord(void);                  /* writes string table, index, patches header */
 qboolean RefRec_Recording(void);

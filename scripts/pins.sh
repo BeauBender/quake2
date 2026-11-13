@@ -33,6 +33,8 @@
 #                 prints score=... bad=..., exit 0 when both are at or under
 #                 their thresholds, 2 when either is over.
 #   PINS_DRYRUN   print the engine command line for "record" and stop
+#   PINS_TRACE    0: record no renderer-API trace. Default: record writes
+#                 trace.q2r beside the frames (the engine's pins_record)
 #
 # Every path and value handed to the engine (store, PINS_BASEDIR, PINS_DEMO,
 # scenario values) may hold only A-Z a-z 0-9 _ . / - : the engine re-joins
@@ -226,8 +228,9 @@ build_args() {
     engine_args+=(+set vid_renderer "$renderer" +set vid_fullscreen 0 +set r_mode -1
         +set r_customwidth "${PINS_WIDTH:-640}" +set r_customheight "${PINS_HEIGHT:-480}"
         +set s_initsound 0
-        +set pins_dir "$out" +set pins_scenario "$scenario" +set pins_capture "${PINS_EVERY:-30}"
-        +demomap "${PINS_DEMO:-demo1.dm2}")
+        +set pins_dir "$out" +set pins_scenario "$scenario" +set pins_capture "${PINS_EVERY:-30}")
+    if [ "${PINS_TRACE:-1}" != 0 ]; then engine_args+=(+set pins_record trace.q2r); fi
+    engine_args+=(+demomap "${PINS_DEMO:-demo1.dm2}")
 }
 
 cmd_record() {
@@ -296,6 +299,7 @@ cmd_record() {
     fi
     date -u '+%Y-%m-%dT%H:%M:%SZ' > "$out/complete"
     echo "recorded $n frames: $out"
+    if [ -f "$out/trace.q2r" ]; then echo "trace: $out/trace.q2r ($(wc -c < "$out/trace.q2r" | tr -d ' ') bytes)"; fi
 }
 
 cmd_compare() {
@@ -551,13 +555,17 @@ st_scenarios() {
     for name in vid_renderer vid_fullscreen r_mode r_customwidth r_customheight s_initsound; do
         grep -rqF "\"$name\"" "$root/src" || st_fail "the driver sets $name, which is not a cvar in src/" || return 1
     done
-    for name in pins_dir pins_scenario pins_capture; do
+    for name in pins_dir pins_scenario pins_capture pins_record; do
         grep -qF "\"$name\"" "$root/src/client/cl_pins.c" || st_fail "the driver passes $name, which CL_PinsLatch in src/client/cl_pins.c does not read" || return 1
     done
     local line; line=$(PINS_DRYRUN=1 cmd_record gl1 world)
-    for name in '-portable' '+set r_customwidth 640' '+set pins_capture 30' '+set cl_entities 0' '+set timedemo 1' '+demomap demo1.dm2'; do
+    for name in '-portable' '+set r_customwidth 640' '+set pins_capture 30' '+set pins_record trace.q2r' '+set cl_entities 0' '+set timedemo 1' '+demomap demo1.dm2'; do
         case $line in *"$name"*) ;; *) st_fail "record command line lacks: $name"; return 1;; esac
     done
+    # the trace lands in the pin directory beside the frames, and PINS_TRACE=0 records none
+    case $line in *"+set pins_dir $PINS_STORE/world/gl1/"*" +set pins_record trace.q2r +demomap "*) ;; *) st_fail "the trace must be pins_record inside pins_dir: $line"; return 1;; esac
+    line=$(PINS_TRACE=0 PINS_DRYRUN=1 cmd_record gl1 world)
+    case $line in *pins_record*) st_fail "PINS_TRACE=0 must not pass pins_record"; return 1;; esac
     [ "$(HOME=/h/x PINS_STORE= store)" = "/h/x/.quake2-pins" ] || st_fail "store default must be \$HOME/.quake2-pins, whatever .claude/dev-loop.json holds" || return 1
 }
 
@@ -580,7 +588,7 @@ st_scenario_lines() { # TASK39 (b, c): only "set <cvar> <value>", never a driver
     mkdir -p "$tmp/scen"; local scen_dir="$tmp/scen" bad
     printf '%s\n' '// ok' 'set timedemo 1' 'set cl_gun 0' > "$tmp/scen/good.cfg"
     local line; line=$(PINS_DRYRUN=1 cmd_record gl1 good) || st_fail "a plain scenario must pass" || return 1
-    case $line in *"+set cl_gun 0 "*"+set pins_dir "*"+set pins_capture 30 +demomap demo1.dm2") ;; *) st_fail "the driver's own arguments must follow the scenario's: $line"; return 1;; esac
+    case $line in *"+set cl_gun 0 "*"+set pins_dir "*"+set pins_capture 30 +set pins_record trace.q2r +demomap demo1.dm2") ;; *) st_fail "the driver's own arguments must follow the scenario's: $line"; return 1;; esac
     printf '%s\n' 'set timedemo 1' 'set cl_gun -1' 'set cl_gun -0.5' 'set cl_gun -.5' > "$tmp/scen/neg.cfg"
     PINS_DRYRUN=1 cmd_record gl1 neg >/dev/null || st_fail "negative numbers must be accepted" || return 1
     for bad in 'set pins_capture 1' 'set pins_dir /tmp/x' 'set vid_renderer gl1' 'set r_customwidth 9' 'set s_initsound 1' \
@@ -694,7 +702,7 @@ st_engine_id() { # TASK39 (h): the id sees uncommitted source, untracked source 
 
 cmd_selftest() {
     # the selftest must not depend on, or act on, the caller's environment
-    unset PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF
+    unset PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF PINS_TRACE
     # the scratch store must be somewhere check_store accepts: not inside a git
     # work tree (TMPDIR may be in one), so try TMPDIR, then /tmp, then /var/tmp
     local base t
@@ -738,5 +746,5 @@ case "${1:-}" in
     compare)  [ $# -ge 3 ] || die "usage: pins.sh compare <renderer> <scenario> [--ref r] [--ref-id d] [--run N | --cand-id d] [--threshold t] [--bad-threshold b]"; shift; cmd_compare "$@";;
     list)     cmd_list;;
     selftest) cmd_selftest;;
-    *) sed -n '2,79p' "$0" | sed 's/^# \{0,1\}//'; exit 1;;
+    *) sed -n '2,82p' "$0" | sed 's/^# \{0,1\}//'; exit 1;;
 esac
