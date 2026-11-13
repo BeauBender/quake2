@@ -166,7 +166,7 @@ index or size without a check, that is the bug to look for.
 Severity: critical = remote memory corruption or file write; high = remote
 crash or OOB read of memory; medium = resource exhaustion; low = hardening.
 
-### D1 — `num_entities` can exceed `MAX_EDICTS`; sound loops write/read past `sounds[MAX_EDICTS]` (high, high confidence)
+### D1 — `num_entities` can exceed `MAX_EDICTS`; sound loops write/read past `sounds[MAX_EDICTS]` (high, high confidence) [FIX11 (#107)]
 
 `CL_ParsePacketEntities`/`CL_DeltaEntity` increment `frame->num_entities` once
 per entity in a frame and never cap it to `MAX_EDICTS` (1024). The underlying
@@ -200,7 +200,7 @@ cleanest is to bound the frame's entity count at parse time, which also
 protects the other `num_entities` consumers (`cl_entities.c`,
 `cl_prediction.c`, which happen to mask but iterate the inflated count).
 
-### D2 — server `playernum` is not range-checked on the client (medium/high, high confidence)
+### D2 — server `playernum` is not range-checked on the client (medium/high, high confidence) [FIX12 (#108)]
 
 `CL_ParseServerData` does `cl.playernum = MSG_ReadShort(...)` with no bound
 except the special value `-1` (cinematic/pic). Elsewhere the client uses
@@ -214,7 +214,7 @@ Fix: reject `playernum < -1 || playernum >= MAX_CLIENTS` with `ERR_DROP` at the
 read. Low cost, closes the class. Confidence that it is unchecked: high;
 confidence it is independently exploitable today: low — hence medium.
 
-### D3 — `"num"`/`"hnum"`/`"anum"`/`"rnum"` layout tokens index `stats[]` unchecked (high, high confidence)
+### D3 — `"num"`/`"hnum"`/`"anum"`/`"rnum"` layout tokens index `stats[]` unchecked (high, high confidence) [FIX13 (#109)]
 
 In `SCR_ExecuteLayoutString` (`cl_screen.c`), the `"pic"`, `"stat_string"`,
 `"if"` handlers all validate `index` against `MAX_STATS`, but the `"num"`
@@ -228,7 +228,7 @@ value is then rendered as a number, so it is an information read, and a large
 negative index can fault. Severity high (remote OOB read / crash). Fix: bound
 the `"num"` stat index to `0..MAX_STATS` like the sibling handlers.
 
-### D4 — `DrawHUDStringScaled` writes `line[1024]` with no width bound (high, high confidence)
+### D4 — `DrawHUDStringScaled` writes `line[1024]` with no width bound (high, high confidence) [FIX13 (#109)]
 
 `DrawHUDStringScaled` (`cl_screen.c`) copies a line of the input string into
 `char line[1024]` with `while (*string && *string != '\n') line[width++] =
@@ -242,7 +242,7 @@ cstring path is a 1-byte edge; a direct caller with a longer string is a clear
 overflow. Fix: bound `width` to `sizeof(line)-1`. Severity high (stack OOB
 write of attacker bytes).
 
-### D5 — entity `modelindex`/`modelindex2-4` and `frame` used as array indices without range checks (high, high confidence)
+### D5 — entity `modelindex`/`modelindex2-4` and `frame` used as array indices without range checks (high, high confidence) [FIX14 (#110)]
 
 `CL_AddPacketEntities` (`cl_entities.c`) indexes `cl.model_draw[s1->modelindex]`
 (and `modelindex2/3/4`) and `cl_prediction.c` indexes
@@ -258,7 +258,7 @@ fed to `V_AddLight` intensity). Fix: bound `s1->frame` before indexing
 were checked and are safe by the byte type.) Confidence high for the
 `bfg_lightramp` read.
 
-### D6 — negative download `offset` not clamped on the server (high, high confidence — confirmed)
+### D6 — negative download `offset` not clamped on the server (high, high confidence — confirmed) [FIX15 (#111)]
 
 `SV_BeginDownload_f` (`sv_user.c`) sets `downloadcount = offset` from
 `Cmd_Argv(2)` and only clamps the upper side (`if (offset > downloadsize)`).
@@ -284,7 +284,7 @@ This is adjacent to, but distinct from, TASK1/#8 (which fixed the *client* side
 `svc_download` size) and FIX1/#40 (download header / savedir): neither touched
 the server-side negative offset.
 
-### D7 — `StringToFilter` in the game module overflows `num[128]` (medium, medium confidence — game module)
+### D7 — `StringToFilter` in the game module overflows `num[128]` (medium, medium confidence — game module) [FIX16 (#112)]
 
 `StringToFilter` (`src/game/g_svcmds.c`, also reached from `SV_FilterPacket`)
 copies decimal digits of an IP octet into `char num[128]` with `num[j++]` and
@@ -321,12 +321,13 @@ is exploitable today: low. Listed so the class is not silently dropped.
 - H6 `SVC_Info`: the wrong-version `Com_sprintf` passes an extra `sizeof`
   argument that the format ignores; cosmetic, no overflow.
 
-## Cards to file
+## Cards filed
 
-One card per defect class. The orchestrator files these and fills in ids.
+One card per defect class, filed as locked backlog issues (epic trust-boundary, depends on TASK17).
 
 ---
 
+**Card:** FIX11 (#107)
 **Title:** Bound client frame `num_entities` to `MAX_EDICTS`; fix the sound-list loops
 **Severity:** high
 **Sites:** `cl_parse.c` `CL_ParsePacketEntities`/`CL_DeltaEntity`;
@@ -342,6 +343,7 @@ stack-buffer-overflow; stock play unchanged. Model: sonnet.
 
 ---
 
+**Card:** FIX12 (#108)
 **Title:** Range-check server-supplied `playernum` on the client
 **Severity:** medium
 **Sites:** `cl_parse.c` `CL_ParseServerData`.
@@ -353,6 +355,7 @@ running — document the trace. Model: haiku.
 
 ---
 
+**Card:** FIX13 (#109)
 **Title:** Bound the `"num"` stat index and the `line[]` width in the HUD layout interpreter
 **Severity:** high
 **Sites:** `cl_screen.c` `SCR_ExecuteLayoutString` (`"num"` handler),
@@ -366,6 +369,7 @@ HUDs render unchanged. Model: sonnet.
 
 ---
 
+**Card:** FIX14 (#110)
 **Title:** Bound entity `frame` before indexing `bfg_lightramp[]`
 **Severity:** high
 **Sites:** `cl_entities.c` `CL_AddPacketEntities` (`bfg_lightramp[s1->frame]`).
@@ -376,6 +380,7 @@ Acceptance: fix plus a trace; BFG visuals unchanged. Model: haiku.
 
 ---
 
+**Card:** FIX15 (#111)
 **Title:** Reject a negative download offset on the server
 **Severity:** high
 **Sites:** `sv_user.c` `SV_BeginDownload_f` / `SV_NextDownload_f`.
@@ -387,6 +392,7 @@ bounds; valid resume offsets still work. Model: sonnet.
 
 ---
 
+**Card:** FIX16 (#112)
 **Title:** Bound the octet buffer in the game-module IP filter
 **Severity:** low (game module)
 **Sites:** `src/game/g_svcmds.c` `StringToFilter`.
