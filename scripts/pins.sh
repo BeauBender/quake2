@@ -884,6 +884,8 @@ st_make_demo_args() { # TASK70: what make-demo accepts and passes to the engine
     for n in ../water Water -x 'wa ter' ''; do
         if (PINS_DRYRUN=1 cmd_make_demo "$n") >/dev/null 2>&1; then st_fail "make-demo name '$n' must be refused"; return 1; fi
     done
+    mkdir -p "$tmp/dn"; printf '%s\n' 'map base1' 'record Up' 'stop' 'quit' > "$tmp/dn/Up.cfg"
+    if (demo_dir="$tmp/dn" PINS_DRYRUN=1 cmd_make_demo Up) >/dev/null 2>&1; then st_fail "an upper-case name must be refused even when its script exists"; return 1; fi
     if (PINS_DRYRUN=1 cmd_make_demo nosuch) >/dev/null 2>&1; then st_fail "a name with no script must be refused"; return 1; fi
     if (PINS_DRYRUN=1 cmd_make_demo water --run 2) >/dev/null 2>&1; then st_fail "an unknown option must be refused"; return 1; fi
     if (PINS_DRYRUN=1 PINS_TIMEOUT=abc cmd_make_demo water) >/dev/null 2>&1; then st_fail "a non-numeric PINS_TIMEOUT must be refused"; return 1; fi
