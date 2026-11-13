@@ -33,6 +33,9 @@ extern cvar_t *vid_renderer;
 cvar_t *cin_force43;
 int abort_cinematic;
 
+/* How the last cinematic ended (SCR_CinematicEnd). */
+static int cin_end = CINEND_NONE;
+
 typedef struct
 {
 	byte *data;
@@ -464,6 +467,7 @@ SCR_RunCinematic(void)
 
 	if (!cin.pic_pending)
 	{
+		cin_end = CINEND_DONE;
 		SCR_StopCinematic();
 		SCR_FinishCinematic();
 		cl.cinematictime = 1; /* the black screen behind loading */
@@ -635,6 +639,7 @@ SCR_PlayCinematic(char *arg)
 
 	In_FlushQueue();
 	abort_cinematic = INT_MAX;
+	cin_end = CINEND_NONE;
 
 	/* make sure background music is not playing */
 	OGG_Stop();
@@ -709,6 +714,7 @@ SCR_PlayCinematic(char *arg)
 
 	if (!cl.cinematic_file)
 	{
+		cin_end = CINEND_FAILED;
 		SCR_FinishCinematic();
 		cl.cinematictime = 0; /* done */
 		return;
@@ -735,6 +741,7 @@ SCR_PlayCinematic(char *arg)
 		(long long)cin.width * (long long)cin.height > 16 * 1024 * 1024)
 	{
 		Com_Printf("Cinematic %s has bad size %i x %i\n", name, cin.width, cin.height);
+		cin_end = CINEND_FAILED;
 		SCR_StopCinematic();
 		SCR_FinishCinematic();
 		return;
@@ -746,6 +753,7 @@ SCR_PlayCinematic(char *arg)
 	{
 		Com_Printf("Cinematic %s has bad sound format (%i Hz, width %i, %i channels)\n",
 				name, cin.s_rate, cin.s_width, cin.s_channels);
+		cin_end = CINEND_FAILED;
 		SCR_StopCinematic();
 		SCR_FinishCinematic();
 		return;
@@ -756,4 +764,16 @@ SCR_PlayCinematic(char *arg)
 	cl.cinematicframe = 0;
 	cin.pic = SCR_ReadNextFrame();
 	cl.cinematictime = Sys_Milliseconds();
+}
+
+/*
+ * How the last cinematic ended: CINEND_DONE once it played to its last
+ * frame, CINEND_FAILED when it could not be opened or read, CINEND_NONE
+ * while it plays or when none was played. Read by the pin harness
+ * (CL_PinsFrame) only.
+ */
+int
+SCR_CinematicEnd(void)
+{
+	return cin_end;
 }

@@ -1663,7 +1663,11 @@ SCR_Framecounter(void)
  * Pin harness. With "+set pins_capture N" on the command line
  * (CL_PinsCapture), while a demo plays, every Nth rendered frame is
  * captured by running the renderer's own screenshot command here, after
- * the frame is complete and before it is presented.
+ * the frame is complete and before it is presented. While a cinematic
+ * plays (demomap of a .cin) the count is of cinematic frames instead:
+ * the first rendered frame that shows a newly decoded cinematic frame
+ * counts once, so the frames captured do not depend on how fast the
+ * host renders.
  * Reading the GL back buffer after the swap is undefined, so this runs
  * before R_EndFrame. gl1 batches 2D quads and flushes them at the end of
  * the frame, so its screenshot command flushes that batch first
@@ -1675,13 +1679,33 @@ static void
 SCR_PinsCapture(void)
 {
 	static int demoframe;
+	static int cinframe = -1;
 	char cmd[] = "screenshot tga";
 	int every = CL_PinsCapture();
 
-	if ((every <= 0) || !cl.attractloop || (cls.state != ca_active) ||
-		!cl.refresh_prepped)
+	if ((every <= 0) || !cl.attractloop || (cls.state != ca_active))
 	{
 		demoframe = 0;
+		cinframe = -1;
+		return;
+	}
+
+	if (cl.cinematictime > 0)
+	{
+		/* a static picture has no frames; a paused cinematic shows
+		   the console or the menu, not the cinematic */
+		if ((cl.cinematicframe < 0) || (cls.key_dest != key_game) ||
+			(cl.cinematicframe == cinframe))
+		{
+			return;
+		}
+
+		cinframe = cl.cinematicframe;
+	}
+	else if (!cl.refresh_prepped)
+	{
+		demoframe = 0;
+		cinframe = -1;
 		return;
 	}
 
