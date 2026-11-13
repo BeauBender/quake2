@@ -609,6 +609,7 @@ else ifeq ($(YQ2_OSTYPE), Darwin)
 
 ref_gl1:
 	@echo "===> Building ref_gl1.dylib"
+	${Q}mkdir -p $(BINDIR)
 	$(MAKE) $(BINDIR)/ref_gl1.dylib
 
 
@@ -620,7 +621,9 @@ $(BINDIR)/ref_gl1.dylib : LDFLAGS += -shared -framework OpenGL
 endif
 
 # Both builds write release/ref_gl1.dylib from different objects: a
-# stamp per build relinks it whenever WITH_METAL_SHIM changes.
+# stamp per build relinks it whenever WITH_METAL_SHIM changes. Switching
+# to the OpenGL build also removes the shim's ref_gl1.metallib, which
+# that build does not use.
 REFGL1_MODE := $(if $(filter yes,$(WITH_METAL_SHIM)),metal,gl)
 
 $(BINDIR)/ref_gl1.dylib : $(BUILDDIR)/ref_gl1.$(REFGL1_MODE).mode
@@ -628,6 +631,7 @@ $(BINDIR)/ref_gl1.dylib : $(BUILDDIR)/ref_gl1.$(REFGL1_MODE).mode
 $(BUILDDIR)/ref_gl1.$(REFGL1_MODE).mode:
 	${Q}mkdir -p $(@D)
 	${Q}rm -f $(BUILDDIR)/ref_gl1.*.mode
+	$(if $(filter gl,$(REFGL1_MODE)),${Q}rm -f $(BINDIR)/ref_gl1.metallib)
 	${Q}touch $@
 
 ifeq ($(WITH_METAL_SHIM), yes)
