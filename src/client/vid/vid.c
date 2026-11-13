@@ -107,6 +107,16 @@ VID_WriteTGA(const char *path, int width, int height, int comp, const unsigned c
 		ok = false;
 	}
 
+	/*
+	 * The file was opened (and so created or truncated) by this function:
+	 * do not leave a truncated TGA behind. Failures before the open
+	 * above remove nothing, as the path may be somebody else's file.
+	 */
+	if (!ok)
+	{
+		remove(path);
+	}
+
 	return ok;
 }
 
@@ -197,9 +207,8 @@ VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 
 	if (!VID_WriteTGA(path, width, height, comp, data))
 	{
-		/* Intended even if the file was never opened: a stale frame is removed, not kept. */
-		remove(path);
-		Com_Printf("pins: cannot write %s (failed or short write, file removed)\n", path);
+		/* VID_WriteTGA removed what it created; nothing else is touched here. */
+		Com_Printf("pins: cannot write %s\n", path);
 		VID_PinManifest(dir, "FAILED %s-%06d.tga\n", scenario, idx);
 		return true;   /* handled: scrnshot/ stays untouched while pins are active */
 	}
@@ -246,6 +255,7 @@ void VID_WriteScreenshot(int width, int height, int comp, const void* data)
 		if (!f)
 		{
 			Com_sprintf(picname, sizeof(picname), "q2_%04d.tga", i);
+			/* Also lands here for an existing file that cannot be opened, so the writer never removes a file it did not open itself. */
 			break; /* file doesn't exist */
 		}
 
@@ -264,9 +274,7 @@ void VID_WriteScreenshot(int width, int height, int comp, const void* data)
 	}
 	else
 	{
-		/* Don't leave a truncated file behind. */
-		remove(checkname);
-		Com_Printf("SCR_ScreenShot_f: Couldn't write %s (partial file removed)\n", picname);
+		Com_Printf("SCR_ScreenShot_f: Couldn't write %s\n", picname);
 	}
 }
 
