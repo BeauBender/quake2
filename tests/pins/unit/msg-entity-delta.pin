@@ -1,0 +1,15 @@
+# Pin "msg-entity-delta", produced by test msg_entity_delta_bytes (tests/unit/test_msg.c).
+# Generated from real engine output by `make test UPDATE_PINS=1`
+# (build/<release|debug>/test/yq2test --update-pins). Do not edit by
+# hand: a change to the body below is a behaviour change and its commit
+# says why. The body starts after the separator line.
+# ---
+new entity 300:
+a5 cb 87 0d 2c 01 03 04 01 02 01 00 02 04 02 a0
+ff 40 00 00 00 00 00 00 05 01 1f 00
+unchanged with event:
+a0 01 2c 01 01
+unchanged, entity 300, not forced:
+80 01 2c 01
+forced unchanged:
+00 05

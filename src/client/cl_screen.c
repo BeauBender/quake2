@@ -934,7 +934,7 @@ DrawHUDStringScaled(const char *string, int x, int y, int centerwidth, int xor, 
 
 		width = 0;
 
-		while (*string && *string != '\n')
+		while (*string && *string != '\n' && width < (int)sizeof(line) - 1)
 		{
 			line[width++] = *string++;
 		}
@@ -1149,10 +1149,10 @@ SCR_ExecuteLayoutString(char *s)
 
 			value = cl.frame.playerstate.stats[index];
 
-			if (value >= MAX_IMAGES)
+			if ((value < 0) || (value >= MAX_IMAGES))
 			{
-				Com_DPrintf("%s: Pic %d >= MAX_IMAGES in pic\n",
-					__func__, value);
+				Com_DPrintf("%s: bad pic %d (0x%x) in pic\n",
+					__func__, value, value);
 				continue;
 			}
 
@@ -1285,13 +1285,22 @@ SCR_ExecuteLayoutString(char *s)
 
 		if (!strcmp(token, "num"))
 		{
-			int value, width;
+			int index, value, width;
 
 			/* draw a number */
 			token = COM_Parse(&s);
 			width = (int)strtol(token, (char **)NULL, 10);
 			token = COM_Parse(&s);
-			value = cl.frame.playerstate.stats[(int)strtol(token, (char **)NULL, 10)];
+			index = (int)strtol(token, (char **)NULL, 10);
+
+			if ((index < 0) || (index >= MAX_STATS))
+			{
+				Com_DPrintf("%s: bad stats index %d (0x%x) in num\n",
+					__func__, index, index);
+				continue;
+			}
+
+			value = cl.frame.playerstate.stats[index];
 			SCR_DrawFieldScaled(x, y, 0, width, value, scale);
 			continue;
 		}
@@ -1650,6 +1659,62 @@ SCR_Framecounter(void)
  * This is called every frame, and can also be called
  * explicitly to flush text to the screen.
  */
+/*
+ * Pin harness. With "+set pins_capture N" on the command line
+ * (CL_PinsCapture), while a demo plays, every Nth rendered frame is
+ * captured by running the renderer's own screenshot command here, after
+ * the frame is complete and before it is presented. While a cinematic
+ * plays (demomap of a .cin) the count is of cinematic frames instead:
+ * the first rendered frame that shows a newly decoded cinematic frame
+ * counts once, so the frames captured do not depend on how fast the
+ * host renders.
+ * Reading the GL back buffer after the swap is undefined, so this runs
+ * before R_EndFrame. gl1 batches 2D quads and flushes them at the end of
+ * the frame, so its screenshot command flushes that batch first
+ * (R_ScreenShot in gl1_misc.c); gl3 and soft draw 2D immediately.
+ * The frame lands in the pin store when one was given on the command
+ * line (VID_WritePinFrame in vid.c).
+ */
+static void
+SCR_PinsCapture(void)
+{
+	static int demoframe;
+	static int cinframe = -1;
+	char cmd[] = "screenshot tga";
+	int every = CL_PinsCapture();
+
+	if ((every <= 0) || !cl.attractloop || (cls.state != ca_active))
+	{
+		demoframe = 0;
+		cinframe = -1;
+		return;
+	}
+
+	if (cl.cinematictime > 0)
+	{
+		/* a static picture has no frames; a paused cinematic shows
+		   the console or the menu, not the cinematic */
+		if ((cl.cinematicframe < 0) || (cls.key_dest != key_game) ||
+			(cl.cinematicframe == cinframe))
+		{
+			return;
+		}
+
+		cinframe = cl.cinematicframe;
+	}
+	else if (!cl.refresh_prepped)
+	{
+		demoframe = 0;
+		cinframe = -1;
+		return;
+	}
+
+	if ((demoframe++ % every) == 0)
+	{
+		Cmd_ExecuteString(cmd);
+	}
+}
+
 void
 SCR_UpdateScreen(void)
 {
@@ -1798,6 +1863,7 @@ SCR_UpdateScreen(void)
 	}
 
 	SCR_Framecounter();
+	SCR_PinsCapture();
 	R_EndFrame();
 }
 

@@ -1125,6 +1125,13 @@ GL3_DrawSpriteModel(entity_t *e, gl3model_t *currentmodel)
 	   a single polygon without a surface cache */
 	psprite = (dsprite_t *)currentmodel->extradata;
 
+	/* A negative frame would leave a negative remainder and index
+	   before frames[] and skins[]; use the first frame. */
+	if (e->frame < 0)
+	{
+		e->frame = 0;
+	}
+
 	e->frame %= psprite->numframes;
 	frame = &psprite->frames[e->frame];
 

@@ -36,7 +36,7 @@ Returns the proper texture for a given time and base texture
 struct image_s *
 R_TextureAnimation(const entity_t *currententity, const mtexinfo_t *tex)
 {
-	int c;
+	int c, frame;
 
 	if (!tex->next)
 		return tex->image;
@@ -44,8 +44,18 @@ R_TextureAnimation(const entity_t *currententity, const mtexinfo_t *tex)
 	if (!currententity)
 		return tex->image;
 
-	c = currententity->frame % tex->numframes;
-	while (c && tex)
+	/* A negative frame (an entity's or the world's, derived from
+	   the client time) would start the step count below zero and
+	   walk a circular chain about 2^32 times; use the first frame.
+	   numframes is the chain length counted at load, so at most
+	   numframes - 1 steps are taken, and the walk also stops at the
+	   end of a chain that is not circular. */
+	frame = currententity->frame;
+	if (frame < 0)
+		frame = 0;
+
+	c = frame % tex->numframes;
+	while (c > 0 && tex->next)
 	{
 		tex = tex->next;
 		c--;

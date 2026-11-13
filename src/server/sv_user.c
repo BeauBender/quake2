@@ -381,6 +381,20 @@ SV_NextDownload_f(void)
 		return;
 	}
 
+	/* The read position must lie inside the loaded file, whatever
+	   the caller stored in downloadcount. */
+	if ((sv_client->downloadsize < 0) || (sv_client->downloadcount < 0) ||
+		(sv_client->downloadcount > sv_client->downloadsize))
+	{
+		FS_FreeFile(sv_client->download);
+		sv_client->download = NULL;
+
+		MSG_WriteByte(&sv_client->netchan.message, svc_download);
+		MSG_WriteShort(&sv_client->netchan.message, -1);
+		MSG_WriteByte(&sv_client->netchan.message, 0);
+		return;
+	}
+
 	r = sv_client->downloadsize - sv_client->downloadcount;
 
 	if (r > 1024)
@@ -430,6 +444,16 @@ SV_BeginDownload_f(void)
 	if (Cmd_Argc() > 2)
 	{
 		offset = (int)strtol(Cmd_Argv(2), (char **)NULL, 10); /* downloaded offset */
+	}
+
+	/* A resume offset is a position inside the file, never negative.
+	   Refuse the request the same way as any other bad download. */
+	if (offset < 0)
+	{
+		MSG_WriteByte(&sv_client->netchan.message, svc_download);
+		MSG_WriteShort(&sv_client->netchan.message, -1);
+		MSG_WriteByte(&sv_client->netchan.message, 0);
+		return;
 	}
 
 	/* hacked by zoid to allow more conrol over download

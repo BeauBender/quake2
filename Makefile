@@ -614,6 +614,7 @@ endif
 
 # ----------
 
+
 # The OpenGL 1.x renderer lib
 
 ifeq ($(YQ2_OSTYPE), Windows)
@@ -855,6 +856,7 @@ CLIENT_OBJS_ := \
 	src/client/cl_keyboard.o \
 	src/client/cl_lights.o \
 	src/client/cl_main.o \
+	src/client/cl_pins.o \
 	src/client/cl_network.o \
 	src/client/cl_parse.o \
 	src/client/cl_particles.o \
@@ -870,6 +872,7 @@ CLIENT_OBJS_ := \
 	src/client/sound/sdl.o \
 	src/client/sound/sound.o \
 	src/client/sound/wave.o \
+	src/client/vid/refrecord.o \
 	src/client/vid/vid.o \
 	src/common/argproc.o \
 	src/common/clientserver.o \
@@ -1192,6 +1195,72 @@ else
 $(BINDIR)/baseq2/game.so : $(GAME_OBJS)
 	@echo "===> LD $@"
 	${Q}$(CC) $(LDFLAGS) $(GAME_OBJS) $(LDLIBS) -o $@
+endif
+
+# ----------
+
+# The unit-test suite (tests/unit, see doc/085_unittests.md). The test
+# binary links the dedicated server's own objects (SERVER_OBJS_ below,
+# built with q2ded's flags into a tree of their own) except the unix
+# main.c; tests/unit/main.c supplies main(). One client object,
+# cl_download.c, is linked on its own against the client state stubs in
+# tests/unit/stub_client.c (it includes no SDL), and one renderer object,
+# refresh/files/surf.c, which needs only shared.c. Needs no SDL and no game
+# data. `make test` builds and runs it; UPDATE_PINS=1 (exactly 1, any
+# other value is ignored) rewrites the pins under tests/pins/unit/
+# instead of comparing; TEST_ARGS passes options or test-name filters to
+# the runner. scripts/test.sh and scripts/coverage.sh clear both on the
+# make command line, so the gate always compares and runs every test. COVERAGE=1 builds an instrumented
+# copy under build/coverage (scripts/coverage.sh drives that).
+ifneq ($(YQ2_OSTYPE), Windows)
+
+ifdef COVERAGE
+override TESTDIR := $(BUILDROOT)/coverage
+ifeq ($(COMPILER), clang)
+TEST_COVFLAGS := -O0 -fprofile-instr-generate -fcoverage-mapping
+else
+TEST_COVFLAGS := -O0 --coverage
+endif
+else
+override TESTDIR := $(BUILDDIR)/test
+TEST_COVFLAGS :=
+endif
+
+TEST_CFLAGS := -DDEDICATED_ONLY -Wno-unused-result $(TEST_COVFLAGS)
+ifeq ($(WITH_XDG),yes)
+TEST_CFLAGS += -DUSE_XDG
+endif
+
+TEST_SRCS := $(sort $(wildcard tests/unit/*.c))
+TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SERVER_OBJS_))) \
+	$(TESTDIR)/src/client/cl_download.o \
+	$(TESTDIR)/src/client/refresh/files/surf.o \
+	$(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS))
+TEST_BIN = $(TESTDIR)/yq2test
+
+# Header dependencies of the test objects (-MMD, not on Darwin), so that
+# an incremental `make test` after a header edit rebuilds what uses it.
+-include $(TEST_OBJS:.o=.d)
+
+.PHONY : test
+
+test: $(TEST_BIN)
+	@echo "===> TEST $(TEST_BIN)"
+	${Q}$(TEST_BIN) $(if $(filter 1,$(UPDATE_PINS)),--update-pins) $(TEST_ARGS)
+
+$(TESTDIR)/%.o: %.c
+	@if [ -z $(QUIET) ]; then\
+		echo "===> CC $< (test)";\
+	fi
+	${Q}mkdir -p $(@D)
+	${Q}$(CC) -c $(CFLAGS) $(TEST_CFLAGS) $(INCLUDE) -o $@ $<
+
+$(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS)) : tests/unit/test.h
+
+$(TEST_BIN) : $(TEST_OBJS)
+	@echo "===> LD $@"
+	${Q}$(CC) $(LDFLAGS) $(TEST_COVFLAGS) $(TEST_OBJS) $(LDLIBS) -o $@
+
 endif
 
 # ----------

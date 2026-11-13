@@ -788,3 +788,44 @@ like.
 * **toggle <cvar> [val0] [val1]**: Toggle the given cvar between `0` and
   `1`. If the optional arguments `val0` and `val1` are given, the cvar
   is toggled between them.
+
+## Pin harness
+
+These are set by `scripts/pins.sh`, never by a player. They look like
+cvars on the command line but are not cvars: the engine reads them once
+from its own command line, in exactly the form `+set <name> <value>`,
+before any config file runs, and keeps the values where nothing else can
+change them. A `set` of the same name in a config file, on the console
+or from a server's stufftext (with or without flags such as `a`) only
+creates an unrelated cvar that the engine never reads. Their values name
+files, which is why. When one is given more than once the last occurrence is used, but any
+refused occurrence switches the harness off for the whole run, even if a
+later one is valid. If any of them holds a refused value (see below),
+the harness is off and no screenshot is written at all. With none of
+them given the engine behaves exactly as before.
+
+* **pins_dir**: When given, every screenshot is written into this
+  directory as an uncompressed 24-bit TGA named
+  `<pins_scenario>-<frame>.tga` plus a line in `manifest.txt` (file
+  name, renderer, size), and `scrnshot/` is not touched. Refused when
+  empty, when it contains `..`, or when it does not fit the engine's
+  path buffer; a frame path that would not fit is never opened. An
+  absolute path is accepted. Default: not given.
+
+* **pins_scenario**: The file-name prefix for frames written into
+  `pins_dir`. Must match `[a-z0-9_][a-z0-9_-]*`. Default: `pin`.
+
+* **pins_capture**: While a demo plays, capture every Nth rendered frame,
+  after the frame is complete and before it is presented (while a
+  cinematic started with `demomap <name>.cin` plays, every Nth cinematic
+  frame instead, and a cinematic that cannot be opened ends the engine
+  with a non-zero exit status); when playback ends, quit so a scenario
+  run is unattended; and if the renderer named
+  by `vid_renderer` fails to load, stop with an error instead of falling
+  back to another renderer. While it is on, `config.cfg` and
+  `autoexec.cfg` are neither executed nor written, and an error that
+  would drop to the console (a demo that cannot be opened, for example)
+  ends the engine with a non-zero exit status, as does a demo file that
+  ends before its end marker. Needs `pins_dir`. Must be a non-negative
+  integer of digits only (no sign, no spaces). `0` (the default)
+  disables all of this.

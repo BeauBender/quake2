@@ -592,7 +592,7 @@ Mod_LoadMarksurfaces (model_t *loadmodel, byte *mod_base, lump_t *l)
 	{
 		int j;
 		j = LittleShort(in[i]);
-		if (j >= loadmodel->numsurfaces)
+		if ((j < 0) || (j >= loadmodel->numsurfaces))
 		{
 			Com_Error(ERR_DROP, "%s: bad surface number", __func__);
 		}

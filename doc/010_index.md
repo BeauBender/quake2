@@ -24,4 +24,6 @@ The documentation is split into several documents:
 * [Multiplayer Server Configuration](060_multiplayer.md)
 * [Packaging Guide For Maintainers](070_packaging.md)
 * [Contributing Guide](080_contributing.md)
+* [Unit Tests, Pins And Coverage](085_unittests.md)
 * [File Listings](090_filelists.md)
+* [Renderer Frame Pins](100_renderpins.md)

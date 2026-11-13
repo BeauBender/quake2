@@ -695,7 +695,8 @@ CL_WriteConfiguration(void)
 	FILE *f;
 	char path[MAX_OSPATH];
 
-	if (cls.state == ca_uninitialized)
+	/* Pin harness: a pin run never reads or rewrites config.cfg */
+	if ((cls.state == ca_uninitialized) || (CL_PinsCapture() > 0))
 	{
 		return;
 	}
@@ -804,6 +805,74 @@ CL_UpdateWindowedMouse(void)
 			Cvar_SetValue("windowed_mouse", 1);
 		}
 	}
+}
+
+/*
+ * With pin capture on, quit once demo playback has ended, so a scenario
+ * run is unattended. The capture itself happens in SCR_UpdateScreen
+ * (SCR_PinsCapture), before the frame is presented. A demo whose file
+ * ended before its end marker, or that ended before a frame of it was
+ * played, fails the run: the engine exits non-zero (Com_Error turns a
+ * dropped pin run into a fatal error the same way). A cinematic played
+ * with demomap ends the same way once its last frame was shown
+ * (SCR_CinematicEnd), and fails the run when it could not be opened.
+ */
+static void
+CL_PinsFrame(void)
+{
+	static qboolean was_playing;
+	static qboolean quitting;
+	int demoend, cinend;
+
+	if ((CL_PinsCapture() <= 0) || quitting)
+	{
+		return;
+	}
+
+	if (cl.attractloop && (cls.state == ca_active))
+	{
+		if (cl.playernum != -1)
+		{
+			/* a demo, not a cinematic: an earlier cinematic's end is stale */
+			SCR_ResetCinematicEnd();
+		}
+
+		was_playing = true;
+		return;
+	}
+
+	demoend = SV_DemoEnd();
+	cinend = SCR_CinematicEnd();
+
+	if ((cls.state != ca_disconnected) ||
+		(!was_playing && (demoend == DEMOEND_NONE) &&
+		 (cinend == CINEND_NONE)))
+	{
+		return;
+	}
+
+	if (cinend == CINEND_FAILED)
+	{
+		Com_Error(ERR_FATAL, "pins: the cinematic could not be played\n");
+	}
+
+	if (demoend == DEMOEND_CUT)
+	{
+		Com_Error(ERR_FATAL, "pins: the demo ended before its end marker\n");
+	}
+
+	if ((demoend == DEMOEND_NONE) && (cinend == CINEND_NONE))
+	{
+		Com_Error(ERR_FATAL, "pins: playback stopped before the demo ended\n");
+	}
+
+	if (!was_playing)
+	{
+		Com_Error(ERR_FATAL, "pins: the demo ended before a frame of it was played\n");
+	}
+
+	quitting = true;
+	Cbuf_AddText("quit\n");
 }
 
 void
@@ -917,6 +986,9 @@ CL_Frame(int packetdelta, int renderdelta, int timedelta, qboolean packetframe, 
 
 		/* Update framecounter */
 		cls.framecount++;
+
+		/* Pin harness: quit when demo playback has ended. */
+		CL_PinsFrame();
 
 		if (log_stats->value)
 		{

@@ -29,107 +29,234 @@
 
 #include "../../client/header/client.h"
 #include "../../client/header/keyboard.h"
+#include "header/refrecord.h"
 
 // --------
 
 // Screenshots
 // -----------
 
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "header/stb_image_write.h"
+/*
+ * Writes an uncompressed 24-bit TGA. data holds width*height pixels of
+ * comp bytes (3 or 4, RGB or RGBA), row-wise, starting at the top left.
+ * Returns true on success.
+ */
+static qboolean
+VID_WriteTGA(const char *path, int width, int height, int comp, const unsigned char *data)
+{
+	unsigned char hdr[18];
+	unsigned char *row;
+	FILE *f;
+	int x, y;
+	qboolean ok = true;
+
+	if ((comp != 3 && comp != 4) || width < 1 || height < 1 || width > 65535 || height > 65535)
+	{
+		return false;
+	}
+
+	row = malloc((size_t)width * 3);
+
+	if (!row)
+	{
+		return false;
+	}
+
+	f = Q_fopen(path, "wb");
+
+	if (!f)
+	{
+		free(row);
+		return false;
+	}
+
+	memset(hdr, 0, sizeof(hdr));
+	hdr[2] = 2;                 /* uncompressed truecolor */
+	hdr[12] = width & 255;
+	hdr[13] = (width >> 8) & 255;
+	hdr[14] = height & 255;
+	hdr[15] = (height >> 8) & 255;
+	hdr[16] = 24;
+	hdr[17] = 0x20;             /* rows stored top-down, as the renderer hands them over */
+
+	if (fwrite(hdr, 1, sizeof(hdr), f) != sizeof(hdr))
+	{
+		ok = false;
+	}
+
+	for (y = 0; ok && y < height; y++)
+	{
+		const unsigned char *src = data + (size_t)y * width * comp;
+
+		for (x = 0; x < width; x++)
+		{
+			row[x * 3 + 0] = src[x * comp + 2];
+			row[x * 3 + 1] = src[x * comp + 1];
+			row[x * 3 + 2] = src[x * comp + 0];
+		}
+
+		if (fwrite(row, 1, (size_t)width * 3, f) != (size_t)width * 3)
+		{
+			ok = false;
+		}
+	}
+
+	free(row);
+
+	if (fclose(f) != 0)
+	{
+		ok = false;
+	}
+
+	/*
+	 * The file was opened (and so created or truncated) by this function:
+	 * do not leave a truncated TGA behind. Failures before the open
+	 * above remove nothing, as the path may be somebody else's file.
+	 */
+	if (!ok)
+	{
+		remove(path);
+	}
+
+	return ok;
+}
+
+/* Appends one line to <dir>/manifest.txt; silent when it cannot. */
+static void
+VID_PinManifest(const char *dir, const char *fmt, ...)
+{
+	char path[MAX_OSPATH];
+	va_list ap;
+	FILE *f;
+	int len;
+
+	len = snprintf(path, sizeof(path), "%s/manifest.txt", dir);
+	if ((len < 0) || (len >= (int)sizeof(path)))
+	{
+		return;
+	}
+
+	f = Q_fopen(path, "ab");
+	if (f)
+	{
+		va_start(ap, fmt);
+		vfprintf(f, fmt, ap);
+		va_end(ap);
+		fclose(f);
+	}
+}
 
 /*
- * Writes a screenshot. This function is called with raw image data of
- * width*height pixels, each pixel has comp bytes. Must be 3 or 4, for
- * RGB or RGBA. The pixels must be given row-wise, stating at the top
- * left.
+ * Pin harness (INFORM8/INFORM9): when a pin store directory was given on
+ * the command line (CL_PinsDir, latched by CL_PinsLatch; never a cvar), a
+ * screenshot is written as an uncompressed 24-bit TGA straight into the
+ * store, named by scenario and frame index, and scrnshot/ is never
+ * touched. Uses the same writer as the screenshot command. Returns true
+ * when it handled the frame.
+ */
+static qboolean
+VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
+{
+	static int frame;
+	const char *dir = CL_PinsDir();
+	const char *scenario = CL_PinsScenario();
+	char path[MAX_OSPATH];
+	int len, idx;
+
+	if (CL_PinsInvalid())
+	{
+		Com_Printf("pins: a pins_* argument was refused, nothing written\n");
+		return true;
+	}
+
+	if (!dir[0])
+	{
+		return false;
+	}
+
+	if ((comp != 3) && (comp != 4))
+	{
+		Com_Printf("pins: unsupported pixel format (%d bytes), nothing written\n", comp);
+		return true;
+	}
+
+	/* Belt and braces: CL_PinsLatch refused these already. */
+	if (strstr(dir, "..") || strpbrk(scenario, "/\\:") || strstr(scenario, ".."))
+	{
+		Com_Printf("pins: pins_dir or pins_scenario holds a forbidden character, nothing written\n");
+		return true;
+	}
+
+	/*
+	 * The frame index always advances, so a failed write never shifts
+	 * the names of the frames after it. A failure is recorded in
+	 * manifest.txt as "FAILED <name>", which scripts/pins.sh record
+	 * treats as an incomplete pin. If the manifest cannot be written
+	 * either, its line count no longer matches the frames and record
+	 * fails on that.
+	 */
+	idx = frame++;
+
+	/* Never open a truncated path. */
+	len = snprintf(path, sizeof(path), "%s/%s-%06d.tga", dir, scenario, idx);
+	if ((len < 0) || (len >= (int)sizeof(path)))
+	{
+		Com_Printf("pins: the frame path does not fit %d bytes, nothing written\n", (int)sizeof(path));
+		VID_PinManifest(dir, "FAILED %s-%06d.tga\n", scenario, idx);
+		return true;
+	}
+
+	if (!VID_WriteTGA(path, width, height, comp, data))
+	{
+		/* VID_WriteTGA removed what it created; nothing else is touched here. */
+		Com_Printf("pins: cannot write %s\n", path);
+		VID_PinManifest(dir, "FAILED %s-%06d.tga\n", scenario, idx);
+		return true;   /* handled: scrnshot/ stays untouched while pins are active */
+	}
+
+	VID_PinManifest(dir, "%s-%06d.tga %s %dx%d\n", scenario, idx,
+		vid_renderer ? vid_renderer->string : "?", width, height);
+	return true;
+}
+
+/*
+ * Writes a screenshot as an uncompressed TGA. This function is called
+ * with raw image data of width*height pixels, each pixel has comp bytes.
+ * Must be 3 or 4, for RGB or RGBA. The pixels must be given row-wise,
+ * starting at the top left.
  */
 void VID_WriteScreenshot(int width, int height, int comp, const void* data)
 {
 	char picname[80];
 	char checkname[MAX_OSPATH];
-	int i, success = 0;
-	static const char* supportedFormats[] = { "tga", "bmp", "png", "jpg" };
-	static const int numFormats = ARRLEN(supportedFormats);
-	int format = 0; // 0=tga, 1=bmp, 2=png, 3=jpg
-	int quality = 85;
+	int i;
 	int argc = Cmd_Argc();
 	const char* gameDir = FS_Gamedir();
 
-	// FS_InitFilesystem() made sure the screenshots dir exists./
-
-	if (argc > 1)
+	if (VID_WritePinFrame(width, height, comp, (const unsigned char *)data))
 	{
-		const char* maybeFormat = Cmd_Argv(1);
+		return;
+	}
 
-		for (i = 0; i < numFormats; ++i)
-		{
-			if (Q_stricmp(maybeFormat, supportedFormats[i]) == 0)
-			{
-				format = i;
-				break;
-			}
-		}
+	// FS_InitFilesystem() made sure the screenshots dir exists.
 
-		if (i == numFormats)
-		{
-			Com_Printf("the (optional) second argument to 'screenshot' is the format, one of \"tga\", \"bmp\", \"png\", \"jpg\"\n");
-			return;
-		}
-
-		if (argc > 2)
-		{
-			const char* q = Cmd_Argv(2);
-			size_t qualityStrLen = strlen(q);
-
-			for (i = 0; i < qualityStrLen; ++i)
-			{
-				if (q[i] < '0' || q[i] > '9')
-				{
-					Com_Printf("The (optional!) third argument to 'screenshot' is jpg quality, a number between 1 and 100\n");
-					Com_Printf("  or png compression level, between 0 and 9!\n");
-
-					return;
-				}
-			}
-
-			quality = atoi(q);
-
-			if (format == 2) // png
-			{
-				if (quality < 0)
-				{
-					quality = 0;
-				}
-				else if (quality > 9)
-				{
-					quality = 9;
-				}
-			}
-			else if(format == 3) // jpg
-			{
-				if (quality < 1)
-				{
-					quality = 1;
-				}
-				else if (quality > 100)
-				{
-					quality = 100;
-				}
-			}
-		}
+	if (argc > 1 && (argc > 2 || Q_stricmp(Cmd_Argv(1), "tga") != 0))
+	{
+		Com_Printf("screenshot only writes TGA files; the (optional) argument must be \"tga\"\n");
+		return;
 	}
 
 	/* find a file name to save it to */
 	for (i = 0; i <= 9999; i++)
 	{
 		FILE *f;
-		Com_sprintf(checkname, sizeof(checkname), "%s/scrnshot/q2_%04d.%s", gameDir, i, supportedFormats[format]);
+		Com_sprintf(checkname, sizeof(checkname), "%s/scrnshot/q2_%04d.tga", gameDir, i);
 		f = Q_fopen(checkname, "rb");
 
 		if (!f)
 		{
-			Com_sprintf(picname, sizeof(picname), "q2_%04d.%s", i, supportedFormats[format]);
+			Com_sprintf(picname, sizeof(picname), "q2_%04d.tga", i);
+			/* Also lands here for an existing file that cannot be opened, so the writer never removes a file it did not open itself. */
 			break; /* file doesn't exist */
 		}
 
@@ -142,24 +269,7 @@ void VID_WriteScreenshot(int width, int height, int comp, const void* data)
 		return;
 	}
 
-	switch (format) // 0=tga, 1=bmp, 2=png, 3=jpg
-	{
-		case 0:
-			success = stbi_write_tga(checkname, width, height, comp, data);
-			break;
-		case 1:
-			success = stbi_write_bmp(checkname, width, height, comp, data);
-			break;
-		case 2:
-			stbi_write_png_compression_level = (quality < 10) ? quality : 7;
-			success = stbi_write_png(checkname, width, height, comp, data, 0);
-			break;
-		case 3:
-			success = stbi_write_jpg(checkname, width, height, comp, data, quality);
-			break;
-	}
-
-	if(success)
+	if (VID_WriteTGA(checkname, width, height, comp, (const unsigned char *)data))
 	{
 		Com_Printf("Wrote %s\n", picname);
 	}
@@ -169,7 +279,6 @@ void VID_WriteScreenshot(int width, int height, int comp, const void* data)
 	}
 }
 
-// --------
 
 // Video mode array
 // ----------------
@@ -345,6 +454,11 @@ VID_ShutdownRenderer(void)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_StopRecord();
+		}
+
 		/* Shut down the renderer */
 		re.Shutdown();
 		GLimp_ShutdownGraphics();
@@ -459,6 +573,12 @@ VID_LoadRenderer(void)
 		return false;
 	}
 
+	/* session open: the renderer cvars a replay restores */
+	if (RefRec_Recording())
+	{
+		RefRec_Control(REC_CVARS, 0);
+	}
+
 	/* Ensure that all key states are cleared */
 	Key_MarkAllUp();
 
@@ -518,6 +638,15 @@ VID_CheckChanges(void)
 		while (!VID_LoadRenderer())
 		{
 			int next_test = 0;
+
+			/* Pin harness: frames filed under one renderer's name must
+			   come from that renderer, so never fall back while capturing. */
+			if (CL_PinsCapture() > 0)
+			{
+				Com_Error(ERR_FATAL, "pins: renderer %s failed to load, no fallback while capturing\n",
+						vid_renderer->string);
+				return;
+			}
 
 			for (int i = 0; i < r_order_len; i++)
 			{
@@ -595,6 +724,11 @@ R_BeginRegistration(const char *map)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_Registration(REC_BEGINREG, map, NULL);
+		}
+
 		re.BeginRegistration(map);
 	}
 }
@@ -604,7 +738,14 @@ R_RegisterModel(const char *name)
 {
 	if (ref_active)
 	{
-		return re.RegisterModel(name);
+		struct model_s *mod = re.RegisterModel(name);
+
+		if (RefRec_Recording())
+		{
+			RefRec_Registration(REC_MODEL, name, mod);
+		}
+
+		return mod;
 	}
 
 	return NULL;
@@ -615,7 +756,14 @@ R_RegisterSkin(const char *name)
 {
 	if (ref_active)
 	{
-		return re.RegisterSkin(name);
+		struct image_s *skin = re.RegisterSkin(name);
+
+		if (RefRec_Recording())
+		{
+			RefRec_Registration(REC_SKIN, name, skin);
+		}
+
+		return skin;
 	}
 
 	return NULL;
@@ -626,6 +774,13 @@ R_SetSky(const char *name, float rotate, vec3_t axis)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			const float f[4] = { rotate, axis[0], axis[1], axis[2] };
+
+			RefRec_Draw(REC_SKY, NULL, 0, f, 4, name, NULL, 0);
+		}
+
 		re.SetSky(name, rotate, axis);
 	}
 }
@@ -635,6 +790,11 @@ R_EndRegistration(void)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_Registration(REC_ENDREG, NULL, NULL);
+		}
+
 		re.EndRegistration();
 	}
 }
@@ -644,6 +804,11 @@ R_RenderFrame(refdef_t *fd)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_RenderFrame(fd);
+		}
+
 		re.RenderFrame(fd);
 	}
 }
@@ -653,7 +818,14 @@ Draw_FindPic(const char *name)
 {
 	if (ref_active)
 	{
-		return re.DrawFindPic(name);
+		struct image_s *pic = re.DrawFindPic(name);
+
+		if (RefRec_Recording())
+		{
+			RefRec_Registration(REC_PIC, name, pic);
+		}
+
+		return pic;
 	}
 
 	return NULL;
@@ -666,6 +838,13 @@ Draw_GetPicSize(int *w, int *h, const char *name)
 	if (ref_active)
 	{
 		re.DrawGetPicSize(w, h, name);
+
+		if (RefRec_Recording())
+		{
+			const int32_t a[2] = { *w, *h };
+
+			RefRec_Draw(REC_PICSIZE, a, 2, NULL, 0, name, NULL, 0);
+		}
 	}
 }
 
@@ -674,6 +853,13 @@ Draw_StretchPic(int x, int y, int w, int h, const char *name)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			const int32_t a[4] = { x, y, w, h };
+
+			RefRec_Draw(REC_STRETCHPIC, a, 4, NULL, 0, name, NULL, 0);
+		}
+
 		re.DrawStretchPic(x, y, w, h, name);
 	}
 }
@@ -683,6 +869,13 @@ Draw_PicScaled(int x, int y, const char *pic, float factor)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			const int32_t a[2] = { x, y };
+
+			RefRec_Draw(REC_PICSCALED, a, 2, &factor, 1, pic, NULL, 0);
+		}
+
 		re.DrawPicScaled(x, y, pic, factor);
 	}
 }
@@ -692,6 +885,14 @@ Draw_PicScaledCol(int x, int y, const char *pic, float factor, const float color
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			const int32_t a[2] = { x, y };
+			const float f[4] = { factor, color[0], color[1], color[2] };
+
+			RefRec_Draw(REC_PICSCALEDCOL, a, 2, f, 4, pic, NULL, 0);
+		}
+
 		if (re.DrawPicScaledCol)
 		{
 			re.DrawPicScaledCol(x, y, pic, factor, color);
@@ -708,6 +909,13 @@ Draw_CharScaled(int x, int y, int num, float scale)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			const int32_t a[3] = { x, y, num };
+
+			RefRec_Draw(REC_CHARSCALED, a, 3, &scale, 1, NULL, NULL, 0);
+		}
+
 		re.DrawCharScaled(x, y, num, scale);
 	}
 }
@@ -717,6 +925,13 @@ Draw_TileClear(int x, int y, int w, int h, const char *name)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			const int32_t a[4] = { x, y, w, h };
+
+			RefRec_Draw(REC_TILECLEAR, a, 4, NULL, 0, name, NULL, 0);
+		}
+
 		re.DrawTileClear(x, y, w, h, name);
 	}
 }
@@ -726,6 +941,13 @@ Draw_Fill(int x, int y, int w, int h, int c)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			const int32_t a[5] = { x, y, w, h, c };
+
+			RefRec_Draw(REC_FILL, a, 5, NULL, 0, NULL, NULL, 0);
+		}
+
 		re.DrawFill(x, y, w, h, c);
 	}
 }
@@ -735,6 +957,11 @@ Draw_FadeScreen(void)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_Draw(REC_FADESCREEN, NULL, 0, NULL, 0, NULL, NULL, 0);
+		}
+
 		re.DrawFadeScreen();
 	}
 }
@@ -744,6 +971,14 @@ Draw_StretchRaw(int x, int y, int w, int h, int cols, int rows, const byte *data
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			const int32_t a[7] = { x, y, w, h, cols, rows, bits };
+
+			RefRec_Draw(REC_STRETCHRAW, a, 7, NULL, 0, NULL, data,
+				(uint32_t)cols * (uint32_t)rows * (uint32_t)(bits / 8));
+		}
+
 		re.DrawStretchRaw(x, y, w, h, cols, rows, data, bits);
 	}
 }
@@ -753,6 +988,11 @@ R_SetPalette(const unsigned char *palette)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_Draw(REC_PALETTE, NULL, 0, NULL, 0, NULL, palette, palette ? REFREC_PALETTE_SIZE : 0);
+		}
+
 		re.SetPalette(palette);
 	}
 }
@@ -762,6 +1002,11 @@ R_BeginFrame(float camera_separation)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_Control(REC_BEGINFRAME, camera_separation);
+		}
+
 		re.BeginFrame(camera_separation);
 	}
 }
@@ -771,6 +1016,11 @@ R_EndWorldRenderpass(void)
 {
 	if(ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_Control(REC_ENDWORLD, 0);
+		}
+
 		return re.EndWorldRenderpass();
 	}
 	return false;
@@ -781,6 +1031,11 @@ R_EndFrame(void)
 {
 	if(ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_Control(REC_ENDFRAME, 0);
+		}
+
 		re.EndFrame();
 	}
 }

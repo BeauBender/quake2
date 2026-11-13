@@ -102,6 +102,16 @@ CL_AddPacketEntities(frame_t *frame)
 			ent.frame = s1->frame;
 		}
 
+		/* A negative frame, from the server's frame field or from a
+		   negative client time in the two animation branches above:
+		   the renderers index texture chains and sprite frames with
+		   it, use the first frame like the alias model code does for
+		   a bad frame. */
+		if (ent.frame < 0)
+		{
+			ent.frame = 0;
+		}
+
 		/* quad and pent can do different things on client */
 		if (effects & EF_PENT)
 		{
@@ -220,7 +230,10 @@ CL_AddPacketEntities(frame_t *frame)
 			}
 			else
 			{
-				ent.skinnum = s1->skinnum;
+				/* A negative skin would index before the skins
+				   array of the model; use the first skin, as the
+				   software renderer does for a bad skin. */
+				ent.skinnum = (s1->skinnum >= 0) ? s1->skinnum : 0;
 				ent.skin = NULL;
 				ent.model = cl.model_draw[s1->modelindex];
 			}
@@ -413,7 +426,7 @@ CL_AddPacketEntities(frame_t *frame)
 				ci = &cl.clientinfo[s1->skinnum & 0xff];
 				i = (s1->skinnum >> 8); /* 0 is default weapon model */
 
-				if (!cl_vwep->value || (i > MAX_CLIENTWEAPONMODELS - 1))
+				if (!cl_vwep->value || (i < 0) || (i > MAX_CLIENTWEAPONMODELS - 1))
 				{
 					i = 0;
 				}
@@ -541,12 +554,21 @@ CL_AddPacketEntities(frame_t *frame)
 					CL_BfgParticles(&ent);
 					i = 200;
 				}
-				else
+				else if (s1->frame >= 0 &&
+						s1->frame < (int)(sizeof(bfg_lightramp) / sizeof(bfg_lightramp[0])))
 				{
 					i = bfg_lightramp[s1->frame];
 				}
+				else
+				{
+					/* Frame outside the table: no ramp light. */
+					i = 0;
+				}
 
-				V_AddLight(ent.origin, i, 0, 1, 0);
+				if (i > 0)
+				{
+					V_AddLight(ent.origin, i, 0, 1, 0);
+				}
 			}
 			else if (effects & EF_TRAP)
 			{

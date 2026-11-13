@@ -8,7 +8,7 @@ ships with releases; `docs/` (this directory) is for working on the code.
 - `CLAUDE.md` (also `AGENTS.md`): build commands, the gate, architecture,
   security boundaries and the working rules for agents.
 - `scripts/setup.sh`: checks the toolchain and wires the commit hook.
-- `scripts/test.sh`: the gate. Every commit must pass it.
+- `scripts/test.sh`: the gate. Every commit must pass it. It ends with `make test`, the unit-test suite.
 
 ## Source (`src/`)
 
@@ -29,10 +29,15 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | `doc/` | User documentation, numbered in reading order; cvars in `040_cvarlist.md`, commands in `050_commands.md` |
 | `docs/plans/` | Plan anchors for multi-card work; cards cite them |
 | `docs/decisions/` | Decision records: what was decided, why, and what it costs |
-| `docs/audits/` | Audit write-ups (for example the small vendored files) |
+| `docs/audits/` | Audit write-ups: the [small vendored files](audits/small-vendored.md), the [asset-loader malformed-input audit](audits/asset-loaders.md) and the [network message parser audit](audits/network-parsers.md) |
+| `docs/analysis/` | Measured inventories of existing code that plans and cards cite |
 | `docs/DEPENDENCIES.md` | Every external library and vendored file, and its status |
 | `third_party/SDL3/` | SDL 3 source, byte-identical to the upstream release tarball and verified against `MANIFEST.sha256` by `scripts/check-vendored.sh`; built on macOS by `third_party/sdl3.make`. Provenance and update procedure in its `README.md` |
-| `tests/` | Repo invariants (`check-*.sh`), run by the gate and each runnable on its own; `baselines/` freezes the upstream gaps they tolerate |
+| `scripts/pins.sh`, `scripts/pins/` | The renderer pin harness: record frames per scenario, compare renderers; user page `doc/100_renderpins.md`, procedure in `docs/plans/metal-port-harness.md` |
+| `tests/` | Repo invariants (`check-*.sh`), run by the gate and each runnable on its own; `baselines/` freezes the upstream gaps they tolerate; `pins/` holds the C driver `check-pins-latch.sh` builds; `refrecord/` holds the record-format test `check-refrecord.sh` builds |
+| `tests/unit/` | The unit-test suite: hand-written runner (`test.h`, `main.c`), one `test_*.c` per area, the client-state stubs for `cl_download.c`; built and run by `make test` (in the gate); see `doc/085_unittests.md` |
+| `tests/pins/unit/` | Unit-test pins: committed expected outputs with a provenance header, rewritten by `make test UPDATE_PINS=1` (not the renderer frame pins of `scripts/pins.sh`) |
+| `scripts/coverage.sh`, `scripts/coverage-floor` | Line coverage of the suite with the compiler's own tools, and the floor it must not drop below |
 | `stuff/` | Maintainer tools: savegame table generators (`fngen/`, `mmgen/`), map entity fixes (`mapfixes/`), icons, the Dockerfile and the uncrustify style file (`misc/`) |
 | `.claude/` | Agent configuration: settings and hooks, path-scoped rules (`rules/`), skills (`skills/`), shared memory (`memory/`) |
 | `.githooks/` | The commit hook, wired by `scripts/setup.sh` |

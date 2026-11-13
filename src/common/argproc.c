@@ -26,7 +26,7 @@
 
 #include "header/common.h"
 
-#define MAX_NUM_ARGVS 50
+#define MAX_NUM_ARGVS 128
 
 int com_argc;
 char *com_argv[MAX_NUM_ARGVS + 1];

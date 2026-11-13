@@ -489,9 +489,20 @@ SV_SendClientDatagram(client_t *client)
 	return true;
 }
 
-static void
-SV_DemoCompleted(void)
+/* How the last demo played by this server ended (SV_DemoEnd). */
+static int sv_demoend = DEMOEND_NONE;
+
+int
+SV_DemoEnd(void)
 {
+	return sv_demoend;
+}
+
+static void
+SV_DemoCompleted(int how)
+{
+	sv_demoend = how;
+
 	if (sv.demofile)
 	{
 		FS_FCloseFile(sv.demofile);
@@ -549,14 +560,14 @@ SV_NextDemoChunk(byte *msgbuf)
 
 	if (r != 4)
 	{
-		return -1;
+		return -2; /* the file ended before its end marker */
 	}
 
 	n = LittleLong(n);
 
 	if (n == -1)
 	{
-		return -1;
+		return -1; /* the end marker */
 	}
 
 	if (n > MAX_MSGLEN)
@@ -567,7 +578,7 @@ SV_NextDemoChunk(byte *msgbuf)
 
 	r = FS_FRead(msgbuf, n, 1, sv.demofile);
 
-	return (r == n) ? n : -1;
+	return (r == n) ? n : -2;
 }
 
 /* if the reliable message
@@ -600,7 +611,7 @@ SV_SendClientMessages(void)
 
 		if (msglen < 0)
 		{
-			SV_DemoCompleted();
+			SV_DemoCompleted((msglen == -1) ? DEMOEND_MARKER : DEMOEND_CUT);
 			return;
 		}
 	}

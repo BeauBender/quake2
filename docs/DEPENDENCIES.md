@@ -57,7 +57,6 @@ Audited items (small files that stay) first, then the larger vendored files that
 | `src/game/savegame/tables/stfields.h` | Project file; hand-written | n/a | GPL-2-or-later | `e5f8fe9accf0c61038db32de73a94584b5566b624070eccac7755f9ba24b1400` | Audited, KEEP (TASK15) |
 | `src/client/refresh/files/stb_image.h` | stb, http://nothings.org/stb (Sean Barrett) | v2.30 | Public domain / MIT (dual, stated in file) | `3b0ea6220d9645445721432b37e76d0c438eee0590f5bac2aa1b739d51b944b4` | Keep-or-replace decision: INFORM2 / TASK11 |
 | `src/client/refresh/files/stb_image_resize.h` | stb, http://github.com/nothings/stb | v0.97 | Public domain / MIT (dual, stated in file) | `6a0e75adbabb48df9031c2e39ccd97437bb226fe31e7d4a01c7bf70a18d32ec6` | Same decision as stb_image: INFORM2 / TASK11 |
-| `src/client/vid/header/stb_image_write.h` | stb, http://nothings.org/stb | v1.16 | Public domain / MIT (dual, stated in file) | `5320669a283c2945d53276c18e22ca431f098f7dfc356b9ff46b899766dd9b40` | Removal: TASK9 |
 | `src/client/sound/header/stb_vorbis.h` | stb_vorbis, http://nothings.org/stb_vorbis/ | v1.22 | Public domain / MIT (dual, stated in file) | `0bec65a0408e902b12da70ec5c3c7874434c5eecc4e0c7174a82d2bb34f8f062` | Keep-or-replace decision: INFORM1 / TASK10 |
 | `src/client/refresh/gl3/glad/include/glad/glad.h` | glad OpenGL loader generator (glad 0.1.36, generated 2023-05-14) | 0.1.36 | glad terms, see `LICENSE` ("The glad source code") | `d1821b801c6cfdaf4e043ac8d741276d90146bb606fe59a9f3b4e79cffdc0637` | Decision: INFORM3 / TASK12 |
 | `src/client/refresh/gl3/glad/include/KHR/khrplatform.h` | Khronos Group (shipped by glad) | not stated | MIT-style (Khronos Group, permission notice in file) | `7b1e01aaa7ad8f6fc34b5c7bdf79ebf5189bb09e2c4d2e79fc5d350623d11e83` | INFORM3 / TASK12 |
@@ -81,5 +80,6 @@ Notes:
 | Path or component | Removed by | Date | Where the record lives |
 |-------------------|------------|------|------------------------|
 | `src/common/unzip/` (minizip 1.1 + miniz) | TASK8 | 2026-10-18 | git history: the TASK8 removal commit; hashes were listed in this file before that commit |
+| `src/client/vid/header/stb_image_write.h` (v1.16) | TASK9 | 2026-11-12 | git history; screenshots are written by a native TGA writer in `src/client/vid/vid.c` |
 | `src/client/sound/openal.c`, `qal.c`, `header/qal.h` | TASK4 | 2026-10-18 | git history |
 | `src/client/curl/` | TASK3 | 2026-10-18 | git history (in flight) |

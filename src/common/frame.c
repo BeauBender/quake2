@@ -66,6 +66,8 @@ int curtime;
 
 #ifndef DEDICATED_ONLY
 void Key_Init(void);
+void CL_PinsLatch(void);
+int CL_PinsCapture(void);
 void Key_Shutdown(void);
 void SCR_EndLoadingPlaque(void);
 #endif
@@ -207,8 +209,17 @@ void Qcommon_ExecConfigs(qboolean gameStartUp)
 {
 	Cbuf_AddText("exec default.cfg\n");
 	Cbuf_AddText("exec yq2.cfg\n");
-	Cbuf_AddText("exec config.cfg\n");
-	Cbuf_AddText("exec autoexec.cfg\n");
+
+#ifndef DEDICATED_ONLY
+	/* Pin harness: a pin run depends on its scenario and command line
+	   only, never on a saved configuration (CL_WriteConfiguration does
+	   not write one either). */
+	if (CL_PinsCapture() <= 0)
+#endif
+	{
+		Cbuf_AddText("exec config.cfg\n");
+		Cbuf_AddText("exec autoexec.cfg\n");
+	}
 
 	if (gameStartUp)
 	{
@@ -303,6 +314,13 @@ Qcommon_Init(int argc, char **argv)
 
 	// Start early subsystems.
 	COM_InitArgv(argc, argv);
+
+#ifndef DEDICATED_ONLY
+	/* Pin harness: latch its arguments before Cbuf_AddEarlyCommands blanks
+	   them and before any config file or command can run. */
+	CL_PinsLatch();
+#endif
+
 	Swap_Init();
 	Cbuf_Init();
 	Cmd_Init();

@@ -1,0 +1,12 @@
+# Pin "fs-malformed-paks", produced by test fs_malformed_paks (tests/unit/test_filesystem.c).
+# Generated from real engine output by `make test UPDATE_PINS=1`
+# (build/<release|debug>/test/yq2test --update-pins). Do not edit by
+# hand: a change to the body below is a behaviour change and its commit
+# says why. The body starts after the separator line.
+# ---
+t_bad_ident   exit 1: Error: FS_LoadPAK: '<tmp>/data/t_bad_ident/pak0.pak' is not a pack file
+t_bad_empty   exit 1: Error: FS_LoadPAK: '<tmp>/data/t_bad_empty/pak0.pak' is too short.
+t_bad_short   exit 1: Error: FS_LoadPAK: '<tmp>/data/t_bad_short/pak0.pak' is too short.
+t_bad_neglen  exit 1: Error: FS_LoadPAK: '<tmp>/data/t_bad_neglen/pak0.pak' is too short.
+t_bad_negofs  exit 1: Error: FS_LoadPAK: '<tmp>/data/t_bad_negofs/pak0.pak' is too short.
+t_good        exit 0: yq2test-child: mod t_good loaded

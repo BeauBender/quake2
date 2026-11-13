@@ -185,7 +185,7 @@ FloodAreaConnections(void)
 void
 CM_SetAreaPortalState(int portalnum, qboolean open)
 {
-	if (portalnum > numareaportals)
+	if ((portalnum < 0) || (portalnum > numareaportals))
 	{
 		Com_Error(ERR_DROP, "areaportal > numareaportals");
 	}
@@ -328,6 +328,7 @@ CM_InitBoxHull(void)
 	box_planes = &map_planes[numplanes];
 
 	if ((numnodes + 6 > MAX_MAP_NODES) ||
+		(numleafs + 1 > MAX_MAP_LEAFS) ||
 		(numbrushes + 1 > MAX_MAP_BRUSHES) ||
 		(numleafbrushes + 1 > MAX_MAP_LEAFBRUSHES) ||
 		(numbrushsides + 6 > MAX_MAP_BRUSHSIDES) ||
