@@ -42,8 +42,9 @@ text files and need no game data.
   same value.
 
 The store path, `PINS_BASEDIR`, `PINS_DEMO` and scenario values may hold
-only `A-Z a-z 0-9 _ . / -`, because the engine joins its command line
-back together without quoting.
+only `A-Z a-z 0-9 _ . / -`, except that `PINS_DEMO` is a bare file name
+and holds no `/`. The engine joins its command line back together
+without quoting.
 
 ## Scenarios
 
@@ -58,13 +59,19 @@ scenario plays `PINS_DEMO`, so all of them follow the same camera path.
 | `models` | the world plus entities: models, sprites, beams, the view weapon |
 | `particles` | everything, including particles, dynamic lights and the screen blend |
 | `hud2d` | 2D only: status bar, crosshair, console text |
-| `skywater` | world surfaces, sky and warped water, with the sky and water-warp settings fixed |
+| `skywater` | world surfaces and sky, with the sky and water-warp settings fixed |
 | `cinematic` | a cinematic stretched over the screen; needs `PINS_DEMO` naming a `.cin` |
 
 `models` and `particles` are not identical from run to run, because
 explosions and particles draw on random numbers; their files say so in a
 `// nondeterministic:` line, with the thresholds they were measured at.
-The others were identical from run to run with the software renderer.
+The others were identical from run to run, observed on one host with the
+software renderer.
+
+With the stock demos `skywater` shows the sky but no water surface. The
+water-warp settings act on the full-view warp while the camera is under
+water, not on a water surface seen from above, so pinning water needs a
+demo whose camera passes water.
 
 For `cinematic`, set `PINS_DEMO` to a cinematic, for example
 `PINS_DEMO=idlog.cin`. A cinematic changes its picture 14 times a
