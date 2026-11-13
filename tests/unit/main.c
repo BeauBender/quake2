@@ -441,8 +441,8 @@ static void
 t_engine_init(void)
 {
 	static char *argv[] = { "yq2test" };
-	char path[MAX_OSPATH];
 
+	/* The order of Qcommon_Init. */
 	Z_Init();
 	COM_InitArgv(1, argv);
 	Swap_Init();
@@ -450,13 +450,23 @@ t_engine_init(void)
 	Cmd_Init();
 	Cvar_Init();
 
-	/* Search path: <tmp>/data/baseq2 and the binary's own directory,
-	   never the user's home directory. */
+	/* Search path: <tmp>/data/baseq2 and the binary's own directory
+	   (FS_BuildRawPath always adds it), never the user's home: the
+	   same switch as the -portable command line option. */
 	is_portable = true;
-	snprintf(path, sizeof(path), "%s/data/baseq2/.keep", t_tmp);
 	t_write_file("data/baseq2/.keep", "", 0);
 	snprintf(datadir, sizeof(datadir), "%s/data", t_tmp);
 	FS_InitFilesystem();
+
+	/* The generic search path leaves fs_gamedir at the last raw path
+	   (the binary's directory); resetting to baseq2 points it at the
+	   first, <tmp>/data/baseq2, so that everything the engine writes
+	   during the tests lands in the scratch directory. */
+	FS_BuildGameSpecificSearchPath("");
+
+	developer = Cvar_Get("developer", "0", 0);
+	dedicated = Cvar_Get("dedicated", "1", CVAR_NOSET);
+	SV_Init();
 }
 
 int
