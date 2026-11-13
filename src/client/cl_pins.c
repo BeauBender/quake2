@@ -114,9 +114,11 @@ CL_PinsLatch(void)
 		}
 		else if (strcmp(name, "pins_capture") == 0)
 		{
+			/* digits only: strtol alone skips leading space and takes a sign */
 			l = strtol(value, &end, 10);
 
-			if ((end == value) || (*end != '\0') || (l < 0) || (l > 1000000))
+			if ((value[0] < '0') || (value[0] > '9') || (end == value) ||
+				(*end != '\0') || (l < 0) || (l > 1000000))
 			{
 				pins_invalid = true;
 			}
