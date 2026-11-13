@@ -20,12 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include <limits.h>
 
-#ifdef USE_SDL3
 #include <SDL3/SDL.h>
-#else
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_video.h>
-#endif
 
 #include "header/local.h"
 
@@ -390,11 +385,7 @@ R_RegisterVariables (void)
 	// On MacOS texture is cleaned up after render and code have to copy a whole
 	// screen to texture, other platforms save previous texture content and can be
 	// copied only changed parts
-#if defined(__APPLE__) || defined(USE_SDL3)
 	sw_partialrefresh = ri.Cvar_Get("sw_partialrefresh", "0", CVAR_ARCHIVE);
-#else
-	sw_partialrefresh = ri.Cvar_Get("sw_partialrefresh", "1", CVAR_ARCHIVE);
-#endif
 
 	r_mode = ri.Cvar_Get( "r_mode", "0", CVAR_ARCHIVE );
 
@@ -1885,11 +1876,7 @@ RE_Draw_StretchRawColor(int x, int y, int w, int h, int cols, int rows,
 	}
 
 	/* Full screen update should be faster */
-#ifdef USE_SDL3
 	if (!SDL_LockTexture(texture, NULL, (void**)&pixels, &pitch))
-#else
-	if (SDL_LockTexture(texture, NULL, (void**)&pixels, &pitch))
-#endif
 	{
 		Com_Printf("Can't lock texture: %s\n", SDL_GetError());
 		return;
@@ -1938,13 +1925,7 @@ GetRefAPI(refimport_t imp)
 	refexport_t	refexport;
 
 	// Need to communicate the SDL major version to the client.
-#ifdef USE_SDL3
 	int version = SDL_VERSIONNUM_MAJOR(SDL_GetVersion());
-#else
-	SDL_version ver;
-	SDL_VERSION(&ver);
-	int version = ver.major;
-#endif
 
 	memset(&refexport, 0, sizeof(refexport_t));
 	ri = imp;
@@ -2017,28 +1998,12 @@ RE_InitContext(void *win)
 
 	if (r_vsync->value)
 	{
-#ifdef USE_SDL3
 		renderer = SDL_CreateRenderer(window, NULL);
 		SDL_SetRenderVSync(renderer, 1);
-#else
-		renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-		if (!renderer)
-		{
-			renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE | SDL_RENDERER_PRESENTVSYNC);
-		}
-#endif
 	}
 	else
 	{
-#ifdef USE_SDL3
 		renderer = SDL_CreateRenderer(window, NULL);
-#else
-		renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-		if (!renderer)
-		{
-			renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
-		}
-#endif
 	}
 
 	if (!renderer)
@@ -2057,15 +2022,9 @@ RE_InitContext(void *win)
 	   This will show the new, black contents of the window. */
 	SDL_RenderPresent(renderer);
 
-#if SDL_VERSION_ATLEAST(2, 26, 0)
 	// Figure out if we are high dpi aware.
 	int flags = SDL_GetWindowFlags(win);
-#ifdef USE_SDL3
 	IsHighDPIaware = (flags & SDL_WINDOW_HIGH_PIXEL_DENSITY) ? true : false;
-#else
-	IsHighDPIaware = (flags & SDL_WINDOW_ALLOW_HIGHDPI) ? true : false;
-#endif
-#endif
 
 	/* We can't rely on vid, because the context is created
 	   before we had a chance to overwrite it with the drawable
@@ -2107,11 +2066,7 @@ RE_InitContext(void *win)
  */
 void RE_GetDrawableSize(int* width, int* height)
 {
-#ifdef USE_SDL3
 	SDL_GetCurrentRenderOutputSize(renderer, width, height);
-#else
-	SDL_GetRendererOutputSize(renderer, width, height);
-#endif
 }
 
 
@@ -2339,11 +2294,7 @@ RE_CleanFrame(void)
 	memset(swap_buffers, 0,
 		vid_buffer_height * vid_buffer_width * sizeof(pixel_t) * 2);
 
-#ifdef USE_SDL3
 	if (!SDL_LockTexture(texture, NULL, (void**)&pixels, &pitch))
-#else
-	if (SDL_LockTexture(texture, NULL, (void**)&pixels, &pitch))
-#endif
 	{
 		Com_Printf("Can't lock texture: %s\n", SDL_GetError());
 		return;
@@ -2395,11 +2346,7 @@ RE_FlushFrame(int vmin, int vmax)
 		rect.w = vid_buffer_width;
 		rect.h = vmax - vmin;
 
-#ifdef USE_SDL3
 		if (!SDL_LockTexture(texture, &rect, (void**)&pixels, &pitch))
-#else
-		if (SDL_LockTexture(texture, &rect, (void**)&pixels, &pitch))
-#endif
 		{
 			Com_Printf("Can't lock texture: %s\n", SDL_GetError());
 			return;
@@ -2410,11 +2357,7 @@ RE_FlushFrame(int vmin, int vmax)
 		SDL_UnlockTexture(texture);
 	}
 
-#ifdef USE_SDL3
 	SDL_RenderTexture(renderer, texture, NULL, NULL);
-#else
-	SDL_RenderCopy(renderer, texture, NULL, NULL);
-#endif
 
 	SDL_RenderPresent(renderer);
 

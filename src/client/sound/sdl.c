@@ -34,11 +34,7 @@
  */
 
 /* SDL includes */
-#ifdef USE_SDL3
 #include <SDL3/SDL.h>
-#else
-#include <SDL2/SDL.h>
-#endif
 
 #include <errno.h>
 
@@ -829,9 +825,6 @@ SDL_ClearBuffer(void)
 		clear = 0;
 	}
 
-#ifndef USE_SDL3
-	SDL_LockAudio();
-#endif
 
 	if (sound.buffer)
 	{
@@ -847,9 +840,6 @@ SDL_ClearBuffer(void)
 		}
 	}
 
-#ifndef USE_SDL3
-	SDL_UnlockAudio();
-#endif
 }
 
 /*
@@ -1213,9 +1203,6 @@ SDL_Update(void)
 	}
 
 	/* Mix the samples */
-#ifndef USE_SDL3
-	SDL_LockAudio();
-#endif
 
 	/* Updates SDL time */
 	SDL_UpdateSoundtime();
@@ -1245,9 +1232,6 @@ SDL_Update(void)
 	}
 
 	SDL_PaintChannels(endtime);
-#ifndef USE_SDL3
-	SDL_UnlockAudio();
-#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -1323,7 +1307,6 @@ SDL_Callback(void *data, Uint8 *stream, int length)
 	}
 }
 
-#ifdef USE_SDL3
 /* Global stream handle. */
 static SDL_AudioStream *stream;
 
@@ -1381,11 +1364,7 @@ SDL_BackendInit(void)
 
 	if (!SDL_WasInit(SDL_INIT_AUDIO))
 	{
-#ifdef USE_SDL3
 		if (!SDL_Init(SDL_INIT_AUDIO))
-#else
-		if (SDL_Init(SDL_INIT_AUDIO) == -1)
-#endif
 		{
 			Com_Printf ("Couldn't init SDL audio: %s.\n", SDL_GetError ());
 			return false;
@@ -1511,168 +1490,3 @@ SDL_BackendShutdown(void)
 	snd_inited = 0;
 	Com_Printf("SDL audio device shut down.\n");
 }
-#else
-/*
- * Initializes the SDL sound
- * backend and sets up SDL.
- */
-qboolean
-SDL_BackendInit(void)
-{
-	char reqdriver[128];
-	SDL_AudioSpec spec;
-	int tmp, val;
-
-	/* This should never happen,
-	   but this is Quake 2 ... */
-	if (snd_inited)
-	{
-		return true;
-	}
-
-	int sndbits = (Cvar_Get("sndbits", "16", CVAR_ARCHIVE))->value;
-	int sndfreq = (Cvar_Get("s_khz", "44", CVAR_ARCHIVE))->value;
-	int sndchans = (Cvar_Get("sndchannels", "2", CVAR_ARCHIVE))->value;
-	cvar_t *s_sdldriver = (Cvar_Get("s_sdldriver", "auto", CVAR_ARCHIVE));
-
-	if (strcmp(s_sdldriver->string, "auto") != 0)
-	{
-		snprintf(reqdriver, sizeof(reqdriver), "%s=%s", "SDL_AUDIODRIVER", s_sdldriver->string);
-		if (putenv(reqdriver))
-		{
-			Com_Printf("%s: putenv is failed: %s\n",
-				__func__, strerror(errno));
-		}
-	}
-
-	Com_Printf("Starting SDL audio callback.\n");
-
-	if (!SDL_WasInit(SDL_INIT_AUDIO))
-	{
-		if (SDL_Init(SDL_INIT_AUDIO) == -1)
-		{
-			Com_Printf ("Couldn't init SDL audio: %s.\n", SDL_GetError ());
-			return false;
-		}
-	}
-	const char* drivername = SDL_GetCurrentAudioDriver();
-	if(drivername == NULL)
-	{
-		drivername = "(UNKNOWN)";
-	}
-
-	Com_Printf("SDL audio driver is \"%s\".\n", drivername);
-
-	memset(&spec, '\0', sizeof(spec));
-
-	/* Users are stupid */
-	if ((sndbits != 16) && (sndbits != 8))
-	{
-		sndbits = 16;
-	}
-
-	if (sndfreq == 48)
-	{
-		spec.freq = 48000;
-	}
-	else if (sndfreq == 44)
-	{
-		spec.freq = 44100;
-	}
-	else if (sndfreq == 22)
-	{
-		spec.freq = 22050;
-	}
-	else if (sndfreq == 11)
-	{
-		spec.freq = 11025;
-	}
-
-	spec.format = ((sndbits == 16) ? AUDIO_S16SYS : AUDIO_U8);
-
-	if (spec.freq <= 11025)
-	{
-		spec.samples = 256;
-	}
-	else if (spec.freq <= 22050)
-	{
-		spec.samples = 512;
-	}
-	else if (spec.freq <= 44100)
-	{
-		spec.samples = 1024;
-	}
-	else
-	{
-		spec.samples = 2048;
-	}
-
-	spec.channels = sndchans;
-	spec.callback = SDL_Callback;
-
-	/* Okay, let's try our luck */
-	if (SDL_OpenAudio(&spec, NULL) == -1)
-	{
-		Com_Printf("SDL_OpenAudio() failed: %s\n", SDL_GetError());
-		SDL_QuitSubSystem(SDL_INIT_AUDIO);
-		return false;
-	}
-
-	/* This points to the frontend */
-	backend = &sound;
-
-	playpos = 0;
-	backend->samplebits = spec.format & 0xFF;
-	backend->channels = spec.channels;
-
-	tmp = (spec.samples * spec.channels) * 10;
-
-	if (tmp & (tmp - 1))
-	{	/* make it a power of two */
-		val = 1;
-		while (val < tmp)
-			val <<= 1;
-
-		tmp = val;
-	}
-
-	backend->samples = tmp;
-
-	backend->submission_chunk = 1;
-	backend->speed = spec.freq;
-	samplesize = (backend->samples * (backend->samplebits / 8));
-	backend->buffer = calloc(1, samplesize);
-	s_numchannels = MAX_CHANNELS;
-
-	s_underwater->modified = true;
-	s_underwater_gain_hf->modified = true;
-	lpf_initialize(&lpf_context, lpf_default_gain_hf, backend->speed);
-
-	SDL_UpdateScaletable();
-	SDL_PauseAudio(0);
-
-	Com_Printf("SDL audio initialized.\n");
-
-	soundtime = 0;
-	snd_inited = 1;
-
-	return true;
-}
-
-/*
- * Shuts the SDL backend down.
- */
-void
-SDL_BackendShutdown(void)
-{
-	Com_Printf("Closing SDL audio device...\n");
-	SDL_PauseAudio(1);
-	SDL_CloseAudio();
-	SDL_QuitSubSystem(SDL_INIT_AUDIO);
-	free(backend->buffer);
-	backend->buffer = NULL;
-	playpos = samplesize = 0;
-	snd_inited = 0;
-	Com_Printf("SDL audio device shut down.\n");
-}
-#endif

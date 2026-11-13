@@ -1778,7 +1778,6 @@ RI_BeginFrame(float camera_separation)
 	if (vid_gamma->modified)
 	{
 		vid_gamma->modified = false;
-		RI_UpdateGamma();
 	}
 
 	// Clamp overbrightbits
