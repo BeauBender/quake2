@@ -4,8 +4,8 @@
 # The gate first runs the repo invariants in tests/check-*.sh (each runs
 # in seconds on an idle host, longer on a loaded one, and can be run on its
 # own; the three identity checks build throwaway git repositories), then
-# builds the parts that need nothing beyond the system toolchain: the dedicated server
-# (q2ded) and the game module. This compiles src/common, src/server,
+# builds the parts that need nothing beyond the system toolchain: the
+# dedicated server (q2ded) and the game module. This compiles src/common, src/server,
 # src/game and the unix backend. The client and renderers need SDL and
 # are not built here. Last it builds and runs the unit-test suite
 # (make test: tests/unit against the real q2ded objects, pins under
