@@ -74,7 +74,23 @@ CL_IsConnectReplyFrom(netadr_t from)
 		return false;
 	}
 
-	return NET_CompareAdr(from, cl_connect_adr);
+	if (!NET_CompareAdr(from, cl_connect_adr))
+	{
+		return false;
+	}
+
+	/* NET_CompareAdr() ignores the IPv6 scope. A link-local address
+	   is only unique together with its interface, so a reply that
+	   arrived on another link than the one chosen is somebody else.
+	   An address given without a zone has scope 0 and matches any. */
+	if ((from.type == NA_IP6) && (cl_connect_adr.type == NA_IP6) &&
+		(from.scope_id != 0) && (cl_connect_adr.scope_id != 0) &&
+		(from.scope_id != cl_connect_adr.scope_id))
+	{
+		return false;
+	}
+
+	return true;
 }
 
 /*
@@ -216,6 +232,7 @@ CL_CheckForResend(void)
 	{
 		Com_Printf("Bad server address\n");
 		cls.state = ca_disconnected;
+		CL_ClearConnectAddress();
 		return;
 	}
 
@@ -643,7 +660,10 @@ CL_ConnectionlessPacket(void)
 			return;
 		}
 
-		Netchan_Setup(NS_CLIENT, &cls.netchan, net_from, cls.quakePort);
+		/* talk to the address and interface the user chose, not to
+		   whatever the packet's source says */
+		Netchan_Setup(NS_CLIENT, &cls.netchan, cl_connect_adr, cls.quakePort);
+		CL_ClearConnectAddress();
 
 		/* Put client into pause mode when connecting to a local server.
 		   This prevents the world from being forwarded while the client
