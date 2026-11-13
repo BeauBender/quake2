@@ -79,9 +79,10 @@ TEST(cl_bfg_ramp_outside_table)
 	}
 }
 
-/* One entity for every effect bit and every render effect bit, each with
-   all four models set: the frame is drawn without a stray access (the
-   sanitizers watch) and the lights of the effects that have one are added. */
+/* Sanitizer smoke test: one entity for every effect bit and every render
+   effect bit, each with all four models set, drawn in one frame without a
+   stray access (the sanitizers watch). It only asserts that some light was
+   added; the exact light per effect bit is in the test below. */
 TEST(cl_entities_every_effect_bit)
 {
 	frame_t frame;
@@ -121,4 +122,46 @@ TEST(cl_entities_every_effect_bit)
 	memset(&stub_calls, 0, sizeof(stub_calls));
 	CL_AddPacketEntities(&frame);
 	T_CHECK(stub_calls.lights > 0);
+}
+
+/* Each effect bit alone, on its own entity: exactly the effects that
+   carry a light add one, the rest add none. */
+TEST(cl_entities_one_light_per_lit_effect_bit)
+{
+	static const unsigned int lit = EF_ROCKET | EF_BLASTER | EF_HYPERBLASTER |
+		EF_BFG | EF_FLAG1 | EF_FLAG2 | EF_IONRIPPER | EF_BLUEHYPERBLASTER |
+		EF_SPINNINGLIGHTS | EF_PLASMA | EF_TRAP | EF_TRACKER |
+		EF_TAGTRAIL | EF_TRACKERTRAIL;
+	int bit;
+
+	for (bit = 0; bit < 32; bit++)
+	{
+		frame_t frame;
+		unsigned int effect = 1u << bit;
+		int want = (lit & effect) ? 1 : 0;
+
+		stub_client_cvars();
+		memset(&cl, 0, sizeof(cl));
+		memset(&frame, 0, sizeof(frame));
+		cl.playernum = 62;
+		cl.time = 1000;
+		CL_AllocEntity(ENT_NUM);
+
+		memset(&cl_parse_entities[0], 0, sizeof(cl_parse_entities[0]));
+		cl_parse_entities[0].number = ENT_NUM;
+		cl_parse_entities[0].modelindex = 1;
+		cl_parse_entities[0].effects = effect;
+
+		frame.num_entities = 1;
+		frame.parse_entities = 0;
+
+		memset(&stub_calls, 0, sizeof(stub_calls));
+		CL_AddPacketEntities(&frame);
+
+		if (stub_calls.lights != want)
+		{
+			t_fail(__FILE__, __LINE__, "effect bit %d: %d lights, want %d",
+				bit, stub_calls.lights, want);
+		}
+	}
 }

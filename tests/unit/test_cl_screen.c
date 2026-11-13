@@ -49,6 +49,9 @@ show_layout(const char *layout, int statindex, int statvalue)
 	cls.state = ca_active;
 	cl.refresh_prepped = true;
 
+	/* A centered message an earlier test left behind is still shown. */
+	SCR_CenterPrint("");
+
 	cl.frame.playerstate.stats[STAT_LAYOUTS] = 1;
 	Q_strlcpy(cl.layout, layout, sizeof(cl.layout));
 	strcpy(cl.configstrings[CS_IMAGES + PIC_VALUE], "w_blaster");
@@ -210,7 +213,13 @@ TEST(hud_layout_every_command)
 		"if 20 string shown endif if 23 string hidden endif if 99 num 3 2 endif "
 		"bogus", PIC_STAT, PIC_VALUE);
 
-	/* A pic from the stat, one from its name, digits, a client block. */
-	T_CHECK(stub_calls.pics >= 5);
-	T_CHECK(stub_calls.chars >= 6);
+	/* Pictures: one from its name, one from the stat, the digits of
+	   health 100 (num 3), health 100 (hnum), ammo 25 and armor 50 (3 + 3
+	   + 2 + 2), and the one client icon; the client, ctf and
+	   stat_string commands that name something past a table draw nothing. */
+	T_EQ_INT(stub_calls.pics, 1 + 1 + 3 + 3 + 2 + 2 + 1);
+
+	/* Characters: only the centered strings go through the HUD string
+	   code, "mid" and "mid2". */
+	T_EQ_INT(stub_calls.chars, 3 + 4);
 }
