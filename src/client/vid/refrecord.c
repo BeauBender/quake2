@@ -1090,6 +1090,30 @@ RefRec_NextFrameIndex(refrec_reader_t *r, uint32_t *frame, uint64_t *offset)
 }
 
 qboolean
+RefRec_CheckLayout(const refrec_header_t *h, uint64_t file_size, const uint64_t *frame_offset)
+{
+	uint64_t sto = h->string_table_offset, fio = h->frame_index_offset;
+
+	/* a finished trace: records, string table, frame index, nothing after */
+	if (file_size >= 0xffffffffull || sto < REFREC_HEADER_SIZE || sto > fio ||
+		fio > file_size || (sto & 3) || (fio & 3) ||
+		h->frame_count > (file_size - fio) / REFREC_INDEX_SIZE ||
+		fio + (uint64_t)h->frame_count * REFREC_INDEX_SIZE != file_size)
+	{
+		return false;
+	}
+
+	/* a frame starts with a whole record header inside the records */
+	if (frame_offset && (*frame_offset < REFREC_HEADER_SIZE || (*frame_offset & 3) ||
+		*frame_offset > sto - REFREC_REC_SIZE))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+qboolean
 RefRec_ReadRecord(refrec_reader_t *r, refrec_type_t *type,
 		refrec_call_t *call, refrec_frame_t *frame,
 		refrec_reader_t *cvars, uint32_t *ncvars)

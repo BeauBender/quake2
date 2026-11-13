@@ -158,7 +158,8 @@ patched last, so a trace with `string_table_offset` 0 was never finished
   a `REC_WARN` (`REFREC_WARN_RAW_TOO_BIG`) in place of the draw.
 
 Size: ~13 KB per typical frame; a 1000-frame scenario is ~13 MB, under
-the store, never committed (INFORM9: it embeds asset-derived data).
+the store, never committed and never uploaded (INFORM9: it embeds
+asset-derived data).
 Measured (TASK43, `soft`, 640x480, demo1): `world` 4,378,708 bytes and
 `hud2d` 4,406,852 bytes for 707 frames, about 4.4 MB per default run.
 
@@ -326,6 +327,12 @@ record and replay, and are not implemented yet.
   with `RefRec_ReadStringTable`, `RefRec_NextString` and
   `RefRec_NextFrameIndex`. The test tool `refrecord-test --read <trace>`
   already walks a whole trace that way and prints counts.
+- For TASK44: before it seeks, the replayer checks the header and every
+  frame-index entry with `RefRec_CheckLayout` against the size of the
+  file (the test reader does the same), and that each indexed offset names
+  a `REC_BEGINFRAME`. On a `REFREC_FLAG_TRUNCATED` trace it stops at the
+  last indexed frame: the records of an open frame after it are not a
+  frame to replay.
 
 ## 6. Sub-cards, in dependency order
 

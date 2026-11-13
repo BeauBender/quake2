@@ -1536,11 +1536,7 @@ ReadTrace(const char *path, tracefile_t *t, tracefile_cb_t cb, void *ctx, FILE *
 		goto done;
 	}
 
-	if (t->h.string_table_offset < REFREC_HEADER_SIZE ||
-		t->h.string_table_offset > t->h.frame_index_offset ||
-		t->h.frame_index_offset > t->size ||
-		t->h.frame_count > (t->size - t->h.frame_index_offset) / REFREC_INDEX_SIZE ||
-		t->h.frame_index_offset + t->h.frame_count * REFREC_INDEX_SIZE != t->size)
+	if (!RefRec_CheckLayout(&t->h, t->size, NULL))
 	{
 		snprintf(t->err, sizeof(t->err), "unfinished trace or bad offsets");
 		goto done;
@@ -1677,7 +1673,8 @@ ReadTrace(const char *path, tracefile_t *t, tracefile_cb_t cb, void *ctx, FILE *
 
 	for (i = 0; i < t->h.frame_count; i++)
 	{
-		if (!RefRec_NextFrameIndex(&rec, &fi, &off) || fi != i || off != starts[i])
+		if (!RefRec_NextFrameIndex(&rec, &fi, &off) || !RefRec_CheckLayout(&t->h, t->size, &off) ||
+			fi != i || off != starts[i])
 		{
 			snprintf(t->err, sizeof(t->err), "frame index entry %u does not name frame %u", i, i);
 			goto done;
@@ -2216,6 +2213,36 @@ TestRecordLimit(void)
 	CHECK(t.size <= 64 * 1024 + 4 + REFREC_INDEX_SIZE * 100, "limit: %u bytes", t.size);
 	CHECK(t.frames >= 10 && t.frames < (uint32_t)i, "limit: %u frames of %d", t.frames, i);
 	CHECK(prints == 2, "limit: %d reports (want the limit and the summary)", prints);
+
+	/*
+	 * A raw image whose record header fits and whose pixels do not: the
+	 * whole record is refused, so the trace stays within the limit.
+	 */
+	{
+		static uint8_t pixels[64 * 64];
+		const int32_t raw[7] = { 0, 0, 640, 480, 64, 64, 8 };
+		const uint32_t limit = REFREC_HEADER_SIZE + 12 + 2048;
+
+		path = TracePath("limitraw");
+		prints = 0;
+		RefRec_SetLimit(limit);
+		RefRec_StartRecord(path, 640, 480, 30);
+		RefRec_Control(REC_BEGINFRAME, 0);
+		RefRec_Draw(REC_STRETCHRAW, raw, 7, NULL, 0, NULL, pixels, sizeof(pixels));
+		RefRec_SetLimit(0);
+		CHECK(!RefRec_Recording(), "limit raw: still recording");
+		RefRec_StopRecord();
+
+		if (!ReadTrace(path, &t, NULL, NULL, NULL))
+		{
+			CHECK(0, "limit raw: trace refused: %s", t.err);
+			return;
+		}
+
+		CHECK(t.h.flags == REFREC_FLAG_TRUNCATED && t.types[REC_STRETCHRAW] == 0 &&
+				t.h.string_table_offset <= limit, "limit raw: %u raw records, records end at %u",
+				t.types[REC_STRETCHRAW], t.h.string_table_offset);
+	}
 }
 
 /* A failed write ends the recording, reported once; the trace reads as unfinished. */
@@ -2791,6 +2818,46 @@ TestTableReaders(void)
 			"frame index: entry read wrong");
 	RefRec_ReaderInit(&r, idx, sizeof(idx) - 1);
 	CHECK(!RefRec_NextFrameIndex(&r, &frame, &off), "frame index: a truncated entry was accepted");
+
+	/* the header offsets and a frame offset against the file size */
+	{
+		refrec_header_t h;
+		uint64_t fo;
+
+#define LAYOUT(setup, size, want, what) \
+		do \
+		{ \
+			memset(&h, 0, sizeof(h)); \
+			h.string_table_offset = 1000; \
+			h.frame_index_offset = 1004; \
+			h.frame_count = 2; \
+			fo = 64; \
+			setup; \
+			CHECK(RefRec_CheckLayout(&h, (size), &fo) == (want), "layout: %s", what); \
+		} while (0)
+
+		LAYOUT((void)0, 1004 + 24, true, "a valid layout was refused");
+		LAYOUT(fo = 992, 1004 + 24, true, "the last record header place was refused");
+		LAYOUT((void)0, 1004 + 23, false, "a file shorter than the index was accepted");
+		LAYOUT((void)0, 1004 + 25, false, "bytes after the index were accepted");
+		LAYOUT(h.string_table_offset = 60, 1004 + 24, false, "a string table inside the header was accepted");
+		LAYOUT(h.string_table_offset = 0, 1004 + 24, false, "an unfinished trace was accepted");
+		LAYOUT(h.string_table_offset = 1008, 1004 + 24, false, "a string table after the index was accepted");
+		LAYOUT(h.frame_index_offset = 1006; h.frame_count = 2, 1006 + 24, false, "an unaligned index was accepted");
+		LAYOUT(h.frame_count = 0x20000000u, 1004 + 24, false, "a frame count past the file was accepted");
+		LAYOUT((void)0, 0x100000000ull, false, "a file of 4 GiB was accepted");
+		LAYOUT(fo = 60, 1004 + 24, false, "a frame inside the header was accepted");
+		LAYOUT(fo = 66, 1004 + 24, false, "an unaligned frame was accepted");
+		LAYOUT(fo = 996, 1004 + 24, false, "a frame without room for its record header was accepted");
+		LAYOUT(fo = 1000, 1004 + 24, false, "a frame in the string table was accepted");
+		LAYOUT(fo = 0x100000040ull, 1004 + 24, false, "a frame offset over 4 GiB was accepted");
+#undef LAYOUT
+
+		memset(&h, 0, sizeof(h));
+		h.string_table_offset = 64;
+		h.frame_index_offset = 68;
+		CHECK(RefRec_CheckLayout(&h, 68, NULL), "layout: an empty finished trace was refused");
+	}
 }
 
 int

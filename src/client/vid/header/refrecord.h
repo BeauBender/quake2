@@ -227,6 +227,23 @@ qboolean RefRec_NextString(refrec_reader_t *r, uint32_t *kind, uint32_t *id, cha
 qboolean RefRec_NextFrameIndex(refrec_reader_t *r, uint32_t *frame, uint64_t *offset);
 
 /*
+ * The layout of a whole trace file of file_size bytes: false unless the
+ * header's offsets describe a finished trace (the records, the string
+ * table at a 4-aligned string_table_offset, the frame index at a
+ * 4-aligned frame_index_offset holding exactly frame_count entries up to
+ * the end of the file; under 4 GiB). With frame_offset, also false
+ * unless that frame-index offset lies inside the records, past the
+ * header, 4-aligned and room for a record header. Neither the header
+ * reader nor the index reader checks this; anything that seeks by these
+ * offsets (the replayer) must call it first, for the header and for
+ * every index entry, and also check that the offset names a
+ * REC_BEGINFRAME. A REFREC_FLAG_TRUNCATED trace can end with an open
+ * frame after the last indexed one: a replay stops at the last indexed
+ * frame.
+ */
+qboolean RefRec_CheckLayout(const refrec_header_t *h, uint64_t file_size, const uint64_t *frame_offset);
+
+/*
  * recorder: called from the vid.c wrappers. Records are streamed to the
  * file one at a time; memory held is one record (at most a full
  * REC_RENDERFRAME, about 97 KB; Draw_StretchRaw pixels are written from

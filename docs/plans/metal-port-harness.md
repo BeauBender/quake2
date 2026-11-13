@@ -68,10 +68,11 @@ the user-facing description.
   with an error instead of falling back to another one. `0`, the default,
   disables all three.
 - `pins_record <name>`: the first renderer session of the run is recorded
-  to `<pins_dir>/<name>`, a plain file name (`[A-Za-z0-9_][A-Za-z0-9_.-]*`,
-  no `..`, no directory). `pins.sh record` passes `trace.q2r`, so the trace
+  to `<pins_dir>/<name>`, a plain file name (`[A-Za-z0-9_][A-Za-z0-9_.-]*`
+  ending in `.q2r`, no `..`, no directory). `pins.sh record` passes `trace.q2r`, so the trace
   lies beside the frames; `PINS_TRACE=0` records none. The trace embeds
-  data derived from the game data (INFORM9) and is never committed.
+  data derived from the game data (INFORM9) and is never committed or
+  uploaded.
 
 A refused value turns the harness off and suppresses every screenshot
 write. With none of them given the engine behaves as before.

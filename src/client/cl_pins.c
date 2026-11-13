@@ -116,9 +116,12 @@ CL_PinsLatch(void)
 		else if (strcmp(name, "pins_record") == 0)
 		{
 			/* a file name, written inside pins_dir only:
-			   [A-Za-z0-9_][A-Za-z0-9_.-]*, never "..", no directory */
+			   [A-Za-z0-9_][A-Za-z0-9_.-]*, never "..", no directory,
+			   ending in ".q2r" so it never names a pin frame (.tga)
+			   or the manifest the harness writes beside it */
 			if (!CL_PinsCopy(pins_record, sizeof(pins_record), value) ||
-				strstr(value, ".."))
+				strstr(value, "..") || (strlen(value) <= 4) ||
+				(strcmp(value + strlen(value) - 4, ".q2r") != 0))
 			{
 				pins_invalid = true;
 			}

@@ -840,7 +840,9 @@ them given the engine behaves exactly as before.
   recorded again. The file is streamed to disk; a failed write or a
   recorder limit (1 GiB of records) ends the recording with one message
   and the game carries on. The trace embeds data derived from the game
-  data and stays in the pin store. Must be a plain file name matching
-  `[A-Za-z0-9_][A-Za-z0-9_.-]*`, at most 63 characters, without `..`
-  or a directory part. Needs `pins_dir`. Default: not given, nothing
-  is recorded and no file is opened.
+  data: it stays in the pin store and is never committed or uploaded.
+  Must be a plain file name matching `[A-Za-z0-9_][A-Za-z0-9_.-]*` and
+  ending in `.q2r` (so it never names a pin frame or the manifest), at
+  most 63 characters, without `..` or a directory part. Needs
+  `pins_dir`. Default: not given, nothing is recorded and no file is
+  opened.

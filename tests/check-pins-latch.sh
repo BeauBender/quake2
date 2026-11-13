@@ -60,10 +60,17 @@ expect 'dir=/s|scenario=pin|capture=0|invalid=0|record=Trace_1-a.q2r' \
 	+set pins_dir /s +set pins_record Trace_1-a.q2r
 # a trace without a store records nothing
 expect "$off" +set pins_record trace.q2r
-for r in ../trace.q2r a..b /tmp/t.q2r a/b .hidden -x 'a b' 'a:b' 'a\\b' ''; do
+# and ends in .q2r, so it can never name a pin frame or the manifest
+for r in ../trace.q2r a..b /tmp/t.q2r a/b .hidden -x 'a b' 'a:b' 'a\\b' '' \
+	trace pin-000000.tga manifest.txt trace.q2r.tga trace.Q2R .q2r trace_q2r; do
 	expect "$refused_pin" +set pins_dir /s +set pins_capture 30 +set pins_record "$r"
 done
-expect "$refused_pin" +set pins_dir /s +set pins_record "$(printf '%064d' 0)"
+expect "$refused_pin" +set pins_dir /s +set pins_record "$(printf '%060d' 0).q2r"
+n59=$(printf '%059d' 0)
+expect "dir=/s|scenario=pin|capture=0|invalid=0|record=$n59.q2r" \
+	+set pins_dir /s +set pins_record "$n59.q2r"
+expect 'dir=/s|scenario=pin|capture=0|invalid=0|record=a.q2r' \
+	+set pins_dir /s +set pins_record a.q2r
 # only the exact "+set name value" triple counts, paired as Cbuf_AddEarlyCommands pairs it
 expect "$off" set pins_dir /s +pins_dir /s
 expect "$off" +set foo +set pins_dir /s
