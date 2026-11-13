@@ -86,6 +86,8 @@ pin src/win-wrapper/wrapper.c 'static const WCHAR WRAPPED_EXE[] = L"yquake2.exe"
 pin Makefile '$(BINDIR)/yquake2.exe : $(CLIENT_OBJS) icon'
 pin Makefile '$(BINDIR)/quake2.exe : src/win-wrapper/wrapper.c icon'
 pin Makefile '$(BINDIR)/quake2 : $(CLIENT_OBJS)'
+pin Makefile '$(BINDIR)/quake2 : $(CLIENT_OBJS) $(SDL3_LIB)'
+pin Makefile '$(MAKE) $(BINDIR)/quake2'
 pin Makefile '$(BINDIR)/q2ded.exe : $(SERVER_OBJS) icon'
 pin Makefile '$(BINDIR)/q2ded : $(SERVER_OBJS)'
 
