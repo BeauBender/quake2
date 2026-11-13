@@ -196,7 +196,6 @@ describe() {
 	message) echo "the message of commit $3 contains this machine's $2 identity; reword it before pushing" ;;
 	tag) echo "the tag object $3 (its name, tagger line or message) contains this machine's $2 identity; recreate the tag" ;;
 	blob) echo "the blob $3 the ref points at contains this machine's $2 identity" ;;
-	*) echo "object $3 contains this machine's $2 identity" ;;
 	esac
 }
 

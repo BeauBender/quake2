@@ -230,6 +230,10 @@ case_ "$M" refs/heads/zzqn10 "$(mk "$bad" "zzqm15 on $syn")" refs/heads/zzqn10 "
 case_ ok refs/heads/zzqn11 "$(mk "$bad" zzqm16)" refs/heads/zzqn11 "$bad"
 case_ ok refs/heads/zzqnew "$(mk "$claim" zzqm17)" refs/heads/zzqnew "$zero"
 case_ ok refs/heads/zzqbehind "$claim" refs/heads/zzqbehind "$m1"
+# ... but only what THIS remote has: another remote's tracking refs do not count
+other=$(mk "$m1" "zzqm27 on $syn")
+w update-ref refs/remotes/zzqother/zzqx "$other"
+case_ "$M $(printf '%.10s' "$other")" refs/heads/zzqo "$(mk "$other" zzqm28)" refs/heads/zzqo "$zero"
 # tooling branches: object scan exempt, names never
 case_ ok refs/heads/zzqc "$bad" refs/heads/claim/ZZQ3 "$zero"
 case_ ok refs/heads/zzqc "$bad" refs/heads/gate-clear/ZZQ4 "$zero"
@@ -326,6 +330,7 @@ case_ "$M" refs/heads/zzqn2 "$(mk "$m1" "zzqm9 note for $login")" refs/heads/zzq
 case_ ok refs/heads/zzqn5 "$(mk "$m1" "zzqm10 x${login}x and ${login}2 and zz${login} and ${login}_a")" refs/heads/zzqn5 "$zero"
 case_ "$T" refs/tags/zzqt3 "$(tag "$tbad" tag zzqt3 zzqouter)" refs/tags/zzqt3 "$zero"
 case_ ok refs/heads/zzqc "$bad" refs/heads/gate-clear/ZZQ4 "$zero"
+echo >> "$tmp/in" # an empty line is skipped and does not count as a ref
 case_ "the remote ref name contains $H" refs/heads/zzqx "$m1" "refs/heads/zzqlast-$syn" "$zero"
 shells="dash bash"
 run "other shells"
