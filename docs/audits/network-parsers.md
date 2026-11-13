@@ -184,7 +184,7 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_entities.c` `ent.frame = s1->frame` → `files/surf.c` `R_TextureAnimation` `frame % numframes`, called by all three renderers (`gl1_surf.c`, `gl3_surf.c`; soft `sw_edge.c` and `sw_poly.c` through `D_CacheSurface` in `sw_surf.c`) | frame (signed short) | count of `tex->next` steps | **negative frame gives a negative count**; the loop runs about 2^32 steps or reaches `NULL` → Defect D11 (alias models test both sides) | defect (D11) |
 | `cl_entities.c` `ent.frame = s1->frame` → sprite models: `gl1_main.c` `R_DrawSpriteModel`, `gl3_main.c` `GL3_DrawSpriteModel`, `sw_sprite.c` `R_DrawSprite`: `frame %= numframes`, then `psprite->frames[frame]` and `currentmodel->skins[frame]` | frame (signed short) | sprite frame record and image pointer | the remainder of a negative frame is zero or negative, so for a sprite with two or more frames **the index is negative** → Defect D16 | defect (D16) |
 | `cl_entities.c` `cl.model_draw[ps->gunindex]` | `gunindex` (`MSG_ReadByte` in `CL_ParsePlayerstate`) | gun model | 0..255 by the byte type vs `MAX_MODELS` | ok (by the byte type) |
-| `cl_entities.c` `bfg_lightramp[s1->frame]` | frame (`U_FRAME8` byte or `U_FRAME16` signed short) | index into `static int[6]` | reached when `effects & EF_BFG` is set without `EF_ANIM_ALLFAST`; **no check on either side** → Defect D5 | defect (D5) |
+| `cl_entities.c` `bfg_lightramp[s1->frame]` | frame (`U_FRAME8` byte or `U_FRAME16` signed short) | index into `static int[6]` | reached when `effects & EF_BFG` is set without `EF_ANIM_ALLFAST`; checked on both sides since FIX14 (the table is read only for a frame inside it; any other frame adds no light), was Defect D5 | ok (fixed by FIX14) |
 | `cl_prediction.c` `cl.model_clip[ent->modelindex]` | modelindex byte | clip model | reached when `ent->solid == 31`; 0..255 by the byte type against `model_clip[MAX_MODELS]`; see Hardening H2 | ok (hardening H2) |
 | `sound/sound.c` `S_BuildSoundList` `sounds[i]` | loop to `num_entities` | write into caller `sounds[MAX_EDICTS]` | bound is `i <= MAX_CL_ENTNUM` (32767), **not `MAX_EDICTS` (1024)** → Defect D1 | defect (D1) |
 | `sound/sdl.c` `SDL_AddLoopSounds` `sounds[i]` / loop | `i < num_entities` | read/zero `sounds[MAX_EDICTS]` | **no bound vs `MAX_EDICTS`** → Defect D1 | defect (D1) |
@@ -348,6 +348,9 @@ function.) Not reachable today; bounded by the tokenizer, not by the function.
 Fix (hardening): cap `width` at `sizeof(line) - 1`.
 
 ### D5: entity `frame` indexes `bfg_lightramp[6]` unchecked (high, high confidence) [FIX14 (#110)]
+
+Fixed by FIX14: the table is read only for a frame inside it; any other frame
+adds no light.
 
 In `CL_AddPacketEntities` (`cl_entities.c`), when an entity has `EF_BFG` in
 `effects` and not `EF_ANIM_ALLFAST`, the light intensity is
@@ -766,6 +769,8 @@ unfixed finding above is on one of them.
 | FIX28 | #129 | H1, H2, H3, H4, H6, H7 | low |
 | FIX29 | #130 | D15 | critical (Windows builds only) |
 | FIX30 | #131 | D17 | medium |
+
+Fixed: FIX14 (D5).
 
 D9, D10, D11 and D16 share a card because they are one class (a server-supplied
 entity or effect field reaching an array index or loop count with a check on
