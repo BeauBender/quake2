@@ -1,86 +1,64 @@
-# Yamagi Quake II
+# quake2
 
-Yamagi Quake II is an enhanced client for id Software's Quake II with
-focus on offline and coop gameplay. Both the gameplay and the graphics
-are unchanged, but many bugs in the last official release were fixed and
-some nice to have features like widescreen support, reliable support for
-high framerates, a modern SDL based sound backend, support for
-modern game controllers and a modern OpenGL 3.2 renderer were added.
-Unlike most other Quake II source ports Yamagi Quake II is fully 64-bit
-clean. It works perfectly on modern processors and operating systems.
+A long-lived fork of Yamagi Quake II, an enhanced client for id Software's
+Quake II. It exists for two reasons: to run and extend the game on code
+that can be read and verified in full, and to give it a native renderer on
+Apple platforms.
 
-This code is built upon Icculus Quake II, which itself is based on Quake
-II 3.21. Yamagi Quake II is released under the terms of the GPL version
-2. See LICENSE for further information:
+The fork was taken from Yamagi Quake II at upstream commit `9dbf6992`
+(2026-10-15) and was byte-identical to it at that point. Gameplay and look
+are unchanged. Game data is not in this repository and is required to run
+anything; see [doc/020_installation.md](doc/020_installation.md).
 
-* [LICENSE](https://github.com/yquake2/yquake2/blob/master/LICENSE)
+## How it differs from upstream
 
-Officially supported operating systems are:
+Removed, to shrink what has to be trusted
+([docs/plans/trust-boundary.md](docs/plans/trust-boundary.md),
+[docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)):
 
-* FreeBSD
-* Linux
-* Windows
+* HTTP downloads and libcurl
+* the OpenAL sound backend; SDL audio is the only backend
+* the OpenGL ES renderers
+* zip pack files; packs are `.pak` only
+* CMake and the Windows build scripts; GNU Make is the only build
 
-Beside theses Yamagi Quake II has community support for MacOS and most
-other unixoid operating systems, including NetBSD, OpenBSD and Solaris.
+Fixed: unchecked sizes and indices in the download path and in the asset
+loaders.
 
+Planned and not in the tree yet
+([docs/plans/metal-renderer.md](docs/plans/metal-renderer.md)): a Metal
+renderer, then ray tracing on Apple silicon.
 
-## Addons and partner projects
+## Build and run
 
-This repository contains Yamagi Quake II itself. The official addons
-have their own repositories:
+```sh
+make                      # client, server, game and the renderers, into release/
+make server game          # the parts that need no SDL
+release/quake2 -datadir /path/to/quake2 -portable
+scripts/test.sh           # the gate; every commit must pass it
+```
 
-* [The Reckoning](https://github.com/yquake2/xatrix)
-* [Ground Zero](https://github.com/yquake2/rogue)
-* [ThreeWave's Capture The Flag](https://github.com/yquake2/ctf)
-
-Yamagi Quake II Remaster is a project providing optional support for the
-assets of Quake II Remaster by Nightdive Studios and has a less
-conservative approach in regards to new features. It also lives in it's
-own repository:
-
-* [Yamagi Quake II Remaster](https://github.com/yquake2/yquake2remaster)
-
-
-## Development
-
-Yamagi Quake II is a community driven project and lives from community
-involvement. Please report bugs in our issue tracker:
-
-* [Issue Tracker](https://github.com/yquake2/yquake2/issues)
-
-We are always open to code contributions, no matter if they are small
-bugfixes or bigger features. However, Yamagi Quake II is a conservative
-project with big focus on stability and backward compatibility. We don't
-accept breaking changes. When in doubt please open an issue and ask if a
-contribution is welcome before putting too much work into it. Open a
-pull request to submit code:
-
-* [Pull Requests](https://github.com/yquake2/yquake2/pulls)
-
-Also have a look at our contributors guide:
-
-* [Contributors Guide](https://github.com/yquake2/yquake2/blob/master/doc/080_contributing.md)
-
+The client needs SDL3 or SDL2. The dedicated server and the game module
+need only the system toolchain. CI builds on Linux and macOS.
 
 ## Documentation
 
-Yamagi Quake II has rather extensive documentation covering all relevant
-areas from installation and configuration to package building. Have a
-look at the documentation index:
+* [doc/010_index.md](doc/010_index.md): the user documentation. It comes
+  from upstream and is updated as features are removed.
+* [docs/README.md](docs/README.md): a map of the repository for working on
+  the code, with the plans and decision records.
 
-* [Documentation Index](https://github.com/yquake2/yquake2/blob/master/doc/010_index.md)
+## Contributing
 
+The repository is public to read. Issues and pull requests are open to its
+owner only, so reports and patches cannot be accepted here.
 
-## Releases
+## Upstream and credits
 
-Yamagi Quake II releases at an irregular schedule. The official releases
-with source code tarballs and prebuild Windows binaries can be found at
-the homepage:
+* [Yamagi Quake II](https://github.com/yquake2/yquake2), the upstream of
+  this fork. Bugs in upstream belong in its tracker.
+* Icculus Quake II, on which Yamagi Quake II is built.
+* id Software's Quake II 3.21 source release.
 
-* [Homepage](https://www.yamagi.org/quake2/)
-
-Our CI builds **unsupported** Linux and MacOS binaries at every
-commit. The artifacts can be found here:
-
-* [Github Actions](https://github.com/yquake2/yquake2/actions)
+Released under the GPL version 2; see [LICENSE](LICENSE). The copyright
+notices are upstream's and are unchanged.

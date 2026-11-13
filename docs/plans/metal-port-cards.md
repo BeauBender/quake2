@@ -45,6 +45,7 @@ bare-metal Mac where `ref_gl1` renders, T2 an M3 or later.
 | TASK21 (#28) | The title says 61 entry points. Measured: 54 called directly at 435 sites, plus 5 loaded by pointer at 6 sites. gl1 has no `glBegin`/`glEnd`; it draws through vertex arrays (19 `glDrawArrays` sites and one `glDrawElements` in `R_ApplyGLBuffer`) | `docs/analysis/gl1-state-inventory.md` section 1 |
 | TASK28 (#38) | The title says 444 call sites. Measured: 441 | same |
 | INFORM8 (#35) | Its context quotes the same two numbers. The decision does not depend on them | same |
+| TASK19 (#26) | `README.md` is rewritten: it describes this repository, names the fork point, lists the differences, and mentions upstream only as the origin and in "Upstream and credits". `FORK.md`, the `CHANGELOG` section and the remaining upstream links under `doc/` are what is left of the card | `README.md` |
 | TASK27 (#37) | The core is in the tree: capture hook, capture before present, unattended quit, `scripts/pins.sh`, the comparator, four scenarios, the gate check. Groups P and R below are what remains | `docs/plans/metal-port-harness.md` |
 
 ## Group P: pins on real game data (parent TASK27, #37)
