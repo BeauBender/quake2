@@ -8,7 +8,8 @@
  *
  * =======================================================================
  *
- * How many entities a frame may carry (FIX11):
+ * How many entities a frame may carry (FIX11), and what the server message
+ * parser does with a bad configstring index or text:
  *
  * - CL_DeltaEntity in src/client/cl_parse.c refuses an entity once the
  *   frame already holds MAX_EDICTS of them. It is static; the tests
@@ -172,4 +173,63 @@ TEST(sound_list_frame_past_list_is_cut)
 	T_EQ_INT(build_sound_list(100000, MAX_EDICTS), MAX_EDICTS);
 	T_EQ_INT(build_sound_list(MAX_EDICTS, 10), 10);
 	T_EQ_INT(build_sound_list(11, 10), 10);
+}
+
+/* A configstring message: svc_configstring, index, text. */
+static void
+send_configstring(int index, const char *text)
+{
+	SZ_Init(&net_message, msgbuf, sizeof(msgbuf));
+	MSG_WriteByte(&net_message, svc_configstring);
+	MSG_WriteShort(&net_message, index);
+	MSG_WriteString(&net_message, text);
+	MSG_BeginReading(&net_message);
+	CL_ParseServerMessage();
+}
+
+/* The text of a message that prints, lays out and stuffs, and the
+   configstring indexes at and past the end of the table. */
+TEST(cl_server_messages_and_configstring_bounds)
+{
+	char longtext[MAX_QPATH + 8];
+
+	reset_client();
+
+	SZ_Init(&net_message, msgbuf, sizeof(msgbuf));
+	MSG_WriteByte(&net_message, svc_nop);
+	MSG_WriteByte(&net_message, svc_print);
+	MSG_WriteByte(&net_message, PRINT_HIGH);
+	MSG_WriteString(&net_message, "hello from the server\n");
+	MSG_WriteByte(&net_message, svc_layout);
+	MSG_WriteString(&net_message, "xv 0 yv 0");
+	MSG_WriteByte(&net_message, svc_centerprint);
+	MSG_WriteString(&net_message, "centered");
+	MSG_BeginReading(&net_message);
+	t_console_reset();
+	CL_ParseServerMessage();
+	T_CONSOLE_HAS("hello from the server");
+	T_EQ_STR(cl.layout, "xv 0 yv 0");
+
+	/* The last index of the table is taken, the one after it is not. */
+	send_configstring(MAX_CONFIGSTRINGS - 1, "last");
+	T_EQ_STR(cl.configstrings[MAX_CONFIGSTRINGS - 1], "last");
+
+	t_console_reset();
+	send_configstring(MAX_CONFIGSTRINGS, "past");
+	T_CONSOLE_HAS("bad index");
+	send_configstring(-1, "before");
+	T_CONSOLE_HAS("bad index");
+
+	/* A string that fills its entry is taken, one byte longer is not. */
+	memset(longtext, 'x', sizeof(longtext));
+	longtext[MAX_QPATH - 1] = 0;
+	send_configstring(CS_NAME, longtext);
+	T_EQ_STR(cl.configstrings[CS_NAME], longtext);
+
+	longtext[MAX_QPATH - 1] = 'x';
+	longtext[MAX_QPATH] = 0;
+	t_console_reset();
+	send_configstring(CS_NAME + 1, longtext);
+	T_CONSOLE_HAS("string too long");
+	T_EQ_STR(cl.configstrings[CS_NAME + 1], "");
 }

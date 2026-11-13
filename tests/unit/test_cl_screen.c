@@ -58,6 +58,13 @@ show_layout(const char *layout, int statindex, int statvalue)
 	strcpy(cl.configstrings[CS_IMAGES + MAX_IMAGES], "past_the_end");
 	strcpy(cl.configstrings[CS_IMAGES - 1], "before_the_start");
 
+	cl.frame.playerstate.stats[1] = 100;       /* health */
+	cl.frame.playerstate.stats[3] = 25;        /* ammo */
+	cl.frame.playerstate.stats[5] = 50;        /* armor */
+	cl.frame.playerstate.stats[11] = 7;        /* flashes */
+	cl.frame.playerstate.stats[21] = 40;       /* a configstring number */
+	cl.frame.playerstate.stats[22] = SHRT_MAX; /* far past the configstrings */
+
 	if (statindex >= 0 && statindex < MAX_STATS)
 	{
 		cl.frame.playerstate.stats[statindex] = statvalue;
@@ -182,4 +189,23 @@ TEST(hud_string_line_past_buffer)
 		T_CHECK((size_t)n <= lens[i]);
 		T_CHECK((size_t)n >= lens[i] - lens[i] / 1023 - 1);
 	}
+}
+
+/* Every layout command with well-formed arguments, and some with arguments
+   past the end of a table: nothing is drawn past anything (the sanitizers
+   watch) and the well-formed ones draw what they ask for. */
+TEST(hud_layout_every_command)
+{
+	show_layout("xl 4 xr -4 xv 8 yt 4 yb -4 yv 8 "
+		"picn net pic 20 num 3 1 hnum anum rnum "
+		"client 0 0 0 12 34 56 client 0 0 300 1 2 3 "
+		"ctf 0 0 0 5 1500 ctf 0 0 -1 5 7 "
+		"stat_string 21 stat_string 32 stat_string 22 "
+		"string hello string2 world cstring mid cstring2 mid2 "
+		"if 20 string shown endif if 23 string hidden endif if 99 num 3 2 endif "
+		"bogus", PIC_STAT, PIC_VALUE);
+
+	/* A pic from the stat, one from its name, digits, a client block. */
+	T_CHECK(stub_calls.pics >= 5);
+	T_CHECK(stub_calls.chars >= 6);
 }

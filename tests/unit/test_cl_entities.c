@@ -78,3 +78,47 @@ TEST(cl_bfg_ramp_outside_table)
 		T_EQ_INT(stub_calls.lights, 0);
 	}
 }
+
+/* One entity for every effect bit and every render effect bit, each with
+   all four models set: the frame is drawn without a stray access (the
+   sanitizers watch) and the lights of the effects that have one are added. */
+TEST(cl_entities_every_effect_bit)
+{
+	frame_t frame;
+	int i;
+
+	stub_client_cvars();
+	memset(&cl, 0, sizeof(cl));
+	memset(&frame, 0, sizeof(frame));
+	cl.playernum = 62;
+	cl.time = 1000;
+	cl.frame.serverframe = 10;
+	CL_AllocEntity(64);
+
+	for (i = 0; i < 64; i++)
+	{
+		entity_state_t *s = &cl_parse_entities[i];
+
+		memset(s, 0, sizeof(*s));
+		s->number = i + 1;
+		s->modelindex = (i == 40) ? 255 : 1;
+		s->modelindex2 = 2;
+		s->modelindex3 = 3;
+		s->modelindex4 = 4;
+		s->frame = i % 6;
+
+		if (i < 32)
+		{
+			s->effects = 1u << i;
+		}
+		else
+		{
+			s->renderfx = 1 << (i - 32);
+		}
+	}
+
+	frame.num_entities = 64;
+	memset(&stub_calls, 0, sizeof(stub_calls));
+	CL_AddPacketEntities(&frame);
+	T_CHECK(stub_calls.lights > 0);
+}
