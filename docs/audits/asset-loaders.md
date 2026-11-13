@@ -457,3 +457,40 @@ No host harness was run: `wave.c`, `sound.c` and `sdl.c` include the client
 and SDL sound headers and do not link standalone without a large stub surface.
 The reads above were traced by hand from `info.samples`/`info.dataofs` to each
 `sound_end`/`srcsample` use.
+
+## Cinematics (`src/client/cl_cin.c`)
+
+A `.cin` is a width/height/sound header, a 64 KB Huffman count table, then
+per-frame records (optional palette, a compressed size, the compressed bytes,
+a sound chunk). `SCR_PlayCinematic` is reached from `cl_parse.c` when the
+server sends `svc_playerinfo` with `playernum == -1`, so the file name (`arg`)
+and the file are both server-supplied; a `.cin` is downloadable with
+`allow_download`. TASK2 added most of the bounds below (the baseline), so most
+rows are `ok`; the exception is the file-name handling.
+
+| Function | Field | Use | Check (quoted) or absence | Verdict |
+|---|---|---|---|---|
+| `SCR_PlayCinematic` | `arg` (server string), still-image branch | `memcpy(namewe, name, strlen(name) - strlen(dot))` into `char namewe[256]` | the length is `5 + offset-of-first-dot-in-arg`; `name` is `MAX_OSPATH`, which is 256 on Windows/macOS but **4096** on other Unix, so there a `"<4000 chars>.pcx"` name overruns the 256-byte stack buffer | **defect D26** (stack buffer overflow, server-triggered, on `MAX_OSPATH == 4096` platforms; reached only for a name ending exactly `.pcx`/`.tga`/`.jpg`/`.png` because the branch uses `strcmp(dot, ...)`) |
+| `SCR_PlayCinematic` | `arg`, video branch | `Com_sprintf(name, sizeof(name), "video/%s", arg)`, `FS_FOpenFile` | `Com_sprintf` truncates to `MAX_OSPATH`; `FS_FOpenFile` applies the path rules audited in the filesystem section | ok |
+| `SCR_PlayCinematic` | `width`, `height` | `cin.width`, `cin.height`, `maxcount` in decompress, image size | `cin.width <= 0 \|\| cin.height <= 0 \|\| (long long)width * height > 16 * 1024 * 1024` | ok |
+| `SCR_PlayCinematic` | `s_rate`, `s_width`, `s_channels` | sound chunk size per frame, `S_RawSamples` | `s_rate <= 0 \|\| s_rate > 22050`, `s_width != 1 && != 2`, `s_channels != 1 && != 2` | ok |
+| `Huff1TableInit` | 256 rows of 256 count bytes | `cin.h_count[j] = counts[j]`, node build into `hnodes1` | `FS_Read(counts, 256, ...)` fixed; `hnodes1 = Z_Malloc(256*256*2*4)`, `nodebase = hnodes1 + prev*256*2` with `prev < 256` and the inner node index at most `(510-256)*2`, so the top write is below the 131072-int allocation | ok |
+| `Huff1TableInit` | `h_count` sums | `numhnodes` grows to at most 511 | the `while (numhnodes != 511)` loop and `SmallestNode1` returning -1 bound it; `h_count[512]`, `h_used[512]` | ok |
+| `SCR_ReadNextFrame` | `command` | `1` palette, `2` end, else decompress | `LittleLong`; any other value falls through to a frame read, which is then bounded by the size check | ok |
+| `SCR_ReadNextFrame` | palette | `FS_Read(cl.cinematicpalette, sizeof(...), ...)` | fixed 768 bytes | ok |
+| `SCR_ReadNextFrame` | `size` | `FS_Read(compressed, size, ...)`, `compressed[size] = 0` into `byte compressed[0x20000 + 1]` | `((size_t)size > sizeof(compressed) - 1) \|\| (size < 1)` raises `Com_Error` | ok |
+| `SCR_ReadNextFrame` | sound chunk | `FS_Read(samples, bytes, ...)` into `byte samples[22050 / 14 * 4]` | `bytes = (long long)count * s_width * s_channels`; `count < 0 \|\| bytes < 0 \|\| bytes > sizeof(samples)` returns; the header limits make `bytes` at most `(22050/14 + 1) * 2 * 2`, inside the 6300-byte buffer | ok |
+| `Huff1Decompress` | `in.count` | header read | `if (in.count < 4)` | ok |
+| `Huff1Decompress` | `ucount` (decompressed size, first 4 bytes) | `count`, output length | `ucount == 0 \|\| (long long)ucount > maxcount` where `maxcount = width * height`; output is `Z_Malloc(maxcount)` | ok |
+| `Huff1Decompress` | input advance | `*input++` | `if (input - in.data > in.count)` stops with one tolerated overread byte (the `compressed[size] = 0` spare) | ok |
+| `Huff1Decompress` | `nodenum` | `hnodes[nodenum * 2 + bit]`, `*out_p++ = nodenum` | `if (nodenum < 0 \|\| nodenum > 510)` per step; `out_p` is bounded because `count` (<= `maxcount`) drives the write and decrements to zero | ok |
+| `SCR_LoadHiColor` | `cin.width`, `cin.height`, `*bitsPerPixel` | `Z_Malloc(h * w * bpp / 8)`, `memcpy(pic, data, h * w * bpp / 8)` | `cin.width`/`cin.height` were set by `SCR_LoadImageWithPalette` from the same image `data`, so the copy length matches the source; `bitsPerPixel` is 8 or 32 from the loader | ok |
+
+The cinematic loader is the best-hardened asset parser in the tree: the frame,
+sound and decompression paths all carry explicit bounds. The one finding is
+D26, the still-image name copy, which predates and sits outside those bounds.
+No host harness was run (the file pulls in the client, sound and filesystem
+imports); D26 is a static trace with high confidence (`MAX_OSPATH` is 4096 in
+`shared.h` for non-Windows, non-Apple builds, and `namewe` is a fixed 256).
+The minimal fix is to size `namewe` as `MAX_OSPATH` or to copy with
+`Q_strlcpy` into a bounded buffer.
