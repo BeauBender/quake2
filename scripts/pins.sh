@@ -129,6 +129,11 @@ store() {
     if [ -n "${PINS_STORE:-}" ]; then echo "$PINS_STORE"; return; fi
     echo "$HOME/.quake2-pins"
 }
+# phys_dir <dir>: the physical path of an existing directory in the
+# filesystem's own spelling. /bin/pwd -P asks the filesystem; the shell's
+# pwd -P keeps the letter case it was given, which on a case-insensitive
+# volume names one directory in several ways
+phys_dir() { (cd "$1" && /bin/pwd -P); }
 # phys_path <path>: sets phys_result to the physical path, resolving symbolic
 # links through the nearest ancestor that exists, and phys_existing to that
 # ancestor; phys_dangling names a dangling symbolic link met on the way
@@ -139,14 +144,14 @@ phys_path() {
         if [ -L "$p" ] && [ -z "$phys_dangling" ]; then phys_dangling=$p; fi
         rest="/$(basename "$p")$rest"; p=$(dirname "$p")
     done
-    phys_existing=$(cd "$p" && pwd -P)
+    phys_existing=$(phys_dir "$p")
     phys_result=$(printf '%s%s' "$phys_existing" "$rest" | tr -s /)
 }
 # check_store_path <path>: refuse a place inside this repository or any git
 # work tree, and a dangling symbolic link (it could later be made into a
 # directory inside one)
 check_store_path() {
-    local s r; phys_path "$1"; s=$phys_result; r=$(cd "$root" && pwd -P)
+    local s r; phys_path "$1"; s=$phys_result; r=$(phys_dir "$root")
     [ -z "$phys_dangling" ] || die "the pin store path $1 holds a dangling symbolic link ($phys_dangling)"
     case "$s/" in "$r/"*) die "the pin store $s is inside this repository; set PINS_STORE outside it (INFORM9)";; esac
     if git -C "$phys_existing" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -512,7 +517,7 @@ check_demo_place() {
         phys_path "$PINS_BASEDIR"; b=$phys_result
         case "$w/" in "$b/"*) die "make-demo would write $w/$2 inside PINS_BASEDIR; use an engine binary outside the game data";; esac
     fi
-    r=$(cd "$root" && pwd -P)
+    r=$(phys_dir "$root")
     case "$w/" in "$r/"*)
         git -C "$root" check-ignore -q "${w#"$r"/}/$2" 2>/dev/null ||
             die "make-demo would write $w/$2 inside this repository, where git does not ignore it";;
@@ -1128,6 +1133,26 @@ st_make_demo_place() { # TASK70: the demo is never written into the game data or
     case $rep in *"tracked/water.dm2 inside this repository"*) ;; *) st_fail "the linked demos/ must be refused for its place: $rep"; return 1;; esac
     rm "$r/release/baseq2/demos"
 }
+st_make_demo_case() { # TASK70: a place spelled in another letter case is the same place
+    local rep c="$tmp/case" ok='for i in $(seq 100); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0'
+    mkdir -p "$c/GDCASE/baseq2/demos" "$c/GDCASE/bin" "$c/e3/baseq2"
+    if [ ! -d "$c/gdcase" ]; then echo "       make_demo_case: $c is on a case-sensitive volume, skipped"; return 0; fi
+    # the reviewers' fixtures: demos/ linked into the game data under another spelling, then no link
+    fake_demo_engine "$c/e3/quake2" "$ok"; ln -s "$c/gdcase/baseq2/demos" "$c/e3/baseq2/demos"
+    rep=$( (PINS_BASEDIR="$c/GDCASE" PINS_BIN="$c/e3/quake2" cmd_make_demo water) 2>&1 ) && { st_fail "a demos/ linked into PINS_BASEDIR in another case must be refused: $rep"; return 1; }
+    case $rep in *"inside PINS_BASEDIR"*) ;; *) st_fail "the refusal must name PINS_BASEDIR: $rep"; return 1;; esac
+    [ ! -e "$c/GDCASE/baseq2/demos/water.dm2" ] || st_fail "nothing may land in the game data" || return 1
+    fake_demo_engine "$c/GDCASE/bin/quake2" "$ok"
+    rep=$( (PINS_BASEDIR="$c/gdcase" PINS_BIN="$c/GDCASE/bin/quake2" cmd_make_demo water) 2>&1 ) && { st_fail "a binary inside PINS_BASEDIR in another case must be refused: $rep"; return 1; }
+    case $rep in *"inside PINS_BASEDIR"*) ;; *) st_fail "the refusal must name PINS_BASEDIR: $rep"; return 1;; esac
+    [ ! -e "$c/GDCASE/bin/baseq2" ] || st_fail "nothing may be written beside a binary in the game data" || return 1
+    # the repository root spelled in another case
+    command -v git >/dev/null 2>&1 || { echo "       make_demo_case: no git, repository case skipped"; return 0; }
+    mkdir -p "$c/RP/bin"; git -C "$c/RP" init -q; printf '/release/\n' > "$c/RP/.gitignore"; ln -s "$root/src" "$c/RP/src"
+    cp "$tmp/fake-ok" "$c/RP/bin/quake2"
+    rep=$( (root="$c/rp" PINS_BIN="$c/RP/bin/quake2" PINS_DRYRUN=1 cmd_make_demo water) 2>&1 ) && { st_fail "a tracked write directory under another spelling of the repository must be refused: $rep"; return 1; }
+    case $rep in *"git does not ignore"*) ;; *) st_fail "the refusal must say git does not ignore it: $rep"; return 1;; esac
+}
 st_demo_sum() { # TASK70: a demo beside the binary is part of the pin id
     rm -rf "$tmp/baseq2"
     local a b c w
@@ -1178,7 +1203,7 @@ cmd_selftest() {
     for c in framediff framediff_block compare_basic compare_bad_threshold ref_mtime missing_frame self_compare \
         two_runs incomplete record_engine timeout fallback names cmdline thresholds scenarios argcount frame_failed list \
         scenario_lines store_place fast_fail demo_name replace engine_id metal_shim usage \
-        make_demo_args make_demo_script make_demo_run make_demo_place demo_sum; do
+        make_demo_args make_demo_script make_demo_run make_demo_place make_demo_case demo_sum; do
         rm -rf "$PINS_STORE/world"
         if ( set -e; "st_$c" ); then echo "  ok   $c"; else echo "  FAIL $c"; failed="$failed $c"; fi
     done
