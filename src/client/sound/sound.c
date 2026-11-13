@@ -1341,13 +1341,13 @@ S_StopAllSounds(void)
  * Builds a list of all sounds
  */
 void
-S_BuildSoundList(int *sounds)
+S_BuildSoundList(int *sounds, int maxsounds)
 {
 	int i;
 	const float ambient = s_ambient->value;
 	const int plnum = cl.playernum + 1;
 
-	for (i = 0; i < cl.frame.num_entities && i <= MAX_CL_ENTNUM; i++)
+	for (i = 0; i < cl.frame.num_entities && i < maxsounds; i++)
 	{
 		int num;
 		entity_state_t *ent;
