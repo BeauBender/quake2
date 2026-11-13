@@ -8,10 +8,10 @@
  *
  * =======================================================================
  *
- * The only stubs in the suite. The test binary links one client object,
+ * Client state stubs. The test binary links client objects, among them
  * src/client/cl_download.c, so that CL_DownloadFilter (static, reached
  * through the public CL_Download_f and CL_CheckOrDownloadFile) and
- * CL_ParseDownload run as shipped. Linking the rest of the client would
+ * CL_ParseDownload run as shipped. Linking all of the client would
  * pull in SDL, the renderer and sound; these definitions stand in for the
  * client state cl_download.c reads. Everything else it calls (MSG_*, FS_*,
  * Cmd_*, Com_*, the collision map tables) is the real dedicated-server
