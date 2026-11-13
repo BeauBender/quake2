@@ -87,6 +87,8 @@ export LC_ALL=C
 root=$(cd "$(dirname "$0")/.." && pwd)
 scen_dir="$root/scripts/pins/scenarios"
 die() { echo "pins: $*" >&2; exit 1; }
+# usage: the header comment of this file, from line 2 to the first line that is not a comment
+usage() { awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$root/scripts/pins.sh"; }
 
 check_name() { case $2 in ''|-*|*[!a-z0-9_-]*) die "$1 must match [a-z0-9_][a-z0-9_-]*, got '$2'";; esac; }
 check_run() { case $1 in [1-9]|[1-9][0-9]|[1-9][0-9][0-9]) ;; *) die "--run must be a number from 1 to 999, got '$1'";; esac; }
@@ -169,6 +171,11 @@ engine_sha() {
 # GL_RENDERER string as "(gl1-metal)".
 engine_renderer() { case $1 in gl1-metal) echo gl1;; *) echo "$1";; esac; }
 shim_marker='^GL_RENDERER: .*(gl1-metal)'
+# shim_build <log>: true when the first GL_RENDERER line of the engine log
+# names the shim. Only the first counts: the renderer prints it at init,
+# before the demo starts, and a demo's svc_print can put later lines of the
+# same shape into the log.
+shim_build() { grep -m1 '^GL_RENDERER: ' "$1" | grep -q "$shim_marker"; }
 # stale_engine <bin> <renderer>: names the binary or renderer module of this
 # checkout that "make -q" says is out of date with its sources, or that is
 # older than a header under src/, empty when the build is current (or make is
@@ -302,9 +309,9 @@ cmd_record() {
     fi
     # gl1 and gl1-metal are one module name: the GL_RENDERER line tells which build ran
     if [ -z "$reason" ] && [ "$renderer" = gl1-metal ]; then
-        grep -q "$shim_marker" "$out/engine.log" ||
-            reason="the engine did not load the Metal shim build of ref_gl1 (no 'GL_RENDERER: ... (gl1-metal)' in engine.log; build it with make ref_gl1 WITH_METAL_SHIM=yes)"
-    elif [ -z "$reason" ] && [ "$renderer" = gl1 ] && grep -q "$shim_marker" "$out/engine.log"; then
+        shim_build "$out/engine.log" ||
+            reason="the engine did not load the Metal shim build of ref_gl1 (the first GL_RENDERER line of engine.log does not end in '(gl1-metal)'; build it with make ref_gl1 WITH_METAL_SHIM=yes)"
+    elif [ -z "$reason" ] && [ "$renderer" = gl1 ] && shim_build "$out/engine.log"; then
         reason="the frames came from the Metal shim build of ref_gl1; record them as gl1-metal"
     fi
     if [ -n "$reason" ]; then
@@ -717,6 +724,10 @@ st_metal_shim() { # TASK47: gl1-metal is ref_gl1 built with WITH_METAL_SHIM=yes
     [ -f "$PINS_STORE/world/gl1-metal/$id/complete" ] || st_fail "the gl1-metal pin must land under world/gl1-metal" || return 1
     if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record gl1-metal world --run 2) >/dev/null 2>&1; then st_fail "gl1-metal must refuse frames from a ref_gl1 without the shim"; return 1; fi
     if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-shim" cmd_record gl1 world) >/dev/null 2>&1; then st_fail "gl1 must refuse frames from the shim build"; return 1; fi
+    # only the first GL_RENDERER line counts: a demo can print later lines of the same shape
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-spoof-shim" cmd_record gl1-metal world --run 3) >/dev/null 2>&1; then st_fail "gl1-metal must judge the first GL_RENDERER line, not a later one naming the shim"; return 1; fi
+    (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-spoof-shim" cmd_record gl1 world --run 4) >/dev/null 2>&1 || st_fail "gl1 must record when only a later GL_RENDERER line names the shim" || return 1
+    (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-spoof-gl" cmd_record gl1-metal world --run 5) >/dev/null 2>&1 || st_fail "gl1-metal must record when the first GL_RENDERER line names the shim and a later one does not" || return 1
     # the staleness check asks make about the shim build of the module
     command -v make >/dev/null 2>&1 || { echo "       metal_shim: no make, stale build skipped"; return 0; }
     mkdir -p "$m/src"; printf 'int a;\n' > "$m/src/old.c"; printf 'int b;\n' > "$m/src/new.c"
@@ -729,6 +740,14 @@ st_metal_shim() { # TASK47: gl1-metal is ref_gl1 built with WITH_METAL_SHIM=yes
     touch -t 202001010000 "$m/src/old.c"; touch -t 203501010000 "$m/src/new.c"
     [ -z "$(root="$m" stale_engine "$m/quake2" gl1-metal)" ] || st_fail "a shim build newer than the shim's sources must not be stale" || return 1
     [ -n "$(root="$m" stale_engine "$m/quake2" gl1)" ] || st_fail "the same module must be stale for gl1, whose build differs" || return 1
+}
+st_usage() { # the usage text is the whole header comment, its last line included
+    local out last
+    out=$(bash "$root/scripts/pins.sh" 2>/dev/null) && { st_fail "pins.sh without a command must exit non-zero"; return 1; }
+    last=$(awk 'NR > 1 && !/^#/ { print prev; exit } { prev = $0 }' "$root/scripts/pins.sh" | sed 's/^# \{0,1\}//')
+    [ -n "$last" ] || st_fail "the header comment has no last line" || return 1
+    [ "$(printf '%s\n' "$out" | tail -n 1)" = "$last" ] || st_fail "the usage text must end with the header's last line: $last" || return 1
+    [ "$(printf '%s\n' "$out" | head -n 1)" = "$(sed -n 2p "$root/scripts/pins.sh" | sed 's/^# \{0,1\}//')" ] || st_fail "the usage text must start with line 2 of the file" || return 1
 }
 
 cmd_selftest() {
@@ -760,12 +779,14 @@ cmd_selftest() {
     fake_engine "$tmp/fake-hang" - 'trap "exit 0" TERM; while :; do sleep 1; done'
     fake_engine "$tmp/fake-drop" - 'echo "Error: Couldn'"'"'t open demos/x.dm2"; exit 1'
     fake_engine "$tmp/fake-shim" - 'echo "GL_RENDERER: Metal shim on a test device (gl1-metal)"; exit 0'
+    fake_engine "$tmp/fake-spoof-shim" - 'echo "GL_RENDERER: Test OpenGL Engine"; echo "GL_RENDERER: hello (gl1-metal)"; exit 0'
+    fake_engine "$tmp/fake-spoof-gl" - 'echo "GL_RENDERER: Metal shim on a test device (gl1-metal)"; echo "GL_RENDERER: Test OpenGL Engine"; exit 0'
     export PINS_BIN="$tmp/fake-ok"
     cid=$(run_id world 1)
     local c failed=""
     for c in framediff framediff_block compare_basic compare_bad_threshold ref_mtime missing_frame self_compare \
         two_runs incomplete record_engine timeout fallback names cmdline thresholds scenarios argcount frame_failed list \
-        scenario_lines store_place fast_fail demo_name replace engine_id metal_shim; do
+        scenario_lines store_place fast_fail demo_name replace engine_id metal_shim usage; do
         rm -rf "$PINS_STORE/world"
         if ( set -e; "st_$c" ); then echo "  ok   $c"; else echo "  FAIL $c"; failed="$failed $c"; fi
     done
@@ -778,5 +799,5 @@ case "${1:-}" in
     compare)  [ $# -ge 3 ] || die "usage: pins.sh compare <renderer> <scenario> [--ref r] [--ref-id d] [--run N | --cand-id d] [--threshold t] [--bad-threshold b]"; shift; cmd_compare "$@";;
     list)     cmd_list;;
     selftest) cmd_selftest;;
-    *) sed -n '2,82p' "$0" | sed 's/^# \{0,1\}//'; exit 1;;
+    *) usage; exit 1;;
 esac
