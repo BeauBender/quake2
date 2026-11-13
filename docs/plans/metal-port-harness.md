@@ -20,7 +20,7 @@ renderer is judged with it, and what the first run on real data found.
 | No renderer fallback while capturing | `VID_CheckChanges` in `src/client/vid/vid.c` | compiles and links; the failure path has not been provoked |
 | Capture before present | `SCR_PinsCapture` in `src/client/cl_screen.c` | run on `soft`: complete frames with the status bar (TASK39); not run on `gl1` |
 | gl1 screenshot flushes the batched 2D quads before reading | `R_ScreenShot` in `src/client/refresh/gl1/gl1_misc.c` | compiles and links; never run (`gl1` cannot create a context on the build VM) |
-| Unattended quit at end of demo, non-zero exit on a broken demo | `CL_PinsFrame` in `src/client/cl_main.c`, `SV_DemoEnd` in `src/server/sv_send.c`, `Com_Error` in `src/common/clientserver.c` | run: every record quits by itself with status 0; a missing demo and a demo file without its end marker exit 1 within about a second (TASK39) |
+| Unattended quit at end of demo, non-zero exit on a broken demo | `CL_PinsFrame` in `src/client/cl_main.c`, `SV_DemoEnd` in `src/server/sv_send.c`, `Com_Error` in `src/common/clientserver.c` | run: every record quits by itself with status 0; a missing demo and a short demo file without its end marker were run and exit 1 within about a second; a demo cut after playback began and playback stopping without a demo end are implemented but not observed (TASK39) |
 | No saved configuration in a pin run | `Qcommon_ExecConfigs` in `src/common/frame.c`, `CL_WriteConfiguration` in `src/client/cl_main.c` | run: the engine log shows no `config.cfg` exec and none is written (TASK39) |
 | Driver: record, compare, list, selftest | `scripts/pins.sh` (bash 3.2) | selftest green; `record` and `compare` run against the engine on real data (TASK39) |
 | Comparator | `scripts/pins/framediff.c` | selftest green; run on real frames (TASK39) |
@@ -103,7 +103,10 @@ writes `incomplete` with the reason and exits non-zero. With pin capture
 on, the engine exits 1 at once when the demo cannot be opened (any
 dropped error is fatal), when the demo file ends before its end marker,
 when it ends before a frame of it was played, or when playback stops
-without the demo ending.
+without the demo ending. Of these four cases only the first two (a missing
+demo, a short file without an end marker) were run on real data; the
+other two are implemented in `CL_PinsFrame` and `SV_DemoEnd` and read from
+the source, not observed, and nothing in the gate reaches them.
 
 `scripts/pins.sh compare <renderer> <scenario> --ref <renderer> [--ref-id <dir>] [--run N | --cand-id <dir>] [--threshold T] [--bad-threshold B]`
 compares frame by frame and prints one line per frame (score, bad
@@ -160,8 +163,10 @@ Host: the build VM, macOS arm64, `soft` at 640x480, `PINS_EVERY` 30,
 6. Run to run on `soft`: `world` and `hud2d` are identical (score and bad
    fraction 0.000000 on all 23 frames) over four runs each. `models` is
    not: frame 7 differs in every pair, in a small patch of about 250
-   pixels, because temporary-entity explosions take a random yaw and
-   frame (`CL_ParseTEnt`) from the engine PRNG; worst over five pairs
+   pixels, which is consistent with temporary-entity explosions taking a
+   random yaw and frame (`CL_ParseTEnt`) from the engine PRNG (not
+   attributed by this record, which shows only the score and a pixel
+   count); worst over five pairs
    score 0.000446, bad fraction 0.000973, which passes the default
    thresholds but is not 0. `particles` differs in 16 of 23 frames; worst
    over five pairs score 0.011556 and bad fraction 0.172061, so 10 or 11
