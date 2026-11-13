@@ -89,7 +89,7 @@ scripts/pins.sh record <renderer> <scenario> [--run N] [--replace]
 ```
 
 `record` starts the engine with the scenario's settings, the renderer
-(`soft`, `gl1`, `gl3`), a fixed window size and sound off, plays
+(`soft`, `gl1`, `gl3`, or `gl1-metal`, see below), a fixed window size and sound off, plays
 `PINS_DEMO` and quits by itself when it ends. The frames land in
 `<store>/<scenario>/<renderer>/<id>/`, where `<id>` names the engine
 commit and a hash of the scenario and the `PINS_*` settings. With
@@ -104,6 +104,38 @@ Every `record` also writes `trace.q2r` beside the frames, a trace of
 the drawing calls the engine made into the renderer (about 4.4 MB for the
 default demo); it holds data derived from the game data, stays in the
 store and is never committed or uploaded. `PINS_TRACE=0` records none.
+
+### The Metal shim build of gl1
+
+On macOS `ref_gl1` can be built against an OpenGL subset on Metal that
+lives in this tree, instead of Apple's OpenGL framework, for Macs where
+OpenGL does not work. The switch is a build variable and needs the
+Xcode Metal toolchain (`xcrun metal`):
+
+```sh
+make client game ref_gl1 WITH_METAL_SHIM=yes
+scripts/pins.sh record gl1-metal world
+```
+
+The build writes `ref_gl1.metallib` next to `ref_gl1.dylib`. The
+engine still loads it as `gl1`; the pin harness records it as
+`gl1-metal`. `record gl1-metal` asks `make` whether the shim build is
+current and checks that the module the engine loaded is that build (its
+`GL_RENDERER` string ends in `(gl1-metal)`); `record gl1` refuses frames
+from it. The shim is being built up step by step: until it draws, a
+frame from it is the cleared screen.
+
+With the environment variable `MGL_READBACK_DUMP` set to an absolute
+directory (characters `A-Z a-z 0-9 _ . / -`, no `..`), the shim also
+writes every `glReadPixels` result there, byte for byte as the renderer
+received it (bottom row first), as `mgl-readback-NNNNNN.raw`, with one
+line per read in `mgl-readback.txt`. That is the way to check a
+captured frame against the shim's own readback. Every file is created
+new and no symbolic link is followed: use an empty directory per run, as
+one that already holds a `mgl-readback.txt` turns the hook off for that
+run. At most 1000 reads are written per run; later reads are not, and
+the shim says so once on stderr. Like the frames, these files come from
+the game data and stay on the machine that made them.
 
 ## Comparing
 
