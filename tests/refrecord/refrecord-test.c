@@ -869,8 +869,13 @@ RoundTripFrame(const char *what, int nent, int ndl, int npart, qboolean areabits
 				SetU32(copy + FRAME_COUNTS_OFS + 4, bc[1] < 0 ? 0xffffffffu : (uint32_t)ndl + (uint32_t)bc[1]);
 				SetU32(copy + FRAME_COUNTS_OFS + 8, bc[2] < 0 ? 0xffffffffu : (uint32_t)npart + (uint32_t)bc[2]);
 
+				out.refdef.num_entities = out.refdef.num_dlights = out.refdef.num_particles = 0x55;
 				CHECK(!ReadExact(copy, w.cursize, &type, NULL, &out, NULL, NULL, NULL),
 						"%s: bad counts #%d were accepted", what, (int)i);
+				CHECK(out.refdef.num_entities == 0 && out.refdef.num_dlights == 0 &&
+						out.refdef.num_particles == 0,
+						"%s: bad counts #%d left %d, %d, %d in the frame", what, (int)i,
+						out.refdef.num_entities, out.refdef.num_dlights, out.refdef.num_particles);
 			}
 
 			/* has_areabits other than 0 or 1, and areabits bytes without the flag */

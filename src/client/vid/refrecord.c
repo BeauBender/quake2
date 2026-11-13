@@ -868,6 +868,9 @@ ReadRenderFrame(refrec_reader_t *r, refrec_frame_t *f)
 		rd->num_dlights < 0 || rd->num_dlights > MAX_DLIGHTS ||
 		rd->num_particles < 0 || rd->num_particles > MAX_PARTICLES)
 	{
+		/* leave no hostile count behind in the caller's frame */
+		rd->num_entities = rd->num_dlights = rd->num_particles = 0;
+
 		return R_Fail(r);
 	}
 
@@ -876,6 +879,8 @@ ReadRenderFrame(refrec_reader_t *r, refrec_frame_t *f)
 			(uint32_t)rd->num_dlights * REFREC_DLIGHT_SIZE +
 			(uint32_t)rd->num_particles * REFREC_PARTICLE_SIZE)
 	{
+		rd->num_entities = rd->num_dlights = rd->num_particles = 0;
+
 		return R_Fail(r);
 	}
 
