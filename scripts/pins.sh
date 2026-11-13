@@ -402,6 +402,20 @@ st_scenarios() {
     [ "$(HOME=/h/x PINS_STORE= store)" = "/h/x/.quake2-pins" ] || st_fail "store default must be \$HOME/.quake2-pins, whatever .claude/dev-loop.json holds" || return 1
 }
 
+st_argcount() { # R3-B1: the engine refuses an argv longer than MAX_NUM_ARGVS (src/common/argproc.c)
+    local limit s line n worst=0
+    limit=$(sed -n 's/^#define MAX_NUM_ARGVS \([0-9]*\).*/\1/p' "$root/src/common/argproc.c")
+    case $limit in ''|*[!0-9]*) st_fail "cannot read MAX_NUM_ARGVS from src/common/argproc.c"; return 1;; esac
+    for s in "$scen_dir"/*.cfg; do
+        line=$(PINS_BASEDIR="$tmp/gd" PINS_DRYRUN=1 cmd_record gl1 "$(basename "$s" .cfg)") || st_fail "dry run failed for $(basename "$s")" || return 1
+        set -f; set -- $line; set +f
+        n=$#   # the binary is argv[0], the rest are the arguments
+        [ "$n" -gt "$worst" ] && worst=$n
+        [ "$n" -le "$limit" ] || st_fail "$(basename "$s"): the engine command line has $n words, MAX_NUM_ARGVS is $limit" || return 1
+    done
+    echo "       argc: worst scenario $worst of $limit, headroom $((limit - worst))"
+}
+
 cmd_selftest() {
     # the selftest must not depend on, or act on, the caller's environment
     unset PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF
@@ -421,7 +435,7 @@ cmd_selftest() {
     fake_engine "$tmp/fake-hang" - 'trap "exit 0" TERM; while :; do sleep 1; done'
     local c failed=""
     for c in framediff framediff_block compare_basic compare_bad_threshold ref_mtime missing_frame self_compare \
-        two_runs incomplete record_engine timeout fallback names cmdline thresholds scenarios; do
+        two_runs incomplete record_engine timeout fallback names cmdline thresholds scenarios argcount; do
         rm -rf "$PINS_STORE/world"
         if ( set -e; "st_$c" ); then echo "  ok   $c"; else echo "  FAIL $c"; failed="$failed $c"; fi
     done

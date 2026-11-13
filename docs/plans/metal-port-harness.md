@@ -24,6 +24,7 @@ renderer is judged with it, and what has not been verified yet.
 | Driver: record, compare, list, selftest | `scripts/pins.sh` (bash 3.2) | selftest green; `record` never run against an engine |
 | Comparator | `scripts/pins/framediff.c` | selftest green |
 | Scenarios, one per feature | `scripts/pins/scenarios/*.cfg` | names checked against `src/`; never run |
+| Argument limit raised: `MAX_NUM_ARGVS` in `src/common/argproc.c` is 128 (was 50); `record` passes 66 to 69 words and the engine refused more than 50 at startup | `scripts/pins.sh selftest` case `argcount` and `tests/check-pins-latch.sh` feed every scenario's command line to the real `COM_InitArgv` | green in `scripts/test.sh`; never run inside the engine |
 | Gate checks, no game data needed | `tests/check-pins.sh`, `tests/check-pins-latch.sh` | green in `scripts/test.sh` |
 
 "Compiles and links" means the client and all three renderers build with

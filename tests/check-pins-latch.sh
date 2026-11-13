@@ -53,5 +53,35 @@ expect "$refused_pin" +set pins_dir /s +set pins_capture -1
 expect "$off" set pins_dir /s +pins_dir /s
 expect "$off" +set foo +set pins_dir /s
 
+# The "does not fit" refusal: values short enough to survive COM_InitArgv
+# (under MAX_TOKEN_CHARS) that CL_PinsCopy itself must refuse. pins_scenario
+# is a 64-byte buffer. pins_dir cannot be made too long here: MAX_OSPATH is
+# 4096 outside Windows, above MAX_TOKEN_CHARS (1024), so COM_InitArgv blanks
+# such a value first (the 1101-byte case above); the dir half of the guard
+# only fires with the Windows MAX_OSPATH of 256.
+s63=$(printf '%063d' 0 | tr 0 a)
+s64=$(printf '%064d' 0 | tr 0 a)
+expect "dir=/s|scenario=$s63|capture=30|invalid=0" \
+	+set pins_dir /s +set pins_scenario "$s63" +set pins_capture 30
+expect "$refused_pin" +set pins_dir /s +set pins_scenario "$s64" +set pins_capture 30
+
+# Every scenario's command line, as scripts/pins.sh record builds it, is
+# accepted by the real COM_InitArgv (no argc > MAX_NUM_ARGVS) and latches
+# the directory, scenario and interval it names.
+for cfg in scripts/pins/scenarios/*.cfg; do
+	scen=$(basename "$cfg" .cfg)
+	line=$(PINS_DRYRUN=1 PINS_STORE=/s PINS_BASEDIR=/b bash scripts/pins.sh record gl1 "$scen")
+	set -f
+	# shellcheck disable=SC2086
+	set -- $line
+	set +f
+	shift
+	got=$("$tmp/latch" "$@") || bad "scenario $scen: the engine refuses its command line ($# arguments)"
+	case $got in
+		"dir=/s/$scen/gl1/"*"|scenario=$scen|capture=30|invalid=0") ;;
+		*) bad "scenario $scen: latched '$got'" ;;
+	esac
+done
+
 [ "$fail" -eq 0 ] && echo "check-pins-latch: ok"
 exit "$fail"
