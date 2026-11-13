@@ -230,6 +230,14 @@ Host: the build VM, macOS arm64, `soft` at 640x480.
    cinematic` captures 12 frames in about 6 seconds and quits with status 0;
    frame 0 is black (the start of the cinematic), the later frames show it
    fading in and out. Three runs were identical (score 0 on all 12 frames).
+   The second run is recorded with `record soft cinematic --run 2` and
+   compared as `compare soft cinematic --run 2 --ref soft`; `--ref-id
+   <dir>` names the reference when the scenario has been recorded with
+   other settings (item 8).
+   The picture on screen lags the decoded-frame count by one to two
+   frames, and with `PINS_EVERY=1` the capture at index 1 falls on a
+   rendered frame where nothing new is drawn, so a GL reference should
+   not be recorded at N = 1.
    No `Dropped frame` line was logged.
 6. `PINS_DEMO=nosuch.cin` exits 1 within a few seconds with `pins: the
    cinematic could not be played`.
