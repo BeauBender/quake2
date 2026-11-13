@@ -8,7 +8,8 @@ the same camera path and differ only in what is drawn. The exception is
 `cinematic`: `PINS_DEMO` names a cinematic under `video/` instead (for
 example `PINS_DEMO=idlog.cin PINS_EVERY=7`), which `+demomap` plays the same
 way, and the engine then captures every Nth cinematic frame rather than
-every Nth rendered frame. Nothing here is
+every Nth rendered frame. `record` holds you to the pairing: `cinematic`
+needs a `.cin` and any other scenario refuses one. Nothing here is
 derived from game data, so the files are committed (INFORM9).
 
 | Scenario | Drawn |

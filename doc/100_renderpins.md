@@ -60,7 +60,7 @@ scenario plays `PINS_DEMO`, so all of them follow the same camera path.
 | `particles` | everything, including particles, dynamic lights and the screen blend |
 | `hud2d` | 2D only: status bar, crosshair, console text |
 | `skywater` | world surfaces and sky, with the sky and water-warp settings fixed |
-| `cinematic` | a cinematic stretched over the screen; needs `PINS_DEMO` naming a `.cin` |
+| `cinematic` | a cinematic stretched over the screen; `record` needs `PINS_DEMO` naming a `.cin`, and refuses a `.cin` for any other scenario |
 
 `models` and `particles` are not identical from run to run, because
 explosions and particles draw on random numbers; their files say so in a

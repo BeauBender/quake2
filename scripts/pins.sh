@@ -23,7 +23,8 @@
 #   PINS_DEMO     what every scenario plays: a demo, a file name under demos/
 #                 ([A-Za-z0-9_][A-Za-z0-9_.-]*.dm2), or a cinematic, a file
 #                 name under video/ (the same pattern ending in .cin, for the
-#                 cinematic scenario). Default: demo1.dm2
+#                 cinematic scenario, which needs a .cin and refuses a .dm2;
+#                 every other scenario refuses a .cin). Default: demo1.dm2
 #   PINS_WIDTH, PINS_HEIGHT   capture size. Default: 640 x 480
 #   PINS_EVERY    capture every Nth rendered frame. Default: 30
 #   PINS_TIMEOUT  seconds before a run is killed. Default: 600
@@ -240,6 +241,10 @@ cmd_record() {
     case $limit in ''|*[!0-9]*) die "PINS_TIMEOUT must be a number of seconds, got '$limit'";; esac
     check_count PINS_WIDTH "${PINS_WIDTH:-640}"; check_count PINS_HEIGHT "${PINS_HEIGHT:-480}"; check_count PINS_EVERY "${PINS_EVERY:-30}"
     check_demo "${PINS_DEMO:-demo1.dm2}"
+    case ${PINS_DEMO:-demo1.dm2} in
+        *.cin) [ "$scenario" = cinematic ] || die "PINS_DEMO '${PINS_DEMO}' is a cinematic; only the cinematic scenario plays one, not $scenario";;
+        *) [ "$scenario" != cinematic ] || die "the cinematic scenario needs PINS_DEMO naming a cinematic ending in .cin, got '${PINS_DEMO:-demo1.dm2}'";;
+    esac
     [ -f "$scen_dir/$scenario.cfg" ] || die "no scenario $scenario (see $scen_dir)"
     [ -z "${PINS_BIN:-}" ] || [ -f "$PINS_BIN" ] || die "no engine binary at $PINS_BIN (build the client, or set PINS_BIN)"
     check_store "$scenario" "$renderer"
@@ -557,11 +562,12 @@ st_scenarios() {
 }
 
 st_argcount() { # R3-B1: the engine refuses an argv longer than MAX_NUM_ARGVS (src/common/argproc.c)
-    local limit s line n worst=0
+    local limit s line n worst=0 d
     limit=$(sed -n 's/^#define MAX_NUM_ARGVS \([0-9]*\).*/\1/p' "$root/src/common/argproc.c")
     case $limit in ''|*[!0-9]*) st_fail "cannot read MAX_NUM_ARGVS from src/common/argproc.c"; return 1;; esac
     for s in "$scen_dir"/*.cfg; do
-        line=$(PINS_BASEDIR="$tmp/gd" PINS_DRYRUN=1 cmd_record gl1 "$(basename "$s" .cfg)") || st_fail "dry run failed for $(basename "$s")" || return 1
+        d=demo1.dm2; [ "$(basename "$s" .cfg)" != cinematic ] || d=idlog.cin
+        line=$(PINS_DEMO=$d PINS_BASEDIR="$tmp/gd" PINS_DRYRUN=1 cmd_record gl1 "$(basename "$s" .cfg)") || st_fail "dry run failed for $(basename "$s")" || return 1
         set -f; set -- $line; set +f
         n=$#   # the binary is argv[0], the rest are the arguments
         [ "$n" -gt "$worst" ] && worst=$n
@@ -618,9 +624,16 @@ st_demo_name() { # TASK39 (g): PINS_DEMO is a demo file name the engine keeps
         .cin -idlog.cin video/idlog.cin ../idlog.cin idlog.cinx 'x..cin' idlog.pcx 'idlog.cin;quit'; do
         if (PINS_DEMO="$d" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "PINS_DEMO '$d' must be refused"; return 1; fi
     done
-    for d in demo2.dm2 my_demo-1.dm2 X.dm2 idlog.cin eou1_.cin; do
+    for d in demo2.dm2 my_demo-1.dm2 X.dm2; do
         (PINS_DEMO="$d" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1 || st_fail "PINS_DEMO '$d' must be accepted" || return 1
     done
+    for d in idlog.cin eou1_.cin; do
+        (PINS_DEMO="$d" PINS_DRYRUN=1 cmd_record gl1 cinematic) >/dev/null 2>&1 || st_fail "PINS_DEMO '$d' must be accepted for cinematic" || return 1
+        if (PINS_DEMO="$d" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "a cinematic '$d' must be refused for world"; return 1; fi
+    done
+    # the cinematic scenario needs a .cin: the default demo and a named demo are refused
+    if (PINS_DRYRUN=1 cmd_record gl1 cinematic) >/dev/null 2>&1; then st_fail "cinematic with the default demo must be refused"; return 1; fi
+    if (PINS_DEMO=demo2.dm2 PINS_DRYRUN=1 cmd_record gl1 cinematic) >/dev/null 2>&1; then st_fail "cinematic with a .dm2 must be refused"; return 1; fi
     # a cinematic is played the same way as a demo: +demomap, last on the line
     local line; line=$(PINS_DEMO=idlog.cin PINS_DRYRUN=1 cmd_record gl1 cinematic) || st_fail "a dry run of the cinematic scenario must pass" || return 1
     case $line in *" +demomap idlog.cin") ;; *) st_fail "PINS_DEMO=idlog.cin must reach +demomap: $line"; return 1;; esac
