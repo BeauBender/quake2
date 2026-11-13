@@ -262,6 +262,35 @@ TEST(cmd_alias)
 	run("alias t_loop t_loop\nt_loop\n");
 	T_CONSOLE_HAS("ALIAS_LOOP_COUNT");
 
+	/* The exact limit. Cbuf_Execute resets alias_count; Cmd_ExecuteString
+	   refuses the expansion that makes ++alias_count reach
+	   ALIAS_LOOP_COUNT (16). So one Cbuf_Execute may expand 15 aliases
+	   and the 16th is refused. t_c1 .. t_c16 is a chain in which each
+	   alias runs the next and t_c16 echoes: starting at t_c2 takes 15
+	   expansions and reaches the echo, starting at t_c1 takes 16 and
+	   stops one short of it. */
+	{
+		char def[64];
+		int k;
+
+		for (k = 1; k <= 16; k++)
+		{
+			if (k < 16)
+			{
+				Com_sprintf(def, sizeof(def), "alias t_c%d t_c%d\n", k, k + 1);
+			}
+			else
+			{
+				Com_sprintf(def, sizeof(def), "alias t_c%d echo reached\n", k);
+			}
+
+			run(def);
+		}
+
+		T_EQ_STR(run("t_c2\n"), "reached \n");
+		T_EQ_STR(run("t_c1\n"), "ALIAS_LOOP_COUNT\n");
+	}
+
 	/* vstr runs a cvar's value as a command. */
 	Cvar_Set("t_script", "echo from vstr");
 	T_EQ_STR(run("vstr t_script\n"), "from vstr \n");

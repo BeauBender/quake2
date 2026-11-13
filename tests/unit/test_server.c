@@ -96,6 +96,8 @@ TEST(sv_connectionless_packets)
 		"connect 33 1234 0 \"\\name\\x\"",
 		"rcon",
 		"rcon wrong echo hi",
+		"rcon secretx echo hi",
+		"rcon secre echo hi",
 		"rcon secret echo hi there",
 		"rcon secret set t_rcon_set 7",
 		"nonsense with args",

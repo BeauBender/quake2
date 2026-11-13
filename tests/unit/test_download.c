@@ -183,6 +183,13 @@ TEST(download_chunk_size)
 	T_CHECK(cls.download == NULL);
 	T_EQ_INT(FS_LoadFile("maps/chunk.tmp", NULL), -1);
 
+	/* The boundary: one byte more than the message holds is refused. */
+	server_sends(4, 50, "abc", 3);
+	T_EXPECT_DROP(CL_ParseDownload());
+	T_CONSOLE_HAS("Bad download chunk size 4, only 3 bytes in message.");
+	T_CHECK(cls.download == NULL);
+	T_EQ_INT(FS_LoadFile("maps/chunk.tmp", NULL), -1);
+
 	server_sends(-2, 50, "abc", 3);
 	T_EXPECT_DROP(CL_ParseDownload());
 	T_CONSOLE_HAS("Bad download chunk size -2");
@@ -193,7 +200,9 @@ TEST(download_chunk_size)
 	CL_ParseDownload();
 	T_CONSOLE_HAS("Server does not have this file.");
 
-	/* Two good chunks: the temp file grows, then is renamed. */
+	/* Two good chunks, each exactly as long as the rest of its message
+	   (the accepted side of the boundary): the temp file grows, then is
+	   renamed. */
 	server_sends(3, 50, "abc", 3);
 	CL_ParseDownload();
 	T_CHECK(cls.download != NULL);

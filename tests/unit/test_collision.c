@@ -180,6 +180,10 @@ TEST(cm_load_valid_map)
 	data = bsp_build(&b, &len);
 	name = bsp_write(data, len);
 
+	/* The last lump ends exactly at the end of the file. */
+	T_EQ_INT(((dheader_t *)data)->lumps[LUMP_AREAS].fileofs +
+		((dheader_t *)data)->lumps[LUMP_AREAS].filelen, len);
+
 	world = CM_LoadMap(name, false, &checksum);
 	T_REQUIRE(world != NULL);
 
@@ -256,6 +260,21 @@ p_lump_past_end(byte *data, int *len)
 	h->lumps[LUMP_LEAFS].filelen = *len;
 }
 
+/* The areas lump is the last one bsp_build writes and ends exactly at
+   the end of the file (cm_load_valid_map loads that, the accepted side
+   of the boundary); cutting the file by one byte leaves it ending one
+   byte past the end. */
+static void
+p_lump_one_past_end(byte *data, int *len)
+{
+	dheader_t *h = (dheader_t *)data;
+
+	if (h->lumps[LUMP_AREAS].fileofs + h->lumps[LUMP_AREAS].filelen == *len)
+	{
+		*len -= 1;
+	}
+}
+
 static void
 p_lump_negative_ofs(byte *data, int *len)
 {
@@ -309,6 +328,7 @@ TEST(cm_refused_maps)
 		{ "header cut short", NULL, p_truncate_header },
 		{ "wrong version", c_version, NULL },
 		{ "lump past end of file (TASK2)", NULL, p_lump_past_end },
+		{ "lump ends one byte past the file", NULL, p_lump_one_past_end },
 		{ "lump negative offset (TASK2)", NULL, p_lump_negative_ofs },
 		{ "lump negative length (TASK2)", NULL, p_lump_negative_len },
 		{ "lump offset+length wraps (TASK2)", NULL, p_lump_overflow },

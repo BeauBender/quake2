@@ -24,6 +24,14 @@ packet "rcon wrong echo hi":
   reply: \xff\xff\xff\xffprint\nBad rcon_password.\n
   console: Bad rcon from [0.0.0.0]:0:
   console: rcon wrong echo hi
+packet "rcon secretx echo hi":
+  reply: \xff\xff\xff\xffprint\nBad rcon_password.\n
+  console: Bad rcon from [0.0.0.0]:0:
+  console: rcon secretx echo hi
+packet "rcon secre echo hi":
+  reply: \xff\xff\xff\xffprint\nBad rcon_password.\n
+  console: Bad rcon from [0.0.0.0]:0:
+  console: rcon secre echo hi
 packet "rcon secret echo hi there":
   reply: \xff\xff\xff\xffprint\nhi there \n
   console: Rcon from [0.0.0.0]:0:

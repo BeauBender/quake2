@@ -10,6 +10,8 @@ wrong version:
   CMod_LoadBrushModel: <map> has wrong version number (37 should be 38)
 lump past end of file (TASK2):
   CMod_CheckLumps: Map <map> lump 8 (ofs 336, len 468) lies outside the file (468 bytes)
+lump ends one byte past the file:
+  CMod_CheckLumps: Map <map> lump 17 (ofs 460, len 8) lies outside the file (467 bytes)
 lump negative offset (TASK2):
   CMod_CheckLumps: Map <map> lump 1 (ofs -4, len 20) lies outside the file (468 bytes)
 lump negative length (TASK2):
