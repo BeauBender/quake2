@@ -102,14 +102,26 @@ index or size without a check, that is the bug to look for.
 | `cl_tempentities.c` splash `r` | `MSG_ReadByte` | `splash_color[r]` (7 entries) | `r > 6 || r < 0` → `color=0` else index | ok |
 | `cl_tempentities.c` beam/lightning/steam `ent`/`srcEnt`/`destEnt` | `MSG_ReadShort` | stored in beam `entity`/`dest_entity`, compared only | `CL_ParseLightning` drops on `-1`; beams store ints, used in equality tests not as indices | ok |
 | `cl_tempentities.c` sustain `id` | `MSG_ReadShort` | `s->id`, compared only | not an index | ok |
+| `cl_tempentities.c` `TE_LASER_SPARKS`/`TE_WELDING_SPARKS` `color`, `CL_ParseSteam` `r` | `MSG_ReadByte` | particle colour `color + (randk() & 7)`, up to 262 | none; reaches the renderers unmasked → Defect D9 | defect (D9) |
+| `cl_tempentities.c` `TE_TUNNEL_SPARKS`, `TE_FORCEWALL` `color` | `MSG_ReadByte` | particle colour used as is (0..255) | in range | ok |
+| `sw_part.c` `R_DrawParticle` `vid_alphamap[(color << 8) + pdest]` / `[color + (pdest << 8)]` | `particle_t.color` | translucency table index | **no mask** → Defect D9 | defect (D9) |
+| `gl1_main.c` `R_DrawParticles2` `colortable[p->color]` | `particle_t.color` | `d_8to24table[256]` index | **no mask** (the point-sprite path and gl3 mask `& 0xFF`) → Defect D9 | defect (D9) |
 | `cl_network.c` `CL_ConnectionlessPacket` `Cmd_Argv(1)` | tokenized | `strtol` → `cls.challenge`; echoed | numeric / `Netchan_OutOfBandPrint` with fixed format | ok |
 | `cl_network.c` `cmd` connectionless | `MSG_ReadString` | `Cbuf_AddText` | gated on `NET_IsLocalAddress` | ok (by design for local) |
 | `cl_main.c` `CL_ParseStatusMessage` → `M_AddToServerList` | `MSG_ReadString` | `Q_strlcpy` into `local_server_names[]` | `m_num_servers == MAX_LOCAL_SERVERS` guard; `Q_strlcpy` truncates | ok |
-| `cl_screen.c` `SCR_ExecuteLayoutString` stat indices | `COM_Parse`+`strtol` of a configstring | `stats[index]`, `configstrings[CS_IMAGES+value]`, `clientinfo[value]` | each checked (`index` vs `MAX_STATS`, `value` vs `MAX_IMAGES`/`MAX_CLIENTS`/`MAX_CONFIGSTRINGS`) | ok |
+| `cl_screen.c` `SCR_ExecuteLayoutString` `"pic"`/`"stat_string"`/`"if"` stat index | `COM_Parse`+`strtol` of the layout | `stats[index]` | `index < 0 \|\| index >= MAX_STATS` rejected in each | ok |
+| `cl_screen.c` `SCR_ExecuteLayoutString` `"pic"` `configstrings[CS_IMAGES + value]` | `value = stats[index]` (server `short`) | configstring row, then picture name | only `value >= MAX_IMAGES` rejected; **negative `value` passes** → Defect D8 | defect (D8) |
+| `cl_screen.c` `SCR_ExecuteLayoutString` `"stat_string"` `configstrings[value]` | `stats[index]` | configstring row | `value < 0 \|\| value >= MAX_CONFIGSTRINGS` rejected | ok |
+| `cl_screen.c` `SCR_ExecuteLayoutString` `"client"`/`"ctf"` `clientinfo[value]` | `strtol` of the layout | clientinfo index | `value < 0 \|\| value >= MAX_CLIENTS` rejected; `ctf` `sprintf` into `block[80]` with `%3d %3d %-12.12s`: two `int` fields of at most 11 characters each plus a 12-character name, under 80 | ok |
 | `cl_screen.c` `SCR_ExecuteLayoutString` `"num"` → `stats[strtol(token)]` | layout number | `stats[...]` index | **unchecked** index into `stats[MAX_STATS]` → Defect D3 | defect (D3) |
 | `cl_screen.c` `DrawHUDStringScaled` `line[width++]` | `COM_Parse` token chars to `\n` | index into `line[1024]` | no bound on `width` in the function; its only live callers (`cstring`, `cstring2` layout tokens) pass a `COM_Parse` token, at most `MAX_TOKEN_CHARS - 1` = 1023 characters, so `line[1023]` is the furthest write | hardening (D4, not reachable today) |
 | `cl_entities.c` `CL_AddPacketEntities` `cl.model_draw[s1->modelindex]` (and `modelindex2/3/4`) | modelindex bytes | model pointer | no explicit check; `CL_ParseDelta` reads each with `MSG_ReadByte`, so 0..255 against `model_draw[MAX_MODELS]` (256); `-1` only on a short read, which drops the connection before the frame is used (see D5) | ok (by the byte type; H2) |
 | `cl_entities.c` `ci = &cl.clientinfo[s1->skinnum & 0xff]` | skinnum | clientinfo index | masked `& 0xff`, `MAX_CLIENTS == 256` | ok |
+| `cl_entities.c` custom weapon `ci->weaponmodel[s1->skinnum >> 8]` | skinnum (`int`, byte/short/long on the wire) | model pointer | only `i > MAX_CLIENTWEAPONMODELS - 1` rejected; **negative `i` passes** → Defect D10 | defect (D10) |
+| `cl_entities.c` `ent.skinnum = s1->skinnum` → `gl1_mesh.c`/`gl3_mesh.c` `currentmodel->skins[skinnum]` | skinnum | image pointer | only `skinnum >= MAX_MD2SKINS` tested; **negative passes** → Defect D10 (`sw_alias.c` tests both sides) | defect (D10) |
+| `cl_entities.c` beam `ent.skinnum = (s1->skinnum >> (...)) & 0xff` → `d_8to24table[e->skinnum & 0xFF]` | skinnum | palette index | masked at both ends | ok |
+| `cl_entities.c` `ent.frame = s1->frame` → `files/surf.c` `R_TextureAnimation` `frame % numframes` | frame (signed short) | count of `tex->next` steps | **negative frame gives a negative count**; the loop runs about 2^32 steps or reaches `NULL` → Defect D11 (alias models test both sides) | defect (D11) |
+| `cl_entities.c` `cl.model_draw[ps->gunindex]` | `gunindex` (`MSG_ReadByte` in `CL_ParsePlayerstate`) | gun model | 0..255 by the byte type vs `MAX_MODELS` | ok (by the byte type) |
 | `cl_entities.c` `bfg_lightramp[s1->frame]` | frame (`U_FRAME8` byte or `U_FRAME16` signed short) | index into `static int[6]` | reached when `effects & EF_BFG` is set without `EF_ANIM_ALLFAST`; **no check on either side** → Defect D5 | defect (D5) |
 | `cl_prediction.c` `cl.model_clip[ent->modelindex]` | modelindex byte | clip model | reached when `ent->solid == 31`; 0..255 by the byte type against `model_clip[MAX_MODELS]` | ok (by the byte type; H2) |
 | `sound/sound.c` `S_BuildSoundList` `sounds[i]` | loop to `num_entities` | write into caller `sounds[MAX_EDICTS]` | bound is `i <= MAX_CL_ENTNUM` (32767), **not `MAX_EDICTS` (1024)** → Defect D1 | defect (D1) |
@@ -120,11 +132,11 @@ index or size without a check, that is the bug to look for.
 
 | Site (file / function / expr) | Reads | Used as | Check | Verdict |
 |---|---|---|---|---|
-| `sv_main.c` `SV_ReadPackets` `*(int*)net_message.data == -1` | first 4 bytes | connectionless test | `NET_GetPacket` guarantees `cursize >= 1`; read of 4 bytes of a `MAX_MSGLEN` buffer — Hardening H5 (runt connectionless) | hardening |
+| `sv_main.c` `SV_ReadPackets` `*(int*)net_message.data == -1` | first 4 bytes | connectionless test | `cursize` can be 0..1399 (`NET_GetPacket` accepts a zero-length datagram); the 4 bytes are always inside the 1400-byte buffer, stale for a datagram shorter than 4 bytes; a stale marker only sends an empty string to `SV_ConnectionlessPacket` | ok (in bounds) |
 | `sv_main.c` `SV_ReadPackets` qport | `MSG_ReadShort & 0xffff` | client match | value only compared | ok |
 | `sv_user.c` `SV_ExecuteClientMessage` `c` | `MSG_ReadByte` | `switch`; `default` drops | `readcount > cursize` tested each loop; `c == -1` ends | ok |
 | `sv_user.c` clc_userinfo `MSG_ReadString` | string | `Q_strlcpy` into `cl->userinfo[MAX_INFO_STRING]` then `SV_UserinfoChanged` | truncates; `SV_UserinfoChanged` masks name high bit, clamps rate | ok |
-| `sv_user.c` clc_move `checksum` | `MSG_ReadByte` | compared to `COM_BlockSequenceCRCByte(... readcount-checksumIndex-1 ...)` | CRC length clamped to 60 inside; mismatch returns | ok |
+| `sv_user.c` clc_move `checksum`, CRC over `net_message.data + checksumIndex + 1` | `MSG_ReadByte`; CRC length `readcount - checksumIndex - 1` | compared to `COM_BlockSequenceCRCByte(...)` | length clamped to 60 inside, but **computed before any `readcount > cursize` test**: a `clc_move` at the end of a full-size packet reads up to 55 bytes past `net_message_buffer` → Defect D12 | defect (D12) |
 | `sv_user.c` clc_move `lastframe` | `MSG_ReadLong` | `cl->frames[lastframe & UPDATE_MASK]`, `frame_latency[lastframe & (LATENCY_COUNTS-1)]` | both masked; only read when `lastframe > 0` | ok |
 | `sv_user.c` clc_move `net_drop = cl->netchan.dropped` | from netchan | loop count of `SV_ClientThink` | `net_drop < 20` guard | ok |
 | `sv_user.c` clc_move usercmds | `MSG_ReadDeltaUsercmd` ×3 | `SV_ClientThink` | `msec` consumed as time; `commandMsec` underflow guarded by `sv_enforcetime` | ok |
@@ -135,7 +147,7 @@ index or size without a check, that is the bug to look for.
 | `sv_conless.c` `SVC_DirectConnect` `version`/`qport`/`challenge` | `Cmd_Argv`→`strtol` | compared / stored | version and challenge checked; qport stored | ok |
 | `sv_conless.c` `SVC_DirectConnect` userinfo | `Cmd_Argv(4)` | `Q_strlcpy` into `userinfo[MAX_INFO_STRING]`; `Info_SetValueForKey` | truncates; `Info_SetValueForKey` validates | ok |
 | `sv_conless.c` `SVC_Info` `version` | `Cmd_Argv(1)`→`strtol` | compared; `Com_sprintf(string, 64, ...)` | **bug-adjacent**: wrong-version branch calls `Com_sprintf(string, sizeof(string), "%s: wrong version\n", hostname->string, sizeof(string))` — extra arg, benign; Hardening H6 | hardening |
-| `sv_conless.c` `SVC_RemoteCommand` `net_message.data + 4` | raw packet tail | `Com_Printf("%s", ...)` of unvalidated bytes | printed as `%s`; relies on `MSG_ReadStringLine` having been tokenized first; data is NUL-terminated within `MAX_MSGLEN` buffer — Hardening H5 | hardening |
+| `sv_conless.c` `SVC_RemoteCommand` `net_message.data + 4` | raw packet tail | `Com_Printf("%s", ...)` before the password check | **nothing NUL-terminates the receive buffer**; the print can run past `net_message_buffer` → Defect D13 | defect (D13) |
 | `sv_conless.c` `SVC_RemoteCommand` args | `Cmd_Argv(i)` | `Q_strlcat` into `remaining[1024]`; `Cmd_ExecuteString` | `Q_strlcat` bounded; gated on `Rcon_Validate` password | ok (rcon by design) |
 | `sv_conless.c` `SV_ConnectionlessPacket` `s` | `MSG_ReadStringLine` | `Cmd_TokenizeString` | string bounded 2048; tokenizer bounded | ok |
 | `sv_main.c` `SV_UserinfoChanged` `Info_ValueForKey(userinfo,"rate")` | userinfo value | `strtol` → clamped 100..15000 | clamped | ok |
@@ -337,6 +349,158 @@ but this turns that into stack memory corruption in the game module; the
 scale rates operator-only memory corruption medium. Fix: bound `j` to
 `sizeof(num) - 1` (reject the address if an octet is longer).
 
+### D8: the `"pic"` layout token indexes `configstrings[]` with a negative server stat (high, high confidence) [FIX13 (#109)]
+
+The `"pic"` handler in `SCR_ExecuteLayoutString` (`cl_screen.c`) bounds its
+parsed stat index to `0..MAX_STATS - 1`, then reads `value =
+cl.frame.playerstate.stats[index]` and tests only `value >= MAX_IMAGES`
+before using `cl.configstrings[CS_IMAGES + value]`. `stats[]` is
+`short[MAX_STATS]`, filled by `CL_ParsePlayerstate` with `MSG_ReadShort`, so
+the server chooses any value in -32768..32767. With `CS_IMAGES` = 544, a
+negative stat below -544 indexes `cl.configstrings` (64-byte rows) up to
+about 2 MB before the array. The row is first tested for a non-empty string
+and then passed as a picture name to `Draw_GetPicSize` and `Draw_PicScaled`,
+which read it as a NUL-terminated string. Severity high (server-driven
+out-of-bounds read that can fault). Same class as D3 (a layout handler that
+checks one side of a server value). Fix: also reject `value < 0`, as the
+`"stat_string"` handler already does for its stat value.
+
+### D9: server-chosen particle colours above 255 index the software renderer's translucency table out of bounds (high, medium confidence) [CARD_R]
+
+Trace: `CL_ParseTEnt` (`cl_tempentities.c`) reads a colour with
+`MSG_ReadByte` (0..255) for `TE_LASER_SPARKS` and `TE_WELDING_SPARKS`
+(passed to `CL_ParticleEffect2`, `cl_particles.c`) and for `TE_STEAM`
+(`CL_ParseSteam`, passed to `CL_ParticleSteamEffect` or stored for the
+sustained `CL_ParticleSteamEffect2`, `cl_effects.c`). Each of those sets
+`p->color = color + (randk() & 7)`, so a particle's colour reaches 262. No
+step masks it: `CL_AddParticles` passes it to `V_AddParticle`
+(`cl_view.c`), which stores it in `particle_t.color` (`int`), and the
+refresh module receives it in `refdef.particles`.
+
+Sinks:
+
+- Software renderer, `R_DrawParticle` (`sw_part.c`): for 33% particles it
+  reads `vid_alphamap[color + (pdest << 8)]` and for 66% particles
+  `vid_alphamap[(color << 8) + pdest]`, with no mask (the opaque case only
+  writes `color` into a byte pixel, which truncates). `vid_alphamap` is
+  `vid_colormap + 64 * 256` (`sw_main.c`), and `vid_colormap` is the
+  `pics/colormap.pcx` image as loaded by `LoadPCX`, a heap block of exactly
+  width times height bytes.
+- OpenGL 1 renderer, `R_DrawParticles2` (`gl1_main.c`), the path used when
+  point parameters are unavailable or stereo split is on: reads
+  `colortable[p->color]` with `colortable = d_8to24table`, a static
+  `unsigned[256]`, unmasked. The point-sprite path in the same file and the
+  OpenGL 3 renderer mask with `& 0xFF`.
+
+Assumption about the table extent: the stock `colormap.pcx` is 256 by 320
+pixels (81920 bytes), 64 light-level rows followed by the 256 by 256
+translucency table, so `vid_alphamap` ends exactly at the end of the heap
+block. `LoadPCX` does not check the image size, so the code itself guarantees
+no extent; with the stock file, a colour of 256..262 reads up to 1792 bytes
+past the end of the block in the 66% case and up to 7 bytes in the 33% case,
+and gl1 reads up to 7 entries (28 bytes) past `d_8to24table`. The values read
+become pixel colours (seen only by the victim). Whether the 66% read faults
+depends on where the allocator places the block (an 80 KB block can end at a
+page boundary).
+
+Hostile input: a temporary entity of one of those three types with a colour
+byte above 248. Stock game code sends fixed colours below 249, so normal
+play is unaffected. Severity high by the scale (server-driven heap
+out-of-bounds read that can fault); confidence medium because the fault
+depends on allocator placement. Fix: mask the colour with `& 0xFF` where the
+renderers consume it (as gl3 and the gl1 point path already do), or at
+`V_AddParticle`.
+
+### D10: a negative entity `skinnum` passes one-sided checks into `weaponmodel[]` and the GL model skin arrays (high, high confidence) [CARD_R]
+
+`entity_state_t.skinnum` is an `int` read by `CL_ParseDelta` as a byte, a
+signed short, or (with both `U_SKIN8` and `U_SKIN16`) a full signed long, so
+the server can send any negative value.
+
+- `CL_AddPacketEntities` (`cl_entities.c`), custom weapon path
+  (`modelindex2 == 255`): `i = (s1->skinnum >> 8)` is tested only with
+  `i > MAX_CLIENTWEAPONMODELS - 1` before `ent.model = ci->weaponmodel[i]`
+  (`ci` is `&cl.clientinfo[s1->skinnum & 0xff]`, which is in range). A
+  negative `skinnum` gives a negative `i`, which reads a pointer up to about
+  64 MB before the array; it is handed to the renderer as a model and
+  dereferenced there.
+- Normal entity path (`modelindex != 255`, not a beam): `ent.skinnum =
+  s1->skinnum`. The OpenGL 1 and 3 alias-model code (`gl1_mesh.c`,
+  `gl3_mesh.c`) select `currentmodel->skins[currententity->skinnum]` after
+  testing only `skinnum >= MAX_MD2SKINS`; a negative value reads an image
+  pointer before the `skins[MAX_MD2SKINS]` array inside the model, and the
+  renderer then uses it as an image. The software renderer (`sw_alias.c`)
+  tests both `skinnum >= num_skins` and `skinnum < 0`.
+
+Severity high (server-driven out-of-bounds pointer read, then a wild pointer
+dereference: crash at least). Fix: reject or zero a negative `i` in the
+custom-weapon path and add the `< 0` test to the two GL skin selections, as
+`sw_alias.c` already has.
+
+### D11: a negative brush-entity `frame` makes `R_TextureAnimation` walk the texture chain about 2^32 times (high, high confidence) [CARD_R]
+
+On the normal path of `CL_AddPacketEntities` (no `EF_ANIM*` effect) the
+entity's `ent.frame` is `s1->frame`, a server-chosen value that can be
+negative (`U_FRAME16` signed short). For a brush model (an inline `*N` model
+from the server's own map) the OpenGL 1 and 3 surface code calls
+`R_TextureAnimation` (`src/client/refresh/files/surf.c`) for every surface
+with an animated texture: `c = currententity->frame % tex->numframes; while
+(c && tex) { tex = tex->next; c--; }`. In C the remainder of a negative frame
+is zero or negative, so `c` starts below zero and the loop decrements it away
+from zero: on the circular animation chain built by `Mod_LoadTexinfo` it runs
+until `c` wraps (signed overflow, undefined behaviour; in practice about 2^32
+iterations per surface per rendered frame), freezing the client; on a chain
+that ends in `NULL` it stops with `tex == NULL` and then dereferences it.
+The alias-model paths are not affected: they test `frame` and `oldframe`
+against `0..num_frames - 1` on both sides. Severity high (remote hang or
+crash). Same class as D10 (a server entity field reaching a renderer with a
+one-sided assumption). Fix: treat a negative frame as 0, either in
+`R_TextureAnimation` or where `ent.frame` is set.
+
+### D12: a truncated `clc_move` makes the command checksum read past `net_message_buffer` (low, high confidence) [CARD_S]
+
+In `SV_ExecuteClientMessage` (`sv_user.c`) the `clc_move` case records
+`checksumIndex = net_message.readcount`, reads the checksum byte, a long and
+three `MSG_ReadDeltaUsercmd`, then (for a client in `cs_spawned`) computes
+`COM_BlockSequenceCRCByte(net_message.data + checksumIndex + 1,
+net_message.readcount - checksumIndex - 1, ...)` before the loop's
+`readcount > cursize` test runs. On a short read `MSG_ReadByte` returns `-1`,
+so each delta usercmd's bit mask has every field bit set and advances
+`readcount` by its maximum of 17 bytes; the long adds 4. If the `clc_move`
+byte is the last byte of the message, the CRC input starts one byte past the
+message end and is 55 bytes long (below the 60-byte clamp in
+`COM_BlockSequenceCRCByte`), so `memcpy` reads up to
+`net_message.data + cursize + 55`. With a datagram of the largest accepted
+size (1399 bytes, `NET_GetPacket` drops one of `MAX_MSGLEN`) that is up to 55
+bytes past the 1400-byte static `net_message_buffer` (`netchan.c`). The
+result is only compared with the checksum byte, which is `-1` after a short
+read and never matches, so the packet's moves are discarded and nothing read
+is returned. Reachable by any spawned client. Severity low (read of adjacent
+static memory, result only compared). Fix: test `net_message.readcount >
+net_message.cursize` (and drop) before computing the checksum.
+
+### D13: `SVC_RemoteCommand` prints the raw packet with `%s` before the password check, and nothing NUL-terminates it (low, high confidence) [CARD_S]
+
+`SVC_RemoteCommand` (`sv_conless.c`) logs every rcon attempt with
+`Com_Printf("...%s\n", ..., net_message.data + 4)`, whether or not
+`Rcon_Validate` accepts the password. `net_message.data` is the static
+1400-byte `net_message_buffer`; `NET_GetPacket` (`backends/unix/network.c`)
+writes the datagram with `recvfrom` and sets `cursize`, and nothing writes a
+terminator after it (the tokenizer works on the copy that
+`MSG_ReadStringLine` made, not on the buffer). The bytes after `cursize` are
+left over from earlier datagrams; an oversize datagram, although dropped,
+still fills the whole buffer. So an unauthenticated peer can send an rcon
+datagram without a NUL after one that filled the buffer, and the print runs
+past the end of `net_message_buffer` into the static memory that follows
+until it meets a zero byte. The output goes to the server console and log,
+not to the peer (the redirect to the sender starts after the print).
+Severity low (out-of-bounds read of adjacent static memory, logged locally).
+This replaces the earlier hardening note H5, which said both that the buffer
+was NUL-terminated and that the print relied on it. Fix: print at most
+`cursize - 4` bytes (`%.*s`), or terminate the received data in
+`NET_GetPacket` (receive at most `maxsize - 1` bytes and store a NUL at
+`cursize`).
+
 ## Hardening (low severity, optional)
 
 - H1 `COM_Parse`: on a token of exactly `MAX_TOKEN_CHARS` it resets `len` to 0,
@@ -352,11 +516,9 @@ scale rates operator-only memory corruption medium. Fix: bound `j` to
 - H4 `CL_AddMuzzleFlash2`: `flash_number > 210` is rejected though the table has
   216 entries (211..215 are valid); harmless, but the constant should match the
   table size.
-- H5 connectionless runt: `SV_ReadPackets` reads `*(int*)net_message.data`
-  after `NET_GetPacket` guarantees only `cursize >= 1`; a 1–3 byte datagram
-  reads up to 3 bytes of the fixed `MAX_MSGLEN` buffer (initialised, no OOB) —
-  benign but reads uninitialised tail. `SVC_RemoteCommand` prints
-  `net_message.data + 4` as `%s` relying on NUL-termination within the buffer.
+- H5: withdrawn. The `SVC_RemoteCommand` print is a defect (D13); the
+  `SV_ReadPackets` runt read stays inside the buffer and is recorded as ok in
+  the server table.
 - H6 `SVC_Info`: the wrong-version `Com_sprintf` passes an extra `sizeof`
   argument that the format ignores; cosmetic, no overflow.
 
