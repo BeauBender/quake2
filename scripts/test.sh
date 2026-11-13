@@ -21,6 +21,10 @@
 # two targets takes a few seconds; the suite builds and runs in a few more.
 set -eu
 
+# MAKEFLAGS=-i or -n from the environment would turn a failing or empty run
+# into success; the command-line overrides below are kept.
+unset MAKEFLAGS GNUMAKEFLAGS MFLAGS
+
 cd "$(dirname "$0")/.."
 
 for check in tests/check-*.sh; do

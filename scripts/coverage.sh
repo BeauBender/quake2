@@ -23,6 +23,10 @@
 #        CC=gcc scripts/coverage.sh     (pick the compiler, as for make)
 set -eu
 
+# MAKEFLAGS=-i or -n from the environment would turn a failing or empty run
+# into success; the command-line overrides below are kept.
+unset MAKEFLAGS GNUMAKEFLAGS MFLAGS
+
 cd "$(dirname "$0")/.."
 
 jobs=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
