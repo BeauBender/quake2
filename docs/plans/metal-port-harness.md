@@ -27,6 +27,7 @@ renderer is judged with it, and what the first run on real data found.
 | Scenarios, one per feature | `scripts/pins/scenarios/*.cfg` | all four run on `soft` (TASK39) |
 | Argument limit raised: `MAX_NUM_ARGVS` in `src/common/argproc.c` is 128 (was 50); `record` passes 66 to 69 words and the engine refused more than 50 at startup | `scripts/pins.sh selftest` case `argcount` and `tests/check-pins-latch.sh` feed every scenario's command line to the real `COM_InitArgv` | green in `scripts/test.sh`; the engine accepts 69 words (TASK39) |
 | Renderer-API record serializers and the 22 wrapper hooks in `vid.c`, recording off | `src/client/vid/refrecord.c`, `src/client/vid/header/refrecord.h`, `tests/check-refrecord.sh` | every record type round-trips through a buffer in `tests/check-refrecord.sh` (green in `scripts/test.sh`); observed on one host: the `world` scenario recorded on `soft` with a build of the base commit and with a build of the hooks gave 23 frames each, and all 23 frame files and the manifest compared byte-identical with `cmp` (TASK42) |
+| Renderer-API recording behind `pins_record`: handle map, `refdef_t` deep copy, string table, frame index, header patched at stop | `RefRec_*` recorder in `src/client/vid/refrecord.c`, `VID_StartRecord` in `src/client/vid/vid.c`, `pins_record` in `CL_PinsLatch`, `pins.sh record` (`PINS_TRACE=0` for none) | `tests/check-refrecord.sh` records traces and reads them back whole, failure paths included; observed on one host: `world` and `hud2d` on `soft` each left a 707-frame trace (about 4.4 MB) with 23 `REC_CAPTURE` records for the 23 frames captured, a 162-entry string table equal to the 162 distinct names a debug listing of the registration wrappers logged, and frames byte-identical (`cmp`) to a run with `PINS_TRACE=0` (TASK43) |
 | Gate checks, no game data needed | `tests/check-pins.sh`, `tests/check-pins-latch.sh` | green in `scripts/test.sh` |
 
 The client and `ref_soft` link and run on macOS arm64 against SDL3
@@ -34,14 +35,15 @@ The client and `ref_soft` link and run on macOS arm64 against SDL3
 and `ref_gl3` build there too; `gl1` references are card P3's.
 
 In the tree from the renderer-API recorder (design in
-`docs/plans/refapi-record-replay.md`): the record serializers and the wrapper
-hooks, with recording off. Not in the tree from TASK27: the handle map, the
-`refdef_t` deep copy, recording and replay (including `pins.sh replay`), the
+`docs/plans/refapi-record-replay.md`): the record serializers, the wrapper
+hooks and recording (`pins_record`: handle map, `refdef_t` deep copy, string
+table, frame index). Not in the tree from TASK27: replay (including
+`pins.sh replay`), the cvar snapshot contents and the fixed `randk` seed, the
 sky-and-water and cinematics scenarios, and every reference frame.
 
 ## Pin arguments
 
-`pins_dir`, `pins_scenario` and `pins_capture` look like cvars but are not:
+`pins_dir`, `pins_scenario`, `pins_capture` and `pins_record` look like cvars but are not:
 the engine reads them once from its own command line, exactly as
 `+set <name> <value>`, before any config file runs, and keeps them where
 nothing else can change them. A `set` of these names from a config file,
@@ -61,6 +63,11 @@ the user-facing description.
   engine quits. If the requested renderer fails to load, the engine stops
   with an error instead of falling back to another one. `0`, the default,
   disables all three.
+- `pins_record <name>`: the first renderer session of the run is recorded
+  to `<pins_dir>/<name>`, a plain file name (`[A-Za-z0-9_][A-Za-z0-9_.-]*`,
+  no `..`, no directory). `pins.sh record` passes `trace.q2r`, so the trace
+  lies beside the frames; `PINS_TRACE=0` records none. The trace embeds
+  data derived from the game data (INFORM9) and is never committed.
 
 A refused value turns the harness off and suppresses every screenshot
 write. With none of them given the engine behaves as before.

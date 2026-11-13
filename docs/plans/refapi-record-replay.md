@@ -78,9 +78,37 @@ meanings; copying verbatim preserves that. `backlerp`, `alpha`, `lightstyle`,
 Per typical frame: ~11.3 KB of state plus the 2D stream (HUD: ~40 draw
 records at 32 B = 1.3 KB). Worst case with 4096 particles: ~97 KB.
 
+As built (TASK43). Every size the recorder copies comes from the source's
+own declaration: `areabits` 32 bytes from `cl.frame.areabits[MAX_MAP_AREAS/8]`
+(a compile-time check ties the two), `lightstyles` from
+`r_lightstyles[MAX_LIGHTSTYLES]`, the palette 768 bytes from
+`cl.cinematicpalette[768]`, the raw pixels `cols*rows*(bits/8)` as
+`cl_cin.c` allocates them. The engine is the source here, not a file, so
+a count outside `0..MAX_*` is recorded clamped to the maximum with a
+`REC_WARN` (`REFREC_WARN_COUNT`) instead of refused, a NULL array with a
+nonzero count is recorded empty, and NULL `lightstyles` as zeros, each with
+a `REC_WARN` (`REFREC_WARN_NULL_ARRAY`). A NULL entity model is id 0
+without a warning (beams carry none). An entity skin is looked up as a skin
+first, then as a pic (the same image can come from either). The same
+pointer and name always map to the same id; the same pointer under a new
+name (memory the renderer reused after `EndRegistration`) gets a new id.
+A failed registration (NULL handle) is recorded with id 0 and has no string
+table entry. Measured on `soft`: about 6.2 KB per 3D frame on demo1.
+
 ## 3. On-disk format
 
 One file per record run, `<store>/<scenario>/<renderer>/<sha>-<hash>/trace.q2r`.
+As built (TASK43), the engine writes `<pins_dir>/<pins_record>`, where
+`pins_record` is a plain file name latched from the command line like the
+other pin arguments, and `pins.sh record` passes `trace.q2r`; only the
+first renderer session of a run is recorded, so a renderer restart never
+overwrites the trace. `engine_sha` (the first 16 bytes of the engine part)
+and `scenario_hash` are parsed from the pin directory's name,
+`<engine>-<scenario hash>[-r<N>]`; another name leaves them zero. `flags`
+bit 0 (`REFREC_FLAG_TRUNCATED`) marks a trace a recorder limit ended
+early. The header is written first with zero offsets and counts and
+patched last, so a trace with `string_table_offset` 0 was never finished
+(the engine died, or a write failed).
 
 - Header (64 B): magic `Q2REFREC`, `u32 version = 1`, `u32 api_version`
   (8), `u32 flags`, `u32 string_table_offset`, `u32 frame_index_offset`,
@@ -98,12 +126,41 @@ One file per record run, `<store>/<scenario>/<renderer>/<sha>-<hash>/trace.q2r`.
   depend on the compiler's layout.
 - String table at `string_table_offset`: `u32 count`, then
   `u32 kind (model|skin|pic|sky|map), u32 id, char name[MAX_QPATH]`.
-  Written at `VID_ShutdownRenderer`, so the header is patched last.
+  Written at `VID_ShutdownRenderer`, so the header is patched last. As
+  built: kinds are `refrec_kind_t` 1 to 5, ids run 1 to `count` in order
+  (0 is "no handle"), each name is NUL-terminated inside its 64 bytes and
+  zero after (a longer name is cut in the table, with a `REC_WARN`; the
+  registration record keeps it whole), sky and map entries are kept once
+  per name, and at most `REFREC_MAX_HANDLES` (8192) entries.
 - Frame index after the string table: `u32 frame, u64 offset` per frame so
   a replay can seek to any frame and a compare can report by frame number.
+  As built: one entry per complete frame (a `REC_BEGINFRAME` closed by a
+  `REC_ENDFRAME`), `frame` counting 0, 1, 2, ..., `offset` the file offset
+  of that `REC_BEGINFRAME`. `frame_count` is the number of rendered frames
+  (707 for demo1), not the number captured: the live run captures every
+  Nth frame of demo playback only (`SCR_PinsCapture`), so the frames before
+  playback are recorded but never captured. Where each pin frame was taken
+  is a `REC_CAPTURE` record (added by TASK43, type 23, `int` pin frame
+  number), written by `VID_WritePinFrame` inside the frame, before
+  `REC_ENDFRAME`; there is one per frame file and their numbers run 0, 1,
+  2, ... like the file names.
+- Streaming and limits (TASK43): each record is built in one buffer and
+  written at once, so the recorder holds one record (at most a full
+  `REC_RENDERFRAME`, about 97 KB; `Draw_StretchRaw` pixels are written from
+  the caller's buffer), the handle map (about 0.7 MB) and the frame index
+  (12 bytes a frame, at most `REFREC_MAX_FRAMES`, 2^20). Records are
+  limited to `REFREC_MAX_TRACE` (1 GiB), which keeps every offset far below
+  4 GiB. Reaching either limit finishes the trace with what it holds and
+  sets `REFREC_FLAG_TRUNCATED`; a failed write or seek ends the recording
+  at once, reported once through `Com_Printf`, and leaves the trace
+  unfinished. Neither stops the game. A `Draw_StretchRaw` the format cannot
+  carry (a side over `REFREC_MAX_RAW_DIM`, `bits` not 8 or 32, no pixels) is
+  a `REC_WARN` (`REFREC_WARN_RAW_TOO_BIG`) in place of the draw.
 
 Size: ~13 KB per typical frame; a 1000-frame scenario is ~13 MB, under
 the store, never committed (INFORM9: it embeds asset-derived data).
+Measured (TASK43, `soft`, 640x480, demo1): `world` 4,378,708 bytes and
+`hud2d` 4,406,852 bytes for 707 frames, about 4.4 MB per default run.
 
 ## 4. Replay driver
 
@@ -122,8 +179,9 @@ the store, never committed (INFORM9: it embeds asset-derived data).
    `lightstyle_t[256]`, `byte areabits[32]`), `R_RenderFrame(&fd)`, the 2D
    records in order, `R_EndWorldRenderpass` where it was recorded,
    `R_EndFrame`.
-4. Frames whose index is a multiple of the recorded `pins_capture` cadence
-   run the `screenshot` command synchronously before `R_EndFrame`, the same
+4. Where the trace holds a `REC_CAPTURE` record (TASK43; not every frame
+   whose index is a multiple of the cadence, since the live count starts
+   with demo playback), run the `screenshot` command synchronously before `R_EndFrame`, the same
    place the live run captures (`SCR_PinsCapture`; gl1's `R_ScreenShot`
    reads the back buffer at command time), so `VID_WritePinFrame` writes them to
    `pins_dir` with the same frame numbering.
@@ -223,10 +281,15 @@ instead, because `RefRec_Registration(t, name, handle)` and
 the palette bytes); `R_RenderFrame` → `RefRec_RenderFrame(fd)` before
 forwarding; every `Draw_*` → `RefRec_Draw`; `R_BeginFrame`,
 `R_EndWorldRenderpass`, `R_EndFrame` → `RefRec_Control`. Each is one block
-guarded by `RefRec_Recording()`. `RefRec_StartRecord` is not called from
-vid.c yet: the next card calls it from the session-open point in
-`VID_LoadRenderer`, before the `REC_CVARS` snapshot and outside the
-`RefRec_Recording()` guard, since recording is off until it has run.
+guarded by `RefRec_Recording()`. `RefRec_StartRecord` is called (TASK43)
+through `VID_StartRecord` at the session-open point in `VID_LoadRenderer`,
+after `re.Init()` succeeds (so `viddef` holds the size), before the
+`REC_CVARS` snapshot and outside the `RefRec_Recording()` guard, since
+recording is off until it has run. `VID_WritePinFrame` carries one more
+guarded hook, for `REC_CAPTURE`. The `REC_CVARS` record is written empty
+(count 0) until TASK45 fills it. The recorder reports through
+`RefRec_SetPrint` (set to `Com_Printf`; stderr in the test), so refrecord.c
+still calls nothing else in the engine.
 New cvars: `pins_record <path>` (recorder on), `pins_replay <path>`
 (replayer on), both documented in `doc/040_cvarlist.md` or
 `tests/check-cvar-docs.sh` fails.
@@ -245,16 +308,24 @@ record and replay, and are not implemented yet.
 - `refrec_call_t.data` points into the reader's buffer after a read; the
   replayer keeps that buffer alive and unmodified until the call has been
   forwarded.
-- The recorder copies names bounded and NUL-terminated, and handles a NULL
-  name (several hooks pass none). It treats a writer whose `ok` is false as
-  the end of the recording, not as one skipped record. It needs a defined
-  behaviour for a `Draw_StretchRaw` image above `REFREC_MAX_RAW_DIM` in
-  either dimension, which the writer refuses (a `REC_WARN`, not a dead
-  writer).
-- The `Draw_GetPicSize` hook reads `*w` and `*h` after forwarding, and the
-  `Draw_PicScaledCol` hook reads `color[0..2]` before the existing NULL test
-  of `re.DrawPicScaledCol`; both are dereferences the base wrappers did not
-  make and must be made safe when recording is switched on.
+- Done in TASK43: the recorder copies names bounded and NUL-terminated
+  (a NULL name is recorded empty, a longer one cut, each with a
+  `REC_WARN`). It treats a writer whose `ok` is false as the end of the
+  recording, not as one skipped record. A `Draw_StretchRaw` image above
+  `REFREC_MAX_RAW_DIM` in either dimension is a `REC_WARN`, not a dead
+  writer.
+- Done in TASK43: the `Draw_GetPicSize` hook reads `*w` and `*h` only when
+  the pointers are not NULL, and the `Draw_PicScaledCol` hook reads
+  `color[0..2]` only when `color` is not NULL; without one it passes the
+  factor alone and the recorder writes white with a `REC_WARN`.
+- For TASK44: the replayer captures at `REC_CAPTURE` records, not at a
+  frame-number cadence (section 4), walks the frame index rather than
+  assuming every record belongs to a frame (a truncated trace can end with
+  an unterminated frame after the last indexed one), refuses a trace whose
+  `string_table_offset` is 0, and reads the string table and frame index
+  with `RefRec_ReadStringTable`, `RefRec_NextString` and
+  `RefRec_NextFrameIndex`. The test tool `refrecord-test --read <trace>`
+  already walks a whole trace that way and prints counts.
 
 ## 6. Sub-cards, in dependency order
 
@@ -264,7 +335,7 @@ list below is the detailed scope behind its rows.
 | Card | Scope | Acceptance (one line) |
 |---|---|---|
 | TASK27a | `refrecord.h` + `refrecord.c` with serializers only; every vid.c wrapper gains its guarded one-liner; `pins_record` unset | Byte-identical frames to the unhooked build on the `world` scenario, `scripts/test.sh` green, `tests/check-refrecord.sh` round-trips every record type through a buffer |
-| TASK27b | Recording: handle map, `refdef_t` deep copy, string table, frame index, header patch | `pins.sh record gl1 world` with `pins_record` set leaves a `trace.q2r` whose frame count equals the captured frame count and whose string table names every model, skin and pic the engine logged |
+| TASK27b | Recording: handle map, `refdef_t` deep copy, string table, frame index, header patch | `pins.sh record gl1 world` with `pins_record` set leaves a `trace.q2r` whose frame count equals the captured frame count and whose string table names every model, skin and pic the engine logged (as built, TASK43: the captured frames are its `REC_CAPTURE` records, one per frame file; `frame_count` counts every rendered frame) |
 | TASK27c | Replay driver `CL_PinsReplay()` behind `pins_replay`, registration from the string table, frame feed, capture at the recorded cadence, quit | `pins.sh replay gl1 world` produces the same number of frames as the live record without the server or a demo file |
 | TASK27d | Determinism: cvar snapshot and restore, fixed `randk` seed behind the cvar, `refdef_t.time` check | `framediff` scores 0.000000 on every frame, live vs replay, `gl1` and `soft`, same machine |
 | TASK27e | `scripts/pins.sh replay <renderer> <scenario>` + `compare` across renderers from one trace; doctor row for trace coverage | `pins.sh replay metal world` from the `gl1` trace followed by `compare metal world --ref gl1` runs with the game absent |

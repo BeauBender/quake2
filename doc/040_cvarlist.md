@@ -826,3 +826,18 @@ them given the engine behaves exactly as before.
   ends before its end marker. Needs `pins_dir`. Must be a non-negative
   integer of digits only (no sign, no spaces). `0` (the default)
   disables all of this.
+
+* **pins_record**: When given, every call the client makes into the
+  renderer during the first renderer session of the run is recorded to
+  a trace file of this name inside `pins_dir` (`scripts/pins.sh record`
+  passes `trace.q2r`): registrations with stable ids in place of the
+  renderer's pointers, each `refdef_t` copied in full, every 2D draw,
+  the point of each captured frame, a string table naming the models,
+  skins and pics registered, and a frame index. A renderer restart is not
+  recorded again. The file is streamed to disk; a failed write or a
+  recorder limit (1 GiB of records) ends the recording with one message
+  and the game carries on. The trace embeds data derived from the game
+  data and stays in the pin store. Must be a plain file name matching
+  `[A-Za-z0-9_][A-Za-z0-9_.-]*`, at most 63 characters, without `..`
+  or a directory part. Needs `pins_dir`. Default: not given, nothing
+  is recorded and no file is opened.
