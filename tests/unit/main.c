@@ -1,0 +1,612 @@
+/*
+ * Copyright (C) 2026 Yamagi Quake II contributors
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or (at
+ * your option) any later version.
+ *
+ * =======================================================================
+ *
+ * tests/unit/main.c -- the unit-test runner (see test.h). Replaces
+ * src/backends/unix/main.c in the dedicated server's object list: it
+ * starts the engine's early subsystems the way Qcommon_Init does (zone,
+ * argv, command buffer, commands, cvars, filesystem on a scratch data
+ * directory) and then runs every registered test.
+ *
+ * Usage: yq2test [--update-pins] [--pins DIR] [--verbose] [--list] [NAME...]
+ *   NAME selects the tests whose name contains it (default: all).
+ *
+ * =======================================================================
+ */
+
+#include <errno.h>
+#include <ftw.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include "test.h"
+
+static t_case_t *t_cases;
+static int t_ncases;
+
+static int t_update;
+static int t_verbose;
+static const char *t_pinsdir = "tests/pins/unit";
+static char t_tmp[MAX_OSPATH];
+
+static const t_case_t *t_current;
+static int t_current_failures;
+static jmp_buf t_test_jmp;
+static jmp_buf t_runner_abortframe;
+static int t_pins_written;
+
+/* Console capture: rd_buf is the engine's redirect buffer, flushed into cap. */
+static char t_rd_buf[8192];
+static t_text_t t_cap;
+
+void
+t_register(t_case_t *tc)
+{
+	tc->next = t_cases;
+	t_cases = tc;
+	t_ncases++;
+}
+
+void
+t_fail(const char *file, int line, const char *fmt, ...)
+{
+	va_list ap;
+
+	t_current_failures++;
+	fprintf(stderr, "FAIL %s (%s:%d): ", t_current ? t_current->name : "?", file, line);
+	va_start(ap, fmt);
+	vfprintf(stderr, fmt, ap);
+	va_end(ap);
+	fputc('\n', stderr);
+}
+
+void
+t_abort_test(void)
+{
+	longjmp(t_test_jmp, 1);
+}
+
+void
+t_rearm_abortframe(void)
+{
+	memcpy(abortframe, t_runner_abortframe, sizeof(jmp_buf));
+}
+
+/* ---- text buffers ---- */
+
+void
+t_text_printf(t_text_t *t, const char *fmt, ...)
+{
+	va_list ap;
+	int n;
+
+	for (;;)
+	{
+		size_t avail = t->size - t->len;
+
+		va_start(ap, fmt);
+		n = vsnprintf(t->data ? t->data + t->len : NULL, avail, fmt, ap);
+		va_end(ap);
+
+		if (n < 0)
+		{
+			return;
+		}
+
+		if ((size_t)n < avail)
+		{
+			t->len += n;
+			return;
+		}
+
+		t->size = (t->size + n + 1) * 2;
+		t->data = realloc(t->data, t->size);
+
+		if (!t->data)
+		{
+			fprintf(stderr, "yq2test: out of memory\n");
+			exit(2);
+		}
+	}
+}
+
+void
+t_text_hex(t_text_t *t, const void *data, size_t len)
+{
+	const unsigned char *p = data;
+	size_t i;
+
+	for (i = 0; i < len; i++)
+	{
+		t_text_printf(t, "%02x%s", p[i], ((i % 16) == 15 || i == len - 1) ? "\n" : " ");
+	}
+
+	if (len == 0)
+	{
+		t_text_printf(t, "(empty)\n");
+	}
+}
+
+void
+t_text_free(t_text_t *t)
+{
+	free(t->data);
+	t->data = NULL;
+	t->len = t->size = 0;
+}
+
+/* ---- console capture ---- */
+
+static void
+t_rd_flush(int target, char *buffer)
+{
+	(void)target;
+	t_text_printf(&t_cap, "%s", buffer);
+}
+
+void
+t_console_reset(void)
+{
+	t_rd_buf[0] = '\0';
+	t_cap.len = 0;
+
+	if (t_cap.data)
+	{
+		t_cap.data[0] = '\0';
+	}
+}
+
+const char *
+t_console(void)
+{
+	t_rd_flush(1, t_rd_buf);
+	t_rd_buf[0] = '\0';
+	return t_cap.data ? t_cap.data : "";
+}
+
+/* ---- scratch files ---- */
+
+const char *
+t_tmpdir(void)
+{
+	return t_tmp;
+}
+
+static void
+t_mkdirs(char *path)
+{
+	char *p;
+
+	for (p = path + 1; *p; p++)
+	{
+		if (*p == '/')
+		{
+			*p = '\0';
+			mkdir(path, 0700);
+			*p = '/';
+		}
+	}
+}
+
+void
+t_write_file(const char *relpath, const void *data, size_t len)
+{
+	char path[MAX_OSPATH];
+	FILE *f;
+
+	snprintf(path, sizeof(path), "%s/%s", t_tmp, relpath);
+	t_mkdirs(path);
+
+	f = fopen(path, "wb");
+
+	if (!f || fwrite(data, 1, len, f) != len)
+	{
+		fprintf(stderr, "yq2test: cannot write %s: %s\n", path, strerror(errno));
+		exit(2);
+	}
+
+	fclose(f);
+}
+
+static int
+t_rm_entry(const char *path, const struct stat *sb, int flag, struct FTW *ftw)
+{
+	(void)sb;
+	(void)flag;
+	(void)ftw;
+	return remove(path);
+}
+
+/* ---- forked expectations ---- */
+
+int
+t_expect_exit(void (*fn)(void *), void *arg, char *out, size_t outlen)
+{
+	int fds[2];
+	pid_t pid;
+	int status;
+	size_t got = 0;
+	ssize_t n;
+
+	fflush(stdout);
+	fflush(stderr);
+
+	if (pipe(fds) != 0)
+	{
+		t_fail(__FILE__, __LINE__, "pipe: %s", strerror(errno));
+		return -1;
+	}
+
+	pid = fork();
+
+	if (pid < 0)
+	{
+		t_fail(__FILE__, __LINE__, "fork: %s", strerror(errno));
+		return -1;
+	}
+
+	if (pid == 0)
+	{
+		close(fds[0]);
+		dup2(fds[1], STDOUT_FILENO);
+		dup2(fds[1], STDERR_FILENO);
+		close(fds[1]);
+
+		/* Engine output goes to the real console (the pipe) from here. */
+		Com_EndRedirect();
+
+		/* An ERR_DROP in the child must not resume the parent's run loop. */
+		if (YQ2_SETJMP(abortframe))
+		{
+			printf("yq2test-child: Com_Error(ERR_DROP)\n");
+			fflush(stdout);
+			exit(3);
+		}
+
+		fn(arg);
+		fflush(stdout);
+		exit(0);
+	}
+
+	close(fds[1]);
+
+	while (got + 1 < outlen && (n = read(fds[0], out + got, outlen - got - 1)) > 0)
+	{
+		got += n;
+	}
+
+	/* Drain whatever does not fit. */
+	{
+		char sink[512];
+
+		while (read(fds[0], sink, sizeof(sink)) > 0)
+		{
+		}
+	}
+
+	out[got] = '\0';
+	close(fds[0]);
+
+	if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status))
+	{
+		return -1;
+	}
+
+	return WEXITSTATUS(status);
+}
+
+/* ---- pins ---- */
+
+#define T_PIN_END "# ---\n"
+
+static char *
+t_read_all(const char *path, size_t *len)
+{
+	FILE *f = fopen(path, "rb");
+	char *buf;
+	long size;
+
+	if (!f)
+	{
+		return NULL;
+	}
+
+	fseek(f, 0, SEEK_END);
+	size = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	buf = malloc(size + 1);
+
+	if (!buf || fread(buf, 1, size, f) != (size_t)size)
+	{
+		fclose(f);
+		free(buf);
+		return NULL;
+	}
+
+	buf[size] = '\0';
+	fclose(f);
+	*len = size;
+	return buf;
+}
+
+static void
+t_pin_diff(const char *name, const char *want, const char *got)
+{
+	int line = 1;
+	const char *w = want, *g = got;
+
+	while (*w && *g && *w == *g)
+	{
+		if (*w == '\n')
+		{
+			line++;
+		}
+
+		w++;
+		g++;
+	}
+
+	/* Back up to the start of the differing line. */
+	while (w > want && w[-1] != '\n')
+	{
+		w--;
+		g--;
+	}
+
+	fprintf(stderr, "  pin %s differs at body line %d\n", name, line);
+	fprintf(stderr, "  want: %.*s\n", (int)strcspn(w, "\n"), w);
+	fprintf(stderr, "  got:  %.*s\n", (int)strcspn(g, "\n"), g);
+}
+
+void
+t_pin(const char *name, const char *text)
+{
+	char path[MAX_OSPATH];
+	size_t len;
+	char *file;
+	const char *body;
+
+	snprintf(path, sizeof(path), "%s/%s.pin", t_pinsdir, name);
+
+	if (t_update)
+	{
+		FILE *f = fopen(path, "wb");
+
+		if (!f)
+		{
+			t_fail(__FILE__, __LINE__, "cannot write pin %s: %s", path, strerror(errno));
+			return;
+		}
+
+		fprintf(f, "# Pin \"%s\", produced by test %s (%s).\n", name,
+				t_current->name, t_current->file);
+		fprintf(f, "# Generated from real engine output by `make test UPDATE_PINS=1`\n");
+		fprintf(f, "# (build/<release|debug>/test/yq2test --update-pins). Do not edit by\n");
+		fprintf(f, "# hand: a change to the body below is a behaviour change and its commit\n");
+		fprintf(f, "# says why. The body starts after the separator line.\n");
+		fputs(T_PIN_END, f);
+		fputs(text, f);
+		fclose(f);
+		t_pins_written++;
+		return;
+	}
+
+	file = t_read_all(path, &len);
+
+	if (!file)
+	{
+		t_fail(__FILE__, __LINE__, "pin %s is missing (run `make test UPDATE_PINS=1`)", path);
+		return;
+	}
+
+	body = strstr(file, "\n" T_PIN_END);
+
+	if (!body)
+	{
+		t_fail(__FILE__, __LINE__, "pin %s has no provenance header", path);
+	}
+	else if (strcmp(body + strlen("\n" T_PIN_END), text) != 0)
+	{
+		t_fail(__FILE__, __LINE__, "pin %s does not match", path);
+		t_pin_diff(name, body + strlen("\n" T_PIN_END), text);
+	}
+
+	free(file);
+}
+
+/* ---- runner ---- */
+
+static int
+t_case_cmp(const void *a, const void *b)
+{
+	const t_case_t *x = *(t_case_t * const *)a;
+	const t_case_t *y = *(t_case_t * const *)b;
+	int r = strcmp(x->file, y->file);
+
+	return r ? r : strcmp(x->name, y->name);
+}
+
+static void
+t_engine_init(void)
+{
+	static char *argv[] = { "yq2test" };
+	char path[MAX_OSPATH];
+
+	Z_Init();
+	COM_InitArgv(1, argv);
+	Swap_Init();
+	Cbuf_Init();
+	Cmd_Init();
+	Cvar_Init();
+
+	/* Search path: <tmp>/data/baseq2 and the binary's own directory,
+	   never the user's home directory. */
+	is_portable = true;
+	snprintf(path, sizeof(path), "%s/data/baseq2/.keep", t_tmp);
+	t_write_file("data/baseq2/.keep", "", 0);
+	snprintf(datadir, sizeof(datadir), "%s/data", t_tmp);
+	FS_InitFilesystem();
+}
+
+int
+main(int argc, char **argv)
+{
+	t_case_t **list, *tc;
+	int i, n = 0, failed = 0, ran = 0;
+	int list_only = 0;
+	const char *tmpbase;
+
+	for (i = 1; i < argc; i++)
+	{
+		if (strcmp(argv[i], "--update-pins") == 0)
+		{
+			t_update = 1;
+		}
+		else if (strcmp(argv[i], "--verbose") == 0)
+		{
+			t_verbose = 1;
+		}
+		else if (strcmp(argv[i], "--list") == 0)
+		{
+			list_only = 1;
+		}
+		else if (strcmp(argv[i], "--pins") == 0 && i + 1 < argc)
+		{
+			t_pinsdir = argv[++i];
+		}
+		else if (argv[i][0] == '-')
+		{
+			fprintf(stderr, "usage: %s [--update-pins] [--pins DIR] [--verbose] [--list] [NAME...]\n", argv[0]);
+			return 2;
+		}
+	}
+
+	list = malloc(sizeof(*list) * (t_ncases + 1));
+
+	for (tc = t_cases; tc; tc = tc->next)
+	{
+		list[n++] = tc;
+	}
+
+	qsort(list, n, sizeof(*list), t_case_cmp);
+
+	if (list_only)
+	{
+		for (i = 0; i < n; i++)
+		{
+			printf("%s\t%s\n", list[i]->name, list[i]->file);
+		}
+
+		return 0;
+	}
+
+	tmpbase = getenv("TMPDIR");
+	snprintf(t_tmp, sizeof(t_tmp), "%s/yq2test.XXXXXX", (tmpbase && tmpbase[0]) ? tmpbase : "/tmp");
+
+	if (!mkdtemp(t_tmp))
+	{
+		fprintf(stderr, "yq2test: mkdtemp: %s\n", strerror(errno));
+		return 2;
+	}
+
+	/* Engine start-up errors are fatal to the run. */
+	Com_BeginRedirect(1, t_rd_buf, sizeof(t_rd_buf), t_rd_flush);
+
+	if (YQ2_SETJMP(abortframe))
+	{
+		fprintf(stderr, "yq2test: Com_Error during engine start-up:\n%s\n", t_console());
+		return 2;
+	}
+
+	t_engine_init();
+
+	for (i = 0; i < n; i++)
+	{
+		int j, selected = 1;
+
+		for (j = 1; j < argc; j++)
+		{
+			if (argv[j][0] == '-')
+			{
+				if (strcmp(argv[j], "--pins") == 0)
+				{
+					j++;
+				}
+
+				continue;
+			}
+
+			selected = strstr(list[i]->name, argv[j]) != NULL;
+
+			if (selected)
+			{
+				break;
+			}
+		}
+
+		if (!selected)
+		{
+			continue;
+		}
+
+		t_current = list[i];
+		t_current_failures = 0;
+		t_console_reset();
+
+		if (YQ2_SETJMP(abortframe))
+		{
+			t_fail(t_current->file, 0, "unexpected Com_Error(ERR_DROP); console:\n%s", t_console());
+		}
+		else
+		{
+			memcpy(t_runner_abortframe, abortframe, sizeof(jmp_buf));
+
+			if (setjmp(t_test_jmp) == 0)
+			{
+				t_current->fn();
+			}
+		}
+
+		ran++;
+
+		if (t_current_failures)
+		{
+			failed++;
+			fprintf(stderr, "not ok %s\n", t_current->name);
+		}
+		else if (t_verbose)
+		{
+			printf("ok %s\n", t_current->name);
+		}
+
+		if (t_verbose)
+		{
+			fputs(t_console(), stdout);
+		}
+	}
+
+	Com_EndRedirect();
+	t_current = NULL;
+	nftw(t_tmp, t_rm_entry, 16, FTW_DEPTH | FTW_PHYS);
+	t_text_free(&t_cap);
+	free(list);
+
+	if (t_update)
+	{
+		printf("yq2test: wrote %d pins to %s\n", t_pins_written, t_pinsdir);
+	}
+
+	printf("yq2test: %d tests, %d failed\n", ran, failed);
+	return failed ? 1 : 0;
+}

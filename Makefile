@@ -584,6 +584,7 @@ endif
 
 # ----------
 
+
 # The OpenGL 1.x renderer lib
 
 ifeq ($(YQ2_OSTYPE), Windows)
@@ -1159,6 +1160,61 @@ else
 $(BINDIR)/baseq2/game.so : $(GAME_OBJS)
 	@echo "===> LD $@"
 	${Q}$(CC) $(LDFLAGS) $(GAME_OBJS) $(LDLIBS) -o $@
+endif
+
+# ----------
+
+# The unit-test suite (tests/unit, see doc/085_unittests.md). The test
+# binary links the dedicated server's own objects (SERVER_OBJS_ below,
+# built with q2ded's flags into a tree of their own) except the unix
+# main.c; tests/unit/main.c supplies main(). Needs no SDL and no game
+# data. `make test` builds and runs it; UPDATE_PINS=1 rewrites the pins
+# under tests/pins/unit/ instead of comparing; TEST_ARGS passes options
+# or test-name filters to the runner. COVERAGE=1 builds an instrumented
+# copy under build/coverage (scripts/coverage.sh drives that).
+ifneq ($(YQ2_OSTYPE), Windows)
+
+ifdef COVERAGE
+override TESTDIR := $(BUILDROOT)/coverage
+ifeq ($(COMPILER), clang)
+TEST_COVFLAGS := -O0 -fprofile-instr-generate -fcoverage-mapping
+else
+TEST_COVFLAGS := -O0 --coverage
+endif
+else
+override TESTDIR := $(BUILDDIR)/test
+TEST_COVFLAGS :=
+endif
+
+TEST_CFLAGS := -DDEDICATED_ONLY -Wno-unused-result $(TEST_COVFLAGS)
+ifeq ($(WITH_XDG),yes)
+TEST_CFLAGS += -DUSE_XDG
+endif
+
+TEST_SRCS := $(sort $(wildcard tests/unit/*.c))
+TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SERVER_OBJS_))) \
+	$(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS))
+TEST_BIN = $(TESTDIR)/yq2test
+
+.PHONY : test
+
+test: $(TEST_BIN)
+	@echo "===> TEST $(TEST_BIN)"
+	${Q}$(TEST_BIN) $(if $(UPDATE_PINS),--update-pins) $(TEST_ARGS)
+
+$(TESTDIR)/%.o: %.c
+	@if [ -z $(QUIET) ]; then\
+		echo "===> CC $< (test)";\
+	fi
+	${Q}mkdir -p $(@D)
+	${Q}$(CC) -c $(CFLAGS) $(TEST_CFLAGS) $(INCLUDE) -o $@ $<
+
+$(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS)) : tests/unit/test.h
+
+$(TEST_BIN) : $(TEST_OBJS)
+	@echo "===> LD $@"
+	${Q}$(CC) $(LDFLAGS) $(TEST_COVFLAGS) $(TEST_OBJS) $(LDLIBS) -o $@
+
 endif
 
 # ----------

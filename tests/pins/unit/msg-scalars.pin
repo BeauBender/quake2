@@ -1,0 +1,9 @@
+# Pin "msg-scalars", produced by test msg_scalar_roundtrip (tests/unit/test_msg.c).
+# Generated from real engine output by `make test UPDATE_PINS=1`
+# (build/<release|debug>/test/yq2test --update-pins). Do not edit by
+# hand: a change to the body below is a behaviour change and its commit
+# says why. The body starts after the separator line.
+# ---
+fb 7f 00 ff 00 80 34 12 fe ff ff ff 01 ff 00 7f
+00 00 c0 3f 00 00 00 80 68 65 6c 6c 6f 00 00 21
+03 01 80 40 e0 49 ff
