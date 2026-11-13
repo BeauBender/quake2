@@ -13,39 +13,73 @@ owner's decision, and the owner asked for a mechanism so it cannot recur.
 
 - Telemetry is not published to the remote: `"vsm": { "durable": false }`.
   What is lost is cross-machine telemetry; each machine keeps its own.
-- `.githooks/pre-push` refuses a push when a ref name (local or remote), the
-  author or committer name or e-mail, the message of a commit being pushed, or
-  the tagger line or message of an annotated tag being pushed, contains the
-  working machine's host name (`hostname -s`), user name (`whoami`) or home
-  path. The values are read at run time, compared case-insensitively, skipped
-  when shorter than three characters, and never written to the repository or
-  printed. Ref names are matched as substrings. In commit and tag text the
-  host name and home path are matched as substrings and the user name as a
-  whole word, so a short user name does not trip on ordinary prose; the card
-  said "contains", and this narrows it for the user name in messages only.
+- `.githooks/pre-push` refuses a push when the working machine's host name
+  (`hostname -s`), user name (`whoami`) or home path appears in what the push
+  publishes: a ref name (local or remote); for each new commit its author and
+  committer lines, its other headers (a `mergetag` header carries a whole
+  merged tag) and its message; for an annotated tag its name, tagger line
+  and message, at every level of a tag of a tag (up to ten levels; more is
+  refused); a blob that a tag or ref points at. A tag or ref on a tree is
+  refused, since it cannot be scanned there. Signature blocks (`gpgsig`
+  headers, the signature appended to a tag) are not scanned: they are base64
+  and a short name would match them by chance.
+- The values are read at run time, compared case-insensitively (ASCII),
+  skipped when shorter than three characters, and never written to the
+  repository. Nothing the hook or the checks print carries one: no value, no
+  ref name, file name or author field that holds one. A refusal names the
+  field that matched (local or remote ref name, message, author or committer
+  field, merged tag, other header, tag, blob), the kind of value (host, user,
+  home), the ref's position in the push and the commit or object id.
+- Ref names are matched as substrings. In object text the host name and home
+  path are matched as substrings and the user name as a whole word, so a short
+  user name does not trip on ordinary prose; the card said "contains", and
+  this narrows it for the user name in object text only.
+- One's own author name: in the author and committer lines only, the user
+  name is not compared when it is a whole word of the checkout's `user.name`
+  or of the part of `user.email` before the `@`. That word is already
+  published, by choice, as the author identity, and rewording cannot clear
+  such a hit. The host name and home path are still compared there, and the
+  user name still counts everywhere else (messages, tags, ref names). Without
+  a configured `user.name`/`user.email` nothing is exempt.
 - `tests/check-no-local-identity.sh` (in the gate) fails when a tracked text
   file or a tracked file name contains one of them (the user name as a whole
-  word or path component). It reports file and line, or a count for file
-  names, never the text.
+  word or path component). It reports file and line (a file whose own name
+  holds a value as `<withheld file name>`), and a count for file names. A
+  file is binary, and skipped, when it holds a NUL byte; git's own test is not
+  used, because a committed `.gitattributes` (`-diff`, `binary`) would take a
+  text file out of it. From a pre-commit hook it reads the index git hands it.
 - `tests/check-pre-push-hook.sh` (in the gate) proves the hook against a
-  throwaway bare repository, with a synthetic name; the real names are only
-  ever added to, never replaced by, the test word. Both self-tests ignore the
-  invoking user's git configuration.
+  throwaway bare repository, with synthetic names served by `hostname` and
+  `whoami` shims; three real pushes prove the wiring and the rest feeds the
+  hook directly, many refs per run.
+- `tests/check-identity-env.sh` (in the gate) runs both checks with a hostile
+  git environment (a `GIT_INDEX_FILE` copy, `GIT_DIR`, `GIT_WORK_TREE`,
+  `GIT_CONFIG_*` and global and system configuration with failing hooks,
+  failing signing and forced colour, `GIT_AUTHOR_*`/`GIT_COMMITTER_*`) and
+  requires both to pass and the index copy to be unchanged. Both self-tests
+  unset every `GIT_*` variable and read no global or system configuration or
+  templates; the real scan keeps the caller's index.
+- Every tool error fails closed: in the hook the push is refused, in the gate
+  check the scan reports that it could not run.
 - The gate prints a warning when `core.hooksPath` is not `.githooks`.
 
-## Claim branches
+## Tooling branches
 
-The tooling's card-claim branches (`refs/heads/claim/<ID>`) carry the same
-identity in their commit messages, and the loop needs them. The hook exempts
-the message scan, for that ref prefix only, in one marked block; ref names are
-always checked. Keeping the exemption costs: those commit messages stay
-public. Removing it costs: claims are refused on push, so the loop cannot
-claim cards until the tooling offers a pseudonymous identity. The exemption
-ends then.
+The tooling's card-claim branches (`refs/heads/claim/<ID>`) and gate-clear
+branches (`refs/heads/gate-clear/<ID>`) carry the same identity in their
+commit messages, and the loop needs both. The hook exempts them from the
+object scan, for these two ref prefixes only (keyed on the remote ref name),
+in one marked block; ref names are always checked. Keeping the exemption
+costs: those commit messages stay public, and a commit pushed under an exempt
+ref is from then on on a remote-tracking ref, so it counts as published and is
+not scanned when another ref (a pull request branch, `main`) pushes it later.
+Removing it costs: claims and gate clearances are refused on push, so the loop
+cannot claim cards or record a cleared gate until the tooling offers a
+pseudonymous identity. The exemption ends then.
 
 ## Consequences
 
-Recommendation on the claim exemption: keep it until the tooling offers a
+Recommendation on the tooling exemption: keep it until the tooling offers a
 pseudonymous identity; the owner decides.
 
 What the guard does not do (known limits):
@@ -53,28 +87,40 @@ What the guard does not do (known limits):
 - A push from an unwired checkout is not guarded; the gate warns about it. A
   push with `--no-verify` skips the hook; that is against the rules in
   `CLAUDE.md` and nothing here can prevent it.
+- `core.hooksPath=.githooks` is relative, so the hook that runs is the one in
+  the tree checked out. A worktree on a commit older than this change has no
+  `pre-push` and is not guarded, and the gate warning does not fire there
+  (the setting is still `.githooks`).
 - The commits to scan are those the remote lacks: not the remote's own tip and
   not anything already on a remote-tracking ref of that remote. That makes
   the hook depend on local remote-tracking refs. A stale one (for a branch
   deleted on the remote) still counts as published, so run
   `git fetch --prune` after a remote-side deletion. If the remote's tip is not
   known locally the push is refused: fetch the remote first.
+- The published set is read from the tracking refs of the remote's name. A
+  remote whose `pushurl` points somewhere other than where it fetches from
+  is trusted to hold what was fetched; such a setup is not used here.
 - More than 1000 such commits cannot be scanned, so the push is refused. This
   also happens on a first push to a remote that has no tracking refs here
   (not fetched yet, or a push by URL), where the whole history counts: fetch
   the remote first, or push in steps.
-- If git cannot list or read the commits, or the host or user name cannot be
+- If git cannot list or read an object, or the host or user name cannot be
   read, the push is refused (fail closed). The gate check instead warns when
   only one of the two names is unreadable, and fails when both are.
-- Not scanned: file contents and file names at push time (the gate checks
-  them in the working tree), note bodies, and spellings other than the
-  literal one (percent or hex encodings, a name split across lines). The
-  format in which the tooling writes identities is outside this repository.
+- Not scanned: file contents and file names of pushed trees at push time (the
+  gate checks them in the working tree), note bodies, signature blocks, and
+  spellings other than the literal one (percent or hex encodings, other text
+  encodings such as UTF-16, a name split across lines, non-ASCII case
+  folding). The format in which the tooling writes identities is outside
+  this repository.
 - An ordinary-word name defeats it: a host or user name that is a common
   word (a generic container name, `root`, `build`) appears in this
-  repository's own text and in ordinary commit messages, so the gate fails and ordinary
-  messages are refused. The remedy is to give the machine a distinctive host
-  or user name; an allow rule is the owner's decision and is not provided.
+  repository's own text and in ordinary commit messages, so the gate fails
+  and ordinary messages are refused. The same holds for CI-style user names
+  (`runner` appears in this repository's text), so if the gate is ever run
+  in CI, the identity check needs a decision there first. The remedy is to
+  give the machine a distinctive host or user name; an allow rule is the
+  owner's decision and is not provided.
 - History already on the public default branch from before this mechanism
   contains such identity trailers in commit messages. This change does not
   rewrite that history, and the hook never scans it (those commits are already
@@ -82,5 +128,5 @@ What the guard does not do (known limits):
 
 ## Reversal
 
-Delete the hook, the two checks and the warning in `scripts/test.sh`, and set
-`vsm.durable` back. Nothing else depends on them.
+Delete the hook, the three checks and the warning in `scripts/test.sh`, and
+set `vsm.durable` back. Nothing else depends on them.
