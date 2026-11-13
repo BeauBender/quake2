@@ -92,6 +92,11 @@ without a warning (beams carry none). An entity skin is looked up as a skin
 first, then as a pic (the same image can come from either). The same
 pointer and name always map to the same id; the same pointer under a new
 name (memory the renderer reused after `EndRegistration`) gets a new id.
+When the map is full (`REFREC_MAX_HANDLES`) that new name gets id 0 with a
+`REFREC_WARN_HANDLES_FULL`, and the pointer's old id is retired: the
+string table keeps its entry for the records that carry it, but an entity
+using the pointer afterwards is recorded as id 0 with a
+`REFREC_WARN_UNKNOWN_HANDLE`, never under the old name.
 A failed registration (NULL handle) is recorded with id 0 and has no string
 table entry. Measured on `soft`: about 6.2 KB per 3D frame on demo1.
 
