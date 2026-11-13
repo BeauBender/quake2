@@ -38,7 +38,8 @@ for _v in $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p'); do
 	unset "$_v"
 done
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/prepush.XXXXXX")
-trap 'rm -rf "$tmp"' EXIT
+# A shell error must not exit 0 (bash 3.2 loses the status in an EXIT trap).
+trap 'rm -rf "$tmp"; [ "${_ok:-}" = 1 ] || exit 1' EXIT
 mkdir "$tmp/tpl" "$tmp/bin" "$tmp/hooks"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TEMPLATE_DIR="$tmp/tpl"
 export XDG_CONFIG_HOME="$tmp/xdg"
@@ -219,6 +220,7 @@ case_ "$M" refs/heads/zzqn2 "$(mk "$m1" "zzqm9 note for $login")" refs/heads/zzq
 case_ "$M" refs/heads/zzqn3 "$(mk "$m1" "zzqm9 path /srv/$login/data")" refs/heads/zzqn3 "$zero"
 case_ "$M" refs/heads/zzqn4 "$(mk "$m1" "$login starts the line")" refs/heads/zzqn4 "$zero"
 case_ ok refs/heads/zzqn5 "$(mk "$m1" "zzqm10 x${login}x and ${login}2 and zz${login} and ${login}_a")" refs/heads/zzqn5 "$zero"
+case_ "$M" refs/heads/zzqn5b "$(mk "$m1" "zzqm10 ${login}x first, then $login alone")" refs/heads/zzqn5b "$zero"
 case_ "$M" refs/heads/zzqn6 "$(mk "$m1" "zzqm11 see $synhome/file")" refs/heads/zzqn6 "$zero"
 case_ "$M" refs/heads/zzqn7 "$(mk "$m1" "zzqm11 see /ZZQHOME/zzqX/file")" refs/heads/zzqn7 "$zero"
 case_ "$M" refs/heads/zzqn8 "$(mk "$m1" "zzqm11 the zzqextra word")" refs/heads/zzqn8 "$zero"
@@ -296,6 +298,16 @@ case_ ok refs/heads/zzqr3 "$(raw "${hdr}gpgsig -----BEGIN PGP SIGNATURE-----
 
 zzqm21
 ")" refs/heads/zzqr3 "$zero"
+case_ ok refs/heads/zzqr3b "$(raw "${hdr}gpgsig-sha256 -----BEGIN PGP SIGNATURE-----
+ zzq$syn
+ -----END PGP SIGNATURE-----
+
+zzqm21b
+")" refs/heads/zzqr3b "$zero"
+case_ "a header of commit" refs/heads/zzqr3c "$(raw "${hdr}gzzq zzq$syn
+
+zzqm21c
+")" refs/heads/zzqr3c "$zero"
 case_ "a header of commit" refs/heads/zzqr4 "$(raw "${hdr}encoding zzq$syn
 
 zzqm22
@@ -401,6 +413,8 @@ dangling=$(printf 'object 2222222222222222222222222222222222222222\ntype commit\
 	w hash-object -t tag -w --literally --stdin)
 printf 'refs/tags/zzqdg %s refs/tags/zzqdg %s\n' "$dangling" "$zero" > "$tmp/in"
 closed "tag on a missing object" 'cannot read object'
+printf 'refs/heads/zzqmiss 3333333333333333333333333333333333333333 refs/heads/zzqmiss %s\n' "$zero" > "$tmp/in"
+closed "unknown local object" 'cannot read object'
 printf 'refs/heads/zzqmain %s refs/heads/zzqmain %s\n' "$m2" "$m1" > "$tmp/in"
 shim hostname ''
 closed "host name unreadable" "cannot read this machine's host name"
@@ -422,4 +436,5 @@ shim whoami "$login"
 [ -z "$(ls -A "$tmp/hooktmp")" ] || note "the hook left temporary files behind"
 
 [ "$fails" -eq 0 ] || exit 1
+_ok=1
 echo "check-pre-push-hook: ok"

@@ -121,7 +121,7 @@ scan() {
 			word[nw] = tolower(substr(raw[i], sp + 1))
 		}
 		upub = ENVIRON["YQ2_UPUB"]
-		inhdr = (mode == "commit" || mode == "tag")
+		inhdr = (mode == "commit")
 		field = (mode == "commit") ? "header" : mode
 		insig = 0
 	}
@@ -152,12 +152,11 @@ scan() {
 	{
 		line = $0
 		if (inhdr) {
-			if (line == "") { inhdr = 0; field = (mode == "commit") ? "message" : "tag"; next }
+			if (line == "") { inhdr = 0; field = "message"; next }
 			if (line !~ /^ /) {
 				key = line; sub(/ .*/, "", key)
-				skiphdr = (key ~ /^gpgsig/)
-				if (mode == "commit")
-					field = (key == "author" || key == "committer") ? "author" : (key == "mergetag") ? "mergetag" : "header"
+				skiphdr = (key == "gpgsig" || key == "gpgsig-sha256")
+				field = (key == "author" || key == "committer") ? "author" : (key == "mergetag") ? "mergetag" : "header"
 			}
 			if (skiphdr) next
 		}
@@ -201,7 +200,9 @@ describe() {
 
 objf=$(mktemp "${TMPDIR:-/tmp}/pre-push.XXXXXX") || die "refused: cannot create a temporary file"
 objt=$objf.txt
-trap 'rm -f "$objf" "$objt"' EXIT
+# A shell error must still refuse; bash 3.2 loses the status in an EXIT
+# trap, so only the normal end of the script may exit 0.
+trap 'rm -f "$objf" "$objt"; [ "${_ok:-}" = 1 ] || exit 1' EXIT
 fail=0
 n=0
 while read -r lref lsha rref rsha || [ -n "${lref:-}" ]; do
@@ -232,7 +233,6 @@ while read -r lref lsha rref rsha || [ -n "${lref:-}" ]; do
 
 	# Annotated tags, a tag of a tag included: each tag object is published.
 	obj=$lsha
-	hit=
 	type=$(git cat-file -t "$obj" 2>/dev/null) || die "refused: cannot read object $(printf '%.10s' "$obj") (ref number $n)"
 	depth=0
 	while [ "$type" = tag ]; do
@@ -288,4 +288,5 @@ while read -r lref lsha rref rsha || [ -n "${lref:-}" ]; do
 	done
 done
 
+_ok=1
 exit "$fail"

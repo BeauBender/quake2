@@ -29,7 +29,8 @@ index=${GIT_INDEX_FILE:-$(git rev-parse --git-path index)}
 [ -f "$index" ] || { echo "$me: cannot find the index"; exit 1; }
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/identenv.XXXXXX")
-trap 'rm -rf "$tmp"' EXIT
+# A shell error must not exit 0 (bash 3.2 loses the status in an EXIT trap).
+trap 'rm -rf "$tmp"; [ "${_ok:-}" = 1 ] || exit 1' EXIT
 cp "$index" "$tmp/index"
 cp "$index" "$tmp/index.orig"
 mkdir "$tmp/hooks"
@@ -57,6 +58,11 @@ cat > "$tmp/hostile.gitconfig" <<EOF
 	excludesFile = $tmp/excludes
 EOF
 printf '*\n' > "$tmp/excludes"
+# The same configuration as the caller's own global files, for git to find
+# if a check let it fall back to them.
+mkdir -p "$tmp/home" "$tmp/xdg/git"
+cp "$tmp/hostile.gitconfig" "$tmp/home/.gitconfig"
+cp "$tmp/hostile.gitconfig" "$tmp/xdg/git/config"
 
 # redact: paths of this checkout and the temp directory become placeholders;
 # a line holding the host or user name or the home path is withheld whole.
@@ -86,7 +92,7 @@ for check in tests/check-no-local-identity.sh tests/check-pre-push-hook.sh; do
 		GIT_CONFIG_KEY_1=commit.gpgSign GIT_CONFIG_VALUE_1=true \
 		GIT_AUTHOR_NAME=zzq-synthetic-box GIT_AUTHOR_EMAIL=zzqa@zzq-synthetic-box.zzq \
 		GIT_COMMITTER_NAME=zzq-synthetic-box GIT_COMMITTER_EMAIL=zzqa@zzq-synthetic-box.zzq \
-		GIT_ALTERNATE_OBJECT_DIRECTORIES="$tmp/none" \
+		GIT_ALTERNATE_OBJECT_DIRECTORIES="$tmp/none" HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/xdg" \
 		"$check" > "$tmp/out" 2>&1 || rc=$?
 	if [ "$rc" -ne 0 ]; then
 		echo "$me: FAIL: $check failed under a hostile git environment; its output:"
@@ -135,4 +141,5 @@ shim whoami ''
 gate "host and user name unreadable" 1 "cannot read the host name or the user name"
 
 [ "$fails" -eq 0 ] || exit 1
+_ok=1
 echo "$me: ok"

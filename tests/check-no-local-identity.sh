@@ -34,7 +34,8 @@ cd "$(dirname "$0")/.."
 export LC_ALL=C
 me=check-no-local-identity
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/noident.XXXXXX")
-trap 'rm -rf "$tmp"' EXIT
+# A shell error must not exit 0 (bash 3.2 loses the status in an EXIT trap).
+trap 'rm -rf "$tmp"; [ "${_ok:-}" = 1 ] || exit 1' EXIT
 us=$(printf '\037')
 
 # scan_repo <dir> <host> <user> <home>: prints "path:line (kind)" for each hit
@@ -143,6 +144,11 @@ scan_repo() {
 	1 tracked file name(s) (user)
 	EOF
 	expect 1 "every kind of hit, nothing else" "$tmp/want" "$syn" zzquser /home/zzqhome
+	cat > "$tmp/want" <<-EOF
+	notes:v2.txt:2 (home)
+	sub.txt:1 (home)
+	EOF
+	expect 1 "content hits alone" "$tmp/want" zzqnone zzqnone /home/zzqhome
 	expect 0 "words shorter than three characters are skipped" "$tmp/none" zz zz zz
 	expect 0 "empty words are skipped" "$tmp/none" '' '' ''
 
@@ -170,7 +176,7 @@ fi
 real_st=0
 scan_repo . "$host" "$user" "$home" > "$tmp/real" 2> "$tmp/realerr" || real_st=$?
 case $real_st in
-0) echo "$me: ok" ;;
+0) _ok=1; echo "$me: ok" ;;
 1)
 	echo "$me: tracked files contain this machine's identity (values not shown); remove them:"
 	sed 's/^/  /' "$tmp/real"
