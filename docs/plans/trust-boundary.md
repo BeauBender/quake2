@@ -156,8 +156,16 @@ behaviour fixed and gives every later card a place for its failing test.
   `build/coverage`, per-directory and total line coverage with the
   compiler's own tools (`xcrun llvm-cov`/`llvm-profdata`, or `gcov`), and a
   per-tool floor in `scripts/coverage-floor` that only ratchets up. CI runs
-  both on macOS and Linux x86_64. When the plugin's generic coverage knob
-  exists, the floor moves into `.claude/dev-loop.json`.
+  both on macOS and Linux x86_64. The dev-loop plugin's generic coverage
+  knob exists (`gate.coverage.command`, `gate.coverage.floor`, with
+  `ratchet` and `ratchetStep`), but the floor is not moved into
+  `.claude/dev-loop.json` yet, for two reasons: the plugin's command
+  contract reads the total from the last line of the command's stdout and
+  wants it bare (`33.15`), while `scripts/coverage.sh` ends with an
+  `ok` line; and the knob holds one floor, while this repo keeps one per
+  tool because `llvm-cov` and `gcov` count lines differently. A follow-up
+  card does the wiring (a bare last line, and a decision on which tool's
+  floor the knob carries).
 
 ## Dependency manifest and verification
 
