@@ -1,0 +1,161 @@
+#!/bin/sh
+# Push-time guard, wired by scripts/setup.sh (core.hooksPath=.githooks).
+#
+# This repository is public. Nothing that identifies the working machine may
+# leave it: not in a ref name, not in a commit message. The identifying values
+# are the output of `hostname -s`, the output of `whoami` and the path in
+# $HOME. They are read at run time and compared case-insensitively; a value
+# shorter than three characters is not compared (it would match ordinary
+# text). None of them is written anywhere in the repository, and this hook
+# never prints one: it says THAT a ref or commit matched and which kind of
+# value (host, user, home), by position in the push and by commit id. (A ref
+# is named by its position because its name is the matched text.)
+#
+# Rules
+#   ref names   a match anywhere in the local or the remote ref name refuses the
+#               push (substring match). Deleting a ref is always allowed, so a
+#               ref that already leaked can be removed.
+#   messages    commit messages of the commits being pushed are scanned: the
+#               host name and the home path as substrings, the user name as a
+#               whole word (so a short, common user name does not trip on
+#               ordinary prose). File contents are the job of
+#               tests/check-no-local-identity.sh.
+#   new branch  the commits not yet on the remote, git rev-list <sha> --not
+#               --remotes=<remote>, at most SCAN_CAP of them. A branch with more
+#               is refused (the rest cannot be scanned): push it in steps.
+#   update      <remote sha>..<local sha>, same cap.
+#   errors      fail closed: if the host or user name cannot be read, or git
+#               cannot list the commits (for example the remote sha is not
+#               known locally: fetch first), the push is refused. A retry is
+#               cheap; a published identity cannot be taken back.
+#
+# Test-only environment (used by tests/check-pre-push-hook.sh):
+#   YQ2_IDENTITY_TEST_EXTRA_WORD   one more word to look for. It is only ever
+#                                  added to the real words, never replaces them.
+#   YQ2_IDENTITY_TEST_SCAN_CAP     a lower SCAN_CAP; a value above the default
+#                                  is ignored.
+#
+# Usage: runs from git (arguments: remote name, remote URL; stdin: one line
+# "<local ref> <local sha> <remote ref> <remote sha>" per ref). Bypassing it
+# with --no-verify is against the rules in CLAUDE.md.
+
+remote=${1:-}
+SCAN_CAP=1000
+case ${YQ2_IDENTITY_TEST_SCAN_CAP:-} in
+'' | *[!0-9]*) ;;
+*) [ "$YQ2_IDENTITY_TEST_SCAN_CAP" -lt "$SCAN_CAP" ] && SCAN_CAP=$YQ2_IDENTITY_TEST_SCAN_CAP ;;
+esac
+zero=0000000000000000000000000000000000000000
+nl='
+'
+
+die() {
+	echo "pre-push: $*" >&2
+	exit 1
+}
+
+# words: lines of "<kind> <value>"; kind is host, user, home or test.
+words=
+add_word() { # $1 = kind, $2 = value
+	[ "${#2}" -ge 3 ] || return 0
+	words="$words$1 $2$nl"
+}
+
+h=$(hostname -s 2>/dev/null) || h=
+u=$(whoami 2>/dev/null) || u=
+[ -n "$h" ] || die "refused: cannot read this machine's host name, so the identity check cannot run"
+[ -n "$u" ] || die "refused: cannot read the local user name, so the identity check cannot run"
+add_word host "$h"
+add_word user "$u"
+case ${HOME:-} in
+'' | /) ;;
+*) add_word home "$HOME" ;;
+esac
+if [ -n "${YQ2_IDENTITY_TEST_EXTRA_WORD:-}" ]; then
+	add_word test "$YQ2_IDENTITY_TEST_EXTRA_WORD"
+fi
+
+# matches <text> <as-message>: prints the kind of the first word found and
+# returns 0; returns 1 if none; returns 2 on a grep error.
+matches() {
+	_rest=$words
+	while [ -n "$_rest" ]; do
+		_line=${_rest%%"$nl"*}
+		_rest=${_rest#*"$nl"}
+		_kind=${_line%% *}
+		_word=${_line#* }
+		_mode=-F
+		[ "$2" = 1 ] && [ "$_kind" = user ] && _mode=-wF
+		printf '%s\n' "$1" | grep -q -i "$_mode" -e "$_word"
+		case $? in
+		0) echo "$_kind"; return 0 ;;
+		1) ;;
+		*) return 2 ;;
+		esac
+	done
+	return 1
+}
+
+fail=0
+n=0
+while read -r lref lsha rref rsha; do
+	[ -n "${lref:-}" ] || continue
+	n=$((n + 1))
+	# Deleting a ref publishes nothing.
+	[ "$lsha" = "$zero" ] && continue
+	short=$(printf '%.10s' "$lsha")
+
+	for name in "$lref" "$rref"; do
+		kind=$(matches "$name" 0)
+		case $? in
+		0)
+			echo "pre-push: refused: ref number $n of this push (commit $short) has a name containing this machine's $kind identity; rename the branch" >&2
+			fail=1
+			continue 2
+			;;
+		1) ;;
+		*) die "refused: the ref name check failed internally (ref number $n)" ;;
+		esac
+	done
+
+	# ---- Claim branches: the one exemption. --------------------------------
+	# The loop's tooling pushes refs/heads/claim/<ID> branches whose commit
+	# messages carry the machine identity, and the loop cannot work without
+	# them. Only the MESSAGE scan is skipped, and only for this prefix; the ref
+	# name above is always checked. Delete this block when the tooling offers a
+	# pseudonymous identity (see docs/decisions/0003-no-local-identity.md).
+	case $rref in
+	refs/heads/claim/*) continue ;;
+	esac
+	# -------------------------------------------------------------------------
+
+	if [ "$rsha" = "$zero" ]; then
+		commits=$(git rev-list --max-count=$((SCAN_CAP + 1)) "$lsha" --not --remotes="$remote" 2>/dev/null) ||
+			die "refused: cannot list the new commits of ref number $n"
+	else
+		commits=$(git rev-list --max-count=$((SCAN_CAP + 1)) "$rsha..$lsha" 2>/dev/null) ||
+			die "refused: cannot list the commits of ref number $n (is the remote commit known here? fetch first)"
+	fi
+	[ -n "$commits" ] || continue
+	count=$(printf '%s\n' "$commits" | wc -l | tr -d ' ')
+	if [ "$count" -gt "$SCAN_CAP" ]; then
+		echo "pre-push: refused: ref number $n has more than $SCAN_CAP commits to scan; push it in smaller steps" >&2
+		fail=1
+		continue
+	fi
+	for c in $commits; do
+		msg=$(git log -1 --format=%B "$c" 2>/dev/null) || die "refused: cannot read commit $c"
+		kind=$(matches "$msg" 1)
+		case $? in
+		0)
+			echo "pre-push: refused: the message of commit $(printf '%.10s' "$c") (ref number $n) contains this machine's $kind identity; reword it before pushing" >&2
+			fail=1
+			break
+			;;
+		1) ;;
+		*) die "refused: the message check failed internally (commit $c)" ;;
+		esac
+	done
+done
+
+exit "$fail"
