@@ -167,3 +167,113 @@ start. `fsPackFile_t` holds `name[MAX_QPATH]`, `size`, `offset`; a
 | `FS_PackQuickSearch` | pack names | binary search | `FS_SortPack` runs before the pack is searched | ok |
 | `FS_CreatePath` | path | `Sys_Mkdir` on each prefix | `if (strstr(path, "..") != NULL)` refuses | ok |
 | `FS_SetGamedir` | `game` (set from the server's serverdata) | search path and write directory | `!strcmp(dir, ".") \|\| strstr(dir, "..") \|\| strstr(dir, "/") \|\| strstr(dir, "\\")` | ok |
+
+## Renderer BSP
+
+Each renderer loads the world map a second time, from the same file, in its
+own `Mod_LoadBrushModel` (`gl1_model.c`, `gl3_model.c` with `GL3_` names,
+`sw_model.c`), with lump readers shared from `src/client/refresh/files/models.c`
+(`Mod_LoadVertexes`, `Mod_LoadEdges`, `Mod_LoadSurfedges`, `Mod_LoadLighting`,
+`Mod_LoadPlanes`, `Mod_LoadTexinfo`, `Mod_LoadVisibility`, `Mod_LoadNodes`) and
+vis decompression from `files/pvs.c`. gl1 and gl3 are the same code apart
+from names; where soft differs the row says so. Memory comes from
+`Hunk_Begin`/`Hunk_Alloc` (`src/backends/unix/shared/hunk.c`): one `mmap`
+sized from the lump lengths, and `Hunk_Alloc` raises `Sys_Error` (fatal) when
+an allocation would pass the reservation, so a loop that fills a freshly
+allocated array is bounded; reads and writes through file-sourced indices are
+not.
+
+The renderer has none of the lump bounds `collision.c` got from TASK2. What
+protects it is order: a BSP reaches the renderer only as the world model
+(`Mod_ForName` refuses a later one, "Loaded a brush model after the world"),
+and on the client `CM_LoadMap` always loads the same `maps/<name>.bsp` before
+`CL_PrepRefresh` calls `R_BeginRegistration` (`CL_RequestNextDownload` in
+`cl_download.c`, `CL_Precache_f` in `cl_main.c`). So `CMod_CheckLumps` (every
+lump inside the file), the collision count limits (leafs and nodes at most
+65536, models at most `MAX_MAP_MODELS`, texinfo at most `MAX_MAP_TEXINFO`,
+visibility at most `MAX_MAP_VISIBILITY` bytes) and the collision node child
+checks hold for the renderer too. Everything collision does not read (faces,
+edges, surfedges, vertexes, lighting, leaf faces, `nexttexinfo`, node and
+submodel face ranges, the vis offsets) reaches the renderer unchecked. A
+collision fix that refuses a map also protects the renderer, which is why
+several rows below cite FIX3.
+
+| Function | Field | Use | Check (quoted) or absence | Verdict |
+|---|---|---|---|---|
+| `Mod_ForName` | first 4 bytes | `LittleLong(*(unsigned *)buf)` format switch | none; `FS_LoadFile` allocates `length + 1`, so a 1 or 2 byte file is read up to 2 bytes past the allocation (a BSP is protected by `CM_LoadMap`; this matters for MD2 and SP2, see the next section) | **defect D7** |
+| `Mod_ForName` | requested name | `strcpy(mod->name, name)` into `MAX_QPATH` | names come from configstrings (at most `MAX_QPATH - 1`) or from `Com_sprintf` into `MAX_QPATH` buffers | ok-by-construction |
+| `Mod_ForName` | `*N` inline model | `&parent_model->submodels[i]` | `if (i < 1 \|\| i >= parent_model->numsubmodels)` | ok |
+| `Mod_LoadBrushModel` | file length | header copy and lump swap over `sizeof(dheader_t)` | none in the renderer; `CM_LoadMap` refuses a file shorter than the header first | ok-by-construction (collision-first order) |
+| `Mod_LoadBrushModel` | every `fileofs`, `filelen` | `mod_base + l->fileofs` in every `Mod_Load*` | none in the renderer; `CMod_CheckLumps` checks the same lumps of the same file first | hardening (safe only because of the call order) |
+| `Mod_LoadBrushModel` | lump lengths | `hunkSize` sum via `Mod_CalcLumpHunkSize` and `calcTexinfoAndFacesSize` | `int` arithmetic without an overflow test; a lump of several hundred MB wraps the sum and a later `Hunk_Alloc` fails with `Sys_Error` | hardening (fatal error, not memory corruption) |
+| `Mod_CalcLumpHunkSize`, all `Mod_Load*` | lump length modulo record size | record count | `if (l->filelen % sizeof(*in))` ("funny lump size") | ok |
+| `Mod_LoadVertexes`, `Mod_LoadEdges`, `Mod_LoadSurfedges`, `Mod_LoadPlanes` | counts | array fills through `Hunk_Alloc((count + extra) * size)` | the allocation is sized from the count; there is no upper limit such as `MAX_MAP_SURFEDGES` (the comment "else it errors out later anyway" is not backed by a check; the hunk runs out and `Sys_Error`s) | ok for memory |
+| `Mod_LoadPlanes` | `type` (int, stored in `byte`) | `p[plane->type]` when `< 3` | truncation to `byte` | ok-by-construction |
+| `Mod_LoadEdges` | `v[0]`, `v[1]` (unsigned short) | `vertexes[edge.v[k]]` in every face walker below | none against `numvertexes` | **defect D11** |
+| `Mod_LoadTexinfo` | `texture[32]` | `GetTexImage` builds `textures/%s.wal` with `Com_sprintf`; `Com_Printf("%s")` on failure | destination bounded; an unterminated name reads on into the next records, at worst to the pad byte `FS_LoadFile` appends | hardening |
+| `Mod_LoadTexinfo` | `nexttexinfo` | `out->next = *texinfo + next`, then the frame count walk `for (step = out->next; step && step != out; step = step->next)`, later `R_TextureAnimation` | `if (next > 0)` only; no upper bound, and a chain that loops without coming back to its start never ends | **defect D13** |
+| `Mod_LoadFaces` | `numedges` (short) | gl1/gl3 `LM_BuildPolygonFromSurface` sizes `Hunk_Alloc(sizeof(glpoly_t) + (lnumverts - 4) * ...)`; loop bound in every face walker | soft: `if (out->numedges < 3)`; gl1/gl3: none, so a negative count gives a negative `Hunk_Alloc` size, which passes the overflow test and moves the hunk cursor backwards (later allocations overlap earlier ones) | **defect D11** |
+| `Mod_LoadFaces` | `numedges` of a `SURF_WARP` face | gl1 `R_SubdivideSurface`, gl3 `GL3_SubdivideSurface` copy every edge vertex into `vec3_t verts[64]` on the stack | the only limit, `if (numverts > MAX_SUBDIVIDE_VERTS)` (60), is in `R_SubdividePolygon`, called after the copy; `calcTexinfoAndFacesSize` sees `numverts > 60` but only returns 0 for the hunk estimate | **defect D10** (stack buffer overflow write of vertex coordinates from the file) |
+| `Mod_LoadFaces` | `firstedge` (int) with `numedges` | `surfedges[firstedge + i]` in `Mod_CalcSurfaceExtents`, `LM_BuildPolygonFromSurface`, `R_SubdivideSurface`; soft `R_RenderFace`, `R_RenderBmodelFace`, `R_DrawSolidClippedSubmodelPolygons`, `R_BuildPolygonFromSurface` (`sw_poly.c`) | none against `numsurfedges` | **defect D11** |
+| same walkers | each surfedge value `e` | `edges[e]` or `edges[-e]` | none against `numedges`; `e == INT_MIN` negates to itself | **defect D11** |
+| `Mod_CalcSurfaceExtents` | vertex positions, texinfo vectors | `extents[]`, `texturemins[]`, lightmap size | soft: `extents < 16` raised to 16, `extents > 256` refused ("Bad surface extents") for lit faces; gl1/gl3: no limit, but `LM_AllocBlock` fails for a lightmap wider than the block (then `ERR_FATAL`) and `R_BuildLightMap` tests `size > (sizeof(s_blocklights) >> 4)`; a gl1/gl3 face with no edges leaves mins at 999999, so both extents are negative, `smax * tmax` is positive and `LM_AllocBlock` accepts it with `*x` past the block | soft ok; gl1/gl3 large extents ok, the no-edge case folded into D11 |
+| `Mod_LoadFaces` | `styles[4]` (byte) | `r_newrefdef.lightstyles[style]` (256 entries) | byte range; 255 ends the list | ok-by-construction |
+| `Mod_LoadFaces` | `lightofs` | `samples = lightdata + i`; `R_BuildLightMap` (gl1, soft) and `GL3_BuildLightMap` read `smax * tmax * 3` bytes per style; `R_LightPoint` / `GL3_LightPoint` read at `3 * (dt * smax + ds)` | only `-1` is special; no test against the lighting lump length, nor for other negative values | **defect D12** (heap over-read; the bytes become lightmap texels, so they are shown on screen) |
+| `Mod_LoadFaces` | `planenum`, `texinfo` | `planes + planenum`, `texinfo + ti` | `planenum < 0 \|\| planenum >= loadmodel->numplanes`; `(ti < 0) \|\| (ti >= loadmodel->numtexinfo)` | ok |
+| `Mod_LoadMarksurfaces` | each face index (short) | `surfaces + j`; soft `R_RecursiveWorldNode` writes `(*mark)->visframe` | gl1/gl3: `(j < 0) \|\| (j >= loadmodel->numsurfaces)`; soft tested only `j >= loadmodel->numsurfaces` | gl1/gl3 ok; soft **defect D15, fixed in this branch** (a write before the surfaces array) |
+| `Mod_LoadLeafs` | `firstleafface`, `numleaffaces` | `firstmarksurface` and the mark loops | `(firstleafface + out->nummarksurfaces) > loadmodel->nummarksurfaces` (both widened to unsigned) | ok |
+| `Mod_LoadLeafs` | `cluster` (short) | `bitofs[cluster]` in `Mod_ClusterPVS`; `vis[cluster >> 3]` in `R_MarkLeaves` (gl1, gl3, soft) | `cluster == -1` skipped; nothing else | carded as FIX3 item 1 / FIX10 item 1 (the collision check also closes the renderer, because `CM_LoadMap` runs first) |
+| `Mod_LoadLeafs` | `area` (short) | `areabits[area >> 3]` in `R_AreaVisible` (`files/surf.c`); `areabits` is the client's 32-byte `frame_t.areabits` | none | carded as FIX3 item 1 / FIX10 item 1 (same reason) |
+| `Mod_LoadVisibility` | `numclusters` | swap loop over `out->bitofs[i]` for `i < numclusters` in a `Hunk_Alloc(l->filelen)` block | none against the lump length: reads, and writes back, past the allocation | carded as FIX3 item 3 (its collision check of `numclusters` against the lump length closes this through the call order) |
+| `Mod_ClusterPVS` | `bitofs[cluster][DVIS_PVS]` | `(byte *)model->vis + bitofs` as the input of `Mod_DecompressVis` | none | carded as FIX3 item 3 (same reason) |
+| `Mod_ClusterPVS` | `numclusters` | `row = (numclusters + 7) >> 3` passed to `Mod_DecompressVis` | none; even after FIX3 item 3, `numclusters` can reach `MAX_MAP_VISIBILITY / 8` (131072), a 16384-byte row | **defect D8** |
+| `Mod_DecompressVis` | run bytes | writes into `static byte decompressed[MAX_MAP_LEAFS / 8]` (8192 bytes) | `while (out - decompressed < row)` only, no bound against the buffer; a zero run is written whole, so even a legal 8192-byte row can overshoot by 254 bytes; the input is never bounded by the lump | **defect D8** (global buffer overflow write; non-zero bytes are copied from the file verbatim) |
+| `R_MarkLeaves` (gl1, gl3) | `numleafs` | `memcpy(fatvis, vis, (numleafs + 7) / 8)` and an `int` OR loop into an 8192-byte stack array | none in the renderer; collision limits leafs to 65536, exactly the array | ok-by-construction (collision-first order) |
+| `Mod_LoadNodes` | `planenum`, `children[2]` | `planes + planenum`, child pointers | `planenum < 0 \|\| planenum >= numplanes`; a child `>= *numnodes` or a leaf `>= numleafs` is refused | ok for range |
+| `Mod_LoadNodes` | child graph | `Mod_SetParent`, `Mod_NumberLeafs` (recursive), `Mod_PointInLeaf` (loop) | a cycle recurses until the stack is gone, or loops forever | carded as FIX3 item 4 (a collision cycle check refuses the map first) |
+| `Mod_NumberLeafs` | child graph | writes `r_leaftovis[leafnum]` and `r_vistoleaf[*numvisleafs]`, two `int [MAX_MAP_LEAFS]` arrays on the stack of `Mod_LoadNodes` | none; without any cycle, nodes that share children (a DAG) are walked once per path, so 17 nodes whose two children are both the next node reach the last leaf 2^17 times and `numvisleafs` runs past 65536 | **defect D9** (stack buffer overflow write; a depth-bound fix for FIX3 item 4 does not refuse a DAG; both arrays are unused after the walk) |
+| `Mod_LoadNodes` | `firstface`, `numfaces` (unsigned short) | `surfaces + node->firstsurface` for `numsurfaces` entries in `R_RecursiveWorldNode` (gl1, gl3, soft), `R_MarkSurfaceLights`, `R_RecursiveLightPoint` (gl1, gl3, soft) | none against `numsurfaces` | **defect D14** (heap over-read; gl1/gl3 `R_RecursiveWorldNode` links a surface whose `visframe` matches into `image->texturechain`, a write through the stray pointer) |
+| `Mod_LoadSubmodels` | `headnode` | `nodes + firstnode` for `R_MarkLights` in `R_DrawBrushModel` (gl1, gl3) and `R_PushDlights` (soft) | `if (out->firstnode >= loadmodel->numnodes)`; no lower bound, and collision accepts a negative headnode that names a leaf | **defect D14** (a pointer before the node array, read as a node) |
+| `Mod_LoadSubmodels` | `firstface`, `numfaces` (int) | `&surfaces[firstmodelsurface]` for `nummodelsurfaces` entries in `R_DrawInlineBModel` (gl1, gl3), `R_DrawSolidClippedSubmodelPolygons` and `R_DrawSubmodelPolygons` (soft) | none | **defect D14** |
+| `Mod_LoadSubmodels` | count | `submodels[i]` fills | sized allocation; collision limits it to `MAX_MAP_MODELS` | ok |
+| `R_InitSkyBox` (soft) | counts plus the six sky faces | writes into the `extra` slots the loaders reserved | `loadmodel->numedges > MAX_MAP_EDGES` and the matching surface and vertex tests raise `ERR_DROP` | ok |
+
+Proof for D8, D9, D10 and the two `nexttexinfo` failures of D13: host-side
+harnesses (not committed) compiled the real `files/models.c`, `files/pvs.c`
+and `gl1/gl1_warp.c` with stubs for `Hunk_Alloc`, `Com_Error` and the GL
+entry points and ran them under `-fsanitize=address`:
+
+```text
+Mod_LoadNodes, 17 nodes, both children of node i = node i+1, last node -> leaf 1:
+ERROR: AddressSanitizer: stack-buffer-overflow ... WRITE of size 4
+    #0 in Mod_NumberLeafs models.c:385  #1..#3 in Mod_NumberLeafs models.c:390
+Address ... is located in stack of thread T0 at offset 524576 in frame
+    #0 in Mod_LoadNodes models.c:405
+
+Mod_LoadVisibility, 4-byte lump with numclusters = 1000000:
+ERROR: AddressSanitizer: heap-buffer-overflow ... READ of size 4
+    #0 in Mod_LoadVisibility models.c:508
+... located 0 bytes after 4-byte region
+
+Mod_LoadTexinfo, texinfo 0 -> 1 -> 1 -> ...: no return (killed by a 10 s timeout)
+
+Mod_LoadTexinfo, one texinfo with nexttexinfo = 100000:
+ERROR: AddressSanitizer: BUS on unknown address ... READ memory access
+    #0 in Mod_LoadTexinfo models.c:651
+
+Mod_DecompressVis, row 25000 (numclusters 200000), literal 0x41 bytes:
+ERROR: AddressSanitizer: global-buffer-overflow ... WRITE of size 1
+    #0 in Mod_DecompressVis pvs.c:60
+... located 0 bytes after global variable 'Mod_DecompressVis.decompressed' ... of size 8192
+
+R_SubdivideSurface, one SURF_WARP face with 200 edges:
+ERROR: AddressSanitizer: stack-buffer-overflow ... WRITE of size 4
+    #0 in R_SubdivideSurface gl1_warp.c:271
+Address ... is located in stack of thread T0 at offset 800 in frame
+    #0 in R_SubdivideSurface gl1_warp.c:246
+```
+
+D11, D12 and D14 are static traces, high confidence: each is an array index
+taken from the file with no comparison anywhere between the read and the use.
+D15 is the one-line fix in this branch (soft `Mod_LoadMarksurfaces` now tests
+`j < 0` like gl1 and gl3).
