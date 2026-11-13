@@ -12,7 +12,7 @@
 # absolute path.
 #
 #   evidence.py build --ref-dir D --cand-dir D --compare F --out D --prefix P [--meta k=v]...
-#   evidence.py synth --out D --prefix P [--noise BYTES] [--meta k=v]...
+#   evidence.py synth --out D --prefix P [--noise BYTES | --size WxHxFRAMES] [--meta k=v]...
 #   evidence.py stage --root D --manifest M --stage D [file]...
 #   evidence.py markdown --manifest M --base-url URL
 #   evidence.py selftest
@@ -646,7 +646,8 @@ def cmd_build(a):
     if not scored:
         raise SystemExit('evidence: the comparison lists no frame present in both pins')
     worst = max(scored, key=lambda r: (float(r[1]), float(r[2]) if r[2] != '-' else 0.0))
-    ref_cap, cand_cap = a.get('ref-caption', 'REFERENCE'), a.get('cand-caption', 'CANDIDATE')
+    given = dict(parse_meta(a['meta']))
+    ref_cap, cand_cap = given.get('ref-caption', 'REFERENCE'), given.get('cand-caption', 'CANDIDATE')
     diff_cap = 'DIFFERENCE X%d' % DIFF_GAIN
 
     def load(d, name):
@@ -749,7 +750,7 @@ def cmd_synth(a):
         meta += [('budget', 'exempt: a size-limit probe')]
         write_outputs(a['out'], a['prefix'], meta, [('noise.png', 'apng', data, w, h, 1)])
         return
-    w, h, total = 320, 240, 24
+    w, h, total = (int(v) for v in a.get('size', '320x240x24').split('x'))  # the self-test draws a small one
     frames = [pattern(w, h, i, total) for i in range(total)]
     meta += [('clip-frames', str(total)), ('clip-delay-ms', '125'), ('budget', str(BUDGET))]
     write_outputs(a['out'], a['prefix'], meta, [
@@ -872,6 +873,8 @@ def cmd_stage(a):
 
 def cmd_markdown(a):
     meta, scores, files = read_manifest(a['manifest'])
+    if 'stage' in a:  # only what was uploaded
+        files = [f for f in files if os.path.isfile(os.path.join(a['stage'], f['name']))]
     base = a['base-url'].rstrip('/') + '/'
     url = {f['kind']: base + f['name'] for f in files}
     mname = os.path.basename(a['manifest'])
