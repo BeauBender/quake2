@@ -712,14 +712,14 @@ reachability in [Where each asset can come from](#where-each-asset-can-come-from
 
 | ID | Where | One line | sev | conf | Card |
 |---|---|---|---|---|---|
-| D1 | `collision.c` `CM_DecompressVis` | input never bounded by `numvisibility`; a zero-length run writes a full `row` past the 8192-byte output when `row` is large | medium | high (ASAN) | FIX23 |
+| D1 | `collision.c` `CM_DecompressVis` | input over-read only: the input pointer is never bounded by `numvisibility`, and a `00 00` pair (zero-length run) advances the input without producing output, so the decoder walks past `map_visibility`; the output is clamped to `row` (at most 4096 of 8192 bytes) | medium | high (ASAN, READ) | FIX23 |
 | D2 | `collision.c` `CM_InitBoxHull` | box-hull leaf written past `map_leafs` when the map uses every leaf slot | high | high (ASAN) — **fixed in this branch** | fixed |
 | D3 | `collision.c` `CM_SetAreaPortalState` | `portalnum` has no lower bound and an off-by-one upper bound | medium | high (ASAN) — negative side **fixed in this branch**; off-by-one remains | FIX23 (off-by-one) |
 | D4 | `filesystem.c` `FS_LoadPAK` | directory read past EOF leaves `info` uninitialised; `Q_strlcpy` then over-reads an unterminated pack name | medium | high | FIX22 |
 | D5 | `filesystem.c` `FS_LoadPAK` | a bare header asks for a ~2 GB `malloc` plus ~2.4 GB `calloc`; failure is `ERR_FATAL` | medium | high | FIX22 |
 | D6 | `filesystem.c` `FS_FOpenFile`/`FS_LoadFile2` | pack entry `offset`/`size` never bounded by the file; negative size leaks the handle, oversize size `ERR_FATAL`s | medium | high | FIX22 |
 | D7 | renderer `Mod_ForName` | 1-2 byte model file read up to 2 bytes past the `length + 1` allocation at the format switch | low | high | FIX17 |
-| D8 | renderer `Mod_ClusterPVS`/`Mod_DecompressVis` | vis offsets and `numclusters` unbounded; the `static decompressed[8192]` overflows on write | high | high (ASAN) | FIX17 |
+| D8 | renderer `Mod_ClusterPVS`/`Mod_DecompressVis` | the output is bounded only by `row`, never by the buffer: `numclusters` can give a row of up to 16384 bytes and a zero run is written whole, so the `static decompressed[8192]` overflows on write (the vis offsets are FIX3 item 3) | high | high (ASAN) | FIX17 |
 | D9 | renderer `Mod_NumberLeafs` | a node DAG (shared children, no cycle) walks a leaf 2^n times, overrunning two `int[MAX_MAP_LEAFS]` stack arrays | high | high (ASAN) | FIX17 |
 | D10 | gl1/gl3 `R_SubdivideSurface` | a `SURF_WARP` face with >64 edges overruns `vec3_t verts[64]` on the stack before the vertex-count check | high | high (ASAN) | FIX17 |
 | D11 | renderer faces/edges | `numedges`/`firstedge`/surfedge/`edge.v[]` indices unbounded against `numsurfedges`/`numedges`/`numvertexes`; negative `numedges` gives a negative `Hunk_Alloc` | high | high (static) | FIX17 |
