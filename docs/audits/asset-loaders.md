@@ -494,3 +494,46 @@ imports); D26 is a static trace with high confidence (`MAX_OSPATH` is 4096 in
 `shared.h` for non-Windows, non-Apple builds, and `namewe` is a fixed 256).
 The minimal fix is to size `namewe` as `MAX_OSPATH` or to copy with
 `Q_strlcpy` into a bounded buffer.
+
+## Entity strings and map-fix overrides
+
+The entity lump is text: `{ "key" "value" ... }` blocks. The server reads it
+in `collision.c` (`CMod_LoadEntityString`), optionally replacing it with a
+`.ent` override file, then hands it to the game module's `SpawnEntities`
+(`g_spawn.c`), which tokenizes with `COM_Parse` (`shared.c`) and writes each
+value into a fixed struct field chosen by name. The entity text comes from the
+map, which a client downloads from the server, so it is untrusted on the
+server; the `.ent` override is a loose file in the game directory. Every write
+below lands at a compile-time struct offset selected by the key, never at an
+offset taken from the file, which is why the section is almost entirely `ok`.
+
+| Function | Field | Use | Check (quoted) or absence | Verdict |
+|---|---|---|---|---|
+| `CMod_LoadEntityString` | map `name` | `strcmp(name + nameLen - 4, ".bsp")`, `memcpy(namewe, name, nameLen - 4)` | `nameLen > (MAX_QPATH - 1)` rejects long names; a name shorter than 4 underflows `name + nameLen - 4`, but the server builds it as `maps/%s.bsp` (covered in the collision section) | ok-by-construction |
+| `CMod_LoadEntityString` | `.ent` CRC | `snprintf(entname, sizeof(entname) - 1, "%s@%04x.ent", namewe, crc)` | `CRC_Block` over `l->filelen - 1`, `namewe` is `MAX_QPATH`, `entname` is 256; `snprintf` bounds the write | ok |
+| `CMod_LoadEntityString` | `.ent` file length | `memcpy(map_entitystring, buffer, bufLen)`, `map_entitystring[bufLen] = 0` | `bufLen > 1 && bufLen < sizeof(map_entitystring) - 1` | ok |
+| `CMod_LoadEntityString` | BSP entity lump length | `memcpy(map_entitystring, ..., numentitychars)` | `l->filelen < 0`, `l->filelen >= sizeof(map_entitystring)` (collision section) | ok |
+| `COM_Parse` (`shared.c`) | each token | writes `com_token[MAX_TOKEN_CHARS]` (1024) | `if (len < MAX_TOKEN_CHARS)` guards every write, the quoted-string branch keeps reading but stops writing, and `if (len == MAX_TOKEN_CHARS) len = 0` before `com_token[len] = 0` | ok (a token longer than 1023 is silently truncated, not a memory error) |
+| `ED_ParseEdict` | key token | `Q_strlcpy(keyname, com_token, sizeof(keyname))` into `char keyname[256]` | bounded copy | ok |
+| `ED_ParseEdict` | `}` / EOF | loop control | `com_token[0] == '}'`, `!data` with `gi.error` | ok |
+| `ED_ParseEdict` | leading `_` keys | `continue` (discarded) | `if (keyname[0] == '_')` | ok |
+| `ED_ParseField` | key | `FindSpawntempField(key)` then `FindSpawnfield(key)`; `b = &st + f->ofs` or `(byte *)ent + f->ofs` | the offset comes from the compile-time `fields[]` table, not the file; an unknown key is reported and dropped | ok-by-construction |
+| `ED_ParseField` | `F_LSTRING` value | `ED_NewString(value)` | see `ED_NewString` | ok |
+| `ED_ParseField` | `F_VECTOR`, `F_ANGLEHACK` | `sscanf(value, "%f %f %f", &vec[0..2])`, `strtod` | writes three `vec_t` at the field offset; a short value zero-fills the vector | ok |
+| `ED_ParseField` | `F_INT`, `F_FLOAT` | `strtol` / `strtod` into the field | fixed-size write | ok |
+| `ED_NewString` | value | `gi.TagMalloc(strlen(value) + 1)`, escape expansion into it | each `\\x` consumes two input bytes for one output byte, so the output never exceeds the `strlen + 1` allocation; the `i < l - 1` guard keeps the look-ahead inside the string | ok |
+| `SpawnEntities` | `entities` text | `COM_Parse` loop; `ent = G_Spawn()` per block | `{` expected or `gi.error`; `G_Spawn` raises `gi.error` when `num_edicts >= maxentities`, so a map with too many entities drops rather than overrunning `g_edicts` | ok |
+| `SpawnEntities` | `mapname`, `spawnpoint` | `Q_strlcpy(level.mapname, ...)`, `Q_strlcpy(game.spawnpoint, ...)` | bounded copies | ok |
+| `ED_CallSpawn` | `ent->classname` | linear search of `itemlist` and `spawns[]` by `strcmp` | string compare only; an unknown classname is reported, the entity gets no spawn function | ok |
+| map hacks (`SpawnEntities`, individual spawn functions) | `ent->model`, `level.mapname` | `Q_stricmp(ent->model, "*27")` etc.; `ent->model` as `*N` reaches `CM_InlineModel` | string compares; the inline-model number is range-checked in `CM_InlineModel` (collision section) | ok |
+
+No defect found in the entity-string path. The parser's safety rests on two
+invariants that hold in this tree: `COM_Parse` bounds its token buffer, and
+`ED_ParseField` writes only to offsets from the static `fields[]` table keyed
+by name, so a hostile value can set a field to a garbage number but cannot
+choose where it lands. The downstream effect of a garbage field value (for
+example an out-of-range `style` on `func_areaportal`, which becomes a
+`CM_SetAreaPortalState` index) is accounted for at the sink, in the collision
+section (D3). No host harness was run: `g_spawn.c` is the game module and links
+against the full `game_import_t`; the writes were traced to the `fields[]`
+table, which is compile-time data.
