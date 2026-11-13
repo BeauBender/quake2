@@ -26,3 +26,4 @@ The documentation is split into several documents:
 * [Contributing Guide](080_contributing.md)
 * [Unit Tests, Pins And Coverage](085_unittests.md)
 * [File Listings](090_filelists.md)
+* [Renderer Frame Pins](100_renderpins.md)
