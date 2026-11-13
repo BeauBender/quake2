@@ -8,8 +8,7 @@ boundaries": a malicious server sending a connected client arbitrary
 `svc_*` data and connectionless replies, and a malicious client sending a
 server `clc_*` data, connectionless requests and userinfo.
 
-Base: branch `task17-network-audit` off `main` (727a6280). Earlier
-trust-boundary fixes are referenced where a site is already fixed or already
+Base: `main` at 727a6280. Earlier trust-boundary fixes are referenced where a site is already fixed or already
 carded: TASK1 (#8, download chunk / savedir), TASK2 (#9, areabits and asset
 loaders), FIX1 (#40), FIX3 (#44), FIX8 (#56), FIX10 (#73), FIX4/#46 (challenge
 entropy).
@@ -104,7 +103,7 @@ before the loop's test (D12), that is the bug to look for.
 | `szone.c` `SZ_Write`/`SZ_Print` | `length`/`strlen` | `memcpy` len | engine-originated lengths only | ok |
 | `crc.c` `COM_BlockSequenceCRCByte` `memcpy(chkb,base,length)` | `length` from caller | copy into `chkb[64]` | `length > 60` clamped to 60 before copy; `sequence < 0` → `Sys_Error` | ok |
 | `cmdparser.c` `Cmd_TokenizeString` / `Cmd_Argv` | tokenized peer string | `cmd_argv[]`, count | `cmd_argc < MAX_STRING_TOKENS` on fill; `Cmd_Argv((unsigned)arg >= cmd_argc)` returns `""` | ok |
-| `shared.c` `COM_Parse` `com_token[len]` | token chars | index into `com_token[MAX_TOKEN_CHARS]` | `len < MAX_TOKEN_CHARS` guards each write; `len == MAX_TOKEN_CHARS` reset to 0 — see Hardening H1 (off-by-one terminator) | hardening |
+| `shared.c` `COM_Parse` `com_token[len]` | token chars | index into `com_token[MAX_TOKEN_CHARS]` | `len < MAX_TOKEN_CHARS` guards each write; `len == MAX_TOKEN_CHARS` reset to 0 — see Hardening H1 (over-long token emptied, not truncated) | ok (hardening H1) |
 | `shared.c` `Info_ValueForKey` | key/value scan | `Q_strlcpy` into `value[2][MAX_INFO_VALUE]` | `vlen` clamped to `MAX_INFO_VALUE`; `Q_strlcpy` truncates; in bounds. Returns the **first** pair with the key, which the engine-set `ip` key relies on → Defect D17 | defect (D17) |
 | `shared.c` `Info_SetValueForKey` / `Info_RemoveKey` | key/value | builds into `s` | `Info_ValidateKeyValue` bounds key/value < MAX_INFO_KEY/VALUE; `Q_strlcpy_ascii` with `MAX_INFO_STRING - slen` and overflow check; in bounds. `Info_RemoveKey` removes only the **first** matching pair, the new pair is appended at the end, and a pair that does not fit is dropped ("Info string length exceeded"), so setting a key does not make it unique or present → Defect D17 | defect (D17) |
 | `backends/unix/network.c` `NET_GetPacket` `recvfrom(..., maxsize, ...)` | datagram | `cursize = ret` | `ret == maxsize` → "Oversize packet" dropped; buffer is `MAX_MSGLEN` | ok |
@@ -124,7 +123,7 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_parse.c` `CL_ParsePacketEntities` ring | `oldframe->parse_entities + i` | index `cl_parse_entities[... & (MAX_PARSE_ENTITIES-1)]` | masked | ok |
 | `cl_parse.c` `CL_DeltaEntity` `cl_parse_entities[cl.parse_entities & (MAX_PARSE_ENTITIES-1)]` | — | ring write; `frame->num_entities++` | ring masked; **`num_entities` itself is never capped to `MAX_EDICTS`** → feeds Defect D1 | defect (D1, in a sink) |
 | `cl_parse.c` `CL_DeltaEntity` `CL_AllocEntity(newnum)` | newnum | realloc'd `cl_entities[newnum]` | `CL_AllocEntity` checks `0..MAX_CL_ENTNUM`, grows array via `NextPow2gt`; NULL → dummy | ok |
-| `cl_parse.c` `CL_ParseDelta` modelindex/frame/skin/… | byte/short/long | stored in `entity_state_t` fields as read (frame and skin can be negative) | no check here; each sink must bound the field: the entity rows below (D5, D10, D11 defects; `modelindex*` ok by the byte type, H2) | see the sink rows |
+| `cl_parse.c` `CL_ParseDelta` `modelindex`, `modelindex2`, `modelindex3`, `modelindex4`, `frame`, `skinnum`, `effects`, `renderfx`, `origin`, `angles`, `old_origin`, `sound`, `event`, `solid` | byte (`modelindex*`, `sound`, `event`), byte or short (`frame`), byte, short or long (`skinnum`, `effects`, `renderfx`), short (`solid`), coords and angles | stored in `entity_state_t` fields as read (`frame` and `skinnum` can be negative) | no check here; each sink must bound the field: `modelindex*` in the `model_draw`/`model_clip` rows (by the byte type, H2), `frame` in the D5, D11 and D16 rows, `skinnum` in the clientinfo, D10 and beam rows, `sound` in the `sound_precache` row; `effects` and `renderfx` are flag tests, `event` a `switch` (`CL_EntityEvent`) and comparisons, `solid` a test and bit fields for the prediction box, positions and angles plain values | see the sink rows |
 | `cl_parse.c` `CL_ParsePlayerstate` `state->stats[i]` | long `statbits`, shorts | `stats[i]`, `i` in `0..MAX_STATS` loop | `i < MAX_STATS` | ok |
 | `cl_parse.c` `CL_ParsePlayerstate` other fields (`pm_type`, origin, velocity, `pm_time`, `pm_flags`, gravity, `delta_angles`, view and kick angles, `gunframe`, gun offset and angles, blend, `fov`, `rdflags`) | byte/char/short/angle reads | stored as values in `player_state_t` | not used as indices (`gunindex` is covered in the entity rows) | ok |
 | `cl_parse.c` `CL_ParseFrame` `serverframe`, `surpressCount`, `svc_playerinfo`/`svc_packetentities` bytes | `MSG_ReadLong`, `MSG_ReadByte` | `cl.frames[serverframe & UPDATE_MASK]`; command bytes compared | masked; a wrong command byte → `ERR_DROP` | ok |
@@ -136,7 +135,7 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_parse.c` `CL_ParseConfigString` → `CL_LoadClientinfo` (`CS_PLAYERSKINS + n`) | configstring (< 64 bytes, checked above) | `Q_strlcpy` into `cinfo[64]`, `name[64]`, `model_name`/`skin_name[64]`; file names by `Com_sprintf` with `sizeof` | `name[t - s]` is inside `name` because `s` is inside `cinfo` of the same size; the skin pointer `s + strlen(model_name) + 1` stays inside `cinfo`; names are only looked up (`R_RegisterModel`, `R_RegisterSkin`, `Draw_FindPic`), never written | ok |
 | `cl_lights.c` `CL_SetLightstyle` `map[k]` | `CS_LIGHTS + n` configstring | `cl_lightstyle[n].map[k]`, `k < strlen(s)` | `n < MAX_LIGHTSTYLES` by the caller's range test; `strlen(s) < MAX_QPATH` enforced by `CL_ParseConfigString`, and `map` is `float[MAX_QPATH]` | ok |
 | `cl_parse.c` `CL_ParseStartSoundPacket` `sound_num` | `MSG_ReadByte` | `cl.sound_precache[sound_num]` | `sound_num < 0` drop; `>= MAX_SOUNDS` print+return | ok |
-| `cl_parse.c` `CL_ParseStartSoundPacket` `ent` | `channel = MSG_ReadShort; ent = channel>>3` | passed to `S_StartSound` | `ent < 0` print+return; `S_StartSound`/`S_PickChannel` clamp — see Hardening H3 | ok / hardening |
+| `cl_parse.c` `CL_ParseStartSoundPacket` `ent` | `channel = MSG_ReadShort; ent = channel>>3` | passed to `S_StartSound` | `ent < 0` print+return; `S_StartSound`/`S_PickChannel` clamp — see Hardening H3 | ok (hardening H3) |
 | `cl_parse.c` svc_layout `MSG_ReadString` | string | `Q_strlcpy` into `cl.layout[1024]` | truncates | ok |
 | `cl_parse.c` svc_print `i` | `MSG_ReadByte` | only compared to `PRINT_CHAT` | `i < 0` → break | ok |
 | `cl_parse.c` svc_print text | `MSG_ReadString` | `Com_Printf("%s", ...)` | string bounded 2048, printed as an argument | ok |
@@ -149,11 +148,12 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_download.c` `CL_RequestNextDownload` `strcpy(model, p)`, `strcpy(skin, p)` | `cl.configstrings[CS_PLAYERSKINS + i]` (server) | copies into `char model[MAX_QPATH]`, `skin[MAX_QPATH]` | unbounded copies, in bounds only because `CL_ParseConfigString` refuses a string of `MAX_QPATH` or more characters for every row outside the statusbar range, and `p` and the `skin` source point inside that string | ok |
 | `cl_effects.c` `CL_AddMuzzleFlash` `i` | `MSG_ReadShort` | `CL_AllocEntity(i)` | `i < 1 || i > MAX_CL_ENTNUM` → `Com_Error` | ok |
 | `cl_effects.c` `CL_AddMuzzleFlash` `weapon` | `MSG_ReadByte` | `switch`, no array index | `-1` hits default | ok |
-| `cl_effects.c` `CL_AddMuzzleFlash2` `flash_number` | `MSG_ReadByte` | `monster_flash_offset[flash_number]` | `flash_number` is `unsigned`, so `-1` is rejected too; `flash_number > 210` → print+return, a literal below the table size (`flash.c`) — Hardening H4 | ok (H4) |
+| `cl_effects.c` `CL_AddMuzzleFlash2` `flash_number` | `MSG_ReadByte` | `monster_flash_offset[flash_number]` | `flash_number` is `unsigned`, so `-1` is rejected too; `flash_number > 210` → print+return, a literal below the table size (`flash.c`) — Hardening H4 | ok (hardening H4) |
 | `cl_effects.c` `CL_AddMuzzleFlash2` `entnum` | `MSG_ReadShort` | `CL_AllocEntity`-backed entity lookup | `entnum < 1 \|\| entnum > MAX_CL_ENTNUM` → `Com_Error` | ok |
 | `cl_tempentities.c` `CL_ParseTEnt` `type` | `MSG_ReadByte` | `switch`; `default` `Com_Error` | ok | ok |
 | `cl_tempentities.c` splash `r` | `MSG_ReadByte` | `splash_color[r]` (7 entries) | `r > 6 || r < 0` → `color=0` else index | ok |
 | `cl_tempentities.c` beam/lightning/steam `ent`/`srcEnt`/`destEnt` | `MSG_ReadShort` | stored in beam `entity`/`dest_entity`, compared only | `CL_ParseLightning` drops on `-1`; beams store ints, used in equality tests not as indices | ok |
+| `cl_tempentities.c` `TE_FLASHLIGHT` `ent` | `MSG_ReadShort` | `CL_Flashlight(ent, pos)` → `CL_AllocDlight(ent)` key | used only as a key compared with `cl_dlights[i].key` over `MAX_DLIGHTS`; never an index | ok |
 | `cl_tempentities.c` sustain `id` | `MSG_ReadShort` | `s->id`, compared only | not an index | ok |
 | `cl_tempentities.c` `CL_ParseTEnt` and helpers (`CL_ParseLaser`, `CL_ParseNuke`, `CL_ParseWidow`, `CL_ParseHeatBeam`, `CL_ParseBeam`) positions, directions, counts, `magnitude` | `MSG_ReadPos`, `MSG_ReadDir`, `MSG_ReadByte`, `MSG_ReadShort` | vectors, particle counts, speeds | counts are loop bounds over the free-particle list (allocation stops when it is empty); `MSG_ReadDir` bounds its index | ok |
 | `cl_tempentities.c` `CL_ParseParticles` | `MSG_ReadPos`, `MSG_ReadDir`, `MSG_ReadByte` ×2 | `CL_ParticleEffect` | the function has no caller (dead code); its colour would be the same class as D9 | ok (unreachable) |
@@ -163,7 +163,7 @@ before the loop's test (D12), that is the bug to look for.
 | `gl1_main.c` `R_DrawParticles2` `colortable[p->color]` | `particle_t.color` | `d_8to24table[256]` index | **no mask** (the point-sprite path and gl3 mask `& 0xFF`) → Defect D9 | defect (D9) |
 | `cl_network.c` `CL_ConnectionlessPacket` `Cmd_Argv(0)` and the logged command name | `MSG_ReadStringLine` → `Cmd_TokenizeString` | dispatch; `Com_Printf("%s: %s\n", ...)` | string bounded 2048; tokenizer bounded | ok |
 | `cl_network.c` `client_connect` | command name only | `Netchan_Setup(..., net_from, ...)`, `cls.state = ca_connected`, sends `new` | ignored only in `ca_connected`; **accepted from any source address in `ca_disconnected`, `ca_connecting` and `ca_active`** while the client socket is open, and points the netchan at the sender → Defect D14 (preconditions there) | defect (D14) |
-| `cl_network.c` `challenge` `Cmd_Argv(1)` | tokenized | `strtol` → `cls.challenge`; `CL_SendConnectPacket` to `cls.servername` | numeric; the connect goes to the configured server, not the sender; accepted from any source in any state (same class as D14) | defect (D14, low part) |
+| `cl_network.c` `challenge` `Cmd_Argv(1)` | tokenized | `strtol` → `cls.challenge`; `CL_SendConnectPacket` to `cls.servername` | numeric; the connect goes to the configured server, not the sender; accepted from any source in any state (same class as D14) | defect (D14, lower impact) |
 | `cl_network.c` `echo` `Cmd_Argv(1)` | tokenized (≤ 1023 characters) | `Netchan_OutOfBandPrint(..., "%s", ...)` back to the sender | format is fixed; reply is about as large as the request (no amplification) | ok |
 | `cl_network.c` `print` | `MSG_ReadString` | `Com_Printf("%s", s)` | string bounded 2048; accepted from any source, console text only (this is how status replies arrive) | ok (by design) |
 | `cl_network.c` `ping` | command name only | `Netchan_OutOfBandPrint("ack")` | fixed reply | ok |
@@ -175,17 +175,17 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_screen.c` `SCR_ExecuteLayoutString` `"stat_string"` `configstrings[value]` | `stats[index]` | configstring row | `value < 0 \|\| value >= MAX_CONFIGSTRINGS` rejected | ok |
 | `cl_screen.c` `SCR_ExecuteLayoutString` `"client"`/`"ctf"` `clientinfo[value]` | `strtol` of the layout | clientinfo index | `value < 0 \|\| value >= MAX_CLIENTS` rejected; `ctf` `sprintf` into `block[80]` with `%3d %3d %-12.12s`: two `int` fields of at most 11 characters each plus a 12-character name, under 80 | ok |
 | `cl_screen.c` `SCR_ExecuteLayoutString` `"num"` → `stats[strtol(token)]` | layout number | `stats[...]` index | **unchecked** index into `stats[MAX_STATS]` → Defect D3 | defect (D3) |
-| `cl_screen.c` `DrawHUDStringScaled` `line[width++]` | `COM_Parse` token chars to `\n` | index into `line[1024]` | no bound on `width` in the function; its only live callers (`cstring`, `cstring2` layout tokens) pass a `COM_Parse` token, at most `MAX_TOKEN_CHARS - 1` = 1023 characters, so `line[1023]` is the furthest write | hardening (D4, not reachable today) |
-| `cl_entities.c` `CL_AddPacketEntities` `cl.model_draw[s1->modelindex]` (and `modelindex2/3/4`) | modelindex bytes | model pointer | no explicit check; `CL_ParseDelta` reads each with `MSG_ReadByte`, so 0..255 against `model_draw[MAX_MODELS]` (256); `-1` only on a short read, which drops the connection before the frame is used (see D5) | ok (by the byte type; H2) |
+| `cl_screen.c` `DrawHUDStringScaled` `line[width++]` | `COM_Parse` token chars to `\n` | index into `line[1024]` | no bound on `width` in the function; its only live callers (`cstring`, `cstring2` layout tokens) pass a `COM_Parse` token, at most `MAX_TOKEN_CHARS - 1` = 1023 characters, so `line[1023]` is the furthest write; not reachable today → D4 | ok (hardening D4) |
+| `cl_entities.c` `CL_AddPacketEntities` `cl.model_draw[s1->modelindex]` (and `modelindex2/3/4`) | modelindex bytes | model pointer | no explicit check; `CL_ParseDelta` reads each with `MSG_ReadByte`, so 0..255 against `model_draw[MAX_MODELS]` (256); `-1` only on a short read, which drops the connection before the frame is used (see D5); see Hardening H2 | ok (hardening H2) |
 | `cl_entities.c` `ci = &cl.clientinfo[s1->skinnum & 0xff]` | skinnum | clientinfo index | masked `& 0xff`, `MAX_CLIENTS == 256` | ok |
-| `cl_entities.c` custom weapon `ci->weaponmodel[s1->skinnum >> 8]` | skinnum (`int`, byte/short/long on the wire) | model pointer | only `i > MAX_CLIENTWEAPONMODELS - 1` rejected; **negative `i` passes** → Defect D10 | defect (D10) |
+| `cl_entities.c` custom weapon `ci->weaponmodel[s1->skinnum >> 8]` | skinnum (`int`, byte/short/long on the wire) | model pointer | with `cl_vwep` non-zero (the default), only `i > MAX_CLIENTWEAPONMODELS - 1` rejected; **negative `i` passes** → Defect D10 | defect (D10) |
 | `cl_entities.c` `ent.skinnum = s1->skinnum` → `gl1_mesh.c`/`gl3_mesh.c` `currentmodel->skins[skinnum]` | skinnum | image pointer | only `skinnum >= MAX_MD2SKINS` tested; **negative passes** → Defect D10 (`sw_alias.c` tests both sides) | defect (D10) |
 | `cl_entities.c` beam `ent.skinnum = (s1->skinnum >> (...)) & 0xff` → `d_8to24table[e->skinnum & 0xFF]` | skinnum | palette index | masked at both ends | ok |
 | `cl_entities.c` `ent.frame = s1->frame` → `files/surf.c` `R_TextureAnimation` `frame % numframes`, called by all three renderers (`gl1_surf.c`, `gl3_surf.c`; soft `sw_edge.c` and `sw_poly.c` through `D_CacheSurface` in `sw_surf.c`) | frame (signed short) | count of `tex->next` steps | **negative frame gives a negative count**; the loop runs about 2^32 steps or reaches `NULL` → Defect D11 (alias models test both sides) | defect (D11) |
 | `cl_entities.c` `ent.frame = s1->frame` → sprite models: `gl1_main.c` `R_DrawSpriteModel`, `gl3_main.c` `GL3_DrawSpriteModel`, `sw_sprite.c` `R_DrawSprite`: `frame %= numframes`, then `psprite->frames[frame]` and `currentmodel->skins[frame]` | frame (signed short) | sprite frame record and image pointer | the remainder of a negative frame is zero or negative, so for a sprite with two or more frames **the index is negative** → Defect D16 | defect (D16) |
 | `cl_entities.c` `cl.model_draw[ps->gunindex]` | `gunindex` (`MSG_ReadByte` in `CL_ParsePlayerstate`) | gun model | 0..255 by the byte type vs `MAX_MODELS` | ok (by the byte type) |
 | `cl_entities.c` `bfg_lightramp[s1->frame]` | frame (`U_FRAME8` byte or `U_FRAME16` signed short) | index into `static int[6]` | reached when `effects & EF_BFG` is set without `EF_ANIM_ALLFAST`; **no check on either side** → Defect D5 | defect (D5) |
-| `cl_prediction.c` `cl.model_clip[ent->modelindex]` | modelindex byte | clip model | reached when `ent->solid == 31`; 0..255 by the byte type against `model_clip[MAX_MODELS]` | ok (by the byte type; H2) |
+| `cl_prediction.c` `cl.model_clip[ent->modelindex]` | modelindex byte | clip model | reached when `ent->solid == 31`; 0..255 by the byte type against `model_clip[MAX_MODELS]`; see Hardening H2 | ok (hardening H2) |
 | `sound/sound.c` `S_BuildSoundList` `sounds[i]` | loop to `num_entities` | write into caller `sounds[MAX_EDICTS]` | bound is `i <= MAX_CL_ENTNUM` (32767), **not `MAX_EDICTS` (1024)** → Defect D1 | defect (D1) |
 | `sound/sdl.c` `SDL_AddLoopSounds` `sounds[i]` / loop | `i < num_entities` | read/zero `sounds[MAX_EDICTS]` | **no bound vs `MAX_EDICTS`** → Defect D1 | defect (D1) |
 | `sound/sound.c` `cl.sound_precache[sounds[i]]` | sound id from `ent->sound` (byte) | precache index | `ent->sound` is a byte, `MAX_SOUNDS == 256` | ok |
@@ -206,13 +206,13 @@ before the loop's test (D12), that is the bug to look for.
 | `sv_user.c` `SV_Configstrings_f`/`SV_Baselines_f` `start` | `Cmd_Argv`→`strtol` | loop start / `sv.baselines[i]` | `start < 0` clamped to 0; loops bound by `MAX_CONFIGSTRINGS`/`numbaselines` | ok |
 | `sv_user.c` `SV_ExecuteUserCommand` `Cmd_Argv(0)` | `clc_stringcmd` string, tokenized without macro expansion | `ucmds[]` dispatch, else `ge->ClientCommand` | table lookup by name | ok (by design) |
 | `sv_user.c` `SV_New_f` | no arguments | writes `svc_serverdata` for this client | `state != cs_connected` rejected | ok |
-| `sv_user.c` `SV_Begin_f` `Cmd_Argv(1)` | `strtol` | compared with `svs.spawncount`; then `cs_spawned`, `ge->ClientBegin` | spawncount must match; **no test of the client's current state**, so `begin` can be repeated while spawned (game-level effect, no memory issue) → Hardening H7 | hardening |
+| `sv_user.c` `SV_Begin_f` `Cmd_Argv(1)` | `strtol` | compared with `svs.spawncount`; then `cs_spawned`, `ge->ClientBegin` | spawncount must match; **no test of the client's current state**, so `begin` can be repeated while spawned (game-level effect, no memory issue) → Hardening H7 | ok (hardening H7) |
 | `sv_user.c` `SV_Nextserver_f` `Cmd_Argv(1)` | `strtol` | compared with `svs.spawncount`; `SV_Nextserver` | spawncount must match; `SV_Nextserver` refuses during a normal game | ok |
 | `sv_user.c` `SV_BeginDownload_f` `name` | `Cmd_Argv(1)` | `FS_LoadFile(name)`, path | denylist `..`, `\`, `:`, leading `.`/`/`, must contain `/` | ok (see By design: denylist, not the client allowlist) |
 | `sv_user.c` `SV_BeginDownload_f` `offset` | `Cmd_Argv(2)`→`strtol` | `downloadcount = offset`; then `SV_NextDownload_f` reads `download + downloadcount - r` | clamp only on the `>` side: `if (offset > downloadsize) downloadcount = downloadsize`; **negative `offset` passes** → Defect D6 | defect (D6) |
 | `sv_conless.c` `SVC_DirectConnect` `version`/`qport`/`challenge` | `Cmd_Argv`→`strtol` | compared / stored | version and challenge checked; qport stored | ok |
 | `sv_conless.c` `SVC_DirectConnect` userinfo, `Info_SetValueForKey(userinfo, "ip", NET_AdrToString(net_from))` | `Cmd_Argv(4)` | `Q_strlcpy` into `userinfo[MAX_INFO_STRING]`; engine forces the `ip` key; passed to `ge->ClientConnect` | copy truncates, in bounds; **nothing makes the engine's `ip` pair the only one, or present** → Defect D17 | defect (D17) |
-| `sv_conless.c` `SVC_Info` `version` | `Cmd_Argv(1)`→`strtol` | compared; `Com_sprintf(string, 64, ...)` | **bug-adjacent**: wrong-version branch calls `Com_sprintf(string, sizeof(string), "%s: wrong version\n", hostname->string, sizeof(string))` — extra arg, benign; Hardening H6 | hardening |
+| `sv_conless.c` `SVC_Info` `version` | `Cmd_Argv(1)`→`strtol` | compared; `Com_sprintf(string, 64, ...)` | **bug-adjacent**: wrong-version branch calls `Com_sprintf(string, sizeof(string), "%s: wrong version\n", hostname->string, sizeof(string))` — extra arg, benign; Hardening H6 | ok (hardening H6) |
 | `sv_conless.c` `SVC_RemoteCommand` `net_message.data + 4` | raw packet tail | `Com_Printf("%s", ...)` before the password check | **nothing NUL-terminates the receive buffer**; the print can run past `net_message_buffer` → Defect D13 | defect (D13) |
 | `sv_conless.c` `SVC_RemoteCommand` args | `Cmd_Argv(i)` | `Q_strlcat` into `remaining[1024]`; `Cmd_ExecuteString` | `Q_strlcat` bounded; gated on `Rcon_Validate` password | ok (rcon by design) |
 | `sv_conless.c` `SV_ConnectionlessPacket` `s` | `MSG_ReadStringLine` | `Cmd_TokenizeString` | string bounded 2048; tokenizer bounded | ok |
@@ -226,7 +226,7 @@ before the loop's test (D12), that is the bug to look for.
 | game `client.c` `ClientConnect` → `g_svcmds.c` `SV_FilterPacket(Info_ValueForKey(userinfo, "ip"))` `m[i]` | userinfo `ip`: the first `ip` pair, which need not be the one the engine set from `net_from` | octet bytes `m[4]`, then `*(unsigned *)m` against the filter list | `i < 4` loop bound keeps the writes in bounds; does not call `StringToFilter`; **the value can be peer-chosen or absent**, and with fewer than four dotted parts (or none) some of `m[]` is never written before it is read → Defect D17 | defect (D17) |
 | game `client.c` `ClientUserinfoChanged` skin → `configstring(CS_PLAYERSKINS+playernum, va("%s\\%s", name, s))` | userinfo | configstring | `playernum = ent - g_edicts - 1`, engine-assigned; name/skin validated by `Info_Validate` | ok |
 
-## By design (noted, not filed)
+## By design (noted, no card)
 
 - `svc_stufftext` → `Cbuf_AddText` (cl_parse.c) lets a server queue arbitrary
   client console commands; connectionless `"cmd"` likewise but only from a
@@ -278,8 +278,9 @@ i <= MAX_CL_ENTNUM; i++) sounds[i] = ...`: the guard is `MAX_CL_ENTNUM`
 (32767), not the size of the caller's array. Its one caller,
 `SDL_AddLoopSounds` (`sdl.c`), declares `int sounds[MAX_EDICTS]` on the stack
 and then reads `sounds[i]` and `sounds[j]` in its own two loops, also bounded
-only by `num_entities` (the stale values read past the end are then used as
-an index into `cl.sound_precache[]`). When `num_entities > 1024` the write
+only by `num_entities` (the values read past the end are the ones
+`S_BuildSoundList` has just written there, and they are then used as an index
+into `cl.sound_precache[]`). When `num_entities > 1024` the write
 `sounds[i]` runs off the end of the 4 KB stack array.
 
 Hostile input and reachability: there is no cap on `num_entities` and no
@@ -491,7 +492,8 @@ signed short, or (with both `U_SKIN8` and `U_SKIN16`) a full signed long, so
 the server can send any negative value.
 
 - `CL_AddPacketEntities` (`cl_entities.c`), custom weapon path
-  (`modelindex2 == 255`): `i = (s1->skinnum >> 8)` is tested only with
+  (`modelindex2 == 255`, with `cl_vwep` non-zero, the default; `cl_vwep 0`
+  forces `i` to 0): `i = (s1->skinnum >> 8)` is tested only with
   `i > MAX_CLIENTWEAPONMODELS - 1` before `ent.model = ci->weaponmodel[i]`
   (`ci` is `&cl.clientinfo[s1->skinnum & 0xff]`, which is in range). A
   negative `skinnum` gives a negative `i`, which reads a pointer up to about
@@ -569,8 +571,7 @@ the print can run past the received data, and past the end of
 zero byte; an unauthenticated peer reaches it. The output goes to the server console and log,
 not to the peer (the redirect to the sender starts after the print).
 Severity low (out-of-bounds read of adjacent static memory, logged locally).
-This replaces the earlier hardening note H5, which said both that the buffer
-was NUL-terminated and that the print relied on it. Fix: print at most
+Fix: print at most
 `cursize - 4` bytes (`%.*s`), or terminate the received data in
 `NET_GetPacket` (receive at most `maxsize - 1` bytes and store a NUL at
 `cursize`).
@@ -737,9 +738,6 @@ Carried on FIX28 (#129) except D4, which is on FIX13 (#109).
 - H4 `CL_AddMuzzleFlash2`: `flash_number > 210` is rejected though the
   `monster_flash_offset` table in `src/common/shared/flash.c` has more
   entries; harmless, but the bound should come from the table size.
-- H5: withdrawn. The `SVC_RemoteCommand` print is a defect (D13); the
-  `SV_ReadPackets` runt read stays inside the buffer and is recorded as ok in
-  the server table.
 - H6 `SVC_Info`: the wrong-version `Com_sprintf` passes an extra `sizeof`
   argument that the format ignores; cosmetic, no overflow.
 - H7 `SV_Begin_f`: checks only the spawn count, not that the client is in
@@ -751,9 +749,8 @@ Carried on FIX28 (#129) except D4, which is on FIX13 (#109).
 
 ## Cards filed
 
-One card per defect class, filed as locked backlog issues (epic
-trust-boundary, depends on TASK17). Every unfixed finding above is on one of
-them.
+One card per defect class (epic trust-boundary, depends on TASK17). Every
+unfixed finding above is on one of them.
 
 | Card | Issue | Covers | Severity |
 |---|---|---|---|
@@ -773,6 +770,6 @@ them.
 D9, D10, D11 and D16 share a card because they are one class (a server-supplied
 entity or effect field reaching an array index or loop count with a check on
 one side only) and one fix pattern (a two-sided bound or a mask at the sink),
-in the same files. D5 is the same class but was already filed on its own.
+in the same files. D5 is the same class and has its own card.
 D12 and D13 share a card because both treat the receive buffer as longer or
 better terminated than the datagram in it.
