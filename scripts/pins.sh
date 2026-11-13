@@ -31,6 +31,8 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 scen_dir="$root/scripts/pins/scenarios"
 die() { echo "pins: $*" >&2; exit 1; }
 
+check_name() { case $2 in ''|*[!a-z0-9_]*) die "$1 must match [a-z0-9_]+, got '$2'";; esac; }
+
 store() {
     if [ -n "${PINS_STORE:-}" ]; then echo "$PINS_STORE"; return; fi
     local s; s=$(sed -n 's/.*"store"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$root/.claude/dev-loop.json" 2>/dev/null | head -1)
@@ -70,7 +72,9 @@ build_args() {
 }
 
 cmd_record() {
-    local renderer=$1 scenario=$2 bin="${PINS_BIN:-$root/release/quake2}"
+    local renderer=$1 scenario=$2 bin="${PINS_BIN:-$root/release/quake2}" limit="${PINS_TIMEOUT:-600}"
+    check_name renderer "$renderer"; check_name scenario "$scenario"
+    case $limit in ''|*[!0-9]*) die "PINS_TIMEOUT must be a number of seconds, got '$limit'";; esac
     [ -f "$scen_dir/$scenario.cfg" ] || die "no scenario $scenario (see $scen_dir)"
     local out; out="$(store)/$scenario/$renderer/$(engine_sha)-$(scenario_hash "$scenario")"
     build_args "$renderer" "$scenario" "$out"
@@ -79,17 +83,22 @@ cmd_record() {
     [ -n "${PINS_BASEDIR:-}" ] && [ -d "$PINS_BASEDIR/baseq2" ] || die "PINS_BASEDIR must hold baseq2/ (owner game data, never committed)"
     rm -rf "$out"; mkdir -p "$out"
     "$bin" "${engine_args[@]}" > "$out/engine.log" 2>&1 &
-    local pid=$! t=0 limit="${PINS_TIMEOUT:-600}"
+    local pid=$! t=0 w status=0 timedout=0
     while kill -0 "$pid" 2>/dev/null; do
         if [ "$t" -ge "$limit" ]; then
+            timedout=1
             kill "$pid" 2>/dev/null || true
+            w=0; while kill -0 "$pid" 2>/dev/null && [ "$w" -lt 5 ]; do sleep 1; w=$((w+1)); done
+            kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
             echo "pins: engine killed after ${limit}s (PINS_TIMEOUT)" >> "$out/engine.log"
             break
         fi
         sleep 1; t=$((t+1))
     done
-    wait "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || status=$?
     grep -E 'frames,.*fps' "$out/engine.log" > "$out/timedemo.txt" || true
+    [ "$timedout" -eq 0 ] || die "engine timed out after ${limit}s; the pin in $out is incomplete (see $out/engine.log)"
+    [ "$status" -eq 0 ] || die "engine exited with status $status; the pin in $out is incomplete (see $out/engine.log)"
     local n; n=$(ls "$out"/*.tga 2>/dev/null | wc -l | tr -d ' ')
     [ "$n" -gt 0 ] || die "no frames captured; see $out/engine.log"
     echo "recorded $n frames: $out"
@@ -97,7 +106,8 @@ cmd_record() {
 
 cmd_compare() {
     local renderer=$1 scenario=$2 ref=gl1 threshold=0.02; shift 2
-    while [ $# -gt 0 ]; do case $1 in --ref) ref=$2; shift 2;; --threshold) threshold=$2; shift 2;; *) die "unknown option $1";; esac; done
+    check_name renderer "$renderer"; check_name scenario "$scenario"
+    while [ $# -gt 0 ]; do case $1 in --ref) ref=$2; check_name reference "$ref"; shift 2;; --threshold) threshold=$2; shift 2;; *) die "unknown option $1";; esac; done
     local s; s=$(store)
     local cand ref_dir; cand=$(ls -d "$s/$scenario/$renderer"/* 2>/dev/null | tail -1); ref_dir=$(ls -d "$s/$scenario/$ref"/* 2>/dev/null | tail -1)
     [ -n "$cand" ] || die "no candidate frames for $renderer/$scenario"
@@ -117,6 +127,12 @@ cmd_compare() {
 }
 
 cmd_list() { local s; s=$(store); echo "store: $s"; find "$s" -name '*.tga' 2>/dev/null | sed "s|$s/||" | awk -F/ '{print $1"/"$2"/"$3}' | sort | uniq -c; }
+
+# fake_engine <path> <final command>: writes one frame into the pins_dir it is given, then runs the command
+fake_engine() {
+    printf '%s\n' '#!/bin/bash' 'while [ $# -gt 0 ]; do [ "$1" = pins_dir ] && d=$2; shift; done' 'printf x > "$d/world-000000.tga"' "$2" > "$1"
+    chmod +x "$1"
+}
 
 cmd_selftest() {
     # the selftest must not depend on, or act on, the caller's environment
@@ -156,6 +172,18 @@ cmd_selftest() {
         case $line in *"$name"*) ;; *) die "record command line lacks: $name" ;; esac
     done
     if (PINS_BIN="$tmp/no-such-engine" cmd_record gl1 world) >/dev/null 2>&1; then die "record must refuse without an engine binary"; fi
+    # record against a fake engine: crash and hang must not leave a "recorded" pin
+    mkdir -p "$tmp/gd/baseq2"
+    fake_engine "$tmp/fake-ok" 'exit 0'
+    fake_engine "$tmp/fake-crash" 'exit 139'
+    fake_engine "$tmp/fake-hang" 'exec sleep 300'
+    PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record gl1 world >/dev/null || die "record must pass with an engine that exits 0"
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-crash" cmd_record gl1 world) >/dev/null 2>&1; then die "record must fail when the engine crashes after a frame"; fi
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-hang" PINS_TIMEOUT=2 cmd_record gl1 world) >/dev/null 2>&1; then die "record must fail when the engine hangs until PINS_TIMEOUT"; fi
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" PINS_TIMEOUT=abc cmd_record gl1 world) >/dev/null 2>&1; then die "a non-numeric PINS_TIMEOUT must be refused"; fi
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record ../evil world) >/dev/null 2>&1; then die "a renderer with .. must be refused"; fi
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record gl1 ../world) >/dev/null 2>&1; then die "a scenario with .. must be refused"; fi
+    if (cmd_compare 'a/b' world) >/dev/null 2>&1; then die "compare must refuse a renderer with a slash"; fi
     echo "pins selftest: ok"
 }
 
