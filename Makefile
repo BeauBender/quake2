@@ -8,7 +8,7 @@
 #  - Renderer libraries (gl1, gl3, soft)                 #
 #                                                        #
 # Base dependencies:                                     #
-#  - SDL 3                                      #
+#  - SDL 3                                               #
 #  - libGL                                               #
 #  - Vulkan headers                                      #
 #                                                        #

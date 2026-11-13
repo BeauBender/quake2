@@ -412,7 +412,7 @@ typedef struct
 typedef struct
 {
 	float inverse_intensity;
-	float sw_gamma;	// always 1, gamma is applied with a lookup table
+	float sw_gamma;	// vid_gamma, applied through the lookup table
 	qboolean minlight_set;	// is gl1_minlight > 0 ?
 	qboolean fullscreen;
 
