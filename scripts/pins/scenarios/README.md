@@ -29,7 +29,9 @@ Rules:
 - A scenario that cannot be deterministic says so in a `// nondeterministic:`
   line and is accepted at a looser threshold, recorded with the pin.
 
-Not yet verified: no scenario has been run against game data. Which demos
-the owner's data contains, and what `hud2d` shows behind the 2D elements on
-each renderer, are settled by the first runs (see
-`docs/plans/metal-port-harness.md`).
+First run on game data (TASK39, `soft`): `world` and `hud2d` are
+identical run to run; `models` and `particles` are not and carry their
+measured thresholds in their `// nondeterministic:` lines. The owner's data
+holds `demo1.dm2` and `demo2.dm2`. Behind the 2D elements of `hud2d`,
+`soft` shows a uniform dark grey; other renderers are not measured yet
+(see `docs/plans/metal-port-harness.md`).

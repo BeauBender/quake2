@@ -49,6 +49,10 @@ expect "$refused_pin" +set pins_dir /s +set pins_scenario a/b +set pins_capture 
 expect "$refused_pin" +set pins_dir /s +set pins_scenario -x +set pins_capture 30
 expect "$refused_pin" +set pins_dir /s +set pins_capture abc
 expect "$refused_pin" +set pins_dir /s +set pins_capture -1
+# strtol alone would skip a leading space and accept a plus sign
+expect "$refused_pin" +set pins_dir /s +set pins_capture ' 30'
+expect "$refused_pin" +set pins_dir /s +set pins_capture +30
+expect "$refused_pin" +set pins_dir /s +set pins_capture '30 '
 # only the exact "+set name value" triple counts, paired as Cbuf_AddEarlyCommands pairs it
 expect "$off" set pins_dir /s +pins_dir /s
 expect "$off" +set foo +set pins_dir /s

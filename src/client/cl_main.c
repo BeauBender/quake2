@@ -695,7 +695,8 @@ CL_WriteConfiguration(void)
 	FILE *f;
 	char path[MAX_OSPATH];
 
-	if (cls.state == ca_uninitialized)
+	/* Pin harness: a pin run never reads or rewrites config.cfg */
+	if ((cls.state == ca_uninitialized) || (CL_PinsCapture() > 0))
 	{
 		return;
 	}
@@ -809,14 +810,19 @@ CL_UpdateWindowedMouse(void)
 /*
  * With pin capture on, quit once demo playback has ended, so a scenario
  * run is unattended. The capture itself happens in SCR_UpdateScreen
- * (SCR_PinsCapture), before the frame is presented.
+ * (SCR_PinsCapture), before the frame is presented. A demo whose file
+ * ended before its end marker, or that ended before a frame of it was
+ * played, fails the run: the engine exits non-zero (Com_Error turns a
+ * dropped pin run into a fatal error the same way).
  */
 static void
 CL_PinsFrame(void)
 {
 	static qboolean was_playing;
+	static qboolean quitting;
+	int demoend;
 
-	if (CL_PinsCapture() <= 0)
+	if ((CL_PinsCapture() <= 0) || quitting)
 	{
 		return;
 	}
@@ -824,12 +830,34 @@ CL_PinsFrame(void)
 	if (cl.attractloop && (cls.state == ca_active))
 	{
 		was_playing = true;
+		return;
 	}
-	else if (was_playing && (cls.state == ca_disconnected))
+
+	demoend = SV_DemoEnd();
+
+	if ((cls.state != ca_disconnected) ||
+		(!was_playing && (demoend == DEMOEND_NONE)))
 	{
-		was_playing = false;
-		Cbuf_AddText("quit\n");
+		return;
 	}
+
+	if (demoend == DEMOEND_CUT)
+	{
+		Com_Error(ERR_FATAL, "pins: the demo ended before its end marker\n");
+	}
+
+	if (demoend == DEMOEND_NONE)
+	{
+		Com_Error(ERR_FATAL, "pins: playback stopped before the demo ended\n");
+	}
+
+	if (!was_playing)
+	{
+		Com_Error(ERR_FATAL, "pins: the demo ended before a frame of it was played\n");
+	}
+
+	quitting = true;
+	Cbuf_AddText("quit\n");
 }
 
 void

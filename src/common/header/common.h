@@ -856,6 +856,13 @@ void SV_Init(void);
 void SV_Shutdown(char *finalmsg, qboolean reconnect);
 void SV_Frame(int usec);
 
+/* How the last demo ended, for the pin harness: nothing has ended yet,
+   it reached its end marker, or the file ended before the marker. */
+#define DEMOEND_NONE 0
+#define DEMOEND_MARKER 1
+#define DEMOEND_CUT 2
+int SV_DemoEnd(void);
+
 /* ======================================================================= */
 
 // Platform specific functions.

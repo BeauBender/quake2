@@ -28,6 +28,10 @@
 #include <stdlib.h>
 #include <setjmp.h>
 
+#ifndef DEDICATED_ONLY
+int CL_PinsCapture(void);
+#endif
+
 #define MAXPRINTMSG 4096
 
 FILE *logfile;
@@ -258,6 +262,16 @@ Com_Error(int code, const char *fmt, ...)
 	va_start(argptr, fmt);
 	vsnprintf(msg, MAXPRINTMSG, fmt, argptr);
 	va_end(argptr);
+
+#ifndef DEDICATED_ONLY
+	/* Pin harness: a dropped pin run is a failed run, so the engine
+	   exits non-zero instead of idling at the console until the driver's
+	   timeout (a demo that cannot be opened, for example). */
+	if ((code == ERR_DROP) && (CL_PinsCapture() > 0))
+	{
+		code = ERR_FATAL;
+	}
+#endif
 
 	if (code == ERR_DISCONNECT)
 	{
