@@ -19,30 +19,63 @@ entropy).
 Enumeration was by grep for every `MSG_Read*`, `Cmd_Argv`, `Info_ValueForKey`,
 `strcpy`/`strcat`/`sprintf`/`memcpy` on peer data, and array indexing by a
 parsed value, across the files in scope; then each function that reads the
-network was read in full. Read in full: `src/common/movemsg.c`,
+network was read in full, and each value was followed to the arrays and
+renderer calls it reaches. Read in full: `src/common/movemsg.c`,
 `src/common/netchan.c`, `src/common/szone.c`, `src/common/crc.c`
 (`COM_BlockSequenceCRCByte`), `src/common/cmdparser.c` (`Cmd_TokenizeString`,
 `Cmd_Argv`), the Info_* and `COM_Parse` functions in
 `src/common/shared/shared.c`, `src/client/cl_parse.c`,
 `src/client/cl_tempentities.c`, `src/client/cl_effects.c`
-(`CL_AddMuzzleFlash`, `CL_AddMuzzleFlash2`), `src/client/cl_inventory.c`,
+(`CL_AddMuzzleFlash`, `CL_AddMuzzleFlash2`, the particle effects fed by
+temporary entities), `src/client/cl_particles.c`, `src/client/cl_inventory.c`,
 `src/client/cl_download.c`, `src/client/cl_network.c`
-(`CL_ConnectionlessPacket`, `CL_ParseStatusMessage`),
-`src/client/cl_screen.c` (`SCR_ExecuteLayoutString`, `DrawHUDStringScaled`,
-`SCR_CenterPrint`), the sound frontend sinks (`S_BuildSoundList`,
-`SDL_AddLoopSounds`, `S_PickChannel`, `GetEntitySoundOrigin`),
-`src/client/cl_entities.c`, `src/client/cl_prediction.c`,
-`src/server/sv_user.c`, `src/server/sv_conless.c`,
-`src/server/sv_main.c` (`SV_ReadPackets`, `SV_UserinfoChanged`,
-`SV_CalcPings`), and the backend packet receivers in
-`src/backends/unix/network.c`. The game-module userinfo consumers
-(`ClientUserinfoChanged`, `ClientConnect`, `SV_FilterPacket`) were read because
-the server hands them peer userinfo. Grepped but not relevant: the renderers
-(fed only from already-bounded client arrays), demo-file reading.
+(`CL_ConnectionlessPacket`, `CL_ReadPackets` and the console commands that
+build packets), `src/client/cl_main.c` (`CL_ParseStatusMessage`,
+`CL_AllocEntity`, `CL_ClearState`), `src/client/cl_lights.c`
+(`CL_SetLightstyle`), `src/client/cl_screen.c` (`SCR_ExecuteLayoutString`,
+`DrawHUDStringScaled`, `SCR_CenterPrint`, `SCR_DrawCenterString`), the sound
+frontend sinks (`S_BuildSoundList`, `SDL_AddLoopSounds`, `S_PickChannel`,
+`CL_GetEntitySoundOrigin`), `src/client/cl_entities.c`,
+`src/client/cl_prediction.c`, `src/server/sv_user.c`,
+`src/server/sv_conless.c`, `src/server/sv_main.c` (`SV_ReadPackets`,
+`SV_UserinfoChanged`, `SV_CalcPings`, `SV_StatusString`), and the backend
+packet receiver in `src/backends/unix/network.c`. The game-module consumers
+(`ClientUserinfoChanged`, `ClientConnect`, `SV_FilterPacket`,
+`StringToFilter`) were read because the server hands them peer userinfo or
+command arguments.
 
-Two suspected defects were confirmed with standalone ASan harnesses that link
-the real parser against stubs; their results are quoted in the Defects
-section. The harnesses are in the auditor's scratch dir, not committed.
+The renderers are not fed only from bounded client arrays: entity `skinnum`
+and `frame` and particle colours pass from the server through
+`CL_AddPacketEntities` and `V_AddParticle` into `refdef` unchanged. The
+renderer code that indexes by those fields was therefore read
+(`gl1_mesh.c`, `gl3_mesh.c`, `sw_alias.c` skin and frame selection,
+`files/surf.c` `R_TextureAnimation`, `sw_part.c`, the gl1 and gl3 particle
+paths); D9, D10 and D11 come from there.
+
+Sweep, at the audit base. `git grep -n 'MSG_Read[A-Za-z0-9]* *(' -- src`
+returns 271 hits: 14 are prototypes in `src/common/header/common.h` and 35
+are the definitions and internal calls in `src/common/movemsg.c` (covered by
+the shared-code rows); the remaining 222 are in the scope files
+(`cl_parse.c` 98, `cl_tempentities.c` 96, `sv_user.c` 8, `cl_effects.c` 4,
+`cl_network.c` 4, `netchan.c` 3, `sv_main.c` 3, `cl_download.c` 2,
+`sv_conless.c` 2, `cl_inventory.c` 1, `cl_main.c` 1). `git grep -n
+'Cmd_Argv *(' -- src/server src/client/cl_network.c src/client/cl_parse.c`
+returns 49 hits: 26 in the scope files (`cl_network.c` 9, `sv_user.c` 9,
+`sv_conless.c` 8) and 23 in `sv_cmd.c` (15) and `sv_save.c` (8). Every one of
+the 248 in-scope hits is covered: each sits in a function that has a row below
+naming the value it reads.
+
+Deliberately out of scope: `sv_cmd.c` and `sv_save.c` (server console
+commands such as `map`, `gamemap`, `savegame`, `loadgame`, `serverrecord`;
+their input is the operator or an rcon holder, the by-design rcon trust, and
+the savedir side is TASK1/#8); demo-file reading (local files); the asset
+loaders behind `R_RegisterModel`, `R_RegisterSkin`, `Draw_FindPic`,
+`SCR_PlayCinematic` and `CM_InlineModel` (TASK2/#9 and the asset-loader
+audit); the Windows backend receiver, which mirrors the Unix one.
+
+Two defects (D1, D6) were confirmed with standalone ASan harnesses that link
+the real code against stubs; their results are quoted in the Defects section.
+The harnesses are not committed.
 
 `MSG_Read*` short-read behaviour (relied on throughout): at end of message
 `MSG_ReadByte`/`ReadShort`/`ReadLong`/`ReadChar` return `-1`, `MSG_ReadFloat`
@@ -51,7 +84,8 @@ returns `-1.0`, `MSG_ReadString`/`ReadStringLine` stop and NUL-terminate.
 the top-level parse loops (`CL_ParseServerMessage`, `SV_ExecuteClientMessage`,
 `CL_ParsePacketEntities`) detect it and drop. The `-1` return is the only
 value an attacker can force by truncating; where a `-1` is used as a count,
-index or size without a check, that is the bug to look for.
+index or size without a check, or where work is done on the over-read data
+before the loop's test (D12), that is the bug to look for.
 
 ## Shared code
 
@@ -79,34 +113,58 @@ index or size without a check, that is the bug to look for.
 | Site (file / function / expr) | Reads | Used as | Check | Verdict |
 |---|---|---|---|---|
 | `cl_parse.c` `CL_ParseServerMessage` `cmd` | `MSG_ReadByte` | `switch`; `default` drops | `readcount > cursize` tested each loop; `cmd == -1` ends | ok |
+| `cl_network.c` `CL_ReadPackets` `*(int *)net_message.data == -1` | first 4 bytes | connectionless test | client twin of the server runt read: `cursize` can be 0, the 4 bytes are always inside the 1400-byte buffer (stale for a datagram under 4 bytes); sequenced packets need `cursize >= 8` and the server's address before `Netchan_Process` | ok (in bounds) |
+| `cl_parse.c` `CL_ParseServerData` protocol version | `MSG_ReadLong` | `cls.serverProtocol`; compared | `!= PROTOCOL_VERSION` → `ERR_DROP`, except with a local server (demo hack); the value only selects the protocol-26 frame layout | ok |
+| `cl_parse.c` `CL_ParseServerData` `servercount`, `attractloop` | `MSG_ReadLong`, `MSG_ReadByte` | stored, echoed in commands, tested as a flag | not indices | ok |
+| `cl_parse.c` `CL_ParseServerData` level name with `playernum == -1` | `MSG_ReadString` | `SCR_PlayCinematic(str)` | string bounded 2048; the cinematic and picture loaders are asset loaders (TASK2 scope) | ok (loader out of scope) |
+| `cl_parse.c` `CL_ParseBaseline` `newnum` | `CL_ParseEntityBits` (byte or signed short) | `CL_AllocEntity(newnum)` → `ent->baseline` | `CL_AllocEntity` returns `NULL` outside `0..MAX_CL_ENTNUM`; `CL_ParseDelta` then writes a local dummy | ok |
 | `cl_parse.c` `CL_ParseEntityBits` `number` | byte or short | returned as entity number | caller `CL_ParsePacketEntities` checks `newnum > MAX_CL_ENTNUM` → drop | ok |
 | `cl_parse.c` `CL_ParsePacketEntities` ring | `oldframe->parse_entities + i` | index `cl_parse_entities[... & (MAX_PARSE_ENTITIES-1)]` | masked | ok |
 | `cl_parse.c` `CL_DeltaEntity` `cl_parse_entities[cl.parse_entities & (MAX_PARSE_ENTITIES-1)]` | — | ring write; `frame->num_entities++` | ring masked; **`num_entities` itself is never capped to `MAX_EDICTS`** → feeds Defect D1 | defect (D1, in a sink) |
 | `cl_parse.c` `CL_DeltaEntity` `CL_AllocEntity(newnum)` | newnum | realloc'd `cl_entities[newnum]` | `CL_AllocEntity` checks `0..MAX_CL_ENTNUM`, grows array via `NextPow2gt`; NULL → dummy | ok |
 | `cl_parse.c` `CL_ParseDelta` modelindex/frame/skin/… | byte/short/long | stored in `entity_state_t` fields | consumed later with masks/bounds at the sinks (`cl.model_draw[modelindex]` — see Hardening H2) | ok / hardening |
 | `cl_parse.c` `CL_ParsePlayerstate` `state->stats[i]` | long `statbits`, shorts | `stats[i]`, `i` in `0..MAX_STATS` loop | `i < MAX_STATS` | ok |
+| `cl_parse.c` `CL_ParsePlayerstate` other fields (`pm_type`, origin, velocity, `pm_time`, `pm_flags`, gravity, `delta_angles`, view and kick angles, `gunframe`, gun offset and angles, blend, `fov`, `rdflags`) | byte/char/short/angle reads | stored as values in `player_state_t` | not used as indices (`gunindex` is covered in the entity rows) | ok |
+| `cl_parse.c` `CL_ParseFrame` `serverframe`, `surpressCount`, `svc_playerinfo`/`svc_packetentities` bytes | `MSG_ReadLong`, `MSG_ReadByte` | `cl.frames[serverframe & UPDATE_MASK]`; command bytes compared | masked; a wrong command byte → `ERR_DROP` | ok |
 | `cl_parse.c` `CL_ParseFrame` `cl.frame.deltaframe` | `MSG_ReadLong` | `cl.frames[deltaframe & UPDATE_MASK]` | masked; validity checks | ok |
 | `cl_parse.c` `CL_ParseFrame` areabits `len` | `MSG_ReadByte` | `MSG_ReadData` into `areabits[MAX_MAP_AREAS/8]` | `len > sizeof(areabits)` → `Com_Error(ERR_DROP)` (fixed in TASK2/#9) | ok (already carded/fixed) |
 | `cl_parse.c` `CL_ParseServerData` `cl.playernum` | `MSG_ReadShort` | `cl.playernum+1` used as entity number across client | **no range check at read** → Defect D2 | defect (D2) |
 | `cl_parse.c` `CL_ParseServerData` gamedir/levelname | `MSG_ReadString` | `Q_strlcpy` into `cl.gamedir`; `Cvar_Set("game", str)` | `Q_strlcpy` truncates; `FS_BuildGameSpecificSearchPath` rejects `..`, `/`, `\` | ok |
 | `cl_parse.c` `CL_ParseConfigString` `i` | `MSG_ReadShort` | index `cl.configstrings[i]` and sub-ranges | `i < 0 || i >= MAX_CONFIGSTRINGS` → print+return; statusbar vs normal length checked | ok |
+| `cl_parse.c` `CL_ParseConfigString` → `CL_LoadClientinfo` (`CS_PLAYERSKINS + n`) | configstring (< 64 bytes, checked above) | `Q_strlcpy` into `cinfo[64]`, `name[64]`, `model_name`/`skin_name[64]`; file names by `Com_sprintf` with `sizeof` | `name[t - s]` is inside `name` because `s` is inside `cinfo` of the same size; the skin pointer `s + strlen(model_name) + 1` stays inside `cinfo`; names are only looked up (`R_RegisterModel`, `R_RegisterSkin`, `Draw_FindPic`), never written | ok |
+| `cl_lights.c` `CL_SetLightstyle` `map[k]` | `CS_LIGHTS + n` configstring | `cl_lightstyle[n].map[k]`, `k < strlen(s)` | `n < MAX_LIGHTSTYLES` by the caller's range test; `strlen(s) < MAX_QPATH` enforced by `CL_ParseConfigString`, and `map` is `float[MAX_QPATH]` | ok |
 | `cl_parse.c` `CL_ParseStartSoundPacket` `sound_num` | `MSG_ReadByte` | `cl.sound_precache[sound_num]` | `sound_num < 0` drop; `>= MAX_SOUNDS` print+return | ok |
 | `cl_parse.c` `CL_ParseStartSoundPacket` `ent` | `channel = MSG_ReadShort; ent = channel>>3` | passed to `S_StartSound` | `ent < 0` print+return; `S_StartSound`/`S_PickChannel` clamp — see Hardening H3 | ok / hardening |
 | `cl_parse.c` svc_layout `MSG_ReadString` | string | `Q_strlcpy` into `cl.layout[1024]` | truncates | ok |
 | `cl_parse.c` svc_print `i` | `MSG_ReadByte` | only compared to `PRINT_CHAT` | `i < 0` → break | ok |
+| `cl_parse.c` svc_print text | `MSG_ReadString` | `Com_Printf("%s", ...)` | string bounded 2048, printed as an argument | ok |
+| `cl_parse.c` svc_centerprint → `SCR_CenterPrint` | `MSG_ReadString` | `Q_strlcpy` into `scr_centerstring[1024]`; echo to console builds `line[64]` | the echo scans at most 40 characters per line, so `line[i + 1]` is at most index 41; `SCR_DrawCenterString` also scans 40 per line | ok |
+| `cl_parse.c` svc_stufftext | `MSG_ReadString` | `Cbuf_AddText` | by design (see By design) | ok (by design) |
+| `cl_parse.c` `CL_ParseStartSoundPacket` `flags`, volume, attenuation, offset, position | `MSG_ReadByte`, `MSG_ReadPos` | scaled floats and a vector | not indices | ok |
 | `cl_inventory.c` `CL_ParseInventory` `cl.inventory[i]` | `MSG_ReadShort` ×`MAX_ITEMS` | `inventory[i]` | `i` in `0..MAX_ITEMS` loop | ok |
+| `cl_download.c` `CL_ParseDownload` `size`, `percent` | `MSG_ReadShort`, `MSG_ReadByte` | chunk length for `fwrite`; progress | `size == -1` is "no such file"; otherwise `size < 0` or larger than the bytes left in the message → `ERR_DROP` (fixed in TASK1/#8); `percent` is only displayed | ok (fixed by TASK1) |
 | `cl_effects.c` `CL_AddMuzzleFlash` `i` | `MSG_ReadShort` | `CL_AllocEntity(i)` | `i < 1 || i > MAX_CL_ENTNUM` → `Com_Error` | ok |
 | `cl_effects.c` `CL_AddMuzzleFlash` `weapon` | `MSG_ReadByte` | `switch`, no array index | `-1` hits default | ok |
 | `cl_effects.c` `CL_AddMuzzleFlash2` `flash_number` | `MSG_ReadByte` | `monster_flash_offset[flash_number]` (216 entries) | `flash_number > 210` → print+return; byte so `<= 255`; 211..215 pass but within table — Hardening H4 | hardening |
+| `cl_effects.c` `CL_AddMuzzleFlash2` `entnum` | `MSG_ReadShort` | `CL_AllocEntity`-backed entity lookup | `entnum < 1 \|\| entnum > MAX_CL_ENTNUM` → `Com_Error` | ok |
 | `cl_tempentities.c` `CL_ParseTEnt` `type` | `MSG_ReadByte` | `switch`; `default` `Com_Error` | ok | ok |
 | `cl_tempentities.c` splash `r` | `MSG_ReadByte` | `splash_color[r]` (7 entries) | `r > 6 || r < 0` → `color=0` else index | ok |
 | `cl_tempentities.c` beam/lightning/steam `ent`/`srcEnt`/`destEnt` | `MSG_ReadShort` | stored in beam `entity`/`dest_entity`, compared only | `CL_ParseLightning` drops on `-1`; beams store ints, used in equality tests not as indices | ok |
 | `cl_tempentities.c` sustain `id` | `MSG_ReadShort` | `s->id`, compared only | not an index | ok |
+| `cl_tempentities.c` `CL_ParseTEnt` and helpers (`CL_ParseLaser`, `CL_ParseNuke`, `CL_ParseWidow`, `CL_ParseHeatBeam`, `CL_ParseBeam`) positions, directions, counts, `magnitude` | `MSG_ReadPos`, `MSG_ReadDir`, `MSG_ReadByte`, `MSG_ReadShort` | vectors, particle counts, speeds | counts are loop bounds over the free-particle list (allocation stops when it is empty); `MSG_ReadDir` bounds its index | ok |
+| `cl_tempentities.c` `CL_ParseParticles` | `MSG_ReadPos`, `MSG_ReadDir`, `MSG_ReadByte` ×2 | `CL_ParticleEffect` | the function has no caller (dead code); its colour would be the same class as D9 | ok (unreachable) |
 | `cl_tempentities.c` `TE_LASER_SPARKS`/`TE_WELDING_SPARKS` `color`, `CL_ParseSteam` `r` | `MSG_ReadByte` | particle colour `color + (randk() & 7)`, up to 262 | none; reaches the renderers unmasked → Defect D9 | defect (D9) |
 | `cl_tempentities.c` `TE_TUNNEL_SPARKS`, `TE_FORCEWALL` `color` | `MSG_ReadByte` | particle colour used as is (0..255) | in range | ok |
 | `sw_part.c` `R_DrawParticle` `vid_alphamap[(color << 8) + pdest]` / `[color + (pdest << 8)]` | `particle_t.color` | translucency table index | **no mask** → Defect D9 | defect (D9) |
 | `gl1_main.c` `R_DrawParticles2` `colortable[p->color]` | `particle_t.color` | `d_8to24table[256]` index | **no mask** (the point-sprite path and gl3 mask `& 0xFF`) → Defect D9 | defect (D9) |
-| `cl_network.c` `CL_ConnectionlessPacket` `Cmd_Argv(1)` | tokenized | `strtol` → `cls.challenge`; echoed | numeric / `Netchan_OutOfBandPrint` with fixed format | ok |
+| `cl_network.c` `CL_ConnectionlessPacket` `Cmd_Argv(0)` and the logged command name | `MSG_ReadStringLine` → `Cmd_TokenizeString` | dispatch; `Com_Printf("%s: %s\n", ...)` | string bounded 2048; tokenizer bounded | ok |
+| `cl_network.c` `client_connect` | command name only | `Netchan_Setup(..., net_from, ...)`, `cls.state = ca_connected`, sends `new` | ignored only in `ca_connected`; **accepted from any source address in `ca_disconnected`, `ca_connecting` and `ca_active`**, and points the netchan at the sender → Defect D14 | defect (D14) |
+| `cl_network.c` `challenge` `Cmd_Argv(1)` | tokenized | `strtol` → `cls.challenge`; `CL_SendConnectPacket` to `cls.servername` | numeric; the connect goes to the configured server, not the sender; accepted from any source in any state (same class as D14) | defect (D14, low part) |
+| `cl_network.c` `echo` `Cmd_Argv(1)` | tokenized (≤ 1023 characters) | `Netchan_OutOfBandPrint(..., "%s", ...)` back to the sender | format is fixed; reply is about as large as the request (no amplification) | ok |
+| `cl_network.c` `print` | `MSG_ReadString` | `Com_Printf("%s", s)` | string bounded 2048; accepted from any source, console text only (this is how status replies arrive) | ok (by design) |
+| `cl_network.c` `ping` | command name only | `Netchan_OutOfBandPrint("ack")` | fixed reply | ok |
+| `cl_network.c` console commands with `Cmd_Argv` (`CL_Connect_f`, `CL_Packet_f`, `CL_Rcon_f`, `CL_ForwardToServer_f`, `Cmd_ForwardToServer`) | user console, or a server through `svc_stufftext` | `Q_strlcpy` into `server[256]`; `send[2048]` from a ≤ 1023-character token; `Q_strlcat` into `message[1024]`; forwarded strings | each copy bounded (the `CL_Packet_f` loop writes at most 4 + 1023 + 1 bytes of 2048) | ok |
+
 | `cl_network.c` `cmd` connectionless | `MSG_ReadString` | `Cbuf_AddText` | gated on `NET_IsLocalAddress` | ok (by design for local) |
 | `cl_main.c` `CL_ParseStatusMessage` → `M_AddToServerList` | `MSG_ReadString` | `Q_strlcpy` into `local_server_names[]` | `m_num_servers == MAX_LOCAL_SERVERS` guard; `Q_strlcpy` truncates | ok |
 | `cl_screen.c` `SCR_ExecuteLayoutString` `"pic"`/`"stat_string"`/`"if"` stat index | `COM_Parse`+`strtol` of the layout | `stats[index]` | `index < 0 \|\| index >= MAX_STATS` rejected in each | ok |
@@ -142,6 +200,10 @@ index or size without a check, that is the bug to look for.
 | `sv_user.c` clc_move usercmds | `MSG_ReadDeltaUsercmd` ×3 | `SV_ClientThink` | `msec` consumed as time; `commandMsec` underflow guarded by `sv_enforcetime` | ok |
 | `sv_user.c` clc_stringcmd `MSG_ReadString` | string | `SV_ExecuteUserCommand` | `stringCmdCount < MAX_STRINGCMDS` rate-limited | ok (command dispatch by design) |
 | `sv_user.c` `SV_Configstrings_f`/`SV_Baselines_f` `start` | `Cmd_Argv`→`strtol` | loop start / `sv.baselines[i]` | `start < 0` clamped to 0; loops bound by `MAX_CONFIGSTRINGS`/`numbaselines` | ok |
+| `sv_user.c` `SV_ExecuteUserCommand` `Cmd_Argv(0)` | `clc_stringcmd` string, tokenized without macro expansion | `ucmds[]` dispatch, else `ge->ClientCommand` | table lookup by name | ok (by design) |
+| `sv_user.c` `SV_New_f` | no arguments | writes `svc_serverdata` for this client | `state != cs_connected` rejected | ok |
+| `sv_user.c` `SV_Begin_f` `Cmd_Argv(1)` | `strtol` | compared with `svs.spawncount`; then `cs_spawned`, `ge->ClientBegin` | spawncount must match; **no test of the client's current state**, so `begin` can be repeated while spawned (game-level effect, no memory issue) → Hardening H7 | hardening |
+| `sv_user.c` `SV_Nextserver_f` `Cmd_Argv(1)` | `strtol` | compared with `svs.spawncount`; `SV_Nextserver` | spawncount must match; `SV_Nextserver` refuses during a normal game | ok |
 | `sv_user.c` `SV_BeginDownload_f` `name` | `Cmd_Argv(1)` | `FS_LoadFile(name)`, path | denylist `..`, `\`, `:`, leading `.`/`/`, must contain `/` | ok (see By design: denylist, not the client allowlist) |
 | `sv_user.c` `SV_BeginDownload_f` `offset` | `Cmd_Argv(2)`→`strtol` | `downloadcount = offset`; then `SV_NextDownload_f` reads `download + downloadcount - r` | clamp only on the `>` side: `if (offset > downloadsize) downloadcount = downloadsize`; **negative `offset` passes** → Defect D6 | defect (D6) |
 | `sv_conless.c` `SVC_DirectConnect` `version`/`qport`/`challenge` | `Cmd_Argv`→`strtol` | compared / stored | version and challenge checked; qport stored | ok |
@@ -150,6 +212,11 @@ index or size without a check, that is the bug to look for.
 | `sv_conless.c` `SVC_RemoteCommand` `net_message.data + 4` | raw packet tail | `Com_Printf("%s", ...)` before the password check | **nothing NUL-terminates the receive buffer**; the print can run past `net_message_buffer` → Defect D13 | defect (D13) |
 | `sv_conless.c` `SVC_RemoteCommand` args | `Cmd_Argv(i)` | `Q_strlcat` into `remaining[1024]`; `Cmd_ExecuteString` | `Q_strlcat` bounded; gated on `Rcon_Validate` password | ok (rcon by design) |
 | `sv_conless.c` `SV_ConnectionlessPacket` `s` | `MSG_ReadStringLine` | `Cmd_TokenizeString` | string bounded 2048; tokenizer bounded | ok |
+| `sv_conless.c` `SV_ConnectionlessPacket` `Cmd_Argv(0)` | tokenized | dispatch, `Com_DPrintf` | compared with fixed names; unknown command printed with `%s` from the bounded copy | ok |
+| `sv_conless.c` `SVC_Status` | command name only | `SV_StatusString` reply | `status[MAX_MSGLEN - 16]` filled with `Q_strlcpy`/`Q_strlcat` and a length test before each player line; reply larger than the request (reflection, see By design) | ok |
+| `sv_conless.c` `SVC_Ack` | command name only | `Com_Printf` of `net_from` | no packet data printed | ok |
+| `sv_conless.c` `SVC_GetChallenge` | command name only | `svs.challenges[MAX_CHALLENGES]`, keyed by address | loop bounded by `MAX_CHALLENGES`; oldest entry reused; value from `Sys_GetRandomBytes` (FIX4/#46) | ok |
+| `sv_conless.c` `Rcon_Validate` `Cmd_Argv(1)` | tokenized | `strcmp` with `rcon_password` | empty password disables rcon; timing see By design | ok |
 | `sv_main.c` `SV_UserinfoChanged` `Info_ValueForKey(userinfo,"rate")` | userinfo value | `strtol` → clamped 100..15000 | clamped | ok |
 | game `g_svcmds.c` `StringToFilter` `num[j++]` | `gi.argv(2)` of `sv addip` / `sv removeip` (server console or rcon; a token of up to 1023 characters) | write into `char num[128]` | **`j` unbounded** while the input is digits → Defect D7 | defect (D7) |
 | game `g_svcmds.c` `SV_FilterPacket` `m[i]` | userinfo `ip` (set by the engine from `net_from` in `SVC_DirectConnect`) | octet bytes `m[4]` | `i < 4` loop bound; does not call `StringToFilter` | ok |
@@ -173,6 +240,14 @@ index or size without a check, that is the bug to look for.
   not the client's allowlist. It is the long-standing id design and is not a
   memory-safety issue; FIX1/#40 already tracks tightening the *client* and
   savedir sides.
+- Connectionless reflection: `status`, `info` and `ping` on the server and
+  `echo` and `ping` on the client answer any source address. `status` answers
+  a short request with the serverinfo and player list (a reflection and
+  amplification vector, as in every Quake II server); `echo` returns about as
+  many bytes as it receives. Rate limiting is a network-level concern outside a
+  parser audit.
+- Connectionless `print` on the client is printed from any source; it is how
+  `status` replies arrive and only produces console text.
 
 ## Defects
 
@@ -501,26 +576,55 @@ was NUL-terminated and that the print relied on it. Fix: print at most
 `NET_GetPacket` (receive at most `maxsize - 1` bytes and store a NUL at
 `cursize`).
 
+### D14: the client accepts `client_connect` from any address in any state but `ca_connected` (high, high confidence) [CARD_C]
+
+`CL_ConnectionlessPacket` (`cl_network.c`) handles `client_connect` by
+ignoring it only when `cls.state == ca_connected`. Otherwise, whether the
+client is disconnected, still connecting, or fully in a game
+(`ca_active`), it calls `Netchan_Setup(NS_CLIENT, &cls.netchan, net_from,
+...)` with the sender's address, sets `cls.state = ca_connected` and sends
+`new` to the sender. Nothing compares `net_from` with the server the client is
+connecting to (`cls.servername`). Any host that can send a UDP datagram to the
+client's port can therefore take over its connection: an in-game client is
+moved to the sender, and a client that is connecting can be raced. The new
+"server" then holds the server's trust, which by design includes
+`svc_stufftext` (arbitrary client console commands) and every `svc_*` parser
+in this audit. Severity high (unauthenticated takeover of a connection).
+
+The `challenge` reply has the same shape at lower impact: it is accepted from
+any address in any state and overwrites `cls.challenge`, but the connect it
+triggers goes to `cls.servername`, not to the sender.
+
+Fix (client-side only, no protocol change): accept `client_connect` and
+`challenge` only in `ca_connecting` and only when `net_from` equals the
+resolved address of `cls.servername`.
+
 ## Hardening (low severity, optional)
 
-- H1 `COM_Parse`: on a token of exactly `MAX_TOKEN_CHARS` it resets `len` to 0,
-  silently emptying an over-long token rather than truncating; the guard
-  `len < MAX_TOKEN_CHARS` means the terminator write is in range, so no
-  overflow — behaviour wart only.
+- H1 `COM_Parse`: when a token reaches `MAX_TOKEN_CHARS` (1024) characters
+  it resets `len` to 0, silently emptying the over-long token rather than
+  truncating it; the guard `len < MAX_TOKEN_CHARS` keeps every write in range,
+  so no overflow, behaviour wart only. (D4 depends on this cap.)
 - H2 entity `modelindex*`: safe by the byte type today; an assert/bound would
   harden against a future widening of the field.
 - H3 `S_StartSound`/`S_PickChannel`: `ent` from `channel>>3` can be large;
   `S_PickChannel` only errors on `entchannel < 0`, and `ent` is used as a sound
   origin lookup with `cl_numentities` bounds at the sinks — no OOB found, but
   an explicit upper bound on `ent` would be clearer.
-- H4 `CL_AddMuzzleFlash2`: `flash_number > 210` is rejected though the table has
-  216 entries (211..215 are valid); harmless, but the constant should match the
-  table size.
+- H4 `CL_AddMuzzleFlash2`: `flash_number > 210` is rejected though the
+  `monster_flash_offset` table in `src/common/shared/flash.c` has more
+  entries; harmless, but the bound should come from the table size.
 - H5: withdrawn. The `SVC_RemoteCommand` print is a defect (D13); the
   `SV_ReadPackets` runt read stays inside the buffer and is recorded as ok in
   the server table.
 - H6 `SVC_Info`: the wrong-version `Com_sprintf` passes an extra `sizeof`
   argument that the format ignores; cosmetic, no overflow.
+- H7 `SV_Begin_f`: checks only the spawn count, not that the client is in
+  `cs_connected`, so a spawned client can send `begin` again and re-run
+  `ge->ClientBegin`. No memory issue; a game-level state wart. A state test
+  would make the connect sequence strict.
+- D4 (`DrawHUDStringScaled` width) is also hardening today; it is carried on
+  FIX13 (#109) with D3 and D8 because it is the same function family.
 
 ## Cards filed
 
