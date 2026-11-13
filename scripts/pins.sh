@@ -11,6 +11,9 @@
 #   pins.sh selftest                           no engine, no game data
 #
 # Names (renderer, scenario) match [a-z0-9_][a-z0-9_-]*, e.g. gl1-metal, rt-ao.
+# The renderer gl1-metal is ref_gl1 built with "make ref_gl1 WITH_METAL_SHIM=yes":
+# the engine runs it as vid_renderer gl1, and record checks that the module
+# it loaded was the shim build (and, for gl1, that it was not).
 #
 # Environment:
 #   PINS_STORE    the pin store, never inside this repository or any other
@@ -109,6 +112,8 @@ export LC_ALL=C
 root=$(cd "$(dirname "$0")/.." && pwd)
 scen_dir="$root/scripts/pins/scenarios"
 die() { echo "pins: $*" >&2; exit 1; }
+# usage: the header comment of this file, from line 2 to the first line that is not a comment
+usage() { awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$root/scripts/pins.sh"; }
 
 check_name() { case $2 in ''|-*|*[!a-z0-9_-]*) die "$1 must match [a-z0-9_][a-z0-9_-]*, got '$2'";; esac; }
 check_run() { case $1 in [1-9]|[1-9][0-9]|[1-9][0-9][0-9]) ;; *) die "--run must be a number from 1 to 999, got '$1'";; esac; }
@@ -185,17 +190,29 @@ engine_sha() {
     if [ -n "${PINS_BIN:-}" ]; then sha="$sha-b$(cksum < "$PINS_BIN" 2>/dev/null | awk '{print $1}')"; fi
     echo "$sha"
 }
+# A pin renderer name that is a build of another engine renderer (TASK47):
+# gl1-metal is ref_gl1 built with "make ref_gl1 WITH_METAL_SHIM=yes", which
+# the engine loads as vid_renderer gl1 and which names itself in its
+# GL_RENDERER string as "(gl1-metal)".
+engine_renderer() { case $1 in gl1-metal) echo gl1;; *) echo "$1";; esac; }
+shim_marker='^GL_RENDERER: .*(gl1-metal)'
+# shim_build <log>: true when the first GL_RENDERER line of the engine log
+# names the shim. Only the first counts: the renderer prints it at init,
+# before the demo starts, and a demo's svc_print can put later lines of the
+# same shape into the log.
+shim_build() { grep -m1 '^GL_RENDERER: ' "$1" | grep -q "$shim_marker"; }
 # stale_engine <bin> <renderer>: names the binary or renderer module of this
 # checkout that "make -q" says is out of date with its sources, or that is
 # older than a header under src/, empty when the build is current (or make is
-# missing)
+# missing). For gl1-metal it asks make about the WITH_METAL_SHIM=yes build.
 stale_engine() {
-    local m
+    local m r; r=$(engine_renderer "$2")
+    local build=(); [ "$2" = gl1-metal ] && build=(WITH_METAL_SHIM=yes)
     command -v make >/dev/null 2>&1 || return 0
-    for m in "$1" "$(dirname "$1")/ref_$2".so "$(dirname "$1")/ref_$2".dylib "$(dirname "$1")/ref_$2".dll; do
+    for m in "$1" "$(dirname "$1")/ref_$r".so "$(dirname "$1")/ref_$r".dylib "$(dirname "$1")/ref_$r".dll; do
         [ -f "$m" ] || continue
         case $m in "$root"/*) ;; *) continue;; esac
-        if ! make -C "$root" -q "${m#"$root"/}" >/dev/null 2>&1; then echo "${m#"$root"/} is out of date"; return; fi
+        if ! make -C "$root" -q ${build[@]+"${build[@]}"} "${m#"$root"/}" >/dev/null 2>&1; then echo "${m#"$root"/} is out of date"; return; fi
         # the Makefile has no header dependencies on macOS, so make -q cannot see a header edit
         if [ -n "$(find "$root/src" -name '*.h' -newer "$m" -print 2>/dev/null | head -n 1)" ]; then
             echo "${m#"$root"/} is older than a header under src/"; return
@@ -255,7 +272,7 @@ build_args() {
         engine_args+=(+set "$name" "$value")
     done < "$scen_dir/$scenario.cfg"
     set +f
-    engine_args+=(+set vid_renderer "$renderer" +set vid_fullscreen 0 +set r_mode -1
+    engine_args+=(+set vid_renderer "$(engine_renderer "$renderer")" +set vid_fullscreen 0 +set r_mode -1
         +set r_customwidth "${PINS_WIDTH:-640}" +set r_customheight "${PINS_HEIGHT:-480}"
         +set s_initsound 0
         +set pins_dir "$out" +set pins_scenario "$scenario" +set pins_capture "${PINS_EVERY:-30}")
@@ -320,8 +337,15 @@ cmd_record() {
     elif grep -q '^FAILED ' "$out/manifest.txt"; then reason="the engine could not write a frame ($(grep -m1 '^FAILED ' "$out/manifest.txt"))"
     elif [ "$(wc -l < "$out/manifest.txt" | tr -d ' ')" -ne "$n" ]; then reason="manifest.txt does not list the $n frames"
     else
-        bad=$(awk -v r="$renderer" '$2 != r {print $2; exit}' "$out/manifest.txt")
+        bad=$(awk -v r="$(engine_renderer "$renderer")" '$2 != r {print $2; exit}' "$out/manifest.txt")
         [ -z "$bad" ] || reason="frames were rendered by '$bad', not '$renderer' (renderer fallback)"
+    fi
+    # gl1 and gl1-metal are one module name: the GL_RENDERER line tells which build ran
+    if [ -z "$reason" ] && [ "$renderer" = gl1-metal ]; then
+        shim_build "$out/engine.log" ||
+            reason="the engine did not load the Metal shim build of ref_gl1 (the first GL_RENDERER line of engine.log does not end in '(gl1-metal)'; build it with make ref_gl1 WITH_METAL_SHIM=yes)"
+    elif [ -z "$reason" ] && [ "$renderer" = gl1 ] && shim_build "$out/engine.log"; then
+        reason="the frames came from the Metal shim build of ref_gl1; record them as gl1-metal"
     fi
     if [ -n "$reason" ]; then
         echo "$reason" > "$out/incomplete"
@@ -712,7 +736,7 @@ st_names() { # C-I4
     if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record gl1 ../world) >/dev/null 2>&1; then st_fail "a scenario with .. must be refused"; return 1; fi
     if (cmd_compare 'a/b' world) >/dev/null 2>&1; then st_fail "compare must refuse a renderer with a slash"; return 1; fi
     if (cmd_compare -x world) >/dev/null 2>&1; then st_fail "a leading - must be refused"; return 1; fi
-    (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record gl1-metal world) >/dev/null 2>&1 || st_fail "renderer gl1-metal must be accepted" || return 1
+    (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-shim" cmd_record gl1-metal world) >/dev/null 2>&1 || st_fail "renderer gl1-metal must be accepted" || return 1
     fixture gl1 ref "$tmp/a.tga"; fixture gl1-metal "$cid" "$tmp/a.tga"
     (cmd_compare gl1-metal world --ref gl1) >/dev/null 2>&1 || st_fail "compare gl1-metal world --ref gl1 must parse and pass" || return 1
     (check_name scenario rt-ao) || st_fail "scenario rt-ao must be accepted" || return 1
@@ -901,6 +925,40 @@ st_engine_id() { # TASK39 (h): the id sees uncommitted source, untracked source 
     touch -t 203601010000 "$m/release/quake2"
     (root="$m" PINS_BIN= PINS_BASEDIR="$tmp/gd" cmd_record gl1 world) >/dev/null 2>&1 || st_fail "record must pass with a build newer than every header" || return 1
 }
+st_metal_shim() { # TASK47: gl1-metal is ref_gl1 built with WITH_METAL_SHIM=yes
+    local rep id m="$tmp/mkm"
+    rep=$(PINS_DRYRUN=1 cmd_record gl1-metal world) || st_fail "a dry run of gl1-metal must work" || return 1
+    case $rep in *"+set vid_renderer gl1 "*) ;; *) st_fail "gl1-metal must start the engine with vid_renderer gl1: $rep"; return 1;; esac
+    (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-shim" cmd_record gl1-metal world) >/dev/null 2>&1 || st_fail "gl1-metal must record from an engine whose ref_gl1 is the shim build" || return 1
+    id=$(PINS_BIN="$tmp/fake-shim" run_id world 1)
+    [ -f "$PINS_STORE/world/gl1-metal/$id/complete" ] || st_fail "the gl1-metal pin must land under world/gl1-metal" || return 1
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record gl1-metal world --run 2) >/dev/null 2>&1; then st_fail "gl1-metal must refuse frames from a ref_gl1 without the shim"; return 1; fi
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-shim" cmd_record gl1 world) >/dev/null 2>&1; then st_fail "gl1 must refuse frames from the shim build"; return 1; fi
+    # only the first GL_RENDERER line counts: a demo can print later lines of the same shape
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-spoof-shim" cmd_record gl1-metal world --run 3) >/dev/null 2>&1; then st_fail "gl1-metal must judge the first GL_RENDERER line, not a later one naming the shim"; return 1; fi
+    (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-spoof-shim" cmd_record gl1 world --run 4) >/dev/null 2>&1 || st_fail "gl1 must record when only a later GL_RENDERER line names the shim" || return 1
+    (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-spoof-gl" cmd_record gl1-metal world --run 5) >/dev/null 2>&1 || st_fail "gl1-metal must record when the first GL_RENDERER line names the shim and a later one does not" || return 1
+    # the staleness check asks make about the shim build of the module
+    command -v make >/dev/null 2>&1 || { echo "       metal_shim: no make, stale build skipped"; return 0; }
+    mkdir -p "$m/src"; printf 'int a;\n' > "$m/src/old.c"; printf 'int b;\n' > "$m/src/new.c"
+    printf 'ifeq ($(WITH_METAL_SHIM),yes)\nref_gl1.dylib: src/old.c\n\ttouch ref_gl1.dylib\nelse\nref_gl1.dylib: src/new.c\n\ttouch ref_gl1.dylib\nendif\n' > "$m/Makefile"
+    printf 'x' > "$m/quake2"; printf 'x' > "$m/ref_gl1.dylib"
+    touch -t 203001010000 "$m/quake2" "$m/ref_gl1.dylib"
+    touch -t 203501010000 "$m/src/old.c"; touch -t 202001010000 "$m/src/new.c"
+    [ -n "$(root="$m" stale_engine "$m/quake2" gl1-metal)" ] || st_fail "ref_gl1 older than a source of the shim build must be stale for gl1-metal" || return 1
+    [ -z "$(root="$m" stale_engine "$m/quake2" gl1)" ] || st_fail "the same module must not be stale for gl1, whose sources are older" || return 1
+    touch -t 202001010000 "$m/src/old.c"; touch -t 203501010000 "$m/src/new.c"
+    [ -z "$(root="$m" stale_engine "$m/quake2" gl1-metal)" ] || st_fail "a shim build newer than the shim's sources must not be stale" || return 1
+    [ -n "$(root="$m" stale_engine "$m/quake2" gl1)" ] || st_fail "the same module must be stale for gl1, whose build differs" || return 1
+}
+st_usage() { # the usage text is the whole header comment, its last line included
+    local out last
+    out=$(bash "$root/scripts/pins.sh" 2>/dev/null) && { st_fail "pins.sh without a command must exit non-zero"; return 1; }
+    last=$(awk 'NR > 1 && !/^#/ { print prev; exit } { prev = $0 }' "$root/scripts/pins.sh" | sed 's/^# \{0,1\}//')
+    [ -n "$last" ] || st_fail "the header comment has no last line" || return 1
+    [ "$(printf '%s\n' "$out" | tail -n 1)" = "$last" ] || st_fail "the usage text must end with the header's last line: $last" || return 1
+    [ "$(printf '%s\n' "$out" | head -n 1)" = "$(sed -n 2p "$root/scripts/pins.sh" | sed 's/^# \{0,1\}//')" ] || st_fail "the usage text must start with line 2 of the file" || return 1
+}
 
 # fake_demo_engine <path> <body>: stands in for the engine in make-demo. It
 # finds the script copy it was told to exec in <its dir>/baseq2 (exit 3 if
@@ -1084,12 +1142,15 @@ cmd_selftest() {
     fake_engine "$tmp/fake-other" soft 'exit 0'
     fake_engine "$tmp/fake-hang" - 'trap "exit 0" TERM; while :; do sleep 1; done'
     fake_engine "$tmp/fake-drop" - 'echo "Error: Couldn'"'"'t open demos/x.dm2"; exit 1'
+    fake_engine "$tmp/fake-shim" - 'echo "GL_RENDERER: Metal shim on a test device (gl1-metal)"; exit 0'
+    fake_engine "$tmp/fake-spoof-shim" - 'echo "GL_RENDERER: Test OpenGL Engine"; echo "GL_RENDERER: hello (gl1-metal)"; exit 0'
+    fake_engine "$tmp/fake-spoof-gl" - 'echo "GL_RENDERER: Metal shim on a test device (gl1-metal)"; echo "GL_RENDERER: Test OpenGL Engine"; exit 0'
     export PINS_BIN="$tmp/fake-ok"
     cid=$(run_id world 1)
     local c failed=""
     for c in framediff framediff_block compare_basic compare_bad_threshold ref_mtime missing_frame self_compare \
         two_runs incomplete record_engine timeout fallback names cmdline thresholds scenarios argcount frame_failed list \
-        scenario_lines store_place fast_fail demo_name replace engine_id \
+        scenario_lines store_place fast_fail demo_name replace engine_id metal_shim usage \
         make_demo_args make_demo_script make_demo_run make_demo_place demo_sum; do
         rm -rf "$PINS_STORE/world"
         if ( set -e; "st_$c" ); then echo "  ok   $c"; else echo "  FAIL $c"; failed="$failed $c"; fi
@@ -1104,5 +1165,5 @@ case "${1:-}" in
     make-demo) [ $# -ge 2 ] || die "usage: pins.sh make-demo <name> [--replace]"; shift; cmd_make_demo "$@";;
     list)     cmd_list;;
     selftest) cmd_selftest;;
-    *) awk 'NR > 1 && /^#/ {sub(/^# ?/, ""); print; next} NR > 1 {exit}' "$0"; exit 1;;
+    *) usage; exit 1;;
 esac

@@ -1,9 +1,11 @@
 # Contributing Code
 
-You want to contribute code to Yamagi Quake II? That's good! We're
-always interested in contributions, as long as they're in the scope of
-our little project. It doesn't matter if you're sending new features,
-bugfixes or even documentation updates.
+Portmanbeau Quake II does not accept contributions. The repository at
+<https://github.com/BeauBender/quake2> is the project's home; issues and
+pull requests there are open to its owner only, so bug reports and patches
+are not accepted. The rest of this page is kept for reference: it is the
+guidance of Yamagi Quake II, which this fork is based on, for sending
+code to that project.
 
 As a general note: **Ask before writing code!** Nobody was ever hurt for
 asking if his or her idea is in scope for Yamagi Quake II. And an early

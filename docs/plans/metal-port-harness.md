@@ -33,7 +33,7 @@ renderer is judged with it, and what the first run on real data found.
 | Gate checks, no game data needed | `tests/check-pins.sh`, `tests/check-pins-latch.sh` | green in `scripts/test.sh` |
 
 The client and `ref_soft` link and run on macOS arm64 against SDL3
-3.4.20 (`make client ref_soft game` with an untracked `config.mk`). `ref_gl1`
+3.4.20 (`make client ref_soft game`, SDL 3 built from `third_party/SDL3/`). `ref_gl1`
 and `ref_gl3` build there too; `gl1` references are card P3's.
 
 In the tree from the renderer-API recorder (design in

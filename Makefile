@@ -8,7 +8,9 @@
 #  - Renderer libraries (gl1, gl3, soft)                 #
 #                                                        #
 # Base dependencies:                                     #
-#  - SDL 3                                               #
+#  - SDL 3 (vendored in third_party/SDL3 and built      #
+#    statically on OS X; system SDL3 via pkgconf        #
+#    elsewhere)                                         #
 #  - libGL                                               #
 #  - Vulkan headers                                      #
 #                                                        #
@@ -76,6 +78,14 @@ WITH_SYSTEMDIR:=""
 
 # Enable XDG directories support
 WITH_XDG:=yes
+
+# WITH_METAL_SHIM
+# macOS only. Builds ref_gl1 against the in-tree OpenGL subset on
+# Metal (src/client/refresh/gl1/metal/) instead of Apple's OpenGL
+# framework, for Macs where OpenGL is unavailable. Needs the Xcode
+# Metal toolchain (xcrun metal); writes ref_gl1.metallib next to
+# ref_gl1.dylib. Work in progress: see doc/100_renderpins.md.
+WITH_METAL_SHIM:=no
 
 # OSX_APP
 # This will set the build options to create an MacOS .app-bundle.
@@ -305,8 +315,14 @@ endif
 
 # ----------
 
-# Extra CFLAGS for SDL.
+# Extra CFLAGS for SDL. On OS X SDL3 is built from the
+# vendored source (third_party/sdl3.make, included below);
+# elsewhere the system SDL3 is found by pkgconf.
+ifeq ($(YQ2_OSTYPE), Darwin)
+SDLCFLAGS := -Ithird_party/SDL3/include
+else
 SDLCFLAGS := $(shell $(PKG_CONFIG) --cflags sdl3)
+endif
 
 ifdef NO_SDL_GYRO
 SDLCFLAGS += -DNO_SDL_GYRO
@@ -326,7 +342,8 @@ INCLUDE ?= -I/usr/local/include
 else ifeq ($(YQ2_OSTYPE),Windows)
 INCLUDE ?= -I/usr/include
 else ifeq ($(YQ2_OSTYPE),Darwin)
-INCLUDE ?= -I/usr/local/include -I/opt/homebrew/include
+# Nothing from /usr/local or Homebrew: SDL3 is vendored.
+INCLUDE ?=
 endif
 
 # ----------
@@ -343,7 +360,8 @@ LDFLAGS ?= -L/usr/local/lib
 else ifeq ($(YQ2_OSTYPE),Windows)
 LDFLAGS ?= -L/usr/lib
 else ifeq ($(YQ2_OSTYPE),Darwin)
-LDFLAGS ?= -L/usr/local/lib -L/opt/homebrew/lib
+# Nothing from /usr/local or Homebrew: SDL3 is vendored.
+LDFLAGS ?=
 endif
 
 # Link address sanitizer if requested.
@@ -391,8 +409,24 @@ endif
 # ----------
 
 # Extra LDFLAGS for SDL
+#
+# On OS X the vendored SDL3 is linked statically into the
+# client executable only, and all of it (-force_load), so
+# that every public SDL function is defined and exported
+# by quake2 itself. The renderer dylibs are loaded by the
+# client with dlopen() and use SDL too (GL context,
+# window, SDL_Renderer). They must use the client's SDL,
+# not a second copy: a second static copy would have its
+# own, uninitialised video subsystem and window list. So
+# the renderers are linked without SDL, and only their
+# undefined _SDL_* symbols are marked for lookup at load
+# time (-Wl,-U,<symbol>, see SDL_DYNAMIC_LOOKUP), where
+# dyld finds them in the already loaded executable. Any
+# other undefined symbol still fails the link.
 ifeq ($(YQ2_OSTYPE), Darwin)
-SDLLDFLAGS := -lSDL3
+include third_party/sdl3.make
+SDLLDFLAGS := -Wl,-force_load,$(SDL3_LIB) $(SDL3_LDLIBS)
+SDL_DYNAMIC_LOOKUP = $$(nm -u $(filter %.o,$^) | grep '^_SDL_' | sort -u | sed 's/^/-Wl,-U,/')
 else
 SDLLDFLAGS := $(shell $(PKG_CONFIG) --libs sdl3)
 endif
@@ -419,7 +453,11 @@ endif
 
 # ----------
 
-# Builds everything
+# Builds everything. Named as the default goal because
+# third_party/sdl3.make, included above on OS X, defines
+# targets of its own.
+.DEFAULT_GOAL := all
+
 all: config client server game ref_gl1 ref_gl3 ref_soft
 
 # ----------
@@ -434,6 +472,7 @@ config:
 	@echo "WITH_SYSTEMWIDE = $(WITH_SYSTEMWIDE)"
 	@echo "WITH_SYSTEMDIR = $(WITH_SYSTEMDIR)"
 	@echo "WITH_XDG = $(WITH_XDG)"
+	@echo "WITH_METAL_SHIM = $(WITH_METAL_SHIM)"
 	@echo "============================"
 	@echo ""
 
@@ -600,10 +639,71 @@ else ifeq ($(YQ2_OSTYPE), Darwin)
 
 ref_gl1:
 	@echo "===> Building ref_gl1.dylib"
+	${Q}mkdir -p $(BINDIR)
 	$(MAKE) $(BINDIR)/ref_gl1.dylib
 
 
+ifeq ($(WITH_METAL_SHIM), yes)
+# The OpenGL subset on Metal: no OpenGL framework is linked.
+$(BINDIR)/ref_gl1.dylib : LDFLAGS += -shared -framework Metal -framework QuartzCore -framework Foundation
+else
 $(BINDIR)/ref_gl1.dylib : LDFLAGS += -shared -framework OpenGL
+endif
+
+# Both builds write release/ref_gl1.dylib from different objects: a
+# stamp per build relinks it whenever WITH_METAL_SHIM changes. Switching
+# to the OpenGL build also removes the shim's ref_gl1.metallib, which
+# that build does not use.
+REFGL1_MODE := $(if $(filter yes,$(WITH_METAL_SHIM)),metal,gl)
+
+$(BINDIR)/ref_gl1.dylib : $(BUILDDIR)/ref_gl1.$(REFGL1_MODE).mode
+
+$(BUILDDIR)/ref_gl1.$(REFGL1_MODE).mode:
+	${Q}mkdir -p $(@D)
+	${Q}rm -f $(BUILDDIR)/ref_gl1.*.mode
+	$(if $(filter gl,$(REFGL1_MODE)),${Q}rm -f $(BINDIR)/ref_gl1.metallib)
+	${Q}touch $@
+
+ifeq ($(WITH_METAL_SHIM), yes)
+MGL_DIR := src/client/refresh/gl1/metal
+MGL_OBJDIR := $(BUILDDIR)/ref_gl1_metal
+MGL_CFLAGS := -DMGL_RENDERER_SUFFIX=\"gl1-metal\"
+
+$(BINDIR)/ref_gl1.dylib : $(BINDIR)/ref_gl1.metallib
+
+# The shaders, loaded from next to the dylib at context creation.
+$(BINDIR)/ref_gl1.metallib : $(MGL_DIR)/shaders.metal
+	@echo "===> METAL $<"
+	${Q}command -v xcrun >/dev/null 2>&1 || { echo "WITH_METAL_SHIM=yes needs xcrun and the Xcode Metal toolchain" >&2; exit 1; }
+	${Q}xcrun -f metal >/dev/null 2>&1 || { echo "WITH_METAL_SHIM=yes needs the Metal compiler (xcrun metal); install the Xcode Metal toolchain" >&2; exit 1; }
+	${Q}mkdir -p $(MGL_OBJDIR) $(@D)
+	${Q}xcrun -sdk macosx metal -c $< -o $(MGL_OBJDIR)/shaders.air
+	${Q}xcrun -sdk macosx metallib $(MGL_OBJDIR)/shaders.air -o $@
+
+# The shim's own sources (C, and ARC Objective-C in mgl_layer.m), without the remap.
+$(MGL_OBJDIR)/$(MGL_DIR)/%.o: $(MGL_DIR)/%.c
+	@if [ -z $(QUIET) ]; then\
+		echo "===> CC $<";\
+	fi
+	${Q}mkdir -p $(@D)
+	${Q}$(CC) -c $(CFLAGS) $(MGL_CFLAGS) $(SDLCFLAGS) $(INCLUDE) -o $@ $<
+
+$(MGL_OBJDIR)/$(MGL_DIR)/%.o: $(MGL_DIR)/%.m
+	@if [ -z $(QUIET) ]; then\
+		echo "===> CC $<";\
+	fi
+	${Q}mkdir -p $(@D)
+	${Q}$(CC) -c -fobjc-arc $(CFLAGS) $(MGL_CFLAGS) $(SDLCFLAGS) $(INCLUDE) -o $@ $<
+
+# gl1 and the rest of ref_gl1, unchanged: <OpenGL/gl.h> resolves to the
+# shim's subset header and shim_sdl.h remaps the SDL OpenGL calls.
+$(MGL_OBJDIR)/%.o: %.c
+	@if [ -z $(QUIET) ]; then\
+		echo "===> CC $<";\
+	fi
+	${Q}mkdir -p $(@D)
+	${Q}$(CC) -c $(CFLAGS) -I$(MGL_DIR)/include -include $(MGL_DIR)/shim_sdl.h $(SDLCFLAGS) $(INCLUDE) -o $@ $<
+endif
 
 else # not Windows or Darwin
 
@@ -1053,7 +1153,17 @@ endif
 
 # Rewrite paths to our object directory.
 CLIENT_OBJS = $(patsubst %,$(BUILDDIR)/client/%,$(CLIENT_OBJS_))
+ifeq ($(WITH_METAL_SHIM), yes)
+ifneq ($(YQ2_OSTYPE), Darwin)
+$(error WITH_METAL_SHIM=yes is for macOS only)
+endif
+# The shim build keeps its objects apart, they are compiled with other flags.
+REFGL1_OBJS = $(patsubst %,$(BUILDDIR)/ref_gl1_metal/%,$(REFGL1_OBJS_)) \
+	$(patsubst %,$(BUILDDIR)/ref_gl1_metal/src/client/refresh/gl1/metal/%,\
+		mgl_state.o mgl_draw.o mgl_tex.o mgl_raster.o mgl_frame.o mgl_layer.o)
+else
 REFGL1_OBJS = $(patsubst %,$(BUILDDIR)/ref_gl1/%,$(REFGL1_OBJS_))
+endif
 REFGL3_OBJS = $(patsubst %,$(BUILDDIR)/ref_gl3/%,$(REFGL3_OBJS_))
 REFGL3_OBJS += $(patsubst %,$(BUILDDIR)/ref_gl3/%,$(REFGL3_OBJS_GLADE_))
 REFSOFT_OBJS = $(patsubst %,$(BUILDDIR)/ref_soft/%,$(REFSOFT_OBJS_))
@@ -1086,6 +1196,10 @@ $(BINDIR)/yquake2.exe : $(CLIENT_OBJS) icon
 	${Q}$(CC) $(LDFLAGS) $(BUILDROOT)/icon/icon.res $(CLIENT_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
 $(BINDIR)/quake2.exe : src/win-wrapper/wrapper.c icon
 	$(Q)$(CC) -Wall -mwindows $(BUILDROOT)/icon/icon.res src/win-wrapper/wrapper.c -o $@
+else ifeq ($(YQ2_OSTYPE), Darwin)
+$(BINDIR)/quake2 : $(CLIENT_OBJS) $(SDL3_LIB)
+	@echo "===> LD $@"
+	${Q}$(CC) $(LDFLAGS) $(CLIENT_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
 else
 $(BINDIR)/quake2 : $(CLIENT_OBJS)
 	@echo "===> LD $@"
@@ -1111,7 +1225,7 @@ $(BINDIR)/ref_gl1.dll : $(REFGL1_OBJS)
 else ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/ref_gl1.dylib : $(REFGL1_OBJS)
 	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(REFGL1_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
+	${Q}$(CC) $(LDFLAGS) $(REFGL1_OBJS) $(LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
 else
 $(BINDIR)/ref_gl1.so : $(REFGL1_OBJS)
 	@echo "===> LD $@"
@@ -1126,7 +1240,7 @@ $(BINDIR)/ref_gl3.dll : $(REFGL3_OBJS)
 else ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/ref_gl3.dylib : $(REFGL3_OBJS)
 	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(REFGL3_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
+	${Q}$(CC) $(LDFLAGS) $(REFGL3_OBJS) $(LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
 else
 $(BINDIR)/ref_gl3.so : $(REFGL3_OBJS)
 	@echo "===> LD $@"
@@ -1141,7 +1255,7 @@ $(BINDIR)/ref_soft.dll : $(REFSOFT_OBJS)
 else ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/ref_soft.dylib : $(REFSOFT_OBJS)
 	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(REFSOFT_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
+	${Q}$(CC) $(LDFLAGS) $(REFSOFT_OBJS) $(LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
 else
 $(BINDIR)/ref_soft.so : $(REFSOFT_OBJS)
 	@echo "===> LD $@"
