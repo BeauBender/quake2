@@ -251,3 +251,79 @@ Cards to file, in order (each `depends:TASK27`, `epic:metal-renderer`):
 `gl1-metal` above is the renderer name the harness records under when the
 dylib was built with the shim; the Makefile sets `-DMGL_RENDERER_SUFFIX` so
 `glGetString(GL_RENDERER)` and the pin manifest name it.
+
+## 7. As built by TASK47 (S1): departures from sections 1 to 3
+
+TASK47 built the skeleton under `src/client/refresh/gl1/metal/`. Where it
+differs from the text above, this list is what the tree does.
+
+- **Eight SDL calls, not six.** `gl1_sdl.c` calls `SDL_GL_SetAttribute`,
+  `SDL_GL_GetAttribute`, `SDL_GL_CreateContext`, `SDL_GL_DestroyContext`,
+  `SDL_GL_SwapWindow`, `SDL_GL_SetSwapInterval`, `SDL_GL_GetSwapInterval`
+  and `SDL_GL_GetProcAddress`; `shim_sdl.h` remaps all eight and
+  `SDL_WINDOW_OPENGL`. It includes `<SDL3/SDL.h>` first, so SDL's own
+  declarations keep their names and only gl1's uses are renamed.
+- **Makefile mechanics.** No target-specific `CFLAGS` on the dylib: they
+  would reach the shim's own objects too, and both builds would share one
+  object directory. The shim build compiles into
+  `$(BUILDDIR)/ref_gl1_metal/` with its own rules (gl1 and the shared
+  files with `-I .../metal/include -include .../shim_sdl.h`; the shim's
+  sources without the remap; `mgl_layer.m` with `-fobjc-arc`). The
+  OpenGL framework is left out by an `ifeq`, not `filter-out` (which
+  works per word and would drop every `-framework`). A stamp per build
+  (`$(BUILDDIR)/ref_gl1.{gl,metal}.mode`) relinks `ref_gl1.dylib` when
+  `WITH_METAL_SHIM` changes, so `make -q` tells the two builds apart.
+  `WITH_METAL_SHIM=yes` on another OS is a make error.
+- **What is implemented now.** Beyond the frame calls, every entry point
+  that only records state does so, with GL's argument checks: enables,
+  blend, depth, alpha, stencil, cull, colour mask, polygon mode and
+  offset, shade model, point size and parameters, current colour,
+  active and client-active unit, `glTexEnvi`, client arrays,
+  `glMatrixMode`, `glLoadIdentity`, `glLoadMatrixf`, `glPushMatrix`,
+  `glPopMatrix`, `glGetFloatv` (modelview and projection only),
+  `glPixelStorei`, `glHint`, `glDrawBuffer`. Stubs that set
+  `GL_INVALID_OPERATION` and log their name once: `glDrawArrays`,
+  `glDrawElements`, `glBindTexture`, `glDeleteTextures`, `glTexImage2D`,
+  `glTexSubImage2D`, `glTexParameteri`, `glRotatef`, `glTranslatef`,
+  `glScalef`, `glOrtho`, `glFrustum`, `glColorTableEXT`.
+- **Extensions.** `GL_ARB_multitexture GL_ARB_point_parameters
+  GL_ARB_texture_non_power_of_two`. Anisotropy is not advertised until
+  `glGetFloatv` answers `GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT`; paletted
+  textures never are.
+- **MSAA.** A multisample request is refused (gl1 then turns
+  `r_msaa_samples` off); the multisampled colour texture with resolve is
+  left for a later card.
+- **Clears.** The first pass of every frame clears what the frame did not
+  ask to clear (black, depth 1, stencil 0) instead of leaving it
+  undefined, so frames are reproducible. A clear a load action cannot
+  express (a partial colour or stencil write mask, a scissor that does
+  not cover the target) sets the sticky error and leaves that attachment
+  as it is; the draw path can do those as a quad.
+- **Bounded waits.** The frame semaphore is created at 0 and raised to 3
+  (libdispatch traps when a semaphore is released below its initial
+  value). A frame whose semaphore wait passes 2 s is skipped (clears do
+  nothing, reads set the sticky error). `nextDrawable` returns nil after
+  one second (`allowsNextDrawableTimeout`); the frame is then drawn into
+  an offscreen texture of the same size, which `glReadPixels` reads, and
+  nothing is presented. `glFinish` and readback wait at most 5 s.
+- **Readback.** `glReadPixels` validates before it reads: format
+  `GL_RGB`, `GL_RGBA` or `GL_BGRA`, type `GL_UNSIGNED_BYTE`, the
+  rectangle inside the target, the pack alignment; otherwise the sticky
+  error and nothing written. It also exports the bounded
+  `glReadnPixels`. With `MGL_READBACK_DUMP` set (see
+  `doc/100_renderpins.md`) every read is also written to that directory,
+  which is how the pins_dir frames were checked against the shim's own
+  readback.
+- **The renderer name.** The engine writes `vid_renderer` (`gl1`) into
+  the pin manifest; the build is named by the `GL_RENDERER` string, which
+  ends in `(gl1-metal)` (`-DMGL_RENDERER_SUFFIX`). `scripts/pins.sh record
+  gl1-metal` starts the engine with `vid_renderer gl1`, checks the
+  manifest against `gl1` and requires that string in `engine.log`;
+  `record gl1` refuses a log that has it.
+- **Encoder state.** Viewport, scissor and depth range are set on every
+  new pass and whenever they change; an empty GL scissor has no Metal
+  form (the encoder gets a 1x1 rectangle and `mgl_raster_t.scissor_empty`),
+  so the draw path must skip draws while it holds.
+- **CI.** Not built in CI yet: the switch is off by default, so the macOS
+  job is unaffected. Building the shim there needs the Metal toolchain on
+  the runner and a workflow change, which is a follow-up card.
