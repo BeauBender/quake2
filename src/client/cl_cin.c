@@ -467,7 +467,12 @@ SCR_RunCinematic(void)
 
 	if (!cin.pic_pending)
 	{
-		cin_end = CINEND_DONE;
+		/* a cinematic with no first frame stays failed */
+		if (cin_end != CINEND_FAILED)
+		{
+			cin_end = CINEND_DONE;
+		}
+
 		SCR_StopCinematic();
 		SCR_FinishCinematic();
 		cl.cinematictime = 1; /* the black screen behind loading */
@@ -763,6 +768,13 @@ SCR_PlayCinematic(char *arg)
 
 	cl.cinematicframe = 0;
 	cin.pic = SCR_ReadNextFrame();
+
+	if (!cin.pic)
+	{
+		/* opened, but no first frame: the pin harness reports it failed */
+		cin_end = CINEND_FAILED;
+	}
+
 	cl.cinematictime = Sys_Milliseconds();
 }
 
@@ -776,4 +788,14 @@ int
 SCR_CinematicEnd(void)
 {
 	return cin_end;
+}
+
+/*
+ * Forget how the last cinematic ended, so that it cannot be taken for the
+ * end of a demo that starts later. Called by the pin harness only.
+ */
+void
+SCR_ResetCinematicEnd(void)
+{
+	cin_end = CINEND_NONE;
 }

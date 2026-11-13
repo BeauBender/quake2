@@ -831,6 +831,12 @@ CL_PinsFrame(void)
 
 	if (cl.attractloop && (cls.state == ca_active))
 	{
+		if (cl.playernum != -1)
+		{
+			/* a demo, not a cinematic: an earlier cinematic's end is stale */
+			SCR_ResetCinematicEnd();
+		}
+
 		was_playing = true;
 		return;
 	}

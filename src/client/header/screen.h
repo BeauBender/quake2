@@ -66,6 +66,7 @@ void SCR_FinishCinematic(void);
 #define CINEND_DONE 1   /* it played to its last frame */
 #define CINEND_FAILED 2 /* it could not be opened or read */
 int SCR_CinematicEnd(void);
+void SCR_ResetCinematicEnd(void);
 
 void SCR_DrawCrosshair(void);
 
