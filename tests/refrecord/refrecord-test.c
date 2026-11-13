@@ -1674,8 +1674,9 @@ ReadMode(const char *path, qboolean names)
 		return 0;
 	}
 
-	printf("trace: %u bytes, %u frames, %u captures, flags %u, %ux%u, capture every %u\n",
-			t.size, t.h.frame_count, t.captures, t.h.flags, t.h.width, t.h.height, t.h.capture_every);
+	printf("trace: %u bytes, %u frames, %u captures, flags %u, %ux%u, capture every %u, api %u, run %.16s-%u\n",
+			t.size, t.h.frame_count, t.captures, t.h.flags, t.h.width, t.h.height, t.h.capture_every,
+			t.h.api_version, t.h.engine_sha, t.h.scenario_hash);
 	printf("strings: %u (models %u, skins %u, pics %u, skies %u, maps %u)\n", t.strings,
 			t.kinds[REFREC_KIND_MODEL], t.kinds[REFREC_KIND_SKIN], t.kinds[REFREC_KIND_PIC],
 			t.kinds[REFREC_KIND_SKY], t.kinds[REFREC_KIND_MAP]);
@@ -2228,6 +2229,58 @@ TestRecordWriteError(void)
 	CHECK(!RefRec_Recording(), "writeerror: a NULL path started recording");
 }
 
+/* The string table and frame index readers refuse malformed entries. */
+static void
+TestTableReaders(void)
+{
+	uint8_t buf[4 + REFREC_STRING_SIZE], *e = buf + 4, idx[REFREC_INDEX_SIZE];
+	refrec_reader_t r;
+	uint32_t count, kind, id, frame;
+	uint64_t off;
+	char name[MAX_QPATH];
+
+#define TABLE(setup, want, what) \
+	do \
+	{ \
+		memset(buf, 0, sizeof(buf)); \
+		SetU32(buf, 1); \
+		SetU32(e, REFREC_KIND_PIC); \
+		SetU32(e + 4, 1); \
+		memcpy(e + 8, "conchars", 8); \
+		setup; \
+		RefRec_ReaderInit(&r, buf, sizeof(buf)); \
+		CHECK((RefRec_ReadStringTable(&r, &count) && \
+			RefRec_NextString(&r, &kind, &id, name)) == (want), "string table: %s", what); \
+	} while (0)
+
+	TABLE((void)0, true, "a valid entry was refused");
+	TABLE(memset(e + 8, 'a', MAX_QPATH), false, "a name without a NUL was accepted");
+	TABLE(e[8 + 20] = 'x', false, "bytes after the NUL were accepted");
+	TABLE(SetU32(e, 0), false, "kind 0 was accepted");
+	TABLE(SetU32(e, REFREC_KIND_LAST + 1), false, "a kind past the last was accepted");
+	TABLE(SetU32(e + 4, 0), false, "id 0 was accepted");
+	TABLE(SetU32(buf, 2), false, "a count over the entries present was accepted");
+	TABLE(SetU32(buf, REFREC_MAX_HANDLES + 1), false, "a count over REFREC_MAX_HANDLES was accepted");
+#undef TABLE
+
+	memset(buf, 0, sizeof(buf));
+	SetU32(buf, 1);
+	SetU32(e, REFREC_KIND_MODEL);
+	SetU32(e + 4, 1);
+	RefRec_ReaderInit(&r, buf, sizeof(buf) - 1);
+	CHECK(!(RefRec_ReadStringTable(&r, &count) && RefRec_NextString(&r, &kind, &id, name)),
+			"string table: a truncated entry was accepted");
+
+	SetU32(idx, 7);
+	SetU32(idx + 4, 0x10);
+	SetU32(idx + 8, 1);
+	RefRec_ReaderInit(&r, idx, sizeof(idx));
+	CHECK(RefRec_NextFrameIndex(&r, &frame, &off) && frame == 7 && off == 0x100000010ull,
+			"frame index: entry read wrong");
+	RefRec_ReaderInit(&r, idx, sizeof(idx) - 1);
+	CHECK(!RefRec_NextFrameIndex(&r, &frame, &off), "frame index: a truncated entry was accepted");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2261,6 +2314,7 @@ main(int argc, char **argv)
 	TestRecordDraws();
 	TestRecordLimit();
 	TestRecordWriteError();
+	TestTableReaders();
 
 	printf("refrecord: %d checks, %d failed\n", checks, failures);
 
