@@ -6,7 +6,7 @@
 #
 # llvm-cov: measured 33.21% with Apple clang 21 on macOS arm64 (TASK29),
 # from an empty build/coverage (the script cleans it on every run).
-# Re-measured after the client parser tests (TASK66): 33.71% of 18771 lines;
+# Re-measured after the client parser tests (TASK66): 33.73% of 18771 lines;
 # that total now includes six client files (cl_download, cl_entities,
 # cl_network, cl_parse, cl_screen, sound/sound.c), so a loss under
 # src/common or src/server can be offset by client lines.
