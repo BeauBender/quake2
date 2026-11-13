@@ -59,7 +59,7 @@ VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 	char path[MAX_OSPATH];
 	unsigned char hdr[18];
 	FILE *f;
-	int x, y;
+	int x, y, ok;
 
 	/* Registered CVAR_NOSET in CL_InitLocal: only +set on the command line
 	   can give them a value, a stuffed or typed "set" is refused. */
@@ -77,7 +77,11 @@ VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 
 	Com_sprintf(path, sizeof(path), "%s/%s-%06d.tga", pins_dir->string, pins_scenario->string, frame);
 	f = Q_fopen(path, "wb");
-	if (!f) { Com_Printf("pins: cannot write %s\n", path); return false; }
+	if (!f)
+	{
+		Com_Printf("pins: cannot write %s\n", path);
+		return true;   /* handled: scrnshot/ stays untouched while pins_dir is set */
+	}
 
 	memset(hdr, 0, sizeof(hdr));
 	hdr[2] = 2;                 /* uncompressed truecolor */
@@ -85,17 +89,23 @@ VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 	hdr[14] = height & 255; hdr[15] = (height >> 8) & 255;
 	hdr[16] = 24;
 	hdr[17] = 0x20;             /* rows stored top-down, as the renderer hands them over */
-	fwrite(hdr, 1, sizeof(hdr), f);
-	for (y = 0; y < height; y++)
+	ok = fwrite(hdr, 1, sizeof(hdr), f) == sizeof(hdr);
+	for (y = 0; ok && y < height; y++)
 	{
 		const unsigned char *row = data + (size_t)y * width * comp;
 		for (x = 0; x < width; x++)
 		{
 			unsigned char bgr[3] = { row[x * comp + 2], row[x * comp + 1], row[x * comp + 0] };
-			fwrite(bgr, 1, 3, f);
+			if (fwrite(bgr, 1, 3, f) != 3) { ok = 0; break; }
 		}
 	}
-	fclose(f);
+	if (fclose(f) != 0) ok = 0;
+	if (!ok)
+	{
+		remove(path);
+		Com_Printf("pins: short write, removed %s\n", path);
+		return true;
+	}
 
 	Com_sprintf(path, sizeof(path), "%s/manifest.txt", pins_dir->string);
 	f = Q_fopen(path, "ab");
