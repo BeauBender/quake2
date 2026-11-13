@@ -182,6 +182,7 @@ cmd_compare() {
         esac
         shift 2
     done
+    [ -f "$scen_dir/$scenario.cfg" ] || die "no scenario $scenario (see $scen_dir)"
     local s; s=$(store)
     local cand ref_dir
     [ -n "$cand_id" ] || cand_id=$(run_id "$scenario" "$run")
