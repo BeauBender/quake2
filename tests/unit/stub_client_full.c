@@ -62,6 +62,7 @@ cvar_t *horplus, *rcon_address, *rcon_client_password, *vid_renderer;
 void
 stub_client_cvars(void)
 {
+	static int done;
 	cvar_t **all[] = { &cl_gun, &cl_kickangles, &cl_laseralpha, &cl_loadpaused,
 		&cl_noskins, &cl_paused, &cl_predict, &cl_r1q2_lightstyle, &cl_showclamp,
 		&cl_showfps, &cl_shownet, &cl_showspeed, &cl_timedemo, &cl_timeout,
@@ -77,16 +78,24 @@ stub_client_cvars(void)
 		Com_sprintf(name, sizeof(name), "t_stub_cvar_%d", (int)i);
 		*all[i] = Cvar_Get(name, "0", 0);
 	}
+
+	/* The cl_screen.c cvars, once: it adds console commands too. */
+	if (!done)
+	{
+		done = 1;
+		SCR_Init();
+	}
 }
 
+/* One slot per entity number a message can name (MAX_CL_ENTNUM). */
 centity_t *
 CL_AllocEntity(int entnum)
 {
-	static centity_t ents[64];
+	static centity_t ents[MAX_CL_ENTNUM + 1];
 
 	cl_entities = ents;
-	cl_numentities = 64;
-	return (entnum >= 0 && entnum < 64) ? &ents[entnum] : NULL;
+	cl_numentities = MAX_CL_ENTNUM + 1;
+	return (entnum >= 0 && entnum <= MAX_CL_ENTNUM) ? &ents[entnum] : NULL;
 }
 
 int CL_MaxClients(void) { return 1; }
