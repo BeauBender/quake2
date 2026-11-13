@@ -71,7 +71,8 @@ software renderer.
 With the stock demos `skywater` shows the sky but no water surface. The
 water-warp settings act on the full-view warp while the camera is under
 water, not on a water surface seen from above, so pinning water needs a
-demo whose camera passes water.
+demo whose camera passes water. `make-demo water` (see *Making a demo*)
+makes one; record `skywater` from it with `PINS_DEMO=water.dm2`.
 
 For `cinematic`, set `PINS_DEMO` to a cinematic, for example
 `PINS_DEMO=idlog.cin`. A cinematic changes its picture 14 times a
@@ -123,6 +124,44 @@ scripts/pins.sh record soft world
 scripts/pins.sh record soft world --run 2
 scripts/pins.sh compare soft world --run 2 --ref soft
 ```
+
+## Making a demo
+
+```sh
+scripts/pins.sh make-demo <name> [--replace]
+```
+
+`make-demo` plays the console script `scripts/pins/demos/<name>.cfg` in
+a local single-player game, with no network game joined and no frames
+captured, and leaves the demo it records as `demos/<name>.dm2` in the
+engine's portable write directory, `baseq2/` beside the binary
+(`release/baseq2/` for this tree's build). That is where `PINS_DEMO`
+finds it: record from it with `PINS_DEMO=<name>.dm2`. The demo is made
+from the game data, so like the frames it is never committed; `release/`
+is ignored by git, and `make-demo` refuses a binary whose write
+directory is inside `PINS_BASEDIR` or a part of this repository git does
+not ignore.
+
+The one script so far, `water`, loads `base1`, puts the camera over its
+large pool and then under the surface, and records `water.dm2`; it runs
+for about half a minute. Run it once:
+
+```sh
+scripts/pins.sh make-demo water
+PINS_DEMO=water.dm2 scripts/pins.sh record soft skywater
+```
+
+A script may use only console commands that exist in this tree, must
+record its own name once, and must end with `stop` and `quit`; `make-demo`
+checks the script before it starts the engine. The run is bounded by
+`PINS_TIMEOUT`. It fails at once when the script's map is not in the game
+data, and fails when the engine exits non-zero or the demo is missing, cut
+short, or nearly empty. An existing demo is replaced only with
+`--replace`. Because a demo made again is not the same file, a demo
+beside the binary adds its checksum to the id of every record made from
+it, so records of the old and the new demo never share an id. The run
+also reads and rewrites `config.cfg` in the write directory, as any
+portable start without the pin arguments does.
 
 ## Other commands
 

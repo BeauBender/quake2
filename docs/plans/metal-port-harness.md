@@ -28,6 +28,7 @@ renderer is judged with it, and what the first run on real data found.
 | Cinematic capture: every Nth cinematic frame, quit at its end, exit 1 when it cannot be opened | `SCR_PinsCapture` in `src/client/cl_screen.c`, `SCR_CinematicEnd` in `src/client/cl_cin.c`, `CL_PinsFrame` in `src/client/cl_main.c` | run on `soft` with `idlog.cin` and a missing cinematic (TASK40) |
 | Argument limit raised: `MAX_NUM_ARGVS` in `src/common/argproc.c` is 128 (was 50); `record` passes 66 to 69 words and the engine refused more than 50 at startup | `scripts/pins.sh selftest` case `argcount` and `tests/check-pins-latch.sh` feed every scenario's command line to the real `COM_InitArgv` | green in `scripts/test.sh`; the engine accepts 69 words (TASK39) |
 | Renderer-API record serializers and the 22 wrapper hooks in `vid.c`, recording off | `src/client/vid/refrecord.c`, `src/client/vid/header/refrecord.h`, `tests/check-refrecord.sh` | every record type round-trips through a buffer in `tests/check-refrecord.sh` (green in `scripts/test.sh`); observed on one host: the `world` scenario recorded on `soft` with a build of the base commit and with a build of the hooks gave 23 frames each, and all 23 frame files and the manifest compared byte-identical with `cmp` (TASK42) |
+| A scripted demo that shows water: `make-demo <name>` runs a console script in a local game and leaves `demos/<name>.dm2` beside the binary; a demo there adds its checksum to the pin id | `scripts/pins.sh` (`cmd_make_demo`, `check_demo_script`, `demo_sum`), `scripts/pins/demos/water.cfg` | selftest cases `make_demo_*` and `demo_sum`; run on real data, and `skywater` recorded from the demo on `soft` (TASK70) |
 | Gate checks, no game data needed | `tests/check-pins.sh`, `tests/check-pins-latch.sh` | green in `scripts/test.sh` |
 
 The client and `ref_soft` link and run on macOS arm64 against SDL3
@@ -252,6 +253,57 @@ Host: the build VM, macOS arm64, `soft` at 640x480.
    other `PINS_*` settings (here, `demo2.dm2` or another `PINS_EVERY`): it
    then reports a frame-count difference. When one scenario is recorded
    with several settings, name the reference with `--ref-id`.
+
+## Observed on the scripted water demo (TASK70)
+
+Host: the build VM, macOS arm64, `soft` at 640x480, the default
+`PINS_EVERY` 30.
+
+1. The demo: `scripts/pins.sh make-demo water` runs
+   `scripts/pins/demos/water.cfg`. It loads `base1`, the first map of the
+   game, gives `god`, `notarget` and `noclip` before `record water`, then
+   `teleport`s the player to fixed coordinates over the large pool of
+   that map (the eye about 24 units above the surface, level) and later
+   under it (about 24 units below), holding each place for 500 `wait`s.
+   The run took 26 seconds, exited 0 and left `water.dm2` (about 16 KB,
+   168 messages) in `release/baseq2/demos/`; `git status` stayed clean.
+   Nothing under `$PINS_BASEDIR` changed (checked with `find -newer`
+   against a marker made before the first run).
+2. Why no walking: console `wait` holds the script for one frame of at
+   least 16 ms (`Cbuf_Execute`), so a wait count is time, and a walk timed
+   by waits would end in a different place on another host. A teleport
+   lands on fixed coordinates. In `noclip` the player has no gravity, so it
+   stays there, and the teleport's pause flag, which holds the pitch at 0
+   until its timer runs down, never clears in `noclip` (`Pmove` returns
+   before the timer for `PM_SPECTATOR`), so the view is level at the yaw
+   of the level start. `+lookdown` therefore has no effect after a
+   teleport in `noclip`; tried, the pitch stayed at 0. Standing on a
+   ledge without `noclip` lets the pitch turn, but the ledge tried faced a
+   wall, so the script keeps the level view.
+3. Water on named frames: `PINS_DEMO=water.dm2 scripts/pins.sh record
+   soft skywater` captured 6 frames. Frames 0 to 2 show the pool from
+   just above: a rippled, warped water surface over the lower half of the
+   frame, the walls of the room and the ceiling lights above it. Frames 3
+   to 5 show the view from under the surface: the whole view warped, the
+   pool floor in the lower half and the underside of the water surface,
+   dark and rippled, in the upper half.
+4. Run to run: two records of one demo file (`--run 2` against the first,
+   `--ref-id` naming it) compared at score 0 and bad fraction 0 on all 6
+   frames, twice, for two demo files.
+5. Regeneration: making the demo again gave a different file (16043 and
+   16077 bytes, both 168 messages), so a made demo is not byte-identical.
+   The 6 `skywater` frames of the second demo compared at score 0 against
+   those of the first on this host. On a slower or faster host the time at
+   each place, and with it the frame count, may differ; the camera
+   positions do not. Because a demo beside the binary adds its checksum to
+   the pin id, records of two made demos never share an id; compare them
+   with `--ref-id` and `--cand-id`.
+6. A script whose map is not in the game data (tried with a throwaway
+   script naming a map that does not exist) fails in 4 seconds with
+   `the map <map> is missing from PINS_BASEDIR`.
+7. The run writes `config.cfg`, `qconsole.log`, `pins_make_water.log` and
+   `save/current/` into `release/baseq2/`, all git-ignored, as a portable
+   single-player start does.
 
 ### Thresholds measured for nondeterministic scenarios
 

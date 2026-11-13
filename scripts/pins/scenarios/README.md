@@ -18,7 +18,7 @@ derived from game data, so the files are committed (INFORM9).
 | `models` | world plus entities: alias models, sprites, beams, view weapon |
 | `particles` | everything, including particles, dynamic lights, screen blend |
 | `hud2d` | 2D only: status bar, crosshair, console text |
-| `skywater` | world surfaces, sky and warped water, with the sky and water-warp settings fixed; no entities, particles, dynamic lights or blend |
+| `skywater` | world surfaces, sky and warped water, with the sky and water-warp settings fixed; no entities, particles, dynamic lights or blend; water needs `PINS_DEMO=water.dm2` from `make-demo water` |
 | `cinematic` | a cinematic (`.cin`) stretched over the screen, no world; needs `PINS_DEMO` naming a cinematic |
 
 Rules:
@@ -50,3 +50,15 @@ demo showed warped water on any frame looked at, so `skywater` exercises
 the sky and the water-warp settings but not a water surface on this data.
 `cinematic` was recorded with `idlog.cin`. See the runbook for the frame
 lists.
+
+Added by TASK70: a demo that shows water, made from the game data by a
+committed console script and never committed itself.
+`scripts/pins.sh make-demo water` runs `scripts/pins/demos/water.cfg` and
+leaves `water.dm2` beside the binary (`release/baseq2/demos/`); record
+`skywater` from it with `PINS_DEMO=water.dm2`. Observed on one host
+(`soft`, the default `PINS_EVERY` 30): six frames, frames 0 to 2 the
+pool of `base1` from just above its surface, frames 3 to 5 from under
+it; two records of one demo file compare at score 0. A script under
+`scripts/pins/demos/` may use only commands that exist in `src/`; the
+driver checks that before it runs one, and the selftest checks every
+committed script.
