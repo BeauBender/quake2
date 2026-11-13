@@ -50,7 +50,7 @@
 #define REFREC_PARTICLE_SIZE	20
 
 #define REFREC_AREABYTES	32	/* MAX_MAP_AREAS / 8 */
-#define REFREC_PALETTE_SIZE	1024	/* 256 RGBA entries */
+#define REFREC_PALETTE_SIZE	768	/* 256 RGB entries */
 #define REFREC_MAX_STRING	1024	/* longest name or cvar value, NUL included */
 #define REFREC_MAX_CVARS	4096
 #define REFREC_MAX_RAW_DIM	4096	/* cols and rows of a Draw_StretchRaw */

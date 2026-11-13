@@ -371,6 +371,31 @@ TestCalls(void)
 	}
 }
 
+/* The palette payload is 256 RGB triples; hand the writer a block of exactly
+   that size so a read past it is an ASAN report. */
+static void
+TestPaletteExact(void)
+{
+	uint8_t *pal = malloc(REFREC_PALETTE_SIZE);
+	int i;
+
+	CHECK(REFREC_PALETTE_SIZE == 768, "palette size is not 256 RGB triples");
+
+	if (pal == NULL)
+	{
+		CHECK(0, "out of memory");
+		return;
+	}
+
+	for (i = 0; i < REFREC_PALETTE_SIZE; i++)
+	{
+		pal[i] = (uint8_t)(i * 3 + 1);
+	}
+
+	RoundTripCall(REC_PALETTE, 0, 0, false, NULL, pal, REFREC_PALETTE_SIZE, "REC_PALETTE exact heap block");
+	free(pal);
+}
+
 /* The writer refuses what the format cannot carry. */
 static void
 TestWriteRefusals(void)
@@ -435,9 +460,9 @@ TestWriteRefusals(void)
 	CHECK(!RefRec_WriteCall(&w, &c), "REC_FILL with data was written");
 	RefRec_WriterFree(&w);
 	c.type = REC_PALETTE;
-	c.datalen = 768;
+	c.datalen = 1024;
 	RefRec_WriterInit(&w);
-	CHECK(!RefRec_WriteCall(&w, &c), "a 768-byte palette was written");
+	CHECK(!RefRec_WriteCall(&w, &c), "a 1024-byte palette was written");
 	RefRec_WriterFree(&w);
 
 	/* a refused write leaves the writer failed: nothing more is appended */
@@ -1090,6 +1115,7 @@ int
 main(void)
 {
 	TestCalls();
+	TestPaletteExact();
 	TestWriteRefusals();
 	TestLayout();
 	TestFrames();

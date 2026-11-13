@@ -31,7 +31,7 @@ change to `API_VERSION 8`, no change to any renderer.
 | `DrawGetPicSize(w,h,name)` | `Draw_GetPicSize` | 2D query | `REC_PICSIZE` (name; result stored for replay check) |
 | `DrawPicScaled`, `DrawPicScaledCol`, `DrawStretchPic`, `DrawCharScaled`, `DrawTileClear`, `DrawFill`, `DrawFadeScreen` | `Draw_*` | 2D draw | one record each, arguments verbatim |
 | `DrawStretchRaw(x,y,w,h,cols,rows,data,bits)` | `Draw_StretchRaw` | 2D draw (cinematic) | record + `cols*rows*(bits/8)` payload |
-| `SetPalette(palette)` | `R_SetPalette` | control | `REC_PALETTE` + 1024 bytes or NULL flag |
+| `SetPalette(palette)` | `R_SetPalette` | control | `REC_PALETTE` + 768 bytes (256 RGB triples) or NULL flag |
 | `BeginFrame(camera_separation)` | `R_BeginFrame` | control | `REC_BEGINFRAME` |
 | `EndWorldRenderpass` | `R_EndWorldRenderpass` | control | `REC_ENDWORLD` |
 | `EndFrame` | `R_EndFrame` | control | `REC_ENDFRAME` (closes the frame record) |
