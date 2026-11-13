@@ -816,8 +816,11 @@ them given the engine behaves exactly as before.
   `pins_dir`. Must match `[a-z0-9_][a-z0-9_-]*`. Default: `pin`.
 
 * **pins_capture**: While a demo plays, capture every Nth rendered frame,
-  after the frame is complete and before it is presented; when playback
-  ends, quit so a scenario run is unattended; and if the renderer named
+  after the frame is complete and before it is presented (while a
+  cinematic started with `demomap <name>.cin` plays, every Nth cinematic
+  frame instead, and a cinematic that cannot be opened ends the engine
+  with a non-zero exit status); when playback ends, quit so a scenario
+  run is unattended; and if the renderer named
   by `vid_renderer` fails to load, stop with an error instead of falling
   back to another renderer. While it is on, `config.cfg` and
   `autoexec.cfg` are neither executed nor written, and an error that

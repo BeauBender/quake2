@@ -61,6 +61,13 @@ void SCR_RunCinematic(void);
 void SCR_StopCinematic(void);
 void SCR_FinishCinematic(void);
 
+/* How the last cinematic ended (SCR_CinematicEnd), for the pin harness. */
+#define CINEND_NONE 0   /* none was played, or it is still playing */
+#define CINEND_DONE 1   /* it played to its last frame */
+#define CINEND_FAILED 2 /* it could not be opened or read */
+int SCR_CinematicEnd(void);
+void SCR_ResetCinematicEnd(void);
+
 void SCR_DrawCrosshair(void);
 
 float SCR_GetHUDScale(void);
