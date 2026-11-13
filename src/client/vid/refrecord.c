@@ -1553,6 +1553,27 @@ Rec_Find(const void *ptr, uint32_t kind)
 }
 
 /*
+ * Retire the entries of ptr, of every kind that has a pointer (model,
+ * skin, pic), whose name is not name: the entry keeps its hash slot and
+ * string table row, but never matches a lookup again.
+ */
+static void
+Rec_Retire(const void *ptr, const char *name)
+{
+	uint32_t kind;
+
+	for (kind = REFREC_KIND_MODEL; kind <= REFREC_KIND_PIC; kind++)
+	{
+		uint32_t *slot = Rec_Find(ptr, kind);
+
+		if (slot && *slot && strncmp(rec.handles[*slot - 1].name, name, MAX_QPATH - 1) != 0)
+		{
+			rec.handles[*slot - 1].ptr = NULL;
+		}
+	}
+}
+
+/*
  * The id for a handle. The same pointer and name of one kind always get
  * the same id; the same pointer under a new name (the renderer reused
  * the memory after EndRegistration) gets a new id. Sky and map entries
@@ -1596,14 +1617,17 @@ Rec_Register(uint32_t kind, const char *name, const void *ptr)
 	if (rec.numhandles >= rec.handlelimit || (ptr && !slot))
 	{
 		/*
-		 * The pointer's entry names another file now. Retire it, so a
-		 * later lookup of the pointer misses and warns instead of
-		 * finding the stale id; the entry stays in the string table for
-		 * the records that already carry its id.
+		 * The pointer names another file now. Retire every entry of it
+		 * that carries another name, whatever its kind: Rec_Lookup finds
+		 * a skin through a pic entry, and a pointer the renderer reused
+		 * across kinds must not reach a frame under the old name. A
+		 * later lookup misses and warns instead of finding the stale id;
+		 * the entries stay in the string table for the records that
+		 * already carry their ids.
 		 */
-		if (slot && *slot)
+		if (ptr)
 		{
-			rec.handles[*slot - 1].ptr = NULL;
+			Rec_Retire(ptr, name);
 		}
 
 		Rec_Warn(REFREC_WARN_HANDLES_FULL, "handle map full, recorded as id 0");

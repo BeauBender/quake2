@@ -2707,6 +2707,80 @@ TestRecordHandlesFull(void)
 }
 
 /*
+ * A full handle map and a pointer registered again under another name and
+ * another kind. Rec_Lookup falls back from a skin to a pic entry, so the
+ * retirement covers every kind of the pointer: the entity is recorded as
+ * id 0 with an unknown-handle warning, never under the old name.
+ */
+static void
+TestRecordHandlesFullKinds(void)
+{
+	static const struct {
+		refrec_type_t first, second;
+		const char *first_name, *second_name;
+		qboolean model;		/* the entity uses the pointer as its model, else as its skin */
+	} runs[] = {
+		{ REC_PIC, REC_SKIN, "pics/old.pcx", "skins/new.pcx", false },
+		{ REC_SKIN, REC_PIC, "skins/old.pcx", "pics/new.pcx", false },
+		{ REC_MODEL, REC_SKIN, "models/old.md2", "skins/new.pcx", true },
+		{ REC_SKIN, REC_MODEL, "skins/old.pcx", "models/new.md2", false },
+		{ REC_PIC, REC_MODEL, "pics/old.pcx", "models/new.md2", false },
+		{ REC_MODEL, REC_PIC, "models/old.md2", "pics/new.pcx", true }
+	};
+	static entity_t ents[2];
+	static char ptr, other[2];
+	size_t r;
+
+	for (r = 0; r < sizeof(runs) / sizeof(runs[0]); r++)
+	{
+		const char *path = TracePath("handleskinds");
+		full_ctx_t x;
+		tracefile_t t;
+		refdef_t fd;
+		uint32_t id;
+
+		memset(&x, 0, sizeof(x));
+		memset(&fd, 0, sizeof(fd));
+		memset(ents, 0, sizeof(ents));
+		fd.entities = ents;
+		fd.num_entities = 1;
+		ents[0].model = runs[r].model ? (struct model_s *)&ptr : NULL;
+		ents[0].skin = runs[r].model ? NULL : (struct image_s *)&ptr;
+
+		RefRec_SetHandleLimit(4);
+		RefRec_StartRecord(path, 640, 480, 0);
+		RefRec_Registration(REC_BEGINREG, "maps/m.bsp", NULL);		/* id 1 */
+		RefRec_Registration(runs[r].first, runs[r].first_name, &ptr);	/* id 2 */
+		RefRec_Registration(REC_MODEL, "models/a.md2", &other[0]);	/* id 3 */
+		RefRec_Registration(REC_MODEL, "models/b.md2", &other[1]);	/* id 4, the map is full */
+		RefRec_Registration(runs[r].second, runs[r].second_name, &ptr);	/* full: retires id 2 */
+		RefRec_Registration(REC_ENDREG, NULL, NULL);
+		RefRec_Control(REC_BEGINFRAME, 0);
+		RefRec_RenderFrame(&fd);
+		RefRec_Control(REC_ENDFRAME, 0);
+		RefRec_StopRecord();
+		RefRec_SetHandleLimit(0);
+
+		if (!ReadTrace(path, &t, FullCb, &x, NULL))
+		{
+			CHECK(0, "handles kinds %u: trace refused: %s", (unsigned)r, t.err);
+			continue;
+		}
+
+		id = runs[r].model ? x.first[0].model_id : x.first[0].skin_id;
+		CHECK(t.strings == 4 && strcmp(t.sname[1], runs[r].first_name) == 0,
+				"handles kinds %u: string table", (unsigned)r);
+		CHECK(x.seen && id == 0, "handles kinds %u: the pointer kept id %u", (unsigned)r, id);
+		CHECK(t.warns[REFREC_WARN_UNKNOWN_HANDLE] == 1,
+				"handles kinds %u: %u unknown-handle warnings", (unsigned)r,
+				t.warns[REFREC_WARN_UNKNOWN_HANDLE]);
+		CHECK(t.warns[REFREC_WARN_HANDLES_FULL] == 1,
+				"handles kinds %u: %u full-map warnings", (unsigned)r,
+				t.warns[REFREC_WARN_HANDLES_FULL]);
+	}
+}
+
+/*
  * --read and --read --names print every name byte and engine id byte
  * outside 0x20..0x7e (and the backslash) escaped: a server or a demo
  * chooses those bytes.
@@ -2894,6 +2968,7 @@ main(int argc, char **argv)
 	TestRecordLimit();
 	TestRecordWriteError();
 	TestRecordHandlesFull();
+	TestRecordHandlesFullKinds();
 	TestRecordStopSweep();
 	TestReadEscapes();
 	TestTableReaders();
