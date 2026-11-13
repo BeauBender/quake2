@@ -1,0 +1,39 @@
+# Pin "com-parse-tokens", produced by test com_parse_tokens (tests/unit/test_shared.c).
+# Generated from real engine output by `make test UPDATE_PINS=1`
+# (build/<release|debug>/test/yq2test --update-pins). Do not edit by
+# hand: a change to the body below is a behaviour change and its commit
+# says why. The body starts after the separator line.
+# ---
+entity block:
+  [{]
+  [classname]
+  [worldspawn]
+  [message]
+  [The Edge]
+  [}]
+  [{]
+  [origin]
+  [-8 16 24]
+  [angle]
+  [90]
+  [}]
+  end after 12 tokens (last "")
+comments and whitespace:
+  [word1]
+  [word2]
+  end after 2 tokens (last "")
+quotes:
+  []
+  [a b]
+  [c]
+  [unterminated]
+  end after 4 tokens (last "")
+separators are not special:
+  [a=b;c{d}e/f]
+  end after 1 tokens (last "")
+control characters split words:
+  [one]
+  [two\x7fthree]
+  end after 2 tokens (last "")
+empty:
+  end after 0 tokens (last "")
