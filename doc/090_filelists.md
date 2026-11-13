@@ -27,7 +27,7 @@ level.
 # -------------------
 
 # Shared libaries (Windows only):
-/SDL2.DLL
+/SDL3.DLL
 
 # Renderer libraries:
 /ref_gl1.dll

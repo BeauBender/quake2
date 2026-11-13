@@ -23,7 +23,7 @@ need make "GNU Make is the only build" "Xcode command line tools, or build-essen
 need git "worktrees and the commit hook" "your package manager"
 need gh "cards are GitHub Issues; work lands through pull requests" "brew install gh, or apt install gh"
 
-# The client and renderers need SDL3 (or SDL2 with WITH_SDL3=no); the gate
+# The client and renderers need SDL3; the gate
 # does not.
 if have sdl3-config || { have pkg-config && pkg-config --exists sdl3; } ||
 	{ have brew && [ -d "$(brew --prefix 2>/dev/null)/include/SDL3" ]; } ||

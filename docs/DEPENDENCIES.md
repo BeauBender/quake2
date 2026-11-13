@@ -6,7 +6,7 @@ This file is the fork's dependency manifest. It lists the system libraries the b
 
 | Library | Used by | How it is used | Status |
 |---------|---------|----------------|--------|
-| SDL3 (preferred) or SDL2 | client: window, input, gamepad and gyro, audio (`src/client/input/sdl3.c`, `sdl2.c`, `src/client/vid/glimp_sdl3.c`, `glimp_sdl2.c`, `src/client/sound/sdl.c`) | Linked at build time (`WITH_SDL3=yes` by default, SDL2 as the alternative). The dedicated server (`q2ded`) and the game module do not need it. On macOS: `brew install sdl3`. | Kept. SDL2 and SDL3 code paths are parallel implementations. |
+| SDL3 | client: window, input, gamepad and gyro, audio (`src/client/input/sdl3.c`, `src/client/vid/glimp_sdl3.c`, `src/client/sound/sdl.c`) | Linked at build time (via `pkgconf` sdl3). The dedicated server (`q2ded`) and the game module do not need it. On macOS: `brew install sdl3`. | Kept. SDL2 support was removed by TASK13; SDL3 is the only SDL. |
 | OpenAL | formerly `src/client/sound/openal.c` and `qal.c` | Was loaded at runtime with `dlopen`. | Removed by TASK4; SDL audio is the only sound backend. |
 | libcurl | `src/client/curl/` (HTTP downloads) | Loaded at runtime with `dlopen`, never linked. | Removed by TASK3. |
 | bcrypt (Windows) | `src/backends/windows/system.c` `Sys_GetRandomBytes` | Linked at build time (Makefile LDLIBS) | Kept: OS random source |
