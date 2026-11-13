@@ -49,8 +49,9 @@ and `frame` and particle colours pass from the server through
 `CL_AddPacketEntities` and `V_AddParticle` into `refdef` unchanged. The
 renderer code that indexes by those fields was therefore read
 (`gl1_mesh.c`, `gl3_mesh.c`, `sw_alias.c` skin and frame selection,
-`files/surf.c` `R_TextureAnimation`, `sw_part.c`, the gl1 and gl3 particle
-paths); D9, D10 and D11 come from there.
+`files/surf.c` `R_TextureAnimation`, the sprite functions in `gl1_main.c`,
+`gl3_main.c` and `sw_sprite.c`, `sw_part.c`, the gl1 and gl3 particle
+paths); D9, D10, D11 and D16 come from there.
 
 Sweep, at the audit base. `git grep -n 'MSG_Read[A-Za-z0-9]* *(' -- src`
 returns 271 hits: 14 are prototypes in `src/common/header/common.h` and 35
@@ -181,6 +182,7 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_entities.c` `ent.skinnum = s1->skinnum` → `gl1_mesh.c`/`gl3_mesh.c` `currentmodel->skins[skinnum]` | skinnum | image pointer | only `skinnum >= MAX_MD2SKINS` tested; **negative passes** → Defect D10 (`sw_alias.c` tests both sides) | defect (D10) |
 | `cl_entities.c` beam `ent.skinnum = (s1->skinnum >> (...)) & 0xff` → `d_8to24table[e->skinnum & 0xFF]` | skinnum | palette index | masked at both ends | ok |
 | `cl_entities.c` `ent.frame = s1->frame` → `files/surf.c` `R_TextureAnimation` `frame % numframes` | frame (signed short) | count of `tex->next` steps | **negative frame gives a negative count**; the loop runs about 2^32 steps or reaches `NULL` → Defect D11 (alias models test both sides) | defect (D11) |
+| `cl_entities.c` `ent.frame = s1->frame` → sprite models: `gl1_main.c` `R_DrawSpriteModel`, `gl3_main.c` `GL3_DrawSpriteModel`, `sw_sprite.c` `R_DrawSprite`: `frame %= numframes`, then `psprite->frames[frame]` and `currentmodel->skins[frame]` | frame (signed short) | sprite frame record and image pointer | the remainder of a negative frame is zero or negative, so for a sprite with two or more frames **the index is negative** → Defect D16 | defect (D16) |
 | `cl_entities.c` `cl.model_draw[ps->gunindex]` | `gunindex` (`MSG_ReadByte` in `CL_ParsePlayerstate`) | gun model | 0..255 by the byte type vs `MAX_MODELS` | ok (by the byte type) |
 | `cl_entities.c` `bfg_lightramp[s1->frame]` | frame (`U_FRAME8` byte or `U_FRAME16` signed short) | index into `static int[6]` | reached when `effects & EF_BFG` is set without `EF_ANIM_ALLFAST`; **no check on either side** → Defect D5 | defect (D5) |
 | `cl_prediction.c` `cl.model_clip[ent->modelindex]` | modelindex byte | clip model | reached when `ent->solid == 31`; 0..255 by the byte type against `model_clip[MAX_MODELS]` | ok (by the byte type; H2) |
@@ -528,8 +530,11 @@ from zero: on the circular animation chain built by `Mod_LoadTexinfo` it runs
 until `c` wraps (signed overflow, undefined behaviour; in practice about 2^32
 iterations per surface per rendered frame), freezing the client; on a chain
 that ends in `NULL` it stops with `tex == NULL` and then dereferences it.
-The alias-model paths are not affected: they test `frame` and `oldframe`
-against `0..num_frames - 1` on both sides. Severity high (remote hang or
+The alias-model paths are not affected: in all three renderers they test
+`frame` and `oldframe` against `0..num_frames - 1` on both sides and reset an
+out-of-range value to 0 (`gl1_mesh.c` and `gl3_mesh.c` in the cull and draw
+functions, `sw_alias.c` `R_AliasSetupFrames`). Sprite models are affected in a
+different way: they index arrays with the remainder directly (D16). Severity high (remote hang or
 crash). Same class as D10 (a server entity field reaching a renderer with a
 one-sided assumption). Fix: treat a negative frame as 0, either in
 `R_TextureAnimation` or where `ent.frame` is set.
@@ -630,6 +635,36 @@ static trace only, since no Windows build is available here. Fix: use the
 bounded copies `CL_CheckOrDownloadFile` uses, and refuse the download when
 the temporary name does not fit.
 
+### D16: a negative entity `frame` on a sprite model indexes the sprite frame and skin arrays below zero (high, high confidence) [FIX25 (#126)]
+
+The same server-chosen `ent.frame` (`U_FRAME16` signed short, set on the
+normal path of `CL_AddPacketEntities`) reaches the sprite drawing code of all
+three renderers: `R_DrawSpriteModel` (`gl1_main.c`), `GL3_DrawSpriteModel`
+(`gl3_main.c`) and `R_DrawSprite` (`sw_sprite.c`). Each does
+`frame %= psprite->numframes`, then reads `&psprite->frames[frame]` and
+`currentmodel->skins[frame]`, with no other test. In C the remainder of a
+negative value by a positive count is zero or negative, so for a sprite with
+two or more frames (the loader caps `numframes` at `MAX_MD2SKINS`) the index
+is negative:
+
+- `psprite->frames[frame]` is a `dsprframe_t` record before the array. The
+  sprite data starts a few bytes into the block `Hunk_Begin` maps for it
+  (`src/backends/unix/shared/hunk.c`), so any negative index reads before the
+  start of that mapping; the record's size and origin feed the sprite's
+  vertices. This is an out-of-bounds read that faults when the memory below
+  the mapping is not mapped.
+- `currentmodel->skins[frame]` reads one of the `model_t` members declared
+  before `skins[]` as an image pointer. A NULL value falls back to the "no
+  texture" image; any other value is used as an image and dereferenced.
+
+A sprite with a single frame always gives index 0 and is not affected.
+Hostile input: an entity whose model is a precached sprite with two or more
+frames and whose `frame` is negative; any server can send it. Severity high
+(server-driven out-of-bounds read that can fault, then a pointer of unknown
+origin used as an image). Same class as D10 and D11. Fix: treat a negative
+frame as 0 before the remainder in the three sprite functions, or where
+`ent.frame` is set (the D11 fix at that point covers both).
+
 ## Hardening (low severity)
 
 Carried on FIX28 (#129) except D4, which is on FIX13 (#109).
@@ -673,13 +708,13 @@ them.
 | FIX14 | #110 | D5 | high |
 | FIX15 | #111 | D6 | high |
 | FIX16 | #112 | D7 | medium |
-| FIX25 | #126 | D9, D10, D11 | high |
+| FIX25 | #126 | D9, D10, D11, D16 | high |
 | FIX26 | #127 | D12, D13 | low |
 | FIX27 | #128 | D14 | high |
 | FIX28 | #129 | H1, H2, H3, H4, H6, H7 | low |
 | FIX29 | #130 | D15 | critical (Windows builds only) |
 
-D9, D10 and D11 share a card because they are one class (a server-supplied
+D9, D10, D11 and D16 share a card because they are one class (a server-supplied
 entity or effect field reaching an array index or loop count with a check on
 one side only) and one fix pattern (a two-sided bound or a mask at the sink),
 in the same files. D5 is the same class but was already filed on its own.
