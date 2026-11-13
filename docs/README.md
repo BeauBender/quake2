@@ -7,7 +7,7 @@ ships with releases; `docs/` (this directory) is for working on the code.
 
 - `CLAUDE.md` (also `AGENTS.md`): build commands, the gate, architecture,
   security boundaries and the working rules for agents.
-- `scripts/setup.sh`: checks the toolchain and wires the commit hook.
+- `scripts/setup.sh`: checks the toolchain and wires the commit and push hooks.
 - `scripts/test.sh`: the gate. Every commit must pass it. It ends with `make test`, the unit-test suite.
 
 ## Source (`src/`)

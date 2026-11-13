@@ -69,4 +69,4 @@ When compacting, always preserve the list of modified files, the gate command (`
 
 Cards are GitHub Issues and work lands through pull requests: use `gh issue list`, `gh pr create` and `gh pr checks` rather than the web UI.
 
-Where things live: `docs/README.md` maps the tree; decisions are in `docs/decisions/`; plans in `docs/plans/`. Rules that load only for the files they cover are in `.claude/rules/`, and the `savegame-tables` skill is in `.claude/skills/`. `scripts/setup.sh` checks the toolchain and wires the commit hook in `.githooks/`.
+Where things live: `docs/README.md` maps the tree; decisions are in `docs/decisions/`; plans in `docs/plans/`. Rules that load only for the files they cover are in `.claude/rules/`, and the `savegame-tables` skill is in `.claude/skills/`. `scripts/setup.sh` checks the toolchain and wires the commit and push hooks in `.githooks/`.
