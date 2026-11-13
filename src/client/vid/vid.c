@@ -197,6 +197,7 @@ VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 
 	if (!VID_WriteTGA(path, width, height, comp, data))
 	{
+		/* Intended even if the file was never opened: a stale frame is removed, not kept. */
 		remove(path);
 		Com_Printf("pins: cannot write %s (failed or short write, file removed)\n", path);
 		VID_PinManifest(dir, "FAILED %s-%06d.tga\n", scenario, idx);
@@ -263,7 +264,9 @@ void VID_WriteScreenshot(int width, int height, int comp, const void* data)
 	}
 	else
 	{
-		Com_Printf("SCR_ScreenShot_f: Couldn't write %s\n", picname);
+		/* Don't leave a truncated file behind. */
+		remove(checkname);
+		Com_Printf("SCR_ScreenShot_f: Couldn't write %s (partial file removed)\n", picname);
 	}
 }
 
