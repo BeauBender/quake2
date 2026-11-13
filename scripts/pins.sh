@@ -433,12 +433,16 @@ cmd_evidence() {
         esac
         shift 2
     done
-    local s cmp rc=0; s=$(store)
-    cmp=$(mktemp "${TMPDIR:-/tmp}/pins-evidence.XXXXXX")
-    ( cmd_compare "$renderer" "$scenario" --ref "$ref" "${cmp_args[@]}" ) > "$cmp" || rc=$?
+    # compare's own framediff would be built into the store; evidence writes nothing there
+    local wd cmp rc=0 diffbin=${PINS_DIFF:-}
+    wd=$(mktemp -d "${TMPDIR:-/tmp}/pins-evidence.XXXXXX"); cmp="$wd/compare.txt"
+    if [ -z "$diffbin" ]; then
+        diffbin="$wd/framediff"; cc -O2 -o "$diffbin" "$root/scripts/pins/framediff.c" -lm || { rm -rf "${wd:?}"; die "cannot build framediff"; }
+    fi
+    ( PINS_DIFF=$diffbin cmd_compare "$renderer" "$scenario" --ref "$ref" "${cmp_args[@]}" ) > "$cmp" || rc=$?
     local ref_dir cand
     ref_dir=$(sed -n 's/^ref=//p' "$cmp"); cand=$(sed -n 's/^candidate=//p' "$cmp")
-    if [ -z "$ref_dir" ] || [ -z "$cand" ]; then rm -f "${cmp:?}"; die "compare found no pair of pins to show (see the message above)"; fi
+    if [ -z "$ref_dir" ] || [ -z "$cand" ]; then rm -rf "${wd:?}"; die "compare found no pair of pins to show (see the message above)"; fi
     local cand_id=${cand##*/} ref_id=${ref_dir##*/}
     prefix="$card-${cand_id%%-*}-$renderer-$scenario"
     out=$(ev_outdir "$prefix")
@@ -447,8 +451,8 @@ cmd_evidence() {
         --meta "renderer=$renderer" --meta "scenario=$scenario" \
         --meta "reference=$scenario/$ref/$ref_id" --meta "candidate=$scenario/$renderer/$cand_id" \
         --meta "compare-exit=$rc" --meta "ref-caption=REFERENCE $ref" --meta "cand-caption=CANDIDATE $renderer" \
-        || { rm -f "${cmp:?}"; die "the evidence step failed"; }
-    rm -f "${cmp:?}"
+        || { rm -rf "${wd:?}"; die "the evidence step failed"; }
+    rm -rf "${wd:?}"
     echo "folder: ${out#"$root"/}"
 }
 
@@ -561,8 +565,8 @@ ev_st_identity() {
     ev_refused "home path" "$m"
 }
 ev_st_evidence() {
-    local diff a b i
-    diff=$(difftool); a="$PINS_STORE/world/soft/aaaa-1"; b="$PINS_STORE/world/soft/aaaa-1-r2"
+    local diff="$tmp/framediff" a="$PINS_STORE/world/soft/aaaa-1" b="$PINS_STORE/world/soft/aaaa-1-r2" i
+    cc -O2 -o "$diff" "$root/scripts/pins/framediff.c" -lm
     mkdir -p "$a" "$b"
     for i in 0 1 2; do "$diff" --gen "$a/world-00000$i.tga" 64 48 "$i"; cp "$a/world-00000$i.tga" "$b/"; done
     "$diff" --perturb "$a/world-000001.tga" "$b/world-000001.tga" 40
@@ -574,6 +578,7 @@ ev_st_evidence() {
     grep -q '^reference world/soft/aaaa-1$' "$o/T1-aaaa-soft-world-evidence.txt" || ev_fail "the manifest must name the pins relative to the store" || return 1
     if grep -qF "$tmp" "$o"/*; then ev_fail "an output holds the scratch path"; return 1; fi
     ls "$PINS_STORE/world/soft/aaaa-1-r2" | grep -qv -e '\.tga$' -e '^complete$' && { ev_fail "evidence wrote into the pin store"; return 1; }
+    [ "$(ls "$PINS_STORE")" = world ] || ev_fail "evidence wrote into the pin store: $(ls "$PINS_STORE")" || return 1
     if (PINS_EVIDENCE_DIR="$PINS_STORE/ev" cmd_evidence soft world --ref soft --ref-id aaaa-1 --cand-id aaaa-1-r2) >/dev/null 2>&1; then ev_fail "an evidence folder inside the store must be refused"; return 1; fi
     if (cmd_evidence soft world --ref soft --ref-id aaaa-1 --cand-id aaaa-1-r2 --card 'a/b') >/dev/null 2>&1; then ev_fail "a card with a slash must be refused"; return 1; fi
     return 0

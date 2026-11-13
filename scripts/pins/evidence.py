@@ -878,12 +878,17 @@ def cmd_markdown(a):
     base = a['base-url'].rstrip('/') + '/'
     url = {f['kind']: base + f['name'] for f in files}
     mname = os.path.basename(a['manifest'])
-    scen, rend = meta.get('scenario', 'synthetic'), meta.get('renderer', '-')
-    out = ['### Evidence: `%s` on `%s`' % (scen, rend), '']
+    scen = meta.get('scenario', 'synthetic')
+    if 'renderer' in meta:
+        out = ['### Evidence: `%s` on `%s`' % (scen, meta['renderer']), '']
+    else:
+        out = ['### Evidence: synthetic test pattern (no game content)', '']
     if 'reference' in meta:
         out.append('Reference `%s`, candidate `%s`; %s.' % (meta['reference'], meta['candidate'], meta.get('summary', '')))
         out.append('')
-    if 'png' in url:
+    if 'png' in url and 'renderer' not in meta:
+        out += ['![synthetic test pattern](%s)' % url['png'], '']
+    elif 'png' in url:
         cap = 'reference, candidate, difference x%s' % meta.get('diff-gain', DIFF_GAIN)
         if 'worst-frame' in meta:
             cap += ', frame %s (the worst score)' % meta['worst-frame']
