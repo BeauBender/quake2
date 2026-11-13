@@ -181,7 +181,7 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_entities.c` custom weapon `ci->weaponmodel[s1->skinnum >> 8]` | skinnum (`int`, byte/short/long on the wire) | model pointer | only `i > MAX_CLIENTWEAPONMODELS - 1` rejected; **negative `i` passes** → Defect D10 | defect (D10) |
 | `cl_entities.c` `ent.skinnum = s1->skinnum` → `gl1_mesh.c`/`gl3_mesh.c` `currentmodel->skins[skinnum]` | skinnum | image pointer | only `skinnum >= MAX_MD2SKINS` tested; **negative passes** → Defect D10 (`sw_alias.c` tests both sides) | defect (D10) |
 | `cl_entities.c` beam `ent.skinnum = (s1->skinnum >> (...)) & 0xff` → `d_8to24table[e->skinnum & 0xFF]` | skinnum | palette index | masked at both ends | ok |
-| `cl_entities.c` `ent.frame = s1->frame` → `files/surf.c` `R_TextureAnimation` `frame % numframes` | frame (signed short) | count of `tex->next` steps | **negative frame gives a negative count**; the loop runs about 2^32 steps or reaches `NULL` → Defect D11 (alias models test both sides) | defect (D11) |
+| `cl_entities.c` `ent.frame = s1->frame` → `files/surf.c` `R_TextureAnimation` `frame % numframes`, called by all three renderers (`gl1_surf.c`, `gl3_surf.c`; soft `sw_edge.c` and `sw_poly.c` through `D_CacheSurface` in `sw_surf.c`) | frame (signed short) | count of `tex->next` steps | **negative frame gives a negative count**; the loop runs about 2^32 steps or reaches `NULL` → Defect D11 (alias models test both sides) | defect (D11) |
 | `cl_entities.c` `ent.frame = s1->frame` → sprite models: `gl1_main.c` `R_DrawSpriteModel`, `gl3_main.c` `GL3_DrawSpriteModel`, `sw_sprite.c` `R_DrawSprite`: `frame %= numframes`, then `psprite->frames[frame]` and `currentmodel->skins[frame]` | frame (signed short) | sprite frame record and image pointer | the remainder of a negative frame is zero or negative, so for a sprite with two or more frames **the index is negative** → Defect D16 | defect (D16) |
 | `cl_entities.c` `cl.model_draw[ps->gunindex]` | `gunindex` (`MSG_ReadByte` in `CL_ParsePlayerstate`) | gun model | 0..255 by the byte type vs `MAX_MODELS` | ok (by the byte type) |
 | `cl_entities.c` `bfg_lightramp[s1->frame]` | frame (`U_FRAME8` byte or `U_FRAME16` signed short) | index into `static int[6]` | reached when `effects & EF_BFG` is set without `EF_ANIM_ALLFAST`; **no check on either side** → Defect D5 | defect (D5) |
@@ -521,9 +521,11 @@ custom-weapon path and add the `< 0` test to the two GL skin selections, as
 On the normal path of `CL_AddPacketEntities` (no `EF_ANIM*` effect) the
 entity's `ent.frame` is `s1->frame`, a server-chosen value that can be
 negative (`U_FRAME16` signed short). For a brush model (an inline `*N` model
-from the server's own map) the OpenGL 1 and 3 surface code calls
+from the server's own map) the surface code of all three renderers calls
 `R_TextureAnimation` (`src/client/refresh/files/surf.c`) for every surface
-with an animated texture: `c = currententity->frame % tex->numframes; while
+with an animated texture (OpenGL 1: `gl1_surf.c`; OpenGL 3: `gl3_surf.c`;
+software: `D_SolidSurf` in `sw_edge.c` and `R_BuildPolygonFromSurface` in
+`sw_poly.c`, both through `D_CacheSurface` in `sw_surf.c`): `c = currententity->frame % tex->numframes; while
 (c && tex) { tex = tex->next; c--; }`. In C the remainder of a negative frame
 is zero or negative, so `c` starts below zero and the loop decrements it away
 from zero: on the circular animation chain built by `Mod_LoadTexinfo` it runs
