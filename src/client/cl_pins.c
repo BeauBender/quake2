@@ -27,7 +27,7 @@
 #include "header/client.h"
 
 /*
- * Pin harness. pins_dir, pins_scenario and pins_capture are not cvars:
+ * Pin harness. pins_dir, pins_scenario, pins_capture and pins_record are not cvars:
  * their values name files the client writes, so they come from the
  * process command line only. CL_PinsLatch copies them once, before any
  * config file, console command or server stufftext can run, into these
@@ -38,6 +38,7 @@
 static char pins_dir[MAX_OSPATH];
 static char pins_scenario[64] = "pin";
 static int pins_capture;
+static char pins_record[64];	/* a file name inside pins_dir, "" for no trace */
 static qboolean pins_invalid;
 
 /* Copies src into dst; false when it is empty or does not fit. */
@@ -112,6 +113,30 @@ CL_PinsLatch(void)
 				}
 			}
 		}
+		else if (strcmp(name, "pins_record") == 0)
+		{
+			/* a file name, written inside pins_dir only:
+			   [A-Za-z0-9_][A-Za-z0-9_.-]*, never "..", no directory,
+			   ending in ".q2r" so it never names a pin frame (.tga)
+			   or the manifest the harness writes beside it */
+			if (!CL_PinsCopy(pins_record, sizeof(pins_record), value) ||
+				strstr(value, "..") || (strlen(value) <= 4) ||
+				(strcmp(value + strlen(value) - 4, ".q2r") != 0))
+			{
+				pins_invalid = true;
+			}
+
+			for (p = value; *p; p++)
+			{
+				if (!(((*p >= 'a') && (*p <= 'z')) ||
+					((*p >= 'A') && (*p <= 'Z')) ||
+					((*p >= '0') && (*p <= '9')) || (*p == '_') ||
+					(((*p == '-') || (*p == '.')) && (p != value))))
+				{
+					pins_invalid = true;
+				}
+			}
+		}
 		else if (strcmp(name, "pins_capture") == 0)
 		{
 			/* digits only: strtol alone skips leading space and takes a sign */
@@ -134,6 +159,7 @@ CL_PinsLatch(void)
 		pins_dir[0] = '\0';
 		CL_PinsCopy(pins_scenario, sizeof(pins_scenario), "pin");
 		pins_capture = 0;
+		pins_record[0] = '\0';
 	}
 }
 
@@ -149,6 +175,13 @@ const char *
 CL_PinsScenario(void)
 {
 	return pins_scenario;
+}
+
+/* The latched trace file name inside CL_PinsDir, "" when nothing is recorded. */
+const char *
+CL_PinsRecord(void)
+{
+	return pins_record;
 }
 
 /* The latched capture interval, 0 when the harness is off. */

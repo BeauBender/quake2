@@ -5,7 +5,14 @@
   "kanban": { "repo": "BeauBender/quake2" },
   "gate": { "test": "scripts/test.sh", "merge": "scripts/test.sh", "stampCommands": ["scripts/test.sh"] },
   "merge": { "ciChecks": "require" },
-  "risk": { "autoMergeCap": "H", "unattendedCap": "H" },
+  "risk": {
+    "autoMergeCap": "H",
+    "unattendedCap": "H",
+    "sampleRate": { "L": 0, "M": 0, "H": 0 },
+    "highPaths": [".claude/dev-loop.json", ".gitmodules", "*/.gitmodules", "defaults.json", "*/defaults.json", "CLAUDE.md", "*/CLAUDE.md", "AGENTS.md", "*/AGENTS.md", ".claude/settings.json", ".claude/settings.local.json", ".claude", ".claude/.pull-mode", "*/.claude/.pull-mode", ".github/workflows/*", "hooks/*", "*/hooks/*", ".githooks/*", "*/auth/*", "*auth.*", "*/authn/*", "*/authz/*", "*/secrets/*", "*secret*.*", "*credential*", "*password*", "*/payments/*", "*payment*.*", "*/billing/*", "*/crypto/*", "*crypto*.*", "*/security/*", "*/permissions/*", "*permission*.*", "*/migrations/*", "*/migration/*", "infra/*", "*/infra/*", "*/terraform/*", "*.tf", "*/k8s/*", "*/kubernetes/*", "*/helm/*", "Dockerfile*", "*/Dockerfile*", "docker-compose*", "*.pem", "*.key", "*.p12", "*.jks", ".env", ".env.*", "*/.env", "*/.env.*", "third_party/*", "docs/DEPENDENCIES.md"],
+    "secretAllowPaths": ["tests/*", "*/tests/*", "*/fixtures/*", "*/testdata/*", "*.md", "*.lock", "*lock.json", "third_party/*"]
+  },
   "worktree": { "required": true },
-  "memory": { "shared": true }
+  "memory": { "shared": true },
+  "vsm": { "durable": false }
 }

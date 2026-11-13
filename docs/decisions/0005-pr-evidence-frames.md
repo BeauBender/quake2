@@ -2,9 +2,6 @@
 
 Status: accepted by the owner 2026-11-13; landed as TASK73 (#163).
 
-Number 0005 follows 0002 on this branch's base; 0003 and 0004 are left
-to another branch that was adding records when this one was cut.
-
 ## Context
 
 The renderer pins (`scripts/pins.sh`, [the user page](../../doc/100_renderpins.md))

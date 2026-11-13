@@ -5,11 +5,14 @@ what was decided, why, what it costs, and how to reverse it. A later
 decision that changes an earlier one is a new record that names the old one;
 records are not rewritten.
 
-Decisions still waiting for the owner are tracked as INFORM cards (GitHub
-Issues gated on the owner) and become a record here once settled.
+Decisions the loop has taken and wants the owner to be able to see and
+redirect are tracked as INFORM cards (GitHub Issues). Nothing waits for
+them (record 0004); one becomes a record here when it is settled.
 
 | Record | Decision |
 |---|---|
 | [0001](0001-remove-optional-dependencies.md) | Remove optional external and vendored dependencies |
 | [0002](0002-gnu-make-only.md) | GNU Make is the only build system |
-| [0005](0005-pr-evidence-frames.md) | Rendered frames and short clips may be published as pull-request evidence (0003 and 0004 are reserved for another branch; keep the rows in number order) |
+| [0003](0003-no-local-identity.md) | Agent telemetry is not published to the remote |
+| [0004](0004-no-human-tier.md) | No change waits for a person: the loop merges everything that passes review and the gates |
+| [0005](0005-pr-evidence-frames.md) | Rendered frames and short clips may be published as pull-request evidence |

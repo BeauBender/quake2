@@ -34,7 +34,7 @@
 #include "../../ref_shared.h"
 #include "qgl.h"
 
-#define REF_VERSION "Yamagi Quake II OpenGL Refresher"
+#define REF_VERSION DISPLAYNAME " OpenGL Refresher"
 #ifndef GL_COLOR_INDEX8_EXT
 #define GL_COLOR_INDEX8_EXT	GL_COLOR_INDEX
 #endif
