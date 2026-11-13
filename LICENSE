@@ -9,6 +9,7 @@ copys of each license:
 - stb_image.h, stb_image_write.h, stb_image_resize.h, stb_vorbis.h
 - miniz
 - GLAD
+- SDL 3 (source in third_party/SDL3, built into the macOS client)
 
 Parts of other Quake II Clients were included into the source. They're
 covered by the same GPLv2 license as Quake II itself:
@@ -28,7 +29,8 @@ Quake II:
 - cURL
 - libGL
 - libopenal
-- SDL
+- SDL (on platforms other than macOS, where the system SDL 3 is
+  linked)
 
 ===============================================================================
 
@@ -631,5 +633,29 @@ Gyro source code (gyro.c, gyro.h):
     CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
     TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
     SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+===============================================================================
+
+SDL 3 (third_party/SDL3/LICENSE.txt, zlib license). Some files inside
+third_party/SDL3 carry their own notices (for example src/hidapi and
+src/video/yuv2rgb); those notices are kept unmodified in the files:
+
+    Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
+
+    This software is provided 'as-is', without any express or implied
+    warranty.  In no event will the authors be held liable for any damages
+    arising from the use of this software.
+
+    Permission is granted to anyone to use this software for any purpose,
+    including commercial applications, and to alter it and redistribute it
+    freely, subject to the following restrictions:
+
+    1. The origin of this software must not be misrepresented; you must not
+       claim that you wrote the original software. If you use this software
+       in a product, an acknowledgment in the product documentation would be
+       appreciated but is not required.
+    2. Altered source versions must be plainly marked as such, and must not be
+       misrepresented as being the original software.
+    3. This notice may not be removed or altered from any source distribution.
 
 ===============================================================================

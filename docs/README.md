@@ -31,6 +31,7 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | `docs/decisions/` | Decision records: what was decided, why, and what it costs |
 | `docs/audits/` | Audit write-ups (for example the small vendored files) |
 | `docs/DEPENDENCIES.md` | Every external library and vendored file, and its status |
+| `third_party/SDL3/` | SDL 3 source, byte-identical to the upstream release tarball and verified against `MANIFEST.sha256` by `scripts/check-vendored.sh`; built on macOS by `third_party/sdl3.make`. Provenance and update procedure in its `README.md` |
 | `tests/` | Repo invariants (`check-*.sh`), run by the gate and each runnable on its own; `baselines/` freezes the upstream gaps they tolerate |
 | `stuff/` | Maintainer tools: savegame table generators (`fngen/`, `mmgen/`), map entity fixes (`mapfixes/`), icons, the Dockerfile and the uncrustify style file (`misc/`) |
 | `.claude/` | Agent configuration: settings and hooks, path-scoped rules (`rules/`), skills (`skills/`), shared memory (`memory/`) |

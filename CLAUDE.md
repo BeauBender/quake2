@@ -8,7 +8,7 @@ Yamagi Quake II (yquake2): a GPL-2 Quake II engine descended from id Software's 
 
 ## Build
 
-GNU Make (`Makefile`) is the only build system. On macOS the client needs `brew install sdl3`; the dedicated server and game module need nothing beyond the system toolchain.
+GNU Make (`Makefile`) is the only build system. On macOS the client and renderers need nothing beyond Xcode's toolchain: SDL3 is built from the vendored source in `third_party/SDL3/` into a static `libSDL3.a` (`third_party/sdl3.make`), with no Homebrew or `pkgconf`. Linux, the BSDs and Windows still need the system SDL3 (found by `pkgconf`). The dedicated server and game module need nothing beyond the system toolchain.
 
 ```sh
 make                      # all: client, server, game, ref_gl1, ref_gl3, ref_soft -> release/
@@ -23,7 +23,7 @@ release/quake2 +set basedir /path/to/quake2 -portable   # run against real game 
 
 Feature switches are `WITH_*` variables (`WITH_SYSTEMWIDE`, `WITH_XDG`, `WITH_EXECINFO`, `WITH_RPATH`). Pass them on the command line or put them in an untracked `config.mk`, which the Makefile includes. `-j` is safe.
 
-There are no unit tests. The repo's gate is `scripts/test.sh`: it runs the repo invariants in `tests/check-*.sh` (savegame tables complete, no new undocumented cvar or command, removed dependencies stay removed, Markdown links resolve), then force-rebuilds `q2ded` and the game module (the targets that need no SDL). It must pass on every commit. Each invariant also runs standalone, e.g. `tests/check-savegame-tables.sh`; while iterating, run the single check or build the one target you touched (`make game`), and the whole gate before a PR. CI (`.github/workflows/`) compiles on Linux and macOS, plus CodeQL and Cppcheck. Beyond that, verification is building the affected targets, ideally with `ASAN=1`, and running the game against real data with the command above (`-portable` keeps config and saves next to the binary instead of `~/.local/share/YamagiQ2` with XDG, or `~/.yq2` without).
+There are no unit tests. The repo's gate is `scripts/test.sh`: it runs the repo invariants in `tests/check-*.sh` (savegame tables complete, no new undocumented cvar or command, removed dependencies stay removed, Markdown links resolve, the vendored SDL3 tree matches its manifest), then force-rebuilds `q2ded` and the game module (the targets that need no SDL). It must pass on every commit. Each invariant also runs standalone, e.g. `tests/check-savegame-tables.sh`; while iterating, run the single check or build the one target you touched (`make game`), and the whole gate before a PR. CI (`.github/workflows/`) compiles on Linux and macOS, plus CodeQL and Cppcheck. Beyond that, verification is building the affected targets, ideally with `ASAN=1`, and running the game against real data with the command above (`-portable` keeps config and saves next to the binary instead of `~/.local/share/YamagiQ2` with XDG, or `~/.yq2` without).
 
 ## Architecture
 
@@ -40,7 +40,7 @@ Things that are not obvious from a single file:
 - **Savegames serialize function pointers by name.** `src/game/savegame/savegame.c` maps pointers to names through generated tables in `src/game/savegame/tables/`. Adding, removing or renaming any game function that is stored in an entity field (think functions, touch, use, pain, die, `mmove_t` monster move tables) requires regenerating those tables with the scripts in `stuff/fngen/` and `stuff/mmgen/` (see their READMEs), or saves will fail to load. The format version is `SAVEGAMEVER` in that file.
 - **Cvars and console commands are the configuration and scripting surface.** `Cvar_Get` with `CVAR_ARCHIVE` persists to `<writedir>/config.cfg`; `CVAR_USERINFO` is sent to servers; `CVAR_SERVERINFO` is advertised. New cvars and commands must be documented in `doc/040_cvarlist.md` and `doc/050_commands.md`.
 - **Filesystem search paths** (`src/common/filesystem.c`): `basedir`, then `game` dir, each with loose files overriding `.pak` contents; the user's home directory is pushed on top and is where everything is written. `FS_Gamedir()` is the write location. Map-fix entity overrides in `stuff/mapfixes/` are loaded as `<map>@<crc>.ent`.
-- **Vendored third-party code** lives in `src/client/refresh/files/stb_image*.h`, `src/client/vid/header/stb_image_write.h`, `src/client/sound/header/stb_vorbis.h`, `src/client/refresh/gl3/glad/`, `src/client/refresh/gl3/header/{HandmadeMath,DG_dynarr}.h`, `src/client/input/gyro.c`. None of it is switchable by a `WITH_*` flag.
+- **Vendored third-party code** lives in `src/client/refresh/files/stb_image*.h`, `src/client/vid/header/stb_image_write.h`, `src/client/sound/header/stb_vorbis.h`, `src/client/refresh/gl3/glad/`, `src/client/refresh/gl3/header/{HandmadeMath,DG_dynarr}.h`, `src/client/input/gyro.c`, and SDL 3 in `third_party/SDL3/` (byte-identical to the upstream release tarball; never edit it, its manifest `third_party/SDL3/MANIFEST.sha256` is checked by `scripts/check-vendored.sh`; update procedure in `third_party/SDL3/README.md`). None of it is switchable by a `WITH_*` flag. On macOS the client executable links SDL statically and exports it; the renderer dylibs link no SDL and bind their `SDL_*` calls to the executable's copy at load time.
 
 ## Security-relevant boundaries
 
