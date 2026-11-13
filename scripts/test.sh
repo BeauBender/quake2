@@ -1,19 +1,22 @@
 #!/bin/sh
 # dev-loop gate entry point (gate.test in .claude/dev-loop.json).
 #
-# The repo has no unit tests. The gate first runs the repo invariants in
-# tests/check-*.sh (each takes well under a second and can be run on its
-# own), then builds the parts that need nothing beyond the system
-# toolchain: the dedicated server (q2ded) and the game module. This
-# compiles src/common, src/server, src/game and the unix backend. The
-# client and renderers need SDL and are not built here.
+# The gate first runs the repo invariants in tests/check-*.sh (each takes
+# well under a second and can be run on its own), then builds the parts
+# that need nothing beyond the system toolchain: the dedicated server
+# (q2ded) and the game module. This compiles src/common, src/server,
+# src/game and the unix backend. The client and renderers need SDL and
+# are not built here. Last it builds and runs the unit-test suite
+# (make test: tests/unit against the real q2ded objects, pins under
+# tests/pins/unit; see doc/085_unittests.md). Coverage is a separate,
+# slower command: scripts/coverage.sh.
 #
 # Usage: scripts/test.sh            (from anywhere; exits non-zero on failure)
 #
 # -B forces a full rebuild: the Makefile does not emit header dependencies
 # on Darwin (no -MMD), so an incremental build can leave stale objects and
 # report success for a commit that does not compile. The full build of these
-# two targets takes a few seconds.
+# two targets takes a few seconds; the suite builds and runs in a few more.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -23,3 +26,4 @@ for check in tests/check-*.sh; do
 done
 
 make -B -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)" server game
+make -B -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)" test
