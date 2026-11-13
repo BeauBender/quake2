@@ -934,7 +934,7 @@ DrawHUDStringScaled(const char *string, int x, int y, int centerwidth, int xor, 
 
 		width = 0;
 
-		while (*string && *string != '\n')
+		while (*string && *string != '\n' && width < (int)sizeof(line) - 1)
 		{
 			line[width++] = *string++;
 		}
@@ -1149,10 +1149,10 @@ SCR_ExecuteLayoutString(char *s)
 
 			value = cl.frame.playerstate.stats[index];
 
-			if (value >= MAX_IMAGES)
+			if ((value < 0) || (value >= MAX_IMAGES))
 			{
-				Com_DPrintf("%s: Pic %d >= MAX_IMAGES in pic\n",
-					__func__, value);
+				Com_DPrintf("%s: bad pic %d (0x%x) in pic\n",
+					__func__, value, value);
 				continue;
 			}
 
@@ -1285,13 +1285,22 @@ SCR_ExecuteLayoutString(char *s)
 
 		if (!strcmp(token, "num"))
 		{
-			int value, width;
+			int index, value, width;
 
 			/* draw a number */
 			token = COM_Parse(&s);
 			width = (int)strtol(token, (char **)NULL, 10);
 			token = COM_Parse(&s);
-			value = cl.frame.playerstate.stats[(int)strtol(token, (char **)NULL, 10)];
+			index = (int)strtol(token, (char **)NULL, 10);
+
+			if ((index < 0) || (index >= MAX_STATS))
+			{
+				Com_DPrintf("%s: bad stats index %d (0x%x) in num\n",
+					__func__, index, index);
+				continue;
+			}
+
+			value = cl.frame.playerstate.stats[index];
 			SCR_DrawFieldScaled(x, y, 0, width, value, scale);
 			continue;
 		}

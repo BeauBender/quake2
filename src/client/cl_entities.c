@@ -541,12 +541,21 @@ CL_AddPacketEntities(frame_t *frame)
 					CL_BfgParticles(&ent);
 					i = 200;
 				}
-				else
+				else if (s1->frame >= 0 &&
+						s1->frame < (int)(sizeof(bfg_lightramp) / sizeof(bfg_lightramp[0])))
 				{
 					i = bfg_lightramp[s1->frame];
 				}
+				else
+				{
+					/* Frame outside the table: no ramp light. */
+					i = 0;
+				}
 
-				V_AddLight(ent.origin, i, 0, 1, 0);
+				if (i > 0)
+				{
+					V_AddLight(ent.origin, i, 0, 1, 0);
+				}
 			}
 			else if (effects & EF_TRAP)
 			{
