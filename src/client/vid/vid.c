@@ -197,6 +197,14 @@ VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 	 */
 	idx = frame++;
 
+	/* the trace marks where in the frame this pin frame was taken */
+	if (RefRec_Recording())
+	{
+		const int32_t n = idx;
+
+		RefRec_Draw(REC_CAPTURE, &n, 1, NULL, 0, NULL, NULL, 0);
+	}
+
 	/* Never open a truncated path. */
 	len = snprintf(path, sizeof(path), "%s/%s-%06d.tga", dir, scenario, idx);
 	if ((len < 0) || (len >= (int)sizeof(path)))
@@ -447,6 +455,56 @@ VID_Restart_f(void)
 }
 
 /*
+ * Renderer-API recorder (docs/plans/refapi-record-replay.md). With
+ * "+set pins_record <name>" on the command line (CL_PinsRecord, latched
+ * by CL_PinsLatch with the pin directory; never a cvar) the first
+ * renderer session of the run is recorded to <pins_dir>/<name>, beside
+ * the pin frames. A later session (a renderer restart) is not recorded,
+ * so the trace is never overwritten. Without pins_record nothing is
+ * opened.
+ */
+static void
+VID_StartRecord(void)
+{
+	static qboolean started;
+	const char *dir = CL_PinsDir();
+	const char *name = CL_PinsRecord();
+	char path[MAX_OSPATH];
+	int len;
+
+	if (!name[0] || !dir[0] || CL_PinsInvalid())
+	{
+		return;
+	}
+
+	if (started)
+	{
+		Com_Printf("pins: only the first renderer session of a run is recorded\n");
+		return;
+	}
+
+	started = true;
+
+	/* Belt and braces: CL_PinsLatch refused these already. */
+	if (strstr(dir, "..") || strstr(name, "..") || strpbrk(name, "/\\:"))
+	{
+		Com_Printf("pins: pins_dir or pins_record holds a forbidden character, not recording\n");
+		return;
+	}
+
+	/* Never open a truncated path. */
+	len = snprintf(path, sizeof(path), "%s/%s", dir, name);
+	if ((len < 0) || (len >= (int)sizeof(path)))
+	{
+		Com_Printf("pins: the trace path does not fit %d bytes, not recording\n", (int)sizeof(path));
+		return;
+	}
+
+	RefRec_SetPrint(Com_Printf);
+	RefRec_StartRecord(path, viddef.width, viddef.height, CL_PinsCapture());
+}
+
+/*
  * Shuts the renderer down and unloads it.
  */
 static void
@@ -573,7 +631,11 @@ VID_LoadRenderer(void)
 		return false;
 	}
 
-	/* session open: the renderer cvars a replay restores */
+	/* session open: pins_record starts the recorder, unguarded, since
+	   recording is off until it has run */
+	VID_StartRecord();
+
+	/* the renderer cvars a replay restores */
 	if (RefRec_Recording())
 	{
 		RefRec_Control(REC_CVARS, 0);
@@ -841,7 +903,7 @@ Draw_GetPicSize(int *w, int *h, const char *name)
 
 		if (RefRec_Recording())
 		{
-			const int32_t a[2] = { *w, *h };
+			const int32_t a[2] = { w ? *w : 0, h ? *h : 0 };
 
 			RefRec_Draw(REC_PICSIZE, a, 2, NULL, 0, name, NULL, 0);
 		}
@@ -888,9 +950,11 @@ Draw_PicScaledCol(int x, int y, const char *pic, float factor, const float color
 		if (RefRec_Recording())
 		{
 			const int32_t a[2] = { x, y };
-			const float f[4] = { factor, color[0], color[1], color[2] };
+			/* without a color only the factor is passed; the recorder warns */
+			const float f[4] = { factor, color ? color[0] : 1.0f,
+				color ? color[1] : 1.0f, color ? color[2] : 1.0f };
 
-			RefRec_Draw(REC_PICSCALEDCOL, a, 2, f, 4, pic, NULL, 0);
+			RefRec_Draw(REC_PICSCALEDCOL, a, 2, f, color ? 4 : 1, pic, NULL, 0);
 		}
 
 		if (re.DrawPicScaledCol)
@@ -973,6 +1037,8 @@ Draw_StretchRaw(int x, int y, int w, int h, int cols, int rows, const byte *data
 	{
 		if (RefRec_Recording())
 		{
+			/* cl_cin.c allocates cin.pic as cols * rows * bits / 8 bytes;
+			   the recorder refuses sizes it cannot carry with a REC_WARN */
 			const int32_t a[7] = { x, y, w, h, cols, rows, bits };
 
 			RefRec_Draw(REC_STRETCHRAW, a, 7, NULL, 0, NULL, data,
@@ -990,6 +1056,7 @@ R_SetPalette(const unsigned char *palette)
 	{
 		if (RefRec_Recording())
 		{
+			/* every palette passed is 768 bytes: cl.cinematicpalette[768], cl_cin.c's Z_Malloc(768) */
 			RefRec_Draw(REC_PALETTE, NULL, 0, NULL, 0, NULL, palette, palette ? REFREC_PALETTE_SIZE : 0);
 		}
 

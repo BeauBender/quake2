@@ -3,8 +3,9 @@
 # docs/plans/refapi-record-replay.md) round-trips every record type through
 # a memory buffer field by field, keeps its little-endian byte layout, and
 # refuses truncated, oversized-length and out-of-range input without reading
-# past the end. Recording is off: RefRec_Recording() is false and the
-# recorder entry points do nothing. This builds tests/refrecord/refrecord-test.c
+# past the end; the recorder writes trace files (handle map, refdef_t deep
+# copy, string table, frame index, header patch) that read back whole, and
+# ends cleanly on a recorder limit, a write error and oversized input. This builds tests/refrecord/refrecord-test.c
 # against the real refrecord.c, with ASAN and UBSAN when the compiler has
 # them. Also: every vid.c wrapper that forwards to the renderer carries its
 # guarded hook. Needs a C compiler; needs no SDL, no engine and no game data.
@@ -32,7 +33,8 @@ fi
 
 # shellcheck disable=SC2086 # flags and srcs are word lists
 $cc $flags -o "$tmp/refrecord" $srcs -lm
-if ! ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 "$tmp/refrecord" > "$tmp/out" 2>&1; then
+mkdir "$tmp/traces"
+if ! ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 "$tmp/refrecord" "$tmp/traces" > "$tmp/out" 2>&1; then
 	cat "$tmp/out"
 	bad "tests/refrecord/refrecord-test.c failed"
 fi
@@ -44,7 +46,7 @@ for fn in VID_LoadRenderer VID_ShutdownRenderer R_BeginRegistration R_RegisterMo
 	R_RegisterSkin R_SetSky R_EndRegistration R_RenderFrame Draw_FindPic \
 	Draw_GetPicSize Draw_StretchPic Draw_PicScaled Draw_PicScaledCol \
 	Draw_CharScaled Draw_TileClear Draw_Fill Draw_FadeScreen Draw_StretchRaw \
-	R_SetPalette R_BeginFrame R_EndWorldRenderpass R_EndFrame; do
+	R_SetPalette R_BeginFrame R_EndWorldRenderpass R_EndFrame VID_WritePinFrame; do
 	n=$(awk -v fn="$fn" '
 		$0 ~ "^" fn "\\(" { body = 1; next }
 		body && /^}/ { body = 0 }
