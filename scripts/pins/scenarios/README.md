@@ -4,7 +4,12 @@ One file per rendering feature, so a failing pin names the feature. A
 scenario is a list of `set <cvar> <value>` lines. `scripts/pins.sh record`
 passes each line to the engine as a `+set` argument and then starts the demo
 with `+demomap` (`PINS_DEMO`, default `demo1.dm2`), so all scenarios follow
-the same camera path and differ only in what is drawn. Nothing here is
+the same camera path and differ only in what is drawn. The exception is
+`cinematic`: `PINS_DEMO` names a cinematic under `video/` instead (for
+example `PINS_DEMO=idlog.cin PINS_EVERY=7`), which `+demomap` plays the same
+way, and the engine then captures every Nth cinematic frame rather than
+every Nth rendered frame. `record` holds you to the pairing: `cinematic`
+needs a `.cin` and any other scenario refuses one. Nothing here is
 derived from game data, so the files are committed (INFORM9).
 
 | Scenario | Drawn |
@@ -13,6 +18,8 @@ derived from game data, so the files are committed (INFORM9).
 | `models` | world plus entities: alias models, sprites, beams, view weapon |
 | `particles` | everything, including particles, dynamic lights, screen blend |
 | `hud2d` | 2D only: status bar, crosshair, console text |
+| `skywater` | world surfaces, sky and warped water, with the sky and water-warp settings fixed; no entities, particles, dynamic lights or blend |
+| `cinematic` | a cinematic (`.cin`) stretched over the screen, no world; needs `PINS_DEMO` naming a cinematic |
 
 Rules:
 
@@ -35,3 +42,11 @@ measured thresholds in their `// nondeterministic:` lines. The owner's data
 holds `demo1.dm2` and `demo2.dm2`. Behind the 2D elements of `hud2d`,
 `soft` shows a uniform dark grey; other renderers are not measured yet
 (see `docs/plans/metal-port-harness.md`).
+
+Added by TASK40 (`soft`, two runs each and a third): `skywater` and
+`cinematic` are identical run to run (score 0 on every frame). On
+`demo1.dm2` the sky is in frame 21 at the default `PINS_EVERY` 30; neither
+demo showed warped water on any frame looked at, so `skywater` exercises
+the sky and the water-warp settings but not a water surface on this data.
+`cinematic` was recorded with `idlog.cin`. See the runbook for the frame
+lists.

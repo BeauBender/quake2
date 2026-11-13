@@ -24,7 +24,8 @@ renderer is judged with it, and what the first run on real data found.
 | No saved configuration in a pin run | `Qcommon_ExecConfigs` in `src/common/frame.c`, `CL_WriteConfiguration` in `src/client/cl_main.c` | run: the engine log shows no `config.cfg` exec and none is written (TASK39) |
 | Driver: record, compare, list, selftest | `scripts/pins.sh` (bash 3.2) | selftest green; `record` and `compare` run against the engine on real data (TASK39) |
 | Comparator | `scripts/pins/framediff.c` | selftest green; run on real frames (TASK39) |
-| Scenarios, one per feature | `scripts/pins/scenarios/*.cfg` | all four run on `soft` (TASK39) |
+| Scenarios, one per feature | `scripts/pins/scenarios/*.cfg` | all six run on `soft` (TASK39; `skywater` and `cinematic` TASK40) |
+| Cinematic capture: every Nth cinematic frame, quit at its end, exit 1 when it cannot be opened | `SCR_PinsCapture` in `src/client/cl_screen.c`, `SCR_CinematicEnd` in `src/client/cl_cin.c`, `CL_PinsFrame` in `src/client/cl_main.c` | run on `soft` with `idlog.cin` and a missing cinematic (TASK40) |
 | Argument limit raised: `MAX_NUM_ARGVS` in `src/common/argproc.c` is 128 (was 50); `record` passes 66 to 69 words and the engine refused more than 50 at startup | `scripts/pins.sh selftest` case `argcount` and `tests/check-pins-latch.sh` feed every scenario's command line to the real `COM_InitArgv` | green in `scripts/test.sh`; the engine accepts 69 words (TASK39) |
 | Renderer-API record serializers and the 22 wrapper hooks in `vid.c`, recording off | `src/client/vid/refrecord.c`, `src/client/vid/header/refrecord.h`, `tests/check-refrecord.sh` | every record type round-trips through a buffer in `tests/check-refrecord.sh` (green in `scripts/test.sh`); observed on one host: the `world` scenario recorded on `soft` with a build of the base commit and with a build of the hooks gave 23 frames each, and all 23 frame files and the manifest compared byte-identical with `cmp` (TASK42) |
 | Gate checks, no game data needed | `tests/check-pins.sh`, `tests/check-pins-latch.sh` | green in `scripts/test.sh` |
@@ -36,8 +37,9 @@ and `ref_gl3` build there too; `gl1` references are card P3's.
 In the tree from the renderer-API recorder (design in
 `docs/plans/refapi-record-replay.md`): the record serializers and the wrapper
 hooks, with recording off. Not in the tree from TASK27: the handle map, the
-`refdef_t` deep copy, recording and replay (including `pins.sh replay`), the
-sky-and-water and cinematics scenarios, and every reference frame.
+`refdef_t` deep copy, recording and replay (including `pins.sh replay`), and
+every reference frame. The sky-and-water and cinematics scenarios came with
+TASK40. The user-facing page is `doc/100_renderpins.md`.
 
 ## Pin arguments
 
@@ -57,8 +59,10 @@ the user-facing description.
 - `pins_scenario <id>`: the file-name prefix, `[a-z0-9_][a-z0-9_-]*`.
 - `pins_capture <N>`: while a demo plays, every Nth rendered frame is
   captured after it is complete and before it is presented, by running the
-  renderer's own `screenshot` command at that point. When playback ends the
-  engine quits. If the requested renderer fails to load, the engine stops
+  renderer's own `screenshot` command at that point. While a cinematic
+  plays, every Nth cinematic frame is captured instead (the first rendered
+  frame that shows it), so the frames do not depend on the render rate.
+  When playback ends the engine quits. If the requested renderer fails to load, the engine stops
   with an error instead of falling back to another one. `0`, the default,
   disables all three.
 
@@ -75,8 +79,9 @@ last `+demomap $PINS_DEMO` (default `demo1.dm2`). A scenario line that is
 not exactly `set <cvar> <value>`, or that sets a cvar the driver sets
 itself (`pins_*`, `vid_renderer`, `vid_fullscreen`, `r_mode`,
 `r_customwidth`, `r_customheight`, `s_initsound`), is refused. `PINS_DEMO`
-must be a file name under `demos/` ending in `.dm2`, not starting with `-`
-or `.`.
+must be a file name under `demos/` ending in `.dm2`, or under `video/`
+ending in `.cin` (for the `cinematic` scenario), not starting with `-` or
+`.`.
 
 Frames land in `<store>/<scenario>/<renderer>/<id>/`, where `<id>` is
 `<engine>-<settings hash>`, with `-r<N>` appended for `--run N` (N from 2),
@@ -189,6 +194,64 @@ game data holds and wrote one beside the binary (now neither); a demo
 that could not be opened left the engine at the console until the
 timeout (now exit 1 at once); `pins_capture` accepted a leading space or
 plus sign (now refused).
+
+## Observed on sky, water and cinematics (TASK40)
+
+Host: the build VM, macOS arm64, `soft` at 640x480.
+
+1. Sky: `demo1.dm2` (the default) shows the sky in one stretch of its
+   camera path, near the end of the demo: at `PINS_EVERY` 30 it is frame
+   21 (`skywater-000021.tga`), at `PINS_EVERY` 10 frames 62 to 64. All
+   other captured frames of `demo1.dm2`, and all of `demo2.dm2`, are
+   indoors.
+   The sky-and-water card accepts the sky on frame 21 at the default
+   settings.
+2. Water: no warped water surface was seen. All 23 frames of `demo1.dm2`
+   and all 21 of `demo2.dm2` at `PINS_EVERY` 30 were looked at, and at
+   `PINS_EVERY` 10 (69 and 62 frames) 20 further frames of each demo,
+   spread over the whole run, plus frames 60 to 68 of `demo1.dm2`, the
+   outdoor stretch. With the
+   owner's two demos the `skywater` scenario therefore pins the sky and
+   the water-warp settings, not a water surface; a demo whose camera
+   passes water is needed for that, and no such demo is in this data.
+3. `skywater` run to run: identical (score and bad fraction 0 on all 23
+   frames) over three runs, the third from a build with TASK40's capture
+   change; the change did not alter a demo capture.
+4. Cinematics are reached with `+demomap <name>.cin`: `SV_Map` sees the
+   `.cin` extension and spawns an `ss_cinematic` server with the attract
+   loop set, the client plays it through `SCR_PlayCinematic`, and at its
+   last frame `SCR_FinishCinematic` asks the server for the next map; with
+   an empty `nextserver` the server is killed and the client disconnects,
+   as at the end of a demo. Before TASK40 the capture hook captured
+   nothing there (`cl.refresh_prepped` stays false without a map) and the
+   run ended with `pins: playback stopped before the demo ended`, exit 1,
+   after about 6 seconds of `idlog.cin`.
+5. A cinematic shows a new picture 14 times a second by wall clock,
+   whatever the render rate, so counting rendered frames would capture
+   different pictures from run to run. The hook now counts decoded
+   cinematic frames. `PINS_DEMO=idlog.cin PINS_EVERY=7 pins.sh record soft
+   cinematic` captures 12 frames in about 6 seconds and quits with status 0;
+   frame 0 is black (the start of the cinematic), the later frames show it
+   fading in and out. Three runs were identical (score 0 on all 12 frames).
+   The second run is recorded with `record soft cinematic --run 2` and
+   compared as `compare soft cinematic --run 2 --ref soft`; `--ref-id
+   <dir>` names the reference when the scenario has been recorded with
+   other settings (item 8).
+   The picture on screen lags the decoded-frame count by one to two
+   frames, and with `PINS_EVERY=1` the capture at index 1 falls on a
+   rendered frame where nothing new is drawn, so a GL reference should
+   not be recorded at N = 1.
+   No `Dropped frame` line was logged.
+6. `PINS_DEMO=nosuch.cin` exits 1 within a few seconds with `pins: the
+   cinematic could not be played`.
+7. The owner's data holds the cinematics `idlog.cin`, `ntro.cin`,
+   `end.cin` and `eou1_.cin` to `eou8_.cin`, loose under `baseq2/video/`;
+   `idlog.cin` is the shortest and is the one recorded.
+8. `compare` without `--ref-id` takes the most recently modified complete
+   directory under `<scenario>/<ref>/`, which can be a record made with
+   other `PINS_*` settings (here, `demo2.dm2` or another `PINS_EVERY`): it
+   then reports a frame-count difference. When one scenario is recorded
+   with several settings, name the reference with `--ref-id`.
 
 ### Thresholds measured for nondeterministic scenarios
 
