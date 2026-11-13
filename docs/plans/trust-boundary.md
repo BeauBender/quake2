@@ -127,8 +127,10 @@ behaviour fixed and gives every later card a place for its failing test.
   package, no downloaded fixture. `make test` builds
   `build/<release|debug>/test/yq2test` from the dedicated server's own
   object list (`SERVER_OBJS_`, same flags, `-DDEDICATED_ONLY`) minus
-  `src/backends/unix/main.c`, plus `src/client/cl_download.c`; the client
-  state that one file reads is the only stub (`tests/unit/stub_client.c`).
+  `src/backends/unix/main.c`, plus six client objects (`cl_download.c`, `cl_entities.c`, `cl_network.c`,
+  `cl_parse.c`, `cl_screen.c` and the sound frontend `sound/sound.c`); what they
+  call outside the suite is stubbed by `tests/unit/stub_client.c` and
+  `tests/unit/stub_client_full.c`.
   Engine sources are not changed to make them testable: static functions
   are reached through the public ones that call them.
 - `Com_Error(ERR_DROP)` is the real one: it longjmps to the global
@@ -147,7 +149,7 @@ behaviour fixed and gives every later card a place for its failing test.
   connectionless packets (`sv_conless.c`, over the in-memory loopback,
   no socket). The savegame tables
   are checked in both directions by `tests/check-savegame-tables.sh`.
-- Known defects (FIX3, FIX15, FIX22, FIX23 and the ones found while
+- Known defects (FIX3, FIX22, FIX23 and the ones found while
   writing the tests) are not exercised: a test that triggers an
   out-of-bounds access would crash or pin the bug. Each test file names
   the card whose author should extend it.
