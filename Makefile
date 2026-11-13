@@ -77,6 +77,14 @@ WITH_SYSTEMDIR:=""
 # Enable XDG directories support
 WITH_XDG:=yes
 
+# WITH_METAL_SHIM
+# macOS only. Builds ref_gl1 against the in-tree OpenGL subset on
+# Metal (src/client/refresh/gl1/metal/) instead of Apple's OpenGL
+# framework, for Macs where OpenGL is unavailable. Needs the Xcode
+# Metal toolchain (xcrun metal); writes ref_gl1.metallib next to
+# ref_gl1.dylib. Work in progress: see doc/100_renderpins.md.
+WITH_METAL_SHIM:=no
+
 # OSX_APP
 # This will set the build options to create an MacOS .app-bundle.
 # The app-bundle itself will not be created, but the runtime paths
@@ -434,6 +442,7 @@ config:
 	@echo "WITH_SYSTEMWIDE = $(WITH_SYSTEMWIDE)"
 	@echo "WITH_SYSTEMDIR = $(WITH_SYSTEMDIR)"
 	@echo "WITH_XDG = $(WITH_XDG)"
+	@echo "WITH_METAL_SHIM = $(WITH_METAL_SHIM)"
 	@echo "============================"
 	@echo ""
 
@@ -603,7 +612,64 @@ ref_gl1:
 	$(MAKE) $(BINDIR)/ref_gl1.dylib
 
 
+ifeq ($(WITH_METAL_SHIM), yes)
+# The OpenGL subset on Metal: no OpenGL framework is linked.
+$(BINDIR)/ref_gl1.dylib : LDFLAGS += -shared -framework Metal -framework QuartzCore -framework Foundation
+else
 $(BINDIR)/ref_gl1.dylib : LDFLAGS += -shared -framework OpenGL
+endif
+
+# Both builds write release/ref_gl1.dylib from different objects: a
+# stamp per build relinks it whenever WITH_METAL_SHIM changes.
+REFGL1_MODE := $(if $(filter yes,$(WITH_METAL_SHIM)),metal,gl)
+
+$(BINDIR)/ref_gl1.dylib : $(BUILDDIR)/ref_gl1.$(REFGL1_MODE).mode
+
+$(BUILDDIR)/ref_gl1.$(REFGL1_MODE).mode:
+	${Q}mkdir -p $(@D)
+	${Q}rm -f $(BUILDDIR)/ref_gl1.*.mode
+	${Q}touch $@
+
+ifeq ($(WITH_METAL_SHIM), yes)
+MGL_DIR := src/client/refresh/gl1/metal
+MGL_OBJDIR := $(BUILDDIR)/ref_gl1_metal
+MGL_CFLAGS := -DMGL_RENDERER_SUFFIX=\"gl1-metal\"
+
+$(BINDIR)/ref_gl1.dylib : $(BINDIR)/ref_gl1.metallib
+
+# The shaders, loaded from next to the dylib at context creation.
+$(BINDIR)/ref_gl1.metallib : $(MGL_DIR)/shaders.metal
+	@echo "===> METAL $<"
+	${Q}command -v xcrun >/dev/null 2>&1 || { echo "WITH_METAL_SHIM=yes needs xcrun and the Xcode Metal toolchain" >&2; exit 1; }
+	${Q}xcrun -f metal >/dev/null 2>&1 || { echo "WITH_METAL_SHIM=yes needs the Metal compiler (xcrun metal); install the Xcode Metal toolchain" >&2; exit 1; }
+	${Q}mkdir -p $(MGL_OBJDIR) $(@D)
+	${Q}xcrun -sdk macosx metal -c $< -o $(MGL_OBJDIR)/shaders.air
+	${Q}xcrun -sdk macosx metallib $(MGL_OBJDIR)/shaders.air -o $@
+
+# The shim's own sources (C, and ARC Objective-C in mgl_layer.m), without the remap.
+$(MGL_OBJDIR)/$(MGL_DIR)/%.o: $(MGL_DIR)/%.c
+	@if [ -z $(QUIET) ]; then\
+		echo "===> CC $<";\
+	fi
+	${Q}mkdir -p $(@D)
+	${Q}$(CC) -c $(CFLAGS) $(MGL_CFLAGS) $(SDLCFLAGS) $(INCLUDE) -o $@ $<
+
+$(MGL_OBJDIR)/$(MGL_DIR)/%.o: $(MGL_DIR)/%.m
+	@if [ -z $(QUIET) ]; then\
+		echo "===> CC $<";\
+	fi
+	${Q}mkdir -p $(@D)
+	${Q}$(CC) -c -fobjc-arc $(CFLAGS) $(MGL_CFLAGS) $(SDLCFLAGS) $(INCLUDE) -o $@ $<
+
+# gl1 and the rest of ref_gl1, unchanged: <OpenGL/gl.h> resolves to the
+# shim's subset header and shim_sdl.h remaps the SDL OpenGL calls.
+$(MGL_OBJDIR)/%.o: %.c
+	@if [ -z $(QUIET) ]; then\
+		echo "===> CC $<";\
+	fi
+	${Q}mkdir -p $(@D)
+	${Q}$(CC) -c $(CFLAGS) -I$(MGL_DIR)/include -include $(MGL_DIR)/shim_sdl.h $(SDLCFLAGS) $(INCLUDE) -o $@ $<
+endif
 
 else # not Windows or Darwin
 
@@ -1053,7 +1119,17 @@ endif
 
 # Rewrite paths to our object directory.
 CLIENT_OBJS = $(patsubst %,$(BUILDDIR)/client/%,$(CLIENT_OBJS_))
+ifeq ($(WITH_METAL_SHIM), yes)
+ifneq ($(YQ2_OSTYPE), Darwin)
+$(error WITH_METAL_SHIM=yes is for macOS only)
+endif
+# The shim build keeps its objects apart, they are compiled with other flags.
+REFGL1_OBJS = $(patsubst %,$(BUILDDIR)/ref_gl1_metal/%,$(REFGL1_OBJS_)) \
+	$(patsubst %,$(BUILDDIR)/ref_gl1_metal/src/client/refresh/gl1/metal/%,\
+		mgl_state.o mgl_draw.o mgl_tex.o mgl_frame.o mgl_layer.o)
+else
 REFGL1_OBJS = $(patsubst %,$(BUILDDIR)/ref_gl1/%,$(REFGL1_OBJS_))
+endif
 REFGL3_OBJS = $(patsubst %,$(BUILDDIR)/ref_gl3/%,$(REFGL3_OBJS_))
 REFGL3_OBJS += $(patsubst %,$(BUILDDIR)/ref_gl3/%,$(REFGL3_OBJS_GLADE_))
 REFSOFT_OBJS = $(patsubst %,$(BUILDDIR)/ref_soft/%,$(REFSOFT_OBJS_))
