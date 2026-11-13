@@ -21,6 +21,7 @@ Removed, to shrink what has to be trusted
 * the OpenGL ES renderers
 * zip pack files; packs are `.pak` only
 * CMake and the Windows build scripts; GNU Make is the only build
+* SDL2 support; SDL3 is the only SDL
 
 Fixed: unchecked sizes and indices in the download path and in the asset
 loaders.
@@ -38,7 +39,7 @@ release/quake2 -datadir /path/to/quake2 -portable
 scripts/test.sh           # the gate; every commit must pass it
 ```
 
-The client needs SDL3 or SDL2. The dedicated server and the game module
+The client needs SDL3. The dedicated server and the game module
 need only the system toolchain. CI builds on Linux and macOS.
 
 ## Documentation

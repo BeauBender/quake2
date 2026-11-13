@@ -124,9 +124,10 @@ RT10 belong to TASK25 and carry TASK24. Design:
 
 ## Order of work and what gates it
 
-1. Land the branch that carries this file.
+1. Land the branch that carries this file. Done: `metal-port-harness` was
+   merged to main.
 2. TASK13 and TASK9, then TASK29. These existing cards gate the harness
-   through TASK27's labels.
+   through TASK27's labels. TASK13 is merged (#106); TASK9 and TASK29 remain.
 3. Owner gates: INFORM8 and INFORM9 for groups P, R and S; INFORM7 for
    group RT. All three were closed as accepted by the owner on 2026-11-12;
    nothing waits on them. The cards still carry the `depends` labels the
