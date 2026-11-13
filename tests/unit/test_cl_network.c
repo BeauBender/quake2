@@ -40,6 +40,10 @@ start_connecting(const char *server)
 	sizebuf_t sink;
 	netadr_t from;
 
+	/* Nothing here may reach the wire: close any socket an earlier test
+	   or the engine opened (the loopback needs none). */
+	NET_Config(false);
+
 	stub_client_cvars();
 	memset(&cls, 0, sizeof(cls));
 	memset(&cl, 0, sizeof(cl));

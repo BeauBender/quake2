@@ -17,12 +17,30 @@
  * with (V_AddLight, Draw_CharScaled, Draw_PicScaled)
  * say so. Nothing here changes the code under test.
  *
+ * What cannot be tested through these stubs:
+ *
+ * - The message types whose parser is a stub here read no bytes and
+ *   apply none of their own checks: svc_temp_entity (CL_ParseTEnt),
+ *   svc_muzzleflash and svc_muzzleflash2 (CL_AddMuzzleFlash, ...2),
+ *   svc_inventory (CL_ParseInventory), the status bar configstrings
+ *   (CL_ParseStatusMessage), lightstyle configstrings (CL_SetLightstyle)
+ *   and entity events (CL_EntityEvent). Each of these stubs fails the
+ *   running test when it is called, so a test that sends one of those
+ *   messages cannot pass by accident.
+ * - CL_AllocEntity gives a table that is already as large as an entity
+ *   number can be, so the bounds checks on cl_numentities in
+ *   cl_entities.c and sound.c are never the deciding check here; the
+ *   entity-number check in CL_AllocEntity itself is the real one.
+ * - CL_MaxClients returns a constant 1: the clamp the real function
+ *   applies to the maxclients configstring is not exercised.
+ *
  * =======================================================================
  */
 
 #include "../../src/client/header/client.h"
 #include "../../src/client/sound/header/local.h"
 #include "stub_client.h"
+#include "test.h"
 
 /* ---- recorded calls ---- */
 
@@ -37,6 +55,15 @@ void V_AddLight(vec3_t org, float intensity, float r, float g, float b)
 void Draw_CharScaled(int x, int y, int num, float scale) { stub_calls.chars++; }
 void Draw_PicScaled(int x, int y, const char *pic, float f) { stub_calls.pics++; }
 void Draw_GetPicSize(int *w, int *h, const char *name) { *w = 8; *h = 8; }
+
+/* A parser that is only a stub: reaching it means the test is not
+   testing what it thinks, so it fails the running test. */
+static void
+stub_not_reachable(const char *name)
+{
+	t_fail(__FILE__, __LINE__, "%s is an empty stub and was called; "
+		"the real parser's checks are not under test", name);
+}
 
 /* ---- cl_main.c, cl_input.c, cl_keyboard.c state ---- */
 
@@ -105,8 +132,8 @@ void CL_Stop_f(void) { }
 void CL_WriteConfiguration(void) { }
 void CL_WriteDemoMessage(void) { }
 void CL_CheckPredictionError(void) { }
-void CL_ParseStatusMessage(void) { }
-void CL_ParseInventory(void) { }
+void CL_ParseStatusMessage(void) { stub_not_reachable("CL_ParseStatusMessage"); }
+void CL_ParseInventory(void) { stub_not_reachable("CL_ParseInventory"); }
 void CL_DrawInventory(void) { }
 void In_FlushQueue(void) { }
 void IN_Update(void) { }
@@ -126,23 +153,23 @@ void Haptic_Feedback(const char *n, int a, int b, int c, int d, int e, int f, in
 
 void CL_AddDLights(void) { }
 void CL_AddLightStyles(void) { }
-void CL_AddMuzzleFlash(void) { }
-void CL_AddMuzzleFlash2(void) { }
+void CL_AddMuzzleFlash(void) { stub_not_reachable("CL_AddMuzzleFlash"); }
+void CL_AddMuzzleFlash2(void) { stub_not_reachable("CL_AddMuzzleFlash2"); }
 void CL_AddParticles(void) { }
 void CL_AddTEnts(void) { }
 void CL_BfgParticles(entity_t *ent) { }
 void CL_BlasterTrail(vec3_t s, vec3_t e) { }
 void CL_BlasterTrail2(vec3_t s, vec3_t e) { }
 void CL_DiminishingTrail(vec3_t s, vec3_t e, centity_t *o, int f) { }
-void CL_EntityEvent(entity_state_t *ent) { }
+void CL_EntityEvent(entity_state_t *ent) { stub_not_reachable("CL_EntityEvent"); }
 void CL_FlagTrail(vec3_t s, vec3_t e, int c) { }
 void CL_FlyEffect(centity_t *ent, vec3_t o) { }
 void CL_IonripperTrail(vec3_t s, vec3_t e) { }
-void CL_ParseTEnt(void) { }
+void CL_ParseTEnt(void) { stub_not_reachable("CL_ParseTEnt"); }
 struct model_s *CL_PowerScreenModel(void) { return NULL; }
 void CL_RegisterTEntSounds(void) { }
 void CL_RocketTrail(vec3_t s, vec3_t e, centity_t *o) { }
-void CL_SetLightstyle(int i) { }
+void CL_SetLightstyle(int i) { stub_not_reachable("CL_SetLightstyle"); }
 void CL_TagTrail(vec3_t s, vec3_t e, int c) { }
 void CL_TeleporterParticles(entity_state_t *ent) { }
 void CL_TrackerTrail(vec3_t s, vec3_t e, int c) { }
