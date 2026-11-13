@@ -39,8 +39,3 @@ void
 CL_PrepRefresh(void)
 {
 }
-
-void
-CL_RegisterSounds(void)
-{
-}
