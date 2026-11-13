@@ -20,8 +20,10 @@
 #                 record refuses when "make -q" says it or its renderer
 #                 module is out of date with the source. A binary named here
 #                 adds its checksum to the pin id; compare needs the same value.
-#   PINS_DEMO     the demo every scenario plays, a file name under demos/:
-#                 [A-Za-z0-9_][A-Za-z0-9_.-]*.dm2. Default: demo1.dm2
+#   PINS_DEMO     what every scenario plays: a demo, a file name under demos/
+#                 ([A-Za-z0-9_][A-Za-z0-9_.-]*.dm2), or a cinematic, a file
+#                 name under video/ (the same pattern ending in .cin, for the
+#                 cinematic scenario). Default: demo1.dm2
 #   PINS_WIDTH, PINS_HEIGHT   capture size. Default: 640 x 480
 #   PINS_EVERY    capture every Nth rendered frame. Default: 30
 #   PINS_TIMEOUT  seconds before a run is killed. Default: 600
@@ -72,7 +74,9 @@
 # -portable the engine writes beside its binary (qconsole.log,
 # console_history.txt), and with pin capture on it neither reads nor writes
 # config.cfg or autoexec.cfg. A demo that cannot be opened, or whose file
-# ends before its end marker, makes the engine exit non-zero at once.
+# ends before its end marker, makes the engine exit non-zero at once, as
+# does a cinematic that cannot be opened. A cinematic is captured every
+# Nth cinematic frame, not every Nth rendered frame.
 set -eu
 # character ranges such as [a-z] in patterns mean ASCII only in the C locale
 export LC_ALL=C
@@ -128,13 +132,14 @@ check_store() {
     if [ $# -ge 1 ]; then shift; fi
     for rend in "$@"; do check_store_path "$(store)/$scen/$rend"; done
 }
-# a demo file name under demos/: [A-Za-z0-9_][A-Za-z0-9_.-]*.dm2, no path
+# a demo file name under demos/ ([A-Za-z0-9_][A-Za-z0-9_.-]*.dm2) or a
+# cinematic under video/ (the same, ending in .cin), no path; +demomap plays both
 check_demo() {
     case $1 in
         *[!A-Za-z0-9_.-]*|*..*) ;;
-        [A-Za-z0-9_]*.dm2) return 0;;
+        [A-Za-z0-9_]*.dm2|[A-Za-z0-9_]*.cin) return 0;;
     esac
-    die "PINS_DEMO must be a demo file name [A-Za-z0-9_][A-Za-z0-9_.-]*.dm2 (no path, no leading - or .), got '$1'"
+    die "PINS_DEMO must be a demo file name [A-Za-z0-9_][A-Za-z0-9_.-]*.dm2 or a cinematic name ending in .cin (no path, no leading - or .), got '$1'"
 }
 # The engine part of a pin id: the commit, then "-d<hash>" when src/ or the
 # Makefile differ from it (tracked changes and untracked files), then
@@ -609,12 +614,16 @@ st_fast_fail() { # TASK39 (f): an engine that exits non-zero at once (a demo it 
 }
 st_demo_name() { # TASK39 (g): PINS_DEMO is a demo file name the engine keeps
     local d
-    for d in -x.dm2 -demo1.dm2 .hidden.dm2 a/demo1.dm2 ../demo1.dm2 demo1 demo1.dm2x 'demo 1.dm2' 'x..dm2' .dm2; do
+    for d in -x.dm2 -demo1.dm2 .hidden.dm2 a/demo1.dm2 ../demo1.dm2 demo1 demo1.dm2x 'demo 1.dm2' 'x..dm2' .dm2 \
+        .cin -idlog.cin video/idlog.cin ../idlog.cin idlog.cinx 'x..cin' idlog.pcx 'idlog.cin;quit'; do
         if (PINS_DEMO="$d" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "PINS_DEMO '$d' must be refused"; return 1; fi
     done
-    for d in demo2.dm2 my_demo-1.dm2 X.dm2; do
+    for d in demo2.dm2 my_demo-1.dm2 X.dm2 idlog.cin eou1_.cin; do
         (PINS_DEMO="$d" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1 || st_fail "PINS_DEMO '$d' must be accepted" || return 1
     done
+    # a cinematic is played the same way as a demo: +demomap, last on the line
+    local line; line=$(PINS_DEMO=idlog.cin PINS_DRYRUN=1 cmd_record gl1 cinematic) || st_fail "a dry run of the cinematic scenario must pass" || return 1
+    case $line in *" +demomap idlog.cin") ;; *) st_fail "PINS_DEMO=idlog.cin must reach +demomap: $line"; return 1;; esac
 }
 st_replace() { # TASK39 (h): a complete pin is never replaced silently
     PINS_BASEDIR="$tmp/gd" cmd_record gl1 world >/dev/null || st_fail "first record must pass" || return 1
@@ -716,5 +725,5 @@ case "${1:-}" in
     compare)  [ $# -ge 3 ] || die "usage: pins.sh compare <renderer> <scenario> [--ref r] [--ref-id d] [--run N | --cand-id d] [--threshold t] [--bad-threshold b]"; shift; cmd_compare "$@";;
     list)     cmd_list;;
     selftest) cmd_selftest;;
-    *) sed -n '2,75p' "$0" | sed 's/^# \{0,1\}//'; exit 1;;
+    *) sed -n '2,79p' "$0" | sed 's/^# \{0,1\}//'; exit 1;;
 esac
