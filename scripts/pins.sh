@@ -3,7 +3,7 @@
 # bash 3.2. Records reference frames from a renderer over a scenario, compares
 # a candidate renderer against them, and self-tests without game data.
 #
-#   pins.sh record  <renderer> <scenario> [--run N]
+#   pins.sh record  <renderer> <scenario> [--run N] [--replace]
 #   pins.sh compare <renderer> <scenario> [--ref <renderer>] [--ref-id <dir>]
 #                   [--run N | --cand-id <dir>] [--threshold T] [--bad-threshold B]
 #   pins.sh list                               what the store holds
@@ -12,11 +12,16 @@
 # Names (renderer, scenario) match [a-z0-9_][a-z0-9_-]*, e.g. gl1-metal, rt-ao.
 #
 # Environment:
-#   PINS_STORE    the pin store, never inside the repository (INFORM9).
+#   PINS_STORE    the pin store, never inside this repository or any other
+#                 git work tree (INFORM9; record and compare refuse it).
 #                 Default: ~/.quake2-pins
 #   PINS_BASEDIR  the directory holding baseq2/ (owner game data, never committed)
-#   PINS_BIN      engine binary. Default: release/quake2
-#   PINS_DEMO     the demo every scenario plays. Default: demo1.dm2
+#   PINS_BIN      engine binary. Default: release/quake2 of this checkout, which
+#                 record refuses when a file under src/ or the Makefile is
+#                 newer than it or its renderer module. A binary named here
+#                 adds its checksum to the pin id; compare needs the same value.
+#   PINS_DEMO     the demo every scenario plays, a file name under demos/:
+#                 [A-Za-z0-9_][A-Za-z0-9_.-]*.dm2. Default: demo1.dm2
 #   PINS_WIDTH, PINS_HEIGHT   capture size. Default: 640 x 480
 #   PINS_EVERY    capture every Nth rendered frame. Default: 30
 #   PINS_TIMEOUT  seconds before a run is killed. Default: 600
@@ -32,9 +37,12 @@
 # command. record refuses such values.
 #
 # record writes <store>/<scenario>/<renderer>/<id>, where <id> is
-# <engine commit>-<settings hash> for this checkout and these PINS_*
-# settings, with "-r<N>" appended for --run N (N >= 2), so a second run of
-# the same engine and scenario does not replace the first. A record is
+# <engine>-<settings hash> for this checkout and these PINS_* settings, with
+# "-r<N>" appended for --run N (N >= 2), so a second run of the same engine
+# and scenario does not replace the first. <engine> is the commit, plus
+# "-d<hash>" when src/ or the Makefile hold uncommitted changes and
+# "-b<hash>" when PINS_BIN is set. A complete pin of the same id is never
+# overwritten unless --replace is given; an incomplete one is. A record is
 # complete only when the engine exited 0 within PINS_TIMEOUT, captured at
 # least one frame, manifest.txt holds no FAILED line (the engine's mark for a
 # frame it could not write) and every frame in it was rendered by the
@@ -53,11 +61,19 @@
 # Two runs of one renderer: record soft world; record soft world --run 2;
 # compare soft world --run 2 --ref soft.
 #
-# A scenario is a list of console commands (scripts/pins/scenarios/*.cfg).
-# The driver passes each line to the engine as a "+command" argument, then
-# starts the demo with +demomap. Nothing is written into the game data, and
-# the engine runs with -portable so the owner's saved config is not touched.
+# A scenario is a list of "set <cvar> <value>" lines
+# (scripts/pins/scenarios/*.cfg); any other line, and a line setting a cvar
+# the driver sets itself (pins_*, vid_renderer, vid_fullscreen, r_mode,
+# r_customwidth, r_customheight, s_initsound), is refused. The driver passes
+# each line to the engine as a "+set" argument, then its own settings, then
+# starts the demo with +demomap. Nothing is written into the game data: with
+# -portable the engine writes beside its binary (qconsole.log,
+# console_history.txt), and with pin capture on it neither reads nor writes
+# config.cfg or autoexec.cfg. A demo that cannot be opened, or whose file
+# ends before its end marker, makes the engine exit non-zero at once.
 set -eu
+# character ranges such as [a-z] in patterns mean ASCII only in the C locale
+export LC_ALL=C
 root=$(cd "$(dirname "$0")/.." && pwd)
 scen_dir="$root/scripts/pins/scenarios"
 die() { echo "pins: $*" >&2; exit 1; }
@@ -76,7 +92,58 @@ store() {
     if [ -n "${PINS_STORE:-}" ]; then echo "$PINS_STORE"; return; fi
     echo "$HOME/.quake2-pins"
 }
-engine_sha() { git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo nogit; }
+# phys_path <path>: sets phys_result to the physical path, resolving symbolic
+# links through the nearest ancestor that exists, and phys_existing to that ancestor
+phys_path() {
+    local p=$1 rest=""
+    while [ ! -d "$p" ]; do rest="/$(basename "$p")$rest"; p=$(dirname "$p"); done
+    phys_existing=$(cd "$p" && pwd -P)
+    phys_result=$(printf '%s%s' "$phys_existing" "$rest" | tr -s /)
+}
+# the pin store is never inside this repository or any other git work tree (INFORM9)
+check_store() {
+    local s r; phys_path "$(store)"; s=$phys_result; r=$(cd "$root" && pwd -P)
+    case "$s/" in "$r/"*) die "the pin store $s is inside this repository; set PINS_STORE outside it (INFORM9)";; esac
+    if git -C "$phys_existing" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        die "the pin store $s is inside a git work tree; set PINS_STORE outside any repository (INFORM9)"
+    fi
+}
+# a demo file name under demos/: [A-Za-z0-9_][A-Za-z0-9_.-]*.dm2, no path
+check_demo() {
+    case $1 in
+        *[!A-Za-z0-9_.-]*|*..*) ;;
+        [A-Za-z0-9_]*.dm2) return 0;;
+    esac
+    die "PINS_DEMO must be a demo file name [A-Za-z0-9_][A-Za-z0-9_.-]*.dm2 (no path, no leading - or .), got '$1'"
+}
+# The engine part of a pin id: the commit, then "-d<hash>" when src/ or the
+# Makefile differ from it (tracked changes and untracked files), then
+# "-b<hash>" of the binary when PINS_BIN names one, so a pin from a modified
+# tree or from another tree's binary never shares an id with this commit's.
+engine_sha() {
+    local sha dirty f
+    sha=$(git -C "$root" rev-parse --short=12 HEAD 2>/dev/null) || sha=nogit
+    if [ "$sha" != nogit ]; then
+        dirty=$(git -C "$root" status --porcelain --untracked-files=all -- src Makefile 2>/dev/null || true)
+        if [ -n "$dirty" ]; then
+            sha="$sha-d$( { git -C "$root" diff HEAD -- src Makefile
+                git -C "$root" ls-files -o --exclude-standard -- src Makefile | while IFS= read -r f; do echo "$f"; cat "$root/$f"; done
+            } | cksum | awk '{print $1}')"
+        fi
+    fi
+    if [ -n "${PINS_BIN:-}" ]; then sha="$sha-b$(cksum < "$PINS_BIN" 2>/dev/null | awk '{print $1}')"; fi
+    echo "$sha"
+}
+# stale_engine <bin> <renderer>: names a file under src/ or the Makefile newer
+# than the binary or its renderer module, empty when the build is current
+stale_engine() {
+    local m f
+    for m in "$1" "$(dirname "$1")/ref_$2".so "$(dirname "$1")/ref_$2".dylib "$(dirname "$1")/ref_$2".dll; do
+        [ -f "$m" ] || continue
+        f=$(find "$root/src" "$root/Makefile" -type f -newer "$m" 2>/dev/null | head -n 1)
+        if [ -n "$f" ]; then echo "${f#"$root"/} is newer than $m"; return; fi
+    done
+}
 scenario_hash() {
     { cat "$scen_dir/$1.cfg"; echo "${PINS_DEMO:-demo1.dm2} ${PINS_WIDTH:-640}x${PINS_HEIGHT:-480} every=${PINS_EVERY:-30}"; } | cksum | awk '{print $1}'
 }
@@ -98,33 +165,44 @@ difftool() {
 
 # Fills the global array engine_args for <renderer> <scenario> <outdir>.
 build_args() {
-    local renderer=$1 scenario=$2 out=$3 line w first
-    engine_args=(-datadir "${PINS_BASEDIR:-}" -portable
-        +set vid_renderer "$renderer" +set vid_fullscreen 0 +set r_mode -1
-        +set r_customwidth "${PINS_WIDTH:-640}" +set r_customheight "${PINS_HEIGHT:-480}"
-        +set s_initsound 0
-        +set pins_dir "$out" +set pins_scenario "$scenario" +set pins_capture "${PINS_EVERY:-30}")
+    local renderer=$1 scenario=$2 out=$3 line verb name value extra n=0
+    engine_args=(-datadir "${PINS_BASEDIR:-}" -portable)
+    # every line is exactly "set <cvar> <value>"; the cvars the driver sets
+    # itself are refused, so a scenario can never override them
     set -f
     while IFS= read -r line || [ -n "$line" ]; do
+        n=$((n+1))
         case $line in ''|//*) continue ;; esac
-        first=1
-        for w in $line; do
-            if [ "$first" -eq 1 ]; then engine_args+=("+$w"); first=0; else check_arg "$scenario.cfg value" "$w" value; engine_args+=("$w"); fi
-        done
+        [[ $line =~ ^set\ [^\ ]+\ [^\ ]+$ ]] || die "$scenario.cfg line $n: not 'set <cvar> <value>' with single spaces: $line"
+        read -r verb name value extra <<< "$line"
+        [ "$verb" = set ] && [ -n "$value" ] && [ -z "$extra" ] || die "$scenario.cfg line $n: not 'set <cvar> <value>': $line"
+        case $name in ''|*[!a-z0-9_]*) die "$scenario.cfg line $n: the cvar must match [a-z0-9_]+, got '$name'";; esac
+        case $name in pins_*|vid_renderer|vid_fullscreen|r_mode|r_customwidth|r_customheight|s_initsound)
+            die "$scenario.cfg line $n: $name is set by the driver, a scenario may not set it";; esac
+        check_arg "$scenario.cfg value" "$value" value
+        engine_args+=(+set "$name" "$value")
     done < "$scen_dir/$scenario.cfg"
     set +f
-    engine_args+=(+demomap "${PINS_DEMO:-demo1.dm2}")
+    engine_args+=(+set vid_renderer "$renderer" +set vid_fullscreen 0 +set r_mode -1
+        +set r_customwidth "${PINS_WIDTH:-640}" +set r_customheight "${PINS_HEIGHT:-480}"
+        +set s_initsound 0
+        +set pins_dir "$out" +set pins_scenario "$scenario" +set pins_capture "${PINS_EVERY:-30}"
+        +demomap "${PINS_DEMO:-demo1.dm2}")
 }
 
 cmd_record() {
-    local renderer=$1 scenario=$2 run=1; shift 2
+    local renderer=$1 scenario=$2 run=1 replace=0; shift 2
     local bin="${PINS_BIN:-$root/release/quake2}" limit="${PINS_TIMEOUT:-600}"
     check_name renderer "$renderer"; check_name scenario "$scenario"
-    while [ $# -gt 0 ]; do case $1 in --run) [ $# -ge 2 ] || die "--run needs a value"; run=$2; check_run "$run"; shift 2;; *) die "unknown option $1";; esac; done
+    while [ $# -gt 0 ]; do case $1 in
+        --run) [ $# -ge 2 ] || die "--run needs a value"; run=$2; check_run "$run"; shift 2;;
+        --replace) replace=1; shift;;
+        *) die "unknown option $1";; esac; done
     case $limit in ''|*[!0-9]*) die "PINS_TIMEOUT must be a number of seconds, got '$limit'";; esac
     check_count PINS_WIDTH "${PINS_WIDTH:-640}"; check_count PINS_HEIGHT "${PINS_HEIGHT:-480}"; check_count PINS_EVERY "${PINS_EVERY:-30}"
-    check_arg PINS_DEMO "${PINS_DEMO:-demo1.dm2}" path
+    check_demo "${PINS_DEMO:-demo1.dm2}"
     [ -f "$scen_dir/$scenario.cfg" ] || die "no scenario $scenario (see $scen_dir)"
+    check_store
     local out; out=$(printf '%s' "$(store)/$scenario/$renderer/$(run_id "$scenario" "$run")" | tr -s /)
     check_arg "the pin store path" "$out" path
     if [ -n "${PINS_BASEDIR:-}" ]; then check_arg PINS_BASEDIR "$PINS_BASEDIR" path; fi
@@ -132,6 +210,13 @@ cmd_record() {
     if [ -n "${PINS_DRYRUN:-}" ]; then echo "$bin ${engine_args[*]}"; return 0; fi
     [ -x "$bin" ] || die "no engine binary at $bin (build the client, or set PINS_BIN)"
     [ -n "${PINS_BASEDIR:-}" ] && [ -d "$PINS_BASEDIR/baseq2" ] || die "PINS_BASEDIR must hold baseq2/ (owner game data, never committed)"
+    if [ -z "${PINS_BIN:-}" ]; then
+        local stale; stale=$(stale_engine "$bin" "$renderer")
+        [ -z "$stale" ] || die "the build is older than the source ($stale); rebuild before recording"
+    fi
+    if [ -f "$out/complete" ] && [ "$replace" -ne 1 ]; then
+        die "a complete pin already exists at $out; record with --run N for another run, or --replace to overwrite it"
+    fi
     rm -rf "$out"; mkdir -p "$out"
     "$bin" "${engine_args[@]}" > "$out/engine.log" 2>&1 &
     local pid=$! t=0 w status=0 timedout=0
@@ -185,6 +270,7 @@ cmd_compare() {
         shift 2
     done
     [ -f "$scen_dir/$scenario.cfg" ] || die "no scenario $scenario (see $scen_dir)"
+    check_store
     local s; s=$(store)
     local cand ref_dir
     [ -n "$cand_id" ] || cand_id=$(run_id "$scenario" "$run")
@@ -337,7 +423,8 @@ st_incomplete() { # C-I1
     local rep; rep=$(cmd_compare metal world --ref gl1) && { st_fail "a candidate with more frames than the reference must fail"; return 1; }
     case $rep in *"frame count differs"*) ;; *) st_fail "the frame count mismatch must be printed: $rep"; return 1;; esac
     if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-crash" cmd_record gl1 world) >/dev/null 2>&1; then st_fail "record must fail when the engine crashes after a frame"; return 1; fi
-    [ ! -f "$PINS_STORE/world/gl1/$cid/complete" ] && [ -f "$PINS_STORE/world/gl1/$cid/incomplete" ] || st_fail "a failed record must leave 'incomplete' and no 'complete'" || return 1
+    local crash; crash=$(PINS_BIN="$tmp/fake-crash" run_id world 1)
+    [ ! -f "$PINS_STORE/world/gl1/$crash/complete" ] && [ -f "$PINS_STORE/world/gl1/$crash/incomplete" ] || st_fail "a failed record must leave 'incomplete' and no 'complete'" || return 1
 }
 st_record_engine() {
     PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record gl1 world >/dev/null || st_fail "record must pass with an engine that exits 0" || return 1
@@ -350,7 +437,8 @@ st_timeout() { # C-I2c: fake-hang exits 0 on TERM, like the engine; only the tim
 st_frame_failed() { # R3-N3: a failed frame write is a FAILED manifest line; record must not complete
     fake_engine "$tmp/fake-failed" - 'echo "FAILED $s-000001.tga" >> "$d/manifest.txt"; exit 0'
     if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-failed" cmd_record gl1 world) >/dev/null 2>&1; then st_fail "record must fail when manifest.txt holds a FAILED line"; return 1; fi
-    [ ! -f "$PINS_STORE/world/gl1/$cid/complete" ] && grep -q 'FAILED' "$PINS_STORE/world/gl1/$cid/incomplete" || st_fail "the pin must be marked incomplete, naming the failed frame" || return 1
+    local fid; fid=$(PINS_BIN="$tmp/fake-failed" run_id world 1)
+    [ ! -f "$PINS_STORE/world/gl1/$fid/complete" ] && grep -q 'FAILED' "$PINS_STORE/world/gl1/$fid/incomplete" || st_fail "the pin must be marked incomplete, naming the failed frame" || return 1
     # the manifest itself unwritable: the frame exists but no line was appended
     fake_engine "$tmp/fake-nomanifest" - 'rm -f "$d/manifest.txt"; exit 0'
     if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-nomanifest" cmd_record gl1 world) >/dev/null 2>&1; then st_fail "record must fail when the manifest is missing"; return 1; fi
@@ -375,6 +463,7 @@ st_names() { # C-I4
     fixture gl1 ref "$tmp/a.tga"; fixture gl1-metal "$cid" "$tmp/a.tga"
     (cmd_compare gl1-metal world --ref gl1) >/dev/null 2>&1 || st_fail "compare gl1-metal world --ref gl1 must parse and pass" || return 1
     (check_name scenario rt-ao) || st_fail "scenario rt-ao must be accepted" || return 1
+    if (check_name scenario World) >/dev/null 2>&1; then st_fail "an upper-case name must be refused"; return 1; fi
 }
 st_cmdline() { # C-I5: what the engine's command line cannot carry is refused
     local p
@@ -439,6 +528,79 @@ st_argcount() { # R3-B1: the engine refuses an argv longer than MAX_NUM_ARGVS (s
     echo "       argc: worst scenario $worst of $limit, headroom $((limit - worst))"
 }
 
+st_scenario_lines() { # TASK39 (b, c): only "set <cvar> <value>", never a driver-owned cvar
+    mkdir -p "$tmp/scen"; local scen_dir="$tmp/scen" bad
+    printf '%s\n' '// ok' 'set timedemo 1' 'set cl_gun 0' > "$tmp/scen/good.cfg"
+    local line; line=$(PINS_DRYRUN=1 cmd_record gl1 good) || st_fail "a plain scenario must pass" || return 1
+    case $line in *"+set cl_gun 0 "*"+set pins_dir "*"+set pins_capture 30 +demomap demo1.dm2") ;; *) st_fail "the driver's own arguments must follow the scenario's: $line"; return 1;; esac
+    for bad in 'set pins_capture 1' 'set pins_dir /tmp/x' 'set vid_renderer gl1' 'set r_customwidth 9' 'set s_initsound 1' \
+        'exec evil.cfg' 'quit' '+set timedemo 1' 'set timedemo' 'set timedemo 1 2' 'set TimeDemo 1' 'set time-demo 1' ' set timedemo 1'; do
+        printf '%s\n' 'set timedemo 1' "$bad" > "$tmp/scen/bad.cfg"
+        if (PINS_DRYRUN=1 cmd_record gl1 bad) >/dev/null 2>&1; then st_fail "scenario line '$bad' must be refused"; return 1; fi
+    done
+}
+st_store_place() { # TASK39 (d): the store is never inside this repository or another work tree
+    if (PINS_STORE="$root/pins-store" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "a store inside the repository must be refused"; return 1; fi
+    if (PINS_STORE="$root" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "the repository itself must be refused as the store"; return 1; fi
+    ln -s "$root/scripts" "$tmp/into-repo"
+    if (PINS_STORE="$tmp/into-repo/x" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "a store reached through a link into the repository must be refused"; return 1; fi
+    if (PINS_STORE="$root/pins-store" cmd_compare metal world --ref gl1) >/dev/null 2>&1; then st_fail "compare must refuse a store inside the repository"; return 1; fi
+    if command -v git >/dev/null 2>&1; then
+        git init -q "$tmp/other-repo"
+        if (PINS_STORE="$tmp/other-repo/a/b" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "a store inside another git work tree must be refused"; return 1; fi
+    fi
+    (PINS_STORE="$tmp/not-yet/made" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1 || st_fail "a store outside any repository must be accepted" || return 1
+}
+st_fast_fail() { # TASK39 (f): an engine that exits non-zero at once (a demo it cannot open) fails the record at once
+    local t0=$SECONDS
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-drop" PINS_TIMEOUT=60 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "record must fail when the engine exits 1"; return 1; fi
+    [ $((SECONDS - t0)) -lt 10 ] || st_fail "record must not wait for PINS_TIMEOUT when the engine exits at once" || return 1
+    grep -q 'status 1' "$PINS_STORE/world/gl1/$(PINS_BIN="$tmp/fake-drop" run_id world 1)/incomplete" || st_fail "the reason must name the exit status" || return 1
+}
+st_demo_name() { # TASK39 (g): PINS_DEMO is a demo file name the engine keeps
+    local d
+    for d in -x.dm2 -demo1.dm2 .hidden.dm2 a/demo1.dm2 ../demo1.dm2 demo1 demo1.dm2x 'demo 1.dm2' 'x..dm2' .dm2; do
+        if (PINS_DEMO="$d" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "PINS_DEMO '$d' must be refused"; return 1; fi
+    done
+    for d in demo2.dm2 my_demo-1.dm2 X.dm2; do
+        (PINS_DEMO="$d" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1 || st_fail "PINS_DEMO '$d' must be accepted" || return 1
+    done
+}
+st_replace() { # TASK39 (h): a complete pin is never replaced silently
+    PINS_BASEDIR="$tmp/gd" cmd_record gl1 world >/dev/null || st_fail "first record must pass" || return 1
+    echo keep > "$PINS_STORE/world/gl1/$cid/marker"
+    if (PINS_BASEDIR="$tmp/gd" cmd_record gl1 world) >/dev/null 2>&1; then st_fail "recording the same id over a complete pin must be refused"; return 1; fi
+    [ -f "$PINS_STORE/world/gl1/$cid/marker" ] || st_fail "the refused record must leave the pin untouched" || return 1
+    PINS_BASEDIR="$tmp/gd" cmd_record gl1 world --replace >/dev/null || st_fail "--replace must overwrite the pin" || return 1
+    [ ! -f "$PINS_STORE/world/gl1/$cid/marker" ] && [ -f "$PINS_STORE/world/gl1/$cid/complete" ] || st_fail "--replace must leave a fresh complete pin" || return 1
+    rm "$PINS_STORE/world/gl1/$cid/complete"; echo failed > "$PINS_STORE/world/gl1/$cid/incomplete"
+    PINS_BASEDIR="$tmp/gd" cmd_record gl1 world >/dev/null || st_fail "an incomplete pin must be re-recorded without --replace" || return 1
+}
+st_engine_id() { # TASK39 (h): the id sees uncommitted source, untracked source and another binary
+    command -v git >/dev/null 2>&1 || { echo "       engine_id: no git, skipped"; return 0; }
+    local r="$tmp/tree" a b c d
+    mkdir -p "$r/src"; printf 'int a;\n' > "$r/src/a.c"; printf 'all:\n' > "$r/Makefile"
+    git -C "$r" init -q; git -C "$r" add src/a.c Makefile
+    git -C "$r" -c user.name=pins -c user.email=pins@example.invalid commit -q -m t
+    a=$(root="$r" PINS_BIN= engine_sha)
+    case $a in *-*) st_fail "a clean tree's id must be the bare commit: $a"; return 1;; esac
+    printf 'int b;\n' > "$r/src/a.c"; b=$(root="$r" PINS_BIN= engine_sha)
+    case $b in "$a"-d*) ;; *) st_fail "a modified source file must add -d<hash>: $a -> $b"; return 1;; esac
+    printf 'int a;\n' > "$r/src/a.c"; printf 'int n;\n' > "$r/src/new.c"; c=$(root="$r" PINS_BIN= engine_sha)
+    case $c in "$a"-d*) [ "$c" != "$b" ] || st_fail "different changes must give different ids" || return 1;; *) st_fail "an untracked source file must add -d<hash>: $c"; return 1;; esac
+    rm "$r/src/new.c"; [ "$(root="$r" PINS_BIN= engine_sha)" = "$a" ] || st_fail "a reverted tree must give the commit's id again" || return 1
+    d=$(root="$r" PINS_BIN="$tmp/fake-ok" engine_sha)
+    case $d in "$a"-b*) ;; *) st_fail "PINS_BIN must add -b<hash>: $d"; return 1;; esac
+    [ "$d" != "$(root="$r" PINS_BIN="$tmp/fake-crash" engine_sha)" ] || st_fail "two binaries must give two ids" || return 1
+    printf 'x' > "$r/quake2"; printf 'x' > "$r/ref_gl1.so"
+    touch -t 202001010000 "$r/quake2" "$r/ref_gl1.so"
+    [ -n "$(root="$r" stale_engine "$r/quake2" gl1)" ] || st_fail "a binary older than src/ must be stale" || return 1
+    touch -t 203001010000 "$r/quake2"
+    [ -n "$(root="$r" stale_engine "$r/quake2" gl1)" ] || st_fail "a renderer module older than src/ must be stale" || return 1
+    touch -t 203001010000 "$r/ref_gl1.so"
+    [ -z "$(root="$r" stale_engine "$r/quake2" gl1)" ] || st_fail "a current build must not be stale" || return 1
+}
+
 cmd_selftest() {
     # the selftest must not depend on, or act on, the caller's environment
     unset PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF
@@ -450,15 +612,18 @@ cmd_selftest() {
     "$diff" --gen "$tmp/d.tga" 32 32 1
     "$diff" --gen "$tmp/big.tga" 640 480 1
     "$diff" --block "$tmp/big.tga" "$tmp/bigblock.tga" 100 100 77 77 255 2>/dev/null || cp "$tmp/big.tga" "$tmp/bigblock.tga"
-    cid=$(run_id world 1)
     mkdir -p "$tmp/gd/baseq2"
     fake_engine "$tmp/fake-ok" - 'exit 0'
     fake_engine "$tmp/fake-crash" - 'exit 139'
     fake_engine "$tmp/fake-other" soft 'exit 0'
     fake_engine "$tmp/fake-hang" - 'trap "exit 0" TERM; while :; do sleep 1; done'
+    fake_engine "$tmp/fake-drop" - 'echo "Error: Couldn'"'"'t open demos/x.dm2"; exit 1'
+    export PINS_BIN="$tmp/fake-ok"
+    cid=$(run_id world 1)
     local c failed=""
     for c in framediff framediff_block compare_basic compare_bad_threshold ref_mtime missing_frame self_compare \
-        two_runs incomplete record_engine timeout fallback names cmdline thresholds scenarios argcount frame_failed list; do
+        two_runs incomplete record_engine timeout fallback names cmdline thresholds scenarios argcount frame_failed list \
+        scenario_lines store_place fast_fail demo_name replace engine_id; do
         rm -rf "$PINS_STORE/world"
         if ( set -e; "st_$c" ); then echo "  ok   $c"; else echo "  FAIL $c"; failed="$failed $c"; fi
     done
@@ -467,9 +632,9 @@ cmd_selftest() {
 }
 
 case "${1:-}" in
-    record)   [ $# -ge 3 ] || die "usage: pins.sh record <renderer> <scenario> [--run N]"; shift; cmd_record "$@";;
+    record)   [ $# -ge 3 ] || die "usage: pins.sh record <renderer> <scenario> [--run N] [--replace]"; shift; cmd_record "$@";;
     compare)  [ $# -ge 3 ] || die "usage: pins.sh compare <renderer> <scenario> [--ref r] [--ref-id d] [--run N | --cand-id d] [--threshold t] [--bad-threshold b]"; shift; cmd_compare "$@";;
     list)     cmd_list;;
     selftest) cmd_selftest;;
-    *) sed -n '2,56p' "$0" | sed 's/^# \{0,1\}//'; exit 1;;
+    *) sed -n '2,73p' "$0" | sed 's/^# \{0,1\}//'; exit 1;;
 esac
