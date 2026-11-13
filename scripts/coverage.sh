@@ -68,15 +68,24 @@ else
 fi
 
 [ -r "$floorfile" ] || fail "$floorfile is missing"
-floor=$(awk -v t="$tool" '$1 == t { print $2 }' "$floorfile")
-[ -n "$floor" ] || fail "$floorfile has no floor for $tool"
+# Exactly one "<tool> <N>" line, N a non-negative whole number.
+nfloor=$(awk -v t="$tool" '$1 == t { n++ } END { print n + 0 }' "$floorfile")
+[ "$nfloor" -eq 1 ] || fail "$floorfile must have exactly one '$tool' line, it has $nfloor"
+floor=$(awk -v t="$tool" '$1 == t { if (NF == 2) print $2; else print $0 }' "$floorfile")
+case $floor in
+	'' | *[!0-9]*) fail "$floorfile: the '$tool' floor must be a single whole number of percent, not '$floor'" ;;
+esac
 
-# Fresh counters: stale profiles from an earlier run would inflate the result.
-rm -rf "$outdir/profiles"
+# A clean tree on every run: stale profiles or .gcda counters would
+# inflate the result, and the directories the engine creates next to the
+# test binary (see t_engine_init in tests/unit/main.c) change which
+# filesystem paths a run takes, so a repeat run would differ from a fresh
+# one. The build is a full one anyway (-B below).
+case $outdir in
+	build/coverage) rm -rf "$outdir" ;;
+	*) fail "refusing to clean unexpected directory '$outdir'" ;;
+esac
 mkdir -p "$outdir/profiles"
-if [ -d "$outdir" ]; then
-	find "$outdir" -name '*.gcda' -exec rm -f {} +
-fi
 
 # -B for the same reason as in scripts/test.sh: no header dependencies
 # on Darwin. %m merges the profiles of the forked children (t_expect_exit)

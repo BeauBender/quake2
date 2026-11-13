@@ -76,8 +76,15 @@ go on; `T_REQUIRE` ends the test. `T_EXPECT_DROP(statement)` expects the
 statement to end in `Com_Error(ERR_DROP)`, the way the engine refuses
 bad data, and `t_console()` returns what the engine printed.
 `t_expect_exit()` runs a function in a child process, for code that
-ends in a fatal error. `t_pin(name, text)` compares against a pin.
+ends in a fatal error; it returns the child's exit status, and a child
+that runs longer than `t_child_timeout` seconds (10) is killed and
+reported as `T_EXIT_TIMEOUT`, so a hang cannot stall the gate. A check
+that fails inside the child fails the test. `t_pin(name, text)` compares against a pin.
 A new `test_*.c` file is picked up by the Makefile automatically.
+
+A test that crashes (a segfault, an abort) or a run that is
+interrupted prints the name of the running test to stderr, and the
+runner removes its temporary directory on every way out it can catch.
 
 ## Coverage
 
@@ -85,7 +92,8 @@ A new `test_*.c` file is picked up by the Makefile automatically.
 scripts/coverage.sh
 ```
 
-builds an instrumented copy of the suite under `build/coverage`, runs
+builds an instrumented copy of the suite in an emptied `build/coverage`
+(so that every run starts from the same state), runs
 it and prints the percentage of source lines it executed, per
 directory and in total. It uses only the tools that come with the
 compiler: `llvm-cov` and `llvm-profdata` (through `xcrun` on macOS) for

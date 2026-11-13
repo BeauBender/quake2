@@ -23,10 +23,12 @@
 #include <errno.h>
 #include <dirent.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -35,6 +37,18 @@
 
 static t_case_t *t_cases;
 static int t_ncases;
+
+unsigned t_child_timeout = 10;
+
+/* The process that created t_tmp; only it removes the directory (a forked
+   child runs the same atexit handlers when it exits). */
+static pid_t t_owner;
+
+/* Set in a t_expect_exit child: t_fail also counts into t_child_fails, a
+   page shared with the parent, so a check that fails in the child fails
+   the test even though the child's own counters die with it. */
+static int t_in_child;
+static volatile int *t_child_fails;
 
 static int t_update;
 static int t_verbose;
@@ -65,6 +79,12 @@ t_fail(const char *file, int line, const char *fmt, ...)
 	va_list ap;
 
 	t_current_failures++;
+
+	if (t_in_child && t_child_fails)
+	{
+		(*t_child_fails)++;
+	}
+
 	fprintf(stderr, "FAIL %s (%s:%d): ", t_current ? t_current->name : "?", file, line);
 	va_start(ap, fmt);
 	vfprintf(stderr, fmt, ap);
@@ -273,6 +293,23 @@ t_expect_exit(void (*fn)(void *), void *arg, char *out, size_t outlen)
 
 	fflush(stdout);
 	fflush(stderr);
+	out[0] = '\0';
+
+	if (!t_child_fails)
+	{
+		void *page = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE,
+				MAP_SHARED | MAP_ANON, -1, 0);
+
+		if (page == MAP_FAILED)
+		{
+			t_fail(__FILE__, __LINE__, "mmap: %s", strerror(errno));
+			return -1;
+		}
+
+		t_child_fails = page;
+	}
+
+	*t_child_fails = 0;
 
 	if (pipe(fds) != 0)
 	{
@@ -285,15 +322,22 @@ t_expect_exit(void (*fn)(void *), void *arg, char *out, size_t outlen)
 	if (pid < 0)
 	{
 		t_fail(__FILE__, __LINE__, "fork: %s", strerror(errno));
+		close(fds[0]);
+		close(fds[1]);
 		return -1;
 	}
 
 	if (pid == 0)
 	{
+		t_in_child = 1;
 		close(fds[0]);
 		dup2(fds[1], STDOUT_FILENO);
 		dup2(fds[1], STDERR_FILENO);
 		close(fds[1]);
+
+		/* A child that hangs must not hang the suite (and the gate):
+		   SIGALRM's default action ends it. */
+		alarm(t_child_timeout);
 
 		/* Engine output goes to the real console (the pipe) from here. */
 		Com_EndRedirect();
@@ -330,7 +374,29 @@ t_expect_exit(void (*fn)(void *), void *arg, char *out, size_t outlen)
 	out[got] = '\0';
 	close(fds[0]);
 
-	if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status))
+	if (waitpid(pid, &status, 0) != pid)
+	{
+		t_fail(__FILE__, __LINE__, "waitpid: %s", strerror(errno));
+		return -1;
+	}
+
+	if (*t_child_fails)
+	{
+		/* The child's FAIL lines went into its output, not to stderr. */
+		t_fail(__FILE__, __LINE__, "%d check(s) failed in the forked child; its output:\n%s",
+			*t_child_fails, out);
+	}
+
+	if (WIFSIGNALED(status) && WTERMSIG(status) == SIGALRM)
+	{
+		/* Said in the output, which a failing caller prints, rather than
+		   on stderr: the runner self-test expects the timeout. */
+		snprintf(out + got, outlen - got, "yq2test: forked child timed out after %u s\n",
+			t_child_timeout);
+		return T_EXIT_TIMEOUT;
+	}
+
+	if (!WIFEXITED(status))
 	{
 		return -1;
 	}
@@ -457,6 +523,82 @@ t_pin(const char *name, const char *text)
 	free(file);
 }
 
+/* ---- cleanup and crash reporting ---- */
+
+static void
+t_cleanup_tmp(void)
+{
+	if (t_tmp[0] && getpid() == t_owner)
+	{
+		t_rm_tree(t_tmp);
+		t_tmp[0] = '\0';
+	}
+}
+
+static const int t_crash_signals[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT };
+static const int t_stop_signals[] = { SIGINT, SIGTERM, SIGHUP };
+static struct sigaction t_old_actions[NSIG];
+
+static void
+t_write_str(const char *s)
+{
+	ssize_t r = write(STDERR_FILENO, s, strlen(s));
+
+	(void)r;
+}
+
+/*
+ * A test that crashes or is interrupted: name the test (write() is safe
+ * here, stdio is not), remove the scratch directory (best effort: not
+ * async-signal-safe, but the process is ending anyway), then hand the
+ * signal on to whatever handled it before (the default action, or the
+ * sanitizer's reporter, which then prints its own diagnosis).
+ */
+static void
+t_on_signal(int sig, siginfo_t *info, void *uctx)
+{
+	int sent = info == NULL || info->si_code == SI_USER || info->si_code <= 0;
+
+	(void)uctx;
+
+	t_write_str("yq2test: ");
+	t_write_str(t_current ? t_current->name : "(no test running)");
+	t_write_str(sig == SIGINT || sig == SIGTERM || sig == SIGHUP ?
+		": interrupted\n" : ": died by a signal\n");
+	t_cleanup_tmp();
+	sigaction(sig, &t_old_actions[sig], NULL);
+
+	/* A real fault re-executes the faulting instruction on return and so
+	   reaches the previous handler with its real context. A signal that
+	   was sent (kill, raise, abort) is sent again. */
+	if (sent)
+	{
+		raise(sig);
+	}
+}
+
+static void
+t_install_handlers(void)
+{
+	struct sigaction sa;
+	size_t i;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_sigaction = t_on_signal;
+	sa.sa_flags = SA_SIGINFO;
+	sigemptyset(&sa.sa_mask);
+
+	for (i = 0; i < sizeof(t_crash_signals) / sizeof(t_crash_signals[0]); i++)
+	{
+		sigaction(t_crash_signals[i], &sa, &t_old_actions[t_crash_signals[i]]);
+	}
+
+	for (i = 0; i < sizeof(t_stop_signals) / sizeof(t_stop_signals[0]); i++)
+	{
+		sigaction(t_stop_signals[i], &sa, &t_old_actions[t_stop_signals[i]]);
+	}
+}
+
 /* ---- runner ---- */
 
 static int
@@ -492,8 +634,16 @@ t_engine_init(void)
 
 	/* The generic search path leaves fs_gamedir at the last raw path
 	   (the binary's directory); resetting to baseq2 points it at the
-	   first, <tmp>/data/baseq2, so that everything the engine writes
-	   during the tests lands in the scratch directory. */
+	   first, <tmp>/data/baseq2, so that what the engine writes while
+	   baseq2 is the game lands in the scratch directory. Not everything
+	   stays there: FS_BuildRawPath always puts the binary's own
+	   directory on the search path, and the engine creates
+	   <bindir>/baseq2/scrnshot at start-up and, when a test switches to
+	   a mod, <bindir>/<mod>/scrnshot (fs_gamedir is <bindir>/<mod> while
+	   the mod is active). No source change can avoid that, so these
+	   empty directories are left under build/; the tests write no file
+	   while a mod is active. scripts/coverage.sh starts from an empty
+	   build/coverage so that they cannot make two runs differ. */
 	FS_BuildGameSpecificSearchPath("");
 
 	developer = Cvar_Get("developer", "0", 0);
@@ -569,6 +719,13 @@ main(int argc, char **argv)
 		fprintf(stderr, "yq2test: mkdtemp: %s\n", strerror(errno));
 		return 2;
 	}
+
+	/* Remove the scratch directory however the run ends: atexit for the
+	   engine's own exit() paths (Sys_Error, ERR_FATAL), signal handlers
+	   for a crash or an interrupt, which also name the running test. */
+	t_owner = getpid();
+	atexit(t_cleanup_tmp);
+	t_install_handlers();
 
 	/* The filesystem stores realpath()s (/var is /private/var on macOS);
 	   use the same spelling so tests can match paths in its output. */
@@ -660,7 +817,7 @@ main(int argc, char **argv)
 
 	Com_EndRedirect();
 	t_current = NULL;
-	t_rm_tree(t_tmp);
+	t_cleanup_tmp();
 	t_text_free(&t_cap);
 	free(list);
 

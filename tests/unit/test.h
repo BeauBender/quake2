@@ -123,10 +123,14 @@ void t_rearm_abortframe(void);
 /*
  * Runs fn(arg) in a forked child with the console capture going to the
  * child's stdout, and returns the child's exit status (-1 if it did not
- * exit normally). Engine paths that end in Com_Error(ERR_FATAL) or
- * Sys_Error exit the process; this is how a test observes them. The
+ * exit normally, T_EXIT_TIMEOUT if it ran longer than t_child_timeout
+ * seconds and was killed). Engine paths that end in Com_Error(ERR_FATAL)
+ * or Sys_Error exit the process; this is how a test observes them. The
  * child's combined stdout and stderr is copied into out (NUL-terminated).
+ * A T_* check that fails inside the child fails the calling test.
  */
+#define T_EXIT_TIMEOUT (-2)
+extern unsigned t_child_timeout;
 int t_expect_exit(void (*fn)(void *), void *arg, char *out, size_t outlen);
 
 /*

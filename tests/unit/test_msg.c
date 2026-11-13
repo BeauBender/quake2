@@ -32,6 +32,8 @@ TEST(msg_scalar_roundtrip)
 	sizebuf_t sb;
 	byte buf[256];
 	t_text_t pin = {0};
+	const vec3_t pos = { 12.5f, -0.125f, 4095.875f };
+	vec3_t readpos;
 
 	init_msg(&sb, buf, sizeof(buf));
 	MSG_WriteChar(&sb, -5);
@@ -51,6 +53,7 @@ TEST(msg_scalar_roundtrip)
 	MSG_WriteAngle(&sb, 90.0f);
 	MSG_WriteAngle(&sb, -45.0f);
 	MSG_WriteAngle16(&sb, 359.0f);
+	MSG_WritePos(&sb, pos);
 
 	MSG_BeginReading(&sb);
 	T_EQ_INT(MSG_ReadChar(&sb), -5);
@@ -74,6 +77,11 @@ TEST(msg_scalar_roundtrip)
 	/* MSG_ReadAngle16 reads a signed short: 359 degrees comes back as
 	   about -1 (the same direction). */
 	T_EQ_FLT(MSG_ReadAngle16(&sb), SHORT2ANGLE((short)ANGLE2SHORT(359.0f)));
+	/* A position is three coords: 1/8 units in three shorts. */
+	MSG_ReadPos(&sb, readpos);
+	T_EQ_FLT(readpos[0], 12.5f);
+	T_EQ_FLT(readpos[1], -0.125f);
+	T_EQ_FLT(readpos[2], 4095.875f);
 	T_EQ_INT(sb.readcount, sb.cursize);
 
 	t_text_hex(&pin, sb.data, sb.cursize);

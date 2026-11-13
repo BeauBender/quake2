@@ -298,16 +298,30 @@ TEST(cmd_alias)
 
 TEST(cmd_wait)
 {
-	/* "wait" stops the buffer until about 16 ms have passed. */
+	int start;
+
+	/* "wait" stops the buffer until more than 16 ms of wall-clock time
+	   (Sys_Milliseconds) have passed; Cbuf_Execute compares against the
+	   time "wait" ran. No public function sets that clock or the wait
+	   mark, so this test depends on real time, and is written so that it
+	   cannot flake: the "still waiting" check is made only when the
+	   second Cbuf_Execute provably came within 16 ms of the "wait" (the
+	   wait ran at or after start), and the release follows a sleep
+	   longer than the interval (usleep sleeps at least that long). */
 	Sys_Milliseconds();
 	usleep(2000);
 
 	t_console_reset();
+	start = Sys_Milliseconds();
 	Cbuf_AddText("echo before; wait; echo after\n");
 	Cbuf_Execute();
 	T_EQ_STR(t_console(), "before \n");
 	Cbuf_Execute();
-	T_EQ_STR(t_console(), "before \n");
+
+	if (Sys_Milliseconds() - start <= 16)
+	{
+		T_EQ_STR(t_console(), "before \n");
+	}
 
 	usleep(40 * 1000);
 	Cbuf_Execute();

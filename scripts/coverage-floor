@@ -4,7 +4,8 @@
 # total has risen by a whole percent; raise the floor in the same change.
 # Values are whole percent, rounded down from the measured total.
 #
-# llvm-cov: measured 33.12% with Apple clang 21 on macOS arm64 (TASK29).
+# llvm-cov: measured 33.21% with Apple clang 21 on macOS arm64 (TASK29),
+# from an empty build/coverage (the script cleans it on every run).
 # gcov: NOT measured. TASK29 was written on a host without gcc, and the
 # Linux CI job only runs on a pull request. 25 is a conservative lower
 # bound chosen below the llvm-cov measurement (gcov counts lines a little
