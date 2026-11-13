@@ -157,7 +157,7 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_tempentities.c` sustain `id` | `MSG_ReadShort` | `s->id`, compared only | not an index | ok |
 | `cl_tempentities.c` `CL_ParseTEnt` and helpers (`CL_ParseLaser`, `CL_ParseNuke`, `CL_ParseWidow`, `CL_ParseHeatBeam`, `CL_ParseBeam`) positions, directions, counts, `magnitude` | `MSG_ReadPos`, `MSG_ReadDir`, `MSG_ReadByte`, `MSG_ReadShort` | vectors, particle counts, speeds | counts are loop bounds over the free-particle list (allocation stops when it is empty); `MSG_ReadDir` bounds its index | ok |
 | `cl_tempentities.c` `CL_ParseParticles` | `MSG_ReadPos`, `MSG_ReadDir`, `MSG_ReadByte` ×2 | `CL_ParticleEffect` | the function has no caller (dead code); its colour would be the same class as D9 | ok (unreachable) |
-| `cl_tempentities.c` `TE_LASER_SPARKS`/`TE_WELDING_SPARKS` `color`, `CL_ParseSteam` `r` | `MSG_ReadByte` | particle colour `color + (randk() & 7)`, up to 262 | none; reaches the renderers unmasked → Defect D9 | defect (D9) |
+| `cl_tempentities.c` `TE_LASER_SPARKS`/`TE_WELDING_SPARKS` `color`, `CL_ParseSteam` `r` | `MSG_ReadByte` | particle colour plus a small random offset, which can exceed 255 | none; reaches the renderers unmasked → Defect D9 | defect (D9) |
 | `cl_tempentities.c` `TE_TUNNEL_SPARKS`, `TE_FORCEWALL` `color` | `MSG_ReadByte` | particle colour used as is (0..255) | in range | ok |
 | `sw_part.c` `R_DrawParticle` `vid_alphamap[(color << 8) + pdest]` / `[color + (pdest << 8)]` | `particle_t.color` | translucency table index | **no mask** → Defect D9 | defect (D9) |
 | `gl1_main.c` `R_DrawParticles2` `colortable[p->color]` | `particle_t.color` | `d_8to24table[256]` index | **no mask** (the point-sprite path and gl3 mask `& 0xFF`) → Defect D9 | defect (D9) |
@@ -198,7 +198,7 @@ before the loop's test (D12), that is the bug to look for.
 | `sv_main.c` `SV_ReadPackets` qport | `MSG_ReadShort & 0xffff` | client match | value only compared | ok |
 | `sv_user.c` `SV_ExecuteClientMessage` `c` | `MSG_ReadByte` | `switch`; `default` drops | `readcount > cursize` tested each loop; `c == -1` ends | ok |
 | `sv_user.c` clc_userinfo `MSG_ReadString` | string | `Q_strlcpy` into `cl->userinfo[MAX_INFO_STRING]` then `SV_UserinfoChanged` | truncates; `SV_UserinfoChanged` masks name high bit, clamps rate | ok |
-| `sv_user.c` clc_move `checksum`, CRC over `net_message.data + checksumIndex + 1` | `MSG_ReadByte`; CRC length `readcount - checksumIndex - 1` | compared to `COM_BlockSequenceCRCByte(...)` | length clamped to 60 inside, but **computed before any `readcount > cursize` test**: a `clc_move` at the end of a full-size packet reads up to 55 bytes past `net_message_buffer` → Defect D12 | defect (D12) |
+| `sv_user.c` clc_move `checksum`, CRC over `net_message.data + checksumIndex + 1` | `MSG_ReadByte`; CRC length `readcount - checksumIndex - 1` | compared to `COM_BlockSequenceCRCByte(...)` | length clamped to 60 inside, but **computed before any `readcount > cursize` test**: a truncated `clc_move` in a large packet reads past `net_message_buffer` → Defect D12 | defect (D12) |
 | `sv_user.c` clc_move `lastframe` | `MSG_ReadLong` | `cl->frames[lastframe & UPDATE_MASK]`, `frame_latency[lastframe & (LATENCY_COUNTS-1)]` | both masked; only read when `lastframe > 0` | ok |
 | `sv_user.c` clc_move `net_drop = cl->netchan.dropped` | from netchan | loop count of `SV_ClientThink` | `net_drop < 20` guard | ok |
 | `sv_user.c` clc_move usercmds | `MSG_ReadDeltaUsercmd` ×3 | `SV_ClientThink` | `msec` consumed as time; `commandMsec` underflow guarded by `sv_enforcetime` | ok |
@@ -282,21 +282,14 @@ only by `num_entities` (the stale values read past the end are then used as
 an index into `cl.sound_precache[]`). When `num_entities > 1024` the write
 `sounds[i]` runs off the end of the 4 KB stack array.
 
-Hostile input and reachability: `CL_ParsePacketEntities` has no ordering or
-uniqueness check on `newnum`. With no delta frame (`oldnum = 99999`) every
-entity record is a "delta from baseline" and is appended, so the same small
-entity number can be repeated; a record with no field bits and an 8-bit
-number costs 2 bytes. One packet (at most `MAX_MSGLEN - 1` = 1399 bytes, less
-the netchan and frame headers) therefore carries about 680 entities. A second
-frame that deltas from the first carries all of those over unchanged (the
-"unchanged" loop runs for every old entry below the first new number) and
-appends about 680 more, so the frame exceeds 1024 entities after two packets
-from the server. The values written are each entity's `sound` byte, chosen by
+Hostile input and reachability: there is no cap on `num_entities` and no
+uniqueness check on the entity numbers in a frame, so a server can make a
+frame's count exceed `MAX_EDICTS` within a few packets. The values written are each entity's `sound` byte, chosen by
 the server, at stack slots past the array: server-driven stack memory
 corruption on the client, which the scale rates critical.
 
 Confirmation (ASan harness linking the real `S_BuildSoundList` with
-`num_entities = 1380`): AddressSanitizer reports a `stack-buffer-overflow`
+`num_entities` above the array size): AddressSanitizer reports a `stack-buffer-overflow`
 WRITE of size 4 in `S_BuildSoundList` at `sound.c:1368`. The faulting address
 is reported at frame offset 4128, which with ASan's 32-byte left redzone is
 the first element past the end of the 4096-byte `sounds` array, i.e.
@@ -416,8 +409,8 @@ callers are `SVCmd_AddIP_f` and `SVCmd_RemoveIP_f`, which pass `gi.argv(2)`:
 the address argument of the `sv addip` / `sv removeip` server commands
 (`ServerCommand`, reached from the engine's `sv` command). `SV_FilterPacket`,
 which checks connecting clients' `ip` userinfo, does not call it. The argument
-is a `COM_Parse` token of up to 1023 characters, so an argument with 128 or
-more consecutive digits writes past `num` on the game module's stack.
+is a `COM_Parse` token, which can be longer than `num`, so an octet longer
+than the buffer writes past `num` on the game module's stack.
 
 Reachability: the `sv` command runs from the server console, a config file
 the server executes, or an rcon command that passed the password check. A
@@ -450,9 +443,9 @@ Trace: `CL_ParseTEnt` (`cl_tempentities.c`) reads a colour with
 `MSG_ReadByte` (0..255) for `TE_LASER_SPARKS` and `TE_WELDING_SPARKS`
 (passed to `CL_ParticleEffect2`, `cl_particles.c`) and for `TE_STEAM`
 (`CL_ParseSteam`, passed to `CL_ParticleSteamEffect` or stored for the
-sustained `CL_ParticleSteamEffect2`, `cl_effects.c`). Each of those sets
-`p->color = color + (randk() & 7)`, so a particle's colour reaches 262. No
-step masks it: `CL_AddParticles` passes it to `V_AddParticle`
+sustained `CL_ParticleSteamEffect2`, `cl_effects.c`). Each of those adds a
+small random offset to the colour, so a colour value near the top of the byte
+range ends up beyond 255. No step masks it: `CL_AddParticles` passes it to `V_AddParticle`
 (`cl_view.c`), which stores it in `particle_t.color` (`int`), and the
 refresh module receives it in `refdef.particles`.
 
@@ -475,16 +468,17 @@ Assumption about the table extent: the stock `colormap.pcx` is 256 by 320
 pixels (81920 bytes), 64 light-level rows followed by the 256 by 256
 translucency table, so `vid_alphamap` ends exactly at the end of the heap
 block. `LoadPCX` does not check the image size, so the code itself guarantees
-no extent; with the stock file, a colour of 256..262 reads up to 1792 bytes
-past the end of the block in the 66% case and up to 7 bytes in the 33% case,
-and gl1 reads up to 7 entries (28 bytes) past `d_8to24table`. The values read
+no extent; with the stock file, a colour beyond 255 reads past the end of the
+block in both translucent cases (further in the 66% case, where the colour
+selects a row), and gl1 reads past the end of `d_8to24table`. The values read
 become pixel colours (seen only by the victim). Whether the 66% read faults
 depends on where the allocator places the block (an 80 KB block can end at a
 page boundary).
 
 Hostile input: a temporary entity of one of those three types with a colour
-byte above 248. Stock game code sends fixed colours below 249, so normal
-play is unaffected. Severity high by the scale (server-driven heap
+value that, after the engine's random offset, exceeds the table's index
+range. Stock game code sends fixed colours that stay in range, so normal play
+is unaffected. Severity high by the scale (server-driven heap
 out-of-bounds read that can fault); confidence medium because the fault
 depends on allocator placement. Fix: mask the colour with `& 0xFF` where the
 renderers consume it (as gl3 and the gl1 point path already do), or at
@@ -548,15 +542,12 @@ In `SV_ExecuteClientMessage` (`sv_user.c`) the `clc_move` case records
 three `MSG_ReadDeltaUsercmd`, then (for a client in `cs_spawned`) computes
 `COM_BlockSequenceCRCByte(net_message.data + checksumIndex + 1,
 net_message.readcount - checksumIndex - 1, ...)` before the loop's
-`readcount > cursize` test runs. On a short read `MSG_ReadByte` returns `-1`,
-so each delta usercmd's bit mask has every field bit set and advances
-`readcount` by its maximum of 17 bytes; the long adds 4. If the `clc_move`
-byte is the last byte of the message, the CRC input starts one byte past the
-message end and is 55 bytes long (below the 60-byte clamp in
-`COM_BlockSequenceCRCByte`), so `memcpy` reads up to
-`net_message.data + cursize + 55`. With a datagram of the largest accepted
-size (1399 bytes, `NET_GetPacket` drops one of `MAX_MSGLEN`) that is up to 55
-bytes past the 1400-byte static `net_message_buffer` (`netchan.c`). The
+`readcount > cursize` test runs. On a short read the reads keep advancing
+`readcount` past `cursize`, so the CRC length counts bytes that were never
+received, and `memcpy` in `COM_BlockSequenceCRCByte` (clamped to 60 bytes)
+reads past the end of the received data. For a datagram near the largest
+accepted size that read runs past the end of the 1400-byte static
+`net_message_buffer` (`netchan.c`). The
 result is only compared with the checksum byte, which is `-1` after a short
 read and never matches, so the packet's moves are discarded and nothing read
 is returned. Reachable by any spawned client. Severity low (read of adjacent
@@ -572,11 +563,10 @@ net_message.cursize` (and drop) before computing the checksum.
 writes the datagram with `recvfrom` and sets `cursize`, and nothing writes a
 terminator after it (the tokenizer works on the copy that
 `MSG_ReadStringLine` made, not on the buffer). The bytes after `cursize` are
-left over from earlier datagrams; an oversize datagram, although dropped,
-still fills the whole buffer. So an unauthenticated peer can send an rcon
-datagram without a NUL after one that filled the buffer, and the print runs
-past the end of `net_message_buffer` into the static memory that follows
-until it meets a zero byte. The output goes to the server console and log,
+left over from earlier datagrams. The receive buffer is not terminated, so
+the print can run past the received data, and past the end of
+`net_message_buffer` into the static memory that follows until it meets a
+zero byte; an unauthenticated peer reaches it. The output goes to the server console and log,
 not to the peer (the redirect to the sender starts after the print).
 Severity low (out-of-bounds read of adjacent static memory, logged locally).
 This replaces the earlier hardening note H5, which said both that the buffer
