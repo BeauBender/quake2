@@ -50,7 +50,7 @@ throwaway host-side harness (in a scratch directory, not committed) linked the
 real function against minimal stubs and ran crafted in-memory inputs under
 `-fsanitize=address`; its output is quoted in the relevant section. Harnesses
 were built for `collision.c` (the earlier commits), `files/models.c`,
-`files/pvs.c` and `gl1/gl1_warp.c`. Renderer surface, light and sound code
+`files/pvs.c`, `files/pcx.c` and `gl1/gl1_warp.c`. Renderer surface, light and sound code
 pulls in SDL/GL or the full client import struct and was not harnessed; those
 findings are static traces with a stated confidence.
 
@@ -428,7 +428,7 @@ it through `PCX_RLE_Decode`, which bounds both ends of every run.
 | `PCX_Decode` | file length | header read | `if (len < sizeof(pcx_t))` | ok |
 | `PCX_Decode` | `manufacturer`, `version`, `encoding` | format gate | explicit equality tests | ok |
 | `PCX_Decode` | `xmax-xmin`, `ymax-ymin`, `bytes_per_line`, `color_planes`, `bits_per_pixel` | dimensions, loop bounds | each tested `<= 0` and rejected with "Bad pcx file" | ok |
-| `PCX_Decode` | `full_size = (h+1)*(w+1)` (`*4` for 24/32-bit) | `out = malloc(full_size)` | `int`; both dimensions are positive `short` differences, so at most 65535 each and `(65536*65536)*4` overflows `int` to a small or negative `malloc`, which then overflows on decode | **defect D19** (heap overflow write; the dimensions are two subtractions of file-supplied shorts) |
+| `PCX_Decode` | `full_size = (h+1)*(w+1)` (`*4` for 24/32-bit) | `out = malloc(full_size)`, then every row written at `pix += (pcx_width + 1)` (`* 4`) | `int`, no overflow test; each dimension is a difference of two file-supplied shorts, so `pcx_width + 1` and `pcx_height + 1` reach 65536, and the product (with or without the `* 4`) wraps to a tiny value. The row writes do not depend on the RLE input: the 8-bit path `memcpy(pix, line, pcx_width + 1)` and the 24/32-bit plane loop write a full row whether or not `PCX_RLE_Decode` stopped at the end of the input, so a header-only file is enough | **defect D19** (heap buffer overflow write, ASAN-confirmed in the 8-bit and the 24-bit mode, see below) |
 | `PCX_RLE_Decode` | run byte, data byte | writes `pix[x++]`, reads `*raw++` | `if (raw >= raw_max)` before each read, `if (pix_max <= (pix + x))` before each write; both set `image_issues` and stop | ok |
 | `PCX_Decode` (24/32-bit) | `line[x + bytes_per_line * j]` | plane assembly into `pix[4*x+j]` | `line` is `malloc(Q_max(bytes_per_line, pcx_width+1) * color_planes)`, and the inner index stays below that; `bytes_per_line <= pcx_width` only sets `image_issues` | ok |
 | `PCX_Decode` (8-bit palette) | palette at `pcx + len - 768`, marker at `pcx + len - 769` | `memcpy(*palette, ..., 768)` | guarded by `if (len > 768)`; else `image_issues` | ok |
@@ -441,7 +441,8 @@ it through `PCX_RLE_Decode`, which bounds both ends of every run.
 
 All three share the shape: header, then `offsets[0]` to the first mip. The
 body check `((size - ofs) / height) < width` rejects a body too small for
-`width * height` (`* 4` for M32).
+`width * height`; the M32 variant multiplies `width * 4` in `int` and is
+bypassed by a wrapping width (D27).
 
 | Function | Field | Use | Check (quoted) or absence | Verdict |
 |---|---|---|---|---|
@@ -450,8 +451,24 @@ body check `((size - ofs) / height) < width` rejects a body too small for
 | `LoadM8` | `version` | format gate | `LittleLong(mt->version) != M8_VERSION` | ok |
 | `LoadM8` | `width[0]`, `height[0]`, `offsets[0]` | palette expand loop and `load_image` | same body check as `LoadWal` | ok |
 | `LoadM8` | each source byte | `mt->palette[value]` | `value` is a `byte`, the palette has 256 entries; `image_buffer = malloc((size - ofs) * 4)` matches the loop `i < (size - ofs)` | ok |
-| `LoadM32` | `version`, dimensions | as above, `*4` in the body check and `(size - ofs) / 4` as the pixel count | `((size - ofs) / height) < (width * 4)`; `width * 4` is `int` and a `width` near `INT_MAX/4` overflows, but the `width <= 0` sibling and the earlier `(size - ofs)` bound keep a real file in range | hardening |
-| `GetWalInfo`, `GetM8Info`, `GetM32Info` | — | these never write `*width`/`*height`; callers rely on the zero-init | ok (but see `LoadHiColorImage`) |
+| `LoadM32` | `version` | format gate | `LittleLong(mt->version) != M32_VERSION` | ok |
+| `LoadM32` | `width[0]`, `height[0]`, `offsets[0]` | `load_image((byte *)mt + ofs, width, height, (size - ofs) / 4, ...)`; the renderer then walks `width * height` 4-byte pixels of the file buffer | `((size - ofs) / height) < (width * 4)`; `width * 4` is `int` and wraps for any `width` above `INT_MAX / 4`, so a hostile width with a small product passes against a body of a few bytes. gl1 `R_LoadPic` → `R_Upload32` (→ `SmoothColorImage` with `r_scale8bittextures`) → `R_Upload32Native` → `R_LightScaleTexture` rewrites `width * height` pixels in place, then scans the alpha bytes and hands the buffer to `glTexImage2D`; without NPOT support `R_Upload32Soft` resamples from the same buffer. gl3 `GL3_Upload32` scans the alpha bytes over `width * height` pixels and passes the buffer to `glTexImage2D`. soft `R_LoadPic` converts only `data_size` pixels and `R_LoadPic8` allocates `R_GetImageMipsSize(width * height)` itself, so it stays in bounds (one very large allocation, `ERR_FATAL` if it fails) | **defect D27** (gl1: heap buffer overflow write past the file buffer; gl3: heap over-read; the fix is the comparison in 64-bit arithmetic, `(long long)width * height * 4 > size - ofs`) |
+| `GetWalInfo` | `width`, `height` | `*width = LittleLong(mt->width)`, `*height = ...`, which become `realwidth`/`realheight` in `LoadHiColorImage` (`files/stb.c`) | `if (size < sizeof(miptex_t))` bounds the header read; no version test (`miptex_t` has none) and the values are not checked: zero, negative and huge pass | hardening (see the verdict note below the table) |
+| `GetM8Info` | `width[0]`, `height[0]` | as `GetWalInfo` | `size < sizeof(m8tex_t) \|\| LittleLong(mt->version) != M8_VERSION`; values not checked | hardening |
+| `GetM32Info` | `width[0]`, `height[0]` | as `GetWalInfo` | `size < sizeof(m32tex_t) \|\| LittleLong(mt->version) != M32_VERSION`; values not checked | hardening |
+
+The three `Get*Info` functions read only the header they size-check, so they
+are memory-safe themselves. Their results matter only when a TGA, PNG or JPG
+replacement with the same base name loads: `LoadHiColorImage` uses the
+replacement if `width >= realwidth && height >= realheight`, which bounds
+positive values by the stb dimensions but lets zero (replaced by the stb size)
+and negative values through. A negative `realwidth`/`realheight` then reaches
+the renderer: gl1 and gl3 copy it into `image->width` only when it is smaller,
+soft `R_LoadPic` uses it as the resize target (`malloc(uploadwidth *
+uploadheight * 4)`, `ResizeSTB`) and as `asset_width`/`asset_height`, the
+skin size of the soft alias rasterizer. Static trace, medium confidence on the
+downstream effect; carded under FIX19 as hardening (reject non-positive
+dimensions in the three functions).
 
 ### stb_image callers (repo code only)
 
@@ -467,14 +484,39 @@ body check `((size - ofs) / height) < width` rejects a body too small for
 | `sw_image.c` `R_LoadPic8` | `size`, `data_size` | `full_size = R_GetImageMipsSize(size)`, `malloc(full_size)`, `memcpy(pixels[0], pic, data_size)` | `data_size > full_size` is clamped to `full_size`; `size` and `data_size` both come from the loader as `width * height`-class values and agree | ok |
 | `sw_image.c` resize path | `uploadwidth * uploadheight * 4` | `malloc(pic32)`, `ResizeSTB` | dimensions are `realwidth`/`realheight` or halved copies of the loader size; no overflow guard, same `int` product class | hardening |
 
-Severity note: D19 and D22 need an image whose two dimensions multiply past
-`INT_MAX`. PCX dimensions are bounded to 65535 each, so D19 needs close to the
-maximum in both (about 4 GB of pixels); it is a real integer overflow but the
-`malloc` it produces is enormous and usually fails first. D22 depends on stb's
-own dimension cap. Both are medium at most. D20 and D21 are read-only and low.
-No host harness was run for this section: the PCX and WAL decoders pull in the
-renderer `ri` import struct and `load_image`, which do not compile standalone
-without a large stub surface; the findings are static traces, and the
+Severity note: D19 is high. The wrapped `full_size` is a tiny allocation, not
+an enormous one, so nothing fails first: the header alone (a file of a few
+hundred bytes) sets the dimensions, and each row write lands past the
+allocation. A PCX is requested from a server as `pics/%s.pcx` for every
+`CS_IMAGES` configstring and as a model skin, so this is a server-reachable
+heap write against a default client. Proof: a host-side harness (not
+committed) compiled the real `files/pcx.c` with stubs for `ri`,
+`Com_Printf` and the byte-order helpers and called `PCX_Decode` on a
+header-only in-memory file under `-fsanitize=address`:
+
+```text
+8-bit, one plane, 65536 x 65536:
+ERROR: AddressSanitizer: heap-buffer-overflow ... WRITE of size 65536
+    #0 in __asan_memcpy  #1 in PCX_Decode pcx.c:372
+... located 0 bytes after 1-byte region
+
+24-bit, three planes, 32768 x 32768:
+ERROR: AddressSanitizer: heap-buffer-overflow ... WRITE of size 1
+    #0 in PCX_Decode pcx.c:275
+... located 0 bytes after 1-byte region
+```
+
+D27 (M32) is a static trace with high confidence: the wrap is plain `int`
+arithmetic, and the gl1 in-place rewrite of `width * height` pixels follows
+from `R_Upload32Native` and `R_LightScaleTexture` with no other size in
+between. It is high: `.m32` is never named by the download walk (wall
+textures are requested as `textures/%s.wal`, and `GetTexImage` tries
+`textures/%s.m32` when no `.wal` loads), but the `download` console command,
+which a server can issue through `svc_stufftext`, fetches any name the filter
+accepts. The write needs gl1 (`vid_renderer gl1`; the default is gl3, where
+the same file gives a heap over-read). D22 depends on stb's own dimension cap
+and is medium. D20 and D21 are read-only and low. The WAL, M8 and stb paths
+were not harnessed (they go through `load_image` into a renderer); the
 `PCX_RLE_Decode` bounds were confirmed by reading every read and write in the
 decode loop.
 
@@ -652,7 +694,7 @@ reachability in [Where each asset can come from](#where-each-asset-can-come-from
 | D16 | MD2 `lightnormalindex` | a vertex normal index 162..255 reads up to ~1 KB past the 162-row `r_avertexnormals` table | low | high (static) | FIX18 |
 | D17 | MD2 soft skin path | `skinwidth`/`skinheight` unchecked (div, scale); `st` coords never bounded by the skin size, over-reading texels in the rasterizer | medium | medium (static) | FIX18 |
 | D18 | SP2 `Mod_LoadSP2` | no length check (reads/writes past a short file); `numframes` zero divides, negative indexes `skins[]`/`frames[]` out of range | high | high (ASAN for the over-read) | FIX18 |
-| D19 | PCX `PCX_Decode` | `full_size = (h+1)*(w+1)[*4]` is `int` and overflows for near-max dimensions, undersizing the decode buffer | medium | high (static) | FIX19 |
+| D19 | PCX `PCX_Decode` | `full_size = (h+1)*(w+1)[*4]` is `int` with no overflow test; header dimensions alone wrap it to a tiny `malloc`, and every row write then lands past it regardless of the RLE input | high | high (ASAN, 8-bit and 24-bit) | FIX19 |
 | D20 | PCX 1/2/4-bit path | `line[x / div]` can exceed a `bytes_per_line`-byte row when `bytes_per_line` is tiny | low | medium (static) | FIX19 |
 | D21 | `GetPCXInfo` | reads `xmax`/`ymax` without a header-size check; over-reads a short file | low | high (static) | FIX19 |
 | D22 | `R_LoadImage`/soft scale | `width * height` (and `* 4`) is `int` and can overflow for large stb dimensions; the gl renderers guard the scale product, soft and the copy length do not | medium | medium (static) | FIX19 |
@@ -660,6 +702,7 @@ reachability in [Where each asset can come from](#where-each-asset-can-come-from
 | D24 | `wave.c` cue `loopstart` | loop point unbounded; `SDL_Cache` turns it into a mixer `pos`/`end` past the cached sample | medium | medium (static) | FIX20 |
 | D25 | `wave.c` data chunk | the data-length word and `dataofs` are trusted without comparison to `wavlength`; four consumers read `info.samples` elements from `data + dataofs` | high | high (static) | FIX20 |
 | D26 | `cl_cin.c` `SCR_PlayCinematic` | still-image name copied into `char namewe[256]` by length; `MAX_OSPATH` is 4096 on non-Apple Unix, so a long server name overruns the stack buffer | high | high (static) | FIX21 |
+| D27 | M32 `LoadM32` | `width * 4` wraps in the body-size check, so a hostile width passes against a few-byte body; gl1 then rewrites `width * height` pixels in place past the file buffer (gl3 over-reads) | high | high (static) | FIX19 |
 
 Fixed in this branch: D2, D3 (negative side), D15 — each a one-line bound
 check in its loader, committed separately and noted in its row.
@@ -677,7 +720,7 @@ here (no harness is committed).
 |---|---|---|---|
 | FIX17 | #115 | D7, D8, D9, D10, D11, D12, D13, D14 (renderer BSP loaders) | high |
 | FIX18 | #116 | D16, D17, D18 (MD2 and SP2) | high |
-| FIX19 | #117 | D19, D20, D21, D22 (image loaders) | medium |
+| FIX19 | #117 | D19, D20, D21, D22, D27 (image loaders), plus hardening: non-positive dimensions from `GetWalInfo`/`GetM8Info`/`GetM32Info` | high |
 | FIX20 | #118 | D23, D24, D25 (WAV) | high |
 | FIX21 | #119 | D26 (cinematic still-image name) | high |
 | FIX22 | #120 | D4, D5, D6 (pak directory) | high |
