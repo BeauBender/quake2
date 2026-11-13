@@ -125,11 +125,11 @@ R_ScreenShot(void)
 
 	R_ApplyGLBuffer();	// draw the batched 2D quads, or they are missing from the read
 
-	buffer = malloc(w*h*3);
+	buffer = malloc((size_t)w * h * 3);
 
 	if (!buffer)
 	{
-		Com_Printf("%s: Couldn't malloc %d bytes\n", __func__, w*h*3);
+		Com_Printf("%s: Couldn't malloc %zu bytes\n", __func__, (size_t)w * h * 3);
 		return;
 	}
 
@@ -140,7 +140,7 @@ R_ScreenShot(void)
 	// but we need them row-wise left to right, top to bottom.
 	// so swap bottom rows with top rows
 	{
-		size_t bytesPerRow = 3*w;
+		size_t bytesPerRow = (size_t)3 * w;
 		YQ2_VLA(byte, rowBuffer, bytesPerRow);
 		byte *curRowL = buffer; // first byte of first row
 		byte *curRowH = buffer + bytesPerRow*(h-1); // first byte of last row
