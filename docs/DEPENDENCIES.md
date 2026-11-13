@@ -32,7 +32,7 @@ This file is the fork's dependency manifest. It lists the system libraries the b
 | Built on | macOS only, as a static `libSDL3.a` (`build/<release\|debug>/sdl3/`), with the stock `include/build_config/SDL_build_config_macos.h` and the source list, header paths, ARC and frameworks of the tarball's Xcode project. Linux, BSD and Windows builds still link the system SDL3 found by `pkgconf`. |
 | Linking | The client executable links all of `libSDL3.a` (`-force_load`) and exports the SDL API. The renderer dylibs contain no SDL; their `_SDL_*` imports are bound at load time to the executable's copy (`-Wl,-U,<symbol>`), so one SDL instance serves the process. |
 | Update procedure | `third_party/SDL3/README.md`, "Update procedure". |
-| Note | SDL's dynamic API (`src/dynapi`) stays enabled, as upstream ships it: setting the environment variable `SDL3_DYNAMIC_API` to a library path makes the statically linked SDL forward every call to that library. Turning it off needs an edit to a vendored file, which this import does not make. |
+| Note | SDL's dynamic API (`src/dynapi`) stays enabled, as upstream ships it: setting the environment variable `SDL3_DYNAMIC_API` to a library path makes the statically linked SDL forward every call to that library. It cannot be disabled by a compiler flag: `SDL_dynapi.h` refuses a command-line define. It can be neutralised without touching vendored files by clearing the `SDL3_DYNAMIC_API` environment variable in the engine's `main` before the first SDL call; doing so is left to a follow-up card. |
 
 ## In-tree third-party files
 
