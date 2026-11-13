@@ -12,8 +12,11 @@
 # find -type f or be followed by shasum. Offline: only shasum, grep, find,
 # sort, comm.
 #
-# Not checked: file modes (the executable bit), and anything outside
-# third_party/SDL3. The manifest and its pin in docs/DEPENDENCIES.md are an
+# It also fails if anything other than SDL3/ and a regular sdl3.make sits
+# directly under third_party/ (the credential scan exempts that directory).
+#
+# Not checked: file modes (the executable bit), and the content of
+# third_party/sdl3.make. The manifest and its pin in docs/DEPENDENCIES.md are an
 # in-repository trust root: a change that edits MANIFEST.sha256 or the pin
 # line passes this check by construction, so a reviewer must re-derive such
 # a change from the upstream tarball.
@@ -26,6 +29,28 @@ root=${1:-"$(dirname "$0")/.."}
 cd "$root"
 dir=third_party/SDL3
 manifest=$dir/MANIFEST.sha256
+
+# third_party/ holds only the SDL3 tree and its build rules. The credential
+# scan exempts all of third_party/, so anything else parked there would be
+# neither scanned nor covered by the manifest. find -P (the default) does
+# not follow links; a listing that fails is a failure, not an empty list.
+if [ -L third_party ] || [ ! -d third_party ]; then
+	echo "check-vendored: third_party is a symlink or not a directory"
+	exit 1
+fi
+if ! entries=$(find third_party -mindepth 1 -maxdepth 1); then
+	echo "check-vendored: cannot list third_party"
+	exit 1
+fi
+stray=$(printf '%s\n' "$entries" | grep -vxF -e third_party/SDL3 -e third_party/sdl3.make || true)
+if [ -L third_party/sdl3.make ] || { [ -e third_party/sdl3.make ] && [ ! -f third_party/sdl3.make ]; }; then
+	stray=$(printf '%s\n%s' third_party/sdl3.make "$stray")
+fi
+stray=$(printf '%s\n' "$stray" | grep . || true)
+if [ -n "$stray" ]; then
+	echo "check-vendored: $(printf '%s\n' "$stray" | wc -l | tr -d ' ') unexpected entries under third_party/ (only SDL3/ and sdl3.make belong there), first: $(printf '%s\n' "$stray" | head -n 1)"
+	exit 1
+fi
 
 if [ -L "$dir" ] || [ ! -d "$dir" ]; then
 	echo "check-vendored: $dir is a symlink or not a directory"
