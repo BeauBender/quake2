@@ -1036,7 +1036,8 @@ st_make_demo_script() { # TASK70: a demo script holds only commands of this tree
     if (check_demo_script "$tmp/ds/bad.cfg" bad) >/dev/null 2>&1; then st_fail "a script without stop before quit must be refused"; return 1; fi
     { printf '%s\n' "$good" | sed 's/^record good$/record bad/'; echo wait; } > "$tmp/ds/bad.cfg"
     if (check_demo_script "$tmp/ds/bad.cfg" bad) >/dev/null 2>&1; then st_fail "a script that does not end with quit must be refused"; return 1; fi
-    for s in '/^\/\/ pins: messages/d' 's/^\/\/ pins: messages 10 20$/\/\/ pins: messages 20 10/' 's/^\/\/ pins: messages 10 20$/\/\/ pins: messages 5 20/'; do
+    for s in '/^\/\/ pins: messages/d' 's/^\/\/ pins: messages 10 20$/\/\/ pins: messages 20 10/' 's/^\/\/ pins: messages 10 20$/\/\/ pins: messages 5 20/' \
+        's/^\/\/ pins: messages 10 20$/\/\/ pins: messages 10 1234567890/'; do
         printf '%s\n' "$good" | sed 's/^record good$/record bad/' | sed "$s" > "$tmp/ds/bad.cfg"
         if (check_demo_script "$tmp/ds/bad.cfg" bad) >/dev/null 2>&1; then st_fail "a script whose message range is edited by '$s' must be refused"; return 1; fi
     done
