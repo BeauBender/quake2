@@ -217,6 +217,7 @@ TEST(cl_server_messages_and_configstring_bounds)
 	t_console_reset();
 	send_configstring(MAX_CONFIGSTRINGS, "past");
 	T_CONSOLE_HAS("bad index");
+	t_console_reset();
 	send_configstring(-1, "before");
 	T_CONSOLE_HAS("bad index");
 

@@ -52,6 +52,11 @@ show_layout(const char *layout, int statindex, int statvalue)
 	cl.frame.playerstate.stats[STAT_LAYOUTS] = 1;
 	Q_strlcpy(cl.layout, layout, sizeof(cl.layout));
 	strcpy(cl.configstrings[CS_IMAGES + PIC_VALUE], "w_blaster");
+	strcpy(cl.configstrings[CS_IMAGES + MAX_IMAGES - 1], "last_image");
+
+	/* What lies right after the stats array names a valid image, so
+	   that a read one past the array would draw it. */
+	cl.frame.num_entities = PIC_VALUE;
 
 	/* The names past both ends of the image table, so that a read
 	   there would draw something. */
@@ -142,7 +147,7 @@ TEST(hud_pic_value_outside_range)
 
 	/* The last image of the table itself is inside it. */
 	show_layout("pic 20", PIC_STAT, MAX_IMAGES - 1);
-	T_EQ_INT(stub_calls.pics, 0); /* its name is empty: nothing to draw */
+	T_EQ_INT(stub_calls.pics, 1);
 }
 
 /* A string of the given length on one line: every character is drawn. */
