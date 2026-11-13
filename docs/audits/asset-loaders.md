@@ -410,7 +410,7 @@ ERROR: AddressSanitizer: heap-buffer-overflow ... READ of size 4
 ```
 
 Proof for D31, with the same harness: a well-formed small MD2 whose skin
-count is above `MAX_MD2SKINS` and whose glcmd section starts at offset 0,
+count is above `MAX_MD2SKINS` and whose glcmd section starts inside the header,
 with the caller's skin array allocated at its real `MAX_MD2SKINS` size:
 
 ```text
@@ -453,7 +453,7 @@ it through `PCX_RLE_Decode`, which bounds both ends of every run.
 | `PCX_Decode` | file length | header read | `if (len < sizeof(pcx_t))` | ok |
 | `PCX_Decode` | `manufacturer`, `version`, `encoding` | format gate | explicit equality tests | ok |
 | `PCX_Decode` | `xmax-xmin`, `ymax-ymin`, `bytes_per_line`, `color_planes`, `bits_per_pixel` | dimensions, loop bounds | each tested `<= 0` and rejected with "Bad pcx file" | ok |
-| `PCX_Decode` | `full_size = (h+1)*(w+1)` (`*4` for 24/32-bit) | `out = malloc(full_size)`, then every row written at `pix += (pcx_width + 1)` (`* 4`) | `int`, no overflow test; each dimension is a difference of two file-supplied shorts, so `pcx_width + 1` and `pcx_height + 1` reach 65536, and the product (with or without the `* 4`) wraps to a tiny value. The row writes do not depend on the RLE input: the 8-bit path `memcpy(pix, line, pcx_width + 1)` and the 24/32-bit plane loop write a full row whether or not `PCX_RLE_Decode` stopped at the end of the input, so a header-only file is enough | **defect D19** (heap buffer overflow write, ASAN-confirmed in the 8-bit and the 24-bit mode, see below) |
+| `PCX_Decode` | `full_size = (h+1)*(w+1)` (`*4` for 24/32-bit) | `out = malloc(full_size)`, then every row written at `pix += (pcx_width + 1)` (`* 4`) | `int`, no overflow test; each dimension is a difference of two file-supplied shorts, so `pcx_width + 1` and `pcx_height + 1` can be large, and the product (with or without the `* 4`) can wrap to a small value. The row writes do not depend on the RLE input: the 8-bit path `memcpy(pix, line, pcx_width + 1)` and the 24/32-bit plane loop write a full row whether or not `PCX_RLE_Decode` stopped at the end of the input, so the header dimensions alone decide it | **defect D19** (heap buffer overflow write, ASAN-confirmed in the 8-bit and the 24-bit mode, see below) |
 | `PCX_RLE_Decode` | run byte, data byte | writes `pix[x++]`, reads `*raw++` | `if (raw >= raw_max)` before each read, `if (pix_max <= (pix + x))` before each write; both set `image_issues` and stop | ok |
 | `PCX_Decode` (24/32-bit) | `line[x + bytes_per_line * j]` | plane assembly into `pix[4*x+j]` | `line` is `malloc(Q_max(bytes_per_line, pcx_width+1) * color_planes)`, and the inner index stays below that; `bytes_per_line <= pcx_width` only sets `image_issues` | ok |
 | `PCX_Decode` (8-bit palette) | palette at `pcx + len - 768`, marker at `pcx + len - 769` | `memcpy(*palette, ..., 768)` | guarded by `if (len > 768)`; else `image_issues` | ok |
@@ -477,7 +477,7 @@ bypassed by a wrapping width (D27).
 | `LoadM8` | `width[0]`, `height[0]`, `offsets[0]` | palette expand loop and `load_image` | same body check as `LoadWal` | ok |
 | `LoadM8` | each source byte | `mt->palette[value]` | `value` is a `byte`, the palette has 256 entries; `image_buffer = malloc((size - ofs) * 4)` matches the loop `i < (size - ofs)` | ok |
 | `LoadM32` | `version` | format gate | `LittleLong(mt->version) != M32_VERSION` | ok |
-| `LoadM32` | `width[0]`, `height[0]`, `offsets[0]` | `load_image((byte *)mt + ofs, width, height, (size - ofs) / 4, ...)`; the renderer then walks `width * height` 4-byte pixels of the file buffer | `((size - ofs) / height) < (width * 4)`; `width * 4` is `int` and wraps for any `width` above `INT_MAX / 4`, so a hostile width with a small product passes against a body of a few bytes. gl1 `R_LoadPic` → `R_Upload32` (→ `SmoothColorImage` with `r_scale8bittextures`) → `R_Upload32Native` → `R_LightScaleTexture` rewrites `width * height` pixels in place, then scans the alpha bytes and hands the buffer to `glTexImage2D`; without NPOT support `R_Upload32Soft` resamples from the same buffer. gl3 `GL3_Upload32` scans the alpha bytes over `width * height` pixels and passes the buffer to `glTexImage2D`. soft `R_LoadPic` converts only `data_size` pixels and `R_LoadPic8` allocates `R_GetImageMipsSize(width * height)` itself, so it stays in bounds (one very large allocation, `ERR_FATAL` if it fails) | **defect D27** (gl1: heap buffer overflow write past the file buffer; gl3: heap over-read; the fix is the comparison in 64-bit arithmetic, `(long long)width * height * 4 > size - ofs`) |
+| `LoadM32` | `width[0]`, `height[0]`, `offsets[0]` | `load_image((byte *)mt + ofs, width, height, (size - ofs) / 4, ...)`; the renderer then walks `width * height` 4-byte pixels of the file buffer | `((size - ofs) / height) < (width * 4)`; `width * 4` is `int` and wraps for any `width` above `INT_MAX / 4`, so a hostile width with a small product passes against a small body. gl1 `R_LoadPic` → `R_Upload32` (→ `SmoothColorImage` with `r_scale8bittextures`) → `R_Upload32Native` → `R_LightScaleTexture` rewrites `width * height` pixels in place, then scans the alpha bytes and hands the buffer to `glTexImage2D`; without NPOT support `R_Upload32Soft` resamples from the same buffer. gl3 `GL3_Upload32` scans the alpha bytes over `width * height` pixels and passes the buffer to `glTexImage2D`. soft `R_LoadPic` converts only `data_size` pixels and `R_LoadPic8` allocates `R_GetImageMipsSize(width * height)` itself, so it stays in bounds (one very large allocation, `ERR_FATAL` if it fails) | **defect D27** (gl1: heap buffer overflow write past the file buffer; gl3: heap over-read; the fix is the comparison in 64-bit arithmetic, `(long long)width * height * 4 > size - ofs`) |
 | `GetWalInfo` | `width`, `height` | `*width = LittleLong(mt->width)`, `*height = ...`, which become `realwidth`/`realheight` in `LoadHiColorImage` (`files/stb.c`) | `if (size < sizeof(miptex_t))` bounds the header read; no version test (`miptex_t` has none) and the values are not checked: zero, negative and huge pass | hardening (see the verdict note below the table) |
 | `GetM8Info` | `width[0]`, `height[0]` | as `GetWalInfo` | `size < sizeof(m8tex_t) \|\| LittleLong(mt->version) != M8_VERSION`; values not checked | hardening |
 | `GetM32Info` | `width[0]`, `height[0]` | as `GetWalInfo` | `size < sizeof(m32tex_t) \|\| LittleLong(mt->version) != M32_VERSION`; values not checked | hardening |
@@ -509,23 +509,23 @@ dimensions in the three functions).
 | `sw_image.c` `R_LoadPic8` | `size`, `data_size` | `full_size = R_GetImageMipsSize(size)`, `malloc(full_size)`, `memcpy(pixels[0], pic, data_size)` | `data_size > full_size` is clamped to `full_size`; `size` and `data_size` both come from the loader as `width * height`-class values and agree | ok |
 | `sw_image.c` resize path | `uploadwidth * uploadheight * 4` | `malloc(pic32)`, `ResizeSTB` | dimensions are `realwidth`/`realheight` or halved copies of the loader size; no overflow guard, same `int` product class | hardening (carded under FIX19 with D22: the same 64-bit guard) |
 
-Severity note: D19 is high. The wrapped `full_size` is a tiny allocation, not
-an enormous one, so nothing fails first: the header alone (a file of a few
-hundred bytes) sets the dimensions, and each row write lands past the
+Severity note: D19 is high. The wrapped `full_size` is a small allocation, not
+an enormous one, so nothing fails first: the header dimensions alone
+decide the allocation size, and each row write lands past the
 allocation. A PCX is requested from a server as `pics/%s.pcx` for every
 `CS_IMAGES` configstring and as a model skin, so this is a server-reachable
 heap write against a default client. Proof: a host-side harness (not
 committed) compiled the real `files/pcx.c` with stubs for `ri`,
 `Com_Printf` and the byte-order helpers and called `PCX_Decode` on a
-header-only in-memory file under `-fsanitize=address`:
+small in-memory file under `-fsanitize=address`:
 
 ```text
-8-bit, one plane, 65536 x 65536:
+8-bit, dimensions at the header maximum:
 ERROR: AddressSanitizer: heap-buffer-overflow ... WRITE of size 65536
     #0 in __asan_memcpy  #1 in PCX_Decode pcx.c:372
 ... located 0 bytes after 1-byte region
 
-24-bit, three planes, 32768 x 32768:
+24-bit, large dimensions:
 ERROR: AddressSanitizer: heap-buffer-overflow ... WRITE of size 1
     #0 in PCX_Decode pcx.c:275
 ... located 0 bytes after 1-byte region
@@ -770,7 +770,7 @@ reachability in [Where each asset can come from](#where-each-asset-can-come-from
 | D16 | MD2 `lightnormalindex` | a vertex normal index 162..255 reads up to ~1 KB past the 162-row `r_avertexnormals` table | low | high (static) | FIX18 |
 | D17 | MD2 soft skin path | `skinwidth`/`skinheight` unchecked (div, scale); `st` coords never bounded by the skin size, over-reading texels in the rasterizer | medium | medium (static) | FIX18 |
 | D18 | SP2 `Mod_LoadSP2` | no length check (reads/writes past a short file); `numframes` zero divides, negative indexes `skins[]`/`frames[]` out of range | high | high (ASAN for the over-read) | FIX18 |
-| D19 | PCX `PCX_Decode` | `full_size = (h+1)*(w+1)[*4]` is `int` with no overflow test; header dimensions alone wrap it to a tiny `malloc`, and every row write then lands past it regardless of the RLE input | high | high (ASAN, 8-bit and 24-bit) | FIX19 |
+| D19 | PCX `PCX_Decode` | `full_size = (h+1)*(w+1)[*4]` is `int` with no overflow test; header dimensions alone can wrap it to a small `malloc`, and every row write then lands past it regardless of the RLE input | high | high (ASAN, 8-bit and 24-bit) | FIX19 |
 | D20 | PCX 1/2/4-bit path | `line[x / div]` can exceed a `bytes_per_line`-byte row when `bytes_per_line` is tiny | low | medium (static) | FIX19 |
 | D21 | `GetPCXInfo` | reads `xmax`/`ymax` without a header-size check; over-reads a short file | low | high (static) | FIX19 |
 | D22 | `R_LoadImage`/soft scale | `width * height` (and `* 4`) is `int` and can overflow for large stb dimensions; the gl renderers guard the scale product, soft and the copy length do not | medium | medium (static) | FIX19 |
