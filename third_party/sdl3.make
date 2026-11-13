@@ -305,19 +305,27 @@ SDL3_SRCS := \
 
 SDL3_OBJS := $(patsubst %,$(BUILDDIR)/sdl3/%.o,$(basename $(SDL3_SRCS)))
 
-$(BUILDDIR)/sdl3/%.o: $(SDL3_DIR)/src/%.c
-	@if [ -z $(QUIET) ]; then\
-		echo "===> CC $<";\
-	fi
-	${Q}mkdir -p $(@D)
-	${Q}$(CC) -c $(SDL3_CFLAGS) $(SDL3_CPPFLAGS) -o $@ $<
+# -MMD -MP write a .d file next to each object (header
+# dependencies, picked up by the -include below). Every
+# SDL object also depends on this file, so a change to
+# the flags or the source list rebuilds all of them.
+SDL3_DEPFLAGS := -MMD -MP
 
-$(BUILDDIR)/sdl3/%.o: $(SDL3_DIR)/src/%.m
+$(BUILDDIR)/sdl3/%.o: $(SDL3_DIR)/src/%.c third_party/sdl3.make
 	@if [ -z $(QUIET) ]; then\
 		echo "===> CC $<";\
 	fi
 	${Q}mkdir -p $(@D)
-	${Q}$(CC) -c $(SDL3_CFLAGS) -fobjc-arc $(SDL3_CPPFLAGS) -o $@ $<
+	${Q}$(CC) -c $(SDL3_DEPFLAGS) $(SDL3_CFLAGS) $(SDL3_CPPFLAGS) -o $@ $<
+
+$(BUILDDIR)/sdl3/%.o: $(SDL3_DIR)/src/%.m third_party/sdl3.make
+	@if [ -z $(QUIET) ]; then\
+		echo "===> CC $<";\
+	fi
+	${Q}mkdir -p $(@D)
+	${Q}$(CC) -c $(SDL3_DEPFLAGS) $(SDL3_CFLAGS) -fobjc-arc $(SDL3_CPPFLAGS) -o $@ $<
+
+-include $(SDL3_OBJS:.o=.d)
 
 $(SDL3_LIB): $(SDL3_OBJS)
 	@echo "===> AR $@"
