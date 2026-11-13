@@ -10,7 +10,7 @@ below is additive and selected by one Makefile variable.
 
 | Fact | Value | Consequence |
 |---|---|---|
-| Distinct `gl*` entry points called from `gl1/*.c` | 52 (plus the `qgl*` pointers loaded in `qgl.c`: `qglClientActiveTexture`) | small, finite surface; one Khronos spec per symbol |
+| Distinct `gl*` entry points called from `gl1/*.c` | 54 direct, 435 call sites, plus 5 loaded by pointer with 6 call sites (`qglActiveTexture`, `qglClientActiveTexture`, `qglPointParameterf`, `qglPointParameterfv`, `qglColorTableEXT`); see `docs/analysis/gl1-state-inventory.md` | small, finite surface; one Khronos spec per symbol |
 | Immediate mode (`glBegin`/`glEnd`) | none | no per-vertex capture path; everything is `glVertexPointer` + `glDrawArrays` (19) and one `glDrawElements` |
 | Primitive modes | `GL_TRIANGLE_FAN` 21, `GL_TRIANGLE_STRIP` 5, `GL_TRIANGLES` 2, `GL_POINTS` 2, `GL_LINES` 1, `GL_LINE_STRIP` 1 | fans and strips need an index expansion (Metal has no fan) |
 | Fixed-function state used | blend, depth test/mask/func/range, alpha test, cull, stencil (op/func/mask/clear), scissor, polygon offset, polygon mode, color mask, shade model, point size | one PSO key tuple plus a per-draw uniform block |
@@ -25,7 +25,7 @@ below is additive and selected by one Makefile variable.
 
 ```
 src/client/refresh/gl1/metal/
-  include/OpenGL/gl.h      the subset header: enums, typedefs, the 52 prototypes (plus the qgl ones)
+  include/OpenGL/gl.h      the subset header: enums, typedefs, the 54 prototypes (plus the 5 qgl ones)
   include/OpenGL/glext.h   empty; satisfies any transitive include
   shim_sdl.h               macro remap of the six SDL_GL_* calls and SDL_WINDOW_OPENGL -> SDL_WINDOW_METAL
   mgl_state.c              GL state machine: enable bits, blend/depth/stencil/cull, matrices, client arrays, texenv
@@ -76,7 +76,7 @@ and lazily on the first GL call of a frame) acquires the drawable, builds a
 encoder and opens a new pass with the matching load actions; outside a frame
 it sets the load actions of the next pass. Nothing is deferred beyond the frame.
 
-**State machine.** `mgl_state.c` keeps the full GL state the 52 calls can
+**State machine.** `mgl_state.c` keeps the full GL state the 54 calls can
 touch in one `mgl_state_t`: enable bitmask (blend, depth, alpha test, cull,
 scissor, stencil, polygon offset, texture per unit), blend factors, depth
 func/mask/range, stencil func/ref/mask/op, cull face, color mask, polygon
