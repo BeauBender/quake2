@@ -120,7 +120,6 @@ resetall
 save
 say
 say_team
-screenshot
 serverinfo
 serverrecord
 serverstop

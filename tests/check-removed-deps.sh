@@ -3,7 +3,7 @@
 #
 # The trust-boundary epic (docs/plans/trust-boundary.md, decision record
 # docs/decisions/0001-remove-optional-dependencies.md) deleted OpenAL,
-# libcurl, minizip/miniz, the GLES renderers, the CMake build and SDL2 (and
+# libcurl, minizip/miniz, stb_image_write, the GLES renderers, the CMake build and SDL2 (and
 # with it the WITH_SDL3 switch). This fails if any of them comes back into the
 # build: a source directory, a Makefile switch, an include or a CI install
 # line. SDL2 is matched case-insensitively for the name SDL2, SDL_VERSION_ATLEAST(2
@@ -25,7 +25,7 @@ done
 
 # Word-bounded on purpose: "angles", "triangles_max" and stb's "unzigzag"
 # must not match.
-pattern='USE_CURL|WITH_CURL|curl/curl\.h|libcurl|USE_OPENAL|WITH_OPENAL|AL/alc?\.h|libopenal|WITH_SYSTEM_MINIZIP|unzip\.h|miniz\.h|-lminizip|ref_gles[0-9]|YQ2_GL3_GLES|USE_GLES|WITH_SDL3|USE_SDL3'
+pattern='USE_CURL|WITH_CURL|curl/curl\.h|libcurl|USE_OPENAL|WITH_OPENAL|AL/alc?\.h|libopenal|WITH_SYSTEM_MINIZIP|unzip\.h|miniz\.h|-lminizip|ref_gles[0-9]|YQ2_GL3_GLES|USE_GLES|WITH_SDL3|USE_SDL3|stb_image_write|stbi_write_|STB_IMAGE_WRITE'
 hits=$(git grep -nE "$pattern" -- src Makefile .github stuff/misc 2>/dev/null || true)
 if [ -n "$hits" ]; then
 	echo "check-removed-deps: references to removed dependencies:"
