@@ -86,6 +86,11 @@ These standing rules remain and this record does not touch them:
   existing allow paths (`*.md` at any depth, tests, fixtures, lock files).
   Pinning the list here means a later plugin default will not reach this
   repository.
+- `third_party/*` and `docs/DEPENDENCIES.md` are high-risk paths in
+  `risk.highPaths`, so a change to vendored bytes, the manifest, its pin or
+  the SDL build rules gets all three review passes. The list is pinned in
+  `.claude/dev-loop.json` (the plugin default plus these two entries), so a
+  later plugin default will not reach this repository.
 - A wrong judgement by the loop lands on `main` and is corrected by a
   later change, not prevented by a second pair of eyes.
 

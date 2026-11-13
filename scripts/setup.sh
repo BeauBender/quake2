@@ -24,13 +24,15 @@ need git "worktrees and the commit hook" "your package manager"
 need gh "cards are GitHub Issues; work lands through pull requests" "brew install gh, or apt install gh"
 
 # The client and renderers need SDL3; the gate
-# does not.
-if have sdl3-config || { have pkg-config && pkg-config --exists sdl3; } ||
-	{ have brew && [ -d "$(brew --prefix 2>/dev/null)/include/SDL3" ]; } ||
+# does not. On macOS it is built from the vendored
+# source in third_party/SDL3, so nothing is needed.
+if [ "$(uname -s)" = Darwin ]; then
+	echo "setup: ok   SDL3 (vendored in third_party/SDL3, built by make)"
+elif have sdl3-config || { have pkg-config && pkg-config --exists sdl3; } ||
 	[ -d /usr/include/SDL3 ]; then
 	echo "setup: ok   SDL3"
 else
-	echo "setup: miss SDL3 -- only the client and renderers need it; the gate does not (install: brew install sdl3, or apt install libsdl3-dev)"
+	echo "setup: miss SDL3 -- only the client and renderers need it; the gate does not (install: apt install libsdl3-dev, or your package manager's sdl3)"
 fi
 
 # Wire .githooks/ unless the checkout already uses another hooks path or
