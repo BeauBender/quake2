@@ -532,10 +532,12 @@ ev_st_digest() {
 }
 ev_st_types() {
     local name content why
-    for name in game.pak game.dm2 intro.cin trace.q2r manifest.txt; do
+    for name in game.pak game.pk3 game.dm2 intro.cin trace.q2r manifest.txt world-000000.tga; do
         ev_case
         case $name in
             *.pak) content='PACK'; why='game data archive (.pak)';;
+            *.pk3) content=$'PK\003\004'; why='game data archive (.pk3/.zip)';;
+            *.tga) content='frame'; why='file of the pin store';;
             *.dm2) content='demo'; why='demo (.dm2)';;
             *.cin) content='cine'; why='cinematic (.cin)';;
             *.q2r) content='Q2REFREC'; why='renderer trace';;
@@ -545,7 +547,7 @@ ev_st_types() {
         ev_refused "$why" "$m" || return 1
         # by content too, under an innocent name
         ev_case
-        case $name in *.dm2|*.cin) continue;; esac
+        case $name in *.dm2|*.cin|*.tga) continue;; esac
         printf '%s\n' "$content" > "$d/x-content.png"; ev_list "$m" "$d/x-content.png" png
         ev_refused "$why" "$m" || return 1
     done
