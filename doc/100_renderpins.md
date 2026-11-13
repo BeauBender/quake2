@@ -137,6 +137,20 @@ run. At most 1000 reads are written per run; later reads are not, and
 the shim says so once on stderr. Like the frames, these files come from
 the game data and stay on the machine that made them.
 
+### The gl1 frames on a host without accelerated OpenGL
+
+`ref_gl1` first asks for an accelerated OpenGL context. If the system
+refuses it, the renderer tries once more without that requirement and
+prints `No accelerated OpenGL context available, using an unaccelerated
+one.` in the engine log. On such a host (a macOS virtual machine, for
+example) the `gl1` frames come from the system's software OpenGL
+renderer, not from a graphics card. The `GL_RENDERER` line of
+`engine.log` in the pin's directory tells which one drew them; on the
+build host it reads `Apple Software Renderer`. In this mode the renderer
+does not wait for the display to sync, as that wait does not end on a
+host that never shows the window. A machine where the accelerated
+request succeeds is not affected.
+
 ## Comparing
 
 ```sh

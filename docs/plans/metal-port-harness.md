@@ -19,7 +19,7 @@ renderer is judged with it, and what the first run on real data found.
 | Frame writer, no stb | `VID_WritePinFrame` in `src/client/vid/vid.c` | run on `soft`: 23 frames per scenario, 640x480, upright (TASK39) |
 | No renderer fallback while capturing | `VID_CheckChanges` in `src/client/vid/vid.c` | compiles and links; the failure path has not been provoked |
 | Capture before present | `SCR_PinsCapture` in `src/client/cl_screen.c` | run on `soft`: complete frames with the status bar (TASK39); not run on `gl1` |
-| gl1 screenshot flushes the batched 2D quads before reading | `R_ScreenShot` in `src/client/refresh/gl1/gl1_misc.c` | compiles and links; never run (`gl1` cannot create a context on the build VM) |
+| gl1 screenshot flushes the batched 2D quads before reading | `R_ScreenShot` in `src/client/refresh/gl1/gl1_misc.c` | compiles and links; the context now exists on the build VM (TASK80) but the screenshot is not yet compared with a pre-change one |
 | Unattended quit at end of demo, non-zero exit on a broken demo | `CL_PinsFrame` in `src/client/cl_main.c`, `SV_DemoEnd` in `src/server/sv_send.c`, `Com_Error` in `src/common/clientserver.c` | run: every record quits by itself with status 0; a missing demo and a short demo file without its end marker were run and exit 1 within about a second; a demo cut after playback began and playback stopping without a demo end are implemented but not observed (TASK39) |
 | No saved configuration in a pin run | `Qcommon_ExecConfigs` in `src/common/frame.c`, `CL_WriteConfiguration` in `src/client/cl_main.c` | run: the engine log shows no `config.cfg` exec and none is written (TASK39) |
 | Driver: record, compare, list, selftest | `scripts/pins.sh` (bash 3.2) | selftest green; `record` and `compare` run against the engine on real data (TASK39) |
@@ -171,8 +171,9 @@ Host: the build VM, macOS arm64, `soft` at 640x480, `PINS_EVERY` 30,
    complete frame on `soft`: world, view weapon and status bar are all in
    the captured frames, and a frame opened in an image viewer is upright
    (floor at the bottom, status bar at the bottom edge, numbers reading
-   left to right; TASK9's acceptance). Not run on `gl1`: `ref_gl1` cannot
-   create a GL context on the build VM, so whether its screenshot (which
+   left to right; TASK9's acceptance). Not run on `gl1`: at the time
+   `ref_gl1` could not create a GL context on the build VM (fixed by
+   TASK80, below), so whether its screenshot (which
    now flushes the 2D batch first) is unchanged stays open for a host
    where `gl1` runs (card P3).
 5. The owner's data holds two demos, both in `pak0.pak`: `demo1.dm2` and
@@ -271,6 +272,30 @@ Host: the build VM, macOS arm64, `soft` at 640x480.
 
 Measured on `soft` over five pairs of runs (run 1 against runs 2 to 6).
 A fixed PRNG seed (record and replay group) would make both exact.
+
+## `gl1` on the build host (TASK80)
+
+`ref_gl1` used to stop on the build VM with "Failed creating OpenGL
+pixel format", because it demands an accelerated visual and the only
+OpenGL renderer there is Apple's software one. Since TASK80 it retries
+once without that demand (in `RI_InitContext`, where the context is
+created; a failure of the retry is reported as before) and switches
+vsync off for such a context: with vsync on, the first buffer swap
+waited for a display sync that never came and the engine drew no frame
+in 240 s. The engine log of a pin now shows `GL_VENDOR: Apple Inc.`,
+`GL_RENDERER: Apple Software Renderer`, `GL_VERSION: 2.1 APPLE-24.0.2`.
+
+Observed on this host (machine load average 10 to 60 over the runs, other
+work running): `record gl1 world` takes 17 to 24 s for 23 frames, `soft`
+3 to 7 s. Three `gl1` records of `world` compare at score 0.000000 and bad
+0.000000 on every frame (23 of 23), so the software OpenGL renderer is
+deterministic here. `soft` against `gl1` on `world`: score 0.013 to
+0.081, bad fraction 0.13 to 0.92 per frame, all 23 over the default
+thresholds. The frames show the same scenes; `gl1` is smoother and
+slightly darker (true colour and bilinear filtering against the software
+renderer's 8-bit palette: 3589 to 41005 distinct colours per `gl1` frame
+against 105 to 189 per `soft` frame), so thresholds for `soft` against
+`gl1` are card P3's to set.
 
 ## Judging a renderer
 
