@@ -5,7 +5,8 @@ at two seams, shim first, then native `ref_metal`) and INFORM9 (#36: pins
 from the owner's game data, in a local store, never committed). Parent
 cards: TASK27 (#37, harness), TASK21 (#28, OpenGL-subset shim), TASK28
 (#38, native `ref_metal`), TASK24 (#31) and TASK25 (#32, ray tracing). The
-cards still to file are in `docs/plans/metal-port-cards.md`.
+cards filed for it on 2026-11-12, with their ids, are in
+`docs/plans/metal-port-cards.md`.
 
 This document is the operating procedure: what the harness is, how a
 renderer is judged with it, and what has not been verified yet.
@@ -150,7 +151,7 @@ inside a card, never by CI.
 
 | Document | Feeds |
 |---|---|
-| `docs/plans/metal-port-cards.md` | every card still to file, with dependencies and acceptance |
+| `docs/plans/metal-port-cards.md` | every card filed for the port, with dependencies, acceptance and ids |
 | `docs/analysis/gl1-state-inventory.md` | TASK21, TASK28: GL entry points, draw-time state, pipeline-state keys, order |
 | `docs/plans/metal-shim-design.md` | TASK21: module layout, state cache, uploads, readback, present |
 | `docs/plans/metal-raytracing-design.md` | TASK24, TASK25: acceleration structures, effects, G-buffer, gating |
