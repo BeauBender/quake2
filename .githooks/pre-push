@@ -15,15 +15,18 @@
 #   ref names   a match anywhere in the local or the remote ref name refuses the
 #               push (substring match). Deleting a ref is always allowed, so a
 #               ref that already leaked can be removed.
-#   messages    commit messages of the commits being pushed are scanned: the
-#               host name and the home path as substrings, the user name as a
-#               whole word (so a short, common user name does not trip on
-#               ordinary prose). File contents are the job of
-#               tests/check-no-local-identity.sh.
-#   new branch  the commits not yet on the remote, git rev-list <sha> --not
-#               --remotes=<remote>, at most SCAN_CAP of them. A branch with more
-#               is refused (the rest cannot be scanned): push it in steps.
-#   update      <remote sha>..<local sha>, same cap.
+#   messages    the author and committer name and e-mail and the message of
+#               the commits being pushed are scanned, and for an annotated tag
+#               its tagger line and message: the host name and the home path as
+#               substrings, the user name as a whole word (so a short, common
+#               user name does not trip on ordinary prose). File contents and
+#               file names are the job of tests/check-no-local-identity.sh;
+#               they are not scanned here.
+#   commits     the commits the remote lacks: git rev-list <sha> --not
+#               <remote sha> --remotes=<remote>, at most SCAN_CAP of them
+#               (commits already on any remote-tracking ref of the remote
+#               count as published, so fetch the remote first). More than the
+#               cap is refused (the rest cannot be scanned): push in steps.
 #   errors      fail closed: if the host or user name cannot be read, or git
 #               cannot list the commits (for example the remote sha is not
 #               known locally: fetch first), the push is refused. A retry is
@@ -32,7 +35,8 @@
 # Test-only environment (used by tests/check-pre-push-hook.sh):
 #   YQ2_IDENTITY_TEST_EXTRA_WORD   one more word to look for. It is only ever
 #                                  added to the real words, never replaces them.
-#   YQ2_IDENTITY_TEST_SCAN_CAP     a lower SCAN_CAP; a value above the default
+#   YQ2_IDENTITY_TEST_SCAN_CAP     a lower SCAN_CAP; a value above the default,
+#                                  with a leading zero or not a plain number
 #                                  is ignored.
 #
 # Usage: runs from git (arguments: remote name, remote URL; stdin: one line
@@ -42,7 +46,7 @@
 remote=${1:-}
 SCAN_CAP=1000
 case ${YQ2_IDENTITY_TEST_SCAN_CAP:-} in
-'' | *[!0-9]*) ;;
+'' | *[!0-9]* | 0?*) ;;
 *) [ "$YQ2_IDENTITY_TEST_SCAN_CAP" -lt "$SCAN_CAP" ] && SCAN_CAP=$YQ2_IDENTITY_TEST_SCAN_CAP ;;
 esac
 zero=0000000000000000000000000000000000000000
@@ -98,7 +102,7 @@ matches() {
 
 fail=0
 n=0
-while read -r lref lsha rref rsha; do
+while read -r lref lsha rref rsha || [ -n "${lref:-}" ]; do
 	[ -n "${lref:-}" ] || continue
 	n=$((n + 1))
 	# Deleting a ref publishes nothing.
@@ -129,22 +133,42 @@ while read -r lref lsha rref rsha; do
 	esac
 	# -------------------------------------------------------------------------
 
+	# An annotated tag: its tagger line and message are published too.
+	if [ "$(git cat-file -t "$lsha" 2>/dev/null)" = tag ]; then
+		tagtext=$(git cat-file tag "$lsha" 2>/dev/null) || die "refused: cannot read tag $short (ref number $n)"
+		kind=$(matches "$tagtext" 1)
+		case $? in
+		0)
+			echo "pre-push: refused: the tag object $short (ref number $n) contains this machine's $kind identity; recreate the tag" >&2
+			fail=1
+			continue
+			;;
+		1) ;;
+		*) die "refused: the tag check failed internally (ref number $n)" ;;
+		esac
+	fi
+
+	# Only what the remote lacks: not the remote's own tip, and not what
+	# another remote-tracking ref of it already has. An unknown remote tip
+	# cannot be subtracted, so the push is refused.
 	if [ "$rsha" = "$zero" ]; then
 		commits=$(git rev-list --max-count=$((SCAN_CAP + 1)) "$lsha" --not --remotes="$remote" 2>/dev/null) ||
 			die "refused: cannot list the new commits of ref number $n"
 	else
-		commits=$(git rev-list --max-count=$((SCAN_CAP + 1)) "$rsha..$lsha" 2>/dev/null) ||
-			die "refused: cannot list the commits of ref number $n (is the remote commit known here? fetch first)"
+		git cat-file -e "$rsha^{commit}" 2>/dev/null ||
+			die "refused: the remote commit of ref number $n is not known here; fetch the remote first"
+		commits=$(git rev-list --max-count=$((SCAN_CAP + 1)) "$lsha" --not "$rsha" --remotes="$remote" 2>/dev/null) ||
+			die "refused: cannot list the commits of ref number $n"
 	fi
 	[ -n "$commits" ] || continue
 	count=$(printf '%s\n' "$commits" | wc -l | tr -d ' ')
 	if [ "$count" -gt "$SCAN_CAP" ]; then
-		echo "pre-push: refused: ref number $n has more than $SCAN_CAP commits to scan; push it in smaller steps" >&2
+		echo "pre-push: refused: ref number $n has more than $SCAN_CAP commits to scan; fetch the remote first, or push in smaller steps" >&2
 		fail=1
 		continue
 	fi
 	for c in $commits; do
-		msg=$(git log -1 --format=%B "$c" 2>/dev/null) || die "refused: cannot read commit $c"
+		msg=$(git log -1 --format='%an%n%ae%n%cn%n%ce%n%B' "$c" 2>/dev/null) || die "refused: cannot read commit $c"
 		kind=$(matches "$msg" 1)
 		case $? in
 		0)
