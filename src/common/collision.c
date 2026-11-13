@@ -328,6 +328,7 @@ CM_InitBoxHull(void)
 	box_planes = &map_planes[numplanes];
 
 	if ((numnodes + 6 > MAX_MAP_NODES) ||
+		(numleafs + 1 > MAX_MAP_LEAFS) ||
 		(numbrushes + 1 > MAX_MAP_BRUSHES) ||
 		(numleafbrushes + 1 > MAX_MAP_LEAFBRUSHES) ||
 		(numbrushsides + 6 > MAX_MAP_BRUSHSIDES) ||
