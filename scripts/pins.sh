@@ -119,8 +119,10 @@ cmd_compare() {
 cmd_list() { local s; s=$(store); echo "store: $s"; find "$s" -name '*.tga' 2>/dev/null | sed "s|$s/||" | awk -F/ '{print $1"/"$2"/"$3}' | sort | uniq -c; }
 
 cmd_selftest() {
-    local tmp; tmp=$(mktemp -d "${TMPDIR:-/tmp}/pins.XXXXXX"); trap "rm -rf '$tmp'" EXIT
-    export PINS_STORE="$tmp/store"; unset PINS_DIFF
+    # the selftest must not depend on, or act on, the caller's environment
+    unset PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/pins.XXXXXX"); trap 'rm -rf "$tmp"' EXIT
+    export PINS_STORE="$tmp/store"
     local diff; diff=$(difftool)
     "$diff" --gen "$tmp/a.tga" 64 48 1 && "$diff" --perturb "$tmp/a.tga" "$tmp/b.tga" 3 && "$diff" --perturb "$tmp/a.tga" "$tmp/c.tga" 60
     "$diff" "$tmp/a.tga" "$tmp/a.tga" | grep -q '^score=0.000000' || die "identical frames must score 0"
@@ -153,7 +155,7 @@ cmd_selftest() {
     for name in '-portable' '+set r_customwidth 640' '+set pins_capture 30' '+set cl_entities 0' '+set timedemo 1' '+demomap demo1.dm2'; do
         case $line in *"$name"*) ;; *) die "record command line lacks: $name" ;; esac
     done
-    if (cmd_record gl1 world) >/dev/null 2>&1; then die "record must refuse without an engine binary"; fi
+    if (PINS_BIN="$tmp/no-such-engine" cmd_record gl1 world) >/dev/null 2>&1; then die "record must refuse without an engine binary"; fi
     echo "pins selftest: ok"
 }
 
