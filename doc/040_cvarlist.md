@@ -819,5 +819,10 @@ them given the engine behaves exactly as before.
   after the frame is complete and before it is presented; when playback
   ends, quit so a scenario run is unattended; and if the renderer named
   by `vid_renderer` fails to load, stop with an error instead of falling
-  back to another renderer. Needs `pins_dir`. Must be a non-negative
-  integer. `0` (the default) disables all three.
+  back to another renderer. While it is on, `config.cfg` and
+  `autoexec.cfg` are neither executed nor written, and an error that
+  would drop to the console (a demo that cannot be opened, for example)
+  ends the engine with a non-zero exit status, as does a demo file that
+  ends before its end marker. Needs `pins_dir`. Must be a non-negative
+  integer of digits only (no sign, no spaces). `0` (the default)
+  disables all of this.
