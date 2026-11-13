@@ -291,9 +291,10 @@ guarded hook, for `REC_CAPTURE`. The `REC_CVARS` record is written empty
 (count 0) until TASK45 fills it. The recorder reports through
 `RefRec_SetPrint` (set to `Com_Printf`; stderr in the test), so refrecord.c
 still calls nothing else in the engine.
-New cvars: `pins_record <path>` (recorder on), `pins_replay <path>`
-(replayer on), both documented in `doc/040_cvarlist.md` or
-`tests/check-cvar-docs.sh` fails.
+New settings: `pins_record <name>` (recorder on; as built a plain file name
+inside `pins_dir` ending in `.q2r`, latched from the command line, not a
+cvar) and `pins_replay <path>` (replayer on), both documented in
+`doc/040_cvarlist.md` or `tests/check-cvar-docs.sh` fails.
 
 ### For the next cards
 
@@ -343,7 +344,7 @@ list below is the detailed scope behind its rows.
 |---|---|---|
 | TASK27a | `refrecord.h` + `refrecord.c` with serializers only; every vid.c wrapper gains its guarded one-liner; `pins_record` unset | Byte-identical frames to the unhooked build on the `world` scenario, `scripts/test.sh` green, `tests/check-refrecord.sh` round-trips every record type through a buffer |
 | TASK27b | Recording: handle map, `refdef_t` deep copy, string table, frame index, header patch | `pins.sh record gl1 world` with `pins_record` set leaves a `trace.q2r` whose frame count equals the captured frame count and whose string table names every model, skin and pic the engine logged (as built, TASK43: the captured frames are its `REC_CAPTURE` records, one per frame file; `frame_count` counts every rendered frame) |
-| TASK27c | Replay driver `CL_PinsReplay()` behind `pins_replay`, registration from the string table, frame feed, capture at the recorded cadence, quit | `pins.sh replay gl1 world` produces the same number of frames as the live record without the server or a demo file |
+| TASK27c | Replay driver `CL_PinsReplay()` behind `pins_replay`, registration from the string table, frame feed, capture at the recorded cadence, quit (amended for TASK44: capture at the `REC_CAPTURE` records, not at a cadence; bound entity skin, frame and particle colour before a frame reaches a renderer) | `pins.sh replay gl1 world` produces the same number of frames as the live record without the server or a demo file |
 | TASK27d | Determinism: cvar snapshot and restore, fixed `randk` seed behind the cvar, `refdef_t.time` check | `framediff` scores 0.000000 on every frame, live vs replay, `gl1` and `soft`, same machine |
 | TASK27e | `scripts/pins.sh replay <renderer> <scenario>` + `compare` across renderers from one trace; doctor row for trace coverage | `pins.sh replay metal world` from the `gl1` trace followed by `compare metal world --ref gl1` runs with the game absent |
 
