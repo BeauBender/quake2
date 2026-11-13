@@ -34,6 +34,50 @@ extern cvar_t *rcon_address;
 extern cvar_t *cl_timeout;
 
 /*
+ * The address the last getchallenge or connect packet was sent
+ * to. The connectionless challenge and client_connect replies
+ * are honoured only from this address while connecting, so no
+ * other host can redirect or take over the connection.
+ */
+static netadr_t cl_connect_adr;
+static qboolean cl_connect_adr_valid;
+
+static void
+CL_SetConnectAddress(netadr_t adr)
+{
+	cl_connect_adr = adr;
+	cl_connect_adr_valid = true;
+}
+
+static void
+CL_ClearConnectAddress(void)
+{
+	memset(&cl_connect_adr, 0, sizeof(cl_connect_adr));
+	cl_connect_adr_valid = false;
+}
+
+/*
+ * True if a connectionless handshake reply (challenge or
+ * client_connect) sent from the given address belongs to the
+ * connection the client is making.
+ */
+static qboolean
+CL_IsConnectReplyFrom(netadr_t from)
+{
+	if (cls.state != ca_connecting)
+	{
+		return false;
+	}
+
+	if (!cl_connect_adr_valid)
+	{
+		return false;
+	}
+
+	return NET_CompareAdr(from, cl_connect_adr);
+}
+
+/*
  * adds the current command line as a clc_stringcmd to the client
  * message. things like godmode, noclip, etc, are commands directed to
  * the server, so when they are typed in at the console, they will need
@@ -129,6 +173,8 @@ CL_SendConnectPacket(void)
 		adr.port = BigShort(PORT_SERVER);
 	}
 
+	CL_SetConnectAddress(adr);
+
 	port = Cvar_VariableValue("qport");
 
 	userinfo_modified = false;
@@ -180,6 +226,8 @@ CL_CheckForResend(void)
 
 	cls.connect_time = cls.realtime;
 
+	CL_SetConnectAddress(adr);
+
 	Com_Printf("Connecting to %s...\n", cls.servername);
 
 	Netchan_OutOfBandPrint(NS_CLIENT, adr, "getchallenge\n");
@@ -207,6 +255,7 @@ CL_Connect_f(void)
 
 	NET_Config(true); /* allow remote */
 	CL_Disconnect();
+	CL_ClearConnectAddress();
 
 	cls.state = ca_connecting;
 	Q_strlcpy(cls.servername, server, sizeof(cls.servername));
@@ -317,6 +366,7 @@ CL_Disconnect(void)
 	M_ForceMenuOff();
 
 	cls.connect_time = 0;
+	CL_ClearConnectAddress();
 
 	SCR_StopCinematic();
 
@@ -586,6 +636,13 @@ CL_ConnectionlessPacket(void)
 			return;
 		}
 
+		if (!CL_IsConnectReplyFrom(net_from))
+		{
+			Com_DPrintf("client_connect from %s while not connecting to it.  Ignored.\n",
+					NET_AdrToString(net_from));
+			return;
+		}
+
 		Netchan_Setup(NS_CLIENT, &cls.netchan, net_from, cls.quakePort);
 
 		/* Put client into pause mode when connecting to a local server.
@@ -670,6 +727,13 @@ CL_ConnectionlessPacket(void)
 	/* challenge from the server we are connecting to */
 	if (!strcmp(c, "challenge"))
 	{
+		if (!CL_IsConnectReplyFrom(net_from))
+		{
+			Com_DPrintf("challenge from %s while not connecting to it.  Ignored.\n",
+					NET_AdrToString(net_from));
+			return;
+		}
+
 		cls.challenge = (int)strtol(Cmd_Argv(1), (char **)NULL, 10);
 		CL_SendConnectPacket();
 		return;
