@@ -68,6 +68,7 @@ expect "$refused_pin" +set pins_dir /s +set pins_scenario "$s64" +set pins_captu
 # Every scenario's command line, as scripts/pins.sh record builds it, is
 # accepted by the real COM_InitArgv (no argc > MAX_NUM_ARGVS) and latches
 # the directory, scenario and interval it names.
+unset PINS_BIN PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DIFF
 for cfg in scripts/pins/scenarios/*.cfg; do
 	scen=$(basename "$cfg" .cfg)
 	line=$(PINS_DRYRUN=1 PINS_STORE=/s PINS_BASEDIR=/b bash scripts/pins.sh record gl1 "$scen")
