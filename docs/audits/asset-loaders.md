@@ -414,3 +414,46 @@ renderer `ri` import struct and `load_image`, which do not compile standalone
 without a large stub surface; the findings are static traces, and the
 `PCX_RLE_Decode` bounds were confirmed by reading every read and write in the
 decode loop.
+
+## WAV (`src/client/sound/wave.c`)
+
+`GetWavinfo` is a classic RIFF walker over the whole file (`FS_LoadFile`
+allocates `wavlength + 1`). `FindNextChunk` advances by the chunk's own length
+field, and the readers `GetLittleShort`/`GetLittleLong` read 2 or 4 bytes
+without any end check of their own. The result `wavinfo_t` is consumed by
+`S_LoadSound` (`sound.c`), which passes `data + info.dataofs` and `info.samples`
+to `S_GetVolume`, `S_GetStatistics`, `S_IsShortSilence` and `SDL_Cache`
+(`sdl.c`); none of those re-checks the length.
+
+| Function | Field | Use | Check (quoted) or absence | Verdict |
+|---|---|---|---|---|
+| `FindNextChunk` | `last_chunk + 4` | base of the next header; `strncmp(data_p, name, 4)` | `if (data_p >= iff_end)` before the length read, but `strncmp` and `GetLittleLong` then read up to 4 bytes, so with `data_p == iff_end - 1` the compare and the length read run past the buffer | **defect D23** (over-read; low, bounded to a few bytes past a `wavlength + 1` allocation) |
+| `FindNextChunk` | `iff_chunk_len` | `last_chunk = data_p + 8 + ((iff_chunk_len + 1) & ~1)` | `if (iff_chunk_len < 0)` stops; no upper bound, but the next loop's `data_p >= iff_end` catches an overshoot before another read | ok (given the next-iteration check) |
+| `GetWavinfo` | "RIFF"/"WAVE" | `strncmp(data_p + 8, "WAVE", 4)` | `data_p` is non-NULL, but `data_p + 8 .. + 11` is not bounded against `iff_end` | D23 |
+| `GetWavinfo` | `fmt ` body | `data_p += 8`, then `GetLittleShort`/`GetLittleLong` for `format`, `channels`, `rate`, `width` | no check that the `fmt ` chunk holds these 16 bytes inside the file | D23 |
+| `GetWavinfo` | `format` | `if (format != 1)` | ok |
+| `GetWavinfo` | `width = GetLittleShort() / 8` | divisor of `samples`, element size in every reader | `if (info.width <= 0)`; later `sound.c` accepts any positive width though only 1 and 2 are handled by the readers (a width of 3 or 4 reads `((short *)data)[srcsample]` with the wrong stride) | hardening |
+| `GetWavinfo` | `cue ` body, `LIST`/`mark` | `data_p += 32`, `GetLittleLong` for `loopstart`; `data_p += 24`, `GetLittleLong` for loop samples | the `mark` read is guarded by `((data_p - wav) + 32 <= wavlength)`, but the `cue ` `data_p += 32; GetLittleLong()` for `loopstart` is not bounded | D23 |
+| `GetWavinfo` | `loopstart` | `info.samples = loopstart + i`; `sc->loopstart` in `SDL_Cache`, used as a replay offset in `sdl.c` `S_PaintChannels` | no range check; a loopstart past the sample count makes `SDL_PaintChannelFrom*` read `sc->data` out of range during mixing | **defect D24** (the loop offset is divided by `stepscale` and used as `ch->pos`/`ch->end`; a crafted cue loop points the mixer past the cached sample) |
+| `GetWavinfo` | data chunk length | `samples = GetLittleLong() / info.width` | `data_p += 4` then the read; `samples` is never compared with `wavlength - dataofs`, so the field alone sets how many samples every consumer believes exist | **defect D25** |
+| `GetWavinfo` | `samples` vs `info.samples` (cue) | loop-length sanity | `if (samples < info.samples) Com_Error(...)` only when a cue set `info.samples`; otherwise `info.samples = samples` unchecked | D25 |
+| `GetWavinfo` | `dataofs = data_p - wav` | base pointer `data + info.dataofs` for all consumers | no check that `dataofs <= wavlength` | **defect D25** (feeds the over-read below) |
+| `S_GetVolume` (`sound.c`) | `info.samples` | `sound_end = sound_data + sound_length`, reads every element | none; trusts `info.samples` | **defect D25** (heap over-read) |
+| `S_GetStatistics` (`sound.c`) | `info.samples` | four scans over `[sound_data, sound_data + sound_length]` | none | **defect D25** |
+| `S_IsShortSilence` (`sound.c`) | `info.samples` | `sample_count = info.samples * info.width`, reads each | tests `info.samples > rate * S_MAX_LEN...` to skip long sounds, but the short-silence branch still reads `sample_count` bytes for a sound whose `rate` is large | **defect D25** |
+| `SDL_Cache` (`sdl.c`) | `info.samples`, `info.rate` | `len = info.samples / stepscale`, resample loop reads `data[srcsample]` / `((short *)data)[srcsample]` for `srcsample` up to about `info.samples` | `stepscale = info.rate / sound.speed`; zero-length rejected; the loop index is driven by `info.samples`, so an inflated count reads past `data` and writes a correspondingly large `sc` | **defect D25** (heap over-read on the source; the destination `Z_Malloc(len ...)` is sized from the same inflated count, so it is large but matched) |
+
+D25 is the substantive WAV finding: the data-chunk length word, and the
+`dataofs`, are trusted without any comparison to `wavlength`. A `.wav` named
+in a server sound configstring, downloadable with `allow_download_sounds`,
+sets `info.samples` to any 31-bit value, and four consumers then read that many
+elements from `data + info.dataofs`. Static trace, high confidence. D23 and
+D24 are the same class (unbounded chunk reads, unbounded loop point); D23 is a
+few bytes, D24 reaches the mixer. The minimal fix is a clamp in `GetWavinfo`:
+reject `dataofs > wavlength`, and `samples > (wavlength - dataofs) / (width *
+channels)`; and bound `loopstart` to `samples`.
+
+No host harness was run: `wave.c`, `sound.c` and `sdl.c` include the client
+and SDL sound headers and do not link standalone without a large stub surface.
+The reads above were traced by hand from `info.samples`/`info.dataofs` to each
+`sound_end`/`srcsample` use.
