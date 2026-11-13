@@ -107,11 +107,11 @@ index or size without a check, that is the bug to look for.
 | `cl_main.c` `CL_ParseStatusMessage` → `M_AddToServerList` | `MSG_ReadString` | `Q_strlcpy` into `local_server_names[]` | `m_num_servers == MAX_LOCAL_SERVERS` guard; `Q_strlcpy` truncates | ok |
 | `cl_screen.c` `SCR_ExecuteLayoutString` stat indices | `COM_Parse`+`strtol` of a configstring | `stats[index]`, `configstrings[CS_IMAGES+value]`, `clientinfo[value]` | each checked (`index` vs `MAX_STATS`, `value` vs `MAX_IMAGES`/`MAX_CLIENTS`/`MAX_CONFIGSTRINGS`) | ok |
 | `cl_screen.c` `SCR_ExecuteLayoutString` `"num"` → `stats[strtol(token)]` | layout number | `stats[...]` index | **unchecked** index into `stats[MAX_STATS]` → Defect D3 | defect (D3) |
-| `cl_screen.c` `DrawHUDStringScaled` `line[width++]` | configstring/token chars to `\n` | index into `line[1024]` | **no bound** on `width` → Defect D4 | defect (D4) |
-| `cl_entities.c` `CL_AddPacketEntities` `cl.model_draw[s1->modelindex]` | modelindex byte | model pointer | `s1->number` checked `0..cl_numentities`; **modelindex/2/3/4 not range-checked** before `model_draw[...]` → Defect D5 | defect (D5) |
+| `cl_screen.c` `DrawHUDStringScaled` `line[width++]` | `COM_Parse` token chars to `\n` | index into `line[1024]` | no bound on `width` in the function; its only live callers (`cstring`, `cstring2` layout tokens) pass a `COM_Parse` token, at most `MAX_TOKEN_CHARS - 1` = 1023 characters, so `line[1023]` is the furthest write | hardening (D4, not reachable today) |
+| `cl_entities.c` `CL_AddPacketEntities` `cl.model_draw[s1->modelindex]` (and `modelindex2/3/4`) | modelindex bytes | model pointer | no explicit check; `CL_ParseDelta` reads each with `MSG_ReadByte`, so 0..255 against `model_draw[MAX_MODELS]` (256); `-1` only on a short read, which drops the connection before the frame is used (see D5) | ok (by the byte type; H2) |
 | `cl_entities.c` `ci = &cl.clientinfo[s1->skinnum & 0xff]` | skinnum | clientinfo index | masked `& 0xff`, `MAX_CLIENTS == 256` | ok |
-| `cl_entities.c` `bfg_lightramp[s1->frame]` | frame | index into `[6]` | reached only under `RF_FRAMELERP`/modelindex2==255 path; **`frame` not bounded to 6** → Defect D5 (same class) | defect (D5) |
-| `cl_prediction.c` `cl.model_clip[ent->modelindex]` | modelindex | clip model | guarded by `ent->solid==31`; **modelindex unchecked** → Defect D5 | defect (D5) |
+| `cl_entities.c` `bfg_lightramp[s1->frame]` | frame (`U_FRAME8` byte or `U_FRAME16` signed short) | index into `static int[6]` | reached when `effects & EF_BFG` is set without `EF_ANIM_ALLFAST`; **no check on either side** → Defect D5 | defect (D5) |
+| `cl_prediction.c` `cl.model_clip[ent->modelindex]` | modelindex byte | clip model | reached when `ent->solid == 31`; 0..255 by the byte type against `model_clip[MAX_MODELS]` | ok (by the byte type; H2) |
 | `sound/sound.c` `S_BuildSoundList` `sounds[i]` | loop to `num_entities` | write into caller `sounds[MAX_EDICTS]` | bound is `i <= MAX_CL_ENTNUM` (32767), **not `MAX_EDICTS` (1024)** → Defect D1 | defect (D1) |
 | `sound/sdl.c` `SDL_AddLoopSounds` `sounds[i]` / loop | `i < num_entities` | read/zero `sounds[MAX_EDICTS]` | **no bound vs `MAX_EDICTS`** → Defect D1 | defect (D1) |
 | `sound/sound.c` `cl.sound_precache[sounds[i]]` | sound id from `ent->sound` (byte) | precache index | `ent->sound` is a byte, `MAX_SOUNDS == 256` | ok |
@@ -139,7 +139,8 @@ index or size without a check, that is the bug to look for.
 | `sv_conless.c` `SVC_RemoteCommand` args | `Cmd_Argv(i)` | `Q_strlcat` into `remaining[1024]`; `Cmd_ExecuteString` | `Q_strlcat` bounded; gated on `Rcon_Validate` password | ok (rcon by design) |
 | `sv_conless.c` `SV_ConnectionlessPacket` `s` | `MSG_ReadStringLine` | `Cmd_TokenizeString` | string bounded 2048; tokenizer bounded | ok |
 | `sv_main.c` `SV_UserinfoChanged` `Info_ValueForKey(userinfo,"rate")` | userinfo value | `strtol` → clamped 100..15000 | clamped | ok |
-| game `g_svcmds.c` `SV_FilterPacket`/`StringToFilter` `num[128]`,`b[4]` | userinfo "ip" octets | `num[j++]` | **`j` unbounded** while digits — Defect D7 (game module, not engine core) | defect (D7) |
+| game `g_svcmds.c` `StringToFilter` `num[j++]` | `gi.argv(2)` of `sv addip` / `sv removeip` (server console or rcon; a token of up to 1023 characters) | write into `char num[128]` | **`j` unbounded** while the input is digits → Defect D7 | defect (D7) |
+| game `g_svcmds.c` `SV_FilterPacket` `m[i]` | userinfo `ip` (set by the engine from `net_from` in `SVC_DirectConnect`) | octet bytes `m[4]` | `i < 4` loop bound; does not call `StringToFilter` | ok |
 | game `client.c` `ClientUserinfoChanged` skin → `configstring(CS_PLAYERSKINS+playernum, va("%s\\%s", name, s))` | userinfo | configstring | `playernum = ent - g_edicts - 1`, engine-assigned; name/skin validated by `Info_Validate` | ok |
 
 ## By design (noted, not filed)
@@ -163,140 +164,178 @@ index or size without a check, that is the bug to look for.
 
 ## Defects
 
-Severity: critical = remote memory corruption or file write; high = remote
-crash or OOB read of memory; medium = resource exhaustion; low = hardening.
+Severity is applied to the attacker in the threat model (a hostile server
+against a client; a hostile client or unauthenticated peer against a server):
 
-### D1 — `num_entities` can exceed `MAX_EDICTS`; sound loops write/read past `sounds[MAX_EDICTS]` (high, high confidence) [FIX11 (#107)]
+- critical: an out-of-bounds write or a file write driven by a remote peer.
+- high: a remote crash or hang; an out-of-bounds read whose bytes reach the
+  attacker or that can fault; an unauthenticated takeover of a connection.
+- medium: resource exhaustion; an unvalidated peer value that is in bounds
+  today but seeds state used across the module; memory corruption reachable
+  only by an operator or rcon holder.
+- low: an out-of-bounds read that stays in mapped memory next to the buffer
+  and whose result is only compared or logged locally; hardening.
 
-`CL_ParsePacketEntities`/`CL_DeltaEntity` increment `frame->num_entities` once
-per entity in a frame and never cap it to `MAX_EDICTS` (1024). The underlying
-store `cl_parse_entities` is a 1024-entry ring accessed with a mask, so a
-frame whose entity count exceeds 1024 is counted but aliases in the ring.
-`S_BuildSoundList` (`sound.c`) then loops `for (i = 0; i < num_entities &&
-i <= MAX_CL_ENTNUM; i++) sounds[i] = ...` — the guard is `MAX_CL_ENTNUM`
-(32767), not the size of the caller's array. Both callers
-(`SDL_AddLoopSounds`, and the duplicate loop in it) declare
-`int sounds[MAX_EDICTS]`. When `num_entities > 1024` the write `sounds[i]`
-runs off the end of a 4 KB stack array.
+### D1: `num_entities` can exceed `MAX_EDICTS`; `S_BuildSoundList` writes past `sounds[MAX_EDICTS]` (critical, high confidence) [FIX11 (#107)]
 
-Hostile input: a server that, over the delta chain, accumulates a frame with
-more than 1024 live entities (new high-numbered entities each packet while the
-previously-sent low-numbered entities are auto-carried without consuming
-bytes). The written values are `ent->sound` (0..255) — partially controlled —
-placed at attacker-influenced stack offsets: stack memory corruption on the
-client.
+`CL_ParsePacketEntities` / `CL_DeltaEntity` increment `frame->num_entities`
+once per entity in a frame and never cap it to `MAX_EDICTS` (1024). The store
+`cl_parse_entities` is a 1024-entry ring accessed with a mask, so a frame with
+more than 1024 entities is counted but aliases in the ring.
+`S_BuildSoundList` (`sound.c`) loops `for (i = 0; i < num_entities &&
+i <= MAX_CL_ENTNUM; i++) sounds[i] = ...`: the guard is `MAX_CL_ENTNUM`
+(32767), not the size of the caller's array. Its one caller,
+`SDL_AddLoopSounds` (`sdl.c`), declares `int sounds[MAX_EDICTS]` on the stack
+and then reads `sounds[i]` and `sounds[j]` in its own two loops, also bounded
+only by `num_entities` (the stale values read past the end are then used as
+an index into `cl.sound_precache[]`). When `num_entities > 1024` the write
+`sounds[i]` runs off the end of the 4 KB stack array.
+
+Hostile input and reachability: `CL_ParsePacketEntities` has no ordering or
+uniqueness check on `newnum`. With no delta frame (`oldnum = 99999`) every
+entity record is a "delta from baseline" and is appended, so the same small
+entity number can be repeated; a record with no field bits and an 8-bit
+number costs 2 bytes. One packet (at most `MAX_MSGLEN - 1` = 1399 bytes, less
+the netchan and frame headers) therefore carries about 680 entities. A second
+frame that deltas from the first carries all of those over unchanged (the
+"unchanged" loop runs for every old entry below the first new number) and
+appends about 680 more, so the frame exceeds 1024 entities after two packets
+from the server. The values written are each entity's `sound` byte, chosen by
+the server, at stack slots past the array: server-driven stack memory
+corruption on the client, which the scale rates critical.
 
 Confirmation (ASan harness linking the real `S_BuildSoundList` with
 `num_entities = 1380`): AddressSanitizer reports a `stack-buffer-overflow`
-WRITE of size 4 in `S_BuildSoundList` at `sound.c:1368`, the access landing at
-offset 4128 of the 4096-byte `sounds` array — i.e. the first element past
-`sounds[MAX_EDICTS]`. The write is the real loop writing `sounds[i]`.
+WRITE of size 4 in `S_BuildSoundList` at `sound.c:1368`. The faulting address
+is reported at frame offset 4128, which with ASan's 32-byte left redzone is
+the first element past the end of the 4096-byte `sounds` array, i.e.
+`sounds[MAX_EDICTS]`.
 
-Reachability requires sustaining >1024 carried entities across frames, so I
-rate it high rather than critical; the OOB write itself is certain. Minimal
-fix: cap `num_entities` in `CL_ParsePacketEntities` (drop with `ERR_DROP` if it
-would exceed `MAX_EDICTS`, or clamp the sound loops to `MAX_EDICTS`). The
-cleanest is to bound the frame's entity count at parse time, which also
-protects the other `num_entities` consumers (`cl_entities.c`,
-`cl_prediction.c`, which happen to mask but iterate the inflated count).
+Minimal fix: bound the frame's entity count at parse time (drop with
+`Com_Error(ERR_DROP, ...)` when a frame would exceed `MAX_EDICTS`), which
+also protects the other `num_entities` consumers (`cl_entities.c`,
+`cl_prediction.c`, which mask the ring index but iterate the inflated count);
+clamping the sound loops to `MAX_EDICTS` as well is cheap defence in depth.
 
-### D2 — server `playernum` is not range-checked on the client (medium/high, high confidence) [FIX12 (#108)]
+### D2: server `playernum` is not range-checked on the client (medium, high confidence) [FIX12 (#108)]
 
-`CL_ParseServerData` does `cl.playernum = MSG_ReadShort(...)` with no bound
-except the special value `-1` (cinematic/pic). Elsewhere the client uses
-`cl.playernum + 1` as an entity number and, in `cl_screen.c` "ctf", compares
-`value == cl.playernum`; `sound.c`/`sdl.c` use `plnum = cl.playernum + 1` only
-in equality tests. No direct unmasked array index by `playernum` was found
-(the dangerous consumers compare rather than index), so this is not currently
-an OOB on its own, but it is an unvalidated network value seeding entity
-identity and is exactly the "unchecked playernum" the card's rationale cites.
-Fix: reject `playernum < -1 || playernum >= MAX_CLIENTS` with `ERR_DROP` at the
-read. Low cost, closes the class. Confidence that it is unchecked: high;
-confidence it is independently exploitable today: low — hence medium.
+`CL_ParseServerData` does `cl.playernum = MSG_ReadShort(...)` with no bound;
+only the value `-1` (cinematic or pic) is special. Every consumer found
+compares rather than indexes: `cl.playernum + 1` is compared with entity
+numbers (`cl_entities.c`, `cl_prediction.c`, `cl_tempentities.c`, `sound.c`,
+`sdl.c`), `cl_screen.c` "ctf" compares `value == cl.playernum`, and
+`S_StartSound(NULL, cl.playernum + 1, ...)` stores the number, which
+`CL_GetEntitySoundOrigin` and `CL_GetEntitySoundVelocity` bound against
+`cl_numentities`. So it is not an out-of-bounds access today, but it is an
+unvalidated network value seeding the client's notion of its own entity
+across the module, which the scale rates medium. Fix: reject
+`playernum < -1 || playernum >= MAX_CLIENTS` with `ERR_DROP` at the read.
+Confidence that it is unchecked: high; that it is exploitable today: low.
 
-### D3 — `"num"`/`"hnum"`/`"anum"`/`"rnum"` layout tokens index `stats[]` unchecked (high, high confidence) [FIX13 (#109)]
+### D3: the `"num"` layout token indexes `stats[]` with an unchecked parsed value (high, high confidence) [FIX13 (#109)]
 
-In `SCR_ExecuteLayoutString` (`cl_screen.c`), the `"pic"`, `"stat_string"`,
-`"if"` handlers all validate `index` against `MAX_STATS`, but the `"num"`
-handler does `value = cl.frame.playerstate.stats[(int)strtol(token, NULL, 10)]`
-with no check, and the `hnum`/`anum`/`rnum`/`cnum` variants read a hardcoded
-stat so are safe. The layout string is `cl.configstrings[CS_STATUSBAR]` /
-`cl.layout`, both set from the server (`svc_layout`, `svc_configstring`). A
-server sends `num <width> 999999`, producing an out-of-bounds read of
-`player_state_t.stats[]` (`int[MAX_STATS]`) at an attacker-chosen offset; the
-value is then rendered as a number, so it is an information read, and a large
-negative index can fault. Severity high (remote OOB read / crash). Fix: bound
-the `"num"` stat index to `0..MAX_STATS` like the sibling handlers.
+In `SCR_ExecuteLayoutString` (`cl_screen.c`), the `"pic"`, `"stat_string"`
+and `"if"` handlers validate their parsed stat index against `0..MAX_STATS`,
+but the `"num"` handler does `value =
+cl.frame.playerstate.stats[(int)strtol(token, NULL, 10)]` with no check. It is
+the only handler that indexes `stats[]` by a parsed value (`hnum`, `anum` and
+`rnum` read fixed `STAT_*` slots). The layout string is
+`cl.configstrings[CS_STATUSBAR]` or `cl.layout`, both set by the server
+(`svc_configstring`, `svc_layout`). A layout whose `"num"` stat argument is
+outside `0..MAX_STATS - 1` reads `player_state_t.stats[]` (`short[MAX_STATS]`,
+32 entries) at a server-chosen offset of up to about 2^31 elements either
+side; the value is drawn on the HUD, and a far index faults. Severity high
+(server-driven out-of-bounds read that can crash the client). Fix: bound the
+`"num"` stat index to `0..MAX_STATS - 1` like the sibling handlers.
 
-### D4 — `DrawHUDStringScaled` writes `line[1024]` with no width bound (high, high confidence) [FIX13 (#109)]
+### D4: `DrawHUDStringScaled` fills `line[1024]` with no width bound (hardening, not reachable today) [FIX13 (#109)]
 
-`DrawHUDStringScaled` (`cl_screen.c`) copies a line of the input string into
+`DrawHUDStringScaled` (`cl_screen.c`) copies one line of its input into
 `char line[1024]` with `while (*string && *string != '\n') line[width++] =
-*string++;` and no cap on `width`. It is called from the `cstring`/`cstring2`
-layout tokens with a `COM_Parse` token (bounded to `MAX_TOKEN_CHARS` 1024, so
-that path is at the edge) and, more dangerously, `SCR_DrawCenterString` /
-other callers pass `scr_centerstring` and configstrings. A server-supplied
-layout/centerprint line longer than 1024 bytes with no embedded `\n`
-overflows `line` on the stack. `COM_Parse` tokens are capped near 1024 so the
-cstring path is a 1-byte edge; a direct caller with a longer string is a clear
-overflow. Fix: bound `width` to `sizeof(line)-1`. Severity high (stack OOB
-write of attacker bytes).
+*string++;` and no cap on `width`, so in isolation it overflows on any line
+longer than 1023 characters. Its only live callers are the `"cstring"` and
+`"cstring2"` layout handlers, which pass a `COM_Parse` token. `COM_Parse`
+stores at most `MAX_TOKEN_CHARS` (1024) characters and resets a token that
+reaches that length to empty, so a token is at most 1023 characters and the
+furthest write is the terminator at `line[1023]`. (`DrawHUDString`, the
+non-scaled wrapper, has no callers; `SCR_DrawCenterString` does not use this
+function.) Not reachable today; bounded by the tokenizer, not by the function.
+Fix (hardening): cap `width` at `sizeof(line) - 1`.
 
-### D5 — entity `modelindex`/`modelindex2-4` and `frame` used as array indices without range checks (high, high confidence) [FIX14 (#110)]
+### D5: entity `frame` indexes `bfg_lightramp[6]` unchecked (high, high confidence) [FIX14 (#110)]
 
-`CL_AddPacketEntities` (`cl_entities.c`) indexes `cl.model_draw[s1->modelindex]`
-(and `modelindex2/3/4`) and `cl_prediction.c` indexes
-`cl.model_clip[ent->modelindex]`. `modelindex*` are bytes (0..255) and
-`model_draw`/`model_clip` are `[MAX_MODELS]` (256), so those specific indices
-are in range by type — *ok by construction*. However `bfg_lightramp[s1->frame]`
-indexes a 6-element array with `s1->frame`, which `CL_ParseDelta` reads as a
-`U_FRAME16` short (0..65535); the BFG path is entered via `modelindex2 == 255`
-and `effects`/`renderfx` bits the server controls, so a crafted entity with a
-large `frame` reads far past `bfg_lightramp[6]`. Severity high (OOB read, value
-fed to `V_AddLight` intensity). Fix: bound `s1->frame` before indexing
-`bfg_lightramp`. (The `modelindex*` cases are listed here only to record they
-were checked and are safe by the byte type.) Confidence high for the
-`bfg_lightramp` read.
+In `CL_AddPacketEntities` (`cl_entities.c`), when an entity has `EF_BFG` in
+`effects` and not `EF_ANIM_ALLFAST`, the light intensity is
+`bfg_lightramp[s1->frame]`, a `static int[6]`. `s1->frame` comes from
+`CL_ParseDelta`: a `U_FRAME8` byte (0..255) or a `U_FRAME16` signed short
+(-32768..32767). Both `effects` and `frame` are server-chosen, so a crafted
+entity reads up to 32767 elements past or 32768 elements before the table
+(about 128 KB either way); the value becomes the `V_AddLight` intensity, and a
+far index can fault. Severity high. Fix: use the table only for
+`0 <= frame < 6` (or clamp) before the lookup.
 
-### D6 — negative download `offset` not clamped on the server (high, high confidence — confirmed) [FIX15 (#111)]
+The `modelindex`, `modelindex2/3/4` reads (`cl.model_draw[]` in
+`CL_AddPacketEntities`, `cl.model_clip[]` in `cl_prediction.c`) and
+`gunindex` (`cl.model_draw[ps->gunindex]`) were checked and are in range by
+the byte type: each is read with `MSG_ReadByte` (0..255) into an array of
+`MAX_MODELS` (256). They are recorded as ok in the tables, not as part of D5.
+
+Short reads: on a truncated message every one of these fields can be `-1`
+(`MSG_ReadByte`/`MSG_ReadShort` return `-1` at end of message). No path
+renders such a state: the next read in `CL_ParsePacketEntities`
+(`CL_ParseEntityBits`, followed by the `readcount > cursize` test) or the
+`readcount > cursize` test at the top of the `CL_ParseServerMessage` loop
+raises `Com_Error(ERR_DROP)` before control returns to the frame loop, the
+drop disconnects (`cls.state` leaves `ca_active`, so `CL_AddPacketEntities` is
+not called), and the next `svc_serverdata` runs `CL_ClearState`, which clears
+`cl` and the client entities. The `-1` case therefore does not add to D5; the
+negative values that matter are the ones a server sends deliberately.
+
+### D6: negative download `offset` is not rejected on the server (high, high confidence, confirmed) [FIX15 (#111)]
 
 `SV_BeginDownload_f` (`sv_user.c`) sets `downloadcount = offset` from
-`Cmd_Argv(2)` and only clamps the upper side (`if (offset > downloadsize)`).
-A negative `offset` passes. `SV_NextDownload_f` then computes
-`r = downloadsize - downloadcount` (so `r > downloadsize`, capped to 1024) and
-`SZ_Write(..., download + downloadcount - r, r)` — i.e. `memcpy` from
-`download + offset` for `r` bytes, reading up to 1024 bytes *before* the start
-of the loaded file. A malicious client sends `download maps/x.bsp -64` (any
-map that exists on the server). The server reads out of bounds and copies those
-bytes into the download message sent back to the client — an OOB read of server
-heap memory disclosed to the attacker.
+`Cmd_Argv(2)` and only clamps the upper side (`if (offset >
+downloadsize)`). A negative offset argument is not rejected.
+`SV_NextDownload_f` then computes `r = downloadsize - downloadcount`, caps it
+at 1024 and copies `r` bytes from `download + downloadcount - r` (after adding
+`r` to `downloadcount`), i.e. from `download + offset`. The server therefore
+sends the client memory from before the start of the loaded file buffer, 1024
+bytes per chunk, starting at the offset and continuing forward on each
+`nextdl`. Any connected client can do this for any file the server allows it
+to download. Severity high (out-of-bounds read of server heap memory, contents
+sent to the attacker).
 
 Confirmation (ASan harness linking the real `SV_ExecuteUserCommand` →
-`SV_BeginDownload_f` → `SV_NextDownload_f` with `FS_LoadFile` returning a
-2000-byte heap block and the command `download maps/x.bsp -64`):
-AddressSanitizer reports a `heap-buffer-overflow` READ of size 1024 in
-`SZ_Write` (`szone.c`), the source located 64 bytes before the 2000-byte
-region returned by the stub `FS_LoadFile` — exactly `download + (-64)`. A
-larger magnitude (`-4096`) faults with a `BUS`/segfault instead. Severity high
-(remote OOB read of server memory, contents sent to the attacker). Fix: reject
-`offset < 0` (and keep the existing `> downloadsize` clamp) before using it.
-This is adjacent to, but distinct from, TASK1/#8 (which fixed the *client* side
-`svc_download` size) and FIX1/#40 (download header / savedir): neither touched
-the server-side negative offset.
+`SV_BeginDownload_f` → `SV_NextDownload_f`, with `FS_LoadFile` stubbed to
+return a 2000-byte heap block and a download command with a small negative
+offset): AddressSanitizer reports a `heap-buffer-overflow` READ of size 1024
+in `SZ_Write` (`szone.c`), the source located before the 2000-byte region
+returned by the stub. A larger magnitude faults instead.
 
-### D7 — `StringToFilter` in the game module overflows `num[128]` (medium, medium confidence — game module) [FIX16 (#112)]
+Fix: reject `offset < 0` (keep the existing `> downloadsize` clamp) before
+using it. This is adjacent to, but distinct from, TASK1/#8 (which fixed the
+client-side `svc_download` chunk size) and FIX1/#40 (download names and the
+savedir); neither touched the server-side negative offset.
 
-`StringToFilter` (`src/game/g_svcmds.c`, also reached from `SV_FilterPacket`)
-copies decimal digits of an IP octet into `char num[128]` with `num[j++]` and
-no bound on `j`. The input is the userinfo `"ip"` key. The engine forces
-`ip` to `NET_AdrToString(net_from)` in `SVC_DirectConnect` *before*
-`ClientConnect`, so the normal path is safe; but `ClientConnect` reads
-`Info_ValueForKey(userinfo, "ip")` and the value is bounded to
-`MAX_INFO_VALUE` (64) < 128, so `j` cannot reach 128 through the info string.
-This is therefore not reachable today (ok-by-construction via `MAX_INFO_VALUE`),
-but the loop is unbounded in isolation and lives in the game module (frozen API,
-separate repo for addons). Recorded as a hardening-grade defect; confidence it
-is exploitable today: low. Listed so the class is not silently dropped.
+### D7: `StringToFilter` in the game module overflows `num[128]` (medium, high confidence) [FIX16 (#112)]
+
+`StringToFilter` (`src/game/g_svcmds.c`) copies the decimal digits of each
+octet into `char num[128]` with `num[j++] = *s++` and no bound on `j`. Its only
+callers are `SVCmd_AddIP_f` and `SVCmd_RemoveIP_f`, which pass `gi.argv(2)`:
+the address argument of the `sv addip` / `sv removeip` server commands
+(`ServerCommand`, reached from the engine's `sv` command). `SV_FilterPacket`,
+which checks connecting clients' `ip` userinfo, does not call it. The argument
+is a `COM_Parse` token of up to 1023 characters, so an argument with 128 or
+more consecutive digits writes past `num` on the game module's stack.
+
+Reachability: the `sv` command runs from the server console, a config file
+the server executes, or an rcon command that passed the password check. A
+client's `clc_stringcmd` goes to `SV_ExecuteUserCommand`, whose table does not
+include `sv`. So the attacker is an operator or rcon holder, not an
+unauthenticated peer. Such a party already runs arbitrary console commands,
+but this turns that into stack memory corruption in the game module; the
+scale rates operator-only memory corruption medium. Fix: bound `j` to
+`sizeof(num) - 1` (reject the address if an octet is longer).
 
 ## Hardening (low severity, optional)
 
