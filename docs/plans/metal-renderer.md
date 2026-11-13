@@ -8,7 +8,7 @@
 ## Cards generated
 
 Decision record (owner-gated, `manual:BeauBender`):
-- INFORM7 — Ray-tracing approach: do not import Q2RTXM; Metal rasterizer first, hybrid RT on real hardware
+- INFORM7 — Ray-tracing approach: do not import Q2RTXM; Metal rasterizer first, hybrid RT on real hardware (closed, accepted by the owner on 2026-11-12)
 
 Work cards:
 - TASK20 — Static-link build mode (platform) — tier T0
@@ -26,6 +26,8 @@ Harness and designs (2026-11-06): the operating procedure is
 `docs/plans/metal-port-harness.md`; it links the GL-state inventory, the shim
 design, the ray-tracing design and the record/replay design. TASK27's core
 (capture hook, cadence, driver, diff, scenarios, gate check) is in the tree.
+INFORM7, INFORM8 and INFORM9 were closed as accepted by the owner on
+2026-11-12.
 The cards still to file, with dependencies and acceptance, are in
 `docs/plans/metal-port-cards.md`.
 

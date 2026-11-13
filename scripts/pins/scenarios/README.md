@@ -19,6 +19,9 @@ Rules:
 - `set timedemo 1` in every file: playback is locked to the demo stream.
 - A scenario never names a demo and sets only cvars that exist in `src/`.
   `scripts/pins.sh selftest` (run by the gate) checks both.
+- A scenario name matches `[a-z0-9_][a-z0-9_-]*` (for example `rt-ao`), and a
+  value holds only `A-Z a-z 0-9 _ . -`: the engine re-joins its command line
+  unquoted. The selftest checks the values and `record` refuses others.
 - Every file sets every toggle, so no state leaks from one run to the next.
 - This tree has no cvar that hides the status bar, so the status bar is in
   every scenario. Isolation is by the client-side toggles `cl_entities`,

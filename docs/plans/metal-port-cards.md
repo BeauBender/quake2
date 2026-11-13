@@ -50,17 +50,19 @@ bare-metal Mac where `ref_gl1` renders, T2 an M3 or later.
 
 ## Group P: pins on real game data (parent TASK27, #37)
 
-Parent dependencies carried by every card: INFORM8, INFORM9, TASK29.
+Parent dependencies carried by every card: INFORM8, INFORM9, TASK29
+(INFORM8 and INFORM9 are closed, accepted by the owner on 2026-11-12).
 
 | Key | Title | Depends | Tier | Model | Design reference | Acceptance | Filed as |
 |---|---|---|---|---|---|---|---|
-| P1 | First capture on real data: link the client with the capture hooks and record `ref_soft` references for the four scenarios | none | T0 | opus | `docs/plans/metal-port-harness.md`, "Not yet run" | `make client ref_soft` links on macOS. `scripts/pins.sh record soft <scenario>` exits 0 for all four scenarios and the engine quits by itself. Two consecutive records of `world`, `models` and `hud2d` compare at score 0.000000 on every frame. The run-to-run score of `particles` is measured and recorded as its threshold. Every item in "Not yet run" is answered in the runbook. Nothing derived from game data is committed | |
-| P2 | Remaining scenarios and the user page: sky and water, cinematics, and a `doc/` page for the harness | P1 | T0 | sonnet | TASK27 (#37) scope list; `scripts/pins/scenarios/README.md` | Two new scenario files pass `scripts/pins.sh selftest`. Each records on `soft` and self-compares at score 0. A page in `doc/` lists the scenarios, the environment variables and how to record and compare | |
+| P1 | First capture on real data: link the client with the capture hooks and record `ref_soft` references for the four scenarios | none | T0 | opus | `docs/plans/metal-port-harness.md`, "Not yet run" | `make client ref_soft` links on macOS. `scripts/pins.sh record soft <scenario>` exits 0 for all four scenarios and the engine quits by itself. Two consecutive records of `world`, `models` and `hud2d` (`record soft <scenario>`, then `record soft <scenario> --run 2`) compare at score 0.000000 and bad 0.000000 on every frame (`compare soft <scenario> --run 2 --ref soft`). The run-to-run score of `particles` is measured and recorded as its threshold. Every item in "Not yet run" is answered in the runbook. Nothing derived from game data is committed | |
+| P2 | Remaining scenarios and the user page: sky and water, cinematics, and a `doc/` page for the harness | P1 | T0 | sonnet | TASK27 (#37) scope list; `scripts/pins/scenarios/README.md` | Two new scenario files pass `scripts/pins.sh selftest`. Each records twice on `soft` (the second with `--run 2`) and the two runs compare at score 0 (`compare soft <scenario> --run 2 --ref soft`). A page in `doc/` lists the scenarios, the environment variables and how to record and compare | |
 | P3 | `ref_gl1` references and the thresholds at which `soft` and `gl1` agree | P1, P2 | T1, after checking whether `ref_gl1` renders on the VM | opus | INFORM9 (#36) | `ref_gl1` references for every scenario are in the pin store of a machine where gl1 renders. `scripts/pins.sh compare soft <scenario> --ref gl1` has been run for each, and the score at which the two agree is recorded per scenario in the runbook. If gl1 does not render on the VM, the card says so with the engine log line and waits for a T1 host | |
 
 ## Group R: renderer-API record and replay (parent TASK27, #37)
 
-Parent dependencies carried by every card: INFORM8, INFORM9, TASK29.
+Parent dependencies carried by every card: INFORM8, INFORM9, TASK29
+(INFORM8 and INFORM9 are closed, accepted by the owner on 2026-11-12).
 Design: `docs/plans/refapi-record-replay.md`. On a host where only `soft`
 runs, "each renderer" below means `soft`.
 
@@ -74,7 +76,8 @@ runs, "each renderer" below means `soft`.
 
 ## Group S: the OpenGL-subset shim on Metal (parent TASK21, #28)
 
-Parent dependencies carried by every card: INFORM8, TASK13, TASK27, TASK29.
+Parent dependencies carried by every card: INFORM8, TASK13, TASK27, TASK29
+(INFORM8 is closed, accepted by the owner on 2026-11-12).
 Design: `docs/plans/metal-shim-design.md` and
 `docs/analysis/gl1-state-inventory.md`. The six cards consolidate the ten
 stages of the inventory's section 6 and the three cards of the shim
@@ -100,7 +103,8 @@ its acceptance after every concept.
 
 ## Group RT: ray tracing (parents TASK24, #31, and TASK25, #32)
 
-Parent dependencies carried by RT1 to RT8 and RTA: INFORM7, TASK28. RT9 and
+Parent dependencies carried by RT1 to RT8 and RTA: INFORM7 (closed, accepted
+by the owner on 2026-11-12), TASK28. RT9 and
 RT10 belong to TASK25 and carry TASK24. Design:
 `docs/plans/metal-raytracing-design.md`.
 
@@ -124,7 +128,9 @@ RT10 belong to TASK25 and carry TASK24. Design:
 2. TASK13 and TASK9, then TASK29. These existing cards gate the harness
    through TASK27's labels.
 3. Owner gates: INFORM8 and INFORM9 for groups P, R and S; INFORM7 for
-   group RT.
+   group RT. All three were closed as accepted by the owner on 2026-11-12;
+   nothing waits on them. The cards still carry the `depends` labels the
+   group headings list.
 4. P1, P2, P3 and R1 to R5, then TASK27 itself.
 5. S1 to S6, then TASK21.
 6. TASK28.

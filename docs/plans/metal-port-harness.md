@@ -14,60 +14,100 @@ renderer is judged with it, and what has not been verified yet.
 
 | Piece | Where | Verified |
 |---|---|---|
-| Frame writer, no stb | `VID_WritePinFrame` in `src/client/vid/vid.c` | compiles; never run |
-| Capture before present | `SCR_PinsCapture` in `src/client/cl_screen.c` | compiles; never run |
-| Unattended quit at end of demo | `CL_PinsFrame` in `src/client/cl_main.c` | compiles; never run |
+| Command-line latch of the three pin arguments | `CL_PinsLatch` in `src/client/cl_pins.c`, called from `Qcommon_Init` | `tests/check-pins-latch.sh` green; never run inside the engine |
+| Frame writer, no stb | `VID_WritePinFrame` in `src/client/vid/vid.c` | compiles and links; never run |
+| No renderer fallback while capturing | `VID_CheckChanges` in `src/client/vid/vid.c` | compiles and links; never run |
+| Capture before present | `SCR_PinsCapture` in `src/client/cl_screen.c` | compiles and links; never run |
+| gl1 screenshot flushes the batched 2D quads before reading | `R_ScreenShot` in `src/client/refresh/gl1/gl1_misc.c` | compiles and links; never run |
+| Unattended quit at end of demo | `CL_PinsFrame` in `src/client/cl_main.c` | compiles and links; never run |
 | Driver: record, compare, list, selftest | `scripts/pins.sh` (bash 3.2) | selftest green; `record` never run against an engine |
 | Comparator | `scripts/pins/framediff.c` | selftest green |
 | Scenarios, one per feature | `scripts/pins/scenarios/*.cfg` | names checked against `src/`; never run |
-| Gate check, no game data needed | `tests/check-pins.sh` | green in `scripts/test.sh` |
+| Gate checks, no game data needed | `tests/check-pins.sh`, `tests/check-pins-latch.sh` | green in `scripts/test.sh` |
 
-"Compiles" means each file builds to an object with the Makefile's flags on
-Linux. The client has not been linked with these hooks anywhere.
+"Compiles and links" means the client and all three renderers build with
+these hooks on macOS arm64 against SDL3 3.4.20 (`make` with an untracked
+`config.mk`). Starting the client and capturing a frame have not been
+observed anywhere.
 
 Not in the tree from TASK27: the renderer-API recorder and replayer (design
-in `docs/plans/refapi-record-replay.md`), the sky-and-water and cinematics
-scenarios, and every reference frame.
+in `docs/plans/refapi-record-replay.md`, including `pins.sh replay`), the
+sky-and-water and cinematics scenarios, and every reference frame.
 
-## Cvars
+## Pin arguments
 
-- `pins_dir <path>`: when set, a screenshot is written as an uncompressed
-  24-bit TGA `<pins_scenario>-<frame>.tga` into that directory, with a line
-  in `manifest.txt` (file, renderer, size). `scrnshot/` is not touched.
-- `pins_scenario <id>`: the file-name prefix.
+`pins_dir`, `pins_scenario` and `pins_capture` look like cvars but are not:
+the engine reads them once from its own command line, exactly as
+`+set <name> <value>`, before any config file runs, and keeps them where
+nothing else can change them. A `set` of these names from a config file,
+the console or a server's stufftext only creates an unrelated cvar that is
+never read, because their values name files. `doc/040_cvarlist.md` has
+the user-facing description.
+
+- `pins_dir <path>`: a screenshot is written as an uncompressed 24-bit TGA
+  `<pins_scenario>-<frame>.tga` into that directory, with a line in
+  `manifest.txt` (file, renderer, size). `scrnshot/` is not touched.
+  Refused when empty, containing `..`, or too long for the engine's path
+  buffer; a frame path that would be truncated is never opened.
+- `pins_scenario <id>`: the file-name prefix, `[a-z0-9_][a-z0-9_-]*`.
 - `pins_capture <N>`: while a demo plays, every Nth rendered frame is
   captured after it is complete and before it is presented, by running the
   renderer's own `screenshot` command at that point. When playback ends the
-  engine quits. `0`, the default, disables both.
+  engine quits. If the requested renderer fails to load, the engine stops
+  with an error instead of falling back to another one. `0`, the default,
+  disables all three.
 
-With none of them set the engine behaves as before.
+A refused value turns the harness off and suppresses every screenshot
+write. With none of them given the engine behaves as before.
 
 ## How a run works
 
-`scripts/pins.sh record <renderer> <scenario>` starts the engine with
-`-datadir $PINS_BASEDIR -portable`, a fixed window size, sound off, the
-three cvars above, every `set` line of the scenario as a `+set` argument,
-and `+demomap $PINS_DEMO` (default `demo1.dm2`). Frames land in
-`<store>/<scenario>/<renderer>/<engine commit>-<settings hash>/`. A watchdog
-kills a run after `PINS_TIMEOUT` seconds. `-portable` keeps the engine from
-rewriting the owner's saved configuration; nothing is written into the game
-data.
+`scripts/pins.sh record <renderer> <scenario> [--run N]` starts the engine
+with `-datadir $PINS_BASEDIR -portable`, a fixed window size, sound off,
+the three pin arguments above, every `set` line of the scenario as a
+`+set` argument, and `+demomap $PINS_DEMO` (default `demo1.dm2`). Frames
+land in `<store>/<scenario>/<renderer>/<engine commit>-<settings hash>/`,
+with `-r<N>` appended for `--run N` (N from 2), so a second run of the same
+engine and scenario is kept next to the first. A watchdog kills a run after
+`PINS_TIMEOUT` seconds. `-portable` keeps the engine from rewriting the
+owner's saved configuration; nothing is written into the game data. The
+engine re-joins its command line unquoted, so `record` refuses a store
+path, `PINS_BASEDIR`, `PINS_DEMO` or scenario value with anything but
+`A-Z a-z 0-9 _ . / -`.
 
-`scripts/pins.sh compare <renderer> <scenario> --ref <renderer> [--ref-id <dir>]`
-compares frame by frame and prints one line per frame and a summary. The
-candidate is exactly the directory this checkout's engine commit and these
-`PINS_*` settings record to (it dies and says to record first when it is
-absent). The reference is the directory `--ref-id` names, else the most
-recently modified one under `<scenario>/<ref>/`; the chosen path is printed
-as `ref=`. It exits
-non-zero when any frame is over the threshold or missing.
+A record is complete when the engine exited 0 before the timeout, wrote at
+least one frame, and every line of `manifest.txt` names the requested
+renderer; `record` then writes the file `complete` last. Otherwise it
+writes `incomplete` with the reason and exits non-zero.
+
+`scripts/pins.sh compare <renderer> <scenario> --ref <renderer> [--ref-id <dir>] [--run N | --cand-id <dir>] [--threshold T] [--bad-threshold B]`
+compares frame by frame and prints one line per frame (score, bad
+fraction, verdict) and a summary. The candidate is the directory this
+checkout's engine commit and these `PINS_*` settings record to (run N with
+`--run`, any directory with `--cand-id`; it dies and says to record first
+when it is absent). The reference is the directory `--ref-id` names, else
+the most recently modified complete one under `<scenario>/<ref>/` other
+than the candidate; the chosen path is printed as `ref=`. Both must be
+complete, must differ, and must hold the same number of frames. A frame is
+`ok` when its mean difference is at or under `--threshold` (default 0.02)
+and the fraction of its pixels that differ by more than 8/255 in some
+channel is at or under `--bad-threshold` (default 0.005); the summary
+prints both values, so the thresholds a pin was accepted at are on record.
+It exits non-zero when any frame is over, missing, or the frame counts
+differ. The cross-renderer thresholds (`soft` against `gl1`) are set by
+card P3 from real frames; none are assumed here.
+
+Two runs of one renderer, as P1 and P2 require:
+`pins.sh record soft world`, `pins.sh record soft world --run 2`, then
+`pins.sh compare soft world --run 2 --ref soft`.
 
 ## Not yet run
 
 Nothing below has been observed. The first card (P1 in the manifest)
 answers each item here and replaces this section with what it found.
 
-1. The client links and starts with the three hooks.
+1. The client starts with the hooks (it links on macOS arm64; it has not
+   been started).
 2. A demo started with `+demomap` on the command line reaches playback, and
    `cl.attractloop` is set while it plays (the capture condition).
 3. When the demo ends, the client reaches `ca_disconnected` and the queued
@@ -96,12 +136,14 @@ a built client and renderer modules, and a pin store outside the repository
 3. `scripts/pins.sh record <candidate> <scenario>`, then
    `scripts/pins.sh compare <candidate> <scenario> --ref gl1`.
 4. Fix the one feature the failing scenario names, rebuild, repeat 3. The
-   threshold is never widened to make a pin pass. A scenario marked
+   thresholds (`--threshold`, `--bad-threshold`) are never widened to make
+   a pin pass. A scenario marked
    `nondeterministic:` has its own recorded threshold.
 5. A card's pins pass when every frame of every scenario it names is `ok`.
 
 `scripts/test.sh` stays green with and without game data: the gate runs
-only `tests/check-pins.sh`, on synthetic frames. Pins on real data are run
+only `tests/check-pins.sh` (synthetic frames, fake engines) and
+`tests/check-pins-latch.sh` (the command-line latch, no engine). Pins on real data are run
 inside a card, never by CI.
 
 ## Design documents
