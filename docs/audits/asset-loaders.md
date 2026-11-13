@@ -277,3 +277,66 @@ D11, D12 and D14 are static traces, high confidence: each is an array index
 taken from the file with no comparison anywhere between the read and the use.
 D15 is the one-line fix in this branch (soft `Mod_LoadMarksurfaces` now tests
 `j < 0` like gl1 and gl3).
+
+## MD2 and SP2 models
+
+`Mod_ForName` in each renderer dispatches on the first four bytes (D7) to
+`Mod_LoadMD2` or `Mod_LoadSP2` in `src/client/refresh/files/models.c`; the
+three renderers share both loaders. Unlike a BSP, a model is loaded by the
+renderer alone, so nothing in `collision.c` checks it first. MD5 models are
+named in the card's context, but no MD5 loader exists in this tree: a
+case-insensitive search for `md5` under `src/` finds nothing, and
+`Mod_ForName` knows only `IDALIASHEADER`, `IDSPRITEHEADER` and
+`IDBSPHEADER`. MD2 and SP2 are the only model formats.
+
+### MD2 (`Mod_LoadMD2`)
+
+TASK2 added the size, count and range checks quoted below. The copy goes
+into `Hunk_Alloc(ofs_end)` at the same offsets as the file, so a range that
+lies inside `ofs_end` in the file also lies inside the copy.
+
+| Function | Field | Use | Check (quoted) or absence | Verdict |
+|---|---|---|---|---|
+| `Mod_LoadMD2` | file length | header copy | `if (modfilelen < (int)sizeof(dmdl_t))` | ok |
+| `Mod_LoadMD2` | `version` | format gate | `if (version != ALIAS_VERSION)` | ok |
+| `Mod_LoadMD2` | `ofs_end` | `Hunk_Alloc(ofs_end)`, the bound of every range test | `if (ofs_end < 0 \|\| ofs_end > modfilelen)` | ok |
+| `Mod_LoadMD2` | every early `return NULL` after `Hunk_Begin` | the hunk is not freed | none | carded as FIX10 item 2 |
+| `Mod_LoadMD2` | `skinheight` | soft `R_AliasSetupSkin`: `scaleheight = asset_height / s_pmdl->skinheight` | `if (pheader->skinheight > MAX_LBM_HEIGHT)`; zero and negatives pass | **defect D17** |
+| `Mod_LoadMD2` | `skinwidth` | soft `R_AliasSetupSkin`: `scalewidth = asset_width / s_pmdl->skinwidth` | none | **defect D17** |
+| `Mod_LoadMD2` | `num_xyz` | `s_lerped[MAX_VERTS]` (gl1/gl3), soft `verts + num_xyz` | `num_xyz <= 0`, `num_xyz > MAX_VERTS`; soft also tests `(verts + s_pmdl->num_xyz) >= verts_max` | ok |
+| `Mod_LoadMD2` | `num_st`, `num_tris`, `num_frames`, `num_glcmds` | loop bounds and ranges | `<= 0` each, then `MD2_RANGE_BAD(ofs, cnt, size)` in 64-bit arithmetic against `ofs_end` | ok |
+| `Mod_LoadMD2` | `num_skins` | `skins[MAX_MD2SKINS]` fill, skin name range | clamped by `if (pheader->num_skins > MAX_MD2SKINS)`; `num_skins < 0` refused; range test on `ofs_skins` | ok |
+| `Mod_LoadMD2` | `framesize` | stride of the frame copy and of every frame lookup | `pheader->framesize < (int)(sizeof(daliasframe_t) + (pheader->num_xyz - 1) * sizeof(dtrivertx_t))` refused, range test over `num_frames * framesize` | ok |
+| `Mod_LoadMD2` | `index_xyz[3]`, `index_st[3]` | soft `R_AliasPreparePoints`: `verts[index_xyz]`, `pstverts[index_st]` | none on the values | carded as FIX3 item 5 |
+| `Mod_LoadMD2` | glcmd stream | gl1 `R_DrawAliasFrameLerp`, gl3 `DrawAliasFrameLerp`: vertex count words and `order[2]` as `s_lerped[index_xyz]` | the last word is only reported (`possible last element issues`), the walk is not bounded by `num_glcmds` | carded as FIX3 item 5 |
+| `Mod_LoadMD2` | skin names (`MAX_SKINNAME` bytes each) | `find_image` on the copied name | not terminated by the loader; an unterminated last name reads into the bytes that follow in the hunk copy | hardening |
+| `Mod_LoadMD2` | frame `name[16]` | `memcpy` of a fixed 16 bytes | fixed size | ok |
+| `Mod_LoadMD2` | vertex `lightnormalindex` (byte) | `r_avertexnormals[lightnormalindex]` in gl1/gl3 `R_LerpVerts` (shell effect) and soft `R_AliasTransformFinalVerts`; the table has `NUMVERTEXNORMALS` (162) rows | none; values 162 to 255 read up to 1116 bytes past the static table (`shadedots[...]` has 256 columns and is fine) | **defect D16** (static over-read, garbage normals) |
+| `Mod_LoadMD2` | `st` coordinates (short) | soft `R_ProcessLeftEdge` (called from `R_RasterizeAliasPolySmooth`): texel address `(s >> 16) + (t >> 16) * skinwidth` into the skin pixels, with `s = st.s * scalewidth` | none; the coordinates are never compared with the skin size (gl1/gl3 pass them to the GPU, which clamps or wraps) | **defect D17** (heap over-read of texels, drawn on screen; confidence medium, static trace through the rasterizer setup) |
+| `R_DrawAliasModel` (gl1), `GL3_DrawAliasModel`, `R_AliasSetupFrames` (soft) | entity frame vs `num_frames` | frame lookup | `(e->frame >= paliashdr->num_frames) \|\| (e->frame < 0)` resets to 0, same for `oldframe` | ok |
+
+### SP2 (`Mod_LoadSP2`)
+
+`dsprite_t` is three ints followed by `numframes` records of four ints and a
+64-byte name. Nothing compares the file length with either.
+
+| Function | Field | Use | Check (quoted) or absence | Verdict |
+|---|---|---|---|---|
+| `Mod_LoadSP2` | file length | reads `ident`, `version`, `numframes` and then `sprin->frames[i]`; writes `sprout->frames[i]` into `Hunk_Alloc(modfilelen)` | none; a file shorter than 12 bytes, or with fewer frame records than `numframes`, is read past its end, and the copy is written past the `modfilelen`-byte allocation | **defect D18** |
+| `Mod_LoadSP2` | `version` | format gate | `if (sprout->version != SPRITE_VERSION)`; the early return leaks the hunk like the MD2 paths | ok for memory; hunk leak in the class of FIX10 item 2 |
+| `Mod_LoadSP2` | `numframes` | frame loop, `skins[i]` (`MAX_MD2SKINS` entries), later `currententity->frame %= psprite->numframes` in gl1 `R_DrawSpriteModel`, `GL3_DrawSpriteModel` and soft `R_DrawSprite` | upper clamp only: `if (sprout->numframes > MAX_MD2SKINS)`; zero is accepted, a division by zero (SIGFPE on x86-64); a negative count makes `frame % numframes` fall in `0 .. -numframes - 1`, so `frames[frame]` and `currentmodel->skins[frame]` index past the 32-entry array and the result is used as an image pointer | **defect D18** |
+| `Mod_LoadSP2` | frame `name[64]` | `find_image(name, it_sprite)` | `memcpy` of 64 bytes, not terminated | hardening |
+| `R_DrawSprite` (soft) | frame `width`, `height`, `origin_x`, `origin_y` | polygon size and texel span | `Q_min(s_psprframe->width, skin->width)` and the same for height bound the texel reads; gl1/gl3 use them only as float geometry | ok |
+
+Proof for D18, with the harness from the renderer BSP section: a 12-byte
+SP2 that claims 32 frames.
+
+```text
+ERROR: AddressSanitizer: heap-buffer-overflow ... READ of size 4
+    #0 in Mod_LoadSP2 models.c:292
+... located 0 bytes after 13-byte region   (the 12-byte file plus the pad byte)
+```
+
+D16 is a static trace with high confidence (a byte indexes a 162-row table
+with no test). D7 needs a 1 or 2 byte `.md2`/`.sp2` (any file name a server
+names as a model): high confidence, low impact.
