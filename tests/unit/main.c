@@ -232,6 +232,12 @@ t_write_file(const char *relpath, const void *data, size_t len)
 	char path[MAX_OSPATH];
 	FILE *f;
 
+	if (!t_tmp[0])
+	{
+		fprintf(stderr, "yq2test: no scratch directory, refusing to write %s\n", relpath);
+		exit(2);
+	}
+
 	snprintf(path, sizeof(path), "%s/%s", t_tmp, relpath);
 	t_mkdirs(path);
 
@@ -557,6 +563,7 @@ t_write_str(const char *s)
 static void
 t_on_signal(int sig, siginfo_t *info, void *uctx)
 {
+	int stop = sig == SIGINT || sig == SIGTERM || sig == SIGHUP;
 	int sent = info == NULL || info->si_code == SI_USER || info->si_code <= 0;
 
 	(void)uctx;
@@ -571,9 +578,16 @@ t_on_signal(int sig, siginfo_t *info, void *uctx)
 	/* A real fault re-executes the faulting instruction on return and so
 	   reaches the previous handler with its real context. A signal that
 	   was sent (kill, raise, abort) is sent again. */
-	if (sent)
+	if (stop || sent)
 	{
 		raise(sig);
+
+		/* Still here: the signal was blocked or ignored. Never go on
+		   without the scratch directory. */
+		if (stop)
+		{
+			_exit(128 + sig);
+		}
 	}
 }
 
@@ -595,6 +609,15 @@ t_install_handlers(void)
 
 	for (i = 0; i < sizeof(t_stop_signals) / sizeof(t_stop_signals[0]); i++)
 	{
+		struct sigaction old;
+
+		/* A signal the caller ignores (nohup, a background job) stays
+		   ignored: catching it would end the run's directory but not the run. */
+		if (sigaction(t_stop_signals[i], NULL, &old) == 0 && old.sa_handler == SIG_IGN)
+		{
+			continue;
+		}
+
 		sigaction(t_stop_signals[i], &sa, &t_old_actions[t_stop_signals[i]]);
 	}
 }
