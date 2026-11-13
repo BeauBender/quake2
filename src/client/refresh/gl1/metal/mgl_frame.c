@@ -35,9 +35,11 @@
  * =======================================================================
  */
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <SDL3/SDL.h>
 
@@ -517,7 +519,39 @@ glFinish(void)
  * mgl-readback-NNNNNN.raw, with one line per read in mgl-readback.txt
  * ("NNNNNN x y w h format type alignment bytes"). It lets a frame the
  * pin harness captured be compared with what glReadPixels returned.
+ *
+ * Every file is created new (O_CREAT | O_EXCL | O_NOFOLLOW, mode 0600):
+ * nothing already there, a symbolic link included, is followed or
+ * overwritten. A directory that already holds an earlier run's
+ * mgl-readback.txt turns the hook off for the run, with one message.
+ * At most MGL_DUMP_MAX reads are written per run; later reads are not.
  */
+#define MGL_DUMP_MAX 1000
+
+/* fopen for a dump file that must not exist yet; append opens the log again, never creates it */
+static FILE *
+mgl_dump_open(const char *path, int append)
+{
+	int fd, flags = O_WRONLY | O_NOFOLLOW | (append ? O_APPEND : (O_CREAT | O_EXCL));
+	FILE *f;
+
+	fd = open(path, flags, 0600);
+
+	if (fd < 0)
+	{
+		return NULL;
+	}
+
+	f = fdopen(fd, append ? "ab" : "wb");
+
+	if (!f)
+	{
+		close(fd);
+	}
+
+	return f;
+}
+
 static const char *
 mgl_dump_dir(void)
 {
@@ -562,34 +596,47 @@ mgl_dump_read(GLint x, GLint y, GLsizei w, GLsizei h, GLenum format,
 		const void *data, size_t total)
 {
 	static unsigned n;
+	static int off;
 	const char *dir = mgl_dump_dir();
-	char path[600];
-	FILE *f;
+	char path[600], raw[600];
+	FILE *f, *r;
 	int ok;
 
-	if (!dir)
+	if (!dir || off)
 	{
 		return;
 	}
 
-	snprintf(path, sizeof(path), "%s/mgl-readback-%06u.raw", dir, n);
-	f = fopen(path, "wb");
-	ok = f && fwrite(data, 1, total, f) == total;
+	if (n >= MGL_DUMP_MAX)
+	{
+		off = 1;
+		fprintf(stderr, "mgl: MGL_READBACK_DUMP wrote its %d reads; later reads are not written\n", MGL_DUMP_MAX);
+		return;
+	}
 
-	if (f && fclose(f) != 0)
+	/* the first read creates the log; an existing one, or a link, stops the hook */
+	snprintf(path, sizeof(path), "%s/mgl-readback.txt", dir);
+	f = mgl_dump_open(path, n > 0);
+
+	if (!f)
+	{
+		off = 1;
+		fprintf(stderr, "mgl: MGL_READBACK_DUMP: cannot open %s (it must not exist before the run, nor be a link); nothing more is written\n", path);
+		return;
+	}
+
+	snprintf(raw, sizeof(raw), "%s/mgl-readback-%06u.raw", dir, n);
+	r = mgl_dump_open(raw, 0);
+	ok = r && fwrite(data, 1, total, r) == total;
+
+	if (r && fclose(r) != 0)
 	{
 		ok = 0;
 	}
 
-	snprintf(path, sizeof(path), "%s/mgl-readback.txt", dir);
-	f = fopen(path, "ab");
-
-	if (f)
-	{
-		fprintf(f, "%s%06u %d %d %d %d 0x%04x 0x%04x %d %zu\n", ok ? "" : "FAILED ", n,
-				x, y, w, h, format, GL_UNSIGNED_BYTE, mgl_state.pack_alignment, total);
-		fclose(f);
-	}
+	fprintf(f, "%s%06u %d %d %d %d 0x%04x 0x%04x %d %zu\n", ok ? "" : "FAILED ", n,
+			x, y, w, h, format, GL_UNSIGNED_BYTE, mgl_state.pack_alignment, total);
+	fclose(f);
 
 	n++;
 }
