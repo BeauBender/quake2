@@ -222,3 +222,24 @@ TEST(sv_download_next_position_in_range)
 
 	teardown();
 }
+
+/* A negative offset is refused before anything is loaded: a download
+   that is already running is left alone. */
+TEST(sv_download_negative_offset_leaves_running_download)
+{
+	byte *running;
+
+	setup();
+
+	run("download " DL_NAME);
+	T_REQUIRE(sv_client->download != NULL);
+	running = sv_client->download;
+
+	run("download " DL_NAME " -1");
+	T_EQ_INT(sv_client->netchan.message.cursize, 4);
+	T_CHECK(sv_client->download == running);
+	T_EQ_INT(sv_client->downloadcount, 1024);
+	T_EQ_INT(sv_client->downloadsize, DL_SIZE);
+
+	teardown();
+}
