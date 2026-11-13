@@ -75,7 +75,9 @@ expect "$refused_pin" +set pins_dir /s +set pins_scenario "$s64" +set pins_captu
 unset PINS_BIN PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DIFF
 for cfg in scripts/pins/scenarios/*.cfg; do
 	scen=$(basename "$cfg" .cfg)
-	line=$(PINS_DRYRUN=1 PINS_STORE=/s PINS_BASEDIR=/b bash scripts/pins.sh record gl1 "$scen")
+	demo=demo1.dm2
+	[ "$scen" != cinematic ] || demo=idlog.cin # record pairs the cinematic scenario with a .cin
+	line=$(PINS_DEMO=$demo PINS_DRYRUN=1 PINS_STORE=/s PINS_BASEDIR=/b bash scripts/pins.sh record gl1 "$scen")
 	set -f
 	# shellcheck disable=SC2086
 	set -- $line
