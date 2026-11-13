@@ -33,6 +33,7 @@ static SDL_Window* window = NULL;
 static SDL_GLContext context = NULL;
 qboolean IsHighDPIaware = false;
 static qboolean vsyncActive = false;
+static qboolean unaccelerated = false;
 
 // ----
 
@@ -143,6 +144,14 @@ void RI_SetVsync(void)
 		vsync = -1;
 	}
 
+	/* A software renderer gains nothing from waiting for the
+	   display, and where the window is never shown (a headless
+	   host) the wait for the next swap interval never ends. */
+	if (unaccelerated)
+	{
+		vsync = 0;
+	}
+
 	if (!SDL_GL_SetSwapInterval(vsync))
 	{
 		if (vsync == -1)
@@ -181,9 +190,32 @@ int RI_InitContext(void* win)
 	}
 
 	window = (SDL_Window*)win;
+	unaccelerated = false;
 
 	// Initialize GL context.
 	context = SDL_GL_CreateContext(window);
+
+	if (context == NULL)
+	{
+		/* The accelerated visual requested by RI_PrepareForWindow()
+		   may be what is refused, e.g. on a host whose only OpenGL
+		   renderer is a software one. Retry exactly once, with the
+		   attribute back at SDL's default (no preference). The
+		   window is kept; the pixel format is chosen when the
+		   context is created. A failure of the retry is reported
+		   below like a failure of the first attempt. */
+		Com_Printf("%s: Creating OpenGL Context failed: %s\n", __func__, SDL_GetError());
+
+		SDL_GL_SetAttribute(SDL_GL_ACCELERATED_VISUAL, -1);
+		context = SDL_GL_CreateContext(window);
+
+		if (context != NULL)
+		{
+			unaccelerated = true;
+
+			Com_Printf("%s: No accelerated OpenGL context available, using an unaccelerated one; vsync is off whatever r_vsync says.\n", __func__);
+		}
+	}
 
 	if (context == NULL)
 	{
