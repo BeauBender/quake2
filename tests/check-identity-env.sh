@@ -113,7 +113,7 @@ shim() { # $1 = command, $2 = what it prints ("" = fails)
 }
 gate() { # $1 = label, $2 = wanted status, $3 = text the output must hold
 	rc=0
-	PATH="$tmp/bin:$PATH" HOME=/zzqnohome tests/check-no-local-identity.sh > "$tmp/out" 2>&1 || rc=$?
+	PATH="$tmp/bin:$PATH" HOME="/zzqno""home" tests/check-no-local-identity.sh > "$tmp/out" 2>&1 || rc=$?
 	if [ "$rc" -ne "$2" ] || ! grep -q "$3" "$tmp/out"; then
 		echo "$me: FAIL: $1: status $rc, wanted $2 and \"$3\"; its output:"
 		redact < "$tmp/out"
@@ -125,8 +125,9 @@ gate() { # $1 = label, $2 = wanted status, $3 = text the output must hold
 	fi
 }
 # The self-tests of these checks hold the synthetic host name, so it is a hit.
+# The other two values are split in this file so the tree does not hold them.
 shim hostname zzq-synthetic-box
-shim whoami zzqnobody
+shim whoami "zzqno""body"
 gate "a host name found in tracked files" 1 "tracked files contain this machine's identity"
 shim hostname ''
 gate "host name unreadable" 0 "warning: cannot read the host or user name"
