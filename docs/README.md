@@ -34,7 +34,7 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | `docs/analysis/` | Measured inventories of existing code that plans and cards cite |
 | `docs/DEPENDENCIES.md` | Every external library and vendored file, and its status |
 | `scripts/pins.sh`, `scripts/pins/` | The renderer pin harness: record frames per scenario, compare renderers; user page `doc/100_renderpins.md`, procedure in `docs/plans/metal-port-harness.md` |
-| `tests/` | Repo invariants (`check-*.sh`), run by the gate and each runnable on its own; `baselines/` freezes the upstream gaps they tolerate; `pins/` holds the C driver `check-pins-latch.sh` builds; `refrecord/` holds the record-format test `check-refrecord.sh` builds |
+| `tests/` | Repo invariants (`check-*.sh`), run by the gate and each runnable on its own; `baselines/` freezes the upstream gaps they tolerate; `pins/` holds the C driver `check-pins-latch.sh` builds; `refrecord/` holds the record-format test `check-refrecord.sh` builds; `metal/` holds the Metal shim host test `check-metal-shim.sh` builds |
 | `tests/unit/` | The unit-test suite: hand-written runner (`test.h`, `main.c`), one `test_*.c` per area, the client stubs (`stub_client.c`, `stub_client_full.c`) that let `cl_download.c`, the message parser, handshake, entity, HUD and sound-frontend files link without SDL; built and run by `make test` (in the gate); see `doc/085_unittests.md` |
 | `tests/pins/unit/` | Unit-test pins: committed expected outputs with a provenance header, rewritten by `make test UPDATE_PINS=1` (not the renderer frame pins of `scripts/pins.sh`) |
 | `scripts/coverage.sh`, `scripts/coverage-floor` | Line coverage of the suite with the compiler's own tools, and the floor it must not drop below |

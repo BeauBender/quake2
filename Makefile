@@ -1126,7 +1126,7 @@ endif
 # The shim build keeps its objects apart, they are compiled with other flags.
 REFGL1_OBJS = $(patsubst %,$(BUILDDIR)/ref_gl1_metal/%,$(REFGL1_OBJS_)) \
 	$(patsubst %,$(BUILDDIR)/ref_gl1_metal/src/client/refresh/gl1/metal/%,\
-		mgl_state.o mgl_draw.o mgl_tex.o mgl_frame.o mgl_layer.o)
+		mgl_state.o mgl_draw.o mgl_tex.o mgl_raster.o mgl_frame.o mgl_layer.o)
 else
 REFGL1_OBJS = $(patsubst %,$(BUILDDIR)/ref_gl1/%,$(REFGL1_OBJS_))
 endif
