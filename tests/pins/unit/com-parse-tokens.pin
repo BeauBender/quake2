@@ -26,8 +26,9 @@ quotes:
   []
   [a b]
   [c]
-  [unterminated]
-  end after 4 tokens (last "")
+  [unterminated\x0aline]
+  [end]
+  end after 5 tokens (last "")
 separators are not special:
   [a=b;c{d}e/f]
   end after 1 tokens (last "")

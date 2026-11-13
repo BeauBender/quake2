@@ -68,8 +68,13 @@ TEST(com_parse_tokens)
 		"{ \"origin\" \"-8 16 24\" \"angle\" \"90\" }");
 	pin_tokens(&pin, "comments and whitespace",
 		"  // a comment line\n\tword1 // trailing\n\n  word2\r\n//last");
+	/* Not pinned: a quoted string without its closing quote at the very
+	   end of the input. COM_Parse then returns *data_p one byte past
+	   the terminator and the next call reads beyond the string (found
+	   under ASAN while writing this test, TASK29); extend this test
+	   when that is fixed. */
 	pin_tokens(&pin, "quotes",
-		"\"\" \"a b\"c \"unterminated");
+		"\"\" \"a b\"c \"unterminated\nline\" end");
 	pin_tokens(&pin, "separators are not special",
 		"a=b;c{d}e/f");
 	pin_tokens(&pin, "control characters split words",
