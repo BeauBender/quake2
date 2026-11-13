@@ -38,7 +38,7 @@
    compared or stored (YQ2VERSION, CFGDIRNAME, SAVEGAMEVER, ...) is kept
    apart from them and must not be derived from them. */
 #define DISPLAYNAME "Portmanbeau Quake II"
-#define DISPLAYCREDIT "based on Yamagi Quake II"
+#define DISPLAYCREDIT "based on Yamagi Quake II, from Icculus Quake II and id Software's Quake II"
 #define BASEDIRNAME "baseq2"
 
 #ifndef YQ2OSTYPE
