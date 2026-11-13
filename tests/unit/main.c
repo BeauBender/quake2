@@ -343,7 +343,7 @@ t_expect_exit(void (*fn)(void *), void *arg, char *out, size_t outlen)
 
 		/* A child that hangs must not hang the suite (and the gate):
 		   SIGALRM's default action ends it. */
-		alarm(t_child_timeout);
+		alarm(t_child_timeout > 0 ? t_child_timeout : 10);
 
 		/* Engine output goes to the real console (the pipe) from here. */
 		Com_EndRedirect();
@@ -563,6 +563,9 @@ t_write_str(const char *s)
 static void
 t_on_signal(int sig, siginfo_t *info, void *uctx)
 {
+	/* Cleanup allocates and so can block in a crashed allocator: bound it. */
+	alarm(5);
+
 	int stop = sig == SIGINT || sig == SIGTERM || sig == SIGHUP;
 	int sent = info == NULL || info->si_code == SI_USER || info->si_code <= 0;
 

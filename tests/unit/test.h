@@ -127,7 +127,9 @@ void t_rearm_abortframe(void);
  * seconds and was killed). Engine paths that end in Com_Error(ERR_FATAL)
  * or Sys_Error exit the process; this is how a test observes them. The
  * child's combined stdout and stderr is copied into out (NUL-terminated).
- * A T_* check that fails inside the child fails the calling test.
+ * A T_* check that fails inside the child fails the calling test. Only
+ * T_CHECK-style macros belong in fn, not T_REQUIRE: it longjmps into the
+ * child's copy of the runner's frame.
  */
 #define T_EXIT_TIMEOUT (-2)
 extern unsigned t_child_timeout;
