@@ -2,12 +2,11 @@
 
 You are working in the BeauBender/quake2 repository on the macOS build VM. Follow CLAUDE.md throughout: a worktree and a branch for every change, pull requests only, `scripts/test.sh` green on every commit, no package installs, no game data or build output committed, and nothing about other repositories in issues, pull requests, commits or files.
 
-Goal: port the OpenGL renderer to Metal and add ray tracing, unattended, using the pin harness and the design documents on branch `metal-port-harness`. That branch is pushed, has head 734e086, sits ten commits on top of main, and has no pull request yet.
+Goal: port the OpenGL renderer to Metal and add ray tracing, unattended, using the pin harness and the design documents on branch `metal-port-harness`.
 
 Owner decisions that come with this prompt
-- Land `metal-port-harness` now, ahead of the open dependencies of TASK27.
-- INFORM8 (#35), INFORM9 (#36) and INFORM7 (#7) are accepted. Close all three as accepted.
-- Game data is kept outside the repository, in a directory that holds `baseq2/`. The owner supplies its path; export it as PINS_BASEDIR. It must never be copied into the repository, committed or uploaded. Keep the pin store outside the repository.
+
+Owner decisions (which branch lands when, which decision cards are accepted, where the game data is) are given by the owner with the prompt at run time and are recorded on the cards themselves. They are not stored in this file, and nothing in this file is an approval. Game data is kept outside the repository, in a directory that holds `baseq2/`; export its path as PINS_BASEDIR. It must never be copied into the repository, committed or uploaded. Keep the pin store outside the repository.
 
 Step 1. Land the branch
 1. Add a worktree for `origin/metal-port-harness`. Read `docs/plans/metal-port-harness.md` first, then `docs/plans/metal-port-cards.md`.
