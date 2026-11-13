@@ -80,18 +80,24 @@ configstrings (`cl.configstrings[CS_MODELS..]`, `CS_SOUNDS..`, `CS_IMAGES..`,
 plus the sky in `CS_SKY` and player skins). `CL_RequestNextDownload` walks
 those configstrings and, for each name, calls `CL_CheckOrDownloadFile`, whose
 only gate is `CL_DownloadFilter`. That filter rejects a name that starts with
-`.` or `/`, contains `:` or `..`, ends in a library extension
-(`.dll`, `.dylib`, `.lib`, `.so`, `.a`), or matches the `cl_nodownload_list`
-cvar. It does **not** restrict the asset extension: a server can name a
-`.md2`, `.sp2`, `.bsp`, `.pcx`, `.wal`, `.m8`, `.m32`, `.tga`, `.png`, `.jpg`,
-`.wav` or `.cin` file in a configstring, the client downloads it to the game
-directory, and the matching loader then parses it. `allow_download` is created
-with default `"1"` (`Cvar_Get("allow_download", "1", CVAR_ARCHIVE)` in
-`sv_main.c`, shared with the client in the integrated engine), and the
-per-type `allow_download_models` / `_sounds` / `_maps` gate only whether that
-class is fetched, not what is accepted. So with stock settings effectively
-every format in this audit can arrive over the network from a server the user
-connected to, as a downloaded file that a loader then reads.
+`.` or `/`, contains `:` or `..`, contains a library extension anywhere
+(`.dll`, `.dylib`, `.lib`, `.so`, `.a`, tested with `strstr`, so `x.so.wav`
+is refused too), matches the `cl_nodownload_list` cvar, or already exists. It
+does **not** restrict the asset extension. Model configstrings are requested
+verbatim, so they can name a `.md2`, `.sp2` or `.bsp` (the map is
+`CS_MODELS + 1`); the other classes are requested under names the client
+builds: sounds as `sound/%s`, pics as `pics/%s.pcx`, sky faces as
+`env/%s%s.pcx` or `.tga`, wall textures as `textures/%s.wal`, and MD2 skins
+by the names inside the downloaded model. Any other name, for example an
+`.m8`, `.m32`, `.png`, `.jpg` or `.cin`, can be fetched with the `download`
+console command, which takes an arbitrary name and which a server can issue
+through `svc_stufftext`. `allow_download` is created with default `"1"`
+(`Cvar_Get("allow_download", "1", CVAR_ARCHIVE)` in `sv_main.c`, shared with
+the client in the integrated engine), `allow_download_models`, `_sounds` and
+`_maps` default to `"1"` and `allow_download_players` to `"0"`; they gate
+only whether a class is fetched, not what is accepted. So with stock settings
+effectively every format in this audit can arrive over the network from a
+server the user connected to, as a downloaded file that a loader then reads.
 
 Even with `allow_download 0`, the same loaders run on whatever files are
 already in the search path, and a map, model or sound referenced by the server
@@ -107,9 +113,11 @@ attacker-authored bytes.
 
 The practical conclusion: the renderer BSP, MD2/SP2, image, WAV and cinematic
 findings are all reachable from a malicious or compromised server against a
-default client, which is why the memory-corruption ones (D8, D9, D10, D18,
-D25, D26) are rated high. The pak-directory findings (D4, D5, D6) need a
-hostile `.pak` in a search path, a lower but real bar.
+default client, which is why the server-reachable memory-corruption findings
+are rated high (see the `sev` column under [Defects](#defects)). The
+pak-directory findings (D4, D5, D6) need a hostile `.pak` in a search path, a
+lower but real bar, and none of them is a memory-corruption write, so they are
+medium.
 
 ## Collision BSP (`src/common/collision.c`)
 
@@ -214,7 +222,7 @@ start. `fsPackFile_t` holds `name[MAX_QPATH]`, `size`, `offset`; a
 
 | Function | Field | Use | Check (quoted) or absence | Verdict |
 |---|---|---|---|---|
-| `FS_LoadPAK` | header read | `fread(&header, 1, sizeof(dpackheader_t), handle)` | return value ignored; a file shorter than 12 bytes leaves `dirofs`/`dirlen` as uninitialised stack | hardening (the ident test catches most short files; a file holding only the ident does not) |
+| `FS_LoadPAK` | header read | `fread(&header, 1, sizeof(dpackheader_t), handle)` | return value ignored; a file shorter than 12 bytes leaves `dirofs`/`dirlen` as uninitialised stack | hardening (the ident test catches most short files; a file holding only the ident does not; carded under FIX22) |
 | `FS_LoadPAK` | `ident` | format gate | `LittleLong(header.ident) != IDPAKHEADER` raises `ERR_FATAL` | ok for memory; a garbage `.pak` in the write directory stops the engine at every start (see D5) |
 | `FS_LoadPAK` | `dirlen`, `dirofs` | `numFiles = header.dirlen / sizeof(dpackfile_t)`, `malloc(header.dirlen)`, `fseek(handle, header.dirofs, SEEK_SET)` | `(numFiles == 0) \|\| (header.dirlen < 0) \|\| (header.dirofs < 0)` | ok for sign; no upper bound against the file size (see next rows) |
 | `FS_LoadPAK` | `numFiles` | `Z_Malloc(numFiles * sizeof(fsPackFile_t))` | `numFiles > MAX_FILES_IN_PACK` only prints a message; the product is computed in `size_t` and cannot wrap on 64-bit hosts (at most 33 554 431 entries of 72 bytes, about 2.4 GB) | **defect D5** (resource exhaustion: up to 2 GB `malloc` plus 2.4 GB `calloc` from a header alone; `Z_TagMalloc` turns a failed allocation into `ERR_FATAL`) |
@@ -268,7 +276,7 @@ several rows below cite FIX3.
 | `Mod_ForName` | `*N` inline model | `&parent_model->submodels[i]` | `if (i < 1 \|\| i >= parent_model->numsubmodels)` | ok |
 | `Mod_LoadBrushModel` | file length | header copy and lump swap over `sizeof(dheader_t)` | none in the renderer; `CM_LoadMap` refuses a file shorter than the header first | ok-by-construction (collision-first order) |
 | `Mod_LoadBrushModel` | every `fileofs`, `filelen` | `mod_base + l->fileofs` in every `Mod_Load*` | none in the renderer; `CMod_CheckLumps` checks the same lumps of the same file first | hardening (safe only because of the call order) |
-| `Mod_LoadBrushModel` | lump lengths | `hunkSize` sum via `Mod_CalcLumpHunkSize` and `calcTexinfoAndFacesSize` | `int` arithmetic without an overflow test; a lump of several hundred MB wraps the sum and a later `Hunk_Alloc` fails with `Sys_Error` | hardening (fatal error, not memory corruption) |
+| `Mod_LoadBrushModel` | lump lengths | `hunkSize` sum via `Mod_CalcLumpHunkSize` and `calcTexinfoAndFacesSize` | `int` arithmetic without an overflow test; a lump of several hundred MB wraps the sum and a later `Hunk_Alloc` fails with `Sys_Error` | hardening (fatal error, not memory corruption; carded under FIX17: sum in 64-bit and refuse past a limit) |
 | `Mod_CalcLumpHunkSize`, all `Mod_Load*` | lump length modulo record size | record count | `if (l->filelen % sizeof(*in))` ("funny lump size") | ok |
 | `Mod_LoadVertexes`, `Mod_LoadEdges`, `Mod_LoadSurfedges`, `Mod_LoadPlanes` | counts | array fills through `Hunk_Alloc((count + extra) * size)` | the allocation is sized from the count; there is no upper limit such as `MAX_MAP_SURFEDGES` (the comment "else it errors out later anyway" is not backed by a check; the hunk runs out and `Sys_Error`s) | ok for memory |
 | `Mod_LoadPlanes` | `type` (int, stored in `byte`) | `p[plane->type]` when `< 3` | truncation to `byte` | ok-by-construction |
@@ -362,7 +370,8 @@ lies inside `ofs_end` in the file also lies inside the copy.
 |---|---|---|---|---|
 | `Mod_LoadMD2` | file length | header copy | `if (modfilelen < (int)sizeof(dmdl_t))` | ok |
 | `Mod_LoadMD2` | `version` | format gate | `if (version != ALIAS_VERSION)` | ok |
-| `Mod_LoadMD2` | `ofs_end` | `Hunk_Alloc(ofs_end)`, the bound of every range test | `if (ofs_end < 0 \|\| ofs_end > modfilelen)` | ok |
+| `Mod_LoadMD2` | `ofs_end` | `Hunk_Alloc(ofs_end)`, then the header swap writes `sizeof(dmdl_t)` bytes into it; the bound of every range test | `if (ofs_end < 0 \|\| ofs_end > modfilelen)`: no lower bound, so any `0 <= ofs_end <= modfilelen` is accepted and an `ofs_end` below `sizeof(dmdl_t)` makes the header copy write past the `Hunk_Alloc` block (it stays inside the `Hunk_Begin(modfilelen)` reservation, so later hunk allocations overlap it) | hardening (carded under FIX18: refuse `ofs_end < sizeof(dmdl_t)`) |
+| `Mod_LoadMD2` | `ofs_skins`, `ofs_st`, `ofs_tris`, `ofs_frames`, `ofs_glcmds` | destination of each section copy into the hunk block | `MD2_RANGE_BAD` tests only `ofs < 0` and the end against `ofs_end`; an offset below `sizeof(dmdl_t)` is accepted, so a section copy overwrites the validated, byte-swapped header. The glcmd copy runs before the skin copy: with `ofs_glcmds` inside the header it restores the file's unclamped `num_skins`, and the skin `memcpy` and the loop `skins[i] = find_image(...)` then run past the `MAX_MD2SKINS` clamp | **defect D31** (writes image pointers past the caller's `skins[MAX_MD2SKINS]` array in `model_t`; the skin `memcpy` also outruns the range it was checked for) |
 | `Mod_LoadMD2` | every early `return NULL` after `Hunk_Begin` | the hunk is not freed | none | carded as FIX10 item 2 |
 | `Mod_LoadMD2` | `skinheight` | soft `R_AliasSetupSkin`: `scaleheight = asset_height / s_pmdl->skinheight` | `if (pheader->skinheight > MAX_LBM_HEIGHT)`; zero and negatives pass | **defect D17** |
 | `Mod_LoadMD2` | `skinwidth` | soft `R_AliasSetupSkin`: `scalewidth = asset_width / s_pmdl->skinwidth` | none | **defect D17** |
@@ -386,7 +395,7 @@ lies inside `ofs_end` in the file also lies inside the copy.
 | Function | Field | Use | Check (quoted) or absence | Verdict |
 |---|---|---|---|---|
 | `Mod_LoadSP2` | file length | reads `ident`, `version`, `numframes` and then `sprin->frames[i]`; writes `sprout->frames[i]` into `Hunk_Alloc(modfilelen)` | none; a file shorter than 12 bytes, or with fewer frame records than `numframes`, is read past its end, and the copy is written past the `modfilelen`-byte allocation | **defect D18** |
-| `Mod_LoadSP2` | `version` | format gate | `if (sprout->version != SPRITE_VERSION)`; the early return leaks the hunk like the MD2 paths | ok for memory; hunk leak in the class of FIX10 item 2 |
+| `Mod_LoadSP2` | `version` | format gate | `if (sprout->version != SPRITE_VERSION)`; the early return leaks the hunk like the MD2 paths | ok for memory; hunk leak in the class of FIX10 item 2, which names only MD2, so carded under FIX18 (hardening) |
 | `Mod_LoadSP2` | `numframes` | frame loop, `skins[i]` (`MAX_MD2SKINS` entries), later `currententity->frame %= psprite->numframes` in gl1 `R_DrawSpriteModel`, `GL3_DrawSpriteModel` and soft `R_DrawSprite` | upper clamp only: `if (sprout->numframes > MAX_MD2SKINS)`; zero is accepted, a division by zero (SIGFPE on x86-64); a negative count makes `frame % numframes` fall in `0 .. -numframes - 1`, so `frames[frame]` and `currentmodel->skins[frame]` index past the 32-entry array and the result is used as an image pointer | **defect D18** |
 | `Mod_LoadSP2` | frame `name[64]` | `find_image(name, it_sprite)` | `memcpy` of 64 bytes, not terminated | hardening |
 | `R_DrawSprite` (soft) | frame `width`, `height`, `origin_x`, `origin_y` | polygon size and texel span | `Q_min(s_psprframe->width, skin->width)` and the same for height bound the texel reads; gl1/gl3 use them only as float geometry | ok |
@@ -399,6 +408,22 @@ ERROR: AddressSanitizer: heap-buffer-overflow ... READ of size 4
     #0 in Mod_LoadSP2 models.c:292
 ... located 0 bytes after 13-byte region   (the 12-byte file plus the pad byte)
 ```
+
+Proof for D31, with the same harness: a well-formed small MD2 whose skin
+count is above `MAX_MD2SKINS` and whose glcmd section starts at offset 0,
+with the caller's skin array allocated at its real `MAX_MD2SKINS` size:
+
+```text
+ERROR: AddressSanitizer: heap-buffer-overflow ... WRITE of size 8
+    #0 in Mod_LoadMD2 models.c:227
+... located 0 bytes after 256-byte region
+```
+
+D31 is high: an `.md2` is requested from a server verbatim from the
+`CS_MODELS` configstrings, and the write is a pointer store into the
+following `model_t` fields. The fix is the lower bound on every section
+offset (`ofs_* >= sizeof(dmdl_t)`) and on `ofs_end` (`ofs_end >=
+sizeof(dmdl_t)`).
 
 D16 is a static trace with high confidence (a byte indexes a 162-row table
 with no test). D7 needs a 1 or 2 byte `.md2`/`.sp2` (any file name a server
@@ -482,7 +507,7 @@ dimensions in the three functions).
 | `gl1_image.c`, `gl3_image.c` scale path | `width`, `height`, `scale` | `malloc(width * height * scale * scale)` then `scale2x`/`scale3x` | `if (height == 0 \|\| scale == 0 \|\| width > INT_MAX / height / scale / scale)` raises `ERR_DROP` | ok |
 | `sw_image.c` `R_LoadPic8` scale path | `width * height * 4` | `malloc` then `scale2x` | no overflow guard on `width * height * 4` here (the gl renderers added one; soft did not) | **defect D22** (same class) |
 | `sw_image.c` `R_LoadPic8` | `size`, `data_size` | `full_size = R_GetImageMipsSize(size)`, `malloc(full_size)`, `memcpy(pixels[0], pic, data_size)` | `data_size > full_size` is clamped to `full_size`; `size` and `data_size` both come from the loader as `width * height`-class values and agree | ok |
-| `sw_image.c` resize path | `uploadwidth * uploadheight * 4` | `malloc(pic32)`, `ResizeSTB` | dimensions are `realwidth`/`realheight` or halved copies of the loader size; no overflow guard, same `int` product class | hardening |
+| `sw_image.c` resize path | `uploadwidth * uploadheight * 4` | `malloc(pic32)`, `ResizeSTB` | dimensions are `realwidth`/`realheight` or halved copies of the loader size; no overflow guard, same `int` product class | hardening (carded under FIX19 with D22: the same 64-bit guard) |
 
 Severity note: D19 is high. The wrapped `full_size` is a tiny allocation, not
 an enormous one, so nothing fails first: the header alone (a file of a few
@@ -706,6 +731,18 @@ table, which is compile-time data.
   byte past the buffer, which bounds the worst case; listed as hardening.
 - **Savegames** (`savegame.c`) read local files the user chose and are a
   different trust model; not an asset loader.
+- **Hardening rows with a card.** Five hardening rows are folded into the
+  matching card rather than left open: the renderer `hunkSize` `int` sum
+  (FIX17), the MD2 `ofs_end` lower bound and the SP2 early-return hunk leak
+  (FIX18), the soft `sw_image.c` resize product and the unchecked
+  `Get*Info` dimensions (FIX19), and the WAV sample width other than 1 or 2
+  (FIX20). The short pak header read goes with FIX22, which already checks
+  every other `FS_LoadPAK` read. The `LoadM32` row is a defect (D27), not
+  hardening. The remaining hardening rows (misaligned loads, unterminated
+  names, `..` in a read path) are not carded for the reasons given in the
+  bullets above; the renderer's reliance on `CMod_CheckLumps` running first
+  is not carded because `CM_LoadMap` always runs first on the client and
+  FIX17 adds the renderer's own index checks where they matter.
 
 ## Defects
 
@@ -745,6 +782,7 @@ reachability in [Where each asset can come from](#where-each-asset-can-come-from
 | D28 | `sdl.c` `SDL_Cache` (rate from `wave.c`) | `info.rate` unchecked; a low rate inflates the resampled frame count, `len * width * channels` wraps in `int` to a small allocation, and the loop writes the full count: heap overflow write not closed by the D25 clamp | high | high (static, arithmetic checked) | FIX20 |
 | D29 | `sdl.c` `SDL_Cache`, `sound.c` `S_IsShortSilence` | a zero `info.rate` reaches integer divisions (`begin_length * 1000 / info->rate` and siblings, `(info->samples * 1000) / info->rate`) | medium | high (static) | FIX20 |
 | D30 | `wave.c` `GetWavinfo` return paths | `info` is returned partly filled from early returns (a cue loop length with no data chunk leaves `samples` set and `dataofs` 0) and a negative data-length word gives negative `samples`; nothing validates on any path | medium | high (static) | FIX20 |
+| D31 | MD2 `Mod_LoadMD2` section offsets | section offsets have no lower bound; a section copied over the validated header restores the unclamped `num_skins`, and the skin loop writes image pointers past `skins[MAX_MD2SKINS]` | high | high (ASAN) | FIX18 |
 
 Fixed in this branch: D2, D3 (negative side), D15 — each a one-line bound
 check in its loader, committed separately and noted in its row.
@@ -760,10 +798,10 @@ here (no harness is committed).
 
 | Card | Issue | Defects covered | Severity |
 |---|---|---|---|
-| FIX17 | #115 | D7, D8, D9, D10, D11, D12, D13, D14 (renderer BSP loaders) | high |
-| FIX18 | #116 | D16, D17, D18 (MD2 and SP2) | high |
+| FIX17 | #115 | D7, D8, D9, D10, D11, D12, D13, D14 (renderer BSP loaders), plus hardening: the `int` `hunkSize` sum | high |
+| FIX18 | #116 | D16, D17, D18, D31 (MD2 and SP2), plus hardening: MD2 `ofs_end` lower bound, the SP2 early-return hunk leak | high |
 | FIX19 | #117 | D19, D20, D21, D22, D27 (image loaders), plus hardening: non-positive dimensions from `GetWalInfo`/`GetM8Info`/`GetM32Info` | high |
 | FIX20 | #118 | D23, D24, D25, D28, D29, D30 (WAV and the SDL resampler), plus hardening: refuse a sample width other than 1 or 2 | high |
 | FIX21 | #119 | D26 (cinematic still-image name) | high |
-| FIX22 | #120 | D4, D5, D6 (pak directory) | high |
+| FIX22 | #120 | D4, D5, D6 (pak directory), plus hardening: the unchecked header `fread` | medium |
 | FIX23 | #121 | D1 and the remaining D3 off-by-one (collision BSP), distinct from FIX3 (#44) / FIX10 (#73) | medium |
