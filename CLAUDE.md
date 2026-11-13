@@ -63,6 +63,7 @@ Non-negotiables:
 - Never change the savegame format, the network protocol, or a struct that crosses a module API without a card that asks for it (see Architecture).
 - Never install packages or add a dependency without the owner's approval. A missing tool is reported, not installed.
 - Do not commit secrets, game data (`.pak` files) or build output.
+- Never put the working machine's host name, local user name or a local absolute path in a branch name, file or commit message; `.githooks/pre-push` and `tests/check-no-local-identity.sh` enforce it, so run `scripts/setup.sh` in each checkout.
 
 When compacting, always preserve the list of modified files, the gate command (`scripts/test.sh`) and any open failures.
 

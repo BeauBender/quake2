@@ -12,3 +12,4 @@ Issues gated on the owner) and become a record here once settled.
 |---|---|
 | [0001](0001-remove-optional-dependencies.md) | Remove optional external and vendored dependencies |
 | [0002](0002-gnu-make-only.md) | GNU Make is the only build system |
+| [0003](0003-no-local-identity.md) | Keep the working machine's identity out of what is published |

@@ -27,6 +27,12 @@ unset MAKEFLAGS GNUMAKEFLAGS MFLAGS
 
 cd "$(dirname "$0")/.."
 
+# A warning, not a failure: without the hooks the commit and push guards
+# (.githooks/) do not run in this checkout.
+if [ "$(git config --get core.hooksPath || true)" != ".githooks" ]; then
+	echo "test.sh: warning: core.hooksPath is not .githooks in this checkout, so the commit and push hooks are not wired; run scripts/setup.sh"
+fi
+
 for check in tests/check-*.sh; do
 	"$check"
 done

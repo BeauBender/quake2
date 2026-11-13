@@ -1,6 +1,6 @@
 #!/bin/sh
 # One-time setup for a fresh checkout. Checks the toolchain the gate and the
-# client need and wires the commit hook in .githooks/. It installs nothing:
+# client need and wires the commit and push hooks in .githooks/. It installs nothing:
 # a missing tool is reported with the command that would install it.
 #
 # Usage: scripts/setup.sh            (re-running it is harmless)

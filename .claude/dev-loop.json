@@ -7,5 +7,6 @@
   "merge": { "ciChecks": "require" },
   "risk": { "autoMergeCap": "H", "unattendedCap": "H" },
   "worktree": { "required": true },
-  "memory": { "shared": true }
+  "memory": { "shared": true },
+  "vsm": { "durable": false }
 }
