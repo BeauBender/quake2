@@ -111,6 +111,7 @@ independent of any removal and go first.
 - Network message parsers (client-side `cl_parse.c`, server-side `sv_user.c`,
   `sv_conless.c`, `movemsg.c`, `netchan.c`): every read bounded, every index
   checked. Findings become cards.
+  Record: [`docs/audits/network-parsers.md`](../audits/network-parsers.md).
 - Asset loaders (`collision.c`, `refresh/files/*`, `cl_cin.c`, `wave.c`, pak
   directory parsing in `filesystem.c`).
 - Small vendored files kept (gyro.c, md4.c, rand.c, glob.c, savegame tables):
