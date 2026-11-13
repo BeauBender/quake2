@@ -29,6 +29,7 @@
 
 #include "../../client/header/client.h"
 #include "../../client/header/keyboard.h"
+#include "header/refrecord.h"
 
 // --------
 
@@ -453,6 +454,11 @@ VID_ShutdownRenderer(void)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_StopRecord();
+		}
+
 		/* Shut down the renderer */
 		re.Shutdown();
 		GLimp_ShutdownGraphics();
@@ -565,6 +571,12 @@ VID_LoadRenderer(void)
 		Com_Printf("------------------------------------\n\n");
 
 		return false;
+	}
+
+	/* session open: the renderer cvars a replay restores */
+	if (RefRec_Recording())
+	{
+		RefRec_Control(REC_CVARS, 0);
 	}
 
 	/* Ensure that all key states are cleared */
@@ -712,6 +724,11 @@ R_BeginRegistration(const char *map)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_Registration(REC_BEGINREG, map, NULL);
+		}
+
 		re.BeginRegistration(map);
 	}
 }
@@ -721,7 +738,14 @@ R_RegisterModel(const char *name)
 {
 	if (ref_active)
 	{
-		return re.RegisterModel(name);
+		struct model_s *mod = re.RegisterModel(name);
+
+		if (RefRec_Recording())
+		{
+			RefRec_Registration(REC_MODEL, name, mod);
+		}
+
+		return mod;
 	}
 
 	return NULL;
@@ -732,7 +756,14 @@ R_RegisterSkin(const char *name)
 {
 	if (ref_active)
 	{
-		return re.RegisterSkin(name);
+		struct image_s *skin = re.RegisterSkin(name);
+
+		if (RefRec_Recording())
+		{
+			RefRec_Registration(REC_SKIN, name, skin);
+		}
+
+		return skin;
 	}
 
 	return NULL;
@@ -743,6 +774,13 @@ R_SetSky(const char *name, float rotate, vec3_t axis)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			const float f[4] = { rotate, axis[0], axis[1], axis[2] };
+
+			RefRec_Draw(REC_SKY, NULL, 0, f, 4, name, NULL, 0);
+		}
+
 		re.SetSky(name, rotate, axis);
 	}
 }
@@ -752,6 +790,11 @@ R_EndRegistration(void)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_Registration(REC_ENDREG, NULL, NULL);
+		}
+
 		re.EndRegistration();
 	}
 }
@@ -761,6 +804,11 @@ R_RenderFrame(refdef_t *fd)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_RenderFrame(fd);
+		}
+
 		re.RenderFrame(fd);
 	}
 }
@@ -770,7 +818,14 @@ Draw_FindPic(const char *name)
 {
 	if (ref_active)
 	{
-		return re.DrawFindPic(name);
+		struct image_s *pic = re.DrawFindPic(name);
+
+		if (RefRec_Recording())
+		{
+			RefRec_Registration(REC_PIC, name, pic);
+		}
+
+		return pic;
 	}
 
 	return NULL;
@@ -783,6 +838,13 @@ Draw_GetPicSize(int *w, int *h, const char *name)
 	if (ref_active)
 	{
 		re.DrawGetPicSize(w, h, name);
+
+		if (RefRec_Recording())
+		{
+			const int32_t a[2] = { *w, *h };
+
+			RefRec_Draw(REC_PICSIZE, a, 2, NULL, 0, name, NULL, 0);
+		}
 	}
 }
 
@@ -791,6 +853,13 @@ Draw_StretchPic(int x, int y, int w, int h, const char *name)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			const int32_t a[4] = { x, y, w, h };
+
+			RefRec_Draw(REC_STRETCHPIC, a, 4, NULL, 0, name, NULL, 0);
+		}
+
 		re.DrawStretchPic(x, y, w, h, name);
 	}
 }
@@ -800,6 +869,13 @@ Draw_PicScaled(int x, int y, const char *pic, float factor)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			const int32_t a[2] = { x, y };
+
+			RefRec_Draw(REC_PICSCALED, a, 2, &factor, 1, pic, NULL, 0);
+		}
+
 		re.DrawPicScaled(x, y, pic, factor);
 	}
 }
@@ -809,6 +885,14 @@ Draw_PicScaledCol(int x, int y, const char *pic, float factor, const float color
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			const int32_t a[2] = { x, y };
+			const float f[4] = { factor, color[0], color[1], color[2] };
+
+			RefRec_Draw(REC_PICSCALEDCOL, a, 2, f, 4, pic, NULL, 0);
+		}
+
 		if (re.DrawPicScaledCol)
 		{
 			re.DrawPicScaledCol(x, y, pic, factor, color);
@@ -825,6 +909,13 @@ Draw_CharScaled(int x, int y, int num, float scale)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			const int32_t a[3] = { x, y, num };
+
+			RefRec_Draw(REC_CHARSCALED, a, 3, &scale, 1, NULL, NULL, 0);
+		}
+
 		re.DrawCharScaled(x, y, num, scale);
 	}
 }
@@ -834,6 +925,13 @@ Draw_TileClear(int x, int y, int w, int h, const char *name)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			const int32_t a[4] = { x, y, w, h };
+
+			RefRec_Draw(REC_TILECLEAR, a, 4, NULL, 0, name, NULL, 0);
+		}
+
 		re.DrawTileClear(x, y, w, h, name);
 	}
 }
@@ -843,6 +941,13 @@ Draw_Fill(int x, int y, int w, int h, int c)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			const int32_t a[5] = { x, y, w, h, c };
+
+			RefRec_Draw(REC_FILL, a, 5, NULL, 0, NULL, NULL, 0);
+		}
+
 		re.DrawFill(x, y, w, h, c);
 	}
 }
@@ -852,6 +957,11 @@ Draw_FadeScreen(void)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_Draw(REC_FADESCREEN, NULL, 0, NULL, 0, NULL, NULL, 0);
+		}
+
 		re.DrawFadeScreen();
 	}
 }
@@ -861,6 +971,14 @@ Draw_StretchRaw(int x, int y, int w, int h, int cols, int rows, const byte *data
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			const int32_t a[7] = { x, y, w, h, cols, rows, bits };
+
+			RefRec_Draw(REC_STRETCHRAW, a, 7, NULL, 0, NULL, data,
+				(uint32_t)cols * (uint32_t)rows * (uint32_t)(bits / 8));
+		}
+
 		re.DrawStretchRaw(x, y, w, h, cols, rows, data, bits);
 	}
 }
@@ -870,6 +988,11 @@ R_SetPalette(const unsigned char *palette)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_Draw(REC_PALETTE, NULL, 0, NULL, 0, NULL, palette, palette ? REFREC_PALETTE_SIZE : 0);
+		}
+
 		re.SetPalette(palette);
 	}
 }
@@ -879,6 +1002,11 @@ R_BeginFrame(float camera_separation)
 {
 	if (ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_Control(REC_BEGINFRAME, camera_separation);
+		}
+
 		re.BeginFrame(camera_separation);
 	}
 }
@@ -888,6 +1016,11 @@ R_EndWorldRenderpass(void)
 {
 	if(ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_Control(REC_ENDWORLD, 0);
+		}
+
 		return re.EndWorldRenderpass();
 	}
 	return false;
@@ -898,6 +1031,11 @@ R_EndFrame(void)
 {
 	if(ref_active)
 	{
+		if (RefRec_Recording())
+		{
+			RefRec_Control(REC_ENDFRAME, 0);
+		}
+
 		re.EndFrame();
 	}
 }
