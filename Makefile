@@ -8,7 +8,9 @@
 #  - Renderer libraries (gl1, gl3, soft)                 #
 #                                                        #
 # Base dependencies:                                     #
-#  - SDL 3                                               #
+#  - SDL 3 (vendored in third_party/SDL3 and built      #
+#    statically on OS X; system SDL3 via pkgconf        #
+#    elsewhere)                                         #
 #  - libGL                                               #
 #  - Vulkan headers                                      #
 #                                                        #
@@ -305,8 +307,14 @@ endif
 
 # ----------
 
-# Extra CFLAGS for SDL.
+# Extra CFLAGS for SDL. On OS X SDL3 is built from the
+# vendored source (third_party/sdl3.make, included below);
+# elsewhere the system SDL3 is found by pkgconf.
+ifeq ($(YQ2_OSTYPE), Darwin)
+SDLCFLAGS := -Ithird_party/SDL3/include
+else
 SDLCFLAGS := $(shell $(PKG_CONFIG) --cflags sdl3)
+endif
 
 ifdef NO_SDL_GYRO
 SDLCFLAGS += -DNO_SDL_GYRO
@@ -326,7 +334,8 @@ INCLUDE ?= -I/usr/local/include
 else ifeq ($(YQ2_OSTYPE),Windows)
 INCLUDE ?= -I/usr/include
 else ifeq ($(YQ2_OSTYPE),Darwin)
-INCLUDE ?= -I/usr/local/include -I/opt/homebrew/include
+# Nothing from /usr/local or Homebrew: SDL3 is vendored.
+INCLUDE ?=
 endif
 
 # ----------
@@ -343,7 +352,8 @@ LDFLAGS ?= -L/usr/local/lib
 else ifeq ($(YQ2_OSTYPE),Windows)
 LDFLAGS ?= -L/usr/lib
 else ifeq ($(YQ2_OSTYPE),Darwin)
-LDFLAGS ?= -L/usr/local/lib -L/opt/homebrew/lib
+# Nothing from /usr/local or Homebrew: SDL3 is vendored.
+LDFLAGS ?=
 endif
 
 # Link address sanitizer if requested.
@@ -391,8 +401,24 @@ endif
 # ----------
 
 # Extra LDFLAGS for SDL
+#
+# On OS X the vendored SDL3 is linked statically into the
+# client executable only, and all of it (-force_load), so
+# that every public SDL function is defined and exported
+# by quake2 itself. The renderer dylibs are loaded by the
+# client with dlopen() and use SDL too (GL context,
+# window, SDL_Renderer). They must use the client's SDL,
+# not a second copy: a second static copy would have its
+# own, uninitialised video subsystem and window list. So
+# the renderers are linked without SDL, and only their
+# undefined _SDL_* symbols are marked for lookup at load
+# time (-Wl,-U,<symbol>, see SDL_DYNAMIC_LOOKUP), where
+# dyld finds them in the already loaded executable. Any
+# other undefined symbol still fails the link.
 ifeq ($(YQ2_OSTYPE), Darwin)
-SDLLDFLAGS := -lSDL3
+include third_party/sdl3.make
+SDLLDFLAGS := -Wl,-force_load,$(SDL3_LIB) $(SDL3_LDLIBS)
+SDL_DYNAMIC_LOOKUP = $$(nm -u $^ | grep '^_SDL_' | sort -u | sed 's/^/-Wl,-U,/')
 else
 SDLLDFLAGS := $(shell $(PKG_CONFIG) --libs sdl3)
 endif
@@ -419,7 +445,11 @@ endif
 
 # ----------
 
-# Builds everything
+# Builds everything. Named as the default goal because
+# third_party/sdl3.make, included above on OS X, defines
+# targets of its own.
+.DEFAULT_GOAL := all
+
 all: config client server game ref_gl1 ref_gl3 ref_soft
 
 # ----------
@@ -1083,6 +1113,10 @@ $(BINDIR)/yquake2.exe : $(CLIENT_OBJS) icon
 	${Q}$(CC) $(LDFLAGS) $(BUILDROOT)/icon/icon.res $(CLIENT_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
 $(BINDIR)/quake2.exe : src/win-wrapper/wrapper.c icon
 	$(Q)$(CC) -Wall -mwindows $(BUILDROOT)/icon/icon.res src/win-wrapper/wrapper.c -o $@
+else ifeq ($(YQ2_OSTYPE), Darwin)
+$(BINDIR)/quake2 : $(CLIENT_OBJS) $(SDL3_LIB)
+	@echo "===> LD $@"
+	${Q}$(CC) $(LDFLAGS) $(CLIENT_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
 else
 $(BINDIR)/quake2 : $(CLIENT_OBJS)
 	@echo "===> LD $@"
@@ -1108,7 +1142,7 @@ $(BINDIR)/ref_gl1.dll : $(REFGL1_OBJS)
 else ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/ref_gl1.dylib : $(REFGL1_OBJS)
 	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(REFGL1_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
+	${Q}$(CC) $(LDFLAGS) $(REFGL1_OBJS) $(LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
 else
 $(BINDIR)/ref_gl1.so : $(REFGL1_OBJS)
 	@echo "===> LD $@"
@@ -1123,7 +1157,7 @@ $(BINDIR)/ref_gl3.dll : $(REFGL3_OBJS)
 else ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/ref_gl3.dylib : $(REFGL3_OBJS)
 	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(REFGL3_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
+	${Q}$(CC) $(LDFLAGS) $(REFGL3_OBJS) $(LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
 else
 $(BINDIR)/ref_gl3.so : $(REFGL3_OBJS)
 	@echo "===> LD $@"
@@ -1138,7 +1172,7 @@ $(BINDIR)/ref_soft.dll : $(REFSOFT_OBJS)
 else ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/ref_soft.dylib : $(REFSOFT_OBJS)
 	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(REFSOFT_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
+	${Q}$(CC) $(LDFLAGS) $(REFSOFT_OBJS) $(LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
 else
 $(BINDIR)/ref_soft.so : $(REFSOFT_OBJS)
 	@echo "===> LD $@"
