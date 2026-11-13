@@ -139,3 +139,31 @@ tree", "areaportal > numareaportals"); mode 3 still overflows (filed, not fixed)
 Mode 3 passes even a strict FIX3-style `bitofs < numvisibility` check if the
 lump carries two extra zero bytes for the offset to point at, so D1 is distinct
 from FIX3 item 3.
+
+## Pak directory and paths (`src/common/filesystem.c`)
+
+`FS_AddDirToSearchPath` loads `pak0.pak` to `pak99.pak` (marked protected) and
+then every other `*.pak` in the directory returned by `FS_ListFiles`, so a
+`.pak` that lands in the write directory (for example through a download, see
+[sources](#where-each-asset-can-come-from)) is opened on the next filesystem
+start. `fsPackFile_t` holds `name[MAX_QPATH]`, `size`, `offset`; a
+`dpackfile_t` on disk is `name[56]`, `filepos`, `filelen`.
+
+| Function | Field | Use | Check (quoted) or absence | Verdict |
+|---|---|---|---|---|
+| `FS_LoadPAK` | header read | `fread(&header, 1, sizeof(dpackheader_t), handle)` | return value ignored; a file shorter than 12 bytes leaves `dirofs`/`dirlen` as uninitialised stack | hardening (the ident test catches most short files; a 4-byte `PACK` file does not) |
+| `FS_LoadPAK` | `ident` | format gate | `LittleLong(header.ident) != IDPAKHEADER` raises `ERR_FATAL` | ok for memory; a garbage `.pak` in the write directory stops the engine at every start (see D5) |
+| `FS_LoadPAK` | `dirlen`, `dirofs` | `numFiles = header.dirlen / sizeof(dpackfile_t)`, `malloc(header.dirlen)`, `fseek(handle, header.dirofs, SEEK_SET)` | `(numFiles == 0) \|\| (header.dirlen < 0) \|\| (header.dirofs < 0)` | ok for sign; no upper bound against the file size (see next rows) |
+| `FS_LoadPAK` | `numFiles` | `Z_Malloc(numFiles * sizeof(fsPackFile_t))` | `numFiles > MAX_FILES_IN_PACK` only prints a message; the product is computed in `size_t` and cannot wrap on 64-bit hosts (at most 33 554 431 entries of 72 bytes, about 2.4 GB) | **defect D5** (resource exhaustion: up to 2 GB `malloc` plus 2.4 GB `calloc` from a 12-byte header; `Z_TagMalloc` turns a failed allocation into `ERR_FATAL`) |
+| `FS_LoadPAK` | directory bytes | `fread(info, 1, header.dirlen, handle)` into `malloc`ed (not zeroed) memory | return value ignored; a directory that runs past the end of the file leaves the tail of `info` uninitialised | **defect D4** (feeds the next row) |
+| `FS_LoadPAK` | `name[56]` | `Q_strlcpy(files[i].name, info[i].name, Q_min(sizeof(files[i].name), sizeof(files[i].name)))` | the destination is bounded (the `Q_min` compares the same size twice, presumably meant to name the 56-byte source), but `Q_strlcpy` reads the source up to its NUL; a name with no NUL in the last entry, or uninitialised bytes from the short read above, reads past the end of the `info` allocation | **defect D4** (heap over-read in a loader of a downloadable file) |
+| `FS_LoadPAK` | `filepos`, `filelen` | `files[i].offset`, `files[i].size` | none; neither is compared with the pack file size, and negatives are accepted | **defect D6** (see `FS_FOpenFile` and `FS_LoadFile2` rows) |
+| `FS_FOpenFile` | `pack->files[i].offset` | `fseek(handle->file, pack->files[i].offset, SEEK_SET)` | return of `fseek` ignored; a negative offset leaves the stream at 0 and the caller reads the wrong bytes | D6 |
+| `FS_FOpenFile` | `pack->files[i].size` | returned as the file length to every loader | none | D6 |
+| `FS_LoadFile2` | size from `FS_FOpenFile` | `Z_Malloc(size + (pad < 0 ? 0 : pad))`, `FS_Read(*buffer, size, f)` | `if (size <= 0)` returns early, but only `!size` closes the handle, so a negative pak entry size leaks the open handle and `FILE *` (32 such lookups exhaust `fs_handles` and every later open fails with `ERR_DROP` "none free"); `size + 1` with `size == INT_MAX` is signed overflow; a size past the end of the pack makes `FS_Read` hit end of file twice and raise `ERR_FATAL` | D6 (crash of the engine via `ERR_FATAL`, handle leak) |
+| `FS_Read` | short read | loop on `fread` | second zero-length read raises `ERR_FATAL` | ok for memory (the error is the DoS in D6) |
+| `FS_FOpenFile` | requested name (from configstrings, models, maps) | normalised copy into `name[MAX_OSPATH]`; `rawname[input + 1]` look-ahead | `if (namelen > sizeof(name) - 1)` rejects long names; the look-ahead reads at most the terminating NUL | ok |
+| `FS_FOpenFile` | requested name | `Com_sprintf(path, sizeof(path), "%s/%s", search->path, handle->name)` then `Q_fopen` | `..` is not removed or refused, so a server-supplied model, sound or image name can read files outside the search paths | hardening (read only; the bytes are parsed as an asset and never sent back) |
+| `FS_PackQuickSearch` | pack names | binary search | `FS_SortPack` runs before the pack is searched | ok |
+| `FS_CreatePath` | path | `Sys_Mkdir` on each prefix | `if (strstr(path, "..") != NULL)` refuses | ok |
+| `FS_SetGamedir` | `game` (set from the server's serverdata) | search path and write directory | `!strcmp(dir, ".") \|\| strstr(dir, "..") \|\| strstr(dir, "/") \|\| strstr(dir, "\\")` | ok |
