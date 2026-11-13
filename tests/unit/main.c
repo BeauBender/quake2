@@ -22,6 +22,7 @@
 
 #include <errno.h>
 #include <ftw.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -528,6 +529,17 @@ main(int argc, char **argv)
 	{
 		fprintf(stderr, "yq2test: mkdtemp: %s\n", strerror(errno));
 		return 2;
+	}
+
+	/* The filesystem stores realpath()s (/var is /private/var on macOS);
+	   use the same spelling so tests can match paths in its output. */
+	{
+		char real[PATH_MAX];
+
+		if (realpath(t_tmp, real) && strlen(real) < sizeof(t_tmp))
+		{
+			Q_strlcpy(t_tmp, real, sizeof(t_tmp));
+		}
 	}
 
 	/* Engine start-up errors are fatal to the run. */
