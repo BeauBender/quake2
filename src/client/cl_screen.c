@@ -1668,7 +1668,7 @@ SCR_PinsCapture(void)
 
 	if (!pins_capture)
 	{
-		pins_capture = Cvar_Get("pins_capture", "0", 0);
+		pins_capture = Cvar_Get("pins_capture", "0", CVAR_NOSET);
 	}
 
 	every = (int)pins_capture->value;

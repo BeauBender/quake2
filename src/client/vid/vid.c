@@ -61,9 +61,19 @@ VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 	FILE *f;
 	int x, y;
 
-	if (!pins_dir) { pins_dir = Cvar_Get("pins_dir", "", 0); pins_scenario = Cvar_Get("pins_scenario", "pin", 0); }
+	/* Registered CVAR_NOSET in CL_InitLocal: only +set on the command line
+	   can give them a value, a stuffed or typed "set" is refused. */
+	if (!pins_dir) { pins_dir = Cvar_Get("pins_dir", "", CVAR_NOSET); pins_scenario = Cvar_Get("pins_scenario", "pin", CVAR_NOSET); }
 	if (!pins_dir->string[0]) return false;
 	if (comp != 3 && comp != 4) return false;
+
+	/* Belt and braces: the values end up in a file name. */
+	if (strstr(pins_dir->string, "..") || strpbrk(pins_scenario->string, "/\\:") ||
+		strstr(pins_scenario->string, ".."))
+	{
+		Com_Printf("pins: pins_dir or pins_scenario holds a forbidden character, nothing written\n");
+		return true;
+	}
 
 	Com_sprintf(path, sizeof(path), "%s/%s-%06d.tga", pins_dir->string, pins_scenario->string, frame);
 	f = Q_fopen(path, "wb");

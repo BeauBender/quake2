@@ -562,6 +562,12 @@ CL_InitLocal(void)
 
 	CL_InitInput();
 
+	/* Pin harness (TASK27): command line only, never settable from the
+	   console or from a server's stufftext. */
+	Cvar_Get("pins_dir", "", CVAR_NOSET);
+	Cvar_Get("pins_scenario", "pin", CVAR_NOSET);
+	Cvar_Get("pins_capture", "0", CVAR_NOSET);
+
 	/* register our variables */
 	cin_force43 = Cvar_Get("cin_force43", "1", CVAR_ARCHIVE);
 
@@ -819,7 +825,7 @@ CL_PinsFrame(void)
 
 	if (!pins_capture)
 	{
-		pins_capture = Cvar_Get("pins_capture", "0", 0);
+		pins_capture = Cvar_Get("pins_capture", "0", CVAR_NOSET);
 	}
 
 	if (pins_capture->value <= 0)

@@ -794,7 +794,9 @@ like.
 
 ## Pin harness (TASK27)
 
-These are set by `scripts/pins.sh`, never by a player. With none of them set
+These are set by `scripts/pins.sh`, never by a player. All three are
+command-line only (`+set`): they are write protected, so the console and a
+server's stufftext cannot set them, because their values name files. With none of them set
 the engine behaves exactly as before.
 
 * **pins_dir**: When set to a directory, every screenshot is written there as an
