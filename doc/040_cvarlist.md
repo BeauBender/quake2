@@ -451,10 +451,8 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 
 * **vid_gamma**: The value used for gamma correction. Higher values look
   brighter. The OpenGL 3.2 and Vulkan renderers apply this to
-  the window in realtime via shaders (on all platforms). When the game
-  is built against SDL2, the OpenGL 1.4 renderer uses "hardware gamma"
-  when available, increasing the brightness of the whole screen. When
-  the game is built using SDL3, the OpenGL 1.4 renderer requires a
+  the window in realtime via shaders (on all platforms). The
+  OpenGL 1.4 renderer requires a
   `vid_restart` since gamma values are precomputed at renderer start
   only. On MacOS the situation is similar; `vid_restart` is required.
   This cvar is also set by the brightness slider in the video menu.
@@ -476,8 +474,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   be scaled to the underlying compositor. Scaling applied by the
   compositor may introduce blur and sluggishness.  
   Currently high dpi awareness is only supported under Wayland.  
-  Defaults to `0` when build against SDL2 and to `1` when build against
-  SDL3.
+  Defaults to `1`.
 
 * **vid_maxfps**: The maximum framerate. *Note* that vsync (`r_vsync`) 
   also restricts the framerate to the monitor refresh rate, so if vsync
@@ -625,7 +622,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 
 * **joy_labels**: Defines style of button labels in binding menus. Note
   that binding through console only uses the SDL nomenclature (`0`).
-  Default is `-1`, which requires at least SDL 2.0.12 to work.
+  Default is `-1`, which is autodetected.
   - `-1`: *Autodetect*, sets to `0` if gamepad type isn't detected
   - `0`: *SDL*, face buttons appear as cardinal points
   - `1`: *Xbox*, with One / Series X / S labels
@@ -633,7 +630,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   - `3`: *Switch*, traditional Nintendo button format
 
 * **joy_confirm**: Style of *confirm* and *cancel* buttons in menus. As
-  with the previous one, SDL 2.0.12 is required for `-1` to work.
+  with the previous one, `-1` autodetects.
   - `-1`: *Autodetect*, sets to `1` if Nintendo gamepad, `0` otherwise
   - `0`: *Standard style* - SOUTH to confirm, EAST to cancel
   - `1`: *Japanese style* - EAST to confirm, SOUTH to cancel

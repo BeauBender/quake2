@@ -69,10 +69,8 @@
 /* fall over */
 #define ROLL 2
 
-#if defined(USE_SDL3)
-// Use internal lookup table instead of SDL2 hw gamma funcs for GL1
+// Use internal lookup table for gamma, SDL3 has no hardware gamma ramps
 #define GL1_GAMMATABLE
-#endif
 
 enum stereo_modes {
 	STEREO_MODE_NONE,
@@ -414,7 +412,7 @@ typedef struct
 typedef struct
 {
 	float inverse_intensity;
-	float sw_gamma;	// always 1 if using SDL2 hw gamma
+	float sw_gamma;	// vid_gamma, applied through the lookup table
 	qboolean minlight_set;	// is gl1_minlight > 0 ?
 	qboolean fullscreen;
 
@@ -449,11 +447,6 @@ typedef struct
 
 extern glconfig_t gl_config;
 extern glstate_t gl_state;
-
-/*
- * Updates the gamma ramp (SDL2 only).
- */
-void RI_UpdateGamma(void);
 
 /*
  * Enables or disables the vsync.

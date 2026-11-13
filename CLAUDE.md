@@ -8,7 +8,7 @@ Yamagi Quake II (yquake2): a GPL-2 Quake II engine descended from id Software's 
 
 ## Build
 
-GNU Make (`Makefile`) is the only build system. On macOS the client needs `brew install sdl3` (or `sdl2`); the dedicated server and game module need nothing beyond the system toolchain.
+GNU Make (`Makefile`) is the only build system. On macOS the client needs `brew install sdl3`; the dedicated server and game module need nothing beyond the system toolchain.
 
 ```sh
 make                      # all: client, server, game, ref_gl1, ref_gl3, ref_soft -> release/
@@ -21,7 +21,7 @@ make clean                # remove objects; cleanall also removes release/ debug
 release/quake2 +set basedir /path/to/quake2 -portable   # run against real game data
 ```
 
-Feature switches are `WITH_*` variables (`WITH_SDL3`, `WITH_SYSTEMWIDE`, `WITH_XDG`, `WITH_EXECINFO`, `WITH_RPATH`). Pass them on the command line or put them in an untracked `config.mk`, which the Makefile includes. `-j` is safe.
+Feature switches are `WITH_*` variables (`WITH_SYSTEMWIDE`, `WITH_XDG`, `WITH_EXECINFO`, `WITH_RPATH`). Pass them on the command line or put them in an untracked `config.mk`, which the Makefile includes. `-j` is safe.
 
 There are no unit tests. The repo's gate is `scripts/test.sh`: it runs the repo invariants in `tests/check-*.sh` (savegame tables complete, no new undocumented cvar or command, removed dependencies stay removed, Markdown links resolve), then force-rebuilds `q2ded` and the game module (the targets that need no SDL). It must pass on every commit. Each invariant also runs standalone, e.g. `tests/check-savegame-tables.sh`; while iterating, run the single check or build the one target you touched (`make game`), and the whole gate before a PR. CI (`.github/workflows/`) compiles on Linux and macOS, plus CodeQL and Cppcheck. Beyond that, verification is building the affected targets, ideally with `ASAN=1`, and running the game against real data with the command above (`-portable` keeps config and saves next to the binary instead of `~/.local/share/YamagiQ2` with XDG, or `~/.yq2` without).
 
@@ -36,7 +36,7 @@ The engine is split into separately built, dynamically loaded modules with versi
 
 Things that are not obvious from a single file:
 
-- **SDL2 and SDL3 are parallel implementations, not one with ifdefs.** `src/client/input/sdl2.c` / `sdl3.c` and `src/client/vid/glimp_sdl2.c` / `glimp_sdl3.c` are near-duplicates. A change to input, window, or gamepad handling must be made in both.
+- **SDL3 is the only SDL.** Input, window and gamepad handling live in `src/client/input/sdl3.c` and `src/client/vid/glimp_sdl3.c`; SDL2 support and the `WITH_SDL3` switch were removed, and `tests/check-removed-deps.sh` keeps them out (any spelling of `SDL2`, `SDL_VERSION_ATLEAST(2`, a bare `<SDL.h>` include) in `src`, `Makefile`, `.github` and `stuff/misc`.
 - **Savegames serialize function pointers by name.** `src/game/savegame/savegame.c` maps pointers to names through generated tables in `src/game/savegame/tables/`. Adding, removing or renaming any game function that is stored in an entity field (think functions, touch, use, pain, die, `mmove_t` monster move tables) requires regenerating those tables with the scripts in `stuff/fngen/` and `stuff/mmgen/` (see their READMEs), or saves will fail to load. The format version is `SAVEGAMEVER` in that file.
 - **Cvars and console commands are the configuration and scripting surface.** `Cvar_Get` with `CVAR_ARCHIVE` persists to `<writedir>/config.cfg`; `CVAR_USERINFO` is sent to servers; `CVAR_SERVERINFO` is advertised. New cvars and commands must be documented in `doc/040_cvarlist.md` and `doc/050_commands.md`.
 - **Filesystem search paths** (`src/common/filesystem.c`): `basedir`, then `game` dir, each with loose files overriding `.pak` contents; the user's home directory is pushed on top and is where everything is written. `FS_Gamedir()` is the write location. Map-fix entity overrides in `stuff/mapfixes/` are loaded as `<map>@<crc>.ent`.

@@ -17,6 +17,8 @@ jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    container:
+      image: debian:testing
     permissions:
       security-events: write
       packages: read
@@ -32,6 +34,11 @@ jobs:
         - language: c-cpp
           build-mode: manual
     steps:
+    - name: Install build dependencies
+      run: |
+        apt-get update
+        apt-get install -y libgl1-mesa-dev libsdl3-dev \
+            build-essential git ca-certificates
     - name: Checkout repository
       uses: actions/checkout@v7
     - name: Initialize CodeQL
@@ -42,9 +49,7 @@ jobs:
     - name: Build
       if: matrix.build-mode == 'manual'
       run: |
-        sudo apt-get update
-        sudo apt-get install -y libgl1-mesa-dev libsdl2-dev
-        make -j4 WITH_SDL3=no client server game ref_gl1 ref_gl3 ref_soft
+        make -j4 client server game ref_gl1 ref_gl3 ref_soft
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4.38.0
       with:

@@ -411,7 +411,7 @@ ShutdownGraphics(void)
 		window = NULL;
 	}
 
-	// make sure that after vid_restart the refreshrate will be queried from SDL2 again.
+	// make sure that after vid_restart the refreshrate will be queried from SDL again.
 	glimp_refreshRate = -1;
 
 	initSuccessful = false; // not initialized anymore
@@ -790,7 +790,7 @@ GLimp_InitGraphics(int fullscreen, int *pwidth, int *pheight)
 
 	Com_Printf("Drawable size: %ix%i\n", viddef.width, viddef.height);
 
-	/* Set the window icon - For SDL2, this must be done after creating the window */
+	/* Set the window icon, this must be done after creating the window */
 	SetSDLIcon();
 
 	/* No cursor */
