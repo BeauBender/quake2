@@ -122,8 +122,12 @@ directory (characters `A-Z a-z 0-9 _ . / -`, no `..`), the shim also
 writes every `glReadPixels` result there, byte for byte as the renderer
 received it (bottom row first), as `mgl-readback-NNNNNN.raw`, with one
 line per read in `mgl-readback.txt`. That is the way to check a
-captured frame against the shim's own readback. Like the frames, these
-files come from the game data and stay on the machine that made them.
+captured frame against the shim's own readback. Every file is created
+new and no symbolic link is followed: use an empty directory per run, as
+one that already holds a `mgl-readback.txt` turns the hook off for that
+run. At most 1000 reads are written per run; later reads are not, and
+the shim says so once on stderr. Like the frames, these files come from
+the game data and stay on the machine that made them.
 
 ## Comparing
 

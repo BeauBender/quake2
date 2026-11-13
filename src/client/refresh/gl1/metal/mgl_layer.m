@@ -537,6 +537,13 @@ mgl_layer_ensure_pass(void)
 		return 0;
 	}
 
+	/*
+	 * TASK48: after a mid-frame flush (glReadPixels, glFinish) the
+	 * encoder is nil while frame_passes > 0, so this answers 1 with no
+	 * open encoder. Nothing draws yet, and present copes; the draw path
+	 * must reopen a Load pass itself (design section 7, notes for the
+	 * next card).
+	 */
 	return frame_passes ? 1 : mgl_layer_pass(0, black, 1.0, 0);
 }
 
@@ -729,7 +736,13 @@ mgl_layer_destroy(void)
 			[frame_cmd commit];
 		}
 
-		/* wait for the frames on the GPU, bounded; the semaphore outlives a hung one */
+		/*
+		 * wait for the frames on the GPU, bounded; the semaphore outlives a hung one.
+		 * The completion handlers are code in this dylib: one that arrives after
+		 * this wait gives up, and after the engine unloads the module, would run
+		 * unmapped code. It needs a GPU hung past MGL_GPU_WAIT_MS and is not
+		 * handled yet (design section 7, notes for the next card).
+		 */
 		for (i = 0; i < MGL_FRAMES_IN_FLIGHT; i++)
 		{
 			if (dispatch_semaphore_wait(mgl_frame_sem, mgl_deadline(MGL_GPU_WAIT_MS)) != 0)

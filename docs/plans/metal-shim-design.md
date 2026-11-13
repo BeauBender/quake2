@@ -249,8 +249,10 @@ Cards to file, in order (each `depends:TASK27`, `epic:metal-renderer`):
    threshold, which proves the same-frame staging path.
 
 `gl1-metal` above is the renderer name the harness records under when the
-dylib was built with the shim; the Makefile sets `-DMGL_RENDERER_SUFFIX` so
-`glGetString(GL_RENDERER)` and the pin manifest name it.
+dylib was built with the shim (the pin directory `<scenario>/gl1-metal/`).
+The pin manifest names the module the engine loaded, `gl1`; the build is
+named by `glGetString(GL_RENDERER)`, which ends in `(gl1-metal)` because
+the Makefile sets `-DMGL_RENDERER_SUFFIX` (section 7, "The renderer name").
 
 ## 7. As built by TASK47 (S1): departures from sections 1 to 3
 
@@ -313,17 +315,56 @@ differs from the text above, this list is what the tree does.
   `glReadnPixels`. With `MGL_READBACK_DUMP` set (see
   `doc/100_renderpins.md`) every read is also written to that directory,
   which is how the pins_dir frames were checked against the shim's own
-  readback.
+  readback. The hook creates every file new (`O_CREAT | O_EXCL |
+  O_NOFOLLOW`), stops for the run when the directory already holds a
+  `mgl-readback.txt` or a link in its place, and writes at most 1000
+  reads per run (`MGL_DUMP_MAX` in `mgl_frame.c`).
 - **The renderer name.** The engine writes `vid_renderer` (`gl1`) into
   the pin manifest; the build is named by the `GL_RENDERER` string, which
   ends in `(gl1-metal)` (`-DMGL_RENDERER_SUFFIX`). `scripts/pins.sh record
   gl1-metal` starts the engine with `vid_renderer gl1`, checks the
-  manifest against `gl1` and requires that string in `engine.log`;
-  `record gl1` refuses a log that has it.
+  manifest against `gl1` and requires that string in the first
+  `GL_RENDERER: ` line of `engine.log`; `record gl1` refuses a log whose
+  first such line has it. Only the first line counts: the renderer prints
+  it at init, before the demo starts, and a demo's `svc_print` can put
+  later lines of the same shape into the log.
 - **Encoder state.** Viewport, scissor and depth range are set on every
   new pass and whenever they change; an empty GL scissor has no Metal
   form (the encoder gets a 1x1 rectangle and `mgl_raster_t.scissor_empty`),
   so the draw path must skip draws while it holds.
-- **CI.** Not built in CI yet: the switch is off by default, so the macOS
-  job is unaffected. Building the shim there needs the Metal toolchain on
-  the runner and a workflow change, which is a follow-up card.
+- **Pure C apart.** `mgl_compute_raster` and `mgl_read_contract` live in
+  `mgl_raster.c`, which needs neither SDL nor Metal, so the gate can
+  compile them on any host.
+- **Gate and CI.** `tests/check-metal-shim.sh`, run by `scripts/test.sh`,
+  compiles a host test (`tests/metal/mgl_host_test.c`) of `mgl_raster.c`,
+  `mgl_state.c` and `glPixelStorei` with the system compiler on every OS,
+  and builds `make ref_gl1 WITH_METAL_SHIM=yes` only on Darwin with
+  `xcrun -f metal` and SDL 3 configured, printing `skipped: <reason>`
+  otherwise. No CI workflow builds the shim: the switch is off by
+  default, so the macOS job is unaffected; building it there needs the
+  Metal toolchain on the runner and a workflow change, a follow-up card.
+- **Switching back.** The OpenGL build of `ref_gl1` removes
+  `release/ref_gl1.metallib` when its mode stamp is made, so the shaders
+  of a shim build do not stay beside a dylib that does not use them.
+
+### Notes for the next card (TASK48)
+
+- **Criterion 3 is orientation-blind until something draws.** Every frame
+  the skeleton produces is one colour, so the byte-identity of the
+  pins_dir frames and the `MGL_READBACK_DUMP` reads proves the channel
+  order (a `glClearColor(1, 0, 0.5)` read is `ff 00 80`) but cannot see a
+  row flip; the bottom-up row order of `glReadPixels` is traced only.
+  TASK48, the first card that draws, must re-check the row order with a
+  frame that is not uniform.
+- **Reopen a Load pass after a mid-frame flush.** After `glReadPixels` or
+  `glFinish` in the middle of a frame the encoder is nil while
+  `frame_passes > 0`, so `mgl_layer_ensure_pass` answers 1 with no open
+  encoder (`mgl_layer.m`). The draw path must open a new pass with a
+  Load action itself before it encodes.
+- **A completion handler after unload.** The completion-handler blocks are
+  code inside `ref_gl1.dylib`. `mgl_layer_destroy` stops waiting after
+  `MGL_GPU_WAIT_MS` and the engine then unloads the module, so a
+  completion that arrives later would run unmapped code. It needs a GPU
+  hung past the timeout and was not reproduced; a fix must keep the
+  handlers' code mapped (or the wait unbounded only on that path) without
+  an unbounded wait on the normal one.
