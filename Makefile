@@ -1193,6 +1193,11 @@ TEST_COVFLAGS :=
 endif
 
 TEST_CFLAGS := -DDEDICATED_ONLY -Wno-unused-result $(TEST_COVFLAGS)
+# An undefined-behaviour report ends the test run instead of being printed
+# and passed over. Only the test objects get this, never a shipped binary.
+ifdef UBSAN
+TEST_CFLAGS += -fno-sanitize-recover=undefined
+endif
 ifeq ($(WITH_XDG),yes)
 TEST_CFLAGS += -DUSE_XDG
 endif

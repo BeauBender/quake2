@@ -103,7 +103,10 @@ which a test calls first to give the cvars a value. A test sets up
 through the public ones (`CL_ParseServerMessage`, `CL_ReadPackets`,
 `SCR_UpdateScreen`, `SV_ExecuteUserCommand`). Run `make ASAN=1
 UBSAN=1 test` after a change to this code: the bounds tests rely on the
-sanitizers to report an out-of-bounds access.
+sanitizers to report an out-of-bounds access. The test objects are built
+with `-fno-sanitize-recover=undefined` in that build, so a report of
+undefined behaviour ends the run with a failure; the shipped binaries
+keep the default and only print it.
 
 ## Coverage
 
