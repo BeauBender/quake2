@@ -4,13 +4,13 @@
 # a candidate renderer against them, and self-tests without game data.
 #
 #   pins.sh record  <renderer> <scenario>      capture frames into the pin store
-#   pins.sh compare <renderer> <scenario> [--ref <renderer>] [--threshold T]
+#   pins.sh compare <renderer> <scenario> [--ref <renderer>] [--ref-id <dir>] [--threshold T]
 #   pins.sh list                               what the store holds
 #   pins.sh selftest                           no engine, no game data
 #
 # Environment:
 #   PINS_STORE    the pin store, never inside the repository (INFORM9).
-#                 Default: "pins.store" in .claude/dev-loop.json, else ~/.quake2-pins
+#                 Default: ~/.quake2-pins
 #   PINS_BASEDIR  the directory holding baseq2/ (owner game data, never committed)
 #   PINS_BIN      engine binary. Default: release/quake2
 #   PINS_DEMO     the demo every scenario plays. Default: demo1.dm2
@@ -21,6 +21,11 @@
 #                 Contract: "<diff> a.tga b.tga --threshold T" prints score=...,
 #                 exit 0 at or under the threshold, 2 over it.
 #   PINS_DRYRUN   print the engine command line for "record" and stop
+#
+# compare: the candidate is exactly <store>/<scenario>/<renderer>/<engine
+# commit>-<settings hash> for this checkout and these PINS_* settings (record
+# it first). The reference is the directory named by --ref-id, else the most
+# recently modified directory of <store>/<scenario>/<ref>/; its path is printed.
 #
 # A scenario is a list of console commands (scripts/pins/scenarios/*.cfg).
 # The driver passes each line to the engine as a "+command" argument, then
@@ -35,8 +40,7 @@ check_name() { case $2 in ''|*[!a-z0-9_]*) die "$1 must match [a-z0-9_]+, got '$
 
 store() {
     if [ -n "${PINS_STORE:-}" ]; then echo "$PINS_STORE"; return; fi
-    local s; s=$(sed -n 's/.*"store"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$root/.claude/dev-loop.json" 2>/dev/null | head -1)
-    [ -n "$s" ] && echo "$s" || echo "$HOME/.quake2-pins"
+    echo "$HOME/.quake2-pins"
 }
 engine_sha() { git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo nogit; }
 scenario_hash() {
@@ -105,22 +109,32 @@ cmd_record() {
 }
 
 cmd_compare() {
-    local renderer=$1 scenario=$2 ref=gl1 threshold=0.02; shift 2
+    local renderer=$1 scenario=$2 ref=gl1 threshold=0.02 ref_id=""; shift 2
     check_name renderer "$renderer"; check_name scenario "$scenario"
-    while [ $# -gt 0 ]; do case $1 in --ref) ref=$2; check_name reference "$ref"; shift 2;; --threshold) threshold=$2; shift 2;; *) die "unknown option $1";; esac; done
+    while [ $# -gt 0 ]; do case $1 in --ref) ref=$2; check_name reference "$ref"; shift 2;; --threshold) threshold=$2; shift 2;; --ref-id) ref_id=$2; shift 2;; *) die "unknown option $1";; esac; done
     local s; s=$(store)
-    local cand ref_dir; cand=$(ls -d "$s/$scenario/$renderer"/* 2>/dev/null | tail -1); ref_dir=$(ls -d "$s/$scenario/$ref"/* 2>/dev/null | tail -1)
-    [ -n "$cand" ] || die "no candidate frames for $renderer/$scenario"
-    [ -n "$ref_dir" ] || die "no reference frames for $ref/$scenario"
+    local cand ref_dir
+    cand="$s/$scenario/$renderer/$(engine_sha)-$(scenario_hash "$scenario")"
+    [ -d "$cand" ] || die "no candidate frames at $cand (run: pins.sh record $renderer $scenario, with this engine and these PINS_* settings)"
+    if [ -n "$ref_id" ]; then
+        case $ref_id in */*|..*) die "--ref-id must be a directory name";; esac
+        ref_dir="$s/$scenario/$ref/$ref_id"
+        [ -d "$ref_dir" ] || die "no reference $ref_dir"
+    else
+        ref_dir=$(ls -dt "$s/$scenario/$ref"/*/ 2>/dev/null | head -1); ref_dir=${ref_dir%/}
+        [ -n "$ref_dir" ] || die "no reference frames for $ref/$scenario"
+    fi
     local diff; diff=$(difftool)
-    local worst=0 fails=0 total=0 f base r out
+    local worst=0 fails=0 total=0 f base r out verdict
     printf '%-24s %-10s %s\n' frame score verdict
+    local score
     for f in "$ref_dir"/*.tga; do
         base=$(basename "$f"); r="$cand/$base"; total=$((total+1))
         if [ ! -f "$r" ]; then printf '%-24s %-10s %s\n' "$base" - MISSING; fails=$((fails+1)); continue; fi
-        if out=$("$diff" "$f" "$r" --threshold "$threshold"); then printf '%-24s %-10s %s\n' "$base" "${out#score=}" ok
-        else printf '%-24s %-10s %s\n' "$base" "${out#score=}" OVER; fails=$((fails+1)); fi
-        worst=$(printf '%s\n%s\n' "$worst" "${out#score=}" | awk '{v=$1+0; if (v>m) m=v} END {print m}')
+        if out=$("$diff" "$f" "$r" --threshold "$threshold"); then verdict=ok; else verdict=OVER; fails=$((fails+1)); fi
+        score=${out#score=}; score=${score%% *}; [ -n "$score" ] || score=-
+        printf '%-24s %-10s %s\n' "$base" "$score" "$verdict"
+        worst=$(printf '%s\n%s\n' "$worst" "$score" | awk '{v=$1+0; if (v>m) m=v} END {print m+0}')
     done
     echo "ref=$ref_dir"; echo "candidate=$cand"; echo "frames=$total failed=$fails worst=$worst threshold=$threshold"
     [ "$fails" -eq 0 ]
@@ -146,11 +160,32 @@ cmd_selftest() {
     if "$diff" "$tmp/a.tga" "$tmp/c.tga" --threshold 0.02 >/dev/null; then die "a 60/255 shift must fail at 0.02"; fi
     "$diff" --gen "$tmp/d.tga" 32 32 1; if "$diff" "$tmp/a.tga" "$tmp/d.tga" >/dev/null 2>&1; then die "size mismatch must fail"; fi
     # compare over a fake store: reference = a, candidate = b (pass) then c (fail)
-    mkdir -p "$PINS_STORE/world/gl1/ref" "$PINS_STORE/world/metal/cand"
-    cp "$tmp/a.tga" "$PINS_STORE/world/gl1/ref/world-000000.tga"; cp "$tmp/b.tga" "$PINS_STORE/world/metal/cand/world-000000.tga"
+    local cid; cid="$(engine_sha)-$(scenario_hash world)"
+    mkdir -p "$PINS_STORE/world/gl1/ref" "$PINS_STORE/world/metal/$cid"
+    cp "$tmp/a.tga" "$PINS_STORE/world/gl1/ref/world-000000.tga"; cp "$tmp/b.tga" "$PINS_STORE/world/metal/$cid/world-000000.tga"
     cmd_compare metal world --ref gl1 >/dev/null || die "compare must pass on a near-identical frame"
-    cp "$tmp/c.tga" "$PINS_STORE/world/metal/cand/world-000000.tga"
+    local rep; rep=$(cmd_compare metal world --ref gl1); case $rep in *"ref=$PINS_STORE/world/gl1/ref"*) ;; *) die "compare must print the chosen reference path";; esac
+    # an unrelated directory that sorts last must not be taken for the candidate
+    mkdir -p "$PINS_STORE/world/metal/zzzz-1"; cp "$tmp/c.tga" "$PINS_STORE/world/metal/zzzz-1/world-000000.tga"
+    cmd_compare metal world --ref gl1 >/dev/null || die "compare must use the candidate of this engine and scenario, not the lexically last directory"
+    cp "$tmp/c.tga" "$PINS_STORE/world/metal/$cid/world-000000.tga"
     if cmd_compare metal world --ref gl1 >/dev/null; then die "compare must fail on a far frame"; fi
+    rm -rf "$PINS_STORE/world/metal/$cid"
+    if (cmd_compare metal world --ref gl1) >/dev/null 2>&1; then die "compare must fail when this engine has no recorded candidate"; fi
+    mkdir -p "$PINS_STORE/world/metal/$cid"; cp "$tmp/b.tga" "$PINS_STORE/world/metal/$cid/world-000000.tga"
+    # reference choice: newest by modification time by default, --ref-id picks one
+    mkdir -p "$PINS_STORE/world/gl1/older" "$PINS_STORE/world/gl1/newer"
+    cp "$tmp/a.tga" "$PINS_STORE/world/gl1/older/world-000000.tga"; cp "$tmp/c.tga" "$PINS_STORE/world/gl1/newer/world-000000.tga"
+    touch -t 202001010000 "$PINS_STORE/world/gl1/ref" "$PINS_STORE/world/gl1/older"; touch -t 202101010000 "$PINS_STORE/world/gl1/newer"
+    if cmd_compare metal world --ref gl1 >/dev/null; then die "compare must default to the most recently modified reference"; fi
+    cmd_compare metal world --ref gl1 --ref-id older >/dev/null || die "--ref-id must select that reference"
+    if (cmd_compare metal world --ref gl1 --ref-id nosuch) >/dev/null 2>&1; then die "an unknown --ref-id must fail"; fi
+    # all-zero scores: worst is 0, and the score column holds the number only
+    cp "$tmp/a.tga" "$PINS_STORE/world/metal/$cid/world-000000.tga"
+    rep=$(cmd_compare metal world --ref gl1 --ref-id older)
+    case $rep in *"worst=0 "*) ;; *) die "compare must print worst=0 when every score is 0: $rep";; esac
+    case $rep in *"world-000000.tga"*"0.000000 "*" ok"*) ;; *) die "score column must hold the number: $rep";; esac
+    case $rep in *"max="*frame*|*"score=0.000000 max"*) die "score column carries the comparator line";; esac
     # every scenario: timedemo on, no demo line of its own (the driver adds
     # +demomap), and every cvar it sets exists in this source tree
     local s name
@@ -184,6 +219,7 @@ cmd_selftest() {
     if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record ../evil world) >/dev/null 2>&1; then die "a renderer with .. must be refused"; fi
     if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record gl1 ../world) >/dev/null 2>&1; then die "a scenario with .. must be refused"; fi
     if (cmd_compare 'a/b' world) >/dev/null 2>&1; then die "compare must refuse a renderer with a slash"; fi
+    [ "$(HOME=/h/x PINS_STORE= store)" = "/h/x/.quake2-pins" ] || die "store default must be \$HOME/.quake2-pins, whatever .claude/dev-loop.json holds"
     echo "pins selftest: ok"
 }
 
@@ -192,5 +228,5 @@ case "${1:-}" in
     compare)  [ $# -ge 3 ] || die "usage: pins.sh compare <renderer> <scenario> [--ref r] [--threshold t]"; shift; cmd_compare "$@";;
     list)     cmd_list;;
     selftest) cmd_selftest;;
-    *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1;;
+    *) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 1;;
 esac

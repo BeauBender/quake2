@@ -53,8 +53,13 @@ kills a run after `PINS_TIMEOUT` seconds. `-portable` keeps the engine from
 rewriting the owner's saved configuration; nothing is written into the game
 data.
 
-`scripts/pins.sh compare <renderer> <scenario> --ref <renderer>` compares
-frame by frame and prints one line per frame and a summary. It exits
+`scripts/pins.sh compare <renderer> <scenario> --ref <renderer> [--ref-id <dir>]`
+compares frame by frame and prints one line per frame and a summary. The
+candidate is exactly the directory this checkout's engine commit and these
+`PINS_*` settings record to (it dies and says to record first when it is
+absent). The reference is the directory `--ref-id` names, else the most
+recently modified one under `<scenario>/<ref>/`; the chosen path is printed
+as `ref=`. It exits
 non-zero when any frame is over the threshold or missing.
 
 ## Not yet run
@@ -82,7 +87,7 @@ answers each item here and replaces this section with what it found.
 
 Prerequisites on the Mac: the owner's game data at `$PINS_BASEDIR/baseq2`,
 a built client and renderer modules, and a pin store outside the repository
-(`$PINS_STORE`, or `pins.store` in `.claude/dev-loop.json`).
+(`$PINS_STORE`, default `~/.quake2-pins`).
 
 1. References, once per engine commit and scenario (INFORM9):
    `scripts/pins.sh record gl1 <scenario>` for each scenario on a machine
@@ -127,7 +132,8 @@ render-stage ray queries and the performance numbers.
 
 ## Open decisions for the owner
 
-- INFORM8 and INFORM9 are still open. Groups P, R and S in the manifest
-  wait on them.
+- INFORM7, INFORM8 and INFORM9 were closed as accepted by the owner on
+  2026-11-12. Groups P, R and S in the manifest no longer wait on them. The
+  unattended run prompt is [`metal-port-agent-prompt.md`](metal-port-agent-prompt.md).
 - Whether a freely distributable demo may be downloaded for a CI-side pin
   job (INFORM9, option C). Until then CI runs synthetic frames only.
