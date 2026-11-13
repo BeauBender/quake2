@@ -6,7 +6,8 @@
 # past the end. Recording is off: RefRec_Recording() is false and the
 # recorder entry points do nothing. This builds tests/refrecord/refrecord-test.c
 # against the real refrecord.c, with ASAN and UBSAN when the compiler has
-# them. Needs a C compiler; needs no SDL, no engine and no game data.
+# them. Also: every vid.c wrapper that forwards to the renderer carries its
+# guarded hook. Needs a C compiler; needs no SDL, no engine and no game data.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -35,6 +36,29 @@ if ! ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 "$tmp/refrecor
 	cat "$tmp/out"
 	bad "tests/refrecord/refrecord-test.c failed"
 fi
+
+# Every wrapper that forwards to the renderer is hooked once, behind the
+# RefRec_Recording() guard. Count the guards inside each wrapper body.
+vid=src/client/vid/vid.c
+for fn in VID_LoadRenderer VID_ShutdownRenderer R_BeginRegistration R_RegisterModel \
+	R_RegisterSkin R_SetSky R_EndRegistration R_RenderFrame Draw_FindPic \
+	Draw_GetPicSize Draw_StretchPic Draw_PicScaled Draw_PicScaledCol \
+	Draw_CharScaled Draw_TileClear Draw_Fill Draw_FadeScreen Draw_StretchRaw \
+	R_SetPalette R_BeginFrame R_EndWorldRenderpass R_EndFrame; do
+	n=$(awk -v fn="$fn" '
+		$0 ~ "^" fn "\\(" { body = 1; next }
+		body && /^}/ { body = 0 }
+		body && /RefRec_Recording\(\)/ { n++ }
+		END { print n + 0 }' "$vid")
+	[ "$n" = 1 ] || bad "$vid: $fn has $n RefRec_Recording() hooks, expected 1"
+done
+# the window plumbing is not recorded
+n=$(awk '
+	/^R_IsVSyncActive\(/ { body = 1; next }
+	body && /^}/ { body = 0 }
+	body && /RefRec_/ { n++ }
+	END { print n + 0 }' "$vid")
+[ "$n" = 0 ] || bad "$vid: R_IsVSyncActive is hooked; GLimp-path members are not recorded"
 
 if [ "$fail" = 0 ]; then
 	echo "check-refrecord: ok ($(tail -n 1 "$tmp/out" | sed 's/^refrecord: //'))"
