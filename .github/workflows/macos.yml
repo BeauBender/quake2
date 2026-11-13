@@ -35,6 +35,14 @@ jobs:
       run: |
         # Public runners come with 3 CPUs.
         gmake -j3
+    - name: Unit tests
+      run: |
+        # tests/unit against the q2ded objects; no SDL, no game data.
+        gmake -j3 test
+    - name: Coverage
+      run: |
+        # Toolchain-only line coverage; fails below scripts/coverage-floor.
+        scripts/coverage.sh
     - name: Create testbuild package
       run: |
         # Create release directory tree

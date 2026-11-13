@@ -38,6 +38,14 @@ jobs:
       run: |
         # Public runners come with 4 CPUs.
         make -j4
+    - name: Unit tests
+      run: |
+        # tests/unit against the q2ded objects; no SDL, no game data.
+        make -j4 test
+    - name: Coverage
+      run: |
+        # Toolchain-only line coverage; fails below scripts/coverage-floor.
+        scripts/coverage.sh
     - name: Create testbuild package
       run: |
         # Create release directory tree

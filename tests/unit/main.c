@@ -21,7 +21,7 @@
  */
 
 #include <errno.h>
-#include <ftw.h>
+#include <dirent.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -220,13 +220,38 @@ t_write_file(const char *relpath, const void *data, size_t len)
 	fclose(f);
 }
 
-static int
-t_rm_entry(const char *path, const struct stat *sb, int flag, struct FTW *ftw)
+/* Removes a directory tree (no nftw: glibc hides it by default). */
+static void
+t_rm_tree(const char *path)
 {
-	(void)sb;
-	(void)flag;
-	(void)ftw;
-	return remove(path);
+	struct stat st;
+	DIR *d;
+	struct dirent *e;
+
+	if (lstat(path, &st) != 0)
+	{
+		return;
+	}
+
+	if (S_ISDIR(st.st_mode) && (d = opendir(path)) != NULL)
+	{
+		while ((e = readdir(d)) != NULL)
+		{
+			char sub[MAX_OSPATH];
+
+			if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
+			{
+				continue;
+			}
+
+			snprintf(sub, sizeof(sub), "%s/%s", path, e->d_name);
+			t_rm_tree(sub);
+		}
+
+		closedir(d);
+	}
+
+	remove(path);
 }
 
 /* ---- forked expectations ---- */
@@ -620,7 +645,7 @@ main(int argc, char **argv)
 
 	Com_EndRedirect();
 	t_current = NULL;
-	nftw(t_tmp, t_rm_entry, 16, FTW_DEPTH | FTW_PHYS);
+	t_rm_tree(t_tmp);
 	t_text_free(&t_cap);
 	free(list);
 
