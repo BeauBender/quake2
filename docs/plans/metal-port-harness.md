@@ -2,7 +2,9 @@
 
 Plan anchor: `docs/plans/metal-renderer.md`, as revised by INFORM8 (#35: pin
 at two seams, shim first, then native `ref_metal`) and INFORM9 (#36: pins
-from the owner's game data, in a local store, never committed). Parent
+from the owner's game data, in a local store, never committed; rendered
+stills and short clips may be published as pull-request evidence since
+decision record 0005, the store and the data never). Parent
 cards: TASK27 (#37, harness), TASK21 (#28, OpenGL-subset shim), TASK28
 (#38, native `ref_metal`), TASK24 (#31) and TASK25 (#32, ray tracing). The
 cards filed for it on 2026-11-12, with their ids, are in
@@ -29,6 +31,7 @@ renderer is judged with it, and what the first run on real data found.
 | Argument limit raised: `MAX_NUM_ARGVS` in `src/common/argproc.c` is 128 (was 50); `record` passes 66 to 69 words and the engine refused more than 50 at startup | `scripts/pins.sh selftest` case `argcount` and `tests/check-pins-latch.sh` feed every scenario's command line to the real `COM_InitArgv` | green in `scripts/test.sh`; the engine accepts 69 words (TASK39) |
 | Renderer-API record serializers and the 22 wrapper hooks in `vid.c`, recording off | `src/client/vid/refrecord.c`, `src/client/vid/header/refrecord.h`, `tests/check-refrecord.sh` | every record type round-trips through a buffer in `tests/check-refrecord.sh` (green in `scripts/test.sh`); observed on one host: the `world` scenario recorded on `soft` with a build of the base commit and with a build of the hooks gave 23 frames each, and all 23 frame files and the manifest compared byte-identical with `cmp` (TASK42) |
 | Gate checks, no game data needed | `tests/check-pins.sh`, `tests/check-pins-latch.sh` | green in `scripts/test.sh` |
+| Pull-request evidence: still, animated PNG and GIF clip, manifest; publishing to the `pr-evidence` pre-release with refusals | `scripts/pins.sh evidence`, `evidence-publish`, `evidence-selftest`; encoders in `scripts/pins/evidence.py`; `tests/check-evidence.sh` | self-test green in `scripts/test.sh`; synthetic and real sets published and fetched back (TASK73, below) |
 
 The client and `ref_soft` link and run on macOS arm64 against SDL3
 3.4.20 (`make client ref_soft game` with an untracked `config.mk`). `ref_gl1`
@@ -262,6 +265,86 @@ Host: the build VM, macOS arm64, `soft` at 640x480.
 
 Measured on `soft` over five pairs of runs (run 1 against runs 2 to 6).
 A fixed PRNG seed (record and replay group) would make both exact.
+
+## Evidence on pull requests (TASK73)
+
+Decision record `docs/decisions/0005-pr-evidence-frames.md`: rendered
+stills and short clips may be published as pull-request evidence; the
+game data, demos, cinematics, traces and the pin store never. The user
+page (`doc/100_renderpins.md`, *Evidence for a pull request*) has the
+commands, the files and the refusals.
+
+Procedure for a renderer card: record and compare as above, then
+`scripts/pins.sh evidence <candidate> <scenario> --ref <ref> --card <ID>`
+(the same options as `compare`), look at the still, run
+`scripts/pins.sh evidence-publish <manifest>` and paste the printed
+section into the pull request under a heading `## Evidence`, one
+section per scenario. The pre-release `pr-evidence` was created once by
+hand (`gh release create pr-evidence --prerelease --latest=false`);
+the script uploads only into it, never replaces an asset, and the
+assets are named `<card>-<commit>-<renderer>-<scenario>-*`.
+
+The clip shows the frames the pin captured, every `PINS_EVERY`th
+rendered frame (30 by default: 23 frames over `demo1.dm2`), each for
+500 ms. A smoother clip needs a denser record (`PINS_EVERY=5`, say) in
+its own `--run`; that changes the settings hash, so compare it against
+a reference of the same settings.
+
+### What the synthetic test established (2026-11-13)
+
+A generated test pattern (colour bars, a moving square, frame numbers,
+no game content; `scripts/pins.sh evidence --synthetic`) was published
+through `evidence-publish` to `pr-evidence`: a 320x240 PNG still
+(1478 bytes), a 24-frame animated PNG (49870 bytes) and the same clip as
+GIF (113219 bytes).
+
+1. GitHub's Markdown renderer (`POST /markdown`, mode `gfm`, context this
+   repository, the same pipeline as pull-request bodies) keeps the
+   `<img>` for all three and leaves the URL as is:
+   `https://github.com/<owner>/<repo>/releases/download/pr-evidence/<name>`.
+   It does not route it through the image proxy (`camo`), because the
+   URL is on github.com. The GIF's `<img>` gets a `data-animated-image`
+   attribute (GitHub's play and pause control); the animated PNG's does
+   not, because GitHub recognises animation by the `.gif` extension.
+2. Fetching that URL gives `302` to `release-assets.githubusercontent.com`
+   and then `200` with the exact bytes uploaded (SHA-256 equal to the
+   manifest for every file). The final response is served as
+   `content-type: application/octet-stream` with
+   `content-disposition: attachment`, whatever type the asset was
+   uploaded with (the API lists `image/png` and `image/gif`), and
+   without `x-content-type-options: nosniff`. The github.com page's
+   Content-Security-Policy lists `release-assets.githubusercontent.com`
+   under `img-src`, so the page allows images from there.
+3. Size: an animated PNG of random noise of 3753869 bytes and one of
+   9760144 bytes were published the same way, rendered to an `<img>` by
+   the Markdown API and fetched back whole (status 200, digest equal),
+   then deleted. No limit was met up to 9.76 MB: release assets are not
+   proxied, so the proxy's limits do not apply; the evidence budget
+   stays at 4 MB per file to keep a pull-request page light.
+
+Not established, because no browser was driven: that a browser draws
+the `application/octet-stream` response inside the `<img>` (browsers
+determine an image's type from its bytes there, and nothing in the
+headers forbids it), and that the animated PNG animates inline. The
+GIF of every clip is published next to it, and the printed section
+links it, so the owner can compare the two in the first pull request
+and drop the one that does not animate. If release images turn out not
+to render at all, the fallback is a branch of images referenced by
+commit through `raw.githubusercontent.com`; it was not taken, because
+anything committed stays in the history of a public repository, while a
+release asset can be deleted.
+
+### First real run (TASK73)
+
+`world` on `soft`, reference `598e4654575f-2420249005` (run 1) and
+candidate `598e4654575f-2420249005-r2` (run 2), both from one commit, so
+every score is 0 and the difference panel is black: a still of
+1928x500 (192319 bytes, full size), an animated PNG of 23 frames at
+968x260 (1281289 bytes, half size) and the GIF (689057 bytes, half
+size), all within the 4 MB budget at the first size tried. On the build
+VM, loaded by other work at the time, the encoding took about three
+minutes, most of it in the pure-Python GIF encoder. Published and
+fetched back byte for byte.
 
 ## Judging a renderer
 
