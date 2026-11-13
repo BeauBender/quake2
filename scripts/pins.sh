@@ -95,20 +95,38 @@ store() {
     echo "$HOME/.quake2-pins"
 }
 # phys_path <path>: sets phys_result to the physical path, resolving symbolic
-# links through the nearest ancestor that exists, and phys_existing to that ancestor
+# links through the nearest ancestor that exists, and phys_existing to that
+# ancestor; phys_dangling names a dangling symbolic link met on the way
 phys_path() {
     local p=$1 rest=""
-    while [ ! -d "$p" ]; do rest="/$(basename "$p")$rest"; p=$(dirname "$p"); done
+    phys_dangling=""
+    while [ ! -d "$p" ]; do
+        if [ -L "$p" ] && [ -z "$phys_dangling" ]; then phys_dangling=$p; fi
+        rest="/$(basename "$p")$rest"; p=$(dirname "$p")
+    done
     phys_existing=$(cd "$p" && pwd -P)
     phys_result=$(printf '%s%s' "$phys_existing" "$rest" | tr -s /)
 }
-# the pin store is never inside this repository or any other git work tree (INFORM9)
-check_store() {
-    local s r; phys_path "$(store)"; s=$phys_result; r=$(cd "$root" && pwd -P)
+# check_store_path <path>: refuse a place inside this repository or any git
+# work tree, and a dangling symbolic link (it could later be made into a
+# directory inside one)
+check_store_path() {
+    local s r; phys_path "$1"; s=$phys_result; r=$(cd "$root" && pwd -P)
+    [ -z "$phys_dangling" ] || die "the pin store path $1 holds a dangling symbolic link ($phys_dangling)"
     case "$s/" in "$r/"*) die "the pin store $s is inside this repository; set PINS_STORE outside it (INFORM9)";; esac
     if git -C "$phys_existing" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         die "the pin store $s is inside a git work tree; set PINS_STORE outside any repository (INFORM9)"
     fi
+}
+# check_store [<scenario> <renderer>...]: the pin store is never inside this
+# repository or any other git work tree (INFORM9), and neither is each
+# <store>/<scenario>/<renderer> it is about to use, which a link in the store
+# could send elsewhere
+check_store() {
+    local scen=${1:-} rend
+    check_store_path "$(store)"
+    if [ $# -ge 1 ]; then shift; fi
+    for rend in "$@"; do check_store_path "$(store)/$scen/$rend"; done
 }
 # a demo file name under demos/: [A-Za-z0-9_][A-Za-z0-9_.-]*.dm2, no path
 check_demo() {
@@ -137,8 +155,9 @@ engine_sha() {
     echo "$sha"
 }
 # stale_engine <bin> <renderer>: names the binary or renderer module of this
-# checkout that "make -q" says is out of date with its sources, empty when
-# the build is current (or make is missing)
+# checkout that "make -q" says is out of date with its sources, or that is
+# older than a header under src/, empty when the build is current (or make is
+# missing)
 stale_engine() {
     local m
     command -v make >/dev/null 2>&1 || return 0
@@ -146,6 +165,10 @@ stale_engine() {
         [ -f "$m" ] || continue
         case $m in "$root"/*) ;; *) continue;; esac
         if ! make -C "$root" -q "${m#"$root"/}" >/dev/null 2>&1; then echo "${m#"$root"/} is out of date"; return; fi
+        # the Makefile has no header dependencies on macOS, so make -q cannot see a header edit
+        if [ -n "$(find "$root/src" -name '*.h' -newer "$m" -print 2>/dev/null | head -n 1)" ]; then
+            echo "${m#"$root"/} is older than a header under src/"; return
+        fi
     done
 }
 scenario_hash() {
@@ -213,7 +236,8 @@ cmd_record() {
     check_count PINS_WIDTH "${PINS_WIDTH:-640}"; check_count PINS_HEIGHT "${PINS_HEIGHT:-480}"; check_count PINS_EVERY "${PINS_EVERY:-30}"
     check_demo "${PINS_DEMO:-demo1.dm2}"
     [ -f "$scen_dir/$scenario.cfg" ] || die "no scenario $scenario (see $scen_dir)"
-    check_store
+    [ -z "${PINS_BIN:-}" ] || [ -f "$PINS_BIN" ] || die "no engine binary at $PINS_BIN (build the client, or set PINS_BIN)"
+    check_store "$scenario" "$renderer"
     local out; out=$(printf '%s' "$(store)/$scenario/$renderer/$(run_id "$scenario" "$run")" | tr -s /)
     check_arg "the pin store path" "$out" path
     if [ -n "${PINS_BASEDIR:-}" ]; then check_arg PINS_BASEDIR "$PINS_BASEDIR" path; fi
@@ -281,7 +305,7 @@ cmd_compare() {
         shift 2
     done
     [ -f "$scen_dir/$scenario.cfg" ] || die "no scenario $scenario (see $scen_dir)"
-    check_store
+    check_store "$scenario" "$renderer" "$ref"
     local s; s=$(store)
     local cand ref_dir
     [ -n "$cand_id" ] || cand_id=$(run_id "$scenario" "$run")
@@ -439,7 +463,9 @@ st_incomplete() { # C-I1
 }
 st_record_engine() {
     PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record gl1 world >/dev/null || st_fail "record must pass with an engine that exits 0" || return 1
-    if (PINS_BIN="$tmp/no-such-engine" cmd_record gl1 world) >/dev/null 2>&1; then st_fail "record must refuse without an engine binary"; return 1; fi
+    local rep; rep=$( (PINS_BIN="$tmp/no-such-engine" cmd_record gl1 world) 2>&1 ) && { st_fail "record must refuse without an engine binary"; return 1; }
+    case $rep in "pins: no engine binary at $tmp/no-such-engine"*) ;; *) st_fail "a missing PINS_BIN must give the clean error, got: $rep"; return 1;; esac
+    rep=$( (PINS_BIN="$tmp/no-such-engine" PINS_DRYRUN=1 cmd_record gl1 world) 2>&1 ) && { st_fail "a dry run must refuse a missing PINS_BIN too"; return 1; }
     if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" PINS_TIMEOUT=abc cmd_record gl1 world) >/dev/null 2>&1; then st_fail "a non-numeric PINS_TIMEOUT must be refused"; return 1; fi
 }
 st_timeout() { # C-I2c: fake-hang exits 0 on TERM, like the engine; only the timeout flag can fail the record
@@ -559,7 +585,16 @@ st_store_place() { # TASK39 (d): the store is never inside this repository or an
     if (PINS_STORE="$root" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "the repository itself must be refused as the store"; return 1; fi
     ln -s "$root/scripts" "$tmp/into-repo"
     if (PINS_STORE="$tmp/into-repo/x" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "a store reached through a link into the repository must be refused"; return 1; fi
-    if (PINS_STORE="$root/pins-store" cmd_compare metal world --ref gl1) >/dev/null 2>&1; then st_fail "compare must refuse a store inside the repository"; return 1; fi
+    local rep; rep=$( (PINS_STORE="$root/pins-store" cmd_compare metal world --ref gl1) 2>&1 ) && { st_fail "compare must refuse a store inside the repository"; return 1; }
+    case $rep in *"inside this repository"*|*"inside a git work tree"*) ;; *) st_fail "compare must refuse the store for its place, got: $rep"; return 1;; esac
+    mkdir -p "$tmp/lnkstore"; ln -s "$root/newstore" "$tmp/lnkstore/dangling"
+    rep=$( (PINS_STORE="$tmp/lnkstore/dangling" PINS_DRYRUN=1 cmd_record gl1 world) 2>&1 ) && { st_fail "a store that is a dangling link must be refused"; return 1; }
+    case $rep in *dangling*) ;; *) st_fail "the dangling link must be named, got: $rep"; return 1;; esac
+    mkdir -p "$tmp/subst"; ln -s "$root/scripts" "$tmp/subst/world"
+    rep=$( (PINS_STORE="$tmp/subst" PINS_DRYRUN=1 cmd_record soft world) 2>&1 ) && { st_fail "a scenario directory linked into the repository must be refused"; return 1; }
+    case $rep in *"inside this repository"*) ;; *) st_fail "the linked scenario directory must be refused for its place, got: $rep"; return 1;; esac
+    mkdir -p "$tmp/subst2/world"; ln -s "$root/scripts" "$tmp/subst2/world/soft"
+    (PINS_STORE="$tmp/subst2" PINS_DRYRUN=1 cmd_record soft world) >/dev/null 2>&1 && { st_fail "a renderer directory linked into the repository must be refused"; return 1; }
     if command -v git >/dev/null 2>&1; then
         git init -q "$tmp/other-repo"
         if (PINS_STORE="$tmp/other-repo/a/b" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "a store inside another git work tree must be refused"; return 1; fi
@@ -608,7 +643,7 @@ st_engine_id() { # TASK39 (h): the id sees uncommitted source, untracked source 
     case $d in "$a"-b*) ;; *) st_fail "PINS_BIN must add -b<hash>: $d"; return 1;; esac
     [ "$d" != "$(root="$r" PINS_BIN="$tmp/fake-crash" engine_sha)" ] || st_fail "two binaries must give two ids" || return 1
     command -v make >/dev/null 2>&1 || { echo "       stale build: no make, skipped"; return 0; }
-    local m="$tmp/mk"
+    local m="$tmp/mk" rep
     mkdir -p "$m/src"; printf 'int a;\n' > "$m/src/a.c"; printf 'int r;\n' > "$m/src/r.c"
     printf 'quake2: src/a.c\n\ttouch quake2\nref_gl1.so: src/r.c\n\ttouch ref_gl1.so\n' > "$m/Makefile"
     printf 'x' > "$m/quake2"; printf 'x' > "$m/ref_gl1.so"
@@ -620,13 +655,37 @@ st_engine_id() { # TASK39 (h): the id sees uncommitted source, untracked source 
     [ -z "$(root="$m" stale_engine "$m/quake2" gl1)" ] || st_fail "a current build must not be stale" || return 1
     touch -t 202501010000 "$m/src/a.c"; touch -t 202601010000 "$m/ref_gl1.so"; touch -t 202801010000 "$m/src/r.c" "$m/quake2"
     [ -n "$(root="$m" stale_engine "$m/quake2" gl1)" ] || st_fail "the module's own source newer than the module must be stale" || return 1
+    # a header the Makefile does not list: make -q calls the build current, the header test must not
+    touch -t 202501010000 "$m/src/a.c" "$m/src/r.c"; touch -t 203001010000 "$m/quake2" "$m/ref_gl1.so"
+    printf 'int h;\n' > "$m/src/h.h"; touch -t 202501010000 "$m/src/h.h"
+    [ -z "$(root="$m" stale_engine "$m/quake2" gl1)" ] || st_fail "a build newer than every source and header must not be stale" || return 1
+    touch -t 203501010000 "$m/src/h.h"
+    [ -n "$(root="$m" stale_engine "$m/quake2" gl1)" ] || st_fail "a binary older than a header under src/ must be stale" || return 1
+    # record reaches that check when PINS_BIN is not set (root points at the toy tree)
+    mkdir -p "$m/release"; printf 'release/quake2: src/a.c\n\ttouch release/quake2\n' > "$m/Makefile"
+    fake_engine "$m/release/quake2" - 'exit 0'; touch -t 203001010000 "$m/release/quake2"
+    rep=$( (root="$m" PINS_BIN= PINS_BASEDIR="$tmp/gd" cmd_record gl1 world) 2>&1 ) && { st_fail "record must refuse a binary older than a header"; return 1; }
+    case $rep in *"the build is out of date"*"older than a header"*) ;; *) st_fail "record must report the stale build, got: $rep"; return 1;; esac
+    touch -t 203601010000 "$m/release/quake2"
+    (root="$m" PINS_BIN= PINS_BASEDIR="$tmp/gd" cmd_record gl1 world) >/dev/null 2>&1 || st_fail "record must pass with a build newer than every header" || return 1
 }
 
 cmd_selftest() {
     # the selftest must not depend on, or act on, the caller's environment
     unset PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF
-    tmp=$(mktemp -d "${TMPDIR:-/tmp}/pins.XXXXXX"); trap 'rm -rf "$tmp"' EXIT
-    tmp=$(cd "$tmp" && pwd -P)
+    # the scratch store must be somewhere check_store accepts: not inside a git
+    # work tree (TMPDIR may be in one), so try TMPDIR, then /tmp, then /var/tmp
+    local base t
+    tmp=""
+    for base in "${TMPDIR:-/tmp}" /tmp /var/tmp; do
+        [ -d "$base" ] || continue
+        t=$(mktemp -d "$base/pins.XXXXXX") || continue
+        t=$(cd "$t" && pwd -P)
+        if ! git -C "$t" rev-parse --is-inside-work-tree >/dev/null 2>&1; then tmp=$t; break; fi
+        rm -rf "${t:?}"
+    done
+    [ -n "$tmp" ] || die "no scratch directory outside a git work tree under TMPDIR, /tmp or /var/tmp"
+    trap 'rm -rf "$tmp"' EXIT
     export PINS_STORE="$tmp/store"
     diff=$(difftool)
     "$diff" --gen "$tmp/a.tga" 64 48 1 && "$diff" --perturb "$tmp/a.tga" "$tmp/b.tga" 3 && "$diff" --perturb "$tmp/a.tga" "$tmp/c.tga" 60
