@@ -143,7 +143,9 @@ behaviour fixed and gives every later card a place for its failing test.
   `COM_Parse`, `Info_*` and the `Q_*`/math helpers; `CL_DownloadFilter`,
   the TASK1 download chunk and savedir checks; `.pak` parsing and search
   order on synthetic paks; `CM_LoadMap` on a synthetic BSP including every
-  TASK2 refusal; cvar and command buffer semantics. The savegame tables
+  TASK2 refusal; cvar and command buffer semantics; the server's
+  connectionless packets (`sv_conless.c`, over the in-memory loopback,
+  no socket). The savegame tables
   are checked in both directions by `tests/check-savegame-tables.sh`.
 - Known defects (FIX3, FIX15, FIX22, FIX23 and the ones found while
   writing the tests) are not exercised: a test that triggers an

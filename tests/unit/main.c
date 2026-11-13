@@ -168,6 +168,12 @@ t_console_reset(void)
 	}
 }
 
+void
+t_console_rearm(void)
+{
+	Com_BeginRedirect(1, t_rd_buf, sizeof(t_rd_buf), t_rd_flush);
+}
+
 const char *
 t_console(void)
 {
@@ -609,6 +615,7 @@ main(int argc, char **argv)
 
 		t_current = list[i];
 		t_current_failures = 0;
+		t_console_rearm();
 		t_console_reset();
 
 		if (YQ2_SETJMP(abortframe))
