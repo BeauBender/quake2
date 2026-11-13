@@ -213,7 +213,7 @@ int RI_InitContext(void* win)
 		{
 			unaccelerated = true;
 
-			Com_Printf("%s: No accelerated OpenGL context available, using an unaccelerated one.\n", __func__);
+			Com_Printf("%s: No accelerated OpenGL context available, using an unaccelerated one; vsync is off whatever r_vsync says.\n", __func__);
 		}
 	}
 
