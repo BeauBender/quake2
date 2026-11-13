@@ -40,6 +40,9 @@ text files and need no game data.
 * `PINS_BIN`: an engine binary other than `release/quake2` of this tree;
   its checksum becomes part of the pin's name, so `compare` needs the
   same value.
+* `PINS_TRACE`: `0` records no renderer trace beside the frames (see
+  *Recording*). Default: a trace is recorded. It does not change the
+  frames and is not part of the pin's name.
 
 The store path, `PINS_BASEDIR`, `PINS_DEMO` and scenario values may hold
 only `A-Z a-z 0-9 _ . / -`, except that `PINS_DEMO` is a bare file name
@@ -97,6 +100,11 @@ of replacing it. A complete record is never overwritten unless
 a demo or cinematic that could not be opened, frames from another
 renderer than the one asked for) is marked incomplete and `record`
 exits non-zero.
+
+Every `record` also writes `trace.q2r` beside the frames, a trace of
+the drawing calls the engine made into the renderer (about 4.4 MB for the
+default demo); it holds data derived from the game data, stays in the
+store and is never committed or uploaded. `PINS_TRACE=0` records none.
 
 ## Comparing
 
@@ -172,8 +180,9 @@ portable start without the pin arguments does.
 
 ## The pin arguments
 
-`record` passes three arguments to the engine, `pins_dir`,
-`pins_scenario` and `pins_capture`. They look like cvars but are read
+`record` passes four arguments to the engine, `pins_dir`,
+`pins_scenario`, `pins_capture` and `pins_record` (the last one left out
+with `PINS_TRACE=0`). They look like cvars but are read
 only from the command line; see the *Pin harness* section of the
 [List Of All New Console Variables](040_cvarlist.md). Without them the
 engine behaves exactly as it does otherwise.

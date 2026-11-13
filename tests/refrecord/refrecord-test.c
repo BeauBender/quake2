@@ -14,17 +14,34 @@
  * their bits), pins the little-endian byte layout of a few records, and
  * feeds truncated, oversized-length and out-of-range inputs, each of which
  * must be refused without reading past the end of its buffer (the script
- * builds this with ASAN and UBSAN when the compiler has them). Prints one
- * line per failure and "refrecord: N checks, 0 failed" at the end; exits
- * non-zero on any failure.
+ * builds this with ASAN and UBSAN when the compiler has them). Then records
+ * trace files into the scratch directory it is given and reads them back
+ * whole: the handle map, the refdef_t deep copy, the string table, the
+ * frame index, the header patch, and the failure paths (a recorder limit,
+ * an injected write error, oversized raw images, a full handle map), and
+ * sweeps a recorder limit and an injected write fault across every record
+ * of runs that warn, so a recording that ends inside a call is proven
+ * safe (REFREC_FULL_SWEEP=1 takes every byte). Prints one line per
+ * failure and "refrecord: N checks, 0 failed" at the end; exits non-zero
+ * on any failure.
+ *
+ *   refrecord-test <scratch dir>              the tests
+ *   refrecord-test --read <trace> [--names]   reads a trace end to end and
+ *       prints counts only (records per type, frames, captures, strings);
+ *       with --names the string table, one "kind name" per line; every
+ *       name and engine id byte outside 0x20..0x7e is printed as \xNN
  *
  * =======================================================================
  */
 
 #include <math.h>
+#include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
 
 #include "../../src/client/vid/header/refrecord.h"
 
@@ -341,6 +358,7 @@ TestCalls(void)
 	RoundTripCall(REC_PALETTE, 0, 0, false, NULL, palette, sizeof(palette), "REC_PALETTE");
 	RoundTripCall(REC_PALETTE, 0, 0, false, NULL, NULL, 0, "REC_PALETTE NULL");
 	RoundTripCall(REC_WARN, 1, 0, false, "entity model not registered", NULL, 0, "REC_WARN");
+	RoundTripCall(REC_CAPTURE, 1, 0, false, NULL, NULL, 0, "REC_CAPTURE");
 	/* names of every length near the 4-byte padding boundary, and the longest allowed */
 	RoundTripCall(REC_PIC, 0, 0, true, "", NULL, 0, "REC_PIC empty name");
 	RoundTripCall(REC_PIC, 0, 0, true, "abc", NULL, 0, "REC_PIC 3");
@@ -1379,7 +1397,7 @@ TestStream(void)
 	CHECK(!RefRec_ReadRecord(&r, &type, &got, &out, &cvars, &ncvars), "a NULL buffer was read");
 }
 
-/* Recording is off in this build, and the hooks are inert. */
+/* Without RefRec_StartRecord the hooks are inert and write nothing. */
 static void
 TestRecorderOff(void)
 {
@@ -1387,8 +1405,6 @@ TestRecorderOff(void)
 	int32_t ints[2] = { 1, 2 };
 
 	CHECK(!RefRec_Recording(), "recording is on");
-	RefRec_StartRecord("x.q2r", 640, 480, 30);
-	CHECK(!RefRec_Recording(), "RefRec_StartRecord switched recording on");
 	RefRec_Registration(REC_MODEL, "m", NULL);
 	RefRec_RenderFrame(NULL);
 	RefRec_Draw(REC_FILL, ints, 2, NULL, 0, NULL, NULL, 0);
@@ -1400,9 +1416,1541 @@ TestRecorderOff(void)
 	RefRec_CloseReplay();
 }
 
-int
-main(void)
+/* ---- trace files: the recorder end to end, and the --read tool ---- */
+
+/* what the print function was handed */
+static int prints;
+static char last_print[512];
+
+static void
+TestPrint(const char *fmt, ...)
 {
+	va_list ap;
+
+	prints++;
+	va_start(ap, fmt);
+	vsnprintf(last_print, sizeof(last_print), fmt, ap);
+	va_end(ap);
+}
+
+#define MAX_TEST_STRINGS	64
+
+typedef struct {
+	refrec_header_t h;
+	uint32_t size;
+	uint32_t types[REC_LAST + 1];
+	uint32_t warns[16];
+	uint32_t warn_at[16], warn_rec[16];	/* offset and ordinal of the first REC_WARN of each code */
+	uint32_t long_start[64], long_end[64], nlong;	/* the first records over 48 bytes */
+	uint32_t frames;	/* complete frames found walking the records */
+	uint32_t strings, kinds[REFREC_KIND_LAST + 1];
+	uint32_t captures, capture_next;	/* REC_CAPTURE numbers must run 0, 1, 2, ... */
+	/* the first entries of the string table */
+	uint32_t skind[MAX_TEST_STRINGS], sid[MAX_TEST_STRINGS];
+	char sname[MAX_TEST_STRINGS][MAX_QPATH];
+	char err[128];
+} tracefile_t;
+
+/*
+ * Writes up to max bytes of s, stopping at a NUL, with every byte outside
+ * 0x20..0x7e and the backslash itself as \xNN: names and the engine id
+ * come from the game, a server or a demo, and must not reach a terminal
+ * raw.
+ */
+static void
+PrintEscaped(FILE *out, const char *s, size_t max)
+{
+	size_t i;
+
+	for (i = 0; i < max && s[i]; i++)
+	{
+		unsigned char ch = (unsigned char)s[i];
+
+		if (ch < 0x20 || ch > 0x7e || ch == '\\')
+		{
+			fprintf(out, "\\x%02x", ch);
+		}
+		else
+		{
+			fputc(ch, out);
+		}
+	}
+}
+
+typedef void (*tracefile_cb_t)(refrec_type_t type, const refrec_call_t *call,
+		const refrec_frame_t *frame, void *ctx);
+
+/*
+ * Reads a whole trace with the refrecord.c readers and checks its
+ * structure: the header, every record up to the string table, the string
+ * table, and a frame index that names each complete frame's REC_BEGINFRAME
+ * in order. Calls cb for every record. False with t->err set on the first
+ * problem.
+ */
+static qboolean
+ReadTrace(const char *path, tracefile_t *t, tracefile_cb_t cb, void *ctx, FILE *names)
+{
+	static refrec_frame_t frame;
+	static refrec_call_t call;
+	refrec_reader_t r, rec, cvars;
+	refrec_type_t type;
+	uint32_t ncvars, count, i, kind, id, fi, start = 0, *starts = NULL, nstarts = 0, nrec = 0;
+	uint64_t off;
+	qboolean open = false, ok = false;
+	char name[MAX_QPATH];
+	uint8_t *buf = NULL;
+	long len;
+	FILE *f;
+
+	memset(t, 0, sizeof(*t));
+	f = fopen(path, "rb");
+
+	if (!f)
+	{
+		snprintf(t->err, sizeof(t->err), "cannot open");
+		return false;
+	}
+
+	if (fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0 || len >= 0xffffffffL ||
+		fseek(f, 0, SEEK_SET) != 0)
+	{
+		snprintf(t->err, sizeof(t->err), "cannot size, or 4 GiB or more");
+		fclose(f);
+		return false;
+	}
+
+	t->size = (uint32_t)len;
+	buf = malloc(t->size ? t->size : 1);
+
+	if (!buf || fread(buf, 1, t->size, f) != t->size)
+	{
+		snprintf(t->err, sizeof(t->err), "cannot read");
+		goto done;
+	}
+
+	RefRec_ReaderInit(&r, buf, t->size);
+
+	if (!RefRec_ReadHeader(&r, &t->h))
+	{
+		snprintf(t->err, sizeof(t->err), "bad header");
+		goto done;
+	}
+
+	if (!RefRec_CheckLayout(&t->h, t->size, NULL))
+	{
+		snprintf(t->err, sizeof(t->err), "unfinished trace or bad offsets");
+		goto done;
+	}
+
+	starts = malloc(sizeof(*starts) * (t->h.frame_count + 1));
+
+	if (!starts)
+	{
+		snprintf(t->err, sizeof(t->err), "out of memory");
+		goto done;
+	}
+
+	/* the records */
+	RefRec_ReaderInit(&rec, buf, t->h.string_table_offset);
+	rec.pos = REFREC_HEADER_SIZE;
+
+	while (rec.pos < rec.size)
+	{
+		uint32_t at = rec.pos;
+
+		if (!RefRec_ReadRecord(&rec, &type, &call, &frame, &cvars, &ncvars))
+		{
+			snprintf(t->err, sizeof(t->err), "bad record at offset %u", at);
+			goto done;
+		}
+
+		t->types[type]++;
+
+		if (type == REC_WARN && call.ints[0] >= 0 && call.ints[0] < 16)
+		{
+			if (!t->warns[call.ints[0]]++)
+			{
+				t->warn_at[call.ints[0]] = at;
+				t->warn_rec[call.ints[0]] = nrec;
+			}
+		}
+
+		nrec++;
+
+		if (rec.pos - at > 48 && t->nlong < 64)
+		{
+			t->long_start[t->nlong] = at;
+			t->long_end[t->nlong++] = rec.pos;
+		}
+
+		if (type == REC_CAPTURE)
+		{
+			if ((uint32_t)call.ints[0] != t->capture_next)
+			{
+				snprintf(t->err, sizeof(t->err), "capture %d out of order", call.ints[0]);
+				goto done;
+			}
+
+			t->capture_next++;
+			t->captures++;
+		}
+
+		if (type == REC_BEGINFRAME)
+		{
+			start = at;
+			open = true;
+		}
+		else if (type == REC_ENDFRAME && open)
+		{
+			if (nstarts < t->h.frame_count)
+			{
+				starts[nstarts] = start;
+			}
+
+			nstarts++;
+			open = false;
+		}
+
+		if (cb)
+		{
+			cb(type, &call, &frame, ctx);
+		}
+	}
+
+	t->frames = nstarts;
+
+	if (nstarts != t->h.frame_count)
+	{
+		snprintf(t->err, sizeof(t->err), "%u frames in the records, %u in the header", nstarts, t->h.frame_count);
+		goto done;
+	}
+
+	/* the string table */
+	RefRec_ReaderInit(&rec, buf + t->h.string_table_offset,
+			t->h.frame_index_offset - t->h.string_table_offset);
+
+	if (!RefRec_ReadStringTable(&rec, &count))
+	{
+		snprintf(t->err, sizeof(t->err), "bad string table count");
+		goto done;
+	}
+
+	for (i = 0; i < count; i++)
+	{
+		if (!RefRec_NextString(&rec, &kind, &id, name) || id != i + 1)
+		{
+			snprintf(t->err, sizeof(t->err), "bad string table entry %u", i);
+			goto done;
+		}
+
+		t->kinds[kind]++;
+
+		if (i < MAX_TEST_STRINGS)
+		{
+			t->skind[i] = kind;
+			t->sid[i] = id;
+			memcpy(t->sname[i], name, MAX_QPATH);
+		}
+
+		if (names)
+		{
+			fprintf(names, "%u ", kind);
+			PrintEscaped(names, name, MAX_QPATH);
+			fputc('\n', names);
+		}
+	}
+
+	t->strings = count;
+
+	if (rec.pos != rec.size)
+	{
+		snprintf(t->err, sizeof(t->err), "bytes between the string table and the frame index");
+		goto done;
+	}
+
+	/* the frame index */
+	RefRec_ReaderInit(&rec, buf + t->h.frame_index_offset, t->size - t->h.frame_index_offset);
+
+	for (i = 0; i < t->h.frame_count; i++)
+	{
+		if (!RefRec_NextFrameIndex(&rec, &fi, &off) || !RefRec_CheckLayout(&t->h, t->size, &off) ||
+			fi != i || off != starts[i])
+		{
+			snprintf(t->err, sizeof(t->err), "frame index entry %u does not name frame %u", i, i);
+			goto done;
+		}
+	}
+
+	ok = true;
+
+done:
+	free(starts);
+	free(buf);
+	fclose(f);
+
+	return ok;
+}
+
+static const char *const type_names[REC_LAST + 1] = {
+	"", "BEGINREG", "MODEL", "SKIN", "PIC", "SKY", "ENDREG",
+	"BEGINFRAME", "RENDERFRAME", "ENDWORLD", "ENDFRAME",
+	"PICSIZE", "PICSCALED", "PICSCALEDCOL", "STRETCHPIC",
+	"CHARSCALED", "TILECLEAR", "FILL", "FADESCREEN", "STRETCHRAW",
+	"PALETTE", "CVARS", "WARN", "CAPTURE"
+};
+
+/*
+ * --read: counts only (and with --names the string table, kind and name
+ * per line), to out. Names and the engine id are printed escaped.
+ */
+static int
+ReadMode(const char *path, qboolean names, FILE *out)
+{
+	tracefile_t t;
+	int i;
+
+	if (!ReadTrace(path, &t, NULL, NULL, names ? out : NULL))
+	{
+		fprintf(out, "trace: refused: %s\n", t.err);
+		return 1;
+	}
+
+	if (names)
+	{
+		return 0;
+	}
+
+	fprintf(out, "trace: %u bytes, %u frames, %u captures, flags %u, %ux%u, capture every %u, api %u, run ",
+			t.size, t.h.frame_count, t.captures, t.h.flags, t.h.width, t.h.height, t.h.capture_every,
+			t.h.api_version);
+	PrintEscaped(out, t.h.engine_sha, sizeof(t.h.engine_sha));
+	fprintf(out, "-%u\n", t.h.scenario_hash);
+	fprintf(out, "strings: %u (models %u, skins %u, pics %u, skies %u, maps %u)\n", t.strings,
+			t.kinds[REFREC_KIND_MODEL], t.kinds[REFREC_KIND_SKIN], t.kinds[REFREC_KIND_PIC],
+			t.kinds[REFREC_KIND_SKY], t.kinds[REFREC_KIND_MAP]);
+	fprintf(out, "records:");
+
+	for (i = REC_FIRST; i <= REC_LAST; i++)
+	{
+		fprintf(out, " %s=%u", type_names[i], t.types[i]);
+	}
+
+	fprintf(out, "\nwarnings:");
+
+	for (i = 1; i < 16; i++)
+	{
+		if (t.warns[i])
+		{
+			fprintf(out, " %d=%u", i, t.warns[i]);
+		}
+	}
+
+	fprintf(out, "\n");
+
+	return 0;
+}
+
+static char test_dir[1024];
+
+/* <test_dir>/<sub>/trace.q2r, its directory made */
+static const char *
+TracePath(const char *sub)
+{
+	static char path[1200];
+	char dir[1100];
+
+	snprintf(dir, sizeof(dir), "%s/%s", test_dir, sub);
+	mkdir(dir, 0700);
+	snprintf(path, sizeof(path), "%s/trace.q2r", dir);
+	remove(path);
+
+	return path;
+}
+
+/* fake renderer handles: only their addresses matter */
+static char handle_a, handle_b, handle_c, handle_unknown;
+
+typedef struct {
+	uint32_t model_ids[8], nmodels;
+	refrec_entity_t ents[8];
+	uint32_t nents, nframes;
+	int32_t num_counts[3];
+	uint8_t areaflag[2];
+	uint32_t raws, rawlen, rawsum;
+	char draw_names[4][32];
+	uint32_t ndraw;
+	float colf[4];
+	particle_t p0;
+	lightstyle_t ls7;
+} handles_ctx_t;
+
+static void
+HandlesCb(refrec_type_t type, const refrec_call_t *c, const refrec_frame_t *f, void *vctx)
+{
+	handles_ctx_t *x = vctx;
+	int i;
+
+	if (type == REC_MODEL && x->nmodels < 8)
+	{
+		x->model_ids[x->nmodels++] = c->id;
+	}
+
+	if (type == REC_RENDERFRAME)
+	{
+		if (x->nframes < 2)
+		{
+			x->areaflag[x->nframes] = f->refdef.has_areabits;
+		}
+
+		x->nframes++;
+		x->num_counts[0] = f->refdef.num_entities;
+		x->num_counts[1] = f->refdef.num_dlights;
+		x->num_counts[2] = f->refdef.num_particles;
+		x->ls7 = f->refdef.lightstyles[7];
+
+		if (f->refdef.num_particles)
+		{
+			x->p0 = f->particles[0];
+		}
+
+		for (i = 0; i < f->refdef.num_entities && x->nents < 8; i++)
+		{
+			x->ents[x->nents++] = f->entities[i];
+		}
+	}
+
+	if (type == REC_STRETCHRAW)
+	{
+		x->raws++;
+		x->rawlen = c->datalen;
+
+		for (i = 0; i < (int)c->datalen; i++)
+		{
+			x->rawsum += c->data[i];
+		}
+	}
+
+	if ((type == REC_STRETCHPIC || type == REC_PICSCALEDCOL) && x->ndraw < 4)
+	{
+		snprintf(x->draw_names[x->ndraw++], 32, "%.31s", c->name);
+	}
+
+	if (type == REC_PICSCALEDCOL)
+	{
+		memcpy(x->colf, c->floats, sizeof(x->colf));
+	}
+}
+
+/* The handle map: ids are stable, NULL is 0, an unknown pointer is 0 plus REC_WARN. */
+static void
+TestRecordHandles(void)
+{
+	static lightstyle_t ls[MAX_LIGHTSTYLES];
+	entity_t ents[3];
+	refdef_t fd;
+	handles_ctx_t x;
+	tracefile_t t;
+	const char *path = TracePath("abcdef123456-d77-1234567890-r3");
+	const int32_t fill[5] = { 1, 2, 3, 4, 5 }, cap0 = 0, cap1 = 1;
+	const float sky[4] = { 1.0f, 0, 0, 1.0f };
+
+	memset(ents, 0, sizeof(ents));
+	memset(&fd, 0, sizeof(fd));
+	memset(&x, 0, sizeof(x));
+	prints = 0;
+
+	RefRec_StartRecord(path, 640, 480, 30);
+	CHECK(RefRec_Recording(), "handles: recording did not start");
+
+	RefRec_Registration(REC_BEGINREG, "maps/base1.bsp", NULL);	/* id 1, map */
+	RefRec_Registration(REC_MODEL, "models/a.md2", &handle_a);	/* id 2 */
+	RefRec_Registration(REC_MODEL, "models/a.md2", &handle_a);	/* id 2 again */
+	RefRec_Registration(REC_SKIN, "skins/b.pcx", &handle_b);	/* id 3 */
+	RefRec_Registration(REC_PIC, "c", &handle_c);	/* id 4 */
+	RefRec_Registration(REC_MODEL, "models/missing.md2", NULL);	/* id 0, no entry */
+	RefRec_Draw(REC_SKY, NULL, 0, sky, 4, "unit1_", NULL, 0);	/* id 5, sky */
+	RefRec_Registration(REC_ENDREG, NULL, NULL);
+
+	RefRec_Control(REC_BEGINFRAME, 0);
+	ents[0].model = (struct model_s *)&handle_a;	/* skin NULL: inline */
+	ents[1].model = (struct model_s *)&handle_unknown;
+	ents[1].skin = (struct image_s *)&handle_b;
+	ents[2].skin = (struct image_s *)&handle_c;	/* a pic used as a skin */
+	ents[2].frame = 7;
+	fd.num_entities = 3;
+	fd.entities = ents;
+	fd.lightstyles = ls;
+	RefRec_RenderFrame(&fd);
+	RefRec_Control(REC_CVARS, 0);
+	RefRec_Draw(REC_FILL, fill, 5, NULL, 0, NULL, NULL, 0);
+	RefRec_Draw(REC_CAPTURE, &cap0, 1, NULL, 0, NULL, NULL, 0);
+	RefRec_Control(REC_ENDFRAME, 0);
+
+	/* the renderer reused handle_a's memory for another model: a new id */
+	RefRec_Registration(REC_MODEL, "models/other.md2", &handle_a);	/* id 6 */
+	RefRec_Control(REC_BEGINFRAME, 0);
+	RefRec_Draw(REC_CAPTURE, &cap1, 1, NULL, 0, NULL, NULL, 0);
+	RefRec_Control(REC_ENDFRAME, 0);
+	RefRec_StopRecord();
+	CHECK(!RefRec_Recording(), "handles: still recording after stop");
+
+	if (!ReadTrace(path, &t, HandlesCb, &x, NULL))
+	{
+		CHECK(0, "handles: trace refused: %s", t.err);
+		return;
+	}
+
+	CHECK(t.h.frame_count == 2 && t.frames == 2, "handles: %u frames", t.h.frame_count);
+	CHECK(t.captures == 2, "handles: %u captures", t.captures);
+	CHECK(t.h.api_version == API_VERSION && t.h.width == 640 && t.h.height == 480 &&
+			t.h.capture_every == 30 && t.h.flags == 0, "handles: header fields");
+	CHECK(memcmp(t.h.engine_sha, "abcdef123456-d77", 16) == 0 && t.h.scenario_hash == 1234567890u,
+			"handles: run id not taken from the directory name (sha '%.16s' hash %u)",
+			t.h.engine_sha, t.h.scenario_hash);
+	CHECK(x.nmodels == 4 && x.model_ids[0] == 2 && x.model_ids[1] == 2 && x.model_ids[2] == 0 &&
+			x.model_ids[3] == 6, "handles: REC_MODEL ids %u %u %u %u",
+			x.model_ids[0], x.model_ids[1], x.model_ids[2], x.model_ids[3]);
+	CHECK(x.nents == 3, "handles: %u entities", x.nents);
+	CHECK(x.ents[0].model_id == 2 && x.ents[0].skin_id == 0, "handles: entity 0 ids %u %u",
+			x.ents[0].model_id, x.ents[0].skin_id);
+	CHECK(x.ents[1].model_id == 0 && x.ents[1].skin_id == 3, "handles: entity 1 ids %u %u",
+			x.ents[1].model_id, x.ents[1].skin_id);
+	CHECK(x.ents[2].model_id == 0 && x.ents[2].skin_id == 4 && x.ents[2].frame == 7,
+			"handles: entity 2 ids %u %u", x.ents[2].model_id, x.ents[2].skin_id);
+	CHECK(t.warns[REFREC_WARN_UNKNOWN_HANDLE] == 1 && t.types[REC_WARN] == 1,
+			"handles: %u unknown-handle warnings, %u in all", t.warns[REFREC_WARN_UNKNOWN_HANDLE],
+			t.types[REC_WARN]);
+	CHECK(t.strings == 6, "handles: %u strings", t.strings);
+
+	if (t.strings == 6)
+	{
+		static const uint32_t kinds[6] = {
+			REFREC_KIND_MAP, REFREC_KIND_MODEL, REFREC_KIND_SKIN,
+			REFREC_KIND_PIC, REFREC_KIND_SKY, REFREC_KIND_MODEL
+		};
+		static const char *const names[6] = {
+			"maps/base1.bsp", "models/a.md2", "skins/b.pcx", "c", "unit1_", "models/other.md2"
+		};
+		int i;
+
+		for (i = 0; i < 6; i++)
+		{
+			CHECK(t.skind[i] == kinds[i] && strcmp(t.sname[i], names[i]) == 0,
+					"handles: string %d is %u '%s'", i, t.skind[i], t.sname[i]);
+		}
+	}
+
+	CHECK(t.types[REC_CVARS] == 1 && t.types[REC_FILL] == 1 && t.types[REC_SKY] == 1,
+			"handles: record counts");
+
+	/* a directory name that is not a pin id leaves the id fields zero */
+	path = TracePath("not-a-pin");
+	RefRec_StartRecord(path, 320, 240, 0);
+	RefRec_StopRecord();
+
+	if (ReadTrace(path, &t, NULL, NULL, NULL))
+	{
+		static const char zero[16];
+
+		CHECK(memcmp(t.h.engine_sha, zero, 16) == 0 && t.h.scenario_hash == 0 &&
+				t.h.frame_count == 0 && t.strings == 0, "handles: empty trace fields");
+	}
+	else
+	{
+		CHECK(0, "handles: empty trace refused: %s", t.err);
+	}
+}
+
+/* The refdef_t deep copy: counts bounded, NULL arrays, areabits, verbatim fields. */
+static void
+TestRecordFrameCopy(void)
+{
+	static entity_t ents[MAX_ENTITIES + 5];
+	static particle_t parts[MAX_PARTICLES + 5];
+	static dlight_t dl[MAX_DLIGHTS];
+	static lightstyle_t ls[MAX_LIGHTSTYLES];
+	static uint8_t area[REFREC_AREABYTES];
+	refdef_t fd;
+	handles_ctx_t x;
+	tracefile_t t;
+	const char *path = TracePath("framecopy");
+
+	memset(&fd, 0, sizeof(fd));
+	memset(&x, 0, sizeof(x));
+	ls[7].rgb[1] = 0.5f;
+	ls[7].white = 1.5f;
+	parts[0].origin[2] = -3.0f;
+	parts[0].color = 0xd0;
+	parts[0].alpha = 0.25f;
+	area[31] = 0x80;
+
+	RefRec_StartRecord(path, 640, 480, 30);
+
+	/* frame 1: areabits, lightstyles, counts over the maxima */
+	RefRec_Control(REC_BEGINFRAME, 0);
+	fd.areabits = area;
+	fd.lightstyles = ls;
+	fd.entities = ents;
+	fd.num_entities = MAX_ENTITIES + 5;
+	fd.particles = parts;
+	fd.num_particles = MAX_PARTICLES + 5;
+	fd.dlights = dl;
+	fd.num_dlights = -1;
+	RefRec_RenderFrame(&fd);
+	RefRec_Control(REC_ENDFRAME, 0);
+
+	/* frame 2: no areabits, NULL arrays with counts, NULL lightstyles */
+	RefRec_Control(REC_BEGINFRAME, 0);
+	memset(&fd, 0, sizeof(fd));
+	fd.num_entities = 3;
+	fd.num_particles = 2;
+	RefRec_RenderFrame(&fd);
+	RefRec_RenderFrame(NULL);
+	RefRec_Control(REC_ENDFRAME, 0);
+	CHECK(RefRec_Recording(), "framecopy: a bad refdef_t stopped the recording");
+	RefRec_StopRecord();
+
+	if (!ReadTrace(path, &t, HandlesCb, &x, NULL))
+	{
+		CHECK(0, "framecopy: trace refused: %s", t.err);
+		return;
+	}
+
+	CHECK(t.frames == 2 && x.nframes == 2, "framecopy: %u frames, %u RENDERFRAME", t.frames, x.nframes);
+	CHECK(x.areaflag[0] == 1 && x.areaflag[1] == 0, "framecopy: areabits flags %u %u", x.areaflag[0], x.areaflag[1]);
+	/* frame 1 counts were clamped; the last frame's are zero */
+	CHECK(x.num_counts[0] == 0 && x.num_counts[1] == 0 && x.num_counts[2] == 0, "framecopy: NULL arrays not recorded empty");
+	CHECK(t.warns[REFREC_WARN_COUNT] == 3, "framecopy: %u count warnings", t.warns[REFREC_WARN_COUNT]);
+	CHECK(t.warns[REFREC_WARN_NULL_ARRAY] == 4, "framecopy: %u NULL-array warnings", t.warns[REFREC_WARN_NULL_ARRAY]);
+	CHECK(x.nents == 8, "framecopy: %u entities seen", x.nents);
+	CHECK(Bits(x.p0.origin[2]) == Bits(-3.0f) && x.p0.color == 0xd0 && Bits(x.p0.alpha) == Bits(0.25f),
+			"framecopy: particle not verbatim");
+}
+
+/* first frame only: the clamped counts, read again with a callback that stops after it */
+typedef struct {
+	int32_t counts[3];
+	uint8_t area31;
+	float ls7;
+	qboolean seen;
+} first_ctx_t;
+
+static void
+FirstCb(refrec_type_t type, const refrec_call_t *c, const refrec_frame_t *f, void *vctx)
+{
+	first_ctx_t *x = vctx;
+
+	if (type == REC_RENDERFRAME && !x->seen)
+	{
+		x->seen = true;
+		x->counts[0] = f->refdef.num_entities;
+		x->counts[1] = f->refdef.num_dlights;
+		x->counts[2] = f->refdef.num_particles;
+		x->area31 = f->refdef.areabits[31];
+		x->ls7 = f->refdef.lightstyles[7].white;
+	}
+}
+
+static void
+TestRecordFrameClamp(void)
+{
+	first_ctx_t x;
+	tracefile_t t;
+	char path[1200];
+
+	snprintf(path, sizeof(path), "%s/framecopy/trace.q2r", test_dir);
+	memset(&x, 0, sizeof(x));
+
+	if (!ReadTrace(path, &t, FirstCb, &x, NULL))
+	{
+		CHECK(0, "clamp: trace refused: %s", t.err);
+		return;
+	}
+
+	CHECK(x.counts[0] == MAX_ENTITIES && x.counts[1] == 0 && x.counts[2] == MAX_PARTICLES,
+			"clamp: counts %d %d %d", x.counts[0], x.counts[1], x.counts[2]);
+	CHECK(x.area31 == 0x80 && Bits(x.ls7) == Bits(1.5f), "clamp: areabits or lightstyles not copied");
+}
+
+/* 2D records: oversized raw is a warning, NULL names and colors are safe */
+static void
+TestRecordDraws(void)
+{
+	static uint8_t pixels[16 * 8];
+	static uint8_t palette[REFREC_PALETTE_SIZE];
+	handles_ctx_t x;
+	tracefile_t t;
+	refrec_writer_t w;
+	refrec_call_t c;
+	const char *path = TracePath("draws");
+	int32_t big[7] = { 0, 0, 640, 480, REFREC_MAX_RAW_DIM + 1, 2, 8 };
+	int32_t ok[7] = { 0, 0, 640, 480, 16, 8, 8 };
+	int32_t bad_bits[7] = { 0, 0, 640, 480, 16, 8, 16 };
+	int32_t xy[4] = { 1, 2, 3, 4 };
+	float factor = 2.0f;
+	uint32_t i, sum = 0;
+	long size;
+	FILE *f;
+
+	for (i = 0; i < sizeof(pixels); i++)
+	{
+		pixels[i] = (uint8_t)(i * 3 + 1);
+		sum += pixels[i];
+	}
+
+	memset(&x, 0, sizeof(x));
+	RefRec_StartRecord(path, 640, 480, 30);
+	RefRec_Control(REC_BEGINFRAME, 0);
+	RefRec_Draw(REC_STRETCHRAW, big, 7, NULL, 0, NULL, pixels,
+			(uint32_t)big[4] * (uint32_t)big[5]);
+	CHECK(RefRec_Recording(), "draws: an oversized raw ended the recording");
+	RefRec_Draw(REC_STRETCHRAW, bad_bits, 7, NULL, 0, NULL, pixels, sizeof(pixels) * 2);
+	RefRec_Draw(REC_STRETCHRAW, ok, 7, NULL, 0, NULL, NULL, sizeof(pixels));	/* no pixels */
+	RefRec_Draw(REC_STRETCHRAW, ok, 7, NULL, 0, NULL, pixels, sizeof(pixels));
+	RefRec_Draw(REC_STRETCHPIC, xy, 4, NULL, 0, NULL, NULL, 0);	/* NULL name */
+	RefRec_Draw(REC_PICSCALEDCOL, xy, 2, &factor, 1, "ch1", NULL, 0);	/* no color */
+	RefRec_Draw(REC_PALETTE, NULL, 0, NULL, 0, NULL, palette, REFREC_PALETTE_SIZE);
+	RefRec_Draw(REC_PALETTE, NULL, 0, NULL, 0, NULL, NULL, 0);
+	RefRec_Control(REC_ENDFRAME, 0);
+	RefRec_StopRecord();
+
+	if (!ReadTrace(path, &t, HandlesCb, &x, NULL))
+	{
+		CHECK(0, "draws: trace refused: %s", t.err);
+		return;
+	}
+
+	CHECK(t.warns[REFREC_WARN_RAW_TOO_BIG] == 3, "draws: %u raw warnings", t.warns[REFREC_WARN_RAW_TOO_BIG]);
+	CHECK(x.raws == 1 && x.rawlen == sizeof(pixels) && x.rawsum == sum, "draws: raw %u len %u", x.raws, x.rawlen);
+	CHECK(t.warns[REFREC_WARN_NAME] == 1 && x.ndraw == 2 && x.draw_names[0][0] == '\0',
+			"draws: NULL name warnings %u", t.warns[REFREC_WARN_NAME]);
+	CHECK(t.warns[REFREC_WARN_COLOR] == 1 && Bits(x.colf[0]) == Bits(2.0f) &&
+			Bits(x.colf[1]) == Bits(1.0f) && Bits(x.colf[3]) == Bits(1.0f), "draws: no-color default");
+	CHECK(t.types[REC_PALETTE] == 2, "draws: %u palettes", t.types[REC_PALETTE]);
+
+	/* the streamed raw record is byte for byte what RefRec_WriteCall writes */
+	memset(&c, 0, sizeof(c));
+	c.type = REC_STRETCHRAW;
+	memcpy(c.ints, ok, sizeof(ok));
+	c.data = pixels;
+	c.datalen = sizeof(pixels);
+	RefRec_WriterInit(&w);
+	RefRec_WriteCall(&w, &c);
+	f = fopen(path, "rb");
+
+	if (f && w.ok)
+	{
+		uint8_t *buf;
+
+		fseek(f, 0, SEEK_END);
+		size = ftell(f);
+		fseek(f, 0, SEEK_SET);
+		buf = malloc(size);
+
+		if (buf && fread(buf, 1, size, f) == (size_t)size)
+		{
+			qboolean found = false;
+			long j;
+
+			for (j = REFREC_HEADER_SIZE; j + (long)w.cursize <= size; j += 4)
+			{
+				if (memcmp(buf + j, w.data, w.cursize) == 0)
+				{
+					found = true;
+					break;
+				}
+			}
+
+			CHECK(found, "draws: the streamed raw record differs from RefRec_WriteCall");
+		}
+
+		free(buf);
+	}
+
+	if (f)
+	{
+		fclose(f);
+	}
+
+	RefRec_WriterFree(&w);
+}
+
+/* A recorder limit finishes the trace early, valid and flagged. */
+static void
+TestRecordLimit(void)
+{
+	static lightstyle_t ls[MAX_LIGHTSTYLES];
+	refdef_t fd;
+	tracefile_t t;
+	const char *path = TracePath("limit");
+	int i;
+
+	memset(&fd, 0, sizeof(fd));
+	fd.lightstyles = ls;
+	prints = 0;
+	RefRec_SetLimit(64 * 1024);
+	RefRec_StartRecord(path, 640, 480, 30);
+
+	for (i = 0; i < 100 && RefRec_Recording(); i++)
+	{
+		RefRec_Control(REC_BEGINFRAME, 0);
+		RefRec_RenderFrame(&fd);
+		RefRec_Control(REC_ENDFRAME, 0);
+	}
+
+	RefRec_SetLimit(0);
+	CHECK(!RefRec_Recording() && i < 100, "limit: still recording after %d frames", i);
+	RefRec_StopRecord();
+	RefRec_Control(REC_BEGINFRAME, 0);	/* after the end: inert */
+
+	if (!ReadTrace(path, &t, NULL, NULL, NULL))
+	{
+		CHECK(0, "limit: trace refused: %s", t.err);
+		return;
+	}
+
+	CHECK(t.h.flags == REFREC_FLAG_TRUNCATED, "limit: flags %u", t.h.flags);
+	CHECK(t.size <= 64 * 1024 + 4 + REFREC_INDEX_SIZE * 100, "limit: %u bytes", t.size);
+	CHECK(t.frames >= 10 && t.frames < (uint32_t)i, "limit: %u frames of %d", t.frames, i);
+	CHECK(prints == 2, "limit: %d reports (want the limit and the summary)", prints);
+
+	/*
+	 * A raw image whose record header fits and whose pixels do not: the
+	 * whole record is refused, so the trace stays within the limit.
+	 */
+	{
+		static uint8_t pixels[64 * 64];
+		const int32_t raw[7] = { 0, 0, 640, 480, 64, 64, 8 };
+		const uint32_t limit = REFREC_HEADER_SIZE + 12 + 2048;
+
+		path = TracePath("limitraw");
+		prints = 0;
+		RefRec_SetLimit(limit);
+		RefRec_StartRecord(path, 640, 480, 30);
+		RefRec_Control(REC_BEGINFRAME, 0);
+		RefRec_Draw(REC_STRETCHRAW, raw, 7, NULL, 0, NULL, pixels, sizeof(pixels));
+		RefRec_SetLimit(0);
+		CHECK(!RefRec_Recording(), "limit raw: still recording");
+		RefRec_StopRecord();
+
+		if (!ReadTrace(path, &t, NULL, NULL, NULL))
+		{
+			CHECK(0, "limit raw: trace refused: %s", t.err);
+			return;
+		}
+
+		CHECK(t.h.flags == REFREC_FLAG_TRUNCATED && t.types[REC_STRETCHRAW] == 0 &&
+				t.h.string_table_offset <= limit, "limit raw: %u raw records, records end at %u",
+				t.types[REC_STRETCHRAW], t.h.string_table_offset);
+	}
+}
+
+/* A failed write ends the recording, reported once; the trace reads as unfinished. */
+static void
+TestRecordWriteError(void)
+{
+	static lightstyle_t ls[MAX_LIGHTSTYLES];
+	struct rlimit old, small;
+	refdef_t fd;
+	tracefile_t t;
+	const char *path = TracePath("writeerror");
+	int i;
+
+	memset(&fd, 0, sizeof(fd));
+	fd.lightstyles = ls;
+	prints = 0;
+
+	/* a file size limit makes write() fail with EFBIG, as a full disk would with ENOSPC */
+	if (getrlimit(RLIMIT_FSIZE, &old) != 0)
+	{
+		CHECK(0, "writeerror: getrlimit");
+		return;
+	}
+
+	signal(SIGXFSZ, SIG_IGN);
+	small = old;
+	small.rlim_cur = 32 * 1024;
+	CHECK(setrlimit(RLIMIT_FSIZE, &small) == 0, "writeerror: setrlimit");
+	RefRec_StartRecord(path, 640, 480, 30);
+
+	for (i = 0; i < 100 && RefRec_Recording(); i++)
+	{
+		RefRec_Control(REC_BEGINFRAME, 0);
+		RefRec_RenderFrame(&fd);
+		RefRec_Control(REC_ENDFRAME, 0);
+	}
+
+	CHECK(!RefRec_Recording() && i < 100, "writeerror: still recording after %d frames", i);
+
+	/* the hooks and stop after a failure do nothing and report nothing more */
+	RefRec_Control(REC_BEGINFRAME, 0);
+	RefRec_RenderFrame(&fd);
+	RefRec_StopRecord();
+	setrlimit(RLIMIT_FSIZE, &old);
+	signal(SIGXFSZ, SIG_DFL);
+
+	CHECK(prints == 1 && strstr(last_print, "recording stopped"), "writeerror: %d reports, last '%s'", prints, last_print);
+	CHECK(!ReadTrace(path, &t, NULL, NULL, NULL), "writeerror: an unfinished trace was accepted");
+
+	/* a path that cannot be opened: reported, not recording */
+	prints = 0;
+	snprintf(last_print, sizeof(last_print), "%s", "");
+	{
+		char bad[1200];
+
+		snprintf(bad, sizeof(bad), "%s/no-such-dir/trace.q2r", test_dir);
+		RefRec_StartRecord(bad, 640, 480, 30);
+	}
+
+	CHECK(!RefRec_Recording() && prints == 1, "writeerror: an unopenable path started recording");
+	RefRec_StartRecord(NULL, 640, 480, 30);
+	CHECK(!RefRec_Recording(), "writeerror: a NULL path started recording");
+}
+
+/*
+ * A recording that ends inside a call. A recorder limit or a failed
+ * write can land on any record, including a REC_WARN written from the
+ * middle of a registration, a frame or a draw, with the handle map in use
+ * further up the stack. Each run below makes one kind of warning in all
+ * three kinds of call; the sweep ends the run at every byte (the limit)
+ * and at every file operation (an injected fault), and after each run the
+ * recorder must be off, have reported the stop once, and (for a limit)
+ * have left a trace that reads back whole. The build has ASAN and UBSAN,
+ * so a use of freed or NULL recorder state fails the check.
+ */
+enum {
+	SW_UNKNOWN, SW_LONGNAME, SW_NULLNAME, SW_FULL, SW_COUNTS, SW_RAW, SW_FRAMES, SW_NUM
+};
+
+static const char *const sweep_names[SW_NUM] = {
+	"unknown handle", "over-long name", "NULL name", "handle map full",
+	"clamped counts", "oversized raw", "frame order"
+};
+
+static const refrec_warn_t sweep_warns[SW_NUM] = {
+	REFREC_WARN_UNKNOWN_HANDLE, REFREC_WARN_NAME, REFREC_WARN_NAME, REFREC_WARN_HANDLES_FULL,
+	REFREC_WARN_COUNT, REFREC_WARN_RAW_TOO_BIG, REFREC_WARN_FRAME
+};
+
+/* fake pointers that fill the handle map, and its size in this run */
+static char sweep_fill[REFREC_MAX_HANDLES];
+static uint32_t sweep_handles = REFREC_MAX_HANDLES;
+
+static void
+SweepRun(int kind, const char *path)
+{
+	static entity_t ents[MAX_ENTITIES + 1];
+	static particle_t parts[4];
+	static dlight_t dl[MAX_DLIGHTS + 1];
+	static lightstyle_t ls[MAX_LIGHTSTYLES];
+	static uint8_t pixels[64 * 4 * 4];
+	static char longname[1100], qpath[80];
+	const int32_t raw_ok[7] = { 0, 0, 64, 4, 64, 4, 8 };
+	const int32_t raw_wide[7] = { 0, 0, 64, 4, 63, 4, 32 };	/* 1008 bytes, padding none */
+	const int32_t raw_odd[7] = { 0, 0, 64, 4, 3, 1, 8 };	/* 3 bytes and 1 of padding */
+	const int32_t raw_big[7] = { 0, 0, 640, 480, REFREC_MAX_RAW_DIM + 1, 1, 8 };
+	const int32_t raw_bits[7] = { 0, 0, 640, 480, 4, 4, 16 };
+	const int32_t xy[5] = { 1, 2, 3, 4, 5 };
+	const float sky[4] = { 0, 0, 0, 1.0f }, col[4] = { 2.0f, 0.5f, 0.5f, 0.5f };
+	refdef_t fd;
+	int32_t frame;
+	int i;
+
+	memset(longname, 'n', sizeof(longname) - 1);
+	memset(qpath, 'q', sizeof(qpath) - 1);
+	memset(&fd, 0, sizeof(fd));
+	memset(ents, 0, sizeof(ents));
+	fd.lightstyles = ls;
+	fd.entities = ents;
+
+	RefRec_StartRecord(path, 640, 480, 30);
+
+	/* registration */
+	switch (kind)
+	{
+		case SW_LONGNAME:
+			RefRec_Registration(REC_BEGINREG, longname, NULL);
+			RefRec_Registration(REC_MODEL, qpath, &handle_a);	/* cut in the table */
+			RefRec_Registration(REC_SKIN, longname, &handle_b);	/* cut in the record and the table */
+			break;
+
+		case SW_NULLNAME:
+			RefRec_Registration(REC_BEGINREG, NULL, NULL);
+			RefRec_Registration(REC_MODEL, NULL, &handle_a);
+			RefRec_Registration(REC_PIC, NULL, &handle_c);
+			break;
+
+		case SW_FULL:
+			RefRec_Registration(REC_BEGINREG, "maps/m.bsp", NULL);
+			RefRec_Registration(REC_MODEL, "models/old.md2", &handle_a);
+
+			for (i = 0; i < (int)sweep_handles - 2; i++)
+			{
+				RefRec_Registration(REC_PIC, "p", &sweep_fill[i]);
+			}
+
+			RefRec_Registration(REC_MODEL, "models/new.md2", &handle_a);	/* full: retired */
+			RefRec_Registration(REC_SKIN, "skins/s.pcx", &handle_b);	/* full */
+			RefRec_Registration(REC_MODEL, "models/old.md2", &handle_a);	/* still full */
+			break;
+
+		default:
+			RefRec_Registration(REC_BEGINREG, "maps/m.bsp", NULL);
+			RefRec_Registration(REC_MODEL, "models/a.md2", &handle_a);
+			RefRec_Registration(REC_SKIN, "skins/b.pcx", &handle_b);
+			break;
+	}
+
+	RefRec_Registration(REC_ENDREG, NULL, NULL);
+
+	for (frame = 0; frame < 2; frame++)
+	{
+		if (kind == SW_FRAMES)
+		{
+			RefRec_Control(REC_ENDFRAME, 0);	/* outside a frame */
+			RefRec_Control(REC_BEGINFRAME, 0);
+		}
+
+		RefRec_Control(REC_BEGINFRAME, 0);
+		fd.num_entities = 4;
+		fd.num_particles = 0;
+		fd.num_dlights = 0;
+		fd.particles = parts;
+		fd.dlights = NULL;
+		ents[0].model = (struct model_s *)&handle_a;
+		ents[0].skin = (struct image_s *)&handle_b;
+		ents[1].model = (struct model_s *)&handle_a;
+		ents[2].model = NULL;
+		ents[3].model = (struct model_s *)&handle_a;
+
+		switch (kind)
+		{
+			case SW_UNKNOWN:
+			case SW_FULL:
+				/* unknown pointers between known ones; in the full map handle_a is retired */
+				ents[0].model = (struct model_s *)&handle_unknown;
+				ents[1].skin = (struct image_s *)&handle_unknown;
+				ents[2].model = (struct model_s *)&handle_c;
+				ents[3].skin = (struct image_s *)&handle_b;
+				break;
+
+			case SW_COUNTS:
+				/* clamped low, clamped high, and a NULL array with a count */
+				fd.num_entities = (frame == 0) ? -1 : 4;
+				fd.num_particles = (frame == 0) ? -5 : 2;
+				fd.particles = (frame == 0) ? parts : NULL;
+				fd.num_dlights = MAX_DLIGHTS + 1;
+				fd.dlights = dl;
+				fd.lightstyles = (frame == 0) ? NULL : ls;
+				break;
+
+			default:
+				break;
+		}
+
+		RefRec_RenderFrame(&fd);
+
+		if (kind == SW_COUNTS)
+		{
+			RefRec_RenderFrame(NULL);
+		}
+
+		/* draws */
+		switch (kind)
+		{
+			case SW_LONGNAME:
+				RefRec_Draw(REC_SKY, NULL, 0, sky, 4, longname, NULL, 0);
+				RefRec_Draw(REC_STRETCHPIC, xy, 4, NULL, 0, longname, NULL, 0);
+				RefRec_Draw(REC_PICSCALEDCOL, xy, 2, col, 4, qpath, NULL, 0);
+				break;
+
+			case SW_NULLNAME:
+				RefRec_Draw(REC_SKY, NULL, 0, sky, 4, NULL, NULL, 0);
+				RefRec_Draw(REC_STRETCHPIC, xy, 4, NULL, 0, NULL, NULL, 0);
+				RefRec_Draw(REC_PICSCALEDCOL, xy, 2, col, 1, NULL, NULL, 0);	/* no color */
+				break;
+
+			case SW_FULL:
+				RefRec_Draw(REC_SKY, NULL, 0, sky, 4, "newsky", NULL, 0);	/* full */
+				break;
+
+			case SW_RAW:
+				RefRec_Draw(REC_STRETCHRAW, raw_big, 7, NULL, 0, NULL, pixels, sizeof(pixels));
+				RefRec_Draw(REC_STRETCHRAW, raw_ok, 7, NULL, 0, NULL, pixels, 64 * 4);
+				RefRec_Draw(REC_STRETCHRAW, raw_bits, 7, NULL, 0, NULL, pixels, 4 * 4 * 2);
+				RefRec_Draw(REC_STRETCHRAW, raw_wide, 7, NULL, 0, NULL, pixels, 63 * 4 * 4);
+				RefRec_Draw(REC_STRETCHRAW, raw_odd, 7, NULL, 0, NULL, pixels, 3);
+				RefRec_Draw(REC_STRETCHRAW, raw_ok, 7, NULL, 0, NULL, NULL, 64 * 4);
+				break;
+
+			default:
+				RefRec_Draw(REC_FILL, xy, 5, NULL, 0, NULL, NULL, 0);
+				break;
+		}
+
+		RefRec_Control(REC_CVARS, 0);
+		RefRec_Draw(REC_CAPTURE, &frame, 1, NULL, 0, NULL, NULL, 0);
+		RefRec_Control(REC_ENDWORLD, 0);
+		RefRec_Control(REC_ENDFRAME, 0);
+	}
+
+	RefRec_StopRecord();
+}
+
+static int sweep_bad;
+
+static void
+SweepBad(int kind, const char *what, uint32_t at)
+{
+	if (++sweep_bad <= 5)
+	{
+		printf("FAIL sweep %s: %s at %u (prints %d, last '%s')\n",
+				sweep_names[kind], what, at, prints, last_print);
+	}
+}
+
+static void
+TestRecordStopSweep(void)
+{
+	const char *path = TracePath("sweep");
+	const char *env = getenv("REFREC_FULL_SWEEP");
+	qboolean full_sweep = env && strcmp(env, "1") == 0;
+	tracefile_t t, whole;
+	uint32_t end, limit, n, runs = 0;
+	int kind;
+
+	sweep_bad = 0;
+
+	/*
+	 * The full-map run fills a map of 16 (RefRec_SetHandleLimit), so that
+	 * each run stays short; TestRecordHandlesFull fills the real one.
+	 */
+	sweep_handles = 16;
+	RefRec_SetHandleLimit(sweep_handles);
+
+	for (kind = 0; kind < SW_NUM; kind++)
+	{
+		/* the whole run: where its records end, and that it warns as meant */
+		prints = 0;
+		SweepRun(kind, path);
+
+		if (!ReadTrace(path, &whole, NULL, NULL, NULL) || whole.h.flags != 0 || prints != 1)
+		{
+			CHECK(0, "sweep %s: the whole run is not a finished trace: %s", sweep_names[kind], whole.err);
+			continue;
+		}
+
+		CHECK(whole.warns[sweep_warns[kind]] >= 2, "sweep %s: %u warnings of code %d",
+				sweep_names[kind], whole.warns[sweep_warns[kind]], sweep_warns[kind]);
+		end = whole.h.string_table_offset;
+
+		/*
+		 * A limit at every byte. The limit is checked per record, so a
+		 * limit anywhere inside one record ends the run on that record;
+		 * inside a record over 48 bytes (a REC_RENDERFRAME is over 4 KB,
+		 * a long name or a raw image up to some) the gate takes its first
+		 * and last 16 bytes only. REFREC_FULL_SWEEP=1 takes every byte
+		 * there too.
+		 */
+		for (limit = 1; limit <= end + 4; limit++)
+		{
+			qboolean cut;
+			uint32_t f;
+
+			for (f = 0; f < whole.nlong && !full_sweep; f++)
+			{
+				if (limit > whole.long_start[f] + 16 && limit + 16 < whole.long_end[f])
+				{
+					limit = whole.long_end[f] - 16;
+				}
+			}
+
+			cut = limit < end;
+			prints = 0;
+			last_print[0] = '\0';
+			RefRec_SetLimit(limit);
+			SweepRun(kind, path);
+			RefRec_SetLimit(0);
+			runs++;
+
+			if (RefRec_Recording())
+			{
+				SweepBad(kind, "still recording after a limit", limit);
+				RefRec_StopRecord();
+			}
+			else if (!ReadTrace(path, &t, NULL, NULL, NULL))
+			{
+				SweepBad(kind, t.err, limit);
+			}
+			else if (((t.h.flags & REFREC_FLAG_TRUNCATED) != 0) != cut ||
+				t.h.string_table_offset > (limit < REFREC_HEADER_SIZE ? REFREC_HEADER_SIZE : limit) ||
+				prints != (cut ? 2 : 1))
+			{
+				SweepBad(kind, "limit not kept, or not reported once", limit);
+			}
+		}
+
+		/* a failed write, seek or close at every file operation, until one is past the last */
+		for (n = 1;; n++)
+		{
+			prints = 0;
+			last_print[0] = '\0';
+			RefRec_SetWriteFault(n);
+			SweepRun(kind, path);
+			RefRec_SetWriteFault(0);
+			runs++;
+
+			if (prints == 1 && strstr(last_print, "trace written"))
+			{
+				break;
+			}
+
+			if (RefRec_Recording() || prints != 1 || !strstr(last_print, "recording stopped"))
+			{
+				SweepBad(kind, "a failed write not reported once", n);
+				RefRec_StopRecord();
+			}
+			else if (!strstr(last_print, "close") && ReadTrace(path, &t, NULL, NULL, NULL))
+			{
+				SweepBad(kind, "an unfinished trace was accepted", n);
+			}
+
+			if (n > 1000000)
+			{
+				SweepBad(kind, "the fault sweep does not end", n);
+				break;
+			}
+		}
+
+		/* the frame limit, on the first frames */
+		for (limit = 1; limit <= 3; limit++)
+		{
+			prints = 0;
+			RefRec_SetFrameLimit(limit);
+			SweepRun(kind, path);
+			RefRec_SetFrameLimit(0);
+			runs++;
+
+			if (RefRec_Recording() || !ReadTrace(path, &t, NULL, NULL, NULL) ||
+				t.h.frame_count > limit || (limit < 2) != ((t.h.flags & REFREC_FLAG_TRUNCATED) != 0))
+			{
+				SweepBad(kind, "frame limit not kept", limit);
+			}
+		}
+	}
+
+	CHECK(sweep_bad == 0, "sweep: %d of %u runs ended wrong", sweep_bad, runs);
+	RefRec_SetHandleLimit(0);
+	sweep_handles = REFREC_MAX_HANDLES;
+	CHECK(runs > 1000, "sweep: only %u runs", runs);
+}
+
+/*
+ * A full handle map: a pointer re-registered under a new name retires its
+ * old id, so entities using it are recorded as id 0 with a warning, never
+ * under the old name.
+ */
+typedef struct {
+	uint32_t model_ids[8], nmodels;
+	refrec_entity_t first[4];
+	qboolean seen;
+} full_ctx_t;
+
+static void
+FullCb(refrec_type_t type, const refrec_call_t *c, const refrec_frame_t *f, void *vctx)
+{
+	full_ctx_t *x = vctx;
+
+	if (type == REC_MODEL && x->nmodels < 8)
+	{
+		x->model_ids[x->nmodels++] = c->id;
+	}
+
+	if (type == REC_RENDERFRAME && !x->seen)
+	{
+		x->seen = true;
+		memcpy(x->first, f->entities, sizeof(x->first));
+	}
+}
+
+static void
+TestRecordHandlesFull(void)
+{
+	const char *path = TracePath("handlesfull");
+	full_ctx_t x;
+	tracefile_t t;
+
+	memset(&x, 0, sizeof(x));
+	prints = 0;
+	SweepRun(SW_FULL, path);
+
+	if (!ReadTrace(path, &t, FullCb, &x, NULL))
+	{
+		CHECK(0, "handles full: trace refused: %s", t.err);
+		return;
+	}
+
+	CHECK(t.strings == REFREC_MAX_HANDLES, "handles full: %u strings", t.strings);
+	CHECK(t.skind[1] == REFREC_KIND_MODEL && strcmp(t.sname[1], "models/old.md2") == 0,
+			"handles full: the old entry left the string table");
+	/* the map, old.md2 as id 2, then new.md2, the skin and old.md2 again as id 0 */
+	CHECK(x.nmodels == 3 && x.model_ids[0] == 2 && x.model_ids[1] == 0 && x.model_ids[2] == 0,
+			"handles full: REC_MODEL ids %u %u %u", x.model_ids[0], x.model_ids[1], x.model_ids[2]);
+	/* handle_a on entities 1 and 3 is retired: id 0, not the stale 2 */
+	CHECK(x.seen && x.first[1].model_id == 0 && x.first[3].model_id == 0,
+			"handles full: a retired pointer kept id %u %u", x.first[1].model_id, x.first[3].model_id);
+	CHECK(t.warns[REFREC_WARN_HANDLES_FULL] == 5, "handles full: %u full-map warnings",
+			t.warns[REFREC_WARN_HANDLES_FULL]);
+	/* per frame: entity 0 model and skin, 1 model and skin, 2 model, 3 model and skin */
+	CHECK(t.warns[REFREC_WARN_UNKNOWN_HANDLE] == 14, "handles full: %u unknown-handle warnings",
+			t.warns[REFREC_WARN_UNKNOWN_HANDLE]);
+}
+
+/*
+ * A full handle map and a pointer registered again under another name and
+ * another kind. Rec_Lookup falls back from a skin to a pic entry, so the
+ * retirement covers every kind of the pointer: the entity is recorded as
+ * id 0 with an unknown-handle warning, never under the old name.
+ */
+static void
+TestRecordHandlesFullKinds(void)
+{
+	static const struct {
+		refrec_type_t first, second;
+		const char *first_name, *second_name;
+		qboolean model;		/* the entity uses the pointer as its model, else as its skin */
+	} runs[] = {
+		{ REC_PIC, REC_SKIN, "pics/old.pcx", "skins/new.pcx", false },
+		{ REC_SKIN, REC_PIC, "skins/old.pcx", "pics/new.pcx", false },
+		{ REC_MODEL, REC_SKIN, "models/old.md2", "skins/new.pcx", true },
+		{ REC_SKIN, REC_MODEL, "skins/old.pcx", "models/new.md2", false },
+		{ REC_PIC, REC_MODEL, "pics/old.pcx", "models/new.md2", false },
+		{ REC_MODEL, REC_PIC, "models/old.md2", "pics/new.pcx", true }
+	};
+	static entity_t ents[2];
+	static char ptr, other[2];
+	size_t r;
+
+	for (r = 0; r < sizeof(runs) / sizeof(runs[0]); r++)
+	{
+		const char *path = TracePath("handleskinds");
+		full_ctx_t x;
+		tracefile_t t;
+		refdef_t fd;
+		uint32_t id;
+
+		memset(&x, 0, sizeof(x));
+		memset(&fd, 0, sizeof(fd));
+		memset(ents, 0, sizeof(ents));
+		fd.entities = ents;
+		fd.num_entities = 1;
+		ents[0].model = runs[r].model ? (struct model_s *)&ptr : NULL;
+		ents[0].skin = runs[r].model ? NULL : (struct image_s *)&ptr;
+
+		RefRec_SetHandleLimit(4);
+		RefRec_StartRecord(path, 640, 480, 0);
+		RefRec_Registration(REC_BEGINREG, "maps/m.bsp", NULL);		/* id 1 */
+		RefRec_Registration(runs[r].first, runs[r].first_name, &ptr);	/* id 2 */
+		RefRec_Registration(REC_MODEL, "models/a.md2", &other[0]);	/* id 3 */
+		RefRec_Registration(REC_MODEL, "models/b.md2", &other[1]);	/* id 4, the map is full */
+		RefRec_Registration(runs[r].second, runs[r].second_name, &ptr);	/* full: retires id 2 */
+		RefRec_Registration(REC_ENDREG, NULL, NULL);
+		RefRec_Control(REC_BEGINFRAME, 0);
+		RefRec_RenderFrame(&fd);
+		RefRec_Control(REC_ENDFRAME, 0);
+		RefRec_StopRecord();
+		RefRec_SetHandleLimit(0);
+
+		if (!ReadTrace(path, &t, FullCb, &x, NULL))
+		{
+			CHECK(0, "handles kinds %u: trace refused: %s", (unsigned)r, t.err);
+			continue;
+		}
+
+		id = runs[r].model ? x.first[0].model_id : x.first[0].skin_id;
+		CHECK(t.strings == 4 && strcmp(t.sname[1], runs[r].first_name) == 0,
+				"handles kinds %u: string table", (unsigned)r);
+		CHECK(x.seen && id == 0, "handles kinds %u: the pointer kept id %u", (unsigned)r, id);
+		CHECK(t.warns[REFREC_WARN_UNKNOWN_HANDLE] == 1,
+				"handles kinds %u: %u unknown-handle warnings", (unsigned)r,
+				t.warns[REFREC_WARN_UNKNOWN_HANDLE]);
+		CHECK(t.warns[REFREC_WARN_HANDLES_FULL] == 1,
+				"handles kinds %u: %u full-map warnings", (unsigned)r,
+				t.warns[REFREC_WARN_HANDLES_FULL]);
+	}
+}
+
+/*
+ * --read and --read --names print every name byte and engine id byte
+ * outside 0x20..0x7e (and the backslash) escaped: a server or a demo
+ * chooses those bytes.
+ */
+static void
+TestReadEscapes(void)
+{
+	static const char sky[] = "s\x1b[2J\x01\x7f\xff\\e";
+	char sub[32], buf[4096];
+	const float rot[4] = { 0, 0, 0, 1.0f };
+	const char *path;
+	size_t n, i;
+	qboolean clean = true;
+	FILE *out;
+	int pass;
+
+	snprintf(sub, sizeof(sub), "e%cx-42", 0x1b);
+	path = TracePath(sub);
+	RefRec_StartRecord(path, 640, 480, 0);
+	RefRec_Registration(REC_BEGINREG, "maps/m\x07.bsp", NULL);
+	RefRec_Draw(REC_SKY, NULL, 0, rot, 4, sky, NULL, 0);
+	RefRec_StopRecord();
+
+	for (pass = 0; pass < 2; pass++)
+	{
+		out = tmpfile();
+
+		if (!out)
+		{
+			CHECK(0, "escapes: tmpfile");
+			return;
+		}
+
+		CHECK(ReadMode(path, pass == 1, out) == 0, "escapes: --read refused the trace");
+		rewind(out);
+		n = fread(buf, 1, sizeof(buf) - 1, out);
+		buf[n] = '\0';
+		fclose(out);
+
+		for (i = 0; i < n; i++)
+		{
+			if ((buf[i] < 0x20 || buf[i] > 0x7e) && buf[i] != '\n')
+			{
+				clean = false;
+			}
+		}
+
+		if (pass == 0)
+		{
+			CHECK(strstr(buf, "run e\\x1bx-42\n") != NULL, "escapes: engine id not escaped: %s", buf);
+		}
+		else
+		{
+			CHECK(strstr(buf, "4 s\\x1b[2J\\x01\\x7f\\xff\\x5ce\n") != NULL &&
+					strstr(buf, "5 maps/m\\x07.bsp\n") != NULL, "escapes: names not escaped: %s", buf);
+		}
+	}
+
+	CHECK(clean, "escapes: a byte outside 0x20..0x7e reached the output");
+}
+
+/* The string table and frame index readers refuse malformed entries. */
+static void
+TestTableReaders(void)
+{
+	uint8_t buf[4 + REFREC_STRING_SIZE], *e = buf + 4, idx[REFREC_INDEX_SIZE];
+	refrec_reader_t r;
+	uint32_t count, kind, id, frame;
+	uint64_t off;
+	char name[MAX_QPATH];
+
+#define TABLE(setup, want, what) \
+	do \
+	{ \
+		memset(buf, 0, sizeof(buf)); \
+		SetU32(buf, 1); \
+		SetU32(e, REFREC_KIND_PIC); \
+		SetU32(e + 4, 1); \
+		memcpy(e + 8, "conchars", 8); \
+		setup; \
+		RefRec_ReaderInit(&r, buf, sizeof(buf)); \
+		CHECK((RefRec_ReadStringTable(&r, &count) && \
+			RefRec_NextString(&r, &kind, &id, name)) == (want), "string table: %s", what); \
+	} while (0)
+
+	TABLE((void)0, true, "a valid entry was refused");
+	TABLE(memset(e + 8, 'a', MAX_QPATH), false, "a name without a NUL was accepted");
+	TABLE(e[8 + 20] = 'x', false, "bytes after the NUL were accepted");
+	TABLE(SetU32(e, 0), false, "kind 0 was accepted");
+	TABLE(SetU32(e, REFREC_KIND_LAST + 1), false, "a kind past the last was accepted");
+	TABLE(SetU32(e + 4, 0), false, "id 0 was accepted");
+	TABLE(SetU32(buf, 2), false, "a count over the entries present was accepted");
+	TABLE(SetU32(buf, REFREC_MAX_HANDLES + 1), false, "a count over REFREC_MAX_HANDLES was accepted");
+#undef TABLE
+
+	memset(buf, 0, sizeof(buf));
+	SetU32(buf, 1);
+	SetU32(e, REFREC_KIND_MODEL);
+	SetU32(e + 4, 1);
+	RefRec_ReaderInit(&r, buf, sizeof(buf) - 1);
+	CHECK(!(RefRec_ReadStringTable(&r, &count) && RefRec_NextString(&r, &kind, &id, name)),
+			"string table: a truncated entry was accepted");
+
+	SetU32(idx, 7);
+	SetU32(idx + 4, 0x10);
+	SetU32(idx + 8, 1);
+	RefRec_ReaderInit(&r, idx, sizeof(idx));
+	CHECK(RefRec_NextFrameIndex(&r, &frame, &off) && frame == 7 && off == 0x100000010ull,
+			"frame index: entry read wrong");
+	RefRec_ReaderInit(&r, idx, sizeof(idx) - 1);
+	CHECK(!RefRec_NextFrameIndex(&r, &frame, &off), "frame index: a truncated entry was accepted");
+
+	/* the header offsets and a frame offset against the file size */
+	{
+		refrec_header_t h;
+		uint64_t fo;
+
+#define LAYOUT(setup, size, want, what) \
+		do \
+		{ \
+			memset(&h, 0, sizeof(h)); \
+			h.string_table_offset = 1000; \
+			h.frame_index_offset = 1004; \
+			h.frame_count = 2; \
+			fo = 64; \
+			setup; \
+			CHECK(RefRec_CheckLayout(&h, (size), &fo) == (want), "layout: %s", what); \
+		} while (0)
+
+		LAYOUT((void)0, 1004 + 24, true, "a valid layout was refused");
+		LAYOUT(fo = 992, 1004 + 24, true, "the last record header place was refused");
+		LAYOUT((void)0, 1004 + 23, false, "a file shorter than the index was accepted");
+		LAYOUT((void)0, 1004 + 25, false, "bytes after the index were accepted");
+		LAYOUT(h.string_table_offset = 60, 1004 + 24, false, "a string table inside the header was accepted");
+		LAYOUT(h.string_table_offset = 0, 1004 + 24, false, "an unfinished trace was accepted");
+		LAYOUT(h.string_table_offset = 1008, 1004 + 24, false, "a string table after the index was accepted");
+		LAYOUT(h.frame_index_offset = 1006; h.frame_count = 2, 1006 + 24, false, "an unaligned index was accepted");
+		LAYOUT(h.frame_count = 0x20000000u, 1004 + 24, false, "a frame count past the file was accepted");
+		LAYOUT((void)0, 0x100000000ull, false, "a file of 4 GiB was accepted");
+		LAYOUT(fo = 60, 1004 + 24, false, "a frame inside the header was accepted");
+		LAYOUT(fo = 66, 1004 + 24, false, "an unaligned frame was accepted");
+		LAYOUT(fo = 996, 1004 + 24, false, "a frame without room for its record header was accepted");
+		LAYOUT(fo = 1000, 1004 + 24, false, "a frame in the string table was accepted");
+		LAYOUT(fo = 0x100000040ull, 1004 + 24, false, "a frame offset over 4 GiB was accepted");
+#undef LAYOUT
+
+		memset(&h, 0, sizeof(h));
+		h.string_table_offset = 64;
+		h.frame_index_offset = 68;
+		CHECK(RefRec_CheckLayout(&h, 68, NULL), "layout: an empty finished trace was refused");
+	}
+}
+
+int
+main(int argc, char **argv)
+{
+	if (argc >= 3 && strcmp(argv[1], "--read") == 0)
+	{
+		return ReadMode(argv[2], argc >= 4 && strcmp(argv[3], "--names") == 0, stdout);
+	}
+
+	if (argc != 2 || strlen(argv[1]) >= sizeof(test_dir))
+	{
+		printf("usage: refrecord-test <scratch dir> | --read <trace.q2r> [--names]\n");
+		return 2;
+	}
+
+	snprintf(test_dir, sizeof(test_dir), "%s", argv[1]);
+	RefRec_SetPrint(TestPrint);
+
 	TestCalls();
 	TestPaletteExact();
 	TestWriteRefusals();
@@ -1413,6 +2961,17 @@ main(void)
 	TestCvars();
 	TestStream();
 	TestRecorderOff();
+	TestRecordHandles();
+	TestRecordFrameCopy();
+	TestRecordFrameClamp();
+	TestRecordDraws();
+	TestRecordLimit();
+	TestRecordWriteError();
+	TestRecordHandlesFull();
+	TestRecordHandlesFullKinds();
+	TestRecordStopSweep();
+	TestReadEscapes();
+	TestTableReaders();
 
 	printf("refrecord: %d checks, %d failed\n", checks, failures);
 
