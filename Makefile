@@ -426,7 +426,7 @@ endif
 ifeq ($(YQ2_OSTYPE), Darwin)
 include third_party/sdl3.make
 SDLLDFLAGS := -Wl,-force_load,$(SDL3_LIB) $(SDL3_LDLIBS)
-SDL_DYNAMIC_LOOKUP = $$(nm -u $^ | grep '^_SDL_' | sort -u | sed 's/^/-Wl,-U,/')
+SDL_DYNAMIC_LOOKUP = $$(nm -u $(filter %.o,$^) | grep '^_SDL_' | sort -u | sed 's/^/-Wl,-U,/')
 else
 SDLLDFLAGS := $(shell $(PKG_CONFIG) --libs sdl3)
 endif
