@@ -223,7 +223,7 @@ start. `fsPackFile_t` holds `name[MAX_QPATH]`, `size`, `offset`; a
 | Function | Field | Use | Check (quoted) or absence | Verdict |
 |---|---|---|---|---|
 | `FS_LoadPAK` | header read | `fread(&header, 1, sizeof(dpackheader_t), handle)` | return value ignored; a file shorter than 12 bytes leaves `dirofs`/`dirlen` as uninitialised stack | hardening (the ident test catches most short files; a file holding only the ident does not; carded under FIX22) |
-| `FS_LoadPAK` | `ident` | format gate | `LittleLong(header.ident) != IDPAKHEADER` raises `ERR_FATAL` | ok for memory; a garbage `.pak` in the write directory stops the engine at every start (see D5) |
+| `FS_LoadPAK` | `ident` | format gate | `LittleLong(header.ident) != IDPAKHEADER` raises `ERR_FATAL` | ok for memory; a file named `*.pak` that is not a pack, in a search path, stops the engine at every start (see "By design / out of scope") |
 | `FS_LoadPAK` | `dirlen`, `dirofs` | `numFiles = header.dirlen / sizeof(dpackfile_t)`, `malloc(header.dirlen)`, `fseek(handle, header.dirofs, SEEK_SET)` | `(numFiles == 0) \|\| (header.dirlen < 0) \|\| (header.dirofs < 0)` | ok for sign; no upper bound against the file size (see next rows) |
 | `FS_LoadPAK` | `numFiles` | `Z_Malloc(numFiles * sizeof(fsPackFile_t))` | `numFiles > MAX_FILES_IN_PACK` only prints a message; the product is computed in `size_t` and cannot wrap on 64-bit hosts (at most 33 554 431 entries of 72 bytes, about 2.4 GB) | **defect D5** (resource exhaustion: up to 2 GB `malloc` plus 2.4 GB `calloc` from a header alone; `Z_TagMalloc` turns a failed allocation into `ERR_FATAL`) |
 | `FS_LoadPAK` | directory bytes | `fread(info, 1, header.dirlen, handle)` into `malloc`ed (not zeroed) memory | return value ignored; a directory that runs past the end of the file leaves the tail of `info` uninitialised | **defect D4** (feeds the next row) |
@@ -502,7 +502,7 @@ dimensions in the three functions).
 | `LoadSTB` | `rawsize`, returned `w`, `h` | `stbi_load_from_memory`, then `*width = w`, `*height = h` | stb validates its own input and dimensions; the repo trusts the returned `w`/`h` | out of scope (stb internal), but the dimensions flow into the next rows |
 | `R_LoadImage`, `LoadHiColorImage` | `width * height` | passed as `size` to `load_image` | `int`; stb caps a dimension at `1 << 24` by default, so two large images multiply past `INT_MAX` | **defect D22** (the product is used as a copy length and mip base; the fix is a 64-bit guard like `R_Convert8to32` already has) |
 | `LoadHiColorImage` | `width >= realwidth && height >= realheight` | gate on using the replacement | compares the stb result with the PCX/WAL/M8/M32 real size | ok |
-| `R_Convert8to32` (gl1, gl3) | `width`, `height` | `malloc(width * height * sizeof(unsigned))` | `if (height == 0 || width > INT_MAX / sizeof(*trans) / height)` raises `ERR_DROP` | ok |
+| `R_Convert8to32` (gl1, gl3) | `width`, `height` | `malloc(width * height * sizeof(unsigned))` | `if (height == 0 \|\| width > INT_MAX / sizeof(*trans) / height)` raises `ERR_DROP` | ok |
 | `scale2x`, `scale3x` (`files/stb.c`) | `width`, `height` | reads `src[width*y + x]`, writes `dst` up to `(width*height) << 2` / `* 9` | no internal bound; callers size the destination and guard the product (next rows) | ok by caller |
 | `gl1_image.c`, `gl3_image.c` scale path | `width`, `height`, `scale` | `malloc(width * height * scale * scale)` then `scale2x`/`scale3x` | `if (height == 0 \|\| scale == 0 \|\| width > INT_MAX / height / scale / scale)` raises `ERR_DROP` | ok |
 | `sw_image.c` `R_LoadPic8` scale path | `width * height * 4` | `malloc` then `scale2x` | no overflow guard on `width * height * 4` here (the gl renderers added one; soft did not) | **defect D22** (same class) |
@@ -576,7 +576,7 @@ to `S_GetVolume`, `S_GetStatistics`, `S_IsShortSilence` and `SDL_Cache`
 | `S_IsShortSilence` (`sound.c`) | `info.samples` | `sample_count = info.samples * info.width`, reads each | tests `info.samples > rate * S_MAX_LEN...` to skip long sounds, but the short-silence branch still reads `sample_count` bytes for a sound whose `rate` is large; the first test divides by `info->rate` unchecked (reached only for a mono sound under one of the muzzle-flash names listed in `S_IsSilencedMuzzleFlash`) | **defect D25**; the division **D29** |
 | `SDL_Cache` (`sdl.c`) | `info.samples` | resample loop reads `data[srcsample]` / `((short *)data)[srcsample]` for `srcsample` up to about `info.samples` | zero-length rejected; nothing compares `info.samples` with the data actually present | **defect D25** (heap over-read on the source) |
 | `SDL_Cache` (`sdl.c`) | `len * info->width * info->channels` | `Z_Malloc(len + sizeof(sfxcache_t))` for a loop that writes `(int)(info->samples / stepscale)` elements of `sc->width` bytes | `int` multiplication with no overflow test, and the loop bound is recomputed from the un-multiplied frame count, so the destination is not matched to the loop once the product wraps; a negative product becomes a huge `size_t` and `Z_TagMalloc` fails with `ERR_FATAL` | **defect D28** (heap overflow write; with `info.samples` consistent with the file, so D25's clamp leaves it open) |
-| `SDL_Cache` (`sdl.c`) | `info->rate == 0` | `stepscale = 0`, `(int)(info->samples / 0.0f)` (undefined conversion of infinity), then `begin_length * 1000 / info->rate` and the `end`, `fade`, `attack` lines | none | **defect D29** (integer division by zero: SIGFPE on x86-64, a silent 0 on arm64; the float path gives an undefined frame count) |
+| `SDL_Cache` (`sdl.c`) | `info->rate == 0` | `stepscale = 0`, `(int)(info->samples / 0.0f)` (undefined conversion of infinity), then `begin_length * 1000 / info->rate` and the `end`, `fade`, `attack` lines | none | **defect D29** (integer division by zero: SIGFPE on x86-64, a silent 0 on arm64, where `SDL_Cache` then continues into the resample loop with an undefined frame count against an allocation sized from the wrapped product, the D28 class: a write past the allocation, not only a denial of service) |
 
 D25 is the substantive WAV finding: the data-chunk length word, and the
 `dataofs`, are trusted without any comparison to `wavlength`. A `.wav` named
@@ -599,13 +599,23 @@ and only the write overflows. Checked numerically with the same expressions
 for a stereo 16-bit file of a few tens of KB at the two usual output rates:
 at 48 kHz the product wraps to about 313 MB allocated for about 2.3 GB of
 writes; at 44.1 kHz it wraps negative and `Z_TagMalloc` fails with
-`ERR_FATAL`. A `.wav` is requested from a server as `sound/%s` for every
+`ERR_FATAL`. That holds for that sample count only: the sign of the wrapped
+product depends on the count, so the default rate (`s_khz` 44, 44100 Hz) is
+affected at other counts, where the product wraps to a small positive size
+and the write overflows; `Z_TagMalloc` only refuses a size of zero or one
+near `SIZE_MAX`. A `.wav` is requested from a server as `sound/%s` for every
 `CS_SOUNDS` configstring, so D28 is server-reachable: high, static trace with
 high confidence (the arithmetic was checked, `SDL_Cache` was not run). D29 is
 the zero rate: `begin_length * 1000 / info->rate` and its three siblings in
 `SDL_Cache` (every SDL-loaded sound) and the first test of
 `S_IsShortSilence` divide by zero; that is a SIGFPE crash on x86-64 and a
-silent 0 on arm64, so medium (denial of service), high confidence. D30 is
+silent 0 on arm64. On arm64 the divisions do not stop the build's execution:
+the infinite step count converts to an undefined frame count (`len` is
+non-zero, so the zero-length test passes), `len * width * channels` wraps, and
+`SDL_Cache` enters the resample loop whose bound is the undefined count
+against an allocation sized from the wrapped product. That is the D28 class
+(a write past the allocation), so D29 is high on arm64 and a denial of
+service on x86-64; high confidence (static; `SDL_Cache` was not run). D30 is
 `GetWavinfo` handing back a partly filled `info` from an early return (a cue
 loop length but no data chunk leaves `samples` set and `dataofs` 0) or a
 negative `samples` from a negative length word; medium, high confidence.
@@ -729,9 +739,10 @@ table, which is compile-time data.
 - **Unterminated fixed-size name fields** (`texinfo.texture[32]`, MD2/SP2 skin
   names, surface names) read to the next NUL. `FS_LoadFile` appends one zero
   byte past the buffer, which bounds the worst case; listed as hardening.
+- **A non-pack file named `*.pak`.** `FS_LoadPAK` raises `ERR_FATAL` ("is not a pack file") when the ident does not match, so a stray file with that extension in a search path stops the engine at every start. That is fatal by design today; FIX22 lists it as a behaviour to decide (skip it with a warning instead of `ERR_FATAL`).
 - **Savegames** (`savegame.c`) read local files the user chose and are a
   different trust model; not an asset loader.
-- **Hardening rows with a card.** Five hardening rows are folded into the
+- **Hardening rows with a card.** These hardening rows are folded into the
   matching card rather than left open: the renderer `hunkSize` `int` sum
   (FIX17), the MD2 `ofs_end` lower bound and the SP2 early-return hunk leak
   (FIX18), the soft `sw_image.c` resize product and the unchecked
@@ -780,7 +791,7 @@ reachability in [Where each asset can come from](#where-each-asset-can-come-from
 | D26 | `cl_cin.c` `SCR_PlayCinematic` | still-image name copied into `char namewe[256]` by length; `MAX_OSPATH` is 4096 on every non-Windows build (macOS included), so a server level name of up to about 1380 characters (the `svc_serverdata` message limit) overruns the stack buffer by up to about 1100 bytes | high | high (static) | FIX21 |
 | D27 | M32 `LoadM32` | `width * 4` wraps in the body-size check, so a hostile width passes against a few-byte body; gl1 then rewrites `width * height` pixels in place past the file buffer (gl3 over-reads) | high | high (static) | FIX19 |
 | D28 | `sdl.c` `SDL_Cache` (rate from `wave.c`) | `info.rate` unchecked; a low rate inflates the resampled frame count, `len * width * channels` wraps in `int` to a small allocation, and the loop writes the full count: heap overflow write not closed by the D25 clamp | high | high (static, arithmetic checked) | FIX20 |
-| D29 | `sdl.c` `SDL_Cache`, `sound.c` `S_IsShortSilence` | a zero `info.rate` reaches integer divisions (`begin_length * 1000 / info->rate` and siblings, `(info->samples * 1000) / info->rate`) | medium | high (static) | FIX20 |
+| D29 | `sdl.c` `SDL_Cache`, `sound.c` `S_IsShortSilence` | a zero `info.rate` reaches integer divisions (`begin_length * 1000 / info->rate` and siblings, `(info->samples * 1000) / info->rate`); on x86-64 SIGFPE, on arm64 execution continues into the resample loop with an undefined frame count (the D28 class, a write past the allocation) | high | high (static) | FIX20 |
 | D30 | `wave.c` `GetWavinfo` return paths | `info` is returned partly filled from early returns (a cue loop length with no data chunk leaves `samples` set and `dataofs` 0) and a negative data-length word gives negative `samples`; nothing validates on any path | medium | high (static) | FIX20 |
 | D31 | MD2 `Mod_LoadMD2` section offsets | section offsets have no lower bound; a section copied over the validated header restores the unclamped `num_skins`, and the skin loop writes image pointers past `skins[MAX_MD2SKINS]` | high | high (ASAN) | FIX18 |
 
