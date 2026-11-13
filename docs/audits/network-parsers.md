@@ -122,7 +122,7 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_parse.c` `CL_ParseBaseline` `newnum` | `CL_ParseEntityBits` (byte or signed short) | `CL_AllocEntity(newnum)` → `ent->baseline` | `CL_AllocEntity` returns `NULL` outside `0..MAX_CL_ENTNUM`; `CL_ParseDelta` then writes a local dummy | ok |
 | `cl_parse.c` `CL_ParseEntityBits` `number` | byte or short | returned as entity number | caller `CL_ParsePacketEntities` checks `newnum > MAX_CL_ENTNUM` → drop | ok |
 | `cl_parse.c` `CL_ParsePacketEntities` ring | `oldframe->parse_entities + i` | index `cl_parse_entities[... & (MAX_PARSE_ENTITIES-1)]` | masked | ok |
-| `cl_parse.c` `CL_DeltaEntity` `cl_parse_entities[cl.parse_entities & (MAX_PARSE_ENTITIES-1)]` | — | ring write; `frame->num_entities++` | ring masked; **`num_entities` itself is never capped to `MAX_EDICTS`** → feeds Defect D1 | defect (D1, in a sink) |
+| `cl_parse.c` `CL_DeltaEntity` `cl_parse_entities[cl.parse_entities & (MAX_PARSE_ENTITIES-1)]` | — | ring write; `frame->num_entities++` | ring masked; `num_entities` is capped at `MAX_EDICTS` since FIX11 (#136), was Defect D1 | ok (fixed by FIX11) |
 | `cl_parse.c` `CL_DeltaEntity` `CL_AllocEntity(newnum)` | newnum | realloc'd `cl_entities[newnum]` | `CL_AllocEntity` checks `0..MAX_CL_ENTNUM`, grows array via `NextPow2gt`; NULL → dummy | ok |
 | `cl_parse.c` `CL_ParseDelta` `modelindex`, `modelindex2`, `modelindex3`, `modelindex4`, `frame`, `skinnum`, `effects`, `renderfx`, `origin`, `angles`, `old_origin`, `sound`, `event`, `solid` | byte (`modelindex*`, `sound`, `event`), byte or short (`frame`), byte, short or long (`skinnum`, `effects`, `renderfx`), short (`solid`), coords and angles | stored in `entity_state_t` fields as read (`frame` and `skinnum` can be negative) | no check here; each sink must bound the field: `modelindex*` in the `model_draw`/`model_clip` rows (by the byte type, H2), `frame` in the D5, D11 and D16 rows, `skinnum` in the clientinfo, D10 and beam rows, `sound` in the `sound_precache` row; `effects` and `renderfx` are flag tests, `event` a `switch` (`CL_EntityEvent`) and comparisons, `solid` a test and bit fields for the prediction box, positions and angles plain values | see the sink rows |
 | `cl_parse.c` `CL_ParsePlayerstate` `state->stats[i]` | long `statbits`, shorts | `stats[i]`, `i` in `0..MAX_STATS` loop | `i < MAX_STATS` | ok |
@@ -164,8 +164,8 @@ before the loop's test (D12), that is the bug to look for.
 | `sw_part.c` `R_DrawParticle` `vid_alphamap[(color << 8) + pdest]` / `[color + (pdest << 8)]` | `particle_t.color` | translucency table index | was Defect D9, now: covered by the mask in `V_AddParticle` | ok (fixed by FIX25) |
 | `gl1_main.c` `R_DrawParticles2` `colortable[p->color]` | `particle_t.color` | `d_8to24table[256]` index | was Defect D9, now: covered by the mask in `V_AddParticle` | ok (fixed by FIX25) |
 | `cl_network.c` `CL_ConnectionlessPacket` `Cmd_Argv(0)` and the logged command name | `MSG_ReadStringLine` → `Cmd_TokenizeString` | dispatch; `Com_Printf("%s: %s\n", ...)` | string bounded 2048; tokenizer bounded | ok |
-| `cl_network.c` `client_connect` | command name only | `Netchan_Setup(..., net_from, ...)`, `cls.state = ca_connected`, sends `new` | ignored only in `ca_connected`; **accepted from any source address in `ca_disconnected`, `ca_connecting` and `ca_active`** while the client socket is open, and points the netchan at the sender → Defect D14 (preconditions there) | defect (D14) |
-| `cl_network.c` `challenge` `Cmd_Argv(1)` | tokenized | `strtol` → `cls.challenge`; `CL_SendConnectPacket` to `cls.servername` | numeric; the connect goes to the configured server, not the sender; accepted from any source in any state (same class as D14) | defect (D14, lower impact) |
+| `cl_network.c` `client_connect` | command name only | `Netchan_Setup(..., net_from, ...)`, `cls.state = ca_connected`, sends `new` | accepted only in `ca_connecting` and only from the address being connected to, which is also the address the netchan is set up with, since FIX27 (#139), was Defect D14 | ok (fixed by FIX27) |
+| `cl_network.c` `challenge` `Cmd_Argv(1)` | tokenized | `strtol` → `cls.challenge`; `CL_SendConnectPacket` to `cls.servername` | numeric; the connect goes to the configured server, not the sender; accepted only in `ca_connecting` from the address being connected to since FIX27 (#139), was the same class as D14 | ok (fixed by FIX27) |
 | `cl_network.c` `echo` `Cmd_Argv(1)` | tokenized (≤ 1023 characters) | `Netchan_OutOfBandPrint(..., "%s", ...)` back to the sender | format is fixed; reply is about as large as the request (no amplification) | ok |
 | `cl_network.c` `print` | `MSG_ReadString` | `Com_Printf("%s", s)` | string bounded 2048; accepted from any source, console text only (this is how status replies arrive) | ok (by design) |
 | `cl_network.c` `ping` | command name only | `Netchan_OutOfBandPrint("ack")` | fixed reply | ok |
@@ -173,11 +173,11 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_network.c` `cmd` connectionless | `MSG_ReadString` | `Cbuf_AddText` | gated on `NET_IsLocalAddress` | ok (by design for local) |
 | `cl_main.c` `CL_ParseStatusMessage` → `M_AddToServerList` | `MSG_ReadString` | `Q_strlcpy` into `local_server_names[]` | `m_num_servers == MAX_LOCAL_SERVERS` guard; `Q_strlcpy` truncates | ok |
 | `cl_screen.c` `SCR_ExecuteLayoutString` `"pic"`/`"stat_string"`/`"if"` stat index | `COM_Parse`+`strtol` of the layout | `stats[index]` | `index < 0 \|\| index >= MAX_STATS` rejected in each | ok |
-| `cl_screen.c` `SCR_ExecuteLayoutString` `"pic"` `configstrings[CS_IMAGES + value]` | `value = stats[index]` (server `short`) | configstring row, then picture name | only `value >= MAX_IMAGES` rejected; **negative `value` passes** → Defect D8 | defect (D8) |
+| `cl_screen.c` `SCR_ExecuteLayoutString` `"pic"` `configstrings[CS_IMAGES + value]` | `value = stats[index]` (server `short`) | configstring row, then picture name | bounded on both sides against `MAX_IMAGES` since FIX13 (#137), was Defect D8 | ok (fixed by FIX13) |
 | `cl_screen.c` `SCR_ExecuteLayoutString` `"stat_string"` `configstrings[value]` | `stats[index]` | configstring row | `value < 0 \|\| value >= MAX_CONFIGSTRINGS` rejected | ok |
 | `cl_screen.c` `SCR_ExecuteLayoutString` `"client"`/`"ctf"` `clientinfo[value]` | `strtol` of the layout | clientinfo index | `value < 0 \|\| value >= MAX_CLIENTS` rejected; `ctf` `sprintf` into `block[80]` with `%3d %3d %-12.12s`: two `int` fields of at most 11 characters each plus a 12-character name, under 80 | ok |
-| `cl_screen.c` `SCR_ExecuteLayoutString` `"num"` → `stats[strtol(token)]` | layout number | `stats[...]` index | **unchecked** index into `stats[MAX_STATS]` → Defect D3 | defect (D3) |
-| `cl_screen.c` `DrawHUDStringScaled` `line[width++]` | `COM_Parse` token chars to `\n` | index into `line[1024]` | no bound on `width` in the function; its only live callers (`cstring`, `cstring2` layout tokens) pass a `COM_Parse` token, at most `MAX_TOKEN_CHARS - 1` = 1023 characters, so `line[1023]` is the furthest write; not reachable today → D4 | ok (hardening D4) |
+| `cl_screen.c` `SCR_ExecuteLayoutString` `"num"` → `stats[strtol(token)]` | layout number | `stats[...]` index | index into `stats[MAX_STATS]` bounded since FIX13 (#137), was Defect D3 | ok (fixed by FIX13) |
+| `cl_screen.c` `DrawHUDStringScaled` `line[width++]` | `COM_Parse` token chars to `\n` | index into `line[1024]` | no bound on `width` in the function; its only live callers (`cstring`, `cstring2` layout tokens) pass a `COM_Parse` token, at most `MAX_TOKEN_CHARS - 1` = 1023 characters, so `line[1023]` is the furthest write; not reachable today; `width` capped since FIX13 (#137), was D4 | ok (fixed by FIX13) |
 | `cl_entities.c` `CL_AddPacketEntities` `cl.model_draw[s1->modelindex]` (and `modelindex2/3/4`) | modelindex bytes | model pointer | no explicit check; `CL_ParseDelta` reads each with `MSG_ReadByte`, so 0..255 against `model_draw[MAX_MODELS]` (256); `-1` only on a short read, which drops the connection before the frame is used (see D5); see Hardening H2 | ok (hardening H2) |
 | `cl_entities.c` `ci = &cl.clientinfo[s1->skinnum & 0xff]` | skinnum | clientinfo index | masked `& 0xff`, `MAX_CLIENTS == 256` | ok |
 | `cl_entities.c` custom weapon `ci->weaponmodel[s1->skinnum >> 8]` | skinnum (`int`, byte/short/long on the wire) | model pointer | was Defect D10, now: a negative `i` takes the default weapon model | ok (fixed by FIX25) |
@@ -189,8 +189,8 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_entities.c` `cl.model_draw[ps->gunindex]` | `gunindex` (`MSG_ReadByte` in `CL_ParsePlayerstate`) | gun model | 0..255 by the byte type vs `MAX_MODELS` | ok (by the byte type) |
 | `cl_entities.c` `bfg_lightramp[s1->frame]` | frame (`U_FRAME8` byte or `U_FRAME16` signed short) | index into `static int[6]` | reached when `effects & EF_BFG` is set without `EF_ANIM_ALLFAST`; checked on both sides since FIX14 (the table is read only for a frame inside it; any other frame adds no light), was Defect D5 | ok (fixed by FIX14) |
 | `cl_prediction.c` `cl.model_clip[ent->modelindex]` | modelindex byte | clip model | reached when `ent->solid == 31`; 0..255 by the byte type against `model_clip[MAX_MODELS]`; see Hardening H2 | ok (hardening H2) |
-| `sound/sound.c` `S_BuildSoundList` `sounds[i]` | loop to `num_entities` | write into caller `sounds[MAX_EDICTS]` | bound is `i <= MAX_CL_ENTNUM` (32767), **not `MAX_EDICTS` (1024)** → Defect D1 | defect (D1) |
-| `sound/sdl.c` `SDL_AddLoopSounds` `sounds[i]` / loop | `i < num_entities` | read/zero `sounds[MAX_EDICTS]` | **no bound vs `MAX_EDICTS`** → Defect D1 | defect (D1) |
+| `sound/sound.c` `S_BuildSoundList` `sounds[i]` | loop to `num_entities` | write into caller `sounds[MAX_EDICTS]` | bounded by the caller's array size since FIX11 (#136), was Defect D1 | ok (fixed by FIX11) |
+| `sound/sdl.c` `SDL_AddLoopSounds` `sounds[i]` / loop | `i < num_entities` | read/zero `sounds[MAX_EDICTS]` | bounded by `MAX_EDICTS` since FIX11 (#136), was Defect D1 | ok (fixed by FIX11) |
 | `sound/sound.c` `cl.sound_precache[sounds[i]]` | sound id from `ent->sound` (byte) | precache index | `ent->sound` is a byte, `MAX_SOUNDS == 256` | ok |
 
 ## Server (reads `clc_*` from a client, plus connectionless and userinfo)
@@ -212,7 +212,7 @@ before the loop's test (D12), that is the bug to look for.
 | `sv_user.c` `SV_Begin_f` `Cmd_Argv(1)` | `strtol` | compared with `svs.spawncount`; then `cs_spawned`, `ge->ClientBegin` | spawncount must match; **no test of the client's current state**, so `begin` can be repeated while spawned (game-level effect, no memory issue) → Hardening H7 | ok (hardening H7) |
 | `sv_user.c` `SV_Nextserver_f` `Cmd_Argv(1)` | `strtol` | compared with `svs.spawncount`; `SV_Nextserver` | spawncount must match; `SV_Nextserver` refuses during a normal game | ok |
 | `sv_user.c` `SV_BeginDownload_f` `name` | `Cmd_Argv(1)` | `FS_LoadFile(name)`, path | denylist `..`, `\`, `:`, leading `.`/`/`, must contain `/` | ok (see By design: denylist, not the client allowlist) |
-| `sv_user.c` `SV_BeginDownload_f` `offset` | `Cmd_Argv(2)`→`strtol` | `downloadcount = offset`; then `SV_NextDownload_f` reads `download + downloadcount - r` | clamp only on the `>` side: `if (offset > downloadsize) downloadcount = downloadsize`; **negative `offset` passes** → Defect D6 | defect (D6) |
+| `sv_user.c` `SV_BeginDownload_f` `offset` | `Cmd_Argv(2)`→`strtol` | `downloadcount = offset`; then `SV_NextDownload_f` reads `download + downloadcount - r` | clamp only on the `>` side: `if (offset > downloadsize) downloadcount = downloadsize`; negative `offset` refused since FIX15 (#138), was Defect D6 | ok (fixed by FIX15) |
 | `sv_conless.c` `SVC_DirectConnect` `version`/`qport`/`challenge` | `Cmd_Argv`→`strtol` | compared / stored | version and challenge checked; qport stored | ok |
 | `sv_conless.c` `SVC_DirectConnect` userinfo, `Info_SetValueForKey(userinfo, "ip", NET_AdrToString(net_from))` | `Cmd_Argv(4)` | `Q_strlcpy` into `userinfo[MAX_INFO_STRING]`; engine forces the `ip` key; passed to `ge->ClientConnect` | copy truncates, in bounds; **nothing makes the engine's `ip` pair the only one, or present** → Defect D17 | defect (D17) |
 | `sv_conless.c` `SVC_Info` `version` | `Cmd_Argv(1)`→`strtol` | compared; `Com_sprintf(string, 64, ...)` | **bug-adjacent**: wrong-version branch calls `Com_sprintf(string, sizeof(string), "%s: wrong version\n", hostname->string, sizeof(string))` — extra arg, benign; Hardening H6 | ok (hardening H6) |
@@ -270,7 +270,10 @@ against a client; a hostile client or unauthenticated peer against a server):
 - low: an out-of-bounds read that stays in mapped memory next to the buffer
   and whose result is only compared or logged locally; hardening.
 
-### D1: `num_entities` can exceed `MAX_EDICTS`; `S_BuildSoundList` writes past `sounds[MAX_EDICTS]` (critical, high confidence) [FIX11 (#107)]
+### D1: `num_entities` can exceed `MAX_EDICTS`; `S_BuildSoundList` writes past `sounds[MAX_EDICTS]` (critical, high confidence) [fixed in #136]
+
+Fixed by FIX11 (#136): a frame with more than `MAX_EDICTS` entities is refused
+with `ERR_DROP`, and the sound-list loops are bounded by the array size.
 
 `CL_ParsePacketEntities` / `CL_DeltaEntity` increment `frame->num_entities`
 once per entity in a frame and never cap it to `MAX_EDICTS` (1024). The store
@@ -320,7 +323,9 @@ across the module, which the scale rates medium. Fix: reject
 `playernum < -1 || playernum >= MAX_CLIENTS` with `ERR_DROP` at the read.
 Confidence that it is unchecked: high; that it is exploitable today: low.
 
-### D3: the `"num"` layout token indexes `stats[]` with an unchecked parsed value (high, high confidence) [FIX13 (#109)]
+### D3: the `"num"` layout token indexes `stats[]` with an unchecked parsed value (high, high confidence) [fixed in #137]
+
+Fixed by FIX13 (#137): the `"num"` stat index is bounded to `0..MAX_STATS - 1`.
 
 In `SCR_ExecuteLayoutString` (`cl_screen.c`), the `"pic"`, `"stat_string"`
 and `"if"` handlers validate their parsed stat index against `0..MAX_STATS`,
@@ -336,7 +341,9 @@ side; the value is drawn on the HUD, and a far index faults. Severity high
 (server-driven out-of-bounds read that can crash the client). Fix: bound the
 `"num"` stat index to `0..MAX_STATS - 1` like the sibling handlers.
 
-### D4: `DrawHUDStringScaled` fills `line[1024]` with no width bound (hardening, not reachable today) [FIX13 (#109)]
+### D4: `DrawHUDStringScaled` fills `line[1024]` with no width bound (hardening, not reachable today) [fixed in #137]
+
+Fixed by FIX13 (#137): `width` is capped at `sizeof(line) - 1`.
 
 `DrawHUDStringScaled` (`cl_screen.c`) copies one line of its input into
 `char line[1024]` with `while (*string && *string != '\n') line[width++] =
@@ -382,7 +389,10 @@ not called), and the next `svc_serverdata` runs `CL_ClearState`, which clears
 `cl` and the client entities. The `-1` case therefore does not add to D5; the
 negative values that matter are the ones a server sends deliberately.
 
-### D6: negative download `offset` is not rejected on the server (high, high confidence, confirmed) [FIX15 (#111)]
+### D6: negative download `offset` is not rejected on the server (high, high confidence, confirmed) [fixed in #138]
+
+Fixed by FIX15 (#138): a negative `offset` is refused like any other bad
+download.
 
 `SV_BeginDownload_f` (`sv_user.c`) sets `downloadcount = offset` from
 `Cmd_Argv(2)` and only clamps the upper side (`if (offset >
@@ -428,7 +438,9 @@ but this turns that into stack memory corruption in the game module; the
 scale rates operator-only memory corruption medium. Fix: bound `j` to
 `sizeof(num) - 1` (reject the address if an octet is longer).
 
-### D8: the `"pic"` layout token indexes `configstrings[]` with a negative server stat (high, high confidence) [FIX13 (#109)]
+### D8: the `"pic"` layout token indexes `configstrings[]` with a negative server stat (high, high confidence) [fixed in #137]
+
+Fixed by FIX13 (#137): the `"pic"` stat value is bounded on both sides.
 
 The `"pic"` handler in `SCR_ExecuteLayoutString` (`cl_screen.c`) bounds its
 parsed stat index to `0..MAX_STATS - 1`, then reads `value =
@@ -596,7 +608,11 @@ Fix: print at most
 `NET_GetPacket` (receive at most `maxsize - 1` bytes and store a NUL at
 `cursize`).
 
-### D14: the client accepts `client_connect` from any address in any state but `ca_connected` (high, high confidence) [FIX27 (#128)]
+### D14: the client accepts `client_connect` from any address in any state but `ca_connected` (high, high confidence) [fixed in #139]
+
+Fixed by FIX27 (#139): `client_connect` and `challenge` are accepted only in
+`ca_connecting` and only from the address the client is connecting to, and the
+netchannel is set up to that address.
 
 `CL_ConnectionlessPacket` (`cl_network.c`) handles `client_connect` by
 ignoring it only when `cls.state == ca_connected`. In every other state
@@ -794,7 +810,7 @@ unfixed finding above is on one of them.
 | FIX29 | #130 | D15 | critical (Windows builds only) |
 | FIX30 | #131 | D17 | medium |
 
-Fixed: FIX14 (D5).
+Fixed: FIX11 (D1, #136), FIX13 (D3, D4, D8, #137), FIX14 (D5), FIX15 (D6, #138), FIX27 (D14, #139).
 
 Fixed: FIX25 (D9, D10, D11, D16).
 
