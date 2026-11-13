@@ -1252,7 +1252,9 @@ static int rec_depth;	/* public entry points on the call stack */
 static uint32_t rec_limit = REFREC_MAX_TRACE;
 static uint32_t rec_frame_limit = REFREC_MAX_FRAMES;
 static uint32_t rec_handle_limit = REFREC_MAX_HANDLES;
+#ifdef REFREC_TEST_WRITE_FAULT
 static uint32_t rec_fault;
+#endif
 
 static void Rec_Finish(qboolean truncated);
 
@@ -1282,6 +1284,8 @@ Rec_Release(void)
 	memset(&rec, 0, sizeof(rec));
 }
 
+/* a print callback must return normally: a non-local exit would leave the
+   depth raised and every later recording refused */
 static void
 Rec_Enter(void)
 {
@@ -1319,11 +1323,14 @@ RefRec_SetHandleLimit(uint32_t handles)
 	rec_handle_limit = (handles && handles < REFREC_MAX_HANDLES) ? handles : REFREC_MAX_HANDLES;
 }
 
+/* only in the host test build (REFREC_TEST_WRITE_FAULT); the client has no write-failure switch */
+#ifdef REFREC_TEST_WRITE_FAULT
 void
 RefRec_SetWriteFault(uint32_t n)
 {
 	rec_fault = n;
 }
+#endif
 
 qboolean
 RefRec_Recording(void)
@@ -1362,7 +1369,11 @@ Rec_Fault(void)
 {
 	rec.fileops++;
 
+#ifdef REFREC_TEST_WRITE_FAULT
 	return rec.fault && rec.fileops == rec.fault;
+#else
+	return false;
+#endif
 }
 
 static qboolean
@@ -1771,7 +1782,9 @@ Rec_StartRecord(const char *path, int width, int height, int capture_every)
 	rec.limit = rec_limit;
 	rec.framelimit = rec_frame_limit;
 	rec.handlelimit = rec_handle_limit;
+#ifdef REFREC_TEST_WRITE_FAULT
 	rec.fault = rec_fault;
+#endif
 	rec.handles = calloc(REFREC_MAX_HANDLES, sizeof(*rec.handles));
 	rec.hash = calloc(REC_HASH_SLOTS, sizeof(*rec.hash));
 

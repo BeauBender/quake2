@@ -22,7 +22,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 cc=${CC:-cc}
 srcs="tests/refrecord/refrecord-test.c src/client/vid/refrecord.c"
-flags="-std=gnu99 -Wall -Werror -g -O1 -fno-strict-aliasing -fwrapv -DYQ2OSTYPE=\"test\" -DYQ2ARCH=\"test\""
+flags="-std=gnu99 -Wall -Werror -g -O1 -fno-strict-aliasing -fwrapv -DREFREC_TEST_WRITE_FAULT -DYQ2OSTYPE=\"test\" -DYQ2ARCH=\"test\""
 san="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
 
 # sanitizers when this compiler can build and run with them

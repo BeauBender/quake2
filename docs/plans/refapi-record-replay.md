@@ -339,6 +339,10 @@ record and replay, and are not implemented yet.
   a `REC_BEGINFRAME`. On a `REFREC_FLAG_TRUNCATED` trace it stops at the
   last indexed frame: the records of an open frame after it are not a
   frame to replay.
+- For TASK44: the string table reader (`RefRec_ReadStringTable`) must be
+  given exactly the bytes between `string_table_offset` and
+  `frame_index_offset`; that bound, with `RefRec_CheckLayout`, is what keeps
+  the table inside the file.
 
 ## 6. Sub-cards, in dependency order
 

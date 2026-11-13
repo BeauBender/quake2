@@ -239,7 +239,9 @@ qboolean RefRec_NextFrameIndex(refrec_reader_t *r, uint32_t *frame, uint64_t *of
  * every index entry, and also check that the offset names a
  * REC_BEGINFRAME. A REFREC_FLAG_TRUNCATED trace can end with an open
  * frame after the last indexed one: a replay stops at the last indexed
- * frame.
+ * frame. The string table reader must be given exactly the bytes between
+ * string_table_offset and frame_index_offset, which is what bounds the
+ * table.
  */
 qboolean RefRec_CheckLayout(const refrec_header_t *h, uint64_t file_size, const uint64_t *frame_offset);
 
@@ -261,7 +263,7 @@ void RefRec_SetPrint(void (*print)(const char *fmt, ...));
 void RefRec_SetLimit(uint32_t bytes);	/* lowers REFREC_MAX_TRACE for the next recording (tests); 0 restores it */
 void RefRec_SetFrameLimit(uint32_t frames);	/* lowers REFREC_MAX_FRAMES for the next recording (tests); 0 restores it */
 void RefRec_SetHandleLimit(uint32_t handles);	/* lowers REFREC_MAX_HANDLES for the next recording (tests); 0 restores it */
-void RefRec_SetWriteFault(uint32_t n);	/* the n-th write, seek or close of the next recording fails (tests); 0 none */
+void RefRec_SetWriteFault(uint32_t n);	/* the n-th write, seek or close of the next recording fails (tests); 0 none; defined only when REFREC_TEST_WRITE_FAULT is */
 void RefRec_StartRecord(const char *path, int width, int height, int capture_every);
 void RefRec_StopRecord(void);                  /* writes string table, index, patches header */
 qboolean RefRec_Recording(void);
