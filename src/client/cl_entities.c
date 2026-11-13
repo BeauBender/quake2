@@ -97,15 +97,18 @@ CL_AddPacketEntities(frame_t *frame)
 			ent.frame = cl.time / 100;
 		}
 
-		else if (s1->frame >= 0)
+		else
 		{
 			ent.frame = s1->frame;
 		}
-		else
+
+		/* A negative frame, from the server's frame field or from a
+		   negative client time in the two animation branches above:
+		   the renderers index texture chains and sprite frames with
+		   it, use the first frame like the alias model code does for
+		   a bad frame. */
+		if (ent.frame < 0)
 		{
-			/* Negative frame from the server: the renderers index
-			   texture chains and sprite frames with it, use the first
-			   frame like the alias model code does for a bad frame. */
 			ent.frame = 0;
 		}
 
