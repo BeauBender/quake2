@@ -1651,29 +1651,23 @@ SCR_Framecounter(void)
  * explicitly to flush text to the screen.
  */
 /*
- * Pin harness (TASK27). pins_capture N: while a demo plays, every Nth
- * rendered frame is captured by running the renderer's own screenshot
- * command here, after the frame is complete and before it is presented.
+ * Pin harness. With "+set pins_capture N" on the command line
+ * (CL_PinsCapture), while a demo plays, every Nth rendered frame is
+ * captured by running the renderer's own screenshot command here, after
+ * the frame is complete and before it is presented.
  * Reading the GL back buffer after the swap is undefined, so this runs
  * before R_EndFrame. gl1 batches 2D quads and flushes them at the end of
  * the frame, so its screenshot command flushes that batch first
- * (R_ScreenShot in gl1_misc.c); gl3 and soft draw 2D immediately. The frame lands in the pin
- * store when pins_dir is set (VID_WriteScreenshot in vid.c).
+ * (R_ScreenShot in gl1_misc.c); gl3 and soft draw 2D immediately.
+ * The frame lands in the pin store when one was given on the command
+ * line (VID_WritePinFrame in vid.c).
  */
 static void
 SCR_PinsCapture(void)
 {
-	static cvar_t *pins_capture;
 	static int demoframe;
 	char cmd[] = "screenshot tga";
-	int every;
-
-	if (!pins_capture)
-	{
-		pins_capture = Cvar_Get("pins_capture", "0", CVAR_NOSET);
-	}
-
-	every = (int)pins_capture->value;
+	int every = CL_PinsCapture();
 
 	if ((every <= 0) || !cl.attractloop || (cls.state != ca_active) ||
 		!cl.refresh_prepped)

@@ -562,12 +562,6 @@ CL_InitLocal(void)
 
 	CL_InitInput();
 
-	/* Pin harness (TASK27): command line only, never settable from the
-	   console or from a server's stufftext. */
-	Cvar_Get("pins_dir", "", CVAR_NOSET);
-	Cvar_Get("pins_scenario", "pin", CVAR_NOSET);
-	Cvar_Get("pins_capture", "0", CVAR_NOSET);
-
 	/* register our variables */
 	cin_force43 = Cvar_Get("cin_force43", "1", CVAR_ARCHIVE);
 
@@ -813,22 +807,16 @@ CL_UpdateWindowedMouse(void)
 }
 
 /*
- * Pin harness (TASK27). With pins_capture set, quit once demo playback
- * has ended, so a scenario run is unattended. The capture itself happens
- * in SCR_UpdateScreen (SCR_PinsCapture), before the frame is presented.
+ * With pin capture on, quit once demo playback has ended, so a scenario
+ * run is unattended. The capture itself happens in SCR_UpdateScreen
+ * (SCR_PinsCapture), before the frame is presented.
  */
 static void
 CL_PinsFrame(void)
 {
-	static cvar_t *pins_capture;
 	static qboolean was_playing;
 
-	if (!pins_capture)
-	{
-		pins_capture = Cvar_Get("pins_capture", "0", CVAR_NOSET);
-	}
-
-	if (pins_capture->value <= 0)
+	if (CL_PinsCapture() <= 0)
 	{
 		return;
 	}
@@ -956,7 +944,7 @@ CL_Frame(int packetdelta, int renderdelta, int timedelta, qboolean packetframe, 
 		/* Update framecounter */
 		cls.framecount++;
 
-		/* Pin harness (TASK27): quit when demo playback has ended. */
+		/* Pin harness: quit when demo playback has ended. */
 		CL_PinsFrame();
 
 		if (log_stats->value)

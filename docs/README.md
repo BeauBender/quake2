@@ -33,7 +33,7 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | `docs/analysis/` | Measured inventories of existing code that plans and cards cite |
 | `docs/DEPENDENCIES.md` | Every external library and vendored file, and its status |
 | `scripts/pins.sh`, `scripts/pins/` | The renderer pin harness: record frames per scenario, compare renderers; procedure in `docs/plans/metal-port-harness.md` |
-| `tests/` | Repo invariants (`check-*.sh`), run by the gate and each runnable on its own; `baselines/` freezes the upstream gaps they tolerate |
+| `tests/` | Repo invariants (`check-*.sh`), run by the gate and each runnable on its own; `baselines/` freezes the upstream gaps they tolerate; `pins/` holds the C driver `check-pins-latch.sh` builds |
 | `stuff/` | Maintainer tools: savegame table generators (`fngen/`, `mmgen/`), map entity fixes (`mapfixes/`), icons, the Dockerfile and the uncrustify style file (`misc/`) |
 | `.claude/` | Agent configuration: settings and hooks, path-scoped rules (`rules/`), skills (`skills/`), shared memory (`memory/`) |
 | `.githooks/` | The commit hook, wired by `scripts/setup.sh` |

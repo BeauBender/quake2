@@ -45,37 +45,55 @@
  * left.
  */
 /*
- * Pin harness (TASK27, INFORM8/INFORM9): when the cvar pins_dir is set, a
- * screenshot is written as an uncompressed 24-bit TGA straight into the pin
- * store, named by scenario and frame index, and scrnshot/ is never touched.
- * No stb here on purpose: this path must survive TASK9. Returns true when
- * it handled the frame.
+ * Pin harness (INFORM8/INFORM9): when a pin store directory was given on
+ * the command line (CL_PinsDir, latched by CL_PinsLatch; never a cvar), a
+ * screenshot is written as an uncompressed 24-bit TGA straight into the
+ * store, named by scenario and frame index, and scrnshot/ is never
+ * touched. No stb here on purpose: this path must survive TASK9. Returns
+ * true when it handled the frame.
  */
 static qboolean
 VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 {
-	static cvar_t *pins_dir, *pins_scenario;
 	static int frame;
+	const char *dir = CL_PinsDir();
+	const char *scenario = CL_PinsScenario();
 	char path[MAX_OSPATH];
 	unsigned char hdr[18];
 	FILE *f;
-	int x, y, ok;
+	int x, y, ok, len;
 
-	/* Registered CVAR_NOSET in CL_InitLocal: only +set on the command line
-	   can give them a value, a stuffed or typed "set" is refused. */
-	if (!pins_dir) { pins_dir = Cvar_Get("pins_dir", "", CVAR_NOSET); pins_scenario = Cvar_Get("pins_scenario", "pin", CVAR_NOSET); }
-	if (!pins_dir->string[0]) return false;
-	if (comp != 3 && comp != 4) return false;
+	if (CL_PinsInvalid())
+	{
+		Com_Printf("pins: a pins_* argument was refused, nothing written\n");
+		return true;
+	}
 
-	/* Belt and braces: the values end up in a file name. */
-	if (strstr(pins_dir->string, "..") || strpbrk(pins_scenario->string, "/\\:") ||
-		strstr(pins_scenario->string, ".."))
+	if (!dir[0])
+	{
+		return false;
+	}
+
+	if ((comp != 3) && (comp != 4))
+	{
+		return false;
+	}
+
+	/* Belt and braces: CL_PinsLatch refused these already. */
+	if (strstr(dir, "..") || strpbrk(scenario, "/\\:") || strstr(scenario, ".."))
 	{
 		Com_Printf("pins: pins_dir or pins_scenario holds a forbidden character, nothing written\n");
 		return true;
 	}
 
-	Com_sprintf(path, sizeof(path), "%s/%s-%06d.tga", pins_dir->string, pins_scenario->string, frame);
+	/* Never open a truncated path. */
+	len = snprintf(path, sizeof(path), "%s/%s-%06d.tga", dir, scenario, frame);
+	if ((len < 0) || (len >= (int)sizeof(path)))
+	{
+		Com_Printf("pins: the frame path does not fit %d bytes, nothing written\n", (int)sizeof(path));
+		return true;
+	}
+
 	f = Q_fopen(path, "wb");
 	if (!f)
 	{
@@ -107,9 +125,12 @@ VID_WritePinFrame(int width, int height, int comp, const unsigned char *data)
 		return true;
 	}
 
-	Com_sprintf(path, sizeof(path), "%s/manifest.txt", pins_dir->string);
-	f = Q_fopen(path, "ab");
-	if (f) { fprintf(f, "%s-%06d.tga %s %dx%d\n", pins_scenario->string, frame, vid_renderer ? vid_renderer->string : "?", width, height); fclose(f); }
+	len = snprintf(path, sizeof(path), "%s/manifest.txt", dir);
+	if ((len >= 0) && (len < (int)sizeof(path)))
+	{
+		f = Q_fopen(path, "ab");
+		if (f) { fprintf(f, "%s-%06d.tga %s %dx%d\n", scenario, frame, vid_renderer ? vid_renderer->string : "?", width, height); fclose(f); }
+	}
 	frame++;
 	return true;
 }
@@ -593,6 +614,15 @@ VID_CheckChanges(void)
 		while (!VID_LoadRenderer())
 		{
 			int next_test = 0;
+
+			/* Pin harness: frames filed under one renderer's name must
+			   come from that renderer, so never fall back while capturing. */
+			if (CL_PinsCapture() > 0)
+			{
+				Com_Error(ERR_FATAL, "pins: renderer %s failed to load, no fallback while capturing\n",
+						vid_renderer->string);
+				return;
+			}
 
 			for (int i = 0; i < r_order_len; i++)
 			{

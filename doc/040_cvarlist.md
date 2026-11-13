@@ -792,20 +792,33 @@ like.
   `1`. If the optional arguments `val0` and `val1` are given, the cvar
   is toggled between them.
 
-## Pin harness (TASK27)
+## Pin harness
 
-These are set by `scripts/pins.sh`, never by a player. All three are
-command-line only (`+set`): they are write protected, so the console and a
-server's stufftext cannot set them, because their values name files. With none of them set
-the engine behaves exactly as before.
+These are set by `scripts/pins.sh`, never by a player. They look like
+cvars on the command line but are not cvars: the engine reads them once
+from its own command line, in exactly the form `+set <name> <value>`,
+before any config file runs, and keeps the values where nothing else can
+change them. A `set` of the same name in a config file, on the console
+or from a server's stufftext (with or without flags such as `a`) only
+creates an unrelated cvar that the engine never reads. Their values name
+files, which is why. If any of them holds a refused value (see below),
+the harness is off and no screenshot is written at all. With none of
+them given the engine behaves exactly as before.
 
-* **pins_dir**: When set to a directory, every screenshot is written there as an
-  uncompressed 24-bit TGA named `<pins_scenario>-<frame>.tga` plus a line in
-  `manifest.txt`, and `scrnshot/` is not touched. Default: empty.
+* **pins_dir**: When given, every screenshot is written into this
+  directory as an uncompressed 24-bit TGA named
+  `<pins_scenario>-<frame>.tga` plus a line in `manifest.txt` (file
+  name, renderer, size), and `scrnshot/` is not touched. Refused when
+  empty, when it contains `..`, or when it does not fit the engine's
+  path buffer; a frame path that would not fit is never opened. An
+  absolute path is accepted. Default: not given.
 
-* **pins_scenario**: The file-name prefix for frames written by `pins_dir`.
-  Default: `pin`.
+* **pins_scenario**: The file-name prefix for frames written into
+  `pins_dir`. Must match `[a-z0-9_][a-z0-9_-]*`. Default: `pin`.
 
-* **pins_capture**: While a demo plays, capture every Nth rendered frame, after
-  the frame is complete and before it is presented; when playback ends,
-  quit so a scenario run is unattended. `0` (the default) disables both.
+* **pins_capture**: While a demo plays, capture every Nth rendered frame,
+  after the frame is complete and before it is presented; when playback
+  ends, quit so a scenario run is unattended; and if the renderer named
+  by `vid_renderer` fails to load, stop with an error instead of falling
+  back to another renderer. Needs `pins_dir`. Must be a non-negative
+  integer. `0` (the default) disables all three.
