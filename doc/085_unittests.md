@@ -15,9 +15,12 @@ make test
 
 This builds `build/release/test/yq2test` (or `build/debug/test/` with
 `DEBUG=1`) and runs it. The test binary links the same objects as the
-dedicated server `q2ded`, built with the same flags, plus
-`src/client/cl_download.c`; only `main()` is replaced by the test
-runner. The last line says how many tests ran and how many failed; the
+dedicated server `q2ded`, built with the same flags, plus the client
+files `cl_download.c`, `cl_parse.c`, `cl_network.c`, `cl_entities.c`,
+`cl_screen.c` and the sound frontend `sound/sound.c` (see "Client
+stubs" below) and the shared renderer file
+`src/client/refresh/files/surf.c`; only `main()` is replaced by the
+test runner. The last line says how many tests ran and how many failed; the
 exit status is 1 when a test failed and 2 when no test ran at all (a
 name filter that matches nothing, or a usage error), so a run that
 proved nothing never passes. `make clean` removes the build.
@@ -85,6 +88,27 @@ A new `test_*.c` file is picked up by the Makefile automatically.
 A test that crashes (a segfault, an abort) or a run that is
 interrupted prints the name of the running test to stderr, and the
 runner removes its temporary directory on every way out it can catch.
+
+## Client stubs
+
+The client files in the test binary run as shipped. What they call
+outside the suite (the renderer, the SDL sound mixer, input, the menu,
+the console, particles and temp entities, and the rest of `cl_main.c`)
+is stubbed by two files: `tests/unit/stub_client.c` defines the client
+state `cl_download.c` reads, and `tests/unit/stub_client_full.c` defines
+empty functions and the cvar pointers for the rest. A few stubs count
+what they were asked to draw (`V_AddLight`, `Draw_CharScaled`,
+`Draw_PicScaled`) so a test can see what the HUD or a light would have
+done; they are in `tests/unit/stub_client.h`, with `stub_client_cvars()`,
+which a test calls first to give the cvars a value. A test sets up
+`cls`, `cl` and `net_message` itself and reaches static functions
+through the public ones (`CL_ParseServerMessage`, `CL_ReadPackets`,
+`SCR_UpdateScreen`, `SV_ExecuteUserCommand`). Run `make ASAN=1
+UBSAN=1 test` after a change to this code: the bounds tests rely on the
+sanitizers to report an out-of-bounds access. The test objects are built
+with `-fno-sanitize-recover=undefined` in that build, so a report of
+undefined behaviour ends the run with a failure; the shipped binaries
+keep the default and only print it.
 
 ## Coverage
 
