@@ -1,0 +1,18 @@
+# Line-coverage floor (percent of lines) for scripts/coverage.sh, one line
+# per coverage tool, because llvm-cov and gcov count lines differently.
+# The script fails below the floor and prints the value to record when the
+# total has risen by a whole percent; raise the floor in the same change.
+# Values are whole percent, rounded down from the measured total.
+#
+# llvm-cov: measured 33.21% with Apple clang 21 on macOS arm64 (TASK29),
+# from an empty build/coverage (the script cleans it on every run).
+# gcov: NOT measured. TASK29 was written on a host without gcc, and the
+# Linux CI job only runs on a pull request. 25 is a conservative lower
+# bound chosen below the llvm-cov measurement (gcov counts lines a little
+# differently, but not by eight points). The first Linux CI run measures
+# it: the "Coverage" step of .github/workflows/linux_x86_64.yml prints
+# "TOTAL NN.NN% of N lines" and, when that is a whole percent or more
+# above this floor, "set the 'gcov' line in scripts/coverage-floor to N".
+# Raise the line below to that N then.
+llvm-cov 33
+gcov 25

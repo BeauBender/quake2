@@ -1,0 +1,18 @@
+# Pin "cm-valid-map", produced by test cm_load_valid_map (tests/unit/test_collision.c).
+# Generated from real engine output by `make test UPDATE_PINS=1`
+# (build/<release|debug>/test/yq2test --update-pins). Do not edit by
+# hand: a change to the body below is a behaviour change and its commit
+# says why. The body starts after the separator line.
+# ---
+size 468 checksum 2c6e31ed
+inline models 1 clusters 1
+world mins (-65 -65 -65) maxs (65 65 65) headnode 0
+entity string: {
+"classname" "worldspawn"
+"message" "synthetic"
+}
+contents front 0 back 1
+leaf front 1 back 0, leaf 0 contents 1
+trace front->back: fraction 0.4984 end (0.031 0 0) startsolid 0 allsolid 0 contents 1 surface e1u1/floor1_1/7
+trace back->front: fraction 1.0000 startsolid 1 allsolid 0
+trace in front: fraction 1.0000 startsolid 0

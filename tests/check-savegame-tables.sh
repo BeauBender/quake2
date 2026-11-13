@@ -1,6 +1,7 @@
 #!/bin/sh
 # Invariant: every game function stored in a savable entity field, and every
-# mmove_t monster move table, is listed in the savegame tables.
+# mmove_t monster move table, is listed in the savegame tables, and the
+# tables list nothing else: they equal what a regeneration would produce.
 #
 # Savegames store these pointers by name (src/game/savegame/savegame.c). A
 # function assigned to think/touch/use/pain/die/blocked/endfunc or a
@@ -9,7 +10,8 @@
 # stuff/fngen and stuff/mmgen (see their READMEs, or the
 # savegame-tables skill under .claude/skills/).
 #
-# Usage: tests/check-savegame-tables.sh    (exit 1 lists the missing names)
+# Usage: tests/check-savegame-tables.sh    (exit 1 lists the missing or
+#                                           stale names)
 set -eu
 cd "$(dirname "$0")/.."
 export LC_ALL=C
@@ -54,6 +56,25 @@ missing=$(comm -23 "$tmp/mmoves" "$tmp/mmlisted")
 if [ -n "$missing" ]; then
 	echo "check-savegame-tables: mmove_t tables missing from $tables/gamemmove_list.h:"
 	echo "$missing" | sed 's/^/  /'
+	fail=1
+fi
+# The other direction: the committed tables are what stuff/fngen and
+# stuff/mmgen would generate from the current source, so they contain no
+# entry the source no longer assigns. (The generators themselves need GNU
+# grep -P and gawk, which the macOS and Debian CI images do not ship; the
+# extraction above is their POSIX equivalent.) A stale entry still
+# compiles while the function exists, but it is not what a regeneration
+# would produce, and it hides a rename.
+stale=$(comm -13 "$tmp/assigned" "$tmp/funcs")
+if [ -n "$stale" ]; then
+	echo "check-savegame-tables: (list, function) pairs in $tables/gamefunc_list.h that src/game no longer assigns:"
+	echo "$stale" | sed 's/^/  /'
+	fail=1
+fi
+stale=$(comm -13 "$tmp/mmoves" "$tmp/mmlisted")
+if [ -n "$stale" ]; then
+	echo "check-savegame-tables: names in $tables/gamemmove_list.h that are not an mmove_t in src/game:"
+	echo "$stale" | sed 's/^/  /'
 	fail=1
 fi
 [ "$fail" -eq 0 ] && echo "check-savegame-tables: ok ($(wc -l < "$tmp/assigned" | tr -d ' ') functions, $(wc -l < "$tmp/mmoves" | tr -d ' ') mmoves)"
