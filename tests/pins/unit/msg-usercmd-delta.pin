@@ -1,0 +1,7 @@
+# Pin "msg-usercmd-delta", produced by test msg_usercmd_delta (tests/unit/test_msg.c).
+# Generated from real engine output by `make test UPDATE_PINS=1`
+# (build/<release|debug>/test/yq2test --update-pins). Do not edit by
+# hand: a change to the body below is a behaviour change and its commit
+# says why. The body starts after the separator line.
+# ---
+dd 64 00 f9 ff 90 01 38 ff 01 09 10 4d 00 10 4d

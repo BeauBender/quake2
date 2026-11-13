@@ -1,0 +1,17 @@
+# Pin "cmd-tokenize", produced by test cmd_tokenize_and_buffer (tests/unit/test_cvar_cmd.c).
+# Generated from real engine output by `make test UPDATE_PINS=1`
+# (build/<release|debug>/test/yq2test --update-pins). Do not edit by
+# hand: a change to the body below is a behaviour change and its commit
+# says why. The body starts after the separator line.
+# ---
+argc=3 args=[one two] <t_record> <one> <two>
+argc=3 args=["quoted ; semicolon" three] <t_record> <quoted ; semicolon> <three>
+argc=3 args=[spaced   out] <T_RECORD> <spaced> <out>
+argc=4 args=[expanded "$t_macro" preexpanded] <t_record> <expanded> <$t_macro> <preexpanded>
+argc=1 args=[// comment] <t_record>
+--- insert vs. add
+argc=2 args=[inserted] <t_record> <inserted>
+argc=2 args=[added] <t_record> <added>
+--- exec now
+argc=2 args=[now] <t_record> <now>
+argc=2 args=[appended] <t_record> <appended>

@@ -1,0 +1,21 @@
+# Pin "fs-pak-directory", produced by test fs_pak_directory (tests/unit/test_filesystem.c).
+# Generated from real engine output by `make test UPDATE_PINS=1`
+# (build/<release|debug>/test/yq2test --update-pins). Do not edit by
+# hand: a change to the body below is a behaviour change and its commit
+# says why. The body starts after the separator line.
+# ---
+maps/one.txt      = one-from-pak0
+sub/mixed.txt     = mixed
+SUB/MIXED.txt     = mixed
+empty.txt         = []
+loose.txt         = loose
+shadowed.txt      = extra
+extra.txt         = from-extra
+missing.txt       = <missing>
+./maps/one.txt    = one-from-pak0
+maps/./one.txt    = one-from-pak0
+maps//one.txt     = one-from-pak0
+/maps/one.txt     = one-from-pak0
+t_base_only.txt   = base
+path 2: <tmp>/data/t_pakmod
+path 4: <tmp>/data/baseq2

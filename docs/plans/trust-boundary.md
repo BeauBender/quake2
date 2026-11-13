@@ -117,6 +117,50 @@ independent of any removal and go first.
 - Small vendored files kept (gyro.c, md4.c, rand.c, glob.c, savegame tables):
   full read, hash recorded in the dependency manifest.
 
+## Test harness and coverage
+
+Added by TASK29. The audits above find defects; the harness keeps fixed
+behaviour fixed and gives every later card a place for its failing test.
+
+- `tests/unit/`: a hand-written runner (`test.h` is the whole interface,
+  `main.c` the runner) and one `test_*.c` per area. No framework, no
+  package, no downloaded fixture. `make test` builds
+  `build/<release|debug>/test/yq2test` from the dedicated server's own
+  object list (`SERVER_OBJS_`, same flags, `-DDEDICATED_ONLY`) minus
+  `src/backends/unix/main.c`, plus `src/client/cl_download.c`; the client
+  state that one file reads is the only stub (`tests/unit/stub_client.c`).
+  Engine sources are not changed to make them testable: static functions
+  are reached through the public ones that call them.
+- `Com_Error(ERR_DROP)` is the real one: it longjmps to the global
+  `abortframe`, which the runner and `T_EXPECT_DROP` arm the way
+  `Qcommon_Frame` does. Paths that end in `ERR_FATAL` or `Sys_Error` exit
+  the process and are observed in a forked child (`t_expect_exit`).
+- Pins: committed expected outputs under `tests/pins/unit/` (text, with a
+  provenance header), compared by `t_pin` and rewritten by
+  `make test UPDATE_PINS=1`. These are unit pins; the renderer frame pins of
+  `scripts/pins.sh` are a separate harness.
+- Areas pinned: `movemsg.c` writer/reader round-trips and truncated reads;
+  `COM_Parse`, `Info_*` and the `Q_*`/math helpers; `CL_DownloadFilter`,
+  the TASK1 download chunk and savedir checks; `.pak` parsing and search
+  order on synthetic paks; `CM_LoadMap` on a synthetic BSP including every
+  TASK2 refusal; cvar and command buffer semantics; the server's
+  connectionless packets (`sv_conless.c`, over the in-memory loopback,
+  no socket). The savegame tables
+  are checked in both directions by `tests/check-savegame-tables.sh`.
+- Known defects (FIX3, FIX15, FIX22, FIX23 and the ones found while
+  writing the tests) are not exercised: a test that triggers an
+  out-of-bounds access would crash or pin the bug. Each test file names
+  the card whose author should extend it.
+- `scripts/test.sh` runs `make test` after the build. Coverage is a
+  separate command, `scripts/coverage.sh`: instrumented build under
+  `build/coverage`, per-directory and total line coverage with the
+  compiler's own tools (`xcrun llvm-cov`/`llvm-profdata`, or `gcov`), and a
+  per-tool floor in `scripts/coverage-floor` that only ratchets up. CI runs
+  both on macOS and Linux x86_64. The floor lives in
+  `scripts/coverage-floor` and is enforced by `scripts/coverage.sh`; it is
+  not yet wired to the `gate.coverage` setting in `.claude/dev-loop.json`.
+  A follow-up card (TASK68, #142) does that.
+
 ## Dependency manifest and verification
 
 `docs/DEPENDENCIES.md` lists every remaining external library and every

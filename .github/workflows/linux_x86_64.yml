@@ -38,6 +38,14 @@ jobs:
       run: |
         # Public runners come with 4 CPUs.
         make -j4
+    - name: Unit tests
+      run: |
+        # tests/unit against the q2ded objects; no SDL, no game data.
+        make -j4 test
+    - name: Coverage
+      run: |
+        # Toolchain-only line coverage; fails below scripts/coverage-floor.
+        scripts/coverage.sh
     - name: Create testbuild package
       run: |
         # Create release directory tree
@@ -58,6 +66,7 @@ jobs:
         cp doc/060_multiplayer.md publish/quake2-linux_x86_64-${{github.sha}}/misc/docs/060_multiplayer.txt
         cp doc/070_packaging.md publish/quake2-linux_x86_64-${{github.sha}}/misc/docs/070_packaging.txt
         cp doc/080_contributing.md publish/quake2-linux_x86_64-${{github.sha}}/misc/docs/080_contributing.txt
+        cp doc/085_unittests.md publish/quake2-linux_x86_64-${{github.sha}}/misc/docs/085_unittests.txt
         cp doc/090_filelists.md publish/quake2-linux_x86_64-${{github.sha}}/misc/docs/090_filelists.md
     - name: Upload testbuild package
       uses: actions/upload-artifact@v7

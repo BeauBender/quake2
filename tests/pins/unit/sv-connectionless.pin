@@ -1,0 +1,47 @@
+# Pin "sv-connectionless", produced by test sv_connectionless_packets (tests/unit/test_server.c).
+# Generated from real engine output by `make test UPDATE_PINS=1`
+# (build/<release|debug>/test/yq2test --update-pins). Do not edit by
+# hand: a change to the body below is a behaviour change and its commit
+# says why. The body starts after the separator line.
+# ---
+packet "ping":
+  reply: \xff\xff\xff\xffack
+packet "ack":
+  console: Ping acknowledge from [0.0.0.0]:0
+packet "info 34":
+  reply: \xff\xff\xff\xffinfo\n      testserver           0/ 2\n
+packet "info 33":
+  reply: \xff\xff\xff\xffinfo\ntestserver: wrong version\n
+packet "status":
+  reply: \xff\xff\xff\xffprint\n\cheats\0\coop\0\deathmatch\0\dmflags\16\fraglimit\0\hostname\testserver\maxclients\2\protocol\34\singleplayer\0\timelimit\0\n
+packet "connect 33 1234 0 "\name\x"":
+  reply: \xff\xff\xff\xffprint\nServer is protocol version 34.\n
+packet "rcon":
+  reply: \xff\xff\xff\xffprint\nBad rcon_password.\n
+  console: Bad rcon from [0.0.0.0]:0:
+  console: rcon
+packet "rcon wrong echo hi":
+  reply: \xff\xff\xff\xffprint\nBad rcon_password.\n
+  console: Bad rcon from [0.0.0.0]:0:
+  console: rcon wrong echo hi
+packet "rcon secretx echo hi":
+  reply: \xff\xff\xff\xffprint\nBad rcon_password.\n
+  console: Bad rcon from [0.0.0.0]:0:
+  console: rcon secretx echo hi
+packet "rcon secre echo hi":
+  reply: \xff\xff\xff\xffprint\nBad rcon_password.\n
+  console: Bad rcon from [0.0.0.0]:0:
+  console: rcon secre echo hi
+packet "rcon secret echo hi there":
+  reply: \xff\xff\xff\xffprint\nhi there \n
+  console: Rcon from [0.0.0.0]:0:
+  console: rcon secret echo hi there
+packet "rcon secret set t_rcon_set 7":
+  reply: \xff\xff\xff\xffprint\n
+  console: Rcon from [0.0.0.0]:0:
+  console: rcon secret set t_rcon_set 7
+packet "nonsense with args":
+  console: bad connectionless packet from [0.0.0.0]:0:
+  console: nonsense with args
+packet "":
+  console: bad connectionless packet from [0.0.0.0]:0:

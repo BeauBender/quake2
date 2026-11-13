@@ -1,0 +1,25 @@
+# Pin "download-filter", produced by test download_filter (tests/unit/test_download.c).
+# Generated from real engine output by `make test UPDATE_PINS=1`
+# (build/<release|debug>/test/yq2test --update-pins). Do not edit by
+# hand: a change to the body below is a behaviour change and its commit
+# says why. The body starts after the separator line.
+# ---
+maps/q2dm1.bsp               sent "download maps/q2dm1.bsp" (temp maps/q2dm1.tmp)
+players/male/grunt.pcx       sent "download players/male/grunt.pcx" (temp players/male/grunt.tmp)
+sound/world/amb10.wav        sent "download sound/world/amb10.wav" (temp sound/world/amb10.tmp)
+textures/e1u1/floor1_1.wal   sent "download textures/e1u1/floor1_1.wal" (temp textures/e1u1/floor1_1.tmp)
+../outside.cfg               refused: Refusing to download a path containing '..' or ':' or starting with '.' or '/': ../outside.cfg
+maps/../../outside.cfg       refused: Refusing to download a path containing '..' or ':' or starting with '.' or '/': maps/../../outside.cfg
+maps/..                      refused: Refusing to download a path containing '..' or ':' or starting with '.' or '/': maps/..
+.hidden                      refused: Refusing to download a path containing '..' or ':' or starting with '.' or '/': .hidden
+/etc/passwd                  refused: Refusing to download a path containing '..' or ':' or starting with '.' or '/': /etc/passwd
+c:/autoexec.cfg              refused: Refusing to download a path containing '..' or ':' or starting with '.' or '/': c:/autoexec.cfg
+maps:stream                  refused: Refusing to download a path containing '..' or ':' or starting with '.' or '/': maps:stream
+game.dll                     refused: Refusing to download a path containing '.dll': game.dll
+baseq2/game.so               refused: Refusing to download a path containing '.so': baseq2/game.so
+lib/libfoo.dylib             refused: Refusing to download a path containing '.dylib': lib/libfoo.dylib
+thing.lib                    refused: Refusing to download a path containing '.lib': thing.lib
+archive.a                    refused: Refusing to download a path containing '.a': archive.a
+models/items/a.ase           refused: Refusing to download a path containing '.a': models/items/a.ase
+sound/.au/x.wav              refused: Refusing to download a path containing '.a': sound/.au/x.wav
+maps\sub\x.bsp               sent "download maps\sub\x.bsp" (temp maps\sub\x.tmp)
