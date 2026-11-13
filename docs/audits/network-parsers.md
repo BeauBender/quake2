@@ -162,7 +162,7 @@ before the loop's test (D12), that is the bug to look for.
 | `sw_part.c` `R_DrawParticle` `vid_alphamap[(color << 8) + pdest]` / `[color + (pdest << 8)]` | `particle_t.color` | translucency table index | **no mask** → Defect D9 | defect (D9) |
 | `gl1_main.c` `R_DrawParticles2` `colortable[p->color]` | `particle_t.color` | `d_8to24table[256]` index | **no mask** (the point-sprite path and gl3 mask `& 0xFF`) → Defect D9 | defect (D9) |
 | `cl_network.c` `CL_ConnectionlessPacket` `Cmd_Argv(0)` and the logged command name | `MSG_ReadStringLine` → `Cmd_TokenizeString` | dispatch; `Com_Printf("%s: %s\n", ...)` | string bounded 2048; tokenizer bounded | ok |
-| `cl_network.c` `client_connect` | command name only | `Netchan_Setup(..., net_from, ...)`, `cls.state = ca_connected`, sends `new` | ignored only in `ca_connected`; **accepted from any source address in `ca_disconnected`, `ca_connecting` and `ca_active`**, and points the netchan at the sender → Defect D14 | defect (D14) |
+| `cl_network.c` `client_connect` | command name only | `Netchan_Setup(..., net_from, ...)`, `cls.state = ca_connected`, sends `new` | ignored only in `ca_connected`; **accepted from any source address in `ca_disconnected`, `ca_connecting` and `ca_active`** while the client socket is open, and points the netchan at the sender → Defect D14 (preconditions there) | defect (D14) |
 | `cl_network.c` `challenge` `Cmd_Argv(1)` | tokenized | `strtol` → `cls.challenge`; `CL_SendConnectPacket` to `cls.servername` | numeric; the connect goes to the configured server, not the sender; accepted from any source in any state (same class as D14) | defect (D14, low part) |
 | `cl_network.c` `echo` `Cmd_Argv(1)` | tokenized (≤ 1023 characters) | `Netchan_OutOfBandPrint(..., "%s", ...)` back to the sender | format is fixed; reply is about as large as the request (no amplification) | ok |
 | `cl_network.c` `print` | `MSG_ReadString` | `Com_Printf("%s", s)` | string bounded 2048; accepted from any source, console text only (this is how status replies arrive) | ok (by design) |
@@ -588,21 +588,52 @@ was NUL-terminated and that the print relied on it. Fix: print at most
 ### D14: the client accepts `client_connect` from any address in any state but `ca_connected` (high, high confidence) [FIX27 (#128)]
 
 `CL_ConnectionlessPacket` (`cl_network.c`) handles `client_connect` by
-ignoring it only when `cls.state == ca_connected`. Otherwise, whether the
-client is disconnected, still connecting, or fully in a game
-(`ca_active`), it calls `Netchan_Setup(NS_CLIENT, &cls.netchan, net_from,
-...)` with the sender's address, sets `cls.state = ca_connected` and sends
-`new` to the sender. Nothing compares `net_from` with the server the client is
-connecting to (`cls.servername`). Any host that can send a UDP datagram to the
-client's port can therefore take over its connection: an in-game client is
-moved to the sender, and a client that is connecting can be raced. The new
+ignoring it only when `cls.state == ca_connected`. In every other state
+(`ca_disconnected`, `ca_connecting`, `ca_active`) it calls
+`Netchan_Setup(NS_CLIENT, &cls.netchan, net_from, ...)` with the sender's
+address, sets `cls.state = ca_connected` and sends `new` to the sender.
+Nothing compares `net_from` with the server the client is connecting to
+(`cls.servername`). `CL_ReadPackets` hands every connectionless datagram on
+the client socket to this function whatever the state. Where the
+preconditions below hold, a client in a game on a remote or multiplayer server
+is moved to the sender, a client that is connecting can be raced, and an idle
+disconnected client is pulled onto a server the user never chose. The new
 "server" then holds the server's trust, which by design includes
 `svc_stufftext` (arbitrary client console commands) and every `svc_*` parser
 in this audit. Severity high (unauthenticated takeover of a connection).
 
+Preconditions, each read in the code:
+
+1. The client's UDP socket must be open. It is opened only by
+   `NET_Config(true)`: from `connect`, `rcon` and `packet` (`CL_Connect_f`,
+   `CL_Rcon_f`, `CL_Packet_f`), the server-browser ping (`CL_PingServers_f`),
+   or a local server started with `maxclients > 1` (`SV_InitGame`). It is
+   closed by `NET_Config(false)`: when a single-player game starts
+   (`SV_InitGame` with `maxclients` 1), on `killserver` (`SV_KillServer_f`)
+   and when the menu changes the game while a server runs. A client that only
+   plays single player therefore has no client socket and is not reachable in
+   any state, `ca_active` included; only the loopback carries its packets.
+2. `CL_Disconnect` does not close the socket. A client that is disconnected
+   and idle, but opened the server browser or left a network game earlier in
+   the session, is still reachable.
+3. The sender needs the client's address and its UDP source port. The port is
+   ephemeral (the client socket is bound with `PORT_ANY`), a 16-bit value
+   known to any host the client has sent a packet to (a server it played on or
+   pinged) and otherwise searchable. Nothing secret is needed, and nothing
+   rate-limits or counts wrong guesses.
+4. No on-path position and no source spoofing: the datagram comes from the
+   sender's own address, and the client then talks to that address. The
+   practical barrier is whether a NAT or stateful firewall in front of the
+   client admits an unsolicited datagram from a third address.
+5. Verified on the Unix backend (`src/backends/unix/network.c`) only; the
+   Windows backend was not read (see Method and coverage).
+
 The `challenge` reply has the same shape at lower impact: it is accepted from
 any address in any state and overwrites `cls.challenge`, but the connect it
-triggers goes to `cls.servername`, not to the sender.
+triggers goes to `cls.servername`, not to the sender. In `ca_disconnected`
+with a stale `cls.servername` (`CL_Disconnect` does not clear it), an
+unsolicited `challenge` makes the client send its userinfo in a `connect`
+packet to the last server it used.
 
 Fix (client-side only, no protocol change): accept `client_connect` and
 `challenge` only in `ca_connecting` and only when `net_from` equals the
