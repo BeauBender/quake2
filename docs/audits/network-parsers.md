@@ -121,7 +121,7 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_parse.c` `CL_ParseBaseline` `newnum` | `CL_ParseEntityBits` (byte or signed short) | `CL_AllocEntity(newnum)` → `ent->baseline` | `CL_AllocEntity` returns `NULL` outside `0..MAX_CL_ENTNUM`; `CL_ParseDelta` then writes a local dummy | ok |
 | `cl_parse.c` `CL_ParseEntityBits` `number` | byte or short | returned as entity number | caller `CL_ParsePacketEntities` checks `newnum > MAX_CL_ENTNUM` → drop | ok |
 | `cl_parse.c` `CL_ParsePacketEntities` ring | `oldframe->parse_entities + i` | index `cl_parse_entities[... & (MAX_PARSE_ENTITIES-1)]` | masked | ok |
-| `cl_parse.c` `CL_DeltaEntity` `cl_parse_entities[cl.parse_entities & (MAX_PARSE_ENTITIES-1)]` | — | ring write; `frame->num_entities++` | ring masked; **`num_entities` itself is never capped to `MAX_EDICTS`** → feeds Defect D1, fixed by FIX11 (#136) | ok (fixed by FIX11) |
+| `cl_parse.c` `CL_DeltaEntity` `cl_parse_entities[cl.parse_entities & (MAX_PARSE_ENTITIES-1)]` | — | ring write; `frame->num_entities++` | ring masked; `num_entities` is capped at `MAX_EDICTS` since FIX11 (#136), was Defect D1 | ok (fixed by FIX11) |
 | `cl_parse.c` `CL_DeltaEntity` `CL_AllocEntity(newnum)` | newnum | realloc'd `cl_entities[newnum]` | `CL_AllocEntity` checks `0..MAX_CL_ENTNUM`, grows array via `NextPow2gt`; NULL → dummy | ok |
 | `cl_parse.c` `CL_ParseDelta` `modelindex`, `modelindex2`, `modelindex3`, `modelindex4`, `frame`, `skinnum`, `effects`, `renderfx`, `origin`, `angles`, `old_origin`, `sound`, `event`, `solid` | byte (`modelindex*`, `sound`, `event`), byte or short (`frame`), byte, short or long (`skinnum`, `effects`, `renderfx`), short (`solid`), coords and angles | stored in `entity_state_t` fields as read (`frame` and `skinnum` can be negative) | no check here; each sink must bound the field: `modelindex*` in the `model_draw`/`model_clip` rows (by the byte type, H2), `frame` in the D5, D11 and D16 rows, `skinnum` in the clientinfo, D10 and beam rows, `sound` in the `sound_precache` row; `effects` and `renderfx` are flag tests, `event` a `switch` (`CL_EntityEvent`) and comparisons, `solid` a test and bit fields for the prediction box, positions and angles plain values | see the sink rows |
 | `cl_parse.c` `CL_ParsePlayerstate` `state->stats[i]` | long `statbits`, shorts | `stats[i]`, `i` in `0..MAX_STATS` loop | `i < MAX_STATS` | ok |
@@ -162,8 +162,8 @@ before the loop's test (D12), that is the bug to look for.
 | `sw_part.c` `R_DrawParticle` `vid_alphamap[(color << 8) + pdest]` / `[color + (pdest << 8)]` | `particle_t.color` | translucency table index | **no mask** → Defect D9 | defect (D9) |
 | `gl1_main.c` `R_DrawParticles2` `colortable[p->color]` | `particle_t.color` | `d_8to24table[256]` index | **no mask** (the point-sprite path and gl3 mask `& 0xFF`) → Defect D9 | defect (D9) |
 | `cl_network.c` `CL_ConnectionlessPacket` `Cmd_Argv(0)` and the logged command name | `MSG_ReadStringLine` → `Cmd_TokenizeString` | dispatch; `Com_Printf("%s: %s\n", ...)` | string bounded 2048; tokenizer bounded | ok |
-| `cl_network.c` `client_connect` | command name only | `Netchan_Setup(..., net_from, ...)`, `cls.state = ca_connected`, sends `new` | ignored only in `ca_connected`; **accepted from any source address in `ca_disconnected`, `ca_connecting` and `ca_active`** while the client socket is open, and points the netchan at the sender; accepted only in `ca_connecting` from the address being connected to since FIX27 (#139), was Defect D14 | ok (fixed by FIX27) |
-| `cl_network.c` `challenge` `Cmd_Argv(1)` | tokenized | `strtol` → `cls.challenge`; `CL_SendConnectPacket` to `cls.servername` | numeric; the connect goes to the configured server, not the sender; accepted from any source in any state (same class as D14); accepted only in `ca_connecting` from the address being connected to since FIX27 (#139) | ok (fixed by FIX27) |
+| `cl_network.c` `client_connect` | command name only | `Netchan_Setup(..., net_from, ...)`, `cls.state = ca_connected`, sends `new` | accepted only in `ca_connecting` and only from the address being connected to, which is also the address the netchan is set up with, since FIX27 (#139), was Defect D14 | ok (fixed by FIX27) |
+| `cl_network.c` `challenge` `Cmd_Argv(1)` | tokenized | `strtol` → `cls.challenge`; `CL_SendConnectPacket` to `cls.servername` | numeric; the connect goes to the configured server, not the sender; accepted only in `ca_connecting` from the address being connected to since FIX27 (#139), was the same class as D14 | ok (fixed by FIX27) |
 | `cl_network.c` `echo` `Cmd_Argv(1)` | tokenized (≤ 1023 characters) | `Netchan_OutOfBandPrint(..., "%s", ...)` back to the sender | format is fixed; reply is about as large as the request (no amplification) | ok |
 | `cl_network.c` `print` | `MSG_ReadString` | `Com_Printf("%s", s)` | string bounded 2048; accepted from any source, console text only (this is how status replies arrive) | ok (by design) |
 | `cl_network.c` `ping` | command name only | `Netchan_OutOfBandPrint("ack")` | fixed reply | ok |
@@ -171,7 +171,7 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_network.c` `cmd` connectionless | `MSG_ReadString` | `Cbuf_AddText` | gated on `NET_IsLocalAddress` | ok (by design for local) |
 | `cl_main.c` `CL_ParseStatusMessage` → `M_AddToServerList` | `MSG_ReadString` | `Q_strlcpy` into `local_server_names[]` | `m_num_servers == MAX_LOCAL_SERVERS` guard; `Q_strlcpy` truncates | ok |
 | `cl_screen.c` `SCR_ExecuteLayoutString` `"pic"`/`"stat_string"`/`"if"` stat index | `COM_Parse`+`strtol` of the layout | `stats[index]` | `index < 0 \|\| index >= MAX_STATS` rejected in each | ok |
-| `cl_screen.c` `SCR_ExecuteLayoutString` `"pic"` `configstrings[CS_IMAGES + value]` | `value = stats[index]` (server `short`) | configstring row, then picture name | only `value >= MAX_IMAGES` rejected; bounded on both sides since FIX13 (#137), was Defect D8 | ok (fixed by FIX13) |
+| `cl_screen.c` `SCR_ExecuteLayoutString` `"pic"` `configstrings[CS_IMAGES + value]` | `value = stats[index]` (server `short`) | configstring row, then picture name | bounded on both sides against `MAX_IMAGES` since FIX13 (#137), was Defect D8 | ok (fixed by FIX13) |
 | `cl_screen.c` `SCR_ExecuteLayoutString` `"stat_string"` `configstrings[value]` | `stats[index]` | configstring row | `value < 0 \|\| value >= MAX_CONFIGSTRINGS` rejected | ok |
 | `cl_screen.c` `SCR_ExecuteLayoutString` `"client"`/`"ctf"` `clientinfo[value]` | `strtol` of the layout | clientinfo index | `value < 0 \|\| value >= MAX_CLIENTS` rejected; `ctf` `sprintf` into `block[80]` with `%3d %3d %-12.12s`: two `int` fields of at most 11 characters each plus a 12-character name, under 80 | ok |
 | `cl_screen.c` `SCR_ExecuteLayoutString` `"num"` → `stats[strtol(token)]` | layout number | `stats[...]` index | index into `stats[MAX_STATS]` bounded since FIX13 (#137), was Defect D3 | ok (fixed by FIX13) |
@@ -186,7 +186,7 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_entities.c` `cl.model_draw[ps->gunindex]` | `gunindex` (`MSG_ReadByte` in `CL_ParsePlayerstate`) | gun model | 0..255 by the byte type vs `MAX_MODELS` | ok (by the byte type) |
 | `cl_entities.c` `bfg_lightramp[s1->frame]` | frame (`U_FRAME8` byte or `U_FRAME16` signed short) | index into `static int[6]` | reached when `effects & EF_BFG` is set without `EF_ANIM_ALLFAST`; checked on both sides since FIX14 (the table is read only for a frame inside it; any other frame adds no light), was Defect D5 | ok (fixed by FIX14) |
 | `cl_prediction.c` `cl.model_clip[ent->modelindex]` | modelindex byte | clip model | reached when `ent->solid == 31`; 0..255 by the byte type against `model_clip[MAX_MODELS]`; see Hardening H2 | ok (hardening H2) |
-| `sound/sound.c` `S_BuildSoundList` `sounds[i]` | loop to `num_entities` | write into caller `sounds[MAX_EDICTS]` | bound is `i <= MAX_CL_ENTNUM` (32767), **not `MAX_EDICTS` (1024)**; bounded by the caller's array size since FIX11 (#136), was Defect D1 | ok (fixed by FIX11) |
+| `sound/sound.c` `S_BuildSoundList` `sounds[i]` | loop to `num_entities` | write into caller `sounds[MAX_EDICTS]` | bounded by the caller's array size since FIX11 (#136), was Defect D1 | ok (fixed by FIX11) |
 | `sound/sdl.c` `SDL_AddLoopSounds` `sounds[i]` / loop | `i < num_entities` | read/zero `sounds[MAX_EDICTS]` | bounded by `MAX_EDICTS` since FIX11 (#136), was Defect D1 | ok (fixed by FIX11) |
 | `sound/sound.c` `cl.sound_precache[sounds[i]]` | sound id from `ent->sound` (byte) | precache index | `ent->sound` is a byte, `MAX_SOUNDS == 256` | ok |
 
@@ -269,7 +269,7 @@ against a client; a hostile client or unauthenticated peer against a server):
 
 ### D1: `num_entities` can exceed `MAX_EDICTS`; `S_BuildSoundList` writes past `sounds[MAX_EDICTS]` (critical, high confidence) [fixed in #136]
 
-Fixed by FIX11 (#136): a frame with `MAX_EDICTS` entities or more is refused
+Fixed by FIX11 (#136): a frame with more than `MAX_EDICTS` entities is refused
 with `ERR_DROP`, and the sound-list loops are bounded by the array size.
 
 `CL_ParsePacketEntities` / `CL_DeltaEntity` increment `frame->num_entities`
