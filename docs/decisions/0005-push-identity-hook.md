@@ -146,13 +146,21 @@ machine, so:
   the hook it is the whole-word test on object text, and in ref names (a
   substring test) only an occurrence inside a longer word still refuses.
   The host-name and home-path tests are unchanged and still apply there, so
-  a path under the home directory is still refused. The user name is still
-  withheld from any file name the gate check prints.
-- The skip also needs a home path that can refuse a path under this
-  account's home directory: the last component of `$HOME` must equal the
-  user name (case-insensitively, `home_is`). With `$HOME` unset, `/`, ending
-  in `/` or naming another directory, the home-path test could not refuse
-  such a path, so the user-name word test runs as on any other machine.
+  a path under `$HOME`, spelled as `$HOME` spells it, is still refused. The
+  user name is still withheld from any file name the gate check prints.
+- The skip also needs the last path component of `$HOME` to equal the user
+  name (ASCII case-insensitively, `home_is`); nothing else about `$HOME` is
+  checked. Under this record's threat model `$HOME` is trusted to be the
+  account's home directory, so the home-path test then refuses a path under
+  it. With `$HOME` unset, `/`, ending in `/` or with another last component,
+  nothing is skipped and the user-name word test runs as on any other
+  machine. Not covered, so that with the skip on a path in one of these
+  forms is not refused: a `$HOME` elsewhere that ends in the user name (the
+  account's real home is then no home word), a symlinked or non-canonical
+  spelling of the home directory, and the dash-encoded form of the home path
+  that some tools write in directory names (`/home/zzq` as `-home-zzq`). The
+  follow-up card "Identity check: take the home directory from the user
+  database and catch its dash-encoded form" tracks them.
 - The owner segment is read from what `git remote get-url --all origin`
   resolves from the repository's configuration (`.git/config`, and the
   owner's own global configuration for `url.<base>.insteadOf`). No commit or
@@ -174,9 +182,11 @@ machine, so:
   `home_is`) are the same text in both scripts, and
   `tests/check-pre-push-hook.sh` fails if they differ. The self-tests cover:
   skipped when equal, not skipped when different, not skipped when
-  undeterminable, not skipped when the home path is unset or elsewhere, the
-  home path and the host name still refused when skipped, and the address
-  forms.
+  undeterminable (two URLs for `origin` included), not skipped when `$HOME`
+  is unset, `/`, ends in `/` or has another last component, the home path
+  and the host name still refused when skipped, a longer word holding the
+  user name refused in a ref name only, no note for a user name that is not
+  the owner, and the address forms.
 
 ## Reversal
 

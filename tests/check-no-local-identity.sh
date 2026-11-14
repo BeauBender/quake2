@@ -30,10 +30,10 @@
 # public handle and is in the tree by necessity (links, credits), so the
 # user-name word test is skipped and a note says so (without the value). The
 # host-name and home-path tests still run, and the user name is still
-# withheld from any file name printed. The skip needs a home path that the
-# home-path test can refuse (see home_is: its last component is the user
-# name); without one, or if the owner cannot be determined, nothing is
-# skipped. The push hook applies the same rule.
+# withheld from any file name printed. The skip also needs the last path
+# component of $HOME to be the user name (see home_is for what that does
+# and does not cover); otherwise, or if the owner cannot be determined,
+# nothing is skipped. The push hook applies the same rule.
 #
 # Limit: a machine whose host or user name is an ordinary word of this
 # repository's text (for example a generic container or CI name) cannot
@@ -76,11 +76,19 @@ owner_is() {
 		-e 's#^([^/@:]*@)?github\.com:([a-z0-9-]+)/[a-z0-9._-]+/?$#\2#p') || return 1
 	[ -n "$_oo" ] && [ "$_oo" = "$(printf '%s' "$2" | tr 'A-Z' 'a-z')" ]
 }
-# home_is <home> <user>: true when the last path component of <home> equals
-# <user>, ASCII case-insensitively, so that the home-path test refuses a path
-# under this account's home directory. False for an empty <user> and for a
-# <home> that is empty, `/`, ends in `/` or names another directory; the
-# user-name word test is then not skipped (it is what still sees such a path).
+# home_is <home> <user>: true only when the last path component of <home>
+# equals <user>, ASCII case-insensitively; nothing else about <home> is
+# checked. <home> is $HOME, which the threat model of
+# docs/decisions/0005-push-identity-hook.md trusts to be this account's home
+# directory, so the home-path test then refuses a path under it as $HOME
+# spells it. False for an empty <user> and for a <home> that is empty, `/`,
+# ends in `/` or has another last component; the user-name word test is then
+# not skipped. Not covered (with the skip on, such a path is not refused): a
+# $HOME elsewhere that ends in the user name, a symlinked or non-canonical
+# spelling of the home, and the dash-encoded form of the home path (as some
+# tools write it in directory names). The follow-up card "Identity check:
+# take the home directory from the user database and catch its dash-encoded
+# form" tracks them.
 home_is() {
 	[ -n "$2" ] && [ "$(printf '%s' "${1##*/}" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$2" | tr 'A-Z' 'a-z')" ]
 }
