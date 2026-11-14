@@ -264,7 +264,9 @@ nl.txt"
 	git -C "$r" add -A
 	expect 2 "an index blob not found by its path" "$tmp/none" "$syn" zzquser /home/zzqhome
 
-	# Which addresses name an owner. "y <url>": the owner is zzquser.
+	# Which addresses name an owner. "y <url>": the owner is zzquser. sed keeps
+	# an unmatched prefix, so "zzq" before an owner "user" would spell zzquser
+	# if a pattern lost its leading anchor.
 	r=$tmp/r5
 	git init -q "$r"
 	while read -r _want _url; do
@@ -300,9 +302,9 @@ nl.txt"
 	n file:///home/zzquser/zzqrepo
 	n ../zzquser/zzqrepo
 	n zzquser/zzqrepo
-	n zzqhttps://github.com/zzquser/zzqrepo
+	n zzqhttps://github.com/user/zzqrepo
 	n zzqext::https://github.com/zzquser/zzqrepo.git
-	n zzqgithub.com:zzquser/zzqrepo
+	n zzqgithub.com:user/zzqrepo
 	n /zzq/github.com:zzquser/zzqrepo
 	n https://githubxcom/zzquser/zzqrepo
 	n zzqgit@githubxcom:zzquser/zzqrepo.git
