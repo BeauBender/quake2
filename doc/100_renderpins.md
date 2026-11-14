@@ -108,7 +108,7 @@ scripts/pins.sh record <renderer> <scenario> [--run N] [--replace]
 ```
 
 `record` starts the engine with the scenario's settings, the renderer
-(`soft`, `gl1`, `gl3`, or `gl1-metal`, see below), a fixed window size and sound off, plays
+(`soft`, `gl1`, `gl3`, `gl1-metal` or `metal`, see below), a fixed window size and sound off, plays
 `PINS_DEMO` and quits by itself when it ends. The frames land in
 `<store>/<scenario>/<renderer>/<id>/`, where `<id>` names the engine
 commit and a hash of the scenario and the `PINS_*` settings. With
@@ -227,6 +227,26 @@ one that already holds a `mgl-readback.txt` turns the hook off for that
 run. At most 1000 reads are written per run; later reads are not, and
 the shim says so once on stderr. Like the frames, these files come from
 the game data and stay on the machine that made them.
+
+### The native Metal renderer
+
+`ref_metal` is a renderer module of its own that draws with Metal
+directly (design: `docs/plans/ref-metal-native.md`). It is built on
+macOS only and is not part of `make`:
+
+```sh
+make client game ref_metal
+scripts/pins.sh record metal hud2d
+```
+
+The engine loads it as `vid_renderer metal` and the pin harness records
+it as `metal`. It is being built up step by step: for now every frame is
+the cleared screen (with `r_clear 1`, the colour 255, 0, 128 that `gl1`
+clears to), and nothing is compared against it yet. At start it prints
+the Metal device, the Apple GPU families it supports and whether it
+supports ray tracing; it refuses a device older than the apple5 family.
+`MTL_DEBUG_LAYER=1` in the environment turns on Metal's validation
+layer for a record.
 
 ### The gl1 frames on a host without accelerated OpenGL
 
