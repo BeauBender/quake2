@@ -335,6 +335,7 @@ nl.txt"
 	expect 1 "the owner handle, home unset: checked" "$tmp/want" "$syn" zzquser ''
 	expect 1 "the owner handle, home elsewhere: checked" "$tmp/want" "$syn" zzquser /home/zzqhome
 	expect 1 "the owner handle, home is /: checked" "$tmp/want" "$syn" zzquser /
+	expect 0 "the owner handle, home in other case: skipped" "$tmp/none" "$syn" zzquser /home/ZzqUser
 	git -C "$r" remote set-url origin https://github.com/zzqother/zzqrepo.git
 	expect 1 "the owner handle is another name: checked" "$tmp/want" "$syn" zzquser /home/zzquser
 	git -C "$r" remote set-url origin zzqalias:zzquser/zzqrepo.git

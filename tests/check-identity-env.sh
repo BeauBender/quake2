@@ -155,6 +155,12 @@ if [ -n "$owner" ]; then
 		echo "$me: FAIL: the user name is the owner handle: the output printed the user name"
 		fails=1
 	fi
+	# A home path that does not end in the user name: nothing is skipped.
+	gate "the owner handle, home elsewhere" 1 "tracked files contain this machine's identity"
+	if grep -q "skipped" "$tmp/out"; then
+		echo "$me: FAIL: the owner handle, home elsewhere: the skip note was printed"
+		fails=1
+	fi
 fi
 
 [ "$fails" -eq 0 ] || exit 1
