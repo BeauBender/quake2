@@ -1122,6 +1122,24 @@ that commit in a private store:
 | mutants of the world's pure code and of what it takes from `files/surf.c` | 45 mutants (the material order, the normal flip, each limit and division of the size arithmetic, the fan's order, capacity and 32-bit bound, the range, lump, face, surfedge, leaf, area and texinfo-chain checks, the PVS decompression's run cut, input end and output size, the viewport flip, each rotation, the translation, the wobble, `gl_znear`'s floor, `r_farsee`, the blend's alpha test and gamma, the per-map line, the skipped counts, the black first pass; `R_SetFrustum`'s angles and distances, `R_CullBox`'s side and planes, `R_TextureAnimation`'s step and negative frame) fail the host test (five cases were added after the first run left five alive; two mutants are equivalent and were dropped: `ceil` for `floor` in gl1's viewport formula, which is the identity on integer rectangles, and the `gl1_waterwarp` guard, whose wobble is 0 when it is 0). That list did not cover every form it names: the correctness review's 47 mutants of `rm_pure.c` left six alive (`rm_world_bytes`' index and record products without their division, `rm_world_fan`'s exact fit and its 32-bit base bound, the last surface of `rm_mark_once`'s range, `rm_decompress_vis` reading one byte past its input); the review's six cases were added and each of the six now fails (the last under ASAN, a stack-buffer-overflow) |
 | mutants of the review rework's checks | 16 mutants of `rm_node_tree_ok` (the root test, the node bound, the seen test and its mark, the leaf bound, the scratch clear, the empty lump), `rm_leaf_contents_ok`, `rm_world_head_ok` (each bound), the lump alignment and `rm_slot_state` (each state): 15 fail the host test; one is equivalent (`numnodes >= 1` dropped from `rm_world_head_ok`, implied by `0 <= headnode < numnodes`) |
 
+After the review rework (source `fe3ad284`, the load-state, leaf, world
+head, node tree and lump alignment checks), in a private store with
+`PINS_TRACE=0` and `MTL_DEBUG_LAYER=1`: `compare metal world-fullbright
+--ref gl1-metal --threshold 0.005 --bad-threshold 0.001` gives the same
+numbers as above (frames 0 to 20 ok, the same four frames at bad 0.000003
+to 0.000013, 21 and 22 over and excluded); `hud2d` 23 of 23 and
+`cinematic` 12 of 12 at score 0 and bad 0; a hand run of `map base1`
+then `map base2` with `metal_stats 1` prints the two per-map lines above
+and tears down with `0 live objects` (texture 295/295, buffer 10/10), `0
+unreleased, 0 unmatched`. A scratch harness linking `rm_model.c`,
+`rm_surf.c`, `rm_pure.c` and the shared loaders under ASAN and UBSAN
+refuses a map whose shared loader drops on the first and on the second
+registration of the same name (no slot handed out, no hunk or file held
+past the next registration), a leaf with a node's contents, an empty node
+lump, and a node named twice (no hang); 600,000 mutated inputs (two
+seeds, node children and leaf contents mutated too, one alarm per input)
+gave no sanitizer report and no hang.
+
 The texture used for a surface whose image did not load is `r_notexture`
 by `Mod_LoadTexinfo`'s fallback argument; the game data has no such
 surface, so no frame shows it.
