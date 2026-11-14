@@ -588,7 +588,9 @@ renderers (`soft` has no such cvar and still darkens, and stays exact run
 to run), and the `gl1` and `soft` references of `hud2d` were recorded again
 (the row in the table above). With it, three `gl1-metal` records of commit
 `74205ac9` match all four new `gl1` records exactly (score 0, bad 0, all 23
-frames, 12 pairs; record and compare load 22.7 to 64.7), and `gl1`/`gl1`
+frames, 12 pairs; record and compare load 22.7 to 64.7; three more of
+commit `20014fb9`, the final shim code, gave the same at load 21.5 to
+37.6), and `gl1`/`gl1`
 and `soft`/`soft` stay exact. The new `gl1` frames differ from the old
 reference only on frames 3, 5, 8, 11 and 16, by the wedge (score up to
 0.007440, bad 0.061862).
