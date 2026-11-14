@@ -184,6 +184,15 @@ GLenum mgl_read_contract(GLint x, GLint y, GLsizei w, GLsizei h,
 		size_t *bpp, size_t *rowbytes, size_t *total);
 
 /*
+ * Which image a read sees. A read with no pass drawn in the open frame
+ * (the console's screenshot command runs between frames, so the frame it
+ * opens is a cleared one) reads the last presented frame, when one of
+ * the target's size is kept (last_w, last_h; 0 when none); a read after
+ * a pass reads the frame itself. Returns 1 for the last frame.
+ */
+int mgl_read_uses_last(int passes, int last_w, int last_h, int tw, int th);
+
+/*
  * Converts what Metal read (BGRA rows, top row first, w * 4 bytes each)
  * into the caller's glReadPixels buffer: GL rows bottom up, rowbytes
  * apart, bpp bytes per pixel in format (GL_RGB, GL_RGBA or GL_BGRA).
@@ -397,14 +406,23 @@ int mgl_layer_pass(GLbitfield clear_mask, const GLclampf color[4], double depth,
 /* Opens a first pass when the frame has none, so the target is defined. */
 int mgl_layer_ensure_pass(void);
 /*
+ * Prepares a read: 1 when it will read the last presented frame (no pass
+ * is opened), 0 when it reads the open frame after ensuring a pass,
+ * -1 when the frame cannot be read.
+ */
+int mgl_layer_read_prepare(void);
+/*
  * Recomputes the viewport, scissor and depth range from mgl_state and
  * sets them on the open pass (each new pass gets them too).
  */
 void mgl_layer_update_raster(void);
 /* Commits what the frame has so far and waits for it, bounded; the frame stays open. */
 int mgl_layer_finish(void);
-/* Reads a rectangle of the frame's target in Metal coordinates as BGRA rows, top row first. */
-int mgl_layer_read(int x, int y, int w, int h, unsigned char *bgra);
+/*
+ * Reads a rectangle of the frame's target (the last presented frame when
+ * last is set) in Metal coordinates as BGRA rows, top row first.
+ */
+int mgl_layer_read(int x, int y, int w, int h, unsigned char *bgra, int last);
 /* Ends the frame: presents the drawable (if there is one) and commits. */
 int mgl_layer_present(void);
 

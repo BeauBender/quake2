@@ -84,6 +84,15 @@ static int frame_w, frame_h;
 /* Kept across frames, rebuilt when the size changes. */
 static id<MTLTexture> mgl_depth;           /* depth32Float_stencil8, private */
 static id<MTLTexture> mgl_offscreen;       /* the target when there is no drawable */
+/*
+ * The last presented frame, for reads between frames (the screenshot
+ * command): its target (the drawable's texture, or mgl_offscreen), and
+ * its drawable, held so the layer does not hand that texture out again
+ * while it may be read. Replaced at each present, dropped on a resize
+ * and at teardown. No copy is made.
+ */
+static id<MTLTexture> mgl_last;
+static id<CAMetalDrawable> mgl_last_drawable;
 static id<MTLBuffer> mgl_readbuf;          /* shared, for glReadPixels */
 
 /* Counters, printed when the context is destroyed. */
@@ -223,6 +232,8 @@ mgl_release_all(void)
 	frame_target = nil;
 	mgl_depth = nil;
 	mgl_offscreen = nil;
+	mgl_last = nil;
+	mgl_last_drawable = nil;
 	mgl_readbuf = nil;
 	upload_blit = nil;
 	upload_cmd = nil;
@@ -558,6 +569,9 @@ mgl_layer_frame_begin(int *tw, int *th)
 		if (mgl_metal_layer.drawableSize.width != w || mgl_metal_layer.drawableSize.height != h)
 		{
 			mgl_metal_layer.drawableSize = CGSizeMake(w, h);
+			/* the kept frame is of the old size: nothing to read, nothing to hold */
+			mgl_last = nil;
+			mgl_last_drawable = nil;
 		}
 
 		frame_drawable = [mgl_metal_layer nextDrawable];
@@ -704,6 +718,25 @@ mgl_layer_ensure_pass(void)
 	return frame_passes ? 1 : mgl_layer_pass(0, black, 1.0, 0);
 }
 
+int
+mgl_layer_read_prepare(void)
+{
+	int w, h;
+
+	if (!mgl_layer_frame_begin(&w, &h))
+	{
+		return -1;
+	}
+
+	if (mgl_read_uses_last(frame_passes, mgl_last ? (int)mgl_last.width : 0,
+			mgl_last ? (int)mgl_last.height : 0, w, h))
+	{
+		return 1;
+	}
+
+	return mgl_layer_ensure_pass() ? 0 : -1;
+}
+
 /* Commits the frame so far and opens a new command buffer for the rest of it. */
 static int
 mgl_flush(void)
@@ -774,7 +807,7 @@ mgl_layer_finish(void)
 }
 
 int
-mgl_layer_read(int x, int y, int w, int h, unsigned char *bgra)
+mgl_layer_read(int x, int y, int w, int h, unsigned char *bgra, int last)
 {
 	if (!frame_open || frame_skipped || !frame_cmd || x < 0 || y < 0 || w <= 0 || h <= 0 ||
 		x + w > frame_w || y + h > frame_h)
@@ -801,7 +834,7 @@ mgl_layer_read(int x, int y, int w, int h, unsigned char *bgra)
 		}
 
 		blit = [frame_cmd blitCommandEncoder];
-		[blit copyFromTexture:frame_target
+		[blit copyFromTexture:(last ? mgl_last : frame_target)
 				sourceSlice:0
 				sourceLevel:0
 				sourceOrigin:MTLOriginMake((NSUInteger)x, (NSUInteger)y, 0)
@@ -869,6 +902,10 @@ mgl_layer_present(void)
 				dispatch_semaphore_signal(sem);
 			}];
 			[frame_cmd commit];
+
+			/* what is now on screen; a read between frames reads it in place */
+			mgl_last = frame_target;
+			mgl_last_drawable = frame_drawable;
 		}
 		else
 		{
