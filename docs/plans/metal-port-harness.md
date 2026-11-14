@@ -1080,9 +1080,10 @@ and `cinematic`, pass. No threshold or scenario was changed.
 directly, 5 loaded by pointer under 10 names) and checks that the shim's
 objects define each one, that the linked `ref_gl1.dylib` leaves no `_gl`
 symbol undefined, and that the table of `docs/plans/metal-shim-design.md`
-section 14 names exactly those 59: 51 implemented, 5 partial
+section 14 names exactly those 59: 50 implemented, 5 partial
 (`glClear`, `glDrawElements`, `glPolygonMode`, `glTexEnvi`,
-`glTexImage2D`), 2 no-op (`glDrawBuffer`, `glHint`), 1 stub
+`glTexImage2D`), 3 no-op (`glDrawBuffer`, `glHint`, `glShadeModel`: `GL_FLAT` is
+stored and not applied), 1 stub
 (`glColorTableEXT`, which gl1 never loads because the shim does not
 advertise `GL_EXT_shared_texture_palette`). Each of 15 mutants of its
 inputs (a row removed, renamed, duplicated or given an unknown status,
@@ -1206,7 +1207,22 @@ content` grows by 295 KB over the six cycles, which suggests window
 objects autoreleased into a pool the main loop never drains; not
 proven). So "`vid_restart` without leaks" holds for the shim and not
 for the process; the window retention is a finding for a card outside
-the port queue.
+the port queue: FIX41 (#193).
+
+**Criterion 1 and the GL-call pins.** The card's first criterion asks
+that every GL-call pin of the reference set pass. It is met here by the
+coverage report, the host test (`tests/metal/mgl_host_test.c`) and the
+frame pins above. No GL-call recorder, trace or GL-call pin was built or
+run in this repository, so the GL-call-pin half of the criterion is not
+met as worded. The enum values the section 14 table names as refused
+come from reading the source and from the runs that logged no `not
+implemented` or `glError` line, not from a recorded trace.
+
+**Deviations from the card.** The shim lives in
+`src/client/refresh/gl1/metal/`, not in the suggested
+`src/client/refresh/glmetal/`, which keeps it next to the one renderer
+it serves. It was written in this tree, not seeded from any external
+seed. Nothing was promoted elsewhere.
 
 ## Judging a renderer
 

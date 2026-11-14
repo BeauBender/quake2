@@ -193,7 +193,9 @@ pins (`scripts/pins.sh`) accept each stage. Suggested stages, each a
 
 A stage is done when every GL-call pin for its entry points passes and the
 scenario's frames pass at the recorded threshold against `gl1` on real
-OpenGL (T1 references, INFORM9).
+OpenGL (T1 references, INFORM9). TASK21 closed without any GL-call pin
+(none was recorded or replayed in this repository); see "Closing TASK21
+on the build host" in `docs/plans/metal-port-harness.md`.
 
 ## 5. Risks and unknowns
 
@@ -894,7 +896,7 @@ them is a value gl1 passes.
 | `glRotatef` | implemented | `mgl_state.c` | test_perspective, test_sky_water_alpha | |
 | `glScalef` | implemented | `mgl_state.c` | test_perspective, test_models | |
 | `glScissor` | implemented | `mgl_frame.c` | test_raster (`mgl_compute_raster`); pins | |
-| `glShadeModel` | implemented | `mgl_state.c` | test_models | |
+| `glShadeModel` | no-op | `mgl_state.c` | test_models | `GL_FLAT` is stored and not applied; every gl1 draw under it has one colour per primitive |
 | `glStencilFunc` | implemented | `mgl_state.c` | test_state, test_draw_state, test_models, test_points_lines | |
 | `glStencilMask` | implemented | `mgl_state.c` | test_draw_state | |
 | `glStencilOp` | implemented | `mgl_state.c` | test_state, test_draw_state, test_models, test_points_lines | `GL_INCR_WRAP` and `GL_DECR_WRAP` |
