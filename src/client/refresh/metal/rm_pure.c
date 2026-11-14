@@ -381,3 +381,215 @@ rm_texture_mode(const char *name, int *min, int *mag_linear)
 
 	return 0;
 }
+
+/* ---- the scrap, pics and characters ----------------------------------------- */
+
+/* from gl1_scrap.c, CommonAllocBlock, with the bounds gl1 leaves to its caller */
+int
+rm_scrap_alloc(int *allocated, int aw, int ah, int w, int h, int *x, int *y)
+{
+	int i, j, best, best2, bx = 0, by = 0, found = 0;
+
+	if (!allocated || !x || !y || (aw < 1) || (ah < 1) || (w < 1) || (h < 1) || (w > aw) || (h > ah))
+	{
+		return 0;
+	}
+
+	best = ah;
+
+	/* gl1's bound, aw - w: a block never starts in the last w columns */
+	for (i = 0; i < aw - w; i++)
+	{
+		best2 = 0;
+
+		for (j = 0; j < w; j++)
+		{
+			if (allocated[i + j] >= best)
+			{
+				break;
+			}
+
+			if (allocated[i + j] > best2)
+			{
+				best2 = allocated[i + j];
+			}
+		}
+
+		if (j == w)
+		{
+			/* this is a valid spot */
+			bx = i;
+			by = best = best2;
+			found = 1;
+		}
+	}
+
+	if (!found || (best + h > ah))
+	{
+		return 0;
+	}
+
+	for (i = 0; i < w; i++)
+	{
+		allocated[bx + i] = best + h;
+	}
+
+	*x = bx;
+	*y = by;
+	return 1;
+}
+
+int
+rm_scrap_copy(unsigned *texels, int aw, int ah, int x, int y, int w, int h, const unsigned *pic)
+{
+	int i;
+
+	if (!texels || !pic || (aw < 1) || (ah < 1) || (w < 1) || (h < 1) || (x < 0) || (y < 0)
+			|| (w > aw - x) || (h > ah - y))
+	{
+		return 0;
+	}
+
+	for (i = 0; i < h; i++)
+	{
+		memcpy(&texels[(size_t)(y + i) * (size_t)aw + (size_t)x], pic + (size_t)i * (size_t)w,
+				(size_t)w * sizeof(unsigned));
+	}
+
+	return 1;
+}
+
+/* from gl1_draw.c, RDraw_CharScaled */
+int
+rm_char_quad(rm_quad_t *q, int x, int y, int num, float scale, const float *st)
+{
+	int row, col;
+	float frow, fcol, size, scaledSize;
+
+	num &= 255;
+
+	if ((num & 127) == 32)
+	{
+		return 0;   /* space */
+	}
+
+	if (y <= -8)
+	{
+		return 0;   /* totally off screen */
+	}
+
+	row = num >> 4;
+	col = num & 15;
+
+	frow = row * 0.0625;
+	fcol = col * 0.0625;
+	size = 0.0625;
+
+	scaledSize = 8 * scale;
+
+	q->x0 = x;
+	q->y0 = y;
+	q->x1 = x + scaledSize;
+	q->y1 = y + scaledSize;
+	q->s0 = st[0] + fcol * (st[2] - st[0]);
+	q->t0 = st[1] + frow * (st[3] - st[1]);
+	q->s1 = st[0] + (fcol + size) * (st[2] - st[0]);
+	q->t1 = st[1] + (frow + size) * (st[3] - st[1]);
+	return 1;
+}
+
+/* from gl1_draw.c, RDraw_PicScaled and RDraw_StretchPic */
+void
+rm_pic_quad(rm_quad_t *q, int x, int y, int w, int h, float factor, const float *st)
+{
+	q->x0 = x;
+	q->y0 = y;
+	q->x1 = x + w * factor;
+	q->y1 = y + h * factor;
+	q->s0 = st[0];
+	q->t0 = st[1];
+	q->s1 = st[2];
+	q->t1 = st[3];
+}
+
+/* from gl1_draw.c, RDraw_TileClear: the body of its two loops */
+int
+rm_tile_quad(rm_quad_t *q, int x, int y, int w, int h, int iw, int ih, long x2, long y2, const float *st)
+{
+	long next_x, next_y;
+	int tile_w, tile_h;
+
+	if ((iw < 1) || (ih < 1) || (w < 1) || (h < 1) || (x2 < 0) || (y2 < 0) || (x2 >= w) || (y2 >= h))
+	{
+		return 0;
+	}
+
+	next_x = x + x2 + iw;
+
+	if (next_x > (long)x + w)
+	{
+		next_x = (long)x + w;
+	}
+
+	tile_w = (int)(next_x - (x + x2));
+
+	next_y = y + y2 + ih;
+
+	if (next_y > (long)y + h)
+	{
+		next_y = (long)y + h;
+	}
+
+	tile_h = (int)(next_y - (y + y2));
+
+	q->x0 = x + x2;
+	q->y0 = y + y2;
+	q->x1 = next_x;
+	q->y1 = next_y;
+	q->s0 = st[0];
+	q->t0 = st[1];
+	q->s1 = st[0] + (st[2] - st[0]) * ((float)tile_w / iw);
+	q->t1 = st[1] + (st[3] - st[1]) * ((float)tile_h / ih);
+	return 1;
+}
+
+int
+rm_batch_fits(long count, long add, long cap)
+{
+	return (count >= 0) && (add > 0) && (cap > 0) && (count <= cap) && (add <= cap - count);
+}
+
+int
+rm_quad_indices(int n, unsigned short *idx, int cap)
+{
+	int i, k = 0;
+
+	/* 4 vertices a quad: the last vertex index is 4 * n - 1, at most 65535 */
+	if (!idx || (n < 1) || (n > 16384) || (cap < 0) || (n > cap / 6))
+	{
+		return 0;
+	}
+
+	for (i = 0; i < n; i++)
+	{
+		unsigned base = (unsigned)i * 4;
+
+		idx[k++] = (unsigned short)base;
+		idx[k++] = (unsigned short)(base + 1);
+		idx[k++] = (unsigned short)(base + 2);
+		idx[k++] = (unsigned short)base;
+		idx[k++] = (unsigned short)(base + 2);
+		idx[k++] = (unsigned short)(base + 3);
+	}
+
+	return k;
+}
+
+void
+rm_tint_color(float *rgba, const float *rgb)
+{
+	rgba[0] = rgb[0];
+	rgba[1] = rgb[1];
+	rgba[2] = rgb[2];
+	rgba[3] = 1;
+}

@@ -202,6 +202,73 @@ int rm_texture_mode(const char *name, int *min, int *mag_linear);
  */
 int rm_dir_of(const char *path, char *dir, size_t len);
 
+/* ---- the scrap, pics and characters (rm_pure.c) ---------------------------------- */
+
+/* gl1's scrap: four atlases of 256 by 256 texels, the first two without filtering */
+#define RM_SCRAP_WIDTH 256
+#define RM_SCRAP_HEIGHT 256
+#define RM_MAX_SCRAPS 4
+#define RM_MAX_SCRAPS_NOLERP 2
+
+/*
+ * gl1's CommonAllocBlock: a w by h block (the border already added) in an
+ * atlas whose column heights are allocated[aw]. 1 with *x, *y the block's
+ * corner and the columns raised; 0 and nothing written when it does not fit
+ * or is larger than the atlas (gl1 computes aw - w unsigned there; a width
+ * above aw is refused here). The spots are gl1's: the rightmost column
+ * start is aw - w - 1.
+ */
+int rm_scrap_alloc(int *allocated, int aw, int ah, int w, int h, int *x, int *y);
+
+/*
+ * Copies a w by h block of texels (rows tight) to (x, y) of an atlas of
+ * aw by ah texels. 0 and nothing written when the block is not inside it.
+ */
+int rm_scrap_copy(unsigned *texels, int aw, int ah, int x, int y, int w, int h, const unsigned *pic);
+
+/* One 2D quad: corners and the texture coordinates of the corners (up left, down right). */
+typedef struct
+{
+	float x0, y0, x1, y1;
+	float s0, t0, s1, t1;
+} rm_quad_t;
+
+/*
+ * gl1's RDraw_CharScaled: the cell of character num of a 16 by 16 sheet
+ * whose image holds the coordinates st (sl, tl, sh, th). 0 for a space
+ * and for a character wholly above the screen (y <= -8): nothing drawn.
+ */
+int rm_char_quad(rm_quad_t *q, int x, int y, int num, float scale, const float *st);
+
+/* gl1's RDraw_PicScaled, RDraw_StretchPic: a pic of w by h at (x, y), scaled by factor. */
+void rm_pic_quad(rm_quad_t *q, int x, int y, int w, int h, float factor, const float *st);
+
+/*
+ * gl1's RDraw_TileClear: the tile at offset (x2, y2) of an iw by ih pic
+ * repeated over the box (x, y, w, h), the last column and row clipped to
+ * the box with the texture coordinates cut in proportion. 0 when iw or ih
+ * is not positive or the offset is outside the box.
+ */
+int rm_tile_quad(rm_quad_t *q, int x, int y, int w, int h, int iw, int ih,
+		long x2, long y2, const float *st);
+
+/*
+ * Whether add more quads fit in a batch of cap with count in it: 1, or 0
+ * for a negative or zero add, a count outside 0..cap, or a sum above cap
+ * (checked without forming an overflowing sum).
+ */
+int rm_batch_fits(long count, long add, long cap);
+
+/*
+ * The indices of n quads of 4 vertices each (gl1's R_Buffer2DQuad: 0 1 2,
+ * 0 2 3 of each quad) into idx, which holds cap entries. The number of
+ * indices, 0 when n < 1, they do not fit or a vertex index would pass 65535.
+ */
+int rm_quad_indices(int n, unsigned short *idx, int cap);
+
+/* gl1's glColor4f(r, g, b, 1) of RDraw_PicScaledCol, which modulates the texel. */
+void rm_tint_color(float *rgba, const float *rgb);
+
 /* ---- rmb_device.m and rmb_encode.m ------------------------------------------- */
 
 /*
@@ -356,5 +423,13 @@ typedef struct
  * (column-major) on every vertex. 0 when the draw is skipped (counted).
  */
 int rmb_draw_2d(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n, const float *mvp);
+
+/*
+ * The same for nquads quads of 4 vertices each (a batch of gl1's
+ * R_Buffer2DQuad, one draw). 0 when the draw is skipped (counted), or
+ * nquads is outside 1 to RM_BATCH_QUADS.
+ */
+#define RM_BATCH_QUADS 1024
+int rmb_draw_2d_quads(int pipe, int tex, int smp, const rmb_vert2d_t *v, int nquads, const float *mvp);
 
 #endif /* RM_RMB_H */
