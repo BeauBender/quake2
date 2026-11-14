@@ -6,8 +6,9 @@
 # any depth (.claude/memory/x, .Claude/memory/x, .claude/Memory/x,
 # sub/.claude/memory/x), including a symbolic link or a submodule at that
 # path; when a file created at .claude/memory/ would not be ignored; or when
-# git, tr or grep fails (nothing is counted as clean then). Memory is kept
-# in the owner's private store (see CLAUDE.md), never in a commit.
+# git, tr or grep fails or the script is interrupted (nothing is counted as
+# clean then). Memory is kept in the owner's private store (see CLAUDE.md),
+# never in a commit.
 #
 # The self-test runs first, in a subshell with the GIT_* repository variables
 # unset and no global or system configuration, on throwaway repositories
@@ -19,11 +20,14 @@
 #
 # Usage: tests/check-no-tracked-memory.sh
 set -eu
-cd "$(dirname "$0")/.."
+CDPATH='' cd "$(dirname "$0")/.."
 me=check-no-tracked-memory
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/nomem.XXXXXX")
 chmod 700 "${tmp:?}"
-trap 'rm -rf "${tmp:?}"' EXIT HUP INT TERM
+# Cleanup runs only on exit; a signal exits non-zero (and so cleans up)
+# instead of resuming with the scratch files gone.
+trap 'rm -rf "${tmp:?}"' EXIT
+trap 'exit 1' HUP INT TERM
 
 # check <repo-dir>: prints a reason and returns 1 on a violation.
 check()
@@ -36,11 +40,12 @@ check()
 		echo "$me: tr failed; cannot scan the tracked paths" >&2
 		return 1
 	fi
+	# grep reads its input as an operand and prints only a count, so a
+	# missing or unreadable file is status 2, never "no match".
 	rc=0
-	grep -Ei '(^|/)\.claude/memory(/|$)' < "${tmp:?}/paths" > "${tmp:?}/hits" || rc=$?
+	n=$(grep -Eic '(^|/)\.claude/memory(/|$)' "${tmp:?}/paths") || rc=$?
 	case "$rc" in
 	0)
-		n=$(wc -l < "${tmp:?}/hits" | tr -d ' ')
 		echo "$me: $n tracked path(s) under a .claude/memory directory (any case, any depth); agent memory belongs in the owner's private store (see CLAUDE.md), not in a commit (git rm -r --cached <path>)" >&2
 		return 1
 		;;
