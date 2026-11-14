@@ -41,14 +41,41 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/noident.XXXXXX")
 # A shell error must not exit 0 (bash 3.2 loses the status in an EXIT trap).
 trap 'rm -rf "$tmp"; [ "${_ok:-}" = 1 ] || exit 1' EXIT
 us=$(printf '\037')
+nl='
+'
+
+# ---- owner_is: keep this block identical in .githooks/pre-push. ------------
+# owner_is <dir> <user>: true when <user> equals, ASCII case-insensitively,
+# the owner segment of the GitHub address of the remote "origin" of the
+# repository at <dir>. The address is the one git itself resolves (`git
+# remote get-url`, so a url.<base>.insteadOf rewrite applies) from the
+# repository's own configuration, which no commit or push can change. Only
+# https://, ssh:// and git:// URLs and the scp-like form whose host is
+# github.com and whose path is exactly <owner>/<repository> count. Anything
+# else is undeterminable and false: no origin, more than one URL, a local path
+# or file:// URL, another host (an ssh alias included), or a git error.
+owner_is() {
+	_ou=$(git -C "$1" remote get-url --all origin 2>/dev/null) || return 1
+	case $_ou in
+	*"$nl"*) return 1 ;;
+	esac
+	_oo=$(printf '%s\n' "$_ou" | tr 'A-Z' 'a-z' | sed -nE \
+		-e 's#^(https|ssh|git)://([^/@]*@)?github\.com(:[0-9]+)?/([a-z0-9-]+)/[a-z0-9._-]+/?$#\4#p' \
+		-e 's#^([^/@:]*@)?github\.com:([a-z0-9-]+)/[a-z0-9._-]+/?$#\2#p') || return 1
+	[ -n "$_oo" ] && [ "$_oo" = "$(printf '%s' "$2" | tr 'A-Z' 'a-z')" ]
+}
+# ---- end of owner_is. ------------------------------------------------------
 
 # scan_repo <dir> <host> <user> <home>: prints "path:line (kind)" for each hit
 # in the staged text files and link targets of the repository at <dir>, and
 # "N tracked file name(s) (kind)" for file names; never the matched text. Returns 1 if any
 # hit, 2 if <dir> is not a repository or a git or grep call fails (said on
-# stderr).
+# stderr). The user-name word test is skipped when owner_is <dir> <user>; the
+# user name is then still withheld from the file names printed.
 scan_repo() {
 	_hits=0
+	_skipu=0
+	if owner_is "$1" "$3"; then _skipu=1; fi
 	: > "$tmp/hits"
 	: > "$tmp/words"
 	# One listing gives the names and the symbolic links (mode 120000):
@@ -64,6 +91,7 @@ scan_repo() {
 		_word=${_rest#*:}
 		[ "${#_word}" -ge 3 ] || continue
 		printf '%s\n' "$_word" >> "$tmp/words"
+		if [ "$_kind" = user ] && [ "$_skipu" = 1 ]; then continue; fi
 		# -z ends the path and the line number with NUL, so a colon in a path
 		# cannot shift the fields; awk keeps the first two fields only. -a:
 		# git's own binary test honours .gitattributes, so it is not used.
@@ -214,6 +242,79 @@ scan_repo() {
 nl.txt"
 	git -C "$r" add -A
 	expect 2 "an index blob not found by its path" "$tmp/none" "$syn" zzquser /home/zzqhome
+
+	# Which addresses name an owner. "y <url>": the owner is zzquser.
+	r=$tmp/r5
+	git init -q "$r"
+	while read -r _want _url; do
+		git -C "$r" config remote.origin.url "$_url"
+		_got=n
+		if owner_is "$r" zzquser; then _got=y; fi
+		[ "$_got" = "$_want" ] || { echo "$me: self-test 'owner of an address' wanted $_want, got $_got for $_url"; exit 1; }
+	done <<-EOF
+	y https://github.com/zzquser/zzqrepo
+	y https://github.com/zzquser/zzqrepo.git
+	y HTTPS://GitHub.COM/ZZQUSER/zzqrepo.git/
+	y https://zzqtoken@github.com/zzquser/zzqrepo.git
+	y ssh://zzqgit@github.com/zzquser/zzqrepo.git
+	y ssh://zzqgit@github.com:22/zzquser/zzqrepo.git
+	y git://github.com/zzquser/zzqrepo.git
+	y zzqgit@github.com:zzquser/zzqrepo.git
+	y github.com:zzquser/zzq.repo
+	n https://github.com/zzqother/zzqrepo.git
+	n https://github.com/zzquserx/zzqrepo.git
+	n https://github.com/xzzquser/zzqrepo.git
+	n https://zzquser@github.com/zzqother/zzqrepo.git
+	n https://github.com/zzqother/zzquser.git
+	n https://github.com/zzquser
+	n https://github.com/zzquser/zzqrepo/zzqmore
+	n https://github.com//zzquser/zzqrepo
+	n http://github.com/zzquser/zzqrepo.git
+	n https://zzq.example/zzquser/zzqrepo.git
+	n https://github.com.zzq.example/zzquser/zzqrepo.git
+	n https://zzqgithub.com/zzquser/zzqrepo.git
+	n https://github.com/zzqo/zzqrepo#github.com/zzquser/zzqrepo
+	n zzqalias:zzquser/zzqrepo.git
+	n /home/zzquser/zzqrepo
+	n file:///home/zzquser/zzqrepo
+	n ../zzquser/zzqrepo
+	n zzquser/zzqrepo
+	EOF
+	git -C "$r" config --add remote.origin.url https://github.com/zzquser/zzqrepo.git
+	if owner_is "$r" zzquser; then echo "$me: self-test 'origin with two URLs' named an owner"; exit 1; fi
+	git -C "$r" config --unset-all remote.origin.url
+	git -C "$r" config remote.zzqup.url https://github.com/zzquser/zzqrepo.git
+	if owner_is "$r" zzquser; then echo "$me: self-test 'no origin, another remote' named an owner"; exit 1; fi
+	git -C "$r" config remote.origin.url zzqgh:zzquser/zzqrepo
+	git -C "$r" config url.https://github.com/.insteadOf zzqgh:
+	owner_is "$r" zzquser || { echo "$me: self-test 'an insteadOf rewrite' named no owner"; exit 1; }
+	owner_is "$r" ZZQUSER || { echo "$me: self-test 'the user name in other case' named no owner"; exit 1; }
+	if owner_is "$r" ''; then echo "$me: self-test 'an empty user name' matched"; exit 1; fi
+	if owner_is "$tmp/plain-none" zzquser; then echo "$me: self-test 'not a repository' named an owner"; exit 1; fi
+
+	# The user name that is the owner handle of origin's GitHub address is
+	# public: only the user-name word test is skipped.
+	r=$tmp/r4
+	git init -q "$r"
+	printf 'see github.com/zzquser/zzqrepo, by zzquser\n' > "$r/credits.txt"
+	git -C "$r" add -A
+	printf 'credits.txt:1 (user)\n' > "$tmp/want"
+	expect 1 "no origin: the user name is checked" "$tmp/want" "$syn" zzquser /home/zzquser
+	git -C "$r" remote add origin https://github.com/ZzqUser/zzqrepo.git
+	expect 0 "the user name is the owner handle: skipped" "$tmp/none" "$syn" zzquser /home/zzquser
+	git -C "$r" remote set-url origin https://github.com/zzqother/zzqrepo.git
+	expect 1 "the owner handle is another name: checked" "$tmp/want" "$syn" zzquser /home/zzquser
+	git -C "$r" remote set-url origin zzqalias:zzquser/zzqrepo.git
+	expect 1 "the owner is undeterminable: checked" "$tmp/want" "$syn" zzquser /home/zzquser
+	git -C "$r" remote set-url origin https://github.com/zzquser/zzqrepo.git
+	printf 'built in /home/zzquser/src\n' > "$r/zzquser-notes.txt"
+	printf 'built on %s\n' "$syn" > "$r/host.txt"
+	git -C "$r" add -A
+	cat > "$tmp/want" <<-EOF
+	<withheld file name>:1 (home)
+	host.txt:1 (host)
+	EOF
+	expect 1 "skipped: the home path and the host name are still refused" "$tmp/want" "$syn" zzquser /home/zzquser
 	r=$tmp/r
 
 	mkdir "$tmp/plain"
@@ -236,6 +337,9 @@ if [ -z "$host" ] && [ -z "$user" ]; then
 fi
 if [ -z "$host" ] || [ -z "$user" ]; then
 	echo "$me: warning: cannot read the host or user name; that word is not checked"
+fi
+if [ -n "$user" ] && owner_is . "$user"; then
+	echo "$me: note: the user name is the owner handle of this repository's GitHub address (remote origin), which is public; the user-name word test is skipped, the host name and home path are still checked"
 fi
 real_st=0
 scan_repo . "$host" "$user" "$home" > "$tmp/real" 2> "$tmp/realerr" || real_st=$?
