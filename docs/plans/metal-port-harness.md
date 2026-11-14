@@ -1067,7 +1067,11 @@ screen; TASK83 (#187) judges it against an accelerated reference.
 
 ### `gl1` references from an accelerated OpenGL (TASK83)
 
-Measurement in progress.
+Measurement in progress on the bare-metal host (`GL_RENDERER: Apple M6`,
+`GL_VERSION: 2.1 Metal - 91.7`). A first pass was discarded: it was
+recorded while the desktop was in use, and one record shows the effect of
+a key press (1064 rendered frames against 689). Every number below comes
+from the second pass.
 
 ### Closing TASK21 on the build host
 
