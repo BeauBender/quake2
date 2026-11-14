@@ -115,7 +115,7 @@ R_ImageList_f(void)
 		const char *in_use = "";
 		char imageType = '?';
 
-		if (image->texnum <= 0)
+		if (!image->texnum)
 		{
 			continue;
 		}
@@ -287,8 +287,9 @@ R_LoadScrap(image_t *image, byte *pic, int width, int height, int bits, qboolean
 		R_Printf(PRINT_ALL, "%s: Nolerp image stored to lerp\n", image->name);
 	}
 
-	image->texnum = Scrap_Texture(texnum);
+	image->texnum = RM_TEXNUM_SCRAP;   /* not the atlas's id: a failed upload can free it */
 	image->scrap = true;
+	image->scrapnum = texnum;
 	image->has_alpha = true;
 	image->sl = (float)x / RM_SCRAP_WIDTH;
 	image->sh = (float)(x + width) / RM_SCRAP_WIDTH;
@@ -588,7 +589,7 @@ R_ShutdownImages(void)
 
 	for (i = 0; i < numgltextures; i++)
 	{
-		/* an atlas's texture is the scrap's, freed there */
+		/* a scrap image has no texture of its own: the atlases are the scrap's, freed there */
 		if (gltextures[i].texnum && !gltextures[i].scrap)
 		{
 			rmb_texture_free(gltextures[i].texnum);

@@ -25,7 +25,9 @@
  * plain functions in rm_pure.c (host-tested); this file holds the texels,
  * the dirty flags and the textures. Each atlas is one back end texture,
  * made when the first block is placed in it and rewritten, through the
- * upload command buffer, when a draw finds it dirty.
+ * upload command buffer, when a draw finds it dirty. A scrap image keeps
+ * its atlas index (image_t scrapnum), not the texture id, which a failed
+ * upload frees and another texture may take.
  *
  * =======================================================================
  */
@@ -113,39 +115,29 @@ Scrap_AllocBlock(unsigned w, unsigned h, int *x, int *y, const unsigned *pic, in
 	return -1;
 }
 
-/* the back end texture of an atlas, 0 for an index outside the table */
+/* the back end texture of an atlas, read at each draw; 0 for an index outside the table or an atlas not made */
 int
 Scrap_Texture(int texnum)
 {
-	return ((texnum >= 0) && (texnum < RM_MAX_SCRAPS)) ? scrap_tex[texnum] : 0;
+	return rm_scrap_texture(scrap_tex, RM_MAX_SCRAPS, texnum);
 }
 
 /*
- * The sampler of a scrap texture, by gl1's Scrap_Update: the first atlases
- * and every atlas with r_2D_unfiltered are nearest; the others are
- * filtered without mipmaps (gl_filter_max for both).
+ * The sampler of an atlas, by gl1's Scrap_Update: the first atlases and
+ * every atlas with r_2D_unfiltered are nearest; the others are filtered
+ * without mipmaps (gl_filter_max for both).
  */
 int
-Scrap_Sampler(int tex)
+Scrap_Sampler(int texnum)
 {
-	int i;
-
-	for (i = 0; i < RM_MAX_SCRAPS; i++)
-	{
-		if (tex && (tex == scrap_tex[i]))
-		{
-			return RMB_SAMPLER((i < RM_MAX_SCRAPS_NOLERP) || (r_2D_unfiltered->value != 0.0f)
-					? RMB_SMP_NEAREST : RMB_SMP_FLAT, 0);
-		}
-	}
-
-	return RMB_SAMPLER(RMB_SMP_FLAT, 0);
+	return rm_scrap_sampler(texnum, r_2D_unfiltered->value != 0.0f);
 }
 
 /*
  * from gl1_draw.c, Scrap_Update: the dirty atlases are written to their
  * textures, light-scaled as gl1's R_Upload32 does an image without mipmaps.
- * A copy goes through the scale (the texels stay as the pics were put).
+ * A copy goes through the scale (the texels stay as the pics were put). A
+ * dirty atlas without a texture (a failed upload) is made again.
  */
 void
 Scrap_Update(void)
@@ -159,7 +151,7 @@ Scrap_Update(void)
 		size_t i;
 		qboolean has_alpha = false;
 
-		if (!scrap_dirty[texnum] || !scrap_tex[texnum])
+		if (!rm_scrap_needs_upload(scrap_dirty[texnum], scrap_tex[texnum]))
 		{
 			continue;
 		}
@@ -184,7 +176,12 @@ Scrap_Update(void)
 			}
 		}
 
-		/* 0 frees the id (an allocation failed): the pics on this atlas draw nothing until it is made again */
+		/*
+		 * 0 frees the id (an allocation failed): the atlas stays dirty and its
+		 * pics draw nothing (their draws look the texture up by the atlas
+		 * index) until a later update makes it again, with id 0. An id 0
+		 * here is that re-creation.
+		 */
 		scrap_tex[texnum] = rmb_texture_upload(scrap_tex[texnum], (const unsigned char *)tmp,
 				RM_SCRAP_WIDTH, RM_SCRAP_HEIGHT, 0, !has_alpha);
 		scrap_dirty[texnum] = scrap_tex[texnum] ? false : true;

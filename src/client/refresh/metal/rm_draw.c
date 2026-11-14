@@ -133,11 +133,18 @@ RM_Flush2D(void)
 	batch_n = 0;
 }
 
+/* the texture a pic is drawn with: its own, or its atlas's, looked up now (a failed upload can have freed it) */
+static int
+RM_PicTexture(const image_t *gl)
+{
+	return gl->scrap ? Scrap_Texture(gl->scrapnum) : gl->texnum;
+}
+
 /* the sampler a pic is drawn with: its own, or its atlas's */
 static int
 RM_PicSampler(const image_t *gl)
 {
-	return gl->scrap ? Scrap_Sampler(gl->texnum) : gl->sampler;
+	return gl->scrap ? Scrap_Sampler(gl->scrapnum) : gl->sampler;
 }
 
 /*
@@ -181,7 +188,7 @@ RM_DrawPicNow(const image_t *gl, const rm_quad_t *q, rm_texenv_t env, const floa
 
 	RM_QuadF(v, q, rgba);
 	RM_Mvp2D(mvp);
-	rmb_draw_2d(rm_pipe_2d(env, 1, 0), gl->texnum, RM_PicSampler(gl), v, 4, mvp);
+	rmb_draw_2d(rm_pipe_2d(env, 1, 0), RM_PicTexture(gl), RM_PicSampler(gl), v, 4, mvp);
 }
 
 /* from gl1_draw.c */
@@ -221,7 +228,7 @@ RDraw_CharScaled(int x, int y, int num, float scale)
 		Scrap_Update();
 	}
 
-	RM_BufferQuad(draw_chars->texnum, RM_PicSampler(draw_chars), &q);
+	RM_BufferQuad(RM_PicTexture(draw_chars), RM_PicSampler(draw_chars), &q);
 }
 
 /* from gl1_draw.c */
@@ -262,7 +269,7 @@ RDraw_StretchPic(int x, int y, int w, int h, const char *pic)
 
 	st[0] = gl->sl; st[1] = gl->tl; st[2] = gl->sh; st[3] = gl->th;
 	rm_pic_quad(&q, x, y, w, h, 1.0f, st);
-	RM_BufferQuad(gl->texnum, RM_PicSampler(gl), &q);
+	RM_BufferQuad(RM_PicTexture(gl), RM_PicSampler(gl), &q);
 }
 
 /* from gl1_draw.c: an atlas pic joins the batch, the others are drawn at once, in order */
@@ -290,7 +297,7 @@ RDraw_PicScaled(int x, int y, const char *pic, float factor)
 
 	if (gl->scrap)
 	{
-		RM_BufferQuad(gl->texnum, RM_PicSampler(gl), &q);
+		RM_BufferQuad(RM_PicTexture(gl), RM_PicSampler(gl), &q);
 		return;
 	}
 
@@ -358,7 +365,7 @@ RDraw_TileClear(int x, int y, int w, int h, const char *pic)
 
 			if (rm_tile_quad(&q, x, y, w, h, image->width, image->height, x2, y2, st))
 			{
-				RM_BufferQuad(image->texnum, RM_PicSampler(image), &q);
+				RM_BufferQuad(RM_PicTexture(image), RM_PicSampler(image), &q);
 			}
 		}
 	}

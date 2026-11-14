@@ -626,6 +626,44 @@ test_scrap_alloc(void)
 	CHECK(ok);
 }
 
+/*
+ * The atlas state read at draw time: an atlas is written whenever it is
+ * dirty, a missing texture included (a failed upload freed it, the next
+ * update makes it again with id 0); its texture and sampler are looked up
+ * by the atlas index, never by an id an image kept.
+ */
+static void
+test_scrap_state(void)
+{
+	/* a guard entry before the table: an index of -1 that is not refused reads 99 */
+	const int guarded[RM_MAX_SCRAPS + 1] = { 99, 7, 0, 9, 12 };
+	const int *tex = guarded + 1;
+
+	CHECK(rm_scrap_needs_upload(1, 5));
+	CHECK(rm_scrap_needs_upload(1, 0));
+	CHECK(!rm_scrap_needs_upload(0, 5));
+	CHECK(!rm_scrap_needs_upload(0, 0));
+
+	CHECK(rm_scrap_texture(tex, RM_MAX_SCRAPS, 0) == 7);
+	CHECK(rm_scrap_texture(tex, RM_MAX_SCRAPS, 1) == 0);
+	CHECK(rm_scrap_texture(tex, RM_MAX_SCRAPS, 3) == 12);
+	CHECK(rm_scrap_texture(tex, RM_MAX_SCRAPS, RM_MAX_SCRAPS) == 0);
+	CHECK(rm_scrap_texture(tex, RM_MAX_SCRAPS, -1) == 0);
+	CHECK(rm_scrap_texture(tex, 2, 2) == 0);
+	CHECK(rm_scrap_texture(NULL, RM_MAX_SCRAPS, 0) == 0);
+
+	/* gl1's Scrap_Update: the first two atlases nearest, the others filtered unless r_2D_unfiltered */
+	CHECK(rm_scrap_sampler(0, 0) == RMB_SAMPLER(RMB_SMP_NEAREST, 0));
+	CHECK(rm_scrap_sampler(RM_MAX_SCRAPS_NOLERP - 1, 0) == RMB_SAMPLER(RMB_SMP_NEAREST, 0));
+	CHECK(rm_scrap_sampler(RM_MAX_SCRAPS_NOLERP, 0) == RMB_SAMPLER(RMB_SMP_FLAT, 0));
+	CHECK(rm_scrap_sampler(RM_MAX_SCRAPS - 1, 0) == RMB_SAMPLER(RMB_SMP_FLAT, 0));
+	CHECK(rm_scrap_sampler(RM_MAX_SCRAPS_NOLERP, 1) == RMB_SAMPLER(RMB_SMP_NEAREST, 0));
+	CHECK(rm_scrap_sampler(0, 1) == RMB_SAMPLER(RMB_SMP_NEAREST, 0));
+	/* an index outside the table: filtered, as a texture that is no atlas's */
+	CHECK(rm_scrap_sampler(RM_MAX_SCRAPS, 1) == RMB_SAMPLER(RMB_SMP_FLAT, 0));
+	CHECK(rm_scrap_sampler(-1, 0) == RMB_SAMPLER(RMB_SMP_FLAT, 0));
+}
+
 /* The copy of a block into the atlas: placed by the row pitch, refused outside it. */
 static void
 test_scrap_copy(void)
@@ -837,6 +875,7 @@ main(void)
 	test_len_zero();
 	test_scrap_alloc();
 	test_scrap_copy();
+	test_scrap_state();
 	test_char_quad();
 	test_pic_quad();
 	test_tile_quad();

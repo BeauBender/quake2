@@ -822,7 +822,8 @@ What exists:
   Each atlas is a back end texture made when the first block is placed in
   it; a dirty atlas is light-scaled (gamma only, as gl1's `R_Upload32` of
   an image without mipmaps) and rewritten through the upload command
-  buffer when a draw finds it dirty. An atlas's sampler is nearest for
+  buffer when a draw finds it dirty (made again when a failed upload
+freed it, see Bounds below). An atlas's sampler is nearest for
   the first two and with `r_2D_unfiltered`, flat otherwise, decided at
   draw time (gl1 decides it at upload; the two differ only when
   `r_2D_unfiltered` changes after a pic is queued and nothing rewrites
@@ -845,9 +846,25 @@ count are plain functions with host-test cases of oversized counts (an
 atlas block wider than 256 or of 1,000,000, a quad count of 16,385 and
 `INT_MAX` of a batch, a copy at `x = INT_MAX`); overflow is a flush or a
 skipped draw (`draws skipped` in `metal_stats`), never a write past the
-end. A failed atlas upload frees its id and leaves the atlas dirty; the
-pics on it draw nothing until the atlas is made again (an allocation
-failure only).
+end. A failed atlas upload frees its id and leaves the atlas dirty. A
+scrap image keeps its atlas index (`scrapnum`, its `texnum` is
+`RM_TEXNUM_SCRAP`), not the atlas's texture id, and every draw looks the
+texture and sampler up through the scrap (`Scrap_Texture`,
+`Scrap_Sampler`), so an id freed by a failed upload and taken by the next
+texture made is never drawn for a pic: the pics on that atlas draw
+nothing (counted skips) until the next `Scrap_Update`, which makes a
+dirty atlas without a texture again (an upload with id 0;
+`rm_scrap_needs_upload`) instead of passing over it, so a transient
+failure heals at the next draw of a scrap pic. `R_ShutdownImages` keys
+on the image's scrap flag, not its id; the atlases are freed once, by
+`Scrap_Shutdown`. Proved with a scratch build (not committed) whose first
+atlas upload is made to fail and whose next upload, a red 4 by 4
+texture, takes the freed id (1): `hud2d` 23 of 23 at score 0 and bad 0
+against `gl1-metal`, the log showing the atlas made again; the same
+injection into the code before this fix (images holding the id, the
+dirty atlas skipped) draws the console characters of atlas 0 in the red
+texture in 5 of 23 frames (worst score 0.000841, bad 0.002917) and never
+makes the atlas again.
 
 Measured on the build VM (T0), source `308d8073` (the pins; later commits
 change tests and documents only), load averages 17.7 to 26.1 (a shared
@@ -862,6 +879,7 @@ commit in a private store:
 | validation and teardown, the four `hud2d` records | `engine.log` holds only `Metal API Validation Enabled`; teardown `0 live objects` (texture 6/6, buffer 5/5), `0 unreleased`, `0 unmatched` |
 | `metal_stats 1`, `hud2d` outside the harness | every one of the 24 lines `12 pipelines, 0 created after init`, `0 draws skipped`, `0 uploads skipped`; 2,121 draws and 10 uploads over 707 frames, 0 pass splits |
 | mutants of the host test | 28 mutants of the pure code (the allocator's loop bound, strictness, height check, raised columns and result; the copy's bounds, pitch and sign; the character mask, space test, top clip, column, scale and row ratio; the pic factor; the tile's clip, ratios and offset bound; the batch's overflow-safe sum, zero add and cap; the indices' capacity, 16-bit bound and second triangle; the tint's alpha and blue) all fail it; two cases (a non-square atlas block, a non-square tile) were added after the first run left one mutant alive |
+| mutants of the atlas state (review rework) | 15 mutants of `rm_scrap_needs_upload` (always, never, the old skip of a missing texture), `rm_scrap_texture` (each bound, the count against the table size, the result) and `rm_scrap_sampler` (each bound, the no-filter count, the cvar, both classes) all fail the host test without sanitizers (an unrefused index -1 reads a guard entry) |
 | a mutant of the front end, `RM_Flush2D` removed from `EndFrame`, one `hud2d` record | 2 of 23 frames over the threshold (worst score 0.0134, bad 0.0315), so the pin does see the order of the flush |
 | `tests/check-ref-metal.sh` | host test 201 checks, 0 failed; 72 vocabulary mutants refused; `ref_metal` built |
 

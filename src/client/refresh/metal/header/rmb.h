@@ -226,6 +226,29 @@ int rm_scrap_alloc(int *allocated, int aw, int ah, int w, int h, int *x, int *y)
  */
 int rm_scrap_copy(unsigned *texels, int aw, int ah, int x, int y, int w, int h, const unsigned *pic);
 
+/*
+ * Whether Scrap_Update writes an atlas: 1 when it is dirty, whether its
+ * texture tex exists or not (a failed upload freed it; the update makes it
+ * again with id 0, so a transient failure heals on a later draw).
+ */
+int rm_scrap_needs_upload(int dirty, int tex);
+
+/*
+ * The texture of atlas n in tex[count], 0 for an index outside it. A scrap
+ * image keeps its atlas index and looks its texture up at each draw, so
+ * an id freed by a failed upload, and taken by another texture, is never
+ * drawn for it.
+ */
+int rm_scrap_texture(const int *tex, int count, int n);
+
+/*
+ * gl1's Scrap_Update filter of atlas n: nearest for the first
+ * RM_MAX_SCRAPS_NOLERP atlases and for all under r_2D_unfiltered
+ * (unfiltered), filtered without mipmaps otherwise and for an index
+ * outside the table.
+ */
+int rm_scrap_sampler(int n, int unfiltered);
+
 /* One 2D quad: corners and the texture coordinates of the corners (up left, down right). */
 typedef struct
 {

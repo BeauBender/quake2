@@ -70,8 +70,9 @@ extern cvar_t *r_retexturing;
 extern cvar_t *r_validation;
 extern cvar_t *vid_gamma;
 
-/* from gl1's header/local.h, without the GL fields; a scrap image's texnum is its atlas's texture */
+/* from gl1's header/local.h, without the GL fields; a scrap image has no texture of its own (texnum RM_TEXNUM_SCRAP) */
 #define MAX_GLTEXTURES 1024
+#define RM_TEXNUM_SCRAP -1               /* a scrap image's texnum: the slot is used, its texture is the atlas's */
 
 typedef struct image_s
 {
@@ -81,10 +82,11 @@ typedef struct image_s
 	int upload_width, upload_height;    /* as uploaded: the source size, no power of two */
 	int registration_sequence;          /* 0 = free */
 	struct msurface_s *texturechain;    /* for sort-by-texture world drawing */
-	int texnum;                         /* the back end's texture id, 0 = free slot (an atlas's, for a scrap image) */
+	int texnum;                         /* the back end's texture id, 0 = free slot, RM_TEXNUM_SCRAP for a scrap image */
 	int sampler;                        /* RMB_SAMPLER(class, clamp) */
 	float sl, tl, sh, th;               /* 0,0 - 1,1 unless part of the scrap */
 	qboolean scrap;                     /* part of an atlas (rm_scrap.c), sl, tl, sh, th inside it */
+	int scrapnum;                       /* the atlas index of a scrap image, its texture looked up at each draw */
 	qboolean has_alpha;
 } image_t;
 
@@ -111,7 +113,7 @@ void Scrap_Init(void);
 void Scrap_Shutdown(void);
 int Scrap_AllocBlock(unsigned w, unsigned h, int *x, int *y, const unsigned *pic, int scrap_offset);
 int Scrap_Texture(int texnum);
-int Scrap_Sampler(int tex);
+int Scrap_Sampler(int texnum);
 void Scrap_Update(void);
 
 /* rm_draw.c */

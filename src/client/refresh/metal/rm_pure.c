@@ -459,6 +459,35 @@ rm_scrap_copy(unsigned *texels, int aw, int ah, int x, int y, int w, int h, cons
 	return 1;
 }
 
+int
+rm_scrap_needs_upload(int dirty, int tex)
+{
+	(void)tex;   /* a missing texture is made again, not skipped */
+	return dirty != 0;
+}
+
+int
+rm_scrap_texture(const int *tex, int count, int n)
+{
+	if (!tex || (n < 0) || (n >= count))
+	{
+		return 0;
+	}
+
+	return tex[n];
+}
+
+int
+rm_scrap_sampler(int n, int unfiltered)
+{
+	if ((n < 0) || (n >= RM_MAX_SCRAPS))
+	{
+		return RMB_SAMPLER(RMB_SMP_FLAT, 0);
+	}
+
+	return RMB_SAMPLER((n < RM_MAX_SCRAPS_NOLERP) || unfiltered ? RMB_SMP_NEAREST : RMB_SMP_FLAT, 0);
+}
+
 /* from gl1_draw.c, RDraw_CharScaled */
 int
 rm_char_quad(rm_quad_t *q, int x, int y, int num, float scale, const float *st)
