@@ -84,6 +84,7 @@ RM_PrintStats(void)
 	rmb_stats(&s, &l);
 	s.noop_calls = rm_noop_calls;
 	RM_WorldSkips(&s);
+	RM_EntitySkips(&s);
 
 	if (rm_stats_format(&s, &l, line, sizeof(line)))
 	{

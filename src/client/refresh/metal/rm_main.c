@@ -69,8 +69,15 @@ cvar_t *gl_lightmap;
 cvar_t *gl1_dynamic;
 cvar_t *gl1_flashblend;
 cvar_t *r_lightlevel;
+cvar_t *r_drawentities;
+cvar_t *r_lerpmodels;
+cvar_t *gl_lefthand;
+cvar_t *r_gunfov;
 
 unsigned long rm_noop_calls;
+
+/* the entities of the current view not drawn, by class (metal_stats) */
+static unsigned long skip_sprite, skip_beam, skip_null, skip_btrans, skip_ent;
 
 /* the view of the current frame (R_SetupGL) */
 static rm_view_t r_view;
@@ -120,6 +127,10 @@ R_Register(void)
 	gl1_dynamic = ri.Cvar_Get("gl1_dynamic", "1", 0);
 	gl1_flashblend = ri.Cvar_Get("gl1_flashblend", "0", 0);
 	gl1_minlight = ri.Cvar_Get("gl1_minlight", "0", CVAR_ARCHIVE);
+	r_drawentities = ri.Cvar_Get("r_drawentities", "1", 0);
+	r_lerpmodels = ri.Cvar_Get("r_lerpmodels", "1", 0);
+	gl_lefthand = ri.Cvar_Get("hand", "0", CVAR_USERINFO | CVAR_ARCHIVE);
+	r_gunfov = ri.Cvar_Get("r_gunfov", "80", CVAR_ARCHIVE);
 
 	ri.Cmd_AddCommand("screenshot", R_ScreenShot);
 	ri.Cmd_AddCommand("imagelist", R_ImageList_f);
@@ -399,7 +410,126 @@ R_SetupFrame(void)
 		}
 	}
 
-	/* the clear of the RDF_NOWORLDMODEL rectangle (the player model of the menu) is N7's */
+}
+
+/*
+ * gl1's clear of the RDF_NOWORLDMODEL rectangle (the player model of the
+ * menu, R_SetupFrame): the colour 0.3 grey inside the view, drawn as one
+ * quad over the viewport without a depth test; the 3D pass cleared the
+ * depth when it opened (rmb_pass_3d) and nothing drew before the view.
+ */
+static void
+R_ClearNoWorld(void)
+{
+	static const float quad[] = {
+		-1, -1, 0,
+		1, -1, 0,
+		1, 1, 0,
+		-1, 1, 0
+	};
+	static const float grey[4] = { 0.3f, 0.3f, 0.3f, 1.0f };
+	float id[16];
+
+	if (!(r_newrefdef.rdflags & RDF_NOWORLDMODEL))
+	{
+		return;
+	}
+
+	mtl_mat_identity(id);
+	rmb_draw_color(quad, 4, grey, id, &r_view.vp, 0);
+}
+
+void
+RM_EntitySkips(rmb_stats_t *s)
+{
+	s->sprite_skips = skip_sprite;
+	s->beam_skips = skip_beam;
+	s->null_skips = skip_null;
+	s->bmodel_trans_skips = skip_btrans;
+	s->ent_skips = skip_ent;
+}
+
+/* one entity of the list, in the pass whose depth writes are depth_write */
+static void
+R_DrawEntity(const entity_t *currententity, int depth_write)
+{
+	const model_t *currentmodel = currententity->model;
+
+	if (currententity->flags & RF_BEAM)
+	{
+		skip_beam++;   /* R_DrawBeam: N8 */
+		return;
+	}
+
+	if (!currentmodel)
+	{
+		skip_null++;   /* R_DrawNullModel: N8 */
+		return;
+	}
+
+	switch (currentmodel->type)
+	{
+		case mod_alias:
+			if (!R_DrawAliasModel(currententity, currentmodel, &r_view, depth_write))
+			{
+				skip_ent++;
+			}
+
+			break;
+		case mod_brush:
+			/* gl1's translucent brush entity depends on its texture units' history; none in stock content (section 22) */
+			if (currententity->flags & RF_TRANSLUCENT)
+			{
+				skip_btrans++;
+			}
+			else if (!R_DrawBrushModel(currententity, currentmodel, &r_view))
+			{
+				skip_ent++;
+			}
+
+			break;
+		case mod_sprite:
+			skip_sprite++;   /* R_DrawSpriteModel: N8 */
+			break;
+		default:
+			ri.Sys_Error(ERR_DROP, "Bad modeltype");
+			break;
+	}
+}
+
+/*
+ * from gl1_main.c: the opaque entities, then the translucent ones without
+ * depth writes (gl1's glDepthMask(GL_FALSE)), each in list order
+ */
+static void
+R_DrawEntitiesOnList(void)
+{
+	int i, n;
+
+	if (!r_drawentities->value)
+	{
+		return;
+	}
+
+	n = rm_entity_count(r_newrefdef.num_entities);
+
+	/* draw non-transparent first */
+	for (i = 0; i < n; i++)
+	{
+		if (!(r_newrefdef.entities[i].flags & RF_TRANSLUCENT))
+		{
+			R_DrawEntity(&r_newrefdef.entities[i], 1);
+		}
+	}
+
+	/* draw transparent entities; we could sort these if it ever becomes a problem... */
+	for (i = 0; i < n; i++)
+	{
+		if (r_newrefdef.entities[i].flags & RF_TRANSLUCENT)
+		{
+			R_DrawEntity(&r_newrefdef.entities[i], 0);
+		}
+	}
 }
 
 /*
@@ -454,9 +584,9 @@ R_PolyBlend(void)
 }
 
 /*
- * from gl1_main.c; entities (N7), the light of dynamic lights (N8: N5 marks
- * the surfaces they touch and counts them) and particles (N9) are not
- * drawn yet
+ * from gl1_main.c; the light of dynamic lights (N8: N5 marks the surfaces
+ * they touch and counts them), the flash blobs (N8) and the particles
+ * (N9) are not drawn yet
  */
 static void
 R_RenderView(refdef_t *fd)
@@ -469,16 +599,24 @@ R_RenderView(refdef_t *fd)
 	}
 
 	RM_WorldSkipsClear();
+	skip_sprite = skip_beam = skip_null = skip_btrans = skip_ent = 0;
 	R_PushDlights();
 	R_SetupFrame();
 	R_SetFrustum(vup, vpn, vright, r_origin, r_newrefdef.fov_x, r_newrefdef.fov_y, frustum);
 	R_SetupGL();
+	R_ClearNoWorld();
 
 	if (!(r_newrefdef.rdflags & RDF_NOWORLDMODEL))
 	{
 		R_MarkLeaves(); /* done here so we know if we're in water */
 		R_DrawWorld(&r_view);
-		/* the entities (N7) and the particles (N9) are drawn here, before the translucent surfaces */
+	}
+
+	R_DrawEntitiesOnList();
+
+	if (!(r_newrefdef.rdflags & RDF_NOWORLDMODEL))
+	{
+		/* the flash blobs (N8) and the particles (N9) are drawn here, before the translucent surfaces */
 		R_DrawAlphaSurfaces(&r_view);
 	}
 
@@ -520,14 +658,11 @@ RI_EndFrame(void)
 	rmb_frame_end();
 }
 
-/* ---- not implemented yet: valid no-ops that count their calls ---------------- */
-
+/* from gl1_image.c */
 static struct image_s *
 RI_RegisterSkin(const char *name)
 {
-	(void)name;
-	rm_noop_calls++;
-	return NULL;
+	return R_FindImage(name, it_skin);
 }
 
 

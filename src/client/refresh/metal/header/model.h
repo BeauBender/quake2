@@ -163,6 +163,7 @@ typedef struct model_s
 
 	/* for alias models and skins */
 	image_t *skins[MAX_MD2SKINS];
+	rm_md2_info_t md2;  /* an alias model's counts, from rm_md2_check before the loader ran (N7) */
 
 	int extradatasize;
 	void *extradata;

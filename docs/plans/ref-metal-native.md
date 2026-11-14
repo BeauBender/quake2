@@ -276,7 +276,7 @@ against gl1's source:
 | Cvar | In `ref_metal` | Why |
 |---|---|---|
 | `gl1_ztrick` | dropped (depth is cleared every frame, gl1's default 0) | `R_Clear` (`gl1_main.c`) alternates depth ranges to skip the depth clear; on Metal the depth clear is a load action, so the trick saves nothing and the default path is kept |
-| `gl_zfix` | copied | polygon offset around brush models (`R_Clear`, `R_DrawBrushModel` in `gl1_surf.c`), raster state the back end has |
+| `gl_zfix` | copied; as built by N7: not taken | polygon offset around brush models (`R_Clear`, `R_DrawBrushModel` in `gl1_surf.c`), raster state the back end has. Not taken (section 22): its default is 0 and no scenario or demo sets it, so gl1 with the default draws what ref_metal draws; taking it means a depth bias on every brush-entity draw whose factor and units match the shim's conversion of the `glPolygonOffset(0.05, 1)` that `R_Clear` sets for a 32-bit float depth buffer, parity that no pin shows today |
 | `gl1_dynamic` | copied | it gates the dynamic-lightmap update in `gl1_surf.c`, code N5 and N8 copy anyway |
 | `gl1_saturatelighting` | dropped | read only by `R_BlendLightmaps` (`gl1_surf.c`), the classic two-pass lightmap path that is left out |
 | `gl1_picmip`, `gl1_round_down` | dropped | read only by `R_Upload32Soft` (`gl1_image.c`), the power-of-two path gl1 does not take on the shim (section 5) |
@@ -1558,3 +1558,262 @@ is equivalent to its base because no gl1 or shim file changed.
 The two sky face tables are read through an index checked to be 0..2
 (`rm_sky_vec`, `rm_sky_draw_polygon`), after CI's Cppcheck could not prove
 the lookups in bounds; the results are bit-identical for every table entry.
+
+## 22. As built: N7, brush entities, alias models, the view weapon, model lighting (TASK90)
+
+What exists:
+
+- **The entity list** (`rm_main.c`, gl1's `R_DrawEntitiesOnList`): drawn
+  after the world and before the translucent surfaces, also under
+  `RDF_NOWORLDMODEL` (gl1 draws it there too; the view's rectangle is
+  then cleared to grey 0.3 first, as gl1's `R_SetupFrame` does, by a
+  colour quad over the viewport that tests and writes no depth; the 3D
+  pass has cleared the depth to 1 when it opened, which covers gl1's
+  scissored depth clear: no scenario shows it, a hand run of the
+  player-setup menu does, below). The opaque
+  entities first, then the translucent ones with depth writes off (gl1's
+  `glDepthMask(GL_FALSE)`, a new depth-stencil state `RMB_DS_LEQUAL`),
+  each in list order; the count is bounded by `rm_entity_count` (0 to
+  `MAX_ENTITIES`). `r_drawentities` is taken. Beams, null models and
+  sprites are counted, not drawn (N8).
+- **Alias models** (`rm_mesh.c`, from `gl1_mesh.c` and `gl1_buffer.c`'s
+  `buf_alias`): gl1's cull (`R_CullAliasModel`, not for the weapon), its
+  two frame bounds, `hand 2` not drawing the weapon, the light (shells,
+  `RF_FULLBRIGHT`, `R_LightPoint` at the entity's origin, `RF_MINLIGHT`,
+  `RF_GLOW`, `gl1_overbrightbits`, the IR goggles, and the weapon's
+  `r_lightlevel`), the shade dots, `R_RotateForEntity` with the pitch
+  turned, the skin (a custom skin, the entity's skin number or skin 0,
+  `r_notexture`), `r_lerpmodels`, the lerp on the CPU (`R_LerpVerts`,
+  shells pushed out by `POWERSUIT_SCALE`) and the command stream walked
+  into vertices and triangles as gl1's `R_SetBufferIndices` orders them,
+  with each vertex's colour through the shade dot, the minlight table and
+  the gamma table and the alpha byte of `RF_TRANSLUCENT`. gl1 writes the
+  frame bounds and the turned pitch into the client's entity; here a copy
+  is drawn, which draws the same.
+- **One draw per entity, one region of the frame ring** (section 9): the
+  vertices (48 bytes: the position as float4 with w 1, the texture
+  coordinate, 8 bytes of padding, the colour as four floats, gl1's
+  bytes divided by 255 as the shim reads them), then the 16-bit indices,
+  taken by `rm_alias_region` (`rm_pure.c`, on `mtl_ring.c`'s allocator):
+  RT1 can refit from it. The design's rgba8 colour (section 4) was not
+  built: the shim's float colour is the one the parity needs, and the
+  shader would have to divide by 255 itself.
+- **The view weapon** (gl1's `R_ApplyGLBuffer` with `RF_WEAPONMODEL`):
+  its projection is the identity, `glScalef(-1, 1, 1)` with `hand 1`,
+  then `R_SetPerspective` of `r_gunfov` (of `fov_y` when it is negative),
+  P = S F as the shim multiplies them (`rm_weapon_projection`); its depth
+  range 0 to 0.3 with `RF_DEPTHHACK` (`rm_alias_depth`, the viewport's
+  near and far); GL's back faces culled when mirrored (`RMB_CULL_BACK`;
+  the 3D draws' cull argument now takes `RMB_CULL_NONE`, `_FRONT`,
+  `_BACK`).
+- **The pipelines**: four alias classes (the vertex colour times the
+  skin, gl1's `GL_MODULATE` through `mtl_world_color`; the same blended;
+  a shell untextured; the same blended), built with the context: 21 in
+  all, 0 after start-up.
+- **`R_LightPoint` with an entity**, its first real caller: N5's bound
+  (`rm_lp_coords` before any int conversion of the sampled texture
+  coordinates, `rm_dlight_count` on the dynamic-light loop) is on the
+  path unchanged.
+- **Brush entities** (`rm_surf.c`, `R_DrawBrushModel`,
+  `R_DrawInlineBModel` on gl1's multitexture path): culled by gl1's box
+  (`rm_brush_bounds`), modelorg turned into the entity's axes
+  (`rm_brush_modelorg`), each surface's facing tested as gl1
+  (`rm_brush_face_visible`), drawn from the submodel's surfaces of the
+  retained buffers with the entity's matrix (`R_RotateForEntity` with
+  the pitch and the roll turned): lit runs through `world_lm` (or
+  `world_tex` under `r_fullbright`), flowing surfaces scrolled and warped
+  ones through N6's batch in their place, translucent ones pushed on the
+  alpha chain. Their lightmaps are rebuilt and uploaded with the world's:
+  `R_GetBrushesLighting` chains the lit surfaces of the brush entities in
+  view into the slice chains before `R_RegenAllLightmaps`.
+- **`RegisterSkin`** is gl1's (`R_FindImage(name, it_skin)`), no longer a
+  no-op.
+- **`metal_stats`**: the per-frame line ends with `skipped entities: N
+  sprites, N beams, N null models, N translucent brush models, N
+  refused`.
+
+gl1 behaviours kept that look like defects:
+
+- `R_GetBrushesLighting` tests the facing with the world's modelorg, not
+  the entity's (gl1 never sets it there); kept.
+- The translucent surfaces of a brush entity join the alpha chain and are
+  drawn by `R_DrawAlphaSurfaces` with the world's matrix, where the
+  entity's offset is lost; kept, as gl1 draws them.
+- `R_LightPoint` adds the dynamic lights to the model's light (gl1's
+  loop); the scenarios run with `cl_lights 0`.
+
+Deviations from gl1, each only on input gl1 cannot handle or content the
+game does not have:
+
+- **A translucent brush entity is not drawn** (counted). On gl1's
+  multitexture path its look depends on the history of the texture units
+  (whether the previous draw left multitexturing on decides whether unit
+  0 modulates with the 0.25 alpha or replaces it, and the lightmap's
+  alpha then enters the blend). The game code of this repository sets
+  `RF_TRANSLUCENT` only on alias models (`misc_blackhole`) and beams, and
+  the client only from effects the game puts on models; none of the demos
+  shows one (`metal_stats`). It is left to a card that needs it.
+- **Models refused at load that gl1 would load**: a command stream with a
+  count below 3 (a count of 1 makes gl1's `R_SetBufferIndices` loop about
+  2^32 times; 2 draws nothing), vertices past the stream or no
+  terminating 0, a vertex index not below `num_xyz`, texture coordinates
+  or a frame's scale or translate that are not finite, a light normal
+  index of 162 or more (gl1 reads past `r_avertexnormals` for shells), a
+  skin name without its end, the frame or command offsets or the frame
+  size not on 4 bytes or the st or triangle offsets odd (the loader reads
+  them in place), more than 16,384 vertices in the stream (gl1's own
+  buffer size), a region (skins, st, tris, frames, commands) that starts inside the 68-byte header, including an empty one, or shares a byte with another region (the loader copies each region into its hunk at its own offset: over the header, a `num_skins` past 32 writes past `model_t.skins`; regions over each other load in gl1). All 240 models of the game, the mission packs and CTF
+  (`.md2` and `.sp2`) pass and are drawn, every frame.
+- A skin whose image has no texture (`texnum` 0 or less) is drawn with
+  `r_notexture`, as a missing skin is; gl1 falls back only when the skin
+  is NULL and binds the texture number it has. An image without a
+  texture cannot be drawn here, so the fallback shows what gl1 would
+  show for a missing one (`rm_mesh.c`).
+- A negative skin number takes skin 0 (gl1 reads before the array); an
+  entity whose origin, old origin, angles, backlerp or alpha is not finite
+  is not drawn (counted); an alpha or a light outside what gl1's casts
+  define is saturated. Everywhere else the arithmetic is gl1's, bit for
+  bit (the host test's differentials).
+- Not taken: `gl_showbbox`, `gl_zfix`, `gl1_ztrick` (`doc/040_cvarlist.md`).
+  `gl_zfix` was planned as copied (section 7): it is gl1's polygon offset
+  around each inline model (`R_DrawBrushModel` turns
+  `GL_POLYGON_OFFSET_FILL` on and off around `R_DrawInlineBModel`, with
+  the offset `R_Clear` sets). Its default is 0 and no scenario or demo
+  sets it, so gl1 with the default draws what ref_metal draws. Taking it
+  means a depth bias on every brush-entity draw (the world, lightmapped,
+  flowing and warped draws of `R_DrawInlineBModel`) whose factor and
+  units match how the shim converts `glPolygonOffset` for a 32-bit float
+  depth buffer; no pin would show that parity, so it is left to a card
+  that needs it (the reason is the same in section 7's row).
+
+The shared loader (`files/models.c`) and what this module closes
+(FIX40, #185, names the alias command stream among the inherited sites):
+
+| Input | The loader | ref_metal (`rm_md2_check`, `rm_sp2_check`, before the loader is called) |
+|---|---|---|
+| header, counts, offsets | checks the size, version, `ofs_end`, counts, frame size, each range inside `ofs_end` | the same conditions first: the loader fails after `Hunk_Begin` and never frees that hunk, so a model it would refuse never reaches it |
+| regions in the hunk | swaps the header into its hunk and clamps `num_skins` there to 32, then copies each region (skins, st, tris, frames, commands) to the region's own offset, so a region over the header puts the file's words back: a `num_skins` past 32 then makes its skin loop write past `model_t.skins` (TASK90's security review) | every region offset at 68 or more, an empty skins region too, and no two regions sharing a byte (`rm_regions_apart`; the skins as many as the loader copies), so the hunk's header is the file's with `num_skins` clamped; host cases at and past each boundary, the review's model (40 skins named, their offset 0) and a fuzz of a 40-skin seed whose mutations move the offsets |
+| command stream | byte-swaps it, warns when the last int is not 0 | walked: counts of 3 or more inside the stream, a 0 inside it, indices below `num_xyz`, finite coordinates, at most 16,384 vertices; its vertex and index totals kept for the draw |
+| frames | copies them | scale and translate finite, light normal indices below 162 |
+| skin names | passes them to `find_image` | each ends inside its 64 bytes |
+| alignment | reads frames, commands, st and triangles in place | frames, commands and frame size on 4 bytes, st and triangles on 2 |
+| SP2 header and frames | checks the version after `Hunk_Begin`, reads `numframes` records without a size check | the header inside the file, the version, 1 to 32 frames kept (as the loader keeps), every kept record inside the file and past the 12-byte header (the format puts them there, and the loader copies nothing over its header; `rm_regions_apart` states it), its name ending inside it |
+| per-frame entity fields | (renderer) | frame and oldframe bounded as gl1 bounds them (`rm_alias_frames`), skin index 0 to 31 (`rm_alias_skin`), the floats finite (`rm_entity_floats_ok`), the shade dot row saturated, the alpha byte and the colour index saturated |
+| one draw's vertices and indices | (renderer) | the totals from the check; `rm_alias_emit` rechecks every count and index against the stream and its buffers; the back end checks every index against the vertex count and takes the region with `rm_alias_region`, a refused draw skipped and counted |
+
+What survives a refused model: nothing. The refusal (`ri.Sys_Error`
+with `ERR_DROP`, as for N4 to N6's) frees the slot and the file before
+the loader runs, so no hunk is taken; the scratch harness counts 0
+hunks and 0 files outstanding after every refused case and 400,000
+fuzzed models.
+
+What survives a drop while the skins are found (TASK90's security
+review, N3): the shared loaders call `find_image` for each skin between
+`Hunk_Begin` and their return, and `R_FindImage` can drop (`R_LoadPic`'s
+`MAX_GLTEXTURES`, a name too long). The slot gets the hunk only from the
+return, so `mod->extradata` was still NULL and `Mod_Free` freed the file
+but not the open hunk: the scratch harness, its `R_FindImage` stub
+dropping on the first, second or third skin of an MD2 and the first or
+second frame of an SP2, counted one hunk more outstanding after each
+(`dropskin`). The loaders are now given `RM_SkinLater` (`rm_model.c`),
+which loads nothing, and `Mod_ForName` registers the skins with
+`Mod_ReLoadSkins` once the hunk is the slot's (the same `R_FindImage`
+calls in the same order; `RI_RegisterModel` calls it again, as before
+and as gl1). A drop there leaves an unfinished slot holding its hunk,
+which `RM_FreeUnfinished` frees whole at the next registration: the same
+five cases end with 0 hunks and 0 files outstanding.
+
+Measured on the build VM (T0), sources `41bcf6f2` (the pins; later
+commits add host cases, documents, a comment and a skin index bounded a
+second time, which changes no draw) and `c3d3257a` (the `ASAN=1`
+record), load averages 3 to 11, every record with `MTL_DEBUG_LAYER=1`
+and `PINS_TRACE=0`, references recorded at `8224fcb9` (this card's first
+commit: gl1 and the shim unchanged) in a private store:
+
+| What | Result |
+|---|---|
+| two `gl1-metal` records of `models`, `--threshold 0 --bad-threshold 0` | 22 frames identical, frame 7 (the explosion of the engine's PRNG) at 0.000304, bad 0.000410 |
+| frames excluded by section 11 (`metal_stats 1`, a hand run) | none: every one of the 24 lines reads `skipped entities: 0 sprites, 0 beams, 0 null models, 0 translucent brush models, 0 refused` (`demo1.dm2`'s explosions are alias models), and the surfaces skip nothing |
+| `compare metal models --ref gl1-metal --threshold 0.005 --bad-threshold 0.001`, two `metal` records against each of the two references | all 23 frames ok in each of the four pairs; worst score 0.000658 and worst bad 0.000889 (frame 7); outside frame 7 score 0.000001 to 0.000039, bad 0.000003 to 0.000589 (frame 2) |
+| the same against the defaults (0.02, 0.005) | all ok |
+| the brush entities | a scratch build that skips them differs from the record on frames 0, 9, 11, 13, 16 and 17 (6,713 to 210,997 pixels: doors and panels); with them drawn those frames are within the values above (frame 13: 19 differing pixels) |
+| `hand 1`, `gl1_overbrightbits 2`, `r_gunfov 60` (both renderers by hand) | 23 frames, at most 409 differing pixels and 246 over 8 levels (bad 0.0008); the settings took effect (300,539 pixels of frame 5 differ from the default record) |
+| the residue, traced as N6 asked (both renderers' numbers for the same vertices: a scratch `fprintf` in `gl1_mesh.c` and `rm_mesh.c`, reverted) | every one of the 4,400 vertices of frame 361 identical in position, texture coordinate and colour bytes, and the modelview and the world projection identical; runs of both with `gl_texturemode GL_NEAREST` and with `GL_LINEAR` are identical on frames 2, 12 and 19 (0 pixels), with `GL_LINEAR_MIPMAP_LINEAR` 504 to 1,153 pixels differ, nearly all by 1 level: the mip level chosen for a few pixels of the models, the class N4 traced on the world (section 19). The shim's 64-byte vertex layout and a fragment function sampling under a uniform test as the shim's does left the numbers unchanged (scratch builds, reverted); no threshold was changed |
+| `world`, `skywater`, `world-fullbright`, `hud2d` (23 frames each), `cinematic` (12) at the tight values | `world`, `skywater`, `hud2d`, `cinematic` score 0 and bad 0 on every frame; `world-fullbright` bad at most 0.000013 (N4's residue) |
+| the player-setup menu, an `RDF_NOWORLDMODEL` view (hand runs of both renderers under the validation layer: `menu_playerconfig`, 120 `wait`, `screenshot tga`, 30 `wait`, `screenshot tga`, `quit` from a scratch config beside the binary, deleted after); after the reviews, sources `a3e41084` | the player model and its weapon show over the view's rectangle on both renderers (6,155 and 5,387 pixels of them in the rectangle on `metal`, 6,275 and 5,298 on `gl1-metal`; the model turns with the clock, so the two are not compared pixel by pixel). On `metal` the rest of the rectangle is grey 77 (gl1's `glClearColor(0.3, 0.3, 0.3, 1)`): the grey quad is drawn with `RMB_DS_NONE` (compare always, no depth write), so it hides nothing drawn after it. On `gl1-metal` the rectangle keeps the menu's text-box fill (11, 7, 7): the shim does not implement `glClear` inside a scissor rectangle and prints so once (`docs/plans/metal-shim-design.md`, `glClear` row), so a pin of such a view would differ there because of the shim, not of ref_metal. `metal`'s teardown `0 live objects`; no validation message on either |
+| `skywater` with `PINS_DEMO=water.dm2` (N6's pin; made by `make-demo water`, 99 messages), two `gl1-metal` records and one `metal`, `--threshold 0.02 --bad-threshold 0.03`, default cadence (4 frames) and `PINS_EVERY=5` (19 frames); recorded after the reviews, sources `a3e41084`, references at the same commit | `gl1-metal` run 2 against run 1: 0 on all 4 and all 19; `metal` against each reference: 0 on all 4 and all 19, at the tight values as well. The scenario draws no entity (`cl_entities 0`, `cl_gun 0`); what N7 put on its path is the world's: `R_GetBrushesLighting` before `R_RegenAllLightmaps` and the entity list, empty here. Every `engine.log` holds only `Metal API Validation Enabled` and, for `metal`, the teardown with `0 live objects` (texture 202/202) |
+| the `ASAN=1` build, `models` | all 23 frames ok (worst 0.000293, bad 0.000589), no sanitizer line |
+| validation and teardown | every record's `engine.log` holds only `Metal API Validation Enabled` and the teardown with `0 live objects` (texture 231/231, buffer 8/8 for `models`); a hand run under the validation layer loading `base1`, `vid_restart`, `base2`, `vid_restart`, `base1`, `vid_restart`, quit (release and `ASAN=1` engines): four teardowns, each `0 live objects`, `0 unreleased`, `0 unmatched`, no validation message; every `metal_stats` line `21 pipelines, 0 created after init` |
+| timedemo, `demo1.dm2`, the same engine, `ref_metal` of `8224fcb9` and of this card alternated, four runs each, no validation layer | the display paced every run at 120.0 fps (5.7 s; `r_vsync 0` and `vid_maxfps` did not lift it on this host today), so the process's CPU time is the measure: `world` user 0.43 to 0.46 s before, 0.44 to 0.51 s after; `models` 0.44 to 0.50 s before (models not drawn), 0.49 to 0.56 s after; load 3 to 9. The process's CPU time leaves out the GPU's: the four new alias pipelines' cost on the GPU is not measured (N7 has no frame-time criterion; N9 has) |
+| `tests/check-ref-metal.sh` | host test 1,071 checks, 0 failed (877 at N6); 1,115 after the review rework (below) |
+| mutants of N7's pure code (`rm_pure.c`, a scratch script applying each to a scratch copy, the host test with ASAN and UBSAN; neither is committed) | 127 mutants, 119 killed. The first run left 22 alive; 14 led to cases (the region's counts one past their limits in a ring with room, strips of 2 in a model and in an emitted stream, a stream and a command list cut one int short read from copies of exactly their size, a stream off its alignment, 40 skins or sprite frames with room for 32, 2049 vertices with the frames to hold them, a sprite name without its end before a width of 0, `r_gunfov 0`, a roll alone). Eight are equivalent: the region's `ni < 3` (0 to 2 are refused by the multiple-of-3 test and the allocator), `ofs_end < 0` (implied by the range checks), `num_xyz <= 0` and `num_glcmds <= 0` (implied by the stream check, which needs one vertex with an index below `num_xyz`), the light normal bound in `rm_alias_lerp` (the load check guarantees it), `>=` in the light level's first comparison (equal values give the same result), the shell's colour through the textured formula with a dot of 1 (1 times x is exact), and the frustum multiplied on either side (`R_SetPerspective`'s frustum is symmetric, so S F = F S) |
+| a scratch sanitizer harness (N4 to N6's, extended: `rm_mesh.c`, `rm_warp.c`, `mtl_ring.c` and `files/models.c` linked; one-block hunk as the real one; a back-end stub that checks `rmb_draw_alias`'s contract, reads every vertex and takes the region from a ring of `RMB_RING_BYTES`) | N4 to N6's 102 map cases with the same verdicts; 28 model cases (each limit of the table above at it and past it, 16,384 and 16,385 stream vertices, 2048 and 2049 vertices, the SP2 cases), every refusal with 0 hunks and 0 files outstanding; `R_LightPoint` with an entity on N5's security review's map (texturemins -30000, extents 0, the node's plane 10 units above the face): K 0 samples the face, K giving s of 970,000, 2.1e9, 2.2e9, 5e9, 1e31 and -5e9 sample nothing; three runs of 100,000 frames of 32 entities with every field from the server (frames, skins and flags any int, floats NaN, infinite, 1e30 or bit patterns; `hand`, `r_lerpmodels`, `r_gunfov`, the goggles random), two seeds on the plain map and one on that map, with a brush entity and its lightmaps: 684,565 alias draws, 0 bad; 400,000 mutated models (two seeds) through `RI_RegisterModel`, 152,267 accepted and drawn with hostile fields: no sanitizer report, no hang. Of the bounds removed one at a time, the frame bounds of `rm_mesh.c` and the skin's negative bound are reported by the harness at once (a heap overflow, a wild pointer) |
+| the game's models | all 240 `.md2` and `.sp2` of `baseq2` (three paks), `rogue`, `xatrix` and `ctf` accepted by the check and the loader and drawn on every frame; the longest stream 2,558 vertices |
+
+After the reviews (the regions refused over the header or each other,
+the skins found once the hunk is the slot's), sources `a3e41084` (later
+commits change documents only), the same VM, the `gl1-metal` references
+of `models` and `world` above (gl1, the shim and `files/` unchanged
+since `8224fcb9`), every record with `MTL_DEBUG_LAYER=1` and
+`PINS_TRACE=0`:
+
+| What | Result |
+|---|---|
+| `metal` of `models` recorded again, compared with each of the two `gl1-metal` references at `--threshold 0.005 --bad-threshold 0.001` | 23 of 23 ok against each; worst 0.000039 and 0.000299 (frame 7), bad 0.000589 (frame 2): the values above. Teardown `0 live objects` with texture 231/231, so every skin is still found |
+| `metal` of `world` recorded again, the same compare | 23 of 23 at score 0 and bad 0 |
+| the `ASAN=1` build (`PINS_BIN=debug/quake2`), `models` | 23 of 23 ok (worst 0.000289, bad 0.000589), no sanitizer line, teardown `0 live objects` |
+| `tests/check-ref-metal.sh` | host test 1,115 checks, 0 failed: `rm_regions_apart` at and past each limit, each region at the header's end accepted and 4, 2 or 1 bytes into it and at 0 refused, the review's model refused at offsets 0, 20, 24 and 67 and accepted at 68, five models with two regions over each other that the loader loads (st and tris both ways, the skins over the commands, the frames and the commands both ways) refused, and a fuzz of 40,000 mutants of a 40-skin seed (region offsets moved into the header and onto the other regions, `num_skins` changed) whose accepted models are loaded into a 32-entry skins array under ASAN. At `82f2c6ba` the cases fail and the fuzz ends in a stack-buffer-overflow at `models.c:227` |
+| mutants of the new check (scratch copies, the host test and the scratch harness) | the header bound removed from `rm_regions_apart`: 19 host failures and the fuzz's stack-buffer-overflow; the harness reports the review's model at once (accepted; with 40 skins the slot's counts are lost, with 100,000 a global-buffer-overflow at `models.c:227`) and the 40-skin fuzz at iteration 21. Its call removed from `rm_md2_check`: 21 host failures and the overflow; the harness the same, the fuzz at iteration 29. The overlap test removed (the header bound kept): 9 host failures; the harness does not see it, since on a little-endian host the loader's copies of overlapping regions are copies of the same file bytes |
+| the scratch harness again (the review's `ovl.c` added; after each registration the slot's counts and the hunk's `num_skins` compared with the check's; an `R_FindImage` stub that can drop; a 40-skin fuzz seed whose mutations move region offsets and `num_skins`) | the review's model refused (40 and 100,000 skins); the 102 map cases and the 28 model cases with the same verdicts, every refusal with 0 hunks and 0 files; `R_LightPoint` on N5's review map as before; 400,000 mutated models of the old seed (70,817 and 70,583 accepted and drawn) and 400,000 of the 40-skin seed (76,278 and 76,552), two runs of 100,000 frames of 32 hostile entities (455,301 alias draws, 0 bad): no sanitizer report, no hang, 0 hunks and 0 files after; the `dropskin` cases as in the paragraph above; all 240 game models accepted and drawn |
+
+Files changed outside the card's scope list, each needed by it:
+`Makefile` (`rm_mesh` in `ref_metal`'s objects), `header/local.h` (the
+cvars and the entity functions), `header/model.h` (the model's checked
+counts), `header/rmb.h`, `rm_light.c` (`R_Minlight`), `rm_misc.c` (the
+entity counts in `metal_stats`), `rm_warp.c` (`rm_sky_vec`'s caller,
+from TASK89's review), `rmb_resource.m` (the pipelines and the depth
+state), `tests/check-ref-metal.sh` (it links `files/models.c` into the
+host test, compiled apart without its one `-Wextra` warning),
+`doc/040_cvarlist.md` and `tests/baselines/undocumented-cvars.txt`
+(`hand`, `r_drawentities`, `r_lerpmodels` described; `gl1_ztrick` and
+`gl_showbbox` named as not taken). No cvar was added: the four taken are
+gl1's, by its names and defaults.
+
+The implementer did not run the full gate (`scripts/test.sh`) and has no
+Cppcheck on the build VM: the host limits of this card keep the gate to
+the orchestrator, and CI runs Cppcheck. The change is about 4,000 lines
+against the card's estimate of 1,000: about 950 of pure arithmetic and
+checks in `rm_pure.c`, 1,950 of host test (gl1's lines copied as
+references, the loader linked, the limits), 220 `rm_mesh.c`, 250
+`rm_surf.c`, 155 `rm_main.c`, 300 of declarations and contracts in
+`rmb.h`, 140 the back end and the shader.
+
+Handed over to N8 (TASK91, #202):
+
+- Sprites, beams and null models are counted in `metal_stats` (`skipped
+  entities`) and drawn by N8 in `R_DrawEntity` (`rm_main.c`), in the
+  opaque or translucent pass gl1 draws them in. A sprite model passed
+  `rm_sp2_check`: 1 to 32 frames kept, each record inside the file; the
+  frame index gl1 takes modulo `numframes` is never a division by 0.
+- Shadows: gl1's `R_DrawAliasShadow` reads `s_lerped` (here `s_lerped`
+  in `rm_mesh.c`, filled before the draw) and `lightspot` from
+  `R_LightPoint`; `shadevector` is not computed yet.
+- The dynamic lights of brush entities: `R_GetBrushesLighting` does not
+  mark them (`R_MarkLights` on the submodel's nodes); a submodel without
+  faces has a negative `firstnode` (section 19's note), so N8 must not
+  mark from it.
+- The per-entity ring region: a frame of many large models can exhaust
+  `RMB_RING_BYTES` (8 MiB, shared with the world's indices); such a draw
+  is skipped and counted (`draws skipped`). `demo1.dm2` never comes near.
+- A translucent brush entity is counted, not drawn (above).
+
+Handed over to N9 (TASK92, #203):
+
+- Particles go between the entities and `R_DrawAlphaSurfaces` in
+  `R_RenderView` (`rm_main.c`, the comment marks the place), with depth
+  writes off as gl1 draws them; the alias draws leave no state behind
+  (every 3D draw sets its own).
+- The parity sweep: `models` passes at the tight values on all 23 frames
+  with a residue of 1 to 409 pixels per frame, the mip-level class above;
+  the frame-time comparison has to lift the display's 120 fps pace this
+  host showed today, or measure CPU time as here.

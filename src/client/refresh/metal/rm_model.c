@@ -26,7 +26,8 @@
  * LM_BuildPolygonFromSurface), one uint32 index buffer of the fans
  * (gl1's R_SetBufferIndices order) and one record per surface, in
  * surface order, so each submodel is a contiguous index range. Alias and
- * sprite models load through files/models.c; nothing draws them yet (N7).
+ * sprite models load through files/models.c, after rm_md2_check and
+ * rm_sp2_check, their skins found once the hunk is the slot's (N7).
  *
  * The BSP is untrusted (plan section 2, "Inputs and bounds"). The shared
  * loaders in files/ check lump sizes against their record sizes, plane,
@@ -221,6 +222,24 @@ Mod_Init(void)
 	memset(mod_novis, 0xff, sizeof(mod_novis));
 }
 
+/*
+ * What the shared alias and sprite loaders are given for find_image. They
+ * call it for each skin between Hunk_Begin and their return, and
+ * R_FindImage can drop (R_LoadPic's MAX_GLTEXTURES, a name too long):
+ * the hunk would stay open with no pointer left to free it by (the slot
+ * gets it only from the return). This loads nothing; Mod_ForName
+ * registers the skins once the hunk is the slot's (Mod_ReLoadSkins: the
+ * same calls in the same order), where a drop leaves an unfinished slot
+ * that Mod_Free frees whole, hunk and file.
+ */
+static struct image_s *
+RM_SkinLater(const char *name, imagetype_t type)
+{
+	(void)name;
+	(void)type;
+	return NULL;
+}
+
 /* from gl1_model.c: loads in a model for the given name */
 static model_t *
 Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
@@ -312,25 +331,46 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 	switch (LittleLong(*(unsigned *)buf))
 	{
 		case IDALIASHEADER:
+			/*
+			 * the shared loader fails after taking its hunk on what rm_md2_check
+			 * refuses first, and leaves the command stream and the frames
+			 * unchecked: a refused model takes nothing (design section 22)
+			 */
+			if (!rm_md2_check(buf, modfilelen, &mod->md2))
+			{
+				Mod_Free(mod);
+				ri.Sys_Error(ERR_DROP, "%s: %s is not a model ref_metal can draw", __func__, name);
+			}
+
 			mod->extradata = Mod_LoadMD2(mod->name, buf, modfilelen, mod->mins, mod->maxs,
-					(struct image_s **)mod->skins, (findimage_t)R_FindImage, &(mod->type));
+					(struct image_s **)mod->skins, RM_SkinLater, &(mod->type));
 
 			if (!mod->extradata)
 			{
 				ri.Sys_Error(ERR_DROP, "%s: Failed to load %s", __func__, mod->name);
 			}
 
+			/* the skins the loader would have found, now that a drop frees the hunk with the slot */
+			Mod_ReLoadSkins((struct image_s **)mod->skins, (findimage_t)R_FindImage, mod->extradata, mod->type);
 			break;
 
 		case IDSPRITEHEADER:
+			/* Mod_LoadSP2 reads its frame records without a size check, and fails after taking its hunk */
+			if (!rm_sp2_check(buf, modfilelen))
+			{
+				Mod_Free(mod);
+				ri.Sys_Error(ERR_DROP, "%s: %s is not a sprite ref_metal can draw", __func__, name);
+			}
+
 			mod->extradata = Mod_LoadSP2(mod->name, buf, modfilelen,
-					(struct image_s **)mod->skins, (findimage_t)R_FindImage, &(mod->type));
+					(struct image_s **)mod->skins, RM_SkinLater, &(mod->type));
 
 			if (!mod->extradata)
 			{
 				ri.Sys_Error(ERR_DROP, "%s: Failed to load %s", __func__, mod->name);
 			}
 
+			Mod_ReLoadSkins((struct image_s **)mod->skins, (findimage_t)R_FindImage, mod->extradata, mod->type);
 			break;
 
 		case IDBSPHEADER:
