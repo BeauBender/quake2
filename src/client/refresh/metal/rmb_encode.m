@@ -723,7 +723,7 @@ rmb_draw_3d_state(int pipe, int ds, const float *mvp, const float *rgba, const r
 	[frame_enc setRenderPipelineState:ps];
 	[frame_enc setDepthStencilState:dss];
 	[frame_enc setFrontFacingWinding:MTLWindingCounterClockwise];
-	[frame_enc setCullMode:(cull ? MTLCullModeFront : MTLCullModeNone)];
+	[frame_enc setCullMode:(cull == RMB_CULL_BACK) ? MTLCullModeBack : (cull ? MTLCullModeFront : MTLCullModeNone)];
 	[frame_enc setViewport:(MTLViewport){ vp->x, vp->y, vp->w, vp->h, vp->znear, vp->zfar }];
 	[frame_enc setVertexBytes:&u length:sizeof(u) atIndex:1];
 	return 1;
@@ -980,6 +980,85 @@ rmb_draw_color(const float *xyz, int n, const float *rgba, const float *mvp,
 				indexType:MTLIndexTypeUInt16
 				indexBuffer:frame_ring
 				indexBufferOffset:(NSUInteger)iat];
+	}
+
+	rmb_counts.draws++;
+	return 1;
+}
+
+/*
+ * One alias entity (N7): its vertices and indices go into one region of
+ * the frame ring (rm_alias_region: the fixed layout RT1 refits from),
+ * drawn as gl1's R_ApplyGLBuffer draws buf_alias: GL_MODULATE of the
+ * vertex colour and the skin (untextured for a shell), blended with
+ * RF_TRANSLUCENT, depth LEQUAL with or without writes, the cull and the
+ * depth range of the entity.
+ */
+int
+rmb_draw_alias(const rm_avert_t *v, unsigned nv, const unsigned short *idx, unsigned long ni,
+		const rmb_alias_draw_t *d, const float *mvp, const rm_viewport_t *vp)
+{
+	static const float white[4] = { 1, 1, 1, 1 };
+	unsigned long i;
+	rm_region_t r;
+	rm_viewport_t dvp;
+	int pipe;
+
+	if (!v || !idx || !d || !vp || (nv > RM_ALIAS_MAX_VERTS) || (ni > RM_ALIAS_MAX_INDICES))
+	{
+		rmb_counts.draw_skips++;
+		return 0;
+	}
+
+	/* an index outside the vertices would read the rest of the ring */
+	for (i = 0; i < ni; i++)
+	{
+		if (idx[i] >= nv)
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+	}
+
+	pipe = d->tex ? (d->blend ? RM_PIPE_ALIAS_BLEND : RM_PIPE_ALIAS) :
+			(d->blend ? RM_PIPE_ALIAS_SHELL_BLEND : RM_PIPE_ALIAS_SHELL);
+	dvp = *vp;
+	dvp.znear = d->znear;
+	dvp.zfar = d->zfar;
+
+	@autoreleasepool
+	{
+		id<MTLTexture> t = d->tex ? rmb_texture_for_draw(d->tex) : nil;
+		id<MTLSamplerState> ss = d->tex ? rmb_sampler(d->smp) : nil;
+
+		if ((d->tex && (!t || !ss)) ||
+			!rmb_draw_3d_state(pipe, d->depth_write ? RMB_DS_LEQUAL_WRITE : RMB_DS_LEQUAL, mvp, white, &dvp, d->cull))
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+
+		if (!rm_alias_region(&ring, (long)nv, (long)ni, &r))
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+
+		memcpy((unsigned char *)frame_ring.contents + r.voff, v, r.vbytes);
+		memcpy((unsigned char *)frame_ring.contents + r.ioff, idx, r.ibytes);
+		[frame_enc setVertexBuffer:frame_ring offset:(NSUInteger)r.voff atIndex:0];
+
+		if (t)
+		{
+			[frame_enc setFragmentTexture:t atIndex:0];
+			[frame_enc setFragmentSamplerState:ss atIndex:0];
+		}
+
+		[frame_enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+				indexCount:(NSUInteger)ni
+				indexType:MTLIndexTypeUInt16
+				indexBuffer:frame_ring
+				indexBufferOffset:(NSUInteger)r.ioff];
 	}
 
 	rmb_counts.draws++;

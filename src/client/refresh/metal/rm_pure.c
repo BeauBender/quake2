@@ -217,6 +217,10 @@ rm_stats_format(const rmb_stats_t *s, const rm_ledger_t *l, char *buf, size_t le
 	ok = ok && rm_append(buf, len, &used, "skipped surfaces: %lu sky, %lu warped, %lu translucent, %lu flowing",
 			s->sky_skips, s->warp_skips, s->trans_skips, s->flow_skips);
 	ok = ok && rm_append(buf, len, &used, "; %lu drawn without their dynamic light", s->dlit_surfs);
+	ok = ok && rm_append(buf, len, &used, "; skipped entities: %lu sprites, %lu beams, %lu null models, ",
+			s->sprite_skips, s->beam_skips, s->null_skips);
+	ok = ok && rm_append(buf, len, &used, "%lu translucent brush models, %lu refused", s->bmodel_trans_skips,
+			s->ent_skips);
 	return ok;
 }
 
@@ -3394,4 +3398,10 @@ rm_entity_floats_ok(const float *origin, const float *oldorigin, const float *an
 	}
 
 	return isfinite(backlerp) && isfinite(alpha);
+}
+
+int
+rm_entity_count(long n)
+{
+	return (n < 0) ? 0 : (n > RM_MAX_ENTITIES) ? RM_MAX_ENTITIES : (int)n;
 }

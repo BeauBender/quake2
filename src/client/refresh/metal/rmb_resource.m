@@ -142,6 +142,18 @@ rmb_new_pipe_3d(rm_pipe3d_t which, NSError **e)
 		vf = [library newFunctionWithName:@"rm_vertex_world"];
 		ff = [library newFunctionWithName:@"rm_fragment_world_color"];
 	}
+	else if ((which == RM_PIPE_ALIAS) || (which == RM_PIPE_ALIAS_BLEND))
+	{
+		/* N7: the vertex colour times the skin, gl1's GL_MODULATE (rm_fragment_world_color, on the vertex's colour) */
+		vf = [library newFunctionWithName:@"rm_vertex_alias"];
+		ff = [library newFunctionWithName:@"rm_fragment_world_color"];
+	}
+	else if ((which == RM_PIPE_ALIAS_SHELL) || (which == RM_PIPE_ALIAS_SHELL_BLEND))
+	{
+		/* a shell: GL_TEXTURE_2D off, the vertex colour alone */
+		vf = [library newFunctionWithName:@"rm_vertex_alias"];
+		ff = [library newFunctionWithName:@"rm_fragment_color"];
+	}
 	else
 	{
 		vf = [library newFunctionWithName:@"rm_vertex_color"];
@@ -159,7 +171,8 @@ rmb_new_pipe_3d(rm_pipe3d_t which, NSError **e)
 	d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
 	d.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
 
-	if ((which == RM_PIPE_COLOR_BLEND) || (which == RM_PIPE_WORLD_TEXC_BLEND))
+	if ((which == RM_PIPE_COLOR_BLEND) || (which == RM_PIPE_WORLD_TEXC_BLEND) || (which == RM_PIPE_ALIAS_BLEND) ||
+		(which == RM_PIPE_ALIAS_SHELL_BLEND))
 	{
 		/* gl1's glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA), for colour and alpha */
 		d.colorAttachments[0].blendingEnabled = YES;
@@ -172,7 +185,7 @@ rmb_new_pipe_3d(rm_pipe3d_t which, NSError **e)
 	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
 }
 
-/* The depth-stencil states of the 3D pass: no test, and gl1's GL_LEQUAL with writes. */
+/* The depth-stencil states of the 3D pass: no test, and gl1's GL_LEQUAL with writes and without (N7). */
 static int
 rmb_new_depth_states(void)
 {
@@ -187,7 +200,12 @@ rmb_new_depth_states(void)
 	d.depthWriteEnabled = YES;
 	depth_states[RMB_DS_LEQUAL_WRITE] = [rmb_device newDepthStencilStateWithDescriptor:d];
 
-	return depth_states[RMB_DS_NONE] && depth_states[RMB_DS_LEQUAL_WRITE];
+	d = [MTLDepthStencilDescriptor new];
+	d.depthCompareFunction = MTLCompareFunctionLessEqual;
+	d.depthWriteEnabled = NO;
+	depth_states[RMB_DS_LEQUAL] = [rmb_device newDepthStencilStateWithDescriptor:d];
+
+	return depth_states[RMB_DS_NONE] && depth_states[RMB_DS_LEQUAL_WRITE] && depth_states[RMB_DS_LEQUAL];
 }
 
 int

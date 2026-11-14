@@ -312,6 +312,17 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 	switch (LittleLong(*(unsigned *)buf))
 	{
 		case IDALIASHEADER:
+			/*
+			 * the shared loader fails after taking its hunk on what rm_md2_check
+			 * refuses first, and leaves the command stream and the frames
+			 * unchecked: a refused model takes nothing (design section 22)
+			 */
+			if (!rm_md2_check(buf, modfilelen, &mod->md2))
+			{
+				Mod_Free(mod);
+				ri.Sys_Error(ERR_DROP, "%s: %s is not a model ref_metal can draw", __func__, name);
+			}
+
 			mod->extradata = Mod_LoadMD2(mod->name, buf, modfilelen, mod->mins, mod->maxs,
 					(struct image_s **)mod->skins, (findimage_t)R_FindImage, &(mod->type));
 
@@ -323,6 +334,13 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 			break;
 
 		case IDSPRITEHEADER:
+			/* Mod_LoadSP2 reads its frame records without a size check, and fails after taking its hunk */
+			if (!rm_sp2_check(buf, modfilelen))
+			{
+				Mod_Free(mod);
+				ri.Sys_Error(ERR_DROP, "%s: %s is not a sprite ref_metal can draw", __func__, name);
+			}
+
 			mod->extradata = Mod_LoadSP2(mod->name, buf, modfilelen,
 					(struct image_s **)mod->skins, (findimage_t)R_FindImage, &(mod->type));
 

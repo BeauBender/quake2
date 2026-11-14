@@ -44,6 +44,7 @@
  */
 
 #include "header/local.h"
+#include "common/mtl_matrix.h"
 
 int r_framecount;     /* used for dlight push checking */
 int r_visframecount;  /* bumped when going to a new PVS */
@@ -604,7 +605,243 @@ R_DrawAlphaSurfaces(const rm_view_t *view)
 	r_alpha_surfaces = NULL;
 }
 
-/* from gl1_surf.c, without the brush entities' lighting (R_GetBrushesLighting, N7) */
+/* ---- brush entities (N7) ------------------------------------------------------------- */
+
+/*
+ * from gl1_surf.c, R_GetBrushesLighting: the lit surfaces of the brush
+ * entities in view join the per-slice chains of R_RegenAllLightmaps, so
+ * their lightmaps are rebuilt and uploaded with the world's. gl1 tests
+ * the facing with the world's modelorg here (it does not set the
+ * entity's), kept. Marking the dynamic lights on the entity's nodes is
+ * N8's (R_AddDynamicLights). An entity with a float that is not finite is
+ * left out, as it is not drawn.
+ */
+static void
+R_GetBrushesLighting(void)
+{
+	int i, k, n;
+
+	if (!r_drawentities->value || gl1_flashblend->value)
+	{
+		return;
+	}
+
+	n = rm_entity_count(r_newrefdef.num_entities);
+
+	for (i = 0; i < n; i++)
+	{
+		const entity_t *currententity = &r_newrefdef.entities[i];
+		const model_t *currentmodel = currententity->model;
+		vec3_t mins, maxs;
+		msurface_t *surf;
+
+		if (currententity->flags & RF_BEAM)
+		{
+			continue;
+		}
+
+		if (!currentmodel || (currentmodel->type != mod_brush) || (currentmodel->nummodelsurfaces == 0) ||
+			!rm_entity_floats_ok(currententity->origin, currententity->oldorigin, currententity->angles,
+				currententity->backlerp, currententity->alpha))
+		{
+			continue;
+		}
+
+		rm_brush_bounds(currententity->origin, currententity->angles, currentmodel->mins, currentmodel->maxs,
+				currentmodel->radius, mins, maxs);
+
+		if (r_cull->value && R_CullBox(mins, maxs, frustum))
+		{
+			continue;
+		}
+
+		/* the range is inside the world's surfaces (Mod_LoadSubmodels, rm_range_ok) */
+		surf = &r_worldmodel->surfaces[currentmodel->firstmodelsurface];
+
+		for (k = 0; k < currentmodel->nummodelsurfaces; k++, surf++)
+		{
+			if ((surf->texinfo->flags & (SURF_TRANS33 | SURF_TRANS66 | SURF_WARP)) || (surf->flags & SURF_DRAWTURB) ||
+				(surf->lmchain_frame == r_framecount))
+			{
+				continue; /* either not affected by light, or already in the chain */
+			}
+
+			if (rm_brush_face_visible(modelorg, surf->plane->normal, surf->plane->dist, (surf->flags & SURF_PLANEBACK) != 0) &&
+				(surf->lightmaptexturenum >= 0) && (surf->lightmaptexturenum < RM_LM_MAX_SLICES))
+			{
+				surf->lmchain_frame = r_framecount; /* don't add this twice to the chain */
+				surf->lightmapchain = lightmap_surfaces[surf->lightmaptexturenum];
+				lightmap_surfaces[surf->lightmaptexturenum] = surf;
+			}
+		}
+	}
+}
+
+/*
+ * from gl1_surf.c, R_DrawInlineBModel on gl1's multitexture path: the
+ * surfaces facing the viewer, in model order; the translucent ones join
+ * the alpha chain (drawn by R_DrawAlphaSurfaces with the world's matrix,
+ * as gl1 draws them), the lit ones in runs of one image and one slice
+ * (gl1's buf_mtex batch), a flowing one scrolled and a warped one through
+ * R_EmitWaterPolys in its place.
+ */
+static int
+R_DrawInlineBModel(const entity_t *currententity, const model_t *currentmodel, const rm_view_t *view,
+		const float *emodelorg)
+{
+	rm_world_t *w = r_worldmodel->world;
+	msurface_t *psurf = &r_worldmodel->surfaces[currentmodel->firstmodelsurface];
+	const image_t *run_image = NULL;
+	unsigned long n = 0;
+	int i, slice = -1, ok = 1;
+
+	RM_DynBegin(view, &skip_flow);
+
+	for (i = 0; i < currentmodel->nummodelsurfaces; i++, psurf++)
+	{
+		image_t *image;
+
+		/* find which side of the node we are on */
+		if (!rm_brush_face_visible(emodelorg, psurf->plane->normal, psurf->plane->dist, (psurf->flags & SURF_PLANEBACK) != 0))
+		{
+			continue;
+		}
+
+		if (psurf->texinfo->flags & (SURF_TRANS33 | SURF_TRANS66))
+		{
+			/* add to the translucent chain */
+			psurf->texturechain = r_alpha_surfaces;
+			r_alpha_surfaces = psurf;
+			continue;
+		}
+
+		image = R_TextureAnimation(currententity, psurf->texinfo);
+
+		if (!image)
+		{
+			continue;
+		}
+
+		if (!(psurf->flags & SURF_DRAWTURB))
+		{
+			if (psurf->texinfo->flags & SURF_FLOWING)
+			{
+				/* the run before it is drawn first */
+				if (run_image)
+				{
+					R_FlushChain(w, run_image, slice, n, view->mvp, &view->vp, view->cull);
+				}
+
+				n = 0;
+				R_DrawFlowing(w, image, psurf);
+				continue;
+			}
+
+			/* gl1's R_UpdateGLBuffer(buf_mtex, ...): another image or lightmap draws the batch */
+			if (run_image && ((image != run_image) || (!r_fullbright->value && (psurf->lightmaptexturenum != slice))))
+			{
+				R_FlushChain(w, run_image, slice, n, view->mvp, &view->vp, view->cull);
+				n = 0;
+			}
+
+			run_image = image;
+			slice = psurf->lightmaptexturenum;
+
+			/* the model's surfaces are distinct and their fans fit the scratch together (they are the world's) */
+			if (psurf->num_indices > w->size.indices - n)
+			{
+				ok = 0;
+				continue;
+			}
+
+			memcpy(w->scratch + n, w->indices + psurf->first_index, psurf->num_indices * sizeof(unsigned));
+			n += psurf->num_indices;
+		}
+		else
+		{
+			rmb_dyn_t d;
+
+			if (run_image)
+			{
+				R_FlushChain(w, run_image, slice, n, view->mvp, &view->vp, view->cull);
+			}
+
+			n = 0;
+			run_image = NULL;
+
+			/* gl1's buf_singletex with SURF_DRAWTURB: the warped water's colour (R_ApplyGLBuffer) */
+			memset(&d, 0, sizeof(d));
+			d.kind = rm_warp_color(rm_overbright(gl1_overbrightbits->value) != 0, rm_inverse_intensity_value, d.color) ?
+					RM_DYN_TEXC : RM_DYN_TEX;
+			d.tex = image->texnum;
+			d.smp = image->sampler;
+			RM_DynState(&d);
+			RM_DynSurface();
+
+			if (!RM_EmitWaterPolys(w, psurf))
+			{
+				skip_warp++;
+			}
+		}
+	}
+
+	if (run_image)
+	{
+		R_FlushChain(w, run_image, slice, n, view->mvp, &view->vp, view->cull);
+	}
+
+	RM_DynFlush();
+	return ok;
+}
+
+/*
+ * from gl1_surf.c, R_DrawBrushModel: culled by its box, its modelorg
+ * turned into the entity's axes, drawn with R_RotateForEntity (pitch and
+ * roll turned, as gl1 calls it) on the world's matrix. gl_zfix's polygon
+ * offset is not honoured (doc/040_cvarlist.md).
+ */
+int
+R_DrawBrushModel(const entity_t *currententity, const model_t *currentmodel, const rm_view_t *view)
+{
+	vec3_t mins, maxs, emodelorg, forward, right, up;
+	float a[3];
+	rm_view_t ev;
+	int rotated;
+
+	if (currentmodel->nummodelsurfaces == 0)
+	{
+		return 1;
+	}
+
+	if (!r_worldmodel || !r_worldmodel->world || !r_worldmodel->world->scratch ||
+		!rm_entity_floats_ok(currententity->origin, currententity->oldorigin, currententity->angles,
+			currententity->backlerp, currententity->alpha))
+	{
+		return 0;
+	}
+
+	rotated = rm_brush_bounds(currententity->origin, currententity->angles, currentmodel->mins, currentmodel->maxs,
+			currentmodel->radius, mins, maxs);
+
+	if (r_cull->value && R_CullBox(mins, maxs, frustum))
+	{
+		return 1;
+	}
+
+	AngleVectors(currententity->angles, forward, right, up);
+	rm_brush_modelorg(r_newrefdef.vieworg, currententity->origin, rotated, forward, right, up, emodelorg);
+
+	ev = *view;
+	a[0] = -currententity->angles[0];
+	a[1] = currententity->angles[1];
+	a[2] = -currententity->angles[2];
+	rm_entity_matrix(ev.world, view->world, currententity->origin, a);
+	mtl_mat_mul(ev.mvp, view->proj, ev.world);
+
+	return R_DrawInlineBModel(currententity, currentmodel, &ev, emodelorg);
+}
+
+/* from gl1_surf.c */
 void
 R_DrawWorld(const rm_view_t *view)
 {
@@ -630,6 +867,7 @@ R_DrawWorld(const rm_view_t *view)
 
 	RM_SkyClear();
 	R_RecursiveWorldNode(&ent, r_worldmodel->nodes);
+	R_GetBrushesLighting();
 	R_RegenAllLightmaps();
 	R_DrawTextureChains(view);
 	skip_sky += (unsigned long)RM_DrawSkyBox(view);

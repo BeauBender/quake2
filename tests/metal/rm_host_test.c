@@ -201,7 +201,8 @@ test_stats(void)
 		"ref_metal: metal_stats: 23 frames, 1 without a drawable, 2 skipped, 3 failed command buffers, "
 		"4 readbacks, 5 no-op calls, 6 draws, 7 draws skipped, 8 uploads, 9 uploads skipped, "
 		"10 pass splits, 12 pipelines, 0 created after init, 1 live objects, "
-		"skipped surfaces: 13 sky, 14 warped, 15 translucent, 16 flowing; 17 drawn without their dynamic light";
+		"skipped surfaces: 13 sky, 14 warped, 15 translucent, 16 flowing; 17 drawn without their dynamic light; "
+		"skipped entities: 18 sprites, 19 beams, 20 null models, 21 translucent brush models, 22 refused";
 	size_t n;
 
 	memset(&l, 0, sizeof(l));
@@ -224,6 +225,11 @@ test_stats(void)
 	s.trans_skips = 15;
 	s.flow_skips = 16;
 	s.dlit_surfs = 17;
+	s.sprite_skips = 18;
+	s.beam_skips = 19;
+	s.null_skips = 20;
+	s.bmodel_trans_skips = 21;
+	s.ent_skips = 22;
 	CHECK(rm_stats_format(&s, &l, buf, sizeof(buf)) && strcmp(buf, want) == 0);
 
 	n = strlen(want);
@@ -4550,6 +4556,11 @@ test_alias_cull(void)
 	CHECK(!rm_entity_floats_ok(z3, z3, nan3, 0, 1) && !rm_entity_floats_ok(z3, z3, z3, NAN, 1));
 	CHECK(!rm_entity_floats_ok(z3, z3, z3, 0, -INFINITY) && !rm_entity_floats_ok(inf3, z3, z3, 0, 1));
 	CHECK(rm_entity_floats_ok(z3, z3, z3, -1e30f, 1e30f));
+
+	/* the entity count the loops take */
+	CHECK(RM_MAX_ENTITIES == MAX_ENTITIES && rm_entity_count(0) == 0 && rm_entity_count(-1) == 0);
+	CHECK(rm_entity_count(LONG_MIN) == 0 && rm_entity_count(5) == 5 && rm_entity_count(MAX_ENTITIES) == MAX_ENTITIES);
+	CHECK(rm_entity_count(MAX_ENTITIES + 1) == MAX_ENTITIES && rm_entity_count(LONG_MAX) == MAX_ENTITIES);
 }
 
 /* the weapon's projection and depth range, the entity matrix, the cull mode and the brush entity's arithmetic */

@@ -97,13 +97,14 @@ typedef struct
 	 * the entities of the last 3D view not drawn, by class (N7): sprites,
 	 * beams and null models (N8 draws them), translucent brush entities
 	 * (no stock content has one; left out, see design section 22), and
-	 * alias models whose draw was refused (a frame-ring region, a texture)
+	 * alias and brush entities whose draw was refused (a float that is not
+	 * finite, a frame-ring region, a texture)
 	 */
-	unsigned long sprite_skips, beam_skips, null_skips, bmodel_trans_skips, alias_skips;
+	unsigned long sprite_skips, beam_skips, null_skips, bmodel_trans_skips, ent_skips;
 } rmb_stats_t;
 
 /* A buffer of this size holds every metal_stats line (rm_stats_format, rm_world_format, host-tested). */
-#define RM_STATS_LINE 768
+#define RM_STATS_LINE 1024
 
 /* ---- rm_pure.c: no SDL, no Metal --------------------------------------------- */
 
@@ -1143,6 +1144,12 @@ void rm_brush_modelorg(const float *vieworg, const float *origin, int rotated, c
 
 /* gl1's facing test of a brush entity's surface (BACKFACE_EPSILON 0.01) */
 int rm_brush_face_visible(const float *modelorg, const float *normal, float dist, int planeback);
+
+/* MAX_ENTITIES of ref.h, which this header does not include (the host test holds them equal) */
+#define RM_MAX_ENTITIES 128
+
+/* the refdef's entity count as the loops take it: 0 to RM_MAX_ENTITIES (the client never hands more) */
+int rm_entity_count(long n);
 
 /*
  * The per-frame fields of an entity this renderer uses that are floats:

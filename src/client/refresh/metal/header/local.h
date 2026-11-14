@@ -91,6 +91,12 @@ extern cvar_t *gl1_dynamic;
 extern cvar_t *gl1_flashblend;
 extern cvar_t *r_lightlevel;
 
+/* the entities (N7), by gl1's names */
+extern cvar_t *r_drawentities;
+extern cvar_t *r_lerpmodels;
+extern cvar_t *gl_lefthand;     /* hand */
+extern cvar_t *r_gunfov;
+
 /* from gl1's header/local.h, without the GL fields; a scrap image has no texture of its own (texnum RM_TEXNUM_SCRAP) */
 #define MAX_GLTEXTURES 1024
 #define RM_TEXNUM_SCRAP -1               /* a scrap image's texnum: the slot is used, its texture is the atlas's */
@@ -185,6 +191,8 @@ void R_DrawAlphaSurfaces(const rm_view_t *view);
 /* the surfaces of the last view R_DrawWorld skipped, by class, into s (metal_stats) */
 void RM_WorldSkips(rmb_stats_t *s);
 void RM_WorldSkipsClear(void);
+/* the entities of the last view not drawn, by class (rm_main.c, N7), into s (metal_stats) */
+void RM_EntitySkips(rmb_stats_t *s);
 
 /* rm_warp.c (gl1_warp.c): the sky box, the warped water and the batches of per-frame vertices */
 void RM_SetSky(const char *name, float rotate, vec3_t axis);
@@ -215,6 +223,15 @@ void R_MarkSurfaceLights(dlight_t *light, int bit, mnode_t *node, int lightframe
 void R_PushDlights(void);
 void R_LightPoint(entity_t *currententity, vec3_t p, vec3_t color);
 void R_SetLightLevel(entity_t *currententity);
+const byte *R_Minlight(void);
+
+/*
+ * rm_mesh.c (gl1_mesh.c) and rm_surf.c (gl1_surf.c): an alias and a brush
+ * entity, in the pass whose depth writes are depth_write; 0 when a value
+ * is refused or the draw is (the caller counts it), 1 when drawn or culled
+ */
+int R_DrawAliasModel(const entity_t *currententity, const model_t *currentmodel, const rm_view_t *view, int depth_write);
+int R_DrawBrushModel(const entity_t *currententity, const model_t *currentmodel, const rm_view_t *view);
 
 /* rm_misc.c */
 void R_InitBuiltinTextures(void);
