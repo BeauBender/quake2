@@ -19,7 +19,7 @@
 #   every _gl symbol gl1's objects import is in D (the grep misses
 #   nothing), every entry point of D and P is defined by the shim's
 #   objects, and the dylib has no undefined _gl symbol.
-# Any tool error or an empty set fails. Prints the counts on success.
+# Any tool error, a missing tool or an empty set fails. Prints the counts on success.
 set -eu
 cd "$(dirname "$0")/../.."
 export LC_ALL=C
@@ -29,7 +29,7 @@ doc=docs/plans/metal-shim-design.md
 procsrc=$gl1/metal/mgl_frame.c
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/shim-coverage.XXXXXX")
-trap 'rm -rf "$tmp"' EXIT
+trap 'rm -rf "${tmp:?}"' EXIT
 
 fail=0
 bad() { echo "shim-coverage: $*"; fail=1; }
@@ -96,15 +96,18 @@ sed -n '/^<!-- coverage-table:start -->$/,/^<!-- coverage-table:end -->$/p' "$do
 	grep -E '^\| `gl' > "$tmp/rows" || true
 [ -s "$tmp/rows" ] || die "no coverage table between the coverage-table markers in $doc"
 sed -E 's/^\| `([^`]+)`.*/\1/' "$tmp/rows" | sort > "$tmp/docnames"
-uniq -d "$tmp/docnames" | while read -r n; do echo "shim-coverage: $doc lists $n twice"; done
-[ -z "$(uniq -d "$tmp/docnames")" ] || fail=1
+uniq -d "$tmp/docnames" > "$tmp/dups" || die "uniq failed on the coverage table names"
+while read -r n; do echo "shim-coverage: $doc lists $n twice"; done < "$tmp/dups"
+[ ! -s "$tmp/dups" ] || fail=1
 sort -u -o "$tmp/docnames" "$tmp/docnames"
-comm -23 "$tmp/used" "$tmp/docnames" | while read -r n; do
+comm -23 "$tmp/used" "$tmp/docnames" > "$tmp/nodoc" || die "comm failed on the used names"
+while read -r n; do
 	echo "shim-coverage: gl1 uses $n; the coverage table in $doc has no row for it"
-done
-comm -13 "$tmp/used" "$tmp/docnames" | while read -r n; do
+done < "$tmp/nodoc"
+comm -13 "$tmp/used" "$tmp/docnames" > "$tmp/unused" || die "comm failed on the table names"
+while read -r n; do
 	echo "shim-coverage: the coverage table in $doc lists $n, which gl1 does not use"
-done
+done < "$tmp/unused"
 cmp -s "$tmp/used" "$tmp/docnames" || fail=1
 # The second column is the status
 while IFS= read -r row; do
@@ -115,8 +118,9 @@ while IFS= read -r row; do
 	esac
 done < "$tmp/rows"
 
-ndirect=$(wc -l < "$tmp/direct" | tr -d ' ')
-npointer=$(wc -l < "$tmp/pointer" | tr -d ' ')
+ndirect=$(wc -l < "$tmp/direct" | tr -d ' ') || die "wc failed"
+npointer=$(wc -l < "$tmp/pointer" | tr -d ' ') || die "wc failed"
+[ -n "$ndirect" ] && [ -n "$npointer" ] || die "could not count the entry points"
 summary="$ndirect direct, $npointer by pointer, table matches"
 
 # The objects, when given
@@ -128,27 +132,31 @@ if [ -n "$objdir" ]; then
 	nm -u "$@" > "$tmp/nm.u" || die "nm -u failed on the gl1 objects"
 	grep -E '^_gl[A-Z]' "$tmp/nm.u" | sed 's/^_//' | sort -u > "$tmp/imports" || true
 	[ -s "$tmp/imports" ] || die "the gl1 objects import no GL symbol"
-	comm -23 "$tmp/imports" "$tmp/direct" | while read -r n; do
+	comm -23 "$tmp/imports" "$tmp/direct" > "$tmp/missed" || die "comm failed on the imports"
+	while read -r n; do
 		echo "shim-coverage: the gl1 objects import $n, which the source scan missed"
-	done
-	[ -z "$(comm -23 "$tmp/imports" "$tmp/direct")" ] || fail=1
+	done < "$tmp/missed"
+	[ ! -s "$tmp/missed" ] || fail=1
 
 	set -- "$objdir/$gl1/metal"/*.o
 	[ -f "$1" ] || die "no shim objects under $objdir/$gl1/metal"
 	nm -g -U "$@" > "$tmp/nm.def" || die "nm -g -U failed on the shim objects"
 	awk '$2 == "T" && $3 ~ /^_gl[A-Z]/ { sub(/^_/, "", $3); print $3 }' "$tmp/nm.def" | sort -u > "$tmp/exports"
 	[ -s "$tmp/exports" ] || die "the shim objects define no GL symbol"
-	comm -23 "$tmp/used" "$tmp/exports" | while read -r n; do
+	comm -23 "$tmp/used" "$tmp/exports" > "$tmp/undefd" || die "comm failed on the exports"
+	while read -r n; do
 		echo "shim-coverage: gl1 uses $n; the shim does not define it"
-	done
-	[ -z "$(comm -23 "$tmp/used" "$tmp/exports")" ] || fail=1
+	done < "$tmp/undefd"
+	[ ! -s "$tmp/undefd" ] || fail=1
 
 	nm -u "$dylib" > "$tmp/nm.dylib" || die "nm -u failed on $dylib"
 	if grep -E '^_gl[A-Z]' "$tmp/nm.dylib" > "$tmp/undef"; then
-		bad "$dylib leaves $(wc -l < "$tmp/undef" | tr -d ' ') GL symbol(s) undefined"
+		nundef=$(wc -l < "$tmp/undef" | tr -d ' ') || nundef="some"
+		bad "$dylib leaves $nundef GL symbol(s) undefined"
 	fi
-	nimports=$(wc -l < "$tmp/imports" | tr -d ' ')
-	nexports=$(wc -l < "$tmp/exports" | tr -d ' ')
+	nimports=$(wc -l < "$tmp/imports" | tr -d ' ') || die "wc failed"
+	nexports=$(wc -l < "$tmp/exports" | tr -d ' ') || die "wc failed"
+	[ -n "$nimports" ] && [ -n "$nexports" ] || die "could not count the symbols"
 	summary="$summary; objects import $nimports, shim defines $nexports, dylib has none undefined"
 fi
 

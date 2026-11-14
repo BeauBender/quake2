@@ -58,6 +58,7 @@ fi
 
 # (b) the shim build, where it can be built
 skip=""
+covobjs=""
 if [ "$(uname -s)" != Darwin ]; then
 	skip="not macOS"
 elif ! command -v xcrun >/dev/null 2>&1 || ! xcrun -f metal >/dev/null 2>&1; then
@@ -100,7 +101,7 @@ fi
 
 # (c) the coverage report, with the objects of (b) when it built them
 covrc=0
-if [ -n "${covobjs:-}" ]; then
+if [ -n "$covobjs" ]; then
 	covout=$(sh tests/metal/shim-coverage.sh "$covobjs" "$tmp/tree/release/ref_gl1.dylib" 2>&1) || covrc=$?
 else
 	covout=$(sh tests/metal/shim-coverage.sh 2>&1) || covrc=$?
