@@ -1556,7 +1556,7 @@ test_models(void)
 	glPushMatrix();
 	glLoadIdentity();
 	glScalef(-1, 1, 1);
-	glFrustum(-2, 2, -1, 1, 1, 3);
+	glFrustum(-1, 3, -1, 1, 1, 3);
 	glMatrixMode(GL_MODELVIEW);
 	glCullFace(GL_BACK);
 	glShadeModel(GL_SMOOTH);
@@ -1567,29 +1567,35 @@ test_models(void)
 	glTexCoordPointer(2, GL_FLOAT, 0, tex);
 	glEnableClientState(GL_COLOR_ARRAY);
 	glColorPointer(4, GL_UNSIGNED_BYTE, 0, clr);
+	/* gl1's c4ub layout is accepted as it is */
+	CHECK(ERR() == GL_NO_ERROR && mgl_state.color_array.type == GL_UNSIGNED_BYTE && mgl_state.color_array.size == 4 &&
+		mgl_state.color_array.pointer == clr);
 	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, idx);
 	CHECK(ERR() == GL_NO_ERROR && mgl_state.projection_depth == 1 && last_draw.nindices == 3);
 	/* the left-handed weapon culls the other face; depth tested and written as the world */
 	CHECK(last_draw.cull == MGL_CULL_BACK && last_draw.pipeline_key == (15u << 9));
 	CHECK(last_draw.depth_stencil_key == (1u | ((uint64_t)(GL_LEQUAL - GL_NEVER) << 1) | (1u << 4)));
 	/*
-	 * (1, 1, 0) is (1, 1, -2) in the eye; the frustum gives clip
-	 * (0.5, 1, 1, 2) and the mirror (-0.5, 1, 1, 2): NDC x -0.25, y 0.5,
-	 * z 0.5. GL's window depth in the range 0 .. 0.3 is
-	 * 0 + 0.3 * (0.5 + 1) / 2 = 0.225; the shim's clip depth for Metal
-	 * is (1 + 2) / 2 = 1.5, and 0 + 0.3 * 1.5 / 2 is the same 0.225.
+	 * The weapon's frustum (-1, 3, -1, 1, 1, 3) is asymmetric, so the
+	 * order of mirror and frustum shows: GL multiplies the current matrix
+	 * by each, P = S F. (1, 1, 0) is (1, 1, -2) in the eye; F gives clip
+	 * x 0.5 * 1 + 0.5 * -2 = -0.5, y 1, z -2 * -2 - 3 = 1, w 2, and S
+	 * mirrors x to 0.5 (F S would give -1.5): NDC z 0.5. GL's window
+	 * depth in the range 0 .. 0.3 is 0 + 0.3 * (0.5 + 1) / 2 = 0.225;
+	 * the shim's clip depth for Metal is (1 + 2) / 2 = 1.5, and
+	 * 0 + 0.3 * 1.5 / 2 is the same 0.225.
 	 */
 	test_clip(0, c);
-	CHECK(c[0] == -0.5f && c[1] == 1.0f && c[2] == 1.0f && c[3] == 2.0f);
+	CHECK(c[0] == 0.5f && c[1] == 1.0f && c[2] == 1.0f && c[3] == 2.0f);
 	CHECK(mgl_gl_clip_z(c[2], c[3]) == 1.5f);
 	mgl_compute_raster(&mgl_state, 640, 480, &r);
 	CHECK(r.znear == 0.0 && r.zfar == 0.3 &&
 		fabs(r.znear + (r.zfar - r.znear) * mgl_gl_clip_z(c[2], c[3]) / c[3] - 0.225) < 1e-6);
 	/* the near and far planes land on the ends of the range: clip z -w and w */
 	CHECK(mgl_gl_clip_z(-2.0f, 2.0f) == 0.0f && mgl_gl_clip_z(2.0f, 2.0f) == 2.0f && mgl_gl_clip_z(0, 4.0f) == 2.0f);
-	/* (-1, 1, 0) mirrors to the other side */
+	/* (-1, 1, 0): F gives x -0.5 - 1 = -1.5, mirrored 1.5 */
 	test_clip(1, c);
-	CHECK(c[0] == 0.5f && c[1] == 1.0f);
+	CHECK(c[0] == 1.5f && c[1] == 1.0f);
 	/* the colours gl1 computed, normalised; the skin modulated by them (an RGB skin: the vertex alpha stays) */
 	CHECK(last_draw.vertices[0].color[0] == 1.0f && last_draw.vertices[0].color[1] == 128.0f / 255.0f &&
 		last_draw.vertices[0].color[2] == 0.0f && last_draw.vertices[2].color[3] == 77.0f / 255.0f);
@@ -1610,7 +1616,7 @@ test_models(void)
 	glGetFloatv(GL_PROJECTION_MATRIX, got);
 	CHECK(ERR() == GL_NO_ERROR && mgl_state.projection_depth == 0 && memcmp(got, proj, sizeof(proj)) == 0);
 
-	/* a right-handed model: not mirrored, GL_FRONT culled; flat shading is not modelled (design section 11) */
+	/* a right-handed model: not mirrored, GL_FRONT culled; flat shading is not modelled (design doc, as built by TASK51) */
 	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 	glShadeModel(GL_SMOOTH);
 	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, idx);
@@ -1722,6 +1728,9 @@ test_models(void)
 	glDrawArrays(GL_TRIANGLE_STRIP, 0, 8);
 	CHECK(ERR() == GL_NO_ERROR && draws == before + 1 && last_draw.nindices == 18 && last_draw.fill_lines &&
 		last_draw.cull == MGL_CULL_NONE && last_draw.u.texenv0 == MGL_TEXENV_NONE);
+	/* the strip keeps GL's order: the second triangle is (2 1 3), the last (6 5 7) */
+	CHECK(last_draw.indices[3] == 2 && last_draw.indices[4] == 1 && last_draw.indices[5] == 3 &&
+		last_draw.indices[15] == 6 && last_draw.indices[16] == 5 && last_draw.indices[17] == 7);
 	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 	glEnable(GL_CULL_FACE);
 	glEnable(GL_TEXTURE_2D);
