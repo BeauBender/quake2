@@ -2934,6 +2934,713 @@ TestTableReaders(void)
 	}
 }
 
+/* ---- the replayer, into a mock renderer ---- */
+
+/* the live handles the mock renderer hands out */
+static char live_model, live_skin, live_pic;
+
+#define MOCK_LOG	512
+#define MOCK_FRAMES	8
+
+typedef struct {
+	int log[MOCK_LOG];	/* record types forwarded, in order */
+	uint32_t nlog;
+	refdef_t fd[MOCK_FRAMES];
+	entity_t ents[MOCK_FRAMES][4];
+	dlight_t dl[MOCK_FRAMES];
+	particle_t parts[MOCK_FRAMES][2];
+	uint32_t nfd;
+	int32_t captures[16];
+	uint32_t ncap;
+	refrec_call_t last[REC_LAST + 1];	/* the last forwarded call of each type */
+	char regnames[16][64];
+	uint32_t nreg;
+	uint32_t palettes;	/* forwarded with 768 bytes */
+} mock_t;
+
+static mock_t mock;
+
+static void
+MockLog(int type)
+{
+	if (mock.nlog < MOCK_LOG)
+	{
+		mock.log[mock.nlog] = type;
+	}
+
+	mock.nlog++;
+}
+
+static void *
+MockRegister(refrec_type_t t, const char *name)
+{
+	MockLog(t);
+
+	if (mock.nreg < 16)
+	{
+		snprintf(mock.regnames[mock.nreg], sizeof(mock.regnames[0]), "%s", name);
+	}
+
+	mock.nreg++;
+
+	if (strcmp(name, "missing") == 0)
+	{
+		return NULL;
+	}
+
+	return t == REC_MODEL ? (void *)&live_model : t == REC_SKIN ? (void *)&live_skin : (void *)&live_pic;
+}
+
+static void
+MockRenderFrame(refdef_t *fd)
+{
+	MockLog(REC_RENDERFRAME);
+
+	if (mock.nfd < MOCK_FRAMES)
+	{
+		uint32_t k = mock.nfd;
+		int i;
+
+		mock.fd[k] = *fd;
+
+		for (i = 0; i < fd->num_entities && i < 4; i++)
+		{
+			mock.ents[k][i] = fd->entities[i];
+		}
+
+		if (fd->num_dlights)
+		{
+			mock.dl[k] = fd->dlights[0];
+		}
+
+		for (i = 0; i < fd->num_particles && i < 2; i++)
+		{
+			mock.parts[k][i] = fd->particles[i];
+		}
+	}
+
+	mock.nfd++;
+}
+
+static void
+MockCall(refrec_call_t *c)
+{
+	MockLog(c->type);
+	mock.last[c->type] = *c;
+
+	if (c->type == REC_PICSIZE)
+	{
+		c->ints[0] = 8;
+		c->ints[1] = 8;
+	}
+
+	if (c->type == REC_PALETTE && c->datalen == REFREC_PALETTE_SIZE)
+	{
+		mock.palettes++;
+	}
+
+	if (c->type == REC_CAPTURE && mock.ncap < 16)
+	{
+		mock.captures[mock.ncap++] = c->ints[0];
+	}
+}
+
+/* replays path into the mock; false when the open was refused */
+static qboolean
+Replay(const char *path, uint32_t api, int width, int height, refrec_replay_stats_t *st)
+{
+	refrec_target_t t;
+	refrec_header_t h;
+	int guard = 0;
+
+	memset(&mock, 0, sizeof(mock));
+	memset(&t, 0, sizeof(t));
+	t.api_version = api;
+	t.width = width;
+	t.height = height;
+	t.Register = MockRegister;
+	t.RenderFrame = MockRenderFrame;
+	t.Call = MockCall;
+	RefRec_SetReplayTarget(&t);
+
+	if (!RefRec_OpenReplay(path, &h))
+	{
+		RefRec_ReplayStats(st);
+		return false;
+	}
+
+	while (RefRec_ReplayNextFrame() && guard++ < 100000)
+	{
+	}
+
+	RefRec_ReplayStats(st);
+	RefRec_CloseReplay();
+
+	return true;
+}
+
+/* the record types the replayer forwards, as ReadTrace walks them */
+typedef struct {
+	int log[MOCK_LOG];
+	uint32_t nlog;
+} typelog_t;
+
+static void
+TypeLogCb(refrec_type_t type, const refrec_call_t *c, const refrec_frame_t *f, void *vctx)
+{
+	typelog_t *x = vctx;
+
+	(void)c;
+	(void)f;
+
+	if (type == REC_CVARS || type == REC_WARN)
+	{
+		return;
+	}
+
+	if (x->nlog < MOCK_LOG)
+	{
+		x->log[x->nlog] = type;
+	}
+
+	x->nlog++;
+}
+
+/* a whole file into a malloc'd buffer */
+static uint8_t *
+Slurp(const char *path, long *size)
+{
+	uint8_t *buf;
+	FILE *f = fopen(path, "rb");
+
+	*size = 0;
+
+	if (!f)
+	{
+		return NULL;
+	}
+
+	fseek(f, 0, SEEK_END);
+	*size = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	buf = malloc(*size > 0 ? *size : 1);
+
+	if (buf && fread(buf, 1, *size, f) != (size_t)*size)
+	{
+		free(buf);
+		buf = NULL;
+	}
+
+	fclose(f);
+
+	return buf;
+}
+
+static void
+Spill(const char *path, const uint8_t *buf, long size)
+{
+	FILE *f = fopen(path, "wb");
+
+	if (f)
+	{
+		fwrite(buf, 1, size, f);
+		fclose(f);
+	}
+}
+
+static uint32_t
+GetU32(const uint8_t *p)
+{
+	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/*
+ * A three-frame trace: registrations before and between frames (one that
+ * failed live), entities on registered handles, 2D draws, two captures.
+ */
+static void
+RecordReplayTrace(const char *path)
+{
+	static entity_t ents[2];
+	static particle_t parts[1];
+	static dlight_t dl[1];
+	static lightstyle_t ls[MAX_LIGHTSTYLES];
+	static uint8_t area[REFREC_AREABYTES];
+	static uint8_t palette[REFREC_PALETTE_SIZE];
+	const float sky[4] = { 0.5f, 0, 0, 1 };
+	refdef_t fd;
+	int32_t fill[5] = { 1, 2, 3, 4, 5 }, size[2] = { 8, 8 }, cap = 0;
+	int i;
+
+	RefRec_StartRecord(path, 640, 480, 30);
+	RefRec_Registration(REC_PIC, "conchars", &handle_c);
+	RefRec_Registration(REC_BEGINREG, "base1", NULL);
+	RefRec_Registration(REC_MODEL, "models/a.md2", &handle_a);
+	RefRec_Registration(REC_MODEL, "missing", NULL);
+	RefRec_Registration(REC_SKIN, "skins/b.pcx", &handle_b);
+	RefRec_Draw(REC_SKY, NULL, 0, sky, 4, "unit1_", NULL, 0);
+	RefRec_Registration(REC_ENDREG, NULL, NULL);
+
+	for (i = 0; i < 3; i++)
+	{
+		memset(&fd, 0, sizeof(fd));
+		fd.width = 640;
+		fd.height = 480;
+		fd.fov_x = 90;
+		fd.fov_y = 73.74f;
+		fd.time = 1.5f + i;
+		fd.rdflags = RDF_UNDERWATER;
+		fd.areabits = i == 1 ? NULL : area;
+		area[3] = 0x11;
+		ls[0].white = 1.0f;
+		fd.lightstyles = ls;
+		ents[0].model = (struct model_s *)&handle_a;
+		ents[0].skin = (struct image_s *)&handle_b;
+		ents[0].frame = i;
+		ents[0].origin[0] = 100.0f;
+		ents[0].alpha = 1.0f;
+		ents[1].model = NULL;
+		ents[1].skin = (struct image_s *)&handle_c;	/* a pic used as a skin */
+		fd.entities = ents;
+		fd.num_entities = 2;
+		parts[0].color = 0xd0;
+		parts[0].alpha = 0.5f;
+		fd.particles = parts;
+		fd.num_particles = 1;
+		dl[0].intensity = 200;
+		dl[0].color[0] = -1;	/* a darkening light */
+		fd.dlights = dl;
+		fd.num_dlights = 1;
+
+		RefRec_Control(REC_BEGINFRAME, 0);
+		RefRec_RenderFrame(&fd);
+		RefRec_Draw(REC_PICSIZE, size, 2, NULL, 0, "conchars", NULL, 0);
+		RefRec_Draw(REC_FILL, fill, 5, NULL, 0, NULL, NULL, 0);
+		RefRec_Control(REC_ENDWORLD, 0);
+
+		if (i != 1)
+		{
+			RefRec_Draw(REC_CAPTURE, &cap, 1, NULL, 0, NULL, NULL, 0);
+			cap++;
+		}
+
+		RefRec_Control(REC_ENDFRAME, 0);
+		RefRec_Draw(REC_PALETTE, NULL, 0, NULL, 0, NULL, i == 0 ? palette : NULL,
+				i == 0 ? REFREC_PALETTE_SIZE : 0);
+	}
+
+	RefRec_StopRecord();
+}
+
+/* A recorded trace replays every record in order, handles resolved to live ones. */
+static void
+TestReplayRoundTrip(void)
+{
+	char path[1200];
+	refrec_replay_stats_t st;
+	typelog_t want;
+	tracefile_t t;
+	uint32_t i, last;
+
+	snprintf(path, sizeof(path), "%s", TracePath("replay"));
+	RecordReplayTrace(path);
+	memset(&want, 0, sizeof(want));
+
+	if (!ReadTrace(path, &t, TypeLogCb, &want, NULL))
+	{
+		CHECK(0, "replay: trace refused: %s", t.err);
+		return;
+	}
+
+	CHECK(Replay(path, API_VERSION, 640, 480, &st), "replay: a valid trace was refused");
+	CHECK(!st.failed && st.frames == 3 && st.frames == t.frames, "replay: %u frames of %u, failed %d",
+			st.frames, t.frames, st.failed);
+	CHECK(st.captures == 2 && st.captures == t.captures && mock.ncap == 2 &&
+			mock.captures[0] == 0 && mock.captures[1] == 1, "replay: %u captures", st.captures);
+	CHECK(st.clamped == 0 && st.picsize_mismatch == 0, "replay: %u clamped, %u picsize mismatches in a clean trace",
+			st.clamped, st.picsize_mismatch);
+
+	/* everything up to the last frame's REC_ENDFRAME, in order: not the palette after it */
+	for (last = want.nlog; last > 0 && want.log[last - 1] != REC_ENDFRAME; last--)
+	{
+	}
+
+	CHECK(mock.nlog == last, "replay: %u calls forwarded, %u recorded before the last REC_ENDFRAME", mock.nlog, last);
+
+	for (i = 0; i < last && i < mock.nlog && i < MOCK_LOG; i++)
+	{
+		if (mock.log[i] != want.log[i])
+		{
+			CHECK(0, "replay: call %u is type %d, recorded %d", i, mock.log[i], want.log[i]);
+			break;
+		}
+	}
+
+	CHECK(mock.nreg == 4 && strcmp(mock.regnames[3], "skins/b.pcx") == 0 &&
+			strcmp(mock.regnames[2], "missing") == 0, "replay: registrations %u", mock.nreg);
+	CHECK(mock.nfd == 3, "replay: %u RenderFrame calls", mock.nfd);
+	CHECK(mock.ents[0][0].model == (void *)&live_model && mock.ents[0][0].skin == (void *)&live_skin,
+			"replay: entity handles not resolved to the live ones");
+	CHECK(mock.ents[0][1].model == NULL && mock.ents[0][1].skin == (void *)&live_pic,
+			"replay: a NULL model or a pic used as a skin not resolved");
+	CHECK(mock.ents[2][0].frame == 2 && Bits(mock.ents[2][0].origin[0]) == Bits(100.0f) &&
+			Bits(mock.fd[2].time) == Bits(3.5f) && mock.fd[2].rdflags == RDF_UNDERWATER &&
+			mock.fd[0].width == 640 && mock.fd[0].height == 480 && Bits(mock.fd[0].fov_y) == Bits(73.74f),
+			"replay: frame values not verbatim");
+	CHECK(mock.fd[0].areabits && mock.fd[0].areabits[3] == 0x11 && mock.fd[1].areabits == NULL,
+			"replay: areabits not rebuilt");
+	CHECK(mock.fd[0].lightstyles && Bits(mock.fd[0].lightstyles[0].white) == Bits(1.0f),
+			"replay: lightstyles not rebuilt");
+	CHECK(mock.parts[0][0].color == 0xd0 && Bits(mock.parts[0][0].alpha) == Bits(0.5f) &&
+			Bits(mock.dl[0].intensity) == Bits(200.0f) && Bits(mock.dl[0].color[0]) == Bits(-1.0f),
+			"replay: particle or dlight not verbatim");
+	CHECK(mock.last[REC_FILL].ints[4] == 5 && strcmp(mock.last[REC_SKY].name, "unit1_") == 0 &&
+			Bits(mock.last[REC_SKY].floats[0]) == Bits(0.5f) && strcmp(mock.last[REC_BEGINREG].name, "base1") == 0,
+			"replay: 2D or registration arguments not verbatim");
+	CHECK(mock.palettes == 1 && mock.last[REC_PALETTE].datalen == 0, "replay: palettes not forwarded");
+	CHECK(!RefRec_ReplayNextFrame(), "replay: a frame after close");
+
+	/* the target's configuration must match the trace */
+	CHECK(!Replay(path, API_VERSION, 641, 480, &st) && st.failed, "replay: another width was accepted");
+	CHECK(!Replay(path, API_VERSION, 640, 481, &st) && st.failed, "replay: another height was accepted");
+	CHECK(!Replay(path, API_VERSION - 1, 640, 480, &st) && st.failed, "replay: another API version was accepted");
+	CHECK(!Replay(TracePath("absent"), API_VERSION, 640, 480, &st), "replay: a missing file was accepted");
+
+	/* one replay at a time, and none without a complete target */
+	{
+		refrec_header_t h;
+		refrec_target_t bad;
+
+		CHECK(Replay(path, API_VERSION, 640, 480, &st), "replay: refused the second time");
+		RefRec_OpenReplay(path, &h);
+		CHECK(!RefRec_OpenReplay(path, &h), "replay: a second open while open was accepted");
+		RefRec_CloseReplay();
+		RefRec_CloseReplay();
+		memset(&bad, 0, sizeof(bad));
+		bad.api_version = API_VERSION;
+		bad.width = 640;
+		bad.height = 480;
+		bad.Register = MockRegister;
+		bad.RenderFrame = MockRenderFrame;
+		RefRec_SetReplayTarget(&bad);
+		CHECK(!RefRec_OpenReplay(path, &h), "replay: a target without Call was accepted");
+		RefRec_CloseReplay();
+	}
+}
+
+/* Every value a renderer could index with or overflow on is bounded first. */
+static void
+TestReplayBounds(void)
+{
+	static entity_t ents[3];
+	static particle_t parts[2];
+	static dlight_t dl[1];
+	static lightstyle_t ls[MAX_LIGHTSTYLES];
+	const char *path = TracePath("replaybounds");
+	refrec_replay_stats_t st;
+	refdef_t fd;
+	int32_t pic[4] = { 1 << 30, -(1 << 30), -5, 1 << 30 };
+	int32_t fill[5] = { 0, 0, 10, 10, 300 };
+	int32_t chr[3] = { 0, 0, -1 };
+	int32_t xy[2] = { 3, 4 };
+	float huge = 1e9f, nan = NAN, col[4] = { 1e9f, NAN, -1, 0.5f };
+	const float sky[4] = { NAN, 0, 0, 1 };
+
+	memset(&fd, 0, sizeof(fd));
+	fd.x = -10;
+	fd.y = 470;
+	fd.width = 99999;
+	fd.height = 480;
+	fd.fov_x = 0;
+	fd.fov_y = NAN;
+	fd.vieworg[0] = INFINITY;
+	fd.viewangles[1] = 1e9f;
+	fd.blend[0] = 2;
+	fd.time = -1;
+	fd.rdflags = 0xff;
+	ls[3].white = 1e9f;
+	ls[3].rgb[0] = -1;
+	fd.lightstyles = ls;
+	ents[0].model = (struct model_s *)&handle_a;
+	ents[0].frame = -5;
+	ents[0].oldframe = -1;
+	ents[0].skinnum = -3;
+	ents[0].alpha = 5;
+	ents[0].backlerp = -1;
+	ents[0].lightstyle = 999;
+	ents[0].origin[1] = NAN;
+	ents[1].flags = RF_BEAM;
+	ents[1].skinnum = (int)0xd0d1d2d3u;
+	ents[1].frame = 4;
+	ents[2].skinnum = 40;
+	fd.entities = ents;
+	fd.num_entities = 3;
+	parts[0].color = 999;
+	parts[0].alpha = 3;
+	parts[1].color = -1;
+	fd.particles = parts;
+	fd.num_particles = 2;
+	dl[0].color[0] = 1e9f;
+	dl[0].intensity = NAN;
+	fd.dlights = dl;
+	fd.num_dlights = 1;
+
+	RefRec_StartRecord(path, 640, 480, 30);
+	RefRec_Registration(REC_MODEL, "models/a.md2", &handle_a);
+	RefRec_Draw(REC_SKY, NULL, 0, sky, 4, "unit1_", NULL, 0);
+	RefRec_Control(REC_BEGINFRAME, nan);
+	RefRec_RenderFrame(&fd);
+	RefRec_Draw(REC_STRETCHPIC, pic, 4, NULL, 0, "p", NULL, 0);
+	RefRec_Draw(REC_FILL, fill, 5, NULL, 0, NULL, NULL, 0);
+	RefRec_Draw(REC_CHARSCALED, chr, 3, &nan, 1, NULL, NULL, 0);
+	RefRec_Draw(REC_PICSCALED, xy, 2, &huge, 1, "p", NULL, 0);
+	RefRec_Draw(REC_PICSCALEDCOL, xy, 2, col, 4, "p", NULL, 0);
+	RefRec_Control(REC_ENDFRAME, 0);
+	RefRec_StopRecord();
+
+	CHECK(Replay(path, API_VERSION, 640, 480, &st) && !st.failed && st.frames == 1,
+			"bounds: the hostile trace was not replayed");
+	CHECK(mock.fd[0].x == 0 && mock.fd[0].y == 470 && mock.fd[0].width == 640 && mock.fd[0].height == 10,
+			"bounds: viewport %d %d %d %d", mock.fd[0].x, mock.fd[0].y, mock.fd[0].width, mock.fd[0].height);
+	CHECK(Bits(mock.fd[0].fov_x) == Bits(1.0f) && Bits(mock.fd[0].fov_y) == Bits(90.0f),
+			"bounds: fov %g %g", mock.fd[0].fov_x, mock.fd[0].fov_y);
+	CHECK(Bits(mock.fd[0].vieworg[0]) == Bits(0.0f) &&
+			Bits(mock.fd[0].viewangles[1]) == Bits(REFREC_REPLAY_MAX_COORD) &&
+			Bits(mock.fd[0].blend[0]) == Bits(1.0f) && Bits(mock.fd[0].time) == Bits(0.0f),
+			"bounds: view floats");
+	CHECK(mock.fd[0].rdflags == REFREC_REPLAY_RDFLAGS, "bounds: rdflags %d", mock.fd[0].rdflags);
+	CHECK(Bits(mock.fd[0].lightstyles[3].white) == Bits(REFREC_REPLAY_MAX_LIGHT) &&
+			Bits(mock.fd[0].lightstyles[3].rgb[0]) == Bits(0.0f), "bounds: lightstyle");
+	CHECK(mock.ents[0][0].frame == 0 && mock.ents[0][0].oldframe == 0 && mock.ents[0][0].skinnum == 0 &&
+			Bits(mock.ents[0][0].alpha) == Bits(1.0f) && Bits(mock.ents[0][0].backlerp) == Bits(0.0f) &&
+			mock.ents[0][0].lightstyle == MAX_LIGHTSTYLES - 1 && Bits(mock.ents[0][0].origin[1]) == Bits(0.0f),
+			"bounds: entity frame %d oldframe %d skinnum %d lightstyle %d", mock.ents[0][0].frame,
+			mock.ents[0][0].oldframe, mock.ents[0][0].skinnum, mock.ents[0][0].lightstyle);
+	CHECK(mock.ents[0][1].skinnum == 0xd3 && mock.ents[0][1].frame == 4, "bounds: beam skinnum %d",
+			mock.ents[0][1].skinnum);
+	CHECK(mock.ents[0][2].skinnum == 0, "bounds: skinnum 40 became %d", mock.ents[0][2].skinnum);
+	CHECK(mock.parts[0][0].color == (999 & 0xff) && mock.parts[0][1].color == 0xff &&
+			Bits(mock.parts[0][0].alpha) == Bits(1.0f), "bounds: particle colours %d %d",
+			mock.parts[0][0].color, mock.parts[0][1].color);
+	CHECK(Bits(mock.dl[0].color[0]) == Bits(REFREC_REPLAY_MAX_LIGHT) && Bits(mock.dl[0].intensity) == Bits(0.0f),
+			"bounds: dlight");
+	CHECK(mock.last[REC_STRETCHPIC].ints[0] == REFREC_REPLAY_MAX_2D &&
+			mock.last[REC_STRETCHPIC].ints[1] == -REFREC_REPLAY_MAX_2D &&
+			mock.last[REC_STRETCHPIC].ints[2] == 0 && mock.last[REC_STRETCHPIC].ints[3] == REFREC_REPLAY_MAX_2D,
+			"bounds: 2D coordinates %d %d %d %d", mock.last[REC_STRETCHPIC].ints[0],
+			mock.last[REC_STRETCHPIC].ints[1], mock.last[REC_STRETCHPIC].ints[2], mock.last[REC_STRETCHPIC].ints[3]);
+	CHECK(mock.last[REC_FILL].ints[4] == (300 & 0xff), "bounds: fill colour %d", mock.last[REC_FILL].ints[4]);
+	CHECK(mock.last[REC_CHARSCALED].ints[2] == 0xff && Bits(mock.last[REC_CHARSCALED].floats[0]) == Bits(1.0f),
+			"bounds: char %d", mock.last[REC_CHARSCALED].ints[2]);
+	CHECK(Bits(mock.last[REC_PICSCALED].floats[0]) == Bits(REFREC_REPLAY_MAX_SCALE), "bounds: pic scale");
+	CHECK(Bits(mock.last[REC_PICSCALEDCOL].floats[0]) == Bits(REFREC_REPLAY_MAX_SCALE) &&
+			Bits(mock.last[REC_PICSCALEDCOL].floats[1]) == Bits(1.0f) &&
+			Bits(mock.last[REC_PICSCALEDCOL].floats[2]) == Bits(0.0f) &&
+			Bits(mock.last[REC_PICSCALEDCOL].floats[3]) == Bits(0.5f), "bounds: pic colour");
+	CHECK(Bits(mock.last[REC_SKY].floats[0]) == Bits(0.0f) && Bits(mock.last[REC_BEGINFRAME].floats[0]) == Bits(0.0f),
+			"bounds: sky rotate or camera separation");
+	CHECK(st.clamped >= 30, "bounds: only %u values counted as clamped", st.clamped);
+}
+
+/* a trace recorded by fn, then patched by fix at its file offsets, replayed */
+static qboolean
+ReplayPatched(const char *sub, void (*fix)(uint8_t *buf, long size), refrec_replay_stats_t *st)
+{
+	const char *path = TracePath(sub);
+	long size;
+	uint8_t *buf;
+	qboolean opened;
+
+	RecordReplayTrace(path);
+	buf = Slurp(path, &size);
+
+	if (!buf)
+	{
+		CHECK(0, "%s: cannot read the trace back", sub);
+		return false;
+	}
+
+	fix(buf, size);
+	Spill(path, buf, size);
+	free(buf);
+	opened = Replay(path, API_VERSION, 640, 480, st);
+
+	return opened;
+}
+
+static uint32_t
+FrameStart(const uint8_t *buf, uint32_t i)
+{
+	return GetU32(buf + GetU32(buf + 24) + i * REFREC_INDEX_SIZE + 4);
+}
+
+/* entity 0 of frame 0: the REC_RENDERFRAME after the 12-byte REC_BEGINFRAME, past the refdef scalars */
+#define ENT0(buf)	((buf) + FrameStart(buf, 0) + 12 + REFREC_REC_SIZE + 4216)
+
+static void FixModelKind(uint8_t *b, long n) { (void)n; SetU32(ENT0(b), 4); }	/* the skin's id as a model */
+static void FixSkinKind(uint8_t *b, long n) { (void)n; SetU32(ENT0(b) + 4, 3); }	/* the model's id as a skin */
+static void FixIdPast(uint8_t *b, long n) { (void)n; SetU32(ENT0(b), 9999); }
+static void FixTableKind(uint8_t *b, long n) { (void)n; SetU32(b + GetU32(b + 20) + 4, REFREC_KIND_MODEL); }	/* conchars, a pic */
+static void FixIndexOff(uint8_t *b, long n) { (void)n; SetU32(b + GetU32(b + 24) + 4, FrameStart(b, 0) + 12); }
+static void FixIndexMid(uint8_t *b, long n) { (void)n; SetU32(b + GetU32(b + 24) + 4, FrameStart(b, 0) + 4); }
+static void FixIndexOrder(uint8_t *b, long n) { (void)n; SetU32(b + GetU32(b + 24) + REFREC_INDEX_SIZE + 4, FrameStart(b, 0)); }
+static void FixRecLen(uint8_t *b, long n) { (void)n; SetU32(ENT0(b) - 4216 - 4, 0x7ffffff0u); }
+static void FixRecLenEnd(uint8_t *b, long n) { (void)n; SetU32(b + REFREC_HEADER_SIZE + 4, GetU32(b + 20) - REFREC_HEADER_SIZE); }
+static void FixUnfinished(uint8_t *b, long n) { (void)n; SetU32(b + 20, 0); }
+static void FixTableBig(uint8_t *b, long n) { (void)n; SetU32(b + 20, REFREC_HEADER_SIZE); }
+
+static uint32_t
+CaptureAt(const uint8_t *b, uint32_t frame)
+{
+	uint32_t at = FrameStart(b, frame);
+
+	while (GetU32(b + at) != REC_CAPTURE)
+	{
+		at += REFREC_REC_SIZE + GetU32(b + at + 4);
+	}
+
+	return at;
+}
+
+static void FixCapture(uint8_t *b, long n) { (void)n; SetU32(b + CaptureAt(b, 2) + REFREC_REC_SIZE, 5); }
+
+/*
+ * The next byte a sweep of a RecordReplayTrace file takes: every byte,
+ * except inside the 4096 bytes of lightstyles of each REC_RENDERFRAME,
+ * where every 16th (the first byte of each entry) stands for the rest.
+ */
+static long
+SweepNext(const uint8_t *buf, long i)
+{
+	uint32_t f;
+
+	for (f = 0; f < 3; f++)
+	{
+		long ls = FrameStart(buf, f) + 12 + REFREC_REC_SIZE + 108;
+
+		if (i >= ls && i + 16 < ls + 4096)
+		{
+			return i + 16;
+		}
+	}
+
+	return i + 1;
+}
+
+/* Damaged traces: refused at open or at the record, never read past. */
+static void
+TestReplayRefusals(void)
+{
+	refrec_replay_stats_t st;
+	const char *path;
+	long size, i;
+	uint8_t *buf, *copy;
+	uint32_t opened = 0, failed = 0, completed = 0;
+
+	CHECK(ReplayPatched("rp-model", FixModelKind, &st) && !st.failed && mock.ents[0][0].model == NULL,
+			"refusals: a skin id resolved as a model");
+	CHECK(ReplayPatched("rp-skin", FixSkinKind, &st) && !st.failed && mock.ents[0][0].skin == NULL,
+			"refusals: a model id resolved as a skin");
+	CHECK(ReplayPatched("rp-past", FixIdPast, &st) && !st.failed && mock.ents[0][0].model == NULL,
+			"refusals: an id past the string table resolved");
+	CHECK(ReplayPatched("rp-kind", FixTableKind, &st) && st.failed && st.frames == 0,
+			"refusals: a registration of another kind than its table entry was accepted");
+	CHECK(ReplayPatched("rp-index", FixIndexOff, &st) && st.failed && st.frames == 0,
+			"refusals: a frame index entry naming a REC_RENDERFRAME was accepted");
+	CHECK(ReplayPatched("rp-mid", FixIndexMid, &st) && st.failed && st.frames == 0,
+			"refusals: a frame index entry inside a record was accepted");
+	CHECK(!ReplayPatched("rp-order", FixIndexOrder, &st) && st.failed,
+			"refusals: a frame index out of order was accepted");
+	CHECK(ReplayPatched("rp-len", FixRecLen, &st) && st.failed && st.frames == 0 && mock.nfd == 0,
+			"refusals: an oversized record length was accepted");
+	CHECK(ReplayPatched("rp-lenend", FixRecLenEnd, &st) && st.failed && st.frames == 0,
+			"refusals: a record running into the string table was accepted");
+	CHECK(!ReplayPatched("rp-unfinished", FixUnfinished, &st) && st.failed,
+			"refusals: an unfinished trace was accepted");
+	CHECK(!ReplayPatched("rp-tablebig", FixTableBig, &st) && st.failed,
+			"refusals: a string table over the records was accepted");
+	CHECK(ReplayPatched("rp-capture", FixCapture, &st) && st.failed && st.frames == 2 && st.captures == 1,
+			"refusals: a capture out of order was accepted (%u frames, %u captures)", st.frames, st.captures);
+
+	/* every truncation is refused at open; every single-byte change ends cleanly */
+	path = TracePath("rp-sweep");
+	RecordReplayTrace(path);
+	buf = Slurp(path, &size);
+	copy = buf ? malloc(size) : NULL;
+
+	if (!copy)
+	{
+		CHECK(0, "refusals: cannot read the sweep trace");
+		free(buf);
+		return;
+	}
+
+	for (i = 0; i < size; i = SweepNext(buf, i))
+	{
+		Spill(path, buf, i);
+
+		if (Replay(path, API_VERSION, 640, 480, &st))
+		{
+			CHECK(0, "refusals: a trace cut to %ld of %ld bytes was opened", i, size);
+			break;
+		}
+	}
+
+	for (i = 0; i < size; i = SweepNext(buf, i))
+	{
+		memcpy(copy, buf, size);
+		copy[i] ^= 0xa5;
+		Spill(path, copy, size);
+
+		if (Replay(path, API_VERSION, 640, 480, &st))
+		{
+			opened++;
+			failed += st.failed;
+			completed += !st.failed && st.frames == 3;
+			CHECK(st.frames <= 3 && st.captures <= 2, "refusals: byte %ld gave %u frames", i, st.frames);
+		}
+	}
+
+	/* the sweep reaches the records: some changes open and are refused there, some replay */
+	CHECK(opened > 0 && failed > 0 && completed > 0, "refusals: sweep opened %u, failed %u, completed %u",
+			opened, failed, completed);
+	free(copy);
+	free(buf);
+}
+
+/* Only indexed frames replay; an open frame after the last one does not. */
+static void
+TestReplayStructure(void)
+{
+	const char *path = TracePath("replayopen");
+	refrec_replay_stats_t st;
+	int32_t fill[5] = { 1, 2, 3, 4, 5 };
+
+	RefRec_StartRecord(path, 640, 480, 30);
+	RefRec_Control(REC_BEGINFRAME, 0);	/* dropped from the index by the next one */
+	RefRec_Draw(REC_FILL, fill, 5, NULL, 0, NULL, NULL, 0);
+	RefRec_Control(REC_BEGINFRAME, 0);
+	RefRec_Draw(REC_FILL, fill, 5, NULL, 0, NULL, NULL, 0);
+	RefRec_Control(REC_ENDFRAME, 0);
+	RefRec_Control(REC_BEGINFRAME, 0);	/* never closed */
+	RefRec_Draw(REC_FADESCREEN, NULL, 0, NULL, 0, NULL, NULL, 0);
+	RefRec_StopRecord();
+
+	CHECK(Replay(path, API_VERSION, 640, 480, &st) && !st.failed && st.frames == 1,
+			"structure: %u frames, failed %d", st.frames, st.failed);
+	CHECK(mock.nlog == 5 && mock.log[0] == REC_BEGINFRAME && mock.log[2] == REC_BEGINFRAME &&
+			mock.log[4] == REC_ENDFRAME, "structure: %u calls forwarded", mock.nlog);
+	CHECK(mock.last[REC_FADESCREEN].type == 0, "structure: the open frame after the last indexed one was replayed");
+	CHECK(st.warns == 1, "structure: %u warnings counted", st.warns);
+
+	/* a trace without a frame replays nothing and ends */
+	path = TracePath("replayempty");
+	RefRec_StartRecord(path, 640, 480, 30);
+	RefRec_StopRecord();
+	CHECK(Replay(path, API_VERSION, 640, 480, &st) && !st.failed && st.frames == 0 && mock.nlog == 0,
+			"structure: an empty trace");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2972,6 +3679,10 @@ main(int argc, char **argv)
 	TestRecordStopSweep();
 	TestReadEscapes();
 	TestTableReaders();
+	TestReplayRoundTrip();
+	TestReplayBounds();
+	TestReplayRefusals();
+	TestReplayStructure();
 
 	printf("refrecord: %d checks, %d failed\n", checks, failures);
 

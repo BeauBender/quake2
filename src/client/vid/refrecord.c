@@ -35,6 +35,7 @@
  * =======================================================================
  */
 
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2327,20 +2328,683 @@ RefRec_Control(refrec_type_t t, float arg)
 
 /* ---- replayer ---- */
 
-qboolean
-RefRec_OpenReplay(const char *path, refrec_header_t *out)
+typedef char rep_rdflags_check[(REFREC_REPLAY_RDFLAGS ==
+	(RDF_UNDERWATER | RDF_NOWORLDMODEL | RDF_IRGOGGLES | RDF_UVGOGGLES)) ? 1 : -1];
+
+/*
+ * Replayer state. The string table and the frame index are read whole at
+ * open, after their sizes were checked against the file and against
+ * REFREC_MAX_HANDLES and REFREC_MAX_FRAMES; the records are read one at a
+ * time into buf, which a forwarded call's data points into until the next
+ * read.
+ */
+static struct {
+	qboolean open;
+	FILE *f;
+	refrec_target_t t;
+	qboolean have_target;
+	refrec_header_t h;
+	uint8_t *kinds;		/* [nstrings + 1], the string table kind of each id */
+	void **ptrs;		/* [nstrings + 1], the live handle registered under each id */
+	uint32_t nstrings;
+	uint8_t *index;		/* the frame index, frame_count entries, checked at open */
+	uint32_t frame;		/* the next indexed frame */
+	uint32_t pos;		/* file offset of the next record */
+	uint8_t *buf;
+	uint32_t bufsize;
+	refrec_frame_t *in;	/* the REC_RENDERFRAME just read */
+	refrec_call_t call;
+	refrec_replay_stats_t stats;
+} rep;
+
+/* what the target is handed: replay-owned, rebuilt every REC_RENDERFRAME */
+static entity_t rep_entities[MAX_ENTITIES];
+static dlight_t rep_dlights[MAX_DLIGHTS];
+static particle_t rep_particles[MAX_PARTICLES];
+static lightstyle_t rep_lightstyles[MAX_LIGHTSTYLES];
+static byte rep_areabits[REFREC_AREABYTES];
+
+void
+RefRec_SetReplayTarget(const refrec_target_t *t)
 {
-	/* replay is not implemented yet */
+	rep.have_target = t && t->Register && t->RenderFrame && t->Call;
+
+	if (rep.have_target)
+	{
+		rep.t = *t;
+	}
+}
+
+void
+RefRec_ReplayStats(refrec_replay_stats_t *out)
+{
+	*out = rep.stats;
+}
+
+static qboolean
+Rep_Fail(const char *what, uint32_t at)
+{
+	rec_print("refrecord: replay refused: %s (offset %u, frame %u)\n", what, at, rep.frame);
+	rep.stats.failed = true;
+
 	return false;
 }
 
-qboolean
-RefRec_ReplayNextFrame(void)
+/* v moved into [lo, hi]; a non-finite v becomes def */
+static float
+Rep_F(float v, float lo, float hi, float def)
 {
-	return false;
+	if (!isfinite(v))
+	{
+		rep.stats.clamped++;
+		return def;
+	}
+
+	if (v < lo || v > hi)
+	{
+		rep.stats.clamped++;
+		return v < lo ? lo : hi;
+	}
+
+	return v;
+}
+
+static int
+Rep_I(int32_t v, int32_t lo, int32_t hi)
+{
+	if (v < lo || v > hi)
+	{
+		rep.stats.clamped++;
+		return v < lo ? lo : hi;
+	}
+
+	return v;
+}
+
+/* a palette index: its low byte, which is what the renderers that mask draw */
+static int
+Rep_Byte(int32_t v)
+{
+	if (v < 0 || v > 255)
+	{
+		rep.stats.clamped++;
+	}
+
+	return v & 0xff;
+}
+
+static void
+Rep_Vec(float *out, const float *in, int n, float max)
+{
+	int i;
+
+	for (i = 0; i < n; i++)
+	{
+		out[i] = Rep_F(in[i], -max, max, 0.0f);
+	}
+}
+
+/* the live handle the replay registered under id, if the table gives id kind or alt */
+static void *
+Rep_Handle(uint32_t id, uint32_t kind, uint32_t alt)
+{
+	if (id == 0 || id > rep.nstrings || (rep.kinds[id] != kind && rep.kinds[id] != alt))
+	{
+		return NULL;
+	}
+
+	return rep.ptrs[id];
 }
 
 void
 RefRec_CloseReplay(void)
 {
+	if (rep.f)
+	{
+		fclose(rep.f);
+	}
+
+	free(rep.kinds);
+	free(rep.ptrs);
+	free(rep.index);
+	free(rep.buf);
+	free(rep.in);
+	rep.f = NULL;
+	rep.kinds = NULL;
+	rep.ptrs = NULL;
+	rep.index = NULL;
+	rep.buf = NULL;
+	rep.in = NULL;
+	rep.bufsize = 0;
+	rep.nstrings = 0;
+	rep.open = false;
+}
+
+static qboolean
+Rep_ReadAt(uint32_t off, void *dst, uint32_t n)
+{
+	return fseek(rep.f, (long)off, SEEK_SET) == 0 && fread(dst, 1, n, rep.f) == n;
+}
+
+static qboolean
+Rep_Open(const char *path, refrec_header_t *out)
+{
+	uint8_t hb[REFREC_HEADER_SIZE], *table;
+	refrec_reader_t r;
+	uint32_t tablesize, indexsize, count = 0, kind, id, i, fi, prev = 0;
+	uint64_t off;
+	char name[MAX_QPATH];
+	long size;
+
+	if (!rep.have_target)
+	{
+		return Rep_Fail("no replay target", 0);
+	}
+
+	rep.f = fopen(path, "rb");
+
+	if (!rep.f)
+	{
+		return Rep_Fail("cannot open the trace", 0);
+	}
+
+	if (fseek(rep.f, 0, SEEK_END) != 0 || (size = ftell(rep.f)) < 0 ||
+		(uint64_t)size >= 0xffffffffull)
+	{
+		return Rep_Fail("cannot size the trace, or it is 4 GiB or more", 0);
+	}
+
+	RefRec_ReaderInit(&r, hb, sizeof(hb));
+
+	if (size < REFREC_HEADER_SIZE || !Rep_ReadAt(0, hb, sizeof(hb)) ||
+		!RefRec_ReadHeader(&r, &rep.h))
+	{
+		return Rep_Fail("not a trace", 0);
+	}
+
+	/* an unfinished trace has string_table_offset 0, which this refuses */
+	if (!RefRec_CheckLayout(&rep.h, (uint64_t)size, NULL) ||
+		rep.h.frame_count > REFREC_MAX_FRAMES ||
+		rep.h.frame_index_offset - rep.h.string_table_offset >
+			4 + REFREC_MAX_HANDLES * REFREC_STRING_SIZE)
+	{
+		return Rep_Fail("unfinished trace or bad offsets", 0);
+	}
+
+	if (rep.h.api_version != rep.t.api_version)
+	{
+		return Rep_Fail("recorded for another renderer API version", 0);
+	}
+
+	if (rep.h.width != rep.t.width || rep.h.height != rep.t.height)
+	{
+		rec_print("refrecord: the trace is %ux%u, the renderer runs %dx%d\n",
+				rep.h.width, rep.h.height, rep.t.width, rep.t.height);
+		return Rep_Fail("recorded at another resolution", 0);
+	}
+
+	/* the string table: exactly the bytes up to the frame index */
+	tablesize = rep.h.frame_index_offset - rep.h.string_table_offset;
+	table = malloc(tablesize ? tablesize : 1);
+
+	if (!table || !Rep_ReadAt(rep.h.string_table_offset, table, tablesize))
+	{
+		free(table);
+		return Rep_Fail("cannot read the string table", rep.h.string_table_offset);
+	}
+
+	RefRec_ReaderInit(&r, table, tablesize);
+
+	if (RefRec_ReadStringTable(&r, &count))
+	{
+		rep.kinds = calloc(count + 1, 1);
+		rep.ptrs = calloc(count + 1, sizeof(*rep.ptrs));
+	}
+
+	for (i = 0; r.ok && rep.kinds && rep.ptrs && i < count; i++)
+	{
+		if (!RefRec_NextString(&r, &kind, &id, name) || id != i + 1)
+		{
+			r.ok = false;
+			break;
+		}
+
+		rep.kinds[id] = (uint8_t)kind;
+	}
+
+	free(table);
+
+	if (!r.ok || !rep.kinds || !rep.ptrs || r.pos != r.size)
+	{
+		return Rep_Fail("bad string table", rep.h.string_table_offset);
+	}
+
+	rep.nstrings = count;
+
+	/* the frame index: frames 0, 1, 2, ... at rising offsets inside the records */
+	indexsize = rep.h.frame_count * REFREC_INDEX_SIZE;
+	rep.index = malloc(indexsize ? indexsize : 1);
+
+	if (!rep.index || !Rep_ReadAt(rep.h.frame_index_offset, rep.index, indexsize))
+	{
+		return Rep_Fail("cannot read the frame index", rep.h.frame_index_offset);
+	}
+
+	RefRec_ReaderInit(&r, rep.index, indexsize);
+
+	for (i = 0; i < rep.h.frame_count; i++)
+	{
+		if (!RefRec_NextFrameIndex(&r, &fi, &off) || fi != i ||
+			!RefRec_CheckLayout(&rep.h, (uint64_t)size, &off) ||
+			(i > 0 && off <= prev))
+		{
+			return Rep_Fail("bad frame index entry", rep.h.frame_index_offset + i * REFREC_INDEX_SIZE);
+		}
+
+		prev = (uint32_t)off;
+	}
+
+	rep.in = malloc(sizeof(*rep.in));
+
+	if (!rep.in || fseek(rep.f, REFREC_HEADER_SIZE, SEEK_SET) != 0)
+	{
+		return Rep_Fail("out of memory", 0);
+	}
+
+	rep.pos = REFREC_HEADER_SIZE;
+	*out = rep.h;
+
+	return true;
+}
+
+qboolean
+RefRec_OpenReplay(const char *path, refrec_header_t *out)
+{
+	if (rep.open || RefRec_Recording())
+	{
+		return false;
+	}
+
+	memset(&rep.stats, 0, sizeof(rep.stats));
+	rep.frame = 0;
+
+	if (!Rep_Open(path, out))
+	{
+		RefRec_CloseReplay();
+		return false;
+	}
+
+	rep.open = true;
+
+	return true;
+}
+
+/* the offset of indexed frame i's REC_BEGINFRAME (the low word; checked at open) */
+static uint32_t
+Rep_FrameStart(uint32_t i)
+{
+	const uint8_t *p = rep.index + i * REFREC_INDEX_SIZE + 4;
+
+	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/* the next record into rep.call or rep.in; false on anything refused */
+static qboolean
+Rep_Next(refrec_type_t *type)
+{
+	refrec_reader_t r, cvars;
+	uint32_t len, ncvars;
+	uint8_t hb[REFREC_REC_SIZE];
+
+	if (rep.pos > rep.h.string_table_offset - REFREC_REC_SIZE ||
+		fread(hb, 1, sizeof(hb), rep.f) != sizeof(hb))
+	{
+		return Rep_Fail("the records end inside a frame", rep.pos);
+	}
+
+	len = (uint32_t)hb[4] | ((uint32_t)hb[5] << 8) | ((uint32_t)hb[6] << 16) | ((uint32_t)hb[7] << 24);
+
+	if (len > REFREC_REPLAY_MAX_RECORD ||
+		len > rep.h.string_table_offset - rep.pos - REFREC_REC_SIZE)
+	{
+		return Rep_Fail("a record length past the records", rep.pos);
+	}
+
+	if (rep.bufsize < REFREC_REC_SIZE + len)
+	{
+		uint8_t *b = realloc(rep.buf, REFREC_REC_SIZE + len);
+
+		if (!b)
+		{
+			return Rep_Fail("out of memory", rep.pos);
+		}
+
+		rep.buf = b;
+		rep.bufsize = REFREC_REC_SIZE + len;
+	}
+
+	memcpy(rep.buf, hb, sizeof(hb));
+
+	if (fread(rep.buf + REFREC_REC_SIZE, 1, len, rep.f) != len)
+	{
+		return Rep_Fail("cannot read a record", rep.pos);
+	}
+
+	RefRec_ReaderInit(&r, rep.buf, REFREC_REC_SIZE + len);
+
+	if (!RefRec_ReadRecord(&r, type, &rep.call, rep.in, &cvars, &ncvars))
+	{
+		return Rep_Fail("a bad record", rep.pos);
+	}
+
+	rep.pos += REFREC_REC_SIZE + len;
+
+	return true;
+}
+
+static void
+Rep_RenderFrame(void)
+{
+	const refrec_refdef_t *in = &rep.in->refdef;
+	refdef_t fd;
+	int i, j;
+
+	memset(&fd, 0, sizeof(fd));
+	fd.x = Rep_I(in->x, 0, rep.h.width - 1);
+	fd.y = Rep_I(in->y, 0, rep.h.height - 1);
+	fd.width = Rep_I(in->width, 1, rep.h.width - fd.x);
+	fd.height = Rep_I(in->height, 1, rep.h.height - fd.y);
+	fd.fov_x = Rep_F(in->fov_x, 1.0f, 179.0f, 90.0f);
+	fd.fov_y = Rep_F(in->fov_y, 1.0f, 179.0f, 90.0f);
+	Rep_Vec(fd.vieworg, in->vieworg, 3, REFREC_REPLAY_MAX_COORD);
+	Rep_Vec(fd.viewangles, in->viewangles, 3, REFREC_REPLAY_MAX_COORD);
+
+	for (i = 0; i < 4; i++)
+	{
+		fd.blend[i] = Rep_F(in->blend[i], 0.0f, 1.0f, 0.0f);
+	}
+
+	fd.time = Rep_F(in->time, 0.0f, REFREC_REPLAY_MAX_TIME, 0.0f);
+
+	if (in->rdflags & ~REFREC_REPLAY_RDFLAGS)
+	{
+		rep.stats.clamped++;
+	}
+
+	fd.rdflags = in->rdflags & REFREC_REPLAY_RDFLAGS;
+
+	if (in->has_areabits)
+	{
+		memcpy(rep_areabits, in->areabits, sizeof(rep_areabits));
+		fd.areabits = rep_areabits;
+	}
+
+	for (i = 0; i < MAX_LIGHTSTYLES; i++)
+	{
+		for (j = 0; j < 3; j++)
+		{
+			rep_lightstyles[i].rgb[j] = Rep_F(in->lightstyles[i].rgb[j], 0.0f, REFREC_REPLAY_MAX_LIGHT, 0.0f);
+		}
+
+		rep_lightstyles[i].white = Rep_F(in->lightstyles[i].white, 0.0f, REFREC_REPLAY_MAX_LIGHT, 0.0f);
+	}
+
+	fd.lightstyles = rep_lightstyles;
+
+	/* the reader refused counts outside 0..MAX_* */
+	for (i = 0; i < in->num_entities; i++)
+	{
+		const refrec_entity_t *s = &rep.in->entities[i];
+		entity_t *e = &rep_entities[i];
+
+		memset(e, 0, sizeof(*e));
+		e->model = Rep_Handle(s->model_id, REFREC_KIND_MODEL, REFREC_KIND_MODEL);
+		e->skin = Rep_Handle(s->skin_id, REFREC_KIND_SKIN, REFREC_KIND_PIC);
+		Rep_Vec(e->angles, s->angles, 3, REFREC_REPLAY_MAX_COORD);
+		Rep_Vec(e->origin, s->origin, 3, REFREC_REPLAY_MAX_COORD);
+		Rep_Vec(e->oldorigin, s->oldorigin, 3, REFREC_REPLAY_MAX_COORD);
+		e->backlerp = Rep_F(s->backlerp, 0.0f, 1.0f, 0.0f);
+		e->alpha = Rep_F(s->alpha, 0.0f, 1.0f, 1.0f);
+		e->frame = Rep_I(s->frame, 0, INT32_MAX);
+		e->oldframe = Rep_I(s->oldframe, 0, INT32_MAX);
+		/* a beam's skinnum is its palette colour, of which renderers use the
+		   low byte; any other out of range is skin 0, as the renderers draw it */
+		if (s->flags & RF_BEAM)
+		{
+			e->skinnum = s->skinnum & 0xff;
+		}
+		else if (s->skinnum < 0 || s->skinnum >= REFREC_REPLAY_MAX_SKINNUM)
+		{
+			rep.stats.clamped++;
+			e->skinnum = 0;
+		}
+		else
+		{
+			e->skinnum = s->skinnum;
+		}
+
+		e->lightstyle = Rep_I(s->lightstyle, 0, MAX_LIGHTSTYLES - 1);
+		e->flags = s->flags;
+	}
+
+	for (i = 0; i < in->num_dlights; i++)
+	{
+		const dlight_t *s = &rep.in->dlights[i];
+
+		Rep_Vec(rep_dlights[i].origin, s->origin, 3, REFREC_REPLAY_MAX_COORD);
+		/* negative colours are legal: darkening lights */
+		Rep_Vec(rep_dlights[i].color, s->color, 3, REFREC_REPLAY_MAX_LIGHT);
+		rep_dlights[i].intensity = Rep_F(s->intensity, -REFREC_REPLAY_MAX_COORD,
+				REFREC_REPLAY_MAX_COORD, 0.0f);
+	}
+
+	for (i = 0; i < in->num_particles; i++)
+	{
+		const particle_t *s = &rep.in->particles[i];
+
+		Rep_Vec(rep_particles[i].origin, s->origin, 3, REFREC_REPLAY_MAX_COORD);
+		rep_particles[i].color = Rep_Byte(s->color);
+		rep_particles[i].alpha = Rep_F(s->alpha, 0.0f, 1.0f, 1.0f);
+	}
+
+	fd.num_entities = in->num_entities;
+	fd.entities = rep_entities;
+	fd.num_dlights = in->num_dlights;
+	fd.dlights = rep_dlights;
+	fd.num_particles = in->num_particles;
+	fd.particles = rep_particles;
+
+	rep.t.RenderFrame(&fd);
+}
+
+/* the ints and floats of a draw or control record, bounded in place */
+static void
+Rep_BoundCall(refrec_call_t *c)
+{
+	int32_t *n = c->ints;
+	float *f = c->floats;
+	int i;
+
+	switch (c->type)
+	{
+		case REC_STRETCHPIC:
+		case REC_TILECLEAR:
+		case REC_FILL:
+		case REC_STRETCHRAW:
+			n[2] = Rep_I(n[2], 0, REFREC_REPLAY_MAX_2D);
+			n[3] = Rep_I(n[3], 0, REFREC_REPLAY_MAX_2D);
+			/* fall through: x and y */
+		case REC_PICSCALED:
+		case REC_PICSCALEDCOL:
+		case REC_CHARSCALED:
+			n[0] = Rep_I(n[0], -REFREC_REPLAY_MAX_2D, REFREC_REPLAY_MAX_2D);
+			n[1] = Rep_I(n[1], -REFREC_REPLAY_MAX_2D, REFREC_REPLAY_MAX_2D);
+			break;
+
+		default:
+			break;
+	}
+
+	switch (c->type)
+	{
+		case REC_FILL:
+			n[4] = Rep_Byte(n[4]);
+			break;
+
+		case REC_CHARSCALED:
+			n[2] = Rep_Byte(n[2]);
+			/* fall through: the scale */
+		case REC_PICSCALED:
+			f[0] = Rep_F(f[0], 0.0f, REFREC_REPLAY_MAX_SCALE, 1.0f);
+			break;
+
+		case REC_PICSCALEDCOL:
+			f[0] = Rep_F(f[0], 0.0f, REFREC_REPLAY_MAX_SCALE, 1.0f);
+
+			for (i = 1; i < 4; i++)
+			{
+				f[i] = Rep_F(f[i], 0.0f, REFREC_REPLAY_MAX_LIGHT, 1.0f);
+			}
+
+			break;
+
+		case REC_SKY:
+		case REC_BEGINFRAME:
+			Rep_Vec(f, f, c->type == REC_SKY ? 4 : 1, REFREC_REPLAY_MAX_COORD);
+			break;
+
+		default:
+			break;
+	}
+}
+
+/* forwards one record; false when the trace is refused */
+static qboolean
+Rep_Forward(refrec_type_t type, uint32_t at)
+{
+	refrec_call_t *c = &rep.call;
+	void *p;
+
+	switch (type)
+	{
+		case REC_MODEL:
+		case REC_SKIN:
+		case REC_PIC:
+		{
+			uint32_t kind = type == REC_MODEL ? REFREC_KIND_MODEL :
+				type == REC_SKIN ? REFREC_KIND_SKIN : REFREC_KIND_PIC;
+
+			/* id 0 is a registration that failed live: made again, kept nowhere */
+			if (c->id && (c->id > rep.nstrings || rep.kinds[c->id] != kind))
+			{
+				return Rep_Fail("a registration id the string table does not name", at);
+			}
+
+			p = rep.t.Register(type, c->name);
+
+			if (c->id)
+			{
+				rep.ptrs[c->id] = p;
+			}
+
+			return true;
+		}
+
+		case REC_RENDERFRAME:
+			Rep_RenderFrame();
+			return true;
+
+		case REC_CVARS:
+			return true;	/* restored by TASK45 */
+
+		case REC_WARN:
+			rep.stats.warns++;
+			return true;
+
+		case REC_CAPTURE:
+			if ((uint32_t)c->ints[0] != rep.stats.captures)
+			{
+				return Rep_Fail("a capture out of order", at);
+			}
+
+			rep.stats.captures++;
+			rep.t.Call(c);
+			return true;
+
+		case REC_PICSIZE:
+		{
+			int32_t w = c->ints[0], h = c->ints[1];
+
+			rep.t.Call(c);
+
+			if (c->ints[0] != w || c->ints[1] != h)
+			{
+				rep.stats.picsize_mismatch++;
+			}
+
+			return true;
+		}
+
+		default:
+			Rep_BoundCall(c);
+			rep.t.Call(c);
+			return true;
+	}
+}
+
+qboolean
+RefRec_ReplayNextFrame(void)
+{
+	uint32_t start, at;
+	refrec_type_t type;
+	qboolean inframe = false;
+
+	if (!rep.open || rep.stats.failed || rep.frame >= rep.h.frame_count)
+	{
+		return false;
+	}
+
+	start = Rep_FrameStart(rep.frame);
+
+	for (;;)
+	{
+		at = rep.pos;
+
+		/* the records before an indexed frame replay in place, the frame from its offset */
+		if (at > start && !inframe)
+		{
+			return Rep_Fail("a frame index offset that is not a record", at);
+		}
+
+		if (!Rep_Next(&type))
+		{
+			return false;
+		}
+
+		if (at == start)
+		{
+			if (type != REC_BEGINFRAME)
+			{
+				return Rep_Fail("a frame index offset that is not a REC_BEGINFRAME", at);
+			}
+
+			inframe = true;
+		}
+		else if (inframe && type == REC_BEGINFRAME)
+		{
+			return Rep_Fail("a REC_BEGINFRAME inside an indexed frame", at);
+		}
+
+		if (!Rep_Forward(type, at))
+		{
+			return false;
+		}
+
+		if (inframe && type == REC_ENDFRAME)
+		{
+			rep.frame++;
+			rep.stats.frames++;
+			return true;
+		}
+	}
 }
