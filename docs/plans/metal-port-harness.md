@@ -420,9 +420,9 @@ messages) and with the stock `demo1.dm2`.
 |---|---|---|---|---|---|---|---|
 | `world` | `demo1.dm2` | 23 | exact: 0, 0 in 6 of 6 pairs | exact: 0, 0 in 3 of 3 | 0.013180 to 0.081482; 0.132624 to 0.922676 | none: not meaningful (below) | 11.6 to 21.3 |
 | `hud2d` | `demo1.dm2` | 23 | exact: 0, 0 in 6 of 6 | exact in 3 of 3 | 0.461199 to 0.464962; 0.990553 to 0.998561 | none: not meaningful (below) | 13.8 to 20.9 |
-| `models` | `demo1.dm2` | 23 | not exact in 6 of 6: worst 0.000260, 0.004583 | not exact in 3 of 3: worst 0.000150, 0.000345 | 0.015337 to 0.090400; 0.179834 to 0.925937 | none: not meaningful | 10.9 to 20.0 |
+| `models` | `demo1.dm2` | 23 | not exact in 6 of 6: worst 0.000826, 0.004583 | not exact in 3 of 3: worst 0.000150, 0.000345 | 0.015337 to 0.090930; 0.179834 to 0.925937 | none: not meaningful | 10.9 to 20.9 |
 | `particles` | `demo1.dm2` | 23 | not exact in 6 of 6: worst 0.010232, 0.172093 | not exact in 3 of 3: worst 0.011482, 0.130306 | 0.028070 to 0.141715; 0.408568 to 0.998324 | none: not meaningful | 16.2 to 30.6 |
-| `skywater` | `water.dm2` | 4 | not exact in 3 of 6 pairs: worst 0.002562, 0.022972 | exact in 3 of 3 | 0.030261 to 0.033948; 0.539687 to 0.673857 | none: not meaningful | 16.7 to 19.5 |
+| `skywater` | `water.dm2` | 4 | not exact in 3 of 6 pairs: worst 0.002562, 0.022972 | exact in 3 of 3 | 0.030261 to 0.033948; 0.539687 to 0.673857 | `--threshold 0.034 --bad-threshold 0.68` (below) | 16.7 to 19.5 |
 | `skywater` | `demo1.dm2` | 23 | exact: 0, 0 in 6 of 6 | exact in 3 of 3 | identical to `world`: 0.013180 to 0.081482; 0.132624 to 0.922676 | none: not meaningful | 16.2 to 26.0 |
 | `cinematic` | `idlog.cin`, every 7th | 12 | exact: 0, 0 in 6 of 6 | exact in 3 of 3 | 0 to 0.018680; 0 to 0.322956 (frame 0 is black and exact) | `--threshold 0.02 --bad-threshold 0.35` | 17.2 to 23.8 |
 
@@ -433,32 +433,67 @@ commit `885e70fa` (the base of this work).
 
 Renderer string of every `gl1` number above: `Apple Software Renderer`.
 
+The `models` row comes from two measurement sets (the original one at
+1-minute load 10.9 to 20.0 and a re-measurement by the review of this card,
+4 `gl1` and 3 `soft` records of the same build, load 11.2 to 20.9); the
+worst values in it, 0.000826 for `gl1`/`gl1` and 0.090930 for `soft`/`gl1`,
+come from the second set (the first had 0.000260 and 0.090400). Every
+column of the table holds sample maxima of a scenario driven by the engine's
+PRNG, not bounds: a further record can exceed them.
+
 ### Where an agreement threshold means something
 
-Only `cinematic` has one. Its `soft`/`gl1` frames agree to score 0.0187 and
-bad fraction 0.323 at worst, and the proposal keeps the default score
-threshold 0.02 and sets the bad fraction at 0.35, following the convention of
-the table above (the default where the worst value is under it, otherwise the
-worst value rounded up, never widened to make a pin pass). The bad fraction is
-loose, so the score is what rejects a wrong picture: a black frame against
-the `gl1` frames scores up to about 0.12 on `cinematic` (estimated with a
-throwaway script, not the comparator). The score margin against 0.02 is
-small (7 percent), so a third renderer that is smoother or sharper than
-either of these may land over it; that would be a finding, not a threshold
-to move.
+Two scenarios have one: `cinematic` and `skywater` with `water.dm2`.
+
+`cinematic`: its `soft`/`gl1` frames agree to score 0.0187 and bad fraction
+0.323 at worst, and the proposal keeps the default score threshold 0.02 and
+sets the bad fraction at 0.35, following the convention of "Thresholds
+measured for nondeterministic scenarios" (the default where the worst value
+is under it, otherwise the worst value rounded up, never widened to make a
+pin pass). The bad fraction is loose, so both values reject a wrong picture:
+black against the `gl1` frames at `--threshold 0.02 --bad-threshold 0.35`
+passes frame 0 (which is black) and is over on frames 1 to 11, with score
+0.049713 to 0.117941 and bad fraction 0.969580 to 1.000000 (the review of
+this card, `framediff`, load 10.3). The score margin against 0.02 is small
+(7 percent), so a third renderer that is smoother or sharper than either of
+these may land over it; that would be a finding, not a threshold to move.
+
+`skywater` with `water.dm2`: the worst `soft`/`gl1` values are score
+0.033948 and bad fraction 0.673857, so the threshold is the worst value
+rounded up, `--threshold 0.034 --bad-threshold 0.68`. It rejects a black
+frame: made with `framediff --block <gl1 frame> <out> 0 0 640 480 0` from
+each of the 4 frames of one `gl1` record and scored with the comparator,
+black scores 0.044689, 0.052517, 0.052069 and 0.041041 with bad fraction
+0.767340, 0.767340, 0.994681 and 0.993538, over on all four frames at both
+values (1-minute load 7.4, this card's rework). The margin is small on the
+score (0.041 against 0.034) and rests on 4 frames, so it is a starting
+value for a candidate that is not `soft`, not a proof that a wrong picture
+cannot pass.
 
 For the others no agreement threshold is meaningful. `soft` and `gl1` draw
 different pictures of the same scene: bad fractions run from 0.13 to 0.92
-on `world` and `models`, 0.41 to 0.998 on `particles`, 0.54 to 0.67 on the
-`skywater` water demo and 0.99 on `hud2d`, and a threshold wide enough to
-pass all frames would also pass a black frame. A black frame against the
-`gl1` frames scores 0.0375 to 0.1489 (bad fraction 0.62 to 0.999) on
-`world`, 0.0424 to 0.1671 on `models`, 0.0484 to 0.2121 on `particles`, 0.0410
-to 0.0525 (bad 0.77 to 0.99) on `skywater` with the water demo; the `soft`/`gl1`
-ranges overlap those (estimated with the same throwaway script). So a third renderer cannot be judged
-against `soft` by these numbers, and the judge for the shim is `gl1`, not
-`soft`. Causes, each checked by looking at a pair of frames (downscaled
-to PNG in scratch, one pair per cause):
+on `world`, 0.18 to 0.93 on `models`, 0.41 to 0.998 on `particles` and 0.99
+on `hud2d`, and `skywater` with `demo1.dm2` is identical to `world`. A
+black frame against the `gl1` frames, scored with the comparator by the
+review of this card (load 10.3), is over the threshold on only some frames
+when the threshold is wide enough to pass every `soft` frame: at
+`--threshold 0.081482 --bad-threshold 0.922676` (the worst `world` values)
+it passes 15 of 23 frames of `world` and is over on 8 (score 0.037498 to
+0.148949, bad fraction 0.617708 to 0.998796 over the frames); at 0.090930
+and 0.925937 (the worst `models` values) it passes 15 of 23 frames of
+`models` and is over on 8. A record as a whole fails when any frame is over,
+so an all-black record is still rejected, but such a threshold cannot tell
+a wrong picture on most single frames, and the `soft`/`gl1` ranges overlap
+the black-frame ranges. The `particles` black frame (score 0.0484 to
+0.2121) is an estimate from a throwaway script, not the comparator, and
+was not re-measured. `hud2d` is a different case: its reason is the clear
+colour (below), and black scores 0.489265 to 0.499510 there, above the
+worst `soft`/`gl1` value 0.464962, so a threshold that passes `soft` rejects
+every black frame; the `soft`/`gl1` difference there is a property of the
+scenario, not of the picture. So a third renderer cannot be judged against
+`soft` by these numbers, and the judge for the shim is `gl1`, not `soft`.
+Causes, each checked by looking at a pair of frames (downscaled to PNG in
+scratch, one pair per cause):
 
 - Colour depth: `soft` draws from the 8-bit palette, 93 to 174 distinct
   colours per frame in the frames looked at, and `gl1` 1923 to 28318 (true
@@ -486,8 +521,9 @@ to PNG in scratch, one pair per cause):
 ### `gl1` against `gl1`: the floor for the Metal shim
 
 The thresholds the shim is judged at are `gl1-metal` against `gl1`. No
-Metal frame draws yet, so none are set here. The `gl1`/`gl1` column is
-their lower bound: a `gl1-metal` threshold under it would fail two
+Metal frame draws yet; the starting values are in the table below, and the
+first shim card that draws each scenario confirms or revises them. The
+`gl1`/`gl1` column is their lower bound: a `gl1-metal` threshold under it would fail two
 records of `gl1` itself. `world`, `hud2d`, `cinematic` and `skywater` from
 `demo1.dm2` are exact, so any difference there is a real one. `models`
 (worst bad fraction 0.004583, close to the default 0.005 that
@@ -496,7 +532,24 @@ are not exact between two `gl1` records, so for those the floor is the
 worst value in the column, and a Metal candidate is judged against at least
 two `gl1` references and the noise of each.
 These are numbers from Apple's software renderer; on accelerated hardware
-measure them again.
+measure them again. The worst values in the column are sample maxima of a
+PRNG-driven scenario, not bounds (`models` was measured twice and the
+second set was worse), so a floor is a lower bound on what to accept, not
+the number to accept at.
+
+Accept `gl1-metal` against `gl1` at (starting values; the first shim card
+drawing each scenario confirms or revises them, recording the measurement
+if it does):
+
+| Scenario | Accept at | Why |
+|---|---|---|
+| `world` | `--threshold 0.02 --bad-threshold 0.005` (the defaults) | `gl1`/`gl1` is exact |
+| `hud2d` | the defaults | exact |
+| `cinematic` | the defaults | exact |
+| `skywater` with `demo1.dm2` | the defaults | exact |
+| `models` | the defaults, 0.02 and 0.005 | `gl1`/`gl1` worst score 0.000826 is far under 0.02, but the worst bad fraction 0.004583 is 0.0004 under 0.005, so `gl1-metal` has about 8 percent of room on the bad fraction before it is over; widening it is a finding for the card to record, with its measurement |
+| `particles` | `--threshold 0.02 --bad-threshold 0.25` (the `// nondeterministic:` line) | `gl1`/`gl1` worst 0.010232 and 0.172093 |
+| `skywater` with `water.dm2` | `--threshold 0.02 --bad-threshold 0.03` (the `// nondeterministic:` line) | `gl1`/`gl1` worst 0.002562 and 0.022972 |
 
 The `// nondeterministic:` lines of the scenario files are unchanged:
 `gl1` shows the same nondeterminism as `soft` (`models`, `particles`,
