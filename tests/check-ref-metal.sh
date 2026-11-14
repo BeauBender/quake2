@@ -13,7 +13,10 @@
 #     touched; otool -L of the dylib must list Metal and QuartzCore and no
 #     OpenGL. In the same copy "make ref_metal YQ2_OSTYPE=Linux" must fail
 #     with a line naming macOS. Otherwise one line
-#     "check-ref-metal: build skipped: <reason>".
+#     "check-ref-metal: build skipped: <reason>". When the vendored
+#     headers exist, a Makefile that cannot be evaluated, or gives an
+#     SDLCFLAGS that is empty or cannot compile <SDL3/SDL.h>, fails the
+#     check (the probe runs with the make flags cleared, as the builds).
 # (c) Always: the vocabulary check. Under src/client/refresh/metal/ no
 #     gl[A-Z] call and no GL_ identifier in code (outside comments and
 #     string literals), no <OpenGL/ include, no include of a gl1/ path,
@@ -173,11 +176,27 @@ elif ! command -v make >/dev/null 2>&1; then
 	skip="no make"
 else
 	printf 'include Makefile\nrm-print-sdlcflags:\n\t@echo $(SDLCFLAGS)\n' > "${tmp:?}/print.mk"
-	sdlcflags=$(make -s -f "${tmp:?}/print.mk" rm-print-sdlcflags 2>/dev/null || true)
 	printf '#include <SDL3/SDL.h>\nint main(void){return 0;}\n' > "${tmp:?}/sdl.c"
-	# shellcheck disable=SC2086 # SDLCFLAGS is a word list
-	if [ -z "$sdlcflags" ] || ! $cc $sdlcflags -fsyntax-only "${tmp:?}/sdl.c" >/dev/null 2>&1; then
-		skip="the vendored SDL 3 headers are missing (SDLCFLAGS cannot compile <SDL3/SDL.h>)"
+	if [ ! -f third_party/SDL3/include/SDL3/SDL.h ]; then
+		skip="the vendored SDL 3 headers are missing (third_party/SDL3/include/SDL3/SDL.h)"
+	else
+		# the headers are part of the tree: a probe that fails or prints nothing is a
+		# broken Makefile, not a reason to skip. The make flags are cleared, as for the builds.
+		rc=0
+		sdlcflags=$(unset MAKEFLAGS GNUMAKEFLAGS MFLAGS; make -s -f "${tmp:?}/print.mk" rm-print-sdlcflags 2> "${tmp:?}/probe.err") || rc=$?
+		if [ "$rc" != 0 ]; then
+			tail -n 5 "${tmp:?}/probe.err"
+			bad "the Makefile cannot be evaluated (make status $rc printing SDLCFLAGS)"
+			skip="the SDLCFLAGS probe failed"
+		elif [ -z "$sdlcflags" ]; then
+			bad "the Makefile gives an empty SDLCFLAGS although the vendored SDL 3 headers exist"
+			skip="the SDLCFLAGS probe failed"
+		# shellcheck disable=SC2086 # SDLCFLAGS is a word list
+		elif ! $cc $sdlcflags -fsyntax-only "${tmp:?}/sdl.c" > "${tmp:?}/probe.err" 2>&1; then
+			tail -n 5 "${tmp:?}/probe.err"
+			bad "SDLCFLAGS ($sdlcflags) cannot compile <SDL3/SDL.h> although the vendored headers exist"
+			skip="the SDLCFLAGS probe failed"
+		fi
 	fi
 fi
 
