@@ -869,3 +869,24 @@ them given the engine behaves exactly as before.
   path of `A-Z a-z 0-9 _ . / -` without `..`, whose file name starts
   with a letter, digit or `_` and ends in `.q2r`. Needs `pins_dir`;
   refused together with `pins_record`. Default: not given.
+  At the start of the trace the replay restores the renderer cvars the
+  live run had (the trace's cvar snapshot), so the replay needs none of
+  the scenario's settings on its command line. It sets a cvar only when
+  it exists in this engine, its name starts with `gl1_`, `gl3_`, `gl_`,
+  `r_`, `sw_` or `vid_`, it is not write-protected, latched, userinfo
+  or serverinfo, it does not choose the renderer, the window, the
+  display mode or a library (`vid_renderer`, `vid_fullscreen`, `r_mode`
+  and the like), and its value is printable text; everything else in
+  the snapshot is skipped and counted in the line the replay prints at
+  the end. The restored values are never saved.
+
+* **pins_seed**: A fixed seed for the engine's random numbers, for a
+  record or a replay: with it, `pins_record` and `pins_replay` reseed the
+  engine's generator from this number whenever a map's models are
+  registered, so particles and explosions draw the same random numbers
+  in every run. Without it (every normal game) the generator is seeded
+  from the operating system as before. It never reaches the game
+  module's own generator, the dedicated server, or the server's
+  connection challenge, which is drawn from the operating system
+  directly. Must be 1 to 9 digits. Refused without `pins_record` or
+  `pins_replay`. Default: not given.

@@ -47,6 +47,12 @@ text files and need no game data.
 * `PINS_TRACE`: `0` records no renderer trace beside the frames (see
   *Recording*). Default: a trace is recorded. It does not change the
   frames and is not part of the pin's name.
+* `PINS_SEED`: 1 to 9 digits, a fixed seed for the engine's random
+  numbers (the engine's `pins_seed`), applied whenever a map is
+  registered, so `models` and `particles` draw the same explosions and
+  particles on every record. It needs the trace (`PINS_TRACE=0` is
+  refused) and is part of the pin's name. Default: unset, the seed comes
+  from the operating system as in a normal game.
 
 The store path, `PINS_BASEDIR`, `PINS_DEMO` and scenario values may hold
 only `A-Z a-z 0-9 _ . / -`, except that `PINS_DEMO` is a bare file name
@@ -72,6 +78,8 @@ scenario plays `PINS_DEMO`, so all of them follow the same camera path.
 `models` and `particles` are not identical from run to run, because
 explosions and particles draw on random numbers; their files say so in a
 `// nondeterministic:` line, with the thresholds they were measured at.
+Recorded with `PINS_SEED` set they are identical from run to run (see
+*Determinism* below), and compare at `--threshold 0 --bad-threshold 0`.
 The others were identical from run to run, observed on one host with the
 software renderer. `skywater` played from `water.dm2` (below) is also
 marked nondeterministic: the water warp follows the client's clock, and
@@ -121,8 +129,46 @@ recorded size, writes a frame wherever the live run captured one, with
 the same names, and quits after the last frame. No server, demo, sound
 or input runs, so the game module may be absent. A replay is a pin run
 even without `pins_capture`: no configuration file is read or written,
-and an error stops the engine. `scripts/pins.sh` does not drive this
-yet.
+and an error stops the engine. The replay first restores the renderer
+cvars the live run had (`r_*`, `gl_*`, `gl1_*`, `gl3_*`, `sw_*`,
+`vid_*`, from the trace), so it needs none of the scenario's settings on
+its command line; the cvars that choose the renderer, the window or the
+display mode are never changed, and nothing is saved. `scripts/pins.sh`
+does not drive this yet.
+
+### Determinism
+
+A renderer replaying its own trace draws exactly the frames it drew
+live: everything it is handed is in the trace, `refdef_t.time` included
+(bit-exact, `tests/check-refrecord.sh`), and the renderer cvars are
+restored from it. The renderers in this tree draw no random numbers
+themselves; the randomness of explosions and particles is the client's,
+and the trace records its result. So the replay is identical to the
+live run with or without `PINS_SEED`; `PINS_SEED` makes two live runs
+identical too.
+
+Measured (TASK45) on Apple silicon, load average 1.8 to 6.0 while the
+runs went, 640x480, every 30th frame of `demo1.dm2` (23 frames;
+`cinematic` 3 frames of `idlog.cin`), `framediff` with both thresholds
+0. Each live record was replayed twice with no scenario setting on the
+replay's command line:
+
+| Comparison | `soft` | `gl1-metal` |
+|---|---|---|
+| live against replay, `world` `models` `particles` `hud2d` `skywater` `cinematic` | 0.000000 on every frame, every scenario, both replays | 0.000000 on every frame, every scenario, both replays |
+| live against replay, `particles` and `models` with `PINS_SEED=1`, 3 records each (gl1-metal: `particles`, 2 records) | 0.000000 on every frame | 0.000000 on every frame |
+| live against live, `particles`, no seed | 16 of 23 frames differ, worst score 0.011087, bad fraction 0.110687 | not measured |
+| live against live, `models`, no seed | 1 of 23 frames differs, worst score 0.000114 | not measured |
+| live against live, `particles` and `models`, `PINS_SEED=1`, every pair of 3 records (soft) or 2 (gl1-metal, `particles`) | 0.000000 on every frame | 0.000000 on every frame |
+| live against live, `particles`, `PINS_SEED=1` against `PINS_SEED=2` | 16 of 23 frames differ, worst score 0.010905 | not measured |
+
+Replaying the `hud2d` trace with the cvar restore switched off (a
+measurement build only) differed on all 23 frames (worst score
+0.126499): the replay drew the world `hud2d` switches off. `gl1` itself
+could not create an OpenGL context on that host and was not measured.
+A live record taken while the host stalls for more than 100 ms a frame
+can still differ from another live record (see `skywater` above); its
+replay matches it all the same.
 
 A trace is a local development artifact: your own engine records it,
 you name it on the command line, and like the rest of the store it is
@@ -403,7 +449,7 @@ refusal with a stand-in uploader; it runs in `scripts/test.sh` as
 
 `record` passes four arguments to the engine, `pins_dir`,
 `pins_scenario`, `pins_capture` and `pins_record` (the last one left out
-with `PINS_TRACE=0`). They look like cvars but are read
+with `PINS_TRACE=0`), and a fifth, `pins_seed`, when `PINS_SEED` is set. They look like cvars but are read
 only from the command line; see the *Pin harness* section of the
 [List Of All New Console Variables](040_cvarlist.md). Without them the
 engine behaves exactly as it does otherwise.

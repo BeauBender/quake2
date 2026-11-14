@@ -288,7 +288,7 @@ void RefRec_Control(refrec_type_t t, float arg);
  * the trace is skipped and counted (stats.cvars_skipped), never refused.
  */
 #define REFREC_CVAR_PREFIXES	"gl1_", "gl3_", "gl_", "r_", "sw_", "vid_"
-#define REFREC_CVAR_NEVER	"vid_renderer", "vid_fullscreen", "vid_displayindex", \
+#define REFREC_CVAR_NEVER	"vid_renderer", "vid_fullscreen", "vid_displayindex", "vid_displayrefreshrate", \
 	"vid_highdpiaware", "vid_rate", "r_mode", "r_customwidth", "r_customheight", \
 	"r_vsync", "r_msaa_samples", "gl3_libgl", "gl3_debugcontext"
 qboolean RefRec_CvarRecorded(const char *name, int flags);
