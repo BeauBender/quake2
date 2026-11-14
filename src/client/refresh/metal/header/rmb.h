@@ -685,6 +685,17 @@ typedef struct
 void rm_lm_join(const rm_lmrect_t *adding, rm_lmrect_t *obj);
 
 /*
+ * gl1's R_RegenAllLightmaps after it rebuilt a surface's lightmap:
+ * *dirty, the surface is rebuilt next frame whatever its styles, when a
+ * dynamic light touched it this frame (dlit) or its slice's region did
+ * not reach the texture (uploaded 0); returns 1 when its styles' values
+ * are to be recorded as built (R_SetCacheState): not dirty and one style
+ * is 0 or 32 and above (cacheable), the only styles gl1 records. A
+ * refused upload records nothing, so the next frame retries it.
+ */
+int rm_lm_regen_mark(int uploaded, int dlit, int cacheable, int *dirty);
+
+/*
  * gl1's minlight table (R_InitImages, gl1_image.c) for gl1_minlight m:
  * the identity for m 0 (returns 0, gl_state.minlight_set off), otherwise
  * (255 - m) * i / 255 + m (returns 1). m is clamped to 0 .. 255 first.

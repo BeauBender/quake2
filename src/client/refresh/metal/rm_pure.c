@@ -1308,6 +1308,14 @@ rm_lm_join(const rm_lmrect_t *adding, rm_lmrect_t *obj)
 	}
 }
 
+int
+rm_lm_regen_mark(int uploaded, int dlit, int cacheable, int *dirty)
+{
+	*dirty = !uploaded || dlit;
+
+	return !*dirty && cacheable;
+}
+
 /* from gl1_image.c, R_InitImages; a NaN is 0 (gl1 would convert it to a byte) */
 int
 rm_minlight_table(float m, unsigned char *table)

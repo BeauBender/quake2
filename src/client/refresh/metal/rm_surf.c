@@ -205,13 +205,54 @@ R_RecursiveWorldNode(entity_t *currententity, mnode_t *node)
 }
 
 /*
+ * gl1's test of R_RegenAllLightmaps: whether the lightmap of a lit
+ * surface of the chain is rebuilt this frame (a style changed since it
+ * was recorded, a dynamic light touched it this frame, or it is still
+ * dirty from the last one), with smax, tmax and a region inside slice
+ * i; 0 for the classes gl1 skips there. It reads only what the rebuild
+ * changes after the slice's upload, so both walks of the chain agree.
+ */
+static qboolean
+R_LightmapRebuilt(msurface_t *surf, int i, int nslices, int *smax, int *tmax)
+{
+	int map;
+
+	if (surf->texinfo->flags & (SURF_SKY | SURF_TRANS33 | SURF_TRANS66 | SURF_WARP))
+	{
+		return false;
+	}
+
+	/* Any dynamic lights on this surface? */
+	for (map = 0; map < MAXLIGHTMAPS && surf->styles[map] != 255; map++)
+	{
+		if (r_newrefdef.lightstyles[surf->styles[map]].white != surf->cached_light[map])
+		{
+			goto dynamic_surf;
+		}
+	}
+
+	/* Surface is considered to have dynamic lights if it had them in the previous frame */
+	if ((surf->dlightframe != r_framecount) && !surf->dirty_lightmap)
+	{
+		return false; /* no dynamic lights affect this surface in this frame */
+	}
+
+dynamic_surf:
+	return rm_lm_size(surf->extents[0], surf->extents[1], smax, tmax) &&
+		rm_lm_region_ok(i, nslices, surf->light_s, surf->light_t, *smax, *tmax);
+}
+
+/*
  * from gl1_surf.c: rebuilds the lightmaps whose styles changed since they
  * were built (or that a dynamic light touched this frame or the last),
  * per slice, and uploads the joined rectangle of each changed slice
  * before the chains draw (multitexture path only). gl1's tile-rendering
  * copies are left out (design section 7). The rectangles are inside
  * their slice by the load's checks and are checked again before a
- * write (rm_lm_region_ok).
+ * write (rm_lm_region_ok). Which surfaces stay dirty and which record
+ * their styles as built is decided after the upload (rm_lm_regen_mark):
+ * when the slice's region is refused, its rebuilt surfaces stay dirty
+ * and record nothing, so the next frame rebuilds and uploads them again.
  */
 static void
 R_RegenAllLightmaps(void)
@@ -230,6 +271,7 @@ R_RegenAllLightmaps(void)
 		msurface_t *surf;
 		byte *base, *slice = LM_SliceBuffer(i);
 		qboolean affected_lightmap;
+		int uploaded, smax, tmax;
 		long left = r_worldmodel->numsurfaces;
 
 		if (!lightmap_surfaces[i] || !slice)
@@ -245,31 +287,7 @@ R_RegenAllLightmaps(void)
 		/* a chain holds each surface once (the walk visits it once); bounded all the same */
 		for (surf = lightmap_surfaces[i]; surf != 0 && left > 0; surf = surf->lightmapchain, left--)
 		{
-			int map, smax, tmax;
-
-			if (surf->texinfo->flags & (SURF_SKY | SURF_TRANS33 | SURF_TRANS66 | SURF_WARP))
-			{
-				continue;
-			}
-
-			/* Any dynamic lights on this surface? */
-			for (map = 0; map < MAXLIGHTMAPS && surf->styles[map] != 255; map++)
-			{
-				if (r_newrefdef.lightstyles[surf->styles[map]].white != surf->cached_light[map])
-				{
-					goto dynamic_surf;
-				}
-			}
-
-			/* Surface is considered to have dynamic lights if it had them in the previous frame */
-			if ((surf->dlightframe != r_framecount) && !surf->dirty_lightmap)
-			{
-				continue; /* no dynamic lights affect this surface in this frame */
-			}
-
-dynamic_surf:
-			if (!rm_lm_size(surf->extents[0], surf->extents[1], &smax, &tmax) ||
-				!rm_lm_region_ok(i, w->lmslices, surf->light_s, surf->light_t, smax, tmax))
+			if (!R_LightmapRebuilt(surf, i, w->lmslices, &smax, &tmax))
 			{
 				continue;
 			}
@@ -286,35 +304,53 @@ dynamic_surf:
 
 			R_BuildLightMap(surf, base, RM_LM_WIDTH * RM_LM_BYTES);
 
-			surf->dirty_lightmap = (surf->dlightframe == r_framecount);
-
-			if (!surf->dirty_lightmap)
-			{
-				for (map = 0; map < MAXLIGHTMAPS && surf->styles[map] != 255; map++)
-				{
-					if ((surf->styles[map] >= 32) || (surf->styles[map] == 0))
-					{
-						R_SetCacheState(surf);
-						break;
-					}
-				}
-			}
-
 			rm_lm_join(&current, &best);
 		}
 
-		if (!affected_lightmap ||
-			!rm_lm_region_ok(i, w->lmslices, best.left, best.top, best.right - best.left, best.bottom - best.top))
+		if (!affected_lightmap)
 		{
 			continue;
 		}
 
 		/* upload changes */
-		base = slice;
-		base += (best.top * RM_LM_WIDTH + best.left) * RM_LM_BYTES;
+		uploaded = 0;
 
-		rmb_texture_region(w->lmtex, i, best.left, best.top, best.right - best.left, best.bottom - best.top,
-				base, RM_LM_WIDTH * RM_LM_BYTES);
+		if (rm_lm_region_ok(i, w->lmslices, best.left, best.top, best.right - best.left, best.bottom - best.top))
+		{
+			base = slice;
+			base += (best.top * RM_LM_WIDTH + best.left) * RM_LM_BYTES;
+
+			uploaded = rmb_texture_region(w->lmtex, i, best.left, best.top, best.right - best.left,
+					best.bottom - best.top, base, RM_LM_WIDTH * RM_LM_BYTES) != 0;
+		}
+
+		/* the same surfaces as above: nothing they test changed in between */
+		for (surf = lightmap_surfaces[i], left = r_worldmodel->numsurfaces; surf != 0 && left > 0;
+			 surf = surf->lightmapchain, left--)
+		{
+			int map, dirty, cacheable = 0;
+
+			if (!R_LightmapRebuilt(surf, i, w->lmslices, &smax, &tmax))
+			{
+				continue;
+			}
+
+			for (map = 0; map < MAXLIGHTMAPS && surf->styles[map] != 255; map++)
+			{
+				if ((surf->styles[map] >= 32) || (surf->styles[map] == 0))
+				{
+					cacheable = 1;
+					break;
+				}
+			}
+
+			if (rm_lm_regen_mark(uploaded, surf->dlightframe == r_framecount, cacheable, &dirty))
+			{
+				R_SetCacheState(surf);
+			}
+
+			surf->dirty_lightmap = dirty;
+		}
 	}
 }
 

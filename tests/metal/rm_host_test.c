@@ -1778,6 +1778,39 @@ test_lm_join(void)
 	}
 }
 
+/*
+ * After a rebuilt lightmap (rm_lm_regen_mark), gl1's R_RegenAllLightmaps
+ * keeps a surface dirty when a dynamic light touched it this frame, and
+ * records its styles as built when one is 0 or 32 and above; here also
+ * when its slice's upload was refused, it stays dirty and nothing is
+ * recorded, so the next frame rebuilds and uploads it again. Every row.
+ */
+static void
+test_lm_regen_mark(void)
+{
+	int up, dl, ca, dirty, ok = 1;
+
+	for (up = 0; up < 2; up++)
+	{
+		for (dl = 0; dl < 2; dl++)
+		{
+			for (ca = 0; ca < 2; ca++)
+			{
+				int cache;
+
+				dirty = 7;
+				cache = rm_lm_regen_mark(up, dl, ca, &dirty);
+				ok &= (dirty == (!up || dl)) && (cache == (up && !dl && ca));
+			}
+		}
+	}
+
+	CHECK(ok);
+	/* any non-zero value is true */
+	CHECK(rm_lm_regen_mark(2, 0, 3, &dirty) == 1 && dirty == 0);
+	CHECK(rm_lm_regen_mark(0, 0, 1, &dirty) == 0 && dirty == 1);
+}
+
 /* gl1's minlight table: the identity at 0, (255 - m) * i / 255 + m otherwise, m clamped. */
 static void
 test_minlight(void)
@@ -2104,6 +2137,7 @@ main(void)
 	test_lm_alloc();
 	test_lm_regions();
 	test_lm_join();
+	test_lm_regen_mark();
 	test_minlight();
 	test_lm_build();
 	test_lm_combine();
