@@ -90,8 +90,8 @@ mgl_vertex_main(uint vid [[vertex_id]],
 	mgl_varying out;
 	float4 p = u.mvp * v[vid].pos;
 
-	/* GL clips z to [-w, w], Metal to [0, w]: the same depth after the viewport */
-	p.z = (p.z + p.w) * 0.5;
+	/* GL clips z to [-w, w], Metal to [0, w]: the same depth after the viewport (mgl_texenv.h) */
+	p.z = mgl_gl_clip_z(p.z, p.w);
 
 	out.position = p;
 	out.tc0 = v[vid].tc0;

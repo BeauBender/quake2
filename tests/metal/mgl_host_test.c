@@ -1436,6 +1436,324 @@ test_world_units(void)
 	glDepthMask(GL_TRUE);
 }
 
+/* Clip coordinates of vertex i of the last draw: its mvp (column-major) times the position. */
+static void
+test_clip(int i, float out[4])
+{
+	const float *m = last_draw.u.mvp, *p = last_draw.vertices[i].pos;
+	int r;
+
+	for (r = 0; r < 4; r++)
+	{
+		out[r] = m[r] * p[0] + m[4 + r] * p[1] + m[8 + r] * p[2] + m[12 + r] * p[3];
+	}
+}
+
+/*
+ * The stencil test and update of one fragment as GL 1.4, section 4.1.5
+ * defines them, read from a depth and stencil key (mgl_depth_stencil_key)
+ * and the draw's reference: what Metal is asked to do, written out so the
+ * hand-worked values below can be checked against it. Returns 1 when the
+ * fragment passes; *stored is the stencil value, updated.
+ */
+static int
+test_stencil(uint64_t key, uint32_t ref, int depth_pass, unsigned *stored)
+{
+	unsigned rmask = (unsigned)((key >> 18) & 0xff), wmask = (unsigned)((key >> 26) & 0xff);
+	unsigned a = ref & rmask, b = *stored & rmask, v = *stored;
+	int pass, op;
+
+	if (!(key & (1u << 5)))
+	{
+		return 1;
+	}
+
+	switch ((key >> 6) & 7)
+	{
+		case 0: pass = 0; break;
+		case 1: pass = a < b; break;
+		case 2: pass = a == b; break;
+		case 3: pass = a <= b; break;
+		case 4: pass = a > b; break;
+		case 5: pass = a != b; break;
+		case 6: pass = a >= b; break;
+		default: pass = 1;
+	}
+
+	op = (int)((key >> (!pass ? 9 : (!depth_pass ? 12 : 15))) & 7);
+
+	switch (op)
+	{
+		case 1: v = 0; break;
+		case 2: v = ref; break;
+		case 3: v = v < 255 ? v + 1 : 255; break;
+		case 4: v = v > 0 ? v - 1 : 0; break;
+		case 5: v = ~v & 0xff; break;
+		default: break;
+	}
+
+	*stored = (*stored & ~wmask) | (v & wmask);
+	return pass && depth_pass;
+}
+
+/*
+ * The model path as gl1 sets it up (R_ApplyGLBuffer buf_alias, buf_flash
+ * and buf_shadow in gl1_buffer.c, R_DrawAliasModel and R_DrawAliasShadow
+ * in gl1_mesh.c, R_RenderDlights in gl1_light.c), checked against values
+ * worked out by hand. gl1 computes the vertex colours (shadedots times
+ * shadelight, as bytes), the flash blob's fan and the shadow's projected
+ * points on the CPU; the shim normalises the bytes, multiplies the
+ * matrices, maps GL's clip depth to Metal's and passes the depth range,
+ * cull, blend and stencil state on.
+ */
+static void
+test_models(void)
+{
+	static const GLfloat vtx[] = {1, 1, 0, -1, 1, 0, 1, -1, 0};
+	static const GLfloat tex[] = {0, 0, 1, 0, 0, 1};
+	static const GLubyte clr[] = {255, 128, 0, 255, 51, 102, 204, 255, 0, 0, 0, 77};
+	static const GLushort idx[] = {0, 1, 2};
+	static const unsigned char skin[4] = {128, 255, 64, 255};
+	static const GLfloat bbox[24] = {0};
+	GLfloat proj[16], got[16];
+	float c[4];
+	mgl_rgba_t f, dst;
+	mgl_raster_t r;
+	unsigned st;
+	int i, before;
+
+	mgl_state_reset();
+	mgl_textures_reset();
+
+	/* R_SetupGL: the world's frustum (l, r, b, t, n, f) = (-2, 2, -1, 1, 1, 3), the eye 2 units back */
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glFrustum(-2, 2, -1, 1, 1, 3);
+	glGetFloatv(GL_PROJECTION_MATRIX, proj);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glTranslatef(0, 0, -2);
+	glCullFace(GL_FRONT);
+	glEnable(GL_CULL_FACE);
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_LEQUAL);
+	glBindTexture(GL_TEXTURE_2D, 1500);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, skin);
+	glEnable(GL_TEXTURE_2D);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	CHECK(ERR() == GL_NO_ERROR);
+
+	/*
+	 * The view weapon, left-handed: RF_DEPTHHACK and RF_WEAPONMODEL with
+	 * gl_lefthand 1. gl1 computes the range on the CPU,
+	 * gldepthmin + 0.3 * (gldepthmax - gldepthmin) = 0.3; the shim's
+	 * glDepthRange (mgl_frame.c, not linked here) stores it clamped, and
+	 * mgl_compute_raster hands it to the Metal viewport.
+	 */
+	mgl_state.depth_near = 0.0;
+	mgl_state.depth_far = 0.0 + 0.3 * (1.0 - 0.0);
+	glMatrixMode(GL_PROJECTION);
+	glPushMatrix();
+	glLoadIdentity();
+	glScalef(-1, 1, 1);
+	glFrustum(-2, 2, -1, 1, 1, 3);
+	glMatrixMode(GL_MODELVIEW);
+	glCullFace(GL_BACK);
+	glShadeModel(GL_SMOOTH);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glVertexPointer(3, GL_FLOAT, 0, vtx);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	glTexCoordPointer(2, GL_FLOAT, 0, tex);
+	glEnableClientState(GL_COLOR_ARRAY);
+	glColorPointer(4, GL_UNSIGNED_BYTE, 0, clr);
+	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, idx);
+	CHECK(ERR() == GL_NO_ERROR && mgl_state.projection_depth == 1 && last_draw.nindices == 3);
+	/* the left-handed weapon culls the other face; depth tested and written as the world */
+	CHECK(last_draw.cull == MGL_CULL_BACK && last_draw.pipeline_key == (15u << 9));
+	CHECK(last_draw.depth_stencil_key == (1u | ((uint64_t)(GL_LEQUAL - GL_NEVER) << 1) | (1u << 4)));
+	/*
+	 * (1, 1, 0) is (1, 1, -2) in the eye; the frustum gives clip
+	 * (0.5, 1, 1, 2) and the mirror (-0.5, 1, 1, 2): NDC x -0.25, y 0.5,
+	 * z 0.5. GL's window depth in the range 0 .. 0.3 is
+	 * 0 + 0.3 * (0.5 + 1) / 2 = 0.225; the shim's clip depth for Metal
+	 * is (1 + 2) / 2 = 1.5, and 0 + 0.3 * 1.5 / 2 is the same 0.225.
+	 */
+	test_clip(0, c);
+	CHECK(c[0] == -0.5f && c[1] == 1.0f && c[2] == 1.0f && c[3] == 2.0f);
+	CHECK(mgl_gl_clip_z(c[2], c[3]) == 1.5f);
+	mgl_compute_raster(&mgl_state, 640, 480, &r);
+	CHECK(r.znear == 0.0 && r.zfar == 0.3 &&
+		fabs(r.znear + (r.zfar - r.znear) * mgl_gl_clip_z(c[2], c[3]) / c[3] - 0.225) < 1e-6);
+	/* the near and far planes land on the ends of the range: clip z -w and w */
+	CHECK(mgl_gl_clip_z(-2.0f, 2.0f) == 0.0f && mgl_gl_clip_z(2.0f, 2.0f) == 2.0f && mgl_gl_clip_z(0, 4.0f) == 2.0f);
+	/* (-1, 1, 0) mirrors to the other side */
+	test_clip(1, c);
+	CHECK(c[0] == 0.5f && c[1] == 1.0f);
+	/* the colours gl1 computed, normalised; the skin modulated by them (an RGB skin: the vertex alpha stays) */
+	CHECK(last_draw.vertices[0].color[0] == 1.0f && last_draw.vertices[0].color[1] == 128.0f / 255.0f &&
+		last_draw.vertices[0].color[2] == 0.0f && last_draw.vertices[2].color[3] == 77.0f / 255.0f);
+	CHECK(last_draw.u.texenv0 == MGL_TEXENV_MODULATE && last_draw.u.tex_opaque0 == 1 &&
+		last_draw.texture0 == mgl_texture(1500)->mtl);
+	f = mgl_texenv_stage(last_draw.u.texenv0, last_draw.u.tex_opaque0, last_draw.u.rgb_scale0,
+		rgba(1.0f, 0.5f, 0.25f, 1.0f), rgba(0.5f, 1.0f, 0.25f, 1.0f));
+	CHECK(same(f, 0.5f, 0.5f, 0.0625f, 1.0f));
+
+	/* and back: GL_REPLACE, GL_FLAT, the world's projection, GL_FRONT, the whole range */
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glShadeModel(GL_FLAT);
+	glMatrixMode(GL_PROJECTION);
+	glPopMatrix();
+	glMatrixMode(GL_MODELVIEW);
+	glCullFace(GL_FRONT);
+	mgl_state.depth_far = 1.0;
+	glGetFloatv(GL_PROJECTION_MATRIX, got);
+	CHECK(ERR() == GL_NO_ERROR && mgl_state.projection_depth == 0 && memcmp(got, proj, sizeof(proj)) == 0);
+
+	/* a right-handed model: not mirrored, GL_FRONT culled; flat shading is not modelled (design section 11) */
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	glShadeModel(GL_SMOOTH);
+	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, idx);
+	test_clip(0, c);
+	CHECK(last_draw.cull == MGL_CULL_FRONT && c[0] == 0.5f && c[2] == 1.0f && c[3] == 2.0f);
+
+	/* RF_SHELL_*: the texture off, the colours alone; RF_TRANSLUCENT blends them over what is there */
+	glDisable(GL_TEXTURE_2D);
+	glEnable(GL_BLEND);
+	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, idx);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.u.texenv0 == MGL_TEXENV_NONE && last_draw.texture0 == NULL);
+	CHECK(last_draw.pipeline_key == (1u | (4u << 1) | (5u << 5) | (15u << 9)));
+	dst = test_blend(last_draw.pipeline_key, rgba(1, 0, 0, 0.25f), rgba(0, 0, 1, 1));
+	CHECK(same(dst, 0.25f, 0, 0.75f, 0.8125f));
+	glDisable(GL_BLEND);
+	glEnable(GL_TEXTURE_2D);
+
+	/*
+	 * The flash blobs, R_RenderDlights with gl1_flashblend 1: untextured,
+	 * the colour array (centre light->color * 51, rim black), GL_ONE,
+	 * GL_ONE and no depth write; the blob adds, clamped.
+	 */
+	glDepthMask(GL_FALSE);
+	glDisable(GL_TEXTURE_2D);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_ONE, GL_ONE);
+	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+	glDrawArrays(GL_TRIANGLE_FAN, 0, 3);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.u.texenv0 == MGL_TEXENV_NONE && last_draw.nindices == 3);
+	CHECK(last_draw.pipeline_key == (1u | (1u << 1) | (1u << 5) | (15u << 9)));
+	CHECK(last_draw.depth_stencil_key == (1u | ((uint64_t)(GL_LEQUAL - GL_NEVER) << 1)));
+	CHECK(last_draw.vertices[1].color[0] == 0.2f && last_draw.vertices[1].color[1] == 0.4f &&
+		last_draw.vertices[1].color[2] == 0.8f);
+	dst = test_blend(last_draw.pipeline_key, rgba(0.2f, 0.4f, 0.8f, 1), rgba(0.25f, 0.5f, 0.5f, 1));
+	CHECK(fabsf(dst.r - 0.45f) < 1e-6f && fabsf(dst.g - 0.9f) < 1e-6f && dst.b == 1.0f && dst.a == 1.0f);
+	glDisableClientState(GL_COLOR_ARRAY);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDisable(GL_BLEND);
+	glDepthMask(GL_TRUE);
+
+	/*
+	 * The shadow, R_DrawAliasShadow: untextured, the current colour
+	 * (0, 0, 0, 0.5) blended, depth tested and written. R_Clear clears
+	 * the stencil to 1 (glClearStencil(1)) when gl1_stencilshadow is on.
+	 */
+	glColor4f(0, 0, 0, 0.5f);
+	glEnable(GL_BLEND);
+	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, idx);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.vertices[2].color[3] == 0.5f && last_draw.vertices[2].color[0] == 0);
+	CHECK(last_draw.depth_stencil_key == (1u | ((uint64_t)(GL_LEQUAL - GL_NEVER) << 1) | (1u << 4)));
+	/* gl1_stencilshadow 0: two triangles of the shadow over one pixel darken it twice, 0.8 to 0.4 to 0.2 */
+	st = 1;
+	dst = rgba(0.8f, 0.8f, 0.8f, 1);
+
+	for (i = 0; i < 2; i++)
+	{
+		if (test_stencil(last_draw.depth_stencil_key, last_draw.stencil_ref, 1, &st))
+		{
+			const float *v = last_draw.vertices[0].color;
+
+			dst = test_blend(last_draw.pipeline_key, rgba(v[0], v[1], v[2], v[3]), dst);
+		}
+	}
+
+	CHECK(fabsf(dst.r - 0.2f) < 1e-6f && st == 1);
+	/* gl1_stencilshadow 1: GL_EQUAL 1 under mask 2 passes on 1 and on 0 ((1 & 2) == (s & 2)), GL_INCR makes 2 */
+	glEnable(GL_STENCIL_TEST);
+	glStencilFunc(GL_EQUAL, 1, 2);
+	glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
+	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, idx);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.stencil_ref == 1);
+	CHECK(last_draw.depth_stencil_key == (1u | ((uint64_t)(GL_LEQUAL - GL_NEVER) << 1) | (1u << 4) | (1u << 5) |
+		(2ull << 6) | (3ull << 15) | (2ull << 18) | (0xffull << 26)));
+	st = 1;
+	dst = rgba(0.8f, 0.8f, 0.8f, 1);
+
+	for (i = 0; i < 2; i++)
+	{
+		if (test_stencil(last_draw.depth_stencil_key, last_draw.stencil_ref, 1, &st))
+		{
+			dst = test_blend(last_draw.pipeline_key, rgba(0, 0, 0, 0.5f), dst);
+		}
+	}
+
+	/* the second fragment fails ((2 & 2) != 0): darkened once, the stencil 2 */
+	CHECK(fabsf(dst.r - 0.4f) < 1e-6f && st == 2);
+	/* a fragment behind the wall (depth fails) keeps the stencil, so a later one may still darken there */
+	st = 1;
+	CHECK(!test_stencil(last_draw.depth_stencil_key, last_draw.stencil_ref, 0, &st) && st == 1);
+	/* the stencil cleared to 0 (gl1_stencilshadow 0, or a stereo mode): (0 & 2) == (1 & 2), and INCR makes 1, then 2 */
+	st = 0;
+	CHECK(test_stencil(last_draw.depth_stencil_key, last_draw.stencil_ref, 1, &st) && st == 1);
+	CHECK(test_stencil(last_draw.depth_stencil_key, last_draw.stencil_ref, 1, &st) && st == 2);
+	CHECK(!test_stencil(last_draw.depth_stencil_key, last_draw.stencil_ref, 1, &st) && st == 2);
+	/* the increment stops at the eight bits */
+	st = 255;
+	test_stencil((1u << 5) | (7ull << 6) | (3ull << 15) | (0xffull << 18) | (0xffull << 26), 0, 1, &st);
+	CHECK(st == 255);
+	glDisable(GL_STENCIL_TEST);
+	glDisable(GL_BLEND);
+	glColor4f(1, 1, 1, 1);
+
+	/* gl_showbbox: an 8-vertex strip in lines, culling and texture off: six triangles, all faces drawn */
+	glDisable(GL_CULL_FACE);
+	glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+	glDisable(GL_TEXTURE_2D);
+	glVertexPointer(3, GL_FLOAT, 0, bbox);
+	before = draws;
+	glDrawArrays(GL_TRIANGLE_STRIP, 0, 8);
+	CHECK(ERR() == GL_NO_ERROR && draws == before + 1 && last_draw.nindices == 18 && last_draw.fill_lines &&
+		last_draw.cull == MGL_CULL_NONE && last_draw.u.texenv0 == MGL_TEXENV_NONE);
+	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+	glEnable(GL_CULL_FACE);
+	glEnable(GL_TEXTURE_2D);
+	glDisableClientState(GL_VERTEX_ARRAY);
+
+	/* the projection stack the weapon pushes: the last push that fits, then the first that overflows */
+	glMatrixMode(GL_PROJECTION);
+
+	for (i = 1; i < MGL_STACK_DEPTH; i++)
+	{
+		glPushMatrix();
+	}
+
+	CHECK(ERR() == GL_NO_ERROR && mgl_state.projection_depth == MGL_STACK_DEPTH - 1);
+	glLoadIdentity();
+	glPushMatrix();
+	CHECK(ERR() == GL_STACK_OVERFLOW && mgl_state.projection_depth == MGL_STACK_DEPTH - 1);
+	glGetFloatv(GL_PROJECTION_MATRIX, got);
+	CHECK(got[0] == 1.0f && got[14] == 0.0f);
+
+	for (i = 1; i < MGL_STACK_DEPTH; i++)
+	{
+		glPopMatrix();
+	}
+
+	glGetFloatv(GL_PROJECTION_MATRIX, got);
+	CHECK(ERR() == GL_NO_ERROR && mgl_state.projection_depth == 0 && memcmp(got, proj, sizeof(proj)) == 0);
+	glPopMatrix();
+	CHECK(ERR() == GL_STACK_UNDERFLOW && mgl_state.projection_depth == 0);
+	glMatrixMode(GL_MODELVIEW);
+}
+
 static void
 test_draw(void)
 {
@@ -1624,6 +1942,7 @@ test_draw(void)
 
 	test_draw_state();
 	test_world_units();
+	test_models();
 }
 
 int
