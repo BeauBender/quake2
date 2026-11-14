@@ -223,9 +223,10 @@ Recorded by TASK26 on 2026-10-18 from the owner's own `gh` login, completed
 
 Deferred on purpose:
 
-- `main-require-pr.json` (require a pull request before merging): the memory
-  sync Stop hook and the breakdown plan-anchor commit still push straight
-  to `main`; enabling it would break the loop until those paths change.
+- `main-require-pr.json` (require a pull request before merging): the
+  breakdown plan-anchor commit still pushes straight to `main`; enabling it
+  would break the loop until that path changes. The memory sync no longer
+  does, since [decision 0009](../decisions/0009-no-shared-memory.md).
 - Required status checks: Actions now runs on every pull request, and the
   loop already refuses to merge on a red or pending check
   (`merge.ciChecks: require` in `.claude/dev-loop.json`). Making checks
