@@ -502,7 +502,8 @@ cmd_evidence() {
     if [ -z "$diffbin" ]; then
         diffbin="$wd/framediff"; cc -O2 -o "$diffbin" "$root/scripts/pins/framediff.c" -lm || { rm -rf "${wd:?}"; die "cannot build framediff"; }
     fi
-    ( PINS_DIFF=$diffbin cmd_compare "$renderer" "$scenario" --ref "$ref" "${cmp_args[@]}" ) > "$cmp" || rc=$?
+    # ${a[@]+"${a[@]}"}: bash 3.2 under set -u calls an empty array unbound
+    ( PINS_DIFF=$diffbin cmd_compare "$renderer" "$scenario" --ref "$ref" ${cmp_args[@]+"${cmp_args[@]}"} ) > "$cmp" || rc=$?
     local ref_dir cand
     ref_dir=$(sed -n 's/^ref=//p' "$cmp"); cand=$(sed -n 's/^candidate=//p' "$cmp")
     if [ -z "$ref_dir" ] || [ -z "$cand" ]; then rm -rf "${wd:?}"; die "compare found no pair of pins to show (see the message above)"; fi
@@ -655,11 +656,33 @@ ev_st_evidence() {
     return 0
 }
 
+# evidence with no option beyond --card: the default reference gl1 and the
+# candidate at this checkout's run id, as compare finds them
+ev_st_card_only() {
+    local diff="$tmp/framediff" id i a b
+    [ -x "$diff" ] || cc -O2 -o "$diff" "$root/scripts/pins/framediff.c" -lm
+    id=$(run_id world 1); a="$PINS_STORE/world/gl1/ref-1"; b="$PINS_STORE/world/soft/$id"
+    mkdir -p "$a" "$b"
+    for i in 0 1; do "$diff" --gen "$a/world-00000$i.tga" 32 24 "$i"; cp "$a/world-00000$i.tga" "$b/"; done
+    "$diff" --perturb "$a/world-000001.tga" "$b/world-000001.tga" 40
+    touch "$a/complete" "$b/complete"
+    local rep; rep=$(cmd_evidence soft world --card T2 2>&1) || ev_fail "evidence with only --card must pass: $rep" || return 1
+    local o="$PINS_EVIDENCE_DIR/T2-${id%%-*}-soft-world"
+    [ -f "$o/T2-${id%%-*}-soft-world-still.png" ] || ev_fail "evidence with only --card must write the still: $rep" || return 1
+    grep -q '^reference world/gl1/ref-1$' "$o/T2-${id%%-*}-soft-world-evidence.txt" || ev_fail "the default reference must be gl1" || return 1
+    rm -rf "${PINS_STORE:?}/world/gl1" "${b:?}"
+}
+
 cmd_evidence_selftest() {
     command -v python3 >/dev/null 2>&1 || { echo "evidence selftest: python3 not found, skipped"; return 0; }
+    # the self-test must not depend on, or act on, the caller's environment: a
+    # git hook's GIT_INDEX_FILE or GIT_DIR, or any PINS_ setting
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR \
+        GIT_NAMESPACE GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM
+    unset PINS_EVIDENCE_BUDGET PINS_EVIDENCE_UPLOADER PINS_EVIDENCE_REPO PINS_EVIDENCE_DIR \
+        PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF PINS_TRACE
     ev_py selftest
-    unset PINS_EVIDENCE_BUDGET
-    tmp=$(mktemp -d "${TMPDIR:-/tmp}/pins-ev.XXXXXX"); tmp=$(phys_dir "$tmp")
+    scratch_outside_git pins-ev
     trap 'rm -rf "$tmp"' EXIT
     export PINS_STORE="$tmp/store" PINS_EVIDENCE_DIR="$tmp/ev" PINS_EVIDENCE_REPO=example/repo PINS_EVIDENCE_UPLOADER="$tmp/fake-upload"
     unset PINS_DIFF
@@ -667,7 +690,7 @@ cmd_evidence_selftest() {
     mkdir -p "$PINS_STORE"
     ev_py synth --out "$tmp/template" --prefix T1-c0ffee-synthetic-pattern --size 96x64x4 --meta card=T1 >/dev/null
     local c failed=""
-    for c in publish_ok not_listed digest types outside identity evidence; do
+    for c in publish_ok not_listed digest types outside identity evidence card_only; do
         if ( set -e; "ev_st_$c" ); then echo "  ok   $c"; else echo "  FAIL $c"; failed="$failed $c"; fi
     done
     [ -z "$failed" ] || die "evidence selftest failed:$failed"
@@ -1412,21 +1435,26 @@ st_demo_sum() { # TASK70: a demo beside the binary is part of the pin id
     rm -rf "$tmp/baseq2"
 }
 
-cmd_selftest() {
-    # the selftest must not depend on, or act on, the caller's environment
-    unset PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF PINS_TRACE
-    # the scratch store must be somewhere check_store accepts: not inside a git
-    # work tree (TMPDIR may be in one), so try TMPDIR, then /tmp, then /var/tmp
+# scratch_outside_git <name>: sets tmp to a fresh directory that check_store
+# accepts, not inside a git work tree (TMPDIR may be in one), so it tries
+# TMPDIR, then /tmp, then /var/tmp
+scratch_outside_git() {
     local base t
     tmp=""
     for base in "${TMPDIR:-/tmp}" /tmp /var/tmp; do
         [ -d "$base" ] || continue
-        t=$(mktemp -d "$base/pins.XXXXXX") || continue
+        t=$(mktemp -d "$base/$1.XXXXXX") || continue
         t=$(cd "$t" && pwd -P)
         if ! git -C "$t" rev-parse --is-inside-work-tree >/dev/null 2>&1; then tmp=$t; break; fi
         rm -rf "${t:?}"
     done
     [ -n "$tmp" ] || die "no scratch directory outside a git work tree under TMPDIR, /tmp or /var/tmp"
+}
+
+cmd_selftest() {
+    # the selftest must not depend on, or act on, the caller's environment
+    unset PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF PINS_TRACE
+    scratch_outside_git pins
     trap 'rm -rf "$tmp"' EXIT
     export PINS_STORE="$tmp/store"
     diff=$(difftool)
