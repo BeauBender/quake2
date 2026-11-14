@@ -1646,49 +1646,85 @@ N8 is judged on the new scenario `dlights` (`world` plus `cl_lights 1`),
 on `models` (complete: sprites, beams and null models drawn) and its
 scratch copies with stencil shadows, and on N7's set unchanged
 (`docs/plans/ref-metal-native.md`, section 23). References are
-`gl1-metal` records in a private store, without traces:
+`gl1-metal` records in a private store; `dlights` and `models` are
+recorded with `PINS_SEED`, which needs the trace (about 4 to 6 MB a
+record, so leave `PINS_TRACE` unset):
 
 ```sh
 make client game ref_metal && make ref_gl1 WITH_METAL_SHIM=yes
-export PINS_STORE=<private store> PINS_BASEDIR=<game data> PINS_TRACE=0
-MTL_DEBUG_LAYER=1 scripts/pins.sh record gl1-metal dlights [--run N]   # five records, for the run-to-run values
+export PINS_STORE=<private store> PINS_BASEDIR=<game data> PINS_SEED=1   # one seed for every record
+MTL_DEBUG_LAYER=1 scripts/pins.sh record gl1-metal dlights               # and again with --run 2
 MTL_DEBUG_LAYER=1 scripts/pins.sh record metal dlights
-scripts/pins.sh compare metal dlights --ref gl1-metal --ref-id <each reference> --threshold 0.02 --bad-threshold 0.5
-scripts/pins.sh compare metal dlights --ref gl1-metal --ref-id <each reference> --threshold 0.005 --bad-threshold 0.001   # the per-frame list
-# the same with PINS_DEMO=demo2.dm2 PINS_EVERY=7 (89 frames, the animated lightstyles)
-# models against two references; world, skywater, world-fullbright, hud2d as in N6; cinematic as in N2
+scripts/pins.sh compare gl1-metal dlights --run 2 --ref gl1-metal --ref-id <the first> --threshold 0 --bad-threshold 0
+scripts/pins.sh compare metal dlights --ref gl1-metal --ref-id <each reference> --threshold 0.005 --bad-threshold 0.001
+# the same with PINS_DEMO=demo2.dm2 PINS_EVERY=7 (89 frames, the animated lightstyles), and for models
+# world, skywater, world-fullbright, hud2d as in N6; cinematic as in N2
 # scratch copies, deleted after: models plus "set r_shadows 1" and "set gl1_stencilshadow 1" (and 0),
-# dlights plus "set gl1_flashblend 1", dlights plus "set gl1_dynamic 0" (the control)
+# dlights plus "set gl1_flashblend 1", dlights plus "set gl1_dynamic 0" (the control, recorded seeded)
 ```
 
-`dlights` is not deterministic: the muzzle-flash and explosion lights
-take a random radius from the engine PRNG (`randk() & 31` in
-`cl_effects.c`), which is seeded from OS entropy. Two `gl1-metal`
-records differ on the frames such a light reaches (on `demo1.dm2`
-frames 5, 8, 10, 14, 16, 18, 19, 20, 21; on `demo2.dm2` every 7th, 22
-of 89), and `metal` differs from any reference on exactly those frames
-by as much as the references differ among themselves. The scenario
-file carries the run-to-run worst values of five records (ten pairs) of
-each demo and accepts at `--threshold 0.02 --bad-threshold 0.5`; at the
-tight values the compare lists those frames as over and every other
-one as ok. Recorded with the PRNG fixed, every run is identical and the
-scenario is judged at the tight values: `PINS_SEED` does it beside a
-trace (TASK45), and without a trace a scratch copy of the tree whose
-`Qcommon_Init` (`src/common/frame.c`) calls `randk_seed_fixed(91)`
-instead of `randk_seed()` does the same (copy the tree without its
-`.git`, change that line, `make client` and `make ref_gl1
-WITH_METAL_SHIM=yes` there, record both renderers with that copy's
-`scripts/pins.sh`; the pin id then begins with `nogit`, so it never
-mixes with the real records; never commit the change).
+`dlights` is not deterministic unseeded: the muzzle-flash and
+explosion lights take a random radius from the engine PRNG (`randk() &
+31` in `cl_effects.c`), which is seeded from OS entropy. Unseeded, two
+`gl1-metal` records differ on the frames such a light reaches (on
+`demo1.dm2` frames 5, 8, 10, 14, 16, 18, 19, 20, 21; on `demo2.dm2`
+every 7th, 22 of 89), by up to score 0.009399 and 0.012701, bad
+0.176774 and 0.305941 over five records (ten pairs) of each demo, and
+`metal` differs from any reference on exactly those frames by as much
+as the references differ among themselves. No unseeded threshold
+guards the lightstyle update: the accept value first committed,
+`--threshold 0.02 --bad-threshold 0.5`, passes the `gl1_dynamic 0`
+control below on all five lightstyle frames. So the scenario is
+recorded with `PINS_SEED` and judged only seeded, at `--threshold
+0.005 --bad-threshold 0.001`; the seed is part of the pin id, so the
+reference and the candidate are recorded with the same seed and the
+reference is named with `--ref-id`. The first measurement, made
+without a trace, fixed the PRNG with a scratch copy of the tree whose
+`Qcommon_Init` (`src/common/frame.c`) called `randk_seed_fixed(91)`
+instead of `randk_seed()` (its pin ids begin with `nogit`; never
+committed); `PINS_SEED` gives the same result without a copy.
+
+Seeded, at `8852cfc9` (`PINS_SEED=1`, every record with
+`MTL_DEBUG_LAYER=1` and its trace): the two `gl1-metal` records of
+`dlights` were identical byte for byte, 23 of 23 frames of `demo1.dm2`
+and 89 of 89 of `demo2.dm2` every 7th, and so were the two of
+`models` (23 of 23). `metal` against each of the two references, at
+`--threshold 0.005 --bad-threshold 0.001`: `dlights` on `demo1.dm2` 23
+of 23 ok, score 0.000000 and bad 0.000000 on every frame (14 frames
+not byte-identical, by 5 levels at most); on `demo2.dm2` every 7th 89
+of 89 ok, worst score 0.000001 and bad 0.000013 (frames 12, 15 and 61
+hold 1 to 4 pixels more than 8 levels off; 42 frames not
+byte-identical); `models` 23 of 23 ok, worst score 0.000039, bad
+0.000589 (N7's residue).
 
 The animated lightstyles: on `demo2.dm2` at `PINS_EVERY=7` frames 51,
-61, 63, 67 and 69 show one (N5) and no light from the PRNG, so they are
-identical between `gl1-metal` records and compare at score 0 for
-`metal`. The control is `metal` with `gl1_dynamic 0` against the same
-reference, compared frame by frame with the comparator of
-`scripts/pins/framediff.c` (the
-two records are of different scenarios): over at the tight values on 32
-frames, 61, 67 and 69 among them with N5's numbers.
+61, 63, 67 and 69 show one (N5) and no dynamic light at all (the
+trace's refdef holds none), so they are identical between `gl1-metal`
+records with or without a seed. The control is `metal` with
+`gl1_dynamic 0`, recorded seeded from a scratch copy of `dlights` plus
+that line, against the seeded reference, compared frame by frame with
+`scripts/pins/framediff.c` (the two records are of different
+scenarios): over at the tight values on 32 of 89 frames: 29 of the 37
+frames whose refdef holds a dynamic light (score 0.000492 to 0.062769;
+on the other 8 the light lights nothing in view, 3 levels at most), and
+three of the five lightstyle frames: 61 (score 0.000105, bad
+0.001130: 3,934 pixels differ, by up to 27 levels), 67 (0.000595,
+0.006882: 27,473
+pixels, up to 24) and 69 (0.000447, 0.004303: 20,850 pixels, up to
+32), N5's numbers. Frames 51 and 63 stay under: without the update 184
+pixels of 51 (score 0.000001) and 80,449 of 63 (score 0.000467) differ,
+each by exactly one level, and the bad fraction counts only pixels
+more than 8 levels off. Without the update a lightmap keeps its first
+build, every style at 1.0 (`LM_BeginBuildingLightmaps`, as gl1's), and
+the styles of the surfaces in view on those two captures light them
+within one level of it; `metal` with the update against `metal`
+without it gives the same one-level difference (178 and 80,449
+pixels), so that is the update's whole effect there, not a renderer
+difference. At these values the update is not visible on 51 and 63:
+the bad fraction never counts a one-level change, and the scores are
+under 0.005 by a factor of ten or more. At the old accept value the
+control is over on 13 frames, all with a dynamic light (score 0.020
+to 0.063), none of the five.
 
 Which frames are judged: all of them. N5's rule that excluded a frame
 whose `metal_stats` line counted surfaces "drawn without their dynamic
@@ -1721,9 +1757,10 @@ with a scratch `pins_dir`, runs alternated; the frame rate is the line
 this host (about 1,400 to 1,650 fps), unlike N7's.
 
 Measured on the build VM, sources `28d1c8f8` to `a48d01a8` (the same
-code), load averages 4 to 9: the numbers of the design document's table
-in section 23; every `engine.log` holds only `Metal API Validation
-Enabled` and, for `metal`, the teardown with `0 live objects`.
+code), load averages 4 to 9, and the seeded records at `8852cfc9`: the
+numbers of the design document's table in section 23; every
+`engine.log` holds only `Metal API Validation Enabled` and, for
+`metal`, the teardown with `0 live objects`.
 
 ### Closing TASK27 on the build host
 
