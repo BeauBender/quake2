@@ -642,8 +642,11 @@ flowing surfaces, lightmaps and models are not drawn yet.
   draws and uploads made and skipped, pipeline states (and those made
   after initialisation), its Metal objects still alive, and the sky,
   warped, translucent and flowing surfaces of the last 3D view it did not
-  draw. When a map is loaded it also prints the vertex, index and
-  surface-record counts and bytes of the map's retained buffers. The
+  draw, and the surfaces it drew with their static lightmap although a
+  dynamic light touches them (it does not add dynamic lights yet). When a
+  map is loaded it also prints the vertex, index and surface-record counts
+  and bytes of the map's retained buffers, and the number of its lightmap
+  slices. The
   teardown line with its object counts is printed at every shutdown
   regardless. Defaults to `0`.
 

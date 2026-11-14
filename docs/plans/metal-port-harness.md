@@ -1425,6 +1425,64 @@ excluded (the sky and the translucent water, N6's); `hud2d` 23 and
 `Metal API Validation Enabled` and `0 live objects`; every captured frame
 `14 pipelines, 0 created after init`.
 
+### Lightmaps in `ref_metal` (TASK88, N5)
+
+N5 is judged on `world` itself (lightmaps on), with a scratch copy of it
+at `gl1_overbrightbits 2` and `world-fullbright`, `hud2d` and `cinematic`
+as the regressions (`docs/plans/ref-metal-native.md`, section 20). The
+references are `gl1-metal` records at the card's own commit, in a private
+store, without traces:
+
+```sh
+make client game ref_metal && make ref_gl1 WITH_METAL_SHIM=yes
+export PINS_STORE=<private store> PINS_BASEDIR=<game data> PINS_TRACE=0
+MTL_DEBUG_LAYER=1 scripts/pins.sh record gl1-metal world [--run 2]
+scripts/pins.sh compare gl1-metal world --ref gl1-metal --run 2 --threshold 0 --bad-threshold 0
+MTL_DEBUG_LAYER=1 scripts/pins.sh record metal world [--run 2]
+scripts/pins.sh compare metal world --ref gl1-metal [--run 2] --threshold 0.005 --bad-threshold 0.001
+# the overbright copy: world.cfg plus "set gl1_overbrightbits 2" as an
+# untracked scenarios/<name>.cfg, both renderers, the same compare; delete it after
+# world-fullbright as in N4, hud2d as in N3, cinematic as in N2
+make ASAN=1 client ref_metal game
+PINS_BIN=debug/quake2 MTL_DEBUG_LAYER=1 scripts/pins.sh record metal world
+scripts/pins.sh compare metal world --ref gl1-metal --cand-id <the ASAN record's id> ...
+```
+
+The Darwin build has no header dependencies, so after a header edit
+remove `build/release/ref_metal` (or `make -B`) before building, or the
+objects keep the old declarations.
+
+Which frames are judged: the rule of N4 (a frame on which `metal_stats 1`
+reports a skipped sky, warped, translucent or flowing surface is
+excluded), and a frame whose line ends in a count above 0 of surfaces
+`drawn without their dynamic light` is excluded too (N8 adds the light).
+The counts come from a hand run as in N4. On `demo1.dm2` frames 19 to 22
+are excluded (sky and translucent surfaces), none for dynamic lights
+(`cl_lights 0`).
+
+`world` on `demo1.dm2` has no visible surface with an animated
+lightstyle, so it never exercises the per-frame lightmap updates (the
+`uploads` count of `metal_stats` stays at its value after registration).
+To see them, record both renderers with `PINS_DEMO=demo2.dm2` (the
+second demo of the game data, whose visible lights flicker) into another
+private store and compare the frames the rule leaves.
+
+A record is accepted on the conditions of N2. The few differing pixels
+of the judged frames are N4's mip-level residue; to tell it from a
+lightmap difference, run both renderers by hand with `+set
+gl_texturemode GL_NEAREST` (and `GL_LINEAR`): the judged frames must then
+be identical pixel for pixel.
+
+On the build VM, source `4f9a9fd9`, load averages 3.1 to 11.6: two
+`gl1-metal` records of `world` identical; three release records and one
+`ASAN=1` record of `metal world` with the same numbers, frames 0 to 20 ok
+(0 to 6 differing pixels each, none with either filter above), frames 21
+and 22 over and excluded; the overbright copy the same; `demo2.dm2` about
+400 region uploads, every frame the rule leaves ok; `world-fullbright` as
+in N4; `hud2d` 23 and `cinematic` 12 frames at score 0 and bad 0; every
+log holding only `Metal API Validation Enabled` and `0 live objects`;
+every captured frame `15 pipelines, 0 created after init`.
+
 ### Closing TASK27 on the build host
 
 The umbrella card's acceptance list, checked end to end after P1 to P3
