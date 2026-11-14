@@ -43,9 +43,8 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | `tests/unit/` | The unit-test suite: hand-written runner (`test.h`, `main.c`), one `test_*.c` per area, the client stubs (`stub_client.c`, `stub_client_full.c`) that let `cl_download.c`, the message parser, handshake, entity, HUD and sound-frontend files link without SDL; built and run by `make test` (in the gate); see `doc/085_unittests.md` |
 | `tests/pins/unit/` | Unit-test pins: committed expected outputs with a provenance header, rewritten by `make test UPDATE_PINS=1` (not the renderer frame pins of `scripts/pins.sh`) |
 | `scripts/coverage.sh`, `scripts/coverage-floor` | Line coverage of the suite with the compiler's own tools, and the floor it must not drop below |
-| `scripts/agent-memory.sh` | Pulls and pushes agent memory between the agent's memory directory and the owner's private store, named only by a local file outside the tree; merges with git's three-way merge and never forces (rule in `CLAUDE.md`). Its selftest is `tests/check-agent-memory.sh`; `tests/check-no-tracked-memory.sh` keeps memory out of the index |
 | `stuff/` | Maintainer tools: savegame table generators (`fngen/`, `mmgen/`), map entity fixes (`mapfixes/`), icons, the Dockerfile and the uncrustify style file (`misc/`) |
-| `.claude/` | Agent configuration: settings and hooks, path-scoped rules (`rules/`), skills (`skills/`), and the local, ignored `memory/` directory (agent memory; never committed, see `CLAUDE.md`) |
+| `.claude/` | Agent configuration: settings and hooks, path-scoped rules (`rules/`), skills (`skills/`), and the local, ignored `memory/` directory (agent memory; never committed, `tests/check-no-tracked-memory.sh` keeps it out of the index, see `CLAUDE.md`) |
 | `.githooks/` | The commit hook and the push hook (refuses a ref name or commit message carrying the working machine's host name, user name or home path), wired by `scripts/setup.sh`; see [decision 0005](decisions/0005-push-identity-hook.md) |
 | `.github/` | CI workflows, the PR template, the `main` branch ruleset |
 | `CHANGELOG` | Upstream release notes, updated per release |
