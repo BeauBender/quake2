@@ -4317,24 +4317,60 @@ TimesCb(refrec_type_t type, const refrec_call_t *c, const refrec_frame_t *f, voi
 }
 
 /*
+ * One record session of a single cvar whose value is one byte too long for the
+ * string table: a renderer-prefixed cvar is left out with one warning, a
+ * cvar that is not stored gives none.
+ */
+static void
+CheckLongValue(const char *name, unsigned expect_warns)
+{
+	static char longvalue[REFREC_MAX_STRING + 8];
+	const char *names[1], *values[1];
+	int flags[1] = { 0 };
+	char path[1200];
+	tracefile_t t;
+
+	memset(longvalue, 'v', REFREC_MAX_STRING);
+	longvalue[REFREC_MAX_STRING] = '\0';
+	names[0] = name;
+	values[0] = longvalue;
+	snprintf(path, sizeof(path), "%s", TracePath("longvalue"));
+
+	RefRec_StartRecord(path, 640, 480, 1);
+	RefRec_Cvars(1, names, values, flags);
+	RefRec_StopRecord();
+
+	if (!ReadTrace(path, &t, NULL, NULL, NULL))
+	{
+		CHECK(0, "long value %s: trace refused: %s", name, t.err);
+		return;
+	}
+
+	CHECK(t.warns[REFREC_WARN_NAME] == expect_warns,
+			"long value %s: %u name warnings, expected %u", name, t.warns[REFREC_WARN_NAME], expect_warns);
+}
+
+/*
  * The REC_CVARS snapshot and its restore, end to end through a trace, and
  * refdef_t.time bit-exact from the recorder's input to the renderer's.
  */
 static void
 TestRecordReplayCvars(void)
 {
+	CheckLongValue("r_long", 1);
+	CheckLongValue("cl_x", 0);
+
 	static lightstyle_t ls[MAX_LIGHTSTYLES];
-	static char longvalue[REFREC_MAX_STRING + 8];
 	/* the times a live client hands the renderer (cl.time * 0.001), and edges */
 	const float times[] = { 0.001f * 12345, 1.0f / 3.0f, 0x1p-140f, -0.0f, 9999999.0f, 0.0f };
 	const int nt = (int)(sizeof(times) / sizeof(times[0]));
 	const char *names[] = { "r_lerpmodels", "cl_gun", "cl_nothing", "gl_polyblend", "r_noset",
-		"vid_renderer", "logfile", "hand", "r_absent", "sw_waterwarp", "r_long", "r_badvalue",
+		"vid_renderer", "logfile", "hand", "r_absent", "sw_waterwarp", "r_badvalue",
 		"r_drawworld", NULL, "", "r_userinfo" };
-	const char *values[] = { "0", "2", "1", "0", "5", "gl3", "1", "1", "1", "1", longvalue,
+	const char *values[] = { "0", "2", "1", "0", "5", "gl3", "1", "1", "1", "1",
 		"a\"b", "1", "1", "1", "1" };
 	const int flags[] = { CVAR_ARCHIVE, CVAR_ARCHIVE, 0, CVAR_ARCHIVE, 0, CVAR_ARCHIVE, CVAR_ARCHIVE,
-		CVAR_ARCHIVE | CVAR_USERINFO, 0, 0, 0, 0, 0, CVAR_ARCHIVE, CVAR_ARCHIVE, CVAR_USERINFO };
+		CVAR_ARCHIVE | CVAR_USERINFO, 0, 0, 0, 0, CVAR_ARCHIVE, CVAR_ARCHIVE, CVAR_USERINFO };
 	const int n = (int)(sizeof(names) / sizeof(names[0]));
 	char path[1200];
 	refrec_replay_stats_t st;
@@ -4345,8 +4381,6 @@ TestRecordReplayCvars(void)
 	refdef_t fd;
 	int i, cap = 0;
 
-	memset(longvalue, 'v', REFREC_MAX_STRING);
-	longvalue[REFREC_MAX_STRING] = '\0';
 	snprintf(path, sizeof(path), "%s", TracePath("cvars"));
 
 	RefRec_StartRecord(path, 640, 480, 1);
@@ -4379,7 +4413,7 @@ TestRecordReplayCvars(void)
 		return;
 	}
 
-	/* the long value and the NULL and empty names are left out, with one warning */
+	/* the NULL and empty names are left out, with one warning */
 	CHECK(t.types[REC_CVARS] == 1 && t.warns[REFREC_WARN_NAME] == 1,
 			"cvars: %u REC_CVARS, %u name warnings", t.types[REC_CVARS], t.warns[REFREC_WARN_NAME]);
 	CHECK(x.ntimes == (uint32_t)nt, "time: %u frames recorded", x.ntimes);

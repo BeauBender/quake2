@@ -151,6 +151,10 @@ and the trace records its result. So the replay is identical to the
 live run with or without `PINS_SEED`; `PINS_SEED` makes two live runs
 identical too.
 
+One caveat: a latched renderer cvar (in this tree only `r_farsee`) is
+neither stored in the trace nor restored, so a replay uses the value of
+the replaying process. Record and replay with the same `r_farsee`.
+
 Measured (TASK45) on Apple silicon, load average 1.8 to 6.0 while the
 runs went, 640x480, every 30th frame of `demo1.dm2` (23 frames;
 `cinematic` 3 frames of `idlog.cin`), `framediff` with both thresholds

@@ -300,7 +300,9 @@ exactly what a replay can use. The prefixes are `gl1_`, `gl3_`, `gl_`,
 because `ref_gl1` reads
 `gl_polyblend`, `gl_texturemode` and other `gl_` cvars, and `ref_gl3` its
 `gl3_` ones). A NULL or over-long name, or a stored cvar's over-long
-value, is left out with one `REFREC_WARN_NAME`, more than `REFREC_MAX_CVARS` with a
+value, is left out with one `REFREC_WARN_NAME` (a latched renderer cvar, in this tree
+only `r_farsee`, is neither stored nor restored: a replay uses the replaying
+process's value, so record and replay with the same setting), more than `REFREC_MAX_CVARS` with a
 `REFREC_WARN_COUNT`. The replayer forwards the record in place (it comes
 before the first `REC_BEGINREG`) and sets a pair through the target's
 `SetCvar` (vid.c: `Cvar_Set`) only when `RefRec_CvarRestorable` accepts
