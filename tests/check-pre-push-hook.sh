@@ -408,10 +408,12 @@ for _url in https://github.com/zzqother/zzqrepo.git "zzqalias:$login/zzqrepo.git
 	case_ "the remote ref name contains $U" refs/heads/zzqx "$m1" "refs/heads/zzqt/$login/zzqtopic" "$zero"
 	run "the owner handle is not the user name (address $_i of 3)"
 done
-w remote set-url origin "zzqalias:$login/zzqrepo.git"
-w config --add remote.origin.url "https://github.com/$login/zzqrepo.git"
+# Two URLs, the owner's first (`get-url` without --all would give only it),
+# and a home ending in the user name, so only owner_is can keep the skip off.
+w remote set-url origin "https://github.com/$login/zzqrepo.git"
+w config --add remote.origin.url "zzqalias:$login/zzqrepo.git"
 case_ "$M" refs/heads/zzqw1 "$(mk "$m1" "zzqm30 note for $login")" refs/heads/zzqw1 "$zero"
-run "origin with two URLs"
+run "origin with two URLs" HOME="/zzqhome/$login"
 w config --unset-all remote.origin.url
 w config remote.origin.url "$tmp/remote.git"
 

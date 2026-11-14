@@ -315,7 +315,9 @@ nl.txt"
 	n https://zzq.example/@github.com/zzquser/zzqrepo
 	n zzqalias:x@github.com:zzquser/zzqrepo
 	EOF
-	git -C "$r" config --add remote.origin.url https://github.com/zzquser/zzqrepo.git
+	# Two URLs, the owner's first: `get-url` without --all would give only it.
+	git -C "$r" config remote.origin.url https://github.com/zzquser/zzqrepo.git
+	git -C "$r" config --add remote.origin.url zzqalias:zzquser/zzqrepo.git
 	if owner_is "$r" zzquser; then echo "$me: self-test 'origin with two URLs' named an owner"; exit 1; fi
 	git -C "$r" config --unset-all remote.origin.url
 	git -C "$r" config remote.zzqup.url https://github.com/zzquser/zzqrepo.git
