@@ -84,7 +84,15 @@ static int frame_w, frame_h;
 /* Kept across frames, rebuilt when the size changes. */
 static id<MTLTexture> mgl_depth;           /* depth32Float_stencil8, private */
 static id<MTLTexture> mgl_offscreen;       /* the target when there is no drawable */
-static id<MTLTexture> mgl_last;            /* a copy of the last presented frame, for reads between frames */
+/*
+ * The last presented frame, for reads between frames (the screenshot
+ * command): its target (the drawable's texture, or mgl_offscreen), and
+ * its drawable, held so the layer does not hand that texture out again
+ * while it may be read. Replaced at each present, dropped on a resize
+ * and at teardown. No copy is made.
+ */
+static id<MTLTexture> mgl_last;
+static id<CAMetalDrawable> mgl_last_drawable;
 static id<MTLBuffer> mgl_readbuf;          /* shared, for glReadPixels */
 
 /* Counters, printed when the context is destroyed. */
@@ -225,6 +233,7 @@ mgl_release_all(void)
 	mgl_depth = nil;
 	mgl_offscreen = nil;
 	mgl_last = nil;
+	mgl_last_drawable = nil;
 	mgl_readbuf = nil;
 	upload_blit = nil;
 	upload_cmd = nil;
@@ -560,6 +569,9 @@ mgl_layer_frame_begin(int *tw, int *th)
 		if (mgl_metal_layer.drawableSize.width != w || mgl_metal_layer.drawableSize.height != h)
 		{
 			mgl_metal_layer.drawableSize = CGSizeMake(w, h);
+			/* the kept frame is of the old size: nothing to read, nothing to hold */
+			mgl_last = nil;
+			mgl_last_drawable = nil;
 		}
 
 		frame_drawable = [mgl_metal_layer nextDrawable];
@@ -848,31 +860,6 @@ mgl_layer_read(int x, int y, int w, int h, unsigned char *bgra, int last)
 	return 1;
 }
 
-/*
- * Copies the frame about to be presented into mgl_last: a drawable
- * cannot be read once presented, and a read between frames (the
- * screenshot command) wants the screen as it was last shown.
- */
-static void
-mgl_keep_last(void)
-{
-	id<MTLBlitCommandEncoder> blit;
-
-	if (!mgl_last || (int)mgl_last.width != frame_w || (int)mgl_last.height != frame_h)
-	{
-		mgl_last = mgl_new_texture(MTLPixelFormatBGRA8Unorm, frame_w, frame_h, MTLTextureUsageShaderRead);
-	}
-
-	if (!mgl_last)
-	{
-		return;
-	}
-
-	blit = [frame_cmd blitCommandEncoder];
-	[blit copyFromTexture:frame_target toTexture:mgl_last];
-	[blit endEncoding];
-}
-
 int
 mgl_layer_present(void)
 {
@@ -904,8 +891,6 @@ mgl_layer_present(void)
 
 		if (frame_cmd)
 		{
-			mgl_keep_last();
-
 			if (frame_drawable)
 			{
 				[frame_cmd presentDrawable:frame_drawable];
@@ -917,6 +902,10 @@ mgl_layer_present(void)
 				dispatch_semaphore_signal(sem);
 			}];
 			[frame_cmd commit];
+
+			/* what is now on screen; a read between frames reads it in place */
+			mgl_last = frame_target;
+			mgl_last_drawable = frame_drawable;
 		}
 		else
 		{

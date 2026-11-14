@@ -137,6 +137,12 @@ test_read_source(void)
 	CHECK(mgl_read_uses_last(0, 640, 480, 800, 600) == 0);
 	CHECK(mgl_read_uses_last(0, 640, 480, 640, 600) == 0);
 	CHECK(mgl_read_uses_last(0, 800, 480, 640, 480) == 0);
+	/* a kept frame narrower, taller or turned against the target is not read */
+	CHECK(mgl_read_uses_last(0, 320, 480, 640, 480) == 0);
+	CHECK(mgl_read_uses_last(0, 640, 600, 640, 480) == 0);
+	CHECK(mgl_read_uses_last(0, 480, 640, 640, 480) == 0);
+	/* the smallest frame is one */
+	CHECK(mgl_read_uses_last(0, 1, 1, 1, 1) == 1);
 	/* an empty kept frame is none, even against an empty target */
 	CHECK(mgl_read_uses_last(0, 0, 0, 0, 0) == 0);
 	CHECK(mgl_read_uses_last(0, 0, 480, 0, 480) == 0);
