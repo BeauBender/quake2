@@ -137,8 +137,8 @@ cvars the live run had (`r_*`, `gl_*`, `gl1_*`, `gl3_*`, `sw_*`,
 its command line; the cvars that choose the renderer, the window or the
 display mode are never changed, and nothing is saved. The trace stores
 only those renderer cvars, never the player's name, the server address
-book or any other client or server setting. `scripts/pins.sh`
-does not drive this yet.
+book or any other client or server setting. `scripts/pins.sh replay`
+drives it (see *Replaying a trace* below).
 
 ### Determinism
 
@@ -307,6 +307,95 @@ scripts/pins.sh record soft world --run 2
 scripts/pins.sh compare soft world --run 2 --ref soft
 ```
 
+`compare` prints `ref-kind=` and `candidate-kind=` after the two paths:
+`replay` for a pin `replay` wrote, `live` for a record. A replay is the
+reference only when `--ref-id` names it; without it `compare` takes the
+newest live record.
+
+## Replaying a trace
+
+```sh
+scripts/pins.sh replay <renderer> <scenario> [--trace-of <renderer>] [--ref-id <dir>] [--run N] [--replace]
+```
+
+`replay` feeds the trace of a complete record to `<renderer>` (the
+engine's `pins_replay`): the frames come from the recorded drawing
+calls, with no demo, no server and no game module. The record is the
+one of the `--trace-of` renderer (default: `<renderer>` itself) that
+`--ref-id` names, or else its most recently modified complete record
+holding a `trace.q2r`. Before the engine starts, `replay` refuses:
+
+* a record that is not complete, or that is itself a replay;
+* a trace that is not a regular file inside the store by its physical
+  path (a symbolic link anywhere on the way is refused), or whose path,
+  or the frame paths the replay would write, do not fit the engine's
+  smallest path buffer (255 bytes);
+* a trace whose header is not finished (the engine died while
+  recording), is marked cut short by a recorder limit, is of another
+  format version or renderer API than this tree, holds no frame, or was
+  recorded at another size or capture cadence than `PINS_WIDTH` x
+  `PINS_HEIGHT` and `PINS_EVERY`.
+
+Only numbers are read from the header; nothing from a trace or a
+manifest is run. `PINS_SEED`, `PINS_TIMEOUT`, `PINS_BIN` and
+`PINS_BASEDIR` mean what they mean for `record`. The frames land in
+`<store>/<scenario>/<renderer>/<engine>-replay-<trace-of>-<record>/`
+(with `-s<seed>` when `PINS_SEED` is set and `-r<N>` for `--run N`,
+so replays with two seeds are two pins and `--replace` of one never
+overwrites the other), beside the renderer's records but never under a
+record's name. `replay.txt` there, the replay manifest, is
+written before the engine starts: the trace it replayed, its size and
+checksum, the seed, and `game-module absent` or `present`, whether a
+game module lay where the engine would look for one (beside the binary
+or in `PINS_BASEDIR`, under `baseq2/`). The replay is complete on the
+same terms as a record, and only when it wrote as many frames as the
+record holds; otherwise it is left with `incomplete` and the reason.
+A complete replay is replaced only with `--replace`, and a directory
+without `replay.txt` (a regular file, not a link) never. `list` shows,
+per scenario and renderer, how many complete records hold a trace and
+how many replays there are.
+
+One trace, two renderers:
+
+```sh
+scripts/pins.sh record gl1-metal world
+scripts/pins.sh replay soft world --trace-of gl1-metal
+scripts/pins.sh compare soft world --cand-id <the id replay printed> --ref soft
+```
+
+Measured (TASK46) on Apple silicon, load average 8.1 to 13.0 while the
+runs went, 640x480, every 30th frame of `demo1.dm2`, `world`, both
+thresholds 0. One live record each of `soft` and `gl1-metal`; each
+replay was run three times, with an engine binary copied into a
+directory without a game module (`PINS_BIN`), `PINS_BASEDIR` holding
+none for macOS either; every replay manifest says `game-module absent`.
+The same binary refuses a live record (`failed to load game DLL`), so
+the game module was needed by the record and not by the replay.
+With a default build the binary is `release/quake2` beside
+`release/baseq2/game.dylib`, so the manifest says `game-module present`
+although the replay does not load it; the copied binary above is how
+the absent case was shown. The cross-renderer rows are two renderers on
+one host replaying each other's trace, not a trace carried from another
+machine. Plain `gl1` and the native `ref_metal` were not measured in
+these runs (plain `gl1` replaying its own trace is under *Determinism*
+above).
+
+| Replay | Against | Result, each of 3 runs |
+|---|---|---|
+| `soft` from its own trace | live `soft` | 23 frames, 0 differ, worst 0 |
+| `gl1-metal` from its own trace | live `gl1-metal` | 23 frames, 0 differ, worst 0 |
+| `soft` from the `gl1-metal` trace | live `soft` | 23 frames, 0 differ, worst 0 |
+| `gl1-metal` from the `soft` trace | live `gl1-metal` | 23 frames, 0 differ, worst 0 |
+| `soft` from the `gl1-metal` trace | live `gl1-metal` | 23 of 23 frames differ, worst score 0.077802, worst bad fraction 0.922135 (the same in all 3) |
+
+The client hands the renderer the same calls whichever renderer is
+loaded, so a replay from another renderer's trace draws what that
+renderer drew live; the two traces differ in size (4,382,172 and
+4,383,028 bytes) by their renderer cvar snapshot. The last row is the
+difference between the two rasterizers themselves, not a replay error.
+A replay took 1.28 to 1.34 s on `gl1-metal` and 2.31 to 2.34 s on
+`soft` (6 runs each).
+
 ## Making a demo
 
 ```sh
@@ -365,8 +454,10 @@ portable start without the pin arguments does.
 
 ## Other commands
 
-* `scripts/pins.sh list`: how many frames each record in the store holds.
-* `scripts/pins.sh selftest`: tests the driver and the comparator with
+* `scripts/pins.sh list`: how many frames each record in the store holds,
+  and the trace coverage (records with a trace, and replays, per
+  scenario and renderer).
+* `scripts/pins.sh selftest [case...]`: tests the driver and the comparator with
   generated frames and a stand-in engine. It needs no game data and runs
   as part of `scripts/test.sh`.
 

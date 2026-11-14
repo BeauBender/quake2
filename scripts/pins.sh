@@ -6,9 +6,11 @@
 #   pins.sh record  <renderer> <scenario> [--run N] [--replace]
 #   pins.sh compare <renderer> <scenario> [--ref <renderer>] [--ref-id <dir>]
 #                   [--run N | --cand-id <dir>] [--threshold T] [--bad-threshold B]
+#   pins.sh replay  <renderer> <scenario> [--trace-of <renderer>] [--ref-id <dir>]
+#                   [--run N] [--replace]
 #   pins.sh make-demo <name> [--replace]       make demos/<name>.dm2 beside the binary
 #   pins.sh list                               what the store holds
-#   pins.sh selftest                           no engine, no game data
+#   pins.sh selftest [case...]                 no engine, no game data
 #   pins.sh evidence <renderer> <scenario> [--ref r] [--ref-id d] [--run N | --cand-id d] [--card ID] | --synthetic [--card ID] [--noise BYTES]
 #   pins.sh evidence-publish <manifest> [file...]   upload one evidence set to the pr-evidence pre-release
 #   pins.sh evidence-selftest                  the evidence encoder and the publish refusals, offline
@@ -90,6 +92,26 @@
 # --bad-threshold (default 0.005); both values are printed with the result.
 # Two runs of one renderer: record soft world; record soft world --run 2;
 # compare soft world --run 2 --ref soft.
+#
+# replay (TASK46) feeds the trace.q2r of a complete record of --trace-of
+# <renderer> (default: the renderer replayed into) to <renderer>, with the
+# engine's pins_replay: no demo, server or game module runs. The record is
+# --ref-id <dir>, else the most recently modified complete record of
+# <store>/<scenario>/<trace-of>/ that holds a trace. The trace must lie in the
+# store by its physical path (no symbolic link on the way) and its header
+# must be finished, not cut short, of this engine's format and renderer API,
+# and of PINS_WIDTH x PINS_HEIGHT and PINS_EVERY; PINS_SEED and PINS_TIMEOUT
+# apply as for record. The frames land in
+# <store>/<scenario>/<renderer>/<engine>-replay-<trace-of>-<record dir>[-s<PINS_SEED>][-r<N>]
+# with replay.txt, the replay manifest (which trace, its size and checksum,
+# and whether a game module lay on the engine's search path), written
+# first; the pin is complete only as a record is, and when it holds the
+# record's frame count. A complete replay is replaced only with --replace,
+# and a directory without replay.txt never. compare takes a replay as the
+# candidate by --cand-id and as the reference only by --ref-id, and prints
+# whether each side is live or a replay. From one trace, across renderers:
+# record gl1-metal world; replay soft world --trace-of gl1-metal;
+# compare soft world --cand-id <the printed id> --ref soft.
 #
 # A scenario is a list of "set <cvar> <value>" lines
 # (scripts/pins/scenarios/*.cfg); any other line, and a line setting a cvar
@@ -263,6 +285,19 @@ run_id() {
     echo "$id"
 }
 frame_count() { ls "$1"/*.tga 2>/dev/null | wc -l | tr -d ' '; }
+# is_count <value>: a count a tool printed, digits only; an empty value is a
+# tool that did not run, never zero
+is_count() { case $1 in ''|*[!0-9]*) return 1;; esac; }
+# need_tools <command> <tool>...: dies unless every tool is on PATH. Without
+# one a command substitution prints nothing and the script, without
+# pipefail, would go on with an empty count or checksum
+need_tools() {
+    local what=$1 t; shift
+    for t in "$@"; do command -v "$t" >/dev/null 2>&1 || die "$what needs $t, which is not on PATH"; done
+}
+# the external tools record and replay call (make and cc are optional: a
+# missing make skips the staleness check, compare alone builds framediff)
+pins_tools="awk basename cat cksum date dirname find git grep head ls mkdir rm sleep tr wc"
 difftool() {
     if [ -n "${PINS_DIFF:-}" ]; then echo "$PINS_DIFF"; return; fi
     local bin="$(store)/bin/framediff"
@@ -308,7 +343,64 @@ build_args() {
     engine_args+=(+demomap "${PINS_DEMO:-demo1.dm2}")
 }
 
+# run_engine <bin> <out> <limit>: runs the engine with engine_args, its
+# output in <out>/engine.log, killed after <limit> seconds; sets run_status
+# (its exit status) and run_timedout (1 when it was killed)
+run_engine() {
+    local bin=$1 out=$2 limit=$3 pid t=0 w
+    run_status=0; run_timedout=0
+    "$bin" "${engine_args[@]}" > "$out/engine.log" 2>&1 &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$t" -ge "$limit" ]; then
+            run_timedout=1
+            kill "$pid" 2>/dev/null || true
+            w=0; while kill -0 "$pid" 2>/dev/null && [ "$w" -lt 5 ]; do sleep 1; w=$((w+1)); done
+            kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+            echo "pins: engine killed after ${limit}s (PINS_TIMEOUT)" >> "$out/engine.log"
+            break
+        fi
+        sleep 1; t=$((t+1))
+    done
+    wait "$pid" 2>/dev/null || run_status=$?
+    grep -E 'frames,.*fps' "$out/engine.log" > "$out/timedemo.txt" || true
+}
+# judge_pin <out> <renderer> <limit>: after run_engine, sets reason to why
+# the pin in <out> is not complete (empty when it is) and n to its frames
+judge_pin() {
+    local out=$1 renderer=$2 limit=$3 bad nman=""
+    reason=""
+    n=$(frame_count "$out")
+    if [ -f "$out/manifest.txt" ]; then nman=$(wc -l < "$out/manifest.txt" | tr -d ' '); fi
+    if [ "$run_timedout" -ne 0 ]; then reason="engine timed out after ${limit}s"
+    elif [ "$run_status" -ne 0 ]; then reason="engine exited with status $run_status"
+    elif ! is_count "$n"; then reason="the frames written could not be counted (got '$n')"
+    elif [ "$n" -eq 0 ]; then reason="no frames captured"
+    elif [ ! -f "$out/manifest.txt" ]; then reason="no manifest.txt"
+    elif grep -q '^FAILED ' "$out/manifest.txt"; then reason="the engine could not write a frame ($(grep -m1 '^FAILED ' "$out/manifest.txt"))"
+    elif ! is_count "$nman"; then reason="the lines of manifest.txt could not be counted (got '$nman')"
+    elif [ "$nman" -ne "$n" ]; then reason="manifest.txt does not list the $n frames"
+    else
+        bad=$(awk -v r="$(engine_renderer "$renderer")" '$2 != r {print $2; exit}' "$out/manifest.txt")
+        [ -z "$bad" ] || reason="frames were rendered by '$bad', not '$renderer' (renderer fallback)"
+    fi
+    # gl1 and gl1-metal are one module name: the GL_RENDERER line tells which build ran
+    if [ -z "$reason" ] && [ "$renderer" = gl1-metal ]; then
+        shim_build "$out/engine.log" ||
+            reason="the engine did not load the Metal shim build of ref_gl1 (the first GL_RENDERER line of engine.log does not end in '(gl1-metal)'; build it with make ref_gl1 WITH_METAL_SHIM=yes)"
+    elif [ -z "$reason" ] && [ "$renderer" = gl1 ] && shim_build "$out/engine.log"; then
+        reason="the frames came from the Metal shim build of ref_gl1; record them as gl1-metal"
+    fi
+}
+# check_seed: PINS_SEED, when set, is 1 to 9 digits without a leading zero
+# (but 0 itself): 01 and 1 are one engine seed and would be two pin ids
+check_seed() {
+    [ -n "${PINS_SEED:-}" ] || return 0
+    [[ $PINS_SEED =~ ^(0|[1-9][0-9]{0,8})$ ]] || die "PINS_SEED must be 1 to 9 digits without a leading zero, got '$PINS_SEED'"
+}
+
 cmd_record() {
+    need_tools record $pins_tools
     local renderer=$1 scenario=$2 run=1 replace=0; shift 2
     local bin="${PINS_BIN:-$root/release/quake2}" limit="${PINS_TIMEOUT:-600}"
     check_name renderer "$renderer"; check_name scenario "$scenario"
@@ -319,9 +411,8 @@ cmd_record() {
     case $limit in ''|*[!0-9]*) die "PINS_TIMEOUT must be a number of seconds, got '$limit'";; esac
     check_count PINS_WIDTH "${PINS_WIDTH:-640}"; check_count PINS_HEIGHT "${PINS_HEIGHT:-480}"; check_count PINS_EVERY "${PINS_EVERY:-30}"
     check_demo "${PINS_DEMO:-demo1.dm2}"
+    check_seed
     if [ -n "${PINS_SEED:-}" ]; then
-        # no leading zero but 0 itself: 01 and 1 are one engine seed and would be two pin ids
-        [[ $PINS_SEED =~ ^(0|[1-9][0-9]{0,8})$ ]] || die "PINS_SEED must be 1 to 9 digits without a leading zero, got '$PINS_SEED'"
         [ "${PINS_TRACE:-1}" != 0 ] || die "PINS_SEED needs the trace: the engine takes pins_seed only beside pins_record"
     fi
     case ${PINS_DEMO:-demo1.dm2} in
@@ -345,41 +436,10 @@ cmd_record() {
     if [ -f "$out/complete" ] && [ "$replace" -ne 1 ]; then
         die "a complete pin already exists at $out; record with --run N for another run, or --replace to overwrite it"
     fi
+    local reason="" n=0 run_status=0 run_timedout=0
     rm -rf "$out"; mkdir -p "$out"
-    "$bin" "${engine_args[@]}" > "$out/engine.log" 2>&1 &
-    local pid=$! t=0 w status=0 timedout=0
-    while kill -0 "$pid" 2>/dev/null; do
-        if [ "$t" -ge "$limit" ]; then
-            timedout=1
-            kill "$pid" 2>/dev/null || true
-            w=0; while kill -0 "$pid" 2>/dev/null && [ "$w" -lt 5 ]; do sleep 1; w=$((w+1)); done
-            kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
-            echo "pins: engine killed after ${limit}s (PINS_TIMEOUT)" >> "$out/engine.log"
-            break
-        fi
-        sleep 1; t=$((t+1))
-    done
-    wait "$pid" 2>/dev/null || status=$?
-    grep -E 'frames,.*fps' "$out/engine.log" > "$out/timedemo.txt" || true
-    local reason="" n bad
-    n=$(frame_count "$out")
-    if [ "$timedout" -ne 0 ]; then reason="engine timed out after ${limit}s"
-    elif [ "$status" -ne 0 ]; then reason="engine exited with status $status"
-    elif [ "$n" -eq 0 ]; then reason="no frames captured"
-    elif [ ! -f "$out/manifest.txt" ]; then reason="no manifest.txt"
-    elif grep -q '^FAILED ' "$out/manifest.txt"; then reason="the engine could not write a frame ($(grep -m1 '^FAILED ' "$out/manifest.txt"))"
-    elif [ "$(wc -l < "$out/manifest.txt" | tr -d ' ')" -ne "$n" ]; then reason="manifest.txt does not list the $n frames"
-    else
-        bad=$(awk -v r="$(engine_renderer "$renderer")" '$2 != r {print $2; exit}' "$out/manifest.txt")
-        [ -z "$bad" ] || reason="frames were rendered by '$bad', not '$renderer' (renderer fallback)"
-    fi
-    # gl1 and gl1-metal are one module name: the GL_RENDERER line tells which build ran
-    if [ -z "$reason" ] && [ "$renderer" = gl1-metal ]; then
-        shim_build "$out/engine.log" ||
-            reason="the engine did not load the Metal shim build of ref_gl1 (the first GL_RENDERER line of engine.log does not end in '(gl1-metal)'; build it with make ref_gl1 WITH_METAL_SHIM=yes)"
-    elif [ -z "$reason" ] && [ "$renderer" = gl1 ] && shim_build "$out/engine.log"; then
-        reason="the frames came from the Metal shim build of ref_gl1; record them as gl1-metal"
-    fi
+    run_engine "$bin" "$out" "$limit"
+    judge_pin "$out" "$renderer" "$limit"
     if [ -n "$reason" ]; then
         echo "$reason" > "$out/incomplete"
         die "$reason; the pin in $out is incomplete (see $out/engine.log)"
@@ -418,8 +478,8 @@ cmd_compare() {
         [ -d "$ref_dir" ] || die "no reference $ref_dir"
     else
         ref_dir=$(ls -dt "$s/$scenario/$ref"/*/ 2>/dev/null | while IFS= read -r d; do
-            d=${d%/}; [ "$d" != "$cand" ] && [ -f "$d/complete" ] && { echo "$d"; break; }; done || true)
-        [ -n "$ref_dir" ] || die "no complete reference for $ref/$scenario other than the candidate"
+            d=${d%/}; [ "$d" != "$cand" ] && [ -f "$d/complete" ] && [ ! -e "$d/replay.txt" ] && { echo "$d"; break; }; done || true)
+        [ -n "$ref_dir" ] || die "no complete live reference for $ref/$scenario other than the candidate (a replay is a reference only by --ref-id)"
     fi
     [ "$ref_dir" != "$cand" ] || die "the reference and the candidate are the same directory ($cand)"
     [ -f "$ref_dir/complete" ] || die "the reference $ref_dir is incomplete (no 'complete' marker)"
@@ -446,8 +506,169 @@ cmd_compare() {
     if [ "$nref" -ne "$ncand" ]; then echo "frame count differs: reference $nref, candidate $ncand"; fails=$((fails+1)); fi
     if [ "$total" -eq 0 ]; then echo "the reference holds no frames"; fails=$((fails+1)); fi
     echo "ref=$ref_dir"; echo "candidate=$cand"
+    # live or replayed, from the pin's replay manifest being there, never from its text
+    local k; for k in ref:"$ref_dir" candidate:"$cand"; do
+        if [ -e "${k#*:}/replay.txt" ]; then echo "${k%%:*}-kind=replay"; else echo "${k%%:*}-kind=live"; fi
+    done
     echo "frames=$total failed=$fails worst=$worst worst_bad=$worst_bad threshold=$threshold bad_threshold=$bad_threshold"
     [ "$fails" -eq 0 ]
+}
+
+# src_define <file> <name>: the number a "#define <name> <n>" of a source
+# header holds, so the trace format the driver accepts follows the engine's
+src_define() {
+    sed -n "s/^#define[[:space:]][[:space:]]*$2[[:space:]][[:space:]]*\([0-9][0-9]*\).*/\1/p" "$root/$1" 2>/dev/null | head -n 1
+}
+# trace_header <file>: reads the 64-byte header of a trace (section 3 of
+# docs/plans/refapi-record-replay.md, little-endian) into th_version, th_api,
+# th_flags, th_stoff, th_frames, th_w, th_h, th_every; fails with th_why for
+# a file shorter than the header or without the magic. Only numbers are read.
+trace_header() {
+    local b
+    th_why=""
+    b=$(od -An -v -tu1 -N64 "$1" 2>/dev/null | tr -s ' \n' '  ') || { th_why="cannot read the trace"; return 1; }
+    local h=(); set -f; h=($b); set +f
+    [ ${#h[@]} -eq 64 ] || { th_why="the trace is shorter than its 64-byte header"; return 1; }
+    [ "${h[*]:0:8}" = "81 50 82 69 70 82 69 67" ] || { th_why="the trace does not start with the magic Q2REFREC"; return 1; }
+    th_u32() { echo $(( h[$1] + h[$1+1]*256 + h[$1+2]*65536 + h[$1+3]*16777216 )); }
+    th_version=$(th_u32 8); th_api=$(th_u32 12); th_flags=$(th_u32 16); th_stoff=$(th_u32 20)
+    th_frames=$(th_u32 28); th_w=$(( h[52] + h[53]*256 )); th_h=$(( h[54] + h[55]*256 )); th_every=$(th_u32 56)
+}
+# game_module <bin>: "absent" when no game module of any platform's name lies
+# in a directory the engine would load one from for this run (<binary
+# dir>/baseq2 and PINS_BASEDIR/baseq2; -portable leaves out the home
+# directory), "present" otherwise. Decided from the files, not from a log.
+game_module() {
+    local d f
+    for d in "$(dirname "$1")/baseq2" "${PINS_BASEDIR:-}/baseq2"; do
+        for f in game.so game.dylib game.dll; do
+            if [ -e "$d/$f" ] || [ -L "$d/$f" ]; then echo present; return; fi
+        done
+    done
+    echo absent
+}
+# The smallest MAX_OSPATH the engine is built with (Windows, shared.h): the
+# trace path and every frame path the engine forms must fit it
+pins_ospath=256
+
+# replay <renderer> <scenario>: replays the trace of a complete record into
+# <renderer>, its frames a pin of their own beside that renderer's records
+cmd_replay() {
+    need_tools replay $pins_tools od sed
+    local renderer=$1 scenario=$2 from="" trace_id="" run=1 replace=0; shift 2
+    local bin="${PINS_BIN:-$root/release/quake2}" limit="${PINS_TIMEOUT:-600}"
+    check_name renderer "$renderer"; check_name scenario "$scenario"
+    while [ $# -gt 0 ]; do case $1 in
+        --trace-of) [ $# -ge 2 ] || die "--trace-of needs a value"; from=$2; check_name --trace-of "$from"; shift 2;;
+        --ref-id) [ $# -ge 2 ] || die "--ref-id needs a value"; trace_id=$2; check_pin_id --ref-id "$trace_id"; shift 2;;
+        --run) [ $# -ge 2 ] || die "--run needs a value"; run=$2; check_run "$run"; shift 2;;
+        --replace) replace=1; shift;;
+        *) die "unknown option $1";; esac; done
+    [ -n "$from" ] || from=$renderer
+    case $limit in ''|*[!0-9]*) die "PINS_TIMEOUT must be a number of seconds, got '$limit'";; esac
+    check_count PINS_WIDTH "${PINS_WIDTH:-640}"; check_count PINS_HEIGHT "${PINS_HEIGHT:-480}"; check_count PINS_EVERY "${PINS_EVERY:-30}"
+    check_seed
+    [ -f "$scen_dir/$scenario.cfg" ] || die "no scenario $scenario (see $scen_dir)"
+    [ -z "${PINS_BIN:-}" ] || [ -f "$PINS_BIN" ] || die "no engine binary at $PINS_BIN (build the client, or set PINS_BIN)"
+    if [ -n "${PINS_BASEDIR:-}" ]; then check_arg PINS_BASEDIR "$PINS_BASEDIR" path; fi
+    check_store "$scenario" "$renderer" "$from"
+    [ -d "$(store)" ] || die "the pin store $(store) does not exist; record $from $scenario first"
+    local s; s=$(phys_dir "$(store)") || die "cannot resolve the pin store $(store)"
+    check_arg "the pin store path" "$s" path
+    # the trace: a complete live record of <from>, by --ref-id or the newest
+    local tdir pick=""
+    if [ -n "$trace_id" ]; then
+        tdir="$s/$scenario/$from/$trace_id"
+        [ -d "$tdir" ] || die "no record $scenario/$from/$trace_id in the pin store"
+        # on a case-insensitive volume another spelling finds the record; name the cause
+        if [ ! -L "$tdir" ]; then
+            local pt; pt=$(phys_dir "$tdir") || die "cannot resolve the record $scenario/$from/$trace_id"
+            [ "${pt##*/}" = "$trace_id" ] ||
+                die "no record $scenario/$from/$trace_id in the pin store (it holds ${pt##*/}, the same name in another letter case; name it as stored)"
+        fi
+    else
+        pick="; that is the newest record of $from $scenario with a trace, name another with --ref-id"
+        tdir=$(ls -dt "$s/$scenario/$from"/*/ 2>/dev/null | while IFS= read -r d; do
+            d=${d%/}; [ -f "$d/complete" ] && [ ! -e "$d/replay.txt" ] && [ -f "$d/trace.q2r" ] && { echo "$d"; break; }; done || true)
+        [ -n "$tdir" ] || die "no complete record of $from $scenario with a trace (record it: pins.sh record $from $scenario)"
+        trace_id=${tdir##*/}; check_pin_id "the record's directory" "$trace_id"
+    fi
+    [ -f "$tdir/complete" ] && [ ! -e "$tdir/incomplete" ] || die "the record $scenario/$from/$trace_id is incomplete; its trace is not replayed"
+    [ ! -e "$tdir/replay.txt" ] || die "$scenario/$from/$trace_id is a replay, not a record; a replay writes no trace"
+    local trace="$tdir/trace.q2r"
+    [ ! -L "$trace" ] && [ -f "$trace" ] || die "the record $scenario/$from/$trace_id holds no trace.q2r (a regular file, not a link)"
+    # the physical path, every component of it, is the one inside the store
+    phys_path "$trace"
+    [ "$phys_result" = "$trace" ] || die "the trace of $scenario/$from/$trace_id leaves the pin store through a symbolic link; it is not replayed"
+    check_arg "the trace path" "$trace" path
+    [ ${#trace} -lt $pins_ospath ] || die "the trace path is ${#trace} bytes, the engine takes at most $((pins_ospath - 1))"
+    # the header, checked before an engine starts: unfinished, cut short, another format or size
+    local want_version want_api
+    want_version=$(src_define src/client/vid/header/refrecord.h REFREC_VERSION)
+    want_api=$(src_define src/client/vid/header/ref.h API_VERSION)
+    [ -n "$want_version" ] && [ -n "$want_api" ] || die "cannot read REFREC_VERSION and API_VERSION from the source headers"
+    trace_header "$trace" || die "$th_why: $scenario/$from/$trace_id/trace.q2r"
+    [ "$th_version" -eq "$want_version" ] || die "the trace is format version $th_version, this engine reads $want_version"
+    [ "$th_api" -eq "$want_api" ] || die "the trace is of renderer API $th_api, this engine has $want_api"
+    [ "$th_stoff" -ne 0 ] || die "the trace was never finished (its engine died or a write failed); record $from $scenario again"
+    [ $((th_flags & 1)) -eq 0 ] || die "the trace was cut short by a recorder limit (REFREC_FLAG_TRUNCATED); it is not replayed"
+    [ "$th_frames" -gt 0 ] || die "the trace holds no frame"
+    [ "$th_w" -eq "${PINS_WIDTH:-640}" ] && [ "$th_h" -eq "${PINS_HEIGHT:-480}" ] ||
+        die "the trace is ${th_w}x${th_h}, PINS_WIDTH x PINS_HEIGHT is ${PINS_WIDTH:-640}x${PINS_HEIGHT:-480}$pick"
+    [ "$th_every" -eq "${PINS_EVERY:-30}" ] || die "the trace was captured every $th_every frames, PINS_EVERY is ${PINS_EVERY:-30}$pick"
+    # the replay's own pin: never a live record's directory, never through a link
+    # the seed is part of the id, as it is of a record's: two seeds are two pins
+    local rid; rid="$(engine_sha)-replay-$from-$trace_id"
+    if [ -n "${PINS_SEED:-}" ]; then rid="$rid-s$PINS_SEED"; fi
+    if [ "$run" -gt 1 ]; then rid="$rid-r$run"; fi
+    check_pin_id "the replay's directory" "$rid"
+    local out="$s/$scenario/$renderer/$rid"
+    check_arg "the replay pin path" "$out" path
+    [ $(( ${#out} + ${#scenario} + 12 )) -lt $pins_ospath ] ||
+        die "the replay's frame paths would be over $((pins_ospath - 1)) bytes (the pin directory is ${#out}); use a shorter PINS_STORE"
+    if [ -d "$s/$scenario/$renderer" ]; then
+        [ "$(phys_dir "$s/$scenario/$renderer")" = "$s/$scenario/$renderer" ] || die "$scenario/$renderer in the pin store is a symbolic link; nothing is written through it"
+    fi
+    if [ -e "$out" ] || [ -L "$out" ]; then
+        [ ! -L "$out" ] && [ -d "$out" ] || die "$out is not a directory; nothing is written there"
+        [ -f "$out/replay.txt" ] && [ ! -L "$out/replay.txt" ] || die "$out exists and is not a replay; it is never replaced"
+        if [ -f "$out/complete" ] && [ "$replace" -ne 1 ]; then
+            die "a complete replay already exists at $out; replay with --run N for another run, or --replace to overwrite it"
+        fi
+    fi
+    engine_args=(-datadir "${PINS_BASEDIR:-}" -portable +set vid_renderer "$(engine_renderer "$renderer")" +set vid_fullscreen 0
+        +set r_mode -1 +set r_customwidth "${PINS_WIDTH:-640}" +set r_customheight "${PINS_HEIGHT:-480}" +set s_initsound 0
+        +set pins_dir "$out" +set pins_scenario "$scenario" +set pins_capture "${PINS_EVERY:-30}" +set pins_replay "$trace")
+    if [ -n "${PINS_SEED:-}" ]; then engine_args+=(+set pins_seed "$PINS_SEED"); fi
+    if [ -n "${PINS_DRYRUN:-}" ]; then echo "$bin ${engine_args[*]}"; return 0; fi
+    [ -x "$bin" ] || die "no engine binary at $bin (build the client, or set PINS_BIN)"
+    [ -n "${PINS_BASEDIR:-}" ] && [ -d "$PINS_BASEDIR/baseq2" ] || die "PINS_BASEDIR must hold baseq2/ (owner game data, never committed)"
+    if [ -z "${PINS_BIN:-}" ]; then
+        local stale; stale=$(stale_engine "$bin" "$renderer")
+        [ -z "$stale" ] || die "the build is out of date ($stale); rebuild before replaying"
+    fi
+    local reason="" n=0 run_status=0 run_timedout=0 nlive tbytes tsum
+    nlive=$(frame_count "$tdir"); tbytes=$(wc -c < "$trace" | tr -d ' '); tsum=$(cksum < "$trace" | awk '{print $1}')
+    is_count "$nlive" || die "the frames of the record $scenario/$from/$trace_id could not be counted (got '$nlive')"
+    is_count "$tbytes" && is_count "$tsum" || die "the size and checksum of the trace could not be taken (got '$tbytes' and '$tsum')"
+    rm -rf "${out:?}"; mkdir -p "$out"
+    # the replay manifest is written first, so even a failed replay is never taken for a record
+    { echo "replay of $scenario/$from/$trace_id/trace.q2r"
+      echo "trace-bytes $tbytes"; echo "trace-cksum $tsum"
+      echo "trace-frames $th_frames"; echo "record-frames $nlive"
+      echo "renderer $renderer"; echo "engine $(engine_sha)"; echo "seed ${PINS_SEED:-none}"
+      echo "game-module $(game_module "$bin")"; } > "$out/replay.txt"
+    run_engine "$bin" "$out" "$limit"
+    judge_pin "$out" "$renderer" "$limit"
+    if [ -z "$reason" ] && [ "$n" -ne "$nlive" ]; then reason="the replay wrote $n frames, the record of the trace holds $nlive"; fi
+    if [ -n "$reason" ]; then
+        echo "$reason" > "$out/incomplete"
+        die "$reason; the replay in $out is incomplete (see $out/engine.log)"
+    fi
+    date -u '+%Y-%m-%dT%H:%M:%SZ' > "$out/complete"
+    echo "replayed $n frames of $scenario/$from/$trace_id into $renderer: $out"
+    echo "game module: $(game_module "$bin")"
+    echo "compare: pins.sh compare $renderer $scenario --cand-id $rid --ref <renderer>"
 }
 
 cmd_list() {
@@ -455,6 +676,14 @@ cmd_list() {
     # the prefix is stripped by parameter expansion: the store path is never part of a program text
     find "$s" -name '*.tga' 2>/dev/null | while IFS= read -r line; do echo "${line#"$s"/}"; done |
         awk -F/ '{print $1"/"$2"/"$3}' | sort | uniq -c
+    # trace coverage: complete records holding a trace, and replays, per scenario and renderer
+    echo "traces (complete records with trace.q2r, per scenario/renderer):"
+    find "$s" -mindepth 4 -maxdepth 4 -name trace.q2r -type f 2>/dev/null | while IFS= read -r line; do
+        line=${line%/trace.q2r}; [ -f "$line/complete" ] && [ ! -e "$line/replay.txt" ] && echo "${line#"$s"/}"; done |
+        awk -F/ '{print $1"/"$2}' | sort | uniq -c
+    echo "replays (per scenario/renderer):"
+    find "$s" -mindepth 4 -maxdepth 4 -name replay.txt -type f 2>/dev/null | while IFS= read -r line; do echo "${line#"$s"/}"; done |
+        awk -F/ '{print $1"/"$2}' | sort | uniq -c
 }
 
 # ---- evidence (TASK73; docs/decisions/0007) ---------------------------------
@@ -1658,6 +1887,256 @@ st_usage() { # the usage text is the whole header comment, its last line include
     [ "$(printf '%s\n' "$out" | head -n 1)" = "$(sed -n 2p "$root/scripts/pins.sh" | sed 's/^# \{0,1\}//')" ] || st_fail "the usage text must start with line 2 of the file" || return 1
 }
 
+# le_bytes <value> <count>: the value as <count> little-endian bytes
+le_bytes() {
+    local v=$1 i=0
+    while [ "$i" -lt "$2" ]; do printf "\\$(printf %03o $((v & 255)))"; v=$((v >> 8)); i=$((i+1)); done
+}
+# trace_fixture <renderer> <id> [version api flags stoff frames w h every magic]: a
+# complete record holding one frame and a trace whose header has those fields
+# (default: a finished 640x480 trace of this engine's format, every 30)
+trace_fixture() {
+    local d="${PINS_STORE:?}/world/$1/$2"
+    fixture "$1" "$2" "${tmp:?}/a.tga"
+    { printf '%s' "${11:-Q2REFREC}"; le_bytes "${3:-$tver}" 4; le_bytes "${4:-$tapi}" 4; le_bytes "${5:-0}" 4
+      le_bytes "${6:-100}" 4; le_bytes 112 4; le_bytes "${7:-3}" 4; le_bytes 0 20
+      le_bytes "${8:-640}" 2; le_bytes "${9:-480}" 2; le_bytes "${10:-30}" 4; le_bytes 0 4; } > "$d/trace.q2r"
+}
+# replay_ok <args>: the replay must pass; replay_no <message> <args>: a dry
+# run of it, which would otherwise pass, must be refused with that message
+replay_ok() { (cmd_replay "$@") >/dev/null 2>&1 || st_fail "replay $* must pass"; }
+replay_no() {
+    local why=$1 rep; shift
+    rep=$( (PINS_DRYRUN=1 PINS_BASEDIR="${tmp:?}/gd" cmd_replay "$@") 2>&1 ) && { st_fail "replay $* must be refused ($why)"; return 1; }
+    case $rep in "pins: "*"$why"*) ;; *) st_fail "replay $* must be refused with '$why', got: $rep"; return 1;; esac
+}
+st_replay_args() { # TASK46: what replay passes to the engine
+    trace_fixture gl1 rec1
+    local line t; t="$(phys_dir "$PINS_STORE")/world/gl1/rec1/trace.q2r"
+    line=$(PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) || st_fail "a dry run of replay must pass" || return 1
+    case $line in "${tmp:?}/fake-ok -datadir  -portable +set vid_renderer soft +set vid_fullscreen 0 +set r_mode -1 +set r_customwidth 640 +set r_customheight 480 +set s_initsound 0 +set pins_dir $(phys_dir "$PINS_STORE")/world/soft/$(engine_sha)-replay-gl1-rec1 +set pins_scenario world +set pins_capture 30 +set pins_replay $t") ;;
+        *) st_fail "the replay command line is not the expected one: $line"; return 1;; esac
+    case $(PINS_SEED=7 PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) in *"/world/soft/$(engine_sha)-replay-gl1-rec1-s7 "*"+set pins_replay $t +set pins_seed 7") ;; *) st_fail "PINS_SEED=7 must pass pins_seed 7 and name the replay -s7"; return 1;; esac
+    case $(PINS_SEED=7 PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1 --run 2) in *"-replay-gl1-rec1-s7-r2 "*) ;; *) st_fail "PINS_SEED=7 --run 2 must name the replay -s7-r2"; return 1;; esac
+    local sd; for sd in x -1 1234567890 01 '4;quit'; do
+        if (PINS_SEED="$sd" PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) >/dev/null 2>&1; then st_fail "PINS_SEED='$sd' must be refused"; return 1; fi
+    done
+    case $(PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1 --run 2) in *"-replay-gl1-rec1-r2 "*) ;; *) st_fail "--run 2 must add -r2 to the replay id"; return 1;; esac
+    trace_fixture gl1-metal rec2
+    case $(PINS_DRYRUN=1 cmd_replay gl1-metal world) in *"+set vid_renderer gl1 "*"world/gl1-metal/rec2/trace.q2r") ;; *) st_fail "gl1-metal must replay its own trace as vid_renderer gl1"; return 1;; esac
+}
+st_replay_pick() { # TASK46: the default trace is the newest complete record with a trace
+    trace_fixture gl1 old; trace_fixture gl1 new; trace_fixture gl1 nocomplete; trace_fixture gl1 isreplay; fixture gl1 notrace "${tmp:?}/a.tga"
+    rm "${PINS_STORE:?}/world/gl1/nocomplete/complete"; echo x > "${PINS_STORE:?}/world/gl1/isreplay/replay.txt"
+    touch -t 202001010000 "${PINS_STORE:?}/world/gl1/old"; touch -t 202101010000 "${PINS_STORE:?}/world/gl1/new"
+    touch -t 203001010000 "${PINS_STORE:?}/world/gl1/nocomplete" "${PINS_STORE:?}/world/gl1/isreplay" "${PINS_STORE:?}/world/gl1/notrace"
+    case $(PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) in *"/world/gl1/new/trace.q2r") ;; *) st_fail "the default trace must be the newest complete record with one (new)"; return 1;; esac
+    case $(PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1 --ref-id old) in *"/world/gl1/old/trace.q2r") ;; *) st_fail "--ref-id must select that record"; return 1;; esac
+}
+st_replay_refused() { # TASK46: options, and records that are not a finished live record
+    replay_no "no complete record of gl1 world with a trace" soft world --trace-of gl1 || return 1
+    trace_fixture gl1 rec1
+    local v; for v in ../x a/b .x '-x' 'a b' '$(x)'; do replay_no "--ref-id must be a pin directory name" soft world --trace-of gl1 --ref-id "$v" || return 1; done
+    for v in ../x A 'a/b' -x; do replay_no "--trace-of must match" soft world --trace-of "$v" || return 1; done
+    replay_no "no record world/gl1/nosuch" soft world --trace-of gl1 --ref-id nosuch || return 1
+    if [ -d "${PINS_STORE:?}/world/gl1/REC1" ]; then
+        replay_no "the same name in another letter case" soft world --trace-of gl1 --ref-id REC1 || return 1
+    else echo "       replay_refused: a case-sensitive volume, the letter case is skipped"; fi
+    replay_no "unknown option --bogus" soft world --trace-of gl1 --bogus || return 1
+    replay_no "renderer must match" ../x world || return 1
+    replay_no "no scenario nosuch" soft nosuch || return 1
+    for v in x 1.5 -1; do PINS_TIMEOUT=$v replay_no "PINS_TIMEOUT must be a number" soft world --trace-of gl1 || return 1; done
+    rm "${PINS_STORE:?}/world/gl1/rec1/complete"; replay_no "is incomplete; its trace is not replayed" soft world --trace-of gl1 --ref-id rec1 || return 1
+    trace_fixture gl1 rec1; echo failed > "${PINS_STORE:?}/world/gl1/rec1/incomplete"
+    replay_no "is incomplete; its trace is not replayed" soft world --trace-of gl1 --ref-id rec1 || return 1
+    trace_fixture gl1 rec1; echo x > "${PINS_STORE:?}/world/gl1/rec1/replay.txt"
+    replay_no "is a replay, not a record" soft world --trace-of gl1 --ref-id rec1 || return 1
+    trace_fixture gl1 rec1; rm "${PINS_STORE:?}/world/gl1/rec1/trace.q2r"
+    replay_no "holds no trace.q2r" soft world --trace-of gl1 --ref-id rec1 || return 1
+    mkdir -p "${PINS_STORE:?}/world/gl1/rec1/trace.q2r"; replay_no "holds no trace.q2r" soft world --trace-of gl1 --ref-id rec1 || return 1
+}
+st_replay_header() { # TASK46: the trace header is checked before an engine starts
+    trace_fixture gl1 rec1; PINS_DRYRUN=1 replay_ok soft world --trace-of gl1 || return 1
+    local c
+    for c in "2 $tapi 0 100 3 640 480 30 Q2REFREC:format version" "257 $tapi 0 100 3 640 480 30 Q2REFREC:format version" \
+        "$tver 7 0 100 3 640 480 30 Q2REFREC:renderer API" \
+        "$tver $tapi 0 0 3 640 480 30 Q2REFREC:never finished" "$tver $tapi 1 100 3 640 480 30 Q2REFREC:cut short" \
+        "$tver $tapi 0 100 0 640 480 30 Q2REFREC:no frame" "$tver $tapi 0 100 3 320 480 30 Q2REFREC:PINS_WIDTH" \
+        "$tver $tapi 0 100 3 640 240 30 Q2REFREC:PINS_WIDTH" "$tver $tapi 0 100 3 640 480 15 Q2REFREC:PINS_EVERY" \
+        "$tver $tapi 0 100 3 640 480 30 Q2REFRED:magic"; do
+        set -f; trace_fixture gl1 rec1 ${c%%:*}; set +f
+        local rep; rep=$( (PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) 2>&1 ) && { st_fail "a trace with header '${c%%:*}' must be refused"; return 1; }
+        case $rep in *"${c#*:}"*) ;; *) st_fail "the refusal must name '${c#*:}': $rep"; return 1;; esac
+    done
+    # a refusal of the default record for its size or cadence says how to name another; one named by --ref-id does not
+    local why; for why in "$tver $tapi 0 100 3 320 480 30" "$tver $tapi 0 100 3 640 480 15"; do
+        set -f; trace_fixture gl1 rec1 $why; set +f
+        rep=$( (PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) 2>&1 ) && { st_fail "a trace with header '$why' must be refused"; return 1; }
+        case $rep in *"newest record of gl1 world with a trace, name another with --ref-id") ;; *) st_fail "the refusal of the newest record must point to --ref-id: $rep"; return 1;; esac
+        rep=$( (PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1 --ref-id rec1) 2>&1 ) && { st_fail "a trace with header '$why' must be refused by --ref-id too"; return 1; }
+        case $rep in *"--ref-id"*) st_fail "a record named by --ref-id needs no hint: $rep"; return 1;; esac
+    done
+    trace_fixture gl1 rec1; head -c 63 "${PINS_STORE:?}/world/gl1/rec1/trace.q2r" > "${tmp:?}/short"; cp "${tmp:?}/short" "${PINS_STORE:?}/world/gl1/rec1/trace.q2r"
+    local rep; rep=$( (PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) 2>&1 ) && { st_fail "a 63-byte trace must be refused"; return 1; }
+    case $rep in *"shorter than its 64-byte header"*) ;; *) st_fail "the short trace must be named: $rep"; return 1;; esac
+    # every byte of a u32 counts: a string table at 65536, 707 frames
+    trace_fixture gl1 rec1 "$tver" "$tapi" 0 65536 707; PINS_DRYRUN=1 replay_ok soft world --trace-of gl1 || return 1
+    # the 320x240 trace replays at PINS_WIDTH=320 PINS_HEIGHT=240, every 15 at PINS_EVERY=15
+    trace_fixture gl1 rec1 "$tver" "$tapi" 0 100 3 320 240 15
+    case $(PINS_WIDTH=320 PINS_HEIGHT=240 PINS_EVERY=15 PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) in
+        *"+set r_customwidth 320 +set r_customheight 240 "*"+set pins_capture 15 "*) ;; *) st_fail "a 320x240 trace must replay at PINS_WIDTH=320"; return 1;; esac
+}
+st_replay_place() { # TASK46: the trace is read and the frames written only inside the store, by physical path
+    trace_fixture gl1 rec1
+    mkdir -p "${tmp:?}/outside/rec2"; cp -R "${PINS_STORE:?}/world/gl1/rec1/." "${tmp:?}/outside/rec2/"
+    ln -s "${tmp:?}/outside/rec2" "${PINS_STORE:?}/world/gl1/rec2"
+    replay_no "leaves the pin store through a symbolic link" soft world --trace-of gl1 --ref-id rec2 || return 1
+    rm "${PINS_STORE:?}/world/gl1/rec2"; mkdir "${PINS_STORE:?}/world/gl1/rec2"; cp "${PINS_STORE:?}/world/gl1/rec1/complete" "${PINS_STORE:?}/world/gl1/rec2/"
+    ln -s "${tmp:?}/outside/rec2/trace.q2r" "${PINS_STORE:?}/world/gl1/rec2/trace.q2r"
+    replay_no "holds no trace.q2r (a regular file, not a link)" soft world --trace-of gl1 --ref-id rec2 || return 1
+    rm "${PINS_STORE:?}/world/gl1/rec2/trace.q2r"; ln -s ../rec1/trace.q2r "${PINS_STORE:?}/world/gl1/rec2/trace.q2r"
+    replay_no "holds no trace.q2r (a regular file, not a link)" soft world --trace-of gl1 --ref-id rec2 || return 1
+    rm -rf "${PINS_STORE:?}/world/gl1/rec2"
+    # the renderer directory written into, linked elsewhere
+    mkdir -p "${tmp:?}/outside/soft"; ln -s "${tmp:?}/outside/soft" "${PINS_STORE:?}/world/soft"
+    replay_no "is a symbolic link; nothing is written through it" soft world --trace-of gl1 || return 1
+    rm "${PINS_STORE:?}/world/soft"
+    local rep; rep=$( (PINS_STORE="$root/pins-store" cmd_replay soft world --trace-of gl1) 2>&1 ) && { st_fail "a store inside the repository must be refused"; return 1; }
+    case $rep in *"inside this repository"*) ;; *) st_fail "replay must refuse the store for its place: $rep"; return 1;; esac
+    mkdir -p "${tmp:?}/a b"; rep=$( (PINS_STORE="${tmp:?}/a b" PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) 2>&1 ) && { st_fail "a store path with a space must be refused"; return 1; }
+    case $rep in *"engine re-joins its command line"*) ;; *) st_fail "the store path must be refused for its characters: $rep"; return 1;; esac
+    # the paths the engine forms must fit its smallest MAX_OSPATH (256): a store
+    # of 200 to 209 bytes fits the trace path but not the frame paths, one of
+    # 235 to 244 neither
+    local deep="${tmp:?}/d1" what s=$PINS_STORE
+    for what in "frame paths would be over 255" "trace path is"; do
+        while [ ${#deep} -lt 200 ]; do deep="$deep/aaaaaaaaa"; done
+        [ "$what" = "frame paths would be over 255" ] || while [ ${#deep} -lt 235 ]; do deep="$deep/aaaaaaaaa"; done
+        mkdir -p "$deep"; PINS_STORE=$deep; trace_fixture gl1 rec1; PINS_STORE=$s
+        rep=$( (PINS_STORE="$deep" PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) 2>&1 ) && { st_fail "a store of ${#deep} bytes must be refused ($what)"; return 1; }
+        case $rep in *"$what"*) ;; *) st_fail "a store of ${#deep} bytes must be refused for '$what': $rep"; return 1;; esac
+    done
+}
+st_replay_run() { # TASK46: a replay is a pin of its own, with its manifest, complete like a record
+    trace_fixture gl1 rec1
+    local rid out; rid="$(engine_sha)-replay-gl1-rec1"; out="$(phys_dir "$PINS_STORE")/world/soft/$rid"
+    PINS_BASEDIR="${tmp:?}/gd" replay_ok soft world --trace-of gl1 || return 1
+    [ -f "$out/complete" ] && [ ! -e "$out/incomplete" ] || st_fail "the replay must be complete" || return 1
+    grep -qx 'replay of world/gl1/rec1/trace.q2r' "$out/replay.txt" && grep -qx 'game-module absent' "$out/replay.txt" &&
+        grep -qx "trace-cksum $(cksum < "${PINS_STORE:?}/world/gl1/rec1/trace.q2r" | awk '{print $1}')" "$out/replay.txt" ||
+        st_fail "replay.txt must name the trace, its checksum and the absent game module: $(cat "$out/replay.txt")" || return 1
+    [ ! -e "${PINS_STORE:?}/world/gl1/rec1/replay.txt" ] && [ "$(ls "${PINS_STORE:?}/world/gl1/rec1" | wc -l | tr -d ' ')" -eq 3 ] ||
+        st_fail "the record replayed must be left as it was" || return 1
+    mkdir -p "${tmp:?}/baseq2"; : > "${tmp:?}/baseq2/game.dylib"
+    PINS_BASEDIR="${tmp:?}/gd" replay_ok soft world --trace-of gl1 --run 2 || return 1
+    rm -rf "${tmp:?}/baseq2"
+    grep -qx 'game-module present' "$out-r2/replay.txt" || st_fail "a game module beside the binary must be reported present" || return 1
+    [ -f "$out/complete" ] || st_fail "--run 2 must keep the first replay" || return 1
+}
+st_replay_keep() { # TASK46: nothing complete is replaced silently, and a directory that is not a replay never
+    trace_fixture gl1 rec1
+    local out; out="$(phys_dir "$PINS_STORE")/world/soft/$(engine_sha)-replay-gl1-rec1"
+    PINS_BASEDIR="${tmp:?}/gd" replay_ok soft world --trace-of gl1 || return 1
+    echo keep > "$out/marker"
+    replay_no "a complete replay already exists" soft world --trace-of gl1 || return 1
+    if (PINS_BASEDIR="${tmp:?}/gd" cmd_replay soft world --trace-of gl1) >/dev/null 2>&1; then st_fail "a replay over a complete one must be refused"; return 1; fi
+    [ -f "$out/marker" ] || st_fail "the refused replay must leave the pin untouched" || return 1
+    PINS_BASEDIR="${tmp:?}/gd" replay_ok soft world --trace-of gl1 --replace || return 1
+    [ ! -e "$out/marker" ] && [ -f "$out/complete" ] || st_fail "--replace must leave a fresh complete replay" || return 1
+    rm -rf "${out:?}"; mkdir -p "$out"; echo keep > "$out/marker"
+    replay_no "exists and is not a replay; it is never replaced" soft world --trace-of gl1 --replace || return 1
+    if (PINS_BASEDIR="${tmp:?}/gd" cmd_replay soft world --trace-of gl1 --replace) >/dev/null 2>&1; then st_fail "--replace over a directory that is not a replay must be refused"; return 1; fi
+    [ -f "$out/marker" ] || st_fail "a directory without replay.txt must never be replaced" || return 1
+    echo x > "${tmp:?}/outside-replay.txt"; ln -s "${tmp:?}/outside-replay.txt" "$out/replay.txt"
+    replay_no "exists and is not a replay; it is never replaced" soft world --trace-of gl1 --replace || return 1
+    if (PINS_BASEDIR="${tmp:?}/gd" cmd_replay soft world --trace-of gl1 --replace) >/dev/null 2>&1; then st_fail "--replace over a replay.txt that is a link must be refused"; return 1; fi
+    [ -f "$out/marker" ] && [ -L "$out/replay.txt" ] || st_fail "a directory whose replay.txt is a link must never be replaced" || return 1
+    rm -rf "${out:?}"; ln -s "${tmp:?}/gd" "$out"
+    replay_no "is not a directory; nothing is written there" soft world --trace-of gl1 --replace || return 1
+    [ -d "${tmp:?}/gd/baseq2" ] || st_fail "the link's target must be left alone" || return 1
+    rm "${out:?}"
+    # two seeds are two replays: neither collides with the other, nor --replace of one with the other
+    PINS_SEED=7 PINS_BASEDIR="${tmp:?}/gd" replay_ok soft world --trace-of gl1 || return 1
+    PINS_SEED=8 PINS_BASEDIR="${tmp:?}/gd" replay_ok soft world --trace-of gl1 || return 1
+    echo keep > "$out-s8/marker"
+    PINS_SEED=7 PINS_BASEDIR="${tmp:?}/gd" replay_ok soft world --trace-of gl1 --replace || return 1
+    [ -f "$out-s7/complete" ] && [ -f "$out-s8/marker" ] && grep -qx 'seed 8' "$out-s8/replay.txt" ||
+        st_fail "a replay with PINS_SEED=7 must never touch the one with PINS_SEED=8" || return 1
+}
+st_replay_fail() { # TASK46: a failed replay is left incomplete, never looking complete
+    trace_fixture gl1 rec1
+    local out; out="$(phys_dir "$PINS_STORE")/world/soft"
+    local e r id; for e in fake-crash:soft fake-drop:soft fake-other:gl1; do
+        r=${e#*:}; e=${e%%:*}; id="$(PINS_BIN="${tmp:?}/$e" engine_sha)-replay-gl1-rec1"
+        if (PINS_BASEDIR="${tmp:?}/gd" PINS_BIN="${tmp:?}/$e" cmd_replay "$r" world --trace-of gl1) >/dev/null 2>&1; then st_fail "replay into $r with $e must fail"; return 1; fi
+        [ ! -e "$out/../$r/$id/complete" ] && [ -s "$out/../$r/$id/incomplete" ] && [ -f "$out/../$r/$id/replay.txt" ] || st_fail "a replay with $e must be left incomplete" || return 1
+    done
+    id="$(PINS_BIN="${tmp:?}/fake-hang" engine_sha)-replay-gl1-rec1"
+    if (PINS_BASEDIR="${tmp:?}/gd" PINS_BIN="${tmp:?}/fake-hang" PINS_TIMEOUT=2 cmd_replay soft world --trace-of gl1) >/dev/null 2>&1; then st_fail "a replay that hangs must fail"; return 1; fi
+    grep -q 'timed out' "$out/$id/incomplete" && [ ! -e "$out/$id/complete" ] || st_fail "the timeout must leave the replay incomplete" || return 1
+    # fewer frames than the record (two here, the fake engine writes one)
+    fixture gl1 rec2 "${tmp:?}/a.tga" "${tmp:?}/a.tga"; cp "${PINS_STORE:?}/world/gl1/rec1/trace.q2r" "${PINS_STORE:?}/world/gl1/rec2/"
+    if (PINS_BASEDIR="${tmp:?}/gd" cmd_replay soft world --trace-of gl1 --ref-id rec2) >/dev/null 2>&1; then st_fail "a replay with fewer frames than its record must fail"; return 1; fi
+    grep -q 'wrote 1 frames, the record of the trace holds 2' "$out/$(engine_sha)-replay-gl1-rec2/incomplete" || st_fail "the frame count must be named" || return 1
+    if (PINS_BASEDIR="${tmp:?}/gd" PINS_BIN="${tmp:?}/fake-ok" cmd_replay gl1-metal world --trace-of gl1) >/dev/null 2>&1; then st_fail "gl1-metal must refuse a replay without the shim build"; return 1; fi
+    # an engine that is not executable, and no game data, are refused before an engine runs
+    local rep; cp "${tmp:?}/fake-ok" "${tmp:?}/noexec"; chmod -x "${tmp:?}/noexec"
+    rep=$( (PINS_BASEDIR="${tmp:?}/gd" PINS_BIN="${tmp:?}/noexec" cmd_replay soft world --trace-of gl1 --ref-id rec1) 2>&1 ) && { st_fail "a replay with an engine that is not executable must fail"; return 1; }
+    case $rep in "pins: no engine binary at ${tmp:?}/noexec"*) ;; *) st_fail "a binary that is not executable must be named: $rep"; return 1;; esac
+    rm -rf "${out:?}"/*
+    mkdir -p "${tmp:?}/nogd"; local bd
+    for bd in "" "${tmp:?}/nogd"; do
+        rep=$( (PINS_BASEDIR="$bd" cmd_replay soft world --trace-of gl1 --ref-id rec1) 2>&1 ) && { st_fail "a replay with PINS_BASEDIR='$bd' must fail"; return 1; }
+        case $rep in "pins: PINS_BASEDIR must hold baseq2/"*) ;; *) st_fail "PINS_BASEDIR='$bd' must be refused for the game data: $rep"; return 1;; esac
+        [ ! -e "$out/$(engine_sha)-replay-gl1-rec1" ] || st_fail "a replay refused for PINS_BASEDIR must write nothing" || return 1
+    done
+}
+st_replay_compare() { # TASK46: compare names replays and takes one as a reference only by --ref-id
+    trace_fixture gl1-metal rec1; fixture soft live1 "${tmp:?}/a.tga"; touch -t 202001010000 "${PINS_STORE:?}/world/soft/live1"
+    PINS_BASEDIR="${tmp:?}/gd" replay_ok soft world --trace-of gl1-metal || return 1
+    local rid rep; rid="$(engine_sha)-replay-gl1-metal-rec1"
+    rep=$(cmd_compare soft world --cand-id "$rid" --ref soft) || st_fail "the replay must compare against the live soft pin: $rep" || return 1
+    case $rep in *"ref=$PINS_STORE/world/soft/live1"*"ref-kind=live"*"candidate-kind=replay"*) ;; *) st_fail "compare must name live and replay: $rep"; return 1;; esac
+    rep=$(cmd_compare soft world --cand-id "$rid" --ref gl1-metal) || st_fail "the replay must compare against the gl1-metal record: $rep" || return 1
+    fixture gl1 "$cid" "${tmp:?}/a.tga"
+    rep=$(cmd_compare gl1 world --ref soft) || st_fail "compare gl1 against soft must pass: $rep" || return 1
+    case $rep in *"ref=$PINS_STORE/world/soft/live1"*) ;; *) st_fail "the default reference must skip the newer replay: $rep"; return 1;; esac
+    rep=$(cmd_compare gl1 world --ref soft --ref-id "$rid") || st_fail "--ref-id must take a replay as the reference: $rep" || return 1
+    case $rep in *"ref-kind=replay"*"candidate-kind=live"*) ;; *) st_fail "compare must name the replay reference: $rep"; return 1;; esac
+    # an incomplete record holding a trace is no trace coverage
+    trace_fixture gl1-metal inc; rm "${PINS_STORE:?}/world/gl1-metal/inc/complete"
+    rep=$(cmd_list)
+    printf '%s\n' "$rep" | sed -n '/^traces/,/^replays/p' | grep -qxE ' *1 world/gl1-metal' &&
+        printf '%s\n' "$rep" | sed -n '/^replays/,$p' | grep -qxE ' *1 world/soft' || st_fail "list must show trace coverage and replays: $rep" || return 1
+}
+st_replay_tools() { # TASK46: a missing tool, or one that prints nothing, never leaves a complete pin
+    trace_fixture gl1 rec1
+    local t u d rep f
+    no_complete() { for f in "${PINS_STORE:?}"/world/soft/*/complete; do [ ! -e "$f" ] || { st_fail "$1 left $f"; return 1; }; done; }
+    for t in cksum wc grep od; do
+        d="${tmp:?}/path-no-$t"; rm -rf "${d:?}"; mkdir "$d"
+        for u in $pins_tools od sed cp; do [ "$u" = "$t" ] || ln -s "$(command -v "$u")" "$d/$u"; done
+        rep=$( (PATH="$d" PINS_BASEDIR="${tmp:?}/gd" cmd_replay soft world --trace-of gl1) 2>&1 ) && { st_fail "replay without $t must fail"; return 1; }
+        case $rep in "pins: replay needs $t, which is not on PATH"*) ;; *) st_fail "replay without $t must say so, got: $rep"; return 1;; esac
+        no_complete "replay without $t" || return 1
+        [ "$t" != od ] || continue
+        rep=$( (PATH="$d" PINS_BASEDIR="${tmp:?}/gd" cmd_record soft world) 2>&1 ) && { st_fail "record without $t must fail"; return 1; }
+        case $rep in "pins: record needs $t, which is not on PATH"*) ;; *) st_fail "record without $t must say so, got: $rep"; return 1;; esac
+        no_complete "record without $t" || return 1
+    done
+    # a tool that is there but prints nothing: an empty count or checksum is a failure, never zero
+    if (frame_count() { :; }; PINS_BASEDIR="${tmp:?}/gd" cmd_replay soft world --trace-of gl1) >/dev/null 2>&1; then st_fail "replay must fail when the frames cannot be counted"; return 1; fi
+    no_complete "an uncounted replay" || return 1
+    if (cksum() { :; }; PINS_BASEDIR="${tmp:?}/gd" cmd_replay soft world --trace-of gl1) >/dev/null 2>&1; then st_fail "replay must fail without the trace checksum"; return 1; fi
+    no_complete "a replay without a checksum" || return 1
+    if (wc() { :; }; PINS_BASEDIR="${tmp:?}/gd" cmd_replay soft world --trace-of gl1) >/dev/null 2>&1; then st_fail "replay must fail when wc prints nothing"; return 1; fi
+    no_complete "a replay without wc output" || return 1
+    if (wc() { :; }; PINS_BASEDIR="${tmp:?}/gd" cmd_record soft world) >/dev/null 2>&1; then st_fail "record must fail when wc prints nothing"; return 1; fi
+    no_complete "a record without wc output" || return 1
+    if (frame_count() { echo 1; }; wc() { :; }; PINS_BASEDIR="${tmp:?}/gd" cmd_record soft world) >/dev/null 2>&1; then st_fail "record must fail when the manifest lines cannot be counted"; return 1; fi
+    no_complete "a record with an uncounted manifest" || return 1
+}
+
 # fake_demo_engine <path> <body>: stands in for the engine in make-demo. It
 # finds the script copy it was told to exec in <its dir>/baseq2 (exit 3 if
 # absent), then runs <body>, which may write the demo "$f"
@@ -1892,11 +2371,20 @@ cmd_selftest() {
     fake_engine "$tmp/fake-spoof-gl" - 'echo "GL_RENDERER: Metal shim on a test device (gl1-metal)"; echo "GL_RENDERER: Test OpenGL Engine"; exit 0'
     export PINS_BIN="$tmp/fake-ok"
     cid=$(run_id world 1)
-    local c failed=""
-    for c in framediff framediff_block compare_basic compare_bad_threshold ref_mtime missing_frame self_compare \
-        two_runs incomplete record_engine timeout fallback names cmdline thresholds scenarios argcount frame_failed list \
-        scenario_lines store_place fast_fail demo_name replace engine_id metal_shim usage \
-        make_demo_args make_demo_script make_demo_run make_demo_place make_demo_case demo_sum; do
+    tver=$(src_define src/client/vid/header/refrecord.h REFREC_VERSION); tapi=$(src_define src/client/vid/header/ref.h API_VERSION)
+    [ -n "$tver" ] && [ -n "$tapi" ] || die "selftest: cannot read REFREC_VERSION and API_VERSION"
+    local c failed="" cases="framediff framediff_block compare_basic compare_bad_threshold ref_mtime missing_frame self_compare
+        two_runs incomplete record_engine timeout fallback names cmdline thresholds scenarios argcount frame_failed list
+        scenario_lines store_place fast_fail demo_name replace engine_id metal_shim usage
+        replay_args replay_pick replay_refused replay_header replay_place replay_run replay_keep replay_fail replay_compare
+        replay_tools
+        make_demo_args make_demo_script make_demo_run make_demo_place make_demo_case demo_sum"
+    # "selftest <case>..." runs only those cases (each must be one of the list)
+    if [ $# -gt 0 ]; then
+        for c in "$@"; do case " $(echo $cases) " in *" $c "*) ;; *) die "no selftest case '$c'";; esac; done
+        cases="$*"
+    fi
+    for c in $cases; do
         rm -rf "$PINS_STORE/world"
         if ( set -e; "st_$c" ); then echo "  ok   $c"; else echo "  FAIL $c"; failed="$failed $c"; fi
     done
@@ -1907,9 +2395,10 @@ cmd_selftest() {
 case "${1:-}" in
     record)   [ $# -ge 3 ] || die "usage: pins.sh record <renderer> <scenario> [--run N] [--replace]"; shift; cmd_record "$@";;
     compare)  [ $# -ge 3 ] || die "usage: pins.sh compare <renderer> <scenario> [--ref r] [--ref-id d] [--run N | --cand-id d] [--threshold t] [--bad-threshold b]"; shift; cmd_compare "$@";;
+    replay)   [ $# -ge 3 ] || die "usage: pins.sh replay <renderer> <scenario> [--trace-of r] [--ref-id d] [--run N] [--replace]"; shift; cmd_replay "$@";;
     make-demo) [ $# -ge 2 ] || die "usage: pins.sh make-demo <name> [--replace]"; shift; cmd_make_demo "$@";;
     list)     cmd_list;;
-    selftest) cmd_selftest;;
+    selftest) shift; cmd_selftest "$@";;
     evidence) shift; cmd_evidence "$@";;
     evidence-publish) shift; cmd_evidence_publish "$@";;
     evidence-selftest) cmd_evidence_selftest;;

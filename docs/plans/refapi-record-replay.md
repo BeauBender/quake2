@@ -503,3 +503,36 @@ list below is the detailed scope behind its rows.
 
 TASK27a changes no behaviour and lands first; the gate stays green at every
 card because replay is off unless `pins_replay` is set.
+
+As built (TASK46, sub-card e). No engine change: `scripts/pins.sh replay
+<renderer> <scenario> [--trace-of <renderer>] [--ref-id <dir>] [--run N]
+[--replace]` starts the engine with `pins_replay` and the window size,
+`pins_dir`, `pins_scenario`, `pins_capture` and `pins_seed` a record
+passes, and no scenario line (the trace restores the renderer cvars). The
+card's `--from` is `--trace-of`, and the record is chosen by `--ref-id`
+as `compare` chooses a reference, else the newest complete live record
+with a trace. The driver checks before the engine starts what it can
+check without parsing records: the trace's physical path is the one
+inside the physical store (no link on any component, nor on the renderer
+directory written into), its path and the frame paths fit 255 bytes (the
+Windows `MAX_OSPATH`), and its header (read as bytes by `od`, never
+evaluated) is finished (`string_table_offset` not 0), not
+`REFREC_FLAG_TRUNCATED`, of `REFREC_VERSION` and `API_VERSION` as the
+source headers define them, has frames, and is of `PINS_WIDTH` x
+`PINS_HEIGHT` and `PINS_EVERY`; the engine checks the rest. The replay is
+a pin of its own, `<engine>-replay-<trace-of>-<record>[-r<N>]`, with the
+replay manifest `replay.txt` written before the engine starts (trace,
+size, checksum, seed, and whether a game module lay on the engine's
+search path, decided from the files); it completes on the record's terms
+plus the record's frame count. `compare` prints `ref-kind` and
+`candidate-kind` (`live` or `replay`, from `replay.txt` being there) and
+never picks a replay as the default reference; `list` reports trace
+coverage. The card's "doctor row" is that `list` output. Measured on
+`world` (`doc/100_renderpins.md`, *Replaying a trace*): `soft` and
+`gl1-metal` each from its own trace and each from the other's, three
+runs each with no game module where the engine looks for one, 0
+differing frames of 23 against the live record of the renderer replayed
+into; the same binary refuses a live record for want of the game module.
+The `gl1` and `metal` renderers of the table's acceptance line are
+`gl1-metal` and `soft` on this host; the native `ref_metal` (TASK28) replays
+the same way once it exists.
