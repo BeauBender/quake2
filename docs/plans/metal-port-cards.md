@@ -76,7 +76,8 @@ runs, "each renderer" below means `soft`.
 
 ## Group S: the OpenGL-subset shim on Metal (parent TASK21, #28)
 
-Parent dependencies carried by every card: INFORM8, TASK13, TASK27, TASK29
+Parent dependencies carried by every card: INFORM8, TASK13, TASK29 (TASK27
+was dropped from S2 to S6 on 2026-11-13, see record 0006)
 (INFORM8 is closed, accepted by the owner on 2026-11-12).
 Design: `docs/plans/metal-shim-design.md` and
 `docs/analysis/gl1-state-inventory.md`. The six cards consolidate the ten
@@ -91,7 +92,7 @@ in this group.
 | S2 | 2D path: RGBA textures, samplers, replace and modulate, blend, alpha test, the 2D batch, cinematic uploads | S1, P3 | T0 | opus | inventory stages b, c | `scripts/pins.sh compare gl1-metal hud2d --ref gl1` passes on every frame at the `hud2d` value in the harness table "Accept `gl1-metal` against `gl1` at" (docs/plans/metal-port-harness.md, section "`gl1` against `gl1`: the floor for the Metal shim") | TASK48 (#90) |
 | S3 | World: matrices, depth, cull, the classic lightmap pass, two-unit combine with overbright, dynamic lightmap sub-uploads, polygon offset | S2 | T0 | opus | inventory stages d, e | `compare gl1-metal world --ref gl1` passes on every frame with `gl1_multitexture` 0 and with 1 | TASK49 (#91) |
 | S4 | Translucent surfaces, water and sky | S3 | T0 | opus | inventory stage f | The `world` frames that contain water or sky pass, and so does the sky-and-water scenario from P2 The water half needs a water source before it can be accepted: a demo that passes water, recorded by the owner or found in other data the owner has. Until then only sky is pinned. TASK70: the water source is `water.dm2` from `scripts/pins.sh make-demo water`, which fails a demo outside the message range its script states; `skywater` recorded with `PINS_DEMO=water.dm2` at `PINS_EVERY` 30 shows the water from above on the first half of its frames and from below on the second half (4 frames, 2 and 2, in every record so far), and is compared at `--bad-threshold 0.03` (runbook, thresholds for nondeterministic scenarios). | TASK50 (#92) |
-| S5 | Alias models, the view weapon, dynamic lights, flashes and stencil shadows | S3 | T0 | opus | inventory stages g, h | `compare gl1-metal models --ref gl1` passes, also with `gl1_stencilshadow 1` | TASK51 (#93) |
+| S5 | Alias models, the view weapon, dynamic lights, flashes and stencil shadows | S4 | T0 | opus | inventory stages g, h | `compare gl1-metal models --ref gl1` passes, also with `gl1_stencilshadow 1` | TASK51 (#93) |
 | S6 | Particles, beams, sprites and the screen blend | S5 | T0 | opus | inventory stage i | `compare gl1-metal particles --ref gl1` passes at the `particles` value in the same table | TASK52 (#94) |
 
 ## TASK28, TASK20, TASK22, TASK23
@@ -126,8 +127,9 @@ RT10 belong to TASK25 and carry TASK24. Design:
 
 Record 0006 (`docs/decisions/0006-port-first.md`) sets the queue. The port
 queue is the rows of this file, in the order the sections list them: P1 to
-P3, R1 to R5, S1 to S6 (S3 to S6 stacked on their predecessor's open pull
-request), then TASK28, TASK20, TASK22, TASK23, then RT1 to RT10 with RTA.
+P3, R1 to R5, S1 to S6 (the shim cards S2 to S6 form one chain; each
+stacks on its predecessor's open pull request and waits when there is
+none), then TASK28, TASK20, TASK22, TASK23, then RT1 to RT10 with RTA.
 Their parents (TASK27, TASK21, TASK24, TASK25) follow their children.
 
 Everything else is parked: the card carries the label

@@ -21,22 +21,28 @@ their predecessor.
    specification passes. A change that touches the build, a script, a gate
    check, or any path in `risk.mediumPaths` or `risk.highPaths` is tier M or
    H and gets all three passes (correctness, security, specification).
-3. Shim cards S3 to S6 are stacked: each is cut from, and its pull request
-   targets, the open pull request of its predecessor.
+3. The shim cards form one chain (S2, S3, S4, S5, S6). On 2026-11-13 the
+   loop made S5 depend on S4 and removed the dependency of S2 to S6 on the
+   pin-harness parent card TASK27: the shim is judged by pins that already
+   exist, and record/replay is not needed to judge it. Reversible by
+   restoring the `depends:TASK27` labels. A card stacks on its
+   predecessor's open pull request (cut from it, pull request against it)
+   and waits when there is none.
 
 ## What each key does
 
-All three live in `.claude/dev-loop.json`.
+All three live in `.claude/dev-loop.json`. The classifier reads the config
+from the main checkout, so they take effect once the main checkout holds it.
 
 - `risk.largeDiffLines` is 1500. Size only raises a tier when a change is
   over this many lines, so a source-only change under it keeps the tier its
   paths give it (L for the renderer).
 - `risk.mediumPaths` replaces the plugin default when set, so it holds the
   whole default list followed by the source that parses untrusted input:
-  `src/client/cl_parse.c`, `src/client/cl_download.c`,
-  `src/client/cl_network.c`, `src/server/*`, `src/common/*`,
-  `src/client/refresh/files/*`, `src/client/vid/refrecord.c` and
-  `src/game/savegame/*`. A change there is always tier M and keeps the
+  `src/server/*`, `src/common/*`, `src/client/refresh/files/*`,
+  `src/client/vid/refrecord.c`, `src/client/cl_*.c`, `src/client/sound/*`,
+  `src/client/refresh/*_model.c`, `src/client/refresh/*_image.c`,
+  `src/backends/*` and `src/game/*`. A change there is always tier M and keeps the
   security pass. The classifier matches with shell `case` globs, where `*`
   also crosses `/`, so `src/common/*` covers its subdirectories.
 - `prs.stacking` is `always`: a card whose predecessor has an open pull
@@ -53,9 +59,10 @@ and the rest goes to a parked card.
 
 ## Consequences
 
-- Port changes under 1500 lines of renderer source get two review passes,
-  not three. The security pass is skipped only where no untrusted input is
-  parsed.
+- Port changes of 1500 or fewer lines of renderer source get two review passes,
+  not three. The security pass is skipped for source outside
+  `risk.mediumPaths` and `risk.highPaths`; the list is meant to cover every
+  place untrusted input is parsed (the globs listed above).
 - Parked work waits, possibly for a long time.
 - A stacked card cannot merge before its predecessor.
 
