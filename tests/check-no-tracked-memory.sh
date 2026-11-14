@@ -5,19 +5,23 @@
 # is a .claude/memory directory or lies under one, in any letter case and at
 # any depth (.claude/memory/x, .Claude/memory/x, .claude/Memory/x,
 # sub/.claude/memory/x), including a symbolic link or a submodule at that
-# path; when a file created at .claude/memory/ would not be ignored; or when
-# git, tr or grep fails or the script is interrupted (nothing is counted as
-# clean then). Memory is kept in the owner's private store (see CLAUDE.md),
-# never in a commit.
+# path; when the index holds a gitlink anywhere (mode 160000: a submodule,
+# or a clone made inside a checkout and staged as an embedded repository,
+# whose path would name what was cloned; this repository has none); when a
+# file created at .claude/memory/ would not be ignored; or when git, tr or
+# grep fails or the script is interrupted (nothing is counted as clean
+# then). Memory is kept in the owner's private store (see CLAUDE.md), never
+# in a commit.
 #
 # The self-test runs first, in a subshell with the GIT_* repository
 # variables, GIT_DEFAULT_HASH and GIT_TEMPLATE_DIR unset, no global or
 # system configuration, and HOME and XDG_CONFIG_HOME inside a private
 # mktemp -d, on throwaway repositories there. It shows the check fails on
 # each spelling above, on a symlink and a submodule at .claude/memory, on a
-# missing ignore rule, outside a repository, and when ls-files,
-# check-ignore, tr or grep alone fails (a shim first on PATH), and passes
-# on a clean repository. The real check then reads the index git hands it.
+# nested clone staged with add -A, on a missing ignore rule, outside a
+# repository, and when ls-files, ls-files -s, check-ignore, tr or either
+# grep alone fails (a shim first on PATH), and passes on a clean
+# repository. The real check then reads the index git hands it.
 #
 # Usage: tests/check-no-tracked-memory.sh
 set -eu
@@ -53,6 +57,25 @@ check()
 	1) ;;
 	*)
 		echo "$me: cannot scan the tracked paths" >&2
+		return 1
+		;;
+	esac
+	# Without -z, ls-files -s quotes a path that holds a newline, so each
+	# entry is one line and starts with its mode.
+	if ! git -C "$1" ls-files -s > "${tmp:?}/stage" 2>/dev/null; then
+		echo "$me: git ls-files -s failed; cannot tell whether the index holds a gitlink" >&2
+		return 1
+	fi
+	rc=0
+	n=$(grep -c '^160000 ' "${tmp:?}/stage") || rc=$?
+	case "$rc" in
+	0)
+		echo "$me: $n gitlink(s) (mode 160000, a submodule or an embedded repository) in the index; this repository has none, and a clone of the memory store belongs outside every checkout (see CLAUDE.md); find them with git ls-files -s and git rm --cached <path>" >&2
+		return 1
+		;;
+	1) ;;
+	*)
+		echo "$me: cannot scan the index entries" >&2
 		return 1
 		;;
 	esac
@@ -142,6 +165,16 @@ selftest()
 	entry submodule 160000 .claude/memory
 	expect_reject submodule "a submodule at .claude/memory"
 
+	# A clone made inside a checkout and staged with add -A becomes a
+	# gitlink at the clone's path.
+	git init -q "${tmp:?}/origin"
+	git -C "${tmp:?}/origin" -c user.name=selftest -c user.email=selftest@example.invalid \
+		commit -q --allow-empty -m selftest
+	mkrepo nested
+	git clone -q "${tmp:?}/origin" "${tmp:?}/nested/store" 2>/dev/null
+	git -C "${tmp:?}/nested" add -A 2>/dev/null
+	expect_reject nested "a nested clone staged as an embedded repository"
+
 	mkdir -p "${tmp:?}/noignore"
 	git -C "${tmp:?}/noignore" init -q .
 	expect_reject noignore "a missing ignore rule"
@@ -150,24 +183,27 @@ selftest()
 	expect_reject notarepo "a git failure (not a repository)"
 
 	# One command fails while the rest work, on the clean repository: a
-	# shim first on PATH exits non-zero for that command only.
-	realgit=$(command -v git)
-	for c in ls-files check-ignore tr grep; do
-		mkdir -p "${tmp:?}/shim-$c"
-		case "$c" in
-		tr) printf '#!/bin/sh\nexit 1\n' > "${tmp:?}/shim-$c/tr" ;;
-		grep) printf '#!/bin/sh\nexit 2\n' > "${tmp:?}/shim-$c/grep" ;;
-		*)
-			printf '#!/bin/sh\ncase " $* " in *" %s "*) exit 128 ;; esac\nexec "%s" "$@"\n' \
-				"$c" "$realgit" > "${tmp:?}/shim-$c/git"
-			;;
-		esac
-		chmod 755 "${tmp:?}/shim-$c/"*
-		if (PATH=$tmp/shim-$c:$PATH; check "$tmp/clean") 2>/dev/null; then
-			echo "$me: selftest: a failing $c was counted as clean" >&2
+	# shim first on PATH exits non-zero when its arguments hold <word> and
+	# runs the real command otherwise.
+	# shim <name> <command> <word> <status>
+	shim()
+	{
+		real=$(command -v "$2")
+		mkdir -p "${tmp:?}/shim-$1"
+		printf '#!/bin/sh\ncase " $* " in *"%s"*) exit %s ;; esac\nexec "%s" "$@"\n' \
+			"$3" "$4" "$real" > "${tmp:?}/shim-$1/$2"
+		chmod 755 "${tmp:?}/shim-$1/$2"
+		if (PATH=$tmp/shim-$1:$PATH; check "$tmp/clean") 2>/dev/null; then
+			echo "$me: selftest: a failing $1 was counted as clean" >&2
 			exit 1
 		fi
-	done
+	}
+	shim ls-files git ' ls-files -z ' 128
+	shim ls-files-s git ' ls-files -s ' 128
+	shim check-ignore git ' check-ignore ' 128
+	shim tr tr '' 1
+	shim grep-paths grep 'claude/memory' 2
+	shim grep-gitlinks grep '^160000' 2
 }
 
 ( selftest ) || exit 1
