@@ -1947,7 +1947,8 @@ st_replay_refused() { # TASK46: options, and records that are not a finished liv
 st_replay_header() { # TASK46: the trace header is checked before an engine starts
     trace_fixture gl1 rec1; PINS_DRYRUN=1 replay_ok soft world --trace-of gl1 || return 1
     local c
-    for c in "2 $tapi 0 100 3 640 480 30 Q2REFREC:format version" "$tver 7 0 100 3 640 480 30 Q2REFREC:renderer API" \
+    for c in "2 $tapi 0 100 3 640 480 30 Q2REFREC:format version" "257 $tapi 0 100 3 640 480 30 Q2REFREC:format version" \
+        "$tver 7 0 100 3 640 480 30 Q2REFREC:renderer API" \
         "$tver $tapi 0 0 3 640 480 30 Q2REFREC:never finished" "$tver $tapi 1 100 3 640 480 30 Q2REFREC:cut short" \
         "$tver $tapi 0 100 0 640 480 30 Q2REFREC:no frame" "$tver $tapi 0 100 3 320 480 30 Q2REFREC:PINS_WIDTH" \
         "$tver $tapi 0 100 3 640 240 30 Q2REFREC:PINS_WIDTH" "$tver $tapi 0 100 3 640 480 15 Q2REFREC:PINS_EVERY" \
@@ -1959,6 +1960,8 @@ st_replay_header() { # TASK46: the trace header is checked before an engine star
     trace_fixture gl1 rec1; head -c 63 "${PINS_STORE:?}/world/gl1/rec1/trace.q2r" > "${tmp:?}/short"; cp "${tmp:?}/short" "${PINS_STORE:?}/world/gl1/rec1/trace.q2r"
     local rep; rep=$( (PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) 2>&1 ) && { st_fail "a 63-byte trace must be refused"; return 1; }
     case $rep in *"shorter than its 64-byte header"*) ;; *) st_fail "the short trace must be named: $rep"; return 1;; esac
+    # every byte of a u32 counts: a string table at 65536, 707 frames
+    trace_fixture gl1 rec1 "$tver" "$tapi" 0 65536 707; PINS_DRYRUN=1 replay_ok soft world --trace-of gl1 || return 1
     # the 320x240 trace replays at PINS_WIDTH=320 PINS_HEIGHT=240, every 15 at PINS_EVERY=15
     trace_fixture gl1 rec1 "$tver" "$tapi" 0 100 3 320 240 15
     case $(PINS_WIDTH=320 PINS_HEIGHT=240 PINS_EVERY=15 PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) in
@@ -2059,6 +2062,8 @@ st_replay_compare() { # TASK46: compare names replays and takes one as a referen
     case $rep in *"ref=$PINS_STORE/world/soft/live1"*) ;; *) st_fail "the default reference must skip the newer replay: $rep"; return 1;; esac
     rep=$(cmd_compare gl1 world --ref soft --ref-id "$rid") || st_fail "--ref-id must take a replay as the reference: $rep" || return 1
     case $rep in *"ref-kind=replay"*"candidate-kind=live"*) ;; *) st_fail "compare must name the replay reference: $rep"; return 1;; esac
+    # an incomplete record holding a trace is no trace coverage
+    trace_fixture gl1-metal inc; rm "${PINS_STORE:?}/world/gl1-metal/inc/complete"
     rep=$(cmd_list)
     printf '%s\n' "$rep" | sed -n '/^traces/,/^replays/p' | grep -qxE ' *1 world/gl1-metal' &&
         printf '%s\n' "$rep" | sed -n '/^replays/,$p' | grep -qxE ' *1 world/soft' || st_fail "list must show trace coverage and replays: $rep" || return 1
