@@ -42,6 +42,11 @@
 #   PINS_DRYRUN   print the engine command line for "record" and stop
 #   PINS_TRACE    0: record no renderer-API trace. Default: record writes
 #                 trace.q2r beside the frames (the engine's pins_record)
+#   PINS_SEED     1 to 9 digits: the engine's pins_seed, a fixed PRNG seed
+#                 applied at each map registration, so particles and
+#                 explosions draw the same random numbers on every record.
+#                 Needs the trace (not PINS_TRACE=0). Default: unset, the
+#                 seed comes from OS entropy as in a normal client
 #   PINS_EVIDENCE_DIR     where evidence writes its sets, never inside the
 #                 pin store. Default: evidence/ of this checkout (git-ignored)
 #   PINS_EVIDENCE_REPO    owner/name evidence-publish uploads to. Default: the
@@ -240,7 +245,8 @@ stale_engine() {
     done
 }
 scenario_hash() {
-    { cat "$scen_dir/$1.cfg"; echo "${PINS_DEMO:-demo1.dm2} ${PINS_WIDTH:-640}x${PINS_HEIGHT:-480} every=${PINS_EVERY:-30}"; demo_sum; } | cksum | awk '{print $1}'
+    { cat "$scen_dir/$1.cfg"; echo "${PINS_DEMO:-demo1.dm2} ${PINS_WIDTH:-640}x${PINS_HEIGHT:-480} every=${PINS_EVERY:-30}"; demo_sum
+      if [ -n "${PINS_SEED:-}" ]; then echo "seed=$PINS_SEED"; fi; } | cksum | awk '{print $1}'
 }
 # demo_sum: the checksum of PINS_DEMO when it lies beside the engine binary,
 # where make-demo writes it, so a demo made again never shares a pin id with
@@ -297,6 +303,7 @@ build_args() {
         +set s_initsound 0
         +set pins_dir "$out" +set pins_scenario "$scenario" +set pins_capture "${PINS_EVERY:-30}")
     if [ "${PINS_TRACE:-1}" != 0 ]; then engine_args+=(+set pins_record trace.q2r); fi
+    if [ -n "${PINS_SEED:-}" ]; then engine_args+=(+set pins_seed "$PINS_SEED"); fi
     engine_args+=(+demomap "${PINS_DEMO:-demo1.dm2}")
 }
 
@@ -311,6 +318,10 @@ cmd_record() {
     case $limit in ''|*[!0-9]*) die "PINS_TIMEOUT must be a number of seconds, got '$limit'";; esac
     check_count PINS_WIDTH "${PINS_WIDTH:-640}"; check_count PINS_HEIGHT "${PINS_HEIGHT:-480}"; check_count PINS_EVERY "${PINS_EVERY:-30}"
     check_demo "${PINS_DEMO:-demo1.dm2}"
+    if [ -n "${PINS_SEED:-}" ]; then
+        [[ $PINS_SEED =~ ^[0-9]{1,9}$ ]] || die "PINS_SEED must be 1 to 9 digits, got '$PINS_SEED'"
+        [ "${PINS_TRACE:-1}" != 0 ] || die "PINS_SEED needs the trace: the engine takes pins_seed only beside pins_record"
+    fi
     case ${PINS_DEMO:-demo1.dm2} in
         *.cin) [ "$scenario" = cinematic ] || die "PINS_DEMO '${PINS_DEMO}' is a cinematic; only the cinematic scenario plays one, not $scenario";;
         *) [ "$scenario" != cinematic ] || die "the cinematic scenario needs PINS_DEMO naming a cinematic ending in .cin, got '${PINS_DEMO:-demo1.dm2}'";;
@@ -1057,7 +1068,7 @@ cmd_evidence_selftest() {
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR \
         GIT_NAMESPACE GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM
     unset PINS_EVIDENCE_BUDGET PINS_EVIDENCE_UPLOADER PINS_EVIDENCE_REPO PINS_EVIDENCE_DIR \
-        PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF PINS_TRACE
+        PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF PINS_TRACE PINS_SEED
     ev_py selftest
     scratch_outside_git pins-ev
     trap 'rm -rf "$tmp"' EXIT
@@ -1455,7 +1466,7 @@ st_scenarios() {
     for name in vid_renderer vid_fullscreen r_mode r_customwidth r_customheight s_initsound; do
         grep -rqF "\"$name\"" "$root/src" || st_fail "the driver sets $name, which is not a cvar in src/" || return 1
     done
-    for name in pins_dir pins_scenario pins_capture pins_record; do
+    for name in pins_dir pins_scenario pins_capture pins_record pins_seed; do
         grep -qF "\"$name\"" "$root/src/client/cl_pins.c" || st_fail "the driver passes $name, which CL_PinsLatch in src/client/cl_pins.c does not read" || return 1
     done
     local line; line=$(PINS_DRYRUN=1 cmd_record gl1 world)
@@ -1466,6 +1477,16 @@ st_scenarios() {
     case $line in *"+set pins_dir $PINS_STORE/world/gl1/"*" +set pins_record trace.q2r +demomap "*) ;; *) st_fail "the trace must be pins_record inside pins_dir: $line"; return 1;; esac
     line=$(PINS_TRACE=0 PINS_DRYRUN=1 cmd_record gl1 world)
     case $line in *pins_record*) st_fail "PINS_TRACE=0 must not pass pins_record"; return 1;; esac
+    # PINS_SEED passes pins_seed beside pins_record, and is part of the pin id
+    case $(PINS_SEED=42 PINS_DRYRUN=1 cmd_record gl1 world) in *"+set pins_record trace.q2r +set pins_seed 42 +demomap "*) ;;
+        *) st_fail "PINS_SEED=42 must pass pins_seed 42 after pins_record"; return 1;; esac
+    case $line in *pins_seed*) st_fail "pins_seed passed without PINS_SEED"; return 1;; esac
+    [ "$(scenario_hash world)" != "$(PINS_SEED=42 scenario_hash world)" ] || st_fail "PINS_SEED must change the pin id" || return 1
+    local sd
+    for sd in x -1 1234567890 '1 2' '4;quit'; do
+        if (PINS_SEED="$sd" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "PINS_SEED='$sd' must be refused"; return 1; fi
+    done
+    if (PINS_SEED=1 PINS_TRACE=0 PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "PINS_SEED with PINS_TRACE=0 must be refused"; return 1; fi
     [ "$(HOME=/h/x PINS_STORE= store)" = "/h/x/.quake2-pins" ] || st_fail "store default must be \$HOME/.quake2-pins, whatever .claude/dev-loop.json holds" || return 1
 }
 
@@ -1848,7 +1869,7 @@ scratch_outside_git() {
 
 cmd_selftest() {
     # the selftest must not depend on, or act on, the caller's environment
-    unset PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF PINS_TRACE
+    unset PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF PINS_TRACE PINS_SEED
     scratch_outside_git pins
     trap 'rm -rf "$tmp"' EXIT
     export PINS_STORE="$tmp/store"
