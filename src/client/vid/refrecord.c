@@ -2330,6 +2330,7 @@ RefRec_Control(refrec_type_t t, float arg)
 
 typedef char rep_rdflags_check[(REFREC_REPLAY_RDFLAGS ==
 	(RDF_UNDERWATER | RDF_NOWORLDMODEL | RDF_IRGOGGLES | RDF_UVGOGGLES)) ? 1 : -1];
+typedef char rep_rflags_check[(REFREC_REPLAY_RFLAGS == ((RF_USE_DISGUISE << 1) - 1)) ? 1 : -1];
 
 /*
  * Replayer state. The string table and the frame index are read whole at
@@ -2345,6 +2346,7 @@ static struct {
 	qboolean have_target;
 	refrec_header_t h;
 	uint8_t *kinds;		/* [nstrings + 1], the string table kind of each id */
+	char (*names)[MAX_QPATH];	/* [nstrings + 1], the string table name of each id */
 	void **ptrs;		/* [nstrings + 1], the live handle registered under each id */
 	uint32_t nstrings;
 	uint8_t *index;		/* the frame index, frame_count entries, checked at open */
@@ -2465,12 +2467,14 @@ RefRec_CloseReplay(void)
 	}
 
 	free(rep.kinds);
+	free(rep.names);
 	free(rep.ptrs);
 	free(rep.index);
 	free(rep.buf);
 	free(rep.in);
 	rep.f = NULL;
 	rep.kinds = NULL;
+	rep.names = NULL;
 	rep.ptrs = NULL;
 	rep.index = NULL;
 	rep.buf = NULL;
@@ -2536,10 +2540,10 @@ Rep_Open(const char *path, refrec_header_t *out)
 		return Rep_Fail("recorded for another renderer API version", 0);
 	}
 
+	/* no value of the untrusted trace is printed, only the renderer's */
 	if (rep.h.width != rep.t.width || rep.h.height != rep.t.height)
 	{
-		rec_print("refrecord: the trace is %ux%u, the renderer runs %dx%d\n",
-				rep.h.width, rep.h.height, rep.t.width, rep.t.height);
+		rec_print("refrecord: the renderer runs %dx%d\n", rep.t.width, rep.t.height);
 		return Rep_Fail("recorded at another resolution", 0);
 	}
 
@@ -2558,11 +2562,13 @@ Rep_Open(const char *path, refrec_header_t *out)
 	if (RefRec_ReadStringTable(&r, &count))
 	{
 		rep.kinds = calloc(count + 1, 1);
+		rep.names = calloc(count + 1, sizeof(*rep.names));
 		rep.ptrs = calloc(count + 1, sizeof(*rep.ptrs));
 	}
 
-	for (i = 0; r.ok && rep.kinds && rep.ptrs && i < count; i++)
+	for (i = 0; r.ok && rep.kinds && rep.names && rep.ptrs && i < count; i++)
 	{
+		/* the name is NUL-terminated within MAX_QPATH, zero after it */
 		if (!RefRec_NextString(&r, &kind, &id, name) || id != i + 1)
 		{
 			r.ok = false;
@@ -2570,11 +2576,12 @@ Rep_Open(const char *path, refrec_header_t *out)
 		}
 
 		rep.kinds[id] = (uint8_t)kind;
+		memcpy(rep.names[id], name, MAX_QPATH);
 	}
 
 	free(table);
 
-	if (!r.ok || !rep.kinds || !rep.ptrs || r.pos != r.size)
+	if (!r.ok || !rep.kinds || !rep.names || !rep.ptrs || r.pos != r.size)
 	{
 		return Rep_Fail("bad string table", rep.h.string_table_offset);
 	}
@@ -2784,7 +2791,14 @@ Rep_RenderFrame(void)
 		}
 
 		e->lightstyle = Rep_I(s->lightstyle, 0, MAX_LIGHTSTYLES - 1);
-		e->flags = s->flags;
+
+		/* the RF_* flags the client sets; no renderer reads another bit */
+		if (s->flags & ~REFREC_REPLAY_RFLAGS)
+		{
+			rep.stats.clamped++;
+		}
+
+		e->flags = s->flags & REFREC_REPLAY_RFLAGS;
 	}
 
 	for (i = 0; i < in->num_dlights; i++)
@@ -2817,74 +2831,120 @@ Rep_RenderFrame(void)
 	rep.t.RenderFrame(&fd);
 }
 
-/* the ints and floats of a draw or control record, bounded in place */
-static void
-Rep_BoundCall(refrec_call_t *c)
+/*
+ * A 2D rectangle the renderers can be handed: a positive size no larger
+ * than the frame the trace was recorded at (its width and height equal
+ * the target's, checked at open), wholly inside it across, and
+ * overlapping it down. Across is where a renderer writes unchecked
+ * (ref_soft's Draw_CharScaled indexes its frame buffer by x alone); down,
+ * every renderer clips or refuses the part outside itself, and the live
+ * client draws there (the console sliding in starts above the top).
+ */
+static qboolean
+Rep_InFrame(int32_t x, int32_t y, int32_t w, int32_t h)
 {
+	int32_t fw = rep.h.width, fh = rep.h.height;
+
+	return w >= 1 && w <= fw && h >= 1 && h <= fh &&
+		x >= 0 && x <= fw - w && y > -h && y < fh;
+}
+
+/*
+ * A Draw_Fill or Draw_TileClear rectangle cut to the frame, as every
+ * renderer cuts these two itself (so what is drawn does not change);
+ * false when nothing of it is left.
+ */
+static qboolean
+Rep_ClipToFrame(int32_t *n)
+{
+	int64_t x0 = n[0], y0 = n[1], x1 = x0 + n[2], y1 = y0 + n[3];
+
+	if (n[2] < 1 || n[3] < 1)
+	{
+		return false;
+	}
+
+	x0 = x0 < 0 ? 0 : x0;
+	y0 = y0 < 0 ? 0 : y0;
+	x1 = x1 > rep.h.width ? rep.h.width : x1;
+	y1 = y1 > rep.h.height ? rep.h.height : y1;
+
+	if (x1 <= x0 || y1 <= y0)
+	{
+		return false;
+	}
+
+	if (x0 != n[0] || y0 != n[1] || x1 - x0 != n[2] || y1 - y0 != n[3])
+	{
+		rep.stats.clamped++;
+	}
+
+	n[0] = (int32_t)x0;
+	n[1] = (int32_t)y0;
+	n[2] = (int32_t)(x1 - x0);
+	n[3] = (int32_t)(y1 - y0);
+
+	return true;
+}
+
+/* a 2D scale factor as the live client computes one: 1 up to the bound */
+static qboolean
+Rep_Scale(float s)
+{
+	return isfinite(s) && s >= 1.0f && s <= REFREC_REPLAY_MAX_SCALE;
+}
+
+typedef enum { REP_FORWARD, REP_DROP, REP_REFUSE } rep_verdict_t;
+
+/*
+ * The replayer's one validation layer, run on every record before any of
+ * it reaches the target. The trace is untrusted, and the renderers were
+ * written for trusted callers: they copy names into MAX_QPATH buffers,
+ * index the frame buffer with 2D coordinates and divide by 2D sizes
+ * without checking any of them. So the replayer hands a renderer entry
+ * point only values that the live client could have handed it:
+ *
+ *   - every forwarded name (map, model, skin, pic, sky, and the pic of
+ *     every draw by name) is shorter than MAX_QPATH, as configstrings
+ *     and the client's own pic names are; the reader already made it
+ *     NUL-terminated with no NUL inside. A registration's name is the
+ *     one its id's string table entry holds. Otherwise the trace is
+ *     refused (REP_REFUSE).
+ *   - every 2D draw lies in the frame (Rep_InFrame; a pic of unknown
+ *     size by its corner), Draw_Fill and Draw_TileClear are cut to it,
+ *     and a scale factor is one the client computes (Rep_Scale). A draw
+ *     that is not is not forwarded (REP_DROP, stats.dropped): it would
+ *     draw nothing, or write outside the frame.
+ *   - enum-like values are masked to what the renderers take (a
+ *     character, a palette index), floats are moved into finite bounds
+ *     (stats.clamped), and a REC_RENDERFRAME is rebuilt from bounded
+ *     values by Rep_RenderFrame.
+ *   - counts, lengths and payloads were checked by the reader: refdef_t
+ *     counts within MAX_ENTITIES, MAX_DLIGHTS and MAX_PARTICLES, a raw
+ *     image's columns, rows and bits agreeing with its data length, a
+ *     palette of 0 or 768 bytes (CallDataValid).
+ *
+ * A refusal prints the kind of fault and the record's offset, never a
+ * value read from the trace.
+ */
+static rep_verdict_t
+Rep_Check(refrec_type_t type, uint32_t at)
+{
+	refrec_call_t *c = &rep.call;
 	int32_t *n = c->ints;
 	float *f = c->floats;
 	int i;
 
-	switch (c->type)
+	if (type == REC_RENDERFRAME || type == REC_CVARS)
 	{
-		case REC_STRETCHPIC:
-		case REC_TILECLEAR:
-		case REC_FILL:
-		case REC_STRETCHRAW:
-			n[2] = Rep_I(n[2], 0, REFREC_REPLAY_MAX_2D);
-			n[3] = Rep_I(n[3], 0, REFREC_REPLAY_MAX_2D);
-			/* fall through: x and y */
-		case REC_PICSCALED:
-		case REC_PICSCALEDCOL:
-		case REC_CHARSCALED:
-			n[0] = Rep_I(n[0], -REFREC_REPLAY_MAX_2D, REFREC_REPLAY_MAX_2D);
-			n[1] = Rep_I(n[1], -REFREC_REPLAY_MAX_2D, REFREC_REPLAY_MAX_2D);
-			break;
-
-		default:
-			break;
+		return REP_FORWARD;
 	}
 
-	switch (c->type)
+	if (rec_layout[type].has_name && type != REC_WARN && !memchr(c->name, '\0', MAX_QPATH))
 	{
-		case REC_FILL:
-			n[4] = Rep_Byte(n[4]);
-			break;
-
-		case REC_CHARSCALED:
-			/* every renderer masks the character; the console passes signed chars */
-			n[2] &= 0xff;
-			/* fall through: the scale */
-		case REC_PICSCALED:
-			f[0] = Rep_F(f[0], 0.0f, REFREC_REPLAY_MAX_SCALE, 1.0f);
-			break;
-
-		case REC_PICSCALEDCOL:
-			f[0] = Rep_F(f[0], 0.0f, REFREC_REPLAY_MAX_SCALE, 1.0f);
-
-			for (i = 1; i < 4; i++)
-			{
-				f[i] = Rep_F(f[i], 0.0f, REFREC_REPLAY_MAX_LIGHT, 1.0f);
-			}
-
-			break;
-
-		case REC_SKY:
-		case REC_BEGINFRAME:
-			Rep_Vec(f, f, c->type == REC_SKY ? 4 : 1, REFREC_REPLAY_MAX_COORD);
-			break;
-
-		default:
-			break;
+		Rep_Fail("a name of MAX_QPATH bytes or more", at);
+		return REP_REFUSE;
 	}
-}
-
-/* forwards one record; false when the trace is refused */
-static qboolean
-Rep_Forward(refrec_type_t type, uint32_t at)
-{
-	refrec_call_t *c = &rep.call;
-	void *p;
 
 	switch (type)
 	{
@@ -2898,9 +2958,103 @@ Rep_Forward(refrec_type_t type, uint32_t at)
 			/* id 0 is a registration that failed live: made again, kept nowhere */
 			if (c->id && (c->id > rep.nstrings || rep.kinds[c->id] != kind))
 			{
-				return Rep_Fail("a registration id the string table does not name", at);
+				Rep_Fail("a registration id the string table does not name", at);
+				return REP_REFUSE;
 			}
 
+			if (c->id && strcmp(c->name, rep.names[c->id]) != 0)
+			{
+				Rep_Fail("a registration name its string table entry does not hold", at);
+				return REP_REFUSE;
+			}
+
+			return REP_FORWARD;
+		}
+
+		case REC_CAPTURE:
+			if ((uint32_t)n[0] != rep.stats.captures)
+			{
+				Rep_Fail("a capture out of order", at);
+				return REP_REFUSE;
+			}
+
+			return REP_FORWARD;
+
+		case REC_CHARSCALED:
+			/* every renderer masks the character; the console passes signed chars */
+			n[2] &= 0xff;
+
+			if (!Rep_Scale(f[0]) || !Rep_InFrame(n[0], n[1], (int32_t)ceilf(8.0f * f[0]),
+					(int32_t)ceilf(8.0f * f[0])))
+			{
+				return REP_DROP;
+			}
+
+			return REP_FORWARD;
+
+		case REC_PICSCALEDCOL:
+			for (i = 1; i < 4; i++)
+			{
+				f[i] = Rep_F(f[i], 0.0f, REFREC_REPLAY_MAX_LIGHT, 1.0f);
+			}
+
+			/* fall through: the corner and the scale */
+		case REC_PICSCALED:
+			/* the renderer knows the pic's size and checks the rest of it */
+			return Rep_Scale(f[0]) && Rep_InFrame(n[0], n[1], 1, rep.h.height) ? REP_FORWARD : REP_DROP;
+
+		case REC_STRETCHPIC:
+		case REC_STRETCHRAW:
+			return Rep_InFrame(n[0], n[1], n[2], n[3]) ? REP_FORWARD : REP_DROP;
+
+		case REC_FILL:
+			n[4] = Rep_Byte(n[4]);
+			/* fall through: the rectangle */
+		case REC_TILECLEAR:
+			return Rep_ClipToFrame(n) ? REP_FORWARD : REP_DROP;
+
+		case REC_SKY:
+			Rep_Vec(f, f, 4, REFREC_REPLAY_MAX_COORD);
+			return REP_FORWARD;
+
+		case REC_BEGINFRAME:
+			Rep_Vec(f, f, 1, REFREC_REPLAY_MAX_COORD);
+			return REP_FORWARD;
+
+		default:
+			/* REC_BEGINREG (its name checked above), REC_ENDREG,
+			   REC_ENDWORLD, REC_ENDFRAME, REC_FADESCREEN and REC_PICSIZE
+			   carry nothing else a renderer takes; REC_PALETTE was
+			   checked by the reader; REC_WARN is not forwarded */
+			return REP_FORWARD;
+	}
+}
+
+/* forwards one record that Rep_Check passed; false when the trace is refused */
+static qboolean
+Rep_Forward(refrec_type_t type, uint32_t at)
+{
+	refrec_call_t *c = &rep.call;
+	void *p;
+
+	switch (Rep_Check(type, at))
+	{
+		case REP_REFUSE:
+			return false;
+
+		case REP_DROP:
+			rep.stats.dropped++;
+			return true;
+
+		default:
+			break;
+	}
+
+	switch (type)
+	{
+		case REC_MODEL:
+		case REC_SKIN:
+		case REC_PIC:
 			p = rep.t.Register(type, c->name);
 
 			if (c->id)
@@ -2909,7 +3063,6 @@ Rep_Forward(refrec_type_t type, uint32_t at)
 			}
 
 			return true;
-		}
 
 		case REC_RENDERFRAME:
 			Rep_RenderFrame();
@@ -2923,11 +3076,6 @@ Rep_Forward(refrec_type_t type, uint32_t at)
 			return true;
 
 		case REC_CAPTURE:
-			if ((uint32_t)c->ints[0] != rep.stats.captures)
-			{
-				return Rep_Fail("a capture out of order", at);
-			}
-
 			rep.stats.captures++;
 			rep.t.Call(c);
 			return true;
@@ -2947,7 +3095,6 @@ Rep_Forward(refrec_type_t type, uint32_t at)
 		}
 
 		default:
-			Rep_BoundCall(c);
 			rep.t.Call(c);
 			return true;
 	}

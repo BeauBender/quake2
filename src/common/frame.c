@@ -67,7 +67,7 @@ int curtime;
 #ifndef DEDICATED_ONLY
 void Key_Init(void);
 void CL_PinsLatch(void);
-int CL_PinsCapture(void);
+qboolean CL_PinsRun(void);
 qboolean CL_PinsReplaying(void);
 void CL_PinsReplay(void);
 void Key_Shutdown(void);
@@ -216,7 +216,7 @@ void Qcommon_ExecConfigs(qboolean gameStartUp)
 	/* Pin harness: a pin run depends on its scenario and command line
 	   only, never on a saved configuration (CL_WriteConfiguration does
 	   not write one either). */
-	if (CL_PinsCapture() <= 0)
+	if (!CL_PinsRun())
 #endif
 	{
 		Cbuf_AddText("exec config.cfg\n");

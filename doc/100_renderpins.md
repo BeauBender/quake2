@@ -115,8 +115,10 @@ game: `pins_replay <trace.q2r>` with `pins_dir` (and no `pins_record`)
 feeds the recorded calls to the renderer named by `vid_renderer` at the
 recorded size, writes a frame wherever the live run captured one, with
 the same names, and quits after the last frame. No server, demo, sound
-or input runs, so the game module may be absent. `scripts/pins.sh` does
-not drive this yet.
+or input runs, so the game module may be absent. A replay is a pin run
+even without `pins_capture`: no configuration file is read or written,
+and an error stops the engine. `scripts/pins.sh` does not drive this
+yet.
 
 ### The Metal shim build of gl1
 

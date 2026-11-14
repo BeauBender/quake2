@@ -854,8 +854,14 @@ them given the engine behaves exactly as before.
   `+set` arguments is executed. Where the live run captured a frame,
   the replay takes a screenshot at the same point of the frame, so the
   frames land in `pins_dir` with the same names and numbers; after the
-  last frame of the trace the engine quits. Every value read from the
-  trace is bounded before the renderer sees it. The engine stops with
+  last frame of the trace the engine quits. The trace is untrusted:
+  the renderer is handed only values the live client could have handed
+  it. Every name is shorter than 64 bytes and every registration names
+  what the trace's string table holds, or the trace is refused; a 2D
+  draw outside the frame is skipped; every other value is bounded. A
+  replay is a pin run like a capture: it never reads or writes
+  `config.cfg` or `autoexec.cfg`, and an error that would drop to the
+  console stops the engine. The engine stops with
   an error (non-zero exit status) when the trace cannot be opened, was
   recorded at another size (`r_customwidth`, `r_customheight`) or for
   another renderer API version, was never finished, is damaged, or

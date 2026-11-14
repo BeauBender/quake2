@@ -281,11 +281,17 @@ void RefRec_Control(refrec_type_t t, float arg);
  * forwards, in file order, every record up to the REC_ENDFRAME of the
  * next indexed frame, and is false after the last indexed frame or on a
  * refused record (stats.failed). An open frame after the last indexed one
- * is never replayed. Every value is bounded before the target sees it
+ * is never replayed. The target is handed only values the live client
+ * could have handed the renderer (Rep_Check in refrecord.c): a name of
+ * MAX_QPATH bytes or more, or a registration whose name is not its
+ * string table entry's, refuses the trace; a 2D draw outside the frame
+ * is not forwarded (stats.dropped); every other value is bounded
  * (REFREC_REPLAY_*; a value moved counts in stats.clamped), and an id is
  * resolved only to a handle the replay registered under that id with the
  * kind the string table names; any other id is NULL. REC_CAPTURE numbers
- * must run 0, 1, 2, ...; REC_CVARS and REC_WARN are not forwarded.
+ * must run 0, 1, 2, ...; REC_CVARS and REC_WARN are not forwarded. A
+ * refusal is sticky: every later RefRec_ReplayNextFrame is false and
+ * forwards nothing.
  */
 typedef struct {
 	uint32_t api_version;	/* the trace must carry these */
@@ -300,6 +306,7 @@ typedef struct {
 
 typedef struct {
 	uint32_t frames, captures, clamped, warns, picsize_mismatch;
+	uint32_t dropped;	/* 2D draws outside the frame, not forwarded */
 	qboolean failed;
 } refrec_replay_stats_t;
 
@@ -307,10 +314,10 @@ typedef struct {
 #define REFREC_REPLAY_MAX_COORD	1000000.0f	/* world positions, angles, dlight intensity */
 #define REFREC_REPLAY_MAX_TIME	10000000.0f	/* refdef_t.time, seconds */
 #define REFREC_REPLAY_MAX_LIGHT	256.0f	/* lightstyle and dlight colour components */
-#define REFREC_REPLAY_MAX_SCALE	64.0f	/* 2D scale factors */
-#define REFREC_REPLAY_MAX_2D	65536	/* 2D coordinates and sizes */
+#define REFREC_REPLAY_MAX_SCALE	64.0f	/* 2D scale factors, from 1 */
 #define REFREC_REPLAY_MAX_SKINNUM	32	/* MAX_MD2SKINS; beams keep the low byte, their colour */
 #define REFREC_REPLAY_RDFLAGS	15	/* RDF_UNDERWATER | RDF_NOWORLDMODEL | RDF_IRGOGGLES | RDF_UVGOGGLES */
+#define REFREC_REPLAY_RFLAGS	0x7ffff	/* RF_MINLIGHT up to RF_USE_DISGUISE */
 #define REFREC_REPLAY_MAX_RECORD	(REFREC_MAX_RAW_DIM * REFREC_MAX_RAW_DIM * 4 + 64)	/* payload bytes */
 
 void RefRec_SetReplayTarget(const refrec_target_t *t);	/* copied; before RefRec_OpenReplay */

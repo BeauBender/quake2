@@ -25,8 +25,15 @@ cc -DYQ2OSTYPE='"test"' -DYQ2ARCH='"test"' -o "$tmp/latch" \
 # expect <expected line> <args...>
 expect() {
 	want=$1; shift
-	got=$("$tmp/latch" "$@")
+	got=$("$tmp/latch" "$@" | sed -n 1p)
 	[ "$got" = "$want" ] || bad "args '$*': want '$want', got '$got'"
+}
+
+# expect_run <0|1> <args...>: whether the args make a pin run (CL_PinsRun)
+expect_run() {
+	want=$1; shift
+	got=$("$tmp/latch" "$@" | sed -n 2p)
+	[ "$got" = "run=$want" ] || bad "args '$*': want 'run=$want', got '$got'"
 }
 
 off='dir=|scenario=pin|capture=0|invalid=0|record=|replay='
@@ -88,6 +95,27 @@ long=$(printf '%01000d' 0)
 expect "dir=/s|scenario=pin|capture=0|invalid=0|record=|replay=/$long.q2r|requested" \
 	+set pins_dir /s +set pins_replay "/$long.q2r"
 
+# A pin run is a capture or a replay, also a replay without pins_capture
+# and a refused one: config.cfg is never read or written, ERR_DROP is fatal
+# and no renderer fallback is tried (frame.c, cl_main.c, clientserver.c, vid.c)
+expect_run 0
+expect_run 0 +set pins_capture 30
+expect_run 0 +set pins_dir /s +set pins_record trace.q2r
+expect_run 1 +set pins_dir /s +set pins_capture 30
+expect_run 1 +set pins_dir /s +set pins_replay /t/trace.q2r
+expect_run 1 +set pins_replay /t/trace.q2r
+expect_run 1 +set pins_dir /s +set pins_replay /t/../trace.q2r
+# and those guards test that predicate, not the capture interval alone
+for g in 'src/common/frame.c:if (!CL_PinsRun())' \
+	'src/client/cl_main.c:if ((cls.state == ca_uninitialized) || CL_PinsRun())' \
+	'src/common/clientserver.c:if ((code == ERR_DROP) && CL_PinsRun())' \
+	'src/client/vid/vid.c:if (CL_PinsRun())'; do
+	f=${g%%:*}
+	grep -qF "${g#*:}" "$f" || bad "$f: the pin-run guard does not test CL_PinsRun()"
+done
+n=$(grep -rn 'CL_PinsCapture() *\(<=\|>\) *0' src | grep -v '^src/client/cl_main.c:.*quitting' || true)
+[ -z "$n" ] || bad "a pin-run guard tests CL_PinsCapture() alone (use CL_PinsRun()): $n"
+
 # only the exact "+set name value" triple counts, paired as Cbuf_AddEarlyCommands pairs it
 expect "$off" set pins_dir /s +pins_dir /s
 expect "$off" +set foo +set pins_dir /s
@@ -119,6 +147,7 @@ for cfg in scripts/pins/scenarios/*.cfg; do
 	set +f
 	shift
 	got=$("$tmp/latch" "$@") || bad "scenario $scen: the engine refuses its command line ($# arguments)"
+	got=$(printf '%s\n' "$got" | sed -n 1p)
 	case $got in
 		"dir=/s/$scen/gl1/"*"|scenario=$scen|capture=30|invalid=0|record=trace.q2r|replay=") ;;
 		*) bad "scenario $scen: latched '$got'" ;;

@@ -819,7 +819,7 @@ VID_CheckChanges(void)
 
 			/* Pin harness: frames filed under one renderer's name must
 			   come from that renderer, so never fall back while capturing. */
-			if ((CL_PinsCapture() > 0) || CL_PinsReplayRequested())
+			if (CL_PinsRun())
 			{
 				Com_Error(ERR_FATAL, "pins: renderer %s failed to load, no fallback while capturing\n",
 						vid_renderer->string);

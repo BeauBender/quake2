@@ -696,7 +696,7 @@ CL_WriteConfiguration(void)
 	char path[MAX_OSPATH];
 
 	/* Pin harness: a pin run never reads or rewrites config.cfg */
-	if ((cls.state == ca_uninitialized) || (CL_PinsCapture() > 0))
+	if ((cls.state == ca_uninitialized) || CL_PinsRun())
 	{
 		return;
 	}

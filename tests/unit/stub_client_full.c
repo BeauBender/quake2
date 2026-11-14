@@ -127,6 +127,7 @@ CL_AllocEntity(int entnum)
 
 int CL_MaxClients(void) { return 1; }
 int CL_PinsCapture(void) { return 0; }
+qboolean CL_PinsRun(void) { return false; }
 void CL_ClearState(void) { }
 void CL_Stop_f(void) { }
 void CL_WriteConfiguration(void) { }

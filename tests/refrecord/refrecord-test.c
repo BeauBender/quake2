@@ -3197,7 +3197,11 @@ RecordReplayTrace(const char *path)
 		ents[0].model = (struct model_s *)&handle_a;
 		ents[0].skin = (struct image_s *)&handle_b;
 		ents[0].frame = i;
+		ents[0].oldframe = i + 7;
 		ents[0].origin[0] = 100.0f;
+		ents[0].angles[1] = 45.0f;
+		ents[0].oldorigin[2] = -12.5f;
+		ents[0].flags = RF_MINLIGHT | RF_GLOW | RF_USE_DISGUISE;
 		ents[0].alpha = 1.0f;
 		ents[1].model = NULL;
 		ents[1].skin = (struct image_s *)&handle_c;	/* a pic used as a skin */
@@ -3208,6 +3212,7 @@ RecordReplayTrace(const char *path)
 		fd.particles = parts;
 		fd.num_particles = 1;
 		dl[0].intensity = 200;
+		dl[0].origin[1] = 64.0f + i;
 		dl[0].color[0] = -1;	/* a darkening light */
 		fd.dlights = dl;
 		fd.num_dlights = 1;
@@ -3257,8 +3262,9 @@ TestReplayRoundTrip(void)
 			st.frames, t.frames, st.failed);
 	CHECK(st.captures == 2 && st.captures == t.captures && mock.ncap == 2 &&
 			mock.captures[0] == 0 && mock.captures[1] == 1, "replay: %u captures", st.captures);
-	CHECK(st.clamped == 0 && st.picsize_mismatch == 0, "replay: %u clamped, %u picsize mismatches in a clean trace",
-			st.clamped, st.picsize_mismatch);
+	CHECK(st.clamped == 0 && st.dropped == 0 && st.picsize_mismatch == 0,
+			"replay: %u clamped, %u dropped, %u picsize mismatches in a clean trace",
+			st.clamped, st.dropped, st.picsize_mismatch);
 
 	/* everything up to the last frame's REC_ENDFRAME, in order: not the palette after it */
 	for (last = want.nlog; last > 0 && want.log[last - 1] != REC_ENDFRAME; last--)
@@ -3283,6 +3289,12 @@ TestReplayRoundTrip(void)
 			"replay: entity handles not resolved to the live ones");
 	CHECK(mock.ents[0][1].model == NULL && mock.ents[0][1].skin == (void *)&live_pic,
 			"replay: a NULL model or a pic used as a skin not resolved");
+	CHECK(mock.ents[2][0].oldframe == 9 && Bits(mock.ents[2][0].angles[1]) == Bits(45.0f) &&
+			Bits(mock.ents[2][0].oldorigin[2]) == Bits(-12.5f) &&
+			mock.ents[2][0].flags == (RF_MINLIGHT | RF_GLOW | RF_USE_DISGUISE),
+			"replay: entity flags %d, angles, oldorigin or oldframe %d not verbatim",
+			mock.ents[2][0].flags, mock.ents[2][0].oldframe);
+	CHECK(Bits(mock.dl[2].origin[1]) == Bits(66.0f), "replay: dlight origin not verbatim");
 	CHECK(mock.ents[2][0].frame == 2 && Bits(mock.ents[2][0].origin[0]) == Bits(100.0f) &&
 			Bits(mock.fd[2].time) == Bits(3.5f) && mock.fd[2].rdflags == RDF_UNDERWATER &&
 			mock.fd[0].width == 640 && mock.fd[0].height == 480 && Bits(mock.fd[0].fov_y) == Bits(73.74f),
@@ -3344,7 +3356,7 @@ TestReplayBounds(void)
 	int32_t chr[3] = { 0, 0, -1 };
 	int32_t xy[2] = { 3, 4 };
 	int32_t size[2] = { 3, 4 };
-	float huge = 1e9f, nan = NAN, col[4] = { 1e9f, NAN, -1, 0.5f };
+	float one = 1, huge = 1e9f, nan = NAN, col[4] = { 2, NAN, -1, 0.5f };
 	const float sky[4] = { NAN, 0, 0, 1 };
 
 	memset(&fd, 0, sizeof(fd));
@@ -3374,6 +3386,7 @@ TestReplayBounds(void)
 	ents[1].skinnum = (int)0xd0d1d2d3u;
 	ents[1].frame = 4;
 	ents[2].skinnum = 40;
+	ents[2].flags = (int)(0xfff80000u | RF_GLOW);	/* bits no renderer reads */
 	fd.entities = ents;
 	fd.num_entities = 3;
 	parts[0].color = 999;
@@ -3393,8 +3406,9 @@ TestReplayBounds(void)
 	RefRec_RenderFrame(&fd);
 	RefRec_Draw(REC_STRETCHPIC, pic, 4, NULL, 0, "p", NULL, 0);
 	RefRec_Draw(REC_FILL, fill, 5, NULL, 0, NULL, NULL, 0);
-	RefRec_Draw(REC_CHARSCALED, chr, 3, &nan, 1, NULL, NULL, 0);
-	RefRec_Draw(REC_PICSCALED, xy, 2, &huge, 1, "p", NULL, 0);
+	RefRec_Draw(REC_CHARSCALED, chr, 3, &nan, 1, NULL, NULL, 0);	/* dropped */
+	RefRec_Draw(REC_CHARSCALED, chr, 3, &one, 1, NULL, NULL, 0);
+	RefRec_Draw(REC_PICSCALED, xy, 2, &huge, 1, "p", NULL, 0);	/* dropped */
 	RefRec_Draw(REC_PICSCALEDCOL, xy, 2, col, 4, "p", NULL, 0);
 	RefRec_Draw(REC_PICSIZE, size, 2, NULL, 0, "p", NULL, 0);	/* the mock says 8x8 */
 	RefRec_Control(REC_ENDFRAME, 0);
@@ -3421,28 +3435,26 @@ TestReplayBounds(void)
 	CHECK(mock.ents[0][1].skinnum == 0xd3 && mock.ents[0][1].frame == 4, "bounds: beam skinnum %d",
 			mock.ents[0][1].skinnum);
 	CHECK(mock.ents[0][2].skinnum == 0, "bounds: skinnum 40 became %d", mock.ents[0][2].skinnum);
+	CHECK(mock.ents[0][2].flags == RF_GLOW && mock.ents[0][1].flags == RF_BEAM,
+			"bounds: entity flags %d %d", mock.ents[0][2].flags, mock.ents[0][1].flags);
 	CHECK(mock.parts[0][0].color == (999 & 0xff) && mock.parts[0][1].color == 0xff &&
 			Bits(mock.parts[0][0].alpha) == Bits(1.0f), "bounds: particle colours %d %d",
 			mock.parts[0][0].color, mock.parts[0][1].color);
 	CHECK(Bits(mock.dl[0].color[0]) == Bits(REFREC_REPLAY_MAX_LIGHT) && Bits(mock.dl[0].intensity) == Bits(0.0f),
 			"bounds: dlight");
-	CHECK(mock.last[REC_STRETCHPIC].ints[0] == REFREC_REPLAY_MAX_2D &&
-			mock.last[REC_STRETCHPIC].ints[1] == -REFREC_REPLAY_MAX_2D &&
-			mock.last[REC_STRETCHPIC].ints[2] == 0 && mock.last[REC_STRETCHPIC].ints[3] == REFREC_REPLAY_MAX_2D,
-			"bounds: 2D coordinates %d %d %d %d", mock.last[REC_STRETCHPIC].ints[0],
-			mock.last[REC_STRETCHPIC].ints[1], mock.last[REC_STRETCHPIC].ints[2], mock.last[REC_STRETCHPIC].ints[3]);
+	CHECK(mock.last[REC_STRETCHPIC].type == 0 && mock.last[REC_PICSCALED].type == 0 && st.dropped == 3,
+			"bounds: a draw outside the frame or at a hostile scale forwarded (%u dropped)", st.dropped);
 	CHECK(mock.last[REC_FILL].ints[4] == (300 & 0xff), "bounds: fill colour %d", mock.last[REC_FILL].ints[4]);
 	CHECK(mock.last[REC_CHARSCALED].ints[2] == 0xff && Bits(mock.last[REC_CHARSCALED].floats[0]) == Bits(1.0f),
 			"bounds: char %d", mock.last[REC_CHARSCALED].ints[2]);
-	CHECK(Bits(mock.last[REC_PICSCALED].floats[0]) == Bits(REFREC_REPLAY_MAX_SCALE), "bounds: pic scale");
-	CHECK(Bits(mock.last[REC_PICSCALEDCOL].floats[0]) == Bits(REFREC_REPLAY_MAX_SCALE) &&
+	CHECK(Bits(mock.last[REC_PICSCALEDCOL].floats[0]) == Bits(2.0f) &&
 			Bits(mock.last[REC_PICSCALEDCOL].floats[1]) == Bits(1.0f) &&
 			Bits(mock.last[REC_PICSCALEDCOL].floats[2]) == Bits(0.0f) &&
 			Bits(mock.last[REC_PICSCALEDCOL].floats[3]) == Bits(0.5f), "bounds: pic colour");
 	CHECK(Bits(mock.last[REC_SKY].floats[0]) == Bits(0.0f) && Bits(mock.last[REC_BEGINFRAME].floats[0]) == Bits(0.0f),
 			"bounds: sky rotate or camera separation");
 	CHECK(st.picsize_mismatch == 1, "bounds: %u pic size mismatches", st.picsize_mismatch);
-	CHECK(st.clamped >= 30, "bounds: only %u values counted as clamped", st.clamped);
+	CHECK(st.clamped >= 25, "bounds: only %u values counted as clamped", st.clamped);
 }
 
 /* a trace recorded by fn, then patched by fix at its file offsets, replayed */
@@ -3676,6 +3688,296 @@ TestReplayRefusals(void)
 	free(buf);
 }
 
+/* ---- the validation layer: only values the live client could hand a renderer ---- */
+
+#define VAL_W	640
+#define VAL_H	480
+
+/* one frame holding the one draw t, replayed; whether the draw reached the mock */
+static qboolean
+Replay2D(refrec_type_t t, const int32_t *n, int nn, const float *f, int nf, const char *name,
+		const void *data, uint32_t datalen, refrec_replay_stats_t *st)
+{
+	const char *path = TracePath("replay2d");
+
+	RefRec_StartRecord(path, VAL_W, VAL_H, 30);
+	RefRec_Control(REC_BEGINFRAME, 0);
+	RefRec_Draw(t, n, nn, f, nf, name, data, datalen);
+	RefRec_Control(REC_ENDFRAME, 0);
+	RefRec_StopRecord();
+
+	if (!Replay(path, API_VERSION, VAL_W, VAL_H, st) || st->failed || st->frames != 1)
+	{
+		CHECK(0, "2d: a one-draw trace of type %d was refused", t);
+		return false;
+	}
+
+	CHECK(st->dropped + (mock.last[t].type == t) == 1, "2d: type %d both dropped and forwarded", t);
+
+	return mock.last[t].type == t;
+}
+
+/* a rectangle draw at x, y, w, h */
+static qboolean
+Rect2D(refrec_type_t t, int32_t x, int32_t y, int32_t w, int32_t h, refrec_replay_stats_t *st)
+{
+	static uint8_t raw[16];
+	int32_t n[7] = { x, y, w, h, 4, 4, 8 };
+
+	if (t == REC_FILL)
+	{
+		n[4] = 7;
+	}
+
+	return Replay2D(t, n, t == REC_STRETCHRAW ? 7 : t == REC_FILL ? 5 : 4, NULL, 0, "p",
+			t == REC_STRETCHRAW ? raw : NULL, t == REC_STRETCHRAW ? sizeof(raw) : 0, st);
+}
+
+static qboolean
+Char2D(int32_t x, int32_t y, float scale, refrec_replay_stats_t *st)
+{
+	int32_t n[3] = { x, y, 'A' };
+
+	return Replay2D(REC_CHARSCALED, n, 3, &scale, 1, NULL, NULL, 0, st);
+}
+
+static qboolean
+Pic2D(refrec_type_t t, int32_t x, int32_t y, float scale, refrec_replay_stats_t *st)
+{
+	int32_t n[2] = { x, y };
+	float f[4] = { scale, 1, 1, 1 };
+
+	return Replay2D(t, n, 2, f, t == REC_PICSCALEDCOL ? 4 : 1, "p", NULL, 0, st);
+}
+
+/* a one-name trace of kind t, replayed; true when it was refused */
+static qboolean
+NameRefused(refrec_type_t t, const char *name, refrec_replay_stats_t *st)
+{
+	const char *path = TracePath("replayname");
+	int32_t n[4] = { 0, 0, 8, 8 };
+	const float f[4] = { 1, 0, 0, 1 };
+
+	RefRec_StartRecord(path, VAL_W, VAL_H, 30);
+
+	switch (t)
+	{
+		case REC_BEGINREG:
+		case REC_MODEL:
+		case REC_SKIN:
+		case REC_PIC:
+			RefRec_Registration(t, name, t == REC_BEGINREG ? NULL : &handle_a);
+			break;
+
+		default:
+			RefRec_Draw(t, n, 4, f, 4, name, NULL, 0);
+			break;
+	}
+
+	RefRec_Control(REC_BEGINFRAME, 0);
+	RefRec_Control(REC_ENDFRAME, 0);
+	RefRec_StopRecord();
+
+	if (!Replay(path, API_VERSION, VAL_W, VAL_H, st))
+	{
+		CHECK(0, "names: a trace of type %d was refused at open", t);
+		return false;
+	}
+
+	/* refused before the target saw the record, so nothing was forwarded */
+	if (st->failed)
+	{
+		CHECK(mock.nlog == 0 && st->frames == 0, "names: type %d forwarded %u calls before its refusal",
+				t, mock.nlog);
+	}
+
+	return st->failed;
+}
+
+/* the REC_MODEL record's name of RecordReplayTrace, one byte changed: not its table entry */
+static void
+FixRegName(uint8_t *b, long n)
+{
+	long i;
+
+	for (i = 0; i + 12 <= n; i++)
+	{
+		if (memcmp(b + i, "models/a.md2", 12) == 0)
+		{
+			b[i + 7] = 'z';
+			return;
+		}
+	}
+}
+
+/* entity 0's model id one past the string table */
+static void FixIdEdge(uint8_t *b, long n) { (void)n; SetU32(ENT0(b), GetU32(b + GetU32(b + 20)) + 1); }
+
+static void
+TestReplayValidation(void)
+{
+	static const refrec_type_t named[] = {
+		REC_BEGINREG, REC_MODEL, REC_SKIN, REC_PIC, REC_SKY, REC_PICSIZE,
+		REC_PICSCALED, REC_PICSCALEDCOL, REC_STRETCHPIC, REC_TILECLEAR
+	};
+	static const refrec_type_t rects[] = { REC_STRETCHPIC, REC_STRETCHRAW };
+	static const refrec_type_t pics[] = { REC_PICSCALED, REC_PICSCALEDCOL };
+	char n63[64], n64[65], n1023[1024];
+	refrec_replay_stats_t st;
+	size_t i;
+
+	/* B1: every forwarded name is shorter than MAX_QPATH, else the trace is refused */
+	memset(n63, 'a', 63);
+	n63[63] = '\0';
+	memset(n64, 'a', 64);
+	n64[64] = '\0';
+	memset(n1023, 'Q', 1023);
+	n1023[1023] = '\0';
+
+	for (i = 0; i < sizeof(named) / sizeof(named[0]); i++)
+	{
+		CHECK(!NameRefused(named[i], n63, &st), "names: type %d with 63 bytes refused", named[i]);
+		CHECK(NameRefused(named[i], n64, &st), "names: type %d with 64 bytes forwarded", named[i]);
+		CHECK(NameRefused(named[i], n1023, &st) && strstr(last_print, "MAX_QPATH") &&
+				!strstr(last_print, "QQQQ"), "names: type %d with 1023 bytes forwarded, or printed", named[i]);
+	}
+
+	/* a registration whose name is not its table entry's */
+	CHECK(ReplayPatched("rp-regname", FixRegName, &st) && st.failed && st.frames == 0 &&
+			strstr(last_print, "string table entry") && mock.nreg == 1,
+			"names: a registration under another name than its table entry was forwarded (%u)", mock.nreg);
+
+	/* I2: an entity id one past the table resolves to NULL (and reads nothing past it) */
+	CHECK(ReplayPatched("rp-idedge", FixIdEdge, &st) && !st.failed && st.frames == 3 &&
+			mock.ents[0][0].model == NULL, "handles: an id one past the string table resolved");
+
+	/* I2: a refusal is sticky: nothing more is forwarded, however often it is asked */
+	{
+		refrec_header_t h;
+		uint32_t nlog;
+
+		const char *path = TracePath("rp-sticky");
+		long size;
+		uint8_t *buf;
+
+		/* the first record, conchars, is refused: the rest of the trace is well formed */
+		RecordReplayTrace(path);
+		buf = Slurp(path, &size);
+
+		if (buf)
+		{
+			FixTableKind(buf, size);
+			Spill(path, buf, size);
+			free(buf);
+		}
+
+		memset(&mock, 0, sizeof(mock));
+		CHECK(RefRec_OpenReplay(path, &h), "sticky: refused at open");
+		CHECK(!RefRec_ReplayNextFrame() && mock.nlog == 0, "sticky: the refused record was forwarded");
+		nlog = mock.nlog;
+		CHECK(!RefRec_ReplayNextFrame() && !RefRec_ReplayNextFrame() && mock.nlog == nlog,
+				"sticky: %u calls forwarded after the refusal", mock.nlog - nlog);
+		RefRec_CloseReplay();
+	}
+
+	/* B2: a rectangle lies across the frame and overlaps it down, with a size of 1 or more */
+	for (i = 0; i < sizeof(rects) / sizeof(rects[0]); i++)
+	{
+		refrec_type_t t = rects[i];
+
+		CHECK(Rect2D(t, 0, 0, VAL_W, VAL_H, &st), "2d %d: the whole frame dropped", t);
+		CHECK(Rect2D(t, VAL_W - 1, VAL_H - 1, 1, 1, &st), "2d %d: the last pixel dropped", t);
+		CHECK(Rect2D(t, 0, -(VAL_H - 1), VAL_W, VAL_H, &st), "2d %d: one row showing dropped", t);
+		CHECK(!Rect2D(t, 0, -VAL_H, VAL_W, VAL_H, &st), "2d %d: wholly above forwarded", t);
+		CHECK(!Rect2D(t, 0, VAL_H, 8, 8, &st), "2d %d: wholly below forwarded", t);
+		CHECK(!Rect2D(t, -1, 0, 8, 8, &st), "2d %d: one column left of the frame forwarded", t);
+		CHECK(!Rect2D(t, VAL_W - 7, 0, 8, 8, &st), "2d %d: one column right of the frame forwarded", t);
+		CHECK(!Rect2D(t, 0, 0, 0, 8, &st), "2d %d: zero width forwarded", t);
+		CHECK(!Rect2D(t, 0, 0, 8, 0, &st), "2d %d: zero height forwarded", t);
+		CHECK(!Rect2D(t, 0, 0, -8, 8, &st), "2d %d: negative width forwarded", t);
+		CHECK(!Rect2D(t, 0, 0, VAL_W + 1, 8, &st), "2d %d: wider than the frame forwarded", t);
+		CHECK(!Rect2D(t, 0, 0, 8, VAL_H + 1, &st), "2d %d: taller than the frame forwarded", t);
+		CHECK(!Rect2D(t, INT32_MAX, 0, 8, 8, &st) && !Rect2D(t, 0, INT32_MIN, 8, 8, &st) &&
+				!Rect2D(t, 8, 8, INT32_MAX, INT32_MAX, &st), "2d %d: extreme values forwarded", t);
+	}
+
+	/* Draw_Fill and Draw_TileClear are cut to the frame, as the renderers cut them */
+	for (i = 0; i < 2; i++)
+	{
+		refrec_type_t t = i ? REC_TILECLEAR : REC_FILL;
+		const int32_t *m = mock.last[t].ints;
+
+		CHECK(Rect2D(t, 1, 2, 3, 4, &st) && m[0] == 1 && m[1] == 2 && m[2] == 3 && m[3] == 4 &&
+				st.clamped == 0, "clip %d: an inside rectangle changed", t);
+		CHECK(Rect2D(t, -5, -6, 10, 10, &st) && m[0] == 0 && m[1] == 0 && m[2] == 5 && m[3] == 4 &&
+				st.clamped == 1, "clip %d: top left %d %d %d %d", t, m[0], m[1], m[2], m[3]);
+		CHECK(Rect2D(t, VAL_W - 2, VAL_H - 3, VAL_W, INT32_MAX, &st) && m[0] == VAL_W - 2 &&
+				m[1] == VAL_H - 3 && m[2] == 2 && m[3] == 3, "clip %d: bottom right %d %d %d %d", t,
+				m[0], m[1], m[2], m[3]);
+		CHECK(Rect2D(t, -1000000, -1000000, INT32_MAX, INT32_MAX, &st) && m[0] == 0 && m[1] == 0 &&
+				m[2] == VAL_W && m[3] == VAL_H, "clip %d: extremes %d %d %d %d", t, m[0], m[1], m[2], m[3]);
+		CHECK(!Rect2D(t, VAL_W, 0, 8, 8, &st) && !Rect2D(t, 0, VAL_H, 8, 8, &st) &&
+				!Rect2D(t, -8, 0, 8, 8, &st) && !Rect2D(t, 0, -8, 8, 8, &st),
+				"clip %d: a rectangle wholly outside forwarded", t);
+		CHECK(!Rect2D(t, 0, 0, 0, 8, &st) && !Rect2D(t, 0, 0, 8, 0, &st) && !Rect2D(t, 0, 0, -1, 8, &st) &&
+				!Rect2D(t, INT32_MIN, INT32_MIN, INT32_MAX, INT32_MAX, &st), "clip %d: an empty rectangle forwarded", t);
+	}
+
+	/* a character: 8 * scale square, across the frame, scale 1 up to the bound */
+	CHECK(Char2D(0, 0, 1, &st) && Char2D(VAL_W - 8, VAL_H - 8, 1, &st), "char: inside dropped");
+	CHECK(Char2D(0, -7, 1, &st) && Char2D(0, VAL_H - 1, 1, &st), "char: one row showing dropped");
+	CHECK(!Char2D(0, -8, 1, &st) && !Char2D(0, VAL_H, 1, &st), "char: wholly above or below forwarded");
+	CHECK(!Char2D(-1, 0, 1, &st) && !Char2D(VAL_W - 7, 0, 1, &st), "char: past the side forwarded");
+	CHECK(Char2D(VAL_W - 16, 0, 2, &st) && !Char2D(VAL_W - 15, 0, 2, &st), "char: scale 2 at the side");
+	CHECK(Char2D(VAL_W - 12, 0, 1.5f, &st) && !Char2D(VAL_W - 11, 0, 1.5f, &st), "char: scale 1.5 at the side");
+	CHECK(Char2D(0, 0, VAL_H / 8, &st) && !Char2D(0, 0, VAL_H / 8 + 1, &st), "char: taller than the frame");
+	CHECK(!Char2D(0, 0, 0, &st) && !Char2D(0, 0, 0.99f, &st) && !Char2D(0, 0, -1, &st) &&
+			!Char2D(0, 0, NAN, &st) && !Char2D(0, 0, INFINITY, &st), "char: a scale below 1 or not finite forwarded");
+	CHECK(!Char2D(INT32_MAX, 0, 1, &st) && !Char2D(0, INT32_MIN, 1, &st), "char: extremes forwarded");
+
+	/* a scaled pic, by its corner (the renderer knows its size), scale 1 up to the bound */
+	for (i = 0; i < sizeof(pics) / sizeof(pics[0]); i++)
+	{
+		refrec_type_t t = pics[i];
+
+		CHECK(Pic2D(t, 0, 0, 1, &st) && Pic2D(t, VAL_W - 1, VAL_H - 1, 2, &st), "pic %d: inside dropped", t);
+		CHECK(Pic2D(t, 0, -(VAL_H - 1), 1, &st), "pic %d: above, overlapping, dropped", t);
+		CHECK(!Pic2D(t, -1, 0, 1, &st) && !Pic2D(t, VAL_W, 0, 1, &st), "pic %d: past the side forwarded", t);
+		CHECK(!Pic2D(t, 0, -VAL_H, 1, &st) && !Pic2D(t, 0, VAL_H, 1, &st), "pic %d: above or below forwarded", t);
+		CHECK(Pic2D(t, 0, 0, REFREC_REPLAY_MAX_SCALE, &st) && !Pic2D(t, 0, 0, REFREC_REPLAY_MAX_SCALE * 1.01f, &st),
+				"pic %d: the scale bound", t);
+		CHECK(!Pic2D(t, 0, 0, 0, &st) && !Pic2D(t, 0, 0, 0.99f, &st) && !Pic2D(t, 0, 0, NAN, &st),
+				"pic %d: a scale below 1 or not finite forwarded", t);
+	}
+
+	/* a raw image whose dimensions and data length disagree is refused by the reader */
+	{
+		static uint8_t raw[16];
+		const char *path = TracePath("rp-raw");
+		int32_t n[7] = { 0, 0, 8, 8, 4, 4, 8 };
+		long size;
+		uint8_t *buf, *p;
+
+		RefRec_StartRecord(path, VAL_W, VAL_H, 30);
+		RefRec_Control(REC_BEGINFRAME, 0);
+		RefRec_Draw(REC_STRETCHRAW, n, 7, NULL, 0, NULL, raw, sizeof(raw));
+		RefRec_Control(REC_ENDFRAME, 0);
+		RefRec_StopRecord();
+		buf = Slurp(path, &size);
+		p = buf ? buf + RecordAt(buf, 0, REC_STRETCHRAW) : NULL;
+
+		if (p)
+		{
+			SetU32(p + REFREC_REC_SIZE + 16, 5);	/* cols 5: 20 bytes, 16 carried */
+			Spill(path, buf, size);
+		}
+
+		free(buf);
+		CHECK(p && Replay(path, API_VERSION, VAL_W, VAL_H, &st) && st.failed &&
+				mock.last[REC_STRETCHRAW].type == 0, "raw: a length the dimensions disagree with was forwarded");
+	}
+}
+
 /* Only indexed frames replay; an open frame after the last one does not. */
 static void
 TestReplayStructure(void)
@@ -3765,6 +4067,7 @@ main(int argc, char **argv)
 	TestReplayRoundTrip();
 	TestReplayBounds();
 	TestReplayRefusals();
+	TestReplayValidation();
 	TestReplayStructure();
 
 	printf("refrecord: %d checks, %d failed\n", checks, failures);

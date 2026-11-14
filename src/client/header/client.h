@@ -453,6 +453,7 @@ int CL_PinsCapture(void);
 qboolean CL_PinsInvalid(void);
 const char *CL_PinsReplayPath(void);
 qboolean CL_PinsReplayRequested(void);
+qboolean CL_PinsRun(void);
 void CL_PinsReplayStart(void);
 qboolean CL_PinsReplaying(void);
 void CL_PinsReplay(void);

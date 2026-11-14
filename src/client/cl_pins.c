@@ -263,3 +263,15 @@ CL_PinsReplayRequested(void)
 {
 	return pins_replay_requested;
 }
+
+/*
+ * True for a pin run: a capture, or a replay (requested, whether or not
+ * it was accepted; a refused one stops the engine in CL_Init). A pin run
+ * never reads or writes the saved configuration, turns a dropped run
+ * into a fatal error and never falls back to another renderer.
+ */
+qboolean
+CL_PinsRun(void)
+{
+	return (pins_capture > 0) || pins_replay_requested;
+}
