@@ -907,6 +907,15 @@ commit in a private store:
 | `tests/check-ref-metal.sh` | host test 201 checks, 0 failed; 72 vocabulary mutants refused; `ref_metal` built (after the review rework: 227 checks, and the flush points below) |
 | the flush points, by source inspection (review rework) | `tests/check-ref-metal.sh` (d) requires `RM_Flush2D();` as a statement, outside comments, in `RI_RenderFrame` before `rmb_pass_3d`, in `RI_EndFrame` before `rmb_frame_end` and in `R_ScreenShot` before `rmb_read`, and fails when a function is not found; its 12 scratch mutants (each flush removed, commented out, moved after the call, the function renamed) are refused, and scratch copies of the tree with each of the three flushes deleted fail the check, naming the function |
 
+Menu and console screens have no pin. The shim's `screenshot` command
+(`ref_gl1` built with `WITH_METAL_SHIM=yes`) writes an all-black image on
+a frame that draws 2D only (four of four attempts at review: the
+console, the main menu, the options menu and the quit screen; card
+FIX42), so it gives no reference there. Those screens were judged by
+viewing `ref_metal`'s own screenshots of the same four states (the
+console background and text, the faded console under the menu, the menu
+pics and the cursor), not by a comparison against the shim.
+
 The implementer did not run the full gate (`scripts/test.sh`): the host
 limits of this card keep it to the orchestrator; the checks above are
 its parts that this change touches. The change is about 1,170 lines
