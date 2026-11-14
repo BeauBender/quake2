@@ -1004,7 +1004,9 @@ face's plane and texinfo, a leaf's marksurfaces and a marksurface's
 surface are kept. Added, before a loader or the buffer builder reads the
 data, each through a plain function of `rm_pure.c`:
 
-- every lump inside the file, and the header inside it (`rm_lump_ok`);
+- every lump inside the file and at an offset that is a multiple of 4
+  (the loaders read its records' `int` and `float` fields in place), and
+  the header inside the file (`rm_lump_ok`);
 - the counts the loaders size arrays by within `files.h`'s limits (nodes,
   planes, vertices, edges, surfedges, leaf faces, leafs, faces, texinfos,
   models; lighting and visibility bytes), so `Mod_LoadNodes`' arrays of
@@ -1132,6 +1134,14 @@ more cases per check, the shim's raster and `files/surf.c` linked in);
 `rmb.h` about 270 of declarations with their contracts. The card was not
 cut into two slices: the measurement that set the vertex layout needed
 the drawing, and both halves were done when the size was counted.
+
+Bounds the later cards must add before the first use (security review of
+N4): a submodel's negative head node is a leaf, `-1 - headnode`, and is
+bounded here from above only (`firstnode < numnodes`); N7 and N8, which
+read `firstnode`, must check `-1 - headnode < numleafs` first (FIX40,
+#185). `Mod_CalcSurfaceExtents` (gl1's code) converts an unbounded float
+to `int`, so a surface's `extents` are not bounded; N5 must bound them
+before they size a lightmap.
 
 Left for N5 and later: the lightmaps (`light_s`, `light_t`, the slice and
 rectangle of the record, the samples' bounds), the warp subdivision and

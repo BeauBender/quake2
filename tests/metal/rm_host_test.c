@@ -1096,6 +1096,8 @@ test_bsp_bounds(void)
 
 	CHECK(rm_lump_ok(160, 40, 200) && !rm_lump_ok(160, 41, 200) && !rm_lump_ok(-4, 4, 200));
 	CHECK(!rm_lump_ok(4, -4, 200) && !rm_lump_ok(0x7fffffff, 0x7fffffff, 200));
+	/* a lump's records are read as int and float fields: its offset is a multiple of 4 */
+	CHECK(!rm_lump_ok(161, 4, 200) && !rm_lump_ok(162, 0, 200) && !rm_lump_ok(3, 1, 200) && rm_lump_ok(196, 4, 200));
 
 	CHECK(rm_face_edges_ok(0, 3, 3) && rm_face_edges_ok(7, 5, 12) && !rm_face_edges_ok(8, 5, 12));
 	CHECK(!rm_face_edges_ok(0, 2, 12) && !rm_face_edges_ok(-1, 3, 12) && !rm_face_edges_ok(0, -3, 12));

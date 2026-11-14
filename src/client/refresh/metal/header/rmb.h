@@ -413,7 +413,11 @@ long rm_world_fan(unsigned long base, long n, unsigned *idx, unsigned long cap);
 /* [first, first + count) inside [0, total]: 1, or 0 for a negative value or an end past total (no overflow). */
 int rm_range_ok(long first, long count, long total);
 
-/* A lump of the BSP file: fileofs and filelen not negative, the lump inside the file's len bytes. */
+/*
+ * A lump of the BSP file: fileofs and filelen not negative, fileofs a
+ * multiple of 4 (the loaders read the records' int and float fields in
+ * place), the lump inside the file's len bytes.
+ */
 int rm_lump_ok(long fileofs, long filelen, long len);
 
 /* A face's edges: at least 3, inside the surfedge lump. */

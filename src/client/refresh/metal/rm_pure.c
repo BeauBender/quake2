@@ -758,7 +758,8 @@ rm_range_ok(long first, long count, long total)
 int
 rm_lump_ok(long fileofs, long filelen, long len)
 {
-	return rm_range_ok(fileofs, filelen, len);
+	/* the loaders read int and float fields of the records in place: aligned to 4 */
+	return ((fileofs & 3) == 0) && rm_range_ok(fileofs, filelen, len);
 }
 
 int
