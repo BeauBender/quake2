@@ -377,6 +377,7 @@ owner_cases() {
 	case_ ok refs/heads/zzqx "$m1" "refs/heads/zzqt/$login/zzqtopic" "$zero"
 	case_ "the remote ref name contains $U" refs/heads/zzqx "$m1" "refs/heads/zzqt/x${login}x" "$zero"
 	case_ "the local ref name contains $U" "refs/heads/${login}2" "$m1" refs/heads/zzqplain "$zero"
+	case_ "the remote ref name contains $U" refs/heads/zzqx "$m1" "refs/heads/zzqt/zz${login}" "$zero"
 	case_ "$M $(printf '%.10s' "$m3") contains $H" refs/heads/zzqmain "$m3" refs/heads/zzqmain "$m1"
 	_hm=$(mk "$m1" "zzqm32 see /zzqhome/$login/file")
 	case_ "$M $(printf '%.10s' "$_hm") contains $Hm" refs/heads/zzqw4 "$_hm" refs/heads/zzqw4 "$zero"
