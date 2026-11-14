@@ -144,15 +144,17 @@ rmb_open(rmb_caps_t *caps, char *err, size_t errlen)
 	int n, i;
 
 	memset(caps, 0, sizeof(*caps));
-	memset(&rmb_ledger, 0, sizeof(rmb_ledger));
-	memset(&rmb_counts, 0, sizeof(rmb_counts));
-	atomic_store(&rmb_failed, 0);
 
+	/* refused before the counts are reset: they belong to the open session */
 	if (rmb_device)
 	{
 		snprintf(err, errlen, "the Metal device is open already");
 		return 0;
 	}
+
+	memset(&rmb_ledger, 0, sizeof(rmb_ledger));
+	memset(&rmb_counts, 0, sizeof(rmb_counts));
+	atomic_store(&rmb_failed, 0);
 
 	@autoreleasepool
 	{

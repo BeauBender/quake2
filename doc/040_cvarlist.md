@@ -632,7 +632,8 @@ draws nothing else.
 
 * **metal_stats**: When set to `1`, the Metal renderer prints one line
   per screenshot (so per frame the pin harness captures) and one at
-  shutdown: frames presented, frames without a drawable (not shown,
+  shutdown: frames ended (those without a drawable included), frames
+  without a drawable (not presented,
   for example while the window cannot be shown), frames skipped because
   the GPU still held every frame slot, command buffers that failed,
   readbacks, calls to drawing functions it does not implement yet, and

@@ -30,6 +30,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "../../src/client/refresh/metal/header/rmb.h"
@@ -211,6 +212,40 @@ test_color_load(void)
 	CHECK(rm_color_load(0, 0) == RM_LOAD_BLACK);
 }
 
+/*
+ * With len 0 the formatters write nothing: neither the byte of a one
+ * byte heap block (which must stay as it was) nor the byte just past
+ * its end (which ASAN reports).
+ */
+static void
+test_len_zero(void)
+{
+	rmb_stats_t s;
+	rm_ledger_t l;
+	char *block = malloc(1);
+
+	CHECK(block != NULL);
+
+	if (!block)
+	{
+		return;
+	}
+
+	memset(&s, 0, sizeof(s));
+	memset(&l, 0, sizeof(l));
+
+	block[0] = 'x';
+	CHECK(!rm_caps_family_list(0x1ff, block, 0) && block[0] == 'x');
+	CHECK(!rm_ledger_format(&l, block, 0) && block[0] == 'x');
+	CHECK(!rm_stats_format(&s, &l, block, 0) && block[0] == 'x');
+
+	CHECK(!rm_caps_family_list(0x1ff, block + 1, 0));
+	CHECK(!rm_ledger_format(&l, block + 1, 0));
+	CHECK(!rm_stats_format(&s, &l, block + 1, 0));
+
+	free(block);
+}
+
 int
 main(void)
 {
@@ -220,6 +255,7 @@ main(void)
 	test_ledger();
 	test_stats();
 	test_color_load();
+	test_len_zero();
 
 	printf("rm_host_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
