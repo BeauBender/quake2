@@ -306,7 +306,8 @@ only `[A-Za-z0-9_]`; it is none of `CVAR_NOSET`, `CVAR_LATCH`
 the cvars read only when a window or context is made (`vid_renderer`,
 which would reload the renderer, `vid_fullscreen`, `vid_displayindex`, `vid_displayrefreshrate`,
 `vid_highdpiaware`, `vid_rate`, `r_mode`, `r_customwidth`,
-`r_customheight`, `r_vsync`, `r_msaa_samples`, `gl3_debugcontext`) or
+`r_customheight`, `r_vsync`, `r_msaa_samples`, `gl3_debugcontext`,
+`gl1_stereo`, whose change makes gl1 and gl3 ask for a `vid_restart`) or
 that names a library to load (`gl3_libgl`); and its value is printable
 ASCII without `"`. No cvar the allow-rule admits writes a file or runs
 a command. Anything else is skipped and counted

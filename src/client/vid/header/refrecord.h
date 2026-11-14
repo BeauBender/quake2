@@ -282,15 +282,16 @@ void RefRec_Control(refrec_type_t t, float arg);
  * cvar's flags (the trace carries no flags): the cvar exists, its name
  * has a renderer prefix and only [A-Za-z0-9_], it is none of CVAR_NOSET,
  * CVAR_LATCH, CVAR_USERINFO, CVAR_SERVERINFO, it is not one of the
- * cvars that pick the renderer, the window, the display mode or a
- * library (REFREC_CVAR_NEVER, read only when a window or context is
- * made), and its value is printable ASCII without '"'. Anything else in
+ * cvars that pick the renderer, the window, the display mode, the
+ * context's buffers or a library (REFREC_CVAR_NEVER, read only when a
+ * window or context is made; a change to gl1_stereo asks for a
+ * vid_restart), and its value is printable ASCII without '"'. Anything else in
  * the trace is skipped and counted (stats.cvars_skipped), never refused.
  */
 #define REFREC_CVAR_PREFIXES	"gl1_", "gl3_", "gl_", "r_", "sw_", "vid_"
 #define REFREC_CVAR_NEVER	"vid_renderer", "vid_fullscreen", "vid_displayindex", "vid_displayrefreshrate", \
 	"vid_highdpiaware", "vid_rate", "r_mode", "r_customwidth", "r_customheight", \
-	"r_vsync", "r_msaa_samples", "gl3_libgl", "gl3_debugcontext"
+	"r_vsync", "r_msaa_samples", "gl3_libgl", "gl3_debugcontext", "gl1_stereo"
 qboolean RefRec_CvarRecorded(const char *name, int flags);
 qboolean RefRec_CvarRestorable(const char *name, const char *value, int flags);	/* flags -1: no such cvar */
 void RefRec_Cvars(int count, const char *const *names, const char *const *values, const int *flags);

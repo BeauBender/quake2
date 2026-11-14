@@ -4162,6 +4162,10 @@ static void
 TestCvarRules(void)
 {
 	const char *never[] = { REFREC_CVAR_NEVER };
+	/* a literal copy: dropping a name from REFREC_CVAR_NEVER fails here */
+	const char *never_lit[] = { "vid_renderer", "vid_fullscreen", "vid_displayindex",
+		"vid_displayrefreshrate", "vid_highdpiaware", "vid_rate", "r_mode", "r_customwidth",
+		"r_customheight", "r_vsync", "r_msaa_samples", "gl3_libgl", "gl3_debugcontext", "gl1_stereo" };
 	const char *yes[] = { "r_lerpmodels", "gl1_minlight", "gl3_intensity", "gl_polyblend",
 		"sw_waterwarp", "vid_gamma" };
 	const char *no[] = { "cl_gun", "rate", "r", "gl1", "R_lerpmodels", "xr_lerpmodels", "glx_a",
@@ -4191,11 +4195,15 @@ TestCvarRules(void)
 		CHECK(!RefRec_CvarRestorable(no[i], "1", 0), "cvars: %s restorable", no[i]);
 	}
 
-	for (i = 0; i < sizeof(never) / sizeof(never[0]); i++)
+	CHECK(sizeof(never) / sizeof(never[0]) == sizeof(never_lit) / sizeof(never_lit[0]),
+			"cvars: REFREC_CVAR_NEVER has %u names, the test pins %u",
+			(unsigned)(sizeof(never) / sizeof(never[0])), (unsigned)(sizeof(never_lit) / sizeof(never_lit[0])));
+
+	for (i = 0; i < sizeof(never_lit) / sizeof(never_lit[0]); i++)
 	{
-		CHECK(RefRec_CvarRecorded(never[i], CVAR_ARCHIVE), "cvars: %s not recorded", never[i]);
-		CHECK(!RefRec_CvarRestorable(never[i], "1", CVAR_ARCHIVE), "cvars: %s restorable", never[i]);
-		CHECK(!RefRec_CvarRestorable(never[i], "1", 0), "cvars: %s restorable", never[i]);
+		CHECK(RefRec_CvarRecorded(never_lit[i], CVAR_ARCHIVE), "cvars: %s not recorded", never_lit[i]);
+		CHECK(!RefRec_CvarRestorable(never_lit[i], "1", CVAR_ARCHIVE), "cvars: %s restorable", never_lit[i]);
+		CHECK(!RefRec_CvarRestorable(never_lit[i], "1", 0), "cvars: %s restorable", never_lit[i]);
 	}
 
 	CHECK(!RefRec_CvarRecorded(NULL, CVAR_ARCHIVE), "cvars: a NULL name recorded");
@@ -4426,6 +4434,22 @@ TestRecordReplayCvars(void)
 	RefRec_CloseReplay();
 	CHECK(!st.failed && st.cvars_set == 0 && st.cvars_skipped == 11 && !mock_setlog[0],
 			"cvars: without CvarFlags %u set, %u skipped", st.cvars_set, st.cvars_skipped);
+
+	/* nor with CvarFlags and no SetCvar */
+	tg.CvarFlags = MockCvarFlags;
+	tg.SetCvar = NULL;
+	mock_setlog[0] = '\0';
+	RefRec_SetReplayTarget(&tg);
+	CHECK(RefRec_OpenReplay(path, &h), "cvars: replay without SetCvar refused");
+
+	while (RefRec_ReplayNextFrame())
+	{
+	}
+
+	RefRec_ReplayStats(&st);
+	RefRec_CloseReplay();
+	CHECK(!st.failed && st.cvars_set == 0 && st.cvars_skipped == 11 && !mock_setlog[0],
+			"cvars: without SetCvar %u set, %u skipped", st.cvars_set, st.cvars_skipped);
 }
 
 /* REC_CVARS count limits on the recorder side: past REFREC_MAX_CVARS is left out with a warning */
