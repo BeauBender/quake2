@@ -5376,6 +5376,13 @@ test_md2_regions(void)
 	CHECK(rm_md2_check(m, MD2_LEN, &in) && in.num_skins == 0 && md2_loads(m, MD2_LEN) && md2_draws(m, &in));
 	put32(m + 4 * 11, 0);
 	CHECK(!rm_md2_check(m, MD2_LEN, &in));
+	/* an empty skins region strictly inside the st (132..136): no byte shared, accepted */
+	put32(m + 4 * 11, 134);
+	CHECK(rm_md2_check(m, MD2_LEN, &in) && in.num_skins == 0 && md2_loads(m, MD2_LEN));
+	/* the tris over the commands tail (commands 260..356, tris 340..352): refused */
+	memcpy(m, b, MD2_LEN);
+	put32(m + 4 * 13, 340);
+	CHECK(!rm_md2_check(m, MD2_LEN, &in));
 
 	/*
 	 * Mutated models of the 40 skins: region offsets moved into the header,
