@@ -87,7 +87,7 @@ typedef struct
 	unsigned long splits;       /* frame command buffers split for a rewritten texture (section 3) */
 	unsigned long pipelines;    /* pipeline states built in InitContext */
 	unsigned long late_pipelines;   /* pipeline states built after InitContext: must stay 0 */
-	/* the surfaces of the last 3D view not drawn yet, by class (front end, N4): drawn from N6 on */
+	/* the surfaces of the last 3D view whose draw was refused, by class (front end; N4 and N5 counted the classes N6 draws) */
 	unsigned long sky_skips, warp_skips, trans_skips, flow_skips;
 	/* of the drawn surfaces of the last 3D view, those a dynamic light touches, drawn with their static lightmap (N5; N8 adds the light) */
 	unsigned long dlit_surfs;
@@ -1203,7 +1203,7 @@ typedef struct
 	int kind;               /* rm_dyn_t */
 	int tex, smp;           /* the diffuse texture and its sampler */
 	float color[4];         /* RM_DYN_TEXC, RM_DYN_TEXC_BLEND */
-	rmb_lm_draw_t lm;       /* RM_DYN_LM: its tex and smp are the draw's own */
+	rmb_lm_draw_t lm;       /* RM_DYN_LM: lmtex, slice, env and scale are used; the diffuse is tex and smp above */
 } rmb_dyn_t;
 
 /*
