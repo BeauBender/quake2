@@ -6,16 +6,16 @@
 # any depth (.claude/memory/x, .Claude/memory/x, .claude/Memory/x,
 # sub/.claude/memory/x), including a symbolic link or a submodule at that
 # path; when a file created at .claude/memory/ would not be ignored; or when
-# git itself fails (nothing is counted as clean then). Memory is kept in the
-# owner's private store (scripts/agent-memory.sh), never in a commit.
+# git, tr or grep fails (nothing is counted as clean then). Memory is kept
+# in the owner's private store (see CLAUDE.md), never in a commit.
 #
 # The self-test runs first, in a subshell with the GIT_* repository variables
 # unset and no global or system configuration, on throwaway repositories
 # under a private mktemp -d. It shows the check fails on each spelling above,
 # on a symlink and a submodule at .claude/memory, on a missing ignore rule,
-# outside a repository, and when ls-files, check-ignore or grep alone fails
-# (a shim first on PATH), and passes on a clean repository. The real check
-# then reads the index git hands it.
+# outside a repository, and when ls-files, check-ignore, tr or grep alone
+# fails (a shim first on PATH), and passes on a clean repository. The real
+# check then reads the index git hands it.
 #
 # Usage: tests/check-no-tracked-memory.sh
 set -eu
@@ -32,12 +32,16 @@ check()
 		echo "$me: git ls-files failed; cannot tell whether agent memory is tracked" >&2
 		return 1
 	fi
+	if ! tr '\0' '\n' < "${tmp:?}/ls" > "${tmp:?}/paths" 2>/dev/null; then
+		echo "$me: tr failed; cannot scan the tracked paths" >&2
+		return 1
+	fi
 	rc=0
-	tr '\0' '\n' < "${tmp:?}/ls" | grep -Ei '(^|/)\.claude/memory(/|$)' > "${tmp:?}/hits" || rc=$?
+	grep -Ei '(^|/)\.claude/memory(/|$)' < "${tmp:?}/paths" > "${tmp:?}/hits" || rc=$?
 	case "$rc" in
 	0)
 		n=$(wc -l < "${tmp:?}/hits" | tr -d ' ')
-		echo "$me: $n tracked path(s) under a .claude/memory directory (any case, any depth); agent memory belongs in the private store (scripts/agent-memory.sh), not in a commit (git rm -r --cached <path>)" >&2
+		echo "$me: $n tracked path(s) under a .claude/memory directory (any case, any depth); agent memory belongs in the owner's private store (see CLAUDE.md), not in a commit (git rm -r --cached <path>)" >&2
 		return 1
 		;;
 	1) ;;
@@ -140,14 +144,16 @@ selftest()
 	# One command fails while the rest work, on the clean repository: a
 	# shim first on PATH exits non-zero for that command only.
 	realgit=$(command -v git)
-	for c in ls-files check-ignore grep; do
+	for c in ls-files check-ignore tr grep; do
 		mkdir -p "${tmp:?}/shim-$c"
-		if [ "$c" = grep ]; then
-			printf '#!/bin/sh\nexit 2\n' > "${tmp:?}/shim-$c/grep"
-		else
+		case "$c" in
+		tr) printf '#!/bin/sh\nexit 1\n' > "${tmp:?}/shim-$c/tr" ;;
+		grep) printf '#!/bin/sh\nexit 2\n' > "${tmp:?}/shim-$c/grep" ;;
+		*)
 			printf '#!/bin/sh\ncase " $* " in *" %s "*) exit 128 ;; esac\nexec "%s" "$@"\n' \
 				"$c" "$realgit" > "${tmp:?}/shim-$c/git"
-		fi
+			;;
+		esac
 		chmod 755 "${tmp:?}/shim-$c/"*
 		if (PATH=$tmp/shim-$c:$PATH; check "$tmp/clean") 2>/dev/null; then
 			echo "$me: selftest: a failing $c was counted as clean" >&2
