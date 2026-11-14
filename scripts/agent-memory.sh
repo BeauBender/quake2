@@ -448,11 +448,12 @@ for f in "$clone/$SUBDIR"/*.md; do
 	pulled=$((pulled + 1))
 done
 
-# The other side of each conflict, beside the local file.
+# The other side of each conflict, beside the local file: the store's
+# version for a merge conflict, the merged one for a file edited meanwhile.
 while IFS= read -r line; do
 	name=${line#? }
 	case "$line" in
-	s*) rev=HEAD^2 ;;
+	s*) rev=$origin ;;
 	*) rev=HEAD ;;
 	esac
 	dest=$memdir/$name.store

@@ -12,8 +12,9 @@
 # The self-test runs first, in a subshell with the GIT_* repository variables
 # unset and no global or system configuration, on throwaway repositories
 # under a private mktemp -d. It shows the check fails on each spelling above,
-# on a symlink and a submodule at .claude/memory, on a missing ignore rule
-# and outside a repository, and passes on a clean repository. The real check
+# on a symlink and a submodule at .claude/memory, on a missing ignore rule,
+# outside a repository, and when ls-files, check-ignore or grep alone fails
+# (a shim first on PATH), and passes on a clean repository. The real check
 # then reads the index git hands it.
 #
 # Usage: tests/check-no-tracked-memory.sh
@@ -135,6 +136,24 @@ selftest()
 
 	mkdir -p "${tmp:?}/notarepo"
 	expect_reject notarepo "a git failure (not a repository)"
+
+	# One command fails while the rest work, on the clean repository: a
+	# shim first on PATH exits non-zero for that command only.
+	realgit=$(command -v git)
+	for c in ls-files check-ignore grep; do
+		mkdir -p "${tmp:?}/shim-$c"
+		if [ "$c" = grep ]; then
+			printf '#!/bin/sh\nexit 2\n' > "${tmp:?}/shim-$c/grep"
+		else
+			printf '#!/bin/sh\ncase " $* " in *" %s "*) exit 128 ;; esac\nexec "%s" "$@"\n' \
+				"$c" "$realgit" > "${tmp:?}/shim-$c/git"
+		fi
+		chmod 755 "${tmp:?}/shim-$c/"*
+		if (PATH=$tmp/shim-$c:$PATH; check "$tmp/clean") 2>/dev/null; then
+			echo "$me: selftest: a failing $c was counted as clean" >&2
+			exit 1
+		fi
+	done
 }
 
 ( selftest ) || exit 1

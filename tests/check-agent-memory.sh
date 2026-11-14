@@ -338,6 +338,76 @@ runv PATH="$tmp/cpbin:$PATH" REALCP="$realcp" FAILCP="$tmp/B/*" "$sh" "$script" 
 expect_ok "pull after the failure" pull "$tmp/B"
 grep -q cp-in-marker "${tmp:?}/B/a.md" || fail "the edit did not reach B after a failed pull"
 
+# a push that says it succeeded but did not land is not reported as done
+mkdir -p "${tmp:?}/liebin"
+printf '#!/bin/sh\ncase " $* " in *" push "*) exit 0 ;; esac\nexec "$REALGIT" "$@"\n' > "${tmp:?}/liebin/git"
+chmod 755 "${tmp:?}/liebin/git"
+printf 'lie-marker\n' > "${tmp:?}/A/l.md"
+runv PATH="$tmp/liebin:$PATH" REALGIT="$realgit" "$sh" "$script" push "$tmp/A"
+[ "$rc" -ne 0 ] || fail "a push that did not land exited 0"
+expect_ok "push after a push that did not land" push "$tmp/A"
+has store.git quake2/memory/l.md || fail "the change did not land after the retry"
+
+# a conflict whose .store file cannot be written is undone, not half-kept:
+# the next run finds the same conflict again
+printf 'q1\n' > "${tmp:?}/A/q.md"
+expect_ok "push q" push "$tmp/A"
+expect_ok "pull q" pull "$tmp/B"
+printf 'q-A-marker\n' > "${tmp:?}/A/q.md"
+printf 'q-B-marker\n' > "${tmp:?}/B/q.md"
+expect_ok "B pushes q" push "$tmp/B"
+runv PATH="$tmp/cpbin:$PATH" REALCP="$realcp" FAILCP="*.store" "$sh" "$script" push "$tmp/A"
+[ "$rc" -ne 0 ] || fail "a failed .store write exited 0"
+[ ! -e "${tmp:?}/A/q.md.store" ] || fail "a failed .store write left a .store file"
+[ "$(cat "${tmp:?}/A/q.md")" = q-A-marker ] || fail "a failed .store write changed the local file"
+expect_fail "the conflict again after a failed .store write" push "$tmp/A"
+[ "$(cat "${tmp:?}/A/q.md.store")" = q-B-marker ] || fail "the conflict was lost after a failed .store write"
+[ "$(show store.git quake2/memory/q.md)" = q-B-marker ] || fail "the store lost B's edit after a failed .store write"
+rm -f "${tmp:?}/A/q.md.store"
+expect_ok "A keeps q" push "$tmp/A"
+expect_ok "B pulls q" pull "$tmp/B"
+
+# the same when the merge commit fails: undone, and found again next run
+mkdir -p "${tmp:?}/mergefail"
+printf '#!/bin/sh\ncase " $* " in *" commit "*"memory: merge"*) exit 1 ;; esac\nexec "$REALGIT" "$@"\n' > "${tmp:?}/mergefail/git"
+chmod 755 "${tmp:?}/mergefail/git"
+printf 'k1\n' > "${tmp:?}/A/k.md"
+expect_ok "push k" push "$tmp/A"
+expect_ok "pull k" pull "$tmp/B"
+printf 'k-A-marker\n' > "${tmp:?}/A/k.md"
+printf 'k-B-marker\n' > "${tmp:?}/B/k.md"
+expect_ok "B pushes k" push "$tmp/B"
+runv PATH="$tmp/mergefail:$PATH" REALGIT="$realgit" "$sh" "$script" push "$tmp/A"
+[ "$rc" -ne 0 ] || fail "a failed merge commit exited 0"
+[ ! -e "${tmp:?}/A/k.md.store" ] || fail "a failed merge commit left a .store file"
+expect_fail "the conflict again after a failed merge commit" push "$tmp/A"
+[ "$(cat "${tmp:?}/A/k.md.store")" = k-B-marker ] || fail "the conflict was lost after a failed merge commit"
+printf 'k-A-marker\nk-B-marker\n' > "${tmp:?}/A/k.md"
+rm -f "${tmp:?}/A/k.md.store"
+expect_ok "push the k resolution" push "$tmp/A"
+[ "$(show store.git quake2/memory/k.md | tr '\n' ' ')" = "k-A-marker k-B-marker " ] || fail "the k resolution did not land"
+expect_ok "B pulls k" pull "$tmp/B"
+
+# a memory file edited while the run merges is not overwritten
+printf 'w1\n' > "${tmp:?}/A/w.md"
+expect_ok "push w" push "$tmp/A"
+expect_ok "pull w" pull "$tmp/B"
+printf 'w-B-marker\n' > "${tmp:?}/B/w.md"
+expect_ok "B pushes w" push "$tmp/B"
+mkdir -p "${tmp:?}/editbin"
+printf '#!/bin/sh\ncase " $* " in *" fetch "*)\n\tif [ -f "$EDIT" ]; then rm -f "$EDIT"; printf "w-during-marker\\n" > "$EDITFILE"; fi ;;\nesac\nexec "$REALGIT" "$@"\n' > "${tmp:?}/editbin/git"
+chmod 755 "${tmp:?}/editbin/git"
+: > "${tmp:?}/edit"
+runv PATH="$tmp/editbin:$PATH" REALGIT="$realgit" EDIT="$tmp/edit" EDITFILE="$tmp/A/w.md" "$sh" "$script" pull "$tmp/A"
+[ ! -e "${tmp:?}/edit" ] || fail "edit during the run: the shim did not run"
+[ "$rc" -ne 0 ] || fail "a file edited during the run: exit status 0"
+[ "$(cat "${tmp:?}/A/w.md")" = w-during-marker ] || fail "a file edited during the run was overwritten"
+[ "$(cat "${tmp:?}/A/w.md.store")" = w-B-marker ] || fail "the merged version is not beside a file edited during the run"
+rm -f "${tmp:?}/A/w.md.store"
+expect_ok "A keeps w" push "$tmp/A"
+[ "$(show store.git quake2/memory/w.md)" = w-during-marker ] || fail "the edit made during the run did not reach the store"
+expect_ok "B pulls w" pull "$tmp/B"
+
 # --- an inherited git environment is ignored ---------------------------------
 
 git init -q "${tmp:?}/decoy"
@@ -362,12 +432,17 @@ has store.git quake2/memory/e.md || fail "push with an inherited git environment
 
 # --- transports other than https and file are refused ------------------------
 
-mkdir -p "${tmp:?}/home2" "${tmp:?}/helper"
+# The user's configuration rewrites an allowed absolute path to a remote
+# helper (url.<base>.insteadOf, applied when the existing clone fetches);
+# the helper is a local script, so nothing reaches a network.
+mkdir -p "${tmp:?}/home2" "${tmp:?}/helper" "${tmp:?}/P"
+printf 'p-marker\n' > "${tmp:?}/P/p.md"
+expect_ok "push from P" push "$tmp/P"
 printf '[url "testproto::fixture"]\n\tinsteadOf = %s\n' "$tmp/redir.git" > "${tmp:?}/home2/.gitconfig"
 printf '#!/bin/sh\n: > "$PROTO_MARK"\nexit 1\n' > "${tmp:?}/helper/git-remote-testproto"
 chmod 755 "${tmp:?}/helper/git-remote-testproto"
 runv HOME="$tmp/home2" PATH="$tmp/helper:$PATH" PROTO_MARK="$tmp/proto-ran" \
-	AGENT_MEMORY_REMOTE="$tmp/redir.git" XDG_CACHE_HOME="$tmp/cacheP" "$sh" "$script" push "$tmp/A"
+	AGENT_MEMORY_REMOTE="$tmp/redir.git" "$sh" "$script" pull "$tmp/P"
 [ "$rc" -ne 0 ] || fail "a rewritten remote with another transport was used"
 [ ! -e "${tmp:?}/proto-ran" ] || fail "a transport other than https and file ran"
 
@@ -436,10 +511,12 @@ expect_fail "rewritten store" push "$tmp/A"
 # --- nothing printed names the store, a path, or a file's content ------------
 
 for marker in "$slug" 'selftest_store' "$tmp" 'alpha-content-marker' 'beta-content-marker' \
-	'stale-h-marker' 'h2-marker' 'one-marker' 'two-marker' 'secret-link-marker' 'A-line-marker' 'B-line-marker' 'r-A-marker' \
-	'r-B-marker' 'n-marker' 'other-machine-marker' 'b2-marker' 'cp-in-marker' 'env-marker' \
-	'victim-original' 'd-private-marker' 'outside-secret-marker' 'e-marker' 'f-marker' \
-	'g-marker' 'gamma-marker'; do
+	'stale-h-marker' 'h2-marker' 'one-marker' 'two-marker' 'secret-link-marker' 'A-line-marker' \
+	'B-line-marker' 'r-A-marker' 'r-B-marker' 'n-marker' 'other-machine-marker' 'b2-marker' \
+	'cp-in-marker' 'lie-marker' 'q-A-marker' 'q-B-marker' 'k-A-marker' 'k-B-marker' \
+	'w-B-marker' 'w-during-marker' \
+	'env-marker' 'p-marker' 'victim-original' 'd-private-marker' \
+	'outside-secret-marker' 'e-marker' 'f-marker' 'g-marker' 'gamma-marker'; do
 	! grep -qF -- "$marker" "${tmp:?}/all" || fail "output leaks a marker"
 done
 
