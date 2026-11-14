@@ -371,6 +371,14 @@ directory without a game module (`PINS_BIN`), `PINS_BASEDIR` holding
 none for macOS either; every replay manifest says `game-module absent`.
 The same binary refuses a live record (`failed to load game DLL`), so
 the game module was needed by the record and not by the replay.
+With a default build the binary is `release/quake2` beside
+`release/baseq2/game.dylib`, so the manifest says `game-module present`
+although the replay does not load it; the copied binary above is how
+the absent case was shown. The cross-renderer rows are two renderers on
+one host replaying each other's trace, not a trace carried from another
+machine. Plain `gl1` and the native `ref_metal` were not measured in
+these runs (plain `gl1` replaying its own trace is under *Determinism*
+above).
 
 | Replay | Against | Result, each of 3 runs |
 |---|---|---|
