@@ -44,7 +44,8 @@ us=$(printf '\037')
 nl='
 '
 
-# ---- owner_is: keep this block identical in .githooks/pre-push. ------------
+# ---- owner_is: the same text in tests/check-no-local-identity.sh and in
+# .githooks/pre-push (tests/check-pre-push-hook.sh compares them). ----------
 # owner_is <dir> <user>: true when <user> equals, ASCII case-insensitively,
 # the owner segment of the GitHub address of the remote "origin" of the
 # repository at <dir>. The address is the one git itself resolves (`git
