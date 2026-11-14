@@ -29,9 +29,8 @@
  * The sampler is a packed key of the parameters, which the layer turns
  * into a cached MTLSamplerState. Only RGBA and RGB uploads of unsigned
  * bytes are accepted: the paletted path (GL_COLOR_INDEX8_EXT) is never
- * advertised and is refused. Levels above 0 (gl1 uploads its own chain
- * only without GL_ARB_texture_non_power_of_two, which the shim
- * advertises) and glTexSubImage2D (dynamic lightmaps) are S2b.
+ * advertised and is refused. Levels above 0 fill the chain of level 0;
+ * glTexSubImage2D (dynamic lightmaps) writes a region of a level.
  *
  * =======================================================================
  */
@@ -88,6 +87,7 @@ mgl_texture_init(mgl_texture_t *t)
 	t->min_filter = GL_NEAREST_MIPMAP_LINEAR;
 	t->mag_filter = GL_LINEAR;
 	t->wrap_s = t->wrap_t = GL_REPEAT;
+	t->max_anisotropy = 1;
 }
 
 mgl_texture_t *
@@ -115,7 +115,8 @@ mgl_textures_reset(void)
 /*
  * Bits 0-2 min filter (GL_NEAREST, GL_LINEAR, then the four mipmap
  * filters in enum order), bit 3 mag filter linear, bits 4-5 and 6-7
- * wrap s and t (0 repeat, 1 clamp, 2 clamp to edge).
+ * wrap s and t (0 repeat, 1 clamp, 2 clamp to edge), bits 8-11 the
+ * maximum anisotropy minus 1.
  */
 static uint32_t
 mgl_wrap_bits(GLenum wrap)
@@ -130,7 +131,8 @@ mgl_sampler_key(const mgl_texture_t *t)
 		2 + (uint32_t)(t->min_filter - GL_NEAREST_MIPMAP_NEAREST);
 
 	return min | (t->mag_filter == GL_LINEAR ? 8u : 0u) |
-		(mgl_wrap_bits(t->wrap_s) << 4) | (mgl_wrap_bits(t->wrap_t) << 6);
+		(mgl_wrap_bits(t->wrap_s) << 4) | (mgl_wrap_bits(t->wrap_t) << 6) |
+		((uint32_t)(t->max_anisotropy - 1) << 8);
 }
 
 /* The bound texture of the active unit, for the calls that act on it. */
@@ -243,6 +245,43 @@ mgl_mip_count(int w, int h)
 	return n;
 }
 
+/* The width or height of a level of the chain; level is below the chain's length. */
+static int
+mgl_level_size(int size, int level)
+{
+	size >>= level;
+	return size > 0 ? size : 1;
+}
+
+/*
+ * Converts w x h pixels laid out as the unpack state says and copies
+ * them to (x, y) of a level. A change of level 0 regenerates the chain
+ * when GL_GENERATE_MIPMAP is set.
+ */
+static void
+mgl_upload(const mgl_texture_t *t, int level, int x, int y, int w, int h,
+		GLenum format, const GLvoid *pixels)
+{
+	unsigned char *rgba = malloc((size_t)w * (size_t)h * 4);
+
+	if (!rgba)
+	{
+		mgl_error(GL_OUT_OF_MEMORY);
+		return;
+	}
+
+	mgl_unpack_rgba(pixels, format, w, h, mgl_state.unpack_alignment,
+			mgl_state.unpack_row_length, t->opaque, rgba);
+
+	if (!mgl_layer_tex_upload(t->mtl, level, x, y, w, h, rgba,
+			level == 0 && t->generate_mipmap && t->levels > 1))
+	{
+		mgl_error(GL_OUT_OF_MEMORY);
+	}
+
+	free(rgba);
+}
+
 void
 glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width,
 		GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid *pixels)
@@ -250,7 +289,6 @@ glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width,
 	static int once_level;
 	mgl_texture_t *t = mgl_bound(target);
 	int alpha = mgl_internal_alpha(internalformat);
-	unsigned char *rgba;
 
 	if (!t)
 	{
@@ -270,9 +308,25 @@ glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width,
 		return;
 	}
 
+	/*
+	 * A level above 0 fills the chain level 0 made (gl1 uploads level 0
+	 * first) and keeps level 0's alpha; one of another size would make
+	 * the texture incomplete in GL, which the shim does not model.
+	 */
 	if (level > 0)
 	{
-		mgl_unimplemented("glTexImage2D above level 0", &once_level);
+		if (!t->mtl || level >= t->levels || width != mgl_level_size(t->width, level) ||
+			height != mgl_level_size(t->height, level))
+		{
+			mgl_unimplemented("glTexImage2D of a level that does not fit level 0", &once_level);
+			return;
+		}
+
+		if (pixels)
+		{
+			mgl_upload(t, level, 0, 0, width, height, format, pixels);
+		}
+
 		return;
 	}
 
@@ -304,39 +358,56 @@ glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width,
 
 	t->opaque = alpha ? GL_FALSE : GL_TRUE;
 
-	if (!pixels)
+	if (pixels)
 	{
-		return;
+		mgl_upload(t, 0, 0, 0, width, height, format, pixels);
 	}
-
-	rgba = malloc((size_t)width * (size_t)height * 4);
-
-	if (!rgba)
-	{
-		mgl_error(GL_OUT_OF_MEMORY);
-		return;
-	}
-
-	mgl_unpack_rgba(pixels, format, width, height, mgl_state.unpack_alignment,
-			mgl_state.unpack_row_length, t->opaque, rgba);
-
-	if (!mgl_layer_tex_upload(t->mtl, 0, 0, 0, width, height, rgba,
-			t->generate_mipmap && t->levels > 1))
-	{
-		mgl_error(GL_OUT_OF_MEMORY);
-	}
-
-	free(rgba);
 }
 
-/* The dynamic lightmaps' path: S2b. */
+/* The dynamic lightmaps' path: a region of a level that exists. */
 void
 glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
 		GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels)
 {
-	(void)target; (void)level; (void)xoffset; (void)yoffset; (void)width;
-	(void)height; (void)format; (void)type; (void)pixels;
-	MGL_UNIMPLEMENTED();
+	mgl_texture_t *t = mgl_bound(target);
+
+	if (!t)
+	{
+		return;
+	}
+
+	if ((format != GL_RGBA && format != GL_RGB) || type != GL_UNSIGNED_BYTE)
+	{
+		mgl_error(GL_INVALID_ENUM);
+		return;
+	}
+
+	if (level < 0 || xoffset < 0 || yoffset < 0 || width < 0 || height < 0)
+	{
+		mgl_error(GL_INVALID_VALUE);
+		return;
+	}
+
+	if (!t->mtl || level >= t->levels)
+	{
+		mgl_error(GL_INVALID_OPERATION);
+		return;
+	}
+
+	/* written so that nothing wraps: the offsets are at most the level's size */
+	if (xoffset > mgl_level_size(t->width, level) || width > mgl_level_size(t->width, level) - xoffset ||
+		yoffset > mgl_level_size(t->height, level) || height > mgl_level_size(t->height, level) - yoffset)
+	{
+		mgl_error(GL_INVALID_VALUE);
+		return;
+	}
+
+	if (width == 0 || height == 0 || !pixels)
+	{
+		return;
+	}
+
+	mgl_upload(t, level, xoffset, yoffset, width, height, format, pixels);
 }
 
 void
@@ -380,8 +451,16 @@ glTexParameteri(GLenum target, GLenum pname, GLint param)
 		case GL_GENERATE_MIPMAP:
 			t->generate_mipmap = param ? GL_TRUE : GL_FALSE;
 			break;
+		case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+			/* EXT_texture_filter_anisotropic: below 1 is an error, above the maximum is clamped */
+			if (param < 1)
+			{
+				mgl_error(GL_INVALID_VALUE);
+				return;
+			}
+			t->max_anisotropy = param > MGL_MAX_ANISOTROPY ? MGL_MAX_ANISOTROPY : param;
+			break;
 		default:
-			/* GL_TEXTURE_MAX_ANISOTROPY_EXT among them: the extension is not advertised */
 			mgl_error(GL_INVALID_ENUM);
 	}
 }

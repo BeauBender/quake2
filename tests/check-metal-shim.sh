@@ -40,7 +40,7 @@ else
 fi
 
 # shellcheck disable=SC2086 # flags and srcs are word lists
-if ! $cc $flags -o "$tmp/mgl_host_test" $srcs > "$tmp/cc.out" 2>&1; then
+if ! $cc $flags -o "$tmp/mgl_host_test" $srcs -lm > "$tmp/cc.out" 2>&1; then
 	cat "$tmp/cc.out"
 	bad "tests/metal/mgl_host_test.c does not compile"
 elif ! ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 "$tmp/mgl_host_test" > "$tmp/out" 2>&1; then

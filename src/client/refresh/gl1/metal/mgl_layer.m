@@ -86,20 +86,30 @@ static id<MTLTexture> mgl_offscreen;       /* the target when there is no drawab
 static id<MTLBuffer> mgl_readbuf;          /* shared, for glReadPixels */
 
 /* Counters, printed when the context is destroyed. */
-static unsigned long count_frames, count_no_drawable, count_skipped;
+static unsigned long count_frames, count_no_drawable, count_skipped, count_ring_full;
 
 #define MGL_FRAMES_IN_FLIGHT 3
 
 /*
- * The draw path (TASK48). The caches are keyed by the packed keys of
- * mgl_draw.c and mgl_tex.c, so each holds at most one object per
- * reachable key (13 and 8 bits: 8192 pipelines, 256 samplers; gl1 uses a
- * handful of each).
+ * The draw path (TASK48, TASK82). The caches are keyed by the packed
+ * keys of mgl_draw.c and mgl_tex.c, so each holds at most one object per
+ * key gl1 reaches (13 and 12 bits for pipelines and samplers; the depth
+ * and stencil key has 34, of which gl1 sets a handful).
  */
 static id<MTLFunction> mgl_vfunc, mgl_ffunc;
 static NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *mgl_pipelines;
 static NSMutableDictionary<NSNumber *, id<MTLSamplerState>> *mgl_samplers;
+static NSMutableDictionary<NSNumber *, id<MTLDepthStencilState>> *mgl_depth_states;
 static id<MTLTexture> mgl_unbound;         /* bound to texture(0) when a draw samples nothing */
+
+/*
+ * The vertex ring: one buffer per frame in flight. The frame semaphore
+ * lets a frame begin only when at most two others are on the GPU, so
+ * the buffer of the frame three back is no longer read.
+ */
+static id<MTLBuffer> ring_buf[MGL_FRAMES_IN_FLIGHT];
+static mgl_ring_t ring;
+static unsigned ring_slot;
 
 /* Texture uploads made outside a frame, committed before the next frame's command buffer. */
 static id<MTLCommandBuffer> upload_cmd;
@@ -154,6 +164,8 @@ mgl_library_path(char *path, size_t len)
 static void
 mgl_release_all(void)
 {
+	int i;
+
 	frame_enc = nil;
 	frame_cmd = nil;
 	frame_drawable = nil;
@@ -165,7 +177,13 @@ mgl_release_all(void)
 	upload_cmd = nil;
 	mgl_pipelines = nil;
 	mgl_samplers = nil;
+	mgl_depth_states = nil;
 	mgl_unbound = nil;
+
+	for (i = 0; i < MGL_FRAMES_IN_FLIGHT; i++)
+	{
+		ring_buf[i] = nil;
+	}
 	mgl_vfunc = nil;
 	mgl_ffunc = nil;
 	mgl_library = nil;
@@ -267,11 +285,12 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 
 		mgl_pipelines = [NSMutableDictionary dictionary];
 		mgl_samplers = [NSMutableDictionary dictionary];
+		mgl_depth_states = [NSMutableDictionary dictionary];
 
 		snprintf(mgl_device_name, sizeof(mgl_device_name), "%s", mgl_device.name.UTF8String);
 	}
 
-	count_frames = count_no_drawable = count_skipped = 0;
+	count_frames = count_no_drawable = count_skipped = count_ring_full = 0;
 	mgl_ready = 1;
 	return 1;
 }
@@ -504,6 +523,11 @@ mgl_layer_frame_begin(int *tw, int *th)
 			return 0;
 		}
 	}
+
+	/* this frame holds a slot of the semaphore: its ring buffer is free */
+	ring_slot = (ring_slot + 1) % MGL_FRAMES_IN_FLIGHT;
+	ring.size = MGL_RING_BYTES;
+	ring.used = 0;
 
 	*tw = frame_w;
 	*th = frame_h;
@@ -820,8 +844,8 @@ mgl_layer_destroy(void)
 			}
 		}
 
-		fprintf(stderr, "mgl: %lu frames, %lu without a drawable, %lu skipped\n",
-				count_frames, count_no_drawable, count_skipped);
+		fprintf(stderr, "mgl: %lu frames, %lu without a drawable, %lu skipped, %lu draws past the vertex ring\n",
+				count_frames, count_no_drawable, count_skipped, count_ring_full);
 
 		mgl_release_all();
 	}
@@ -1038,6 +1062,7 @@ mgl_sampler(uint32_t key)
 	d.magFilter = (key & 8) ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
 	d.sAddressMode = wrap[(key >> 4) & 3];
 	d.tAddressMode = wrap[(key >> 6) & 3];
+	d.maxAnisotropy = ((key >> 8) & 15) + 1;
 	s = [mgl_device newSamplerStateWithDescriptor:d];
 
 	if (s)
@@ -1046,6 +1071,87 @@ mgl_sampler(uint32_t key)
 	}
 
 	return s;
+}
+
+/* The key is mgl_depth_stencil_key's (mgl_draw.c); both stencil faces get the same state, as in GL 1.4. */
+static id<MTLDepthStencilState>
+mgl_depth_state(uint64_t key)
+{
+	/* indexed by the GL function minus GL_NEVER, and by mgl_stencil_op_index */
+	static const MTLCompareFunction funcs[] = {
+		MTLCompareFunctionNever, MTLCompareFunctionLess, MTLCompareFunctionEqual,
+		MTLCompareFunctionLessEqual, MTLCompareFunctionGreater, MTLCompareFunctionNotEqual,
+		MTLCompareFunctionGreaterEqual, MTLCompareFunctionAlways
+	};
+	static const MTLStencilOperation ops[] = {
+		MTLStencilOperationKeep, MTLStencilOperationZero, MTLStencilOperationReplace,
+		MTLStencilOperationIncrementClamp, MTLStencilOperationDecrementClamp, MTLStencilOperationInvert
+	};
+	id<MTLDepthStencilState> s = mgl_depth_states[@(key)];
+	MTLDepthStencilDescriptor *d;
+
+	if (s)
+	{
+		return s;
+	}
+
+	if (((key >> 9) & 7) >= 6 || ((key >> 12) & 7) >= 6 || ((key >> 15) & 7) >= 6)
+	{
+		return nil;
+	}
+
+	d = [MTLDepthStencilDescriptor new];
+	d.depthCompareFunction = (key & 1) ? funcs[(key >> 1) & 7] : MTLCompareFunctionAlways;
+	d.depthWriteEnabled = (key & (1u << 4)) ? YES : NO;
+
+	if (key & (1u << 5))
+	{
+		MTLStencilDescriptor *st = [MTLStencilDescriptor new];
+
+		st.stencilCompareFunction = funcs[(key >> 6) & 7];
+		st.stencilFailureOperation = ops[(key >> 9) & 7];
+		st.depthFailureOperation = ops[(key >> 12) & 7];
+		st.depthStencilPassOperation = ops[(key >> 15) & 7];
+		st.readMask = (uint32_t)((key >> 18) & 0xff);
+		st.writeMask = (uint32_t)((key >> 26) & 0xff);
+		d.frontFaceStencil = st;
+		d.backFaceStencil = st;
+	}
+
+	s = [mgl_device newDepthStencilStateWithDescriptor:d];
+
+	if (s)
+	{
+		mgl_depth_states[@(key)] = s;
+	}
+
+	return s;
+}
+
+/*
+ * Copies n bytes into the frame's ring buffer: the buffer and the
+ * offset, or nil when the ring is full (the caller then makes a buffer
+ * for the draw alone).
+ */
+static id<MTLBuffer>
+mgl_ring_copy(const void *bytes, size_t n, NSUInteger *offset)
+{
+	long at;
+
+	if (!ring_buf[ring_slot])
+	{
+		ring_buf[ring_slot] = [mgl_device newBufferWithLength:MGL_RING_BYTES
+				options:MTLResourceStorageModeShared];
+	}
+
+	if (!ring_buf[ring_slot] || (at = mgl_ring_alloc(&ring, n)) < 0)
+	{
+		return nil;
+	}
+
+	memcpy((unsigned char *)ring_buf[ring_slot].contents + at, bytes, n);
+	*offset = (NSUInteger)at;
+	return ring_buf[ring_slot];
 }
 
 /* ---- draws ------------------------------------------------------------------------ */
@@ -1064,9 +1170,14 @@ mgl_layer_draw(const mgl_draw_t *d)
 
 	@autoreleasepool
 	{
+		static int once_full;
+		static const MTLCullMode culls[] = {MTLCullModeNone, MTLCullModeFront, MTLCullModeBack};
 		id<MTLRenderPipelineState> pso;
 		id<MTLSamplerState> smp;
+		id<MTLDepthStencilState> ds;
 		id<MTLBuffer> vbuf, ibuf;
+		NSUInteger voff = 0, ioff = 0;
+		size_t vbytes = d->nvertices * sizeof(mgl_vertex_t), ibytes = d->nindices * sizeof(uint16_t);
 		mgl_raster_t r;
 
 		/* the first pass of the frame, or a Load pass after a flush or an upload */
@@ -1087,25 +1198,43 @@ mgl_layer_draw(const mgl_draw_t *d)
 			mgl_unbound = mgl_new_texture(MTLPixelFormatRGBA8Unorm, 1, 1, MTLTextureUsageShaderRead);
 		}
 
-		/*
-		 * A buffer per draw, which the command buffer keeps alive; a
-		 * per-frame ring is S2b. No depth-stencil state is set: Metal's
-		 * default neither tests nor writes, as GL without GL_DEPTH_TEST.
-		 */
 		pso = mgl_pipeline(d->pipeline_key);
 		smp = mgl_sampler(d->texture0 ? d->sampler0 : 0);
-		vbuf = [mgl_device newBufferWithBytes:d->vertices length:d->nvertices * sizeof(mgl_vertex_t)
-				options:MTLResourceStorageModeShared];
-		ibuf = [mgl_device newBufferWithBytes:d->indices length:d->nindices * sizeof(uint16_t)
-				options:MTLResourceStorageModeShared];
+		ds = mgl_depth_state(d->depth_stencil_key);
 
-		if (!pso || !smp || !vbuf || !ibuf || !mgl_unbound)
+		/* the frame's ring; a draw it cannot hold gets buffers of its own, which the command buffer keeps alive */
+		vbuf = mgl_ring_copy(d->vertices, vbytes, &voff);
+		ibuf = vbuf ? mgl_ring_copy(d->indices, ibytes, &ioff) : nil;
+
+		if (!vbuf || !ibuf)
+		{
+			count_ring_full++;
+
+			if (!once_full)
+			{
+				once_full = 1;
+				fprintf(stderr, "mgl: the vertex ring (%u bytes) is full, drawing from a buffer per draw\n",
+						(unsigned)MGL_RING_BYTES);
+			}
+
+			voff = ioff = 0;
+			vbuf = [mgl_device newBufferWithBytes:d->vertices length:vbytes options:MTLResourceStorageModeShared];
+			ibuf = [mgl_device newBufferWithBytes:d->indices length:ibytes options:MTLResourceStorageModeShared];
+		}
+
+		if (!pso || !smp || !ds || !vbuf || !ibuf || !mgl_unbound)
 		{
 			return 0;
 		}
 
 		[frame_enc setRenderPipelineState:pso];
-		[frame_enc setVertexBuffer:vbuf offset:0 atIndex:0];
+		[frame_enc setDepthStencilState:ds];
+		[frame_enc setStencilReferenceValue:d->stencil_ref];
+		[frame_enc setFrontFacingWinding:MTLWindingCounterClockwise];
+		[frame_enc setCullMode:culls[d->cull >= 0 && d->cull <= MGL_CULL_BACK ? d->cull : 0]];
+		[frame_enc setTriangleFillMode:(d->fill_lines ? MTLTriangleFillModeLines : MTLTriangleFillModeFill)];
+		[frame_enc setDepthBias:d->depth_bias slopeScale:d->depth_slope clamp:0.0f];
+		[frame_enc setVertexBuffer:vbuf offset:voff atIndex:0];
 		[frame_enc setVertexBytes:&d->u length:sizeof(d->u) atIndex:1];
 		[frame_enc setFragmentBytes:&d->u length:sizeof(d->u) atIndex:1];
 		[frame_enc setFragmentTexture:(d->texture0 ? (__bridge id<MTLTexture>)d->texture0 : mgl_unbound)
@@ -1115,7 +1244,7 @@ mgl_layer_draw(const mgl_draw_t *d)
 				indexCount:d->nindices
 				indexType:MTLIndexTypeUInt16
 				indexBuffer:ibuf
-				indexBufferOffset:0];
+				indexBufferOffset:ioff];
 	}
 
 	return 1;

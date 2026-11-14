@@ -207,7 +207,11 @@ typedef struct
 	GLboolean opaque;             /* an RGB internal format: alpha reads 1, GL_REPLACE keeps the fragment's */
 	GLenum min_filter, mag_filter, wrap_s, wrap_t;
 	GLboolean generate_mipmap;
+	int max_anisotropy;           /* 1 .. MGL_MAX_ANISOTROPY */
 } mgl_texture_t;
+
+/* What glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT) answers: Metal's maxAnisotropy limit. */
+#define MGL_MAX_ANISOTROPY 16
 
 /* The texture object of a name, or NULL for a name past the table. */
 mgl_texture_t *mgl_texture(GLuint name);
@@ -262,7 +266,16 @@ typedef struct
 	uint32_t pipeline_key;        /* mgl_pipeline_key */
 	void *texture0;               /* NULL when texenv0 is MGL_TEXENV_NONE */
 	uint32_t sampler0;
+	uint64_t depth_stencil_key;   /* mgl_depth_stencil_key */
+	uint32_t stencil_ref;         /* clamped to the 8 stencil bits */
+	int cull;                     /* MGL_CULL_* */
+	int fill_lines;               /* glPolygonMode GL_LINE */
+	float depth_bias, depth_slope;   /* glPolygonOffset units and factor; 0 without GL_POLYGON_OFFSET_FILL */
 } mgl_draw_t;
+
+#define MGL_CULL_NONE 0
+#define MGL_CULL_FRONT 1
+#define MGL_CULL_BACK 2
 
 /* Fills out[0..count) from the enabled client arrays, vertices first..first+count-1. */
 void mgl_assemble(const mgl_state_t *s, GLint first, GLsizei count, mgl_vertex_t *out);
@@ -281,6 +294,36 @@ long mgl_triangle_indices(GLenum mode, GLsizei count, const uint16_t *elements,
 uint32_t mgl_pipeline_key(const mgl_state_t *s);
 /* GL blend factor -> index 0..10 in the order of mgl_layer.m's table; -1 if none. */
 int mgl_blend_index(GLenum factor);
+
+/*
+ * The packed depth and stencil state of a draw: bit 0 depth test, bits
+ * 1-3 its function minus GL_NEVER, bit 4 depth write; bit 5 stencil
+ * test, bits 6-8 its function, bits 9-11, 12-14 and 15-17 the fail,
+ * depth-fail and pass operations (mgl_stencil_op_index), bits 18-25 the
+ * read mask, bits 26-33 the write mask. 0 is "neither tests nor writes".
+ */
+uint64_t mgl_depth_stencil_key(const mgl_state_t *s);
+/* GL stencil operation -> index 0..5 in the order of mgl_layer.m's table; -1 if none. */
+int mgl_stencil_op_index(GLenum op);
+
+/*
+ * The per-frame vertex ring (design section 2): each frame in flight has
+ * one shared buffer of MGL_RING_BYTES, and a draw's vertices and indices
+ * are bump-allocated in it at MGL_RING_ALIGN. mgl_ring_alloc answers the
+ * offset of n bytes, or -1 when the rest of the ring cannot hold them
+ * (the layer then gives that draw a buffer of its own).
+ */
+#ifndef MGL_RING_BYTES
+#define MGL_RING_BYTES (8u << 20)   /* a -D can shrink it to exercise the overflow path */
+#endif
+#define MGL_RING_ALIGN 256
+
+typedef struct
+{
+	size_t size, used;
+} mgl_ring_t;
+
+long mgl_ring_alloc(mgl_ring_t *r, size_t n);
 
 /* mgl_layer.m: the only file that talks to Metal and CAMetalLayer. */
 typedef struct

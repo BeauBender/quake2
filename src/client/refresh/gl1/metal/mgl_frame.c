@@ -50,7 +50,8 @@
 
 #define MGL_VENDOR "Yamagi Quake II Metal shim"
 #define MGL_VERSION "1.4 mgl"
-#define MGL_EXTENSIONS "GL_ARB_multitexture GL_ARB_point_parameters GL_ARB_texture_non_power_of_two"
+#define MGL_EXTENSIONS "GL_ARB_multitexture GL_ARB_point_parameters GL_ARB_texture_non_power_of_two " \
+	"GL_EXT_texture_filter_anisotropic"
 
 static mgl_config_t mgl_config = {24, 8, 0, 0};
 static char mgl_context_token;
