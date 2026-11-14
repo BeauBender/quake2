@@ -2293,6 +2293,12 @@ test_warp_arith(void)
 	CHECK(rm_warp_scroll(1e30f, 1) == (float)(-64 * ((1e30f * 0.5) - 2147483647.0)));
 	CHECK(rm_warp_scroll(-1e30f, 1) == (float)(-64 * ((-1e30f * 0.5) + 2147483648.0)));
 	CHECK(rm_warp_scroll(3e9f, 1) == (float)(-64 * ((3e9f * 0.5) - 1500000000.0)));
+	/* just past an int the truncation is the largest and the smallest one */
+	CHECK(rm_warp_scroll(5e9f, 1) == (float)(-64 * ((5e9f * 0.5) - 2147483647.0)));
+	CHECK(rm_warp_scroll(-5e9f, 1) == (float)(-64 * ((-5e9f * 0.5) + 2147483648.0)));
+	/* at the first value past the largest int the truncation saturates: one above it, and 0 above the smallest */
+	CHECK(rm_warp_scroll(4294967296.0f, 1) == -64);
+	CHECK(rm_warp_scroll(-4294967296.0f, 1) == 0);
 
 	/* a flowing polygon's scroll: -64 * the fraction of time / 40, -64 where that is 0 */
 	CHECK(rm_flow_scroll(10) == -16);
@@ -2301,6 +2307,10 @@ test_warp_arith(void)
 	CHECK(rm_flow_scroll(40) == -64);
 	CHECK(rm_flow_scroll(80) == -64);
 	CHECK(rm_flow_scroll(41) == -1.6f);
+	CHECK(rm_flow_scroll(85899345920.0f) == -64);     /* 2^31 * 40: one above the largest int */
+	CHECK(rm_flow_scroll(-85899345920.0f) == -64);    /* the smallest int exactly: the fraction is 0, which gl1 makes -64 */
+	CHECK(rm_flow_scroll(1e12f) == (float)(-64 * ((1e12f / 40.0) - 2147483647.0)));
+	CHECK(rm_flow_scroll(-1e12f) == (float)(-64 * ((-1e12f / 40.0) + 2147483648.0)));
 	CHECK(rm_flow_scroll(1e30f) == (float)(-64 * ((1e30f / 40.0) - 2147483647.0)));
 	CHECK(rm_flow_scroll(-1e30f) == (float)(-64 * ((-1e30f / 40.0) + 2147483648.0)));
 	CHECK(rm_flow_scroll(NAN) != rm_flow_scroll(NAN));   /* the fraction of a NaN is a NaN: no conversion, no crash */
@@ -2995,6 +3005,26 @@ test_sky(void)
 		CHECK(memcmp(b.mins, ref_skymins, sizeof(ref_skymins)) == 0 && memcmp(b.maxs, ref_skymaxs, sizeof(ref_skymaxs)) == 0);
 	}
 
+	/*
+	 * a polygon whose clip leaves a side of 64 vertices without the guard on the way there (62 vertices, two
+	 * of them behind the first plane, the last edge crossing it): the next stage refuses it
+	 */
+	{
+		float arc[62 * 3];
+
+		for (i = 0; i < 62; i++)
+		{
+			arc[i * 3] = 500.0f + (float)i;
+			arc[i * 3 + 1] = 10.0f;
+			arc[i * 3 + 2] = 5.0f + (float)i;
+		}
+
+		arc[0] = arc[30 * 3] = -500.0f;
+		arc[1] = arc[30 * 3 + 1] = -500.0f;
+		rm_sky_clear(&b);
+		CHECK(rm_sky_clip(&b, 62, arc) == 0);
+	}
+
 	/* structured polygons against gl1's clip: vertices on the planes, and 0.15 off them, a depth just over 0.001 */
 	{
 		static const float polys[][12] = {
@@ -3042,6 +3072,21 @@ test_sky(void)
 	b.mins[1][3] = 0.1f;
 	b.maxs[1][3] = 0.2f;
 	CHECK(rm_sky_prepare(&b, 0) == 1 && b.mins[0][3] == -0.5f && !rm_sky_face_visible(&b, 0));
+	/* a face with one empty side is not seen: equal bounds on s with a t range, and a s range with equal t */
+	rm_sky_clear(&b);
+	b.mins[0][2] = 0.25f;
+	b.maxs[0][2] = 0.25f;
+	b.mins[1][2] = 0;
+	b.maxs[1][2] = 1;
+	CHECK(rm_sky_prepare(&b, 1) == 0);
+	rm_sky_clear(&b);
+	b.mins[0][2] = 0;
+	b.maxs[0][2] = 1;
+	b.mins[1][2] = 0.5f;
+	b.maxs[1][2] = 0.5f;
+	CHECK(rm_sky_prepare(&b, 1) == 0);
+	b.maxs[1][2] = 0.75f;
+	CHECK(rm_sky_prepare(&b, 1) == 1);
 	CHECK(rm_sky_prepare(&b, 0.5f) == 1);
 
 	for (f = 0; f < 6; f++)
@@ -3104,6 +3149,10 @@ test_sky(void)
 
 	/* the sky name: letters, digits, _ - . and not a path */
 	CHECK(rm_sky_name_ok("unit1_") && rm_sky_name_ok("sky-2.x") && rm_sky_name_ok("a"));
+	/* the ends of each class of characters */
+	CHECK(rm_sky_name_ok("az") && rm_sky_name_ok("AZ") && rm_sky_name_ok("09") && rm_sky_name_ok("zZ9aA0"));
+	CHECK(!rm_sky_name_ok("`") && !rm_sky_name_ok("{") && !rm_sky_name_ok("@") && !rm_sky_name_ok("[") &&
+		!rm_sky_name_ok("/") && !rm_sky_name_ok(":"));
 	CHECK(!rm_sky_name_ok(NULL) && !rm_sky_name_ok("") && !rm_sky_name_ok(".hidden") && !rm_sky_name_ok("a..b"));
 	CHECK(!rm_sky_name_ok("../x") && !rm_sky_name_ok("a/b") && !rm_sky_name_ok("a\\b") && !rm_sky_name_ok("c:x"));
 	CHECK(!rm_sky_name_ok("a b") && !rm_sky_name_ok("a\nb") && !rm_sky_name_ok("a%00") && !rm_sky_name_ok("\x7f"));
@@ -3163,6 +3212,20 @@ test_sky(void)
 		world[12] = 10;
 		rm_sky_matrix(out, world, org, 0, 0, axz);
 		CHECK(out[12] == 11 && out[13] == 2 && out[14] == 3);
+		/* and it comes first as a product: a world turned 90 degrees about z carries the origin (1, 0, 0) to (0, 1, 0) */
+		{
+			float turned[16], ax_x[3] = { 1, 0, 0 }, o1[3] = { 1, 0, 0 };
+
+			mtl_mat_identity(turned);
+			CHECK(mtl_mat_rotate(turned, 90, 0, 0, 1) == 1);
+			rm_sky_matrix(out, turned, o1, 0, 0, axz);
+			CHECK(fabsf(out[12]) < 1e-6f && fabsf(out[13] - 1) < 1e-6f && out[14] == 0);
+			/* the axis is (x, y, z) in that order: 90 degrees about x turns y into z */
+			mtl_mat_identity(turned);
+			rm_sky_matrix(out, turned, org, 1, 90, ax_x);
+			CHECK(fabsf(out[5]) < 1e-6f && fabsf(out[6] - 1) < 1e-6f && fabsf(out[9] + 1) < 1e-6f && fabsf(out[10]) < 1e-6f);
+			CHECK(out[12] == 1 && out[13] == 2 && out[14] == 3);
+		}
 	}
 
 	/* differential: random polygons of 3 to 8 vertices around the origin against gl1's R_ClipSkyPolygon */
@@ -3248,6 +3311,9 @@ test_trans(void)
 	tex[3] = 0;
 	rm_host_shim_modulate(rgba, tex, c);
 	CHECK(c[3] == 0);
+	t.a = 0;
+	m = mtl_world_color(p, t);
+	CHECK(m.a == c[3] && m.a == 0);
 
 	/* the opaque water: GL_MODULATE with the inverse intensity, or the texel itself with overbright bits */
 	CHECK(rm_warp_color(0, 0.5f, rgba) == 1 && rgba[0] == 0.5f && rgba[1] == 0.5f && rgba[2] == 0.5f && rgba[3] == 1);
