@@ -216,8 +216,9 @@ test_stats(void)
 
 /*
  * The size check of every upload (plan section 2, "Inputs and bounds"):
- * w * h * 4 bytes within the staging ring, decided before the product
- * is formed, so a product that would overflow is refused too.
+ * each side at most RMB_MAX_TEXTURE_SIDE and w * h * 4 bytes within the
+ * staging ring, decided before the product is formed, so a product that
+ * would overflow is refused too.
  */
 static void
 test_upload_bytes(void)
@@ -237,6 +238,16 @@ test_upload_bytes(void)
 	CHECK(!rm_upload_bytes(1L << 32, 1L << 32, (size_t)-1, &b) && b == 0);
 	CHECK(!rm_upload_bytes(65536, 65536, (size_t)-1 >> 31, &b));
 	CHECK(!rm_upload_bytes(0x7fffffffL, 0x7fffffffL, RMB_STAGING_BYTES, &b));
+	/* each side on its own: Metal refuses a texture side above its maximum by abort */
+	CHECK(!rm_upload_bytes(20000, 1, RMB_STAGING_BYTES, &b) && b == 0);
+	CHECK(!rm_upload_bytes(1, 20000, RMB_STAGING_BYTES, &b) && b == 0);
+	CHECK(rm_upload_bytes(RMB_MAX_TEXTURE_SIDE, 1, RMB_STAGING_BYTES, &b) && b == RMB_MAX_TEXTURE_SIDE * 4);
+	CHECK(rm_upload_bytes(1, RMB_MAX_TEXTURE_SIDE, RMB_STAGING_BYTES, &b) && b == RMB_MAX_TEXTURE_SIDE * 4);
+	CHECK(rm_upload_bytes(RMB_MAX_TEXTURE_SIDE, 1024, RMB_STAGING_BYTES, &b) && b == RMB_STAGING_BYTES);
+	CHECK(!rm_upload_bytes(RMB_MAX_TEXTURE_SIDE + 1, 1, RMB_STAGING_BYTES, &b) && b == 0);
+	CHECK(!rm_upload_bytes(1, RMB_MAX_TEXTURE_SIDE + 1, RMB_STAGING_BYTES, &b) && b == 0);
+	CHECK(!rm_upload_bytes(RMB_MAX_TEXTURE_SIDE + 1, 1, (size_t)-1, &b) && b == 0);
+	CHECK(RMB_MAX_TEXTURE_SIDE <= 16384);
 }
 
 /*
@@ -287,6 +298,12 @@ test_raw8(void)
 	big[0] = 0x5a;
 	CHECK(!rm_raw8_to_rgba(frame, 321, 240, palette, big, sizeof(big)) && big[0] == 0x5a);
 	CHECK(!rm_raw8_to_rgba(frame, 320, 241, palette, big, sizeof(big)) && big[0] == 0x5a);
+
+	/* a cinematic frame with a side over the texture maximum is refused though the buffer holds it */
+	CHECK(!rm_raw8_to_rgba(frame, 20000, 1, palette, big, sizeof(big)) && big[0] == 0x5a);
+	CHECK(!rm_raw8_to_rgba(frame, 1, 20000, palette, big, sizeof(big)) && big[0] == 0x5a);
+	CHECK(!rm_raw8_to_rgba(frame, RMB_MAX_TEXTURE_SIDE + 1, 1, palette, big, sizeof(big)) && big[0] == 0x5a);
+	CHECK(rm_raw8_to_rgba(frame, RMB_MAX_TEXTURE_SIDE, 1, palette, big, sizeof(big)) && big[0] == 11);
 }
 
 /* gl1's 2D quads are fans; the shim draws them as 0, i, i + 1 */

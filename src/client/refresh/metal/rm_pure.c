@@ -239,6 +239,12 @@ rm_upload_bytes(long w, long h, size_t cap, size_t *bytes)
 		return 0;
 	}
 
+	/* each side on its own: a texture descriptor above the device's maximum aborts in Metal */
+	if ((w > RMB_MAX_TEXTURE_SIDE) || (h > RMB_MAX_TEXTURE_SIDE))
+	{
+		return 0;
+	}
+
 	/* w * h * 4 <= cap, checked by division before the product is formed */
 	if ((unsigned long)w > cap / 4 / (unsigned long)h)
 	{

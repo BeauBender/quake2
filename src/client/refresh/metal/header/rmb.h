@@ -146,9 +146,10 @@ int rm_targets_rebuild(int have_color, int have_depth, int cw, int ch, int w, in
 
 /*
  * The bytes of a w by h rgba8 upload. 1 with *bytes set when w and h are
- * positive and w * h * 4 fits in cap (the staging ring, RMB_STAGING_BYTES),
- * 0 otherwise: no upload of that size is staged. The product is checked
- * for overflow before it is formed.
+ * positive, neither is above RMB_MAX_TEXTURE_SIDE and w * h * 4 fits in
+ * cap (the staging ring, RMB_STAGING_BYTES), 0 otherwise: no upload of
+ * that size is staged. The product is checked for overflow before it is
+ * formed.
  */
 int rm_upload_bytes(long w, long h, size_t cap, size_t *bytes);
 
@@ -274,6 +275,16 @@ void rmb_clear(const float *rgba);
 
 /* The staging ring all texture uploads go through (section 3). */
 #define RMB_STAGING_BYTES (64u << 20)
+/*
+ * The longest texture side an upload may have. Metal aborts the process
+ * (a failed descriptor assertion, not an error) on a side above the
+ * device's maximum, which is 16384 on every family from the apple5 floor
+ * on; gl1 on real GL answers GL_INVALID_VALUE instead. 16384 and not the
+ * shim's 8192: it is the device's own limit, so nothing a GL driver on
+ * this hardware takes is refused, and the staging ring bounds the other
+ * side (16384 by 1024 is the whole ring).
+ */
+#define RMB_MAX_TEXTURE_SIDE 16384
 /* Texture ids run from 1 to RMB_MAX_TEXTURES - 1; 0 is none. */
 #define RMB_MAX_TEXTURES 4096
 
