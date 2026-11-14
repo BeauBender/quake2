@@ -45,9 +45,13 @@ left the push-time refusal to a separate card; this record is that card.
   file or a tracked file name contains one of them (the user name as a whole
   word or path component). It reports file and line (a file whose own name
   holds a value as `<withheld file name>`), and a count for file names. A
-  file is binary, and skipped, when it holds a NUL byte; git's own test is not
-  used, because a committed `.gitattributes` (`-diff`, `binary`) would take a
-  text file out of it. From a pre-commit hook it reads the index git hands it.
+  file is binary, and skipped, when its index blob holds a NUL byte; git's
+  own test is not used, because a committed `.gitattributes` (`-diff`,
+  `binary`) would take a text file out of it. It reads the staged content,
+  not the working tree: the index blobs of regular files (`git grep
+  --cached`) and the target of every tracked symbolic link (its blob, read
+  with `git cat-file`), so from a pre-commit hook it checks what is being
+  committed.
 - `tests/check-pre-push-hook.sh` (in the gate) proves the hook against a
   throwaway bare repository, with synthetic names served by `hostname` and
   `whoami` shims; three real pushes prove the wiring and the rest feeds the
@@ -108,7 +112,7 @@ What the guard does not do (known limits):
   read, the push is refused (fail closed). The gate check instead warns when
   only one of the two names is unreadable, and fails when both are.
 - Not scanned: file contents and file names of pushed trees at push time (the
-  gate checks them in the working tree), note bodies, signature blocks, and
+  gate checks them in the index), note bodies, signature blocks, and
   spellings other than the literal one (percent or hex encodings, other text
   encodings such as UTF-16, a name split across lines, non-ASCII case
   folding). The format in which the tooling writes identities is outside

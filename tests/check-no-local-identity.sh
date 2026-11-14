@@ -6,9 +6,13 @@
 # of `whoami` (whole word or path component only, so a short common user name
 # does not flag ordinary prose) and the path in $HOME (substring). All are
 # fixed strings compared case-insensitively; a word shorter than three
-# characters is skipped. Binary files (a NUL byte in the working-tree file)
-# are not scanned; the decision is made here, not by git, so a committed
-# .gitattributes (`-diff`, `binary`) cannot take a text file out of the scan.
+# characters is skipped. The content scanned is the staged content (the
+# index blobs), not the working tree: regular files through `git grep
+# --cached`, and the target of every tracked symbolic link (mode 120000)
+# read from its blob with `git cat-file`. Binary files (a NUL byte in the
+# index blob) are not scanned; the decision is made here, not by git, so a
+# committed .gitattributes (`-diff`, `binary`) cannot take a text file out of
+# the scan. A link target is reported as line 1 of the link.
 # File contents are reported as file:line and the kind of value, file names
 # only as a count; a file whose own name holds a value is reported as
 # "<withheld file name>:line". Nothing printed carries the matched text. If
@@ -16,7 +20,7 @@
 # push hook also fails closed); if only one is, it warns.
 #
 # The real scan reads the index git hands it, so from a pre-commit hook it
-# sees the files being committed. The self-test runs first, in a subshell
+# sees the blobs being committed, whatever the working tree holds. The self-test runs first, in a subshell
 # with every GIT_* variable unset and no global or system configuration, on a
 # throwaway repository under mktemp -d with synthetic names.
 #
@@ -39,16 +43,20 @@ trap 'rm -rf "$tmp"; [ "${_ok:-}" = 1 ] || exit 1' EXIT
 us=$(printf '\037')
 
 # scan_repo <dir> <host> <user> <home>: prints "path:line (kind)" for each hit
-# in the tracked text files of the repository at <dir>, and "N tracked file
-# name(s) (kind)" for file names; never the matched text. Returns 1 if any
+# in the staged text files and link targets of the repository at <dir>, and
+# "N tracked file name(s) (kind)" for file names; never the matched text. Returns 1 if any
 # hit, 2 if <dir> is not a repository or a git or grep call fails (said on
 # stderr).
 scan_repo() {
 	_hits=0
 	: > "$tmp/hits"
 	: > "$tmp/words"
-	git -C "$1" ls-files -z > "$tmp/names.z" 2>/dev/null || { echo "$me: git ls-files failed" >&2; return 2; }
-	tr '\000' '\n' < "$tmp/names.z" > "$tmp/names"
+	# One listing gives the names and the symbolic links (mode 120000):
+	# "<mode> <id> <stage><TAB><path>", each entry ended by NUL.
+	git -C "$1" ls-files -s -z > "$tmp/ls.z" 2>/dev/null || { echo "$me: git ls-files failed" >&2; return 2; }
+	tr '\000' '\n' < "$tmp/ls.z" > "$tmp/ls"
+	sed 's/^[0-7]* [0-9a-f]* [0-3]	//' "$tmp/ls" > "$tmp/names"
+	sed -n "s/^120000 \([0-9a-f]*\) [0-3]	/\1$us/p" "$tmp/ls" > "$tmp/links"
 	for _spec in "host:-iF:$2" "user:-iwF:$3" "home:-iF:$4"; do
 		_kind=${_spec%%:*}
 		_rest=${_spec#*:}
@@ -60,12 +68,23 @@ scan_repo() {
 		# cannot shift the fields; awk keeps the first two fields only. -a:
 		# git's own binary test honours .gitattributes, so it is not used.
 		_st=0
-		git -C "$1" -c color.ui=false grep --no-color -a -nz "$_mode" -e "$_word" -- . > "$tmp/grep" 2>/dev/null || _st=$?
+		git -C "$1" -c color.ui=false grep --cached --no-color -a -nz "$_mode" -e "$_word" -- . > "$tmp/grep" 2>/dev/null || _st=$?
 		case $_st in
 		0) tr '\000' '\037' < "$tmp/grep" | awk -F '\037' -v k="$_kind" '{ print $1 "\037" $2 "\037" k }' >> "$tmp/hits" ;;
 		1) ;;
 		*) echo "$me: git grep failed" >&2; return 2 ;;
 		esac
+		# git grep skips symbolic links; their target is the link's blob.
+		while IFS=$us read -r _id _lp; do
+			git -C "$1" cat-file blob "$_id" > "$tmp/link" 2>/dev/null || { echo "$me: git cat-file failed" >&2; return 2; }
+			_st=0
+			grep -q "$_mode" -e "$_word" < "$tmp/link" || _st=$?
+			case $_st in
+			0) printf '%s\037%s\037%s\n' "$_lp" 1 "$_kind" >> "$tmp/hits" ;;
+			1) ;;
+			*) echo "$me: grep failed" >&2; return 2 ;;
+			esac
+		done < "$tmp/links"
 		# File names count too; only how many, never which.
 		_st=0
 		_n=$(grep -c "$_mode" -e "$_word" < "$tmp/names") || _st=$?
@@ -75,9 +94,11 @@ scan_repo() {
 		*) echo "$me: grep failed" >&2; return 2 ;;
 		esac
 	done
-	# Contents: skip binary files; withhold a path that itself holds a value.
+	# Contents: skip binary index blobs; withhold a path that itself holds a
+	# value. ":0:" names the stage-0 entry, so no path is read as a stage.
 	while IFS=$us read -r _p _l _k; do
-		if [ -f "$1/$_p" ] && [ "$(tr -cd '\000' < "$1/$_p" | wc -c)" -gt 0 ]; then
+		git -C "$1" cat-file blob ":0:$_p" > "$tmp/blob" 2>/dev/null || { echo "$me: git cat-file failed" >&2; return 2; }
+		if [ "$(tr -cd '\000' < "$tmp/blob" | wc -c)" -gt 0 ]; then
 			continue
 		fi
 		_shown=$_p
@@ -151,6 +172,49 @@ scan_repo() {
 	expect 1 "content hits alone" "$tmp/want" zzqnone zzqnone /home/zzqhome
 	expect 0 "words shorter than three characters are skipped" "$tmp/none" zz zz zz
 	expect 0 "empty words are skipped" "$tmp/none" '' '' ''
+
+	# Staged content counts, not the working tree; and link targets count.
+	r=$tmp/r2
+	git init -q "$r"
+	printf 'clean\n' > "$r/clean.txt"
+	ln -s ../zzquserful/x "$r/clean-link"
+	git -C "$r" add -A
+	expect 0 "a clean symbolic link" "$tmp/none" "$syn" zzquser /home/zzqhome
+	ln -s "/srv/zzquser/$syn" "$r/leak-link"
+	git -C "$r" add -A
+	cat > "$tmp/want" <<-EOF
+	leak-link:1 (host)
+	leak-link:1 (user)
+	EOF
+	expect 1 "a symbolic link whose target holds a value" "$tmp/want" "$syn" zzquser /home/zzqhome
+	git -C "$r" rm -q --cached leak-link
+	rm "$r/leak-link"
+	for _f in staged staged-nul staged-gone 1:staged; do
+		printf 'built on %s\n' "$syn" > "$r/$_f.txt"
+	done
+	git -C "$r" add -A
+	printf 'clean\n' > "$r/staged.txt"
+	printf 'clean \000\n' > "$r/staged-nul.txt"
+	rm "$r/staged-gone.txt"
+	cat > "$tmp/want" <<-EOF
+	staged.txt:1 (host)
+	staged-nul.txt:1 (host)
+	staged-gone.txt:1 (host)
+	1:staged.txt:1 (host)
+	EOF
+	expect 1 "staged blobs, working files cleaned or removed" "$tmp/want" "$syn" zzquser /home/zzqhome
+	r=$tmp/r3
+	git init -q "$r"
+	_id=$(printf 'zzq/target' | git -C "$r" hash-object -w --stdin)
+	git -C "$r" update-index --add --cacheinfo "120000,$_id,dangling-link"
+	rm -f "$r/.git/objects/$(printf '%s' "$_id" | cut -c1-2)/$(printf '%s' "$_id" | cut -c3-)"
+	expect 2 "an unreadable link blob" "$tmp/none" "$syn" zzquser /home/zzqhome
+	rm -f "$r/.git/index"
+	printf 'built on %s\n' "$syn" > "$r/zzq
+nl.txt"
+	git -C "$r" add -A
+	expect 2 "an index blob not found by its path" "$tmp/none" "$syn" zzquser /home/zzqhome
+	r=$tmp/r
 
 	mkdir "$tmp/plain"
 	_got=0
