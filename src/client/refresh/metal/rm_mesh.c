@@ -152,7 +152,9 @@ R_DrawAliasModel(const entity_t *currententity, const model_t *currentmodel, con
 	}
 	else
 	{
-		skin = currentmodel->skins[rm_alias_skin(e.skinnum, (const void *const *)currentmodel->skins)];
+		const int si = rm_alias_skin(e.skinnum, (const void *const *)currentmodel->skins);
+
+		skin = ((si >= 0) && (si < MAX_MD2SKINS)) ? currentmodel->skins[si] : NULL;
 	}
 
 	if (!skin || (skin->texnum <= 0))

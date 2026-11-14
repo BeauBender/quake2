@@ -38,7 +38,11 @@
  * (R_DrawAlphaSurfaces, called by R_RenderView). The skipped counts are
  * now the surfaces whose draw was refused. A surface a dynamic light
  * touches is drawn with its static lightmap and counted until N8 adds
- * the light.
+ * the light. N7 adds the brush entities (R_DrawBrushModel,
+ * R_DrawInlineBModel): their index ranges of the same retained buffers
+ * drawn with the entity's matrix, their lit surfaces in the slice chains
+ * of R_RegenAllLightmaps (R_GetBrushesLighting), their translucent ones
+ * in the alpha chain.
  *
  * =======================================================================
  */
