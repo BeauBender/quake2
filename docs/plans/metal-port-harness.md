@@ -1208,7 +1208,10 @@ content` grows by 295 KB over the six cycles, which suggests window
 objects autoreleased into a pool the main loop never drains; not
 proven). So "`vid_restart` without leaks" holds for the shim and not
 for the process; the window retention is a finding for a card outside
-the port queue: FIX41 (#193).
+the port queue: FIX41 (#193). FIX41 has since proven the causes and
+corrected one point of this paragraph: the kept `CAMetalLayer`s and metal
+views belonged to the `soft` windows, not the `gl1` ones (see
+"`vid_restart` and the main thread's autorelease pool (FIX41)" below).
 
 **Criterion 1 and the GL-call pins.** The card's first criterion asks
 that every GL-call pin of the reference set pass. It is met here by the
