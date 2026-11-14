@@ -399,14 +399,15 @@ for _h in unset /zzqhome/zzqx; do
 		run "the owner handle, HOME elsewhere" HOME="$_h"
 	fi
 done
-# Not skipped: another owner, an undeterminable owner, two URLs.
+# Not skipped: another owner, an undeterminable owner, two URLs. The home
+# ends in the user name, so only owner_is can keep the skip off.
 _i=0
 for _url in https://github.com/zzqother/zzqrepo.git "zzqalias:$login/zzqrepo.git" "file:///zzq/$login/zzqrepo"; do
 	_i=$((_i + 1))
 	w remote set-url origin "$_url"
 	case_ "$M" refs/heads/zzqw1 "$(mk "$m1" "zzqm30 note for $login")" refs/heads/zzqw1 "$zero"
 	case_ "the remote ref name contains $U" refs/heads/zzqx "$m1" "refs/heads/zzqt/$login/zzqtopic" "$zero"
-	run "the owner handle is not the user name (address $_i of 3)"
+	run "the owner handle is not the user name (address $_i of 3)" HOME="/zzqhome/$login"
 done
 # Two URLs, the owner's first (`get-url` without --all would give only it),
 # and a home ending in the user name, so only owner_is can keep the skip off.
