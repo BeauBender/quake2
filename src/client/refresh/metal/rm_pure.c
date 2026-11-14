@@ -1624,12 +1624,7 @@ rm_lm_build(const unsigned char *samples, int smax, int tmax, int nummaps, const
 		float modulate, const unsigned char *minlight, const unsigned char *gamma,
 		unsigned char *dest, long stride, float *blocklights)
 {
-	/* nothing written when either refuses: the store's stride is checked first */
-	if (!rm_lm_dims_ok(smax, tmax) || (stride < (long)smax * RM_LM_BYTES))
-	{
-		return 0;
-	}
-
+	/* nothing written to dest when either refuses (the styles write only blocklights, the scratch) */
 	return rm_lm_styles(samples, smax, tmax, nummaps, rgb, modulate, blocklights) &&
 		rm_lm_store(smax, tmax, minlight, gamma, dest, stride, blocklights);
 }
@@ -3528,7 +3523,8 @@ rm_prim_indices(int strip, int n, int base, unsigned short *idx, int cap)
 {
 	int i, k = 0;
 
-	if ((n < 3) || (base < 0) || ((long)base + n > 65536) || (cap < 0) || ((n - 2) > cap / 3))
+	/* a negative cap leaves cap / 3 at most 0, below n - 2 */
+	if ((n < 3) || (base < 0) || ((long)base + n > 65536) || ((n - 2) > cap / 3))
 	{
 		return 0;
 	}

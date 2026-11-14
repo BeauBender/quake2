@@ -5675,6 +5675,20 @@ test_lm_dlight(void)
 	dl.origin[2] = -100;
 	CHECK(rm_dlight_of(bl, 3, 2, normal, 0, vecs, tmins, &dl) && bl[3] == 92);
 
+	/*
+	 * a luxel exactly at the cutoff's distance gets nothing (gl1's <): the
+	 * light 100 above (36, 0), frad 100, the cutoff 36 away; (0, 0) is 36
+	 * away, (1, 0) 20 (80), (2, 0) 4 (96), (0, 1) 44, (1, 1) 28 (72), (2, 1) 18 (82)
+	 */
+	dl.origin[0] = 36;
+	dl.origin[1] = 0;
+	dl.origin[2] = 100;
+	memset(bl, 0, sizeof(bl));
+	CHECK(rm_dlight_of(bl, 3, 2, normal, 0, vecs, tmins, &dl));
+	CHECK(bl[0] == 0 && bl[3] == 80 && bl[6] == 96 && bl[9] == 0 && bl[12] == 72 && bl[15] == 82);
+	dl.origin[0] = 16;
+	dl.origin[1] = 8;
+
 	/* the sizes rm_lm_size allows, and nothing written outside them */
 	dl.origin[2] = 100;
 	memset(bl, 0, sizeof(bl));
@@ -6110,6 +6124,10 @@ test_sprite(void)
 	CHECK(a == 1 && !blend && atest);
 	a = rm_sprite_alpha(RF_TRANSLUCENT | RF_FULLBRIGHT, 0, &blend, &atest);
 	CHECK(a == 0 && blend && !atest);
+	a = rm_sprite_alpha(RF_TRANSLUCENT, 1.5f, &blend, &atest);
+	CHECK(a == 1.5f && blend && !atest);
+	a = rm_sprite_alpha(RF_TRANSLUCENT, NAN, &blend, &atest);
+	CHECK(a != a && blend && !atest);
 
 	/* a 32 by 16 frame with its origin at (16, 8), at (100, 0, 0) facing -x: up z, right y */
 	{
@@ -6163,8 +6181,12 @@ test_sprite(void)
 		const float origin[3] = { 0, 0, 0 }, up[3] = { 3e38f, 0, 0 }, right[3] = { 0, 1, 0 };
 		float p[4][3];
 
+		const float upz[3] = { 0, 0, 3e38f }, upy[3] = { 0, 3e38f, 0 };
+
 		CHECK(!rm_sprite_quad(origin, 0, 2, 0, 0, up, right, p));
 		CHECK(rm_sprite_quad(origin, 0, 1, 0, 0, up, right, p) && p[1][0] == 3e38f);
+		CHECK(!rm_sprite_quad(origin, 0, 2, 0, 0, upz, right, p) && !rm_sprite_quad(origin, 0, 2, 0, 0, upy, right, p));
+		CHECK(!rm_sprite_quad(origin, 0, 0, 0, -2, upz, right, p));
 	}
 }
 
@@ -6341,6 +6363,10 @@ test_beam(void)
 	CHECK(c[3] == 0.0f);
 	rm_beam_color(pal, gam, 0, 1e30f, c);
 	CHECK(c[3] == 1.0f);
+	rm_beam_color(pal, gam, 0, 1e7f, c);
+	CHECK(c[3] == 1.0f);
+	rm_beam_color(pal, gam, 0, -1e7f, c);
+	CHECK(c[3] == 0.0f);
 }
 
 static void
@@ -6417,6 +6443,15 @@ test_shadow(void)
 	CHECK(rm_shadow_drawn(0, 1) && rm_shadow_drawn(RF_FULLBRIGHT, 1) && rm_shadow_drawn(RF_GLOW | RF_SHELL_RED, 2));
 	CHECK(!rm_shadow_drawn(0, 0) && rm_shadow_drawn(0, NAN) && !rm_shadow_drawn(RF_TRANSLUCENT, 1));
 	CHECK(!rm_shadow_drawn(RF_WEAPONMODEL, 1) && !rm_shadow_drawn(RF_NOSHADOW, 1) && rm_shadow_drawn(RF_DEPTHHACK, 1));
+
+	/* a height where gl1's float 0.1f and a double 0.1 put the plane on two floats */
+	{
+		const float p[3] = { 0, 0, 0 }, v[3] = { 0, 0, 1 }, l = 0x1.ffc006p-3f;
+		float out[3];
+
+		rm_shadow_point(p, v, l, out);
+		CHECK(out[2] == -l + 0.1f && out[2] != (float)(-(double)l + 0.1));
+	}
 
 	/* yaw 0: the shadow leans along +x, normalized (1, 0, 1) */
 	rm_shadevector(0, sv);
