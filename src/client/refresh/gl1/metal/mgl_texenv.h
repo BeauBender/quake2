@@ -90,6 +90,20 @@ mgl_texenv_stage(int env, int opaque, float scale, mgl_rgba_t p, mgl_rgba_t t)
 }
 
 /*
+ * The clip depth the vertex function hands Metal for GL's clip depth z
+ * at clip w. GL clips z to [-w, w] and maps z / w from [-1, 1] onto the
+ * depth range (n + (f - n) (z / w + 1) / 2, GL 1.4, section 2.11.1);
+ * Metal clips to [0, w] and maps z / w from [0, 1] (n + (f - n) z / w).
+ * (z + w) / 2 gives both the same window depth, so glDepthRange (the
+ * view weapon's 0 .. 0.3) is the Metal viewport's znear and zfar as is.
+ */
+static inline float
+mgl_gl_clip_z(float z, float w)
+{
+	return (z + w) * 0.5f;
+}
+
+/*
  * The coverage of a pixel by a smooth point (GL_POINT_SMOOTH, GL 1.4
  * section 3.3.2) of radius r whose centre lies dx, dy pixels from the
  * pixel's centre: r + 1/2 minus the distance, clamped to [0, 1]. That is
