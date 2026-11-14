@@ -566,6 +566,9 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
   references from Apple's software renderer have faults of their own
   that no correct renderer reproduces, so `world` does not pass there
   at the defaults; no threshold was changed.
+- **Not covered.** No static assert ties the C uniform struct to the
+  shader's (follow-up), and no scenario pins `GL_COMBINE` because
+  overbright defaults to off.
 
 ## 11. As built by TASK50 (S4, sky, water and translucent surfaces)
 
@@ -592,9 +595,11 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
 - **Depth writes stay on for translucent surfaces.** The card and
   inventory B4 say depth writes off; gl1 never calls `glDepthMask` in
   `R_DrawAlphaSurfaces` or for `buf_alpha` (each `glDepthMask(GL_FALSE)`
-  in gl1 is undone with `GL_TRUE` before its function returns), so the
-  shim, which follows the
-  calls, draws them with depth writes, as a GL driver does.
+  in gl1 is undone with `GL_TRUE` before its function returns; see
+  `src/client/refresh/gl1/gl1_surf.c`, `R_DrawAlphaSurfaces`, lines 477
+  to 521, which only has `glEnable(GL_BLEND)` at 485 and
+  `glDisable(GL_BLEND)` at 520), so the shim, which follows the calls,
+  draws them with depth writes, as a GL driver does.
 - **What the shim computes on these paths.** gl1 computes the warp
   (`r_turbsin`, the scroll of `SURF_FLOWING`) and the sky's texture
   coordinates (clamped to 1/512 and 511/512, t flipped) on the CPU; the
@@ -624,6 +629,3 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
   every region where they differ by more is one of the reference's
   known faults, with `gl1` the odd one out against `soft` and
   `gl1-metal`.
-- **Not covered.** No static assert ties the C uniform struct to the
-  shader's (follow-up), and no scenario pins `GL_COMBINE` because
-  overbright defaults to off.
