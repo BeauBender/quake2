@@ -185,6 +185,7 @@ RI_Init(void)
 	R_Printf(PRINT_ALL, "Refresh: " REF_VERSION "\n");
 	R_Printf(PRINT_ALL, "Client: " YQ2VERSION "\n\n");
 
+	Swap_Init();   /* LittleShort and the rest, which the loaders in files/ call (gl1_main.c) */
 	R_Register();
 	rm_noop_calls = 0;
 
