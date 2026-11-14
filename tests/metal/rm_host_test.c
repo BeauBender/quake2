@@ -1928,6 +1928,8 @@ test_lm_regen_mark(void)
 	/* any non-zero value is true */
 	CHECK(rm_lm_regen_mark(2, 0, 3, &dirty) == 1 && dirty == 0);
 	CHECK(rm_lm_regen_mark(0, 0, 1, &dirty) == 0 && dirty == 1);
+	/* a dynamic-light mark is any non-zero value, and dirty is normalised to 1 */
+	CHECK(rm_lm_regen_mark(1, 2, 1, &dirty) == 0 && dirty == 1);
 }
 
 /* gl1's minlight table: the identity at 0, (255 - m) * i / 255 + m otherwise, m clamped. */
