@@ -2845,7 +2845,8 @@ Rep_InFrame(int32_t x, int32_t y, int32_t w, int32_t h)
 {
 	int32_t fw = rep.h.width, fh = rep.h.height;
 
-	return w >= 1 && w <= fw && h >= 1 && h <= fh &&
+	/* w >= 1 first, so fw - w cannot overflow; x <= fw - w also bounds w */
+	return w >= 1 && h >= 1 && h <= fh &&
 		x >= 0 && x <= fw - w && y > -h && y < fh;
 }
 
@@ -2857,12 +2858,8 @@ Rep_InFrame(int32_t x, int32_t y, int32_t w, int32_t h)
 static qboolean
 Rep_ClipToFrame(int32_t *n)
 {
+	/* in 64 bits, so x + w cannot overflow; a size below 1 leaves nothing */
 	int64_t x0 = n[0], y0 = n[1], x1 = x0 + n[2], y1 = y0 + n[3];
-
-	if (n[2] < 1 || n[3] < 1)
-	{
-		return false;
-	}
 
 	x0 = x0 < 0 ? 0 : x0;
 	y0 = y0 < 0 ? 0 : y0;
@@ -2891,7 +2888,8 @@ Rep_ClipToFrame(int32_t *n)
 static qboolean
 Rep_Scale(float s)
 {
-	return isfinite(s) && s >= 1.0f && s <= REFREC_REPLAY_MAX_SCALE;
+	/* false for a NaN; an infinity is past the bound */
+	return s >= 1.0f && s <= REFREC_REPLAY_MAX_SCALE;
 }
 
 typedef enum { REP_FORWARD, REP_DROP, REP_REFUSE } rep_verdict_t;

@@ -1421,6 +1421,7 @@ TestRecorderOff(void)
 /* what the print function was handed */
 static int prints;
 static char last_print[512];
+static char print_log[4096];	/* every print since Replay began, cut at its size */
 
 static void
 TestPrint(const char *fmt, ...)
@@ -1431,6 +1432,11 @@ TestPrint(const char *fmt, ...)
 	va_start(ap, fmt);
 	vsnprintf(last_print, sizeof(last_print), fmt, ap);
 	va_end(ap);
+
+	if (strlen(print_log) + strlen(last_print) < sizeof(print_log))
+	{
+		strcat(print_log, last_print);
+	}
 }
 
 #define MAX_TEST_STRINGS	64
@@ -3054,6 +3060,7 @@ Replay(const char *path, uint32_t api, int width, int height, refrec_replay_stat
 	int guard = 0;
 
 	memset(&mock, 0, sizeof(mock));
+	print_log[0] = '\0';
 	memset(&t, 0, sizeof(t));
 	t.api_version = api;
 	t.width = width;
@@ -3313,6 +3320,9 @@ TestReplayRoundTrip(void)
 	CHECK(!RefRec_ReplayNextFrame(), "replay: a frame after close");
 
 	/* the target's configuration must match the trace */
+	CHECK(!Replay(path, API_VERSION, 641, 481, &st) && st.failed && strstr(print_log, "641x481") &&
+			!strstr(print_log, "640") && strstr(print_log, "another resolution"),
+			"replay: another size was accepted, or the trace's size printed: %s", print_log);
 	CHECK(!Replay(path, API_VERSION, 641, 480, &st) && st.failed, "replay: another width was accepted");
 	CHECK(!Replay(path, API_VERSION, 640, 481, &st) && st.failed, "replay: another height was accepted");
 	CHECK(!Replay(path, API_VERSION - 1, 640, 480, &st) && st.failed, "replay: another API version was accepted");
@@ -3454,7 +3464,7 @@ TestReplayBounds(void)
 	CHECK(Bits(mock.last[REC_SKY].floats[0]) == Bits(0.0f) && Bits(mock.last[REC_BEGINFRAME].floats[0]) == Bits(0.0f),
 			"bounds: sky rotate or camera separation");
 	CHECK(st.picsize_mismatch == 1, "bounds: %u pic size mismatches", st.picsize_mismatch);
-	CHECK(st.clamped >= 25, "bounds: only %u values counted as clamped", st.clamped);
+	CHECK(st.clamped == 31, "bounds: %u values counted as clamped, not 31", st.clamped);
 }
 
 /* a trace recorded by fn, then patched by fix at its file offsets, replayed */
