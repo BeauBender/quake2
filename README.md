@@ -43,7 +43,9 @@ scripts/test.sh           # the gate; every commit must pass it
 ```
 
 The client needs SDL3. The dedicated server and the game module
-need only the system toolchain. CI builds on Linux and macOS.
+need only the system toolchain. Only Apple platforms are built and tested by
+this fork; other platforms are unmaintained (see
+[docs/decisions/0008-apple-platforms-only.md](docs/decisions/0008-apple-platforms-only.md)).
 
 ## Documentation
 

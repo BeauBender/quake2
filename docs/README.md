@@ -9,6 +9,9 @@ ships with releases; `docs/` (this directory) is for working on the code.
   security boundaries and the working rules for agents.
 - `scripts/setup.sh`: checks the toolchain and wires the commit and push hooks.
 - `scripts/test.sh`: the gate. Every commit must pass it. It ends with `make test`, the unit-test suite.
+- Platforms: only Apple platforms are built and tested; other platforms are
+  unmaintained (`docs/decisions/0008-apple-platforms-only.md`). CI runs the
+  macOS test build, CodeQL and Cppcheck.
 
 ## Source (`src/`)
 

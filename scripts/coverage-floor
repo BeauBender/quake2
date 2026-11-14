@@ -11,10 +11,10 @@
 # cl_network, cl_parse, cl_screen, sound/sound.c), so a loss under
 # src/common or src/server can be offset by client lines.
 # gcov: NOT measured. TASK29 was written on a host without gcc, and the
-# Linux CI job only runs on a pull request. 25 is a conservative lower
+# Linux CI job was removed (record 0008). 25 is a conservative lower
 # bound chosen below the llvm-cov measurement (gcov counts lines a little
-# differently, but not by eight points). The first Linux CI run measures
-# it: the "Coverage" step of .github/workflows/linux_x86_64.yml prints
+# differently, but not by eight points). A run on a host with gcc measures
+# it: a gcov run of scripts/coverage.sh prints
 # "TOTAL NN.NN% of N lines" and, when that is a whole percent or more
 # above this floor, "set the 'gcov' line in scripts/coverage-floor to N".
 # Raise the line below to that N then.
