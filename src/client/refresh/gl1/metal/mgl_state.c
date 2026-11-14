@@ -42,8 +42,7 @@ static unsigned long unimplemented_calls;
 static void
 mgl_identity(GLfloat *m)
 {
-	memset(m, 0, 16 * sizeof(GLfloat));
-	m[0] = m[5] = m[10] = m[15] = 1.0f;
+	mtl_mat_identity(m);
 }
 
 /* The initial GL state (OpenGL 1.4 specification, tables 6.x). */
@@ -796,34 +795,17 @@ mgl_mult(const GLfloat *m)
 	mgl_mat_mul(mgl_top(), mgl_top(), m);
 }
 
+/* The matrices are built by src/client/refresh/metal/common/mtl_matrix.c (TASK85). */
 void
 glRotatef(GLfloat angle, GLfloat x, GLfloat y, GLfloat z)
 {
-	double len = sqrt((double)x * x + (double)y * y + (double)z * z);
-	double a = angle * (M_PI / 180.0), c = cos(a), s = sin(a), nx, ny, nz;
 	GLfloat m[16];
 
 	/* GL leaves a rotation about the zero vector undefined: the matrix stays */
-	if (len == 0.0)
+	if (!mtl_mat_rotate(m, angle, x, y, z))
 	{
 		return;
 	}
-
-	nx = x / len;
-	ny = y / len;
-	nz = z / len;
-
-	memset(m, 0, sizeof(m));
-	m[0] = (GLfloat)(nx * nx * (1 - c) + c);
-	m[1] = (GLfloat)(ny * nx * (1 - c) + nz * s);
-	m[2] = (GLfloat)(nx * nz * (1 - c) - ny * s);
-	m[4] = (GLfloat)(nx * ny * (1 - c) - nz * s);
-	m[5] = (GLfloat)(ny * ny * (1 - c) + c);
-	m[6] = (GLfloat)(ny * nz * (1 - c) + nx * s);
-	m[8] = (GLfloat)(nx * nz * (1 - c) + ny * s);
-	m[9] = (GLfloat)(ny * nz * (1 - c) - nx * s);
-	m[10] = (GLfloat)(nz * nz * (1 - c) + c);
-	m[15] = 1.0f;
 
 	mgl_mult(m);
 }
@@ -833,10 +815,7 @@ glTranslatef(GLfloat x, GLfloat y, GLfloat z)
 {
 	GLfloat m[16];
 
-	mgl_identity(m);
-	m[12] = x;
-	m[13] = y;
-	m[14] = z;
+	mtl_mat_translate(m, x, y, z);
 	mgl_mult(m);
 }
 
@@ -845,10 +824,7 @@ glScalef(GLfloat x, GLfloat y, GLfloat z)
 {
 	GLfloat m[16];
 
-	mgl_identity(m);
-	m[0] = x;
-	m[5] = y;
-	m[10] = z;
+	mtl_mat_scale(m, x, y, z);
 	mgl_mult(m);
 }
 
@@ -859,20 +835,11 @@ glOrtho(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top,
 {
 	GLfloat m[16];
 
-	if (left == right || bottom == top || zNear == zFar)
+	if (!mtl_mat_ortho(m, left, right, bottom, top, zNear, zFar))
 	{
 		mgl_error(GL_INVALID_VALUE);
 		return;
 	}
-
-	memset(m, 0, sizeof(m));
-	m[0] = (GLfloat)(2.0 / (right - left));
-	m[5] = (GLfloat)(2.0 / (top - bottom));
-	m[10] = (GLfloat)(-2.0 / (zFar - zNear));
-	m[12] = (GLfloat)(-(right + left) / (right - left));
-	m[13] = (GLfloat)(-(top + bottom) / (top - bottom));
-	m[14] = (GLfloat)(-(zFar + zNear) / (zFar - zNear));
-	m[15] = 1.0f;
 
 	mgl_mult(m);
 }
@@ -884,20 +851,11 @@ glFrustum(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top,
 {
 	GLfloat m[16];
 
-	if (zNear <= 0 || zFar <= 0 || left == right || bottom == top || zNear == zFar)
+	if (!mtl_mat_frustum(m, left, right, bottom, top, zNear, zFar))
 	{
 		mgl_error(GL_INVALID_VALUE);
 		return;
 	}
-
-	memset(m, 0, sizeof(m));
-	m[0] = (GLfloat)(2.0 * zNear / (right - left));
-	m[5] = (GLfloat)(2.0 * zNear / (top - bottom));
-	m[8] = (GLfloat)((right + left) / (right - left));
-	m[9] = (GLfloat)((top + bottom) / (top - bottom));
-	m[10] = (GLfloat)(-(zFar + zNear) / (zFar - zNear));
-	m[11] = -1.0f;
-	m[14] = (GLfloat)(-2.0 * zFar * zNear / (zFar - zNear));
 
 	mgl_mult(m);
 }
