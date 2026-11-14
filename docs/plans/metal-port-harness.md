@@ -2722,26 +2722,40 @@ not opaque is composited like a small one and keeps
 opacity made no difference (320.8 to 367.6 fps either way, three runs
 each, alternated, load average 2.13).
 
-**The same change in the engine** (`timedemo` of `demo1.dm2`, windowed,
-`r_vsync 0`, one binary, baseline and changed renderer alternated run
-by run, three runs each; `ref_gl1` presents through OpenGL and is not
-affected). The `ref_metal` and Metal-backed `gl1` rows are scratch
-builds with `opaque = NO` added next to their `displaySyncEnabled`
-line, never committed:
+**The same change in the engine, final numbers** (`timedemo` of
+`demo1.dm2`, windowed, `r_vsync 0`, three runs per cell; before and
+after alternated run by run inside each size's batch; `ref_gl1` runs
+alongside as the reference, it has no before or after and presents
+through OpenGL). The before build of `soft` is main at 1b84bb4f, the
+after build is this branch. The `ref_metal` and Metal-backed `gl1`
+rows are scratch builds with `opaque = NO` added next to their
+`displaySyncEnabled` line, never committed:
 
-| Renderer | 1920x1080 before | after | 640x480 before | after | Load average |
-|---|---|---|---|---|---|
-| `soft` (this card's fix) | 60.0 | 242.3 to 256.9 | 272.2 to 282.3 | 389.3 to 394.4 | 2.56 to 4.29 |
-| `ref_metal` (scratch) | 60.0 | 370.8 to 405.5 | 268.7 to 307.5 | 337.4 to 392.8 | 2.67 to 4.11 |
-| Metal-backed `gl1` (scratch) | 60.1 | 368.8 to 384.1 | 268.4 to 290.8 | 328.7 to 405.3 | 2.67 to 4.11 |
+| Renderer | 1920x1080 before | after | 640x480 before | after |
+|---|---|---|---|---|
+| `soft` (this card's fix) | 60.0 | 258.1 to 263.1 | 309.1 to 327.5 | 381.1 to 404.6 |
+| `ref_metal` (scratch) | 60.0 to 60.1 | 339.7 to 344.2 | 294.2 to 299.4 | 329.7 to 348.9 |
+| Metal-backed `gl1` (scratch) | 60.1 | 324.8 to 341.8 | 249.1 to 259.4 | 321.8 to 340.1 |
+| `ref_gl1` (reference) | 1882.5 to 2044.5 | | 2452.0 to 2469.5 | |
 
-Another agent's build (3 to 8 compiler processes) was running at the
-start of the `soft` 640x480 batch and of the 1920x1080 batch of the
-two Metal renderers; these are A/B ranges, not the final
-before-and-after numbers, which want a quiet host. In the engine the
-opaque layer also
-costs about 1 ms a frame below the threshold: at 640x480 all three
-renderers move from about 270 to 300 fps to about 330 to 400.
+The quiet window, per batch (`uptime` load averages before and after;
+no `make`, `cc`, `clang` or `quake2` process before or after; GPU
+"Device Utilization %" from `ioreg` before and after, the second
+reading taken right after the last engine exited):
+
+| Batch | Load average | GPU utilization before / after |
+|---|---|---|
+| 1920x1080, `r_vsync 0` | 3.10, then 1.68 | 5% / 56% |
+| 640x480, `r_vsync 0` | 1.62, then 1.83 | 2% / 42% |
+| `soft`, `r_vsync 1`, 1920x1080 | 1.92, then 2.22 | 2% / 19% |
+| `soft`, `r_vsync 1`, 640x480 | 2.22, then 2.31 | 21% / 11% |
+
+The first batch began with the load still decaying from the builds
+(3.10, 1.68 at its end); the other readings are steady. In the engine
+the opaque layer also costs about 0.5 to 0.9 ms a frame below the
+threshold: at 640x480 `soft` moves from about 315 to about 390 fps,
+`ref_metal` from about 296 to about 340, the Metal-backed `gl1` from
+about 256 to about 328 (the means of the ranges above).
 
 How these runs were made: the engine was started as a pin run with
 `pins_capture 1000000` (at most one frame captured), so that it quits
@@ -2762,8 +2776,8 @@ alpha 255 (the palette's alpha byte, `R_GammaCorrectAndSetPalette`,
 and a streaming texture drawn over the whole output), so a composited
 layer shows the same picture; the clear at context creation is now
 opaque black instead of alpha 0. With `r_vsync 1` `soft` runs at 59.9
-to 60.0 fps before and after, at 1920x1080 and at 640x480 (two and
-one runs of each, alternated, load average 2.28). The picture was not
+to 60.0 fps before and after, at 1920x1080 and at 640x480 (two runs of
+each, alternated, load average 1.92 to 2.31). The picture was not
 compared on screen. No cvar, no change to the window
 (`glimp_sdl3.c`), and other platforms are untouched.
 
@@ -2780,20 +2794,20 @@ can leave alpha below 1, which an opaque layer ignores and a
 composited one blends with the window's background. Whether they do
 was not measured here.
 
-**FIX51 (#238), the fixed cost of about 3 to 4 ms a frame.** Two parts
-were measured. About 1 ms is the opaque layer (the 640x480 columns
-above). The rest is the time the window server takes to hand back a
+**FIX51 (#238), the fixed cost of about 3 to 4 ms a frame.** What this
+explains and what it does not. Two parts were measured. About 0.5 to
+0.9 ms is the opaque layer (the 640x480 columns above). The rest is the time the window server takes to hand back a
 drawable: the bare probe, which only clears, spends 2.26 to 3.07 ms a
 frame blocked in `nextDrawable` at every size below the threshold and
 with `opaque = NO` at 1920x1080, and the engine with a layer that is
-not opaque tops out at 328.7 to 405.3 fps in all three renderers at
-640x480. `ref_gl1` does not wait there (1780.4 fps at 1920x1080, one
-run). So a Metal renderer that waits for a drawable every frame stops
+not opaque tops out at 321.8 to 404.6 fps in all three renderers at
+640x480. `ref_gl1` does not wait there (2452.0 to 2469.5 fps at
+640x480, 1882.5 to 2044.5 at 1920x1080). So a Metal renderer that waits for a drawable every frame stops
 at about 400 fps on this host; going past it needs a frame that does
 not block in `nextDrawable` (not tried here).
 
-**Open.** The before-and-after numbers of all four renderers at
-1920x1080 and 640x480 on a quiet host. And a follow-up: repeat the
-probe on a display above 60 Hz (an apple7 Mac with a 120 Hz internal
-display), to tell whether the cap follows the refresh rate and where
-the size threshold sits there.
+**Open.** A follow-up: repeat the probe on a display above 60 Hz (an
+apple7 Mac with a 120 Hz internal display), to tell whether the cap
+follows the refresh rate and where the size threshold sits there. The
+panel here is 60 Hz, so this host cannot tell a cap that is the
+refresh rate from a fixed 60.
