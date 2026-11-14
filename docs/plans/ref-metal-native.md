@@ -276,7 +276,7 @@ against gl1's source:
 | Cvar | In `ref_metal` | Why |
 |---|---|---|
 | `gl1_ztrick` | dropped (depth is cleared every frame, gl1's default 0) | `R_Clear` (`gl1_main.c`) alternates depth ranges to skip the depth clear; on Metal the depth clear is a load action, so the trick saves nothing and the default path is kept |
-| `gl_zfix` | copied | polygon offset around brush models (`R_Clear`, `R_DrawBrushModel` in `gl1_surf.c`), raster state the back end has |
+| `gl_zfix` | copied; as built by N7: not taken | polygon offset around brush models (`R_Clear`, `R_DrawBrushModel` in `gl1_surf.c`), raster state the back end has. Not taken (section 22): its default is 0 and no scenario or demo sets it, so gl1 with the default draws what ref_metal draws; taking it means a depth bias on every brush-entity draw whose factor and units match the shim's conversion of the `glPolygonOffset(0.05, 1)` that `R_Clear` sets for a 32-bit float depth buffer, parity that no pin shows today |
 | `gl1_dynamic` | copied | it gates the dynamic-lightmap update in `gl1_surf.c`, code N5 and N8 copy anyway |
 | `gl1_saturatelighting` | dropped | read only by `R_BlendLightmaps` (`gl1_surf.c`), the classic two-pass lightmap path that is left out |
 | `gl1_picmip`, `gl1_round_down` | dropped | read only by `R_Upload32Soft` (`gl1_image.c`), the power-of-two path gl1 does not take on the shim (section 5) |
@@ -1667,6 +1667,16 @@ game does not have:
   define is saturated. Everywhere else the arithmetic is gl1's, bit for
   bit (the host test's differentials).
 - Not taken: `gl_showbbox`, `gl_zfix`, `gl1_ztrick` (`doc/040_cvarlist.md`).
+  `gl_zfix` was planned as copied (section 7): it is gl1's polygon offset
+  around each inline model (`R_DrawBrushModel` turns
+  `GL_POLYGON_OFFSET_FILL` on and off around `R_DrawInlineBModel`, with
+  the offset `R_Clear` sets). Its default is 0 and no scenario or demo
+  sets it, so gl1 with the default draws what ref_metal draws. Taking it
+  means a depth bias on every brush-entity draw (the world, lightmapped,
+  flowing and warped draws of `R_DrawInlineBModel`) whose factor and
+  units match how the shim converts `glPolygonOffset` for a 32-bit float
+  depth buffer; no pin would show that parity, so it is left to a card
+  that needs it (the reason is the same in section 7's row).
 
 The shared loader (`files/models.c`) and what this module closes
 (FIX40, #185, names the alias command stream among the inherited sites):
