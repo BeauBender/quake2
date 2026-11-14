@@ -204,6 +204,12 @@ int rm_dir_of(const char *path, char *dir, size_t len);
 
 /* ---- rmb_device.m and rmb_encode.m ------------------------------------------- */
 
+/*
+ * Frames in flight: the drawable count and frame semaphore of rmb_device.m
+ * and the per-frame vertex rings of rmb_encode.m, one constant for both.
+ */
+#define RMB_FRAMES_IN_FLIGHT 3
+
 /* The device and the queue, and the capabilities. 0 with err filled on failure. */
 int rmb_open(rmb_caps_t *caps, char *err, size_t errlen);
 
@@ -298,6 +304,15 @@ typedef enum
 } rmb_smp_t;
 
 #define RMB_SAMPLER(cls, clamp) ((cls) * 2 + ((clamp) ? 1 : 0))
+
+/*
+ * gl1's filter state of one image as a sampler (repeat form): at load
+ * (R_LoadPic) an image on r_nolerp_list, or a pic under r_2D_unfiltered,
+ * is GL_NEAREST, mipmapped or not; after a mode change (R_TextureMode,
+ * mode_change 1) a mipmapped image takes the mode whatever the lists
+ * say, and only one without mipmaps stays GL_NEAREST.
+ */
+int rm_image_sampler(int mipmapped, int nolerp, int mode_change);
 
 /*
  * Loads ref_metal.metallib from dir and builds the 2D pipeline table and

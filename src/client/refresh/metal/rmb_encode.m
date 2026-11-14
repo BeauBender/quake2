@@ -65,10 +65,9 @@ id<MTLTexture> rmb_texture_for_draw(int id);
 id<MTLRenderPipelineState> rmb_pipe(int i);
 id<MTLSamplerState> rmb_sampler(int i);
 
-/* the frame ring of 2D vertices and indices: one shared buffer per frame slot */
-#define RMB_FRAMES 3
+/* the frame ring of 2D vertices and indices: one shared buffer per frame in flight */
 #define RMB_RING_BYTES (4u << 20)
-static id<MTLBuffer> ring_buf[RMB_FRAMES];
+static id<MTLBuffer> ring_buf[RMB_FRAMES_IN_FLIGHT];
 static mtl_ring_t ring;
 static unsigned long frames_begun;
 
@@ -204,7 +203,7 @@ rmb_frame_begin(int w, int h, const float *clear_rgba)
 		rmb_frame_serial++;
 
 		/* the frame slot guarantees the frame that last used this ring buffer has completed */
-		frame_ring = ring_buf[frames_begun % RMB_FRAMES];
+		frame_ring = ring_buf[frames_begun % RMB_FRAMES_IN_FLIGHT];
 
 		if (!frame_ring)
 		{
@@ -212,7 +211,7 @@ rmb_frame_begin(int w, int h, const float *clear_rgba)
 
 			if (frame_ring)
 			{
-				ring_buf[frames_begun % RMB_FRAMES] = frame_ring;
+				ring_buf[frames_begun % RMB_FRAMES_IN_FLIGHT] = frame_ring;
 				rm_ledger_create(&rmb_ledger, RM_OBJ_BUFFER);
 			}
 		}
@@ -511,7 +510,7 @@ rmb_encode_release(void)
 		wd = depth;
 		wb = readbuf;
 
-		for (i = 0; i < RMB_FRAMES; i++)
+		for (i = 0; i < RMB_FRAMES_IN_FLIGHT; i++)
 		{
 			if (ring_buf[i])
 			{

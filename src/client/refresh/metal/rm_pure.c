@@ -339,6 +339,18 @@ rm_dir_of(const char *path, char *dir, size_t len)
 	return 1;
 }
 
+/* from gl1_image.c: R_LoadPic's GL_NEAREST for nolerp, R_TextureMode's two branches */
+int
+rm_image_sampler(int mipmapped, int nolerp, int mode_change)
+{
+	if (nolerp && !(mode_change && mipmapped))
+	{
+		return RMB_SAMPLER(RMB_SMP_NEAREST, 0);
+	}
+
+	return RMB_SAMPLER(mipmapped ? RMB_SMP_MIP : RMB_SMP_FLAT, 0);
+}
+
 /* from gl1_image.c, the modes table of R_TextureMode */
 int
 rm_texture_mode(const char *name, int *min, int *mag_linear)

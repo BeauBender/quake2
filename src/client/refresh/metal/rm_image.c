@@ -58,17 +58,12 @@ R_NoLerp(const char *name, imagetype_t type)
 	return (gl_nolerp_list->string != NULL) && (strstr(gl_nolerp_list->string, name) != NULL);
 }
 
-/* gl1's per-texture filter state as one of the back end's samplers */
+/* gl1's per-texture filter state as one of the back end's samplers, at load or after a mode change */
 static int
-R_ImageSampler(const image_t *image)
+R_ImageSampler(const image_t *image, int mode_change)
 {
-	if (R_NoLerp(image->name, image->type))
-	{
-		return RMB_SAMPLER(RMB_SMP_NEAREST, 0);
-	}
-
-	return RMB_SAMPLER(((image->type != it_pic) && (image->type != it_sky)) ?
-			RMB_SMP_MIP : RMB_SMP_FLAT, 0);
+	return rm_image_sampler((image->type != it_pic) && (image->type != it_sky),
+			R_NoLerp(image->name, image->type), mode_change);
 }
 
 /* from gl1_image.c; the samplers follow the mode, per image the class does */
@@ -99,7 +94,7 @@ R_TextureMode(const char *string)
 	{
 		if (gltextures[i].texnum)
 		{
-			gltextures[i].sampler = R_ImageSampler(&gltextures[i]);
+			gltextures[i].sampler = R_ImageSampler(&gltextures[i], 1);
 		}
 	}
 }
@@ -356,7 +351,7 @@ R_LoadPic(const char *name, byte *pic, int width, int realwidth,
 		return NULL;
 	}
 
-	image->sampler = R_ImageSampler(image);
+	image->sampler = R_ImageSampler(image, 0);
 	image->sl = 0;
 	image->sh = 1;
 	image->tl = 0;

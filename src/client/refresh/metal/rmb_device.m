@@ -48,7 +48,6 @@
 #error "rmb_device.m is written for ARC: compile it with -fobjc-arc"
 #endif
 
-#define RMB_FRAMES_IN_FLIGHT 3
 #define RMB_FRAME_WAIT_MS 2000
 #define RMB_GPU_WAIT_MS 5000
 #define RMB_FAILED_LOGGED 8

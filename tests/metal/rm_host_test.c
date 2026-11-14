@@ -370,6 +370,25 @@ test_dir_of(void)
 	CHECK(!rm_dir_of("/a/x", d, 0) && d[0] == 'z');
 }
 
+/*
+ * gl1's per-texture filter: R_LoadPic gives an image on the no-lerp lists
+ * GL_NEAREST, mipmapped or not; R_TextureMode then gives a mipmapped image
+ * gl_filter_min and gl_filter_max whatever the lists say, and one without
+ * mipmaps GL_NEAREST when listed, gl_filter_max otherwise.
+ */
+static void
+test_image_sampler(void)
+{
+	CHECK(rm_image_sampler(1, 0, 0) == RMB_SAMPLER(RMB_SMP_MIP, 0));
+	CHECK(rm_image_sampler(1, 1, 0) == RMB_SAMPLER(RMB_SMP_NEAREST, 0));
+	CHECK(rm_image_sampler(1, 0, 1) == RMB_SAMPLER(RMB_SMP_MIP, 0));
+	CHECK(rm_image_sampler(1, 1, 1) == RMB_SAMPLER(RMB_SMP_MIP, 0));
+	CHECK(rm_image_sampler(0, 0, 0) == RMB_SAMPLER(RMB_SMP_FLAT, 0));
+	CHECK(rm_image_sampler(0, 1, 0) == RMB_SAMPLER(RMB_SMP_NEAREST, 0));
+	CHECK(rm_image_sampler(0, 0, 1) == RMB_SAMPLER(RMB_SMP_FLAT, 0));
+	CHECK(rm_image_sampler(0, 1, 1) == RMB_SAMPLER(RMB_SMP_NEAREST, 0));
+}
+
 /* gl_texturemode by gl1's names, case-insensitive as Q_stricmp */
 static void
 test_texture_mode(void)
@@ -377,6 +396,8 @@ test_texture_mode(void)
 	int min = -1, mag = -1;
 
 	CHECK(rm_texture_mode("GL_LINEAR_MIPMAP_NEAREST", &min, &mag) && min == 3 && mag == 1);
+	CHECK(rm_texture_mode("GL_LINEAR", &min, &mag) && min == 1 && mag == 1);
+	CHECK(rm_texture_mode("GL_NEAREST_MIPMAP_NEAREST", &min, &mag) && min == 2 && mag == 0);
 	CHECK(rm_texture_mode("gl_nearest", &min, &mag) && min == 0 && mag == 0);
 	CHECK(rm_texture_mode("GL_NEAREST_MIPMAP_LINEAR", &min, &mag) && min == 4 && mag == 0);
 	CHECK(rm_texture_mode("GL_LINEAR_MIPMAP_LINEAR", &min, &mag) && min == 5 && mag == 1);
@@ -541,6 +562,7 @@ main(void)
 	test_fan();
 	test_pipe_2d();
 	test_texture_mode();
+	test_image_sampler();
 	test_dir_of();
 	test_ortho();
 	test_ring();
