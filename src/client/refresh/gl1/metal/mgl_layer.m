@@ -47,6 +47,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <dlfcn.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -87,6 +88,7 @@ static id<MTLBuffer> mgl_readbuf;          /* shared, for glReadPixels */
 
 /* Counters, printed when the context is destroyed. */
 static unsigned long count_frames, count_no_drawable, count_skipped, count_ring_full;
+static atomic_ulong count_failed;          /* command buffers ended in error (mgl_watch) */
 
 #define MGL_FRAMES_IN_FLIGHT 3
 
@@ -125,6 +127,55 @@ static void
 mgl_err(char *err, size_t errlen, const char *what, const char *detail)
 {
 	snprintf(err, errlen, "mgl: %s%s%s", what, detail ? ": " : "", detail ? detail : "");
+}
+
+/*
+ * The console of the renderer this shim is linked into (R_Printf in
+ * src/client/refresh/files/common.c, declared in ref_shared.h, which
+ * this file does not include); 0 is PRINT_ALL.
+ */
+extern void R_Printf(int level, const char *msg, ...);
+
+/*
+ * The startup capability report: the device, the Apple GPU families 5
+ * to 9 and ray tracing, once per context, to the console. Report only:
+ * nothing in the shim depends on it.
+ */
+static void
+mgl_report_capabilities(id<MTLDevice> dev)
+{
+	static const struct
+	{
+		MTLGPUFamily family;
+		const char *name;
+	} families[] = {
+		{ MTLGPUFamilyApple5, "apple5" }, { MTLGPUFamilyApple6, "apple6" },
+		{ MTLGPUFamilyApple7, "apple7" }, { MTLGPUFamilyApple8, "apple8" },
+		{ MTLGPUFamilyApple9, "apple9" },
+	};
+	char list[64];   /* all five names and their spaces are 34 characters */
+	size_t i, n = 0;
+	int rt_render = 0;
+
+	list[0] = '\0';
+
+	for (i = 0; i < sizeof(families) / sizeof(families[0]); i++)
+	{
+		if ([dev supportsFamily:families[i].family])
+		{
+			n += (size_t)snprintf(list + n, sizeof(list) - n, "%s%s", n ? " " : "", families[i].name);
+		}
+	}
+
+	if (@available(macOS 14.0, *))
+	{
+		rt_render = dev.supportsRaytracingFromRender ? 1 : 0;
+	}
+
+	R_Printf(0, "Metal device: %s\n", dev.name.UTF8String);
+	R_Printf(0, "Metal supportsFamily (apple5 to apple9): %s\n", n ? list : "none");
+	R_Printf(0, "Metal supportsRaytracing: %s, supportsRaytracingFromRender: %s\n",
+			dev.supportsRaytracing ? "yes" : "no", rt_render ? "yes" : "no");
 }
 
 /* ref_gl1.metallib lies next to the dylib this code is linked into. */
@@ -289,9 +340,11 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 		mgl_depth_states = [NSMutableDictionary dictionary];
 
 		snprintf(mgl_device_name, sizeof(mgl_device_name), "%s", mgl_device.name.UTF8String);
+		mgl_report_capabilities(mgl_device);
 	}
 
 	count_frames = count_no_drawable = count_skipped = count_ring_full = 0;
+	atomic_store(&count_failed, 0);
 	mgl_ready = 1;
 	return 1;
 }
@@ -336,6 +389,36 @@ mgl_new_texture(MTLPixelFormat format, int w, int h, MTLTextureUsage usage)
 	return [mgl_device newTextureWithDescriptor:d];
 }
 
+/*
+ * Reports a command buffer that ends in error (a GPU fault, a timeout, or
+ * a fault the shader validation layer found), which would otherwise draw
+ * nothing and say nothing: the first MGL_FAILED_LOGGED are logged, all are
+ * counted and the count is printed when the context is destroyed. Called
+ * before every commit.
+ */
+#define MGL_FAILED_LOGGED 8
+
+static void
+mgl_watch(id<MTLCommandBuffer> cmd)
+{
+	[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
+		unsigned long n;
+
+		if (b.status != MTLCommandBufferStatusError)
+		{
+			return;
+		}
+
+		n = atomic_fetch_add(&count_failed, 1);
+
+		if (n < MGL_FAILED_LOGGED)
+		{
+			fprintf(stderr, "mgl: a command buffer failed: %s\n",
+					b.error ? b.error.localizedDescription.UTF8String : "no error given");
+		}
+	}];
+}
+
 /* Commits cmd and waits for it, at most MGL_GPU_WAIT_MS. */
 static int
 mgl_commit_wait(id<MTLCommandBuffer> cmd)
@@ -343,6 +426,7 @@ mgl_commit_wait(id<MTLCommandBuffer> cmd)
 	dispatch_semaphore_t done = dispatch_semaphore_create(0);
 	long r;
 
+	mgl_watch(cmd);
 	[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 		(void)b;
 		dispatch_semaphore_signal(done);
@@ -365,6 +449,7 @@ mgl_commit_uploads(void)
 
 	if (upload_cmd)
 	{
+		mgl_watch(upload_cmd);
 		[upload_cmd commit];
 		upload_cmd = nil;
 	}
@@ -778,6 +863,7 @@ mgl_layer_present(void)
 				[frame_cmd presentDrawable:frame_drawable];
 			}
 
+			mgl_watch(frame_cmd);   /* first: it counts before the slot is given back */
 			[frame_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 				(void)b;
 				dispatch_semaphore_signal(sem);
@@ -823,6 +909,7 @@ mgl_layer_destroy(void)
 			dispatch_semaphore_t sem = mgl_frame_sem;
 
 			mgl_end_encoder();
+			mgl_watch(frame_cmd);   /* first: it counts before the wait below returns */
 			[frame_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 				(void)b;
 				dispatch_semaphore_signal(sem);
@@ -847,6 +934,11 @@ mgl_layer_destroy(void)
 
 		fprintf(stderr, "mgl: %lu frames, %lu without a drawable, %lu skipped, %lu draws past the vertex ring\n",
 				count_frames, count_no_drawable, count_skipped, count_ring_full);
+
+		if (atomic_load(&count_failed))
+		{
+			fprintf(stderr, "mgl: %lu command buffers failed\n", atomic_load(&count_failed));
+		}
 
 		mgl_release_all();
 	}
