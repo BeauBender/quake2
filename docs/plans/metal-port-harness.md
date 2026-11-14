@@ -2631,3 +2631,9 @@ render-stage ray queries and the performance numbers.
   unattended run prompt is [`metal-port-agent-prompt.md`](metal-port-agent-prompt.md).
 - Whether a freely distributable demo may be downloaded for a CI-side pin
   job (INFORM9, option C). Until then CI runs synthetic frames only.
+
+## The 60 fps cap at 1920x1080 windowed (FIX52)
+
+Work in progress (FIX52, #239): the diagnosis of the 60 fps cap that
+`soft`, the Metal-backed `gl1` and `ref_metal` show at 1920x1080
+windowed with `r_vsync 0`. The measurements follow.
