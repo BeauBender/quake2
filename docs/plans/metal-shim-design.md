@@ -443,6 +443,8 @@ correct implementation; the choice (a reference from an accelerated GL,
 `gl_polyblend 0` in the scenario, or a recorded exception) is the
 owner's, not this card's, and no threshold was changed.
 
+Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hud2d` now passes at the defaults.
+
 ## 9. As built by TASK82 (S2b): departures from section 2
 
 - **Matrices.** `glFrustum`, `glRotatef`, `glTranslatef` and `glScalef`
@@ -494,9 +496,12 @@ owner's, not this card's, and no threshold was changed.
   once: a build with a 4096-byte ring drew 190 draws past it over the
   707 frames of `hud2d`, and its 23 frames were identical (score 0) to
   the 8 MB build's. The uniforms still go by `setVertexBytes`.
-- **Points and lines.** The 2D path uses neither (gl1 draws `GL_POINTS`
-  only for particles and `GL_LINES`/`GL_LINE_STRIP` only for debug
-  views), so they stay reported and undrawn until S6.
+- **Points and lines.** The 2D path draws neither, so they stay reported
+  and undrawn until S6. gl1 does draw `GL_LINES` under the 2D projection
+  for the interleaved-stereo stencil mask (`gl1_main.c`, `R_RenderView`,
+  near line 1070); the shim reports that call and draws nothing, so the
+  mask is empty in those stereo modes. They are not the default and no
+  pin scenario uses them. Lines and points land with S6.
 - **Still not drawn:** texture unit 1 and `GL_COMBINE` (S3).
 - **The reference flaw.** `hud2d` now sets `gl_polyblend 0`
   (`docs/plans/metal-port-harness.md`, "The screen flash and `hud2d`"):
@@ -504,3 +509,8 @@ owner's, not this card's, and no threshold was changed.
   pickup frames, where Apple's software renderer darkens a wedge. Against
   the re-recorded references `gl1-metal` is exact on all 23 frames.
 - **Gate.** The host test links `-lm` (the rotation needs `sin`, `cos`).
+- **Sanitizers.** An `ASAN=1 UBSAN=1` build of the shim recorded `hud2d`
+  and `cinematic` with no sanitizer line in the engine log, and both
+  records pass against `gl1` with the same numbers as the release build
+  (the implementer's run). A reviewer also ran the host test under ASAN
+  and UBSAN: 327 checks, 0 failed.

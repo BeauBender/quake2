@@ -603,7 +603,10 @@ scratch, one pair per cause):
 - Clear colour in `hud2d`: with `r_drawworld 0` `soft` leaves a uniform
   grey (26, 26, 26) and `gl1` its own clear colour (255, 0, 128, set in
   `R_ResetClearColor` in `gl1_main.c`), 304,338 and 304,308 of 307,200
-  pixels. That is the whole of the 0.46 score; the status bar and
+  pixels. That is the whole of the 0.46 score (measured before the
+  `gl_polyblend 0` change; the re-measured range of 0.461199 to 0.471755
+  above includes the `soft`-only pickup darkening, see the note there, and
+  the pixel counts hold for a frame without a pickup); the status bar and
   crosshair are the same size in both.
 - Not isolated: on `world` frame 21 the cloud pattern of the sky and the
   top of the tower differ in shape between the renderers; the cause was
