@@ -156,6 +156,24 @@ does not wait for the display to sync, as that wait does not end on a
 host that never shows the window. A machine where the accelerated
 request succeeds is not affected.
 
+### Recording the gl1 references
+
+A reference is a `gl1` record of each scenario, made once per engine
+commit on a machine where `ref_gl1` renders:
+
+```sh
+for s in world hud2d models particles; do scripts/pins.sh record gl1 $s; done
+PINS_DEMO=water.dm2 scripts/pins.sh record gl1 skywater   # after make-demo water
+PINS_DEMO=idlog.cin PINS_EVERY=7 scripts/pins.sh record gl1 cinematic
+```
+
+To know how much two `gl1` records differ by themselves, record a scenario
+a few times (`--run 2`, `--run 3`) and compare them with each other as
+shown under *Comparing*. `soft` and `gl1` do not draw the same picture
+(palette against true colour, filtering, lighting), so a candidate is
+judged against `gl1`, not `soft`. The measured numbers, the host and the
+renderer string are in `docs/plans/metal-port-harness.md`.
+
 ## Comparing
 
 ```sh
