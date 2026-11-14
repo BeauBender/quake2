@@ -1566,7 +1566,9 @@ Enabled` and the teardown with `0 live objects`.
 N7 is judged on `models` at the tight values (`--threshold 0.005
 --bad-threshold 0.001`, stricter than the card's defaults) against two
 `gl1-metal` records, with `world`, `skywater`, `world-fullbright`,
-`hud2d` and `cinematic` as the regressions (`docs/plans/ref-metal-native.md`,
+`hud2d` and `cinematic` as the regressions, and `skywater` from
+`water.dm2` at N6's 0.02 and 0.03 against two `gl1-metal` records, at the
+default cadence and with `PINS_EVERY=5` (`docs/plans/ref-metal-native.md`,
 section 22). References are `gl1-metal` records in a private store,
 without traces:
 
@@ -1578,6 +1580,11 @@ MTL_DEBUG_LAYER=1 scripts/pins.sh record gl1-metal models --run 2
 MTL_DEBUG_LAYER=1 scripts/pins.sh record metal models [--run 2]
 scripts/pins.sh compare metal models [--run 2] --ref gl1-metal --ref-id <each reference> --threshold 0.005 --bad-threshold 0.001
 # world, skywater, world-fullbright, hud2d as in N6; cinematic as in N2 (PINS_DEMO=idlog.cin PINS_EVERY=7)
+make ref_soft && scripts/pins.sh make-demo water   # once, as in N6
+PINS_DEMO=water.dm2 scripts/pins.sh record gl1-metal skywater [--run 2]
+PINS_DEMO=water.dm2 scripts/pins.sh record metal skywater
+PINS_DEMO=water.dm2 scripts/pins.sh compare metal skywater --ref gl1-metal --ref-id <each reference> --threshold 0.02 --bad-threshold 0.03
+# the same three with PINS_EVERY=5 as well (19 frames; --cand-id names the record of that cadence)
 make ASAN=1 client ref_metal game        # then PINS_BIN=debug/quake2, and --cand-id on the compare
 ```
 
