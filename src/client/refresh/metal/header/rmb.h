@@ -448,6 +448,13 @@ int rm_vis_header_ok(long numclusters, long len);
 int rm_leaf_ok(long cluster, long area, long numclusters, int has_vis);
 
 /*
+ * A leaf's contents: anything but CONTENTS_NODE (-1), which files/models.c
+ * (Mod_SetParent, Mod_PointInLeaf) and the draw take for a node, reading
+ * the leaf's marksurface fields as children.
+ */
+int rm_leaf_contents_ok(long contents);
+
+/*
  * Marks [first, first + count) of owner[total] as taken (a node's
  * surfaces): 0, and nothing marked, when the range leaves the table or a
  * surface is taken already. gl1 links a surface into its texture chain

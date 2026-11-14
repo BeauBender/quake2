@@ -832,6 +832,12 @@ rm_leaf_ok(long cluster, long area, long numclusters, int has_vis)
 }
 
 int
+rm_leaf_contents_ok(long contents)
+{
+	return contents != -1;   /* CONTENTS_NODE */
+}
+
+int
 rm_mark_once(unsigned char *owner, long total, long first, long count)
 {
 	long i;

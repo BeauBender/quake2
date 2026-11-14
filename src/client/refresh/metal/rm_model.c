@@ -775,7 +775,10 @@ RM_BuildWorld(model_t *mod)
 	}
 }
 
-/* from gl1_model.c; the cluster and the area are checked (R_MarkLeaves and R_AreaVisible index by them) */
+/*
+ * from gl1_model.c; the cluster and the area are checked (R_MarkLeaves and
+ * R_AreaVisible index by them), and the contents are not a node's
+ */
 static void
 Mod_LoadLeafs(model_t *loadmodel, byte *mod_base, lump_t *l)
 {
@@ -817,6 +820,11 @@ Mod_LoadLeafs(model_t *loadmodel, byte *mod_base, lump_t *l)
 		if (!rm_leaf_ok(out->cluster, out->area, numclusters, loadmodel->vis != NULL))
 		{
 			RM_Refuse(loadmodel, "leaf %d has cluster %d and area %d", i, out->cluster, out->area);
+		}
+
+		if (!rm_leaf_contents_ok(p))
+		{
+			RM_Refuse(loadmodel, "leaf %d has the contents of a node", i);
 		}
 
 		/* make unsigned long from signed short */

@@ -1107,6 +1107,10 @@ test_bsp_bounds(void)
 	CHECK(rm_leaf_ok(-1, 0, 4, 1) && rm_leaf_ok(3, 255, 4, 1) && !rm_leaf_ok(4, 0, 4, 1));
 	CHECK(!rm_leaf_ok(-2, 0, 4, 1) && !rm_leaf_ok(0, 256, 4, 1) && !rm_leaf_ok(0, -1, 4, 1));
 	CHECK(rm_leaf_ok(70000, 0, 0, 0));   /* without visibility the cluster indexes nothing */
+
+	/* a leaf's contents may be anything but CONTENTS_NODE, the mark of a node */
+	CHECK(rm_leaf_contents_ok(0) && rm_leaf_contents_ok(1) && rm_leaf_contents_ok(-2) && rm_leaf_contents_ok(0x7fffffff));
+	CHECK(!rm_leaf_contents_ok(-1));
 }
 
 /* nexttexinfo chains: in range, and each one ends or returns to its start (Mod_LoadTexinfo's count loop). */
