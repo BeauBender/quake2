@@ -44,3 +44,14 @@ record that names this one.
 The loop also reads the switch from the environment variable
 `DEVLOOP_MEMORY_SHARED`, which takes precedence over the file. Setting it to
 `true` anywhere re-enables syncing, so it is not set.
+
+## Addendum 2026-11-14: the tracked notes leave the tree (TASK103, #235)
+
+The owner has since decided that agent memory is not kept in this
+repository at all, so point 2 is superseded: the notes that were tracked
+under `.claude/memory/` are removed from the tree, `.claude/memory/` is
+ignored, and `tests/check-no-tracked-memory.sh` fails when any file there
+is tracked. Agent memory is persisted outside the repository, as
+`CLAUDE.md` describes in its working rules. Points 1 and 3 stand, and
+`memory.shared` stays `false`. The removed notes stay in history; history
+is not rewritten.
