@@ -201,6 +201,21 @@ before=$(git -C "${tmp:?}/store.git" rev-parse main)
 expect_ok "unchanged push" push "$tmp/A"
 [ "$(git -C "${tmp:?}/store.git" rev-parse main)" = "$before" ] || fail "an unchanged push made a commit"
 
+# a new machine: a file the store also holds, with other content, is a
+# conflict (the base of a first sync is empty), a file only it holds merges
+mkdir -p "${tmp:?}/H" "${tmp:?}/H2"
+printf 'stale-h-marker\n' > "${tmp:?}/H/a.md"
+expect_fail "first sync with a different local copy" push "$tmp/H"
+[ "$(cat "${tmp:?}/H/a.md")" = stale-h-marker ] || fail "first sync: the local copy was overwritten"
+cmp -s "${tmp:?}/H/a.md.store" "${tmp:?}/A/a.md" || fail "first sync: the store's copy is not beside it"
+cmp -s "${tmp:?}/A/a.md" "${tmp:?}/B/a.md" && [ "$(show store.git quake2/memory/a.md)" = alpha-content-marker ] ||
+	fail "first sync: the store's copy was replaced"
+printf 'h2-marker\n' > "${tmp:?}/H2/h2.md"
+expect_ok "first sync with a new local file" push "$tmp/H2"
+has store.git quake2/memory/h2.md || fail "first sync: the new local file was not pushed"
+cmp -s "${tmp:?}/H2/b.md" "${tmp:?}/B/b.md" || fail "first sync: the store's files were not pulled"
+expect_ok "pull h2" pull "$tmp/A"
+
 # an edit in the same second as the last push is kept (no file times)
 printf 'one-marker\n' > "${tmp:?}/A/x.md"
 expect_ok "push x" push "$tmp/A"
@@ -421,7 +436,7 @@ expect_fail "rewritten store" push "$tmp/A"
 # --- nothing printed names the store, a path, or a file's content ------------
 
 for marker in "$slug" 'selftest_store' "$tmp" 'alpha-content-marker' 'beta-content-marker' \
-	'one-marker' 'two-marker' 'secret-link-marker' 'A-line-marker' 'B-line-marker' 'r-A-marker' \
+	'stale-h-marker' 'h2-marker' 'one-marker' 'two-marker' 'secret-link-marker' 'A-line-marker' 'B-line-marker' 'r-A-marker' \
 	'r-B-marker' 'n-marker' 'other-machine-marker' 'b2-marker' 'cp-in-marker' 'env-marker' \
 	'victim-original' 'd-private-marker' 'outside-secret-marker' 'e-marker' 'f-marker' \
 	'g-marker' 'gamma-marker'; do
