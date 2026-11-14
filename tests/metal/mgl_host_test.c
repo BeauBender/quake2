@@ -1665,7 +1665,7 @@ test_points_lines(void)
 		{0, 90, 153, 90, 0}, {78, 255, 255, 255, 78}, {127, 255, 255, 255, 127},
 		{55, 255, 255, 255, 55}, {0, 44, 102, 44, 0}
 	};
-	static const GLfloat gl1_att[3] = {0.01f, 0.0f, 0.01f}, no_att[3] = {0, 0, 0};
+	static const GLfloat gl1_att[3] = {0.01f, 0.0f, 0.01f}, no_att[3] = {0, 0, 0}, lin_att[3] = {0, 1, 0};
 	static const GLubyte clr[] = {255, 128, 0, 51, 1, 2, 3, 4, 9, 8, 7, 6, 0, 0, 255, 255};
 	static const GLushort elems[] = {3, 1, 2, 4};
 	GLfloat pv[9] = {0}, seg[] = {0, 0.5f, 640, 0.5f, 0, 2.5f, 640, 2.5f, 7, 7};
@@ -1737,6 +1737,10 @@ test_points_lines(void)
 	CHECK(last_draw.vertices[0].pt[2] == 3.65f && quad_at(0, 28.35f, 28.45f, 36.65f, 36.75f) &&
 		(int)(mgl_point_coverage(-4, -0.1f, 3.65f) * 255 + 0.5f) == 38);
 	glDisable(GL_POINT_SMOOTH);
+	/* the next triangles carry no point data */
+	glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+	CHECK(last_draw.nvertices == 4 && last_draw.vertices[0].pt[3] == 0 && last_draw.vertices[2].pt[0] == 0 &&
+		last_draw.vertices[3].pt[2] == 0);
 
 	/* the viewport moves the window: NDC (0, 0) is (200, 100); size 3 covers 199..202 */
 	glMatrixMode(GL_PROJECTION);
@@ -1757,9 +1761,23 @@ test_points_lines(void)
 	pv[0] = 0; pv[1] = -1.001f;
 	glDrawArrays(GL_POINTS, 0, 1);
 	CHECK(draws == n + 1);
+	/* past the far plane, and at w 0 (the eye itself): dropped */
+	glVertexPointer(3, GL_FLOAT, 0, pv);
+	pv[0] = pv[1] = 0; pv[2] = 1.001f;
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(draws == n + 1);
+	glVertexPointer(4, GL_FLOAT, 0, pv);
+	pv[2] = pv[3] = 0;
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(ERR() == GL_NO_ERROR && draws == n + 1);
+	pv[3] = 1;
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(draws == n + 2);
+	glVertexPointer(2, GL_FLOAT, 0, pv);
+	n = draws;
 	set_viewport(0, 0, 0, 0);
 	glDrawArrays(GL_POINTS, 0, 2);
-	CHECK(ERR() == GL_NO_ERROR && draws == n + 1);
+	CHECK(ERR() == GL_NO_ERROR && draws == n);
 	set_viewport(0, 0, 640, 480);
 
 	/*
@@ -1795,6 +1813,12 @@ test_points_lines(void)
 	CHECK(mgl_point_size(&mgl_state, e, 0) == MGL_POINT_ALIASED_MAX && mgl_point_size(&mgl_state, e, 1) == MGL_POINT_SMOOTH_MAX);
 	glPointSize(0.01f);
 	CHECK(mgl_point_size(&mgl_state, e, 0) == 1.0f && mgl_point_size(&mgl_state, e, 1) == MGL_POINT_SMOOTH_MIN);
+	/* the linear term alone, which gl1 leaves at 0: 40 / sqrt(d) at d 5 (eye (3, 0, -4)) is 17.8885 */
+	glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, lin_att);
+	glPointSize(40);
+	e[0] = 3; e[2] = -4;
+	CHECK(near1(mgl_point_size(&mgl_state, e, 1), 17.88854f) && mgl_point_size(&mgl_state, e, 0) == 18.0f);
+	e[0] = 0;
 
 	/*
 	 * R_DrawParticles: a perspective view, the eye moved by the modelview
