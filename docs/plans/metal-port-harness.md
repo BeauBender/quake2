@@ -1257,15 +1257,16 @@ the software renderer (dropped edge polygons, the classic-path streaks,
 the wedge-shaped flash) do not appear against an accelerated reference.
 
 **`ref_metal` against the new references** (two `metal` records of each
-scenario it draws on main, `world` with lightmaps since N5; each against
+scenario it draws at `de1da7fd`, `world` with lightmaps since N5; each against
 both `gl1` records, 4 pairs; every log `0 live objects`): `hud2d` and
 `cinematic` exact on every frame; `world` frames 0 to 18 (the frames N4 and
 N5 judge) worst 0.000008 and 0.000016, frames 19, 20 and 22 pass, frame 21
 over at score 0.049744 and bad 0.264007; `world-fullbright` frames 0 to 18
 worst 0.000031 and 0.000072, frame 21 over at 0.055007 and 0.266637.
 Frame 21 holds the sky and the translucent surface that `ref_metal` skips
-until N6 (the exclusion rule of N4), so it is that card's work, not a
-fault. `metal` is exact run to run on all four.
+until N6 (the exclusion rule of N4), so it was that card's work, not a
+fault. N6 (TASK89) has since merged; frame 21 was not measured against
+the accelerated references after it. `metal` is exact run to run on all four.
 
 ### Closing TASK21 on the build host
 
