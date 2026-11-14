@@ -365,9 +365,12 @@ differs from the text above, this list is what the tree does.
   `mgl_state.c` and `glPixelStorei` with the system compiler on every OS,
   and builds `make ref_gl1 WITH_METAL_SHIM=yes` only on Darwin with
   `xcrun -f metal` and SDL 3 configured, printing `skipped: <reason>`
-  otherwise. No CI workflow builds the shim: the switch is off by
-  default, so the macOS job is unaffected; building it there needs the
-  Metal toolchain on the runner and a workflow change, a follow-up card.
+  otherwise. Since TASK96 the CodeQL `c-cpp` job
+  (`.github/workflows/codeql.yml`) builds `ref_gl1` with
+  `WITH_METAL_SHIM=yes METAL_SHADERS=no` on macOS for analysis: the C and
+  Objective-C are compiled, the shaders are not (the hosted runner has no
+  Metal shader compiler and nothing is installed); the macOS test build still
+  builds with the switch off.
 - **Switching back.** The OpenGL build of `ref_gl1` removes
   `release/ref_gl1.metallib` when its mode stamp is made, so the shaders
   of a shim build do not stay beside a dylib that does not use them.

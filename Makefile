@@ -87,6 +87,15 @@ WITH_XDG:=yes
 # ref_gl1.dylib. Work in progress: see doc/100_renderpins.md.
 WITH_METAL_SHIM:=no
 
+# METAL_SHADERS
+# macOS only, for ref_metal and the WITH_METAL_SHIM ref_gl1. "yes"
+# compiles the shaders to a .metallib with xcrun metal. "no" builds the
+# C and Objective-C objects and the dylibs only, without the shader
+# compile and its toolchain check, so the build runs on a machine that
+# has no Metal shader compiler (the CodeQL job). The dylibs built that
+# way have no .metallib and cannot create a Metal context.
+METAL_SHADERS:=yes
+
 # OSX_APP
 # This will set the build options to create an MacOS .app-bundle.
 # The app-bundle itself will not be created, but the runtime paths
@@ -473,6 +482,7 @@ config:
 	@echo "WITH_SYSTEMDIR = $(WITH_SYSTEMDIR)"
 	@echo "WITH_XDG = $(WITH_XDG)"
 	@echo "WITH_METAL_SHIM = $(WITH_METAL_SHIM)"
+	@echo "METAL_SHADERS = $(METAL_SHADERS)"
 	@echo "============================"
 	@echo ""
 
@@ -669,7 +679,9 @@ MGL_DIR := src/client/refresh/gl1/metal
 MGL_OBJDIR := $(BUILDDIR)/ref_gl1_metal
 MGL_CFLAGS := -DMGL_RENDERER_SUFFIX=\"gl1-metal\"
 
+ifeq ($(METAL_SHADERS), yes)
 $(BINDIR)/ref_gl1.dylib : $(BINDIR)/ref_gl1.metallib
+endif
 
 # The shaders, loaded from next to the dylib at context creation.
 $(BINDIR)/ref_gl1.metallib : $(MGL_DIR)/shaders.metal $(MGL_DIR)/mgl_texenv.h \
@@ -831,7 +843,9 @@ $(BINDIR)/ref_metal.dylib : LDFLAGS += -shared -framework Metal -framework Quart
 
 # The shaders, loaded from next to the dylib when the context is made,
 # compiled with the shim's xcrun metal flags (design section 4).
+ifeq ($(METAL_SHADERS), yes)
 $(BINDIR)/ref_metal.dylib : $(BINDIR)/ref_metal.metallib
+endif
 
 $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/common/mtl_shader_math.h

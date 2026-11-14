@@ -6,8 +6,8 @@ platforms are built and tested by this fork.
 
 Only Apple platforms are built and tested by this fork. The instructions for
 Windows, Linux and the BSDs below are kept as they were and those platforms
-are unmaintained: nothing tests them or runs them. The only Linux check is
-that CodeQL compiles the code there; BSD and Windows are compiled nowhere.
+are unmaintained: nothing tests them or runs them. Linux, BSD and Windows are
+compiled nowhere in CI; CodeQL analyses the code as built on macOS.
 
 
 ## The Full Version
