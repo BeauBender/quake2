@@ -122,6 +122,19 @@ RT10 belong to TASK25 and carry TASK24. Design:
 | RT9 | Render-stage ray queries on M3 or later, compute path kept for older families | RT7 | T2 | opus | section 4; row RT9 | Both paths produce the same pins within 0.005. fps on the T2 host at native resolution is recorded in `docs/audits/rt-performance.md` | TASK61 (#104) |
 | RT10 | Refit against rebuild tuning and resolution-scale defaults per GPU family | RT9 | T2 | opus | row RT10 | A per-pass timing table for each host is in `docs/audits/rt-performance.md`. No pin changes | TASK62 (#105) |
 
+## Pull order
+
+Record 0006 (`docs/decisions/0006-port-first.md`) sets the queue. The port
+queue is the rows of this file, in the order the sections list them: P1 to
+P3, R1 to R5, S1 to S6 (S3 to S6 stacked on their predecessor's open pull
+request), then TASK28, TASK20, TASK22, TASK23, then RT1 to RT10 with RTA.
+Their parents (TASK27, TASK21, TASK24, TASK25) follow their children.
+
+Everything else is parked: the card carries the label
+`gate:manual:port-first` and is not ready. It is released only when it
+blocks a port card, or when no port card can start. A review finding
+outside a port card's scope goes to a parked card.
+
 ## Order of work and what gates it
 
 1. Land the branch that carries this file. Done: `metal-port-harness` was
