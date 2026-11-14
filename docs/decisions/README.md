@@ -19,3 +19,4 @@ them (record 0004); one becomes a record here when it is settled.
 | [0006](0006-port-first.md) | Port first: review depth by path, stacked shim cards, parked non-port cards |
 | [0007](0007-pr-evidence-frames.md) | Rendered frames and short clips may be published as pull-request evidence |
 | [0008](0008-apple-platforms-only.md) | Apple platforms only: Linux test builds dropped, other platforms unmaintained |
+| [0009](0009-no-shared-memory.md) | Agent memory is not synced through the repository: shared memory off |
