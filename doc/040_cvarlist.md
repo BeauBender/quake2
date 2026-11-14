@@ -374,6 +374,18 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   90`, it defaults to `80` because that looks a bit better. Set to `-1`
   for the same value as `fov`.
 
+* **hand**: Which hand the view weapon is held in: `0` right (the
+  default), `1` left (the weapon is drawn mirrored), `2` centered (the
+  OpenGL 1.4 and the Metal renderer then do not draw it). It is also
+  sent to the server.
+
+* **r_drawentities**: If set to `0`, no entity (model, door, platform)
+  is drawn. Defaults to `1`.
+
+* **r_lerpmodels**: If set to `1` (the default), the models are drawn
+  interpolated between their last two animation frames; at `0` they
+  jump from frame to frame.
+
 * **horplus**: If set to 1 (the default) the horplus algorithm is used
   to calculate an optimal horizontal and vertical field of view,
   independent of the window or screen aspect ratio or resolution.
@@ -631,8 +643,15 @@ only, with `make ref_metal`. It is work in progress (see
 the screen blend and the world's opaque surfaces with their lightmaps,
 animated lightstyles and `gl1_overbrightbits` (a surface a dynamic light
 touches keeps its static lightmap), the sky box, the warped water, the
-translucent and the flowing surfaces; dynamic lights and models are not
-drawn yet.
+translucent and the flowing surfaces, the brush entities (doors and
+platforms) and the alias models with their shells and the view weapon.
+It takes the OpenGL 1.4 renderer's `r_drawentities`, `r_lerpmodels`,
+`hand` and `r_gunfov` as that renderer does. Sprites, beams, dynamic
+lights, flash blobs, shadows (`r_shadows`, `gl1_stencilshadow`) and
+particles are not drawn yet, and `gl_zfix`, `gl1_ztrick` (the OpenGL
+1.4 renderer's alternating depth range) and `gl_showbbox` (its outline
+of each model's bounding box) are not taken. A brush entity drawn translucent (which no
+map of the game has) is not drawn.
 
 * **metal_stats**: When set to `1`, the Metal renderer prints one line
   per screenshot (so per frame the pin harness captures) and one at
@@ -645,8 +664,12 @@ drawn yet.
   after initialisation), its Metal objects still alive, and the sky,
   warped, translucent and flowing surfaces of the last 3D view whose draw
   it refused (a polygon too large for the sky clip, no room in the frame
-  ring, a missing texture), and the surfaces it drew with their static lightmap although a
-  dynamic light touches them (it does not add dynamic lights yet). When a
+  ring, a missing texture), the surfaces it drew with their static lightmap although a
+  dynamic light touches them (it does not add dynamic lights yet), and the
+  entities of the last 3D view it did not draw: sprites, beams and null
+  models (not drawn yet), translucent brush models, and models whose draw
+  it refused (a position or angle that is not a finite number, no room in
+  the frame ring, a missing texture). When a
   map is loaded it also prints the vertex, index and surface-record counts
   and bytes of the map's retained buffers, and the number of its lightmap
   slices. The

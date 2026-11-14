@@ -4278,6 +4278,21 @@ test_alias_emit(void)
 			out, 9, idx, 14, &ni) == -1);
 	CHECK(rm_alias_emit(order, n, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, 0, sl, 0, NULL, gamma, 255,
 			out, 9, idx, 15, &ni) == 9 && ni == 15);
+	/* a strip of 2 after the strip of 4, then the end: refused (gl1 would add two vertices and no triangle) */
+	memcpy(bad, order, sizeof(order));
+	bad[13] = 2;
+	bad[20] = 0;
+	CHECK(rm_alias_emit(bad, 21, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, 0, sl, 0, NULL, gamma, 255,
+			out, VCAP, idx, ICAP, &ni) == -1);
+	/* the strip of 4 with its last vertex cut: from a copy of exactly the ints given, nothing past them is read */
+	{
+		int *cut = malloc(12 * sizeof(int));
+
+		memcpy(cut, order, 12 * sizeof(int));
+		CHECK(rm_alias_emit(cut, 12, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, 0, sl, 0, NULL, gamma,
+				255, out, VCAP, idx, ICAP, &ni) == -1);
+		free(cut);
+	}
 }
 
 /* gl1_mesh.c, R_CullAliasModel from the frame pointers on, verbatim (frustum passed in) */
@@ -4591,6 +4606,7 @@ test_weapon(void)
 	/* a frustum glFrustum refuses leaves the mirror or the identity, as the shim's matrix stays */
 	CHECK(!rm_weapon_projection(m, 73.74f, 80, 1, 640, 0, 4, 0, 0, 0, 0) && m[0] == -1 && m[5] == 1 && m[15] == 1);
 	CHECK(!rm_weapon_projection(m, 0, 0, 0, 640, 480, 4, 0, 0, 0, 0) && m[0] == 1 && m[1] == 0 && m[15] == 1);
+	CHECK(!rm_weapon_projection(m, 73.74f, 0, 0, 640, 480, 4, 0, 0, 0, 0) && m[0] == 1 && m[5] == 1);
 
 	/* the depth range: gl1's 0 .. 0.3 with RF_DEPTHHACK; the window depth of a point there as GL computes it */
 	rm_alias_depth(0, &zn, &zf);
@@ -4675,6 +4691,7 @@ test_weapon(void)
 		{
 			org[k] = rngf(-2000, 2000);
 			ang[k] = (n % 3) ? 0 : rngf(-180, 180);
+			ang[k] = ((n % 3 == 1) && (k == 2)) ? rngf(-180, 180) : ang[k];
 			mins[k] = rngf(-100, 0);
 			maxs[k] = rngf(0, 100);
 			vo[k] = rngf(-2000, 2000);
@@ -4765,6 +4782,12 @@ test_alias_region(void)
 	CHECK(!rm_alias_region(&ring, 2, 3, &c) && !rm_alias_region(&ring, 3, 2, &c) && !rm_alias_region(&ring, 3, 4, &c));
 	CHECK(!rm_alias_region(&ring, -1, 3, &c) && !rm_alias_region(&ring, LONG_MAX, 3, &c) && !rm_alias_region(NULL, 3, 3, &c));
 	CHECK(ring.used == 8492);
+	/* one past either count is refused even where the ring has the room */
+	ring.size = RMB_RING_BYTES;
+	ring.used = 0;
+	CHECK(!rm_alias_region(&ring, RM_ALIAS_MAX_VERTS + 1, 3, &c) && ring.used == 0);
+	CHECK(!rm_alias_region(&ring, 3, RM_ALIAS_MAX_INDICES + 3, &c) && ring.used == 0);
+	CHECK(rm_alias_region(&ring, RM_ALIAS_MAX_VERTS, RM_ALIAS_MAX_INDICES, &c) && c.nverts == RM_ALIAS_MAX_VERTS);
 	/* at the limit: the largest model in a ring of exactly its size */
 	ring.size = 16384 * 48 + 256 * 0 + (size_t)RM_ALIAS_MAX_INDICES * 2;
 	ring.used = 0;
@@ -5018,6 +5041,73 @@ test_md2_check(void)
 	memcpy(m, b, MD2_LEN);
 	put32(m + 4 * 5, 40);
 	CHECK(!md2_loads(m, MD2_LEN) && !rm_md2_check(m, MD2_LEN, &in));
+	/* a strip of 2 between two good ones (gl1 draws nothing of it; a count below 3 is refused all the same) */
+	memcpy(m, b, MD2_LEN);
+	put32(m + 260 + 4 * 10, 2);
+	put32(m + 260 + 4 * 17, 0);
+	CHECK(md2_loads(m, MD2_LEN) && !rm_md2_check(m, MD2_LEN, &in) && in.verts == 0 && in.indices == 0);
+	/* the stream moved 2 bytes off its alignment, whole (the loader would read it misaligned): refused */
+	memcpy(m, b, MD2_LEN);
+	memmove(m + 262, b + 260, 96);
+	put32(m + 4 * 15, 262);
+	put32(m + 4 * 16, 358);
+	CHECK(!rm_md2_check(m, MD2_LEN + 2, &in));
+	/* 40 skins declared, room for the 32 the loader keeps: accepted as the loader accepts them */
+	{
+		const long len = 68 + 32 * 64 + 4 + 12 + 112 + 96;
+		unsigned char *sk = calloc(1, (size_t)len);
+		long k;
+
+		memcpy(sk, b, 68);
+		put32(sk + 4 * 5, 40);
+		put32(sk + 4 * 12, 68 + 32 * 64);
+		put32(sk + 4 * 13, 68 + 32 * 64 + 4);
+		put32(sk + 4 * 14, 68 + 32 * 64 + 16);
+		put32(sk + 4 * 15, 68 + 32 * 64 + 128);
+		put32(sk + 4 * 16, len);
+		memcpy(sk + 68 + 32 * 64 + 16, b + 148, 112 + 96);
+
+		for (k = 0; k < 32; k++)
+		{
+			memcpy(sk + 68 + 64 * k, "models/test/skin.pcx", 20);
+		}
+
+		CHECK(md2_loads(sk, len) && rm_md2_check(sk, len, &in) && in.num_skins == 32 && md2_draws(sk, &in));
+		free(sk);
+	}
+	/* 2049 vertices with the frames to hold them: the loader refuses them, so the check does */
+	{
+		const long fs = 40 + 4 * 2049, len = 260 + 2 * fs + 96;
+		unsigned char *big = calloc(1, (size_t)len);
+
+		memcpy(big, b, 148);
+		put32(big + 4 * 4, fs);
+		put32(big + 4 * 6, 2049);
+		put32(big + 4 * 14, 148);
+		put32(big + 4 * 15, 148 + 2 * fs);
+		put32(big + 4 * 16, 148 + 2 * fs + 96);
+		memcpy(big + 148 + 2 * fs, b + 260, 96);
+		CHECK(!md2_loads(big, len) && !rm_md2_check(big, len, &in));
+		put32(big + 4 * 6, 2048);
+		CHECK(md2_loads(big, len) && rm_md2_check(big, len, &in) && md2_draws(big, &in));
+		free(big);
+	}
+	/* a stream whose last vertex runs one int past the file, read from a copy of exactly that size */
+	{
+		const long len = 260 + 4 * 9;
+		unsigned char *cut = malloc((size_t)len);
+
+		memcpy(cut, b, (size_t)len);
+		put32(cut + 4 * 9, 9);
+		put32(cut + 4 * 16, len);
+		put32(cut + 260, 3);
+		CHECK(!rm_md2_check(cut, len, &in) && in.verts == 0);
+		free(cut);
+	}
+	/* a stream without its end leaves no count behind */
+	memcpy(m, b, MD2_LEN);
+	put32(m + 260 + 4 * 23, 3);
+	CHECK(!rm_md2_check(m, MD2_LEN, &in) && in.verts == 0 && in.indices == 0);
 	/* a stream of just its end: nothing to draw, refused */
 	memcpy(m, b, MD2_LEN);
 	put32(m + 260, 0);
@@ -5136,6 +5226,22 @@ test_sp2_check(void)
 	CHECK(!rm_sp2_check(m, LEN));
 	put32(m + 8, 1);
 	CHECK(rm_sp2_check(m, LEN) && sp2_loads(m, LEN));
+	/* a first frame's name without its end, the next frame's width 0 after it: refused */
+	memcpy(m, b, LEN);
+	memset(m + 12 + 16, 'x', 64);
+	put32(m + 92, 0);
+	CHECK(!rm_sp2_check(m, LEN));
+	/* 40 frames declared, the 32 the loader keeps in the file: accepted */
+	{
+		const long len = 12 + 32 * 80;
+		unsigned char *sp = calloc(1, (size_t)len);
+
+		memcpy(sp, b, 12);
+		put32(sp + 8, 40);
+		CHECK(rm_sp2_check(sp, len) && sp2_loads(sp, len));
+		CHECK(!rm_sp2_check(sp, len - 1));
+		free(sp);
+	}
 	memcpy(m, b, LEN);
 	memset(m + 92 + 16, 'x', 64);       /* a frame name without its end */
 	CHECK(!rm_sp2_check(m, LEN));
