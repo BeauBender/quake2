@@ -16,6 +16,7 @@ derived from game data, so the files are committed (INFORM9).
 |---|---|
 | `world` | world surfaces, lightmaps, sky, water |
 | `world-fullbright` | `world` with `r_fullbright 1`: world surfaces without lightmaps, sky, water (TASK87, `ref_metal` N4) |
+| `dlights` | `world` with `cl_lights 1`: the dynamic lights on the world's lightmaps; not deterministic (the engine PRNG gives the lights their radii), recorded also with `PINS_DEMO=demo2.dm2 PINS_EVERY=7` for the animated lightstyles (TASK91, `ref_metal` N8) |
 | `models` | world plus entities: alias models, sprites, beams, view weapon |
 | `particles` | everything, including particles, dynamic lights, screen blend |
 | `hud2d` | 2D only: status bar, crosshair, console text; the GL renderers' screen blend off (`gl_polyblend 0`, TASK82) |

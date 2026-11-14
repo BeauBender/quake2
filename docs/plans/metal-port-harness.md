@@ -1454,9 +1454,10 @@ objects keep the old declarations.
 
 Which frames are judged: the rule of N4 (a frame on which `metal_stats 1`
 reports a skipped sky, warped, translucent or flowing surface is
-excluded), and a frame whose line ends in a count above 0 of surfaces
-`drawn without their dynamic light` is excluded too (N8 adds the light).
-The counts come from a hand run as in N4. `metal_stats 1` prints its
+excluded). N5 also excluded a frame whose line ended in a count above 0
+of surfaces `drawn without their dynamic light`; N8 adds the light and
+removes that count and that rule (the N8 subsection below). The counts
+come from a hand run as in N4. `metal_stats 1` prints its
 line into the notify area, so the frames of that hand run differ from a
 record's (about 1.5 % of the pixels, every frame): take the counts and
 the frames from separate runs, never compare the hand run's frames. On
@@ -1638,6 +1639,91 @@ Measured on the build VM, sources `41bcf6f2` (the pins) and `c3d3257a`
 (the `ASAN=1` record), load averages 3 to 11: the numbers of the design
 document's table in section 22; every `engine.log` holds only `Metal API
 Validation Enabled` and the teardown with `0 live objects`.
+
+### Sprites, beams, shadows, dynamic lights and flash blobs in `ref_metal` (TASK91, N8)
+
+N8 is judged on the new scenario `dlights` (`world` plus `cl_lights 1`),
+on `models` (complete: sprites, beams and null models drawn) and its
+scratch copies with stencil shadows, and on N7's set unchanged
+(`docs/plans/ref-metal-native.md`, section 23). References are
+`gl1-metal` records in a private store, without traces:
+
+```sh
+make client game ref_metal && make ref_gl1 WITH_METAL_SHIM=yes
+export PINS_STORE=<private store> PINS_BASEDIR=<game data> PINS_TRACE=0
+MTL_DEBUG_LAYER=1 scripts/pins.sh record gl1-metal dlights [--run N]   # five records, for the run-to-run values
+MTL_DEBUG_LAYER=1 scripts/pins.sh record metal dlights
+scripts/pins.sh compare metal dlights --ref gl1-metal --ref-id <each reference> --threshold 0.02 --bad-threshold 0.5
+scripts/pins.sh compare metal dlights --ref gl1-metal --ref-id <each reference> --threshold 0.005 --bad-threshold 0.001   # the per-frame list
+# the same with PINS_DEMO=demo2.dm2 PINS_EVERY=7 (89 frames, the animated lightstyles)
+# models against two references; world, skywater, world-fullbright, hud2d as in N6; cinematic as in N2
+# scratch copies, deleted after: models plus "set r_shadows 1" and "set gl1_stencilshadow 1" (and 0),
+# dlights plus "set gl1_flashblend 1", dlights plus "set gl1_dynamic 0" (the control)
+```
+
+`dlights` is not deterministic: the muzzle-flash and explosion lights
+take a random radius from the engine PRNG (`randk() & 31` in
+`cl_effects.c`), which is seeded from OS entropy. Two `gl1-metal`
+records differ on the frames such a light reaches (on `demo1.dm2`
+frames 5, 8, 10, 14, 16, 18, 19, 20, 21; on `demo2.dm2` every 7th, 22
+of 89), and `metal` differs from any reference on exactly those frames
+by as much as the references differ among themselves. The scenario
+file carries the run-to-run worst values of five records (ten pairs) of
+each demo and accepts at `--threshold 0.02 --bad-threshold 0.5`; at the
+tight values the compare lists those frames as over and every other
+one as ok. Recorded with the PRNG fixed, every run is identical and the
+scenario is judged at the tight values: `PINS_SEED` does it beside a
+trace (TASK45), and without a trace a scratch copy of the tree whose
+`Qcommon_Init` (`src/common/frame.c`) calls `randk_seed_fixed(91)`
+instead of `randk_seed()` does the same (copy the tree without its
+`.git`, change that line, `make client` and `make ref_gl1
+WITH_METAL_SHIM=yes` there, record both renderers with that copy's
+`scripts/pins.sh`; the pin id then begins with `nogit`, so it never
+mixes with the real records; never commit the change).
+
+The animated lightstyles: on `demo2.dm2` at `PINS_EVERY=7` frames 51,
+61, 63, 67 and 69 show one (N5) and no light from the PRNG, so they are
+identical between `gl1-metal` records and compare at score 0 for
+`metal`. The control is `metal` with `gl1_dynamic 0` against the same
+reference, compared frame by frame with the comparator of
+`scripts/pins/framediff.c` (the
+two records are of different scenarios): over at the tight values on 32
+frames, 61, 67 and 69 among them with N5's numbers.
+
+Which frames are judged: all of them. N5's rule that excluded a frame
+whose `metal_stats` line counted surfaces "drawn without their dynamic
+light" is gone with the count (the line now ends with the dynamic lights
+left out for a float that is not finite or out of bounds, 0 on every
+frame of the game's demos); `dlights` and `models` draw no particle, so
+only `particles` waits for N9.
+
+The stencil shadows: the scratch `models` copies with `r_shadows 1` show
+the shadows (up to 6,609 pixels of a frame against `models`); with
+`gl1_stencilshadow 1` against `0` both renderers change the same number
+of pixels on every frame but the PRNG's frame 7, which shows that the
+stencil test and the clear to 1 work as on the shim.
+
+Map changes and `vid_restart` under the validation layer, with the
+states N8 adds: a config beside the binary (in `release/baseq2/`,
+deleted after) holding `set r_shadows 1`, `set gl1_stencilshadow 1`,
+`map base1`, `wait 80`, `screenshot`, `vid_restart`, `wait 80`, `set
+gl1_flashblend 1`, `map base2`, the same, both off, `map base1`, the
+same, `quit`, run with `MTL_DEBUG_LAYER=1 release/quake2 -datadir <game
+data> -portable +set vid_renderer metal ... +set metal_stats 1 +exec
+<the config>`: four teardowns at `0 live objects`, no validation
+message.
+
+The timedemo, `demo1.dm2`: the same engine binary copied into two
+scratch directories, one beside `ref_metal` of the card's base and one
+beside this card's, the pin harness's command line (`PINS_DRYRUN=1`)
+with a scratch `pins_dir`, runs alternated; the frame rate is the line
+`689 frames, ... fps` of the log. The display did not pace these runs on
+this host (about 1,400 to 1,650 fps), unlike N7's.
+
+Measured on the build VM, sources `28d1c8f8` to `a48d01a8` (the same
+code), load averages 4 to 9: the numbers of the design document's table
+in section 23; every `engine.log` holds only `Metal API Validation
+Enabled` and, for `metal`, the teardown with `0 live objects`.
 
 ### Closing TASK27 on the build host
 

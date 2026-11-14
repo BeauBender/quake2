@@ -1267,7 +1267,8 @@ What exists:
   touches; such a surface is drawn with its static lightmap and counted
   (`metal_stats`: `N drawn without their dynamic light` ends the
   per-frame line). A frame with a count above 0 is excluded from
-  judgment like one with a skipped surface (section 11).
+  judgment like one with a skipped surface (section 11). (N8 adds the
+  light and removes the count and the rule: section 23.)
 - **`R_SetLightLevel`** and `R_LightPoint` (with `R_RecursiveLightPoint`)
   are gl1's. gl1 calls `R_SetLightLevel` without an entity, so
   `r_lightlevel` is 150; `R_LightPoint` is there for N7's model lighting.
@@ -1817,3 +1818,207 @@ Handed over to N9 (TASK92, #203):
   with a residue of 1 to 409 pixels per frame, the mip-level class above;
   the frame-time comparison has to lift the display's 120 fps pace this
   host showed today, or measure CPU time as here.
+
+## 23. As built: N8, sprites, beams, null models, shadows, dynamic lights, flash blobs (TASK91)
+
+What exists:
+
+- **Sprites, beams and null models** (new `rm_effects.c`, from
+  `gl1_main.c`): drawn by `R_DrawEntity` (`rm_main.c`) in the pass gl1
+  draws them in. A sprite is gl1's quad (`rm_sprite_frame`,
+  `rm_sprite_alpha`, `rm_sprite_quad`): its frame a negative one taken as
+  0, else modulo the frame count, the skin of that frame (`r_notexture`
+  when it has none), `GL_MODULATE` of `(1, 1, 1, alpha)`, alpha-tested at
+  0.666 when the alpha is 1 and blended otherwise. A beam is gl1's strip
+  of 24 vertices round the line from `origin` to `oldorigin`, `frame / 2`
+  wide (`rm_beam_points`, with shared.c's `PerpendicularVector` and
+  `RotatePointAroundVector`, which gl1 calls), in the palette colour of
+  `skinnum` through the gamma table with the alpha byte gl1's
+  `glColor4ub` takes (`rm_beam_color`), untextured, blended, without depth
+  writes. A null model is gl1's two fans of 6 (`rm_null_model`) in
+  `R_LightPoint`'s colour (1 with `RF_FULLBRIGHT`) with the entity's
+  matrix. Each is one draw of N7's alias vertices in one region of the
+  frame ring (`rmb_draw_alias`), with the shim's index order for
+  `glDrawArrays` (`rm_prim_indices`: the fan, and the strip whose odd
+  triangles swap their first two vertices, as `mgl_triangle_indices`).
+- **Shadows** (`rm_mesh.c`, gl1's `R_DrawAliasShadow`): with `r_shadows`
+  and not for `RF_TRANSLUCENT`, `RF_WEAPONMODEL` or `RF_NOSHADOW`
+  (`rm_shadow_drawn`), after the model: the model's own vertices (gl1's
+  `s_lerped` in the order of the command stream, whose triangles are the
+  model's) pushed along `shadevector` (`rm_shadevector`, from the yaw) by
+  their height over `lightspot` (the last point `R_LightPoint` met a node
+  at, `R_LightSpot`) and put on the plane under the entity
+  (`rm_shadow_point`), drawn with `glTranslatef(origin)` and
+  `glRotatef(yaw)` (`rm_shadow_matrix`) in `glColor4f(0, 0, 0, 0.5)`,
+  blended, with depth writes, culled as the world. With
+  `gl1_stencilshadow` the draw takes a new depth-stencil state,
+  `RMB_DS_STENCIL_SHADOW` (`LEQUAL` with writes, the stencil compared
+  equal under read mask 2 to the reference 1, incremented clamped on
+  pass, the masks and the reference named in `rmb.h`), and the 3D pass
+  clears the stencil to 1 (`rmb_pass_3d(stencil)`; gl1's `R_Clear`), so
+  one pixel darkens once however many shadow triangles cover it.
+- **Dynamic lights on the lightmaps** (`rm_light.c`, gl1's
+  `R_AddDynamicLights`): N5's build is cut into its two steps,
+  `rm_lm_styles` (the styles into the block of floats) and `rm_lm_store`
+  (the tables and the bytes), with gl1's dynamic-light step between them
+  when the surface has light data and a light marked it this frame:
+  `rm_lm_dlight` for each light whose bit the surface carries, gl1's loop
+  body float for float. The step is behind one front-end flag,
+  `r_dlight_term` (on; RT3 turns it off and adds the term itself);
+  `rm_lm_build`, the two steps without it, is N5's function unchanged in
+  output. A surface a light touched this frame or the last is rebuilt by
+  N5's `R_RegenAllLightmaps`, so the count of surfaces "drawn without
+  their dynamic light" and its exclusion rule are gone.
+- **The brush entities' lights** (`R_MarkBrushLights`, called by
+  `R_GetBrushesLighting` for each brush entity in view, as gl1's marks
+  them): gl1's `R_MarkLights` from the submodel's head node with the
+  light's world position (gl1 does not move the light into the entity's
+  frame; kept). A head node that is not a node of the world is skipped
+  (`rm_bmodel_headnode`): maps hold a leaf there for submodels without
+  faces (base2's `*15`), and gl1 would read before `nodes` there.
+- **The flash blobs** (`R_RenderDlights`, `rm_light.c`): with
+  `gl1_flashblend`, after the entities and with or without a world (as
+  gl1), one fan of 18 vertices per light (`rm_flash_blob`: gl1's
+  arithmetic, the centre `0.35 * intensity` towards the viewer in the
+  light's colour times 51 through the gamma table, the rim black),
+  untextured, blended `GL_ONE, GL_ONE`, without depth writes, all lights
+  in one draw (gl1's `buf_flash` batch).
+- **The frame's lights are the renderer's copy** (`R_TakeDlights`, first
+  thing in `R_RenderView` after the refdef is copied): at most
+  `MAX_DLIGHTS` (`rm_dlight_count`), each copied and checked
+  (`rm_dlight_ok`: every float finite, the origin and intensity within
+  10^9, the colour within 10^6), a refused one left out and counted;
+  `r_newrefdef.dlights` then names the copy. The marking (world and brush
+  entities, `rm_dlight_bit`), the lightmap step, `R_LightPoint` and the
+  flash blobs read only the copy, and nothing copies the client's array
+  again during the view (`r_newrefdef` is written once per view), so no
+  later copy restores an unchecked value. `files/surf.c`'s `R_MarkLights`
+  (the trusted callee) reads the light it is given, which is the copy's.
+- **The pipelines**: two new 3D classes built with the context, an
+  alpha-tested alias pipeline (`rm_fragment_world_color_at`, the shim's
+  `GL_GREATER 0.666` after the texture unit) and an untextured alias
+  pipeline blended `GL_ONE, GL_ONE`: 23 in all, 0 after start-up.
+- **`metal_stats`**: the per-frame line's `N drawn without their dynamic
+  light` is replaced by `N dynamic lights left out`; the `skipped
+  entities` counts are now sprites, beams and null models whose draw was
+  refused.
+- **`r_shadows`, `gl1_stencilshadow`** are taken by gl1's names and
+  defaults; `gl1_flashblend` and `gl1_dynamic` (N5) now act as in gl1.
+
+gl1 behaviours kept that look like defects:
+
+- A beam ends with `glDepthMask(GL_TRUE)`, so in gl1's translucent pass
+  every entity after a beam writes depth; `R_DrawEntitiesOnList` keeps
+  that state (a beam whose direction has no length returns before it and
+  changes nothing).
+- A brush entity's lights are marked with the light's world position on
+  the submodel's untransformed nodes and planes.
+- `lightspot` is what the last `R_LightPoint` that reached a node left,
+  so a fullbright or shell model's shadow (gl1 does not light those) uses
+  the previous model's spot.
+- `R_PushDlights` marks nothing without a world (gl1 would follow a NULL
+  world model, or mark the world's surfaces under `RDF_NOWORLDMODEL`,
+  which then draws none of them).
+
+Deviations from gl1, each only on input gl1 cannot handle:
+
+- A dynamic light with a float that is not finite, an origin coordinate
+  or intensity past 10^9 or a colour channel past 10^6 is left out of the
+  frame (counted): gl1 converts the intensity (`R_MarkLights`) and the
+  blob's colour times 51 to int, undefined past them. No light of the
+  client comes near (muzzle flashes, rockets and explosions: intensities
+  to about 500, colours -1 to 1, origins inside the map).
+- `rm_lm_dlight` leaves a light out of one surface when the light's
+  distance to the plane is not finite, or its point on the surface in
+  texture space is past 2^30 (a texture vector of a hostile map times a
+  far light): gl1's int conversions of `R_AddDynamicLights` are
+  undefined there. Everywhere else it is gl1's loop, float for float.
+- The flash blob's gamma index is held to 0 to 255: gl1 reads
+  `gammatable[clr]` with `clr` the colour times 51, outside the table for
+  a dark light (colour -1, which the client makes) or a colour past 5.
+  With `gl1_flashblend` a dark light's blob is black here (`gamma[0]`,
+  added); gl1 adds whatever bytes lie before its table.
+- A sprite frame's `height - origin_y` and the like are taken in 64 bits
+  (gl1's int arithmetic overflows only on a hostile file); a sprite or a
+  beam whose corner or vertex is not finite is not drawn (counted).
+- The beam's alpha byte saturates where gl1's `alpha * 255` conversion to
+  int is undefined; inside an int it keeps gl1's low byte (an alpha of
+  1.5 is byte 126, as in gl1).
+- The stencil is cleared to 1 at each view's 3D pass, gl1's at the start
+  of the frame (`R_Clear` in `RI_BeginFrame`); they differ only for a
+  frame of two views with stencil shadows, which the game never draws.
+
+Measured on the build VM (T0), sources `28d1c8f8` to `a48d01a8` (the code
+is the same from `28d1c8f8` on: the later commits add host cases and
+remove two checks other checks imply), load averages 4 to 9, every
+record with `MTL_DEBUG_LAYER=1` and `PINS_TRACE=0` in a private store,
+references `gl1-metal` records of the same commits (gl1, the shim and
+`files/` are unchanged on this branch, so they are records of the card's
+base):
+
+| What | Result |
+|---|---|
+| `dlights`, two `gl1-metal` records of `demo1.dm2` against each other, `--threshold 0 --bad-threshold 0` | not exact: 8 of 23 frames differ (worst 0.008036, bad 0.136595) |
+| the cause | the muzzle-flash and explosion lights take a random radius from the engine PRNG (`cl_effects.c`, `randk() & 31`; seeded from OS entropy): over five records (ten pairs) the frames that differ are 5, 8, 10, 14, 16, 18, 19, 20 and 21 of `demo1.dm2` and 22 of the 89 of `demo2.dm2` at `PINS_EVERY=7` (4, 5, 6, 9 to 15, 21, 23, 27, 28, 32, 42, 44, 45, 47, 49, 58, 78); worst score 0.009399 and 0.012701, worst bad 0.176774 and 0.305941, written in the scenario file |
+| the PRNG fixed: a scratch engine calling `randk_seed_fixed(91)` where `Qcommon_Init` seeds (the function `PINS_SEED` uses beside a trace), a copy of the tree, never committed | two `gl1-metal` records of `dlights` identical (score 0, bad 0, 23 frames); `metal` against them at `--threshold 0.005 --bad-threshold 0.001`: all 23 at score 0.000000 and bad 0.000000 (0 to 6 differing pixels, none by more than 8 levels: N4's mip residue); `demo2.dm2` at `PINS_EVERY=7` 89 of 89 ok (bad 0.000003 to 0.000013 on three frames, 0 on the others); `t91flash` (`dlights` plus `gl1_flashblend 1`) 23 of 23 at 0; `models` plus `cl_lights 1` 23 of 23 ok (worst 0.000039, bad 0.000589: N7's residue), and the same with `r_shadows 1` and `gl1_stencilshadow 1` |
+| `metal` against the unseeded references, `--threshold 0.005 --bad-threshold 0.001` | on every frame outside the sets above ok, against each of the five references (14 of 23 of `demo1.dm2`, 67 of 89 of `demo2.dm2`); the frames over are exactly the frames over between two `gl1-metal` records, and their values are in the same range (worst score 0.010235 and 0.012379, bad 0.227233 and 0.404479 against the five); at the scenario's accept values, `--threshold 0.02 --bad-threshold 0.5`, every frame of both demos passes against every reference |
+| the animated lightstyles (N5's frames 51, 61, 63, 67, 69 of `demo2.dm2` every 7th) | none has a light from the PRNG: identical between the `gl1-metal` records and ok at the tight values for `metal`. The control, `metal` with `gl1_dynamic 0` (a scratch copy of `dlights` plus that line): over at the tight values on 32 of the 89 frames, among them 61 (bad 0.001130), 67 (0.006882) and 69 (0.004303), N5's numbers, both unseeded and with the PRNG fixed; at the accept values over on 13 (frames whose lights it drops: score 0.020 to 0.060) |
+| the dynamic-light step's presence | `dlights` and `world` of `metal` differ on every frame with a light (up to 224,451 pixels), and match `gl1-metal` there as above |
+| `models` (`metal` at `12b255ad`, two `gl1-metal` references) | at the defaults all 23 ok against each; at the tight values 23 of 23 against one and 22 against the other (frame 7, the explosion of N7's note: 0.000813, bad 0.001087; the two references differ there by 0.000327, bad 0.000824); with the PRNG fixed 23 of 23 at the tight values (worst 0.000039, bad 0.000589) |
+| `models` with `r_shadows 1` and `gl1_stencilshadow 1` (scratch `t91shadow`), and with `gl1_stencilshadow 0` (`t91shadow0`), not committed | all 23 ok at the tight values on both (worst 0.000306, bad 0.000579 and 0.000038, 0.000579); the shadows change up to 6,609 pixels of a frame against `models` (none on four frames without a shadow in view), and the stencil changes the same number of pixels on both renderers (2 to 302 per frame), but for frame 7 (the PRNG's explosion) |
+| `world`, `skywater`, `hud2d` (23 frames), `cinematic` (12, `PINS_DEMO=idlog.cin PINS_EVERY=7`), `world-fullbright` | score 0 and bad 0 on every frame; `world-fullbright` bad at most 0.000013 (N4's residue) |
+| frames excluded | none: `dlights` and `models` draw no particle; only the `particles` scenario waits for N9 |
+| validation and teardown | 48 records: every `engine.log` holds only `Metal API Validation Enabled`, and every `metal` teardown `0 live objects`, `0 unreleased`, `0 unmatched`. A hand run under the validation layer (a config beside the binary, deleted after: `r_shadows 1`, `gl1_stencilshadow 1`, `map base1`, `vid_restart`, `gl1_flashblend 1`, `map base2`, `vid_restart`, both off, `map base1`, `vid_restart`, `quit`): four teardowns at `0 live objects`, no validation message, every `metal_stats` line `23 pipelines, 0 created after init`, `0 dynamic lights left out`, `skipped entities: 0 sprites, 0 beams, 0 null models` |
+| timedemo, `demo1.dm2`, the same engine binary, `ref_metal` of `92e54a38` (N7) and of this card alternated, four runs each, no validation layer, load 4.4 to 7.4 | the display did not pace the runs today: `world` before 1511 to 1648 fps, after 1552 to 1633; `models` before 1541 to 1555, after 1535 to 1591; `dlights` before 1412 to 1475 (no dynamic light drawn), after 1392 to 1491; process CPU time 0.36 to 0.43 s user either way. The same within the noise |
+| `tests/check-ref-metal.sh` | host test 1,258 checks, 0 failed (1,115 at N7); `tests/check-metal-shim.sh` 515 checks, 0 failed |
+| mutants of N8's pure code (a scratch script applying each to a copy of `rm_pure.c` and running the host test with ASAN and UBSAN) | 114 mutants; the first run left 14 alive. Five led to cases (a sprite alpha past 1 and NaN, a corner whose z alone overflows, a beam alpha between 2^31 and 2^32 over 255, a shadow height where gl1's `0.1f` and a double `0.1` give two planes, a luxel at exactly the cutoff's distance); two were checks implied by others, removed (`rm_lm_build`'s own size test, `rm_prim_indices`' negative capacity). Of the 112 left 106 are killed; 6 are equivalent: `n < 2` for `n < 3` in `rm_prim_indices` (a strip or fan of 2 makes no triangle), `frad <= fminlight` for `<` at the cutoff (the luxel distance limit is then 0, which no distance is below), `sd >= td` for `sd > td` (equal values give the same sum), `firstnode >= -1` (-1 is returned either way), `fabsf` for gl1's double `fabs` (a float less a float is exact in double when their exponents are within 29) and `VectorMA` in double (one rounding either way but at double-rounding ties, which no case reaches; shared.c's `VectorMA`, the reference, is fused the same way) |
+| the scratch sanitizer harness (N4 to N7's, `rm_effects.c` linked; the stub of `rmb_draw_alias` checks the contract and reads every vertex) | N4 to N7's 102 map cases with the same verdicts as N7's harness, the model cases, `lp`, `dropskin` and `ovl` as before; four runs of `fx` (600,000 frames with three seeds, and 100,000 with a submodel whose head node is a leaf): each frame 32 entities from the server (alias, brush, sprites of 1 to 40 frames of hostile sizes, beams, null models; any field), up to 64 lights with any count from -2^31 to 2^31 - 1 and any float, `r_shadows`, `gl1_stencilshadow`, `gl1_flashblend` random: 9,357,349 lights taken and 3,514,178 left out, 10,594,133 draws of the stub, 0 bad; 400,000 mutated maps drawn with two dynamic lights (205,616 accepted); `ents` 200,000 frames and `md2fuzz` 100,000 models: no sanitizer report, no hang, 0 hunks and 0 files after. A face of a few thousandths of a unit with texture vectors of 1 and 3 and lights on its plane 10^9 along it (`dlfar`): clean. Mutants: `rm_dlight_ok` removed, UBSAN at once in `rm_flash_blob` and in `files/surf.c`'s `R_MarkLights` (int conversions); `rm_dlight_count` removed, a global-buffer-overflow at once; `rm_lm_dlight`'s texture-space bound removed, UBSAN at once on `dlfar` |
+
+Files changed outside the card's scope list, each needed by it:
+`Makefile` (`rm_effects` in `ref_metal`'s objects), `header/local.h`,
+`header/rmb.h`, `rm_main.c` (the entity draws, the stencil clear,
+`R_TakeDlights`, `R_RenderDlights`, `r_shadows` and `gl1_stencilshadow`),
+`rm_misc.c` (the lights left out in `metal_stats`), `rm_pure.c`,
+`rmb_encode.m` (the draw's new states, the stencil reference and clear),
+`rmb_resource.m` (the pipelines and the depth-stencil state),
+`doc/040_cvarlist.md`, `tests/baselines/undocumented-cvars.txt`
+(`gl1_dynamic` and `gl1_flashblend` described) and
+`scripts/pins/scenarios/README.md` (the scenario's row).
+
+The implementer did not run the full gate (`scripts/test.sh`) and has no
+Cppcheck on the build VM: the host limits of this card keep the gate to
+the orchestrator, and CI runs Cppcheck. The change is about 2,600 lines
+against the card's estimate of 900: about 520 of pure arithmetic and
+checks in `rm_pure.c`, 1,130 of host test (gl1's and the shim's lines
+copied as references), 235 `rm_effects.c`, 220 `rm_light.c`, 190 of
+declarations and contracts in `rmb.h`, 70 `rm_mesh.c`, 80 `rm_main.c`,
+100 the back end and the shader.
+
+Handed over to N9 (TASK92, #203):
+
+- Particles go between `R_RenderDlights` and `R_DrawAlphaSurfaces` in
+  `R_RenderView` (`rm_main.c`, the comment marks the place); every 3D draw
+  sets its own state, and the flash blobs leave none behind.
+- The `particles` scenario sets `cl_lights 1` and `cl_entities 1`: its
+  dynamic lights, sprites, beams, null models and the lights on models
+  are drawn now. Its lights take random radii from the engine PRNG as
+  `dlights`' do (section 23's table); judging at tight values needs the
+  PRNG fixed (`PINS_SEED` with a trace, or the scratch seeded engine of
+  the runbook's N8 subsection).
+- The frame time: on this host today the display did not pace the
+  timedemo (1,400 to 1,650 fps), so fps can be compared directly; N7's
+  note of a 120 fps pace no longer held.
+
+Handed over to N10 (TASK93, #204):
+
+- The 3D pass clears the stencil to 1 with `r_shadows` and
+  `gl1_stencilshadow` per view (`rmb_pass_3d(stencil)` in
+  `RI_RenderFrame`); gl1 clears it once per frame in `R_Clear`. A frame of
+  two views would differ; the window lifecycle should keep the clear with
+  the view.
+- The new depth-stencil state and the two pipelines are built with the
+  context and freed with the resources: map changes and `vid_restart` by
+  hand end at `0 live objects`; N10's restart soak should include
+  `r_shadows 1`, `gl1_stencilshadow 1` and `gl1_flashblend 1`.
+- `r_shadows` and `gl1_stencilshadow` are archived (`CVAR_ARCHIVE`), as
+  gl1's; `gl1_flashblend` and `gl1_dynamic` are not.
