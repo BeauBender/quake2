@@ -89,13 +89,37 @@ render-stage path, an apple7 device, the G-buffer raster, shading, the
 temporal accumulation and denoiser above, or image quality. Where this
 design needs one of those, it names the card that measures it.
 
-**What runs at the internal resolution.** The whole 3D frame: the G-buffer
+**What runs at the internal resolution.** The whole 3D frame of the world
+refdef: the `refdef_t` without `RDF_NOWORLDMODEL` that `V_RenderView`
+(`src/client/cl_view.c`) passes to `R_RenderFrame`. That is the G-buffer
 raster (section 3), the ray passes, the temporal accumulation and denoiser,
 the lighting resolve and the forward pass for sprites, particles, beams and
-the view weapon. The scaler writes the output size. 2D (HUD, console,
-menus, cinematics) draws after it at the output size, unscaled. With every
-`r_rt_*` effect off there is no internal resolution and no scaler: the
-frame renders at the output size, as before, so the gl1 pins are untouched.
+the view weapon.
+
+**The output is the world refdef's rectangle, not the window.** The client
+sets the refdef's `x`, `y`, `width` and `height` from `viewsize`
+(`SCR_CalcVrect`, `src/client/cl_screen.c`): the whole window at
+`viewsize 100`, a centred sub-rectangle below it, down to 40 % of the
+window's width and height. In this subsection the output size is the size
+of that rectangle, and the internal size is a fraction of it. The scaler
+writes the rectangle at its place in the frame, either through its
+`outputOffsetX` and `outputOffsetY` (declared from macOS 27 in the SDK's
+`MTLFXTemporalScaler.h`) or into a texture of the rectangle's size that is
+copied there; RT11 picks one. 2D (HUD, console, menus, cinematics) draws
+after it at the window size, unscaled. With every `r_rt_*` effect off there
+is no internal resolution and no scaler: the frame renders at the refdef's
+rectangle, as before, so the gl1 pins are untouched.
+
+**A refdef without a world.** The one refdef with `RDF_NOWORLDMODEL` is the
+player-setup menu's model view (`PlayerConfig_ModelDraw`,
+`src/client/menu/menu.c`): a 144 x 168 rectangle times the menu scale,
+`fov_x` 40. With that menu open in game it is a second `R_RenderFrame` in
+the same frame, drawn after the world refdef and after 2D
+(`SCR_UpdateScreen` calls `M_Draw` last). It renders at its own rectangle
+as with every effect off: no internal resolution, no jitter, no ray pass
+and no scaler. It touches neither the scaler's history, RT7's history nor
+the last-frame state the cut test compares (below). Only the world refdef
+drives them.
 
 **Pass order.** Section 3's order, with the scaler added as step 7:
 
@@ -111,8 +135,8 @@ frame renders at the output size, as before, so the gl1 pins are untouched.
 | 8 | 2D | output |
 
 **The scaler and RT7.** The scaler keeps its own history at the output
-size. It accumulates the lit colour over frames and uses the jitter to
-recover detail finer than an internal pixel. It does not replace RT7. RT7
+size. It accumulates the lit colour over frames and is designed to use the
+jitter to recover detail finer than an internal pixel. It does not replace RT7. RT7
 accumulates and denoises each effect before the resolve, where the effects
 are still separate: AO multiplies the lightmap term only and is clamped to
 `r_rt_ao_min`, and the dlight visibility replaces the term of
@@ -140,15 +164,19 @@ image-quality card (RT12), not decided here.
 | Motion vectors | section 3's `rg16float` attachment, from the unjittered current and previous view | `RG16Float` measured. The scaler's motion-vector scale matches section 3's units, which RT2 fixes. RT7 already needs them, so the scaler adds no attachment. Their raster cost is part of RT2's G-buffer and not measured; RT10's per-pass table records it |
 | Jitter | the Halton (2, 3) sequence minus 0.5, in internal pixels, added to the projection and passed to the scaler each frame | the sequence section 8 drove the scaler with |
 | Exposure | auto exposure off, fixed exposure | the resolve writes the stock display-referred product, not scene light; section 8 also ran with auto exposure off |
-| Reset | set for one frame on a map load, a `vid_restart`, a camera cut, a teleport, and a change of `r_rt_scale` or of the output size | the same frame resets RT7's history |
+| Reset | set for one frame on a map load, a `vid_restart`, a camera cut, a teleport, and a change of `r_rt_scale` or of the world refdef's rectangle | the same frame resets RT7's history |
 
 The renderer detects these events from what it already receives; the
 renderer API (`ref.h`, `API_VERSION`) does not change. A map load is
-`BeginRegistration`. A `vid_restart` and a change of `r_rt_scale` or of
-the output size create the scaler anew. A camera cut or a teleport is a
-`refdef_t` whose view origin moved further than a threshold since the last
-frame, whose field of view changed, or whose `RDF_NOWORLDMODEL` flag
-changed. RT11 sets the threshold and records it here.
+`BeginRegistration`. A `vid_restart`, a change of `r_rt_scale` and a
+change of the world refdef's rectangle create the scaler anew; the
+rectangle changes with `viewsize` and with the window size. A camera cut
+or a teleport is a world refdef whose view origin moved further than a
+threshold from the last world refdef's, or whose field of view differs from
+it, or the first world refdef after a frame that drew none (a loading
+plaque, a cinematic, the console with no map). The last world refdef is the
+state the cut test compares; a refdef with `RDF_NOWORLDMODEL` does not
+replace it. RT11 sets the threshold and records it here.
 
 **The scale: `r_rt_scale`.** Named and described here only; no cvar is
 added to the code by TASK105. RT11 adds it, with its entry in
@@ -165,18 +193,22 @@ added to the code by TASK105. RT11 adds it, with its entry in
 - A change takes effect on the next frame, through the path a window
   resize takes, and resets both histories.
 - It reads 1, with a line in the `vid_restart` output, where the scaler is
-  unavailable (table below).
+  unavailable or the device has no ray tracing (section 4, "neither"; table
+  below). It is the one `r_rt_*` cvar that section 4 does not force to 0,
+  because 0 here means the family default.
 
 **Default internal size per family.** A height in rows, so that the
 default follows the output; the fraction is that height over the output's.
-A ratio above the scaler's maximum is clamped to it: on a 5120 x 2880
-output, a default of 720 rows becomes 960.
+A ratio above the scaler's maximum is clamped to it. With the M6's maximum
+of 3.0, a default of 720 rows on a 5120 x 2880 output would become 960.
+The 720-row default is for apple6 to apple8, whose maximum is not measured;
+TASK106 (#249) measures apple7.
 
 | Family | Ray tracing (section 4) | Default internal height | Basis |
 |---|---|---|---|
 | apple9 and later (M3 and later; the M6 measured) | hardware intersection; render-stage path | 1080 rows | Measured on the M6 at a 5120 x 2880 output on the compute path, the only device and output measured: the 1080p trace with the temporal scaler is 7.3 ms as a sum and 9.3 ms as one measured frame, which leaves 7.4 to 9.3 ms of the 60 Hz frame for raster, shading and RT7 (section 8, verdicts table, row RT9 (2)). An internal 2560 x 1440 leaves 1.7 to 4.8 ms (same row), too little for work that is not measured yet. For other apple9 devices and outputs this is a default to be measured (RT10) |
 | apple6 to apple8 (M1 is apple7, M2 apple8) | compute path, Metal's software traverser | 720 rows, *assumed* | Not measured: section 8 is the M6 only. Section 2 assumes 8 to 14 ms for the 1080p trace on apple7, a large part of the 60 Hz frame before the scaler, so the default sits below apple9's. TASK106 (#249) measures apple7, the scalers included; RT10 sets the default from it |
-| a device where `MTLFXTemporalScalerDescriptor` `supportsDevice:` is NO | as section 4 | output size; `r_rt_scale` reads 1 | reported in the `vid_restart` output |
+| a device without ray tracing (section 4, "neither"), or one where `MTLFXTemporalScalerDescriptor` `supportsDevice:` is NO | none, or as section 4 | output size; `r_rt_scale` reads 1 | reported in the `vid_restart` output |
 
 The default does not depend on the refresh rate. At 120 Hz (an 8.3 ms
 frame) the 1080p path on the M6 is met by the 7.3 ms sum and not by the
@@ -187,8 +219,8 @@ needs another display and is RT10's.
 **Other MetalFX scalers.** `MTLFXSpatialScaler` costs 1.668 ms in frame at
 1080p input and 1.653 ms at 2560 x 1440, against the temporal scaler's
 1.822 and 2.413 ms (section 8, MetalFX table, "In frame, scaler"). It
-keeps no history and takes no jitter, so it only interpolates the internal
-pixels. Not used: it saves 0.15 ms at 1080p and 0.76 ms at 2560 x 1440.
+keeps no history and takes no jitter, so it is designed only to
+interpolate the internal pixels. Not used: it saves 0.15 ms at 1080p and 0.76 ms at 2560 x 1440.
 
 `MTLFXTemporalDenoisedScaler` against the bilateral denoiser above, on
 section 8's numbers (M6, 5120 x 2880 output):
