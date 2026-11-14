@@ -3343,6 +3343,7 @@ TestReplayBounds(void)
 	int32_t fill[5] = { 0, 0, 10, 10, 300 };
 	int32_t chr[3] = { 0, 0, -1 };
 	int32_t xy[2] = { 3, 4 };
+	int32_t size[2] = { 3, 4 };
 	float huge = 1e9f, nan = NAN, col[4] = { 1e9f, NAN, -1, 0.5f };
 	const float sky[4] = { NAN, 0, 0, 1 };
 
@@ -3395,6 +3396,7 @@ TestReplayBounds(void)
 	RefRec_Draw(REC_CHARSCALED, chr, 3, &nan, 1, NULL, NULL, 0);
 	RefRec_Draw(REC_PICSCALED, xy, 2, &huge, 1, "p", NULL, 0);
 	RefRec_Draw(REC_PICSCALEDCOL, xy, 2, col, 4, "p", NULL, 0);
+	RefRec_Draw(REC_PICSIZE, size, 2, NULL, 0, "p", NULL, 0);	/* the mock says 8x8 */
 	RefRec_Control(REC_ENDFRAME, 0);
 	RefRec_StopRecord();
 
@@ -3439,6 +3441,7 @@ TestReplayBounds(void)
 			Bits(mock.last[REC_PICSCALEDCOL].floats[3]) == Bits(0.5f), "bounds: pic colour");
 	CHECK(Bits(mock.last[REC_SKY].floats[0]) == Bits(0.0f) && Bits(mock.last[REC_BEGINFRAME].floats[0]) == Bits(0.0f),
 			"bounds: sky rotate or camera separation");
+	CHECK(st.picsize_mismatch == 1, "bounds: %u pic size mismatches", st.picsize_mismatch);
 	CHECK(st.clamped >= 30, "bounds: only %u values counted as clamped", st.clamped);
 }
 
@@ -3503,6 +3506,61 @@ CaptureAt(const uint8_t *b, uint32_t frame)
 }
 
 static void FixCapture(uint8_t *b, long n) { (void)n; SetU32(b + CaptureAt(b, 2) + REFREC_REC_SIZE, 5); }
+/* the first record of type at or after indexed frame's REC_BEGINFRAME */
+static uint32_t
+RecordAt(const uint8_t *b, uint32_t frame, uint32_t type)
+{
+	uint32_t at = FrameStart(b, frame);
+
+	while ((GetU32(b + at) & 0xffff) != type)
+	{
+		at += REFREC_REC_SIZE + GetU32(b + at + 4);
+	}
+
+	return at;
+}
+
+static void FixIndexPast(uint8_t *b, long n) { (void)n; SetU32(b + GetU32(b + 24) + 2 * REFREC_INDEX_SIZE + 4, GetU32(b + 20)); }	/* frame 2 in the string table */
+static void FixNoEnd(uint8_t *b, long n) { (void)n; SetU32(b + RecordAt(b, 2, REC_ENDFRAME), REC_ENDWORLD); }	/* frame 2 never ends */
+
+/* n zero bytes inserted at offset at (a table/index gap when shift moves the index) */
+static qboolean
+ReplayGrown(const char *sub, uint32_t at_field, qboolean shift, refrec_replay_stats_t *st)
+{
+	const char *path = TracePath(sub);
+	long size;
+	uint8_t *buf, *grown;
+	uint32_t at;
+
+	RecordReplayTrace(path);
+	buf = Slurp(path, &size);
+	grown = buf ? calloc(size + 4, 1) : NULL;
+
+	if (!grown)
+	{
+		free(buf);
+		CHECK(0, "%s: cannot read the trace back", sub);
+		return false;
+	}
+
+	at = at_field ? GetU32(buf + at_field) : (uint32_t)size;
+	memcpy(grown, buf, at);
+	memcpy(grown + at + 4, buf + at, size - at);
+
+	if (shift)
+	{
+		SetU32(grown + 24, GetU32(grown + 24) + 4);
+	}
+
+	Spill(path, grown, size + 4);
+	free(grown);
+	free(buf);
+
+	return Replay(path, API_VERSION, 640, 480, st);
+}
+
+/* a 4-byte REC_CAPTURE turned into a REC_BEGINFRAME inside frame 0 */
+static void FixNested(uint8_t *b, long n) { (void)n; SetU32(b + CaptureAt(b, 0), REC_BEGINFRAME); }
 
 /*
  * The next byte a sweep of a RecordReplayTrace file takes: every byte,
@@ -3547,18 +3605,28 @@ TestReplayRefusals(void)
 			"refusals: a registration of another kind than its table entry was accepted");
 	CHECK(ReplayPatched("rp-index", FixIndexOff, &st) && st.failed && st.frames == 0,
 			"refusals: a frame index entry naming a REC_RENDERFRAME was accepted");
-	CHECK(ReplayPatched("rp-mid", FixIndexMid, &st) && st.failed && st.frames == 0,
+	CHECK(ReplayPatched("rp-mid", FixIndexMid, &st) && st.failed && st.frames == 0 && mock.nfd == 0,
 			"refusals: a frame index entry inside a record was accepted");
 	CHECK(!ReplayPatched("rp-order", FixIndexOrder, &st) && st.failed,
 			"refusals: a frame index out of order was accepted");
 	CHECK(ReplayPatched("rp-len", FixRecLen, &st) && st.failed && st.frames == 0 && mock.nfd == 0,
 			"refusals: an oversized record length was accepted");
-	CHECK(ReplayPatched("rp-lenend", FixRecLenEnd, &st) && st.failed && st.frames == 0,
+	CHECK(ReplayPatched("rp-lenend", FixRecLenEnd, &st) && st.failed && st.frames == 0 &&
+			strstr(last_print, "record length"),
 			"refusals: a record running into the string table was accepted");
 	CHECK(!ReplayPatched("rp-unfinished", FixUnfinished, &st) && st.failed,
 			"refusals: an unfinished trace was accepted");
 	CHECK(!ReplayPatched("rp-tablebig", FixTableBig, &st) && st.failed,
 			"refusals: a string table over the records was accepted");
+	CHECK(!ReplayPatched("rp-indexpast", FixIndexPast, &st) && st.failed,
+			"refusals: a frame index entry in the string table was accepted");
+	CHECK(ReplayPatched("rp-noend", FixNoEnd, &st) && st.failed && st.frames == 2 &&
+			strstr(last_print, "records end"), "refusals: a frame that never ends (%u frames)", st.frames);
+	CHECK(!ReplayGrown("rp-trailing", 0, false, &st) && st.failed, "refusals: bytes after the frame index were accepted");
+	CHECK(!ReplayGrown("rp-gap", 24, true, &st) && st.failed,
+			"refusals: bytes between the string table and the frame index were accepted");
+	CHECK(ReplayPatched("rp-nested", FixNested, &st) && st.failed && st.frames == 0,
+			"refusals: a REC_BEGINFRAME inside an indexed frame was accepted (%u frames)", st.frames);
 	CHECK(ReplayPatched("rp-capture", FixCapture, &st) && st.failed && st.frames == 2 && st.captures == 1,
 			"refusals: a capture out of order was accepted (%u frames, %u captures)", st.frames, st.captures);
 
@@ -3639,6 +3707,21 @@ TestReplayStructure(void)
 	RefRec_StopRecord();
 	CHECK(Replay(path, API_VERSION, 640, 480, &st) && !st.failed && st.frames == 0 && mock.nlog == 0,
 			"structure: an empty trace");
+
+	/* and with bytes after its (empty) frame index it is refused: no entry check stands in */
+	{
+		const uint8_t zero[4] = { 0, 0, 0, 0 };
+		FILE *f = fopen(path, "ab");
+
+		if (f)
+		{
+			fwrite(zero, 1, sizeof(zero), f);
+			fclose(f);
+		}
+
+		CHECK(!Replay(path, API_VERSION, 640, 480, &st) && st.failed,
+				"structure: an empty trace with trailing bytes was accepted");
+	}
 }
 
 int
