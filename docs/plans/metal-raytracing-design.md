@@ -165,8 +165,9 @@ global illumination beyond AO, RT for particles or beams.
 Measured with a throwaway Objective-C program (Metal and Foundation
 frameworks, built with `xcrun clang`, no window, no game data, not
 committed) on the bare-metal host: macOS 27.2.1 (26B131), arm64, default
-`MTLDevice` named **Apple M6**. Section 4's assumptions about the VM
-(paravirtual device, no ray tracing, apple5-class families) are not
+`MTLDevice` named **Apple M6**. The assumptions about the VM
+(paravirtual device, no ray tracing, apple5-class families) in
+[the Metal renderer plan](metal-renderer.md) are not
 re-measured here; this is the physical-device column the gating needs.
 
 | Query | Apple M6 (physical) | Section 4 / plan statement for the VM |
@@ -210,17 +211,20 @@ and 3.07/3.21/2.90 after the third (all invocations within one minute);
 another process was using the GPU (frame recording) the whole time, so
 treat the ranges as an upper-biased view.
 
-| Triangles | Structure bytes | Build scratch bytes | Build GPU ms, 21 runs | Build wall ms | Refit GPU ms (21 runs) |
+| Triangles | Structure bytes | Build scratch bytes | Build GPU ms, 21 runs | Build wall ms | Refit GPU ms (24 runs) |
 |---|---|---|---|---|---|
 | 10,000 | 937,728 | 251,584 | 0.72 to 2.58 | 0.84 to 2.98 | 0.07 to 0.26 |
 | 20,000 | 1,874,816 | 904,128 | 0.50 to 1.92 | 0.64 to 2.25 | 0.08 to 0.26 |
 | 50,000 | 4,686,336 | 2,258,880 | 0.96 to 3.37 | 1.12 to 3.53 | 0.16 to 0.50 |
 | 200,000 | 18,743,488 | 9,033,728 | 3.55 to 6.06 | 3.72 to 6.21 | 0.62 to 0.83 |
 
+Note: one further 200,000 build outside the timed set took 7.6 ms, so 3.5 to
+7.6 ms is the range to plan with.
+
 The spread is a property of the measurement, not noise to average out:
 within one invocation the builds agree to a few percent (for example 10k:
 2.46 to 2.53 ms in the first invocation, 0.72 to 0.75 ms in the second),
-but the invocations differ by up to 3.5 times at the same size, and the
+but the invocations differ by up to 3.8 times at the same size, and the
 smaller sizes are slower than the larger ones in some invocations (the
 first and third: 10k takes 2.5 ms, 20k takes 1.7 ms). That pattern
 fits GPU clock and power-state selection that is fixed per process rather
@@ -235,8 +239,8 @@ about 8 ms, on a busy M6", not as a benchmark. The 10k to 20k figure
 matches the design's "under 4 MB" assumption: about 94 bytes per triangle
 on this soup (0.9 to 1.9 MB), though a real map has coherent geometry and
 will differ; RT1 measures that. Refit used the same descriptor with
-`MTLAccelerationStructureUsageRefit`, in place, and completed in under
-0.5 ms up to 50k triangles.
+`MTLAccelerationStructureUsageRefit`, in place, and completed in
+0.5 ms or less up to 50k triangles.
 
 Per-decision verdicts, section 4 and section 6, for this device:
 
@@ -266,7 +270,7 @@ Per-decision verdicts, section 4 and section 6, for this device:
    hint removes any pressure from 128 refit instances.
 6. **Build and refit cost (sections 1 and 6, RT1/RT10):** consistent with
    "once at map load" for the world (about 0.6 to 3.5 ms wall for 10k to
-   50k triangles) and per-frame refit (under 0.5 ms per 50k triangles
+   50k triangles) and per-frame refit (0.5 ms or less per 50k triangles
    here, so 128 alias instances of a few hundred triangles each fit
    comfortably). Whether refit stays cheap as
    many small instances on an apple7 device is for RT10.
