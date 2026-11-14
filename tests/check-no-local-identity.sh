@@ -341,10 +341,11 @@ nl.txt"
 	expect 1 "no origin: the user name is checked" "$tmp/want" "$syn" zzquser /home/zzquser
 	git -C "$r" remote add origin https://github.com/ZzqUser/zzqrepo.git
 	expect 0 "the user name is the owner handle: skipped" "$tmp/none" "$syn" zzquser /home/zzquser
-	# Skipped only when the home-path test can refuse a path under the home.
+	# Skipped only when the last component of the home is the user name.
 	expect 1 "the owner handle, home unset: checked" "$tmp/want" "$syn" zzquser ''
 	expect 1 "the owner handle, home elsewhere: checked" "$tmp/want" "$syn" zzquser /home/zzqhome
 	expect 1 "the owner handle, home is /: checked" "$tmp/want" "$syn" zzquser /
+	expect 1 "the owner handle, home ends in /: checked" "$tmp/want" "$syn" zzquser /home/zzquser/
 	expect 0 "the owner handle, home in other case: skipped" "$tmp/none" "$syn" zzquser /home/ZzqUser
 	git -C "$r" remote set-url origin https://github.com/zzqother/zzqrepo.git
 	expect 1 "the owner handle is another name: checked" "$tmp/want" "$syn" zzquser /home/zzquser

@@ -390,16 +390,16 @@ owner_cases
 shells="dash bash sh"
 run "the user name is the owner handle" HOME="/zzqhome/$login"
 shells=sh
-# Skipped only when the home-path test can refuse a path under the home:
-# with HOME unset or naming another directory, the user name is checked.
-for _h in unset /zzqhome/zzqx; do
+# Skipped only when the last component of HOME is the user name: with HOME
+# unset, with another last component or ending in /, the user name is checked.
+for _h in unset /zzqhome/zzqx "/zzqhome/$login/"; do
 	case_ "$M" refs/heads/zzqw1 "$(mk "$m1" "zzqm30 note for $login")" refs/heads/zzqw1 "$zero"
 	case_ "the remote ref name contains $U" refs/heads/zzqx "$m1" "refs/heads/zzqt/$login/zzqtopic" "$zero"
-	if [ "$_h" = unset ]; then
-		run "the owner handle, HOME unset" -u HOME
-	else
-		run "the owner handle, HOME elsewhere" HOME="$_h"
-	fi
+	case $_h in
+	unset) run "the owner handle, HOME unset" -u HOME ;;
+	*/) run "the owner handle, HOME ends in /" HOME="$_h" ;;
+	*) run "the owner handle, HOME elsewhere" HOME="$_h" ;;
+	esac
 done
 # Not skipped: another owner, an undeterminable owner, two URLs. The home
 # ends in the user name, so only owner_is can keep the skip off.
