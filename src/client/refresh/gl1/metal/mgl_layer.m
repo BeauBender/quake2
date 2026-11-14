@@ -90,6 +90,21 @@ static unsigned long count_frames, count_no_drawable, count_skipped;
 
 #define MGL_FRAMES_IN_FLIGHT 3
 
+/*
+ * The draw path (TASK48). The caches are keyed by the packed keys of
+ * mgl_draw.c and mgl_tex.c, so each holds at most one object per
+ * reachable key (13 and 8 bits: 8192 pipelines, 256 samplers; gl1 uses a
+ * handful of each).
+ */
+static id<MTLFunction> mgl_vfunc, mgl_ffunc;
+static NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *mgl_pipelines;
+static NSMutableDictionary<NSNumber *, id<MTLSamplerState>> *mgl_samplers;
+static id<MTLTexture> mgl_unbound;         /* bound to texture(0) when a draw samples nothing */
+
+/* Texture uploads made outside a frame, committed before the next frame's command buffer. */
+static id<MTLCommandBuffer> upload_cmd;
+static id<MTLBlitCommandEncoder> upload_blit;
+
 static dispatch_time_t
 mgl_deadline(long ms)
 {
@@ -146,6 +161,13 @@ mgl_release_all(void)
 	mgl_depth = nil;
 	mgl_offscreen = nil;
 	mgl_readbuf = nil;
+	upload_blit = nil;
+	upload_cmd = nil;
+	mgl_pipelines = nil;
+	mgl_samplers = nil;
+	mgl_unbound = nil;
+	mgl_vfunc = nil;
+	mgl_ffunc = nil;
 	mgl_library = nil;
 	mgl_queue = nil;
 	mgl_device = nil;
@@ -210,7 +232,10 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 
 		mgl_library = [mgl_device newLibraryWithURL:[NSURL fileURLWithPath:@(path)] error:&error];
 
-		if (!mgl_queue || !mgl_library || ![[mgl_library functionNames] containsObject:@"mgl_vertex_stub"])
+		mgl_vfunc = [mgl_library newFunctionWithName:@"mgl_vertex_main"];
+		mgl_ffunc = [mgl_library newFunctionWithName:@"mgl_fragment_main"];
+
+		if (!mgl_queue || !mgl_library || !mgl_vfunc || !mgl_ffunc)
 		{
 			mgl_err(err, errlen, "cannot load the shader library ref_gl1.metallib next to ref_gl1",
 					error ? error.localizedDescription.UTF8String : path);
@@ -239,6 +264,9 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 		{
 			dispatch_semaphore_signal(mgl_frame_sem);
 		}
+
+		mgl_pipelines = [NSMutableDictionary dictionary];
+		mgl_samplers = [NSMutableDictionary dictionary];
 
 		snprintf(mgl_device_name, sizeof(mgl_device_name), "%s", mgl_device.name.UTF8String);
 	}
@@ -278,7 +306,7 @@ mgl_layer_get_sync(void)
 }
 
 static id<MTLTexture>
-mgl_texture(MTLPixelFormat format, int w, int h, MTLTextureUsage usage)
+mgl_new_texture(MTLPixelFormat format, int w, int h, MTLTextureUsage usage)
 {
 	MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
 			width:(NSUInteger)w height:(NSUInteger)h mipmapped:NO];
@@ -303,6 +331,23 @@ mgl_commit_wait(id<MTLCommandBuffer> cmd)
 
 	r = dispatch_semaphore_wait(done, mgl_deadline(MGL_GPU_WAIT_MS));
 	return r == 0 && cmd.status == MTLCommandBufferStatusCompleted;
+}
+
+/* Commits the uploads made outside a frame; the queue runs them before any later command buffer. */
+static void
+mgl_commit_uploads(void)
+{
+	if (upload_blit)
+	{
+		[upload_blit endEncoding];
+		upload_blit = nil;
+	}
+
+	if (upload_cmd)
+	{
+		[upload_cmd commit];
+		upload_cmd = nil;
+	}
 }
 
 static void
@@ -374,6 +419,9 @@ mgl_layer_frame_begin(int *tw, int *th)
 		return !frame_skipped;
 	}
 
+	/* the uploads made since the last frame go to the GPU before it */
+	mgl_commit_uploads();
+
 	frame_open = 1;
 	frame_skipped = 0;
 	frame_passes = 0;
@@ -425,7 +473,7 @@ mgl_layer_frame_begin(int *tw, int *th)
 
 			if (!mgl_offscreen || (int)mgl_offscreen.width != w || (int)mgl_offscreen.height != h)
 			{
-				mgl_offscreen = mgl_texture(MTLPixelFormatBGRA8Unorm, w, h,
+				mgl_offscreen = mgl_new_texture(MTLPixelFormatBGRA8Unorm, w, h,
 						rt | MTLTextureUsageShaderRead);
 			}
 
@@ -441,7 +489,7 @@ mgl_layer_frame_begin(int *tw, int *th)
 
 			if (!mgl_depth || (int)mgl_depth.width != frame_w || (int)mgl_depth.height != frame_h)
 			{
-				mgl_depth = mgl_texture(MTLPixelFormatDepth32Float_Stencil8, frame_w, frame_h, rt);
+				mgl_depth = mgl_new_texture(MTLPixelFormatDepth32Float_Stencil8, frame_w, frame_h, rt);
 			}
 		}
 
@@ -538,11 +586,10 @@ mgl_layer_ensure_pass(void)
 	}
 
 	/*
-	 * TASK48: after a mid-frame flush (glReadPixels, glFinish) the
+	 * After a mid-frame flush (glReadPixels, glFinish) or an upload the
 	 * encoder is nil while frame_passes > 0, so this answers 1 with no
-	 * open encoder. Nothing draws yet, and present copes; the draw path
-	 * must reopen a Load pass itself (design section 7, notes for the
-	 * next card).
+	 * open encoder: the target is defined, which is all readback and
+	 * present need. mgl_layer_draw opens a Load pass itself.
 	 */
 	return frame_passes ? 1 : mgl_layer_pass(0, black, 1.0, 0);
 }
@@ -571,12 +618,27 @@ mgl_layer_finish(void)
 
 	@autoreleasepool
 	{
+		/* the uploads made outside a frame first */
+		if (upload_cmd)
+		{
+			id<MTLCommandBuffer> cmd = upload_cmd;
+
+			if (upload_blit)
+			{
+				[upload_blit endEncoding];
+				upload_blit = nil;
+			}
+
+			upload_cmd = nil;
+			ok = mgl_commit_wait(cmd);
+		}
+
 		/* an open frame holds one slot of the frame semaphore itself */
 		held = (frame_open && !frame_skipped) ? 1 : 0;
 
 		if (held && frame_cmd)
 		{
-			ok = mgl_flush();
+			ok = mgl_flush() && ok;
 		}
 
 		/* and the frames presented before it: every other slot comes back when they complete */
@@ -724,6 +786,13 @@ mgl_layer_destroy(void)
 
 	@autoreleasepool
 	{
+		/* uploads nothing will draw with: ended, never committed */
+		if (upload_blit)
+		{
+			[upload_blit endEncoding];
+			upload_blit = nil;
+		}
+
 		if (frame_open && !frame_skipped && frame_cmd)
 		{
 			dispatch_semaphore_t sem = mgl_frame_sem;
@@ -758,4 +827,296 @@ mgl_layer_destroy(void)
 	}
 
 	mgl_ready = 0;
+}
+
+/* ---- textures ---------------------------------------------------------------- */
+
+void *
+mgl_layer_tex_create(int w, int h, int levels)
+{
+	if (!mgl_ready || w <= 0 || h <= 0 || levels <= 0)
+	{
+		return NULL;
+	}
+
+	@autoreleasepool
+	{
+		MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+				width:(NSUInteger)w height:(NSUInteger)h mipmapped:NO];
+		id<MTLTexture> t;
+
+		d.mipmapLevelCount = (NSUInteger)levels;
+		d.storageMode = MTLStorageModePrivate;
+		d.usage = MTLTextureUsageShaderRead;
+		t = [mgl_device newTextureWithDescriptor:d];
+
+		/* the texture table of mgl_tex.c owns it until mgl_layer_tex_release */
+		return t ? (void *)CFBridgingRetain(t) : NULL;
+	}
+}
+
+void
+mgl_layer_tex_release(void *tex)
+{
+	if (tex)
+	{
+		/* a command buffer that still uses it keeps its own reference */
+		CFBridgingRelease(tex);
+	}
+}
+
+int
+mgl_layer_tex_upload(void *tex, int level, int x, int y, int w, int h,
+		const unsigned char *rgba, int gen_mips)
+{
+	if (!mgl_ready || !tex || w <= 0 || h <= 0)
+	{
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		id<MTLTexture> t = (__bridge id<MTLTexture>)tex;
+		NSUInteger row = (NSUInteger)w * 4, size = row * (NSUInteger)h;
+		id<MTLBuffer> staging = [mgl_device newBufferWithBytes:rgba length:size
+				options:MTLResourceStorageModeShared];
+		id<MTLBlitCommandEncoder> blit;
+		int in_frame = frame_open && !frame_skipped && frame_cmd;
+
+		if (!staging)
+		{
+			return 0;
+		}
+
+		if (in_frame)
+		{
+			/*
+			 * Between the draws: the copy is encoded after the ones before
+			 * it and before the ones after it, which open a Load pass.
+			 */
+			mgl_end_encoder();
+			blit = [frame_cmd blitCommandEncoder];
+		}
+		else
+		{
+			if (!upload_cmd)
+			{
+				upload_cmd = [mgl_queue commandBuffer];
+			}
+
+			if (upload_cmd && !upload_blit)
+			{
+				upload_blit = [upload_cmd blitCommandEncoder];
+			}
+
+			blit = upload_blit;
+		}
+
+		if (!blit)
+		{
+			return 0;
+		}
+
+		[blit copyFromBuffer:staging
+				sourceOffset:0
+				sourceBytesPerRow:row
+				sourceBytesPerImage:size
+				sourceSize:MTLSizeMake((NSUInteger)w, (NSUInteger)h, 1)
+				toTexture:t
+				destinationSlice:0
+				destinationLevel:(NSUInteger)level
+				destinationOrigin:MTLOriginMake((NSUInteger)x, (NSUInteger)y, 0)];
+
+		if (gen_mips)
+		{
+			[blit generateMipmapsForTexture:t];
+		}
+
+		if (in_frame)
+		{
+			[blit endEncoding];
+		}
+	}
+
+	return 1;
+}
+
+/* ---- pipeline, depth and sampler state ----------------------------------------- */
+
+/* Indexed by mgl_blend_index (mgl_draw.c). */
+static const MTLBlendFactor mgl_blend_factors[] = {
+	MTLBlendFactorZero, MTLBlendFactorOne, MTLBlendFactorSourceColor,
+	MTLBlendFactorOneMinusSourceColor, MTLBlendFactorSourceAlpha,
+	MTLBlendFactorOneMinusSourceAlpha, MTLBlendFactorDestinationAlpha,
+	MTLBlendFactorOneMinusDestinationAlpha, MTLBlendFactorDestinationColor,
+	MTLBlendFactorOneMinusDestinationColor, MTLBlendFactorSourceAlphaSaturated
+};
+
+#define MGL_BLEND_FACTORS (sizeof(mgl_blend_factors) / sizeof(mgl_blend_factors[0]))
+
+static id<MTLRenderPipelineState>
+mgl_pipeline(uint32_t key)
+{
+	static int once;
+	id<MTLRenderPipelineState> p = mgl_pipelines[@(key)];
+	MTLRenderPipelineDescriptor *d;
+	uint32_t src = (key >> 1) & 15, dst = (key >> 5) & 15;
+	NSError *error = nil;
+
+	if (p)
+	{
+		return p;
+	}
+
+	if ((key & 1) && (src >= MGL_BLEND_FACTORS || dst >= MGL_BLEND_FACTORS))
+	{
+		return nil;
+	}
+
+	d = [MTLRenderPipelineDescriptor new];
+	d.vertexFunction = mgl_vfunc;
+	d.fragmentFunction = mgl_ffunc;
+	d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+	d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+	d.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+
+	if (key & 1)
+	{
+		d.colorAttachments[0].blendingEnabled = YES;
+		d.colorAttachments[0].sourceRGBBlendFactor = mgl_blend_factors[src];
+		d.colorAttachments[0].sourceAlphaBlendFactor = mgl_blend_factors[src];
+		d.colorAttachments[0].destinationRGBBlendFactor = mgl_blend_factors[dst];
+		d.colorAttachments[0].destinationAlphaBlendFactor = mgl_blend_factors[dst];
+	}
+
+	d.colorAttachments[0].writeMask = ((key & (1u << 9)) ? MTLColorWriteMaskRed : 0) |
+		((key & (1u << 10)) ? MTLColorWriteMaskGreen : 0) |
+		((key & (1u << 11)) ? MTLColorWriteMaskBlue : 0) |
+		((key & (1u << 12)) ? MTLColorWriteMaskAlpha : 0);
+
+	p = [mgl_device newRenderPipelineStateWithDescriptor:d error:&error];
+
+	if (!p)
+	{
+		if (!once)
+		{
+			once = 1;
+			fprintf(stderr, "mgl: cannot make a pipeline (key 0x%x): %s\n", key,
+					error ? error.localizedDescription.UTF8String : "unknown");
+		}
+
+		return nil;
+	}
+
+	mgl_pipelines[@(key)] = p;
+	return p;
+}
+
+/* The key is mgl_sampler_key's (mgl_tex.c). GL_CLAMP is drawn as clamp to edge: Metal has no border blend. */
+static id<MTLSamplerState>
+mgl_sampler(uint32_t key)
+{
+	static const MTLSamplerAddressMode wrap[] = {
+		MTLSamplerAddressModeRepeat, MTLSamplerAddressModeClampToEdge,
+		MTLSamplerAddressModeClampToEdge, MTLSamplerAddressModeClampToEdge
+	};
+	id<MTLSamplerState> s = mgl_samplers[@(key)];
+	MTLSamplerDescriptor *d;
+	uint32_t min = key & 7;
+
+	if (s)
+	{
+		return s;
+	}
+
+	d = [MTLSamplerDescriptor new];
+	/* GL_NEAREST, GL_LINEAR, then GL_{NEAREST,LINEAR}_MIPMAP_{NEAREST,LINEAR} */
+	d.minFilter = (min == 0 || min == 2 || min == 4) ? MTLSamplerMinMagFilterNearest :
+		MTLSamplerMinMagFilterLinear;
+	d.mipFilter = min < 2 ? MTLSamplerMipFilterNotMipmapped :
+		(min < 4 ? MTLSamplerMipFilterNearest : MTLSamplerMipFilterLinear);
+	d.magFilter = (key & 8) ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
+	d.sAddressMode = wrap[(key >> 4) & 3];
+	d.tAddressMode = wrap[(key >> 6) & 3];
+	s = [mgl_device newSamplerStateWithDescriptor:d];
+
+	if (s)
+	{
+		mgl_samplers[@(key)] = s;
+	}
+
+	return s;
+}
+
+/* ---- draws ------------------------------------------------------------------------ */
+
+int
+mgl_layer_draw(const mgl_draw_t *d)
+{
+	static const GLclampf black[4] = {0, 0, 0, 1};
+	int w, h;
+
+	if (!mgl_layer_frame_begin(&w, &h))
+	{
+		/* a skipped frame draws nothing, as its clears do nothing */
+		return 1;
+	}
+
+	@autoreleasepool
+	{
+		id<MTLRenderPipelineState> pso;
+		id<MTLSamplerState> smp;
+		id<MTLBuffer> vbuf, ibuf;
+		mgl_raster_t r;
+
+		/* the first pass of the frame, or a Load pass after a flush or an upload */
+		if (!frame_enc && !mgl_layer_pass(0, black, 1.0, 0))
+		{
+			return 0;
+		}
+
+		mgl_compute_raster(&mgl_state, frame_w, frame_h, &r);
+
+		if (r.scissor_empty)
+		{
+			return 1;
+		}
+
+		if (!mgl_unbound)
+		{
+			mgl_unbound = mgl_new_texture(MTLPixelFormatRGBA8Unorm, 1, 1, MTLTextureUsageShaderRead);
+		}
+
+		/*
+		 * A buffer per draw, which the command buffer keeps alive; a
+		 * per-frame ring is S2b. No depth-stencil state is set: Metal's
+		 * default neither tests nor writes, as GL without GL_DEPTH_TEST.
+		 */
+		pso = mgl_pipeline(d->pipeline_key);
+		smp = mgl_sampler(d->texture0 ? d->sampler0 : 0);
+		vbuf = [mgl_device newBufferWithBytes:d->vertices length:d->nvertices * sizeof(mgl_vertex_t)
+				options:MTLResourceStorageModeShared];
+		ibuf = [mgl_device newBufferWithBytes:d->indices length:d->nindices * sizeof(uint16_t)
+				options:MTLResourceStorageModeShared];
+
+		if (!pso || !smp || !vbuf || !ibuf || !mgl_unbound)
+		{
+			return 0;
+		}
+
+		[frame_enc setRenderPipelineState:pso];
+		[frame_enc setVertexBuffer:vbuf offset:0 atIndex:0];
+		[frame_enc setVertexBytes:&d->u length:sizeof(d->u) atIndex:1];
+		[frame_enc setFragmentBytes:&d->u length:sizeof(d->u) atIndex:1];
+		[frame_enc setFragmentTexture:(d->texture0 ? (__bridge id<MTLTexture>)d->texture0 : mgl_unbound)
+				atIndex:0];
+		[frame_enc setFragmentSamplerState:smp atIndex:0];
+		[frame_enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+				indexCount:d->nindices
+				indexType:MTLIndexTypeUInt16
+				indexBuffer:ibuf
+				indexBufferOffset:0];
+	}
+
+	return 1;
 }

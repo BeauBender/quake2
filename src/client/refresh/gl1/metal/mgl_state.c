@@ -22,9 +22,10 @@
  * The GL state machine of the Metal shim: one mgl_state_t, the sticky
  * error, and the entry points that only record state. They validate
  * their arguments as GL does and change nothing else; the draw path of
- * later cards reads the struct. The matrix arithmetic (glRotatef,
- * glTranslatef, glScalef, glOrtho, glFrustum) belongs to those cards and
- * is stubbed here: it sets the sticky error and leaves the stack alone.
+ * later cards reads the struct. Of the matrix arithmetic only glOrtho
+ * (the 2D projection) is done; glRotatef, glTranslatef, glScalef and
+ * glFrustum belong to the world cards and are stubbed here: they set
+ * the sticky error and leave the stack alone.
  *
  * =======================================================================
  */
@@ -779,7 +780,7 @@ glGetFloatv(GLenum pname, GLfloat *params)
 	}
 }
 
-/* The matrix arithmetic: TASK48 (glOrtho) and TASK49 (the rest). */
+/* The matrix arithmetic: glOrtho here, the rest with the world (TASK48 S2b, TASK49). */
 
 void
 glRotatef(GLfloat angle, GLfloat x, GLfloat y, GLfloat z)
@@ -802,12 +803,29 @@ glScalef(GLfloat x, GLfloat y, GLfloat z)
 	MGL_UNIMPLEMENTED();
 }
 
+/* The current matrix times the orthographic projection (GL 1.4, section 2.11.2). */
 void
 glOrtho(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top,
 		GLdouble zNear, GLdouble zFar)
 {
-	(void)left; (void)right; (void)bottom; (void)top; (void)zNear; (void)zFar;
-	MGL_UNIMPLEMENTED();
+	GLfloat m[16];
+
+	if (left == right || bottom == top || zNear == zFar)
+	{
+		mgl_error(GL_INVALID_VALUE);
+		return;
+	}
+
+	memset(m, 0, sizeof(m));
+	m[0] = (GLfloat)(2.0 / (right - left));
+	m[5] = (GLfloat)(2.0 / (top - bottom));
+	m[10] = (GLfloat)(-2.0 / (zFar - zNear));
+	m[12] = (GLfloat)(-(right + left) / (right - left));
+	m[13] = (GLfloat)(-(top + bottom) / (top - bottom));
+	m[14] = (GLfloat)(-(zFar + zNear) / (zFar - zNear));
+	m[15] = 1.0f;
+
+	mgl_mat_mul(mgl_top(), mgl_top(), m);
 }
 
 void

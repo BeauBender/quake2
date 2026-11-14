@@ -21,14 +21,17 @@
  *
  * The pure arithmetic of the frame core, kept apart from mgl_frame.c
  * (which needs SDL) so that tests/check-metal-shim.sh can compile it
- * on any host: the GL-to-Metal rectangle flip and the read contract of
- * glReadPixels. Both are declared in mgl_internal.h.
+ * on any host: the GL-to-Metal rectangle flip, the read contract and
+ * the row and channel conversion of glReadPixels, the matrix product
+ * and the unpacking of texture uploads. All are declared in
+ * mgl_internal.h.
  *
  * =======================================================================
  */
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "mgl_internal.h"
 
@@ -137,4 +140,89 @@ mgl_read_contract(GLint x, GLint y, GLsizei w, GLsizei h, GLenum format,
 	*rowbytes = (size_t)row;
 	*total = (size_t)sum;
 	return GL_NO_ERROR;
+}
+
+void
+mgl_convert_readback(const unsigned char *bgra, int w, int h, GLenum format,
+		size_t bpp, size_t rowbytes, unsigned char *dst)
+{
+	const unsigned char *src;
+	unsigned char *out;
+	size_t r, c;
+
+	/* GL row r (bottom up) is row h - 1 - r of what Metal returned. */
+	for (r = 0; r < (size_t)h; r++)
+	{
+		src = bgra + ((size_t)h - 1 - r) * (size_t)w * 4;
+		out = dst + r * rowbytes;
+
+		for (c = 0; c < (size_t)w; c++, src += 4, out += bpp)
+		{
+			if (format == GL_BGRA)
+			{
+				memcpy(out, src, 4);
+				continue;
+			}
+
+			out[0] = src[2];
+			out[1] = src[1];
+			out[2] = src[0];
+
+			if (bpp == 4)
+			{
+				out[3] = src[3];
+			}
+		}
+	}
+}
+
+/* ---- matrices and pixel unpacking ------------------------------------------ */
+
+void
+mgl_mat_mul(GLfloat *out, const GLfloat *a, const GLfloat *b)
+{
+	GLfloat t[16];
+	int r, c, k;
+
+	for (c = 0; c < 4; c++)
+	{
+		for (r = 0; r < 4; r++)
+		{
+			float sum = 0.0f;
+
+			for (k = 0; k < 4; k++)
+			{
+				sum += a[k * 4 + r] * b[c * 4 + k];
+			}
+
+			t[c * 4 + r] = sum;
+		}
+	}
+
+	memcpy(out, t, sizeof(t));
+}
+
+void
+mgl_unpack_rgba(const unsigned char *src, GLenum format, int w, int h,
+		int alignment, int row_length, int opaque, unsigned char *out)
+{
+	size_t bpp = format == GL_RGB ? 3 : 4;
+	size_t stride = (size_t)(row_length > 0 ? row_length : w) * bpp;
+	int x, y;
+
+	/* GL pads each source row to the unpack alignment. */
+	stride = (stride + (size_t)alignment - 1) / (size_t)alignment * (size_t)alignment;
+
+	for (y = 0; y < h; y++)
+	{
+		const unsigned char *p = src + (size_t)y * stride;
+
+		for (x = 0; x < w; x++, p += bpp, out += 4)
+		{
+			out[0] = p[0];
+			out[1] = p[1];
+			out[2] = p[2];
+			out[3] = (bpp == 4 && !opaque) ? p[3] : 255;
+		}
+	}
 }
