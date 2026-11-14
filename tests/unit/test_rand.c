@@ -10,10 +10,19 @@
  *
  * The engine's PRNG (src/common/shared/rand.c) and its fixed seed
  * (randk_seed_fixed, the pin harness's pins_seed, TASK45): a fixed seed
- * gives the same stream every time and a different one per seed,
- * randk_seed() still seeds from OS entropy afterwards, and no seed of
- * the PRNG reaches the server's connectionless challenge, which draws
- * on Sys_GetRandomBytes alone.
+ * gives the same first draws every time (pinned for seeds 7 and 0) and
+ * different ones for seeds 7, 8 and 0; randk_seed() after a fixed seed
+ * draws a stream that differs from one run to the next, so entropy
+ * reaches the state; and a fixed seed does not make the server's
+ * connectionless challenge repeat.
+ *
+ * Not proven here: that randk_seed() is the same function as before
+ * TASK45 (which entropy it reads, and that it leaves j and carry alone).
+ * The entropy is not under the test's control, so a change there still
+ * gives differing streams; it was checked once by comparing the old and
+ * new rand.c against one stubbed Sys_GetRandomBytes. Only 16 draws are
+ * taken after each seed, so a fault that shows only after a full turn of
+ * the 2^21-entry queue is not seen either.
  *
  * =======================================================================
  */
@@ -60,8 +69,8 @@ TEST(randk_fixed_seed_repeats)
 		T_CHECK(a[i] >= 0 && d[i] >= 0);
 	}
 
-	/* the same numbers on every platform and every build: a pin recorded
-	   with pins_seed 7 on one host replays its particles on another */
+	/* pinned numbers: a build or platform that draws others fails here,
+	   since a pin recorded with pins_seed 7 must replay on another host */
 	randk_seed_fixed(7);
 	T_EQ_INT(randk(), 638105636);
 	T_EQ_INT(randk(), 1110157193);
@@ -88,7 +97,11 @@ TEST(randk_fixed_seed_repeats)
 	}
 }
 
-/* With no fixed seed (no pins_seed), seeding is from entropy, as before. */
+/*
+ * With no fixed seed (no pins_seed), randk_seed() still mixes entropy into
+ * the state after a fixed seed: from the same state, two calls give two
+ * streams. Whether it is the same entropy path as before is not tested.
+ */
 TEST(randk_entropy_seed_after_fixed)
 {
 	int a[T_RAND_N], b[T_RAND_N], c[T_RAND_N];
