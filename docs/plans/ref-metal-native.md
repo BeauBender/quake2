@@ -1543,3 +1543,13 @@ translucent surfaces to `r_alpha_surfaces`, and its flowing ones scroll as
 here; N7 reuses `RM_DynPoly`, `RM_EmitWaterPolys` and the chain), alias
 models, the entity list between the world and the alpha surfaces,
 dynamic lights (N8), particles (N9).
+
+Review fixes: the fan centre of a warped piece is multiplied by a float
+scale as gl1's `VectorScale` does (the host reference now calls the real
+`VectorScale`); the world's animation frame is `rm_world_frame`, a
+saturating truncation. The skipped-surface counts are per batch: when a
+surface's fans straddle a flush and the ring is exhausted, a refused batch
+adds the surfaces it held, so the count can be off by the straddling
+surface (the draw skip itself is exact: `draws skipped` in `metal_stats`).
+The `gl1-metal` references were recorded at this card's own commit, which
+is equivalent to its base because no gl1 or shim file changed.
