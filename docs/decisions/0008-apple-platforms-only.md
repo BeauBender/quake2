@@ -43,10 +43,13 @@ repository does not have, so nothing ran on `main` after a merge.
 - The CodeQL `c-cpp` job (`.github/workflows/codeql.yml`, job `analyze`)
   runs on `macos-latest`, with no container and no package install. It builds
   `client server game ref_gl1 ref_gl3 ref_soft ref_metal`, then builds
-  `ref_gl1` again with `WITH_METAL_SHIM=yes`, so both `ref_gl1` variants (the
-  OpenGL one and the Metal shim one) and `ref_metal` are compiled and their C
-  files analysed. CodeQL does not analyse Objective-C, so the `.m` files are
-  outside the analysis.
+  `ref_gl1` again with `WITH_METAL_SHIM=yes`, both with `METAL_SHADERS=no`, so
+  both `ref_gl1` variants (the OpenGL one and the Metal shim one) and
+  `ref_metal` are compiled and their C files analysed. The shaders are not
+  compiled in CI: the hosted runner has Xcode but not the Metal shader
+  compiler, and nothing is installed, so no `.metallib` is built. CodeQL does
+  not analyse Objective-C, so the `.m` files are compiled but outside the
+  analysis.
   The Linux-only preprocessor branches (`#if defined(__linux__)` and the
   non-Darwin arms) are no longer seen by the analysis; this is a stated loss.
   The vendored SDL3 under `third_party/SDL3` is now compiled inside the

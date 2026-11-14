@@ -367,7 +367,9 @@ differs from the text above, this list is what the tree does.
   `xcrun -f metal` and SDL 3 configured, printing `skipped: <reason>`
   otherwise. Since TASK96 the CodeQL `c-cpp` job
   (`.github/workflows/codeql.yml`) builds `ref_gl1` with
-  `WITH_METAL_SHIM=yes` on macOS for analysis; the macOS test build still
+  `WITH_METAL_SHIM=yes METAL_SHADERS=no` on macOS for analysis: the C and
+  Objective-C are compiled, the shaders are not (the hosted runner has no
+  Metal shader compiler and nothing is installed); the macOS test build still
   builds with the switch off.
 - **Switching back.** The OpenGL build of `ref_gl1` removes
   `release/ref_gl1.metallib` when its mode stamp is made, so the shaders

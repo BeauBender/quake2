@@ -504,8 +504,9 @@ intersection performance (RT9, RT10) only.
    scope also asks for "until the owner decides otherwise"). Removing it
    from the build is a later decision of the owner, not part of group N.
 3. **Build and CI.** `ref_metal` is not part of `make all`; since TASK96
-   the CodeQL `c-cpp` job builds it on macOS for analysis; the macOS test
-   build does not. `tests/check-ref-metal.sh` in the local gate builds
+   the CodeQL `c-cpp` job builds it on macOS for analysis with
+   `METAL_SHADERS=no` (C and Objective-C compiled, shaders not: the hosted
+   runner has no Metal shader compiler); the macOS test build does not. `tests/check-ref-metal.sh` in the local gate builds
    it where the Metal toolchain exists.
 4. **Fallback order (N10).** On macOS `metal` goes ahead of `gl1` only; the
    default `vid_renderer` does not change.
