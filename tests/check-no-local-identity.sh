@@ -30,8 +30,10 @@
 # public handle and is in the tree by necessity (links, credits), so the
 # user-name word test is skipped and a note says so (without the value). The
 # host-name and home-path tests still run, and the user name is still
-# withheld from any file name printed. If the owner cannot be determined,
-# nothing is skipped. The push hook applies the same rule.
+# withheld from any file name printed. The skip needs a home path that the
+# home-path test can refuse (see home_is: its last component is the user
+# name); without one, or if the owner cannot be determined, nothing is
+# skipped. The push hook applies the same rule.
 #
 # Limit: a machine whose host or user name is an ordinary word of this
 # repository's text (for example a generic container or CI name) cannot
@@ -74,18 +76,27 @@ owner_is() {
 		-e 's#^([^/@:]*@)?github\.com:([a-z0-9-]+)/[a-z0-9._-]+/?$#\2#p') || return 1
 	[ -n "$_oo" ] && [ "$_oo" = "$(printf '%s' "$2" | tr 'A-Z' 'a-z')" ]
 }
+# home_is <home> <user>: true when the last path component of <home> equals
+# <user>, ASCII case-insensitively, so that the home-path test refuses a path
+# under this account's home directory. False for an empty <user> and for a
+# <home> that is empty, `/`, ends in `/` or names another directory; the
+# user-name word test is then not skipped (it is what still sees such a path).
+home_is() {
+	[ -n "$2" ] && [ "$(printf '%s' "${1##*/}" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$2" | tr 'A-Z' 'a-z')" ]
+}
 # ---- end of owner_is. ------------------------------------------------------
 
 # scan_repo <dir> <host> <user> <home>: prints "path:line (kind)" for each hit
 # in the staged text files and link targets of the repository at <dir>, and
 # "N tracked file name(s) (kind)" for file names; never the matched text. Returns 1 if any
 # hit, 2 if <dir> is not a repository or a git or grep call fails (said on
-# stderr). The user-name word test is skipped when owner_is <dir> <user>; the
-# user name is then still withheld from the file names printed.
+# stderr). The user-name word test is skipped when owner_is <dir> <user> and
+# home_is <home> <user>; the user name is then still withheld from the file
+# names printed.
 scan_repo() {
 	_hits=0
 	_skipu=0
-	if owner_is "$1" "$3"; then _skipu=1; fi
+	if owner_is "$1" "$3" && home_is "$4" "$3"; then _skipu=1; fi
 	: > "$tmp/hits"
 	: > "$tmp/words"
 	# One listing gives the names and the symbolic links (mode 120000):
@@ -314,6 +325,10 @@ nl.txt"
 	expect 1 "no origin: the user name is checked" "$tmp/want" "$syn" zzquser /home/zzquser
 	git -C "$r" remote add origin https://github.com/ZzqUser/zzqrepo.git
 	expect 0 "the user name is the owner handle: skipped" "$tmp/none" "$syn" zzquser /home/zzquser
+	# Skipped only when the home-path test can refuse a path under the home.
+	expect 1 "the owner handle, home unset: checked" "$tmp/want" "$syn" zzquser ''
+	expect 1 "the owner handle, home elsewhere: checked" "$tmp/want" "$syn" zzquser /home/zzqhome
+	expect 1 "the owner handle, home is /: checked" "$tmp/want" "$syn" zzquser /
 	git -C "$r" remote set-url origin https://github.com/zzqother/zzqrepo.git
 	expect 1 "the owner handle is another name: checked" "$tmp/want" "$syn" zzquser /home/zzquser
 	git -C "$r" remote set-url origin zzqalias:zzquser/zzqrepo.git
@@ -350,8 +365,8 @@ fi
 if [ -z "$host" ] || [ -z "$user" ]; then
 	echo "$me: warning: cannot read the host or user name; that word is not checked"
 fi
-if [ -n "$user" ] && owner_is . "$user"; then
-	echo "$me: note: the user name is the owner handle of this repository's GitHub address (remote origin), which is public; the user-name word test is skipped, the host name and home path are still checked"
+if [ "${#user}" -ge 3 ] && owner_is . "$user" && home_is "$home" "$user"; then
+	echo "$me: note: the user name is the owner handle of this repository's GitHub address (remote origin), which is public, and the last component of the home path; the user-name word test is skipped, the host name and home path are still checked"
 fi
 real_st=0
 scan_repo . "$host" "$user" "$home" > "$tmp/real" 2> "$tmp/realerr" || real_st=$?

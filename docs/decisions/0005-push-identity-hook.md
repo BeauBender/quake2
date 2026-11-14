@@ -148,6 +148,11 @@ machine, so:
   The host-name and home-path tests are unchanged and still apply there, so
   a path under the home directory is still refused. The user name is still
   withheld from any file name the gate check prints.
+- The skip also needs a home path that can refuse a path under this
+  account's home directory: the last component of `$HOME` must equal the
+  user name (case-insensitively, `home_is`). With `$HOME` unset, `/`, ending
+  in `/` or naming another directory, the home-path test could not refuse
+  such a path, so the user-name word test runs as on any other machine.
 - The owner segment is read from what `git remote get-url --all origin`
   resolves from the repository's configuration (`.git/config`, and the
   owner's own global configuration for `url.<base>.insteadOf`). No commit or
@@ -165,11 +170,13 @@ machine, so:
 - The gate check prints a note that the user-name word test was skipped and
   why, without the value. The hook says nothing extra; its refusals are
   unchanged in form.
-- The function that reads the owner (`owner_is`) is the same text in both
-  scripts, and `tests/check-pre-push-hook.sh` fails if they differ. The
-  self-tests cover: skipped when equal, not skipped when different, not
-  skipped when undeterminable, the home path and the host name still refused
-  when skipped, and the address forms.
+- The functions that read the owner and judge the home path (`owner_is`,
+  `home_is`) are the same text in both scripts, and
+  `tests/check-pre-push-hook.sh` fails if they differ. The self-tests cover:
+  skipped when equal, not skipped when different, not skipped when
+  undeterminable, not skipped when the home path is unset or elsewhere, the
+  home path and the host name still refused when skipped, and the address
+  forms.
 
 ## Reversal
 

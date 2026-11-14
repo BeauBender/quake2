@@ -387,6 +387,17 @@ owner_cases
 shells="dash bash sh"
 run "the user name is the owner handle" HOME="/zzqhome/$login"
 shells=sh
+# Skipped only when the home-path test can refuse a path under the home:
+# with HOME unset or naming another directory, the user name is checked.
+for _h in unset /zzqhome/zzqx; do
+	case_ "$M" refs/heads/zzqw1 "$(mk "$m1" "zzqm30 note for $login")" refs/heads/zzqw1 "$zero"
+	case_ "the remote ref name contains $U" refs/heads/zzqx "$m1" "refs/heads/zzqt/$login/zzqtopic" "$zero"
+	if [ "$_h" = unset ]; then
+		run "the owner handle, HOME unset" -u HOME
+	else
+		run "the owner handle, HOME elsewhere" HOME="$_h"
+	fi
+done
 # Not skipped: another owner, an undeterminable owner, two URLs.
 _i=0
 for _url in https://github.com/zzqother/zzqrepo.git "zzqalias:$login/zzqrepo.git" "file:///zzq/$login/zzqrepo"; do

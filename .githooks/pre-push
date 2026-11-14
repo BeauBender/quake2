@@ -40,9 +40,11 @@
 #               see owner_is), it is a public handle: it is not compared as a
 #               whole word anywhere, and in ref names only an occurrence inside
 #               a longer word still refuses. Host name and home path are still
-#               compared everywhere. If the owner cannot be determined, nothing
-#               is skipped. tests/check-no-local-identity.sh applies the same
-#               rule to tracked files.
+#               compared everywhere. The skip needs a home path the home-path
+#               test can refuse (see home_is: its last component is the user
+#               name); without one, or if the owner cannot be determined,
+#               nothing is skipped. tests/check-no-local-identity.sh applies
+#               the same rule to tracked files.
 #   commits     the commits the remote lacks: git rev-list <sha> --not
 #               <remote sha> --remotes=<remote>, at most SCAN_CAP of them
 #               (commits already on any remote-tracking ref of the remote
@@ -102,6 +104,14 @@ owner_is() {
 		-e 's#^([^/@:]*@)?github\.com:([a-z0-9-]+)/[a-z0-9._-]+/?$#\2#p') || return 1
 	[ -n "$_oo" ] && [ "$_oo" = "$(printf '%s' "$2" | tr 'A-Z' 'a-z')" ]
 }
+# home_is <home> <user>: true when the last path component of <home> equals
+# <user>, ASCII case-insensitively, so that the home-path test refuses a path
+# under this account's home directory. False for an empty <user> and for a
+# <home> that is empty, `/`, ends in `/` or names another directory; the
+# user-name word test is then not skipped (it is what still sees such a path).
+home_is() {
+	[ -n "$2" ] && [ "$(printf '%s' "${1##*/}" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$2" | tr 'A-Z' 'a-z')" ]
+}
 # ---- end of owner_is. ------------------------------------------------------
 
 # YQ2_W: lines of "<kind> <value>"; kind is host, user, home or test. Handed to
@@ -136,9 +146,11 @@ fi
 export YQ2_UPUB
 
 # Is the user name the public owner handle of this repository's GitHub
-# address? Then it is compared only where it is not a whole word (see Rules).
+# address, and is it the last component of the home path (so the home-path
+# test refuses a path under it)? Then it is compared only where it is not a
+# whole word (see Rules).
 YQ2_USKIP=0
-if owner_is . "$u"; then
+if owner_is . "$u" && home_is "${HOME:-}" "$u"; then
 	YQ2_USKIP=1
 fi
 export YQ2_USKIP
