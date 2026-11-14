@@ -130,6 +130,64 @@ What the guard does not do (known limits):
   rewrite that history, and the hook never scans it (those commits are already
   published).
 
+## Addendum 2026-11-14: the owner handle (FIX44, #229)
+
+On a machine whose account name equals the owner segment of this
+repository's GitHub address, the user name is in the tree by necessity
+(the repository slug in configuration, documentation links, credits), so
+the gate check failed on every head there and an account name cannot be
+renamed. A value that is the public owner handle is not a secret of the
+machine, so:
+
+- The user-name word test is skipped exactly when the user name equals,
+  ASCII case-insensitively, the owner segment of the GitHub address of the
+  remote `origin`, and then only as that whole word. In the gate check this
+  is the whole-word test on file contents, link targets and file names; in
+  the hook it is the whole-word test on object text, and in ref names (a
+  substring test) only an occurrence inside a longer word still refuses.
+  The host-name and home-path tests are unchanged and still apply there, so
+  a path under `$HOME`, spelled as `$HOME` spells it, is still refused. The
+  user name is still withheld from any file name the gate check prints.
+- The skip also needs the last path component of `$HOME` to equal the user
+  name (ASCII case-insensitively, `home_is`); nothing else about `$HOME` is
+  checked. Under this record's threat model `$HOME` is trusted to be the
+  account's home directory, so the home-path test then refuses a path under
+  it. With `$HOME` unset, `/`, ending in `/` or with another last component,
+  nothing is skipped and the user-name word test runs as on any other
+  machine. Not covered, so that with the skip on a path in one of these
+  forms is not refused: a `$HOME` elsewhere that ends in the user name (the
+  account's real home is then no home word), a symlinked or non-canonical
+  spelling of the home directory, and the dash-encoded form of the home path
+  that some tools write in directory names (`/home/zzq` as `-home-zzq`). The
+  follow-up card "Identity check: take the home directory from the user
+  database and catch its dash-encoded form" tracks them.
+- The owner segment is read from what `git remote get-url --all origin`
+  resolves from the repository's configuration (`.git/config`, and the
+  owner's own global configuration for `url.<base>.insteadOf`). No commit or
+  push can change that configuration, and the owner's machine and
+  environment are trusted; tracked content, which can arrive from elsewhere,
+  is not consulted (no allow-list, attribute or configuration file in the
+  tree). The URL given to the hook as its second argument is not used, so
+  the hook and the gate check judge from the same address.
+- Only `https://`, `ssh://` and `git://` URLs and the scp-like form whose host
+  is `github.com` and whose path is exactly `<owner>/<repository>` name an
+  owner. Anything else is undeterminable and nothing is skipped: no `origin`,
+  more than one URL for it, another host (an ssh host alias included), a
+  local path or `file://` URL, or a git error. A fork's `origin` names the
+  fork's owner, whose handle is just as public.
+- The gate check prints a note that the user-name word test was skipped and
+  why, without the value. The hook says nothing extra; its refusals are
+  unchanged in form.
+- The functions that read the owner and judge the home path (`owner_is`,
+  `home_is`) are the same text in both scripts, and
+  `tests/check-pre-push-hook.sh` fails if they differ. The self-tests cover:
+  skipped when equal, not skipped when different, not skipped when
+  undeterminable (two URLs for `origin` included), not skipped when `$HOME`
+  is unset, `/`, ends in `/` or has another last component, the home path
+  and the host name still refused when skipped, a longer word holding the
+  user name refused in a ref name only, no note for a user name that is not
+  the owner, and the address forms.
+
 ## Reversal
 
 Delete the hook, the three checks and the warning in `scripts/test.sh`.
