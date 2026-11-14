@@ -65,8 +65,7 @@ id<MTLTexture> rmb_texture_for_draw(int id);
 id<MTLRenderPipelineState> rmb_pipe(int i);
 id<MTLSamplerState> rmb_sampler(int i);
 
-/* the frame ring of 2D vertices and indices: one shared buffer per frame in flight */
-#define RMB_RING_BYTES (4u << 20)
+/* the frame ring of 2D vertices and indices (RMB_RING_BYTES): one shared buffer per frame in flight */
 static id<MTLBuffer> ring_buf[RMB_FRAMES_IN_FLIGHT];
 static mtl_ring_t ring;
 static unsigned long frames_begun;

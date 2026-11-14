@@ -679,7 +679,8 @@ What exists:
   splits that command buffer (`metal_stats` counts the splits; none in
   the cinematic). A full ring commits the pending uploads, waits for them
   (bounded) and starts again. 2D draws take their vertices and fan
-  indices from a 4 MB frame ring per frame slot.
+  indices from a 4 MB frame ring per frame slot (8 MiB since N3,
+  section 18).
 - **2D and the cinematic.** `rm_draw.c` has `DrawFill`, `DrawFadeScreen`,
   `DrawStretchRaw` and `SetPalette`, with gl1's 2D state: the ortho
   matrix of `R_SetGL2D` times the identity modelview through
@@ -865,6 +866,28 @@ injection into the code before this fix (images holding the id, the
 dirty atlas skipped) draws the console characters of atlas 0 in the red
 texture in 5 of 23 frames (worst score 0.000841, bad 0.002917) and never
 makes the atlas again.
+
+The frame ring (`RMB_RING_BYTES`, now in `header/rmb.h`) was 4 MiB and
+is 8 MiB per frame in flight (24 MiB for the three). A batched quad takes
+4 vertices of 48 bytes and 6 16-bit indices, 204 bytes; a full batch of
+1024 quads takes 196,608 bytes of vertices and 12,288 of indices
+(both multiples of the ring's 256-byte alignment), 208,896 bytes, so
+4 MiB held 20 full batches (20,480 quads) and 8 MiB holds 40 (40,960);
+a draw that does not fit what is left is skipped whole and counted. The
+most characters one frame queues is a full console: its text is at most
+`CON_TEXTSIZE` (32,768) characters at any resolution and console scale
+(`con.totallines` is `CON_TEXTSIZE / con.linewidth`), plus the input
+line, the download bar and the backscroll arrows (a line each,
+`con.linewidth` at most `MAXCMDLINE - 2`, 1022) and 28 characters of
+version and date: at most 35,862 quads. At 4K with `r_consolescale 1`
+the line is 478 characters and the text 68 lines, 33,966 quads, which
+the 4 MiB ring did not hold (the last 13,486 characters of such a frame
+would have been skipped). The 8 MiB ring holds the worst console with
+5,098 quads (about five batches) to spare for the status bar, the
+centre print and the notify lines, all of them on one sheet or atlas
+and batched. `test_ring_console` in the host test holds these numbers
+through `mtl_ring_alloc`, the ring's own allocator (a 4 MiB ring fails
+it), and that the quads past the ring's end are skipped, not written.
 
 Measured on the build VM (T0), source `308d8073` (the pins; later commits
 change tests and documents only), load averages 17.7 to 26.1 (a shared

@@ -300,6 +300,14 @@ void rm_tint_color(float *rgba, const float *rgb);
  */
 #define RMB_FRAMES_IN_FLIGHT 3
 
+/*
+ * The frame ring of 2D vertices and indices (rmb_encode.m), one per frame
+ * in flight. A draw that does not fit in what is left of it is skipped and
+ * counted (draws skipped in metal_stats); the host test holds the size
+ * against the most characters one frame can queue, a full console.
+ */
+#define RMB_RING_BYTES (8u << 20)
+
 /* The device and the queue, and the capabilities. 0 with err filled on failure. */
 int rmb_open(rmb_caps_t *caps, char *err, size_t errlen);
 

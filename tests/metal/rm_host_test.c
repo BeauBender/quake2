@@ -477,6 +477,65 @@ test_ring(void)
 }
 
 /*
+ * How many of quads 2D quads fit in a frame ring of bytes, queued in
+ * batches of RM_BATCH_QUADS and allocated as rmb_draw_2d_idx does: the
+ * vertices, then the indices, of each draw. The quads after the first
+ * draw that does not fit are skipped.
+ */
+static long
+ring_quads(size_t bytes, long quads)
+{
+	mtl_ring_t r;
+	long placed = 0;
+
+	r.size = bytes;
+	r.used = 0;
+
+	while (placed < quads)
+	{
+		long n = quads - placed < RM_BATCH_QUADS ? quads - placed : RM_BATCH_QUADS;
+		size_t used = r.used;
+
+		if ((mtl_ring_alloc(&r, (size_t)n * 4 * sizeof(rmb_vert2d_t)) < 0)
+				|| (mtl_ring_alloc(&r, (size_t)n * 6 * sizeof(unsigned short)) < 0))
+		{
+			/* the draw is skipped: whatever its vertices took is not given back, as in rmb_draw_2d_idx */
+			CHECK(r.used >= used && r.used <= r.size);
+			break;
+		}
+
+		placed += n;
+	}
+
+	return placed;
+}
+
+/*
+ * The frame ring against the most characters one frame can queue, a full
+ * console (cl_console.c): its text is at most CON_TEXTSIZE (32768)
+ * characters at any resolution and console scale (con.totallines is
+ * CON_TEXTSIZE / con.linewidth), plus the input line, the download bar and
+ * the backscroll arrows (at most a line each, con.linewidth at most
+ * MAXCMDLINE - 2 = 1022) and the 28 characters of the version and the
+ * date. All of them are characters of one sheet, so they batch. At 4K
+ * with r_consolescale 1 the line is 478 characters and the text 68 lines:
+ * 32504 + 3 * 478 + 28 = 33966 quads. The old 4 MiB ring held 20 batches, 20480.
+ */
+static void
+test_ring_console(void)
+{
+	const long console = 32768 + 3 * 1022 + 28;
+	const long console_4k = 68 * 478 + 3 * 478 + 28;
+
+	CHECK(ring_quads(RMB_RING_BYTES, console) == console);
+	CHECK(ring_quads(RMB_RING_BYTES, console_4k) == console_4k);
+	CHECK(ring_quads(4u << 20, console_4k) == 20480);
+	/* a frame that exhausts the ring places what fits, then skips: 8 MiB holds 40 batches */
+	CHECK(ring_quads(RMB_RING_BYTES, 100000) == 40 * RM_BATCH_QUADS);
+	CHECK(ring_quads(RMB_RING_BYTES, 1) == 1);
+}
+
+/*
  * The colour load of a pass (gl1 clears colour only in R_Clear at the
  * start of the frame): the r_clear colour when the pass clears,
  * otherwise what the target holds, or black when no pass has written
@@ -872,6 +931,7 @@ main(void)
 	test_dir_of();
 	test_ortho();
 	test_ring();
+	test_ring_console();
 	test_len_zero();
 	test_scrap_alloc();
 	test_scrap_copy();
