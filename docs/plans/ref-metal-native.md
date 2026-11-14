@@ -223,7 +223,7 @@ wanted.
 ## 8. What is shared with the shim
 
 The shim stays in the tree and in the build as the same-machine reference
-(`gl1-metal`); this design does not remove it (see "Open questions"). Its
+(`gl1-metal`); this design does not remove it (see "Decisions taken at filing"). Its
 code is GL-typed throughout (`GLenum`, `mgl_state_t`), so most of it cannot
 be shared without rewriting the reference. What is GL-free is moved, once,
 in N2, into `src/client/refresh/metal/common/`:
@@ -276,7 +276,7 @@ group N.
   loudly without `xcrun` or the Metal compiler. No OpenGL framework is
   linked. On every other OS `make ref_metal` fails with one line saying the
   target is for macOS. `ref_metal` is not added to `all` in group N (see
-  "Open questions"), so `make`, CI and every other platform build exactly
+  "Decisions taken at filing"), so `make`, CI and every other platform build exactly
   what they build today.
 - **Gate.** `tests/check-ref-metal.sh`, run by `scripts/test.sh` like every
   `tests/check-*.sh`: (a) on every OS, compile and run
@@ -399,24 +399,29 @@ give:
 The M3 or later Mac (T2) is for render-stage ray queries and hardware
 intersection performance (RT9, RT10) only.
 
-## 15. Open questions
+## 15. Decisions taken at filing
 
-1. **Parent dependencies.** Filing rule 3 gives every group-N card the
-   parent's labels, `depends:TASK21` and `depends:TASK27`. Both parents are
-   open on work group N does not need (TASK21 waits on TASK83's
-   accelerated references, TASK27 on record and replay); carried, they
-   block the whole group. Record 0006 dropped TASK27 from S2 to S6 for the
-   same reason. Dropping both for group N needs the same kind of decision.
-2. **The shim after TASK28.** The card's goal says the shim leaves the
-   build when TASK28 closes; its scope says gl1 keeps working through the
-   shim until the owner decides. The shim is also the only same-machine
-   reference. This design keeps it.
-3. **`ref_metal` in `make all` on macOS**, and a CI job that builds it:
-   both need the Metal toolchain on the runner and a workflow change.
-4. **Fallback order.** N10 puts `metal` ahead of `gl1` in `VID_CheckChanges`
-   on macOS, as the card asks; whether it goes ahead of `gl3` too, and
-   whether the default `vid_renderer` changes, are not decided here.
-5. **gl1's cvar names.** `ref_metal` reads `gl1_*` cvars so the scenarios
-   apply unchanged; `metal_*` aliases would need new scenario files.
-6. **The tight thresholds** of section 11 are this design's proposal; the
-   shim was held at the defaults.
+1. **Dependencies.** Group N cards depend only on one another in sequence
+   (N1 first); they do not wait for TASK27. TASK21 is closed. TASK28 (#38)
+   closes when N10 (TASK93) lands. The cards are TASK84 (#195) to TASK93
+   (#204), N1 to N10 in order.
+2. **The shim after TASK28.** The GL-subset shim stays in the tree and in
+   the build: it is the same-machine reference for `ref_metal` and keeps
+   `gl1` working on macOS.
+3. **Build and CI.** `ref_metal` is not part of `make all` and is not
+   built in CI for now; `tests/check-ref-metal.sh` in the local gate builds
+   it where the Metal toolchain exists. Adding it to CI is a later card.
+4. **Fallback order (N10).** On macOS `metal` goes ahead of `gl1` only; the
+   default `vid_renderer` does not change.
+5. **Cvar names.** `ref_metal` reads gl1's `gl1_*` and `gl_*` cvar names;
+   Metal-only cvars are `metal_*`.
+6. **Dropped gl1 features.** Classic two-pass lightmaps, tile rendering,
+   stereo, paletted textures, MSAA and `gl_showtris`/`gl_showbbox` are
+   accepted as out of scope (section 7); each is a possible later card.
+7. **Thresholds.** The tight thresholds of section 11 (0.005 / 0.001 on
+   deterministic scenarios against `gl1-metal`) stand; a card that cannot
+   meet one reports the measurement rather than loosening it.
+8. **Shared arithmetic.** N2 moves the shim's GL-free arithmetic into
+   `src/client/refresh/metal/common/` rather than copying it, proven
+   neutral by byte-identical `gl1-metal` frames and an unchanged shim
+   host-test count.
