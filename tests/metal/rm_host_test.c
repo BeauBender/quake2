@@ -1227,6 +1227,8 @@ test_node_tree(void)
 	const int far_node[4] = { 2, -1, -1, -1 };
 	const int far_leaf[4] = { 1, -5, -1, -1 };
 	const int least[4] = { 1, -2147483647 - 1, -1, -1 };
+	const int last_root[4] = { 1, -1, -1, 0 };                 /* the last slot names the root */
+	const int last_again[4] = { 1, -1, -1, 1 };                /* the last slot names node 1 again */
 
 	CHECK(rm_node_tree_ok(tree, 4, 4, seen) && rm_node_tree_ok(leaves, 1, 1, seen));
 	CHECK(!rm_node_tree_ok(shared, 4, 4, seen));
@@ -1237,6 +1239,7 @@ test_node_tree(void)
 	CHECK(!rm_node_tree_ok(far_node, 2, 4, seen) && !rm_node_tree_ok(far_leaf, 2, 4, seen));
 	CHECK(rm_node_tree_ok(far_leaf, 2, 5, seen) && !rm_node_tree_ok(least, 2, 4, seen));
 	CHECK(!rm_node_tree_ok(tree, 0, 4, seen) && !rm_node_tree_ok(tree, 4, 3, seen));
+	CHECK(!rm_node_tree_ok(last_root, 2, 2, seen) && !rm_node_tree_ok(last_again, 2, 2, seen));
 	/* the scratch is cleared on each call: the same valid tree passes twice */
 	CHECK(rm_node_tree_ok(tree, 4, 4, seen) && rm_node_tree_ok(tree, 4, 4, seen));
 }

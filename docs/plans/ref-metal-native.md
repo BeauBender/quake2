@@ -1010,7 +1010,13 @@ data, each through a plain function of `rm_pure.c`:
 
 - every lump inside the file and at an offset that is a multiple of 4
   (the loaders read its records' `int` and `float` fields in place), and
-  the header inside the file (`rm_lump_ok`);
+  the header inside the file (`rm_lump_ok`). This is a deliberate
+  difference from gl1, gl3, soft and the server's collision loader, which
+  load such a map, so a `ref_metal` client would refuse a map they accept;
+  the stock compiler pads every lump to 4 bytes, and all 109 maps of the
+  stock game and the three mission packs pass the check (measured in
+  review); the refusal removes misaligned reads of `int` and `float`
+  fields;
 - the counts the loaders size arrays by within `files.h`'s limits (nodes,
   planes, vertices, edges, surfedges, leaf faces, leafs, faces, texinfos,
   models; lighting and visibility bytes), so `Mod_LoadNodes`' arrays of
@@ -1065,14 +1071,19 @@ check has returned (`rm_slot_state` decides empty, unfinished or loaded).
 Only a loaded slot is handed out: an unfinished one is freed completely
 (world buffers, the hunk after `Hunk_End`, the file) at the next
 `Mod_ForName` or `RI_BeginRegistration`, before any hunk is begun, and the
-map is loaded afresh, so a refused map leaves nothing drawable behind and
-nothing held across registrations.
+map is loaded afresh, so a refused map leaves nothing drawable behind.
+Exactly: after a drop inside a shared loader one hunk, one file buffer and
+the world's retained buffers stay allocated until the next registration,
+model lookup or shutdown (`Mod_FreeAll`), where they are freed once
+(measured in review: constant over 1,000 repeated failing registrations).
 
 Because the node lump is checked to be a tree before `Mod_LoadNodes`, the
 recursion of `Mod_SetParent` and `Mod_NumberLeafs` (`files/models.c`) on
 a node cycle or a shared child cannot happen in this renderer; its depth
-on a valid chain of up to `MAX_MAP_NODES` nodes is gl1's. FIX43 (#216)
-stays open for the shared loader itself and for the other renderers,
+on a valid chain of up to `MAX_MAP_NODES` nodes is gl1's: a legal map at
+the node limit recurses 65,536 levels in the world walk, about 7.0 MiB of
+the main thread's 8 MiB stack with release flags, as in gl1; a bound
+belongs to FIX43 (#216). FIX43 (#216) stays open for the shared loader itself and for the other renderers,
 which do not make this check.
 
 Choices made where the design left room:
@@ -1118,7 +1129,7 @@ that commit in a private store:
 | the per-map line, the map of `demo1.dm2` | `maps/base2.bsp`: 44,502 vertices (1,424,064 bytes), 77,568 indices (310,272 bytes), 9,323 surface records (447,504 bytes) |
 | a map change (`map base1`, then `map base2`, a scratch config) | base1: 37,577 vertices (1,202,464 bytes), 65,301 indices (261,204 bytes), 7,905 records (379,440 bytes); `imagelist` after each map lists ` W   8   8 RGB: ***r_notexture*** (8x8)`; teardown `0 live objects` |
 | timedemo, the release records | `metal` 1092 to 1113 fps, `gl1-metal` 444 to 462 fps (689 frames); `ASAN=1` `metal` 462 fps |
-| `tests/check-ref-metal.sh` | host test 359 checks, 0 failed (with N3's rework cases); 385 after the review rework |
+| `tests/check-ref-metal.sh` | host test 359 checks, 0 failed (with N3's rework cases); 386 after the review rework |
 | mutants of the world's pure code and of what it takes from `files/surf.c` | 45 mutants (the material order, the normal flip, each limit and division of the size arithmetic, the fan's order, capacity and 32-bit bound, the range, lump, face, surfedge, leaf, area and texinfo-chain checks, the PVS decompression's run cut, input end and output size, the viewport flip, each rotation, the translation, the wobble, `gl_znear`'s floor, `r_farsee`, the blend's alpha test and gamma, the per-map line, the skipped counts, the black first pass; `R_SetFrustum`'s angles and distances, `R_CullBox`'s side and planes, `R_TextureAnimation`'s step and negative frame) fail the host test (five cases were added after the first run left five alive; two mutants are equivalent and were dropped: `ceil` for `floor` in gl1's viewport formula, which is the identity on integer rectangles, and the `gl1_waterwarp` guard, whose wobble is 0 when it is 0). That list did not cover every form it names: the correctness review's 47 mutants of `rm_pure.c` left six alive (`rm_world_bytes`' index and record products without their division, `rm_world_fan`'s exact fit and its 32-bit base bound, the last surface of `rm_mark_once`'s range, `rm_decompress_vis` reading one byte past its input); the review's six cases were added and each of the six now fails (the last under ASAN, a stack-buffer-overflow) |
 | mutants of the review rework's checks | 16 mutants of `rm_node_tree_ok` (the root test, the node bound, the seen test and its mark, the leaf bound, the scratch clear, the empty lump), `rm_leaf_contents_ok`, `rm_world_head_ok` (each bound), the lump alignment and `rm_slot_state` (each state): 15 fail the host test; one is equivalent (`numnodes >= 1` dropped from `rm_world_head_ok`, implied by `0 <= headnode < numnodes`) |
 
