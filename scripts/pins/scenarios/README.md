@@ -17,7 +17,7 @@ derived from game data, so the files are committed (INFORM9).
 | `world` | world surfaces, lightmaps, sky, water |
 | `models` | world plus entities: alias models, sprites, beams, view weapon |
 | `particles` | everything, including particles, dynamic lights, screen blend |
-| `hud2d` | 2D only: status bar, crosshair, console text |
+| `hud2d` | 2D only: status bar, crosshair, console text; the GL renderers' screen blend off (`gl_polyblend 0`, TASK82) |
 | `skywater` | world surfaces, sky and warped water, with the sky and water-warp settings fixed; no entities, particles, dynamic lights or blend; water needs `PINS_DEMO=water.dm2` from `make-demo water` |
 | `cinematic` | a cinematic (`.cin`) stretched over the screen, no world; needs `PINS_DEMO` naming a cinematic |
 
@@ -32,7 +32,12 @@ Rules:
 - Every file sets every toggle, so no state leaks from one run to the next.
 - This tree has no cvar that hides the status bar, so the status bar is in
   every scenario. Isolation is by the client-side toggles `cl_entities`,
-  `cl_particles`, `cl_lights`, `cl_blend` and by `r_drawworld`.
+  `cl_particles`, `cl_lights`, `cl_blend` and by `r_drawworld`. `cl_blend 0`
+  clears the colour of the screen blend but not its alpha, so a pickup still
+  darkens the screen; `gl_polyblend 0` (in `hud2d` only) keeps the blend out
+  of `gl1` and `gl3`, not out of `soft`. A pin run neither reads nor writes
+  `config.cfg` (TASK39), so leaving it out of the other files leaks nothing
+  into their runs, even from `gl3`, which archives it.
 - A scenario that cannot be deterministic says so in a `// nondeterministic:`
   line and is accepted at a looser threshold, recorded with the pin.
 

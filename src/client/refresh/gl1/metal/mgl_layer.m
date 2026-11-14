@@ -184,6 +184,7 @@ mgl_release_all(void)
 	{
 		ring_buf[i] = nil;
 	}
+
 	mgl_vfunc = nil;
 	mgl_ffunc = nil;
 	mgl_library = nil;

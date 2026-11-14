@@ -419,7 +419,7 @@ messages) and with the stock `demo1.dm2`.
 | Scenario | Demo | Frames | `gl1`/`gl1` noise (score, bad) | `soft`/`soft` noise (score, bad) | `soft`/`gl1` range (score, bad), worst frame | Proposed `soft` against `gl1` threshold | Load |
 |---|---|---|---|---|---|---|---|
 | `world` | `demo1.dm2` | 23 | exact: 0, 0 in 6 of 6 pairs | exact: 0, 0 in 3 of 3 | 0.013180 to 0.081482; 0.132624 to 0.922676 | none: not meaningful (below) | 11.6 to 21.3 |
-| `hud2d` | `demo1.dm2` | 23 | exact: 0, 0 in 6 of 6 | exact in 3 of 3 | 0.461199 to 0.464962; 0.990553 to 0.998561 | none: not meaningful (below) | 13.8 to 20.9 |
+| `hud2d` (with `gl_polyblend 0`, TASK82) | `demo1.dm2` | 23 | exact: 0, 0 in 6 of 6 | exact in 3 of 3 | 0.461199 to 0.471755; 0.990553 to 0.998561 | none: not meaningful (below) | 23.2 to 32.1 |
 | `models` | `demo1.dm2` | 23 | not exact in 6 of 6: worst 0.000826, 0.004583 | not exact in 3 of 3: worst 0.000150, 0.000345 | 0.015337 to 0.090930; 0.179834 to 0.925937 | none: not meaningful | 10.9 to 20.9 |
 | `particles` | `demo1.dm2` | 23 | not exact in 6 of 6: worst 0.010232, 0.172093 | not exact in 3 of 3: worst 0.011482, 0.130306 | 0.028070 to 0.141715; 0.408568 to 0.998324 | none: not meaningful | 16.2 to 30.6 |
 | `skywater` | `water.dm2` | 4 | not exact in 3 of 6 pairs: worst 0.002562, 0.022972 | exact in 3 of 3 | 0.030261 to 0.033948; 0.539687 to 0.673857 | `--threshold 0.034 --bad-threshold 0.68` (below) | 16.7 to 19.5 |
@@ -429,7 +429,14 @@ messages) and with the stock `demo1.dm2`.
 Each cell of the `soft`/`gl1` column is "score range; bad-fraction range":
 the smallest and the largest per-frame value over all frames of all 12
 pairs (the largest is the worst frame). All records are from the build of
-commit `885e70fa` (the base of this work).
+commit `885e70fa` (the base of this work), except the `hud2d` row: TASK82
+added `set gl_polyblend 0` to the scenario (see "The screen flash and
+`hud2d`" below) and measured the row again the same way, 4 `gl1` and 3
+`soft` records of commit `74205ac9`, all 21 pairs compared. `soft` has no
+such cvar, so its frames are byte-identical to the old scenario's (score 0
+on all 23 frames against a `soft` record of it), and the four flash frames
+now darken in `soft` only, which moves the worst `soft`/`gl1` score from
+0.464962 to 0.471755.
 
 Renderer string of every `gl1` number above: `Apple Software Renderer`.
 
@@ -487,8 +494,9 @@ a wrong picture on most single frames, and the `soft`/`gl1` ranges overlap
 the black-frame ranges. The `particles` black frame (score 0.0484 to
 0.2121) is an estimate from a throwaway script, not the comparator, and
 was not re-measured. `hud2d` is a different case: its reason is the clear
-colour (below), and black scores 0.489265 to 0.499510 there, above the
-worst `soft`/`gl1` value 0.464962, so a threshold that passes `soft` rejects
+colour (below), and black scores 0.496704 to 0.499510 there (against the 23
+frames of the TASK82 `gl1` record, `framediff --block`, load 14.5), above the
+worst `soft`/`gl1` value 0.471755, so a threshold that passes `soft` rejects
 every black frame; the `soft`/`gl1` difference there is a property of the
 scenario, not of the picture. So a third renderer cannot be judged against
 `soft` by these numbers, and the judge for the shim is `gl1`, not `soft`.
@@ -520,9 +528,10 @@ scratch, one pair per cause):
 
 ### `gl1` against `gl1`: the floor for the Metal shim
 
-The thresholds the shim is judged at are `gl1-metal` against `gl1`. No
-Metal frame draws yet; the starting values are in the table below, and the
-first shim card that draws each scenario confirms or revises them. The
+The thresholds the shim is judged at are `gl1-metal` against `gl1`. The
+starting values are in the table below, and the first shim card that draws
+each scenario confirms or revises them (`hud2d` and `cinematic`: confirmed
+by TASK82). The
 `gl1`/`gl1` column is their lower bound: a `gl1-metal` threshold under it would fail two
 records of `gl1` itself. `world`, `hud2d`, `cinematic` and `skywater` from
 `demo1.dm2` are exact, so any difference there is a real one. `models`
@@ -544,8 +553,8 @@ if it does):
 | Scenario | Accept at | Why |
 |---|---|---|
 | `world` | `--threshold 0.02 --bad-threshold 0.005` (the defaults) | `gl1`/`gl1` is exact |
-| `hud2d` | the defaults | exact |
-| `cinematic` | the defaults | exact |
+| `hud2d` | the defaults | exact; confirmed by TASK82 (with `gl_polyblend 0`): three `gl1-metal` records against four `gl1` records, score 0 and bad 0 on all 23 frames of all 12 pairs |
+| `cinematic` | the defaults | exact; confirmed by TASK82: three `gl1-metal` records against the `gl1` reference, score 0 to 0.000191 and bad 0 on all 12 frames (bilinear rounding), the same in each record |
 | `skywater` with `demo1.dm2` | the defaults | exact |
 | `models` | the defaults, 0.02 and 0.005 | `gl1`/`gl1` worst score 0.000826 is far under 0.02, but the worst bad fraction 0.004583 is 0.0004 under 0.005, so `gl1-metal` has about 8 percent of room on the bad fraction before it is over; widening it is a finding for the card to record, with its measurement |
 | `particles` | `--threshold 0.02 --bad-threshold 0.25` (the `// nondeterministic:` line) | `gl1`/`gl1` worst 0.010232 and 0.172093 |
@@ -556,6 +565,41 @@ The `// nondeterministic:` lines of the scenario files are unchanged:
 and the water demo), inside the numbers they already carry for `particles`
 and `skywater` (`gl1`/`gl1` 0.010232 and 0.172093; 0.002562 and 0.022972,
 under `--bad-threshold 0.03`), and just under their default for `models`.
+
+### The screen flash and `hud2d` (TASK82)
+
+On frames 5, 8, 11 and 16 of `hud2d` the player picks up an item and gl1
+draws the screen blend (`R_PolyBlend`, a quad 10 units in front of the eye
+through `glFrustum` and `glRotatef`). `cl_blend 0` does not stop it: it
+clears the blend's colour, not its alpha, so the screen darkens. Apple's
+software renderer draws that quad as a diagonal wedge over 6.2 percent of
+the screen; `soft` and a correct GL darken the whole screen. Measured
+before the decision, with the TASK82 shim (which implements those calls)
+against the `gl1` reference `110a25ae2d26-2096632597` of the old scenario
+(load 37.6): frames 5, 8, 11 and 16 over at score 0.054615 to 0.110522 and
+bad 0.919017 to 0.928447, frame 3 (a fainter blend) at score 0.009718 and
+bad 0; the rest exact. Judging those frames against `soft` instead is no
+way out: there the clear colour differs on every pixel (gl1-metal against
+`soft`, frames 3, 5, 8, 11, 16: score 0.351816 to 0.453720, bad 0.997259
+to 0.998561). No threshold was widened.
+
+Decision: `hud2d` sets `gl_polyblend 0`, which keeps the quad out of the GL
+renderers (`soft` has no such cvar and still darkens, and stays exact run
+to run), and the `gl1` and `soft` references of `hud2d` were recorded again
+(the row in the table above). With it, three `gl1-metal` records of commit
+`74205ac9` match all four new `gl1` records exactly (score 0, bad 0, all 23
+frames, 12 pairs; record and compare load 22.7 to 64.7), and `gl1`/`gl1`
+and `soft`/`soft` stay exact. The new `gl1` frames differ from the old
+reference only on frames 3, 5, 8, 11 and 16, by the wedge (score up to
+0.007440, bad 0.061862).
+
+The flash is judged in a 3D scenario from S3 on: `particles` keeps
+`cl_blend 1` and the default `gl_polyblend 1`. The software renderer's
+wedge will appear in those `gl1` references too, so a correct `gl1-metal`
+will differ from them on the flash frames for the same reason; the card
+that accepts such a scenario records the frames and their numbers, and an
+accelerated `gl1` reference (INFORM9) or a recorded exception decides them,
+not a wider threshold.
 
 ## Judging a renderer
 

@@ -442,3 +442,65 @@ the defaults against this reference on frames 5, 8, 11 and 16 for any
 correct implementation; the choice (a reference from an accelerated GL,
 `gl_polyblend 0` in the scenario, or a recorded exception) is the
 owner's, not this card's, and no threshold was changed.
+
+## 9. As built by TASK82 (S2b): departures from section 2
+
+- **Matrices.** `glFrustum`, `glRotatef`, `glTranslatef` and `glScalef`
+  multiply the top of the current stack (GL 1.4, section 2.11.2), so
+  `R_SetupGL` and `R_PolyBlend` get their matrices; the arithmetic is in
+  double and stored as float. A rotation about the zero vector, which GL
+  leaves undefined, leaves the matrix alone.
+- **Depth, stencil, cull, offset, fill.** No longer reported as missing:
+  the draw carries a packed depth and stencil key (34 bits,
+  `mgl_depth_stencil_key`; GL writes depth only where it tests it, and
+  without the stencil test the stencil buffer is neither tested nor
+  changed), which `mgl_layer.m` turns into a cached
+  `MTLDepthStencilState`, and the encoder gets the cull mode, the
+  counter-clockwise front face, the stencil reference (clamped to 0..255),
+  `setDepthBias:slopeScale:clamp:` from `glPolygonOffset` (units, factor;
+  0 while `GL_POLYGON_OFFSET_FILL` is off) and the line fill mode, on every
+  draw. `GL_FRONT_AND_BACK` culling draws nothing. That Metal's
+  counter-clockwise winding is GL's (both judge it in normalized device
+  coordinates with y up) was checked with a scratch program that culls a
+  triangle counter-clockwise in NDC. Metal has one fill mode for both
+  faces and no point fill: a different mode per face, or `GL_POINT`, sets
+  the sticky error and draws with the front face's mode (filled for
+  `GL_POINT`). None of this is drawn by `hud2d` or `cinematic`; `world`
+  (S3) is the first scenario that judges it on frames.
+- **Uploads.** `glTexSubImage2D` writes a region of a level that exists
+  (`GL_INVALID_OPERATION` for a level the storage does not have,
+  `GL_INVALID_VALUE` for a region past it, both checked without
+  overflow); a sub-image of level 0 regenerates the chain under
+  `GL_GENERATE_MIPMAP`. `glTexImage2D` above level 0 fills the chain of
+  level 0 when its size is the level's; a level of another size, or one
+  before level 0 exists, would make a GL texture incomplete, which the
+  shim does not model, so it is reported and not uploaded. Levels keep
+  level 0's alpha (an RGB level 0 makes every level opaque). The
+  cinematic path needed nothing new: it is a level-0 `glTexImage2D` per
+  frame, already complete in S2a.
+- **Anisotropy.** `GL_EXT_texture_filter_anisotropic` is advertised;
+  `glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT)` answers 16, Metal's
+  limit; `glTexParameteri` takes 1 and up (below 1 is
+  `GL_INVALID_VALUE`, above 16 is clamped) into bits 8-11 of the sampler
+  key and `maxAnisotropy`. gl1 sets it only when `r_anisotropic` is not 0
+  (the default is 0), so the pins do not exercise it.
+- **The vertex ring.** One shared 8 MB buffer per frame in flight
+  (three), bump-allocated at 256 bytes (`mgl_ring_alloc` in
+  `mgl_raster.c`, host-tested); the slot advances only when a frame takes
+  a slot of the frame semaphore, so the buffer it reuses belongs to a
+  frame whose command buffers have completed. A draw the rest of the ring
+  cannot hold gets buffers of its own, as in S2a, and is counted in the
+  line the shim prints at shutdown. The overflow path was run on frames
+  once: a build with a 4096-byte ring drew 190 draws past it over the
+  707 frames of `hud2d`, and its 23 frames were identical (score 0) to
+  the 8 MB build's. The uniforms still go by `setVertexBytes`.
+- **Points and lines.** The 2D path uses neither (gl1 draws `GL_POINTS`
+  only for particles and `GL_LINES`/`GL_LINE_STRIP` only for debug
+  views), so they stay reported and undrawn until S6.
+- **Still not drawn:** texture unit 1 and `GL_COMBINE` (S3).
+- **The reference flaw.** `hud2d` now sets `gl_polyblend 0`
+  (`docs/plans/metal-port-harness.md`, "The screen flash and `hud2d`"):
+  with the matrices in place the shim darkens the whole screen on the
+  pickup frames, where Apple's software renderer darkens a wedge. Against
+  the re-recorded references `gl1-metal` is exact on all 23 frames.
+- **Gate.** The host test links `-lm` (the rotation needs `sin`, `cos`).
