@@ -2449,10 +2449,11 @@ M6`, `GL_VERSION: 2.1 Metal - 91.7`; `gl1-metal` reports `Metal shim on
 Apple M6 (gl1-metal)`, `GL_VERSION: 1.4 mgl`. Source: `main` at 41745a59
 (so `ref_metal` has the lightmapped world, sky, water and translucent
 surfaces of TASK87 to TASK89 and draws no entities, dynamic lights or
-particles, as `rm_main.c` at that commit says; TASK90 (#244) has since added
-brush entities, alias models and the view weapon, so the `ref_metal` column
-is of a lighter renderer than `main`'s and is not a like-for-like
-comparison).
+particles, as `rm_main.c` at that commit says; TASK90 (#244) and TASK91
+(#202) have since added brush entities, alias models and the view weapon,
+then sprites, beams, stencil shadows, dynamic lights and flash blobs, so the
+`ref_metal` column is of a lighter renderer than `main`'s and is not a
+like-for-like comparison).
 
 **Method.** One release build of the `quake2` binary, `ref_soft` and
 `ref_metal`, and two builds of `ref_gl1.dylib`, the plain one and the
@@ -2535,10 +2536,12 @@ later `main`.
 **What the VM cannot reproduce.** All of it: `ref_gl1` at 2000 fps and
 more against a software GL, any hardware Metal rate, the 60 fps ceiling
 below, and the ratio of the Metal renderers to Apple's own OpenGL. The
-build VM has a cap of its own: the TASK90 section records the `demo1.dm2`
-timedemo of `ref_metal` running at that display's 120 fps whatever
-`r_vsync` and `vid_maxfps` said (the window size is not given there). It
-is a lead for Finding 3, not shown to have the same cause.
+build VM capped once: the TASK90 section records the `demo1.dm2` timedemo
+of `ref_metal` running at that display's 120 fps whatever `r_vsync` and
+`vid_maxfps` said (the window size is not given there), while the TASK91
+section records the same timedemo on that VM unpaced, at about 1,400 to
+1,650 fps, so the cap is not constant there. It is a lead for Finding 3,
+not shown to have the same cause.
 
 **Findings** (cards filed, none fixed here; Finding 1 is FIX51 (#238),
 Finding 3 is FIX52 (#239)):
@@ -2552,8 +2555,10 @@ Finding 3 is FIX52 (#239)):
    `ref_soft` shows the same flat 3 to 4 ms a frame up to 1600x900 (253.6
    to 318.1, 294.4 to 306.0 and 284.7 to 287.8 fps at 640x480, 1280x720 and
    1600x900), so it is not an independent CPU baseline, and the fixed cost
-   is common to the `CAMetalLayer` present path: a lead, not a diagnosis
-   (FIX52 (#239) diagnoses part of that cost). That `ref_soft` is slower
+   is common to the `CAMetalLayer` present path on this host: a lead, not a
+   diagnosis (FIX52 (#239) diagnoses part of that cost). On the build VM the
+   same path runs `ref_metal` at about 1,400 to 1,650 fps (TASK91 section),
+   so the cost is not inherent to it. That `ref_soft` is slower
    than `ref_gl1` is expected for
    a CPU renderer and is not a finding.
 2. The `ref_gl1` number may be a CPU-submit rate: Apple's GL queues frames
