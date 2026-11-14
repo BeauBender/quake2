@@ -93,7 +93,7 @@ and adds these rules for what it builds from their output:
   a bound checked against that buffer's size.
 - Every count taken from file data that sizes a retained buffer (the world
   vertex, index and surface-record buffers of N4), the lightmap array (its
-  slice count, at most `MAX_LIGHTMAPS`, N5), a staging-ring upload (an
+  slice count, at most `MAX_LIGHTMAPS`, N5; 126 as built, section 20), a staging-ring upload (an
   image's width times height, or a cinematic frame's, N2) or a frame-ring region (an alias model's
   vertex count, N7) is checked before the buffer is sized or written.
   A texture's width and its height are each also checked on their own,
@@ -224,7 +224,8 @@ shim's, since parity with it is the acceptance.
   solid internal format, which the shim makes opaque (alpha forced to
   255), so `ref_metal` uploads cinematic frames opaque.
 - **Lightmaps** are one `texture2d_array` of 128 by 128 slices, one slice
-  per gl1 block (`BLOCK_WIDTH`, `BLOCK_HEIGHT`, up to `MAX_LIGHTMAPS`), so
+  per gl1 block (`BLOCK_WIDTH`, `BLOCK_HEIGHT`, up to `MAX_LIGHTMAPS`; 126
+  as built, the blocks gl1 can fill, section 20), so
   lightmap coordinates, texel layout and linear sampling are gl1's and the
   world binds one lightmap texture per pass instead of one per chain.
   Lightstyle and dynamic-light changes rebuild the surface's rectangle on

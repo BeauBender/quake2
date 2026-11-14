@@ -627,10 +627,11 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 
 The native Metal renderer, `vid_renderer metal`, is built on macOS
 only, with `make ref_metal`. It is work in progress (see
-`doc/100_renderpins.md`): for now it draws the 2D elements, cinematics
-and the world's opaque surfaces without lightmaps (as with
-`r_fullbright 1`) with the screen blend; sky, water, translucent and
-flowing surfaces, lightmaps and models are not drawn yet.
+`doc/100_renderpins.md`): for now it draws the 2D elements, cinematics,
+the screen blend and the world's opaque surfaces with their lightmaps,
+animated lightstyles and `gl1_overbrightbits` (a surface a dynamic light
+touches keeps its static lightmap); sky, water, translucent and flowing
+surfaces, dynamic lights and models are not drawn yet.
 
 * **metal_stats**: When set to `1`, the Metal renderer prints one line
   per screenshot (so per frame the pin harness captures) and one at
