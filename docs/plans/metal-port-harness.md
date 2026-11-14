@@ -1643,6 +1643,54 @@ sanitizer line, no validation message beyond `Metal API Validation
 Enabled`, five clean `ref_metal` teardowns, and the missing-pool lines
 (2907) all from six threads other than the main thread.
 
+### The `screenshot` command between frames on the shim (FIX42)
+
+**Defect.** With `ref_gl1` built `WITH_METAL_SHIM=yes`, `screenshot` at
+the console, at the main menu and in a map wrote an all black image (640x480,
+0 of 921600 bytes non-zero, one colour), while every pin frame was right.
+
+**Cause.** The pin harness captures inside `SCR_UpdateScreen`, after the
+frame's draws and before `R_EndFrame` (`SCR_PinsCapture`), so
+`glReadPixels` finds a frame with passes. The `screenshot` command is run
+by the command buffer between frames: the shim's frame had been presented
+and closed, so the read opened a new one, took a new drawable and
+`mgl_layer_ensure_pass` gave it a first pass cleared to black, which was then
+what was read. Nothing of the presented image was kept, and a presented
+drawable cannot be read.
+
+**Fix (shim only).** `mgl_layer.m` copies each frame into the private
+texture `mgl_last` before presenting it; `mgl_read_uses_last`
+(`mgl_raster.c`) says a read of an open frame with no pass drawn, and a
+kept image of the target's size, reads that copy and opens no pass.
+`tests/metal/mgl_host_test.c` gained `test_read_source` (the host-test
+count rose from 501 to 511); each of seven mutants of the function (pass test
+dropped, inverted, either size compare dropped, either emptiness test
+dropped, both dropped) fails it.
+
+**Procedure.** A console script in a scratch copy of `release/` (not
+committed): after ten `wait`s, `toggleconsole` or `menu_main` or
+`map base1` and about 60 `wait`s, `screenshot tga`, `quit`, run as
+`./quake2 -portable +set basedir <data> +set s_initsound 0 +set r_mode -1
++set r_customwidth 640 +set r_customheight 480 +set vid_fullscreen 0 +set
+vid_renderer ref_gl1 +exec <script>`; the TGA lands in
+`baseq2/scrnshot/` beside the binary.
+
+| Screenshot | Before (origin/main) | After |
+|---|---|---|
+| console | 0 non-zero bytes, 1 colour | 921560 non-zero, 2070 colours |
+| main menu | 0, 1 colour | 906051 non-zero, 6018 colours (menu over the console log, viewed) |
+| `map base1` | 0, 1 colour | 905953 non-zero, 118 colours (the map's first frames, viewed) |
+
+**No regression.** In a private store, `PINS_TRACE=0`, the engine binary
+of one build, `ref_gl1.dylib` before and after the fix: `record gl1-metal`
+of `hud2d` (23 frames), `cinematic` (`PINS_DEMO=idlog.cin PINS_EVERY=7`,
+12) and `world` (23), then the same with `--run 2` and the fixed
+dylib. `compare --threshold 0 --bad-threshold 0`: failed 0, worst score
+0 and worst bad 0 on all 58 frames, and `diff -r` of the frame
+directories differs only in `engine.log` and `timedemo.txt`. Load
+average 4 to 7 at the time; one run each, and the compare is exact, so
+the count of runs is not a measurement.
+
 ## Judging a renderer
 
 Prerequisites on the Mac: the owner's game data at `$PINS_BASEDIR/baseq2`,

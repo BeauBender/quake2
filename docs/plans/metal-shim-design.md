@@ -310,6 +310,18 @@ differs from the text above, this list is what the tree does.
   one second (`allowsNextDrawableTimeout`); the frame is then drawn into
   an offscreen texture of the same size, which `glReadPixels` reads, and
   nothing is presented. `glFinish` and readback wait at most 5 s.
+- **Readback between frames (FIX42, as built).** The `screenshot`
+  command runs from the command buffer between two frames, so the frame
+  its `glReadPixels` opens had no pass yet and `mgl_layer_ensure_pass`
+  made it a black one: the console and the menu gave an all black image
+  (the pin capture runs inside the frame, after the draws and before
+  `RI_EndFrame`, so it was right). Every present now also blits the
+  frame into a private texture `mgl_last` (same size, one full-frame
+  copy in the frame's own command buffer, before `presentDrawable`), and
+  a read of a frame with no pass drawn (`mgl_read_uses_last`, host
+  tested) reads that texture and opens no pass; after a pass, or when
+  the size changed, it reads the frame as before, so every pin is
+  unchanged. The runbook has the evidence.
 - **Readback.** `glReadPixels` validates before it reads: format
   `GL_RGB`, `GL_RGBA` or `GL_BGRA`, type `GL_UNSIGNED_BYTE`, the
   rectangle inside the target, the pack alignment; otherwise the sticky
