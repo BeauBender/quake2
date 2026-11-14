@@ -41,6 +41,10 @@
 
 #include <SDL3/SDL.h>
 
+#if defined(__APPLE__) && defined(__OBJC__)
+#import <AppKit/NSWindow.h>
+#endif
+
 float glimp_refreshRate = -1.0f;
 
 static cvar_t *vid_displayrefreshrate;
@@ -118,6 +122,27 @@ ClearDisplayIndices(void)
 	SDL_free(displays);
 }
 
+/*
+ * On macOS AppKit's order-out animation, started when SDL closes a
+ * window, kept every window closed by vid_restart alive in the window
+ * server (FIX41). The window now closes without that animation.
+ */
+static void
+DisableCloseAnimation(SDL_Window *w)
+{
+#if defined(__APPLE__) && defined(__OBJC__)
+	NSWindow *nswindow = (NSWindow *)SDL_GetPointerProperty(SDL_GetWindowProperties(w),
+			SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, NULL);
+
+	if (nswindow)
+	{
+		[nswindow setAnimationBehavior:NSWindowAnimationBehaviorNone];
+	}
+#else
+	(void)w;
+#endif
+}
+
 static qboolean
 CreateSDLWindow(SDL_WindowFlags flags, int fullscreen, int w, int h)
 {
@@ -148,6 +173,8 @@ CreateSDLWindow(SDL_WindowFlags flags, int fullscreen, int w, int h)
 
 	if (window)
 	{
+		DisableCloseAnimation(window);
+
 		/* enable text input */
 		SDL_StartTextInput(window);
 
