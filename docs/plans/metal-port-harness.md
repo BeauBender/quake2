@@ -2727,13 +2727,15 @@ each, alternated, load average 2.13).
 after alternated run by run inside each size's batch; `ref_gl1` runs
 alongside as the reference, it has no before or after and presents
 through OpenGL). The before build of `soft` is main at 1b84bb4f, the
-after build is this branch. The `ref_metal` and Metal-backed `gl1`
-rows are scratch builds with `opaque = NO` added next to their
-`displaySyncEnabled` line, never committed. Every build here, before and
-after, is from this branch's fork point, main at 1b84bb4f, plus the change
-named. That is before TASK90 (#244): its `ref_metal` draws no entities,
-dynamic lights or particles, so the `ref_metal` rows and the FIX51
-paragraph's ceiling below are not a baseline for a later `ref_metal`:
+after build is 1b84bb4f plus this card's `sw_main.c` change. The
+`ref_metal` and Metal-backed `gl1` rows are scratch builds with
+`opaque = NO` added next to their `displaySyncEnabled` line, never
+committed. Every build here, before and after, is main at 1b84bb4f (the
+card's base when it was measured) plus the change named. That `ref_metal`
+draws no entities (TASK90, #244, added them later), dynamic lights or
+particles (N8 and N9, not on main yet), so the `ref_metal` rows and the
+FIX51 paragraph's ceiling below are not a baseline for a later
+`ref_metal`:
 
 | Renderer | 1920x1080 before | after | 640x480 before | after |
 |---|---|---|---|---|
@@ -2806,8 +2808,9 @@ frame blocked in `nextDrawable` at every size below the threshold and
 with `opaque = NO` at 1920x1080, and the engine with a layer that is
 not opaque tops out at 321.8 to 404.6 fps in all three renderers at
 640x480. `ref_gl1` does not wait there (2452.0 to 2469.5 fps at
-640x480, 1882.5 to 2044.5 at 1920x1080; that figure may be a CPU-submit
-rate, as FIX51 says, since Apple's GL timer does not wait for the GPU).
+640x480, 1882.5 to 2044.5 at 1920x1080; those figures may be a CPU-submit
+rate, as FIX51 says, since Apple's OpenGL queues frames, so the engine's
+clock does not wait for the GPU).
 So a Metal renderer that waits for a drawable every frame stops
 at about 400 fps on this host; going past it needs a frame that does
 not block in `nextDrawable` (not tried here).
