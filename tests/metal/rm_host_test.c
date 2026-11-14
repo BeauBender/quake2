@@ -3345,6 +3345,7 @@ test_trans(void)
 	CHECK(rm_alpha_break(1, 5, 0.66f, 5, 0.33f));   /* the alpha going down breaks the batch too */
 	CHECK(rm_world_frame(3.4f) == 6 && rm_world_frame(0) == 0 && rm_world_frame(-1.2f) == -2);
 	CHECK(rm_world_frame(6e9f) == 2147483647 && rm_world_frame(-6e9f) == (-2147483647 - 1) && rm_world_frame(NAN) == 0);
+	CHECK(rm_world_frame(0.6f) == 1 && rm_world_frame(-0.6f) == -1);
 }
 
 int

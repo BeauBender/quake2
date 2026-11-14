@@ -2018,7 +2018,7 @@ rm_sky_clear(rm_skybounds_t *b)
 static void
 rm_sky_draw_polygon(rm_skybounds_t *b, int nump, const float *vecs)
 {
-	int i, j;
+	int i, j, idx;
 	float v[3], av[3];
 	float s, t, dv;
 	int axis;
@@ -2055,7 +2055,14 @@ rm_sky_draw_polygon(rm_skybounds_t *b, int nump, const float *vecs)
 	for (i = 0; i < nump; i++, vecs += 3)
 	{
 		j = rm_vec_to_st[axis][2];
-		dv = (j > 0) ? vecs[j - 1] : -vecs[-j - 1];
+		idx = (j > 0) ? (j - 1) : (-j - 1);
+
+		if ((idx < 0) || (idx > 2))
+		{
+			return;
+		}
+
+		dv = (j > 0) ? vecs[idx] : -vecs[idx];
 
 		if (dv < 0.001)
 		{
@@ -2063,10 +2070,24 @@ rm_sky_draw_polygon(rm_skybounds_t *b, int nump, const float *vecs)
 		}
 
 		j = rm_vec_to_st[axis][0];
-		s = (j < 0) ? -vecs[-j - 1] / dv : vecs[j - 1] / dv;
+		idx = (j < 0) ? (-j - 1) : (j - 1);
+
+		if ((idx < 0) || (idx > 2))
+		{
+			return;
+		}
+
+		s = (j < 0) ? -vecs[idx] / dv : vecs[idx] / dv;
 
 		j = rm_vec_to_st[axis][1];
-		t = (j < 0) ? -vecs[-j - 1] / dv : vecs[j - 1] / dv;
+		idx = (j < 0) ? (-j - 1) : (j - 1);
+
+		if ((idx < 0) || (idx > 2))
+		{
+			return;
+		}
+
+		t = (j < 0) ? -vecs[idx] / dv : vecs[idx] / dv;
 
 		if (s < b->mins[0][axis])
 		{
@@ -2274,7 +2295,7 @@ int
 rm_sky_vec(float s, float t, int face, int farsee, float *v, float *st)
 {
 	float b[3];
-	int j, k;
+	int j, k, idx;
 	const float sky_min = 1.0 / 512, sky_max = 511.0 / 512;
 
 	if ((face < 0) || (face >= 6))
@@ -2298,7 +2319,14 @@ rm_sky_vec(float s, float t, int face, int farsee, float *v, float *st)
 	for (j = 0; j < 3; j++)
 	{
 		k = rm_st_to_vec[face][j];
-		v[j] = (k < 0) ? -b[-k - 1] : b[k - 1];
+		idx = (k < 0) ? (-k - 1) : (k - 1);
+
+		if ((idx < 0) || (idx > 2))
+		{
+			return 0;
+		}
+
+		v[j] = (k < 0) ? -b[idx] : b[idx];
 	}
 
 	/* avoid bilerp seam */
