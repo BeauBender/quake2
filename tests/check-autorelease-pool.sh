@@ -13,9 +13,10 @@
 # third_party/sdl3.make and src/ (third_party/SDL3 is linked, not
 # copied; release/ and build/ of this checkout are not touched) it builds
 # src/common/frame.c twice with the Makefile's own rules, as the client
-# object and as the q2ded object, and disassembles both with otool -tV:
-# the client object must call objc_autoreleasePoolPush exactly twice and
-# objc_autoreleasePoolPop at least twice, the q2ded object neither. Three
+# object and as the q2ded object (DEBUG, ASAN and UBSAN cleared), and
+# lists the relocations of both with otool -rv: the client object must
+# branch to objc_autoreleasePoolPush exactly twice and to
+# objc_autoreleasePoolPop at least twice, the q2ded object to neither. Three
 # scratch mutants of frame.c (the frame pool removed, the start-up pool
 # removed, the guard never true) are built first and each must be refused;
 # a mutant that no longer applies to the source fails the check too.
@@ -56,16 +57,18 @@ cp "$frame" "${tmp:?}/frame.c.orig"
 client_o="${tmp:?}/tree/build/release/client/src/common/frame.o"
 server_o="${tmp:?}/tree/build/release/server/src/common/frame.o"
 
-# calls <object> <symbol>: the number of bl instructions to <symbol>
+# calls <object> <symbol>: the number of branch relocations (call sites) to <symbol>
 calls() {
-	otool -tV "$1" > "${tmp:?}/dis" 2> "${tmp:?}/dis.err" || { cat "${tmp:?}/dis.err"; return 1; }
-	grep -cE "[[:space:]](bl|call[q]?)[[:space:]]+_$2\$" "${tmp:?}/dis" || true
+	otool -rv "$1" > "${tmp:?}/dis" 2> "${tmp:?}/dis.err" || { cat "${tmp:?}/dis.err"; return 1; }
+	n=0
+	n=$(grep -cE "[[:space:]](BR26|BRANCH)[[:space:]].*[[:space:]]_$2\$" "${tmp:?}/dis") || [ $? = 1 ] || return 1
+	echo "$n"
 }
 
 # judge: 0 when the objects built from the current frame.c hold the pools
 judge() {
 	rm -f "$client_o" "$server_o"
-	if ! (unset MAKEFLAGS GNUMAKEFLAGS MFLAGS; make -C "${tmp:?}/tree" -s \
+	if ! (unset MAKEFLAGS GNUMAKEFLAGS MFLAGS; make -C "${tmp:?}/tree" -s DEBUG= ASAN= UBSAN= \
 		build/release/client/src/common/frame.o build/release/server/src/common/frame.o) > "${tmp:?}/build.out" 2>&1; then
 		tail -n 20 "${tmp:?}/build.out"
 		echo "build of frame.o failed"

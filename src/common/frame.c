@@ -202,7 +202,20 @@ Qcommon_Mainloop(void)
 		// Save global time for network- and input code.
 		curtime = (int)(newtime / 1000ll);
 
+#if defined(__APPLE__) && defined(__OBJC__)
+		/* The macOS client (its C files are compiled as
+		   Objective-C there) has no Cocoa run loop of its own
+		   to drain the main thread's autorelease pool, so each
+		   frame gets one. Without it every window ever opened
+		   kept its metal view and CAMetalLayer (FIX41). An
+		   ERR_DROP longjmp lands inside Qcommon_Frame. */
+		@autoreleasepool
+		{
+			Qcommon_Frame(newtime - oldtime);
+		}
+#else
 		Qcommon_Frame(newtime - oldtime);
+#endif
 		oldtime = newtime;
 	}
 }
@@ -289,8 +302,8 @@ static qboolean checkForHelp(int argc, char **argv)
 	return false;
 }
 
-void
-Qcommon_Init(int argc, char **argv)
+static void
+Qcommon_Startup(int argc, char **argv)
 {
 	// Jump point used in emergency situations.
 	if (YQ2_SETJMP(abortframe))
@@ -438,6 +451,22 @@ Qcommon_Init(int argc, char **argv)
 
 	Com_Printf("==== " DISPLAYNAME " Initialized ====\n\n");
 	Com_Printf("*************************************\n\n");
+}
+
+void
+Qcommon_Init(int argc, char **argv)
+{
+#if defined(__APPLE__) && defined(__OBJC__)
+	/* Drained before the first frame, see Qcommon_Mainloop.
+	   The jump point Qcommon_Startup sets is not used once it
+	   returns: each Qcommon_Frame sets its own first. */
+	@autoreleasepool
+	{
+		Qcommon_Startup(argc, argv);
+	}
+#else
+	Qcommon_Startup(argc, argv);
+#endif
 
 	// Call the main loop
 	Qcommon_Mainloop();
