@@ -2288,6 +2288,112 @@ three recorded scenarios exercise that path and the presents.
 and shim builds were run. No live window resize and no non-virtual GPU
 were tried.
 
+## Screenshot and capture readback on a physical GPU (TASK98)
+
+Host: the bare-metal Apple Silicon Mac (Apple M6, 12 GPU cores, Metal 4,
+one 5120x2880 Retina display), not the build VM; engine log
+`GL_VENDOR: Apple`, `GL_RENDERER: Apple M6` for `ref_gl1` through Apple's
+OpenGL, `GL_RENDERER: Metal shim on Apple M6 (gl1-metal)` for the
+Metal-backed `gl1`, and `ref_metal` (no GL string). Load average (`uptime`) 2.4
+to 3.6 over the runs, another agent recording on the same machine
+between them. The comparator is `scripts/pins/framediff.c`; the per-channel
+statistics and the row-order and channel-order tests (the image against the
+reference as it is, flipped top to bottom, and with red and blue swapped) come
+from a 60-line C tool kept outside the repository. Nothing derived from game
+data is kept in the tree. The display's screen saver started at 16:38Z during
+the windowed runs; every run was validated from its artifacts (23 frames,
+`exit 0`, non-black statistics), not from the screen, and none stalled.
+
+### What was measured
+
+1. **Harness capture** (`SCR_PinsCapture`, which runs the renderer's own
+   `screenshot tga` inside the frame): `demo1.dm2` with the `hud2d` (2D) and
+   `world` (3D) scenarios, 640x480, `pins_capture 30`, the engine started as
+   `scripts/pins.sh` starts it (`PINS_DRYRUN=1 scripts/pins.sh record` printed the line)
+   but with `vid_fullscreen` set to 0 or 1 by hand. Two windowed runs per
+   renderer and scenario, one fullscreen run, 23 frames each.
+2. **`screenshot` command between frames**: a console script (`map base1`, 200
+   `wait`s, `screenshot tga`, `menu_main`, 60 `wait`s, `screenshot tga`,
+   `quit`) with `vid_renderer`, `vid_fullscreen` and `r_mode -1` 640x480 as
+   above; the first picture is the 3D map, the second the main menu (2D). Three
+   windowed and three fullscreen runs per renderer.
+
+### Results
+
+| Renderer | Case | Result |
+|---|---|---|
+| `ref_gl1` (Apple M6) | harness, 2D `hud2d`, windowed and fullscreen | 23 frames, 640x480; run 1 against run 2 and against fullscreen: score 0.000000, 0 differing bytes in all 23 frames |
+| `ref_gl1` | harness, 3D `world`, windowed and fullscreen | run 1 against run 2: score 0.000000; windowed against fullscreen: score 0.000000 to 0.000002, bad fraction at most 0.000016 (largest channel difference 42) |
+| Metal-backed `gl1` | harness `hud2d` | against `ref_gl1`: score 0.000000 in all 23 frames, windowed (2 runs) and fullscreen |
+| Metal-backed `gl1` | harness `world` | against `ref_gl1`: score 0.000000 to 0.000010, bad at most 0.000033, largest channel difference 36 (2 windowed runs, same range fullscreen) |
+| `ref_metal` | harness `hud2d`, windowed | against `ref_gl1`: score 0.000000 in all 23 frames, two runs |
+| `ref_metal` | harness `world`, windowed | against `ref_gl1`: score 0.000000 to 0.049744, bad up to 0.264, largest channel difference 254; its two runs agree with each other exactly (score 0.000000). The renderer is still partial; this is the 3D difference, not a readback difference (see below) |
+| all three | channel and row order | on every frame the as-is difference is the smallest of the three tests by a factor of 4 or more (for example `world` frame 11: as is 0.00000, flipped 0.03992, red and blue swapped 0.03259; `hud2d` frame 0: 0.00000, 0.00547, 0.33025), so no flip and no channel swap |
+| all three | not black, not gamma shifted | every frame has all three channels spread over 0 to 255 or the scene's maximum (`world` frame 0: mean 27.8 20.9 14.0, maximum 211 203 203, the same for all three renderers to the byte on the GL pair) |
+| `screenshot`, windowed, 3D then menu | `ref_gl1`, shim, `ref_metal` | 640x480, not black, upright, `rgb` in order; `ref_gl1` run against run: 0.00000 to 0.00079 (the scene is live: items and monsters move, so this is scene noise); shim against `ref_gl1` 0.00028 to 0.00824 (two of three first pictures were brighter, mean 27.3 and 26.5 against 24.2, a screen flash present in some runs); `ref_metal` against `ref_gl1` 0.00765 to 0.00925 (map) and 0.00152 to 0.00172 (menu), mean 21.4 against 24.2 for the map, consistent every run (a lighting difference of `ref_metal`, not a readback fault) |
+| `screenshot`, fullscreen | `ref_gl1` and shim | 640x480; same statistics and differences as windowed (0.00000 to 0.00140) |
+| `screenshot`, fullscreen | `ref_metal` | **960x540**, see finding 1 |
+| scaled drawable | all three | `vid_highdpiaware 0` and `1` give the same 640x480 drawable and the same picture (the log's `Drawable size: 640x480` in both); no case with a drawable larger than the framebuffer arose, so the Retina-scaled case is **not run** |
+
+Fullscreen with `r_mode -1 640x480` does not get that mode on this display:
+`User requested 640x480@-1, setting closest mode 960x540@60` for every
+renderer (a display mode change, not a window).
+
+### Findings
+
+1. **`ref_metal` fullscreen picture size.** With `vid_fullscreen 1` the
+   display mode is 960x540 while the engine's `viddef` and the log's
+   `Drawable size:` stay 640x480. The harness capture and the `screenshot`
+   command of `ref_metal` are 960x540 (all three runs, byte-identical
+   to each other), while `ref_gl1` and the shim write 640x480 and the harness
+   refuses nothing. A pin recorded fullscreen from `ref_metal` therefore does
+   not compare with one from the GL renderers; the comparator rejects the pair
+   by size. The 960x540 picture is not a crop of the 640x480 one (the
+   best of four crop offsets still scores 0.0325 against a windowed frame, a
+   frame against the next frame is 0.03); scaling to the drawable is the
+   likely cause and was not confirmed. Owner of the file: the `ref_metal`
+   screenshot path in `src/client/refresh/metal/` (a card should read the
+   drawable size, or the view size, at the readback and say which is meant).
+2. **A `wait` pending while a demo connects aborts the engine.**
+   `quake2 +demomap demo1.dm2 +exec x.cfg` with `x.cfg` holding one or more
+   `wait` lines ends with `Error: CM_InlineModel: bad number` (exit 1, no
+   frame written), for `ref_gl1` and every wait count tried (20 to 400,
+   about ten runs); the same with `x.cfg` holding only `echo hi` runs the whole demo.
+   Reading `Cbuf_Execute`, the `svc_serverdata` handler runs it nested while
+   `demomap` is still executing; the cause was not found. Consequence for
+   this card: a `screenshot` could not be queued at a chosen frame of a
+   playing demo, which is how the screenshot and the harness capture of the
+   same frame would be compared.
+3. **Screenshot against capture of the same frame: not measured.** Because of
+   finding 2 the two paths were compared through everything that does not need
+   the same frame: both run the same `screenshot tga` command (the harness runs
+   it inside `SCR_UpdateScreen` before `R_EndFrame`), both gave
+   not-black, upright, `rgb` pictures of the same size on all three renderers
+   windowed, and the numbers above agree between the harness and the
+   command wherever the scene was static (the menu: 0.00008 to 0.00073 on
+   `ref_gl1`, 0.00152 on `ref_metal`). A same-frame test remains open (a
+   script that does not use `wait` after `demomap`, or a fix for finding 2).
+4. **Windowed against fullscreen on the GL renderers** differ by at most
+   0.00001 in the harness (largest channel difference 36 to 42), so
+   fullscreen readback is the same as windowed there.
+
+### Not run
+
+The Retina-scaled drawable (see the table), a window covered by another
+window or on a sleeping display (the screen saver came on during
+the windowed `hud2d` and `world` runs and every frame was still non-black and
+identical to the earlier runs), and the 2D case in the same frame as a
+harness capture.
+
+### Commands
+
+`scripts/pins.sh record gl1 hud2d --run 90` with `PINS_DRYRUN=1` printed the
+engine line (kept out of the pin store); the runs were that line with
+`vid_renderer gl1|metal`, `vid_fullscreen 0|1` and a private `pins_dir`, from
+copies of `release/` built with `make`, `make ref_gl1 WITH_METAL_SHIM=yes`
+and `make ref_metal`. Frames were compared with `framediff <a> <b>` for each
+of the 23 frames and deleted afterwards.
+
 ## Judging a renderer
 
 Prerequisites on the Mac: the owner's game data at `$PINS_BASEDIR/baseq2`,
