@@ -1200,9 +1200,14 @@ scenario, each against both `gl1` records, 6 pairs; every shim log `mgl:
 | TASK52 (S6) | `particles` | `--threshold 0.02 --bad-threshold 0.25` | 138 of 138 | 0.010591, 0.151660 | 7 exact, worst 0.011907, 0.168597 (frame 8, 3 pairs) |
 | TASK52 (S6) | `particles` with `gl_polyblend 0` (scratch) | the same | 92 of 92 | 0.015115, 0.199079 | 7 exact |
 
-The worst values of `models` and `particles` against `gl1` lie inside the
-`gl1`/`gl1` noise of the same scenario (0.001058; 0.185570 and the scratch
-copy's 0.187988). The 2D scenarios against the new references, two
+The worst values of `models` and `particles` against `gl1` lie at or just
+above the `gl1`/`gl1` sample maximum of the one `gl1` pair of the same
+scenario, and far under the threshold: `models` bad 0.001068 against
+0.001058 (threshold 0.005); `particles` score 0.010591 against 0.009974
+(threshold 0.02), bad 0.151660 against 0.185570 (threshold 0.25); the
+`gl_polyblend 0` copy score 0.015115 against 0.015223, bad 0.199079
+against 0.187988 (threshold 0.25). These maxima are sample maxima of a
+PRNG-driven scenario, not bounds. The 2D scenarios against the new references, two
 `gl1-metal` records each: `hud2d` and `cinematic` exact on every frame,
 `world-fullbright` 92 of 92 at the defaults, worst 0.000031 and 0.000072.
 
