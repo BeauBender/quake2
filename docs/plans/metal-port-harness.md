@@ -1556,7 +1556,7 @@ coordinates for the same vertices (a `fprintf` in each, reverted) showed the
 same indices and half the turbulence table, which gl1's `RI_Init` halves
 in place. After that every frame is at 0.
 
-Measured on the build VM, source `6ce9c350`, load averages 14 to 28, every
+Measured on the build VM, source `316d2b62` (the code of the head), load averages 14 to 28, every
 record with `MTL_DEBUG_LAYER=1`: the numbers of the design document's
 table in section 21; every `engine.log` holds only `Metal API Validation
 Enabled` and the teardown with `0 live objects`.

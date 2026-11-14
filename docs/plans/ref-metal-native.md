@@ -1496,7 +1496,7 @@ pieces), as for every refusal of N4 and N5; no pipeline is created after
 start-up; a draw that cannot be made is skipped and counted, never
 written past a ring or a buffer.
 
-Measured on the build VM (T0), source `6ce9c350`, load averages 14 to 28
+Measured on the build VM (T0), source `316d2b62` (`6ce9c350` and the next commits add only host tests, comments and docs; the `ASAN=1` records are of `6ce9c350`), load averages 14 to 28
 (a shared host), every record with `MTL_DEBUG_LAYER=1` and `PINS_TRACE=0`,
 references recorded at that source in a private store:
 
