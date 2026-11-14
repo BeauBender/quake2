@@ -1515,6 +1515,7 @@ test_surface_extents(void)
 	tm = ex = 77;
 	CHECK(!rm_surface_extents(-32769.0f, 0.0f, &tm, &ex) && tm == 77 && ex == 77);
 	CHECK(!rm_surface_extents(32768.0f, 32768.0f, &tm, &ex));
+	CHECK(!rm_surface_extents(-32769.0f, -32769.0f, &tm, &ex));    /* bmins -2049, extents 16 */
 	CHECK(!rm_surface_extents(-16.0f, 32752.0f, &tm, &ex));    /* extents 2048 * 16 */
 	CHECK(!rm_surface_extents(1e30f, 1e30f, &tm, &ex) && !rm_surface_extents(-1e30f, 0, &tm, &ex));
 	CHECK(!rm_surface_extents(NAN, 0.0f, &tm, &ex) && !rm_surface_extents(0.0f, INFINITY, &tm, &ex));
@@ -1781,6 +1782,14 @@ test_lm_build(void)
 	/* r_modulate scales every style: 2 doubles the first luxel's 0.5 a + 2 b, alpha 58 */
 	CHECK(rm_lm_build(samples, 3, 2, 2, rgb, 2.0f, NULL, ident, &out[0][0], 20, bl));
 	CHECK(out[0][0] == 30 && out[0][1] == 44 && out[0][2] == 58 && out[0][3] == 58);
+
+	/* two styles of different colours: each channel takes its own scale (luxel 0: 5 + 15, 20 + 6, 60 + 3.5) */
+	{
+		const float col[2][3] = { { 0.5f, 1, 2 }, { 3, 1, 0.5f } };
+
+		CHECK(rm_lm_build(samples, 3, 2, 2, col, 1.0f, NULL, ident, &out[0][0], 20, bl));
+		CHECK(out[0][0] == 20 && out[0][1] == 26 && out[0][2] == 63 && out[0][3] == 63);
+	}
 
 	/* one style: scale 1 copies the samples, 1.5 truncates; no light data is 255 everywhere */
 	{

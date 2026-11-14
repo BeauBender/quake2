@@ -1149,7 +1149,7 @@ rm_lm_size(long extent0, long extent1, int *smax, int *tmax)
 {
 	long s, t;
 
-	if ((extent0 < 0) || (extent1 < 0) || (extent0 > 32767) || (extent1 > 32767))
+	if ((extent0 < 0) || (extent1 < 0))
 	{
 		return 0;
 	}
@@ -1185,7 +1185,8 @@ rm_lm_samples_ok(long ofs, long extent0, long extent1, int nummaps, long lightle
 {
 	long long per;
 
-	if ((ofs < 0) || (lightlen < 0) || (ofs > lightlen) || (extent0 < 0) || (extent1 < 0) ||
+	/* an offset past the lump (or a negative length) leaves lightlen - ofs negative, which no run fits */
+	if ((ofs < 0) || (extent0 < 0) || (extent1 < 0) ||
 		(extent0 > 32767) || (extent1 > 32767) || (nummaps < 0) || (nummaps > RM_LM_STYLES))
 	{
 		return 0;
@@ -1242,8 +1243,9 @@ rm_lm_place(int *allocated, int *slice, int w, int h, int *x, int *y)
 int
 rm_region_ok(long tw, long th, long tslices, long slice, long x, long y, long w, long h)
 {
-	return (tw >= 1) && (th >= 1) && (slice >= 0) && (slice < tslices) && (x >= 0) && (y >= 0) &&
-		(w >= 1) && (h >= 1) && (w <= tw) && (h <= th) && (x <= tw - w) && (y <= th - h);
+	/* x >= 0 and x <= tw - w imply w <= tw, and with w >= 1 a texture at least one wide */
+	return (slice >= 0) && (slice < tslices) && (x >= 0) && (y >= 0) && (w >= 1) && (h >= 1) &&
+		(x <= tw - w) && (y <= th - h);
 }
 
 int
@@ -1295,7 +1297,7 @@ rm_minlight_table(float m, unsigned char *table)
 		float inf = (255.0f - m) * (float)i / 255.0f + m;
 
 		inf = inf < 0 ? 0 : (inf > 255 ? 255 : inf);
-		table[i] = (m != 0) ? (unsigned char)inf : (unsigned char)i;
+		table[i] = (unsigned char)inf;      /* the identity at m 0: 255 * i / 255 is i exactly */
 	}
 
 	return m != 0;
@@ -1339,9 +1341,8 @@ rm_lm_build(const unsigned char *samples, int smax, int tmax, int nummaps, const
 	float scale[3];
 	float *bl;
 
-	/* the size rm_lm_size gives for the extents (smax - 1) * 16 and (tmax - 1) * 16 */
-	if ((smax < 1) || (tmax < 1) || (smax > RM_LM_WIDTH) || (tmax > RM_LM_HEIGHT) ||
-		!rm_lm_size((long)(smax - 1) * 16, (long)(tmax - 1) * 16, &ok_s, &ok_t) ||
+	/* the size rm_lm_size gives for the extents (smax - 1) * 16 and (tmax - 1) * 16 (below 1 is negative) */
+	if (!rm_lm_size(((long)smax - 1) * 16, ((long)tmax - 1) * 16, &ok_s, &ok_t) ||
 		(nummaps < 0) || (nummaps > RM_LM_STYLES) || (stride < (long)smax * RM_LM_BYTES))
 	{
 		return 0;
