@@ -2732,8 +2732,9 @@ after build is 1b84bb4f plus this card's `sw_main.c` change. The
 `opaque = NO` added next to their `displaySyncEnabled` line, never
 committed. Every build here, before and after, is main at 1b84bb4f (the
 card's base when it was measured) plus the change named. That `ref_metal`
-draws no entities (TASK90, #244, added them later), dynamic lights or
-particles (N8 and N9, not on main yet), so the `ref_metal` rows and the
+draws no brush or alias-model entities (TASK90, #244, added them later),
+and no sprites, beams, dynamic lights or particles (N8, TASK91, and N9,
+both after 1b84bb4f), so the `ref_metal` rows and the
 FIX51 paragraph's ceiling below are not a baseline for a later
 `ref_metal`:
 
