@@ -2051,13 +2051,14 @@ RE_InitContext(void *win)
 	}
 
 #ifdef __APPLE__
-	/* macOS scans a large window with an opaque CAMetalLayer out
-	   directly and then shows every frame at the display's refresh,
-	   whatever displaySyncEnabled says: with r_vsync 0 a window from
-	   about 1720x700 points up ran at 60 fps on a 60 Hz display. A
-	   layer that is not opaque stays composited and is not capped.
-	   Every pixel drawn here has alpha 255, so the picture is the
-	   same. With r_vsync 1 the layer stays opaque, as SDL makes it. */
+	/* macOS shows every frame of a large window with an opaque
+	   CAMetalLayer at the display's refresh, whatever
+	   displaySyncEnabled says: with r_vsync 0 a window from about
+	   1720x700 points up ran at 60 fps on a 60 Hz display. A layer
+	   that is not opaque is composited like a small one and is not
+	   capped. Every pixel drawn here has alpha 255, so the picture
+	   is the same. With r_vsync 1 the layer stays opaque, as SDL
+	   makes it. */
 	RE_SetMetalLayerOpaque(renderer, r_vsync->value ? true : false);
 #endif
 

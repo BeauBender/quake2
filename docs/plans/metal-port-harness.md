@@ -2742,3 +2742,58 @@ before-and-after numbers, which want a quiet host. In the engine the
 opaque layer also
 costs about 1 ms a frame below the threshold: at 640x480 all three
 renderers move from about 270 to 300 fps to about 330 to 400.
+
+How these runs were made: the engine was started as a pin run with
+`pins_capture 1000000` (at most one frame captured), so that it quits
+by itself at the demo's end, plus `+set r_vsync 0 +set timedemo 1
++demomap demo1.dm2`, `-portable`, `-datadir $PINS_BASEDIR`,
+`s_initsound 0`, `vid_fullscreen 0`, `r_mode -1` and the size in
+`r_customwidth` and `r_customheight`; the fps line is the engine's
+own. A plain `timedemo 1` run does not quit at the end (see the first
+run above).
+
+**The fix (`soft`).** `RE_InitContext` in
+`src/client/refresh/soft/sw_main.c` sets the layer of SDL's Metal
+renderer (`SDL_GetRenderMetalLayer`) not opaque when `r_vsync` is 0,
+and opaque, as SDL makes it, when `r_vsync` is 1; the file is C, so it
+sends `setOpaque:` through the Objective-C runtime it finds with
+`dlsym`, and nothing new is linked. Every pixel `soft` presents has
+alpha 255 (the palette's alpha byte, `R_GammaCorrectAndSetPalette`,
+and a streaming texture drawn over the whole output), so a composited
+layer shows the same picture; the clear at context creation is now
+opaque black instead of alpha 0. With `r_vsync 1` `soft` runs at 59.9
+to 60.0 fps before and after, at 1920x1080 and at 640x480 (two and
+one runs of each, alternated, load average 2.28). The picture was not
+compared on screen. No cvar, no change to the window
+(`glimp_sdl3.c`), and other platforms are untouched.
+
+**Findings for the Metal renderer files** (not edited by FIX52; their
+owner's): `rmb_attach` and `rmb_set_vsync` in
+`src/client/refresh/metal/rmb_device.m`, and `mgl_layer_create` and
+`mgl_layer_set_sync` in `src/client/refresh/gl1/metal/mgl_layer.m`,
+leave the layer opaque, as SDL creates it. A layer that is not opaque
+while `r_vsync` is 0 lifts the cap (the scratch numbers above). Before
+that ships, the drawable's alpha has to be 1 everywhere: `ref_metal`
+copies its offscreen color target to the drawable with a blit and the
+shim draws the GL frame straight into the drawable, so blended draws
+can leave alpha below 1, which an opaque layer ignores and a
+composited one blends with the window's background. Whether they do
+was not measured here.
+
+**FIX51 (#238), the fixed cost of about 3 to 4 ms a frame.** Two parts
+were measured. About 1 ms is the opaque layer (the 640x480 columns
+above). The rest is the time the window server takes to hand back a
+drawable: the bare probe, which only clears, spends 2.26 to 3.07 ms a
+frame blocked in `nextDrawable` at every size below the threshold and
+with `opaque = NO` at 1920x1080, and the engine with a layer that is
+not opaque tops out at 328.7 to 405.3 fps in all three renderers at
+640x480. `ref_gl1` does not wait there (1780.4 fps at 1920x1080, one
+run). So a Metal renderer that waits for a drawable every frame stops
+at about 400 fps on this host; going past it needs a frame that does
+not block in `nextDrawable` (not tried here).
+
+**Open.** The before-and-after numbers of all four renderers at
+1920x1080 and 640x480 on a quiet host. And a follow-up: repeat the
+probe on a display above 60 Hz (an apple7 Mac with a 120 Hz internal
+display), to tell whether the cap follows the refresh rate and where
+the size threshold sits there.
