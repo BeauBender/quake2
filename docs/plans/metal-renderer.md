@@ -21,7 +21,7 @@ Work cards:
 - TASK24 — Hybrid ray tracing, compute-based (raytracing) — tier T1 to build, T2 to validate; depends on TASK21, INFORM7
 - TASK25 — Render-stage ray queries and hardware-RT tuning (raytracing) — tier T2 only; depends on TASK24
 - TASK27 (#37) — Pin harness: capture hook, capture before present, unattended quit, `scripts/pins.sh`, comparator, scenarios, gate check; real-data pins and record/replay follow as TASK39 to TASK46 — depends on INFORM8, INFORM9, TASK29
-- TASK28 (#38) — Specialize into native `ref_metal`: replace the shim at gl1's 441 call sites with direct Metal, concept by concept, frame pins as acceptance — depends on TASK21, TASK27
+- TASK28 (#38) — Specialize into native `ref_metal`: replace the shim at gl1's 441 call sites with direct Metal, concept by concept, frame pins as acceptance — depends on TASK93 (closes when N10 lands; its children TASK84 to TASK93 form one chain, `docs/plans/ref-metal-native.md`)
 
 Cards filed from `docs/plans/metal-port-cards.md` on 2026-11-12 (dependencies
 inside the manifest; each card also carries its group's parent dependencies):
@@ -50,6 +50,16 @@ inside the manifest; each card also carries its group's parent dependencies):
 - TASK60 (#103) — Hardware gating and fallbacks, with ray tracing forced off on the VM — tier T0 and T1; depends on TASK54
 - TASK61 (#104) — Render-stage ray queries on M3 or later, compute path kept for older families — tier T2; depends on TASK59
 - TASK62 (#105) — Refit against rebuild tuning and resolution-scale defaults per GPU family — tier T2; depends on TASK61
+- TASK84 (#195) — N1: `ref_metal` skeleton: build target, window seat, clear, present, frame capture, capability report, gate check — tier T0
+- TASK85 (#196) — N2: Images, textures, the 2D pipeline and the cinematic; the shim's GL-free arithmetic moved to `metal/common/` — tier T0; depends on TASK84
+- TASK86 (#197) — N3: Pics, characters, the scrap and the HUD — tier T0; depends on TASK85
+- TASK87 (#198) — N4: World geometry: BSP registration, retained world buffers, traversal, fullbright surfaces, the screen blend — tier T0; depends on TASK86
+- TASK88 (#199) — N5: Lightmaps: one array texture, lightstyles, overbright, staged updates — tier T0; depends on TASK87
+- TASK89 (#200) — N6: Sky, water warp, translucent and flowing surfaces — tier T0; depends on TASK88
+- TASK90 (#201) — N7: Brush entities, alias models, the view weapon, model lighting — tier T0; depends on TASK89
+- TASK91 (#202) — N8: Sprites, beams, null models, stencil shadows, dynamic lights, flash blobs — tier T0; depends on TASK90
+- TASK92 (#203) — N9: Particles, the full parity sweep and frame time — tier T0; depends on TASK91
+- TASK93 (#204) — N10: Lifecycle, selection and the docs: `vid_restart`, resize, fullscreen, vsync, gamma, the fallback order and the video menu on macOS — tier T0; depends on TASK92
 
 ---
 
