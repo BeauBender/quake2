@@ -9,6 +9,9 @@
 #   pins.sh make-demo <name> [--replace]       make demos/<name>.dm2 beside the binary
 #   pins.sh list                               what the store holds
 #   pins.sh selftest                           no engine, no game data
+#   pins.sh evidence <renderer> <scenario> [--ref r] [--ref-id d] [--run N | --cand-id d] [--card ID] | --synthetic [--card ID] [--noise BYTES]
+#   pins.sh evidence-publish <manifest> [file...]   upload one evidence set to the pr-evidence pre-release
+#   pins.sh evidence-selftest                  the evidence encoder and the publish refusals, offline
 #
 # Names (renderer, scenario) match [a-z0-9_][a-z0-9_-]*, e.g. gl1-metal, rt-ao.
 # The renderer gl1-metal is ref_gl1 built with "make ref_gl1 WITH_METAL_SHIM=yes":
@@ -39,6 +42,18 @@
 #   PINS_DRYRUN   print the engine command line for "record" and stop
 #   PINS_TRACE    0: record no renderer-API trace. Default: record writes
 #                 trace.q2r beside the frames (the engine's pins_record)
+#   PINS_EVIDENCE_DIR     where evidence writes its sets, never inside the
+#                 pin store. Default: evidence/ of this checkout (git-ignored)
+#   PINS_EVIDENCE_REPO    owner/name evidence-publish uploads to. Default: the
+#                 GitHub repository of the origin remote
+#   PINS_EVIDENCE_BUDGET  bytes per evidence file. Default: 4000000. A larger
+#                 value raises the size cap: evidence writes it into the
+#                 manifest's budget, and publish allows the smaller of the two
+#   PINS_EVIDENCE_UPLOADER  a program run as "<it> <repo> <tag> -- <file>..."
+#                 in place of the built-in gh upload, INCLUDING its check that
+#                 the release is an existing pre-release: nothing is checked
+#                 on the release then. It exists for the self-test's stand-in
+#                 uploader; leave it unset to publish
 #
 # Every path and value handed to the engine (store, PINS_BASEDIR, PINS_DEMO,
 # scenario values) may hold only A-Z a-z 0-9 _ . / - : the engine re-joins
@@ -427,6 +442,654 @@ cmd_list() {
     # the prefix is stripped by parameter expansion: the store path is never part of a program text
     find "$s" -name '*.tga' 2>/dev/null | while IFS= read -r line; do echo "${line#"$s"/}"; done |
         awk -F/ '{print $1"/"$2"/"$3}' | sort | uniq -c
+}
+
+# ---- evidence (TASK73; docs/decisions/0007) ---------------------------------
+# evidence writes, from frames already in the store, a side-by-side still of
+# the worst-scoring frame, a short clip as animated PNG and GIF, and a
+# manifest, into <evidence>/<card>-<commit>-<renderer>-<scenario>/, where
+# <evidence> is PINS_EVIDENCE_DIR (default: evidence/ of this checkout,
+# git-ignored) and <commit> the engine part of the candidate pin id. It writes
+# nothing into the store. evidence-publish uploads the files of one such set,
+# validated and staged by scripts/pins/evidence.py ("stage"), to the
+# pre-release pr-evidence of PINS_EVIDENCE_REPO (default: the GitHub
+# repository of the origin remote), then prints the Markdown for the
+# pull-request body. PINS_EVIDENCE_UPLOADER names a program run as
+# "<it> <repo> <tag> -- <file>..." instead of gh (the self-test's stand-in).
+# PINS_EVIDENCE_BUDGET is the size budget per file in bytes (default 4000000).
+
+evidence_root() { echo "${PINS_EVIDENCE_DIR:-$root/evidence}"; }
+ev_py() {
+    command -v python3 >/dev/null 2>&1 || die "evidence needs python3 (standard library only)"
+    python3 -I "$root/scripts/pins/evidence.py" "$@"
+}
+check_card() { case $1 in ''|*[!A-Za-z0-9]*) die "--card must match [A-Za-z0-9]+, got '$1'";; esac; }
+check_pin_id() { case $2 in ''|[.-]*|*[!A-Za-z0-9_.-]*) die "$1 must be a pin directory name [A-Za-z0-9_][A-Za-z0-9_.-]*, got '$2'";; esac; }
+# ev_outdir <prefix>: a fresh <evidence>/<prefix>, never inside the pin store
+ev_outdir() {
+    local ev; ev=$(evidence_root)
+    mkdir -p "$ev"
+    phys_path "$ev"; local e=$phys_result; phys_path "$(store)"
+    case "$e/" in "$phys_result/"*) die "the evidence folder $ev is inside the pin store; evidence writes nothing there";; esac
+    [ ! -L "$ev/$1" ] || die "$ev/$1 is a symbolic link"
+    rm -rf "${ev:?}/${1:?}"; mkdir -p "$ev/$1"
+    echo "$ev/$1"
+}
+ev_commit() { git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo nogit; }
+# ev_cleanup_trap: on every exit of the subshell that runs it, die included,
+# remove the scratch folder named by wd (never local: bash drops the locals
+# before an EXIT trap runs), keeping the exit status
+ev_cleanup_trap() { wd=""; trap 'ev_rc=$?; [ -z "$wd" ] || rm -rf "${wd:?}"; exit $ev_rc' EXIT; }
+
+# cmd_evidence and cmd_evidence_publish run in a subshell of their own, so
+# that their EXIT trap removes the scratch folder however they end
+cmd_evidence() (
+    local card=adhoc args="$*" out prefix
+    ev_cleanup_trap
+    if [ "${1:-}" = --synthetic ]; then
+        local noise=""; shift
+        while [ $# -gt 0 ]; do
+            [ $# -ge 2 ] || die "$1 needs a value"
+            case $1 in --card) card=$2; check_card "$card";; --noise) noise=$2; check_count --noise "$noise";; *) die "unknown option $1";; esac
+            shift 2
+        done
+        prefix="$card-$(ev_commit)-synthetic-${noise:+noise$noise}"; [ -n "$noise" ] || prefix="${prefix}pattern"
+        out=$(ev_outdir "$prefix") || exit 1
+        ev_py synth --out "$out" --prefix "$prefix" ${noise:+--noise "$noise"} --meta "card=$card" --meta "commit=$(ev_commit)" \
+            --meta "command=pins.sh evidence $args"
+        echo "folder: ${out#"$root"/}"
+        return
+    fi
+    [ $# -ge 2 ] || die "usage: pins.sh evidence <renderer> <scenario> [--ref r] [--ref-id d] [--run N | --cand-id d] [--card ID]"
+    local renderer=$1 scenario=$2 ref=gl1; shift 2
+    check_name renderer "$renderer"; check_name scenario "$scenario"
+    local cmp_args=()
+    while [ $# -gt 0 ]; do
+        [ $# -ge 2 ] || die "$1 needs a value"
+        case $1 in
+            --card) card=$2; check_card "$card";;
+            --ref) ref=$2; check_name reference "$ref"; cmp_args+=("$1" "$2");;
+            --ref-id|--cand-id) check_pin_id "$1" "$2"; cmp_args+=("$1" "$2");;
+            --run|--threshold|--bad-threshold) cmp_args+=("$1" "$2");;
+            *) die "unknown option $1";;
+        esac
+        shift 2
+    done
+    # compare's own framediff would be built into the store; evidence writes nothing there
+    local cmp rc=0 diffbin=${PINS_DIFF:-}
+    wd=$(mktemp -d "${TMPDIR:-/tmp}/pins-evidence.XXXXXX"); cmp="$wd/compare.txt"
+    if [ -z "$diffbin" ]; then
+        diffbin="$wd/framediff"; cc -O2 -o "$diffbin" "$root/scripts/pins/framediff.c" -lm || { rm -rf "${wd:?}"; die "cannot build framediff"; }
+    fi
+    # ${a[@]+"${a[@]}"}: bash 3.2 under set -u calls an empty array unbound
+    ( PINS_DIFF=$diffbin cmd_compare "$renderer" "$scenario" --ref "$ref" ${cmp_args[@]+"${cmp_args[@]}"} ) > "$cmp" || rc=$?
+    local ref_dir cand
+    ref_dir=$(sed -n 's/^ref=//p' "$cmp"); cand=$(sed -n 's/^candidate=//p' "$cmp")
+    if [ -z "$ref_dir" ] || [ -z "$cand" ]; then rm -rf "${wd:?}"; die "compare found no pair of pins to show (see the message above)"; fi
+    local cand_id=${cand##*/} ref_id=${ref_dir##*/}
+    prefix="$card-${cand_id%%-*}-$renderer-$scenario"
+    out=$(ev_outdir "$prefix") || exit 1
+    ev_py build --ref-dir "$ref_dir" --cand-dir "$cand" --compare "$cmp" --out "$out" --prefix "$prefix" \
+        --meta "card=$card" --meta "commit=$(ev_commit)" --meta "command=pins.sh evidence $args" \
+        --meta "renderer=$renderer" --meta "scenario=$scenario" \
+        --meta "reference=$scenario/$ref/$ref_id" --meta "candidate=$scenario/$renderer/$cand_id" \
+        --meta "compare-exit=$rc" --meta "ref-caption=REFERENCE $ref" --meta "cand-caption=CANDIDATE $renderer" \
+        || { rm -rf "${wd:?}"; die "the evidence step failed"; }
+    rm -rf "${wd:?}"
+    echo "folder: ${out#"$root"/}"
+)
+
+# ev_repo: owner/name of the GitHub repository evidence is published to
+ev_repo() {
+    local r=${PINS_EVIDENCE_REPO:-}
+    if [ -z "$r" ]; then
+        r=$(git -C "$root" remote get-url origin 2>/dev/null || true)
+        r=${r%.git}; r=${r#*github.com[:/]}
+    fi
+    [[ $r =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "cannot tell the GitHub repository (set PINS_EVIDENCE_REPO=owner/name)"
+    echo "$r"
+}
+# ev_gh_upload <repo> <tag> -- <file>...: only into an existing pre-release, never over an asset
+ev_gh_upload() {
+    local repo=$1 tag=$2 pre; shift 2
+    [ "${1:-}" = -- ] || die "ev_gh_upload: the file names must follow --"
+    command -v gh >/dev/null 2>&1 || die "evidence-publish needs gh"
+    pre=$(gh release view "$tag" -R "$repo" --json isPrerelease --jq .isPrerelease) ||
+        die "no release $tag on $repo; the owner creates it once, as a pre-release that is not marked latest"
+    [ "$pre" = true ] || die "the release $tag on $repo is not a pre-release; nothing was uploaded"
+    gh release upload "$tag" -R "$repo" "$@"
+}
+
+# ev_stage_list <dir>: sets ev_files to the files in the stage folder dir and
+# ev_total to their bytes; fails, with the reason in ev_why, unless each is a
+# regular file (no link) with an evidence name, lying in dir by physical
+# path, and there are at least an image and the manifest
+ev_stage_list() {
+    local pdir f n size
+    ev_files=(); ev_total=0; ev_why=""
+    pdir=$(phys_dir "$1") || { ev_why="the stage folder cannot be resolved"; return 1; }
+    for f in "$1"/* "$1"/.*; do
+        n=${f##*/}
+        case $n in .|..) continue;; esac
+        [ -e "$f" ] || [ -L "$f" ] || continue
+        case $n in [A-Za-z0-9_]*[a-z0-9]) ;; *) n="";; esac
+        case $n in *[!A-Za-z0-9_.-]*) n="";; esac
+        case $n in *.png|*.gif|*-evidence.txt) ;; *) n="";; esac
+        if [ -n "$n" ] && [ -f "$f" ] && [ ! -L "$f" ]; then phys_path "$f"; else phys_result=""; fi
+        [ "$phys_result" = "$pdir/$n" ] || { ev_why="the stage folder holds a file it should not"; return 1; }
+        size=$(wc -c < "$f") || { ev_why="cannot size a staged file"; return 1; }
+        ev_total=$((ev_total + size)); ev_files+=("$f")
+    done
+    [ ${#ev_files[@]} -ge 2 ] || { ev_why="the stage folder holds no image and manifest"; return 1; }
+}
+
+# evidence-publish: scripts/pins/evidence.py ("stage") reads the manifest and
+# each image once, checks those bytes and writes them, with a manifest it
+# regenerates from the validated fields, into a fresh stage folder, and
+# writes the Markdown beside it. What is uploaded is what this function finds
+# in the stage folder, each file checked to lie in it by physical path; no
+# text another program printed becomes an argument, and every file name
+# follows "--".
+cmd_evidence_publish() (
+    [ $# -ge 1 ] || die "usage: pins.sh evidence-publish <manifest> [file...]"
+    ev_cleanup_trap
+    local arg
+    for arg in "$@"; do
+        case $arg in -*) die "evidence-publish: refused: an argument starts with '-' (it takes file names, no option); nothing was uploaded";; esac
+    done
+    local manifest=$1 tag=pr-evidence repo stage; shift
+    repo=$(ev_repo)
+    wd=$(mktemp -d "${TMPDIR:-/tmp}/pins-publish.XXXXXX") || die "evidence-publish: no scratch folder; nothing was uploaded"
+    stage="$wd/stage"; mkdir "$stage" || { rm -rf "${wd:?}"; die "evidence-publish: no stage folder; nothing was uploaded"; }
+    if ! ev_py stage --root "$(evidence_root)" --store "$(store)" --manifest "$manifest" --stage "$stage" \
+        --repo "$repo" --markdown "$wd/body.md" -- ${1+"$@"}; then
+        rm -rf "${wd:?}"; die "nothing was uploaded"
+    fi
+    ev_stage_list "$stage" || { rm -rf "${wd:?}"; die "evidence-publish: refused: $ev_why; nothing was uploaded"; }
+    echo "evidence-publish: uploading ${#ev_files[@]} files, $ev_total bytes, to the $tag pre-release of $repo; an uploaded asset is public at once and cannot be recalled" >&2
+    if [ -n "${PINS_EVIDENCE_UPLOADER:-}" ]; then "$PINS_EVIDENCE_UPLOADER" "$repo" "$tag" -- "${ev_files[@]}"
+    else ev_gh_upload "$repo" "$tag" -- "${ev_files[@]}"; fi ||
+        { rm -rf "${wd:?}"; die "the upload failed; any file sent before the failure is public (check the release)"; }
+    echo "uploaded ${#ev_files[@]} files to the $tag pre-release of $repo"
+    echo
+    cat "$wd/body.md"
+    rm -rf "${wd:?}"
+)
+
+# ---- evidence self-test: no network, no game data --------------------------
+
+ev_fail() { echo "  FAIL: $*" >&2; return 1; }
+# ev_list <manifest> <file> <kind>: list a file with its true size and digest
+ev_list() {
+    python3 -I -c 'import hashlib,os,sys; p=sys.argv[2]; d=open(p,"rb").read()
+open(sys.argv[1],"a").write("file %s %d %s %s 1x1 1/1\n" % (os.path.basename(p), len(d), hashlib.sha256(d).hexdigest(), sys.argv[3]))' "$@"
+}
+# ev_craft <how> <file> [text]: rewrite an image the way an adversary would, and
+# give its line in the manifest m its true size and digest
+ev_craft() {
+    python3 -I -c 'import hashlib, os, struct, sys, zlib
+sys.path.insert(0, sys.argv[1]); import evidence as e
+m, how, p = sys.argv[2], sys.argv[3], sys.argv[4]; d = open(p, "rb").read(); t = sys.argv[5].encode() if len(sys.argv) > 5 else b""
+if how == "after-iend": d += b"PACK" + b"GAMEDATA" * 512
+elif how == "sig-data": d = e.PNG_SIG + b"PACK" + b"GAMEDATA" * 512
+elif how == "gif-junk": d = b"GIF89a" + b"Q2DEMO.." * 512
+elif how == "gif-after-trailer": d += b"PACK" + b"GAMEDATA" * 64
+elif how == "ztxt": d = d[:-12] + e._chunk(b"zTXt", b"Comment\0\0" + zlib.compress(t)) + d[-12:]
+elif how == "pixels":  # a valid PNG of the same size whose stored (uncompressed) pixels hold t
+    w, h = struct.unpack(">II", d[16:24]); rows = b"\0" + t.ljust(3 * w, b"\0") + (b"\0" * (1 + 3 * w)) * (h - 1)
+    d = e.PNG_SIG + e._ihdr(w, h) + e._chunk(b"IDAT", zlib.compress(rows, 0)) + e._chunk(b"IEND", b"")
+elif how == "content": d = t
+elif how == "bad-sig": d = b"\x88" + d[1:]
+elif how.startswith("gif-"):
+    w = 800  # the end of the header, palette and loop block
+    if how == "gif-palette": d = d[:13] + bytes([d[13] ^ 1]) + d[14:]
+    elif how == "gif-comment": d = d[:w] + b"\x21\xfe\x05hello\x00" + d[w:]
+    elif how == "gif-subblock":  # one more sub-block of data after the LZW stream of the first frame
+        q = w + 19
+        while d[q]: q += 1 + d[q]
+        d = d[:q] + b"\x05PACK!" + d[q:]
+    else: raise SystemExit("ev_craft: " + how)
+else:  # a change to one chunk of a PNG, its CRC made right again
+    ch = e.png_chunks(d); kinds = [k for k, _ in ch]
+    def at(kind): return kinds.index(kind)
+    if how == "actl": i = at(b"acTL"); ch[i] = (b"acTL", ch[i][1][:4] + struct.pack(">I", 1))
+    elif how == "fctl": i = at(b"fcTL"); ch[i] = (b"fcTL", ch[i][1][:20] + struct.pack(">H", 250) + ch[i][1][22:])
+    elif how == "fdat-seq": i = at(b"fdAT"); ch[i] = (b"fdAT", struct.pack(">I", 99) + ch[i][1][4:])
+    elif how == "idat-junk": i = at(b"IDAT"); ch[i] = (b"IDAT", ch[i][1] + b"PACKjunk")
+    elif how == "idat-short": i = at(b"IDAT"); raw = zlib.decompress(ch[i][1]); ch[i] = (b"IDAT", zlib.compress(raw[:len(raw) // 2], 9))
+    elif how == "fdat-junk": i = at(b"fdAT"); ch[i] = (b"fdAT", ch[i][1] + b"PACKjunk")
+    elif how == "idat-noend":
+        i = at(b"IDAT"); c = zlib.compressobj(9); ch[i] = (b"IDAT", c.compress(zlib.decompress(ch[i][1])) + c.flush(zlib.Z_SYNC_FLUSH))
+    elif how == "filter3":
+        i = at(b"IDAT"); raw = bytearray(zlib.decompress(ch[i][1])); raw[0] = 3; ch[i] = (b"IDAT", zlib.compress(bytes(raw), 9))
+    else: raise SystemExit("ev_craft: " + how)
+    d = e.PNG_SIG + b"".join(e._chunk(k, b) for k, b in ch)
+open(p, "wb").write(d)
+out = []
+for line in open(m).read().split("\n")[:-1]:
+    w = line.split(" ")
+    if w[0] == "file" and w[1] == os.path.basename(p):
+        w[2], w[3] = str(len(d)), hashlib.sha256(d).hexdigest()
+    out.append(" ".join(w))
+open(m, "w").write("\n".join(out) + "\n")' "$root/scripts/pins" "$m" "$@"
+}
+# ev_case [build|synth]: a fresh copy of an evidence set; sets d (its folder),
+# p (its prefix), m (its manifest), still, clip and gif
+ev_case() {
+    local t; t=$(ls -d "$tmp/tpl/${1:-build}"/*)
+    rm -rf "${PINS_EVIDENCE_DIR:?}"; mkdir -p "$PINS_EVIDENCE_DIR"; cp -R "$t" "$PINS_EVIDENCE_DIR/"
+    p=${t##*/}; d="$PINS_EVIDENCE_DIR/$p"; m="$d/$p-evidence.txt"
+    still="$d/$p-still.png"; clip="$d/$p-clip.png"; gif="$d/$p-clip.gif"
+    rm -rf "${tmp:?}/got"; mkdir "$tmp/got"; : > "$tmp/uploaded"; : > "$tmp/upload-args"
+}
+# ev_refused <reason> [publish args]: publish must fail naming the reason,
+# print neither the scratch path nor the test identity, and upload nothing
+ev_refused() {
+    local why=$1 rep; shift
+    rep=$( (cmd_evidence_publish "$@") 2>&1 ) && { ev_fail "publish must be refused ($why): $rep"; return 1; }
+    case $rep in *"refused: "*"$why"*) ;; *) ev_fail "the refusal must say '$why', got: $rep"; return 1;; esac
+    case $rep in *"$tmp"*|*evidencetestuser*) ev_fail "the refusal prints what it hides: $rep"; return 1;; esac
+    [ ! -s "$tmp/uploaded" ] && [ ! -s "$tmp/upload-args" ] || ev_fail "a refused publish uploaded: $(cat "$tmp/uploaded")" || return 1
+}
+ev_count() { [ "$(wc -l < "$tmp/uploaded" | tr -d ' ')" -eq "$1" ] || ev_fail "$2: $(cat "$tmp/uploaded")"; }
+# ev_td / ev_td_empty <what>: a fresh, empty TMPDIR for the next refused call,
+# and the check that the call left nothing in it (no scratch or stage folder)
+ev_td() { rm -rf "${tmp:?}/td"; mkdir "$tmp/td"; }
+ev_td_empty() { [ -z "$(ls -A "$tmp/td")" ] || ev_fail "$1 left scratch files behind: $(cd "$tmp/td" && find . | sort | tr '\n' ' ')"; }
+ev_st_publish_ok() {
+    ev_case build
+    local rep; rep=$(cmd_evidence_publish "$m" 2>"$tmp/err") || ev_fail "publish of a built set must pass: $rep $(cat "$tmp/err")" || return 1
+    ev_count 4 "publish must upload the 3 images and the manifest" || return 1
+    [ "$(cat "$tmp/upload-args")" = "example/repo pr-evidence" ] || ev_fail "the uploader must get the repository, the tag and -- before the files" || return 1
+    grep -q "uploading 4 files, [0-9]* bytes, to the pr-evidence pre-release of example/repo; an uploaded asset is public at once and cannot be recalled" "$tmp/err" ||
+        ev_fail "publish must say where, how much and that it cannot be recalled: $(cat "$tmp/err")" || return 1
+    cmp -s "$tmp/got/$p-evidence.txt" "$m" || ev_fail "the regenerated manifest must equal the one evidence wrote" || return 1
+    local u="https://github.com/example/repo/releases/download/pr-evidence/$p" line
+    for line in '### Evidence: `world` on `soft`' "Reference \`world/gl1/ref-1\`, candidate \`world/soft/" '; `frames=2 failed=' \
+        "](${u}-still.png)" "![world: clip, 2 frames at 500 ms each](${u}-clip.png)" "[$p-clip.gif](${u}-clip.gif)" \
+        '| `world-000001.tga` | 0.' "[$p-evidence.txt](${u}-evidence.txt)"; do
+        case $rep in *"$line"*) ;; *) ev_fail "the Markdown must hold '$line': $rep"; return 1;; esac
+    done
+    ev_case build; rep=$(cmd_evidence_publish "$m" "$still" 2>/dev/null) || ev_fail "publishing one listed file must pass" || return 1
+    ev_count 2 "one named file and the manifest must be uploaded" || return 1
+    case $rep in *"-clip."*) ev_fail "the Markdown must name only what was uploaded: $rep"; return 1;; esac
+    ev_case synth; rep=$(cmd_evidence_publish "$m" 2>/dev/null) || ev_fail "publish of the synthetic set must pass: $rep" || return 1
+    ev_count 4 "the synthetic set has 3 images and the manifest" || return 1
+    case $rep in *'### Evidence: synthetic test pattern (no game content)'*"![synthetic test pattern](https://"*) ;; *) ev_fail "synthetic Markdown: $rep"; return 1;; esac
+}
+ev_st_card_only() {
+    # the build template was made by "evidence soft world --card T1" alone (see cmd_evidence_selftest)
+    local o; o=$(ls -d "$tmp/tpl/build"/*); o="$o/${o##*/}"
+    [ -f "$o-still.png" ] && [ -f "$o-clip.png" ] && [ -f "$o-clip.gif" ] || ev_fail "evidence with only --card must write the still, the clip and the GIF" || return 1
+    grep -q '^worst-frame world-000001.tga$' "$o-evidence.txt" || ev_fail "the still must show the worst frame" || return 1
+    grep -q '^reference world/gl1/ref-1$' "$o-evidence.txt" || ev_fail "the default reference must be gl1" || return 1
+    grep -q "^candidate world/soft/$(run_id world 1)\$" "$o-evidence.txt" || ev_fail "the default candidate must be this checkout's run" || return 1
+}
+ev_st_args() {
+    # a file argument that is an option (it once overrode the evidence root)
+    ev_case; mkdir -p "$tmp/elsewhere/$p"; cp "$m" "$tmp/elsewhere/$p/"
+    ev_refused "starts with '-'" "$tmp/elsewhere/$p/$p-evidence.txt" --root "$tmp/elsewhere" || return 1
+    ev_refused "starts with '-'" "$m" -- "$still" || return 1
+    ev_refused "starts with '-'" --manifest "$m" || return 1
+    # the Python entry point: only known options, each once, file names only after --
+    local rep arg why
+    for arg in "--root $tmp --root $tmp:given twice" "--bogus x:does not take" "stray:does not take" "--manifest:needs a value" \
+        "--root $tmp:needs --manifest --markdown --repo --stage --store"; do
+        why=${arg##*:}; arg=${arg%:*}
+        # shellcheck disable=SC2086
+        if rep=$(ev_py stage $arg 2>&1); then ev_fail "evidence.py stage $arg must be refused"; return 1; fi
+        case $rep in *"$why"*) ;; *) ev_fail "evidence.py stage $arg must say '$why': $rep"; return 1;; esac
+    done
+    # a manifest name carrying a newline and uploader arguments
+    ev_case; local evil="$d/$p-still.png"$'\n'"--clobber"$'\n'"pak0.pak"$'\n'"b-evidence.txt"
+    cp "$m" "$evil"; printf 'PACK' > "$d/pak0.pak"
+    ev_refused "manifest name" "$evil" || return 1
+    ev_case; cp "$m" "$d/other-evidence.txt"
+    ev_refused "not named after the set" "$d/other-evidence.txt" || return 1
+    ev_case; mv "$d" "$PINS_EVIDENCE_DIR/other"
+    ev_refused "not named after the set" "$PINS_EVIDENCE_DIR/other/$p-evidence.txt" || return 1
+    # evidence.py itself refuses a file argument that starts with '-', even one that resolves into the set
+    ev_case; mkdir -p "$PINS_EVIDENCE_DIR/-x" "$tmp/st2"
+    if rep=$(cd "$PINS_EVIDENCE_DIR" && ev_py stage --root "$PINS_EVIDENCE_DIR" --store "$PINS_STORE" --manifest "$m" \
+        --stage "$tmp/st2" --repo example/repo --markdown "$tmp/st2.md" -- "-x/../$p/$p-still.png" 2>&1); then
+        ev_fail "evidence.py stage must refuse a file argument starting with '-'"; return 1
+    fi
+    case $rep in *"not one of the files of this set"*) ;; *) ev_fail "a file argument starting with '-': $rep"; return 1;; esac
+}
+ev_st_place() {
+    ev_case; mkdir -p "$tmp/elsewhere/$p"; cp "$m" "$tmp/elsewhere/$p/"
+    ev_refused "outside the evidence folder" "$tmp/elsewhere/$p/$p-evidence.txt" || return 1
+    ev_case; mkdir -p "$PINS_EVIDENCE_DIR/deeper"; mv "$d" "$PINS_EVIDENCE_DIR/deeper/"
+    ev_refused "outside the evidence folder" "$PINS_EVIDENCE_DIR/deeper/$p/$p-evidence.txt" || return 1
+    ev_case; mv "$m" "$tmp/real-manifest"; ln -s "$tmp/real-manifest" "$m"
+    ev_refused "the manifest cannot be opened" "$m" || return 1
+    ev_case; mv "$still" "$tmp/real-still.png"; ln -s "$tmp/real-still.png" "$still"
+    ev_refused "cannot be opened" "$m" || return 1
+    if [ "$(id -u)" -ne 0 ]; then ev_case; chmod 000 "$still"; ev_refused "cannot be opened" "$m" || return 1; chmod 644 "$still"; fi
+    ev_case; rm "$gif"; mkdir "$gif"
+    ev_refused "not a regular file" "$m" || return 1
+    ev_case; cp "$still" "$d/extra.png"
+    ev_refused "not one of the files of this set" "$m" "$d/extra.png" || return 1
+    ev_refused "not one of the files of this set" "$m" "$tmp/tpl/build/$p/$p-still.png" || return 1
+    # an evidence folder inside the pin store
+    ( PINS_EVIDENCE_DIR="$PINS_STORE/ev"; ev_case; ev_refused "inside the pin store" "$m" ) || { rm -rf "${PINS_STORE:?}/ev"; return 1; }
+    rm -rf "${PINS_STORE:?}/ev"
+}
+ev_st_content() {
+    ev_case; ev_craft after-iend "$still"
+    ev_refused "not a whole PNG" "$m" || return 1
+    ev_case; ev_craft bad-sig "$still"
+    ev_refused "not a whole PNG" "$m" || return 1
+    ev_case; ev_craft sig-data "$still"
+    ev_refused "not a whole PNG" "$m" || return 1
+    ev_case; ev_craft after-iend "$clip"
+    ev_refused "not a whole PNG" "$m" || return 1
+    ev_case; ev_craft gif-junk "$gif"
+    ev_refused "GIF header" "$m" || return 1
+    ev_case; ev_craft gif-after-trailer "$gif"
+    ev_refused "does not end at its trailer" "$m" || return 1
+    local how why
+    for how in "actl:animation control" "fctl:frame control" "fdat-seq:out of sequence" "idat-junk:decompress to the stated size" "fdat-junk:decompress to the stated size" "idat-short:decompress to the stated size" \
+        "idat-noend:decompress to the stated size" "filter3:filter the encoder does not write"; do
+        why=${how#*:}; how=${how%%:*}
+        ev_case; ev_craft "$how" "$clip"
+        ev_refused "$why" "$m" || return 1
+    done
+    ev_case; ev_craft filter3 "$still"
+    ev_refused "filter the encoder does not write" "$m" || return 1
+    for how in "gif-palette:GIF header" "gif-comment:frame header" "gif-subblock:decode to the stated size"; do
+        why=${how#*:}; how=${how%%:*}
+        ev_case; ev_craft "$how" "$gif"
+        ev_refused "$why" "$m" || return 1
+    done
+    # the manifest states a size the image does not have
+    ev_case; sed -i.bak 's/^\(file [^ ]*-still.png [0-9]* [0-9a-f]* png \)[0-9]*x/\1999x/' "$m"; rm "$m.bak"
+    ev_refused "PNG header" "$m" || return 1
+    ev_case; ev_craft ztxt "$still" evidencetestuser
+    LOGNAME=evidencetestuser ev_refused "chunks are not exactly" "$m" || return 1
+    ev_case; printf 'x' >> "$gif"
+    ev_refused "digest differs" "$m" || return 1
+    # the same size, one byte changed
+    ev_case; python3 -I -c 'import sys; p = sys.argv[1]; d = bytearray(open(p, "rb").read()); d[-2] ^= 1; open(p, "wb").write(d)' "$gif"
+    ev_refused "digest differs" "$m" || return 1
+    ev_case; PINS_EVIDENCE_BUDGET=1000 ev_refused "over the budget of 1000 bytes" "$m" || return 1
+    ev_case; sed -i.bak 's/^budget .*/budget 1000/' "$m"; rm "$m.bak"
+    ev_refused "over the budget of 1000 bytes" "$m" || return 1
+    # game and store data, by name: named after the manifest, or listed in it
+    # (ev_st_manifest lists each kind), and by content, as the still
+    local name content
+    for name in game.pak trace.q2r manifest.txt world-000000.tga; do
+        case $name in
+            *.pak) content='PACK';; *.q2r) content='Q2REFREC';;
+            manifest.txt) content='world-000000.tga soft 640x480';; *) content='data';;
+        esac
+        ev_case; printf '%s\n' "$content" > "$d/$name"
+        ev_refused "not one of the files of this set" "$m" "$d/$name" || return 1
+        ev_list "$m" "$d/$name" png
+        ev_refused "not the ones evidence writes" "$m" || return 1
+        ev_case; ev_craft content "$still" "$content"
+        ev_refused "not a whole PNG" "$m" || return 1
+    done
+}
+ev_st_identity() {
+    # in the pixels of a valid PNG: the raw bytes hold the user name, and a home path
+    ev_case; ev_craft pixels "$still" evidencetestuser
+    LOGNAME=evidencetestuser ev_refused "host name, user name or home path" "$m" || return 1
+    ev_case; ev_craft pixels "$still" "$(printf '/%s/' Users)nobody"
+    ev_refused "absolute home path" "$m" || return 1
+    # in the manifest: a set made for a card that is the user name
+    ev_case
+    local q=evidencetestuser-c0ffee000000-synthetic-pattern
+    ev_py synth --out "$PINS_EVIDENCE_DIR/$q" --prefix "$q" --size 32x24x2 --meta card=evidencetestuser \
+        --meta commit=c0ffee000000 --meta 'command=pins.sh evidence --synthetic --card evidencetestuser' >/dev/null
+    LOGNAME=evidencetestuser ev_refused "host name, user name or home path" "$PINS_EVIDENCE_DIR/$q/$q-evidence.txt" || return 1
+    # in the asset names: an identity string that spans the card and the commit (the file lines carry the names)
+    ev_case synth
+    LOGNAME=T1-c0ffee000000 ev_refused "the manifest holds a host name, user name or home path" "$m" || return 1
+}
+# ev_variants <manifest> [<regex> <replacement> <reason>]...: every variant of the
+# manifest (the first match of the regex, multi-line, replaced; "@md" puts
+# Markdown-active text at the end of each line in turn) must be refused by the
+# manifest parser of evidence-publish with the reason, printing none of it
+ev_variants() {
+    python3 -I -c 'import re, sys
+sys.path.insert(0, sys.argv[1]); import evidence as e
+base = open(sys.argv[2]).read(); a = sys.argv[3:]; bad = 0
+md = "x` @team <img src=x> [l](https://example.invalid/a)"
+lines = base[:-1].split("\n"); out = []
+for pat, rep, why in zip(a[0::3], a[1::3], a[2::3]):
+    if pat == "@md":
+        out += [("Markdown at the end of line %d" % (i + 1), "\n".join(l + md * (j == i) for j, l in enumerate(lines)) + "\n", why) for i in range(len(lines))]
+    else:
+        out.append((pat, re.sub(pat, rep, base, count=1, flags=re.M), why))
+for what, text, why in out:
+    try:
+        if text == base:
+            raise ValueError("changed nothing")
+        e.parse_manifest(text.encode("utf-8"))
+        msg = "accepted"
+    except SystemExit as x:
+        msg = str(x)
+        if "refused: " in msg and why in msg and not any(s in msg for s in ("example.invalid", "@team", "<img")):
+            continue
+    except ValueError as x:
+        msg = str(x)
+    print("  FAIL: the manifest variant %r must be refused with %r: %s" % (what, why, msg), file=sys.stderr); bad = 1
+sys.exit(bad)' "$root/scripts/pins" "$@"
+}
+ev_st_manifest() {
+    # end to end: a pin-store manifest line, free text, Markdown in a field
+    ev_case; printf 'world-000000.tga soft 640x480\n' >> "$m"
+    ev_refused "not a line evidence writes" "$m" || return 1
+    ev_case; printf 'note free text\n' >> "$m"
+    ev_refused "not a line evidence writes" "$m" || return 1
+    ev_case; sed -i.bak 's/^renderer soft$/renderer soft[l](https:\/\/example.invalid\/a)/' "$m"; rm "$m.bak"
+    ev_refused "not a line evidence writes" "$m" || return 1
+    # the parser, one variant at a time: Markdown-active text in every field,
+    # values and combinations the builder cannot write, and the form
+    ev_case
+    local s; s=$(sed -n 's/^file \([^ ]*-still.png\) \([0-9]*\) \([0-9a-f]*\) .*/\1 \2 \3/p' "$m")
+    local listed=() n many=""
+    for n in $(seq 10 57); do many="${many}score world-0000$n.tga 0.000000 0.000000 ok"$'\n'; done
+    for n in game.pak game.pk3 game.zip game.dm2 intro.cin trace.q2r manifest.txt world-000000.tga engine.log timedemo.txt complete incomplete; do
+        listed+=('\Z' "file $n 5 ${s##* } png 1x1 1/1"$'\n' "not the ones evidence writes")
+    done
+    ev_variants "$m" @md '' 'refused' \
+        '\Z' $'world-000000.tga soft 640x480\n' 'not a line evidence writes' \
+        '\Z' $'note free text\n' 'not a line evidence writes' \
+        '^renderer soft$' 'renderer Soft' 'not a line evidence writes' \
+        '^summary .*' 'summary frames=2 extra' 'not a line evidence writes' \
+        '^score world-000000.tga .*' 'score world-000000.tga 1e-5 - ok' 'not a line evidence writes' \
+        '^score world-000000.tga (\S+) (\S+) \S+' 'score world-000000.tga \1 \2 bad' 'not a line evidence writes' \
+        '^commit .*' 'commit C0FFEE000000' 'not a line evidence writes' \
+        ' 1/1$' ' 1/9' 'not a line evidence writes' \
+        '^(file \S+ )\d+' '\g<1>x' 'not a line evidence writes' \
+        '^card .*\n' '\g<0>\g<0>' 'not a line evidence writes' \
+        '^ref-caption .*' 'ref-caption REFERENCE soft' 'do not agree' \
+        '^cand-caption .*' 'cand-caption CANDIDATE gl1' 'do not agree' \
+        '^candidate world/soft/' 'candidate world/gl1/' 'do not agree' \
+        '^candidate world/' 'candidate skywater/' 'do not agree' \
+        '^reference world/' 'reference skywater/' 'do not agree' \
+        '^frames 2$' 'frames 3' 'do not agree' \
+        '^worst-frame .*' 'worst-frame world-000009.tga' 'do not agree' \
+        '^clip-frames 2$' 'clip-frames 3' 'do not agree' \
+        '^diff-gain 8$' 'diff-gain 9' 'do not agree' \
+        '^clip-delay-ms 500$' 'clip-delay-ms 501' 'do not agree' \
+        '^budget .*' 'budget exempt: a size-limit probe' 'do not agree' \
+        ' --card T1$' ' --card T2' 'do not agree' \
+        '^card T1$' 'card T2' 'do not agree' \
+        '^command pins.sh evidence soft world' 'command pins.sh evidence gl1 world' 'do not agree' \
+        '^command pins.sh evidence soft world' 'command pins.sh evidence soft skywater' 'do not agree' \
+        '^command .*' '\g<0> --ref soft' 'do not agree' \
+        '^command .*' '\g<0> --cand-id other' 'do not agree' \
+        '^command .*' '\g<0> --ref-id other' 'do not agree' \
+        '^command .*' '\g<0> --bogus 1' 'command is not one' \
+        '^command .*' '\g<0> --run 0' 'command is not one' \
+        '^command .*' '\g<0> --card' 'command is not one' \
+        '^summary .*\n' '' 'does not hold exactly the fields' \
+        '^(card .*\n)(commit .*\n)' '\2\1' 'does not hold exactly the fields' \
+        '^(file \S+-still.png .*\n)(file .*\n)' '\2\1' 'not the ones evidence writes' \
+        '^(file \S+-still.png \d+ \S+ )png' '\1apng' 'not the ones evidence writes' \
+        '^(file \S+-still.png \d+ \S+ png \d+x\d+ 1/1\n)' '' 'not the ones evidence writes' \
+        '^(summary .*\n)(score .*\n)' '\1\2\2' 'do not agree' \
+        '^(score .*\n)((?:score .*\n)+)(file .*\n)' '\2\3\1' 'not in the form' \
+        '\n' $'\r\n' 'line endings' \
+        '\n\Z' '' 'line endings' \
+        '\Z' $'\xc3\xa9\n' 'not plain ASCII' \
+        '^pins-evidence 1$' 'pins-evidence 2' 'does not start with' \
+        '^frames 2\nclip-frames 2\n((?:.*\n){5})' "frames 50"$'\n'"clip-frames 49"$'\n''\1'"$many" 'do not agree' \
+        "${listed[@]}" || return 1
+    ev_case synth
+    ev_variants "$m" @md '' 'refused' \
+        '^clip-delay-ms 125$' 'clip-delay-ms 500' 'do not agree' \
+        '^card T1$' 'card T2' 'do not agree' \
+        '^command .*' '\g<0> --noise 5' 'do not agree' \
+        '^(command .*)(\n(?:.*\n)*?)budget .*' '\1 --noise 5\2budget exempt: a size-limit probe' 'do not agree' \
+        '^budget .*' 'budget exempt: a size-limit probe' 'do not agree' \
+        '^command pins.sh evidence --synthetic' 'command pins.sh evidence soft world' 'does not hold exactly the fields' \
+        '^(content .*\n)' '\1score world-000000.tga 0.1 0.1 ok\n' 'does not hold exactly the fields' || return 1
+}
+ev_st_fail_closed() {
+    # an uploader that fails is a failure, and a crash of the stage step is a refusal
+    ev_case; printf '#!/bin/sh\nexit 1\n' > "$tmp/fail-upload"; chmod +x "$tmp/fail-upload"
+    local rep
+    ev_td
+    if rep=$( (TMPDIR="$tmp/td" PINS_EVIDENCE_UPLOADER="$tmp/fail-upload" cmd_evidence_publish "$m") 2>&1 ); then ev_fail "a failing uploader must fail the publish"; return 1; fi
+    case $rep in *"the upload failed"*) ;; *) ev_fail "a failing upload must say so: $rep"; return 1;; esac
+    ev_td_empty "a failing upload" || return 1
+    mkdir -p "$tmp/st"
+    if rep=$(ev_py stage --root "$PINS_EVIDENCE_DIR" --store "$PINS_STORE" --manifest "$m" --stage "$tmp/no-such-dir" \
+        --repo example/repo --markdown "$tmp/st/md" 2>&1); then ev_fail "stage into a missing folder must fail"; return 1; fi
+    case $rep in *"refused: unexpected FileNotFoundError; nothing was staged") ;; *) ev_fail "a crash must be a refusal that prints no path: $rep"; return 1;; esac
+    : > "$tmp/st/x"
+    if rep=$(ev_py stage --root "$PINS_EVIDENCE_DIR" --store "$PINS_STORE" --manifest "$m" --stage "$tmp/st" \
+        --repo example/repo --markdown "$tmp/st/md" 2>&1); then ev_fail "stage into a used folder must fail"; return 1; fi
+    case $rep in *"stage folder is not empty"*) ;; *) ev_fail "a used stage folder: $rep"; return 1;; esac
+    if rep=$(ev_py stage --root "$PINS_EVIDENCE_DIR" --store "$PINS_STORE" --manifest "$m" --stage "$tmp/st" \
+        --repo 'example/repo](x' --markdown "$tmp/st/md" 2>&1); then ev_fail "a bad repository must fail"; return 1; fi
+    case $rep in *"not owner/name"*) ;; *) ev_fail "a bad repository: $rep"; return 1;; esac
+    if rep=$( (PINS_EVIDENCE_REPO='example/repo x' cmd_evidence_publish "$m") 2>&1 ); then ev_fail "a bad PINS_EVIDENCE_REPO must fail"; return 1; fi
+    case $rep in *"cannot tell the GitHub repository"*) ;; *) ev_fail "a bad PINS_EVIDENCE_REPO: $rep"; return 1;; esac
+    [ ! -s "$tmp/uploaded" ] || ev_fail "a failed publish uploaded" || return 1
+}
+ev_st_stage_list() {
+    local s="$tmp/sl" bad
+    ev_sl() { rm -rf "${s:?}"; mkdir "$s"; printf 'a' > "$s/a-still.png"; printf 'bb' > "$s/a-evidence.txt"; }
+    ev_sl; ev_stage_list "$s" || ev_fail "a stage folder of an image and a manifest must list: $ev_why" || return 1
+    [ ${#ev_files[@]} -eq 2 ] && [ "$ev_total" -eq 3 ] || ev_fail "the listing must count 2 files and 3 bytes: ${ev_files[*]+"${ev_files[*]}"} $ev_total" || return 1
+    for bad in link newline txt hidden dash dir one; do
+        ev_sl
+        case $bad in
+            link) ln -s "$s/a-still.png" "$s/b-still.png";; newline) printf x > "$s/b"$'\n'"c.png";;
+            txt) printf x > "$s/notes.txt";; hidden) printf x > "$s/.b.png";; dash) printf x > "$s/-b.png";;
+            dir) mkdir "$s/b.png";; one) rm "$s/a-still.png";;
+        esac
+        if ev_stage_list "$s"; then ev_fail "a stage folder with $bad must not list"; return 1; fi
+        case $ev_why in *"should not"*|*"no image and manifest"*) ;; *) ev_fail "stage folder with $bad: $ev_why"; return 1;; esac
+    done
+    # publish acts on that refusal: a file planted in the stage folder after the stage step
+    ev_case
+    ( ev_py() { python3 -I "$root/scripts/pins/evidence.py" "$@" && printf x > "$stage/.planted.png"; }
+      ev_refused "the stage folder holds a file it should not" "$m" ) || return 1
+}
+# the gh path, through a stub gh first on PATH (never the real one): an
+# existing pre-release, -R, and -- before the files; and a release that is
+# not a pre-release refuses before any upload
+ev_st_gh() {
+    mkdir -p "$tmp/bin"
+    printf '%s\n' '#!/bin/sh' "echo \"\$*\" >> '$tmp/gh-calls'" \
+        'case "$1 $2" in "release view") echo "${GH_STUB_PRE:-true}";; "release upload") ;; *) exit 9;; esac' > "$tmp/bin/gh"
+    chmod +x "$tmp/bin/gh"
+    ev_case; : > "$tmp/gh-calls"
+    ( PATH="$tmp/bin:$PATH"; unset PINS_EVIDENCE_UPLOADER; [ "$(command -v gh)" = "$tmp/bin/gh" ] || exit 1
+      cmd_evidence_publish "$m" >/dev/null 2>&1 ) || ev_fail "publish through gh must pass: $(cat "$tmp/gh-calls")" || return 1
+    grep -q "^release view pr-evidence -R example/repo --json isPrerelease" "$tmp/gh-calls" || ev_fail "publish must ask gh whether pr-evidence is a pre-release" || return 1
+    grep -q "^release upload pr-evidence -R example/repo -- [^-]" "$tmp/gh-calls" || ev_fail "the gh upload must name the repository and put -- before the files: $(cat "$tmp/gh-calls")" || return 1
+    ev_case; : > "$tmp/gh-calls"; ev_td
+    local rep
+    if rep=$( (PATH="$tmp/bin:$PATH"; unset PINS_EVIDENCE_UPLOADER; [ "$(command -v gh)" = "$tmp/bin/gh" ] || exit 0
+        TMPDIR="$tmp/td" GH_STUB_PRE=false cmd_evidence_publish "$m") 2>&1 ); then ev_fail "a release that is not a pre-release must be refused"; return 1; fi
+    case $rep in *"is not a pre-release"*) ;; *) ev_fail "a release that is not a pre-release: $rep"; return 1;; esac
+    # the refusal comes from die inside the gh helper; the staged set must still go
+    ev_td_empty "a refusal of the gh helper" || return 1
+    if grep -q '^release upload' "$tmp/gh-calls"; then ev_fail "a release that is not a pre-release got an upload"; return 1; fi
+}
+ev_st_noise() {
+    ev_case noise
+    local rep; rep=$(cmd_evidence_publish "$m" 2>/dev/null) || ev_fail "publish of the noise probe must pass: $rep" || return 1
+    ev_count 2 "the noise probe has one image and the manifest" || return 1
+    case $rep in *"![synthetic: clip, 1 frames at 500 ms each](https://"*) ;; *) ev_fail "noise Markdown: $rep"; return 1;; esac
+    ev_variants "$m" '^command (.*) --noise 1000$' 'command \1' 'do not agree' \
+        '^budget .*' 'budget 4000000' 'do not agree' || return 1
+    ev_case noise
+    PINS_EVIDENCE_BUDGET=1000 ev_refused "over the budget of 1000 bytes" "$m" || return 1
+}
+ev_st_evidence() {
+    local diff="$tmp/framediff" a="$PINS_STORE/world/soft/aaaa-1" b="$PINS_STORE/world/soft/aaaa-1-r2" i
+    mkdir -p "$a" "$b"
+    for i in 0 1 2; do "$diff" --gen "$a/world-00000$i.tga" 64 48 "$i"; cp "$a/world-00000$i.tga" "$b/"; done
+    "$diff" --perturb "$a/world-000001.tga" "$b/world-000001.tga" 40
+    touch "$a/complete" "$b/complete"
+    local rep; rep=$(cmd_evidence soft world --ref soft --ref-id aaaa-1 --cand-id aaaa-1-r2 --card T1) || ev_fail "evidence over two fixture pins must pass: $rep" || return 1
+    local o="$PINS_EVIDENCE_DIR/T1-aaaa-soft-world"
+    [ -f "$o/T1-aaaa-soft-world-still.png" ] && [ -f "$o/T1-aaaa-soft-world-clip.png" ] && [ -f "$o/T1-aaaa-soft-world-clip.gif" ] || ev_fail "evidence must write the still, the clip and the GIF: $(ls "$o")" || return 1
+    grep -q '^worst-frame world-000001.tga$' "$o/T1-aaaa-soft-world-evidence.txt" || ev_fail "the still must show the worst frame" || return 1
+    grep -q '^reference world/soft/aaaa-1$' "$o/T1-aaaa-soft-world-evidence.txt" || ev_fail "the manifest must name the pins relative to the store" || return 1
+    if grep -qF "$tmp" "$o"/*; then ev_fail "an output holds the scratch path"; return 1; fi
+    ls "$b" | grep -qv -e '\.tga$' -e '^complete$' && { ev_fail "evidence wrote into the pin store"; return 1; }
+    [ "$(ls "$PINS_STORE")" = world ] || ev_fail "evidence wrote into the pin store: $(ls "$PINS_STORE")" || return 1
+    ev_td
+    rep=$( (TMPDIR="$tmp/td" PINS_EVIDENCE_DIR="$PINS_STORE/ev" cmd_evidence soft world --ref soft --ref-id aaaa-1 --cand-id aaaa-1-r2) 2>&1 ) &&
+        { ev_fail "an evidence folder inside the store must be refused"; return 1; }
+    case $rep in *"inside the pin store"*) ;; *) ev_fail "an evidence folder inside the store: $rep"; return 1;; esac
+    ev_td_empty "a refused evidence folder" || return 1
+    rep=$( (cmd_evidence soft world --ref soft --ref-id aaaa-1 --cand-id aaaa-1-r2 --card 'a/b') 2>&1 ) && { ev_fail "a card with a slash must be refused"; return 1; }
+    case $rep in *"--card must match"*) ;; *) ev_fail "a card with a slash: $rep"; return 1;; esac
+    rep=$( (cmd_evidence soft world --ref soft --ref-id aaaa-1 --cand-id -aaaa) 2>&1 ) && { ev_fail "a pin id starting with '-' must be refused"; return 1; }
+    case $rep in *"--cand-id must be a pin directory name"*) ;; *) ev_fail "a pin id starting with '-': $rep"; return 1;; esac
+    rm -rf "${a:?}" "${b:?}" "${PINS_EVIDENCE_DIR:?}/T1-aaaa-soft-world"
+}
+
+cmd_evidence_selftest() {
+    command -v python3 >/dev/null 2>&1 || { echo "evidence selftest: python3 not found, skipped"; return 0; }
+    # the self-test must not depend on, or act on, the caller's environment: a
+    # git hook's GIT_INDEX_FILE or GIT_DIR, or any PINS_ setting
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR \
+        GIT_NAMESPACE GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM
+    unset PINS_EVIDENCE_BUDGET PINS_EVIDENCE_UPLOADER PINS_EVIDENCE_REPO PINS_EVIDENCE_DIR \
+        PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF PINS_TRACE
+    ev_py selftest
+    scratch_outside_git pins-ev
+    trap 'rm -rf "$tmp"' EXIT
+    export PINS_STORE="$tmp/store" PINS_EVIDENCE_DIR="$tmp/ev" PINS_EVIDENCE_REPO=example/repo PINS_EVIDENCE_UPLOADER="$tmp/fake-upload"
+    # the stand-in uploader: "<it> <repo> <tag> -- <file>..."; keeps a copy of what it was given
+    printf '%s\n' '#!/bin/sh' '[ "$3" = -- ] || { echo "fake-upload: no -- before the files" >&2; exit 3; }' \
+        "echo \"\$1 \$2\" > '$tmp/upload-args'; shift 3" "for f; do echo \"\$f\" >> '$tmp/uploaded'; cp \"\$f\" '$tmp/got/'; done" > "$tmp/fake-upload"
+    chmod +x "$tmp/fake-upload"
+    # the templates: a synthetic set, and a built set from "evidence" with no option beyond --card,
+    # over a fixture store holding the default reference (gl1) and this checkout's candidate
+    local diff="$tmp/framediff" id i a b q=T1-c0ffee000000-synthetic-pattern
+    cc -O2 -o "$diff" "$root/scripts/pins/framediff.c" -lm
+    id=$(run_id world 1); a="$PINS_STORE/world/gl1/ref-1"; b="$PINS_STORE/world/soft/$id"
+    mkdir -p "$a" "$b" "$tmp/tpl/build" "$tmp/tpl/synth"
+    for i in 0 1; do "$diff" --gen "$a/world-00000$i.tga" 32 24 "$i"; cp "$a/world-00000$i.tga" "$b/"; done
+    "$diff" --perturb "$a/world-000001.tga" "$b/world-000001.tga" 40
+    touch "$a/complete" "$b/complete"
+    cmd_evidence soft world --card T1 >/dev/null || die "evidence selftest failed: card_only (evidence soft world --card T1)"
+    mv "$PINS_EVIDENCE_DIR"/* "$tmp/tpl/build/"
+    rm -rf "${PINS_STORE:?}/world/gl1" "${b:?}"
+    ev_py synth --out "$tmp/tpl/synth/$q" --prefix "$q" --size 96x64x4 --meta card=T1 --meta commit=c0ffee000000 \
+        --meta 'command=pins.sh evidence --synthetic --card T1' >/dev/null
+    q=T1-c0ffee000000-synthetic-noise1000
+    ev_py synth --out "$tmp/tpl/noise/$q" --prefix "$q" --noise 1000 --meta card=T1 --meta commit=c0ffee000000 \
+        --meta 'command=pins.sh evidence --synthetic --card T1 --noise 1000' >/dev/null
+    export PINS_DIFF="$diff"
+    local c failed=""
+    for c in card_only publish_ok args place content identity manifest fail_closed stage_list gh noise evidence; do
+        if ( set -e; "ev_st_$c" ); then echo "  ok   $c"; else echo "  FAIL $c"; failed="$failed $c"; fi
+    done
+    [ -z "$failed" ] || die "evidence selftest failed:$failed"
+    echo "evidence selftest: ok"
 }
 
 # ---- make-demo (TASK70) ---------------------------------------------------
@@ -1167,21 +1830,26 @@ st_demo_sum() { # TASK70: a demo beside the binary is part of the pin id
     rm -rf "$tmp/baseq2"
 }
 
-cmd_selftest() {
-    # the selftest must not depend on, or act on, the caller's environment
-    unset PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF PINS_TRACE
-    # the scratch store must be somewhere check_store accepts: not inside a git
-    # work tree (TMPDIR may be in one), so try TMPDIR, then /tmp, then /var/tmp
+# scratch_outside_git <name>: sets tmp to a fresh directory that check_store
+# accepts, not inside a git work tree (TMPDIR may be in one), so it tries
+# TMPDIR, then /tmp, then /var/tmp
+scratch_outside_git() {
     local base t
     tmp=""
     for base in "${TMPDIR:-/tmp}" /tmp /var/tmp; do
         [ -d "$base" ] || continue
-        t=$(mktemp -d "$base/pins.XXXXXX") || continue
+        t=$(mktemp -d "$base/$1.XXXXXX") || continue
         t=$(cd "$t" && pwd -P)
         if ! git -C "$t" rev-parse --is-inside-work-tree >/dev/null 2>&1; then tmp=$t; break; fi
         rm -rf "${t:?}"
     done
     [ -n "$tmp" ] || die "no scratch directory outside a git work tree under TMPDIR, /tmp or /var/tmp"
+}
+
+cmd_selftest() {
+    # the selftest must not depend on, or act on, the caller's environment
+    unset PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF PINS_TRACE
+    scratch_outside_git pins
     trap 'rm -rf "$tmp"' EXIT
     export PINS_STORE="$tmp/store"
     diff=$(difftool)
@@ -1218,5 +1886,8 @@ case "${1:-}" in
     make-demo) [ $# -ge 2 ] || die "usage: pins.sh make-demo <name> [--replace]"; shift; cmd_make_demo "$@";;
     list)     cmd_list;;
     selftest) cmd_selftest;;
+    evidence) shift; cmd_evidence "$@";;
+    evidence-publish) shift; cmd_evidence_publish "$@";;
+    evidence-selftest) cmd_evidence_selftest;;
     *) usage; exit 1;;
 esac

@@ -408,7 +408,7 @@ differs from the text above, this list is what the tree does.
 - **Readback.** The row and channel conversion of `glReadPixels` is
   `mgl_convert_readback` in `mgl_raster.c`, host-tested on a 3 x 2 image
   that differs in every row, column and channel at alignments 1, 4 and 8,
-  padding included. On real frames the row order is now proven too: 19 of
+  padding included. On real frames the row order is now proven too: 18 of
   the 23 `hud2d` frames are byte-identical to `gl1`'s, status bar at the
   bottom.
 - **Not yet (S2b):** the depth test and depth state, culling, stencil,
@@ -422,7 +422,7 @@ differs from the text above, this list is what the tree does.
 
 Three `gl1-metal` records of commit `e0c57896` against the `gl1`
 reference `110a25ae2d26-2096632597` at the defaults (0.02, 0.005),
-1-minute load 105 to 134: 19 frames exact (score 0, bad 0), frame 3 at
+1-minute load 105 to 134: 18 frames exact (score 0, bad 0), frame 3 at
 score 0.000647 and bad 0, and frames 5, 8, 11 and 16 over at score
 0.003639 to 0.007440 and bad 0.061862 each, identical in all three
 records. The three records are identical to each other, and to the
