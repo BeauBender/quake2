@@ -153,6 +153,20 @@ n=$(grep -rln 'randk_seed_fixed' src | grep -v -e '^src/common/shared/rand\.c$' 
 [ -z "$n" ] || bad "randk_seed_fixed is called outside src/client/vid/vid.c: $n"
 grep -q 'if (CL_PinsSeed(&seed))' src/client/vid/vid.c || bad "vid.c does not guard randk_seed_fixed with CL_PinsSeed"
 [ "$(grep -c 'randk_seed_fixed' src/client/vid/vid.c)" = 1 ] || bad "vid.c must call randk_seed_fixed once"
+# and the call sits inside the guard's braces in R_BeginRegistration
+n=$(awk '
+	/^R_BeginRegistration\(/ { body = 1; next }
+	body && /^}/ { body = 0 }
+	!body { next }
+	g == 0 && /^[ \t]*if \(CL_PinsSeed\(&seed\)\)[ \t]*$/ { g = 1; next }
+	g == 1 { if (/^[ \t]*\{[ \t]*$/) { g = 2; d = 1; next } g = 3 }
+	g == 2 {
+		if (/randk_seed_fixed\(seed\);/) n++
+		d += gsub(/\{/, "{") - gsub(/\}/, "}")
+		if (d <= 0) g = 3
+	}
+	END { print n + 0 }' src/client/vid/vid.c)
+[ "$n" = 1 ] || bad "vid.c: randk_seed_fixed(seed) is not inside the braces of R_BeginRegistration's CL_PinsSeed guard"
 for objs in SERVER_OBJS_ GAME_OBJS_; do
 	n=$(awk -v v="$objs" '$1 == v { on = 1; next } on && !/\\$/ { on = 0 } on && /vid\/vid\.o|cl_pins\.o/ { print }' Makefile)
 	[ -z "$n" ] || bad "Makefile: $objs links vid.o or cl_pins.o: $n"
