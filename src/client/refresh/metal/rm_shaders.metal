@@ -216,6 +216,39 @@ rm_fragment_world_lm(rm_varying3d in [[stage_in]],
 	return float4(c.r, c.g, c.b, c.a);
 }
 
+/*
+ * alias (N7): the vertices gl1 lerps and lights on the CPU, in the shim's
+ * layout (rm_avert_t: the position with w = 1, the texture coordinate and
+ * the colour bytes as the shim normalises them), so the vertex function
+ * is the shim's on the same values; the fragment functions are
+ * rm_fragment_world_color (GL_MODULATE of the vertex colour and the skin)
+ * and rm_fragment_color (a shell, untextured).
+ */
+struct rm_avert
+{
+	float4 pos;
+	float2 uv;
+	float2 pad;
+	float4 color;
+};
+
+vertex rm_varying3d
+rm_vertex_alias(uint vid [[vertex_id]],
+		const device rm_avert *v [[buffer(0)]],
+		constant rm_uniforms3d &u [[buffer(1)]])
+{
+	rm_varying3d out;
+	float4 p = u.mvp * v[vid].pos;
+
+	p.z = mtl_gl_clip_z(p.z, p.w);
+	out.position = p;
+	out.uv = v[vid].uv;
+	out.lmuv = float2(0.0f);
+	out.color = v[vid].color;
+	out.pt = float4(0.0f);
+	return out;
+}
+
 /* color: one untextured colour per draw, carried as a vertex colour as the shim's glColor4f is; positions with w = 1 */
 vertex rm_varying3d
 rm_vertex_color(uint vid [[vertex_id]],

@@ -52,6 +52,13 @@ R_InitLight(void)
 	minlight_set = rm_minlight_table(gl1_minlight->value, minlight);
 }
 
+/* the table when gl1 uses it (gl_state.minlight_set), else NULL: the alias models' colours (N7) */
+const byte *
+R_Minlight(void)
+{
+	return minlight_set ? minlight : NULL;
+}
+
 /* from gl1_light.c */
 void
 R_SetCacheState(msurface_t *surf)

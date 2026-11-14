@@ -77,7 +77,6 @@ gl1_stereo_convergence
 gl1_stereo_separation
 gl1_texturealphamode
 gl1_texturesolidmode
-gl1_ztrick
 gl3_libgl
 gl3_show_draw_stats
 gl4_colorlight
@@ -87,7 +86,6 @@ gl_finish
 gl_modulate
 gl_nobind
 gl_overbrightbits
-gl_showbbox
 gl_showtris
 graphheight
 graphscale
@@ -99,7 +97,6 @@ gyro_calibration_a
 gyro_calibration_x
 gyro_calibration_y
 gyro_calibration_z
-hand
 host_speeds
 hostname
 hostport
@@ -136,10 +133,8 @@ qport
 r_bloom
 r_clear
 r_cull
-r_drawentities
 r_drawworld
 r_dspeeds
-r_lerpmodels
 r_lightlevel
 r_lightmap
 r_lockpvs
