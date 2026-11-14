@@ -1200,16 +1200,39 @@ rm_lm_samples_ok(long ofs, long extent0, long extent1, int nummaps, long lightle
 int
 rm_lp_coords(float s, float t, short smin, short tmin, short sext, short text, int *ds, int *dt)
 {
-	/* each test fails for a NaN; the bounds are shorts, exact in float */
-	if (!(s >= (float)smin) || !(s <= (float)smin + sext) ||
-		!(t >= (float)tmin) || !(t <= (float)tmin + text))
+	long long is, it, ls, lt;
+
+	/*
+	 * gl1's conversion to int is defined when the truncation fits an
+	 * int (C99 6.3.1.4): -2^31 - 1 < s < 2^31, exact in double; each
+	 * test fails for a NaN and an infinity
+	 */
+	if (!((double)s > -2147483649.0 && (double)s < 2147483648.0) ||
+		!((double)t > -2147483649.0 && (double)t < 2147483648.0))
 	{
 		return 0;
 	}
 
-	/* inside the bounds, the truncation of s is inside them too */
-	*ds = (int)s - smin;
-	*dt = (int)t - tmin;
+	/* gl1's four lines, in long long: the truncation and the differences cannot overflow */
+	is = (long long)s;
+	it = (long long)t;
+
+	if ((is < smin) || (it < tmin))
+	{
+		return 0;
+	}
+
+	ls = is - smin;
+	lt = it - tmin;
+
+	if ((ls > sext) || (lt > text))
+	{
+		return 0;
+	}
+
+	/* 0 .. sext and 0 .. text, which fit an int */
+	*ds = (int)ls;
+	*dt = (int)lt;
 
 	return 1;
 }

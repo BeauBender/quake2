@@ -1574,21 +1574,72 @@ test_lm_samples(void)
 }
 
 /*
+ * gl1's R_RecursiveLightPoint on one surface (gl1_light.c), its four
+ * lines with s, t already converted to int: the reference rm_lp_coords
+ * is compared with on inputs where that arithmetic is defined.
+ */
+static int
+gl1_lp_coords(int s, int t, short smin, short tmin, short sext, short text, int *ds, int *dt)
+{
+	if ((s < smin) || (t < tmin))
+	{
+		return 0;
+	}
+
+	*ds = s - smin;
+	*dt = t - tmin;
+
+	return !((*ds > sext) || (*dt > text));
+}
+
+static unsigned lp_rand_state = 0x2545f491u;
+
+static unsigned
+lp_rand(void)
+{
+	/* xorshift32: deterministic, the same sequence on every run */
+	lp_rand_state ^= lp_rand_state << 13;
+	lp_rand_state ^= lp_rand_state >> 17;
+	lp_rand_state ^= lp_rand_state << 5;
+	return lp_rand_state;
+}
+
+/*
+ * a coordinate within two units of lo or of hi in eighths (the edges and
+ * the fractions next to them), or anywhere in lo - 4 .. hi + 4 in quarters
+ */
+static float
+lp_rand_coord(int lo, int hi)
+{
+	unsigned mode = lp_rand() % 3;
+
+	if (mode < 2)
+	{
+		return (float)(mode ? hi : lo) + (float)((int)(lp_rand() % 33) - 16) * 0.125f;
+	}
+
+	return (float)(lo - 4) + (float)(lp_rand() % (unsigned)(((hi - lo) + 8) * 4)) * 0.25f;
+}
+
+/*
  * The light point's texture coordinates on one surface (rm_lp_coords):
- * inside, on each of the four edges, just and far outside each side,
+ * gl1's result inside, on each of the four edges, within one texture
+ * unit outside each edge (truncation toward zero puts -32.5 on -32 but
+ * 15.5 on 15) for negative and positive texturemins, and far outside;
  * NaN and the infinities in each coordinate, values near INT_MAX with a
  * negative texturemins (an int conversion first would wrap ds into the
- * extents), a negative extent; nothing written when refused.
+ * extents), the edges of the int range, a negative extent; nothing
+ * written when refused. Then a differential run against gl1's lines.
  */
 static void
 test_lp_coords(void)
 {
 	const float in = 2147483520.0f; /* the largest float below 2^31 */
-	int ds, dt;
+	int ds, dt, i, gds, gdt, mismatch, accepted;
 
 	/* inside: texturemins 16, -32, extents 64, 48 */
 	CHECK(rm_lp_coords(40.5f, -20.25f, 16, -32, 64, 48, &ds, &dt) && ds == 24 && dt == 12);
-	/* a negative coordinate truncates toward texturemins: -31.5 is -31, 1 past -32 */
+	/* a negative coordinate truncates toward zero: -31.5 is -31, 1 past -32 */
 	CHECK(rm_lp_coords(16, -31.5f, 16, -32, 64, 48, &ds, &dt) && ds == 0 && dt == 1);
 
 	/* each edge is inside */
@@ -1598,12 +1649,36 @@ test_lp_coords(void)
 	CHECK(rm_lp_coords(20, 16, 16, -32, 64, 48, &ds, &dt) && ds == 4 && dt == 48);
 	CHECK(rm_lp_coords(-30000, 0, -30000, 0, 0, 0, &ds, &dt) && ds == 0 && dt == 0);
 
-	/* outside each side, by the next float and by far; ds and dt untouched */
+	/* lower edge, positive texturemins 16: 15.5 and 15.99 truncate to 15 < 16, refused as gl1 */
 	ds = dt = 1234;
+	CHECK(!rm_lp_coords(15.5f, 0, 16, -32, 64, 48, &ds, &dt));
 	CHECK(!rm_lp_coords(nextafterf(16, 0), 0, 16, -32, 64, 48, &ds, &dt));
-	CHECK(!rm_lp_coords(nextafterf(80, 100), 0, 16, -32, 64, 48, &ds, &dt));
-	CHECK(!rm_lp_coords(20, nextafterf(-32, -100), 16, -32, 64, 48, &ds, &dt));
-	CHECK(!rm_lp_coords(20, nextafterf(16, 100), 16, -32, 64, 48, &ds, &dt));
+	CHECK(ds == 1234 && dt == 1234);
+	/* lower edge, negative texturemins -32: -32.5 and -32.99 truncate to -32, accepted with dt 0 */
+	CHECK(rm_lp_coords(20, -32.5f, 16, -32, 64, 48, &ds, &dt) && ds == 4 && dt == 0);
+	CHECK(rm_lp_coords(20, nextafterf(-33, 0), 16, -32, 64, 48, &ds, &dt) && ds == 4 && dt == 0);
+	CHECK(!rm_lp_coords(20, -33, 16, -32, 64, 48, &ds, &dt));
+	/* lower edge, texturemins 0: -0.5 truncates to 0, accepted; -1 refused */
+	CHECK(rm_lp_coords(-0.5f, 5, 0, 0, 16, 16, &ds, &dt) && ds == 0 && dt == 5);
+	CHECK(rm_lp_coords(5, nextafterf(-1, 0), 0, 0, 16, 16, &ds, &dt) && ds == 5 && dt == 0);
+	CHECK(!rm_lp_coords(-1, 5, 0, 0, 16, 16, &ds, &dt) && !rm_lp_coords(5, -1, 0, 0, 16, 16, &ds, &dt));
+	/* upper edge, positive end 80: 80.5 and 80.99 truncate to 80, ds 64 accepted; 81 refused */
+	CHECK(rm_lp_coords(80.5f, 0, 16, -32, 64, 48, &ds, &dt) && ds == 64 && dt == 32);
+	CHECK(rm_lp_coords(nextafterf(81, 0), 0, 16, -32, 64, 48, &ds, &dt) && ds == 64 && dt == 32);
+	CHECK(!rm_lp_coords(81, 0, 16, -32, 64, 48, &ds, &dt));
+	/* upper edge, end 16 from texturemins -32: 16.5 truncates to 16, dt 48 accepted; 17 refused */
+	CHECK(rm_lp_coords(20, 16.5f, 16, -32, 64, 48, &ds, &dt) && ds == 4 && dt == 48);
+	CHECK(!rm_lp_coords(20, 17, 16, -32, 64, 48, &ds, &dt));
+	/* upper edge, negative end -32 (texturemins -64, extent 32): -32.5 is -32, ds 32 accepted; -31.5 is -31, refused */
+	CHECK(rm_lp_coords(-32.5f, 0, -64, 0, 32, 0, &ds, &dt) && ds == 32 && dt == 0);
+	CHECK(!rm_lp_coords(-31.5f, 0, -64, 0, 32, 0, &ds, &dt));
+	/* the smallest texturemins: -32768.5 truncates to -32768, accepted; -32769 refused */
+	CHECK(rm_lp_coords(-32768.5f, 0, -32768, 0, 32767, 0, &ds, &dt) && ds == 0 && dt == 0);
+	CHECK(!rm_lp_coords(-32769, 0, -32768, 0, 32767, 0, &ds, &dt));
+	CHECK(rm_lp_coords(-1, 0, -32768, 0, 32767, 0, &ds, &dt) && ds == 32767 && dt == 0);
+
+	/* far outside each side; ds and dt untouched */
+	ds = dt = 1234;
 	CHECK(!rm_lp_coords(-1e6f, 0, 16, -32, 64, 48, &ds, &dt) && !rm_lp_coords(1e6f, 0, 16, -32, 64, 48, &ds, &dt));
 	CHECK(!rm_lp_coords(20, -1e6f, 16, -32, 64, 48, &ds, &dt) && !rm_lp_coords(20, 1e6f, 16, -32, 64, 48, &ds, &dt));
 	CHECK(ds == 1234 && dt == 1234);
@@ -1616,15 +1691,59 @@ test_lp_coords(void)
 	CHECK(!rm_lp_coords(20, -INFINITY, 16, -32, 64, 48, &ds, &dt));
 
 	/* near and past INT_MAX with texturemins -30000, extents 0 (the wrap the security review built) */
+	ds = dt = 1234;
 	CHECK(!rm_lp_coords(in, 0, -30000, 0, 0, 0, &ds, &dt) && !rm_lp_coords(0, in, 0, -30000, 0, 0, &ds, &dt));
 	CHECK(!rm_lp_coords(5e9f, 0, -30000, 0, 0, 0, &ds, &dt) && !rm_lp_coords(-in, 0, -30000, 0, 0, 0, &ds, &dt));
-	CHECK(!rm_lp_coords(-32768.5f, 0, -32768, 0, 32767, 0, &ds, &dt));
-	CHECK(rm_lp_coords(-1, 0, -32768, 0, 32767, 0, &ds, &dt) && ds == 32767 && dt == 0);
+	/* 2^31 does not fit an int, -2^31 does (and is below texturemins); either refused */
+	CHECK(!rm_lp_coords(2147483648.0f, 0, -32768, 0, 32767, 0, &ds, &dt));
+	CHECK(!rm_lp_coords(-2147483648.0f, 0, -32768, 0, 32767, 0, &ds, &dt));
+	CHECK(!rm_lp_coords(0, 2147483648.0f, 0, -32768, 0, 32767, &ds, &dt));
+	CHECK(!rm_lp_coords(0, -2147483648.0f, 0, -32768, 0, 32767, &ds, &dt));
+	CHECK(!rm_lp_coords(-3e9f, 0, -32768, 0, 32767, 0, &ds, &dt));
+	/* finite but past any integer type */
+	CHECK(!rm_lp_coords(1e30f, 0, 16, -32, 64, 48, &ds, &dt) && !rm_lp_coords(-1e30f, 0, 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(20, 1e30f, 16, -32, 64, 48, &ds, &dt) && !rm_lp_coords(20, -1e30f, 16, -32, 64, 48, &ds, &dt));
+	CHECK(ds == 1234 && dt == 1234);
 
 	/* a negative extent holds no point */
 	ds = dt = 1234;
 	CHECK(!rm_lp_coords(16, 0, 16, 0, -1, 0, &ds, &dt) && !rm_lp_coords(16, 0, 16, 0, 0, -1, &ds, &dt));
 	CHECK(ds == 1234 && dt == 1234);
+
+	/*
+	 * differential: 4000 deterministic points around surfaces of
+	 * texturemins -2048 .. 2047 and extents -16 .. 1007, where gl1's
+	 * conversion and differences are defined; the accept/reject and
+	 * ds, dt agree with gl1's lines on every one
+	 */
+	mismatch = 0;
+	accepted = 0;
+
+	for (i = 0; i < 4000; i++)
+	{
+		short smin = (short)((int)(lp_rand() % 4096) - 2048);
+		short tmin = (short)((int)(lp_rand() % 4096) - 2048);
+		short sext = (short)((int)(lp_rand() % 1024) - 16);
+		short text = (short)((int)(lp_rand() % 1024) - 16);
+		float s = lp_rand_coord(smin, smin + (sext < 0 ? 0 : sext));
+		float t = lp_rand_coord(tmin, tmin + (text < 0 ? 0 : text));
+		int r, g;
+
+		ds = dt = gds = gdt = -1;
+		r = rm_lp_coords(s, t, smin, tmin, sext, text, &ds, &dt);
+		g = gl1_lp_coords((int)s, (int)t, smin, tmin, sext, text, &gds, &gdt);
+
+		if ((r != g) || (r && ((ds != gds) || (dt != gdt))))
+		{
+			mismatch++;
+		}
+
+		accepted += r;
+	}
+
+	CHECK(mismatch == 0);
+	/* both outcomes come up often enough to mean something */
+	CHECK(accepted > 1000 && accepted < 3000);
 }
 
 /*

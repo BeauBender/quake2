@@ -1273,14 +1273,16 @@ What exists:
   without an entity). Its bound is in place for N7: the traced point
   lies on a node's plane, not on the face, and the loader bounds the
   texture vectors only through the face's own vertices, so the texture
-  coordinates can be anything; `rm_lp_coords` takes `ds`, `dt` only from
-  coordinates that are finite and inside `texturemins .. texturemins +
-  extents`, tested in float before the conversion to int (gl1 converts
-  first, which is undefined past the int range and can wrap the
-  difference past its checks). A point outside is a miss on that surface
-  and the walk goes on, as gl1's; unlike gl1's integer checks it refuses
-  the fraction of a texture unit outside an edge that truncation rounds
-  onto it.
+  coordinates can be anything; `rm_lp_coords` refuses a coordinate that
+  is not finite or whose truncation does not fit an int (where gl1's
+  conversion is undefined), then runs gl1's truncation and four checks
+  in 64-bit arithmetic, so no difference wraps past them. On every input
+  where gl1's arithmetic is defined it accepts the same points with the
+  same `ds`, `dt` (a point up to one texture unit outside an edge is
+  truncated onto it, as in gl1): there is no deviation from gl1 there,
+  and the host test compares the two on 4000 points around the edges.
+  A point outside is a miss on that surface and the walk goes on, as
+  gl1's.
 - **The light counts**: both loops over the refdef's dynamic lights take
   `rm_dlight_count` (clamped to `MAX_DLIGHTS`, which the client already
   caps) and `R_PushDlights` marks with `rm_dlight_bit` (an unsigned

@@ -173,15 +173,17 @@ R_PushDlights(void)
 /*
  * from gl1_light.c. The samples it reads are inside the lighting lump:
  * the loader checked every surface's run of styles with its extents
- * (rm_lm_samples_ok), and rm_lp_coords takes ds, dt only from texture
- * coordinates that are finite and inside texturemins .. texturemins +
- * extents before any conversion, so ds, dt are 0 .. extents (gl1
- * converts first and can wrap; a point outside is a miss on this
- * surface and the walk goes on, as gl1's). Unlike gl1's integer checks,
- * this refuses the fraction of a texture unit outside each edge that
- * truncation would round onto it. Not reached in N5: the only caller is
- * R_SetLightLevel(NULL), and R_LightPoint returns before the trace
- * without an entity; N7 calls it with one and inherits this bound.
+ * (rm_lm_samples_ok), and rm_lp_coords gives ds, dt of 0 .. extents:
+ * it refuses a coordinate that is not finite or whose truncation does
+ * not fit an int (gl1's conversion is undefined there), then runs gl1's
+ * truncation and checks in 64-bit arithmetic, so no difference wraps.
+ * On every input where gl1's arithmetic is defined it accepts the same
+ * points with the same ds, dt (a point within one texture unit outside
+ * an edge is truncated onto it, as in gl1); a point outside is a miss on
+ * this surface and the walk goes on, as gl1's. Not reached in N5: the
+ * only caller is R_SetLightLevel(NULL), and R_LightPoint returns before
+ * the trace without an entity; N7 calls it with one and inherits this
+ * bound.
  */
 static int
 R_RecursiveLightPoint(mnode_t *node, vec3_t start, vec3_t end)
