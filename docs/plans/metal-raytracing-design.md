@@ -159,3 +159,117 @@ green, pins as stated.
 
 Out of scope, decided after RT10 per the plan: path tracing (Phase G),
 global illumination beyond AO, RT for particles or beams.
+
+## 7. Measured device capabilities (TASK99)
+
+Measured with a throwaway Objective-C program (Metal and Foundation
+frameworks, built with `xcrun clang`, no window, no game data, not
+committed) on the bare-metal host: macOS 27.2.1 (26B131), arm64, default
+`MTLDevice` named **Apple M6**. Section 4's assumptions about the VM
+(paravirtual device, no ray tracing, apple5-class families) are not
+re-measured here; this is the physical-device column the gating needs.
+
+| Query | Apple M6 (physical) | Section 4 / plan statement for the VM |
+|---|---|---|
+| `supportsFamily` apple1 to apple9, metal3 | all true | VM: apple5-class, so apple6 and later false |
+| `supportsRaytracing` | true | false (forced off) |
+| `supportsRaytracingFromRender` | true | false |
+| `supportsPrimitiveMotionBlur` | true | not stated |
+| `supportsFunctionPointers`, `...FromRender`, `supportsDynamicLibraries` | true, true, true | not stated |
+| `readWriteTextureSupport` | tier 2 | not stated |
+| `argumentBuffersSupport` | tier 1 (see finding 4) | not stated |
+| `hasUnifiedMemory` | true | not stated |
+| `recommendedMaxWorkingSetSize` | 26,800,603,136 bytes (about 25 GiB) | not stated |
+| `maxBufferLength` | 20,100,448,256 bytes | not stated |
+| `maxThreadsPerThreadgroup` | 1024 x 1024 x 1024 (pipeline `maxTotalThreadsPerThreadgroup` 1024, `threadExecutionWidth` 32 for the ray kernel) | not stated |
+| `maxThreadgroupMemoryLength` | 32768 bytes | not stated |
+| Largest 2D RGBA8 private texture created | 32768 x 32768 (8192 and 16384 also ok) | not stated |
+| Stage-boundary counter sampling | supported (GPU timestamps for RT10 are possible) | not stated |
+| `supportsPullModelInterpolation`, barycentric coordinates, 32-bit float filtering, 32-bit MSAA, BC compression, `supportsQueryTextureLOD` | all true | not stated |
+
+End to end, one run: a one-triangle primitive acceleration structure
+(640 bytes) was built, wrapped in a one-instance instance acceleration
+structure, and a compute kernel (`intersector<triangle_data, instancing>`
+over `instance_acceleration_structure`, Metal Shading Language 3.1) cast
+two rays. The ray at (0.25, 0.25, -1) along +z returned hit distance
+1.000000 (expected 1.0) and the ray at (5, 5, -1) returned a miss
+(-1, expected); both command buffers finished with status completed and no
+error. The path works on the device, not only the flag.
+
+Build time of a primitive acceleration structure on a synthetic triangle
+soup (random 64-unit triangles in a 4096 x 4096 x 1024 box, unindexed,
+opaque, a choice of mine: section 1 expects 10k to 20k world triangles and
+a refit population of up to about 1 M alias triangles, so 10k, 20k, 50k
+and 200k were measured). Two invocations of the probe, seven builds each
+(fourteen runs); GPU time from `GPUEndTime - GPUStartTime`, wall time
+around commit to completion. `uptime` load averages (1, 5, 15 min) were
+4.27/3.17/2.79 before and 4.65/3.28/2.84 after the first invocation and
+4.36/3.24/2.83 after the second; another process was using the GPU
+(frame recording) the whole time.
+
+| Triangles | Structure bytes | Build scratch bytes | Build GPU ms, 14 runs | Build wall ms | Refit GPU ms (14 runs) |
+|---|---|---|---|---|---|
+| 10,000 | 937,728 | 251,584 | 2.77 to 2.94 | 3.10 to 4.44 | 0.07 to 0.25 |
+| 20,000 | 1,874,816 | 904,128 | 0.67 to 2.41 | 1.04 to 3.91 | 0.09 to 0.35 |
+| 50,000 | 4,762,560 | 1,857,984 | 1.33 to 4.84 | 1.66 to 5.40 | 0.16 to 0.63 |
+| 200,000 | 19,048,256 | 7,430,528 | 5.02 to 10.60 | 5.63 to 11.96 | not measured |
+
+The spread is a property of the measurement, not noise to average out: the
+two invocations differ by up to 3.5 times at the same size (20k: 0.67 ms
+in the first, 2.3 to 2.4 ms in the second; the 10k build is slower than
+the 20k build in the first), and within the second the first three 200k
+builds (10.6, 8.8, 7.1 ms) are slower than the following four (5.0 to
+5.1 ms). That pattern fits GPU clock and power-state ramping and
+contention with the other GPU client. Read the table as "a world-sized
+structure builds in under 5 ms, and a build of up to 200k triangles stays
+under about 12 ms wall, on a busy M6", not as a benchmark. The 10k to 20k
+figure matches the design's "under 4 MB" assumption: about 94 bytes per
+triangle on this soup (0.9 to 1.9 MB), though a real map has coherent
+geometry and will differ; RT1 measures that. Refit used the same
+descriptor with `MTLAccelerationStructureUsageRefit`, in place, and
+completed in well under 1 ms up to 50k triangles.
+
+Per-decision verdicts, section 4 and section 6, for this device:
+
+1. **apple6 and `supportsRaytracing` gates the compute path (TASK24):**
+   unchanged; true here. The M6 also satisfies the apple9 check, so this
+   host cannot exercise "compute path selected, render-stage not" (an M1
+   Max, apple7, does that). TASK24's T1 validation still needs an M1 Max.
+2. **apple9 and `supportsRaytracingFromRender` gates render-stage
+   intersection (TASK25):** unchanged; both true. This host is a valid
+   T2 device for TASK25.
+3. **Neither forces `r_rt_*` to 0 (TASK60 / RT8):** unchanged; this device
+   never takes the branch. The forced-off half stays VM-only, and on this
+   host it can only be tested by an override cvar that pretends the
+   capability is absent. Finding for the RT8 card: add such an override
+   (or a way to cap the family) so the fallback and the apple6 to apple8
+   compute selection are testable on a device that supports everything.
+4. **Argument buffers:** section 2 and 3 do not state a tier, but a design
+   that passes the G-buffer, history buffers and material tables to the
+   ray kernels through argument buffers must note that the M6 reports
+   tier 1 here (not tier 2), so no code may rely on tier 2 behaviour
+   (arbitrary resource arrays indexed in the shader, writable argument
+   buffers). Finding for RT1/RT2 (new constraint, not a change to a gating
+   decision).
+5. **Memory budget (section 1):** unchanged and confirmed with large
+   margin: the structure for 20k triangles is about 1.9 MB against the
+   "under 4 MB" assumption, and unified memory with a 25 GiB working-set
+   hint removes any pressure from 128 refit instances.
+6. **Build and refit cost (sections 1 and 6, RT1/RT10):** consistent with
+   "once at map load" for the world (about 1 to 5 ms) and per-frame refit
+   (under 1 ms per 50k triangles here, so 128 alias instances of a few
+   hundred triangles each fit comfortably). Whether refit stays cheap as
+   many small instances on an apple7 device is for RT10.
+7. **Metal API notes for the implementers (findings, no decision
+   changes):** a refit-capable structure reports a refit scratch size of
+   0 and refits in place with `destination` equal to the source;
+   `useResource` on each primitive structure is required in the compute
+   encoder that traces an instance structure; and on macOS 27 the
+   properties `lowPower`, `headless`, `removable` and the
+   `MTLGPUFamilyCommon*` constants are deprecated, so the gating code must
+   key on `MTLGPUFamilyApple*` and the ray-tracing properties only (which
+   section 4 already does).
+
+No gating decision in sections 4 and 6 changes on this device. The
+findings above (3, 4) are cards for the RT8 and RT1/RT2 owners, not edits
+to those cards.
