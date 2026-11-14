@@ -1558,10 +1558,5 @@ rm_lm_format(const char *map, long slices, char *buf, size_t len)
 rm_reopen_t
 rm_split_reopen(int pass_open, int pass_depth)
 {
-	if (!pass_open)
-	{
-		return RM_REOPEN_NONE;
-	}
-
-	return pass_depth ? RM_REOPEN_3D_KEEP : RM_REOPEN_2D;
+	return (pass_open && pass_depth) ? RM_REOPEN_3D_KEEP : RM_REOPEN_NONE;
 }

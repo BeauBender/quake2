@@ -45,7 +45,7 @@ typedef struct msurface_s
 	short texturemins[2];
 	short extents[2];
 
-	int light_s, light_t;           /* lightmap coordinates (N5) */
+	int light_s, light_t;           /* lightmap coordinates in its slice (N5) */
 	int dlight_s, dlight_t;
 
 	/* the retained buffers: the polygon's vertices and its fan */
@@ -63,7 +63,7 @@ typedef struct msurface_s
 	int dlightbits;
 	qboolean dirty_lightmap;
 
-	int lightmaptexturenum;
+	int lightmaptexturenum;     /* the lightmap slice, from 0 (gl1's block number less 1); -1 without one */
 	byte styles[MAXLIGHTMAPS];
 	float cached_light[MAXLIGHTMAPS];
 	byte *samples;
@@ -78,6 +78,8 @@ typedef struct
 	rm_surfrec_t *recs;
 	unsigned *scratch;      /* a frame's indices of one texture chain, size.indices entries */
 	int vbuf, ibuf, sbuf;   /* rmb_buffer_static ids, 0 when not made */
+	int lmtex;              /* the lightmap array (rmb_texture_array), 0 when not made */
+	int lmslices;           /* its slices */
 } rm_world_t;
 
 typedef struct model_s

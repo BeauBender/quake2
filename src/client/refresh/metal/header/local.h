@@ -82,6 +82,15 @@ extern cvar_t *gl_znear;
 extern cvar_t *gl_polyblend;
 extern cvar_t *gl1_waterwarp;
 
+/* the lightmaps (N5), by gl1's names */
+extern cvar_t *r_modulate;
+extern cvar_t *gl1_minlight;
+extern cvar_t *gl1_overbrightbits;
+extern cvar_t *gl_lightmap;     /* r_lightmap */
+extern cvar_t *gl1_dynamic;
+extern cvar_t *gl1_flashblend;
+extern cvar_t *r_lightlevel;
+
 /* from gl1's header/local.h, without the GL fields; a scrap image has no texture of its own (texnum RM_TEXNUM_SCRAP) */
 #define MAX_GLTEXTURES 1024
 #define RM_TEXNUM_SCRAP -1               /* a scrap image's texnum: the slot is used, its texture is the atlas's */
@@ -103,8 +112,8 @@ typedef struct image_s
 } image_t;
 
 /* the lightmap block of gl1 (BLOCK_WIDTH, BLOCK_HEIGHT), which the lightmap coordinates are relative to */
-#define RM_LM_BLOCK_WIDTH 128
-#define RM_LM_BLOCK_HEIGHT 128
+#define RM_LM_BLOCK_WIDTH RM_LM_WIDTH
+#define RM_LM_BLOCK_HEIGHT RM_LM_HEIGHT
 
 #include "model.h"
 
@@ -165,6 +174,23 @@ void R_DrawWorld(const float *mvp, const rm_viewport_t *vp, int cull);
 /* the surfaces of the last view R_DrawWorld skipped, by class, into s (metal_stats) */
 void RM_WorldSkips(rmb_stats_t *s);
 void RM_WorldSkipsClear(void);
+
+/* rm_lightmap.c: the lightmap slices of the world (gl1_lightmap.c) */
+void LM_FreeLightmapBuffers(void);
+qboolean LM_BeginBuildingLightmaps(void);
+qboolean LM_CreateSurfaceLightmap(msurface_t *surf);
+int LM_EndBuildingLightmaps(void);
+int LM_UploadSlices(int slices);
+byte *LM_SliceBuffer(int slice);
+
+/* rm_light.c (gl1_light.c) */
+void R_InitLight(void);
+void R_SetCacheState(msurface_t *surf);
+qboolean R_BuildLightMap(msurface_t *surf, byte *dest, int stride);
+void R_MarkSurfaceLights(dlight_t *light, int bit, mnode_t *node, int lightframecount);
+void R_PushDlights(void);
+void R_LightPoint(entity_t *currententity, vec3_t p, vec3_t color);
+void R_SetLightLevel(entity_t *currententity);
 
 /* rm_misc.c */
 void R_InitBuiltinTextures(void);

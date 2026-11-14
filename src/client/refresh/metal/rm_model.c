@@ -78,6 +78,7 @@ RM_FreeWorld(rm_world_t *w)
 	rmb_buffer_free(w->vbuf);
 	rmb_buffer_free(w->ibuf);
 	rmb_buffer_free(w->sbuf);
+	rmb_texture_free(w->lmtex);
 	free(w->verts);
 	free(w->indices);
 	free(w->recs);
@@ -453,7 +454,6 @@ Mod_CalcSurfaceExtents(model_t *loadmodel, msurface_t *s)
 	int i, j, e;
 	mvertex_t *v;
 	mtexinfo_t *tex;
-	int bmins[2], bmaxs[2];
 
 	mins[0] = mins[1] = 999999;
 	maxs[0] = maxs[1] = -99999;
@@ -492,13 +492,25 @@ Mod_CalcSurfaceExtents(model_t *loadmodel, msurface_t *s)
 		}
 	}
 
+	/*
+	 * gl1 converts floor(mins / 16) and ceil(maxs / 16) to int and their
+	 * products to short unchecked; a value that does not fit refuses the
+	 * map (rm_surface_extents), except on a warped surface, whose extents
+	 * Mod_LoadFaces replaces (gl1's 16384 and -8192)
+	 */
 	for (i = 0; i < 2; i++)
 	{
-		bmins[i] = floor(mins[i] / 16);
-		bmaxs[i] = ceil(maxs[i] / 16);
+		if (!rm_surface_extents(mins[i], maxs[i], &s->texturemins[i], &s->extents[i]))
+		{
+			if (!(tex->flags & SURF_WARP))
+			{
+				RM_Refuse(loadmodel, "surface %d has texture coordinates %g to %g, outside the lightmap's range",
+						(int)(s - loadmodel->surfaces), mins[i], maxs[i]);
+			}
 
-		s->texturemins[i] = bmins[i] * 16;
-		s->extents[i] = (bmaxs[i] - bmins[i]) * 16;
+			s->texturemins[i] = 0;
+			s->extents[i] = 0;
+		}
 	}
 }
 
@@ -533,7 +545,17 @@ RM_CheckFaceEdges(model_t *loadmodel, int surfnum, int firstedge, int numedges)
 	}
 }
 
-/* from gl1_model.c; the lightmaps are N5's, the warp subdivision N6's */
+/* the slices the faces filled, for RM_BuildWorld, which uploads them */
+static int faces_lm_slices;
+
+/*
+ * from gl1_model.c, with the lightmaps (gl1_lightmap.c) built as gl1
+ * builds them; the warp subdivision is N6's. Every bound is checked
+ * before the data is used: the extents (Mod_CalcSurfaceExtents), the
+ * lightmap size of a lit surface (rm_lm_size, gl1's limits), the run of
+ * light samples of every surface whose samples are read (rm_lm_samples_ok:
+ * gl1 takes any offset) and the slice count (rm_lm_place).
+ */
 static void
 Mod_LoadFaces(model_t *loadmodel, byte *mod_base, lump_t *l)
 {
@@ -556,9 +578,17 @@ Mod_LoadFaces(model_t *loadmodel, byte *mod_base, lump_t *l)
 	loadmodel->surfaces = out;
 	loadmodel->numsurfaces = count;
 
+	faces_lm_slices = 0;
+
+	if (!LM_BeginBuildingLightmaps())
+	{
+		RM_Refuse(loadmodel, "out of memory for the lightmaps");
+	}
+
 	for (surfnum = 0; surfnum < count; surfnum++, in++, out++)
 	{
 		memset(out, 0, sizeof(*out));
+		out->lightmaptexturenum = -1;
 		out->firstedge = LittleLong(in->firstedge);
 		out->numedges = LittleShort(in->numedges);
 		out->flags = 0;
@@ -599,8 +629,26 @@ Mod_LoadFaces(model_t *loadmodel, byte *mod_base, lump_t *l)
 
 		i = LittleLong(in->lightofs);
 
-		/* gl1 takes any offset; one outside the lighting lump reads nothing here */
-		out->samples = ((i >= 0) && (i < loadmodel->lightlen)) ? loadmodel->lightdata + i : NULL;
+		/*
+		 * -1 is no light data. gl1 takes any other offset; here the
+		 * surface's whole run of styles must lie inside the lighting lump.
+		 * A warped surface's samples are never read (gl1 neither builds
+		 * its lightmap nor lights a point from it).
+		 */
+		if ((i == -1) || (out->texinfo->flags & SURF_WARP))
+		{
+			out->samples = NULL;
+		}
+		else if (!rm_lm_samples_ok(i, out->extents[0], out->extents[1], rm_lm_nummaps(out->styles),
+				loadmodel->lightdata ? loadmodel->lightlen : 0))
+		{
+			RM_Refuse(loadmodel, "surface %d has its light samples at %d, outside the %d bytes of light data",
+					surfnum, i, loadmodel->lightdata ? loadmodel->lightlen : 0);
+		}
+		else
+		{
+			out->samples = loadmodel->lightdata ? loadmodel->lightdata + i : NULL;
+		}
 
 		/* set the drawing flags */
 		if (out->texinfo->flags & SURF_WARP)
@@ -621,7 +669,27 @@ Mod_LoadFaces(model_t *loadmodel, byte *mod_base, lump_t *l)
 				out->flags |= SURF_DRAWSKY;
 			}
 		}
+
+		/* create lightmaps: gl1's size limits first, then the slice */
+		if (!(out->texinfo->flags & (SURF_SKY | SURF_TRANS33 | SURF_TRANS66 | SURF_WARP)))
+		{
+			int smax, tmax;
+
+			if (!rm_lm_size(out->extents[0], out->extents[1], &smax, &tmax))
+			{
+				RM_Refuse(loadmodel, "surface %d has extents %d by %d, larger than a lightmap may be", surfnum,
+						out->extents[0], out->extents[1]);
+			}
+
+			if (!LM_CreateSurfaceLightmap(out))
+			{
+				RM_Refuse(loadmodel, "surface %d: no room for its lightmap in %d slices of %d by %d", surfnum,
+						RM_LM_MAX_SLICES, RM_LM_WIDTH, RM_LM_HEIGHT);
+			}
+		}
 	}
+
+	faces_lm_slices = LM_EndBuildingLightmaps();
 }
 
 /*
@@ -716,7 +784,7 @@ RM_BuildWorld(model_t *mod)
 			v->uv[0] = s1;
 			v->uv[1] = t1;
 
-			/* lightmap texture coordinates (light_s and light_t are N5's, 0 until then) */
+			/* lightmap texture coordinates (light_s and light_t in its slice; 0 without a lightmap, as in gl1) */
 			s1 = DotProduct(vec, tex->vecs[0]) + tex->vecs[0][3];
 			s1 -= fa->texturemins[0];
 			s1 += fa->light_s * 16;
@@ -747,8 +815,19 @@ RM_BuildWorld(model_t *mod)
 		rec->material = rm_material(tex->flags);
 		rec->texflags = (unsigned)tex->flags;
 		rec->image = (int)((image_t *)tex->image - gltextures);
-		rec->lm_slice = -1;
+		rec->lm_slice = fa->lightmaptexturenum;
 		memset(rec->lm_rect, 0, sizeof(rec->lm_rect));
+
+		if (fa->lightmaptexturenum >= 0)
+		{
+			int smax = 0, tmax = 0;
+
+			rm_lm_size(fa->extents[0], fa->extents[1], &smax, &tmax);
+			rec->lm_rect[0] = (short)fa->light_s;
+			rec->lm_rect[1] = (short)fa->light_t;
+			rec->lm_rect[2] = (short)smax;
+			rec->lm_rect[3] = (short)tmax;
+		}
 		memcpy(rec->styles, fa->styles, sizeof(rec->styles));
 		rec->first_index = fa->first_index;
 		rec->num_indices = fa->num_indices;
@@ -764,11 +843,24 @@ RM_BuildWorld(model_t *mod)
 		RM_Refuse(mod, "the retained buffers could not be made");
 	}
 
+	/* the lightmap array, every slice written from its CPU copy (gl1's LM_UploadBlock per block) */
+	w->lmslices = faces_lm_slices;
+
+	if (!(w->lmtex = LM_UploadSlices(w->lmslices)))
+	{
+		RM_Refuse(mod, "the %d lightmap slices could not be made", w->lmslices);
+	}
+
 	if (metal_stats->value)
 	{
 		char line[RM_STATS_LINE];
 
 		if (rm_world_format(mod->name, &w->size, line, sizeof(line)))
+		{
+			R_Printf(PRINT_ALL, "%s\n", line);
+		}
+
+		if (rm_lm_format(mod->name, w->lmslices, line, sizeof(line)))
 		{
 			R_Printf(PRINT_ALL, "%s\n", line);
 		}
@@ -1139,6 +1231,12 @@ static void
 Mod_Free(model_t *mod)
 {
 	qboolean unfinished = (RM_SlotState(mod) == RM_SLOT_UNFINISHED);
+
+	/* the world's slot (only the world is a brush model here): its lightmaps' CPU copies go with it */
+	if (mod == mod_known)
+	{
+		LM_FreeLightmapBuffers();
+	}
 
 	RM_FreeWorld(mod->world);
 

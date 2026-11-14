@@ -1940,7 +1940,7 @@ test_lm_line(void)
 	}
 
 	CHECK(rm_split_reopen(0, 0) == RM_REOPEN_NONE && rm_split_reopen(0, 1) == RM_REOPEN_NONE);
-	CHECK(rm_split_reopen(1, 0) == RM_REOPEN_2D && rm_split_reopen(1, 1) == RM_REOPEN_3D_KEEP);
+	CHECK(rm_split_reopen(1, 0) == RM_REOPEN_NONE && rm_split_reopen(1, 1) == RM_REOPEN_3D_KEEP);
 }
 
 int

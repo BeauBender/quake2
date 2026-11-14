@@ -949,15 +949,14 @@ int rm_region_ok(long tw, long th, long tslices, long slice, long x, long y, lon
 
 /*
  * How the in-frame split reopens the pass it ended (rmb_encode_split):
- * nothing when no pass was open (the next draw opens one), the 2D pass
- * (colour loaded) after a 2D pass, a 3D pass with colour, depth and
- * stencil loaded after a 3D pass, so the draws after the write test the
- * depth the draws before it wrote.
+ * after a 3D pass, at once, a 3D pass with colour, depth and stencil
+ * loaded (the ended pass stores them), so the draws after the write test
+ * the depth the draws before it wrote; otherwise nothing, and the next
+ * 2D draw opens a 2D pass that loads the colour (N2's behaviour).
  */
 typedef enum
 {
 	RM_REOPEN_NONE,
-	RM_REOPEN_2D,
 	RM_REOPEN_3D_KEEP
 } rm_reopen_t;
 

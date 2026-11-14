@@ -62,6 +62,13 @@ cvar_t *r_farsee;
 cvar_t *gl_znear;
 cvar_t *gl_polyblend;
 cvar_t *gl1_waterwarp;
+cvar_t *r_modulate;
+cvar_t *gl1_minlight;
+cvar_t *gl1_overbrightbits;
+cvar_t *gl_lightmap;
+cvar_t *gl1_dynamic;
+cvar_t *gl1_flashblend;
+cvar_t *r_lightlevel;
 
 unsigned long rm_noop_calls;
 
@@ -107,6 +114,13 @@ R_Register(void)
 	gl_znear = ri.Cvar_Get("gl_znear", "4", CVAR_ARCHIVE);
 	r_lockpvs = ri.Cvar_Get("r_lockpvs", "0", 0);
 	gl1_waterwarp = ri.Cvar_Get("gl1_waterwarp", "1.0", CVAR_ARCHIVE);
+	r_lightlevel = ri.Cvar_Get("r_lightlevel", "0", 0);
+	gl1_overbrightbits = ri.Cvar_Get("gl1_overbrightbits", "0", CVAR_ARCHIVE);
+	r_modulate = ri.Cvar_Get("r_modulate", "1", CVAR_ARCHIVE);
+	gl_lightmap = ri.Cvar_Get("r_lightmap", "0", 0);
+	gl1_dynamic = ri.Cvar_Get("gl1_dynamic", "1", 0);
+	gl1_flashblend = ri.Cvar_Get("gl1_flashblend", "0", 0);
+	gl1_minlight = ri.Cvar_Get("gl1_minlight", "0", CVAR_ARCHIVE);
 
 	ri.Cmd_AddCommand("screenshot", R_ScreenShot);
 	ri.Cmd_AddCommand("imagelist", R_ImageList_f);
@@ -261,6 +275,7 @@ RI_Init(void)
 
 	R_InitImages();   /* runs R_TextureMode: the flags RI_BeginFrame tests start clear */
 	RM_ClearTextureModeFlags();
+	R_InitLight();    /* gl1's minlight table, which gl1 makes in R_InitImages */
 	Mod_Init();
 	R_InitBuiltinTextures();
 	RM_InitDraw();
@@ -306,6 +321,13 @@ RI_BeginFrame(float camera_separation)
 	{
 		R_TextureMode(gl_texturemode->string);
 		RM_ClearTextureModeFlags();
+	}
+
+	/* gl1's RI_BeginFrame: gl1_overbrightbits is 0, 1, 2 or 4 */
+	if (gl1_overbrightbits->modified)
+	{
+		ri.Cvar_SetValue("gl1_overbrightbits", rm_overbright(gl1_overbrightbits->value));
+		gl1_overbrightbits->modified = false;
 	}
 
 	/*
@@ -431,7 +453,11 @@ R_PolyBlend(void)
 	rmb_draw_color(vtx, 4, rgba, mvp, &r_view_vp, r_cull->value != 0);
 }
 
-/* from gl1_main.c; entities (N7), dynamic lights (N8), particles (N9) and alpha surfaces (N6) are not drawn yet */
+/*
+ * from gl1_main.c; entities (N7), the light of dynamic lights (N8: N5 marks
+ * the surfaces they touch and counts them), particles (N9) and alpha
+ * surfaces (N6) are not drawn yet
+ */
 static void
 R_RenderView(refdef_t *fd)
 {
@@ -443,6 +469,7 @@ R_RenderView(refdef_t *fd)
 	}
 
 	RM_WorldSkipsClear();
+	R_PushDlights();
 	R_SetupFrame();
 	R_SetFrustum(vup, vpn, vright, r_origin, r_newrefdef.fov_x, r_newrefdef.fov_y, frustum);
 	R_SetupGL();
@@ -474,6 +501,7 @@ RI_RenderFrame(refdef_t *fd)
 	 */
 	rmb_pass_3d();
 	R_RenderView(fd);
+	R_SetLightLevel(NULL);
 }
 
 static qboolean

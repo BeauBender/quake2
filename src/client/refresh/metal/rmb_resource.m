@@ -132,6 +132,11 @@ rmb_new_pipe_3d(rm_pipe3d_t which, NSError **e)
 		vf = [library newFunctionWithName:@"rm_vertex_world"];
 		ff = [library newFunctionWithName:@"rm_fragment_world"];
 	}
+	else if (which == RM_PIPE_WORLD_LM)
+	{
+		vf = [library newFunctionWithName:@"rm_vertex_world"];
+		ff = [library newFunctionWithName:@"rm_fragment_world_lm"];
+	}
 	else
 	{
 		vf = [library newFunctionWithName:@"rm_vertex_color"];
@@ -403,6 +408,12 @@ rmb_samplers_set(int min, int mag_linear, int aniso)
 					d.magFilter = mag;
 					d.maxAnisotropy = aniso > 1 ? (aniso > 16 ? 16 : aniso) : 1;
 				}
+				else if (cls == RMB_SMP_LIGHTMAP)
+				{
+					/* gl1's LM_UploadBlock: GL_LINEAR for both, whatever the mode */
+					d.minFilter = d.magFilter = MTLSamplerMinMagFilterLinear;
+					d.mipFilter = MTLSamplerMipFilterNotMipmapped;
+				}
 				else
 				{
 					/* gl1 gives textures without mipmaps gl_filter_max (or GL_NEAREST) for both */
@@ -562,6 +573,137 @@ rmb_texture_upload(int tid, const unsigned char *rgba, int w, int h, int mipmapp
 
 	rmb_counts.uploads++;
 	return tid;
+}
+
+/*
+ * The lightmap array (design section 5): one texture2d_array of 128 by
+ * 128 slices in the texture table, so a region written after a draw of
+ * the open frame command buffer splits it as any rewritten texture does.
+ */
+int
+rmb_texture_array(int slices)
+{
+	int tid;
+
+	if (!resources_open || !rm_lm_slices_ok(slices))
+	{
+		rmb_counts.upload_skips++;
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		MTLTextureDescriptor *d = [MTLTextureDescriptor new];
+		id<MTLTexture> t;
+
+		if (!(tid = rmb_take_id()))
+		{
+			rmb_counts.upload_skips++;
+			return 0;
+		}
+
+		d.textureType = MTLTextureType2DArray;
+		d.pixelFormat = MTLPixelFormatRGBA8Unorm;
+		d.width = RM_LM_WIDTH;
+		d.height = RM_LM_HEIGHT;
+		d.arrayLength = (NSUInteger)slices;
+		d.mipmapLevelCount = 1;
+		d.storageMode = MTLStorageModePrivate;
+		d.usage = MTLTextureUsageShaderRead;
+		t = [rmb_device newTextureWithDescriptor:d];
+
+		if (!t)
+		{
+			rmb_counts.upload_skips++;
+			return 0;
+		}
+
+		textures[tid] = t;
+		tex_serial[tid] = 0;
+		rm_ledger_create(&rmb_ledger, RM_OBJ_TEXTURE);
+	}
+
+	return tid;
+}
+
+int
+rmb_texture_region(int tid, int slice, int x, int y, int w, int h, const unsigned char *rgba, long stride)
+{
+	size_t bytes;
+	long at;
+	int row;
+
+	if (!resources_open || !rgba || (tid <= 0) || (tid >= RMB_MAX_TEXTURES) || !textures[tid])
+	{
+		rmb_counts.upload_skips++;
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		id<MTLTexture> t = textures[tid];
+		long slices = (t.textureType == MTLTextureType2DArray) ? (long)t.arrayLength : 1;
+		unsigned char *dst;
+
+		/* inside the texture it writes, rows of the source at least as long as the region's */
+		if (!rm_region_ok((long)t.width, (long)t.height, slices, slice, x, y, w, h) || (stride < (long)w * 4) ||
+			!rm_upload_bytes(w, h, RMB_STAGING_BYTES, &bytes))
+		{
+			rmb_counts.upload_skips++;
+			return 0;
+		}
+
+		/* gl1 semantics: draws of this frame before the write saw the old contents */
+		if (tex_serial[tid] == rmb_frame_serial)
+		{
+			rmb_encode_split();
+		}
+
+		at = mtl_ring_alloc(&staging_ring, bytes);
+
+		if ((at < 0) && rmb_staging_recycle())
+		{
+			at = mtl_ring_alloc(&staging_ring, bytes);
+		}
+
+		if (!upload_cmd)
+		{
+			upload_cmd = [rmb_queue commandBuffer];
+		}
+
+		if (upload_cmd && !upload_blit)
+		{
+			upload_blit = [upload_cmd blitCommandEncoder];
+		}
+
+		if ((at < 0) || !upload_blit)
+		{
+			/* the region keeps what it held; the texture and its id stay */
+			rmb_counts.upload_skips++;
+			return 0;
+		}
+
+		/* the region's rows, tightly packed */
+		dst = (unsigned char *)staging.contents + at;
+
+		for (row = 0; row < h; row++)
+		{
+			memcpy(dst + (size_t)row * (size_t)w * 4, rgba + (size_t)row * (size_t)stride, (size_t)w * 4);
+		}
+
+		[upload_blit copyFromBuffer:staging
+				sourceOffset:(NSUInteger)at
+				sourceBytesPerRow:(NSUInteger)w * 4
+				sourceBytesPerImage:bytes
+				sourceSize:MTLSizeMake((NSUInteger)w, (NSUInteger)h, 1)
+				toTexture:t
+				destinationSlice:(NSUInteger)slice
+				destinationLevel:0
+				destinationOrigin:MTLOriginMake((NSUInteger)x, (NSUInteger)y, 0)];
+	}
+
+	rmb_counts.uploads++;
+	return 1;
 }
 
 void

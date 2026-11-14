@@ -25,9 +25,15 @@
  * draw of the retained vertex buffer, its surfaces' fans copied from the
  * retained index buffer in chain order, which is gl1's draw order (gl1
  * batches by texture and lightmap; the batch boundaries change no pixel).
- * N4 draws world surfaces without lightmaps (r_fullbright, which gl1
- * honours by leaving the lightmap unit off); sky, translucent, warped and
- * flowing surfaces are counted and skipped until N6 draws them.
+ * N5 draws the chains lightmapped: one draw per run of a chain in one
+ * lightmap slice (gl1's R_UpdateGLBuffer flushes where the lightmap
+ * changes), the slice's texel times the diffuse one as gl1's two texture
+ * units compute it; with r_fullbright the lightmap unit is off (N4's
+ * world_tex). Before the chains, R_RegenAllLightmaps rebuilds the
+ * lightmaps whose styles changed and uploads each slice's joined dirty
+ * rectangle. Sky, translucent, warped and flowing surfaces are counted
+ * and skipped until N6 draws them; a surface a dynamic light touches is
+ * drawn with its static lightmap and counted until N8 adds the light.
  *
  * =======================================================================
  */
@@ -41,13 +47,16 @@ vec3_t vup, vpn, vright, r_origin;
 
 static vec3_t modelorg; /* relative to viewpoint */
 
-/* the surfaces of the current view not drawn yet, by class */
-static unsigned long skip_sky, skip_warp, skip_trans, skip_flow;
+/* the surfaces of the current view not drawn yet, by class, and those drawn without their dynamic light */
+static unsigned long skip_sky, skip_warp, skip_trans, skip_flow, dlit_surfs;
+
+/* gl1's gl_lms.lightmap_surfaces: the lit surfaces of this frame, per slice */
+static msurface_t *lightmap_surfaces[RM_LM_MAX_SLICES];
 
 void
 RM_WorldSkipsClear(void)
 {
-	skip_sky = skip_warp = skip_trans = skip_flow = 0;
+	skip_sky = skip_warp = skip_trans = skip_flow = dlit_surfs = 0;
 }
 
 void
@@ -57,6 +66,7 @@ RM_WorldSkips(rmb_stats_t *s)
 	s->warp_skips = skip_warp;
 	s->trans_skips = skip_trans;
 	s->flow_skips = skip_flow;
+	s->dlit_surfs = dlit_surfs;
 }
 
 /* from gl1_surf.c */
@@ -176,6 +186,18 @@ R_RecursiveWorldNode(entity_t *currententity, mnode_t *node)
 			surf->texturechain = image->texturechain;
 			image->texturechain = surf;
 		}
+
+		/*
+		 * needed for R_RegenAllLightmaps(): gl1 chains every surface but the
+		 * warped ones, and skips the sky and translucent ones there; a
+		 * surface without a lightmap (lightmaptexturenum -1) is never chained
+		 */
+		if (!(surf->texinfo->flags & SURF_WARP) && (surf->lightmaptexturenum >= 0) &&
+			(surf->lightmaptexturenum < RM_LM_MAX_SLICES))
+		{
+			surf->lightmapchain = lightmap_surfaces[surf->lightmaptexturenum];
+			lightmap_surfaces[surf->lightmaptexturenum] = surf;
+		}
 	}
 
 	/* recurse down the back side */
@@ -183,10 +205,155 @@ R_RecursiveWorldNode(entity_t *currententity, mnode_t *node)
 }
 
 /*
+ * from gl1_surf.c: rebuilds the lightmaps whose styles changed since they
+ * were built (or that a dynamic light touched this frame or the last),
+ * per slice, and uploads the joined rectangle of each changed slice
+ * before the chains draw (multitexture path only). gl1's tile-rendering
+ * copies are left out (design section 7). The rectangles are inside
+ * their slice by the load's checks and are checked again before a
+ * write (rm_lm_region_ok).
+ */
+static void
+R_RegenAllLightmaps(void)
+{
+	rm_world_t *w = r_worldmodel->world;
+	int i;
+
+	if (r_fullbright->value || !gl1_dynamic->value || !w || !w->lmtex)
+	{
+		return;
+	}
+
+	for (i = 0; i < w->lmslices; i++)
+	{
+		rm_lmrect_t current, best;
+		msurface_t *surf;
+		byte *base, *slice = LM_SliceBuffer(i);
+		qboolean affected_lightmap;
+		long left = r_worldmodel->numsurfaces;
+
+		if (!lightmap_surfaces[i] || !slice)
+		{
+			continue;
+		}
+
+		affected_lightmap = false;
+		best.top = RM_LM_HEIGHT;
+		best.left = RM_LM_WIDTH;
+		best.bottom = best.right = 0;
+
+		/* a chain holds each surface once (the walk visits it once); bounded all the same */
+		for (surf = lightmap_surfaces[i]; surf != 0 && left > 0; surf = surf->lightmapchain, left--)
+		{
+			int map, smax, tmax;
+
+			if (surf->texinfo->flags & (SURF_SKY | SURF_TRANS33 | SURF_TRANS66 | SURF_WARP))
+			{
+				continue;
+			}
+
+			/* Any dynamic lights on this surface? */
+			for (map = 0; map < MAXLIGHTMAPS && surf->styles[map] != 255; map++)
+			{
+				if (r_newrefdef.lightstyles[surf->styles[map]].white != surf->cached_light[map])
+				{
+					goto dynamic_surf;
+				}
+			}
+
+			/* Surface is considered to have dynamic lights if it had them in the previous frame */
+			if ((surf->dlightframe != r_framecount) && !surf->dirty_lightmap)
+			{
+				continue; /* no dynamic lights affect this surface in this frame */
+			}
+
+dynamic_surf:
+			if (!rm_lm_size(surf->extents[0], surf->extents[1], &smax, &tmax) ||
+				!rm_lm_region_ok(i, w->lmslices, surf->light_s, surf->light_t, smax, tmax))
+			{
+				continue;
+			}
+
+			affected_lightmap = true;
+
+			current.left = surf->light_s;
+			current.right = surf->light_s + smax;
+			current.top = surf->light_t;
+			current.bottom = surf->light_t + tmax;
+
+			base = slice;
+			base += (current.top * RM_LM_WIDTH + current.left) * RM_LM_BYTES;
+
+			R_BuildLightMap(surf, base, RM_LM_WIDTH * RM_LM_BYTES);
+
+			surf->dirty_lightmap = (surf->dlightframe == r_framecount);
+
+			if (!surf->dirty_lightmap)
+			{
+				for (map = 0; map < MAXLIGHTMAPS && surf->styles[map] != 255; map++)
+				{
+					if ((surf->styles[map] >= 32) || (surf->styles[map] == 0))
+					{
+						R_SetCacheState(surf);
+						break;
+					}
+				}
+			}
+
+			rm_lm_join(&current, &best);
+		}
+
+		if (!affected_lightmap ||
+			!rm_lm_region_ok(i, w->lmslices, best.left, best.top, best.right - best.left, best.bottom - best.top))
+		{
+			continue;
+		}
+
+		/* upload changes */
+		base = slice;
+		base += (best.top * RM_LM_WIDTH + best.left) * RM_LM_BYTES;
+
+		rmb_texture_region(w->lmtex, i, best.left, best.top, best.right - best.left, best.bottom - best.top,
+				base, RM_LM_WIDTH * RM_LM_BYTES);
+	}
+}
+
+/* draws the n indices of the scratch gathered for one texture and, lightmapped, one slice */
+static void
+R_FlushChain(rm_world_t *w, const image_t *image, int slice, unsigned long n, const float *mvp,
+		const rm_viewport_t *vp, int cull)
+{
+	rmb_lm_draw_t d;
+	int obb;
+
+	if (!n)
+	{
+		return;
+	}
+
+	if (r_fullbright->value)
+	{
+		/* gl1 leaves the lightmap unit off: the texel alone */
+		rmb_draw_world(w->vbuf, w->scratch, n, image->texnum, image->sampler, mvp, vp, cull);
+		return;
+	}
+
+	obb = rm_overbright(gl1_overbrightbits->value);
+	d.tex = image->texnum;
+	d.smp = image->sampler;
+	d.lmtex = w->lmtex;
+	d.slice = slice;
+	d.env = rm_lm_env(obb, gl_lightmap->value != 0);
+	d.scale = obb ? (float)obb : 1.0f;
+	rmb_draw_world_lm(w->vbuf, w->scratch, n, &d, mvp, vp, cull);
+}
+
+/*
  * from gl1_surf.c, R_DrawTextureChains, the multitexture path that gl1
  * takes on the reference (without the lightmap unit under r_fullbright):
- * first every chain's surfaces that are not warped, then the warped ones
- * (skipped here), and the chains cleared.
+ * first every chain's surfaces that are not warped, in runs of one
+ * lightmap slice, then the warped ones (skipped here), and the chains
+ * cleared.
  */
 static void
 R_DrawTextureChains(const float *mvp, const rm_viewport_t *vp, int cull)
@@ -199,6 +366,7 @@ R_DrawTextureChains(const float *mvp, const rm_viewport_t *vp, int cull)
 	for (i = 0, image = gltextures; i < numgltextures; i++, image++)
 	{
 		unsigned long n = 0;
+		int slice = -1;
 
 		if (!image->registration_sequence || !image->texturechain)
 		{
@@ -218,6 +386,20 @@ R_DrawTextureChains(const float *mvp, const rm_viewport_t *vp, int cull)
 				continue;
 			}
 
+			/* a lit surface a dynamic light touches: its static lightmap until N8 */
+			if (s->dlightframe == r_framecount)
+			{
+				dlit_surfs++;
+			}
+
+			/* gl1's R_UpdateGLBuffer: another lightmap flushes the batch */
+			if (!r_fullbright->value && (s->lightmaptexturenum != slice))
+			{
+				R_FlushChain(w, image, slice, n, mvp, vp, cull);
+				n = 0;
+				slice = s->lightmaptexturenum;
+			}
+
 			/* each surface is in one node of a tree, so a chain holds it once and fits; never written past */
 			if (s->num_indices > w->size.indices - n)
 			{
@@ -228,10 +410,7 @@ R_DrawTextureChains(const float *mvp, const rm_viewport_t *vp, int cull)
 			n += s->num_indices;
 		}
 
-		if (n)
-		{
-			rmb_draw_world(w->vbuf, w->scratch, n, image->texnum, image->sampler, mvp, vp, cull);
-		}
+		R_FlushChain(w, image, slice, n, mvp, vp, cull);
 	}
 
 	for (i = 0, image = gltextures; i < numgltextures; i++, image++)
@@ -256,7 +435,7 @@ R_DrawTextureChains(const float *mvp, const rm_viewport_t *vp, int cull)
 	}
 }
 
-/* from gl1_surf.c, without the sky box (N6) and the lightmaps (N5) */
+/* from gl1_surf.c, without the sky box (N6) and the brush entities' lighting (R_GetBrushesLighting, N7) */
 void
 R_DrawWorld(const float *mvp, const rm_viewport_t *vp, int cull)
 {
@@ -278,7 +457,10 @@ R_DrawWorld(const float *mvp, const rm_viewport_t *vp, int cull)
 	memset(&ent, 0, sizeof(ent));
 	ent.frame = (int)(r_newrefdef.time * 2);
 
+	memset(lightmap_surfaces, 0, sizeof(lightmap_surfaces));
+
 	R_RecursiveWorldNode(&ent, r_worldmodel->nodes);
+	R_RegenAllLightmaps();
 	R_DrawTextureChains(mvp, vp, cull);
 }
 
