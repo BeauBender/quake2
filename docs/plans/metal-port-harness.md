@@ -1281,7 +1281,10 @@ reading its files), nothing was recorded, replayed or written there. The
 shared the machine). No threshold, scenario or source file was changed.
 
 **Criterion 1: a renderer replaying its own records reproduces its own
-frames bit-identically.** Met. For each renderer and scenario run: one live
+frames bit-identically.** Met with a limit: replay is exact on all three
+renderers; the `soft` references of `models`, `particles` and `skywater`
+from `demo1.dm2` in the owner's store are at an older settings hash, and
+recording new ones is the owner's step (commands given below). For each renderer and scenario run: one live
 record (`record <r> <scenario>`), one replay of that record's own trace
 (`replay <r> <scenario> --ref-id <record>`), and `compare <r> <scenario>
 --cand-id <replay> --ref <r> --ref-id <record> --threshold 0
@@ -1380,7 +1383,8 @@ checkout's `water.dm2` (98 messages) is over on 1 of 4 frames at its
 threshold (frame 2, score 0.035741, bad fraction 0.812705; the other three
 0.030220 to 0.031865, 0.537233 to 0.674004): that threshold was measured on
 another make of the demo and holds for that demo, not for any water demo.
-It was not changed; a new make of the demo needs its own measurement.
+It was not changed; a new make of the demo needs its own measurement, and
+re-measuring it on the accelerated host is noted on TASK83 (#187).
 
 The limit: these are references for the shim's arithmetic, not for a
 graphics card (INFORM9 asks for `gl1` where it renders). Accelerated `gl1`
@@ -1390,8 +1394,9 @@ references are TASK83 (#187).
 ls-files` lists 1874 files, 1434 under `third_party/` (vendored SDL 3,
 byte-identical to its release, checked by `tests/check-vendored.sh`; no
 image, sound or binary data file among them by name) and 440 outside it. Of
-those 440, `file` calls five not text, all from upstream yquake2 and
-unchanged since the fork point (`git diff 9dbf6992 HEAD` on them is empty):
+those 440, `file` calls five binary or image files, all from upstream yquake2 and
+unchanged since the fork point (`git diff 9dbf6992 HEAD` on them is empty);
+`file` also labels four JSON configuration files as data, which are text:
 
 | File | Bytes | Type |
 |---|---|---|
@@ -1401,8 +1406,8 @@ unchanged since the fork point (`git diff 9dbf6992 HEAD` on them is empty):
 | `stuff/models/crosshair/skin.pcx` | 4279 | PCX, 128x128 |
 | `stuff/models/crosshair/tris.md2` | 1152 | MD2, 12 triangles |
 
-No path added since the fork point (1582 added paths, `third_party/`
-excluded) ends in a frame, image, demo, cinematic, trace, pak, map, model,
+No path added since the fork point (147 added paths outside `third_party/`,
+counted by `git diff --name-only --diff-filter=A --no-renames 9dbf6992 HEAD`) ends in a frame, image, demo, cinematic, trace, pak, map, model,
 sound or log extension, or is a `manifest` or `complete` file. The committed
 test fixtures are text: the 12 unit-test pins in `tests/pins/unit/` (output
 over paks and maps the suite generates itself) and the two lists in
@@ -1433,13 +1438,15 @@ empty afterwards. So no check's behaviour depends on those variables. The
 unit suite (`make test`) takes no `PINS_*` variable and generates its own
 data.
 
-**Verdicts.** 1 met (`ref_soft` references are in the owner's store for
-every scenario, three of them at a settings hash older than the head's;
-the commands above record new ones). 2 met with a limit: software OpenGL
+**Verdicts.** 1 met with a limit (replay is exact on all three renderers;
+the `soft` references of `models`, `particles` and `skywater` from
+`demo1.dm2` are at an older settings hash, and recording new ones is the
+owner's step, commands given above). 2 met with a limit: software OpenGL
 only, accelerated references are TASK83 (#187); the `water.dm2` threshold
-is tied to the demo it was measured on. 3 met. 4 met as far as the checks
-go; the green full gate is the orchestrator's. Still open from the card's
-scope, not its acceptance list: the pin store path from configuration
+is tied to the demo it was measured on; re-measuring it on the accelerated
+host is noted on TASK83 (#187). 3 met. 4 met as far as the checks
+go; the full gate is the orchestrator's run. Still open from the card's
+scope (now held by TASK94, #209), not its acceptance list: the pin store path from configuration
 (the driver reads `PINS_STORE` only), a content hash tying a pin to its
 scenario beyond the settings hash in its id, and a fixed `cl_maxfps` for
 capture runs (neither the driver nor a scenario sets it; `timedemo 1` and
