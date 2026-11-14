@@ -1817,6 +1817,23 @@ test_lm_build(void)
 		CHECK(out[0][0] == 255 && out[0][3] == 255);
 	}
 
+	/*
+	 * one style with r_modulate 2 (the path most surfaces take); green the
+	 * brightest channel of an over-bright luxel (170 255 0); every channel
+	 * negative; the combine with gl1_overbrightbits 1
+	 */
+	{
+		const float one1[1][3] = { { 1, 1, 1 } }, grn[1][3] = { { 1, 3, 1 } }, allneg[1][3] = { { -1, -1, -1 } };
+
+		CHECK(rm_lm_build(samples, 3, 2, 1, one1, 2.0f, NULL, ident, &out[0][0], 20, bl));
+		CHECK(out[0][0] == 20 && out[0][1] == 40 && out[0][2] == 60 && out[0][3] == 60);
+		CHECK(rm_lm_build(samples, 3, 2, 1, grn, 1.0f, NULL, ident, &out[0][0], 20, bl));
+		CHECK(out[0][4] == 170 && out[0][5] == 255 && out[0][6] == 0 && out[0][7] == 255);
+		CHECK(rm_lm_build(samples, 3, 2, 1, allneg, 1.0f, NULL, ident, &out[0][0], 20, bl));
+		CHECK(out[0][0] == 0 && out[0][1] == 0 && out[0][2] == 0 && out[0][3] == 0 && out[1][9] == 0 && out[1][10] == 0);
+		CHECK(rm_lm_env(1, 1) == MTL_LM_COMBINE && rm_lm_env(1, 0) == MTL_LM_COMBINE);
+	}
+
 	/* refused: a stride below a row, sizes past rm_lm_size, styles past four; nothing written */
 	memset(out, 0xee, sizeof(out));
 	CHECK(!rm_lm_build(samples, 3, 2, 2, rgb, 1.0f, NULL, ident, &out[0][0], 11, bl));
