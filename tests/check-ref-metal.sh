@@ -4,13 +4,15 @@
 # speaks no OpenGL, and, where the toolchain is there, still builds.
 #
 # (a) Always, on every OS: tests/metal/rm_host_test.c is compiled with the
-#     system compiler against rm_pure.c, with ASAN and UBSAN when the
+#     system compiler against rm_pure.c and common/ (the arithmetic shared
+#     with the shim), with ASAN and UBSAN when the
 #     compiler has them, and run. No SDL, no Metal, no game data.
 # (b) Only on Darwin with the Metal compiler (xcrun -f metal) and the
 #     vendored SDL 3 headers: "make ref_metal" in a scratch copy of
 #     Makefile, third_party/sdl3.make and src/ (third_party/SDL3 is linked,
 #     not copied), so release/ and build/ of this checkout are not
-#     touched; otool -L of the dylib must list Metal and QuartzCore and no
+#     touched; the build must write ref_metal.metallib next to the dylib,
+#     and otool -L of the dylib must list Metal and QuartzCore and no
 #     OpenGL. In the same copy "make ref_metal YQ2_OSTYPE=Linux" must fail
 #     with a line naming macOS. Otherwise one line
 #     "check-ref-metal: build skipped: <reason>". When the vendored
@@ -274,6 +276,8 @@ else
 		bad "make ref_metal failed"
 	elif [ ! -f "${tmp:?}/tree/release/ref_metal.dylib" ]; then
 		bad "make ref_metal wrote no release/ref_metal.dylib"
+	elif [ ! -s "${tmp:?}/tree/release/ref_metal.metallib" ]; then
+		bad "make ref_metal wrote no release/ref_metal.metallib"
 	else
 		libs=$(otool -L "${tmp:?}/tree/release/ref_metal.dylib" 2>&1) || bad "otool -L failed on ref_metal.dylib"
 		case $libs in *Metal.framework*) ;; *) bad "ref_metal.dylib does not link Metal";; esac

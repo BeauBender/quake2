@@ -336,6 +336,23 @@ test_pipe_2d(void)
 	CHECK(rm_pipe_2d(RM_TEXENVS, 0, 0) == -1 && rm_pipe_2d((rm_texenv_t)-1, 0, 0) == -1);
 }
 
+/* The directory ref_metal.metallib is looked for in: the dylib's, bounded by the buffer */
+static void
+test_dir_of(void)
+{
+	char d[16];
+
+	CHECK(rm_dir_of("/a/b/ref_metal.dylib", d, sizeof(d)) && strcmp(d, "/a/b") == 0);
+	CHECK(rm_dir_of("ref_metal.dylib", d, sizeof(d)) && strcmp(d, ".") == 0);
+	CHECK(rm_dir_of("/ref_metal.dylib", d, sizeof(d)) && strcmp(d, "/") == 0);
+	/* "/abcdefghijklmn" is 15 bytes and its NUL the 16th: an exact fit, then one byte short */
+	CHECK(rm_dir_of("/abcdefghijklmn/x", d, 16) && strcmp(d, "/abcdefghijklmn") == 0);
+	memset(d, 'z', sizeof(d));
+	CHECK(!rm_dir_of("/abcdefghijklmn/x", d, 15) && d[0] == '\0' && d[1] == 'z');
+	d[0] = 'z';
+	CHECK(!rm_dir_of("/a/x", d, 0) && d[0] == 'z');
+}
+
 /* gl_texturemode by gl1's names, case-insensitive as Q_stricmp */
 static void
 test_texture_mode(void)
@@ -507,6 +524,7 @@ main(void)
 	test_fan();
 	test_pipe_2d();
 	test_texture_mode();
+	test_dir_of();
 	test_ortho();
 	test_ring();
 	test_len_zero();
