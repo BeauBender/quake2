@@ -877,8 +877,9 @@ Mod_LoadMarksurfaces(model_t *loadmodel, byte *mod_base, lump_t *l)
 /*
  * The checks before the shared loaders read the file: every lump inside
  * it, the counts the loaders size arrays by within the limits, a world
- * with a node and model 0 starting at one, the texinfo names terminated
- * and their chains bounded, the visibility offsets inside their lump.
+ * with a node and model 0 starting at one, the nodes a tree from node 0,
+ * the texinfo names terminated and their chains bounded, the visibility
+ * offsets inside their lump.
  */
 static void
 RM_CheckLumps(model_t *mod, byte *mod_base, const dheader_t *header, int len)
@@ -915,6 +916,32 @@ RM_CheckLumps(model_t *mod, byte *mod_base, const dheader_t *header, int len)
 		if (!rm_world_head_ok(numnodes, nummodels, headnode))
 		{
 			RM_Refuse(mod, "%ld nodes and %ld models, model 0 at node %ld", numnodes, nummodels, headnode);
+		}
+	}
+
+	/*
+	 * the nodes a tree from node 0 (rm_node_tree_ok): Mod_SetParent and
+	 * Mod_NumberLeafs recurse through them unchecked, and the draw would
+	 * chain a node's surfaces once per visit
+	 */
+	l = &header->lumps[LUMP_NODES];
+
+	{
+		static int children[2 * MAX_MAP_NODES];
+		static unsigned char seen[MAX_MAP_NODES];
+		const dnode_t *in = (const void *)(mod_base + l->fileofs);
+		long numnodes = (long)((size_t)l->filelen / sizeof(dnode_t));
+		long numleafs = (long)((size_t)header->lumps[LUMP_LEAFS].filelen / sizeof(dleaf_t));
+
+		for (i = 0; i < numnodes; i++)
+		{
+			children[2 * i] = LittleLong(in[i].children[0]);
+			children[2 * i + 1] = LittleLong(in[i].children[1]);
+		}
+
+		if (!rm_node_tree_ok(children, numnodes, numleafs, seen))
+		{
+			RM_Refuse(mod, "the %ld nodes are not a tree from node 0 over %ld leafs", numnodes, numleafs);
 		}
 	}
 

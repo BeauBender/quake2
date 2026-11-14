@@ -464,6 +464,18 @@ int rm_leaf_contents_ok(long contents);
 int rm_world_head_ok(long numnodes, long nummodels, long headnode);
 
 /*
+ * The raw node lump before files/models.c links it: children holds the two
+ * children of each of numnodes nodes, already swapped (a node index, or
+ * -1 - leaf for a leaf); seen has numnodes bytes of scratch. 1 when node 0
+ * is no node's child, every other node is a child at most once (of one
+ * node, in one of its two slots), every node child is below numnodes and
+ * every leaf child below numleafs; 0 otherwise. The nodes reachable from
+ * node 0 are then a tree: Mod_SetParent, Mod_NumberLeafs and the draw
+ * visit each node once, and a node's surfaces enter a texture chain once.
+ */
+int rm_node_tree_ok(const int *children, long numnodes, long numleafs, unsigned char *seen);
+
+/*
  * Marks [first, first + count) of owner[total] as taken (a node's
  * surfaces): 0, and nothing marked, when the range leaves the table or a
  * surface is taken already. gl1 links a surface into its texture chain

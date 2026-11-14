@@ -844,6 +844,45 @@ rm_world_head_ok(long numnodes, long nummodels, long headnode)
 }
 
 int
+rm_node_tree_ok(const int *children, long numnodes, long numleafs, unsigned char *seen)
+{
+	long i;
+
+	if ((numnodes < 1) || (numleafs < 0))
+	{
+		return 0;
+	}
+
+	memset(seen, 0, (size_t)numnodes);
+
+	for (i = 0; i < 2 * numnodes; i++)
+	{
+		long c = children[i];
+
+		if (c < 0)
+		{
+			/* a leaf, -1 - c; a leaf may have more than one parent (the last one is kept) */
+			if (-1 - c >= numleafs)
+			{
+				return 0;
+			}
+
+			continue;
+		}
+
+		/* node 0 is the root; any other node has one parent at most */
+		if ((c == 0) || (c >= numnodes) || seen[c])
+		{
+			return 0;
+		}
+
+		seen[c] = 1;
+	}
+
+	return 1;
+}
+
+int
 rm_mark_once(unsigned char *owner, long total, long first, long count)
 {
 	long i;

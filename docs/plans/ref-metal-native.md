@@ -1020,12 +1020,26 @@ data, each through a plain function of `rm_pure.c`:
   `rm_decompress_vis`, bounded at both ends, instead of `files/pvs.c`'s
   `Mod_DecompressVis`, which reads and writes unbounded; a leaf's
   cluster below the cluster count and its area inside the client's area
-  bits (`rm_leaf_ok`);
+  bits (`rm_leaf_ok`), and its contents not `CONTENTS_NODE`
+  (`rm_leaf_contents_ok`: `Mod_SetParent`, `Mod_PointInLeaf` and the walk
+  would take the leaf for a node and its marksurface fields for children);
+- a world with at least one node and a model 0 whose head node is one of
+  them (`rm_world_head_ok`), before `Mod_LoadNodes` (an empty node lump
+  left the node array empty and aliased by the next hunk allocation);
+- the raw node lump a tree from node 0 before `Mod_LoadNodes` links it
+  (`rm_node_tree_ok`): node 0 is no node's child, every other node is a
+  child at most once, every node child is below the node count and every
+  leaf child below the leaf count. The nodes reachable from node 0 are
+  then a tree, visited once each by `Mod_SetParent`, `Mod_NumberLeafs`
+  and the walk (a node named twice chained its surfaces twice, which made
+  the chain a loop);
 - a face's edges (at least 3, inside the surfedges), each surfedge's edge
   and both of its vertices (`rm_face_edges_ok`, `rm_surfedge_ok`), before
   `Mod_CalcSurfaceExtents`;
 - a node's surfaces inside the map and in no other node (`rm_mark_once`:
-  a surface in two nodes would make its texture chain a loop), a
+  a surface in two nodes would make its texture chain a loop; the second
+  loop of `R_DrawTextureChains` is bounded by the surface count as well,
+  as the first is by the index capacity, in defence in depth), a
   submodel's faces inside the map (`rm_range_ok`); a negative headnode is
   a leaf and is accepted as gl1 accepts it (base2's `*15`; N8 must not
   mark lights from it);
@@ -1038,10 +1052,22 @@ data, each through a plain function of `rm_pure.c`:
   the lump), for N5 to bound.
 
 A failed check frees the model (hunk, file, buffers) and drops with
-`ri.Sys_Error(ERR_DROP)`. Not prevented here, because it happens inside a
-shared loader before any check of this module can run: a node graph with a
-cycle recurses without end in `Mod_SetParent` (`files/models.c`), as in
-gl1; that is a defect of `files/` for a parked card.
+`ri.Sys_Error(ERR_DROP)`. A shared loader refuses the same way, but its
+drop longjmps past `Mod_ForName` with the slot named and half-filled; a
+slot therefore carries a `loaded` flag, set last, after every loader and
+check has returned (`rm_slot_state` decides empty, unfinished or loaded).
+Only a loaded slot is handed out: an unfinished one is freed completely
+(world buffers, the hunk after `Hunk_End`, the file) at the next
+`Mod_ForName` or `RI_BeginRegistration`, before any hunk is begun, and the
+map is loaded afresh, so a refused map leaves nothing drawable behind and
+nothing held across registrations.
+
+Because the node lump is checked to be a tree before `Mod_LoadNodes`, the
+recursion of `Mod_SetParent` and `Mod_NumberLeafs` (`files/models.c`) on
+a node cycle or a shared child cannot happen in this renderer; its depth
+on a valid chain of up to `MAX_MAP_NODES` nodes is gl1's. FIX43 (#216)
+stays open for the shared loader itself and for the other renderers,
+which do not make this check.
 
 Choices made where the design left room:
 

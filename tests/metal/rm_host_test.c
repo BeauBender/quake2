@@ -1186,6 +1186,38 @@ test_mark_once(void)
 }
 
 /*
+ * The node lump is a tree from node 0 before it is linked: a node named by
+ * two parents, twice by one, a cycle back to node 0 or through another
+ * node, and a child outside the nodes or the leafs are refused.
+ */
+static void
+test_node_tree(void)
+{
+	unsigned char seen[4];
+	const int tree[8] = { 1, 2, -1, -2, 3, -3, -4, -1 };      /* 0 -> 1, 2; 2 -> 3; leaves 0 to 3 */
+	const int leaves[2] = { -1, -1 };                          /* one node, a leaf twice */
+	const int shared[8] = { 1, 2, 3, -1, 3, -2, -3, -4 };      /* 3 is a child of 1 and of 2 */
+	const int twice[4] = { 1, 1, -1, -2 };                     /* 1 is both children of 0 */
+	const int to_root[4] = { 1, -1, 0, -2 };                   /* 0 -> 1 -> 0 */
+	const int loop[6] = { 1, -1, 2, -2, 1, -3 };               /* 0 -> 1 -> 2 -> 1 */
+	const int self[4] = { 1, -1, 1, -2 };                      /* 1 -> 1 */
+	const int far_node[4] = { 2, -1, -1, -1 };
+	const int far_leaf[4] = { 1, -5, -1, -1 };
+	const int least[4] = { 1, -2147483647 - 1, -1, -1 };
+
+	CHECK(rm_node_tree_ok(tree, 4, 4, seen) && rm_node_tree_ok(leaves, 1, 1, seen));
+	CHECK(!rm_node_tree_ok(shared, 4, 4, seen));
+	CHECK(!rm_node_tree_ok(twice, 2, 2, seen));
+	CHECK(!rm_node_tree_ok(to_root, 2, 2, seen));
+	CHECK(!rm_node_tree_ok(loop, 3, 3, seen) && !rm_node_tree_ok(self, 2, 2, seen));
+	CHECK(!rm_node_tree_ok(far_node, 2, 4, seen) && !rm_node_tree_ok(far_leaf, 2, 4, seen));
+	CHECK(rm_node_tree_ok(far_leaf, 2, 5, seen) && !rm_node_tree_ok(least, 2, 4, seen));
+	CHECK(!rm_node_tree_ok(tree, 0, 4, seen) && !rm_node_tree_ok(tree, 4, 3, seen));
+	/* the scratch is cleared on each call: the same valid tree passes twice */
+	CHECK(rm_node_tree_ok(tree, 4, 4, seen) && rm_node_tree_ok(tree, 4, 4, seen));
+}
+
+/*
  * A model slot is handed out only when its load finished: the name alone
  * (a loader dropped past Mod_ForName) or memory without the flag is an
  * unfinished load, to be freed before the next one.
@@ -1465,6 +1497,7 @@ main(void)
 	test_vis();
 	test_mark_once();
 	test_slot_state();
+	test_node_tree();
 	test_view_rect();
 	test_view_matrix();
 	test_projection();

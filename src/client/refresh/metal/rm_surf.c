@@ -146,7 +146,7 @@ R_RecursiveWorldNode(entity_t *currententity, mnode_t *node)
 	/* recurse down the children, front side first */
 	R_RecursiveWorldNode(currententity, node->children[side]);
 
-	/* draw stuff (the node's surfaces are inside the map and in no other node: rm_model.c) */
+	/* draw stuff (the node is visited once and its surfaces are inside the map and in no other node: rm_model.c) */
 	for (c = node->numsurfaces, surf = r_worldmodel->surfaces + node->firstsurface; c; c--, surf++)
 	{
 		if (surf->visframe != r_framecount)
@@ -218,7 +218,7 @@ R_DrawTextureChains(const float *mvp, const rm_viewport_t *vp, int cull)
 				continue;
 			}
 
-			/* each surface is in one node, so a chain holds it once and fits; never written past */
+			/* each surface is in one node of a tree, so a chain holds it once and fits; never written past */
 			if (s->num_indices > w->size.indices - n)
 			{
 				break;
@@ -236,12 +236,15 @@ R_DrawTextureChains(const float *mvp, const rm_viewport_t *vp, int cull)
 
 	for (i = 0, image = gltextures; i < numgltextures; i++, image++)
 	{
+		long left = r_worldmodel->numsurfaces;
+
 		if (!image->registration_sequence || !image->texturechain)
 		{
 			continue;
 		}
 
-		for (s = image->texturechain; s; s = s->texturechain)
+		/* a chain holds each surface once (the nodes are a tree: rm_model.c); bounded all the same */
+		for (s = image->texturechain; s && (left > 0); s = s->texturechain, left--)
 		{
 			if (s->flags & SURF_DRAWTURB)
 			{
