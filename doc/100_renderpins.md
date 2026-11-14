@@ -290,21 +290,51 @@ manifest, as assets of the pre-release `pr-evidence` of the repository
 (`PINS_EVIDENCE_REPO=owner/name`, default the GitHub repository of the
 `origin` remote), then prints a Markdown section to paste into the pull
 request. It uses `gh`, uploads only into an existing pre-release and
-never replaces an asset. It refuses, and uploads nothing, when a file is
-not listed in the manifest, its size or digest differs from the
-manifest, it is not a PNG or GIF written by `evidence`, it is a symbolic
-link or lies outside the manifest's folder, the manifest is outside the
-evidence folder, any file holds the host name, the user name or a home
-path, or a file is game or store data: `.pak`, `.pk3`, `.dm2`, `.cin`, a
-trace (`.q2r`), a `.tga` frame, the store's `manifest.txt` or other store
-files. Name single files after the manifest to publish only those.
+never replaces an asset. Before uploading it says on stderr where to,
+how many files and bytes, and that an uploaded asset is public at once
+and cannot be recalled: deleting it later stops further downloads, not
+copies already fetched.
+
+It never uploads a file as it found it. It reads each image once, without
+following a link, checks those bytes and uploads those same bytes; it
+uploads a manifest it writes again from the validated fields, and the
+asset names come from the card, commit, renderer and scenario, not from
+the manifest. It refuses the whole set, and uploads nothing, when:
+
+* the manifest is not named `<folder>-evidence.txt` inside its set
+  folder `<card>-<commit>-<renderer>-<scenario>` (or the synthetic
+  equivalent) directly in the evidence folder, is a symbolic link, or
+  lies in the store;
+* any line of the manifest is not one `evidence` writes, any value does
+  not match the pattern `evidence` can write (names, pin ids, numbers;
+  no Markdown, no free text), or the values disagree with each other or
+  with the names;
+* an image's size is over the budget (`PINS_EVIDENCE_BUDGET` or the
+  manifest's `budget`, whichever is smaller) or its size or SHA-256
+  differs from the manifest;
+* an image is not exactly what the encoder writes: for PNG the
+  signature, every chunk's CRC, only the chunks the encoder writes
+  (`IHDR`, `acTL`, `fcTL`, `IDAT`, `fdAT`, `IEND`), nothing after
+  `IEND`, every frame decompressing to the stated size; for GIF the
+  header, the fixed palette and loop block, only the frame blocks the
+  encoder writes, nothing after the trailer;
+* the regenerated manifest or an image holds the host name, the user
+  name or a home path;
+* a file named after the manifest is not one of the set's files in its
+  folder, or any argument starts with `-`.
+
+Game and store data (`.pak`, `.pk3`, `.dm2`, `.cin`, a trace `.q2r`, a
+`.tga` frame, the store's `manifest.txt` and other store files) are
+refused because no set has such a name and no such file parses as an
+image the encoder writes. Name single files after the manifest to
+publish only those.
 
 The section it prints looks like this:
 
 ```markdown
 ### Evidence: `world` on `soft`
 
-Reference `world/soft/<id>`, candidate `world/soft/<id>-r2`; frames=23 failed=0 worst=0 ...
+Reference `world/soft/<id>`, candidate `world/soft/<id>-r2`; `frames=23 failed=0 worst=0 ...`.
 
 ![world: reference, candidate, difference x8, frame world-000000.tga (the worst score)](https://github.com/<owner>/<repo>/releases/download/pr-evidence/<card>-<commit>-soft-world-still.png)
 
