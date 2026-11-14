@@ -12,6 +12,7 @@ Decision record (owner-gated, `manual:BeauBender`):
 - INFORM8 (#35) — Metal path: pin at two seams, grow an in-tree OpenGL-subset shim first, then specialize into native `ref_metal` (closed, accepted by the owner on 2026-11-12)
 - INFORM9 (#36) — Pin fixtures: reference frames and traces come from the owner's game data on a Mac where `ref_gl1` runs, kept in a local pin store; CI runs only synthetic traces (closed, accepted by the owner on 2026-11-12)
 - INFORM11 (#101) — the look of the four ray-traced effects, accepted by the owner from the frames RT3 to RT6 captured (owner-gated, `gate:manual:BeauBender`) — depends on TASK55, TASK56, TASK57, TASK58
+- INFORM12 (#262) — the ray passes run at an internal resolution and the MetalFX temporal scaler upscales the frame, decided by TASK105 (owner-gated, `gate:manual:BeauBender`)
 
 Work cards:
 - TASK20 — Static-link build mode (platform) — tier T0

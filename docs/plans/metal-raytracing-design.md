@@ -162,7 +162,7 @@ image-quality card (RT12), not decided here.
 |---|---|---|
 | Colour | the forward pass's output at the internal size | `RGBA16Float`, the format section 8 measured |
 | Depth | section 3's `depth32float` attachment | `Depth32Float` measured; the scaler's reversed-depth setting follows the renderer's depth convention |
-| Motion vectors | section 3's `rg16float` attachment, from the unjittered current and previous view | `RG16Float` measured. The scaler's motion-vector scale matches section 3's units, which RT2 fixes. RT7 already needs them, so the scaler adds no attachment. Their raster cost is part of RT2's G-buffer and not measured; RT10's per-pass table records it |
+| Motion vectors | section 3's `rg16float` attachment, from the unjittered current and previous view, each with its own projection, so a change of the field of view is carried by them | `RG16Float` measured. The scaler's motion-vector scale matches section 3's units, which RT2 fixes. RT7 already needs them, so the scaler adds no attachment. Their raster cost is part of RT2's G-buffer and not measured; RT10's per-pass table records it |
 | Jitter | the Halton (2, 3) sequence minus 0.5, in internal pixels, added to the projection and passed to the scaler each frame | the sequence section 8 drove the scaler with |
 | Exposure | auto exposure off, fixed exposure | the resolve writes the stock display-referred product, not scene light; section 8 also ran with auto exposure off |
 | Reset | set for one frame on a map load, a `vid_restart`, a camera cut, a teleport, and a change of `r_rt_scale` or of the world refdef's rectangle | the same frame resets RT7's history |
@@ -173,11 +173,15 @@ renderer API (`ref.h`, `API_VERSION`) does not change. A map load is
 change of the world refdef's rectangle create the scaler anew; the
 rectangle changes with `viewsize` and with the window size. A camera cut
 or a teleport is a world refdef whose view origin moved further than a
-threshold from the last world refdef's, or whose field of view differs from
-it, or the first world refdef after a frame that drew none (a loading
-plaque, a cinematic, the console with no map). The last world refdef is the
-state the cut test compares; a refdef with `RDF_NOWORLDMODEL` does not
-replace it. RT11 sets the threshold and records it here.
+threshold from the last world refdef's, or the first world refdef after a
+frame that drew none (a cinematic, the console with no map). The last world
+refdef is the state the cut test compares; a refdef with `RDF_NOWORLDMODEL`
+does not replace it. RT11 sets the threshold and records it here. A change
+of the field of view is not a cut: the client interpolates `fov` across a
+server frame (`cl_entities.c`), so a zoom changes it a little on every
+rendered frame, and the motion vectors already carry it. While a loading
+plaque is up the renderer receives no frame at all; the map load that
+normally ends it is a reset event of its own.
 
 **The scale: `r_rt_scale`.** Named and described here only; no cvar is
 added to the code by TASK105. RT11 adds it, with its entry in
@@ -370,7 +374,7 @@ green, pins as stated.
 | RT6 | Water reflections, one bounce, warp-perturbed normal | same shape with `rt-water`; non-water pixels byte-identical to RT off |
 | RT7 | Temporal accumulation and denoiser (depends RT3 to RT5) | pins unchanged (pins run with temporal off); fps with everything on ≥ 60 at 1080p on apple7, number recorded |
 | RT8 | Hardware gating and fallbacks, `vid_restart` reporting, VM build | every effect cvar forced 0 on the VM with the report line; pins unchanged there (`r_rt_scale` is not RT8's: RT11 adds it, and it reads 1 there, section 4) |
-| RT11 (TASK25) | Internal resolution and `MTLFXTemporalScaler` (section 2, TASK105): the world refdef's 3D frame at `r_rt_scale` with a jittered projection, upscaled to that refdef's rectangle, 2D at the window size, a refdef with `RDF_NOWORLDMODEL` at its own size with no scaler; the cvar with its `doc/040_cvarlist.md` entry; the reset events for the scaler and RT7's history; the per-family defaults of section 2 (depends RT7, RT8) | every effect off: all gl1 pins unchanged and no scaler created; the four effect scenarios carry `r_rt_scale 1` and their pins are unchanged; with an effect on and the scale below 1, each reset event (map load, `vid_restart`, camera cut, teleport, a change of the scale or of the world refdef's rectangle through `viewsize` or the window size) resets the scaler and RT7's history on that frame, shown by a `r_rt_stats 1` line, and the player-setup menu's model view open in game resets neither, shown by the same line; at `viewsize` below 100 the upscaled view fills the same centred rectangle as with every effect off; where `supportsDevice:` is NO or the device has no ray tracing (the VM), `r_rt_scale` reads 1 with a report line; fps with everything on at the default scale on T1 and T2, with the internal and output sizes, recorded in `docs/audits/rt-performance.md` |
+| RT11 (TASK25) | Internal resolution and `MTLFXTemporalScaler` (section 2, TASK105): the world refdef's 3D frame at `r_rt_scale` with a jittered projection, upscaled to that refdef's rectangle, 2D at the window size, a refdef with `RDF_NOWORLDMODEL` at its own size with no scaler; the cvar with its `doc/040_cvarlist.md` entry; the reset events for the scaler and RT7's history; the per-family defaults of section 2 (depends RT7, RT8) | every effect off: all gl1 pins unchanged and no scaler created; the four effect scenarios carry `r_rt_scale 1` and their pins are unchanged; with an effect on and the scale below 1, each reset event (map load, `vid_restart`, camera cut, teleport, a change of the scale or of the world refdef's rectangle through `viewsize` or the window size) resets the scaler and RT7's history on that frame, shown by a `r_rt_stats 1` line, and the player-setup menu's model view open in game and a `fov` change from 90 to 30 reset neither, shown by the same line; at `viewsize` below 100 the upscaled view fills the same centred rectangle as with every effect off; where `supportsDevice:` is NO or the device has no ray tracing (the VM), `r_rt_scale` reads 1 with a report line; fps with everything on at the default scale on T1 and T2, with the internal and output sizes, recorded in `docs/audits/rt-performance.md` |
 | RT9 (TASK25) | Render-stage ray queries on apple9: shadows and AO in the resolve shader, compute path kept for apple6 to apple8; both at the internal resolution (depends RT7, RT11) | identical pins on both paths at 0.005 (pins run at `r_rt_scale 1`, temporal accumulation off); with everything on and the default `r_rt_scale` (1080 rows upscaled by `MTLFXTemporalScaler` to the M6's 5120 x 2880, section 2), the render-stage path holds fps ≥ display refresh (60 Hz on the T2 host), the first frames of a process excluded; the fps, the internal and the output size recorded in `docs/audits/rt-performance.md`, the compute path's fps beside it. Tracing at native pixels is not the target: 36.8 ms on the M6 (section 8, verdicts table, row RT9 (1)) |
 | RT10 (TASK25) | Acceleration-structure refit vs rebuild tuning and resolution-scale defaults per family, GPU timestamps | per-pass timings table in `docs/audits/rt-performance.md` for apple7 and apple9, including the G-buffer raster with its motion vectors, RT7's accumulation and denoiser and the scaler; the `r_rt_scale` default per family set from those timings and TASK106's (#249), replacing section 2's design defaults; no pin change |
 | RT12 (TASK25) | Image quality of the upscaled frame on real frames (depends RT11 and the owner's acceptance of the RT look, section 5) | for the four effect scenarios and `world`, frames at the default `r_rt_scale` upscaled to the T2 host's native output are compared with frames at `r_rt_scale 1` at the same output, from the same replay; the per-frame scores are recorded in this document, and each case section 2 lists (particles, sprites and beams, water reflections, lightstyle changes and muzzle flashes, the view weapon, the jitter in RT7's history) is named with the frames that show it; a default that should change is a finding for RT10 |
@@ -458,7 +462,8 @@ Per-decision verdicts, section 4 and section 6, for this device:
    intersection (TASK25):** unchanged; both true. This host is a valid
    T2 device for TASK25.
 3. **Neither forces `r_rt_*` to 0 (TASK60 / RT8):** unchanged; this device
-   never takes the branch. The forced-off half stays VM-only, and on this
+   never takes the branch. (Since TASK105, section 4 forces only the effect
+   cvars to 0 there, and `r_rt_scale` reads 1.) The forced-off half stays VM-only, and on this
    host it can only be tested by an override cvar that pretends the
    capability is absent. Finding for the RT8 card: add such an override
    (or a way to cap the family) so the fallback and the apple6 to apple8
