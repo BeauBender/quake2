@@ -8,9 +8,13 @@ records pins and compares them frame by frame. This is a tool for
 renderer work: players never need it.
 
 The frames come from the retail game data, so a pin can only be made on
-a machine that has that data. Neither the data nor anything made from it
-(frames, manifests, logs) is ever committed or uploaded; the store stays
-on the machine that made it. These pins are not the unit-test pins of
+a machine that has that data. Neither the data nor the store (frames,
+manifests, logs, traces) is ever committed or uploaded; the store stays
+on the machine that made it. The one exception is evidence for a pull
+request: a scaled still and a short clip rendered from two pins, which
+`scripts/pins.sh evidence-publish` may upload (see *Evidence for a pull
+request* below and decision record
+[0007](../docs/decisions/0007-pr-evidence-frames.md)). These pins are not the unit-test pins of
 [Unit Tests, Pins And Coverage](085_unittests.md), which are committed
 text files and need no game data.
 
@@ -263,6 +267,120 @@ portable start without the pin arguments does.
 * `scripts/pins.sh selftest`: tests the driver and the comparator with
   generated frames and a stand-in engine. It needs no game data and runs
   as part of `scripts/test.sh`.
+
+## Evidence for a pull request
+
+A pull request for a renderer change can show what it does: a
+side-by-side still and a short clip per scenario, with the score table.
+Both commands need `python3` (standard library only); nothing else is
+installed.
+
+```sh
+scripts/pins.sh evidence <renderer> <scenario> [--ref <renderer>] [--ref-id <dir>] [--run N | --cand-id <dir>] [--card <ID>]
+scripts/pins.sh evidence-publish evidence/<folder>/<folder>-evidence.txt
+```
+
+`evidence` runs `compare` with the same options, then writes into
+`evidence/<card>-<commit>-<renderer>-<scenario>/` of the checkout (git
+ignores it; `PINS_EVIDENCE_DIR` names another place, never inside the
+store), where `<commit>` is the engine commit of the candidate pin:
+
+* `...-still.png`: the frame with the worst score, as reference,
+  candidate and the absolute difference times 8, side by side, with
+  captions.
+* `...-clip.png`: an animated PNG of the same three panels over every
+  captured frame (at most 48, taken evenly), at half size, each frame
+  shown for half a second. The frames are the ones the pin captured,
+  every `PINS_EVERY`th rendered frame (30 by default), so the clip is a
+  slide show of the demo, not smooth motion.
+* `...-clip.gif`: the same clip as a GIF with a fixed palette of 256
+  colours, for viewers that do not animate PNG.
+* `...-evidence.txt`: the manifest: the command, the commit, the pin ids
+  (relative to the store), every frame's score and the size and SHA-256
+  of each file. No host name, user name or local path.
+
+Each file must fit `PINS_EVIDENCE_BUDGET` bytes (default 4000000);
+a file that does not is scaled down by 2, 3 and so on until it does.
+Setting `PINS_EVIDENCE_BUDGET` higher raises that size cap: `evidence`
+writes the value into the manifest's `budget` line, and
+`evidence-publish` accepts files up to it.
+`evidence` writes nothing into the store.
+
+`evidence-publish` uploads the files the manifest lists, and the
+manifest, as assets of the pre-release `pr-evidence` of the repository
+(`PINS_EVIDENCE_REPO=owner/name`, default the GitHub repository of the
+`origin` remote), then prints a Markdown section to paste into the pull
+request. It uses `gh`, uploads only into an existing pre-release and
+never replaces an asset. All of that holds only while
+`PINS_EVIDENCE_UPLOADER` is unset: when it names a program,
+`evidence-publish` runs that program as
+`<program> <repo> <tag> -- <file>...` in place of the built-in `gh`
+upload, including its check that the release exists and is a
+pre-release, so nothing is checked on the release. The variable exists
+for the self-test's stand-in uploader; leave it unset to publish.
+Before uploading it says on stderr where to,
+how many files and bytes, and that an uploaded asset is public at once
+and cannot be recalled: deleting it later stops further downloads, not
+copies already fetched.
+
+It never uploads a file as it found it. It reads each image once, without
+following a link, checks those bytes and uploads those same bytes; it
+uploads a manifest it writes again from the validated fields, and the
+asset names come from the card, commit, renderer and scenario, not from
+the manifest. It refuses the whole set, and uploads nothing, when:
+
+* the manifest is not named `<folder>-evidence.txt` inside its set
+  folder `<card>-<commit>-<renderer>-<scenario>` (or the synthetic
+  equivalent) directly in the evidence folder, is a symbolic link, or
+  lies in the store;
+* any line of the manifest is not one `evidence` writes, any value does
+  not match the pattern `evidence` can write (names, pin ids, numbers;
+  no Markdown, no free text), or the values disagree with each other or
+  with the names;
+* an image's size is over the budget (`PINS_EVIDENCE_BUDGET` or the
+  manifest's `budget`, whichever is smaller) or its size or SHA-256
+  differs from the manifest;
+* an image is not exactly what the encoder writes: for PNG the
+  signature, every chunk's CRC, only the chunks the encoder writes
+  (`IHDR`, `acTL`, `fcTL`, `IDAT`, `fdAT`, `IEND`), nothing after
+  `IEND`, every frame decompressing to the stated size; for GIF the
+  header, the fixed palette and loop block, only the frame blocks the
+  encoder writes, nothing after the trailer;
+* the regenerated manifest or an image holds the host name, the user
+  name or a home path;
+* a file named after the manifest is not one of the set's files in its
+  folder, or any argument starts with `-`.
+
+Game and store data (`.pak`, `.pk3`, `.dm2`, `.cin`, a trace `.q2r`, a
+`.tga` frame, the store's `manifest.txt` and other store files) are
+refused because no set has such a name and no such file parses as an
+image the encoder writes. Name single files after the manifest to
+publish only those.
+
+The section it prints looks like this:
+
+```markdown
+### Evidence: `world` on `soft`
+
+Reference `world/soft/<id>`, candidate `world/soft/<id>-r2`; `frames=23 failed=0 worst=0 ...`.
+
+![world: reference, candidate, difference x8, frame world-000000.tga (the worst score)](https://github.com/<owner>/<repo>/releases/download/pr-evidence/<card>-<commit>-soft-world-still.png)
+
+![world: clip, 23 frames at 500 ms each](https://github.com/<owner>/<repo>/releases/download/pr-evidence/<card>-<commit>-soft-world-clip.png)
+
+GIF of the same clip (256 fixed colours): [<card>-<commit>-soft-world-clip.gif](https://github.com/<owner>/<repo>/releases/download/pr-evidence/<card>-<commit>-soft-world-clip.gif)
+
+<details><summary>Scores per frame</summary> ... one row per frame ... </details>
+
+Manifest with the command, the commit, the pin ids and the SHA-256 of every file: [<card>-<commit>-soft-world-evidence.txt](https://github.com/<owner>/<repo>/releases/download/pr-evidence/<card>-<commit>-soft-world-evidence.txt)
+```
+
+`scripts/pins.sh evidence --synthetic [--card <ID>]` writes the same
+kind of set from a generated test pattern (colour bars, a moving square,
+frame numbers) with no game content, to try the publishing path.
+`scripts/pins.sh evidence-selftest` checks the encoders and every
+refusal with a stand-in uploader; it runs in `scripts/test.sh` as
+`tests/check-evidence.sh` and is skipped when `python3` is missing.
 
 ## The pin arguments
 
