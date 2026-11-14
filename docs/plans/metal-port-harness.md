@@ -645,7 +645,7 @@ references from an accelerated OpenGL, `Apple M6`; the numbers are in
 | `skywater` with `demo1.dm2` | the defaults | exact; confirmed by TASK83 as for `world` (the frames are the same) |
 | `models` | the defaults, 0.02 and 0.005 | confirmed by TASK83: accelerated `gl1`/`gl1` worst 0.000824 and 0.001058, and `gl1-metal` against it at most 0.000792 and 0.001068 in 6 pairs, a fifth of the default bad fraction |
 | `particles` | `--threshold 0.02 --bad-threshold 0.25` (the `// nondeterministic:` line) | confirmed by TASK83: accelerated `gl1`/`gl1` worst 0.009974 and 0.185570, `gl1-metal` against it at most 0.010591 and 0.151660 in 6 pairs, with the flash drawn |
-| `skywater` with `water.dm2` | `--threshold 0.02 --bad-threshold 0.03` (the `// nondeterministic:` line) | confirmed by TASK83: accelerated `gl1`/`gl1` exact on the 144-message demo, `gl1-metal` against it at most 0.000004 and 0.000013 in 6 pairs |
+| `skywater` with `water.dm2` | `--threshold 0.02 --bad-threshold 0.03` (the `// nondeterministic:` line) | indicative only (TASK83): accelerated `gl1`/`gl1` exact on a 144-message demo that `make-demo water` refused and that was renamed by hand, `gl1-metal` against it at most 0.000004 and 0.000013 in 6 pairs; not acceptance evidence until `make-demo water` accepts a demo on that host (#232) |
 
 The `// nondeterministic:` lines of the scenario files are unchanged:
 `gl1` shows the same nondeterminism as `soft` (`models`, `particles`,
@@ -862,8 +862,10 @@ difference 7 and bad 0, score 0.000002 of the whole frame against
 
 So on this host S4 cannot pass against `gl1` at the defaults for the
 same reasons as `world` in TASK49; an accelerated reference (TASK83)
-decides it. It did: against the accelerated references `world`, `skywater`
-from `demo1.dm2` and from `water.dm2` pass on every frame (TASK83).
+decides it. It did for `world` and `skywater` from `demo1.dm2`, which pass
+on every frame against the accelerated references; `skywater` from
+`water.dm2` passes too, but on a refused, hand-renamed demo, so that half
+is indicative and stays open until #232 (TASK83).
 
 ### The `models` scenario against the software renderer (TASK51)
 
@@ -980,7 +982,7 @@ So `compare gl1-metal models --ref gl1` cannot pass at the defaults
 against these references, with or without `gl1_stencilshadow 1`; no
 threshold or scenario was changed. TASK83 (#187) judges `models` again
 against references from an accelerated OpenGL; there it passes on every
-frame at the defaults.
+frame at the defaults, also with `gl1_stencilshadow 1`.
 
 Frame 19 is decided: the reference is wrong and the shim is right. In
 589,461 to 638,479 `gl1` draws 328 pixels that `gl1-metal` does not and
@@ -1151,7 +1153,8 @@ so the demo captures 5 frames, not 4: 0 to 2 from above the surface and 3
 and 4 from below (looked at in both passes). The demo the references were
 recorded from is the second pass's last make (144 messages, `cksum`
 1705733582, 14994 bytes), refused by `make-demo` and renamed by hand beside
-the binary, as in TASK50. The range was not recalibrated: a demo of 141 to
+the binary, as in TASK50, so every number measured from it in this section is indicative and
+not acceptance evidence (#232 tracks the fix). The range was not recalibrated: a demo of 141 to
 145 messages puts the move under water at about rendered frame 60
 (TASK70: 0.44 to 0.45 of the frames), on the third capture, so widening
 the range would make the split depend on the make; the holds of
@@ -1197,6 +1200,7 @@ scenario, each against both `gl1` records, 6 pairs; every shim log `mgl:
 | TASK50 (S4) | `skywater` from `demo1.dm2` | the defaults | 138 of 138 | 0.000010, 0.000033 (21) | exact |
 | TASK50 (S4) | `skywater` from `water.dm2` | `--threshold 0.02 --bad-threshold 0.03` | 30 of 30; also all at the defaults | 0.000004, 0.000013 | exact |
 | TASK51 (S5) | `models` | the defaults | 138 of 138 | 0.000792, 0.001068 (7) | 22 exact, frame 7 at most 0.000608, 0.001038 (3 pairs) |
+| TASK51 (S5) | `models` with `r_shadows 1`, `gl1_stencilshadow 1` (scratch, below) | the defaults | 92 of 92 (4 pairs) | 0.000070, 0.000078 (7) | 22 exact, frame 7 0.000070, 0.000078 |
 | TASK52 (S6) | `particles` | `--threshold 0.02 --bad-threshold 0.25` | 138 of 138 | 0.010591, 0.151660 | 7 exact, worst 0.011907, 0.168597 (frame 8, 3 pairs) |
 | TASK52 (S6) | `particles` with `gl_polyblend 0` (scratch) | the same | 92 of 92 | 0.015115, 0.199079 | 7 exact |
 
@@ -1207,18 +1211,44 @@ scenario, and far under the threshold: `models` bad 0.001068 against
 (threshold 0.02), bad 0.151660 against 0.185570 (threshold 0.25); the
 `gl_polyblend 0` copy score 0.015115 against 0.015223, bad 0.199079
 against 0.187988 (threshold 0.25). These maxima are sample maxima of a
-PRNG-driven scenario, not bounds. The 2D scenarios against the new references, two
+PRNG-driven scenario, not bounds.
+
+**Stencil shadows (`models` with `r_shadows 1` and `gl1_stencilshadow
+1`).** Recorded in a second round of the same card, at the same engine
+commit `de1da7fd` and on the same host (1-minute load 2.3 to 2.7): a scratch copy of
+`models.cfg` with those two lines appended, in a throwaway work tree of
+that commit, not committed (scenario `models-stencil` in the store). Two
+`gl1` records, then `ref_gl1` rebuilt with `WITH_METAL_SHIM=yes` and two
+`gl1-metal` records. All four exited 0 and wrote `complete`, rendered 689
+frames (`timedemo.txt`) and captured 23 with no `FAILED` line, as the
+`models` records do; the shim logs `mgl: 707 frames, 0 without a drawable,
+0 skipped, 0 draws past the vertex ring` and no `not implemented` line. The
+shadows are drawn: against the plain `models` record of `gl1`, 19 of 23
+frames differ (worst bad 0.008001, frame 19). `gl1`/`gl1` is exact on all
+23 frames. `compare gl1-metal models-stencil --ref gl1` exits 0; over all 4
+pairs, 92 of 92 frames pass at the defaults, worst score 0.000070 and bad
+0.000078 (frame 7); `gl1-metal` run to run 22 exact, frame 7 0.000070 and
+0.000078. Met, no finding.
+
+The 2D scenarios against the new references, two
 `gl1-metal` records each: `hud2d` and `cinematic` exact on every frame,
 `world-fullbright` 92 of 92 at the defaults, worst 0.000031 and 0.000072.
 
 Verdicts: TASK49 (S3) met, with `gl1_multitexture` 1 and 0. TASK50 (S4)
-met for `world`, `skywater` from `demo1.dm2` and from `water.dm2`; the sky
-(frame 21) and the translucent surface pass, and the water demo passes
-even at the defaults. TASK51 (S5) met for `models`; the scratch copies
-with shadows and stencil shadows of TASK51 were not recorded again. TASK52
-(S6) met at the `particles` value; frames 5, 8, 11 and 16 (the flash) and
-13 pass. No frame of any of these is over its threshold, so there is no
-finding on any of the four cards. The faults TASK49 to TASK52 attributed to
+met for `world` and `skywater` from `demo1.dm2`; the sky (frame 21) and
+the translucent surface pass. The water half of S4 stays open: the shim
+passes all 30 comparisons on the 144-message demo (6 pairs, 5 frames each,
+at `--bad-threshold 0.03` and at the defaults, worst score 0.000004, bad
+0.000013), but that demo was refused by `make-demo water` and renamed by
+hand, so by this runbook's rule the numbers are indicative and not
+acceptance evidence. It is accepted when `make-demo water` accepts a demo
+on this host, tracked by #232 ("`make-demo water` refuses every demo on a
+fast host"). TASK51 (S5) met for `models` and for `models` with
+`gl1_stencilshadow 1` (above); the plain-shadow copy of TASK51
+(`gl1_stencilshadow 0`) was not recorded again. TASK52 (S6) met at the
+`particles` value; frames 5, 8, 11 and 16 (the flash) and 13 pass. No
+frame of any of these is over its threshold, so there is no finding on any
+of the four cards. The faults TASK49 to TASK52 attributed to
 the software renderer (dropped edge polygons, the classic-path streaks,
 the wedge-shaped flash) do not appear against an accelerated reference.
 
@@ -1243,9 +1273,11 @@ host the `gl1` references come from Apple Software Renderer ("`gl1` on
 the build host (TASK80)"), so "every pin passes against `gl1`" is
 pending TASK83 (#187) for the 3D scenarios; the 2D scenarios, `hud2d`
 and `cinematic`, pass. No threshold or scenario was changed. TASK83
-closed that on the bare-metal host: every scenario passes against
-accelerated `gl1` references ("`gl1` references from an accelerated
-OpenGL (TASK83)").
+closed that on the bare-metal host for every scenario except `skywater`
+from `water.dm2`: they pass against accelerated `gl1` references, `models`
+also with `gl1_stencilshadow 1`; `skywater` from `water.dm2` passes too,
+but on a demo `make-demo water` refused, so that half stays open until
+#232 is done ("`gl1` references from an accelerated OpenGL (TASK83)").
 
 **Coverage.** `tests/metal/shim-coverage.sh`, run by
 `tests/check-metal-shim.sh`, derives the 59 entry points (54 called
