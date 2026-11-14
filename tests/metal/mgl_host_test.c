@@ -33,6 +33,7 @@
  */
 
 #include <limits.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,7 +62,7 @@ mgl_layer_ready(void)
 }
 
 static int tex_creates, tex_releases, tex_uploads, tex_create_fails, draws;
-static int last_levels, last_up_level, last_up_w, last_up_h, last_up_gen;
+static int last_levels, last_up_level, last_up_x, last_up_y, last_up_w, last_up_h, last_up_gen;
 static unsigned char last_up_rgba[64];
 static mgl_draw_t last_draw;
 
@@ -93,9 +94,11 @@ mgl_layer_tex_upload(void *tex, int level, int x, int y, int w, int h,
 {
 	size_t n = (size_t)w * (size_t)h * 4;
 
-	(void)tex; (void)x; (void)y;
+	(void)tex;
 	tex_uploads++;
 	last_up_level = level;
+	last_up_x = x;
+	last_up_y = y;
 	last_up_w = w;
 	last_up_h = h;
 	last_up_gen = gen_mips;
@@ -467,8 +470,8 @@ test_matrix_stack(void)
 	glGetFloatv(TEST_GL_VIEWPORT, got);
 	CHECK(ERR() == GL_INVALID_ENUM && got[0] == 42.0f);
 
-	/* the rest of the matrix arithmetic is a later card's: refused, counted */
-	glFrustum(-1, 1, -1, 1, 1, 2);
+	/* what the shim never implements is refused and counted */
+	glColorTableEXT(GL_TEXTURE_2D, GL_RGBA, 256, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 	CHECK(ERR() == GL_INVALID_OPERATION && mgl_unimplemented_calls() == 1);
 }
 
@@ -481,6 +484,145 @@ xform(const GLfloat *m, float x, float y, float out[4])
 	for (r = 0; r < 4; r++)
 	{
 		out[r] = m[r] * x + m[4 + r] * y + m[12 + r];
+	}
+}
+
+/* (x, y, z, 1) through a column-major matrix. */
+static void
+xform3(const GLfloat *m, float x, float y, float z, float out[4])
+{
+	int r;
+
+	for (r = 0; r < 4; r++)
+	{
+		out[r] = m[r] * x + m[4 + r] * y + m[8 + r] * z + m[12 + r];
+	}
+}
+
+/* Equal to a few float ulps, relative to the size of the value. */
+static int
+near1(float v, float want)
+{
+	float e = 1e-5f * (1.0f + (want < 0 ? -want : want));
+
+	return v > want - e && v < want + e;
+}
+
+static int
+near4(const float *v, float a, float b, float c, float d)
+{
+	return near1(v[0], a) && near1(v[1], b) && near1(v[2], c) && near1(v[3], d);
+}
+
+/* glFrustum, glRotatef, glTranslatef and glScalef against values worked out by hand. */
+static void
+test_perspective(void)
+{
+	GLfloat *top;
+	float v[4];
+
+	mgl_state_reset();
+	top = mgl_state.modelview[0];
+
+	/* the near plane maps to NDC z -1, the far one to 1; an off-centre volume shifts x and y */
+	glMatrixMode(GL_PROJECTION);
+	glFrustum(-1, 1, -1, 1, 1, 3);
+	CHECK(ERR() == GL_NO_ERROR);
+	xform3(mgl_state.projection[0], 0, 0, -1, v);
+	CHECK(near4(v, 0, 0, -1, 1));
+	xform3(mgl_state.projection[0], 0, 0, -3, v);
+	CHECK(near4(v, 0, 0, 3, 3));
+	xform3(mgl_state.projection[0], 1, -1, -1, v);
+	CHECK(near4(v, 1, -1, -1, 1));
+	glLoadIdentity();
+	glFrustum(0, 2, -1, 3, 2, 4);
+	xform3(mgl_state.projection[0], 2, 3, -2, v);
+	CHECK(near4(v, 2, 2, -2, 2));
+	CHECK(mgl_state.projection[0][8] == 1.0f && mgl_state.projection[0][9] == 0.5f &&
+		mgl_state.projection[0][0] == 2.0f && mgl_state.projection[0][5] == 1.0f);
+	CHECK(mgl_state.projection[0][14] == -8.0f && mgl_state.projection[0][15] == 0.0f);
+
+	/* it multiplies the current matrix; volumes GL refuses leave it alone */
+	glLoadIdentity();
+	mgl_state.projection[0][0] = 3.0f;
+	glFrustum(-1, 1, -1, 1, 1, 3);
+	CHECK(mgl_state.projection[0][0] == 3.0f && mgl_state.projection[0][5] == 1.0f);
+	glFrustum(-1, 1, -1, 1, 0, 3);
+	CHECK(ERR() == GL_INVALID_VALUE && mgl_state.projection[0][0] == 3.0f);
+	glFrustum(-1, 1, -1, 1, 1, -3);
+	CHECK(ERR() == GL_INVALID_VALUE);
+	glFrustum(1, 1, -1, 1, 1, 3);
+	CHECK(ERR() == GL_INVALID_VALUE);
+	glFrustum(-1, 1, 1, 1, 1, 3);
+	CHECK(ERR() == GL_INVALID_VALUE);
+	glFrustum(-1, 1, -1, 1, 2, 2);
+	CHECK(ERR() == GL_INVALID_VALUE && mgl_state.projection[0][0] == 3.0f);
+	glMatrixMode(GL_MODELVIEW);
+
+	/* a quarter turn about each axis, and about an axis that is not unit length */
+	glRotatef(90, 0, 0, 1);
+	xform3(top, 1, 0, 0, v);
+	CHECK(near4(v, 0, 1, 0, 1));
+	glLoadIdentity();
+	glRotatef(90, 2, 0, 0);
+	xform3(top, 0, 1, 0, v);
+	CHECK(near4(v, 0, 0, 1, 1));
+	glLoadIdentity();
+	glRotatef(-90, 0, 1, 0);
+	xform3(top, 1, 0, 0, v);
+	CHECK(near4(v, 0, 0, 1, 1));
+	glLoadIdentity();
+	/* a third of a turn about the diagonal cycles the axes */
+	glRotatef(120, 1, 1, 1);
+	xform3(top, 1, 0, 0, v);
+	CHECK(near4(v, 0, 1, 0, 1));
+	xform3(top, 0, 0, 1, v);
+	CHECK(near4(v, 1, 0, 0, 1));
+	xform3(top, 0, 1, 0, v);
+	CHECK(near4(v, 0, 0, 1, 1));
+	glLoadIdentity();
+	glRotatef(45, 0, 0, 0);
+	CHECK(ERR() == GL_NO_ERROR && top[0] == 1.0f && top[1] == 0.0f && top[5] == 1.0f);
+
+	/* translate then scale: the scale applies first */
+	glTranslatef(1, 2, 3);
+	glScalef(2, 3, 4);
+	xform3(top, 1, 1, 1, v);
+	CHECK(near4(v, 3, 5, 7, 1));
+	CHECK(top[12] == 1.0f && top[13] == 2.0f && top[14] == 3.0f && top[10] == 4.0f);
+	/* and the other way round: the translation is scaled */
+	glLoadIdentity();
+	glScalef(2, 3, 4);
+	glTranslatef(1, 1, 1);
+	xform3(top, 0, 0, 0, v);
+	CHECK(near4(v, 2, 3, 4, 1));
+
+	/*
+	 * gl1's R_PolyBlend: Quake's forward (x) becomes the eye's -z, left
+	 * (y) its -x and up (z) its y, so the quad 10 units ahead covers
+	 * every corner of the screen through gl1's projection.
+	 */
+	glLoadIdentity();
+	glRotatef(-90, 1, 0, 0);
+	glRotatef(90, 0, 0, 1);
+	xform3(top, 10, 100, 100, v);
+	CHECK(near4(v, -100, 100, -10, 1));
+	xform3(top, 10, -100, -100, v);
+	CHECK(near4(v, 100, -100, -10, 1));
+	{
+		/* R_SetPerspective of gl1_main.c at fov_y 73.74, 4:3, zNear 4, zFar 4096 */
+		double ymax = 4 * tan(73.74 * M_PI / 360.0), xmax = ymax * 4.0 / 3.0;
+		GLfloat mvp[16];
+
+		glMatrixMode(GL_PROJECTION);
+		glLoadIdentity();
+		glFrustum(-xmax, xmax, -ymax, ymax, 4, 4096);
+		mgl_mat_mul(mvp, mgl_state.projection[0], top);
+		xform3(mvp, 10, 100, 100, v);
+		CHECK(v[3] > 9.99f && v[3] < 10.01f && v[0] < -v[3] && v[1] > v[3] && v[2] > -v[3] && v[2] < v[3]);
+		xform3(mvp, 10, -100, -100, v);
+		CHECK(v[0] > v[3] && v[1] < -v[3]);
+		glMatrixMode(GL_MODELVIEW);
 	}
 }
 
@@ -535,6 +677,8 @@ test_matrices(void)
 	CHECK(ERR() == GL_INVALID_VALUE);
 	glOrtho(0, 1, 0, 1, 2, 2);
 	CHECK(ERR() == GL_INVALID_VALUE && mgl_state.projection[0][0] == 2.0f);
+
+	test_perspective();
 }
 
 /*
@@ -687,9 +831,28 @@ test_textures(void)
 	CHECK(ERR() == GL_NO_ERROR && tex_creates == 2 && tex_releases == 1 && last_levels == 3);
 	CHECK(t->width == 5 && t->height == 3 && tex_uploads == 3);
 
-	/* levels above 0 are S2b: refused, nothing uploaded */
+	/* levels above 0 fill the chain of the 5 x 3 level 0: 2 x 1, then 1 x 1, never mipmapped */
+	glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, 1);
 	glTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA, 2, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
-	CHECK(ERR() == GL_INVALID_OPERATION && tex_uploads == 3);
+	CHECK(ERR() == GL_NO_ERROR && tex_uploads == 4 && last_up_level == 1 && last_up_w == 2 &&
+		last_up_h == 1 && !last_up_gen && tex_creates == 2);
+	CHECK(memcmp(last_up_rgba, px, 8) == 0);
+	glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, 0);
+	glTexImage2D(GL_TEXTURE_2D, 2, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+	CHECK(ERR() == GL_NO_ERROR && tex_uploads == 5 && last_up_level == 2);
+	glTexImage2D(GL_TEXTURE_2D, 2, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	CHECK(ERR() == GL_NO_ERROR && tex_uploads == 5);
+	/* past the chain, or a size that is not the level's: not modelled, refused, nothing uploaded */
+	glTexImage2D(GL_TEXTURE_2D, 3, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+	CHECK(ERR() == GL_INVALID_OPERATION && tex_uploads == 5);
+	glTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA, 3, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+	CHECK(ERR() == GL_INVALID_OPERATION && tex_uploads == 5);
+	glTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+	CHECK(ERR() == GL_INVALID_OPERATION && tex_uploads == 5);
+	glBindTexture(GL_TEXTURE_2D, 1413);
+	glTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+	CHECK(ERR() == GL_INVALID_OPERATION && tex_uploads == 5 && !mgl_texture(1413)->mtl);
+	glBindTexture(GL_TEXTURE_2D, name);
 
 	/* what the shim refuses: the paletted path, other types, a border, the size limit */
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_COLOR_INDEX8_EXT, 2, 2, 0, GL_COLOR_INDEX, GL_UNSIGNED_BYTE, px);
@@ -713,9 +876,73 @@ test_textures(void)
 	CHECK(ERR() == GL_OUT_OF_MEMORY && t->width == MGL_MAX_TEXTURE_SIZE && t->mtl);
 	tex_create_fails = 0;
 
-	/* sub-images are S2b: refused */
-	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
-	CHECK(ERR() == GL_INVALID_OPERATION && tex_uploads == 3);
+	/* sub-images of the MGL_MAX_TEXTURE_SIZE x 1 storage: the last pixel that fits, then one past */
+	{
+		int up = tex_uploads;
+
+		glTexSubImage2D(GL_TEXTURE_2D, 0, MGL_MAX_TEXTURE_SIZE - 1, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_NO_ERROR && tex_uploads == up + 1 && last_up_x == MGL_MAX_TEXTURE_SIZE - 1 &&
+			last_up_y == 0 && last_up_w == 1 && last_up_h == 1 && last_up_level == 0 && !last_up_gen);
+		CHECK(memcmp(last_up_rgba, px, 4) == 0);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, MGL_MAX_TEXTURE_SIZE - 1, 0, 2, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_INVALID_VALUE);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_INVALID_VALUE);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 2, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_INVALID_VALUE);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, INT_MAX, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_INVALID_VALUE);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 1, 0, INT_MAX, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_INVALID_VALUE);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, -1, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_INVALID_VALUE);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, -1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_INVALID_VALUE);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, -1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_INVALID_VALUE);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, -1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_INVALID_VALUE);
+		glTexSubImage2D(GL_TEXTURE_2D, -1, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_INVALID_VALUE);
+		/* an empty region at the edge is valid and uploads nothing, as does no pixel pointer */
+		glTexSubImage2D(GL_TEXTURE_2D, 0, MGL_MAX_TEXTURE_SIZE, 0, 0, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_NO_ERROR && tex_uploads == up + 1);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		CHECK(ERR() == GL_NO_ERROR && tex_uploads == up + 1);
+		/* the last level of the chain (1 x 1 at 13), then past it; formats and types the shim refuses */
+		glTexSubImage2D(GL_TEXTURE_2D, 13, 0, 0, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_NO_ERROR && tex_uploads == up + 2 && last_up_level == 13 && last_up_rgba[3] == 255);
+		glTexSubImage2D(GL_TEXTURE_2D, 13, 1, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_INVALID_VALUE);
+		glTexSubImage2D(GL_TEXTURE_2D, 14, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_INVALID_OPERATION);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_COLOR_INDEX, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_INVALID_ENUM);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA, GL_FLOAT, px);
+		CHECK(ERR() == GL_INVALID_ENUM);
+		glTexSubImage2D(GL_TEXTURE_2D + 1, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_INVALID_ENUM && tex_uploads == up + 2);
+
+		/* level 0 regenerates the chain under GL_GENERATE_MIPMAP, a level above it does not */
+		glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, 1);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 3, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_NO_ERROR && last_up_gen && last_up_x == 3);
+		glTexSubImage2D(GL_TEXTURE_2D, 1, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_NO_ERROR && !last_up_gen && last_up_level == 1);
+		glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, 0);
+
+		/* no storage yet; an RGB texture stays opaque; the row length and offsets reach the copy */
+		glBindTexture(GL_TEXTURE_2D, 1414);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_INVALID_OPERATION && tex_uploads == up + 4);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		glPixelStorei(GL_UNPACK_ROW_LENGTH, 2);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 2, 1, 1, 2, GL_RGBA, GL_UNSIGNED_BYTE, px);
+		CHECK(ERR() == GL_NO_ERROR && last_up_x == 2 && last_up_y == 1 && last_up_w == 1 && last_up_h == 2);
+		CHECK(last_up_rgba[0] == 1 && last_up_rgba[3] == 255 && last_up_rgba[4] == 9 && last_up_rgba[7] == 255);
+		glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+		glBindTexture(GL_TEXTURE_2D, name);
+	}
 
 	/* a 1x1 texture has one level: GL_GENERATE_MIPMAP must not reach the layer */
 	glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, 1);
@@ -765,9 +992,24 @@ test_textures(void)
 	CHECK(ERR() == GL_INVALID_ENUM);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_LINEAR);
 	CHECK(ERR() == GL_INVALID_ENUM && mgl_texture(7)->wrap_s == GL_CLAMP);
-	/* anisotropy is not advertised */
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 4);
-	CHECK(ERR() == GL_INVALID_ENUM);
+	/* anisotropy: 1 to the maximum gl1 reads, clamped above it, refused below 1; bits 8-11 of the key */
+	{
+		GLfloat max = 0;
+		uint32_t base = mgl_sampler_key(mgl_texture(7));
+
+		glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &max);
+		CHECK(ERR() == GL_NO_ERROR && max == (GLfloat)MGL_MAX_ANISOTROPY && mgl_texture(7)->max_anisotropy == 1);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 4);
+		CHECK(ERR() == GL_NO_ERROR && mgl_sampler_key(mgl_texture(7)) == (base | (3u << 8)));
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, MGL_MAX_ANISOTROPY);
+		CHECK(ERR() == GL_NO_ERROR && mgl_sampler_key(mgl_texture(7)) == (base | (15u << 8)));
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, MGL_MAX_ANISOTROPY + 1);
+		CHECK(ERR() == GL_NO_ERROR && mgl_texture(7)->max_anisotropy == MGL_MAX_ANISOTROPY);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 1);
+		CHECK(ERR() == GL_NO_ERROR && mgl_sampler_key(mgl_texture(7)) == base);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 0);
+		CHECK(ERR() == GL_INVALID_VALUE && mgl_texture(7)->max_anisotropy == 1);
+	}
 
 	/* delete: storage released, parameters reset, bindings to it fall back to 0; 0 and names past the table ignored */
 	glBindTexture(GL_TEXTURE_2D, name);
@@ -779,11 +1021,149 @@ test_textures(void)
 		int before = tex_releases;
 
 		glDeleteTextures(3, del);
-		CHECK(ERR() == GL_NO_ERROR && tex_releases == before + 1 && !t->mtl && t->width == 0);
+		CHECK(ERR() == GL_NO_ERROR && tex_releases == before + 1 && !t->mtl && t->width == 0 && t->levels == 0);
 		CHECK(mgl_state.unit[0].bound == 0 && mgl_state.unit[1].bound == 0);
 	}
 	glDeleteTextures(-1, NULL);
 	CHECK(ERR() == GL_INVALID_VALUE);
+}
+
+/* Depth, stencil, cull, fill and polygon offset as they reach a draw. */
+static void
+test_draw_state(void)
+{
+	static const GLfloat vtx[] = {0, 0, 1, 0, 0, 1};
+	int i;
+
+	mgl_state_reset();
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glVertexPointer(2, GL_FLOAT, 0, vtx);
+
+	/* the defaults: nothing tested or written, nothing culled, filled, no offset, reference 0 */
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.depth_stencil_key == 0 && last_draw.cull == MGL_CULL_NONE);
+	CHECK(!last_draw.fill_lines && last_draw.depth_bias == 0 && last_draw.depth_slope == 0 && last_draw.stencil_ref == 0);
+
+	/* the depth test with GL's initial GL_LESS and writes; a function or mask set while it is off does nothing */
+	glDepthFunc(GL_GREATER);
+	glDepthMask(GL_FALSE);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(last_draw.depth_stencil_key == 0);
+	glEnable(GL_DEPTH_TEST);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.depth_stencil_key == (1u | ((uint64_t)(GL_GREATER - GL_NEVER) << 1)));
+	glDepthFunc(GL_LEQUAL);
+	glDepthMask(GL_TRUE);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(last_draw.depth_stencil_key == (1u | (3u << 1) | (1u << 4)));
+	glDepthFunc(GL_ALWAYS);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(last_draw.depth_stencil_key == (1u | (7u << 1) | (1u << 4)));
+	glDisable(GL_DEPTH_TEST);
+
+	/* gl1's shadow stencil: GL_EQUAL 1 under mask 2, GL_INCR on pass; masks keep the 8 bits */
+	glStencilFunc(GL_EQUAL, 1, 2);
+	glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(last_draw.depth_stencil_key == 0 && last_draw.stencil_ref == 1);
+	glEnable(GL_STENCIL_TEST);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.depth_stencil_key == ((1u << 5) | (2ull << 6) | (3ull << 15) |
+		(2ull << 18) | (0xffull << 26)));
+	/* every operation in its own field, the write mask, and the reference clamped to 0 .. 255 */
+	glStencilOp(GL_INVERT, GL_REPLACE, GL_DECR);
+	glStencilMask(0x1fe);
+	glStencilFunc(GL_NOTEQUAL, 300, 0x3ff);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(last_draw.depth_stencil_key == ((1u << 5) | (5ull << 6) | (5ull << 9) | (2ull << 12) | (4ull << 15) |
+		(0xffull << 18) | (0xfeull << 26)) && last_draw.stencil_ref == 255);
+	glStencilFunc(GL_NEVER, -4, 1);
+	glStencilOp(GL_ZERO, GL_KEEP, GL_KEEP);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(last_draw.stencil_ref == 0 && ((last_draw.depth_stencil_key >> 9) & 7) == 1 &&
+		((last_draw.depth_stencil_key >> 6) & 7) == 0);
+	glStencilFunc(GL_ALWAYS, 255, 1);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(last_draw.stencil_ref == 255);
+	CHECK(mgl_stencil_op_index(GL_KEEP) == 0 && mgl_stencil_op_index(GL_INVERT) == 5 &&
+		mgl_stencil_op_index(GL_INCR) == 3 && mgl_stencil_op_index(GL_ONE) == -1);
+	/* depth and stencil together */
+	glEnable(GL_DEPTH_TEST);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK((last_draw.depth_stencil_key & 0x3f) == (1u | (7u << 1) | (1u << 4) | (1u << 5)));
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_STENCIL_TEST);
+
+	/* cull: GL_BACK by default, gl1's GL_FRONT, and both faces, which draws nothing */
+	glEnable(GL_CULL_FACE);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.cull == MGL_CULL_BACK);
+	glCullFace(GL_FRONT);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(last_draw.cull == MGL_CULL_FRONT);
+	i = draws;
+	glCullFace(GL_FRONT_AND_BACK);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(ERR() == GL_NO_ERROR && draws == i);
+	glDisable(GL_CULL_FACE);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(draws == i + 1 && last_draw.cull == MGL_CULL_NONE);
+
+	/* gl1's polygon offset, only while GL_POLYGON_OFFSET_FILL is on */
+	glPolygonOffset(-0.05f, -1);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(last_draw.depth_bias == 0 && last_draw.depth_slope == 0);
+	glEnable(GL_POLYGON_OFFSET_FILL);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.depth_bias == -1.0f && last_draw.depth_slope == -0.05f);
+	glDisable(GL_POLYGON_OFFSET_FILL);
+
+	/* gl1's wireframe: GL_LINE on both faces; a mode per face or GL_POINT is drawn as the front's, reported */
+	glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.fill_lines);
+	glPolygonMode(GL_BACK, GL_FILL);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(ERR() == GL_INVALID_OPERATION && last_draw.fill_lines);
+	glPolygonMode(GL_FRONT_AND_BACK, GL_POINT);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(ERR() == GL_INVALID_OPERATION && !last_draw.fill_lines);
+	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(ERR() == GL_NO_ERROR && !last_draw.fill_lines);
+}
+
+/* The ring allocator: aligned offsets, the last allocation that fits, then the first that does not. */
+static void
+test_ring(void)
+{
+	mgl_ring_t r = {MGL_RING_ALIGN * 4, 0};
+
+	CHECK(mgl_ring_alloc(&r, 48) == 0 && r.used == 48);
+	CHECK(mgl_ring_alloc(&r, 1) == MGL_RING_ALIGN && r.used == MGL_RING_ALIGN + 1);
+	CHECK(mgl_ring_alloc(&r, MGL_RING_ALIGN) == 2 * MGL_RING_ALIGN);
+	/* exactly the rest */
+	CHECK(mgl_ring_alloc(&r, MGL_RING_ALIGN) == 3 * MGL_RING_ALIGN && r.used == r.size);
+	/* full: refused and nothing changes */
+	CHECK(mgl_ring_alloc(&r, 1) == -1 && r.used == r.size);
+	/* one byte over the rest */
+	r.used = MGL_RING_ALIGN * 3;
+	CHECK(mgl_ring_alloc(&r, MGL_RING_ALIGN + 1) == -1 && r.used == MGL_RING_ALIGN * 3);
+	/* the alignment itself past the end, and sizes that would wrap */
+	r.used = MGL_RING_ALIGN * 3 + 1;
+	CHECK(mgl_ring_alloc(&r, 1) == -1);
+	r.size = MGL_RING_ALIGN * 4 + 10;
+	r.used = MGL_RING_ALIGN * 4 + 1;
+	CHECK(mgl_ring_alloc(&r, 1) == -1 && r.used == MGL_RING_ALIGN * 4 + 1);
+	r.size = MGL_RING_ALIGN * 4;
+	r.used = 0;
+	CHECK(mgl_ring_alloc(&r, (size_t)-1) == -1 && mgl_ring_alloc(&r, 0) == -1 && r.used == 0);
+	CHECK(mgl_ring_alloc(&r, r.size) == 0);
+	/* the real ring holds the largest draw the shim accepts */
+	r.size = MGL_RING_BYTES;
+	r.used = 0;
+	CHECK(mgl_ring_alloc(&r, MGL_MAX_DRAW_VERTICES * sizeof(mgl_vertex_t)) == 0 &&
+		mgl_ring_alloc(&r, MGL_MAX_DRAW_INDICES * sizeof(uint16_t)) > 0);
 }
 
 /* Large enough for the largest draw the shim accepts. */
@@ -966,25 +1346,18 @@ test_draw(void)
 	CHECK(mgl_triangle_indices(GL_TRIANGLE_FAN, 5, NULL, (uint16_t *)big_elements, 8) == -1);
 	CHECK(mgl_triangle_indices(GL_POINTS, 5, NULL, (uint16_t *)big_elements, 99) == -1);
 
-	/* state this card does not draw yet: drawn without it, the sticky error set */
+	/* state later cards draw: drawn without it, the sticky error set */
 	i = draws;
-	glEnable(GL_CULL_FACE);
-	glDrawArrays(GL_TRIANGLES, 0, 3);
-	CHECK(ERR() == GL_INVALID_OPERATION && draws == i + 1);
-	glDisable(GL_CULL_FACE);
-	glEnable(GL_DEPTH_TEST);
-	glDrawArrays(GL_TRIANGLES, 0, 3);
-	CHECK(ERR() == GL_INVALID_OPERATION && draws == i + 2);
-	glDisable(GL_DEPTH_TEST);
-	i++;
 	glActiveTexture(GL_TEXTURE1);
 	glEnable(GL_TEXTURE_2D);
 	glDrawArrays(GL_TRIANGLES, 0, 3);
-	CHECK(ERR() == GL_INVALID_OPERATION && draws == i + 2);
+	CHECK(ERR() == GL_INVALID_OPERATION && draws == i + 1);
 	glDisable(GL_TEXTURE_2D);
 	glActiveTexture(GL_TEXTURE0);
 	glDrawArrays(GL_TRIANGLES, 0, 3);
-	CHECK(ERR() == GL_NO_ERROR && draws == i + 3);
+	CHECK(ERR() == GL_NO_ERROR && draws == i + 2);
+
+	test_draw_state();
 }
 
 int
@@ -999,6 +1372,7 @@ main(void)
 	test_unpack();
 	test_textures();
 	test_draw();
+	test_ring();
 
 	printf("mgl_host_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
