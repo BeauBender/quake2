@@ -63,9 +63,10 @@ Non-negotiables:
 - Never change the savegame format, the network protocol, or a struct that crosses a module API without a card that asks for it (see Architecture).
 - Never install packages or add a dependency without the owner's approval. A missing tool is reported, not installed.
 - Do not commit secrets, game data (`.pak` files) or build output.
+- Agent memory is never committed to this repository (`.claude/memory/` is ignored, and the dev-loop memory sync is off). It is kept in the owner's private store: at the start of a session run `scripts/agent-memory.sh pull <memory-dir>`, and when a memory changes run `scripts/agent-memory.sh push <memory-dir>`, where `<memory-dir>` is the agent's own memory directory. The store is named only by the local file `~/.config/agents/memory_repo`, which is outside the repository; never write its contents into a file, commit message, issue or pull request.
 
 When compacting, always preserve the list of modified files, the gate command (`scripts/test.sh`) and any open failures.
 
 Cards are GitHub Issues and work lands through pull requests: use `gh issue list`, `gh pr create` and `gh pr checks` rather than the web UI.
 
-Where things live: `docs/README.md` maps the tree; decisions are in `docs/decisions/`; plans in `docs/plans/`. Rules that load only for the files they cover are in `.claude/rules/`, and the `savegame-tables` skill is in `.claude/skills/`. `scripts/setup.sh` checks the toolchain and wires the commit hook in `.githooks/`.
+Where things live (agent memory is not in the tree, see the working rules): `docs/README.md` maps the tree; decisions are in `docs/decisions/`; plans in `docs/plans/`. Rules that load only for the files they cover are in `.claude/rules/`, and the `savegame-tables` skill is in `.claude/skills/`. `scripts/setup.sh` checks the toolchain and wires the commit hook in `.githooks/`.

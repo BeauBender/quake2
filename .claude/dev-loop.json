@@ -16,6 +16,6 @@
     "secretAllowPaths": ["tests/*", "*/tests/*", "*/fixtures/*", "*/testdata/*", "*.md", "*.lock", "*lock.json", "third_party/*"]
   },
   "worktree": { "required": true },
-  "memory": { "shared": true },
+  "memory": { "shared": false },
   "vsm": { "durable": false }
 }
