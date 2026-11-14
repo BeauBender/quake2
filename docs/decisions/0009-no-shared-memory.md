@@ -55,3 +55,11 @@ is tracked. Agent memory is persisted outside the repository, as
 `CLAUDE.md` describes in its working rules. Points 1 and 3 stand, and
 `memory.shared` stays `false`. The removed notes stay in history; history
 is not rewritten.
+
+The check also refuses any embedded repository (a gitlink, mode 160000,
+anywhere in the index) and requires the ignore rule to be in the top-level
+`.gitignore` itself; a rule only in `.git/info/exclude`, a global ignore
+file or a nested `.gitignore`, or a rule undone by a later negated pattern,
+does not count. The Consequences bullet above, that memory writes still
+change tracked files in the working tree, no longer applies once a checkout
+has this change: nothing under `.claude/memory/` is tracked.

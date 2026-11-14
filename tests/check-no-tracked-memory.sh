@@ -19,7 +19,8 @@
 # system configuration, and HOME and XDG_CONFIG_HOME inside a private
 # mktemp -d, on throwaway repositories there. It shows the check fails on
 # each spelling above, on a symlink and a submodule at .claude/memory, on a
-# nested clone staged with add -A, on a missing ignore rule and on one only
+# nested clone staged with add -A, on a missing ignore rule, on negated rules that leave memory
+# files not ignored, and on one only
 # in .git/info/exclude, a global ignore file or .claude/.gitignore, outside
 # a repository, and when ls-files, ls-files -s, check-ignore, tr or either
 # grep alone fails (a shim first on PATH); and that it passes on a clean
@@ -32,6 +33,8 @@ CDPATH='' cd "$(dirname "$0")/.."
 me=check-no-tracked-memory
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/nomem.XXXXXX")
 chmod 700 "${tmp:?}"
+# Absolute, so a relative TMPDIR is not resolved again against a -C directory.
+tmp=$(CDPATH='' cd "$tmp" && pwd)
 # Cleanup runs only on exit; a signal exits non-zero (and so cleans up)
 # instead of resuming with the scratch files gone.
 trap 'rm -rf "${tmp:?}"' EXIT
@@ -108,6 +111,16 @@ check()
 		;;
 	*)
 		echo "$me: git check-ignore failed; cannot tell whether .claude/memory/ is ignored" >&2
+		return 1
+		;;
+	esac
+	# -v prints "<source>:<line>:<pattern><TAB><path>" and exits 0 also when
+	# the deciding pattern is a negation, which means "not ignored".
+	pat=${rule#*:}
+	pat=${pat#*:}
+	case "$pat" in
+	'!'*)
+		echo "$me: .claude/memory/ is re-included by a negated pattern in .gitignore; it must be ignored" >&2
 		return 1
 		;;
 	esac
@@ -239,6 +252,16 @@ selftest()
 	git -C "${tmp:?}/nestedignore" init -q .
 	printf '%s\n' memory > "${tmp:?}/nestedignore/.claude/.gitignore"
 	expect_reject nestedignore "an ignore rule only in .claude/.gitignore"
+
+	mkdir -p "${tmp:?}/negall"
+	git -C "${tmp:?}/negall" init -q .
+	printf '%s\n' '!*.md' > "${tmp:?}/negall/.gitignore"
+	expect_reject negall "a .gitignore holding only a negated pattern"
+
+	mkdir -p "${tmp:?}/negmem"
+	git -C "${tmp:?}/negmem" init -q .
+	printf '%s\n' '.claude/memory/*' '!.claude/memory/*.md' > "${tmp:?}/negmem/.gitignore"
+	expect_reject negmem "a negated rule re-including .claude/memory/*.md"
 
 	mkdir -p "${tmp:?}/notarepo"
 	expect_reject notarepo "a git failure (not a repository)"
