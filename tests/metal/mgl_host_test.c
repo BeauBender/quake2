@@ -578,6 +578,8 @@ test_perspective(void)
 	CHECK(near4(v, 0, 1, 0, 1));
 	xform3(top, 0, 0, 1, v);
 	CHECK(near4(v, 1, 0, 0, 1));
+	xform3(top, 0, 1, 0, v);
+	CHECK(near4(v, 0, 0, 1, 1));
 	glLoadIdentity();
 	glRotatef(45, 0, 0, 0);
 	CHECK(ERR() == GL_NO_ERROR && top[0] == 1.0f && top[1] == 0.0f && top[5] == 1.0f);
@@ -588,6 +590,12 @@ test_perspective(void)
 	xform3(top, 1, 1, 1, v);
 	CHECK(near4(v, 3, 5, 7, 1));
 	CHECK(top[12] == 1.0f && top[13] == 2.0f && top[14] == 3.0f && top[10] == 4.0f);
+	/* and the other way round: the translation is scaled */
+	glLoadIdentity();
+	glScalef(2, 3, 4);
+	glTranslatef(1, 1, 1);
+	xform3(top, 0, 0, 0, v);
+	CHECK(near4(v, 2, 3, 4, 1));
 
 	/*
 	 * gl1's R_PolyBlend: Quake's forward (x) becomes the eye's -z, left
@@ -1007,7 +1015,7 @@ test_textures(void)
 		int before = tex_releases;
 
 		glDeleteTextures(3, del);
-		CHECK(ERR() == GL_NO_ERROR && tex_releases == before + 1 && !t->mtl && t->width == 0);
+		CHECK(ERR() == GL_NO_ERROR && tex_releases == before + 1 && !t->mtl && t->width == 0 && t->levels == 0);
 		CHECK(mgl_state.unit[0].bound == 0 && mgl_state.unit[1].bound == 0);
 	}
 	glDeleteTextures(-1, NULL);
@@ -1138,6 +1146,10 @@ test_ring(void)
 	/* the alignment itself past the end, and sizes that would wrap */
 	r.used = MGL_RING_ALIGN * 3 + 1;
 	CHECK(mgl_ring_alloc(&r, 1) == -1);
+	r.size = MGL_RING_ALIGN * 4 + 10;
+	r.used = MGL_RING_ALIGN * 4 + 1;
+	CHECK(mgl_ring_alloc(&r, 1) == -1 && r.used == MGL_RING_ALIGN * 4 + 1);
+	r.size = MGL_RING_ALIGN * 4;
 	r.used = 0;
 	CHECK(mgl_ring_alloc(&r, (size_t)-1) == -1 && mgl_ring_alloc(&r, 0) == -1 && r.used == 0);
 	CHECK(mgl_ring_alloc(&r, r.size) == 0);

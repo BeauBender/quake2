@@ -203,7 +203,7 @@ void mgl_mat_mul(GLfloat *out, const GLfloat *a, const GLfloat *b);
 typedef struct
 {
 	void *mtl;                    /* the layer's texture, NULL until level 0 is defined */
-	int width, height, levels;    /* of level 0; levels is the whole chain */
+	int width, height, levels;    /* of level 0; levels is the whole chain, 0 while mtl is NULL */
 	GLboolean opaque;             /* an RGB internal format: alpha reads 1, GL_REPLACE keeps the fragment's */
 	GLenum min_filter, mag_filter, wrap_s, wrap_t;
 	GLboolean generate_mipmap;

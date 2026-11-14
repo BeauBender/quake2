@@ -312,10 +312,11 @@ glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width,
 	 * A level above 0 fills the chain level 0 made (gl1 uploads level 0
 	 * first) and keeps level 0's alpha; one of another size would make
 	 * the texture incomplete in GL, which the shim does not model.
+	 * levels is 0 until level 0 has storage.
 	 */
 	if (level > 0)
 	{
-		if (!t->mtl || level >= t->levels || width != mgl_level_size(t->width, level) ||
+		if (level >= t->levels || width != mgl_level_size(t->width, level) ||
 			height != mgl_level_size(t->height, level))
 		{
 			mgl_unimplemented("glTexImage2D of a level that does not fit level 0", &once_level);
@@ -388,15 +389,16 @@ glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
 		return;
 	}
 
-	if (!t->mtl || level >= t->levels)
+	/* levels is 0 until level 0 has storage */
+	if (level >= t->levels)
 	{
 		mgl_error(GL_INVALID_OPERATION);
 		return;
 	}
 
-	/* written so that nothing wraps: the offsets are at most the level's size */
-	if (xoffset > mgl_level_size(t->width, level) || width > mgl_level_size(t->width, level) - xoffset ||
-		yoffset > mgl_level_size(t->height, level) || height > mgl_level_size(t->height, level) - yoffset)
+	/* a size of at most MGL_MAX_TEXTURE_SIZE minus an offset of at least 0 cannot overflow an int */
+	if (width > mgl_level_size(t->width, level) - xoffset ||
+		height > mgl_level_size(t->height, level) - yoffset)
 	{
 		mgl_error(GL_INVALID_VALUE);
 		return;
