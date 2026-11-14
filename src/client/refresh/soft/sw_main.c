@@ -22,6 +22,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include <SDL3/SDL.h>
 
+#ifdef __APPLE__
+#include <dlfcn.h>
+#include <objc/objc.h>
+#endif
+
 #include "header/local.h"
 
 #define NUMSTACKEDGES		2048
@@ -1979,6 +1984,39 @@ GetRefAPI(refimport_t imp)
 int vid_buffer_height = 0;
 int vid_buffer_width = 0;
 
+#ifdef __APPLE__
+/*
+ * Sets the opaque property of the CAMetalLayer that SDL's Metal
+ * renderer presents through, when it is the renderer in use. This file
+ * is C, so the Objective-C runtime is reached through dlsym: SDL's Cocoa
+ * backend has it loaded, and this module does not link it.
+ */
+static void
+RE_SetMetalLayerOpaque(SDL_Renderer *r, qboolean opaque)
+{
+	SEL (*getsel)(const char *);
+	void (*send)(void *, SEL, BOOL);
+	void *layer;
+
+	layer = SDL_GetRenderMetalLayer(r);
+
+	if (!layer)
+	{
+		return;
+	}
+
+	getsel = (SEL (*)(const char *))dlsym(RTLD_DEFAULT, "sel_registerName");
+	send = (void (*)(void *, SEL, BOOL))dlsym(RTLD_DEFAULT, "objc_msgSend");
+
+	if (!getsel || !send)
+	{
+		return;
+	}
+
+	send(layer, getsel("setOpaque:"), opaque ? YES : NO);
+}
+#endif
+
 static int
 RE_InitContext(void *win)
 {
@@ -2012,8 +2050,19 @@ RE_InitContext(void *win)
 		return false;
 	}
 
-	/* Select the color for drawing. It is set to black here. */
-	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+#ifdef __APPLE__
+	/* macOS scans a large window with an opaque CAMetalLayer out
+	   directly and then shows every frame at the display's refresh,
+	   whatever displaySyncEnabled says: with r_vsync 0 a window from
+	   about 1720x700 points up ran at 60 fps on a 60 Hz display. A
+	   layer that is not opaque stays composited and is not capped.
+	   Every pixel drawn here has alpha 255, so the picture is the
+	   same. With r_vsync 1 the layer stays opaque, as SDL makes it. */
+	RE_SetMetalLayerOpaque(renderer, r_vsync->value ? true : false);
+#endif
+
+	/* Select the color for drawing. It is set to opaque black here. */
+	SDL_SetRenderDrawColor(renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
 
 	/* Clear the entire screen to our selected color. */
 	SDL_RenderClear(renderer);
