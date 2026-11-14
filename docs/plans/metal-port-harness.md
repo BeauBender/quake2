@@ -2001,6 +2001,10 @@ three recorded scenarios exercise that path and the presents.
 and shim builds were run. No live window resize and no non-virtual GPU
 were tried.
 
+## Frame rates on a physical GPU (TASK97)
+
+In progress.
+
 ## Judging a renderer
 
 Prerequisites on the Mac: the owner's game data at `$PINS_BASEDIR/baseq2`,
