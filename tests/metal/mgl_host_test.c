@@ -1763,6 +1763,180 @@ test_models(void)
 	glMatrixMode(GL_MODELVIEW);
 }
 
+/* A colour equal to a few float ulps, for blends of gl1's 0.33 and 0.66, which have no exact float. */
+static int
+close4(mgl_rgba_t c, float r, float g, float b, float a)
+{
+	return near1(c.r, r) && near1(c.g, g) && near1(c.b, b) && near1(c.a, a);
+}
+
+/*
+ * Sky, warped water and translucent surfaces as gl1 submits them
+ * (TASK50). The warp and the sky's texture coordinates are computed by
+ * gl1 on the CPU (R_EmitWaterPolys, R_MakeSkyVec); the shim only copies
+ * them, so the checks are that they arrive unchanged and that the
+ * state of each draw reduces to the uniforms, keys and matrix gl1 asks
+ * for. One texel T of an RGB texture and gl1's inverse_intensity 0.5
+ * (intensity 2) throughout.
+ */
+static void
+test_sky_water_alpha(void)
+{
+	/* R_EmitWaterPolys: s and t already warped and divided by 64 */
+	static const GLfloat wvtx[] = {0, 0, 0, 64, 0, 0, 64, 64, 0, 0, 64, 0};
+	static const GLfloat wtc[] = {0.015625f, 1.15625f, 1.0703125f, -0.0390625f, 0.9921875f, 0.984375f, -0.03125f, 1.0f};
+	static const GLushort widx[] = {0, 1, 2, 0, 2, 3};
+	/* R_MakeSkyVec: one face, s and t clamped to [1/512, 511/512], t flipped */
+	static const GLfloat svtx[] = {10, 0, 0, 10, 5, 0, 10, 5, 5, 10, 0, 5};
+	static const GLfloat stc[] = {0.001953125f, 0.998046875f, 0.001953125f, 0.001953125f,
+		0.998046875f, 0.001953125f, 0.998046875f, 0.998046875f};
+	static const unsigned char texel[4] = {191, 64, 255, 255};
+	const mgl_rgba_t T = rgba(0.75f, 0.25f, 1.0f, 1.0f), dst = rgba(0.25f, 0.5f, 1.0f, 1.0f);
+	const float ii = 0.5f;
+	const uint64_t depth_write = 1u | ((uint64_t)(GL_LEQUAL - GL_NEVER) << 1) | (1u << 4);
+	mgl_rgba_t c;
+	float v[4];
+	int n, k;
+
+	mgl_state_reset();
+	mgl_textures_reset();
+	draws = 0;
+
+	/* R_SetupGL and R_Clear: front faces culled, depth test GL_LEQUAL with writes */
+	glCullFace(GL_FRONT);
+	glEnable(GL_CULL_FACE);
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_LEQUAL);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glBindTexture(GL_TEXTURE_2D, 1700);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, texel);
+	glEnable(GL_TEXTURE_2D);
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+
+	/*
+	 * D14, R_DrawSkyBox: the box follows the eye and turns with the sky
+	 * (glTranslatef to r_origin, glRotatef by time * skyrotate about
+	 * skyaxis, here 90 degrees about an axis of length 2), one fan of
+	 * four per face with GL_REPLACE and depth writes. The world matrix
+	 * under it is a move by (1, 2, 3).
+	 */
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glColor4f(1, 1, 1, 1);
+	glTranslatef(1, 2, 3);
+	glPushMatrix();
+	glTranslatef(100, 200, 300);
+	glRotatef(90, 0, 0, 2);
+	glVertexPointer(3, GL_FLOAT, 0, svtx);
+	glTexCoordPointer(2, GL_FLOAT, 0, stc);
+	glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+	n = draws;
+	CHECK(ERR() == GL_NO_ERROR && n == 1 && last_draw.nvertices == 4 && last_draw.nindices == 6);
+	CHECK(last_draw.indices[0] == 0 && last_draw.indices[1] == 1 && last_draw.indices[2] == 2 &&
+		last_draw.indices[3] == 0 && last_draw.indices[4] == 2 && last_draw.indices[5] == 3);
+	/* (10, 5, 5) turned 90 degrees about z is (-5, 10, 5), then moved by the origin and the world */
+	xform3(last_draw.u.mvp, last_draw.vertices[2].pos[0], last_draw.vertices[2].pos[1],
+		last_draw.vertices[2].pos[2], v);
+	CHECK(near4(v, 96, 212, 308, 1));
+	xform3(last_draw.u.mvp, 10, 0, 0, v);
+	CHECK(near4(v, 101, 212, 303, 1));
+	CHECK(last_draw.vertices[0].tc[0][0] == 0.001953125f && last_draw.vertices[0].tc[0][1] == 0.998046875f &&
+		last_draw.vertices[2].tc[0][0] == 0.998046875f && last_draw.vertices[3].tc[0][1] == 0.998046875f);
+	CHECK(last_draw.pipeline_key == (15u << 9) && last_draw.depth_stencil_key == depth_write &&
+		last_draw.cull == MGL_CULL_FRONT);
+	CHECK(last_draw.u.texenv0 == MGL_TEXENV_REPLACE && last_draw.u.tex_opaque0 == 1 &&
+		last_draw.u.texenv1 == MGL_TEXENV_NONE && last_draw.texture0 == mgl_texture(1700)->mtl);
+	c = mgl_texenv_stage(last_draw.u.texenv0, last_draw.u.tex_opaque0, last_draw.u.rgb_scale0,
+		rgba(1, 1, 1, 1), T);
+	CHECK(same(test_blend(last_draw.pipeline_key, c, dst), 0.75f, 0.25f, 1.0f, 1.0f));
+	/* glPopMatrix: the world matrix again, the next draw is not turned */
+	glPopMatrix();
+	glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+	xform3(last_draw.u.mvp, 10, 5, 5, v);
+	CHECK(ERR() == GL_NO_ERROR && near4(v, 11, 7, 8, 1) && mgl_state.modelview_depth == 0);
+	/* another sky axis, of length 2 along x: (10, 5, 5) turns to (10, -5, 5) */
+	glPushMatrix();
+	glRotatef(90, 2, 0, 0);
+	glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+	xform3(last_draw.u.mvp, 10, 5, 5, v);
+	CHECK(ERR() == GL_NO_ERROR && near4(v, 11, -3, 8, 1));
+	glPopMatrix();
+	n = draws;
+
+	/*
+	 * The turb path, R_RenderBrushPoly then R_ApplyGLBuffer with
+	 * SURF_DRAWTURB: unit 1 off, and with gl1_overbrightbits 0
+	 * GL_MODULATE by inverse_intensity, alpha 1.
+	 */
+	glVertexPointer(3, GL_FLOAT, 0, wvtx);
+	glTexCoordPointer(2, GL_FLOAT, 0, wtc);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	glColor4f(ii, ii, ii, 1.0f);
+	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, widx);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.nvertices == 4 && last_draw.nindices == 6);
+
+	for (k = 0; k < 4; k++)
+	{
+		CHECK(last_draw.vertices[k].tc[0][0] == wtc[2 * k] && last_draw.vertices[k].tc[0][1] == wtc[2 * k + 1]);
+		CHECK(last_draw.vertices[k].color[0] == ii && last_draw.vertices[k].color[3] == 1.0f);
+	}
+
+	CHECK(last_draw.u.texenv0 == MGL_TEXENV_MODULATE && last_draw.u.texenv1 == MGL_TEXENV_NONE &&
+		last_draw.pipeline_key == (15u << 9) && last_draw.depth_stencil_key == depth_write);
+	c = mgl_texenv_stage(last_draw.u.texenv0, last_draw.u.tex_opaque0, last_draw.u.rgb_scale0,
+		rgba(last_draw.vertices[0].color[0], last_draw.vertices[0].color[1],
+			last_draw.vertices[0].color[2], last_draw.vertices[0].color[3]), T);
+	CHECK(same(c, 0.375f, 0.125f, 0.5f, 1.0f));
+	/* gl1_overbrightbits 1, 2 or 4: GL_COMBINE with GL_RGB_SCALE 1, the colour left white */
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+	glTexEnvi(GL_TEXTURE_ENV, GL_RGB_SCALE, 1);
+	glColor4f(1, 1, 1, 1);
+	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, widx);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.u.texenv0 == MGL_TEXENV_COMBINE && last_draw.u.rgb_scale0 == 1.0f);
+	c = mgl_texenv_stage(last_draw.u.texenv0, last_draw.u.tex_opaque0, last_draw.u.rgb_scale0, rgba(1, 1, 1, 1), T);
+	CHECK(same(c, 0.75f, 0.25f, 1.0f, 1.0f));
+
+	/*
+	 * B4, R_DrawAlphaSurfaces then R_ApplyGLBuffer with buf_alpha:
+	 * blending on, GL_MODULATE, the colour (inverse_intensity, alpha),
+	 * drawn after everything opaque. gl1 leaves the depth writes on
+	 * here (it never calls glDepthMask in that path), so the shim does.
+	 */
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	glEnable(GL_BLEND);
+	glColor4f(ii, ii, ii, 0.33f);
+	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, widx);
+	CHECK(ERR() == GL_NO_ERROR && draws == n + 3);
+	CHECK(last_draw.pipeline_key == (1u | (4u << 1) | (5u << 5) | (15u << 9)) &&
+		last_draw.depth_stencil_key == depth_write && last_draw.cull == MGL_CULL_FRONT);
+	CHECK(last_draw.vertices[3].color[0] == ii && last_draw.vertices[3].color[3] == 0.33f &&
+		last_draw.vertices[1].tc[0][1] == wtc[3]);
+	c = mgl_texenv_stage(last_draw.u.texenv0, last_draw.u.tex_opaque0, last_draw.u.rgb_scale0,
+		rgba(ii, ii, ii, last_draw.vertices[0].color[3]), T);
+	/* the opaque texture keeps the colour's alpha: 0.33 of (0.375, 0.125, 0.5) over 0.67 of dst */
+	CHECK(close4(c, 0.375f, 0.125f, 0.5f, 0.33f));
+	CHECK(close4(test_blend(last_draw.pipeline_key, c, dst), 0.29125f, 0.37625f, 0.835f, 0.7789f));
+	/* SURF_TRANS66 */
+	glColor4f(ii, ii, ii, 0.66f);
+	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, widx);
+	c = mgl_texenv_stage(last_draw.u.texenv0, last_draw.u.tex_opaque0, last_draw.u.rgb_scale0,
+		rgba(ii, ii, ii, last_draw.vertices[0].color[3]), T);
+	CHECK(close4(test_blend(last_draw.pipeline_key, c, dst), 0.3325f, 0.2525f, 0.67f, 0.7756f));
+
+	/* the restore at the end of R_DrawAlphaSurfaces */
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glColor4f(1, 1, 1, 1);
+	glDisable(GL_BLEND);
+	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, widx);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.pipeline_key == (15u << 9) &&
+		last_draw.u.texenv0 == MGL_TEXENV_REPLACE && last_draw.vertices[0].color[3] == 1.0f);
+
+	glDisable(GL_TEXTURE_2D);
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_CULL_FACE);
+	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+}
+
 static void
 test_draw(void)
 {
@@ -1951,6 +2125,7 @@ test_draw(void)
 
 	test_draw_state();
 	test_world_units();
+	test_sky_water_alpha();
 	test_models();
 }
 
