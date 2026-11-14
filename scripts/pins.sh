@@ -308,6 +308,59 @@ build_args() {
     engine_args+=(+demomap "${PINS_DEMO:-demo1.dm2}")
 }
 
+# run_engine <bin> <out> <limit>: runs the engine with engine_args, its
+# output in <out>/engine.log, killed after <limit> seconds; sets run_status
+# (its exit status) and run_timedout (1 when it was killed)
+run_engine() {
+    local bin=$1 out=$2 limit=$3 pid t=0 w
+    run_status=0; run_timedout=0
+    "$bin" "${engine_args[@]}" > "$out/engine.log" 2>&1 &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$t" -ge "$limit" ]; then
+            run_timedout=1
+            kill "$pid" 2>/dev/null || true
+            w=0; while kill -0 "$pid" 2>/dev/null && [ "$w" -lt 5 ]; do sleep 1; w=$((w+1)); done
+            kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+            echo "pins: engine killed after ${limit}s (PINS_TIMEOUT)" >> "$out/engine.log"
+            break
+        fi
+        sleep 1; t=$((t+1))
+    done
+    wait "$pid" 2>/dev/null || run_status=$?
+    grep -E 'frames,.*fps' "$out/engine.log" > "$out/timedemo.txt" || true
+}
+# judge_pin <out> <renderer> <limit>: after run_engine, sets reason to why
+# the pin in <out> is not complete (empty when it is) and n to its frames
+judge_pin() {
+    local out=$1 renderer=$2 limit=$3 bad
+    reason=""
+    n=$(frame_count "$out")
+    if [ "$run_timedout" -ne 0 ]; then reason="engine timed out after ${limit}s"
+    elif [ "$run_status" -ne 0 ]; then reason="engine exited with status $run_status"
+    elif [ "$n" -eq 0 ]; then reason="no frames captured"
+    elif [ ! -f "$out/manifest.txt" ]; then reason="no manifest.txt"
+    elif grep -q '^FAILED ' "$out/manifest.txt"; then reason="the engine could not write a frame ($(grep -m1 '^FAILED ' "$out/manifest.txt"))"
+    elif [ "$(wc -l < "$out/manifest.txt" | tr -d ' ')" -ne "$n" ]; then reason="manifest.txt does not list the $n frames"
+    else
+        bad=$(awk -v r="$(engine_renderer "$renderer")" '$2 != r {print $2; exit}' "$out/manifest.txt")
+        [ -z "$bad" ] || reason="frames were rendered by '$bad', not '$renderer' (renderer fallback)"
+    fi
+    # gl1 and gl1-metal are one module name: the GL_RENDERER line tells which build ran
+    if [ -z "$reason" ] && [ "$renderer" = gl1-metal ]; then
+        shim_build "$out/engine.log" ||
+            reason="the engine did not load the Metal shim build of ref_gl1 (the first GL_RENDERER line of engine.log does not end in '(gl1-metal)'; build it with make ref_gl1 WITH_METAL_SHIM=yes)"
+    elif [ -z "$reason" ] && [ "$renderer" = gl1 ] && shim_build "$out/engine.log"; then
+        reason="the frames came from the Metal shim build of ref_gl1; record them as gl1-metal"
+    fi
+}
+# check_seed: PINS_SEED, when set, is 1 to 9 digits without a leading zero
+# (but 0 itself): 01 and 1 are one engine seed and would be two pin ids
+check_seed() {
+    [ -n "${PINS_SEED:-}" ] || return 0
+    [[ $PINS_SEED =~ ^(0|[1-9][0-9]{0,8})$ ]] || die "PINS_SEED must be 1 to 9 digits without a leading zero, got '$PINS_SEED'"
+}
+
 cmd_record() {
     local renderer=$1 scenario=$2 run=1 replace=0; shift 2
     local bin="${PINS_BIN:-$root/release/quake2}" limit="${PINS_TIMEOUT:-600}"
@@ -319,9 +372,8 @@ cmd_record() {
     case $limit in ''|*[!0-9]*) die "PINS_TIMEOUT must be a number of seconds, got '$limit'";; esac
     check_count PINS_WIDTH "${PINS_WIDTH:-640}"; check_count PINS_HEIGHT "${PINS_HEIGHT:-480}"; check_count PINS_EVERY "${PINS_EVERY:-30}"
     check_demo "${PINS_DEMO:-demo1.dm2}"
+    check_seed
     if [ -n "${PINS_SEED:-}" ]; then
-        # no leading zero but 0 itself: 01 and 1 are one engine seed and would be two pin ids
-        [[ $PINS_SEED =~ ^(0|[1-9][0-9]{0,8})$ ]] || die "PINS_SEED must be 1 to 9 digits without a leading zero, got '$PINS_SEED'"
         [ "${PINS_TRACE:-1}" != 0 ] || die "PINS_SEED needs the trace: the engine takes pins_seed only beside pins_record"
     fi
     case ${PINS_DEMO:-demo1.dm2} in
@@ -345,41 +397,10 @@ cmd_record() {
     if [ -f "$out/complete" ] && [ "$replace" -ne 1 ]; then
         die "a complete pin already exists at $out; record with --run N for another run, or --replace to overwrite it"
     fi
+    local reason="" n=0 run_status=0 run_timedout=0
     rm -rf "$out"; mkdir -p "$out"
-    "$bin" "${engine_args[@]}" > "$out/engine.log" 2>&1 &
-    local pid=$! t=0 w status=0 timedout=0
-    while kill -0 "$pid" 2>/dev/null; do
-        if [ "$t" -ge "$limit" ]; then
-            timedout=1
-            kill "$pid" 2>/dev/null || true
-            w=0; while kill -0 "$pid" 2>/dev/null && [ "$w" -lt 5 ]; do sleep 1; w=$((w+1)); done
-            kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
-            echo "pins: engine killed after ${limit}s (PINS_TIMEOUT)" >> "$out/engine.log"
-            break
-        fi
-        sleep 1; t=$((t+1))
-    done
-    wait "$pid" 2>/dev/null || status=$?
-    grep -E 'frames,.*fps' "$out/engine.log" > "$out/timedemo.txt" || true
-    local reason="" n bad
-    n=$(frame_count "$out")
-    if [ "$timedout" -ne 0 ]; then reason="engine timed out after ${limit}s"
-    elif [ "$status" -ne 0 ]; then reason="engine exited with status $status"
-    elif [ "$n" -eq 0 ]; then reason="no frames captured"
-    elif [ ! -f "$out/manifest.txt" ]; then reason="no manifest.txt"
-    elif grep -q '^FAILED ' "$out/manifest.txt"; then reason="the engine could not write a frame ($(grep -m1 '^FAILED ' "$out/manifest.txt"))"
-    elif [ "$(wc -l < "$out/manifest.txt" | tr -d ' ')" -ne "$n" ]; then reason="manifest.txt does not list the $n frames"
-    else
-        bad=$(awk -v r="$(engine_renderer "$renderer")" '$2 != r {print $2; exit}' "$out/manifest.txt")
-        [ -z "$bad" ] || reason="frames were rendered by '$bad', not '$renderer' (renderer fallback)"
-    fi
-    # gl1 and gl1-metal are one module name: the GL_RENDERER line tells which build ran
-    if [ -z "$reason" ] && [ "$renderer" = gl1-metal ]; then
-        shim_build "$out/engine.log" ||
-            reason="the engine did not load the Metal shim build of ref_gl1 (the first GL_RENDERER line of engine.log does not end in '(gl1-metal)'; build it with make ref_gl1 WITH_METAL_SHIM=yes)"
-    elif [ -z "$reason" ] && [ "$renderer" = gl1 ] && shim_build "$out/engine.log"; then
-        reason="the frames came from the Metal shim build of ref_gl1; record them as gl1-metal"
-    fi
+    run_engine "$bin" "$out" "$limit"
+    judge_pin "$out" "$renderer" "$limit"
     if [ -n "$reason" ]; then
         echo "$reason" > "$out/incomplete"
         die "$reason; the pin in $out is incomplete (see $out/engine.log)"
