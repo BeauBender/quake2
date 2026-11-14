@@ -25,8 +25,8 @@
  * image keeps its size (R_Upload32Native), with R_LightScaleTexture, the
  * gamma and intensity tables and the skin flood fill. Not copied: the
  * power-of-two path (R_Upload32Soft, gl1_picmip, gl1_round_down), the
- * paletted path, r_scale8bittextures (no scenario sets it) and the scrap
- * (N3). The shared loaders in files/ parse the files.
+ * paletted path and r_scale8bittextures (no scenario sets it). The scrap
+ * is rm_scrap.c's (N3). The shared loaders in files/ parse the files.
  *
  * =======================================================================
  */
@@ -159,7 +159,7 @@ R_ImageList_f(void)
 }
 
 /* from gl1_image.c: scale up the pixel values to increase the lighting range */
-static void
+void
 R_LightScaleTexture(unsigned *in, int inwidth, int inheight, qboolean only_gamma)
 {
 	int i, c = inwidth * inheight;
@@ -247,6 +247,58 @@ R_Upload8(image_t *image, byte *data, int width, int height, qboolean mipmap)
 	return ret;
 }
 
+/*
+ * from gl1_image.c, R_LoadPic: little pics go into the scrap (rm_scrap.c).
+ * 1 when the pic is in it; 0 when it is not, and the pic is loaded as an
+ * image of its own.
+ */
+static qboolean
+R_LoadScrap(image_t *image, byte *pic, int width, int height, int bits, qboolean nolerp)
+{
+	int texnum = -1, x = 0, y = 0;
+
+	if ((width < 1) || (height < 1) || (width > 128) || (height > 128))
+	{
+		return false;
+	}
+
+	if (bits == 32)
+	{
+		texnum = Scrap_AllocBlock(width, height, &x, &y, (unsigned *)pic, nolerp ? 0 : RM_MAX_SCRAPS_NOLERP);
+	}
+	else if (bits == 8)
+	{
+		unsigned *trans = R_Convert8to32(pic, width, height, d_8to24table);
+
+		if (trans)
+		{
+			texnum = Scrap_AllocBlock(width, height, &x, &y, trans, nolerp ? 0 : RM_MAX_SCRAPS_NOLERP);
+			free(trans);
+		}
+	}
+
+	if (texnum == -1)
+	{
+		return false;
+	}
+
+	if (nolerp && (texnum >= RM_MAX_SCRAPS_NOLERP))
+	{
+		R_Printf(PRINT_ALL, "%s: Nolerp image stored to lerp\n", image->name);
+	}
+
+	image->texnum = Scrap_Texture(texnum);
+	image->scrap = true;
+	image->has_alpha = true;
+	image->sl = (float)x / RM_SCRAP_WIDTH;
+	image->sh = (float)(x + width) / RM_SCRAP_WIDTH;
+	image->tl = (float)y / RM_SCRAP_HEIGHT;
+	image->th = (float)(y + height) / RM_SCRAP_HEIGHT;
+	image->upload_width = width;
+	image->upload_height = height;
+	return true;
+}
+
 /* from gl1_image.c: also the entry point for the generated textures */
 image_t *
 R_LoadPic(const char *name, byte *pic, int width, int realwidth,
@@ -330,7 +382,11 @@ R_LoadPic(const char *name, byte *pic, int width, int realwidth,
 		}
 	}
 
-	if (bits == 8)
+	if ((type == it_pic) && R_LoadScrap(image, pic, width, height, bits, R_NoLerp(name, type)))
+	{
+		/* in the atlas: its coordinates are set */
+	}
+	else if (bits == 8)
 	{
 		image->has_alpha = R_Upload8(image, pic, width, height, mipmap);
 	}
@@ -352,10 +408,14 @@ R_LoadPic(const char *name, byte *pic, int width, int realwidth,
 	}
 
 	image->sampler = R_ImageSampler(image, 0);
-	image->sl = 0;
-	image->sh = 1;
-	image->tl = 0;
-	image->th = 1;
+
+	if (!image->scrap)
+	{
+		image->sl = 0;
+		image->sh = 1;
+		image->tl = 0;
+		image->th = 1;
+	}
 
 	if (realwidth && realheight)
 	{
@@ -486,6 +546,7 @@ R_InitImages(void)
 		ri.Cvar_Set("gl1_intensity", "1");
 	}
 
+	Scrap_Init();
 	GetPCXPalette(&colormap, d_8to24table);
 	free(colormap);
 
@@ -527,7 +588,8 @@ R_ShutdownImages(void)
 
 	for (i = 0; i < numgltextures; i++)
 	{
-		if (gltextures[i].texnum)
+		/* an atlas's texture is the scrap's, freed there */
+		if (gltextures[i].texnum && !gltextures[i].scrap)
 		{
 			rmb_texture_free(gltextures[i].texnum);
 		}

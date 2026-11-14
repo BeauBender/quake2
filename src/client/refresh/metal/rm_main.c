@@ -234,6 +234,7 @@ RI_Init(void)
 
 	R_InitImages();   /* runs R_TextureMode: the flags RI_BeginFrame tests start clear */
 	RM_ClearTextureModeFlags();
+	RM_InitDraw();
 
 	ri.Vid_MenuInit();
 	return true;
@@ -290,6 +291,7 @@ RI_BeginFrame(float camera_separation)
 static void
 RI_RenderFrame(refdef_t *fd)
 {
+	RM_Flush2D();   /* menu rendering when needed */
 	(void)fd;   /* nothing is drawn yet */
 
 	if (r_norefresh->value)
@@ -316,6 +318,7 @@ RI_EndWorldRenderpass(void)
 static void
 RI_EndFrame(void)
 {
+	RM_Flush2D();   /* to draw buffered 2D text */
 	rmb_frame_end();
 }
 
@@ -356,58 +359,6 @@ static void
 RI_EndRegistration(void)
 {
 	R_FreeUnusedImages();
-}
-
-/* from gl1_draw.c: the pic is loaded and registered; drawing it is N3's */
-static struct image_s *
-RDraw_FindPic(const char *name)
-{
-	return R_FindPic(name, (findimage_t)R_FindImage);
-}
-
-/* from gl1_draw.c, which answers -1 -1 for a missing pic */
-static void
-RDraw_GetPicSize(int *w, int *h, const char *name)
-{
-	const image_t *image = R_FindPic(name, (findimage_t)R_FindImage);
-
-	*w = image ? image->width : -1;
-	*h = image ? image->height : -1;
-}
-
-static void
-RDraw_PicScaled(int x, int y, const char *pic, float factor)
-{
-	(void)x; (void)y; (void)pic; (void)factor;
-	rm_noop_calls++;
-}
-
-static void
-RDraw_PicScaledCol(int x, int y, const char *pic, float factor, const float color[3])
-{
-	(void)x; (void)y; (void)pic; (void)factor; (void)color;
-	rm_noop_calls++;
-}
-
-static void
-RDraw_StretchPic(int x, int y, int w, int h, const char *name)
-{
-	(void)x; (void)y; (void)w; (void)h; (void)name;
-	rm_noop_calls++;
-}
-
-static void
-RDraw_CharScaled(int x, int y, int num, float scale)
-{
-	(void)x; (void)y; (void)num; (void)scale;
-	rm_noop_calls++;
-}
-
-static void
-RDraw_TileClear(int x, int y, int w, int h, const char *name)
-{
-	(void)x; (void)y; (void)w; (void)h; (void)name;
-	rm_noop_calls++;
 }
 
 
