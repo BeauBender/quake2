@@ -2,7 +2,7 @@
 
 Status: decided by the owner, 2026-11-13.
 
-Number 0005 is taken by a record that lands separately.
+Number 0005 is the push identity hook record.
 
 ## Context
 
@@ -17,7 +17,7 @@ their predecessor.
 
 1. Port cards are pulled first. A card outside the port queue is parked.
 2. Review depth follows the tier, and the tier follows the paths. A
-   renderer-only change stays tier L and gets the correctness and
+   renderer-only change stays tier L (drawing code; the model, image and mesh files of each renderer are in `risk.mediumPaths`) and gets the correctness and
    specification passes. A change that touches the build, a script, a gate
    check, or any path in `risk.mediumPaths` or `risk.highPaths` is tier M or
    H and gets all three passes (correctness, security, specification).
@@ -41,7 +41,7 @@ from the main checkout, so they take effect once the main checkout holds it.
   whole default list followed by the source that parses untrusted input:
   `src/server/*`, `src/common/*`, `src/client/refresh/files/*`,
   `src/client/vid/refrecord.c`, `src/client/cl_*.c`, `src/client/sound/*`,
-  `src/client/refresh/*_model.c`, `src/client/refresh/*_image.c`,
+  `src/client/refresh/*_model.c`, `src/client/refresh/*_image.c`, `src/client/refresh/*_mesh.c`, `src/client/menu/*`,
   `src/backends/*` and `src/game/*`. A change there is always tier M and keeps the
   security pass. The classifier matches with shell `case` globs, where `*`
   also crosses `/`, so `src/common/*` covers its subdirectories.
