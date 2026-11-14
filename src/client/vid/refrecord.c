@@ -2834,20 +2834,63 @@ Rep_RenderFrame(void)
 /*
  * A 2D rectangle the renderers can be handed: a positive size no larger
  * than the frame the trace was recorded at (its width and height equal
- * the target's, checked at open), wholly inside it across, and
- * overlapping it down. Across is where a renderer writes unchecked
- * (ref_soft's Draw_CharScaled indexes its frame buffer by x alone); down,
- * every renderer clips or refuses the part outside itself, and the live
- * client draws there (the console sliding in starts above the top).
+ * the target's, checked at open), and wholly inside it. The GL renderers
+ * clip every 2D draw themselves, but ref_soft writes its frame buffer
+ * without checking several edges (Draw_CharScaled indexes it by x alone
+ * and checks the bottom with the integer scale; the tinted path of
+ * Draw_PicScaledCol never checks the top), so wholly inside is the rule.
+ * With top, the rectangle may instead overlap the top edge (y < 0, but
+ * some row inside), for the kinds whose ref_soft entry point clips that
+ * edge itself and which the live client draws there (the console sliding
+ * in starts above the top); every other edge stays inside.
  */
 static qboolean
-Rep_InFrame(int32_t x, int32_t y, int32_t w, int32_t h)
+Rep_InFrame(int32_t x, int32_t y, int32_t w, int32_t h, qboolean top)
 {
 	int32_t fw = rep.h.width, fh = rep.h.height;
 
-	/* w >= 1 first, so fw - w cannot overflow; x <= fw - w also bounds w */
-	return w >= 1 && h >= 1 && h <= fh &&
-		x >= 0 && x <= fw - w && y > -h && y < fh;
+	/* w, h >= 1 and h <= fh first, so fw - w and fh - h cannot overflow */
+	return w >= 1 && h >= 1 && h <= fh && x >= 0 && x <= fw - w &&
+		y <= fh - h && (top ? y > -h : y >= 0);
+}
+
+/*
+ * The size ref_soft draws a scaled pic at: the target's Draw_GetPicSize
+ * (the REC_PICSIZE call), times the scale in float, cut to int, as
+ * RE_Draw_PicScaled and RE_Draw_PicScaledCol compute it. False for a pic
+ * the target does not have (the renderer would draw nothing) and for a
+ * size past any frame (not cast, so the conversion cannot overflow).
+ */
+static qboolean
+Rep_PicRect(const char *name, float scale, int32_t *w, int32_t *h)
+{
+	static refrec_call_t q;
+	float sw, sh;
+
+	memset(&q, 0, sizeof(q));
+	q.type = REC_PICSIZE;
+	snprintf(q.name, sizeof(q.name), "%s", name);
+	q.ints[0] = q.ints[1] = -1;
+	rep.t.Call(&q);
+
+	if (q.ints[0] < 1 || q.ints[1] < 1)
+	{
+		return false;
+	}
+
+	sw = scale * q.ints[0];
+	sh = scale * q.ints[1];
+
+	/* false for a NaN too; the scale was checked first */
+	if (!(sw < 65536.0f && sh < 65536.0f))
+	{
+		return false;
+	}
+
+	*w = (int32_t)sw;
+	*h = (int32_t)sh;
+
+	return true;
 }
 
 /*
@@ -2908,8 +2951,11 @@ typedef enum { REP_FORWARD, REP_DROP, REP_REFUSE } rep_verdict_t;
  *     NUL-terminated with no NUL inside. A registration's name is the
  *     one its id's string table entry holds. Otherwise the trace is
  *     refused (REP_REFUSE).
- *   - every 2D draw lies in the frame (Rep_InFrame; a pic of unknown
- *     size by its corner), Draw_Fill and Draw_TileClear are cut to it,
+ *   - every 2D draw that reaches a pixel loop lies wholly in the frame,
+ *     its rectangle computed as ref_soft computes it (Rep_InFrame,
+ *     Rep_PicRect); only a character and a stretched pic may overlap the
+ *     top edge, which ref_soft clips for those two. Draw_Fill and
+ *     Draw_TileClear, which every renderer cuts itself, are cut to it,
  *     and a scale factor is one the client computes (Rep_Scale). A draw
  *     that is not is not forwarded (REP_DROP, stats.dropped): it would
  *     draw nothing, or write outside the frame.
@@ -2931,6 +2977,7 @@ Rep_Check(refrec_type_t type, uint32_t at)
 	refrec_call_t *c = &rep.call;
 	int32_t *n = c->ints;
 	float *f = c->floats;
+	int32_t w, h;
 	int i;
 
 	if (type == REC_RENDERFRAME || type == REC_CVARS)
@@ -2982,8 +3029,18 @@ Rep_Check(refrec_type_t type, uint32_t at)
 			/* every renderer masks the character; the console passes signed chars */
 			n[2] &= 0xff;
 
+			/*
+			 * ref_soft draws 8 * (int)scale columns and at most
+			 * (int)(8 * scale) rows: ceil(8 * scale) covers both. The top
+			 * may overlap: RE_Draw_CharScaled (soft/sw_draw.c:85-86 and
+			 * 101-106) returns for y <= -8 and otherwise starts at row 0
+			 * with 8 + y source rows, at most (8 + y) * scale <=
+			 * y + ceil(8 * scale) rows, which this bounds by the height.
+			 * The console's version line starts above the top while it
+			 * slides in (cl_console.c, lines - 35 * scale).
+			 */
 			if (!Rep_Scale(f[0]) || !Rep_InFrame(n[0], n[1], (int32_t)ceilf(8.0f * f[0]),
-					(int32_t)ceilf(8.0f * f[0])))
+					(int32_t)ceilf(8.0f * f[0]), true))
 			{
 				return REP_DROP;
 			}
@@ -2996,14 +3053,26 @@ Rep_Check(refrec_type_t type, uint32_t at)
 				f[i] = Rep_F(f[i], 0.0f, REFREC_REPLAY_MAX_LIGHT, 1.0f);
 			}
 
-			/* fall through: the corner and the scale */
+			/* fall through: the rectangle */
 		case REC_PICSCALED:
-			/* the renderer knows the pic's size and checks the rest of it */
-			return Rep_Scale(f[0]) && Rep_InFrame(n[0], n[1], 1, rep.h.height) ? REP_FORWARD : REP_DROP;
+			/* wholly inside: the tinted path of RE_Draw_PicScaledCol never checks the top */
+			return Rep_Scale(f[0]) && Rep_PicRect(c->name, f[0], &w, &h) &&
+				Rep_InFrame(n[0], n[1], w, h, false) ? REP_FORWARD : REP_DROP;
 
 		case REC_STRETCHPIC:
+			/*
+			 * The top may overlap: RE_Draw_StretchPicImplementation
+			 * (soft/sw_draw.c:176-183 refuses the sides and the bottom,
+			 * 189-196 skips the rows above the top), and its transparent
+			 * same-size path, which ignores the skip, writes h <= height
+			 * rows from row 0. The console background slides in from
+			 * above the top (cl_console.c, Draw_StretchPic at
+			 * -viddef.height + lines).
+			 */
+			return Rep_InFrame(n[0], n[1], n[2], n[3], true) ? REP_FORWARD : REP_DROP;
+
 		case REC_STRETCHRAW:
-			return Rep_InFrame(n[0], n[1], n[2], n[3]) ? REP_FORWARD : REP_DROP;
+			return Rep_InFrame(n[0], n[1], n[2], n[3], false) ? REP_FORWARD : REP_DROP;
 
 		case REC_FILL:
 			n[4] = Rep_Byte(n[4]);
@@ -3025,6 +3094,27 @@ Rep_Check(refrec_type_t type, uint32_t at)
 			   carry nothing else a renderer takes; REC_PALETTE was
 			   checked by the reader; REC_WARN is not forwarded */
 			return REP_FORWARD;
+	}
+}
+
+/*
+ * A new registration sequence: the renderer frees, at this map change or
+ * at the EndRegistration after it, every model and skin not registered
+ * again (an inline model lives on the world model's hunk). So every model
+ * and skin handle is forgotten, and an id not registered again resolves
+ * to NULL, never to a pointer from before. Pics are never freed.
+ */
+static void
+Rep_ForgetHandles(void)
+{
+	uint32_t i;
+
+	for (i = 1; i <= rep.nstrings; i++)
+	{
+		if (rep.kinds[i] == REFREC_KIND_MODEL || rep.kinds[i] == REFREC_KIND_SKIN)
+		{
+			rep.ptrs[i] = NULL;
+		}
 	}
 }
 
@@ -3064,6 +3154,11 @@ Rep_Forward(refrec_type_t type, uint32_t at)
 
 		case REC_RENDERFRAME:
 			Rep_RenderFrame();
+			return true;
+
+		case REC_BEGINREG:
+			Rep_ForgetHandles();
+			rep.t.Call(c);
 			return true;
 
 		case REC_CVARS:

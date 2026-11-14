@@ -124,6 +124,13 @@ even without `pins_capture`: no configuration file is read or written,
 and an error stops the engine. `scripts/pins.sh` does not drive this
 yet.
 
+A trace is a local development artifact: your own engine records it,
+you name it on the command line, and like the rest of the store it is
+derived from the game data and never leaves your machine. Replaying a
+trace obtained from someone else is not supported. The checks the
+replay makes on every call are defence in depth, not a sandbox; the
+renderers' own missing bounds checks are tracked on FIX40 (issue #185).
+
 ### The Metal shim build of gl1
 
 On macOS `ref_gl1` can be built against an OpenGL subset on Metal that

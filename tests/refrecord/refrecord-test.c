@@ -2966,6 +2966,9 @@ typedef struct {
 
 static mock_t mock;
 
+/* the size the mock's Draw_GetPicSize gives every pic but "missing" */
+static int32_t mock_picw = 8, mock_pich = 8;
+
 static void
 MockLog(int type)
 {
@@ -3036,8 +3039,10 @@ MockCall(refrec_call_t *c)
 
 	if (c->type == REC_PICSIZE)
 	{
-		c->ints[0] = 8;
-		c->ints[1] = 8;
+		qboolean missing = strcmp(c->name, "missing") == 0;
+
+		c->ints[0] = missing ? -1 : mock_picw;
+		c->ints[1] = missing ? -1 : mock_pich;
 	}
 
 	if (c->type == REC_PALETTE && c->datalen == REFREC_PALETTE_SIZE)
@@ -3890,15 +3895,22 @@ TestReplayValidation(void)
 		RefRec_CloseReplay();
 	}
 
-	/* B2: a rectangle lies across the frame and overlaps it down, with a size of 1 or more */
+	/* B2: a rectangle lies wholly in the frame, with a size of 1 or more; a stretched pic may overlap the top */
 	for (i = 0; i < sizeof(rects) / sizeof(rects[0]); i++)
 	{
 		refrec_type_t t = rects[i];
+		qboolean top = t == REC_STRETCHPIC;
 
 		CHECK(Rect2D(t, 0, 0, VAL_W, VAL_H, &st), "2d %d: the whole frame dropped", t);
 		CHECK(Rect2D(t, VAL_W - 1, VAL_H - 1, 1, 1, &st), "2d %d: the last pixel dropped", t);
-		CHECK(Rect2D(t, 0, -(VAL_H - 1), VAL_W, VAL_H, &st), "2d %d: one row showing dropped", t);
-		CHECK(!Rect2D(t, 0, -VAL_H, VAL_W, VAL_H, &st), "2d %d: wholly above forwarded", t);
+		CHECK(Rect2D(t, 0, VAL_H - 8, 8, 8, &st), "2d %d: on the bottom edge dropped", t);
+		CHECK(!Rect2D(t, 0, VAL_H - 7, 8, 8, &st) && !Rect2D(t, 0, VAL_H - 1, 8, 8, &st) &&
+				!Rect2D(t, 0, 1, VAL_W, VAL_H, &st), "2d %d: past the bottom forwarded", t);
+		CHECK(Rect2D(t, 0, -(VAL_H - 1), VAL_W, VAL_H, &st) == top &&
+				Rect2D(t, 0, -1, 8, 8, &st) == top && Rect2D(t, 0, -7, 8, 8, &st) == top,
+				"2d %d: over the top %s", t, top ? "dropped" : "forwarded");
+		CHECK(!Rect2D(t, 0, -VAL_H, VAL_W, VAL_H, &st) && !Rect2D(t, 0, -8, 8, 8, &st),
+				"2d %d: wholly above forwarded", t);
 		CHECK(!Rect2D(t, 0, VAL_H, 8, 8, &st), "2d %d: wholly below forwarded", t);
 		CHECK(!Rect2D(t, -1, 0, 8, 8, &st), "2d %d: one column left of the frame forwarded", t);
 		CHECK(!Rect2D(t, VAL_W - 7, 0, 8, 8, &st), "2d %d: one column right of the frame forwarded", t);
@@ -3933,9 +3945,18 @@ TestReplayValidation(void)
 				!Rect2D(t, INT32_MIN, INT32_MIN, INT32_MAX, INT32_MAX, &st), "clip %d: an empty rectangle forwarded", t);
 	}
 
-	/* a character: 8 * scale square, across the frame, scale 1 up to the bound */
+	/* a character: a ceil(8 * scale) square, in the frame but for the top, scale 1 up to the bound */
 	CHECK(Char2D(0, 0, 1, &st) && Char2D(VAL_W - 8, VAL_H - 8, 1, &st), "char: inside dropped");
-	CHECK(Char2D(0, -7, 1, &st) && Char2D(0, VAL_H - 1, 1, &st), "char: one row showing dropped");
+	CHECK(Char2D(0, -7, 1, &st) && Char2D(0, -1, 1, &st), "char: over the top dropped");
+	CHECK(Char2D(0, -15, 2, &st) && !Char2D(0, -16, 2, &st), "char: scale 2 over the top");
+	CHECK(!Char2D(0, VAL_H - 7, 1, &st) && !Char2D(0, VAL_H - 1, 1, &st), "char: past the bottom forwarded");
+	/* ref_soft checks the bottom with the integer scale and draws (int)(8 * scale) rows */
+	CHECK(Char2D(0, VAL_H - 12, 1.5f, &st) && !Char2D(0, VAL_H - 11, 1.5f, &st) &&
+			!Char2D(0, VAL_H - 9, 1.5f, &st), "char: scale 1.5 at the bottom");
+	CHECK(Char2D(0, VAL_H - 16, 1.99f, &st) && !Char2D(0, VAL_H - 9, 1.99f, &st) &&
+			!Char2D(0, VAL_H - 15, 1.99f, &st), "char: scale 1.99 at the bottom");
+	CHECK(Char2D(0, -1, VAL_H / 8, &st) && !Char2D(0, 1, VAL_H / 8, &st),
+			"char: over the top and past the bottom");
 	CHECK(!Char2D(0, -8, 1, &st) && !Char2D(0, VAL_H, 1, &st), "char: wholly above or below forwarded");
 	CHECK(!Char2D(-1, 0, 1, &st) && !Char2D(VAL_W - 7, 0, 1, &st), "char: past the side forwarded");
 	CHECK(Char2D(VAL_W - 16, 0, 2, &st) && !Char2D(VAL_W - 15, 0, 2, &st), "char: scale 2 at the side");
@@ -3945,20 +3966,52 @@ TestReplayValidation(void)
 			!Char2D(0, 0, NAN, &st) && !Char2D(0, 0, INFINITY, &st), "char: a scale below 1 or not finite forwarded");
 	CHECK(!Char2D(INT32_MAX, 0, 1, &st) && !Char2D(0, INT32_MIN, 1, &st), "char: extremes forwarded");
 
-	/* a scaled pic, by its corner (the renderer knows its size), scale 1 up to the bound */
+	/* a scaled pic: the target's size times the scale, cut to int, wholly in the frame */
 	for (i = 0; i < sizeof(pics) / sizeof(pics[0]); i++)
 	{
 		refrec_type_t t = pics[i];
 
-		CHECK(Pic2D(t, 0, 0, 1, &st) && Pic2D(t, VAL_W - 1, VAL_H - 1, 2, &st), "pic %d: inside dropped", t);
-		CHECK(Pic2D(t, 0, -(VAL_H - 1), 1, &st), "pic %d: above, overlapping, dropped", t);
+		mock_picw = mock_pich = 8;
+		CHECK(Pic2D(t, 0, 0, 1, &st) && strcmp(mock.last[REC_PICSIZE].name, "p") == 0,
+				"pic %d: inside dropped, or the size not asked for its name", t);
+		CHECK(Pic2D(t, VAL_W - 16, VAL_H - 16, 2, &st), "pic %d: in the corner dropped", t);
+		CHECK(!Pic2D(t, VAL_W - 15, 0, 2, &st) && !Pic2D(t, 0, VAL_H - 15, 2, &st) &&
+				!Pic2D(t, VAL_W - 1, VAL_H - 1, 1, &st), "pic %d: past the side or the bottom forwarded", t);
+		/* the tinted path of ref_soft's Draw_PicScaledCol writes above its buffer for y < 0 */
+		CHECK(!Pic2D(t, 0, -1, 1, &st) && !Pic2D(t, 0, -(VAL_H - 1), 1, &st), "pic %d: over the top forwarded", t);
 		CHECK(!Pic2D(t, -1, 0, 1, &st) && !Pic2D(t, VAL_W, 0, 1, &st), "pic %d: past the side forwarded", t);
 		CHECK(!Pic2D(t, 0, -VAL_H, 1, &st) && !Pic2D(t, 0, VAL_H, 1, &st), "pic %d: above or below forwarded", t);
-		CHECK(Pic2D(t, 0, 0, REFREC_REPLAY_MAX_SCALE, &st) && !Pic2D(t, 0, 0, REFREC_REPLAY_MAX_SCALE * 1.01f, &st),
-				"pic %d: the scale bound", t);
 		CHECK(!Pic2D(t, 0, 0, 0, &st) && !Pic2D(t, 0, 0, 0.99f, &st) && !Pic2D(t, 0, 0, NAN, &st),
 				"pic %d: a scale below 1 or not finite forwarded", t);
+
+		/* 5 * 1.5 = 7.5 is drawn 7 wide, as ref_soft cuts it */
+		mock_picw = mock_pich = 5;
+		CHECK(Pic2D(t, VAL_W - 7, VAL_H - 7, 1.5f, &st) && !Pic2D(t, VAL_W - 6, 0, 1.5f, &st) &&
+				!Pic2D(t, 0, VAL_H - 6, 1.5f, &st), "pic %d: a fractional size not cut to int", t);
+
+		mock_picw = mock_pich = 1;
+		CHECK(Pic2D(t, 0, 0, REFREC_REPLAY_MAX_SCALE, &st) && !Pic2D(t, 0, 0, REFREC_REPLAY_MAX_SCALE * 1.01f, &st),
+				"pic %d: the scale bound", t);
+
+		/* a pic wider than the frame, one too large for an int, one the target lacks */
+		mock_picw = VAL_W;
+		CHECK(Pic2D(t, 0, VAL_H - 8, 1, &st) && !Pic2D(t, 1, 0, 1, &st), "pic %d: width and height mixed up", t);
+		mock_picw = VAL_W + 1;
+		CHECK(!Pic2D(t, 0, 0, 1, &st), "pic %d: wider than the frame forwarded", t);
+		mock_picw = 8;
+		mock_pich = INT32_MAX;
+		CHECK(!Pic2D(t, 0, 0, REFREC_REPLAY_MAX_SCALE, &st), "pic %d: a size past an int forwarded", t);
+		mock_pich = 8;
+		{
+			int32_t n[2] = { 0, 0 };
+			float f[4] = { 1, 1, 1, 1 };
+
+			CHECK(!Replay2D(t, n, 2, f, t == REC_PICSCALEDCOL ? 4 : 1, "missing", NULL, 0, &st),
+					"pic %d: a pic the target lacks forwarded", t);
+		}
 	}
+
+	mock_picw = mock_pich = 8;
 
 	/* a raw image whose dimensions and data length disagree is refused by the reader */
 	{
@@ -3986,6 +4039,71 @@ TestReplayValidation(void)
 		CHECK(p && Replay(path, API_VERSION, VAL_W, VAL_H, &st) && st.failed &&
 				mock.last[REC_STRETCHRAW].type == 0, "raw: a length the dimensions disagree with was forwarded");
 	}
+}
+
+/*
+ * B3: a model or skin handle never outlives a registration sequence. A
+ * trace registers a model and a skin, begins registration again, and
+ * draws an entity on the old ids: they resolve to NULL (the entity is
+ * drawn without them), unless they were registered again; a pic used as
+ * a skin keeps its handle (the renderers never free pics).
+ */
+static qboolean
+RegTrace(const char *sub, qboolean again, refrec_replay_stats_t *st)
+{
+	static entity_t ents[2];
+	static lightstyle_t ls[MAX_LIGHTSTYLES];
+	const char *path = TracePath(sub);
+	refdef_t fd;
+
+	RefRec_StartRecord(path, VAL_W, VAL_H, 30);
+	RefRec_Registration(REC_PIC, "pics/c", &handle_c);
+	RefRec_Registration(REC_BEGINREG, "mapa", NULL);
+	RefRec_Registration(REC_MODEL, "*1", &handle_a);
+	RefRec_Registration(REC_SKIN, "skins/b.pcx", &handle_b);
+	RefRec_Registration(REC_ENDREG, NULL, NULL);
+	RefRec_Registration(REC_BEGINREG, "mapb", NULL);
+
+	if (again)
+	{
+		RefRec_Registration(REC_MODEL, "*1", &handle_a);
+		RefRec_Registration(REC_SKIN, "skins/b.pcx", &handle_b);
+	}
+
+	RefRec_Registration(REC_ENDREG, NULL, NULL);
+
+	memset(&fd, 0, sizeof(fd));
+	memset(ents, 0, sizeof(ents));
+	fd.width = VAL_W;
+	fd.height = VAL_H;
+	fd.fov_x = 90;
+	fd.fov_y = 73.74f;
+	fd.lightstyles = ls;
+	ents[0].model = (struct model_s *)&handle_a;
+	ents[0].skin = (struct image_s *)&handle_b;
+	ents[1].skin = (struct image_s *)&handle_c;
+	fd.entities = ents;
+	fd.num_entities = 2;
+
+	RefRec_Control(REC_BEGINFRAME, 0);
+	RefRec_RenderFrame(&fd);
+	RefRec_Control(REC_ENDFRAME, 0);
+	RefRec_StopRecord();
+
+	return Replay(path, API_VERSION, VAL_W, VAL_H, st) && !st->failed && st->frames == 1 && mock.nfd == 1;
+}
+
+static void
+TestReplayRegistration(void)
+{
+	refrec_replay_stats_t st;
+
+	CHECK(RegTrace("rp-stale", false, &st) && st.warns == 0 && mock.ents[0][0].model == NULL &&
+			mock.ents[0][0].skin == NULL && mock.ents[0][1].skin == (void *)&live_pic,
+			"registration: a handle from before BeginRegistration was forwarded after it");
+	CHECK(RegTrace("rp-again", true, &st) && mock.ents[0][0].model == (void *)&live_model &&
+			mock.ents[0][0].skin == (void *)&live_skin && mock.ents[0][1].skin == (void *)&live_pic,
+			"registration: a handle registered again was not resolved");
 }
 
 /* Only indexed frames replay; an open frame after the last one does not. */
@@ -4078,6 +4196,7 @@ main(int argc, char **argv)
 	TestReplayBounds();
 	TestReplayRefusals();
 	TestReplayValidation();
+	TestReplayRegistration();
 	TestReplayStructure();
 
 	printf("refrecord: %d checks, %d failed\n", checks, failures);
