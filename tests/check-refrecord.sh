@@ -59,6 +59,29 @@ for fn in VID_LoadRenderer VID_ShutdownRenderer R_BeginRegistration R_RegisterMo
 		END { print n + 0 }' "$vid")
 	[ "$n" = 1 ] || bad "$vid: $fn has $n RefRec_Recording() hooks, expected 1"
 done
+# The cvar snapshot and its restore are wired: VID_LoadRenderer takes the
+# snapshot (VID_RecordCvars hands every cvar to RefRec_Cvars) and
+# VID_OpenReplay gives the replay target both cvar functions before it is
+# set. vid.o is linked into the client only, so no other check runs this.
+body() {
+	awk -v fn="$1" '
+		$0 ~ "^" fn "\\(" { body = 1; next }
+		body && /^}/ { body = 0 }
+		body { print }' "$vid"
+}
+body VID_LoadRenderer | grep -q '^[[:space:]]*VID_RecordCvars();' ||
+	bad "$vid: VID_LoadRenderer does not call VID_RecordCvars()"
+body VID_RecordCvars | grep -q '^[[:space:]]*RefRec_Cvars(' ||
+	bad "$vid: VID_RecordCvars does not hand the cvars to RefRec_Cvars"
+for a in 't.CvarFlags = VID_ReplayCvarFlags;' 't.SetCvar = VID_ReplaySetCvar;'; do
+	n=$(body VID_OpenReplay | awk -v a="$a" '
+		{ l = $0; sub(/^[ \t]+/, "", l) }
+		l == a && !set { at = NR }
+		/RefRec_SetReplayTarget\(&t\)/ && !set { set = NR }
+		END { print (at && set && at < set) ? 1 : 0 }')
+	[ "$n" = 1 ] || bad "$vid: VID_OpenReplay does not assign '$a' before RefRec_SetReplayTarget"
+done
+
 # the window plumbing is not recorded
 n=$(awk '
 	/^R_IsVSyncActive\(/ { body = 1; next }

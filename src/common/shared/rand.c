@@ -71,18 +71,13 @@ crandk(void)
 	return (randk()&32767)* (2.0/32767) - 1;
 }
 
-/*
- * Seeds the PRNG
- */
-void
-randk_seed(void)
+/* Fills QARY[] from xs and cng and warms the state up. */
+static void
+randk_fill(void)
 {
 	uint64_t i;
 
-	/* Seed the generators from the OS, never leave xs at 0 */
-	Sys_GetRandomBytes(&xs, sizeof(xs));
-	Sys_GetRandomBytes(&cng, sizeof(cng));
-
+	/* never leave xs at 0 */
 	if (xs == 0)
 	{
 		xs = 0x9E3779B97F4A7C15ULL;
@@ -102,3 +97,46 @@ randk_seed(void)
 	}
 }
 
+/*
+ * Seeds the PRNG
+ */
+void
+randk_seed(void)
+{
+	/* Seed the generators from the OS */
+	Sys_GetRandomBytes(&xs, sizeof(xs));
+	Sys_GetRandomBytes(&cng, sizeof(cng));
+
+	randk_fill();
+}
+
+/* One splitmix64 step: spreads a small seed over 64 bits. */
+static uint64_t
+randk_mix(uint64_t *s)
+{
+	uint64_t z = (*s += 0x9E3779B97F4A7C15ULL);
+
+	z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+	z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+	return z ^ (z >> 31);
+}
+
+/*
+ * Seeds the PRNG from a fixed seed, so that the same seed gives the same
+ * stream. Only the pin harness calls this (pins_seed, while recording or
+ * replaying a renderer trace; src/client/vid/vid.c); everything else
+ * seeds from the OS with randk_seed().
+ */
+void
+randk_seed_fixed(unsigned int seed)
+{
+	uint64_t s = seed;
+
+	/* the whole state, also what randk_seed() leaves as it was */
+	j = 0;
+	carry = 0;
+	xs = randk_mix(&s);
+	cng = randk_mix(&s);
+
+	randk_fill();
+}
