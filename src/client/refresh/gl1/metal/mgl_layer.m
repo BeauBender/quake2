@@ -1245,7 +1245,7 @@ mgl_layer_draw(const mgl_draw_t *d)
 		[frame_enc setFragmentTexture:(d->texture1 ? (__bridge id<MTLTexture>)d->texture1 : mgl_unbound)
 				atIndex:1];
 		[frame_enc setFragmentSamplerState:smp1 atIndex:1];
-		[frame_enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+		[frame_enc drawIndexedPrimitives:(d->lines ? MTLPrimitiveTypeLine : MTLPrimitiveTypeTriangle)
 				indexCount:d->nindices
 				indexType:MTLIndexTypeUInt16
 				indexBuffer:ibuf

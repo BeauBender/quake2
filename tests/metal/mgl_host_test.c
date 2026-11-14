@@ -333,7 +333,7 @@ test_state(void)
 	glPointParameterf(GL_POINT_SIZE_MIN, 0.0f);
 	CHECK(ERR() == GL_NO_ERROR);
 	glPointParameterf(GL_POINT_SIZE_MAX, -1e-6f);
-	CHECK(ERR() == GL_INVALID_VALUE && mgl_state.point_size_max == 1.0f);
+	CHECK(ERR() == GL_INVALID_VALUE && mgl_state.point_size_max == MGL_POINT_ALIASED_MAX);
 	glPointParameterfv(GL_POINT_SIZE_MAX, NULL);
 	CHECK(ERR() == GL_INVALID_VALUE);
 
@@ -1610,6 +1610,307 @@ test_sky_water_alpha(void)
 	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
 }
 
+/* The window coordinates (GL's, bottom-left origin) of a clip-space position under the viewport. */
+static void
+win(const mgl_vertex_t *q, float *x, float *y)
+{
+	const GLint *v = mgl_state.viewport;
+
+	*x = v[0] + (q->pos[0] / q->pos[3] + 1) * v[2] * 0.5f;
+	*y = v[1] + (q->pos[1] / q->pos[3] + 1) * v[3] * 0.5f;
+}
+
+/* glViewport lives in mgl_frame.c, which the host test does not link: what it stores. */
+static void
+set_viewport(GLint x, GLint y, GLint w, GLint h)
+{
+	mgl_state.viewport[0] = x;
+	mgl_state.viewport[1] = y;
+	mgl_state.viewport[2] = w;
+	mgl_state.viewport[3] = h;
+}
+
+/* The quad of point k spans x0..x1, y0..y1 in window coordinates, corners in the order mgl_point_quads writes. */
+static int
+quad_at(int k, float x0, float y0, float x1, float y1)
+{
+	const mgl_vertex_t *q = &last_draw.vertices[4 * k];
+	float x[4], y[4];
+	int c;
+
+	for (c = 0; c < 4; c++)
+	{
+		win(&q[c], &x[c], &y[c]);
+	}
+
+	return near1(x[0], x0) && near1(y[0], y0) && near1(x[1], x1) && near1(y[1], y0) &&
+		near1(x[2], x1) && near1(y[2], y1) && near1(x[3], x0) && near1(y[3], y1) &&
+		last_draw.indices[6 * k] == 4 * k && last_draw.indices[6 * k + 1] == 4 * k + 1 &&
+		last_draw.indices[6 * k + 2] == 4 * k + 2 && last_draw.indices[6 * k + 3] == 4 * k &&
+		last_draw.indices[6 * k + 4] == 4 * k + 2 && last_draw.indices[6 * k + 5] == 4 * k + 3;
+}
+
+/*
+ * Points and lines (TASK52). The point rules are GL 1.4 section 3.3 and
+ * ARB_point_parameters; the expected pixels and 8-bit coverages are what
+ * Apple's software renderer drew for the same points (a scratch probe
+ * of TASK52, CGL offscreen, white points blended over black), worked
+ * out again by hand below.
+ */
+static void
+test_points_lines(void)
+{
+	/* the 8-bit values of a smooth point of size 4 at (32.5, 32.6), pixels x 30..34, y 34 down to 30 */
+	static const int apple4[5][5] = {
+		{0, 90, 153, 90, 0}, {78, 255, 255, 255, 78}, {127, 255, 255, 255, 127},
+		{55, 255, 255, 255, 55}, {0, 44, 102, 44, 0}
+	};
+	static const GLfloat gl1_att[3] = {0.01f, 0.0f, 0.01f}, no_att[3] = {0, 0, 0};
+	static const GLubyte clr[] = {255, 128, 0, 51, 1, 2, 3, 4, 9, 8, 7, 6, 0, 0, 255, 255};
+	static const GLushort elems[] = {3, 1, 2, 4};
+	GLfloat pv[9] = {0}, seg[] = {0, 0.5f, 640, 0.5f, 0, 2.5f, 640, 2.5f, 7, 7};
+	uint16_t idx[16];
+	float e[4] = {0, 0, -20, 1};
+	int i, j, n;
+
+	mgl_state_reset();
+	mgl_textures_reset();
+	draws = 0;
+	set_viewport(0, 0, 640, 480);
+	glMatrixMode(GL_PROJECTION);
+	glOrtho(0, 640, 0, 480, -1, 1);
+	glMatrixMode(GL_MODELVIEW);
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glVertexPointer(2, GL_FLOAT, 0, pv);
+
+	/* square points: an even width centred on the nearest corner, an odd one on the pixel; sizes rounded */
+	glPointSize(4);
+	pv[0] = 32.5f; pv[1] = 32.6f;
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(ERR() == GL_NO_ERROR && draws == 1 && last_draw.nvertices == 4 && last_draw.nindices == 6 &&
+		!last_draw.lines && quad_at(0, 31, 31, 35, 35) && last_draw.vertices[0].pt[3] == 0.0f);
+	pv[0] = 32.0f; pv[1] = 32.1f;
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(quad_at(0, 30, 30, 34, 34));
+	glPointSize(1.4f);
+	pv[0] = 32.3f; pv[1] = 32.4f;
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(quad_at(0, 32, 32, 33, 33));
+	glPointSize(1.6f);
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(quad_at(0, 31, 31, 33, 33));
+	glPointSize(2.5f);
+	pv[0] = 32.5f; pv[1] = 32.6f;
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(quad_at(0, 31, 31, 34, 34));
+	glPointSize(7.3f);
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(quad_at(0, 29, 29, 36, 36));
+
+	/* smooth: about the exact centre, out to r + 1/2, and the coverage Apple's renderer drew, to 1 in 255 */
+	glEnable(GL_POINT_SMOOTH);
+	glPointSize(4);
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(ERR() == GL_NO_ERROR && quad_at(0, 30, 30.1f, 35, 35.1f));
+	CHECK(last_draw.vertices[0].pt[0] == -2.5f && last_draw.vertices[0].pt[1] == -2.5f &&
+		last_draw.vertices[2].pt[0] == 2.5f && last_draw.vertices[2].pt[2] == 2.0f &&
+		last_draw.vertices[1].pt[3] == 1.0f);
+
+	for (j = 0, n = 0; j < 5; j++)
+	{
+		for (i = 0; i < 5; i++)
+		{
+			float c = mgl_point_coverage(30 + i + 0.5f - 32.5f, 34 - j + 0.5f - 32.6f, last_draw.vertices[0].pt[2]);
+			int v = (int)floorf(c * 255 + 0.5f);
+
+			n += v - apple4[j][i] <= 1 && apple4[j][i] - v <= 1;
+		}
+	}
+
+	CHECK(n == 25);
+	/* by hand: pixel (34, 33) is (2, 0.9) from the centre, 2.5 - 2.19317 = 0.30683; clamped at 1 and 0 */
+	CHECK(near1(mgl_point_coverage(2, 0.9f, 2), 0.306833f) && mgl_point_coverage(0.1f, 0, 2) == 1.0f &&
+		mgl_point_coverage(2.5f, 0, 2) == 0.0f && mgl_point_coverage(-3, 0, 2) == 0.0f);
+	/* size 7.3 is not rounded: (28, 32) is 4.00125 from the centre, 4.15 - 4.00125 = 0.14875, Apple's 38 */
+	glPointSize(7.3f);
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(last_draw.vertices[0].pt[2] == 3.65f && quad_at(0, 28.35f, 28.45f, 36.65f, 36.75f) &&
+		(int)(mgl_point_coverage(-4, -0.1f, 3.65f) * 255 + 0.5f) == 38);
+	glDisable(GL_POINT_SMOOTH);
+
+	/* the viewport moves the window: NDC (0, 0) is (200, 100); size 3 covers 199..202 */
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glMatrixMode(GL_MODELVIEW);
+	set_viewport(100, 50, 200, 100);
+	glPointSize(3);
+	pv[0] = pv[1] = 0;
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(quad_at(0, 199, 99, 202, 102));
+	/* a centre outside the clip volume drops the point, not its corners; one draw of two keeps the inside one */
+	pv[0] = 1.001f; pv[2] = 0.999f; pv[3] = -0.999f;
+	n = draws;
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(ERR() == GL_NO_ERROR && draws == n);
+	glDrawArrays(GL_POINTS, 0, 2);
+	CHECK(draws == n + 1 && last_draw.nvertices == 4 && quad_at(0, 298, 49, 301, 52));
+	pv[0] = 0; pv[1] = -1.001f;
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(draws == n + 1);
+	set_viewport(0, 0, 0, 0);
+	glDrawArrays(GL_POINTS, 0, 2);
+	CHECK(ERR() == GL_NO_ERROR && draws == n + 1);
+	set_viewport(0, 0, 640, 480);
+
+	/*
+	 * ARB_point_parameters as gl1 sets them (gl1_misc.c, R_InitParticleTexture:
+	 * min 2, max 40, attenuation 0.01, 0, 0.01; glPointSize 40 at a height
+	 * of 480): size 40 / sqrt(0.01 + 0.01 d^2), d the eye distance. The
+	 * widths are what Apple's renderer drew: 20 (d 20), 16 (d 25,
+	 * 15.987), 6 (d 62.5, 6.399), 3 (d 125, 3.200), 2 (clamped from
+	 * 1.0000 at d 400), 40 (clamped from 78.4 at d 5).
+	 */
+	glPointSize(40);
+	glPointParameterf(GL_POINT_SIZE_MIN, 2);
+	glPointParameterf(GL_POINT_SIZE_MAX, 40);
+	glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, gl1_att);
+	CHECK(ERR() == GL_NO_ERROR && mgl_point_size(&mgl_state, e, 0) == 20.0f);
+	e[0] = 15;
+	CHECK(mgl_point_size(&mgl_state, e, 0) == 16.0f && near1(mgl_point_size(&mgl_state, e, 1), 15.98721f));
+	e[0] = 37.5f; e[2] = -50;
+	CHECK(mgl_point_size(&mgl_state, e, 0) == 6.0f && near1(mgl_point_size(&mgl_state, e, 1), 6.39918f));
+	e[0] = 75; e[2] = -100;
+	CHECK(mgl_point_size(&mgl_state, e, 0) == 3.0f);
+	e[0] = 0; e[2] = -400;
+	CHECK(mgl_point_size(&mgl_state, e, 0) == 2.0f && mgl_point_size(&mgl_state, e, 1) == 2.0f);
+	e[2] = -5;
+	CHECK(mgl_point_size(&mgl_state, e, 0) == 40.0f && mgl_point_size(&mgl_state, e, 1) == 40.0f);
+	/* without attenuation glPointSize itself, rounded; past the ranges clamped to them */
+	glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, no_att);
+	glPointParameterf(GL_POINT_SIZE_MIN, 0);
+	glPointParameterf(GL_POINT_SIZE_MAX, 10000);
+	glPointSize(2.5f);
+	CHECK(mgl_point_size(&mgl_state, e, 0) == 3.0f && mgl_point_size(&mgl_state, e, 1) == 2.5f);
+	glPointSize(9000);
+	CHECK(mgl_point_size(&mgl_state, e, 0) == MGL_POINT_ALIASED_MAX && mgl_point_size(&mgl_state, e, 1) == MGL_POINT_SMOOTH_MAX);
+	glPointSize(0.01f);
+	CHECK(mgl_point_size(&mgl_state, e, 0) == 1.0f && mgl_point_size(&mgl_state, e, 1) == MGL_POINT_SMOOTH_MIN);
+
+	/*
+	 * R_DrawParticles: a perspective view, the eye moved by the modelview
+	 * (so the distance is the eye's, not the object's), the colour array,
+	 * blend on, no depth writes; culling, GL_LINE fill and polygon offset
+	 * left on from the world do not apply to points.
+	 */
+	glMatrixMode(GL_PROJECTION);
+	glFrustum(-1, 1, -1, 1, 1, 1000);
+	glMatrixMode(GL_MODELVIEW);
+	glTranslatef(0, 0, -10);
+	glPointSize(40);
+	glPointParameterf(GL_POINT_SIZE_MIN, 2);
+	glPointParameterf(GL_POINT_SIZE_MAX, 40);
+	glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, gl1_att);
+	glEnable(GL_CULL_FACE);
+	glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+	glEnable(GL_POLYGON_OFFSET_FILL);
+	glPolygonOffset(1, 2);
+	glEnable(GL_DEPTH_TEST);
+	glDepthMask(GL_FALSE);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glEnableClientState(GL_COLOR_ARRAY);
+	glColorPointer(4, GL_UNSIGNED_BYTE, 0, clr);
+	glVertexPointer(3, GL_FLOAT, 0, pv);
+	pv[0] = 0; pv[1] = 0; pv[2] = -10;    /* eye (0, 0, -20) */
+	pv[3] = 15; pv[4] = 0; pv[5] = -15;   /* eye (15, 0, -25), d 29.155: 13.712, 14 */
+	pv[6] = 0; pv[7] = 0; pv[8] = 100;    /* eye (0, 0, 90): behind the eye, dropped */
+	glDrawArrays(GL_POINTS, 0, 2);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.nvertices == 8 && last_draw.nindices == 12);
+	/* (0, 0, -20): w 20, z (1001 * 20 - 2000) / 999; NDC (0, 0) is (320, 240): width 20 from 310 to 330 */
+	CHECK(near1(last_draw.vertices[1].pos[3], 20) && near1(last_draw.vertices[3].pos[2], 18020.0f / 999) &&
+		last_draw.vertices[0].pos[2] == last_draw.vertices[2].pos[2] && quad_at(0, 310, 230, 330, 250));
+	/* (15, 0, -25): x 15 / 25 of the half width, 320 + 192 = 512, 14 wide about the corner 512 */
+	CHECK(quad_at(1, 505, 233, 519, 247));
+	CHECK(last_draw.vertices[0].color[0] == 1.0f && last_draw.vertices[3].color[3] == 0.2f &&
+		last_draw.vertices[4].color[0] == 1.0f / 255 && last_draw.vertices[7].color[3] == 4.0f / 255);
+	CHECK(last_draw.u.mvp[0] == 1 && last_draw.u.mvp[5] == 1 && last_draw.u.mvp[10] == 1 &&
+		last_draw.u.mvp[15] == 1 && last_draw.u.mvp[14] == 0 && last_draw.u.mvp[11] == 0);
+	CHECK(last_draw.cull == MGL_CULL_NONE && !last_draw.fill_lines && last_draw.depth_bias == 0 &&
+		last_draw.depth_slope == 0 && !last_draw.lines);
+	CHECK(last_draw.pipeline_key == (1u | (4u << 1) | (5u << 5) | (15u << 9)) &&
+		last_draw.depth_stencil_key == (1u | ((uint64_t)(GL_LESS - GL_NEVER) << 1)));
+	/* glDrawElements picks the points; the third lies behind the eye (w < 0) */
+	glDrawElements(GL_POINTS, 2, GL_UNSIGNED_SHORT, elems + 1);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.nvertices == 4 && quad_at(0, 505, 233, 519, 247) &&
+		last_draw.vertices[0].color[1] == 2.0f / 255);
+	glDisableClientState(GL_COLOR_ARRAY);
+
+	/* the bound: MGL_MAX_DRAW_POINTS points fill a draw, one more is refused */
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glVertexPointer(2, GL_FLOAT, 0, big_vertices);
+	memset(big_vertices, 0, sizeof(big_vertices));
+	n = draws;
+	glDrawArrays(GL_POINTS, 0, MGL_MAX_DRAW_POINTS);
+	CHECK(ERR() == GL_NO_ERROR && draws == n + 1 && last_draw.nvertices == MGL_MAX_DRAW_VERTICES &&
+		last_draw.indices[last_draw.nindices - 1] == MGL_MAX_DRAW_VERTICES - 1);
+	glDrawArrays(GL_POINTS, 0, MGL_MAX_DRAW_POINTS + 1);
+	CHECK(ERR() == GL_INVALID_VALUE && draws == n + 1);
+	glDrawElements(GL_POINTS, MGL_MAX_DRAW_POINTS + 1, GL_UNSIGNED_SHORT, big_elements);
+	CHECK(ERR() == GL_INVALID_VALUE && draws == n + 1);
+
+	/* line lists: pairs, strips, loops; elements pick; a list past cap refused */
+	CHECK(mgl_line_indices(GL_LINES, 5, NULL, idx, 16) == 4 && idx[0] == 0 && idx[1] == 1 && idx[2] == 2 && idx[3] == 3);
+	CHECK(mgl_line_indices(GL_LINE_STRIP, 4, NULL, idx, 16) == 6 && idx[1] == 1 && idx[2] == 1 &&
+		idx[4] == 2 && idx[5] == 3);
+	CHECK(mgl_line_indices(GL_LINE_LOOP, 3, NULL, idx, 16) == 6 && idx[3] == 2 && idx[4] == 2 && idx[5] == 0);
+	CHECK(mgl_line_indices(GL_LINE_STRIP, 4, elems, idx, 16) == 6 && idx[0] == 3 && idx[1] == 1 &&
+		idx[2] == 1 && idx[5] == 4);
+	CHECK(mgl_line_indices(GL_LINE_LOOP, 1, NULL, idx, 16) == 0 && mgl_line_indices(GL_LINE_STRIP, 1, NULL, idx, 16) == 0);
+	CHECK(mgl_line_indices(GL_LINE_LOOP, 5, NULL, idx, 10) == 10 && mgl_line_indices(GL_LINE_LOOP, 5, NULL, idx, 9) == -1);
+	CHECK(mgl_line_indices(GL_TRIANGLES, 3, NULL, idx, 16) == -1);
+
+	/*
+	 * The interleaved-stereo mask (gl1_main.c, R_SetGL2D's caller): 2D
+	 * GL_LINES of two floats, colour writes off, the stencil test
+	 * GL_NEVER with GL_INVERT on fail. Culling left on does not apply.
+	 */
+	glDisable(GL_BLEND);
+	glDisable(GL_DEPTH_TEST);
+	glEnable(GL_STENCIL_TEST);
+	glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+	glStencilOp(GL_INVERT, GL_KEEP, GL_KEEP);
+	glStencilFunc(GL_NEVER, 1, 1);
+	glVertexPointer(2, GL_FLOAT, 0, seg);
+	glDrawArrays(GL_LINES, 0, 4);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.lines && last_draw.nvertices == 4 && last_draw.nindices == 4 &&
+		last_draw.vertices[3].pos[0] == 640 && last_draw.vertices[3].pos[1] == 2.5f);
+	CHECK(last_draw.cull == MGL_CULL_NONE && !last_draw.fill_lines && last_draw.depth_bias == 0 &&
+		last_draw.pipeline_key == 0 && (last_draw.depth_stencil_key & (1u << 5)) &&
+		((last_draw.depth_stencil_key >> 9) & 7) == (uint64_t)mgl_stencil_op_index(GL_INVERT));
+	/* gl_showtris: a line strip of four closes a triangle */
+	glDisable(GL_STENCIL_TEST);
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	glDrawArrays(GL_LINE_STRIP, 0, 4);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.lines && last_draw.nindices == 6 && last_draw.indices[5] == 3);
+	glDrawElements(GL_LINE_LOOP, 4, GL_UNSIGNED_SHORT, elems);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.nindices == 8 && last_draw.indices[6] == 4 &&
+		last_draw.indices[7] == 3 && last_draw.nvertices == 5);
+	n = draws;
+	glDrawElements(GL_LINE_LOOP, MGL_MAX_DRAW_INDICES, GL_UNSIGNED_SHORT, big_elements);
+	CHECK(ERR() == GL_INVALID_VALUE && draws == n);
+	/* back to triangles: the lines flag goes */
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(!last_draw.lines && last_draw.cull == MGL_CULL_BACK && last_draw.fill_lines);
+
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_POLYGON_OFFSET_FILL);
+	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+	glDepthMask(GL_TRUE);
+}
+
 static void
 test_draw(void)
 {
@@ -1738,16 +2039,12 @@ test_draw(void)
 	CHECK(last_draw.vertices[1].pos[0] == 30 && last_draw.vertices[1].pos[1] == 40 &&
 		last_draw.vertices[2].pos[0] == 50);
 
-	/* what is not drawn: no vertex array, the modes of later cards, unknown modes and types */
+	/* what is not drawn: no vertex array, unknown modes and types (points and lines: test_points_lines) */
 	i = draws;
 	glDisableClientState(GL_VERTEX_ARRAY);
 	glDrawArrays(GL_TRIANGLES, 0, 3);
 	CHECK(ERR() == GL_NO_ERROR && draws == i);
 	glEnableClientState(GL_VERTEX_ARRAY);
-	glDrawArrays(GL_POINTS, 0, 3);
-	CHECK(ERR() == GL_INVALID_OPERATION && draws == i);
-	glDrawArrays(GL_LINE_STRIP, 0, 3);
-	CHECK(ERR() == GL_INVALID_OPERATION && draws == i);
 	glDrawArrays(GL_TRIANGLE_FAN + 1, 0, 3);
 	CHECK(ERR() == GL_INVALID_ENUM && draws == i);
 	glDrawArrays(GL_TRIANGLES, -1, 3);
@@ -1799,6 +2096,7 @@ test_draw(void)
 	test_draw_state();
 	test_world_units();
 	test_sky_water_alpha();
+	test_points_lines();
 }
 
 int

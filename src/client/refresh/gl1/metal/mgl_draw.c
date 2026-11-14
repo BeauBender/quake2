@@ -31,13 +31,14 @@
  * The triangle modes draw, textured on units 0 and 1 with GL_REPLACE,
  * GL_MODULATE or gl1's GL_COMBINE (modulate with GL_RGB_SCALE), with
  * blending, the alpha test, the depth and stencil tests, culling,
- * polygon offset and line fill (TASK48, TASK82, TASK49). Points and
- * lines are later cards': a draw of them sets the sticky error, logs
- * once and is not drawn.
+ * polygon offset and line fill (TASK48, TASK82, TASK49). Lines are
+ * Metal lines; points are quads computed here, square or smooth, at the
+ * size ARB_point_parameters derives (TASK52).
  *
  * =======================================================================
  */
 
+#include <math.h>
 #include <string.h>
 
 #include "mgl_internal.h"
@@ -46,6 +47,7 @@
 static mgl_vertex_t draw_vertices[MGL_MAX_DRAW_VERTICES];
 static uint16_t draw_indices[MGL_MAX_DRAW_INDICES];
 static uint16_t draw_elements[MGL_MAX_DRAW_INDICES];
+static mgl_vertex_t draw_points[MGL_MAX_DRAW_POINTS];
 
 /* Element i of a client array as four floats, GL's defaults (0, 0, 0, 1) for the rest. */
 static void
@@ -117,6 +119,8 @@ mgl_assemble(const mgl_state_t *s, GLint first, GLsizei count, mgl_vertex_t *out
 		{
 			memcpy(out->color, s->color, sizeof(out->color));
 		}
+
+		memset(out->pt, 0, sizeof(out->pt));
 	}
 }
 
@@ -173,6 +177,184 @@ mgl_triangle_indices(GLenum mode, GLsizei count, const uint16_t *elements,
 	}
 
 	return (long)k;
+}
+
+long
+mgl_line_indices(GLenum mode, GLsizei count, const uint16_t *elements,
+		uint16_t *out, size_t cap)
+{
+	size_t n, i, k = 0, a, b;
+
+	switch (mode)
+	{
+		case GL_LINES:
+			n = (size_t)count / 2;
+			break;
+		case GL_LINE_STRIP:
+			n = count > 1 ? (size_t)count - 1 : 0;
+			break;
+		case GL_LINE_LOOP:
+			/* GL 1.4, section 2.6.1: the last vertex joins the first */
+			n = count > 1 ? (size_t)count : 0;
+			break;
+		default:
+			return -1;
+	}
+
+	if (n * 2 > cap)
+	{
+		return -1;
+	}
+
+	for (i = 0; i < n; i++)
+	{
+		a = mode == GL_LINES ? 2 * i : i;
+		b = mode == GL_LINES ? 2 * i + 1 : (i + 1 == (size_t)count ? 0 : i + 1);
+		out[k++] = elements ? elements[a] : (uint16_t)a;
+		out[k++] = elements ? elements[b] : (uint16_t)b;
+	}
+
+	return (long)k;
+}
+
+/* out = m * (x, y, z, w), column-major as GL keeps m. */
+static void
+mgl_xform(const GLfloat *m, const float *v, double *out)
+{
+	int r;
+
+	for (r = 0; r < 4; r++)
+	{
+		out[r] = (double)m[r] * v[0] + (double)m[4 + r] * v[1] +
+			(double)m[8 + r] * v[2] + (double)m[12 + r] * v[3];
+	}
+}
+
+float
+mgl_point_size(const mgl_state_t *s, const float eye[4], int smooth)
+{
+	const GLfloat *a = s->point_attenuation;
+	double d2 = (double)eye[0] * eye[0] + (double)eye[1] * eye[1] + (double)eye[2] * eye[2];
+	double den = a[0] + a[1] * sqrt(d2) + a[2] * d2;
+	double size = s->point_size;
+
+	/*
+	 * ARB_point_parameters: size * sqrt(1 / (a + b d + c d^2)), d the
+	 * distance of the eye coordinates from the eye (Apple's renderer
+	 * uses the distance, not |z|: TASK52 measured points off the axis).
+	 * A denominator of 0 or less, which GL leaves undefined, leaves the
+	 * size as it is.
+	 */
+	if (den > 0.0)
+	{
+		size /= sqrt(den);
+	}
+
+	size = size < s->point_size_min ? s->point_size_min : size;
+	size = size > s->point_size_max ? s->point_size_max : size;
+
+	if (smooth)
+	{
+		size = size < MGL_POINT_SMOOTH_MIN ? MGL_POINT_SMOOTH_MIN : size;
+		return (float)(size > MGL_POINT_SMOOTH_MAX ? MGL_POINT_SMOOTH_MAX : size);
+	}
+
+	/* GL 1.4, section 3.3: a whole width, rounded, at least 1 */
+	size = floor(size + 0.5);
+	size = size < 1.0 ? 1.0 : size;
+	return (float)(size > MGL_POINT_ALIASED_MAX ? MGL_POINT_ALIASED_MAX : size);
+}
+
+size_t
+mgl_point_quads(const mgl_state_t *s, const mgl_vertex_t *in, size_t n, mgl_vertex_t *out, uint16_t *idx)
+{
+	static const double corner[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+	const GLfloat *mv = s->modelview[s->modelview_depth];
+	GLfloat mvp[16];
+	double clip[4], eye[4], vx = s->viewport[0], vy = s->viewport[1];
+	double vw = s->viewport[2], vh = s->viewport[3], xw, yw, cx, cy, half;
+	float e[4], size;
+	int smooth = (s->enables & MGL_EN_POINT_SMOOTH) != 0, c;
+	size_t i, k = 0;
+
+	if (vw <= 0 || vh <= 0)
+	{
+		return 0;
+	}
+
+	mgl_mat_mul(mvp, s->projection[s->projection_depth], mv);
+
+	for (i = 0; i < n; i++)
+	{
+		const mgl_vertex_t *p = &in[i];
+
+		mgl_xform(mvp, p->pos, clip);
+
+		/* GL 1.4, section 2.12: a point outside the clip volume is discarded */
+		if (!(clip[3] > 0) || fabs(clip[0]) > clip[3] || fabs(clip[1]) > clip[3] || fabs(clip[2]) > clip[3])
+		{
+			continue;
+		}
+
+		mgl_xform(mv, p->pos, eye);
+		e[0] = (float)eye[0];
+		e[1] = (float)eye[1];
+		e[2] = (float)eye[2];
+		e[3] = (float)eye[3];
+		size = mgl_point_size(s, e, smooth);
+
+		/* window coordinates, GL's bottom-left origin */
+		xw = vx + (clip[0] / clip[3] + 1) * vw * 0.5;
+		yw = vy + (clip[1] / clip[3] + 1) * vh * 0.5;
+
+		if (smooth)
+		{
+			/* section 3.3.2: a disc about the exact centre; no pixel past r + 1/2 is covered */
+			cx = xw;
+			cy = yw;
+			half = size * 0.5 + 0.5;
+		}
+		else if ((long)size & 1)
+		{
+			/* section 3.3.1: an odd width is centred on a pixel, an even one on a corner */
+			cx = floor(xw) + 0.5;
+			cy = floor(yw) + 0.5;
+			half = size * 0.5;
+		}
+		else
+		{
+			cx = floor(xw + 0.5);
+			cy = floor(yw + 0.5);
+			half = size * 0.5;
+		}
+
+		for (c = 0; c < 4; c++)
+		{
+			mgl_vertex_t *q = &out[4 * k + c];
+			double x = cx + corner[c][0] * half, y = cy + corner[c][1] * half;
+
+			*q = *p;
+			/* back to clip coordinates at the point's w: the same depth on every corner */
+			q->pos[0] = (float)(((x - vx) * 2 / vw - 1) * clip[3]);
+			q->pos[1] = (float)(((y - vy) * 2 / vh - 1) * clip[3]);
+			q->pos[2] = (float)clip[2];
+			q->pos[3] = (float)clip[3];
+			q->pt[0] = (float)(corner[c][0] * half);
+			q->pt[1] = (float)(corner[c][1] * half);
+			q->pt[2] = size * 0.5f;
+			q->pt[3] = smooth ? 1.0f : 0.0f;
+		}
+
+		idx[6 * k] = (uint16_t)(4 * k);
+		idx[6 * k + 1] = (uint16_t)(4 * k + 1);
+		idx[6 * k + 2] = (uint16_t)(4 * k + 2);
+		idx[6 * k + 3] = (uint16_t)(4 * k);
+		idx[6 * k + 4] = (uint16_t)(4 * k + 2);
+		idx[6 * k + 5] = (uint16_t)(4 * k + 3);
+		k++;
+	}
+
+	return k;
 }
 
 int
@@ -331,15 +513,32 @@ mgl_unit_env(const mgl_state_t *s, int i, int32_t *env, int32_t *opaque, float *
 	*sampler = mgl_sampler_key(t);
 }
 
+/* What a draw's indices form: GL's triangles, GL's lines, or the quads of GL's points. */
+#define MGL_KIND_TRIANGLES 0
+#define MGL_KIND_LINES 1
+#define MGL_KIND_POINTS 2
+
 /*
  * The rasterizer state of a draw: cull, fill mode, polygon offset and
  * the stencil reference. Returns 0 when GL draws no triangle at all
- * (both faces culled).
+ * (both faces culled). Culling, the polygon mode and
+ * GL_POLYGON_OFFSET_FILL are for polygons: GL applies none of them to
+ * lines and points, so neither does the shim (a point's quad included).
  */
 static int
-mgl_raster_state(const mgl_state_t *s, mgl_draw_t *d)
+mgl_raster_state(const mgl_state_t *s, int kind, mgl_draw_t *d)
 {
 	d->cull = MGL_CULL_NONE;
+
+	/* GL clamps the reference to the stencil bits (8) */
+	d->stencil_ref = s->stencil_ref < 0 ? 0u : (s->stencil_ref > 0xff ? 0xffu : (uint32_t)s->stencil_ref);
+	d->depth_stencil_key = mgl_depth_stencil_key(s);
+	d->lines = kind == MGL_KIND_LINES;
+
+	if (kind != MGL_KIND_TRIANGLES)
+	{
+		return 1;
+	}
 
 	if (s->enables & MGL_EN_CULL_FACE)
 	{
@@ -360,16 +559,14 @@ mgl_raster_state(const mgl_state_t *s, mgl_draw_t *d)
 		d->depth_slope = s->polygon_offset_factor;
 	}
 
-	/* GL clamps the reference to the stencil bits (8) */
-	d->stencil_ref = s->stencil_ref < 0 ? 0u : (s->stencil_ref > 0xff ? 0xffu : (uint32_t)s->stencil_ref);
-	d->depth_stencil_key = mgl_depth_stencil_key(s);
 	return 1;
 }
 
 /* Builds the draw from the state and the assembled vertices and indices, and encodes it. */
 static void
-mgl_submit(size_t nvertices, size_t nindices)
+mgl_submit(int kind, size_t nvertices, size_t nindices)
 {
+	static const GLfloat identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 	const mgl_state_t *s = &mgl_state;
 	mgl_draw_t d;
 
@@ -378,7 +575,10 @@ mgl_submit(size_t nvertices, size_t nindices)
 		return;
 	}
 
-	mgl_check_unsupported(s);
+	if (kind == MGL_KIND_TRIANGLES)
+	{
+		mgl_check_unsupported(s);
+	}
 
 	memset(&d, 0, sizeof(d));
 	d.vertices = draw_vertices;
@@ -386,7 +586,15 @@ mgl_submit(size_t nvertices, size_t nindices)
 	d.indices = draw_indices;
 	d.nindices = nindices;
 
-	mgl_mat_mul(d.u.mvp, s->projection[s->projection_depth], s->modelview[s->modelview_depth]);
+	/* a point's quad is already in clip coordinates (mgl_point_quads) */
+	if (kind == MGL_KIND_POINTS)
+	{
+		memcpy(d.u.mvp, identity, sizeof(identity));
+	}
+	else
+	{
+		mgl_mat_mul(d.u.mvp, s->projection[s->projection_depth], s->modelview[s->modelview_depth]);
+	}
 
 	d.u.alpha_func = (int32_t)(((s->enables & MGL_EN_ALPHA_TEST) ? s->alpha_func : GL_ALWAYS) - GL_NEVER);
 	d.u.alpha_ref = s->alpha_ref;
@@ -396,7 +604,7 @@ mgl_submit(size_t nvertices, size_t nindices)
 
 	d.pipeline_key = mgl_pipeline_key(s);
 
-	if (!mgl_raster_state(s, &d))
+	if (!mgl_raster_state(s, kind, &d))
 	{
 		return;
 	}
@@ -407,38 +615,89 @@ mgl_submit(size_t nvertices, size_t nindices)
 	}
 }
 
+/* The kind of a primitive mode, or -1 (GL_INVALID_ENUM set) for one GL does not have. */
 static int
 mgl_check_mode(GLenum mode)
 {
-	static int once_points, once_lines;
-
 	switch (mode)
 	{
 		case GL_TRIANGLES:
 		case GL_TRIANGLE_STRIP:
 		case GL_TRIANGLE_FAN:
-			return 1;
-		case GL_POINTS:
-			mgl_unimplemented("GL_POINTS", &once_points);
-			return 0;
+			return MGL_KIND_TRIANGLES;
 		case GL_LINES:
 		case GL_LINE_LOOP:
 		case GL_LINE_STRIP:
-			mgl_unimplemented("line primitives", &once_lines);
-			return 0;
+			return MGL_KIND_LINES;
+		case GL_POINTS:
+			return MGL_KIND_POINTS;
 		default:
 			/* quads and polygons are GL too, but gl1 never draws them and the header has no name for them */
 			mgl_error(GL_INVALID_ENUM);
-			return 0;
+			return -1;
 	}
+}
+
+/*
+ * Assembles the vertices of a draw (first .. first + count - 1, or 0 ..
+ * the largest element), makes its indices and submits it. The bounds
+ * were checked by the caller; a list longer than the shim's bound sets
+ * GL_INVALID_VALUE and draws nothing.
+ */
+static void
+mgl_draw(int kind, GLenum mode, GLint first, GLsizei count, const uint16_t *elements, GLsizei nvertices)
+{
+	long n;
+	size_t i, k;
+
+	if (kind == MGL_KIND_POINTS)
+	{
+		/* each point becomes four vertices: at most MGL_MAX_DRAW_POINTS of them */
+		if ((size_t)count > MGL_MAX_DRAW_POINTS)
+		{
+			mgl_error(GL_INVALID_VALUE);
+			return;
+		}
+
+		if (elements)
+		{
+			mgl_assemble(&mgl_state, 0, nvertices, draw_vertices);
+
+			for (i = 0; i < (size_t)count; i++)
+			{
+				draw_points[i] = draw_vertices[elements[i]];
+			}
+		}
+		else
+		{
+			mgl_assemble(&mgl_state, first, count, draw_points);
+		}
+
+		k = mgl_point_quads(&mgl_state, draw_points, (size_t)count, draw_vertices, draw_indices);
+		mgl_submit(kind, 4 * k, 6 * k);
+		return;
+	}
+
+	n = kind == MGL_KIND_LINES ?
+		mgl_line_indices(mode, count, elements, draw_indices, MGL_MAX_DRAW_INDICES) :
+		mgl_triangle_indices(mode, count, elements, draw_indices, MGL_MAX_DRAW_INDICES);
+
+	if (n < 0)
+	{
+		mgl_error(GL_INVALID_VALUE);
+		return;
+	}
+
+	mgl_assemble(&mgl_state, first, nvertices, draw_vertices);
+	mgl_submit(kind, (size_t)nvertices, (size_t)n);
 }
 
 void
 glDrawArrays(GLenum mode, GLint first, GLsizei count)
 {
-	long n;
+	int kind = mgl_check_mode(mode);
 
-	if (!mgl_check_mode(mode))
+	if (kind < 0)
 	{
 		return;
 	}
@@ -461,27 +720,18 @@ glDrawArrays(GLenum mode, GLint first, GLsizei count)
 		return;
 	}
 
-	n = mgl_triangle_indices(mode, count, NULL, draw_indices, MGL_MAX_DRAW_INDICES);
-
-	if (n < 0)
-	{
-		mgl_error(GL_INVALID_VALUE);
-		return;
-	}
-
-	mgl_assemble(&mgl_state, first, count, draw_vertices);
-	mgl_submit((size_t)count, (size_t)n);
+	mgl_draw(kind, mode, first, count, NULL, count);
 }
 
 void
 glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices)
 {
 	static int once_type;
+	int kind = mgl_check_mode(mode);
 	GLsizei i;
-	long n;
 	uint16_t max = 0;
 
-	if (!mgl_check_mode(mode))
+	if (kind < 0)
 	{
 		return;
 	}
@@ -526,15 +776,6 @@ glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices)
 		max = draw_elements[i] > max ? draw_elements[i] : max;
 	}
 
-	n = mgl_triangle_indices(mode, count, draw_elements, draw_indices, MGL_MAX_DRAW_INDICES);
-
-	if (n < 0)
-	{
-		mgl_error(GL_INVALID_VALUE);
-		return;
-	}
-
 	/* every vertex up to the largest index: gl1's buffer starts at vertex 0 */
-	mgl_assemble(&mgl_state, 0, (GLsizei)max + 1, draw_vertices);
-	mgl_submit((size_t)max + 1, (size_t)n);
+	mgl_draw(kind, mode, 0, count, draw_elements, (GLsizei)max + 1);
 }
