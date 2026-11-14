@@ -197,6 +197,74 @@ The replay path never runs `CL_Frame`, the server, sound or input: it is a
 loop in `CL_PinsReplay()` driven from `Qcommon_Frame` when `pins_replay` is
 set, so the game's own timing cannot interleave.
 
+As built (TASK44). `pins_replay` is latched from the command line with the
+other pin values (`CL_PinsLatch`): a `.q2r` path of `[A-Za-z0-9_./-]`
+without `..`, refused beside `pins_record` or without `pins_dir`; a refused
+one stops the engine in `CL_Init`, so a replay never falls back to the
+attract demo, and `Qcommon_Init` queues no `d1` while replaying. The
+replayer is in `refrecord.c` and still calls nothing in the engine: vid.c
+hands it a `refrec_target_t` (the API version and size it must match,
+`Register`, `RenderFrame`, `Call`) whose functions are the same wrappers
+the client calls, so `tests/refrecord` replays into a mock renderer.
+`RefRec_OpenReplay` reads the header, `RefRec_CheckLayout`, the string
+table (exactly the bytes up to the frame index, at most
+`REFREC_MAX_HANDLES` entries) and the whole frame index (at most
+`REFREC_MAX_FRAMES`, offsets rising, each checked) before anything is
+allocated by them; the records are then read one at a time, each length
+bounded by the bytes left before the string table and by
+`REFREC_REPLAY_MAX_RECORD`. `RefRec_ReplayNextFrame` forwards every
+record in file order up to the `REC_ENDFRAME` of the next indexed frame
+(records before an indexed `REC_BEGINFRAME`, a dropped open frame
+included, replay in place; an open frame after the last indexed one does
+not), refuses an index offset that is not a `REC_BEGINFRAME` and a
+`REC_BEGINFRAME` inside an indexed frame, and refuses `REC_CAPTURE`
+numbers out of order. Every record then passes one validation layer,
+`Rep_Check`, before any of it reaches the target, with three outcomes.
+It refuses the trace (refuse) for a name of `MAX_QPATH` bytes or more
+and for a registration whose id does not have the kind, or whose name is
+not the name, of its string table entry. It does not forward a 2D draw
+(drop, counted in `refrec_replay_stats_t.dropped`) that ref_soft would
+draw outside its frame buffer: the rectangle, computed as ref_soft
+computes it (`ceil(8 * scale)` square for a character; the target's
+`Draw_GetPicSize` times the scale, cut to int, for a scaled pic; the
+given size for a stretched pic or raw image), must have a size of 1 up
+to the frame and lie wholly inside it, except that a character and a
+stretched pic may overlap the top edge, which ref_soft clips for those
+two (the console slides in from above); a scale outside 1..64 or not
+finite, and a pic the target lacks, are dropped too. It cuts
+`Draw_Fill` and `Draw_TileClear` to the frame (clip), as every renderer
+does itself. Every other value is bounded (`REFREC_REPLAY_*` in
+refrecord.h): the viewport inside the recorded size, `rdflags` to the
+four `RDF_` bits and entity flags to `REFREC_REPLAY_RFLAGS`, fov to
+1..179, blend, alpha and backlerp to 0..1, non-finite floats to a
+default, positions and angles to ±10^6; entity `frame`/`oldframe` at
+least 0, `skinnum` 0..31 or 0 (a beam keeps its low byte, its colour),
+`lightstyle` 0..255; particle colour, fill colour and character to their
+low byte. Each moved or cut value counts in `stats.clamped` (character
+masking excepted: every renderer masks, and the console passes signed
+chars). An entity id resolves only to a handle registered under it with
+that kind (a skin may be a pic), and every model and skin handle is
+forgotten at each `REC_BEGINREG`, because the renderer frees what is not
+registered again; anything else is NULL. The engine prints the counts at
+the end; the `world`, `hud2d` and `cinematic` traces of demo1 and
+`idlog.cin` count 0 dropped and 0 bounded and replay byte-identical to
+live on `soft`. `REC_CVARS` is skipped until TASK45. A replay is a pin
+run: no configuration file is read or written. A refused trace ends the
+engine with `ERR_FATAL`, the last frame with `quit`, and a renderer that
+fails to load is not replaced by another.
+
+Trust boundary: a trace is a local development artifact, recorded by the
+owner's own engine and named on the command line; it is derived from game
+data and never leaves the machine. Replaying a trace obtained from
+another party is not supported. The validation layer is defence in
+depth, not a sandbox: the renderers' own missing bounds checks (ref_soft's
+2D entry points among them) are tracked on FIX40 (issue #185).
+Measured (`soft`, 640x480, demo1 `world`, Apple silicon host at load
+average 117 to 200): the live record wrote 23 frames and a 4,380,868-byte
+trace of 707 frames in 7.0 s; two replays of it with `game.dylib` moved
+away wrote 23 frames with the same names in 3.0 to 3.2 s, 0 values
+bounded, 0 pic size mismatches.
+
 Bit-identical to live, same renderer, same machine (the TASK27 acceptance
 criterion): everything the renderer sees is in the trace by construction,
 with three known leaks to close. (a) `refdef_t.time` drives auto-animation

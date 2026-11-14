@@ -624,3 +624,6 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
   every region where they differ by more is one of the reference's
   known faults, with `gl1` the odd one out against `soft` and
   `gl1-metal`.
+- **Not covered.** No static assert ties the C uniform struct to the
+  shader's (follow-up), and no scenario pins `GL_COMBINE` because
+  overbright defaults to off.

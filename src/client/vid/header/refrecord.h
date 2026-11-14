@@ -272,8 +272,57 @@ void RefRec_RenderFrame(const refdef_t *fd);   /* deep copy, handles -> ids */
 void RefRec_Draw(refrec_type_t t, const int32_t *ints, int nints, const float *floats, int nfloats, const char *name, const void *data, uint32_t datalen);
 void RefRec_Control(refrec_type_t t, float arg);
 
-/* replayer: called from CL_PinsReplay() */
+/*
+ * replayer: called from CL_PinsReplay() through vid.c. The trace is
+ * untrusted: RefRec_OpenReplay refuses a header whose api_version, width
+ * or height differ from the target's, an unfinished or truncated file,
+ * and a layout RefRec_CheckLayout refuses; the string table and the frame
+ * index are read and checked whole at open. RefRec_ReplayNextFrame then
+ * forwards, in file order, every record up to the REC_ENDFRAME of the
+ * next indexed frame, and is false after the last indexed frame or on a
+ * refused record (stats.failed). An open frame after the last indexed one
+ * is never replayed. The target is handed only values the live client
+ * could have handed the renderer (Rep_Check in refrecord.c): a name of
+ * MAX_QPATH bytes or more, or a registration whose name is not its
+ * string table entry's, refuses the trace; a 2D draw outside the frame
+ * is not forwarded (stats.dropped); every other value is bounded
+ * (REFREC_REPLAY_*; a value moved counts in stats.clamped), and an id is
+ * resolved only to a handle the replay registered under that id with the
+ * kind the string table names; any other id is NULL. REC_CAPTURE numbers
+ * must run 0, 1, 2, ...; REC_CVARS and REC_WARN are not forwarded. A
+ * refusal is sticky: every later RefRec_ReplayNextFrame is false and
+ * forwards nothing.
+ */
+typedef struct {
+	uint32_t api_version;	/* the trace must carry these */
+	int width, height;
+	/* REC_MODEL, REC_SKIN, REC_PIC: the live handle for the name */
+	void *(*Register)(refrec_type_t type, const char *name);
+	void (*RenderFrame)(refdef_t *fd);
+	/* every other forwarded record; for REC_PICSIZE the target writes
+	   the size into ints[0] and ints[1] */
+	void (*Call)(refrec_call_t *c);
+} refrec_target_t;
+
+typedef struct {
+	uint32_t frames, captures, clamped, warns, picsize_mismatch;
+	uint32_t dropped;	/* 2D draws outside the frame, not forwarded */
+	qboolean failed;
+} refrec_replay_stats_t;
+
+/* bounds a replayed value is moved into */
+#define REFREC_REPLAY_MAX_COORD	1000000.0f	/* world positions, angles, dlight intensity */
+#define REFREC_REPLAY_MAX_TIME	10000000.0f	/* refdef_t.time, seconds */
+#define REFREC_REPLAY_MAX_LIGHT	256.0f	/* lightstyle and dlight colour components */
+#define REFREC_REPLAY_MAX_SCALE	64.0f	/* 2D scale factors, from 1 */
+#define REFREC_REPLAY_MAX_SKINNUM	32	/* MAX_MD2SKINS; beams keep the low byte, their colour */
+#define REFREC_REPLAY_RDFLAGS	15	/* RDF_UNDERWATER | RDF_NOWORLDMODEL | RDF_IRGOGGLES | RDF_UVGOGGLES */
+#define REFREC_REPLAY_RFLAGS	0x7ffff	/* RF_MINLIGHT up to RF_USE_DISGUISE */
+#define REFREC_REPLAY_MAX_RECORD	(REFREC_MAX_RAW_DIM * REFREC_MAX_RAW_DIM * 4 + 64)	/* payload bytes */
+
+void RefRec_SetReplayTarget(const refrec_target_t *t);	/* copied; before RefRec_OpenReplay */
 qboolean RefRec_OpenReplay(const char *path, refrec_header_t *out);
 qboolean RefRec_ReplayNextFrame(void);         /* false after the last frame */
 void RefRec_CloseReplay(void);
+void RefRec_ReplayStats(refrec_replay_stats_t *out);	/* of the open or the last replay */
 #endif

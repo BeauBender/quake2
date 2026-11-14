@@ -7,10 +7,13 @@
 # copy, string table, frame index, header patch) that read back whole, and
 # ends cleanly on a recorder limit, a write error and oversized input, also
 # when the limit or the error lands inside a call (swept over every record
-# of runs that warn). This builds tests/refrecord/refrecord-test.c
-# against the real refrecord.c, with ASAN and UBSAN when the compiler has
-# them. Also: every vid.c wrapper that forwards to the renderer carries its
-# guarded hook. Needs a C compiler; needs no SDL, no engine and no game data.
+# of runs that warn); the replayer feeds recorded traces to a mock renderer
+# in order, ids resolved to live handles and every value bounded, and
+# refuses truncated, patched and byte-swept traces cleanly. This builds
+# tests/refrecord/refrecord-test.c against the real refrecord.c, with ASAN
+# and UBSAN when the compiler has them. Also: every vid.c wrapper that
+# forwards to the renderer carries its guarded hook. Needs a C compiler;
+# needs no SDL, no engine and no game data.
 set -eu
 cd "$(dirname "$0")/.."
 

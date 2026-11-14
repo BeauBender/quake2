@@ -764,6 +764,8 @@ painted pixels counted per frame:
   frames 0 to 2 (from above, y 258 to 479) and 40.4 to 40.8 percent of
   frames 3 and 4 (from below, y 0 to 211). No opaque warp, no sky.
 
+The water-demo measurements below were made with a demo that `scripts/pins.sh make-demo water` had REFUSED (146 messages against the accepted range of 97 to 124; all 13 attempts gave 142 to 151) and that was renamed by hand for this measurement only, so they are indicative and not acceptance evidence. The message range needs recalibrating, because it was calibrated under heavy host load.
+
 The water demo. `make-demo water` gave 142 to 151 messages in 13 runs
 at 1-minute load 8.3 to 172.6 (a run took 24 seconds at load 8.3),
 outside the 97 to 124 its script states, so every run failed for the
@@ -846,6 +848,17 @@ difference 7 and bad 0, score 0.000002 of the whole frame against
 So on this host S4 cannot pass against `gl1` at the defaults for the
 same reasons as `world` in TASK49; an accelerated reference (TASK83)
 decides it.
+TASK83 (#187) is the card that judges `world` again, against references
+from an accelerated OpenGL. Polygon offset and dynamic-light sub-uploads
+are host-tested only, not judged on frames (`world` has `gl_zfix 0` and
+`cl_lights 0`).
+
+The review checked this independently. A three-way comparison with
+`soft` on the 15 frames still over without the flash found 56 differing
+regions of 150 pixels or more (108,719 pixels), with `gl1` the odd one
+out in all 56 and `gl1-metal` alone in none. On passing frames the
+luminance ratio of `gl1-metal` to `gl1` is 0.9996 to 1.0015; with
+overbright forced to 2 and 4 both renderers brighten alike.
 
 ## Judging a renderer
 

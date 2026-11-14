@@ -49,6 +49,11 @@ void	VID_Init(void);
 void	VID_Shutdown(void);
 void	VID_CheckChanges(void);
 
+/* pins_replay: a renderer-API trace fed to the loaded renderer */
+qboolean VID_OpenReplay(const char *path);
+int VID_ReplayFrame(void);
+void VID_CloseReplay(void);
+
 void	VID_MenuInit(void);
 void	VID_MenuDraw(void);
 const char *VID_MenuKey(int);
