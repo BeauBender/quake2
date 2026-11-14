@@ -142,7 +142,7 @@ Scrap_Sampler(int texnum)
 void
 Scrap_Update(void)
 {
-	int texnum;
+	int texnum, flushed = 0;
 
 	for (texnum = 0; texnum < RM_MAX_SCRAPS; texnum++)
 	{
@@ -154,6 +154,17 @@ Scrap_Update(void)
 		if (!rm_scrap_needs_upload(scrap_dirty[texnum], scrap_tex[texnum]))
 		{
 			continue;
+		}
+
+		/*
+		 * Quads batched under an atlas's old texture id are drawn before the
+		 * id can be freed and taken by another texture (RM_Flush2D only
+		 * encodes the batch; it does not call Scrap_Update).
+		 */
+		if (!flushed)
+		{
+			RM_Flush2D();
+			flushed = 1;
 		}
 
 		tmp = malloc(scrap_size);

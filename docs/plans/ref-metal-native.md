@@ -853,7 +853,10 @@ scrap image keeps its atlas index (`scrapnum`, its `texnum` is
 texture and sampler up through the scrap (`Scrap_Texture`,
 `Scrap_Sampler`), so an id freed by a failed upload and taken by the next
 texture made is never drawn for a pic: the pics on that atlas draw
-nothing (counted skips) until the next `Scrap_Update`, which makes a
+nothing (a pic whose atlas has no texture is a counted skip, enforced in
+the back end by `rm_pipe_2d_textured`: a textured pipeline without a
+texture is never encoded, and `Scrap_Update` flushes the pending batch
+before it rewrites any atlas) until the next `Scrap_Update`, which makes a
 dirty atlas without a texture again (an upload with id 0;
 `rm_scrap_needs_upload`) instead of passing over it, so a transient
 failure heals at the next draw of a scrap pic. `R_ShutdownImages` keys
