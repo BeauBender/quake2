@@ -104,7 +104,7 @@ frame renders at the output size, as before, so the gl1 pins are untouched.
 | 1 | IAS rebuild and alias refits | – |
 | 2 | G-buffer raster, projection jittered | internal |
 | 3 | Ray passes: dlight shadows, sun, AO, reflections | internal |
-| 4 | Temporal accumulation and the bilateral denoiser (RT7), on the visibility, AO and reflection buffers | internal |
+| 4 | Temporal accumulation and denoise (RT7), as above: shadow, sun and AO history, the 5x5 blur on AO and sun, the 3x3 blur on reflections | internal |
 | 5 | Lighting resolve | internal |
 | 6 | Forward pass | internal |
 | 7 | `MTLFXTemporalScaler`: lit colour, depth and motion vectors in, colour out | internal to output |
@@ -233,7 +233,7 @@ upscaled frame on real frames is RT12; no quality is claimed before it.
 The cases it names: particles, sprites and beams, which write no motion
 vectors of their own; water reflections, which RT7 keeps without history
 but the scaler accumulates; lightstyle changes and muzzle flashes, which
-change the lighting within a frame; the view weapon; the jitter in RT7's
+change the lighting from one frame to the next; the view weapon; the jitter in RT7's
 history. The cost of the motion vectors, the G-buffer raster, shading and
 RT7 is RT10's per-pass table. The scaler's cost on apple7 is TASK106
 (#249). The first frames of a process run at the start level (section 8,
