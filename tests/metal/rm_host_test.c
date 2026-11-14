@@ -2266,7 +2266,12 @@ test_warp_arith(void)
 	CHECK(rm_warp_index(NAN, 1) == 0);
 	CHECK(rm_warp_index(1e30f, 0) >= 0 && rm_warp_index(1e30f, 0) < 256);
 	CHECK(rm_warp_index(-1e30f, 0) >= 0 && rm_warp_index(-1e30f, 0) < 256);
-	CHECK(rm_warp_index(INFINITY, 0) >= 0 && rm_warp_index(INFINITY, 0) < 256);
+	CHECK(rm_warp_index(INFINITY, 0) == 0 && rm_warp_index(-INFINITY, 0) == 0);
+	/* past an int the value is taken modulo 256 as the integer would be: 1e9 * 0.125 * 40.74 = 5.09e9 */
+	CHECK(rm_warp_index(1e9f, 0) == (int)(((long long)((1e9f * 0.125 + 0) * REF_TURBSCALE)) & 255));
+	CHECK(rm_warp_index(-1e9f, 0) == (int)(((long long)((-1e9f * 0.125 + 0) * REF_TURBSCALE)) & 255));
+	CHECK(rm_warp_index(1e9f, 7.5f) == (int)(((long long)((1e9f * 0.125 + 7.5f) * REF_TURBSCALE)) & 255));
+	CHECK(rm_warp_index(53000000.0f, 0) == (int)(((long long)((53000000.0f * 0.125 + 0) * REF_TURBSCALE)) & 255));
 
 	/* the three vertices: s = os + turb(ot) + scroll, t = ot + turb(os), each over 64 */
 	rm_warp_st(0, 0, 1.5f, 0, &s, &t);
@@ -2284,9 +2289,10 @@ test_warp_arith(void)
 	CHECK(rm_warp_scroll(0, 1) == 0);
 	CHECK(rm_warp_scroll(-0.5f, 1) == 16);     /* (int) truncates toward 0: -0.25 - 0 = -0.25 */
 	/* a time that is not a number or beyond an int is converted without the undefined behaviour of gl1's cast */
-	(void)rm_warp_scroll(NAN, 1);
-	(void)rm_warp_scroll(1e30f, 1);
-	(void)rm_warp_scroll(-1e30f, 1);
+	CHECK(rm_warp_scroll(NAN, 1) != rm_warp_scroll(NAN, 1));
+	CHECK(rm_warp_scroll(1e30f, 1) == (float)(-64 * ((1e30f * 0.5) - 2147483647.0)));
+	CHECK(rm_warp_scroll(-1e30f, 1) == (float)(-64 * ((-1e30f * 0.5) + 2147483648.0)));
+	CHECK(rm_warp_scroll(3e9f, 1) == (float)(-64 * ((3e9f * 0.5) - 1500000000.0)));
 
 	/* a flowing polygon's scroll: -64 * the fraction of time / 40, -64 where that is 0 */
 	CHECK(rm_flow_scroll(10) == -16);
@@ -2295,9 +2301,9 @@ test_warp_arith(void)
 	CHECK(rm_flow_scroll(40) == -64);
 	CHECK(rm_flow_scroll(80) == -64);
 	CHECK(rm_flow_scroll(41) == -1.6f);
-	(void)rm_flow_scroll(1e30f);
-	(void)rm_flow_scroll(NAN);
-	CHECK(rm_flow_scroll(1e30f) == rm_flow_scroll(1e30f));
+	CHECK(rm_flow_scroll(1e30f) == (float)(-64 * ((1e30f / 40.0) - 2147483647.0)));
+	CHECK(rm_flow_scroll(-1e30f) == (float)(-64 * ((-1e30f / 40.0) + 2147483648.0)));
+	CHECK(rm_flow_scroll(NAN) != rm_flow_scroll(NAN));   /* the fraction of a NaN is a NaN: no conversion, no crash */
 
 	/* differential: the same expressions as gl1's, over random values */
 	ok = 1;
@@ -2582,6 +2588,60 @@ test_warp_subdivide(void)
 			CHECK(rm_warp_subdivide(map, 4, v0, v1, sub_out, RM_WARP_MAX_OUT, sub_len, RM_WARP_MAX_POLYS, &np, &nv) == 1);
 			CHECK(np == 128 * 128 && nv == 128 * 128 * 6);
 		}
+	}
+
+	/*
+	 * a polygon whose pieces pass the vertex bound: 60 vertices zigzagging across the cut plane make
+	 * a front piece of about 90 (the polygon is refused, as gl1 drops the map)
+	 */
+	{
+		float zig[60 * 3];
+
+		for (i = 0; i < 60; i++)
+		{
+			zig[i * 3] = (i & 1) ? 118.0f : 10.0f;
+			zig[i * 3 + 1] = (float)i * 2;
+			zig[i * 3 + 2] = 0;
+		}
+
+		np = 7;
+		CHECK(rm_warp_subdivide(zig, 60, v0, v1, sub_out, RM_WARP_MAX_OUT, sub_len, RM_WARP_MAX_POLYS, &np, &nv) == 0 && np == 0);
+	}
+
+	/* structured polygons against gl1's function: vertices on a cut plane, a cut through a vertex, 8 units apart */
+	{
+		static const float polys[][12] = {
+			{ 64, 0, 0, 128, 64, 0, 64, 128, 0, 0, 64, 0 },       /* a diamond, two vertices on x = 64 */
+			{ 0, 0, 0, 64, 0, 0, 64, 64, 0, 0, 64, 0 },           /* a side on the plane */
+			{ 0, 0, 0, 128, 0, 0, 128, 64, 0, 0, 64, 0 },         /* a side on y = 64 */
+			{ -20, -20, 0, 20, -20, 0, 20, 20, 0, -20, 20, 0 },   /* a vertex pair about the origin plane */
+			{ 56, 56, 0, 72, 56, 0, 72, 72, 0, 56, 72, 0 },       /* 8 units from the planes on each side */
+			{ 57, 56, 0, 71, 56, 0, 71, 72, 0, 57, 72, 0 },       /* 7 units in x */
+			{ 0, 0, 0, 200, 0, 0, 200, 200, 0, 0, 200, 0 },
+			{ 64, 64, 0, 192, 64, 0, 192, 192, 0, 64, 192, 0 },   /* on the grid: not cut */
+		};
+		static const float w0[3] = { 0.5f, 0.25f, -1 }, w1[3] = { -2, 1, 0.125f };
+		size_t k;
+
+		ok = 1;
+
+		for (k = 0; k < sizeof(polys) / sizeof(polys[0]); k++)
+		{
+			float copy[12 + 3];
+			unsigned long rnv = 0;
+			unsigned rnp = 0;
+
+			memcpy(copy, polys[k], sizeof(polys[k]));
+			ref_np = ref_nv = 0;
+			ref_subdivide(4, copy, w0, w1);
+			ok &= rm_warp_subdivide(polys[k], 4, w0, w1, sub_out, RM_WARP_MAX_OUT, sub_len, RM_WARP_MAX_POLYS, &rnp, &rnv);
+			ok &= ((int)rnp == ref_np) && ((int)rnv == ref_nv) && (memcmp(sub_out, ref_out, (size_t)ref_nv * 5 * sizeof(float)) == 0);
+		}
+
+		CHECK(ok);
+		/* the diamond: four pieces after the x and the y cut, each a triangle of the cut (centre, 3 vertices, 1) */
+		CHECK(rm_warp_subdivide(polys[0], 4, v0, v1, sub_out, 1000, sub_len, 100, &np, &nv) == 1 && np == 4 && nv == 4 * 5);
+		CHECK(sub_len[0] == 5 && sub_len[1] == 5 && sub_len[2] == 5 && sub_len[3] == 5);
 	}
 
 	/* differential: random convex quads and triangles on random planes against gl1's R_SubdividePolygon */
@@ -2903,29 +2963,74 @@ test_sky(void)
 		CHECK(rm_sky_clip(&b, 0, ring) == 1);
 	}
 
-	/* a polygon that is not convex crosses a plane more often than the buffers hold: refused, never written past */
+	/*
+	 * a polygon that is not convex crosses a plane more often than a convex one: 62 vertices that alternate
+	 * across x + y = 0 give 31 + 62 vertices to a side, more than the buffers hold, so the polygon is
+	 * refused (the sanitizers watch the buffers); 20 of them fit and are clipped as gl1 clips them
+	 */
 	{
-		float zig[62 * 3];
+		float zig[62 * 3], copy[65 * 3];
 
 		for (i = 0; i < 62; i++)
 		{
-			zig[i * 3] = 100;
-			zig[i * 3 + 1] = (i & 1) ? 50 : -50;   /* x - y alternates 50, 150: use y to cross x + y, x - y planes */
-			zig[i * 3 + 2] = (float)i;
+			zig[i * 3] = (i & 1) ? -500.0f : 500.0f;
+			zig[i * 3 + 1] = (i & 1) ? 400.0f : -400.0f;
+			zig[i * 3 + 2] = 5.0f + (float)i;
 		}
 
 		rm_sky_clear(&b);
-		(void)rm_sky_clip(&b, 62, zig);    /* the result is 1 or 0; the sanitizers see the buffers */
+		CHECK(rm_sky_clip(&b, 62, zig) == 0);
 
-		for (i = 0; i < 62; i++)
+		memcpy(copy, zig, sizeof(zig));
+		rm_sky_clear(&b);
+		CHECK(rm_sky_clip(&b, 20, zig) == 1);
+
+		for (f = 0; f < 6; f++)
 		{
-			zig[i * 3] = (i & 1) ? 100 : -100;
-			zig[i * 3 + 1] = (i & 1) ? -100 : 100;
-			zig[i * 3 + 2] = (float)(i % 3);
+			ref_skymins[0][f] = ref_skymins[1][f] = 9999;
+			ref_skymaxs[0][f] = ref_skymaxs[1][f] = -9999;
 		}
 
-		rm_sky_clear(&b);
-		(void)rm_sky_clip(&b, 62, zig);
+		ref_clip_sky(20, copy, 0);
+		CHECK(memcmp(b.mins, ref_skymins, sizeof(ref_skymins)) == 0 && memcmp(b.maxs, ref_skymaxs, sizeof(ref_skymaxs)) == 0);
+	}
+
+	/* structured polygons against gl1's clip: vertices on the planes, and 0.15 off them, a depth just over 0.001 */
+	{
+		static const float polys[][12] = {
+			{ 100, 100, 5, 120, 100, -5, 150, 150, 0, 90, 90, 0 },       /* vertices on x = y */
+			{ 100, 99.85f, 5, 100, 100.15f, 5, 80, 80, -5, 120, 120, -5 },   /* 0.15 off the plane, as 0 and as -0.15 */
+			{ 100, 99.95f, 5, 100, 100.05f, 5, 80, 80, -5, 120, 120, -5 },   /* within 0.1 of it: on the plane */
+			{ 0.002f, 10, 10, 0.002f, 20, 10, 0.002f, 20, -10, 0.002f, 10, -10 }, /* a depth just over 0.001 on the +x face */
+			{ 0.0005f, 10, 10, 0.0005f, 20, 10, 0.0005f, 20, -10, 0.0005f, 10, -10 },
+			{ 100, 100, 100, 100, -100, 100, -100, -100, 100, -100, 100, 100 },
+			{ 50, 0, 10, 0, 50, 10, -50, 0, 10, 0, -50, 10 },
+			{ 10, 10, -3, 10, 10, 3, 10, -10, 3, 10, -10, -3 },
+		};
+		size_t k;
+
+		ok = 1;
+
+		for (k = 0; k < sizeof(polys) / sizeof(polys[0]); k++)
+		{
+			float vecs[65 * 3], copy[65 * 3];
+
+			memcpy(vecs, polys[k], sizeof(polys[k]));
+			memcpy(copy, polys[k], sizeof(polys[k]));
+			rm_sky_clear(&b);
+
+			for (f = 0; f < 6; f++)
+			{
+				ref_skymins[0][f] = ref_skymins[1][f] = 9999;
+				ref_skymaxs[0][f] = ref_skymaxs[1][f] = -9999;
+			}
+
+			ref_clip_sky(4, copy, 0);
+			ok &= rm_sky_clip(&b, 4, vecs);
+			ok &= (memcmp(b.mins, ref_skymins, sizeof(ref_skymins)) == 0) && (memcmp(b.maxs, ref_skymaxs, sizeof(ref_skymaxs)) == 0);
+		}
+
+		CHECK(ok);
 	}
 
 	/* a rotating sky is the whole box once any face is seen, and nothing when none is */
