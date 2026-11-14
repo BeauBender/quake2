@@ -195,6 +195,12 @@ int rm_pipe_2d(rm_texenv_t env, int alpha_test, int blend);
  */
 int rm_texture_mode(const char *name, int *min, int *mag_linear);
 
+/*
+ * The directory part of path ("." for a bare name) into dir, which holds
+ * len bytes. 1 when it fits; 0, with dir empty when len > 0, otherwise.
+ */
+int rm_dir_of(const char *path, char *dir, size_t len);
+
 /* ---- rmb_device.m and rmb_encode.m ------------------------------------------- */
 
 /* The device and the queue, and the capabilities. 0 with err filled on failure. */

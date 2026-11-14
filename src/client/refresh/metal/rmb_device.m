@@ -283,6 +283,7 @@ rmb_close(rmb_stats_t *stats, rm_ledger_t *ledger)
 	__weak id<MTLCommandQueue> queue;
 
 	rmb_detach();
+	rmb_resources_close();      /* textures, staging, pipelines, samplers (rmb_resource.m) */
 
 	if (rmb_device)
 	{

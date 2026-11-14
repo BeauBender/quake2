@@ -41,6 +41,7 @@
 #include <string.h>
 
 #include "header/rmb.h"
+#include "common/mtl_ring.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_encode.m is written for ARC: compile it with -fobjc-arc"
@@ -58,6 +59,26 @@ long rmb_frame_wait_ms(void);
 void rmb_watch(id<MTLCommandBuffer> cmd);
 int rmb_commit_wait(id<MTLCommandBuffer> cmd);
 
+/* rmb_resource.m */
+void rmb_upload_flush(void);
+id<MTLTexture> rmb_texture_for_draw(int id);
+id<MTLRenderPipelineState> rmb_pipe(int i);
+id<MTLSamplerState> rmb_sampler(int i);
+
+/* the frame ring of 2D vertices and indices: one shared buffer per frame slot */
+#define RMB_FRAMES 3
+#define RMB_RING_BYTES (4u << 20)
+static id<MTLBuffer> ring_buf[RMB_FRAMES];
+static mtl_ring_t ring;
+static unsigned long frames_begun;
+
+/*
+ * Changes with every frame command buffer (a split makes a new one), and
+ * when the frame ends: a texture whose last draw carries the current value
+ * was drawn by the open command buffer (rmb_resource.m).
+ */
+unsigned long rmb_frame_serial = 1;
+
 /* kept across frames, rebuilt when the size changes */
 static id<MTLTexture> color;     /* the frame, private */
 static id<MTLTexture> depth;     /* depth32Float_stencil8, private */
@@ -65,7 +86,8 @@ static id<MTLBuffer> readbuf;    /* shared, for rmb_read */
 static int color_defined;        /* a pass has written color since it was made */
 
 /* the open frame */
-static int frame_open, frame_skipped, frame_passes;
+static int frame_open, frame_skipped, frame_passes, frame_depth;
+static id<MTLBuffer> frame_ring;
 static id<MTLCommandBuffer> frame_cmd;
 static id<MTLRenderCommandEncoder> frame_enc;
 
@@ -109,9 +131,21 @@ rmb_end_encoder(void)
 static void
 rmb_frame_reset(void)
 {
-	frame_open = frame_skipped = frame_passes = 0;
+	frame_open = frame_skipped = frame_passes = frame_depth = 0;
 	frame_cmd = nil;
 	frame_enc = nil;
+	frame_ring = nil;
+	rmb_frame_serial++;
+}
+
+/* Commits the frame command buffer so far, after the uploads before it. */
+static void
+rmb_commit_partial(void)
+{
+	rmb_end_encoder();
+	rmb_upload_flush();
+	rmb_watch(frame_cmd);
+	[frame_cmd commit];
 }
 
 static int rmb_pass(const float *clear_rgba, int with_depth);
@@ -167,8 +201,27 @@ rmb_frame_begin(int w, int h, const float *clear_rgba)
 		}
 
 		frame_cmd = [rmb_queue commandBuffer];
+		rmb_frame_serial++;
 
-		if (!color || !depth || !frame_cmd)
+		/* the frame slot guarantees the frame that last used this ring buffer has completed */
+		frame_ring = ring_buf[frames_begun % RMB_FRAMES];
+
+		if (!frame_ring)
+		{
+			frame_ring = [rmb_device newBufferWithLength:RMB_RING_BYTES options:MTLResourceStorageModeShared];
+
+			if (frame_ring)
+			{
+				ring_buf[frames_begun % RMB_FRAMES] = frame_ring;
+				rm_ledger_create(&rmb_ledger, RM_OBJ_BUFFER);
+			}
+		}
+
+		frames_begun++;
+		ring.size = RMB_RING_BYTES;
+		ring.used = 0;
+
+		if (!color || !depth || !frame_cmd || !frame_ring)
 		{
 			frame_cmd = nil;
 			frame_skipped = 1;
@@ -240,6 +293,7 @@ rmb_pass(const float *clear_rgba, int with_depth)
 		}
 
 		frame_passes++;
+		frame_depth = with_depth;
 		color_defined = 1;
 	}
 
@@ -294,6 +348,7 @@ rmb_read(unsigned char *bgra, size_t len)
 		}
 
 		rmb_end_encoder();
+		rmb_upload_flush();     /* the frame reads what was written before it */
 		own = !frame_open;
 		cmd = own ? [rmb_queue commandBuffer] : frame_cmd;
 
@@ -337,6 +392,7 @@ rmb_read(unsigned char *bgra, size_t len)
 		{
 			/* the rest of the frame goes on a new command buffer; its next pass loads */
 			frame_cmd = [rmb_queue commandBuffer];
+			rmb_frame_serial++;
 		}
 
 		if (!ok)
@@ -404,6 +460,7 @@ rmb_frame_end(void)
 			rmb_counts.no_drawable++;
 		}
 
+		rmb_upload_flush();     /* committed ahead of the frame that reads it */
 		rmb_watch(frame_cmd);   /* first: it counts before the slot is given back */
 		[frame_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 			(void)b;
@@ -427,6 +484,7 @@ rmb_encode_abandon(void)
 			dispatch_semaphore_t sem = rmb_frame_sem;
 
 			rmb_end_encoder();
+			rmb_upload_flush();
 			rmb_watch(frame_cmd);
 			[frame_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 				(void)b;
@@ -445,12 +503,23 @@ rmb_encode_release(void)
 {
 	__weak id<MTLTexture> wc, wd;
 	__weak id<MTLBuffer> wb;
+	int i;
 
 	@autoreleasepool
 	{
 		wc = color;
 		wd = depth;
 		wb = readbuf;
+
+		for (i = 0; i < RMB_FRAMES; i++)
+		{
+			if (ring_buf[i])
+			{
+				ring_buf[i] = nil;
+				rm_ledger_destroy(&rmb_ledger, RM_OBJ_BUFFER);
+			}
+		}
+
 		color_defined = 0;
 		rmb_set_texture(&color, nil);
 		rmb_set_texture(&depth, nil);
@@ -463,4 +532,100 @@ rmb_encode_release(void)
 	}
 
 	rmb_ledger.unreleased += (wc ? 1 : 0) + (wd ? 1 : 0) + (wb ? 1 : 0);
+}
+
+/*
+ * The in-frame reuse split (section 3): the draws so far are committed
+ * (after the uploads before them) and the frame goes on with a new
+ * command buffer, whose next pass loads the target.
+ */
+void
+rmb_encode_split(void)
+{
+	if (!frame_open || frame_skipped || !frame_cmd)
+	{
+		return;
+	}
+
+	@autoreleasepool
+	{
+		rmb_commit_partial();
+		frame_cmd = [rmb_queue commandBuffer];
+		rmb_frame_serial++;
+	}
+
+	rmb_counts.splits++;
+}
+
+void
+rmb_clear(const float *rgba)
+{
+	rmb_pass(rgba, 0);
+}
+
+int
+rmb_draw_2d(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n, const float *mvp)
+{
+	unsigned short idx[3 * 62];
+	int count = rm_fan_indices(n, idx, (int)(sizeof(idx) / sizeof(idx[0])));
+	size_t vbytes = (size_t)(n > 0 ? n : 0) * sizeof(rmb_vert2d_t);
+	long vat, iat;
+
+	if (!frame_open || frame_skipped || !frame_cmd || !count)
+	{
+		rmb_counts.draw_skips++;
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		id<MTLRenderPipelineState> ps = rmb_pipe(pipe);
+		id<MTLTexture> t = tex ? rmb_texture_for_draw(tex) : nil;
+		id<MTLSamplerState> ss = rmb_sampler(smp);
+
+		if (!ps || (tex && (!t || !ss)))
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+
+		/* the 2D pipelines have no depth: a draw after the 3D pass opens the 2D pass */
+		if ((!frame_enc || frame_depth) && !rmb_pass(NULL, 0))
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+
+		vat = mtl_ring_alloc(&ring, vbytes);
+		iat = vat < 0 ? -1 : mtl_ring_alloc(&ring, (size_t)count * sizeof(idx[0]));
+
+		if (iat < 0)
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+
+		memcpy((unsigned char *)frame_ring.contents + vat, v, vbytes);
+		memcpy((unsigned char *)frame_ring.contents + iat, idx, (size_t)count * sizeof(idx[0]));
+
+		[frame_enc setRenderPipelineState:ps];
+		[frame_enc setViewport:(MTLViewport){ 0, 0, (double)color.width, (double)color.height, 0, 1 }];
+		[frame_enc setVertexBuffer:frame_ring offset:(NSUInteger)vat atIndex:0];
+		[frame_enc setVertexBytes:mvp length:16 * sizeof(float) atIndex:1];
+
+		if (t)
+		{
+			[frame_enc setFragmentTexture:t atIndex:0];
+			[frame_enc setFragmentSamplerState:ss atIndex:0];
+		}
+
+		[frame_enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+				indexCount:(NSUInteger)count
+				indexType:MTLIndexTypeUInt16
+				indexBuffer:frame_ring
+				indexBufferOffset:(NSUInteger)iat];
+	}
+
+	rmb_counts.draws++;
+	return 1;
 }

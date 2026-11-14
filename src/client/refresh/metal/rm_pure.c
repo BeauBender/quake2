@@ -305,6 +305,34 @@ rm_pipe_2d(rm_texenv_t env, int alpha_test, int blend)
 	return ((int)env * 2 + (alpha_test ? 1 : 0)) * 2 + (blend ? 1 : 0);
 }
 
+int
+rm_dir_of(const char *path, char *dir, size_t len)
+{
+	const char *slash = strrchr(path, '/');
+	size_t n = slash ? (size_t)(slash - path) : 1;
+	const char *from = slash ? path : ".";
+
+	if (slash && (n == 0))
+	{
+		n = 1;   /* the root directory */
+	}
+
+	if (len == 0)
+	{
+		return 0;
+	}
+
+	if (n >= len)
+	{
+		dir[0] = '\0';
+		return 0;
+	}
+
+	memcpy(dir, from, n);
+	dir[n] = '\0';
+	return 1;
+}
+
 /* from gl1_image.c, the modes table of R_TextureMode */
 int
 rm_texture_mode(const char *name, int *min, int *mag_linear)

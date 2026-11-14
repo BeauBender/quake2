@@ -829,6 +829,19 @@ ref_metal:
 
 $(BINDIR)/ref_metal.dylib : LDFLAGS += -shared -framework Metal -framework QuartzCore -framework Foundation
 
+# The shaders, loaded from next to the dylib when the context is made,
+# compiled with the shim's xcrun metal flags (design section 4).
+$(BINDIR)/ref_metal.dylib : $(BINDIR)/ref_metal.metallib
+
+$(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
+		src/client/refresh/metal/common/mtl_shader_math.h
+	@echo "===> METAL $<"
+	${Q}command -v xcrun >/dev/null 2>&1 || { echo "ref_metal needs xcrun and the Xcode Metal toolchain" >&2; exit 1; }
+	${Q}xcrun -f metal >/dev/null 2>&1 || { echo "ref_metal needs the Metal compiler (xcrun metal); install the Xcode Metal toolchain" >&2; exit 1; }
+	${Q}mkdir -p $(BUILDDIR)/ref_metal $(@D)
+	${Q}xcrun -sdk macosx metal -c $< -o $(BUILDDIR)/ref_metal/rm_shaders.air
+	${Q}xcrun -sdk macosx metallib $(BUILDDIR)/ref_metal/rm_shaders.air -o $@
+
 # Header dependencies: the Darwin CFLAGS carry no -MMD (see above), but
 # the Apple clang this target needs writes them for C and Objective-C
 # alike; REFMETAL_DEPS includes the .d files.
@@ -1155,13 +1168,22 @@ endif
 # ----------
 
 REFMETAL_OBJS_ := \
+	src/client/refresh/metal/rm_draw.o \
+	src/client/refresh/metal/rm_image.o \
 	src/client/refresh/metal/rm_main.o \
 	src/client/refresh/metal/rm_misc.o \
 	src/client/refresh/metal/rm_pure.o \
 	src/client/refresh/metal/rm_sdl.o \
 	src/client/refresh/metal/rmb_device.o \
 	src/client/refresh/metal/rmb_encode.o \
+	src/client/refresh/metal/rmb_resource.o \
+	src/client/refresh/metal/common/mtl_matrix.o \
+	src/client/refresh/metal/common/mtl_ring.o \
 	src/client/refresh/files/common.o \
+	src/client/refresh/files/pcx.o \
+	src/client/refresh/files/stb.o \
+	src/client/refresh/files/wal.o \
+	src/common/md4.o \
 	src/common/shared/shared.o
 
 # ----------
