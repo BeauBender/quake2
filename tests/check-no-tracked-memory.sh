@@ -10,13 +10,14 @@
 # clean then). Memory is kept in the owner's private store (see CLAUDE.md),
 # never in a commit.
 #
-# The self-test runs first, in a subshell with the GIT_* repository variables
-# unset and no global or system configuration, on throwaway repositories
-# under a private mktemp -d. It shows the check fails on each spelling above,
-# on a symlink and a submodule at .claude/memory, on a missing ignore rule,
-# outside a repository, and when ls-files, check-ignore, tr or grep alone
-# fails (a shim first on PATH), and passes on a clean repository. The real
-# check then reads the index git hands it.
+# The self-test runs first, in a subshell with the GIT_* repository
+# variables, GIT_DEFAULT_HASH and GIT_TEMPLATE_DIR unset, no global or
+# system configuration, and HOME and XDG_CONFIG_HOME inside a private
+# mktemp -d, on throwaway repositories there. It shows the check fails on
+# each spelling above, on a symlink and a submodule at .claude/memory, on a
+# missing ignore rule, outside a repository, and when ls-files,
+# check-ignore, tr or grep alone fails (a shim first on PATH), and passes
+# on a clean repository. The real check then reads the index git hands it.
 #
 # Usage: tests/check-no-tracked-memory.sh
 set -eu
@@ -75,11 +76,14 @@ selftest()
 {
 	unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
 		GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_CONFIG GIT_CONFIG_PARAMETERS \
-		GIT_CONFIG_COUNT
+		GIT_CONFIG_COUNT GIT_DEFAULT_HASH GIT_TEMPLATE_DIR
+	HOME=$tmp/home
+	XDG_CONFIG_HOME=$tmp/home/.config
 	GIT_CONFIG_GLOBAL=/dev/null
 	GIT_CONFIG_NOSYSTEM=1
 	GIT_CEILING_DIRECTORIES=$tmp
-	export GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_CEILING_DIRECTORIES
+	export HOME XDG_CONFIG_HOME GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_CEILING_DIRECTORIES
+	mkdir -p "${tmp:?}/home"
 
 	# mkrepo <name>: a repository with the ignore rule.
 	mkrepo()
@@ -91,12 +95,11 @@ selftest()
 
 	# entry <name> <mode> <path>: an index entry with no file behind it, so
 	# letter-case variants do not collide on a case-insensitive filesystem.
+	# A gitlink's oid is not type-checked, so a blob's serves for every mode
+	# and under either hash.
 	entry()
 	{
-		case "$2" in
-		160000) oid=1111111111111111111111111111111111111111 ;;
-		*) oid=$(printf 'x\n' | git -C "${tmp:?}/$1" hash-object -w --stdin) ;;
-		esac
+		oid=$(printf 'x\n' | git -C "${tmp:?}/$1" hash-object -w --stdin)
 		git -C "${tmp:?}/$1" update-index --add --cacheinfo "$2,$oid,$3"
 	}
 
