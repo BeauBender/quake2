@@ -394,8 +394,13 @@ Mod_LoadSubmodels(model_t *loadmodel, byte *mod_base, lump_t *l)
 		/* visleafs */
 		out->numleafs = 0;
 
-		/* check limits (gl1 checks the upper bound of firstnode only) */
-		if ((out->firstnode < 0) || (out->firstnode >= loadmodel->numnodes))
+		/*
+		 * check limits; a negative headnode is a leaf (-1 - leafnum), which
+		 * maps hold for submodels without faces (base2's *15), so gl1's
+		 * check of the upper bound alone is kept; N8 must not mark lights
+		 * from such a node (gl1's R_MarkLights reads nodes + firstnode)
+		 */
+		if (out->firstnode >= loadmodel->numnodes)
 		{
 			RM_Refuse(loadmodel, "%s: Inline model %i has bad firstnode", __func__, i);
 		}

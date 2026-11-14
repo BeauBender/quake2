@@ -122,11 +122,14 @@ struct rm_uniforms3d
 	float one;
 };
 
+/* the shim's mgl_varying, member for member, so the interpolation is laid out as the shim's */
 struct rm_varying3d
 {
 	float4 position [[position]];
 	float2 uv;
+	float2 lmuv;
 	float4 color;
+	float4 pt;
 };
 
 /* world_tex: the diffuse texel alone, gl1's GL_REPLACE with the lightmap unit off (r_fullbright) */
@@ -141,7 +144,9 @@ rm_vertex_world(uint vid [[vertex_id]],
 	p.z = mtl_gl_clip_z(p.z, p.w);
 	out.position = p;
 	out.uv = float2(v[vid].uv);
+	out.lmuv = float2(v[vid].lmuv);
 	out.color = u.color;
+	out.pt = float4(0.0f);
 	return out;
 }
 
@@ -165,7 +170,9 @@ rm_vertex_color(uint vid [[vertex_id]],
 	p.z = mtl_gl_clip_z(p.z, p.w);
 	out.position = p;
 	out.uv = float2(0.0f);
+	out.lmuv = float2(0.0f);
 	out.color = u.color;
+	out.pt = float4(0.0f);
 	return out;
 }
 
