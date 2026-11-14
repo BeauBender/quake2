@@ -29,7 +29,7 @@ if git diff --cached -U0 | grep -nE '^\+.*(-----BEGIN [A-Z ]*PRIVATE KEY-----|AK
 	fail=1
 fi
 
-if echo "$staged" | grep -qE '^(src|doc|docs|tests)/|\.md$|^(Makefile|\.github/)'; then
+if echo "$staged" | grep -qE '^(src|doc|docs|tests)/|\.md$|^(Makefile|\.github/)|^\.claude/'; then
 	for check in tests/check-*.sh; do
 		"$check" >/dev/null || { "$check" || true; fail=1; }
 	done
