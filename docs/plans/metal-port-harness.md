@@ -1129,7 +1129,8 @@ renderer's was at 0.004583.
 
 **`soft` against the accelerated `gl1`.** `world` 0 of 23 frames pass at the
 defaults, worst score 0.077802 (frame 7) and bad 0.922132 (frame 21);
-`models` 0.086982 and 0.925456; `particles` 0.092917 and 0.924736. The
+`models` 0.087157 and 0.925456; `particles` 0.092917 and 0.924736 (each
+the worst of all 4 pairs of 2 `soft` and 2 `gl1` records). The
 "not meaningful" finding of TASK41 stands for these. The water demo, all
 4 pairs of 2 `soft` and 2 `gl1` records identical frame for frame: score
 0.027971 to 0.030022, bad 0.507620 to 0.657751 (frames 0 to 2 from above,
@@ -1195,8 +1196,8 @@ scenario, each against both `gl1` records, 6 pairs; every shim log `mgl:
 | TASK49 (S3) | `world` with `gl1_multitexture 0` (scratch) | the defaults | 92 of 92 (4 pairs) | 0.000011, 0.000052 (21) | exact |
 | TASK50 (S4) | `skywater` from `demo1.dm2` | the defaults | 138 of 138 | 0.000010, 0.000033 (21) | exact |
 | TASK50 (S4) | `skywater` from `water.dm2` | `--threshold 0.02 --bad-threshold 0.03` | 30 of 30; also all at the defaults | 0.000004, 0.000013 | exact |
-| TASK51 (S5) | `models` | the defaults | 138 of 138 | 0.000792, 0.001068 (7) | 22 exact, frame 7 at most 0.000608, 0.001032 |
-| TASK52 (S6) | `particles` | `--threshold 0.02 --bad-threshold 0.25` | 138 of 138 | 0.010591, 0.151660 | 7 exact, worst 0.010098, 0.129642 |
+| TASK51 (S5) | `models` | the defaults | 138 of 138 | 0.000792, 0.001068 (7) | 22 exact, frame 7 at most 0.000608, 0.001038 (3 pairs) |
+| TASK52 (S6) | `particles` | `--threshold 0.02 --bad-threshold 0.25` | 138 of 138 | 0.010591, 0.151660 | 7 exact, worst 0.011907, 0.168597 (frame 8, 3 pairs) |
 | TASK52 (S6) | `particles` with `gl_polyblend 0` (scratch) | the same | 92 of 92 | 0.015115, 0.199079 | 7 exact |
 
 The worst values of `models` and `particles` against `gl1` lie inside the
