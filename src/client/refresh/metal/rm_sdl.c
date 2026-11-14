@@ -44,7 +44,7 @@ RI_PrepareForWindow(void)
 int
 RI_InitContext(void *win)
 {
-	char err[256], title[80];
+	char err[256], title[80], dir[1024] = "";
 
 	if (win == NULL)
 	{
@@ -74,6 +74,14 @@ RI_InitContext(void *win)
 	}
 
 	r_vsync->modified = false;
+
+	/* the shader library, the pipeline table and the samplers (section 4) */
+	if (!RM_ModuleDir(dir, sizeof(dir)) || !rmb_resources_open(dir, err, sizeof(err)))
+	{
+		R_Printf(PRINT_ALL, "%s: %s\n", __func__, dir[0] ? err : "cannot find the directory of ref_metal");
+		RI_ShutdownContext();
+		return false;
+	}
 
 	snprintf(title, sizeof(title), DISPLAYNAME " %s - Metal", YQ2VERSION);
 	SDL_SetWindowTitle(window, title);

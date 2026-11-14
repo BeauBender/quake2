@@ -23,8 +23,10 @@
  * shaders.metal and the C side (mgl_internal.h), so the host test runs
  * the arithmetic the fragment function runs. It is written in the
  * common subset of C99 and the Metal shading language: no pointers, no
- * library calls but the square root, structs by value. It also holds
- * the coverage of a smooth point (TASK52), for the same reason.
+ * library calls but the square root, structs by value. The clamp, the
+ * clip-depth mapping and the coverage of a smooth point (TASK52) moved
+ * to src/client/refresh/metal/common/mtl_shader_math.h (TASK85), which
+ * ref_metal's shaders include as well; their shim names stay.
  *
  * =======================================================================
  */
@@ -38,16 +40,15 @@
 #define MGL_TEXENV_MODULATE 2
 #define MGL_TEXENV_COMBINE 3    /* GL_COMBINE with GL_MODULATE for RGB and alpha, GL_RGB_SCALE */
 
+#include "../../metal/common/mtl_shader_math.h"
+#define mgl_clamp01 mtl_clamp01
+#define mgl_gl_clip_z mtl_gl_clip_z
+#define mgl_point_coverage mtl_point_coverage
+
 typedef struct
 {
 	float r, g, b, a;
 } mgl_rgba_t;
-
-static inline float
-mgl_clamp01(float v)
-{
-	return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
-}
 
 /*
  * GL 1.4, section 3.8.13, tables 3.22 and 3.24: p is the previous
@@ -87,42 +88,6 @@ mgl_texenv_stage(int env, int opaque, float scale, mgl_rgba_t p, mgl_rgba_t t)
 	}
 
 	return c;
-}
-
-/*
- * The clip depth the vertex function hands Metal for GL's clip depth z
- * at clip w. GL clips z to [-w, w] and maps z / w from [-1, 1] onto the
- * depth range (n + (f - n) (z / w + 1) / 2, GL 1.4, section 2.11.1);
- * Metal clips to [0, w] and maps z / w from [0, 1] (n + (f - n) z / w).
- * (z + w) / 2 gives both the same window depth, so glDepthRange (the
- * view weapon's 0 .. 0.3) is the Metal viewport's znear and zfar as is.
- */
-static inline float
-mgl_gl_clip_z(float z, float w)
-{
-	return (z + w) * 0.5f;
-}
-
-/*
- * The coverage of a pixel by a smooth point (GL_POINT_SMOOTH, GL 1.4
- * section 3.3.2) of radius r whose centre lies dx, dy pixels from the
- * pixel's centre: r + 1/2 minus the distance, clamped to [0, 1]. That is
- * what Apple's software renderer computes (TASK52 measured it on points
- * of 1 to 64 pixels: the same 8-bit value on every pixel of a point of
- * size 4 and of 7.3), and it sums to the disc's area for r of 2 and up.
- * The fragment function multiplies the alpha by it.
- */
-#ifdef __METAL_VERSION__
-#define MGL_SQRT sqrt
-#else
-#include <math.h>
-#define MGL_SQRT sqrtf
-#endif
-
-static inline float
-mgl_point_coverage(float dx, float dy, float r)
-{
-	return mgl_clamp01(r + 0.5f - MGL_SQRT(dx * dx + dy * dy));
 }
 
 #endif /* MGL_TEXENV_H */

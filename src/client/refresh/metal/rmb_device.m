@@ -48,7 +48,6 @@
 #error "rmb_device.m is written for ARC: compile it with -fobjc-arc"
 #endif
 
-#define RMB_FRAMES_IN_FLIGHT 3
 #define RMB_FRAME_WAIT_MS 2000
 #define RMB_GPU_WAIT_MS 5000
 #define RMB_FAILED_LOGGED 8
@@ -283,6 +282,7 @@ rmb_close(rmb_stats_t *stats, rm_ledger_t *ledger)
 	__weak id<MTLCommandQueue> queue;
 
 	rmb_detach();
+	rmb_resources_close();      /* textures, staging, pipelines, samplers (rmb_resource.m) */
 
 	if (rmb_device)
 	{

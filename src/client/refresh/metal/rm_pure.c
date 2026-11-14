@@ -29,6 +29,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 #include "header/rmb.h"
 
@@ -203,6 +204,10 @@ rm_stats_format(const rmb_stats_t *s, const rm_ledger_t *l, char *buf, size_t le
 			s->frames, s->no_drawable);
 	ok = ok && rm_append(buf, len, &used, "%lu skipped, %lu failed command buffers, ", s->skipped, s->failed);
 	ok = ok && rm_append(buf, len, &used, "%lu readbacks, %lu no-op calls, ", s->readbacks, s->noop_calls);
+	ok = ok && rm_append(buf, len, &used, "%lu draws, %lu draws skipped, %lu uploads, %lu uploads skipped, ",
+			s->draws, s->draw_skips, s->uploads, s->upload_skips);
+	ok = ok && rm_append(buf, len, &used, "%lu pass splits, %lu pipelines, %lu created after init, ",
+			s->splits, s->pipelines, s->late_pipelines);
 	ok = ok && rm_append(buf, len, &used, "%lu live objects", rm_ledger_live(l));
 	return ok;
 }
@@ -216,4 +221,163 @@ rm_color_load(int clear, int defined)
 	}
 
 	return defined ? RM_LOAD_KEEP : RM_LOAD_BLACK;
+}
+
+int
+rm_targets_rebuild(int have_color, int have_depth, int cw, int ch, int w, int h)
+{
+	return !have_color || !have_depth || (cw != w) || (ch != h);
+}
+
+int
+rm_upload_bytes(long w, long h, size_t cap, size_t *bytes)
+{
+	*bytes = 0;
+
+	if ((w <= 0) || (h <= 0))
+	{
+		return 0;
+	}
+
+	/* each side on its own: a texture descriptor above the device's maximum aborts in Metal */
+	if ((w > RMB_MAX_TEXTURE_SIDE) || (h > RMB_MAX_TEXTURE_SIDE))
+	{
+		return 0;
+	}
+
+	/* w * h * 4 <= cap, checked by division before the product is formed */
+	if ((unsigned long)w > cap / 4 / (unsigned long)h)
+	{
+		return 0;
+	}
+
+	*bytes = (size_t)w * (size_t)h * 4;
+	return 1;
+}
+
+/* from gl1_draw.c, RDraw_StretchRaw (the 8-bit frame on the non-power-of-two path) */
+int
+rm_raw8_to_rgba(const unsigned char *data, int cols, int rows, const unsigned *palette,
+		unsigned char *out, size_t out_len)
+{
+	size_t need, i, j;
+
+	if (!rm_upload_bytes(cols, rows, out_len, &need))
+	{
+		return 0;
+	}
+
+	for (i = 0; i < (size_t)rows; ++i)
+	{
+		size_t rowOffset = i * (size_t)cols;
+
+		for (j = 0; j < (size_t)cols; ++j)
+		{
+			memcpy(out + (rowOffset + j) * 4, &palette[data[rowOffset + j]], 4);
+		}
+	}
+
+	return 1;
+}
+
+int
+rm_fan_indices(int n, unsigned short *idx, int cap)
+{
+	int i, k = 0;
+
+	if ((n < 3) || (n > 65535) || (cap < 0) || ((n - 2) > cap / 3))
+	{
+		return 0;
+	}
+
+	for (i = 1; i + 1 < n; i++)
+	{
+		idx[k++] = 0;
+		idx[k++] = (unsigned short)i;
+		idx[k++] = (unsigned short)(i + 1);
+	}
+
+	return k;
+}
+
+int
+rm_pipe_2d(rm_texenv_t env, int alpha_test, int blend)
+{
+	if (((int)env < 0) || (env >= RM_TEXENVS))
+	{
+		return -1;
+	}
+
+	return ((int)env * 2 + (alpha_test ? 1 : 0)) * 2 + (blend ? 1 : 0);
+}
+
+int
+rm_dir_of(const char *path, char *dir, size_t len)
+{
+	const char *slash = strrchr(path, '/');
+	size_t n = slash ? (size_t)(slash - path) : 1;
+	const char *from = slash ? path : ".";
+
+	if (slash && (n == 0))
+	{
+		n = 1;   /* the root directory */
+	}
+
+	if (len == 0)
+	{
+		return 0;
+	}
+
+	if (n >= len)
+	{
+		dir[0] = '\0';
+		return 0;
+	}
+
+	memcpy(dir, from, n);
+	dir[n] = '\0';
+	return 1;
+}
+
+/* from gl1_image.c: R_LoadPic's GL_NEAREST for nolerp, R_TextureMode's two branches */
+int
+rm_image_sampler(int mipmapped, int nolerp, int mode_change)
+{
+	if (nolerp && !(mode_change && mipmapped))
+	{
+		return RMB_SAMPLER(RMB_SMP_NEAREST, 0);
+	}
+
+	return RMB_SAMPLER(mipmapped ? RMB_SMP_MIP : RMB_SMP_FLAT, 0);
+}
+
+/* from gl1_image.c, the modes table of R_TextureMode */
+int
+rm_texture_mode(const char *name, int *min, int *mag_linear)
+{
+	static const struct
+	{
+		const char *name;
+		int min, mag_linear;
+	} modes[] = {
+		{"GL_NEAREST", 0, 0},
+		{"GL_LINEAR", 1, 1},
+		{"GL_NEAREST_MIPMAP_NEAREST", 2, 0},
+		{"GL_LINEAR_MIPMAP_NEAREST", 3, 1},
+		{"GL_NEAREST_MIPMAP_LINEAR", 4, 0},
+		{"GL_LINEAR_MIPMAP_LINEAR", 5, 1}
+	};
+	size_t i;
+
+	for (i = 0; name && i < sizeof(modes) / sizeof(modes[0]); i++)
+	{
+		if (!strcasecmp(modes[i].name, name))
+		{
+			*min = modes[i].min;
+			*mag_linear = modes[i].mag_linear;
+			return 1;
+		}
+	}
+
+	return 0;
 }

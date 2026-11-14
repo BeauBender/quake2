@@ -60,8 +60,62 @@ void RI_ShutdownContext(void);
 qboolean RI_IsVSyncActive(void);
 int RI_GetSDLVersion(void);
 
+extern cvar_t *gl_texturemode;
+extern cvar_t *gl_anisotropic;
+extern cvar_t *gl_nolerp_list;
+extern cvar_t *r_lerp_list;
+extern cvar_t *r_2D_unfiltered;
+extern cvar_t *r_videos_unfiltered;
+extern cvar_t *r_retexturing;
+extern cvar_t *r_validation;
+extern cvar_t *vid_gamma;
+
+/* from gl1's header/local.h, without the GL and scrap fields (the scrap is N3's) */
+#define MAX_GLTEXTURES 1024
+
+typedef struct image_s
+{
+	char name[MAX_QPATH];               /* game path, including extension */
+	imagetype_t type;
+	int width, height;                  /* source image */
+	int upload_width, upload_height;    /* as uploaded: the source size, no power of two */
+	int registration_sequence;          /* 0 = free */
+	struct msurface_s *texturechain;    /* for sort-by-texture world drawing */
+	int texnum;                         /* the back end's texture id, 0 = free slot */
+	int sampler;                        /* RMB_SAMPLER(class, clamp) */
+	float sl, tl, sh, th;               /* 0,0 - 1,1 unless part of the scrap */
+	qboolean scrap;
+	qboolean has_alpha;
+} image_t;
+
+extern image_t gltextures[MAX_GLTEXTURES];
+extern int numgltextures;
+extern unsigned d_8to24table[256];
+extern unsigned r_rawpalette[256];
+extern byte gammatable[256];
+
+/* rm_image.c */
+void R_InitImages(void);
+void R_ShutdownImages(void);
+void R_FreeUnusedImages(void);
+void R_BeginImageRegistration(void);
+void R_TextureMode(const char *string);
+void R_ImageList_f(void);
+image_t *R_FindImage(const char *name, imagetype_t type);
+image_t *R_LoadPic(const char *name, byte *pic, int width, int realwidth,
+		int height, int realheight, size_t data_size, imagetype_t type, int bits);
+
+/* rm_draw.c */
+void RM_ShutdownDraw(void);
+void RDraw_Fill(int x, int y, int w, int h, int c);
+void RDraw_FadeScreen(void);
+void RDraw_StretchRaw(int x, int y, int w, int h, int cols, int rows, const byte *data, int bits);
+void RI_SetPalette(const unsigned char *palette);
+
 /* rm_misc.c */
 void R_ScreenShot(void);
 void RM_PrintStats(void);
+/* the directory of ref_metal.dylib, where ref_metal.metallib lies; 0 when unknown */
+int RM_ModuleDir(char *dir, size_t len);
 
 #endif /* RM_LOCAL_H */

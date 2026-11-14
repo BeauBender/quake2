@@ -41,6 +41,15 @@ cvar_t *r_norefresh;
 cvar_t *r_vsync;
 cvar_t *vid_fullscreen;
 cvar_t *metal_stats;
+cvar_t *gl_texturemode;
+cvar_t *gl_anisotropic;
+cvar_t *gl_nolerp_list;
+cvar_t *r_lerp_list;
+cvar_t *r_2D_unfiltered;
+cvar_t *r_videos_unfiltered;
+cvar_t *r_retexturing;
+cvar_t *r_validation;
+cvar_t *vid_gamma;
 
 unsigned long rm_noop_calls;
 
@@ -62,7 +71,19 @@ R_Register(void)
 	vid_fullscreen = ri.Cvar_Get("vid_fullscreen", "0", CVAR_ARCHIVE);
 	metal_stats = ri.Cvar_Get("metal_stats", "0", 0);
 
+	/* gl1's, by gl1's names and defaults (gl1_main.c, R_Register) */
+	gl_texturemode = ri.Cvar_Get("gl_texturemode", "GL_LINEAR_MIPMAP_NEAREST", CVAR_ARCHIVE);
+	gl_anisotropic = ri.Cvar_Get("r_anisotropic", "0", CVAR_ARCHIVE);
+	vid_gamma = ri.Cvar_Get("vid_gamma", "1.2", CVAR_ARCHIVE);
+	r_retexturing = ri.Cvar_Get("r_retexturing", "1", CVAR_ARCHIVE);
+	r_validation = ri.Cvar_Get("r_validation", "0", CVAR_ARCHIVE);
+	gl_nolerp_list = ri.Cvar_Get("r_nolerp_list", "pics/conchars.pcx pics/ch1.pcx pics/ch2.pcx pics/ch3.pcx", CVAR_ARCHIVE);
+	r_lerp_list = ri.Cvar_Get("r_lerp_list", "", CVAR_ARCHIVE);
+	r_2D_unfiltered = ri.Cvar_Get("r_2D_unfiltered", "0", CVAR_ARCHIVE);
+	r_videos_unfiltered = ri.Cvar_Get("r_videos_unfiltered", "0", CVAR_ARCHIVE);
+
 	ri.Cmd_AddCommand("screenshot", R_ScreenShot);
+	ri.Cmd_AddCommand("imagelist", R_ImageList_f);
 }
 
 /* from gl1_main.c */
@@ -135,7 +156,7 @@ RM_Close(void)
 {
 	rmb_stats_t s;
 	rm_ledger_t l;
-	char line[256];
+	char line[RM_STATS_LINE];
 
 	if (!rm_opened)
 	{
@@ -155,6 +176,18 @@ RM_Close(void)
 	R_Printf(PRINT_ALL, "%s\n", line);
 }
 
+/* gl1's RI_BeginFrame clears these six together once R_TextureMode ran */
+static void
+RM_ClearTextureModeFlags(void)
+{
+	gl_texturemode->modified = false;
+	gl_anisotropic->modified = false;
+	gl_nolerp_list->modified = false;
+	r_lerp_list->modified = false;
+	r_2D_unfiltered->modified = false;
+	r_videos_unfiltered->modified = false;
+}
+
 static qboolean
 RI_Init(void)
 {
@@ -164,6 +197,7 @@ RI_Init(void)
 	R_Printf(PRINT_ALL, "Refresh: " REF_VERSION "\n");
 	R_Printf(PRINT_ALL, "Client: " YQ2VERSION "\n\n");
 
+	Swap_Init();   /* LittleShort and the rest, which the loaders in files/ call (gl1_main.c) */
 	R_Register();
 	rm_noop_calls = 0;
 
@@ -198,6 +232,9 @@ RI_Init(void)
 		return false;
 	}
 
+	R_InitImages();   /* runs R_TextureMode: the flags RI_BeginFrame tests start clear */
+	RM_ClearTextureModeFlags();
+
 	ri.Vid_MenuInit();
 	return true;
 }
@@ -206,6 +243,9 @@ static void
 RI_Shutdown(void)
 {
 	ri.Cmd_RemoveCommand("screenshot");
+	ri.Cmd_RemoveCommand("imagelist");
+	RM_ShutdownDraw();
+	R_ShutdownImages();
 	RI_ShutdownContext();
 	RM_Close();
 }
@@ -221,6 +261,19 @@ RI_BeginFrame(float camera_separation)
 	{
 		r_vsync->modified = false;
 		rmb_set_vsync(r_vsync->value != 0);
+	}
+
+	/*
+	 * gl1's RI_BeginFrame: the sampler table follows the mode, and each
+	 * image's sampler the lists and r_2D_unfiltered, between frames (gl1
+	 * also tests r_videos_unfiltered, which RDraw_StretchRaw reads per call)
+	 */
+	if (gl_texturemode->modified || gl_anisotropic->modified
+		|| gl_nolerp_list->modified || r_lerp_list->modified
+		|| r_2D_unfiltered->modified || r_videos_unfiltered->modified)
+	{
+		R_TextureMode(gl_texturemode->string);
+		RM_ClearTextureModeFlags();
 	}
 
 	/*
@@ -272,7 +325,8 @@ static void
 RI_BeginRegistration(const char *map)
 {
 	(void)map;
-	rm_noop_calls++;
+	R_BeginImageRegistration();
+	rm_noop_calls++;   /* the map is N4's */
 }
 
 static struct model_s *
@@ -301,33 +355,24 @@ RI_SetSky(const char *name, float rotate, vec3_t axis)
 static void
 RI_EndRegistration(void)
 {
-	rm_noop_calls++;
+	R_FreeUnusedImages();
 }
 
+/* from gl1_draw.c: the pic is loaded and registered; drawing it is N3's */
 static struct image_s *
 RDraw_FindPic(const char *name)
 {
-	(void)name;
-	rm_noop_calls++;
-	return NULL;
+	return R_FindPic(name, (findimage_t)R_FindImage);
 }
 
-/* ref.h: "will return 0 0 if not found", and nothing is found yet */
+/* from gl1_draw.c, which answers -1 -1 for a missing pic */
 static void
 RDraw_GetPicSize(int *w, int *h, const char *name)
 {
-	(void)name;
-	rm_noop_calls++;
+	const image_t *image = R_FindPic(name, (findimage_t)R_FindImage);
 
-	if (w)
-	{
-		*w = 0;
-	}
-
-	if (h)
-	{
-		*h = 0;
-	}
+	*w = image ? image->width : -1;
+	*h = image ? image->height : -1;
 }
 
 static void
@@ -365,32 +410,6 @@ RDraw_TileClear(int x, int y, int w, int h, const char *name)
 	rm_noop_calls++;
 }
 
-static void
-RDraw_Fill(int x, int y, int w, int h, int c)
-{
-	(void)x; (void)y; (void)w; (void)h; (void)c;
-	rm_noop_calls++;
-}
-
-static void
-RDraw_FadeScreen(void)
-{
-	rm_noop_calls++;
-}
-
-static void
-RDraw_StretchRaw(int x, int y, int w, int h, int cols, int rows, const byte *data, int bits)
-{
-	(void)x; (void)y; (void)w; (void)h; (void)cols; (void)rows; (void)data; (void)bits;
-	rm_noop_calls++;
-}
-
-static void
-RI_SetPalette(const unsigned char *palette)
-{
-	(void)palette;
-	rm_noop_calls++;
-}
 
 Q2_DLL_EXPORTED refexport_t
 GetRefAPI(refimport_t imp)

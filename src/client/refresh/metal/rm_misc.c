@@ -27,14 +27,30 @@
  * =======================================================================
  */
 
+#include <dlfcn.h>
+
 #include "header/local.h"
+
+/* ref_metal.metallib lies next to the dylib this code is linked into (the shim's mgl_library_path) */
+int
+RM_ModuleDir(char *dir, size_t len)
+{
+	Dl_info info;
+
+	if (!dladdr((const void *)&RM_ModuleDir, &info) || !info.dli_fname)
+	{
+		return 0;
+	}
+
+	return rm_dir_of(info.dli_fname, dir, len);
+}
 
 void
 RM_PrintStats(void)
 {
 	rmb_stats_t s;
 	rm_ledger_t l;
-	char line[256];
+	char line[RM_STATS_LINE];
 
 	rmb_stats(&s, &l);
 	s.noop_calls = rm_noop_calls;
