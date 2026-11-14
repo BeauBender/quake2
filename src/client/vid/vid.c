@@ -505,6 +505,44 @@ VID_StartRecord(void)
 }
 
 /*
+ * The REC_CVARS snapshot at session open: every cvar with its flags;
+ * RefRec_Cvars keeps those RefRec_CvarRecorded accepts (CVAR_ARCHIVE or
+ * a renderer prefix, refrecord.h).
+ */
+static void
+VID_RecordCvars(void)
+{
+	const char **names, **values;
+	cvar_t *var;
+	int *flags;
+	int n = 0;
+
+	for (var = cvar_vars; var; var = var->next)
+	{
+		n++;
+	}
+
+	names = malloc(n * sizeof(*names) + 1);
+	values = malloc(n * sizeof(*values) + 1);
+	flags = malloc(n * sizeof(*flags) + 1);
+	n = 0;
+
+	/* out of memory: an empty snapshot, the replay restores nothing */
+	for (var = cvar_vars; var && names && values && flags; var = var->next)
+	{
+		names[n] = var->name;
+		values[n] = var->string;
+		flags[n] = var->flags;
+		n++;
+	}
+
+	RefRec_Cvars(n, names, values, flags);
+	free(names);
+	free(values);
+	free(flags);
+}
+
+/*
  * Replay target (pins_replay, CL_PinsReplay): the replayer hands every
  * record that passed its validation layer (Rep_Check), its values
  * bounded and its ids resolved, to the same wrappers
@@ -563,6 +601,34 @@ VID_ReplayCall(refrec_call_t *c)
 	}
 }
 
+/*
+ * REC_CVARS restore: the replayer asks for the live cvar's flags and sets
+ * only what RefRec_CvarRestorable allows for them; a name without a live
+ * cvar is never created. A replay is a pin run, so CL_WriteConfiguration
+ * never writes the restored values to config.cfg.
+ */
+static int
+VID_ReplayCvarFlags(const char *name)
+{
+	cvar_t *var;
+
+	for (var = cvar_vars; var; var = var->next)
+	{
+		if (strcmp(var->name, name) == 0)
+		{
+			return var->flags;
+		}
+	}
+
+	return -1;
+}
+
+static void
+VID_ReplaySetCvar(const char *name, const char *value)
+{
+	Cvar_Set(name, value);
+}
+
 /* Opens the trace for the loaded renderer at its size; false when refused. */
 qboolean
 VID_OpenReplay(const char *path)
@@ -582,6 +648,8 @@ VID_OpenReplay(const char *path)
 	t.Register = VID_ReplayRegister;
 	t.RenderFrame = R_RenderFrame;
 	t.Call = VID_ReplayCall;
+	t.CvarFlags = VID_ReplayCvarFlags;
+	t.SetCvar = VID_ReplaySetCvar;
 	RefRec_SetPrint(Com_Printf);
 	RefRec_SetReplayTarget(&t);
 
@@ -618,8 +686,9 @@ VID_CloseReplay(void)
 	RefRec_ReplayStats(&st);
 	RefRec_CloseReplay();
 	Com_Printf("pins: replayed %u frames, %u captures, %u values bounded, %u draws outside the frame skipped, "
-			"%u warnings, %u pic size mismatches\n",
-			st.frames, st.captures, st.clamped, st.dropped, st.warns, st.picsize_mismatch);
+			"%u warnings, %u pic size mismatches, %u cvars restored, %u not\n",
+			st.frames, st.captures, st.clamped, st.dropped, st.warns, st.picsize_mismatch,
+			st.cvars_set, st.cvars_skipped);
 }
 
 /*
@@ -756,7 +825,7 @@ VID_LoadRenderer(void)
 	/* the renderer cvars a replay restores */
 	if (RefRec_Recording())
 	{
-		RefRec_Control(REC_CVARS, 0);
+		VID_RecordCvars();
 	}
 
 	/* Ensure that all key states are cleared */
@@ -902,6 +971,15 @@ VID_Shutdown(void)
 void
 R_BeginRegistration(const char *map)
 {
+	unsigned int seed;
+
+	/* pins_seed, latched with pins_record or pins_replay only: the same
+	   random numbers from here in the live record and in its replay */
+	if (CL_PinsSeed(&seed))
+	{
+		randk_seed_fixed(seed);
+	}
+
 	if (ref_active)
 	{
 		if (RefRec_Recording())

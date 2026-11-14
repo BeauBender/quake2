@@ -68,5 +68,18 @@ main(int argc, char **argv)
 		CL_PinsReplayPath(), CL_PinsReplayRequested() ? "|requested" : "");
 	/* the pin-run predicate the config, error and renderer guards test */
 	printf("run=%d\n", (int)CL_PinsRun());
+	/* the fixed PRNG seed R_BeginRegistration applies, or none */
+	{
+		unsigned int seed;
+
+		if (CL_PinsSeed(&seed))
+		{
+			printf("seed=%u\n", seed);
+		}
+		else
+		{
+			printf("seed=off\n");
+		}
+	}
 	return 0;
 }

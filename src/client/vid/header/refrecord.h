@@ -273,6 +273,29 @@ void RefRec_Draw(refrec_type_t t, const int32_t *ints, int nints, const float *f
 void RefRec_Control(refrec_type_t t, float arg);
 
 /*
+ * REC_CVARS (TASK45). At session open vid.c hands RefRec_Cvars every
+ * cvar with its flags; the recorder keeps those RefRec_CvarRecorded
+ * accepts: CVAR_ARCHIVE, or a renderer prefix (REFREC_CVAR_PREFIXES).
+ * A name or value that does not fit REFREC_MAX_STRING, and any past
+ * REFREC_MAX_CVARS, is left out with a REC_WARN. The replayer restores a
+ * pair only when RefRec_CvarRestorable accepts it against the LIVE
+ * cvar's flags (the trace carries no flags): the cvar exists, its name
+ * has a renderer prefix and only [A-Za-z0-9_], it is none of CVAR_NOSET,
+ * CVAR_LATCH, CVAR_USERINFO, CVAR_SERVERINFO, it is not one of the
+ * cvars that pick the renderer, the window, the display mode or a
+ * library (REFREC_CVAR_NEVER, read only when a window or context is
+ * made), and its value is printable ASCII without '"'. Anything else in
+ * the trace is skipped and counted (stats.cvars_skipped), never refused.
+ */
+#define REFREC_CVAR_PREFIXES	"gl1_", "gl3_", "gl_", "r_", "sw_", "vid_"
+#define REFREC_CVAR_NEVER	"vid_renderer", "vid_fullscreen", "vid_displayindex", \
+	"vid_highdpiaware", "vid_rate", "r_mode", "r_customwidth", "r_customheight", \
+	"r_vsync", "r_msaa_samples", "gl3_libgl", "gl3_debugcontext"
+qboolean RefRec_CvarRecorded(const char *name, int flags);
+qboolean RefRec_CvarRestorable(const char *name, const char *value, int flags);	/* flags -1: no such cvar */
+void RefRec_Cvars(int count, const char *const *names, const char *const *values, const int *flags);
+
+/*
  * replayer: called from CL_PinsReplay() through vid.c. The trace is
  * untrusted: RefRec_OpenReplay refuses a header whose api_version, width
  * or height differ from the target's, an unfinished or truncated file,
@@ -289,7 +312,8 @@ void RefRec_Control(refrec_type_t t, float arg);
  * (REFREC_REPLAY_*; a value moved counts in stats.clamped), and an id is
  * resolved only to a handle the replay registered under that id with the
  * kind the string table names; any other id is NULL. REC_CAPTURE numbers
- * must run 0, 1, 2, ...; REC_CVARS and REC_WARN are not forwarded. A
+ * must run 0, 1, 2, ...; REC_WARN is not forwarded, and a REC_CVARS pair
+ * reaches SetCvar only as RefRec_CvarRestorable allows (above). A
  * refusal is sticky: every later RefRec_ReplayNextFrame is false and
  * forwards nothing.
  */
@@ -302,11 +326,16 @@ typedef struct {
 	/* every other forwarded record; for REC_PICSIZE the target writes
 	   the size into ints[0] and ints[1] */
 	void (*Call)(refrec_call_t *c);
+	/* REC_CVARS, both optional (no cvar is restored without them): the
+	   live cvar's flags, -1 when there is none, and the restore */
+	int (*CvarFlags)(const char *name);
+	void (*SetCvar)(const char *name, const char *value);
 } refrec_target_t;
 
 typedef struct {
 	uint32_t frames, captures, clamped, warns, picsize_mismatch;
 	uint32_t dropped;	/* 2D draws outside the frame, not forwarded */
+	uint32_t cvars_set, cvars_skipped;	/* REC_CVARS pairs restored, and not */
 	qboolean failed;
 } refrec_replay_stats_t;
 

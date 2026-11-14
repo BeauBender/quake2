@@ -27,9 +27,10 @@
 #include "header/client.h"
 
 /*
- * Pin harness. pins_dir, pins_scenario, pins_capture, pins_record and
- * pins_replay are not cvars: their values name files the client writes
- * or reads, so they come from the process command line only. CL_PinsLatch copies them once, before any
+ * Pin harness. pins_dir, pins_scenario, pins_capture, pins_record,
+ * pins_replay and pins_seed are not cvars: their values name files the
+ * client writes or reads, or fix its random numbers, so they come from
+ * the process command line only. CL_PinsLatch copies them once, before any
  * config file, console command or server stufftext can run, into these
  * statics, which nothing else writes. A "set pins_dir ..." from a config
  * file, the console or a server (with or without flags) only creates an
@@ -41,6 +42,8 @@ static int pins_capture;
 static char pins_record[64];	/* a file name inside pins_dir, "" for no trace */
 static char pins_replay[MAX_OSPATH];	/* the trace a replay reads, "" for none */
 static qboolean pins_replay_requested;	/* given, accepted or not */
+static unsigned int pins_seed;	/* the fixed PRNG seed of a record or replay */
+static qboolean pins_seed_given;
 static qboolean pins_invalid;
 
 /* Copies src into dst; false when it is empty or does not fit. */
@@ -182,6 +185,28 @@ CL_PinsLatch(void)
 				pins_invalid = true;
 			}
 		}
+		else if (strcmp(name, "pins_seed") == 0)
+		{
+			/* 1 to 9 digits: 0 to 999999999, the same on every platform */
+			pins_seed_given = true;
+			pins_seed = 0;
+
+			if ((value[0] == '\0') || (strlen(value) > 9))
+			{
+				pins_invalid = true;
+			}
+
+			for (p = value; *p; p++)
+			{
+				if ((*p < '0') || (*p > '9'))
+				{
+					pins_invalid = true;
+					break;
+				}
+
+				pins_seed = pins_seed * 10 + (unsigned int)(*p - '0');
+			}
+		}
 		else if (strcmp(name, "pins_capture") == 0)
 		{
 			/* digits only: strtol alone skips leading space and takes a sign */
@@ -205,8 +230,16 @@ CL_PinsLatch(void)
 		pins_invalid = true;
 	}
 
+	/* a fixed seed is for a record or a replay only (vid.c) */
+	if (pins_seed_given && !pins_record[0] && !pins_replay[0])
+	{
+		pins_invalid = true;
+	}
+
 	if (pins_invalid || !have_dir)
 	{
+		pins_seed_given = false;
+		pins_seed = 0;
 		pins_dir[0] = '\0';
 		CL_PinsCopy(pins_scenario, sizeof(pins_scenario), "pin");
 		pins_capture = 0;
@@ -255,6 +288,18 @@ const char *
 CL_PinsReplayPath(void)
 {
 	return pins_replay;
+}
+
+/*
+ * True when pins_seed was given and accepted, with pins_record or
+ * pins_replay: *seed is then the fixed seed R_BeginRegistration applies
+ * (the fixed variant in rand.c). False otherwise, and the PRNG keeps its entropy seed.
+ */
+qboolean
+CL_PinsSeed(unsigned int *seed)
+{
+	*seed = pins_seed;
+	return pins_seed_given;
 }
 
 /* True when pins_replay was given, whether or not it was accepted. */

@@ -4154,6 +4154,307 @@ TestReplayStructure(void)
 	}
 }
 
+/* ---- determinism (TASK45): REC_CVARS and refdef_t.time ---- */
+
+/* Which cvars a trace stores, and which a replay may set (refrecord.h). */
+static void
+TestCvarRules(void)
+{
+	const char *never[] = { REFREC_CVAR_NEVER };
+	const char *yes[] = { "r_lerpmodels", "gl1_minlight", "gl3_intensity", "gl_polyblend",
+		"sw_waterwarp", "vid_gamma" };
+	const char *no[] = { "cl_gun", "rate", "r", "gl1", "R_lerpmodels", "xr_lerpmodels", "glx_a",
+		"logfile", "name", "" };
+	char longname[REFREC_MAX_STRING + 1];
+	size_t i;
+
+	for (i = 0; i < sizeof(yes) / sizeof(yes[0]); i++)
+	{
+		CHECK(RefRec_CvarRecorded(yes[i], 0), "cvars: %s not recorded", yes[i]);
+		CHECK(RefRec_CvarRestorable(yes[i], "1", 0), "cvars: %s not restorable", yes[i]);
+		CHECK(RefRec_CvarRestorable(yes[i], "1", CVAR_ARCHIVE), "cvars: archived %s not restorable", yes[i]);
+		CHECK(!RefRec_CvarRestorable(yes[i], "1", -1), "cvars: %s restorable without a live cvar", yes[i]);
+		CHECK(!RefRec_CvarRestorable(yes[i], "1", CVAR_NOSET), "cvars: CVAR_NOSET %s restorable", yes[i]);
+		CHECK(!RefRec_CvarRestorable(yes[i], "1", CVAR_LATCH | CVAR_ARCHIVE), "cvars: CVAR_LATCH %s restorable", yes[i]);
+		CHECK(!RefRec_CvarRestorable(yes[i], "1", CVAR_USERINFO), "cvars: CVAR_USERINFO %s restorable", yes[i]);
+		CHECK(!RefRec_CvarRestorable(yes[i], "1", CVAR_SERVERINFO), "cvars: CVAR_SERVERINFO %s restorable", yes[i]);
+	}
+
+	for (i = 0; i < sizeof(no) / sizeof(no[0]); i++)
+	{
+		CHECK(!RefRec_CvarRecorded(no[i], 0), "cvars: %s recorded", no[i]);
+		/* an archived cvar is recorded, but a replay sets renderer cvars only */
+		CHECK(!no[i][0] || RefRec_CvarRecorded(no[i], CVAR_ARCHIVE), "cvars: archived %s not recorded", no[i]);
+		CHECK(!RefRec_CvarRestorable(no[i], "1", CVAR_ARCHIVE), "cvars: %s restorable", no[i]);
+		CHECK(!RefRec_CvarRestorable(no[i], "1", 0), "cvars: %s restorable", no[i]);
+	}
+
+	for (i = 0; i < sizeof(never) / sizeof(never[0]); i++)
+	{
+		CHECK(RefRec_CvarRecorded(never[i], CVAR_ARCHIVE), "cvars: %s not recorded", never[i]);
+		CHECK(!RefRec_CvarRestorable(never[i], "1", CVAR_ARCHIVE), "cvars: %s restorable", never[i]);
+		CHECK(!RefRec_CvarRestorable(never[i], "1", 0), "cvars: %s restorable", never[i]);
+	}
+
+	CHECK(!RefRec_CvarRecorded(NULL, CVAR_ARCHIVE), "cvars: a NULL name recorded");
+	CHECK(!RefRec_CvarRestorable(NULL, "1", 0), "cvars: a NULL name restorable");
+	CHECK(!RefRec_CvarRestorable("r_a", NULL, 0), "cvars: a NULL value restorable");
+	CHECK(RefRec_CvarRestorable("r_a", "", 0), "cvars: an empty value not restorable");
+	CHECK(RefRec_CvarRestorable("gl_texturemode", "GL_LINEAR_MIPMAP_NEAREST", 0), "cvars: a mode name not restorable");
+	CHECK(RefRec_CvarRestorable("r_lerp_list", "a b ~!#$%&'()*+,-./:;<=>?@[\\]^_`{|}", 0),
+			"cvars: printable ASCII not restorable");
+	CHECK(RefRec_CvarRestorable("r_A_0", "1", 0), "cvars: upper case and digits not restorable");
+
+	/* names: [A-Za-z0-9_] only; values: printable ASCII, no '"' */
+	{
+		const char *badnames[] = { "r_a;quit", "r_a b", "r_a\"", "r_a\n", "r_a.b", "r_a/b", "r_\x7f", "r_\xc3\xa9" };
+		const char *badvalues[] = { "a\"b", "a\nb", "a\rb", "\t", "\x7f", "\x1b[0m", "\xc3\xa9", "\x01" };
+
+		for (i = 0; i < sizeof(badnames) / sizeof(badnames[0]); i++)
+		{
+			CHECK(!RefRec_CvarRestorable(badnames[i], "1", 0), "cvars: bad name %u restorable", (unsigned)i);
+		}
+
+		for (i = 0; i < sizeof(badvalues) / sizeof(badvalues[0]); i++)
+		{
+			CHECK(!RefRec_CvarRestorable("r_a", badvalues[i], 0), "cvars: bad value %u restorable", (unsigned)i);
+		}
+	}
+
+	/* a name the format cannot carry is never recorded */
+	memset(longname, 'a', sizeof(longname) - 1);
+	memcpy(longname, "r_", 2);
+	longname[sizeof(longname) - 1] = '\0';
+	CHECK(!RefRec_CvarRecorded(longname, 0), "cvars: a name of REFREC_MAX_STRING bytes recorded");
+	longname[REFREC_MAX_STRING - 1] = '\0';
+	CHECK(RefRec_CvarRecorded(longname, 0), "cvars: the longest name not recorded");
+}
+
+/* the live cvars of the mock: name, flags; anything else does not exist */
+typedef struct {
+	const char *name;
+	int flags;
+} mock_cvar_t;
+
+static const mock_cvar_t mock_cvars[] = {
+	{ "r_lerpmodels", CVAR_ARCHIVE },
+	{ "gl_polyblend", CVAR_ARCHIVE },
+	{ "sw_waterwarp", 0 },
+	{ "r_drawworld", 0 },
+	{ "r_noset", CVAR_NOSET },	/* recorded as a plain renderer cvar */
+	{ "vid_renderer", CVAR_ARCHIVE },
+	{ "cl_gun", CVAR_ARCHIVE },
+	{ "logfile", CVAR_ARCHIVE },
+	{ "hand", CVAR_ARCHIVE | CVAR_USERINFO },
+	{ "r_badvalue", 0 },
+};
+
+static char mock_setlog[1024];
+static uint32_t mock_nset, mock_set_at_log;
+
+static int
+MockCvarFlags(const char *name)
+{
+	size_t i;
+
+	for (i = 0; i < sizeof(mock_cvars) / sizeof(mock_cvars[0]); i++)
+	{
+		if (strcmp(name, mock_cvars[i].name) == 0)
+		{
+			return mock_cvars[i].flags;
+		}
+	}
+
+	return -1;
+}
+
+static void
+MockSetCvar(const char *name, const char *value)
+{
+	size_t len = strlen(mock_setlog);
+
+	snprintf(mock_setlog + len, sizeof(mock_setlog) - len, "%s=%s;", name, value);
+	mock_nset++;
+	mock_set_at_log = mock.nlog;	/* the calls forwarded before it */
+}
+
+typedef struct {
+	uint32_t times[8], ntimes;
+} times_ctx_t;
+
+static void
+TimesCb(refrec_type_t type, const refrec_call_t *c, const refrec_frame_t *f, void *vctx)
+{
+	times_ctx_t *x = vctx;
+
+	(void)c;
+
+	if (type == REC_RENDERFRAME && x->ntimes < 8)
+	{
+		x->times[x->ntimes++] = Bits(f->refdef.time);
+	}
+}
+
+/*
+ * The REC_CVARS snapshot and its restore, end to end through a trace, and
+ * refdef_t.time bit-exact from the recorder's input to the renderer's.
+ */
+static void
+TestRecordReplayCvars(void)
+{
+	static lightstyle_t ls[MAX_LIGHTSTYLES];
+	static char longvalue[REFREC_MAX_STRING + 8];
+	/* the times a live client hands the renderer (cl.time * 0.001), and edges */
+	const float times[] = { 0.001f * 12345, 1.0f / 3.0f, 0x1p-140f, -0.0f, 9999999.0f, 0.0f };
+	const int nt = (int)(sizeof(times) / sizeof(times[0]));
+	const char *names[] = { "r_lerpmodels", "cl_gun", "cl_nothing", "gl_polyblend", "r_noset",
+		"vid_renderer", "logfile", "hand", "r_absent", "sw_waterwarp", "r_long", "r_badvalue",
+		"r_drawworld", NULL, "" };
+	const char *values[] = { "0", "2", "1", "0", "5", "gl3", "1", "1", "1", "1", longvalue,
+		"a\"b", "1", "1", "1" };
+	const int flags[] = { CVAR_ARCHIVE, CVAR_ARCHIVE, 0, CVAR_ARCHIVE, 0, CVAR_ARCHIVE, CVAR_ARCHIVE,
+		CVAR_ARCHIVE | CVAR_USERINFO, 0, 0, 0, 0, 0, CVAR_ARCHIVE, CVAR_ARCHIVE };
+	const int n = (int)(sizeof(names) / sizeof(names[0]));
+	char path[1200];
+	refrec_replay_stats_t st;
+	refrec_target_t tg;
+	refrec_header_t h;
+	times_ctx_t x;
+	tracefile_t t;
+	refdef_t fd;
+	int i, cap = 0;
+
+	memset(longvalue, 'v', REFREC_MAX_STRING);
+	longvalue[REFREC_MAX_STRING] = '\0';
+	snprintf(path, sizeof(path), "%s", TracePath("cvars"));
+
+	RefRec_StartRecord(path, 640, 480, 1);
+	RefRec_Cvars(n, names, values, flags);
+	RefRec_Registration(REC_BEGINREG, "base1", NULL);
+	RefRec_Registration(REC_ENDREG, NULL, NULL);
+
+	for (i = 0; i < nt; i++)
+	{
+		memset(&fd, 0, sizeof(fd));
+		fd.width = 640;
+		fd.height = 480;
+		fd.fov_x = fd.fov_y = 90;
+		fd.time = times[i];
+		fd.lightstyles = ls;
+		RefRec_Control(REC_BEGINFRAME, 0);
+		RefRec_RenderFrame(&fd);
+		RefRec_Draw(REC_CAPTURE, &cap, 1, NULL, 0, NULL, NULL, 0);
+		cap++;
+		RefRec_Control(REC_ENDFRAME, 0);
+	}
+
+	RefRec_StopRecord();
+
+	memset(&x, 0, sizeof(x));
+
+	if (!ReadTrace(path, &t, TimesCb, &x, NULL))
+	{
+		CHECK(0, "cvars: trace refused: %s", t.err);
+		return;
+	}
+
+	/* the long value and the NULL and empty names are left out, with one warning */
+	CHECK(t.types[REC_CVARS] == 1 && t.warns[REFREC_WARN_NAME] == 1,
+			"cvars: %u REC_CVARS, %u name warnings", t.types[REC_CVARS], t.warns[REFREC_WARN_NAME]);
+	CHECK(x.ntimes == (uint32_t)nt, "time: %u frames recorded", x.ntimes);
+
+	for (i = 0; i < nt && i < (int)x.ntimes; i++)
+	{
+		CHECK(x.times[i] == Bits(times[i]), "time: frame %d recorded as %08x, live %08x", i, x.times[i], Bits(times[i]));
+	}
+
+	/* the replay restores the renderer cvars the live flags allow, before registration */
+	memset(&mock, 0, sizeof(mock));
+	mock_setlog[0] = '\0';
+	mock_nset = 0;
+	memset(&tg, 0, sizeof(tg));
+	tg.api_version = API_VERSION;
+	tg.width = 640;
+	tg.height = 480;
+	tg.Register = MockRegister;
+	tg.RenderFrame = MockRenderFrame;
+	tg.Call = MockCall;
+	tg.CvarFlags = MockCvarFlags;
+	tg.SetCvar = MockSetCvar;
+	RefRec_SetReplayTarget(&tg);
+	CHECK(RefRec_OpenReplay(path, &h), "cvars: replay refused");
+
+	while (RefRec_ReplayNextFrame())
+	{
+	}
+
+	RefRec_ReplayStats(&st);
+	RefRec_CloseReplay();
+
+	CHECK(!st.failed && st.frames == (uint32_t)nt, "cvars: replay failed, %u frames", st.frames);
+	CHECK(strcmp(mock_setlog, "r_lerpmodels=0;gl_polyblend=0;sw_waterwarp=1;r_drawworld=1;") == 0,
+			"cvars: restored '%s'", mock_setlog);
+	/* recorded: r_lerpmodels cl_gun gl_polyblend r_noset vid_renderer logfile hand r_absent
+	   sw_waterwarp r_badvalue r_drawworld (11); set 4 */
+	CHECK(st.cvars_set == 4 && st.cvars_skipped == 7, "cvars: %u set, %u skipped", st.cvars_set, st.cvars_skipped);
+	CHECK(mock_nset == 4 && mock_set_at_log == 0 && mock.nlog > 0 && mock.log[0] == REC_BEGINREG,
+			"cvars: restored after %u forwarded calls, first %d", mock_set_at_log, mock.log[0]);
+
+	for (i = 0; i < nt && i < MOCK_FRAMES; i++)
+	{
+		CHECK(Bits(mock.fd[i].time) == Bits(times[i]), "time: frame %d replayed as %08x, live %08x",
+				i, Bits(mock.fd[i].time), Bits(times[i]));
+	}
+
+	CHECK(st.clamped == 0, "time: %u values bounded in range", st.clamped);
+
+	/* without the cvar functions a target restores nothing, and still replays */
+	tg.CvarFlags = NULL;
+	mock_setlog[0] = '\0';
+	RefRec_SetReplayTarget(&tg);
+	CHECK(RefRec_OpenReplay(path, &h), "cvars: replay without CvarFlags refused");
+
+	while (RefRec_ReplayNextFrame())
+	{
+	}
+
+	RefRec_ReplayStats(&st);
+	RefRec_CloseReplay();
+	CHECK(!st.failed && st.cvars_set == 0 && st.cvars_skipped == 11 && !mock_setlog[0],
+			"cvars: without CvarFlags %u set, %u skipped", st.cvars_set, st.cvars_skipped);
+}
+
+/* REC_CVARS count limits on the recorder side: past REFREC_MAX_CVARS is left out with a warning */
+static void
+TestRecordCvarsLimit(void)
+{
+	static const char *names[REFREC_MAX_CVARS + 2], *values[REFREC_MAX_CVARS + 2];
+	static int flags[REFREC_MAX_CVARS + 2];
+	static char store[REFREC_MAX_CVARS + 2][16];
+	tracefile_t t;
+	const char *path = TracePath("cvarslimit");
+	int i;
+
+	for (i = 0; i < REFREC_MAX_CVARS + 2; i++)
+	{
+		snprintf(store[i], sizeof(store[i]), "r_c%d", i);
+		names[i] = store[i];
+		values[i] = "1";
+		flags[i] = 0;
+	}
+
+	RefRec_StartRecord(path, 640, 480, 1);
+	RefRec_Cvars(REFREC_MAX_CVARS + 2, names, values, flags);
+	RefRec_Cvars(-1, names, values, flags);
+	RefRec_Cvars(1, NULL, values, flags);
+	RefRec_StopRecord();
+
+	CHECK(ReadTrace(path, &t, NULL, NULL, NULL), "cvars limit: trace refused: %s", t.err);
+	/* the full one with a count warning; a negative count and NULL arrays are an empty record */
+	CHECK(t.types[REC_CVARS] == 3 && t.warns[REFREC_WARN_COUNT] == 1,
+			"cvars limit: %u REC_CVARS, %u count warnings", t.types[REC_CVARS], t.warns[REFREC_WARN_COUNT]);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -4198,6 +4499,9 @@ main(int argc, char **argv)
 	TestReplayValidation();
 	TestReplayRegistration();
 	TestReplayStructure();
+	TestCvarRules();
+	TestRecordReplayCvars();
+	TestRecordCvarsLimit();
 
 	printf("refrecord: %d checks, %d failed\n", checks, failures);
 
