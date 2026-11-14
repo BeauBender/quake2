@@ -340,8 +340,10 @@ Only numbers are read from the header; nothing from a trace or a
 manifest is run. `PINS_SEED`, `PINS_TIMEOUT`, `PINS_BIN` and
 `PINS_BASEDIR` mean what they mean for `record`. The frames land in
 `<store>/<scenario>/<renderer>/<engine>-replay-<trace-of>-<record>/`
-(with `-r<N>` for `--run N`), beside the renderer's records but never
-under a record's name. `replay.txt` there, the replay manifest, is
+(with `-s<seed>` when `PINS_SEED` is set and `-r<N>` for `--run N`,
+so replays with two seeds are two pins and `--replace` of one never
+overwrites the other), beside the renderer's records but never under a
+record's name. `replay.txt` there, the replay manifest, is
 written before the engine starts: the trace it replayed, its size and
 checksum, the seed, and `game-module absent` or `present`, whether a
 game module lay where the engine would look for one (beside the binary

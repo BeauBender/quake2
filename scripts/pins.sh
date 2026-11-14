@@ -102,7 +102,7 @@
 # must be finished, not cut short, of this engine's format and renderer API,
 # and of PINS_WIDTH x PINS_HEIGHT and PINS_EVERY; PINS_SEED and PINS_TIMEOUT
 # apply as for record. The frames land in
-# <store>/<scenario>/<renderer>/<engine>-replay-<trace-of>-<record dir>[-r<N>]
+# <store>/<scenario>/<renderer>/<engine>-replay-<trace-of>-<record dir>[-s<PINS_SEED>][-r<N>]
 # with replay.txt, the replay manifest (which trace, its size and checksum,
 # and whether a game module lay on the engine's search path), written
 # first; the pin is complete only as a record is, and when it holds the
@@ -610,7 +610,9 @@ cmd_replay() {
         die "the trace is ${th_w}x${th_h}, PINS_WIDTH x PINS_HEIGHT is ${PINS_WIDTH:-640}x${PINS_HEIGHT:-480}"
     [ "$th_every" -eq "${PINS_EVERY:-30}" ] || die "the trace was captured every $th_every frames, PINS_EVERY is ${PINS_EVERY:-30}"
     # the replay's own pin: never a live record's directory, never through a link
+    # the seed is part of the id, as it is of a record's: two seeds are two pins
     local rid; rid="$(engine_sha)-replay-$from-$trace_id"
+    if [ -n "${PINS_SEED:-}" ]; then rid="$rid-s$PINS_SEED"; fi
     if [ "$run" -gt 1 ]; then rid="$rid-r$run"; fi
     check_pin_id "the replay's directory" "$rid"
     local out="$s/$scenario/$renderer/$rid"
@@ -1908,7 +1910,8 @@ st_replay_args() { # TASK46: what replay passes to the engine
     line=$(PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) || st_fail "a dry run of replay must pass" || return 1
     case $line in "${tmp:?}/fake-ok -datadir  -portable +set vid_renderer soft +set vid_fullscreen 0 +set r_mode -1 +set r_customwidth 640 +set r_customheight 480 +set s_initsound 0 +set pins_dir $(phys_dir "$PINS_STORE")/world/soft/$(engine_sha)-replay-gl1-rec1 +set pins_scenario world +set pins_capture 30 +set pins_replay $t") ;;
         *) st_fail "the replay command line is not the expected one: $line"; return 1;; esac
-    case $(PINS_SEED=7 PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) in *"+set pins_replay $t +set pins_seed 7") ;; *) st_fail "PINS_SEED=7 must pass pins_seed 7"; return 1;; esac
+    case $(PINS_SEED=7 PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) in *"/world/soft/$(engine_sha)-replay-gl1-rec1-s7 "*"+set pins_replay $t +set pins_seed 7") ;; *) st_fail "PINS_SEED=7 must pass pins_seed 7 and name the replay -s7"; return 1;; esac
+    case $(PINS_SEED=7 PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1 --run 2) in *"-replay-gl1-rec1-s7-r2 "*) ;; *) st_fail "PINS_SEED=7 --run 2 must name the replay -s7-r2"; return 1;; esac
     local sd; for sd in x -1 1234567890 01 '4;quit'; do
         if (PINS_SEED="$sd" PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) >/dev/null 2>&1; then st_fail "PINS_SEED='$sd' must be refused"; return 1; fi
     done
@@ -2032,6 +2035,13 @@ st_replay_keep() { # TASK46: nothing complete is replaced silently, and a direct
     replay_no "is not a directory; nothing is written there" soft world --trace-of gl1 --replace || return 1
     [ -d "${tmp:?}/gd/baseq2" ] || st_fail "the link's target must be left alone" || return 1
     rm "${out:?}"
+    # two seeds are two replays: neither collides with the other, nor --replace of one with the other
+    PINS_SEED=7 PINS_BASEDIR="${tmp:?}/gd" replay_ok soft world --trace-of gl1 || return 1
+    PINS_SEED=8 PINS_BASEDIR="${tmp:?}/gd" replay_ok soft world --trace-of gl1 || return 1
+    echo keep > "$out-s8/marker"
+    PINS_SEED=7 PINS_BASEDIR="${tmp:?}/gd" replay_ok soft world --trace-of gl1 --replace || return 1
+    [ -f "$out-s7/complete" ] && [ -f "$out-s8/marker" ] && grep -qx 'seed 8' "$out-s8/replay.txt" ||
+        st_fail "a replay with PINS_SEED=7 must never touch the one with PINS_SEED=8" || return 1
 }
 st_replay_fail() { # TASK46: a failed replay is left incomplete, never looking complete
     trace_fixture gl1 rec1
