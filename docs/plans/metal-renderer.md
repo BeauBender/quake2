@@ -50,7 +50,7 @@ inside the manifest; each card also carries its group's parent dependencies):
 - TASK59 (#102) — Temporal accumulation and the denoiser — tier T1; depends on INFORM11
 - TASK60 (#103) — Hardware gating and fallbacks, with ray tracing forced off on the VM — tier T0 and T1; depends on TASK54
 - TASK61 (#104) — Render-stage ray queries on M3 or later, compute path kept for older families, both at the internal resolution — tier T2; depends on TASK59 and TASK109
-- TASK62 (#105) — Refit against rebuild tuning and resolution-scale defaults per GPU family — tier T2; depends on TASK61
+- TASK62 (#105) — Refit against rebuild tuning and resolution-scale defaults per GPU family — tier T2; depends on TASK61, TASK110 and TASK106 (#249)
 - TASK109 (#263) — Internal resolution and the MetalFX temporal scaler — tier T0, T1 and T2; depends on TASK59 and TASK60
 - TASK110 (#264) — Image quality of the upscaled frame on real frames — tier T2; depends on TASK109 and INFORM11
 - TASK84 (#195) — N1: `ref_metal` skeleton: build target, window seat, clear, present, frame capture, capability report, gate check — tier T0
