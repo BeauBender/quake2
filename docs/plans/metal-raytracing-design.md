@@ -172,7 +172,7 @@ re-measured here; this is the physical-device column the gating needs.
 
 | Query | Apple M6 (physical) | Section 4 / plan statement for the VM |
 |---|---|---|
-| `supportsFamily` apple1 to apple9, metal3 | all true | apple1 to apple5 and mac2 true; apple6, apple7, apple8, apple9, metal3 false |
+| `supportsFamily` apple1 to apple10, metal3 | all true | apple1 to apple5 and mac2 true; apple6, apple7, apple8, apple9, metal3 false |
 | `supportsRaytracing` | true | false (forced off) |
 | `supportsRaytracingFromRender` | true | false |
 | `supportsPrimitiveMotionBlur` | true | not stated |
@@ -189,7 +189,7 @@ re-measured here; this is the physical-device column the gating needs.
 | `supportsPullModelInterpolation`, barycentric coordinates, 32-bit float filtering, 32-bit MSAA, BC compression, `supportsQueryTextureLOD` | all true | 32-bit MSAA true; the others not stated |
 
 End to end, one run: a one-triangle primitive acceleration structure
-(640 bytes) was built, wrapped in a one-instance instance acceleration
+(640 bytes, built without refit usage) was built, wrapped in a one-instance instance acceleration
 structure, and a compute kernel (`intersector<triangle_data, instancing>`
 over `instance_acceleration_structure`, Metal Shading Language 3.1) cast
 two rays. The ray at (0.25, 0.25, -1) along +z returned hit distance
@@ -197,50 +197,35 @@ two rays. The ray at (0.25, 0.25, -1) along +z returned hit distance
 (-1, expected); both command buffers finished with status completed and no
 error. The path works on the device, not only the flag.
 
-Build time of a primitive acceleration structure on a synthetic triangle
-soup (n triangles, each a right triangle with 64-unit legs at a random
-integer position in a 4096 x 4096 x 1024 box, fixed seed, unindexed,
-opaque; sizes chosen because section 1 expects 10k to 20k world triangles and
-a refit population of up to about 1 M alias triangles, so 10k, 20k, 50k
-and 200k were measured). Each size was built once as a discarded warm-up,
-then seven timed builds and eight timed refits; three invocations of the
-probe, so 21 timed builds per size. GPU time is `GPUEndTime -
-GPUStartTime`, wall time is around commit to completion. `uptime` load
-averages (1, 5, 15 min) were 3.27/3.26/2.90 before the first invocation
-and 3.07/3.21/2.90 after the third (all invocations within one minute);
-another process was using the GPU (frame recording) the whole time, so
-treat the ranges as an upper-biased view.
+Sizes of a primitive acceleration structure on a synthetic triangle soup
+(n triangles, each a right triangle with 64-unit legs at a random integer
+position in a 4096 x 4096 x 1024 box, fixed seed, unindexed, opaque; sizes
+chosen because section 1 expects 10k to 20k world triangles and a refit
+population of up to about 1 M alias triangles, so 10k, 20k, 50k and 200k
+were measured). The soup structures were built with
+`MTLAccelerationStructureUsageRefit`, so their sizes are not comparable
+with the one-triangle 640-byte structure above, which was built without
+refit usage.
 
-| Triangles | Structure bytes | Build scratch bytes | Build GPU ms, 21 runs | Build wall ms | Refit GPU ms (24 runs) |
-|---|---|---|---|---|---|
-| 10,000 | 937,728 | 251,584 | 0.72 to 2.58 | 0.84 to 2.98 | 0.07 to 0.26 |
-| 20,000 | 1,874,816 | 904,128 | 0.50 to 1.92 | 0.64 to 2.25 | 0.08 to 0.26 |
-| 50,000 | 4,686,336 | 2,258,880 | 0.96 to 3.37 | 1.12 to 3.53 | 0.16 to 0.50 |
-| 200,000 | 18,743,488 | 9,033,728 | 3.55 to 6.06 | 3.72 to 6.21 | 0.62 to 0.83 |
+| Triangles | Structure bytes | Build scratch bytes |
+|---|---|---|
+| 10,000 | 937,728 | 251,584 |
+| 20,000 | 1,874,816 | 904,128 |
+| 50,000 | 4,686,336 | 2,258,880 |
+| 200,000 | 18,743,488 | 9,033,728 |
 
-Note: one further 200,000 build outside the timed set took 7.6 ms, so 3.5 to
-7.6 ms is the range to plan with.
+Build and refit times were observed in the low milliseconds but varied
+several-fold between process invocations while another GPU client was
+active, so no figure is recorded here; they are measured on a quiet GPU
+under TASK101 (#228).
 
-The spread is a property of the measurement, not noise to average out:
-within one invocation the builds agree to a few percent (for example 10k:
-2.46 to 2.53 ms in the first invocation, 0.72 to 0.75 ms in the second),
-but the invocations differ by up to 3.8 times at the same size, and the
-smaller sizes are slower than the larger ones in some invocations (the
-first and third: 10k takes 2.5 ms, 20k takes 1.7 ms). That pattern
-fits GPU clock and power-state selection that is fixed per process rather
-than per build, plus contention with the other GPU client. One discarded
-warm-up build is not enough at 200k: in the first invocation the timed
-builds after it ran 6.1, 4.5, then 3.6 ms, and a further single-invocation
-check saw 7.6 ms for the first timed 200k build, so the 200k GPU range
-is the one in the note under the table. The 200k refit cell is measured (0.62 to 0.83 ms).
-Read the table as "a world-sized structure (10k to 50k triangles) builds in
-under about 3.5 ms wall, and a build of up to 200k triangles stays under
-about 8 ms, on a busy M6", not as a benchmark. The 10k to 20k figure
-matches the design's "under 4 MB" assumption: about 94 bytes per triangle
-on this soup (0.9 to 1.9 MB), though a real map has coherent geometry and
-will differ; RT1 measures that. Refit used the same descriptor with
-`MTLAccelerationStructureUsageRefit`, in place, and completed in
-0.5 ms or less up to 50k triangles.
+The structure size is about 94 bytes per triangle on this soup (0.9 to
+1.9 MB for 10k to 20k triangles), though a real map has coherent geometry
+and will differ; RT1 measures that. The measured figure of about 94 bytes
+per triangle is above section 1's assumed 64 bytes per triangle plus
+nodes, and the "under 4 MB" total still holds at the world size section 1
+states. A structure with refit usage refits in place, using the same
+descriptor, with a refit scratch size of 0.
 
 Per-decision verdicts, section 4 and section 6, for this device:
 
@@ -266,12 +251,10 @@ Per-decision verdicts, section 4 and section 6, for this device:
    margin: the structure for 20k triangles is about 1.9 MB against the
    "under 4 MB" assumption, and unified memory with a 25 GiB working-set
    hint removes any pressure from 128 refit instances.
-6. **Build and refit cost (sections 1 and 6, RT1/RT10):** consistent with
-   "once at map load" for the world (about 0.6 to 3.5 ms wall for 10k to
-   50k triangles) and per-frame refit (0.5 ms or less per 50k triangles
-   here, so 128 alias instances of a few hundred triangles each fit
-   comfortably). Whether refit stays cheap as
-   many small instances on an apple7 device is for RT10.
+6. **Build and refit cost (sections 1 and 6, RT1/RT10):** the cost is
+   measured under TASK101 (#228). Nothing observed here contradicts "build
+   once at map load, refit per frame". Whether refit stays cheap as many
+   small instances on an apple7 device is for RT10.
 7. **Metal API notes for the implementers (findings, no decision
    changes):** a refit-capable structure reports a refit scratch size of
    0 and refits in place with `destination` equal to the source;
@@ -282,5 +265,6 @@ Per-decision verdicts, section 4 and section 6, for this device:
    key on `MTLGPUFamilyApple*` and the ray-tracing properties only (which
    section 4 already does).
 
-No gating decision in sections 4 and 6 changes on this device. The
-finding above (3) is a card for the RT8 owner, not an edit to that card.
+No gating decision in sections 4 and 6 changes on this device, and this
+section records capabilities and sizes only; build and refit timings are
+measured under TASK101 (#228). The finding above (3) is a card for the RT8 owner, not an edit to that card.
