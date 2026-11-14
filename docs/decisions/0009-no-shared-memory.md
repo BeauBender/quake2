@@ -44,3 +44,27 @@ record that names this one.
 The loop also reads the switch from the environment variable
 `DEVLOOP_MEMORY_SHARED`, which takes precedence over the file. Setting it to
 `true` anywhere re-enables syncing, so it is not set.
+
+## Addendum 2026-11-14: the tracked notes leave the tree (TASK103, #235)
+
+The owner has since decided that agent memory is not kept in this
+repository at all, so point 2 is superseded: the notes that were tracked
+under `.claude/memory/` are removed from the tree, `.claude/memory/` is
+ignored, and `tests/check-no-tracked-memory.sh` fails when any file there
+is tracked. Agent memory is persisted outside the repository, as
+`CLAUDE.md` describes in its working rules. Points 1 and 3 stand, and
+`memory.shared` stays `false`. The removed notes stay in history; history
+is not rewritten.
+
+The check also refuses any embedded repository (a gitlink, mode 160000,
+anywhere in the index) and requires the top-level `.gitignore` itself to
+ignore `.claude/memory/` as a directory: the rule that decides a file there
+must be the directory rule `.claude/memory` (with an optional leading or
+trailing `/`), so that no later rule can re-include a file in it. A rule
+only in `.git/info/exclude`, a global ignore file or a nested `.gitignore`
+does not count, nor does a narrower one such as `.claude/memory/*.md`, or
+`.claude/memory/*` with a negated pattern after it. The commit hook runs
+the check on every commit. The Consequences bullet above, that memory
+writes still change tracked files in the working tree, no longer applies
+once a checkout has this change: nothing under `.claude/memory/` is
+tracked.
