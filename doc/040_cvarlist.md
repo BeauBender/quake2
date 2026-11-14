@@ -1,7 +1,7 @@
-# Yamagi Quake II Console Variables
+# Portmanbeau Quake II Console Variables
 
 This lists explains most console variables (cvars) added by Yamagi
-Quake II. Most of the original clients (Vanilla Quake II) cvars are
+Quake II and inherited by Portmanbeau Quake II. Most of the original clients (Vanilla Quake II) cvars are
 still in place, however due to architectural changes some of them
 have been renamed. The prefixes are:
 
@@ -176,7 +176,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   default. Note that some substrings are always forbidden, for security
   reasons these cannot be overridden: '.dll', '.dylib' and '.so' to
   prevent downloading of libraries which could be injected into the
-  Yamagi Quake II process. '..' or ':' inside filenames and '/' or '.'
+  Portmanbeau Quake II process. '..' or ':' inside filenames and '/' or '.'
   at the beginning of filenames to prevent downloading files into
   arbitrary directories.
 
@@ -198,7 +198,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 * **cl_centertime**: Time in ms that takes the `centerview` command to
   finish. `0` is immediate (Vanilla Q2 behaviour). Default `180`.
 
-* **in_grab**: Defines how the mouse is grabbed by Yamagi Quake IIs
+* **in_grab**: Defines how the mouse is grabbed by Portmanbeau Quake IIs
   window. If set to `0` the mouse is never grabbed and if set to `1`
   it's always grabbed. If set to `2` (the default) the mouse is grabbed
   during gameplay and released otherwise (in menu, videos, console or if
@@ -363,7 +363,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   is omitted. If set to `1` the gun is only drawn if the FOV is equal
   or smaller than 90. This was the default with Vanilla Quake II. If set
   to `2` the gun is drawn regardless of the FOV. This is the default
-  in Yamagi Quake II.
+  in Portmanbeau Quake II.
 
 * **fov**: Sets the field of view.
 

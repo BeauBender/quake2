@@ -69,12 +69,17 @@ scenario plays `PINS_DEMO`, so all of them follow the same camera path.
 explosions and particles draw on random numbers; their files say so in a
 `// nondeterministic:` line, with the thresholds they were measured at.
 The others were identical from run to run, observed on one host with the
-software renderer.
+software renderer. `skywater` played from `water.dm2` (below) is also
+marked nondeterministic: the water warp follows the client's clock, and
+in a timedemo that clock follows the host whenever a frame takes longer
+than 100 ms, so a record made while the host stalls differs a little on
+frames that show the water surface.
 
 With the stock demos `skywater` shows the sky but no water surface. The
 water-warp settings act on the full-view warp while the camera is under
 water, not on a water surface seen from above, so pinning water needs a
-demo whose camera passes water.
+demo whose camera passes water. `make-demo water` (see *Making a demo*)
+makes one; record `skywater` from it with `PINS_DEMO=water.dm2`.
 
 For `cinematic`, set `PINS_DEMO` to a cinematic, for example
 `PINS_DEMO=idlog.cin`. A cinematic changes its picture 14 times a
@@ -89,7 +94,7 @@ scripts/pins.sh record <renderer> <scenario> [--run N] [--replace]
 ```
 
 `record` starts the engine with the scenario's settings, the renderer
-(`soft`, `gl1`, `gl3`), a fixed window size and sound off, plays
+(`soft`, `gl1`, `gl3`, or `gl1-metal`, see below), a fixed window size and sound off, plays
 `PINS_DEMO` and quits by itself when it ends. The frames land in
 `<store>/<scenario>/<renderer>/<id>/`, where `<id>` names the engine
 commit and a hash of the scenario and the `PINS_*` settings. With
@@ -104,6 +109,70 @@ Every `record` also writes `trace.q2r` beside the frames, a trace of
 the drawing calls the engine made into the renderer (about 4.4 MB for the
 default demo); it holds data derived from the game data, stays in the
 store and is never committed or uploaded. `PINS_TRACE=0` records none.
+
+### The Metal shim build of gl1
+
+On macOS `ref_gl1` can be built against an OpenGL subset on Metal that
+lives in this tree, instead of Apple's OpenGL framework, for Macs where
+OpenGL does not work. The switch is a build variable and needs the
+Xcode Metal toolchain (`xcrun metal`):
+
+```sh
+make client game ref_gl1 WITH_METAL_SHIM=yes
+scripts/pins.sh record gl1-metal world
+```
+
+The build writes `ref_gl1.metallib` next to `ref_gl1.dylib`. The
+engine still loads it as `gl1`; the pin harness records it as
+`gl1-metal`. `record gl1-metal` asks `make` whether the shim build is
+current and checks that the module the engine loaded is that build (its
+`GL_RENDERER` string ends in `(gl1-metal)`); `record gl1` refuses frames
+from it. The shim is being built up step by step: until it draws, a
+frame from it is the cleared screen.
+
+With the environment variable `MGL_READBACK_DUMP` set to an absolute
+directory (characters `A-Z a-z 0-9 _ . / -`, no `..`), the shim also
+writes every `glReadPixels` result there, byte for byte as the renderer
+received it (bottom row first), as `mgl-readback-NNNNNN.raw`, with one
+line per read in `mgl-readback.txt`. That is the way to check a
+captured frame against the shim's own readback. Every file is created
+new and no symbolic link is followed: use an empty directory per run, as
+one that already holds a `mgl-readback.txt` turns the hook off for that
+run. At most 1000 reads are written per run; later reads are not, and
+the shim says so once on stderr. Like the frames, these files come from
+the game data and stay on the machine that made them.
+
+### The gl1 frames on a host without accelerated OpenGL
+
+`ref_gl1` first asks for an accelerated OpenGL context. If the system
+refuses it, the renderer tries once more without that requirement and
+prints `No accelerated OpenGL context available, using an unaccelerated
+one.` in the engine log. On such a host (a macOS virtual machine, for
+example) the `gl1` frames come from the system's software OpenGL
+renderer, not from a graphics card. The `GL_RENDERER` line of
+`engine.log` in the pin's directory tells which one drew them; on the
+build host it reads `Apple Software Renderer`. In this mode the renderer
+does not wait for the display to sync, as that wait does not end on a
+host that never shows the window. A machine where the accelerated
+request succeeds is not affected.
+
+### Recording the gl1 references
+
+A reference is a `gl1` record of each scenario, made once per engine
+commit on a machine where `ref_gl1` renders:
+
+```sh
+for s in world hud2d models particles; do scripts/pins.sh record gl1 $s; done
+PINS_DEMO=water.dm2 scripts/pins.sh record gl1 skywater   # after make-demo water
+PINS_DEMO=idlog.cin PINS_EVERY=7 scripts/pins.sh record gl1 cinematic
+```
+
+To know how much two `gl1` records differ by themselves, record a scenario
+a few times (`--run 2`, `--run 3`) and compare them with each other as
+shown under *Comparing*. `soft` and `gl1` do not draw the same picture
+(palette against true colour, filtering, lighting), so a candidate is
+judged against `gl1`, not `soft`. The measured numbers, the host and the
+renderer string are in `docs/plans/metal-port-harness.md`.
 
 ## Comparing
 
@@ -131,6 +200,62 @@ scripts/pins.sh record soft world
 scripts/pins.sh record soft world --run 2
 scripts/pins.sh compare soft world --run 2 --ref soft
 ```
+
+## Making a demo
+
+```sh
+scripts/pins.sh make-demo <name> [--replace]
+```
+
+`make-demo` plays the console script `scripts/pins/demos/<name>.cfg` in
+a local single-player game, with no network game joined and no frames
+captured, and leaves the demo it records as `demos/<name>.dm2` in the
+engine's portable write directory, `baseq2/` beside the binary
+(`release/baseq2/` for this tree's build). That is where `PINS_DEMO`
+finds it: record from it with `PINS_DEMO=<name>.dm2`. The demo is made
+from the game data, so like the frames it is never committed; `release/`
+is ignored by git. `make-demo` refuses a binary whose write directory,
+or the `demos/` in it, is by its physical path inside `PINS_BASEDIR` or a
+part of this repository git does not ignore, and refuses when the demo,
+the script copy or the log is a symbolic link.
+
+The one script so far, `water`, loads `base1`, puts the camera over its
+large pool and then under the surface, and records `water.dm2`. A run
+took 17 to 47 seconds on a shared host (load average 6 to 232). Run it
+once:
+
+```sh
+scripts/pins.sh make-demo water
+PINS_DEMO=water.dm2 scripts/pins.sh record soft skywater
+```
+
+A script holds each camera place for a number of console `wait`s, and a
+wait lasts at least 16 ms but longer when the host is busy, so the length
+of the demo is not fixed; nothing in the engine holds a script for a
+number of server frames. Each script therefore states the number of demo
+messages it must give, in a `// pins: messages <low> <high>` line, and
+`make-demo` fails a demo outside that range and keeps it as
+`<name>.dm2.failed`. From a `water.dm2` in range, `skywater` at the
+default `PINS_EVERY` 30 shows the pool from just above its surface on the
+first half of its frames and from under it on the second half (4 frames,
+2 and 2, in every record so far). The range follows from the capture: a
+demo of N messages renders N-5 frames and a capture falls on every 30th
+rendered frame, so 96 to 125 messages give 4 captures; the stated range,
+97 to 124, keeps one message inside each edge. When a run fails for the range, make
+the demo again when the host is quieter.
+
+A script may use only console commands that exist in this tree, must
+record its own name once, must hold its message range, and must end with
+`stop` and `quit`; `make-demo` checks the script before it starts the
+engine. The run is bounded by `PINS_TIMEOUT`. It fails at once when the
+script's map is not in the game data, and fails when the engine exits
+non-zero or the demo is missing, cut short, nearly empty or outside its
+range. An existing demo is replaced only with
+`--replace`. Because a demo made again is not the same file, a demo
+beside the binary adds its checksum to the id of every record made from
+it, so records of the old and the new demo never share an id. The run
+also reads and rewrites `config.cfg` in the write directory, as any
+portable start without the pin arguments does.
 
 ## Other commands
 

@@ -225,7 +225,7 @@ while read -r lref lsha rref rsha || [ -n "${lref:-}" ]; do
 	# scan below is skipped, and only for these prefixes; the ref names above
 	# are always checked. Commits pushed here count as published for every
 	# other ref afterwards. Delete this block when the tooling offers a
-	# pseudonymous identity (see docs/decisions/0003-no-local-identity.md).
+	# pseudonymous identity (see docs/decisions/0005-push-identity-hook.md).
 	case $rref in
 	refs/heads/claim/* | refs/heads/gate-clear/*) continue ;;
 	esac

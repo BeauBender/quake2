@@ -23,7 +23,7 @@
 # Limit: a machine whose host or user name is an ordinary word of this
 # repository's text (for example a generic container or CI name) cannot
 # pass; give the machine another name (see
-# docs/decisions/0003-no-local-identity.md).
+# docs/decisions/0005-push-identity-hook.md).
 #
 # The push-time twin of this check is .githooks/pre-push; its self-test is
 # tests/check-pre-push-hook.sh.

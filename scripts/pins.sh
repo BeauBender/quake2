@@ -6,10 +6,14 @@
 #   pins.sh record  <renderer> <scenario> [--run N] [--replace]
 #   pins.sh compare <renderer> <scenario> [--ref <renderer>] [--ref-id <dir>]
 #                   [--run N | --cand-id <dir>] [--threshold T] [--bad-threshold B]
+#   pins.sh make-demo <name> [--replace]       make demos/<name>.dm2 beside the binary
 #   pins.sh list                               what the store holds
 #   pins.sh selftest                           no engine, no game data
 #
 # Names (renderer, scenario) match [a-z0-9_][a-z0-9_-]*, e.g. gl1-metal, rt-ao.
+# The renderer gl1-metal is ref_gl1 built with "make ref_gl1 WITH_METAL_SHIM=yes":
+# the engine runs it as vid_renderer gl1, and record checks that the module
+# it loaded was the shim build (and, for gl1, that it was not).
 #
 # Environment:
 #   PINS_STORE    the pin store, never inside this repository or any other
@@ -80,12 +84,36 @@
 # ends before its end marker, makes the engine exit non-zero at once, as
 # does a cinematic that cannot be opened. A cinematic is captured every
 # Nth cinematic frame, not every Nth rendered frame.
+#
+# make-demo (TASK70) plays scripts/pins/demos/<name>.cfg, a console script,
+# in a local single-player game (no network game is joined, pin capture is
+# off, the soft renderer at PINS_WIDTH x PINS_HEIGHT) and leaves the demo it
+# records as demos/<name>.dm2 in the engine's portable write directory,
+# <binary dir>/baseq2, where PINS_DEMO=<name>.dm2 finds it. The script may
+# use only commands that exist in src/, must record <name> once, hold one
+# "// pins: messages <low> <high>" line and end with stop and quit. The
+# write directory and its demos/, by their physical paths, must not be
+# inside PINS_BASEDIR, nor inside this repository unless git ignores them
+# (release/ is), and the demo, the script copy and the log must not be
+# symbolic links. An existing demo is replaced only with --replace. The run
+# fails at once when the script's map is not in the game data, and fails
+# when the engine times out (PINS_TIMEOUT) or exits non-zero, or when the
+# demo is missing, cut short, or holds a number of messages outside the
+# script's range (renamed <name>.dm2.failed). A wait is a lower bound on
+# time, so on a busy host each place is held longer, the demo holds more
+# messages and the run fails; make it again. The script copy and pins_make_<name>.log
+# are written into that directory too; the run also reads and rewrites
+# config.cfg there, as any portable run without pin capture does. A demo
+# beside the binary adds its checksum to the pin id of every scenario
+# recorded from it, so pins of a demo made again never share an id.
 set -eu
 # character ranges such as [a-z] in patterns mean ASCII only in the C locale
 export LC_ALL=C
 root=$(cd "$(dirname "$0")/.." && pwd)
 scen_dir="$root/scripts/pins/scenarios"
 die() { echo "pins: $*" >&2; exit 1; }
+# usage: the header comment of this file, from line 2 to the first line that is not a comment
+usage() { awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$root/scripts/pins.sh"; }
 
 check_name() { case $2 in ''|-*|*[!a-z0-9_-]*) die "$1 must match [a-z0-9_][a-z0-9_-]*, got '$2'";; esac; }
 check_run() { case $1 in [1-9]|[1-9][0-9]|[1-9][0-9][0-9]) ;; *) die "--run must be a number from 1 to 999, got '$1'";; esac; }
@@ -101,6 +129,11 @@ store() {
     if [ -n "${PINS_STORE:-}" ]; then echo "$PINS_STORE"; return; fi
     echo "$HOME/.quake2-pins"
 }
+# phys_dir <dir>: the physical path of an existing directory in the
+# filesystem's own spelling. /bin/pwd -P asks the filesystem; the shell's
+# pwd -P keeps the letter case it was given, which on a case-insensitive
+# volume names one directory in several ways
+phys_dir() { (cd "$1" && /bin/pwd -P); }
 # phys_path <path>: sets phys_result to the physical path, resolving symbolic
 # links through the nearest ancestor that exists, and phys_existing to that
 # ancestor; phys_dangling names a dangling symbolic link met on the way
@@ -111,14 +144,14 @@ phys_path() {
         if [ -L "$p" ] && [ -z "$phys_dangling" ]; then phys_dangling=$p; fi
         rest="/$(basename "$p")$rest"; p=$(dirname "$p")
     done
-    phys_existing=$(cd "$p" && pwd -P)
+    phys_existing=$(phys_dir "$p")
     phys_result=$(printf '%s%s' "$phys_existing" "$rest" | tr -s /)
 }
 # check_store_path <path>: refuse a place inside this repository or any git
 # work tree, and a dangling symbolic link (it could later be made into a
 # directory inside one)
 check_store_path() {
-    local s r; phys_path "$1"; s=$phys_result; r=$(cd "$root" && pwd -P)
+    local s r; phys_path "$1"; s=$phys_result; r=$(phys_dir "$root")
     [ -z "$phys_dangling" ] || die "the pin store path $1 holds a dangling symbolic link ($phys_dangling)"
     case "$s/" in "$r/"*) die "the pin store $s is inside this repository; set PINS_STORE outside it (INFORM9)";; esac
     if git -C "$phys_existing" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -162,17 +195,29 @@ engine_sha() {
     if [ -n "${PINS_BIN:-}" ]; then sha="$sha-b$(cksum < "$PINS_BIN" 2>/dev/null | awk '{print $1}')"; fi
     echo "$sha"
 }
+# A pin renderer name that is a build of another engine renderer (TASK47):
+# gl1-metal is ref_gl1 built with "make ref_gl1 WITH_METAL_SHIM=yes", which
+# the engine loads as vid_renderer gl1 and which names itself in its
+# GL_RENDERER string as "(gl1-metal)".
+engine_renderer() { case $1 in gl1-metal) echo gl1;; *) echo "$1";; esac; }
+shim_marker='^GL_RENDERER: .*(gl1-metal)'
+# shim_build <log>: true when the first GL_RENDERER line of the engine log
+# names the shim. Only the first counts: the renderer prints it at init,
+# before the demo starts, and a demo's svc_print can put later lines of the
+# same shape into the log.
+shim_build() { grep -m1 '^GL_RENDERER: ' "$1" | grep -q "$shim_marker"; }
 # stale_engine <bin> <renderer>: names the binary or renderer module of this
 # checkout that "make -q" says is out of date with its sources, or that is
 # older than a header under src/, empty when the build is current (or make is
-# missing)
+# missing). For gl1-metal it asks make about the WITH_METAL_SHIM=yes build.
 stale_engine() {
-    local m
+    local m r; r=$(engine_renderer "$2")
+    local build=(); [ "$2" = gl1-metal ] && build=(WITH_METAL_SHIM=yes)
     command -v make >/dev/null 2>&1 || return 0
-    for m in "$1" "$(dirname "$1")/ref_$2".so "$(dirname "$1")/ref_$2".dylib "$(dirname "$1")/ref_$2".dll; do
+    for m in "$1" "$(dirname "$1")/ref_$r".so "$(dirname "$1")/ref_$r".dylib "$(dirname "$1")/ref_$r".dll; do
         [ -f "$m" ] || continue
         case $m in "$root"/*) ;; *) continue;; esac
-        if ! make -C "$root" -q "${m#"$root"/}" >/dev/null 2>&1; then echo "${m#"$root"/} is out of date"; return; fi
+        if ! make -C "$root" -q ${build[@]+"${build[@]}"} "${m#"$root"/}" >/dev/null 2>&1; then echo "${m#"$root"/} is out of date"; return; fi
         # the Makefile has no header dependencies on macOS, so make -q cannot see a header edit
         if [ -n "$(find "$root/src" -name '*.h' -newer "$m" -print 2>/dev/null | head -n 1)" ]; then
             echo "${m#"$root"/} is older than a header under src/"; return
@@ -180,7 +225,14 @@ stale_engine() {
     done
 }
 scenario_hash() {
-    { cat "$scen_dir/$1.cfg"; echo "${PINS_DEMO:-demo1.dm2} ${PINS_WIDTH:-640}x${PINS_HEIGHT:-480} every=${PINS_EVERY:-30}"; } | cksum | awk '{print $1}'
+    { cat "$scen_dir/$1.cfg"; echo "${PINS_DEMO:-demo1.dm2} ${PINS_WIDTH:-640}x${PINS_HEIGHT:-480} every=${PINS_EVERY:-30}"; demo_sum; } | cksum | awk '{print $1}'
+}
+# demo_sum: the checksum of PINS_DEMO when it lies beside the engine binary,
+# where make-demo writes it, so a demo made again never shares a pin id with
+# the one it replaced; nothing for a demo found only in the game data
+demo_sum() {
+    local f; f="$(dirname "${PINS_BIN:-$root/release/quake2}")/baseq2/demos/${PINS_DEMO:-demo1.dm2}"
+    if [ -f "$f" ]; then echo "demo $(cksum < "$f" | awk '{print $1, $2}')"; fi
 }
 # run_id <scenario> <run>
 run_id() {
@@ -225,7 +277,7 @@ build_args() {
         engine_args+=(+set "$name" "$value")
     done < "$scen_dir/$scenario.cfg"
     set +f
-    engine_args+=(+set vid_renderer "$renderer" +set vid_fullscreen 0 +set r_mode -1
+    engine_args+=(+set vid_renderer "$(engine_renderer "$renderer")" +set vid_fullscreen 0 +set r_mode -1
         +set r_customwidth "${PINS_WIDTH:-640}" +set r_customheight "${PINS_HEIGHT:-480}"
         +set s_initsound 0
         +set pins_dir "$out" +set pins_scenario "$scenario" +set pins_capture "${PINS_EVERY:-30}")
@@ -290,8 +342,15 @@ cmd_record() {
     elif grep -q '^FAILED ' "$out/manifest.txt"; then reason="the engine could not write a frame ($(grep -m1 '^FAILED ' "$out/manifest.txt"))"
     elif [ "$(wc -l < "$out/manifest.txt" | tr -d ' ')" -ne "$n" ]; then reason="manifest.txt does not list the $n frames"
     else
-        bad=$(awk -v r="$renderer" '$2 != r {print $2; exit}' "$out/manifest.txt")
+        bad=$(awk -v r="$(engine_renderer "$renderer")" '$2 != r {print $2; exit}' "$out/manifest.txt")
         [ -z "$bad" ] || reason="frames were rendered by '$bad', not '$renderer' (renderer fallback)"
+    fi
+    # gl1 and gl1-metal are one module name: the GL_RENDERER line tells which build ran
+    if [ -z "$reason" ] && [ "$renderer" = gl1-metal ]; then
+        shim_build "$out/engine.log" ||
+            reason="the engine did not load the Metal shim build of ref_gl1 (the first GL_RENDERER line of engine.log does not end in '(gl1-metal)'; build it with make ref_gl1 WITH_METAL_SHIM=yes)"
+    elif [ -z "$reason" ] && [ "$renderer" = gl1 ] && shim_build "$out/engine.log"; then
+        reason="the frames came from the Metal shim build of ref_gl1; record them as gl1-metal"
     fi
     if [ -n "$reason" ]; then
         echo "$reason" > "$out/incomplete"
@@ -368,6 +427,184 @@ cmd_list() {
     # the prefix is stripped by parameter expansion: the store path is never part of a program text
     find "$s" -name '*.tga' 2>/dev/null | while IFS= read -r line; do echo "${line#"$s"/}"; done |
         awk -F/ '{print $1"/"$2"/"$3}' | sort | uniq -c
+}
+
+# ---- make-demo (TASK70) ---------------------------------------------------
+
+demo_dir="$root/scripts/pins/demos"
+# demo_cmds: the console commands this tree registers, Cmd_AddCommand("<name>"
+# under src/ and the game module's own, Q_stricmp(cmd, "<name>") in g_cmds.c
+demo_cmds() {
+    { grep -rhoE 'Cmd_AddCommand\("[^"]+"' "$root/src/" | sed 's/^Cmd_AddCommand("//; s/"$//'
+      grep -hoE 'Q_stricmp\(cmd, "[^"]+"\)' "$root/src/game/g_cmds.c" | sed 's/^Q_stricmp(cmd, "//; s/")$//'
+    } | sort -u
+}
+# check_demo_script <file> <name>: every line is a comment, an alias of
+# commands, or "<command> [<argument>...]" whose command exists in src/ (or
+# is an alias defined above it); one "map <map>" line, exactly one
+# "record <name>", and the script ends with stop, then quit. Every line
+# beginning "// pins:" must be the one range line; it sets demo_lo and demo_hi
+check_demo_script() {
+    local file=$1 name=$2 line n=0 cmd piece known aliases=" " records=0 maps=0 last="" prev="" aname body
+    local re_alias='^alias ([a-z0-9_]+) "([a-z0-9_]+(;[a-z0-9_]+)*)"$'
+    local re_range='^// pins: messages ([1-9][0-9]{0,8}) ([1-9][0-9]{0,8})$' ranges=0
+    demo_lo=""; demo_hi=""
+    known=$(demo_cmds)
+    [ -n "$known" ] || die "cannot read the console commands from $root/src"
+    while IFS= read -r line || [ -n "$line" ]; do
+        n=$((n+1))
+        case $line in
+            '') continue;;
+            //*) case $line in *\;*|*\"*) die "$name.cfg line $n: a comment must not hold ; or a quote (the engine splits commands on them): $line";; esac
+                case $line in '// pins:'*)
+                    [[ $line =~ $re_range ]] ||
+                        die "$name.cfg line $n: a '// pins:' line must be exactly '// pins: messages <low> <high>', two positive integers without a leading zero, single spaces: $line"
+                    [ "${BASH_REMATCH[1]}" -ge 10 ] && [ "${BASH_REMATCH[1]}" -le "${BASH_REMATCH[2]}" ] ||
+                        die "$name.cfg line $n: the message range must start at 10 or more and not end below its start: $line"
+                    ranges=$((ranges+1)); demo_lo=${BASH_REMATCH[1]}; demo_hi=${BASH_REMATCH[2]};;
+                esac
+                continue;;
+        esac
+        case $line in *..*) die "$name.cfg line $n: must not contain '..': $line";; esac
+        if [[ $line =~ $re_alias ]]; then
+            aname=${BASH_REMATCH[1]}; body=${BASH_REMATCH[2]}
+            for piece in ${body//;/ }; do
+                case $aliases in *" $piece "*) continue;; esac
+                printf '%s\n' "$known" | grep -qxF -e "$piece" || die "$name.cfg line $n: alias $aname runs $piece, which is not a command in src/"
+            done
+            aliases="$aliases$aname "
+            continue
+        fi
+        [[ $line =~ ^[+-]?[a-z0-9_]+(\ [A-Za-z0-9_.-]+)*$ ]] || die "$name.cfg line $n: not '<command> [<argument>...]' with single spaces, or 'alias <name> \"<command>;...\"': $line"
+        cmd=${line%% *}
+        case $aliases in *" $cmd "*) ;; *)
+            printf '%s\n' "$known" | grep -qxF -e "$cmd" || die "$name.cfg line $n: $cmd is not a command in src/";;
+        esac
+        case $cmd in
+            record) [ "$line" = "record $name" ] || die "$name.cfg line $n: must record $name, the script's own name: $line"; records=$((records+1));;
+            map) [[ $line =~ ^map\ [a-z0-9_]+$ ]] || die "$name.cfg line $n: not 'map <map>': $line"; maps=$((maps+1));;
+            exec) die "$name.cfg line $n: a demo script runs no other script: $line";;
+        esac
+        prev=$last; last=$line
+    done < "$file"
+    [ "$maps" -eq 1 ] || die "$name.cfg: needs exactly one 'map <map>' line, has $maps"
+    [ "$records" -eq 1 ] || die "$name.cfg: needs exactly one 'record $name' line, has $records"
+    [ "$ranges" -eq 1 ] || die "$name.cfg: needs exactly one '// pins: messages <low> <high>' line, has $ranges"
+    [ "$prev" = stop ] && [ "$last" = quit ] || die "$name.cfg: must end with 'stop', then 'quit'"
+}
+# demo_in_range <messages> <low> <high>: true only when all three are integers
+# and low <= messages <= high; a comparison that errors is false, never a pass
+demo_in_range() { [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]; }
+# demo_blocks <file>: the number of message blocks before the end marker
+# (a length of -1), or "cut" when the file ends first
+demo_blocks() {
+    od -An -v -tu1 "$1" | awk '{for (i = 1; i <= NF; i++) b[n++] = $i}
+        END {p = 0; c = 0
+            while (p + 4 <= n) {
+                l = b[p] + 256 * b[p+1] + 65536 * b[p+2] + 16777216 * b[p+3]
+                if (l == 4294967295) {print c; exit}
+                p += 4 + l; if (p > n) break; c++
+            }
+            print "cut"}'
+}
+# check_demo_place <physical dir> <file>: make-demo writes <file> into <dir>
+# (the write directory beside the binary, or its demos/, which a link may
+# send elsewhere); that is never inside PINS_BASEDIR, and inside this
+# repository only where git ignores it (release/, for the default binary)
+check_demo_place() {
+    local w=$1 b r
+    if [ -n "${PINS_BASEDIR:-}" ]; then
+        phys_path "$PINS_BASEDIR"; b=$phys_result
+        case "$w/" in "$b/"*) die "make-demo would write $w/$2 inside PINS_BASEDIR; use an engine binary outside the game data";; esac
+    fi
+    r=$(phys_dir "$root")
+    case "$w/" in "$r/"*)
+        git -C "$root" check-ignore -q "${w#"$r"/}/$2" 2>/dev/null ||
+            die "make-demo would write $w/$2 inside this repository, where git does not ignore it";;
+    esac
+}
+# Fills engine_args for the make-demo run of <script copy name>: a local,
+# windowed, silent single-player game that execs the script; pin capture is off
+build_demo_args() {
+    engine_args=(-datadir "${PINS_BASEDIR:-}" -portable +set vid_renderer soft +set vid_fullscreen 0 +set r_mode -1
+        +set r_customwidth "${PINS_WIDTH:-640}" +set r_customheight "${PINS_HEIGHT:-480}" +set s_initsound 0
+        +set vid_pauseonfocuslost 0 +set deathmatch 0 +set coop 0 +exec "$1")
+}
+
+cmd_make_demo() {
+    local name=$1 replace=0; shift
+    local bin="${PINS_BIN:-$root/release/quake2}" limit="${PINS_TIMEOUT:-600}"
+    check_name demo "$name"
+    while [ $# -gt 0 ]; do case $1 in
+        --replace) replace=1; shift;;
+        *) die "unknown option $1";; esac; done
+    case $limit in ''|*[!0-9]*) die "PINS_TIMEOUT must be a number of seconds, got '$limit'";; esac
+    check_count PINS_WIDTH "${PINS_WIDTH:-640}"; check_count PINS_HEIGHT "${PINS_HEIGHT:-480}"
+    local script="$demo_dir/$name.cfg"
+    [ -f "$script" ] || die "no demo script $name (see $demo_dir)"
+    check_demo_script "$script" "$name"
+    local map lo=$demo_lo hi=$demo_hi; map=$(sed -n 's/^map \([a-z0-9_]*\)$/\1/p' "$script")
+    [[ $lo =~ ^[1-9][0-9]{0,8}$ ]] && [[ $hi =~ ^[1-9][0-9]{0,8}$ ]] && [ "$lo" -le "$hi" ] ||
+        die "$name.cfg: the message range must be two positive integers, low first, got '$lo' and '$hi'"
+    [ -z "${PINS_BIN:-}" ] || [ -f "$PINS_BIN" ] || die "no engine binary at $PINS_BIN (build the client, or set PINS_BIN)"
+    if [ -n "${PINS_BASEDIR:-}" ]; then check_arg PINS_BASEDIR "$PINS_BASEDIR" path; fi
+    # with -portable the engine writes into <binary dir>/baseq2
+    phys_path "$(dirname "$bin")/baseq2"; local wdir=$phys_result
+    [ -z "$phys_dangling" ] || die "the write directory $(dirname "$bin")/baseq2 holds a dangling symbolic link ($phys_dangling)"
+    check_demo_place "$wdir" "pins_make_$name.log"
+    # demos/ may be a link: check where it leads, and write there
+    phys_path "$wdir/demos"; local ddir=$phys_result
+    [ -z "$phys_dangling" ] || die "the demo directory $wdir/demos holds a dangling symbolic link ($phys_dangling)"
+    check_demo_place "$ddir" "$name.dm2"
+    local demo="$ddir/$name.dm2" copy="pins_make_$name.cfg" log="$wdir/pins_make_$name.log" f
+    build_demo_args "$copy"
+    if [ -n "${PINS_DRYRUN:-}" ]; then echo "$bin ${engine_args[*]}"; return 0; fi
+    [ -x "$bin" ] || die "no engine binary at $bin (build the client, or set PINS_BIN)"
+    [ -n "${PINS_BASEDIR:-}" ] && [ -d "$PINS_BASEDIR/baseq2" ] || die "PINS_BASEDIR must hold baseq2/ (owner game data, never committed)"
+    if [ -z "${PINS_BIN:-}" ]; then
+        local stale; stale=$(stale_engine "$bin" soft)
+        [ -z "$stale" ] || die "the build is out of date ($stale); rebuild before making a demo"
+    fi
+    if [ -f "$demo" ] && [ "$replace" -ne 1 ]; then
+        die "a demo already exists at $demo; give --replace to make it again (pins recorded from the old one then have another id)"
+    fi
+    for f in "$demo" "$demo.failed" "$wdir/$copy" "$log"; do
+        [ ! -L "$f" ] || die "$f is a symbolic link; make-demo writes only plain files there"
+    done
+    mkdir -p "$wdir"; rm -f "$demo"; cp "$script" "$wdir/$copy"
+    "$bin" "${engine_args[@]}" > "$log" 2>&1 &
+    local pid=$! t=0 w status=0 timedout=0 missing=0
+    while kill -0 "$pid" 2>/dev/null; do
+        # a map that is not in the game data: the engine stays up, so stop it now
+        if grep -q "^Can't find maps/" "$log" 2>/dev/null; then missing=1; fi
+        if [ "$missing" -ne 0 ] || [ "$t" -ge "$limit" ]; then
+            [ "$missing" -ne 0 ] || timedout=1
+            kill "$pid" 2>/dev/null || true
+            w=0; while kill -0 "$pid" 2>/dev/null && [ "$w" -lt 5 ]; do sleep 1; w=$((w+1)); done
+            kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+            break
+        fi
+        sleep 1; t=$((t+1))
+    done
+    wait "$pid" 2>/dev/null || status=$?
+    rm -f "$wdir/$copy"
+    if grep -q "^Can't find maps/" "$log" 2>/dev/null; then missing=1; fi
+    local reason="" blocks=""
+    [ ! -f "$demo" ] || blocks=$(demo_blocks "$demo")
+    if [ "$missing" -ne 0 ]; then reason="the map $map is missing from PINS_BASEDIR ($(grep -m1 "^Can't find maps/" "$log"))"
+    elif [ "$timedout" -ne 0 ]; then reason="engine timed out after ${limit}s (PINS_TIMEOUT)"
+    elif [ "$status" -ne 0 ]; then reason="engine exited with status $status"
+    elif [ ! -f "$demo" ]; then reason="the engine wrote no demo at $demo"
+    elif [ "$blocks" = cut ]; then reason="the demo $demo ends before its end marker"
+    elif [ "$blocks" -lt 10 ]; then reason="the demo $demo holds only $blocks messages"
+    elif ! demo_in_range "$blocks" "$lo" "$hi"; then
+        reason="the demo holds $blocks messages, outside $lo to $hi ($name.cfg): its waits lasted longer than the script means, so a record of it would not capture the frames documented; make it again on a quieter host"
+    fi
+    if [ -n "$reason" ]; then
+        if [ -f "$demo" ]; then mv -f "$demo" "$demo.failed"; fi
+        die "$reason (see $log)"
+    fi
+    echo "made $demo ($blocks messages, $lo to $hi wanted); record it with PINS_DEMO=$name.dm2"
 }
 
 # ---- selftest -------------------------------------------------------------
@@ -510,7 +747,7 @@ st_names() { # C-I4
     if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record gl1 ../world) >/dev/null 2>&1; then st_fail "a scenario with .. must be refused"; return 1; fi
     if (cmd_compare 'a/b' world) >/dev/null 2>&1; then st_fail "compare must refuse a renderer with a slash"; return 1; fi
     if (cmd_compare -x world) >/dev/null 2>&1; then st_fail "a leading - must be refused"; return 1; fi
-    (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record gl1-metal world) >/dev/null 2>&1 || st_fail "renderer gl1-metal must be accepted" || return 1
+    (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-shim" cmd_record gl1-metal world) >/dev/null 2>&1 || st_fail "renderer gl1-metal must be accepted" || return 1
     fixture gl1 ref "$tmp/a.tga"; fixture gl1-metal "$cid" "$tmp/a.tga"
     (cmd_compare gl1-metal world --ref gl1) >/dev/null 2>&1 || st_fail "compare gl1-metal world --ref gl1 must parse and pass" || return 1
     (check_name scenario rt-ao) || st_fail "scenario rt-ao must be accepted" || return 1
@@ -699,6 +936,236 @@ st_engine_id() { # TASK39 (h): the id sees uncommitted source, untracked source 
     touch -t 203601010000 "$m/release/quake2"
     (root="$m" PINS_BIN= PINS_BASEDIR="$tmp/gd" cmd_record gl1 world) >/dev/null 2>&1 || st_fail "record must pass with a build newer than every header" || return 1
 }
+st_metal_shim() { # TASK47: gl1-metal is ref_gl1 built with WITH_METAL_SHIM=yes
+    local rep id m="$tmp/mkm"
+    rep=$(PINS_DRYRUN=1 cmd_record gl1-metal world) || st_fail "a dry run of gl1-metal must work" || return 1
+    case $rep in *"+set vid_renderer gl1 "*) ;; *) st_fail "gl1-metal must start the engine with vid_renderer gl1: $rep"; return 1;; esac
+    (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-shim" cmd_record gl1-metal world) >/dev/null 2>&1 || st_fail "gl1-metal must record from an engine whose ref_gl1 is the shim build" || return 1
+    id=$(PINS_BIN="$tmp/fake-shim" run_id world 1)
+    [ -f "$PINS_STORE/world/gl1-metal/$id/complete" ] || st_fail "the gl1-metal pin must land under world/gl1-metal" || return 1
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-ok" cmd_record gl1-metal world --run 2) >/dev/null 2>&1; then st_fail "gl1-metal must refuse frames from a ref_gl1 without the shim"; return 1; fi
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-shim" cmd_record gl1 world) >/dev/null 2>&1; then st_fail "gl1 must refuse frames from the shim build"; return 1; fi
+    # only the first GL_RENDERER line counts: a demo can print later lines of the same shape
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-spoof-shim" cmd_record gl1-metal world --run 3) >/dev/null 2>&1; then st_fail "gl1-metal must judge the first GL_RENDERER line, not a later one naming the shim"; return 1; fi
+    (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-spoof-shim" cmd_record gl1 world --run 4) >/dev/null 2>&1 || st_fail "gl1 must record when only a later GL_RENDERER line names the shim" || return 1
+    (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-spoof-gl" cmd_record gl1-metal world --run 5) >/dev/null 2>&1 || st_fail "gl1-metal must record when the first GL_RENDERER line names the shim and a later one does not" || return 1
+    # the staleness check asks make about the shim build of the module
+    command -v make >/dev/null 2>&1 || { echo "       metal_shim: no make, stale build skipped"; return 0; }
+    mkdir -p "$m/src"; printf 'int a;\n' > "$m/src/old.c"; printf 'int b;\n' > "$m/src/new.c"
+    printf 'ifeq ($(WITH_METAL_SHIM),yes)\nref_gl1.dylib: src/old.c\n\ttouch ref_gl1.dylib\nelse\nref_gl1.dylib: src/new.c\n\ttouch ref_gl1.dylib\nendif\n' > "$m/Makefile"
+    printf 'x' > "$m/quake2"; printf 'x' > "$m/ref_gl1.dylib"
+    touch -t 203001010000 "$m/quake2" "$m/ref_gl1.dylib"
+    touch -t 203501010000 "$m/src/old.c"; touch -t 202001010000 "$m/src/new.c"
+    [ -n "$(root="$m" stale_engine "$m/quake2" gl1-metal)" ] || st_fail "ref_gl1 older than a source of the shim build must be stale for gl1-metal" || return 1
+    [ -z "$(root="$m" stale_engine "$m/quake2" gl1)" ] || st_fail "the same module must not be stale for gl1, whose sources are older" || return 1
+    touch -t 202001010000 "$m/src/old.c"; touch -t 203501010000 "$m/src/new.c"
+    [ -z "$(root="$m" stale_engine "$m/quake2" gl1-metal)" ] || st_fail "a shim build newer than the shim's sources must not be stale" || return 1
+    [ -n "$(root="$m" stale_engine "$m/quake2" gl1)" ] || st_fail "the same module must be stale for gl1, whose build differs" || return 1
+}
+st_usage() { # the usage text is the whole header comment, its last line included
+    local out last
+    out=$(bash "$root/scripts/pins.sh" 2>/dev/null) && { st_fail "pins.sh without a command must exit non-zero"; return 1; }
+    last=$(awk 'NR > 1 && !/^#/ { print prev; exit } { prev = $0 }' "$root/scripts/pins.sh" | sed 's/^# \{0,1\}//')
+    [ -n "$last" ] || st_fail "the header comment has no last line" || return 1
+    [ "$(printf '%s\n' "$out" | tail -n 1)" = "$last" ] || st_fail "the usage text must end with the header's last line: $last" || return 1
+    [ "$(printf '%s\n' "$out" | head -n 1)" = "$(sed -n 2p "$root/scripts/pins.sh" | sed 's/^# \{0,1\}//')" ] || st_fail "the usage text must start with line 2 of the file" || return 1
+}
+
+# fake_demo_engine <path> <body>: stands in for the engine in make-demo. It
+# finds the script copy it was told to exec in <its dir>/baseq2 (exit 3 if
+# absent), then runs <body>, which may write the demo "$f"
+fake_demo_engine() {
+    printf '%s\n' '#!/bin/bash' \
+        'd=$(dirname "$0")/baseq2; c=""' \
+        'while [ $# -gt 0 ]; do [ "$1" = +exec ] && c=$2; shift; done' \
+        '[ -n "$c" ] && [ -f "$d/$c" ] || { echo "no script copy $d/$c"; exit 3; }' \
+        'mkdir -p "$d/demos"; f="$d/demos/water.dm2"; echo "recording to $f."' \
+        "$2" > "$1"
+    chmod +x "$1"
+}
+st_make_demo_args() { # TASK70: what make-demo accepts and passes to the engine
+    local n rep
+    for n in ../water Water -x 'wa ter' ''; do
+        if (PINS_DRYRUN=1 cmd_make_demo "$n") >/dev/null 2>&1; then st_fail "make-demo name '$n' must be refused"; return 1; fi
+    done
+    mkdir -p "$tmp/dn"; printf '%s\n' '// pins: messages 10 20' 'map base1' 'record Up' 'stop' 'quit' > "$tmp/dn/Up.cfg"
+    if (demo_dir="$tmp/dn" PINS_DRYRUN=1 cmd_make_demo Up) >/dev/null 2>&1; then st_fail "an upper-case name must be refused even when its script exists"; return 1; fi
+    if (PINS_DRYRUN=1 cmd_make_demo nosuch) >/dev/null 2>&1; then st_fail "a name with no script must be refused"; return 1; fi
+    if (PINS_DRYRUN=1 cmd_make_demo water --run 2) >/dev/null 2>&1; then st_fail "an unknown option must be refused"; return 1; fi
+    if (PINS_DRYRUN=1 PINS_TIMEOUT=abc cmd_make_demo water) >/dev/null 2>&1; then st_fail "a non-numeric PINS_TIMEOUT must be refused"; return 1; fi
+    if (PINS_DRYRUN=1 PINS_WIDTH=x cmd_make_demo water) >/dev/null 2>&1; then st_fail "PINS_WIDTH=x must be refused"; return 1; fi
+    if (PINS_DRYRUN=1 PINS_BASEDIR="$tmp/g+quit" cmd_make_demo water) >/dev/null 2>&1; then st_fail "PINS_BASEDIR with + must be refused"; return 1; fi
+    rep=$( (PINS_BIN="$tmp/no-such-engine" PINS_DRYRUN=1 cmd_make_demo water) 2>&1 ) && { st_fail "make-demo must refuse a missing PINS_BIN"; return 1; }
+    rep=$(PINS_BASEDIR="$tmp/gd" PINS_DRYRUN=1 cmd_make_demo water) || st_fail "a dry run of make-demo water must pass: $rep" || return 1
+    for n in "$tmp/fake-ok -datadir $tmp/gd -portable " '+set vid_renderer soft ' '+set s_initsound 0 ' '+set deathmatch 0 +set coop 0 ' ' +exec pins_make_water.cfg'; do
+        case $rep in *"$n"*) ;; *) st_fail "the make-demo command line lacks '$n': $rep"; return 1;; esac
+    done
+    case $rep in *pins_*capture*|*pins_dir*|*+demomap*) st_fail "make-demo must not turn pin capture on or play a demo: $rep"; return 1;; esac
+    case $rep in *" +exec pins_make_water.cfg") ;; *) st_fail "+exec must come last: $rep"; return 1;; esac
+    # what make-demo passes exists in this tree
+    for n in vid_pauseonfocuslost deathmatch coop; do
+        grep -rqF "\"$n\"" "$root/src" || st_fail "make-demo sets $n, which is not a cvar in src/" || return 1
+    done
+    grep -qF 'Cmd_AddCommand("exec"' "$root/src/common/cmdparser.c" || st_fail "exec is not a command in src/common/cmdparser.c" || return 1
+    grep -qF '"-portable"' "$root/src/backends/unix/main.c" || st_fail "-portable is not an argument of src/backends/unix/main.c" || return 1
+}
+st_make_demo_script() { # TASK70: a demo script holds only commands of this tree
+    local s
+    for s in "$demo_dir"/*.cfg; do
+        (check_demo_script "$s" "$(basename "$s" .cfg)") || st_fail "the committed $(basename "$s") must pass the script check" || return 1
+    done
+    mkdir -p "$tmp/ds"; local demo_dir="$tmp/ds" bad good
+    good=$(printf '%s\n' '// ok' '// pins: messages 10 20' 'alias w2 "wait;wait"' 'alias w4 "w2;w2"' 'map base1' 'w4' 'record good' '+lookdown' 'teleport 1 -2 3.5' '-lookdown' 'stop' 'quit')
+    printf '%s\n' "$good" > "$tmp/ds/good.cfg"
+    (check_demo_script "$tmp/ds/good.cfg" good) || st_fail "a plain demo script must pass" || return 1
+    # each case: the good script recording "bad", with the teleport line replaced
+    printf '%s\n' "$good" | sed 's/^record good$/record bad/' > "$tmp/ds/bad.cfg"
+    (check_demo_script "$tmp/ds/bad.cfg" bad) || st_fail "the unchanged script recording its own name must pass" || return 1
+    for bad in 'nosuchcmd' 'record other' 'record bad' 'map base2' 'map ../x' 'exec x.cfg' '// a; quit' '// a "b' 'teleport ../x' ' wait' 'wait  ' 'echo "x"' \
+        'alias w8 "w2;nosuchcmd"' 'alias w8 "w2; wait"' 'bind x "quit"' 'wait;quit' '// pins: messages 10 20' \
+        '// pins: messages 0 999' '// pins: messages 097 124' '// pins: messages  97 124' '// pins: messages 97  124' '// pins: messages 97 124 ' \
+        '// pins: messages 97' '// pins: messages' '// pins: messages  ' '// pins:messages 97 124' '// pins: message 97 124' '// pins: messages 1234567890 1234567891'; do
+        printf '%s\n' "$good" | sed 's/^record good$/record bad/' | awk -v b="$bad" '$0 == "teleport 1 -2 3.5" {print b; next} {print}' > "$tmp/ds/bad.cfg"
+        if (check_demo_script "$tmp/ds/bad.cfg" bad) >/dev/null 2>&1; then st_fail "demo script line '$bad' must be refused"; return 1; fi
+    done
+    printf '%s\n' "$good" | grep -v '^map ' | sed 's/^record good$/record bad/' > "$tmp/ds/bad.cfg"
+    if (check_demo_script "$tmp/ds/bad.cfg" bad) >/dev/null 2>&1; then st_fail "a script without a map line must be refused"; return 1; fi
+    printf '%s\n' "$good" | grep -v '^record ' > "$tmp/ds/bad.cfg"
+    if (check_demo_script "$tmp/ds/bad.cfg" bad) >/dev/null 2>&1; then st_fail "a script that records nothing must be refused"; return 1; fi
+    printf '%s\n' "$good" | sed 's/^record good$/record bad/' | grep -v '^stop$' > "$tmp/ds/bad.cfg"
+    if (check_demo_script "$tmp/ds/bad.cfg" bad) >/dev/null 2>&1; then st_fail "a script without stop before quit must be refused"; return 1; fi
+    { printf '%s\n' "$good" | sed 's/^record good$/record bad/'; echo wait; } > "$tmp/ds/bad.cfg"
+    if (check_demo_script "$tmp/ds/bad.cfg" bad) >/dev/null 2>&1; then st_fail "a script that does not end with quit must be refused"; return 1; fi
+    for s in '/^\/\/ pins: messages/d' 's/^\/\/ pins: messages 10 20$/\/\/ pins: messages 20 10/' 's/^\/\/ pins: messages 10 20$/\/\/ pins: messages 5 20/' \
+        's/^\/\/ pins: messages 10 20$/\/\/ pins: messages 10 1234567890/'; do
+        printf '%s\n' "$good" | sed 's/^record good$/record bad/' | sed "$s" > "$tmp/ds/bad.cfg"
+        if (check_demo_script "$tmp/ds/bad.cfg" bad) >/dev/null 2>&1; then st_fail "a script whose message range is edited by '$s' must be refused"; return 1; fi
+    done
+    # the range make-demo compares with comes from the check, and is verified again before the engine starts
+    (check_demo_script "$tmp/ds/good.cfg" good; [ "$demo_lo $demo_hi" = "10 20" ]) || st_fail "the script check must set the range it accepted" || return 1
+    for s in '97|124' 'x|124' '097|124' '124|97' '0|999' "97 124
+0|124" '|' '97|'; do
+        if (demo_dir="$root/scripts/pins/demos"; check_demo_script() { demo_lo=${s%|*}; demo_hi=${s#*|}; }
+            PINS_DRYRUN=1 PINS_BASEDIR="$tmp/gd" cmd_make_demo water) >/dev/null 2>&1; then
+            [ "$s" = '97|124' ] && continue
+            st_fail "make-demo must refuse the message range '$s' before the engine starts"; return 1
+        elif [ "$s" = '97|124' ]; then st_fail "a dry run with the range 97 124 must pass"; return 1
+        fi
+    done
+    # a comparison that errors is never in range
+    demo_in_range 100 97 124 && demo_in_range 97 97 124 && demo_in_range 124 97 124 || st_fail "100, 97 and 124 are in 97 to 124" || return 1
+    for s in '96|97|124' '125|97|124' "500|97 124
+0|124" '500|97|124
+0 999' 'cut|97|124' '|97|124' '100|x|124' '100|97|'; do
+        local m=${s%%|*} l=${s#*|}; l=${l%|*}
+        if demo_in_range "$m" "$l" "${s##*|}" 2>/dev/null; then st_fail "demo_in_range must be false for '$s'"; return 1; fi
+    done
+}
+st_make_demo_run() { # TASK70: make-demo passes only with a whole demo, and fails fast on a missing map
+    local ok='for i in $(seq 100); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0'
+    local rep t0 d="$tmp/baseq2/demos/water.dm2"
+    rm -rf "$tmp/baseq2"
+    fake_demo_engine "$tmp/fake-demo" "$ok"
+    rep=$(PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-demo" cmd_make_demo water 2>&1) || st_fail "make-demo must pass with a whole demo: $rep" || return 1
+    [ -f "$d" ] && [ ! -f "$tmp/baseq2/pins_make_water.cfg" ] || st_fail "the demo must be left and the script copy removed" || return 1
+    case $rep in *"(100 messages, 97 to 124 wanted)"*"PINS_DEMO=water.dm2"*) ;; *) st_fail "make-demo must report the demo and how to record it: $rep"; return 1;; esac
+    echo keep >> "$d"
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-demo" cmd_make_demo water) >/dev/null 2>&1; then st_fail "an existing demo must not be replaced without --replace"; return 1; fi
+    grep -q keep "$d" || st_fail "the refused make-demo must leave the demo untouched" || return 1
+    (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-demo" cmd_make_demo water --replace) >/dev/null 2>&1 || st_fail "--replace must make the demo again" || return 1
+    if grep -q keep "$d"; then st_fail "--replace must leave a fresh demo"; return 1; fi
+    if (PINS_BIN="$tmp/fake-demo" cmd_make_demo water --replace) >/dev/null 2>&1; then st_fail "make-demo must refuse without PINS_BASEDIR"; return 1; fi
+    # a map missing from the game data: the engine stays up, the driver must not wait for PINS_TIMEOUT
+    fake_demo_engine "$tmp/fake-demo-nomap" 'echo "Can'"'"'t find maps/base1.bsp"; trap "exit 0" TERM; while :; do sleep 1; done'
+    t0=$SECONDS
+    rep=$( (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-demo-nomap" PINS_TIMEOUT=60 cmd_make_demo water --replace) 2>&1 ) && { st_fail "make-demo must fail when the map is missing"; return 1; }
+    [ $((SECONDS - t0)) -lt 10 ] || st_fail "a missing map must fail at once, not after PINS_TIMEOUT" || return 1
+    case $rep in *"map base1 is missing"*) ;; *) st_fail "a missing map must be named: $rep"; return 1;; esac
+    local body why
+    for body in 'exit 0|wrote no demo' \
+        'printf "\001\000\000\000x\001\000\000" > "$f"; exit 0|ends before its end marker' \
+        'printf "\001\000\000\000x\377\377\377\377" > "$f"; exit 0|holds only 1 messages' \
+        'for i in $(seq 96); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0|holds 96 messages, outside 97 to 124' \
+        'for i in $(seq 125); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0|holds 125 messages, outside 97 to 124' \
+        "${ok% exit 0} exit 139|status 139"; do
+        why=${body##*|}; fake_demo_engine "$tmp/fake-demo-bad" "${body%|*}"
+        rep=$( (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-demo-bad" cmd_make_demo water --replace) 2>&1 ) && { st_fail "make-demo must fail when it $why"; return 1; }
+        case $rep in *"$why"*) ;; *) st_fail "make-demo must say it $why: $rep"; return 1;; esac
+        [ ! -f "$d" ] || st_fail "a failed make-demo must not leave $d where PINS_DEMO finds it ($why)" || return 1
+        case $why in *outside*) [ -f "$d.failed" ] || st_fail "a demo outside its range must be kept as $d.failed" || return 1;; esac
+    done
+    fake_demo_engine "$tmp/fake-demo-hang" 'trap "exit 0" TERM; while :; do sleep 1; done'
+    rep=$( (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-demo-hang" PINS_TIMEOUT=2 cmd_make_demo water --replace) 2>&1 ) && { st_fail "make-demo must fail when the engine hangs"; return 1; }
+    case $rep in *"timed out after 2s"*) ;; *) st_fail "the timeout must be named: $rep"; return 1;; esac
+}
+st_make_demo_place() { # TASK70: the demo is never written into the game data or a tracked part of the repository
+    local rep r="$tmp/rp"
+    mkdir -p "$tmp/gd/bin"; cp "$tmp/fake-ok" "$tmp/gd/bin/quake2"
+    rep=$( (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/gd/bin/quake2" PINS_DRYRUN=1 cmd_make_demo water) 2>&1 ) && { st_fail "a binary inside PINS_BASEDIR must be refused"; return 1; }
+    case $rep in *"inside PINS_BASEDIR"*) ;; *) st_fail "the refusal must name PINS_BASEDIR: $rep"; return 1;; esac
+    ln -s "$tmp/gd" "$tmp/gd-link"
+    if (PINS_BASEDIR="$tmp/gd-link" PINS_BIN="$tmp/gd/bin/quake2" PINS_DRYRUN=1 cmd_make_demo water) >/dev/null 2>&1; then st_fail "PINS_BASEDIR reached through a link must be refused too"; return 1; fi
+    # a demos/ beside the binary that is a link into the game data
+    local p="$tmp/pl" f
+    mkdir -p "$p/baseq2" "$tmp/gd/baseq2/demos"; cp "$tmp/fake-ok" "$p/quake2"; ln -s "$tmp/gd/baseq2/demos" "$p/baseq2/demos"
+    rep=$( (PINS_BASEDIR="$tmp/gd" PINS_BIN="$p/quake2" PINS_DRYRUN=1 cmd_make_demo water) 2>&1 ) && { st_fail "a demos/ linked into PINS_BASEDIR must be refused"; return 1; }
+    case $rep in *"demos/water.dm2 inside PINS_BASEDIR"*) ;; *) st_fail "the linked demos/ must be refused for its place: $rep"; return 1;; esac
+    rm "$p/baseq2/demos"; ln -s "$tmp/no-such-dir" "$p/baseq2/demos"
+    if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$p/quake2" PINS_DRYRUN=1 cmd_make_demo water) >/dev/null 2>&1; then st_fail "a dangling demos/ link must be refused"; return 1; fi
+    # the demo, the script copy or the log as a link: nothing is written through it
+    rm "$p/baseq2/demos"; mkdir -p "$p/baseq2/demos" "$tmp/elsewhere"
+    fake_demo_engine "$p/quake2" 'for i in $(seq 100); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0'
+    (PINS_BASEDIR="$tmp/gd" PINS_BIN="$p/quake2" cmd_make_demo water --replace) >/dev/null 2>&1 || st_fail "make-demo must pass beside a plain demos/" || return 1
+    for f in demos/water.dm2 demos/water.dm2.failed pins_make_water.cfg pins_make_water.log; do
+        echo x > "$tmp/elsewhere/x"; rm -f "$p/baseq2/$f"; ln -s "$tmp/elsewhere/x" "$p/baseq2/$f"
+        if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$p/quake2" cmd_make_demo water --replace) >/dev/null 2>&1; then st_fail "make-demo must refuse when $f is a link"; return 1; fi
+        [ "$(cat "$tmp/elsewhere/x")" = x ] || st_fail "make-demo must not write through the link $f" || return 1
+        rm "$p/baseq2/$f"
+    done
+    command -v git >/dev/null 2>&1 || { echo "       make_demo_place: no git, skipped"; return 0; }
+    mkdir -p "$r/bin" "$r/release"; git -C "$r" init -q; printf '/release/\n' > "$r/.gitignore"; ln -s "$root/src" "$r/src"
+    cp "$tmp/fake-ok" "$r/bin/quake2"; cp "$tmp/fake-ok" "$r/release/quake2"
+    rep=$( (root="$r" PINS_BIN="$r/bin/quake2" PINS_DRYRUN=1 cmd_make_demo water) 2>&1 ) && { st_fail "a write directory the repository tracks must be refused"; return 1; }
+    case $rep in *"git does not ignore"*) ;; *) st_fail "the refusal must say git does not ignore it: $rep"; return 1;; esac
+    (root="$r" PINS_BIN="$r/release/quake2" PINS_DRYRUN=1 cmd_make_demo water) >/dev/null 2>&1 || st_fail "the git-ignored release/ must be accepted" || return 1
+    # a demos/ in the ignored release/ linked into a tracked directory of the repository
+    mkdir -p "$r/release/baseq2" "$r/tracked"; ln -s "$r/tracked" "$r/release/baseq2/demos"
+    rep=$( (root="$r" PINS_BIN="$r/release/quake2" PINS_DRYRUN=1 cmd_make_demo water) 2>&1 ) && { st_fail "a demos/ linked into a tracked directory must be refused"; return 1; }
+    case $rep in *"tracked/water.dm2 inside this repository"*) ;; *) st_fail "the linked demos/ must be refused for its place: $rep"; return 1;; esac
+    rm "$r/release/baseq2/demos"
+}
+st_make_demo_case() { # TASK70: a place spelled in another letter case is the same place
+    local rep c="$tmp/case" ok='for i in $(seq 100); do printf "\001\000\000\000x"; done > "$f"; printf "\377\377\377\377" >> "$f"; exit 0'
+    mkdir -p "$c/GDCASE/baseq2/demos" "$c/GDCASE/bin" "$c/e3/baseq2"
+    if [ ! -d "$c/gdcase" ]; then echo "       make_demo_case: $c is on a case-sensitive volume, skipped"; return 0; fi
+    # the reviewers' fixtures: demos/ linked into the game data under another spelling, then no link
+    fake_demo_engine "$c/e3/quake2" "$ok"; ln -s "$c/gdcase/baseq2/demos" "$c/e3/baseq2/demos"
+    rep=$( (PINS_BASEDIR="$c/GDCASE" PINS_BIN="$c/e3/quake2" cmd_make_demo water) 2>&1 ) && { st_fail "a demos/ linked into PINS_BASEDIR in another case must be refused: $rep"; return 1; }
+    case $rep in *"inside PINS_BASEDIR"*) ;; *) st_fail "the refusal must name PINS_BASEDIR: $rep"; return 1;; esac
+    [ ! -e "$c/GDCASE/baseq2/demos/water.dm2" ] || st_fail "nothing may land in the game data" || return 1
+    fake_demo_engine "$c/GDCASE/bin/quake2" "$ok"
+    rep=$( (PINS_BASEDIR="$c/gdcase" PINS_BIN="$c/GDCASE/bin/quake2" cmd_make_demo water) 2>&1 ) && { st_fail "a binary inside PINS_BASEDIR in another case must be refused: $rep"; return 1; }
+    case $rep in *"inside PINS_BASEDIR"*) ;; *) st_fail "the refusal must name PINS_BASEDIR: $rep"; return 1;; esac
+    [ ! -e "$c/GDCASE/bin/baseq2" ] || st_fail "nothing may be written beside a binary in the game data" || return 1
+    # the repository root spelled in another case
+    command -v git >/dev/null 2>&1 || { echo "       make_demo_case: no git, repository case skipped"; return 0; }
+    mkdir -p "$c/RP/bin"; git -C "$c/RP" init -q; printf '/release/\n' > "$c/RP/.gitignore"; ln -s "$root/src" "$c/RP/src"
+    cp "$tmp/fake-ok" "$c/RP/bin/quake2"
+    rep=$( (root="$c/rp" PINS_BIN="$c/RP/bin/quake2" PINS_DRYRUN=1 cmd_make_demo water) 2>&1 ) && { st_fail "a tracked write directory under another spelling of the repository must be refused: $rep"; return 1; }
+    case $rep in *"git does not ignore"*) ;; *) st_fail "the refusal must say git does not ignore it: $rep"; return 1;; esac
+}
+st_demo_sum() { # TASK70: a demo beside the binary is part of the pin id
+    rm -rf "$tmp/baseq2"
+    local a b c w
+    a=$(PINS_DEMO=water.dm2 run_id skywater 1); w=$(run_id world 1)
+    mkdir -p "$tmp/baseq2/demos"; printf 'one' > "$tmp/baseq2/demos/water.dm2"
+    b=$(PINS_DEMO=water.dm2 run_id skywater 1)
+    printf 'two' > "$tmp/baseq2/demos/water.dm2"
+    c=$(PINS_DEMO=water.dm2 run_id skywater 1)
+    [ "$a" != "$b" ] && [ "$b" != "$c" ] || st_fail "the pin id must change with the demo beside the binary: $a $b $c" || return 1
+    [ "$w" = "$(run_id world 1)" ] && [ "$w" = "$cid" ] || st_fail "a demo found only in the game data must keep its id" || return 1
+    rm -rf "$tmp/baseq2"
+}
 
 cmd_selftest() {
     # the selftest must not depend on, or act on, the caller's environment
@@ -728,12 +1195,16 @@ cmd_selftest() {
     fake_engine "$tmp/fake-other" soft 'exit 0'
     fake_engine "$tmp/fake-hang" - 'trap "exit 0" TERM; while :; do sleep 1; done'
     fake_engine "$tmp/fake-drop" - 'echo "Error: Couldn'"'"'t open demos/x.dm2"; exit 1'
+    fake_engine "$tmp/fake-shim" - 'echo "GL_RENDERER: Metal shim on a test device (gl1-metal)"; exit 0'
+    fake_engine "$tmp/fake-spoof-shim" - 'echo "GL_RENDERER: Test OpenGL Engine"; echo "GL_RENDERER: hello (gl1-metal)"; exit 0'
+    fake_engine "$tmp/fake-spoof-gl" - 'echo "GL_RENDERER: Metal shim on a test device (gl1-metal)"; echo "GL_RENDERER: Test OpenGL Engine"; exit 0'
     export PINS_BIN="$tmp/fake-ok"
     cid=$(run_id world 1)
     local c failed=""
     for c in framediff framediff_block compare_basic compare_bad_threshold ref_mtime missing_frame self_compare \
         two_runs incomplete record_engine timeout fallback names cmdline thresholds scenarios argcount frame_failed list \
-        scenario_lines store_place fast_fail demo_name replace engine_id; do
+        scenario_lines store_place fast_fail demo_name replace engine_id metal_shim usage \
+        make_demo_args make_demo_script make_demo_run make_demo_place make_demo_case demo_sum; do
         rm -rf "$PINS_STORE/world"
         if ( set -e; "st_$c" ); then echo "  ok   $c"; else echo "  FAIL $c"; failed="$failed $c"; fi
     done
@@ -744,7 +1215,8 @@ cmd_selftest() {
 case "${1:-}" in
     record)   [ $# -ge 3 ] || die "usage: pins.sh record <renderer> <scenario> [--run N] [--replace]"; shift; cmd_record "$@";;
     compare)  [ $# -ge 3 ] || die "usage: pins.sh compare <renderer> <scenario> [--ref r] [--ref-id d] [--run N | --cand-id d] [--threshold t] [--bad-threshold b]"; shift; cmd_compare "$@";;
+    make-demo) [ $# -ge 2 ] || die "usage: pins.sh make-demo <name> [--replace]"; shift; cmd_make_demo "$@";;
     list)     cmd_list;;
     selftest) cmd_selftest;;
-    *) sed -n '2,82p' "$0" | sed 's/^# \{0,1\}//'; exit 1;;
+    *) usage; exit 1;;
 esac

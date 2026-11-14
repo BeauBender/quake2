@@ -19,7 +19,7 @@ renderer is judged with it, and what the first run on real data found.
 | Frame writer, no stb | `VID_WritePinFrame` in `src/client/vid/vid.c` | run on `soft`: 23 frames per scenario, 640x480, upright (TASK39) |
 | No renderer fallback while capturing | `VID_CheckChanges` in `src/client/vid/vid.c` | compiles and links; the failure path has not been provoked |
 | Capture before present | `SCR_PinsCapture` in `src/client/cl_screen.c` | run on `soft`: complete frames with the status bar (TASK39); not run on `gl1` |
-| gl1 screenshot flushes the batched 2D quads before reading | `R_ScreenShot` in `src/client/refresh/gl1/gl1_misc.c` | compiles and links; never run (`gl1` cannot create a context on the build VM) |
+| gl1 screenshot flushes the batched 2D quads before reading | `R_ScreenShot` in `src/client/refresh/gl1/gl1_misc.c` | compiles and links; the context now exists on the build VM (TASK80) but the screenshot is not yet compared with a pre-change one |
 | Unattended quit at end of demo, non-zero exit on a broken demo | `CL_PinsFrame` in `src/client/cl_main.c`, `SV_DemoEnd` in `src/server/sv_send.c`, `Com_Error` in `src/common/clientserver.c` | run: every record quits by itself with status 0; a missing demo and a short demo file without its end marker were run and exit 1 within about a second; a demo cut after playback began and playback stopping without a demo end are implemented but not observed (TASK39) |
 | No saved configuration in a pin run | `Qcommon_ExecConfigs` in `src/common/frame.c`, `CL_WriteConfiguration` in `src/client/cl_main.c` | run: the engine log shows no `config.cfg` exec and none is written (TASK39) |
 | Driver: record, compare, list, selftest | `scripts/pins.sh` (bash 3.2) | selftest green; `record` and `compare` run against the engine on real data (TASK39) |
@@ -29,11 +29,12 @@ renderer is judged with it, and what the first run on real data found.
 | Argument limit raised: `MAX_NUM_ARGVS` in `src/common/argproc.c` is 128 (was 50); `record` passes 66 to 69 words and the engine refused more than 50 at startup | `scripts/pins.sh selftest` case `argcount` and `tests/check-pins-latch.sh` feed every scenario's command line to the real `COM_InitArgv` | green in `scripts/test.sh`; the engine accepts 69 words (TASK39) |
 | Renderer-API record serializers and the 22 wrapper hooks in `vid.c`, recording off | `src/client/vid/refrecord.c`, `src/client/vid/header/refrecord.h`, `tests/check-refrecord.sh` | every record type round-trips through a buffer in `tests/check-refrecord.sh` (green in `scripts/test.sh`); observed on one host: the `world` scenario recorded on `soft` with a build of the base commit and with a build of the hooks gave 23 frames each, and all 23 frame files and the manifest compared byte-identical with `cmp` (TASK42) |
 | Renderer-API recording behind `pins_record`: handle map, `refdef_t` deep copy, string table, frame index, header patched at stop | `RefRec_*` recorder in `src/client/vid/refrecord.c`, `VID_StartRecord` in `src/client/vid/vid.c`, `pins_record` in `CL_PinsLatch`, `pins.sh record` (`PINS_TRACE=0` for none) | `tests/check-refrecord.sh` records traces and reads them back whole, failure paths included; observed on one host: `world` and `hud2d` on `soft` each left a 707-frame trace (about 4.4 MB) with 23 `REC_CAPTURE` records for the 23 frames captured, a 162-entry string table equal to the 162 distinct names a debug listing of the registration wrappers logged (to repeat: the trace side is `refrecord-test --read <trace> --names`, one `kind name` line per entry, from the test binary `tests/check-refrecord.sh` builds; the engine side was a temporary print, not in the tree, in `R_BeginRegistration`, `R_RegisterModel`, `R_RegisterSkin`, `Draw_FindPic` and `R_SetSky` of `vid.c`, logging the kind and name of each registration; registrations that returned a NULL handle were excluded, since they get no table entry by design; the two sets of distinct kind and name pairs were compared), and frames byte-identical (`cmp`) to a run with `PINS_TRACE=0` (TASK43) |
+| A scripted demo that shows water: `make-demo <name>` runs a console script in a local game and leaves `demos/<name>.dm2` beside the binary, failing a demo outside the message range the script states; a demo there adds its checksum to the pin id | `scripts/pins.sh` (`cmd_make_demo`, `check_demo_script`, `demo_sum`), `scripts/pins/demos/water.cfg` | selftest cases `make_demo_*` and `demo_sum`; run on real data, and `skywater` recorded from the demo on `soft` (TASK70) |
 | Gate checks, no game data needed | `tests/check-pins.sh`, `tests/check-pins-latch.sh` | green in `scripts/test.sh` |
 
 The client and `ref_soft` link and run on macOS arm64 against SDL3
 3.4.20 (`make client ref_soft game`, SDL 3 built from `third_party/SDL3/`). `ref_gl1`
-and `ref_gl3` build there too; `gl1` references are card P3's.
+and `ref_gl3` build there too; `gl1` references are card P3's (TASK41, below).
 
 In the tree from the renderer-API recorder (design in
 `docs/plans/refapi-record-replay.md`): the record serializers, the wrapper
@@ -171,8 +172,9 @@ Host: the build VM, macOS arm64, `soft` at 640x480, `PINS_EVERY` 30,
    complete frame on `soft`: world, view weapon and status bar are all in
    the captured frames, and a frame opened in an image viewer is upright
    (floor at the bottom, status bar at the bottom edge, numbers reading
-   left to right; TASK9's acceptance). Not run on `gl1`: `ref_gl1` cannot
-   create a GL context on the build VM, so whether its screenshot (which
+   left to right; TASK9's acceptance). Not run on `gl1`: at the time
+   `ref_gl1` could not create a GL context on the build VM (fixed by
+   TASK80, below), so whether its screenshot (which
    now flushes the 2D batch first) is unchanged stays open for a host
    where `gl1` runs (card P3).
 5. The owner's data holds two demos, both in `pak0.pak`: `demo1.dm2` and
@@ -262,15 +264,298 @@ Host: the build VM, macOS arm64, `soft` at 640x480.
    then reports a frame-count difference. When one scenario is recorded
    with several settings, name the reference with `--ref-id`.
 
+## Observed on the scripted water demo (TASK70)
+
+Host: the build VM, macOS arm64, shared with other work and busy
+throughout (load averages from `uptime` given per item), `soft` at
+640x480, the default `PINS_EVERY` 30.
+
+1. The demo: `scripts/pins.sh make-demo water` runs
+   `scripts/pins/demos/water.cfg`. It loads `base1`, the first map of the
+   game, gives `god`, `notarget` and `noclip` before `record water`, then
+   `teleport`s the player to fixed coordinates over the large pool of
+   that map (the eye about 24 units above the surface, level), holds 260
+   `wait`s, moves it under the surface (about 24 units below) and holds
+   320. It leaves `water.dm2` in `release/baseq2/demos/`; `git status`
+   stayed clean, and nothing under `$PINS_BASEDIR` changed (checked with
+   `find -newer` against a marker, TASK70 first review).
+2. The length is not fixed. Console `wait` holds the script for one frame
+   of at least 16 ms (`Cbuf_Execute`), so a wait count is a lower bound on
+   time, and the engine has nothing that holds a script for a number of
+   server frames (`fixedtime` and `timedemo` change the clock the server
+   and the frame loop see, not the real-time test of `wait`). The first
+   version held each place for 500 waits; reviewers measured 168 to 835
+   messages and 6 to 21 captured frames from it. So the script states the
+   message range it must give (97 to 124) and `make-demo` fails a demo
+   outside it, keeping it as `water.dm2.failed`. With the current
+   script, 7 runs with nothing else of this task running (load 108 to
+   232) gave 100 or 101 messages. 5 runs made while this task's own
+   mutant runs of the selftest shared the host (load 88 to 195) gave 103
+   and 118 (passed) and 140, 165 and 189 (failed for the range). A run
+   took 21 to 47 seconds. Re-measured on a quieter host (TASK70 rework):
+   15 runs at load 5.8 to 28.0 gave 99 or 100 messages in 17 to 21
+   seconds; 7 runs with the engine stopped (`kill -STOP` and `-CONT` on
+   its pid) for 0.1 to 0.5 s of every second from its start, at load 7.5
+   to 13.2, gave 110 to 126 messages in 20 to 33 seconds (one of 126
+   failed for the range).
+3. Why no walking: a walk timed by waits would end in a different place
+   on another host. A teleport lands on fixed coordinates. In `noclip` the
+   player has no gravity, so it stays there, and the teleport's pause
+   flag, which holds the pitch at 0 until its timer runs down, never
+   clears in `noclip` (`Pmove` returns before the timer for
+   `PM_SPECTATOR`), so the view is level at the yaw of the level start.
+   `+lookdown` therefore has no effect after a teleport in `noclip`; tried,
+   the pitch stayed at 0.
+4. Water, relative to the capture: every `skywater` record made from a
+   demo in range (from three demos of 100, 100 and 103 messages, 19
+   records) captured 4 frames. The first 2 show the pool from just above:
+   a rippled, warped water surface over the lower half of the frame, the
+   walls and the ceiling lights above it. The last 2 show the view from
+   under the surface: the whole view warped, the pool floor below and the
+   underside of the surface above. The move under water falls between
+   the second and the third capture, and a longer or shorter demo inside
+   the range scales both holds alike, which is what the range is chosen
+   for. The rework measured it over the range (the 22 runs of item 2, a
+   record at `PINS_EVERY` 30 and one at `PINS_EVERY` 1 of each demo): a
+   demo of N messages rendered N-5 frames in all 22, and the move under
+   water fell on rendered frame 41 to 53, 0.44 to 0.45 of the frames. The
+   21 demos of 99 to 122 messages each gave 4 captures, 2 from above and 2
+   from under the surface; the one of 126 messages rendered 121 frames and
+   gave 5 (2 and 3), the fifth falling on frame 120. Captures fall on
+   rendered frames 0, 30, 60, 90 and 120, so 4 captures need 91 to 120
+   rendered frames, 96 to 125 messages; the script's range, 97 to 124,
+   keeps one message inside each edge against a change in the 5-message
+   lead (none seen in 22 runs), and the move under water stays at least
+   11 frames after the second capture and 7 before the third.
+5. Run to run: records of one demo file compared at score 0 and bad
+   fraction 0 in all 27 pairs measured (6 pairs at load 192 to 197 and
+   15 pairs at load 182 to 184 from a 103-message demo, 6 pairs at load
+   142 to 144 from a 100-message demo). The first review measured, while
+   the host was loaded by several engines, a few frames per pair of
+   21-frame records at score 0.0017 and bad fraction 0.018 to 0.020. The
+   cause is time-dependent rendering, not the demo or the capture
+   cadence: the soft renderer animates the water warp by the client
+   time, and in a timedemo `CL_AddEntities` clamps that time to between
+   100 ms before and the time of the frame being shown, so it equals the
+   lower bound, the same in every run, while frames take less than
+   100 ms, and follows the real clock on a frame that takes longer.
+   Reproduced: two records with the engine stopped for 150 ms of every
+   160 ms (`kill -STOP` and `-CONT` on its pid) each differed from an
+   unstalled record on one frame showing the surface from above, at
+   score 0.001776 and bad fraction 0.020898; the frames under water and
+   the frame indices were the same. The row below records the threshold.
+6. Regeneration: a demo made again is a different file of the same
+   camera places, so it is not byte-identical. Because a demo beside the
+   binary adds its checksum to the pin id, records of two made demos
+   never share an id; compare them with `--ref-id` and `--cand-id`.
+7. A script whose map is not in the game data (tried with a throwaway
+   script naming a map that does not exist) fails in 4 seconds with
+   `the map <map> is missing from PINS_BASEDIR`.
+8. The run writes `config.cfg`, `qconsole.log`, `pins_make_water.log`,
+   `save/current/`, `save/save0/` and `scrnshot/` into `release/baseq2/`
+   and `console_history.txt` into `release/`, all git-ignored, as a
+   portable single-player start does.
+
 ### Thresholds measured for nondeterministic scenarios
 
 | Scenario | Worst score | Worst bad fraction | Accept with |
 |---|---|---|---|
 | `models` | 0.000446 | 0.000973 | the defaults (`--threshold 0.02 --bad-threshold 0.005`) |
 | `particles` | 0.011556 | 0.172061 | `--threshold 0.02 --bad-threshold 0.25` |
+| `skywater` with `PINS_DEMO=water.dm2` | 0.001776 | 0.020898 | `--threshold 0.02 --bad-threshold 0.03` |
 
-Measured on `soft` over five pairs of runs (run 1 against runs 2 to 6).
+Measured on `soft` over five pairs of runs (run 1 against runs 2 to 6);
+`skywater` from `water.dm2` over 27 pairs at score 0 and two records made
+with the engine stalled (TASK70, item 5 above).
 A fixed PRNG seed (record and replay group) would make both exact.
+
+## `gl1` on the build host (TASK80)
+
+`ref_gl1` used to stop on the build VM with "Failed creating OpenGL
+pixel format", because it demands an accelerated visual and the only
+OpenGL renderer there is Apple's software one. Since TASK80 it retries
+once without that demand (in `RI_InitContext`, where the context is
+created; a failure of the retry is reported as before) and switches
+vsync off for such a context: with vsync on, the first buffer swap
+waited for a display sync that never came and the engine drew no frame
+in 240 s. The engine log of a pin now shows `GL_VENDOR: Apple Inc.`,
+`GL_RENDERER: Apple Software Renderer`, `GL_VERSION: 2.1 APPLE-24.0.2`.
+
+Observed on this host (machine load average 10 to 60 over the runs, other
+work running): `record gl1 world` takes 17 to 24 s for 23 frames, `soft`
+3 to 7 s. Three `gl1` records of `world` compare at score 0.000000 and bad
+0.000000 on every frame (23 of 23), so the software OpenGL renderer is
+deterministic here. `soft` against `gl1` on `world`: score 0.013 to
+0.081, bad fraction 0.13 to 0.92 per frame, all 23 over the default
+thresholds. The frames show the same scenes; `gl1` is smoother and
+slightly darker (true colour and bilinear filtering against the software
+renderer's 8-bit palette: 3589 to 41005 distinct colours per `gl1` frame
+against 105 to 189 per `soft` frame), so thresholds for `soft` against
+`gl1` are card P3's to set.
+
+## `gl1` references and the `soft` against `gl1` thresholds (TASK41, card P3)
+
+Host: the build VM, macOS arm64, `ref_gl1` through Apple's software
+OpenGL (engine log: `GL_VENDOR: Apple Inc.`, `GL_RENDERER: Apple Software
+Renderer`, `GL_VERSION: 2.1 APPLE-24.0.2`), 640x480, the default `PINS_EVERY`
+30 except `cinematic` (`PINS_DEMO=idlog.cin PINS_EVERY=7`). The `gl1` frames
+are therefore references for the shim's arithmetic, not for a graphics card;
+a recording on accelerated hardware has a different `GL_RENDERER` and has to
+be measured again, not assumed equal to these.
+
+Method, per scenario: four `gl1` records (`record gl1 <scenario>`, then
+`--run 2` to `--run 4`) and three `soft` records, from one build, one after
+the other. Every pair is compared with `compare --cand-id <dir> --ref <r>
+--ref-id <dir>`: the 6 `gl1`/`gl1` pairs, the 3 `soft`/`soft` pairs and all
+12 `soft`/`gl1` pairs. Scores are per frame (mean difference, and the
+fraction of pixels more than 8/255 apart in some channel); the ranges below
+run over all frames of all pairs of the group. Every record exited 0. Load
+is the 1-minute load average from `uptime` at the end of each record and at
+the start of each compare (the machine was shared with other work all the
+time; the range given is over all runs of the row).
+`skywater` was measured with `water.dm2` made by `make-demo water` (100
+messages) and with the stock `demo1.dm2`.
+
+| Scenario | Demo | Frames | `gl1`/`gl1` noise (score, bad) | `soft`/`soft` noise (score, bad) | `soft`/`gl1` range (score, bad), worst frame | Proposed `soft` against `gl1` threshold | Load |
+|---|---|---|---|---|---|---|---|
+| `world` | `demo1.dm2` | 23 | exact: 0, 0 in 6 of 6 pairs | exact: 0, 0 in 3 of 3 | 0.013180 to 0.081482; 0.132624 to 0.922676 | none: not meaningful (below) | 11.6 to 21.3 |
+| `hud2d` | `demo1.dm2` | 23 | exact: 0, 0 in 6 of 6 | exact in 3 of 3 | 0.461199 to 0.464962; 0.990553 to 0.998561 | none: not meaningful (below) | 13.8 to 20.9 |
+| `models` | `demo1.dm2` | 23 | not exact in 6 of 6: worst 0.000826, 0.004583 | not exact in 3 of 3: worst 0.000150, 0.000345 | 0.015337 to 0.090930; 0.179834 to 0.925937 | none: not meaningful | 10.9 to 20.9 |
+| `particles` | `demo1.dm2` | 23 | not exact in 6 of 6: worst 0.010232, 0.172093 | not exact in 3 of 3: worst 0.011482, 0.130306 | 0.028070 to 0.141715; 0.408568 to 0.998324 | none: not meaningful | 16.2 to 30.6 |
+| `skywater` | `water.dm2` | 4 | not exact in 3 of 6 pairs: worst 0.002562, 0.022972 | exact in 3 of 3 | 0.030261 to 0.033948; 0.539687 to 0.673857 | `--threshold 0.034 --bad-threshold 0.68` (below) | 16.7 to 19.5 |
+| `skywater` | `demo1.dm2` | 23 | exact: 0, 0 in 6 of 6 | exact in 3 of 3 | identical to `world`: 0.013180 to 0.081482; 0.132624 to 0.922676 | none: not meaningful | 16.2 to 26.0 |
+| `cinematic` | `idlog.cin`, every 7th | 12 | exact: 0, 0 in 6 of 6 | exact in 3 of 3 | 0 to 0.018680; 0 to 0.322956 (frame 0 is black and exact) | `--threshold 0.02 --bad-threshold 0.35` | 17.2 to 23.8 |
+
+Each cell of the `soft`/`gl1` column is "score range; bad-fraction range":
+the smallest and the largest per-frame value over all frames of all 12
+pairs (the largest is the worst frame). All records are from the build of
+commit `885e70fa` (the base of this work).
+
+Renderer string of every `gl1` number above: `Apple Software Renderer`.
+
+The `models` row comes from two measurement sets (the original one at
+1-minute load 10.9 to 20.0 and a re-measurement by the review of this card,
+4 `gl1` and 3 `soft` records of the same build, load 11.2 to 20.9); the
+worst values in it, 0.000826 for `gl1`/`gl1` and 0.090930 for `soft`/`gl1`,
+come from the second set (the first had 0.000260 and 0.090400). Every
+column of the table holds sample maxima of a scenario driven by the engine's
+PRNG, not bounds: a further record can exceed them.
+
+### Where an agreement threshold means something
+
+Two scenarios have one: `cinematic` and `skywater` with `water.dm2`.
+
+`cinematic`: its `soft`/`gl1` frames agree to score 0.0187 and bad fraction
+0.323 at worst, and the proposal keeps the default score threshold 0.02 and
+sets the bad fraction at 0.35, following the convention of "Thresholds
+measured for nondeterministic scenarios" (the default where the worst value
+is under it, otherwise the worst value rounded up, never widened to make a
+pin pass). The bad fraction is loose, so both values reject a wrong picture:
+black against the `gl1` frames at `--threshold 0.02 --bad-threshold 0.35`
+passes frame 0 (which is black) and is over on frames 1 to 11, with score
+0.049713 to 0.117941 and bad fraction 0.969580 to 1.000000 (the review of
+this card, `framediff`, load 10.3). The score margin against 0.02 is small
+(7 percent), so a third renderer that is smoother or sharper than either of
+these may land over it; that would be a finding, not a threshold to move.
+
+`skywater` with `water.dm2`: the worst `soft`/`gl1` values are score
+0.033948 and bad fraction 0.673857, so the threshold is the worst value
+rounded up, `--threshold 0.034 --bad-threshold 0.68`. It rejects a black
+frame: made with `framediff --block <gl1 frame> <out> 0 0 640 480 0` from
+each of the 4 frames of one `gl1` record and scored with the comparator,
+black scores 0.044689, 0.052517, 0.052069 and 0.041041 with bad fraction
+0.767340, 0.767340, 0.994681 and 0.993538, over on all four frames at both
+values (1-minute load 7.4, this card's rework). The margin is small on the
+score (0.041 against 0.034) and rests on 4 frames, so it is a starting
+value for a candidate that is not `soft`, not a proof that a wrong picture
+cannot pass.
+
+For the others no agreement threshold is meaningful. `soft` and `gl1` draw
+different pictures of the same scene: bad fractions run from 0.13 to 0.92
+on `world`, 0.18 to 0.93 on `models`, 0.41 to 0.998 on `particles` and 0.99
+on `hud2d`, and `skywater` with `demo1.dm2` is identical to `world`. A
+black frame against the `gl1` frames, scored with the comparator by the
+review of this card (load 10.3), is over the threshold on only some frames
+when the threshold is wide enough to pass every `soft` frame: at
+`--threshold 0.081482 --bad-threshold 0.922676` (the worst `world` values)
+it passes 15 of 23 frames of `world` and is over on 8 (score 0.037498 to
+0.148949, bad fraction 0.617708 to 0.998796 over the frames); at 0.090930
+and 0.925937 (the worst `models` values) it passes 15 of 23 frames of
+`models` and is over on 8. A record as a whole fails when any frame is over,
+so an all-black record is still rejected, but such a threshold cannot tell
+a wrong picture on most single frames, and the `soft`/`gl1` ranges overlap
+the black-frame ranges. The `particles` black frame (score 0.0484 to
+0.2121) is an estimate from a throwaway script, not the comparator, and
+was not re-measured. `hud2d` is a different case: its reason is the clear
+colour (below), and black scores 0.489265 to 0.499510 there, above the
+worst `soft`/`gl1` value 0.464962, so a threshold that passes `soft` rejects
+every black frame; the `soft`/`gl1` difference there is a property of the
+scenario, not of the picture. So a third renderer cannot be judged against
+`soft` by these numbers, and the judge for the shim is `gl1`, not `soft`.
+Causes, each checked by looking at a pair of frames (downscaled to PNG in
+scratch, one pair per cause):
+
+- Colour depth: `soft` draws from the 8-bit palette, 93 to 174 distinct
+  colours per frame in the frames looked at, and `gl1` 1923 to 28318 (true
+  colour). Seen in a zoomed crop of `world` frame 6: the `soft` pixels
+  are blocky and speckled, the `gl1` ones smooth.
+- Filtering: on `cinematic` frame 3, zoomed 5 times, `soft` shows the
+  picture as hard-edged blocks and `gl1` as bilinear-smoothed ones. The
+  `gl1` frame is also slightly brighter here (mean RGB 51.9, 20.5, 10.1
+  against 45.0, 16.5, 7.7), the opposite of `world`.
+- Lighting and tint: on every `world` frame looked at (7 of 23, and 2 of
+  4 on the water demo) `gl1` is darker and redder, for example `world`
+  frame 6 mean RGB 39.0, 33.6, 26.9 on `soft` against 30.6, 21.2, 9.5 on
+  `gl1`, and the underwater frame of the water demo shows the `soft`
+  green-grey tint as a dark red-brown on `gl1`. The cause of the tint was
+  not isolated.
+- Clear colour in `hud2d`: with `r_drawworld 0` `soft` leaves a uniform
+  grey (26, 26, 26) and `gl1` its own clear colour (255, 0, 128, set in
+  `R_ResetClearColor` in `gl1_main.c`), 304,338 and 304,308 of 307,200
+  pixels. That is the whole of the 0.46 score; the status bar and
+  crosshair are the same size in both.
+- Not isolated: on `world` frame 21 the cloud pattern of the sky and the
+  top of the tower differ in shape between the renderers; the cause was
+  not found.
+
+### `gl1` against `gl1`: the floor for the Metal shim
+
+The thresholds the shim is judged at are `gl1-metal` against `gl1`. No
+Metal frame draws yet; the starting values are in the table below, and the
+first shim card that draws each scenario confirms or revises them. The
+`gl1`/`gl1` column is their lower bound: a `gl1-metal` threshold under it would fail two
+records of `gl1` itself. `world`, `hud2d`, `cinematic` and `skywater` from
+`demo1.dm2` are exact, so any difference there is a real one. `models`
+(worst bad fraction 0.004583, close to the default 0.005 that
+`models` is accepted at), `particles` and `skywater` from `water.dm2`
+are not exact between two `gl1` records, so for those the floor is the
+worst value in the column, and a Metal candidate is judged against at least
+two `gl1` references and the noise of each.
+These are numbers from Apple's software renderer; on accelerated hardware
+measure them again. The worst values in the column are sample maxima of a
+PRNG-driven scenario, not bounds (`models` was measured twice and the
+second set was worse), so a floor is a lower bound on what to accept, not
+the number to accept at.
+
+Accept `gl1-metal` against `gl1` at (starting values; the first shim card
+drawing each scenario confirms or revises them, recording the measurement
+if it does):
+
+| Scenario | Accept at | Why |
+|---|---|---|
+| `world` | `--threshold 0.02 --bad-threshold 0.005` (the defaults) | `gl1`/`gl1` is exact |
+| `hud2d` | the defaults | exact |
+| `cinematic` | the defaults | exact |
+| `skywater` with `demo1.dm2` | the defaults | exact |
+| `models` | the defaults, 0.02 and 0.005 | `gl1`/`gl1` worst score 0.000826 is far under 0.02, but the worst bad fraction 0.004583 is 0.0004 under 0.005, so `gl1-metal` has about 8 percent of room on the bad fraction before it is over; widening it is a finding for the card to record, with its measurement |
+| `particles` | `--threshold 0.02 --bad-threshold 0.25` (the `// nondeterministic:` line) | `gl1`/`gl1` worst 0.010232 and 0.172093 |
+| `skywater` with `water.dm2` | `--threshold 0.02 --bad-threshold 0.03` (the `// nondeterministic:` line) | `gl1`/`gl1` worst 0.002562 and 0.022972 |
+
+The `// nondeterministic:` lines of the scenario files are unchanged:
+`gl1` shows the same nondeterminism as `soft` (`models`, `particles`,
+and the water demo), inside the numbers they already carry for `particles`
+and `skywater` (`gl1`/`gl1` 0.010232 and 0.172093; 0.002562 and 0.022972,
+under `--bad-threshold 0.03`), and just under their default for `models`.
 
 ## Judging a renderer
 

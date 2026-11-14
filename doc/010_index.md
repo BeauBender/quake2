@@ -1,17 +1,21 @@
-# Yamagi Quake II Documentation
+# Portmanbeau Quake II Documentation
 
-Welcome to the Yamagi Quake II documentation. Here is documented how
-Yamagi Quake II is installed and configured. Please make sure to read
+Welcome to the Portmanbeau Quake II documentation. Here is documented how
+Portmanbeau Quake II is installed and configured. Please make sure to read
 through the whole guide before asking questions!
+
+Portmanbeau Quake II is based on Yamagi Quake II, which descends from
+Icculus Quake II and id Software's Quake II source release. The files
+are modified from upstream; the git history is the record.
 
 Some general hints:
 
 * No matter what's the current keyboard layout or on which platform the
   game is running, the console is always opened and closed by pressing
   **Left Shift + Escape**.
-* Yamagi Quake II saves its configuration, savegames and screenshots to
+* Portmanbeau Quake II saves its configuration, savegames and screenshots to
   *~/.yq2* (unixoid platforms) or *My Documents\YamagiQ2* (Windows).
-  If Yamagi Quake II is started with the `-portable` switch all data is
+  If Portmanbeau Quake II is started with the `-portable` switch all data is
   saved in the same directory as the executables.
 
 The documentation is split into several documents:
