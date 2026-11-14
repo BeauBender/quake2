@@ -1660,7 +1660,7 @@ scripts/pins.sh compare metal dlights --ref gl1-metal --ref-id <each reference> 
 # the same with PINS_DEMO=demo2.dm2 PINS_EVERY=7 (89 frames, the animated lightstyles), and for models
 # world, skywater, world-fullbright, hud2d as in N6; cinematic as in N2
 # scratch copies, deleted after: models plus "set r_shadows 1" and "set gl1_stencilshadow 1" (and 0),
-# dlights plus "set gl1_flashblend 1", dlights plus "set gl1_dynamic 0" (the control, recorded seeded)
+# dlights plus "set gl1_flashblend 1" (or by hand, below), dlights plus "set gl1_dynamic 0" (the control, recorded seeded)
 ```
 
 `dlights` is not deterministic unseeded: the muzzle-flash and
@@ -1731,7 +1731,29 @@ whose `metal_stats` line counted surfaces "drawn without their dynamic
 light" is gone with the count (the line now ends with the dynamic lights
 left out for a float that is not finite or out of bounds, 0 on every
 frame of the game's demos); `dlights` and `models` draw no particle, so
-only `particles` waits for N9.
+only `particles` waits for N9. The counts come from a hand run of
+`metal` per scenario, as in N2: `PINS_DRYRUN=1`'s command line of the
+record without `+set pins_record trace.q2r`, a scratch `pins_dir`, plus
+`+set metal_stats 1`, under `MTL_DEBUG_LAYER=1`. At `9a47f6e0` on
+`demo1.dm2` both `models` and `dlights` printed one line per captured
+frame, 23 each (and one more at shutdown), every one reading `0 draws
+skipped`, `23 pipelines, 0 created after init` and `skipped surfaces: 0
+sky, 0 warped, 0 translucent, 0 flowing; 0 dynamic lights left out;
+skipped entities: 0 sprites, 0 beams, 0 null models, 0 translucent brush
+models, 0 refused`: no frame skips a surface, an entity or a light.
+
+The flash-blob copy needs no scenario file: run the engine by hand with
+the seeded command line of `dlights` (`PINS_SEED=1 PINS_DRYRUN=1
+scripts/pins.sh record <renderer> dlights`, the trace kept, as the seed
+needs it) plus `+set gl1_flashblend 1` and a scratch `pins_dir`, once
+for `gl1-metal` and once for `metal`, and compare the frames pairwise
+with `framediff` (`cc -O2 -o <scratch>/framediff
+scripts/pins/framediff.c -lm`) at `--threshold 0.005 --bad-threshold
+0.001`; delete the traces after. At `9a47f6e0`: 23 of 23 ok, score
+0.000000 and bad 0.000000 on every frame (5 levels off at most), and the
+`metal` frames differ from a seeded `metal` record without
+`gl1_flashblend` on the 10 frames that hold a light (score up to
+0.045524).
 
 The stencil shadows: the scratch `models` copies with `r_shadows 1` show
 the shadows (up to 6,609 pixels of a frame against `models`); with

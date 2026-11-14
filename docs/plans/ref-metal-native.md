@@ -389,7 +389,7 @@ against `gl1`:
 | `models` | the defaults, 0.02 and 0.005, against two `gl1-metal` records | nondeterministic (engine PRNG); the scenario's line |
 | `particles` | `--threshold 0.02 --bad-threshold 0.25`, against two records | the scenario's `// nondeterministic:` line |
 | `skywater` from `water.dm2` | `--threshold 0.02 --bad-threshold 0.03`, against two records | the scenario's line |
-| `dlights` (N8) | as measured by N8 from `gl1-metal` against itself, recorded in the scenario file | new scenario |
+| `dlights` (N8), from `demo1.dm2` and from `demo2.dm2` every 7th | seeded only (`PINS_SEED`, one seed for the reference and the candidate, the reference named with `--ref-id`): `--threshold 0.005 --bad-threshold 0.001` | the engine PRNG gives its lights their radii, so unseeded records differ by more than a missing lightstyle update and no unseeded value judges it; seeded `gl1-metal` records are identical byte for byte (N8, section 23 and the scenario file) |
 
 Every record runs with `MTL_DEBUG_LAYER=1`, and a record with a validation
 message or a failed command buffer is not accepted. A threshold is never
@@ -1876,6 +1876,19 @@ What exists:
   frame; kept). A head node that is not a node of the world is skipped
   (`rm_bmodel_headnode`): maps hold a leaf there for submodels without
   faces (base2's `*15`), and gl1 would read before `nodes` there.
+- **What the committed pins judge of the lights on entities** (N7's
+  hand-off: "a `dlights` scenario is the first to judge" the lights
+  `R_LightPoint` adds to a model): the committed `dlights` sets
+  `cl_entities 0`, as `world` does, so it judges the lights on the
+  world's lightmaps (and, with `gl1_flashblend 1`, the flash blobs), not
+  those on entities. The dynamic-light term of `R_LightPoint` for models
+  and `R_MarkBrushLights` on the brush entities are judged only by the
+  scratch row "`models` plus `cl_lights 1`" of the table below (with the
+  PRNG fixed, 23 of 23 at the tight values, never committed);
+  `rm_bmodel_headnode` alone is host-tested. The `particles` scenario
+  sets `cl_entities 1` and `cl_lights 1`, so N9 is the first card whose
+  committed pins judge them: handed over below and in the N8 comment on
+  #203.
 - **The flash blobs** (`R_RenderDlights`, `rm_light.c`): with
   `gl1_flashblend`, after the entities and with or without a world (as
   gl1), one fan of 18 vertices per light (`rm_flash_blob`: gl1's
@@ -1941,6 +1954,12 @@ Deviations from gl1, each only on input gl1 cannot handle:
 - A sprite frame's `height - origin_y` and the like are taken in 64 bits
   (gl1's int arithmetic overflows only on a hostile file); a sprite or a
   beam whose corner or vertex is not finite is not drawn (counted).
+- A beam with a float that is not finite (its origin, `oldorigin`,
+  angles, `backlerp` or alpha, `rm_entity_floats_ok`) is refused
+  (counted) before it turns depth writes back on (`*drawn` stays 0).
+  gl1 goes on (`VectorNormalize` of a NaN direction is not 0) to its
+  `glDepthMask(GL_TRUE)`, so a translucent entity after such a beam
+  writes depth in gl1 and not here. Only a hostile server sends one.
 - The beam's alpha byte saturates where gl1's `alpha * 255` conversion to
   int is undefined; inside an int it keeps gl1's low byte (an alpha of
   1.5 is byte 126, as in gl1).
@@ -1970,7 +1989,9 @@ base); the rows marked seeded were recorded at `8852cfc9` with
 | `models` (`metal` at `12b255ad`, two `gl1-metal` references) | at the defaults all 23 ok against each; at the tight values 23 of 23 against one and 22 against the other (frame 7, the explosion of N7's note: 0.000813, bad 0.001087; the two references differ there by 0.000327, bad 0.000824); with the PRNG fixed 23 of 23 at the tight values (worst 0.000039, bad 0.000589); seeded, two `gl1-metal` records identical byte for byte and `metal` 23 of 23 ok at the tight values against each (worst 0.000039, bad 0.000589) |
 | `models` with `r_shadows 1` and `gl1_stencilshadow 1` (scratch `t91shadow`), and with `gl1_stencilshadow 0` (`t91shadow0`), not committed | all 23 ok at the tight values on both (worst 0.000306, bad 0.000579 and 0.000038, 0.000579); the shadows change up to 6,609 pixels of a frame against `models` (none on four frames without a shadow in view), and the stencil changes the same number of pixels on both renderers (2 to 302 per frame), but for frame 7 (the PRNG's explosion) |
 | `world`, `skywater`, `hud2d` (23 frames), `cinematic` (12, `PINS_DEMO=idlog.cin PINS_EVERY=7`), `world-fullbright` | score 0 and bad 0 on every frame; `world-fullbright` bad at most 0.000013 (N4's residue) |
-| frames excluded | none: `dlights` and `models` draw no particle; only the `particles` scenario waits for N9 |
+| `metal_stats 1`, at `9a47f6e0`: `metal` run by hand per scenario on `demo1.dm2` with `PINS_DRYRUN=1`'s command line without the trace, plus `+set metal_stats 1`, `MTL_DEBUG_LAYER=1` and a scratch `pins_dir` | `models` and `dlights` 23 captured frames each; on every one of the 23 per-frame lines of each: `0 draws skipped`, `23 pipelines, 0 created after init`, `skipped surfaces: 0 sky, 0 warped, 0 translucent, 0 flowing; 0 dynamic lights left out; skipped entities: 0 sprites, 0 beams, 0 null models, 0 translucent brush models, 0 refused`, so no frame skips a surface, an entity or a light; the line at shutdown the same; no validation message, teardown `0 live objects` |
+| the flash-blob copy seeded, at `9a47f6e0`: the engine run by hand with `PINS_DRYRUN=1`'s seeded command line of `dlights` (`PINS_SEED=1`, the trace on, deleted after) plus `+set gl1_flashblend 1`, one record of each renderer of `demo1.dm2`, no scenario file; `scripts/pins/framediff.c` frame by frame | `metal` against `gl1-metal` at `--threshold 0.005 --bad-threshold 0.001`: 23 of 23 ok, score 0.000000 and bad 0.000000 on every frame (5 levels off at most); against a seeded `metal` record without `gl1_flashblend` it differs on the 10 frames with a light (5, 7, 8, 10, 14, 16, 18, 19, 20, 21; score up to 0.045524), so the blobs are judged; no validation message, teardown `0 live objects` |
+| frames excluded | none: `metal_stats 1` skips nothing on any frame of `dlights` or `models` (above), and neither draws a particle; only the `particles` scenario waits for N9 |
 | validation and teardown | 48 records, and the 10 seeded ones (with the control): every `engine.log` holds only `Metal API Validation Enabled`, and every `metal` teardown `0 live objects`, `0 unreleased`, `0 unmatched`. A hand run under the validation layer (a config beside the binary, deleted after: `r_shadows 1`, `gl1_stencilshadow 1`, `map base1`, `vid_restart`, `gl1_flashblend 1`, `map base2`, `vid_restart`, both off, `map base1`, `vid_restart`, `quit`): four teardowns at `0 live objects`, no validation message, every `metal_stats` line `23 pipelines, 0 created after init`, `0 dynamic lights left out`, `skipped entities: 0 sprites, 0 beams, 0 null models` |
 | timedemo, `demo1.dm2`, the same engine binary, `ref_metal` of `92e54a38` (N7) and of this card alternated, four runs each, no validation layer, load 4.4 to 7.4 | the display did not pace the runs today: `world` before 1511 to 1648 fps, after 1552 to 1633; `models` before 1541 to 1555, after 1535 to 1591; `dlights` before 1412 to 1475 (no dynamic light drawn), after 1392 to 1491; process CPU time 0.36 to 0.43 s user either way. The same within the noise |
 | `tests/check-ref-metal.sh` | host test 1,258 checks, 0 failed (1,115 at N7); `tests/check-metal-shim.sh` 515 checks, 0 failed |
@@ -2004,7 +2025,10 @@ Handed over to N9 (TASK92, #203):
   sets its own state, and the flash blobs leave none behind.
 - The `particles` scenario sets `cl_lights 1` and `cl_entities 1`: its
   dynamic lights, sprites, beams, null models and the lights on models
-  are drawn now. Its lights take random radii from the engine PRNG as
+  are drawn now. It is the first committed scenario to judge the
+  dynamic lights on models (`R_LightPoint`) and on brush entities
+  (`R_MarkBrushLights`), which the committed `dlights` (`cl_entities 0`)
+  does not draw. Its lights take random radii from the engine PRNG as
   `dlights`' do (section 23's table); judging at tight values needs the
   PRNG fixed: `PINS_SEED` with a trace, as `dlights` is recorded.
 - The frame time: on this host today the display did not pace the
