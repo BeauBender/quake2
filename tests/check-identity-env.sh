@@ -14,8 +14,9 @@
 # holds the self-tests' synthetic host name. Both must pass and the index
 # copy must be byte-identical afterwards. Last, the real part of the gate
 # check is run with `hostname` and `whoami` shims (synthetic names), to show
-# that a hit fails without printing the value and that unreadable names fail
-# closed. Nothing in the repository is written.
+# that a hit fails without printing the value, that unreadable names fail
+# closed, and that a user name equal to origin's GitHub owner is skipped with
+# a note that does not print it. Nothing in the repository is written.
 #
 # Usage: tests/check-identity-env.sh
 set -eu
@@ -59,9 +60,12 @@ cat > "$tmp/hostile.gitconfig" <<EOF
 EOF
 printf '*\n' > "$tmp/excludes"
 # The same configuration as the caller's own global files, for git to find
-# if a check let it fall back to them.
-mkdir -p "$tmp/home" "$tmp/xdg/git"
-cp "$tmp/hostile.gitconfig" "$tmp/home/.gitconfig"
+# if a check let it fall back to them. The home directory ends in the user
+# name, as a real one does (the owner-handle skip of the gate check needs
+# that; see home_is there).
+hhome=$tmp/home/$(whoami 2>/dev/null || true)
+mkdir -p "$hhome" "$tmp/xdg/git"
+cp "$tmp/hostile.gitconfig" "$hhome/.gitconfig"
 cp "$tmp/hostile.gitconfig" "$tmp/xdg/git/config"
 
 # redact: paths of this checkout and the temp directory become placeholders;
@@ -92,7 +96,7 @@ for check in tests/check-no-local-identity.sh tests/check-pre-push-hook.sh; do
 		GIT_CONFIG_KEY_1=commit.gpgSign GIT_CONFIG_VALUE_1=true \
 		GIT_AUTHOR_NAME=zzq-synthetic-box GIT_AUTHOR_EMAIL=zzqa@zzq-synthetic-box.zzq \
 		GIT_COMMITTER_NAME=zzq-synthetic-box GIT_COMMITTER_EMAIL=zzqa@zzq-synthetic-box.zzq \
-		GIT_ALTERNATE_OBJECT_DIRECTORIES="$tmp/none" HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/xdg" \
+		GIT_ALTERNATE_OBJECT_DIRECTORIES="$tmp/none" HOME="$hhome" XDG_CONFIG_HOME="$tmp/xdg" \
 		"$check" > "$tmp/out" 2>&1 || rc=$?
 	if [ "$rc" -ne 0 ]; then
 		echo "$me: FAIL: $check failed under a hostile git environment; its output:"
@@ -117,9 +121,9 @@ shim() { # $1 = command, $2 = what it prints ("" = fails)
 	fi
 	chmod +x "$tmp/bin/$1"
 }
-gate() { # $1 = label, $2 = wanted status, $3 = text the output must hold
+gate() { # $1 = label, $2 = wanted status, $3 = text the output must hold, [$4 = HOME]
 	rc=0
-	PATH="$tmp/bin:$PATH" HOME="/zzqno""home" tests/check-no-local-identity.sh > "$tmp/out" 2>&1 || rc=$?
+	PATH="$tmp/bin:$PATH" HOME="${4:-/zzqno""home}" tests/check-no-local-identity.sh > "$tmp/out" 2>&1 || rc=$?
 	if [ "$rc" -ne "$2" ] || ! grep -q "$3" "$tmp/out"; then
 		echo "$me: FAIL: $1: status $rc, wanted $2 and \"$3\"; its output:"
 		redact < "$tmp/out"
@@ -139,6 +143,19 @@ shim hostname ''
 gate "host name unreadable" 0 "warning: cannot read the host or user name"
 shim whoami ''
 gate "host and user name unreadable" 1 "cannot read the host name or the user name"
+# The user name is the owner handle of origin's GitHub address and the last
+# component of the home path: the user-name word test is skipped and a note
+# says so, without the value. Not run when origin names no GitHub owner.
+owner=$(git remote get-url origin 2>/dev/null | sed -nE 's#^.*github\.com[:/]([A-Za-z0-9-]+)/[^/]+$#\1#p') || owner=
+if [ -n "$owner" ]; then
+	shim hostname "zzqno""host"
+	shim whoami "$owner"
+	gate "the user name is the owner handle" 0 "the user-name word test is skipped" "/zzqno""home/$owner"
+	if grep -qiF -e "$owner" "$tmp/out"; then
+		echo "$me: FAIL: the user name is the owner handle: the output printed the user name"
+		fails=1
+	fi
+fi
 
 [ "$fails" -eq 0 ] || exit 1
 _ok=1
