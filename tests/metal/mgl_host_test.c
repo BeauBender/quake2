@@ -694,6 +694,8 @@ test_textures(void)
 	/* what the shim refuses: the paletted path, other types, a border, the size limit */
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_COLOR_INDEX8_EXT, 2, 2, 0, GL_COLOR_INDEX, GL_UNSIGNED_BYTE, px);
 	CHECK(ERR() == GL_INVALID_ENUM);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_COLOR_INDEX8_EXT, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+	CHECK(ERR() == GL_INVALID_ENUM && t->width == 5);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_FLOAT, px);
 	CHECK(ERR() == GL_INVALID_ENUM);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
@@ -725,6 +727,16 @@ test_textures(void)
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 2, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb);
 		CHECK(ERR() == GL_NO_ERROR && last_up_rgba[4] == 0xAA && last_up_rgba[5] == 4);
 		glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+	}
+
+	/* a change of width alone, then of height alone, replaces the storage */
+	{
+		int before = tex_creates;
+
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		CHECK(ERR() == GL_NO_ERROR && tex_creates == before + 1 && t->width == 2);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 3, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+		CHECK(ERR() == GL_NO_ERROR && tex_creates == before + 2 && t->height == 3);
 	}
 
 	glBindTexture(GL_TEXTURE_2D, 7);
@@ -838,6 +850,10 @@ test_draw(void)
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glAlphaFunc(GL_LESS, 0.5f);
+	glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+	/* a function set while the test is off does not apply */
+	CHECK(last_draw.u.alpha_func == GL_ALWAYS - GL_NEVER);
 	glEnable(GL_ALPHA_TEST);
 	glAlphaFunc(GL_GREATER, 0.666f);
 	glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
