@@ -10,6 +10,7 @@ have been renamed. The prefixes are:
 * `gl_`: Common to all OpenGL renderers.
 * `gl1_`: OpenGL 1.4 renderer.
 * `gl3_`: OpenGL 3.2 renderer.
+* `metal_`: Metal renderer (macOS).
 * `ogg_`: Ogg/Vorbis music playback.
 * `r_`: Common to all renderers.
 * `s_`: Sound system.
@@ -620,6 +621,23 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   less optimal for the default gun field of view of 80.
 
 * **sw_colorlight**: enable experimental color lighting.
+
+
+## Graphics (Metal only)
+
+The native Metal renderer, `vid_renderer metal`, is built on macOS
+only, with `make ref_metal`. It is work in progress (see
+`doc/100_renderpins.md`): for now it clears and presents the screen and
+draws nothing else.
+
+* **metal_stats**: When set to `1`, the Metal renderer prints one line
+  per screenshot (so per frame the pin harness captures) and one at
+  shutdown: frames presented, frames without a drawable (not shown,
+  for example while the window cannot be shown), frames skipped because
+  the GPU still held every frame slot, command buffers that failed,
+  readbacks, calls to drawing functions it does not implement yet, and
+  its Metal objects still alive. The teardown line with its object
+  counts is printed at every shutdown regardless. Defaults to `0`.
 
 
 ## Gamepad

@@ -19,6 +19,7 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | `src/client/` | Client: parsing server messages (`cl_parse.c`), downloads (`cl_download.c`), input, menus, sound, video |
 | `src/client/refresh/` | Renderers built as separate modules: `gl1`, `gl3`, `soft`, plus `files/` with the asset loaders they share |
 | `src/client/refresh/gl1/metal/` | The OpenGL subset on Metal that `ref_gl1` is built against with `WITH_METAL_SHIM=yes` on macOS (design: `docs/plans/metal-shim-design.md`); gl1's own files are not edited |
+| `src/client/refresh/metal/` | `ref_metal`, the native Metal renderer, macOS only, built with `make ref_metal` (design: `docs/plans/ref-metal-native.md`); C with an Objective-C back end behind `header/rmb.h`, checked by `tests/check-ref-metal.sh` |
 | `src/game/` | The game module: gameplay, monsters, weapons, savegames (`savegame/`) |
 | `src/backends/` | OS specifics: `unix`, `windows`, `generic` |
 | `src/win-wrapper/` | Windows launcher wrapper |
