@@ -846,3 +846,20 @@ them given the engine behaves exactly as before.
   most 63 characters, without `..` or a directory part. Needs
   `pins_dir`. Default: not given, nothing is recorded and no file is
   opened.
+
+* **pins_replay**: The path of a trace written by `pins_record`. Once the
+  renderer named by `vid_renderer` is loaded, the engine feeds the
+  trace to it frame by frame instead of running the game: no server,
+  no demo, no sound and no input run, and no `+` command after the
+  `+set` arguments is executed. Where the live run captured a frame,
+  the replay takes a screenshot at the same point of the frame, so the
+  frames land in `pins_dir` with the same names and numbers; after the
+  last frame of the trace the engine quits. Every value read from the
+  trace is bounded before the renderer sees it. The engine stops with
+  an error (non-zero exit status) when the trace cannot be opened, was
+  recorded at another size (`r_customwidth`, `r_customheight`) or for
+  another renderer API version, was never finished, is damaged, or
+  when the renderer fails to load (there is no fallback). Must be a
+  path of `A-Z a-z 0-9 _ . / -` without `..`, whose file name starts
+  with a letter, digit or `_` and ends in `.q2r`. Needs `pins_dir`;
+  refused together with `pins_record`. Default: not given.

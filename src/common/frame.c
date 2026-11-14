@@ -68,6 +68,8 @@ int curtime;
 void Key_Init(void);
 void CL_PinsLatch(void);
 int CL_PinsCapture(void);
+qboolean CL_PinsReplaying(void);
+void CL_PinsReplay(void);
 void Key_Shutdown(void);
 void SCR_EndLoadingPlaque(void);
 #endif
@@ -408,8 +410,14 @@ Qcommon_Init(int argc, char **argv)
 	{
 		if (!dedicated->value)
 		{
-			// Start demo loop...
-			Cbuf_AddText("d1\n");
+#ifndef DEDICATED_ONLY
+			/* a pin replay runs no demo */
+			if (!CL_PinsReplaying())
+#endif
+			{
+				// Start demo loop...
+				Cbuf_AddText("d1\n");
+			}
 		}
 		else
 		{
@@ -492,6 +500,21 @@ Qcommon_Frame(int usec)
 	   it alone. */
 	if (YQ2_SETJMP(abortframe))
 	{
+		return;
+	}
+
+
+	/* Pin harness replay: one recorded frame into the renderer and
+	   nothing else, no server, client frame, sound, input or command
+	   buffer (CL_PinsReplay quits after the last frame). */
+	if (CL_PinsReplaying())
+	{
+		if (quitnextframe)
+		{
+			Com_Quit();
+		}
+
+		CL_PinsReplay();
 		return;
 	}
 

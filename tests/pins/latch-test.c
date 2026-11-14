@@ -63,7 +63,8 @@ main(int argc, char **argv)
 		}
 	}
 
-	printf("dir=%s|scenario=%s|capture=%d|invalid=%d|record=%s\n", CL_PinsDir(),
-		CL_PinsScenario(), CL_PinsCapture(), (int)CL_PinsInvalid(), CL_PinsRecord());
+	printf("dir=%s|scenario=%s|capture=%d|invalid=%d|record=%s|replay=%s%s\n", CL_PinsDir(),
+		CL_PinsScenario(), CL_PinsCapture(), (int)CL_PinsInvalid(), CL_PinsRecord(),
+		CL_PinsReplayPath(), CL_PinsReplayRequested() ? "|requested" : "");
 	return 0;
 }
