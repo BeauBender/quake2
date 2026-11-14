@@ -17,6 +17,7 @@
 #   evidence.py selftest
 #
 # Captions use a built-in 5x7 bitmap font; no font file is read.
+import decimal
 import hashlib
 import os
 import re
@@ -622,8 +623,21 @@ def parse_compare(path):
             if len(p) == 4 and SCORE_RE.fullmatch(' '.join(p)):
                 rows.append(p)
             elif line.startswith('frames='):
-                summary = ' '.join(t for t in p if re.match(r'^[a-z_]+=[0-9.]+$', t))
+                summary = ' '.join(filter(None, (summary_token(t) for t in p)))
     return rows, summary
+
+
+def summary_token(t):
+    """A key=value token of the compare summary with its value in fixed
+    notation (compare prints %.6g, so a small worst score reads 2e-06), or
+    None for anything else."""
+    m = re.fullmatch(r'([a-z_]+)=([0-9]+(?:\.[0-9]*)?(?:e[-+]?[0-9]{1,2})?)', t, re.ASCII)
+    if not m:
+        return None
+    v = m.group(2)
+    if 'e' in v:
+        v = format(decimal.Decimal(v), 'f')
+    return '%s=%s' % (m.group(1), v)
 
 
 def cmd_build(a):
@@ -1215,6 +1229,13 @@ def _selftest(t):
         f.write('world-000000.tga 0.5 0.1 OVER\nworld-000001.tga 1e-5 - ok\nworld-00000`.tga 1 1 ok\nworld-000002.tga 1 1 maybe\n')
     if [r[0] for r in parse_compare(odd)[0]] != ['world-000000.tga']:
         _fail('parse_compare keeps a row publish refuses: %r' % (parse_compare(odd)[0],))
+    # the summary keeps a worst score compare printed in exponent form, in fixed notation
+    with open(odd, 'w') as f:
+        f.write('frames=4 failed=0 worst=2e-06 worst_bad=0 threshold=0.02 bad_threshold=0.005 x=1e5 bogus=-1 y=nan\n')
+    if parse_compare(odd)[1] != 'frames=4 failed=0 worst=0.000002 worst_bad=0 threshold=0.02 bad_threshold=0.005 x=100000':
+        _fail('compare summary: %r' % parse_compare(odd)[1])
+    if not VALUE_RE['summary'].fullmatch(parse_compare(odd)[1]):
+        _fail('publish must accept the summary build writes')
     old = sys.stdout
     sys.stdout = open(os.devnull, 'w')
     try:
@@ -1270,6 +1291,48 @@ def _selftest(t):
             _fail('clip panel pixel (%d, %d) is %r, expected %r' % (x, y, at(clip[0], x, y + bar), rgb))
         if gifs[0][(y + bar) * clip[0][0] + x] != quantize(blank(1, 1, rgb))[0]:
             _fail('GIF panel pixel (%d, %d)' % (x, y))
+    # a pin of more than CLIP_MAX_FRAMES frames is subsampled evenly: 50 frames,
+    # each one flat colour, give 48 clip frames: frame int(k * 50 / 48) at k
+    n50, sw, sh = 50, 16, 12
+
+    def col(i):
+        return (i * 5, 255 - i * 5, 7)
+
+    for d in ('ref50', 'cand50', 'out50'):
+        os.makedirs(os.path.join(t, d))
+    with open(cmp_path, 'w') as f:
+        for i in range(n50):
+            c = col(i)
+            for d in ('ref50', 'cand50'):
+                with open(os.path.join(t, d, 'world-%06d.tga' % i), 'wb') as g:
+                    g.write(bytes([0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, sw, 0, sh, 0, 24, 0x20]) + bytes((c[2], c[1], c[0])) * (sw * sh))
+            f.write('world-%06d.tga 0.000000 0.000000 ok\n' % i)
+        f.write('frames=%d failed=0 worst=0 worst_bad=0 threshold=0.02 bad_threshold=0.005\n' % n50)
+    sys.stdout = open(os.devnull, 'w')
+    try:
+        cmd_build({'ref-dir': os.path.join(t, 'ref50'), 'cand-dir': os.path.join(t, 'cand50'), 'compare': cmp_path,
+                   'out': os.path.join(t, 'out50'), 'prefix': 'X1-abc-soft-world',
+                   'meta': ['card=X1', 'commit=nogit', 'command=pins.sh evidence soft world --card X1',
+                            'renderer=soft', 'scenario=world', 'reference=world/gl1/r1', 'candidate=world/soft/abc-1',
+                            'compare-exit=0', 'ref-caption=REFERENCE gl1', 'cand-caption=CANDIDATE soft']})
+    finally:
+        sys.stdout.close()
+        sys.stdout = old
+    with open(os.path.join(t, 'out50', 'X1-abc-soft-world-evidence.txt'), 'rb') as f:
+        st = parse_manifest(f.read())
+    if st['fields']['frames'] != str(n50) or st['fields']['clip-frames'] != str(CLIP_MAX_FRAMES):
+        _fail('a %d-frame pin: frames %s, clip-frames %s' % (n50, st['fields']['frames'], st['fields']['clip-frames']))
+    with open(os.path.join(t, 'out50', 'X1-abc-soft-world-clip.png'), 'rb') as f:
+        clip = decode_png(f.read())
+    with open(os.path.join(t, 'out50', 'X1-abc-soft-world-clip.gif'), 'rb') as f:
+        _, _, gifs = decode_gif(f.read())
+    if len(clip) != CLIP_MAX_FRAMES or len(gifs) != CLIP_MAX_FRAMES:
+        _fail('a %d-frame pin: clip frames %d, GIF frames %d' % (n50, len(clip), len(gifs)))
+    for k, i in ((0, 0), (CLIP_MAX_FRAMES // 2, n50 // 2), (CLIP_MAX_FRAMES - 1, n50 - 2)):
+        if at(clip[k], 0, bar) != col(i):
+            _fail('clip frame %d shows %r, expected frame %d %r' % (k, at(clip[k], 0, bar), i, col(i)))
+        if gifs[k][bar * clip[k][0]] != quantize(blank(1, 1, col(i)))[0]:
+            _fail('GIF frame %d is not frame %d' % (k, i))
 
 
 # the options of each command; only --meta may be given more than once, and

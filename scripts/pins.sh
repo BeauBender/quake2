@@ -42,6 +42,18 @@
 #   PINS_DRYRUN   print the engine command line for "record" and stop
 #   PINS_TRACE    0: record no renderer-API trace. Default: record writes
 #                 trace.q2r beside the frames (the engine's pins_record)
+#   PINS_EVIDENCE_DIR     where evidence writes its sets, never inside the
+#                 pin store. Default: evidence/ of this checkout (git-ignored)
+#   PINS_EVIDENCE_REPO    owner/name evidence-publish uploads to. Default: the
+#                 GitHub repository of the origin remote
+#   PINS_EVIDENCE_BUDGET  bytes per evidence file. Default: 4000000. A larger
+#                 value raises the size cap: evidence writes it into the
+#                 manifest's budget, and publish allows the smaller of the two
+#   PINS_EVIDENCE_UPLOADER  a program run as "<it> <repo> <tag> -- <file>..."
+#                 in place of the built-in gh upload, INCLUDING its check that
+#                 the release is an existing pre-release: nothing is checked
+#                 on the release then. It exists for the self-test's stand-in
+#                 uploader; leave it unset to publish
 #
 # Every path and value handed to the engine (store, PINS_BASEDIR, PINS_DEMO,
 # scenario values) may hold only A-Z a-z 0-9 _ . / - : the engine re-joins
@@ -464,9 +476,16 @@ ev_outdir() {
     echo "$ev/$1"
 }
 ev_commit() { git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo nogit; }
+# ev_cleanup_trap: on every exit of the subshell that runs it, die included,
+# remove the scratch folder named by wd (never local: bash drops the locals
+# before an EXIT trap runs), keeping the exit status
+ev_cleanup_trap() { wd=""; trap 'ev_rc=$?; [ -z "$wd" ] || rm -rf "${wd:?}"; exit $ev_rc' EXIT; }
 
-cmd_evidence() {
+# cmd_evidence and cmd_evidence_publish run in a subshell of their own, so
+# that their EXIT trap removes the scratch folder however they end
+cmd_evidence() (
     local card=adhoc args="$*" out prefix
+    ev_cleanup_trap
     if [ "${1:-}" = --synthetic ]; then
         local noise=""; shift
         while [ $# -gt 0 ]; do
@@ -475,7 +494,7 @@ cmd_evidence() {
             shift 2
         done
         prefix="$card-$(ev_commit)-synthetic-${noise:+noise$noise}"; [ -n "$noise" ] || prefix="${prefix}pattern"
-        out=$(ev_outdir "$prefix")
+        out=$(ev_outdir "$prefix") || exit 1
         ev_py synth --out "$out" --prefix "$prefix" ${noise:+--noise "$noise"} --meta "card=$card" --meta "commit=$(ev_commit)" \
             --meta "command=pins.sh evidence $args"
         echo "folder: ${out#"$root"/}"
@@ -497,7 +516,7 @@ cmd_evidence() {
         shift 2
     done
     # compare's own framediff would be built into the store; evidence writes nothing there
-    local wd cmp rc=0 diffbin=${PINS_DIFF:-}
+    local cmp rc=0 diffbin=${PINS_DIFF:-}
     wd=$(mktemp -d "${TMPDIR:-/tmp}/pins-evidence.XXXXXX"); cmp="$wd/compare.txt"
     if [ -z "$diffbin" ]; then
         diffbin="$wd/framediff"; cc -O2 -o "$diffbin" "$root/scripts/pins/framediff.c" -lm || { rm -rf "${wd:?}"; die "cannot build framediff"; }
@@ -509,7 +528,7 @@ cmd_evidence() {
     if [ -z "$ref_dir" ] || [ -z "$cand" ]; then rm -rf "${wd:?}"; die "compare found no pair of pins to show (see the message above)"; fi
     local cand_id=${cand##*/} ref_id=${ref_dir##*/}
     prefix="$card-${cand_id%%-*}-$renderer-$scenario"
-    out=$(ev_outdir "$prefix")
+    out=$(ev_outdir "$prefix") || exit 1
     ev_py build --ref-dir "$ref_dir" --cand-dir "$cand" --compare "$cmp" --out "$out" --prefix "$prefix" \
         --meta "card=$card" --meta "commit=$(ev_commit)" --meta "command=pins.sh evidence $args" \
         --meta "renderer=$renderer" --meta "scenario=$scenario" \
@@ -518,7 +537,7 @@ cmd_evidence() {
         || { rm -rf "${wd:?}"; die "the evidence step failed"; }
     rm -rf "${wd:?}"
     echo "folder: ${out#"$root"/}"
-}
+)
 
 # ev_repo: owner/name of the GitHub repository evidence is published to
 ev_repo() {
@@ -571,13 +590,14 @@ ev_stage_list() {
 # in the stage folder, each file checked to lie in it by physical path; no
 # text another program printed becomes an argument, and every file name
 # follows "--".
-cmd_evidence_publish() {
+cmd_evidence_publish() (
     [ $# -ge 1 ] || die "usage: pins.sh evidence-publish <manifest> [file...]"
+    ev_cleanup_trap
     local arg
     for arg in "$@"; do
         case $arg in -*) die "evidence-publish: refused: an argument starts with '-' (it takes file names, no option); nothing was uploaded";; esac
     done
-    local manifest=$1 tag=pr-evidence repo wd stage; shift
+    local manifest=$1 tag=pr-evidence repo stage; shift
     repo=$(ev_repo)
     wd=$(mktemp -d "${TMPDIR:-/tmp}/pins-publish.XXXXXX") || die "evidence-publish: no scratch folder; nothing was uploaded"
     stage="$wd/stage"; mkdir "$stage" || { rm -rf "${wd:?}"; die "evidence-publish: no stage folder; nothing was uploaded"; }
@@ -594,7 +614,7 @@ cmd_evidence_publish() {
     echo
     cat "$wd/body.md"
     rm -rf "${wd:?}"
-}
+)
 
 # ---- evidence self-test: no network, no game data --------------------------
 
@@ -672,6 +692,10 @@ ev_refused() {
     [ ! -s "$tmp/uploaded" ] && [ ! -s "$tmp/upload-args" ] || ev_fail "a refused publish uploaded: $(cat "$tmp/uploaded")" || return 1
 }
 ev_count() { [ "$(wc -l < "$tmp/uploaded" | tr -d ' ')" -eq "$1" ] || ev_fail "$2: $(cat "$tmp/uploaded")"; }
+# ev_td / ev_td_empty <what>: a fresh, empty TMPDIR for the next refused call,
+# and the check that the call left nothing in it (no scratch or stage folder)
+ev_td() { rm -rf "${tmp:?}/td"; mkdir "$tmp/td"; }
+ev_td_empty() { [ -z "$(ls -A "$tmp/td")" ] || ev_fail "$1 left scratch files behind: $(cd "$tmp/td" && find . | sort | tr '\n' ' ')"; }
 ev_st_publish_ok() {
     ev_case build
     local rep; rep=$(cmd_evidence_publish "$m" 2>"$tmp/err") || ev_fail "publish of a built set must pass: $rep $(cat "$tmp/err")" || return 1
@@ -929,8 +953,10 @@ ev_st_fail_closed() {
     # an uploader that fails is a failure, and a crash of the stage step is a refusal
     ev_case; printf '#!/bin/sh\nexit 1\n' > "$tmp/fail-upload"; chmod +x "$tmp/fail-upload"
     local rep
-    if rep=$( (PINS_EVIDENCE_UPLOADER="$tmp/fail-upload" cmd_evidence_publish "$m") 2>&1 ); then ev_fail "a failing uploader must fail the publish"; return 1; fi
+    ev_td
+    if rep=$( (TMPDIR="$tmp/td" PINS_EVIDENCE_UPLOADER="$tmp/fail-upload" cmd_evidence_publish "$m") 2>&1 ); then ev_fail "a failing uploader must fail the publish"; return 1; fi
     case $rep in *"the upload failed"*) ;; *) ev_fail "a failing upload must say so: $rep"; return 1;; esac
+    ev_td_empty "a failing upload" || return 1
     mkdir -p "$tmp/st"
     if rep=$(ev_py stage --root "$PINS_EVIDENCE_DIR" --store "$PINS_STORE" --manifest "$m" --stage "$tmp/no-such-dir" \
         --repo example/repo --markdown "$tmp/st/md" 2>&1); then ev_fail "stage into a missing folder must fail"; return 1; fi
@@ -979,11 +1005,13 @@ ev_st_gh() {
       cmd_evidence_publish "$m" >/dev/null 2>&1 ) || ev_fail "publish through gh must pass: $(cat "$tmp/gh-calls")" || return 1
     grep -q "^release view pr-evidence -R example/repo --json isPrerelease" "$tmp/gh-calls" || ev_fail "publish must ask gh whether pr-evidence is a pre-release" || return 1
     grep -q "^release upload pr-evidence -R example/repo -- [^-]" "$tmp/gh-calls" || ev_fail "the gh upload must name the repository and put -- before the files: $(cat "$tmp/gh-calls")" || return 1
-    ev_case; : > "$tmp/gh-calls"
+    ev_case; : > "$tmp/gh-calls"; ev_td
     local rep
     if rep=$( (PATH="$tmp/bin:$PATH"; unset PINS_EVIDENCE_UPLOADER; [ "$(command -v gh)" = "$tmp/bin/gh" ] || exit 0
-        GH_STUB_PRE=false cmd_evidence_publish "$m") 2>&1 ); then ev_fail "a release that is not a pre-release must be refused"; return 1; fi
+        TMPDIR="$tmp/td" GH_STUB_PRE=false cmd_evidence_publish "$m") 2>&1 ); then ev_fail "a release that is not a pre-release must be refused"; return 1; fi
     case $rep in *"is not a pre-release"*) ;; *) ev_fail "a release that is not a pre-release: $rep"; return 1;; esac
+    # the refusal comes from die inside the gh helper; the staged set must still go
+    ev_td_empty "a refusal of the gh helper" || return 1
     if grep -q '^release upload' "$tmp/gh-calls"; then ev_fail "a release that is not a pre-release got an upload"; return 1; fi
 }
 ev_st_noise() {
@@ -1010,9 +1038,11 @@ ev_st_evidence() {
     if grep -qF "$tmp" "$o"/*; then ev_fail "an output holds the scratch path"; return 1; fi
     ls "$b" | grep -qv -e '\.tga$' -e '^complete$' && { ev_fail "evidence wrote into the pin store"; return 1; }
     [ "$(ls "$PINS_STORE")" = world ] || ev_fail "evidence wrote into the pin store: $(ls "$PINS_STORE")" || return 1
-    rep=$( (PINS_EVIDENCE_DIR="$PINS_STORE/ev" cmd_evidence soft world --ref soft --ref-id aaaa-1 --cand-id aaaa-1-r2) 2>&1 ) &&
+    ev_td
+    rep=$( (TMPDIR="$tmp/td" PINS_EVIDENCE_DIR="$PINS_STORE/ev" cmd_evidence soft world --ref soft --ref-id aaaa-1 --cand-id aaaa-1-r2) 2>&1 ) &&
         { ev_fail "an evidence folder inside the store must be refused"; return 1; }
     case $rep in *"inside the pin store"*) ;; *) ev_fail "an evidence folder inside the store: $rep"; return 1;; esac
+    ev_td_empty "a refused evidence folder" || return 1
     rep=$( (cmd_evidence soft world --ref soft --ref-id aaaa-1 --cand-id aaaa-1-r2 --card 'a/b') 2>&1 ) && { ev_fail "a card with a slash must be refused"; return 1; }
     case $rep in *"--card must match"*) ;; *) ev_fail "a card with a slash: $rep"; return 1;; esac
     rep=$( (cmd_evidence soft world --ref soft --ref-id aaaa-1 --cand-id -aaaa) 2>&1 ) && { ev_fail "a pin id starting with '-' must be refused"; return 1; }

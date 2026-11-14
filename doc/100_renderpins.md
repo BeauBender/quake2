@@ -301,6 +301,9 @@ store), where `<commit>` is the engine commit of the candidate pin:
 
 Each file must fit `PINS_EVIDENCE_BUDGET` bytes (default 4000000);
 a file that does not is scaled down by 2, 3 and so on until it does.
+Setting `PINS_EVIDENCE_BUDGET` higher raises that size cap: `evidence`
+writes the value into the manifest's `budget` line, and
+`evidence-publish` accepts files up to it.
 `evidence` writes nothing into the store.
 
 `evidence-publish` uploads the files the manifest lists, and the
@@ -308,7 +311,14 @@ manifest, as assets of the pre-release `pr-evidence` of the repository
 (`PINS_EVIDENCE_REPO=owner/name`, default the GitHub repository of the
 `origin` remote), then prints a Markdown section to paste into the pull
 request. It uses `gh`, uploads only into an existing pre-release and
-never replaces an asset. Before uploading it says on stderr where to,
+never replaces an asset. All of that holds only while
+`PINS_EVIDENCE_UPLOADER` is unset: when it names a program,
+`evidence-publish` runs that program as
+`<program> <repo> <tag> -- <file>...` in place of the built-in `gh`
+upload, including its check that the release exists and is a
+pre-release, so nothing is checked on the release. The variable exists
+for the self-test's stand-in uploader; leave it unset to publish.
+Before uploading it says on stderr where to,
 how many files and bytes, and that an uploaded asset is public at once
 and cannot be recalled: deleting it later stops further downloads, not
 copies already fetched.

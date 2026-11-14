@@ -21,7 +21,9 @@ repository as evidence for a pull request, through one path:
   side-by-side still (reference, candidate, difference), a short clip as
   animated PNG and as GIF, and a manifest with the command, the commit,
   the pin ids, the scores and the SHA-256 of every file. Every file stays
-  under a size budget (4 MB by default).
+  under a size budget (4 MB by default; `PINS_EVIDENCE_BUDGET` can raise
+  it, and the raised value is written into the manifest and allowed at
+  publish).
 - `scripts/pins.sh evidence-publish` uploads one such set as assets of
   the single pre-release `pr-evidence` (not marked latest), and prints
   the Markdown for the pull-request body. It never uploads bytes it
@@ -36,7 +38,11 @@ repository as evidence for a pull request, through one path:
   validated card, commit, renderer and scenario. The upload is done by
   the script, never by a typed command, and the script says on stderr,
   before it starts, where it uploads, how many files and bytes, and that
-  an uploaded asset is public at once and cannot be recalled.
+  an uploaded asset is public at once and cannot be recalled. One
+  exception to "one path": `PINS_EVIDENCE_UPLOADER`, when set, names a
+  program that replaces the built-in `gh` upload, including its check
+  that `pr-evidence` exists and is a pre-release. It exists for the
+  self-test's stand-in uploader and is left unset to publish.
 
 What may never be published, by this path or any other: the game data
 files (`.pak`, `.pk3`), demos (`.dm2`), cinematics (`.cin`), renderer
