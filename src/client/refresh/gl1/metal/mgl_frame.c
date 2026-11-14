@@ -160,6 +160,7 @@ mgl_CreateContext(SDL_Window *window)
 	}
 
 	mgl_state_reset();
+	mgl_textures_reset();
 
 	if (!mgl_layer_create(window, &mgl_config, err, sizeof(err)))
 	{
@@ -184,6 +185,7 @@ mgl_DestroyContext(SDL_GLContext context)
 		return SDL_SetError("mgl: not the shim's context");
 	}
 
+	mgl_textures_reset();   /* the textures' Metal storage goes before the device */
 	mgl_layer_destroy();
 	mgl_context_live = 0;
 	return true;
@@ -646,9 +648,8 @@ static void
 mgl_read(GLint x, GLint y, GLsizei w, GLsizei h, GLenum format, GLenum type,
 		size_t bound, GLvoid *pixels)
 {
-	size_t bpp, rowbytes, total, r, c;
-	unsigned char *bgra, *dst;
-	const unsigned char *src;
+	size_t bpp, rowbytes, total;
+	unsigned char *bgra;
 	int tw, th;
 	GLenum e;
 
@@ -713,30 +714,8 @@ mgl_read(GLint x, GLint y, GLsizei w, GLsizei h, GLenum format, GLenum type,
 		return;
 	}
 
-	/* GL row r (bottom up) is row h - 1 - r of what Metal returned; padding is left untouched. */
-	for (r = 0; r < (size_t)h; r++)
-	{
-		src = bgra + ((size_t)h - 1 - r) * (size_t)w * 4;
-		dst = (unsigned char *)pixels + r * rowbytes;
-
-		for (c = 0; c < (size_t)w; c++, src += 4, dst += bpp)
-		{
-			if (format == GL_BGRA)
-			{
-				memcpy(dst, src, 4);
-				continue;
-			}
-
-			dst[0] = src[2];
-			dst[1] = src[1];
-			dst[2] = src[0];
-
-			if (bpp == 4)
-			{
-				dst[3] = src[3];
-			}
-		}
-	}
+	/* bottom-up rows, the caller's format; the padding is left untouched (mgl_raster.c) */
+	mgl_convert_readback(bgra, w, h, format, bpp, rowbytes, pixels);
 
 	free(bgra);
 	mgl_dump_read(x, y, w, h, format, pixels, total);

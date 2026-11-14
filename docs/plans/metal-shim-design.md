@@ -368,3 +368,77 @@ differs from the text above, this list is what the tree does.
   hung past the timeout and was not reproduced; a fix must keep the
   handlers' code mapped (or the wait unbounded only on that path) without
   an unbounded wait on the normal one.
+
+## 8. As built by TASK48 S2a (the 2D path): departures from section 2
+
+- **What draws.** `glDrawArrays` and `glDrawElements` (`GL_UNSIGNED_SHORT`)
+  in `GL_TRIANGLES`, `GL_TRIANGLE_STRIP` and `GL_TRIANGLE_FAN`, textured on
+  unit 0 with `GL_REPLACE` or `GL_MODULATE` or untextured, with blending,
+  the colour mask and the alpha test; `glOrtho`; RGBA and RGB
+  `glTexImage2D` of level 0 (with `GL_GENERATE_MIPMAP`), `glBindTexture`,
+  `glDeleteTextures`, `glTexParameteri` (filters, wrap). That is every
+  call the `hud2d` frames make. A texture with no storage draws as if the
+  unit were off (GL's incomplete texture).
+- **No vertex descriptor, no function constants.** The client arrays are
+  assembled on the CPU into one interleaved 48-byte vertex
+  (`mgl_vertex_t`: position, two texture coordinates, colour; a disabled
+  array is filled from the current colour or a zero coordinate), which the
+  vertex function reads by `vertex_id`. The texture environment and the
+  alpha test are a uniform (`mgl_uniforms_t`) and a branch, not function
+  constants; the pipeline key is only blend enable, the two factors and
+  the colour mask (13 bits). The uniforms go by `setVertexBytes` /
+  `setFragmentBytes` (80 bytes), not a ring.
+- **Fans and strips** are expanded on the CPU into a 16-bit triangle list
+  (strips keep GL's winding: every odd triangle swaps its first two
+  vertices) and drawn with `drawIndexedPrimitives`. One draw holds at most
+  65536 vertices and 196608 indices (`MGL_MAX_DRAW_*`); a larger one sets
+  `GL_INVALID_VALUE` and draws nothing.
+- **Textures.** A fixed table of 4096 names (`MGL_MAX_TEXTURES`; gl1's
+  names run to about 2500 and it never calls `glGenTextures`), a name past
+  it is refused with `GL_INVALID_VALUE`. Storage is `rgba8Unorm`, private,
+  with the whole mip chain; an RGB internal format stores alpha 255 and
+  makes `GL_REPLACE` keep the fragment's alpha. Each upload is copied into
+  its own shared staging buffer and blitted: inside a frame on the frame's
+  command buffer after ending the render encoder (the next draw opens a
+  Load pass, which also answers the S1 note on reopening after a flush);
+  outside a frame into one pending command buffer committed before the
+  next frame's. `GL_CLAMP` samples as clamp to edge.
+- **Per-draw buffers.** Vertices and indices go into a new shared
+  `MTLBuffer` per draw; the 8 MB per-frame ring of section 2 is S2b.
+- **Readback.** The row and channel conversion of `glReadPixels` is
+  `mgl_convert_readback` in `mgl_raster.c`, host-tested on a 3 x 2 image
+  that differs in every row, column and channel at alignments 1, 4 and 8,
+  padding included. On real frames the row order is now proven too: 18 of
+  the 23 `hud2d` frames are byte-identical to `gl1`'s, status bar at the
+  bottom.
+- **Not yet (S2b):** the depth test and depth state, culling, stencil,
+  polygon offset and mode, unit 1 and `GL_COMBINE`, points and lines,
+  `glTexSubImage2D`, levels above 0, anisotropy, the per-frame vertex
+  ring, `glFrustum`, `glRotatef`, `glTranslatef`, `glScalef`. A draw that
+  needs one of the states sets the sticky error, logs once and draws
+  without it; points and lines are not drawn.
+
+### Measured on `hud2d` (TASK48 S2a)
+
+Three `gl1-metal` records of commit `e0c57896` against the `gl1`
+reference `110a25ae2d26-2096632597` at the defaults (0.02, 0.005),
+1-minute load 105 to 134: 18 frames exact (score 0, bad 0), frame 3 at
+score 0.000647 and bad 0, and frames 5, 8, 11 and 16 over at score
+0.003639 to 0.007440 and bad 0.061862 each, identical in all three
+records. The three records are identical to each other, and to the
+record of the commit before the S2b cuts.
+
+The four frames over are the screen blend of `R_PolyBlend` (an item
+pickup flash): a quad 10 units in front of the eye drawn through
+`glFrustum` and `glRotatef`. The `gl1` reference, made with Apple's
+software renderer, dims only a diagonal wedge of the screen (about 6
+percent of it, the bad fraction above), which looks like a clipping
+fault of that renderer: a correct GL dims the whole screen, as `soft`
+does. The shim does not implement those matrix calls yet, so it draws no
+blend, and the wedge is the whole difference. A shim that implements
+them correctly would dim the whole screen and differ from this reference
+on about 94 percent of those frames instead. So `hud2d` cannot pass at
+the defaults against this reference on frames 5, 8, 11 and 16 for any
+correct implementation; the choice (a reference from an accelerated GL,
+`gl_polyblend 0` in the scenario, or a recorded exception) is the
+owner's, not this card's, and no threshold was changed.
