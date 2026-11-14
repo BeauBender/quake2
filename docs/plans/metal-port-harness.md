@@ -2064,6 +2064,60 @@ render-stage ray queries and the performance numbers.
 
 ## The 60 fps cap at 1920x1080 windowed (FIX52)
 
-Work in progress (FIX52, #239): the diagnosis of the 60 fps cap that
-`soft`, the Metal-backed `gl1` and `ref_metal` show at 1920x1080
-windowed with `r_vsync 0`. The measurements follow.
+TASK97 (#224) measured `soft`, the Metal-backed `gl1` and `ref_metal`
+at 60.0 to 60.1 fps in a 1920x1080 window with `r_vsync 0`, while
+`ref_gl1` ran uncapped. The three capped renderers are the three that
+present through a `CAMetalLayer` (`soft` through SDL's Metal renderer,
+`SDL_CreateRenderer(window, NULL)` in `sw_main.c`); `ref_gl1` presents
+through OpenGL. FIX52 (#239) diagnosed it on the bare-metal host.
+
+**The display.** An Apple Studio Display (Retina LCD, 5120x2880
+pixels) on an Apple M6, macOS 27.2.1. CoreGraphics reports the mode as
+2560x1440 points, 5120x2880 pixels, at 60 Hz, and
+`NSScreen.maximumFramesPerSecond` is 60: the panel's maximum refresh
+is 60 Hz, so the cap equals the refresh. The visible frame (below the
+menu bar, above the Dock) is 2560x1320 points at backing scale 2.
+
+**A bare probe reproduces it.** A scratch Objective-C program of about
+280 lines (never committed) opens one `NSWindow`, adds a subview
+backed by a `CAMetalLayer` the way SDL's Metal view does, and only
+clears and presents, as fast as it can, with SDL's settings for a
+window without `SDL_WINDOW_TRANSPARENT` and without high pixel
+density: opaque layer, `displaySyncEnabled = NO`,
+`maximumDrawableCount` 3, `contentsScale` 1, drawable the window's
+size in points. It prints the screen, the display mode, the layer
+state, the present rate, the mean time spent in `nextDrawable` and how
+many presented drawables reached the screen. No quake2 code runs. Two
+runs of 600 frames each, sizes alternated (load average 1.73 to 1.84,
+no other build running):
+
+| Window (points) | fps | mean wait in `nextDrawable` | drawables shown / dropped |
+|---|---|---|---|
+| 1600x900 | 341.6 to 346.5 | 2.82 to 2.87 ms | 333 to 337 / 263 to 267 |
+| 1920x1080 | 60.0 | 16.56 to 16.60 ms | 600 / 0 |
+
+So the cap is below quake2: at 1920x1080 the window server hands a
+drawable back only once a refresh and shows every one (none dropped),
+as if `displaySyncEnabled` were `YES`.
+
+**Where the cap starts.** One run of 200 to 300 frames per size in
+the probe (load average 1.73 to 2.52; another agent's build was
+running during part of it). It is neither the area nor a single
+dimension:
+
+| Height \ width (points) | 1200 | 1600 | 1680 | 1700 | 1720 | 1740 | 1760 | 1800 | 1920 | 2400 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 400 | 381 | 395 | | 433 | 333 | | 359 | 376 | 311 | 296 |
+| 700 | 229 | 259 | | 280 | 60 | | | 60 | 60 | 60 |
+| 900 | 295 | 357 | 329 | 311 to 339 | 60 | 60 | 60 | 60 | 60 | 60 |
+| 1080 | 325 | 323 to 337 | | 342 | 60 | | | 60 | 60 | 60 |
+| 1200 | 312 | 316 | | 314 | 60 | | | 60 | 60 | 60 |
+| 1300 | 60 | 60 | | 60 | 60 | | | 60 | 60 | 60 |
+
+The cap starts between 1700 and 1720 points of width (about two
+thirds of the 2560-point screen) once the height is 700 or more, and
+at every width once the height is 1300 (taller than the 1320-point
+visible frame with the title bar). 1920x900, 1760x990, 1840x1035,
+1919x1080, 1920x1079, 1921x1081 and 2000x1125 are capped; 1600x1080
+(the same area as 1920x900) is not. The 640x480 and 1600x900 that
+TASK97 measured sit below the threshold, 1920x1080 above it.
