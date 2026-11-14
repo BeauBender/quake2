@@ -754,3 +754,69 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
   Frames 18, 20 and 21 have no differing pixel there. On frame 17 the
   reference drops a piece of the weapon instead (81 pixels the other
   way, 78 of them confirmed by `gl1` at fov 100).
+
+## 13. As built by TASK52 (S6, particles, beams, sprites and the screen blend)
+
+- **What was left.** A `gl1-metal` record of `particles` on the parent
+  logged one line, `GL_POINTS is not implemented yet`; nothing else.
+  Beams (`R_DrawBeam`, an untextured strip), sprites
+  (`R_DrawSpriteModel`, a `GL_MODULATE` fan), `R_DrawParticles2` (with
+  `gl1_pointparameters 0`) and the screen blend (`R_PolyBlend`, since
+  TASK82) already drew. This card adds points and lines and closes the
+  deferral of section 9.
+- **Points are quads computed on the CPU** (`mgl_point_quads` in
+  `mgl_draw.c`), not Metal point primitives: the size, the clip test and
+  the pixel snapping are then plain C the host test runs, and Metal
+  rasterizes a quad whose edges lie on pixel boundaries exactly as GL
+  rasterizes the point. Per point: the clip coordinates (a centre
+  outside the clip volume, or w <= 0, drops the point, GL 1.4 section
+  2.12), the eye distance through the modelview, the width
+  (`mgl_point_size`: `glPointSize` times `sqrt(1 / (a + b d + c d^2))`,
+  clamped to `GL_POINT_SIZE_MIN` and `_MAX`; a square point rounds it
+  to a whole width in 1 to 8191, a smooth one clamps it to 0.1 to 256),
+  then four corners in window coordinates turned back into clip
+  coordinates at the point's own z and w, drawn with the identity
+  matrix. Square points (`gl1_particle_square 1`) centre an odd width
+  on the pixel and an even one on the nearest corner (section 3.3.1);
+  smooth points (`GL_POINT_SMOOTH`, gl1's default) reach r + 1/2 about
+  the exact centre and carry their offset and radius in a new vertex
+  field, `pt` (the vertex is 64 bytes), from which the fragment
+  function multiplies the alpha by `mgl_point_coverage` (r + 1/2 minus
+  the distance, clamped), before the alpha test (section 3.12).
+  Culling, the polygon mode and polygon offset do not apply. One draw
+  holds `MGL_MAX_DRAW_POINTS` (16384) points; more is
+  `GL_INVALID_VALUE`.
+- **Measured against Apple's software renderer**, the renderer of the
+  `gl1` references, with a scratch CGL program (not committed): its
+  ranges (aliased 1 to 8191, smooth 0.1 to 256, the initial
+  `GL_POINT_SIZE_MAX` 8191, which the shim now starts at instead of
+  1); square points of 1 to 64 pixels at three sub-pixel positions
+  cover exactly the pixels GL's rule gives (1.4 to 1, 1.6 to 2, 2.5 to
+  3, 7.3 to 7); smooth points of size 4 and 7.3 match the coverage
+  formula to 1 in 255 on every pixel, and the coverage of size 10 to
+  64 sums to the disc's area within 0.6 percent; with gl1's parameters
+  the width follows the eye distance, not |z| (a point 25 units away
+  at z -20 is 16 pixels, as the distance gives, not 20). The host test
+  checks these values.
+- **Lines** (`GL_LINES`, `GL_LINE_STRIP`, `GL_LINE_LOOP`) are Metal
+  line lists (`mgl_line_indices`, `mgl_draw_t.lines`), width 1. gl1
+  draws them in two places, both covered: the interleaved-stereo
+  stencil mask (`gl1_main.c`, `R_RenderView`, `GL_LINES`) and
+  `gl_showtris` (`gl1_surf.c`, `R_DrawTriangleOutlines`,
+  `GL_LINE_STRIP`). No pin scenario uses either; a scratch `particles`
+  with `gl_showtris 1` drew outlines that lie on `gl1`'s. Metal's line
+  rasterization rule is not GL's diamond-exit rule, so single pixels
+  at line ends may differ; not measured.
+- **Nothing deferred.** Every `glDrawArrays` and `glDrawElements` mode
+  gl1 uses now draws. `GL_POINT` polygon fill stays reported (section
+  9); gl1 never sets it.
+- **Tests and sanitizers.** `test_points_lines` checks the widths,
+  snapping, coverage, attenuation, clip test, viewport, the draw state
+  of gl1's three call sites, and the overflow paths of the point bound
+  and the line list against hand-worked values; each of 62 mutants of
+  the lines it covers fails it (run alone and in the whole test); the
+  host test as a whole runs 501 checks. An
+  `ASAN=1 UBSAN=1` build recorded `particles`, with
+  `gl1_pointparameters 0` and with `gl1_particle_square 1`, with no
+  sanitizer line. On frames see `docs/plans/metal-port-harness.md`,
+  "Particles against the software renderer (TASK52)".

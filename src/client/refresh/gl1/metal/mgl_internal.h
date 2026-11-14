@@ -231,12 +231,18 @@ void mgl_unpack_rgba(const unsigned char *src, GLenum format, int w, int h,
 
 /* ---- the draw path (mgl_draw.c) -------------------------------------------- */
 
-/* One vertex as the shaders read it (shaders.metal, struct mgl_vertex): 48 bytes. */
+/*
+ * One vertex as the shaders read it (shaders.metal, struct mgl_vertex):
+ * 64 bytes. pt is zero except on the corners of a smooth point's quad
+ * (mgl_point_quads): the corner's offset from the point's centre in
+ * pixels, the point's radius, and 1.
+ */
 typedef struct
 {
 	float pos[4];
 	float tc[MGL_MAX_UNITS][2];
 	float color[4];
+	float pt[4];
 } mgl_vertex_t;
 
 /* The uniform block of a draw (shaders.metal, struct mgl_uniforms): 96 bytes. */
@@ -274,6 +280,7 @@ typedef struct
 	int cull;                     /* MGL_CULL_* */
 	int fill_lines;               /* glPolygonMode GL_LINE */
 	float depth_bias, depth_slope;   /* glPolygonOffset units and factor; 0 without GL_POLYGON_OFFSET_FILL */
+	int lines;                    /* indices are pairs of a line list, not triangles */
 } mgl_draw_t;
 
 #define MGL_CULL_NONE 0
@@ -292,6 +299,48 @@ void mgl_assemble(const mgl_state_t *s, GLint first, GLsizei count, mgl_vertex_t
  */
 long mgl_triangle_indices(GLenum mode, GLsizei count, const uint16_t *elements,
 		uint16_t *out, size_t cap);
+
+/*
+ * The line list of count vertices drawn as mode (GL_LINES,
+ * GL_LINE_STRIP, GL_LINE_LOOP), two indices a segment; elements as for
+ * mgl_triangle_indices. Returns the number of indices written, or -1
+ * when mode is none of the three or the list needs more than cap.
+ */
+long mgl_line_indices(GLenum mode, GLsizei count, const uint16_t *elements,
+		uint16_t *out, size_t cap);
+
+/*
+ * Points (TASK52). GL's point size ranges are those of Apple's software
+ * renderer, which made the gl1 references: GL_ALIASED_POINT_SIZE_RANGE
+ * 1 to 8191, GL_SMOOTH_POINT_SIZE_RANGE 0.1 to 256. A point is drawn as
+ * a quad of two triangles, so one draw holds at most a quarter of
+ * MGL_MAX_DRAW_VERTICES points.
+ */
+#define MGL_POINT_ALIASED_MAX 8191.0f
+#define MGL_POINT_SMOOTH_MIN 0.1f
+#define MGL_POINT_SMOOTH_MAX 256.0f
+#define MGL_MAX_DRAW_POINTS (MGL_MAX_DRAW_VERTICES / 4)
+
+/*
+ * The width in pixels GL rasterizes a point at whose eye coordinates are
+ * eye: glPointSize attenuated by ARB_point_parameters and clamped to
+ * GL_POINT_SIZE_MIN and _MAX, then to the smooth range, or rounded to a
+ * whole width in the aliased range when smooth is 0.
+ */
+float mgl_point_size(const mgl_state_t *s, const float eye[4], int smooth);
+
+/*
+ * Expands the n points of in into quads in clip coordinates, to be
+ * drawn with the identity matrix: GL 1.4 section 3.3. A point whose centre lies outside the clip volume is dropped
+ * (section 2.12). A square point covers the size x size pixels around
+ * its centre snapped as GL snaps it; a smooth one (GL_POINT_SMOOTH)
+ * covers every pixel within its radius plus half a pixel and carries pt
+ * for the coverage the fragment function applies (mgl_point_coverage).
+ * Writes 4 vertices and 6 indices a point drawn and returns the number
+ * of points drawn; out and idx must hold 4 n and 6 n.
+ */
+size_t mgl_point_quads(const mgl_state_t *s, const mgl_vertex_t *in, size_t n,
+		mgl_vertex_t *out, uint16_t *idx);
 
 /* The packed blend and colour-mask state of a draw. */
 uint32_t mgl_pipeline_key(const mgl_state_t *s);

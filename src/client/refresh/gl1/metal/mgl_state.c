@@ -83,7 +83,7 @@ mgl_state_reset(void)
 
 	s->point_size = 1.0f;
 	s->point_size_min = 0.0f;
-	s->point_size_max = 1.0f;   /* GL: the implementation's maximum; refined by the draw path */
+	s->point_size_max = MGL_POINT_ALIASED_MAX;   /* GL: the largest size the implementation has */
 	s->point_attenuation[0] = 1.0f;
 
 	s->color[0] = s->color[1] = s->color[2] = s->color[3] = 1.0f;
@@ -418,7 +418,8 @@ glShadeModel(GLenum mode)
 void
 glPointSize(GLfloat size)
 {
-	if (size <= 0.0f)
+	/* the negated form refuses NaN as well */
+	if (!(size > 0.0f))
 	{
 		mgl_error(GL_INVALID_VALUE);
 		return;
