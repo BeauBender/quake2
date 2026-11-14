@@ -315,6 +315,8 @@ void rmb_samplers_set(int min, int mag_linear, int aniso);
  * with mipmapped the mip chain is generated. id 0 takes a free id.
  * Returns the id, 0 when the size check refuses the upload or an
  * allocation fails (counted as an upload skip; nothing is written).
+ * Every 0 also frees the id passed in (its texture is gone), so on 0
+ * the caller forgets its id and no id is lost.
  * opaque forces alpha 255 (gl1's solid internal format on the shim).
  */
 int rmb_texture_upload(int id, const unsigned char *rgba, int w, int h, int mipmapped, int opaque);

@@ -340,6 +340,8 @@ rmb_texture_upload(int tid, const unsigned char *rgba, int w, int h, int mipmapp
 	if (!resources_open || !rgba || (tid < 0) || (tid >= RMB_MAX_TEXTURES) ||
 		!rm_upload_bytes(w, h, RMB_STAGING_BYTES, &bytes))
 	{
+		/* every 0 frees the id passed in (out of range ids are ignored): the caller forgets it */
+		rmb_texture_free(tid);
 		rmb_counts.upload_skips++;
 		return 0;
 	}
@@ -405,6 +407,8 @@ rmb_texture_upload(int tid, const unsigned char *rgba, int w, int h, int mipmapp
 
 		if (at < 0)
 		{
+			/* the texture has no defined contents: free its id, the caller is given 0 */
+			rmb_texture_free(tid);
 			rmb_counts.upload_skips++;
 			return 0;
 		}
@@ -433,6 +437,7 @@ rmb_texture_upload(int tid, const unsigned char *rgba, int w, int h, int mipmapp
 
 		if (!upload_blit)
 		{
+			rmb_texture_free(tid);
 			rmb_counts.upload_skips++;
 			return 0;
 		}
