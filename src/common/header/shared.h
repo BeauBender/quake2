@@ -428,6 +428,7 @@ int randk(void);
 float frandk(void);
 float crandk(void);
 void randk_seed(void);
+void randk_seed_fixed(unsigned int seed);	/* the pin harness only (pins_seed) */
 
 /*
  * ==============================================================
