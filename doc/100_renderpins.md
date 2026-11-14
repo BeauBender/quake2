@@ -168,11 +168,22 @@ replay's command line:
 
 Replaying the `hud2d` trace with the cvar restore switched off (a
 measurement build only) differed on all 23 frames (worst score
-0.126499): the replay drew the world `hud2d` switches off. `gl1` itself
-could not create an OpenGL context on that host and was not measured.
+0.126499): the replay drew the world `hud2d` switches off. Plain `gl1`
+(`GL_RENDERER` Apple Software Renderer) was measured in the TASK45
+review on the same host: `world`, `hud2d`, and `particles` with
+`PINS_SEED=1`, each recorded and replayed, 23 of 23 frames identical
+each. An earlier run
+in which `gl1` could not create an OpenGL context was an environment
+condition of that host at the time, not a property of the engine.
 A live record taken while the host stalls for more than 100 ms a frame
 can still differ from another live record (see `skywater` above); its
 replay matches it all the same.
+
+A seeded record (`PINS_SEED`, the engine's `pins_seed`) is for making
+pins, not for hosting a server: a listen server started in that process
+draws its spawn count from the fixed stream. `pins_record` without
+`pins_capture` is not a pin run, so it reads the user's `config.cfg` and
+`autoexec.cfg` like a normal game.
 
 A trace is a local development artifact: your own engine records it,
 you name it on the command line, and like the rest of the store it is
@@ -453,7 +464,7 @@ refusal with a stand-in uploader; it runs in `scripts/test.sh` as
 
 `record` passes four arguments to the engine, `pins_dir`,
 `pins_scenario`, `pins_capture` and `pins_record` (the last one left out
-with `PINS_TRACE=0`), and a fifth, `pins_seed`, when `PINS_SEED` is set. They look like cvars but are read
-only from the command line; see the *Pin harness* section of the
+with `PINS_TRACE=0`), and a fifth, `pins_seed`, when `PINS_SEED` is
+set. They look like cvars but are read only from the command line; see the *Pin harness* section of the
 [List Of All New Console Variables](040_cvarlist.md). Without them the
 engine behaves exactly as it does otherwise.
