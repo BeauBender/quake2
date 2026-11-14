@@ -232,8 +232,8 @@ rmb_new_depth_states(void)
 		st.stencilFailureOperation = MTLStencilOperationKeep;
 		st.depthFailureOperation = MTLStencilOperationKeep;
 		st.depthStencilPassOperation = MTLStencilOperationIncrementClamp;
-		st.readMask = 2;
-		st.writeMask = 0xff;   /* GL's default glStencilMask, which gl1 leaves */
+		st.readMask = RM_SHADOW_STENCIL_READ_MASK;
+		st.writeMask = RM_SHADOW_STENCIL_WRITE_MASK;   /* GL's default glStencilMask, which gl1 leaves */
 
 		d = [MTLDepthStencilDescriptor new];
 		d.depthCompareFunction = MTLCompareFunctionLessEqual;

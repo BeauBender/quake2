@@ -1054,7 +1054,7 @@ rmb_draw_alias(const rm_avert_t *v, unsigned nv, const unsigned short *idx, unsi
 
 		if (d->stencil)
 		{
-			[frame_enc setStencilReferenceValue:1];   /* glStencilFunc(GL_EQUAL, 1, 2) */
+			[frame_enc setStencilReferenceValue:RM_SHADOW_STENCIL_REF];   /* glStencilFunc(GL_EQUAL, 1, 2) */
 		}
 
 		if (!rm_alias_region(&ring, (long)nv, (long)ni, &r))

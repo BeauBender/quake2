@@ -1528,6 +1528,11 @@ typedef enum
 	RMB_DS_COUNT
 } rmb_ds_t;
 
+/* RMB_DS_STENCIL_SHADOW's reference and masks: gl1's glStencilFunc(GL_EQUAL, 1, 2) and GL's write mask */
+#define RM_SHADOW_STENCIL_REF 1u
+#define RM_SHADOW_STENCIL_READ_MASK 2u
+#define RM_SHADOW_STENCIL_WRITE_MASK 0xffu
+
 /* Static buffer ids run from 1 to RMB_MAX_BUFFERS - 1; 0 is none. */
 #define RMB_MAX_BUFFERS 16
 

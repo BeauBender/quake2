@@ -29,6 +29,7 @@
  * =======================================================================
  */
 
+#include <float.h>
 #include <limits.h>
 #include <math.h>
 #include <stddef.h>
@@ -5518,6 +5519,1076 @@ test_sp2_check(void)
 	hunk_mem = NULL;
 }
 
+/* ---- N8: sprites, beams, null models, shadows, dynamic lights, flash blobs ---------- */
+
+/* gl1_light.c, the body of R_AddDynamicLights' loop for one light dl, verbatim but for the surface's fields passed in */
+static void
+ref_add_dynamic_light(float *s_blocklights, int smax, int tmax, const float *normal, float dist,
+		const float (*vecs)[4], const short *texturemins, const dlight_t *dl)
+{
+	int sd, td;
+	float fdist, frad, fminlight;
+	vec3_t impact, local;
+	int s, t;
+	int i;
+	float *pfBL;
+	float fsacc, ftacc;
+
+	frad = dl->intensity;
+	fdist = DotProduct(dl->origin, normal) -
+			dist;
+	frad -= fabs(fdist);
+
+	/* rad is now the highest intensity on the plane */
+	fminlight = DLIGHT_CUTOFF;
+
+	if (frad < fminlight)
+	{
+		return;
+	}
+
+	fminlight = frad - fminlight;
+
+	for (i = 0; i < 3; i++)
+	{
+		impact[i] = dl->origin[i] -
+					normal[i] * fdist;
+	}
+
+	local[0] = DotProduct(impact,
+			   vecs[0]) + vecs[0][3] - texturemins[0];
+	local[1] = DotProduct(impact,
+			   vecs[1]) + vecs[1][3] - texturemins[1];
+
+	pfBL = s_blocklights;
+
+	for (t = 0, ftacc = 0; t < tmax; t++, ftacc += 16)
+	{
+		td = local[1] - ftacc;
+
+		if (td < 0)
+		{
+			td = -td;
+		}
+
+		for (s = 0, fsacc = 0; s < smax; s++, fsacc += 16, pfBL += 3)
+		{
+			sd = Q_ftol(local[0] - fsacc);
+
+			if (sd < 0)
+			{
+				sd = -sd;
+			}
+
+			if (sd > td)
+			{
+				fdist = sd + (td >> 1);
+			}
+			else
+			{
+				fdist = td + (sd >> 1);
+			}
+
+			if (fdist < fminlight)
+			{
+				pfBL[0] += (frad - fdist) * dl->color[0];
+				pfBL[1] += (frad - fdist) * dl->color[1];
+				pfBL[2] += (frad - fdist) * dl->color[2];
+			}
+		}
+	}
+}
+
+/* rm_lm_dlight with a dlight_t and a texinfo's vecs, as rm_light.c calls it */
+static int
+rm_dlight_of(float *bl, int smax, int tmax, const float *normal, float dist, const float (*vecs)[4],
+		const short *tmins, const dlight_t *dl)
+{
+	return rm_lm_dlight(bl, smax, tmax, normal, dist, vecs[0], vecs[1], tmins[0], tmins[1], dl->origin,
+			dl->intensity, dl->color);
+}
+
+/*
+ * gl1's R_AddDynamicLights on a 3 by 2 surface in the z = 0 plane, worked
+ * by hand: a light 100 above luxel (1, 0)'s corner of radius 200 lights
+ * every luxel (frad 100, the cutoff 36 away: 80 and 92); 120 above, only
+ * the luxels within 16 (72); 150 above, none (below DLIGHT_CUTOFF on the
+ * plane). Then the bounds, the split of rm_lm_build against N5's, and
+ * random surfaces and lights against gl1's lines.
+ */
+static void
+test_lm_dlight(void)
+{
+	static const float normal[3] = { 0, 0, 1 };
+	static const float vecs[2][4] = { { 1, 0, 0, 0 }, { 0, 1, 0, 0 } };
+	static const short tmins[2] = { 0, 0 };
+	float bl[RM_LM_MAX_LUXELS * 3], ref[RM_LM_MAX_LUXELS * 3];
+	dlight_t dl;
+	int i, n, same = 1;
+
+	CHECK(RM_DLIGHT_CUTOFF == DLIGHT_CUTOFF);
+
+	memset(&dl, 0, sizeof(dl));
+	dl.origin[0] = 16;
+	dl.origin[1] = 8;
+	dl.origin[2] = 100;
+	dl.intensity = 200;
+	dl.color[0] = 1;
+	dl.color[1] = 0.5f;
+	dl.color[2] = 0.25f;
+
+	memset(bl, 0, sizeof(bl));
+	CHECK(rm_dlight_of(bl, 3, 2, normal, 0, vecs, tmins, &dl));
+	CHECK(bl[0] == 80 && bl[1] == 40 && bl[2] == 20 && bl[3] == 92 && bl[4] == 46 && bl[5] == 23);
+	CHECK(bl[6] == 80 && bl[9] == 80 && bl[12] == 92 && bl[15] == 80 && bl[17] == 20 && bl[18] == 0);
+
+	/* added to what the styles left, and stored as gl1 stores: 92 46 23, alpha the brightest */
+	{
+		static const unsigned char zero[3 * 6];
+		const float one[1][3] = { { 1, 1, 1 } };
+		unsigned char ident[256], out[2][12];
+
+		for (i = 0; i < 256; i++)
+		{
+			ident[i] = (unsigned char)i;
+		}
+
+		CHECK(rm_lm_styles(zero, 3, 2, 1, one, 1.0f, bl) == 2);
+		CHECK(rm_dlight_of(bl, 3, 2, normal, 0, vecs, tmins, &dl));
+		CHECK(rm_lm_store(3, 2, NULL, ident, &out[0][0], 12, bl));
+		CHECK(out[0][0] == 80 && out[0][1] == 40 && out[0][2] == 20 && out[0][3] == 80);
+		CHECK(out[0][4] == 92 && out[0][5] == 46 && out[0][6] == 23 && out[0][7] == 92 && out[1][4] == 92);
+		/* no light data: 255 everywhere and 1 (gl1 adds no dynamic light then) */
+		CHECK(rm_lm_styles(NULL, 3, 2, 1, one, 1.0f, bl) == 1 && bl[0] == 255 && bl[17] == 255);
+	}
+
+	/* 120 above: frad 80, the luxels nearer than 16 only: (1, 0) and (1, 1) at 8, 72 each */
+	dl.origin[2] = 120;
+	memset(bl, 0, sizeof(bl));
+	CHECK(rm_dlight_of(bl, 3, 2, normal, 0, vecs, tmins, &dl));
+	CHECK(bl[0] == 0 && bl[3] == 72 && bl[4] == 36 && bl[5] == 18 && bl[6] == 0 && bl[12] == 72 && bl[15] == 0);
+
+	/* 150 above (or below the plane: the distance is |fdist|): nothing, and taken */
+	dl.origin[2] = 150;
+	memset(bl, 0, sizeof(bl));
+	CHECK(rm_dlight_of(bl, 3, 2, normal, 0, vecs, tmins, &dl) && bl[3] == 0 && bl[4] == 0);
+	dl.origin[2] = -100;
+	CHECK(rm_dlight_of(bl, 3, 2, normal, 0, vecs, tmins, &dl) && bl[3] == 92);
+
+	/* the sizes rm_lm_size allows, and nothing written outside them */
+	dl.origin[2] = 100;
+	memset(bl, 0, sizeof(bl));
+	CHECK(!rm_dlight_of(bl, 0, 2, normal, 0, vecs, tmins, &dl) && !rm_dlight_of(bl, 3, 0, normal, 0, vecs, tmins, &dl));
+	CHECK(!rm_dlight_of(bl, RM_LM_WIDTH, 1, normal, 0, vecs, tmins, &dl));
+	CHECK(!rm_dlight_of(bl, 30, 30, normal, 0, vecs, tmins, &dl) && bl[0] == 0);
+	CHECK(rm_dlight_of(bl, RM_LM_WIDTH - 1, 6, normal, 0, vecs, tmins, &dl));
+	CHECK(rm_dlight_of(bl, 17, 51, normal, 0, vecs, tmins, &dl) && !rm_dlight_of(bl, 17, 52, normal, 0, vecs, tmins, &dl));
+
+	/* what gl1 would carry into an undefined int conversion: refused, nothing added */
+	{
+		const float nan_normal[3] = { NAN, 0, 1 }, big_normal[3] = { 0, 0, 3e38f };
+		float huge[2][4] = { { 1e30f, 0, 0, 0 }, { 0, 1, 0, 0 } }, edge[2][4] = { { 0, 0, 0, 0 }, { 0, 1, 0, 0 } };
+		dlight_t odd = dl;
+
+		memset(bl, 0, sizeof(bl));
+		CHECK(!rm_dlight_of(bl, 3, 2, nan_normal, 0, vecs, tmins, &dl));
+		CHECK(!rm_dlight_of(bl, 3, 2, normal, NAN, vecs, tmins, &dl));
+		CHECK(!rm_dlight_of(bl, 3, 2, normal, INFINITY, vecs, tmins, &dl));
+		CHECK(!rm_dlight_of(bl, 3, 2, big_normal, 0, vecs, tmins, &dl));
+		CHECK(!rm_dlight_of(bl, 3, 2, normal, 0, (const float (*)[4])huge, tmins, &dl));
+		odd.intensity = NAN;
+		CHECK(!rm_dlight_of(bl, 3, 2, normal, 0, vecs, tmins, &odd));
+		odd.intensity = INFINITY;
+		CHECK(!rm_dlight_of(bl, 3, 2, normal, 0, vecs, tmins, &odd));
+		CHECK(bl[0] == 0 && bl[3] == 0 && bl[17] == 0);
+
+		/* the point 2^30 texture units out is taken (its arithmetic is defined, nothing near), past it refused */
+		edge[0][3] = 1073741824.0f;
+		CHECK(rm_dlight_of(bl, 3, 2, normal, 0, (const float (*)[4])edge, tmins, &dl) && bl[0] == 0);
+		edge[0][3] = -1073741824.0f;
+		CHECK(rm_dlight_of(bl, 3, 2, normal, 0, (const float (*)[4])edge, tmins, &dl) && bl[0] == 0);
+		edge[0][3] = 1073741952.0f;
+		CHECK(!rm_dlight_of(bl, 3, 2, normal, 0, (const float (*)[4])edge, tmins, &dl));
+		edge[0][3] = 0;
+		edge[1][3] = -1073741952.0f;
+		CHECK(!rm_dlight_of(bl, 3, 2, normal, 0, (const float (*)[4])edge, tmins, &dl));
+		/* a negative intensity never reaches the plane */
+		odd.intensity = -500;
+		CHECK(rm_dlight_of(bl, 3, 2, normal, 0, vecs, tmins, &odd) && bl[0] == 0);
+	}
+
+	/* the two halves are N5's rm_lm_build, byte for byte, when no light is added between them */
+	for (n = 0; n < 3000; n++)
+	{
+		unsigned char samples[4 * RM_LM_MAX_LUXELS * 3], a[RM_LM_MAX_LUXELS * 4], b[RM_LM_MAX_LUXELS * 4];
+		unsigned char gam[256], ml[256];
+		float rgb[4][3];
+		const int smax = 1 + (int)(rng() % 17), tmax = 1 + (int)(rng() % 17), maps = (int)(rng() % 5);
+		const float mod = (n % 3) ? rngf(0, 3) : 1.0f;
+		const int with_ml = n & 1, no_samples = (n % 11) == 0;
+
+		for (i = 0; i < (int)sizeof(samples); i++)
+		{
+			samples[i] = (unsigned char)rng();
+		}
+
+		for (i = 0; i < 256; i++)
+		{
+			gam[i] = (unsigned char)rng();
+		}
+
+		rm_minlight_table(rngf(0, 128), ml);
+
+		for (i = 0; i < 12; i++)
+		{
+			rgb[i / 3][i % 3] = (rng() & 1) ? 1.0f : rngf(0, 2);
+		}
+
+		memset(a, 0x5a, sizeof(a));
+		memset(b, 0x5a, sizeof(b));
+		rm_lm_build(no_samples ? NULL : samples, smax, tmax, maps, (const float (*)[3])rgb, mod, with_ml ? ml : NULL,
+				gam, a, smax * 4, bl);
+		same = same && (rm_lm_styles(no_samples ? NULL : samples, smax, tmax, maps, (const float (*)[3])rgb, mod, ref) ==
+				(no_samples ? 1 : 2));
+		same = same && rm_lm_store(smax, tmax, with_ml ? ml : NULL, gam, b, smax * 4, ref);
+		same = same && (memcmp(a, b, sizeof(a)) == 0);
+	}
+
+	CHECK(same);
+
+	/* each half refuses as rm_lm_build does, writing nothing */
+	{
+		unsigned char out[16], idt[256];
+		const float one[1][3] = { { 1, 1, 1 } };
+
+		for (i = 0; i < 256; i++)
+		{
+			idt[i] = (unsigned char)i;
+		}
+
+		memset(out, 0x5a, sizeof(out));
+		bl[0] = 7;
+		CHECK(!rm_lm_styles(NULL, 0, 1, 1, one, 1, bl) && !rm_lm_styles(NULL, 1, 1, 5, one, 1, bl));
+		CHECK(!rm_lm_styles(NULL, 1, 1, -1, one, 1, bl) && !rm_lm_styles(NULL, RM_LM_WIDTH, 1, 1, one, 1, bl) && bl[0] == 7);
+		CHECK(!rm_lm_store(2, 1, NULL, idt, out, 7, bl) && !rm_lm_store(0, 1, NULL, idt, out, 16, bl));
+		CHECK(!rm_lm_store(1, RM_LM_HEIGHT + 1, NULL, idt, out, 16, bl) && out[0] == 0x5a && out[15] == 0x5a);
+		CHECK(rm_lm_store(2, 1, NULL, idt, out, 8, bl) && out[8] == 0x5a);
+	}
+
+	/* random surfaces and lights against gl1's lines, float for float */
+	for (n = 0; n < 20000; n++)
+	{
+		const int smax = 1 + (int)(rng() % 17), tmax = 1 + (int)(rng() % 17);
+		float nrm[3], v[2][4], d;
+		short tm[2];
+
+		for (i = 0; i < 3; i++)
+		{
+			nrm[i] = (n % 4) ? rngf(-1, 1) : (float)(i == (n / 4) % 3);
+			dl.origin[i] = rngf(-2000, 2000);
+			dl.color[i] = (n % 7) ? rngf(-1, 2) : 1.0f;
+		}
+
+		for (i = 0; i < 8; i++)
+		{
+			v[i / 4][i % 4] = (i % 4 == 3) ? rngf(-4000, 4000) : rngf(-2, 2);
+		}
+
+		tm[0] = (short)(rng() % 8192) - 4096;
+		tm[1] = (short)(rng() % 8192) - 4096;
+		d = rngf(-3000, 3000);
+		dl.intensity = rngf(-50, 600);
+
+		/* a light near the plane, so most of them reach it */
+		if (n & 1)
+		{
+			const float off = DotProduct(dl.origin, nrm) - d;
+
+			for (i = 0; i < 3; i++)
+			{
+				dl.origin[i] -= nrm[i] * off * rngf(0.8f, 1.0f);
+			}
+		}
+
+		for (i = 0; i < smax * tmax * 3; i++)
+		{
+			bl[i] = ref[i] = rngf(0, 300);
+		}
+
+		ref_add_dynamic_light(ref, smax, tmax, nrm, d, (const float (*)[4])v, tm, &dl);
+		same = same && rm_dlight_of(bl, smax, tmax, nrm, d, (const float (*)[4])v, tm, &dl);
+		same = same && (memcmp(bl, ref, (size_t)smax * tmax * 3 * sizeof(float)) == 0);
+	}
+
+	CHECK(same);
+
+	/* how many of those lit a luxel at all (the comparison must not be one of untouched blocks) */
+	{
+		int lit = 0;
+
+		for (n = 0; n < 2000; n++)
+		{
+			float nrm[3] = { 0, 0, 1 }, v[2][4] = { { 1, 0, 0, 0 }, { 0, 1, 0, 0 } };
+			short tm[2] = { 0, 0 };
+
+			dl.origin[0] = rngf(-50, 300);
+			dl.origin[1] = rngf(-50, 300);
+			dl.origin[2] = rngf(-200, 200);
+			dl.intensity = rngf(100, 300);
+			memset(bl, 0, sizeof(bl));
+			memset(ref, 0, sizeof(ref));
+			ref_add_dynamic_light(ref, 17, 17, nrm, 0, (const float (*)[4])v, tm, &dl);
+			same = same && rm_dlight_of(bl, 17, 17, nrm, 0, (const float (*)[4])v, tm, &dl);
+			same = same && (memcmp(bl, ref, sizeof(bl)) == 0);
+
+			for (i = 0; i < 17 * 17 * 3; i++)
+			{
+				if (bl[i] != 0)
+				{
+					lit++;
+					break;
+				}
+			}
+		}
+
+		CHECK(same && lit > 500);
+	}
+}
+
+/*
+ * The stencil test and update of one fragment (GL 1.4, section 4.1.5) as
+ * the depth-stencil state RMB_DS_STENCIL_SHADOW asks Metal for it
+ * (rmb_resource.m: compare equal, keep, keep, increment clamped, the
+ * masks and the reference of rmb.h): 1 when the fragment is written,
+ * *stored updated. The shim's test_stencil, for ref_metal's state.
+ */
+static int
+shadow_stencil(unsigned *stored, int depth_pass)
+{
+	const unsigned a = RM_SHADOW_STENCIL_REF & RM_SHADOW_STENCIL_READ_MASK, b = *stored & RM_SHADOW_STENCIL_READ_MASK;
+	unsigned v = *stored;
+
+	if (a != b)
+	{
+		return 0;   /* GL_KEEP */
+	}
+
+	if (depth_pass)
+	{
+		v = v < 255 ? v + 1 : 255;   /* GL_INCR */
+	}
+
+	*stored = (*stored & ~RM_SHADOW_STENCIL_WRITE_MASK) | (v & RM_SHADOW_STENCIL_WRITE_MASK);
+	return depth_pass;
+}
+
+/* the frame's lights as taken, a submodel's head node, the stencil shadow's state */
+static void
+test_dlight_bounds(void)
+{
+	float o[3] = { 0, 0, 0 }, c[3] = { 1, 1, 1 };
+	unsigned st;
+	int i;
+
+	CHECK(rm_dlight_ok(o, c, 200));
+	CHECK(rm_dlight_ok(o, c, -200) && rm_dlight_ok(o, c, 0));
+	CHECK(rm_dlight_ok(o, c, RM_DLIGHT_MAX_INTENSITY) && rm_dlight_ok(o, c, -RM_DLIGHT_MAX_INTENSITY));
+	CHECK(!rm_dlight_ok(o, c, nextafterf(RM_DLIGHT_MAX_INTENSITY, INFINITY)));
+	CHECK(!rm_dlight_ok(o, c, NAN) && !rm_dlight_ok(o, c, INFINITY) && !rm_dlight_ok(o, c, -INFINITY));
+
+	for (i = 0; i < 3; i++)
+	{
+		float oo[3] = { 1, 2, 3 }, cc[3] = { -1, 0.5f, 2 };
+
+		CHECK(rm_dlight_ok(oo, cc, 300));
+		oo[i] = RM_DLIGHT_MAX_COORD;
+		cc[i] = -RM_DLIGHT_MAX_COLOR;
+		CHECK(rm_dlight_ok(oo, cc, 300));
+		oo[i] = nextafterf(RM_DLIGHT_MAX_COORD, INFINITY);
+		CHECK(!rm_dlight_ok(oo, cc, 300));
+		oo[i] = -RM_DLIGHT_MAX_COORD;
+		cc[i] = nextafterf(RM_DLIGHT_MAX_COLOR, INFINITY);
+		CHECK(!rm_dlight_ok(oo, cc, 300));
+		cc[i] = 1;
+		oo[i] = NAN;
+		CHECK(!rm_dlight_ok(oo, cc, 300));
+		oo[i] = 0;
+		cc[i] = NAN;
+		CHECK(!rm_dlight_ok(oo, cc, 300));
+		cc[i] = -INFINITY;
+		CHECK(!rm_dlight_ok(oo, cc, 300));
+	}
+
+	/* the flash blob's colour times 51 and the light's int intensity are defined at the bounds */
+	CHECK((double)RM_DLIGHT_MAX_COLOR * 51 < 2147483647.0 && (double)RM_DLIGHT_MAX_INTENSITY + 64 < 2147483647.0);
+
+	/* a submodel's head node: a node of the world, else nothing marked (a leaf is -1 - leaf) */
+	CHECK(rm_bmodel_headnode(0, 5) == 0 && rm_bmodel_headnode(4, 5) == 4);
+	CHECK(rm_bmodel_headnode(5, 5) == -1 && rm_bmodel_headnode(-1, 5) == -1 && rm_bmodel_headnode(-100, 5) == -1);
+	CHECK(rm_bmodel_headnode(0, 0) == -1 && rm_bmodel_headnode(LONG_MIN, 5) == -1 && rm_bmodel_headnode(LONG_MAX, LONG_MAX) == -1);
+
+	/*
+	 * The shadow's stencil, the shim's test_models case for ref_metal's
+	 * state: the buffer cleared to 1, the first of two shadow triangles
+	 * over a pixel passes (1 & 2 equals 1 & 2) and raises it to 2, the
+	 * second fails (2 & 2 is not 0): one darkening; a fragment behind
+	 * the depth keeps the 1; without the clear to 1 (0) both pass.
+	 */
+	CHECK(RM_SHADOW_STENCIL_REF == 1 && RM_SHADOW_STENCIL_READ_MASK == 2 && RM_SHADOW_STENCIL_WRITE_MASK == 0xff);
+	st = 1;
+	CHECK(!shadow_stencil(&st, 0) && st == 1);
+	CHECK(shadow_stencil(&st, 1) && st == 2);
+	CHECK(!shadow_stencil(&st, 1) && st == 2);
+	CHECK(!shadow_stencil(&st, 1) && st == 2);
+	st = 0;
+	CHECK(shadow_stencil(&st, 1) && st == 1 && shadow_stencil(&st, 1) && st == 2 && !shadow_stencil(&st, 1));
+	/* the read mask sees only bit 1: 253 passes and is raised, 255 fails and is kept */
+	st = 255;
+	CHECK(!shadow_stencil(&st, 1) && st == 255);
+	st = 253;
+	CHECK(shadow_stencil(&st, 1) && st == 254);
+	st = 252;
+	CHECK(shadow_stencil(&st, 1) && st == 253);
+}
+
+/* the shim's mgl_triangle_indices (mgl_draw.c) for glDrawArrays, verbatim but for its types; base added */
+static long
+ref_triangle_indices(int strip, int count, int base, unsigned short *out, size_t cap)
+{
+	size_t n, i, k = 0;
+	size_t pos[3];
+
+	n = count > 2 ? (size_t)count - 2 : 0;
+
+	if (n * 3 > cap)
+	{
+		return -1;
+	}
+
+	for (i = 0; i < n; i++)
+	{
+		if (!strip)
+		{
+			pos[0] = 0;
+			pos[1] = i + 1;
+			pos[2] = i + 2;
+		}
+		else
+		{
+			/* GL 1.4, section 2.6.1: every odd triangle swaps its first two vertices */
+			pos[0] = (i & 1) ? i + 1 : i;
+			pos[1] = (i & 1) ? i : i + 1;
+			pos[2] = i + 2;
+		}
+
+		out[k++] = (unsigned short)(base + pos[0]);
+		out[k++] = (unsigned short)(base + pos[1]);
+		out[k++] = (unsigned short)(base + pos[2]);
+	}
+
+	return (long)k;
+}
+
+/* gl1_buffer.c, R_SetBufferIndices for a GL_TRIANGLE_FAN at vtx_ptr, verbatim but for its buffer */
+static int
+ref_fan_buffer_indices(int vtx_ptr, int vertices_num, unsigned short *idx)
+{
+	int i, idx_ptr = 0;
+
+	for (i = 0; i < vertices_num - 2; i++)
+	{
+		idx[idx_ptr] = vtx_ptr;
+		idx[idx_ptr + 1] = vtx_ptr + i + 1;
+		idx[idx_ptr + 2] = vtx_ptr + i + 2;
+		idx_ptr += 3;
+	}
+
+	return idx_ptr;
+}
+
+static void
+test_prim_indices(void)
+{
+	unsigned short got[3 * 64 + 4], want[3 * 64 + 4];
+	int n, strip, base, same = 1;
+
+	for (strip = 0; strip < 2; strip++)
+	{
+		for (n = 3; n <= 64; n++)
+		{
+			for (base = 0; base < 40; base += 13)
+			{
+				long k = ref_triangle_indices(strip, n, base, want, 3 * 64);
+
+				memset(got, 0xee, sizeof(got));
+				same = same && (rm_prim_indices(strip, n, base, got, 3 * 64) == k);
+				same = same && (memcmp(got, want, (size_t)k * sizeof(got[0])) == 0) && (got[k] == 0xeeee);
+
+				if (!strip)
+				{
+					same = same && (ref_fan_buffer_indices(base, n, want) == k) &&
+						(memcmp(got, want, (size_t)k * sizeof(got[0])) == 0);
+				}
+			}
+		}
+	}
+
+	CHECK(same);
+
+	/* the beam's strip: its first two triangles, the second swapped */
+	CHECK(rm_prim_indices(1, RM_BEAM_VERTS, 0, got, 3 * 64) == 66);
+	CHECK(got[0] == 0 && got[1] == 1 && got[2] == 2 && got[3] == 2 && got[4] == 1 && got[5] == 3 && got[65] == 23);
+
+	/* the bounds: fewer than 3, a negative base, past 65536, one index short of the room; nothing written */
+	memset(got, 0xee, sizeof(got));
+	CHECK(!rm_prim_indices(0, 2, 0, got, 64) && !rm_prim_indices(1, 0, 0, got, 64) && !rm_prim_indices(0, -5, 0, got, 64));
+	CHECK(!rm_prim_indices(0, 4, -1, got, 64) && !rm_prim_indices(0, 4, 65533, got, 64));
+	CHECK(!rm_prim_indices(0, 18, 0, got, 47) && !rm_prim_indices(0, 18, 0, got, -1) && got[0] == 0xeeee);
+	CHECK(rm_prim_indices(0, 18, 0, got, 48) == 48 && rm_prim_indices(0, 4, 65532, got, 64) == 6 && got[5] == 65535);
+	CHECK(rm_prim_indices(0, 3, 0, got, 3) == 3 && !rm_prim_indices(0, 3, 0, got, 2));
+}
+
+/* gl1_main.c, R_DrawSpriteModel's frame, verbatim but on a copy */
+static int
+ref_sprite_frame(int frame, int numframes)
+{
+	/* A negative frame would leave a negative remainder and index
+	   before frames[] and skins[]; use the first frame. */
+	if (frame < 0)
+	{
+		frame = 0;
+	}
+
+	frame %= numframes;
+	return frame;
+}
+
+/* gl1_main.c, R_DrawSpriteModel's corners, verbatim (VectorMA is shared.c's) */
+static void
+ref_sprite_quad(const float *origin, const dsprframe_t *frame, const float *up, const float *right, vec3_t *point)
+{
+	VectorMA( origin, -frame->origin_y, up, point[0] );
+	VectorMA( point[0], -frame->origin_x, right, point[0] );
+
+	VectorMA( origin, frame->height - frame->origin_y, up, point[1] );
+	VectorMA( point[1], -frame->origin_x, right, point[1] );
+
+	VectorMA( origin, frame->height - frame->origin_y, up, point[2] );
+	VectorMA( point[2], frame->width - frame->origin_x, right, point[2] );
+
+	VectorMA( origin, -frame->origin_y, up, point[3] );
+	VectorMA( point[3], frame->width - frame->origin_x, right, point[3] );
+}
+
+static void
+test_sprite(void)
+{
+	int f, nf, n, i, same = 1, blend, atest;
+	float a;
+
+	for (nf = 1; nf <= RM_MD2_MAX_SKINS; nf++)
+	{
+		for (f = -5; f < 100; f++)
+		{
+			same = same && (rm_sprite_frame(f, nf) == ref_sprite_frame(f, nf));
+		}
+
+		same = same && (rm_sprite_frame(INT_MAX, nf) == ref_sprite_frame(INT_MAX, nf));
+		same = same && (rm_sprite_frame(INT_MIN, nf) == 0);
+	}
+
+	CHECK(same);
+	CHECK(rm_sprite_frame(3, 0) == -1 && rm_sprite_frame(0, RM_MD2_MAX_SKINS + 1) == -1 && rm_sprite_frame(0, -1) == -1);
+	CHECK(rm_sprite_frame(7, 4) == 3 && rm_sprite_frame(-7, 4) == 0);
+
+	/* the alpha: 1 without RF_TRANSLUCENT, alpha-tested; the entity's with it, blended unless it is 1 */
+	a = rm_sprite_alpha(0, 0.3f, &blend, &atest);
+	CHECK(a == 1 && !blend && atest);
+	a = rm_sprite_alpha(RF_TRANSLUCENT, 0.3f, &blend, &atest);
+	CHECK(a == 0.3f && blend && !atest);
+	a = rm_sprite_alpha(RF_TRANSLUCENT, 1, &blend, &atest);
+	CHECK(a == 1 && !blend && atest);
+	a = rm_sprite_alpha(RF_TRANSLUCENT | RF_FULLBRIGHT, 0, &blend, &atest);
+	CHECK(a == 0 && blend && !atest);
+
+	/* a 32 by 16 frame with its origin at (16, 8), at (100, 0, 0) facing -x: up z, right y */
+	{
+		const float origin[3] = { 100, 0, 0 }, up[3] = { 0, 0, 1 }, right[3] = { 0, 1, 0 };
+		float p[4][3];
+
+		CHECK(rm_sprite_quad(origin, 32, 16, 16, 8, up, right, p));
+		CHECK(p[0][0] == 100 && p[0][1] == -16 && p[0][2] == -8 && p[1][1] == -16 && p[1][2] == 8);
+		CHECK(p[2][1] == 16 && p[2][2] == 8 && p[3][1] == 16 && p[3][2] == -8);
+	}
+
+	/* random frames and views against gl1's lines */
+	for (n = 0; n < 20000; n++)
+	{
+		float origin[3], up[3], right[3], p[4][3];
+		vec3_t want[4];
+		dsprframe_t fr;
+
+		for (i = 0; i < 3; i++)
+		{
+			origin[i] = rngf(-4096, 4096);
+			up[i] = rngf(-1, 1);
+			right[i] = rngf(-1, 1);
+		}
+
+		memset(&fr, 0, sizeof(fr));
+		fr.width = (int)(rng() % 512);
+		fr.height = (int)(rng() % 512);
+		fr.origin_x = (int)(rng() % 600) - 50;
+		fr.origin_y = (int)(rng() % 600) - 50;
+		ref_sprite_quad(origin, &fr, up, right, want);
+		same = same && rm_sprite_quad(origin, fr.width, fr.height, fr.origin_x, fr.origin_y, up, right, p);
+		same = same && (memcmp(p, want, sizeof(p)) == 0);
+	}
+
+	CHECK(same);
+
+	/* a file's extreme ints: no overflow (gl1's int differences would), finite corners */
+	{
+		const float origin[3] = { 0, 0, 0 }, up[3] = { 0, 0, 1 }, right[3] = { 0, 1, 0 };
+		float p[4][3];
+
+		CHECK(rm_sprite_quad(origin, INT_MAX, INT_MAX, INT_MIN, INT_MIN, up, right, p));
+		CHECK(p[2][1] == 4294967295.0f && p[2][2] == 4294967295.0f && p[0][1] == 2147483648.0f);
+		CHECK(rm_sprite_quad(origin, INT_MIN, INT_MIN, INT_MAX, INT_MAX, up, right, p));
+		CHECK(p[2][1] == -4294967295.0f && p[0][2] == -2147483647.0f);
+	}
+
+	/* corners that are not finite are refused */
+	{
+		const float origin[3] = { 0, 0, 0 }, up[3] = { 3e38f, 0, 0 }, right[3] = { 0, 1, 0 };
+		float p[4][3];
+
+		CHECK(!rm_sprite_quad(origin, 0, 2, 0, 0, up, right, p));
+		CHECK(rm_sprite_quad(origin, 0, 1, 0, 0, up, right, p) && p[1][0] == 3e38f);
+	}
+}
+
+/* gl1_main.c */
+#define NUM_BEAM_SEGS 6
+
+/* gl1_main.c, R_DrawBeam's vertices, verbatim but for the entity's fields passed in */
+static int
+ref_beam(const float *eorigin, const float *eoldorigin, int eframe, float *vtx)
+{
+	int i;
+	vec3_t perpvec;
+	vec3_t direction, normalized_direction;
+	vec3_t start_points[NUM_BEAM_SEGS], end_points[NUM_BEAM_SEGS];
+	vec3_t oldorigin, origin;
+	unsigned int index_vtx = 0;
+	unsigned int pointb;
+
+	oldorigin[0] = eoldorigin[0];
+	oldorigin[1] = eoldorigin[1];
+	oldorigin[2] = eoldorigin[2];
+
+	origin[0] = eorigin[0];
+	origin[1] = eorigin[1];
+	origin[2] = eorigin[2];
+
+	normalized_direction[0] = direction[0] = oldorigin[0] - origin[0];
+	normalized_direction[1] = direction[1] = oldorigin[1] - origin[1];
+	normalized_direction[2] = direction[2] = oldorigin[2] - origin[2];
+
+	if (VectorNormalize(normalized_direction) == 0)
+	{
+		return 0;
+	}
+
+	PerpendicularVector(perpvec, normalized_direction);
+	VectorScale(perpvec, eframe / 2, perpvec);
+
+	for (i = 0; i < 6; i++)
+	{
+		RotatePointAroundVector(start_points[i], normalized_direction, perpvec,
+				(360.0 / NUM_BEAM_SEGS) * i);
+		VectorAdd(start_points[i], origin, start_points[i]);
+		VectorAdd(start_points[i], direction, end_points[i]);
+	}
+
+	for ( i = 0; i < NUM_BEAM_SEGS; i++ )
+	{
+		vtx[index_vtx++] = start_points [ i ][ 0 ];
+		vtx[index_vtx++] = start_points [ i ][ 1 ];
+		vtx[index_vtx++] = start_points [ i ][ 2 ];
+
+		vtx[index_vtx++] = end_points [ i ][ 0 ];
+		vtx[index_vtx++] = end_points [ i ][ 1 ];
+		vtx[index_vtx++] = end_points [ i ][ 2 ];
+
+		pointb = ( i + 1 ) % NUM_BEAM_SEGS;
+		vtx[index_vtx++] = start_points [ pointb ][ 0 ];
+		vtx[index_vtx++] = start_points [ pointb ][ 1 ];
+		vtx[index_vtx++] = start_points [ pointb ][ 2 ];
+
+		vtx[index_vtx++] = end_points [ pointb ][ 0 ];
+		vtx[index_vtx++] = end_points [ pointb ][ 1 ];
+		vtx[index_vtx++] = end_points [ pointb ][ 2 ];
+	}
+
+	return 1;
+}
+
+/* gl1_main.c, R_DrawBeam's colour, verbatim, and the shim's glColor4ub (b / 255.0f) */
+static void
+ref_beam_color(const unsigned *d_8to24table, const unsigned char *gammatable, int skinnum, float alpha, float *out)
+{
+	int clr[4];
+	unsigned char ub[4];
+
+	clr[0] = (LittleLong(d_8to24table[skinnum & 0xFF])) & 0xFF;
+	clr[1] = (LittleLong(d_8to24table[skinnum & 0xFF]) >> 8) & 0xFF;
+	clr[2] = (LittleLong(d_8to24table[skinnum & 0xFF]) >> 16) & 0xFF;
+	clr[3] = alpha * 255;
+
+	/* glColor4ub(gammatable[clr[0]], gammatable[clr[1]], gammatable[clr[2]], clr[3]) */
+	ub[0] = gammatable[clr[0]];
+	ub[1] = gammatable[clr[1]];
+	ub[2] = gammatable[clr[2]];
+	ub[3] = clr[3];
+
+	out[0] = ub[0] / 255.0f;
+	out[1] = ub[1] / 255.0f;
+	out[2] = ub[2] / 255.0f;
+	out[3] = ub[3] / 255.0f;
+}
+
+static void
+test_beam(void)
+{
+	unsigned pal[256];
+	unsigned char gam[256];
+	float got[RM_BEAM_VERTS][3], want[RM_BEAM_VERTS * 3], c[4], w[4];
+	int n, i, same = 1, drawn = 0;
+
+	CHECK(RM_BEAM_SEGS == NUM_BEAM_SEGS);
+	Swap_Init();
+
+	for (i = 0; i < 256; i++)
+	{
+		pal[i] = (unsigned)rng();
+		gam[i] = (unsigned char)rng();
+	}
+
+	/* a beam along x of width 8: its first start point is 4 off the axis, its end 100 further */
+	{
+		const float o[3] = { 0, 0, 0 }, oo[3] = { 100, 0, 0 };
+
+		CHECK(rm_beam_points(o, oo, 8, got) == 1);
+		CHECK(fabsf(sqrtf(got[0][1] * got[0][1] + got[0][2] * got[0][2]) - 4) < 1e-5f && got[0][0] == 0);
+		CHECK(got[1][0] == 100 && got[1][1] == got[0][1] && got[1][2] == got[0][2]);
+		CHECK(memcmp(got[2], got[4], sizeof(got[2])) == 0 && memcmp(got[22], got[0], sizeof(got[0])) == 0);
+		/* no length: gl1 draws nothing */
+		CHECK(rm_beam_points(o, o, 8, got) == 0);
+	}
+
+	for (n = 0; n < 20000; n++)
+	{
+		float o[3], oo[3];
+		int frame = (n % 50 == 0) ? -(int)(rng() % 9) : (int)(rng() % 41);
+
+		for (i = 0; i < 3; i++)
+		{
+			o[i] = rngf(-4096, 4096);
+			oo[i] = (n % 5 == 0 && i != (n / 5) % 3) ? o[i] : rngf(-4096, 4096);
+		}
+
+		if (ref_beam(o, oo, frame, want))
+		{
+			drawn++;
+			same = same && (rm_beam_points(o, oo, frame, got) == 1) && (memcmp(got, want, sizeof(got)) == 0);
+		}
+		else
+		{
+			same = same && (rm_beam_points(o, oo, frame, got) == 0);
+		}
+	}
+
+	CHECK(same && drawn > 19000);
+
+	/* a direction gl1's normalization turns into NaNs: not drawn */
+	{
+		const float o[3] = { 3e38f, 0, 0 }, oo[3] = { -3e38f, 0, 0 };
+
+		CHECK(rm_beam_points(o, oo, 8, got) == -1);
+	}
+
+	/* the colour: the palette through the gamma table, the alpha byte as glColor4ub keeps it */
+	for (n = 0; n < 4000; n++)
+	{
+		const int skin = (n % 3) ? (int)(rng() % 256) : (int)(rng() % 65536) - 32768;
+		const float alpha = (n % 4) ? rngf(0, 1) : rngf(-3, 3);
+
+		rm_beam_color(pal, gam, skin, alpha, c);
+		ref_beam_color(pal, gam, skin, alpha, w);
+		same = same && (memcmp(c, w, sizeof(c)) == 0);
+	}
+
+	CHECK(same);
+	rm_beam_color(pal, gam, 0, 0.30f, c);
+	CHECK(c[3] == 76 / 255.0f && c[0] == gam[pal[0] & 0xff] / 255.0f && c[2] == gam[(pal[0] >> 16) & 0xff] / 255.0f);
+	rm_beam_color(pal, gam, 0, 1.5f, c);
+	CHECK(c[3] == 126 / 255.0f);
+	/* where gl1's conversion is undefined: the int saturated, its low byte kept */
+	rm_beam_color(pal, gam, 0, INFINITY, c);
+	CHECK(c[3] == 1.0f);
+	rm_beam_color(pal, gam, 0, -INFINITY, c);
+	CHECK(c[3] == 0.0f);
+	rm_beam_color(pal, gam, 0, 1e30f, c);
+	CHECK(c[3] == 1.0f);
+}
+
+static void
+test_null_model(void)
+{
+	/* gl1_main.c, R_DrawNullModel's two arrays, verbatim (GLfloat is float) */
+	float vtxA[] = {
+		0, 0, -16,
+		16 * cos( 0 * M_PI / 2 ), 16 * sin( 0 * M_PI / 2 ), 0,
+		16 * cos( 1 * M_PI / 2 ), 16 * sin( 1 * M_PI / 2 ), 0,
+		16 * cos( 2 * M_PI / 2 ), 16 * sin( 2 * M_PI / 2 ), 0,
+		16 * cos( 3 * M_PI / 2 ), 16 * sin( 3 * M_PI / 2 ), 0,
+		16 * cos( 4 * M_PI / 2 ), 16 * sin( 4 * M_PI / 2 ), 0
+	};
+	float vtxB[] = {
+		0, 0, 16,
+		16 * cos( 4 * M_PI / 2 ), 16 * sin( 4 * M_PI / 2 ), 0,
+		16 * cos( 3 * M_PI / 2 ), 16 * sin( 3 * M_PI / 2 ), 0,
+		16 * cos( 2 * M_PI / 2 ), 16 * sin( 2 * M_PI / 2 ), 0,
+		16 * cos( 1 * M_PI / 2 ), 16 * sin( 1 * M_PI / 2 ), 0,
+		16 * cos( 0 * M_PI / 2 ), 16 * sin( 0 * M_PI / 2 ), 0
+	};
+	float got[RM_NULL_VERTS][3];
+
+	CHECK(sizeof(vtxA) + sizeof(vtxB) == sizeof(got));
+	memset(got, 0, sizeof(got));
+	rm_null_model(got);
+	CHECK(memcmp(got[0], vtxA, sizeof(vtxA)) == 0 && memcmp(got[6], vtxB, sizeof(vtxB)) == 0);
+	CHECK(got[0][2] == -16 && got[1][0] == 16 && got[2][1] == 16 && got[6][2] == 16 && got[11][0] == 16);
+}
+
+/* gl1_mesh.c, R_DrawAliasModel's shadevector, verbatim */
+static void
+ref_shadevector(float yaw, vec3_t shadevector)
+{
+	float an;
+
+	an = yaw / 180 * M_PI;
+	shadevector[0] = cos(-an);
+	shadevector[1] = sin(-an);
+	shadevector[2] = 1;
+	VectorNormalize(shadevector);
+}
+
+/* gl1_mesh.c, R_DrawAliasShadow for one vertex of s_lerped, verbatim */
+static void
+ref_shadow_point(const float *lerped, const vec3_t shadevector, const float *origin, const float *lightspot,
+		vec3_t out)
+{
+	vec3_t point;
+	float height = 0, lheight;
+
+	lheight = origin[2] - lightspot[2];
+	height = -lheight + 0.1f;
+
+	memcpy(point, lerped, sizeof(point));
+
+	point[0] -= shadevector[0] * (point[2] + lheight);
+	point[1] -= shadevector[1] * (point[2] + lheight);
+	point[2] = height;
+
+	VectorCopy(point, out);
+}
+
+static void
+test_shadow(void)
+{
+	float sv[3], want_sv[3], w[16], got[16], want[16], r[16];
+	int n, i, same = 1;
+	const float world_angles[3] = { 10, 20, 0 }, world_org[3] = { 1, 2, 3 };
+
+	/* gl1's flags: r_shadows, never for translucent, the view weapon or RF_NOSHADOW */
+	CHECK(RM_RF_NOSHADOW == RF_NOSHADOW && RM_RF_BEAM == RF_BEAM);
+	CHECK(rm_shadow_drawn(0, 1) && rm_shadow_drawn(RF_FULLBRIGHT, 1) && rm_shadow_drawn(RF_GLOW | RF_SHELL_RED, 2));
+	CHECK(!rm_shadow_drawn(0, 0) && rm_shadow_drawn(0, NAN) && !rm_shadow_drawn(RF_TRANSLUCENT, 1));
+	CHECK(!rm_shadow_drawn(RF_WEAPONMODEL, 1) && !rm_shadow_drawn(RF_NOSHADOW, 1) && rm_shadow_drawn(RF_DEPTHHACK, 1));
+
+	/* yaw 0: the shadow leans along +x, normalized (1, 0, 1) */
+	rm_shadevector(0, sv);
+	CHECK(fabsf(sv[0] - 0.70710678f) < 1e-6f && sv[1] == 0 && fabsf(sv[2] - 0.70710678f) < 1e-6f);
+
+	/* a point 10 above the entity's origin, 30 above the spot: pushed 40 along the vector, put on the plane */
+	{
+		const float p[3] = { 5, 6, 10 }, v[3] = { 0.5f, -0.25f, 1 };
+		float out[3];
+
+		rm_shadow_point(p, v, 30, out);
+		CHECK(out[0] == 5 - 0.5f * 40 && out[1] == 6 + 0.25f * 40 && out[2] == -30 + 0.1f);
+	}
+
+	for (n = 0; n < 20000; n++)
+	{
+		const float yaw = (n < 8) ? 45.0f * n : rngf(-720, 720);
+		float p[3], o[3], spot[3], out[3];
+		vec3_t want_p;
+
+		rm_shadevector(yaw, sv);
+		ref_shadevector(yaw, want_sv);
+		same = same && (memcmp(sv, want_sv, sizeof(sv)) == 0);
+
+		for (i = 0; i < 3; i++)
+		{
+			p[i] = rngf(-300, 300);
+			o[i] = rngf(-4096, 4096);
+			spot[i] = rngf(-4096, 4096);
+		}
+
+		ref_shadow_point(p, want_sv, o, spot, want_p);
+		rm_shadow_point(p, sv, o[2] - spot[2], out);
+		same = same && (memcmp(out, want_p, sizeof(out)) == 0);
+	}
+
+	CHECK(same);
+
+	/* the matrix: the shim's glTranslatef(origin), then glRotatef(yaw, 0, 0, 1), on the world's */
+	rm_view_matrix(w, world_angles, world_org);
+
+	for (n = 0; n < 2000; n++)
+	{
+		float o[3];
+		const float yaw = (n < 4) ? 90.0f * n : rngf(-360, 360);
+
+		for (i = 0; i < 3; i++)
+		{
+			o[i] = rngf(-4000, 4000);
+		}
+
+		memcpy(want, w, sizeof(want));
+		mtl_mat_translate(r, o[0], o[1], o[2]);
+		mtl_mat_mul(want, want, r);
+		mtl_mat_rotate(r, yaw, 0, 0, 1);
+		mtl_mat_mul(want, want, r);
+		rm_shadow_matrix(got, w, o, yaw);
+		same = same && (memcmp(got, want, sizeof(got)) == 0);
+	}
+
+	CHECK(same);
+}
+
+/* gl1_light.c, R_RenderDlight, verbatim but for GLBUFFER_VERTEX and GLBUFFER_COLOR writing into arrays */
+static void
+ref_render_dlight(const dlight_t *light, const vec3_t vpn, const vec3_t vright, const vec3_t vup,
+		const unsigned char *gammatable, float (*vout)[3], unsigned char (*cout)[4])
+{
+	const float rad = light->intensity * 0.35;
+	int i, j, clr[3], nv = 0;
+	float vtx[3], a;
+
+	for ( i = 0; i < 3; i++ )
+	{
+		vtx [ i ] = light->origin [ i ] - vpn [ i ] * rad;
+		clr [ i ] = light->color [ i ] * 51;	// 255 * 0.2 = 51
+	}
+
+	/* GLBUFFER_VERTEX( vtx[0], vtx[1], vtx[2] ), GLBUFFER_COLOR( clr[0], clr[1], clr[2], 255 ) */
+	memcpy(vout[nv], vtx, sizeof(vtx));
+	cout[nv][0] = gammatable[clr[0]];
+	cout[nv][1] = gammatable[clr[1]];
+	cout[nv][2] = gammatable[clr[2]];
+	cout[nv][3] = 255;
+	nv++;
+
+	for ( i = 16; i >= 0; i-- )
+	{
+		a = i / 16.0 * M_PI * 2;
+
+		for ( j = 0; j < 3; j++ )
+		{
+			vtx[ j ] = light->origin [ j ] + vright [ j ] * cos( a ) * rad
+				+ vup [ j ] * sin( a ) * rad;
+		}
+
+		/* GLBUFFER_VERTEX( vtx[0], vtx[1], vtx[2] ), GLBUFFER_COLOR( 0, 0, 0, 255 ) */
+		memcpy(vout[nv], vtx, sizeof(vtx));
+		cout[nv][0] = gammatable[0];
+		cout[nv][1] = gammatable[0];
+		cout[nv][2] = gammatable[0];
+		cout[nv][3] = 255;
+		nv++;
+	}
+}
+
+static void
+test_flash_blob(void)
+{
+	rm_avert_t got[RM_FLASH_VERTS];
+	float wv[RM_FLASH_VERTS][3];
+	unsigned char wc[RM_FLASH_VERTS][4], gam[256];
+	int n, i, k, same = 1;
+
+	for (i = 0; i < 256; i++)
+	{
+		gam[i] = (unsigned char)(255 - i);
+	}
+
+	for (n = 0; n < 5000; n++)
+	{
+		dlight_t l;
+		vec3_t pn, rt, up;
+
+		for (i = 0; i < 3; i++)
+		{
+			l.origin[i] = rngf(-4096, 4096);
+			l.color[i] = (n % 3) ? rngf(0, 1) : rngf(0, 5);
+			pn[i] = rngf(-1, 1);
+			rt[i] = rngf(-1, 1);
+			up[i] = rngf(-1, 1);
+		}
+
+		l.intensity = rngf(0, 600);
+		ref_render_dlight(&l, pn, rt, up, gam, wv, wc);
+		rm_flash_blob(l.origin, l.intensity, l.color, pn, rt, up, gam, got);
+
+		for (k = 0; k < RM_FLASH_VERTS; k++)
+		{
+			same = same && (memcmp(got[k].pos, wv[k], sizeof(wv[k])) == 0) && (got[k].pos[3] == 1);
+
+			for (i = 0; i < 4; i++)
+			{
+				same = same && (got[k].color[i] == wc[k][i] / 255.0f);
+			}
+
+			same = same && (got[k].uv[0] == 0) && (got[k].uv[1] == 0);
+		}
+	}
+
+	CHECK(same);
+
+	/* a light of colour (1, 0.5, 0) at the origin of radius 100: the centre 35 towards the viewer, 51 25 0 through the table */
+	{
+		const float o[3] = { 0, 0, 0 }, c[3] = { 1, 0.5f, 0 }, pn[3] = { 1, 0, 0 }, rt[3] = { 0, 1, 0 }, up[3] = { 0, 0, 1 };
+
+		rm_flash_blob(o, 100, c, pn, rt, up, gam, got);
+		CHECK(got[0].pos[0] == -35 && got[0].pos[1] == 0 && got[0].color[0] == 204 / 255.0f && got[0].color[1] == 230 / 255.0f);
+		CHECK(got[0].color[2] == 1.0f && got[0].color[3] == 1.0f && got[1].color[0] == 1.0f);
+		/* the rim from 2 pi down to 0: the first and the last rim vertex are the same point on +y */
+		CHECK(fabsf(got[1].pos[1] - 35) < 1e-4f && fabsf(got[17].pos[1] - 35) < 1e-4f && fabsf(got[9].pos[1] + 35) < 1e-4f);
+	}
+
+	/* a dark light (-1) and a colour past 5: the gamma index held to the table where gl1 reads outside it */
+	{
+		const float o[3] = { 0, 0, 0 }, c[3] = { -1, 6, 1e6f }, pn[3] = { 1, 0, 0 }, rt[3] = { 0, 1, 0 }, up[3] = { 0, 0, 1 };
+
+		rm_flash_blob(o, 100, c, pn, rt, up, gam, got);
+		CHECK(got[0].color[0] == gam[0] / 255.0f && got[0].color[1] == gam[255] / 255.0f && got[0].color[2] == gam[255] / 255.0f);
+	}
+}
+
 int
 main(void)
 {
@@ -5591,6 +6662,14 @@ main(void)
 	test_md2_check();
 	test_md2_regions();
 	test_sp2_check();
+	test_lm_dlight();
+	test_dlight_bounds();
+	test_prim_indices();
+	test_sprite();
+	test_beam();
+	test_null_model();
+	test_shadow();
+	test_flash_blob();
 
 	printf("rm_host_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
