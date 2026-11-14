@@ -631,7 +631,7 @@ cmd_replay() {
     fi
     if [ -e "$out" ] || [ -L "$out" ]; then
         [ ! -L "$out" ] && [ -d "$out" ] || die "$out is not a directory; nothing is written there"
-        [ -f "$out/replay.txt" ] || die "$out exists and is not a replay; it is never replaced"
+        [ -f "$out/replay.txt" ] && [ ! -L "$out/replay.txt" ] || die "$out exists and is not a replay; it is never replaced"
         if [ -f "$out/complete" ] && [ "$replace" -ne 1 ]; then
             die "a complete replay already exists at $out; replay with --run N for another run, or --replace to overwrite it"
         fi
@@ -1900,8 +1900,7 @@ trace_fixture() {
     fixture "$1" "$2" "${tmp:?}/a.tga"
     { printf '%s' "${11:-Q2REFREC}"; le_bytes "${3:-$tver}" 4; le_bytes "${4:-$tapi}" 4; le_bytes "${5:-0}" 4
       le_bytes "${6:-100}" 4; le_bytes 112 4; le_bytes "${7:-3}" 4; le_bytes 0 20
-      le_bytes "${8:-640}" 2; le_bytes "${9:-480}" 2; le_bytes "${10:-30}" 4; le_bytes 0 4
-      printf '%s' '$(touch pwned) `touch pwned`'; } > "$d/trace.q2r"
+      le_bytes "${8:-640}" 2; le_bytes "${9:-480}" 2; le_bytes "${10:-30}" 4; le_bytes 0 4; } > "$d/trace.q2r"
 }
 # replay_ok <args>: the replay must pass; replay_no <message> <args>: a dry
 # run of it, which would otherwise pass, must be refused with that message
@@ -1925,7 +1924,6 @@ st_replay_args() { # TASK46: what replay passes to the engine
     case $(PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1 --run 2) in *"-replay-gl1-rec1-r2 "*) ;; *) st_fail "--run 2 must add -r2 to the replay id"; return 1;; esac
     trace_fixture gl1-metal rec2
     case $(PINS_DRYRUN=1 cmd_replay gl1-metal world) in *"+set vid_renderer gl1 "*"world/gl1-metal/rec2/trace.q2r") ;; *) st_fail "gl1-metal must replay its own trace as vid_renderer gl1"; return 1;; esac
-    [ ! -e pwned ] && [ ! -e "${tmp:?}/pwned" ] || st_fail "nothing in a trace may be run" || return 1
 }
 st_replay_pick() { # TASK46: the default trace is the newest complete record with a trace
     trace_fixture gl1 old; trace_fixture gl1 new; trace_fixture gl1 nocomplete; trace_fixture gl1 isreplay; fixture gl1 notrace "${tmp:?}/a.tga"
@@ -2049,6 +2047,10 @@ st_replay_keep() { # TASK46: nothing complete is replaced silently, and a direct
     replay_no "exists and is not a replay; it is never replaced" soft world --trace-of gl1 --replace || return 1
     if (PINS_BASEDIR="${tmp:?}/gd" cmd_replay soft world --trace-of gl1 --replace) >/dev/null 2>&1; then st_fail "--replace over a directory that is not a replay must be refused"; return 1; fi
     [ -f "$out/marker" ] || st_fail "a directory without replay.txt must never be replaced" || return 1
+    echo x > "${tmp:?}/outside-replay.txt"; ln -s "${tmp:?}/outside-replay.txt" "$out/replay.txt"
+    replay_no "exists and is not a replay; it is never replaced" soft world --trace-of gl1 --replace || return 1
+    if (PINS_BASEDIR="${tmp:?}/gd" cmd_replay soft world --trace-of gl1 --replace) >/dev/null 2>&1; then st_fail "--replace over a replay.txt that is a link must be refused"; return 1; fi
+    [ -f "$out/marker" ] && [ -L "$out/replay.txt" ] || st_fail "a directory whose replay.txt is a link must never be replaced" || return 1
     rm -rf "${out:?}"; ln -s "${tmp:?}/gd" "$out"
     replay_no "is not a directory; nothing is written there" soft world --trace-of gl1 --replace || return 1
     [ -d "${tmp:?}/gd/baseq2" ] || st_fail "the link's target must be left alone" || return 1

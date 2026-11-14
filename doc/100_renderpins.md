@@ -351,8 +351,9 @@ or in `PINS_BASEDIR`, under `baseq2/`). The replay is complete on the
 same terms as a record, and only when it wrote as many frames as the
 record holds; otherwise it is left with `incomplete` and the reason.
 A complete replay is replaced only with `--replace`, and a directory
-without `replay.txt` never. `list` shows, per scenario and renderer,
-how many complete records hold a trace and how many replays there are.
+without `replay.txt` (a regular file, not a link) never. `list` shows,
+per scenario and renderer, how many complete records hold a trace and
+how many replays there are.
 
 One trace, two renderers:
 
