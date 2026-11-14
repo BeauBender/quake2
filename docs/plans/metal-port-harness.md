@@ -1065,6 +1065,10 @@ No threshold or scenario was changed. On this host `particles` cannot
 pass against `gl1` for any renderer that draws the blend over the whole
 screen; TASK83 (#187) judges it against an accelerated reference.
 
+### `gl1` references from an accelerated OpenGL (TASK83)
+
+Measurement in progress.
+
 ### Closing TASK21 on the build host
 
 The umbrella card's acceptance list, checked end to end after S1 to S6
