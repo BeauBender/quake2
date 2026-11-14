@@ -876,9 +876,9 @@ Mod_LoadMarksurfaces(model_t *loadmodel, byte *mod_base, lump_t *l)
 
 /*
  * The checks before the shared loaders read the file: every lump inside
- * it, the counts the loaders size arrays by within the limits, the
- * texinfo names terminated and their chains bounded, the visibility
- * offsets inside their lump.
+ * it, the counts the loaders size arrays by within the limits, a world
+ * with a node and model 0 starting at one, the texinfo names terminated
+ * and their chains bounded, the visibility offsets inside their lump.
  */
 static void
 RM_CheckLumps(model_t *mod, byte *mod_base, const dheader_t *header, int len)
@@ -903,6 +903,20 @@ RM_CheckLumps(model_t *mod, byte *mod_base, const dheader_t *header, int len)
 	RM_LumpCount(mod, &header->lumps[LUMP_EDGES], sizeof(dedge_t), MAX_MAP_EDGES, "edges");
 	RM_LumpCount(mod, &header->lumps[LUMP_SURFEDGES], sizeof(int), RM_MAX_MAP_SURFEDGES, "surfedges");
 	RM_LumpCount(mod, &header->lumps[LUMP_LEAFFACES], sizeof(short), MAX_MAP_LEAFFACES, "leaf faces");
+
+	/* the world: a node to start from, and model 0 starting at one (Mod_LoadNodes, R_DrawWorld) */
+	l = &header->lumps[LUMP_MODELS];
+
+	{
+		long numnodes = (long)((size_t)header->lumps[LUMP_NODES].filelen / sizeof(dnode_t));
+		long nummodels = (long)((size_t)l->filelen / sizeof(dmodel_t));
+		long headnode = nummodels ? LittleLong(((const dmodel_t *)(mod_base + l->fileofs))->headnode) : -1;
+
+		if (!rm_world_head_ok(numnodes, nummodels, headnode))
+		{
+			RM_Refuse(mod, "%ld nodes and %ld models, model 0 at node %ld", numnodes, nummodels, headnode);
+		}
+	}
 
 	if (header->lumps[LUMP_LIGHTING].filelen > MAX_MAP_LIGHTING)
 	{

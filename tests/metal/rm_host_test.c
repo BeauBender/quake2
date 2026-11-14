@@ -1111,6 +1111,11 @@ test_bsp_bounds(void)
 	/* a leaf's contents may be anything but CONTENTS_NODE, the mark of a node */
 	CHECK(rm_leaf_contents_ok(0) && rm_leaf_contents_ok(1) && rm_leaf_contents_ok(-2) && rm_leaf_contents_ok(0x7fffffff));
 	CHECK(!rm_leaf_contents_ok(-1));
+
+	/* the world has a node, and model 0 starts at one of them */
+	CHECK(rm_world_head_ok(1, 1, 0) && rm_world_head_ok(5, 3, 4));
+	CHECK(!rm_world_head_ok(0, 1, 0) && !rm_world_head_ok(0, 1, -1) && !rm_world_head_ok(2, 0, 0));
+	CHECK(!rm_world_head_ok(2, 1, -1) && !rm_world_head_ok(2, 1, 2) && !rm_world_head_ok(-1, 1, 0));
 }
 
 /* nexttexinfo chains: in range, and each one ends or returns to its start (Mod_LoadTexinfo's count loop). */

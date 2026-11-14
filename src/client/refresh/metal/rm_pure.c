@@ -838,6 +838,12 @@ rm_leaf_contents_ok(long contents)
 }
 
 int
+rm_world_head_ok(long numnodes, long nummodels, long headnode)
+{
+	return (numnodes >= 1) && (nummodels >= 1) && (headnode >= 0) && (headnode < numnodes);
+}
+
+int
 rm_mark_once(unsigned char *owner, long total, long first, long count)
 {
 	long i;

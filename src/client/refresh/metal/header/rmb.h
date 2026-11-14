@@ -455,6 +455,15 @@ int rm_leaf_ok(long cluster, long area, long numclusters, int has_vis);
 int rm_leaf_contents_ok(long contents);
 
 /*
+ * The world's head before files/models.c reads the nodes: at least one
+ * node (Mod_LoadNodes sets the parents from node 0, and the draw starts
+ * there) and a model 0 whose head node is one of them. A world without
+ * nodes would leave its node array empty and aliased by the next hunk
+ * allocation.
+ */
+int rm_world_head_ok(long numnodes, long nummodels, long headnode);
+
+/*
  * Marks [first, first + count) of owner[total] as taken (a node's
  * surfaces): 0, and nothing marked, when the range leaves the table or a
  * surface is taken already. gl1 links a surface into its texture chain
