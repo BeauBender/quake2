@@ -693,6 +693,12 @@ test_char_quad(void)
 
 	CHECK(rm_char_quad(&q, 100, 20, 65, 2, whole) && QEQ(q, 100, 20, 116, 36, 0.0625f, 0.25f, 0.125f, 0.3125f));
 	CHECK(rm_char_quad(&q, 100, 20, 65, 2, scrap) && QEQ(q, 100, 20, 116, 36, 0.28125f, 0.375f, 0.3125f, 0.40625f));
+	/* a block that is not square (0.5 wide, 0.25 high): the rows are cut by the height */
+	{
+		static const float wide[4] = { 0.25f, 0.25f, 0.75f, 0.5f };
+
+		CHECK(rm_char_quad(&q, 100, 20, 65, 2, wide) && QEQ(q, 100, 20, 116, 36, 0.28125f, 0.3125f, 0.3125f, 0.328125f));
+	}
 	/* a character is its low 8 bits, as gl1 masks it */
 	CHECK(rm_char_quad(&q, 100, 20, 256 + 65, 2, whole) && QEQ(q, 100, 20, 116, 36, 0.0625f, 0.25f, 0.125f, 0.3125f));
 	/* character 0: the first cell; 255: the last */
@@ -743,6 +749,8 @@ test_tile_quad(void)
 	CHECK(!rm_tile_quad(&q, 10, 20, 100, 70, 64, 64, -1, 0, whole));
 	CHECK(!rm_tile_quad(&q, 10, 20, 100, 70, 0, 64, 0, 0, whole));
 	CHECK(!rm_tile_quad(&q, 10, 20, 100, 70, 64, -3, 0, 0, whole));
+	/* a pic that is not square (32 by 16) over (0, 0, 48, 28): the last column is 16 of 32, the last row 12 of 16 */
+	CHECK(rm_tile_quad(&q, 0, 0, 48, 28, 32, 16, 32, 16, whole) && QEQ(q, 32, 16, 48, 28, 0.0f, 0.0f, 0.5f, 0.75f));
 }
 
 /* The batch's capacity check, with an oversized count and the overflow edges. */
