@@ -285,6 +285,19 @@ run_id() {
     echo "$id"
 }
 frame_count() { ls "$1"/*.tga 2>/dev/null | wc -l | tr -d ' '; }
+# is_count <value>: a count a tool printed, digits only; an empty value is a
+# tool that did not run, never zero
+is_count() { case $1 in ''|*[!0-9]*) return 1;; esac; }
+# need_tools <command> <tool>...: dies unless every tool is on PATH. Without
+# one a command substitution prints nothing and the script, without
+# pipefail, would go on with an empty count or checksum
+need_tools() {
+    local what=$1 t; shift
+    for t in "$@"; do command -v "$t" >/dev/null 2>&1 || die "$what needs $t, which is not on PATH"; done
+}
+# the external tools record and replay call (make and cc are optional: a
+# missing make skips the staleness check, compare alone builds framediff)
+pins_tools="awk basename cat cksum date dirname find git grep head ls mkdir rm sleep tr wc"
 difftool() {
     if [ -n "${PINS_DIFF:-}" ]; then echo "$PINS_DIFF"; return; fi
     local bin="$(store)/bin/framediff"
@@ -355,15 +368,18 @@ run_engine() {
 # judge_pin <out> <renderer> <limit>: after run_engine, sets reason to why
 # the pin in <out> is not complete (empty when it is) and n to its frames
 judge_pin() {
-    local out=$1 renderer=$2 limit=$3 bad
+    local out=$1 renderer=$2 limit=$3 bad nman=""
     reason=""
     n=$(frame_count "$out")
+    if [ -f "$out/manifest.txt" ]; then nman=$(wc -l < "$out/manifest.txt" | tr -d ' '); fi
     if [ "$run_timedout" -ne 0 ]; then reason="engine timed out after ${limit}s"
     elif [ "$run_status" -ne 0 ]; then reason="engine exited with status $run_status"
+    elif ! is_count "$n"; then reason="the frames written could not be counted (got '$n')"
     elif [ "$n" -eq 0 ]; then reason="no frames captured"
     elif [ ! -f "$out/manifest.txt" ]; then reason="no manifest.txt"
     elif grep -q '^FAILED ' "$out/manifest.txt"; then reason="the engine could not write a frame ($(grep -m1 '^FAILED ' "$out/manifest.txt"))"
-    elif [ "$(wc -l < "$out/manifest.txt" | tr -d ' ')" -ne "$n" ]; then reason="manifest.txt does not list the $n frames"
+    elif ! is_count "$nman"; then reason="the lines of manifest.txt could not be counted (got '$nman')"
+    elif [ "$nman" -ne "$n" ]; then reason="manifest.txt does not list the $n frames"
     else
         bad=$(awk -v r="$(engine_renderer "$renderer")" '$2 != r {print $2; exit}' "$out/manifest.txt")
         [ -z "$bad" ] || reason="frames were rendered by '$bad', not '$renderer' (renderer fallback)"
@@ -384,6 +400,7 @@ check_seed() {
 }
 
 cmd_record() {
+    need_tools record $pins_tools
     local renderer=$1 scenario=$2 run=1 replace=0; shift 2
     local bin="${PINS_BIN:-$root/release/quake2}" limit="${PINS_TIMEOUT:-600}"
     check_name renderer "$renderer"; check_name scenario "$scenario"
@@ -537,6 +554,7 @@ pins_ospath=256
 # replay <renderer> <scenario>: replays the trace of a complete record into
 # <renderer>, its frames a pin of their own beside that renderer's records
 cmd_replay() {
+    need_tools replay $pins_tools od sed
     local renderer=$1 scenario=$2 from="" trace_id="" run=1 replace=0; shift 2
     local bin="${PINS_BIN:-$root/release/quake2}" limit="${PINS_TIMEOUT:-600}"
     check_name renderer "$renderer"; check_name scenario "$scenario"
@@ -620,12 +638,14 @@ cmd_replay() {
         local stale; stale=$(stale_engine "$bin" "$renderer")
         [ -z "$stale" ] || die "the build is out of date ($stale); rebuild before replaying"
     fi
-    local reason="" n=0 run_status=0 run_timedout=0 nlive
-    nlive=$(frame_count "$tdir")
+    local reason="" n=0 run_status=0 run_timedout=0 nlive tbytes tsum
+    nlive=$(frame_count "$tdir"); tbytes=$(wc -c < "$trace" | tr -d ' '); tsum=$(cksum < "$trace" | awk '{print $1}')
+    is_count "$nlive" || die "the frames of the record $scenario/$from/$trace_id could not be counted (got '$nlive')"
+    is_count "$tbytes" && is_count "$tsum" || die "the size and checksum of the trace could not be taken (got '$tbytes' and '$tsum')"
     rm -rf "${out:?}"; mkdir -p "$out"
     # the replay manifest is written first, so even a failed replay is never taken for a record
     { echo "replay of $scenario/$from/$trace_id/trace.q2r"
-      echo "trace-bytes $(wc -c < "$trace" | tr -d ' ')"; echo "trace-cksum $(cksum < "$trace" | awk '{print $1}')"
+      echo "trace-bytes $tbytes"; echo "trace-cksum $tsum"
       echo "trace-frames $th_frames"; echo "record-frames $nlive"
       echo "renderer $renderer"; echo "engine $(engine_sha)"; echo "seed ${PINS_SEED:-none}"
       echo "game-module $(game_module "$bin")"; } > "$out/replay.txt"
@@ -2043,6 +2063,33 @@ st_replay_compare() { # TASK46: compare names replays and takes one as a referen
     printf '%s\n' "$rep" | sed -n '/^traces/,/^replays/p' | grep -qxE ' *1 world/gl1-metal' &&
         printf '%s\n' "$rep" | sed -n '/^replays/,$p' | grep -qxE ' *1 world/soft' || st_fail "list must show trace coverage and replays: $rep" || return 1
 }
+st_replay_tools() { # TASK46: a missing tool, or one that prints nothing, never leaves a complete pin
+    trace_fixture gl1 rec1
+    local t u d rep f
+    no_complete() { for f in "${PINS_STORE:?}"/world/soft/*/complete; do [ ! -e "$f" ] || { st_fail "$1 left $f"; return 1; }; done; }
+    for t in cksum wc grep od; do
+        d="${tmp:?}/path-no-$t"; rm -rf "${d:?}"; mkdir "$d"
+        for u in $pins_tools od sed cp; do [ "$u" = "$t" ] || ln -s "$(command -v "$u")" "$d/$u"; done
+        rep=$( (PATH="$d" PINS_BASEDIR="${tmp:?}/gd" cmd_replay soft world --trace-of gl1) 2>&1 ) && { st_fail "replay without $t must fail"; return 1; }
+        case $rep in "pins: replay needs $t, which is not on PATH"*) ;; *) st_fail "replay without $t must say so, got: $rep"; return 1;; esac
+        no_complete "replay without $t" || return 1
+        [ "$t" != od ] || continue
+        rep=$( (PATH="$d" PINS_BASEDIR="${tmp:?}/gd" cmd_record soft world) 2>&1 ) && { st_fail "record without $t must fail"; return 1; }
+        case $rep in "pins: record needs $t, which is not on PATH"*) ;; *) st_fail "record without $t must say so, got: $rep"; return 1;; esac
+        no_complete "record without $t" || return 1
+    done
+    # a tool that is there but prints nothing: an empty count or checksum is a failure, never zero
+    if (frame_count() { :; }; PINS_BASEDIR="${tmp:?}/gd" cmd_replay soft world --trace-of gl1) >/dev/null 2>&1; then st_fail "replay must fail when the frames cannot be counted"; return 1; fi
+    no_complete "an uncounted replay" || return 1
+    if (cksum() { :; }; PINS_BASEDIR="${tmp:?}/gd" cmd_replay soft world --trace-of gl1) >/dev/null 2>&1; then st_fail "replay must fail without the trace checksum"; return 1; fi
+    no_complete "a replay without a checksum" || return 1
+    if (wc() { :; }; PINS_BASEDIR="${tmp:?}/gd" cmd_replay soft world --trace-of gl1) >/dev/null 2>&1; then st_fail "replay must fail when wc prints nothing"; return 1; fi
+    no_complete "a replay without wc output" || return 1
+    if (wc() { :; }; PINS_BASEDIR="${tmp:?}/gd" cmd_record soft world) >/dev/null 2>&1; then st_fail "record must fail when wc prints nothing"; return 1; fi
+    no_complete "a record without wc output" || return 1
+    if (frame_count() { echo 1; }; wc() { :; }; PINS_BASEDIR="${tmp:?}/gd" cmd_record soft world) >/dev/null 2>&1; then st_fail "record must fail when the manifest lines cannot be counted"; return 1; fi
+    no_complete "a record with an uncounted manifest" || return 1
+}
 
 # fake_demo_engine <path> <body>: stands in for the engine in make-demo. It
 # finds the script copy it was told to exec in <its dir>/baseq2 (exit 3 if
@@ -2284,6 +2331,7 @@ cmd_selftest() {
         two_runs incomplete record_engine timeout fallback names cmdline thresholds scenarios argcount frame_failed list
         scenario_lines store_place fast_fail demo_name replace engine_id metal_shim usage
         replay_args replay_pick replay_refused replay_header replay_place replay_run replay_keep replay_fail replay_compare
+        replay_tools
         make_demo_args make_demo_script make_demo_run make_demo_place make_demo_case demo_sum"
     # "selftest <case>..." runs only those cases (each must be one of the list)
     if [ $# -gt 0 ]; then
