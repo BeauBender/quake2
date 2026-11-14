@@ -248,8 +248,8 @@ forgotten at each `REC_BEGINREG`, because the renderer frees what is not
 registered again; anything else is NULL. The engine prints the counts at
 the end; the `world`, `hud2d` and `cinematic` traces of demo1 and
 `idlog.cin` count 0 dropped and 0 bounded and replay byte-identical to
-live on `soft`. `REC_CVARS` is skipped until TASK45. A replay is a pin
-run: no configuration file is read or written. A refused trace ends the
+live on `soft`. `REC_CVARS` is restored as built by TASK45 (below). A
+replay is a pin run: no configuration file is read or written. A refused trace ends the
 engine with `ERR_FATAL`, the last frame with `quit`, and a renderer that
 fails to load is not replaced by another.
 
@@ -278,6 +278,82 @@ fixed seed at `BeginRegistration` in both modes, which is a one-line change
 in `src/common/shared/rand.c` behind the same cvar. With those three, the
 same renderer replaying its own trace produces frames `framediff` scores
 at 0.000000; a nonzero score is a bug in the recorder, not a tolerance.
+
+As built (TASK45).
+(a) `refdef_t.time` is written as its IEEE-754 bits and handed on by
+`Rep_RenderFrame` unchanged when it lies in 0..`REFREC_REPLAY_MAX_TIME`;
+`tests/refrecord` replays 12.345, 1/3, a subnormal, -0.0, 9999999 and 0
+and compares the bits the mock renderer receives with the live ones.
+(b) `REC_CVARS`: at session open `VID_LoadRenderer` hands every cvar with
+its flags to `RefRec_Cvars`, which keeps those `RefRec_CvarRecorded`
+accepts: a name starting with one of `REFREC_CVAR_PREFIXES` and none of
+`CVAR_NOSET`, `CVAR_LATCH`, `CVAR_USERINFO`, `CVAR_SERVERINFO`. This
+deliberately narrows the card's "`CVAR_ARCHIVE` or the prefix": the
+replayer can only ever restore a prefixed cvar of none of those flags
+(the allow-rule below), so an archived cvar without the prefix was
+stored and never used, and that set holds the player's `name`, `skin`
+and `rate`, the server address book `adr0`..`adr8` and `hostname`
+(with `pins_record` and no `pins_capture` the user's `config.cfg` is
+read, so these are the user's own values). The snapshot now stores
+exactly what a replay can use. The prefixes are `gl1_`, `gl3_`, `gl_`,
+`r_`, `sw_`, `vid_` (`gl_` and `gl3_` were added to the card's list
+because `ref_gl1` reads
+`gl_polyblend`, `gl_texturemode` and other `gl_` cvars, and `ref_gl3` its
+`gl3_` ones). A NULL or over-long name, or a stored cvar's over-long
+value, is left out with one `REFREC_WARN_NAME` (a latched renderer cvar, in this tree
+only `r_farsee`, is neither stored nor restored: a replay uses the replaying
+process's value, so record and replay with the same setting), more than `REFREC_MAX_CVARS` with a
+`REFREC_WARN_COUNT`. The replayer forwards the record in place (it comes
+before the first `REC_BEGINREG`) and sets a pair through the target's
+`SetCvar` (vid.c: `Cvar_Set`) only when `RefRec_CvarRestorable` accepts
+it against the flags of the LIVE cvar (`CvarFlags`; the trace carries no
+flags). The allow-rule: the cvar exists (a replay never creates one);
+its name has a renderer prefix (`CVAR_ARCHIVE` alone is not enough: no
+client, server, sound or input runs in a replay, and archived cvars such
+as `logfile`, `name` or `sv_entfile` write files or reach a server) and
+only `[A-Za-z0-9_]`; it is none of `CVAR_NOSET`, `CVAR_LATCH`
+(`game`, `basedir` and the other directory and module cvars),
+`CVAR_USERINFO`, `CVAR_SERVERINFO`; it is not in `REFREC_CVAR_NEVER`,
+the cvars read only when a window or context is made (`vid_renderer`,
+which would reload the renderer, `vid_fullscreen`, `vid_displayindex`, `vid_displayrefreshrate`,
+`vid_highdpiaware`, `vid_rate`, `r_mode`, `r_customwidth`,
+`r_customheight`, `r_vsync`, `r_msaa_samples`, `gl3_debugcontext`,
+`gl1_stereo`, whose change makes gl1 and gl3 ask for a `vid_restart`) or
+that names a library to load (`gl3_libgl`); and its value is printable
+ASCII without `"`. No cvar the allow-rule admits writes a file or runs
+a command. Anything else is skipped and counted
+(`refrec_replay_stats_t.cvars_skipped`), never refused; the reader had
+already bounded the count (`REFREC_MAX_CVARS`), every length
+(`REFREC_MAX_STRING`) and refused an empty or unterminated name. The
+values are never saved: `CL_WriteConfiguration` returns for a pin run.
+Format: no version bump. `REC_CVARS` (type 21) and its payload, `u32
+count` then count name and value strings, were part of version 1 from
+TASK27a, and the reader refuses an unknown record type (above
+`REC_LAST`), so a new type would have needed one; a trace written before
+TASK45 carries an empty snapshot and replays as before.
+(c) No renderer in this tree calls `randk()`, `frandk()` or `crandk()`
+(the `gl1_mesh.c` particles above draw none): the random numbers of
+explosions and particles are the client's (`cl_effects.c`,
+`cl_particles.c`, `cl_tempentities.c`), and the trace records their
+result. Live against replay is therefore deterministic without a seed.
+The seed makes two live runs agree: `randk_seed_fixed(seed)` in
+`rand.c` (splitmix64 of the seed into `xs` and `cng`, the whole state
+reset) runs at every `R_BeginRegistration` when `pins_seed` was latched
+(`CL_PinsSeed`), which `CL_PinsLatch` accepts only from the command line,
+1 to 9 digits without a leading zero (but `0`, so a seed has one pin
+id), beside `pins_record` or `pins_replay`, so a config file, the
+console or a server cannot set it. Without it `randk_seed()` is
+unchanged (entropy from `Sys_GetRandomBytes`). It reaches the engine's
+copy of `rand.c` only, which the client shares with the listen server in
+its process; the game module's copy (seeded by `InitGame`) and the
+dedicated server, which link neither `vid.c` nor `cl_pins.c`, are never
+reseeded (`tests/check-pins-latch.sh`), and the connectionless challenge
+draws on `Sys_GetRandomBytes` directly, not on `randk()`, which the unit
+test `randk_fixed_seed_not_in_challenge` shows. `scripts/pins.sh record`
+passes it from `PINS_SEED`.
+Measured: live against replay 0.000000 on every frame of every scenario
+on `soft` and `gl1-metal`; two live `particles` records 0.000000 with
+`PINS_SEED`, 0.011087 without (`doc/100_renderpins.md`, *Determinism*).
 
 ## 5. Header sketch: `src/client/vid/header/refrecord.h`
 
@@ -360,8 +436,8 @@ through `VID_StartRecord` at the session-open point in `VID_LoadRenderer`,
 after `re.Init()` succeeds (so `viddef` holds the size), before the
 `REC_CVARS` snapshot and outside the `RefRec_Recording()` guard, since
 recording is off until it has run. `VID_WritePinFrame` carries one more
-guarded hook, for `REC_CAPTURE`. The `REC_CVARS` record is written empty
-(count 0) until TASK45 fills it. The recorder reports through
+guarded hook, for `REC_CAPTURE`. The `REC_CVARS` record was written empty
+(count 0) until TASK45 filled it through `RefRec_Cvars` (section 4). The recorder reports through
 `RefRec_SetPrint` (set to `Com_Printf`; stderr in the test), so refrecord.c
 still calls nothing else in the engine.
 New settings: `pins_record <name>` (recorder on; as built a plain file name

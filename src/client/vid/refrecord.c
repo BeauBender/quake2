@@ -2303,7 +2303,7 @@ Rec_Control(refrec_type_t t, float arg)
 			return;
 
 		case REC_CVARS:
-			/* the snapshot contents come with TASK45; the record is in place */
+			/* an empty snapshot; vid.c hands the cvars to RefRec_Cvars */
 			RefRec_WriteCvars(&rec.w, 0, NULL, NULL);
 			Rec_Flush(true, 0);
 			return;
@@ -2323,6 +2323,153 @@ RefRec_Control(refrec_type_t t, float arg)
 
 	Rec_Enter();
 	Rec_Control(t, arg);
+	Rec_Leave();
+}
+
+/* ---- REC_CVARS: the cvar snapshot (TASK45, refrecord.h) ---- */
+
+static const char *const rec_cvar_prefixes[] = { REFREC_CVAR_PREFIXES };
+static const char *const rec_cvar_never[] = { REFREC_CVAR_NEVER };
+
+/* true for a name that fits REFREC_MAX_STRING with its NUL */
+static qboolean
+Rec_Fits(const char *s)
+{
+	return s && strnlen(s, REFREC_MAX_STRING) < REFREC_MAX_STRING;
+}
+
+qboolean
+RefRec_CvarRecorded(const char *name, int flags)
+{
+	size_t i;
+
+	/* only what a replay could restore: CVAR_ARCHIVE alone is not enough,
+	   so the player's name, the address book and the like are never stored */
+	if (!Rec_Fits(name) || !name[0] || (flags < 0) ||
+		(flags & (CVAR_NOSET | CVAR_LATCH | CVAR_USERINFO | CVAR_SERVERINFO)))
+	{
+		return false;
+	}
+
+	for (i = 0; i < sizeof(rec_cvar_prefixes) / sizeof(rec_cvar_prefixes[0]); i++)
+	{
+		if (strncmp(name, rec_cvar_prefixes[i], strlen(rec_cvar_prefixes[i])) == 0)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+qboolean
+RefRec_CvarRestorable(const char *name, const char *value, int flags)
+{
+	const unsigned char *p;
+	size_t i;
+
+	/* a live cvar of none of these flags, a renderer prefix */
+	if ((flags < 0) || (flags & (CVAR_NOSET | CVAR_LATCH | CVAR_USERINFO | CVAR_SERVERINFO)) ||
+		!RefRec_CvarRecorded(name, 0) || !Rec_Fits(value))
+	{
+		return false;
+	}
+
+	for (p = (const unsigned char *)name; *p; p++)
+	{
+		if (!(((*p >= 'a') && (*p <= 'z')) || ((*p >= 'A') && (*p <= 'Z')) ||
+			((*p >= '0') && (*p <= '9')) || (*p == '_')))
+		{
+			return false;
+		}
+	}
+
+	for (i = 0; i < sizeof(rec_cvar_never) / sizeof(rec_cvar_never[0]); i++)
+	{
+		if (strcmp(name, rec_cvar_never[i]) == 0)
+		{
+			return false;
+		}
+	}
+
+	for (p = (const unsigned char *)value; *p; p++)
+	{
+		if ((*p < 0x20) || (*p > 0x7e) || (*p == '"'))
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static void
+Rec_Cvars(int count, const char *const *names, const char *const *values, const int *flags)
+{
+	static const char *keep_names[REFREC_MAX_CVARS], *keep_values[REFREC_MAX_CVARS];
+	qboolean cut = false, full = false;
+	int i, n = 0;
+
+	if ((count < 0) || !names || !values || !flags)
+	{
+		count = 0;
+	}
+
+	for (i = 0; i < count; i++)
+	{
+		if (!Rec_Fits(names[i]))
+		{
+			cut = true;
+			continue;
+		}
+
+		if (!RefRec_CvarRecorded(names[i], flags[i]))
+		{
+			continue;
+		}
+
+		/* a value that does not fit is warned about for a stored cvar only */
+		if (!Rec_Fits(values[i]))
+		{
+			cut = true;
+			continue;
+		}
+
+		if (n == REFREC_MAX_CVARS)
+		{
+			full = true;
+			break;
+		}
+
+		keep_names[n] = names[i];
+		keep_values[n] = values[i];
+		n++;
+	}
+
+	if (cut)
+	{
+		Rec_Warn(REFREC_WARN_NAME, "a NULL or over-long cvar name or value, left out of REC_CVARS");
+	}
+
+	if (full)
+	{
+		Rec_Warn(REFREC_WARN_COUNT, "more cvars than REFREC_MAX_CVARS, the rest left out of REC_CVARS");
+	}
+
+	RefRec_WriteCvars(&rec.w, n, keep_names, keep_values);
+	Rec_Flush(true, 0);
+}
+
+void
+RefRec_Cvars(int count, const char *const *names, const char *const *values, const int *flags)
+{
+	if (!rec.on)
+	{
+		return;
+	}
+
+	Rec_Enter();
+	Rec_Cvars(count, names, values, flags);
 	Rec_Leave();
 }
 
@@ -2356,8 +2503,12 @@ static struct {
 	uint32_t bufsize;
 	refrec_frame_t *in;	/* the REC_RENDERFRAME just read */
 	refrec_call_t call;
+	refrec_reader_t cvars;	/* the pairs of the REC_CVARS just read */
+	uint32_t ncvars;
 	refrec_replay_stats_t stats;
 } rep;
+
+static char rep_cvar_name[REFREC_MAX_STRING], rep_cvar_value[REFREC_MAX_STRING];
 
 /* what the target is handed: replay-owned, rebuilt every REC_RENDERFRAME */
 static entity_t rep_entities[MAX_ENTITIES];
@@ -2659,8 +2810,8 @@ Rep_FrameStart(uint32_t i)
 static qboolean
 Rep_Next(refrec_type_t *type)
 {
-	refrec_reader_t r, cvars;
-	uint32_t len, ncvars;
+	refrec_reader_t r;
+	uint32_t len;
 	uint8_t hb[REFREC_REC_SIZE];
 
 	if (rep.pos > rep.h.string_table_offset - REFREC_REC_SIZE ||
@@ -2699,7 +2850,7 @@ Rep_Next(refrec_type_t *type)
 
 	RefRec_ReaderInit(&r, rep.buf, REFREC_REC_SIZE + len);
 
-	if (!RefRec_ReadRecord(&r, type, &rep.call, rep.in, &cvars, &ncvars))
+	if (!RefRec_ReadRecord(&r, type, &rep.call, rep.in, &rep.cvars, &rep.ncvars))
 	{
 		return Rep_Fail("a bad record", rep.pos);
 	}
@@ -3124,6 +3275,7 @@ Rep_Forward(refrec_type_t type, uint32_t at)
 {
 	refrec_call_t *c = &rep.call;
 	void *p;
+	uint32_t i;
 
 	switch (Rep_Check(type, at))
 	{
@@ -3162,7 +3314,28 @@ Rep_Forward(refrec_type_t type, uint32_t at)
 			return true;
 
 		case REC_CVARS:
-			return true;	/* restored by TASK45 */
+			/* each pair as the live cvar's flags allow (RefRec_CvarRestorable),
+			   in place: the snapshot comes before the first registration */
+			for (i = 0; i < rep.ncvars; i++)
+			{
+				if (!RefRec_NextCvar(&rep.cvars, rep_cvar_name, rep_cvar_value))
+				{
+					return Rep_Fail("a bad REC_CVARS pair", at);
+				}
+
+				if (rep.t.CvarFlags && rep.t.SetCvar &&
+					RefRec_CvarRestorable(rep_cvar_name, rep_cvar_value, rep.t.CvarFlags(rep_cvar_name)))
+				{
+					rep.t.SetCvar(rep_cvar_name, rep_cvar_value);
+					rep.stats.cvars_set++;
+				}
+				else
+				{
+					rep.stats.cvars_skipped++;
+				}
+			}
+
+			return true;
 
 		case REC_WARN:
 			rep.stats.warns++;

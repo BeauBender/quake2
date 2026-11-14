@@ -1,6 +1,6 @@
 #!/bin/sh
 # Invariant: the pin harness's file-naming values come from the process
-# command line only. pins_dir, pins_scenario, pins_capture, pins_record and pins_replay are latched by
+# command line only. pins_dir, pins_scenario, pins_capture, pins_record, pins_replay and pins_seed are latched by
 # CL_PinsLatch (src/client/cl_pins.c) before any config file, console command
 # or server stufftext runs, and are not cvars: no other file in src/ may name
 # them, so no "set pins_dir ..." (with or without flags, before or after
@@ -14,7 +14,7 @@ fail=0
 bad() { echo "check-pins-latch: $*"; fail=1; }
 
 # 1. Nothing outside cl_pins.c names the values, so nothing reads them as cvars.
-others=$(grep -rlE '"pins_(dir|scenario|capture|record|replay)"' src | grep -v '^src/client/cl_pins.c$' || true)
+others=$(grep -rlE '"pins_(dir|scenario|capture|record|replay|seed)"' src | grep -v '^src/client/cl_pins.c$' || true)
 [ -z "$others" ] || bad "pins_* named outside src/client/cl_pins.c (read the latched CL_Pins* values instead): $others"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/pinslatch.XXXXXX")
@@ -34,6 +34,13 @@ expect_run() {
 	want=$1; shift
 	got=$("$tmp/latch" "$@" | sed -n 2p)
 	[ "$got" = "run=$want" ] || bad "args '$*': want 'run=$want', got '$got'"
+}
+
+# expect_seed <seed=N|seed=off> <args...>: the fixed PRNG seed (CL_PinsSeed)
+expect_seed() {
+	want=$1; shift
+	got=$("$tmp/latch" "$@" | sed -n 3p)
+	[ "$got" = "$want" ] || bad "args '$*': want '$want', got '$got'"
 }
 
 off='dir=|scenario=pin|capture=0|invalid=0|record=|replay='
@@ -116,6 +123,56 @@ done
 n=$(grep -rn 'CL_PinsCapture() *\(<=\|>\) *0' src | grep -v '^src/client/cl_main.c:.*quitting' || true)
 [ -z "$n" ] || bad "a pin-run guard tests CL_PinsCapture() alone (use CL_PinsRun()): $n"
 
+# pins_seed fixes the PRNG seed of a record or a replay only: 1 to 9
+# digits without a leading zero (but 0 itself), so one seed has one
+# spelling, with pins_record or pins_replay; anything else refuses the run,
+# and without it (every normal client run) the seed stays the OS entropy
+expect_seed seed=off
+expect_seed seed=off +set pins_dir /s +set pins_capture 30 +set pins_record trace.q2r
+expect_seed seed=off +set pins_dir /s +set pins_replay /t/trace.q2r
+expect_seed seed=42 +set pins_dir /s +set pins_capture 30 +set pins_record trace.q2r +set pins_seed 42
+expect_seed seed=0 +set pins_dir /s +set pins_replay /t/trace.q2r +set pins_seed 0
+expect_seed seed=999999999 +set pins_dir /s +set pins_record trace.q2r +set pins_seed 999999999
+expect_seed seed=7 +set pins_dir /s +set pins_record trace.q2r +set pins_seed 3 +set pins_seed 7
+expect 'dir=/s|scenario=pin|capture=30|invalid=0|record=trace.q2r|replay=' \
+	+set pins_dir /s +set pins_capture 30 +set pins_record trace.q2r +set pins_seed 42
+for v in '' -1 +1 ' 1' '1 ' 0x10 1e3 abc 1000000000 0000000001 4294967297 01 00 007 0123456789; do
+	expect "$refused_pin" +set pins_dir /s +set pins_capture 30 +set pins_record trace.q2r +set pins_seed "$v"
+	expect_seed seed=off +set pins_dir /s +set pins_capture 30 +set pins_record trace.q2r +set pins_seed "$v"
+done
+# not for a capture alone, not without a store, and never from a config or console "set"
+expect "$refused_pin" +set pins_dir /s +set pins_capture 30 +set pins_seed 42
+expect_seed seed=off +set pins_dir /s +set pins_capture 30 +set pins_seed 42
+expect_seed seed=off +set pins_record trace.q2r +set pins_seed 42
+expect_seed seed=off +set pins_dir /s +set pins_record trace.q2r set pins_seed 42
+expect_seed seed=off +set pins_dir /s +set pins_record trace.q2r +set pins_seed 42 +set pins_record a/b
+# and only the client's vid.c applies it, behind CL_PinsSeed: the dedicated
+# server and the game module link neither vid.c nor cl_pins.c, so their
+# copies of rand.c are seeded from entropy only (Qcommon_Init, InitGame)
+n=$(grep -rln 'randk_seed_fixed' src | grep -v -e '^src/common/shared/rand\.c$' \
+	-e '^src/common/header/shared\.h$' -e '^src/client/vid/vid\.c$' || true)
+[ -z "$n" ] || bad "randk_seed_fixed is called outside src/client/vid/vid.c: $n"
+grep -q 'if (CL_PinsSeed(&seed))' src/client/vid/vid.c || bad "vid.c does not guard randk_seed_fixed with CL_PinsSeed"
+[ "$(grep -c 'randk_seed_fixed' src/client/vid/vid.c)" = 1 ] || bad "vid.c must call randk_seed_fixed once"
+# and the call sits inside the guard's braces in R_BeginRegistration
+n=$(awk '
+	/^R_BeginRegistration\(/ { body = 1; next }
+	body && /^}/ { body = 0 }
+	!body { next }
+	g == 0 && /^[ \t]*if \(CL_PinsSeed\(&seed\)\)[ \t]*$/ { g = 1; next }
+	g == 1 { if (/^[ \t]*\{[ \t]*$/) { g = 2; d = 1; next } g = 3 }
+	g == 2 {
+		if (/randk_seed_fixed\(seed\);/) n++
+		d += gsub(/\{/, "{") - gsub(/\}/, "}")
+		if (d <= 0) g = 3
+	}
+	END { print n + 0 }' src/client/vid/vid.c)
+[ "$n" = 1 ] || bad "vid.c: randk_seed_fixed(seed) is not inside the braces of R_BeginRegistration's CL_PinsSeed guard"
+for objs in SERVER_OBJS_ GAME_OBJS_; do
+	n=$(awk -v v="$objs" '$1 == v { on = 1; next } on && !/\\$/ { on = 0 } on && /vid\/vid\.o|cl_pins\.o/ { print }' Makefile)
+	[ -z "$n" ] || bad "Makefile: $objs links vid.o or cl_pins.o: $n"
+done
+
 # only the exact "+set name value" triple counts, paired as Cbuf_AddEarlyCommands pairs it
 expect "$off" set pins_dir /s +pins_dir /s
 expect "$off" +set foo +set pins_dir /s
@@ -135,7 +192,7 @@ expect "$refused_pin" +set pins_dir /s +set pins_scenario "$s64" +set pins_captu
 # Every scenario's command line, as scripts/pins.sh record builds it, is
 # accepted by the real COM_InitArgv (no argc > MAX_NUM_ARGVS) and latches
 # the directory, scenario and interval it names.
-unset PINS_BIN PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DIFF PINS_TRACE
+unset PINS_BIN PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DIFF PINS_TRACE PINS_SEED
 for cfg in scripts/pins/scenarios/*.cfg; do
 	scen=$(basename "$cfg" .cfg)
 	demo=demo1.dm2
