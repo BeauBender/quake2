@@ -15,8 +15,9 @@
 #     with a line naming macOS. Otherwise one line
 #     "check-ref-metal: build skipped: <reason>".
 # (c) Always: the vocabulary check. Under src/client/refresh/metal/ no
-#     gl[A-Z] call, no GL_ token, no <OpenGL/ include, no include of a
-#     gl1/ path, and no symbolic link (which could hide either). It runs
+#     gl[A-Z] call and no GL_ identifier in code (outside comments and
+#     string literals), no <OpenGL/ include, no include of a gl1/ path,
+#     and no symbolic link (which could hide either). It runs
 #     on scratch mutants first and must fail each of them, then on the
 #     tree. A grep that errors fails the check.
 set -eu
@@ -54,7 +55,47 @@ else
 	case $host in *", 0 failed") ;; *) bad "tests/metal/rm_host_test.c printed no result line"; host="";; esac
 fi
 
-# (c) the vocabulary check of one directory: prints what it found, 1 on a finding or a tool error
+# strip <file>: the file with its comments and the contents of its string and
+# character literals blanked, its line numbers kept (for the code-only patterns)
+strip() {
+	awk '
+	BEGIN { st = 0; q = sprintf("%c", 39); bs = sprintf("%c", 92) }   # st: 0 code, 1 block comment, 2 string, 3 char
+	{
+		out = ""; n = length($0); i = 1
+		while (i <= n) {
+			c = substr($0, i, 1); d = substr($0, i, 2)
+			if (st == 1) {
+				if (d == "*/") { st = 0; out = out "  "; i += 2 } else { out = out " "; i++ }
+				continue
+			}
+			if (st >= 2) {
+				if (c == bs) { out = out "  "; i += 2; continue }
+				if ((st == 2 && c == "\"") || (st == 3 && c == q)) { st = 0; out = out c } else { out = out " " }
+				i++; continue
+			}
+			if (d == "/*") { st = 1; out = out "  "; i += 2; continue }
+			if (d == "//") { break }
+			if (c == "\"") { st = 2 } else if (c == q) { st = 3 }
+			out = out c; i++
+		}
+		if (st >= 2) { st = 0 }   # a literal ends with its line
+		print out
+	}' "$1"
+}
+
+# (c) the vocabulary check of one directory: prints what it found, 1 on a finding or a
+# tool error. A gl[A-Z] call and a GL_ identifier are looked for in code only, outside
+# comments and string literals (N2 copies gl1's gl_texturemode value strings, "GL_NEAREST"
+# and the rest, as literals); the two includes are looked for in the raw text.
+vgrep() { # <pattern> <file to search> <file to name>
+	rc=0
+	grep -nE "$1" "$2" > "${tmp:?}/vocab.out" 2>&1 || rc=$?
+	case $rc in
+		0) sed "s|^|  $3:|" "${tmp:?}/vocab.out"; return 2 ;;
+		1) return 0 ;;
+		*) echo "  grep failed ($rc) on $3"; return 1 ;;
+	esac
+}
 vocab() {
 	d=$1 found=0
 	if [ -L "$d" ] || [ ! -d "$d" ]; then
@@ -66,27 +107,36 @@ vocab() {
 		printf '  symbolic link: %s\n' $links
 		found=1
 	fi
-	for pat in '(^|[^A-Za-z0-9_])gl[A-Z][A-Za-z0-9_]*[[:space:]]*\(' \
-		'(^|[^A-Za-z0-9_])GL_[A-Za-z0-9_]' \
-		'#[[:space:]]*(include|import)[[:space:]]*<OpenGL/' \
-		'#[[:space:]]*(include|import)[[:space:]]*[<"]([^>"]*/)?gl1/'; do
-		rc=0
-		grep -rnE --include='*.c' --include='*.h' --include='*.m' --include='*.metal' "$pat" "$d" > "${tmp:?}/vocab.out" 2>&1 || rc=$?
-		case $rc in
-			0) sed 's/^/  /' "${tmp:?}/vocab.out"; found=1 ;;
-			1) ;;
-			*) echo "  grep failed ($rc) on $d"; cat "${tmp:?}/vocab.out"; return 1 ;;
-		esac
+	files=$(find "$d" -type f \( -name '*.c' -o -name '*.h' -o -name '*.m' -o -name '*.metal' \) -print) ||
+		{ echo "  find failed on $d"; return 1; }
+	for f in $files; do
+		strip "$f" > "${tmp:?}/vocab.code" || { echo "  awk failed on $f"; return 1; }
+		for pat in '(^|[^A-Za-z0-9_])gl[A-Z][A-Za-z0-9_]*[[:space:]]*\(' '(^|[^A-Za-z0-9_])GL_[A-Za-z0-9_]'; do
+			r=0; vgrep "$pat" "${tmp:?}/vocab.code" "$f" || r=$?
+			case $r in 0) ;; 2) found=1 ;; *) return 1 ;; esac
+		done
+		for pat in '#[[:space:]]*(include|import)[[:space:]]*<OpenGL/' \
+			'#[[:space:]]*(include|import)[[:space:]]*[<"]([^>"]*/)?gl1/'; do
+			r=0; vgrep "$pat" "$f" "$f" || r=$?
+			case $r in 0) ;; 2) found=1 ;; *) return 1 ;; esac
+		done
 	done
 	return $found
 }
 
-# the mutants: each must fail the check; the clean file must pass it
+# the mutants: each must fail the check; the clean file must pass it. Clean: GL_ and gl
+# calls inside comments and string literals, lower-case gl_ in code.
 mkdir "${tmp:?}/mut"
-printf '/* no GL here: glossary, gl_texturemode */\nint rm_glossary;\n' > "${tmp:?}/mut/clean.c"
+printf '%s\n' '/* glClear(GL_COLOR_BUFFER_BIT) in a comment' '   over two lines GL_ONE */' \
+	'int rm_glossary, gl_texturemode;' \
+	'static const char *modes[] = { "GL_NEAREST", "GL_LINEAR_MIPMAP_LINEAR", "a \" GL_X" };' \
+	"char q = '\"'; // GL_RGBA glFinish() after a line comment" 'const char *s = "glClear(";' \
+	"char e = '\\\\'; const char *t = \"GL_ZERO\";" > "${tmp:?}/mut/clean.c"
 vocab "${tmp:?}/mut" > "${tmp:?}/mut.out" || { cat "${tmp:?}/mut.out"; bad "the vocabulary check fails a clean file"; }
 mutants=0
-for m in 'glClear(GL_COLOR_BUFFER_BIT);' 'x = glGetError ();' 'int y = GL_RGBA;' \
+for m in 'glClear(0);' 'x = glGetError ();' 'int y = GL_RGBA;' 'f("GL_NEAREST", GL_LINEAR);' \
+	'/* a comment */ int z = GL_ONE; /* ends */' 'char *s = "a\"b"; int w = GL_ZERO;' \
+	"char c = '\"'; int v = GL_ONE;" \
 	'#include <OpenGL/gl.h>' '#import <OpenGL/gl3.h>' '#include "../gl1/header/local.h"' \
 	'#include <gl1/gl1.h>' 'link'; do
 	rm -rf "${tmp:?}/mut"

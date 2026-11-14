@@ -449,7 +449,7 @@ endif
 # ----------
 
 # Phony targets
-.PHONY : all client game icon server ref_gl1 ref_gl3 ref_soft
+.PHONY : all client game icon server ref_gl1 ref_gl3 ref_soft ref_metal
 
 # ----------
 
@@ -806,6 +806,42 @@ $(BUILDDIR)/ref_soft/%.o: %.c
 
 # ----------
 
+# The native Metal renderer lib, macOS only and not part of "all"
+# (docs/plans/ref-metal-native.md, section 10). C and ARC Objective-C;
+# no OpenGL is linked, SDL is the executable's (SDL_DYNAMIC_LOOKUP).
+
+ifeq ($(YQ2_OSTYPE), Darwin)
+
+ref_metal:
+	@echo "===> Building ref_metal.dylib"
+	${Q}mkdir -p $(BINDIR)
+	$(MAKE) $(BINDIR)/ref_metal.dylib
+
+$(BINDIR)/ref_metal.dylib : LDFLAGS += -shared -framework Metal -framework QuartzCore -framework Foundation
+
+$(BUILDDIR)/ref_metal/%.o: %.c
+	@if [ -z $(QUIET) ]; then\
+		echo "===> CC $<";\
+	fi
+	${Q}mkdir -p $(@D)
+	${Q}$(CC) -c $(CFLAGS) $(SDLCFLAGS) $(INCLUDE) -o $@ $<
+
+$(BUILDDIR)/ref_metal/%.o: %.m
+	@if [ -z $(QUIET) ]; then\
+		echo "===> CC $<";\
+	fi
+	${Q}mkdir -p $(@D)
+	${Q}$(CC) -c -fobjc-arc $(CFLAGS) $(SDLCFLAGS) $(INCLUDE) -o $@ $<
+
+else
+
+ref_metal:
+	@echo "ref_metal is for macOS only, not for $(YQ2_OSTYPE)" >&2; exit 1
+
+endif # OS specific ref_metal stuff
+
+# ----------
+
 # The baseq2 game
 ifeq ($(YQ2_OSTYPE), Windows)
 game:
@@ -1103,6 +1139,18 @@ endif
 
 # ----------
 
+REFMETAL_OBJS_ := \
+	src/client/refresh/metal/rm_main.o \
+	src/client/refresh/metal/rm_misc.o \
+	src/client/refresh/metal/rm_pure.o \
+	src/client/refresh/metal/rm_sdl.o \
+	src/client/refresh/metal/rmb_device.o \
+	src/client/refresh/metal/rmb_encode.o \
+	src/client/refresh/files/common.o \
+	src/common/shared/shared.o
+
+# ----------
+
 # Used by the server
 SERVER_OBJS_ := \
 	src/backends/generic/misc.o \
@@ -1167,6 +1215,7 @@ endif
 REFGL3_OBJS = $(patsubst %,$(BUILDDIR)/ref_gl3/%,$(REFGL3_OBJS_))
 REFGL3_OBJS += $(patsubst %,$(BUILDDIR)/ref_gl3/%,$(REFGL3_OBJS_GLADE_))
 REFSOFT_OBJS = $(patsubst %,$(BUILDDIR)/ref_soft/%,$(REFSOFT_OBJS_))
+REFMETAL_OBJS = $(patsubst %,$(BUILDDIR)/ref_metal/%,$(REFMETAL_OBJS_))
 SERVER_OBJS = $(patsubst %,$(BUILDDIR)/server/%,$(SERVER_OBJS_))
 GAME_OBJS = $(patsubst %,$(BUILDDIR)/baseq2/%,$(GAME_OBJS_))
 
@@ -1178,6 +1227,7 @@ GAME_DEPS= $(GAME_OBJS:.o=.d)
 REFGL1_DEPS= $(REFGL1_OBJS:.o=.d)
 REFGL3_DEPS= $(REFGL3_OBJS:.o=.d)
 REFSOFT_DEPS= $(REFSOFT_OBJS:.o=.d)
+REFMETAL_DEPS= $(REFMETAL_OBJS:.o=.d)
 SERVER_DEPS= $(SERVER_OBJS:.o=.d)
 
 # Suck header dependencies in.
@@ -1185,6 +1235,7 @@ SERVER_DEPS= $(SERVER_OBJS:.o=.d)
 -include $(GAME_DEPS)
 -include $(REFGL1_DEPS)
 -include $(REFGL3_DEPS)
+-include $(REFMETAL_DEPS)
 -include $(SERVER_DEPS)
 
 # ----------
@@ -1260,6 +1311,13 @@ else
 $(BINDIR)/ref_soft.so : $(REFSOFT_OBJS)
 	@echo "===> LD $@"
 	${Q}$(CC) $(LDFLAGS) $(REFSOFT_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
+endif
+
+# ref_metal.dylib
+ifeq ($(YQ2_OSTYPE), Darwin)
+$(BINDIR)/ref_metal.dylib : $(REFMETAL_OBJS)
+	@echo "===> LD $@"
+	${Q}$(CC) $(LDFLAGS) $(REFMETAL_OBJS) $(LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
 endif
 
 # baseq2/game.so
