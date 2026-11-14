@@ -552,7 +552,11 @@ colour cleared to 1, 0, 0.5 with `r_clear 1`, loaded with `r_clear 0`
 holds; here the last frame, or black on a target no pass has written).
 `RenderFrame` opens the 3D pass with colour loaded, depth cleared to 1
 and stencil to 0 (gl1 clears depth in `R_Clear`; no 2D draw writes
-depth before the view, so the result is the same), and
+depth before the view, so the result is the same; stencil 0 is the no-shadow value:
+gl1 clears stencil only in `R_Clear`, to 1 when `r_shadows`, a stencil
+buffer and `gl1_stencilshadow` are all on, and to 0 only in its
+interleaved stereo modes, so N8 owes the clear to 1 with stencil
+shadows; nothing reads stencil before N8), and
 `EndWorldRenderpass` the 2D pass (colour loaded, no depth). With
 `r_clear 1` a `screenshot` in the main menu before any map is 640x480,
 every pixel 255, 0, 128; with `r_clear 0` every pixel 0, 0, 0. A

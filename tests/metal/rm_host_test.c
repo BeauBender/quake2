@@ -213,21 +213,41 @@ test_color_load(void)
 }
 
 /*
- * With len 0 the formatters write nothing: neither the byte of a one
- * byte heap block (which must stay as it was) nor the byte just past
- * its end (which ASAN reports).
+ * The targets are made again when either is missing (a depth target
+ * whose allocation failed is retried on the next frame, TASK84 review)
+ * or the window changed size, and kept otherwise.
+ */
+static void
+test_targets_rebuild(void)
+{
+	CHECK(!rm_targets_rebuild(1, 1, 640, 480, 640, 480));
+	CHECK(rm_targets_rebuild(0, 0, 0, 0, 640, 480));
+	CHECK(rm_targets_rebuild(1, 0, 640, 480, 640, 480));
+	CHECK(rm_targets_rebuild(0, 1, 0, 0, 640, 480));
+	CHECK(rm_targets_rebuild(1, 1, 640, 480, 641, 480));
+	CHECK(rm_targets_rebuild(1, 1, 640, 480, 640, 479));
+}
+
+/*
+ * With len 0 the formatters write nothing: not the byte of a one byte
+ * heap block (which must stay as it was), and, given the middle byte of
+ * a three byte block, neither that byte nor the one before it (where a
+ * terminator at buf[len - 1] would land) nor the one after. The second
+ * half judges by the bytes' values, so it holds without a sanitizer.
  */
 static void
 test_len_zero(void)
 {
 	rmb_stats_t s;
 	rm_ledger_t l;
-	char *block = malloc(1);
+	char *block = malloc(1), *three = malloc(3);
 
-	CHECK(block != NULL);
+	CHECK(block != NULL && three != NULL);
 
-	if (!block)
+	if (!block || !three)
 	{
+		free(block);
+		free(three);
 		return;
 	}
 
@@ -239,11 +259,13 @@ test_len_zero(void)
 	CHECK(!rm_ledger_format(&l, block, 0) && block[0] == 'x');
 	CHECK(!rm_stats_format(&s, &l, block, 0) && block[0] == 'x');
 
-	CHECK(!rm_caps_family_list(0x1ff, block + 1, 0));
-	CHECK(!rm_ledger_format(&l, block + 1, 0));
-	CHECK(!rm_stats_format(&s, &l, block + 1, 0));
+	memcpy(three, "xyz", 3);
+	CHECK(!rm_caps_family_list(0x1ff, three + 1, 0) && memcmp(three, "xyz", 3) == 0);
+	CHECK(!rm_ledger_format(&l, three + 1, 0) && memcmp(three, "xyz", 3) == 0);
+	CHECK(!rm_stats_format(&s, &l, three + 1, 0) && memcmp(three, "xyz", 3) == 0);
 
 	free(block);
+	free(three);
 }
 
 int
@@ -255,6 +277,7 @@ main(void)
 	test_ledger();
 	test_stats();
 	test_color_load();
+	test_targets_rebuild();
 	test_len_zero();
 
 	printf("rm_host_test: %d checks, %d failed\n", checks, failures);

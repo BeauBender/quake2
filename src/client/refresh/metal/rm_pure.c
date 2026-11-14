@@ -217,3 +217,9 @@ rm_color_load(int clear, int defined)
 
 	return defined ? RM_LOAD_KEEP : RM_LOAD_BLACK;
 }
+
+int
+rm_targets_rebuild(int have_color, int have_depth, int cw, int ch, int w, int h)
+{
+	return !have_color || !have_depth || (cw != w) || (ch != h);
+}

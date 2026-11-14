@@ -20,12 +20,14 @@
 # (c) Always: the vocabulary check. Under src/client/refresh/metal/ no
 #     gl[A-Z] call and no GL_ identifier in code (outside comments and
 #     string literals; a literal continued by a backslash at the end of
-#     its line goes on on the next), no <OpenGL/ include, no include of
-#     a gl1/ path, no symbolic link (which could hide either), and no
-#     file other than .c, .h, .m and .metal (a .mm, .cpp or .inc file
-#     fails the check rather than going unscanned). It runs on scratch
-#     mutants first, each text mutant once per scanned kind of file, and
-#     must fail each of them, then on the tree. A grep that errors fails
+#     its line, blanks or a CR after it allowed, goes on on the next), no
+#     <OpenGL/ include, no include of a gl1/ path or of a .DS_Store, no
+#     symbolic link (which could hide either), and no file other than .c,
+#     .h, .m and .metal (a .mm, .cpp or .inc file fails the check rather
+#     than going unscanned; Finder's .DS_Store is passed over). It runs on
+#     scratch mutants first, each text mutant once per scanned kind of
+#     file, and must fail each of them naming its cause, then on the tree,
+#     whose summary line names the causes found. A grep that errors fails
 #     the check.
 set -eu
 cd "$(dirname "$0")/.."
@@ -86,8 +88,10 @@ strip() {
 			out = out c; i++
 		}
 		# a literal ends with its line, unless the line ends in a backslash (spliced
-		# to the next one before the literal is read)
-		if (st >= 2 && substr($0, n, 1) != bs) { st = 0 }
+		# to the next one before the literal is read); clang splices a backslash
+		# followed by blanks or a CR before the newline as well
+		t = $0; sub(/[ \t\r]+$/, "", t)
+		if (st >= 2 && substr(t, length(t), 1) != bs) { st = 0 }
 		print out
 	}' "$1"
 }
@@ -105,8 +109,14 @@ vgrep() { # <pattern> <file to search> <file to name>
 		*) echo "  grep failed ($rc) on $3"; return 1 ;;
 	esac
 }
+# The causes found go into $causes (the summary line names them): vocab runs in this
+# shell, its output redirected, not in a subshell.
+cause() {
+	case " $causes " in *" $1 "*) ;; *) causes="${causes:+$causes }$1" ;; esac
+	found=1
+}
 vocab() {
-	d=$1 found=0
+	d=$1 found=0 causes=""
 	if [ -L "$d" ] || [ ! -d "$d" ]; then
 		echo "  $d is not a directory (or is a symbolic link)"
 		return 1
@@ -114,24 +124,27 @@ vocab() {
 	links=$(find "$d" -type l -print) || { echo "  find failed on $d"; return 1; }
 	if [ -n "$links" ]; then
 		printf '  symbolic link: %s\n' $links
-		found=1
+		cause symlink
 	fi
 	files=$(find "$d" -type f -print) || { echo "  find failed on $d"; return 1; }
 	for f in $files; do
-		# the scanned kinds; any other file (.mm, .cpp, .inc, ...) fails the check
+		# the scanned kinds; any other file (.mm, .cpp, .inc, ...) fails the check, but
+		# Finder's .DS_Store, which nothing compiles (an include of it is refused below)
 		case $f in
 			*.c|*.h|*.m|*.metal) ;;
-			*) echo "  $f: not a scanned kind of file (.c .h .m .metal)"; found=1; continue ;;
+			*/.DS_Store) continue ;;
+			*) echo "  $f: not a scanned kind of file (.c .h .m .metal)"; cause unscanned; continue ;;
 		esac
 		strip "$f" > "${tmp:?}/vocab.code" || { echo "  awk failed on $f"; return 1; }
 		for pat in '(^|[^A-Za-z0-9_])gl[A-Z][A-Za-z0-9_]*[[:space:]]*\(' '(^|[^A-Za-z0-9_])GL_[A-Za-z0-9_]'; do
 			r=0; vgrep "$pat" "${tmp:?}/vocab.code" "$f" || r=$?
-			case $r in 0) ;; 2) found=1 ;; *) return 1 ;; esac
+			case $r in 0) ;; 2) cause opengl ;; *) return 1 ;; esac
 		done
 		for pat in '#[[:space:]]*(include|import)[[:space:]]*<OpenGL/' \
-			'#[[:space:]]*(include|import)[[:space:]]*[<"]([^>"]*/)?gl1/'; do
+			'#[[:space:]]*(include|import)[[:space:]]*[<"]([^>"]*/)?gl1/' \
+			'#[[:space:]]*(include|import)[[:space:]]*[<"]([^>"]*/)?[.]DS_Store[>"]'; do
 			r=0; vgrep "$pat" "$f" "$f" || r=$?
-			case $r in 0) ;; 2) found=1 ;; *) return 1 ;; esac
+			case $r in 0) ;; 2) cause opengl ;; *) return 1 ;; esac
 		done
 	done
 	return $found
@@ -153,9 +166,11 @@ vocab "${tmp:?}/mut" > "${tmp:?}/mut.out" || { cat "${tmp:?}/mut.out"; bad "the 
 # a literal continued over a line by a backslash, and one left open at the end of its
 # line, are followed by code. Then a symbolic link and a file of an unscanned kind.
 mutants=0
-mutant() { # <label>: the check must fail the directory mut/
+mutant() { # <label> [<cause>]: the check must fail the directory mut/, naming <cause>
 	if vocab "${tmp:?}/mut" > "${tmp:?}/mut.out"; then
 		bad "the vocabulary check passes a mutant ($1)"
+	elif [ "$causes" != "${2:-opengl}" ]; then
+		bad "the vocabulary check names \"$causes\", not \"${2:-opengl}\", for a mutant ($1)"
 	else
 		mutants=$((mutants + 1))
 	fi
@@ -169,23 +184,29 @@ for m in 'glClear(0);' 'x = glGetError ();' 'int y = GL_RGBA;' 'f("GL_NEAREST", 
 	'/* a comment */ int z = GL_ONE; /* ends */' 'char *s = "a\"b"; int w = GL_ZERO;' \
 	"char c = '\"'; int v = GL_ONE;" \
 	'static const char *rm_s = "abc\@NL@def"; static int rm_x = GL_RGBA;' \
+	'static const char *rm_s = "abc\ @NL@def"; static int rm_x = GL_RGBA;' \
+	'static const char *rm_s = "abc\@CR@@NL@def"; static int rm_x = GL_RGBA;@CR@' \
 	'const char *rm_u = "abc@NL@int rm_v = GL_ONE;' \
 	'#include <OpenGL/gl.h>' '#import <OpenGL/gl3.h>' '#include "../gl1/header/local.h"' \
-	'#include <gl1/gl1.h>' '#import "gl1/x.h"'; do
+	'#include <gl1/gl1.h>' '#import "gl1/x.h"' '#include ".DS_Store"'; do
 	for e in c h m metal; do
 		fresh
-		printf '%s\n' "$m" | awk '{ gsub(/@NL@/, "\n"); print }' > "${tmp:?}/mut/m.$e"
+		printf '%s\n' "$m" | awk '{ gsub(/@CR@/, "\r"); gsub(/@NL@/, "\n"); print }' > "${tmp:?}/mut/m.$e"
 		mutant "$m in m.$e"
 	done
 done
 fresh
 ln -s "$PWD/src/client/refresh/gl1/gl1_main.c" "${tmp:?}/mut/hidden.c"
-mutant "a symbolic link"
+mutant "a symbolic link" symlink
 for e in mm cpp inc; do
 	fresh
 	printf '%s\n' '#include <OpenGL/gl.h>' > "${tmp:?}/mut/m.$e"
-	mutant "an unscanned m.$e"
+	mutant "an unscanned m.$e" unscanned
 done
+# Finder's .DS_Store is not judged: beside a clean file it passes
+fresh
+printf 'Bud1 GL_RGBA glClear(\n' > "${tmp:?}/mut/.DS_Store"
+vocab "${tmp:?}/mut" > "${tmp:?}/mut.out" || { cat "${tmp:?}/mut.out"; bad "the vocabulary check fails a .DS_Store"; }
 # a tool error fails it too: a missing directory, and a grep that exits 2
 if vocab "${tmp:?}/no-such-dir" > "${tmp:?}/mut.out"; then
 	bad "the vocabulary check passes a missing directory"
@@ -200,7 +221,7 @@ fi
 
 if ! vocab "$rm_dir" > "${tmp:?}/vocab.tree"; then
 	cat "${tmp:?}/vocab.tree"
-	bad "$rm_dir speaks OpenGL or holds a symbolic link"
+	bad "$rm_dir fails the vocabulary check (${causes:-a tool error}; opengl: OpenGL vocabulary, symlink: a symbolic link, unscanned: a file of another kind)"
 fi
 
 # (b) the build, where it can be built

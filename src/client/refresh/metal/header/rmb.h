@@ -125,6 +125,13 @@ typedef enum
  */
 rm_load_t rm_color_load(int clear, int defined);
 
+/*
+ * 1 when rmb_frame_begin must (re)make the colour and depth targets for
+ * a w by h frame: either is missing (a failed allocation is retried on
+ * the next frame) or the colour target is cw by ch, another size.
+ */
+int rm_targets_rebuild(int have_color, int have_depth, int cw, int ch, int w, int h);
+
 /* ---- rmb_device.m and rmb_encode.m ------------------------------------------- */
 
 /* The device and the queue, and the capabilities. 0 with err filled on failure. */

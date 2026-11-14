@@ -152,7 +152,9 @@ rmb_frame_begin(int w, int h, const float *clear_rgba)
 	{
 		MTLTextureUsage rt = MTLTextureUsageRenderTarget;
 
-		if (!color || (int)color.width != w || (int)color.height != h)
+		/* a target that failed to allocate is tried again on the next frame */
+		if (rm_targets_rebuild(color != nil, depth != nil, color ? (int)color.width : 0,
+				color ? (int)color.height : 0, w, h))
 		{
 			color_defined = 0;
 			rmb_set_texture(&color, rmb_new_target(MTLPixelFormatBGRA8Unorm, w, h, rt | MTLTextureUsageShaderRead));
