@@ -27,7 +27,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 cc=${CC:-cc}
 mgl=src/client/refresh/gl1/metal
-srcs="tests/metal/mgl_host_test.c $mgl/mgl_raster.c $mgl/mgl_state.c $mgl/mgl_tex.c"
+srcs="tests/metal/mgl_host_test.c $mgl/mgl_raster.c $mgl/mgl_state.c $mgl/mgl_tex.c $mgl/mgl_draw.c"
 flags="-std=gnu99 -Wall -Werror -g -O1 -fno-strict-aliasing -fwrapv"
 san="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
 

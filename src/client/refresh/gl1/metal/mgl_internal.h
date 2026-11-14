@@ -182,6 +182,116 @@ GLenum mgl_read_contract(GLint x, GLint y, GLsizei w, GLsizei h,
 		GLenum format, GLenum type, GLint alignment, int tw, int th,
 		size_t *bpp, size_t *rowbytes, size_t *total);
 
+/*
+ * Converts what Metal read (BGRA rows, top row first, w * 4 bytes each)
+ * into the caller's glReadPixels buffer: GL rows bottom up, rowbytes
+ * apart, bpp bytes per pixel in format (GL_RGB, GL_RGBA or GL_BGRA).
+ * The padding at the end of each row is not written.
+ */
+void mgl_convert_readback(const unsigned char *bgra, int w, int h, GLenum format,
+		size_t bpp, size_t rowbytes, unsigned char *dst);
+
+/* out = a * b, column-major 4x4 as GL keeps them; out may be a or b. */
+void mgl_mat_mul(GLfloat *out, const GLfloat *a, const GLfloat *b);
+
+/* ---- textures (mgl_tex.c) ------------------------------------------------ */
+
+/* GL texture names gl1 uses run to about 2500 (TEXNUM_IMAGES + MAX_GLTEXTURES). */
+#define MGL_MAX_TEXTURES 4096
+#define MGL_MAX_TEXTURE_SIZE 8192
+
+typedef struct
+{
+	void *mtl;                    /* the layer's texture, NULL until level 0 is defined */
+	int width, height, levels;    /* of level 0; levels is the whole chain */
+	GLboolean opaque;             /* an RGB internal format: alpha reads 1, GL_REPLACE keeps the fragment's */
+	GLenum min_filter, mag_filter, wrap_s, wrap_t;
+	GLint anisotropy;
+	GLboolean generate_mipmap;
+} mgl_texture_t;
+
+/* The texture object of a name, or NULL for a name past the table. */
+mgl_texture_t *mgl_texture(GLuint name);
+/* Releases every texture's Metal storage and resets the table. */
+void mgl_textures_reset(void);
+/* The sampler a texture's parameters ask for, packed: see mgl_layer.m. */
+uint32_t mgl_sampler_key(const mgl_texture_t *t);
+
+/*
+ * Converts w x h pixels of format (GL_RGBA or GL_RGB, GL_UNSIGNED_BYTE)
+ * laid out with the unpack alignment and row length into tightly packed
+ * RGBA; opaque sets every alpha to 255 (an RGB internal format).
+ */
+void mgl_unpack_rgba(const unsigned char *src, GLenum format, int w, int h,
+		int alignment, int row_length, int opaque, unsigned char *out);
+
+/* ---- the draw path (mgl_draw.c) -------------------------------------------- */
+
+/* One vertex as the shaders read it (shaders.metal, struct mgl_vertex): 48 bytes. */
+typedef struct
+{
+	float pos[4];
+	float tc[MGL_MAX_UNITS][2];
+	float color[4];
+} mgl_vertex_t;
+
+/* The uniform block of a draw (shaders.metal, struct mgl_uniforms): 80 bytes. */
+#define MGL_TEXENV_NONE 0
+#define MGL_TEXENV_REPLACE 1
+#define MGL_TEXENV_MODULATE 2
+
+typedef struct
+{
+	float mvp[16];                /* projection * modelview */
+	float alpha_ref;
+	int32_t alpha_func;           /* GL_NEVER .. GL_ALWAYS minus GL_NEVER; GL_ALWAYS when the test is off */
+	int32_t texenv0;              /* MGL_TEXENV_* */
+	int32_t tex_opaque0;
+} mgl_uniforms_t;
+
+/* Bounds of one draw: a GL_UNSIGNED_SHORT index reaches 65535. */
+#define MGL_MAX_DRAW_VERTICES 65536
+#define MGL_MAX_DRAW_INDICES (3 * MGL_MAX_DRAW_VERTICES)
+
+typedef struct
+{
+	const mgl_vertex_t *vertices;
+	size_t nvertices;
+	const uint16_t *indices;      /* triangles */
+	size_t nindices;
+	mgl_uniforms_t u;
+	uint32_t pipeline_key;        /* mgl_pipeline_key */
+	uint32_t depth_key;           /* mgl_depth_key */
+	void *texture0;               /* NULL when texenv0 is MGL_TEXENV_NONE */
+	uint32_t sampler0;
+} mgl_draw_t;
+
+/* Fills out[0..count) from the enabled client arrays, vertices first..first+count-1. */
+void mgl_assemble(const mgl_state_t *s, GLint first, GLsizei count, mgl_vertex_t *out);
+
+/*
+ * The triangle list of count vertices drawn as mode (GL_TRIANGLES,
+ * GL_TRIANGLE_STRIP, GL_TRIANGLE_FAN). elements maps a position to a
+ * vertex (NULL: the position is the vertex). Returns the number of
+ * indices written, or -1 when mode is none of the three or the list
+ * needs more than cap.
+ */
+long mgl_triangle_indices(GLenum mode, GLsizei count, const uint16_t *elements,
+		uint16_t *out, size_t cap);
+
+/* The packed blend and colour-mask state, and depth state, of a draw. */
+uint32_t mgl_pipeline_key(const mgl_state_t *s);
+uint32_t mgl_depth_key(const mgl_state_t *s);
+/* GL blend factor -> index 0..10 in the order of mgl_layer.m's table; -1 if none. */
+int mgl_blend_index(GLenum factor);
+
+/*
+ * A bump allocator over a buffer of cap bytes: the offset of size
+ * bytes aligned to align (a power of two), or (size_t)-1 when they do
+ * not fit; *used advances only on success.
+ */
+size_t mgl_ring_alloc(size_t *used, size_t cap, size_t size, size_t align);
+
 /* mgl_layer.m: the only file that talks to Metal and CAMetalLayer. */
 typedef struct
 {
@@ -215,6 +325,19 @@ int mgl_layer_finish(void);
 int mgl_layer_read(int x, int y, int w, int h, unsigned char *bgra);
 /* Ends the frame: presents the drawable (if there is one) and commits. */
 int mgl_layer_present(void);
+
+/* A private rgba8Unorm texture with a full mip chain; NULL on failure. */
+void *mgl_layer_tex_create(int w, int h, int levels);
+void mgl_layer_tex_release(void *tex);
+/*
+ * Copies tightly packed RGBA into a region of one level, ordered after
+ * every draw encoded so far (and before every later one); with
+ * gen_mips levels 1 and up are then regenerated from level 0.
+ */
+int mgl_layer_tex_upload(void *tex, int level, int x, int y, int w, int h,
+		const unsigned char *rgba, int gen_mips);
+/* Encodes one draw into the frame, opening the frame or a Load pass as needed. */
+int mgl_layer_draw(const mgl_draw_t *d);
 
 /* Upper bounds on every wait, in milliseconds. */
 #define MGL_FRAME_WAIT_MS 2000
