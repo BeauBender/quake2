@@ -783,3 +783,99 @@ the scrap and its uploads, `Draw_InitLocal` (conchars), gl1's buffered
 the particle texture) with N3 and N9. After a split the next pass is a
 2D pass; reopening a 3D pass there (with its depth kept) is owed by the
 first card that rewrites a texture inside the 3D pass (N5).
+
+## 18. As built: N3, pics, characters, the scrap and the HUD (TASK86)
+
+What exists:
+
+- **The 2D draws.** `rm_draw.c` has `DrawCharScaled`, `DrawStretchPic`,
+  `DrawPicScaled`, `DrawPicScaledCol` and `DrawTileClear` with `DrawFindPic`
+  and `DrawGetPicSize` moved from `rm_main.c`, and `RM_InitDraw` loads
+  `conchars` (gl1's `Draw_InitLocal`). The quad arithmetic is plain C in
+  `rm_pure.c` (`rm_char_quad`, `rm_pic_quad`, `rm_tile_quad`,
+  `rm_tint_color`), each function the body of gl1's, host-tested against
+  hand-worked values.
+- **The batch.** gl1 queues characters, stretched pics, tiles and the
+  atlas pics of `DrawPicScaled` in `gl_buf` (`R_Buffer2DQuad`) and draws
+  it when the texture changes, when it is full and where it calls
+  `R_ApplyGLBuffer`. `ref_metal` keeps that order, because it is visible
+  in the frames: `DrawFill` and the cinematic do not flush gl1's buffer,
+  so a fill drawn after queued characters appears under them. The batch
+  (`RM_Flush2D`) is flushed at the start of `RenderFrame`, in
+  `EndFrame`, before a screenshot's readback, in `DrawFadeScreen`, and
+  before a non-atlas `DrawPicScaled` and a `DrawPicScaledCol` draw at
+  once. It holds `RM_BATCH_QUADS` (1024, gl1's 4096) quads of one
+  texture and sampler; `rm_batch_fits` decides every add (a full batch is
+  drawn first, never written past) and `rm_quad_indices` makes the
+  indices (the 16-bit limit, the index capacity). `rmb_draw_2d_quads` in
+  `rmb_encode.m` draws a batch as one indexed draw through the same
+  ring path as `rmb_draw_2d` (a shared static function; no new pipeline
+  class, the `2d` pipelines of N2 are used: replace with the alpha test,
+  and modulate for `DrawPicScaledCol`).
+- **The scrap.** `rm_scrap.c` is gl1's four 256 by 256 atlases (the first
+  two without filtering) with `Scrap_AllocBlock` and `Scrap_Update`. The
+  allocator (`rm_scrap_alloc`, gl1's `CommonAllocBlock`: same spots,
+  including that a block never starts in the last w columns) and the copy
+  (`rm_scrap_copy`) are in `rm_pure.c` and bounded: a block wider than
+  the atlas, an empty or negative one, a copy that leaves the atlas, is
+  refused and writes nothing (gl1 computes `alloc_width - w` unsigned).
+  Each atlas is a back end texture made when the first block is placed in
+  it; a dirty atlas is light-scaled (gamma only, as gl1's `R_Upload32` of
+  an image without mipmaps) and rewritten through the upload command
+  buffer when a draw finds it dirty. An atlas's sampler is nearest for
+  the first two and with `r_2D_unfiltered`, flat otherwise, decided at
+  draw time (gl1 decides it at upload; the two differ only when
+  `r_2D_unfiltered` changes after a pic is queued and nothing rewrites
+  the atlas).
+- **Changes in N2's `rm_image.c`** (the card said not to touch it; gl1
+  puts the scrap in `R_LoadPic`, so the minimum is there): the scrap
+  branch of `R_LoadPic` (`R_LoadScrap`, for `it_pic` of at most 128 by
+  128, on the same conditions as gl1, including `r_nolerp_list` and
+  `r_2D_unfiltered` choosing the unfiltered atlases), the coordinates
+  left to the atlas, `R_ShutdownImages` not freeing an atlas's texture
+  per image, `Scrap_Init` in `R_InitImages`, and `R_LightScaleTexture`
+  no longer `static`. The card is therefore M, not L.
+- **Not done here.** The built-in textures (`r_notexture`, the particle
+  texture) are not made: nothing draws them before the world (N4) and
+  particles (N9), and a texture nothing samples would only be an object
+  to account for.
+
+Bounds: the scrap allocation and copy, the batch capacity and the index
+count are plain functions with host-test cases of oversized counts (an
+atlas block wider than 256 or of 1,000,000, a quad count of 16,385 and
+`INT_MAX` of a batch, a copy at `x = INT_MAX`); overflow is a flush or a
+skipped draw (`draws skipped` in `metal_stats`), never a write past the
+end. A failed atlas upload frees its id and leaves the atlas dirty; the
+pics on it draw nothing until the atlas is made again (an allocation
+failure only).
+
+Measured on the build VM (T0), source `308d8073` (the pins; later commits
+change tests and documents only), load averages 17.7 to 26.1 (a shared
+host), every record with `MTL_DEBUG_LAYER=1`, references recorded at that
+commit in a private store:
+
+| What | Result |
+|---|---|
+| `compare metal hud2d --ref gl1-metal --threshold 0.005 --bad-threshold 0.001`, three release records (`--run 2`, `--run 3`) | each: 23 frames ok, worst score 0, worst bad 0 (the 23 frames differ from each other; the HUD, the crosshair and the status numbers are drawn over the `r_clear` colour) |
+| the same record with the `ASAN=1` build (`PINS_BIN=debug/quake2`, `PINS_TRACE=0`) | 23 frames ok, score 0, bad 0, no sanitizer line |
+| `compare metal cinematic --ref gl1-metal` (`PINS_DEMO=idlog.cin PINS_EVERY=7`) | 12 frames ok, worst score 0, worst bad 0 |
+| validation and teardown, the four `hud2d` records | `engine.log` holds only `Metal API Validation Enabled`; teardown `0 live objects` (texture 6/6, buffer 5/5), `0 unreleased`, `0 unmatched` |
+| `metal_stats 1`, `hud2d` outside the harness | every one of the 24 lines `12 pipelines, 0 created after init`, `0 draws skipped`, `0 uploads skipped`; 2,121 draws and 10 uploads over 707 frames, 0 pass splits |
+| mutants of the host test | 28 mutants of the pure code (the allocator's loop bound, strictness, height check, raised columns and result; the copy's bounds, pitch and sign; the character mask, space test, top clip, column, scale and row ratio; the pic factor; the tile's clip, ratios and offset bound; the batch's overflow-safe sum, zero add and cap; the indices' capacity, 16-bit bound and second triangle; the tint's alpha and blue) all fail it; two cases (a non-square atlas block, a non-square tile) were added after the first run left one mutant alive |
+| a mutant of the front end, `RM_Flush2D` removed from `EndFrame`, one `hud2d` record | 2 of 23 frames over the threshold (worst score 0.0134, bad 0.0315), so the pin does see the order of the flush |
+| `tests/check-ref-metal.sh` | host test 201 checks, 0 failed; 72 vocabulary mutants refused; `ref_metal` built |
+
+The implementer did not run the full gate (`scripts/test.sh`): the host
+limits of this card keep it to the orchestrator; the checks above are
+its parts that this change touches. The change is about 1,170 lines
+added against the card's estimate of about 600: the estimate counted
+`rm_draw.c` and the scrap, not the bounded pure functions with the
+host-test cases and mutant rework (about 490 of the lines are the pure
+functions, their declarations and `rm_host_test.c`), the batch draw in
+`rmb_encode.m`, and the `rm_image.c` hooks.
+
+Left for N4 and later: the built-in textures with the world and the
+particles, and the sampler of an atlas after a change of `r_2D_unfiltered`
+(here it follows the cvar at once; gl1 sets an atlas's filters when the
+atlas is uploaded and in `R_TextureMode`'s loop over the images, and no
+scenario changes the cvar).
