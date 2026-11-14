@@ -22,8 +22,9 @@
  * The pure arithmetic of the frame core, kept apart from mgl_frame.c
  * (which needs SDL) so that tests/check-metal-shim.sh can compile it
  * on any host: the GL-to-Metal rectangle flip, the read contract and
- * the row and channel conversion of glReadPixels, the matrix product
- * and the unpacking of texture uploads. All are declared in
+ * the row and channel conversion of glReadPixels, the matrix product,
+ * the unpacking of texture uploads and the allocator of the per-frame
+ * vertex ring. All are declared in
  * mgl_internal.h.
  *
  * =======================================================================
@@ -225,4 +226,21 @@ mgl_unpack_rgba(const unsigned char *src, GLenum format, int w, int h,
 			out[3] = (bpp == 4 && !opaque) ? p[3] : 255;
 		}
 	}
+}
+
+/* ---- the per-frame vertex ring ---------------------------------------------- */
+
+long
+mgl_ring_alloc(mgl_ring_t *r, size_t n)
+{
+	size_t at = (r->used + MGL_RING_ALIGN - 1) / MGL_RING_ALIGN * MGL_RING_ALIGN;
+
+	/* at > size is checked first, so size - at cannot wrap */
+	if (n == 0 || at > r->size || n > r->size - at)
+	{
+		return -1;
+	}
+
+	r->used = at + n;
+	return (long)at;
 }

@@ -28,12 +28,12 @@
  * which mgl_layer.m caches. Everything here is plain C; mgl_layer_draw
  * encodes the result.
  *
- * As of TASK48 S2a the triangle modes draw, textured on unit 0 with
- * GL_REPLACE or GL_MODULATE, with blending and the alpha test: what
- * the 2D path uses. Points, lines, unit 1, GL_COMBINE, the depth test,
- * culling, stencil and polygon offset are S2b and later cards: a draw
- * that needs one sets the sticky error and logs once (points and lines
- * are not drawn, the state is ignored).
+ * The triangle modes draw, textured on unit 0 with GL_REPLACE or
+ * GL_MODULATE, with blending, the alpha test, the depth and stencil
+ * tests, culling, polygon offset and line fill (TASK48, TASK82).
+ * Points, lines, unit 1 and GL_COMBINE are later cards': a draw that
+ * needs one sets the sticky error and logs once (points and lines are
+ * not drawn, the state is ignored).
  *
  * =======================================================================
  */
@@ -218,21 +218,58 @@ mgl_pipeline_key(const mgl_state_t *s)
 	return key;
 }
 
+int
+mgl_stencil_op_index(GLenum op)
+{
+	static const GLenum order[] = {GL_KEEP, GL_ZERO, GL_REPLACE, GL_INCR, GL_DECR, GL_INVERT};
+	int i;
+
+	for (i = 0; i < (int)(sizeof(order) / sizeof(order[0])); i++)
+	{
+		if (order[i] == op)
+		{
+			return i;
+		}
+	}
+
+	return -1;
+}
+
+uint64_t
+mgl_depth_stencil_key(const mgl_state_t *s)
+{
+	uint64_t key = 0;
+
+	/* GL writes depth only where it tests it (GL 1.4, section 4.1.5) */
+	if (s->enables & MGL_EN_DEPTH_TEST)
+	{
+		key = 1u | ((uint64_t)(s->depth_func - GL_NEVER) << 1) | (s->depth_mask ? (1u << 4) : 0u);
+	}
+
+	/* without the stencil test GL neither tests nor changes the stencil buffer */
+	if (s->enables & MGL_EN_STENCIL_TEST)
+	{
+		/* glStencilFunc and glStencilOp store only values these know */
+		key |= (1u << 5) | ((uint64_t)(s->stencil_func - GL_NEVER) << 6) |
+			((uint64_t)mgl_stencil_op_index(s->stencil_fail) << 9) |
+			((uint64_t)mgl_stencil_op_index(s->stencil_zfail) << 12) |
+			((uint64_t)mgl_stencil_op_index(s->stencil_zpass) << 15) |
+			((uint64_t)(s->stencil_value_mask & 0xff) << 18) |
+			((uint64_t)(s->stencil_write_mask & 0xff) << 26);
+	}
+
+	return key;
+}
+
 /*
  * State this card does not draw yet: the sticky error and one line
- * each, then drawn without it. Without GL_DEPTH_TEST a draw neither
- * tests nor writes depth, which is Metal's default depth state.
+ * each, then drawn without it.
  */
 static void
 mgl_check_unsupported(const mgl_state_t *s)
 {
-	static int once_unit1, once_env, once_depth, once_cull, once_stencil, once_offset, once_fill;
+	static int once_unit1, once_env, once_fill;
 	const mgl_unit_t *u0 = &s->unit[0];
-
-	if (s->enables & MGL_EN_DEPTH_TEST)
-	{
-		mgl_unimplemented("GL_DEPTH_TEST", &once_depth);
-	}
 
 	if (s->unit[1].texture_2d)
 	{
@@ -244,25 +281,46 @@ mgl_check_unsupported(const mgl_state_t *s)
 		mgl_unimplemented("a texture environment other than GL_REPLACE and GL_MODULATE", &once_env);
 	}
 
+	/* Metal has one fill mode for both faces and no point fill */
+	if (s->polygon_mode_front != s->polygon_mode_back || s->polygon_mode_front == GL_POINT)
+	{
+		mgl_unimplemented("glPolygonMode GL_POINT, or a different mode per face", &once_fill);
+	}
+}
+
+/*
+ * The rasterizer state of a draw: cull, fill mode, polygon offset and
+ * the stencil reference. Returns 0 when GL draws no triangle at all
+ * (both faces culled).
+ */
+static int
+mgl_raster_state(const mgl_state_t *s, mgl_draw_t *d)
+{
+	d->cull = MGL_CULL_NONE;
+
 	if (s->enables & MGL_EN_CULL_FACE)
 	{
-		mgl_unimplemented("GL_CULL_FACE", &once_cull);
+		if (s->cull_face == GL_FRONT_AND_BACK)
+		{
+			return 0;
+		}
+
+		/* the front face is counter-clockwise, GL's default (gl1 never calls glFrontFace) */
+		d->cull = s->cull_face == GL_FRONT ? MGL_CULL_FRONT : MGL_CULL_BACK;
 	}
 
-	if (s->enables & MGL_EN_STENCIL_TEST)
-	{
-		mgl_unimplemented("GL_STENCIL_TEST", &once_stencil);
-	}
+	d->fill_lines = s->polygon_mode_front == GL_LINE;
 
 	if (s->enables & MGL_EN_POLYGON_OFFSET)
 	{
-		mgl_unimplemented("GL_POLYGON_OFFSET_FILL", &once_offset);
+		d->depth_bias = s->polygon_offset_units;
+		d->depth_slope = s->polygon_offset_factor;
 	}
 
-	if (s->polygon_mode_front != GL_FILL || s->polygon_mode_back != GL_FILL)
-	{
-		mgl_unimplemented("glPolygonMode other than GL_FILL", &once_fill);
-	}
+	/* GL clamps the reference to the stencil bits (8) */
+	d->stencil_ref = s->stencil_ref < 0 ? 0u : (s->stencil_ref > 0xff ? 0xffu : (uint32_t)s->stencil_ref);
+	d->depth_stencil_key = mgl_depth_stencil_key(s);
+	return 1;
 }
 
 /* Builds the draw from the state and the assembled vertices and indices, and encodes it. */
@@ -302,6 +360,11 @@ mgl_submit(size_t nvertices, size_t nindices)
 	}
 
 	d.pipeline_key = mgl_pipeline_key(s);
+
+	if (!mgl_raster_state(s, &d))
+	{
+		return;
+	}
 
 	if (!mgl_layer_draw(&d))
 	{

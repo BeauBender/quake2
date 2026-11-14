@@ -21,15 +21,15 @@
  *
  * The GL state machine of the Metal shim: one mgl_state_t, the sticky
  * error, and the entry points that only record state. They validate
- * their arguments as GL does and change nothing else; the draw path of
- * later cards reads the struct. Of the matrix arithmetic only glOrtho
- * (the 2D projection) is done; glRotatef, glTranslatef, glScalef and
- * glFrustum belong to the world cards and are stubbed here: they set
- * the sticky error and leave the stack alone.
+ * their arguments as GL does and change nothing else; the draw path
+ * (mgl_draw.c) reads the struct. The matrix calls (glOrtho, glFrustum,
+ * glRotatef, glTranslatef, glScalef) multiply the top of the current
+ * stack as GL does.
  *
  * =======================================================================
  */
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -774,33 +774,81 @@ glGetFloatv(GLenum pname, GLfloat *params)
 		case GL_PROJECTION_MATRIX:
 			memcpy(params, mgl_state.projection[mgl_state.projection_depth], 16 * sizeof(GLfloat));
 			break;
+		case GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT:
+			params[0] = (GLfloat)MGL_MAX_ANISOTROPY;
+			break;
 		default:
-			/* Not advertised (GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT among them): nothing written. */
+			/* Not answered: nothing written. */
 			mgl_error(GL_INVALID_ENUM);
 	}
 }
 
-/* The matrix arithmetic: glOrtho here, the rest with the world (TASK48 S2b, TASK49). */
+/*
+ * The matrix arithmetic (GL 1.4, section 2.11.2): each call multiplies
+ * the top of the current stack on the right by its matrix, so the last
+ * one named is the first applied to a vertex.
+ */
+
+static void
+mgl_mult(const GLfloat *m)
+{
+	mgl_mat_mul(mgl_top(), mgl_top(), m);
+}
 
 void
 glRotatef(GLfloat angle, GLfloat x, GLfloat y, GLfloat z)
 {
-	(void)angle; (void)x; (void)y; (void)z;
-	MGL_UNIMPLEMENTED();
+	double len = sqrt((double)x * x + (double)y * y + (double)z * z);
+	double a = angle * (M_PI / 180.0), c = cos(a), s = sin(a), nx, ny, nz;
+	GLfloat m[16];
+
+	/* GL leaves a rotation about the zero vector undefined: the matrix stays */
+	if (len == 0.0)
+	{
+		return;
+	}
+
+	nx = x / len;
+	ny = y / len;
+	nz = z / len;
+
+	memset(m, 0, sizeof(m));
+	m[0] = (GLfloat)(nx * nx * (1 - c) + c);
+	m[1] = (GLfloat)(ny * nx * (1 - c) + nz * s);
+	m[2] = (GLfloat)(nx * nz * (1 - c) - ny * s);
+	m[4] = (GLfloat)(nx * ny * (1 - c) - nz * s);
+	m[5] = (GLfloat)(ny * ny * (1 - c) + c);
+	m[6] = (GLfloat)(ny * nz * (1 - c) + nx * s);
+	m[8] = (GLfloat)(nx * nz * (1 - c) + ny * s);
+	m[9] = (GLfloat)(ny * nz * (1 - c) - nx * s);
+	m[10] = (GLfloat)(nz * nz * (1 - c) + c);
+	m[15] = 1.0f;
+
+	mgl_mult(m);
 }
 
 void
 glTranslatef(GLfloat x, GLfloat y, GLfloat z)
 {
-	(void)x; (void)y; (void)z;
-	MGL_UNIMPLEMENTED();
+	GLfloat m[16];
+
+	mgl_identity(m);
+	m[12] = x;
+	m[13] = y;
+	m[14] = z;
+	mgl_mult(m);
 }
 
 void
 glScalef(GLfloat x, GLfloat y, GLfloat z)
 {
-	(void)x; (void)y; (void)z;
-	MGL_UNIMPLEMENTED();
+	GLfloat m[16];
+
+	mgl_identity(m);
+	m[0] = x;
+	m[5] = y;
+	m[10] = z;
+	mgl_mult(m);
 }
 
 /* The current matrix times the orthographic projection (GL 1.4, section 2.11.2). */
@@ -825,15 +873,32 @@ glOrtho(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top,
 	m[14] = (GLfloat)(-(zFar + zNear) / (zFar - zNear));
 	m[15] = 1.0f;
 
-	mgl_mat_mul(mgl_top(), mgl_top(), m);
+	mgl_mult(m);
 }
 
+/* The current matrix times the perspective projection (GL 1.4, section 2.11.2). */
 void
 glFrustum(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top,
 		GLdouble zNear, GLdouble zFar)
 {
-	(void)left; (void)right; (void)bottom; (void)top; (void)zNear; (void)zFar;
-	MGL_UNIMPLEMENTED();
+	GLfloat m[16];
+
+	if (zNear <= 0 || zFar <= 0 || left == right || bottom == top || zNear == zFar)
+	{
+		mgl_error(GL_INVALID_VALUE);
+		return;
+	}
+
+	memset(m, 0, sizeof(m));
+	m[0] = (GLfloat)(2.0 * zNear / (right - left));
+	m[5] = (GLfloat)(2.0 * zNear / (top - bottom));
+	m[8] = (GLfloat)((right + left) / (right - left));
+	m[9] = (GLfloat)((top + bottom) / (top - bottom));
+	m[10] = (GLfloat)(-(zFar + zNear) / (zFar - zNear));
+	m[11] = -1.0f;
+	m[14] = (GLfloat)(-2.0 * zFar * zNear / (zFar - zNear));
+
+	mgl_mult(m);
 }
 
 /* Paletted textures: never advertised, so gl1 never loads this pointer. */

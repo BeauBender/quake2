@@ -65,7 +65,7 @@ scenario plays `PINS_DEMO`, so all of them follow the same camera path.
 | `world` | world surfaces, lightmaps, sky, water |
 | `models` | the world plus entities: models, sprites, beams, the view weapon |
 | `particles` | everything, including particles, dynamic lights and the screen blend |
-| `hud2d` | 2D only: status bar, crosshair, console text |
+| `hud2d` | 2D only: status bar, crosshair, console text; the OpenGL renderers draw no screen blend there (`gl_polyblend 0`), the software renderer still darkens the screen on a pickup |
 | `skywater` | world surfaces and sky, with the sky and water-warp settings fixed |
 | `cinematic` | a cinematic stretched over the screen; `record` needs `PINS_DEMO` naming a `.cin`, and refuses a `.cin` for any other scenario |
 
