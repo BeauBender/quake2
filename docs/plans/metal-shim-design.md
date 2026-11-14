@@ -569,3 +569,63 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
 - **Not covered.** No static assert ties the C uniform struct to the
   shader's (follow-up), and no scenario pins `GL_COMBINE` because
   overbright defaults to off.
+
+## 11. As built by TASK50 (S4, sky, water and translucent surfaces)
+
+- **No new GL surface, as section 4 expected.** The draws of this stage
+  are the sky (`R_DrawSkyBox`, `gl1_warp.c`: `glPushMatrix`,
+  `glTranslatef` to the eye, `glRotatef` by time times `skyrotate`
+  about `skyaxis`, one `GL_TRIANGLE_FAN` of four per face through
+  `glDrawArrays`, `GL_REPLACE`, depth test and writes on), the warped
+  water (`R_EmitWaterPolys` into gl1's buffer, then `R_ApplyGLBuffer`
+  with `SURF_DRAWTURB`: unit 1 off, `GL_MODULATE` with the colour
+  `inverse_intensity`, or with `gl1_overbrightbits` set `GL_COMBINE` at
+  `GL_RGB_SCALE` 1 and a white colour) and the translucent surfaces
+  (`R_DrawAlphaSurfaces`, then `buf_alpha`: blending
+  `GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA`, `GL_MODULATE`, the colour
+  `inverse_intensity, inverse_intensity, inverse_intensity, alpha` with
+  alpha 0.33, 0.66 or 1, drawn after the opaque world and the sky;
+  translucent water goes through `R_EmitWaterPolys` there too). Every
+  call and state in them was already implemented by S2b and S3: records
+  of the parent (`world`, `skywater` from `demo1.dm2` and from
+  `water.dm2`) logged no `not implemented` line, and neither do the
+  records of this card. So S4 changes no shim code. The draw order is
+  gl1's: the shim encodes draws in the order gl1 makes them, into one
+  render pass per frame.
+- **Depth writes stay on for translucent surfaces.** The card and
+  inventory B4 say depth writes off; gl1 never calls `glDepthMask` in
+  `R_DrawAlphaSurfaces` or for `buf_alpha` (each `glDepthMask(GL_FALSE)`
+  in gl1 is undone with `GL_TRUE` before its function returns; see
+  `src/client/refresh/gl1/gl1_surf.c`, `R_DrawAlphaSurfaces`, lines 477
+  to 521, which only has `glEnable(GL_BLEND)` at 485 and
+  `glDisable(GL_BLEND)` at 520), so the shim, which follows the calls,
+  draws them with depth writes, as a GL driver does.
+- **What the shim computes on these paths.** gl1 computes the warp
+  (`r_turbsin`, the scroll of `SURF_FLOWING`) and the sky's texture
+  coordinates (clamped to 1/512 and 511/512, t flipped) on the CPU; the
+  shim copies them into the vertex unchanged (`mgl_assemble`). The shim
+  itself computes the sky's matrix (the rotation in double, about the
+  normalised axis, multiplied on the right of the world matrix, popped
+  after), the fan's six indices, the vertex colour from the current
+  colour (the alpha of a translucent surface rides there), the texture
+  environment (`mgl_texenv_stage`: an RGB texture under `GL_MODULATE`
+  keeps the colour's alpha) and the pipeline and depth keys; Metal does
+  the blend. `test_sky_water_alpha` in the host test replays gl1's
+  call sequence for each of the three and checks those values against
+  hand-worked ones, including the blends of alpha 0.33 and 0.66 over a
+  known destination.
+- **No new table or bound.** Nothing in this card adds a fixed table,
+  so there is no new overflow path.
+- **Tests and sanitizers.** Each check of `test_sky_water_alpha` fails
+  against at least one mutant of a shim line it covers (37 mutants of
+  `mgl_state.c`, `mgl_draw.c` and `mgl_texenv.h`, run with only that
+  test in `main`, all 37 killed). An `ASAN=1 UBSAN=1` build recorded
+  the three scenarios below with no sanitizer line, frames identical to
+  the release build's.
+- **On frames:** see `docs/plans/metal-port-harness.md`, "Sky, water
+  and translucent surfaces against the software renderer (TASK50)".
+  Where the `gl1` reference is sound the shim matches it to within
+  rounding (the sky of `world` frame 21: largest channel difference 1);
+  every region where they differ by more is one of the reference's
+  known faults, with `gl1` the odd one out against `soft` and
+  `gl1-metal`.
