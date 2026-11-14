@@ -176,8 +176,8 @@ re-measured here; this is the physical-device column the gating needs.
 | `supportsRaytracingFromRender` | true | false |
 | `supportsPrimitiveMotionBlur` | true | not stated |
 | `supportsFunctionPointers`, `...FromRender`, `supportsDynamicLibraries` | true, true, true | not stated |
-| `readWriteTextureSupport` | tier 2 | not stated |
-| `argumentBuffersSupport` | tier 1 (see finding 4) | not stated |
+| `readWriteTextureSupport` | tier 2 (`MTLReadWriteTextureTier2`) | not stated |
+| `argumentBuffersSupport` | tier 2 (`MTLArgumentBuffersTier2`; raw value 1) | not stated |
 | `hasUnifiedMemory` | true | not stated |
 | `recommendedMaxWorkingSetSize` | 26,800,603,136 bytes (about 25 GiB) | not stated |
 | `maxBufferLength` | 20,100,448,256 bytes | not stated |
@@ -197,37 +197,46 @@ two rays. The ray at (0.25, 0.25, -1) along +z returned hit distance
 error. The path works on the device, not only the flag.
 
 Build time of a primitive acceleration structure on a synthetic triangle
-soup (random 64-unit triangles in a 4096 x 4096 x 1024 box, unindexed,
-opaque, a choice of mine: section 1 expects 10k to 20k world triangles and
+soup (n triangles, each a right triangle with 64-unit legs at a random
+integer position in a 4096 x 4096 x 1024 box, fixed seed, unindexed,
+opaque; a choice of mine: section 1 expects 10k to 20k world triangles and
 a refit population of up to about 1 M alias triangles, so 10k, 20k, 50k
-and 200k were measured). Two invocations of the probe, seven builds each
-(fourteen runs); GPU time from `GPUEndTime - GPUStartTime`, wall time
-around commit to completion. `uptime` load averages (1, 5, 15 min) were
-4.27/3.17/2.79 before and 4.65/3.28/2.84 after the first invocation and
-4.36/3.24/2.83 after the second; another process was using the GPU
-(frame recording) the whole time.
+and 200k were measured). Each size was built once as a discarded warm-up,
+then seven timed builds and eight timed refits; three invocations of the
+probe, so 21 timed builds per size. GPU time is `GPUEndTime -
+GPUStartTime`, wall time is around commit to completion. `uptime` load
+averages (1, 5, 15 min) were 3.27/3.26/2.90 before the first invocation
+and 3.07/3.21/2.90 after the third (all invocations within one minute);
+another process was using the GPU (frame recording) the whole time, so
+treat the ranges as an upper-biased view.
 
-| Triangles | Structure bytes | Build scratch bytes | Build GPU ms, 14 runs | Build wall ms | Refit GPU ms (14 runs) |
+| Triangles | Structure bytes | Build scratch bytes | Build GPU ms, 21 runs | Build wall ms | Refit GPU ms (21 runs) |
 |---|---|---|---|---|---|
-| 10,000 | 937,728 | 251,584 | 2.77 to 2.94 | 3.10 to 4.44 | 0.07 to 0.25 |
-| 20,000 | 1,874,816 | 904,128 | 0.67 to 2.41 | 1.04 to 3.91 | 0.09 to 0.35 |
-| 50,000 | 4,762,560 | 1,857,984 | 1.33 to 4.84 | 1.66 to 5.40 | 0.16 to 0.63 |
-| 200,000 | 19,048,256 | 7,430,528 | 5.02 to 10.60 | 5.63 to 11.96 | not measured |
+| 10,000 | 937,728 | 251,584 | 0.72 to 2.58 | 0.84 to 2.98 | 0.07 to 0.26 |
+| 20,000 | 1,874,816 | 904,128 | 0.50 to 1.92 | 0.64 to 2.25 | 0.08 to 0.26 |
+| 50,000 | 4,686,336 | 2,258,880 | 0.96 to 3.37 | 1.12 to 3.53 | 0.16 to 0.50 |
+| 200,000 | 18,743,488 | 9,033,728 | 3.55 to 6.06 | 3.72 to 6.21 | 0.62 to 0.83 |
 
-The spread is a property of the measurement, not noise to average out: the
-two invocations differ by up to 3.5 times at the same size (20k: 0.67 ms
-in the first, 2.3 to 2.4 ms in the second; the 10k build is slower than
-the 20k build in the first), and within the second the first three 200k
-builds (10.6, 8.8, 7.1 ms) are slower than the following four (5.0 to
-5.1 ms). That pattern fits GPU clock and power-state ramping and
-contention with the other GPU client. Read the table as "a world-sized
-structure builds in under 5 ms, and a build of up to 200k triangles stays
-under about 12 ms wall, on a busy M6", not as a benchmark. The 10k to 20k
-figure matches the design's "under 4 MB" assumption: about 94 bytes per
-triangle on this soup (0.9 to 1.9 MB), though a real map has coherent
-geometry and will differ; RT1 measures that. Refit used the same
-descriptor with `MTLAccelerationStructureUsageRefit`, in place, and
-completed in well under 1 ms up to 50k triangles.
+The spread is a property of the measurement, not noise to average out:
+within one invocation the builds agree to a few percent (for example 10k:
+2.46 to 2.53 ms in the first invocation, 0.72 to 0.75 ms in the second),
+but the invocations differ by up to 3.5 times at the same size, and the
+smaller sizes are slower than the larger ones in some invocations (the
+first and third: 10k takes 2.5 ms, 20k takes 1.7 ms). That pattern
+fits GPU clock and power-state selection that is fixed per process rather
+than per build, plus contention with the other GPU client. One discarded
+warm-up build is not enough at 200k: in the first invocation the timed
+builds after it ran 6.1, 4.5, then 3.6 ms, and a further single-invocation
+check saw 7.6 ms for the first timed 200k build, so 3.5 to 7.6 ms is the
+honest 200k GPU range. The 200k refit cell is measured (0.62 to 0.83 ms).
+Read the table as "a world-sized structure (10k to 50k triangles) builds in
+under about 3.5 ms wall, and a build of up to 200k triangles stays under
+about 8 ms, on a busy M6", not as a benchmark. The 10k to 20k figure
+matches the design's "under 4 MB" assumption: about 94 bytes per triangle
+on this soup (0.9 to 1.9 MB), though a real map has coherent geometry and
+will differ; RT1 measures that. Refit used the same descriptor with
+`MTLAccelerationStructureUsageRefit`, in place, and completed in under
+0.5 ms up to 50k triangles.
 
 Per-decision verdicts, section 4 and section 6, for this device:
 
@@ -244,21 +253,22 @@ Per-decision verdicts, section 4 and section 6, for this device:
    capability is absent. Finding for the RT8 card: add such an override
    (or a way to cap the family) so the fallback and the apple6 to apple8
    compute selection are testable on a device that supports everything.
-4. **Argument buffers:** section 2 and 3 do not state a tier, but a design
-   that passes the G-buffer, history buffers and material tables to the
-   ray kernels through argument buffers must note that the M6 reports
-   tier 1 here (not tier 2), so no code may rely on tier 2 behaviour
-   (arbitrary resource arrays indexed in the shader, writable argument
-   buffers). Finding for RT1/RT2 (new constraint, not a change to a gating
-   decision).
+4. **Argument buffers:** section 2 and 3 do not state a tier. The M6
+   reports `MTLArgumentBuffersTier2` (compared by constant; the raw value
+   1 is Tier 2, Tier 1 is 0), so passing the G-buffer, history buffers
+   and material tables to the ray kernels through argument buffers is
+   available. An earlier reading of this row as tier 1 was wrong and the
+   constraint it implied is withdrawn; nothing in this section relies on
+   it. No change to any gating decision.
 5. **Memory budget (section 1):** unchanged and confirmed with large
    margin: the structure for 20k triangles is about 1.9 MB against the
    "under 4 MB" assumption, and unified memory with a 25 GiB working-set
    hint removes any pressure from 128 refit instances.
 6. **Build and refit cost (sections 1 and 6, RT1/RT10):** consistent with
-   "once at map load" for the world (about 1 to 5 ms) and per-frame refit
-   (under 1 ms per 50k triangles here, so 128 alias instances of a few
-   hundred triangles each fit comfortably). Whether refit stays cheap as
+   "once at map load" for the world (about 0.6 to 3.5 ms wall for 10k to
+   50k triangles) and per-frame refit (under 0.5 ms per 50k triangles
+   here, so 128 alias instances of a few hundred triangles each fit
+   comfortably). Whether refit stays cheap as
    many small instances on an apple7 device is for RT10.
 7. **Metal API notes for the implementers (findings, no decision
    changes):** a refit-capable structure reports a refit scratch size of
@@ -271,5 +281,4 @@ Per-decision verdicts, section 4 and section 6, for this device:
    section 4 already does).
 
 No gating decision in sections 4 and 6 changes on this device. The
-findings above (3, 4) are cards for the RT8 and RT1/RT2 owners, not edits
-to those cards.
+finding above (3) is a card for the RT8 owner, not an edit to that card.
