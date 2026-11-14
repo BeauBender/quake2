@@ -23,9 +23,9 @@
  * (which needs SDL) so that tests/check-metal-shim.sh can compile it
  * on any host: the GL-to-Metal rectangle flip, the read contract and
  * the row and channel conversion of glReadPixels, the matrix product,
- * the unpacking of texture uploads and the allocator of the per-frame
- * vertex ring. All are declared in
- * mgl_internal.h.
+ * the unpacking of texture uploads. All are declared in
+ * mgl_internal.h. The matrix product and the allocator of the per-frame
+ * vertex ring moved to src/client/refresh/metal/common/ (TASK85).
  *
  * =======================================================================
  */
@@ -177,31 +177,7 @@ mgl_convert_readback(const unsigned char *bgra, int w, int h, GLenum format,
 	}
 }
 
-/* ---- matrices and pixel unpacking ------------------------------------------ */
-
-void
-mgl_mat_mul(GLfloat *out, const GLfloat *a, const GLfloat *b)
-{
-	GLfloat t[16];
-	int r, c, k;
-
-	for (c = 0; c < 4; c++)
-	{
-		for (r = 0; r < 4; r++)
-		{
-			float sum = 0.0f;
-
-			for (k = 0; k < 4; k++)
-			{
-				sum += a[k * 4 + r] * b[c * 4 + k];
-			}
-
-			t[c * 4 + r] = sum;
-		}
-	}
-
-	memcpy(out, t, sizeof(t));
-}
+/* ---- pixel unpacking ------------------------------------------------------- */
 
 void
 mgl_unpack_rgba(const unsigned char *src, GLenum format, int w, int h,
@@ -226,21 +202,4 @@ mgl_unpack_rgba(const unsigned char *src, GLenum format, int w, int h,
 			out[3] = (bpp == 4 && !opaque) ? p[3] : 255;
 		}
 	}
-}
-
-/* ---- the per-frame vertex ring ---------------------------------------------- */
-
-long
-mgl_ring_alloc(mgl_ring_t *r, size_t n)
-{
-	size_t at = (r->used + MGL_RING_ALIGN - 1) / MGL_RING_ALIGN * MGL_RING_ALIGN;
-
-	/* at > size is checked first, so size - at cannot wrap */
-	if (n == 0 || at > r->size || n > r->size - at)
-	{
-		return -1;
-	}
-
-	r->used = at + n;
-	return (long)at;
 }

@@ -193,7 +193,8 @@ void mgl_convert_readback(const unsigned char *bgra, int w, int h, GLenum format
 		size_t bpp, size_t rowbytes, unsigned char *dst);
 
 /* out = a * b, column-major 4x4 as GL keeps them; out may be a or b. */
-void mgl_mat_mul(GLfloat *out, const GLfloat *a, const GLfloat *b);
+#include "../../metal/common/mtl_matrix.h"
+#define mgl_mat_mul mtl_mat_mul
 
 /* ---- textures (mgl_tex.c) ------------------------------------------------ */
 
@@ -368,14 +369,10 @@ int mgl_stencil_op_index(GLenum op);
 #ifndef MGL_RING_BYTES
 #define MGL_RING_BYTES (8u << 20)   /* a -D can shrink it to exercise the overflow path */
 #endif
-#define MGL_RING_ALIGN 256
-
-typedef struct
-{
-	size_t size, used;
-} mgl_ring_t;
-
-long mgl_ring_alloc(mgl_ring_t *r, size_t n);
+#include "../../metal/common/mtl_ring.h"
+#define MGL_RING_ALIGN MTL_RING_ALIGN
+typedef mtl_ring_t mgl_ring_t;
+#define mgl_ring_alloc mtl_ring_alloc
 
 /* mgl_layer.m: the only file that talks to Metal and CAMetalLayer. */
 typedef struct

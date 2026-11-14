@@ -672,7 +672,8 @@ MGL_CFLAGS := -DMGL_RENDERER_SUFFIX=\"gl1-metal\"
 $(BINDIR)/ref_gl1.dylib : $(BINDIR)/ref_gl1.metallib
 
 # The shaders, loaded from next to the dylib at context creation.
-$(BINDIR)/ref_gl1.metallib : $(MGL_DIR)/shaders.metal $(MGL_DIR)/mgl_texenv.h
+$(BINDIR)/ref_gl1.metallib : $(MGL_DIR)/shaders.metal $(MGL_DIR)/mgl_texenv.h \
+		src/client/refresh/metal/common/mtl_shader_math.h
 	@echo "===> METAL $<"
 	${Q}command -v xcrun >/dev/null 2>&1 || { echo "WITH_METAL_SHIM=yes needs xcrun and the Xcode Metal toolchain" >&2; exit 1; }
 	${Q}xcrun -f metal >/dev/null 2>&1 || { echo "WITH_METAL_SHIM=yes needs the Metal compiler (xcrun metal); install the Xcode Metal toolchain" >&2; exit 1; }
@@ -694,6 +695,15 @@ $(MGL_OBJDIR)/$(MGL_DIR)/%.o: $(MGL_DIR)/%.m
 	fi
 	${Q}mkdir -p $(@D)
 	${Q}$(CC) -c -fobjc-arc $(CFLAGS) $(MGL_CFLAGS) $(SDLCFLAGS) $(INCLUDE) -o $@ $<
+
+# The arithmetic shared with ref_metal (src/client/refresh/metal/common/,
+# TASK85): plain C, no shim header and no remap.
+$(MGL_OBJDIR)/src/client/refresh/metal/common/%.o: src/client/refresh/metal/common/%.c
+	@if [ -z $(QUIET) ]; then\
+		echo "===> CC $<";\
+	fi
+	${Q}mkdir -p $(@D)
+	${Q}$(CC) -c $(CFLAGS) $(INCLUDE) -o $@ $<
 
 # gl1 and the rest of ref_gl1, unchanged: <OpenGL/gl.h> resolves to the
 # shim's subset header and shim_sdl.h remaps the SDL OpenGL calls.
@@ -1213,7 +1223,9 @@ endif
 # The shim build keeps its objects apart, they are compiled with other flags.
 REFGL1_OBJS = $(patsubst %,$(BUILDDIR)/ref_gl1_metal/%,$(REFGL1_OBJS_)) \
 	$(patsubst %,$(BUILDDIR)/ref_gl1_metal/src/client/refresh/gl1/metal/%,\
-		mgl_state.o mgl_draw.o mgl_tex.o mgl_raster.o mgl_frame.o mgl_layer.o)
+		mgl_state.o mgl_draw.o mgl_tex.o mgl_raster.o mgl_frame.o mgl_layer.o) \
+	$(patsubst %,$(BUILDDIR)/ref_gl1_metal/src/client/refresh/metal/common/%,\
+		mtl_matrix.o mtl_ring.o)
 else
 REFGL1_OBJS = $(patsubst %,$(BUILDDIR)/ref_gl1/%,$(REFGL1_OBJS_))
 endif
