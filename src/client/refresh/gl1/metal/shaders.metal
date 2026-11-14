@@ -39,13 +39,14 @@ using namespace metal;
 
 #include "mgl_texenv.h"
 
-/* mgl_vertex_t in mgl_internal.h: 48 bytes. */
+/* mgl_vertex_t in mgl_internal.h: 64 bytes. */
 struct mgl_vertex
 {
 	float4 pos;
 	float2 tc0;
 	float2 tc1;
 	float4 color;
+	float4 pt;          /* a smooth point's offset from its centre in pixels, its radius, 1 */
 };
 
 /* mgl_uniforms_t in mgl_internal.h: 96 bytes. */
@@ -68,6 +69,7 @@ struct mgl_varying
 	float2 tc0;
 	float2 tc1;
 	float4 color;
+	float4 pt;
 };
 
 static mgl_rgba_t
@@ -97,6 +99,7 @@ mgl_vertex_main(uint vid [[vertex_id]],
 	out.tc0 = v[vid].tc0;
 	out.tc1 = v[vid].tc1;
 	out.color = v[vid].color;
+	out.pt = v[vid].pt;
 	return out;
 }
 
@@ -137,6 +140,12 @@ mgl_fragment_main(mgl_varying in [[stage_in]],
 	{
 		c = mgl_texenv_stage(u.texenv1, u.tex_opaque1, u.rgb_scale1, c,
 				mgl_rgba(tex1.sample(smp1, in.tc1)));
+	}
+
+	/* GL 1.4, section 3.12: a smooth point's coverage multiplies the alpha, before the alpha test */
+	if (in.pt.w > 0.5)
+	{
+		c.a *= mgl_point_coverage(in.pt.x, in.pt.y, in.pt.z);
 	}
 
 	if (!mgl_alpha_pass(u.alpha_func, c.a, u.alpha_ref))

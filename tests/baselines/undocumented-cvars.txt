@@ -70,7 +70,6 @@ gl1_particle_max_size
 gl1_particle_min_size
 gl1_particle_size
 gl1_picmip
-gl1_pointparameters
 gl1_round_down
 gl1_saturatelighting
 gl1_stereo_anaglyph_colors

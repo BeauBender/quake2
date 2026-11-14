@@ -548,6 +548,14 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 * **gl1_particle_square**: If set to `1` particles are rendered as
   squares.
 
+* **gl1_pointparameters**: If set to `1` (default) and the driver
+  offers point parameters (`glPointParameterf`), particles are drawn as
+  points whose size shrinks with distance. If set to `0`, or the driver
+  lacks them, or `gl1_stereo` is a split-screen mode (`6` or `7`) with
+  a camera separation, particles are drawn as small textured triangles
+  instead. Checked when the renderer starts, so it needs a
+  `vid_restart`.
+
 * **gl1_stencilshadow**: If `gl_shadows` is set to `1`, this makes them
   look a bit better (no flickering) by using the stencil buffer. Does
   not work when `gl1_stereo` is `3`, `4` or `5`.

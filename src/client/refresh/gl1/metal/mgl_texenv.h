@@ -23,7 +23,8 @@
  * shaders.metal and the C side (mgl_internal.h), so the host test runs
  * the arithmetic the fragment function runs. It is written in the
  * common subset of C99 and the Metal shading language: no pointers, no
- * library calls, structs by value.
+ * library calls but the square root, structs by value. It also holds
+ * the coverage of a smooth point (TASK52), for the same reason.
  *
  * =======================================================================
  */
@@ -100,6 +101,28 @@ static inline float
 mgl_gl_clip_z(float z, float w)
 {
 	return (z + w) * 0.5f;
+}
+
+/*
+ * The coverage of a pixel by a smooth point (GL_POINT_SMOOTH, GL 1.4
+ * section 3.3.2) of radius r whose centre lies dx, dy pixels from the
+ * pixel's centre: r + 1/2 minus the distance, clamped to [0, 1]. That is
+ * what Apple's software renderer computes (TASK52 measured it on points
+ * of 1 to 64 pixels: the same 8-bit value on every pixel of a point of
+ * size 4 and of 7.3), and it sums to the disc's area for r of 2 and up.
+ * The fragment function multiplies the alpha by it.
+ */
+#ifdef __METAL_VERSION__
+#define MGL_SQRT sqrt
+#else
+#include <math.h>
+#define MGL_SQRT sqrtf
+#endif
+
+static inline float
+mgl_point_coverage(float dx, float dy, float r)
+{
+	return mgl_clamp01(r + 0.5f - MGL_SQRT(dx * dx + dy * dy));
 }
 
 #endif /* MGL_TEXENV_H */
