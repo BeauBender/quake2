@@ -26,8 +26,9 @@
 #   3. copies the merged quake2/memory/*.md back into <memory-dir>.
 # pull stops there (local commits wait for the next push). push then pushes,
 # never forced, and reports success only when the store's branch contains
-# every local commit. A push that failed is retried by the next run; a store
-# that moved in the meantime is merged first.
+# every local commit. A push that failed, or lost a race with another
+# machine, is retried by the next push after it merges the store; nothing is
+# ever forced.
 #
 # Nothing is decided by file time. A file changed on both sides since the
 # last sync is a conflict: the run exits non-zero and names the files. Your
@@ -53,6 +54,8 @@
 #
 # POSIX sh; also runs under bash 3.2 (stock macOS) and dash.
 set -eu
+# An inherited xtrace (bash honours an exported SHELLOPTS) would echo the URL.
+set +x
 
 # A caller such as a git hook, `git rebase --exec` or `git submodule foreach`
 # can export these; any of them would send the git calls below to another
@@ -190,7 +193,7 @@ fi
 [ -f "$locfile" ] && [ -r "$locfile" ] ||
 	die "the store location file is missing (expected one line, owner/name, in ~/.config/agents/memory_repo); nothing was done"
 slug=
-IFS= read -r slug < "$locfile" || :
+{ IFS= read -r slug < "$locfile"; } 2>/dev/null || :
 # Trim surrounding blanks and a carriage return.
 slug=$(printf '%s' "$slug" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
 [ -n "$slug" ] || die "the store location file is empty (expected one line, owner/name); nothing was done"
@@ -475,7 +478,7 @@ fi
 if [ -s "$tmpd/conflicts" ]; then
 	names=$(sed 's/^. //' "$tmpd/conflicts" | tr '\n' ' ')
 	printf '%s: conflict, changed on both sides: %s\n' "$me" "$names" >&2
-	printf '%s: your version is unchanged in <name>, the store'"'"'s is in <name>.store; merge them into <name>, delete <name>.store, then run push again (nothing was pushed)\n' "$me" >&2
+	printf '%s: your version is unchanged in <name>, the store'"'"'s (merged, for a file edited during this run) is in <name>.store; merge them into <name>, delete <name>.store, then run push again (nothing was pushed)\n' "$me" >&2
 	exit 1
 fi
 
@@ -503,7 +506,7 @@ if [ "$ahead" = 0 ]; then
 	exit 0
 fi
 g push --quiet --no-verify -- origin "HEAD:refs/heads/$branch" >/dev/null 2>&1 ||
-	die "cannot push to the private store (nothing was forced); the change stays in the store clone and the next pull or push merges and retries it"
+	die "cannot push to the private store (nothing was forced); the change stays in the store clone and the next push merges the store and retries it"
 g fetch --quiet --no-tags --no-recurse-submodules -- origin >/dev/null 2>&1 ||
 	die "pushed, but cannot fetch the private store to confirm it; run push again"
 g merge-base --is-ancestor HEAD "$origin" >/dev/null 2>&1 ||
