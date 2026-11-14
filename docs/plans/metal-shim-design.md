@@ -315,13 +315,24 @@ differs from the text above, this list is what the tree does.
   its `glReadPixels` opens had no pass yet and `mgl_layer_ensure_pass`
   made it a black one: the console and the menu gave an all black image
   (the pin capture runs inside the frame, after the draws and before
-  `RI_EndFrame`, so it was right). Every present now also blits the
-  frame into a private texture `mgl_last` (same size, one full-frame
-  copy in the frame's own command buffer, before `presentDrawable`), and
-  a read of a frame with no pass drawn (`mgl_read_uses_last`, host
-  tested) reads that texture and opens no pass; after a pass, or when
-  the size changed, it reads the frame as before, so every pin is
-  unchanged. The runbook has the evidence.
+  `RI_EndFrame`, so it was right). Each present now keeps a strong
+  reference to the frame's drawable and its texture (`mgl_last`,
+  `mgl_last_drawable`; the offscreen texture when the frame had no
+  drawable; the layer is `framebufferOnly = NO` already), so
+  the layer cannot hand that texture out again; no copy is made. A read
+  of a frame with no pass drawn reads that texture in place and opens no
+  pass, when it has the target's size (`mgl_read_uses_last`, host tested
+  with a mutant per term); after a pass it reads the frame as before, so
+  every pin is unchanged. The reference is replaced at each present
+  (a skipped frame keeps it: that image is still on screen), dropped
+  when the drawable size changes and at teardown. A first version blitted
+  every frame into a kept texture and roughly halved `timedemo` of
+  `gl1-metal` on the build host; that was dropped. Before the first
+  present of a layer (start-up, right after `vid_restart`, after a
+  resize) there is nothing shown to read, and the read sees the open
+  frame cleared to black, as before: refusing it would not help, because
+  gl1's `R_ScreenShot` writes its buffer whatever `glReadPixels` did, and
+  that buffer is uninitialised. The runbook has the evidence.
 - **Readback.** `glReadPixels` validates before it reads: format
   `GL_RGB`, `GL_RGBA` or `GL_BGRA`, type `GL_UNSIGNED_BYTE`, the
   rectangle inside the target, the pack alignment; otherwise the sticky
@@ -424,7 +435,9 @@ differs from the text above, this list is what the tree does.
   that differs in every row, column and channel at alignments 1, 4 and 8,
   padding included. On real frames the row order is now proven too: 18 of
   the 23 `hud2d` frames are byte-identical to `gl1`'s, status bar at the
-  bottom.
+  bottom. A read between frames (the `screenshot` command) reads the last
+  presented drawable in place (FIX42, see "Readback between frames"
+  above).
 - **Not yet (S2b):** the depth test and depth state, culling, stencil,
   polygon offset and mode, unit 1 and `GL_COMBINE`, points and lines,
   `glTexSubImage2D`, levels above 0, anisotropy, the per-frame vertex
@@ -904,7 +917,7 @@ them is a value gl1 passes.
 | `glPolygonOffset` | implemented | `mgl_state.c` | test_draw_state, test_points_lines | |
 | `glPopMatrix` | implemented | `mgl_state.c` | test_matrix_stack, test_sky_water_alpha, test_models | |
 | `glPushMatrix` | implemented | `mgl_state.c` | test_matrix_stack, test_sky_water_alpha, test_models | past 32 per stack is `GL_STACK_OVERFLOW` |
-| `glReadPixels` | implemented | `mgl_frame.c` | test_read_contract (`mgl_read_contract`); pins | a format other than `GL_RGB`, `GL_RGBA`, `GL_BGRA`; a type other than `GL_UNSIGNED_BYTE`; a rectangle outside the target is `GL_INVALID_VALUE` |
+| `glReadPixels` | implemented | `mgl_frame.c` | test_read_contract (`mgl_read_contract`), test_read_source (`mgl_read_uses_last`); pins; the screenshot runbook (FIX42) | a format other than `GL_RGB`, `GL_RGBA`, `GL_BGRA`; a type other than `GL_UNSIGNED_BYTE`; a rectangle outside the target is `GL_INVALID_VALUE`; a read between frames returns the last presented frame, except before the first present of a layer or of a new size, where it reads a frame cleared to black |
 | `glRotatef` | implemented | `mgl_state.c` | test_perspective, test_sky_water_alpha | |
 | `glScalef` | implemented | `mgl_state.c` | test_perspective, test_models | |
 | `glScissor` | implemented | `mgl_frame.c` | test_raster (`mgl_compute_raster`); pins | |
