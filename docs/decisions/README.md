@@ -16,3 +16,4 @@ them (record 0004); one becomes a record here when it is settled.
 | [0003](0003-no-local-identity.md) | Agent telemetry is not published to the remote |
 | [0004](0004-no-human-tier.md) | No change waits for a person: the loop merges everything that passes review and the gates |
 | [0005](0005-push-identity-hook.md) | Keep the working machine's identity out of what is published: a push hook and gate checks |
+| [0006](0006-port-first.md) | Port first: review depth by path, stacked shim cards, parked non-port cards |
