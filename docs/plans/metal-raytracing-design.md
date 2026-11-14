@@ -82,8 +82,8 @@ RT9 (2); the scaler is 1.822 ms in frame, section 8, table "MetalFX
 upscaling to the native size"). The decision is INFORM12 (#262), tracked
 until the owner settles it.
 
-Every measured cost in this subsection is quoted from section 8: the M6, the
-compute-dispatch ray queries, the synthetic closed scene, synthetic scaler
+Every measured cost in this subsection is quoted from section 8: the M6,
+the compute-dispatch ray queries, the synthetic closed scene, synthetic scaler
 inputs, the later level of a process. Section 8 did not measure the
 render-stage path, an apple7 device, the G-buffer raster, shading, the
 temporal accumulation and denoiser above, or image quality. Where this
@@ -110,12 +110,13 @@ after it at the window size, unscaled. With every `r_rt_*` effect off there
 is no internal resolution and no scaler: the frame renders at the refdef's
 rectangle, as before, so the gl1 pins are untouched.
 
-**A refdef without a world.** The one refdef with `RDF_NOWORLDMODEL` is the
-player-setup menu's model view (`PlayerConfig_ModelDraw`,
-`src/client/menu/menu.c`): a 144 x 168 rectangle times the menu scale,
-`fov_x` 40. With that menu open in game it is a second `R_RenderFrame` in
-the same frame, drawn after the world refdef and after 2D
-(`SCR_UpdateScreen` calls `M_Draw` last). It renders at its own rectangle
+**A refdef without a world.** In the client, the refdef with
+`RDF_NOWORLDMODEL` is the player-setup menu's model view
+(`PlayerConfig_ModelDraw`, `src/client/menu/menu.c`): a 144 x 168
+rectangle times the menu scale, `fov_x` 40. With that menu open in game it
+is a second `R_RenderFrame` in the same frame, drawn after the world refdef
+and after 2D (`SCR_UpdateScreen` calls `M_Draw` after `V_RenderView` and
+the 2D draws). It renders at its own rectangle
 as with every effect off: no internal resolution, no jitter, no ray pass
 and no scaler. It touches neither the scaler's history, RT7's history nor
 the last-frame state the cut test compares (below). Only the world refdef
@@ -132,13 +133,13 @@ drives them.
 | 5 | Lighting resolve | internal |
 | 6 | Forward pass | internal |
 | 7 | `MTLFXTemporalScaler`: lit colour, depth and motion vectors in, colour out | internal to output |
-| 8 | 2D | output |
+| 8 | 2D | window |
 
 **The scaler and RT7.** The scaler keeps its own history at the output
 size. It accumulates the lit colour over frames and is designed to use the
-jitter to recover detail finer than an internal pixel. It does not replace RT7. RT7
-accumulates and denoises each effect before the resolve, where the effects
-are still separate: AO multiplies the lightmap term only and is clamped to
+jitter to recover detail finer than an internal pixel. It does not replace
+RT7. RT7 accumulates and denoises each effect before the resolve, where the
+effects are still separate: AO multiplies the lightmap term only and is clamped to
 `r_rt_ao_min`, and the dlight visibility replaces the term of
 `R_AddDynamicLights`. The scaler sees only their sum. So RT7 removes the
 noise per effect at the internal resolution, and the scaler upscales a
