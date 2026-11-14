@@ -575,10 +575,13 @@ test_ring_console(void)
 static void
 test_color_load(void)
 {
-	CHECK(rm_color_load(1, 0) == RM_LOAD_CLEAR);
-	CHECK(rm_color_load(1, 1) == RM_LOAD_CLEAR);
-	CHECK(rm_color_load(0, 1) == RM_LOAD_KEEP);
-	CHECK(rm_color_load(0, 0) == RM_LOAD_BLACK);
+	CHECK(rm_color_load(1, 0, 0) == RM_LOAD_CLEAR);
+	CHECK(rm_color_load(1, 1, 1) == RM_LOAD_CLEAR);
+	CHECK(rm_color_load(0, 1, 0) == RM_LOAD_KEEP);
+	CHECK(rm_color_load(0, 0, 0) == RM_LOAD_BLACK);
+	/* a frame gl1 does not clear starts black, as the shim's first pass does, not on the last frame */
+	CHECK(rm_color_load(0, 1, 1) == RM_LOAD_BLACK);
+	CHECK(rm_color_load(0, 0, 1) == RM_LOAD_BLACK);
 }
 
 /*

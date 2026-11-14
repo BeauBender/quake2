@@ -218,14 +218,14 @@ rm_stats_format(const rmb_stats_t *s, const rm_ledger_t *l, char *buf, size_t le
 }
 
 rm_load_t
-rm_color_load(int clear, int defined)
+rm_color_load(int clear, int defined, int first)
 {
 	if (clear)
 	{
 		return RM_LOAD_CLEAR;
 	}
 
-	return defined ? RM_LOAD_KEEP : RM_LOAD_BLACK;
+	return (defined && !first) ? RM_LOAD_KEEP : RM_LOAD_BLACK;
 }
 
 int

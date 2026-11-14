@@ -127,15 +127,18 @@ typedef enum
 {
 	RM_LOAD_CLEAR,   /* cleared to the pass's clear colour */
 	RM_LOAD_KEEP,    /* loaded: what the target holds */
-	RM_LOAD_BLACK    /* cleared to black: no pass has written the target yet */
+	RM_LOAD_BLACK    /* cleared to black: the frame's first pass, or no pass has written the target yet */
 } rm_load_t;
 
 /*
  * The colour load of a pass: clear is 1 when the pass clears (r_clear at
  * the start of the frame), defined is 1 when a pass has written the
- * colour target since it was made.
+ * colour target since it was made, first is 1 for the frame's first
+ * pass. A frame gl1 does not clear starts black, as the shim's does
+ * (mgl_layer_pass: "so a frame is reproducible"), not on the last frame:
+ * the world's cracks show what is under them (design section 19).
  */
-rm_load_t rm_color_load(int clear, int defined);
+rm_load_t rm_color_load(int clear, int defined, int first);
 
 /*
  * 1 when rmb_frame_begin must (re)make the colour and depth targets for
@@ -553,8 +556,9 @@ void rmb_stats(rmb_stats_t *stats, rm_ledger_t *ledger);
  * Takes a frame slot and a command buffer, sizes the targets and the
  * layer's drawable to w by h pixels (the window's size in pixels), and
  * opens the frame's first pass, colour only: cleared to clear_rgba, or
- * loaded when it is NULL (rm_color_load: black on a target no pass has
- * written). This is gl1's R_Clear at the end of RI_BeginFrame. 0 when
+ * to black when it is NULL (rm_color_load). This is gl1's R_Clear at the
+ * end of RI_BeginFrame, with the shim's black for a frame gl1 does not
+ * clear. 0 when
  * the frame is skipped.
  */
 int rmb_frame_begin(int w, int h, const float *clear_rgba);

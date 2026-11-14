@@ -311,8 +311,9 @@ RI_BeginFrame(float camera_separation)
 	 * gl1's R_Clear, the last step of its RI_BeginFrame: the colour clear
 	 * with r_clear, for every frame, with or without a 3D view. Without
 	 * r_clear gl1 clears no colour, so the frame starts on what the
-	 * buffer holds; here that is the last frame (the target is kept),
-	 * or black on a target no pass has written.
+	 * buffer holds, which GL leaves undefined; here it starts black, as
+	 * on the shim (the reference), which clears its first pass of a
+	 * frame to black (TASK87: the cracks of the world show it).
 	 */
 	RI_GetDrawableSize(&w, &h);
 	rmb_frame_begin(w, h, r_clear->value ? rm_clear_color : NULL);

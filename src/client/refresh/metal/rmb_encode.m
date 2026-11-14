@@ -257,7 +257,7 @@ rmb_pass(const float *clear_rgba, int with_depth)
 		rp.colorAttachments[0].texture = color;
 		rp.colorAttachments[0].storeAction = MTLStoreActionStore;
 
-		switch (rm_color_load(clear_rgba != NULL, color_defined))
+		switch (rm_color_load(clear_rgba != NULL, color_defined, frame_passes == 0))
 		{
 			case RM_LOAD_CLEAR:
 				rp.colorAttachments[0].loadAction = MTLLoadActionClear;
@@ -265,7 +265,7 @@ rmb_pass(const float *clear_rgba, int with_depth)
 						clear_rgba[2], clear_rgba[3]);
 				break;
 			case RM_LOAD_BLACK:
-				/* a new target's contents are undefined: the first pass defines them */
+				/* the frame's first pass, or a new target's undefined contents: black, as the shim's */
 				rp.colorAttachments[0].loadAction = MTLLoadActionClear;
 				rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
 				break;
