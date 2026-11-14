@@ -626,3 +626,117 @@ entry is spelled out as a counting no-op.
 Left for N2: the metallib rule (`xcrun metal`, which the gate already
 requires before it builds), textures and the 2D pipeline, and reopening
 a pass with a Load action after a readback when drawing continues.
+
+## 17. As built: N2, images, the 2D pipeline and the cinematic (TASK85)
+
+What exists:
+
+- **The move (section 8).** `common/mtl_matrix.{c,h}` (identity,
+  product, rotate, translate, scale, ortho, frustum), `common/mtl_ring.{c,h}`
+  and `common/mtl_shader_math.h` (clamp, clip depth, point coverage)
+  hold the shim's code with `GLfloat` and `GLdouble` spelled `float` and
+  `double`. The functions are named `mtl_*`; the shim's headers keep the
+  old names as macros (`mgl_mat_mul`, `mgl_ring_alloc`, `mgl_ring_t`,
+  `MGL_RING_ALIGN`, `mgl_clamp01`, `mgl_gl_clip_z`,
+  `mgl_point_coverage`), so its call sites and its host test are
+  unchanged. `glRotatef`, `glTranslatef`, `glScalef`, `glOrtho` and
+  `glFrustum` keep their GL error handling and build their matrix
+  through the moved functions, which answer 0 where GL refuses the
+  arguments.
+- **Images (section 5).** `rm_image.c` is gl1's registry with the
+  native upload path: `R_FindImage`, `R_LoadPic` (skin flood fill, the
+  crosshair normalisation), `R_Upload8` and `R_Upload32` as
+  `R_Upload32Native` (light scale, the gamma and intensity tables, the
+  alpha scan; an image keeps its size), `R_FreeUnusedImages`,
+  `R_TextureMode` and `imagelist`. Each image carries a sampler: one of
+  three classes (mipmapped, gl_texturemode's filters and
+  `r_anisotropic`; without mipmaps, the mode's magnifying filter for
+  both; nearest, for `r_nolerp_list` and `r_2D_unfiltered`), each in a
+  repeat and a clamp form. `R_TextureMode` rebuilds the six samplers
+  between frames. `DrawFindPic` and `DrawGetPicSize` load and register
+  pics (gl1's answer for a missing pic, -1 by -1, replaces N1's 0 by 0);
+  drawing them is N3's. Not copied: `r_scale8bittextures` (no scenario
+  sets it), the scrap (N3), the paletted and power-of-two paths.
+- **The back end (sections 3 and 4).** `rmb_resource.m` loads
+  `ref_metal.metallib` from the dylib's directory and builds the 2D
+  pipeline table (12 states: replace, modulate and untextured, each with
+  and without gl1's alpha test and blending) when the context is made.
+  Textures are `rgba8Unorm`, private, with the blit encoder's mip chain.
+  Every upload is copied into one 64 MB shared staging ring and blitted
+  on an upload command buffer that is committed before any frame command
+  buffer (at the end of the frame, before a readback, before a split).
+  A texture rewritten after a draw of the open command buffer used it
+  splits that command buffer (`metal_stats` counts the splits; none in
+  the cinematic). A full ring commits the pending uploads, waits for them
+  (bounded) and starts again. 2D draws take their vertices and fan
+  indices from a 4 MB frame ring per frame slot.
+- **2D and the cinematic.** `rm_draw.c` has `DrawFill`, `DrawFadeScreen`,
+  `DrawStretchRaw` and `SetPalette`, with gl1's 2D state: the ortho
+  matrix of `R_SetGL2D` times the identity modelview through
+  `mtl_mat_mul`, texture environment `GL_REPLACE`, the alpha test, no
+  blending but in the fade. The cinematic frame is converted at its own
+  size (8-bit through `r_rawpalette`; gl1's 320 by 240 buffer, a larger
+  frame allocates) and uploaded opaque into one texture that is made
+  again when the size changes; it is sampled with the mode's magnifying
+  filter (or nearest with `r_videos_unfiltered`) and repeat, as gl1's
+  texture 0. `SetPalette` clears the colour target to 0, 0, 0, 0 as gl1
+  does.
+- **Bounds.** `rm_upload_bytes` (`rm_pure.c`) decides every upload: w
+  and h positive and w times h times 4 within the staging ring, checked
+  by division before the product is formed. The front end calls it
+  before it converts or scales anything (`R_Upload8` before
+  `R_Convert8to32`, `R_Upload32` before the light scale, `DrawStretchRaw`
+  before the palette conversion), and the back end again before it
+  stages; a refused upload is skipped and counted (`uploads skipped` in
+  `metal_stats`), its image slot stays free. With a 64 MB ring the
+  largest upload is 4096 by 4096 texels; gl1 has no such limit, and no
+  image of the game data comes near it. `mtl_ring_alloc` refuses an
+  allocation larger than the rest of the ring without moving its head.
+
+Choices made where the design left room:
+
+- The 2D vertex is the shim's layout (float4 position, float2 uv, float4
+  colour, 48 bytes), not section 4's float2 position and rgba8 colour, so
+  the vertex function computes exactly the shim's `mvp * pos` and the
+  colours reach the fragment function as the shim's floats.
+- The shaders specialise the texture environment and the alpha test by
+  function constants. An opaque image's texels have alpha 255, so
+  `GL_REPLACE` takes the texel's alpha; the shim keeps the vertex alpha
+  there, which differs only for a vertex alpha below 1 with replace,
+  which gl1's 2D code does not draw.
+- `metal_stats` gains draws, skipped draws, uploads, skipped uploads,
+  pass splits, pipelines and pipelines created after init. Every caller's
+  buffer is `RM_STATS_LINE` (512 bytes); the host test formats the
+  longest line, every counter at its largest, into it.
+- `Swap_Init` runs in `RI_Init` as in gl1: the loaders in `files/` call
+  `LittleShort`, and the `ASAN=1` build crashed in `PCX_Decode` without
+  it.
+- The shim's objects have no header dependencies (the Darwin `CFLAGS`
+  carry no `-MMD`), so a build from before the move must remove
+  `build/release/ref_gl1_metal/` once; otherwise `mgl_draw.o` and
+  `mgl_layer.o` still reference `mgl_mat_mul` and `mgl_ring_alloc` and
+  the link fails.
+
+Measured on the build VM (T0), base `4175e8cc` (its `src/` is that of
+`beb6bb9e`, where the `gl1-metal` references were recorded), head
+`11dfcbff` for the pins, load averages 7.7 to 31.9 (a shared host),
+every record with `MTL_DEBUG_LAYER=1`:
+
+| What | Result |
+|---|---|
+| `compare metal cinematic --ref gl1-metal` (`PINS_DEMO=idlog.cin PINS_EVERY=7`, tight values), three release records (`--run 2`, `--run 3`) | each: 12 frames ok, worst score 0, worst bad 0; every frame byte-identical to the reference; no validation message, no failed command buffer; teardown `0 live objects`, `0 unreleased` |
+| the same record with the `ASAN=1` build (`PINS_BIN=debug/quake2`) | 12 frames ok, score 0, bad 0, no sanitizer line |
+| `metal_stats 1`, the cinematic outside the harness (the harness latches the command line) | 12 captured frames, each line `12 pipelines, 0 created after init`, 0 skipped draws, 0 skipped uploads, 0 pass splits |
+| `gl1-metal` `hud2d`, `cinematic`, `world` after the move against before it (`--ref-id`, `--threshold 0 --bad-threshold 0`), at the move's commit (recorded before the branch was rebased onto `4175e8cc`) and again at the head | 23, 12 and 23 frames, score 0, bad 0, every frame byte-identical |
+| `tests/check-metal-shim.sh` before and after the move | `501 checks, 0 failed` both times; shim coverage unchanged (54 direct, 5 by pointer, shim defines 60) |
+| `record metal hud2d` (N1's acceptance) | 23 frames, each a single colour, 255, 0, 128 (pics are N3's); 54 textures made and released |
+| `tests/check-ref-metal.sh` | host test 106 checks, 0 failed; 72 vocabulary mutants refused; build, metallib, `otool -L` and the other-OS refusal checked |
+
+Left for N3: drawing pics and characters (`DrawPicScaled`,
+`DrawPicScaledCol`, `DrawStretchPic`, `DrawCharScaled`, `DrawTileClear`),
+the scrap and its uploads, `Draw_InitLocal` (conchars), gl1's buffered
+2D quads (`R_Buffer2DQuad`) and with them the texture environment
+`GL_MODULATE` for coloured pics; the built-in textures (`r_notexture`,
+the particle texture) with N3 and N9. After a split the next pass is a
+2D pass; reopening a 3D pass there (with its depth kept) is owed by the
+first card that rewrites a texture inside the 3D pass (N5).
