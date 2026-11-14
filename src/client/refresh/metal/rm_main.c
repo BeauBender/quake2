@@ -223,8 +223,15 @@ RI_BeginFrame(float camera_separation)
 		rmb_set_vsync(r_vsync->value != 0);
 	}
 
+	/*
+	 * gl1's R_Clear, the last step of its RI_BeginFrame: the colour clear
+	 * with r_clear, for every frame, with or without a 3D view. Without
+	 * r_clear gl1 clears no colour, so the frame starts on what the
+	 * buffer holds; here that is the last frame (the target is kept),
+	 * or black on a target no pass has written.
+	 */
 	RI_GetDrawableSize(&w, &h);
-	rmb_frame_begin(w, h);
+	rmb_frame_begin(w, h, r_clear->value ? rm_clear_color : NULL);
 }
 
 static void
@@ -237,8 +244,13 @@ RI_RenderFrame(refdef_t *fd)
 		return;
 	}
 
-	/* the clear of gl1's R_Clear: colour with r_clear, depth to 1 */
-	rmb_pass_3d(r_clear->value ? rm_clear_color : NULL);
+	/*
+	 * Colour loaded, so 2D drawn before a view (the player-config menu)
+	 * stays. Depth to 1 and stencil to 0: gl1 clears depth in R_Clear,
+	 * at the start of the frame, and no 2D draw writes depth before the
+	 * view, so a clear here gives the same depth.
+	 */
+	rmb_pass_3d();
 }
 
 static qboolean

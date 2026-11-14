@@ -62,6 +62,7 @@ int rmb_commit_wait(id<MTLCommandBuffer> cmd);
 static id<MTLTexture> color;     /* the frame, private */
 static id<MTLTexture> depth;     /* depth32Float_stencil8, private */
 static id<MTLBuffer> readbuf;    /* shared, for rmb_read */
+static int color_defined;        /* a pass has written color since it was made */
 
 /* the open frame */
 static int frame_open, frame_skipped, frame_passes;
@@ -113,8 +114,10 @@ rmb_frame_reset(void)
 	frame_enc = nil;
 }
 
+static int rmb_pass(const float *clear_rgba, int with_depth);
+
 int
-rmb_frame_begin(int w, int h)
+rmb_frame_begin(int w, int h, const float *clear_rgba)
 {
 	static int once_skip;
 
@@ -151,6 +154,7 @@ rmb_frame_begin(int w, int h)
 
 		if (!color || (int)color.width != w || (int)color.height != h)
 		{
+			color_defined = 0;
 			rmb_set_texture(&color, rmb_new_target(MTLPixelFormatBGRA8Unorm, w, h, rt | MTLTextureUsageShaderRead));
 			rmb_set_texture(&depth, rmb_new_target(MTLPixelFormatDepth32Float_Stencil8, w, h, rt));
 		}
@@ -172,10 +176,14 @@ rmb_frame_begin(int w, int h)
 		}
 	}
 
-	return 1;
+	/* gl1's R_Clear: the frame's first pass, colour cleared with r_clear */
+	return rmb_pass(clear_rgba, 0);
 }
 
-/* A pass on the colour target; depth only for the 3D pass. */
+/*
+ * A pass on the colour target, colour as rm_color_load says; depth and
+ * stencil (cleared) only for the 3D pass.
+ */
 static int
 rmb_pass(const float *clear_rgba, int with_depth)
 {
@@ -193,21 +201,21 @@ rmb_pass(const float *clear_rgba, int with_depth)
 		rp.colorAttachments[0].texture = color;
 		rp.colorAttachments[0].storeAction = MTLStoreActionStore;
 
-		if (clear_rgba)
+		switch (rm_color_load(clear_rgba != NULL, color_defined))
 		{
-			rp.colorAttachments[0].loadAction = MTLLoadActionClear;
-			rp.colorAttachments[0].clearColor = MTLClearColorMake(clear_rgba[0], clear_rgba[1],
-					clear_rgba[2], clear_rgba[3]);
-		}
-		else if (frame_passes == 0)
-		{
-			/* the frame's first pass defines the target: black */
-			rp.colorAttachments[0].loadAction = MTLLoadActionClear;
-			rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
-		}
-		else
-		{
-			rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
+			case RM_LOAD_CLEAR:
+				rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+				rp.colorAttachments[0].clearColor = MTLClearColorMake(clear_rgba[0], clear_rgba[1],
+						clear_rgba[2], clear_rgba[3]);
+				break;
+			case RM_LOAD_BLACK:
+				/* a new target's contents are undefined: the first pass defines them */
+				rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+				rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+				break;
+			default:
+				rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
+				break;
 		}
 
 		if (with_depth)
@@ -230,15 +238,16 @@ rmb_pass(const float *clear_rgba, int with_depth)
 		}
 
 		frame_passes++;
+		color_defined = 1;
 	}
 
 	return 1;
 }
 
 int
-rmb_pass_3d(const float *clear_rgba)
+rmb_pass_3d(void)
 {
-	return rmb_pass(clear_rgba, 1);
+	return rmb_pass(NULL, 1);
 }
 
 int
@@ -259,7 +268,8 @@ rmb_read(unsigned char *bgra, size_t len)
 {
 	int ok, own;
 
-	if (!color || (frame_open && (frame_skipped || !frame_cmd)))
+	/* a target no pass has written holds undefined contents: never read it */
+	if (!color || !color_defined || (frame_open && (frame_skipped || !frame_cmd)))
 	{
 		return 0;
 	}
@@ -275,7 +285,7 @@ rmb_read(unsigned char *bgra, size_t len)
 			return 0;
 		}
 
-		/* inside a frame: what was drawn so far (a target no pass touched yet is black) */
+		/* inside a frame: what was drawn so far (the first pass opens in rmb_frame_begin) */
 		if (frame_open && (frame_passes == 0) && !rmb_pass(NULL, 0))
 		{
 			return 0;
@@ -439,6 +449,7 @@ rmb_encode_release(void)
 		wc = color;
 		wd = depth;
 		wb = readbuf;
+		color_defined = 0;
 		rmb_set_texture(&color, nil);
 		rmb_set_texture(&depth, nil);
 

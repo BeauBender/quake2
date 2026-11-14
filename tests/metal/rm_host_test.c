@@ -196,6 +196,21 @@ test_stats(void)
 	CHECK(!rm_stats_format(&s, &l, buf, n) && strlen(buf) == n - 1);
 }
 
+/*
+ * The colour load of a pass (gl1 clears colour only in R_Clear at the
+ * start of the frame): the r_clear colour when the pass clears,
+ * otherwise what the target holds, or black when no pass has written
+ * the target since it was made.
+ */
+static void
+test_color_load(void)
+{
+	CHECK(rm_color_load(1, 0) == RM_LOAD_CLEAR);
+	CHECK(rm_color_load(1, 1) == RM_LOAD_CLEAR);
+	CHECK(rm_color_load(0, 1) == RM_LOAD_KEEP);
+	CHECK(rm_color_load(0, 0) == RM_LOAD_BLACK);
+}
+
 int
 main(void)
 {
@@ -204,6 +219,7 @@ main(void)
 	test_family_list();
 	test_ledger();
 	test_stats();
+	test_color_load();
 
 	printf("rm_host_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

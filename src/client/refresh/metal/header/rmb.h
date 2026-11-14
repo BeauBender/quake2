@@ -111,6 +111,20 @@ int rm_ledger_format(const rm_ledger_t *l, char *buf, size_t len);
 /* The metal_stats line, without a newline. Returns 1 when it fits, 0 when truncated. */
 int rm_stats_format(const rmb_stats_t *s, const rm_ledger_t *l, char *buf, size_t len);
 
+typedef enum
+{
+	RM_LOAD_CLEAR,   /* cleared to the pass's clear colour */
+	RM_LOAD_KEEP,    /* loaded: what the target holds */
+	RM_LOAD_BLACK    /* cleared to black: no pass has written the target yet */
+} rm_load_t;
+
+/*
+ * The colour load of a pass: clear is 1 when the pass clears (r_clear at
+ * the start of the frame), defined is 1 when a pass has written the
+ * colour target since it was made.
+ */
+rm_load_t rm_color_load(int clear, int defined);
+
 /* ---- rmb_device.m and rmb_encode.m ------------------------------------------- */
 
 /* The device and the queue, and the capabilities. 0 with err filled on failure. */
@@ -139,19 +153,21 @@ int rmb_vsync(void);
 void rmb_stats(rmb_stats_t *stats, rm_ledger_t *ledger);
 
 /*
- * Takes a frame slot and a command buffer, and sizes the targets and the
- * layer's drawable to w by h pixels (the window's size in pixels); 0
- * when the frame is skipped.
+ * Takes a frame slot and a command buffer, sizes the targets and the
+ * layer's drawable to w by h pixels (the window's size in pixels), and
+ * opens the frame's first pass, colour only: cleared to clear_rgba, or
+ * loaded when it is NULL (rm_color_load: black on a target no pass has
+ * written). This is gl1's R_Clear at the end of RI_BeginFrame. 0 when
+ * the frame is skipped.
  */
-int rmb_frame_begin(int w, int h);
+int rmb_frame_begin(int w, int h, const float *clear_rgba);
 
 /*
- * Opens the 3D pass on the offscreen colour target and its
- * depth32Float_stencil8 attachment: colour cleared to clear_rgba, or
- * loaded when it is NULL (cleared to black on the frame's first pass);
- * depth cleared to 1, stencil to 0. 0 when there is no open frame.
+ * Ends the open pass and opens the 3D pass on the colour target and its
+ * depth32Float_stencil8 attachment: colour loaded, depth cleared to 1,
+ * stencil to 0. 0 when there is no open frame.
  */
-int rmb_pass_3d(const float *clear_rgba);
+int rmb_pass_3d(void);
 
 /* Ends the 3D pass and opens the 2D pass: colour loaded, no depth. */
 int rmb_pass_2d(void);
@@ -160,8 +176,9 @@ int rmb_pass_2d(void);
  * Reads the colour target into bgra (rows top down, w * 4 bytes each,
  * w and h from rmb_target_size); len is the size of bgra. Inside a frame
  * it reads what was drawn so far, outside one the last frame. Returns 0
- * (nothing written) when the frame is skipped, there is no target, bgra
- * is too small or the GPU did not finish within its wait.
+ * (nothing written) when the frame is skipped, there is no target, no
+ * pass has written the target since it was made, bgra is too small or
+ * the GPU did not finish within its wait.
  */
 int rmb_read(unsigned char *bgra, size_t len);
 

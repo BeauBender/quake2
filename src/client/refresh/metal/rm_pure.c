@@ -206,3 +206,14 @@ rm_stats_format(const rmb_stats_t *s, const rm_ledger_t *l, char *buf, size_t le
 	ok = ok && rm_append(buf, len, &used, "%lu live objects", rm_ledger_live(l));
 	return ok;
 }
+
+rm_load_t
+rm_color_load(int clear, int defined)
+{
+	if (clear)
+	{
+		return RM_LOAD_CLEAR;
+	}
+
+	return defined ? RM_LOAD_KEEP : RM_LOAD_BLACK;
+}

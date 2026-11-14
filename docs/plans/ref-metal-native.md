@@ -545,10 +545,19 @@ section 2 that N1 needs: `header/local.h`, `header/rmb.h`, `rm_main.c`,
 `files/common.c` and `shared.c` are linked as the other renderers link
 them. Every `refexport_t` entry is filled; registration and drawing are
 no-ops that return NULL handles (`DrawGetPicSize` answers 0 by 0, as
-`ref.h` says for a missing pic) and count their calls. `RenderFrame`
-opens the 3D pass (colour cleared to 1, 0, 0.5 with `r_clear 1`, depth
-1, stencil 0), `EndWorldRenderpass` the 2D pass (colour loaded, no
-depth). The cvars read are gl1's `r_clear`, `r_mode`, `r_customwidth`,
+`ref.h` says for a missing pic) and count their calls. `BeginFrame`
+opens the frame's first pass, colour only, where gl1 calls `R_Clear`:
+colour cleared to 1, 0, 0.5 with `r_clear 1`, loaded with `r_clear 0`
+(gl1 then clears no colour and the frame starts on what the buffer
+holds; here the last frame, or black on a target no pass has written).
+`RenderFrame` opens the 3D pass with colour loaded, depth cleared to 1
+and stencil to 0 (gl1 clears depth in `R_Clear`; no 2D draw writes
+depth before the view, so the result is the same), and
+`EndWorldRenderpass` the 2D pass (colour loaded, no depth). With
+`r_clear 1` a `screenshot` in the main menu before any map is 640x480,
+every pixel 255, 0, 128; with `r_clear 0` every pixel 0, 0, 0. A
+readback of a colour target no pass has written (a new target in a
+skipped frame) is refused. The cvars read are gl1's `r_clear`, `r_mode`, `r_customwidth`,
 `r_customheight`, `r_norefresh`, `r_vsync`, `vid_fullscreen`, plus
 `metal_stats`; the one command is `screenshot`.
 
