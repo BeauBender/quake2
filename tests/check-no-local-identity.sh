@@ -300,6 +300,12 @@ nl.txt"
 	n file:///home/zzquser/zzqrepo
 	n ../zzquser/zzqrepo
 	n zzquser/zzqrepo
+	n zzqhttps://github.com/zzquser/zzqrepo
+	n zzqext::https://github.com/zzquser/zzqrepo.git
+	n zzqgithub.com:zzquser/zzqrepo
+	n /zzq/github.com:zzquser/zzqrepo
+	n https://githubxcom/zzquser/zzqrepo
+	n zzqgit@githubxcom:zzquser/zzqrepo.git
 	EOF
 	git -C "$r" config --add remote.origin.url https://github.com/zzquser/zzqrepo.git
 	if owner_is "$r" zzquser; then echo "$me: self-test 'origin with two URLs' named an owner"; exit 1; fi
