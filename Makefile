@@ -819,19 +819,24 @@ ref_metal:
 
 $(BINDIR)/ref_metal.dylib : LDFLAGS += -shared -framework Metal -framework QuartzCore -framework Foundation
 
+# Header dependencies: the Darwin CFLAGS carry no -MMD (see above), but
+# the Apple clang this target needs writes them for C and Objective-C
+# alike; REFMETAL_DEPS includes the .d files.
+REFMETAL_DEPFLAGS = -MMD -MP -MF $(@:.o=.d)
+
 $(BUILDDIR)/ref_metal/%.o: %.c
 	@if [ -z $(QUIET) ]; then\
 		echo "===> CC $<";\
 	fi
 	${Q}mkdir -p $(@D)
-	${Q}$(CC) -c $(CFLAGS) $(SDLCFLAGS) $(INCLUDE) -o $@ $<
+	${Q}$(CC) -c $(CFLAGS) $(REFMETAL_DEPFLAGS) $(SDLCFLAGS) $(INCLUDE) -o $@ $<
 
 $(BUILDDIR)/ref_metal/%.o: %.m
 	@if [ -z $(QUIET) ]; then\
 		echo "===> CC $<";\
 	fi
 	${Q}mkdir -p $(@D)
-	${Q}$(CC) -c -fobjc-arc $(CFLAGS) $(SDLCFLAGS) $(INCLUDE) -o $@ $<
+	${Q}$(CC) -c -fobjc-arc $(CFLAGS) $(REFMETAL_DEPFLAGS) $(SDLCFLAGS) $(INCLUDE) -o $@ $<
 
 else
 
