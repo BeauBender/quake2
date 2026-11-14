@@ -95,12 +95,38 @@ in this group.
 | S5 | Alias models, the view weapon, dynamic lights, flashes and stencil shadows | S4 | T0 | opus | inventory stages g, h | `compare gl1-metal models --ref gl1` passes, also with `gl1_stencilshadow 1` TASK51: implementation complete, acceptance pending an accelerated reference. The shim needed no new code for models, the view weapon, flash blobs or stencil shadows (no "not implemented" line in any record); against the `gl1` references of Apple's software renderer `models` passes on 6 of 23 frames, with and without stencil shadows, for faults of the reference; one region first suspected as a shim defect (frame 19) was decided as a fault of the reference in review (runbook, "The `models` scenario against the software renderer (TASK51)"); no threshold was changed. The row is judged again by TASK83 (#187). | TASK51 (#93), TASK83 (#187) |
 | S6 | Particles, beams, sprites and the screen blend | S5 | T0 | opus | inventory stage i | `compare gl1-metal particles --ref gl1` passes at the `particles` value in the same table TASK52: implementation complete, acceptance pending an accelerated reference. Against the `gl1` references of Apple's software renderer `particles` passes on 18 of 23 frames at `--threshold 0.02 --bad-threshold 0.25` in each of 9 record pairs, and so do its copies with `gl1_pointparameters 0` and `gl1_particle_square 1`, for faults of the reference (runbook, "Particles against the software renderer (TASK52)"); no threshold was changed. The row is judged again by TASK83 (#187). | TASK52 (#94), TASK83 (#187) |
 
-## TASK28, TASK20, TASK22, TASK23
+## Group N: native `ref_metal` (parent TASK28, #38)
 
-No sub-cards here. TASK28 (native `ref_metal`) is decomposed when it is
-pulled, one GL concept at a time, from the concept map in the inventory's
-section 5 and the pipeline-state keys in its section 2. The frame pins are
-its acceptance after every concept.
+Dependencies: the cards depend only on one another in sequence (N1
+first); they do not wait for TASK21 (closed) or TASK27. TASK28 (#38)
+closes when N10 (TASK93) lands (`docs/plans/ref-metal-native.md`,
+"Decisions taken at filing").
+Design: `docs/plans/ref-metal-native.md`; per-concept reference: the shim
+(`docs/plans/metal-shim-design.md`) and `docs/analysis/gl1-state-inventory.md`.
+The cards form one chain, each stacked on its predecessor. Risk tier and
+size per card are in the design's section 12. `metal` is the renderer
+name the harness records `ref_metal` under; every comparison below is
+against `gl1-metal` recorded on the same host with `MTL_DEBUG_LAYER=1`,
+"tight" means `--threshold 0.005 --bad-threshold 0.001`, and a card keeps
+the pins of the cards before it passing. gl1's own files, gl3, soft,
+`files/` and `ref.h` are not edited by any card in this group.
+
+| Key | Title | Depends | Tier | Model | Design reference | Acceptance | Filed as |
+|---|---|---|---|---|---|---|---|
+| N1 | `ref_metal` skeleton: build target, window seat, clear, present, frame capture, capability report, gate check | none | T0 | opus | sections 2, 3, 10 | `make ref_metal` links on macOS with Metal and no OpenGL (`otool -L`); on another OS it fails with one line. `scripts/pins.sh record metal hud2d` completes (23 frames, manifest `metal`, the engine quits by itself) with no validation message, and every pixel of every frame is the `r_clear` colour 255, 0, 128. The log shows the device, `supportsFamily` (apple5 to apple9) and the ray-tracing flags; a device below apple5 is refused. Four `vid_restart` cycles between `metal` and `soft` under `ASAN=1`: status 0, no sanitizer line, no `ref_metal` object live after teardown. `tests/check-ref-metal.sh` (host test, build, vocabulary check with its mutant) is green; the vocabulary check rejects a `GL_` identifier outside string literals and comments (the `gl_texturemode` value strings such as `"GL_LINEAR_MIPMAP_NEAREST"` stay legal) | TASK84 (#195) |
+| N2 | Images, textures, the 2D pipeline and the cinematic; the shim's GL-free arithmetic moved to `metal/common/` | N1 | T0 | opus | sections 2 ("Inputs and bounds"), 4, 5, 8 | `compare metal cinematic --ref gl1-metal` (`PINS_DEMO=idlog.cin PINS_EVERY=7`) passes on every frame at the tight values. `gl1-metal` records of `hud2d`, `cinematic` and `world` after the move compare at score 0 and bad 0 against records before it, and the shim's host test passes with the same check count. `metal_stats` reports 0 pipelines created after init. An image whose width times height exceeds the staging ring is not uploaded (skipped or `ri.Sys_Error`, no write past the ring), with a host-test case of an oversized count | TASK85 (#196) |
+| N3 | Pics, characters, the scrap and the HUD | N2 | T0 | sonnet | section 5 | `compare metal hud2d --ref gl1-metal` passes on all 23 frames at the tight values (this also proves the row order on frames that are not uniform) | TASK86 (#197) |
+| N4 | World geometry: BSP registration, retained world buffers, traversal, fullbright surfaces, the screen blend | N3 | T0 | opus | sections 2 ("Inputs and bounds"), 3, 9, 11 | A new scenario `world-fullbright` (`world` plus `r_fullbright 1`) passes `pins.sh selftest`, and two `gl1-metal` records of it compare at score 0. `compare metal world-fullbright --ref gl1-metal` passes at the tight values on every frame on which `metal_stats 1` reports no skipped sky, warped, translucent or flowing surface (flowing surfaces count as skipped until N6 draws them scrolled); the card lists the others. The screen blend (gl1's `R_PolyBlend`, one `color` quad as the 3D pass's last draw) is drawn, so the frames with a blend are judged here (the scenarios leave `gl_polyblend` at 1). The retained vertex, index and surface-record sizes are logged per map. A face, vertex or index count from the BSP that would overflow a retained buffer is refused (skipped or `ri.Sys_Error`, no write past the end), with a host-test case of an oversized count | TASK87 (#198) |
+| N5 | Lightmaps: one array texture, lightstyles, overbright, staged updates | N4 | T0 | opus | sections 2 ("Inputs and bounds"), 5, 6 | `compare metal world --ref gl1-metal` passes at the tight values on every frame `metal_stats 1` reports no skipped surface for (flowing surfaces count as skipped, like sky, warped and translucent ones, until N6 draws them scrolled). A scratch copy of `world` with `gl1_overbrightbits 2`, recorded on both renderers, passes at the same values (not committed). A map that needs more than `MAX_LIGHTMAPS` slices, or a surface rectangle outside its slice, is refused (skipped or `ri.Sys_Error`, no write past the array), with a host-test case of an oversized count | TASK88 (#199) |
+| N6 | Sky, water warp, translucent and flowing surfaces | N5 | T0 | sonnet | sections 5, 9 | `compare metal world --ref gl1-metal` and `compare metal skywater --ref gl1-metal` (from `demo1.dm2`) pass on every frame at the tight values, with no skipped surface left. `skywater` with `PINS_DEMO=water.dm2` passes at `--threshold 0.02 --bad-threshold 0.03` against two `gl1-metal` records | TASK89 (#200) |
+| N7 | Brush entities, alias models, the view weapon, model lighting | N6 | T0 | opus | sections 2 ("Inputs and bounds"), 4, 9 | `compare metal models --ref gl1-metal` passes at the defaults against two `gl1-metal` records on every frame `metal_stats 1` reports no skipped sprite, beam or null model for; the card lists the others. An alias vertex count that does not fit the model's frame-ring region is refused (the draw skipped or `ri.Sys_Error`, no write past the region), with a host-test case of an oversized count | TASK90 (#201) |
+| N8 | Sprites, beams, null models, stencil shadows, dynamic lights, flash blobs | N7 | T0 | opus | sections 6, 9 | `models` passes on every frame at the defaults against two `gl1-metal` records, also in a scratch copy with `r_shadows 1` and `gl1_stencilshadow 1`. A new scenario `dlights` (`world` plus `cl_lights 1`) passes `pins.sh selftest`; its `gl1-metal` run-to-run values are measured and recorded in the file, and `compare metal dlights --ref gl1-metal` passes at them (the tight values if it is exact), also in a scratch copy with `gl1_flashblend 1` | TASK91 (#202) |
+| N9 | Particles, the full parity sweep and frame time (the screen blend moved to N4) | N8 | T0 | sonnet | sections 4, 11 | `compare metal particles --ref gl1-metal` passes at `--threshold 0.02 --bad-threshold 0.25` against two records, also in scratch copies with `gl1_pointparameters 0` and with `gl1_particle_square 1`. Every scenario passes at its value of the design's section 11 in one sweep at one commit, recorded as a table in the runbook. The `timedemo` fps of `metal` is at least that of `gl1-metal` on every scenario at the same load, both recorded | TASK92 (#203) |
+| N10 | Lifecycle, selection and the docs: `vid_restart`, resize, fullscreen, vsync, gamma, the fallback order and the video menu on macOS | N9 | T0 | opus | sections 10, 13, 15 | Eight `vid_restart` cycles through `metal`, `gl1` (shim) and `soft` under `ASAN=1` and under `leaks --atExit`: status 0, 0 leaks, no `ref_metal` object live after any teardown, and no growth beyond what FIX41 (#193) records for the windows. After a mode change, a fullscreen toggle and with HighDPI the screenshot has the drawable's size; `r_vsync` and `vid_gamma` behave as in `gl1`. `metal` is in the fallback order ahead of `gl1` on macOS only, and in the video menu only there. Every pin of N9's sweep still passes. `doc/`, `docs/README.md`, this manifest and the plans describe the tree as built | TASK93 (#204) |
+
+## TASK20, TASK22, TASK23
+
+No sub-cards here.
 
 ## Group RT: ray tracing (parents TASK24, #31, and TASK25, #32)
 
@@ -129,8 +155,8 @@ Record 0006 (`docs/decisions/0006-port-first.md`) sets the queue. The port
 queue is the rows of this file, in the order the sections list them: P1 to
 P3, R1 to R5, S1 to S6 (the shim cards S2 to S6 form one chain; each
 stacks on its predecessor's open pull request and waits when there is
-none), then TASK28, TASK20, TASK22, TASK23, then RT1 to RT10 with RTA.
-Their parents (TASK27, TASK21, TASK24, TASK25) follow their children.
+none), then N1 to N10 (one chain, stacked the same way) and TASK28, TASK20, TASK22, TASK23, then RT1 to RT10 with RTA.
+Their parents (TASK27, TASK21, TASK28, TASK24, TASK25) follow their children.
 
 Everything else is parked: the card carries the label
 `gate:manual:port-first` and is not ready. It is released only when it
@@ -149,10 +175,12 @@ outside a port card's scope goes to a parked card.
    group headings list.
 4. P1, P2, P3 and R1 to R5, then TASK27 itself.
 5. S1 to S6, then TASK21.
-6. TASK28.
+6. N1 to N10, then TASK28.
 7. RT1 to RT8 with RTA, then TASK24; RT9 and RT10, then TASK25.
 
 What the build VM can finish alone: P1, P2, R1 to R5 on `soft`, S1 and
 RT8's VM half. P3 and everything after S1 need `ref_gl1` references, which
-the VM now records through Apple's software OpenGL renderer (TASK80). Group RT needs T1
+the VM now records through Apple's software OpenGL renderer (TASK80).
+Group N is judged against `gl1-metal` on the same host and can be finished
+on the VM; its `--ref gl1` half waits for TASK83 (#187), as the shim's does. Group RT needs T1
 and T2 hardware.
