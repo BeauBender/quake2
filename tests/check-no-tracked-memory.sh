@@ -8,20 +8,23 @@
 # path; when the index holds a gitlink anywhere (mode 160000: a submodule,
 # or a clone made inside a checkout and staged as an embedded repository,
 # whose path would name what was cloned; this repository has none); when a
-# file created at .claude/memory/ would not be ignored; or when git, tr or
-# grep fails or the script is interrupted (nothing is counted as clean
-# then). Memory is kept in the owner's private store (see CLAUDE.md), never
-# in a commit.
+# file created at .claude/memory/ would not be ignored by the top-level
+# .gitignore itself (a rule only in .git/info/exclude, a global ignore file
+# or a nested .gitignore does not count); or when git, tr or grep fails or
+# the script is interrupted (nothing is counted as clean then). Memory is
+# kept in the owner's private store (see CLAUDE.md), never in a commit.
 #
 # The self-test runs first, in a subshell with the GIT_* repository
 # variables, GIT_DEFAULT_HASH and GIT_TEMPLATE_DIR unset, no global or
 # system configuration, and HOME and XDG_CONFIG_HOME inside a private
 # mktemp -d, on throwaway repositories there. It shows the check fails on
 # each spelling above, on a symlink and a submodule at .claude/memory, on a
-# nested clone staged with add -A, on a missing ignore rule, outside a
-# repository, and when ls-files, ls-files -s, check-ignore, tr or either
-# grep alone fails (a shim first on PATH), and passes on a clean
-# repository. The real check then reads the index git hands it.
+# nested clone staged with add -A, on a missing ignore rule and on one only
+# in .git/info/exclude, a global ignore file or .claude/.gitignore, outside
+# a repository, and when ls-files, ls-files -s, check-ignore, tr or either
+# grep alone fails (a shim first on PATH); and that it passes on a clean
+# repository, also when a global ignore file or .git/info/exclude lists
+# .claude/. The real check then reads the index git hands it.
 #
 # Usage: tests/check-no-tracked-memory.sh
 set -eu
@@ -33,6 +36,14 @@ chmod 700 "${tmp:?}"
 # instead of resuming with the scratch files gone.
 trap 'rm -rf "${tmp:?}"' EXIT
 trap 'exit 1' HUP INT TERM
+
+# A throwaway git directory made without templates (so no info/exclude)
+# for the ignore probe in check().
+if ! (unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY
+	git init -q --bare --template= "${tmp:?}/probe.git") > /dev/null 2>&1; then
+	echo "$me: git init failed; cannot tell whether .claude/memory/ is ignored" >&2
+	exit 1
+fi
 
 # check <repo-dir>: prints a reason and returns 1 on a violation.
 check()
@@ -79,16 +90,31 @@ check()
 		return 1
 		;;
 	esac
+	# The rule must be in the tree's own top-level .gitignore. The probe
+	# runs on the work tree with the throwaway git directory and no global
+	# ignore file, which would otherwise stand in for a missing rule or
+	# decide first (a global ".claude/" wins over the tree's rule); -v
+	# names the deciding rule.
 	rc=0
-	git -C "$1" check-ignore -q -- .claude/memory/probe.md 2>/dev/null || rc=$?
+	rule=$(unset GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY
+		git -C "$1" --git-dir="${tmp:?}/probe.git" --work-tree=. \
+			-c core.excludesFile=/dev/null check-ignore --no-index -v \
+			-- .claude/memory/probe.md 2>/dev/null) || rc=$?
 	case "$rc" in
 	0) ;;
 	1)
-		echo "$me: .claude/memory/ is not ignored; add it to .gitignore" >&2
+		echo "$me: .claude/memory/ is not ignored by .gitignore; add .claude/memory to .gitignore" >&2
 		return 1
 		;;
 	*)
 		echo "$me: git check-ignore failed; cannot tell whether .claude/memory/ is ignored" >&2
+		return 1
+		;;
+	esac
+	case "$rule" in
+	.gitignore:*) ;;
+	*)
+		echo "$me: .claude/memory/ is ignored only by a nested .gitignore; add .claude/memory to the top-level .gitignore" >&2
 		return 1
 		;;
 	esac
@@ -134,9 +160,27 @@ selftest()
 		fi
 	}
 
+	# globalignore <name> <rule>: a global ignore file (the XDG default,
+	# which GIT_CONFIG_GLOBAL does not turn off) holding <rule>.
+	globalignore()
+	{
+		mkdir -p "${tmp:?}/$1/git"
+		printf '%s\n' "$2" > "${tmp:?}/$1/git/ignore"
+	}
+
 	mkrepo clean
 	check "$tmp/clean" 2>/dev/null ||
 		{ echo "$me: selftest: a clean repository was rejected" >&2; exit 1; }
+
+	globalignore xdg-claude .claude/
+	(XDG_CONFIG_HOME=$tmp/xdg-claude; check "$tmp/clean") 2>/dev/null ||
+		{ echo "$me: selftest: a global ignore of .claude/ hid the tree's rule" >&2; exit 1; }
+
+	mkrepo excludeshadow
+	mkdir -p "${tmp:?}/excludeshadow/.git/info"
+	printf '%s\n' .claude/ >> "${tmp:?}/excludeshadow/.git/info/exclude"
+	check "$tmp/excludeshadow" 2>/dev/null ||
+		{ echo "$me: selftest: a .claude/ rule in .git/info/exclude hid the tree's rule" >&2; exit 1; }
 
 	mkrepo staged
 	mkdir -p "${tmp:?}/staged/.claude/memory"
@@ -178,6 +222,23 @@ selftest()
 	mkdir -p "${tmp:?}/noignore"
 	git -C "${tmp:?}/noignore" init -q .
 	expect_reject noignore "a missing ignore rule"
+
+	mkdir -p "${tmp:?}/excludeonly"
+	git -C "${tmp:?}/excludeonly" init -q .
+	mkdir -p "${tmp:?}/excludeonly/.git/info"
+	printf '%s\n' '.claude/memory' >> "${tmp:?}/excludeonly/.git/info/exclude"
+	expect_reject excludeonly "an ignore rule only in .git/info/exclude"
+
+	globalignore xdg-memory .claude/memory
+	if (XDG_CONFIG_HOME=$tmp/xdg-memory; check "$tmp/noignore") 2>/dev/null; then
+		echo "$me: selftest: an ignore rule only in a global ignore file was not detected" >&2
+		exit 1
+	fi
+
+	mkdir -p "${tmp:?}/nestedignore/.claude"
+	git -C "${tmp:?}/nestedignore" init -q .
+	printf '%s\n' memory > "${tmp:?}/nestedignore/.claude/.gitignore"
+	expect_reject nestedignore "an ignore rule only in .claude/.gitignore"
 
 	mkdir -p "${tmp:?}/notarepo"
 	expect_reject notarepo "a git failure (not a repository)"
