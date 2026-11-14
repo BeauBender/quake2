@@ -44,7 +44,8 @@ src/client/refresh/metal/
   header/local.h      front-end types and globals; no GL type, no GL header
   header/model.h      model, surface and poly types, with retained-buffer offsets
   header/rmb.h        the back-end API in C: the only door to Metal
-  rm_main.c           GetRefAPI, cvars, Init/Shutdown, RenderFrame, view setup, entity list   (from gl1_main.c)
+  rm_main.c           GetRefAPI, cvars, Init/Shutdown, RenderFrame, view setup, entity list,
+                      the screen blend (R_PolyBlend)                                        (from gl1_main.c)
   rm_sdl.c            window seat: PrepareForWindow, InitContext, drawable size, vsync     (from gl1_sdl.c)
   rm_image.c          image registry, LoadPic, uploads, palette, gamma and intensity tables (from gl1_image.c)
   rm_scrap.c          the scrap atlas                                                      (from gl1_scrap.c)
@@ -55,7 +56,10 @@ src/client/refresh/metal/
   rm_light.c          R_BuildLightMap, styles, dynamic lights, R_LightPoint, flash blobs   (from gl1_light.c)
   rm_warp.c           subdivision, sky clipping and box, water warp                        (from gl1_warp.c)
   rm_mesh.c           alias models: lerp, shading, shells, shadows                         (from gl1_mesh.c)
-  rm_effects.c        sprites, beams, null models, particles, the screen blend             (from gl1_main.c)
+  rm_buffer.c         the draw batch: gl1's buffered world, alias and 2D vertices
+                      (R_UpdateGLBuffer, R_Buffer2DQuad, R_SetBufferIndices) written into
+                      the frame ring and flushed as rmb_draw calls in gl1's order          (from gl1_buffer.c)
+  rm_effects.c        sprites, beams, null models, particles                               (from gl1_main.c)
   rm_misc.c           screenshot, built-in textures, the metal_stats line                  (from gl1_misc.c)
   rm_pure.c           helpers with neither SDL nor Metal (index expansion, readback
                       conversion, pipeline and state keys, the object ledger): host-tested
@@ -78,6 +82,32 @@ the host test runs the very formulas the shaders run (the shim's
 `_image.c` and `_mesh.c` parse untrusted data and fall under
 `risk.mediumPaths` (record 0006), so cards touching them get the security
 review pass.
+
+### Inputs and bounds
+
+Model, image and BSP data come from paks and downloads and are untrusted.
+`ref_metal` keeps the checks of the shared loaders in `files/` unchanged
+and adds these rules for what it builds from their output:
+
+- It copies no model, image or BSP bytes into a fixed-size buffer without
+  a bound checked against that buffer's size.
+- Every count taken from file data that sizes a retained buffer (the world
+  vertex, index and surface-record buffers of N4), the lightmap array (its
+  slice count, at most `MAX_LIGHTMAPS`, N5), a staging-ring upload (an
+  image's width times height, N2) or a frame-ring region (an alias model's
+  vertex count, N7) is checked before the buffer is sized or written. On
+  overflow the draw or the upload is skipped (and counted in
+  `metal_stats`) or the renderer stops with `ri.Sys_Error`; it never
+  writes past the end of a buffer, a slice or a ring region.
+- The size checks are plain functions in `rm_pure.c` or `common/` (the
+  ring's own allocation check in `mtl_ring.c`), so the host test reaches
+  them; each of N2, N4, N5 and N7 adds a host-test case with an oversized
+  count.
+
+The limits `ref_metal` inherits at the renderer entry points (the counts in
+`refdef_t` and the entity, particle and light lists the engine hands over)
+are gl1's and the other renderers' as well; their bounds are tracked on
+FIX40 (#185), not in group N.
 
 ## 3. Frame structure and the back end
 
@@ -127,10 +157,13 @@ the pass. A draw is `rmb_draw(pipeline id, depth-stencil id, raster state,
 vertex range, index range, uniforms)`.
 
 **Matrices.** The shim computes each draw's model-view-projection product
-on the CPU in double and stores it as float, and its vertex function maps
+on the CPU in single precision (`mgl_mat_mul`, a `float` sum per element);
+the rotate matrix is built in double and stored as float (as are the
+frustum and ortho matrices, from their `GLdouble` parameters), and the
+translate and scale matrices are built in float. Its vertex function maps
 GL clip depth with `mgl_gl_clip_z`. `ref_metal` uses the same arithmetic,
-moved into `common/` (section 8), so its depth and position values are the
-shim's bit for bit; it does not split the product into per-pass and
+moved verbatim into `common/` (section 8), so its depth and position values
+are the shim's bit for bit; it does not split the product into per-pass and
 per-draw halves on the GPU, which would change the rounding. Viewports are
 set in Metal's top-left convention directly from the `refdef_t` rectangle;
 the host test checks them against the shim's `mgl_compute_raster` for the
@@ -169,10 +202,14 @@ shim's, since parity with it is the acceptance.
 - **Images.** `rgba8Unorm`, private storage, uploaded through the staging
   ring; mip chains with the blit encoder's `generateMipmaps`, which is what
   the shim does for gl1's `GL_GENERATE_MIPMAP`, so the sampled texels are
-  the shim's. gl1's upload decisions (rounding to powers of two, resampling,
-  `R_LightScaleTexture`, the gamma and intensity tables, skin flood fill)
-  are copied unchanged. Paletted (`GL_COLOR_INDEX8_EXT`) uploads are dead
-  on Metal and are not copied.
+  the shim's. gl1's upload decisions as the reference takes them are
+  copied unchanged: the shim advertises `GL_ARB_texture_non_power_of_two`,
+  so gl1 uploads through `R_Upload32Native` (no rounding to powers of two,
+  no resampling), with `R_LightScaleTexture`, the gamma and intensity
+  tables and the skin flood fill. gl1's power-of-two path
+  (`R_Upload32Soft`) never runs on the reference and is not copied.
+  Paletted (`GL_COLOR_INDEX8_EXT`) uploads are dead on Metal and are not
+  copied.
 - **The scrap** keeps gl1's four 256 by 256 atlases and allocator.
 - **Cinematics** (`DrawStretchRaw`): one texture per size, rewritten each
   call through the upload command buffer.
@@ -215,10 +252,26 @@ retained-buffer sizes). Each card that adds one documents it in
 Left out of `ref_metal`, each a gl1 feature no pin scenario exercises:
 the classic two-pass lightmap path (`gl1_multitexture 0`; the shim measured
 it within rounding of the multitexture path), lightmap copies for tile
-renderers (`gl1_tilerendering`), stereo (`cl_stereo`), paletted textures,
-MSAA (refused, as the shim does: `r_msaa_samples` reads 0), and the debug
-lines of `gl_showtris` and `gl_showbbox`. Any of them is a parked card if
-wanted.
+renderers (`gl1_tilerendering`), stereo (`gl1_stereo` and its
+`gl1_stereo_*` cvars), paletted textures, MSAA (refused, as the shim does:
+`r_msaa_samples` reads 0), and the debug lines of `gl_showtris` and
+`gl_showbbox`. Any of them is a parked card if wanted.
+
+The other gl1 cvars that change a pixel but that no scenario sets, checked
+against gl1's source:
+
+| Cvar | In `ref_metal` | Why |
+|---|---|---|
+| `gl1_ztrick` | dropped (depth is cleared every frame, gl1's default 0) | `R_Clear` (`gl1_main.c`) alternates depth ranges to skip the depth clear; on Metal the depth clear is a load action, so the trick saves nothing and the default path is kept |
+| `gl_zfix` | copied | polygon offset around brush models (`R_Clear`, `R_DrawBrushModel` in `gl1_surf.c`), raster state the back end has |
+| `gl1_dynamic` | copied | it gates the dynamic-lightmap update in `gl1_surf.c`, code N5 and N8 copy anyway |
+| `gl1_saturatelighting` | dropped | read only by `R_BlendLightmaps` (`gl1_surf.c`), the classic two-pass lightmap path that is left out |
+| `gl1_picmip`, `gl1_round_down` | dropped | read only by `R_Upload32Soft` (`gl1_image.c`), the power-of-two path gl1 does not take on the shim (section 5) |
+| `gl1_texturealphamode`, `gl1_texturesolidmode` | dropped | they pick the GL internal format; `ref_metal` stores every image as `rgba8Unorm`, as the shim does whatever internal format gl1 asks for (`mgl_layer.m`), so the reference ignores them too |
+| `r_retexturing` | copied | `R_FindImage` (`gl1_image.c`) passes it to the shared loader in `files/` |
+
+`gl1_buffer.c`, gl1's draw batch, is copied as `rm_buffer.c` (section 2),
+without its tile-rendering lightmap copy (`cur_lm_copy`).
 
 ## 8. What is shared with the shim
 
@@ -230,7 +283,7 @@ in N2, into `src/client/refresh/metal/common/`:
 
 | Moved | From | Why it must be one copy |
 |---|---|---|
-| `mtl_matrix.c`, `mtl_matrix.h`: multiply, rotate, translate, scale, frustum, ortho, in double, stored as float | `mgl_raster.c` (`mgl_mat_mul`) and the matrix arithmetic of `mgl_state.c` | parity of every position and depth value depends on identical rounding |
+| `mtl_matrix.c`, `mtl_matrix.h`: multiply (single precision), rotate, frustum and ortho (built in double, stored as float), translate and scale (float), moved verbatim; the only change is the type names, `GLfloat` becomes `float` and `GLdouble` becomes `double` (the shim's typedefs of the same types, so no value changes) | `mgl_raster.c` (`mgl_mat_mul`) and the matrix arithmetic of `mgl_state.c` | parity of every position and depth value depends on identical rounding |
 | `mtl_ring.c`, `mtl_ring.h`: the bump-allocated frame ring | `mgl_raster.c` (`mgl_ring_alloc`) | one tested allocator |
 | `mtl_shader_math.h` (C99 and MSL subset): clip-depth mapping, clamp, point coverage | `mgl_texenv.h` (`mgl_gl_clip_z`, `mgl_clamp01`, `mgl_point_coverage`) | the shaders of both renderers run the same source |
 
@@ -285,9 +338,15 @@ group N.
   vendored SDL 3 headers, `make ref_metal` in a scratch copy (the pattern of
   `tests/check-metal-shim.sh`), with `otool -L` showing Metal and no
   OpenGL; otherwise one `skipped: <reason>` line; (c) on every OS, the
-  vocabulary check: no `gl[A-Z]` call, no `GL_` token, no `<OpenGL/` include
-  and no include of `gl1/` under `src/client/refresh/metal/`, with a mutant
-  self-test. No CI workflow change.
+  vocabulary check: no `gl[A-Z]` call, no `GL_` identifier outside string
+  literals and comments, no `<OpenGL/` include and no include of `gl1/`
+  under `src/client/refresh/metal/`, with a mutant self-test (a `GL_`
+  identifier in code fails it; the same text in a string literal does
+  not). String literals are exempt because `gl_texturemode` takes gl1's
+  value strings (`"GL_NEAREST"` to `"GL_LINEAR_MIPMAP_LINEAR"`,
+  `gl1_image.c`), which `rm_image.c` must keep as strings to parse the cvar
+  by gl1's names (section 7); comments are exempt because each copied
+  function names its gl1 source. No CI workflow change.
 - **The engine side.** `vid_renderer metal` needs no engine change:
   `VID_LoadRenderer` loads `ref_<name>` from the binary's directory. The
   fallback order and the video menu entry are N10's, guarded to macOS.
@@ -337,6 +396,17 @@ Before N6 the world has no sky, water or translucent surfaces; N4 and N5
 name the frames on which `metal_stats 1` reports such surfaces skipped and
 are judged on the others. From N6 on nothing is excluded.
 
+The screen blend (gl1's `R_PolyBlend`: one `color` quad over the view, the
+3D pass's last draw) comes with N4, not with the effects of N9. The 3D
+scenarios set `cl_blend 0` but leave `gl_polyblend` at 1, and `cl_blend 0`
+clears only the blend's colour (`cl_view.c`), so gl1 draws the quad on
+every frame whose blend alpha is not 0. The runbook measured it on the
+reference: on frames 3, 5, 8, 11 and 16 of `world` it changes 39 to 98
+percent of `gl1-metal`'s pixels (the whole screen), and it darkens the
+whole screen on the under-water frames of `skywater` from `water.dm2`.
+Without it in N4 every world frame with a blend would be unjudgeable
+until N9, and the exclusions above would not cover it.
+
 ## 12. The cards
 
 Group N of `docs/plans/metal-port-cards.md`. A stack: each card is cut from
@@ -350,12 +420,12 @@ green.
 | N1 | Skeleton: build target, window seat, clear, present, capture, capability report, gate check | M | opus | 950 | `record metal hud2d` completes with uniform frames |
 | N2 | Images, textures, the 2D pipeline and the cinematic; the shared code moved to `common/` | M | opus | 1000 | `cinematic`; `gl1-metal` unchanged by the move |
 | N3 | Pics, characters, the scrap and the HUD | L | sonnet | 600 | `hud2d` |
-| N4 | World geometry: BSP registration, retained buffers, traversal, fullbright surfaces | M | opus | 1100 | `world-fullbright` (new) |
+| N4 | World geometry: BSP registration, retained buffers, traversal, fullbright surfaces, the screen blend | M | opus | 1150 | `world-fullbright` (new) |
 | N5 | Lightmaps: the array texture, styles, overbright, updates | M | opus | 850 | `world` |
 | N6 | Sky, water warp, translucent and flowing surfaces | M | sonnet | 800 | `world`, `skywater` |
 | N7 | Brush entities, alias models, the view weapon, model lighting | M | opus | 1000 | `models` |
 | N8 | Sprites, beams, null models, stencil shadows, dynamic lights, flash blobs | M | opus | 900 | `models` complete, `dlights` (new) |
-| N9 | Particles, the screen blend, the full parity sweep and frame time | L | sonnet | 600 | `particles`, every scenario |
+| N9 | Particles, the full parity sweep and frame time | L | sonnet | 550 | `particles`, every scenario |
 | N10 | Lifecycle, selection and the docs: `vid_restart`, resize, vsync, gamma, fallback order, menu | M | opus | 800 | restart soak, leaks, all pins |
 
 The deviation from the order the card suggests: frame capture comes with
@@ -405,23 +475,47 @@ intersection performance (RT9, RT10) only.
    (N1 first); they do not wait for TASK27. TASK21 is closed. TASK28 (#38)
    closes when N10 (TASK93) lands. The cards are TASK84 (#195) to TASK93
    (#204), N1 to N10 in order.
-2. **The shim after TASK28.** The GL-subset shim stays in the tree and in
-   the build: it is the same-machine reference for `ref_metal` and keeps
-   `gl1` working on macOS.
+2. **The shim after TASK28.** Departs from the card: TASK28's goal says
+   the shim "remains in the tree only as the per-concept reference until
+   this card closes, then is removed from the build". The GL-subset shim
+   stays in the tree and in the build: it is the same-machine reference
+   for `ref_metal` and keeps `gl1` working on macOS (which the card's
+   scope also asks for "until the owner decides otherwise"). Removing it
+   from the build is a later decision of the owner, not part of group N.
 3. **Build and CI.** `ref_metal` is not part of `make all` and is not
    built in CI for now; `tests/check-ref-metal.sh` in the local gate builds
    it where the Metal toolchain exists. Adding it to CI is a later card.
 4. **Fallback order (N10).** On macOS `metal` goes ahead of `gl1` only; the
    default `vid_renderer` does not change.
-5. **Cvar names.** `ref_metal` reads gl1's `gl1_*` and `gl_*` cvar names;
+5. **The reference on this host.** Departs from the card: TASK28's goal
+   says every frame pin passes "against the `ref_gl1` references". On
+   this host the `gl1` references come from Apple's software OpenGL
+   renderer, whose faults the runbook records (TASK49 to TASK52), so
+   group N is accepted against `gl1-metal`, the shim on the same GPU, at
+   the values of section 11. The half against `gl1` (`--ref gl1`) is
+   deferred to TASK83 (#187) on a machine with accelerated OpenGL, where
+   it is judged as it is for TASK21; it gates no card of group N.
+6. **Starting point.** Departs from the card: TASK28's scope says the
+   module is "started as a copy of `gl1/` plus the shim". `ref_metal`
+   starts as a copy of gl1's front end only, converted one concept per
+   card (section 1); the shim is not copied. Its GL-free arithmetic is
+   moved to `common/` (decision 10) and a few pieces of its device code
+   are copied with their source named (section 8). The card's
+   per-concept order is kept, with the deviation of section 12.
+7. **Cvar names.** `ref_metal` reads gl1's `gl1_*` and `gl_*` cvar names;
    Metal-only cvars are `metal_*`.
-6. **Dropped gl1 features.** Classic two-pass lightmaps, tile rendering,
-   stereo, paletted textures, MSAA and `gl_showtris`/`gl_showbbox` are
-   accepted as out of scope (section 7); each is a possible later card.
-7. **Thresholds.** The tight thresholds of section 11 (0.005 / 0.001 on
+8. **Dropped gl1 features.** Departs from the card: TASK28's scope
+   converts all of gl1. Classic two-pass lightmaps (with
+   `gl1_saturatelighting`), tile rendering, stereo, paletted textures,
+   MSAA, `gl_showtris`/`gl_showbbox`, `gl1_ztrick`, gl1's power-of-two
+   upload path (with `gl1_picmip` and `gl1_round_down`) and the internal
+   format cvars `gl1_texturealphamode`/`gl1_texturesolidmode` are left
+   out of `ref_metal` (section 7): no pin scenario exercises them. Each is
+   a possible later card.
+9. **Thresholds.** The tight thresholds of section 11 (0.005 / 0.001 on
    deterministic scenarios against `gl1-metal`) stand; a card that cannot
    meet one reports the measurement rather than loosening it.
-8. **Shared arithmetic.** N2 moves the shim's GL-free arithmetic into
+10. **Shared arithmetic.** N2 moves the shim's GL-free arithmetic into
    `src/client/refresh/metal/common/` rather than copying it, proven
    neutral by byte-identical `gl1-metal` frames and an unchanged shim
    host-test count.
