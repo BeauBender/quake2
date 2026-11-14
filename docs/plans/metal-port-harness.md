@@ -2729,7 +2729,11 @@ alongside as the reference, it has no before or after and presents
 through OpenGL). The before build of `soft` is main at 1b84bb4f, the
 after build is this branch. The `ref_metal` and Metal-backed `gl1`
 rows are scratch builds with `opaque = NO` added next to their
-`displaySyncEnabled` line, never committed:
+`displaySyncEnabled` line, never committed. Every build here, before and
+after, is from this branch's fork point, main at 1b84bb4f, plus the change
+named. That is before TASK90 (#244): its `ref_metal` draws no entities,
+dynamic lights or particles, so the `ref_metal` rows and the FIX51
+paragraph's ceiling below are not a baseline for a later `ref_metal`:
 
 | Renderer | 1920x1080 before | after | 640x480 before | after |
 |---|---|---|---|---|
@@ -2752,7 +2756,7 @@ reading taken right after the last engine exited):
 
 The first batch began with the load still decaying from the builds
 (3.10, 1.68 at its end); the other readings are steady. In the engine
-the opaque layer also costs about 0.5 to 0.9 ms a frame below the
+the opaque layer also costs about 0.4 to 0.9 ms a frame below the
 threshold: at 640x480 `soft` moves from about 315 to about 390 fps,
 `ref_metal` from about 296 to about 340, the Metal-backed `gl1` from
 about 256 to about 328 (the means of the ranges above).
@@ -2795,14 +2799,16 @@ composited one blends with the window's background. Whether they do
 was not measured here.
 
 **FIX51 (#238), the fixed cost of about 3 to 4 ms a frame.** What this
-explains and what it does not. Two parts were measured. About 0.5 to
+explains and what it does not. Two parts were measured. About 0.4 to
 0.9 ms is the opaque layer (the 640x480 columns above). The rest is the time the window server takes to hand back a
 drawable: the bare probe, which only clears, spends 2.26 to 3.07 ms a
 frame blocked in `nextDrawable` at every size below the threshold and
 with `opaque = NO` at 1920x1080, and the engine with a layer that is
 not opaque tops out at 321.8 to 404.6 fps in all three renderers at
 640x480. `ref_gl1` does not wait there (2452.0 to 2469.5 fps at
-640x480, 1882.5 to 2044.5 at 1920x1080). So a Metal renderer that waits for a drawable every frame stops
+640x480, 1882.5 to 2044.5 at 1920x1080; that figure may be a CPU-submit
+rate, as FIX51 says, since Apple's GL timer does not wait for the GPU).
+So a Metal renderer that waits for a drawable every frame stops
 at about 400 fps on this host; going past it needs a frame that does
 not block in `nextDrawable` (not tried here).
 
@@ -2810,4 +2816,8 @@ not block in `nextDrawable` (not tried here).
 apple7 Mac with a 120 Hz internal display), to tell whether the cap
 follows the refresh rate and where the size threshold sits there. The
 panel here is 60 Hz, so this host cannot tell a cap that is the
-refresh rate from a fixed 60.
+refresh rate from a fixed 60. That follow-up is TASK107 (#251). One
+data point already in this file: the TASK90 section records the
+`demo1.dm2` timedemo of `ref_metal` running at the build VM's display
+rate of 120 fps whatever `r_vsync` and `vid_maxfps` said (window size
+not given there).
