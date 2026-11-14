@@ -29,7 +29,9 @@
  * =======================================================================
  */
 
+#include <limits.h>
 #include <math.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -3347,6 +3349,1821 @@ test_trans(void)
 	CHECK(rm_world_frame(6e9f) == 2147483647 && rm_world_frame(-6e9f) == (-2147483647 - 1) && rm_world_frame(NAN) == 0);
 	CHECK(rm_world_frame(0.6f) == 1 && rm_world_frame(-0.6f) == -1);
 }
+/* gl1's SHADEDOT_QUANT (gl1_mesh.c) and BACKFACE_EPSILON (gl1/header/local.h) */
+#define SHADEDOT_QUANT_REF 16
+#define BACKFACE_EPSILON_REF 0.01
+
+/* ---- N7: alias models, the view weapon and brush entities ----------------------------- */
+
+/* gl1_mesh.c's tables, from the files it includes */
+static float ref_avertexnormals[162][3] = {
+#include "../../src/client/refresh/constants/anorms.h"
+};
+
+static float ref_avertexnormal_dots[16][256] = {
+#include "../../src/client/refresh/constants/anormtab.h"
+};
+
+/*
+ * The shared loader (files/models.c) is linked to hold rm_md2_check and
+ * rm_sp2_check to it: a hunk in malloc'd memory with the bound of
+ * src/backends/unix/shared/hunk.c, and the loader's other callees.
+ */
+static unsigned char *hunk_mem;
+static size_t hunk_max, hunk_used;
+static int hunk_overflow, find_calls;
+
+void *
+Hunk_Begin(int maxsize)
+{
+	free(hunk_mem);
+	hunk_max = (size_t)maxsize + sizeof(size_t) + 32;
+	hunk_used = 0;
+	hunk_mem = calloc(1, hunk_max + sizeof(size_t));
+	return hunk_mem ? hunk_mem + sizeof(size_t) : NULL;
+}
+
+void *
+Hunk_Alloc(int size)
+{
+	unsigned char *buf;
+
+	size = (size + 31) & ~31;
+
+	if (hunk_used + size > hunk_max)
+	{
+		hunk_overflow++;
+		return NULL;
+	}
+
+	buf = hunk_mem + sizeof(size_t) + hunk_used;
+	hunk_used += size;
+	return buf;
+}
+
+void
+Com_Error(int code, const char *fmt, ...)
+{
+	/* the loader's paths taken here never call it */
+	printf("FAIL: Com_Error(%d, %s)\n", code, fmt);
+	abort();
+}
+
+struct image_s *
+GetTexImage(const char *name, findimage_t find_image)
+{
+	(void)name;
+	(void)find_image;
+	return NULL;
+}
+
+/* the loader's find_image: any name, read to its end (ASAN sees a name past its record) */
+static struct image_s *
+host_find_image(const char *name, imagetype_t type)
+{
+	static int dummy;
+
+	(void)type;
+	find_calls++;
+	return strlen(name) < 1000 ? (struct image_s *)&dummy : NULL;
+}
+
+/* gl1_mesh.c, R_LerpVerts, verbatim (the entity's flags passed in) */
+static void
+ref_LerpVerts(int flags, int nverts, dtrivertx_t *v, dtrivertx_t *ov,
+		dtrivertx_t *verts, float *lerp, float move[3],
+		float frontv[3], float backv[3])
+{
+	int i;
+
+	if (flags &
+		(RF_SHELL_RED | RF_SHELL_GREEN |
+		 RF_SHELL_BLUE | RF_SHELL_DOUBLE |
+		 RF_SHELL_HALF_DAM))
+	{
+		for (i = 0; i < nverts; i++, v++, ov++, lerp += 4)
+		{
+			float *normal = ref_avertexnormals[verts[i].lightnormalindex];
+
+			lerp[0] = move[0] + ov->v[0] * backv[0] + v->v[0] * frontv[0] +
+					  normal[0] * POWERSUIT_SCALE;
+			lerp[1] = move[1] + ov->v[1] * backv[1] + v->v[1] * frontv[1] +
+					  normal[1] * POWERSUIT_SCALE;
+			lerp[2] = move[2] + ov->v[2] * backv[2] + v->v[2] * frontv[2] +
+					  normal[2] * POWERSUIT_SCALE;
+		}
+	}
+	else
+	{
+		for (i = 0; i < nverts; i++, v++, ov++, lerp += 4)
+		{
+			lerp[0] = move[0] + ov->v[0] * backv[0] + v->v[0] * frontv[0];
+			lerp[1] = move[1] + ov->v[1] * backv[1] + v->v[1] * frontv[1];
+			lerp[2] = move[2] + ov->v[2] * backv[2] + v->v[2] * frontv[2];
+		}
+	}
+}
+
+/* gl1_mesh.c, R_DrawAliasFrameLerp up to R_LerpVerts, verbatim */
+static void
+ref_lerp_setup(entity_t *currententity, daliasframe_t *frame, daliasframe_t *oldframe, float backlerp,
+		vec3_t move, vec3_t frontv, vec3_t backv)
+{
+	int i;
+	float frontlerp;
+	vec3_t delta, vectors[3];
+
+	frontlerp = 1.0 - backlerp;
+
+	/* move should be the delta back to the previous frame * backlerp */
+	VectorSubtract(currententity->oldorigin, currententity->origin, delta);
+	AngleVectors(currententity->angles, vectors[0], vectors[1], vectors[2]);
+
+	move[0] = DotProduct(delta, vectors[0]); /* forward */
+	move[1] = -DotProduct(delta, vectors[1]); /* left */
+	move[2] = DotProduct(delta, vectors[2]); /* up */
+
+	VectorAdd(move, oldframe->translate, move);
+
+	for (i = 0; i < 3; i++)
+	{
+		move[i] = backlerp * move[i] + frontlerp * frame->translate[i];
+	}
+
+	for (i = 0; i < 3; i++)
+	{
+		frontv[i] = frontlerp * frame->scale[i];
+		backv[i] = backlerp * oldframe->scale[i];
+	}
+}
+
+/* rm_alias_lerp_setup and rm_alias_lerp of one entity and two frames, as rm_mesh.c calls them */
+static void
+rm_lerp_of(entity_t *e, daliasframe_t *frame, daliasframe_t *oldframe, int n, float (*out)[4])
+{
+	vec3_t delta, vectors[3], move, frontv, backv;
+
+	VectorSubtract(e->oldorigin, e->origin, delta);
+	AngleVectors(e->angles, vectors[0], vectors[1], vectors[2]);
+	rm_alias_lerp_setup(frame->scale, frame->translate, oldframe->scale, oldframe->translate, e->backlerp, delta,
+			vectors[0], vectors[1], vectors[2], move, frontv, backv);
+	rm_alias_lerp(n, (const unsigned char *)frame->verts, (const unsigned char *)oldframe->verts,
+			(e->flags & RM_RF_SHELLS) != 0, move, frontv, backv, out);
+}
+
+static daliasframe_t *
+frame_new(int n)
+{
+	return calloc(1, sizeof(daliasframe_t) + (size_t)n * sizeof(dtrivertx_t));
+}
+
+/* the lerped position of two vertices, by hand and as gl1 computes it, and random frames against gl1 */
+static void
+test_alias_lerp(void)
+{
+	static const float backlerps[3] = { 0, 0.25f, 1 };
+	daliasframe_t *f = frame_new(2), *o = frame_new(2);
+	float got[64][4], want[64][4];
+	entity_t e;
+	int i, k, n, same = 1;
+
+	CHECK(sizeof(dmdl_t) == RM_MD2_HEADER && offsetof(daliasframe_t, verts) == RM_MD2_FRAME_HEADER);
+	CHECK(sizeof(dtrivertx_t) == 4 && sizeof(rm_avert_t) == RM_AVERT_STRIDE);
+	CHECK(RF_MINLIGHT == RM_RF_MINLIGHT && RF_WEAPONMODEL == RM_RF_WEAPONMODEL && RF_FULLBRIGHT == RM_RF_FULLBRIGHT);
+	CHECK(RF_DEPTHHACK == RM_RF_DEPTHHACK && RF_TRANSLUCENT == RM_RF_TRANSLUCENT && RF_GLOW == RM_RF_GLOW);
+	CHECK(RF_SHELL_RED == RM_RF_SHELL_RED && RF_SHELL_GREEN == RM_RF_SHELL_GREEN && RF_SHELL_BLUE == RM_RF_SHELL_BLUE);
+	CHECK(RF_IR_VISIBLE == RM_RF_IR_VISIBLE && RF_SHELL_DOUBLE == RM_RF_SHELL_DOUBLE);
+	CHECK(RF_SHELL_HALF_DAM == RM_RF_SHELL_HALF_DAM && RDF_IRGOGGLES == RM_RDF_IRGOGGLES);
+	CHECK(POWERSUIT_SCALE == RM_POWERSUIT_SCALE && MAX_VERTS == RM_MD2_MAX_VERTS && MAX_MD2SKINS == RM_MD2_MAX_SKINS);
+	CHECK(MAX_SKINNAME == RM_MD2_SKINNAME && MAX_LBM_HEIGHT == RM_MD2_MAX_SKINHEIGHT && ALIAS_VERSION == RM_MD2_VERSION);
+	CHECK(IDALIASHEADER == RM_MD2_IDENT && IDSPRITEHEADER == RM_SP2_IDENT && SPRITE_VERSION == RM_SP2_VERSION);
+	CHECK(offsetof(dsprite_t, frames) == RM_SP2_HEADER && sizeof(dsprframe_t) == RM_SP2_FRAME);
+
+	/* the frame: scale 0.5, translate (10, 20, 30); the old one scale 1 at 0; vertex 0 (2, 4, 6), old (8, 8, 8) */
+	memset(&e, 0, sizeof(e));
+
+	for (k = 0; k < 3; k++)
+	{
+		f->scale[k] = 0.5f;
+		f->translate[k] = 10.0f * (k + 1);
+		o->scale[k] = 1;
+		o->translate[k] = 0;
+		f->verts[0].v[k] = (byte)(2 * (k + 1));
+		o->verts[0].v[k] = 8;
+		f->verts[1].v[k] = 255;
+		o->verts[1].v[k] = 0;
+	}
+
+	f->verts[0].lightnormalindex = 5;
+	f->verts[1].lightnormalindex = 161;
+
+	for (i = 0; i < 3; i++)
+	{
+		vec3_t move, frontv, backv;
+
+		e.backlerp = backlerps[i];
+		rm_lerp_of(&e, f, o, 2, got);
+		ref_lerp_setup(&e, f, o, e.backlerp, move, frontv, backv);
+		ref_LerpVerts(0, 2, f->verts, o->verts, f->verts, want[0], move, frontv, backv);
+		CHECK(memcmp(got[0], want[0], 3 * sizeof(float)) == 0 && memcmp(got[1], want[1], 3 * sizeof(float)) == 0);
+	}
+
+	/* by hand: backlerp 0 is the frame, 1 the old frame, 0.25 a quarter of the way back */
+	e.backlerp = 0;
+	rm_lerp_of(&e, f, o, 2, got);
+	CHECK(got[0][0] == 11 && got[0][1] == 22 && got[0][2] == 33 && got[1][0] == 137.5f);
+	e.backlerp = 1;
+	rm_lerp_of(&e, f, o, 2, got);
+	CHECK(got[0][0] == 8 && got[0][1] == 8 && got[0][2] == 8 && got[1][2] == 0);
+	e.backlerp = 0.25f;
+	rm_lerp_of(&e, f, o, 2, got);
+	CHECK(got[0][0] == 10.25f && got[0][1] == 18.5f && got[0][2] == 26.75f);
+	/* a shell: pushed out along normal 5 by 4 units */
+	e.flags = RF_SHELL_GREEN;
+	e.backlerp = 0;
+	rm_lerp_of(&e, f, o, 2, got);
+	CHECK(fabsf(got[0][0] - (11 + 4 * ref_avertexnormals[5][0])) < 1e-5f &&
+		fabsf(got[0][2] - (33 + 4 * ref_avertexnormals[5][2])) < 1e-5f);
+	/* the entity moved since the old frame: the delta is turned into the entity's axes */
+	e.flags = 0;
+	e.backlerp = 1;
+	e.oldorigin[0] = 16;
+	rm_lerp_of(&e, f, o, 2, got);
+	CHECK(got[0][0] == 24 && got[0][1] == 8);
+	free(f);
+	free(o);
+
+	/* random frames, entities and lerps against gl1, bit for bit */
+	for (n = 0; n < 4000; n++)
+	{
+		const int nv = 1 + (int)(rng() % 64);
+		vec3_t move, frontv, backv;
+
+		f = frame_new(nv);
+		o = frame_new(nv);
+		memset(&e, 0, sizeof(e));
+
+		for (k = 0; k < 3; k++)
+		{
+			f->scale[k] = rngf(0, 2);
+			f->translate[k] = rngf(-300, 300);
+			o->scale[k] = rngf(0, 2);
+			o->translate[k] = rngf(-300, 300);
+			e.origin[k] = rngf(-4000, 4000);
+			e.oldorigin[k] = e.origin[k] + rngf(-40, 40);
+			e.angles[k] = rngf(-360, 360);
+		}
+
+		for (i = 0; i < nv; i++)
+		{
+			for (k = 0; k < 3; k++)
+			{
+				f->verts[i].v[k] = (byte)rng();
+				o->verts[i].v[k] = (byte)rng();
+			}
+
+			f->verts[i].lightnormalindex = (byte)(rng() % 162);
+			o->verts[i].lightnormalindex = (byte)(rng() % 162);
+		}
+
+		e.backlerp = (n % 7 == 0) ? 0 : (n % 7 == 1) ? 1 : rngf(0, 1);
+		e.flags = (n & 8) ? RF_SHELL_RED : (n & 16) ? RF_SHELL_HALF_DAM : 0;
+		rm_lerp_of(&e, f, o, nv, got);
+		ref_lerp_setup(&e, f, o, e.backlerp, move, frontv, backv);
+		ref_LerpVerts(e.flags, nv, f->verts, o->verts, f->verts, want[0], move, frontv, backv);
+
+		for (i = 0; i < nv; i++)
+		{
+			same = same && (memcmp(got[i], want[i], 3 * sizeof(float)) == 0);
+		}
+
+		free(f);
+		free(o);
+	}
+
+	CHECK(same);
+}
+
+/* gl1_mesh.c, R_DrawAliasModel's lighting from "get lighting information" to the IR goggles, verbatim but the
+   light point (R_LightPoint's colour) and the cvars passed in */
+static void
+ref_shadelight(entity_t *currententity, int rdflags, const float *point, float time, float overbright,
+		float *shadelight)
+{
+	int i;
+
+	if (currententity->flags &
+		(RF_SHELL_HALF_DAM | RF_SHELL_GREEN | RF_SHELL_RED |
+		 RF_SHELL_BLUE | RF_SHELL_DOUBLE))
+	{
+		VectorClear(shadelight);
+
+		if (currententity->flags & RF_SHELL_HALF_DAM)
+		{
+			shadelight[0] = 0.56;
+			shadelight[1] = 0.59;
+			shadelight[2] = 0.45;
+		}
+
+		if (currententity->flags & RF_SHELL_DOUBLE)
+		{
+			shadelight[0] = 0.9;
+			shadelight[1] = 0.7;
+		}
+
+		if (currententity->flags & RF_SHELL_RED)
+		{
+			shadelight[0] = 1.0;
+		}
+
+		if (currententity->flags & RF_SHELL_GREEN)
+		{
+			shadelight[1] = 1.0;
+		}
+
+		if (currententity->flags & RF_SHELL_BLUE)
+		{
+			shadelight[2] = 1.0;
+		}
+	}
+	else if (currententity->flags & RF_FULLBRIGHT)
+	{
+		for (i = 0; i < 3; i++)
+		{
+			shadelight[i] = 1.0;
+		}
+	}
+	else
+	{
+		VectorCopy(point, shadelight);
+	}
+
+	if (currententity->flags & RF_MINLIGHT)
+	{
+		for (i = 0; i < 3; i++)
+		{
+			if (shadelight[i] > 0.1)
+			{
+				break;
+			}
+		}
+
+		if (i == 3)
+		{
+			shadelight[0] = 0.1;
+			shadelight[1] = 0.1;
+			shadelight[2] = 0.1;
+		}
+	}
+
+	if (currententity->flags & RF_GLOW)
+	{
+		/* bonus items will pulse with time */
+		float scale;
+		float min;
+
+		scale = 0.1 * sin(time * 7);
+
+		for (i = 0; i < 3; i++)
+		{
+			min = shadelight[i] * 0.8;
+			shadelight[i] += scale;
+
+			if (shadelight[i] < min)
+			{
+				shadelight[i] = min;
+			}
+		}
+	}
+
+	if (overbright)
+	{
+		for (i = 0; i < 3; ++i)
+		{
+			shadelight[i] *= overbright;
+		}
+	}
+
+	/* ir goggles color override */
+	if (rdflags & RDF_IRGOGGLES && currententity->flags &
+		RF_IR_VISIBLE)
+	{
+		shadelight[0] = 1.0;
+		shadelight[1] = 0.0;
+		shadelight[2] = 0.0;
+	}
+}
+
+/* gl1_mesh.c, one vertex's colour in R_DrawAliasFrameLerp with GLBUFFER_COLOR (gammatable passed in), verbatim */
+static void
+ref_vertex_color(float l, const float *shadelight, int shell, int minlight_set, const byte *minlight,
+		const byte *gammatable, float alpha, byte *clr)
+{
+	int idx[3], i;
+
+	for (i = 0; i < 3; i++)
+	{
+		if (shell)
+		{
+			idx[i] = shadelight[i] * 255;
+		}
+		else
+		{
+			idx[i] = l * shadelight[i] * 255;
+		}
+
+		idx[i] = Q_clamp(idx[i], 0, 255);
+	}
+
+	if (minlight_set)
+	{
+		for (i = 0; i < 3; i++)
+		{
+			idx[i] = minlight[idx[i]];
+		}
+	}
+
+	clr[0] = gammatable[idx[0]];
+	clr[1] = gammatable[idx[1]];
+	clr[2] = gammatable[idx[2]];
+	clr[3] = alpha * 255;
+}
+
+/* gl1_main.c, R_SetLightLevel's choice, verbatim */
+static float
+ref_light_level(const float *shadelight)
+{
+	float v;
+
+	if (shadelight[0] > shadelight[1])
+	{
+		if (shadelight[0] > shadelight[2])
+		{
+			v = 150 * shadelight[0];
+		}
+		else
+		{
+			v = 150 * shadelight[2];
+		}
+	}
+	else
+	{
+		if (shadelight[1] > shadelight[2])
+		{
+			v = 150 * shadelight[1];
+		}
+		else
+		{
+			v = 150 * shadelight[2];
+		}
+	}
+
+	return v;
+}
+
+/* the shade dots, the vertex colour of one normal and one light, the shells, the alpha and the light level */
+static void
+test_alias_shade(void)
+{
+	static const int flagsets[] = { 0, RF_MINLIGHT, RF_GLOW, RF_FULLBRIGHT, RF_SHELL_RED, RF_SHELL_GREEN | RF_SHELL_BLUE,
+		RF_SHELL_DOUBLE, RF_SHELL_HALF_DAM, RF_SHELL_HALF_DAM | RF_SHELL_DOUBLE | RF_SHELL_RED, RF_MINLIGHT | RF_GLOW,
+		RF_IR_VISIBLE, RF_IR_VISIBLE | RF_SHELL_BLUE, RF_FULLBRIGHT | RF_MINLIGHT | RF_GLOW, RF_TRANSLUCENT };
+	byte gamma[256], minl[256], clr[4];
+	float sl[3], want[3], rgba[4], point[3];
+	int i, k, n, same = 1, row;
+
+	for (i = 0; i < 256; i++)
+	{
+		gamma[i] = (byte)(255 - i / 2);
+		minl[i] = (byte)(i < 40 ? 40 : i);
+	}
+
+	/* the dots: the table itself, by row and normal; the row of a yaw as gl1 takes it */
+	CHECK(rm_shadedot(0, 0) == ref_avertexnormal_dots[0][0] && rm_shadedot(15, 255) == ref_avertexnormal_dots[15][255]);
+	CHECK(rm_shadedot(7, 100) == ref_avertexnormal_dots[7][100] && rm_shadedot(16, 256) == ref_avertexnormal_dots[0][0]);
+	CHECK(rm_shadedot_row(0) == 0 && rm_shadedot_row(22.5f) == 1 && rm_shadedot_row(22.4f) == 0);
+	CHECK(rm_shadedot_row(359.9f) == 15 && rm_shadedot_row(360) == 0 && rm_shadedot_row(-22.5f) == 15);
+	CHECK(rm_shadedot_row(-22.4f) == 0 && rm_shadedot_row(-45) == 14 && rm_shadedot_row(1e20f) == 15);
+	CHECK(rm_shadedot_row(-1e20f) == 0 && rm_shadedot_row(NAN) == 0);
+
+	for (n = 0; n < 100000; n++)
+	{
+		const float yaw = (n < 2881) ? (float)(n - 1440) * 0.5f : rngf(-1e6f, 1e6f);
+
+		same = same && (rm_shadedot_row(yaw) == (((int)(yaw * (SHADEDOT_QUANT_REF / 360.0))) & (SHADEDOT_QUANT_REF - 1)));
+	}
+
+	CHECK(same);
+
+	/* one normal and one light: l * light * 255, clamped, through minlight and gamma, then normalised */
+	sl[0] = 0.5f;
+	sl[1] = 1.0f;
+	sl[2] = 2.0f;
+	row = 3;
+	rm_alias_color(rm_shadedot(row, 42), sl, 0, NULL, gamma, 255, rgba);
+	ref_vertex_color(ref_avertexnormal_dots[row][42], sl, 0, 0, minl, gamma, 1.0f, clr);
+
+	for (k = 0; k < 4; k++)
+	{
+		CHECK(rgba[k] == clr[k] / 255.0f);
+	}
+
+	/* by hand: dot 1.0 of row 0, normal 13 (a sample), the light 0.5 gives index 127, gamma 255 - 63 */
+	for (i = 0; i < 256 && ref_avertexnormal_dots[0][i] != 1.0f; i++)
+	{
+	}
+
+	CHECK(i < 256);
+	rm_alias_color(rm_shadedot(0, i), sl, 0, NULL, gamma, 128, rgba);
+	CHECK(rgba[0] == 192 / 255.0f && rgba[1] == 128 / 255.0f && rgba[2] == 128 / 255.0f && rgba[3] == 128 / 255.0f);
+	/* with minlight, index 127 stays and 0 is lifted */
+	sl[0] = 0;
+	rm_alias_color(1.0f, sl, 0, minl, gamma, 255, rgba);
+	CHECK(rgba[0] == (255 - 20) / 255.0f && rgba[1] == 128 / 255.0f);
+	/* the shell: shadelight alone, no dot */
+	sl[0] = 1.0f;
+	sl[1] = 0.25f;
+	sl[2] = 0;
+	rm_alias_color(0.0f, sl, 1, NULL, gamma, 76, rgba);
+	CHECK(rgba[0] == 128 / 255.0f && rgba[1] == (255 - 31) / 255.0f && rgba[2] == 1.0f && rgba[3] == 76 / 255.0f);
+	/* a light gl1 cannot convert (a NaN, past an int) saturates: no undefined conversion */
+	sl[0] = NAN;
+	sl[1] = 1e30f;
+	sl[2] = -1e30f;
+	rm_alias_color(1.0f, sl, 0, NULL, gamma, 255, rgba);
+	CHECK(rgba[0] == 1.0f && rgba[1] == 128 / 255.0f && rgba[2] == 1.0f);
+
+	/* random lights and dots against gl1 */
+	for (n = 0; n < 200000; n++)
+	{
+		const int shell = n & 1, mset = (n >> 1) & 1, nrm = (int)(rng() % 256);
+		float a = rngf(0, 1);
+
+		row = (int)(rng() % 16);
+
+		for (k = 0; k < 3; k++)
+		{
+			sl[k] = (n % 11 == 0) ? (float)(rng() % 300) / 255.0f : rngf(-0.5f, 4);
+		}
+
+		rm_alias_color(rm_shadedot(row, nrm), sl, shell, mset ? minl : NULL, gamma, rm_alias_alpha(RF_TRANSLUCENT, a),
+				rgba);
+		ref_vertex_color(ref_avertexnormal_dots[row][nrm], sl, shell, mset, minl, gamma, a, clr);
+
+		for (k = 0; k < 4; k++)
+		{
+			same = same && (rgba[k] == clr[k] / 255.0f);
+		}
+	}
+
+	CHECK(same);
+
+	/* the alpha byte */
+	CHECK(rm_alias_alpha(0, 0.3f) == 255 && rm_alias_alpha(RF_TRANSLUCENT, 0.3f) == 76);
+	CHECK(rm_alias_alpha(RF_TRANSLUCENT, 1) == 255 && rm_alias_alpha(RF_TRANSLUCENT, 0) == 0);
+	CHECK(rm_alias_alpha(RF_TRANSLUCENT, 2) == 255 && rm_alias_alpha(RF_TRANSLUCENT, -1) == 0);
+	CHECK(rm_alias_alpha(RF_TRANSLUCENT, NAN) == 0 && rm_alias_alpha(RF_TRANSLUCENT, -0.003f) == 0);
+	CHECK(rm_alias_alpha(RF_TRANSLUCENT, 255.9f / 255) == 255 && rm_alias_alpha(RF_TRANSLUCENT, 254.9f / 255) == 254);
+
+	/* the light of every flag set, against gl1 */
+	CHECK(!rm_alias_lit(RF_SHELL_DOUBLE) && !rm_alias_lit(RF_FULLBRIGHT) && rm_alias_lit(RF_MINLIGHT | RF_GLOW));
+	CHECK(!rm_alias_lit(RF_SHELL_HALF_DAM) && !rm_alias_lit(RF_SHELL_BLUE) && rm_alias_lit(RF_TRANSLUCENT));
+
+	for (n = 0; n < 60000; n++)
+	{
+		entity_t e;
+		const int rdflags = (n & 1) ? RDF_IRGOGGLES : 0;
+		const float t = rngf(0, 2000), ob = (float)((n >> 1) % 5 == 3 ? 4 : (n >> 1) % 5);
+
+		memset(&e, 0, sizeof(e));
+		e.flags = flagsets[n % (sizeof(flagsets) / sizeof(flagsets[0]))];
+
+		for (k = 0; k < 3; k++)
+		{
+			point[k] = (n % 3 == 0) ? 0.05f * (float)(rng() % 4) : rngf(0, 3);
+		}
+
+		rm_alias_shade(e.flags, rdflags, point, t, ob, sl);
+		ref_shadelight(&e, rdflags, point, t, ob, want);
+		same = same && (memcmp(sl, want, sizeof(sl)) == 0);
+	}
+
+	CHECK(same);
+
+	/* by hand: minlight lifts a dark model to 0.1, the goggles paint it red */
+	point[0] = point[1] = point[2] = 0.05f;
+	rm_alias_shade(RF_MINLIGHT, 0, point, 0, 0, sl);
+	CHECK(sl[0] == 0.1f && sl[1] == 0.1f && sl[2] == 0.1f);
+	rm_alias_shade(RF_MINLIGHT | RF_IR_VISIBLE, RDF_IRGOGGLES, point, 0, 0, sl);
+	CHECK(sl[0] == 1 && sl[1] == 0 && sl[2] == 0);
+	rm_alias_shade(RF_SHELL_DOUBLE | RF_SHELL_BLUE, 0, point, 0, 2, sl);
+	CHECK(sl[0] == 1.8f && sl[1] == 1.4f && sl[2] == 2);
+
+	/* the light level */
+	for (n = 0; n < 10000; n++)
+	{
+		for (k = 0; k < 3; k++)
+		{
+			sl[k] = (n % 5 == 0) ? (float)(rng() % 3) : rngf(0, 2);
+		}
+
+		same = same && (rm_light_level(sl) == ref_light_level(sl));
+	}
+
+	CHECK(same);
+	sl[0] = sl[1] = sl[2] = 1;
+	CHECK(rm_light_level(sl) == 150);
+}
+
+/* gl1_buffer.c, R_SetBufferIndices's two loops, verbatim (vtx_ptr and idx_ptr passed in; the count cast for -Wextra) */
+static void
+ref_SetBufferIndices(int fan, unsigned vertices_num, unsigned short *vtx_ptr, unsigned short *idx_ptr,
+		unsigned short *idx)
+{
+	int i;
+
+	if (fan)
+	{
+		for (i = 0; i < (int)vertices_num-2; i++)
+		{
+			idx[*idx_ptr]   = *vtx_ptr;
+			idx[*idx_ptr+1] = *vtx_ptr+i+1;
+			idx[*idx_ptr+2] = *vtx_ptr+i+2;
+			*idx_ptr += 3;
+		}
+	}
+	else
+	{
+		for (i = 0; i < (int)vertices_num-2; i++)
+		{
+			if (i % 2 == 0)
+			{
+				idx[*idx_ptr]   = *vtx_ptr+i;
+				idx[*idx_ptr+1] = *vtx_ptr+i+1;
+				idx[*idx_ptr+2] = *vtx_ptr+i+2;
+			}
+			else	// backwards order
+			{
+				idx[*idx_ptr]   = *vtx_ptr+i+2;
+				idx[*idx_ptr+1] = *vtx_ptr+i+1;
+				idx[*idx_ptr+2] = *vtx_ptr+i;
+			}
+			*idx_ptr += 3;
+		}
+	}
+
+	*vtx_ptr += vertices_num;
+}
+
+/*
+ * gl1_mesh.c, R_DrawAliasFrameLerp's walk of the command stream, verbatim
+ * but GLBUFFER_* writing to the arrays, R_SetBufferIndices above, and the
+ * colour through ref_vertex_color (GLBUFFER_COLOR); the number of vertices.
+ */
+static int
+ref_emit(int flags, int *order, float (*s_lerped)[4], dtrivertx_t *verts, float *shadedots, const float *shadelight,
+		int minlight_set, const byte *minlight, const byte *gammatable, float alpha, float *vtx, float *tx, byte *cl,
+		unsigned short *idx, int *nidx)
+{
+	unsigned short vtx_ptr = 0, idx_ptr = 0;
+	int count, index_xyz, vt = 0;
+	float tex[2], l;
+
+	while (1)
+	{
+		/* get the vertex count and primitive type */
+		count = *order++;
+
+		if (!count)
+		{
+			break; /* done */
+		}
+
+		if (count < 0)
+		{
+			count = -count;
+			ref_SetBufferIndices(1, count, &vtx_ptr, &idx_ptr, idx);
+		}
+		else
+		{
+			ref_SetBufferIndices(0, count, &vtx_ptr, &idx_ptr, idx);
+		}
+
+		if (flags &
+			(RF_SHELL_RED | RF_SHELL_GREEN | RF_SHELL_BLUE))
+		{
+			do
+			{
+				index_xyz = order[2];
+				order += 3;
+
+				vtx[3 * vt] = s_lerped[index_xyz][0];
+				vtx[3 * vt + 1] = s_lerped[index_xyz][1];
+				vtx[3 * vt + 2] = s_lerped[index_xyz][2];
+				tx[2 * vt] = tx[2 * vt + 1] = 0;
+				ref_vertex_color(0, shadelight, 1, minlight_set, minlight, gammatable, alpha, cl + 4 * vt);
+				vt++;
+			}
+			while (--count);
+		}
+		else
+		{
+			do
+			{
+				/* texture coordinates come from the draw list */
+				tex[0] = ((float *)order)[0];
+				tex[1] = ((float *)order)[1];
+
+				index_xyz = order[2];
+				order += 3;
+
+				/* normals and vertexes come from the frame list */
+				l = shadedots[verts[index_xyz].lightnormalindex];
+
+				vtx[3 * vt] = s_lerped[index_xyz][0];
+				vtx[3 * vt + 1] = s_lerped[index_xyz][1];
+				vtx[3 * vt + 2] = s_lerped[index_xyz][2];
+				tx[2 * vt] = tex[0];
+				tx[2 * vt + 1] = tex[1];
+				ref_vertex_color(l, shadelight, 0, minlight_set, minlight, gammatable, alpha, cl + 4 * vt);
+				vt++;
+			}
+			while (--count);
+		}
+	}
+
+	*nidx = idx_ptr;
+	return vt;
+}
+
+/* a float's bits in an int of the command stream */
+static int
+fbits(float f)
+{
+	int i;
+
+	memcpy(&i, &f, sizeof(i));
+	return i;
+}
+
+/* the command stream walked into vertices and triangles as gl1 walks it, and every refusal */
+static void
+test_alias_emit(void)
+{
+	enum { NXYZ = 6, VCAP = 600, ICAP = 1800 };
+	static float lerped[NXYZ][4];
+	static rm_avert_t out[VCAP];
+	static unsigned short idx[ICAP], ridx[ICAP];
+	static float vtx[3 * VCAP], tx[2 * VCAP];
+	static byte cl[4 * VCAP];
+	dtrivertx_t verts[NXYZ];
+	byte gamma[256];
+	const float sl[3] = { 0.75f, 0.5f, 1.25f };
+	/* a strip of 4 (two triangles, the second backwards) and a fan of 5, then the end */
+	int order[1 + 12 + 1 + 15 + 1];
+	int bad[sizeof(order) / sizeof(order[0])];
+	long nv, ni;
+	int i, k, n, rni, rnv, same = 1;
+
+	for (i = 0; i < 256; i++)
+	{
+		gamma[i] = (byte)i;
+	}
+
+	for (i = 0; i < NXYZ; i++)
+	{
+		for (k = 0; k < 3; k++)
+		{
+			lerped[i][k] = (float)(10 * i + k);
+		}
+
+		verts[i].lightnormalindex = (byte)(17 * i);
+	}
+
+	n = 0;
+	order[n++] = 4;
+
+	for (i = 0; i < 4; i++)
+	{
+		order[n++] = fbits(0.25f * i);
+		order[n++] = fbits(1 - 0.25f * i);
+		order[n++] = i;
+	}
+
+	order[n++] = -5;
+
+	for (i = 0; i < 5; i++)
+	{
+		order[n++] = fbits(0.5f);
+		order[n++] = fbits(0.125f * i);
+		order[n++] = NXYZ - 1 - i;
+	}
+
+	order[n++] = 0;
+
+	nv = rm_alias_emit(order, n, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, 2, sl, 0, NULL,
+			gamma, 255, out, VCAP, idx, ICAP, &ni);
+	CHECK(nv == 9 && ni == 15);
+	/* the strip's triangles 0 1 2, 3 2 1; the fan's 4 5 6, 4 6 7, 4 7 8 */
+	CHECK(idx[0] == 0 && idx[1] == 1 && idx[2] == 2 && idx[3] == 3 && idx[4] == 2 && idx[5] == 1);
+	CHECK(idx[6] == 4 && idx[7] == 5 && idx[8] == 6 && idx[12] == 4 && idx[13] == 7 && idx[14] == 8);
+	CHECK(out[1].pos[0] == 10 && out[1].pos[2] == 12 && out[1].pos[3] == 1 && out[1].uv[0] == 0.25f && out[1].uv[1] == 0.75f);
+	CHECK(out[4].pos[0] == 50 && out[8].pos[1] == 11 && out[8].uv[1] == 0.5f);
+
+	rnv = ref_emit(0, order, lerped, verts, ref_avertexnormal_dots[2], sl, 0, NULL, gamma, 1.0f, vtx, tx, cl,
+			ridx, &rni);
+	CHECK(rnv == nv && rni == ni && memcmp(idx, ridx, (size_t)ni * sizeof(idx[0])) == 0);
+
+	for (i = 0; i < rnv; i++)
+	{
+		same = same && out[i].pos[0] == vtx[3 * i] && out[i].pos[1] == vtx[3 * i + 1] && out[i].pos[2] == vtx[3 * i + 2];
+		same = same && out[i].uv[0] == tx[2 * i] && out[i].uv[1] == tx[2 * i + 1];
+
+		for (k = 0; k < 4; k++)
+		{
+			same = same && out[i].color[k] == cl[4 * i + k] / 255.0f;
+		}
+	}
+
+	CHECK(same);
+
+	/* the shell: no texture coordinate, shadelight's colour on every vertex */
+	nv = rm_alias_emit(order, n, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, 2, sl, 1, NULL,
+			gamma, 76, out, VCAP, idx, ICAP, &ni);
+	rnv = ref_emit(RF_SHELL_RED, order, lerped, verts, ref_avertexnormal_dots[2], sl, 0, NULL, gamma, 0.3f, vtx, tx, cl,
+			ridx, &rni);
+	CHECK(nv == rnv && ni == rni && out[3].uv[0] == 0 && out[3].color[0] == 191 / 255.0f && out[3].color[2] == 1);
+	CHECK(out[3].color[3] == cl[15] / 255.0f && out[5].pos[1] == vtx[16]);
+
+	/* random streams against gl1 */
+	for (k = 0; k < 2000; k++)
+	{
+		static int ro[3000];
+		const int shell = k & 1;
+		int strips = 1 + (int)(rng() % 20), s;
+
+		int m = 0;
+
+		for (s = 0; s < strips; s++)
+		{
+			int c = 3 + (int)(rng() % 20);
+
+			ro[m++] = (rng() & 1) ? c : -c;
+
+			for (i = 0; i < c; i++)
+			{
+				ro[m++] = fbits(rngf(-2, 2));
+				ro[m++] = fbits(rngf(-2, 2));
+				ro[m++] = (int)(rng() % NXYZ);
+			}
+		}
+
+		ro[m++] = 0;
+
+		for (i = 0; i < NXYZ; i++)
+		{
+			verts[i].lightnormalindex = (byte)rng();
+		}
+
+		nv = rm_alias_emit(ro, m, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, k % 16, sl, shell,
+				NULL, gamma, 255, out, VCAP, idx, ICAP, &ni);
+		rnv = ref_emit(shell ? RF_SHELL_BLUE : 0, ro, lerped, verts, ref_avertexnormal_dots[k % 16], sl, 0, NULL, gamma, 1,
+				vtx, tx, cl, ridx, &rni);
+		same = same && (nv == rnv) && (ni == rni) && (memcmp(idx, ridx, (size_t)ni * sizeof(idx[0])) == 0);
+
+		for (i = 0; i < rnv && same; i++)
+		{
+			same = out[i].pos[0] == vtx[3 * i] && out[i].pos[2] == vtx[3 * i + 2] && out[i].color[1] == cl[4 * i + 1] / 255.0f;
+			same = same && (shell || (out[i].uv[0] == tx[2 * i] && out[i].uv[1] == tx[2 * i + 1]));
+		}
+	}
+
+	CHECK(same);
+
+	/* refused: a count of 2, -2, 1, 0 vertices left, a vertex past the stream, an index past num_xyz or negative,
+	   no terminating 0, the vertex and the index capacity */
+	memcpy(bad, order, sizeof(order));
+	bad[0] = 2;
+	CHECK(rm_alias_emit(bad, n, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, 0, sl, 0, NULL, gamma, 255,
+			out, VCAP, idx, ICAP, &ni) == -1 && ni == 0);
+	bad[0] = -2;
+	CHECK(rm_alias_emit(bad, n, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, 0, sl, 0, NULL, gamma, 255,
+			out, VCAP, idx, ICAP, &ni) == -1);
+	bad[0] = INT_MIN;
+	CHECK(rm_alias_emit(bad, n, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, 0, sl, 0, NULL, gamma, 255,
+			out, VCAP, idx, ICAP, &ni) == -1);
+	bad[0] = 10;
+	CHECK(rm_alias_emit(bad, n, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, 0, sl, 0, NULL, gamma, 255,
+			out, VCAP, idx, ICAP, &ni) == -1);
+	memcpy(bad, order, sizeof(order));
+	bad[3] = NXYZ;
+	CHECK(rm_alias_emit(bad, n, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, 0, sl, 0, NULL, gamma, 255,
+			out, VCAP, idx, ICAP, &ni) == -1);
+	bad[3] = -1;
+	CHECK(rm_alias_emit(bad, n, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, 0, sl, 1, NULL, gamma, 255,
+			out, VCAP, idx, ICAP, &ni) == -1);
+	CHECK(rm_alias_emit(order, n - 1, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, 0, sl, 0, NULL, gamma,
+			255, out, VCAP, idx, ICAP, &ni) == -1);
+	CHECK(rm_alias_emit(order, n - 2, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, 0, sl, 0, NULL, gamma,
+			255, out, VCAP, idx, ICAP, &ni) == -1);
+	CHECK(rm_alias_emit(order, n, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, 0, sl, 0, NULL, gamma, 255,
+			out, 8, idx, ICAP, &ni) == -1);
+	CHECK(rm_alias_emit(order, n, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, 0, sl, 0, NULL, gamma, 255,
+			out, 9, idx, 14, &ni) == -1);
+	CHECK(rm_alias_emit(order, n, (const float (*)[4])lerped, (const unsigned char *)verts, NXYZ, 0, sl, 0, NULL, gamma, 255,
+			out, 9, idx, 15, &ni) == 9 && ni == 15);
+}
+
+/* gl1_mesh.c, R_CullAliasModel from the frame pointers on, verbatim (frustum passed in) */
+static qboolean
+ref_cull(daliasframe_t *pframe, daliasframe_t *poldframe, entity_t *e, cplane_t *frustum)
+{
+	int i;
+	vec3_t mins, maxs, bbox[8];
+	vec3_t vectors[3];
+	vec3_t thismins, oldmins, thismaxs, oldmaxs;
+	vec3_t angles;
+
+	/* compute axially aligned mins and maxs */
+	if (pframe == poldframe)
+	{
+		for (i = 0; i < 3; i++)
+		{
+			mins[i] = pframe->translate[i];
+			maxs[i] = mins[i] + pframe->scale[i] * 255;
+		}
+	}
+	else
+	{
+		for (i = 0; i < 3; i++)
+		{
+			thismins[i] = pframe->translate[i];
+			thismaxs[i] = thismins[i] + pframe->scale[i] * 255;
+
+			oldmins[i] = poldframe->translate[i];
+			oldmaxs[i] = oldmins[i] + poldframe->scale[i] * 255;
+
+			if (thismins[i] < oldmins[i])
+			{
+				mins[i] = thismins[i];
+			}
+			else
+			{
+				mins[i] = oldmins[i];
+			}
+
+			if (thismaxs[i] > oldmaxs[i])
+			{
+				maxs[i] = thismaxs[i];
+			}
+			else
+			{
+				maxs[i] = oldmaxs[i];
+			}
+		}
+	}
+
+	/* compute a full bounding box */
+	for (i = 0; i < 8; i++)
+	{
+		vec3_t tmp;
+
+		if (i & 1)
+		{
+			tmp[0] = mins[0];
+		}
+		else
+		{
+			tmp[0] = maxs[0];
+		}
+
+		if (i & 2)
+		{
+			tmp[1] = mins[1];
+		}
+		else
+		{
+			tmp[1] = maxs[1];
+		}
+
+		if (i & 4)
+		{
+			tmp[2] = mins[2];
+		}
+		else
+		{
+			tmp[2] = maxs[2];
+		}
+
+		VectorCopy(tmp, bbox[i]);
+	}
+
+	/* rotate the bounding box */
+	VectorCopy(e->angles, angles);
+	angles[YAW] = -angles[YAW];
+	AngleVectors(angles, vectors[0], vectors[1], vectors[2]);
+
+	for (i = 0; i < 8; i++)
+	{
+		vec3_t tmp;
+
+		VectorCopy(bbox[i], tmp);
+
+		bbox[i][0] = DotProduct(vectors[0], tmp);
+		bbox[i][1] = -DotProduct(vectors[1], tmp);
+		bbox[i][2] = DotProduct(vectors[2], tmp);
+
+		VectorAdd(e->origin, bbox[i], bbox[i]);
+	}
+
+	int p, f, aggregatemask = ~0;
+
+	for (p = 0; p < 8; p++)
+	{
+		int mask = 0;
+
+		for (f = 0; f < 4; f++)
+		{
+			float dp = DotProduct(frustum[f].normal, bbox[p]);
+
+			if ((dp - frustum[f].dist) < 0)
+			{
+				mask |= (1 << f);
+			}
+		}
+
+		aggregatemask &= mask;
+	}
+
+	if (aggregatemask)
+	{
+		return true;
+	}
+
+	return false;
+}
+
+/* rm_alias_culled as rm_mesh.c calls it */
+static int
+rm_cull_of(daliasframe_t *pframe, daliasframe_t *poldframe, entity_t *e, cplane_t *frustum)
+{
+	vec3_t angles, vectors[3];
+	float normal[4][3], dist[4];
+	int f;
+
+	VectorCopy(e->angles, angles);
+	angles[YAW] = -angles[YAW];
+	AngleVectors(angles, vectors[0], vectors[1], vectors[2]);
+
+	for (f = 0; f < 4; f++)
+	{
+		VectorCopy(frustum[f].normal, normal[f]);
+		dist[f] = frustum[f].dist;
+	}
+
+	return rm_alias_culled(pframe->scale, pframe->translate, poldframe->scale, poldframe->translate, pframe == poldframe,
+			e->origin, vectors[0], vectors[1], vectors[2], (const float (*)[3])normal, dist);
+}
+
+/* gl1_mesh.c's frame bounds: R_CullAliasModel's, then R_DrawAliasModel's (the weapon skips the first) */
+static void
+ref_frames(int *frame, int *oldframe, int num_frames, int weapon)
+{
+	if (!weapon)
+	{
+		if ((*frame >= num_frames) || (*frame < 0))
+		{
+			*frame = 0;
+		}
+
+		if ((*oldframe >= num_frames) || (*oldframe < 0))
+		{
+			*oldframe = 0;
+		}
+	}
+
+	if ((*frame >= num_frames) ||
+		(*frame < 0))
+	{
+		*frame = 0;
+		*oldframe = 0;
+	}
+
+	if ((*oldframe >= num_frames) ||
+		(*oldframe < 0))
+	{
+		*frame = 0;
+		*oldframe = 0;
+	}
+}
+
+/* culling, frames, skins, the entity's floats */
+static void
+test_alias_cull(void)
+{
+	static const int fr[] = { -2147483647 - 1, -5, -1, 0, 1, 2, 3, 4, 5, 2147483647 };
+	daliasframe_t *f = frame_new(1), *o = frame_new(1);
+	cplane_t frustum[4];
+	vec3_t vup_, vpn_, vright_, org;
+	entity_t e;
+	const void *skins[MAX_MD2SKINS];
+	int i, j, k, n, same = 1, culled = 0;
+	float nan3[3] = { 0, NAN, 0 }, inf3[3] = { INFINITY, 0, 0 }, z3[3] = { 0, 0, 0 };
+
+	for (n = 0; n < 40000; n++)
+	{
+		vec3_t ang;
+
+		for (k = 0; k < 3; k++)
+		{
+			org[k] = rngf(-500, 500);
+			ang[k] = rngf(-180, 180);
+		}
+
+		AngleVectors(ang, vpn_, vright_, vup_);
+		R_SetFrustum(vup_, vpn_, vright_, org, rngf(60, 120), rngf(50, 100), frustum);
+		memset(&e, 0, sizeof(e));
+
+		for (k = 0; k < 3; k++)
+		{
+			f->scale[k] = rngf(0, 1);
+			f->translate[k] = rngf(-150, 0);
+			o->scale[k] = rngf(0, 1);
+			o->translate[k] = rngf(-150, 0);
+			e.origin[k] = org[k] + rngf(-1500, 1500);
+			e.angles[k] = rngf(-360, 360);
+		}
+
+		k = rm_cull_of(f, (n & 1) ? f : o, &e, frustum);
+		culled += k;
+		same = same && (k == ref_cull(f, (n & 1) ? f : o, &e, frustum));
+	}
+
+	CHECK(same && culled > 1000 && culled < 39000);
+	free(f);
+	free(o);
+
+	/* the frame bounds, every pair of the table against gl1 (cull pass, then draw pass; the weapon draw pass alone) */
+	for (i = 0; i < (int)(sizeof(fr) / sizeof(fr[0])); i++)
+	{
+		for (j = 0; j < (int)(sizeof(fr) / sizeof(fr[0])); j++)
+		{
+			for (k = 0; k < 2; k++)
+			{
+				int a = fr[i], b = fr[j], ra = fr[i], rb = fr[j];
+
+				if (!k)
+				{
+					rm_alias_frames(&a, &b, 4, 1);
+				}
+
+				rm_alias_frames(&a, &b, 4, 0);
+				ref_frames(&ra, &rb, 4, k);
+				same = same && (a == ra) && (b == rb) && (a >= 0) && (a < 4) && (b >= 0) && (b < 4);
+			}
+		}
+	}
+
+	CHECK(same);
+	i = 5;
+	j = 2;
+	rm_alias_frames(&i, &j, 4, 1);
+	CHECK(i == 0 && j == 2);
+	i = 5;
+	j = 2;
+	rm_alias_frames(&i, &j, 4, 0);
+	CHECK(i == 0 && j == 0);
+
+	/* the skins: a set one, an unset one (0), past the array, negative */
+	memset(skins, 0, sizeof(skins));
+	skins[0] = skins;
+	skins[3] = skins;
+	CHECK(rm_alias_skin(3, skins) == 3 && rm_alias_skin(2, skins) == 0 && rm_alias_skin(31, skins) == 0);
+	CHECK(rm_alias_skin(32, skins) == 0 && rm_alias_skin(INT_MAX, skins) == 0 && rm_alias_skin(-1, skins) == 0);
+	CHECK(rm_alias_skin(INT_MIN, skins) == 0 && rm_alias_skin(0, skins) == 0);
+	skins[31] = skins;
+	CHECK(rm_alias_skin(31, skins) == 31);
+
+	/* the entity's floats */
+	CHECK(rm_entity_floats_ok(z3, z3, z3, 0.5f, 1));
+	CHECK(!rm_entity_floats_ok(nan3, z3, z3, 0, 1) && !rm_entity_floats_ok(z3, inf3, z3, 0, 1));
+	CHECK(!rm_entity_floats_ok(z3, z3, nan3, 0, 1) && !rm_entity_floats_ok(z3, z3, z3, NAN, 1));
+	CHECK(!rm_entity_floats_ok(z3, z3, z3, 0, -INFINITY) && !rm_entity_floats_ok(inf3, z3, z3, 0, 1));
+	CHECK(rm_entity_floats_ok(z3, z3, z3, -1e30f, 1e30f));
+}
+
+/* the weapon's projection and depth range, the entity matrix, the cull mode and the brush entity's arithmetic */
+static void
+test_weapon(void)
+{
+	float m[16], want[16], s[16], fr[16], w[16], got[16], c[4];
+	const float world_angles[3] = { 10, 20, 5 }, world_org[3] = { 30, -40, 50 };
+	double zn, zf;
+	int i, k, n, same = 1;
+
+	/* right-handed: the projection of gunfov as R_SetPerspective makes it; gunfov below 0 takes fov_y */
+	CHECK(rm_weapon_projection(m, 73.74f, 80, 0, 640, 480, 4, 0, 0, 1, 1));
+	CHECK(rm_projection(want, 80, 640, 480, 4, 0, 0, 1, 1) && memcmp(m, want, sizeof(m)) == 0);
+	CHECK(rm_weapon_projection(m, 73.74f, -1, 0, 640, 480, 4, 1, 1, 2.5f, 1));
+	CHECK(rm_projection(want, 73.74f, 640, 480, 4, 1, 1, 2.5f, 1) && memcmp(m, want, sizeof(m)) == 0);
+
+	/* left-handed: P = S F as the shim multiplies them (glLoadIdentity, glScalef(-1, 1, 1), glFrustum) */
+	CHECK(rm_weapon_projection(m, 73.74f, 80, 1, 640, 480, 4, 0, 1, 3.25f, 0.5f));
+	CHECK(rm_projection(fr, 80, 640, 480, 4, 0, 1, 3.25f, 0.5f));
+	mtl_mat_identity(want);
+	mtl_mat_scale(s, -1, 1, 1);
+	mtl_mat_mul(want, want, s);
+	mtl_mat_mul(want, want, fr);
+	CHECK(memcmp(m, want, sizeof(m)) == 0 && m[0] == -fr[0] && m[5] == fr[5] && m[14] == fr[14]);
+	/* hand 2 is not mirrored (gl1 tests hand == 1; R_DrawAliasModel does not draw the weapon at 2) */
+	CHECK(rm_weapon_projection(m, 73.74f, 80, 2, 640, 480, 4, 0, 1, 3.25f, 0.5f) && memcmp(m, fr, sizeof(m)) == 0);
+	/* a frustum glFrustum refuses leaves the mirror or the identity, as the shim's matrix stays */
+	CHECK(!rm_weapon_projection(m, 73.74f, 80, 1, 640, 0, 4, 0, 0, 0, 0) && m[0] == -1 && m[5] == 1 && m[15] == 1);
+	CHECK(!rm_weapon_projection(m, 0, 0, 0, 640, 480, 4, 0, 0, 0, 0) && m[0] == 1 && m[1] == 0 && m[15] == 1);
+
+	/* the depth range: gl1's 0 .. 0.3 with RF_DEPTHHACK; the window depth of a point there as GL computes it */
+	rm_alias_depth(0, &zn, &zf);
+	CHECK(zn == 0 && zf == 1);
+	rm_alias_depth(RF_DEPTHHACK | RF_WEAPONMODEL, &zn, &zf);
+	CHECK(zn == 0 && zf == 0.0 + 0.3 * (1.0 - 0.0) && zf == 0.3);
+	rm_alias_depth(RF_WEAPONMODEL, &zn, &zf);
+	CHECK(zf == 1);
+	/* a point 10 units ahead under the weapon's projection: GL's window depth zn + (zf - zn) * (ndc + 1) / 2 */
+	CHECK(rm_weapon_projection(m, 73.74f, 80, 1, 640, 480, 4, 0, 0, 0, 0));
+	rm_alias_depth(RF_DEPTHHACK, &zn, &zf);
+	c[0] = m[8] * -10 + m[12];
+	c[1] = m[9] * -10 + m[13];
+	c[2] = m[10] * -10 + m[14];
+	c[3] = m[11] * -10 + m[15];
+	CHECK(c[3] == 10 && fabs(zn + (zf - zn) * mtl_gl_clip_z(c[2], c[3]) / c[3] -
+		(zn + (zf - zn) * (c[2] / c[3] + 1) / 2)) < 1e-7);
+	/* and its near plane lands on 0, its far plane on 0.3 */
+	CHECK(mtl_gl_clip_z(-c[3], c[3]) == 0 && zn + (zf - zn) * mtl_gl_clip_z(c[3], c[3]) / c[3] == zf);
+
+	/* the cull mode */
+	CHECK(rm_alias_cull_mode(0, RF_WEAPONMODEL, 1) == RMB_CULL_NONE && rm_alias_cull_mode(1, 0, 1) == RMB_CULL_FRONT);
+	CHECK(rm_alias_cull_mode(1, RF_WEAPONMODEL, 1) == RMB_CULL_BACK && rm_alias_cull_mode(1, RF_WEAPONMODEL, 0) == RMB_CULL_FRONT);
+	CHECK(rm_alias_cull_mode(1, RF_WEAPONMODEL, 2) == RMB_CULL_FRONT && rm_alias_cull_mode(1, RF_DEPTHHACK, 1) == RMB_CULL_FRONT);
+	CHECK(rm_alias_cull_mode(1, RF_WEAPONMODEL, 0.5f) == RMB_CULL_FRONT);
+	CHECK(rm_alias_drawn(RF_WEAPONMODEL, 0) && rm_alias_drawn(RF_WEAPONMODEL, 1) && !rm_alias_drawn(RF_WEAPONMODEL, 2));
+	CHECK(rm_alias_drawn(0, 2) && rm_alias_drawn(RF_DEPTHHACK, 2));
+
+	/* the entity matrix: the shim's glTranslatef and glRotatef in R_RotateForEntity's order on the world's */
+	rm_view_matrix(w, world_angles, world_org);
+
+	for (n = 0; n < 2000; n++)
+	{
+		float a[3], o[3], r[16];
+
+		for (k = 0; k < 3; k++)
+		{
+			a[k] = (n < 8) ? 90.0f * (float)((n >> k) & 1) : rngf(-360, 360);
+			o[k] = rngf(-4000, 4000);
+		}
+
+		memcpy(want, w, sizeof(want));
+		mtl_mat_translate(r, o[0], o[1], o[2]);
+		mtl_mat_mul(want, want, r);
+		mtl_mat_rotate(r, a[1], 0, 0, 1);
+		mtl_mat_mul(want, want, r);
+		mtl_mat_rotate(r, -a[0], 0, 1, 0);
+		mtl_mat_mul(want, want, r);
+		mtl_mat_rotate(r, -a[2], 1, 0, 0);
+		mtl_mat_mul(want, want, r);
+		rm_entity_matrix(got, w, o, a);
+		same = same && (memcmp(got, want, sizeof(got)) == 0);
+	}
+
+	CHECK(same);
+
+	/* an entity at (5, 0, 0) turned 90 degrees in yaw: its +x is the world's +y, so (1, 0, 0) is (5, 1, 0) */
+	{
+		const float a[3] = { 0, 90, 0 }, o[3] = { 5, 0, 0 };
+		float eye1[3], eye2[3];
+
+		mtl_mat_identity(w);
+		rm_entity_matrix(got, w, o, a);
+
+		for (i = 0; i < 3; i++)
+		{
+			eye1[i] = got[i] * 1 + got[12 + i];
+			eye2[i] = (i == 0) ? 5 : (i == 1) ? 1 : 0;
+		}
+
+		CHECK(fabsf(eye1[0] - eye2[0]) < 1e-6f && fabsf(eye1[1] - eye2[1]) < 1e-6f && fabsf(eye1[2]) < 1e-6f);
+	}
+
+	/* the brush entity: its box, its modelorg and the facing of its surfaces, against gl1's lines */
+	for (n = 0; n < 20000; n++)
+	{
+		float org[3], ang[3], mins[3], maxs[3], vo[3], bmins[3], bmaxs[3], rmins[3], rmaxs[3], mo[3], rmo[3];
+		float fwd[3], rgt[3], up[3], nrm[3], dist, radius = rngf(0, 300);
+		int rot, rrot, pb = n & 1;
+
+		for (k = 0; k < 3; k++)
+		{
+			org[k] = rngf(-2000, 2000);
+			ang[k] = (n % 3) ? 0 : rngf(-180, 180);
+			mins[k] = rngf(-100, 0);
+			maxs[k] = rngf(0, 100);
+			vo[k] = rngf(-2000, 2000);
+			nrm[k] = rngf(-1, 1);
+		}
+
+		/* gl1_surf.c, R_DrawBrushModel */
+		if (ang[0] || ang[1] || ang[2])
+		{
+			rrot = true;
+
+			for (i = 0; i < 3; i++)
+			{
+				rmins[i] = org[i] - radius;
+				rmaxs[i] = org[i] + radius;
+			}
+		}
+		else
+		{
+			rrot = false;
+			VectorAdd(org, mins, rmins);
+			VectorAdd(org, maxs, rmaxs);
+		}
+
+		VectorSubtract(vo, org, rmo);
+
+		if (rrot)
+		{
+			vec3_t temp;
+			vec3_t forward, right, upv;
+
+			VectorCopy(rmo, temp);
+			AngleVectors(ang, forward, right, upv);
+			rmo[0] = DotProduct(temp, forward);
+			rmo[1] = -DotProduct(temp, right);
+			rmo[2] = DotProduct(temp, upv);
+		}
+
+		dist = (n % 5 == 0) ? DotProduct(rmo, nrm) + ((n % 10 == 0) ? 0.01f : -0.01f) : rngf(-100, 100);
+		rot = rm_brush_bounds(org, ang, mins, maxs, radius, bmins, bmaxs);
+		AngleVectors(ang, fwd, rgt, up);
+		rm_brush_modelorg(vo, org, rot, fwd, rgt, up, mo);
+		same = same && (rot == rrot) && !memcmp(bmins, rmins, sizeof(bmins)) && !memcmp(bmaxs, rmaxs, sizeof(bmaxs));
+		same = same && !memcmp(mo, rmo, sizeof(mo));
+
+		/* gl1_surf.c, R_DrawInlineBModel's facing test */
+		{
+			float dot = DotProduct(rmo, nrm) - dist;
+			int vis = ((pb && (dot < -BACKFACE_EPSILON_REF)) || (!pb && (dot > BACKFACE_EPSILON_REF)));
+
+			same = same && (rm_brush_face_visible(mo, nrm, dist, pb) == vis);
+		}
+	}
+
+	CHECK(same);
+
+	{
+		const float n0[3] = { 1, 0, 0 }, at[3] = { 0.02f, 0, 0 }, at2[3] = { 0.005f, 0, 0 };
+
+		CHECK(rm_brush_face_visible(at, n0, 0, 0) && !rm_brush_face_visible(at, n0, 0, 1));
+		CHECK(!rm_brush_face_visible(at2, n0, 0, 0) && !rm_brush_face_visible(at2, n0, 0, 1));
+		CHECK(rm_brush_face_visible(at2, n0, 0.02f, 1) && !rm_brush_face_visible(at2, n0, 0.02f, 0));
+	}
+}
+
+/* the per-entity regions of the frame ring: the layout of two models, and the oversized counts refused */
+static void
+test_alias_region(void)
+{
+	mtl_ring_t ring;
+	rm_region_t a, b, c;
+
+	ring.size = 8492 + 600;
+	ring.used = 0;
+	CHECK(rm_alias_region(&ring, 100, 300, &a));
+	CHECK(a.voff == 0 && a.vbytes == 4800 && a.ioff == 4864 && a.ibytes == 600 && a.nverts == 100 && a.nindices == 300);
+	CHECK(rm_alias_region(&ring, 50, 150, &b));
+	CHECK(b.voff == 5632 && b.vbytes == 2400 && b.ioff == 8192 && b.ibytes == 300 && ring.used == 8492);
+	/* each region's vertices start on the ring's alignment, so the stride of 48 bytes holds from voff */
+	CHECK(a.voff % MTL_RING_ALIGN == 0 && b.voff % MTL_RING_ALIGN == 0 && b.ioff % MTL_RING_ALIGN == 0);
+	CHECK(a.voff + (long)a.vbytes <= a.ioff && a.ioff + (long)a.ibytes <= b.voff);
+
+	/* the vertices would fit in what is left, the indices not: refused, the ring as it was */
+	CHECK(!rm_alias_region(&ring, 8, 600, &c) && ring.used == 8492 && c.nverts == 0 && c.voff == 0);
+	/* oversized counts: never taken, nothing moved */
+	CHECK(!rm_alias_region(&ring, RM_ALIAS_MAX_VERTS + 1, 300, &c) && ring.used == 8492);
+	CHECK(!rm_alias_region(&ring, 100, RM_ALIAS_MAX_INDICES + 3, &c) && ring.used == 8492);
+	CHECK(!rm_alias_region(&ring, 2, 3, &c) && !rm_alias_region(&ring, 3, 2, &c) && !rm_alias_region(&ring, 3, 4, &c));
+	CHECK(!rm_alias_region(&ring, -1, 3, &c) && !rm_alias_region(&ring, LONG_MAX, 3, &c) && !rm_alias_region(NULL, 3, 3, &c));
+	CHECK(ring.used == 8492);
+	/* at the limit: the largest model in a ring of exactly its size */
+	ring.size = 16384 * 48 + 256 * 0 + (size_t)RM_ALIAS_MAX_INDICES * 2;
+	ring.used = 0;
+	CHECK(rm_alias_region(&ring, RM_ALIAS_MAX_VERTS, RM_ALIAS_MAX_INDICES, &c) && ring.used == ring.size);
+	ring.size--;
+	ring.used = 0;
+	CHECK(!rm_alias_region(&ring, RM_ALIAS_MAX_VERTS, RM_ALIAS_MAX_INDICES, &c) && ring.used == 0);
+	/* the frame ring's size holds a model at the limit */
+	CHECK((size_t)RM_ALIAS_MAX_VERTS * RM_AVERT_STRIDE + (size_t)RM_ALIAS_MAX_INDICES * 2 + 256 < RMB_RING_BYTES);
+}
+
+/* ---- the MD2 and SP2 checks against the shared loader -------------------------------------- */
+
+static void
+put32(unsigned char *p, long v)
+{
+	unsigned u = (unsigned)v;
+
+	p[0] = (unsigned char)u;
+	p[1] = (unsigned char)(u >> 8);
+	p[2] = (unsigned char)(u >> 16);
+	p[3] = (unsigned char)(u >> 24);
+}
+
+static void
+putf(unsigned char *p, float f)
+{
+	unsigned u;
+
+	memcpy(&u, &f, sizeof(u));
+	put32(p, (long)u);
+}
+
+/*
+ * A valid MD2 of 4 vertices, 2 frames, 1 skin and a stream of a strip of 3
+ * and a fan of 4: header 68, skins 68, st 132, tris 136, frames 148 (56
+ * each), commands 260 (24 ints), end 356.
+ */
+#define MD2_LEN 356
+static void
+md2_build(unsigned char *b)
+{
+	static const long h[17] = { IDALIASHEADER, ALIAS_VERSION, 64, 64, 56, 1, 4, 1, 1, 24, 2, 68, 132, 136, 148, 260, 356 };
+	int i, k, n;
+
+	memset(b, 0, MD2_LEN);
+
+	for (i = 0; i < 17; i++)
+	{
+		put32(b + 4 * i, h[i]);
+	}
+
+	memcpy(b + 68, "models/test/skin.pcx", 20);
+
+	for (i = 0; i < 2; i++)
+	{
+		unsigned char *f = b + 148 + 56 * i;
+
+		for (k = 0; k < 3; k++)
+		{
+			putf(f + 4 * k, 0.5f);
+			putf(f + 12 + 4 * k, -16.0f);
+		}
+
+		memcpy(f + 24, "frame", 5);
+
+		for (k = 0; k < 4; k++)
+		{
+			f[40 + 4 * k] = (unsigned char)(10 * k);
+			f[41 + 4 * k] = (unsigned char)(20 * k);
+			f[42 + 4 * k] = (unsigned char)(30 * k);
+			f[43 + 4 * k] = (unsigned char)(40 * k);
+		}
+	}
+
+	n = 0;
+	put32(b + 260 + 4 * n++, 3);
+
+	for (i = 0; i < 3; i++)
+	{
+		putf(b + 260 + 4 * n++, 0.25f * i);
+		putf(b + 260 + 4 * n++, 0.5f);
+		put32(b + 260 + 4 * n++, i);
+	}
+
+	put32(b + 260 + 4 * n++, -4);
+
+	for (i = 0; i < 4; i++)
+	{
+		putf(b + 260 + 4 * n++, 0.125f * i);
+		putf(b + 260 + 4 * n++, 1);
+		put32(b + 260 + 4 * n++, 3 - i);
+	}
+
+	put32(b + 260 + 4 * n++, 0);
+}
+
+/* the shared loader on a copy of exactly len bytes (ASAN sees a read past them): 1 when it returns a model */
+static int
+md2_loads(const unsigned char *b, long len)
+{
+	unsigned char *copy = malloc((size_t)len);
+	struct image_s *skins[MAX_MD2SKINS];
+	vec3_t mins, maxs;
+	modtype_t type = mod_bad;
+	void *x;
+
+	memcpy(copy, b, (size_t)len);
+	memset(skins, 0, sizeof(skins));
+	x = Mod_LoadMD2("test", copy, (int)len, mins, maxs, skins, host_find_image, &type);
+	free(copy);
+	return x != NULL && type == mod_alias;
+}
+
+static int
+sp2_loads(const unsigned char *b, long len)
+{
+	unsigned char *copy = malloc((size_t)len);
+	struct image_s *skins[MAX_MD2SKINS];
+	modtype_t type = mod_bad;
+	void *x;
+
+	memcpy(copy, b, (size_t)len);
+	memset(skins, 0, sizeof(skins));
+	x = Mod_LoadSP2("test", copy, (int)len, skins, host_find_image, &type);
+	free(copy);
+	return x != NULL && type == mod_sprite;
+}
+
+/* the model rm_md2_check accepted, walked by the draw's own functions over every frame pair: 1 when they agree */
+static int
+md2_draws(const unsigned char *b, const rm_md2_info_t *in)
+{
+	static float lerped[MAX_VERTS][4];
+	static rm_avert_t out[RM_ALIAS_MAX_VERTS];
+	static unsigned short idx[RM_ALIAS_MAX_INDICES];
+	static const float sl[3] = { 1, 1, 1 };
+	static byte gamma[256];
+	int *order = malloc((size_t)in->num_glcmds * sizeof(int));
+	long nv, ni;
+	int f, ok = 1;
+
+	memcpy(order, b + in->ofs_glcmds, (size_t)in->num_glcmds * sizeof(int));
+
+	for (f = 0; f < in->num_frames && f < 4; f++)
+	{
+		const unsigned char *fr = b + in->ofs_frames + (size_t)f * in->framesize;
+		const unsigned char *of = b + in->ofs_frames + (size_t)((f + 1) % in->num_frames) * in->framesize;
+		float scale[3], trans[3], oscale[3], otrans[3], move[3], fv[3], bv[3];
+		const float zero[3] = { 0, 0, 0 }, fw[3] = { 1, 0, 0 }, rt[3] = { 0, -1, 0 }, up[3] = { 0, 0, 1 };
+
+		memcpy(scale, fr, sizeof(scale));
+		memcpy(trans, fr + 12, sizeof(trans));
+		memcpy(oscale, of, sizeof(oscale));
+		memcpy(otrans, of + 12, sizeof(otrans));
+		rm_alias_lerp_setup(scale, trans, oscale, otrans, 0.5f, zero, fw, rt, up, move, fv, bv);
+		rm_alias_lerp(in->num_xyz, fr + RM_MD2_FRAME_HEADER, of + RM_MD2_FRAME_HEADER, f & 1, move, fv, bv, lerped);
+		nv = rm_alias_emit(order, in->num_glcmds, (const float (*)[4])lerped, fr + RM_MD2_FRAME_HEADER, in->num_xyz,
+				f, sl, f & 1, NULL, gamma, 255, out, RM_ALIAS_MAX_VERTS, idx, RM_ALIAS_MAX_INDICES, &ni);
+		ok = ok && (nv == in->verts) && (ni == in->indices);
+	}
+
+	free(order);
+	return ok;
+}
+
+static void
+test_md2_check(void)
+{
+	static unsigned char b[MD2_LEN], m[MD2_LEN + 64];
+	/* each field of the header set to a value the loader refuses, by byte offset */
+	static const long loaderbad[][2] = {
+		{ 4, 7 }, { 4, 9 }, { 64, -1 }, { 64, MD2_LEN + 1 }, { 12, 481 }, { 24, 0 }, { 24, -3 }, { 24, 2049 },
+		{ 28, 0 }, { 32, 0 }, { 40, 0 }, { 40, -1 }, { 20, -1 }, { 36, 0 }, { 36, -1 }, { 16, 55 }, { 16, -56 },
+		{ 44, -1 }, { 44, MD2_LEN - 63 }, { 48, -4 }, { 48, MD2_LEN - 3 }, { 52, -12 }, { 52, MD2_LEN - 11 },
+		{ 56, -56 }, { 56, MD2_LEN - 111 }, { 60, -4 }, { 60, MD2_LEN - 95 }, { 40, 0x7fffffff }, { 16, 0x7ffffffc },
+		{ 36, 0x7fffffff }
+	};
+	rm_md2_info_t in;
+	long n, i, accepted = 0, refused = 0;
+	int same = 1;
+
+	Swap_Init();
+	md2_build(b);
+	CHECK(rm_md2_check(b, MD2_LEN, &in));
+	CHECK(in.num_xyz == 4 && in.num_frames == 2 && in.num_skins == 1 && in.framesize == 56 && in.verts == 7 &&
+		in.indices == 9 && in.ofs_glcmds == 260 && in.num_glcmds == 24 && in.ofs_frames == 148);
+	CHECK(md2_loads(b, MD2_LEN) && md2_draws(b, &in));
+	CHECK(!rm_md2_check(b, MD2_LEN - 1, &in) && in.verts == 0 && !rm_md2_check(b, RM_MD2_HEADER - 1, &in));
+	CHECK(!rm_md2_check(NULL, MD2_LEN, &in));
+
+	/* every refusal of the loader is a refusal here, so the loader never fails (and leaks its hunk) on a model passed */
+	for (i = 0; i < (long)(sizeof(loaderbad) / sizeof(loaderbad[0])); i++)
+	{
+		memcpy(m, b, MD2_LEN);
+		put32(m + loaderbad[i][0], loaderbad[i][1]);
+		same = same && !md2_loads(m, MD2_LEN) && !rm_md2_check(m, MD2_LEN, &in);
+	}
+
+	CHECK(same);
+	memcpy(m, b, MD2_LEN);
+	put32(m, IDSPRITEHEADER);
+	CHECK(!rm_md2_check(m, MD2_LEN, &in));
+
+	/* what the loader passes and gl1's draw trusts: each refused here */
+#define MD2_CASE(off, val, store) \
+	do { memcpy(m, b, MD2_LEN); store(m + (off), (val)); CHECK(md2_loads(m, MD2_LEN) && !rm_md2_check(m, MD2_LEN, &in)); } while (0)
+	MD2_CASE(260, 2, put32);            /* a strip of 2 */
+	MD2_CASE(260, -2, put32);
+	MD2_CASE(260, 1, put32);
+	MD2_CASE(260, 7, put32);            /* past the stream */
+	MD2_CASE(260, 0x7fffffff, put32);
+	MD2_CASE(260, -0x7fffffff - 1, put32);
+	MD2_CASE(260 + 12, 4, put32);       /* a vertex index past num_xyz */
+	MD2_CASE(260 + 12, -1, put32);
+	MD2_CASE(260 + 4 * 23, 5, put32);   /* no terminating 0 */
+	MD2_CASE(260 + 4, NAN, putf);       /* a texture coordinate that is not finite */
+	MD2_CASE(260 + 8, INFINITY, putf);
+	MD2_CASE(148, NAN, putf);           /* a frame's scale or translate */
+	MD2_CASE(148 + 56 + 20, -INFINITY, putf);
+#undef MD2_CASE
+	memcpy(m, b, MD2_LEN);
+	m[148 + 56 + 43] = 162;             /* a light normal index past the table of 162 */
+	CHECK(md2_loads(m, MD2_LEN) && !rm_md2_check(m, MD2_LEN, &in));
+	m[148 + 56 + 43] = 161;
+	CHECK(rm_md2_check(m, MD2_LEN, &in));
+	memcpy(m, b, MD2_LEN);
+	memset(m + 68, 'a', 64);            /* a skin name without its end */
+	CHECK(md2_loads(m, MD2_LEN) && !rm_md2_check(m, MD2_LEN, &in));
+	m[68 + 63] = 0;
+	CHECK(rm_md2_check(m, MD2_LEN, &in));
+	memcpy(m, b, MD2_LEN);
+	put32(m + 4 * 15, 262);             /* the commands, the frames, the frame size, the st not aligned */
+	put32(m + 4 * 16, 358);
+	CHECK(!rm_md2_check(m, MD2_LEN + 2, &in));
+	memcpy(m, b, MD2_LEN);
+	put32(m + 4 * 12, 133);
+	CHECK(!rm_md2_check(m, MD2_LEN, &in));
+	memcpy(m, b, MD2_LEN);
+	put32(m + 4 * 13, 137);
+	CHECK(!rm_md2_check(m, MD2_LEN, &in));
+	memcpy(m, b, MD2_LEN);
+	put32(m + 4 * 14, 150);
+	put32(m + 4 * 10, 1);
+	CHECK(!rm_md2_check(m, MD2_LEN, &in));
+	memcpy(m, b, MD2_LEN);
+	put32(m + 4 * 4, 58);
+	put32(m + 4 * 10, 1);
+	CHECK(!rm_md2_check(m, MD2_LEN, &in));
+	/* more than 32 skins are 32 to the loader and here; their names must end inside the file */
+	memcpy(m, b, MD2_LEN);
+	put32(m + 4 * 5, 40);
+	CHECK(!md2_loads(m, MD2_LEN) && !rm_md2_check(m, MD2_LEN, &in));
+	/* a stream of just its end: nothing to draw, refused */
+	memcpy(m, b, MD2_LEN);
+	put32(m + 260, 0);
+	CHECK(md2_loads(m, MD2_LEN) && !rm_md2_check(m, MD2_LEN, &in));
+	/* a frame size larger than its vertices need, on 4 bytes: accepted */
+	memcpy(m, b, MD2_LEN);
+	put32(m + 4 * 4, 60);
+	put32(m + 4 * 10, 1);
+	CHECK(rm_md2_check(m, MD2_LEN, &in) && in.framesize == 60 && md2_loads(m, MD2_LEN) && md2_draws(m, &in));
+
+	/* the stream's vertex total: at the limit accepted, one past refused (a model of fans of 4 096 vertices) */
+	{
+		const long fans = 4, per = RM_ALIAS_MAX_VERTS / 4, ints = fans * (1 + 3 * per) + 1;
+		const long len = 260 + 4 * (ints + 3);
+		unsigned char *big = calloc(1, (size_t)len);
+		long f, k, at;
+
+		memcpy(big, b, 260);
+		put32(big + 4 * 9, ints + 3);
+		put32(big + 4 * 16, len);
+
+		for (f = 0, at = 260; f < fans; f++)
+		{
+			put32(big + at, -per);
+			at += 4;
+
+			for (k = 0; k < per; k++, at += 12)
+			{
+				put32(big + at + 8, k % 4);
+			}
+		}
+
+		put32(big + at, 0);
+		CHECK(rm_md2_check(big, len, &in) && in.verts == RM_ALIAS_MAX_VERTS && in.indices == 3 * (RM_ALIAS_MAX_VERTS - 8));
+		CHECK(md2_draws(big, &in));
+		/* the last fan takes one vertex more (index 0, from the spare ints) and ends on the last: past the limit */
+		put32(big + 260 + 4 * 3 * (1 + 3 * per), -(per + 1));
+		CHECK(!rm_md2_check(big, len, &in));
+		free(big);
+	}
+
+	/*
+	 * Mutated models: every one rm_md2_check accepts is loaded by the
+	 * shared loader (which never fails on it) and drawn by the draw's
+	 * functions with the counts the check found; ASAN and UBSAN watch.
+	 */
+	for (n = 0; n < 60000; n++)
+	{
+		long k, len = MD2_LEN + (long)(rng() % 64) - 32;
+
+		memcpy(m, b, MD2_LEN);
+		memset(m + MD2_LEN, 0, 64);
+
+		for (k = 0; k < 1 + (long)(rng() % 4); k++)
+		{
+			const long at = (long)(rng() % MD2_LEN);
+
+			switch (rng() % 4)
+			{
+				case 0: m[at] = (unsigned char)rng(); break;
+				case 1: put32(m + (at & ~3l), (long)(rng() % 600) - 100); break;
+				case 2: put32(m + (at & ~3l), (long)(rng() % 9) - 4); break;
+				default: m[at] ^= (unsigned char)(1u << (rng() % 8)); break;
+			}
+		}
+
+		if (len < 1)
+		{
+			len = 1;
+		}
+
+		if (rm_md2_check(m, len, &in))
+		{
+			accepted++;
+			same = same && md2_loads(m, len) && md2_draws(m, &in);
+		}
+		else
+		{
+			refused++;
+		}
+	}
+
+	CHECK(same && accepted > 1000 && refused > 1000 && hunk_overflow == 0);
+	free(hunk_mem);
+	hunk_mem = NULL;
+}
+
+static void
+test_sp2_check(void)
+{
+	enum { LEN = 12 + 2 * 80 };
+	unsigned char b[LEN], m[LEN];
+	long n, accepted = 0;
+	int same = 1;
+
+	memset(b, 0, sizeof(b));
+	put32(b, IDSPRITEHEADER);
+	put32(b + 4, SPRITE_VERSION);
+	put32(b + 8, 2);
+	put32(b + 12, 32);
+	memcpy(b + 12 + 16, "sprites/s_a.pcx", 15);
+	memcpy(b + 92 + 16, "sprites/s_b.pcx", 15);
+	CHECK(rm_sp2_check(b, LEN) && sp2_loads(b, LEN));
+	CHECK(!rm_sp2_check(b, LEN - 1) && !rm_sp2_check(b, 11) && !rm_sp2_check(NULL, LEN));
+	memcpy(m, b, LEN);
+	put32(m + 4, 3);
+	CHECK(!rm_sp2_check(m, LEN) && !sp2_loads(m, LEN));
+	memcpy(m, b, LEN);
+	put32(m + 8, 0);
+	CHECK(!rm_sp2_check(m, LEN));
+	put32(m + 8, -1);
+	CHECK(!rm_sp2_check(m, LEN));
+	put32(m + 8, 3);                    /* a frame past the file: the loader would read it */
+	CHECK(!rm_sp2_check(m, LEN));
+	put32(m + 8, 1000);                 /* kept as 32 by the loader, past the file */
+	CHECK(!rm_sp2_check(m, LEN));
+	put32(m + 8, 1);
+	CHECK(rm_sp2_check(m, LEN) && sp2_loads(m, LEN));
+	memcpy(m, b, LEN);
+	memset(m + 92 + 16, 'x', 64);       /* a frame name without its end */
+	CHECK(!rm_sp2_check(m, LEN));
+	m[LEN - 1] = 0;
+	CHECK(rm_sp2_check(m, LEN));
+	memcpy(m, b, LEN);
+	put32(m, IDALIASHEADER);
+	CHECK(!rm_sp2_check(m, LEN));
+
+	for (n = 0; n < 20000; n++)
+	{
+		long len = LEN - (long)(rng() % 40);
+
+		memcpy(m, b, LEN);
+
+		switch (rng() % 4)
+		{
+			case 0: m[rng() % 12] ^= (unsigned char)(1u << (rng() % 8)); break;
+			case 1: put32(m + 8, (long)(rng() % 8) - 3); break;
+			case 2: m[12 + rng() % 160] = (unsigned char)rng(); break;
+			default: break;
+		}
+
+		if (rng() & 1)
+		{
+			len = LEN;
+		}
+
+		if (rm_sp2_check(m, len))
+		{
+			accepted++;
+			same = same && sp2_loads(m, len);
+		}
+	}
+
+	CHECK(same && accepted > 100);
+	free(hunk_mem);
+	hunk_mem = NULL;
+}
 
 int
 main(void)
@@ -3412,6 +5229,14 @@ main(void)
 	test_warp_subdivide();
 	test_sky();
 	test_trans();
+	test_alias_lerp();
+	test_alias_shade();
+	test_alias_emit();
+	test_alias_cull();
+	test_weapon();
+	test_alias_region();
+	test_md2_check();
+	test_sp2_check();
 
 	printf("rm_host_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

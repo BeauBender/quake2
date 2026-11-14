@@ -9,7 +9,8 @@
 #     compiler has them, and run. No SDL, no Metal, no game data. The
 #     world's cases (N4) also link files/surf.c with src/common/shared/
 #     shared.c (what ref_metal takes from them unchanged) and the shim's
-#     mgl_raster.c behind tests/metal/rm_host_shim.c (its viewport).
+#     mgl_raster.c behind tests/metal/rm_host_shim.c (its viewport); the
+#     model checks (N7) link files/models.c, the shared MD2 and SP2 loader.
 # (b) Only on Darwin with the Metal compiler (xcrun -f metal) and the
 #     vendored SDL 3 headers: "make ref_metal" in a scratch copy of
 #     Makefile, third_party/sdl3.make and src/ (third_party/SDL3 is linked,
@@ -69,13 +70,21 @@ fi
 
 host=""
 # the world's tests (N4) also run what ref_metal takes from files/surf.c (with shared.c, which it
-# calls) and compare the 3D viewport with the shim's mgl_compute_raster (gl1/metal/mgl_raster.c,
-# behind tests/metal/rm_host_shim.c); the engine headers need the two names the Makefile defines
+# calls), hold the model checks to files/models.c (N7), and compare the 3D viewport with the shim's
+# mgl_compute_raster (gl1/metal/mgl_raster.c, behind tests/metal/rm_host_shim.c); the engine headers
+# need the two names the Makefile defines. files/models.c is the shared loader, not ref_metal's code:
+# its one -Wextra finding (a sign comparison) is not this module's
 # shellcheck disable=SC2086 # flags is a word list
-if ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "${tmp:?}/rm_host_test" \
+if ! $cc $flags -Wno-sign-compare '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -c -o "${tmp:?}/models.o" \
+	src/client/refresh/files/models.c > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "src/client/refresh/files/models.c does not compile for the host test"
+# shellcheck disable=SC2086 # flags is a word list
+elif ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "${tmp:?}/rm_host_test" \
 	tests/metal/rm_host_test.c tests/metal/rm_host_shim.c \
 	"$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" \
-	src/client/refresh/gl1/metal/mgl_raster.c src/client/refresh/files/surf.c src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	src/client/refresh/gl1/metal/mgl_raster.c src/client/refresh/files/surf.c "${tmp:?}/models.o" \
+	src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
 	cat "${tmp:?}/cc.out"
 	bad "tests/metal/rm_host_test.c does not compile"
 elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_host_test" > "${tmp:?}/out" 2>&1; then

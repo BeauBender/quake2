@@ -35,6 +35,8 @@
 
 #include <stddef.h>
 
+#include "../common/mtl_ring.h"
+
 /* ---- capabilities ----------------------------------------------------------- */
 
 /* The bit of Apple GPU family n (1 to 9) in rmb_caps_t.families. */
@@ -91,6 +93,13 @@ typedef struct
 	unsigned long sky_skips, warp_skips, trans_skips, flow_skips;
 	/* of the drawn surfaces of the last 3D view, those a dynamic light touches, drawn with their static lightmap (N5; N8 adds the light) */
 	unsigned long dlit_surfs;
+	/*
+	 * the entities of the last 3D view not drawn, by class (N7): sprites,
+	 * beams and null models (N8 draws them), translucent brush entities
+	 * (no stock content has one; left out, see design section 22), and
+	 * alias models whose draw was refused (a frame-ring region, a texture)
+	 */
+	unsigned long sprite_skips, beam_skips, null_skips, bmodel_trans_skips, alias_skips;
 } rmb_stats_t;
 
 /* A buffer of this size holds every metal_stats line (rm_stats_format, rm_world_format, host-tested). */
@@ -897,6 +906,252 @@ int rm_world_frame(float time);
  */
 int rm_alpha_break(long count, int cur_tex, float cur_alpha, int tex, float alpha);
 
+/* ---- alias models, the view weapon and brush entities (rm_pure.c, N7) ------------ */
+
+/* shared.h's entity flags (RF_*) and refdef flags (RDF_*), which this header does not include; the host test holds them equal */
+#define RM_RF_MINLIGHT 0x1
+#define RM_RF_WEAPONMODEL 0x4
+#define RM_RF_FULLBRIGHT 0x8
+#define RM_RF_DEPTHHACK 0x10
+#define RM_RF_TRANSLUCENT 0x20
+#define RM_RF_GLOW 0x200
+#define RM_RF_SHELL_RED 0x400
+#define RM_RF_SHELL_GREEN 0x800
+#define RM_RF_SHELL_BLUE 0x1000
+#define RM_RF_IR_VISIBLE 0x8000
+#define RM_RF_SHELL_DOUBLE 0x10000
+#define RM_RF_SHELL_HALF_DAM 0x20000
+/* the shells gl1's R_DrawAliasModel lights, and the three R_DrawAliasFrameLerp draws untextured */
+#define RM_RF_SHELLS (RM_RF_SHELL_RED | RM_RF_SHELL_GREEN | RM_RF_SHELL_BLUE | RM_RF_SHELL_DOUBLE | RM_RF_SHELL_HALF_DAM)
+#define RM_RF_SHELLS_RGB (RM_RF_SHELL_RED | RM_RF_SHELL_GREEN | RM_RF_SHELL_BLUE)
+#define RM_RDF_IRGOGGLES 0x4
+
+/* files.h's MD2 and SP2 layout and limits (the host test holds them equal to sizeof and the macros) */
+#define RM_MD2_IDENT (('2' << 24) + ('P' << 16) + ('D' << 8) + 'I')
+#define RM_MD2_VERSION 8
+#define RM_MD2_HEADER 68            /* dmdl_t: 17 ints */
+#define RM_MD2_FRAME_HEADER 40      /* daliasframe_t up to verts: scale, translate, name[16] */
+#define RM_MD2_MAX_VERTS 2048       /* MAX_VERTS */
+#define RM_MD2_MAX_SKINS 32         /* MAX_MD2SKINS */
+#define RM_MD2_SKINNAME 64          /* MAX_SKINNAME */
+#define RM_MD2_MAX_SKINHEIGHT 480   /* MAX_LBM_HEIGHT */
+#define RM_SP2_IDENT (('2' << 24) + ('S' << 16) + ('D' << 8) + 'I')
+#define RM_SP2_VERSION 2
+#define RM_SP2_HEADER 12            /* dsprite_t up to frames */
+#define RM_SP2_FRAME 80             /* dsprframe_t */
+/* the normals of anorms.h and the rows of anormtab.h */
+#define RM_NUMVERTEXNORMALS 162
+#define RM_SHADEDOT_QUANT 16
+#define RM_POWERSUIT_SCALE 4.0F     /* ref.h's POWERSUIT_SCALE */
+
+/*
+ * The per-entity region of the frame ring (design sections 2 and 9): the
+ * command stream's vertices, expanded as gl1's GLBUFFER_VERTEX writes
+ * them, 48 bytes each (the shim's position, texture coordinate and
+ * colour), then 3 * (n - 2) 16-bit indices per strip or fan. A model
+ * whose stream needs more than RM_ALIAS_MAX_VERTS vertices (gl1's
+ * MAX_VERTICES, the size of its own buffer) is refused at load.
+ */
+#define RM_ALIAS_MAX_VERTS 16384
+#define RM_ALIAS_MAX_INDICES (3l * RM_ALIAS_MAX_VERTS)
+
+typedef struct
+{
+	float pos[4];       /* x, y, z, 1 */
+	float uv[2];
+	float pad[2];
+	float color[4];     /* gl1's colour bytes as the shim reads them: b / 255.0f */
+} rm_avert_t;
+
+#define RM_AVERT_STRIDE 48
+
+/* One entity's region of the frame ring: its vertices at voff, its indices at ioff. */
+typedef struct
+{
+	long voff, ioff;
+	unsigned long nverts, nindices;
+	size_t vbytes, ibytes;
+} rm_region_t;
+
+/*
+ * Takes the region of nv vertices and ni indices from ring: 1 with r
+ * filled; 0, the ring as it was and r zeroed, when nv is outside 3 to
+ * RM_ALIAS_MAX_VERTS, ni outside 3 to RM_ALIAS_MAX_INDICES or not a
+ * multiple of 3, or the rest of the ring cannot hold both.
+ */
+int rm_alias_region(mtl_ring_t *ring, long nv, long ni, rm_region_t *r);
+
+/* What rm_md2_check learnt of a model: the counts the draw uses. */
+typedef struct
+{
+	int num_xyz, num_frames, num_skins, framesize, ofs_frames, ofs_glcmds, num_glcmds;
+	long verts, indices;    /* of the command stream, expanded (one draw of the model) */
+} rm_md2_info_t;
+
+/*
+ * The check of an MD2 file of len bytes before the shared loader
+ * (files/models.c, Mod_LoadMD2) is given it: every condition on which
+ * the loader fails (which it does after taking a hunk it never frees),
+ * and what the loader leaves unchecked and gl1's draw trusts: the
+ * command stream (counts of at least 3, the vertices inside the stream,
+ * a terminating 0 inside it, each vertex index below num_xyz, finite
+ * texture coordinates, at most RM_ALIAS_MAX_VERTS vertices in all), the
+ * frames' light normal indices (below RM_NUMVERTEXNORMALS) and finite
+ * scale and translate, the skin names terminated inside their 64 bytes,
+ * the frame and command offsets and the frame size 4-byte aligned and the
+ * st and triangle offsets 2-byte aligned (the loader reads them in place).
+ * 1 with info filled; 0 when the model is refused.
+ */
+int rm_md2_check(const unsigned char *buf, long len, rm_md2_info_t *info);
+
+/*
+ * The same for an SP2 file (Mod_LoadSP2, which reads the frame records
+ * without a size check and fails on the version after taking its hunk):
+ * the header inside len, the version, 1 to RM_MD2_MAX_SKINS frames kept
+ * (the loader keeps at most that many; N8's draw divides by the count),
+ * every kept frame record inside len and its name terminated. 1 when
+ * accepted.
+ */
+int rm_sp2_check(const unsigned char *buf, long len);
+
+/*
+ * gl1's bounds of an entity's frame and oldframe against a model of
+ * numframes frames: R_CullAliasModel sets each one outside 0 ..
+ * numframes - 1 to 0 on its own (cull 1); R_DrawAliasModel sets both to
+ * 0 when either is outside (cull 0). gl1 runs the first, then the second,
+ * except for the view weapon, which it does not cull.
+ */
+void rm_alias_frames(int *frame, int *oldframe, int numframes, int cull);
+
+/*
+ * gl1's choice of skin index: skinnum when it is below RM_MD2_MAX_SKINS
+ * and skins[skinnum] is set, else 0. A negative skinnum, which gl1 reads
+ * before the array, is 0 here.
+ */
+int rm_alias_skin(int skinnum, const void *const *skins);
+
+/*
+ * gl1's R_DrawAliasFrameLerp before the vertices: move, frontv and backv
+ * from the two frames' scale and translate, backlerp, the delta from
+ * origin to oldorigin and the entity's AngleVectors.
+ */
+void rm_alias_lerp_setup(const float *fscale, const float *ftranslate, const float *oscale, const float *otranslate,
+		float backlerp, const float *delta, const float *forward, const float *right, const float *up,
+		float *move, float *frontv, float *backv);
+
+/*
+ * gl1's R_LerpVerts: n vertices of the frame (v) and the old frame (ov),
+ * 4 bytes each (x, y, z, light normal index), into out (4 floats each);
+ * a shell is pushed out along the frame's normal by RM_POWERSUIT_SCALE.
+ */
+void rm_alias_lerp(int n, const unsigned char *v, const unsigned char *ov, int shell, const float *move,
+		const float *frontv, const float *backv, float (*out)[4]);
+
+/*
+ * gl1's R_DrawAliasModel light before the draw: the shell colours, or 1
+ * with RF_FULLBRIGHT, or point (R_LightPoint's colour: the caller asks
+ * for it when rm_alias_lit says so), then RF_MINLIGHT, RF_GLOW at time,
+ * gl1_overbrightbits and the IR goggles.
+ */
+int rm_alias_lit(int flags);
+void rm_alias_shade(int flags, int rdflags, const float *point, float time, float overbright, float *shadelight);
+
+/* gl1's light level for the server from a colour (R_SetLightLevel, R_DrawAliasModel's weapon): 150 times the largest */
+float rm_light_level(const float *shadelight);
+
+/* gl1's shadedots row of a yaw (saturated where gl1's cast is undefined), 0 to 15, and one of its 256 dots */
+int rm_shadedot_row(float yaw);
+float rm_shadedot(int row, int normal);
+
+/* gl1's GLBUFFER_COLOR alpha byte: alpha times 255 with RF_TRANSLUCENT, else 255; saturated outside 0 to 255 */
+unsigned char rm_alias_alpha(int flags, float alpha);
+
+/*
+ * gl1's colour of one vertex (R_DrawAliasFrameLerp, GLBUFFER_COLOR): l
+ * times shadelight times 255 (shadelight alone for a shell), truncated
+ * (saturated where the cast is undefined) and clamped to 0 .. 255, the
+ * minlight table when there is one, the gamma table, and the alpha
+ * byte; as the shim reads the bytes (b / 255.0f) into rgba.
+ */
+void rm_alias_color(float l, const float *shadelight, int shell, const unsigned char *minlight,
+		const unsigned char *gamma, unsigned char alpha, float *rgba);
+
+/*
+ * gl1's R_DrawAliasFrameLerp after the lerp: walks the command stream
+ * (norder ints at order) and writes each vertex (the lerped position of
+ * its index, its texture coordinate, its colour from the shadedots row
+ * and shadelight) to out and the strips' and fans' triangles, in gl1's
+ * R_SetBufferIndices order, to idx. The number of vertices, with *nidx
+ * the indices; -1 (out and idx may hold part of the stream) when a count
+ * is below 3, a vertex lies past the stream, an index is not below
+ * num_xyz, the stream has no terminating 0, or vcap or icap is reached.
+ */
+long rm_alias_emit(const int *order, long norder, const float (*lerped)[4], const unsigned char *verts, int num_xyz,
+		int row, const float *shadelight, int shell, const unsigned char *minlight, const unsigned char *gamma,
+		unsigned char alpha, rm_avert_t *out, long vcap, unsigned short *idx, long icap, long *nidx);
+
+/*
+ * gl1's R_CullAliasModel after the frame bounds: the box of the frame
+ * (and the old frame, unless same), turned by the AngleVectors of the
+ * angles with the yaw negated and moved to origin, against the four
+ * frustum planes (normal[4][3], dist[4]). 1 when every corner is behind
+ * one plane (culled).
+ */
+int rm_alias_culled(const float *fscale, const float *ftranslate, const float *oscale, const float *otranslate,
+		int same, const float *origin, const float *forward, const float *right, const float *up,
+		const float (*normal)[3], const float *dist);
+
+/*
+ * gl1's R_RotateForEntity on the modelview world as the shim computes
+ * it (glTranslatef, then glRotatef about z, y and x: m = m * r each):
+ * out = world * T(origin) * Rz(a[1]) * Ry(-a[0]) * Rx(-a[2]). a is the
+ * entity's angles as gl1 passes them (R_DrawAliasModel negates the
+ * pitch, R_DrawBrushModel the pitch and the roll, around the call).
+ */
+void rm_entity_matrix(float *out, const float *world, const float *origin, const float *a);
+
+/*
+ * gl1's projection of the view weapon (R_ApplyGLBuffer): the identity,
+ * glScalef(-1, 1, 1) when hand is 1, then R_SetPerspective of gunfov (of
+ * fovy when gunfov is negative), as rm_projection takes its arguments.
+ * 0 when glFrustum refuses (m is then the identity or the mirror, as the
+ * shim leaves its matrix).
+ */
+int rm_weapon_projection(float *m, float fovy, float gunfov, float hand, int width, int height, float znear,
+		int farsee, int underwater, float time, float waterwarp);
+
+/* gl1's glDepthRange of an alias draw: 0 to 1, 0 to 0.3 with RF_DEPTHHACK (gldepthmin 0, gldepthmax 1) */
+void rm_alias_depth(int flags, double *znear, double *zfar);
+
+/* the cull mode (RMB_CULL_*) of an alias draw: none without r_cull, GL's back faces for the weapon with hand 1 */
+int rm_alias_cull_mode(int cull, int flags, float hand);
+
+/* whether gl1 draws the entity's alias model at all: not the view weapon with hand 2 */
+int rm_alias_drawn(int flags, float hand);
+
+/*
+ * gl1's R_DrawBrushModel box: origin plus and minus the radius when the
+ * entity is turned (1 returned), else origin plus the model's mins and
+ * maxs (0 returned).
+ */
+int rm_brush_bounds(const float *origin, const float *angles, const float *mins, const float *maxs, float radius,
+		float *bmins, float *bmaxs);
+
+/* gl1's modelorg of a brush entity: vieworg less origin, turned into the entity's axes when rotated */
+void rm_brush_modelorg(const float *vieworg, const float *origin, int rotated, const float *forward,
+		const float *right, const float *up, float *modelorg);
+
+/* gl1's facing test of a brush entity's surface (BACKFACE_EPSILON 0.01) */
+int rm_brush_face_visible(const float *modelorg, const float *normal, float dist, int planeback);
+
+/*
+ * The per-frame fields of an entity this renderer uses that are floats:
+ * origin, oldorigin and angles (3 each), backlerp and alpha. 1 when all
+ * are finite; an entity with one that is not is not drawn (counted).
+ */
+int rm_entity_floats_ok(const float *origin, const float *oldorigin, const float *angles, float backlerp,
+		float alpha);
+
 /* ---- rmb_device.m and rmb_encode.m ------------------------------------------- */
 
 /*
@@ -1080,6 +1335,10 @@ typedef enum
 	RM_PIPE_WORLD_LM,       /* world_lm: the diffuse texel times the lightmap slice's (gl1's two units, N5) */
 	RM_PIPE_WORLD_TEXC,     /* world_tex with a colour: GL_MODULATE of the colour and the texel (warped water, N6) */
 	RM_PIPE_WORLD_TEXC_BLEND,   /* the same blended (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA): translucent surfaces */
+	RM_PIPE_ALIAS,          /* alias: the vertex colour times the skin texel (gl1's GL_MODULATE, N7) */
+	RM_PIPE_ALIAS_BLEND,    /* the same blended: RF_TRANSLUCENT */
+	RM_PIPE_ALIAS_SHELL,    /* alias, untextured: the vertex colour alone (RF_SHELL_*) */
+	RM_PIPE_ALIAS_SHELL_BLEND,  /* the same blended */
 	RM_PIPE_3D_COUNT
 } rm_pipe3d_t;
 
@@ -1088,6 +1347,7 @@ typedef enum
 {
 	RMB_DS_NONE,            /* no depth test, no writes (R_PolyBlend's glDisable(GL_DEPTH_TEST)) */
 	RMB_DS_LEQUAL_WRITE,    /* gl1's glDepthFunc(GL_LEQUAL), glDepthMask(GL_TRUE) */
+	RMB_DS_LEQUAL,          /* the same without writes: gl1's glDepthMask(GL_FALSE) for the translucent entities (N7) */
 	RMB_DS_COUNT
 } rmb_ds_t;
 
@@ -1219,5 +1479,38 @@ typedef struct
  */
 int rmb_draw_world_dyn(const rm_wvert_t *v, unsigned nv, const unsigned *idx, unsigned long ni,
 		const rmb_dyn_t *d, const float *mvp, const rm_viewport_t *vp, int cull);
+
+/* ---- alias models and the view weapon (rmb_encode.m, N7) ---------------------------- */
+
+/*
+ * The cull modes a 3D draw takes (the cull argument of the draws above):
+ * none (r_cull 0), GL's front faces (gl1's glCullFace(GL_FRONT)) and its
+ * back faces (the mirrored view weapon, glCullFace(GL_BACK)).
+ */
+#define RMB_CULL_NONE 0
+#define RMB_CULL_FRONT 1
+#define RMB_CULL_BACK 2
+
+/* how an alias draw is made: the skin (tex 0 for a shell), the blend, the depth writes, the cull and the depth range */
+typedef struct
+{
+	int tex, smp;           /* the skin and its sampler; tex 0: untextured (RF_SHELL_*) */
+	int blend;              /* RF_TRANSLUCENT: gl1's glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA) */
+	int depth_write;        /* 0 in gl1's translucent pass (glDepthMask(GL_FALSE)) */
+	int cull;               /* RMB_CULL_* */
+	double znear, zfar;     /* glDepthRange: 0 to 1, 0 to 0.3 with RF_DEPTHHACK (rm_alias_depth) */
+} rmb_alias_draw_t;
+
+/*
+ * Draws one alias entity: its nv vertices (rm_avert_t, lerped and lit on
+ * the CPU) and ni 16-bit indices go into one region of the frame ring
+ * (rm_alias_region: the vertices first, 48 bytes each, then the indices),
+ * as triangles with the alias pipeline d selects, mvp on every vertex, in
+ * viewport vp with d's depth range. 0 when the draw is skipped (counted):
+ * the counts outside rm_alias_region's bounds, an index not below nv, a
+ * texture missing, or no room in the frame ring (nothing is written).
+ */
+int rmb_draw_alias(const rm_avert_t *v, unsigned nv, const unsigned short *idx, unsigned long ni,
+		const rmb_alias_draw_t *d, const float *mvp, const rm_viewport_t *vp);
 
 #endif /* RM_RMB_H */

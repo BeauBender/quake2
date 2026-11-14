@@ -1056,16 +1056,20 @@ rm_view_matrix(float *m, const float *angles, const float *org)
 	mtl_mat_mul(m, m, t);
 }
 
-/* from gl1_main.c, R_SetPerspective (no stereo), on the identity of glLoadIdentity */
-int
-rm_projection(float *m, float fovy, int width, int height, float znear, int farsee,
+/*
+ * from gl1_main.c, R_SetPerspective (no stereo): m = m * the frustum, as
+ * the shim's glFrustum multiplies it onto the current matrix; m untouched
+ * and 0 when glFrustum refuses
+ */
+static int
+rm_perspective_on(float *m, float fovy, int width, int height, float znear, int farsee,
 		int underwater, float time, float waterwarp)
 {
 	/* gluPerspective style parameters */
 	const double zNear = (znear > 0.1f) ? znear : 0.1f;
 	const double zFar = farsee ? 8192.0f : 4096.0f;
 	double aspectratio, xmin, xmax, ymin, ymax;
-	float f[16], id[16];
+	float f[16];
 
 	if (height == 0)
 	{
@@ -1092,8 +1096,25 @@ rm_projection(float *m, float fovy, int width, int height, float znear, int fars
 		return 0;
 	}
 
-	mtl_mat_identity(id);
-	mtl_mat_mul(m, id, f);
+	mtl_mat_mul(m, m, f);
+	return 1;
+}
+
+/* from gl1_main.c, R_SetPerspective (no stereo), on the identity of glLoadIdentity */
+int
+rm_projection(float *m, float fovy, int width, int height, float znear, int farsee,
+		int underwater, float time, float waterwarp)
+{
+	float t[16];
+
+	mtl_mat_identity(t);
+
+	if (!rm_perspective_on(t, fovy, width, height, znear, farsee, underwater, time, waterwarp))
+	{
+		return 0;   /* m untouched */
+	}
+
+	memcpy(m, t, sizeof(t));
 	return 1;
 }
 
@@ -2464,4 +2485,913 @@ int
 rm_alpha_break(long count, int cur_tex, float cur_alpha, int tex, float alpha)
 {
 	return (count > 0) && ((cur_tex != tex) || (cur_alpha != alpha));
+}
+
+/* ---- alias models, the view weapon and brush entities (N7) ---------------------------- */
+
+/* shared.h's vector macros, which rm_pure.c does not include: the same text, so the same arithmetic */
+#define RM_DotProduct(x, y) (x[0] * y[0] + x[1] * y[1] + x[2] * y[2])
+
+/* gl1_mesh.c's tables */
+static const float rm_avertexnormals[RM_NUMVERTEXNORMALS][3] = {
+#include "../constants/anorms.h"
+};
+
+static const float rm_avertexnormal_dots[RM_SHADEDOT_QUANT][256] = {
+#include "../constants/anormtab.h"
+};
+
+/* a little-endian int of the file, as LittleLong reads it on a little-endian host */
+static long
+rm_le32(const unsigned char *p)
+{
+	unsigned u = (unsigned)p[0] | ((unsigned)p[1] << 8) | ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
+	int i;
+
+	memcpy(&i, &u, sizeof(i));
+	return i;
+}
+
+static int
+rm_le_float_ok(const unsigned char *p)
+{
+	unsigned u = (unsigned)p[0] | ((unsigned)p[1] << 8) | ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
+	float f;
+
+	memcpy(&f, &u, sizeof(f));
+	return isfinite(f) != 0;
+}
+
+int
+rm_alias_region(mtl_ring_t *ring, long nv, long ni, rm_region_t *r)
+{
+	mtl_ring_t saved;
+	long voff, ioff;
+
+	memset(r, 0, sizeof(*r));
+
+	if (!ring || (nv < 3) || (nv > RM_ALIAS_MAX_VERTS) || (ni < 3) || (ni > RM_ALIAS_MAX_INDICES) || (ni % 3))
+	{
+		return 0;
+	}
+
+	saved = *ring;
+	voff = mtl_ring_alloc(ring, (size_t)nv * RM_AVERT_STRIDE);
+	ioff = (voff < 0) ? -1 : mtl_ring_alloc(ring, (size_t)ni * sizeof(unsigned short));
+
+	if (ioff < 0)
+	{
+		*ring = saved;
+		return 0;
+	}
+
+	r->voff = voff;
+	r->ioff = ioff;
+	r->nverts = (unsigned long)nv;
+	r->nindices = (unsigned long)ni;
+	r->vbytes = (size_t)nv * RM_AVERT_STRIDE;
+	r->ibytes = (size_t)ni * sizeof(unsigned short);
+	return 1;
+}
+
+/* ofs + cnt * size inside 0 .. end, in 64 bits (the loader's MD2_RANGE_BAD, negated) */
+static int
+rm_md2_range_ok(long ofs, long cnt, long size, long end)
+{
+	return (ofs >= 0) && ((long long)ofs + (long long)cnt * (long long)size <= (long long)end);
+}
+
+/* the command stream of norder ints at cmds: 1 with the expanded counts when gl1's draw can walk it */
+static int
+rm_md2_stream_ok(const unsigned char *cmds, long norder, long num_xyz, long *verts, long *indices)
+{
+	long pos = 0;
+
+	*verts = *indices = 0;
+
+	for (;;)
+	{
+		long c, n, k;
+
+		if (pos >= norder)
+		{
+			return 0;   /* no terminating 0 */
+		}
+
+		c = rm_le32(cmds + 4 * pos);
+		pos++;
+
+		if (c == 0)
+		{
+			return *verts > 0;
+		}
+
+		n = (c < 0) ? -c : c;
+
+		if ((n < 3) || (n > (norder - pos) / 3))
+		{
+			return 0;
+		}
+
+		for (k = 0; k < n; k++)
+		{
+			const unsigned char *v = cmds + 4 * (pos + 3 * k);
+			long xyz = rm_le32(v + 8);
+
+			if (!rm_le_float_ok(v) || !rm_le_float_ok(v + 4) || (xyz < 0) || (xyz >= num_xyz))
+			{
+				return 0;
+			}
+		}
+
+		pos += 3 * n;
+		*verts += n;
+		*indices += 3 * (n - 2);
+
+		if (*verts > RM_ALIAS_MAX_VERTS)
+		{
+			return 0;
+		}
+	}
+}
+
+int
+rm_md2_check(const unsigned char *buf, long len, rm_md2_info_t *info)
+{
+	long h[RM_MD2_HEADER / 4], skins, ofs_end, f, i;
+
+	memset(info, 0, sizeof(*info));
+
+	if (!buf || (len < RM_MD2_HEADER))
+	{
+		return 0;
+	}
+
+	for (i = 0; i < RM_MD2_HEADER / 4; i++)
+	{
+		h[i] = rm_le32(buf + 4 * i);
+	}
+
+	/* dmdl_t: ident, version, skinwidth, skinheight, framesize, num_skins, num_xyz, num_st, num_tris,
+	   num_glcmds, num_frames, ofs_skins, ofs_st, ofs_tris, ofs_frames, ofs_glcmds, ofs_end */
+	ofs_end = h[16];
+
+	/* the loader's conditions, in its order */
+	if ((h[0] != RM_MD2_IDENT) || (h[1] != RM_MD2_VERSION) || (ofs_end < 0) || (ofs_end > len) ||
+		(h[3] > RM_MD2_MAX_SKINHEIGHT) || (h[6] <= 0) || (h[6] > RM_MD2_MAX_VERTS) || (h[7] <= 0) ||
+		(h[8] <= 0) || (h[10] <= 0))
+	{
+		return 0;
+	}
+
+	skins = (h[5] > RM_MD2_MAX_SKINS) ? RM_MD2_MAX_SKINS : h[5];   /* the loader keeps the first 32 */
+
+	if ((skins < 0) || (h[9] <= 0) || (h[4] < RM_MD2_FRAME_HEADER + 4 * h[6]) ||
+		!rm_md2_range_ok(h[11], skins, RM_MD2_SKINNAME, ofs_end) ||
+		!rm_md2_range_ok(h[12], h[7], 4, ofs_end) ||
+		!rm_md2_range_ok(h[13], h[8], 12, ofs_end) ||
+		!rm_md2_range_ok(h[14], h[10], h[4], ofs_end) ||
+		!rm_md2_range_ok(h[15], h[9], 4, ofs_end))
+	{
+		return 0;
+	}
+
+	/* what the loader reads in place and gl1's draw trusts */
+	if ((h[14] % 4) || (h[4] % 4) || (h[15] % 4) || (h[12] % 2) || (h[13] % 2))
+	{
+		return 0;
+	}
+
+	for (i = 0; i < skins; i++)
+	{
+		if (!memchr(buf + h[11] + i * RM_MD2_SKINNAME, 0, RM_MD2_SKINNAME))
+		{
+			return 0;
+		}
+	}
+
+	for (f = 0; f < h[10]; f++)
+	{
+		const unsigned char *frame = buf + h[14] + f * h[4];
+
+		for (i = 0; i < 6; i++)
+		{
+			if (!rm_le_float_ok(frame + 4 * i))
+			{
+				return 0;
+			}
+		}
+
+		for (i = 0; i < h[6]; i++)
+		{
+			if (frame[RM_MD2_FRAME_HEADER + 4 * i + 3] >= RM_NUMVERTEXNORMALS)
+			{
+				return 0;
+			}
+		}
+	}
+
+	if (!rm_md2_stream_ok(buf + h[15], h[9], h[6], &info->verts, &info->indices))
+	{
+		info->verts = info->indices = 0;
+		return 0;
+	}
+
+	info->num_xyz = (int)h[6];
+	info->num_frames = (int)h[10];
+	info->num_skins = (int)skins;
+	info->framesize = (int)h[4];
+	info->ofs_frames = (int)h[14];
+	info->ofs_glcmds = (int)h[15];
+	info->num_glcmds = (int)h[9];
+	return 1;
+}
+
+int
+rm_sp2_check(const unsigned char *buf, long len)
+{
+	long n, i;
+
+	if (!buf || (len < RM_SP2_HEADER) || (rm_le32(buf) != RM_SP2_IDENT) || (rm_le32(buf + 4) != RM_SP2_VERSION))
+	{
+		return 0;
+	}
+
+	n = rm_le32(buf + 8);
+
+	if (n <= 0)
+	{
+		return 0;
+	}
+
+	if (n > RM_MD2_MAX_SKINS)
+	{
+		n = RM_MD2_MAX_SKINS;   /* the loader keeps the first 32 */
+	}
+
+	if (!rm_md2_range_ok(RM_SP2_HEADER, n, RM_SP2_FRAME, len))
+	{
+		return 0;
+	}
+
+	for (i = 0; i < n; i++)
+	{
+		if (!memchr(buf + RM_SP2_HEADER + i * RM_SP2_FRAME + 16, 0, RM_MD2_SKINNAME))
+		{
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+/* from gl1_mesh.c, R_CullAliasModel (cull) and R_DrawAliasModel */
+void
+rm_alias_frames(int *frame, int *oldframe, int numframes, int cull)
+{
+	if (cull)
+	{
+		if ((*frame >= numframes) || (*frame < 0))
+		{
+			*frame = 0;
+		}
+
+		if ((*oldframe >= numframes) || (*oldframe < 0))
+		{
+			*oldframe = 0;
+		}
+
+		return;
+	}
+
+	if ((*frame >= numframes) || (*frame < 0))
+	{
+		*frame = 0;
+		*oldframe = 0;
+	}
+
+	if ((*oldframe >= numframes) || (*oldframe < 0))
+	{
+		*frame = 0;
+		*oldframe = 0;
+	}
+}
+
+/* from gl1_mesh.c, R_DrawAliasModel's select skin */
+int
+rm_alias_skin(int skinnum, const void *const *skins)
+{
+	if ((skinnum >= RM_MD2_MAX_SKINS) || (skinnum < 0))
+	{
+		return 0;
+	}
+
+	return skins[skinnum] ? skinnum : 0;
+}
+
+/* from gl1_mesh.c, R_DrawAliasFrameLerp */
+void
+rm_alias_lerp_setup(const float *fscale, const float *ftranslate, const float *oscale, const float *otranslate,
+		float backlerp, const float *delta, const float *forward, const float *right, const float *up,
+		float *move, float *frontv, float *backv)
+{
+	float frontlerp;
+	int i;
+
+	frontlerp = 1.0 - backlerp;
+
+	/* move should be the delta back to the previous frame * backlerp */
+	move[0] = RM_DotProduct(delta, forward); /* forward */
+	move[1] = -RM_DotProduct(delta, right); /* left */
+	move[2] = RM_DotProduct(delta, up); /* up */
+
+	move[0] = move[0] + otranslate[0];
+	move[1] = move[1] + otranslate[1];
+	move[2] = move[2] + otranslate[2];
+
+	for (i = 0; i < 3; i++)
+	{
+		move[i] = backlerp * move[i] + frontlerp * ftranslate[i];
+	}
+
+	for (i = 0; i < 3; i++)
+	{
+		frontv[i] = frontlerp * fscale[i];
+		backv[i] = backlerp * oscale[i];
+	}
+}
+
+/* from gl1_mesh.c, R_LerpVerts; a light normal index is below RM_NUMVERTEXNORMALS (rm_md2_check), bounded again */
+void
+rm_alias_lerp(int n, const unsigned char *v, const unsigned char *ov, int shell, const float *move,
+		const float *frontv, const float *backv, float (*out)[4])
+{
+	int i;
+
+	if (shell)
+	{
+		for (i = 0; i < n; i++, v += 4, ov += 4)
+		{
+			const int ni = (v[3] < RM_NUMVERTEXNORMALS) ? v[3] : 0;
+			const float *normal = rm_avertexnormals[ni];
+
+			out[i][0] = move[0] + ov[0] * backv[0] + v[0] * frontv[0] +
+					  normal[0] * RM_POWERSUIT_SCALE;
+			out[i][1] = move[1] + ov[1] * backv[1] + v[1] * frontv[1] +
+					  normal[1] * RM_POWERSUIT_SCALE;
+			out[i][2] = move[2] + ov[2] * backv[2] + v[2] * frontv[2] +
+					  normal[2] * RM_POWERSUIT_SCALE;
+		}
+	}
+	else
+	{
+		for (i = 0; i < n; i++, v += 4, ov += 4)
+		{
+			out[i][0] = move[0] + ov[0] * backv[0] + v[0] * frontv[0];
+			out[i][1] = move[1] + ov[1] * backv[1] + v[1] * frontv[1];
+			out[i][2] = move[2] + ov[2] * backv[2] + v[2] * frontv[2];
+		}
+	}
+}
+
+int
+rm_alias_lit(int flags)
+{
+	return !(flags & (RM_RF_SHELLS | RM_RF_FULLBRIGHT));
+}
+
+/* from gl1_mesh.c, R_DrawAliasModel's lighting information */
+void
+rm_alias_shade(int flags, int rdflags, const float *point, float time, float overbright, float *shadelight)
+{
+	int i;
+
+	if (flags & RM_RF_SHELLS)
+	{
+		shadelight[0] = shadelight[1] = shadelight[2] = 0;
+
+		if (flags & RM_RF_SHELL_HALF_DAM)
+		{
+			shadelight[0] = 0.56;
+			shadelight[1] = 0.59;
+			shadelight[2] = 0.45;
+		}
+
+		if (flags & RM_RF_SHELL_DOUBLE)
+		{
+			shadelight[0] = 0.9;
+			shadelight[1] = 0.7;
+		}
+
+		if (flags & RM_RF_SHELL_RED)
+		{
+			shadelight[0] = 1.0;
+		}
+
+		if (flags & RM_RF_SHELL_GREEN)
+		{
+			shadelight[1] = 1.0;
+		}
+
+		if (flags & RM_RF_SHELL_BLUE)
+		{
+			shadelight[2] = 1.0;
+		}
+	}
+	else if (flags & RM_RF_FULLBRIGHT)
+	{
+		for (i = 0; i < 3; i++)
+		{
+			shadelight[i] = 1.0;
+		}
+	}
+	else
+	{
+		for (i = 0; i < 3; i++)
+		{
+			shadelight[i] = point[i];
+		}
+	}
+
+	if (flags & RM_RF_MINLIGHT)
+	{
+		for (i = 0; i < 3; i++)
+		{
+			if (shadelight[i] > 0.1)
+			{
+				break;
+			}
+		}
+
+		if (i == 3)
+		{
+			shadelight[0] = 0.1;
+			shadelight[1] = 0.1;
+			shadelight[2] = 0.1;
+		}
+	}
+
+	if (flags & RM_RF_GLOW)
+	{
+		/* bonus items will pulse with time */
+		float scale;
+		float min;
+
+		scale = 0.1 * sin(time * 7);
+
+		for (i = 0; i < 3; i++)
+		{
+			min = shadelight[i] * 0.8;
+			shadelight[i] += scale;
+
+			if (shadelight[i] < min)
+			{
+				shadelight[i] = min;
+			}
+		}
+	}
+
+	/* gl1_overbrightbits applies to the mesh too, or it appears dimmer relative to walls */
+	if (overbright)
+	{
+		for (i = 0; i < 3; ++i)
+		{
+			shadelight[i] *= overbright;
+		}
+	}
+
+	/* ir goggles color override */
+	if ((rdflags & RM_RDF_IRGOGGLES) && (flags & RM_RF_IR_VISIBLE))
+	{
+		shadelight[0] = 1.0;
+		shadelight[1] = 0.0;
+		shadelight[2] = 0.0;
+	}
+}
+
+/* from gl1_main.c, R_SetLightLevel: pick the greatest component */
+float
+rm_light_level(const float *shadelight)
+{
+	if (shadelight[0] > shadelight[1])
+	{
+		if (shadelight[0] > shadelight[2])
+		{
+			return 150 * shadelight[0];
+		}
+
+		return 150 * shadelight[2];
+	}
+
+	if (shadelight[1] > shadelight[2])
+	{
+		return 150 * shadelight[1];
+	}
+
+	return 150 * shadelight[2];
+}
+
+/* from gl1_mesh.c: shadedots = r_avertexnormal_dots[((int)(angles[1] * (SHADEDOT_QUANT / 360.0))) & (SHADEDOT_QUANT - 1)] */
+int
+rm_shadedot_row(float yaw)
+{
+	return rm_itrunc(yaw * (RM_SHADEDOT_QUANT / 360.0)) & (RM_SHADEDOT_QUANT - 1);
+}
+
+float
+rm_shadedot(int row, int normal)
+{
+	return rm_avertexnormal_dots[row & (RM_SHADEDOT_QUANT - 1)][normal & 255];
+}
+
+unsigned char
+rm_alias_alpha(int flags, float alpha)
+{
+	float a = (flags & RM_RF_TRANSLUCENT) ? alpha : 1.0;
+	float v = a * 255;
+
+	/* gl1's conversion of alpha * 255 to a byte, defined from 0 to 255 */
+	if (!(v >= 0))
+	{
+		return 0;
+	}
+
+	if (v >= 255)
+	{
+		return 255;
+	}
+
+	return (unsigned char)v;
+}
+
+/* gl1's truncation of a light to a colour index, and Q_clamp(idx, 0, 255) */
+static int
+rm_alias_index(float f)
+{
+	int idx = rm_itrunc(f);
+
+	return (0 > idx) ? 0 : (idx > 255) ? 255 : idx;
+}
+
+/* from gl1_mesh.c, R_DrawAliasFrameLerp, with GLBUFFER_COLOR and the shim's reading of the bytes */
+void
+rm_alias_color(float l, const float *shadelight, int shell, const unsigned char *minlight,
+		const unsigned char *gamma, unsigned char alpha, float *rgba)
+{
+	int i;
+
+	for (i = 0; i < 3; i++)
+	{
+		int idx;
+
+		if (shell)
+		{
+			idx = rm_alias_index(shadelight[i] * 255);
+		}
+		else
+		{
+			idx = rm_alias_index(l * shadelight[i] * 255);
+		}
+
+		if (minlight)
+		{
+			idx = minlight[idx];
+		}
+
+		rgba[i] = gamma[idx] / 255.0f;
+	}
+
+	rgba[3] = alpha / 255.0f;
+}
+
+long
+rm_alias_emit(const int *order, long norder, const float (*lerped)[4], const unsigned char *verts, int num_xyz,
+		int row, const float *shadelight, int shell, const unsigned char *minlight, const unsigned char *gamma,
+		unsigned char alpha, rm_avert_t *out, long vcap, unsigned short *idx, long icap, long *nidx)
+{
+	long pos = 0, nv = 0, ni = 0;
+
+	*nidx = 0;
+
+	for (;;)
+	{
+		long count, i, fan;
+
+		/* get the vertex count and primitive type */
+		if (pos >= norder)
+		{
+			return -1;
+		}
+
+		count = order[pos++];
+
+		if (!count)
+		{
+			break; /* done */
+		}
+
+		fan = (count < 0);
+
+		if (fan)
+		{
+			count = -count;
+		}
+
+		if ((count < 3) || (count > (norder - pos) / 3) || (count > vcap - nv) || (3 * (count - 2) > icap - ni))
+		{
+			return -1;
+		}
+
+		/* R_SetBufferIndices */
+		for (i = 0; i < count - 2; i++)
+		{
+			if (fan)
+			{
+				idx[ni] = (unsigned short)nv;
+				idx[ni + 1] = (unsigned short)(nv + i + 1);
+				idx[ni + 2] = (unsigned short)(nv + i + 2);
+			}
+			else if (i % 2 == 0)
+			{
+				idx[ni] = (unsigned short)(nv + i);
+				idx[ni + 1] = (unsigned short)(nv + i + 1);
+				idx[ni + 2] = (unsigned short)(nv + i + 2);
+			}
+			else /* backwards order */
+			{
+				idx[ni] = (unsigned short)(nv + i + 2);
+				idx[ni + 1] = (unsigned short)(nv + i + 1);
+				idx[ni + 2] = (unsigned short)(nv + i);
+			}
+
+			ni += 3;
+		}
+
+		do
+		{
+			rm_avert_t *o = &out[nv];
+			const int index_xyz = order[pos + 2];
+
+			if ((index_xyz < 0) || (index_xyz >= num_xyz))
+			{
+				return -1;
+			}
+
+			memset(o, 0, sizeof(*o));
+			o->pos[0] = lerped[index_xyz][0];
+			o->pos[1] = lerped[index_xyz][1];
+			o->pos[2] = lerped[index_xyz][2];
+			o->pos[3] = 1.0f;
+
+			if (shell)
+			{
+				rm_alias_color(0, shadelight, 1, minlight, gamma, alpha, o->color);
+			}
+			else
+			{
+				/* texture coordinates come from the draw list */
+				memcpy(&o->uv[0], &order[pos], sizeof(float));
+				memcpy(&o->uv[1], &order[pos + 1], sizeof(float));
+
+				/* normals and vertexes come from the frame list */
+				rm_alias_color(rm_shadedot(row, verts[4 * index_xyz + 3]), shadelight, 0, minlight, gamma,
+						alpha, o->color);
+			}
+
+			pos += 3;
+			nv++;
+		}
+		while (--count);
+	}
+
+	*nidx = ni;
+	return nv;
+}
+
+/* from gl1_mesh.c, R_CullAliasModel */
+int
+rm_alias_culled(const float *fscale, const float *ftranslate, const float *oscale, const float *otranslate,
+		int same, const float *origin, const float *forward, const float *right, const float *up,
+		const float (*normal)[3], const float *dist)
+{
+	float mins[3], maxs[3], bbox[8][3];
+	int i, p, f, aggregatemask = ~0;
+
+	/* compute axially aligned mins and maxs */
+	if (same)
+	{
+		for (i = 0; i < 3; i++)
+		{
+			mins[i] = ftranslate[i];
+			maxs[i] = mins[i] + fscale[i] * 255;
+		}
+	}
+	else
+	{
+		for (i = 0; i < 3; i++)
+		{
+			float thismins, oldmins, thismaxs, oldmaxs;
+
+			thismins = ftranslate[i];
+			thismaxs = thismins + fscale[i] * 255;
+
+			oldmins = otranslate[i];
+			oldmaxs = oldmins + oscale[i] * 255;
+
+			if (thismins < oldmins)
+			{
+				mins[i] = thismins;
+			}
+			else
+			{
+				mins[i] = oldmins;
+			}
+
+			if (thismaxs > oldmaxs)
+			{
+				maxs[i] = thismaxs;
+			}
+			else
+			{
+				maxs[i] = oldmaxs;
+			}
+		}
+	}
+
+	/* compute a full bounding box, rotated */
+	for (i = 0; i < 8; i++)
+	{
+		float tmp[3];
+
+		tmp[0] = (i & 1) ? mins[0] : maxs[0];
+		tmp[1] = (i & 2) ? mins[1] : maxs[1];
+		tmp[2] = (i & 4) ? mins[2] : maxs[2];
+
+		bbox[i][0] = RM_DotProduct(forward, tmp);
+		bbox[i][1] = -RM_DotProduct(right, tmp);
+		bbox[i][2] = RM_DotProduct(up, tmp);
+
+		bbox[i][0] = origin[0] + bbox[i][0];
+		bbox[i][1] = origin[1] + bbox[i][1];
+		bbox[i][2] = origin[2] + bbox[i][2];
+	}
+
+	for (p = 0; p < 8; p++)
+	{
+		int mask = 0;
+
+		for (f = 0; f < 4; f++)
+		{
+			float dp = RM_DotProduct(normal[f], bbox[p]);
+
+			if ((dp - dist[f]) < 0)
+			{
+				mask |= (1 << f);
+			}
+		}
+
+		aggregatemask &= mask;
+	}
+
+	return aggregatemask != 0;
+}
+
+/* from gl1_main.c, R_RotateForEntity, on the shim's matrices */
+void
+rm_entity_matrix(float *out, const float *world, const float *origin, const float *a)
+{
+	float t[16];
+
+	memmove(out, world, 16 * sizeof(float));
+	mtl_mat_translate(t, origin[0], origin[1], origin[2]);
+	mtl_mat_mul(out, out, t);
+
+	rm_mat_rotate_on(out, a[1], 0, 0, 1);
+	rm_mat_rotate_on(out, -a[0], 0, 1, 0);
+	rm_mat_rotate_on(out, -a[2], 1, 0, 0);
+}
+
+/* from gl1_buffer.c, R_ApplyGLBuffer with RF_WEAPONMODEL */
+int
+rm_weapon_projection(float *m, float fovy, float gunfov, float hand, int width, int height, float znear,
+		int farsee, int underwater, float time, float waterwarp)
+{
+	mtl_mat_identity(m);
+
+	if (hand == 1.0f)
+	{
+		float s[16];
+
+		mtl_mat_scale(s, -1, 1, 1);
+		mtl_mat_mul(m, m, s);
+	}
+
+	return rm_perspective_on(m, (gunfov < 0) ? fovy : gunfov, width, height, znear, farsee, underwater, time,
+			waterwarp);
+}
+
+/* from gl1_buffer.c (glDepthRange) and gl1_main.c's R_Clear without gl1_ztrick: gldepthmin 0, gldepthmax 1 */
+void
+rm_alias_depth(int flags, double *znear, double *zfar)
+{
+	const double gldepthmin = 0, gldepthmax = 1;
+
+	*znear = gldepthmin;
+	*zfar = gldepthmax;
+
+	if (flags & RM_RF_DEPTHHACK)
+	{
+		/* hack the depth range to prevent view model from poking into walls */
+		*zfar = gldepthmin + 0.3 * (gldepthmax - gldepthmin);
+	}
+}
+
+int
+rm_alias_cull_mode(int cull, int flags, float hand)
+{
+	if (!cull)
+	{
+		return RMB_CULL_NONE;
+	}
+
+	return ((flags & RM_RF_WEAPONMODEL) && (hand == 1.0f)) ? RMB_CULL_BACK : RMB_CULL_FRONT;
+}
+
+int
+rm_alias_drawn(int flags, float hand)
+{
+	return !((flags & RM_RF_WEAPONMODEL) && (hand == 2));
+}
+
+/* from gl1_surf.c, R_DrawBrushModel */
+int
+rm_brush_bounds(const float *origin, const float *angles, const float *mins, const float *maxs, float radius,
+		float *bmins, float *bmaxs)
+{
+	int i;
+
+	if (angles[0] || angles[1] || angles[2])
+	{
+		for (i = 0; i < 3; i++)
+		{
+			bmins[i] = origin[i] - radius;
+			bmaxs[i] = origin[i] + radius;
+		}
+
+		return 1;
+	}
+
+	for (i = 0; i < 3; i++)
+	{
+		bmins[i] = origin[i] + mins[i];
+		bmaxs[i] = origin[i] + maxs[i];
+	}
+
+	return 0;
+}
+
+void
+rm_brush_modelorg(const float *vieworg, const float *origin, int rotated, const float *forward,
+		const float *right, const float *up, float *modelorg)
+{
+	modelorg[0] = vieworg[0] - origin[0];
+	modelorg[1] = vieworg[1] - origin[1];
+	modelorg[2] = vieworg[2] - origin[2];
+
+	if (rotated)
+	{
+		float temp[3];
+
+		temp[0] = modelorg[0];
+		temp[1] = modelorg[1];
+		temp[2] = modelorg[2];
+		modelorg[0] = RM_DotProduct(temp, forward);
+		modelorg[1] = -RM_DotProduct(temp, right);
+		modelorg[2] = RM_DotProduct(temp, up);
+	}
+}
+
+int
+rm_brush_face_visible(const float *modelorg, const float *normal, float dist, int planeback)
+{
+	const float dot = RM_DotProduct(modelorg, normal) - dist;
+
+	return (planeback && (dot < -0.01)) || (!planeback && (dot > 0.01));
+}
+
+int
+rm_entity_floats_ok(const float *origin, const float *oldorigin, const float *angles, float backlerp,
+		float alpha)
+{
+	int i;
+
+	for (i = 0; i < 3; i++)
+	{
+		if (!isfinite(origin[i]) || !isfinite(oldorigin[i]) || !isfinite(angles[i]))
+		{
+			return 0;
+		}
+	}
+
+	return isfinite(backlerp) && isfinite(alpha);
 }
