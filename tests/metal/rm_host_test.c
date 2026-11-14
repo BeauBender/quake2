@@ -1014,6 +1014,10 @@ test_world_fan(void)
 	CHECK(rm_world_fan(0, 2, idx, 16) == 0 && rm_world_fan(0, -1, idx, 16) == 0);
 	CHECK(rm_world_fan(0xfffffffeul, 3, idx, 16) == 0 && idx[0] == 0xeeeeeeee);
 	CHECK(rm_world_fan(0xfffffffcul, 3, idx, 16) == 3 && idx[2] == 0xfffffffeu);
+
+	/* an exact fit (the last surface of every map), and a base past 32 bits */
+	CHECK(rm_world_fan(0, 5, idx, 9) == 9 && idx[8] == 4);
+	CHECK(rm_world_fan(0x100000000ul, 3, idx, 16) == 0);
 }
 
 /*
@@ -1084,6 +1088,12 @@ test_world_sizes(void)
 	big.verts = 1000;
 	CHECK(!rm_world_bytes(&big, 1000 * 32 - 1, &vb, &ib, &sb) && vb == 0);
 	CHECK(rm_world_bytes(&big, 1000 * 32, &vb, &ib, &sb) && vb == 32000);
+
+	/* the index and record products against the cap, each at its exact fit */
+	memset(&s, 0, sizeof(s)); s.surfs = 1; s.verts = 3; s.indices = 1000;
+	CHECK(!rm_world_bytes(&s, 1000 * 4 - 1, &vb, &ib, &sb) && rm_world_bytes(&s, 1000 * 4, &vb, &ib, &sb) && ib == 4000);
+	memset(&s, 0, sizeof(s)); s.surfs = 100; s.verts = 3; s.indices = 3;
+	CHECK(!rm_world_bytes(&s, 100 * 48 - 1, &vb, &ib, &sb) && rm_world_bytes(&s, 100 * 48, &vb, &ib, &sb) && sb == 4800);
 }
 
 /* The BSP index checks: ranges, lumps, a face's edges, a surfedge, a leaf. */
@@ -1168,6 +1178,13 @@ test_vis(void)
 
 		CHECK(!rm_decompress_vis(tail, sizeof(tail), 5, out, sizeof(out)) && out[0] == 0xff);
 	}
+	{
+		/* a two-byte lump that ends inside the row: never read past its end */
+		unsigned char lit[2] = { 1, 2 };
+
+		memset(out, 0xee, sizeof(out));
+		CHECK(!rm_decompress_vis(lit, sizeof(lit), 5, out, sizeof(out)) && out[0] == 0xff);
+	}
 	/* a row longer than the output writes nothing */
 	memset(out, 0xee, sizeof(out));
 	CHECK(!rm_decompress_vis(row, sizeof(row), 9, out, sizeof(out)) && out[0] == 0xee && out[7] == 0xee);
@@ -1185,6 +1202,10 @@ test_mark_once(void)
 	CHECK(!rm_mark_once(owner, 6, 1, 2) && !owner[2]);
 	CHECK(!rm_mark_once(owner, 6, 3, 4) && !owner[3]);
 	CHECK(!rm_mark_once(owner, 6, -1, 1) && rm_mark_once(owner, 6, 2, 2));
+
+	/* only the last surface of the range is taken already */
+	memset(owner, 0, sizeof(owner));
+	CHECK(rm_mark_once(owner, 6, 4, 1) && !rm_mark_once(owner, 6, 3, 2) && !owner[3]);
 }
 
 /*
@@ -1212,6 +1233,7 @@ test_node_tree(void)
 	CHECK(!rm_node_tree_ok(twice, 2, 2, seen));
 	CHECK(!rm_node_tree_ok(to_root, 2, 2, seen));
 	CHECK(!rm_node_tree_ok(loop, 3, 3, seen) && !rm_node_tree_ok(self, 2, 2, seen));
+	memset(seen, 0, sizeof(seen));   /* a child at the node count, not seen before */
 	CHECK(!rm_node_tree_ok(far_node, 2, 4, seen) && !rm_node_tree_ok(far_leaf, 2, 4, seen));
 	CHECK(rm_node_tree_ok(far_leaf, 2, 5, seen) && !rm_node_tree_ok(least, 2, 4, seen));
 	CHECK(!rm_node_tree_ok(tree, 0, 4, seen) && !rm_node_tree_ok(tree, 4, 3, seen));
