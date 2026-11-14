@@ -20,12 +20,16 @@
  * =======================================================================
  *
  * The light of gl1_light.c (docs/plans/ref-metal-native.md, sections 2
- * and 6): R_BuildLightMap (the arithmetic is rm_lm_build of rm_pure.c,
- * host-tested) without the dynamic-light step, which N8 adds as a step of
- * its own so RT3 can replace exactly that term; R_SetCacheState; gl1's
- * marking of the surfaces a dynamic light touches (R_PushDlights), which
- * N5 only counts: such a surface is drawn with its static lightmap; and
- * R_LightPoint with R_SetLightLevel.
+ * and 6): R_BuildLightMap (the arithmetic is rm_lm_styles and
+ * rm_lm_store of rm_pure.c, host-tested) with gl1's dynamic-light step
+ * between them (R_AddDynamicLights, rm_lm_dlight, N8) behind one
+ * front-end flag, r_dlight_term, so RT3 can replace exactly that term;
+ * R_SetCacheState; gl1's marking of the surfaces a dynamic light touches
+ * (R_PushDlights, and R_MarkBrushLights for the brush entities); the
+ * flash blobs of gl1_flashblend (R_RenderDlights, N8); and R_LightPoint
+ * with R_SetLightLevel. The frame's dynamic lights are the renderer's
+ * own checked copy of the refdef's (R_TakeDlights): every reader takes
+ * them from there.
  *
  * =======================================================================
  */
@@ -39,11 +43,70 @@ static int r_dlightframecount;
 
 static vec3_t pointcolor;
 
+/* the dynamic-light step of R_BuildLightMap (N8): RT3 turns it off and adds the term itself */
+qboolean r_dlight_term = true;
+
+/* the frame's dynamic lights as taken (R_TakeDlights), and those left out */
+static dlight_t rm_dlights[MAX_DLIGHTS];
+static unsigned long dlight_skips;
+
+/* the frame's flash blobs (R_RenderDlights): one fan of RM_FLASH_VERTS per light */
+static rm_avert_t flash_verts[MAX_DLIGHTS * RM_FLASH_VERTS];
+static unsigned short flash_idx[MAX_DLIGHTS * 3 * (RM_FLASH_VERTS - 2)];
+
 #if RM_MAX_DLIGHTS != MAX_DLIGHTS
 #error RM_MAX_DLIGHTS must be ref.h's MAX_DLIGHTS
 #endif
 static cplane_t *lightplane; /* used as shadow plane */
 static vec3_t lightspot;
+
+/*
+ * The refdef's dynamic lights as this renderer takes them for the frame:
+ * at most MAX_DLIGHTS (rm_dlight_count, the 32 bits of a surface's mask),
+ * each copied and checked (rm_dlight_ok: finite, inside its bounds) or
+ * left out and counted; r_newrefdef then names the copy, so marking, the
+ * lightmap step, R_LightPoint and the flash blobs read only checked
+ * values. The refdef itself is copied once per view (R_RenderView), and
+ * nothing copies the client's lights again before the next view.
+ */
+void
+R_TakeDlights(void)
+{
+	const dlight_t *in = r_newrefdef.dlights;
+	int i, k = 0, n = in ? rm_dlight_count(r_newrefdef.num_dlights) : 0;
+
+	dlight_skips = 0;
+
+	for (i = 0; i < n; i++)
+	{
+		dlight_t l = in[i];
+
+		if (!rm_dlight_ok(l.origin, l.color, l.intensity))
+		{
+			dlight_skips++;
+			continue;
+		}
+
+		rm_dlights[k++] = l;
+	}
+
+	r_newrefdef.dlights = rm_dlights;
+	r_newrefdef.num_dlights = k;
+}
+
+/* the dynamic lights of the last view left out, into s (metal_stats) */
+void
+RM_DlightSkips(rmb_stats_t *s)
+{
+	s->dlight_skips = dlight_skips;
+}
+
+/* gl1's lightspot of the last R_LightPoint that reached a node (the alias shadows' plane) */
+const float *
+R_LightSpot(void)
+{
+	return lightspot;
+}
 
 /* gl1's minlight table, made at init as gl1's R_InitImages makes it (a change needs vid_restart) */
 void
@@ -72,15 +135,45 @@ R_SetCacheState(msurface_t *surf)
 }
 
 /*
+ * from gl1_light.c, the loop of R_AddDynamicLights: each light of the
+ * frame the surface is marked for (its bit of dlightbits) added into the
+ * surface's smax by tmax luxels of s_blocklights (rm_lm_dlight, which
+ * refuses a light whose int conversions would be undefined)
+ */
+static void
+R_AddDynamicLights(const msurface_t *surf, int smax, int tmax)
+{
+	int lnum, n = rm_dlight_count(r_newrefdef.num_dlights);
+	const unsigned bits = (unsigned)surf->dlightbits;
+	const mtexinfo_t *tex = surf->texinfo;
+
+	for (lnum = 0; lnum < n; lnum++)
+	{
+		const dlight_t *dl;
+
+		if (!(bits & rm_dlight_bit(lnum)))
+		{
+			continue; /* not lit by this light */
+		}
+
+		dl = &r_newrefdef.dlights[lnum];
+		rm_lm_dlight(s_blocklights, smax, tmax, surf->plane->normal, surf->plane->dist, tex->vecs[0], tex->vecs[1],
+				surf->texturemins[0], surf->texturemins[1], dl->origin, dl->intensity, dl->color);
+	}
+}
+
+/*
  * from gl1_light.c: combine and scale the styles of surf into dest (rows
- * stride bytes apart); the size is the one the loader checked. false
- * when it is refused (nothing written).
+ * stride bytes apart), with the dynamic lights that touch it this frame
+ * when it has light data (gl1's R_AddDynamicLights, behind r_dlight_term);
+ * the size is the one the loader checked. false when it is refused
+ * (nothing written).
  */
 qboolean
 R_BuildLightMap(msurface_t *surf, byte *dest, int stride)
 {
 	float rgb[MAXLIGHTMAPS][3];
-	int smax, tmax, nummaps, maps, i;
+	int smax, tmax, nummaps, maps, i, styled;
 
 	if (surf->texinfo->flags & (SURF_SKY | SURF_TRANS33 | SURF_TRANS66 | SURF_WARP))
 	{
@@ -103,9 +196,26 @@ R_BuildLightMap(msurface_t *surf, byte *dest, int stride)
 		}
 	}
 
-	/* gl1 adds the dynamic lights (R_AddDynamicLights) between the styles and the store: N8 */
-	return rm_lm_build(surf->samples, smax, tmax, nummaps, (const float (*)[3])rgb, r_modulate->value,
-			minlight_set ? minlight : NULL, gammatable, dest, stride, s_blocklights) != 0;
+	if (stride < smax * RM_LM_BYTES)
+	{
+		return false;
+	}
+
+	styled = rm_lm_styles(surf->samples, smax, tmax, nummaps, (const float (*)[3])rgb, r_modulate->value,
+			s_blocklights);
+
+	if (!styled)
+	{
+		return false;
+	}
+
+	/* add all the dynamic lights (not on a surface without light data: gl1 goes to the store) */
+	if ((styled == 2) && r_dlight_term && (surf->dlightframe == r_framecount))
+	{
+		R_AddDynamicLights(surf, smax, tmax);
+	}
+
+	return rm_lm_store(smax, tmax, minlight_set ? minlight : NULL, gammatable, dest, stride, s_blocklights) != 0;
 }
 
 /* from gl1_light.c */
@@ -151,8 +261,8 @@ R_MarkSurfaceLights(dlight_t *light, int bit, mnode_t *node, int lightframecount
 
 /*
  * from gl1_light.c: marks the surfaces each dynamic light touches, before
- * R_SetupFrame advances r_framecount. N5 draws them with their static
- * lightmap and counts them (rm_surf.c); the light itself is N8's.
+ * R_SetupFrame advances r_framecount; R_BuildLightMap adds the light to
+ * the ones R_RegenAllLightmaps rebuilds (rm_surf.c).
  */
 void
 R_PushDlights(void)
@@ -175,6 +285,89 @@ R_PushDlights(void)
 	{
 		R_MarkLights(l, (int)rm_dlight_bit(i), r_worldmodel->nodes, r_dlightframecount, R_MarkSurfaceLights);
 	}
+}
+
+/*
+ * from gl1_surf.c, R_GetBrushesLighting (and R_DrawInlineBModel): marks
+ * the dynamic lights on a brush entity's surfaces from its submodel's
+ * head node, as gl1 marks them, with the frame's count R_PushDlights set
+ * (r_framecount by now). A head node that is not a node of the world (a
+ * submodel without faces holds a leaf, -1 - leaf) marks nothing
+ * (rm_bmodel_headnode).
+ */
+void
+R_MarkBrushLights(const model_t *currentmodel)
+{
+	int k, n;
+	long head;
+	dlight_t *lt;
+
+	if (!r_worldmodel || !currentmodel || (currentmodel->nodes != r_worldmodel->nodes))
+	{
+		return;
+	}
+
+	head = rm_bmodel_headnode(currentmodel->firstnode, r_worldmodel->numnodes);
+
+	if (head < 0)
+	{
+		return;
+	}
+
+	lt = r_newrefdef.dlights;
+	n = rm_dlight_count(r_newrefdef.num_dlights);
+
+	for (k = 0; k < n; k++, lt++)
+	{
+		R_MarkLights(lt, (int)rm_dlight_bit(k), r_worldmodel->nodes + head, r_dlightframecount, R_MarkSurfaceLights);
+	}
+}
+
+/*
+ * from gl1_light.c, R_RenderDlights and R_RenderDlight: with
+ * gl1_flashblend, a blob for each dynamic light instead of its light on
+ * the lightmaps: one fan of RM_FLASH_VERTS vertices (rm_flash_blob, gl1's
+ * arithmetic), blended GL_ONE, GL_ONE without depth writes, untextured,
+ * in one draw (gl1's buf_flash batch). 0 when the draw is refused
+ * (counted by the back end).
+ */
+int
+R_RenderDlights(const rm_view_t *view)
+{
+	rmb_alias_draw_t d;
+	int i, n, ni = 0;
+	dlight_t *l;
+
+	if (!gl1_flashblend->value)
+	{
+		return 1;
+	}
+
+	/* because the count hasn't advanced yet for this frame */
+	r_dlightframecount = r_framecount + 1;
+
+	l = r_newrefdef.dlights;
+	n = rm_dlight_count(r_newrefdef.num_dlights);
+
+	for (i = 0; i < n; i++, l++)
+	{
+		rm_flash_blob(l->origin, l->intensity, l->color, vpn, vright, vup, gammatable, flash_verts + i * RM_FLASH_VERTS);
+		ni += rm_prim_indices(0, RM_FLASH_VERTS, i * RM_FLASH_VERTS, flash_idx + ni,
+				(int)(sizeof(flash_idx) / sizeof(flash_idx[0])) - ni);
+	}
+
+	if (!n)
+	{
+		return 1;
+	}
+
+	memset(&d, 0, sizeof(d));
+	d.add = 1;
+	d.cull = view->cull ? RMB_CULL_FRONT : RMB_CULL_NONE;
+	d.zfar = 1;
+
+	return rmb_draw_alias(flash_verts, (unsigned)(n * RM_FLASH_VERTS), flash_idx, (unsigned long)ni, &d, view->mvp,
+			&view->vp);
 }
 
 /*

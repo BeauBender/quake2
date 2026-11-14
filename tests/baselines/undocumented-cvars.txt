@@ -60,8 +60,6 @@ gamedate
 gamename
 gender
 gender_auto
-gl1_dynamic
-gl1_flashblend
 gl1_palettedtexture
 gl1_particle_att_a
 gl1_particle_att_b

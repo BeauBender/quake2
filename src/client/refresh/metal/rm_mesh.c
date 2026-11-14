@@ -26,9 +26,12 @@
  * hand) and depth range (RF_DEPTHHACK) of gl1's R_ApplyGLBuffer. The
  * arithmetic is rm_pure.c's, host-tested against gl1's lines: the frame
  * lerp and the per-vertex colour run on the CPU as in gl1, and one draw's
- * vertices go into one region of the frame ring (rmb_draw_alias). No
- * shadows (N8). gl1 writes the frame bounds and the turned pitch into the
- * client's entity; this file works on a copy, which draws the same.
+ * vertices go into one region of the frame ring (rmb_draw_alias). The
+ * shadows (r_shadows, gl1_stencilshadow: R_DrawAliasShadow, N8) are the
+ * same vertices projected onto the plane under the light spot, drawn after
+ * the model with gl1's matrix, blend and stencil test. gl1 writes the
+ * frame bounds and the turned pitch into the client's entity; this file
+ * works on a copy, which draws the same.
  *
  * =======================================================================
  */
@@ -73,6 +76,51 @@ R_CullAliasModel(const dmdl_t *paliashdr, const entity_t *e)
 }
 
 /*
+ * from gl1_mesh.c, R_DrawAliasShadow and its call in R_DrawAliasModel: the
+ * nv vertices the model was drawn with (gl1's s_lerped in the order of
+ * the command stream, with the same ni indices: R_SetBufferIndices gives
+ * the shadow the model's triangles) projected by rm_shadow_point, in
+ * glColor4f(0, 0, 0, 0.5) blended, untextured, with depth writes (the
+ * opaque pass) and gl1's stencil test with gl1_stencilshadow, on
+ * glTranslatef(origin) and glRotatef(yaw). s_verts is free to reuse: the
+ * model's draw copied it into the frame ring.
+ */
+static int
+R_DrawAliasShadow(const entity_t *e, const rm_view_t *view, long nv, long ni)
+{
+	const float *spot = R_LightSpot();
+	float shadevector[3], mv[16], mvp[16], lheight;
+	rmb_alias_draw_t d;
+	long i;
+
+	lheight = e->origin[2] - spot[2];
+	rm_shadevector(e->angles[1], shadevector);
+
+	for (i = 0; i < nv; i++)
+	{
+		float p[3];
+
+		rm_shadow_point(s_verts[i].pos, shadevector, lheight, p);
+		memset(&s_verts[i], 0, sizeof(s_verts[i]));
+		memcpy(s_verts[i].pos, p, sizeof(p));
+		s_verts[i].pos[3] = 1;
+		s_verts[i].color[3] = 0.5f;
+	}
+
+	rm_shadow_matrix(mv, view->world, e->origin, e->angles[1]);
+	mtl_mat_mul(mvp, view->proj, mv);
+
+	memset(&d, 0, sizeof(d));
+	d.blend = 1;
+	d.depth_write = 1;
+	d.stencil = gl1_stencilshadow->value != 0;
+	d.cull = view->cull ? RMB_CULL_FRONT : RMB_CULL_NONE;
+	d.zfar = 1;
+
+	return rmb_draw_alias(s_verts, (unsigned)nv, s_idx, (unsigned long)ni, &d, mvp, &view->vp);
+}
+
+/*
  * from gl1_mesh.c and gl1_buffer.c (buf_alias): draws the entity, in the
  * pass whose depth writes are depth_write (gl1's glDepthMask). 0 when a
  * model or entity value is refused or the draw is (the caller counts it).
@@ -89,7 +137,7 @@ R_DrawAliasModel(const entity_t *currententity, const model_t *currentmodel, con
 	const image_t *skin;
 	rmb_alias_draw_t d;
 	long nv, ni;
-	int shell, row;
+	int shell, row, ok;
 
 	/* the model is one rm_md2_check accepted (rm_model.c), whose counts the draw takes */
 	if (!paliashdr || (currentmodel->md2.verts <= 0) || (paliashdr->num_xyz != currentmodel->md2.num_xyz) ||
@@ -216,5 +264,13 @@ R_DrawAliasModel(const entity_t *currententity, const model_t *currentmodel, con
 	d.cull = rm_alias_cull_mode(view->cull, e.flags, gl_lefthand->value);
 	rm_alias_depth(e.flags, &d.znear, &d.zfar);
 
-	return rmb_draw_alias(s_verts, (unsigned)nv, s_idx, (unsigned long)ni, &d, mvp, &view->vp);
+	ok = rmb_draw_alias(s_verts, (unsigned)nv, s_idx, (unsigned long)ni, &d, mvp, &view->vp);
+
+	/* gl1 draws the shadow after the model, never for a translucent one or the view weapon */
+	if (rm_shadow_drawn(e.flags, gl_shadows->value) && !R_DrawAliasShadow(&e, view, nv, ni))
+	{
+		ok = 0;
+	}
+
+	return ok;
 }

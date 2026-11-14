@@ -97,6 +97,10 @@ extern cvar_t *r_lerpmodels;
 extern cvar_t *gl_lefthand;     /* hand */
 extern cvar_t *r_gunfov;
 
+/* the shadows (N8), by gl1's names */
+extern cvar_t *gl_shadows;      /* r_shadows */
+extern cvar_t *gl1_stencilshadow;
+
 /* from gl1's header/local.h, without the GL fields; a scrap image has no texture of its own (texnum RM_TEXNUM_SCRAP) */
 #define MAX_GLTEXTURES 1024
 #define RM_TEXNUM_SCRAP -1               /* a scrap image's texnum: the slot is used, its texture is the atlas's */
@@ -221,6 +225,15 @@ void R_SetCacheState(msurface_t *surf);
 qboolean R_BuildLightMap(msurface_t *surf, byte *dest, int stride);
 void R_MarkSurfaceLights(dlight_t *light, int bit, mnode_t *node, int lightframecount);
 void R_PushDlights(void);
+/* the frame's dynamic lights: the refdef's, copied and checked (rm_dlight_ok); r_newrefdef names the copy */
+void R_TakeDlights(void);
+void RM_DlightSkips(rmb_stats_t *s);
+/* the dynamic-light step of R_BuildLightMap (N8, on): RT3 turns it off */
+extern qboolean r_dlight_term;
+/* marks the frame's dynamic lights on a brush entity's surfaces (gl1's R_GetBrushesLighting) */
+void R_MarkBrushLights(const model_t *currentmodel);
+/* gl1's lightspot: where the last R_LightPoint met a node (the alias shadows) */
+const float *R_LightSpot(void);
 void R_LightPoint(entity_t *currententity, vec3_t p, vec3_t color);
 void R_SetLightLevel(entity_t *currententity);
 const byte *R_Minlight(void);
@@ -232,6 +245,18 @@ const byte *R_Minlight(void);
  */
 int R_DrawAliasModel(const entity_t *currententity, const model_t *currentmodel, const rm_view_t *view, int depth_write);
 int R_DrawBrushModel(const entity_t *currententity, const model_t *currentmodel, const rm_view_t *view);
+
+/*
+ * rm_light.c, gl1_flashblend's blobs (gl1_light.c), and rm_effects.c
+ * (gl1_main.c), the sprites, beams and null models (N8), in the pass whose
+ * depth writes are depth_write; 0 when a value or the draw is refused (the
+ * caller counts it), 1 when drawn or nothing is to be drawn. R_DrawBeam
+ * sets *drawn when gl1 reaches its glDepthMask(GL_TRUE).
+ */
+int R_RenderDlights(const rm_view_t *view);
+int R_DrawSpriteModel(const entity_t *currententity, const model_t *currentmodel, const rm_view_t *view, int depth_write);
+int R_DrawBeam(const entity_t *currententity, const rm_view_t *view, int *drawn);
+int R_DrawNullModel(const entity_t *currententity, const rm_view_t *view, int depth_write);
 
 /* rm_misc.c */
 void R_InitBuiltinTextures(void);

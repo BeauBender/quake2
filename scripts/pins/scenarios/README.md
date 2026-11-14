@@ -16,6 +16,7 @@ derived from game data, so the files are committed (INFORM9).
 |---|---|
 | `world` | world surfaces, lightmaps, sky, water |
 | `world-fullbright` | `world` with `r_fullbright 1`: world surfaces without lightmaps, sky, water (TASK87, `ref_metal` N4) |
+| `dlights` | `world` with `cl_lights 1`: the dynamic lights on the world's lightmaps; not deterministic unseeded (the engine PRNG gives the lights their radii), so recorded with `PINS_SEED`, also with `PINS_DEMO=demo2.dm2 PINS_EVERY=7` for the animated lightstyles (TASK91, `ref_metal` N8) |
 | `models` | world plus entities: alias models, sprites, beams, view weapon |
 | `particles` | everything, including particles, dynamic lights, screen blend |
 | `hud2d` | 2D only: status bar, crosshair, console text; the GL renderers' screen blend off (`gl_polyblend 0`, TASK82) |
@@ -40,7 +41,8 @@ Rules:
   `config.cfg` (TASK39), so leaving it out of the other files leaks nothing
   into their runs, even from `gl3`, which archives it.
 - A scenario that cannot be deterministic says so in a `// nondeterministic:`
-  line and is accepted at a looser threshold, recorded with the pin.
+  line and is accepted at a looser threshold, recorded with the pin, or,
+  like `dlights`, is recorded with `PINS_SEED` and judged only seeded.
 
 First run on game data (TASK39, `soft`): `world` and `hud2d` are
 identical run to run; `models` and `particles` are not and carry their
@@ -74,3 +76,19 @@ from `water.dm2` is accepted at `--bad-threshold 0.03` (its
 `scripts/pins/demos/` may use only commands that exist in `src/`; the
 driver checks that before it runs one, and the selftest checks every
 committed script.
+
+Added by TASK91 (`ref_metal` N8): `dlights`. Unseeded, two `gl1-metal`
+records differ wherever a muzzle-flash or explosion light reaches (worst
+score 0.009399 on `demo1.dm2`, 0.012701 on `demo2.dm2` at `PINS_EVERY=7`,
+over five records each), by more than a missing lightstyle update moves a
+frame, so no unseeded threshold guards the update. It is recorded with
+`PINS_SEED` (any value, the same for the reference and the candidate,
+compared with `--ref-id`): two `gl1-metal` records at `PINS_SEED=1` were
+identical byte for byte on all 23 frames of `demo1.dm2` and all 89 of
+`demo2.dm2` every 7th, and `metal` compared at `--threshold 0.005
+--bad-threshold 0.001` on every frame of both (worst score 0.000001, bad
+0.000013). On `demo2.dm2` every 7th frames 51, 61, 63, 67 and 69 show an
+animated lightstyle; a seeded control with `gl1_dynamic 0` goes over those
+values on 61, 67 and 69 (and on 29 frames whose dynamic light it drops),
+while on 51 and 63 it moves pixels by one level only. See
+`docs/plans/metal-port-harness.md` (the N8 subsection).

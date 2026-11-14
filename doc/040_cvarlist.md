@@ -572,6 +572,15 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   look a bit better (no flickering) by using the stencil buffer. Does
   not work when `gl1_stereo` is `3`, `4` or `5`.
 
+* **gl1_flashblend**: With `1`, each dynamic light is drawn as a glowing
+  blob instead of being added to the lightmaps of the surfaces it
+  reaches (the Metal renderer takes it too). Defaults to `0`.
+
+* **gl1_dynamic**: With `0`, the lightmaps are no longer updated after
+  the map is loaded: the animated lightstyles and the dynamic lights
+  leave the world as it was built (the Metal renderer takes it too).
+  Defaults to `1`.
+
 * **gl1_waterwarp**: Intensity of the "squeeze/stretch" effect on the
   FOV when diving underwater. Can be any floating point number, `0`
   disables it (Vanilla Quake II look). Default `1.0`.
@@ -640,17 +649,19 @@ The native Metal renderer, `vid_renderer metal`, is built on macOS
 only, with `make ref_metal`. It is work in progress (see
 `doc/100_renderpins.md`): for now it draws the 2D elements, cinematics,
 the screen blend and the world's opaque surfaces with their lightmaps,
-animated lightstyles and `gl1_overbrightbits` (a surface a dynamic light
-touches keeps its static lightmap), the sky box, the warped water, the
-translucent and the flowing surfaces, the brush entities (doors and
-platforms) and the alias models with their shells and the view weapon.
-It takes the OpenGL 1.4 renderer's `r_drawentities`, `r_lerpmodels`,
-`hand` and `r_gunfov` as that renderer does. Sprites, beams, dynamic
-lights, flash blobs, shadows (`r_shadows`, `gl1_stencilshadow`) and
-particles are not drawn yet, and `gl_zfix`, `gl1_ztrick` (the OpenGL
-1.4 renderer's alternating depth range) and `gl_showbbox` (its outline
-of each model's bounding box) are not taken. A brush entity drawn translucent (which no
-map of the game has) is not drawn.
+animated lightstyles, `gl1_overbrightbits` and dynamic lights, the sky
+box, the warped water, the translucent and the flowing surfaces, the
+brush entities (doors and platforms), the alias models with their
+shells, shadows and the view weapon, sprites, beams and the flash
+blobs. It takes the OpenGL 1.4 renderer's `r_drawentities`,
+`r_lerpmodels`, `hand`, `r_gunfov`, `r_shadows`, `gl1_stencilshadow`
+and `gl1_flashblend` as that renderer does, and `gl1_dynamic` (`0`
+leaves every lightmap as it was built: no animated lightstyle and no
+dynamic light, as in that renderer). Particles are not drawn yet, and
+`gl_zfix`, `gl1_ztrick` (the OpenGL 1.4 renderer's alternating depth
+range) and `gl_showbbox` (its outline of each model's bounding box) are
+not taken. A brush entity drawn translucent (which no map of the game
+has) is not drawn.
 
 * **metal_stats**: When set to `1`, the Metal renderer prints one line
   per screenshot (so per frame the pin harness captures) and one at
@@ -663,12 +674,12 @@ map of the game has) is not drawn.
   after initialisation), its Metal objects still alive, and the sky,
   warped, translucent and flowing surfaces of the last 3D view whose draw
   it refused (a polygon too large for the sky clip, no room in the frame
-  ring, a missing texture), the surfaces it drew with their static lightmap although a
-  dynamic light touches them (it does not add dynamic lights yet), and the
-  entities of the last 3D view it did not draw: sprites, beams and null
-  models (not drawn yet), translucent brush models, and models whose draw
-  it refused (a position or angle that is not a finite number, no room in
-  the frame ring, a missing texture). When a
+  ring, a missing texture), the dynamic lights of the last 3D view it left
+  out (a position, colour or intensity that is not a finite number or is
+  out of bounds), and the entities of the last 3D view it did not draw:
+  sprites, beams, null models and models whose draw it refused (a
+  position or angle that is not a finite number, no room in the frame
+  ring, a missing texture), and translucent brush models. When a
   map is loaded it also prints the vertex, index and surface-record counts
   and bytes of the map's retained buffers, and the number of its lightmap
   slices. The
