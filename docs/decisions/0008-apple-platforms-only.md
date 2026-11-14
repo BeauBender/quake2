@@ -42,9 +42,16 @@ repository does not have, so nothing ran on `main` after a merge.
   compiled nowhere.
 - The CodeQL `c-cpp` job (`.github/workflows/codeql.yml`, job `analyze`)
   runs on `macos-latest`, with no container and no package install. It builds
-  `client server game ref_gl1 ref_gl3 ref_soft ref_metal`, so the Metal shim
-  of `ref_gl1` and `ref_metal` are compiled and their C files analysed. CodeQL
-  does not analyse Objective-C, so the `.m` files are outside the analysis.
+  `client server game ref_gl1 ref_gl3 ref_soft ref_metal`, then builds
+  `ref_gl1` again with `WITH_METAL_SHIM=yes`, so both `ref_gl1` variants (the
+  OpenGL one and the Metal shim one) and `ref_metal` are compiled and their C
+  files analysed. CodeQL does not analyse Objective-C, so the `.m` files are
+  outside the analysis.
+  The Linux-only preprocessor branches (`#if defined(__linux__)` and the
+  non-Darwin arms) are no longer seen by the analysis; this is a stated loss.
+  The vendored SDL3 under `third_party/SDL3` is now compiled inside the
+  analysed build, so code scanning may report on it; those findings are
+  upstream's code and are not acted on here.
   The `actions` entry of the job runs on `ubuntu-latest`.
 - Cppcheck also runs on a Linux runner, because it analyses the source and
   does not build for that platform.

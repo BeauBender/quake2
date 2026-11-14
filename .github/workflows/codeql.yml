@@ -46,9 +46,11 @@ jobs:
       run: |
         # Nothing is installed: SDL3 is built from third_party/SDL3 and
         # ref_metal needs only Xcode. CodeQL sees the C files compiled by
-        # these targets, the Metal shim of ref_gl1 and ref_metal included.
+        # these targets. ref_gl1 is built twice: against OpenGL, then with
+        # the Metal shim (WITH_METAL_SHIM=yes), so both variants are seen.
         # It does not analyse Objective-C, so the .m files are not covered.
         make -j4 client server game ref_gl1 ref_gl3 ref_soft ref_metal
+        make -j4 ref_gl1 WITH_METAL_SHIM=yes
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4.38.0
       with:
