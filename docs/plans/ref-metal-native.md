@@ -610,6 +610,15 @@ accepted). The completion handlers are code in the dylib: one that
 arrives after the bounded teardown wait (a GPU hung past 5 s) would run
 after the module is unloaded, as in the shim; left for N10.
 
+The implementer did not run the full gate (`scripts/test.sh`); the
+host limits of this card keep it to the orchestrator, who runs it
+before merge. The change is about 2.5 times the card's estimate of 950
+lines because the estimate counted the module's own code only: the
+bounded frame slots, readback and object ledger of the Objective-C back
+end, the host test and the gate check with its vocabulary mutants, and
+the as-built and runbook text add as much again, and every `refexport_t`
+entry is spelled out as a counting no-op.
+
 Left for N2: the metallib rule (`xcrun metal`, which the gate already
 requires before it builds), textures and the 2D pipeline, and reopening
 a pass with a Load action after a readback when drawing continues.
