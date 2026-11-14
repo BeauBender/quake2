@@ -982,6 +982,14 @@ typedef struct
  */
 int rm_alias_region(mtl_ring_t *ring, long nv, long ni, rm_region_t *r);
 
+/*
+ * The n regions of a file that a loader copies into its hunk at their own
+ * offsets, region i bytes[i] long at ofs[i]: 1 when every one starts at
+ * header or later (an empty one too) and no two share a byte (an empty one
+ * shares none); 0 as well for a negative length.
+ */
+int rm_regions_apart(const long *ofs, const long *bytes, int n, long header);
+
 /* What rm_md2_check learnt of a model: the counts the draw uses. */
 typedef struct
 {
@@ -1000,7 +1008,10 @@ typedef struct
  * frames' light normal indices (below RM_NUMVERTEXNORMALS) and finite
  * scale and translate, the skin names terminated inside their 64 bytes,
  * the frame and command offsets and the frame size 4-byte aligned and the
- * st and triangle offsets 2-byte aligned (the loader reads them in place).
+ * st and triangle offsets 2-byte aligned (the loader reads them in place),
+ * and the five regions (skins, st, tris, frames, commands) past the
+ * 68-byte header and apart (rm_regions_apart: the loader copies each one
+ * into its hunk at its own offset, over the header it has clamped).
  * 1 with info filled; 0 when the model is refused.
  */
 int rm_md2_check(const unsigned char *buf, long len, rm_md2_info_t *info);
@@ -1010,8 +1021,9 @@ int rm_md2_check(const unsigned char *buf, long len, rm_md2_info_t *info);
  * without a size check and fails on the version after taking its hunk):
  * the header inside len, the version, 1 to RM_MD2_MAX_SKINS frames kept
  * (the loader keeps at most that many; N8's draw divides by the count),
- * every kept frame record inside len and its name terminated. 1 when
- * accepted.
+ * every kept frame record inside len and past the 12-byte header (the
+ * format puts them there; rm_regions_apart states it) and its name
+ * terminated. 1 when accepted.
  */
 int rm_sp2_check(const unsigned char *buf, long len);
 

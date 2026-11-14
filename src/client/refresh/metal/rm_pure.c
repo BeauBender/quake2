@@ -2565,6 +2565,32 @@ rm_md2_range_ok(long ofs, long cnt, long size, long end)
 	return (ofs >= 0) && ((long long)ofs + (long long)cnt * (long long)size <= (long long)end);
 }
 
+int
+rm_regions_apart(const long *ofs, const long *bytes, int n, long header)
+{
+	int i, j;
+
+	for (i = 0; i < n; i++)
+	{
+		if ((ofs[i] < header) || (bytes[i] < 0))
+		{
+			return 0;
+		}
+
+		for (j = 0; j < i; j++)
+		{
+			if ((bytes[i] > 0) && (bytes[j] > 0) &&
+				((long long)ofs[i] < (long long)ofs[j] + (long long)bytes[j]) &&
+				((long long)ofs[j] < (long long)ofs[i] + (long long)bytes[i]))
+			{
+				return 0;
+			}
+		}
+	}
+
+	return 1;
+}
+
 /* the command stream of norder ints at cmds: 1 with the expanded counts when gl1's draw can walk it */
 static int
 rm_md2_stream_ok(const unsigned char *cmds, long norder, long num_xyz, long *verts, long *indices)
@@ -2622,7 +2648,7 @@ rm_md2_stream_ok(const unsigned char *cmds, long norder, long num_xyz, long *ver
 int
 rm_md2_check(const unsigned char *buf, long len, rm_md2_info_t *info)
 {
-	long h[RM_MD2_HEADER / 4], skins, ofs_end, f, i;
+	long h[RM_MD2_HEADER / 4], skins, ofs_end, f, i, ofs[5], bytes[5];
 
 	memset(info, 0, sizeof(*info));
 
@@ -2656,6 +2682,31 @@ rm_md2_check(const unsigned char *buf, long len, rm_md2_info_t *info)
 		!rm_md2_range_ok(h[13], h[8], 12, ofs_end) ||
 		!rm_md2_range_ok(h[14], h[10], h[4], ofs_end) ||
 		!rm_md2_range_ok(h[15], h[9], 4, ofs_end))
+	{
+		return 0;
+	}
+
+	/*
+	 * The loader swaps the header into its hunk, clamps num_skins there to
+	 * 32 and then copies each region to the region's own offset: a region
+	 * over the header puts the file's words back (a num_skins past 32 then
+	 * makes its skin loop write past model_t.skins), and two regions over
+	 * each other leave the hunk unlike the file read here. Every region
+	 * past the header, no two sharing a byte (the skins as many as it
+	 * copies; the counts are inside ofs_end, so the products are too).
+	 */
+	ofs[0] = h[11];
+	bytes[0] = skins * RM_MD2_SKINNAME;
+	ofs[1] = h[12];
+	bytes[1] = h[7] * 4;
+	ofs[2] = h[13];
+	bytes[2] = h[8] * 12;
+	ofs[3] = h[14];
+	bytes[3] = h[10] * h[4];
+	ofs[4] = h[15];
+	bytes[4] = h[9] * 4;
+
+	if (!rm_regions_apart(ofs, bytes, 5, RM_MD2_HEADER))
 	{
 		return 0;
 	}
@@ -2714,7 +2765,7 @@ rm_md2_check(const unsigned char *buf, long len, rm_md2_info_t *info)
 int
 rm_sp2_check(const unsigned char *buf, long len)
 {
-	long n, i;
+	long n, i, ofs, bytes;
 
 	if (!buf || (len < RM_SP2_HEADER) || (rm_le32(buf) != RM_SP2_IDENT) || (rm_le32(buf + 4) != RM_SP2_VERSION))
 	{
@@ -2733,14 +2784,18 @@ rm_sp2_check(const unsigned char *buf, long len)
 		n = RM_MD2_MAX_SKINS;   /* the loader keeps the first 32 */
 	}
 
-	if (!rm_md2_range_ok(RM_SP2_HEADER, n, RM_SP2_FRAME, len))
+	/* its one region, the frame records the loader writes in place, past the header (it is, by the format) */
+	ofs = RM_SP2_HEADER;
+	bytes = n * RM_SP2_FRAME;
+
+	if (!rm_md2_range_ok(ofs, n, RM_SP2_FRAME, len) || !rm_regions_apart(&ofs, &bytes, 1, RM_SP2_HEADER))
 	{
 		return 0;
 	}
 
 	for (i = 0; i < n; i++)
 	{
-		if (!memchr(buf + RM_SP2_HEADER + i * RM_SP2_FRAME + 16, 0, RM_MD2_SKINNAME))
+		if (!memchr(buf + ofs + i * RM_SP2_FRAME + 16, 0, RM_MD2_SKINNAME))
 		{
 			return 0;
 		}

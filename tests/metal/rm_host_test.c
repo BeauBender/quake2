@@ -5195,6 +5195,235 @@ test_md2_check(void)
 	hunk_mem = NULL;
 }
 
+/*
+ * The regions the shared loader copies into its hunk at their own offsets
+ * (skins, st, tris, frames, commands) after it has swapped the 68-byte
+ * header there and clamped its num_skins to 32: a region over the header
+ * puts the file's words back, and a num_skins past 32 then makes the
+ * loader's skin loop write past model_t.skins (TASK90's security review);
+ * two regions over each other make the hunk differ from the file the
+ * check read. Every region offset below the header and every two regions
+ * that share a byte are refused.
+ */
+
+/* b's regions: where they are, how long they are */
+static const long md2_from[5] = { 68, 132, 136, 148, 260 }, md2_size[5] = { 64, 4, 12, 112, 96 };
+
+/* m: b's header and its five regions at ofs[0..4], ofs_end after the last; the header is written last */
+static long
+md2_relayout(unsigned char *m, long cap, const unsigned char *b, const long ofs[5])
+{
+	long end = RM_MD2_HEADER, i;
+
+	memset(m, 0, (size_t)cap);
+
+	for (i = 0; i < 5; i++)
+	{
+		memcpy(m + ofs[i], b + md2_from[i], (size_t)md2_size[i]);
+
+		if (ofs[i] + md2_size[i] > end)
+		{
+			end = ofs[i] + md2_size[i];
+		}
+	}
+
+	memcpy(m, b, RM_MD2_HEADER);
+
+	for (i = 0; i < 5; i++)
+	{
+		put32(m + 4 * (11 + i), ofs[i]);
+	}
+
+	put32(m + 4 * 16, end);
+	return end;
+}
+
+/* 40 skins declared and named, then b's st, tris, frames and commands: skins 68, st 2628, tris 2632, frames 2644, commands 2756 */
+#define MD2_SK40_LEN (68 + 40 * 64 + 4 + 12 + 112 + 96)
+static void
+md2_build40(unsigned char *sk, const unsigned char *b)
+{
+	static const long ofs[5] = { 68, 68 + 40 * 64, 68 + 40 * 64 + 4, 68 + 40 * 64 + 16, 68 + 40 * 64 + 128 };
+	long k;
+
+	memset(sk, 0, MD2_SK40_LEN);
+	memcpy(sk, b, RM_MD2_HEADER);
+	put32(sk + 4 * 5, 40);
+
+	for (k = 1; k < 5; k++)
+	{
+		memcpy(sk + ofs[k], b + md2_from[k], (size_t)md2_size[k]);
+		put32(sk + 4 * (11 + k), ofs[k]);
+	}
+
+	put32(sk + 4 * 16, MD2_SK40_LEN);
+
+	for (k = 0; k < 40; k++)
+	{
+		snprintf((char *)sk + 68 + 64 * k, 64, "models/test/skin%ld.pcx", k);
+	}
+}
+
+static void
+test_md2_regions(void)
+{
+	static unsigned char b[MD2_LEN], m[1024], sk[MD2_SK40_LEN], f[MD2_SK40_LEN];
+	static const long seed_ofs[5] = { 68, 2628, 2632, 2644, 2756 }, seed_size[5] = { 2048, 4, 12, 112, 96 };
+	rm_md2_info_t in;
+	long r, i, n, ofs[5], len, accepted = 0, refused = 0;
+	int same = 1;
+
+	/* rm_regions_apart at and past each limit: the header's end, a byte shared, an empty region, a negative length */
+	{
+		static const long o1[] = { 68 }, l1[] = { 10 }, o0[] = { 67 }, z[] = { 0 }, neg[] = { -1 };
+		static const long o2[] = { 68, 78 }, o2x[] = { 68, 77 }, o2r[] = { 78, 68 }, o2rx[] = { 77, 68 }, l2[] = { 10, 10 };
+		static const long o2in[] = { 68, 70 }, l2in[] = { 10, 2 }, o2eq[] = { 70, 70 }, l2e[] = { 10, 0 }, o2e[] = { 68, 72 };
+		static const long o5[] = { 68, 100, 200, 300, 400 }, l5[] = { 32, 100, 100, 100, 10 };
+		static const long o5x[] = { 68, 100, 200, 300, 99 }, o5y[] = { 68, 100, 200, 300, 399 }, o5z[] = { 68, 100, 200, 300, 67 };
+		static const long big[] = { 0x7fffff00l }, lbig[] = { 0x7fffff00l };
+
+		CHECK(rm_regions_apart(o1, l1, 1, 68) && !rm_regions_apart(o0, l1, 1, 68) && !rm_regions_apart(z, l1, 1, 68));
+		CHECK(!rm_regions_apart(z, z, 1, 68) && !rm_regions_apart(neg, l1, 1, 68) && !rm_regions_apart(o1, neg, 1, 68));
+		CHECK(rm_regions_apart(z, l1, 1, 0) && rm_regions_apart(o1, l1, 0, 68) && rm_regions_apart(big, lbig, 1, 68));
+		CHECK(rm_regions_apart(o2, l2, 2, 68) && !rm_regions_apart(o2x, l2, 2, 68));
+		CHECK(rm_regions_apart(o2r, l2, 2, 68) && !rm_regions_apart(o2rx, l2, 2, 68));
+		CHECK(!rm_regions_apart(o2in, l2in, 2, 68) && !rm_regions_apart(o2eq, l2, 2, 68) && !rm_regions_apart(o2, l2, 2, 69));
+		CHECK(rm_regions_apart(o2e, l2e, 2, 68) && rm_regions_apart(o2eq, l2e, 2, 68));
+		CHECK(rm_regions_apart(o5, l5, 5, 68) && !rm_regions_apart(o5x, l5, 5, 68) && !rm_regions_apart(o5y, l5, 5, 68));
+		CHECK(!rm_regions_apart(o5z, l5, 5, 68) && rm_regions_apart(o5x, l5, 4, 68));
+	}
+
+	md2_build(b);
+
+	/* each region first, at the header's end, the others after it: accepted, loaded and drawn */
+	for (r = 0; r < 5; r++)
+	{
+		long at = RM_MD2_HEADER;
+
+		ofs[r] = at;
+		at += md2_size[r];
+
+		for (i = 0; i < 5; i++)
+		{
+			if (i != r)
+			{
+				ofs[i] = at;
+				at += md2_size[i];
+			}
+		}
+
+		len = md2_relayout(m, sizeof(m), b, ofs);
+		CHECK(rm_md2_check(m, len, &in) && md2_loads(m, len) && md2_draws(m, &in));
+
+		/* the same region 4 bytes into the header (2 for st and tris, 1 for the skins), and at 0: refused */
+		ofs[r] = RM_MD2_HEADER - 4;
+		len = md2_relayout(m, sizeof(m), b, ofs);
+		CHECK(!rm_md2_check(m, len, &in) && in.verts == 0);
+
+		if ((r == 1) || (r == 2) || (r == 0))
+		{
+			ofs[r] = RM_MD2_HEADER - ((r == 0) ? 1 : 2);
+			len = md2_relayout(m, sizeof(m), b, ofs);
+			CHECK(!rm_md2_check(m, len, &in));
+		}
+
+		ofs[r] = 0;
+		len = md2_relayout(m, sizeof(m), b, ofs);
+		CHECK(!rm_md2_check(m, len, &in));
+	}
+
+	/* the review's case: 40 skins named, their offset moved over the header (the loader would put 40 back) */
+	md2_build40(sk, b);
+	CHECK(rm_md2_check(sk, MD2_SK40_LEN, &in) && in.num_skins == 32 && md2_loads(sk, MD2_SK40_LEN) && md2_draws(sk, &in));
+	memcpy(f, sk, MD2_SK40_LEN);
+	put32(f + 4 * 11, 0);
+	CHECK(!rm_md2_check(f, MD2_SK40_LEN, &in) && in.verts == 0);
+	put32(f + 4 * 11, 20);              /* num_skins's own word */
+	CHECK(!rm_md2_check(f, MD2_SK40_LEN, &in));
+	put32(f + 4 * 11, 24);              /* past it, still the header */
+	CHECK(!rm_md2_check(f, MD2_SK40_LEN, &in));
+	put32(f + 4 * 11, 67);
+	CHECK(!rm_md2_check(f, MD2_SK40_LEN, &in));
+	put32(f + 4 * 11, 68);
+	CHECK(rm_md2_check(f, MD2_SK40_LEN, &in) && md2_loads(f, MD2_SK40_LEN));
+
+	/* regions over each other that every other check passes and the loader loads: refused */
+	memcpy(m, b, MD2_LEN);
+	put32(m + 4 * 12, 144);             /* st over the tris' last 4 bytes */
+	CHECK(md2_loads(m, MD2_LEN) && !rm_md2_check(m, MD2_LEN, &in));
+	memcpy(m, b, MD2_LEN);
+	put32(m + 4 * 13, 134);             /* tris over the st's last 2 bytes */
+	CHECK(md2_loads(m, MD2_LEN) && !rm_md2_check(m, MD2_LEN, &in));
+	memcpy(m, b, MD2_LEN);
+	put32(m + 4 * 11, 260);             /* the skin name read from the commands */
+	CHECK(md2_loads(m, MD2_LEN) && !rm_md2_check(m, MD2_LEN, &in));
+	memcpy(m, b, MD2_LEN);
+	memmove(m + 152, b + 148, 112);     /* the frames 4 bytes later, the last vertex over the first command */
+	put32(m + 260, 3);
+	put32(m + 4 * 14, 152);
+	CHECK(md2_loads(m, MD2_LEN) && !rm_md2_check(m, MD2_LEN, &in));
+	memcpy(m, b, MD2_LEN);
+	put32(m + 4 * 15, 256);             /* ... and the commands 4 bytes earlier: they still parse, over the frames */
+	memmove(m + 256, b + 260, 96);
+	put32(m + 4 * 16, 352);
+	CHECK(md2_loads(m, 352) && !rm_md2_check(m, 352, &in));
+	/* touching is not overlapping: the base model's st ends where its tris begin, its frames end where the commands begin */
+	CHECK(rm_md2_check(b, MD2_LEN, &in));
+	/* no skins: an empty region shares no byte, wherever it is past the header; below it, refused */
+	memcpy(m, b, MD2_LEN);
+	put32(m + 4 * 5, 0);
+	put32(m + 4 * 11, 132);
+	CHECK(rm_md2_check(m, MD2_LEN, &in) && in.num_skins == 0 && md2_loads(m, MD2_LEN) && md2_draws(m, &in));
+	put32(m + 4 * 11, 0);
+	CHECK(!rm_md2_check(m, MD2_LEN, &in));
+
+	/*
+	 * Mutated models of the 40 skins: region offsets moved into the header,
+	 * onto, into and next to the other regions, num_skins changed, bytes
+	 * changed; every one accepted is loaded (its skins array is MAX_MD2SKINS
+	 * long, ASAN watches) and drawn.
+	 */
+	for (n = 0; n < 40000; n++)
+	{
+		long k;
+
+		memcpy(f, sk, MD2_SK40_LEN);
+		len = MD2_SK40_LEN;
+
+		for (k = 0; k < 1 + (long)(rng() % 3); k++)
+		{
+			static const long hdr[] = { 0, 4, 20, 24, 64, 66, 67, 68 }, d[] = { -4, -2, 0, 2, 4 };
+			static const long skins[] = { 0, 1, 31, 32, 33, 40, 64, 1000, 0x7fffffff };
+			const long o = (long)(rng() % 5);
+
+			switch (rng() % 4)
+			{
+				case 0:
+					put32(f + 4 * (11 + (rng() % 5)), (rng() & 1) ? hdr[rng() % 8] :
+						((rng() & 1) ? seed_ofs[o] : seed_ofs[o] + seed_size[o]) + d[rng() % 5]);
+					break;
+				case 1: put32(f + 4 * 5, skins[rng() % 9]); break;
+				case 2: f[rng() % MD2_SK40_LEN] = (unsigned char)rng(); break;
+				default: len = MD2_SK40_LEN - 4 * (long)(rng() % 3); put32(f + 4 * 16, len); break;
+			}
+		}
+
+		if (rm_md2_check(f, len, &in))
+		{
+			accepted++;
+			same = same && md2_loads(f, len) && md2_draws(f, &in);
+		}
+		else
+		{
+			refused++;
+		}
+	}
+
+	CHECK(same && accepted > 1000 && refused > 1000 && hunk_overflow == 0);
+	free(hunk_mem);
+	hunk_mem = NULL;
+}
+
 static void
 test_sp2_check(void)
 {
@@ -5353,6 +5582,7 @@ main(void)
 	test_weapon();
 	test_alias_region();
 	test_md2_check();
+	test_md2_regions();
 	test_sp2_check();
 
 	printf("rm_host_test: %d checks, %d failed\n", checks, failures);
