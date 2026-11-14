@@ -44,7 +44,7 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | `tests/pins/unit/` | Unit-test pins: committed expected outputs with a provenance header, rewritten by `make test UPDATE_PINS=1` (not the renderer frame pins of `scripts/pins.sh`) |
 | `scripts/coverage.sh`, `scripts/coverage-floor` | Line coverage of the suite with the compiler's own tools, and the floor it must not drop below |
 | `stuff/` | Maintainer tools: savegame table generators (`fngen/`, `mmgen/`), map entity fixes (`mapfixes/`), icons, the Dockerfile and the uncrustify style file (`misc/`) |
-| `.claude/` | Agent configuration: settings and hooks, path-scoped rules (`rules/`), skills (`skills/`), a frozen, reviewed set of notes (`memory/`), changed only by pull request and not synced from agents; see [decision 0009](decisions/0009-no-shared-memory.md) |
+| `.claude/` | Agent configuration: settings and hooks, path-scoped rules (`rules/`), skills (`skills/`), and `memory/`, a leftover location from older checkouts that is ignored and never committed (`tests/check-no-tracked-memory.sh` keeps it out of the index); agent memory lives outside the tree, see `CLAUDE.md` and [decision 0009](decisions/0009-no-shared-memory.md) |
 | `.githooks/` | The commit hook and the push hook (refuses a ref name or commit message carrying the working machine's host name, user name or home path), wired by `scripts/setup.sh`; see [decision 0005](decisions/0005-push-identity-hook.md) |
 | `.github/` | CI workflows, the PR template, the `main` branch ruleset |
 | `CHANGELOG` | Upstream release notes, updated per release |
