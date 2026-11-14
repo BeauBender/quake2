@@ -97,3 +97,80 @@ rm_fragment_2d(rm_varying2d in [[stage_in]],
 
 	return c;
 }
+
+/*
+ * The 3D classes of N4. The vertex functions are the shim's: the CPU
+ * product mvp times the position with w = 1, GL clip depth mapped by
+ * mtl_gl_clip_z. w comes from the uniforms, as the shim's comes from its
+ * vertex buffer, so the compiler cannot fold the product's last term and
+ * the rounding is the shim's.
+ */
+
+/* rm_wvert_t: position packed at offset 0, 28 bytes */
+struct rm_wvert
+{
+	packed_float3 pos;
+	packed_float2 uv;
+	packed_float2 lmuv;
+};
+
+/* rmb_uniforms3d_t */
+struct rm_uniforms3d
+{
+	float4x4 mvp;
+	float4 color;
+	float one;
+};
+
+struct rm_varying3d
+{
+	float4 position [[position]];
+	float2 uv;
+	float4 color;
+};
+
+/* world_tex: the diffuse texel alone, gl1's GL_REPLACE with the lightmap unit off (r_fullbright) */
+vertex rm_varying3d
+rm_vertex_world(uint vid [[vertex_id]],
+		const device rm_wvert *v [[buffer(0)]],
+		constant rm_uniforms3d &u [[buffer(1)]])
+{
+	rm_varying3d out;
+	float4 p = u.mvp * float4(float3(v[vid].pos), u.one);
+
+	p.z = mtl_gl_clip_z(p.z, p.w);
+	out.position = p;
+	out.uv = float2(v[vid].uv);
+	out.color = u.color;
+	return out;
+}
+
+fragment float4
+rm_fragment_world(rm_varying3d in [[stage_in]],
+		texture2d<float> tex [[texture(0)]],
+		sampler smp [[sampler(0)]])
+{
+	return tex.sample(smp, in.uv);
+}
+
+/* color: one untextured colour per draw, carried as a vertex colour as the shim's glColor4f is */
+vertex rm_varying3d
+rm_vertex_color(uint vid [[vertex_id]],
+		const device packed_float3 *v [[buffer(0)]],
+		constant rm_uniforms3d &u [[buffer(1)]])
+{
+	rm_varying3d out;
+	float4 p = u.mvp * float4(float3(v[vid]), u.one);
+
+	p.z = mtl_gl_clip_z(p.z, p.w);
+	out.position = p;
+	out.uv = float2(0.0f);
+	out.color = u.color;
+	return out;
+}
+
+fragment float4
+rm_fragment_color(rm_varying3d in [[stage_in]])
+{
+	return saturate(in.color);
+}

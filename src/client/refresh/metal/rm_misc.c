@@ -45,6 +45,35 @@ RM_ModuleDir(char *dir, size_t len)
 	return rm_dir_of(info.dli_fname, dir, len);
 }
 
+/* from gl1_misc.c, R_InitParticleTexture: r_notexture (the particle texture is N9's) */
+static byte notex[4][4] = {
+	{0, 0, 0, 0},
+	{0, 0, 1, 1},
+	{0, 1, 1, 1},
+	{0, 1, 1, 1}
+};
+
+void
+R_InitBuiltinTextures(void)
+{
+	byte notexData[8][8][4];
+	int x, y;
+
+	/* also use this for bad textures, but without alpha */
+	for (x = 0; x < 8; x++)
+	{
+		for (y = 0; y < 8; y++)
+		{
+			notexData[y][x][0] = notex[x & 3][y & 3] * 255;
+			notexData[y][x][1] = 0;
+			notexData[y][x][2] = 0;
+			notexData[y][x][3] = 255;
+		}
+	}
+
+	r_notexture = R_LoadPic("***r_notexture***", (byte *)notexData, 8, 0, 8, 0, 8 * 8, it_wall, 32);
+}
+
 void
 RM_PrintStats(void)
 {
@@ -54,6 +83,7 @@ RM_PrintStats(void)
 
 	rmb_stats(&s, &l);
 	s.noop_calls = rm_noop_calls;
+	RM_WorldSkips(&s);
 
 	if (rm_stats_format(&s, &l, line, sizeof(line)))
 	{

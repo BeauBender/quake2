@@ -30,6 +30,7 @@
  */
 
 #include "header/local.h"
+#include "common/mtl_matrix.h"
 
 refimport_t ri;
 
@@ -50,8 +51,22 @@ cvar_t *r_videos_unfiltered;
 cvar_t *r_retexturing;
 cvar_t *r_validation;
 cvar_t *vid_gamma;
+cvar_t *r_drawworld;
+cvar_t *r_novis;
+cvar_t *r_lockpvs;
+cvar_t *r_cull;
+cvar_t *r_fullbright;
+cvar_t *r_fixsurfsky;
+cvar_t *r_farsee;
+cvar_t *gl_znear;
+cvar_t *gl_polyblend;
+cvar_t *gl1_waterwarp;
 
 unsigned long rm_noop_calls;
+
+/* the view of the current frame (R_SetupGL) */
+static float r_world_matrix[16], r_projection_matrix[16], r_world_mvp[16];
+static rm_viewport_t r_view_vp;
 
 static qboolean rm_opened;
 static int rm_prev_mode = 4;
@@ -81,9 +96,20 @@ R_Register(void)
 	r_lerp_list = ri.Cvar_Get("r_lerp_list", "", CVAR_ARCHIVE);
 	r_2D_unfiltered = ri.Cvar_Get("r_2D_unfiltered", "0", CVAR_ARCHIVE);
 	r_videos_unfiltered = ri.Cvar_Get("r_videos_unfiltered", "0", CVAR_ARCHIVE);
+	r_farsee = ri.Cvar_Get("r_farsee", "0", CVAR_LATCH | CVAR_ARCHIVE);
+	r_fullbright = ri.Cvar_Get("r_fullbright", "0", 0);
+	r_drawworld = ri.Cvar_Get("r_drawworld", "1", 0);
+	r_novis = ri.Cvar_Get("r_novis", "0", 0);
+	r_cull = ri.Cvar_Get("r_cull", "1", 0);
+	gl_polyblend = ri.Cvar_Get("gl_polyblend", "1", 0);
+	r_fixsurfsky = ri.Cvar_Get("r_fixsurfsky", "0", CVAR_ARCHIVE);
+	gl_znear = ri.Cvar_Get("gl_znear", "4", CVAR_ARCHIVE);
+	r_lockpvs = ri.Cvar_Get("r_lockpvs", "0", 0);
+	gl1_waterwarp = ri.Cvar_Get("gl1_waterwarp", "1.0", CVAR_ARCHIVE);
 
 	ri.Cmd_AddCommand("screenshot", R_ScreenShot);
 	ri.Cmd_AddCommand("imagelist", R_ImageList_f);
+	ri.Cmd_AddCommand("modellist", Mod_Modellist_f);
 }
 
 /* from gl1_main.c */
@@ -234,6 +260,8 @@ RI_Init(void)
 
 	R_InitImages();   /* runs R_TextureMode: the flags RI_BeginFrame tests start clear */
 	RM_ClearTextureModeFlags();
+	Mod_Init();
+	R_InitBuiltinTextures();
 	RM_InitDraw();
 
 	ri.Vid_MenuInit();
@@ -245,6 +273,8 @@ RI_Shutdown(void)
 {
 	ri.Cmd_RemoveCommand("screenshot");
 	ri.Cmd_RemoveCommand("imagelist");
+	ri.Cmd_RemoveCommand("modellist");
+	Mod_FreeAll();
 	RM_ShutdownDraw();
 	R_ShutdownImages();
 	RI_ShutdownContext();
@@ -288,11 +318,146 @@ RI_BeginFrame(float camera_separation)
 	rmb_frame_begin(w, h, r_clear->value ? rm_clear_color : NULL);
 }
 
+/* from gl1_main.c */
+static void
+R_SetupFrame(void)
+{
+	mleaf_t *leaf;
+
+	r_framecount++;
+
+	/* build the transformation matrix for the given view angles */
+	VectorCopy(r_newrefdef.vieworg, r_origin);
+
+	AngleVectors(r_newrefdef.viewangles, vpn, vright, vup);
+
+	/* current viewcluster */
+	if (!(r_newrefdef.rdflags & RDF_NOWORLDMODEL))
+	{
+		if (!r_worldmodel)
+		{
+			ri.Sys_Error(ERR_DROP, "%s: bad world model", __func__);
+			return;
+		}
+
+		r_oldviewcluster = r_viewcluster;
+		r_oldviewcluster2 = r_viewcluster2;
+		leaf = Mod_PointInLeaf(r_origin, r_worldmodel->nodes);
+		r_viewcluster = r_viewcluster2 = leaf->cluster;
+
+		/* check above and below so crossing solid water doesn't draw wrong */
+		if (!leaf->contents)
+		{
+			/* look down a bit */
+			vec3_t temp;
+
+			VectorCopy(r_origin, temp);
+			temp[2] -= 16;
+			leaf = Mod_PointInLeaf(temp, r_worldmodel->nodes);
+
+			if (!(leaf->contents & CONTENTS_SOLID) && (leaf->cluster != r_viewcluster2))
+			{
+				r_viewcluster2 = leaf->cluster;
+			}
+		}
+		else
+		{
+			/* look up a bit */
+			vec3_t temp;
+
+			VectorCopy(r_origin, temp);
+			temp[2] += 16;
+			leaf = Mod_PointInLeaf(temp, r_worldmodel->nodes);
+
+			if (!(leaf->contents & CONTENTS_SOLID) && (leaf->cluster != r_viewcluster2))
+			{
+				r_viewcluster2 = leaf->cluster;
+			}
+		}
+	}
+
+	/* the clear of the RDF_NOWORLDMODEL rectangle (the player model of the menu) is N7's */
+}
+
+/*
+ * from gl1_main.c, R_SetupGL and R_SetPerspective: the viewport, the
+ * projection and the modelview as the shim computes them (common/
+ * mtl_matrix.c), and their product as the shim's draws take it
+ * (mgl_mat_mul(projection, modelview)). Culling of GL's front faces with
+ * r_cull, depth LEQUAL (gl1's R_Clear), no blending: the back end's 3D
+ * draws.
+ */
+static void
+R_SetupGL(void)
+{
+	int tw = 0, th = 0;
+
+	rmb_target_size(&tw, &th);
+	rm_view_rect(r_newrefdef.x, r_newrefdef.y, r_newrefdef.width, r_newrefdef.height,
+			vid.width, vid.height, th, &r_view_vp);
+
+	if (!rm_projection(r_projection_matrix, r_newrefdef.fov_y, r_newrefdef.width, r_newrefdef.height,
+			gl_znear->value, r_farsee->value != 0, (r_newrefdef.rdflags & RDF_UNDERWATER) != 0,
+			r_newrefdef.time, gl1_waterwarp->value))
+	{
+		mtl_mat_identity(r_projection_matrix);   /* glFrustum refused: the identity glLoadIdentity left */
+	}
+
+	rm_view_matrix(r_world_matrix, r_newrefdef.viewangles, r_newrefdef.vieworg);
+	mtl_mat_mul(r_world_mvp, r_projection_matrix, r_world_matrix);
+}
+
+/* from gl1_main.c: the screen blend, the 3D pass's last draw (design section 11) */
+static void
+R_PolyBlend(void)
+{
+	static const float vtx[] = {
+		10, 100, 100,
+		10, -100, 100,
+		10, -100, -100,
+		10, 100, -100
+	};
+	float rgba[4], mv[16], mvp[16];
+
+	if (!rm_polyblend(r_newrefdef.blend, rm_sw_gamma, gl_polyblend->value, rgba))
+	{
+		return;
+	}
+
+	rm_blend_matrix(mv);
+	mtl_mat_mul(mvp, r_projection_matrix, mv);
+	rmb_draw_color(vtx, 4, rgba, mvp, &r_view_vp, r_cull->value != 0);
+}
+
+/* from gl1_main.c; entities (N7), dynamic lights (N8), particles (N9) and alpha surfaces (N6) are not drawn yet */
+static void
+R_RenderView(refdef_t *fd)
+{
+	r_newrefdef = *fd;
+
+	if (!r_worldmodel && !(r_newrefdef.rdflags & RDF_NOWORLDMODEL))
+	{
+		ri.Sys_Error(ERR_DROP, "%s: NULL worldmodel", __func__);
+	}
+
+	RM_WorldSkipsClear();
+	R_SetupFrame();
+	R_SetFrustum(vup, vpn, vright, r_origin, r_newrefdef.fov_x, r_newrefdef.fov_y, frustum);
+	R_SetupGL();
+
+	if (!(r_newrefdef.rdflags & RDF_NOWORLDMODEL))
+	{
+		R_MarkLeaves(); /* done here so we know if we're in water */
+		R_DrawWorld(r_world_mvp, &r_view_vp, r_cull->value != 0);
+	}
+
+	R_PolyBlend();
+}
+
 static void
 RI_RenderFrame(refdef_t *fd)
 {
 	RM_Flush2D();   /* menu rendering when needed */
-	(void)fd;   /* nothing is drawn yet */
 
 	if (r_norefresh->value)
 	{
@@ -306,6 +471,7 @@ RI_RenderFrame(refdef_t *fd)
 	 * view, so a clear here gives the same depth.
 	 */
 	rmb_pass_3d();
+	R_RenderView(fd);
 }
 
 static qboolean
@@ -324,22 +490,6 @@ RI_EndFrame(void)
 
 /* ---- not implemented yet: valid no-ops that count their calls ---------------- */
 
-static void
-RI_BeginRegistration(const char *map)
-{
-	(void)map;
-	R_BeginImageRegistration();
-	rm_noop_calls++;   /* the map is N4's */
-}
-
-static struct model_s *
-RI_RegisterModel(const char *name)
-{
-	(void)name;
-	rm_noop_calls++;
-	return NULL;
-}
-
 static struct image_s *
 RI_RegisterSkin(const char *name)
 {
@@ -353,12 +503,6 @@ RI_SetSky(const char *name, float rotate, vec3_t axis)
 {
 	(void)name; (void)rotate; (void)axis;
 	rm_noop_calls++;
-}
-
-static void
-RI_EndRegistration(void)
-{
-	R_FreeUnusedImages();
 }
 
 

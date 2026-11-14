@@ -676,4 +676,52 @@ int rmb_draw_2d(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n, const 
 #define RM_BATCH_QUADS 1024
 int rmb_draw_2d_quads(int pipe, int tex, int smp, const rmb_vert2d_t *v, int nquads, const float *mvp);
 
+/* ---- the 3D pass (rmb_resource.m, rmb_encode.m, N4) ------------------------------ */
+
+/* The 3D pipeline states InitContext builds beside the 2D table (section 4). */
+typedef enum
+{
+	RM_PIPE_WORLD_TEX,      /* world_tex: the diffuse texel alone (r_fullbright, gl1's GL_REPLACE) */
+	RM_PIPE_COLOR_BLEND,    /* color: an untextured colour, blended (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA) */
+	RM_PIPE_3D_COUNT
+} rm_pipe3d_t;
+
+/* The depth-stencil states of the 3D pass built beside them. */
+typedef enum
+{
+	RMB_DS_NONE,            /* no depth test, no writes (R_PolyBlend's glDisable(GL_DEPTH_TEST)) */
+	RMB_DS_LEQUAL_WRITE,    /* gl1's glDepthFunc(GL_LEQUAL), glDepthMask(GL_TRUE) */
+	RMB_DS_COUNT
+} rmb_ds_t;
+
+/* Static buffer ids run from 1 to RMB_MAX_BUFFERS - 1; 0 is none. */
+#define RMB_MAX_BUFFERS 16
+
+/*
+ * A private buffer holding the bytes of data (1 to RMB_STATIC_MAX_BYTES),
+ * written through the upload command buffer, so the next frame reads it.
+ * Its id, 0 when the size is refused or an allocation fails.
+ */
+int rmb_buffer_static(const void *data, size_t bytes);
+void rmb_buffer_free(int id);
+
+/*
+ * Draws count indices of the static vertex buffer vbuf (rm_wvert_t), the
+ * indices copied into the frame ring, as triangles with the world_tex
+ * pipeline, depth LEQUAL with writes, texture tex and sampler smp, mvp
+ * (column-major) on every vertex, in viewport vp, culling GL's front
+ * faces when cull is set (gl1's glCullFace(GL_FRONT)). Only inside the 3D
+ * pass. 0 when the draw is skipped (counted).
+ */
+int rmb_draw_world(int vbuf, const unsigned *idx, unsigned long count, int tex, int smp,
+		const float *mvp, const rm_viewport_t *vp, int cull);
+
+/*
+ * Draws a fan of n float3 positions (xyz) in one colour rgba with the
+ * blended color pipeline and no depth test, as gl1's R_PolyBlend does;
+ * the rest as rmb_draw_world. 0 when the draw is skipped (counted).
+ */
+int rmb_draw_color(const float *xyz, int n, const float *rgba, const float *mvp,
+		const rm_viewport_t *vp, int cull);
+
 #endif /* RM_RMB_H */

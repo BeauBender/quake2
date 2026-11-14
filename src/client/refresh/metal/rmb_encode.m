@@ -64,6 +64,9 @@ void rmb_upload_flush(void);
 id<MTLTexture> rmb_texture_for_draw(int id);
 id<MTLRenderPipelineState> rmb_pipe(int i);
 id<MTLSamplerState> rmb_sampler(int i);
+id<MTLRenderPipelineState> rmb_pipe3d(int i);
+id<MTLDepthStencilState> rmb_depth_state(int i);
+id<MTLBuffer> rmb_static_buffer(int bid);
 
 /* the frame ring of 2D vertices and indices (RMB_RING_BYTES): one shared buffer per frame in flight */
 static id<MTLBuffer> ring_buf[RMB_FRAMES_IN_FLIGHT];
@@ -649,4 +652,141 @@ rmb_draw_2d_quads(int pipe, int tex, int smp, const rmb_vert2d_t *v, int nquads,
 			? rm_quad_indices(nquads, idx, (int)(sizeof(idx) / sizeof(idx[0]))) : 0;
 
 	return rmb_draw_2d_idx(pipe, tex, smp, v, count ? nquads * 4 : 0, idx, count, mvp);
+}
+
+/* ---- the 3D pass (N4) ----------------------------------------------------------- */
+
+/* rm_shaders.metal's rm_uniforms3d: mvp, the colour, and w = 1 as a value the compiler cannot fold */
+typedef struct
+{
+	float mvp[16];
+	float color[4];
+	float one;
+	float pad[3];
+} rmb_uniforms3d_t;
+
+/*
+ * The state of a 3D draw: the shim's mgl_layer_draw sets the depth state,
+ * GL's counter-clockwise front faces and the cull mode, and the viewport
+ * of mgl_compute_raster on every draw.
+ */
+static int
+rmb_draw_3d_state(int pipe, int ds, const float *mvp, const float *rgba, const rm_viewport_t *vp, int cull)
+{
+	id<MTLRenderPipelineState> ps = rmb_pipe3d(pipe);
+	id<MTLDepthStencilState> dss = rmb_depth_state(ds);
+	rmb_uniforms3d_t u;
+
+	/* only inside the 3D pass, whose depth the draws test */
+	if (!frame_open || frame_skipped || !frame_cmd || !frame_enc || !frame_depth || !ps || !dss)
+	{
+		return 0;
+	}
+
+	memset(&u, 0, sizeof(u));
+	memcpy(u.mvp, mvp, sizeof(u.mvp));
+	memcpy(u.color, rgba, sizeof(u.color));
+	u.one = 1.0f;
+
+	[frame_enc setRenderPipelineState:ps];
+	[frame_enc setDepthStencilState:dss];
+	[frame_enc setFrontFacingWinding:MTLWindingCounterClockwise];
+	[frame_enc setCullMode:(cull ? MTLCullModeFront : MTLCullModeNone)];
+	[frame_enc setViewport:(MTLViewport){ vp->x, vp->y, vp->w, vp->h, vp->znear, vp->zfar }];
+	[frame_enc setVertexBytes:&u length:sizeof(u) atIndex:1];
+	return 1;
+}
+
+int
+rmb_draw_world(int vbuf, const unsigned *idx, unsigned long count, int tex, int smp,
+		const float *mvp, const rm_viewport_t *vp, int cull)
+{
+	static const float white[4] = { 1, 1, 1, 1 };
+	long iat;
+
+	if (!count || (count > RM_WORLD_MAX_INDICES))
+	{
+		rmb_counts.draw_skips++;
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		id<MTLBuffer> vb = rmb_static_buffer(vbuf);
+		id<MTLTexture> t = rmb_texture_for_draw(tex);
+		id<MTLSamplerState> ss = rmb_sampler(smp);
+
+		if (!vb || !t || !ss || !rmb_draw_3d_state(RM_PIPE_WORLD_TEX, RMB_DS_LEQUAL_WRITE, mvp, white, vp, cull))
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+
+		iat = mtl_ring_alloc(&ring, (size_t)count * sizeof(idx[0]));
+
+		if (iat < 0)
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+
+		memcpy((unsigned char *)frame_ring.contents + iat, idx, (size_t)count * sizeof(idx[0]));
+		[frame_enc setVertexBuffer:vb offset:0 atIndex:0];
+		[frame_enc setFragmentTexture:t atIndex:0];
+		[frame_enc setFragmentSamplerState:ss atIndex:0];
+		[frame_enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+				indexCount:(NSUInteger)count
+				indexType:MTLIndexTypeUInt32
+				indexBuffer:frame_ring
+				indexBufferOffset:(NSUInteger)iat];
+	}
+
+	rmb_counts.draws++;
+	return 1;
+}
+
+int
+rmb_draw_color(const float *xyz, int n, const float *rgba, const float *mvp,
+		const rm_viewport_t *vp, int cull)
+{
+	unsigned short idx[3 * 62];
+	int count = rm_fan_indices(n, idx, (int)(sizeof(idx) / sizeof(idx[0])));
+	size_t vbytes = (size_t)(count ? n : 0) * 3 * sizeof(float);
+	long vat, iat;
+
+	if (!count)
+	{
+		rmb_counts.draw_skips++;
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		if (!rmb_draw_3d_state(RM_PIPE_COLOR_BLEND, RMB_DS_NONE, mvp, rgba, vp, cull))
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+
+		vat = mtl_ring_alloc(&ring, vbytes);
+		iat = vat < 0 ? -1 : mtl_ring_alloc(&ring, (size_t)count * sizeof(idx[0]));
+
+		if (iat < 0)
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+
+		memcpy((unsigned char *)frame_ring.contents + vat, xyz, vbytes);
+		memcpy((unsigned char *)frame_ring.contents + iat, idx, (size_t)count * sizeof(idx[0]));
+		[frame_enc setVertexBuffer:frame_ring offset:(NSUInteger)vat atIndex:0];
+		[frame_enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+				indexCount:(NSUInteger)count
+				indexType:MTLIndexTypeUInt16
+				indexBuffer:frame_ring
+				indexBufferOffset:(NSUInteger)iat];
+	}
+
+	rmb_counts.draws++;
+	return 1;
 }

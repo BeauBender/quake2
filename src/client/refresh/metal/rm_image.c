@@ -38,8 +38,11 @@ int numgltextures;
 unsigned d_8to24table[256];
 byte gammatable[256];
 
+image_t *r_notexture;    /* the fallback of a missing world texture (rm_misc.c makes it) */
+float rm_sw_gamma = 1;   /* gl1's gl_state.sw_gamma: vid_gamma, at least 0.1, as R_InitImages read it */
+int registration_sequence;
+
 static byte intensitytable[256];
-static int registration_sequence;
 static int image_max = 0;
 static cvar_t *intensity;
 
@@ -505,6 +508,12 @@ R_FreeUnusedImages(void)
 	image_t *image;
 	int i, used = 0;
 
+	/* never free r_notexture (gl1 keeps the particle texture too: N9) */
+	if (r_notexture)
+	{
+		r_notexture->registration_sequence = registration_sequence;
+	}
+
 	for (i = 0, image = gltextures; i < numgltextures; i++, image++)
 	{
 		if (image->registration_sequence == registration_sequence)
@@ -528,6 +537,35 @@ R_FreeUnusedImages(void)
 	}
 }
 
+/* from gl1_image.c */
+qboolean
+R_ImageHasFreeSpace(void)
+{
+	int i, used = 0;
+	image_t *image;
+
+	for (i = 0, image = gltextures; i < numgltextures; i++, image++)
+	{
+		if (!image->name[0])
+		{
+			continue;
+		}
+
+		if (image->registration_sequence == registration_sequence)
+		{
+			used++;
+		}
+	}
+
+	if (image_max < used)
+	{
+		image_max = used;
+	}
+
+	/* should same size of free slots as currently used */
+	return (numgltextures + used) < MAX_GLTEXTURES;
+}
+
 /* from gl1_image.c, with GL1_GAMMATABLE (gl1's header/local.h defines it) */
 void
 R_InitImages(void)
@@ -537,6 +575,7 @@ R_InitImages(void)
 	int i;
 
 	g = Q_max(g, 0.1f);
+	rm_sw_gamma = g;
 	registration_sequence = 1;
 	image_max = 0;
 
@@ -599,4 +638,5 @@ R_ShutdownImages(void)
 	}
 
 	numgltextures = 0;
+	r_notexture = NULL;
 }

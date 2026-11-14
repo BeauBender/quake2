@@ -70,6 +70,18 @@ extern cvar_t *r_retexturing;
 extern cvar_t *r_validation;
 extern cvar_t *vid_gamma;
 
+/* the world and the view (N4), by gl1's names */
+extern cvar_t *r_drawworld;
+extern cvar_t *r_novis;
+extern cvar_t *r_lockpvs;
+extern cvar_t *r_cull;
+extern cvar_t *r_fullbright;
+extern cvar_t *r_fixsurfsky;
+extern cvar_t *r_farsee;
+extern cvar_t *gl_znear;
+extern cvar_t *gl_polyblend;
+extern cvar_t *gl1_waterwarp;
+
 /* from gl1's header/local.h, without the GL fields; a scrap image has no texture of its own (texnum RM_TEXNUM_SCRAP) */
 #define MAX_GLTEXTURES 1024
 #define RM_TEXNUM_SCRAP -1               /* a scrap image's texnum: the slot is used, its texture is the atlas's */
@@ -90,7 +102,16 @@ typedef struct image_s
 	qboolean has_alpha;
 } image_t;
 
+/* the lightmap block of gl1 (BLOCK_WIDTH, BLOCK_HEIGHT), which the lightmap coordinates are relative to */
+#define RM_LM_BLOCK_WIDTH 128
+#define RM_LM_BLOCK_HEIGHT 128
+
+#include "model.h"
+
 extern image_t gltextures[MAX_GLTEXTURES];
+extern image_t *r_notexture;
+extern int registration_sequence;
+extern float rm_sw_gamma;
 extern int numgltextures;
 extern unsigned d_8to24table[256];
 extern unsigned r_rawpalette[256];
@@ -100,6 +121,7 @@ extern byte gammatable[256];
 void R_InitImages(void);
 void R_ShutdownImages(void);
 void R_FreeUnusedImages(void);
+qboolean R_ImageHasFreeSpace(void);
 void R_BeginImageRegistration(void);
 void R_TextureMode(const char *string);
 void R_ImageList_f(void);
@@ -133,7 +155,19 @@ void RDraw_FadeScreen(void);
 void RDraw_StretchRaw(int x, int y, int w, int h, int cols, int rows, const byte *data, int bits);
 void RI_SetPalette(const unsigned char *palette);
 
+/* rm_surf.c: the world */
+extern int r_framecount, r_visframecount;
+extern cplane_t frustum[4];
+extern vec3_t vup, vpn, vright, r_origin;
+void R_MarkLeaves(void);
+/* draws the world with mvp in viewport vp, culling GL's front faces with cull */
+void R_DrawWorld(const float *mvp, const rm_viewport_t *vp, int cull);
+/* the surfaces of the last view R_DrawWorld skipped, by class, into s (metal_stats) */
+void RM_WorldSkips(rmb_stats_t *s);
+void RM_WorldSkipsClear(void);
+
 /* rm_misc.c */
+void R_InitBuiltinTextures(void);
 void R_ScreenShot(void);
 void RM_PrintStats(void);
 /* the directory of ref_metal.dylib, where ref_metal.metallib lies; 0 when unknown */
