@@ -1173,6 +1173,7 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_main.o \
 	src/client/refresh/metal/rm_misc.o \
 	src/client/refresh/metal/rm_pure.o \
+	src/client/refresh/metal/rm_scrap.o \
 	src/client/refresh/metal/rm_sdl.o \
 	src/client/refresh/metal/rmb_device.o \
 	src/client/refresh/metal/rmb_encode.o \

@@ -65,8 +65,7 @@ id<MTLTexture> rmb_texture_for_draw(int id);
 id<MTLRenderPipelineState> rmb_pipe(int i);
 id<MTLSamplerState> rmb_sampler(int i);
 
-/* the frame ring of 2D vertices and indices: one shared buffer per frame in flight */
-#define RMB_RING_BYTES (4u << 20)
+/* the frame ring of 2D vertices and indices (RMB_RING_BYTES): one shared buffer per frame in flight */
 static id<MTLBuffer> ring_buf[RMB_FRAMES_IN_FLIGHT];
 static mtl_ring_t ring;
 static unsigned long frames_begun;
@@ -562,11 +561,11 @@ rmb_clear(const float *rgba)
 	rmb_pass(rgba, 0);
 }
 
-int
-rmb_draw_2d(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n, const float *mvp)
+/* one indexed draw of n vertices with count indices (rm_fan_indices or rm_quad_indices made them) */
+static int
+rmb_draw_2d_idx(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n,
+		const unsigned short *idx, int count, const float *mvp)
 {
-	unsigned short idx[3 * 62];
-	int count = rm_fan_indices(n, idx, (int)(sizeof(idx) / sizeof(idx[0])));
 	size_t vbytes = (size_t)(n > 0 ? n : 0) * sizeof(rmb_vert2d_t);
 	long vat, iat;
 
@@ -582,7 +581,10 @@ rmb_draw_2d(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n, const floa
 		id<MTLTexture> t = tex ? rmb_texture_for_draw(tex) : nil;
 		id<MTLSamplerState> ss = rmb_sampler(smp);
 
-		if (!ps || (tex && (!t || !ss)))
+		int textured = rm_pipe_2d_textured(pipe);
+
+		/* a textured pipeline without a texture is a skip, never a draw on whatever was bound */
+		if (!ps || (textured && !t) || (t && !ss))
 		{
 			rmb_counts.draw_skips++;
 			return 0;
@@ -627,4 +629,24 @@ rmb_draw_2d(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n, const floa
 
 	rmb_counts.draws++;
 	return 1;
+}
+
+
+int
+rmb_draw_2d(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n, const float *mvp)
+{
+	unsigned short idx[3 * 62];
+	int count = rm_fan_indices(n, idx, (int)(sizeof(idx) / sizeof(idx[0])));
+
+	return rmb_draw_2d_idx(pipe, tex, smp, v, n, idx, count, mvp);
+}
+
+int
+rmb_draw_2d_quads(int pipe, int tex, int smp, const rmb_vert2d_t *v, int nquads, const float *mvp)
+{
+	unsigned short idx[6 * RM_BATCH_QUADS];
+	int count = ((nquads >= 1) && (nquads <= RM_BATCH_QUADS))
+			? rm_quad_indices(nquads, idx, (int)(sizeof(idx) / sizeof(idx[0]))) : 0;
+
+	return rmb_draw_2d_idx(pipe, tex, smp, v, count ? nquads * 4 : 0, idx, count, mvp);
 }

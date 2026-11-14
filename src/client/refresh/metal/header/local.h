@@ -70,8 +70,9 @@ extern cvar_t *r_retexturing;
 extern cvar_t *r_validation;
 extern cvar_t *vid_gamma;
 
-/* from gl1's header/local.h, without the GL and scrap fields (the scrap is N3's) */
+/* from gl1's header/local.h, without the GL fields; a scrap image has no texture of its own (texnum RM_TEXNUM_SCRAP) */
 #define MAX_GLTEXTURES 1024
+#define RM_TEXNUM_SCRAP -1               /* a scrap image's texnum: the slot is used, its texture is the atlas's */
 
 typedef struct image_s
 {
@@ -81,10 +82,11 @@ typedef struct image_s
 	int upload_width, upload_height;    /* as uploaded: the source size, no power of two */
 	int registration_sequence;          /* 0 = free */
 	struct msurface_s *texturechain;    /* for sort-by-texture world drawing */
-	int texnum;                         /* the back end's texture id, 0 = free slot */
+	int texnum;                         /* the back end's texture id, 0 = free slot, RM_TEXNUM_SCRAP for a scrap image */
 	int sampler;                        /* RMB_SAMPLER(class, clamp) */
 	float sl, tl, sh, th;               /* 0,0 - 1,1 unless part of the scrap */
-	qboolean scrap;
+	qboolean scrap;                     /* part of an atlas (rm_scrap.c), sl, tl, sh, th inside it */
+	int scrapnum;                       /* the atlas index of a scrap image, its texture looked up at each draw */
 	qboolean has_alpha;
 } image_t;
 
@@ -101,12 +103,31 @@ void R_FreeUnusedImages(void);
 void R_BeginImageRegistration(void);
 void R_TextureMode(const char *string);
 void R_ImageList_f(void);
+void R_LightScaleTexture(unsigned *in, int inwidth, int inheight, qboolean only_gamma);
 image_t *R_FindImage(const char *name, imagetype_t type);
 image_t *R_LoadPic(const char *name, byte *pic, int width, int realwidth,
 		int height, int realheight, size_t data_size, imagetype_t type, int bits);
 
+/* rm_scrap.c */
+void Scrap_Init(void);
+void Scrap_Shutdown(void);
+int Scrap_AllocBlock(unsigned w, unsigned h, int *x, int *y, const unsigned *pic, int scrap_offset);
+int Scrap_Texture(int texnum);
+int Scrap_Sampler(int texnum);
+void Scrap_Update(void);
+
 /* rm_draw.c */
+void RM_InitDraw(void);
 void RM_ShutdownDraw(void);
+/* draws the batched 2D quads, as gl1's R_ApplyGLBuffer does where it is called */
+void RM_Flush2D(void);
+image_t *RDraw_FindPic(const char *name);
+void RDraw_GetPicSize(int *w, int *h, const char *name);
+void RDraw_PicScaled(int x, int y, const char *pic, float factor);
+void RDraw_PicScaledCol(int x, int y, const char *pic, float factor, const float color[3]);
+void RDraw_StretchPic(int x, int y, int w, int h, const char *pic);
+void RDraw_CharScaled(int x, int y, int num, float scale);
+void RDraw_TileClear(int x, int y, int w, int h, const char *pic);
 void RDraw_Fill(int x, int y, int w, int h, int c);
 void RDraw_FadeScreen(void);
 void RDraw_StretchRaw(int x, int y, int w, int h, int cols, int rows, const byte *data, int bits);

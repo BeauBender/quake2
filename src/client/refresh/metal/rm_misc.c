@@ -81,6 +81,8 @@ R_ScreenShot(void)
 		return;
 	}
 
+	RM_Flush2D();   /* draw the batched 2D quads, or they are missing from the read */
+
 	n = (size_t)w * (size_t)h;
 	bgra = malloc(n * 4);
 	rgb = malloc(n * 3);

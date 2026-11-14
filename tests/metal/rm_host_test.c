@@ -351,6 +351,21 @@ test_pipe_2d(void)
 
 	CHECK(ok);
 	CHECK(rm_pipe_2d(RM_TEXENVS, 0, 0) == -1 && rm_pipe_2d((rm_texenv_t)-1, 0, 0) == -1);
+
+	/* a textured pipeline needs a texture: REPLACE and MODULATE do, UNTEXTURED does not */
+	for (e = 0; e < RM_TEXENVS; e++)
+	{
+		for (a = 0; a < 2; a++)
+		{
+			for (b = 0; b < 2; b++)
+			{
+				CHECK(rm_pipe_2d_textured(rm_pipe_2d((rm_texenv_t)e, a, b)) == (e != RM_TEXENV_UNTEXTURED));
+			}
+		}
+	}
+
+	CHECK(rm_pipe_2d_textured(-1) == 0 && rm_pipe_2d_textured(RM_PIPE_2D_COUNT) == 0);
+	CHECK(rm_pipe_2d_textured(RM_PIPE_2D_COUNT + 1) == 0 && rm_pipe_2d_textured(1 << 20) == 0);
 }
 
 /* The directory ref_metal.metallib is looked for in: the dylib's, bounded by the buffer */
@@ -477,6 +492,65 @@ test_ring(void)
 }
 
 /*
+ * How many of quads 2D quads fit in a frame ring of bytes, queued in
+ * batches of RM_BATCH_QUADS and allocated as rmb_draw_2d_idx does: the
+ * vertices, then the indices, of each draw. The quads after the first
+ * draw that does not fit are skipped.
+ */
+static long
+ring_quads(size_t bytes, long quads)
+{
+	mtl_ring_t r;
+	long placed = 0;
+
+	r.size = bytes;
+	r.used = 0;
+
+	while (placed < quads)
+	{
+		long n = quads - placed < RM_BATCH_QUADS ? quads - placed : RM_BATCH_QUADS;
+		size_t used = r.used;
+
+		if ((mtl_ring_alloc(&r, (size_t)n * 4 * sizeof(rmb_vert2d_t)) < 0)
+				|| (mtl_ring_alloc(&r, (size_t)n * 6 * sizeof(unsigned short)) < 0))
+		{
+			/* the draw is skipped: whatever its vertices took is not given back, as in rmb_draw_2d_idx */
+			CHECK(r.used >= used && r.used <= r.size);
+			break;
+		}
+
+		placed += n;
+	}
+
+	return placed;
+}
+
+/*
+ * The frame ring against the most characters one frame can queue, a full
+ * console (cl_console.c): its text is at most CON_TEXTSIZE (32768)
+ * characters at any resolution and console scale (con.totallines is
+ * CON_TEXTSIZE / con.linewidth), plus the input line, the download bar and
+ * the backscroll arrows (at most a line each, con.linewidth at most
+ * MAXCMDLINE - 2 = 1022) and the 28 characters of the version and the
+ * date. All of them are characters of one sheet, so they batch. At 4K
+ * with r_consolescale 1 the line is 478 characters and the text 68 lines:
+ * 32504 + 3 * 478 + 28 = 33966 quads. The old 4 MiB ring held 20 batches, 20480.
+ */
+static void
+test_ring_console(void)
+{
+	const long console = 32768 + 3 * 1022 + 28;
+	const long console_4k = 68 * 478 + 3 * 478 + 28;
+
+	CHECK(ring_quads(RMB_RING_BYTES, console) == console);
+	CHECK(ring_quads(RMB_RING_BYTES, console_4k) == console_4k);
+	CHECK(ring_quads(4u << 20, console_4k) == 20480);
+	/* a frame that exhausts the ring places what fits, then skips: 8 MiB holds 40 batches */
+	CHECK(ring_quads(RMB_RING_BYTES, 100000) == 40 * RM_BATCH_QUADS);
+	CHECK(ring_quads(RMB_RING_BYTES, 1) == 1);
+}
+
+/*
  * The colour load of a pass (gl1 clears colour only in R_Clear at the
  * start of the frame): the r_clear colour when the pass clears,
  * otherwise what the target holds, or black when no pass has written
@@ -547,6 +621,313 @@ test_len_zero(void)
 	free(three);
 }
 
+/*
+ * The scrap allocator on gl1's sequence (worked by hand from
+ * CommonAllocBlock): blocks of 10 by 10, 20 by 30 and 8 by 40 go to (0, 0),
+ * (10, 0) and (30, 0); a 250 by 5 block (0, 40), another (0, 45); 250 by 206
+ * fills the atlas down to 256, and then nothing fits, not even 6 by 1,
+ * because gl1's loop never starts a block in the last w columns (a 1 by 1
+ * block still goes to (250, 0)). Blocks
+ * that do not fit or are larger than the atlas write nothing.
+ */
+static void
+test_scrap_alloc(void)
+{
+	static const int blocks[][5] = {
+		/* w, h, fits, x, y */
+		{ 10, 10, 1, 0, 0 },
+		{ 20, 30, 1, 10, 0 },
+		{ 8, 40, 1, 30, 0 },
+		{ 250, 5, 1, 0, 40 },
+		{ 250, 5, 1, 0, 45 },
+		{ 250, 211, 0, -7, -7 },
+		{ 250, 206, 1, 0, 50 },
+		{ 6, 1, 0, -7, -7 },
+		{ 1, 1, 1, 250, 0 }
+	};
+	int allocated[RM_SCRAP_WIDTH], saved[RM_SCRAP_WIDTH];
+	size_t i;
+	int x, y, ok = 1;
+
+	memset(allocated, 0, sizeof(allocated));
+
+	for (i = 0; i < sizeof(blocks) / sizeof(blocks[0]); i++)
+	{
+		x = y = -7;
+		memcpy(saved, allocated, sizeof(saved));
+
+		if (rm_scrap_alloc(allocated, RM_SCRAP_WIDTH, RM_SCRAP_HEIGHT, blocks[i][0], blocks[i][1], &x, &y)
+				!= blocks[i][2] || x != blocks[i][3] || y != blocks[i][4])
+		{
+			ok = 0;
+		}
+
+		if (!blocks[i][2] && memcmp(saved, allocated, sizeof(saved)) != 0)
+		{
+			ok = 0;
+		}
+	}
+
+	CHECK(ok);
+	/* the 250 wide block raised its columns to 256, the 1 by 1 one column to 1 */
+	CHECK(allocated[0] == 256 && allocated[249] == 256 && allocated[250] == 1 && allocated[251] == 0);
+
+	/* a fresh atlas: the first block is at the origin and raises exactly its columns */
+	memset(allocated, 0, sizeof(allocated));
+	CHECK(rm_scrap_alloc(allocated, RM_SCRAP_WIDTH, RM_SCRAP_HEIGHT, 130, 130, &x, &y) && x == 0 && y == 0);
+	CHECK(allocated[0] == 130 && allocated[129] == 130 && allocated[130] == 0);
+	/* a second of 130 by 130 does not fit in one atlas of 256 (130 + 130 > 256): it goes to the next */
+	CHECK(!rm_scrap_alloc(allocated, RM_SCRAP_WIDTH, RM_SCRAP_HEIGHT, 130, 130, &x, &y));
+
+	/* oversized, empty and negative blocks: refused, nothing written */
+	memset(allocated, 0, sizeof(allocated));
+	x = y = -7;
+	CHECK(!rm_scrap_alloc(allocated, RM_SCRAP_WIDTH, RM_SCRAP_HEIGHT, 257, 1, &x, &y));
+	CHECK(!rm_scrap_alloc(allocated, RM_SCRAP_WIDTH, RM_SCRAP_HEIGHT, 1000000, 1, &x, &y));
+	CHECK(!rm_scrap_alloc(allocated, RM_SCRAP_WIDTH, RM_SCRAP_HEIGHT, 256, 1, &x, &y));
+	CHECK(!rm_scrap_alloc(allocated, RM_SCRAP_WIDTH, RM_SCRAP_HEIGHT, 10, 257, &x, &y));
+	CHECK(!rm_scrap_alloc(allocated, RM_SCRAP_WIDTH, RM_SCRAP_HEIGHT, 0, 5, &x, &y));
+	CHECK(!rm_scrap_alloc(allocated, RM_SCRAP_WIDTH, RM_SCRAP_HEIGHT, -4, 5, &x, &y));
+	CHECK(!rm_scrap_alloc(allocated, RM_SCRAP_WIDTH, RM_SCRAP_HEIGHT, 5, -4, &x, &y));
+	CHECK(!rm_scrap_alloc(NULL, RM_SCRAP_WIDTH, RM_SCRAP_HEIGHT, 5, 5, &x, &y));
+	CHECK(x == -7 && y == -7);
+
+	for (i = 0; i < RM_SCRAP_WIDTH; i++)
+	{
+		ok = ok && allocated[i] == 0;
+	}
+
+	CHECK(ok);
+}
+
+/*
+ * The atlas state read at draw time: an atlas is written whenever it is
+ * dirty, a missing texture included (a failed upload freed it, the next
+ * update makes it again with id 0); its texture and sampler are looked up
+ * by the atlas index, never by an id an image kept.
+ */
+static void
+test_scrap_state(void)
+{
+	/* a guard entry before the table: an index of -1 that is not refused reads 99 */
+	const int guarded[RM_MAX_SCRAPS + 1] = { 99, 7, 0, 9, 12 };
+	const int *tex = guarded + 1;
+
+	CHECK(rm_scrap_needs_upload(1, 5));
+	CHECK(rm_scrap_needs_upload(1, 0));
+	CHECK(!rm_scrap_needs_upload(0, 5));
+	CHECK(!rm_scrap_needs_upload(0, 0));
+
+	CHECK(rm_scrap_texture(tex, RM_MAX_SCRAPS, 0) == 7);
+	CHECK(rm_scrap_texture(tex, RM_MAX_SCRAPS, 1) == 0);
+	CHECK(rm_scrap_texture(tex, RM_MAX_SCRAPS, 3) == 12);
+	CHECK(rm_scrap_texture(tex, RM_MAX_SCRAPS, RM_MAX_SCRAPS) == 0);
+	CHECK(rm_scrap_texture(tex, RM_MAX_SCRAPS, -1) == 0);
+	CHECK(rm_scrap_texture(tex, 2, 2) == 0);
+	CHECK(rm_scrap_texture(NULL, RM_MAX_SCRAPS, 0) == 0);
+
+	/* gl1's Scrap_Update: the first two atlases nearest, the others filtered unless r_2D_unfiltered */
+	CHECK(rm_scrap_sampler(0, 0) == RMB_SAMPLER(RMB_SMP_NEAREST, 0));
+	CHECK(rm_scrap_sampler(RM_MAX_SCRAPS_NOLERP - 1, 0) == RMB_SAMPLER(RMB_SMP_NEAREST, 0));
+	CHECK(rm_scrap_sampler(RM_MAX_SCRAPS_NOLERP, 0) == RMB_SAMPLER(RMB_SMP_FLAT, 0));
+	CHECK(rm_scrap_sampler(RM_MAX_SCRAPS - 1, 0) == RMB_SAMPLER(RMB_SMP_FLAT, 0));
+	CHECK(rm_scrap_sampler(RM_MAX_SCRAPS_NOLERP, 1) == RMB_SAMPLER(RMB_SMP_NEAREST, 0));
+	CHECK(rm_scrap_sampler(0, 1) == RMB_SAMPLER(RMB_SMP_NEAREST, 0));
+	/* an index outside the table: filtered, as a texture that is no atlas's */
+	CHECK(rm_scrap_sampler(RM_MAX_SCRAPS - 1, 1) == RMB_SAMPLER(RMB_SMP_NEAREST, 0));
+	CHECK(rm_scrap_sampler(RM_MAX_SCRAPS, 1) == RMB_SAMPLER(RMB_SMP_FLAT, 0));
+	CHECK(rm_scrap_sampler(-1, 0) == RMB_SAMPLER(RMB_SMP_FLAT, 0));
+}
+
+/* The copy of a block into the atlas: placed by the row pitch, refused outside it. */
+static void
+test_scrap_copy(void)
+{
+	unsigned texels[8 * 8], pic[3 * 2] = { 1, 2, 3, 4, 5, 6 };
+	unsigned zero[8 * 8];
+	int i, ok = 1;
+
+	memset(texels, 0, sizeof(texels));
+	memset(zero, 0, sizeof(zero));
+	CHECK(rm_scrap_copy(texels, 8, 8, 4, 5, 3, 2, pic));
+
+	for (i = 0; i < 64; i++)
+	{
+		unsigned want = 0;
+
+		if (i >= 5 * 8 + 4 && i <= 5 * 8 + 6)
+		{
+			want = (unsigned)(i - (5 * 8 + 4)) + 1;
+		}
+
+		if (i >= 6 * 8 + 4 && i <= 6 * 8 + 6)
+		{
+			want = (unsigned)(i - (6 * 8 + 4)) + 4;
+		}
+
+		ok = ok && texels[i] == want;
+	}
+
+	CHECK(ok);
+
+	/* the last row and column fit exactly */
+	CHECK(rm_scrap_copy(texels, 8, 8, 5, 6, 3, 2, pic) && texels[7 * 8 + 7] == 6);
+
+	/* outside: one column, one row, negative, overflowing: nothing written */
+	memset(texels, 0, sizeof(texels));
+	CHECK(!rm_scrap_copy(texels, 8, 8, 6, 5, 3, 2, pic));
+	CHECK(!rm_scrap_copy(texels, 8, 8, 4, 7, 3, 2, pic));
+	CHECK(!rm_scrap_copy(texels, 8, 8, -1, 5, 3, 2, pic));
+	CHECK(!rm_scrap_copy(texels, 8, 8, 4, -1, 3, 2, pic));
+	CHECK(!rm_scrap_copy(texels, 8, 8, 2147483647, 0, 3, 2, pic));
+	CHECK(!rm_scrap_copy(texels, 8, 8, 0, 0, 0, 2, pic));
+	CHECK(!rm_scrap_copy(texels, 8, 8, 0, 0, 3, 0, pic));
+	CHECK(!rm_scrap_copy(texels, 8, 8, 0, 0, 3, 2, NULL));
+	CHECK(memcmp(texels, zero, sizeof(texels)) == 0);
+}
+
+#define QEQ(q, a, b, c, d, e, f, g, h) \
+	((q).x0 == (a) && (q).y0 == (b) && (q).x1 == (c) && (q).y1 == (d) \
+		&& (q).s0 == (e) && (q).t0 == (f) && (q).s1 == (g) && (q).t1 == (h))
+
+/*
+ * A character's cell, by gl1's formula, worked by hand: 'A' (65) is row 4,
+ * column 1 of the 16 by 16 sheet. On a whole image the cell is
+ * (0.0625, 0.25) to (0.125, 0.3125); on a scrap block (0.25, 0.25) to
+ * (0.75, 0.75) the coordinates are cut into it. Spaces and characters above the
+ * screen are not drawn.
+ */
+static void
+test_char_quad(void)
+{
+	static const float whole[4] = { 0, 0, 1, 1 };
+	static const float scrap[4] = { 0.25f, 0.25f, 0.75f, 0.75f };
+	rm_quad_t q;
+
+	CHECK(rm_char_quad(&q, 100, 20, 65, 2, whole) && QEQ(q, 100, 20, 116, 36, 0.0625f, 0.25f, 0.125f, 0.3125f));
+	CHECK(rm_char_quad(&q, 100, 20, 65, 2, scrap) && QEQ(q, 100, 20, 116, 36, 0.28125f, 0.375f, 0.3125f, 0.40625f));
+	/* a block that is not square (0.5 wide, 0.25 high): the rows are cut by the height */
+	{
+		static const float wide[4] = { 0.25f, 0.25f, 0.75f, 0.5f };
+
+		CHECK(rm_char_quad(&q, 100, 20, 65, 2, wide) && QEQ(q, 100, 20, 116, 36, 0.28125f, 0.3125f, 0.3125f, 0.328125f));
+	}
+	/* a character is its low 8 bits, as gl1 masks it */
+	CHECK(rm_char_quad(&q, 100, 20, 256 + 65, 2, whole) && QEQ(q, 100, 20, 116, 36, 0.0625f, 0.25f, 0.125f, 0.3125f));
+	/* character 0: the first cell; 255: the last */
+	CHECK(rm_char_quad(&q, 0, 0, 0, 1, whole) && QEQ(q, 0, 0, 8, 8, 0.0f, 0.0f, 0.0625f, 0.0625f));
+	CHECK(rm_char_quad(&q, 0, 0, 255, 1, whole) && QEQ(q, 0, 0, 8, 8, 0.9375f, 0.9375f, 1.0f, 1.0f));
+	/* spaces, in both halves of the sheet */
+	CHECK(!rm_char_quad(&q, 0, 0, 32, 1, whole));
+	CHECK(!rm_char_quad(&q, 0, 0, 160, 1, whole));
+	/* clipped to the top of the screen: -7 still shows, -8 does not */
+	CHECK(rm_char_quad(&q, 4, -7, 65, 1, whole) && q.y0 == -7 && q.y1 == 1);
+	CHECK(!rm_char_quad(&q, 4, -8, 65, 1, whole));
+	CHECK(!rm_char_quad(&q, 4, -100, 65, 1, whole));
+}
+
+/* A scaled pic and a stretched one: the corners are x + w * factor, the coordinates the image's. */
+static void
+test_pic_quad(void)
+{
+	static const float scrap[4] = { 0.25f, 0.5f, 0.5f, 0.75f };
+	rm_quad_t q;
+
+	rm_pic_quad(&q, 10, 20, 32, 16, 1.5f, scrap);
+	CHECK(QEQ(q, 10, 20, 58, 44, 0.25f, 0.5f, 0.5f, 0.75f));
+	rm_pic_quad(&q, -5, -6, 10, 10, 1.0f, scrap);
+	CHECK(QEQ(q, -5, -6, 5, 4, 0.25f, 0.5f, 0.5f, 0.75f));
+}
+
+/*
+ * Tile clear: a 64 by 64 pic over the box (10, 20, 100, 70): the second
+ * column is clipped to 36 pixels (36/64 = 0.5625 of the width), the second
+ * row to 6 (6/64 = 0.09375), the coordinates cut in proportion.
+ */
+static void
+test_tile_quad(void)
+{
+	static const float whole[4] = { 0, 0, 1, 1 };
+	static const float scrap[4] = { 0.25f, 0.5f, 0.5f, 0.75f };
+	rm_quad_t q;
+
+	CHECK(rm_tile_quad(&q, 10, 20, 100, 70, 64, 64, 0, 0, whole) && QEQ(q, 10, 20, 74, 84, 0.0f, 0.0f, 1.0f, 1.0f));
+	CHECK(rm_tile_quad(&q, 10, 20, 100, 70, 64, 64, 64, 0, whole) && QEQ(q, 74, 20, 110, 84, 0.0f, 0.0f, 0.5625f, 1.0f));
+	CHECK(rm_tile_quad(&q, 10, 20, 100, 70, 64, 64, 0, 64, whole) && QEQ(q, 10, 84, 74, 90, 0.0f, 0.0f, 1.0f, 0.09375f));
+	CHECK(rm_tile_quad(&q, 10, 20, 100, 70, 64, 64, 64, 64, scrap)
+			&& QEQ(q, 74, 84, 110, 90, 0.25f, 0.5f, 0.390625f, 0.5234375f));
+	/* offsets outside the box, a pic without a size: no quad */
+	CHECK(!rm_tile_quad(&q, 10, 20, 100, 70, 64, 64, 100, 0, whole));
+	CHECK(!rm_tile_quad(&q, 10, 20, 100, 70, 64, 64, 0, 70, whole));
+	CHECK(!rm_tile_quad(&q, 10, 20, 100, 70, 64, 64, -1, 0, whole));
+	CHECK(!rm_tile_quad(&q, 10, 20, 100, 70, 0, 64, 0, 0, whole));
+	CHECK(!rm_tile_quad(&q, 10, 20, 100, 70, 64, -3, 0, 0, whole));
+	/* a pic that is not square (32 by 16) over (0, 0, 48, 28): the last column is 16 of 32, the last row 12 of 16 */
+	CHECK(rm_tile_quad(&q, 0, 0, 48, 28, 32, 16, 32, 16, whole) && QEQ(q, 32, 16, 48, 28, 0.0f, 0.0f, 0.5f, 0.75f));
+}
+
+/* The batch's capacity check, with an oversized count and the overflow edges. */
+static void
+test_batch_fits(void)
+{
+	const long big = 0x7fffffffffffffffL;
+
+	CHECK(rm_batch_fits(0, 1, RM_BATCH_QUADS));
+	CHECK(rm_batch_fits(RM_BATCH_QUADS - 1, 1, RM_BATCH_QUADS));
+	CHECK(!rm_batch_fits(RM_BATCH_QUADS, 1, RM_BATCH_QUADS));
+	CHECK(rm_batch_fits(5, RM_BATCH_QUADS - 5, RM_BATCH_QUADS));
+	CHECK(!rm_batch_fits(5, RM_BATCH_QUADS - 4, RM_BATCH_QUADS));
+	/* oversized: more quads than the batch holds, even when empty */
+	CHECK(!rm_batch_fits(0, RM_BATCH_QUADS + 1, RM_BATCH_QUADS));
+	CHECK(!rm_batch_fits(0, big, RM_BATCH_QUADS));
+	CHECK(!rm_batch_fits(big, 1, RM_BATCH_QUADS));
+	CHECK(!rm_batch_fits(big, big, big));
+	CHECK(!rm_batch_fits(0, 0, RM_BATCH_QUADS));
+	CHECK(!rm_batch_fits(0, -1, RM_BATCH_QUADS));
+	CHECK(!rm_batch_fits(-1, 1, RM_BATCH_QUADS));
+}
+
+/* The indices of a batch of quads: gl1's 0 1 2, 0 2 3 per quad, bounded by cap and by 16 bits. */
+static void
+test_quad_indices(void)
+{
+	static const unsigned short two[12] = { 0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7 };
+	unsigned short idx[16], *big;
+	int n;
+
+	memset(idx, 0xee, sizeof(idx));
+	CHECK(rm_quad_indices(2, idx, 12) == 12 && memcmp(idx, two, sizeof(two)) == 0 && idx[12] == 0xeeee);
+	memset(idx, 0xee, sizeof(idx));
+	CHECK(rm_quad_indices(2, idx, 11) == 0 && idx[0] == 0xeeee);
+	CHECK(rm_quad_indices(0, idx, 16) == 0 && rm_quad_indices(-1, idx, 16) == 0);
+	CHECK(rm_quad_indices(1, idx, -1) == 0);
+	CHECK(rm_quad_indices(1, NULL, 6) == 0);
+	CHECK(idx[0] == 0xeeee);
+
+	/* 16384 quads use vertices 0 to 65535, the last the 16-bit index can name; one more would wrap */
+	big = malloc(16384 * 6 * sizeof(*big));
+	CHECK(big != NULL);
+
+	if (big)
+	{
+		n = rm_quad_indices(16384, big, 16384 * 6);
+		CHECK(n == 16384 * 6 && big[n - 1] == 65535 && big[n - 2] == 65534 && big[n - 3] == 65532);
+		CHECK(rm_quad_indices(16385, big, 1 << 30) == 0);
+		free(big);
+	}
+}
+
+/* The tint of a coloured pic: the colour as given (unclamped, as the shim keeps it) with alpha 1. */
+static void
+test_tint(void)
+{
+	const float rgb[3] = { 0.25f, 0.5f, 1.5f };
+	float out[4] = { 9, 9, 9, 9 };
+
+	rm_tint_color(out, rgb);
+	CHECK(out[0] == 0.25f && out[1] == 0.5f && out[2] == 1.5f && out[3] == 1.0f);
+}
+
 int
 main(void)
 {
@@ -566,7 +947,17 @@ main(void)
 	test_dir_of();
 	test_ortho();
 	test_ring();
+	test_ring_console();
 	test_len_zero();
+	test_scrap_alloc();
+	test_scrap_copy();
+	test_scrap_state();
+	test_char_quad();
+	test_pic_quad();
+	test_tile_quad();
+	test_batch_fits();
+	test_quad_indices();
+	test_tint();
 
 	printf("rm_host_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

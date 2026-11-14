@@ -31,6 +31,17 @@
 #     file, and must fail each of them naming its cause, then on the tree,
 #     whose summary line names the causes found. A grep that errors fails
 #     the check.
+# (d) Always: the 2D flush points, by source inspection. gl1 draws its
+#     buffered 2D quads (R_ApplyGLBuffer) at the start of R_RenderFrame,
+#     in RI_EndFrame and before R_ScreenShot reads the frame; ref_metal's
+#     RM_Flush2D must be called, as a statement outside comments, in
+#     RI_RenderFrame before rmb_pass_3d (rm_main.c), in RI_EndFrame before
+#     rmb_frame_end (rm_main.c) and in R_ScreenShot before rmb_read
+#     (rm_misc.c). The pins see a missing flush on a few frames only
+#     (design section 18) and the host test cannot see this glue. A
+#     function that is not found fails the check. Scratch mutants of each
+#     point (the flush removed, commented out, moved after the call; the
+#     function renamed) must fail it.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -226,6 +237,54 @@ if ! vocab "$rm_dir" > "${tmp:?}/vocab.tree"; then
 	bad "$rm_dir fails the vocabulary check (${causes:-a tool error}; opengl: OpenGL vocabulary, symlink: a symbolic link, unscanned: a file of another kind)"
 fi
 
+# (d) the flush points. flushed <file> <function> <call>: 0 when the function is
+# defined in the file (its name at the start of a line, its body up to the next
+# "}" in column 0) and calls RM_Flush2D(); as a statement, outside comments and
+# string literals, before the first <call> in that body; 1 otherwise.
+flushed() {
+	strip "$1" > "${tmp:?}/flush.code" || return 1
+	awk -v fn="$2" -v call="$3" '
+		$0 ~ "^" fn "\\(" { body = 1; found = 1; next }
+		body && /^}/ { body = 0 }
+		body && !fl && $0 ~ /^[ \t]*RM_Flush2D\(\);/ { fl = NR }
+		body && !at && index($0, call) { at = NR }
+		END { exit (found && fl && at && fl < at) ? 0 : 1 }' "${tmp:?}/flush.code"
+}
+# flush_mutant <kind> <file> <function> <call>: the file with that flush point broken
+flush_mutant() {
+	case $1 in
+		removed) awk -v fn="$3" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && /^[ \t]*RM_Flush2D\(\);/ { next } { print }' "$2" ;;
+		commented) awk -v fn="$3" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && /^[ \t]*RM_Flush2D\(\);/ { sub(/RM_Flush2D\(\);/, "/* RM_Flush2D(); */") } { print }' "$2" ;;
+		moved) awk -v fn="$3" -v call="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && held == "" && !done && /^[ \t]*RM_Flush2D\(\);/ { held = $0; done = 1; next }
+			{ print } b && held != "" && index($0, call) { print held; held = "" }' "$2" ;;
+		renamed) sed "s/^$3(/$3_old(/" "$2" ;;
+	esac
+}
+flush_mutants=0
+for point in "rm_main.c RI_RenderFrame rmb_pass_3d(" "rm_main.c RI_EndFrame rmb_frame_end(" \
+	"rm_misc.c R_ScreenShot rmb_read("; do
+	# shellcheck disable=SC2086 # three words: file, function, call
+	set -- $point
+	f=$rm_dir/$1 fn=$2 call=$3
+	if ! flushed "$f" "$fn" "$call"; then
+		bad "$f: $fn does not call RM_Flush2D() before $call (gl1's R_ApplyGLBuffer)"
+		continue
+	fi
+	for m in removed commented moved renamed; do
+		flush_mutant "$m" "$f" "$fn" "$call" > "${tmp:?}/flush-mutant.c"
+		if cmp -s "$f" "${tmp:?}/flush-mutant.c"; then
+			bad "the flush-point mutant ($m) of $fn changed nothing"
+		elif flushed "${tmp:?}/flush-mutant.c" "$fn" "$call"; then
+			bad "the flush-point check passes a mutant of $fn (the flush $m)"
+		else
+			flush_mutants=$((flush_mutants + 1))
+		fi
+	done
+done
+
 # (b) the build, where it can be built
 skip=""
 if [ "$(uname -s)" != Darwin ]; then
@@ -295,6 +354,6 @@ else
 fi
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; $mutants vocabulary mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $build)"
 fi
 exit $fail
