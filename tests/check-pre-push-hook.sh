@@ -361,6 +361,65 @@ run "not one's own: e-mail domain only" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user
 case_ "$A" refs/heads/zzqo1 "$mine" refs/heads/zzqo1 "$zero"
 run "not one's own: part of a longer word" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name "GIT_CONFIG_VALUE_0=Zzqa ${login}x"
 
+# The user name that is the owner handle of origin's GitHub address is public:
+# it is skipped as a whole word; host name and home path are still refused.
+# The address forms themselves are proven by tests/check-no-local-identity.sh,
+# whose owner_is must be the same text as the hook's.
+sed -n '/^# ---- owner_is: the same/,/^# ---- end of owner_is/p' "$hook" > "$tmp/owner.hook"
+sed -n '/^# ---- owner_is: the same/,/^# ---- end of owner_is/p' tests/check-no-local-identity.sh > "$tmp/owner.check"
+{ [ -s "$tmp/owner.hook" ] && cmp -s "$tmp/owner.hook" "$tmp/owner.check"; } ||
+	note "owner_is differs between the hook and tests/check-no-local-identity.sh"
+Hm="this machine's home identity"
+owner_cases() {
+	case_ ok refs/heads/zzqw1 "$(mk "$m1" "zzqm30 note for $login")" refs/heads/zzqw1 "$zero"
+	case_ ok refs/heads/zzqw2 "$(AN="$login" mk "$m1" zzqm31)" refs/heads/zzqw2 "$zero"
+	case_ ok refs/tags/zzqw3 "$(tag "$m1" commit zzqw3 "$login was here")" refs/tags/zzqw3 "$zero"
+	# a longer word holding the user name refuses in a ref name only
+	case_ ok refs/heads/zzqw5 "$(mk "$m1" "zzqm33 x${login}x")" refs/heads/zzqw5 "$zero"
+	case_ ok refs/heads/zzqx "$m1" "refs/heads/zzqt/$login/zzqtopic" "$zero"
+	case_ "the remote ref name contains $U" refs/heads/zzqx "$m1" "refs/heads/zzqt/x${login}x" "$zero"
+	case_ "the local ref name contains $U" "refs/heads/${login}2" "$m1" refs/heads/zzqplain "$zero"
+	case_ "the remote ref name contains $U" refs/heads/zzqx "$m1" "refs/heads/zzqt/zz${login}" "$zero"
+	case_ "$M $(printf '%.10s' "$m3") contains $H" refs/heads/zzqmain "$m3" refs/heads/zzqmain "$m1"
+	_hm=$(mk "$m1" "zzqm32 see /zzqhome/$login/file")
+	case_ "$M $(printf '%.10s' "$_hm") contains $Hm" refs/heads/zzqw4 "$_hm" refs/heads/zzqw4 "$zero"
+	case_ "the remote ref name contains $H" refs/heads/zzqx "$m1" "refs/heads/$login/$syn" "$zero"
+}
+w remote set-url origin "https://github.com/Zzq${login#zzq}/zzqrepo.git"
+owner_cases
+shells="dash bash sh"
+run "the user name is the owner handle" HOME="/zzqhome/$login"
+shells=sh
+# Skipped only when the last component of HOME is the user name: with HOME
+# unset, with another last component or ending in /, the user name is checked.
+for _h in unset /zzqhome/zzqx "/zzqhome/$login/"; do
+	case_ "$M" refs/heads/zzqw1 "$(mk "$m1" "zzqm30 note for $login")" refs/heads/zzqw1 "$zero"
+	case_ "the remote ref name contains $U" refs/heads/zzqx "$m1" "refs/heads/zzqt/$login/zzqtopic" "$zero"
+	case $_h in
+	unset) run "the owner handle, HOME unset" -u HOME ;;
+	*/) run "the owner handle, HOME ends in /" HOME="$_h" ;;
+	*) run "the owner handle, HOME elsewhere" HOME="$_h" ;;
+	esac
+done
+# Not skipped: another owner, an undeterminable owner, two URLs. The home
+# ends in the user name, so only owner_is can keep the skip off.
+_i=0
+for _url in https://github.com/zzqother/zzqrepo.git "zzqalias:$login/zzqrepo.git" "file:///zzq/$login/zzqrepo"; do
+	_i=$((_i + 1))
+	w remote set-url origin "$_url"
+	case_ "$M" refs/heads/zzqw1 "$(mk "$m1" "zzqm30 note for $login")" refs/heads/zzqw1 "$zero"
+	case_ "the remote ref name contains $U" refs/heads/zzqx "$m1" "refs/heads/zzqt/$login/zzqtopic" "$zero"
+	run "the owner handle is not the user name (address $_i of 3)" HOME="/zzqhome/$login"
+done
+# Two URLs, the owner's first (`get-url` without --all would give only it),
+# and a home ending in the user name, so only owner_is can keep the skip off.
+w remote set-url origin "https://github.com/$login/zzqrepo.git"
+w config --add remote.origin.url "zzqalias:$login/zzqrepo.git"
+case_ "$M" refs/heads/zzqw1 "$(mk "$m1" "zzqm30 note for $login")" refs/heads/zzqw1 "$zero"
+run "origin with two URLs" HOME="/zzqhome/$login"
+w config --unset-all remote.origin.url
+w config remote.origin.url "$tmp/remote.git"
+
 # Tag chains: TAG_DEPTH (10) levels are followed, one more is refused.
 t=$tok
 i=1
