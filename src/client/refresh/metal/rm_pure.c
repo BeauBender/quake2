@@ -1625,7 +1625,11 @@ rm_split_reopen(int pass_open, int pass_depth)
 
 /* ---- sky, warped water, flowing and translucent surfaces (N6) --------------------- */
 
-/* gl1's TURBSCALE and its table, constants/warpsin.h (included by gl1_warp.c as r_turbsin) */
+/*
+ * gl1's TURBSCALE and its table, constants/warpsin.h (included by
+ * gl1_warp.c as r_turbsin), which gl1's RI_Init halves in place before
+ * the first frame: the values the water uses are half of the file's.
+ */
 #define RM_TURBSCALE (256.0 / (2 * M_PI))
 
 static const float rm_turbsin[RM_TURB_SIZE] = {
@@ -1635,7 +1639,7 @@ static const float rm_turbsin[RM_TURB_SIZE] = {
 float
 rm_turb_sin(int i)
 {
-	return rm_turbsin[i & (RM_TURB_SIZE - 1)];
+	return rm_turbsin[i & (RM_TURB_SIZE - 1)] * 0.5;
 }
 
 /* the int a double truncates to as gl1's (int) cast does, where that is defined; saturated, a NaN is 0, elsewhere */
@@ -1713,8 +1717,8 @@ rm_warp_st(float os, float ot, float time, float scroll, float *s, float *t)
 {
 	float ss, tt;
 
-	ss = os + rm_turbsin[rm_warp_index(ot, time)] + scroll;
-	tt = ot + rm_turbsin[rm_warp_index(os, time)];
+	ss = os + rm_turb_sin(rm_warp_index(ot, time)) + scroll;
+	tt = ot + rm_turb_sin(rm_warp_index(os, time));
 
 	*s = ss * (1.0 / 64);
 	*t = tt * (1.0 / 64);

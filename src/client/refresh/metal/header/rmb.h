@@ -774,7 +774,7 @@ int rm_warp_subdivide(const float *verts, int numverts, const float *vec0, const
 		float *out, unsigned long out_cap, unsigned *polylen, unsigned poly_cap,
 		unsigned *npolys, unsigned long *nverts);
 
-/* the turbulence table of gl1 (r_turbsin) and the scale that indexes it, 256 / (2 pi) */
+/* the turbulence table of gl1 (r_turbsin as its RI_Init halves it) and the scale that indexes it, 256 / (2 pi) */
 #define RM_TURB_SIZE 256
 float rm_turb_sin(int i);
 

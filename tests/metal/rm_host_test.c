@@ -2206,7 +2206,7 @@ test_lm_line(void)
 
 /* ---- N6: sky, warped water, flowing and translucent surfaces ------------------------- */
 
-/* gl1's table, from the file gl1_warp.c includes, to hold rm_turb_sin equal to it entry by entry */
+/* gl1's table, from the file gl1_warp.c includes (its RI_Init halves it), to hold rm_turb_sin equal to it entry by entry */
 static const float ref_turbsin[256] = {
 #include "../../src/client/refresh/constants/warpsin.h"
 };
@@ -2243,11 +2243,13 @@ test_warp_arith(void)
 
 	for (i = 0; i < 256; i++)
 	{
-		ok &= (rm_turb_sin(i) == ref_turbsin[i]);
+		ok &= (rm_turb_sin(i) == ref_turbsin[i] * 0.5);
 	}
 
 	CHECK(ok);
-	CHECK(rm_turb_sin(256) == ref_turbsin[0] && rm_turb_sin(-1) == ref_turbsin[255]);
+	CHECK(rm_turb_sin(256) == ref_turbsin[0] * 0.5f && rm_turb_sin(-1) == ref_turbsin[255] * 0.5f);
+	/* the peak of 8 * sin is 4 after the halving, at the quarter turn */
+	CHECK(rm_turb_sin(64) > 3.99f && rm_turb_sin(64) <= 4.0f && rm_turb_sin(192) < -3.99f && rm_turb_sin(0) == 0);
 
 	/* TURBSCALE = 256 / 2 pi = 40.7436654; hand-worked at time 1.5 */
 	CHECK(rm_warp_index(0, 1.5f) == 61);       /* 1.5 * 40.74 = 61.1 */
@@ -2268,11 +2270,11 @@ test_warp_arith(void)
 
 	/* the three vertices: s = os + turb(ot) + scroll, t = ot + turb(os), each over 64 */
 	rm_warp_st(0, 0, 1.5f, 0, &s, &t);
-	CHECK(s == (float)((0 + ref_turbsin[61] + 0) * (1.0 / 64)) && t == (float)((0 + ref_turbsin[61]) * (1.0 / 64)));
+	CHECK(s == (float)((0 + (ref_turbsin[61] * 0.5f) + 0) * (1.0 / 64)) && t == (float)((0 + (ref_turbsin[61] * 0.5f)) * (1.0 / 64)));
 	rm_warp_st(64, 32, 1.5f, -8, &s, &t);
-	CHECK(s == (float)((64 + ref_turbsin[224] - 8) * (1.0 / 64)) && t == (float)((32 + ref_turbsin[131]) * (1.0 / 64)));
+	CHECK(s == (float)((64 + (ref_turbsin[224] * 0.5f) - 8) * (1.0 / 64)) && t == (float)((32 + (ref_turbsin[131] * 0.5f)) * (1.0 / 64)));
 	rm_warp_st(-16, 100, 1.5f, 0, &s, &t);
-	CHECK(s == (float)((-16 + ref_turbsin[58]) * (1.0 / 64)) && t == (float)((100 + ref_turbsin[236]) * (1.0 / 64)));
+	CHECK(s == (float)((-16 + (ref_turbsin[58] * 0.5f)) * (1.0 / 64)) && t == (float)((100 + (ref_turbsin[236] * 0.5f)) * (1.0 / 64)));
 
 	/* the water's scroll: -64 * the fraction of time / 2, only on a flowing surface */
 	CHECK(rm_warp_scroll(1.25f, 0) == 0);
@@ -2308,8 +2310,8 @@ test_warp_arith(void)
 
 		x = (int)((ot * 0.125 + tm) * REF_TURBSCALE) & 255;
 		y = (int)((os * 0.125 + tm) * REF_TURBSCALE) & 255;
-		es = os + ref_turbsin[x] + sc;
-		et = ot + ref_turbsin[y];
+		es = os + (ref_turbsin[x] * 0.5f) + sc;
+		et = ot + (ref_turbsin[y] * 0.5f);
 		rm_warp_st(os, ot, tm, sc, &rs, &rt);
 		ok &= (rs == (float)(es * (1.0 / 64))) && (rt == (float)(et * (1.0 / 64)));
 		ok &= (rm_warp_index(ot, tm) == x) && (rm_warp_index(os, tm) == y);
