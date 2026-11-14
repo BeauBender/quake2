@@ -1,10 +1,11 @@
 #!/bin/sh
 # dev-loop gate entry point (gate.test in .claude/dev-loop.json).
 #
-# The gate first runs the repo invariants in tests/check-*.sh (each takes
-# well under a second and can be run on its own), then builds the parts
-# that need nothing beyond the system toolchain: the dedicated server
-# (q2ded) and the game module. This compiles src/common, src/server,
+# The gate first runs the repo invariants in tests/check-*.sh (each runs
+# in seconds on an idle host, longer on a loaded one, and can be run on its
+# own; the three identity checks build throwaway git repositories), then
+# builds the parts that need nothing beyond the system toolchain: the
+# dedicated server (q2ded) and the game module. This compiles src/common, src/server,
 # src/game and the unix backend. The client and renderers need SDL and
 # are not built here. Last it builds and runs the unit-test suite
 # (make test: tests/unit against the real q2ded objects, pins under
@@ -26,6 +27,12 @@ set -eu
 unset MAKEFLAGS GNUMAKEFLAGS MFLAGS
 
 cd "$(dirname "$0")/.."
+
+# A warning, not a failure: without the hooks the commit and push guards
+# (.githooks/) do not run in this checkout.
+if [ "$(git config --get core.hooksPath || true)" != ".githooks" ]; then
+	echo "test.sh: warning: core.hooksPath is not .githooks in this checkout, so the commit and push hooks are not wired; run scripts/setup.sh (if it says it skipped, wire them by hand: git config core.hooksPath .githooks)"
+fi
 
 for check in tests/check-*.sh; do
 	"$check"

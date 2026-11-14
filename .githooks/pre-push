@@ -1,0 +1,292 @@
+#!/bin/sh
+# Push-time guard, wired by scripts/setup.sh (core.hooksPath=.githooks).
+#
+# This repository is public. Nothing that identifies the working machine may
+# leave it: not in a ref name, not in a commit or tag. The identifying values
+# are the output of `hostname -s`, the output of `whoami` and the path in
+# $HOME. They are read at run time and compared case-insensitively (ASCII);
+# a value shorter than three characters is not compared (it would match
+# ordinary text). None of them is written anywhere in the repository, and
+# this hook never prints one, nor any text that carries one (a ref name, a
+# file name, an author field): it says THAT something matched, which field
+# (ref name, message, author or committer field, merged tag, tag, blob) and
+# which kind of value (host, user, home), by position in the push and by
+# commit id.
+#
+# Rules
+#   ref names   a match anywhere in the local or the remote ref name refuses the
+#               push (substring match). Deleting a ref is always allowed, so a
+#               ref that already leaked can be removed.
+#   objects     the raw text of what is being pushed is scanned: for each new
+#               commit its author and committer lines, every other header
+#               (a `mergetag` header carries a whole merged tag) and its
+#               message; for an annotated tag its name, tagger line and
+#               message, following a tag of a tag up to TAG_DEPTH levels; a
+#               tag (or ref) on a blob scans the blob; one on a tree is
+#               refused (it cannot be scanned here). Signature blocks (gpgsig
+#               headers, BEGIN/END ... SIGNATURE blocks) are skipped: they are
+#               base64 and a short name would match them by chance. The host
+#               name and the home path match as substrings, the user name as a
+#               whole word (so a short, common user name does not trip on
+#               ordinary prose).
+#   your own    in the author and committer lines only, the user name is not
+#   name        compared when it is a whole word of this checkout's
+#               `user.name` or of the part of `user.email` before the @: that
+#               word is already published, by choice, as the author identity.
+#               Host name and home path are still compared there.
+#   commits     the commits the remote lacks: git rev-list <sha> --not
+#               <remote sha> --remotes=<remote>, at most SCAN_CAP of them
+#               (commits already on any remote-tracking ref of the remote
+#               count as published, so fetch the remote first). More than the
+#               cap is refused (the rest cannot be scanned): push in steps.
+#   errors      fail closed: if the host or user name cannot be read, or git
+#               cannot list or read an object (for example the remote sha is
+#               not known locally: fetch first), the push is refused. A retry
+#               is cheap; a published identity cannot be taken back.
+#
+# Test-only environment (used by tests/check-pre-push-hook.sh):
+#   YQ2_IDENTITY_TEST_EXTRA_WORD   one more word to look for. It is only ever
+#                                  added to the real words, never replaces them.
+#   YQ2_IDENTITY_TEST_SCAN_CAP     a lower SCAN_CAP; a value above the default,
+#                                  with a leading zero or not a plain number
+#                                  is ignored.
+#
+# Usage: runs from git (arguments: remote name, remote URL; stdin: one line
+# "<local ref> <local sha> <remote ref> <remote sha>" per ref). Bypassing it
+# with --no-verify is against the rules in CLAUDE.md.
+
+export LC_ALL=C
+remote=${1:-}
+SCAN_CAP=1000
+TAG_DEPTH=10
+case ${YQ2_IDENTITY_TEST_SCAN_CAP:-} in
+'' | *[!0-9]* | 0?*) ;;
+*) [ "$YQ2_IDENTITY_TEST_SCAN_CAP" -lt "$SCAN_CAP" ] && SCAN_CAP=$YQ2_IDENTITY_TEST_SCAN_CAP ;;
+esac
+zero=0000000000000000000000000000000000000000
+nl='
+'
+
+die() {
+	echo "pre-push: $*" >&2
+	exit 1
+}
+
+# YQ2_W: lines of "<kind> <value>"; kind is host, user, home or test. Handed to
+# awk through the environment, so no value is ever on a command line.
+YQ2_W=
+add_word() { # $1 = kind, $2 = value
+	[ "${#2}" -ge 3 ] || return 0
+	YQ2_W="$YQ2_W$1 $2$nl"
+}
+
+h=$(hostname -s 2>/dev/null) || h=
+u=$(whoami 2>/dev/null) || u=
+[ -n "$h" ] || die "refused: cannot read this machine's host name, so the identity check cannot run"
+[ -n "$u" ] || die "refused: cannot read the local user name, so the identity check cannot run"
+add_word host "$h"
+add_word user "$u"
+case ${HOME:-} in
+'' | /) ;;
+*) add_word home "$HOME" ;;
+esac
+if [ -n "${YQ2_IDENTITY_TEST_EXTRA_WORD:-}" ]; then
+	add_word test "$YQ2_IDENTITY_TEST_EXTRA_WORD"
+fi
+export YQ2_W
+
+# Is the user name a word of the author identity this checkout publishes?
+YQ2_UPUB=0
+_me="$(git config user.name 2>/dev/null)$nl$(git config user.email 2>/dev/null | sed 's/@.*//')"
+if printf '%s\n' "$_me" | grep -qiwF -e "$u"; then
+	YQ2_UPUB=1
+fi
+export YQ2_UPUB
+
+# scan <mode>: reads text on stdin (mode name, commit, tag or blob) and prints
+# "<field> <kind>" for the first match, nothing if none. Fields: local and
+# remote (mode name: line 1 is the local ref name, line 2 the remote one),
+# author, header, mergetag, message, tag, blob. Exits non-zero on an error.
+scan() {
+	YQ2_MODE=$1 awk '
+	BEGIN {
+		mode = ENVIRON["YQ2_MODE"]
+		n = split(ENVIRON["YQ2_W"], raw, "\n")
+		nw = 0
+		for (i = 1; i <= n; i++) {
+			if (raw[i] == "") continue
+			sp = index(raw[i], " ")
+			nw++
+			kind[nw] = substr(raw[i], 1, sp - 1)
+			word[nw] = tolower(substr(raw[i], sp + 1))
+		}
+		upub = ENVIRON["YQ2_UPUB"]
+		inhdr = (mode == "commit")
+		field = (mode == "commit") ? "header" : mode
+		insig = 0
+	}
+	mode == "name" { field = (NR == 1) ? "local" : "remote" }
+	function wordch(c) { return c ~ /[a-z0-9_]/ }
+	function wholeword(s, w,    p, start, b, a) {
+		start = 1
+		while ((p = index(substr(s, start), w)) > 0) {
+			p += start - 1
+			b = (p > 1) ? substr(s, p - 1, 1) : ""
+			a = substr(s, p + length(w), 1)
+			if (!wordch(b) && !wordch(a)) return 1
+			start = p + 1
+		}
+		return 0
+	}
+	function check(text, f,    i, s) {
+		s = tolower(text)
+		for (i = 1; i <= nw; i++) {
+			if (kind[i] == "user" && mode != "name") {
+				if (f == "author" && upub == 1) continue
+				if (wholeword(s, word[i])) { print f " " kind[i]; exit 0 }
+			} else if (index(s, word[i]) > 0) {
+				print f " " kind[i]; exit 0
+			}
+		}
+	}
+	{
+		line = $0
+		if (inhdr) {
+			if (line == "") { inhdr = 0; field = "message"; next }
+			if (line !~ /^ /) {
+				key = line; sub(/ .*/, "", key)
+				skiphdr = (key == "gpgsig" || key == "gpgsig-sha256")
+				field = (key == "author" || key == "committer") ? "author" : (key == "mergetag") ? "mergetag" : "header"
+			}
+			if (skiphdr) next
+		}
+		# A signature appended to a tag, or to the tag inside a mergetag.
+		if (mode == "tag" || field == "mergetag") {
+			if (line ~ /^ ?-----BEGIN [A-Z ]*SIGNATURE-----$/) { insig = 1; next }
+			if (insig) { if (line ~ /^ ?-----END [A-Z ]*SIGNATURE-----$/) insig = 0; next }
+		}
+		check(line, field)
+	}
+	'
+}
+
+# scanobj <type> <id> <mode>: scans one object, leaving the result in $hit
+# and the object, NULs turned into newlines, in $objt. Returns non-zero if git
+# cannot read it or the scan fails. Files, not pipes or variables: a pipe would
+# hide a git error and a variable would drop NULs.
+scanobj() {
+	git cat-file "$1" "$2" > "$objf" 2>/dev/null || return 1
+	tr '\000' '\n' < "$objf" > "$objt" || return 1
+	hit=$(scan "$3" < "$objt") || return 1
+}
+
+# report <n> <what>: one refusal line.
+report() {
+	echo "pre-push: refused: ref number $1: $2" >&2
+	fail=1
+}
+
+# describe <field> <kind> <id>: the refusal text for an object match.
+describe() {
+	case $1 in
+	author) echo "the author or committer field of commit $3 contains this machine's $2 identity; recommit with another author identity" ;;
+	header) echo "a header of commit $3 contains this machine's $2 identity; recreate the commit" ;;
+	mergetag) echo "the merged tag (mergetag header) of commit $3 contains this machine's $2 identity; redo the merge without that tag" ;;
+	message) echo "the message of commit $3 contains this machine's $2 identity; reword it before pushing" ;;
+	tag) echo "the tag object $3 (its name, tagger line or message) contains this machine's $2 identity; recreate the tag" ;;
+	blob) echo "the blob $3 the ref points at contains this machine's $2 identity" ;;
+	esac
+}
+
+objf=$(mktemp "${TMPDIR:-/tmp}/pre-push.XXXXXX") || die "refused: cannot create a temporary file"
+objt=$objf.txt
+# A shell error must still refuse; bash 3.2 loses the status in an EXIT
+# trap, so only the normal end of the script may exit 0.
+trap 'rm -f "$objf" "$objt"; [ "${_ok:-}" = 1 ] || exit 1' EXIT
+fail=0
+n=0
+while read -r lref lsha rref rsha || [ -n "${lref:-}" ]; do
+	[ -n "${lref:-}" ] || continue
+	n=$((n + 1))
+	# Deleting a ref publishes nothing.
+	[ "$lsha" = "$zero" ] && continue
+
+	hit=$(printf '%s\n%s\n' "$lref" "$rref" | scan name) || die "refused: the ref name check failed internally (ref number $n)"
+	case $hit in
+	'') ;;
+	local*) report "$n" "the local ref name contains this machine's ${hit#* } identity; rename the branch"; continue ;;
+	*) report "$n" "the remote ref name contains this machine's ${hit#* } identity; push to another name"; continue ;;
+	esac
+
+	# ---- Tooling branches: the one exemption. ------------------------------
+	# The loop's tooling pushes refs/heads/claim/<ID> and
+	# refs/heads/gate-clear/<ID> branches whose commit messages carry the
+	# machine identity, and the loop cannot work without them. Only the object
+	# scan below is skipped, and only for these prefixes; the ref names above
+	# are always checked. Commits pushed here count as published for every
+	# other ref afterwards. Delete this block when the tooling offers a
+	# pseudonymous identity (see docs/decisions/0005-push-identity-hook.md).
+	case $rref in
+	refs/heads/claim/* | refs/heads/gate-clear/*) continue ;;
+	esac
+	# -------------------------------------------------------------------------
+
+	# Annotated tags, a tag of a tag included: each tag object is published.
+	obj=$lsha
+	type=$(git cat-file -t "$obj" 2>/dev/null) || die "refused: cannot read object $(printf '%.10s' "$obj") (ref number $n)"
+	depth=0
+	while [ "$type" = tag ]; do
+		depth=$((depth + 1))
+		[ "$depth" -le "$TAG_DEPTH" ] || die "refused: ref number $n is a chain of more than $TAG_DEPTH tags"
+		scanobj tag "$obj" tag || die "refused: cannot scan tag $(printf '%.10s' "$obj") (ref number $n)"
+		[ -z "$hit" ] || break
+		obj=$(sed -n '1s/^object //p' "$objt")
+		type=$(git cat-file -t "$obj" 2>/dev/null) || die "refused: cannot read object $(printf '%.10s' "$obj") (ref number $n)"
+	done
+	if [ -n "$hit" ]; then
+		report "$n" "$(describe tag "${hit#* }" "$(printf '%.10s' "$obj")")"
+		continue
+	fi
+	case $type in
+	commit) ;;
+	blob)
+		scanobj blob "$obj" blob || die "refused: cannot scan blob $(printf '%.10s' "$obj") (ref number $n)"
+		[ -z "$hit" ] || report "$n" "$(describe blob "${hit#* }" "$(printf '%.10s' "$obj")")"
+		continue
+		;;
+	*)
+		report "$n" "it points at a $type, which this hook cannot scan; push a commit or a tag of one"
+		continue
+		;;
+	esac
+
+	# Only what the remote lacks: not the remote's own tip, and not what
+	# another remote-tracking ref of it already has. An unknown remote tip
+	# cannot be subtracted, so the push is refused.
+	if [ "$rsha" = "$zero" ]; then
+		commits=$(git rev-list --max-count=$((SCAN_CAP + 1)) "$obj" --not --remotes="$remote" 2>/dev/null) ||
+			die "refused: cannot list the new commits of ref number $n"
+	else
+		git cat-file -e "$rsha^{commit}" 2>/dev/null ||
+			die "refused: the remote commit of ref number $n is not known here; fetch the remote first"
+		commits=$(git rev-list --max-count=$((SCAN_CAP + 1)) "$obj" --not "$rsha" --remotes="$remote" 2>/dev/null) ||
+			die "refused: cannot list the commits of ref number $n"
+	fi
+	# shellcheck disable=SC2086 # one word per commit id
+	set -- $commits
+	if [ "$#" -gt "$SCAN_CAP" ]; then
+		report "$n" "more than $SCAN_CAP commits to scan; fetch the remote first, or push in smaller steps"
+		continue
+	fi
+	for c in $commits; do
+		short=$(printf '%.10s' "$c")
+		scanobj commit "$c" commit || die "refused: cannot scan commit $short (ref number $n)"
+		if [ -n "$hit" ]; then
+			report "$n" "$(describe "${hit%% *}" "${hit#* }" "$short")"
+			break
+		fi
+	done
+done
+
+_ok=1
+exit "$fail"
