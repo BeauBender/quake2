@@ -3903,7 +3903,7 @@ TestReplayValidation(void)
 		CHECK(!Rect2D(t, -1, 0, 8, 8, &st), "2d %d: one column left of the frame forwarded", t);
 		CHECK(!Rect2D(t, VAL_W - 7, 0, 8, 8, &st), "2d %d: one column right of the frame forwarded", t);
 		CHECK(!Rect2D(t, 0, 0, 0, 8, &st), "2d %d: zero width forwarded", t);
-		CHECK(!Rect2D(t, 0, 0, 8, 0, &st), "2d %d: zero height forwarded", t);
+		CHECK(!Rect2D(t, 0, 0, 8, 0, &st) && !Rect2D(t, 0, 5, 8, 0, &st), "2d %d: zero height forwarded", t);
 		CHECK(!Rect2D(t, 0, 0, -8, 8, &st), "2d %d: negative width forwarded", t);
 		CHECK(!Rect2D(t, 0, 0, VAL_W + 1, 8, &st), "2d %d: wider than the frame forwarded", t);
 		CHECK(!Rect2D(t, 0, 0, 8, VAL_H + 1, &st), "2d %d: taller than the frame forwarded", t);
