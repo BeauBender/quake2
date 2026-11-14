@@ -110,6 +110,14 @@ the drawing calls the engine made into the renderer (about 4.4 MB for the
 default demo); it holds data derived from the game data, stays in the
 store and is never committed or uploaded. `PINS_TRACE=0` records none.
 
+The engine can replay such a trace into a renderer without running the
+game: `pins_replay <trace.q2r>` with `pins_dir` (and no `pins_record`)
+feeds the recorded calls to the renderer named by `vid_renderer` at the
+recorded size, writes a frame wherever the live run captured one, with
+the same names, and quits after the last frame. No server, demo, sound
+or input runs, so the game module may be absent. `scripts/pins.sh` does
+not drive this yet.
+
 ### The Metal shim build of gl1
 
 On macOS `ref_gl1` can be built against an OpenGL subset on Metal that

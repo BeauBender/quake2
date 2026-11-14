@@ -2852,7 +2852,8 @@ Rep_BoundCall(refrec_call_t *c)
 			break;
 
 		case REC_CHARSCALED:
-			n[2] = Rep_Byte(n[2]);
+			/* every renderer masks the character; the console passes signed chars */
+			n[2] &= 0xff;
 			/* fall through: the scale */
 		case REC_PICSCALED:
 			f[0] = Rep_F(f[0], 0.0f, REFREC_REPLAY_MAX_SCALE, 1.0f);
