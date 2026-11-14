@@ -1688,6 +1688,22 @@ with `ERR_DROP`, as for N4 to N6's) frees the slot and the file before
 the loader runs, so no hunk is taken; the harness counts 0 hunks and 0
 files outstanding after every refused case and 400,000 fuzzed models.
 
+What survives a drop while the skins are found (TASK90's security
+review, N3): the shared loaders call `find_image` for each skin between
+`Hunk_Begin` and their return, and `R_FindImage` can drop (`R_LoadPic`'s
+`MAX_GLTEXTURES`, a name too long). The slot gets the hunk only from the
+return, so `mod->extradata` was still NULL and `Mod_Free` freed the file
+but not the open hunk: the scratch harness, its `R_FindImage` stub
+dropping on the first, second or third skin of an MD2 and the first or
+second frame of an SP2, counted one hunk more outstanding after each
+(`dropskin`). The loaders are now given `RM_SkinLater` (`rm_model.c`),
+which loads nothing, and `Mod_ForName` registers the skins with
+`Mod_ReLoadSkins` once the hunk is the slot's (the same `R_FindImage`
+calls in the same order; `RI_RegisterModel` calls it again, as before
+and as gl1). A drop there leaves an unfinished slot holding its hunk,
+which `RM_FreeUnfinished` frees whole at the next registration: the same
+five cases end with 0 hunks and 0 files outstanding.
+
 Measured on the build VM (T0), sources `41bcf6f2` (the pins; later
 commits add host cases, documents, a comment and a skin index bounded a
 second time, which changes no draw) and `c3d3257a` (the `ASAN=1`
