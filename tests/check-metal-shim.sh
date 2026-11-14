@@ -17,6 +17,11 @@
 #     copied), so release/ and build/ of this
 #     checkout are not touched; the dylib must link Metal and not OpenGL.
 #     Otherwise one line "check-metal-shim: build skipped: <reason>".
+# (c) The coverage report (tests/metal/shim-coverage.sh): always its text
+#     half (every GL entry point gl1 calls or loads by pointer has a row
+#     in the table of docs/plans/metal-shim-design.md section 14 and a
+#     proc-table entry); after the build of (b) also its object half
+#     (the shim defines every one, the dylib leaves no _gl undefined).
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -88,9 +93,18 @@ else
 		libs=$(otool -L "$tmp/tree/release/ref_gl1.dylib")
 		case $libs in *Metal.framework*) ;; *) bad "the shim build of ref_gl1.dylib does not link Metal";; esac
 		case $libs in *OpenGL.framework*) bad "the shim build of ref_gl1.dylib links OpenGL";; esac
+		covobjs="$tmp/tree/build/release/ref_gl1_metal"
 	fi
 	build="shim built"
 fi
+
+# (c) the coverage report, with the objects of (b) when it built them
+if [ -n "${covobjs:-}" ]; then
+	covout=$(sh tests/metal/shim-coverage.sh "$covobjs" "$tmp/tree/release/ref_gl1.dylib" 2>&1) || bad "coverage report failed"
+else
+	covout=$(sh tests/metal/shim-coverage.sh 2>&1) || bad "coverage report failed"
+fi
+printf '%s\n' "$covout"
 
 if [ "$fail" = 0 ]; then
 	echo "check-metal-shim: ok (${host:-host test}; $build)"
