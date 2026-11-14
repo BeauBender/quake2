@@ -23,12 +23,15 @@
  * glGenTextures: it binds the names it chose (texnum), so the objects are
  * a fixed table indexed by name, MGL_MAX_TEXTURES long; a name past it is
  * refused with GL_INVALID_VALUE. Level 0 creates the Metal texture (RGBA
- * 8 bit, a full mip chain); every upload is converted to tightly packed
- * RGBA here and handed to mgl_layer.m, which orders it between the
- * draws around it. The sampler is a packed key of the parameters, which
- * the layer turns into a cached MTLSamplerState. Only RGBA and RGB
- * uploads of unsigned bytes are accepted: the paletted path
- * (GL_COLOR_INDEX8_EXT) is never advertised and is refused.
+ * 8 bit, a full mip chain, filled from level 0 when GL_GENERATE_MIPMAP
+ * is set); every upload is converted to tightly packed RGBA here and
+ * handed to mgl_layer.m, which orders it between the draws around it.
+ * The sampler is a packed key of the parameters, which the layer turns
+ * into a cached MTLSamplerState. Only RGBA and RGB uploads of unsigned
+ * bytes are accepted: the paletted path (GL_COLOR_INDEX8_EXT) is never
+ * advertised and is refused. Levels above 0 (gl1 uploads its own chain
+ * only without GL_ARB_texture_non_power_of_two, which the shim
+ * advertises) and glTexSubImage2D (dynamic lightmaps) are S2b.
  *
  * =======================================================================
  */
@@ -85,7 +88,6 @@ mgl_texture_init(mgl_texture_t *t)
 	t->min_filter = GL_NEAREST_MIPMAP_LINEAR;
 	t->mag_filter = GL_LINEAR;
 	t->wrap_s = t->wrap_t = GL_REPEAT;
-	t->anisotropy = 1;
 }
 
 mgl_texture_t *
@@ -113,8 +115,7 @@ mgl_textures_reset(void)
 /*
  * Bits 0-2 min filter (GL_NEAREST, GL_LINEAR, then the four mipmap
  * filters in enum order), bit 3 mag filter linear, bits 4-5 and 6-7
- * wrap s and t (0 repeat, 1 clamp, 2 clamp to edge), bits 8-12 the
- * anisotropy, 1 to 16.
+ * wrap s and t (0 repeat, 1 clamp, 2 clamp to edge).
  */
 static uint32_t
 mgl_wrap_bits(GLenum wrap)
@@ -129,8 +130,7 @@ mgl_sampler_key(const mgl_texture_t *t)
 		2 + (uint32_t)(t->min_filter - GL_NEAREST_MIPMAP_NEAREST);
 
 	return min | (t->mag_filter == GL_LINEAR ? 8u : 0u) |
-		(mgl_wrap_bits(t->wrap_s) << 4) | (mgl_wrap_bits(t->wrap_t) << 6) |
-		((uint32_t)t->anisotropy << 8);
+		(mgl_wrap_bits(t->wrap_s) << 4) | (mgl_wrap_bits(t->wrap_t) << 6);
 }
 
 /* The bound texture of the active unit, for the calls that act on it. */
@@ -228,38 +228,6 @@ mgl_internal_alpha(GLint internalformat)
 	}
 }
 
-/* Converts and hands one upload to the layer; GL_OUT_OF_MEMORY when the copy cannot be made. */
-static void
-mgl_upload(mgl_texture_t *t, GLint level, GLint x, GLint y, GLsizei w, GLsizei h,
-		GLenum format, const GLvoid *pixels)
-{
-	unsigned char *rgba;
-
-	if (!pixels || w == 0 || h == 0)
-	{
-		return;
-	}
-
-	rgba = malloc((size_t)w * (size_t)h * 4);
-
-	if (!rgba)
-	{
-		mgl_error(GL_OUT_OF_MEMORY);
-		return;
-	}
-
-	mgl_unpack_rgba(pixels, format, w, h, mgl_state.unpack_alignment,
-			mgl_state.unpack_row_length, t->opaque, rgba);
-
-	if (!mgl_layer_tex_upload(t->mtl, level, x, y, w, h, rgba,
-			level == 0 && t->generate_mipmap && t->levels > 1))
-	{
-		mgl_error(GL_OUT_OF_MEMORY);
-	}
-
-	free(rgba);
-}
-
 static int
 mgl_mip_count(int w, int h)
 {
@@ -275,19 +243,14 @@ mgl_mip_count(int w, int h)
 	return n;
 }
 
-static int
-mgl_level_size(int size, GLint level)
-{
-	size >>= level;
-	return size > 0 ? size : 1;
-}
-
 void
 glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width,
 		GLsizei height, GLint border, GLenum format, GLenum type, const GLvoid *pixels)
 {
+	static int once_level;
 	mgl_texture_t *t = mgl_bound(target);
 	int alpha = mgl_internal_alpha(internalformat);
+	unsigned char *rgba;
 
 	if (!t)
 	{
@@ -300,86 +263,80 @@ glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width,
 		return;
 	}
 
-	if (level < 0 || level >= 31 || width < 0 || height < 0 || border != 0 ||
+	if (level < 0 || width < 0 || height < 0 || border != 0 ||
 		width > MGL_MAX_TEXTURE_SIZE || height > MGL_MAX_TEXTURE_SIZE)
 	{
 		mgl_error(GL_INVALID_VALUE);
 		return;
 	}
 
-	if (level == 0)
+	if (level > 0)
 	{
-		if (width == 0 || height == 0)
-		{
-			return;
-		}
-
-		if (!t->mtl || t->width != width || t->height != height)
-		{
-			void *mtl = mgl_layer_tex_create(width, height, mgl_mip_count(width, height));
-
-			if (!mtl)
-			{
-				mgl_error(GL_OUT_OF_MEMORY);
-				return;
-			}
-
-			if (t->mtl)
-			{
-				mgl_layer_tex_release(t->mtl);
-			}
-
-			t->mtl = mtl;
-			t->width = width;
-			t->height = height;
-			t->levels = mgl_mip_count(width, height);
-		}
-
-		t->opaque = alpha ? GL_FALSE : GL_TRUE;
-	}
-	else if (!t->mtl || level >= t->levels ||
-		width != mgl_level_size(t->width, level) || height != mgl_level_size(t->height, level))
-	{
-		/* a level that does not continue level 0's chain: GL would make the texture incomplete */
-		mgl_error(GL_INVALID_OPERATION);
+		mgl_unimplemented("glTexImage2D above level 0", &once_level);
 		return;
 	}
 
-	mgl_upload(t, level, 0, 0, width, height, format, pixels);
+	if (width == 0 || height == 0)
+	{
+		return;
+	}
+
+	if (!t->mtl || t->width != width || t->height != height)
+	{
+		void *mtl = mgl_layer_tex_create(width, height, mgl_mip_count(width, height));
+
+		if (!mtl)
+		{
+			mgl_error(GL_OUT_OF_MEMORY);
+			return;
+		}
+
+		if (t->mtl)
+		{
+			mgl_layer_tex_release(t->mtl);
+		}
+
+		t->mtl = mtl;
+		t->width = width;
+		t->height = height;
+		t->levels = mgl_mip_count(width, height);
+	}
+
+	t->opaque = alpha ? GL_FALSE : GL_TRUE;
+
+	if (!pixels)
+	{
+		return;
+	}
+
+	rgba = malloc((size_t)width * (size_t)height * 4);
+
+	if (!rgba)
+	{
+		mgl_error(GL_OUT_OF_MEMORY);
+		return;
+	}
+
+	mgl_unpack_rgba(pixels, format, width, height, mgl_state.unpack_alignment,
+			mgl_state.unpack_row_length, t->opaque, rgba);
+
+	if (!mgl_layer_tex_upload(t->mtl, 0, 0, 0, width, height, rgba,
+			t->generate_mipmap && t->levels > 1))
+	{
+		mgl_error(GL_OUT_OF_MEMORY);
+	}
+
+	free(rgba);
 }
 
+/* The dynamic lightmaps' path: S2b. */
 void
 glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
 		GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels)
 {
-	mgl_texture_t *t = mgl_bound(target);
-
-	if (!t)
-	{
-		return;
-	}
-
-	if ((format != GL_RGBA && format != GL_RGB) || type != GL_UNSIGNED_BYTE)
-	{
-		mgl_error(GL_INVALID_ENUM);
-		return;
-	}
-
-	if (!t->mtl)
-	{
-		mgl_error(GL_INVALID_OPERATION);
-		return;
-	}
-
-	if (level < 0 || level >= t->levels || xoffset < 0 || yoffset < 0 || width < 0 || height < 0 ||
-		(long long)xoffset + width > mgl_level_size(t->width, level) ||
-		(long long)yoffset + height > mgl_level_size(t->height, level))
-	{
-		mgl_error(GL_INVALID_VALUE);
-		return;
-	}
-
-	mgl_upload(t, level, xoffset, yoffset, width, height, format, pixels);
+	(void)target; (void)level; (void)xoffset; (void)yoffset; (void)width;
+	(void)height; (void)format; (void)type; (void)pixels;
+	MGL_UNIMPLEMENTED();
 }
 
 void
@@ -423,15 +380,8 @@ glTexParameteri(GLenum target, GLenum pname, GLint param)
 		case GL_GENERATE_MIPMAP:
 			t->generate_mipmap = param ? GL_TRUE : GL_FALSE;
 			break;
-		case GL_TEXTURE_MAX_ANISOTROPY_EXT:
-			if (param < 1)
-			{
-				mgl_error(GL_INVALID_VALUE);
-				return;
-			}
-			t->anisotropy = param > 16 ? 16 : param;
-			break;
 		default:
+			/* GL_TEXTURE_MAX_ANISOTROPY_EXT among them: the extension is not advertised */
 			mgl_error(GL_INVALID_ENUM);
 	}
 }

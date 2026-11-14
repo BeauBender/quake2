@@ -22,8 +22,8 @@
  * Host test of the pure-C parts of the Metal shim (TASK47, TASK48), run
  * by tests/check-metal-shim.sh with the system compiler: no SDL, no
  * Metal. It covers mgl_read_contract, mgl_compute_raster, the readback
- * conversion, the matrix product, the upload unpacking and the ring
- * allocator (mgl_raster.c), the validators, matrix stacks and glOrtho
+ * conversion, the matrix product and the upload unpacking
+ * (mgl_raster.c), the validators, matrix stacks and glOrtho
  * of mgl_state.c, the texture table, uploads and sampler keys of
  * mgl_tex.c, and the vertex assembly, index expansion and state keys of
  * mgl_draw.c, with the last accepted and the first refused value at
@@ -61,7 +61,7 @@ mgl_layer_ready(void)
 }
 
 static int tex_creates, tex_releases, tex_uploads, tex_create_fails, draws;
-static int last_levels, last_up_level, last_up_x, last_up_y, last_up_w, last_up_h, last_up_gen;
+static int last_levels, last_up_level, last_up_w, last_up_h, last_up_gen;
 static unsigned char last_up_rgba[64];
 static mgl_draw_t last_draw;
 
@@ -93,11 +93,9 @@ mgl_layer_tex_upload(void *tex, int level, int x, int y, int w, int h,
 {
 	size_t n = (size_t)w * (size_t)h * 4;
 
-	(void)tex;
+	(void)tex; (void)x; (void)y;
 	tex_uploads++;
 	last_up_level = level;
-	last_up_x = x;
-	last_up_y = y;
 	last_up_w = w;
 	last_up_h = h;
 	last_up_gen = gen_mips;
@@ -609,7 +607,7 @@ test_readback_convert(void)
 }
 
 static void
-test_unpack_and_ring(void)
+test_unpack(void)
 {
 	/* RGB, 3 x 2, alignment 4: source rows 12 bytes apart, the 3 padding bytes are not pixels */
 	static const unsigned char rgb[] = {
@@ -622,7 +620,6 @@ test_unpack_and_ring(void)
 		9, 10, 11, 12, 13, 14, 15, 16, 0xAA, 0xAA, 0xAA, 0xAA
 	};
 	unsigned char out[32];
-	size_t used;
 
 	memset(out, 0, sizeof(out));
 	mgl_unpack_rgba(rgb, GL_RGB, 3, 2, 4, 0, 0, out);
@@ -638,19 +635,6 @@ test_unpack_and_ring(void)
 	mgl_unpack_rgba(rgb, GL_RGB, 2, 2, 8, 0, 0, out);
 	CHECK(out[4] == 4 && out[8] == 9 && out[9] == 0xAA);
 
-	/* the ring: aligned offsets, the last byte that fits, then the first that does not */
-	used = 0;
-	CHECK(mgl_ring_alloc(&used, 1024, 10, 256) == 0 && used == 10);
-	CHECK(mgl_ring_alloc(&used, 1024, 100, 256) == 256 && used == 356);
-	CHECK(mgl_ring_alloc(&used, 1024, 512, 256) == 512 && used == 1024);
-	CHECK(mgl_ring_alloc(&used, 1024, 0, 1) == 1024 && used == 1024);
-	CHECK(mgl_ring_alloc(&used, 1024, 1, 1) == (size_t)-1 && used == 1024);
-	used = 769;
-	CHECK(mgl_ring_alloc(&used, 1024, 1, 256) == (size_t)-1 && used == 769);
-	used = 0;
-	CHECK(mgl_ring_alloc(&used, 1024, SIZE_MAX, 1) == (size_t)-1 && used == 0);
-	used = SIZE_MAX - 3;
-	CHECK(mgl_ring_alloc(&used, SIZE_MAX, 1, 256) == (size_t)-1 && used == SIZE_MAX - 3);
 }
 
 static void
@@ -680,7 +664,7 @@ test_textures(void)
 	glBindTexture(GL_TEXTURE_2D, name);
 	t = mgl_texture(name);
 	CHECK(t->min_filter == GL_NEAREST_MIPMAP_LINEAR && t->mag_filter == GL_LINEAR && t->wrap_s == GL_REPEAT);
-	CHECK(mgl_sampler_key(t) == (4u | 8u | (1u << 8)));
+	CHECK(mgl_sampler_key(t) == (4u | 8u));
 
 	/* level 0 creates the storage, with the whole mip chain, and uploads */
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
@@ -703,13 +687,9 @@ test_textures(void)
 	CHECK(ERR() == GL_NO_ERROR && tex_creates == 2 && tex_releases == 1 && last_levels == 3);
 	CHECK(t->width == 5 && t->height == 3 && tex_uploads == 3);
 
-	/* a level that continues the chain, then one that does not */
-	glTexImage2D(GL_TEXTURE_2D, 2, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
-	CHECK(ERR() == GL_NO_ERROR && tex_uploads == 4 && last_up_level == 2);
-	glTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
-	CHECK(ERR() == GL_INVALID_OPERATION && tex_uploads == 4);
-	glTexImage2D(GL_TEXTURE_2D, 3, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
-	CHECK(ERR() == GL_INVALID_OPERATION);
+	/* levels above 0 are S2b: refused, nothing uploaded */
+	glTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA, 2, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+	CHECK(ERR() == GL_INVALID_OPERATION && tex_uploads == 3);
 
 	/* what the shim refuses: the paletted path, other types, a border, the size limit */
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_COLOR_INDEX8_EXT, 2, 2, 0, GL_COLOR_INDEX, GL_UNSIGNED_BYTE, px);
@@ -731,47 +711,32 @@ test_textures(void)
 	CHECK(ERR() == GL_OUT_OF_MEMORY && t->width == MGL_MAX_TEXTURE_SIZE && t->mtl);
 	tex_create_fails = 0;
 
-	/* sub-images: the last region that fits, then one pixel past it */
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-	glTexSubImage2D(GL_TEXTURE_2D, 0, 2, 3, 2, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
-	CHECK(ERR() == GL_NO_ERROR && last_up_x == 2 && last_up_y == 3 && last_up_w == 2 && last_up_h == 1);
-	glTexSubImage2D(GL_TEXTURE_2D, 0, 3, 3, 2, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
-	CHECK(ERR() == GL_INVALID_VALUE);
-	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
-	CHECK(ERR() == GL_INVALID_VALUE);
-	glTexSubImage2D(GL_TEXTURE_2D, 2, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
-	CHECK(ERR() == GL_NO_ERROR && last_up_level == 2);
-	glTexSubImage2D(GL_TEXTURE_2D, 2, 1, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
-	CHECK(ERR() == GL_INVALID_VALUE);
-	glTexSubImage2D(GL_TEXTURE_2D, 0, -1, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
-	CHECK(ERR() == GL_INVALID_VALUE);
-
-	/* a texture with no storage has nothing to update */
-	glBindTexture(GL_TEXTURE_2D, 7);
+	/* sub-images are S2b: refused */
 	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
-	CHECK(ERR() == GL_INVALID_OPERATION);
+	CHECK(ERR() == GL_INVALID_OPERATION && tex_uploads == 3);
+	glBindTexture(GL_TEXTURE_2D, 7);
 
 	/* parameters and their sampler key */
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	CHECK(ERR() == GL_NO_ERROR && mgl_sampler_key(mgl_texture(7)) == (1u << 8));
+	CHECK(ERR() == GL_NO_ERROR && mgl_sampler_key(mgl_texture(7)) == 0u);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 99);
-	CHECK(ERR() == GL_NO_ERROR && mgl_sampler_key(mgl_texture(7)) == (5u | (1u << 4) | (2u << 6) | (16u << 8)));
+	CHECK(ERR() == GL_NO_ERROR && mgl_sampler_key(mgl_texture(7)) == (5u | (1u << 4) | (2u << 6)));
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	CHECK(mgl_sampler_key(mgl_texture(7)) == (1u | (1u << 4) | (2u << 6) | (16u << 8)));
+	CHECK(mgl_sampler_key(mgl_texture(7)) == (1u | (1u << 4) | (2u << 6)));
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	CHECK(mgl_sampler_key(mgl_texture(7)) == (1u | 8u | (1u << 4) | (2u << 6)));
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR + 1);
 	CHECK(ERR() == GL_INVALID_ENUM && mgl_texture(7)->min_filter == GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR_MIPMAP_NEAREST);
 	CHECK(ERR() == GL_INVALID_ENUM);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_LINEAR);
 	CHECK(ERR() == GL_INVALID_ENUM && mgl_texture(7)->wrap_s == GL_CLAMP);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 1);
-	CHECK(ERR() == GL_NO_ERROR && mgl_texture(7)->anisotropy == 1);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 0);
-	CHECK(ERR() == GL_INVALID_VALUE && mgl_texture(7)->anisotropy == 1);
+	/* anisotropy is not advertised */
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 4);
+	CHECK(ERR() == GL_INVALID_ENUM);
 
 	/* delete: storage released, parameters reset, bindings to it fall back to 0; 0 and names past the table ignored */
 	glBindTexture(GL_TEXTURE_2D, name);
@@ -834,9 +799,8 @@ test_draw(void)
 	CHECK(draws == 2 && last_draw.u.texenv0 == MGL_TEXENV_NONE && last_draw.texture0 == NULL);
 	draws = 1;
 
-	/* defaults: no blend, all channels written, alpha test off, depth neither tested nor written */
+	/* defaults: no blend, all channels written, alpha test off */
 	CHECK(last_draw.pipeline_key == (15u << 9) && last_draw.u.alpha_func == GL_ALWAYS - GL_NEVER);
-	CHECK(last_draw.depth_key == (uint32_t)(GL_ALWAYS - GL_NEVER));
 
 	/* first: the vertices from first on */
 	glDrawArrays(GL_TRIANGLE_FAN, 1, 3);
@@ -876,15 +840,6 @@ test_draw(void)
 	CHECK(last_draw.pipeline_key == (1u | (4u << 1) | (5u << 5) | (1u << 9) | (1u << 11)));
 	CHECK(mgl_blend_index(GL_ZERO) == 0 && mgl_blend_index(GL_SRC_ALPHA_SATURATE) == 10 &&
 		mgl_blend_index(GL_DST_COLOR) == 8 && mgl_blend_index(GL_KEEP) == -1);
-
-	/* the depth test: the function and the mask */
-	glEnable(GL_DEPTH_TEST);
-	glDepthFunc(GL_LEQUAL);
-	glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
-	CHECK(last_draw.depth_key == ((GL_LEQUAL - GL_NEVER) | 8u));
-	glDepthMask(GL_FALSE);
-	glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
-	CHECK(last_draw.depth_key == (uint32_t)(GL_LEQUAL - GL_NEVER));
 
 	/* the texture unit off: untextured whatever is bound */
 	glDisable(GL_TEXTURE_2D);
@@ -977,6 +932,11 @@ test_draw(void)
 	glDrawArrays(GL_TRIANGLES, 0, 3);
 	CHECK(ERR() == GL_INVALID_OPERATION && draws == i + 1);
 	glDisable(GL_CULL_FACE);
+	glEnable(GL_DEPTH_TEST);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+	CHECK(ERR() == GL_INVALID_OPERATION && draws == i + 2);
+	glDisable(GL_DEPTH_TEST);
+	i++;
 	glActiveTexture(GL_TEXTURE1);
 	glEnable(GL_TEXTURE_2D);
 	glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -996,7 +956,7 @@ main(void)
 	test_matrix_stack();
 	test_matrices();
 	test_readback_convert();
-	test_unpack_and_ring();
+	test_unpack();
 	test_textures();
 	test_draw();
 

@@ -24,16 +24,16 @@
  * assembled into one interleaved vertex list (mgl_vertex_t, a missing
  * array filled from the current colour or a zero texture coordinate),
  * fans and strips are expanded into a triangle list, and the state is
- * reduced to a uniform block and the packed keys of the pipeline and
- * depth state, which mgl_layer.m caches. Everything here is plain C;
- * mgl_layer_draw encodes the result.
+ * reduced to a uniform block and the packed key of the pipeline state,
+ * which mgl_layer.m caches. Everything here is plain C; mgl_layer_draw
+ * encodes the result.
  *
  * As of TASK48 S2a the triangle modes draw, textured on unit 0 with
- * GL_REPLACE or GL_MODULATE, with blending, the alpha test and the
- * depth test. Points, lines, unit 1, GL_COMBINE, culling, stencil and
- * polygon offset are S2b and later cards: a draw that needs one sets
- * the sticky error and logs once (points and lines are not drawn, the
- * state is ignored).
+ * GL_REPLACE or GL_MODULATE, with blending and the alpha test: what
+ * the 2D path uses. Points, lines, unit 1, GL_COMBINE, the depth test,
+ * culling, stencil and polygon offset are S2b and later cards: a draw
+ * that needs one sets the sticky error and logs once (points and lines
+ * are not drawn, the state is ignored).
  *
  * =======================================================================
  */
@@ -219,27 +219,20 @@ mgl_pipeline_key(const mgl_state_t *s)
 }
 
 /*
- * Bits 0-2 the compare function (GL_NEVER .. GL_ALWAYS minus GL_NEVER),
- * bit 3 depth writes. GL neither tests nor writes depth while
- * GL_DEPTH_TEST is off, whatever glDepthMask says.
+ * State this card does not draw yet: the sticky error and one line
+ * each, then drawn without it. Without GL_DEPTH_TEST a draw neither
+ * tests nor writes depth, which is Metal's default depth state.
  */
-uint32_t
-mgl_depth_key(const mgl_state_t *s)
-{
-	if (!(s->enables & MGL_EN_DEPTH_TEST))
-	{
-		return (uint32_t)(GL_ALWAYS - GL_NEVER);
-	}
-
-	return (uint32_t)(s->depth_func - GL_NEVER) | (s->depth_mask ? 8u : 0u);
-}
-
-/* State this card does not draw yet: the sticky error and one line each, then drawn without it. */
 static void
 mgl_check_unsupported(const mgl_state_t *s)
 {
-	static int once_unit1, once_env, once_cull, once_stencil, once_offset, once_fill;
+	static int once_unit1, once_env, once_depth, once_cull, once_stencil, once_offset, once_fill;
 	const mgl_unit_t *u0 = &s->unit[0];
+
+	if (s->enables & MGL_EN_DEPTH_TEST)
+	{
+		mgl_unimplemented("GL_DEPTH_TEST", &once_depth);
+	}
 
 	if (s->unit[1].texture_2d)
 	{
@@ -309,7 +302,6 @@ mgl_submit(size_t nvertices, size_t nindices)
 	}
 
 	d.pipeline_key = mgl_pipeline_key(s);
-	d.depth_key = mgl_depth_key(s);
 
 	if (!mgl_layer_draw(&d))
 	{

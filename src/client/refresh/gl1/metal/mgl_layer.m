@@ -93,26 +93,13 @@ static unsigned long count_frames, count_no_drawable, count_skipped;
 /*
  * The draw path (TASK48). The caches are keyed by the packed keys of
  * mgl_draw.c and mgl_tex.c, so each holds at most one object per
- * reachable key (8192 pipelines, 16 depth states, 6144 samplers in
- * theory; gl1 uses a handful of each).
+ * reachable key (13 and 8 bits: 8192 pipelines, 256 samplers; gl1 uses a
+ * handful of each).
  */
 static id<MTLFunction> mgl_vfunc, mgl_ffunc;
 static NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *mgl_pipelines;
-static NSMutableDictionary<NSNumber *, id<MTLDepthStencilState>> *mgl_depth_states;
 static NSMutableDictionary<NSNumber *, id<MTLSamplerState>> *mgl_samplers;
 static id<MTLTexture> mgl_unbound;         /* bound to texture(0) when a draw samples nothing */
-
-/*
- * One vertex and index ring per frame in flight, shared storage, bump
- * allocated (mgl_ring_alloc). Frame n writes ring n % 3: the frame
- * semaphore lets it begin only once frame n - 3, the last user of that
- * ring, has completed. A draw that does not fit gets its own buffer.
- */
-#define MGL_RING_SIZE (8u << 20)
-static id<MTLBuffer> mgl_ring[MGL_FRAMES_IN_FLIGHT];
-static id<MTLBuffer> frame_ring;
-static size_t frame_ring_used;
-static unsigned long frame_serial;
 
 /* Texture uploads made outside a frame, committed before the next frame's command buffer. */
 static id<MTLCommandBuffer> upload_cmd;
@@ -176,15 +163,7 @@ mgl_release_all(void)
 	mgl_readbuf = nil;
 	upload_blit = nil;
 	upload_cmd = nil;
-	frame_ring = nil;
-
-	for (int i = 0; i < MGL_FRAMES_IN_FLIGHT; i++)
-	{
-		mgl_ring[i] = nil;
-	}
-
 	mgl_pipelines = nil;
-	mgl_depth_states = nil;
 	mgl_samplers = nil;
 	mgl_unbound = nil;
 	mgl_vfunc = nil;
@@ -287,9 +266,7 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 		}
 
 		mgl_pipelines = [NSMutableDictionary dictionary];
-		mgl_depth_states = [NSMutableDictionary dictionary];
 		mgl_samplers = [NSMutableDictionary dictionary];
-		frame_serial = 0;
 
 		snprintf(mgl_device_name, sizeof(mgl_device_name), "%s", mgl_device.name.UTF8String);
 	}
@@ -504,18 +481,6 @@ mgl_layer_frame_begin(int *tw, int *th)
 		}
 
 		frame_cmd = [mgl_queue commandBuffer];
-
-		/* this frame's ring: its last user, frame_serial - 3, has completed (see mgl_ring) */
-		frame_ring = mgl_ring[frame_serial % MGL_FRAMES_IN_FLIGHT];
-
-		if (!frame_ring)
-		{
-			frame_ring = [mgl_device newBufferWithLength:MGL_RING_SIZE options:MTLResourceStorageModeShared];
-			mgl_ring[frame_serial % MGL_FRAMES_IN_FLIGHT] = frame_ring;
-		}
-
-		frame_ring_used = 0;
-		frame_serial++;
 
 		if (frame_target)
 		{
@@ -1047,31 +1012,6 @@ mgl_pipeline(uint32_t key)
 	return p;
 }
 
-/* GL_NEVER .. GL_ALWAYS and MTLCompareFunctionNever .. Always are in the same order. */
-static id<MTLDepthStencilState>
-mgl_depth_state(uint32_t key)
-{
-	id<MTLDepthStencilState> s = mgl_depth_states[@(key)];
-	MTLDepthStencilDescriptor *d;
-
-	if (s)
-	{
-		return s;
-	}
-
-	d = [MTLDepthStencilDescriptor new];
-	d.depthCompareFunction = (MTLCompareFunction)(key & 7);
-	d.depthWriteEnabled = (key & 8) ? YES : NO;
-	s = [mgl_device newDepthStencilStateWithDescriptor:d];
-
-	if (s)
-	{
-		mgl_depth_states[@(key)] = s;
-	}
-
-	return s;
-}
-
 /* The key is mgl_sampler_key's (mgl_tex.c). GL_CLAMP is drawn as clamp to edge: Metal has no border blend. */
 static id<MTLSamplerState>
 mgl_sampler(uint32_t key)
@@ -1082,7 +1022,7 @@ mgl_sampler(uint32_t key)
 	};
 	id<MTLSamplerState> s = mgl_samplers[@(key)];
 	MTLSamplerDescriptor *d;
-	uint32_t min = key & 7, aniso = (key >> 8) & 31;
+	uint32_t min = key & 7;
 
 	if (s)
 	{
@@ -1098,7 +1038,6 @@ mgl_sampler(uint32_t key)
 	d.magFilter = (key & 8) ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
 	d.sAddressMode = wrap[(key >> 4) & 3];
 	d.tAddressMode = wrap[(key >> 6) & 3];
-	d.maxAnisotropy = aniso >= 1 && aniso <= 16 ? aniso : 1;
 	s = [mgl_device newSamplerStateWithDescriptor:d];
 
 	if (s)
@@ -1110,23 +1049,6 @@ mgl_sampler(uint32_t key)
 }
 
 /* ---- draws ------------------------------------------------------------------------ */
-
-/* A copy of bytes in this frame's ring, or in a buffer of its own when the ring is full. */
-static id<MTLBuffer>
-mgl_frame_bytes(const void *bytes, size_t size, NSUInteger *offset)
-{
-	size_t off = frame_ring ? mgl_ring_alloc(&frame_ring_used, frame_ring.length, size, 256) : (size_t)-1;
-
-	if (off == (size_t)-1)
-	{
-		*offset = 0;
-		return [mgl_device newBufferWithBytes:bytes length:size options:MTLResourceStorageModeShared];
-	}
-
-	memcpy((unsigned char *)frame_ring.contents + off, bytes, size);
-	*offset = off;
-	return frame_ring;
-}
 
 int
 mgl_layer_draw(const mgl_draw_t *d)
@@ -1143,10 +1065,8 @@ mgl_layer_draw(const mgl_draw_t *d)
 	@autoreleasepool
 	{
 		id<MTLRenderPipelineState> pso;
-		id<MTLDepthStencilState> ds;
 		id<MTLSamplerState> smp;
 		id<MTLBuffer> vbuf, ibuf;
-		NSUInteger voff, ioff;
 		mgl_raster_t r;
 
 		/* the first pass of the frame, or a Load pass after a flush or an upload */
@@ -1167,20 +1087,25 @@ mgl_layer_draw(const mgl_draw_t *d)
 			mgl_unbound = mgl_new_texture(MTLPixelFormatRGBA8Unorm, 1, 1, MTLTextureUsageShaderRead);
 		}
 
+		/*
+		 * A buffer per draw, which the command buffer keeps alive; a
+		 * per-frame ring is S2b. No depth-stencil state is set: Metal's
+		 * default neither tests nor writes, as GL without GL_DEPTH_TEST.
+		 */
 		pso = mgl_pipeline(d->pipeline_key);
-		ds = mgl_depth_state(d->depth_key);
 		smp = mgl_sampler(d->texture0 ? d->sampler0 : 0);
-		vbuf = mgl_frame_bytes(d->vertices, d->nvertices * sizeof(mgl_vertex_t), &voff);
-		ibuf = mgl_frame_bytes(d->indices, d->nindices * sizeof(uint16_t), &ioff);
+		vbuf = [mgl_device newBufferWithBytes:d->vertices length:d->nvertices * sizeof(mgl_vertex_t)
+				options:MTLResourceStorageModeShared];
+		ibuf = [mgl_device newBufferWithBytes:d->indices length:d->nindices * sizeof(uint16_t)
+				options:MTLResourceStorageModeShared];
 
-		if (!pso || !ds || !smp || !vbuf || !ibuf || !mgl_unbound)
+		if (!pso || !smp || !vbuf || !ibuf || !mgl_unbound)
 		{
 			return 0;
 		}
 
 		[frame_enc setRenderPipelineState:pso];
-		[frame_enc setDepthStencilState:ds];
-		[frame_enc setVertexBuffer:vbuf offset:voff atIndex:0];
+		[frame_enc setVertexBuffer:vbuf offset:0 atIndex:0];
 		[frame_enc setVertexBytes:&d->u length:sizeof(d->u) atIndex:1];
 		[frame_enc setFragmentBytes:&d->u length:sizeof(d->u) atIndex:1];
 		[frame_enc setFragmentTexture:(d->texture0 ? (__bridge id<MTLTexture>)d->texture0 : mgl_unbound)
@@ -1190,7 +1115,7 @@ mgl_layer_draw(const mgl_draw_t *d)
 				indexCount:d->nindices
 				indexType:MTLIndexTypeUInt16
 				indexBuffer:ibuf
-				indexBufferOffset:ioff];
+				indexBufferOffset:0];
 	}
 
 	return 1;

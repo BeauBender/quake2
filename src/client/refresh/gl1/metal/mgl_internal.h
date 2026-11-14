@@ -206,7 +206,6 @@ typedef struct
 	int width, height, levels;    /* of level 0; levels is the whole chain */
 	GLboolean opaque;             /* an RGB internal format: alpha reads 1, GL_REPLACE keeps the fragment's */
 	GLenum min_filter, mag_filter, wrap_s, wrap_t;
-	GLint anisotropy;
 	GLboolean generate_mipmap;
 } mgl_texture_t;
 
@@ -261,7 +260,6 @@ typedef struct
 	size_t nindices;
 	mgl_uniforms_t u;
 	uint32_t pipeline_key;        /* mgl_pipeline_key */
-	uint32_t depth_key;           /* mgl_depth_key */
 	void *texture0;               /* NULL when texenv0 is MGL_TEXENV_NONE */
 	uint32_t sampler0;
 } mgl_draw_t;
@@ -279,18 +277,10 @@ void mgl_assemble(const mgl_state_t *s, GLint first, GLsizei count, mgl_vertex_t
 long mgl_triangle_indices(GLenum mode, GLsizei count, const uint16_t *elements,
 		uint16_t *out, size_t cap);
 
-/* The packed blend and colour-mask state, and depth state, of a draw. */
+/* The packed blend and colour-mask state of a draw. */
 uint32_t mgl_pipeline_key(const mgl_state_t *s);
-uint32_t mgl_depth_key(const mgl_state_t *s);
 /* GL blend factor -> index 0..10 in the order of mgl_layer.m's table; -1 if none. */
 int mgl_blend_index(GLenum factor);
-
-/*
- * A bump allocator over a buffer of cap bytes: the offset of size
- * bytes aligned to align (a power of two), or (size_t)-1 when they do
- * not fit; *used advances only on success.
- */
-size_t mgl_ring_alloc(size_t *used, size_t cap, size_t size, size_t align);
 
 /* mgl_layer.m: the only file that talks to Metal and CAMetalLayer. */
 typedef struct
