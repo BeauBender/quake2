@@ -79,6 +79,12 @@ mgl_compute_raster(const mgl_state_t *s, int tw, int th, mgl_raster_t *r)
 
 /* ---- readback ------------------------------------------------------------- */
 
+int
+mgl_read_uses_last(int passes, int last_w, int last_h, int tw, int th)
+{
+	return passes == 0 && last_w > 0 && last_h > 0 && last_w == tw && last_h == th;
+}
+
 GLenum
 mgl_read_contract(GLint x, GLint y, GLsizei w, GLsizei h, GLenum format,
 		GLenum type, GLint alignment, int tw, int th,

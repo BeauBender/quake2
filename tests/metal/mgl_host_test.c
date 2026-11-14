@@ -123,6 +123,32 @@ static int failures, checks;
 /* The error a call left, read and cleared as glGetError does. */
 #define ERR() glGetError()
 
+/* FIX42: a read before any pass of the frame sees the last presented frame */
+static void
+test_read_source(void)
+{
+	/* the console's screenshot: a fresh frame, no pass, a kept frame of the size */
+	CHECK(mgl_read_uses_last(0, 640, 480, 640, 480) == 1);
+	/* after a pass the read is of the frame itself (the pin capture) */
+	CHECK(mgl_read_uses_last(1, 640, 480, 640, 480) == 0);
+	CHECK(mgl_read_uses_last(7, 640, 480, 640, 480) == 0);
+	/* nothing kept yet (the first frame), or the window changed size */
+	CHECK(mgl_read_uses_last(0, 0, 0, 640, 480) == 0);
+	CHECK(mgl_read_uses_last(0, 640, 480, 800, 600) == 0);
+	CHECK(mgl_read_uses_last(0, 640, 480, 640, 600) == 0);
+	CHECK(mgl_read_uses_last(0, 800, 480, 640, 480) == 0);
+	/* a kept frame narrower, taller or turned against the target is not read */
+	CHECK(mgl_read_uses_last(0, 320, 480, 640, 480) == 0);
+	CHECK(mgl_read_uses_last(0, 640, 600, 640, 480) == 0);
+	CHECK(mgl_read_uses_last(0, 480, 640, 640, 480) == 0);
+	/* the smallest frame is one */
+	CHECK(mgl_read_uses_last(0, 1, 1, 1, 1) == 1);
+	/* an empty kept frame is none, even against an empty target */
+	CHECK(mgl_read_uses_last(0, 0, 0, 0, 0) == 0);
+	CHECK(mgl_read_uses_last(0, 0, 480, 0, 480) == 0);
+	CHECK(mgl_read_uses_last(0, 640, 0, 640, 0) == 0);
+}
+
 static void
 test_read_contract(void)
 {
@@ -2517,6 +2543,7 @@ int
 main(void)
 {
 	test_read_contract();
+	test_read_source();
 	test_raster();
 	test_state();
 	test_matrix_stack();

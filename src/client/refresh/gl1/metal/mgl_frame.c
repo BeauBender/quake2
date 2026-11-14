@@ -651,7 +651,7 @@ mgl_read(GLint x, GLint y, GLsizei w, GLsizei h, GLenum format, GLenum type,
 {
 	size_t bpp, rowbytes, total;
 	unsigned char *bgra;
-	int tw, th;
+	int tw, th, last;
 	GLenum e;
 
 	if (!mgl_layer_ready())
@@ -693,7 +693,9 @@ mgl_read(GLint x, GLint y, GLsizei w, GLsizei h, GLenum format, GLenum type,
 		return;
 	}
 
-	if (!mgl_layer_ensure_pass())
+	last = mgl_layer_read_prepare();
+
+	if (last < 0)
 	{
 		mgl_error(GL_INVALID_OPERATION);
 		return;
@@ -708,7 +710,7 @@ mgl_read(GLint x, GLint y, GLsizei w, GLsizei h, GLenum format, GLenum type,
 	}
 
 	/* Metal's rows run top down: GL row y + h - 1 is Metal row th - y - h. */
-	if (!mgl_layer_read(x, th - y - h, w, h, bgra))
+	if (!mgl_layer_read(x, th - y - h, w, h, bgra, last))
 	{
 		free(bgra);
 		mgl_error(GL_INVALID_OPERATION);
