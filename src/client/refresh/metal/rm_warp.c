@@ -177,10 +177,23 @@ RM_DrawSkyBox(const rm_view_t *view)
 			float s = (k < 2) ? skybounds.mins[0][i] : skybounds.maxs[0][i];
 			float t = ((k == 1) || (k == 2)) ? skybounds.maxs[1][i] : skybounds.mins[1][i];
 
-			rm_sky_vec(s, t, i, r_farsee->value != 0, v[k].pos, st);
+			/* st is zeroed first: a refused face index (unreachable, i is 0 to 5) leaves it unwritten */
+			st[0] = st[1] = 0.0f;
+
+			if (!rm_sky_vec(s, t, i, r_farsee->value != 0, v[k].pos, st))
+			{
+				break;
+			}
+
 			v[k].pos[3] = 1.0f;
 			v[k].uv[0] = st[0];
 			v[k].uv[1] = st[1];
+		}
+
+		if (k < 4)
+		{
+			failed++;
+			continue;
 		}
 
 		memset(&d, 0, sizeof(d));
