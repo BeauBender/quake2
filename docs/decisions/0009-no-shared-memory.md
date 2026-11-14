@@ -28,8 +28,19 @@ local-identity check then failed on that machine.
 - Durable guidance lives in the tracked rules and decision records, which
   change by pull request.
 - The earlier note stays in history; history is not rewritten.
+- The same switch stops the loop's memory-bridge hook, which linked an
+  agent's memory directory to the tracked `.claude/memory/` and copied any
+  notes it found there into it. A link made before this change stays until
+  it is removed by hand on each machine that has one; until then an agent's
+  memory writes still change tracked files in the working tree of the main
+  checkout (they are no longer committed). Each machine removes its link
+  after pulling this change.
 
 ## Reversal
 
 Set `memory.shared` back to `true` in `.claude/dev-loop.json` and add a
 record that names this one.
+
+The loop also reads the switch from the environment variable
+`DEVLOOP_MEMORY_SHARED`, which takes precedence over the file. Setting it to
+`true` anywhere re-enables syncing, so it is not set.
