@@ -158,7 +158,7 @@ behaviour fixed and gives every later card a place for its failing test.
   `build/coverage`, per-directory and total line coverage with the
   compiler's own tools (`xcrun llvm-cov`/`llvm-profdata`, or `gcov`), and a
   per-tool floor in `scripts/coverage-floor` that only ratchets up. CI runs
-  both on macOS and Linux x86_64. The floor lives in
+  both on macOS only. The floor lives in
   `scripts/coverage-floor` and is enforced by `scripts/coverage.sh`; it is
   not yet wired to the `gate.coverage` setting in `.claude/dev-loop.json`.
   A follow-up card (TASK68, #142) does that.

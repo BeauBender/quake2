@@ -20,7 +20,8 @@ repository does not have, so nothing ran on `main` after a merge.
 ## Decision
 
 1. Only Apple platforms are built and tested by this fork. Other platforms
-   are unmaintained: nothing checks that they build or run.
+   are unmaintained: nothing tests them or runs them. The Linux compile in
+   the CodeQL job (below) is a side effect of analysis, not a Linux check.
 2. The two Linux test workflows are removed. A pull request runs the macOS
    test build (build, unit tests, coverage), CodeQL and Cppcheck.
    Cppcheck is a job of `codeql.yml`, on a free standard runner, and still
@@ -37,9 +38,14 @@ repository does not have, so nothing ran on `main` after a merge.
 
 ## Consequences
 
-- A change that breaks a Linux, BSD or Windows build is not caught by CI.
-- The CodeQL `c-cpp` job and Cppcheck still run on Linux runners, because
-  they analyse the source and do not test a build for that platform.
+- No Linux unit tests, coverage or package run in CI. BSD and Windows are
+  compiled nowhere.
+- The CodeQL `c-cpp` job (`.github/workflows/codeql.yml`, job `analyze`)
+  compiles `client server game ref_gl1 ref_gl3 ref_soft` on Linux as a side
+  effect of analysis, so a change that stops the Linux compile turns a pull
+  request red. It checks that the code compiles there, nothing more.
+- Cppcheck also runs on a Linux runner, because it analyses the source and
+  does not build for that platform.
 
 ## Reversal
 

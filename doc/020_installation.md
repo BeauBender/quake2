@@ -1,11 +1,13 @@
 # Installation
 
-This guide shows how to install Portmanbeau Quake II from scratch. All fully
-supported platforms, both the full and the demo version are covered.
+This guide shows how to install Portmanbeau Quake II from scratch, for
+several platforms and for both the full and the demo version. Only Apple
+platforms are built and tested by this fork.
 
 Only Apple platforms are built and tested by this fork. The instructions for
 Windows, Linux and the BSDs below are kept as they were and those platforms
-are unmaintained: nothing checks that they build or run.
+are unmaintained: nothing tests them or runs them. The only Linux check is
+that CodeQL compiles the code there; BSD and Windows are compiled nowhere.
 
 
 ## The Full Version
