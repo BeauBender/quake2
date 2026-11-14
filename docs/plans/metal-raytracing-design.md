@@ -305,8 +305,8 @@ rendering or not). The program's own build never ran during a batch. The
 after check ran 5 s after the batch's last invocation (from b2 on), and
 invocations were 5 s apart, so every process started on an idle GPU. The
 1-minute load average was 1.5 to 3.0; the one process list taken showed a
-single process that is not a build using about one CPU core. Nothing else
-was rendering during the batches: the 54 GPU user clients are the system's
+single process that is not a build using about one CPU core. No other GPU
+work was seen at any check: the 54 GPU user clients are the system's
 standing clients, the same count at every check, and the utilization at
 the checks of the batches used was 0 to 2 %.
 
@@ -501,7 +501,7 @@ GPU work made of short dispatches with the CPU waiting between them (the
 whole 640 x 480 set in the ray mode, the 20k to 50k builds in the build
 mode) and ended during the first configurations whose dispatches take
 several milliseconds (the first 1080p ray passes, the 200k build); in some
-invocations it ended earlier, during the 20k (b) or 50k builds (their lowest timed runs,
+invocations it ended earlier, during the 20k (b) or 50k builds (their lowest invocation medians,
 1.372 and 2.385 ms, are below the medians of 1.780 and
 3.341 ms). Each
 process started after at least 5 s of GPU idle.
@@ -576,7 +576,7 @@ rebuild, 0.38 ms (1.31 ms at the start level).
 | Design statement | Measured on the M6 | Met? |
 |---|---|---|
 | Section 1: IAS rebuild of about 140 instances "is microseconds on every apple6+ GPU" | 0.174 ms later in a process (invocation medians 0.168 to 0.175), 0.617 ms first in a process (0.590 to 0.652) | Met in substance (under a millisecond at both levels), but hundreds of microseconds, not single microseconds. Wording finding for RT1 |
-| Section 1: refit of 128 alias instances per frame, "under 1 M triangles, well inside a per-frame compute budget" | 128 x 500 (0.064 M triangles): 0.203 ms later, 0.691 ms first. Worst case 128 x 4096 (0.524 M triangles): 1.674 ms. One structure of 1,048,576 triangles: 4.041 ms. The worst-case points were timed mid-process only | Met on the M6; apple7 not measured: the worst case is a tenth of a 60 Hz frame, the 1 M bound as one structure a quarter |
+| Section 1: refit of 128 alias instances per frame, "under 1 M triangles, well inside a per-frame compute budget" | 128 x 500 (0.064 M triangles): 0.203 ms later, 0.691 ms first. Worst case 128 x 4096 (0.524 M triangles): 1.674 ms. One structure of 1,048,576 triangles: 4.041 ms. The worst-case points were timed mid-process only | Met on the M6: the worst case is a tenth of a 60 Hz frame, the 1 M bound as one structure a quarter; apple7 not measured |
 | Section 1: world structure built once at map load | 10k to 20k triangles: 0.50 to 0.71 ms (later) to 1.75 to 2.49 ms (first); 50k 0.99 to 3.34 ms; 200k about 3.6 ms; 1 M about 20 ms | Met |
 | Section 2: dlight shadows, cap 4 rays per pixel | 4 rpp any-hit, every pixel casting: 1.95 ms (1080p), 3.46 ms (2560 x 1440 points), 13.86 ms (5120 x 2880 native) | No time budget of its own; part of the totals below. At native pixels this pass alone is 83 % of a 60 Hz frame |
 | Section 2: sun shadow, 1 ray per pixel | 0.56 ms (1080p), 0.99 ms (2560 x 1440), 3.92 ms (native), every pixel casting | No time budget of its own; part of the totals below |
@@ -584,40 +584,43 @@ rebuild, 0.38 ms (1.31 ms at the start level).
 | Section 2: water reflections, 1 closest-hit ray on water pixels only | at most 0.88 ms (1080p, every pixel), 1.56 ms (2560 x 1440), 6.22 ms (native), trace only; hit shading not measured | No time budget of its own; part of the totals below |
 | Section 2: "about 5 rays per pixel" everything on, assumed 8 to 14 ms at 1080p on apple7 | 4 shadow + 1 sun + 2 AO + 1 reflection: 1.95 + 0.56 + 1.75 + 0.88 = 5.14 ms at 1080p, 3.46 + 0.99 + 3.10 + 1.56 = 9.11 ms at 2560 x 1440, 13.86 + 3.92 + 12.41 + 6.22 at native, which is 36.39 ms as the sum of the unrounded values, plus 0.38 ms per-frame items; trace only, no G-buffer, shading, temporal accumulation or denoise. At the start level, 3.46 times 5.14 ms (the factor measured for the 1080p primary pass and at 640 x 480; the other 1080p passes were not measured at that level) is about 17.8 ms, plus 1.31 ms | Below the estimate on the M6 at the later level (5.5 ms with the per-frame items), above it at the start level (about 19.1 ms). The 8 to 14 ms range is an estimate for apple7, not a budget, so neither is a pass or a fail; apple7 not measured. The apple9 half of section 2's "Total budget" sentence (the render-stage path "is expected to halve it", 4 to 7 ms at 1080p): the render-stage path was not measured; the compute path is already about 5.5 ms, inside the expected 4 to 7 ms |
 | Section 6, RT7: everything on at least 60 fps at 1080p on apple7 | ray cost about 5.5 ms of the 16.7 ms frame on the M6 at the later level, about 19.1 ms at the start level (extrapolated as above) | Not decided by this device: apple7 not measured. On the M6 the ray cost alone fits a 60 Hz frame at the later level and not in the first frames of a process |
-| Section 6, RT9 (1): native resolution at least the display refresh, everything on, tracing at native pixels | 5120 x 2880 at 60 Hz (16.7 ms): 36.39 ms of rays plus 0.38 ms per-frame items = 36.8 ms | **Not met**: the ray cost alone is 2.2 times the frame; dlight shadows plus sun alone (17.8 ms) are over it. This is the compute-dispatch path; the render-stage path RT9 specifies (resolve-shader ray queries, apple9) was not measured. "Not met" still holds under the design's expected halving (section 2): halving the ray passes gives (13.86 + 3.92 + 12.41) / 2 + 6.22 + 0.38 = about 21.7 ms, and halving the whole trace gives 36.39 / 2 + 0.38 = about 18.6 ms, both over 16.7 ms. 120 Hz (8.3 ms frame): not met either, GPU time does not depend on the display. This host's display tops out at 60 Hz, so 60 Hz is RT9's target here. Finding 2 |
-| Section 6, RT9 (2): the same, tracing at a lower internal resolution and upscaling to 5120 x 2880 with MetalFX | Temporal scaler: 1080p internal 5.14 + 0.38 + 1.82 = 7.3 ms (9.3 ms as one measured frame, which also holds the 0.88 ms primary pass the design leaves to the rasterizer and the 1.00 ms gap); 2560 x 1440 internal 9.11 + 0.38 + 2.41 = 11.9 ms (15.0 ms measured). Temporal denoised scaler instead: 5.14 + 0.38 + 12.03 = 17.6 ms (18.9 measured) at 1080p, 9.11 + 0.38 + 19.50 = 29.0 ms (31.5 measured) at 2560 x 1440 | With the temporal scaler, met for the ray and upscale cost at 60 Hz: 7.4 to 9.3 ms left at 1080p internal and 1.7 to 4.8 ms at 2560 x 1440 internal for rasterization, shading, temporal accumulation and denoise. With the denoised scaler, not met at either input. The design does not use MetalFX, so this is a finding, not a decision. Compute-dispatch path, render-stage path not measured. At 120 Hz (8.3 ms frame) with the temporal scaler at 1080p internal: met by the 7.3 ms sum, not met by the 9.3 ms measured frame; GPU time does not depend on the display, and 60 Hz is the target on this host. Finding 2 |
+| Section 6, RT9 (1): native resolution at least the display refresh, everything on, tracing at native pixels | 5120 x 2880 at 60 Hz (16.7 ms): 36.39 ms of rays plus 0.38 ms per-frame items = 36.8 ms | **Not met**: the ray cost alone is 2.2 times the frame; dlight shadows plus sun alone (17.8 ms) are over it. This is the compute-dispatch path; the render-stage path RT9 specifies (resolve-shader ray queries, apple9) was not measured. "Not met" still holds under the design's expected halving (section 2): halving the three passes RT9 moves into the resolve shader (dlight shadows, sun and AO) gives (13.86 + 3.92 + 12.41) / 2 + 6.22 + 0.38 = about 21.7 ms, and halving the whole trace gives 36.39 / 2 + 0.38 = about 18.6 ms, both over 16.7 ms. 120 Hz (8.3 ms frame): not met either, GPU time does not depend on the display. This host's display tops out at 60 Hz, so 60 Hz is RT9's target here. Finding 2 |
+| Section 6, RT9 (2): the same, tracing at a lower internal resolution and upscaling to 5120 x 2880 with MetalFX | Temporal scaler: 1080p internal 5.14 + 0.38 + 1.82 = 7.3 ms (9.3 ms as one measured frame, which also holds the 0.88 ms primary pass the design leaves to the rasterizer and the 1.00 ms gap); 2560 x 1440 internal 9.11 + 0.38 + 2.41 = 11.9 ms (15.0 ms measured). Temporal denoised scaler instead: 5.14 + 0.38 + 12.03 = 17.6 ms (18.9 measured) at 1080p, 9.11 + 0.38 + 19.50 = 29.0 ms (31.5 measured) at 2560 x 1440 | With the temporal scaler, met for the ray and upscale cost at 60 Hz: 7.4 to 9.3 ms left at 1080p internal and 1.7 to 4.8 ms at 2560 x 1440 internal for rasterization, shading, temporal accumulation and denoise. With the denoised scaler, not met at either input. The design does not use MetalFX, so this is a finding, not a decision. Compute-dispatch path, render-stage path not measured. At 120 Hz (8.3 ms frame) with the temporal scaler at 1080p internal: met for the ray and upscale cost only by the 7.3 ms sum, with 1.0 ms left for everything else, and not met by the 9.3 ms measured frame; 2560 x 1440 internal (11.9 ms) is not met at 120 Hz; GPU time does not depend on the display, and 60 Hz is the target on this host. Finding 2 |
 | Section 6, RT10: resolution-scale defaults per family | The design states no numeric resolution-scale default | Nothing to compare |
 
 The device misses one budget stated numerically in the design: RT9 at
 native pixels. Findings for cards (no edit to any decision):
 
-1. RT1: change "microseconds" in section 1 to "a fraction of a
+1. RT1, TASK53 (#95): change "microseconds" in section 1 to "a fraction of a
    millisecond" (0.17 ms measured later in a process, about 0.6 ms in the
    first frames of one), and measure real world and alias triangle counts
    instead of relying on the soup.
-2. RT9, to become a card: tracing everything at the native 5120 x 2880
+2. RT9, TASK105 (#248): tracing everything at the native 5120 x 2880
    pixels costs 36.8 ms against the 16.7 ms frame at the display's 60 Hz,
    so RT9 is not met that way. This is the compute-dispatch path; the
    render-stage path RT9 specifies was not measured, and "not met" still
    holds under the design's expected halving (about 21.7 ms halving the
    ray passes, about 18.6 ms halving the whole trace, as in the RT9 (1)
    row). The design (sections 2 and 6) does not use
-   MetalFX. A card would study tracing at an internal resolution and
+   MetalFX. That card decides tracing at an internal resolution and
    upscaling to the native size with MetalFX's temporal scaler (measured
    above: 7.3 to 9.3 ms of ray and upscale cost at 1080p internal, 11.9 to
-   15.0 ms at 2560 x 1440), and evaluate `MTLFXTemporalDenoisedScaler`
+   15.0 ms at 2560 x 1440), and evaluates `MTLFXTemporalDenoisedScaler`
    (12.0 to 19.5 ms in frame here, the "In frame, scaler" column) against section 2's own 5x5
-   bilateral denoiser and temporal accumulation, including image quality,
-   which this program does not assess. It does not redesign either one.
-3. Repeat on an apple7 Mac (to become a card): repeat this program on an
+   bilateral denoiser and temporal accumulation on these costs; its outcome
+   may change a design decision. Image quality, which this program does not
+   assess, is a later measurement on real frames.
+3. Repeat on an apple7 Mac, TASK106 (#249): repeat this program on an
    apple7 device (M1 family), including the MetalFX scalers, for RT7 and
    RT10. The scene and order are stated above so it can be rebuilt in
    kind, not bit for bit (the seeds and hash constants are not given), and
-   open-scene hit rates may differ by several points; the closed scene,
-   which the verdicts use, is unaffected. Until then the
+   open-scene hit rates may differ by several points; the closed scene's
+   100 % camera hit rate, which the verdicts use, is unaffected, though its
+   shadow occlusion fraction and times depend on the same geometry and
+   seeds. Until then the
    resolution-scale default per family has no measured basis below apple9,
    and the design holds no numeric default to check.
-4. RT7 and RT9: allow for the start-of-process level (about 3.5 times,
+4. RT7 and RT9, TASK59 (#102) and TASK61 (#104): allow for the start-of-process level (about 3.5 times,
    about 0.1 s of GPU work made of short dispatches) so a frame-time test
    does not count the first frames, and test whether it recurs after a
    map load, which is a hypothesis here.
