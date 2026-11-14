@@ -505,6 +505,124 @@ VID_StartRecord(void)
 }
 
 /*
+ * Replay target (pins_replay, CL_PinsReplay): the replayer hands every
+ * record that passed its validation layer (Rep_Check), its values
+ * bounded and its ids resolved, to the same wrappers
+ * the client calls. Nothing is recorded while replaying (CL_PinsLatch
+ * refuses pins_record beside pins_replay).
+ */
+static void *
+VID_ReplayRegister(refrec_type_t type, const char *name)
+{
+	if (type == REC_MODEL)
+	{
+		return R_RegisterModel(name);
+	}
+
+	return (type == REC_SKIN) ? R_RegisterSkin(name) : Draw_FindPic(name);
+}
+
+static void
+VID_ReplayCall(refrec_call_t *c)
+{
+	char screenshot[] = "screenshot tga";
+	const int32_t *n = c->ints;
+	const float *f = c->floats;
+	vec3_t axis;
+
+	switch (c->type)
+	{
+		case REC_BEGINREG: R_BeginRegistration(c->name); break;
+		case REC_ENDREG: R_EndRegistration(); break;
+		case REC_BEGINFRAME: R_BeginFrame(f[0]); break;
+		case REC_ENDWORLD: R_EndWorldRenderpass(); break;
+		case REC_ENDFRAME: R_EndFrame(); break;
+		case REC_PICSIZE: Draw_GetPicSize(&c->ints[0], &c->ints[1], c->name); break;
+		case REC_PICSCALED: Draw_PicScaled(n[0], n[1], c->name, f[0]); break;
+		case REC_PICSCALEDCOL: Draw_PicScaledCol(n[0], n[1], c->name, f[0], &f[1]); break;
+		case REC_STRETCHPIC: Draw_StretchPic(n[0], n[1], n[2], n[3], c->name); break;
+		case REC_CHARSCALED: Draw_CharScaled(n[0], n[1], n[2], f[0]); break;
+		case REC_TILECLEAR: Draw_TileClear(n[0], n[1], n[2], n[3], c->name); break;
+		case REC_FILL: Draw_Fill(n[0], n[1], n[2], n[3], n[4]); break;
+		case REC_FADESCREEN: Draw_FadeScreen(); break;
+		case REC_STRETCHRAW: Draw_StretchRaw(n[0], n[1], n[2], n[3], n[4], n[5], c->data, n[6]); break;
+		case REC_PALETTE: R_SetPalette(c->datalen ? c->data : NULL); break;
+
+		case REC_SKY:
+			VectorSet(axis, f[1], f[2], f[3]);
+			R_SetSky(c->name, f[0], axis);
+			break;
+
+		case REC_CAPTURE:
+			/* where the live run captured, before R_EndFrame (SCR_PinsCapture) */
+			Cmd_ExecuteString(screenshot);
+			break;
+
+		default:
+			break;
+	}
+}
+
+/* Opens the trace for the loaded renderer at its size; false when refused. */
+qboolean
+VID_OpenReplay(const char *path)
+{
+	refrec_target_t t;
+	refrec_header_t h;
+
+	if (!ref_active || RefRec_Recording())
+	{
+		return false;
+	}
+
+	memset(&t, 0, sizeof(t));
+	t.api_version = API_VERSION;
+	t.width = viddef.width;
+	t.height = viddef.height;
+	t.Register = VID_ReplayRegister;
+	t.RenderFrame = R_RenderFrame;
+	t.Call = VID_ReplayCall;
+	RefRec_SetPrint(Com_Printf);
+	RefRec_SetReplayTarget(&t);
+
+	if (!RefRec_OpenReplay(path, &h))
+	{
+		return false;
+	}
+
+	Com_Printf("pins: replaying %u frames of %ux%u, captured every %u live\n",
+			h.frame_count, h.width, h.height, h.capture_every);
+	return true;
+}
+
+/* One frame of the replay: 1 replayed, 0 after the last frame, -1 refused. */
+int
+VID_ReplayFrame(void)
+{
+	refrec_replay_stats_t st;
+
+	if (RefRec_ReplayNextFrame())
+	{
+		return 1;
+	}
+
+	RefRec_ReplayStats(&st);
+	return st.failed ? -1 : 0;
+}
+
+void
+VID_CloseReplay(void)
+{
+	refrec_replay_stats_t st;
+
+	RefRec_ReplayStats(&st);
+	RefRec_CloseReplay();
+	Com_Printf("pins: replayed %u frames, %u captures, %u values bounded, %u draws outside the frame skipped, "
+			"%u warnings, %u pic size mismatches\n",
+			st.frames, st.captures, st.clamped, st.dropped, st.warns, st.picsize_mismatch);
+}
+
+/*
  * Shuts the renderer down and unloads it.
  */
 static void
@@ -703,7 +821,7 @@ VID_CheckChanges(void)
 
 			/* Pin harness: frames filed under one renderer's name must
 			   come from that renderer, so never fall back while capturing. */
-			if (CL_PinsCapture() > 0)
+			if (CL_PinsRun())
 			{
 				Com_Error(ERR_FATAL, "pins: renderer %s failed to load, no fallback while capturing\n",
 						vid_renderer->string);

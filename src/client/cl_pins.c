@@ -27,9 +27,9 @@
 #include "header/client.h"
 
 /*
- * Pin harness. pins_dir, pins_scenario, pins_capture and pins_record are not cvars:
- * their values name files the client writes, so they come from the
- * process command line only. CL_PinsLatch copies them once, before any
+ * Pin harness. pins_dir, pins_scenario, pins_capture, pins_record and
+ * pins_replay are not cvars: their values name files the client writes
+ * or reads, so they come from the process command line only. CL_PinsLatch copies them once, before any
  * config file, console command or server stufftext can run, into these
  * statics, which nothing else writes. A "set pins_dir ..." from a config
  * file, the console or a server (with or without flags) only creates an
@@ -39,6 +39,8 @@ static char pins_dir[MAX_OSPATH];
 static char pins_scenario[64] = "pin";
 static int pins_capture;
 static char pins_record[64];	/* a file name inside pins_dir, "" for no trace */
+static char pins_replay[MAX_OSPATH];	/* the trace a replay reads, "" for none */
+static qboolean pins_replay_requested;	/* given, accepted or not */
 static qboolean pins_invalid;
 
 /* Copies src into dst; false when it is empty or does not fit. */
@@ -53,6 +55,39 @@ CL_PinsCopy(char *dst, size_t size, const char *src)
 	}
 
 	memcpy(dst, src, len + 1);
+	return true;
+}
+
+/*
+ * A trace path: [A-Za-z0-9_./-] only, never "..", a file name that
+ * starts with [A-Za-z0-9_] and ends in ".q2r". The file is only read.
+ */
+static qboolean
+CL_PinsReplayValid(const char *value)
+{
+	const char *p, *base = strrchr(value, '/');
+	size_t len = strlen(value);
+
+	base = base ? base + 1 : value;
+
+	if (strstr(value, "..") || (strlen(base) <= 4) ||
+		(strcmp(value + len - 4, ".q2r") != 0) ||
+		!(((*base >= 'a') && (*base <= 'z')) || ((*base >= 'A') && (*base <= 'Z')) ||
+		  ((*base >= '0') && (*base <= '9')) || (*base == '_')))
+	{
+		return false;
+	}
+
+	for (p = value; *p; p++)
+	{
+		if (!(((*p >= 'a') && (*p <= 'z')) || ((*p >= 'A') && (*p <= 'Z')) ||
+			((*p >= '0') && (*p <= '9')) || (*p == '_') || (*p == '.') ||
+			(*p == '/') || (*p == '-')))
+		{
+			return false;
+		}
+	}
+
 	return true;
 }
 
@@ -137,6 +172,16 @@ CL_PinsLatch(void)
 				}
 			}
 		}
+		else if (strcmp(name, "pins_replay") == 0)
+		{
+			pins_replay_requested = true;
+
+			if (!CL_PinsReplayValid(value) ||
+				!CL_PinsCopy(pins_replay, sizeof(pins_replay), value))
+			{
+				pins_invalid = true;
+			}
+		}
 		else if (strcmp(name, "pins_capture") == 0)
 		{
 			/* digits only: strtol alone skips leading space and takes a sign */
@@ -154,12 +199,19 @@ CL_PinsLatch(void)
 		}
 	}
 
+	/* a replay is not recorded, and writes its frames to a store */
+	if (pins_replay[0] && (pins_record[0] || !have_dir))
+	{
+		pins_invalid = true;
+	}
+
 	if (pins_invalid || !have_dir)
 	{
 		pins_dir[0] = '\0';
 		CL_PinsCopy(pins_scenario, sizeof(pins_scenario), "pin");
 		pins_capture = 0;
 		pins_record[0] = '\0';
+		pins_replay[0] = '\0';
 	}
 }
 
@@ -198,3 +250,28 @@ CL_PinsInvalid(void)
 	return pins_invalid;
 }
 
+/* The latched trace a replay reads, "" when there is no replay. */
+const char *
+CL_PinsReplayPath(void)
+{
+	return pins_replay;
+}
+
+/* True when pins_replay was given, whether or not it was accepted. */
+qboolean
+CL_PinsReplayRequested(void)
+{
+	return pins_replay_requested;
+}
+
+/*
+ * True for a pin run: a capture, or a replay (requested, whether or not
+ * it was accepted; a refused one stops the engine in CL_Init). A pin run
+ * never reads or writes the saved configuration, turns a dropped run
+ * into a fatal error and never falls back to another renderer.
+ */
+qboolean
+CL_PinsRun(void)
+{
+	return (pins_capture > 0) || pins_replay_requested;
+}
