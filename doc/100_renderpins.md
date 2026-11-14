@@ -52,7 +52,7 @@ text files and need no game data.
   name), a fixed seed for the engine's random
   numbers (the engine's `pins_seed`), applied whenever a map is
   registered, so `models` and `particles` draw the same explosions and
-  particles on every record. It needs the trace (`PINS_TRACE=0` is
+  particles, and `dlights` the same lights, on every record. It needs the trace (`PINS_TRACE=0` is
   refused) and is part of the pin's name. Default: unset, the seed comes
   from the operating system as in a normal game.
 
@@ -71,6 +71,8 @@ scenario plays `PINS_DEMO`, so all of them follow the same camera path.
 | Scenario | What is drawn |
 |---|---|
 | `world` | world surfaces, lightmaps, sky, water |
+| `world-fullbright` | `world` with `r_fullbright 1`: world surfaces without lightmaps, sky, water |
+| `dlights` | `world` with `cl_lights 1`: the dynamic lights on the world's lightmaps (with `gl1_flashblend 1`, the flash blobs instead) |
 | `models` | the world plus entities: models, sprites, beams, the view weapon |
 | `particles` | everything, including particles, dynamic lights and the screen blend |
 | `hud2d` | 2D only: status bar, crosshair, console text; the OpenGL renderers draw no screen blend there (`gl_polyblend 0`), the software renderer still darkens the screen on a pickup |
@@ -82,8 +84,18 @@ explosions and particles draw on random numbers; their files say so in a
 `// nondeterministic:` line, with the thresholds they were measured at.
 Recorded with `PINS_SEED` set they are identical from run to run (see
 *Determinism* below), and compare at `--threshold 0 --bad-threshold 0`.
-The others were identical from run to run, observed on one host with the
-software renderer. `skywater` played from `water.dm2` (below) is also
+`dlights` is not identical from run to run either unless seeded: the
+muzzle-flash and explosion lights take their radii from the same random
+numbers, and two unseeded records differ by more than a missing
+lightstyle update changes a frame, so no unseeded threshold can judge
+it. It is recorded with `PINS_SEED`, the same seed for the reference and
+the candidate, the reference named with `--ref-id`, and judged only
+seeded; its file gives the values it is judged at and, for information,
+the unseeded run-to-run values, at which no record is judged. Record it
+also with `PINS_DEMO=demo2.dm2 PINS_EVERY=7`, whose frames show animated
+lightstyles. The others were identical from run to run, observed on one
+host with the software renderer (`world-fullbright` with the Metal shim
+build of gl1). `skywater` played from `water.dm2` (below) is also
 marked nondeterministic: the water warp follows the client's clock, and
 in a timedemo that clock follows the host whenever a frame takes longer
 than 100 ms, so a record made while the host stalls differs a little on
