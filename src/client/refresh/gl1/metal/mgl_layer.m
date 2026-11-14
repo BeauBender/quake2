@@ -1174,7 +1174,7 @@ mgl_layer_draw(const mgl_draw_t *d)
 		static int once_full;
 		static const MTLCullMode culls[] = {MTLCullModeNone, MTLCullModeFront, MTLCullModeBack};
 		id<MTLRenderPipelineState> pso;
-		id<MTLSamplerState> smp;
+		id<MTLSamplerState> smp, smp1;
 		id<MTLDepthStencilState> ds;
 		id<MTLBuffer> vbuf, ibuf;
 		NSUInteger voff = 0, ioff = 0;
@@ -1201,6 +1201,7 @@ mgl_layer_draw(const mgl_draw_t *d)
 
 		pso = mgl_pipeline(d->pipeline_key);
 		smp = mgl_sampler(d->texture0 ? d->sampler0 : 0);
+		smp1 = mgl_sampler(d->texture1 ? d->sampler1 : 0);
 		ds = mgl_depth_state(d->depth_stencil_key);
 
 		/* the frame's ring; a draw it cannot hold gets buffers of its own, which the command buffer keeps alive */
@@ -1223,7 +1224,7 @@ mgl_layer_draw(const mgl_draw_t *d)
 			ibuf = [mgl_device newBufferWithBytes:d->indices length:ibytes options:MTLResourceStorageModeShared];
 		}
 
-		if (!pso || !smp || !ds || !vbuf || !ibuf || !mgl_unbound)
+		if (!pso || !smp || !smp1 || !ds || !vbuf || !ibuf || !mgl_unbound)
 		{
 			return 0;
 		}
@@ -1241,6 +1242,9 @@ mgl_layer_draw(const mgl_draw_t *d)
 		[frame_enc setFragmentTexture:(d->texture0 ? (__bridge id<MTLTexture>)d->texture0 : mgl_unbound)
 				atIndex:0];
 		[frame_enc setFragmentSamplerState:smp atIndex:0];
+		[frame_enc setFragmentTexture:(d->texture1 ? (__bridge id<MTLTexture>)d->texture1 : mgl_unbound)
+				atIndex:1];
+		[frame_enc setFragmentSamplerState:smp1 atIndex:1];
 		[frame_enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
 				indexCount:d->nindices
 				indexType:MTLIndexTypeUInt16

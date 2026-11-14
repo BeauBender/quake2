@@ -514,3 +514,58 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
   records pass against `gl1` with the same numbers as the release build
   (the implementer's run). A reviewer also ran the host test under ASAN
   and UBSAN: 327 checks, 0 failed.
+
+## 10. As built by TASK49 (S3, the world): departures from section 2
+
+- **What was left to draw.** S2b had brought up the frustum, depth,
+  cull, polygon offset and `glTexSubImage2D` with
+  `GL_UNPACK_ROW_LENGTH`; S3 adds texture unit 1 and `GL_COMBINE`. A draw
+  now binds a texture and a sampler on each of the two units
+  (`mgl_draw_t.texture1`, `sampler1`; the unbound 1 x 1 texture when a
+  unit is off) and carries `texenv1`, `tex_opaque1` and the two
+  `GL_RGB_SCALE` values in the uniform block, which is 96 bytes. The
+  vertex function passes the unit-1 coordinate on.
+- **One texture-environment function for both sides.** The arithmetic of
+  a unit is `mgl_texenv_stage` in `mgl_texenv.h`, written in the common
+  subset of C99 and the Metal shading language and included by
+  `shaders.metal` and by `mgl_internal.h`, so the host test runs the very
+  source the fragment function runs: `GL_REPLACE` (an RGB texture keeps
+  the previous alpha), `GL_MODULATE`, and `GL_COMBINE` as gl1 sets it
+  (GL's default sources and operands, `GL_MODULATE` for RGB and alpha:
+  texel times previous, RGB times `GL_RGB_SCALE` clamped to [0, 1],
+  alpha unscaled). Unit 0 works on the fragment's colour, unit 1 on unit
+  0's result. Still a uniform and a branch, not function constants
+  (section 8). `GL_DECAL`, `GL_ADD` and `GL_COMBINE` with another
+  function, which gl1 never sets, set the sticky error, log once and draw
+  as `GL_MODULATE`. The Makefile rebuilds the metallib when the header
+  changes.
+- **The classic path needs nothing of its own.** `gl1_multitexture 0`
+  draws the wall with `GL_REPLACE` and then the lightmap over it with
+  `GL_ZERO, GL_SRC_COLOR` (or `GL_ONE, GL_ONE` with
+  `gl1_saturatelighting`), `GL_LEQUAL` and no depth write: blending,
+  the depth state and the per-unit environment cover it. On frames the
+  two paths of the shim agree: `gl1-metal` with `gl1_multitexture 0`
+  against `gl1-metal` with 1 (both with `gl_polyblend 0`), bad fraction
+  0 on 21 of 23 frames and at most 0.000029, score at most 0.000417,
+  largest channel difference 1 on 21 frames (the first pass is rounded
+  to 8 bits before the second multiplies it); on frames 17 and 21 one
+  and nine pixels differ by more than 8, up to 20 and 26, not looked
+  into.
+- **Dynamic lightmaps and polygon offset** need no new code: the
+  sub-image upload ends the render encoder and the next draw opens a
+  Load pass (section 8). `glPolygonOffset` units go to Metal's depth
+  bias unchanged; for the 32-bit float depth buffer a unit there is
+  2^(e - 23) for the exponent e of the primitive's largest depth, which
+  is 2^-24 where most of a perspective depth range lies (0.5 to 1), the
+  same step as one unit of a 24-bit depth buffer. gl1 enables the offset
+  only with `gl_zfix 1` (default 0) and the `world` scenario has no
+  dynamic lights (`cl_lights 0`), so both are host-tested, not judged on
+  frames.
+- **Against the `gl1` references** see `docs/plans/metal-port-harness.md`,
+  "The `world` scenario against the software renderer (TASK49)": the
+  references from Apple's software renderer have faults of their own
+  that no correct renderer reproduces, so `world` does not pass there
+  at the defaults; no threshold was changed.
+- **Not covered.** No static assert ties the C uniform struct to the
+  shader's (follow-up), and no scenario pins `GL_COMBINE` because
+  overbright defaults to off.

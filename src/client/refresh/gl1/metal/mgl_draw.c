@@ -28,12 +28,12 @@
  * which mgl_layer.m caches. Everything here is plain C; mgl_layer_draw
  * encodes the result.
  *
- * The triangle modes draw, textured on unit 0 with GL_REPLACE or
- * GL_MODULATE, with blending, the alpha test, the depth and stencil
- * tests, culling, polygon offset and line fill (TASK48, TASK82).
- * Points, lines, unit 1 and GL_COMBINE are later cards': a draw that
- * needs one sets the sticky error and logs once (points and lines are
- * not drawn, the state is ignored).
+ * The triangle modes draw, textured on units 0 and 1 with GL_REPLACE,
+ * GL_MODULATE or gl1's GL_COMBINE (modulate with GL_RGB_SCALE), with
+ * blending, the alpha test, the depth and stencil tests, culling,
+ * polygon offset and line fill (TASK48, TASK82, TASK49). Points and
+ * lines are later cards': a draw of them sets the sticky error, logs
+ * once and is not drawn.
  *
  * =======================================================================
  */
@@ -268,24 +268,67 @@ mgl_depth_stencil_key(const mgl_state_t *s)
 static void
 mgl_check_unsupported(const mgl_state_t *s)
 {
-	static int once_unit1, once_env, once_fill;
-	const mgl_unit_t *u0 = &s->unit[0];
-
-	if (s->unit[1].texture_2d)
-	{
-		mgl_unimplemented("drawing with texture unit 1", &once_unit1);
-	}
-
-	if (u0->texture_2d && u0->env_mode != GL_REPLACE && u0->env_mode != GL_MODULATE)
-	{
-		mgl_unimplemented("a texture environment other than GL_REPLACE and GL_MODULATE", &once_env);
-	}
+	static int once_fill;
 
 	/* Metal has one fill mode for both faces and no point fill */
 	if (s->polygon_mode_front != s->polygon_mode_back || s->polygon_mode_front == GL_POINT)
 	{
 		mgl_unimplemented("glPolygonMode GL_POINT, or a different mode per face", &once_fill);
 	}
+}
+
+/*
+ * The texture environment of unit i in a draw. A unit that is off, or
+ * whose texture has no storage (incomplete in GL), is MGL_TEXENV_NONE
+ * and passes the previous colour. GL_DECAL, GL_ADD and GL_COMBINE with
+ * a function other than GL_MODULATE, which gl1 never sets, set the
+ * sticky error, log once and draw as GL_MODULATE.
+ */
+static void
+mgl_unit_env(const mgl_state_t *s, int i, int32_t *env, int32_t *opaque, float *scale,
+		void **tex, uint32_t *sampler)
+{
+	static int once_env, once_combine;
+	const mgl_unit_t *u = &s->unit[i];
+	const mgl_texture_t *t = mgl_texture(u->bound);
+
+	*env = MGL_TEXENV_NONE;
+	*opaque = 0;
+	*scale = 1.0f;
+	*tex = NULL;
+	*sampler = 0;
+
+	if (!u->texture_2d || !t || !t->mtl)
+	{
+		return;
+	}
+
+	switch (u->env_mode)
+	{
+		case GL_REPLACE:
+			*env = MGL_TEXENV_REPLACE;
+			break;
+		case GL_MODULATE:
+			*env = MGL_TEXENV_MODULATE;
+			break;
+		case GL_COMBINE:
+			if (u->combine_rgb != GL_MODULATE || u->combine_alpha != GL_MODULATE)
+			{
+				mgl_unimplemented("GL_COMBINE with a function other than GL_MODULATE", &once_combine);
+			}
+
+			*env = MGL_TEXENV_COMBINE;
+			/* glTexEnvi stores only 1, 2 and 4 */
+			*scale = (float)u->rgb_scale;
+			break;
+		default:
+			mgl_unimplemented("GL_DECAL and GL_ADD", &once_env);
+			*env = MGL_TEXENV_MODULATE;
+	}
+
+	*opaque = t->opaque ? 1 : 0;
+	*tex = t->mtl;
+	*sampler = mgl_sampler_key(t);
 }
 
 /*
@@ -328,8 +371,6 @@ static void
 mgl_submit(size_t nvertices, size_t nindices)
 {
 	const mgl_state_t *s = &mgl_state;
-	const mgl_unit_t *u0 = &s->unit[0];
-	const mgl_texture_t *t = mgl_texture(u0->bound);
 	mgl_draw_t d;
 
 	if (nindices == 0)
@@ -350,14 +391,8 @@ mgl_submit(size_t nvertices, size_t nindices)
 	d.u.alpha_func = (int32_t)(((s->enables & MGL_EN_ALPHA_TEST) ? s->alpha_func : GL_ALWAYS) - GL_NEVER);
 	d.u.alpha_ref = s->alpha_ref;
 
-	/* a texture without storage is incomplete: GL draws as if the unit were off */
-	if (u0->texture_2d && t && t->mtl)
-	{
-		d.u.texenv0 = u0->env_mode == GL_REPLACE ? MGL_TEXENV_REPLACE : MGL_TEXENV_MODULATE;
-		d.u.tex_opaque0 = t->opaque ? 1 : 0;
-		d.texture0 = t->mtl;
-		d.sampler0 = mgl_sampler_key(t);
-	}
+	mgl_unit_env(s, 0, &d.u.texenv0, &d.u.tex_opaque0, &d.u.rgb_scale0, &d.texture0, &d.sampler0);
+	mgl_unit_env(s, 1, &d.u.texenv1, &d.u.tex_opaque1, &d.u.rgb_scale1, &d.texture1, &d.sampler1);
 
 	d.pipeline_key = mgl_pipeline_key(s);
 

@@ -672,7 +672,7 @@ MGL_CFLAGS := -DMGL_RENDERER_SUFFIX=\"gl1-metal\"
 $(BINDIR)/ref_gl1.dylib : $(BINDIR)/ref_gl1.metallib
 
 # The shaders, loaded from next to the dylib at context creation.
-$(BINDIR)/ref_gl1.metallib : $(MGL_DIR)/shaders.metal
+$(BINDIR)/ref_gl1.metallib : $(MGL_DIR)/shaders.metal $(MGL_DIR)/mgl_texenv.h
 	@echo "===> METAL $<"
 	${Q}command -v xcrun >/dev/null 2>&1 || { echo "WITH_METAL_SHIM=yes needs xcrun and the Xcode Metal toolchain" >&2; exit 1; }
 	${Q}xcrun -f metal >/dev/null 2>&1 || { echo "WITH_METAL_SHIM=yes needs the Metal compiler (xcrun metal); install the Xcode Metal toolchain" >&2; exit 1; }
