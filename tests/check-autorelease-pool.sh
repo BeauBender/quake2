@@ -21,6 +21,15 @@
 # removed, the guard never true) are built first and each must be refused;
 # a mutant that no longer applies to the source fails the check too.
 #
+# The window close animation (FIX41, cause 2): AppKit's order-out
+# animation kept each closed window's window-server object, so
+# src/client/vid/glimp_sdl3.c sets every new window's animationBehavior
+# to none under the same guard. The client's glimp_sdl3.o, built the same
+# way, must send setAnimationBehavior: (a branch to the selector stub
+# _objc_msgSend$setAnimationBehavior: or, from a compiler without stubs,
+# the name in __objc_methname and a branch to objc_msgSend); two mutants (the call
+# removed, the guard never true) must each be refused.
+#
 # Off macOS one line "check-autorelease-pool: skipped: not macOS". On
 # macOS a missing make or otool, a build that fails, or an object that is
 # not written fails the check. No window server, SDL library or game data
@@ -54,6 +63,9 @@ cp third_party/sdl3.make "${tmp:?}/tree/third_party/"
 ln -s "$PWD/third_party/SDL3" "${tmp:?}/tree/third_party/SDL3"
 frame="${tmp:?}/tree/src/common/frame.c"
 cp "$frame" "${tmp:?}/frame.c.orig"
+cp src/client/vid/glimp_sdl3.c "${tmp:?}/glimp_sdl3.c.orig"
+glimp="${tmp:?}/tree/src/client/vid/glimp_sdl3.c"
+glimp_o="${tmp:?}/tree/build/release/client/src/client/vid/glimp_sdl3.o"
 client_o="${tmp:?}/tree/build/release/client/src/common/frame.o"
 server_o="${tmp:?}/tree/build/release/server/src/common/frame.o"
 
@@ -67,29 +79,40 @@ calls() {
 
 # judge: 0 when the objects built from the current frame.c hold the pools
 judge() {
-	rm -f "$client_o" "$server_o"
+	rm -f "$client_o" "$server_o" "$glimp_o"
 	if ! (unset MAKEFLAGS GNUMAKEFLAGS MFLAGS; make -C "${tmp:?}/tree" -s DEBUG= ASAN= UBSAN= \
-		build/release/client/src/common/frame.o build/release/server/src/common/frame.o) > "${tmp:?}/build.out" 2>&1; then
+		build/release/client/src/common/frame.o build/release/server/src/common/frame.o \
+		build/release/client/src/client/vid/glimp_sdl3.o) > "${tmp:?}/build.out" 2>&1; then
 		tail -n 20 "${tmp:?}/build.out"
 		echo "build of frame.o failed"
 		return 2
 	fi
-	[ -f "$client_o" ] && [ -f "$server_o" ] || { echo "frame.o not written"; return 2; }
+	[ -f "$client_o" ] && [ -f "$server_o" ] && [ -f "$glimp_o" ] || { echo "an object was not written"; return 2; }
 	push=$(calls "$client_o" objc_autoreleasePoolPush) || return 2
 	pop=$(calls "$client_o" objc_autoreleasePoolPop) || return 2
 	spush=$(calls "$server_o" objc_autoreleasePoolPush) || return 2
 	spop=$(calls "$server_o" objc_autoreleasePoolPop) || return 2
-	echo "client: $push push, $pop pop; q2ded: $spush push, $spop pop"
-	[ "$push" -eq 2 ] && [ "$pop" -ge 2 ] && [ "$spush" -eq 0 ] && [ "$spop" -eq 0 ]
+	stub=$(calls "$glimp_o" 'objc_msgSend\$setAnimationBehavior:') || return 2
+	otool -v -s __TEXT __objc_methname "$glimp_o" > "${tmp:?}/sel" 2>&1 || { cat "${tmp:?}/sel"; return 2; }
+	sel=0
+	sel=$(grep -c '[[:space:]]setAnimationBehavior:$' "${tmp:?}/sel") || [ $? = 1 ] || return 2
+	send=$(calls "$glimp_o" objc_msgSend) || return 2
+	echo "client: $push push, $pop pop; q2ded: $spush push, $spop pop; glimp_sdl3.o: $stub setAnimationBehavior: stub calls, $sel selector names, $send objc_msgSend calls"
+	[ "$push" -eq 2 ] && [ "$pop" -ge 2 ] && [ "$spush" -eq 0 ] && [ "$spop" -eq 0 ] &&
+		{ [ "$stub" -ge 1 ] || { [ "$sel" -eq 1 ] && [ "$send" -ge 1 ]; }; }
 }
 
-# mutant <name> <perl substitution>: frame.c with it applied must be refused
+# mutant <name> <perl substitution> [glimp]: frame.c (or glimp_sdl3.c)
+# with it applied must be refused
 mutants=0
 mutant() {
 	cp "${tmp:?}/frame.c.orig" "$frame"
-	perl -0pi -e "$2" "$frame"
-	if cmp -s "${tmp:?}/frame.c.orig" "$frame"; then
-		bad "mutant '$1' no longer applies to src/common/frame.c"
+	cp "${tmp:?}/glimp_sdl3.c.orig" "$glimp"
+	f=$frame o="${tmp:?}/frame.c.orig"
+	[ "${3:-}" = glimp ] && f=$glimp o="${tmp:?}/glimp_sdl3.c.orig"
+	perl -0pi -e "$2" "$f"
+	if cmp -s "$o" "$f"; then
+		bad "mutant '$1' no longer applies to $(basename "$f")"
 		return
 	fi
 	rc=0
@@ -107,13 +130,16 @@ mutant() {
 mutant "frame pool removed" 's/\@autoreleasepool(\s*\{\s*Qcommon_Frame\()/$1/'
 mutant "start-up pool removed" 's/\@autoreleasepool(\s*\{\s*Qcommon_Startup\()/$1/'
 mutant "guard never true" 's/defined\(__OBJC__\)/defined(__OBJC_NEVER__)/g'
+mutant "close animation call removed" 's/\[nswindow setAnimationBehavior:[^\]]*\];//' glimp
+mutant "window guard never true" 's/defined\(__OBJC__\)/defined(__OBJC_NEVER__)/g' glimp
 
 cp "${tmp:?}/frame.c.orig" "$frame"
+cp "${tmp:?}/glimp_sdl3.c.orig" "$glimp"
 rc=0
 judge > "${tmp:?}/tree.out" 2>&1 || rc=$?
 if [ "$rc" != 0 ]; then
 	cat "${tmp:?}/tree.out"
-	bad "src/common/frame.c does not run start-up and each frame in an autorelease pool on macOS (or q2ded uses one)"
+	bad "src/common/frame.c does not run start-up and each frame in an autorelease pool on macOS (or q2ded uses one), or src/client/vid/glimp_sdl3.c does not turn off the window animation"
 fi
 
 if [ "$fail" = 0 ]; then
