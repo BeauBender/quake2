@@ -150,6 +150,7 @@ typedef struct model_s
 
 	int extradatasize;
 	void *extradata;
+	qboolean loaded;    /* every loader and check returned (rm_slot_state); set last */
 
 	/* submodels */
 	vec3_t origin; /* for sounds or lights */

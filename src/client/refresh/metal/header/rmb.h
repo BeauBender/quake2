@@ -457,6 +457,23 @@ int rm_leaf_ok(long cluster, long area, long numclusters, int has_vis);
 int rm_mark_once(unsigned char *owner, long total, long first, long count);
 
 /*
+ * What a model slot holds, from its name, its loaded flag and whether it
+ * holds memory (a hunk or the world's buffers). A load sets the name first
+ * and the flag only after every loader and check has returned; the shared
+ * loaders drop to the console with a longjmp past Mod_ForName, which
+ * leaves the name set and the flag clear. Only a loaded slot is handed
+ * out; an unfinished one is freed completely before anything is loaded.
+ */
+typedef enum
+{
+	RM_SLOT_EMPTY,       /* no name, no flag, no memory: free for a load */
+	RM_SLOT_UNFINISHED,  /* any other mix: a load that did not finish */
+	RM_SLOT_LOADED       /* named and flagged */
+} rm_slot_t;
+
+rm_slot_t rm_slot_state(int named, int loaded, int holds);
+
+/*
  * gl1's Mod_DecompressVis, bounded: the run-length row at in, which has
  * in_len bytes, into out (row bytes; out_cap at least row). A zero run is
  * cut at the end of the row. 0, with out all set (visible), when the

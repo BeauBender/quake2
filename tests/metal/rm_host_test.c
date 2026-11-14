@@ -1177,6 +1177,21 @@ test_mark_once(void)
 }
 
 /*
+ * A model slot is handed out only when its load finished: the name alone
+ * (a loader dropped past Mod_ForName) or memory without the flag is an
+ * unfinished load, to be freed before the next one.
+ */
+static void
+test_slot_state(void)
+{
+	CHECK(rm_slot_state(0, 0, 0) == RM_SLOT_EMPTY);
+	CHECK(rm_slot_state(1, 1, 1) == RM_SLOT_LOADED && rm_slot_state(1, 1, 0) == RM_SLOT_LOADED);
+	CHECK(rm_slot_state(1, 0, 0) == RM_SLOT_UNFINISHED && rm_slot_state(1, 0, 1) == RM_SLOT_UNFINISHED);
+	CHECK(rm_slot_state(0, 0, 1) == RM_SLOT_UNFINISHED);
+	CHECK(rm_slot_state(0, 1, 0) == RM_SLOT_UNFINISHED && rm_slot_state(0, 1, 1) == RM_SLOT_UNFINISHED);
+}
+
+/*
  * The 3D viewport of gl1's R_SetupGL on the target equals the shim's
  * mgl_compute_raster of the same glViewport, for the full view and for a
  * smaller centred one (viewsize below 100).
@@ -1440,6 +1455,7 @@ main(void)
 	test_texinfo_chains();
 	test_vis();
 	test_mark_once();
+	test_slot_state();
 	test_view_rect();
 	test_view_matrix();
 	test_projection();

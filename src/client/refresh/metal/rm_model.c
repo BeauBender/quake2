@@ -38,6 +38,14 @@
  * the plain functions of rm_pure.c (host-tested). A failed check refuses
  * the map with ri.Sys_Error(ERR_DROP) after the model is freed.
  *
+ * The shared loaders refuse with ri.Sys_Error(ERR_DROP) too, which
+ * longjmps past Mod_ForName with the slot named and half-filled. A slot
+ * is therefore handed out only when it is loaded (rm_slot_state: the flag
+ * is set after every loader and check has returned); an unfinished one is
+ * freed completely (its world buffers, its hunk, the file) at the next
+ * Mod_ForName or RI_BeginRegistration, before any hunk is begun, and the
+ * map is loaded afresh.
+ *
  * =======================================================================
  */
 
@@ -46,7 +54,7 @@
 #define MAX_MOD_KNOWN 512
 
 static int modfilelen;
-static void *mod_filebuf;       /* the file a brush model is loading from, freed on a refusal */
+static void *mod_filebuf;       /* the file a model is loading from, freed with an unfinished slot */
 static YQ2_ALIGNAS_TYPE(int) byte mod_novis[MAX_MAP_LEAFS / 8];
 static model_t mod_known[MAX_MOD_KNOWN];
 static int mod_numknown;
@@ -56,6 +64,7 @@ model_t *r_worldmodel;
 int r_viewcluster, r_viewcluster2, r_oldviewcluster, r_oldviewcluster2;
 
 static void Mod_LoadBrushModel(model_t *mod, void *buffer, int modfilelen);
+static void Mod_Free(model_t *mod);
 
 /* the retained buffers of a world, and the world itself */
 static void
@@ -78,8 +87,8 @@ RM_FreeWorld(rm_world_t *w)
 
 /*
  * Refuses the brush model being loaded: frees it (its hunk, its file and
- * its retained buffers) so the slot does not keep a half-loaded map, then
- * drops to the console.
+ * its retained buffers, Mod_Free of an unfinished slot) so the slot does
+ * not keep a half-loaded map, then drops to the console.
  */
 static void
 RM_Refuse(model_t *mod, const char *fmt, ...) PRINTF_ATTR(2, 3);
@@ -95,23 +104,30 @@ RM_Refuse(model_t *mod, const char *fmt, ...)
 	va_end(ap);
 
 	Q_strlcpy(name, mod->name, sizeof(name));
-	RM_FreeWorld(mod->world);
-	mod->world = NULL;
-
-	if (mod->extradata)
-	{
-		Hunk_End();   /* stores the hunk's size, which Hunk_Free unmaps */
-		Hunk_Free(mod->extradata);
-	}
-
-	if (mod_filebuf)
-	{
-		ri.FS_FreeFile(mod_filebuf);
-		mod_filebuf = NULL;
-	}
-
-	memset(mod, 0, sizeof(*mod));
+	Mod_Free(mod);
 	ri.Sys_Error(ERR_DROP, "%s: %s", name, text);
+}
+
+/* what the slot holds (rm_pure.c) */
+static rm_slot_t
+RM_SlotState(const model_t *mod)
+{
+	return rm_slot_state(mod->name[0] != '\0', mod->loaded, (mod->extradata != NULL) || (mod->world != NULL));
+}
+
+/* frees every slot whose load did not finish (a loader dropped past Mod_ForName) */
+static void
+RM_FreeUnfinished(void)
+{
+	int i;
+
+	for (i = 0; i < mod_numknown; i++)
+	{
+		if (RM_SlotState(&mod_known[i]) == RM_SLOT_UNFINISHED)
+		{
+			Mod_Free(&mod_known[i]);
+		}
+	}
 }
 
 /* from gl1_model.c */
@@ -215,6 +231,9 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 		ri.Sys_Error(ERR_DROP, "%s: NULL name", __func__);
 	}
 
+	/* a load that dropped is freed before anything else, while its hunk is still the open one */
+	RM_FreeUnfinished();
+
 	/* inline models are grabbed only from worldmodel */
 	if ((name[0] == '*') && parent_model)
 	{
@@ -231,7 +250,7 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 	/* search the currently loaded models */
 	for (i = 0, mod = mod_known; i < mod_numknown; i++, mod++)
 	{
-		if (mod->name[0] && !strcmp(mod->name, name))
+		if ((RM_SlotState(mod) == RM_SLOT_LOADED) && !strcmp(mod->name, name))
 		{
 			return mod;
 		}
@@ -240,7 +259,7 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 	/* find a free model slot spot */
 	for (i = 0, mod = mod_known; i < mod_numknown; i++, mod++)
 	{
-		if (!mod->name[0])
+		if (RM_SlotState(mod) == RM_SLOT_EMPTY)
 		{
 			break;
 		}
@@ -277,10 +296,12 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 		return NULL;
 	}
 
+	/* from here on a drop leaves the slot unfinished, and its file is freed with it */
+	mod_filebuf = buf;
+
 	if (modfilelen < 4)
 	{
-		ri.FS_FreeFile(buf);
-		memset(mod->name, 0, sizeof(mod->name));
+		Mod_Free(mod);
 		ri.Sys_Error(ERR_DROP, "%s: %s is too short", __func__, name);
 	}
 
@@ -310,9 +331,7 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 			break;
 
 		case IDBSPHEADER:
-			mod_filebuf = buf;
 			Mod_LoadBrushModel(mod, buf, modfilelen);
-			mod_filebuf = NULL;
 			break;
 
 		default:
@@ -322,6 +341,8 @@ Mod_ForName(const char *name, model_t *parent_model, qboolean crash)
 
 	mod->extradatasize = Hunk_End();
 	ri.FS_FreeFile(buf);
+	mod_filebuf = NULL;
+	mod->loaded = true;   /* last: every loader and check has returned */
 
 	return mod;
 }
@@ -1060,11 +1081,34 @@ Mod_LoadBrushModel(model_t *mod, void *buffer, int modfilelen)
 	mod->numframes = 2; /* regular and alternate animation */
 }
 
+/*
+ * Frees a slot, loaded or unfinished. An unfinished slot's hunk is the
+ * open one (RM_FreeUnfinished runs before the next Hunk_Begin): Hunk_End
+ * stores its size, which Hunk_Free unmaps. Its file is mod_filebuf.
+ */
 static void
 Mod_Free(model_t *mod)
 {
+	qboolean unfinished = (RM_SlotState(mod) == RM_SLOT_UNFINISHED);
+
 	RM_FreeWorld(mod->world);
-	Hunk_Free(mod->extradata);
+
+	if (mod->extradata)
+	{
+		if (unfinished)
+		{
+			Hunk_End();
+		}
+
+		Hunk_Free(mod->extradata);
+	}
+
+	if (unfinished && mod_filebuf)
+	{
+		ri.FS_FreeFile(mod_filebuf);
+		mod_filebuf = NULL;
+	}
+
 	memset(mod, 0, sizeof(*mod));
 }
 
@@ -1075,7 +1119,7 @@ Mod_FreeAll(void)
 
 	for (i = 0; i < mod_numknown; i++)
 	{
-		if (mod_known[i].extradatasize)
+		if (RM_SlotState(&mod_known[i]) != RM_SLOT_EMPTY)
 		{
 			Mod_Free(&mod_known[i]);
 		}
@@ -1096,10 +1140,13 @@ RI_BeginRegistration(const char *model)
 
 	Com_sprintf(fullname, sizeof(fullname), "maps/%s.bsp", model);
 
+	/* a map whose load dropped is never kept: it is freed and loaded afresh */
+	RM_FreeUnfinished();
+
 	/* explicitly free the old map if different: this guarantees that mod_known[0] is the world map */
 	flushmap = ri.Cvar_Get("flushmap", "0", 0);
 
-	if (strcmp(mod_known[0].name, fullname) || flushmap->value)
+	if (strcmp(mod_known[0].name, fullname) || flushmap->value || (RM_SlotState(&mod_known[0]) != RM_SLOT_LOADED))
 	{
 		Mod_Free(&mod_known[0]);
 	}

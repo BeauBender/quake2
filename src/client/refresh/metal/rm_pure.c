@@ -853,6 +853,22 @@ rm_mark_once(unsigned char *owner, long total, long first, long count)
 	return 1;
 }
 
+rm_slot_t
+rm_slot_state(int named, int loaded, int holds)
+{
+	if (named && loaded)
+	{
+		return RM_SLOT_LOADED;
+	}
+
+	if (!named && !loaded && !holds)
+	{
+		return RM_SLOT_EMPTY;
+	}
+
+	return RM_SLOT_UNFINISHED;
+}
+
 /* from files/pvs.c, Mod_DecompressVis, with both ends bounded */
 int
 rm_decompress_vis(const unsigned char *in, size_t in_len, size_t row, unsigned char *out, size_t out_cap)
