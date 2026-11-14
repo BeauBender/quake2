@@ -506,7 +506,7 @@ messages) and with the stock `demo1.dm2`.
 | `hud2d` (with `gl_polyblend 0`, TASK82) | `demo1.dm2` | 23 | exact: 0, 0 in 6 of 6 | exact in 3 of 3 | 0.461199 to 0.471755; 0.990553 to 0.998561 | none: not meaningful (below) | 23.2 to 32.1 |
 | `models` | `demo1.dm2` | 23 | not exact in 6 of 6: worst 0.000826, 0.004583 | not exact in 3 of 3: worst 0.000150, 0.000345 | 0.015337 to 0.090930; 0.179834 to 0.925937 | none: not meaningful | 10.9 to 20.9 |
 | `particles` | `demo1.dm2` | 23 | not exact in 6 of 6: worst 0.010232, 0.172093 | not exact in 3 of 3: worst 0.011482, 0.130306 | 0.028070 to 0.141715; 0.408568 to 0.998324 | none: not meaningful | 16.2 to 30.6 |
-| `skywater` | `water.dm2` | 4 | not exact in 3 of 6 pairs: worst 0.002562, 0.022972 | exact in 3 of 3 | 0.030261 to 0.033948; 0.539687 to 0.673857 | `--threshold 0.034 --bad-threshold 0.68` (below) | 16.7 to 19.5 |
+| `skywater` | `water.dm2` | 4 | not exact in 3 of 6 pairs: worst 0.002562, 0.022972 | exact in 3 of 3 | 0.030261 to 0.033948; 0.539687 to 0.673857 | `--threshold 0.034 --bad-threshold 0.68` (below; on the accelerated references re-measured as 0.031 / 0.66, see TASK83) | 16.7 to 19.5 |
 | `skywater` | `demo1.dm2` | 23 | exact: 0, 0 in 6 of 6 | exact in 3 of 3 | identical to `world`: 0.013180 to 0.081482; 0.132624 to 0.922676 | none: not meaningful | 16.2 to 26.0 |
 | `cinematic` | `idlog.cin`, every 7th | 12 | exact: 0, 0 in 6 of 6 | exact in 3 of 3 | 0 to 0.018680; 0 to 0.322956 (frame 0 is black and exact) | `--threshold 0.02 --bad-threshold 0.35` | 17.2 to 23.8 |
 
@@ -551,7 +551,9 @@ these may land over it; that would be a finding, not a threshold to move.
 
 `skywater` with `water.dm2`: the worst `soft`/`gl1` values are score
 0.033948 and bad fraction 0.673857, so the threshold is the worst value
-rounded up, `--threshold 0.034 --bad-threshold 0.68`. It rejects a black
+rounded up, `--threshold 0.034 --bad-threshold 0.68` (on the accelerated
+references the re-measured value is 0.031 / 0.66, see "`gl1` references
+from an accelerated OpenGL (TASK83)"). It rejects a black
 frame: made with `framediff --block <gl1 frame> <out> 0 0 640 480 0` from
 each of the 4 frames of one `gl1` record and scored with the comparator,
 black scores 0.044689, 0.052517, 0.052069 and 0.041041 with bad fraction
@@ -1104,8 +1106,8 @@ three. The harness does not keep input out of a run: `pins.sh record`
 opens a normal window and nothing in the scenarios or the command line
 disables keys, so a record on a desktop in use is checked this way.
 
-**`gl1` against `gl1`** (two records per scenario, one pair; frames exact
-of all):
+**`gl1` against `gl1`** (two records per scenario, so one pair each; the
+column says how many of its frames are exact):
 
 | Scenario | Demo | Frames | `gl1`/`gl1` | Floor for `gl1-metal` |
 |---|---|---|---|---|
@@ -1120,7 +1122,9 @@ of all):
 
 Scratch copies (untracked scenario files, deleted after): `world` plus
 `gl1_multitexture 0`, `world` plus `gl_polyblend 0`: exact; `particles`
-plus `gl_polyblend 0`: worst 0.015223, 0.187988. `soft`/`soft` for the
+plus `gl_polyblend 0`: worst 0.015223, 0.187988 (the store also holds an
+unused scratch scenario, `world-mt0-pb0`, with records of the discarded
+first pass only). `soft`/`soft` for the
 comparison: `world` and the water demo exact, `models` 0.000342 and
 0.000752, `particles` 0.010346 and 0.106465.
 
@@ -1943,7 +1947,8 @@ and `particles` only at the settings hash before TASK45. Every scenario has
 its row in the table of "`gl1` references and the `soft` against `gl1`
 thresholds (TASK41, card P3)": a threshold for `cinematic` (`--threshold
 0.02 --bad-threshold 0.35`) and for `skywater` from `water.dm2`
-(`--threshold 0.034 --bad-threshold 0.68`), and for `world`, `hud2d`,
+(`--threshold 0.034 --bad-threshold 0.68`; on the accelerated references
+re-measured as 0.031 / 0.66, see the TASK83 section), and for `world`, `hud2d`,
 `models`, `particles` and `skywater` from `demo1.dm2` the documented
 finding that no agreement threshold is meaningful, with the reasons. None
 was missing, so none was measured or added. Re-measured at the head, live
