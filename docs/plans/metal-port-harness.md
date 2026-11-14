@@ -1254,6 +1254,7 @@ inside a card, never by CI.
 | `docs/plans/metal-port-cards.md` | every card filed for the port, with dependencies, acceptance and ids |
 | `docs/analysis/gl1-state-inventory.md` | TASK21, TASK28: GL entry points, draw-time state, pipeline-state keys, order |
 | `docs/plans/metal-shim-design.md` | TASK21: module layout, state cache, uploads, readback, present |
+| `docs/plans/ref-metal-native.md` | TASK28: native `ref_metal`, its layout, passes, thresholds against `gl1-metal`, cards N1 to N10 |
 | `docs/plans/metal-raytracing-design.md` | TASK24, TASK25: acceleration structures, effects, G-buffer, gating |
 | `docs/plans/refapi-record-replay.md` | TASK27: recorder and replayer behind the `vid.c` wrappers |
 

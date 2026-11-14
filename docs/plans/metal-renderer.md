@@ -172,6 +172,8 @@ by eye, became two steps pinned at two seams:
    (which also compare `soft` against `gl1`) as acceptance. The result is
    the module implementing API_VERSION 8 on Metal that TASK24 and TASK25
    need.
+   Design and decomposition (group N, cards N1 to N10):
+   `docs/plans/ref-metal-native.md`.
 
 Both steps are testable on the VM. Together they retire the dependency on
 Apple's deprecated OpenGL; step 1 already runs gl1 with no OpenGL
