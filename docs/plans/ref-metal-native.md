@@ -94,7 +94,7 @@ and adds these rules for what it builds from their output:
 - Every count taken from file data that sizes a retained buffer (the world
   vertex, index and surface-record buffers of N4), the lightmap array (its
   slice count, at most `MAX_LIGHTMAPS`, N5), a staging-ring upload (an
-  image's width times height, N2) or a frame-ring region (an alias model's
+  image's width times height, or a cinematic frame's, N2) or a frame-ring region (an alias model's
   vertex count, N7) is checked before the buffer is sized or written. On
   overflow the draw or the upload is skipped (and counted in
   `metal_stats`) or the renderer stops with `ri.Sys_Error`; it never
@@ -103,6 +103,9 @@ and adds these rules for what it builds from their output:
   ring's own allocation check in `mtl_ring.c`), so the host test reaches
   them; each of N2, N4, N5 and N7 adds a host-test case with an oversized
   count.
+- N3 (the scrap), N6 (warp subdivision), N8 (dynamic lights, shadows) and
+  N9 (particles) keep gl1's batch and capacity checks, each with a
+  host-test case of an oversized count.
 
 The limits `ref_metal` inherits at the renderer entry points (the counts in
 `refdef_t` and the entity, particle and light lists the engine hands over)
@@ -212,7 +215,9 @@ shim's, since parity with it is the acceptance.
   copied.
 - **The scrap** keeps gl1's four 256 by 256 atlases and allocator.
 - **Cinematics** (`DrawStretchRaw`): one texture per size, rewritten each
-  call through the upload command buffer.
+  call through the upload command buffer. gl1 uploads the frame with the
+  solid internal format, which the shim makes opaque (alpha forced to
+  255), so `ref_metal` uploads cinematic frames opaque.
 - **Lightmaps** are one `texture2d_array` of 128 by 128 slices, one slice
   per gl1 block (`BLOCK_WIDTH`, `BLOCK_HEIGHT`, up to `MAX_LIGHTMAPS`), so
   lightmap coordinates, texel layout and linear sampling are gl1's and the
@@ -392,7 +397,10 @@ card's criterion against `ref_gl1`, and it is pending there for the 3D
 scenarios exactly as it is for TASK21; it does not gate any card of group N.
 
 A card's pins pass when every frame of every scenario it names is `ok`.
-Before N6 the world has no sky, water or translucent surfaces; N4 and N5
+Before N6 the world has no sky, water, translucent or flowing surfaces
+(gl1 scrolls the opaque flowing ones inside its lightmapped path; N4 and
+N5 count them as skipped, like sky, warped and translucent surfaces, until
+N6 draws them scrolled); N4 and N5
 name the frames on which `metal_stats 1` reports such surfaces skipped and
 are judged on the others. From N6 on nothing is excluded.
 
@@ -420,9 +428,9 @@ green.
 | N1 | Skeleton: build target, window seat, clear, present, capture, capability report, gate check | M | opus | 950 | `record metal hud2d` completes with uniform frames |
 | N2 | Images, textures, the 2D pipeline and the cinematic; the shared code moved to `common/` | M | opus | 1000 | `cinematic`; `gl1-metal` unchanged by the move |
 | N3 | Pics, characters, the scrap and the HUD | L | sonnet | 600 | `hud2d` |
-| N4 | World geometry: BSP registration, retained buffers, traversal, fullbright surfaces, the screen blend | M | opus | 1150 | `world-fullbright` (new) |
-| N5 | Lightmaps: the array texture, styles, overbright, updates | M | opus | 850 | `world` |
-| N6 | Sky, water warp, translucent and flowing surfaces | M | sonnet | 800 | `world`, `skywater` |
+| N4 | World geometry: BSP registration, retained buffers, traversal, fullbright surfaces, the screen blend | M | opus | 1150 | `world-fullbright` (new), flowing surfaces skipped |
+| N5 | Lightmaps: the array texture, styles, overbright, updates | M | opus | 850 | `world`, flowing surfaces skipped |
+| N6 | Sky, water warp, translucent and flowing surfaces (`water warp` here is the texture-coordinate warp of water surfaces; the cvar `gl1_waterwarp`, the under-water projection wobble, is part of the view setup N4 copies) | M | sonnet | 800 | `world`, `skywater` |
 | N7 | Brush entities, alias models, the view weapon, model lighting | M | opus | 1000 | `models` |
 | N8 | Sprites, beams, null models, stencil shadows, dynamic lights, flash blobs | M | opus | 900 | `models` complete, `dlights` (new) |
 | N9 | Particles, the full parity sweep and frame time | L | sonnet | 550 | `particles`, every scenario |
@@ -474,7 +482,11 @@ intersection performance (RT9, RT10) only.
 1. **Dependencies.** Group N cards depend only on one another in sequence
    (N1 first); they do not wait for TASK27. TASK21 is closed. TASK28 (#38)
    closes when N10 (TASK93) lands. The cards are TASK84 (#195) to TASK93
-   (#204), N1 to N10 in order.
+   (#204), N1 to N10 in order. The group N issues' `Plan anchor:` names
+   `ref-metal-native.md` rather than `metal-renderer.md`, because the
+   design lives here (departs from filing rule 4); the parent #38 carries
+   only `depends:TASK93`, since the children form one chain (departs from
+   filing rule 6).
 2. **The shim after TASK28.** Departs from the card: TASK28's goal says
    the shim "remains in the tree only as the per-concept reference until
    this card closes, then is removed from the build". The GL-subset shim
