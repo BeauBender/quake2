@@ -318,7 +318,7 @@ From `docs/plans/metal-raytracing-design.md` sections 1 and 3:
 
 | RT need | Provided by group N as |
 |---|---|
-| One static triangle mesh per map, AS-friendly | N4: a static vertex buffer (float3 position packed at offset 0, then the two uv pairs; one stride) and a `uint32` index buffer of the fan-expanded world polys, built at registration, private storage, sizes logged per map. RT1 builds the primitive acceleration structure from these buffers without a copy |
+| One static triangle mesh per map, AS-friendly | N4: a static vertex buffer (float3 position packed at offset 0, then the two uv pairs; one stride; as built by N4, a 32-byte vertex with w stored after the float3: see section 19) and a `uint32` index buffer of the fan-expanded world polys, built at registration, private storage, sizes logged per map. RT1 builds the primitive acceleration structure from these buffers without a copy |
 | Inline brush models as separate meshes | N4: each submodel is a contiguous index range in the same buffers; RT1 builds one structure per range |
 | Per-surface material and normal | N4: a per-surface record buffer: plane normal flipped for `SURF_PLANEBACK`, material class (world, sky, water, translucent, flowing), texinfo flags, image index, lightmap slice and rectangle, styles. RT2 writes material id and normal from it |
 | Unwarped water | N6: water stays unwarped in the static buffers; the warp is applied to texture coordinates per frame on the CPU, as gl1 does |
@@ -556,7 +556,8 @@ since N2 `ref_metal` does too, section 17) and count their calls. `BeginFrame`
 opens the frame's first pass, colour only, where gl1 calls `R_Clear`:
 colour cleared to 1, 0, 0.5 with `r_clear 1`, loaded with `r_clear 0`
 (gl1 then clears no colour and the frame starts on what the buffer
-holds; here the last frame, or black on a target no pass has written).
+holds; here the last frame, or black on a target no pass has written;
+as built by N4, black, as on the shim: see section 19).
 `RenderFrame` opens the 3D pass with colour loaded, depth cleared to 1
 and stencil to 0 (gl1 clears depth in `R_Clear`; no 2D draw writes
 depth before the view, so the result is the same; stencil 0 is the no-shadow value:
@@ -654,7 +655,9 @@ What exists:
   native upload path: `R_FindImage`, `R_LoadPic` (skin flood fill, the
   crosshair normalisation), `R_Upload8` and `R_Upload32` as
   `R_Upload32Native` (light scale, the gamma and intensity tables, the
-  alpha scan; an image keeps its size), `R_FreeUnusedImages`,
+  alpha scan; an image keeps its size), `R_FreeUnusedImages` (called at
+  every registration here; as built by N4, gl1's rule, only when the
+  model or image table runs short: see section 19),
   `R_TextureMode` and `imagelist`. Each image carries a sampler: one of
   three classes (mipmapped, gl_texturemode's filters and
   `r_anisotropic`; without mipmaps, the mode's magnifying filter for
@@ -727,7 +730,8 @@ Choices made where the design left room:
   which gl1's 2D code does not draw.
 - `metal_stats` gains draws, skipped draws, uploads, skipped uploads,
   pass splits, pipelines and pipelines created after init. Every caller's
-  buffer is `RM_STATS_LINE` (512 bytes); the host test formats the
+  buffer is `RM_STATS_LINE` (512 bytes; as built by N4, 768: see section
+  19); the host test formats the
   longest line, every counter at its largest, into it.
 - `Swap_Init` runs in `RI_Init` as in gl1: the loaders in `files/` call
   `LittleShort`, and the `ASAN=1` build crashed in `PCX_Decode` without
@@ -1121,6 +1125,16 @@ that commit in a private store:
 The texture used for a surface whose image did not load is `r_notexture`
 by `Mod_LoadTexinfo`'s fallback argument; the game data has no such
 surface, so no frame shows it.
+
+Files changed outside the card's scope list, each needed by it: the
+`Makefile` (`ref_metal`'s object list gains `rm_model`, `rm_surf`,
+`files/models`, `files/pvs`, `files/surf` and the hunk of
+`backends/unix/shared/hunk.c`, now linked into the renderer),
+`tests/check-ref-metal.sh` (the host test's link line, with the two
+`YQ2OSTYPE` and `YQ2ARCH` names, the shim's `mgl_raster.c`, `files/surf.c`
+and `shared.c`), the new host shim `tests/metal/rm_host_shim.c`, and the
+headers `header/rmb.h`, `header/local.h` and `header/model.h`, beside
+`rm_pure.c`, `rm_image.c` and `rm_misc.c`.
 
 The implementer did not run the full gate (`scripts/test.sh`): the host
 limits of this card keep it to the orchestrator; the checks above are its
