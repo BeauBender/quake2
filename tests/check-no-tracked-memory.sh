@@ -29,14 +29,17 @@
 # .claude/memory/probe.md, .claude/memory/* with a negation after it), on
 # a rule only in .git/info/exclude, a global ignore file or
 # .claude/.gitignore, outside a repository, when ls-files, ls-files -s,
-# check-ignore, tr or either grep alone fails (a shim first on PATH); and
-# that it passes on a clean repository, also when a global ignore file or
+# check-ignore, tr or either grep alone fails (a shim first on PATH), and
+# when a TERM arrives during the real scan (the script re-run with
+# NOMEM_SKIP_SELFTEST=1 under a git shim that signals it); and that it
+# passes on a clean repository, also when a global ignore file or
 # .git/info/exclude lists .claude/. The real check then reads the index git
 # hands it.
 #
 # Usage: tests/check-no-tracked-memory.sh
 set -eu
 CDPATH='' cd "$(dirname "$0")/.."
+self=$(pwd)/tests/check-no-tracked-memory.sh
 me=check-no-tracked-memory
 tab=$(printf '\t')
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/nomem.XXXXXX")
@@ -322,8 +325,21 @@ selftest()
 	shim tr tr '' 1
 	shim grep-paths grep 'claude/memory' 2
 	shim grep-gitlinks grep '^160000' 2
+
+	# A signal while the real scan runs exits non-zero and prints no "ok".
+	mkdir -p "${tmp:?}/shim-sig"
+	printf '%s\n' '#!/bin/sh' 'case " $* " in *" -C . ls-files -z "*) kill -TERM "$PPID" ;; esac' \
+		"exec \"$(command -v git)\" \"\$@\"" > "${tmp:?}/shim-sig/git"
+	chmod 755 "${tmp:?}/shim-sig/git"
+	if out=$(PATH=${tmp:?}/shim-sig:$PATH NOMEM_SKIP_SELFTEST=1 TMPDIR=${tmp:?} sh "$self" 2>&1) ||
+		case "$out" in *": ok"*) true ;; *) false ;; esac; then
+		echo "$me: selftest: a TERM during the scan was counted as clean" >&2
+		exit 1
+	fi
 }
 
-( selftest ) || exit 1
+# NOMEM_SKIP_SELFTEST skips only the self-test (its signal case re-runs this
+# script with it set); the real check below always runs.
+[ -n "${NOMEM_SKIP_SELFTEST:-}" ] || ( selftest ) || exit 1
 check . || exit 1
 echo "$me: ok"
