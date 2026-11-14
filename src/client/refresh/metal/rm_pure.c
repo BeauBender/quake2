@@ -35,6 +35,7 @@
 
 #include "header/rmb.h"
 #include "common/mtl_matrix.h"
+#include "common/mtl_shader_math.h"
 
 int
 rm_caps_floor_ok(unsigned families)
@@ -214,6 +215,7 @@ rm_stats_format(const rmb_stats_t *s, const rm_ledger_t *l, char *buf, size_t le
 	ok = ok && rm_append(buf, len, &used, "%lu live objects, ", rm_ledger_live(l));
 	ok = ok && rm_append(buf, len, &used, "skipped surfaces: %lu sky, %lu warped, %lu translucent, %lu flowing",
 			s->sky_skips, s->warp_skips, s->trans_skips, s->flow_skips);
+	ok = ok && rm_append(buf, len, &used, "; %lu drawn without their dynamic light", s->dlit_surfs);
 	return ok;
 }
 
@@ -1112,4 +1114,454 @@ rm_polyblend(const float *blend, float sw_gamma, float polyblend, float *rgba)
 
 	rgba[3] = blend[3];
 	return 1;
+}
+
+/* ---- the lightmaps (N5) --------------------------------------------------------- */
+
+/* from gl1_model.c, Mod_CalcSurfaceExtents, one axis, with the float checked before it becomes an int */
+int
+rm_surface_extents(float mins, float maxs, short *texturemin, short *extent)
+{
+	double bmin, bmax;
+
+	if (!isfinite(mins) || !isfinite(maxs) || (maxs < mins))
+	{
+		return 0;
+	}
+
+	/* gl1: bmins = floor(mins / 16), bmaxs = ceil(maxs / 16), the division in float */
+	bmin = floor(mins / 16);
+	bmax = ceil(maxs / 16);
+
+	/* texturemins = bmins * 16 and extents = (bmaxs - bmins) * 16 are shorts */
+	if ((bmin < -2048) || (bmin > 2047) || (bmax - bmin > 2047))
+	{
+		return 0;
+	}
+
+	*texturemin = (short)((int)bmin * 16);
+	*extent = (short)(((int)bmax - (int)bmin) * 16);
+	return 1;
+}
+
+int
+rm_lm_size(long extent0, long extent1, int *smax, int *tmax)
+{
+	long s, t;
+
+	if ((extent0 < 0) || (extent1 < 0) || (extent0 > 32767) || (extent1 > 32767))
+	{
+		return 0;
+	}
+
+	s = (extent0 >> 4) + 1;
+	t = (extent1 >> 4) + 1;
+
+	/* LM_AllocBlock places nothing wider than BLOCK_WIDTH - 1; R_BuildLightMap's s_blocklights check */
+	if ((s > RM_LM_WIDTH - 1) || (t > RM_LM_HEIGHT) || (s * t > RM_LM_MAX_LUXELS))
+	{
+		return 0;
+	}
+
+	*smax = (int)s;
+	*tmax = (int)t;
+	return 1;
+}
+
+int
+rm_lm_nummaps(const unsigned char *styles)
+{
+	int n;
+
+	for (n = 0; n < RM_LM_STYLES && styles[n] != RM_LM_STYLE_END; n++)
+	{
+	}
+
+	return n;
+}
+
+int
+rm_lm_samples_ok(long ofs, long extent0, long extent1, int nummaps, long lightlen)
+{
+	long long per;
+
+	if ((ofs < 0) || (lightlen < 0) || (ofs > lightlen) || (extent0 < 0) || (extent1 < 0) ||
+		(extent0 > 32767) || (extent1 > 32767) || (nummaps < 0) || (nummaps > RM_LM_STYLES))
+	{
+		return 0;
+	}
+
+	/* at most 2048 * 2048 * 3 * 4 bytes: no overflow in long long */
+	per = (long long)((extent0 >> 4) + 1) * (long long)((extent1 >> 4) + 1) * 3;
+	return per * nummaps <= (long long)(lightlen - ofs);
+}
+
+int
+rm_lm_alloc(int *allocated, int w, int h, int *x, int *y)
+{
+	/* gl1's LM_AllocBlock is CommonAllocBlock's loop on the lightmap block (gl1_lightmap.c, gl1_scrap.c) */
+	return rm_scrap_alloc(allocated, RM_LM_WIDTH, RM_LM_HEIGHT, w, h, x, y);
+}
+
+int
+rm_lm_slices_ok(long n)
+{
+	return (n >= 1) && (n <= RM_LM_MAX_SLICES);
+}
+
+/* from gl1_lightmap.c, LM_CreateSurfaceLightmap */
+int
+rm_lm_place(int *allocated, int *slice, int w, int h, int *x, int *y)
+{
+	int empty[RM_LM_WIDTH];
+
+	if ((w < 1) || (w > RM_LM_WIDTH) || (h < 1) || (h > RM_LM_HEIGHT) || (*slice < 0) ||
+		(*slice >= RM_LM_MAX_SLICES))
+	{
+		return 0;
+	}
+
+	if (rm_lm_alloc(allocated, w, h, x, y))
+	{
+		return 1;
+	}
+
+	/* the next slice must exist and take the block when it is empty (gl1's second LM_AllocBlock) */
+	memset(empty, 0, sizeof(empty));
+
+	if ((*slice + 1 >= RM_LM_MAX_SLICES) || !rm_lm_alloc(empty, w, h, x, y))
+	{
+		return 0;
+	}
+
+	memcpy(allocated, empty, sizeof(empty));
+	(*slice)++;
+	return 2;
+}
+
+int
+rm_region_ok(long tw, long th, long tslices, long slice, long x, long y, long w, long h)
+{
+	return (tw >= 1) && (th >= 1) && (slice >= 0) && (slice < tslices) && (x >= 0) && (y >= 0) &&
+		(w >= 1) && (h >= 1) && (w <= tw) && (h <= th) && (x <= tw - w) && (y <= th - h);
+}
+
+int
+rm_lm_region_ok(long slice, long nslices, long x, long y, long w, long h)
+{
+	return rm_lm_slices_ok(nslices) && rm_region_ok(RM_LM_WIDTH, RM_LM_HEIGHT, nslices, slice, x, y, w, h);
+}
+
+/* from gl1_surf.c */
+void
+rm_lm_join(const rm_lmrect_t *adding, rm_lmrect_t *obj)
+{
+	if (adding->top < obj->top)
+	{
+		obj->top = adding->top;
+	}
+
+	if (adding->bottom > obj->bottom)
+	{
+		obj->bottom = adding->bottom;
+	}
+
+	if (adding->left < obj->left)
+	{
+		obj->left = adding->left;
+	}
+
+	if (adding->right > obj->right)
+	{
+		obj->right = adding->right;
+	}
+}
+
+/* from gl1_image.c, R_InitImages; a NaN is 0 (gl1 would convert it to a byte) */
+int
+rm_minlight_table(float m, unsigned char *table)
+{
+	int i;
+
+	if (m != m)
+	{
+		m = 0;
+	}
+
+	m = m < 0 ? 0 : (m > 255 ? 255 : m);
+
+	for (i = 0; i < 256; i++)
+	{
+		float inf = (255.0f - m) * (float)i / 255.0f + m;
+
+		inf = inf < 0 ? 0 : (inf > 255 ? 255 : inf);
+		table[i] = (m != 0) ? (unsigned char)inf : (unsigned char)i;
+	}
+
+	return m != 0;
+}
+
+/*
+ * Q_ftol, with the values a float cannot hold as an int (a NaN, or a
+ * light past a billion from a huge r_modulate) saturated instead of
+ * converted, which C leaves undefined; every other value is Q_ftol's.
+ */
+static long
+rm_ftol(float f)
+{
+	if (f != f)
+	{
+		return 0;
+	}
+
+	if (f > 1e9f)
+	{
+		return 1000000000L;
+	}
+
+	if (f < -1e9f)
+	{
+		return -1000000000L;
+	}
+
+	return (long)f;
+}
+
+/* from gl1_light.c, R_BuildLightMap, without the dynamic lights (N8) */
+int
+rm_lm_build(const unsigned char *samples, int smax, int tmax, int nummaps, const float (*rgb)[3],
+		float modulate, const unsigned char *minlight, const unsigned char *gamma,
+		unsigned char *dest, long stride, float *blocklights)
+{
+	int r, g, b, a, max;
+	int i, j, size, maps, ok_s, ok_t;
+	const unsigned char *lightmap;
+	float scale[3];
+	float *bl;
+
+	/* the size rm_lm_size gives for the extents (smax - 1) * 16 and (tmax - 1) * 16 */
+	if ((smax < 1) || (tmax < 1) || (smax > RM_LM_WIDTH) || (tmax > RM_LM_HEIGHT) ||
+		!rm_lm_size((long)(smax - 1) * 16, (long)(tmax - 1) * 16, &ok_s, &ok_t) ||
+		(nummaps < 0) || (nummaps > RM_LM_STYLES) || (stride < (long)smax * RM_LM_BYTES))
+	{
+		return 0;
+	}
+
+	size = smax * tmax;
+
+	/* set to full bright if no light data */
+	if (!samples)
+	{
+		for (i = 0; i < size * 3; i++)
+		{
+			blocklights[i] = 255;
+		}
+
+		goto store;
+	}
+
+	lightmap = samples;
+
+	/* add all the lightmaps */
+	if (nummaps == 1)
+	{
+		for (maps = 0; maps < nummaps; maps++)
+		{
+			bl = blocklights;
+
+			for (i = 0; i < 3; i++)
+			{
+				scale[i] = modulate * rgb[maps][i];
+			}
+
+			if ((scale[0] == 1.0F) && (scale[1] == 1.0F) && (scale[2] == 1.0F))
+			{
+				for (i = 0; i < size; i++, bl += 3)
+				{
+					bl[0] = lightmap[i * 3 + 0];
+					bl[1] = lightmap[i * 3 + 1];
+					bl[2] = lightmap[i * 3 + 2];
+				}
+			}
+			else
+			{
+				for (i = 0; i < size; i++, bl += 3)
+				{
+					bl[0] = lightmap[i * 3 + 0] * scale[0];
+					bl[1] = lightmap[i * 3 + 1] * scale[1];
+					bl[2] = lightmap[i * 3 + 2] * scale[2];
+				}
+			}
+
+			lightmap += size * 3; /* skip to next lightmap */
+		}
+	}
+	else
+	{
+		memset(blocklights, 0, sizeof(blocklights[0]) * size * 3);
+
+		for (maps = 0; maps < nummaps; maps++)
+		{
+			bl = blocklights;
+
+			for (i = 0; i < 3; i++)
+			{
+				scale[i] = modulate * rgb[maps][i];
+			}
+
+			if ((scale[0] == 1.0F) && (scale[1] == 1.0F) && (scale[2] == 1.0F))
+			{
+				for (i = 0; i < size; i++, bl += 3)
+				{
+					bl[0] += lightmap[i * 3 + 0];
+					bl[1] += lightmap[i * 3 + 1];
+					bl[2] += lightmap[i * 3 + 2];
+				}
+			}
+			else
+			{
+				for (i = 0; i < size; i++, bl += 3)
+				{
+					bl[0] += lightmap[i * 3 + 0] * scale[0];
+					bl[1] += lightmap[i * 3 + 1] * scale[1];
+					bl[2] += lightmap[i * 3 + 2] * scale[2];
+				}
+			}
+
+			lightmap += size * 3; /* skip to next lightmap */
+		}
+	}
+
+	/* gl1 adds the dynamic lights here (R_AddDynamicLights): N8's, a step of its own */
+
+store:
+
+	stride -= (smax << 2);
+	bl = blocklights;
+
+	for (i = 0; i < tmax; i++, dest += stride)
+	{
+		for (j = 0; j < smax; j++)
+		{
+			r = (int)rm_ftol(bl[0]);
+			g = (int)rm_ftol(bl[1]);
+			b = (int)rm_ftol(bl[2]);
+
+			/* catch negative lights */
+			if (r < 0)
+			{
+				r = 0;
+			}
+
+			if (g < 0)
+			{
+				g = 0;
+			}
+
+			if (b < 0)
+			{
+				b = 0;
+			}
+
+			/* determine the brightest of the three color components */
+			if (r > g)
+			{
+				max = r;
+			}
+			else
+			{
+				max = g;
+			}
+
+			if (b > max)
+			{
+				max = b;
+			}
+
+			/* alpha is ONLY used for the mono lightmap case: the brightest component */
+			a = max;
+
+			/* rescale all the color components if the intensity of the greatest channel exceeds 1.0 */
+			if (max > 255)
+			{
+				float t = 255.0F / max;
+
+				r = r * t;
+				g = g * t;
+				b = b * t;
+				a = a * t;
+			}
+
+			if (minlight)
+			{
+				r = minlight[r];
+				g = minlight[g];
+				b = minlight[b];
+			}
+
+			dest[0] = gamma[r];
+			dest[1] = gamma[g];
+			dest[2] = gamma[b];
+			dest[3] = a;
+
+			bl += 3;
+			dest += 4;
+		}
+	}
+
+	return 1;
+}
+
+/* from gl1_main.c, RI_BeginFrame */
+int
+rm_overbright(float v)
+{
+	int obb = (v != v) ? 0 : (v > 4 ? 4 : (v < 0 ? 0 : (int)v));
+
+	return (obb == 3) ? 2 : obb;
+}
+
+int
+rm_lm_env(int overbright, int lightmap_only)
+{
+	if (overbright)
+	{
+		return MTL_LM_COMBINE;
+	}
+
+	return lightmap_only ? MTL_LM_REPLACE : MTL_LM_MODULATE;
+}
+
+int
+rm_lm_format(const char *map, long slices, char *buf, size_t len)
+{
+	size_t used = 0;
+
+	if (len == 0)
+	{
+		return 0;
+	}
+
+	buf[0] = '\0';
+
+	if (!rm_lm_slices_ok(slices) || !rm_append(buf, len, &used,
+			"ref_metal: metal_stats: lightmaps %s: %ld slices of %d by %d (%ld bytes)", map, slices,
+			RM_LM_WIDTH, RM_LM_HEIGHT, slices * RM_LM_WIDTH * RM_LM_HEIGHT * RM_LM_BYTES))
+	{
+		buf[0] = '\0';
+		return 0;
+	}
+
+	return 1;
+}
+
+rm_reopen_t
+rm_split_reopen(int pass_open, int pass_depth)
+{
+	if (!pass_open)
+	{
+		return RM_REOPEN_NONE;
+	}
+
+	return pass_depth ? RM_REOPEN_3D_KEEP : RM_REOPEN_2D;
 }

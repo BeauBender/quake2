@@ -89,6 +89,8 @@ typedef struct
 	unsigned long late_pipelines;   /* pipeline states built after InitContext: must stay 0 */
 	/* the surfaces of the last 3D view not drawn yet, by class (front end, N4): drawn from N6 on */
 	unsigned long sky_skips, warp_skips, trans_skips, flow_skips;
+	/* of the drawn surfaces of the last 3D view, those a dynamic light touches, drawn with their static lightmap (N5; N8 adds the light) */
+	unsigned long dlit_surfs;
 } rmb_stats_t;
 
 /* A buffer of this size holds every metal_stats line (rm_stats_format, rm_world_format, host-tested). */
@@ -560,6 +562,140 @@ int rm_projection(float *m, float fovy, int width, int height, float znear, int 
  */
 int rm_polyblend(const float *blend, float sw_gamma, float polyblend, float *rgba);
 
+/* ---- the lightmaps (rm_pure.c, N5) ------------------------------------------------ */
+
+/* gl1's lightmap block (BLOCK_WIDTH, BLOCK_HEIGHT, LIGHTMAP_BYTES): one slice of the array texture */
+#define RM_LM_WIDTH 128
+#define RM_LM_HEIGHT 128
+#define RM_LM_BYTES 4
+/*
+ * The slices a map may fill. gl1 numbers its blocks from 1 (0 is the
+ * classic path's dynamic block) and drops with "MAX_LIGHTMAPS exceeded"
+ * when the upload of a full block, or the last one, raises the number to
+ * MAX_LIGHTMAPS (128): it fills blocks 1 to 126 at most.
+ */
+#define RM_LM_MAX_SLICES 126
+/*
+ * The luxels of one surface: gl1's R_BuildLightMap drops when smax * tmax
+ * passes sizeof(s_blocklights) >> 4 (34 * 34 * 3 floats, 867), and its
+ * LM_AllocBlock never places a block wider than BLOCK_WIDTH - 1.
+ */
+#define RM_LM_MAX_LUXELS 867
+/* MAXLIGHTMAPS of the BSP format: the styles of a surface */
+#define RM_LM_STYLES 4
+/* the end of a surface's styles */
+#define RM_LM_STYLE_END 255
+
+/*
+ * gl1's Mod_CalcSurfaceExtents for one axis, bounded: the texture
+ * coordinate range [mins, maxs] of a surface to texturemins (floor(mins
+ * / 16) * 16) and extents ((ceil(maxs / 16) - floor(mins / 16)) * 16),
+ * both short in msurface_t. 1, or 0 and nothing written when either
+ * value is not finite, maxs is below mins, or a result does not fit a
+ * short (gl1 converts the float to int unchecked).
+ */
+int rm_surface_extents(float mins, float maxs, short *texturemin, short *extent);
+
+/*
+ * The lightmap size of a surface from its extents (gl1: smax = (extents[0]
+ * >> 4) + 1, tmax likewise): 1 with *smax, *tmax set when both extents are
+ * not negative, smax is at most RM_LM_WIDTH - 1, tmax at most RM_LM_HEIGHT
+ * and smax * tmax at most RM_LM_MAX_LUXELS (gl1's checks); 0 and nothing
+ * written otherwise (the map is refused).
+ */
+int rm_lm_size(long extent0, long extent1, int *smax, int *tmax);
+
+/* The styles of a surface before the first RM_LM_STYLE_END, at most RM_LM_STYLES. */
+int rm_lm_nummaps(const unsigned char *styles);
+
+/*
+ * The light samples of a surface: smax * tmax * 3 bytes per style, from
+ * byte ofs of a lighting lump of lightlen bytes. 1 when ofs is not
+ * negative, both extents are not negative and the whole run of nummaps
+ * styles ends inside the lump (computed without overflow); 0 otherwise.
+ * Sky and translucent surfaces are read by R_LightPoint with their own
+ * extents, which rm_lm_size does not bound, so this takes the extents.
+ */
+int rm_lm_samples_ok(long ofs, long extent0, long extent1, int nummaps, long lightlen);
+
+/*
+ * gl1's LM_AllocBlock on a block whose RM_LM_WIDTH column heights are
+ * allocated: a w by h rectangle, the same spots as gl1's (the rightmost
+ * start is RM_LM_WIDTH - w - 1). 1 with *x, *y set and the columns
+ * raised; 0 and nothing written when it does not fit (the next slice is
+ * begun) or w, h are outside 1 .. RM_LM_WIDTH, 1 .. RM_LM_HEIGHT.
+ */
+int rm_lm_alloc(int *allocated, int w, int h, int *x, int *y);
+
+/* The slices of a map: 1 to RM_LM_MAX_SLICES, checked before the array texture is made. */
+int rm_lm_slices_ok(long n);
+
+/*
+ * gl1's LM_CreateSurfaceLightmap placement: a w by h lightmap in slice
+ * *slice (allocated its column heights) or, when that is full, at the
+ * top of the next slice (gl1's LM_UploadBlock and LM_InitBlock: the
+ * columns cleared, *slice raised). 1 with *x, *y and *slice set; 2 when
+ * the slice changed; 0 and nothing changed when w, h do not fit an empty
+ * slice or the next slice would be RM_LM_MAX_SLICES or more (the map is
+ * refused before the array is sized: gl1's "MAX_LIGHTMAPS exceeded").
+ */
+int rm_lm_place(int *allocated, int *slice, int w, int h, int *x, int *y);
+
+/*
+ * A w by h region at (x, y) of slice slice in an array of nslices slices
+ * of RM_LM_WIDTH by RM_LM_HEIGHT: 1 when it lies inside (w and h at least
+ * 1, no overflow), checked before a region is built or uploaded.
+ */
+int rm_lm_region_ok(long slice, long nslices, long x, long y, long w, long h);
+
+/* gl1's lmrect_t: [left, right) by [top, bottom) of one slice */
+typedef struct
+{
+	int left, right, top, bottom;
+} rm_lmrect_t;
+
+/* gl1's R_JoinAreas: obj grows to hold adding as well. */
+void rm_lm_join(const rm_lmrect_t *adding, rm_lmrect_t *obj);
+
+/*
+ * gl1's minlight table (R_InitImages, gl1_image.c) for gl1_minlight m:
+ * the identity for m 0 (returns 0, gl_state.minlight_set off), otherwise
+ * (255 - m) * i / 255 + m (returns 1). m is clamped to 0 .. 255 first.
+ */
+int rm_minlight_table(float m, unsigned char *table);
+
+/*
+ * gl1's R_BuildLightMap without the dynamic-light step (R_AddDynamicLights
+ * is N8's, a step of its own between the styles and the store): the
+ * smax by tmax samples of nummaps styles, each style's rgb scaled by
+ * modulate (r_modulate), summed in float, truncated, negative values to 0,
+ * all three scaled down when the brightest passes 255, through minlight
+ * (NULL when gl1_minlight is 0) and gamma (gl1's gammatable), alpha the
+ * brightest; rows of smax * 4 bytes, stride bytes apart, at dest. samples
+ * NULL is gl1's "no light data": every luxel 255 before the tables.
+ * blocklights is scratch of RM_LM_MAX_LUXELS * 3 floats. 0 and nothing
+ * written when rm_lm_size refuses smax and tmax as extents would, nummaps
+ * is outside 0 .. RM_LM_STYLES or stride is below smax * 4.
+ */
+int rm_lm_build(const unsigned char *samples, int smax, int tmax, int nummaps, const float (*rgb)[3],
+		float modulate, const unsigned char *minlight, const unsigned char *gamma,
+		unsigned char *dest, long stride, float *blocklights);
+
+/* gl1_overbrightbits as gl1's RI_BeginFrame clamps it: 0, 1, 2 or 4 (3 is 2, the rest clamped to 0 .. 4). */
+int rm_overbright(float v);
+
+/*
+ * The texture environment of gl1's lightmap unit (TMU 1) on the
+ * multitexture path: GL_COMBINE with GL_RGB_SCALE overbright when
+ * gl1_overbrightbits is set (gl1 sets it after R_EnableMultitexture, so
+ * it wins over r_lightmap), else GL_REPLACE with r_lightmap, else
+ * GL_MODULATE (common/mtl_shader_math.h, MTL_LM_*).
+ */
+int rm_lm_env(int overbright, int lightmap_only);
+
+/* The lightmap line of metal_stats at registration, without a newline; 1 when it fits, 0 with buf empty. */
+int rm_lm_format(const char *map, long slices, char *buf, size_t len);
+
 /* ---- rmb_device.m and rmb_encode.m ------------------------------------------- */
 
 /*
@@ -667,6 +803,7 @@ typedef enum
 	RMB_SMP_MIP,        /* mipmapped: gl_texturemode's min and mag filter, r_anisotropic */
 	RMB_SMP_FLAT,       /* no mipmaps: gl_texturemode's mag filter for both */
 	RMB_SMP_NEAREST,    /* r_nolerp_list, r_2D_unfiltered, r_videos_unfiltered */
+	RMB_SMP_LIGHTMAP,   /* gl1's lightmaps: GL_LINEAR for both whatever gl_texturemode says (LM_UploadBlock), no mipmaps */
 	RMB_SMP_CLASSES
 } rmb_smp_t;
 
@@ -739,6 +876,7 @@ typedef enum
 {
 	RM_PIPE_WORLD_TEX,      /* world_tex: the diffuse texel alone (r_fullbright, gl1's GL_REPLACE) */
 	RM_PIPE_COLOR_BLEND,    /* color: an untextured colour, blended (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA) */
+	RM_PIPE_WORLD_LM,       /* world_lm: the diffuse texel times the lightmap slice's (gl1's two units, N5) */
 	RM_PIPE_3D_COUNT
 } rm_pipe3d_t;
 
@@ -779,5 +917,66 @@ int rmb_draw_world(int vbuf, const unsigned *idx, unsigned long count, int tex, 
  */
 int rmb_draw_color(const float *xyz, int n, const float *rgba, const float *mvp,
 		const rm_viewport_t *vp, int cull);
+
+/* ---- the lightmap array (rmb_resource.m, rmb_encode.m, N5) ------------------------ */
+
+/*
+ * A new texture2d_array of slices slices of RM_LM_WIDTH by RM_LM_HEIGHT
+ * rgba8 texels (private, no mipmaps), its contents undefined until
+ * rmb_texture_region writes them. Its id, 0 (nothing taken) when
+ * rm_lm_slices_ok refuses the count or an allocation fails.
+ */
+int rmb_texture_array(int slices);
+
+/*
+ * Writes the w by h texels at rgba (rows stride bytes apart) to (x, y) of
+ * slice slice of the array texture id, through the staging ring and the
+ * upload command buffer, so the next draw reads them; a frame command
+ * buffer that already drew with id is split first, its pass reopened (a
+ * 3D pass with its depth and stencil kept). 0 when the region is not
+ * inside the texture (rm_region_ok), stride is below w * 4 or the ring
+ * has no room: counted as an upload skip, nothing written, the texture
+ * and its id kept (the region holds what it held).
+ */
+int rmb_texture_region(int id, int slice, int x, int y, int w, int h, const unsigned char *rgba, long stride);
+
+/*
+ * A region of a texture of tw by th texels and tslices slices: slice
+ * below tslices, w and h at least 1, inside the texture (no overflow).
+ * The back end's own check, against the texture it writes.
+ */
+int rm_region_ok(long tw, long th, long tslices, long slice, long x, long y, long w, long h);
+
+/*
+ * How the in-frame split reopens the pass it ended (rmb_encode_split):
+ * nothing when no pass was open (the next draw opens one), the 2D pass
+ * (colour loaded) after a 2D pass, a 3D pass with colour, depth and
+ * stencil loaded after a 3D pass, so the draws after the write test the
+ * depth the draws before it wrote.
+ */
+typedef enum
+{
+	RM_REOPEN_NONE,
+	RM_REOPEN_2D,
+	RM_REOPEN_3D_KEEP
+} rm_reopen_t;
+
+rm_reopen_t rm_split_reopen(int pass_open, int pass_depth);
+
+/*
+ * The world_lm draw: as rmb_draw_world, with the lightmap array lmtex,
+ * the slice of every surface of the draw, and gl1's lightmap unit:
+ * env (rm_lm_env) and the GL_RGB_SCALE of GL_COMBINE.
+ */
+typedef struct
+{
+	int tex, smp;           /* the diffuse texture and its sampler */
+	int lmtex, slice;       /* the lightmap array and the slice */
+	int env;                /* MTL_LM_MODULATE, MTL_LM_REPLACE, MTL_LM_COMBINE */
+	float scale;            /* GL_RGB_SCALE of GL_COMBINE: 1, 2 or 4 */
+} rmb_lm_draw_t;
+
+int rmb_draw_world_lm(int vbuf, const unsigned *idx, unsigned long count, const rmb_lm_draw_t *d,
+		const float *mvp, const rm_viewport_t *vp, int cull);
 
 #endif /* RM_RMB_H */
