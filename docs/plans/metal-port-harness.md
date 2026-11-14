@@ -1473,7 +1473,7 @@ lightmap difference, run both renderers by hand with `+set
 gl_texturemode GL_NEAREST` (and `GL_LINEAR`): the judged frames must then
 be identical pixel for pixel.
 
-On the build VM, source `4f9a9fd9`, load averages 3.1 to 11.6: two
+On the build VM, source `83982904` (a record at `20d47f5c` byte-identical), load averages 3.1 to 11.6: two
 `gl1-metal` records of `world` identical; three release records and one
 `ASAN=1` record of `metal world` with the same numbers, frames 0 to 20 ok
 (0 to 6 differing pixels each, none with either filter above), frames 21

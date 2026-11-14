@@ -1334,8 +1334,9 @@ Choices made where the design left room:
 - The texels of a slice outside every rectangle start at 0 (gl1 leaves
   them as `malloc` gives them); no draw samples them.
 
-Measured on the build VM (T0), source `4f9a9fd9`, load averages 3.1 to
-11.6 (a shared host), every record with `MTL_DEBUG_LAYER=1` and
+Measured on the build VM (T0), source `83982904` (the next commit
+removes checks other checks imply; a `world` record at `20d47f5c` is
+byte-identical on all 23 frames), load averages 3.1 to 11.6 (a shared host), every record with `MTL_DEBUG_LAYER=1` and
 `PINS_TRACE=0`, references recorded at that source in a private store:
 
 | What | Result |
