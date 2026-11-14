@@ -1268,6 +1268,28 @@ What exists:
 - **`R_SetLightLevel`** and `R_LightPoint` (with `R_RecursiveLightPoint`)
   are gl1's. gl1 calls `R_SetLightLevel` without an entity, so
   `r_lightlevel` is 150; `R_LightPoint` is there for N7's model lighting.
+  It is not reached in N5 (`R_LightPoint` returns before the trace
+  without an entity). Its bound is in place for N7: the traced point
+  lies on a node's plane, not on the face, and the loader bounds the
+  texture vectors only through the face's own vertices, so the texture
+  coordinates can be anything; `rm_lp_coords` takes `ds`, `dt` only from
+  coordinates that are finite and inside `texturemins .. texturemins +
+  extents`, tested in float before the conversion to int (gl1 converts
+  first, which is undefined past the int range and can wrap the
+  difference past its checks). A point outside is a miss on that surface
+  and the walk goes on, as gl1's; unlike gl1's integer checks it refuses
+  the fraction of a texture unit outside an edge that truncation rounds
+  onto it.
+- **The light counts**: both loops over the refdef's dynamic lights take
+  `rm_dlight_count` (clamped to `MAX_DLIGHTS`, which the client already
+  caps) and `R_PushDlights` marks with `rm_dlight_bit` (an unsigned
+  shift), so a count past 32 neither shifts past the word nor walks past
+  the 32 marks.
+- **A refused region upload** (`rmb_texture_region` returns 0 when the
+  staging ring has no room) leaves its slice's rebuilt surfaces dirty and
+  their styles unrecorded (`rm_lm_regen_mark`, decided after the upload),
+  so the next frame rebuilds and uploads them again; with every upload
+  accepted the result is gl1's.
 - **The split** (section 17's debt): `rmb_encode_split` inside the 3D
   pass ends it with depth and stencil stored (the store action is chosen
   when a pass ends: `MTLStoreActionUnknown` at creation, stored only for
@@ -1347,7 +1369,8 @@ byte-identical on all 23 frames), load averages 3.1 to 11.6 (a shared host), eve
 | the same with the `ASAN=1` build | the same numbers, no sanitizer line |
 | both renderers with `gl_texturemode GL_NEAREST`, and again with `GL_LINEAR` (hand runs) | frames 0 to 20 identical (0 pixels) in both modes |
 | scratch `world` with `gl1_overbrightbits 2` (not committed), both renderers | frames 0 to 20 ok, the same exclusions; 2 to 5 differing pixels on the frames looked at; the setting took effect (it changes 300,951 of 307,200 pixels of frame 5 against `world`) |
-| scratch `world` on `demo2.dm2` (a map whose visible lights flicker; not a scenario), both renderers | the updates run: 190 uploads at the first capture, 586 at the last (about 400 region uploads); every frame without a skipped surface (5, 7 to 20) ok; frame 6 (3 warped) over at 0.000120, bad 0.001178, excluded |
+| scratch `world` on `demo2.dm2` at the default cadence (every 30th frame), both renderers | 190 uploads at the first capture, 586 at the last; every frame without a skipped surface (5, 7 to 20) ok; frame 6 (3 warped) over at 0.000120, bad 0.001178, excluded. This run proves nothing about the updates: no captured frame shows an animated style, and `metal` with `gl1_dynamic 0` gives every judged frame score 0 and bad 0 against the same reference (the correctness review's control) |
+| scratch `world` on `demo2.dm2` with `PINS_EVERY=7` (89 frames; re-measured at `5642f91e`, the rework's source, private store), both renderers | frames 8 (0.002867, bad 0.027956), 12 (bad 0.001484), 15 (bad 0.015618) and 26 (bad 0.001598) over, each excluded (9, 8, 6 and 3 warped surfaces skipped); the 85 others ok. Frames 51, 61, 63, 67 and 69 show an animated style: against the same `gl1-metal` reference, `metal` with `gl1_dynamic 0` (a scratch copy of `world` plus that line) gives 51 score 0.000001, 61 score 0.000105 bad 0.001130 (over), 63 score 0.000467, 67 score 0.000595 bad 0.006882 (over), 69 score 0.000447 bad 0.004303 (over), and with the updates on they are ok (bad 0.000000, 0.000013 on 61): the same numbers as the correctness review's three hand runs. Between the two `metal` runs frames 48, 57 and 59 also differ, by one level at most (score 0 at the comparator's precision); the other 81 are byte-identical. Counts from separate hand runs with `metal_stats 1` (it prints into the frame, so its frames are not compared): 190 uploads at the first capture, 586 at the last with the updates, 193 without; validation and teardown as below |
 | a scratch build forcing a split after every seventh chain (a one-texel region write of slice 0) | 2,206 pass splits over the demo; all 23 frames identical to the normal build. Mutants: the reopened pass clearing depth instead of loading it, 21 frames fail (score up to 0.053); the split not storing depth, 21 frames fail (score up to 0.137) |
 | `world-fullbright`, `hud2d`, `cinematic` against `gl1-metal` at that source | `world-fullbright` as in N4 (frames 0 to 20 ok, frames 0, 1, 10 and 16 at bad 0.000003 to 0.000013, 21 and 22 over and excluded); `hud2d` 23 frames and `cinematic` (`PINS_DEMO=idlog.cin PINS_EVERY=7`) 12 frames at score 0 and bad 0 |
 | validation and teardown, every record | `engine.log` holds only `Metal API Validation Enabled`; teardown `0 live objects` (texture 224/224, buffer 8/8 for `world`), `0 unreleased`, `0 unmatched` |
@@ -1382,7 +1405,7 @@ draw about 300; the host test and its shim about 510.
 Left for N6 and later: sky, warped, translucent and flowing surfaces (N6;
 the flowing surfaces' lightmaps are built and updated already), the brush
 entities' lightmap chains (`R_GetBrushesLighting`) and `R_LightPoint` with
-an entity (N7, which must bound the float-to-int conversions of
-`R_RecursiveLightPoint` for hostile view origins and texture vectors),
+an entity (N7; the sampler's bound, `rm_lp_coords`, is in place since N5,
+a precondition N7 inherits already satisfied),
 `R_AddDynamicLights` between the styles and the store, the flash blobs and
 stencil shadows (N8).
