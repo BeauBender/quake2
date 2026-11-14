@@ -619,6 +619,20 @@ int rm_lm_nummaps(const unsigned char *styles);
 int rm_lm_samples_ok(long ofs, long extent0, long extent1, int nummaps, long lightlen);
 
 /*
+ * The light point's texture coordinates s, t on one surface of
+ * texturemins smin, tmin and extents sext, text (gl1's
+ * R_RecursiveLightPoint, bounded): 1 with *ds, *dt set, 0 .. sext and
+ * 0 .. text, when s and t are finite and inside smin .. smin + sext and
+ * tmin .. tmin + text, checked in float before the conversion to int
+ * (gl1 converts first, so a coordinate past INT_MAX is undefined and a
+ * wrapped one can pass its checks); 0 and nothing written otherwise: no
+ * sample on this surface, the walk goes on. The traced point lies on the
+ * node's plane, not on the face, and the texture vectors are bounded
+ * only through the face's own vertices, so s and t can be anything.
+ */
+int rm_lp_coords(float s, float t, short smin, short tmin, short sext, short text, int *ds, int *dt);
+
+/*
  * gl1's LM_AllocBlock on a block whose RM_LM_WIDTH column heights are
  * allocated: a w by h rectangle, the same spots as gl1's (the rightmost
  * start is RM_LM_WIDTH - w - 1). 1 with *x, *y set and the columns

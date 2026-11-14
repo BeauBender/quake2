@@ -1198,6 +1198,23 @@ rm_lm_samples_ok(long ofs, long extent0, long extent1, int nummaps, long lightle
 }
 
 int
+rm_lp_coords(float s, float t, short smin, short tmin, short sext, short text, int *ds, int *dt)
+{
+	/* each test fails for a NaN; the bounds are shorts, exact in float */
+	if (!(s >= (float)smin) || !(s <= (float)smin + sext) ||
+		!(t >= (float)tmin) || !(t <= (float)tmin + text))
+	{
+		return 0;
+	}
+
+	/* inside the bounds, the truncation of s is inside them too */
+	*ds = (int)s - smin;
+	*dt = (int)t - tmin;
+
+	return 1;
+}
+
+int
 rm_lm_alloc(int *allocated, int w, int h, int *x, int *y)
 {
 	/* gl1's LM_AllocBlock is CommonAllocBlock's loop on the lightmap block (gl1_lightmap.c, gl1_scrap.c) */

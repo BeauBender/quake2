@@ -166,9 +166,17 @@ R_PushDlights(void)
 }
 
 /*
- * from gl1_light.c; the samples it reads are inside the lighting lump:
+ * from gl1_light.c. The samples it reads are inside the lighting lump:
  * the loader checked every surface's run of styles with its extents
- * (rm_lm_samples_ok), and ds, dt are inside the extents here
+ * (rm_lm_samples_ok), and rm_lp_coords takes ds, dt only from texture
+ * coordinates that are finite and inside texturemins .. texturemins +
+ * extents before any conversion, so ds, dt are 0 .. extents (gl1
+ * converts first and can wrap; a point outside is a miss on this
+ * surface and the walk goes on, as gl1's). Unlike gl1's integer checks,
+ * this refuses the fraction of a texture unit outside each edge that
+ * truncation would round onto it. Not reached in N5: the only caller is
+ * R_SetLightLevel(NULL), and R_LightPoint returns before the trace
+ * without an entity; N7 calls it with one and inherits this bound.
  */
 static int
 R_RecursiveLightPoint(mnode_t *node, vec3_t start, vec3_t end)
@@ -178,7 +186,8 @@ R_RecursiveLightPoint(mnode_t *node, vec3_t start, vec3_t end)
 	cplane_t *plane;
 	vec3_t mid;
 	msurface_t *surf;
-	int s, t, ds, dt;
+	float s, t;
+	int ds, dt;
 	int i;
 	mtexinfo_t *tex;
 	byte *lightmap;
@@ -237,15 +246,8 @@ R_RecursiveLightPoint(mnode_t *node, vec3_t start, vec3_t end)
 		s = DotProduct(mid, tex->vecs[0]) + tex->vecs[0][3];
 		t = DotProduct(mid, tex->vecs[1]) + tex->vecs[1][3];
 
-		if ((s < surf->texturemins[0]) || (t < surf->texturemins[1]))
-		{
-			continue;
-		}
-
-		ds = s - surf->texturemins[0];
-		dt = t - surf->texturemins[1];
-
-		if ((ds > surf->extents[0]) || (dt > surf->extents[1]))
+		if (!rm_lp_coords(s, t, surf->texturemins[0], surf->texturemins[1], surf->extents[0], surf->extents[1],
+				&ds, &dt))
 		{
 			continue;
 		}

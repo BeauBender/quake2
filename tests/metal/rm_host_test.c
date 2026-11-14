@@ -1574,6 +1574,60 @@ test_lm_samples(void)
 }
 
 /*
+ * The light point's texture coordinates on one surface (rm_lp_coords):
+ * inside, on each of the four edges, just and far outside each side,
+ * NaN and the infinities in each coordinate, values near INT_MAX with a
+ * negative texturemins (an int conversion first would wrap ds into the
+ * extents), a negative extent; nothing written when refused.
+ */
+static void
+test_lp_coords(void)
+{
+	const float in = 2147483520.0f; /* the largest float below 2^31 */
+	int ds, dt;
+
+	/* inside: texturemins 16, -32, extents 64, 48 */
+	CHECK(rm_lp_coords(40.5f, -20.25f, 16, -32, 64, 48, &ds, &dt) && ds == 24 && dt == 12);
+	/* a negative coordinate truncates toward texturemins: -31.5 is -31, 1 past -32 */
+	CHECK(rm_lp_coords(16, -31.5f, 16, -32, 64, 48, &ds, &dt) && ds == 0 && dt == 1);
+
+	/* each edge is inside */
+	CHECK(rm_lp_coords(16, 0, 16, -32, 64, 48, &ds, &dt) && ds == 0 && dt == 32);
+	CHECK(rm_lp_coords(80, 0, 16, -32, 64, 48, &ds, &dt) && ds == 64 && dt == 32);
+	CHECK(rm_lp_coords(20, -32, 16, -32, 64, 48, &ds, &dt) && ds == 4 && dt == 0);
+	CHECK(rm_lp_coords(20, 16, 16, -32, 64, 48, &ds, &dt) && ds == 4 && dt == 48);
+	CHECK(rm_lp_coords(-30000, 0, -30000, 0, 0, 0, &ds, &dt) && ds == 0 && dt == 0);
+
+	/* outside each side, by the next float and by far; ds and dt untouched */
+	ds = dt = 1234;
+	CHECK(!rm_lp_coords(nextafterf(16, 0), 0, 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(nextafterf(80, 100), 0, 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(20, nextafterf(-32, -100), 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(20, nextafterf(16, 100), 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(-1e6f, 0, 16, -32, 64, 48, &ds, &dt) && !rm_lp_coords(1e6f, 0, 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(20, -1e6f, 16, -32, 64, 48, &ds, &dt) && !rm_lp_coords(20, 1e6f, 16, -32, 64, 48, &ds, &dt));
+	CHECK(ds == 1234 && dt == 1234);
+
+	/* not finite, in either coordinate */
+	CHECK(!rm_lp_coords(NAN, 0, 16, -32, 64, 48, &ds, &dt) && !rm_lp_coords(20, NAN, 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(INFINITY, 0, 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(-INFINITY, 0, 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(20, INFINITY, 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(20, -INFINITY, 16, -32, 64, 48, &ds, &dt));
+
+	/* near and past INT_MAX with texturemins -30000, extents 0 (the wrap the security review built) */
+	CHECK(!rm_lp_coords(in, 0, -30000, 0, 0, 0, &ds, &dt) && !rm_lp_coords(0, in, 0, -30000, 0, 0, &ds, &dt));
+	CHECK(!rm_lp_coords(5e9f, 0, -30000, 0, 0, 0, &ds, &dt) && !rm_lp_coords(-in, 0, -30000, 0, 0, 0, &ds, &dt));
+	CHECK(!rm_lp_coords(-32768.5f, 0, -32768, 0, 32767, 0, &ds, &dt));
+	CHECK(rm_lp_coords(-1, 0, -32768, 0, 32767, 0, &ds, &dt) && ds == 32767 && dt == 0);
+
+	/* a negative extent holds no point */
+	ds = dt = 1234;
+	CHECK(!rm_lp_coords(16, 0, 16, 0, -1, 0, &ds, &dt) && !rm_lp_coords(16, 0, 16, 0, 0, -1, &ds, &dt));
+	CHECK(ds == 1234 && dt == 1234);
+}
+
+/*
  * gl1's LM_AllocBlock positions for a fixed sequence of sizes on one
  * block (the first spot with the lowest top, never in the last w
  * columns), the exact fit, the full block, and the slice change of
@@ -2019,6 +2073,7 @@ main(void)
 	test_surface_extents();
 	test_lm_size();
 	test_lm_samples();
+	test_lp_coords();
 	test_lm_alloc();
 	test_lm_regions();
 	test_lm_join();
