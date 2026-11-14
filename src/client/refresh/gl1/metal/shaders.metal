@@ -26,8 +26,9 @@
  *
  * One vertex function and one fragment function. The fixed-function
  * state that differs between draws (texture environment, alpha test)
- * is a uniform, not a function constant (design section 7); blending
- * and the colour mask are pipeline state.
+ * is a uniform, not a function constant (design section 8); blending
+ * and the colour mask are pipeline state. The texture environment of
+ * each unit is mgl_texenv_stage, the same source the host test runs.
  *
  * =======================================================================
  */
@@ -35,6 +36,8 @@
 #include <metal_stdlib>
 
 using namespace metal;
+
+#include "mgl_texenv.h"
 
 /* mgl_vertex_t in mgl_internal.h: 48 bytes. */
 struct mgl_vertex
@@ -45,22 +48,39 @@ struct mgl_vertex
 	float4 color;
 };
 
-/* mgl_uniforms_t in mgl_internal.h: 80 bytes. */
+/* mgl_uniforms_t in mgl_internal.h: 96 bytes. */
 struct mgl_uniforms
 {
 	float4x4 mvp;
 	float alpha_ref;
 	int alpha_func;     /* GL_NEVER .. GL_ALWAYS minus GL_NEVER */
-	int texenv0;        /* 0 none, 1 GL_REPLACE, 2 GL_MODULATE */
-	int tex_opaque0;    /* an RGB texture: GL_REPLACE keeps the fragment's alpha */
+	int texenv0;        /* MGL_TEXENV_* */
+	int tex_opaque0;    /* an RGB texture: GL_REPLACE keeps the previous alpha */
+	int texenv1;
+	int tex_opaque1;
+	float rgb_scale0;   /* GL_RGB_SCALE of GL_COMBINE */
+	float rgb_scale1;
 };
 
 struct mgl_varying
 {
 	float4 position [[position]];
 	float2 tc0;
+	float2 tc1;
 	float4 color;
 };
+
+static mgl_rgba_t
+mgl_rgba(float4 v)
+{
+	mgl_rgba_t c;
+
+	c.r = v.r;
+	c.g = v.g;
+	c.b = v.b;
+	c.a = v.a;
+	return c;
+}
 
 vertex mgl_varying
 mgl_vertex_main(uint vid [[vertex_id]],
@@ -75,6 +95,7 @@ mgl_vertex_main(uint vid [[vertex_id]],
 
 	out.position = p;
 	out.tc0 = v[vid].tc0;
+	out.tc1 = v[vid].tc1;
 	out.color = v[vid].color;
 	return out;
 }
@@ -99,22 +120,23 @@ fragment float4
 mgl_fragment_main(mgl_varying in [[stage_in]],
 		constant mgl_uniforms &u [[buffer(1)]],
 		texture2d<float> tex0 [[texture(0)]],
-		sampler smp0 [[sampler(0)]])
+		sampler smp0 [[sampler(0)]],
+		texture2d<float> tex1 [[texture(1)]],
+		sampler smp1 [[sampler(1)]])
 {
-	float4 c = saturate(in.color);
+	mgl_rgba_t c = mgl_rgba(saturate(in.color));
 
-	if (u.texenv0 != 0)
+	/* GL 1.4, section 3.8.13: unit 0 on the fragment's colour, unit 1 on unit 0's result */
+	if (u.texenv0 != MGL_TEXENV_NONE)
 	{
-		float4 t = tex0.sample(smp0, in.tc0);
+		c = mgl_texenv_stage(u.texenv0, u.tex_opaque0, u.rgb_scale0, c,
+				mgl_rgba(tex0.sample(smp0, in.tc0)));
+	}
 
-		if (u.texenv0 == 1)
-		{
-			c = float4(t.rgb, u.tex_opaque0 ? c.a : t.a);
-		}
-		else
-		{
-			c *= t;
-		}
+	if (u.texenv1 != MGL_TEXENV_NONE)
+	{
+		c = mgl_texenv_stage(u.texenv1, u.tex_opaque1, u.rgb_scale1, c,
+				mgl_rgba(tex1.sample(smp1, in.tc1)));
 	}
 
 	if (!mgl_alpha_pass(u.alpha_func, c.a, u.alpha_ref))
@@ -122,5 +144,5 @@ mgl_fragment_main(mgl_varying in [[stage_in]],
 		discard_fragment();
 	}
 
-	return c;
+	return float4(c.r, c.g, c.b, c.a);
 }

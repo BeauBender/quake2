@@ -38,6 +38,7 @@
 #include <stdint.h>
 
 #include "include/OpenGL/gl.h"
+#include "mgl_texenv.h"
 
 #ifndef MGL_RENDERER_SUFFIX
 #define MGL_RENDERER_SUFFIX "gl1-metal"
@@ -238,18 +239,18 @@ typedef struct
 	float color[4];
 } mgl_vertex_t;
 
-/* The uniform block of a draw (shaders.metal, struct mgl_uniforms): 80 bytes. */
-#define MGL_TEXENV_NONE 0
-#define MGL_TEXENV_REPLACE 1
-#define MGL_TEXENV_MODULATE 2
-
+/* The uniform block of a draw (shaders.metal, struct mgl_uniforms): 96 bytes. */
 typedef struct
 {
 	float mvp[16];                /* projection * modelview */
 	float alpha_ref;
 	int32_t alpha_func;           /* GL_NEVER .. GL_ALWAYS minus GL_NEVER; GL_ALWAYS when the test is off */
-	int32_t texenv0;              /* MGL_TEXENV_* */
+	int32_t texenv0;              /* MGL_TEXENV_* (mgl_texenv.h) */
 	int32_t tex_opaque0;
+	int32_t texenv1;
+	int32_t tex_opaque1;
+	float rgb_scale0;             /* GL_RGB_SCALE of GL_COMBINE: 1, 2 or 4 */
+	float rgb_scale1;
 } mgl_uniforms_t;
 
 /* Bounds of one draw: a GL_UNSIGNED_SHORT index reaches 65535. */
@@ -266,6 +267,8 @@ typedef struct
 	uint32_t pipeline_key;        /* mgl_pipeline_key */
 	void *texture0;               /* NULL when texenv0 is MGL_TEXENV_NONE */
 	uint32_t sampler0;
+	void *texture1;               /* NULL when texenv1 is MGL_TEXENV_NONE */
+	uint32_t sampler1;
 	uint64_t depth_stencil_key;   /* mgl_depth_stencil_key */
 	uint32_t stencil_ref;         /* clamped to the 8 stencil bits */
 	int cull;                     /* MGL_CULL_* */

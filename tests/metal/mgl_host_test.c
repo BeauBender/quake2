@@ -1170,6 +1170,269 @@ test_ring(void)
 static GLfloat big_vertices[2 * (MGL_MAX_DRAW_VERTICES + 1)];
 static GLushort big_elements[MGL_MAX_DRAW_INDICES + 1];
 
+static mgl_rgba_t
+rgba(float r, float g, float b, float a)
+{
+	mgl_rgba_t c;
+
+	c.r = r;
+	c.g = g;
+	c.b = b;
+	c.a = a;
+	return c;
+}
+
+static int
+same(mgl_rgba_t c, float r, float g, float b, float a)
+{
+	return c.r == r && c.g == g && c.b == b && c.a == a;
+}
+
+/*
+ * The blend of a pipeline key as GL 1.4, section 4.1.7 defines it, for
+ * the factors in mgl_blend_index's order: what Metal is asked to do,
+ * written out so the hand-worked values below can be checked against it.
+ */
+static float
+test_factor(int index, int ch, const float *s, const float *d)
+{
+	switch (index)
+	{
+		case 0: return 0.0f;
+		case 1: return 1.0f;
+		case 2: return s[ch];
+		case 3: return 1.0f - s[ch];
+		case 4: return s[3];
+		case 5: return 1.0f - s[3];
+		case 6: return d[3];
+		case 7: return 1.0f - d[3];
+		case 8: return d[ch];
+		case 9: return 1.0f - d[ch];
+		default: return ch == 3 ? 1.0f : (s[3] < 1.0f - d[3] ? s[3] : 1.0f - d[3]);
+	}
+}
+
+static mgl_rgba_t
+test_blend(uint32_t key, mgl_rgba_t src, mgl_rgba_t dst)
+{
+	float s[4] = {src.r, src.g, src.b, src.a}, d[4] = {dst.r, dst.g, dst.b, dst.a}, o[4];
+	int sf = (int)((key >> 1) & 15), df = (int)((key >> 5) & 15), ch;
+
+	if (!(key & 1))
+	{
+		return src;
+	}
+
+	for (ch = 0; ch < 4; ch++)
+	{
+		o[ch] = mgl_clamp01(s[ch] * test_factor(sf, ch, s, d) + d[ch] * test_factor(df, ch, s, d));
+	}
+
+	return rgba(o[0], o[1], o[2], o[3]);
+}
+
+/* The texture environment of one unit (mgl_texenv.h, which shaders.metal runs), by hand. */
+static void
+test_texenv(void)
+{
+	const mgl_rgba_t p = rgba(0.5f, 1.0f, 0.25f, 0.5f), t = rgba(0.75f, 0.25f, 1.0f, 0.5f);
+
+	CHECK(same(mgl_texenv_stage(MGL_TEXENV_NONE, 0, 4.0f, p, t), 0.5f, 1.0f, 0.25f, 0.5f));
+	/* REPLACE: the texel; an opaque (RGB) texture keeps the previous alpha */
+	CHECK(same(mgl_texenv_stage(MGL_TEXENV_REPLACE, 0, 1.0f, p, t), 0.75f, 0.25f, 1.0f, 0.5f));
+	CHECK(same(mgl_texenv_stage(MGL_TEXENV_REPLACE, 1, 1.0f, p, rgba(0.75f, 0.25f, 1.0f, 1.0f)),
+		0.75f, 0.25f, 1.0f, 0.5f));
+	CHECK(same(mgl_texenv_stage(MGL_TEXENV_REPLACE, 0, 1.0f, p, rgba(0, 0, 0, 0.125f)), 0, 0, 0, 0.125f));
+	/* MODULATE: the product, alpha too, never scaled */
+	CHECK(same(mgl_texenv_stage(MGL_TEXENV_MODULATE, 0, 4.0f, p, t), 0.375f, 0.25f, 0.25f, 0.25f));
+	/* COMBINE: the product times GL_RGB_SCALE, clamped; alpha unscaled */
+	CHECK(same(mgl_texenv_stage(MGL_TEXENV_COMBINE, 0, 1.0f, p, t), 0.375f, 0.25f, 0.25f, 0.25f));
+	CHECK(same(mgl_texenv_stage(MGL_TEXENV_COMBINE, 0, 2.0f, p, t), 0.75f, 0.5f, 0.5f, 0.25f));
+	CHECK(same(mgl_texenv_stage(MGL_TEXENV_COMBINE, 0, 4.0f, p, t), 1.0f, 1.0f, 1.0f, 0.25f));
+	CHECK(same(mgl_texenv_stage(MGL_TEXENV_COMBINE, 0, 4.0f, rgba(0.125f, 0.5f, 0.25f, 1), t),
+		0.375f, 0.5f, 1.0f, 0.5f));
+	CHECK(mgl_clamp01(-0.5f) == 0.0f && mgl_clamp01(1.5f) == 1.0f && mgl_clamp01(0.25f) == 0.25f);
+}
+
+/*
+ * The world as gl1 draws it, one texel of wall T and one of lightmap L:
+ * gl1_multitexture 1 is one draw, unit 0 GL_REPLACE with T and unit 1
+ * GL_MODULATE (GL_COMBINE with gl1_overbrightbits) with L
+ * (R_EnableMultitexture, R_ApplyGLBuffer); gl1_multitexture 0 draws T
+ * with GL_REPLACE, then L over it with blending (R_BlendLightmaps).
+ */
+static void
+test_world_units(void)
+{
+	static const GLfloat vtx[] = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+	static const GLfloat tc0[] = {0, 0, 1, 0, 0, 1};
+	static const GLfloat tc1[] = {0.25f, 0.5f, 0.75f, 0.5f, 0.25f, 1};
+	static const GLushort idx[] = {0, 1, 2};
+	static const unsigned char wall[4] = {191, 64, 255, 255}, light[4] = {128, 191, 64, 255};
+	static unsigned char block[4 * 4 * 4];
+	const mgl_rgba_t T = rgba(0.75f, 0.25f, 1.0f, 1.0f), L = rgba(0.5f, 0.75f, 0.25f, 1.0f);
+	const mgl_rgba_t white = rgba(1, 1, 1, 1), black = rgba(0, 0, 0, 1);
+	mgl_rgba_t c, dst;
+	int i;
+
+	mgl_state_reset();
+	mgl_textures_reset();
+
+	/* the wall on unit 0 (an RGB image), the lightmap on unit 1 (TEXNUM_LIGHTMAPS + 1, RGBA) */
+	glBindTexture(GL_TEXTURE_2D, 2000);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, wall);
+	glEnable(GL_TEXTURE_2D);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glActiveTexture(GL_TEXTURE1);
+	glClientActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, 1025);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, light);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glEnable(GL_TEXTURE_2D);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	glTexCoordPointer(2, GL_FLOAT, 0, tc1);
+	glActiveTexture(GL_TEXTURE0);
+	glClientActiveTexture(GL_TEXTURE0);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	glTexCoordPointer(2, GL_FLOAT, 0, tc0);
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glVertexPointer(3, GL_FLOAT, 0, vtx);
+	glColor4f(1, 1, 1, 1);
+
+	/* a name past the table on unit 1 is refused and leaves the lightmap bound */
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, MGL_MAX_TEXTURES);
+	CHECK(ERR() == GL_INVALID_VALUE && mgl_state.unit[1].bound == 1025 && mgl_state.unit[0].bound == 2000);
+	glActiveTexture(GL_TEXTURE0);
+
+	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, idx);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.nindices == 3);
+	CHECK(last_draw.u.texenv0 == MGL_TEXENV_REPLACE && last_draw.u.tex_opaque0 == 1 &&
+		last_draw.texture0 == mgl_texture(2000)->mtl && last_draw.sampler0 == mgl_sampler_key(mgl_texture(2000)));
+	CHECK(last_draw.u.texenv1 == MGL_TEXENV_MODULATE && last_draw.u.tex_opaque1 == 0 &&
+		last_draw.texture1 == mgl_texture(1025)->mtl && last_draw.sampler1 == mgl_sampler_key(mgl_texture(1025)));
+	CHECK(last_draw.texture0 != last_draw.texture1 && last_draw.sampler0 != last_draw.sampler1);
+	CHECK(last_draw.u.rgb_scale0 == 1.0f && last_draw.u.rgb_scale1 == 1.0f);
+	/* each unit its own coordinates */
+	CHECK(last_draw.vertices[1].tc[0][0] == 1 && last_draw.vertices[1].tc[1][0] == 0.75f &&
+		last_draw.vertices[2].tc[0][1] == 1 && last_draw.vertices[2].tc[1][1] == 1);
+
+	/* the fragment through both units, with the draw's uniforms: T * L */
+	c = mgl_texenv_stage(last_draw.u.texenv0, last_draw.u.tex_opaque0, last_draw.u.rgb_scale0, white, T);
+	c = mgl_texenv_stage(last_draw.u.texenv1, last_draw.u.tex_opaque1, last_draw.u.rgb_scale1, c, L);
+	CHECK(same(c, 0.375f, 0.1875f, 0.25f, 1.0f));
+
+	/* gl1_overbrightbits 2 and 4: GL_COMBINE on unit 1 */
+	glActiveTexture(GL_TEXTURE1);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+	glTexEnvi(GL_TEXTURE_ENV, GL_RGB_SCALE, 2);
+	glActiveTexture(GL_TEXTURE0);
+	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, idx);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.u.texenv1 == MGL_TEXENV_COMBINE &&
+		last_draw.u.rgb_scale1 == 2.0f && last_draw.u.rgb_scale0 == 1.0f);
+	c = mgl_texenv_stage(last_draw.u.texenv0, last_draw.u.tex_opaque0, last_draw.u.rgb_scale0, white, T);
+	c = mgl_texenv_stage(last_draw.u.texenv1, last_draw.u.tex_opaque1, last_draw.u.rgb_scale1, c, L);
+	CHECK(same(c, 0.75f, 0.375f, 0.5f, 1.0f));
+	glActiveTexture(GL_TEXTURE1);
+	glTexEnvi(GL_TEXTURE_ENV, GL_RGB_SCALE, 4);
+	glActiveTexture(GL_TEXTURE0);
+	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, idx);
+	c = mgl_texenv_stage(last_draw.u.texenv0, last_draw.u.tex_opaque0, last_draw.u.rgb_scale0, white, T);
+	c = mgl_texenv_stage(last_draw.u.texenv1, last_draw.u.tex_opaque1, last_draw.u.rgb_scale1, c, L);
+	CHECK(last_draw.u.rgb_scale1 == 4.0f && same(c, 1.0f, 0.75f, 1.0f, 1.0f));
+
+	/* what gl1 never sets: reported, drawn as the nearest it has */
+	glActiveTexture(GL_TEXTURE1);
+	glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_REPLACE);
+	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, idx);
+	CHECK(ERR() == GL_INVALID_OPERATION && last_draw.u.texenv1 == MGL_TEXENV_COMBINE);
+	glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
+	glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, idx);
+	CHECK(ERR() == GL_INVALID_OPERATION && last_draw.u.texenv1 == MGL_TEXENV_COMBINE);
+	glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_MODULATE);
+	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, idx);
+	CHECK(ERR() == GL_NO_ERROR);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_DECAL);
+	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, idx);
+	CHECK(ERR() == GL_INVALID_OPERATION && last_draw.u.texenv1 == MGL_TEXENV_MODULATE);
+
+	/* gl1_multitexture 0: unit 1 off (R_EnableMultitexture(false)) */
+	glDisable(GL_TEXTURE_2D);
+	glActiveTexture(GL_TEXTURE0);
+	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, idx);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.u.texenv1 == MGL_TEXENV_NONE && last_draw.texture1 == NULL);
+	CHECK(last_draw.pipeline_key == (15u << 9));
+	/* the first pass, R_DrawTextureChains: T, no blend, over whatever was there */
+	dst = test_blend(last_draw.pipeline_key,
+		mgl_texenv_stage(last_draw.u.texenv0, last_draw.u.tex_opaque0, last_draw.u.rgb_scale0, white, T), black);
+	CHECK(same(dst, 0.75f, 0.25f, 1.0f, 1.0f));
+
+	/* the lightmap pass, R_BlendLightmaps: L on unit 0, GL_ZERO, GL_SRC_COLOR, no depth write */
+	glBindTexture(GL_TEXTURE_2D, 1025);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_ZERO, GL_SRC_COLOR);
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_LEQUAL);
+	glDepthMask(GL_FALSE);
+	glDrawArrays(GL_TRIANGLE_FAN, 0, 3);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.texture0 == mgl_texture(1025)->mtl && last_draw.u.tex_opaque0 == 0);
+	CHECK(last_draw.pipeline_key == (1u | (0u << 1) | (2u << 5) | (15u << 9)));
+	CHECK(last_draw.depth_stencil_key == (1u | ((uint64_t)(GL_LEQUAL - GL_NEVER) << 1)));
+	c = test_blend(last_draw.pipeline_key,
+		mgl_texenv_stage(last_draw.u.texenv0, last_draw.u.tex_opaque0, last_draw.u.rgb_scale0, white, L), dst);
+	/* the same as one multitextured draw */
+	CHECK(same(c, 0.375f, 0.1875f, 0.25f, 1.0f));
+
+	/* with gl1_overbrightbits 2, GL_COMBINE on unit 0: T * clamp(2 L), not clamp(2 T L) as above */
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+	glTexEnvi(GL_TEXTURE_ENV, GL_RGB_SCALE, 2);
+	glDrawArrays(GL_TRIANGLE_FAN, 0, 3);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.u.texenv0 == MGL_TEXENV_COMBINE && last_draw.u.rgb_scale0 == 2.0f);
+	c = test_blend(last_draw.pipeline_key,
+		mgl_texenv_stage(last_draw.u.texenv0, last_draw.u.tex_opaque0, last_draw.u.rgb_scale0, white, L), dst);
+	CHECK(same(c, 0.75f, 0.25f, 0.5f, 1.0f));
+
+	/* gl1_saturatelighting 1: GL_ONE, GL_ONE adds, clamped */
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+	glBlendFunc(GL_ONE, GL_ONE);
+	glDrawArrays(GL_TRIANGLE_FAN, 0, 3);
+	CHECK(last_draw.pipeline_key == (1u | (1u << 1) | (1u << 5) | (15u << 9)));
+	c = test_blend(last_draw.pipeline_key,
+		mgl_texenv_stage(last_draw.u.texenv0, last_draw.u.tex_opaque0, last_draw.u.rgb_scale0, white, L), dst);
+	CHECK(same(c, 1.0f, 1.0f, 1.0f, 1.0f));
+	c = test_blend(last_draw.pipeline_key, rgba(0.125f, 0.25f, 0, 0), rgba(0.25f, 0.5f, 0.5f, 0.5f));
+	CHECK(same(c, 0.375f, 0.75f, 0.5f, 0.5f));
+	/* and gl1's default blend, for the pass after it */
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDrawArrays(GL_TRIANGLE_FAN, 0, 3);
+	c = test_blend(last_draw.pipeline_key, rgba(1, 0, 0.5f, 0.25f), rgba(0, 1, 0.5f, 1));
+	CHECK(same(c, 0.25f, 0.75f, 0.5f, 0.8125f));
+
+	/*
+	 * A dynamic lightmap, R_UpdateGLBuffer: a sub-rectangle of the 4 x 4
+	 * block written from the block's own buffer with GL_UNPACK_ROW_LENGTH.
+	 */
+	for (i = 0; i < (int)sizeof(block); i++)
+	{
+		block[i] = (unsigned char)i;
+	}
+
+	glBindTexture(GL_TEXTURE_2D, 1024);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, block);
+	glPixelStorei(GL_UNPACK_ROW_LENGTH, 4);
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 1, 2, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, block + (2 * 4 + 1) * 4);
+	glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+	CHECK(ERR() == GL_NO_ERROR && last_up_x == 1 && last_up_y == 2 && last_up_w == 2 && last_up_h == 2);
+	/* rows of the block: (1, 2) (2, 2) then (1, 3) (2, 3) */
+	CHECK(last_up_rgba[0] == 36 && last_up_rgba[4] == 40 && last_up_rgba[8] == 52 && last_up_rgba[15] == 59);
+
+	glDisable(GL_BLEND);
+	glDisable(GL_DEPTH_TEST);
+	glDepthMask(GL_TRUE);
+}
+
 static void
 test_draw(void)
 {
@@ -1346,18 +1609,18 @@ test_draw(void)
 	CHECK(mgl_triangle_indices(GL_TRIANGLE_FAN, 5, NULL, (uint16_t *)big_elements, 8) == -1);
 	CHECK(mgl_triangle_indices(GL_POINTS, 5, NULL, (uint16_t *)big_elements, 99) == -1);
 
-	/* state later cards draw: drawn without it, the sticky error set */
+	/* unit 1 enabled with nothing bound (texture 0, no storage): drawn as if it were off, no error */
 	i = draws;
 	glActiveTexture(GL_TEXTURE1);
 	glEnable(GL_TEXTURE_2D);
 	glDrawArrays(GL_TRIANGLES, 0, 3);
-	CHECK(ERR() == GL_INVALID_OPERATION && draws == i + 1);
+	CHECK(ERR() == GL_NO_ERROR && draws == i + 1 && last_draw.u.texenv1 == MGL_TEXENV_NONE &&
+		last_draw.texture1 == NULL && last_draw.sampler1 == 0);
 	glDisable(GL_TEXTURE_2D);
 	glActiveTexture(GL_TEXTURE0);
-	glDrawArrays(GL_TRIANGLES, 0, 3);
-	CHECK(ERR() == GL_NO_ERROR && draws == i + 2);
 
 	test_draw_state();
+	test_world_units();
 }
 
 int
@@ -1371,6 +1634,7 @@ main(void)
 	test_readback_convert();
 	test_unpack();
 	test_textures();
+	test_texenv();
 	test_draw();
 	test_ring();
 
