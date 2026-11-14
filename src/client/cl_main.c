@@ -696,7 +696,7 @@ CL_WriteConfiguration(void)
 	char path[MAX_OSPATH];
 
 	/* Pin harness: a pin run never reads or rewrites config.cfg */
-	if ((cls.state == ca_uninitialized) || (CL_PinsCapture() > 0))
+	if ((cls.state == ca_uninitialized) || CL_PinsRun())
 	{
 		return;
 	}
@@ -875,6 +875,65 @@ CL_PinsFrame(void)
 	Cbuf_AddText("quit\n");
 }
 
+/*
+ * Pin harness replay (pins_replay, docs/plans/refapi-record-replay.md
+ * section 4): CL_Init opens the trace once the renderer is loaded, and
+ * from then on Qcommon_Frame calls CL_PinsReplay instead of the server and
+ * CL_Frame, so no server, demo, sound or input runs. Each call feeds one
+ * recorded frame to the renderer; the captures happen inside it, where the
+ * trace marks them. After the last frame the engine quits; a trace that
+ * cannot be opened or is refused part way ends it with an error.
+ */
+static qboolean pins_replaying;
+
+void
+CL_PinsReplayStart(void)
+{
+	if (!CL_PinsReplayRequested())
+	{
+		return;
+	}
+
+	if (!CL_PinsReplayPath()[0])
+	{
+		Com_Error(ERR_FATAL, "pins: pins_replay was refused (it needs pins_dir, not pins_record)\n");
+	}
+
+	if (!VID_OpenReplay(CL_PinsReplayPath()))
+	{
+		Com_Error(ERR_FATAL, "pins: cannot replay %s\n", CL_PinsReplayPath());
+	}
+
+	pins_replaying = true;
+}
+
+qboolean
+CL_PinsReplaying(void)
+{
+	return pins_replaying;
+}
+
+void
+CL_PinsReplay(void)
+{
+	int r = VID_ReplayFrame();
+
+	if (r > 0)
+	{
+		return;
+	}
+
+	pins_replaying = false;
+	VID_CloseReplay();
+
+	if (r < 0)
+	{
+		Com_Error(ERR_FATAL, "pins: the replay of %s was refused\n", CL_PinsReplayPath());
+	}
+
+	Com_Quit();
+}
+
 void
 CL_Frame(int packetdelta, int renderdelta, int timedelta, qboolean packetframe, qboolean renderframe)
 {
@@ -1036,6 +1095,9 @@ CL_Init(void)
 	SCR_Init();
 
 	VID_Init();
+
+	/* pins_replay: the trace is checked against the loaded renderer */
+	CL_PinsReplayStart();
 
 	IN_Init();
 
