@@ -18,3 +18,4 @@ them (record 0004); one becomes a record here when it is settled.
 | [0005](0005-push-identity-hook.md) | Keep the working machine's identity out of what is published: a push hook and gate checks |
 | [0006](0006-port-first.md) | Port first: review depth by path, stacked shim cards, parked non-port cards |
 | [0007](0007-pr-evidence-frames.md) | Rendered frames and short clips may be published as pull-request evidence |
+| [0008](0008-apple-platforms-only.md) | Apple platforms only: Linux test builds dropped, other platforms unmaintained |
