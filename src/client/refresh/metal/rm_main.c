@@ -176,6 +176,18 @@ RM_Close(void)
 	R_Printf(PRINT_ALL, "%s\n", line);
 }
 
+/* gl1's RI_BeginFrame clears these six together once R_TextureMode ran */
+static void
+RM_ClearTextureModeFlags(void)
+{
+	gl_texturemode->modified = false;
+	gl_anisotropic->modified = false;
+	gl_nolerp_list->modified = false;
+	r_lerp_list->modified = false;
+	r_2D_unfiltered->modified = false;
+	r_videos_unfiltered->modified = false;
+}
+
 static qboolean
 RI_Init(void)
 {
@@ -220,9 +232,8 @@ RI_Init(void)
 		return false;
 	}
 
-	R_InitImages();
-	gl_texturemode->modified = false;
-	gl_anisotropic->modified = false;
+	R_InitImages();   /* runs R_TextureMode: the flags RI_BeginFrame tests start clear */
+	RM_ClearTextureModeFlags();
 
 	ri.Vid_MenuInit();
 	return true;
@@ -252,12 +263,17 @@ RI_BeginFrame(float camera_separation)
 		rmb_set_vsync(r_vsync->value != 0);
 	}
 
-	/* gl1's RI_BeginFrame: the sampler table follows the mode, between frames */
-	if (gl_texturemode->modified || gl_anisotropic->modified)
+	/*
+	 * gl1's RI_BeginFrame: the sampler table follows the mode, and each
+	 * image's sampler the lists and r_2D_unfiltered, between frames (gl1
+	 * also tests r_videos_unfiltered, which RDraw_StretchRaw reads per call)
+	 */
+	if (gl_texturemode->modified || gl_anisotropic->modified
+		|| gl_nolerp_list->modified || r_lerp_list->modified
+		|| r_2D_unfiltered->modified || r_videos_unfiltered->modified)
 	{
 		R_TextureMode(gl_texturemode->string);
-		gl_texturemode->modified = false;
-		gl_anisotropic->modified = false;
+		RM_ClearTextureModeFlags();
 	}
 
 	/*
