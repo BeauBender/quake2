@@ -780,7 +780,7 @@ Left for N3: drawing pics and characters (`DrawPicScaled`,
 the scrap and its uploads, `Draw_InitLocal` (conchars), gl1's buffered
 2D quads (`R_Buffer2DQuad`) and with them the texture environment
 `GL_MODULATE` for coloured pics; the built-in textures (`r_notexture`,
-the particle texture) with N3 and N9. After a split the next pass is a
+the particle texture) with N4 and N9 (section 18). After a split the next pass is a
 2D pass; reopening a 3D pass there (with its depth kept) is owed by the
 first card that rewrites a texture inside the 3D pass (N5).
 
