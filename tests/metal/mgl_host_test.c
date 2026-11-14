@@ -1251,6 +1251,9 @@ test_texenv(void)
 	CHECK(same(mgl_texenv_stage(MGL_TEXENV_COMBINE, 0, 4.0f, p, t), 1.0f, 1.0f, 1.0f, 0.25f));
 	CHECK(same(mgl_texenv_stage(MGL_TEXENV_COMBINE, 0, 4.0f, rgba(0.125f, 0.5f, 0.25f, 1), t),
 		0.375f, 0.5f, 1.0f, 0.5f));
+	/* each channel clamped on its own */
+	CHECK(same(mgl_texenv_stage(MGL_TEXENV_COMBINE, 0, 4.0f, rgba(1, 1, 1, 1), rgba(0.5f, 0.375f, 0.75f, 1)),
+		1.0f, 1.0f, 1.0f, 1.0f));
 	CHECK(mgl_clamp01(-0.5f) == 0.0f && mgl_clamp01(1.5f) == 1.0f && mgl_clamp01(0.25f) == 0.25f);
 }
 
