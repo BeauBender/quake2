@@ -7,7 +7,7 @@ ships with releases; `docs/` (this directory) is for working on the code.
 
 - `CLAUDE.md` (also `AGENTS.md`): build commands, the gate, architecture,
   security boundaries and the working rules for agents.
-- `scripts/setup.sh`: checks the toolchain and wires the commit hook.
+- `scripts/setup.sh`: checks the toolchain and wires the commit and push hooks.
 - `scripts/test.sh`: the gate. Every commit must pass it. It ends with `make test`, the unit-test suite.
 
 ## Source (`src/`)
@@ -41,6 +41,6 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | `scripts/coverage.sh`, `scripts/coverage-floor` | Line coverage of the suite with the compiler's own tools, and the floor it must not drop below |
 | `stuff/` | Maintainer tools: savegame table generators (`fngen/`, `mmgen/`), map entity fixes (`mapfixes/`), icons, the Dockerfile and the uncrustify style file (`misc/`) |
 | `.claude/` | Agent configuration: settings and hooks, path-scoped rules (`rules/`), skills (`skills/`), shared memory (`memory/`) |
-| `.githooks/` | The commit hook, wired by `scripts/setup.sh` |
+| `.githooks/` | The commit hook and the push hook (refuses a ref name or commit message carrying the working machine's host name, user name or home path), wired by `scripts/setup.sh`; see [decision 0005](decisions/0005-push-identity-hook.md) |
 | `.github/` | CI workflows, the PR template, the `main` branch ruleset |
 | `CHANGELOG` | Upstream release notes, updated per release |

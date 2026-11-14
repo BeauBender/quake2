@@ -432,7 +432,7 @@ cmd_list() {
         awk -F/ '{print $1"/"$2"/"$3}' | sort | uniq -c
 }
 
-# ---- evidence (TASK73; docs/decisions/0005) ---------------------------------
+# ---- evidence (TASK73; docs/decisions/0007) ---------------------------------
 # evidence writes, from frames already in the store, a side-by-side still of
 # the worst-scoring frame, a short clip as animated PNG and GIF, and a
 # manifest, into <evidence>/<card>-<commit>-<renderer>-<scenario>/, where

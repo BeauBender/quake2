@@ -14,7 +14,7 @@ on the machine that made it. The one exception is evidence for a pull
 request: a scaled still and a short clip rendered from two pins, which
 `scripts/pins.sh evidence-publish` may upload (see *Evidence for a pull
 request* below and decision record
-[0005](../docs/decisions/0005-pr-evidence-frames.md)). These pins are not the unit-test pins of
+[0007](../docs/decisions/0007-pr-evidence-frames.md)). These pins are not the unit-test pins of
 [Unit Tests, Pins And Coverage](085_unittests.md), which are committed
 text files and need no game data.
 
@@ -159,6 +159,24 @@ build host it reads `Apple Software Renderer`. In this mode the renderer
 does not wait for the display to sync, as that wait does not end on a
 host that never shows the window. A machine where the accelerated
 request succeeds is not affected.
+
+### Recording the gl1 references
+
+A reference is a `gl1` record of each scenario, made once per engine
+commit on a machine where `ref_gl1` renders:
+
+```sh
+for s in world hud2d models particles; do scripts/pins.sh record gl1 $s; done
+PINS_DEMO=water.dm2 scripts/pins.sh record gl1 skywater   # after make-demo water
+PINS_DEMO=idlog.cin PINS_EVERY=7 scripts/pins.sh record gl1 cinematic
+```
+
+To know how much two `gl1` records differ by themselves, record a scenario
+a few times (`--run 2`, `--run 3`) and compare them with each other as
+shown under *Comparing*. `soft` and `gl1` do not draw the same picture
+(palette against true colour, filtering, lighting), so a candidate is
+judged against `gl1`, not `soft`. The measured numbers, the host and the
+renderer string are in `docs/plans/metal-port-harness.md`.
 
 ## Comparing
 

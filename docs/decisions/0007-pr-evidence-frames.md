@@ -1,4 +1,4 @@
-# 0005. Rendered frames and short clips may be published as pull-request evidence
+# 0007. Rendered frames and short clips may be published as pull-request evidence
 
 Status: accepted by the owner 2026-11-13; landed as TASK73 (#163).
 
