@@ -7,30 +7,38 @@
 # sub/.claude/memory/x), including a symbolic link or a submodule at that
 # path; when the index holds a gitlink anywhere (mode 160000: a submodule,
 # or a clone made inside a checkout and staged as an embedded repository,
-# whose path would name what was cloned; this repository has none); when a
-# file created at .claude/memory/ would not be ignored by the top-level
-# .gitignore itself (a rule only in .git/info/exclude, a global ignore file
-# or a nested .gitignore does not count); or when git, tr or grep fails or
-# the script is interrupted (nothing is counted as clean then). Memory is
-# kept in the owner's private store (see CLAUDE.md), never in a commit.
+# whose path would name what was cloned; this repository has none); unless
+# the top-level .gitignore itself ignores .claude/memory/ as a directory,
+# that is, the rule that decides a file there is .claude/memory (with an
+# optional leading and/or trailing /), so git excludes the directory and
+# no later rule can re-include a file in it (a rule only in
+# .git/info/exclude, a global ignore file or a nested .gitignore does not
+# count, nor does one that ignores only some files there, such as
+# .claude/memory/*.md, or .claude/memory/* with a negation after it, nor
+# one that ignores all of .claude/); or when git, tr or grep fails or the
+# script is interrupted (nothing is counted as clean then). Memory is kept
+# in the owner's private store (see CLAUDE.md), never in a commit.
 #
 # The self-test runs first, in a subshell with the GIT_* repository
 # variables, GIT_DEFAULT_HASH and GIT_TEMPLATE_DIR unset, no global or
 # system configuration, and HOME and XDG_CONFIG_HOME inside a private
 # mktemp -d, on throwaway repositories there. It shows the check fails on
 # each spelling above, on a symlink and a submodule at .claude/memory, on a
-# nested clone staged with add -A, on a missing ignore rule, on negated rules that leave memory
-# files not ignored, and on one only
-# in .git/info/exclude, a global ignore file or .claude/.gitignore, outside
-# a repository, and when ls-files, ls-files -s, check-ignore, tr or either
-# grep alone fails (a shim first on PATH); and that it passes on a clean
-# repository, also when a global ignore file or .git/info/exclude lists
-# .claude/. The real check then reads the index git hands it.
+# nested clone staged with add -A, on a missing ignore rule, on negated or
+# narrower rules that leave memory files not ignored (.claude/memory/*.md,
+# .claude/memory/probe.md, .claude/memory/* with a negation after it), on
+# a rule only in .git/info/exclude, a global ignore file or
+# .claude/.gitignore, outside a repository, when ls-files, ls-files -s,
+# check-ignore, tr or either grep alone fails (a shim first on PATH); and
+# that it passes on a clean repository, also when a global ignore file or
+# .git/info/exclude lists .claude/. The real check then reads the index git
+# hands it.
 #
 # Usage: tests/check-no-tracked-memory.sh
 set -eu
 CDPATH='' cd "$(dirname "$0")/.."
 me=check-no-tracked-memory
+tab=$(printf '\t')
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/nomem.XXXXXX")
 chmod 700 "${tmp:?}"
 # Absolute, so a relative TMPDIR is not resolved again against a -C directory.
@@ -116,18 +124,26 @@ check()
 	esac
 	# -v prints "<source>:<line>:<pattern><TAB><path>" and exits 0 also when
 	# the deciding pattern is a negation, which means "not ignored".
-	pat=${rule#*:}
-	pat=${pat#*:}
-	case "$pat" in
-	'!'*)
-		echo "$me: .claude/memory/ is re-included by a negated pattern in .gitignore; it must be ignored" >&2
-		return 1
-		;;
-	esac
 	case "$rule" in
 	.gitignore:*) ;;
 	*)
 		echo "$me: .claude/memory/ is ignored only by a nested .gitignore; add .claude/memory to the top-level .gitignore" >&2
+		return 1
+		;;
+	esac
+	# The probe names one file, so a rule that ignores only some files
+	# (.claude/memory/*.md, or .claude/memory/* with a negation after it)
+	# could decide it. Only the directory rule itself counts: git then
+	# excludes the whole directory, and no later rule can re-include a file
+	# in it. The path holds no TAB, so the last TAB ends the pattern.
+	line=${rule#*:}
+	pat=${line#*:}
+	line=${line%%:*}
+	pat=${pat%"$tab"*}
+	case "$pat" in
+	.claude/memory | /.claude/memory | .claude/memory/ | /.claude/memory/) ;;
+	*)
+		echo "$me: the rule that decides .claude/memory/probe.md (.gitignore line $line) is not the directory rule .claude/memory this check requires (a narrower or negated rule can leave files there unignored); add .claude/memory to .gitignore" >&2
 		return 1
 		;;
 	esac
@@ -262,6 +278,24 @@ selftest()
 	git -C "${tmp:?}/negmem" init -q .
 	printf '%s\n' '.claude/memory/*' '!.claude/memory/*.md' > "${tmp:?}/negmem/.gitignore"
 	expect_reject negmem "a negated rule re-including .claude/memory/*.md"
+
+	# Rules that ignore the probed name but leave other memory files
+	# unignored.
+	# partial <name> <line>...: a repository whose .gitignore holds <line>s.
+	partial()
+	{
+		mkdir -p "${tmp:?}/$1"
+		git -C "${tmp:?}/$1" init -q .
+		d=$1
+		shift
+		printf '%s\n' "$@" > "${tmp:?}/$d/.gitignore"
+	}
+	partial negone '.claude/memory/*' '!.claude/memory/MEMORY.md'
+	expect_reject negone "a .claude/memory/* rule with MEMORY.md re-included"
+	partial mdonly '.claude/memory/*.md'
+	expect_reject mdonly "a rule ignoring only .claude/memory/*.md"
+	partial probeonly '.claude/memory/probe.md'
+	expect_reject probeonly "a rule ignoring only .claude/memory/probe.md"
 
 	mkdir -p "${tmp:?}/notarepo"
 	expect_reject notarepo "a git failure (not a repository)"

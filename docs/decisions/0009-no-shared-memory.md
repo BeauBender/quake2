@@ -57,9 +57,13 @@ is tracked. Agent memory is persisted outside the repository, as
 is not rewritten.
 
 The check also refuses any embedded repository (a gitlink, mode 160000,
-anywhere in the index) and requires the ignore rule to be in the top-level
-`.gitignore` itself; a rule only in `.git/info/exclude`, a global ignore
-file or a nested `.gitignore`, or a rule undone by a later negated pattern,
-does not count. The Consequences bullet above, that memory writes still
-change tracked files in the working tree, no longer applies once a checkout
-has this change: nothing under `.claude/memory/` is tracked.
+anywhere in the index) and requires the top-level `.gitignore` itself to
+ignore `.claude/memory/` as a directory: the rule that decides a file there
+must be the directory rule `.claude/memory` (with an optional leading or
+trailing `/`), so that no later rule can re-include a file in it. A rule
+only in `.git/info/exclude`, a global ignore file or a nested `.gitignore`
+does not count, nor does a narrower one such as `.claude/memory/*.md`, or
+`.claude/memory/*` with a negated pattern after it. The Consequences
+bullet above, that memory writes still change tracked files in the
+working tree, no longer applies once a checkout has this change: nothing
+under `.claude/memory/` is tracked.
