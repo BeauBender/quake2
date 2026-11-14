@@ -569,3 +569,113 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
 - **Not covered.** No static assert ties the C uniform struct to the
   shader's (follow-up), and no scenario pins `GL_COMBINE` because
   overbright defaults to off.
+
+## 11. As built by TASK51 (S5, models): departures from section 2
+
+- **Nothing was left to draw.** `gl1-metal` recorded on main (`d1c2ed53`,
+  before any TASK51 change) of `models` and of three scratch copies of it
+  (shadows with `gl1_stencilshadow` 0 and 1, and `cl_lights 1` with
+  `gl1_flashblend 1`) printed no "not implemented" line, and the
+  `ASAN=1 UBSAN=1` build, where gl1 reads `glGetError` after every draw,
+  texture call and pointer call (`glCheckError_` in `gl1_main.c`, DEBUG
+  builds only), printed no `glError` line. Every call of the model path
+  was already there from S1 to S3:
+  - `buf_alias` (`R_ApplyGLBuffer`): `glColorPointer(4, GL_UNSIGNED_BYTE)`
+    is normalised by `mgl_fetch` (byte / 255) into the vertex colour,
+    which `GL_MODULATE` multiplies with the skin; `RF_SHELL_*` turns the
+    unit off (the colours alone), `RF_TRANSLUCENT` blends them.
+  - The view weapon: the projection pushed, `glScalef(-1, 1, 1)` for
+    `gl_lefthand 1`, the weapon frustum and the pop are the CPU stacks
+    (`glScalef` and `glFrustum` multiply the top, so P = S F); the cull
+    swap to `GL_BACK` reaches `setCullMode:`; `RF_DEPTHHACK`'s
+    `glDepthRange(gldepthmin, gldepthmin + 0.3 (gldepthmax - gldepthmin))`
+    (gl1 computes 0 .. 0.3 on the CPU) is the Metal viewport's `znear`
+    and `zfar` as given, because the vertex function maps GL's clip depth
+    z in [-w, w] to (z + w) / 2 in [0, w], which gives the same window
+    depth n + (f - n) (z / w + 1) / 2 for any range.
+  - `buf_flash` (`R_RenderDlights`): untextured, the colour array,
+    `GL_ONE, GL_ONE`, `glDepthMask(GL_FALSE)`: pipeline and depth keys.
+  - `buf_shadow` (`R_DrawAliasShadow`): the current colour (0, 0, 0, 0.5)
+    blended; with `gl1_stencilshadow 1`, `R_Clear` clears the stencil to
+    1 (`glClearStencil(1)`, the pass's `clearStencil`), and
+    `glStencilFunc(GL_EQUAL, 1, 2)` with `glStencilOp(GL_KEEP, GL_KEEP,
+    GL_INCR)` becomes a cached `MTLDepthStencilState` on the
+    `depth32Float_stencil8` attachment (both faces, read mask 2, write
+    mask 255, `MTLStencilOperationIncrementClamp`) with reference 1. The
+    first shadow fragment on a pixel passes ((1 & 2) == (1 & 2)) and
+    makes it 2, a second fails ((1 & 2) != (2 & 2)), so overlapping
+    shadow triangles darken once. `SDL_GL_GetAttribute(SDL_GL_STENCIL_SIZE)`
+    answers 8, so gl1 keeps `gl_state.stencil` on.
+  - The debug bounding box (`gl_showbbox`): `glPolygonMode(GL_LINE)` is
+    `setTriangleFillMode:` lines, the strip expanded in GL's order.
+- **Shared clip depth.** The mapping moved from `shaders.metal` into
+  `mgl_gl_clip_z` in `mgl_texenv.h`, so the host test runs the source the
+  vertex function runs; the arithmetic is unchanged.
+- **Stencil applied on frames.** Switching `gl1_stencilshadow` from 0 to
+  1 (with `r_shadows 1`) changes 574 pixels over 11 of 23 frames in
+  `gl1-metal` and 635 over 11 frames in `gl1`, in the same boxes, each
+  about twice as bright (luminance 9.8 to 20.0 in `gl1-metal` and 9.8 to
+  19.9 in `gl1` on frame 0): the double-darkened overlaps of the shadow
+  become single. Frame 7 is left out of these counts (an explosion
+  sprite with a random frame differs run to run there). `r_shadows 1`
+  itself darkens 8,998 pixels over 17 frames in `gl1-metal`.
+- **Flat shading is not modelled** (section 5): `glShadeModel` is
+  checked and stored, and every draw interpolates. Its call sites are
+  `gl1_buffer.c` 123 (`GL_SMOOTH`, alias) and 256 (`GL_FLAT`),
+  `gl1_light.c` 87 (`GL_SMOOTH`, flash blobs), `gl1_mesh.c` 692 and
+  `gl1_misc.c` 195 (`GL_FLAT`). It changes no pixel gl1 draws: the alias
+  models and the blobs are drawn under `GL_SMOOTH`; under `GL_FLAT` gl1
+  draws only constant-colour geometry (shadows, sprites, beams, the
+  world) and particles whose three vertices carry one colour. Nothing
+  else of the model path is deferred.
+- **Host test.** `test_models` in `tests/metal/mgl_host_test.c` follows
+  gl1's calls for the left-handed weapon (an asymmetric frustum, so the
+  order of mirror and frustum shows; clip coordinates and the 0.225
+  window depth worked by hand), the right-handed model, shells and
+  translucency, the blobs, the shadow without and with the stencil (a
+  GL 1.4 stencil interpreter of the key: darkening 0.8 to 0.4 to 0.2
+  without it, 0.8 to 0.4 with it, the depth-fail case and the clamp at
+  255), the bounding box, and the projection stack to its last push and
+  the first overflow. Each mutant below is one changed line in a scratch
+  copy; the host test is built as `tests/check-metal-shim.sh` builds it
+  (ASAN, UBSAN), once whole and once with `main` calling `test_models`
+  alone, and all 28 are killed both ways. The lines are those of the
+  failing `CHECK`s of `test_models` in the file as committed.
+
+| Mutant | File | `test_models` alone fails at |
+|---|---|---|
+| clip depth not shifted | mgl_texenv.h | lines 1590 1593 1595 |
+| clip depth not halved | mgl_texenv.h | lines 1590 1593 1595 |
+| depth range far ignored | mgl_raster.c | line 1593 |
+| glScalef drops x | mgl_state.c | lines 1589 1598 |
+| matrix product reversed | mgl_state.c | lines 1589 1598 |
+| push depth of the other stack | mgl_state.c | lines 1574 1589 1590 1593 |
+| push overflow one late | mgl_state.c | lines 1750 1752 1760 |
+| pop of the other stack | mgl_state.c | lines 1617 1747 1760 1762 |
+| pop underflow not caught | mgl_state.c | line 1762 |
+| glCullFace not stored | mgl_state.c | line 1576 |
+| byte colour array refused | mgl_state.c | line 1572, then a sanitizer report at the draw |
+| stencil reference not stored | mgl_state.c | line 1690 |
+| depth mask always on | mgl_state.c | line 1650 |
+| polygon mode front from GL_BACK | mgl_state.c | line 1730 |
+| byte colours over 256 | mgl_draw.c | lines 1601 1652 |
+| colour array ignored | mgl_draw.c | lines 1601 1652 |
+| strip odd triangles not swapped | mgl_draw.c | line 1733 |
+| blend destination in the source field | mgl_draw.c | lines 1631 1633 1649 1654 |
+| depth write without the mask | mgl_draw.c | line 1650 |
+| stencil test bit lost | mgl_draw.c | lines 1692 1705 1708 1711 |
+| stencil pass op in the depth-fail field | mgl_draw.c | lines 1692 1705 1708 1711 |
+| stencil read mask shifted | mgl_draw.c | lines 1692 1705 1713 |
+| texture unit enable ignored | mgl_draw.c | lines 1630 1648 1730 |
+| cull always on | mgl_draw.c | line 1730 |
+| cull swap lost | mgl_draw.c | line 1576 |
+| line fill lost | mgl_draw.c | line 1730 |
+| mvp reversed | mgl_draw.c | lines 1589 1590 1593 1598 |
+| mvp from the bottom of the projection stack | mgl_draw.c | line 1598 |
+
+- **Against the `gl1` references** see `docs/plans/metal-port-harness.md`,
+  "The `models` scenario against the software renderer (TASK51)": the
+  faults of Apple's software renderer that TASK49 found (the screen
+  flash drawn as a wedge, polygons crossing the screen edge dropped or
+  garbled) reach the view weapon and close brush entities too, so
+  `models` does not pass there at the defaults; no threshold was changed.
