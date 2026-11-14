@@ -14,10 +14,11 @@
 #   scripts/agent-memory.sh push [--] <memory-dir>
 #
 # Both keep a clone of the store under
-# ${XDG_CACHE_HOME:-$HOME/.cache}/agents/memory-store/<hash> (mode 700; the
-# directory is named by the first 16 hex digits of the SHA-256 of owner/name,
-# never by the name). The clone's own history is the merge base: its HEAD is
-# the last state this machine synced. Every run
+# ${XDG_CACHE_HOME:-$HOME/.cache}/agents/memory-store/<hash> (mode 700), one
+# per memory directory: <hash> is the first 16 hex digits of the SHA-256 of
+# owner/name and the memory directory's absolute path, never the name. The
+# clone's own history is the merge base: its HEAD is the last state this
+# memory directory synced. Every run
 #   1. copies <memory-dir>/*.md (regular files only) into quake2/memory/ of
 #      the clone, stages only those files and commits them on top of the last
 #      synced state;
@@ -244,8 +245,10 @@ root=$cache/agents/memory-store
 private_dir "$root"
 chmod 700 "$root" 2>/dev/null || die "cannot make the store cache directory private"
 
-h=$(printf '%s' "$slug" | shasum -a 256 2>/dev/null) ||
-	h=$(printf '%s' "$slug" | sha256sum 2>/dev/null) ||
+# One clone per store and memory directory: the clone's HEAD is the merge
+# base, so two memory directories must never share one.
+h=$(printf '%s\n%s' "$slug" "$memdir" | shasum -a 256 2>/dev/null) ||
+	h=$(printf '%s\n%s' "$slug" "$memdir" | sha256sum 2>/dev/null) ||
 	die "cannot hash the store name (shasum or sha256sum is needed)"
 h=$(printf '%s' "$h" | cut -c1-16)
 case "$h" in
