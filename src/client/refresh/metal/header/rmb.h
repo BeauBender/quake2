@@ -116,11 +116,18 @@ int rm_stats_format(const rmb_stats_t *s, const rm_ledger_t *l, char *buf, size_
 /* The device and the queue, and the capabilities. 0 with err filled on failure. */
 int rmb_open(rmb_caps_t *caps, char *err, size_t errlen);
 
-/* The SDL Metal view and its CAMetalLayer on the SDL_Window. 0 with err on failure. */
-int rmb_attach(void *sdl_window, int vsync, char *err, size_t errlen);
+/*
+ * Takes the CAMetalLayer of the SDL Metal view (SDL_Metal_GetLayer, made
+ * by rm_sdl.c, which owns the view; the back end includes no SDL).
+ * 0 with err on failure.
+ */
+int rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen);
 
-/* Waits (bounded) for the frames on the GPU and releases the view and the targets. */
+/* Waits (bounded) for the frames on the GPU and releases the layer and the targets. */
 void rmb_detach(void);
+
+/* Counts an object the front end makes or releases (the SDL Metal view). */
+void rmb_ledger_note(rm_obj_kind_t kind, int created);
 
 /* Detaches, releases the device and the queue; fills the final counters. */
 void rmb_close(rmb_stats_t *stats, rm_ledger_t *ledger);
@@ -131,8 +138,12 @@ int rmb_vsync(void);
 /* The counters so far. */
 void rmb_stats(rmb_stats_t *stats, rm_ledger_t *ledger);
 
-/* Takes a frame slot and a command buffer; 0 when the frame is skipped. */
-int rmb_frame_begin(void);
+/*
+ * Takes a frame slot and a command buffer, and sizes the targets and the
+ * layer's drawable to w by h pixels (the window's size in pixels); 0
+ * when the frame is skipped.
+ */
+int rmb_frame_begin(int w, int h);
 
 /*
  * Opens the 3D pass on the offscreen colour target and its
@@ -146,14 +157,15 @@ int rmb_pass_3d(const float *clear_rgba);
 int rmb_pass_2d(void);
 
 /*
- * Reads the frame drawn so far into bgra (rows top down, w * 4 bytes
- * each); len is the size of bgra. Sets *w and *h to the target size
- * first; returns 0 (nothing written) when the frame is skipped, bgra is
- * too small or the GPU did not finish within its wait.
+ * Reads the colour target into bgra (rows top down, w * 4 bytes each,
+ * w and h from rmb_target_size); len is the size of bgra. Inside a frame
+ * it reads what was drawn so far, outside one the last frame. Returns 0
+ * (nothing written) when the frame is skipped, there is no target, bgra
+ * is too small or the GPU did not finish within its wait.
  */
-int rmb_read(unsigned char *bgra, size_t len, int *w, int *h);
+int rmb_read(unsigned char *bgra, size_t len);
 
-/* The target size of the open frame, 0 0 without one. */
+/* The size of the colour target, 0 0 without one. */
 void rmb_target_size(int *w, int *h);
 
 /* Blits the frame to the drawable when there is one, presents and commits. */
