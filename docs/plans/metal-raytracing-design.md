@@ -79,10 +79,10 @@ cost 36.8 ms against the 16.7 ms frame of its 60 Hz display (section 8,
 verdicts table, row RT9 (1)). Tracing at 1920 x 1080 and upscaling to
 5120 x 2880 costs 7.3 ms as a sum and 9.3 ms as one measured frame (row
 RT9 (2); the scaler is 1.822 ms in frame, section 8, table "MetalFX
-upscaling to the native size"). Record
-[0010](../decisions/0010-rt-internal-resolution.md) holds the decision.
+upscaling to the native size"). The decision is INFORM12 (#262), tracked
+until the owner settles it.
 
-Every cost in this subsection is quoted from section 8: the M6, the
+Every measured cost in this subsection is quoted from section 8: the M6, the
 compute-dispatch ray queries, the synthetic closed scene, synthetic scaler
 inputs, the later level of a process. Section 8 did not measure the
 render-stage path, an apple7 device, the G-buffer raster, shading, the
