@@ -692,6 +692,11 @@ What exists:
   largest upload is 4096 by 4096 texels; gl1 has no such limit, and no
   image of the game data comes near it. `mtl_ring_alloc` refuses an
   allocation larger than the rest of the ring without moving its head.
+  A refused image is not remembered: a later `R_FindImage` of the same
+  name reads and decodes the file again (and is refused and counted
+  again). gl1 has no such memory either, for a missing image or any
+  other: its `R_FindImage` looks only through the loaded images before
+  it calls the loader, so `ref_metal` keeps gl1's behaviour.
 
 Choices made where the design left room:
 
