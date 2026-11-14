@@ -172,21 +172,21 @@ re-measured here; this is the physical-device column the gating needs.
 
 | Query | Apple M6 (physical) | Section 4 / plan statement for the VM |
 |---|---|---|
-| `supportsFamily` apple1 to apple9, metal3 | all true | VM: apple5-class, so apple6 and later false |
+| `supportsFamily` apple1 to apple9, metal3 | all true | apple1 to apple5 and mac2 true; apple6, apple7, apple8, apple9, metal3 false |
 | `supportsRaytracing` | true | false (forced off) |
 | `supportsRaytracingFromRender` | true | false |
 | `supportsPrimitiveMotionBlur` | true | not stated |
-| `supportsFunctionPointers`, `...FromRender`, `supportsDynamicLibraries` | true, true, true | not stated |
+| `supportsFunctionPointers`, `...FromRender`, `supportsDynamicLibraries` | true, true, true | `supportsFunctionPointers` false; the other two not stated |
 | `readWriteTextureSupport` | tier 2 (`MTLReadWriteTextureTier2`) | not stated |
-| `argumentBuffersSupport` | tier 2 (`MTLArgumentBuffersTier2`; raw value 1) | not stated |
-| `hasUnifiedMemory` | true | not stated |
-| `recommendedMaxWorkingSetSize` | 26,800,603,136 bytes (about 25 GiB) | not stated |
+| `argumentBuffersSupport` | tier 2 (`MTLArgumentBuffersTier2`; raw value 1) | tier 2 |
+| `hasUnifiedMemory` | true | true |
+| `recommendedMaxWorkingSetSize` | 26,800,603,136 bytes (about 25 GiB) | about 5.4 GB |
 | `maxBufferLength` | 20,100,448,256 bytes | not stated |
-| `maxThreadsPerThreadgroup` | 1024 x 1024 x 1024 (pipeline `maxTotalThreadsPerThreadgroup` 1024, `threadExecutionWidth` 32 for the ray kernel) | not stated |
+| `maxThreadsPerThreadgroup` | 1024 x 1024 x 1024 (pipeline `maxTotalThreadsPerThreadgroup` 1024, `threadExecutionWidth` 32 for the ray kernel) | 1024 x 1024 x 1024 |
 | `maxThreadgroupMemoryLength` | 32768 bytes | not stated |
 | Largest 2D RGBA8 private texture created | 32768 x 32768 (8192 and 16384 also ok) | not stated |
 | Stage-boundary counter sampling | supported (GPU timestamps for RT10 are possible) | not stated |
-| `supportsPullModelInterpolation`, barycentric coordinates, 32-bit float filtering, 32-bit MSAA, BC compression, `supportsQueryTextureLOD` | all true | not stated |
+| `supportsPullModelInterpolation`, barycentric coordinates, 32-bit float filtering, 32-bit MSAA, BC compression, `supportsQueryTextureLOD` | all true | 32-bit MSAA true; the others not stated |
 
 End to end, one run: a one-triangle primitive acceleration structure
 (640 bytes) was built, wrapped in a one-instance instance acceleration
@@ -200,7 +200,7 @@ error. The path works on the device, not only the flag.
 Build time of a primitive acceleration structure on a synthetic triangle
 soup (n triangles, each a right triangle with 64-unit legs at a random
 integer position in a 4096 x 4096 x 1024 box, fixed seed, unindexed,
-opaque; a choice of mine: section 1 expects 10k to 20k world triangles and
+opaque; sizes chosen because section 1 expects 10k to 20k world triangles and
 a refit population of up to about 1 M alias triangles, so 10k, 20k, 50k
 and 200k were measured). Each size was built once as a discarded warm-up,
 then seven timed builds and eight timed refits; three invocations of the
@@ -231,8 +231,8 @@ fits GPU clock and power-state selection that is fixed per process rather
 than per build, plus contention with the other GPU client. One discarded
 warm-up build is not enough at 200k: in the first invocation the timed
 builds after it ran 6.1, 4.5, then 3.6 ms, and a further single-invocation
-check saw 7.6 ms for the first timed 200k build, so 3.5 to 7.6 ms is the
-honest 200k GPU range. The 200k refit cell is measured (0.62 to 0.83 ms).
+check saw 7.6 ms for the first timed 200k build, so the 200k GPU range
+is the one in the note under the table. The 200k refit cell is measured (0.62 to 0.83 ms).
 Read the table as "a world-sized structure (10k to 50k triangles) builds in
 under about 3.5 ms wall, and a build of up to 200k triangles stays under
 about 8 ms, on a busy M6", not as a benchmark. The 10k to 20k figure
@@ -261,9 +261,7 @@ Per-decision verdicts, section 4 and section 6, for this device:
    reports `MTLArgumentBuffersTier2` (compared by constant; the raw value
    1 is Tier 2, Tier 1 is 0), so passing the G-buffer, history buffers
    and material tables to the ray kernels through argument buffers is
-   available. An earlier reading of this row as tier 1 was wrong and the
-   constraint it implied is withdrawn; nothing in this section relies on
-   it. No change to any gating decision.
+   available (the build host is also tier 2 per that plan). No change to any gating decision.
 5. **Memory budget (section 1):** unchanged and confirmed with large
    margin: the structure for 20k triangles is about 1.9 MB against the
    "under 4 MB" assumption, and unified memory with a 25 GiB working-set
