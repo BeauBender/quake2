@@ -735,6 +735,165 @@ int rm_lm_env(int overbright, int lightmap_only);
 /* The lightmap line of metal_stats at registration, without a newline; 1 when it fits, 0 with buf empty. */
 int rm_lm_format(const char *map, long slices, char *buf, size_t len);
 
+/* ---- sky, warped water, flowing and translucent surfaces (rm_pure.c, N6) ------------ */
+
+/*
+ * gl1's warp subdivision (R_SubdivideSurface, R_SubdividePolygon of
+ * gl1_warp.c), bounded. A warped surface is cut along the 64 unit grid
+ * planes of each axis (RM_WARP_SIZE) and each piece becomes a fan: its
+ * centre, its vertices, and its first vertex again, every vertex five
+ * floats (x, y, z and the s, t of the texture vectors, not divided by the
+ * image: the water's turbulence divides by 64).
+ */
+#define RM_WARP_SIZE 64
+/* gl1's MAX_SUBDIVIDE_VERTS: a polygon, or a piece of one, of more vertices is refused (gl1 drops the map) */
+#define RM_WARP_MAX_VERTS 60
+/* gl1's R_BoundPoly starts its bounds at +-9999, which a polygon outside them would not tighten: refused */
+#define RM_WARP_COORD_MAX 9999.0f
+/* the pieces and the vertices (with the centre and the closing one) of one surface, and of one map */
+#define RM_WARP_MAX_POLYS 20000
+#define RM_WARP_MAX_OUT 262144ul
+#define RM_WARP_MAP_MAX_OUT 1048576ul
+#define RM_WARP_FLOATS 5
+/* the longest cut chain, and the calls one surface may make: a bound on the recursion */
+#define RM_WARP_MAX_DEPTH 64
+#define RM_WARP_MAX_CALLS 100000
+
+/*
+ * Cuts the polygon verts (numverts vertices of x, y, z) with the texture
+ * vectors vec0 and vec1 (their first three floats). The pieces go to out,
+ * which holds out_cap vertices of RM_WARP_FLOATS floats, in gl1's order of
+ * emission (gl1 chains them last first); polylen[k] is the vertex count of
+ * piece k, at most poly_cap pieces. Returns 1 with *npolys pieces and
+ * *nverts vertices, 0 when numverts is below 3 or above RM_WARP_MAX_VERTS,
+ * a coordinate is not finite or outside RM_WARP_COORD_MAX, a piece has too
+ * many vertices, a count would pass a cap or the recursion its bound;
+ * *npolys and *nverts are then 0.
+ */
+int rm_warp_subdivide(const float *verts, int numverts, const float *vec0, const float *vec1,
+		float *out, unsigned long out_cap, unsigned *polylen, unsigned poly_cap,
+		unsigned *npolys, unsigned long *nverts);
+
+/* the turbulence table of gl1 (r_turbsin) and the scale that indexes it, 256 / (2 pi) */
+#define RM_TURB_SIZE 256
+float rm_turb_sin(int i);
+
+/*
+ * gl1's index into it, (int)((c * 0.125 + time) * TURBSCALE) & 255: a
+ * value outside the range of an int (gl1 converts it unchecked) is taken
+ * modulo 256 first, a NaN is 0.
+ */
+int rm_warp_index(float c, float time);
+
+/* the water's scroll: gl1's -64 * (t / 2 - (int)(t / 2)) on a SURF_FLOWING surface, 0 otherwise */
+float rm_warp_scroll(float time, int flowing);
+
+/*
+ * The scroll of a flowing surface's polygon (R_RenderLightmappedPoly,
+ * R_DrawGLPoly): -64 * (t / 40 - (int)(t / 40)), -64 where that is 0.
+ */
+float rm_flow_scroll(float time);
+
+/*
+ * gl1's R_EmitWaterPolys for one vertex (os, ot): s = os + turb(ot) +
+ * scroll, t = ot + turb(os), each times 1 / 64.
+ */
+void rm_warp_st(float os, float ot, float time, float scroll, float *s, float *t);
+
+/* the sky box: the six faces' visible bounds, gl1's skymins and skymaxs */
+#define RM_SKY_FACES 6
+/* gl1's MAX_CLIP_VERTS; a polygon of more than RM_SKY_MAX_VERTS - 2 vertices is refused (gl1 drops the map) */
+#define RM_SKY_MAX_VERTS 64
+
+typedef struct
+{
+	float mins[2][RM_SKY_FACES], maxs[2][RM_SKY_FACES];
+} rm_skybounds_t;
+
+/* gl1's R_ClearSkyBox */
+void rm_sky_clear(rm_skybounds_t *b);
+
+/*
+ * gl1's R_ClipSkyPolygon: the polygon of nump vertices (x, y, z relative
+ * to the view origin) clipped against the six box planes and the
+ * projection of each piece on its face added to the bounds. 1 when done;
+ * 0 when nump is below 1 or above RM_SKY_MAX_VERTS - 2 or a piece would
+ * pass the buffers (a polygon that is not convex can), with the bounds
+ * perhaps grown by the pieces done before: the surface counts as not drawn.
+ */
+int rm_sky_clip(rm_skybounds_t *b, int nump, const float *vecs);
+
+/*
+ * gl1's R_DrawSkyBox before the faces: with a rotating sky (rotate not 0),
+ * 0 when no face is visible (nothing is drawn), else every face is set
+ * to the whole -1 .. 1 square; 1 otherwise.
+ */
+int rm_sky_prepare(rm_skybounds_t *b, float rotate);
+
+/* gl1's test of a face: it is drawn unless a side of its bounds is empty (or not a number to compare) */
+int rm_sky_face_visible(const rm_skybounds_t *b, int face);
+
+/* gl1's skytexorder: the sky image (suffix order rt bk lf ft up dn) of a face; -1 outside 0 .. 5 */
+int rm_sky_image_of_face(int face);
+
+/*
+ * gl1's R_MakeSkyVec: the corner (s, t) of a face as a position v (xyz)
+ * on the box of 2300 units, 4096 with farsee, and its texture
+ * coordinates st clamped to 1 / 512 and 511 / 512, t flipped. 0 and
+ * nothing written when face is outside 0 .. 5.
+ */
+int rm_sky_vec(float s, float t, int face, int farsee, float *v, float *st);
+
+/*
+ * gl1's sky modelview: the world matrix times the translation to the
+ * view origin times the rotation by time * rotate about axis (the
+ * shim's glTranslatef and glRotatef, a zero axis leaving it).
+ */
+void rm_sky_matrix(float *out, const float *world, const float *origin, float time, float rotate,
+		const float *axis);
+
+/* the longest sky name (gl1 pastes it into "env/<name>rt.tga" and "pics/Skies/<name>rt.m32") */
+#define RM_SKY_NAME_MAX 40
+
+/*
+ * A sky name the server may send: 1 to RM_SKY_NAME_MAX characters of
+ * letters, digits, '_', '-' and '.', neither beginning with a '.' nor
+ * holding "..": no path, no drive and no control character gets into the
+ * image names. 0 otherwise: the sky has no images, as gl1's when none loads.
+ */
+int rm_sky_name_ok(const char *name);
+
+/* the rotation and axis the server sends: 1 when all four values are finite */
+int rm_sky_params_ok(float rotate, const float *axis);
+
+/*
+ * The alpha of a translucent surface by its texinfo flags: 0.33 for
+ * SURF_TRANS33, else 0.66 for SURF_TRANS66, else 1 (gl1's R_DrawAlphaSurfaces).
+ */
+float rm_trans_alpha(int texflags);
+
+/* gl1's glColor4f(inverse_intensity x3, alpha) of the alpha chain (GL_MODULATE) */
+void rm_trans_color(float inverse_intensity, float alpha, float *rgba);
+
+/* gl1_state.inverse_intensity: gl1's R_InitImages divides the gamma by the intensity */
+float rm_inverse_intensity(float gamma, float intensity);
+
+/*
+ * What gl1 does with an opaque warped surface's texture environment
+ * (R_ApplyGLBuffer, SURF_DRAWTURB): with gl1_overbrightbits, GL_COMBINE
+ * at scale 1 on the current colour (white), which gives the texel (returns
+ * 0); without, GL_MODULATE with glColor4f(inverse_intensity x3, 1)
+ * (returns 1, rgba set).
+ */
+int rm_warp_color(int overbright, float inverse_intensity, float *rgba);
+
+/*
+ * gl1's R_UpdateGLBuffer test for the alpha chain: the batch is drawn
+ * before this surface when it holds something (count above 0) and its
+ * texture or its alpha is not the surface's.
+ */
+int rm_alpha_break(long count, int cur_tex, float cur_alpha, int tex, float alpha);
+
 /* ---- rmb_device.m and rmb_encode.m ------------------------------------------- */
 
 /*

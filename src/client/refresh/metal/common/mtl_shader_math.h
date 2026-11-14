@@ -125,4 +125,23 @@ mtl_world_lm(mtl_rgba_t d, mtl_rgba_t l, int env, float scale)
 	return c;
 }
 
+/*
+ * ref_metal's world_tex with a colour (N6): gl1's GL_MODULATE of the
+ * current colour p (glColor4f, saturated by the caller) and the texel t
+ * on its single unit, as the shim's mgl_texenv_stage computes it: the
+ * warped water (inverse intensity times the texel) and the translucent
+ * surfaces (the alpha in the colour's alpha, blended after).
+ */
+static inline mtl_rgba_t
+mtl_world_color(mtl_rgba_t p, mtl_rgba_t t)
+{
+	mtl_rgba_t c;
+
+	c.r = p.r * t.r;
+	c.g = p.g * t.g;
+	c.b = p.b * t.b;
+	c.a = p.a * t.a;
+	return c;
+}
+
 #endif /* MTL_SHADER_MATH_H */

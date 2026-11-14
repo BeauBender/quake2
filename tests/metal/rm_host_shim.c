@@ -85,3 +85,28 @@ rm_host_shim_world_lm(int env1, float scale, int opaque0, const float *d, const 
 	out[2] = c.b;
 	out[3] = c.a;
 }
+
+/*
+ * What the shim's fragment function computes for one GL_MODULATE unit
+ * (gl1's warped water and translucent surfaces, gl1_buffer.c) on the
+ * colour p and the texel t.
+ */
+void
+rm_host_shim_modulate(const float *p, const float *t, float *out)
+{
+	mgl_rgba_t c, t0;
+
+	c.r = p[0];
+	c.g = p[1];
+	c.b = p[2];
+	c.a = p[3];
+	t0.r = t[0];
+	t0.g = t[1];
+	t0.b = t[2];
+	t0.a = t[3];
+	c = mgl_texenv_stage(MGL_TEXENV_MODULATE, 0, 1.0f, c, t0);
+	out[0] = c.r;
+	out[1] = c.g;
+	out[2] = c.b;
+	out[3] = c.a;
+}

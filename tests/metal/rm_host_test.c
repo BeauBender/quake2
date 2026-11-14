@@ -29,6 +29,7 @@
  * =======================================================================
  */
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2203,6 +2204,959 @@ test_lm_line(void)
 	CHECK(rm_split_reopen(1, 0) == RM_REOPEN_NONE && rm_split_reopen(1, 1) == RM_REOPEN_3D_KEEP);
 }
 
+/* ---- N6: sky, warped water, flowing and translucent surfaces ------------------------- */
+
+/* gl1's table, from the file gl1_warp.c includes, to hold rm_turb_sin equal to it entry by entry */
+static const float ref_turbsin[256] = {
+#include "../../src/client/refresh/constants/warpsin.h"
+};
+
+#define REF_TURBSCALE (256.0 / (2 * M_PI))
+
+/* a small deterministic generator for the differential cases */
+static unsigned long long rng_state = 88172645463325252ull;
+
+static unsigned
+rng(void)
+{
+	rng_state ^= rng_state << 13;
+	rng_state ^= rng_state >> 7;
+	rng_state ^= rng_state << 17;
+	return (unsigned)(rng_state >> 16);
+}
+
+static float
+rngf(float lo, float hi)
+{
+	return lo + (hi - lo) * ((rng() & 0xffffff) / 16777215.0f);
+}
+
+/*
+ * The turbulence table, the index arithmetic of R_EmitWaterPolys worked
+ * by hand for three vertices at one time, and the scrolls.
+ */
+static void
+test_warp_arith(void)
+{
+	int i, ok = 1;
+	float s, t;
+
+	for (i = 0; i < 256; i++)
+	{
+		ok &= (rm_turb_sin(i) == ref_turbsin[i]);
+	}
+
+	CHECK(ok);
+	CHECK(rm_turb_sin(256) == ref_turbsin[0] && rm_turb_sin(-1) == ref_turbsin[255]);
+
+	/* TURBSCALE = 256 / 2 pi = 40.7436654; hand-worked at time 1.5 */
+	CHECK(rm_warp_index(0, 1.5f) == 61);       /* 1.5 * 40.74 = 61.1 */
+	CHECK(rm_warp_index(32, 1.5f) == 224);     /* (4 + 1.5) * 40.74 = 224.09 */
+	CHECK(rm_warp_index(64, 1.5f) == 131);     /* 9.5 * 40.74 = 387.06, 387 & 255 */
+	CHECK(rm_warp_index(100, 1.5f) == 58);     /* 14 * 40.74 = 570.4, 570 & 255 */
+	CHECK(rm_warp_index(-16, 1.5f) == 236);    /* -0.5 * 40.74 = -20.37, -20 & 255 */
+	CHECK(rm_warp_index(8, 0) == 40 && rm_warp_index(-8, 0) == 216);
+	/* an exact multiple: 256 / 40.74 steps */
+	CHECK(rm_warp_index(0, 0) == 0);
+	CHECK(rm_warp_index(0, 1.0f / 64) == 0);   /* 0.636 */
+	CHECK(rm_warp_index(0, 0.025f) == 1);      /* 1.018 */
+	/* not an int: NaN is 0, a huge value is taken modulo 256 and stays in the table */
+	CHECK(rm_warp_index(NAN, 1) == 0);
+	CHECK(rm_warp_index(1e30f, 0) >= 0 && rm_warp_index(1e30f, 0) < 256);
+	CHECK(rm_warp_index(-1e30f, 0) >= 0 && rm_warp_index(-1e30f, 0) < 256);
+	CHECK(rm_warp_index(INFINITY, 0) >= 0 && rm_warp_index(INFINITY, 0) < 256);
+
+	/* the three vertices: s = os + turb(ot) + scroll, t = ot + turb(os), each over 64 */
+	rm_warp_st(0, 0, 1.5f, 0, &s, &t);
+	CHECK(s == (float)((0 + ref_turbsin[61] + 0) * (1.0 / 64)) && t == (float)((0 + ref_turbsin[61]) * (1.0 / 64)));
+	rm_warp_st(64, 32, 1.5f, -8, &s, &t);
+	CHECK(s == (float)((64 + ref_turbsin[224] - 8) * (1.0 / 64)) && t == (float)((32 + ref_turbsin[131]) * (1.0 / 64)));
+	rm_warp_st(-16, 100, 1.5f, 0, &s, &t);
+	CHECK(s == (float)((-16 + ref_turbsin[58]) * (1.0 / 64)) && t == (float)((100 + ref_turbsin[236]) * (1.0 / 64)));
+
+	/* the water's scroll: -64 * the fraction of time / 2, only on a flowing surface */
+	CHECK(rm_warp_scroll(1.25f, 0) == 0);
+	CHECK(rm_warp_scroll(1.25f, 1) == -40);    /* 0.625 * 64 */
+	CHECK(rm_warp_scroll(3.0f, 1) == -32);     /* 1.5 -> 0.5 */
+	CHECK(rm_warp_scroll(2.0f, 1) == 0);
+	CHECK(rm_warp_scroll(0, 1) == 0);
+	CHECK(rm_warp_scroll(-0.5f, 1) == 16);     /* (int) truncates toward 0: -0.25 - 0 = -0.25 */
+	/* a time that is not a number or beyond an int is converted without the undefined behaviour of gl1's cast */
+	(void)rm_warp_scroll(NAN, 1);
+	(void)rm_warp_scroll(1e30f, 1);
+	(void)rm_warp_scroll(-1e30f, 1);
+
+	/* a flowing polygon's scroll: -64 * the fraction of time / 40, -64 where that is 0 */
+	CHECK(rm_flow_scroll(10) == -16);
+	CHECK(rm_flow_scroll(30) == -48);
+	CHECK(rm_flow_scroll(0) == -64);
+	CHECK(rm_flow_scroll(40) == -64);
+	CHECK(rm_flow_scroll(80) == -64);
+	CHECK(rm_flow_scroll(41) == -1.6f);
+	(void)rm_flow_scroll(1e30f);
+	(void)rm_flow_scroll(NAN);
+	CHECK(rm_flow_scroll(1e30f) == rm_flow_scroll(1e30f));
+
+	/* differential: the same expressions as gl1's, over random values */
+	ok = 1;
+
+	for (i = 0; i < 20000; i++)
+	{
+		float os = rngf(-9000, 9000), ot = rngf(-9000, 9000), tm = rngf(0, 5000), sc = rm_warp_scroll(tm, rng() & 1);
+		float rs, rt, es, et;
+		int x, y;
+
+		x = (int)((ot * 0.125 + tm) * REF_TURBSCALE) & 255;
+		y = (int)((os * 0.125 + tm) * REF_TURBSCALE) & 255;
+		es = os + ref_turbsin[x] + sc;
+		et = ot + ref_turbsin[y];
+		rm_warp_st(os, ot, tm, sc, &rs, &rt);
+		ok &= (rs == (float)(es * (1.0 / 64))) && (rt == (float)(et * (1.0 / 64)));
+		ok &= (rm_warp_index(ot, tm) == x) && (rm_warp_index(os, tm) == y);
+	}
+
+	CHECK(ok);
+}
+
+/* gl1's R_SubdividePolygon, unbounded, as the reference of the differential cases (pieces in emission order) */
+#define REF_MAXP 4096
+
+static float ref_out[REF_MAXP * 8][5];
+static int ref_len[REF_MAXP], ref_np, ref_nv;
+
+static void
+ref_subdivide(int numverts, float *verts, const float *vec0, const float *vec1)
+{
+	int i, j, k;
+	float mins[3], maxs[3];
+	float m;
+	float *v;
+	float front[64][3], back[64][3];
+	int f, b;
+	float dist[64];
+	float frac;
+	float s, t;
+	float total[3];
+	float total_s, total_t;
+
+	mins[0] = mins[1] = mins[2] = 9999;
+	maxs[0] = maxs[1] = maxs[2] = -9999;
+	v = verts;
+
+	for (i = 0; i < numverts; i++)
+	{
+		for (j = 0; j < 3; j++, v++)
+		{
+			if (*v < mins[j])
+			{
+				mins[j] = *v;
+			}
+
+			if (*v > maxs[j])
+			{
+				maxs[j] = *v;
+			}
+		}
+	}
+
+	for (i = 0; i < 3; i++)
+	{
+		m = (mins[i] + maxs[i]) * 0.5;
+		m = 64 * floor(m / 64 + 0.5);
+
+		if (maxs[i] - m < 8)
+		{
+			continue;
+		}
+
+		if (m - mins[i] < 8)
+		{
+			continue;
+		}
+
+		v = verts + i;
+
+		for (j = 0; j < numverts; j++, v += 3)
+		{
+			dist[j] = *v - m;
+		}
+
+		dist[j] = dist[0];
+		v -= i;
+		memcpy(v, verts, 3 * sizeof(float));
+
+		f = b = 0;
+		v = verts;
+
+		for (j = 0; j < numverts; j++, v += 3)
+		{
+			if (dist[j] >= 0)
+			{
+				memcpy(front[f], v, 3 * sizeof(float));
+				f++;
+			}
+
+			if (dist[j] <= 0)
+			{
+				memcpy(back[b], v, 3 * sizeof(float));
+				b++;
+			}
+
+			if ((dist[j] == 0) || (dist[j + 1] == 0))
+			{
+				continue;
+			}
+
+			if ((dist[j] > 0) != (dist[j + 1] > 0))
+			{
+				frac = dist[j] / (dist[j] - dist[j + 1]);
+
+				for (k = 0; k < 3; k++)
+				{
+					front[f][k] = back[b][k] = v[k] + frac * (v[3 + k] - v[k]);
+				}
+
+				f++;
+				b++;
+			}
+		}
+
+		ref_subdivide(f, front[0], vec0, vec1);
+		ref_subdivide(b, back[0], vec0, vec1);
+		return;
+	}
+
+	if (numverts < 1)
+	{
+		return;
+	}
+
+	total[0] = total[1] = total[2] = 0;
+	total_s = 0;
+	total_t = 0;
+
+	for (i = 0; i < numverts; i++, verts += 3)
+	{
+		memcpy(ref_out[ref_nv + i + 1], verts, 3 * sizeof(float));
+		s = verts[0] * vec0[0] + verts[1] * vec0[1] + verts[2] * vec0[2];
+		t = verts[0] * vec1[0] + verts[1] * vec1[1] + verts[2] * vec1[2];
+
+		total_s += s;
+		total_t += t;
+		total[0] = verts[0] + total[0];
+		total[1] = verts[1] + total[1];
+		total[2] = verts[2] + total[2];
+
+		ref_out[ref_nv + i + 1][3] = s;
+		ref_out[ref_nv + i + 1][4] = t;
+	}
+
+	ref_out[ref_nv][0] = total[0] * (1.0 / numverts);
+	ref_out[ref_nv][1] = total[1] * (1.0 / numverts);
+	ref_out[ref_nv][2] = total[2] * (1.0 / numverts);
+	ref_out[ref_nv][3] = total_s / numverts;
+	ref_out[ref_nv][4] = total_t / numverts;
+	memcpy(ref_out[ref_nv + i + 1], ref_out[ref_nv + 1], 5 * sizeof(float));
+
+	ref_len[ref_np++] = numverts + 2;
+	ref_nv += numverts + 2;
+}
+
+static float sub_out[RM_WARP_MAX_OUT * RM_WARP_FLOATS];
+static unsigned sub_len[RM_WARP_MAX_POLYS];
+
+/*
+ * The subdivision of a 128 by 128 square, worked by hand (cut at x = 64,
+ * then each half at y = 64: four pieces of six vertices, the first the
+ * x >= 64, y >= 64 corner), the pieces that are not cut, the refusals
+ * and each cap, and the differential against gl1's own function.
+ */
+static void
+test_warp_subdivide(void)
+{
+	static const float v0[3] = { 1, 0, 0 }, v1[3] = { 0, 1, 0 };
+	static const float sq[12] = { 0, 0, 0, 128, 0, 0, 128, 128, 0, 0, 128, 0 };
+	unsigned np;
+	unsigned long nv;
+	int ok, i;
+
+	CHECK(rm_warp_subdivide(sq, 4, v0, v1, sub_out, 1000, sub_len, 100, &np, &nv) == 1);
+	CHECK(np == 4 && nv == 24);
+	CHECK(sub_len[0] == 6 && sub_len[1] == 6 && sub_len[2] == 6 && sub_len[3] == 6);
+	/* the first piece: centre (96, 96), then its four corners and the first again */
+	CHECK(sub_out[0] == 96 && sub_out[1] == 96 && sub_out[2] == 0 && sub_out[3] == 96 && sub_out[4] == 96);
+	CHECK(memcmp(sub_out + 5, sub_out + 5 * 5, 5 * sizeof(float)) == 0);
+	{
+		float xmin = 1e9f, ymin = 1e9f;
+
+		for (i = 1; i <= 4; i++)
+		{
+			xmin = sub_out[i * 5] < xmin ? sub_out[i * 5] : xmin;
+			ymin = sub_out[i * 5 + 1] < ymin ? sub_out[i * 5 + 1] : ymin;
+			/* s and t are the dot products with the texture vectors */
+			CHECK(sub_out[i * 5 + 3] == sub_out[i * 5] && sub_out[i * 5 + 4] == sub_out[i * 5 + 1]);
+		}
+
+		CHECK(xmin == 64 && ymin == 64);
+	}
+	/* the second piece is x >= 64, y < 64: centre (96, 32) */
+	CHECK(sub_out[6 * 5] == 96 && sub_out[6 * 5 + 1] == 32);
+	/* the third and fourth, x < 64: centres (32, 96) and (32, 32) */
+	CHECK(sub_out[12 * 5] == 32 && sub_out[12 * 5 + 1] == 96 && sub_out[18 * 5] == 32 && sub_out[18 * 5 + 1] == 32);
+
+	/* texture vectors scale s and t, and the centre's are the mean of the vertices' */
+	{
+		static const float w0[3] = { 2, 0, 0 }, w1[3] = { 0, -1, 0 };
+
+		CHECK(rm_warp_subdivide(sq, 4, w0, w1, sub_out, 1000, sub_len, 100, &np, &nv) && np == 4);
+		CHECK(sub_out[3] == 192 && sub_out[4] == -96);
+
+		for (i = 1; i <= 4; i++)
+		{
+			CHECK(sub_out[i * 5 + 3] == 2 * sub_out[i * 5] && sub_out[i * 5 + 4] == -sub_out[i * 5 + 1]);
+		}
+	}
+
+	/* a piece of 64 by 64 or less is not cut, nor one narrower than 8 on a side of a grid plane */
+	{
+		static const float small[12] = { 0, 0, 0, 64, 0, 0, 64, 64, 0, 0, 64, 0 };
+		static const float edge[12] = { 56, 0, 0, 72, 0, 0, 72, 8, 0, 56, 8, 0 };
+		static const float short_of[12] = { 57, 0, 0, 71, 0, 0, 71, 8, 0, 57, 8, 0 };
+		static const float tri[9] = { 0, 0, 0, 16, 0, 0, 0, 16, 0 };
+
+		CHECK(rm_warp_subdivide(small, 4, v0, v1, sub_out, 1000, sub_len, 100, &np, &nv) && np == 1 && nv == 6);
+		CHECK(rm_warp_subdivide(edge, 4, v0, v1, sub_out, 1000, sub_len, 100, &np, &nv) && np == 2 && nv == 12);
+		/* a side of the grid plane at 64 is cut when 8 or more away on both sides, not when 7 */
+		CHECK(rm_warp_subdivide(short_of, 4, v0, v1, sub_out, 1000, sub_len, 100, &np, &nv) && np == 1 && nv == 6);
+		CHECK(rm_warp_subdivide(tri, 3, v0, v1, sub_out, 1000, sub_len, 100, &np, &nv) && np == 1 && nv == 5);
+	}
+
+	/* refusals leave the counts 0: too few or too many vertices, a coordinate not a number or out of bounds */
+	{
+		static float big[3 * 61];
+		float bad[12];
+
+		memset(big, 0, sizeof(big));
+		np = 7;
+		nv = 7;
+		CHECK(rm_warp_subdivide(sq, 2, v0, v1, sub_out, 1000, sub_len, 100, &np, &nv) == 0 && np == 0 && nv == 0);
+		CHECK(rm_warp_subdivide(sq, 0, v0, v1, sub_out, 1000, sub_len, 100, &np, &nv) == 0);
+		CHECK(rm_warp_subdivide(sq, -1, v0, v1, sub_out, 1000, sub_len, 100, &np, &nv) == 0);
+		CHECK(rm_warp_subdivide(big, 61, v0, v1, sub_out, 1000, sub_len, 100, &np, &nv) == 0);
+		CHECK(rm_warp_subdivide(big, 60, v0, v1, sub_out, 1000, sub_len, 100, &np, &nv) == 1);
+
+		memcpy(bad, sq, sizeof(bad));
+		bad[4] = NAN;
+		CHECK(rm_warp_subdivide(bad, 4, v0, v1, sub_out, 1000, sub_len, 100, &np, &nv) == 0);
+		bad[4] = INFINITY;
+		CHECK(rm_warp_subdivide(bad, 4, v0, v1, sub_out, 1000, sub_len, 100, &np, &nv) == 0);
+		/* exactly the bound is taken */
+		bad[4] = 9999.0f;
+		CHECK(rm_warp_subdivide(bad, 4, v0, v1, sub_out, RM_WARP_MAX_OUT, sub_len, RM_WARP_MAX_POLYS, &np, &nv) == 1 && np > 100);
+		bad[4] = 10000.0f;
+		CHECK(rm_warp_subdivide(bad, 4, v0, v1, sub_out, 1000, sub_len, 100, &np, &nv) == 0);
+		bad[4] = -10000.0f;
+		CHECK(rm_warp_subdivide(bad, 4, v0, v1, sub_out, 1000, sub_len, 100, &np, &nv) == 0);
+	}
+
+	/* the caps: the vertices (24 fit, 23 do not), the pieces (4 fit, 3 do not) */
+	CHECK(rm_warp_subdivide(sq, 4, v0, v1, sub_out, 24, sub_len, 4, &np, &nv) == 1 && np == 4 && nv == 24);
+	np = 7;
+	nv = 7;
+	CHECK(rm_warp_subdivide(sq, 4, v0, v1, sub_out, 23, sub_len, 4, &np, &nv) == 0 && np == 0 && nv == 0);
+	CHECK(rm_warp_subdivide(sq, 4, v0, v1, sub_out, 24, sub_len, 3, &np, &nv) == 0 && np == 0 && nv == 0);
+	CHECK(rm_warp_subdivide(sq, 4, v0, v1, sub_out, 0, sub_len, 4, &np, &nv) == 0);
+
+	/* the largest map extent still subdivides inside the surface caps: 19998 square is 313 by 313 pieces */
+	{
+		static const float huge[12] = { -9999, -9999, 0, 9999, -9999, 0, 9999, 9999, 0, -9999, 9999, 0 };
+
+		CHECK(rm_warp_subdivide(huge, 4, v0, v1, sub_out, RM_WARP_MAX_OUT, sub_len, RM_WARP_MAX_POLYS, &np, &nv) == 0);
+		CHECK(np == 0 && nv == 0);
+		/* 8192 by 8192, the extent of a map, is 128 by 128 pieces of six vertices */
+		{
+			static const float map[12] = { -4096, -4096, 0, 4096, -4096, 0, 4096, 4096, 0, -4096, 4096, 0 };
+
+			CHECK(rm_warp_subdivide(map, 4, v0, v1, sub_out, RM_WARP_MAX_OUT, sub_len, RM_WARP_MAX_POLYS, &np, &nv) == 1);
+			CHECK(np == 128 * 128 && nv == 128 * 128 * 6);
+		}
+	}
+
+	/* differential: random convex quads and triangles on random planes against gl1's R_SubdividePolygon */
+	ok = 1;
+
+	for (i = 0; i < 3000; i++)
+	{
+		float verts[4 * 3], copy[65 * 3];
+		float cx = rngf(-3000, 3000), cy = rngf(-3000, 3000), cz = rngf(-3000, 3000);
+		float a = rngf(8, 700), b = rngf(8, 700);
+		int n = (rng() & 1) ? 4 : 3, j, axis = rng() % 3, a1 = (axis + 1) % 3, a2 = (axis + 2) % 3;
+		float w0[3] = { rngf(-2, 2), rngf(-2, 2), rngf(-2, 2) }, w1[3] = { rngf(-2, 2), rngf(-2, 2), rngf(-2, 2) };
+		static const float sx[4] = { -1, 1, 1, -1 }, sy[4] = { -1, -1, 1, 1 };
+		unsigned long rnv;
+		unsigned rnp;
+
+		for (j = 0; j < n; j++)
+		{
+			verts[j * 3 + axis] = cz + rngf(-0.5f, 0.5f) * 0;
+			verts[j * 3 + a1] = cx + sx[j] * a;
+			verts[j * 3 + a2] = cy + sy[j] * b;
+		}
+
+		memcpy(copy, verts, sizeof(verts));
+		ref_np = ref_nv = 0;
+		ref_subdivide(n, copy, w0, w1);
+		rnv = 0;
+		rnp = 0;
+
+		if (rm_warp_subdivide(verts, n, w0, w1, sub_out, RM_WARP_MAX_OUT, sub_len, RM_WARP_MAX_POLYS, &rnp, &rnv) == 0)
+		{
+			ok = 0;
+			break;
+		}
+
+		ok &= ((int)rnp == ref_np) && ((int)rnv == ref_nv);
+
+		if (ok)
+		{
+			int p, at = 0;
+
+			for (p = 0; p < ref_np; p++)
+			{
+				ok &= ((int)sub_len[p] == ref_len[p]);
+				ok &= (memcmp(sub_out + (size_t)at * 5, ref_out[at], (size_t)ref_len[p] * 5 * sizeof(float)) == 0);
+				at += ref_len[p];
+			}
+		}
+
+		if (!ok)
+		{
+			break;
+		}
+	}
+
+	CHECK(ok);
+}
+
+/* gl1's sky clip and projection, unbounded, as the reference of the differential cases */
+static float ref_skymins[2][6], ref_skymaxs[2][6];
+
+static const int ref_vec_to_st[6][3] = {
+	{-2, 3, 1}, {2, 3, -1}, {1, 3, 2}, {-1, 3, -2}, {-2, -1, 3}, {-2, 1, -3}
+};
+
+static const float ref_skyclip[6][3] = {
+	{1, 1, 0}, {1, -1, 0}, {0, -1, 1}, {0, 1, 1}, {1, 0, 1}, {-1, 0, 1}
+};
+
+static void
+ref_draw_sky_polygon(int nump, float *vecs)
+{
+	int i, j;
+	float v[3], av[3];
+	float s, t, dv;
+	int axis;
+	float *vp;
+
+	v[0] = v[1] = v[2] = 0;
+
+	for (i = 0, vp = vecs; i < nump; i++, vp += 3)
+	{
+		v[0] = vp[0] + v[0];
+		v[1] = vp[1] + v[1];
+		v[2] = vp[2] + v[2];
+	}
+
+	av[0] = fabs(v[0]);
+	av[1] = fabs(v[1]);
+	av[2] = fabs(v[2]);
+
+	if ((av[0] > av[1]) && (av[0] > av[2]))
+	{
+		axis = v[0] < 0 ? 1 : 0;
+	}
+	else if ((av[1] > av[2]) && (av[1] > av[0]))
+	{
+		axis = v[1] < 0 ? 3 : 2;
+	}
+	else
+	{
+		axis = v[2] < 0 ? 5 : 4;
+	}
+
+	for (i = 0; i < nump; i++, vecs += 3)
+	{
+		j = ref_vec_to_st[axis][2];
+		dv = j > 0 ? vecs[j - 1] : -vecs[-j - 1];
+
+		if (dv < 0.001)
+		{
+			continue;
+		}
+
+		j = ref_vec_to_st[axis][0];
+		s = j < 0 ? -vecs[-j - 1] / dv : vecs[j - 1] / dv;
+		j = ref_vec_to_st[axis][1];
+		t = j < 0 ? -vecs[-j - 1] / dv : vecs[j - 1] / dv;
+
+		if (s < ref_skymins[0][axis])
+		{
+			ref_skymins[0][axis] = s;
+		}
+
+		if (t < ref_skymins[1][axis])
+		{
+			ref_skymins[1][axis] = t;
+		}
+
+		if (s > ref_skymaxs[0][axis])
+		{
+			ref_skymaxs[0][axis] = s;
+		}
+
+		if (t > ref_skymaxs[1][axis])
+		{
+			ref_skymaxs[1][axis] = t;
+		}
+	}
+}
+
+static void
+ref_clip_sky(int nump, float *vecs, int stage)
+{
+	const float *norm;
+	float *v;
+	int front, back;
+	float d, e;
+	float dists[64];
+	int sides[64];
+	float newv[2][64][3];
+	int newc[2];
+	int i, j;
+
+	if (stage == 6)
+	{
+		ref_draw_sky_polygon(nump, vecs);
+		return;
+	}
+
+	front = back = 0;
+	norm = ref_skyclip[stage];
+
+	for (i = 0, v = vecs; i < nump; i++, v += 3)
+	{
+		d = v[0] * norm[0] + v[1] * norm[1] + v[2] * norm[2];
+
+		if (d > 0.1)
+		{
+			front = 1;
+			sides[i] = 0;
+		}
+		else if (d < -0.1)
+		{
+			back = 1;
+			sides[i] = 1;
+		}
+		else
+		{
+			sides[i] = 2;
+		}
+
+		dists[i] = d;
+	}
+
+	if (!front || !back)
+	{
+		ref_clip_sky(nump, vecs, stage + 1);
+		return;
+	}
+
+	sides[i] = sides[0];
+	dists[i] = dists[0];
+	memcpy(vecs + i * 3, vecs, 3 * sizeof(float));
+	newc[0] = newc[1] = 0;
+
+	for (i = 0, v = vecs; i < nump; i++, v += 3)
+	{
+		switch (sides[i])
+		{
+			case 0:
+				memcpy(newv[0][newc[0]++], v, 12);
+				break;
+			case 1:
+				memcpy(newv[1][newc[1]++], v, 12);
+				break;
+			case 2:
+				memcpy(newv[0][newc[0]++], v, 12);
+				memcpy(newv[1][newc[1]++], v, 12);
+				break;
+		}
+
+		if ((sides[i] == 2) || (sides[i + 1] == 2) || (sides[i + 1] == sides[i]))
+		{
+			continue;
+		}
+
+		d = dists[i] / (dists[i] - dists[i + 1]);
+
+		for (j = 0; j < 3; j++)
+		{
+			e = v[j] + d * (v[j + 3] - v[j]);
+			newv[0][newc[0]][j] = e;
+			newv[1][newc[1]][j] = e;
+		}
+
+		newc[0]++;
+		newc[1]++;
+	}
+
+	ref_clip_sky(newc[0], newv[0][0], stage + 1);
+	ref_clip_sky(newc[1], newv[1][0], stage + 1);
+}
+
+/*
+ * The sky clip of a quad that crosses the planes x = y (the +x and +y
+ * faces), worked by hand from gl1_warp.c, the face and bounds a polygon
+ * on one face and one behind the view get, the bounds of the box, the
+ * corner vectors and the coordinate clamp, the limits, and a
+ * differential against gl1's R_ClipSkyPolygon.
+ */
+static void
+test_sky(void)
+{
+	rm_skybounds_t b;
+	int i, f, ok;
+	float v[3], st[2];
+
+	/* P0 (100, 50, 10), P1 (50, 100, 10), P2 (50, 100, -10), P3 (100, 50, -10): cut at x = y into two halves */
+	{
+		static const float quad[12] = { 100, 50, 10, 50, 100, 10, 50, 100, -10, 100, 50, -10 };
+
+		rm_sky_clear(&b);
+
+		for (f = 0; f < 6; f++)
+		{
+			CHECK(b.mins[0][f] == 9999 && b.mins[1][f] == 9999 && b.maxs[0][f] == -9999 && b.maxs[1][f] == -9999);
+			CHECK(!rm_sky_face_visible(&b, f));
+		}
+
+		CHECK(rm_sky_clip(&b, 4, quad) == 1);
+		/* the front half (75 75 10, 75 75 -10 and P0, P3) is on +x: s = -y / x in [-1, -0.5], t = z / x */
+		CHECK(b.mins[0][0] == -1 && b.maxs[0][0] == -0.5f);
+		CHECK(b.mins[1][0] == -10.0f / 75 && b.maxs[1][0] == 10.0f / 75);
+		/* the back half is on +y: s = x / y in [0.5, 1], t = z / y */
+		CHECK(b.mins[0][2] == 0.5f && b.maxs[0][2] == 1);
+		CHECK(b.mins[1][2] == -10.0f / 75 && b.maxs[1][2] == 10.0f / 75);
+		CHECK(rm_sky_face_visible(&b, 0) && rm_sky_face_visible(&b, 2));
+
+		for (f = 0; f < 6; f++)
+		{
+			if (f != 0 && f != 2)
+			{
+				CHECK(b.mins[0][f] == 9999 && b.maxs[0][f] == -9999 && !rm_sky_face_visible(&b, f));
+			}
+		}
+	}
+
+	/* the same quad wholly on +x (x - y all positive): one face, not clipped */
+	{
+		static const float on_x[12] = { 100, 10, 10, 100, 20, 10, 100, 20, -10, 100, 10, -10 };
+
+		rm_sky_clear(&b);
+		CHECK(rm_sky_clip(&b, 4, on_x) == 1);
+		CHECK(b.mins[0][0] == -0.2f && b.maxs[0][0] == -0.1f && b.mins[1][0] == -0.1f && b.maxs[1][0] == 0.1f);
+		CHECK(!rm_sky_face_visible(&b, 1) && !rm_sky_face_visible(&b, 2));
+	}
+
+	/* a polygon behind the view (z <= 0.001 over the face's depth) adds nothing: a triangle on -x, dv < 0.001 skipped */
+	{
+		static const float flat[9] = { 0, 10, 10, 0, 20, 10, 0, 20, -10 };
+
+		rm_sky_clear(&b);
+		CHECK(rm_sky_clip(&b, 3, flat) == 1);
+
+		for (f = 0; f < 6; f++)
+		{
+			CHECK(!rm_sky_face_visible(&b, f));
+		}
+	}
+
+	/* the limits: 62 vertices are taken (a ring of them, not clipped away), 63 and a negative count are not */
+	{
+		float ring[64 * 3];
+
+		for (i = 0; i < 64; i++)
+		{
+			ring[i * 3] = 1000;
+			ring[i * 3 + 1] = (float)(i % 8) * 0.5f;
+			ring[i * 3 + 2] = (float)(i / 8) * 0.5f;
+		}
+
+		rm_sky_clear(&b);
+		CHECK(rm_sky_clip(&b, 62, ring) == 1);
+		CHECK(rm_sky_clip(&b, 63, ring) == 0);
+		CHECK(rm_sky_clip(&b, 64, ring) == 0);
+		CHECK(rm_sky_clip(&b, 1000, ring) == 0);
+		CHECK(rm_sky_clip(&b, -1, ring) == 0);
+		CHECK(rm_sky_clip(&b, 0, ring) == 1);
+	}
+
+	/* a polygon that is not convex crosses a plane more often than the buffers hold: refused, never written past */
+	{
+		float zig[62 * 3];
+
+		for (i = 0; i < 62; i++)
+		{
+			zig[i * 3] = 100;
+			zig[i * 3 + 1] = (i & 1) ? 50 : -50;   /* x - y alternates 50, 150: use y to cross x + y, x - y planes */
+			zig[i * 3 + 2] = (float)i;
+		}
+
+		rm_sky_clear(&b);
+		(void)rm_sky_clip(&b, 62, zig);    /* the result is 1 or 0; the sanitizers see the buffers */
+
+		for (i = 0; i < 62; i++)
+		{
+			zig[i * 3] = (i & 1) ? 100 : -100;
+			zig[i * 3 + 1] = (i & 1) ? -100 : 100;
+			zig[i * 3 + 2] = (float)(i % 3);
+		}
+
+		rm_sky_clear(&b);
+		(void)rm_sky_clip(&b, 62, zig);
+	}
+
+	/* a rotating sky is the whole box once any face is seen, and nothing when none is */
+	rm_sky_clear(&b);
+	CHECK(rm_sky_prepare(&b, 1) == 0);
+	CHECK(rm_sky_prepare(&b, 0) == 1 && !rm_sky_face_visible(&b, 0));
+	b.mins[0][3] = -0.5f;
+	b.maxs[0][3] = 0.5f;
+	b.mins[1][3] = 0.1f;
+	b.maxs[1][3] = 0.2f;
+	CHECK(rm_sky_prepare(&b, 0) == 1 && b.mins[0][3] == -0.5f && !rm_sky_face_visible(&b, 0));
+	CHECK(rm_sky_prepare(&b, 0.5f) == 1);
+
+	for (f = 0; f < 6; f++)
+	{
+		CHECK(b.mins[0][f] == -1 && b.mins[1][f] == -1 && b.maxs[0][f] == 1 && b.maxs[1][f] == 1);
+		CHECK(rm_sky_face_visible(&b, f));
+	}
+
+	/* a face with one empty side is not drawn: equal bounds, or min above max */
+	rm_sky_clear(&b);
+	b.mins[0][1] = 0;
+	b.maxs[0][1] = 0;
+	b.mins[1][1] = -1;
+	b.maxs[1][1] = 1;
+	CHECK(!rm_sky_face_visible(&b, 1));
+	b.maxs[0][1] = 0.25f;
+	CHECK(rm_sky_face_visible(&b, 1));
+	b.mins[1][1] = 1;
+	CHECK(!rm_sky_face_visible(&b, 1));
+	CHECK(!rm_sky_face_visible(&b, -1) && !rm_sky_face_visible(&b, 6));
+
+	/* the sky image of each face: gl1's skytexorder */
+	CHECK(rm_sky_image_of_face(0) == 0 && rm_sky_image_of_face(1) == 2 && rm_sky_image_of_face(2) == 1);
+	CHECK(rm_sky_image_of_face(3) == 3 && rm_sky_image_of_face(4) == 4 && rm_sky_image_of_face(5) == 5);
+	CHECK(rm_sky_image_of_face(-1) == -1 && rm_sky_image_of_face(6) == -1);
+
+	/* the corner of a face: positions on the box of 2300 or 4096, coordinates clamped to 1/512 .. 511/512, t flipped */
+	CHECK(rm_sky_vec(-1, -1, 0, 0, v, st) == 1);
+	CHECK(v[0] == 2300 && v[1] == 2300 && v[2] == -2300);
+	CHECK(st[0] == 1.0f / 512 && st[1] == 1 - 1.0f / 512);
+	CHECK(rm_sky_vec(1, 1, 0, 0, v, st) == 1);
+	CHECK(v[0] == 2300 && v[1] == -2300 && v[2] == 2300);
+	CHECK(st[0] == 511.0f / 512 && st[1] == 1 - 511.0f / 512);
+	CHECK(rm_sky_vec(1, 1, 0, 1, v, st) == 1 && v[0] == 4096 && v[1] == -4096 && v[2] == 4096);
+	CHECK(rm_sky_vec(0.5f, -0.5f, 4, 0, v, st) == 1);
+	CHECK(v[0] == 1150 && v[1] == -1150 && v[2] == 2300 && st[0] == 0.75f && st[1] == 0.75f);
+	/* the clamp: just inside and exactly at the ends, and outside the box */
+	CHECK(rm_sky_vec(-0.99f, 0, 2, 0, v, st) == 1 && st[0] > 1.0f / 512 && st[0] < 0.01f);
+	CHECK(rm_sky_vec(-2, 3, 2, 0, v, st) == 1 && st[0] == 1.0f / 512 && st[1] == 1 - 511.0f / 512);
+	CHECK(rm_sky_vec(2, -3, 2, 0, v, st) == 1 && st[0] == 511.0f / 512 && st[1] == 1 - 1.0f / 512);
+	CHECK(rm_sky_vec(0, 0, 3, 0, v, st) == 1 && st[0] == 0.5f && st[1] == 0.5f);
+	/* each face's axes: s = 0.5, t = 0.25, so b = (1150, 575, 2300) */
+	{
+		static const float want[6][3] = {
+			{ 2300, -1150, 575 }, { -2300, 1150, 575 }, { 1150, 2300, 575 },
+			{ -1150, -2300, 575 }, { -575, -1150, 2300 }, { 575, -1150, -2300 }
+		};
+
+		ok = 1;
+
+		for (f = 0; f < 6; f++)
+		{
+			ok &= rm_sky_vec(0.5f, 0.25f, f, 0, v, st);
+			ok &= (v[0] == want[f][0]) && (v[1] == want[f][1]) && (v[2] == want[f][2]);
+		}
+
+		CHECK(ok);
+	}
+	CHECK(rm_sky_vec(0, 0, -1, 0, v, st) == 0 && rm_sky_vec(0, 0, 6, 0, v, st) == 0);
+
+	/* the sky name: letters, digits, _ - . and not a path */
+	CHECK(rm_sky_name_ok("unit1_") && rm_sky_name_ok("sky-2.x") && rm_sky_name_ok("a"));
+	CHECK(!rm_sky_name_ok(NULL) && !rm_sky_name_ok("") && !rm_sky_name_ok(".hidden") && !rm_sky_name_ok("a..b"));
+	CHECK(!rm_sky_name_ok("../x") && !rm_sky_name_ok("a/b") && !rm_sky_name_ok("a\\b") && !rm_sky_name_ok("c:x"));
+	CHECK(!rm_sky_name_ok("a b") && !rm_sky_name_ok("a\nb") && !rm_sky_name_ok("a%00") && !rm_sky_name_ok("\x7f"));
+	CHECK(!rm_sky_name_ok("\xc3\xa9") && !rm_sky_name_ok("a*"));
+	{
+		char name[RM_SKY_NAME_MAX + 3];
+
+		memset(name, 'a', sizeof(name));
+		name[RM_SKY_NAME_MAX] = '\0';
+		CHECK(rm_sky_name_ok(name));
+		name[RM_SKY_NAME_MAX] = 'a';
+		name[RM_SKY_NAME_MAX + 1] = '\0';
+		CHECK(!rm_sky_name_ok(name));
+		name[RM_SKY_NAME_MAX - 1] = '.';
+		name[RM_SKY_NAME_MAX] = '\0';
+		CHECK(rm_sky_name_ok(name));
+	}
+
+	/* the rotation and axis: finite */
+	{
+		static const float ax[3] = { 0, 0, 1 };
+		float bad[3] = { 0, NAN, 1 };
+
+		CHECK(rm_sky_params_ok(10, ax) && rm_sky_params_ok(0, ax));
+		CHECK(!rm_sky_params_ok(NAN, ax) && !rm_sky_params_ok(INFINITY, ax) && !rm_sky_params_ok(-INFINITY, ax));
+		CHECK(!rm_sky_params_ok(1, bad));
+		bad[1] = 0;
+		bad[0] = INFINITY;
+		CHECK(!rm_sky_params_ok(1, bad));
+		bad[0] = 0;
+		bad[2] = -INFINITY;
+		CHECK(!rm_sky_params_ok(1, bad));
+	}
+
+	/* the sky modelview: the world times the translation to the origin times the rotation */
+	{
+		float world[16], out[16], org[3] = { 1, 2, 3 }, axz[3] = { 0, 0, 1 }, zero[3] = { 0, 0, 0 };
+
+		mtl_mat_identity(world);
+		rm_sky_matrix(out, world, org, 5, 0, axz);
+		CHECK(out[12] == 1 && out[13] == 2 && out[14] == 3 && out[0] == 1 && out[5] == 1 && out[10] == 1 && out[15] == 1);
+		/* 5 * 18 = 90 degrees about z: the columns turn, the translation of the product (T * R) stays */
+		rm_sky_matrix(out, world, org, 5, 18, axz);
+		CHECK(out[12] == 1 && out[13] == 2 && out[14] == 3);
+		CHECK(fabsf(out[0]) < 1e-6f && fabsf(out[1] - 1) < 1e-6f && fabsf(out[4] + 1) < 1e-6f && fabsf(out[5]) < 1e-6f);
+		/* the time scales the angle: 2 * 45 = 90, the same matrix */
+		{
+			float out2[16];
+
+			rm_sky_matrix(out2, world, org, 2, 45, axz);
+			CHECK(memcmp(out, out2, sizeof(out)) == 0);
+		}
+		/* a zero axis leaves the translation alone (the shim's glRotatef about nothing) */
+		rm_sky_matrix(out, world, org, 5, 18, zero);
+		CHECK(out[0] == 1 && out[1] == 0 && out[12] == 1);
+		/* the world matrix comes first: a world translation (10, 0, 0) is carried through */
+		world[12] = 10;
+		rm_sky_matrix(out, world, org, 0, 0, axz);
+		CHECK(out[12] == 11 && out[13] == 2 && out[14] == 3);
+	}
+
+	/* differential: random polygons of 3 to 8 vertices around the origin against gl1's R_ClipSkyPolygon */
+	ok = 1;
+
+	for (i = 0; i < 20000; i++)
+	{
+		float vecs[65 * 3], copy[65 * 3];
+		int n = 3 + rng() % 6, j;
+
+		for (j = 0; j < n * 3; j++)
+		{
+			vecs[j] = rngf(-1500, 1500);
+		}
+
+		memcpy(copy, vecs, sizeof(vecs));
+		rm_sky_clear(&b);
+
+		for (j = 0; j < 6; j++)
+		{
+			ref_skymins[0][j] = ref_skymins[1][j] = 9999;
+			ref_skymaxs[0][j] = ref_skymaxs[1][j] = -9999;
+		}
+
+		ref_clip_sky(n, copy, 0);
+		ok &= rm_sky_clip(&b, n, vecs);
+		ok &= (memcmp(b.mins, ref_skymins, sizeof(ref_skymins)) == 0) && (memcmp(b.maxs, ref_skymaxs, sizeof(ref_skymaxs)) == 0);
+	}
+
+	CHECK(ok);
+}
+
+/*
+ * The translucent colours, the blend of one over a known destination
+ * and the opaque water's environment: the shader's modulate is the
+ * shim's, and the numbers are those of gl1 (glColor4f(inverse_intensity,
+ * alpha), GL_MODULATE, GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA).
+ */
+void rm_host_shim_modulate(const float *p, const float *t, float *out);
+
+static void
+test_trans(void)
+{
+	float rgba[4], ii, tex[4] = { 1, 0.5f, 0.25f, 1 }, c[4], dst[3] = { 0.2f, 0.4f, 0.6f }, got[3];
+	mtl_rgba_t p, t, m;
+
+	CHECK(rm_trans_alpha(RM_TEX_TRANS33) == 0.33f && rm_trans_alpha(RM_TEX_TRANS66) == 0.66f);
+	CHECK(rm_trans_alpha(RM_TEX_TRANS33 | RM_TEX_TRANS66) == 0.33f);
+	CHECK(rm_trans_alpha(0) == 1 && rm_trans_alpha(RM_TEX_WARP | RM_TEX_FLOWING | RM_TEX_SKY) == 1);
+	CHECK(rm_trans_alpha(RM_TEX_TRANS66 | RM_TEX_WARP) == 0.66f && rm_trans_alpha(RM_TEX_TRANS33 | RM_TEX_FLOWING) == 0.33f);
+
+	CHECK(rm_inverse_intensity(1, 2) == 0.5f && rm_inverse_intensity(1, 1) == 1 && rm_inverse_intensity(1.5f, 2) == 0.75f);
+	ii = rm_inverse_intensity(1, 2);
+	rm_trans_color(ii, 0.33f, rgba);
+	CHECK(rgba[0] == 0.5f && rgba[1] == 0.5f && rgba[2] == 0.5f && rgba[3] == 0.33f);
+	rm_trans_color(ii, 0.66f, rgba);
+	CHECK(rgba[0] == 0.5f && rgba[3] == 0.66f);
+
+	/* the shader's modulate is the shim's on every channel */
+	p.r = rgba[0];
+	p.g = rgba[1];
+	p.b = rgba[2];
+	p.a = rgba[3];
+	t.r = tex[0];
+	t.g = tex[1];
+	t.b = tex[2];
+	t.a = tex[3];
+	m = mtl_world_color(p, t);
+	rm_host_shim_modulate(rgba, tex, c);
+	CHECK(m.r == c[0] && m.g == c[1] && m.b == c[2] && m.a == c[3]);
+	CHECK(m.r == 0.5f && m.g == 0.25f && m.b == 0.125f && m.a == 0.66f);
+
+	/* blended over the destination (0.2, 0.4, 0.6) at alpha 0.66: src * a + dst * (1 - a) */
+	got[0] = m.r * m.a + dst[0] * (1 - m.a);
+	got[1] = m.g * m.a + dst[1] * (1 - m.a);
+	got[2] = m.b * m.a + dst[2] * (1 - m.a);
+	CHECK(fabsf(got[0] - (0.5f * 0.66f + 0.2f * 0.34f)) < 1e-6f);
+	CHECK(fabsf(got[1] - (0.25f * 0.66f + 0.4f * 0.34f)) < 1e-6f);
+	CHECK(fabsf(got[2] - (0.125f * 0.66f + 0.6f * 0.34f)) < 1e-6f);
+	CHECK(fabsf(got[0] - 0.398f) < 1e-6f && fabsf(got[1] - 0.301f) < 1e-6f && fabsf(got[2] - 0.2865f) < 1e-6f);
+
+	/* a texel with alpha 0 (the transparent palette entry of a wall texture) leaves the destination */
+	tex[3] = 0;
+	rm_host_shim_modulate(rgba, tex, c);
+	CHECK(c[3] == 0);
+
+	/* the opaque water: GL_MODULATE with the inverse intensity, or the texel itself with overbright bits */
+	CHECK(rm_warp_color(0, 0.5f, rgba) == 1 && rgba[0] == 0.5f && rgba[1] == 0.5f && rgba[2] == 0.5f && rgba[3] == 1);
+	CHECK(rm_warp_color(1, 0.5f, rgba) == 0 && rgba[0] == 1 && rgba[1] == 1 && rgba[2] == 1 && rgba[3] == 1);
+	CHECK(rm_warp_color(4, 0.25f, rgba) == 0);
+	CHECK(rm_warp_color(2, 0.25f, rgba) == 0 && rm_warp_color(0, 0.25f, rgba) == 1 && rgba[0] == 0.25f);
+
+	/* the batch of the alpha chain breaks where gl1's R_UpdateGLBuffer draws: another texture or another alpha */
+	CHECK(!rm_alpha_break(0, 3, 0.33f, 4, 0.66f));       /* nothing batched yet */
+	CHECK(!rm_alpha_break(5, 3, 0.33f, 3, 0.33f));
+	CHECK(rm_alpha_break(5, 3, 0.33f, 4, 0.33f));
+	CHECK(rm_alpha_break(5, 3, 0.33f, 3, 0.66f));
+	CHECK(rm_alpha_break(1, 3, 0.33f, 4, 0.66f));
+	CHECK(!rm_alpha_break(-1, 3, 0.33f, 4, 0.66f));
+}
+
 int
 main(void)
 {
@@ -2263,6 +3217,10 @@ main(void)
 	test_lm_build();
 	test_lm_combine();
 	test_lm_line();
+	test_warp_arith();
+	test_warp_subdivide();
+	test_sky();
+	test_trans();
 
 	printf("rm_host_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
