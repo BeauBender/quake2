@@ -20,8 +20,8 @@ repository does not have, so nothing ran on `main` after a merge.
 ## Decision
 
 1. Only Apple platforms are built and tested by this fork. Other platforms
-   are unmaintained: nothing tests them or runs them. The Linux compile in
-   the CodeQL job (below) is a side effect of analysis, not a Linux check.
+   are unmaintained: nothing tests them or runs them. No CI job
+   compiles the engine on Linux.
 2. The two Linux test workflows are removed. A pull request runs the macOS
    test build (build, unit tests, coverage), CodeQL and Cppcheck.
    Cppcheck is a job of `codeql.yml`, on a free standard runner, and still
@@ -41,9 +41,21 @@ repository does not have, so nothing ran on `main` after a merge.
 - No Linux unit tests, coverage or package run in CI. BSD and Windows are
   compiled nowhere.
 - The CodeQL `c-cpp` job (`.github/workflows/codeql.yml`, job `analyze`)
-  compiles `client server game ref_gl1 ref_gl3 ref_soft` on Linux as a side
-  effect of analysis, so a change that stops the Linux compile turns a pull
-  request red. It checks that the code compiles there, nothing more.
+  runs on `macos-latest`, with no container and no package install. It builds
+  `client server game ref_gl1 ref_gl3 ref_soft ref_metal`, then builds
+  `ref_gl1` again with `WITH_METAL_SHIM=yes`, both with `METAL_SHADERS=no`, so
+  both `ref_gl1` variants (the OpenGL one and the Metal shim one) and
+  `ref_metal` are compiled and their C files analysed. The shaders are not
+  compiled in CI: the hosted runner has Xcode but not the Metal shader
+  compiler, and nothing is installed, so no `.metallib` is built. CodeQL does
+  not analyse Objective-C, so the `.m` files are compiled but outside the
+  analysis.
+  The Linux-only preprocessor branches (`#if defined(__linux__)` and the
+  non-Darwin arms) are no longer seen by the analysis; this is a stated loss.
+  The vendored SDL3 under `third_party/SDL3` is now compiled inside the
+  analysed build, so code scanning may report on it; those findings are
+  upstream's code and are not acted on here.
+  The `actions` entry of the job runs on `ubuntu-latest`.
 - Cppcheck also runs on a Linux runner, because it analyses the source and
   does not build for that platform.
 
