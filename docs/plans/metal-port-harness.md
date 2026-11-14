@@ -1624,7 +1624,8 @@ The timedemo of `demo1.dm2` ran at the display's 120 fps for both
 renderers on this host today, whatever `r_vsync` and `vid_maxfps` said,
 so before and after were compared by the process's CPU time
 (`/usr/bin/time -p`), alternating the two `ref_metal` builds next to the
-same engine.
+same engine. That time leaves out the GPU's: what the alias pipelines
+cost on the GPU is not measured by it.
 
 Measured on the build VM, sources `41bcf6f2` (the pins) and `c3d3257a`
 (the `ASAN=1` record), load averages 3 to 11: the numbers of the design

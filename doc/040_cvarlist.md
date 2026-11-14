@@ -376,8 +376,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 
 * **hand**: Which hand the view weapon is held in: `0` right (the
   default), `1` left (the weapon is drawn mirrored), `2` centered (the
-  OpenGL 1.4 and the Metal renderer then do not draw it). It is also
-  sent to the server.
+  weapon is then not drawn). It is also sent to the server.
 
 * **r_drawentities**: If set to `0`, no entity (model, door, platform)
   is drawn. Defaults to `1`.
