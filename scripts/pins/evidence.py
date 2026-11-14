@@ -13,8 +13,7 @@
 #
 #   evidence.py build --ref-dir D --cand-dir D --compare F --out D --prefix P [--meta k=v]...
 #   evidence.py synth --out D --prefix P [--noise BYTES | --size WxHxFRAMES] [--meta k=v]...
-#   evidence.py stage --root D --manifest M --stage D [file]...
-#   evidence.py markdown --manifest M --base-url URL
+#   evidence.py stage --root D --store D --manifest M --stage D --repo O/N --markdown F [-- file...]
 #   evidence.py selftest
 #
 # Captions use a built-in 5x7 bitmap font; no font file is read.
@@ -28,12 +27,14 @@ import struct
 import sys
 import zlib
 
-BUDGET = int(os.environ.get('PINS_EVIDENCE_BUDGET', '4000000'))  # bytes per file
+BUDGET = os.environ.get('PINS_EVIDENCE_BUDGET', '4000000')  # bytes per file
+if not re.fullmatch(r'[1-9][0-9]{0,9}', BUDGET, re.ASCII):
+    raise SystemExit('evidence: PINS_EVIDENCE_BUDGET must be a positive whole number of bytes')
+BUDGET = int(BUDGET)
 DIFF_GAIN = 8          # the difference panel shows |ref - cand| * 8, clamped
 CLIP_DELAY_MS = 500    # each clip frame is shown for half a second
 CLIP_MAX_FRAMES = 48   # a longer pin is subsampled evenly to this many frames
 MANIFEST_MAGIC = 'pins-evidence 1'
-NAME_RE = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*$')
 
 # ---- images ----------------------------------------------------------------
 # An image is (w, h, bytearray of w*h*3 RGB bytes, rows top to bottom).
@@ -423,8 +424,9 @@ def lzw_encode(idx):
     return bytes(out)
 
 
-def lzw_decode(data, npix):
-    """The inverse of lzw_encode, for the self-test and for reading a GIF back."""
+def lzw_decode(data, npix, strict=False):
+    """The inverse of lzw_encode, for the self-test and for reading a GIF back.
+    strict: nothing may follow the end code but the zero bits of its last byte."""
     pos = acc = nbits = 0
     size = 9
     table = [bytes([i]) for i in range(256)] + [b'', b'']
@@ -446,6 +448,8 @@ def lzw_decode(data, npix):
             prev = None
             continue
         if code == 257:
+            if strict and (pos != len(data) or acc):
+                raise ValueError('data after the LZW end code')
             break
         if prev is None:
             entry = table[code]
@@ -566,29 +570,6 @@ def parse_meta(pairs):
     return meta
 
 
-def read_manifest(path):
-    with open(path) as f:
-        lines = f.read().split('\n')
-    if lines[0] != MANIFEST_MAGIC:
-        raise ValueError('not an evidence manifest')
-    meta, scores, files = {}, [], []
-    for line in lines[1:]:
-        if not line:
-            continue
-        k, _, v = line.partition(' ')
-        if k == 'file':
-            parts = v.split(' ')
-            if len(parts) != 6:
-                raise ValueError('bad file line: %s' % line)
-            files.append({'name': parts[0], 'size': int(parts[1]), 'sha256': parts[2],
-                          'kind': parts[3], 'dims': parts[4], 'scale': parts[5]})
-        elif k == 'score':
-            scores.append(v.split(' '))
-        else:
-            meta[k] = v
-    return meta, scores, files
-
-
 # ---- identity ----------------------------------------------------------------
 
 
@@ -638,7 +619,7 @@ def parse_compare(path):
     with open(path) as f:
         for line in f:
             p = line.split()
-            if len(p) == 4 and p[0].endswith('.tga') and NAME_RE.match(p[0]):
+            if len(p) == 4 and SCORE_RE.fullmatch(' '.join(p)):
                 rows.append(p)
             elif line.startswith('frames='):
                 summary = ' '.join(t for t in p if re.match(r'^[a-z_]+=[0-9.]+$', t))
@@ -764,150 +745,328 @@ def cmd_synth(a):
         ('clip.gif', 'gif', encode_gif(frames, 125), w, h, 1)])
 
 
-# ---- stage: the provenance and type checks of evidence-publish -------------
-# Every file to upload is listed in a manifest the evidence step wrote, lies
-# directly in the manifest's folder inside the evidence root, is a PNG or a
-# GIF by name and by content (or the manifest itself), and matches the size
-# and SHA-256 the manifest records. Data files of the game and of the pin
-# store are refused by name and by content before anything else is looked at.
-# Accepted files are copied to the stage folder and hashed again there; only
-# the copies are uploaded.
+# ---- stage: what evidence-publish may upload -------------------------------
+# Publish never uploads bytes it found. It reads the manifest and each image
+# once, through a descriptor opened without following links, runs every check
+# on the bytes it read, and writes those same bytes to the stage folder; the
+# manifest it stages is regenerated from the parsed and validated fields, and
+# the Markdown is built from the same fields. The file names are derived from
+# the validated card, commit, renderer and scenario, never taken from the
+# manifest. Every value must match the exact pattern the evidence step can
+# write; anything else refuses the whole set. Checks per image: size within
+# the budget, the SHA-256 the manifest records, and a full structural parse
+# (PNG: signature, every chunk CRC, exactly the chunks the encoder writes,
+# nothing after IEND, every frame decompresses to the stated size; GIF: the
+# header, palette and loop block the encoder writes, every frame walked to
+# the trailer with nothing after it). Refusals never print the value a check
+# exists to hide.
+
+SYNTH_CONTENT = 'synthetic: colour bars, a moving square, frame numbers; no game content'
+NOISE_BUDGET = 'exempt: a size-limit probe'
+_NAME = r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}'
+_LOWER = r'[a-z0-9_][a-z0-9_-]{0,63}'
+_DEC = r'[0-9]+(?:\.[0-9]+)?'
+_COUNT = r'[1-9][0-9]{0,5}'
+NAME_ONLY_RE = re.compile(_NAME, re.ASCII)
+MANIFEST_NAME_RE = re.compile(_NAME + r'-evidence\.txt', re.ASCII)
+REPO_RE = re.compile(r'[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}', re.ASCII)
+FRAME_RE = re.compile(_NAME + r'\.tga', re.ASCII)
+SCORE_RE = re.compile(r'(%s\.tga) (%s|-) (%s|-) (ok|OVER|MISSING|EXTRA)' % (_NAME, _DEC, _DEC), re.ASCII)
+SUMMARY_TOKEN = r'[a-z_]+=[0-9.]+'
+FILE_RE = re.compile(r'file (%s) ([0-9]{1,10}) ([0-9a-f]{64}) (png|apng|gif) ([1-9][0-9]{0,4})x([1-9][0-9]{0,4}) 1/([1-8])' % _NAME, re.ASCII)
+PIN_RE = r'(%s)/(%s)/(%s)' % (_LOWER, _LOWER, _NAME)
+VALUE_RE = {k: re.compile(v, re.ASCII) for k, v in {
+    'card': r'[A-Za-z0-9]{1,32}', 'commit': r'[0-9a-f]{12,40}|nogit',
+    'command': r'pins\.sh evidence(?: [A-Za-z0-9_.-]{1,100}){1,20}', 'content': re.escape(SYNTH_CONTENT),
+    'renderer': _LOWER, 'scenario': _LOWER, 'reference': PIN_RE, 'candidate': PIN_RE,
+    'compare-exit': r'[0-9]{1,3}', 'ref-caption': 'REFERENCE ' + _LOWER, 'cand-caption': 'CANDIDATE ' + _LOWER,
+    'frames': _COUNT, 'clip-frames': _COUNT, 'clip-delay-ms': _COUNT, 'diff-gain': _COUNT,
+    'budget': r'[1-9][0-9]{0,9}|' + re.escape(NOISE_BUDGET), 'worst-frame': _NAME + r'\.tga',
+    'summary': r'(?:%s(?: %s){0,15})?' % (SUMMARY_TOKEN, SUMMARY_TOKEN)}.items()}
+# the fields of each kind of set, in the order the evidence step writes them
+BUILD_KEYS = ['card', 'commit', 'command', 'renderer', 'scenario', 'reference', 'candidate', 'compare-exit',
+              'ref-caption', 'cand-caption', 'frames', 'clip-frames', 'clip-delay-ms', 'diff-gain', 'budget',
+              'worst-frame', 'summary']
+PATTERN_KEYS = ['card', 'commit', 'command', 'content', 'clip-frames', 'clip-delay-ms', 'budget']
+NOISE_KEYS = ['card', 'commit', 'command', 'content', 'budget']
+# the options "pins.sh evidence" accepts, each with the pattern of its value
+BUILD_OPTS = {'--card': r'[A-Za-z0-9]{1,32}', '--ref': _LOWER, '--ref-id': _NAME, '--cand-id': _NAME,
+              '--run': r'[1-9][0-9]{0,2}', '--threshold': r'[0-9]+(?:\.[0-9]*)?|\.[0-9]+',
+              '--bad-threshold': r'[0-9]+(?:\.[0-9]*)?|\.[0-9]+'}
+SYNTH_OPTS = {'--card': r'[A-Za-z0-9]{1,32}', '--noise': r'[1-9][0-9]{0,9}'}
+
 
 def refuse(msg):
     raise SystemExit('evidence-publish: refused: ' + msg)
 
 
-def data_file_reason(name, head):
-    """Why name (with its first bytes head) is a game or pin-store data file, or None."""
-    low = name.lower()
-    if low.endswith('.pak') or head[:4] == b'PACK':
-        return 'a game data archive (.pak)'
-    if low.endswith(('.pk3', '.zip')) or head[:4] == b'PK\x03\x04':
-        return 'a game data archive (.pk3/.zip)'
-    if low.endswith('.dm2'):
-        return 'a demo (.dm2)'
-    if low.endswith('.cin'):
-        return 'a cinematic (.cin)'
-    if low.endswith('.q2r') or 'trace' in low or head[:8] == b'Q2REFREC':
-        return 'a renderer trace (.q2r)'
-    if low == 'manifest.txt' or re.match(rb'^[A-Za-z0-9_.-]+\.tga [a-z0-9_-]+ [0-9]+x[0-9]+\n', head):
-        return 'a pin-store manifest'
-    if low.endswith('.tga') or low in ('complete', 'incomplete', 'engine.log', 'timedemo.txt'):
-        return 'a file of the pin store'
-    return None
+def _command_options(words, opts):
+    """{option: last value} of "--opt value" pairs; refuses anything else."""
+    if len(words) % 2:
+        refuse('the manifest command is not one evidence writes')
+    got = {}
+    for k, v in zip(words[0::2], words[1::2]):
+        if k not in opts or not re.fullmatch(opts[k], v, re.ASCII):
+            refuse('the manifest command is not one evidence writes')
+        got[k] = v
+    return got
 
 
-def physical(p):
-    return os.path.realpath(p)
+def render_manifest(fields, scores, files):
+    lines = [MANIFEST_MAGIC] + ['%s %s' % kv for kv in fields.items()]
+    lines += ['score %s' % ' '.join(s) for s in scores]
+    lines += ['file %s %d %s %s %dx%d 1/%d' % (f['name'], f['size'], f['sha256'], f['kind'], f['w'], f['h'], f['scale'])
+              for f in files]
+    return '\n'.join(lines) + '\n'
+
+
+def parse_manifest(data):
+    """The validated set a manifest describes: {fields, scores, files, prefix,
+    expect}, where files are the manifest's file lines, prefix is the name
+    stem derived from the validated fields and expect is [(name, kind,
+    frames, delay_ms)] of the files that set has. Refuses any line, value or
+    combination the evidence step cannot write; never prints a value."""
+    try:
+        text = data.decode('ascii')
+    except UnicodeDecodeError:
+        refuse('the manifest is not plain ASCII text')
+    if not text.endswith('\n') or '\r' in text:
+        refuse('the manifest does not have the line endings evidence writes')
+    lines = text[:-1].split('\n')
+    if lines[0] != MANIFEST_MAGIC:
+        refuse('the manifest does not start with the line "%s"' % MANIFEST_MAGIC)
+    fields, scores, files = {}, [], []
+    for no, line in enumerate(lines[1:], 2):
+        k, _, v = line.partition(' ')
+        if k == 'file' and FILE_RE.fullmatch(line):
+            m = FILE_RE.fullmatch(line)
+            files.append({'name': m.group(1), 'size': int(m.group(2)), 'sha256': m.group(3), 'kind': m.group(4),
+                          'w': int(m.group(5)), 'h': int(m.group(6)), 'scale': int(m.group(7))})
+        elif k == 'score' and SCORE_RE.fullmatch(v):
+            scores.append(list(SCORE_RE.fullmatch(v).groups()))
+        elif k in VALUE_RE and k not in fields and VALUE_RE[k].fullmatch(v):
+            fields[k] = v
+        else:
+            refuse('line %d of the manifest is not a line evidence writes' % no)
+    words = fields.get('command', '').split(' ')[2:]
+    keys = list(fields)
+    if keys == BUILD_KEYS:
+        renderer, scenario, card = fields['renderer'], fields['scenario'], fields['card']
+        rs, rr, rid = re.fullmatch(PIN_RE, fields['reference']).groups()
+        cs, cr, cid = re.fullmatch(PIN_RE, fields['candidate']).groups()
+        opt = _command_options(words[2:], BUILD_OPTS)
+        scored = [s[0] for s in scores if s[1] != '-']
+        if (words[:2] != [renderer, scenario] or opt.get('--card', 'adhoc') != card or opt.get('--ref', 'gl1') != rr
+                or opt.get('--ref-id', rid) != rid or opt.get('--cand-id', cid) != cid
+                or (rs, cs, cr) != (scenario, scenario, renderer)
+                or fields['ref-caption'] != 'REFERENCE ' + rr or fields['cand-caption'] != 'CANDIDATE ' + renderer
+                or int(fields['frames']) != len(scores) or fields['worst-frame'] not in scored
+                or int(fields['clip-frames']) > min(CLIP_MAX_FRAMES, len(scored))
+                or fields['diff-gain'] != str(DIFF_GAIN) or fields['clip-delay-ms'] != str(CLIP_DELAY_MS)
+                or fields['budget'] == NOISE_BUDGET):
+            refuse('the manifest fields do not agree with each other as evidence writes them')
+        prefix = '%s-%s-%s-%s' % (card, cid.split('-')[0], renderer, scenario)
+        n = int(fields['clip-frames'])
+        expect = [('still.png', 'png', 1, 0), ('clip.png', 'apng', n, CLIP_DELAY_MS), ('clip.gif', 'gif', n, CLIP_DELAY_MS)]
+    elif keys in (PATTERN_KEYS, NOISE_KEYS) and words[:1] == ['--synthetic'] and not scores:
+        opt = _command_options(words[1:], SYNTH_OPTS)
+        noise = opt.get('--noise')
+        if opt.get('--card', 'adhoc') != fields['card'] or (keys == NOISE_KEYS) != (noise is not None) \
+                or (fields['budget'] == NOISE_BUDGET) != (noise is not None) \
+                or (noise is None and fields['clip-delay-ms'] != '125'):
+            refuse('the manifest fields do not agree with each other as evidence writes them')
+        prefix = '%s-%s-synthetic-%s' % (fields['card'], fields['commit'], 'noise' + noise if noise else 'pattern')
+        if noise:
+            expect = [('noise.png', 'apng', max(1, round(int(noise) / (512 * 512 * 3))), CLIP_DELAY_MS)]
+        else:
+            n = int(fields['clip-frames'])
+            expect = [('still.png', 'png', 1, 0), ('clip.png', 'apng', n, 125), ('clip.gif', 'gif', n, 125)]
+    else:
+        refuse('the manifest does not hold exactly the fields evidence writes')
+    expect = [(prefix + '-' + s, kind, n, d) for s, kind, n, d in expect]
+    if [(f['name'], f['kind']) for f in files] != [(e[0], e[1]) for e in expect]:
+        refuse('the files the manifest lists are not the ones evidence writes for this set')
+    if render_manifest(fields, scores, files) != text:
+        refuse('the manifest is not in the form evidence writes')
+    return {'fields': fields, 'scores': scores, 'files': files, 'prefix': prefix, 'expect': expect}
+
+
+def _inflate(z, w, h, what):
+    """Checks that the zlib stream z holds exactly h rows of w RGB pixels,
+    each with a filter type the encoder uses (None, Sub, Up)."""
+    n = h * (1 + 3 * w)
+    d = zlib.decompressobj()
+    raw = d.decompress(z, n + 1)
+    if len(raw) != n or not d.eof or d.unused_data or d.unconsumed_tail:
+        refuse('%s: a frame does not decompress to the stated size' % what)
+    if not set(raw[0::1 + 3 * w]) <= {0, 1, 2}:
+        refuse('%s: a row uses a filter the encoder does not write' % what)
+
+
+def check_png(data, what, kind, w, h, frames, delay_ms):
+    try:
+        chunks = png_chunks(data)
+    except (ValueError, struct.error):
+        refuse('%s is not a whole PNG (signature, chunk lengths and CRCs, nothing after IEND)' % what)
+    kinds = [k for k, _ in chunks]
+    if kind == 'png':
+        want = [b'IHDR', b'IDAT', b'IEND']
+    else:
+        want = [b'IHDR', b'acTL', b'fcTL', b'IDAT'] + [b'fcTL', b'fdAT'] * (frames - 1) + [b'IEND']
+    if kinds != want:
+        refuse('%s: its PNG chunks are not exactly the ones the encoder writes' % what)
+    if chunks[0][1] != struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0):
+        refuse('%s: its PNG header is not the stated size of 8-bit RGB' % what)
+    if kind == 'apng' and chunks[1][1] != struct.pack('>II', frames, 0):
+        refuse('%s: its animation control is not the one the encoder writes' % what)
+    seq = 0
+    for k, body in chunks[2:-1] if kind == 'apng' else chunks[1:-1]:
+        if k == b'fcTL':
+            if body != struct.pack('>IIIIIHHBB', seq, w, h, 0, 0, delay_ms, 1000, 0, 0):
+                refuse('%s: a frame control is not the one the encoder writes' % what)
+            seq += 1
+        elif k == b'fdAT':
+            if body[:4] != struct.pack('>I', seq):
+                refuse('%s: a frame is out of sequence' % what)
+            seq += 1
+            _inflate(body[4:], w, h, what)
+        else:
+            _inflate(body, w, h, what)
+
+
+def check_gif(data, what, w, h, frames, delay_ms):
+    head = b'GIF89a' + struct.pack('<HHBBB', w, h, 0xF7, 0, 0) + GIF_PALETTE + b'\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00'
+    if data[:len(head)] != head:
+        refuse('%s: its GIF header, palette or loop block is not the one the encoder writes' % what)
+    frame = b'\x21\xf9\x04\x04' + struct.pack('<H', max(2, delay_ms // 10)) + b'\x00\x00' + \
+        b'\x2c' + struct.pack('<HHHHB', 0, 0, w, h, 0) + b'\x08'
+    pos = len(head)
+    for _ in range(frames):
+        if data[pos:pos + len(frame)] != frame:
+            refuse('%s: a GIF frame header is not the one the encoder writes' % what)
+        pos += len(frame)
+        z = bytearray()
+        while pos < len(data) and data[pos]:
+            z += data[pos + 1:pos + 1 + data[pos]]
+            pos += 1 + data[pos]
+        pos += 1
+        try:
+            lzw_decode(bytes(z), w * h, strict=True)
+        except ValueError:
+            refuse('%s: a GIF frame does not decode to the stated size' % what)
+    if data[pos:] != b'\x3b':
+        refuse('%s: the GIF does not end at its trailer after the stated frames' % what)
+
+
+def _read(dfd, name, limit, what):
+    """The bytes of the regular file name in the directory dfd, opened without
+    following a link, at most limit bytes."""
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+    except OSError:
+        refuse('%s cannot be opened as a file in the set folder (missing, unreadable or a symbolic link)' % what)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            refuse('%s is not a regular file' % what)
+        with os.fdopen(fd, 'rb', closefd=False) as f:
+            data = f.read(limit + 1)
+    finally:
+        os.close(fd)
+    if len(data) > limit:
+        refuse('%s is over the budget of %d bytes' % (what, limit))
+    return data
+
+
+def _write(dfd, name, data):
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=dfd)
+    with os.fdopen(fd, 'wb') as f:
+        f.write(data)
 
 
 def cmd_stage(a):
-    root = physical(a['root'])
-    mpath = a['manifest']
-    if os.path.islink(mpath) or not os.path.isfile(mpath):
-        refuse('the manifest %s is not a regular file' % os.path.basename(mpath))
-    mdir = physical(os.path.dirname(os.path.abspath(mpath)))
-    if not (mdir + os.sep).startswith(root + os.sep) or mdir == root:
-        refuse('the manifest is outside the evidence folder')
-    store = a.get('store')
-    if store and (mdir + os.sep).startswith(physical(store) + os.sep):
+    mname = os.path.basename(a['manifest'])
+    if not MANIFEST_NAME_RE.fullmatch(mname):
+        refuse('the manifest name is not a bare evidence manifest name ([A-Za-z0-9_][A-Za-z0-9_.-]*-evidence.txt)')
+    if not REPO_RE.fullmatch(a['repo']):
+        refuse('the repository is not owner/name')
+    root = os.path.realpath(a['root'])
+    mdir = os.path.realpath(os.path.dirname(os.path.abspath(a['manifest'])))
+    if os.path.dirname(mdir) != root:
+        refuse('the manifest is outside the evidence folder (it must lie in a set folder directly inside it)')
+    store = os.path.realpath(a['store'])
+    if (mdir + os.sep).startswith(store + os.sep):
         refuse('the manifest is inside the pin store')
-    mname = os.path.basename(mpath)
-    with open(mpath, 'rb') as f:
-        mhead = f.read(64)
-    why = data_file_reason(mname, mhead)
-    if why:
-        refuse('%s is %s' % (mname, why))
-    if not mname.endswith('-evidence.txt'):
-        refuse('%s is not an evidence manifest (*-evidence.txt)' % mname)
+    dfd = os.open(mdir, os.O_RDONLY | os.O_DIRECTORY)
     try:
-        meta, scores, files = read_manifest(mpath)
-    except (ValueError, UnicodeDecodeError) as e:
-        refuse('%s: %s' % (mname, e))
-    listed = {f['name']: f for f in files}
-    if a['files']:
+        s = parse_manifest(_read(dfd, mname, 1 << 20, 'the manifest'))
+        text = render_manifest(s['fields'], s['scores'], s['files']).encode()
+        # the file lines carry every asset name, so every name printed from here on is clean
+        identity_check(text, 'the manifest')
+        if mname != s['prefix'] + '-evidence.txt' or os.path.basename(mdir) != s['prefix']:
+            refuse('the manifest and its folder are not named after the set it describes (%s)' % s['prefix'])
+        listed = {f['name']: (f, e) for f, e in zip(s['files'], s['expect'])}
         chosen = []
         for p in a['files']:
             n = os.path.basename(p)
-            if n not in listed or physical(p) != os.path.join(mdir, n):
-                refuse('%s is not in the manifest' % n)
+            if p.startswith('-') or not NAME_ONLY_RE.fullmatch(n) or n not in listed \
+                    or os.path.realpath(p) != os.path.join(mdir, n):
+                refuse('a file named after the manifest is not one of the files of this set in its folder')
             chosen.append(listed[n])
-    else:
-        chosen = files
-    os.makedirs(a['stage'], exist_ok=True)
-    with open(mpath, 'rb') as f:
-        mdata = f.read()
-    identity_check(mdata, mname)
-    for ent in chosen:
-        n = ent['name']
-        path = os.path.join(mdir, n)
-        head = b''
-        if os.path.isfile(path):
-            with open(path, 'rb') as f:
-                head = f.read(64)
-        why = data_file_reason(n, head)
-        if why:
-            refuse('%s is %s' % (n, why))
-        if not NAME_RE.match(n) or os.sep in n:
-            refuse('%s is outside the evidence folder (not a bare file name)' % n)
-        st = os.lstat(path) if os.path.lexists(path) else None
-        if st is None:
-            refuse('%s, listed in the manifest, does not exist' % n)
-        if stat.S_ISLNK(st.st_mode) or os.path.dirname(physical(path)) != mdir:
-            refuse('%s is outside the evidence folder (a symbolic link)' % n)
-        if not stat.S_ISREG(st.st_mode):
-            refuse('%s is not a regular file' % n)
-        if n.endswith('.png') and head[:8] == PNG_SIG and ent['kind'] in ('png', 'apng'):
-            pass
-        elif n.endswith('.gif') and head[:6] == b'GIF89a' and ent['kind'] == 'gif':
-            pass
-        else:
-            refuse('%s is not a PNG or GIF image written by the evidence step' % n)
-        dst = os.path.join(a['stage'], n)
-        shutil.copyfile(path, dst)
-        if os.path.getsize(dst) != ent['size'] or sha256(dst) != ent['sha256']:
-            refuse('%s: its digest differs from the manifest' % n)
-        with open(dst, 'rb') as f:
-            identity_check(f.read(), n)
-        print(dst)
-    dst = os.path.join(a['stage'], mname)
-    with open(dst, 'wb') as f:
-        f.write(mdata)
-    print(dst)
+        chosen = chosen or list(listed.values())
+        budget = BUDGET if s['fields']['budget'] == NOISE_BUDGET else min(BUDGET, int(s['fields']['budget']))
+        staged = []
+        for f, (n, kind, frames, delay) in chosen:
+            data = _read(dfd, n, budget, n)
+            if len(data) != f['size'] or hashlib.sha256(data).hexdigest() != f['sha256']:
+                refuse('%s: its digest differs from the manifest' % n)
+            if kind == 'gif':
+                check_gif(data, n, f['w'], f['h'], frames, delay)
+            else:
+                check_png(data, n, kind, f['w'], f['h'], frames, delay)
+            identity_check(data, n)
+            staged.append((n, data))
+    finally:
+        os.close(dfd)
+    md = markdown(s, [n for n, _ in staged], mname, 'https://github.com/%s/releases/download/pr-evidence/' % a['repo'])
+    sfd = os.open(a['stage'], os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        if os.listdir(sfd):
+            refuse('the stage folder is not empty')
+        for n, data in staged + [(mname, text)]:
+            _write(sfd, n, data)
+    finally:
+        os.close(sfd)
+    with open(a['markdown'], 'x') as f:
+        f.write(md)
 
 
-def cmd_markdown(a):
-    meta, scores, files = read_manifest(a['manifest'])
-    if 'stage' in a:  # only what was uploaded
-        files = [f for f in files if os.path.isfile(os.path.join(a['stage'], f['name']))]
-    base = a['base-url'].rstrip('/') + '/'
-    url = {f['kind']: base + f['name'] for f in files}
-    mname = os.path.basename(a['manifest'])
+def markdown(s, names, mname, base):
+    """The pull-request section, from the validated fields only."""
+    meta = s['fields']
+    url = {e[1]: base + e[0] for e in s['expect'] if e[0] in names}
     scen = meta.get('scenario', 'synthetic')
     if 'renderer' in meta:
-        out = ['### Evidence: `%s` on `%s`' % (scen, meta['renderer']), '']
+        out = ['### Evidence: `%s` on `%s`' % (scen, meta['renderer']), '',
+               'Reference `%s`, candidate `%s`%s.' % (meta['reference'], meta['candidate'],
+                                                     '; `%s`' % meta['summary'] if meta['summary'] else ''), '']
     else:
         out = ['### Evidence: synthetic test pattern (no game content)', '']
-    if 'reference' in meta:
-        out.append('Reference `%s`, candidate `%s`; %s.' % (meta['reference'], meta['candidate'], meta.get('summary', '')))
-        out.append('')
     if 'png' in url and 'renderer' not in meta:
         out += ['![synthetic test pattern](%s)' % url['png'], '']
     elif 'png' in url:
-        cap = 'reference, candidate, difference x%s' % meta.get('diff-gain', DIFF_GAIN)
-        if 'worst-frame' in meta:
-            cap += ', frame %s (the worst score)' % meta['worst-frame']
-        out += ['![%s: %s](%s)' % (scen, cap, url['png']), '']
+        out += ['![%s: reference, candidate, difference x%s, frame %s (the worst score)](%s)'
+                % (scen, meta['diff-gain'], meta['worst-frame'], url['png']), '']
     if 'apng' in url:
-        out += ['![%s: clip, %s frames at %s ms each](%s)' % (scen, meta.get('clip-frames', '?'), meta.get('clip-delay-ms', '?'), url['apng']), '']
+        count = meta.get('clip-frames', str(s['expect'][0][2]))
+        out += ['![%s: clip, %s frames at %s ms each](%s)' % (scen, count, meta.get('clip-delay-ms', CLIP_DELAY_MS), url['apng']), '']
     if 'gif' in url:
-        out += ['GIF of the same clip (256 fixed colours): [%s](%s)' % (os.path.basename(url['gif']), url['gif']), '']
-    if scores:
+        out += ['GIF of the same clip (256 fixed colours): [%s](%s)' % (url['gif'][len(base):], url['gif']), '']
+    if s['scores']:
         out += ['<details><summary>Scores per frame</summary>', '', '| Frame | Score | Bad | Verdict |', '|---|---|---|---|']
-        out += ['| %s |' % ' | '.join(s) for s in scores]
+        out += ['| `%s` | %s | %s | %s |' % tuple(r) for r in s['scores']]
         out += ['', '</details>', '']
     out.append('Manifest with the command, the commit, the pin ids and the SHA-256 of every file: [%s](%s)' % (mname, base + mname))
-    print('\n'.join(out))
+    return '\n'.join(out) + '\n'
 
 
 # ---- self-test ---------------------------------------------------------------
@@ -936,6 +1095,16 @@ def _selftest(t):
             write_tga(p, img, up, bpp)
             if read_tga(p) != img:
                 _fail('TGA round trip (bottom_up=%s, %d bit)' % (up, bpp))
+    # only uncompressed 24/32-bit truecolor with no colour map is read
+    good = bytes([0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 24, 0x20]) + b'\x00\x00\xff'
+    for i, v in ((2, 10), (1, 1), (16, 16), (12, 0), (14, 0)):
+        with open(p, 'wb') as f:
+            f.write(good[:i] + bytes([v]) + good[i + 1:])
+        try:
+            read_tga(p)
+            _fail('a TGA with byte %d = %d must be refused' % (i, v))
+        except ValueError:
+            pass
     # PNG: every filter path round-trips through the independent reader; CRCs and lengths hold
     flat = blank(64, 16, (9, 200, 77))
     pat = pattern(160, 120, 3, 10)
@@ -974,8 +1143,26 @@ def _selftest(t):
         _fail('APNG round trip')
     # GIF: LZW decodes back, including a stream long and noisy enough to fill the table
     for idx in (bytes(1), bytes(range(256)) * 3, quantize(noise(300, 200, 3)), bytes(5000)):
-        if lzw_decode(lzw_encode(idx), len(idx)) != idx:
+        if lzw_decode(lzw_encode(idx), len(idx), strict=True) != idx:
             _fail('LZW round trip of %d pixels' % len(idx))
+    # strict: a set padding bit after the end code, or a byte after it, is refused
+    padded = 0
+    for idx in (bytes(1), bytes(range(256)) * 3, bytes(5000)):
+        z = lzw_encode(idx)
+        for z2 in [z[:-1] + bytes([z[-1] | (1 << b)]) for b in range(8)] + [z + b'\x00']:
+            try:
+                same = z2 != z and lzw_decode(z2, len(idx)) == idx
+            except ValueError:
+                same = False
+            if same:
+                padded += 1
+                try:
+                    lzw_decode(z2, len(idx), strict=True)
+                    _fail('strict LZW must refuse anything after the end code')
+                except ValueError:
+                    pass
+    if padded < 2:
+        _fail('the strict LZW check met no padding to test')
     gw, gh, gframes = decode_gif(encode_gif(frames))
     if (gw, gh) != (96, 64) or gframes != [quantize(f) for f in frames]:
         _fail('GIF round trip')
@@ -995,68 +1182,145 @@ def _selftest(t):
     data, f = fit(lambda k: encode_png(downscale(big, k)), 1, limit=40000)
     if f != 2 or len(data) > 40000:
         _fail('fit chose 1/%d for %d bytes' % (f, len(data)))
-    # build end to end over two synthetic pins; the manifest names no local path
+    # build end to end over two pins whose frames are literal engine bytes, as
+    # VID_WriteTGA (src/client/vid/vid.c) writes them: an 18-byte header with
+    # type 2, 24 bits and descriptor 0x20 (rows top-down), then B, G, R per
+    # pixel. Frame 0 differs; known pixels are read back from each panel.
+    W, H = 40, 30
+
+    def engine_tga(path, px):
+        hdr = bytes([0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, W & 255, W >> 8, H & 255, H >> 8, 24, 0x20])
+        with open(path, 'wb') as f:
+            f.write(hdr + b''.join(bytes((px(x, y)[2], px(x, y)[1], px(x, y)[0])) for y in range(H) for x in range(W)))
+
+    def ref_px(x, y):  # red at the top left, blue in the 2x2 bottom-left corner
+        return (255, 0, 0) if (x, y) == (0, 0) else (0, 0, 255) if x < 2 and y >= H - 2 else (10, 20, 30)
+
+    def cand_px(x, y):
+        return (0, 255, 0) if (x, y) == (0, 0) else (0, 0, 255) if x < 2 and y >= H - 2 else (12, 20, 29)
+
     for d in ('ref', 'cand', 'out'):
         os.makedirs(os.path.join(t, d))
-    for i in range(3):
-        write_tga(os.path.join(t, 'ref', 'world-%06d.tga' % i), pattern(120, 90, i, 3))
-        write_tga(os.path.join(t, 'cand', 'world-%06d.tga' % i), pattern(120, 90, i if i != 1 else 2, 3))
+    engine_tga(os.path.join(t, 'ref', 'world-000000.tga'), ref_px)
+    engine_tga(os.path.join(t, 'cand', 'world-000000.tga'), cand_px)
+    for d in ('ref', 'cand'):
+        engine_tga(os.path.join(t, d, 'world-000001.tga'), ref_px)
     cmp_path = os.path.join(t, 'compare.txt')
     with open(cmp_path, 'w') as f:
-        f.write('frame score bad verdict\nworld-000000.tga 0.000000 0.000000 ok\n'
-                'world-000001.tga 0.050000 0.100000 OVER\nworld-000002.tga 0.000000 0.000000 ok\n'
-                'ref=%s\ncandidate=%s\nframes=3 failed=1 worst=0.05 worst_bad=0.1 threshold=0.02 bad_threshold=0.005\n' % (t, t))
+        f.write('frame score bad verdict\nworld-000000.tga 0.500000 0.100000 OVER\nworld-000001.tga 0.000000 0.000000 ok\n'
+                'ref=%s\ncandidate=%s\nframes=2 failed=1 worst=0.5 worst_bad=0.1 threshold=0.02 bad_threshold=0.005\n' % (t, t))
+    # build keeps only score rows publish accepts
+    odd = os.path.join(t, 'odd.txt')
+    with open(odd, 'w') as f:
+        f.write('world-000000.tga 0.5 0.1 OVER\nworld-000001.tga 1e-5 - ok\nworld-00000`.tga 1 1 ok\nworld-000002.tga 1 1 maybe\n')
+    if [r[0] for r in parse_compare(odd)[0]] != ['world-000000.tga']:
+        _fail('parse_compare keeps a row publish refuses: %r' % (parse_compare(odd)[0],))
     old = sys.stdout
     sys.stdout = open(os.devnull, 'w')
     try:
         cmd_build({'ref-dir': os.path.join(t, 'ref'), 'cand-dir': os.path.join(t, 'cand'), 'compare': cmp_path,
-                   'out': os.path.join(t, 'out'), 'prefix': 'X1-abc-soft-world', 'meta': ['card=X1']})
+                   'out': os.path.join(t, 'out'), 'prefix': 'X1-abc-soft-world',
+                   'meta': ['card=X1', 'commit=nogit', 'command=pins.sh evidence soft world --cand-id abc-1 --card X1',
+                            'renderer=soft', 'scenario=world', 'reference=world/gl1/r1', 'candidate=world/soft/abc-1',
+                            'compare-exit=1', 'ref-caption=REFERENCE gl1', 'cand-caption=CANDIDATE soft']})
     finally:
         sys.stdout.close()
         sys.stdout = old
     mpath = os.path.join(t, 'out', 'X1-abc-soft-world-evidence.txt')
-    meta, scores, files = read_manifest(mpath)
-    if meta.get('worst-frame') != 'world-000001.tga' or len(scores) != 3 or [f['kind'] for f in files] != ['png', 'apng', 'gif']:
-        _fail('build manifest: %r %r' % (meta, files))
     with open(mpath, 'rb') as f:
-        if t.encode() in f.read():
-            _fail('the manifest holds the scratch path')
-    for ent in files:
-        p = os.path.join(t, 'out', ent['name'])
-        if sha256(p) != ent['sha256'] or os.path.getsize(p) != ent['size']:
-            _fail('manifest digest of %s' % ent['name'])
-    still = decode_png(open(os.path.join(t, 'out', files[0]['name']), 'rb').read())[0]
-    if still[:2] != (3 * 120 + 8, 90 + 13):
+        mdata = f.read()
+    if t.encode() in mdata:
+        _fail('the manifest holds the scratch path')
+    st = parse_manifest(mdata)  # what build writes, publish accepts
+    if st['prefix'] != 'X1-abc-soft-world' or st['fields']['worst-frame'] != 'world-000000.tga' or len(st['scores']) != 2:
+        _fail('build manifest: %r' % st)
+    blobs = {}
+    for f, (n, kind, frames, delay) in zip(st['files'], st['expect']):
+        with open(os.path.join(t, 'out', n), 'rb') as fp:
+            blobs[kind] = fp.read()
+        if hashlib.sha256(blobs[kind]).hexdigest() != f['sha256'] or len(blobs[kind]) != f['size']:
+            _fail('manifest digest of %s' % n)
+        if kind == 'gif':
+            check_gif(blobs[kind], n, f['w'], f['h'], frames, delay)
+        else:
+            check_png(blobs[kind], n, kind, f['w'], f['h'], frames, delay)
+
+    def at(img, x, y):
+        o = (y * img[0] + x) * 3
+        return tuple(img[2][o:o + 3])
+
+    still = decode_png(blobs['png'])[0]
+    bar = FONT_H + 6
+    if still[:2] != (3 * W + 8, H + bar):
         _fail('still size %dx%d' % still[:2])
-    clip = decode_png(open(os.path.join(t, 'out', files[1]['name']), 'rb').read())
-    if len(clip) != 3:
-        _fail('clip frames %d' % len(clip))
+    want = {(0, 0): (255, 0, 0), (0, H - 1): (0, 0, 255), (5, 9): (10, 20, 30),                    # reference
+            (W + 4, 0): (0, 255, 0), (W + 4, H - 1): (0, 0, 255), (W + 9, 9): (12, 20, 29),        # candidate
+            (2 * W + 8, 0): (255, 255, 0), (2 * W + 8, H - 1): (0, 0, 0), (2 * W + 13, 9): (16, 0, 8)}  # |r - c| * 8
+    for (x, y), rgb in want.items():
+        if at(still, x, y + bar) != rgb:
+            _fail('still panel pixel (%d, %d) is %r, expected %r' % (x, y, at(still, x, y + bar), rgb))
+    clip = decode_png(blobs['apng'])
+    _, _, gifs = decode_gif(blobs['gif'])
+    if len(clip) != 2 or len(gifs) != 2:
+        _fail('clip frames %d, GIF frames %d' % (len(clip), len(gifs)))
+    hw = W // 2  # the clip is at half size
+    for (x, y), rgb in {(0, 0): (255, 0, 0), (0, H // 2 - 1): (0, 0, 255), (hw + 4, 0): (0, 255, 0),
+                        (2 * hw + 8, 0): (255, 255, 0), (2 * hw + 13, 5): (16, 0, 8)}.items():
+        if at(clip[0], x, y + bar) != rgb:
+            _fail('clip panel pixel (%d, %d) is %r, expected %r' % (x, y, at(clip[0], x, y + bar), rgb))
+        if gifs[0][(y + bar) * clip[0][0] + x] != quantize(blank(1, 1, rgb))[0]:
+            _fail('GIF panel pixel (%d, %d)' % (x, y))
 
 
-def main(argv):
-    if not argv:
-        raise SystemExit(__doc__ if __doc__ else 'usage: evidence.py build|synth|stage|markdown|selftest')
+# the options of each command; only --meta may be given more than once, and
+# only stage takes file names, after "--"
+OPTIONS = {'build': {'ref-dir', 'cand-dir', 'compare', 'out', 'prefix', 'meta'},
+           'synth': {'out', 'prefix', 'noise', 'size', 'meta'},
+           'stage': {'root', 'store', 'manifest', 'stage', 'repo', 'markdown'},
+           'selftest': set()}
+REQUIRED = {'build': {'ref-dir', 'cand-dir', 'compare', 'out', 'prefix'}, 'synth': {'out', 'prefix'},
+            'stage': OPTIONS['stage'], 'selftest': set()}
+
+
+def parse_args(argv):
+    if not argv or argv[0] not in OPTIONS:
+        raise SystemExit('usage: evidence.py build|synth|stage|selftest [--option value]... [-- file...]')
     cmd, rest = argv[0], argv[1:]
     a = {'meta': [], 'files': []}
     i = 0
     while i < len(rest):
-        if rest[i].startswith('--'):
-            if i + 1 >= len(rest):
-                raise SystemExit('evidence: %s needs a value' % rest[i])
-            k = rest[i][2:]
-            if k == 'meta':
-                a['meta'].append(rest[i + 1])
-            else:
-                a[k] = rest[i + 1]
-            i += 2
+        if rest[i] == '--' and cmd == 'stage':
+            a['files'] = rest[i + 1:]
+            break
+        k = rest[i][2:]
+        if not rest[i].startswith('--') or k not in OPTIONS[cmd]:
+            raise SystemExit('evidence: %s does not take that argument' % cmd)
+        if i + 1 >= len(rest):
+            raise SystemExit('evidence: --%s needs a value' % k)
+        if k == 'meta':
+            a['meta'].append(rest[i + 1])
+        elif k in a:
+            raise SystemExit('evidence: --%s is given twice' % k)
         else:
-            a['files'].append(rest[i])
-            i += 1
-    fn = {'build': cmd_build, 'synth': cmd_synth, 'stage': cmd_stage,
-          'markdown': cmd_markdown, 'selftest': cmd_selftest}.get(cmd)
-    if fn is None:
-        raise SystemExit('evidence: unknown command %s' % cmd)
-    fn(a)
+            a[k] = rest[i + 1]
+        i += 2
+    if not REQUIRED[cmd] <= set(a):
+        raise SystemExit('evidence: %s needs --%s' % (cmd, ' --'.join(sorted(REQUIRED[cmd] - set(a)))))
+    return cmd, a
+
+
+def main(argv):
+    cmd, a = parse_args(argv)
+    fn = {'build': cmd_build, 'synth': cmd_synth, 'stage': cmd_stage, 'selftest': cmd_selftest}[cmd]
+    if cmd != 'stage':
+        fn(a)
+        return
+    try:
+        fn(a)
+    except SystemExit:
+        raise
+    except BaseException as e:  # fail closed, and print no message that could hold a path
+        raise SystemExit('evidence-publish: refused: unexpected %s; nothing was staged' % type(e).__name__)
 
 
 if __name__ == '__main__':
