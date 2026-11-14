@@ -16,9 +16,7 @@ concurrency:
 jobs:
   analyze:
     name: Analyze
-    runs-on: ubuntu-latest
-    container:
-      image: debian:testing
+    runs-on: ${{ matrix.runner }}
     permissions:
       security-events: write
       packages: read
@@ -31,14 +29,11 @@ jobs:
         include:
         - language: actions
           build-mode: none
+          runner: ubuntu-latest
         - language: c-cpp
           build-mode: manual
+          runner: macos-latest
     steps:
-    - name: Install build dependencies
-      run: |
-        apt-get update
-        apt-get install -y libgl1-mesa-dev libsdl3-dev \
-            build-essential git ca-certificates
     - name: Checkout repository
       uses: actions/checkout@v7
     - name: Initialize CodeQL
@@ -49,7 +44,11 @@ jobs:
     - name: Build
       if: matrix.build-mode == 'manual'
       run: |
-        make -j4 client server game ref_gl1 ref_gl3 ref_soft
+        # Nothing is installed: SDL3 is built from third_party/SDL3 and
+        # ref_metal needs only Xcode. CodeQL sees the C files compiled by
+        # these targets, the Metal shim of ref_gl1 and ref_metal included.
+        # It does not analyse Objective-C, so the .m files are not covered.
+        make -j4 client server game ref_gl1 ref_gl3 ref_soft ref_metal
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4.38.0
       with:
