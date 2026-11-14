@@ -193,7 +193,9 @@ pins (`scripts/pins.sh`) accept each stage. Suggested stages, each a
 
 A stage is done when every GL-call pin for its entry points passes and the
 scenario's frames pass at the recorded threshold against `gl1` on real
-OpenGL (T1 references, INFORM9).
+OpenGL (T1 references, INFORM9). TASK21 closed without any GL-call pin
+(none was recorded or replayed in this repository); see "Closing TASK21
+on the build host" in `docs/plans/metal-port-harness.md`.
 
 ## 5. Risks and unknowns
 
@@ -820,3 +822,111 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
   `gl1_pointparameters 0` and with `gl1_particle_square 1`, with no
   sanitizer line. On frames see `docs/plans/metal-port-harness.md`,
   "Particles against the software renderer (TASK52)".
+
+## 14. Coverage report (TASK21)
+
+Derived on the tree of TASK21 by `tests/metal/shim-coverage.sh`, which
+`tests/check-metal-shim.sh` runs: the text half always, the object half
+after its shim build. It lists the `gl` calls in gl1's own C files (54
+direct) and the names gl1 passes to `RI_GetProcAddress`, resolved
+through the shim's proc table (`mgl_procs` in `mgl_frame.c`; 10 names,
+5 entry points). It fails when a name has no proc-table entry, when
+the rows below do not name exactly those 59 entry points, or when a
+row's status is not one of the four below. Given the build's objects
+it also fails when gl1's objects import a `_gl` symbol the source scan
+missed, when the shim's objects do not define one of the 59, or when
+the linked `ref_gl1.dylib` leaves any `_gl` symbol undefined. A
+release build imports 53 of the 54: `glGetError` is called only by
+gl1's `DEBUG` error check (`glCheckError_` in `header/local.h`).
+
+Status: **implemented** draws or answers as GL 1.4 does for every
+value gl1 passes; **partial** is implemented, with named valid-GL
+values that set `GL_INVALID_OPERATION` and log once (`mgl: ... is not
+implemented yet`); **no-op** validates and stores, with no effect on
+a frame; **stub** only reports itself. "Host test" names the
+functions of `tests/metal/mgl_host_test.c` that call the entry point
+(every test reads errors through `glGetError`); "pins" means the
+entry point lives in `mgl_frame.c`, which the host test does not
+link, and is covered by the pin runs only. "Refused" values set
+`GL_INVALID_ENUM` (or the error named) and change nothing; none of
+them is a value gl1 passes.
+
+<!-- coverage-table:start -->
+| Entry point | Status | Shim file | Host test | Refused or stubbed values |
+|---|---|---|---|---|
+| `glAlphaFunc` | implemented | `mgl_state.c` | test_state, test_draw | a function outside `GL_NEVER` to `GL_ALWAYS` |
+| `glBindTexture` | implemented | `mgl_tex.c` | test_textures, test_draw, test_world_units, test_sky_water_alpha, test_models | a target other than `GL_TEXTURE_2D`; a name past `MGL_MAX_TEXTURES` (4096) is `GL_INVALID_VALUE` |
+| `glBlendFunc` | implemented | `mgl_state.c` | test_state, test_draw, test_world_units, test_sky_water_alpha, test_models, test_points_lines | a factor not valid on its side |
+| `glClear` | partial | `mgl_frame.c` | pins | not implemented: a partial colour mask, a partial stencil mask, a clear inside a scissor rectangle |
+| `glClearColor` | implemented | `mgl_frame.c` | pins | |
+| `glClearStencil` | implemented | `mgl_frame.c` | pins | |
+| `glColor4f` | implemented | `mgl_state.c` | test_draw, test_world_units, test_sky_water_alpha, test_models | |
+| `glColor4ub` | implemented | `mgl_state.c` | none | |
+| `glColorMask` | implemented | `mgl_state.c` | test_draw, test_points_lines | |
+| `glColorPointer` | implemented | `mgl_state.c` | test_state, test_draw, test_models, test_points_lines | a type other than `GL_FLOAT` and `GL_UNSIGNED_BYTE`; a size below 3 is `GL_INVALID_VALUE` |
+| `glCullFace` | implemented | `mgl_state.c` | test_state, test_draw_state, test_sky_water_alpha, test_models | |
+| `glDeleteTextures` | implemented | `mgl_tex.c` | test_textures | |
+| `glDepthFunc` | implemented | `mgl_state.c` | test_state, test_draw_state, test_world_units, test_sky_water_alpha, test_models | |
+| `glDepthMask` | implemented | `mgl_state.c` | test_draw_state, test_world_units, test_models, test_points_lines | |
+| `glDepthRange` | implemented | `mgl_frame.c` | pins | |
+| `glDisable` | implemented | `mgl_state.c` | every draw test | as `glEnable` |
+| `glDisableClientState` | implemented | `mgl_state.c` | test_draw, test_sky_water_alpha, test_models, test_points_lines | an array other than vertex, colour and texture coordinates |
+| `glDrawArrays` | implemented | `mgl_draw.c` | test_draw, test_draw_state, test_world_units, test_sky_water_alpha, test_models, test_points_lines | `GL_QUADS`, `GL_QUAD_STRIP` and `GL_POLYGON` (gl1 never draws them) |
+| `glDrawBuffer` | no-op | `mgl_frame.c` | pins | one colour attachment: `GL_FRONT` draws to the back buffer; a stereo buffer is `GL_INVALID_OPERATION` |
+| `glDrawElements` | partial | `mgl_draw.c` | test_draw, test_world_units, test_sky_water_alpha, test_models, test_points_lines | not implemented: `GL_UNSIGNED_BYTE` and `GL_UNSIGNED_INT` indices; modes as `glDrawArrays` |
+| `glEnable` | implemented | `mgl_state.c` | every draw test | a cap gl1 does not name; `GL_MULTISAMPLE` and `GL_SHARED_TEXTURE_PALETTE_EXT` are stored with no effect |
+| `glEnableClientState` | implemented | `mgl_state.c` | every draw test | as `glDisableClientState` |
+| `glFinish` | implemented | `mgl_frame.c` | pins | |
+| `glFrustum` | implemented | `mgl_state.c` | test_perspective, test_models, test_points_lines | |
+| `glGetError` | implemented | `mgl_state.c` | every test (`ERR()`) | |
+| `glGetFloatv` | implemented | `mgl_state.c` | test_matrix_stack, test_textures, test_models | answers the two matrices and `GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT` only |
+| `glGetString` | implemented | `mgl_frame.c` | pins | |
+| `glHint` | no-op | `mgl_state.c` | none | a target other than `GL_MULTISAMPLE_FILTER_HINT_NV` |
+| `glLoadIdentity` | implemented | `mgl_state.c` | test_matrices, test_matrix_stack, test_perspective, test_models, test_points_lines | |
+| `glLoadMatrixf` | implemented | `mgl_state.c` | test_matrix_stack | |
+| `glMatrixMode` | implemented | `mgl_state.c` | test_matrices and every matrix test | `GL_TEXTURE` is `GL_INVALID_OPERATION` |
+| `glOrtho` | implemented | `mgl_state.c` | test_matrices, test_draw, test_points_lines | |
+| `glPixelStorei` | implemented | `mgl_tex.c` | test_state, test_textures, test_world_units | a name other than the two alignments and `GL_UNPACK_ROW_LENGTH` |
+| `glPointSize` | implemented | `mgl_state.c` | test_state, test_points_lines | |
+| `glPolygonMode` | partial | `mgl_state.c` | test_draw_state, test_models, test_points_lines | not implemented at draw time: `GL_POINT` fill, a different mode per face |
+| `glPolygonOffset` | implemented | `mgl_state.c` | test_draw_state, test_points_lines | |
+| `glPopMatrix` | implemented | `mgl_state.c` | test_matrix_stack, test_sky_water_alpha, test_models | |
+| `glPushMatrix` | implemented | `mgl_state.c` | test_matrix_stack, test_sky_water_alpha, test_models | past 32 per stack is `GL_STACK_OVERFLOW` |
+| `glReadPixels` | implemented | `mgl_frame.c` | test_read_contract (`mgl_read_contract`); pins | a format other than `GL_RGB`, `GL_RGBA`, `GL_BGRA`; a type other than `GL_UNSIGNED_BYTE`; a rectangle outside the target is `GL_INVALID_VALUE` |
+| `glRotatef` | implemented | `mgl_state.c` | test_perspective, test_sky_water_alpha | |
+| `glScalef` | implemented | `mgl_state.c` | test_perspective, test_models | |
+| `glScissor` | implemented | `mgl_frame.c` | test_raster (`mgl_compute_raster`); pins | |
+| `glShadeModel` | no-op | `mgl_state.c` | test_models | `GL_FLAT` is stored and not applied; every gl1 draw under it has one colour per primitive |
+| `glStencilFunc` | implemented | `mgl_state.c` | test_state, test_draw_state, test_models, test_points_lines | |
+| `glStencilMask` | implemented | `mgl_state.c` | test_draw_state | |
+| `glStencilOp` | implemented | `mgl_state.c` | test_state, test_draw_state, test_models, test_points_lines | `GL_INCR_WRAP` and `GL_DECR_WRAP` |
+| `glTexCoordPointer` | implemented | `mgl_state.c` | test_state, test_draw, test_world_units, test_sky_water_alpha, test_models | a type other than `GL_FLOAT` |
+| `glTexEnvi` | partial | `mgl_state.c` | test_state, test_draw, test_world_units, test_sky_water_alpha, test_models | not implemented at draw time (drawn as `GL_MODULATE`): `GL_DECAL`, `GL_ADD`, `GL_COMBINE` with a function other than `GL_MODULATE`; refused: a name other than the mode, the two combine functions and `GL_RGB_SCALE` |
+| `glTexImage2D` | partial | `mgl_tex.c` | test_textures, test_draw, test_world_units, test_sky_water_alpha, test_models | not implemented: a level above 0 whose size does not fit level 0; refused: a format other than `GL_RGB` and `GL_RGBA`, a type other than `GL_UNSIGNED_BYTE` |
+| `glTexParameteri` | implemented | `mgl_tex.c` | test_textures, test_draw, test_world_units | a wrap other than `GL_REPEAT`, `GL_CLAMP`, `GL_CLAMP_TO_EDGE`; a name other than the filters, the wraps, `GL_GENERATE_MIPMAP` and the anisotropy |
+| `glTexSubImage2D` | implemented | `mgl_tex.c` | test_textures, test_world_units | format and type as `glTexImage2D` |
+| `glTranslatef` | implemented | `mgl_state.c` | test_perspective, test_sky_water_alpha, test_models, test_points_lines | |
+| `glVertexPointer` | implemented | `mgl_state.c` | every draw test | a type other than `GL_FLOAT` and `GL_SHORT`; a size below 2 is `GL_INVALID_VALUE` |
+| `glViewport` | implemented | `mgl_frame.c` | test_raster (`mgl_compute_raster`); pins | |
+| `glActiveTexture` | implemented | `mgl_state.c` | test_state, test_textures, test_draw, test_world_units | by pointer, also as `glActiveTextureARB`; a unit past `GL_TEXTURE1` (`MGL_MAX_UNITS` 2) |
+| `glClientActiveTexture` | implemented | `mgl_state.c` | test_state, test_world_units | by pointer, also as `glClientActiveTextureARB`; as `glActiveTexture` |
+| `glPointParameterf` | implemented | `mgl_state.c` | test_state, test_points_lines | by pointer, also under the ARB and EXT names; a name other than `GL_POINT_SIZE_MIN` and `GL_POINT_SIZE_MAX` |
+| `glPointParameterfv` | implemented | `mgl_state.c` | test_state, test_points_lines | by pointer, also under the ARB and EXT names; `GL_POINT_DISTANCE_ATTENUATION` and the two sizes only |
+| `glColorTableEXT` | stub | `mgl_state.c` | test_matrix_stack | by pointer; `GL_EXT_shared_texture_palette` is not in the shim's `GL_EXTENSIONS`, so gl1 never loads it (paletted textures are dead on Metal) |
+<!-- coverage-table:end -->
+
+Beyond the 59 the shim exports `glReadnPixels` (in the proc table,
+called by no gl1 file). No pin run reaches a refused, partial or
+stubbed value: no record logs a `not implemented` line, and the
+`ASAN=1` (`DEBUG`) build, where gl1 checks `glGetError` after its
+calls, logs no `glError` line (`docs/plans/metal-port-harness.md`,
+"Closing TASK21 on the build host").
+
+TASK21 also added two reports to `mgl_layer.m`, neither of which
+changes what is drawn: the startup capability report (`Metal device`,
+`Metal supportsFamily (apple5 to apple9)`, `Metal supportsRaytracing`,
+through `R_Printf` to the console, once per context) and `mgl_watch`, a
+completion handler on every committed command buffer that logs the
+first eight that end in error and counts all of them for the teardown
+line. Before it, a command buffer the GPU refused drew nothing and said
+nothing; the pin records made that way held frames of noise.

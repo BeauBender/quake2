@@ -15,7 +15,7 @@ Decision record (owner-gated, `manual:BeauBender`):
 
 Work cards:
 - TASK20 — Static-link build mode (platform) — tier T0
-- TASK21 — `ref_metal` Metal rasterizer (renderer) — tier T0; depends on TASK13
+- TASK21 — `ref_gl1` on Metal through an in-tree OpenGL-subset shim (renderer; Phase A step 1, re-scoped by INFORM8) — tier T0; depends on TASK13
 - TASK22 — iPhone and iPad port (platform) — tier T0 simulator; depends on TASK20, TASK21
 - TASK23 — Apple TV and Apple Vision Pro targets (platform) — tier T0 simulators; depends on TASK22
 - TASK24 — Hybrid ray tracing, compute-based (raytracing) — tier T1 to build, T2 to validate; depends on TASK21, INFORM7
@@ -146,16 +146,37 @@ RenderFrame / EndFrame, 2D drawing, palette and gamma). The software renderer
 (13.5k lines, 22 files) and GL1 (10k lines) are the reference
 implementations. Windows come from SDL3 through `src/client/vid/`.
 
-### Phase A — `ref_metal`, a Metal rasterizer (T0)
+### Phase A — a Metal rasterizer in two steps (T0)
 
-New renderer module implementing API_VERSION 8 on Metal, attached to the SDL3
-window via `SDL_Metal_CreateView`. World BSP surfaces with lightmaps, alias
-models with frame interpolation, sprites, particles, sky, 2D pics and console
-text, screenshots. C with a small Objective-C shim for `CAMetalLayer`.
-Feature detection at startup via `supportsFamily`, with the apple5 set as
-the floor. Estimate: 6k to 9k lines. Fully testable on the VM. Also retires
-the dependency on Apple's deprecated OpenGL and is the only renderer path
-that exists on visionOS.
+Amended by INFORM8 (#35, accepted by the owner on 2026-11-12). The
+original Phase A, a new `ref_metal` written from a blank file and judged
+by eye, became two steps pinned at two seams:
+
+1. **GL-call seam: `ref_gl1` on an in-tree OpenGL-subset shim (TASK21,
+   cards TASK47 to TASK52 and TASK82).** gl1's C stays as it is; every GL
+   entry point it uses (54 called directly, 5 loaded by pointer) resolves
+   to the shim in `src/client/refresh/gl1/metal/`, which implements exactly
+   that subset on Metal: C plus a small Objective-C file for
+   `CAMetalLayer` on the SDL3 window (`SDL_Metal_CreateView`), shaders in a
+   `.metal` file, fixed-function emulation as shader permutations. The
+   build selects it with `make ref_gl1 WITH_METAL_SHIM=yes`; the OpenGL
+   build stays until step 2 lands. Startup logs the Metal device,
+   `supportsFamily` (apple5 to apple9) and `supportsRaytracing`; apple5 is
+   the floor. Acceptance is the frame pins of TASK27 against `ref_gl1`
+   references. Design: `docs/plans/metal-shim-design.md`; state of the
+   acceptance on the build host: `docs/plans/metal-port-harness.md`,
+   "Closing TASK21 on the build host".
+2. **Renderer-API seam: native `ref_metal` (TASK28).** Each call site is
+   specialized from the shim into direct Metal, concept by concept, with
+   the shim as the per-concept reference and the renderer-API frame pins
+   (which also compare `soft` against `gl1`) as acceptance. The result is
+   the module implementing API_VERSION 8 on Metal that TASK24 and TASK25
+   need.
+
+Both steps are testable on the VM. Together they retire the dependency on
+Apple's deprecated OpenGL; step 1 already runs gl1 with no OpenGL
+framework linked, which is what iOS (TASK22) needs, and step 2 is the only
+renderer path that exists on visionOS.
 
 ### Phase B — static-link build mode (T0)
 
@@ -206,7 +227,8 @@ Decide after Phase E is seen on real hardware.
 ## Recommendation
 
 1. Do not import Q2RTXM (INFORM decision).
-2. Build `ref_metal` (A) and static-link mode (B) now, on the VM.
+2. Build `ref_metal` (A, in INFORM8's two steps: the shim, then native) and
+   static-link mode (B) now, on the VM.
 3. Port to iPhone/iPad (C), then Apple TV and Vision Pro (D), using
    simulators on the VM and whatever devices are at hand.
 4. Build compute-based hybrid ray tracing (E) on the M1 Max as soon as A is
