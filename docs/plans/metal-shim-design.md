@@ -912,3 +912,19 @@ them is a value gl1 passes.
 | `glPointParameterfv` | implemented | `mgl_state.c` | test_state, test_points_lines | by pointer, also under the ARB and EXT names; `GL_POINT_DISTANCE_ATTENUATION` and the two sizes only |
 | `glColorTableEXT` | stub | `mgl_state.c` | test_matrix_stack | by pointer; `GL_EXT_shared_texture_palette` is not in the shim's `GL_EXTENSIONS`, so gl1 never loads it (paletted textures are dead on Metal) |
 <!-- coverage-table:end -->
+
+Beyond the 59 the shim exports `glReadnPixels` (in the proc table,
+called by no gl1 file). No pin run reaches a refused, partial or
+stubbed value: no record logs a `not implemented` line, and the
+`ASAN=1` (`DEBUG`) build, where gl1 checks `glGetError` after its
+calls, logs no `glError` line (`docs/plans/metal-port-harness.md`,
+"Closing TASK21 on the build host").
+
+TASK21 also added two reports to `mgl_layer.m`, neither of which
+changes what is drawn: the startup capability report (`Metal device`,
+`Metal supportsFamily (apple5 to apple9)`, `Metal supportsRaytracing`,
+through `R_Printf` to the console, once per context) and `mgl_watch`, a
+completion handler on every committed command buffer that logs the
+first eight that end in error and counts all of them for the teardown
+line. Before it, a command buffer the GPU refused drew nothing and said
+nothing; the pin records made that way held frames of noise.

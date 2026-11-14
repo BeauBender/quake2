@@ -99,12 +99,14 @@ else
 fi
 
 # (c) the coverage report, with the objects of (b) when it built them
+covrc=0
 if [ -n "${covobjs:-}" ]; then
-	covout=$(sh tests/metal/shim-coverage.sh "$covobjs" "$tmp/tree/release/ref_gl1.dylib" 2>&1) || bad "coverage report failed"
+	covout=$(sh tests/metal/shim-coverage.sh "$covobjs" "$tmp/tree/release/ref_gl1.dylib" 2>&1) || covrc=$?
 else
-	covout=$(sh tests/metal/shim-coverage.sh 2>&1) || bad "coverage report failed"
+	covout=$(sh tests/metal/shim-coverage.sh 2>&1) || covrc=$?
 fi
 printf '%s\n' "$covout"
+[ "$covrc" = 0 ] || bad "coverage report failed"
 
 if [ "$fail" = 0 ]; then
 	echo "check-metal-shim: ok (${host:-host test}; $build)"
