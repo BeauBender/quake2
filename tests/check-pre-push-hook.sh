@@ -374,6 +374,8 @@ owner_cases() {
 	case_ ok refs/heads/zzqw1 "$(mk "$m1" "zzqm30 note for $login")" refs/heads/zzqw1 "$zero"
 	case_ ok refs/heads/zzqw2 "$(AN="$login" mk "$m1" zzqm31)" refs/heads/zzqw2 "$zero"
 	case_ ok refs/tags/zzqw3 "$(tag "$m1" commit zzqw3 "$login was here")" refs/tags/zzqw3 "$zero"
+	# a longer word holding the user name refuses in a ref name only
+	case_ ok refs/heads/zzqw5 "$(mk "$m1" "zzqm33 x${login}x")" refs/heads/zzqw5 "$zero"
 	case_ ok refs/heads/zzqx "$m1" "refs/heads/zzqt/$login/zzqtopic" "$zero"
 	case_ "the remote ref name contains $U" refs/heads/zzqx "$m1" "refs/heads/zzqt/x${login}x" "$zero"
 	case_ "the local ref name contains $U" "refs/heads/${login}2" "$m1" refs/heads/zzqplain "$zero"
