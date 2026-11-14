@@ -1045,6 +1045,16 @@ test_world_sizes(void)
 	CHECK(s.verts == RM_WORLD_MAX_VERTS && !rm_world_add(&s, 3) && s.verts == RM_WORLD_MAX_VERTS);
 	CHECK(rm_world_bytes(&s, RMB_STATIC_MAX_BYTES, &vb, &ib, &sb) && vb == (size_t)RM_WORLD_MAX_VERTS * 32);
 
+	/* a polygon one vertex longer than what is left is refused */
+	memset(&s, 0, sizeof(s));
+	CHECK(rm_world_add(&s, RM_WORLD_MAX_VERTS - 3) && !rm_world_add(&s, 4) && s.verts == RM_WORLD_MAX_VERTS - 3);
+
+	/* the index limit on its own (a total near it with few vertices; rm_world_add alone cannot reach it) */
+	memset(&s, 0, sizeof(s));
+	s.indices = RM_WORLD_MAX_INDICES - 5;
+	CHECK(!rm_world_add(&s, 4) && s.indices == RM_WORLD_MAX_INDICES - 5 && s.surfs == 0);
+	CHECK(rm_world_add(&s, 3) && s.indices == RM_WORLD_MAX_INDICES - 2);
+
 	/* a count near LONG_MAX is refused, not wrapped */
 	memset(&s, 0, sizeof(s));
 	CHECK(!rm_world_add(&s, 0x7fffffffffffffffL) && s.verts == 0 && s.indices == 0);
@@ -1135,12 +1145,18 @@ test_vis(void)
 
 	/* the zero run is cut at the end of the row: nothing past it is written */
 	memset(out, 0xee, sizeof(out));
-	CHECK(rm_decompress_vis(longrun, sizeof(longrun), 4, out, 4) && out[0] == 1 && out[3] == 0 && out[4] == 0xee);
+	CHECK(rm_decompress_vis(longrun, sizeof(longrun), 4, out, sizeof(out)) && out[0] == 1 && out[3] == 0 && out[4] == 0xee);
 
 	/* input that ends inside the row, or a run without its count: all visible, never read past */
 	memset(out, 0xee, sizeof(out));
 	CHECK(!rm_decompress_vis(row, 2, 5, out, sizeof(out)) && out[0] == 0xff && out[4] == 0xff && out[5] == 0xee);
 	CHECK(!rm_decompress_vis(row, 1, 5, out, sizeof(out)) && out[1] == 0xff);
+	{
+		/* a zero as the last byte, its count past the end: not read (ASAN sees a read of tail[2]) */
+		const unsigned char tail[2] = { 0x81, 0x00 };
+
+		CHECK(!rm_decompress_vis(tail, sizeof(tail), 5, out, sizeof(out)) && out[0] == 0xff);
+	}
 	/* a row longer than the output writes nothing */
 	memset(out, 0xee, sizeof(out));
 	CHECK(!rm_decompress_vis(row, sizeof(row), 9, out, sizeof(out)) && out[0] == 0xee && out[7] == 0xee);
@@ -1304,6 +1320,7 @@ test_frustum_cull(void)
 	vec3_t b0 = { -20, -1, -1 }, b1 = { -10, 1, 1 };   /* behind */
 	vec3_t c0 = { 10, 50, 0 }, c1 = { 11, 60, 1 };     /* left, outside 45 degrees */
 	vec3_t d0 = { -5, -5, -5 }, d1 = { 5, 5, 5 };      /* around the eye */
+	vec3_t e0 = { 10, -1, 50 }, e1 = { 11, 1, 60 };    /* above, outside the top plane only */
 	cplane_t f[4];
 	const double h = sqrt(0.5);
 
@@ -1317,6 +1334,7 @@ test_frustum_cull(void)
 	CHECK(f[0].dist == 0 && f[0].type == PLANE_ANYZ && f[0].signbits == 2 && f[3].signbits == 4);
 
 	CHECK(!R_CullBox(a0, a1, f) && R_CullBox(b0, b1, f) && R_CullBox(c0, c1, f) && !R_CullBox(d0, d1, f));
+	CHECK(R_CullBox(e0, e1, f));
 
 	/* from 100 units further on, the plane distances move and the box ahead is now behind */
 	R_SetFrustum(vup, vpn, vright, org2, 90, 90, f);
