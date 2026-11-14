@@ -813,8 +813,9 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
 - **Tests and sanitizers.** `test_points_lines` checks the widths,
   snapping, coverage, attenuation, clip test, viewport, the draw state
   of gl1's three call sites, and the overflow paths of the point bound
-  and the line list against hand-worked values; each of 53 mutants of
-  the lines it covers fails it (run alone and in the whole test). An
+  and the line list against hand-worked values; each of 62 mutants of
+  the lines it covers fails it (run alone and in the whole test); the
+  host test as a whole runs 501 checks. An
   `ASAN=1 UBSAN=1` build recorded `particles`, with
   `gl1_pointparameters 0` and with `gl1_particle_square 1`, with no
   sanitizer line. On frames see `docs/plans/metal-port-harness.md`,
