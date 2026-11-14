@@ -338,8 +338,9 @@ The seed makes two live runs agree: `randk_seed_fixed(seed)` in
 `rand.c` (splitmix64 of the seed into `xs` and `cng`, the whole state
 reset) runs at every `R_BeginRegistration` when `pins_seed` was latched
 (`CL_PinsSeed`), which `CL_PinsLatch` accepts only from the command line,
-1 to 9 digits, beside `pins_record` or `pins_replay`, so a config file,
-the console or a server cannot set it. Without it `randk_seed()` is
+1 to 9 digits without a leading zero (but `0`, so a seed has one pin
+id), beside `pins_record` or `pins_replay`, so a config file, the
+console or a server cannot set it. Without it `randk_seed()` is
 unchanged (entropy from `Sys_GetRandomBytes`). It reaches the engine's
 copy of `rand.c` only, which the client shares with the listen server in
 its process; the game module's copy (seeded by `InitGame`) and the

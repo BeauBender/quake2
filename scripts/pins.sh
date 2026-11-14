@@ -42,7 +42,8 @@
 #   PINS_DRYRUN   print the engine command line for "record" and stop
 #   PINS_TRACE    0: record no renderer-API trace. Default: record writes
 #                 trace.q2r beside the frames (the engine's pins_record)
-#   PINS_SEED     1 to 9 digits: the engine's pins_seed, a fixed PRNG seed
+#   PINS_SEED     1 to 9 digits, no leading zero (0 itself is accepted):
+#                 the engine's pins_seed, a fixed PRNG seed
 #                 applied at each map registration, so particles and
 #                 explosions draw the same random numbers on every record.
 #                 Needs the trace (not PINS_TRACE=0). Default: unset, the
@@ -319,7 +320,8 @@ cmd_record() {
     check_count PINS_WIDTH "${PINS_WIDTH:-640}"; check_count PINS_HEIGHT "${PINS_HEIGHT:-480}"; check_count PINS_EVERY "${PINS_EVERY:-30}"
     check_demo "${PINS_DEMO:-demo1.dm2}"
     if [ -n "${PINS_SEED:-}" ]; then
-        [[ $PINS_SEED =~ ^[0-9]{1,9}$ ]] || die "PINS_SEED must be 1 to 9 digits, got '$PINS_SEED'"
+        # no leading zero but 0 itself: 01 and 1 are one engine seed and would be two pin ids
+        [[ $PINS_SEED =~ ^(0|[1-9][0-9]{0,8})$ ]] || die "PINS_SEED must be 1 to 9 digits without a leading zero, got '$PINS_SEED'"
         [ "${PINS_TRACE:-1}" != 0 ] || die "PINS_SEED needs the trace: the engine takes pins_seed only beside pins_record"
     fi
     case ${PINS_DEMO:-demo1.dm2} in
@@ -1482,8 +1484,9 @@ st_scenarios() {
         *) st_fail "PINS_SEED=42 must pass pins_seed 42 after pins_record"; return 1;; esac
     case $line in *pins_seed*) st_fail "pins_seed passed without PINS_SEED"; return 1;; esac
     [ "$(scenario_hash world)" != "$(PINS_SEED=42 scenario_hash world)" ] || st_fail "PINS_SEED must change the pin id" || return 1
+    [ "$(PINS_SEED=1 scenario_hash world)" != "$(PINS_SEED=2 scenario_hash world)" ] || st_fail "two seeds must have two pin ids" || return 1
     local sd
-    for sd in x -1 1234567890 '1 2' '4;quit'; do
+    for sd in x -1 1234567890 '1 2' '4;quit' 01 00 007; do
         if (PINS_SEED="$sd" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "PINS_SEED='$sd' must be refused"; return 1; fi
     done
     if (PINS_SEED=1 PINS_TRACE=0 PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "PINS_SEED with PINS_TRACE=0 must be refused"; return 1; fi

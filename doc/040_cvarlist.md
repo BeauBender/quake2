@@ -900,5 +900,6 @@ them given the engine behaves exactly as before.
   from the operating system as before. It never reaches the game
   module's own generator, the dedicated server, or the server's
   connection challenge, which is drawn from the operating system
-  directly. Must be 1 to 9 digits. Refused without `pins_record` or
+  directly. Must be 1 to 9 digits without a leading zero (`0` itself
+  is accepted). Refused without `pins_record` or
   `pins_replay`. Default: not given.

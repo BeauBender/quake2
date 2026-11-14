@@ -124,7 +124,8 @@ n=$(grep -rn 'CL_PinsCapture() *\(<=\|>\) *0' src | grep -v '^src/client/cl_main
 [ -z "$n" ] || bad "a pin-run guard tests CL_PinsCapture() alone (use CL_PinsRun()): $n"
 
 # pins_seed fixes the PRNG seed of a record or a replay only: 1 to 9
-# digits, with pins_record or pins_replay; anything else refuses the run,
+# digits without a leading zero (but 0 itself), so one seed has one
+# spelling, with pins_record or pins_replay; anything else refuses the run,
 # and without it (every normal client run) the seed stays the OS entropy
 expect_seed seed=off
 expect_seed seed=off +set pins_dir /s +set pins_capture 30 +set pins_record trace.q2r
@@ -135,7 +136,7 @@ expect_seed seed=999999999 +set pins_dir /s +set pins_record trace.q2r +set pins
 expect_seed seed=7 +set pins_dir /s +set pins_record trace.q2r +set pins_seed 3 +set pins_seed 7
 expect 'dir=/s|scenario=pin|capture=30|invalid=0|record=trace.q2r|replay=' \
 	+set pins_dir /s +set pins_capture 30 +set pins_record trace.q2r +set pins_seed 42
-for v in '' -1 +1 ' 1' '1 ' 0x10 1e3 abc 1000000000 0000000001 4294967297; do
+for v in '' -1 +1 ' 1' '1 ' 0x10 1e3 abc 1000000000 0000000001 4294967297 01 00 007 0123456789; do
 	expect "$refused_pin" +set pins_dir /s +set pins_capture 30 +set pins_record trace.q2r +set pins_seed "$v"
 	expect_seed seed=off +set pins_dir /s +set pins_capture 30 +set pins_record trace.q2r +set pins_seed "$v"
 done

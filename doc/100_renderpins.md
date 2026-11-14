@@ -47,7 +47,9 @@ text files and need no game data.
 * `PINS_TRACE`: `0` records no renderer trace beside the frames (see
   *Recording*). Default: a trace is recorded. It does not change the
   frames and is not part of the pin's name.
-* `PINS_SEED`: 1 to 9 digits, a fixed seed for the engine's random
+* `PINS_SEED`: 1 to 9 digits without a leading zero (`0` itself is
+  accepted, `01` is refused: it would be seed 1 under a second pin
+  name), a fixed seed for the engine's random
   numbers (the engine's `pins_seed`), applied whenever a map is
   registered, so `models` and `particles` draw the same explosions and
   particles on every record. It needs the trace (`PINS_TRACE=0` is

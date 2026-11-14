@@ -187,11 +187,13 @@ CL_PinsLatch(void)
 		}
 		else if (strcmp(name, "pins_seed") == 0)
 		{
-			/* 1 to 9 digits: 0 to 999999999, the same on every platform */
+			/* 1 to 9 digits: 0 to 999999999, the same on every platform;
+			   no leading zero but 0 itself, so a seed has one spelling */
 			pins_seed_given = true;
 			pins_seed = 0;
 
-			if ((value[0] == '\0') || (strlen(value) > 9))
+			if ((value[0] == '\0') || (strlen(value) > 9) ||
+				((value[0] == '0') && (value[1] != '\0')))
 			{
 				pins_invalid = true;
 			}
