@@ -849,6 +849,88 @@ rmb_draw_world_lm(int vbuf, const unsigned *idx, unsigned long count, const rmb_
 }
 
 int
+rmb_draw_world_dyn(const rm_wvert_t *v, unsigned nv, const unsigned *idx, unsigned long ni,
+		const rmb_dyn_t *d, const float *mvp, const rm_viewport_t *vp, int cull)
+{
+	static const float white[4] = { 1, 1, 1, 1 };
+	static const int pipes[RM_DYNS] = { RM_PIPE_WORLD_TEX, RM_PIPE_WORLD_TEXC, RM_PIPE_WORLD_TEXC_BLEND,
+		RM_PIPE_WORLD_LM };
+	unsigned long i;
+	long vat, iat;
+
+	if (!v || !idx || !d || !nv || !ni || (nv > RM_DYN_MAX_VERTS) || (ni > RM_DYN_MAX_INDICES) ||
+		(d->kind < 0) || (d->kind >= RM_DYNS))
+	{
+		rmb_counts.draw_skips++;
+		return 0;
+	}
+
+	/* an index outside the vertices would read the rest of the ring */
+	for (i = 0; i < ni; i++)
+	{
+		if (idx[i] >= nv)
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+	}
+
+	@autoreleasepool
+	{
+		const int lm = (d->kind == RM_DYN_LM);
+		id<MTLTexture> t = rmb_texture_for_draw(d->tex);
+		id<MTLSamplerState> ss = rmb_sampler(d->smp);
+		id<MTLTexture> lmt = lm ? rmb_texture_for_draw(d->lm.lmtex) : nil;
+		id<MTLSamplerState> ls = lm ? rmb_sampler(RMB_SAMPLER(RMB_SMP_LIGHTMAP, 0)) : nil;
+		rmb_uniforms_lm_t u;
+
+		if (!t || !ss || (lm && (!lmt || !ls || (lmt.textureType != MTLTextureType2DArray) || (d->lm.slice < 0) ||
+			((NSUInteger)d->lm.slice >= lmt.arrayLength))) ||
+			!rmb_draw_3d_state(pipes[d->kind], RMB_DS_LEQUAL_WRITE, mvp, (d->kind == RM_DYN_TEXC) ||
+				(d->kind == RM_DYN_TEXC_BLEND) ? d->color : white, vp, cull))
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+
+		vat = mtl_ring_alloc(&ring, (size_t)nv * sizeof(*v));
+		iat = vat < 0 ? -1 : mtl_ring_alloc(&ring, (size_t)ni * sizeof(idx[0]));
+
+		if (iat < 0)
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+
+		memcpy((unsigned char *)frame_ring.contents + vat, v, (size_t)nv * sizeof(*v));
+		memcpy((unsigned char *)frame_ring.contents + iat, idx, (size_t)ni * sizeof(idx[0]));
+		[frame_enc setVertexBuffer:frame_ring offset:(NSUInteger)vat atIndex:0];
+		[frame_enc setFragmentTexture:t atIndex:0];
+		[frame_enc setFragmentSamplerState:ss atIndex:0];
+
+		if (lm)
+		{
+			memset(&u, 0, sizeof(u));
+			u.env = d->lm.env;
+			u.scale = d->lm.scale;
+			u.slice = (unsigned)d->lm.slice;
+			[frame_enc setFragmentTexture:lmt atIndex:1];
+			[frame_enc setFragmentSamplerState:ls atIndex:1];
+			[frame_enc setFragmentBytes:&u length:sizeof(u) atIndex:1];
+		}
+
+		[frame_enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+				indexCount:(NSUInteger)ni
+				indexType:MTLIndexTypeUInt32
+				indexBuffer:frame_ring
+				indexBufferOffset:(NSUInteger)iat];
+	}
+
+	rmb_counts.draws++;
+	return 1;
+}
+
+int
 rmb_draw_color(const float *xyz, int n, const float *rgba, const float *mvp,
 		const rm_viewport_t *vp, int cull)
 {

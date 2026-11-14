@@ -1075,6 +1075,8 @@ typedef enum
 	RM_PIPE_WORLD_TEX,      /* world_tex: the diffuse texel alone (r_fullbright, gl1's GL_REPLACE) */
 	RM_PIPE_COLOR_BLEND,    /* color: an untextured colour, blended (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA) */
 	RM_PIPE_WORLD_LM,       /* world_lm: the diffuse texel times the lightmap slice's (gl1's two units, N5) */
+	RM_PIPE_WORLD_TEXC,     /* world_tex with a colour: GL_MODULATE of the colour and the texel (warped water, N6) */
+	RM_PIPE_WORLD_TEXC_BLEND,   /* the same blended (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA): translucent surfaces */
 	RM_PIPE_3D_COUNT
 } rm_pipe3d_t;
 
@@ -1175,5 +1177,44 @@ typedef struct
 
 int rmb_draw_world_lm(int vbuf, const unsigned *idx, unsigned long count, const rmb_lm_draw_t *d,
 		const float *mvp, const rm_viewport_t *vp, int cull);
+
+/* ---- vertices made per frame (rmb_encode.m, N6) ------------------------------------- */
+
+/* What a frame-made world draw does with its texture. */
+typedef enum
+{
+	RM_DYN_TEX,         /* world_tex: the texel alone (GL_REPLACE: sky, r_fullbright flowing surfaces) */
+	RM_DYN_TEXC,        /* the texel times a colour (GL_MODULATE: opaque warped water) */
+	RM_DYN_TEXC_BLEND,  /* the same, blended over the target (translucent surfaces) */
+	RM_DYN_LM,          /* world_lm: the lightmapped flowing surfaces (lm fields of rmb_lm_draw_t) */
+	RM_DYNS
+} rm_dyn_t;
+
+/*
+ * The vertices and indices of one frame-made draw go to the frame ring, so
+ * a batch is bounded: at most RM_DYN_MAX_VERTS vertices and RM_DYN_MAX_INDICES
+ * indices (a fan of n vertices is 3 * (n - 2) of them).
+ */
+#define RM_DYN_MAX_VERTS 4096
+#define RM_DYN_MAX_INDICES (3 * RM_DYN_MAX_VERTS)
+
+typedef struct
+{
+	int kind;               /* rm_dyn_t */
+	int tex, smp;           /* the diffuse texture and its sampler */
+	float color[4];         /* RM_DYN_TEXC, RM_DYN_TEXC_BLEND */
+	rmb_lm_draw_t lm;       /* RM_DYN_LM: its tex and smp are the draw's own */
+} rmb_dyn_t;
+
+/*
+ * Draws nv vertices and ni indices (into them) made this frame, as
+ * triangles with depth LEQUAL and writes, in viewport vp with mvp (as
+ * rmb_draw_world); the blended kind has gl1's glBlendFunc. 0 when the
+ * draw is skipped (counted): no vertex, nv or ni above their bounds, an
+ * index not below nv, a kind outside rm_dyn_t, a texture missing, or no
+ * room in the frame ring.
+ */
+int rmb_draw_world_dyn(const rm_wvert_t *v, unsigned nv, const unsigned *idx, unsigned long ni,
+		const rmb_dyn_t *d, const float *mvp, const rm_viewport_t *vp, int cull);
 
 #endif /* RM_RMB_H */

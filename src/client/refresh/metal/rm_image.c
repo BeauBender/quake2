@@ -40,6 +40,7 @@ byte gammatable[256];
 
 image_t *r_notexture;    /* the fallback of a missing world texture (rm_misc.c makes it) */
 float rm_sw_gamma = 1;   /* gl1's gl_state.sw_gamma: vid_gamma, at least 0.1, as R_InitImages read it */
+float rm_inverse_intensity_value = 0.5f;   /* gl1's gl_state.inverse_intensity: the gamma over gl1_intensity, as R_InitImages computed it */
 int registration_sequence;
 
 static byte intensitytable[256];
@@ -585,6 +586,8 @@ R_InitImages(void)
 	{
 		ri.Cvar_Set("gl1_intensity", "1");
 	}
+
+	rm_inverse_intensity_value = rm_inverse_intensity(g, intensity->value);
 
 	Scrap_Init();
 	GetPCXPalette(&colormap, d_8to24table);

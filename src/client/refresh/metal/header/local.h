@@ -121,6 +121,7 @@ extern image_t gltextures[MAX_GLTEXTURES];
 extern image_t *r_notexture;
 extern int registration_sequence;
 extern float rm_sw_gamma;
+extern float rm_inverse_intensity_value;
 extern int numgltextures;
 extern unsigned d_8to24table[256];
 extern unsigned r_rawpalette[256];
@@ -169,11 +170,34 @@ extern int r_framecount, r_visframecount;
 extern cplane_t frustum[4];
 extern vec3_t vup, vpn, vright, r_origin;
 void R_MarkLeaves(void);
-/* draws the world with mvp in viewport vp, culling GL's front faces with cull */
-void R_DrawWorld(const float *mvp, const rm_viewport_t *vp, int cull);
+/* the view a frame's 3D draws share: gl1's world matrix and projection, their product, the viewport and the culling */
+typedef struct
+{
+	float world[16], proj[16], mvp[16];
+	rm_viewport_t vp;
+	int cull;
+} rm_view_t;
+
+/* draws the world (sky box included) in view */
+void R_DrawWorld(const rm_view_t *view);
+/* gl1's R_DrawAlphaSurfaces: the translucent surfaces of the walk, blended, last to first */
+void R_DrawAlphaSurfaces(const rm_view_t *view);
 /* the surfaces of the last view R_DrawWorld skipped, by class, into s (metal_stats) */
 void RM_WorldSkips(rmb_stats_t *s);
 void RM_WorldSkipsClear(void);
+
+/* rm_warp.c (gl1_warp.c): the sky box, the warped water and the batches of per-frame vertices */
+void RM_SetSky(const char *name, float rotate, vec3_t axis);
+void RM_SkyClear(void);
+int RM_AddSkySurface(const rm_world_t *w, const msurface_t *fa);
+int RM_DrawSkyBox(const rm_view_t *view);
+int RM_SubdivideSurface(model_t *loadmodel, rm_world_t *w, msurface_t *fa);
+int RM_EmitWaterPolys(const rm_world_t *w, const msurface_t *fa);
+void RM_DynBegin(const rm_view_t *view, unsigned long *skips);
+void RM_DynFlush(void);
+void RM_DynState(const rmb_dyn_t *d);
+void RM_DynSurface(void);
+int RM_DynPoly(const rm_world_t *w, const msurface_t *fa, float scroll);
 
 /* rm_lightmap.c: the lightmap slices of the world (gl1_lightmap.c) */
 void LM_FreeLightmapBuffers(void);

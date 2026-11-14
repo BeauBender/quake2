@@ -83,6 +83,8 @@ RM_FreeWorld(rm_world_t *w)
 	free(w->indices);
 	free(w->recs);
 	free(w->scratch);
+	free(w->wverts);
+	free(w->wpolys);
 	free(w);
 }
 
@@ -753,6 +755,13 @@ RM_BuildWorld(model_t *mod)
 
 		fa->first_vertex = (unsigned)vat;
 		fa->num_vertices = (unsigned)lnumverts;
+
+		/* gl1 cuts a warped surface up here (R_SubdivideSurface); its flat polygon stays in the buffers below */
+		if ((tex->flags & SURF_WARP) && !RM_SubdivideSurface(mod, w, fa))
+		{
+			RM_Refuse(mod, "surface %d (%d vertices, warped) cannot be subdivided within the limits", s,
+					fa->numedges);
+		}
 
 		for (i = 0; i < lnumverts; i++)
 		{

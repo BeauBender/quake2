@@ -31,9 +31,14 @@
  * units compute it; with r_fullbright the lightmap unit is off (N4's
  * world_tex). Before the chains, R_RegenAllLightmaps rebuilds the
  * lightmaps whose styles changed and uploads each slice's joined dirty
- * rectangle. Sky, translucent, warped and flowing surfaces are counted
- * and skipped until N6 draws them; a surface a dynamic light touches is
- * drawn with its static lightmap and counted until N8 adds the light.
+ * rectangle. N6 adds the rest of gl1's walk (rm_warp.c): the flowing
+ * surfaces, which scroll and so are drawn from per-frame vertices in
+ * their place in the chain; the warped water, after the chains; the sky
+ * box, after the water; and the translucent surfaces
+ * (R_DrawAlphaSurfaces, called by R_RenderView). The skipped counts are
+ * now the surfaces whose draw was refused. A surface a dynamic light
+ * touches is drawn with its static lightmap and counted until N8 adds
+ * the light.
  *
  * =======================================================================
  */
@@ -47,8 +52,11 @@ vec3_t vup, vpn, vright, r_origin;
 
 static vec3_t modelorg; /* relative to viewpoint */
 
-/* the surfaces of the current view not drawn yet, by class, and those drawn without their dynamic light */
+/* the surfaces of the current view whose draw was refused, by class, and those drawn without their dynamic light */
 static unsigned long skip_sky, skip_warp, skip_trans, skip_flow, dlit_surfs;
+
+/* gl1's r_alpha_surfaces: the translucent surfaces of the walk, the last visited first */
+static msurface_t *r_alpha_surfaces;
 
 /* gl1's gl_lms.lightmap_surfaces: the lit surfaces of this frame, per slice */
 static msurface_t *lightmap_surfaces[RM_LM_MAX_SLICES];
@@ -57,6 +65,7 @@ void
 RM_WorldSkipsClear(void)
 {
 	skip_sky = skip_warp = skip_trans = skip_flow = dlit_surfs = 0;
+	r_alpha_surfaces = NULL;
 }
 
 void
@@ -171,13 +180,21 @@ R_RecursiveWorldNode(entity_t *currententity, mnode_t *node)
 
 		if (surf->texinfo->flags & SURF_SKY)
 		{
-			/* gl1 adds it to the visible sky bounds (R_AddSkySurface): N6 */
-			skip_sky++;
+			/* just adds to visible sky bounds */
+			if (!RM_AddSkySurface(r_worldmodel->world, surf))
+			{
+				skip_sky++;
+			}
 		}
 		else if (surf->texinfo->flags & (SURF_TRANS33 | SURF_TRANS66))
 		{
-			/* gl1 adds it to the translucent chain (R_DrawAlphaSurfaces): N6 */
-			skip_trans++;
+			/*
+			 * add to the translucent chain; gl1 also sets the texinfo's image to the
+			 * animated one (which its next frame's animation then starts from), kept
+			 */
+			surf->texturechain = r_alpha_surfaces;
+			r_alpha_surfaces = surf;
+			r_alpha_surfaces->texinfo->image = R_TextureAnimation(currententity, surf->texinfo);
 		}
 		else
 		{
@@ -367,6 +384,9 @@ R_FlushChain(rm_world_t *w, const image_t *image, int slice, unsigned long n, co
 		return;
 	}
 
+	/* the flowing surfaces before this run in the chain are drawn before it */
+	RM_DynFlush();
+
 	if (r_fullbright->value)
 	{
 		/* gl1 leaves the lightmap unit off: the texel alone */
@@ -384,15 +404,49 @@ R_FlushChain(rm_world_t *w, const image_t *image, int slice, unsigned long n, co
 	rmb_draw_world_lm(w->vbuf, w->scratch, n, &d, mvp, vp, cull);
 }
 
+/* a flowing surface of a chain: its polygon scrolled (R_RenderLightmappedPoly), in the batch of per-frame vertices */
+static void
+R_DrawFlowing(rm_world_t *w, const image_t *image, const msurface_t *s)
+{
+	rmb_dyn_t d;
+
+	memset(&d, 0, sizeof(d));
+	d.tex = image->texnum;
+	d.smp = image->sampler;
+
+	if (r_fullbright->value)
+	{
+		d.kind = RM_DYN_TEX;
+	}
+	else
+	{
+		int obb = rm_overbright(gl1_overbrightbits->value);
+
+		d.kind = RM_DYN_LM;
+		d.lm.lmtex = w->lmtex;
+		d.lm.slice = s->lightmaptexturenum;
+		d.lm.env = rm_lm_env(obb, gl_lightmap->value != 0);
+		d.lm.scale = obb ? (float)obb : 1.0f;
+	}
+
+	RM_DynState(&d);
+	RM_DynSurface();
+
+	if (!RM_DynPoly(w, s, rm_flow_scroll(r_newrefdef.time)))
+	{
+		skip_flow++;
+	}
+}
+
 /*
  * from gl1_surf.c, R_DrawTextureChains, the multitexture path that gl1
  * takes on the reference (without the lightmap unit under r_fullbright):
  * first every chain's surfaces that are not warped, in runs of one
- * lightmap slice, then the warped ones (skipped here), and the chains
- * cleared.
+ * lightmap slice (a flowing one scrolled, in its place), then the warped
+ * ones (R_EmitWaterPolys, one batch per chain), and the chains cleared.
  */
 static void
-R_DrawTextureChains(const float *mvp, const rm_viewport_t *vp, int cull)
+R_DrawTextureChains(const rm_view_t *view)
 {
 	rm_world_t *w = r_worldmodel->world;
 	image_t *image;
@@ -409,6 +463,8 @@ R_DrawTextureChains(const float *mvp, const rm_viewport_t *vp, int cull)
 			continue;
 		}
 
+		RM_DynBegin(view, &skip_flow);
+
 		for (s = image->texturechain; s; s = s->texturechain)
 		{
 			if (s->flags & SURF_DRAWTURB)
@@ -418,7 +474,10 @@ R_DrawTextureChains(const float *mvp, const rm_viewport_t *vp, int cull)
 
 			if (s->texinfo->flags & SURF_FLOWING)
 			{
-				skip_flow++;    /* gl1 scrolls its coordinates (R_RenderLightmappedPoly): N6 */
+				/* the run before it is drawn first, and the surface after the flowing ones before it */
+				R_FlushChain(w, image, slice, n, view->mvp, &view->vp, view->cull);
+				n = 0;
+				R_DrawFlowing(w, image, s);
 				continue;
 			}
 
@@ -431,7 +490,7 @@ R_DrawTextureChains(const float *mvp, const rm_viewport_t *vp, int cull)
 			/* gl1's R_UpdateGLBuffer: another lightmap flushes the batch */
 			if (!r_fullbright->value && (s->lightmaptexturenum != slice))
 			{
-				R_FlushChain(w, image, slice, n, mvp, vp, cull);
+				R_FlushChain(w, image, slice, n, view->mvp, &view->vp, view->cull);
 				n = 0;
 				slice = s->lightmaptexturenum;
 			}
@@ -446,34 +505,108 @@ R_DrawTextureChains(const float *mvp, const rm_viewport_t *vp, int cull)
 			n += s->num_indices;
 		}
 
-		R_FlushChain(w, image, slice, n, mvp, vp, cull);
+		R_FlushChain(w, image, slice, n, view->mvp, &view->vp, view->cull);
+		RM_DynFlush();
 	}
 
 	for (i = 0, image = gltextures; i < numgltextures; i++, image++)
 	{
 		long left = r_worldmodel->numsurfaces;
+		rmb_dyn_t d;
 
 		if (!image->registration_sequence || !image->texturechain)
 		{
 			continue;
 		}
 
+		/* gl1: GL_COMBINE at scale 1 on white with overbright bits, else GL_MODULATE with the inverse intensity */
+		memset(&d, 0, sizeof(d));
+		d.kind = rm_warp_color(rm_overbright(gl1_overbrightbits->value) != 0, rm_inverse_intensity_value, d.color) ?
+				RM_DYN_TEXC : RM_DYN_TEX;
+		d.tex = image->texnum;
+		d.smp = image->sampler;
+
+		RM_DynBegin(view, &skip_warp);
+		RM_DynState(&d);
+
 		/* a chain holds each surface once (the nodes are a tree: rm_model.c); bounded all the same */
 		for (s = image->texturechain; s && (left > 0); s = s->texturechain, left--)
 		{
 			if (s->flags & SURF_DRAWTURB)
 			{
-				skip_warp++;    /* gl1's R_RenderBrushPoly, R_EmitWaterPolys: N6 */
+				RM_DynSurface();
+
+				if (!RM_EmitWaterPolys(w, s))
+				{
+					skip_warp++;
+				}
 			}
 		}
 
+		RM_DynFlush();
 		image->texturechain = NULL;
 	}
 }
 
-/* from gl1_surf.c, without the sky box (N6) and the brush entities' lighting (R_GetBrushesLighting, N7) */
+/*
+ * from gl1_surf.c, R_DrawAlphaSurfaces: the translucent surfaces of the
+ * walk, drawn blended with depth writes (GL_SRC_ALPHA,
+ * GL_ONE_MINUS_SRC_ALPHA), the inverse intensity in the colour and
+ * the alpha of the surface's flags (GL_MODULATE). The walk is front to
+ * back and the chain was built by pushing, so it draws back to front.
+ */
 void
-R_DrawWorld(const float *mvp, const rm_viewport_t *vp, int cull)
+R_DrawAlphaSurfaces(const rm_view_t *view)
+{
+	const rm_world_t *w = r_worldmodel ? r_worldmodel->world : NULL;
+	long left = r_worldmodel ? r_worldmodel->numsurfaces : 0;
+	msurface_t *s;
+
+	RM_DynBegin(view, &skip_trans);
+
+	for (s = r_alpha_surfaces; s && (left > 0); s = s->texturechain, left--)
+	{
+		const image_t *image = (const image_t *)s->texinfo->image;
+		rmb_dyn_t d;
+		int ok;
+
+		if (!image)
+		{
+			skip_trans++;
+			continue;
+		}
+
+		memset(&d, 0, sizeof(d));
+		d.kind = RM_DYN_TEXC_BLEND;
+		d.tex = image->texnum;
+		d.smp = image->sampler;
+		rm_trans_color(rm_inverse_intensity_value, rm_trans_alpha(s->texinfo->flags), d.color);
+
+		RM_DynState(&d);
+		RM_DynSurface();
+
+		if (s->flags & SURF_DRAWTURB)
+		{
+			ok = RM_EmitWaterPolys(w, s);
+		}
+		else
+		{
+			ok = RM_DynPoly(w, s, (s->texinfo->flags & SURF_FLOWING) ? rm_flow_scroll(r_newrefdef.time) : 0.0f);
+		}
+
+		if (!ok)
+		{
+			skip_trans++;
+		}
+	}
+
+	RM_DynFlush();
+	r_alpha_surfaces = NULL;
+}
+
+/* from gl1_surf.c, without the brush entities' lighting (R_GetBrushesLighting, N7) */
+void
+R_DrawWorld(const rm_view_t *view)
 {
 	entity_t ent;
 
@@ -495,9 +628,11 @@ R_DrawWorld(const float *mvp, const rm_viewport_t *vp, int cull)
 
 	memset(lightmap_surfaces, 0, sizeof(lightmap_surfaces));
 
+	RM_SkyClear();
 	R_RecursiveWorldNode(&ent, r_worldmodel->nodes);
 	R_RegenAllLightmaps();
-	R_DrawTextureChains(mvp, vp, cull);
+	R_DrawTextureChains(view);
+	skip_sky += (unsigned long)RM_DrawSkyBox(view);
 }
 
 /* from gl1_surf.c: marks the leaves and nodes in the PVS of the current cluster */
