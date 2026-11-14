@@ -265,8 +265,10 @@ nl.txt"
 	expect 2 "an index blob not found by its path" "$tmp/none" "$syn" zzquser /home/zzqhome
 
 	# Which addresses name an owner. "y <url>": the owner is zzquser. sed keeps
-	# an unmatched prefix, so "zzq" before an owner "user" would spell zzquser
-	# if a pattern lost its leading anchor.
+	# the unmatched text, so "zzq" before an owner "user" would spell zzquser
+	# if a pattern lost its leading anchor, and an owner "zzq" before a
+	# leftover "/user" if it lost its trailing one. A userinfo part holds no
+	# "/" (nor ":" in the scp-like form), so the host cannot be skipped over.
 	r=$tmp/r5
 	git init -q "$r"
 	while read -r _want _url; do
@@ -308,6 +310,10 @@ nl.txt"
 	n /zzq/github.com:zzquser/zzqrepo
 	n https://githubxcom/zzquser/zzqrepo
 	n zzqgit@githubxcom:zzquser/zzqrepo.git
+	n https://github.com/zzq/zzqrepo/user
+	n github.com:zzq/zzqrepo/user
+	n https://zzq.example/@github.com/zzquser/zzqrepo
+	n zzqalias:x@github.com:zzquser/zzqrepo
 	EOF
 	git -C "$r" config --add remote.origin.url https://github.com/zzquser/zzqrepo.git
 	if owner_is "$r" zzquser; then echo "$me: self-test 'origin with two URLs' named an owner"; exit 1; fi
