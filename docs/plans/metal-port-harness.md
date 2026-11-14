@@ -2690,4 +2690,55 @@ at every width once the height is 1300 (taller than the 1320-point
 visible frame with the title bar). 1920x900, 1760x990, 1840x1035,
 1919x1080, 1920x1079, 1921x1081 and 2000x1125 are capped; 1600x1080
 (the same area as 1920x900) is not. The 640x480 and 1600x900 that
-TASK97 measured sit below the threshold, 1920x1080 above it.
+TASK97 measured sit below the threshold, 1920x1080 above it. The
+engine agrees: `soft` ran at 263.8 to 268.1 fps at 1700x900 and at
+60.0 at 1720x900 (two runs each, alternated, load average 2.56 to
+4.29).
+
+**What lifts it: an opaque layer is the cause.** One layer property
+at a time in the probe at 1920x1080, two runs each, alternated with
+the default settings (which gave 60.0 fps and 16.51 to 16.60 ms in
+`nextDrawable` in every one of the 20 baseline runs; load average
+1.86 to 2.19):
+
+| Change | fps | mean wait in `nextDrawable` |
+|---|---|---|
+| `opaque = NO` | 394.0 to 437.8 | 2.26 to 2.46 ms |
+| `maximumDrawableCount` 2 | 178.6 to 191.7 | 5.12 to 5.51 ms |
+| `presentsWithTransaction = YES` | 120.0 to 120.1 | 6.51 to 7.01 ms |
+| `contentsScale` 2, drawable 3840x2160 (no scaling by the compositor) | 60.0 | 16.45 to 16.46 ms |
+| drawable half the window, 960x540 | 60.0 | 16.54 to 16.56 ms |
+| layer colorspace sRGB, or Display P3 | 60.0 | 16.52 to 16.54 ms |
+| `framebufferOnly = YES` | 60.0 | 16.57 to 16.61 ms |
+| `MTLPixelFormatRGBA16Float` | 60.0 | 16.47 to 16.48 ms |
+| window level floating (always on top) | 60.0 | 16.51 to 16.52 ms |
+
+The scaling from 1x to the 2x panel, the colorspace and the pixel
+format do not matter. A large opaque layer is what the window server
+treats this way (consistent with it being scanned out directly rather
+than composited, which macOS does not report), and a layer that is
+not opaque is composited like a small one and keeps
+`displaySyncEnabled = NO`. In the probe at 640x480 and 1600x900 the
+opacity made no difference (320.8 to 367.6 fps either way, three runs
+each, alternated, load average 2.13).
+
+**The same change in the engine** (`timedemo` of `demo1.dm2`, windowed,
+`r_vsync 0`, one binary, baseline and changed renderer alternated run
+by run, three runs each; `ref_gl1` presents through OpenGL and is not
+affected). The `ref_metal` and Metal-backed `gl1` rows are scratch
+builds with `opaque = NO` added next to their `displaySyncEnabled`
+line, never committed:
+
+| Renderer | 1920x1080 before | after | 640x480 before | after | Load average |
+|---|---|---|---|---|---|
+| `soft` (this card's fix) | 60.0 | 242.3 to 256.9 | 272.2 to 282.3 | 389.3 to 394.4 | 2.56 to 4.29 |
+| `ref_metal` (scratch) | 60.0 | 370.8 to 405.5 | 268.7 to 307.5 | 337.4 to 392.8 | 2.67 to 4.11 |
+| Metal-backed `gl1` (scratch) | 60.1 | 368.8 to 384.1 | 268.4 to 290.8 | 328.7 to 405.3 | 2.67 to 4.11 |
+
+Another agent's build (3 to 8 compiler processes) was running at the
+start of the `soft` 640x480 batch and of the 1920x1080 batch of the
+two Metal renderers; these are A/B ranges, not the final
+before-and-after numbers, which want a quiet host. In the engine the
+opaque layer also
+costs about 1 ms a frame below the threshold: at 640x480 all three
+renderers move from about 270 to 300 fps to about 330 to 400.
