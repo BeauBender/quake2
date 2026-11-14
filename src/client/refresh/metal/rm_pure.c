@@ -216,7 +216,7 @@ rm_stats_format(const rmb_stats_t *s, const rm_ledger_t *l, char *buf, size_t le
 	ok = ok && rm_append(buf, len, &used, "%lu live objects, ", rm_ledger_live(l));
 	ok = ok && rm_append(buf, len, &used, "skipped surfaces: %lu sky, %lu warped, %lu translucent, %lu flowing",
 			s->sky_skips, s->warp_skips, s->trans_skips, s->flow_skips);
-	ok = ok && rm_append(buf, len, &used, "; %lu drawn without their dynamic light", s->dlit_surfs);
+	ok = ok && rm_append(buf, len, &used, "; %lu dynamic lights left out", s->dlight_skips);
 	ok = ok && rm_append(buf, len, &used, "; skipped entities: %lu sprites, %lu beams, %lu null models, ",
 			s->sprite_skips, s->beam_skips, s->null_skips);
 	ok = ok && rm_append(buf, len, &used, "%lu translucent brush models, %lu refused", s->bmodel_trans_skips,
@@ -1415,21 +1415,26 @@ rm_ftol(float f)
 	return (long)f;
 }
 
-/* from gl1_light.c, R_BuildLightMap, without the dynamic lights (N8) */
-int
-rm_lm_build(const unsigned char *samples, int smax, int tmax, int nummaps, const float (*rgb)[3],
-		float modulate, const unsigned char *minlight, const unsigned char *gamma,
-		unsigned char *dest, long stride, float *blocklights)
+/* the size rm_lm_size gives for the extents (smax - 1) * 16 and (tmax - 1) * 16 (below 1 is negative) */
+static int
+rm_lm_dims_ok(int smax, int tmax)
 {
-	int r, g, b, a, max;
-	int i, j, size, maps, ok_s, ok_t;
+	int ok_s, ok_t;
+
+	return rm_lm_size(((long)smax - 1) * 16, ((long)tmax - 1) * 16, &ok_s, &ok_t);
+}
+
+/* from gl1_light.c, R_BuildLightMap: the styles, before the dynamic lights (rm_lm_dlight, N8) */
+int
+rm_lm_styles(const unsigned char *samples, int smax, int tmax, int nummaps, const float (*rgb)[3],
+		float modulate, float *blocklights)
+{
+	int i, size, maps;
 	const unsigned char *lightmap;
 	float scale[3];
 	float *bl;
 
-	/* the size rm_lm_size gives for the extents (smax - 1) * 16 and (tmax - 1) * 16 (below 1 is negative) */
-	if (!rm_lm_size(((long)smax - 1) * 16, ((long)tmax - 1) * 16, &ok_s, &ok_t) ||
-		(nummaps < 0) || (nummaps > RM_LM_STYLES) || (stride < (long)smax * RM_LM_BYTES))
+	if (!rm_lm_dims_ok(smax, tmax) || (nummaps < 0) || (nummaps > RM_LM_STYLES))
 	{
 		return 0;
 	}
@@ -1444,7 +1449,7 @@ rm_lm_build(const unsigned char *samples, int smax, int tmax, int nummaps, const
 			blocklights[i] = 255;
 		}
 
-		goto store;
+		return 1;
 	}
 
 	lightmap = samples;
@@ -1519,9 +1524,23 @@ rm_lm_build(const unsigned char *samples, int smax, int tmax, int nummaps, const
 		}
 	}
 
-	/* gl1 adds the dynamic lights here (R_AddDynamicLights): N8's, a step of its own */
+	/* gl1 adds the dynamic lights here (R_AddDynamicLights): rm_lm_dlight, a step of its own (N8) */
+	return 2;
+}
 
-store:
+/* from gl1_light.c, R_BuildLightMap: the store, after the dynamic lights */
+int
+rm_lm_store(int smax, int tmax, const unsigned char *minlight, const unsigned char *gamma,
+		unsigned char *dest, long stride, const float *blocklights)
+{
+	int r, g, b, a, max;
+	int i, j;
+	const float *bl;
+
+	if (!rm_lm_dims_ok(smax, tmax) || (stride < (long)smax * RM_LM_BYTES))
+	{
+		return 0;
+	}
 
 	stride -= (smax << 2);
 	bl = blocklights;
@@ -1597,6 +1616,22 @@ store:
 	}
 
 	return 1;
+}
+
+/* from gl1_light.c, R_BuildLightMap without the dynamic lights: the styles, then the store */
+int
+rm_lm_build(const unsigned char *samples, int smax, int tmax, int nummaps, const float (*rgb)[3],
+		float modulate, const unsigned char *minlight, const unsigned char *gamma,
+		unsigned char *dest, long stride, float *blocklights)
+{
+	/* nothing written when either refuses: the store's stride is checked first */
+	if (!rm_lm_dims_ok(smax, tmax) || (stride < (long)smax * RM_LM_BYTES))
+	{
+		return 0;
+	}
+
+	return rm_lm_styles(samples, smax, tmax, nummaps, rgb, modulate, blocklights) &&
+		rm_lm_store(smax, tmax, minlight, gamma, dest, stride, blocklights);
 }
 
 /* from gl1_main.c, RI_BeginFrame */
@@ -3459,4 +3494,471 @@ int
 rm_entity_count(long n)
 {
 	return (n < 0) ? 0 : (n > RM_MAX_ENTITIES) ? RM_MAX_ENTITIES : (int)n;
+}
+
+/* ---- sprites, beams, null models, shadows, dynamic lights, flash blobs (N8) --------- */
+
+/*
+ * shared.c (src/common/shared/shared.c), which gl1's R_DrawBeam and
+ * R_DrawAliasModel call and ref_metal and the host test link: gl1's own
+ * functions, declared here as shared.h declares them (vec3_t is float[3])
+ */
+float VectorNormalize(float *v);
+void VectorScale(const float *in, float scale, float *out);
+void PerpendicularVector(float *dst, const float *src);
+void RotatePointAroundVector(float *dst, const float *dir, const float *point, float degrees);
+
+/* shared.c's VectorMA, the same statement (so the same contraction) */
+static void
+rm_vector_ma(const float *veca, float scale, const float *vecb, float *vecc)
+{
+	vecc[0] = veca[0] + scale * vecb[0];
+	vecc[1] = veca[1] + scale * vecb[1];
+	vecc[2] = veca[2] + scale * vecb[2];
+}
+
+static int
+rm_finite3(const float *v)
+{
+	return isfinite(v[0]) && isfinite(v[1]) && isfinite(v[2]);
+}
+
+int
+rm_prim_indices(int strip, int n, int base, unsigned short *idx, int cap)
+{
+	int i, k = 0;
+
+	if ((n < 3) || (base < 0) || ((long)base + n > 65536) || (cap < 0) || ((n - 2) > cap / 3))
+	{
+		return 0;
+	}
+
+	for (i = 0; i < n - 2; i++)
+	{
+		int p0, p1, p2;
+
+		if (!strip)
+		{
+			p0 = 0;
+			p1 = i + 1;
+			p2 = i + 2;
+		}
+		else
+		{
+			/* GL 1.4, section 2.6.1: every odd triangle swaps its first two vertices */
+			p0 = (i & 1) ? i + 1 : i;
+			p1 = (i & 1) ? i : i + 1;
+			p2 = i + 2;
+		}
+
+		idx[k++] = (unsigned short)(base + p0);
+		idx[k++] = (unsigned short)(base + p1);
+		idx[k++] = (unsigned short)(base + p2);
+	}
+
+	return k;
+}
+
+/* from gl1_main.c, R_DrawSpriteModel */
+int
+rm_sprite_frame(int frame, int numframes)
+{
+	if ((numframes < 1) || (numframes > RM_MD2_MAX_SKINS))
+	{
+		return -1;
+	}
+
+	/* A negative frame would leave a negative remainder and index before frames[] and skins[]; use the first frame. */
+	if (frame < 0)
+	{
+		frame = 0;
+	}
+
+	return frame % numframes;
+}
+
+/* from gl1_main.c, R_DrawSpriteModel */
+float
+rm_sprite_alpha(int flags, float alpha, int *blend, int *atest)
+{
+	float a = 1.0F;
+
+	if (flags & RM_RF_TRANSLUCENT)
+	{
+		a = alpha;
+	}
+
+	*blend = a != 1.0F;
+	*atest = a == 1.0;
+	return a;
+}
+
+/* from gl1_main.c, R_DrawSpriteModel */
+int
+rm_sprite_quad(const float *origin, int width, int height, int origin_x, int origin_y, const float *up,
+		const float *right, float (*point)[3])
+{
+	/* gl1's int expressions -origin_y, height - origin_y, -origin_x and width - origin_x, without overflow */
+	const float ny = (float)(-(long long)origin_y), hy = (float)((long long)height - origin_y);
+	const float nx = (float)(-(long long)origin_x), wx = (float)((long long)width - origin_x);
+	int i;
+
+	rm_vector_ma(origin, ny, up, point[0]);
+	rm_vector_ma(point[0], nx, right, point[0]);
+
+	rm_vector_ma(origin, hy, up, point[1]);
+	rm_vector_ma(point[1], nx, right, point[1]);
+
+	rm_vector_ma(origin, hy, up, point[2]);
+	rm_vector_ma(point[2], wx, right, point[2]);
+
+	rm_vector_ma(origin, ny, up, point[3]);
+	rm_vector_ma(point[3], wx, right, point[3]);
+
+	for (i = 0; i < 4; i++)
+	{
+		if (!rm_finite3(point[i]))
+		{
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+/* from gl1_main.c, R_DrawBeam */
+int
+rm_beam_points(const float *origin_in, const float *oldorigin_in, int frame, float (*vtx)[3])
+{
+	int i;
+	float perpvec[3];
+	float direction[3], normalized_direction[3];
+	float start_points[RM_BEAM_SEGS][3], end_points[RM_BEAM_SEGS][3];
+	float oldorigin[3], origin[3];
+	unsigned int index_vtx = 0;
+	unsigned int pointb;
+
+	oldorigin[0] = oldorigin_in[0];
+	oldorigin[1] = oldorigin_in[1];
+	oldorigin[2] = oldorigin_in[2];
+
+	origin[0] = origin_in[0];
+	origin[1] = origin_in[1];
+	origin[2] = origin_in[2];
+
+	normalized_direction[0] = direction[0] = oldorigin[0] - origin[0];
+	normalized_direction[1] = direction[1] = oldorigin[1] - origin[1];
+	normalized_direction[2] = direction[2] = oldorigin[2] - origin[2];
+
+	if (VectorNormalize(normalized_direction) == 0)
+	{
+		return 0;
+	}
+
+	PerpendicularVector(perpvec, normalized_direction);
+	VectorScale(perpvec, frame / 2, perpvec);
+
+	for (i = 0; i < 6; i++)
+	{
+		RotatePointAroundVector(start_points[i], normalized_direction, perpvec,
+				(360.0 / RM_BEAM_SEGS) * i);
+		/* VectorAdd, shared.h's macro */
+		start_points[i][0] = start_points[i][0] + origin[0];
+		start_points[i][1] = start_points[i][1] + origin[1];
+		start_points[i][2] = start_points[i][2] + origin[2];
+		end_points[i][0] = start_points[i][0] + direction[0];
+		end_points[i][1] = start_points[i][1] + direction[1];
+		end_points[i][2] = start_points[i][2] + direction[2];
+	}
+
+	for (i = 0; i < RM_BEAM_SEGS; i++)
+	{
+		memcpy(vtx[index_vtx++], start_points[i], sizeof(vtx[0]));
+		memcpy(vtx[index_vtx++], end_points[i], sizeof(vtx[0]));
+
+		pointb = (i + 1) % RM_BEAM_SEGS;
+		memcpy(vtx[index_vtx++], start_points[pointb], sizeof(vtx[0]));
+		memcpy(vtx[index_vtx++], end_points[pointb], sizeof(vtx[0]));
+	}
+
+	for (i = 0; i < RM_BEAM_VERTS; i++)
+	{
+		if (!rm_finite3(vtx[i]))
+		{
+			return -1;
+		}
+	}
+
+	return 1;
+}
+
+/* from gl1_main.c, R_DrawBeam: glColor4ub(gammatable[clr[0]], gammatable[clr[1]], gammatable[clr[2]], clr[3]) */
+void
+rm_beam_color(const unsigned *palette, const unsigned char *gamma, int skinnum, float alpha, float *rgba)
+{
+	const unsigned p = palette[skinnum & 0xFF];
+	const float a = alpha * 255;
+	int clr[4];
+
+	clr[0] = p & 0xFF;
+	clr[1] = (p >> 8) & 0xFF;
+	clr[2] = (p >> 16) & 0xFF;
+	/* clr[3] = e->alpha * 255, defined inside an int; glColor4ub takes its low byte */
+	clr[3] = ((a > -2147483648.0f) && (a < 2147483648.0f)) ? (int)a : ((a > 0) ? INT_MAX : INT_MIN);
+
+	rgba[0] = gamma[clr[0]] / 255.0f;
+	rgba[1] = gamma[clr[1]] / 255.0f;
+	rgba[2] = gamma[clr[2]] / 255.0f;
+	rgba[3] = (unsigned char)clr[3] / 255.0f;
+}
+
+/* from gl1_main.c, R_DrawNullModel */
+void
+rm_null_model(float (*vtx)[3])
+{
+	const float vtxA[] = {
+		0, 0, -16,
+		16 * cos( 0 * M_PI / 2 ), 16 * sin( 0 * M_PI / 2 ), 0,
+		16 * cos( 1 * M_PI / 2 ), 16 * sin( 1 * M_PI / 2 ), 0,
+		16 * cos( 2 * M_PI / 2 ), 16 * sin( 2 * M_PI / 2 ), 0,
+		16 * cos( 3 * M_PI / 2 ), 16 * sin( 3 * M_PI / 2 ), 0,
+		16 * cos( 4 * M_PI / 2 ), 16 * sin( 4 * M_PI / 2 ), 0
+	};
+	const float vtxB[] = {
+		0, 0, 16,
+		16 * cos( 4 * M_PI / 2 ), 16 * sin( 4 * M_PI / 2 ), 0,
+		16 * cos( 3 * M_PI / 2 ), 16 * sin( 3 * M_PI / 2 ), 0,
+		16 * cos( 2 * M_PI / 2 ), 16 * sin( 2 * M_PI / 2 ), 0,
+		16 * cos( 1 * M_PI / 2 ), 16 * sin( 1 * M_PI / 2 ), 0,
+		16 * cos( 0 * M_PI / 2 ), 16 * sin( 0 * M_PI / 2 ), 0
+	};
+
+	memcpy(vtx[0], vtxA, sizeof(vtxA));
+	memcpy(vtx[6], vtxB, sizeof(vtxB));
+}
+
+/* from gl1_mesh.c, R_DrawAliasModel */
+int
+rm_shadow_drawn(int flags, float shadows)
+{
+	return (shadows != 0) && !(flags & (RM_RF_TRANSLUCENT | RM_RF_WEAPONMODEL | RM_RF_NOSHADOW));
+}
+
+/* from gl1_mesh.c, R_DrawAliasModel */
+void
+rm_shadevector(float yaw, float *shadevector)
+{
+	float an;
+
+	an = yaw / 180 * M_PI;
+	shadevector[0] = cos(-an);
+	shadevector[1] = sin(-an);
+	shadevector[2] = 1;
+	VectorNormalize(shadevector);
+}
+
+/* from gl1_mesh.c, R_DrawAliasShadow */
+void
+rm_shadow_point(const float *p, const float *shadevector, float lheight, float *out)
+{
+	float point[3];
+	float height;
+
+	height = -lheight + 0.1f;
+
+	memcpy(point, p, sizeof(point));
+
+	point[0] -= shadevector[0] * (point[2] + lheight);
+	point[1] -= shadevector[1] * (point[2] + lheight);
+	point[2] = height;
+
+	memcpy(out, point, sizeof(point));
+}
+
+/* from gl1_mesh.c, R_DrawAliasModel: glTranslatef(origin), then glRotatef(yaw, 0, 0, 1) */
+void
+rm_shadow_matrix(float *out, const float *world, const float *origin, float yaw)
+{
+	float t[16];
+
+	memmove(out, world, 16 * sizeof(float));
+	mtl_mat_translate(t, origin[0], origin[1], origin[2]);
+	mtl_mat_mul(out, out, t);
+	rm_mat_rotate_on(out, yaw, 0, 0, 1);
+}
+
+int
+rm_dlight_ok(const float *origin, const float *color, float intensity)
+{
+	int i;
+
+	/* each test fails for a NaN as well */
+	if (!(fabsf(intensity) <= RM_DLIGHT_MAX_INTENSITY))
+	{
+		return 0;
+	}
+
+	for (i = 0; i < 3; i++)
+	{
+		if (!(fabsf(origin[i]) <= RM_DLIGHT_MAX_COORD) || !(fabsf(color[i]) <= RM_DLIGHT_MAX_COLOR))
+		{
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+/* the size of the light's point in texture space gl1 converts to int (less a luxel's 16 units) */
+#define RM_DLIGHT_LOCAL_MAX 1073741824.0f
+
+/* from gl1_light.c, R_AddDynamicLights: the body of its loop, for one light the surface is marked for */
+int
+rm_lm_dlight(float *blocklights, int smax, int tmax, const float *normal, float dist, const float *vecs0,
+		const float *vecs1, int texturemin0, int texturemin1, const float *origin, float intensity,
+		const float *color)
+{
+	int sd, td;
+	float fdist, frad, fminlight;
+	float impact[3], local[2];
+	int s, t;
+	int i;
+	float *pfBL;
+	float fsacc, ftacc;
+
+	if (!rm_lm_dims_ok(smax, tmax))
+	{
+		return 0;
+	}
+
+	frad = intensity;
+	fdist = RM_DotProduct(origin, normal) - dist;
+
+	/* a plane or a light gl1 would carry as a NaN or an infinity into its int conversions */
+	if (!isfinite(fdist) || !isfinite(frad))
+	{
+		return 0;
+	}
+
+	frad -= fabs(fdist);
+
+	/* rad is now the highest intensity on the plane */
+	fminlight = RM_DLIGHT_CUTOFF;
+
+	if (frad < fminlight)
+	{
+		return 1;
+	}
+
+	fminlight = frad - fminlight;
+
+	for (i = 0; i < 3; i++)
+	{
+		impact[i] = origin[i] - normal[i] * fdist;
+	}
+
+	local[0] = RM_DotProduct(impact, vecs0) + vecs0[3] - texturemin0;
+	local[1] = RM_DotProduct(impact, vecs1) + vecs1[3] - texturemin1;
+
+	/* gl1 converts local less up to 16 * 127 to int, then sums |s| and |t| / 2: defined inside these */
+	if (!(fabsf(local[0]) <= RM_DLIGHT_LOCAL_MAX) || !(fabsf(local[1]) <= RM_DLIGHT_LOCAL_MAX))
+	{
+		return 0;
+	}
+
+	pfBL = blocklights;
+
+	for (t = 0, ftacc = 0; t < tmax; t++, ftacc += 16)
+	{
+		td = local[1] - ftacc;
+
+		if (td < 0)
+		{
+			td = -td;
+		}
+
+		for (s = 0, fsacc = 0; s < smax; s++, fsacc += 16, pfBL += 3)
+		{
+			sd = (long)(local[0] - fsacc);   /* Q_ftol */
+
+			if (sd < 0)
+			{
+				sd = -sd;
+			}
+
+			if (sd > td)
+			{
+				fdist = sd + (td >> 1);
+			}
+			else
+			{
+				fdist = td + (sd >> 1);
+			}
+
+			if (fdist < fminlight)
+			{
+				pfBL[0] += (frad - fdist) * color[0];
+				pfBL[1] += (frad - fdist) * color[1];
+				pfBL[2] += (frad - fdist) * color[2];
+			}
+		}
+	}
+
+	return 1;
+}
+
+long
+rm_bmodel_headnode(long firstnode, long numnodes)
+{
+	return ((firstnode >= 0) && (firstnode < numnodes)) ? firstnode : -1;
+}
+
+/* from gl1_light.c, R_RenderDlight, and the GLBUFFER_COLOR bytes as the shim reads them */
+void
+rm_flash_blob(const float *origin, float intensity, const float *color, const float *vpn, const float *vright,
+		const float *vup, const unsigned char *gamma, rm_avert_t *out)
+{
+	const float rad = intensity * 0.35;
+	int i, j, k = 0, clr[3];
+	float vtx[3], a;
+
+	memset(out, 0, RM_FLASH_VERTS * sizeof(*out));
+
+	for ( i = 0; i < 3; i++ )
+	{
+		vtx [ i ] = origin [ i ] - vpn [ i ] * rad;
+		clr [ i ] = color [ i ] * 51;	// 255 * 0.2 = 51
+	}
+
+	for (j = 0; j < 3; j++)
+	{
+		out[k].pos[j] = vtx[j];
+		/* gammatable[clr]: gl1 reads outside the table below 0 and past 255 */
+		out[k].color[j] = gamma[(clr[j] < 0) ? 0 : ((clr[j] > 255) ? 255 : clr[j])] / 255.0f;
+	}
+
+	out[k].pos[3] = 1;
+	out[k].color[3] = 255 / 255.0f;
+	k++;
+
+	for ( i = 16; i >= 0; i-- )
+	{
+		a = i / 16.0 * M_PI * 2;
+
+		for ( j = 0; j < 3; j++ )
+		{
+			vtx[ j ] = origin [ j ] + vright [ j ] * cos( a ) * rad
+				+ vup [ j ] * sin( a ) * rad;
+		}
+
+		for (j = 0; j < 3; j++)
+		{
+			out[k].pos[j] = vtx[j];
+			out[k].color[j] = gamma[0] / 255.0f;
+		}
+
+		out[k].pos[3] = 1;
+		out[k].color[3] = 255 / 255.0f;
+		k++;
+	}
 }

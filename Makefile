@@ -1183,6 +1183,7 @@ endif
 
 REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_draw.o \
+	src/client/refresh/metal/rm_effects.o \
 	src/client/refresh/metal/rm_image.o \
 	src/client/refresh/metal/rm_light.o \
 	src/client/refresh/metal/rm_lightmap.o \

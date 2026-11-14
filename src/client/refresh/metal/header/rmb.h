@@ -91,14 +91,15 @@ typedef struct
 	unsigned long late_pipelines;   /* pipeline states built after InitContext: must stay 0 */
 	/* the surfaces of the last 3D view whose draw was refused, by class (front end; N4 and N5 counted the classes N6 draws) */
 	unsigned long sky_skips, warp_skips, trans_skips, flow_skips;
-	/* of the drawn surfaces of the last 3D view, those a dynamic light touches, drawn with their static lightmap (N5; N8 adds the light) */
-	unsigned long dlit_surfs;
+	/* the dynamic lights of the last 3D view left out: a float not finite or past its bound (rm_dlight_ok, N8) */
+	unsigned long dlight_skips;
 	/*
-	 * the entities of the last 3D view not drawn, by class (N7): sprites,
-	 * beams and null models (N8 draws them), translucent brush entities
-	 * (no stock content has one; left out, see design section 22), and
-	 * alias and brush entities whose draw was refused (a float that is not
-	 * finite, a frame-ring region, a texture)
+	 * the entities of the last 3D view not drawn, by class: sprites, beams
+	 * and null models whose draw was refused (N8: a float that is not
+	 * finite, a sprite frame count, a frame-ring region, a texture),
+	 * translucent brush entities (no stock content has one; left out, see
+	 * design section 22), and alias and brush entities whose draw was
+	 * refused (N7)
 	 */
 	unsigned long sprite_skips, beam_skips, null_skips, bmodel_trans_skips, ent_skips;
 } rmb_stats_t;
@@ -730,6 +731,63 @@ int rm_lm_build(const unsigned char *samples, int smax, int tmax, int nummaps, c
 		float modulate, const unsigned char *minlight, const unsigned char *gamma,
 		unsigned char *dest, long stride, float *blocklights);
 
+/*
+ * The two halves of rm_lm_build, with gl1's dynamic-light step
+ * (rm_lm_dlight, N8) between them: rm_lm_styles sums the styles into
+ * blocklights (or 255 everywhere without samples) and returns 2 when
+ * there are samples (gl1 adds the dynamic lights only then), 1 without,
+ * 0 when refused as rm_lm_build refuses (nothing written); rm_lm_store
+ * writes blocklights through the tables to dest, 1, or 0 when refused.
+ * rm_lm_build is the one followed by the other.
+ */
+int rm_lm_styles(const unsigned char *samples, int smax, int tmax, int nummaps, const float (*rgb)[3],
+		float modulate, float *blocklights);
+int rm_lm_store(int smax, int tmax, const unsigned char *minlight, const unsigned char *gamma,
+		unsigned char *dest, long stride, const float *blocklights);
+
+/* gl1's DLIGHT_CUTOFF (ref_shared.h), which this header does not include (the host test holds them equal) */
+#define RM_DLIGHT_CUTOFF 64
+
+/* the bounds of a dynamic light the renderer takes (rm_dlight_ok): far past any the client makes */
+#define RM_DLIGHT_MAX_COORD 1e9f
+#define RM_DLIGHT_MAX_INTENSITY 1e9f
+#define RM_DLIGHT_MAX_COLOR 1e6f
+
+/*
+ * A dynamic light of the refdef as the renderer takes it: 1 when its
+ * origin, colour and intensity are finite, each origin coordinate and the
+ * intensity at most RM_DLIGHT_MAX_COORD and RM_DLIGHT_MAX_INTENSITY in
+ * size and each colour channel at most RM_DLIGHT_MAX_COLOR (gl1 converts
+ * the intensity and the flash blob's colour times 51 to int, undefined
+ * past them); 0 otherwise: the light is left out of the frame (counted).
+ */
+int rm_dlight_ok(const float *origin, const float *color, float intensity);
+
+/*
+ * gl1's R_AddDynamicLights for one light of a surface whose lightmap is
+ * smax by tmax luxels (rm_lm_size's limits): the light at origin with
+ * intensity and color, the surface's plane (normal, dist), texture
+ * vectors vecs0 and vecs1 (four floats each) and texturemins, added to
+ * blocklights (3 floats per luxel) as gl1 adds it. 1 when the light was
+ * taken (added, or below DLIGHT_CUTOFF on the plane: nothing to add); 0
+ * with nothing added when the size is refused, or a value gl1 converts
+ * to int would not fit one (the light's distance to the plane or its
+ * point on the surface in texture space not finite or past 2^30: gl1's
+ * conversions are undefined there).
+ */
+int rm_lm_dlight(float *blocklights, int smax, int tmax, const float *normal, float dist, const float *vecs0,
+		const float *vecs1, int texturemin0, int texturemin1, const float *origin, float intensity,
+		const float *color);
+
+/*
+ * The head node gl1's R_DrawInlineBModel and R_GetBrushesLighting mark a
+ * brush entity's dynamic lights from (nodes + firstnode): firstnode when
+ * it is a node of the world (0 .. numnodes - 1); -1 otherwise (a
+ * negative firstnode is a leaf, -1 - leaf, which maps hold for submodels
+ * without faces: nothing is marked).
+ */
+long rm_bmodel_headnode(long firstnode, long numnodes);
+
 /* gl1_overbrightbits as gl1's RI_BeginFrame clamps it: 0, 1, 2 or 4 (3 is 2, the rest clamped to 0 .. 4). */
 int rm_overbright(float v);
 
@@ -920,6 +978,8 @@ int rm_alpha_break(long count, int cur_tex, float cur_alpha, int tex, float alph
 #define RM_RF_SHELL_GREEN 0x800
 #define RM_RF_SHELL_BLUE 0x1000
 #define RM_RF_IR_VISIBLE 0x8000
+#define RM_RF_BEAM 0x80
+#define RM_RF_NOSHADOW 0x2000
 #define RM_RF_SHELL_DOUBLE 0x10000
 #define RM_RF_SHELL_HALF_DAM 0x20000
 /* the shells gl1's R_DrawAliasModel lights, and the three R_DrawAliasFrameLerp draws untextured */
@@ -1171,6 +1231,95 @@ int rm_entity_count(long n);
 int rm_entity_floats_ok(const float *origin, const float *oldorigin, const float *angles, float backlerp,
 		float alpha);
 
+/* ---- sprites, beams, null models, shadows, flash blobs (rm_pure.c, N8) -------------- */
+
+/*
+ * The shim's indices of a GL_TRIANGLE_FAN (strip 0) or GL_TRIANGLE_STRIP
+ * (strip 1) of n vertices drawn by glDrawArrays (mgl_triangle_indices:
+ * every odd triangle of a strip swaps its first two vertices; gl1's
+ * R_SetBufferIndices gives a fan the same order), each plus base, into
+ * idx: the number written, 0 (nothing written) when n is below 3, base
+ * is negative, base + n passes 65536 or 3 * (n - 2) passes cap.
+ */
+int rm_prim_indices(int strip, int n, int base, unsigned short *idx, int cap);
+
+/* gl1's R_DrawSpriteModel frame: a negative frame is 0, else frame modulo numframes; -1 when numframes is outside 1 .. RM_MD2_MAX_SKINS */
+int rm_sprite_frame(int frame, int numframes);
+
+/*
+ * gl1's sprite alpha (R_DrawSpriteModel): the entity's alpha with
+ * RF_TRANSLUCENT, else 1; *blend when it is not 1 (gl1 enables
+ * GL_BLEND), *atest when it is (GL_ALPHA_TEST).
+ */
+float rm_sprite_alpha(int flags, float alpha, int *blend, int *atest);
+
+/*
+ * gl1's sprite quad (R_DrawSpriteModel): the four corners, in gl1's
+ * order and with VectorMA's arithmetic, from origin, the frame's width,
+ * height, origin_x and origin_y and the view's up and right vectors. The
+ * differences of the frame's ints are taken in 64 bits (gl1's int
+ * arithmetic overflows only on a hostile file). 1 when every corner is
+ * finite, 0 otherwise (not drawn).
+ */
+int rm_sprite_quad(const float *origin, int width, int height, int origin_x, int origin_y, const float *up,
+		const float *right, float (*point)[3]);
+
+/* gl1's NUM_BEAM_SEGS, and a beam's vertices: one GL_TRIANGLE_STRIP of four per segment */
+#define RM_BEAM_SEGS 6
+#define RM_BEAM_VERTS (4 * RM_BEAM_SEGS)
+
+/*
+ * gl1's R_DrawBeam geometry: the strip of RM_BEAM_VERTS vertices from
+ * origin to oldorigin, frame / 2 wide (PerpendicularVector and
+ * RotatePointAroundVector of shared.c, gl1's own): 1; 0 (gl1 draws
+ * nothing and returns before its glDepthMask) when the direction has no
+ * length; -1 (not drawn) when a vertex is not finite.
+ */
+int rm_beam_points(const float *origin, const float *oldorigin, int frame, float (*vtx)[3]);
+
+/*
+ * gl1's R_DrawBeam colour: the palette entry of skinnum & 0xff (its bytes
+ * r, g, b, LittleLong being the identity on the hosts Metal runs on)
+ * through the gamma table, and alpha * 255 converted to int and given to
+ * glColor4ub, which keeps its low byte (saturated where the conversion is
+ * undefined); as the shim stores glColor4ub: b / 255.0f into rgba.
+ */
+void rm_beam_color(const unsigned *palette, const unsigned char *gamma, int skinnum, float alpha, float *rgba);
+
+/* gl1's R_DrawNullModel: its two fans of 6 vertices (vtxA, then vtxB) */
+#define RM_NULL_VERTS 12
+void rm_null_model(float (*vtx)[3]);
+
+/* whether gl1 draws an alias model's shadow (r_shadows and none of RF_TRANSLUCENT, RF_WEAPONMODEL, RF_NOSHADOW) */
+int rm_shadow_drawn(int flags, float shadows);
+
+/* gl1's shadevector of R_DrawAliasModel from the entity's yaw (normalized by shared.c's VectorNormalize) */
+void rm_shadevector(float yaw, float *shadevector);
+
+/*
+ * gl1's R_DrawAliasShadow vertex: the lerped point p (s_lerped) pushed
+ * along shadevector by its height above the light spot (lheight, the
+ * entity's height over it) and put on the plane -lheight + 0.1.
+ */
+void rm_shadow_point(const float *p, const float *shadevector, float lheight, float *out);
+
+/* gl1's shadow matrix: world * T(origin) * Rz(yaw), as the shim computes glTranslatef and glRotatef */
+void rm_shadow_matrix(float *out, const float *world, const float *origin, float yaw);
+
+/* gl1's flash blob (R_RenderDlight): a GL_TRIANGLE_FAN of RM_FLASH_VERTS vertices */
+#define RM_FLASH_VERTS 18
+
+/*
+ * gl1's R_RenderDlight: the fan's vertices, the centre towards the viewer
+ * (vpn) in the light's colour times 51 through the gamma table, the rim
+ * black, alpha 255, each colour as the shim reads gl1's bytes; the gamma
+ * index is clamped to 0 .. 255 (gl1 reads outside its table for a colour
+ * outside 0 .. 5, a dark light's -1 among them). The light is one
+ * rm_dlight_ok accepts.
+ */
+void rm_flash_blob(const float *origin, float intensity, const float *color, const float *vpn, const float *vright,
+		const float *vup, const unsigned char *gamma, rm_avert_t *out);
+
 /* ---- rmb_device.m and rmb_encode.m ------------------------------------------- */
 
 /*
@@ -1226,9 +1375,10 @@ int rmb_frame_begin(int w, int h, const float *clear_rgba);
 /*
  * Ends the open pass and opens the 3D pass on the colour target and its
  * depth32Float_stencil8 attachment: colour loaded, depth cleared to 1,
- * stencil to 0. 0 when there is no open frame.
+ * stencil to stencil (gl1's R_Clear: 1 with stencil shadows, N8; else
+ * 0). 0 when there is no open frame.
  */
-int rmb_pass_3d(void);
+int rmb_pass_3d(int stencil);
 
 /* Ends the 3D pass and opens the 2D pass: colour loaded, no depth. */
 int rmb_pass_2d(void);
@@ -1358,6 +1508,8 @@ typedef enum
 	RM_PIPE_ALIAS_BLEND,    /* the same blended: RF_TRANSLUCENT */
 	RM_PIPE_ALIAS_SHELL,    /* alias, untextured: the vertex colour alone (RF_SHELL_*) */
 	RM_PIPE_ALIAS_SHELL_BLEND,  /* the same blended */
+	RM_PIPE_ALIAS_ATEST,    /* alias with gl1's alpha test (GL_GREATER 0.666): a sprite of alpha 1 (N8) */
+	RM_PIPE_ALIAS_SHELL_ADD,    /* alias, untextured, blended GL_ONE, GL_ONE: the flash blobs (gl1_flashblend, N8) */
 	RM_PIPE_3D_COUNT
 } rm_pipe3d_t;
 
@@ -1367,6 +1519,12 @@ typedef enum
 	RMB_DS_NONE,            /* no depth test, no writes (R_PolyBlend's glDisable(GL_DEPTH_TEST)) */
 	RMB_DS_LEQUAL_WRITE,    /* gl1's glDepthFunc(GL_LEQUAL), glDepthMask(GL_TRUE) */
 	RMB_DS_LEQUAL,          /* the same without writes: gl1's glDepthMask(GL_FALSE) for the translucent entities (N7) */
+	/*
+	 * LEQUAL with writes and gl1's stencil shadow test (N8):
+	 * glStencilFunc(GL_EQUAL, 1, 2), glStencilOp(GL_KEEP, GL_KEEP, GL_INCR),
+	 * the write mask GL's default; the reference 1 is set with the draw
+	 */
+	RMB_DS_STENCIL_SHADOW,
 	RMB_DS_COUNT
 } rmb_ds_t;
 
@@ -1518,11 +1676,16 @@ typedef struct
 	int depth_write;        /* 0 in gl1's translucent pass (glDepthMask(GL_FALSE)) */
 	int cull;               /* RMB_CULL_* */
 	double znear, zfar;     /* glDepthRange: 0 to 1, 0 to 0.3 with RF_DEPTHHACK (rm_alias_depth) */
+	int atest;              /* textured and not blended: gl1's alpha test, GL_GREATER 0.666 (a sprite, N8) */
+	int add;                /* untextured: blended GL_ONE, GL_ONE instead (the flash blobs, N8) */
+	int stencil;            /* depth writes and gl1's stencil shadow test (RMB_DS_STENCIL_SHADOW, N8) */
 } rmb_alias_draw_t;
 
 /*
- * Draws one alias entity: its nv vertices (rm_avert_t, lerped and lit on
- * the CPU) and ni 16-bit indices go into one region of the frame ring
+ * Draws one alias entity (or, from N8, one sprite, beam, null model,
+ * shadow or the frame's flash blobs, made of the same vertices): its nv
+ * vertices (rm_avert_t, lerped and lit on the CPU) and ni 16-bit indices
+ * go into one region of the frame ring
  * (rm_alias_region: the vertices first, 48 bytes each, then the indices),
  * as triangles with the alias pipeline d selects, mvp on every vertex, in
  * viewport vp with d's depth range. 0 when the draw is skipped (counted):

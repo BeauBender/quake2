@@ -196,6 +196,25 @@ rm_fragment_world_color(rm_varying3d in [[stage_in]],
 }
 
 /*
+ * The same with gl1's alpha test, glAlphaFunc(GL_GREATER, 0.666) as the
+ * shim tests it after the texture units: a sprite of alpha 1 (N8)
+ */
+fragment float4
+rm_fragment_world_color_at(rm_varying3d in [[stage_in]],
+		texture2d<float> tex [[texture(0)]],
+		sampler smp [[sampler(0)]])
+{
+	mtl_rgba_t c = mtl_world_color(rm_rgba(saturate(in.color)), rm_rgba(tex.sample(smp, in.uv)));
+
+	if (!(c.a > 0.666f))
+	{
+		discard_fragment();
+	}
+
+	return float4(c.r, c.g, c.b, c.a);
+}
+
+/*
  * world_lm (N5): gl1's two texture units on its multitexture path, the
  * diffuse texel replacing the colour and the lightmap slice's texel
  * applied by gl1's lightmap environment (mtl_world_lm, the arithmetic the

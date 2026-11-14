@@ -171,6 +171,9 @@ rmb_commit_partial(void)
 
 static int rmb_pass(const float *clear_rgba, int with_depth);
 
+/* the stencil the next 3D pass clears to (rmb_pass_3d): gl1's glClearStencil */
+static unsigned pass_stencil;
+
 int
 rmb_frame_begin(int w, int h, const float *clear_rgba)
 {
@@ -306,7 +309,7 @@ rmb_pass(const float *clear_rgba, int with_depth)
 			rp.depthAttachment.storeAction = MTLStoreActionUnknown;
 			rp.stencilAttachment.texture = depth;
 			rp.stencilAttachment.loadAction = load;
-			rp.stencilAttachment.clearStencil = 0;
+			rp.stencilAttachment.clearStencil = pass_stencil;
 			rp.stencilAttachment.storeAction = MTLStoreActionUnknown;
 		}
 
@@ -326,8 +329,9 @@ rmb_pass(const float *clear_rgba, int with_depth)
 }
 
 int
-rmb_pass_3d(void)
+rmb_pass_3d(int stencil)
 {
+	pass_stencil = (stencil > 0) ? (unsigned)(stencil & 0xff) : 0;
 	return rmb_pass(NULL, 1);
 }
 
@@ -992,7 +996,9 @@ rmb_draw_color(const float *xyz, int n, const float *rgba, const float *mvp,
  * drawn as gl1's R_ApplyGLBuffer draws buf_alias: GL_MODULATE of the
  * vertex colour and the skin (untextured for a shell), blended with
  * RF_TRANSLUCENT, depth LEQUAL with or without writes, the cull and the
- * depth range of the entity.
+ * depth range of the entity. N8 draws its sprites (alpha-tested when
+ * opaque), beams, null models, shadows (with the stencil test of
+ * gl1_stencilshadow) and flash blobs (GL_ONE, GL_ONE) the same way.
  */
 int
 rmb_draw_alias(const rm_avert_t *v, unsigned nv, const unsigned short *idx, unsigned long ni,
@@ -1002,7 +1008,7 @@ rmb_draw_alias(const rm_avert_t *v, unsigned nv, const unsigned short *idx, unsi
 	unsigned long i;
 	rm_region_t r;
 	rm_viewport_t dvp;
-	int pipe;
+	int pipe, ds;
 
 	if (!v || !idx || !d || !vp || (nv > RM_ALIAS_MAX_VERTS) || (ni > RM_ALIAS_MAX_INDICES))
 	{
@@ -1020,8 +1026,16 @@ rmb_draw_alias(const rm_avert_t *v, unsigned nv, const unsigned short *idx, unsi
 		}
 	}
 
-	pipe = d->tex ? (d->blend ? RM_PIPE_ALIAS_BLEND : RM_PIPE_ALIAS) :
-			(d->blend ? RM_PIPE_ALIAS_SHELL_BLEND : RM_PIPE_ALIAS_SHELL);
+	if (d->tex)
+	{
+		pipe = d->blend ? RM_PIPE_ALIAS_BLEND : (d->atest ? RM_PIPE_ALIAS_ATEST : RM_PIPE_ALIAS);
+	}
+	else
+	{
+		pipe = d->add ? RM_PIPE_ALIAS_SHELL_ADD : (d->blend ? RM_PIPE_ALIAS_SHELL_BLEND : RM_PIPE_ALIAS_SHELL);
+	}
+
+	ds = d->stencil ? RMB_DS_STENCIL_SHADOW : (d->depth_write ? RMB_DS_LEQUAL_WRITE : RMB_DS_LEQUAL);
 	dvp = *vp;
 	dvp.znear = d->znear;
 	dvp.zfar = d->zfar;
@@ -1032,10 +1046,15 @@ rmb_draw_alias(const rm_avert_t *v, unsigned nv, const unsigned short *idx, unsi
 		id<MTLSamplerState> ss = d->tex ? rmb_sampler(d->smp) : nil;
 
 		if ((d->tex && (!t || !ss)) ||
-			!rmb_draw_3d_state(pipe, d->depth_write ? RMB_DS_LEQUAL_WRITE : RMB_DS_LEQUAL, mvp, white, &dvp, d->cull))
+			!rmb_draw_3d_state(pipe, ds, mvp, white, &dvp, d->cull))
 		{
 			rmb_counts.draw_skips++;
 			return 0;
+		}
+
+		if (d->stencil)
+		{
+			[frame_enc setStencilReferenceValue:1];   /* glStencilFunc(GL_EQUAL, 1, 2) */
 		}
 
 		if (!rm_alias_region(&ring, (long)nv, (long)ni, &r))

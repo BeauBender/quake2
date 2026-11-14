@@ -23,7 +23,9 @@
  * (docs/plans/ref-metal-native.md). The frame is cleared and presented
  * and the 3D and 2D passes are opened (N1); the view is set up and the
  * world drawn as gl1's R_RenderView does, with the screen blend as the 3D
- * pass's last draw (N4, section 19). Entry points not implemented yet are
+ * pass's last draw (N4, section 19); the entities (N7, section 22) with
+ * the sprites, beams and null models, the flash blobs and the stencil
+ * clear of the shadows (N8, section 23). Entry points not implemented yet are
  * valid no-ops that count their calls. R_SetMode and SetMode_impl are
  * from gl1_main.c, without the MSAA retry (ref_metal has no MSAA).
  *
@@ -73,6 +75,8 @@ cvar_t *r_drawentities;
 cvar_t *r_lerpmodels;
 cvar_t *gl_lefthand;
 cvar_t *r_gunfov;
+cvar_t *gl_shadows;
+cvar_t *gl1_stencilshadow;
 
 unsigned long rm_noop_calls;
 
@@ -131,6 +135,8 @@ R_Register(void)
 	r_lerpmodels = ri.Cvar_Get("r_lerpmodels", "1", 0);
 	gl_lefthand = ri.Cvar_Get("hand", "0", CVAR_USERINFO | CVAR_ARCHIVE);
 	r_gunfov = ri.Cvar_Get("r_gunfov", "80", CVAR_ARCHIVE);
+	gl_shadows = ri.Cvar_Get("r_shadows", "0", CVAR_ARCHIVE);
+	gl1_stencilshadow = ri.Cvar_Get("gl1_stencilshadow", "0", CVAR_ARCHIVE);
 
 	ri.Cmd_AddCommand("screenshot", R_ScreenShot);
 	ri.Cmd_AddCommand("imagelist", R_ImageList_f);
@@ -449,28 +455,47 @@ RM_EntitySkips(rmb_stats_t *s)
 	s->ent_skips = skip_ent;
 }
 
-/* one entity of the list, in the pass whose depth writes are depth_write */
+/*
+ * one entity of the list, in the pass whose depth writes are
+ * *depth_write: a beam gl1 draws ends with glDepthMask(GL_TRUE), so the
+ * translucent entities after it write depth (gl1's state, kept)
+ */
 static void
-R_DrawEntity(const entity_t *currententity, int depth_write)
+R_DrawEntity(const entity_t *currententity, int *depth_write)
 {
 	const model_t *currentmodel = currententity->model;
 
 	if (currententity->flags & RF_BEAM)
 	{
-		skip_beam++;   /* R_DrawBeam: N8 */
+		int drawn;
+
+		if (!R_DrawBeam(currententity, &r_view, &drawn))
+		{
+			skip_beam++;
+		}
+
+		if (drawn)
+		{
+			*depth_write = 1;
+		}
+
 		return;
 	}
 
 	if (!currentmodel)
 	{
-		skip_null++;   /* R_DrawNullModel: N8 */
+		if (!R_DrawNullModel(currententity, &r_view, *depth_write))
+		{
+			skip_null++;
+		}
+
 		return;
 	}
 
 	switch (currentmodel->type)
 	{
 		case mod_alias:
-			if (!R_DrawAliasModel(currententity, currentmodel, &r_view, depth_write))
+			if (!R_DrawAliasModel(currententity, currentmodel, &r_view, *depth_write))
 			{
 				skip_ent++;
 			}
@@ -489,7 +514,11 @@ R_DrawEntity(const entity_t *currententity, int depth_write)
 
 			break;
 		case mod_sprite:
-			skip_sprite++;   /* R_DrawSpriteModel: N8 */
+			if (!R_DrawSpriteModel(currententity, currentmodel, &r_view, *depth_write))
+			{
+				skip_sprite++;
+			}
+
 			break;
 		default:
 			ri.Sys_Error(ERR_DROP, "Bad modeltype");
@@ -499,12 +528,13 @@ R_DrawEntity(const entity_t *currententity, int depth_write)
 
 /*
  * from gl1_main.c: the opaque entities, then the translucent ones without
- * depth writes (gl1's glDepthMask(GL_FALSE)), each in list order
+ * depth writes (gl1's glDepthMask(GL_FALSE)) until a beam turns them on
+ * again, each in list order
  */
 static void
 R_DrawEntitiesOnList(void)
 {
-	int i, n;
+	int i, n, depth_write;
 
 	if (!r_drawentities->value)
 	{
@@ -518,16 +548,19 @@ R_DrawEntitiesOnList(void)
 	{
 		if (!(r_newrefdef.entities[i].flags & RF_TRANSLUCENT))
 		{
-			R_DrawEntity(&r_newrefdef.entities[i], 1);
+			depth_write = 1;
+			R_DrawEntity(&r_newrefdef.entities[i], &depth_write);
 		}
 	}
 
 	/* draw transparent entities; we could sort these if it ever becomes a problem... */
+	depth_write = 0;
+
 	for (i = 0; i < n; i++)
 	{
 		if (r_newrefdef.entities[i].flags & RF_TRANSLUCENT)
 		{
-			R_DrawEntity(&r_newrefdef.entities[i], 0);
+			R_DrawEntity(&r_newrefdef.entities[i], &depth_write);
 		}
 	}
 }
@@ -584,14 +617,14 @@ R_PolyBlend(void)
 }
 
 /*
- * from gl1_main.c; the light of dynamic lights (N8: N5 marks the surfaces
- * they touch and counts them), the flash blobs (N8) and the particles
- * (N9) are not drawn yet
+ * from gl1_main.c; the particles (N9) are not drawn yet. The dynamic
+ * lights are the renderer's checked copy from here on (R_TakeDlights)
  */
 static void
 R_RenderView(refdef_t *fd)
 {
 	r_newrefdef = *fd;
+	R_TakeDlights();
 
 	if (!r_worldmodel && !(r_newrefdef.rdflags & RDF_NOWORLDMODEL))
 	{
@@ -614,9 +647,12 @@ R_RenderView(refdef_t *fd)
 
 	R_DrawEntitiesOnList();
 
+	/* gl1_flashblend's blobs, with or without a world (as gl1) */
+	R_RenderDlights(&r_view);
+
 	if (!(r_newrefdef.rdflags & RDF_NOWORLDMODEL))
 	{
-		/* the flash blobs (N8) and the particles (N9) are drawn here, before the translucent surfaces */
+		/* the particles (N9) are drawn here, before the translucent surfaces */
 		R_DrawAlphaSurfaces(&r_view);
 	}
 
@@ -635,11 +671,13 @@ RI_RenderFrame(refdef_t *fd)
 
 	/*
 	 * Colour loaded, so 2D drawn before a view (the player-config menu)
-	 * stays. Depth to 1 and stencil to 0: gl1 clears depth in R_Clear,
-	 * at the start of the frame, and no 2D draw writes depth before the
-	 * view, so a clear here gives the same depth.
+	 * stays. Depth to 1, and stencil to 1 with stencil shadows, else 0:
+	 * gl1 clears them in R_Clear, at the start of the frame (the stencil
+	 * with r_shadows and gl1_stencilshadow, the context having 8 stencil
+	 * bits), and no 2D draw writes depth or stencil before the view, so a
+	 * clear here gives the same.
 	 */
-	rmb_pass_3d();
+	rmb_pass_3d((gl_shadows->value && gl1_stencilshadow->value) ? 1 : 0);
 	R_RenderView(fd);
 	R_SetLightLevel(NULL);
 }

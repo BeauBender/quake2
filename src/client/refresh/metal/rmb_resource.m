@@ -148,7 +148,14 @@ rmb_new_pipe_3d(rm_pipe3d_t which, NSError **e)
 		vf = [library newFunctionWithName:@"rm_vertex_alias"];
 		ff = [library newFunctionWithName:@"rm_fragment_world_color"];
 	}
-	else if ((which == RM_PIPE_ALIAS_SHELL) || (which == RM_PIPE_ALIAS_SHELL_BLEND))
+	else if (which == RM_PIPE_ALIAS_ATEST)
+	{
+		/* N8: a sprite of alpha 1, GL_MODULATE with gl1's alpha test */
+		vf = [library newFunctionWithName:@"rm_vertex_alias"];
+		ff = [library newFunctionWithName:@"rm_fragment_world_color_at"];
+	}
+	else if ((which == RM_PIPE_ALIAS_SHELL) || (which == RM_PIPE_ALIAS_SHELL_BLEND) ||
+		(which == RM_PIPE_ALIAS_SHELL_ADD))
 	{
 		/* a shell: GL_TEXTURE_2D off, the vertex colour alone */
 		vf = [library newFunctionWithName:@"rm_vertex_alias"];
@@ -181,11 +188,23 @@ rmb_new_pipe_3d(rm_pipe3d_t which, NSError **e)
 		d.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
 		d.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
 	}
+	else if (which == RM_PIPE_ALIAS_SHELL_ADD)
+	{
+		/* gl1's glBlendFunc(GL_ONE, GL_ONE) of R_RenderDlights, for colour and alpha */
+		d.colorAttachments[0].blendingEnabled = YES;
+		d.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
+		d.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+		d.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
+		d.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
+	}
 
 	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
 }
 
-/* The depth-stencil states of the 3D pass: no test, and gl1's GL_LEQUAL with writes and without (N7). */
+/*
+ * The depth-stencil states of the 3D pass: no test, gl1's GL_LEQUAL with
+ * writes and without (N7), and the stencil shadow's (N8).
+ */
 static int
 rmb_new_depth_states(void)
 {
@@ -205,7 +224,27 @@ rmb_new_depth_states(void)
 	d.depthWriteEnabled = NO;
 	depth_states[RMB_DS_LEQUAL] = [rmb_device newDepthStencilStateWithDescriptor:d];
 
-	return depth_states[RMB_DS_NONE] && depth_states[RMB_DS_LEQUAL_WRITE] && depth_states[RMB_DS_LEQUAL];
+	/* gl1's R_DrawAliasShadow: glStencilFunc(GL_EQUAL, 1, 2), glStencilOp(GL_KEEP, GL_KEEP, GL_INCR) */
+	{
+		MTLStencilDescriptor *st = [MTLStencilDescriptor new];
+
+		st.stencilCompareFunction = MTLCompareFunctionEqual;
+		st.stencilFailureOperation = MTLStencilOperationKeep;
+		st.depthFailureOperation = MTLStencilOperationKeep;
+		st.depthStencilPassOperation = MTLStencilOperationIncrementClamp;
+		st.readMask = 2;
+		st.writeMask = 0xff;   /* GL's default glStencilMask, which gl1 leaves */
+
+		d = [MTLDepthStencilDescriptor new];
+		d.depthCompareFunction = MTLCompareFunctionLessEqual;
+		d.depthWriteEnabled = YES;
+		d.frontFaceStencil = st;
+		d.backFaceStencil = st;
+		depth_states[RMB_DS_STENCIL_SHADOW] = [rmb_device newDepthStencilStateWithDescriptor:d];
+	}
+
+	return depth_states[RMB_DS_NONE] && depth_states[RMB_DS_LEQUAL_WRITE] && depth_states[RMB_DS_LEQUAL] &&
+		depth_states[RMB_DS_STENCIL_SHADOW];
 }
 
 int

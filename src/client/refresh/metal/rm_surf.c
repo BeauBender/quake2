@@ -37,8 +37,8 @@
  * box, after the water; and the translucent surfaces
  * (R_DrawAlphaSurfaces, called by R_RenderView). The skipped counts are
  * now the surfaces whose draw was refused. A surface a dynamic light
- * touches is drawn with its static lightmap and counted until N8 adds
- * the light. N7 adds the brush entities (R_DrawBrushModel,
+ * touches is rebuilt with the light by R_RegenAllLightmaps (N8). N7 adds
+ * the brush entities (R_DrawBrushModel,
  * R_DrawInlineBModel): their index ranges of the same retained buffers
  * drawn with the entity's matrix, their lit surfaces in the slice chains
  * of R_RegenAllLightmaps (R_GetBrushesLighting), their translucent ones
@@ -57,8 +57,8 @@ vec3_t vup, vpn, vright, r_origin;
 
 static vec3_t modelorg; /* relative to viewpoint */
 
-/* the surfaces of the current view whose draw was refused, by class, and those drawn without their dynamic light */
-static unsigned long skip_sky, skip_warp, skip_trans, skip_flow, dlit_surfs;
+/* the surfaces of the current view whose draw was refused, by class */
+static unsigned long skip_sky, skip_warp, skip_trans, skip_flow;
 
 /* gl1's r_alpha_surfaces: the translucent surfaces of the walk, the last visited first */
 static msurface_t *r_alpha_surfaces;
@@ -69,7 +69,7 @@ static msurface_t *lightmap_surfaces[RM_LM_MAX_SLICES];
 void
 RM_WorldSkipsClear(void)
 {
-	skip_sky = skip_warp = skip_trans = skip_flow = dlit_surfs = 0;
+	skip_sky = skip_warp = skip_trans = skip_flow = 0;
 	r_alpha_surfaces = NULL;
 }
 
@@ -80,7 +80,6 @@ RM_WorldSkips(rmb_stats_t *s)
 	s->warp_skips = skip_warp;
 	s->trans_skips = skip_trans;
 	s->flow_skips = skip_flow;
-	s->dlit_surfs = dlit_surfs;
 }
 
 /* from gl1_surf.c */
@@ -486,12 +485,6 @@ R_DrawTextureChains(const rm_view_t *view)
 				continue;
 			}
 
-			/* a lit surface a dynamic light touches: its static lightmap until N8 */
-			if (s->dlightframe == r_framecount)
-			{
-				dlit_surfs++;
-			}
-
 			/* gl1's R_UpdateGLBuffer: another lightmap flushes the batch */
 			if (!r_fullbright->value && (s->lightmaptexturenum != slice))
 			{
@@ -616,9 +609,10 @@ R_DrawAlphaSurfaces(const rm_view_t *view)
  * entities in view join the per-slice chains of R_RegenAllLightmaps, so
  * their lightmaps are rebuilt and uploaded with the world's. gl1 tests
  * the facing with the world's modelorg here (it does not set the
- * entity's), kept. Marking the dynamic lights on the entity's nodes is
- * N8's (R_AddDynamicLights). An entity with a float that is not finite is
- * left out, as it is not drawn.
+ * entity's), kept. The dynamic lights are marked on the entity's surfaces from
+ * its submodel's head node (R_MarkBrushLights, N8), as gl1 marks them,
+ * before its lit surfaces are chained. An entity with a float that is
+ * not finite is left out, as it is not drawn.
  */
 static void
 R_GetBrushesLighting(void)
@@ -658,6 +652,9 @@ R_GetBrushesLighting(void)
 		{
 			continue;
 		}
+
+		/* from R_DrawInlineBModel() */
+		R_MarkBrushLights(currentmodel);
 
 		/* the range is inside the world's surfaces (Mod_LoadSubmodels, rm_range_ok) */
 		surf = &r_worldmodel->surfaces[currentmodel->firstmodelsurface];

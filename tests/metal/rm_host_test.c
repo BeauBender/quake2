@@ -201,7 +201,7 @@ test_stats(void)
 		"ref_metal: metal_stats: 23 frames, 1 without a drawable, 2 skipped, 3 failed command buffers, "
 		"4 readbacks, 5 no-op calls, 6 draws, 7 draws skipped, 8 uploads, 9 uploads skipped, "
 		"10 pass splits, 12 pipelines, 0 created after init, 1 live objects, "
-		"skipped surfaces: 13 sky, 14 warped, 15 translucent, 16 flowing; 17 drawn without their dynamic light; "
+		"skipped surfaces: 13 sky, 14 warped, 15 translucent, 16 flowing; 17 dynamic lights left out; "
 		"skipped entities: 18 sprites, 19 beams, 20 null models, 21 translucent brush models, 22 refused";
 	size_t n;
 
@@ -224,7 +224,7 @@ test_stats(void)
 	s.warp_skips = 14;
 	s.trans_skips = 15;
 	s.flow_skips = 16;
-	s.dlit_surfs = 17;
+	s.dlight_skips = 17;
 	s.sprite_skips = 18;
 	s.beam_skips = 19;
 	s.null_skips = 20;
