@@ -268,3 +268,155 @@ Per-decision verdicts, section 4 and section 6, for this device:
 No gating decision in sections 4 and 6 changes on this device, and this
 section records capabilities and sizes only; build and refit timings are
 measured under TASK101 (#228). The finding above (3) is a card for the RT8 owner, not an edit to that card.
+
+## 8. Ray-query throughput and acceleration-structure cost (TASK101)
+
+Measured with a throwaway Objective-C program (Metal and Foundation
+frameworks, built with `xcrun clang`, Metal Shading Language 3.1, no
+window, no game data, not committed) on the bare-metal host: macOS 27.2.1
+(26B131), default `MTLDevice` **Apple M6** (the device of section 7). All
+times are GPU time from the command buffer's `GPUEndTime - GPUStartTime`.
+Each configuration ran one discarded warm-up and then 8 timed runs; the
+build and refit table was repeated in 6 separate process invocations, the
+ray table in 3. `uptime` at the start and end of every batch showed load
+averages of 2.2 to 2.4 (1 minute) and 1.95 to 2.0 (5 minutes), unchanged
+across the batch. Before each batch, `pgrep` found no `scripts/test.sh`,
+`make`, `cc`, `clang` or `quake2`; the program itself opened no window.
+The load average of about 2 came from processes that were not rendering (a
+git push script was the only other process seen), but this agent cannot
+inspect other GPU clients, so "nothing else was rendering" is stated as
+"no process of the build or game was running", not as a measurement of the
+GPU. No batch was discarded.
+
+**Scene.** Synthetic, so the numbers are throughput of this device, not of
+a real map. The world is one 20,000-triangle structure (a triangle soup,
+64-unit right triangles at random integer positions in a 4096 x 4096 x
+1024 box, section 1's upper world size); 128 alias-model structures of 500
+triangles each (16-unit legs in a 64-unit box) stand in for a busy frame.
+The instance structure has 141 instances: the world, 128 alias instances
+and 12 more instances of the same alias structures (standing in for inline
+brush models). The camera is at the centre of the box looking along +z;
+the shadow light is 400 units ahead of the camera, jittered by 256 units
+per ray. Each pass is a compute kernel, `intersector<triangle_data,
+instancing>`, one thread per pixel, 8 x 8 threadgroups, no shading, no
+denoise, no G-buffer reads. The closest-hit pass casts `rpp` jittered
+camera rays per pixel; the shadow pass reads a per-pixel primary hit
+position (produced by an untimed primary pass) and casts `rpp` any-hit
+rays from it (`accept_any_intersection`) toward the jittered light.
+Because the world is a sparse soup, about 65 % of closest rays hit
+something and about 22 % of all shadow rays (counting pixels whose primary
+ray missed, which cast no ray) are occluded; a real closed map differs,
+so use these as a scale, not as a prediction.
+
+### Ray passes (GPU time, 3 process invocations, median of 8 runs)
+
+At 1920 x 1080 and 2560 x 1440 the three invocations agreed within 1 %
+(the ranges below are the spread of the three medians). 2560 x 1440 is
+the display mode of this host; its refresh rate was not measured and is
+not stated here.
+
+| Pass | rpp | 640 x 480 | 1920 x 1080 | 2560 x 1440 |
+|---|---|---|---|---|
+| Closest hit | 1 | 0.114 ms | 0.685 to 0.686 ms | 1.211 to 1.215 ms |
+| Closest hit | 2 | 0.215 ms | 1.362 to 1.364 ms | 2.413 to 2.414 ms |
+| Closest hit | 4 | 0.420 ms | 2.702 to 2.703 ms | 4.794 to 4.796 ms |
+| Closest hit | 8 | 0.825 to 0.826 ms | 5.380 to 5.381 ms | 9.558 to 9.561 ms |
+| Any-hit shadow | 1 | 0.077 ms | 0.474 to 0.475 ms | 0.837 ms |
+| Any-hit shadow | 2 | 0.127 ms | 0.774 to 0.777 ms | 1.369 to 1.374 ms |
+| Any-hit shadow | 4 | 0.229 to 0.230 ms | 1.428 to 1.432 ms | 2.529 to 2.534 ms |
+| Any-hit shadow | 8 | 0.437 ms | 2.764 to 2.768 ms | 4.890 to 4.904 ms |
+
+The 640 x 480 closest-hit rows are the fast clock state in invocations 2
+and 3. In invocation 1 the first configurations ran in the slow state
+(untimed primary pass 0.385 ms, closest 1 rpp 0.389 ms, 2 rpp 0.739 ms,
+about 3.4 times the fast state) and the state changed during the 4 rpp
+configuration (min 0.536, median 0.554 ms; 8 rpp median 1.059 ms, min
+0.821, against 0.420 and 0.825 ms in the other two invocations). All 1080p
+and 2560 x 1440 rows were in the fast state in all three invocations. The
+untimed primary pass (1 camera ray per pixel) cost 0.112 (fast) ms at 640
+x 480, 0.683 to 0.686 ms at 1080p and 1.208 to 1.210 ms at 2560 x 1440.
+
+Throughput, fast state, 1080p, 8 rpp: closest hit 16.6 M rays in 5.38 ms
+is 3.1 M rays per ms; any-hit shadow 16.6 M rays in 2.76 ms is 6.0 M rays
+per ms. Closest-hit cost is linear in ray count and in pixels.
+
+### Acceleration-structure cost (GPU time, 6 process invocations)
+
+Structures built with `MTLAccelerationStructureUsageRefit`, the 10k, 20k,
+50k and 200k triangle soups of section 7. Each cell: median of 8 timed
+runs, with (min to max) where the spread exceeded 5 %. Times in
+milliseconds.
+
+| Invocation | Build 10k | Build 20k | Build 50k | Build 200k | Refit 10k | Refit 20k | Refit 50k | Refit 200k |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 2.513 | 1.791 | 3.335 | 3.549 (3.53 to 6.42) | 0.239 | 0.269 | 0.542 | 0.620 |
+| 2 | 2.521 (0.725 to 2.538) | 0.507 | 0.969 | 3.536 | 0.240 (0.066 to 0.242) | 0.077 | 0.159 | 0.618 |
+| 3 | 1.401 (0.737 to 2.537) | 0.524 | 0.959 | 3.533 | 0.069 (0.068 to 0.239) | 0.079 | 0.160 | 0.617 |
+| 4 | 2.516 (1.263 to 2.534) | 0.508 | 0.967 | 3.549 | 0.240 (0.067 to 0.242) | 0.078 | 0.160 | 0.621 |
+| 5 | 0.723 (0.715 to 2.523) | 0.508 | 0.967 | 3.539 | 0.068 (0.066 to 0.239) | 0.077 | 0.160 | 0.619 |
+| 6 | 2.499 (1.053 to 2.509) | 0.509 | 0.964 | 3.544 | 0.234 (0.066 to 0.242) | 0.077 | 0.159 | 0.625 |
+
+Per-frame costs of the dynamic part, same invocations:
+
+| Item | Median per invocation (6) | Range, min to max over all runs |
+|---|---|---|
+| Refit of 128 alias structures x 500 triangles, one command buffer | 0.200 to 0.202 ms | 0.198 to 0.205 ms |
+| Instance structure rebuild, 141 instances | 0.167 to 0.170 ms | 0.167 to 0.171 ms |
+
+Two states are visible, as in TASK99. Invocation 1 ran every configuration
+in the slow state (build 20k 1.79 ms, 50k 3.34 ms, refit 20k 0.269 ms,
+50k 0.542 ms). Invocations 2 to 6 ran the 20k and 50k configurations in
+the fast state (build 0.51 and 0.96 ms, refit 0.077 and 0.160 ms), about
+3.5 times faster for both operations; the 10k configuration, the first of
+each process, changed state during its timed runs in invocations 2 to 6
+(the min to max in the table). The 200k configuration was the same in
+both states (build about 3.5 ms, refit about 0.62 ms), and the 128-alias
+refit and the instance rebuild showed one value in all six invocations
+(under 2 % spread). The slow state appeared at the start of a process, in
+the first configuration(s) timed, and ended after some tens of
+milliseconds of GPU work in 5 of 6 invocations; invocation 1 stayed slow
+for all of the build and refit table. Why it ended there was not
+investigated.
+
+**State the frame budget should plan with.** Plan the steady-state
+per-frame costs with the fast-state numbers (the common state: the 1080p
+and 2560 x 1440 ray passes in 3 of 3 invocations, 20k and 50k builds in 5
+of 6, the 128-alias refit and the instance rebuild in 6 of 6) and allow a
+factor of about 3.5 for the first frames of a process or after a map
+load, where the slow state recurs. The one-time map-load build (20k
+triangles) costs 0.5 ms (fast) to 1.8 ms (slow); even 200k triangles cost
+3.5 ms in both states.
+
+### Verdicts against the design
+
+All comparisons are for this device (Apple M6, apple9, hardware ray
+tracing) on the synthetic scene above, not for an apple7 device, which
+this host cannot measure.
+
+| Design statement | Measured on the M6 | Met? |
+|---|---|---|
+| Section 1: IAS rebuild of about 140 instances "is microseconds on every apple6+ GPU" | 0.167 to 0.171 ms (167 to 171 microseconds) | Met in substance (well under a millisecond), though hundreds of microseconds, not single microseconds. Wording finding for RT1 |
+| Section 1: refit of 128 alias instances per frame fits a per-frame compute budget | 0.20 ms for 128 x 500 triangles (0.64 M triangles) | Met |
+| Section 1: world structure built once at map load | 0.5 ms (20k, fast) to 1.8 ms (slow); 3.5 ms at 200k | Met |
+| Section 2: dlight shadows, cap 4 rays per pixel | 4 rpp any-hit: 1.43 ms (1080p), 2.53 ms (2560 x 1440) | Met |
+| Section 2: sun shadow, 1 ray per pixel | 0.47 ms (1080p), 0.84 ms (2560 x 1440) | Met |
+| Section 2: AO, 2 rays per pixel | closest-hit 2 rpp (an upper bound, AO rays are range-limited): 1.36 ms (1080p), 2.41 ms (2560 x 1440) | Met |
+| Section 2: water reflections, 1 closest-hit ray on water pixels only | at most 0.69 ms (1080p, all pixels), 1.21 ms (2560 x 1440), trace only | Met for the trace; hit shading not measured |
+| Section 2: "about 5 rays per pixel" everything on, assumed 8 to 14 ms at 1080p on apple7 | 4 shadow + 1 sun + 2 AO + 1 reflection passes: 1.43 + 0.47 + 1.36 + 0.69 = 3.95 ms at 1080p, 2.53 + 0.84 + 2.41 + 1.21 = 7.0 ms at 2560 x 1440, plus 0.37 ms for the refit and instance rebuild; trace only, no G-buffer, shading, temporal accumulation or denoise | Met on the M6 in the fast state (below 8 ms at 1080p). In the slow state, scaling by the 3.4 times seen at 640 x 480 (an extrapolation, not measured at 1080p) gives about 13 ms at 1080p, still inside 8 to 14 ms. Apple7 not measured |
+| Section 6, RT7: everything on at least 60 fps at 1080p on apple7 | about 4.3 ms of the 16.7 ms frame is ray tracing on the M6 (about 14 ms in the extrapolated slow state) | Met on the M6 for the ray cost alone; apple7 not measured, so RT7 is not decided by this device |
+| Section 6, RT9: native resolution at least the display refresh, everything on, on the M6 | ray cost about 7.4 ms at 2560 x 1440 (fast state). A 60 Hz frame is 16.7 ms, a 120 Hz frame 8.3 ms | Met for the ray cost at 60 Hz. At 120 Hz the rays alone take most of the frame, leaving about 1 ms for rasterization, shading and denoise, which is likely not enough. The display's refresh rate was not measured, so which case applies is unknown |
+| Section 6, RT10: resolution-scale defaults per family | The design states no numeric resolution-scale default | Nothing to compare |
+
+No budget stated numerically in the design is missed on this device.
+Findings for cards (no edit to any decision):
+
+1. RT1: change "microseconds" in section 1 to "a fraction of a
+   millisecond" (0.17 ms measured), and measure real world and alias
+   triangle counts instead of relying on the soup.
+2. RT9: record the display refresh rate next to the number, since at 120
+   Hz the ray cost alone is most of the frame at native resolution.
+3. RT10: repeat this program on an apple7 device (M1 Max); until then the
+   resolution-scale default per family has no measured basis below
+   apple9, and the design holds no numeric default to check.
+4. RT7 and RT9: allow for the slow clock state (about 3.5 times) in the
+   first frames after a map load, so a frame-time test does not count them.
