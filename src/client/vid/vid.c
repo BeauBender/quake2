@@ -506,7 +506,8 @@ VID_StartRecord(void)
 
 /*
  * Replay target (pins_replay, CL_PinsReplay): the replayer hands every
- * record, its values bounded and its ids resolved, to the same wrappers
+ * record that passed its validation layer (Rep_Check), its values
+ * bounded and its ids resolved, to the same wrappers
  * the client calls. Nothing is recorded while replaying (CL_PinsLatch
  * refuses pins_record beside pins_replay).
  */
@@ -616,8 +617,9 @@ VID_CloseReplay(void)
 
 	RefRec_ReplayStats(&st);
 	RefRec_CloseReplay();
-	Com_Printf("pins: replayed %u frames, %u captures, %u values bounded, %u warnings, %u pic size mismatches\n",
-			st.frames, st.captures, st.clamped, st.warns, st.picsize_mismatch);
+	Com_Printf("pins: replayed %u frames, %u captures, %u values bounded, %u draws outside the frame skipped, "
+			"%u warnings, %u pic size mismatches\n",
+			st.frames, st.captures, st.clamped, st.dropped, st.warns, st.picsize_mismatch);
 }
 
 /*
