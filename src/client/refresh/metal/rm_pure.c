@@ -26,12 +26,15 @@
  * =======================================================================
  */
 
+#include <math.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
 
 #include "header/rmb.h"
+#include "common/mtl_matrix.h"
 
 int
 rm_caps_floor_ok(unsigned families)
@@ -208,7 +211,9 @@ rm_stats_format(const rmb_stats_t *s, const rm_ledger_t *l, char *buf, size_t le
 			s->draws, s->draw_skips, s->uploads, s->upload_skips);
 	ok = ok && rm_append(buf, len, &used, "%lu pass splits, %lu pipelines, %lu created after init, ",
 			s->splits, s->pipelines, s->late_pipelines);
-	ok = ok && rm_append(buf, len, &used, "%lu live objects", rm_ledger_live(l));
+	ok = ok && rm_append(buf, len, &used, "%lu live objects, ", rm_ledger_live(l));
+	ok = ok && rm_append(buf, len, &used, "skipped surfaces: %lu sky, %lu warped, %lu translucent, %lu flowing",
+			s->sky_skips, s->warp_skips, s->trans_skips, s->flow_skips);
 	return ok;
 }
 
@@ -632,4 +637,410 @@ rm_tint_color(float *rgba, const float *rgb)
 	rgba[1] = rgb[1];
 	rgba[2] = rgb[2];
 	rgba[3] = 1;
+}
+
+/* ---- the world (N4) ------------------------------------------------------------- */
+
+_Static_assert(offsetof(rm_wvert_t, pos) == 0, "the position of a world vertex is at offset 0");
+_Static_assert(sizeof(rm_wvert_t) == RM_WVERT_STRIDE, "a world vertex is packed, 28 bytes");
+_Static_assert(RM_WVERT_STRIDE % 4 == 0, "the world vertex stride is a multiple of 4");
+_Static_assert(sizeof(rm_surfrec_t) == 48, "a surface record is 48 bytes, as rm_shaders.metal and RT read it");
+
+rm_material_t
+rm_material(int texflags)
+{
+	if (texflags & RM_TEX_SKY)
+	{
+		return RM_MAT_SKY;
+	}
+
+	if (texflags & (RM_TEX_TRANS33 | RM_TEX_TRANS66))
+	{
+		return RM_MAT_TRANSLUCENT;
+	}
+
+	if (texflags & RM_TEX_WARP)
+	{
+		return RM_MAT_WATER;
+	}
+
+	return (texflags & RM_TEX_FLOWING) ? RM_MAT_FLOWING : RM_MAT_WORLD;
+}
+
+void
+rm_surf_normal(const float *pn, int planeback, float *out)
+{
+	int i;
+
+	for (i = 0; i < 3; i++)
+	{
+		out[i] = planeback ? -pn[i] : pn[i];
+	}
+}
+
+int
+rm_world_add(rm_world_size_t *s, long n)
+{
+	unsigned long tris;
+
+	if ((n < 3) || (s->surfs >= RM_MAX_MAP_FACES) || (s->verts > RM_WORLD_MAX_VERTS) ||
+		(s->indices > RM_WORLD_MAX_INDICES))
+	{
+		return 0;
+	}
+
+	/* each total against what is left of its limit: no sum is formed that could pass it */
+	tris = (unsigned long)n - 2;
+
+	if (((unsigned long)n > RM_WORLD_MAX_VERTS - s->verts) || (tris > (RM_WORLD_MAX_INDICES - s->indices) / 3))
+	{
+		return 0;
+	}
+
+	s->surfs++;
+	s->verts += (unsigned long)n;
+	s->indices += 3 * tris;
+	return 1;
+}
+
+int
+rm_world_bytes(const rm_world_size_t *s, size_t cap, size_t *vbytes, size_t *ibytes, size_t *sbytes)
+{
+	*vbytes = *ibytes = *sbytes = 0;
+
+	if ((s->surfs > RM_MAX_MAP_FACES) || (s->verts > RM_WORLD_MAX_VERTS) || (s->indices > RM_WORLD_MAX_INDICES))
+	{
+		return 0;
+	}
+
+	/* count * size <= cap, by division before the product is formed */
+	if ((s->verts > cap / sizeof(rm_wvert_t)) || (s->indices > cap / sizeof(unsigned)) ||
+		(s->surfs > cap / sizeof(rm_surfrec_t)))
+	{
+		return 0;
+	}
+
+	*vbytes = (size_t)s->verts * sizeof(rm_wvert_t);
+	*ibytes = (size_t)s->indices * sizeof(unsigned);
+	*sbytes = (size_t)s->surfs * sizeof(rm_surfrec_t);
+	return 1;
+}
+
+/* from gl1_buffer.c, R_SetBufferIndices (GL_TRIANGLE_FAN), into the static buffer */
+long
+rm_world_fan(unsigned long base, long n, unsigned *idx, unsigned long cap)
+{
+	long i, k = 0;
+
+	if ((n < 3) || ((unsigned long)(n - 2) > cap / 3) || (base > 0xfffffffful) ||
+		((unsigned long)n - 1 > 0xfffffffful - base))
+	{
+		return 0;
+	}
+
+	for (i = 0; i < n - 2; i++)
+	{
+		idx[k++] = (unsigned)base;
+		idx[k++] = (unsigned)(base + i + 1);
+		idx[k++] = (unsigned)(base + i + 2);
+	}
+
+	return k;
+}
+
+int
+rm_range_ok(long first, long count, long total)
+{
+	return (first >= 0) && (count >= 0) && (total >= 0) && (first <= total) && (count <= total - first);
+}
+
+int
+rm_lump_ok(long fileofs, long filelen, long len)
+{
+	return rm_range_ok(fileofs, filelen, len);
+}
+
+int
+rm_face_edges_ok(long firstedge, long numedges, long numsurfedges)
+{
+	return (numedges >= 3) && rm_range_ok(firstedge, numedges, numsurfedges);
+}
+
+int
+rm_surfedge_ok(long e, long numedges)
+{
+	return (e < numedges) && (e > -numedges);
+}
+
+/* Mod_LoadTexinfo's next: a positive nexttexinfo names a texinfo, anything else ends the chain (-1) */
+static long
+rm_texinfo_next(const int *next, long i)
+{
+	return next[i] > 0 ? next[i] : -1;
+}
+
+int
+rm_texinfo_chains_ok(const int *next, long count)
+{
+	long i, step, steps;
+
+	if (count < 0)
+	{
+		return 0;
+	}
+
+	for (i = 0; i < count; i++)
+	{
+		if (next[i] >= count)
+		{
+			return 0;
+		}
+	}
+
+	/* Mod_LoadTexinfo's count loop: from each texinfo until the chain ends or comes back */
+	for (i = 0; i < count; i++)
+	{
+		for (step = rm_texinfo_next(next, i), steps = 0; (step != -1) && (step != i);
+			step = rm_texinfo_next(next, step))
+		{
+			if (++steps > count)
+			{
+				return 0;
+			}
+		}
+	}
+
+	return 1;
+}
+
+int
+rm_vis_header_ok(long numclusters, long len)
+{
+	return (len >= 4) && (numclusters >= 0) && (numclusters <= RM_MAX_MAP_LEAFS) && (numclusters <= (len - 4) / 8);
+}
+
+int
+rm_leaf_ok(long cluster, long area, long numclusters, int has_vis)
+{
+	if ((area < 0) || (area >= RM_MAX_MAP_AREAS))
+	{
+		return 0;
+	}
+
+	return !has_vis || (cluster == -1) || ((cluster >= 0) && (cluster < numclusters));
+}
+
+int
+rm_mark_once(unsigned char *owner, long total, long first, long count)
+{
+	long i;
+
+	if (!rm_range_ok(first, count, total))
+	{
+		return 0;
+	}
+
+	for (i = first; i < first + count; i++)
+	{
+		if (owner[i])
+		{
+			return 0;
+		}
+	}
+
+	memset(owner + first, 1, (size_t)count);
+	return 1;
+}
+
+/* from files/pvs.c, Mod_DecompressVis, with both ends bounded */
+int
+rm_decompress_vis(const unsigned char *in, size_t in_len, size_t row, unsigned char *out, size_t out_cap)
+{
+	size_t i = 0, o = 0;
+
+	if (out_cap < row)
+	{
+		return 0;
+	}
+
+	while (o < row)
+	{
+		unsigned c;
+
+		if (i >= in_len)
+		{
+			break;
+		}
+
+		if (in[i])
+		{
+			out[o++] = in[i++];
+			continue;
+		}
+
+		if (i + 1 >= in_len)
+		{
+			break;
+		}
+
+		c = in[i + 1];
+		i += 2;
+
+		while (c && (o < row))
+		{
+			out[o++] = 0;
+			c--;
+		}
+	}
+
+	if (o < row)
+	{
+		/* the input ended inside the row: everything visible, as without visibility */
+		memset(out, 0xff, row);
+		return 0;
+	}
+
+	return 1;
+}
+
+int
+rm_world_format(const char *map, const rm_world_size_t *s, char *buf, size_t len)
+{
+	size_t vb, ib, sb, used = 0;
+	int ok;
+
+	if (len == 0)
+	{
+		return 0;
+	}
+
+	buf[0] = '\0';
+
+	if (!rm_world_bytes(s, (size_t)-1, &vb, &ib, &sb))
+	{
+		return 0;
+	}
+
+	ok = rm_append(buf, len, &used, "ref_metal: metal_stats: world %s: %lu vertices (%zu bytes), ", map, s->verts, vb);
+	ok = ok && rm_append(buf, len, &used, "%lu indices (%zu bytes), %lu surface records (%zu bytes)",
+			s->indices, ib, s->surfs, sb);
+	return ok;
+}
+
+/* from gl1_main.c, R_SetupGL: the viewport, as mgl_compute_raster turns it into Metal's */
+void
+rm_view_rect(int rx, int ry, int rw, int rh, int vid_w, int vid_h, int th, rm_viewport_t *out)
+{
+	int x, x2, y2, y, w, h;
+
+	x = floor(rx * vid_w / (float)vid_w);
+	x2 = ceil((rx + rw) * vid_w / (float)vid_w);
+	y = floor(vid_h - ry * vid_h / (float)vid_h);
+	y2 = ceil(vid_h - (ry + rh) * vid_h / (float)vid_h);
+
+	w = x2 - x;
+	h = y - y2;
+
+	/* glViewport(x, y2, w, h); mgl_compute_raster */
+	out->x = x;
+	out->y = (double)th - y2 - h;
+	out->w = w;
+	out->h = h;
+	out->znear = 0;
+	out->zfar = 1;
+}
+
+/* the shim's glRotatef and glTranslatef: m = m * r */
+static void
+rm_mat_rotate_on(float *m, float angle, float x, float y, float z)
+{
+	float r[16];
+
+	if (mtl_mat_rotate(r, angle, x, y, z))
+	{
+		mtl_mat_mul(m, m, r);
+	}
+}
+
+void
+rm_blend_matrix(float *m)
+{
+	mtl_mat_identity(m);
+	rm_mat_rotate_on(m, -90, 1, 0, 0);   /* put Z going up */
+	rm_mat_rotate_on(m, 90, 0, 0, 1);    /* put Z going up */
+}
+
+/* from gl1_main.c, R_SetupGL: the modelview */
+void
+rm_view_matrix(float *m, const float *angles, const float *org)
+{
+	float t[16];
+
+	rm_blend_matrix(m);
+	rm_mat_rotate_on(m, -angles[2], 1, 0, 0);
+	rm_mat_rotate_on(m, -angles[0], 0, 1, 0);
+	rm_mat_rotate_on(m, -angles[1], 0, 0, 1);
+	mtl_mat_translate(t, -org[0], -org[1], -org[2]);
+	mtl_mat_mul(m, m, t);
+}
+
+/* from gl1_main.c, R_SetPerspective (no stereo), on the identity of glLoadIdentity */
+int
+rm_projection(float *m, float fovy, int width, int height, float znear, int farsee,
+		int underwater, float time, float waterwarp)
+{
+	/* gluPerspective style parameters */
+	const double zNear = (znear > 0.1f) ? znear : 0.1f;
+	const double zFar = farsee ? 8192.0f : 4096.0f;
+	double aspectratio, xmin, xmax, ymin, ymax;
+	float f[16], id[16];
+
+	if (height == 0)
+	{
+		return 0;   /* glFrustum refuses bottom == top */
+	}
+
+	aspectratio = (double)width / height;
+	ymax = zNear * tan(fovy * M_PI / 360.0);
+	xmax = ymax * aspectratio;
+
+	if (underwater && waterwarp)
+	{
+		const double warp = sin(time * 1.5) * 0.03 * waterwarp;
+
+		ymax *= 1.0 - warp;
+		xmax *= 1.0 + warp;
+	}
+
+	ymin = -ymax;
+	xmin = -xmax;
+
+	if (!mtl_mat_frustum(f, xmin, xmax, ymin, ymax, zNear, zFar))
+	{
+		return 0;
+	}
+
+	mtl_mat_identity(id);
+	mtl_mat_mul(m, id, f);
+	return 1;
+}
+
+/* from gl1_main.c, R_SetupFrame (v_blend) and R_PolyBlend (whether it draws) */
+int
+rm_polyblend(const float *blend, float sw_gamma, float polyblend, float *rgba)
+{
+	int i;
+
+	if (!polyblend || !blend[3])
+	{
+		return 0;
+	}
+
+	for (i = 0; i < 3; i++)
+	{
+		rgba[i] = blend[i] * sw_gamma;
+	}
+
+	rgba[3] = blend[3];
+	return 1;
 }

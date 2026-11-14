@@ -65,8 +65,14 @@ else
 fi
 
 host=""
+# the world's tests (N4) also run what ref_metal takes from files/surf.c (with shared.c, which it
+# calls) and compare the 3D viewport with the shim's mgl_compute_raster (gl1/metal/mgl_raster.c,
+# behind tests/metal/rm_host_shim.c); the engine headers need the two names the Makefile defines
 # shellcheck disable=SC2086 # flags is a word list
-if ! $cc $flags -o "${tmp:?}/rm_host_test" tests/metal/rm_host_test.c "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" -lm > "${tmp:?}/cc.out" 2>&1; then
+if ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "${tmp:?}/rm_host_test" \
+	tests/metal/rm_host_test.c tests/metal/rm_host_shim.c \
+	"$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" \
+	src/client/refresh/gl1/metal/mgl_raster.c src/client/refresh/files/surf.c src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
 	cat "${tmp:?}/cc.out"
 	bad "tests/metal/rm_host_test.c does not compile"
 elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_host_test" > "${tmp:?}/out" 2>&1; then
