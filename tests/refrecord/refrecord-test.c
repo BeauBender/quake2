@@ -37,6 +37,7 @@
 #include <math.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -4174,6 +4175,7 @@ TestCvarRules(void)
 		CHECK(RefRec_CvarRestorable(yes[i], "1", 0), "cvars: %s not restorable", yes[i]);
 		CHECK(RefRec_CvarRestorable(yes[i], "1", CVAR_ARCHIVE), "cvars: archived %s not restorable", yes[i]);
 		CHECK(!RefRec_CvarRestorable(yes[i], "1", -1), "cvars: %s restorable without a live cvar", yes[i]);
+		CHECK(!RefRec_CvarRestorable(yes[i], "1", INT_MIN), "cvars: %s restorable with negative flags", yes[i]);
 		CHECK(!RefRec_CvarRestorable(yes[i], "1", CVAR_NOSET), "cvars: CVAR_NOSET %s restorable", yes[i]);
 		CHECK(!RefRec_CvarRestorable(yes[i], "1", CVAR_LATCH | CVAR_ARCHIVE), "cvars: CVAR_LATCH %s restorable", yes[i]);
 		CHECK(!RefRec_CvarRestorable(yes[i], "1", CVAR_USERINFO), "cvars: CVAR_USERINFO %s restorable", yes[i]);
@@ -4226,8 +4228,10 @@ TestCvarRules(void)
 	memcpy(longname, "r_", 2);
 	longname[sizeof(longname) - 1] = '\0';
 	CHECK(!RefRec_CvarRecorded(longname, 0), "cvars: a name of REFREC_MAX_STRING bytes recorded");
+	CHECK(!RefRec_CvarRestorable("r_a", longname, 0), "cvars: a value of REFREC_MAX_STRING bytes restorable");
 	longname[REFREC_MAX_STRING - 1] = '\0';
 	CHECK(RefRec_CvarRecorded(longname, 0), "cvars: the longest name not recorded");
+	CHECK(RefRec_CvarRestorable("r_a", longname, 0), "cvars: the longest value not restorable");
 }
 
 /* the live cvars of the mock: name, flags; anything else does not exist */

@@ -60,6 +60,17 @@ TEST(randk_fixed_seed_repeats)
 		T_CHECK(a[i] >= 0 && d[i] >= 0);
 	}
 
+	/* the same numbers on every platform and every build: a pin recorded
+	   with pins_seed 7 on one host replays its particles on another */
+	randk_seed_fixed(7);
+	T_EQ_INT(randk(), 638105636);
+	T_EQ_INT(randk(), 1110157193);
+	T_EQ_INT(randk(), 1925703639);
+	T_EQ_INT(randk(), 411274451);
+	randk_seed_fixed(0);
+	T_EQ_INT(randk(), 1549435686);
+	T_EQ_INT(randk(), 1760712810);
+
 	/* the stream after a fixed seed is not the one before it */
 	randk_seed_fixed(7);
 	t_rand_stream(a);
@@ -86,6 +97,9 @@ TEST(randk_entropy_seed_after_fixed)
 	t_rand_stream(a);
 	randk_seed();
 	t_rand_stream(b);
+	/* from the same state as before b, so only the entropy can tell them apart */
+	randk_seed_fixed(7);
+	t_rand_stream(a);
 	randk_seed();
 	t_rand_stream(c);
 
