@@ -38,6 +38,10 @@ static qboolean minlight_set;
 static int r_dlightframecount;
 
 static vec3_t pointcolor;
+
+#if RM_MAX_DLIGHTS != MAX_DLIGHTS
+#error RM_MAX_DLIGHTS must be ref.h's MAX_DLIGHTS
+#endif
 static cplane_t *lightplane; /* used as shadow plane */
 static vec3_t lightspot;
 
@@ -146,7 +150,7 @@ R_MarkSurfaceLights(dlight_t *light, int bit, mnode_t *node, int lightframecount
 void
 R_PushDlights(void)
 {
-	int i;
+	int i, n;
 	dlight_t *l;
 
 	if (gl1_flashblend->value || !r_worldmodel || (r_newrefdef.rdflags & RDF_NOWORLDMODEL))
@@ -158,10 +162,11 @@ R_PushDlights(void)
 	r_dlightframecount = r_framecount + 1;
 
 	l = r_newrefdef.dlights;
+	n = rm_dlight_count(r_newrefdef.num_dlights); /* at most 32 lights, one bit each */
 
-	for (i = 0; i < r_newrefdef.num_dlights; i++, l++)
+	for (i = 0; i < n; i++, l++)
 	{
-		R_MarkLights(l, 1 << i, r_worldmodel->nodes, r_dlightframecount, R_MarkSurfaceLights);
+		R_MarkLights(l, (int)rm_dlight_bit(i), r_worldmodel->nodes, r_dlightframecount, R_MarkSurfaceLights);
 	}
 }
 
@@ -297,7 +302,7 @@ R_LightPoint(entity_t *currententity, vec3_t p, vec3_t color)
 {
 	vec3_t end;
 	float r;
-	int lnum;
+	int lnum, n;
 	dlight_t *dl;
 	vec3_t dist;
 	float add;
@@ -325,8 +330,9 @@ R_LightPoint(entity_t *currententity, vec3_t p, vec3_t color)
 
 	/* add dynamic lights */
 	dl = r_newrefdef.dlights;
+	n = rm_dlight_count(r_newrefdef.num_dlights);
 
-	for (lnum = 0; lnum < r_newrefdef.num_dlights; lnum++, dl++)
+	for (lnum = 0; lnum < n; lnum++, dl++)
 	{
 		VectorSubtract(currententity->origin, dl->origin, dist);
 		add = dl->intensity - VectorLength(dist);

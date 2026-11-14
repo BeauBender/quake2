@@ -1215,6 +1215,18 @@ rm_lp_coords(float s, float t, short smin, short tmin, short sext, short text, i
 }
 
 int
+rm_dlight_count(long n)
+{
+	return (n < 0) ? 0 : (n > RM_MAX_DLIGHTS ? RM_MAX_DLIGHTS : (int)n);
+}
+
+unsigned
+rm_dlight_bit(int i)
+{
+	return ((i < 0) || (i >= RM_MAX_DLIGHTS)) ? 0 : (1u << i);
+}
+
+int
 rm_lm_alloc(int *allocated, int w, int h, int *x, int *y)
 {
 	/* gl1's LM_AllocBlock is CommonAllocBlock's loop on the lightmap block (gl1_lightmap.c, gl1_scrap.c) */

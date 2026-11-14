@@ -632,6 +632,19 @@ int rm_lm_samples_ok(long ofs, long extent0, long extent1, int nummaps, long lig
  */
 int rm_lp_coords(float s, float t, short smin, short tmin, short sext, short text, int *ds, int *dt);
 
+/* MAX_DLIGHTS of ref.h, which this header does not include (rm_light.c and the host test hold them equal) */
+#define RM_MAX_DLIGHTS 32
+
+/*
+ * The dynamic lights of a frame the renderer walks: the refdef's
+ * num_dlights clamped to 0 .. RM_MAX_DLIGHTS (the client caps it, the
+ * renderer does not rely on that).
+ */
+int rm_dlight_count(long n);
+
+/* The mark bit of dynamic light i, unsigned: 1u << i for i in 0 .. RM_MAX_DLIGHTS - 1, else 0. */
+unsigned rm_dlight_bit(int i);
+
 /*
  * gl1's LM_AllocBlock on a block whose RM_LM_WIDTH column heights are
  * allocated: a w by h rectangle, the same spots as gl1's (the rightmost

@@ -1628,6 +1628,32 @@ test_lp_coords(void)
 }
 
 /*
+ * The dynamic lights of a frame (rm_dlight_count): the count clamped to
+ * 0 .. MAX_DLIGHTS (ref.h, held equal); the mark bit of each, unsigned,
+ * every one of 32 distinct, 0 past them (rm_dlight_bit).
+ */
+static void
+test_dlights(void)
+{
+	unsigned all = 0;
+	int i, ok = 1;
+
+	CHECK(RM_MAX_DLIGHTS == MAX_DLIGHTS);
+	CHECK(rm_dlight_count(0) == 0 && rm_dlight_count(1) == 1 && rm_dlight_count(32) == 32);
+	CHECK(rm_dlight_count(33) == 32 && rm_dlight_count(INT32_MAX) == 32);
+	CHECK(rm_dlight_count(-1) == 0 && rm_dlight_count(INT32_MIN) == 0);
+
+	for (i = 0; i < RM_MAX_DLIGHTS; i++)
+	{
+		ok &= (rm_dlight_bit(i) != 0) && !(all & rm_dlight_bit(i));
+		all |= rm_dlight_bit(i);
+	}
+
+	CHECK(ok && all == 0xffffffffu && rm_dlight_bit(31) == 0x80000000u && rm_dlight_bit(0) == 1u);
+	CHECK(rm_dlight_bit(32) == 0 && rm_dlight_bit(-1) == 0 && rm_dlight_bit(INT32_MAX) == 0);
+}
+
+/*
  * gl1's LM_AllocBlock positions for a fixed sequence of sizes on one
  * block (the first spot with the lowest top, never in the last w
  * columns), the exact fit, the full block, and the slice change of
@@ -2074,6 +2100,7 @@ main(void)
 	test_lm_size();
 	test_lm_samples();
 	test_lp_coords();
+	test_dlights();
 	test_lm_alloc();
 	test_lm_regions();
 	test_lm_join();
