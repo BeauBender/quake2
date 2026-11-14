@@ -15,8 +15,9 @@
 # copy must be byte-identical afterwards. Last, the real part of the gate
 # check is run with `hostname` and `whoami` shims (synthetic names), to show
 # that a hit fails without printing the value, that unreadable names fail
-# closed, and that a user name equal to origin's GitHub owner is skipped with
-# a note that does not print it. Nothing in the repository is written.
+# closed, that a user name equal to origin's GitHub owner is skipped with a
+# note that does not print it, and that another user name is not skipped even
+# when the home ends in it. Nothing in the repository is written.
 #
 # Usage: tests/check-identity-env.sh
 set -eu
@@ -143,9 +144,19 @@ shim hostname ''
 gate "host name unreadable" 0 "warning: cannot read the host or user name"
 shim whoami ''
 gate "host and user name unreadable" 1 "cannot read the host name or the user name"
+# A user name that is not origin's owner, with a home ending in it: nothing is
+# skipped, so no note (the note needs owner_is as well as home_is).
+shim hostname "zzqno""host"
+shim whoami "zzqno""body"
+gate "a user name that is not the owner, home ending in it" 0 "check-no-local-identity: ok" "/zzqno""home/zzqno""body"
+if grep -q "skipped" "$tmp/out"; then
+	echo "$me: FAIL: a user name that is not the owner, home ending in it: the skip note was printed"
+	fails=1
+fi
 # The user name is the owner handle of origin's GitHub address and the last
 # component of the home path: the user-name word test is skipped and a note
-# says so, without the value. Not run when origin names no GitHub owner.
+# says so, without the value. When origin names no GitHub owner these tests
+# are not run, and a line says so.
 owner=$(git remote get-url origin 2>/dev/null | sed -nE 's#^.*github\.com[:/]([A-Za-z0-9-]+)/[^/]+$#\1#p') || owner=
 if [ -n "$owner" ]; then
 	shim hostname "zzqno""host"
@@ -161,6 +172,8 @@ if [ -n "$owner" ]; then
 		echo "$me: FAIL: the owner handle, home elsewhere: the skip note was printed"
 		fails=1
 	fi
+else
+	echo "$me: not run: the owner-handle note tests (origin names no GitHub owner)"
 fi
 
 [ "$fails" -eq 0 ] || exit 1
