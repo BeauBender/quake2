@@ -714,6 +714,19 @@ test_textures(void)
 	/* sub-images are S2b: refused */
 	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
 	CHECK(ERR() == GL_INVALID_OPERATION && tex_uploads == 3);
+
+	/* the unpack alignment reaches the conversion: RGB rows of one pixel, padded to 4, then not */
+	{
+		static const unsigned char rgb[] = {1, 2, 3, 0xAA, 4, 5, 6, 0xAA};
+
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 2, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb);
+		CHECK(ERR() == GL_NO_ERROR && last_up_rgba[2] == 3 && last_up_rgba[4] == 4 && last_up_rgba[7] == 255);
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 2, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb);
+		CHECK(ERR() == GL_NO_ERROR && last_up_rgba[4] == 0xAA && last_up_rgba[5] == 4);
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+	}
+
 	glBindTexture(GL_TEXTURE_2D, 7);
 
 	/* parameters and their sampler key */
