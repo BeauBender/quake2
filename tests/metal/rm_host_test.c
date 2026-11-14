@@ -974,14 +974,14 @@ test_material(void)
 	CHECK(rm_material(SURF_WARP | SURF_FLOWING) == RM_MAT_WATER);
 }
 
-/* The retained vertex: position at offset 0, packed, one stride of 28 bytes; the record's normal. */
+/* The retained vertex: position at offset 0, w after it, one stride of 32 bytes; the record's normal. */
 static void
 test_wvert_record(void)
 {
 	const float pn[3] = { 0.0f, -0.6f, 0.8f };
 	float n[3];
 
-	CHECK(offsetof(rm_wvert_t, pos) == 0 && offsetof(rm_wvert_t, uv) == 12 && offsetof(rm_wvert_t, lmuv) == 20);
+	CHECK(offsetof(rm_wvert_t, pos) == 0 && offsetof(rm_wvert_t, uv) == 16 && offsetof(rm_wvert_t, lmuv) == 24);
 	CHECK(sizeof(rm_wvert_t) == RM_WVERT_STRIDE && RM_WVERT_STRIDE % 4 == 0);
 
 	rm_surf_normal(pn, 0, n);
@@ -1030,7 +1030,7 @@ test_world_sizes(void)
 	CHECK(rm_world_add(&s, 5) && rm_world_add(&s, 3) && rm_world_add(&s, 4));
 	CHECK(s.surfs == 3 && s.verts == 12 && s.indices == 3 * (3 + 1 + 2));
 	CHECK(rm_world_bytes(&s, RMB_STATIC_MAX_BYTES, &vb, &ib, &sb));
-	CHECK(vb == 12 * 28 && ib == 18 * 4 && sb == 3 * sizeof(rm_surfrec_t));
+	CHECK(vb == 12 * 32 && ib == 18 * 4 && sb == 3 * sizeof(rm_surfrec_t));
 
 	/* a polygon of fewer than 3 vertices, or one that is negative, adds nothing */
 	CHECK(!rm_world_add(&s, 2) && !rm_world_add(&s, -5) && !rm_world_add(&s, 0));
@@ -1040,7 +1040,7 @@ test_world_sizes(void)
 	memset(&s, 0, sizeof(s));
 	CHECK(rm_world_add(&s, RM_WORLD_MAX_VERTS - 3) && rm_world_add(&s, 3));
 	CHECK(s.verts == RM_WORLD_MAX_VERTS && !rm_world_add(&s, 3) && s.verts == RM_WORLD_MAX_VERTS);
-	CHECK(rm_world_bytes(&s, RMB_STATIC_MAX_BYTES, &vb, &ib, &sb) && vb == (size_t)RM_WORLD_MAX_VERTS * 28);
+	CHECK(rm_world_bytes(&s, RMB_STATIC_MAX_BYTES, &vb, &ib, &sb) && vb == (size_t)RM_WORLD_MAX_VERTS * 32);
 
 	/* a count near LONG_MAX is refused, not wrapped */
 	memset(&s, 0, sizeof(s));
@@ -1058,7 +1058,7 @@ test_world_sizes(void)
 
 	/* counts past the limits, and products that overflow size_t, are refused with 0 bytes */
 	memset(&big, 0, sizeof(big));
-	big.verts = (unsigned long)-1 / 7;
+	big.verts = (unsigned long)-1 / 9;
 	CHECK(!rm_world_bytes(&big, (size_t)-1, &vb, &ib, &sb) && vb == 0 && ib == 0 && sb == 0);
 	memset(&big, 0, sizeof(big));
 	big.indices = (unsigned long)-1 / 2;
@@ -1069,8 +1069,8 @@ test_world_sizes(void)
 	/* inside the limits but past the buffer cap */
 	memset(&big, 0, sizeof(big));
 	big.verts = 1000;
-	CHECK(!rm_world_bytes(&big, 1000 * 28 - 1, &vb, &ib, &sb) && vb == 0);
-	CHECK(rm_world_bytes(&big, 1000 * 28, &vb, &ib, &sb) && vb == 28000);
+	CHECK(!rm_world_bytes(&big, 1000 * 32 - 1, &vb, &ib, &sb) && vb == 0);
+	CHECK(rm_world_bytes(&big, 1000 * 32, &vb, &ib, &sb) && vb == 32000);
 }
 
 /* The BSP index checks: ranges, lumps, a face's edges, a surfedge, a leaf. */
@@ -1356,7 +1356,7 @@ test_world_line(void)
 {
 	rm_world_size_t s;
 	char buf[RM_STATS_LINE];
-	const char *want = "ref_metal: metal_stats: world maps/base1.bsp: 12 vertices (336 bytes), "
+	const char *want = "ref_metal: metal_stats: world maps/base1.bsp: 12 vertices (384 bytes), "
 		"18 indices (72 bytes), 3 surface records (144 bytes)";
 	size_t n = strlen(want);
 

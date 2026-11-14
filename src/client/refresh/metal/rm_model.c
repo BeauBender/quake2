@@ -691,6 +691,7 @@ RM_BuildWorld(model_t *mod)
 			t1 /= tex->image->height;
 
 			VectorCopy(vec, v->pos);
+			v->pos[3] = 1.0f;
 			v->uv[0] = s1;
 			v->uv[1] = t1;
 

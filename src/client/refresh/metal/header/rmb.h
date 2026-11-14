@@ -339,19 +339,22 @@ typedef enum
 rm_material_t rm_material(int texflags);
 
 /*
- * One vertex of the retained world buffer: position packed at offset 0
- * (what an acceleration structure reads), then the diffuse and the
- * lightmap coordinates; one stride of 28 bytes (static asserts in
- * rm_pure.c, a runtime check in the host test).
+ * One vertex of the retained world buffer: the float3 position at offset
+ * 0 (what an acceleration structure reads, with this stride) and w = 1
+ * after it, then the diffuse and the lightmap coordinates; one stride of
+ * 32 bytes (static asserts in rm_pure.c, a runtime check in the host
+ * test). The w is stored, not packed away, because the vertex function
+ * then reads one float4 as the shim's does, and only that gives the
+ * shim's clip coordinates to the bit (design section 19).
  */
 typedef struct
 {
-	float pos[3];
+	float pos[4];
 	float uv[2];
 	float lmuv[2];
 } rm_wvert_t;
 
-#define RM_WVERT_STRIDE 28
+#define RM_WVERT_STRIDE 32
 
 /*
  * One record of the per-surface buffer (design section 9): the plane

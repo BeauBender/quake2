@@ -100,18 +100,19 @@ rm_fragment_2d(rm_varying2d in [[stage_in]],
 
 /*
  * The 3D classes of N4. The vertex functions are the shim's: the CPU
- * product mvp times the position with w = 1, GL clip depth mapped by
- * mtl_gl_clip_z. w comes from the uniforms, as the shim's comes from its
- * vertex buffer, so the compiler cannot fold the product's last term and
- * the rounding is the shim's.
+ * product mvp times the position, GL clip depth mapped by mtl_gl_clip_z.
+ * The world's position is read as one float4 with its stored w = 1, as
+ * the shim's is: a float3 widened with a w of 1 (a constant or a uniform)
+ * gave clip coordinates that differ in the last bits and moved texels on
+ * 0.1 to 1 percent of the pixels (design section 19).
  */
 
-/* rm_wvert_t: position packed at offset 0, 28 bytes */
+/* rm_wvert_t: the position at offset 0 with w = 1, 32 bytes */
 struct rm_wvert
 {
-	packed_float3 pos;
-	packed_float2 uv;
-	packed_float2 lmuv;
+	float4 pos;
+	float2 uv;
+	float2 lmuv;
 };
 
 /* rmb_uniforms3d_t */
@@ -119,7 +120,6 @@ struct rm_uniforms3d
 {
 	float4x4 mvp;
 	float4 color;
-	float one;
 };
 
 /* the shim's mgl_varying, member for member, so the interpolation is laid out as the shim's */
@@ -139,12 +139,12 @@ rm_vertex_world(uint vid [[vertex_id]],
 		constant rm_uniforms3d &u [[buffer(1)]])
 {
 	rm_varying3d out;
-	float4 p = u.mvp * float4(float3(v[vid].pos), u.one);
+	float4 p = u.mvp * v[vid].pos;
 
 	p.z = mtl_gl_clip_z(p.z, p.w);
 	out.position = p;
-	out.uv = float2(v[vid].uv);
-	out.lmuv = float2(v[vid].lmuv);
+	out.uv = v[vid].uv;
+	out.lmuv = v[vid].lmuv;
 	out.color = u.color;
 	out.pt = float4(0.0f);
 	return out;
@@ -158,14 +158,14 @@ rm_fragment_world(rm_varying3d in [[stage_in]],
 	return tex.sample(smp, in.uv);
 }
 
-/* color: one untextured colour per draw, carried as a vertex colour as the shim's glColor4f is */
+/* color: one untextured colour per draw, carried as a vertex colour as the shim's glColor4f is; positions with w = 1 */
 vertex rm_varying3d
 rm_vertex_color(uint vid [[vertex_id]],
-		const device packed_float3 *v [[buffer(0)]],
+		const device float4 *v [[buffer(0)]],
 		constant rm_uniforms3d &u [[buffer(1)]])
 {
 	rm_varying3d out;
-	float4 p = u.mvp * float4(float3(v[vid]), u.one);
+	float4 p = u.mvp * v[vid];
 
 	p.z = mtl_gl_clip_z(p.z, p.w);
 	out.position = p;

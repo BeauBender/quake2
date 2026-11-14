@@ -656,13 +656,11 @@ rmb_draw_2d_quads(int pipe, int tex, int smp, const rmb_vert2d_t *v, int nquads,
 
 /* ---- the 3D pass (N4) ----------------------------------------------------------- */
 
-/* rm_shaders.metal's rm_uniforms3d: mvp, the colour, and w = 1 as a value the compiler cannot fold */
+/* rm_shaders.metal's rm_uniforms3d: mvp and the colour */
 typedef struct
 {
 	float mvp[16];
 	float color[4];
-	float one;
-	float pad[3];
 } rmb_uniforms3d_t;
 
 /*
@@ -686,7 +684,6 @@ rmb_draw_3d_state(int pipe, int ds, const float *mvp, const float *rgba, const r
 	memset(&u, 0, sizeof(u));
 	memcpy(u.mvp, mvp, sizeof(u.mvp));
 	memcpy(u.color, rgba, sizeof(u.color));
-	u.one = 1.0f;
 
 	[frame_enc setRenderPipelineState:ps];
 	[frame_enc setDepthStencilState:dss];
@@ -750,14 +747,24 @@ rmb_draw_color(const float *xyz, int n, const float *rgba, const float *mvp,
 		const rm_viewport_t *vp, int cull)
 {
 	unsigned short idx[3 * 62];
-	int count = rm_fan_indices(n, idx, (int)(sizeof(idx) / sizeof(idx[0])));
-	size_t vbytes = (size_t)(count ? n : 0) * 3 * sizeof(float);
+	float pos[64][4];
+	int count = rm_fan_indices(n, idx, (int)(sizeof(idx) / sizeof(idx[0]))), i;
+	size_t vbytes = (size_t)(count ? n : 0) * sizeof(pos[0]);
 	long vat, iat;
 
-	if (!count)
+	if (!count || (n > 64))
 	{
 		rmb_counts.draw_skips++;
 		return 0;
+	}
+
+	/* the shim's vertices: (x, y, z, 1), read by the vertex function as one float4 */
+	for (i = 0; i < n; i++)
+	{
+		pos[i][0] = xyz[i * 3];
+		pos[i][1] = xyz[i * 3 + 1];
+		pos[i][2] = xyz[i * 3 + 2];
+		pos[i][3] = 1.0f;
 	}
 
 	@autoreleasepool
@@ -777,7 +784,7 @@ rmb_draw_color(const float *xyz, int n, const float *rgba, const float *mvp,
 			return 0;
 		}
 
-		memcpy((unsigned char *)frame_ring.contents + vat, xyz, vbytes);
+		memcpy((unsigned char *)frame_ring.contents + vat, pos, vbytes);
 		memcpy((unsigned char *)frame_ring.contents + iat, idx, (size_t)count * sizeof(idx[0]));
 		[frame_enc setVertexBuffer:frame_ring offset:(NSUInteger)vat atIndex:0];
 		[frame_enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle

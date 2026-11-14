@@ -642,7 +642,8 @@ rm_tint_color(float *rgba, const float *rgb)
 /* ---- the world (N4) ------------------------------------------------------------- */
 
 _Static_assert(offsetof(rm_wvert_t, pos) == 0, "the position of a world vertex is at offset 0");
-_Static_assert(sizeof(rm_wvert_t) == RM_WVERT_STRIDE, "a world vertex is packed, 28 bytes");
+_Static_assert(sizeof(rm_wvert_t) == RM_WVERT_STRIDE, "a world vertex is 32 bytes, no padding");
+_Static_assert(offsetof(rm_wvert_t, uv) == 16, "the diffuse coordinates follow the position and its w");
 _Static_assert(RM_WVERT_STRIDE % 4 == 0, "the world vertex stride is a multiple of 4");
 _Static_assert(sizeof(rm_surfrec_t) == 48, "a surface record is 48 bytes, as rm_shaders.metal and RT read it");
 
