@@ -309,6 +309,9 @@ void rmb_samplers_set(int min, int mag_linear, int aniso);
 int rmb_texture_upload(int id, const unsigned char *rgba, int w, int h, int mipmapped, int opaque);
 void rmb_texture_free(int id);
 
+/* Counts an upload the front end refused by rm_upload_bytes before converting it. */
+void rmb_upload_refused(void);
+
 /* One 2D vertex: the shim's layout (float4 position, float2 uv, float4 colour). */
 typedef struct
 {

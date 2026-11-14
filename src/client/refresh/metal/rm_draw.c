@@ -144,7 +144,7 @@ RDraw_StretchRaw(int x, int y, int w, int h, int cols, int rows, const byte *dat
 	/* the size check comes before any conversion or upload: an oversized frame is skipped */
 	if (!data || ((bits != 8) && (bits != 32)) || !rm_upload_bytes(cols, rows, RMB_STAGING_BYTES, &bytes))
 	{
-		rmb_texture_upload(0, NULL, cols, rows, 0, 1);   /* counted as a skipped upload */
+		rmb_upload_refused();
 		return;
 	}
 

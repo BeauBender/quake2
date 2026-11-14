@@ -202,6 +202,7 @@ R_Upload32(image_t *image, unsigned *data, int width, int height, qboolean mipma
 	{
 		R_Printf(PRINT_DEVELOPER, "%s: %s is %dx%d, too large to upload\n", __func__,
 				image->name, width, height);
+		rmb_upload_refused();
 		return false;
 	}
 
@@ -228,8 +229,18 @@ R_Upload32(image_t *image, unsigned *data, int width, int height, qboolean mipma
 static qboolean
 R_Upload8(image_t *image, byte *data, int width, int height, qboolean mipmap)
 {
-	unsigned *trans = R_Convert8to32(data, width, height, d_8to24table);
+	unsigned *trans;
 	qboolean ret;
+	size_t bytes;
+
+	/* refused before the conversion allocates for it */
+	if (!rm_upload_bytes(width, height, RMB_STAGING_BYTES, &bytes))
+	{
+		rmb_upload_refused();
+		return false;
+	}
+
+	trans = R_Convert8to32(data, width, height, d_8to24table);
 
 	if (!trans)
 	{

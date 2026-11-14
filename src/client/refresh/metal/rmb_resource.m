@@ -469,6 +469,12 @@ rmb_texture_free(int tid)
 	}
 }
 
+void
+rmb_upload_refused(void)
+{
+	rmb_counts.upload_skips++;
+}
+
 /* For rmb_encode.m: the texture of a draw, marked as used by the open frame command buffer. */
 id<MTLTexture>
 rmb_texture_for_draw(int tid)
