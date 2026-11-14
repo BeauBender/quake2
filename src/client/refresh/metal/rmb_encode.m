@@ -581,7 +581,10 @@ rmb_draw_2d_idx(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n,
 		id<MTLTexture> t = tex ? rmb_texture_for_draw(tex) : nil;
 		id<MTLSamplerState> ss = rmb_sampler(smp);
 
-		if (!ps || (tex && (!t || !ss)))
+		int textured = rm_pipe_2d_textured(pipe);
+
+		/* a textured pipeline without a texture is a skip, never a draw on whatever was bound */
+		if (!ps || (textured && !t) || (t && !ss))
 		{
 			rmb_counts.draw_skips++;
 			return 0;

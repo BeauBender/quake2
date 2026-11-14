@@ -351,6 +351,21 @@ test_pipe_2d(void)
 
 	CHECK(ok);
 	CHECK(rm_pipe_2d(RM_TEXENVS, 0, 0) == -1 && rm_pipe_2d((rm_texenv_t)-1, 0, 0) == -1);
+
+	/* a textured pipeline needs a texture: REPLACE and MODULATE do, UNTEXTURED does not */
+	for (e = 0; e < RM_TEXENVS; e++)
+	{
+		for (a = 0; a < 2; a++)
+		{
+			for (b = 0; b < 2; b++)
+			{
+				CHECK(rm_pipe_2d_textured(rm_pipe_2d((rm_texenv_t)e, a, b)) == (e != RM_TEXENV_UNTEXTURED));
+			}
+		}
+	}
+
+	CHECK(rm_pipe_2d_textured(-1) == 0 && rm_pipe_2d_textured(RM_PIPE_2D_COUNT) == 0);
+	CHECK(rm_pipe_2d_textured(RM_PIPE_2D_COUNT + 1) == 0 && rm_pipe_2d_textured(1 << 20) == 0);
 }
 
 /* The directory ref_metal.metallib is looked for in: the dylib's, bounded by the buffer */
@@ -719,6 +734,7 @@ test_scrap_state(void)
 	CHECK(rm_scrap_sampler(RM_MAX_SCRAPS_NOLERP, 1) == RMB_SAMPLER(RMB_SMP_NEAREST, 0));
 	CHECK(rm_scrap_sampler(0, 1) == RMB_SAMPLER(RMB_SMP_NEAREST, 0));
 	/* an index outside the table: filtered, as a texture that is no atlas's */
+	CHECK(rm_scrap_sampler(RM_MAX_SCRAPS - 1, 1) == RMB_SAMPLER(RMB_SMP_NEAREST, 0));
 	CHECK(rm_scrap_sampler(RM_MAX_SCRAPS, 1) == RMB_SAMPLER(RMB_SMP_FLAT, 0));
 	CHECK(rm_scrap_sampler(-1, 0) == RMB_SAMPLER(RMB_SMP_FLAT, 0));
 }

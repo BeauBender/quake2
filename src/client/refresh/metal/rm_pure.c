@@ -312,6 +312,17 @@ rm_pipe_2d(rm_texenv_t env, int alpha_test, int blend)
 }
 
 int
+rm_pipe_2d_textured(int pipe)
+{
+	if ((pipe < 0) || (pipe >= RM_PIPE_2D_COUNT))
+	{
+		return 0;
+	}
+
+	return (pipe / 4) != RM_TEXENV_UNTEXTURED;
+}
+
+int
 rm_dir_of(const char *path, char *dir, size_t len)
 {
 	const char *slash = strrchr(path, '/');

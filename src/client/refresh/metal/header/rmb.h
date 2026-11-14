@@ -189,6 +189,13 @@ typedef enum
 int rm_pipe_2d(rm_texenv_t env, int alpha_test, int blend);
 
 /*
+ * 1 when the 2D pipeline (an index rm_pipe_2d answers) samples a texture,
+ * so a draw on it without one is refused; 0 for the untextured ones and
+ * for an index outside the table.
+ */
+int rm_pipe_2d_textured(int pipe);
+
+/*
  * gl_texturemode (gl1's names, R_TextureMode in gl1_image.c) to the
  * minifying filter (0 to 5: GL_NEAREST, GL_LINEAR, then the four mipmap
  * filters in GL's enum order) and the magnifying one (0 nearest, 1
