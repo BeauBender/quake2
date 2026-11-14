@@ -253,6 +253,12 @@ mgl_point_size(const mgl_state_t *s, const float eye[4], int smooth)
 	size = size < s->point_size_min ? s->point_size_min : size;
 	size = size > s->point_size_max ? s->point_size_max : size;
 
+	/* NaN or infinity (from the state or the attenuation) never leaves: 1 */
+	if (!isfinite(size))
+	{
+		size = 1.0;
+	}
+
 	if (smooth)
 	{
 		size = size < MGL_POINT_SMOOTH_MIN ? MGL_POINT_SMOOTH_MIN : size;
@@ -291,7 +297,7 @@ mgl_point_quads(const mgl_state_t *s, const mgl_vertex_t *in, size_t n, mgl_vert
 		mgl_xform(mvp, p->pos, clip);
 
 		/* GL 1.4, section 2.12: a point outside the clip volume is discarded */
-		if (!(clip[3] > 0) || fabs(clip[0]) > clip[3] || fabs(clip[1]) > clip[3] || fabs(clip[2]) > clip[3])
+		if (!(clip[3] > 0) || !(fabs(clip[0]) <= clip[3]) || !(fabs(clip[1]) <= clip[3]) || fabs(clip[2]) > clip[3])
 		{
 			continue;
 		}

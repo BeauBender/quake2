@@ -418,7 +418,8 @@ glShadeModel(GLenum mode)
 void
 glPointSize(GLfloat size)
 {
-	if (size <= 0.0f)
+	/* the negated form refuses NaN as well */
+	if (!(size > 0.0f))
 	{
 		mgl_error(GL_INVALID_VALUE);
 		return;

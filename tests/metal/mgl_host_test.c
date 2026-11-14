@@ -2256,6 +2256,68 @@ test_points_lines(void)
 	glDrawArrays(GL_TRIANGLES, 0, 3);
 	CHECK(!last_draw.lines && last_draw.cull == MGL_CULL_BACK && last_draw.fill_lines);
 
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glTranslatef(0.25f, 0, 0);
+	glDrawArrays(GL_LINES, 2, 2);
+	CHECK(ERR() == GL_NO_ERROR && last_draw.lines && last_draw.nvertices == 2 && last_draw.nindices == 2 &&
+		last_draw.vertices[0].pos[0] == 0 && last_draw.vertices[0].pos[1] == 2.5f &&
+		last_draw.vertices[1].pos[0] == 640 && last_draw.u.mvp[12] == 0.25f);
+	glLoadIdentity();
+	glVertexPointer(2, GL_FLOAT, 0, pv);
+	pv[0] = 5; pv[1] = 5; pv[2] = 0; pv[3] = 0;
+	n = draws;
+	glDrawArrays(GL_POINTS, 1, 1);
+	CHECK(ERR() == GL_NO_ERROR && draws == n + 1 && last_draw.nvertices == 4);
+	pv[0] = -1.001f; pv[1] = 0;
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(draws == n + 1);
+	e[0] = 0; e[1] = 15; e[2] = -20;
+	CHECK(mgl_point_size(&mgl_state, e, 0) == 16.0f);
+	e[1] = 0;
+	glEnable(GL_POINT_SMOOTH);
+	glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, no_att);
+	glPointSize(4);
+	pv[0] = 0;
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(last_draw.vertices[1].pt[0] == 2.5f && last_draw.vertices[1].pt[1] == -2.5f &&
+		last_draw.vertices[3].pt[0] == -2.5f && last_draw.vertices[3].pt[1] == 2.5f);
+	glDisable(GL_POINT_SMOOTH);
+
+	/* a NaN size is refused and the stored size stays; a non-finite one never leaves mgl_point_size */
+	glPointSize(4);
+	(void)ERR();
+	glPointSize(NAN);
+	CHECK(ERR() == GL_INVALID_VALUE && mgl_state.point_size == 4.0f);
+	mgl_state.point_size = NAN;
+	CHECK(mgl_point_size(&mgl_state, e, 0) == 1.0f && mgl_point_size(&mgl_state, e, 1) == 1.0f);
+	/* infinity from the state clamped by an infinite maximum, and from an infinite attenuation product */
+	mgl_state.point_size = INFINITY;
+	mgl_state.point_size_max = INFINITY;
+	CHECK(mgl_point_size(&mgl_state, e, 0) == 1.0f && mgl_point_size(&mgl_state, e, 1) == 1.0f);
+	mgl_state.point_size_max = MGL_POINT_ALIASED_MAX;
+	pv[0] = 5; pv[1] = 5;
+	for (j = 0; j < 2; j++)
+	{
+		if (j)
+		{
+			glEnable(GL_POINT_SMOOTH);
+		}
+		mgl_state.point_size = NAN;
+		glDrawArrays(GL_POINTS, 0, 1);
+		CHECK(ERR() == GL_NO_ERROR && last_draw.nvertices == 4 && isfinite(last_draw.vertices[0].pos[0]) &&
+			isfinite(last_draw.vertices[2].pos[1]) && isfinite(last_draw.vertices[2].pt[0]));
+	}
+	glDisable(GL_POINT_SMOOTH);
+	glPointSize(4);
+	/* a NaN position is dropped, not submitted */
+	n = draws;
+	pv[0] = NAN; pv[1] = 5;
+	glDrawArrays(GL_POINTS, 0, 1);
+	pv[0] = 5; pv[1] = NAN;
+	glDrawArrays(GL_POINTS, 0, 1);
+	CHECK(draws == n);
+
 	glDisable(GL_CULL_FACE);
 	glDisable(GL_POLYGON_OFFSET_FILL);
 	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
