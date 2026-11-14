@@ -717,6 +717,12 @@ test_textures(void)
 	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
 	CHECK(ERR() == GL_INVALID_OPERATION && tex_uploads == 3);
 
+	/* a 1x1 texture has one level: GL_GENERATE_MIPMAP must not reach the layer */
+	glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, 1);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+	CHECK(ERR() == GL_NO_ERROR && t->levels == 1 && last_levels == 1 && !last_up_gen);
+	glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, 0);
+
 	/* the unpack alignment reaches the conversion: RGB rows of one pixel, padded to 4, then not */
 	{
 		static const unsigned char rgb[] = {1, 2, 3, 0xAA, 4, 5, 6, 0xAA};
@@ -869,6 +875,9 @@ test_draw(void)
 	CHECK(last_draw.pipeline_key == (1u | (4u << 1) | (5u << 5) | (1u << 9) | (1u << 11)));
 	CHECK(mgl_blend_index(GL_ZERO) == 0 && mgl_blend_index(GL_SRC_ALPHA_SATURATE) == 10 &&
 		mgl_blend_index(GL_DST_COLOR) == 8 && mgl_blend_index(GL_KEEP) == -1);
+	/* the destination alpha pair, in the order of mgl_blend_factors in mgl_layer.m */
+	CHECK(mgl_blend_index(GL_DST_ALPHA) == 6 && mgl_blend_index(GL_ONE_MINUS_DST_ALPHA) == 7 &&
+		mgl_blend_index(GL_ONE_MINUS_DST_COLOR) == 9);
 
 	/* the texture unit off: untextured whatever is bound */
 	glDisable(GL_TEXTURE_2D);
@@ -896,6 +905,8 @@ test_draw(void)
 	CHECK(v[2].pos[0] == 5 && v[2].pos[1] == 6 && v[0].tc[0][0] == 0);
 	CHECK(v[0].color[0] == 1.0f && v[0].color[1] == 0.0f && v[0].color[2] == 0.2f && v[0].color[3] == 0.4f);
 	CHECK(v[2].color[0] == 1.0f / 255.0f && v[2].color[3] == 4.0f / 255.0f);
+	/* the largest element is assembled too */
+	CHECK(v[4].pos[0] == 9 && v[4].pos[1] == 10 && v[4].color[0] == 9.0f / 255.0f);
 	glDrawElements(GL_TRIANGLE_FAN, 4, GL_UNSIGNED_SHORT, elems);
 	CHECK(last_draw.nindices == 6 && last_draw.indices[0] == 3 && last_draw.indices[1] == 1 &&
 		last_draw.indices[2] == 2 && last_draw.indices[4] == 2 && last_draw.indices[5] == 4);
