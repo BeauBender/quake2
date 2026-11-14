@@ -47,6 +47,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <dlfcn.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -87,6 +88,7 @@ static id<MTLBuffer> mgl_readbuf;          /* shared, for glReadPixels */
 
 /* Counters, printed when the context is destroyed. */
 static unsigned long count_frames, count_no_drawable, count_skipped, count_ring_full;
+static atomic_ulong count_failed;          /* command buffers ended in error (mgl_watch) */
 
 #define MGL_FRAMES_IN_FLIGHT 3
 
@@ -342,6 +344,7 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 	}
 
 	count_frames = count_no_drawable = count_skipped = count_ring_full = 0;
+	atomic_store(&count_failed, 0);
 	mgl_ready = 1;
 	return 1;
 }
@@ -386,6 +389,36 @@ mgl_new_texture(MTLPixelFormat format, int w, int h, MTLTextureUsage usage)
 	return [mgl_device newTextureWithDescriptor:d];
 }
 
+/*
+ * Reports a command buffer that ends in error (a GPU fault, a timeout, or
+ * a fault the shader validation layer found), which would otherwise draw
+ * nothing and say nothing: the first MGL_FAILED_LOGGED are logged, all are
+ * counted and the count is printed when the context is destroyed. Called
+ * before every commit.
+ */
+#define MGL_FAILED_LOGGED 8
+
+static void
+mgl_watch(id<MTLCommandBuffer> cmd)
+{
+	[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
+		unsigned long n;
+
+		if (b.status != MTLCommandBufferStatusError)
+		{
+			return;
+		}
+
+		n = atomic_fetch_add(&count_failed, 1);
+
+		if (n < MGL_FAILED_LOGGED)
+		{
+			fprintf(stderr, "mgl: a command buffer failed: %s\n",
+					b.error ? b.error.localizedDescription.UTF8String : "no error given");
+		}
+	}];
+}
+
 /* Commits cmd and waits for it, at most MGL_GPU_WAIT_MS. */
 static int
 mgl_commit_wait(id<MTLCommandBuffer> cmd)
@@ -393,6 +426,7 @@ mgl_commit_wait(id<MTLCommandBuffer> cmd)
 	dispatch_semaphore_t done = dispatch_semaphore_create(0);
 	long r;
 
+	mgl_watch(cmd);
 	[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 		(void)b;
 		dispatch_semaphore_signal(done);
@@ -415,6 +449,7 @@ mgl_commit_uploads(void)
 
 	if (upload_cmd)
 	{
+		mgl_watch(upload_cmd);
 		[upload_cmd commit];
 		upload_cmd = nil;
 	}
@@ -828,6 +863,7 @@ mgl_layer_present(void)
 				[frame_cmd presentDrawable:frame_drawable];
 			}
 
+			mgl_watch(frame_cmd);   /* first: it counts before the slot is given back */
 			[frame_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 				(void)b;
 				dispatch_semaphore_signal(sem);
@@ -873,6 +909,7 @@ mgl_layer_destroy(void)
 			dispatch_semaphore_t sem = mgl_frame_sem;
 
 			mgl_end_encoder();
+			mgl_watch(frame_cmd);   /* first: it counts before the wait below returns */
 			[frame_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 				(void)b;
 				dispatch_semaphore_signal(sem);
@@ -897,6 +934,11 @@ mgl_layer_destroy(void)
 
 		fprintf(stderr, "mgl: %lu frames, %lu without a drawable, %lu skipped, %lu draws past the vertex ring\n",
 				count_frames, count_no_drawable, count_skipped, count_ring_full);
+
+		if (atomic_load(&count_failed))
+		{
+			fprintf(stderr, "mgl: %lu command buffers failed\n", atomic_load(&count_failed));
+		}
 
 		mgl_release_all();
 	}
