@@ -1414,3 +1414,147 @@ an entity (N7; the sampler's bound, `rm_lp_coords`, is in place since N5,
 a precondition N7 inherits already satisfied),
 `R_AddDynamicLights` between the styles and the store, the flash blobs and
 stencil shadows (N8).
+
+## 21. As built: N6, sky, warped water, translucent and flowing surfaces (TASK89)
+
+What exists:
+
+- **`rm_warp.c`** (from `gl1_warp.c` and the batching of `gl1_buffer.c`):
+  the sky state and box, the warp subdivision, the water's per-frame
+  vertices and the batch of per-frame vertices every class below is drawn
+  from. The arithmetic is in `rm_pure.c`, each piece host-tested against a
+  copy of gl1's own code: `rm_warp_subdivide` (gl1's `R_SubdividePolygon`),
+  `rm_warp_index`, `rm_warp_scroll`, `rm_flow_scroll`, `rm_warp_st` (the
+  turbulence), `rm_sky_clip` (`R_ClipSkyPolygon`, `R_DrawSkyPolygon`),
+  `rm_sky_prepare`, `rm_sky_face_visible`, `rm_sky_vec` (`R_MakeSkyVec`),
+  `rm_sky_matrix`, `rm_trans_alpha`, `rm_trans_color`, `rm_warp_color`,
+  `rm_alpha_break`; the shader's modulate is `mtl_world_color`
+  (`common/mtl_shader_math.h`), held equal to the shim's `GL_MODULATE`.
+- **The subdivision** runs at registration, in `RM_BuildWorld` (it needs
+  the world's buffers, which `Mod_LoadFaces` does not have yet), and keeps
+  the pieces beside the retained buffers (`rm_world_t.wverts`, `wpolys`,
+  freed with the world). The retained vertex buffer still holds the flat
+  polygon of a warped surface, so the ray-tracing design's flat water is
+  unchanged; the pieces are what the per-frame warp reads.
+- **Per-frame vertices**: a batch of at most 4,096 vertices and 12,288
+  indices (`RM_DYN_MAX_VERTS`, `RM_DYN_MAX_INDICES`) built on the CPU
+  and drawn through `rmb_draw_world_dyn`, which copies them into the frame
+  ring: the warped water (turbulence per vertex, as `R_EmitWaterPolys`),
+  the flowing surfaces (the retained fan with its s coordinate moved by the
+  scroll) and the translucent ones. The batch is drawn when the state
+  changes (`rm_alpha_break`: another texture or alpha, as gl1's
+  `R_UpdateGLBuffer`; here also another kind, colour or slice), when the
+  next fan does not fit and at the end of a run.
+- **Order**, as gl1's: a flowing surface is drawn in its place in its
+  chain (the run before it, then the surface, then the run after it, so
+  overlapping surfaces resolve as in gl1); the warped surfaces after all
+  chains, one batch per chain; the sky box after them; the translucent
+  surfaces last (`R_DrawAlphaSurfaces`, called by `R_RenderView` after
+  `R_DrawWorld`, before the screen blend), blended with depth writes, the
+  chain walked from its head, which is the last surface the walk visited.
+- **State**: two pipelines beside the three of N4 and N5
+  (`world_tex` with a colour, blended and not; `RM_PIPE_WORLD_TEXC`,
+  `RM_PIPE_WORLD_TEXC_BLEND`), 17 in all, built in `InitContext`, none
+  after (`metal_stats`). An opaque warped surface is gl1's
+  `GL_MODULATE` with the inverse intensity (`gl1_intensity`, gamma over
+  intensity, taken once at `R_InitImages` as gl1 does) or, with
+  `gl1_overbrightbits`, `GL_COMBINE` at scale 1 on white, which is the
+  texel (`rm_warp_color`); a translucent one has the inverse intensity in
+  the colour and 0.33 or 0.66 in its alpha. The sky and the
+  fullbright flowing surfaces are `world_tex` as before; a lit flowing
+  surface is `world_lm` with the scrolled coordinates.
+- **gl1 behaviours kept that the card did not name**: gl1's `RI_Init`
+  halves its turbulence table in place (`r_turbsin[j] *= 0.5`), so the
+  water uses half of `constants/warpsin.h`'s values (found by printing both
+  renderers' warped coordinates for the same vertices on `world` frame 21:
+  same indices, half the table; the first pin run was 0.000660 score, bad
+  0.004626 there); `R_RecursiveWorldNode` sets a translucent surface's
+  `texinfo->image` to the animated image, which the next frame's
+  animation starts from (kept, as the design section 19 said it would be);
+  the two scrolls differ (water `-64 * frac(t / 2)`, flowing polygons `-64 *
+  frac(t / 40)` or -64 where that is 0); and the sky's texture
+  coordinates are clamped to 1/512 and 511/512 with t flipped.
+
+Bounds on untrusted data (every one a pure function or a check before the
+data is used, each with a host-test case at its limit and past it):
+
+| Input | Bound | When refused |
+|---|---|---|
+| a warped surface's vertices | 3 to 60 (gl1's `MAX_SUBDIVIDE_VERTS`, which drops the map), each coordinate finite and within +-9999 (gl1's `R_BoundPoly` starts its bounds there: a polygon outside them would be cut forever) | the map is refused (`RM_Refuse`) |
+| the pieces of one surface | 20,000 pieces, 262,144 vertices; a piece of more than 60 vertices (a non-convex polygon can make one) | the map is refused |
+| the pieces of one map | 1,048,576 vertices (20 MB of floats), a third as many pieces | the map is refused |
+| the recursion | depth 64 and 100,000 calls (unreachable under the caps above; defence in depth) | the map is refused |
+| a sky surface's vertices | at most 62 (gl1's `MAX_CLIP_VERTS - 2`, which drops the map in `R_ClipSkyPolygon`), checked before the copy into the clip's buffers (gl1's `R_AddSkySurface` copies into 64 unchecked) and again on entry to the clip and to each stage | the surface is not added to the box and counts as a skipped sky surface; the map loads |
+| the clip's new vertices | never past 64 per side: a polygon that is not convex can cross a plane at every edge | as above |
+| the sky name | 1 to 40 characters of letters, digits, `_`, `-`, `.`; no leading `.`, no `..` (`rm_sky_name_ok`): no path reaches `GetSkyImage` | the six faces use `r_notexture`, as when no image loads |
+| the sky rotation and axis | finite (`rm_sky_params_ok`) | no rotation |
+| the sky and water images | the sizes the image loader already bounds (`rm_upload_bytes`, `RMB_MAX_TEXTURE_SIDE`); a face whose image has no texture is a skipped draw | the draw is skipped and counted |
+| the per-frame batch | 4,096 vertices and 12,288 indices per draw, an index below its vertex count, a fan of 3 to 4,096 vertices (`rmb_draw_world_dyn`; a translucent polygon of 4,097 vertices is skipped and counted) | the draw is skipped and counted |
+| the truncations of gl1's turbulence and scrolls | a time or coordinate that is not an int is saturated or taken modulo 256 (gl1's cast is undefined there) | nothing refused |
+
+After a refused load nothing of the map survives: `RM_Refuse` frees its
+slot, hunk, file and retained buffers (`RM_FreeWorld` now also frees the
+pieces), as for every refusal of N4 and N5; no pipeline is created after
+start-up; a draw that cannot be made is skipped and counted, never
+written past a ring or a buffer.
+
+Measured on the build VM (T0), source `316d2b62` (`6ce9c350` and the next commits add only host tests, comments and docs; the `ASAN=1` records are of `6ce9c350`), load averages 14 to 28
+(a shared host), every record with `MTL_DEBUG_LAYER=1` and `PINS_TRACE=0`,
+references recorded at that source in a private store:
+
+| What | Result |
+|---|---|
+| `compare metal world --ref gl1-metal --threshold 0.005 --bad-threshold 0.001` | all 23 frames score 0.000000, bad 0.000000 (frames 0 to 22: no frame excluded, 19 to 22 included; before this card 21 was at 0.049742 and 22 at 0.000631) |
+| `skywater` (`demo1.dm2`), same values | all 23 frames 0.000000, bad 0.000000 |
+| `world-fullbright`, same values | all 23 frames ok: score 0, bad 0 to 0.000013 on frames 0, 1, 10, 16 and 22 (N4's residue) |
+| `hud2d` (23 frames), `cinematic` (`PINS_DEMO=idlog.cin PINS_EVERY=7`, 12 frames) | score 0, bad 0 |
+| `skywater` with `PINS_DEMO=water.dm2` (made by `make-demo water`, 99 messages), `--threshold 0.02 --bad-threshold 0.03`, default cadence (4 frames) and `PINS_EVERY=5` (19 frames) | `gl1-metal` run 2 against run 1: 0 on all 4; `metal` against `gl1-metal`: 0 on all 4 and on all 19 |
+| `world` on `demo2.dm2`, `PINS_EVERY=7` (89 frames), same tight values | all ok, worst score 0.000001, worst bad 0.000013 (frames 8, 12, 15 and 26, excluded in N5 for warped surfaces, now ok) |
+| the flowing path (the demos have no flowing opaque surface: `metal_stats` and a scratch counter saw none) | a scratch patch to both renderers marking every fifth texinfo `SURF_FLOWING` (never committed; 66,451 flowing draws over `demo1.dm2`): `world` and `world-fullbright` 23 of 23 frames at score 0 (fullbright worst bad 0.000007) |
+| the `ASAN=1` build | `world` 23 of 23 at score 0 and `skywater` from `water.dm2` 19 of 19 at 0; no sanitizer line |
+| validation and teardown, every record | `engine.log` holds only `Metal API Validation Enabled` and `0 live objects` (texture 201/201 or 230/230, buffer 8/8, `0 unreleased`, `0 unmatched`) |
+| `metal_stats 1` (hand runs; it prints into the frame) | `world` and `skywater` from `water.dm2`: every line `skipped surfaces: 0 sky, 0 warped, 0 translucent, 0 flowing`, `0 draws skipped`, `17 pipelines, 0 created after init` |
+| timedemo of `world` (`demo1.dm2`, 689 frames, 0.6 s, no validation layer), the same engine, `ref_metal` of `07b7ed88` and of this card alternated, three runs each | before 1179.8, 1144.5 and 1241.4 fps, after 1230.4, 1000.0 and 1163.9 fps, load 20 to 28 (too noisy to resolve a few percent: the frames now draw the sky, the water and the translucent surfaces, which the base did not) |
+| `tests/check-ref-metal.sh` | host test 872 checks, 0 failed (576 in N5's measurement); 877 after the review rework |
+| mutants of N6's pure code (a script applying each to a scratch copy and running the host test) | 199 mutants of `rm_pure.c` and `mtl_world_color`: 193 killed. The first runs left 16 alive; each led to a case (exact values at the saturation of the truncation, structured polygons against gl1's functions for the subdivision and the sky clip (vertices on a plane, 0.15 off it, 7 and 8 units from a grid plane), the sky matrix with a turned world and a non-z axis, each end of the sky-name classes, a polygon whose clip leaves 64 vertices, a face with one empty side, the modulate's alpha). Six are equivalent: the `numverts < 1` guard of an emitted piece (a cut never leaves a side empty), `c->nv > c->out_cap` (an invariant of the check after it), the recursion's depth and call bounds (unreachable under the coordinate and piece caps), the bounds' start of 99999 for 9999 (the coordinate bound makes it irrelevant) and the scan limit of `strnlen` (`+ 2` for `+ 1`: both refuse the same lengths) |
+| a scratch sanitizer harness (the real `rm_model.c`, `rm_surf.c`, `rm_warp.c`, `rm_pure.c`, `rm_lightmap.c`, `rm_light.c`, the shared loaders, ASAN, UBSAN and the float-cast check; back-end stubs that abort on a per-frame draw outside its contract) | N5's 76 cases with the same verdicts, and 32 new ones: warped surfaces with NaN, 1e30, 10000 and 9999 coordinates, of 60, 61, 70 vertices, a diamond of 8,192 units (accepted, 297,243 indices per frame) and one of 19,980 (refused for its pieces), 21 and 22 such surfaces (the map cap), sky surfaces of 62, 63, 70, 80 vertices and a star polygon, translucent surfaces of 4,096, 4,097 and 4,098 vertices, flowing and mixed classes: each refused or drawn as expected, the 63-vertex sky skipped and counted. All 39 maps of `pak0.pak` are accepted and drawn. 400,000 mutated inputs (two seeds; faces, texinfo flags and vectors, vertices as floats, lighting, nodes and leafs mutated; three faces of five vertices; nothing pinned; 194,520 accepted and drawn, 7.8 million indices through the per-frame draws in 240,000 draws) gave no sanitizer report and no hang. Of 14 mutants of the bounds, 8 are reported by the harness at once (a heap or stack overflow, a hang or a verdict that changes), 3 by the host test (the clip's new-vertex guard, the piece's vertex bound, the table's index mask), 2 are the same check stated twice (the clip's entry check beside the caller's, the subdivision's entry check beside `RM_SubdivideSurface`'s) and 1 is the recursion's unreachable depth bound |
+
+Files changed outside the card's scope list, each needed by it:
+`Makefile` (`rm_warp` in `ref_metal`'s objects), `rmb_encode.m` and
+`rmb_resource.m` (the per-frame draw and two pipelines), `header/local.h`
+(the view struct `rm_view_t`: `R_DrawWorld` takes the world matrix, the
+projection and their product, which the sky needs), `header/model.h`,
+`header/rmb.h`, `rm_main.c` (the view, the alpha surfaces and `SetSky`),
+`rm_image.c` (the inverse intensity), `rm_pure.c`,
+`common/mtl_shader_math.h` (shared with the shim, which does not use the
+new function; `tests/check-metal-shim.sh` unchanged), `tests/metal/rm_host_shim.c`
+and `doc/040_cvarlist.md`. No cvar was added.
+
+The implementer did not run the full gate (`scripts/test.sh`): the host
+limits of this card keep it to the orchestrator; the checks above are its
+parts that this change touches. The change is about 3,000 lines of code
+and tests against the card's estimate of 800 (earlier cards ran 2.5 to 3
+times theirs): about 800 are the pure arithmetic and its bounds in
+`rm_pure.c`, 500 `rm_warp.c`, 170 in `rm_surf.c`, 200 of declarations and
+contracts in `rmb.h`, 120 the back end, and 1,130 the host test (copies of
+gl1's functions as references, structured and random differentials, the
+limits).
+
+Left for N7 and later: the brush entities (`R_DrawInlineBModel` adds its
+translucent surfaces to `r_alpha_surfaces`, and its flowing ones scroll as
+here; N7 reuses `RM_DynPoly`, `RM_EmitWaterPolys` and the chain), alias
+models, the entity list between the world and the alpha surfaces,
+dynamic lights (N8), particles (N9).
+
+Review fixes: the fan centre of a warped piece is multiplied by a float
+scale as gl1's `VectorScale` does (the host reference now calls the real
+`VectorScale`); the world's animation frame is `rm_world_frame`, a
+saturating truncation. The skipped-surface counts are per batch: when a
+surface's fans straddle a flush and the ring is exhausted, a refused batch
+adds the surfaces it held, so the count can be off by the straddling
+surface (the draw skip itself is exact: `draws skipped` in `metal_stats`).
+The `gl1-metal` references were recorded at this card's own commit, which
+is equivalent to its base because no gl1 or shim file changed.
+The two sky face tables are read through an index checked to be 0..2
+(`rm_sky_vec`, `rm_sky_draw_polygon`), after CI's Cppcheck could not prove
+the lookups in bounds; the results are bit-identical for every table entry.

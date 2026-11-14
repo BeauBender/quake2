@@ -137,6 +137,11 @@ rmb_new_pipe_3d(rm_pipe3d_t which, NSError **e)
 		vf = [library newFunctionWithName:@"rm_vertex_world"];
 		ff = [library newFunctionWithName:@"rm_fragment_world_lm"];
 	}
+	else if ((which == RM_PIPE_WORLD_TEXC) || (which == RM_PIPE_WORLD_TEXC_BLEND))
+	{
+		vf = [library newFunctionWithName:@"rm_vertex_world"];
+		ff = [library newFunctionWithName:@"rm_fragment_world_color"];
+	}
 	else
 	{
 		vf = [library newFunctionWithName:@"rm_vertex_color"];
@@ -154,7 +159,7 @@ rmb_new_pipe_3d(rm_pipe3d_t which, NSError **e)
 	d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
 	d.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
 
-	if (which == RM_PIPE_COLOR_BLEND)
+	if ((which == RM_PIPE_COLOR_BLEND) || (which == RM_PIPE_WORLD_TEXC_BLEND))
 	{
 		/* gl1's glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA), for colour and alpha */
 		d.colorAttachments[0].blendingEnabled = YES;

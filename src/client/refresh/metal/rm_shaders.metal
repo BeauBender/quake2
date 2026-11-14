@@ -180,6 +180,22 @@ rm_rgba(float4 v)
 }
 
 /*
+ * world_tex with a colour (N6): GL_MODULATE of the colour the vertex
+ * function carries (glColor4f, saturated as the shim's fragment function
+ * does) and the texel (mtl_world_color, held equal to the shim's by the
+ * host test); the pipeline blends or not.
+ */
+fragment float4
+rm_fragment_world_color(rm_varying3d in [[stage_in]],
+		texture2d<float> tex [[texture(0)]],
+		sampler smp [[sampler(0)]])
+{
+	mtl_rgba_t c = mtl_world_color(rm_rgba(saturate(in.color)), rm_rgba(tex.sample(smp, in.uv)));
+
+	return float4(c.r, c.g, c.b, c.a);
+}
+
+/*
  * world_lm (N5): gl1's two texture units on its multitexture path, the
  * diffuse texel replacing the colour and the lightmap slice's texel
  * applied by gl1's lightmap environment (mtl_world_lm, the arithmetic the

@@ -26,6 +26,7 @@
  * =======================================================================
  */
 
+#include <limits.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -1620,4 +1621,847 @@ rm_reopen_t
 rm_split_reopen(int pass_open, int pass_depth)
 {
 	return (pass_open && pass_depth) ? RM_REOPEN_3D_KEEP : RM_REOPEN_NONE;
+}
+
+/* ---- sky, warped water, flowing and translucent surfaces (N6) --------------------- */
+
+/*
+ * gl1's TURBSCALE and its table, constants/warpsin.h (included by
+ * gl1_warp.c as r_turbsin), which gl1's RI_Init halves in place before
+ * the first frame: the values the water uses are half of the file's.
+ */
+#define RM_TURBSCALE (256.0 / (2 * M_PI))
+
+static const float rm_turbsin[RM_TURB_SIZE] = {
+#include "../constants/warpsin.h"
+};
+
+float
+rm_turb_sin(int i)
+{
+	return rm_turbsin[i & (RM_TURB_SIZE - 1)] * 0.5;
+}
+
+/* the int a double truncates to as gl1's (int) cast does, where that is defined; saturated, a NaN is 0, elsewhere */
+static int
+rm_itrunc(double d)
+{
+	if (d != d)
+	{
+		return 0;
+	}
+
+	if (d >= 2147483647.0)
+	{
+		return INT_MAX;
+	}
+
+	if (d <= -2147483648.0)
+	{
+		return INT_MIN;
+	}
+
+	return (int)d;
+}
+
+int
+rm_warp_index(float c, float time)
+{
+	double x = (c * 0.125 + time) * RM_TURBSCALE;
+
+	if (x != x)
+	{
+		return 0;
+	}
+
+	/* gl1 converts the value to an int unchecked; the table is periodic, so take it modulo its period */
+	if ((x >= 2147483647.0) || (x <= -2147483648.0))
+	{
+		x = fmod(x, (double)RM_TURB_SIZE);
+
+		if (x != x)
+		{
+			return 0;   /* an infinity */
+		}
+	}
+
+	return (int)x & (RM_TURB_SIZE - 1);
+}
+
+float
+rm_warp_scroll(float time, int flowing)
+{
+	if (!flowing)
+	{
+		return 0;
+	}
+
+	return -64 * ((time * 0.5) - rm_itrunc(time * 0.5));
+}
+
+float
+rm_flow_scroll(float time)
+{
+	float scroll = -64 * ((time / 40.0) - rm_itrunc(time / 40.0));
+
+	if (scroll == 0.0)
+	{
+		scroll = -64.0;
+	}
+
+	return scroll;
+}
+
+void
+rm_warp_st(float os, float ot, float time, float scroll, float *s, float *t)
+{
+	float ss, tt;
+
+	ss = os + rm_turb_sin(rm_warp_index(ot, time)) + scroll;
+	tt = ot + rm_turb_sin(rm_warp_index(os, time));
+
+	*s = ss * (1.0 / 64);
+	*t = tt * (1.0 / 64);
+}
+
+/* ---- the warp subdivision ---- */
+
+/* the vertices a piece may have after its cut: at most two per vertex it had, and it had RM_WARP_MAX_VERTS */
+#define RM_WARP_CLIP 128
+
+typedef struct
+{
+	const float *vec0, *vec1;
+	float *out;
+	unsigned long out_cap, nv;
+	unsigned *polylen;
+	unsigned poly_cap, np;
+	unsigned long calls;
+	int failed;
+} rm_warp_ctx_t;
+
+static void
+rm_warp_piece(rm_warp_ctx_t *c, int numverts, float *verts, int depth)
+{
+	int i, j, k;
+	float mins[3], maxs[3];
+	float m;
+	float *v;
+	float front[RM_WARP_CLIP][3], back[RM_WARP_CLIP][3];
+	int f, b;
+	float dist[RM_WARP_MAX_VERTS + 1];
+	float frac;
+	float s, t;
+	float total[3];
+	float total_s, total_t;
+	float *o;
+
+	if (c->failed)
+	{
+		return;
+	}
+
+	if ((++c->calls > RM_WARP_MAX_CALLS) || (depth > RM_WARP_MAX_DEPTH) || (numverts > RM_WARP_MAX_VERTS) ||
+		(numverts < 0))
+	{
+		c->failed = 1;
+		return;
+	}
+
+	/* gl1's R_BoundPoly */
+	mins[0] = mins[1] = mins[2] = 9999;
+	maxs[0] = maxs[1] = maxs[2] = -9999;
+	v = verts;
+
+	for (i = 0; i < numverts; i++)
+	{
+		for (j = 0; j < 3; j++, v++)
+		{
+			if (*v < mins[j])
+			{
+				mins[j] = *v;
+			}
+
+			if (*v > maxs[j])
+			{
+				maxs[j] = *v;
+			}
+		}
+	}
+
+	for (i = 0; i < 3; i++)
+	{
+		m = (mins[i] + maxs[i]) * 0.5;
+		m = RM_WARP_SIZE * floor(m / RM_WARP_SIZE + 0.5);
+
+		if (maxs[i] - m < 8)
+		{
+			continue;
+		}
+
+		if (m - mins[i] < 8)
+		{
+			continue;
+		}
+
+		/* cut it */
+		v = verts + i;
+
+		for (j = 0; j < numverts; j++, v += 3)
+		{
+			dist[j] = *v - m;
+		}
+
+		/* wrap cases */
+		dist[j] = dist[0];
+		v -= i;
+		v[0] = verts[0];
+		v[1] = verts[1];
+		v[2] = verts[2];
+
+		f = b = 0;
+		v = verts;
+
+		for (j = 0; j < numverts; j++, v += 3)
+		{
+			if (dist[j] >= 0)
+			{
+				front[f][0] = v[0];
+				front[f][1] = v[1];
+				front[f][2] = v[2];
+				f++;
+			}
+
+			if (dist[j] <= 0)
+			{
+				back[b][0] = v[0];
+				back[b][1] = v[1];
+				back[b][2] = v[2];
+				b++;
+			}
+
+			if ((dist[j] == 0) || (dist[j + 1] == 0))
+			{
+				continue;
+			}
+
+			if ((dist[j] > 0) != (dist[j + 1] > 0))
+			{
+				/* clip point */
+				frac = dist[j] / (dist[j] - dist[j + 1]);
+
+				for (k = 0; k < 3; k++)
+				{
+					front[f][k] = back[b][k] = v[k] + frac * (v[3 + k] - v[k]);
+				}
+
+				f++;
+				b++;
+			}
+		}
+
+		rm_warp_piece(c, f, front[0], depth + 1);
+		rm_warp_piece(c, b, back[0], depth + 1);
+		return;
+	}
+
+	/* a piece with no vertex has no fan (gl1 would divide by 0 for its centre) */
+	if (numverts < 1)
+	{
+		return;
+	}
+
+	if ((c->np >= c->poly_cap) || (c->nv > c->out_cap) || ((unsigned long)numverts + 2 > c->out_cap - c->nv))
+	{
+		c->failed = 1;
+		return;
+	}
+
+	/* add a point in the center to help keep warp valid */
+	o = c->out + c->nv * RM_WARP_FLOATS;
+	total[0] = total[1] = total[2] = 0;
+	total_s = 0;
+	total_t = 0;
+
+	for (i = 0; i < numverts; i++, verts += 3)
+	{
+		o[(i + 1) * RM_WARP_FLOATS] = verts[0];
+		o[(i + 1) * RM_WARP_FLOATS + 1] = verts[1];
+		o[(i + 1) * RM_WARP_FLOATS + 2] = verts[2];
+		s = verts[0] * c->vec0[0] + verts[1] * c->vec0[1] + verts[2] * c->vec0[2];
+		t = verts[0] * c->vec1[0] + verts[1] * c->vec1[1] + verts[2] * c->vec1[2];
+
+		total_s += s;
+		total_t += t;
+		total[0] = verts[0] + total[0];
+		total[1] = verts[1] + total[1];
+		total[2] = verts[2] + total[2];
+
+		o[(i + 1) * RM_WARP_FLOATS + 3] = s;
+		o[(i + 1) * RM_WARP_FLOATS + 4] = t;
+	}
+
+	{
+		/* gl1's VectorScale takes its scale as a float */
+		float scale = 1.0 / numverts;
+
+		o[0] = total[0] * scale;
+		o[1] = total[1] * scale;
+		o[2] = total[2] * scale;
+	}
+	o[3] = total_s / numverts;
+	o[4] = total_t / numverts;
+
+	/* copy first vertex to last */
+	memcpy(o + (numverts + 1) * RM_WARP_FLOATS, o + RM_WARP_FLOATS, RM_WARP_FLOATS * sizeof(float));
+
+	c->polylen[c->np++] = (unsigned)numverts + 2;
+	c->nv += (unsigned long)numverts + 2;
+}
+
+int
+rm_warp_subdivide(const float *verts, int numverts, const float *vec0, const float *vec1,
+		float *out, unsigned long out_cap, unsigned *polylen, unsigned poly_cap,
+		unsigned *npolys, unsigned long *nverts)
+{
+	rm_warp_ctx_t c;
+	float top[(RM_WARP_MAX_VERTS + 1) * 3];
+	int i;
+
+	*npolys = 0;
+	*nverts = 0;
+
+	if ((numverts < 3) || (numverts > RM_WARP_MAX_VERTS))
+	{
+		return 0;
+	}
+
+	/* gl1's bounds of a polygon start at +-9999: a coordinate outside them, or not a number, is refused */
+	for (i = 0; i < numverts * 3; i++)
+	{
+		if (!(fabsf(verts[i]) <= RM_WARP_COORD_MAX))
+		{
+			return 0;
+		}
+
+		top[i] = verts[i];
+	}
+
+	memset(&c, 0, sizeof(c));
+	c.vec0 = vec0;
+	c.vec1 = vec1;
+	c.out = out;
+	c.out_cap = out_cap;
+	c.polylen = polylen;
+	c.poly_cap = poly_cap;
+
+	rm_warp_piece(&c, numverts, top, 0);
+
+	if (c.failed)
+	{
+		return 0;
+	}
+
+	*npolys = c.np;
+	*nverts = c.nv;
+	return 1;
+}
+
+/* ---- the sky box ---- */
+
+static const float rm_skyclip[6][3] = {
+	{1, 1, 0},
+	{1, -1, 0},
+	{0, -1, 1},
+	{0, 1, 1},
+	{1, 0, 1},
+	{-1, 0, 1}
+};
+
+static const int rm_st_to_vec[6][3] = {
+	{3, -1, 2},
+	{-3, 1, 2},
+
+	{1, 3, 2},
+	{-1, -3, 2},
+
+	{-2, -1, 3}, /* 0 degrees yaw, look straight up */
+	{2, -1, -3} /* look straight down */
+};
+
+static const int rm_vec_to_st[6][3] = {
+	{-2, 3, 1},
+	{2, 3, -1},
+
+	{1, 3, 2},
+	{-1, 3, -2},
+
+	{-2, -1, 3},
+	{-2, 1, -3}
+};
+
+static const int rm_skytexorder[6] = {0, 2, 1, 3, 4, 5};
+
+void
+rm_sky_clear(rm_skybounds_t *b)
+{
+	int i;
+
+	for (i = 0; i < 6; i++)
+	{
+		b->mins[0][i] = b->mins[1][i] = 9999;
+		b->maxs[0][i] = b->maxs[1][i] = -9999;
+	}
+}
+
+/* gl1's R_DrawSkyPolygon: the face the fully clipped polygon maps to, and its bounds grown */
+static void
+rm_sky_draw_polygon(rm_skybounds_t *b, int nump, const float *vecs)
+{
+	int i, j, idx;
+	float v[3], av[3];
+	float s, t, dv;
+	int axis;
+	const float *vp;
+
+	/* decide which face it maps to */
+	v[0] = v[1] = v[2] = 0;
+
+	for (i = 0, vp = vecs; i < nump; i++, vp += 3)
+	{
+		v[0] = vp[0] + v[0];
+		v[1] = vp[1] + v[1];
+		v[2] = vp[2] + v[2];
+	}
+
+	av[0] = fabs(v[0]);
+	av[1] = fabs(v[1]);
+	av[2] = fabs(v[2]);
+
+	if ((av[0] > av[1]) && (av[0] > av[2]))
+	{
+		axis = (v[0] < 0) ? 1 : 0;
+	}
+	else if ((av[1] > av[2]) && (av[1] > av[0]))
+	{
+		axis = (v[1] < 0) ? 3 : 2;
+	}
+	else
+	{
+		axis = (v[2] < 0) ? 5 : 4;
+	}
+
+	/* project new texture coords */
+	for (i = 0; i < nump; i++, vecs += 3)
+	{
+		j = rm_vec_to_st[axis][2];
+		idx = (j > 0) ? (j - 1) : (-j - 1);
+
+		if ((idx < 0) || (idx > 2))
+		{
+			return;
+		}
+
+		dv = (j > 0) ? vecs[idx] : -vecs[idx];
+
+		if (dv < 0.001)
+		{
+			continue; /* don't divide by zero */
+		}
+
+		j = rm_vec_to_st[axis][0];
+		idx = (j < 0) ? (-j - 1) : (j - 1);
+
+		if ((idx < 0) || (idx > 2))
+		{
+			return;
+		}
+
+		s = (j < 0) ? -vecs[idx] / dv : vecs[idx] / dv;
+
+		j = rm_vec_to_st[axis][1];
+		idx = (j < 0) ? (-j - 1) : (j - 1);
+
+		if ((idx < 0) || (idx > 2))
+		{
+			return;
+		}
+
+		t = (j < 0) ? -vecs[idx] / dv : vecs[idx] / dv;
+
+		if (s < b->mins[0][axis])
+		{
+			b->mins[0][axis] = s;
+		}
+
+		if (t < b->mins[1][axis])
+		{
+			b->mins[1][axis] = t;
+		}
+
+		if (s > b->maxs[0][axis])
+		{
+			b->maxs[0][axis] = s;
+		}
+
+		if (t > b->maxs[1][axis])
+		{
+			b->maxs[1][axis] = t;
+		}
+	}
+}
+
+/* gl1's R_ClipSkyPolygon on vecs, which holds room for nump + 1 vertices (the wrap vertex is written) */
+static int
+rm_sky_clip_stage(rm_skybounds_t *b, int nump, float *vecs, int stage)
+{
+	const float *norm;
+	float *v;
+	int front, back;
+	float d, e;
+	float dists[RM_SKY_MAX_VERTS];
+	int sides[RM_SKY_MAX_VERTS];
+	float newv[2][RM_SKY_MAX_VERTS][3];
+	int newc[2];
+	int i, j;
+
+	if ((nump < 0) || (nump > RM_SKY_MAX_VERTS - 2))
+	{
+		return 0;
+	}
+
+	if (stage == 6)
+	{
+		/* fully clipped, so draw it */
+		rm_sky_draw_polygon(b, nump, vecs);
+		return 1;
+	}
+
+	front = back = 0;
+	norm = rm_skyclip[stage];
+
+	for (i = 0, v = vecs; i < nump; i++, v += 3)
+	{
+		d = v[0] * norm[0] + v[1] * norm[1] + v[2] * norm[2];
+
+		if (d > 0.1)
+		{
+			front = 1;
+			sides[i] = 0;   /* SIDE_FRONT */
+		}
+		else if (d < -0.1)
+		{
+			back = 1;
+			sides[i] = 1;   /* SIDE_BACK */
+		}
+		else
+		{
+			sides[i] = 2;   /* SIDE_ON */
+		}
+
+		dists[i] = d;
+	}
+
+	if (!front || !back)
+	{
+		/* not clipped */
+		return rm_sky_clip_stage(b, nump, vecs, stage + 1);
+	}
+
+	/* clip it */
+	sides[i] = sides[0];
+	dists[i] = dists[0];
+	vecs[i * 3] = vecs[0];
+	vecs[i * 3 + 1] = vecs[1];
+	vecs[i * 3 + 2] = vecs[2];
+	newc[0] = newc[1] = 0;
+
+	for (i = 0, v = vecs; i < nump; i++, v += 3)
+	{
+		/* a polygon that is not convex can cross a plane more often than a convex one: never past the buffers */
+		if ((newc[0] >= RM_SKY_MAX_VERTS - 1) || (newc[1] >= RM_SKY_MAX_VERTS - 1))
+		{
+			return 0;
+		}
+
+		switch (sides[i])
+		{
+			case 0:
+				memcpy(newv[0][newc[0]], v, 3 * sizeof(float));
+				newc[0]++;
+				break;
+			case 1:
+				memcpy(newv[1][newc[1]], v, 3 * sizeof(float));
+				newc[1]++;
+				break;
+			default:
+				memcpy(newv[0][newc[0]], v, 3 * sizeof(float));
+				newc[0]++;
+				memcpy(newv[1][newc[1]], v, 3 * sizeof(float));
+				newc[1]++;
+				break;
+		}
+
+		if ((sides[i] == 2) || (sides[i + 1] == 2) || (sides[i + 1] == sides[i]))
+		{
+			continue;
+		}
+
+		d = dists[i] / (dists[i] - dists[i + 1]);
+
+		for (j = 0; j < 3; j++)
+		{
+			e = v[j] + d * (v[j + 3] - v[j]);
+			newv[0][newc[0]][j] = e;
+			newv[1][newc[1]][j] = e;
+		}
+
+		newc[0]++;
+		newc[1]++;
+	}
+
+	/* continue */
+	return rm_sky_clip_stage(b, newc[0], newv[0][0], stage + 1) &
+		rm_sky_clip_stage(b, newc[1], newv[1][0], stage + 1);
+}
+
+int
+rm_sky_clip(rm_skybounds_t *b, int nump, const float *vecs)
+{
+	float work[(RM_SKY_MAX_VERTS + 1) * 3];
+
+	if ((nump < 0) || (nump > RM_SKY_MAX_VERTS - 2))
+	{
+		return 0;
+	}
+
+	memcpy(work, vecs, (size_t)nump * 3 * sizeof(float));
+	return rm_sky_clip_stage(b, nump, work, 0);
+}
+
+int
+rm_sky_prepare(rm_skybounds_t *b, float rotate)
+{
+	int i;
+
+	if (!rotate)
+	{
+		return 1;
+	}
+
+	/* check for no sky at all */
+	for (i = 0; i < 6; i++)
+	{
+		if ((b->mins[0][i] < b->maxs[0][i]) && (b->mins[1][i] < b->maxs[1][i]))
+		{
+			break;
+		}
+	}
+
+	if (i == 6)
+	{
+		return 0; /* nothing visible */
+	}
+
+	for (i = 0; i < 6; i++)
+	{
+		b->mins[0][i] = -1;
+		b->mins[1][i] = -1;
+		b->maxs[0][i] = 1;
+		b->maxs[1][i] = 1;
+	}
+
+	return 1;
+}
+
+int
+rm_sky_face_visible(const rm_skybounds_t *b, int face)
+{
+	if ((face < 0) || (face >= 6))
+	{
+		return 0;
+	}
+
+	return !((b->mins[0][face] >= b->maxs[0][face]) || (b->mins[1][face] >= b->maxs[1][face]));
+}
+
+int
+rm_sky_image_of_face(int face)
+{
+	return ((face >= 0) && (face < 6)) ? rm_skytexorder[face] : -1;
+}
+
+int
+rm_sky_vec(float s, float t, int face, int farsee, float *v, float *st)
+{
+	float b[3];
+	int j, k, idx;
+	const float sky_min = 1.0 / 512, sky_max = 511.0 / 512;
+
+	if ((face < 0) || (face >= 6))
+	{
+		return 0;
+	}
+
+	if (!farsee)
+	{
+		b[0] = s * 2300;
+		b[1] = t * 2300;
+		b[2] = 2300;
+	}
+	else
+	{
+		b[0] = s * 4096;
+		b[1] = t * 4096;
+		b[2] = 4096;
+	}
+
+	for (j = 0; j < 3; j++)
+	{
+		k = rm_st_to_vec[face][j];
+		idx = (k < 0) ? (-k - 1) : (k - 1);
+
+		if ((idx < 0) || (idx > 2))
+		{
+			return 0;
+		}
+
+		v[j] = (k < 0) ? -b[idx] : b[idx];
+	}
+
+	/* avoid bilerp seam */
+	s = (s + 1) * 0.5;
+	t = (t + 1) * 0.5;
+
+	if (s < sky_min)
+	{
+		s = sky_min;
+	}
+	else if (s > sky_max)
+	{
+		s = sky_max;
+	}
+
+	if (t < sky_min)
+	{
+		t = sky_min;
+	}
+	else if (t > sky_max)
+	{
+		t = sky_max;
+	}
+
+	t = 1.0 - t;
+
+	st[0] = s;
+	st[1] = t;
+	return 1;
+}
+
+void
+rm_sky_matrix(float *out, const float *world, const float *origin, float time, float rotate,
+		const float *axis)
+{
+	float t[16];
+
+	mtl_mat_translate(t, origin[0], origin[1], origin[2]);
+	mtl_mat_mul(out, world, t);
+	rm_mat_rotate_on(out, time * rotate, axis[0], axis[1], axis[2]);
+}
+
+int
+rm_sky_name_ok(const char *name)
+{
+	size_t i, n;
+
+	if (!name)
+	{
+		return 0;
+	}
+
+	n = strnlen(name, RM_SKY_NAME_MAX + 1);
+
+	if ((n < 1) || (n > RM_SKY_NAME_MAX) || (name[0] == '.'))
+	{
+		return 0;
+	}
+
+	for (i = 0; i < n; i++)
+	{
+		char c = name[i];
+
+		if (!(((c >= 'a') && (c <= 'z')) || ((c >= 'A') && (c <= 'Z')) || ((c >= '0') && (c <= '9')) ||
+			(c == '_') || (c == '-') || (c == '.')))
+		{
+			return 0;
+		}
+
+		if ((c == '.') && (name[i + 1] == '.'))
+		{
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+int
+rm_sky_params_ok(float rotate, const float *axis)
+{
+	return isfinite(rotate) && isfinite(axis[0]) && isfinite(axis[1]) && isfinite(axis[2]);
+}
+
+float
+rm_trans_alpha(int texflags)
+{
+	if (texflags & RM_TEX_TRANS33)
+	{
+		return 0.33f;
+	}
+
+	if (texflags & RM_TEX_TRANS66)
+	{
+		return 0.66f;
+	}
+
+	return 1.0f;
+}
+
+void
+rm_trans_color(float inverse_intensity, float alpha, float *rgba)
+{
+	rgba[0] = rgba[1] = rgba[2] = inverse_intensity;
+	rgba[3] = alpha;
+}
+
+float
+rm_inverse_intensity(float gamma, float intensity)
+{
+	return gamma / intensity;
+}
+
+int
+rm_warp_color(int overbright, float inverse_intensity, float *rgba)
+{
+	if (overbright)
+	{
+		rgba[0] = rgba[1] = rgba[2] = rgba[3] = 1.0f;
+		return 0;
+	}
+
+	rgba[0] = rgba[1] = rgba[2] = inverse_intensity;
+	rgba[3] = 1.0f;
+	return 1;
+}
+
+int
+rm_world_frame(float time)
+{
+	return rm_itrunc(time * 2);
+}
+
+int
+rm_alpha_break(long count, int cur_tex, float cur_alpha, int tex, float alpha)
+{
+	return (count > 0) && ((cur_tex != tex) || (cur_alpha != alpha));
 }

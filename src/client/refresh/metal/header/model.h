@@ -52,6 +52,9 @@ typedef struct msurface_s
 	unsigned first_vertex, num_vertices;
 	unsigned first_index, num_indices;
 
+	/* a warped surface's pieces, a range of the world's (N6) */
+	unsigned first_wpoly, num_wpolys;
+
 	struct msurface_s *texturechain;
 	struct msurface_s *lightmapchain;
 	int lmchain_frame;
@@ -69,6 +72,12 @@ typedef struct msurface_s
 	byte *samples;
 } msurface_t;
 
+/* One piece of a warped surface: a fan of n vertices (RM_WARP_FLOATS floats each) from first of the world's */
+typedef struct
+{
+	unsigned first, n;
+} rm_wpoly_t;
+
 /* The retained world of one map: CPU copies and the back end's static buffers. */
 typedef struct
 {
@@ -80,6 +89,11 @@ typedef struct
 	int vbuf, ibuf, sbuf;   /* rmb_buffer_static ids, 0 when not made */
 	int lmtex;              /* the lightmap array (rmb_texture_array), 0 when not made */
 	int lmslices;           /* its slices */
+	/* the warped surfaces' pieces (N6): x, y, z, s, t per vertex, the pieces' ranges, and their capacities */
+	float *wverts;
+	rm_wpoly_t *wpolys;
+	unsigned long nwverts, wverts_cap;
+	unsigned nwpolys, wpolys_cap;
 } rm_world_t;
 
 typedef struct model_s

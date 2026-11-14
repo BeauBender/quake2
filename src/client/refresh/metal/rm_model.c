@@ -83,6 +83,8 @@ RM_FreeWorld(rm_world_t *w)
 	free(w->indices);
 	free(w->recs);
 	free(w->scratch);
+	free(w->wverts);
+	free(w->wpolys);
 	free(w);
 }
 
@@ -550,7 +552,7 @@ static int faces_lm_slices;
 
 /*
  * from gl1_model.c, with the lightmaps (gl1_lightmap.c) built as gl1
- * builds them; the warp subdivision is N6's. Every bound is checked
+ * builds them (the warp subdivision is in RM_BuildWorld). Every bound is checked
  * before the data is used: the extents (Mod_CalcSurfaceExtents), the
  * lightmap size of a lit surface (rm_lm_size, gl1's limits), the run of
  * light samples of every surface whose samples are read (rm_lm_samples_ok:
@@ -695,7 +697,7 @@ Mod_LoadFaces(model_t *loadmodel, byte *mod_base, lump_t *l)
 /*
  * The retained world buffers (design section 9), from gl1's
  * LM_BuildPolygonFromSurface (gl1_lightmap.c) for every surface, warped
- * and sky ones included (they stay unwarped here; N6 draws them): the
+ * and sky ones included (a warped one stays flat here, its pieces are RM_SubdivideSurface's): the
  * counts are checked against their limits and the buffers' capacity
  * (rm_world_add, rm_world_bytes) before anything is allocated or written.
  */
@@ -753,6 +755,13 @@ RM_BuildWorld(model_t *mod)
 
 		fa->first_vertex = (unsigned)vat;
 		fa->num_vertices = (unsigned)lnumverts;
+
+		/* gl1 cuts a warped surface up here (R_SubdivideSurface); its flat polygon stays in the buffers below */
+		if ((tex->flags & SURF_WARP) && !RM_SubdivideSurface(mod, w, fa))
+		{
+			RM_Refuse(mod, "surface %d (%d vertices, warped) cannot be subdivided within the limits", s,
+					fa->numedges);
+		}
 
 		for (i = 0; i < lnumverts; i++)
 		{

@@ -73,8 +73,7 @@ cvar_t *r_lightlevel;
 unsigned long rm_noop_calls;
 
 /* the view of the current frame (R_SetupGL) */
-static float r_world_matrix[16], r_projection_matrix[16], r_world_mvp[16];
-static rm_viewport_t r_view_vp;
+static rm_view_t r_view;
 
 static qboolean rm_opened;
 static int rm_prev_mode = 4;
@@ -418,17 +417,18 @@ R_SetupGL(void)
 
 	rmb_target_size(&tw, &th);
 	rm_view_rect(r_newrefdef.x, r_newrefdef.y, r_newrefdef.width, r_newrefdef.height,
-			vid.width, vid.height, th, &r_view_vp);
+			vid.width, vid.height, th, &r_view.vp);
 
-	if (!rm_projection(r_projection_matrix, r_newrefdef.fov_y, r_newrefdef.width, r_newrefdef.height,
+	if (!rm_projection(r_view.proj, r_newrefdef.fov_y, r_newrefdef.width, r_newrefdef.height,
 			gl_znear->value, r_farsee->value != 0, (r_newrefdef.rdflags & RDF_UNDERWATER) != 0,
 			r_newrefdef.time, gl1_waterwarp->value))
 	{
-		mtl_mat_identity(r_projection_matrix);   /* glFrustum refused: the identity glLoadIdentity left */
+		mtl_mat_identity(r_view.proj);   /* glFrustum refused: the identity glLoadIdentity left */
 	}
 
-	rm_view_matrix(r_world_matrix, r_newrefdef.viewangles, r_newrefdef.vieworg);
-	mtl_mat_mul(r_world_mvp, r_projection_matrix, r_world_matrix);
+	rm_view_matrix(r_view.world, r_newrefdef.viewangles, r_newrefdef.vieworg);
+	mtl_mat_mul(r_view.mvp, r_view.proj, r_view.world);
+	r_view.cull = r_cull->value != 0;
 }
 
 /* from gl1_main.c: the screen blend, the 3D pass's last draw (design section 11) */
@@ -449,14 +449,14 @@ R_PolyBlend(void)
 	}
 
 	rm_blend_matrix(mv);
-	mtl_mat_mul(mvp, r_projection_matrix, mv);
-	rmb_draw_color(vtx, 4, rgba, mvp, &r_view_vp, r_cull->value != 0);
+	mtl_mat_mul(mvp, r_view.proj, mv);
+	rmb_draw_color(vtx, 4, rgba, mvp, &r_view.vp, r_cull->value != 0);
 }
 
 /*
  * from gl1_main.c; entities (N7), the light of dynamic lights (N8: N5 marks
- * the surfaces they touch and counts them), particles (N9) and alpha
- * surfaces (N6) are not drawn yet
+ * the surfaces they touch and counts them) and particles (N9) are not
+ * drawn yet
  */
 static void
 R_RenderView(refdef_t *fd)
@@ -477,7 +477,9 @@ R_RenderView(refdef_t *fd)
 	if (!(r_newrefdef.rdflags & RDF_NOWORLDMODEL))
 	{
 		R_MarkLeaves(); /* done here so we know if we're in water */
-		R_DrawWorld(r_world_mvp, &r_view_vp, r_cull->value != 0);
+		R_DrawWorld(&r_view);
+		/* the entities (N7) and the particles (N9) are drawn here, before the translucent surfaces */
+		R_DrawAlphaSurfaces(&r_view);
 	}
 
 	R_PolyBlend();
@@ -528,13 +530,6 @@ RI_RegisterSkin(const char *name)
 	return NULL;
 }
 
-static void
-RI_SetSky(const char *name, float rotate, vec3_t axis)
-{
-	(void)name; (void)rotate; (void)axis;
-	rm_noop_calls++;
-}
-
 
 Q2_DLL_EXPORTED refexport_t
 GetRefAPI(refimport_t imp)
@@ -556,7 +551,7 @@ GetRefAPI(refimport_t imp)
 	re.BeginRegistration = RI_BeginRegistration;
 	re.RegisterModel = RI_RegisterModel;
 	re.RegisterSkin = RI_RegisterSkin;
-	re.SetSky = RI_SetSky;
+	re.SetSky = RM_SetSky;
 	re.EndRegistration = RI_EndRegistration;
 	re.RenderFrame = RI_RenderFrame;
 	re.DrawFindPic = RDraw_FindPic;
