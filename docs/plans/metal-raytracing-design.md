@@ -287,6 +287,9 @@ invocations differ, the text gives them.
 of 2560 x 1440 points (`CGDisplayModeGetWidth`, `CGDisplayModeGetHeight`),
 5120 x 2880 pixels (`CGDisplayModeGetPixelWidth`,
 `CGDisplayModeGetPixelHeight`) and 60.00 Hz (`CGDisplayModeGetRefreshRate`).
+`system_profiler SPDisplaysDataType` names the display a Studio Display
+(5120 x 2880 Retina). Its maximum refresh is 60 Hz, so 60 Hz is the RT9
+target on this host and a higher-refresh case cannot be measured on it.
 The native resolution is the pixel size, 5120 x 2880; 2560 x 1440 is the
 point size and is labelled so below. A 60 Hz frame is 16.7 ms.
 
@@ -596,11 +599,13 @@ native pixels. Findings for cards (no edit to any decision):
    (12.0 to 19.5 ms on its own here) against section 2's own 5x5
    bilateral denoiser and temporal accumulation, including image quality,
    which this program does not assess. It does not redesign either one.
-3. RT10: repeat this program on an apple7 device (M1 Max), including the
+3. Repeat on an apple7 Mac with a 120 Hz display (to become a card):
+   repeat this program on an apple7 device (M1 Max), including the
    MetalFX scalers; the scene and order are stated above so it can be
    rebuilt. Until then the resolution-scale default per family has no
    measured basis below apple9, and the design holds no numeric default
-   to check.
+   to check. The same device covers RT9 at 120 Hz, where a frame is
+   8.3 ms, which a 60 Hz display cannot measure.
 4. RT7 and RT9: allow for the start-of-process level (about 3.5 times,
    about 0.1 s of GPU work made of short dispatches) so a frame-time test
    does not count the first frames, and test whether it recurs after a
