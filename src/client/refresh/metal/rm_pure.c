@@ -3729,8 +3729,14 @@ rm_null_model(float (*vtx)[3])
 		16 * cos( 0 * M_PI / 2 ), 16 * sin( 0 * M_PI / 2 ), 0
 	};
 
-	memcpy(vtx[0], vtxA, sizeof(vtxA));
-	memcpy(vtx[6], vtxB, sizeof(vtxB));
+	int i;
+
+	/* row by row: each vtx[i] is three floats */
+	for (i = 0; i < RM_NULL_VERTS / 2; i++)
+	{
+		memcpy(vtx[i], &vtxA[3 * i], sizeof(vtx[i]));
+		memcpy(vtx[RM_NULL_VERTS / 2 + i], &vtxB[3 * i], sizeof(vtx[i]));
+	}
 }
 
 /* from gl1_mesh.c, R_DrawAliasModel */
