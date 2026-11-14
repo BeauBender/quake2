@@ -933,3 +933,184 @@ particles, and the sampler of an atlas after a change of `r_2D_unfiltered`
 (here it follows the cvar at once; gl1 sets an atlas's filters when the
 atlas is uploaded and in `R_TextureMode`'s loop over the images, and no
 scenario changes the cvar).
+
+## 19. As built: N4, world geometry, fullbright surfaces and the screen blend (TASK87)
+
+What exists:
+
+- **Registration** (`rm_model.c`, `header/model.h`, from `gl1_model.c`):
+  `Mod_ForName`, `Mod_LoadBrushModel` with `Mod_LoadFaces`,
+  `Mod_LoadLeafs`, `Mod_LoadMarksurfaces`, `Mod_LoadSubmodels`,
+  `Mod_CalcSurfaceExtents`, the shared loaders of `files/models.c` for the
+  rest, `RI_BeginRegistration`, `RI_RegisterModel`, `RI_EndRegistration`
+  (gl1's rule: models and images are freed only when either table runs
+  short; N2 freed the unused images at every registration) and
+  `modellist`. Alias and sprite models load through `files/models.c` and
+  are not drawn (N7). The warp subdivision (N6) and the lightmaps (N5) are
+  not built; a surface has no `glpoly_t`.
+- **The retained buffers** (section 9), built once per map after the faces
+  are loaded: a vertex buffer of gl1's `LM_BuildPolygonFromSurface`
+  values for every surface, sky and warped ones included (unwarped), a
+  `uint32` index buffer of the fans in gl1's `R_SetBufferIndices` order,
+  and one 48-byte record per surface (normal flipped for `SURF_PLANEBACK`,
+  material class, texinfo flags, image slot, lightmap slice -1 and an empty
+  rectangle until N5, styles, index range), all in surface order, so each
+  submodel's index range (`firstindex`, `numindices` of its `model_t`) is
+  contiguous. The buffers are private, written by a blit on the upload
+  command buffer from a shared copy (`rmb_buffer_static`); the CPU copies
+  stay (the frame's indices are copied from them, and N6 needs the
+  vertices). The lightmap coordinates use `light_s` and `light_t` of 0
+  until N5 places the surfaces.
+- **The view** (`rm_main.c`): `R_SetupFrame`, `R_SetFrustum` of
+  `files/surf.c`, and gl1's `R_SetupGL` and `R_SetPerspective` as pure
+  functions of `rm_pure.c` (`rm_view_rect`, `rm_view_matrix`,
+  `rm_projection` with `gl1_waterwarp`'s under-water wobble), each matrix
+  built through `common/mtl_matrix.c` in the shim's order (each product on
+  the right, the projection on the identity), the draw's product
+  `projection * modelview` as the shim's `mgl_mat_mul`.
+- **The world** (`rm_surf.c`, from `gl1_surf.c`): `R_MarkLeaves` (the
+  bounded PVS below), `R_RecursiveWorldNode`, the texture chains of gl1's
+  multitexture path (which gl1 takes on the reference, with the lightmap
+  unit left off under `r_fullbright`), `R_DrawWorld`. A chain is one
+  indexed draw of the vertex buffer, its surfaces' fans copied in chain
+  order into the frame ring; the `world_tex` pipeline returns the texel
+  (gl1's `GL_REPLACE` at colour 1), depth `LEQUAL` with writes, GL's
+  front faces culled with `r_cull` (counter-clockwise front, as the shim
+  sets it), the viewport from the refdef. Sky and translucent surfaces
+  (at the walk), warped surfaces (the chains' second loop) and flowing
+  surfaces (opaque, which gl1 scrolls) are not drawn and are counted.
+- **The screen blend** (`R_PolyBlend`): `rm_polyblend` decides as gl1
+  (`gl_polyblend`, the alpha) and gives the colour times `sw_gamma`; one
+  quad of gl1's four vertices through the blend modelview and the view's
+  projection, the blended `color` pipeline, no depth test, the 3D pass's
+  last draw.
+- **`r_notexture`** (`rm_misc.c`, gl1's `R_InitParticleTexture` without the
+  particle texture, N9): made at init, marked in use by
+  `R_FreeUnusedImages` as gl1 does, handed to `Mod_LoadTexinfo` as the
+  fallback of a texture that does not load, freed with the other images at
+  shutdown.
+- **`metal_stats`**: the per-frame line ends with the skipped surfaces of
+  the last view by class (`skipped surfaces: N sky, N warped, N
+  translucent, N flowing`); a per-map line at registration gives the
+  vertex, index and record counts and bytes. `RM_STATS_LINE` is 768
+  bytes (the longest line is host-tested). 14 pipeline states (12 2D,
+  `world_tex`, `color`) and two depth-stencil states are built with the
+  context.
+
+Bounds (section 2, "Inputs and bounds"). What the shared loaders already
+check is not repeated: a lump's size against its record size, a node's
+plane and children, `Mod_LoadNodes`' leaf numbers; gl1's own checks of a
+face's plane and texinfo, a leaf's marksurfaces and a marksurface's
+surface are kept. Added, before a loader or the buffer builder reads the
+data, each through a plain function of `rm_pure.c`:
+
+- every lump inside the file, and the header inside it (`rm_lump_ok`);
+- the counts the loaders size arrays by within `files.h`'s limits (nodes,
+  planes, vertices, edges, surfedges, leaf faces, leafs, faces, texinfos,
+  models; lighting and visibility bytes), so `Mod_LoadNodes`' arrays of
+  `MAX_MAP_LEAFS` and the hunk size cannot overflow;
+- a texinfo's texture name terminated within its 32 bytes and every
+  `nexttexinfo` chain inside the lump and ending or returning to its start
+  (`rm_texinfo_chains_ok`; `Mod_LoadTexinfo` follows them unchecked and
+  counts each chain in a loop that never ends on a cycle that misses its
+  start);
+- the visibility header's offsets inside the lump before
+  `Mod_LoadVisibility` swaps them in place (`rm_vis_header_ok`), and every
+  PVS and PHS offset inside it after; the PVS row is decompressed by
+  `rm_decompress_vis`, bounded at both ends, instead of `files/pvs.c`'s
+  `Mod_DecompressVis`, which reads and writes unbounded; a leaf's
+  cluster below the cluster count and its area inside the client's area
+  bits (`rm_leaf_ok`);
+- a face's edges (at least 3, inside the surfedges), each surfedge's edge
+  and both of its vertices (`rm_face_edges_ok`, `rm_surfedge_ok`), before
+  `Mod_CalcSurfaceExtents`;
+- a node's surfaces inside the map and in no other node (`rm_mark_once`:
+  a surface in two nodes would make its texture chain a loop), a
+  submodel's faces inside the map (`rm_range_ok`); a negative headnode is
+  a leaf and is accepted as gl1 accepts it (base2's `*15`; N8 must not
+  mark lights from it);
+- the buffers' counts and bytes (`rm_world_add`: surfaces, vertices and
+  indices against `MAX_MAP_FACES`, `MAX_MAP_SURFEDGES` and three times
+  that; `rm_world_bytes`: each product against `RMB_STATIC_MAX_BYTES`, 32
+  MB, by division) before anything is allocated, and each fan against
+  the index buffer's capacity (`rm_world_fan`) as it is written;
+- a lighting offset outside the lump gives no samples (gl1 points past
+  the lump), for N5 to bound.
+
+A failed check frees the model (hunk, file, buffers) and drops with
+`ri.Sys_Error(ERR_DROP)`. Not prevented here, because it happens inside a
+shared loader before any check of this module can run: a node graph with a
+cycle recurses without end in `Mod_SetParent` (`files/models.c`), as in
+gl1; that is a defect of `files/` for a parked card.
+
+Choices made where the design left room:
+
+- **The vertex is 32 bytes, not packed.** The float3 position is at offset
+  0 with w = 1 stored after it, then the two coordinate pairs. With the
+  packed 28-byte vertex the vertex function widened the position with a w
+  of 1 (a constant or a uniform, both tried), and 21 of the 23 frames of
+  `world-fullbright` differed from `gl1-metal` (score up to 0.000017, bad
+  up to 0.000046): texels moved on 0.1 to 1 percent of the pixels,
+  scattered along the bands where the mip level changes, from clip
+  coordinates differing in the last bits. Reading one float4 from the
+  buffer, as the shim's vertex function does, brought 15 of the 19 judged
+  frames to score 0 and bad 0. An acceleration structure reads the float3
+  at offset 0 with a vertex stride of 32 bytes; the screen blend's
+  positions are float4 too.
+- **A frame `r_clear` does not clear starts black**, as on the shim (its
+  first pass of a frame clears to black, "so a frame is reproducible"),
+  not on the last frame as N1 chose (section 16): the world's T-junction
+  cracks show what is under them, which made a pixel of frame 16 differ.
+  `rm_color_load` takes the frame's first pass.
+- The skipped-surface counts end the existing per-frame line rather than
+  adding a line per frame; the per-map line is a line of its own.
+
+Measured on the build VM (T0), source `04c99db2` (the pins; later commits
+change documents and comments only), load averages 2.7 to 10.9 (a shared host), every
+record with `MTL_DEBUG_LAYER=1` and `PINS_TRACE=0`, references recorded at
+that commit in a private store:
+
+| What | Result |
+|---|---|
+| two `gl1-metal` records of `world-fullbright` (`--run 2`), `--threshold 0 --bad-threshold 0` | 23 frames, score 0, bad 0 |
+| frames excluded by section 11 (`metal_stats 1`: a sky, warped, translucent or flowing surface skipped) | 19 (9 sky, 3 translucent), 20 (3 translucent), 21 (31 sky, 32 translucent), 22 (9 sky, 3 translucent); frames 0 to 18 skip none |
+| `compare metal world-fullbright --ref gl1-metal --threshold 0.005 --bad-threshold 0.001`, three release records | each the same: frames 0 to 20 ok (19 judged, 2 excluded but passing); 15 at score 0 and bad 0, frames 0, 1, 10 and 16 at score 0.000000 and bad 0.000003, 0.000010, 0.000013 and 0.000003; frames 21 (0.055006, bad 0.266624) and 22 (0.000631, bad 0.001859) over, both excluded |
+| the same with the `ASAN=1` build (`PINS_BIN=debug/quake2`) | the same numbers, no sanitizer line |
+| frames 21 and 22, viewed | 21: the sky (black where `gl1-metal` draws the sky box) and the translucent water at the bottom left (the floor under it shows); 22: the sky in the top left corner. Both N6's |
+| the residual pixels of frames 0, 1, 10, 16, viewed | 2, 5, 6 and 3 pixels, 2 by 2 quads and short runs inside surfaces, colour differences of 2 to 16 levels; unchanged by drawing the chains in reverse order (a scratch build), so not the draw order; not explained further |
+| the screen blend, by a scratch run of `metal` with `+set gl_polyblend 0` against the same references | frames 5, 8, 11 and 16 over (bad 0.84 to 0.98 of the pixels), frame 3 at score 0.004944, frames 2, 6, 9, 12, 14, 15 and 17 differing by up to 8 levels: 13 of the 19 judged frames carry a blend, and with it drawn all of them pass; no frame is excluded for it |
+| `compare metal hud2d` and `compare metal cinematic` (`PINS_DEMO=idlog.cin PINS_EVERY=7`) against `gl1-metal` at the same commit | 23 and 12 frames, score 0, bad 0 |
+| validation and teardown, every record above | `engine.log` holds only `Metal API Validation Enabled`; teardown `0 live objects` (texture 223/223, buffer 8/8 for `world-fullbright`), `0 unreleased`, `0 unmatched` |
+| `metal_stats 1`, `world-fullbright` outside the harness | every one of the 24 lines `14 pipelines, 0 created after init`, `0 draws skipped`, `0 uploads skipped`, `0 pass splits`; 19,235 draws over 707 frames |
+| the per-map line, the map of `demo1.dm2` | `maps/base2.bsp`: 44,502 vertices (1,424,064 bytes), 77,568 indices (310,272 bytes), 9,323 surface records (447,504 bytes) |
+| a map change (`map base1`, then `map base2`, a scratch config) | base1: 37,577 vertices (1,202,464 bytes), 65,301 indices (261,204 bytes), 7,905 records (379,440 bytes); `imagelist` after each map lists ` W   8   8 RGB: ***r_notexture*** (8x8)`; teardown `0 live objects` |
+| timedemo, the release records | `metal` 1092 to 1113 fps, `gl1-metal` 444 to 462 fps (689 frames); `ASAN=1` `metal` 462 fps |
+| `tests/check-ref-metal.sh` | host test 359 checks, 0 failed (with N3's rework cases) |
+| mutants of the world's pure code and of what it takes from `files/surf.c` | 45 mutants (the material order, the normal flip, each limit and division of the size arithmetic, the fan's order, capacity and 32-bit bound, the range, lump, face, surfedge, leaf, area and texinfo-chain checks, the PVS decompression's run cut, input end and output size, the viewport flip, each rotation, the translation, the wobble, `gl_znear`'s floor, `r_farsee`, the blend's alpha test and gamma, the per-map line, the skipped counts, the black first pass; `R_SetFrustum`'s angles and distances, `R_CullBox`'s side and planes, `R_TextureAnimation`'s step and negative frame) all fail the host test; five cases were added after the first run left five alive; two mutants are equivalent and were dropped (`ceil` for `floor` in gl1's viewport formula, which is the identity on integer rectangles, and the `gl1_waterwarp` guard, whose wobble is 0 when it is 0) |
+
+The texture used for a surface whose image did not load is `r_notexture`
+by `Mod_LoadTexinfo`'s fallback argument; the game data has no such
+surface, so no frame shows it.
+
+The implementer did not run the full gate (`scripts/test.sh`): the host
+limits of this card keep it to the orchestrator; the checks above are its
+parts that this change touches. The change is about 3,700 lines added
+against the card's estimate of about 1,150 (earlier cards ran about 2.5
+times theirs). About 1,000 of them are gl1's registration, walk and view
+code copied into `rm_model.c`, `rm_surf.c` and `rm_main.c`; the bounds
+the shared loaders leave open (the lump, count, texinfo, visibility, edge
+and node checks with their refusal path) add about 350 to `rm_model.c`
+and about 250 to `rm_pure.c`; the back end's static buffers, 3D pipelines,
+depth states and two draws about 340; the host test about 550 (one or
+more cases per check, the shim's raster and `files/surf.c` linked in);
+`rmb.h` about 270 of declarations with their contracts. The card was not
+cut into two slices: the measurement that set the vertex layout needed
+the drawing, and both halves were done when the size was counted.
+
+Left for N5 and later: the lightmaps (`light_s`, `light_t`, the slice and
+rectangle of the record, the samples' bounds), the warp subdivision and
+the sky, warped, translucent and flowing surfaces (N6, which may also
+mutate gl1's translucent texinfo images as gl1's walk does), brush
+entities and alias models (N7), the clear of the `RDF_NOWORLDMODEL`
+rectangle (N7, the player model of the menu), `R_SetLightLevel` (N5), the
+particle texture (N9).

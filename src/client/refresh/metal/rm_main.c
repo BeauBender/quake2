@@ -20,11 +20,12 @@
  * =======================================================================
  *
  * ref_metal: GetRefAPI, the cvars, Init and Shutdown, and the frame
- * (docs/plans/ref-metal-native.md). Skeleton (TASK84, N1): the frame is
- * cleared and presented, the 3D and 2D passes are opened, and every
- * registration and drawing entry point is a valid no-op that returns a
- * NULL handle and counts its call. R_SetMode and SetMode_impl are from
- * gl1_main.c, without the MSAA retry (ref_metal has no MSAA).
+ * (docs/plans/ref-metal-native.md). The frame is cleared and presented
+ * and the 3D and 2D passes are opened (N1); the view is set up and the
+ * world drawn as gl1's R_RenderView does, with the screen blend as the 3D
+ * pass's last draw (N4, section 19). Entry points not implemented yet are
+ * valid no-ops that count their calls. R_SetMode and SetMode_impl are
+ * from gl1_main.c, without the MSAA retry (ref_metal has no MSAA).
  *
  * =======================================================================
  */

@@ -6,7 +6,10 @@
 # (a) Always, on every OS: tests/metal/rm_host_test.c is compiled with the
 #     system compiler against rm_pure.c and common/ (the arithmetic shared
 #     with the shim), with ASAN and UBSAN when the
-#     compiler has them, and run. No SDL, no Metal, no game data.
+#     compiler has them, and run. No SDL, no Metal, no game data. The
+#     world's cases (N4) also link files/surf.c with src/common/shared/
+#     shared.c (what ref_metal takes from them unchanged) and the shim's
+#     mgl_raster.c behind tests/metal/rm_host_shim.c (its viewport).
 # (b) Only on Darwin with the Metal compiler (xcrun -f metal) and the
 #     vendored SDL 3 headers: "make ref_metal" in a scratch copy of
 #     Makefile, third_party/sdl3.make and src/ (third_party/SDL3 is linked,
