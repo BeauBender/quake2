@@ -627,8 +627,10 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 
 The native Metal renderer, `vid_renderer metal`, is built on macOS
 only, with `make ref_metal`. It is work in progress (see
-`doc/100_renderpins.md`): for now it clears and presents the screen and
-draws nothing else.
+`doc/100_renderpins.md`): for now it draws the 2D elements, cinematics
+and the world's opaque surfaces without lightmaps (as with
+`r_fullbright 1`) with the screen blend; sky, water, translucent and
+flowing surfaces, lightmaps and models are not drawn yet.
 
 * **metal_stats**: When set to `1`, the Metal renderer prints one line
   per screenshot (so per frame the pin harness captures) and one at
@@ -636,9 +638,14 @@ draws nothing else.
   without a drawable (not presented,
   for example while the window cannot be shown), frames skipped because
   the GPU still held every frame slot, command buffers that failed,
-  readbacks, calls to drawing functions it does not implement yet, and
-  its Metal objects still alive. The teardown line with its object
-  counts is printed at every shutdown regardless. Defaults to `0`.
+  readbacks, calls to drawing functions it does not implement yet,
+  draws and uploads made and skipped, pipeline states (and those made
+  after initialisation), its Metal objects still alive, and the sky,
+  warped, translucent and flowing surfaces of the last 3D view it did not
+  draw. When a map is loaded it also prints the vertex, index and
+  surface-record counts and bytes of the map's retained buffers. The
+  teardown line with its object counts is printed at every shutdown
+  regardless. Defaults to `0`.
 
 
 ## Gamepad

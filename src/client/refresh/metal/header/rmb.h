@@ -87,10 +87,12 @@ typedef struct
 	unsigned long splits;       /* frame command buffers split for a rewritten texture (section 3) */
 	unsigned long pipelines;    /* pipeline states built in InitContext */
 	unsigned long late_pipelines;   /* pipeline states built after InitContext: must stay 0 */
+	/* the surfaces of the last 3D view not drawn yet, by class (front end, N4): drawn from N6 on */
+	unsigned long sky_skips, warp_skips, trans_skips, flow_skips;
 } rmb_stats_t;
 
-/* A buffer of this size holds every metal_stats line (rm_stats_format, host-tested). */
-#define RM_STATS_LINE 512
+/* A buffer of this size holds every metal_stats line (rm_stats_format, rm_world_format, host-tested). */
+#define RM_STATS_LINE 768
 
 /* ---- rm_pure.c: no SDL, no Metal --------------------------------------------- */
 
@@ -125,15 +127,18 @@ typedef enum
 {
 	RM_LOAD_CLEAR,   /* cleared to the pass's clear colour */
 	RM_LOAD_KEEP,    /* loaded: what the target holds */
-	RM_LOAD_BLACK    /* cleared to black: no pass has written the target yet */
+	RM_LOAD_BLACK    /* cleared to black: the frame's first pass, or no pass has written the target yet */
 } rm_load_t;
 
 /*
  * The colour load of a pass: clear is 1 when the pass clears (r_clear at
  * the start of the frame), defined is 1 when a pass has written the
- * colour target since it was made.
+ * colour target since it was made, first is 1 for the frame's first
+ * pass. A frame gl1 does not clear starts black, as the shim's does
+ * (mgl_layer_pass: "so a frame is reproducible"), not on the last frame:
+ * the world's cracks show what is under them (design section 19).
  */
-rm_load_t rm_color_load(int clear, int defined);
+rm_load_t rm_color_load(int clear, int defined, int first);
 
 /*
  * 1 when rmb_frame_begin must (re)make the colour and depth targets for
@@ -299,6 +304,262 @@ int rm_quad_indices(int n, unsigned short *idx, int cap);
 /* gl1's glColor4f(r, g, b, 1) of RDraw_PicScaledCol, which modulates the texel. */
 void rm_tint_color(float *rgba, const float *rgb);
 
+/* ---- the world: BSP bounds, retained buffers, view (rm_pure.c, N4) ---------------- */
+
+/* q_shared.h's texinfo flags (SURF_*), which this header does not include; the host test holds them equal */
+#define RM_TEX_SKY 0x4
+#define RM_TEX_WARP 0x8
+#define RM_TEX_TRANS33 0x10
+#define RM_TEX_TRANS66 0x20
+#define RM_TEX_FLOWING 0x40
+
+/* The loader limits of files.h the retained buffers are sized by (the host test holds them equal). */
+#define RM_MAX_MAP_FACES 65536        /* MAX_MAP_FACES: surfaces and surface records */
+#define RM_MAX_MAP_SURFEDGES 256000   /* MAX_MAP_SURFEDGES: the vertices of all polygons together */
+#define RM_MAX_MAP_LEAFS 65536        /* MAX_MAP_LEAFS: clusters */
+#define RM_MAX_MAP_AREAS 256          /* MAX_MAP_AREAS */
+#define RM_WORLD_MAX_VERTS RM_MAX_MAP_SURFEDGES
+#define RM_WORLD_MAX_INDICES (3ul * RM_MAX_MAP_SURFEDGES)
+/* The largest static buffer the back end makes (rmb_buffer_static). */
+#define RMB_STATIC_MAX_BYTES (32u << 20)
+
+/*
+ * The material class of a surface for the record and for what N4 draws:
+ * sky, then translucent, then warped (water), then flowing, as gl1's
+ * world walk and texture chains decide them (R_RecursiveWorldNode,
+ * R_DrawTextureChains); everything else is world.
+ */
+typedef enum
+{
+	RM_MAT_WORLD,
+	RM_MAT_SKY,
+	RM_MAT_TRANSLUCENT,
+	RM_MAT_WATER,
+	RM_MAT_FLOWING,
+	RM_MATS
+} rm_material_t;
+
+rm_material_t rm_material(int texflags);
+
+/*
+ * One vertex of the retained world buffer: the float3 position at offset
+ * 0 (what an acceleration structure reads, with this stride) and w = 1
+ * after it, then the diffuse and the lightmap coordinates; one stride of
+ * 32 bytes (static asserts in rm_pure.c, a runtime check in the host
+ * test). The w is stored, not packed away, because the vertex function
+ * then reads one float4 as the shim's does, and only that gives the
+ * shim's clip coordinates to the bit (design section 19).
+ */
+typedef struct
+{
+	float pos[4];
+	float uv[2];
+	float lmuv[2];
+} rm_wvert_t;
+
+#define RM_WVERT_STRIDE 32
+
+/*
+ * One record of the per-surface buffer (design section 9): the plane
+ * normal, flipped for SURF_PLANEBACK; the material class; the texinfo
+ * flags; the image (its slot in gltextures); the lightmap slice (-1 until
+ * N5) and rectangle; the styles; the surface's range of the index buffer.
+ */
+typedef struct
+{
+	float normal[3];
+	unsigned material;
+	unsigned texflags;
+	int image;
+	int lm_slice;
+	short lm_rect[4];
+	unsigned char styles[4];
+	unsigned first_index;
+	unsigned num_indices;
+} rm_surfrec_t;
+
+/* The normal of a surface on plane normal pn: pn, or -pn with planeback. */
+void rm_surf_normal(const float *pn, int planeback, float *out);
+
+/* The counts of the three retained buffers while a map is built. */
+typedef struct
+{
+	unsigned long surfs, verts, indices;
+} rm_world_size_t;
+
+/*
+ * Adds one polygon of n vertices (a surface) to s: 1, or 0 and s unchanged
+ * when n < 3 or a total would pass its limit (RM_MAX_MAP_FACES surfaces,
+ * RM_WORLD_MAX_VERTS vertices, RM_WORLD_MAX_INDICES indices).
+ */
+int rm_world_add(rm_world_size_t *s, long n);
+
+/*
+ * The bytes of the vertex, index (uint32) and record buffers of s: 1, or 0
+ * with all three 0 when a count passes its limit or a product would pass
+ * cap (checked by division before it is formed, so it cannot overflow).
+ */
+int rm_world_bytes(const rm_world_size_t *s, size_t cap, size_t *vbytes, size_t *ibytes, size_t *sbytes);
+
+/*
+ * gl1's R_SetBufferIndices for GL_TRIANGLE_FAN on a polygon whose n
+ * vertices start at base: base, base + i + 1, base + i + 2 for i from 0 to
+ * n - 3, into idx, which holds cap entries. The number of indices; 0 and
+ * nothing written when n < 3, they do not fit or a vertex index would
+ * pass 32 bits.
+ */
+long rm_world_fan(unsigned long base, long n, unsigned *idx, unsigned long cap);
+
+/* [first, first + count) inside [0, total]: 1, or 0 for a negative value or an end past total (no overflow). */
+int rm_range_ok(long first, long count, long total);
+
+/*
+ * A lump of the BSP file: fileofs and filelen not negative, fileofs a
+ * multiple of 4 (the loaders read the records' int and float fields in
+ * place), the lump inside the file's len bytes.
+ */
+int rm_lump_ok(long fileofs, long filelen, long len);
+
+/* A face's edges: at least 3, inside the surfedge lump. */
+int rm_face_edges_ok(long firstedge, long numedges, long numsurfedges);
+
+/* A surfedge names edge |e| of numedges: 1 when -numedges < e < numedges. */
+int rm_surfedge_ok(long e, long numedges);
+
+/*
+ * The raw texinfo lump before files/models.c reads it (Mod_LoadTexinfo
+ * follows nexttexinfo unchecked and counts each chain until it ends or
+ * returns to its start): next[i] for each of count texinfos, already
+ * swapped. 1 when every next is 0 or below (the end) or names a texinfo,
+ * and the chain from every texinfo ends or returns to it within count
+ * steps; 0 otherwise (the map is refused).
+ */
+int rm_texinfo_chains_ok(const int *next, long count);
+
+/*
+ * The header of a visibility lump of len bytes that says it holds
+ * numclusters clusters: 0 to RM_MAX_MAP_LEAFS, and its 4 + 8 * numclusters
+ * bytes of offsets inside the lump (files/models.c swaps them in place
+ * unchecked).
+ */
+int rm_vis_header_ok(long numclusters, long len);
+
+/*
+ * A leaf's cluster and area: the cluster -1 or below numclusters when the
+ * map has visibility (R_MarkLeaves indexes the PVS row by it), the area
+ * inside the client's areabits (R_AreaVisible).
+ */
+int rm_leaf_ok(long cluster, long area, long numclusters, int has_vis);
+
+/*
+ * A leaf's contents: anything but CONTENTS_NODE (-1), which files/models.c
+ * (Mod_SetParent, Mod_PointInLeaf) and the draw take for a node, reading
+ * the leaf's marksurface fields as children.
+ */
+int rm_leaf_contents_ok(long contents);
+
+/*
+ * The world's head before files/models.c reads the nodes: at least one
+ * node (Mod_LoadNodes sets the parents from node 0, and the draw starts
+ * there) and a model 0 whose head node is one of them. A world without
+ * nodes would leave its node array empty and aliased by the next hunk
+ * allocation.
+ */
+int rm_world_head_ok(long numnodes, long nummodels, long headnode);
+
+/*
+ * The raw node lump before files/models.c links it: children holds the two
+ * children of each of numnodes nodes, already swapped (a node index, or
+ * -1 - leaf for a leaf); seen has numnodes bytes of scratch. 1 when node 0
+ * is no node's child, every other node is a child at most once (of one
+ * node, in one of its two slots), every node child is below numnodes and
+ * every leaf child below numleafs; 0 otherwise. The nodes reachable from
+ * node 0 are then a tree: Mod_SetParent, Mod_NumberLeafs and the draw
+ * visit each node once, and a node's surfaces enter a texture chain once.
+ */
+int rm_node_tree_ok(const int *children, long numnodes, long numleafs, unsigned char *seen);
+
+/*
+ * Marks [first, first + count) of owner[total] as taken (a node's
+ * surfaces): 0, and nothing marked, when the range leaves the table or a
+ * surface is taken already. gl1 links a surface into its texture chain
+ * once per node that holds it, so a surface in two nodes would make the
+ * chain a loop.
+ */
+int rm_mark_once(unsigned char *owner, long total, long first, long count);
+
+/*
+ * What a model slot holds, from its name, its loaded flag and whether it
+ * holds memory (a hunk or the world's buffers). A load sets the name first
+ * and the flag only after every loader and check has returned; the shared
+ * loaders drop to the console with a longjmp past Mod_ForName, which
+ * leaves the name set and the flag clear. Only a loaded slot is handed
+ * out; an unfinished one is freed completely before anything is loaded.
+ */
+typedef enum
+{
+	RM_SLOT_EMPTY,       /* no name, no flag, no memory: free for a load */
+	RM_SLOT_UNFINISHED,  /* any other mix: a load that did not finish */
+	RM_SLOT_LOADED       /* named and flagged */
+} rm_slot_t;
+
+rm_slot_t rm_slot_state(int named, int loaded, int holds);
+
+/*
+ * gl1's Mod_DecompressVis, bounded: the run-length row at in, which has
+ * in_len bytes, into out (row bytes; out_cap at least row). A zero run is
+ * cut at the end of the row. 0, with out all set (visible), when the
+ * input ends first; 0 and nothing written when out_cap is below row.
+ */
+int rm_decompress_vis(const unsigned char *in, size_t in_len, size_t row, unsigned char *out, size_t out_cap);
+
+/*
+ * The per-map line of metal_stats: the map's name and the counts and bytes
+ * of its three retained buffers, without a newline. 1 when it fits; 0,
+ * with buf empty, when it does not or the counts pass their limits.
+ */
+int rm_world_format(const char *map, const rm_world_size_t *s, char *buf, size_t len);
+
+/* A viewport of Metal (top-left origin) and its depth range. */
+typedef struct
+{
+	double x, y, w, h, znear, zfar;
+} rm_viewport_t;
+
+/*
+ * gl1's R_SetupGL viewport of the refdef rectangle (rx, ry, rw, rh) on a
+ * vid_w by vid_h screen, as the shim's mgl_compute_raster gives it on a
+ * target th pixels high: x, th - y2 - h, w, h, depth 0 to 1.
+ */
+void rm_view_rect(int rx, int ry, int rw, int rh, int vid_w, int vid_h, int th, rm_viewport_t *out);
+
+/*
+ * gl1's R_SetupGL modelview through common/mtl_matrix.c, as the shim
+ * builds it: the identity times the rotations by -90 about x, 90 about z,
+ * -angles[2] about x, -angles[0] about y, -angles[1] about z, then the
+ * translation by -org, each product taken on the right (m = m * r).
+ */
+void rm_view_matrix(float *m, const float *angles, const float *org);
+
+/* gl1's R_PolyBlend modelview: the identity, -90 about x, 90 about z. */
+void rm_blend_matrix(float *m);
+
+/*
+ * gl1's R_SetPerspective (glFrustum on the identity): fovy in degrees, the
+ * refdef's width and height, gl_znear (at least 0.1), r_farsee, and the
+ * under-water wobble (gl1_waterwarp, RDF_UNDERWATER, the refdef's time).
+ * 0 when glFrustum would refuse the values (m untouched).
+ */
+int rm_projection(float *m, float fovy, int width, int height, float znear, int farsee,
+		int underwater, float time, float waterwarp);
+
+/*
+ * gl1's R_PolyBlend decision and colour (R_SetupFrame's v_blend): 1 with
+ * rgba the refdef's blend, its colour times sw_gamma, when gl_polyblend is
+ * on and the alpha is not 0; 0 (no quad) otherwise.
+ */
+int rm_polyblend(const float *blend, float sw_gamma, float polyblend, float *rgba);
+
 /* ---- rmb_device.m and rmb_encode.m ------------------------------------------- */
 
 /*
@@ -344,8 +605,9 @@ void rmb_stats(rmb_stats_t *stats, rm_ledger_t *ledger);
  * Takes a frame slot and a command buffer, sizes the targets and the
  * layer's drawable to w by h pixels (the window's size in pixels), and
  * opens the frame's first pass, colour only: cleared to clear_rgba, or
- * loaded when it is NULL (rm_color_load: black on a target no pass has
- * written). This is gl1's R_Clear at the end of RI_BeginFrame. 0 when
+ * to black when it is NULL (rm_color_load). This is gl1's R_Clear at the
+ * end of RI_BeginFrame, with the shim's black for a frame gl1 does not
+ * clear. 0 when
  * the frame is skipped.
  */
 int rmb_frame_begin(int w, int h, const float *clear_rgba);
@@ -469,5 +731,53 @@ int rmb_draw_2d(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n, const 
  */
 #define RM_BATCH_QUADS 1024
 int rmb_draw_2d_quads(int pipe, int tex, int smp, const rmb_vert2d_t *v, int nquads, const float *mvp);
+
+/* ---- the 3D pass (rmb_resource.m, rmb_encode.m, N4) ------------------------------ */
+
+/* The 3D pipeline states InitContext builds beside the 2D table (section 4). */
+typedef enum
+{
+	RM_PIPE_WORLD_TEX,      /* world_tex: the diffuse texel alone (r_fullbright, gl1's GL_REPLACE) */
+	RM_PIPE_COLOR_BLEND,    /* color: an untextured colour, blended (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA) */
+	RM_PIPE_3D_COUNT
+} rm_pipe3d_t;
+
+/* The depth-stencil states of the 3D pass built beside them. */
+typedef enum
+{
+	RMB_DS_NONE,            /* no depth test, no writes (R_PolyBlend's glDisable(GL_DEPTH_TEST)) */
+	RMB_DS_LEQUAL_WRITE,    /* gl1's glDepthFunc(GL_LEQUAL), glDepthMask(GL_TRUE) */
+	RMB_DS_COUNT
+} rmb_ds_t;
+
+/* Static buffer ids run from 1 to RMB_MAX_BUFFERS - 1; 0 is none. */
+#define RMB_MAX_BUFFERS 16
+
+/*
+ * A private buffer holding the bytes of data (1 to RMB_STATIC_MAX_BYTES),
+ * written through the upload command buffer, so the next frame reads it.
+ * Its id, 0 when the size is refused or an allocation fails.
+ */
+int rmb_buffer_static(const void *data, size_t bytes);
+void rmb_buffer_free(int id);
+
+/*
+ * Draws count indices of the static vertex buffer vbuf (rm_wvert_t), the
+ * indices copied into the frame ring, as triangles with the world_tex
+ * pipeline, depth LEQUAL with writes, texture tex and sampler smp, mvp
+ * (column-major) on every vertex, in viewport vp, culling GL's front
+ * faces when cull is set (gl1's glCullFace(GL_FRONT)). Only inside the 3D
+ * pass. 0 when the draw is skipped (counted).
+ */
+int rmb_draw_world(int vbuf, const unsigned *idx, unsigned long count, int tex, int smp,
+		const float *mvp, const rm_viewport_t *vp, int cull);
+
+/*
+ * Draws a fan of n float3 positions (xyz) in one colour rgba with the
+ * blended color pipeline and no depth test, as gl1's R_PolyBlend does;
+ * the rest as rmb_draw_world. 0 when the draw is skipped (counted).
+ */
+int rmb_draw_color(const float *xyz, int n, const float *rgba, const float *mvp,
+		const rm_viewport_t *vp, int cull);
 
 #endif /* RM_RMB_H */

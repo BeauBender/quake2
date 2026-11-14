@@ -97,3 +97,87 @@ rm_fragment_2d(rm_varying2d in [[stage_in]],
 
 	return c;
 }
+
+/*
+ * The 3D classes of N4. The vertex functions are the shim's: the CPU
+ * product mvp times the position, GL clip depth mapped by mtl_gl_clip_z.
+ * The world's position is read as one float4 with its stored w = 1, as
+ * the shim's is: a float3 widened with a w of 1 (a constant or a uniform)
+ * gave clip coordinates that differ in the last bits and moved texels on
+ * 0.1 to 1 percent of the pixels (design section 19).
+ */
+
+/* rm_wvert_t: the position at offset 0 with w = 1, 32 bytes */
+struct rm_wvert
+{
+	float4 pos;
+	float2 uv;
+	float2 lmuv;
+};
+
+/* rmb_uniforms3d_t */
+struct rm_uniforms3d
+{
+	float4x4 mvp;
+	float4 color;
+};
+
+/* the shim's mgl_varying, member for member, so the interpolation is laid out as the shim's */
+struct rm_varying3d
+{
+	float4 position [[position]];
+	float2 uv;
+	float2 lmuv;
+	float4 color;
+	float4 pt;
+};
+
+/* world_tex: the diffuse texel alone, gl1's GL_REPLACE with the lightmap unit off (r_fullbright) */
+vertex rm_varying3d
+rm_vertex_world(uint vid [[vertex_id]],
+		const device rm_wvert *v [[buffer(0)]],
+		constant rm_uniforms3d &u [[buffer(1)]])
+{
+	rm_varying3d out;
+	float4 p = u.mvp * v[vid].pos;
+
+	p.z = mtl_gl_clip_z(p.z, p.w);
+	out.position = p;
+	out.uv = v[vid].uv;
+	out.lmuv = v[vid].lmuv;
+	out.color = u.color;
+	out.pt = float4(0.0f);
+	return out;
+}
+
+fragment float4
+rm_fragment_world(rm_varying3d in [[stage_in]],
+		texture2d<float> tex [[texture(0)]],
+		sampler smp [[sampler(0)]])
+{
+	return tex.sample(smp, in.uv);
+}
+
+/* color: one untextured colour per draw, carried as a vertex colour as the shim's glColor4f is; positions with w = 1 */
+vertex rm_varying3d
+rm_vertex_color(uint vid [[vertex_id]],
+		const device float4 *v [[buffer(0)]],
+		constant rm_uniforms3d &u [[buffer(1)]])
+{
+	rm_varying3d out;
+	float4 p = u.mvp * v[vid];
+
+	p.z = mtl_gl_clip_z(p.z, p.w);
+	out.position = p;
+	out.uv = float2(0.0f);
+	out.lmuv = float2(0.0f);
+	out.color = u.color;
+	out.pt = float4(0.0f);
+	return out;
+}
+
+fragment float4
+rm_fragment_color(rm_varying3d in [[stage_in]])
+{
+	return saturate(in.color);
+}

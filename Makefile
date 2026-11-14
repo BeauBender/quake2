@@ -1172,18 +1172,24 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_image.o \
 	src/client/refresh/metal/rm_main.o \
 	src/client/refresh/metal/rm_misc.o \
+	src/client/refresh/metal/rm_model.o \
 	src/client/refresh/metal/rm_pure.o \
 	src/client/refresh/metal/rm_scrap.o \
 	src/client/refresh/metal/rm_sdl.o \
+	src/client/refresh/metal/rm_surf.o \
 	src/client/refresh/metal/rmb_device.o \
 	src/client/refresh/metal/rmb_encode.o \
 	src/client/refresh/metal/rmb_resource.o \
 	src/client/refresh/metal/common/mtl_matrix.o \
 	src/client/refresh/metal/common/mtl_ring.o \
 	src/client/refresh/files/common.o \
+	src/client/refresh/files/models.o \
 	src/client/refresh/files/pcx.o \
+	src/client/refresh/files/pvs.o \
 	src/client/refresh/files/stb.o \
+	src/client/refresh/files/surf.o \
 	src/client/refresh/files/wal.o \
+	src/backends/unix/shared/hunk.o \
 	src/common/md4.o \
 	src/common/shared/shared.o
 

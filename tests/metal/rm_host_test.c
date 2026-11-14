@@ -34,9 +34,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../../src/client/refresh/ref_shared.h"
 #include "../../src/client/refresh/metal/header/rmb.h"
 #include "../../src/client/refresh/metal/common/mtl_matrix.h"
 #include "../../src/client/refresh/metal/common/mtl_ring.h"
+
+/* tests/metal/rm_host_shim.c: the shim's mgl_compute_raster for glViewport(vx, vy, vw, vh) */
+void rm_host_shim_raster(int vx, int vy, int vw, int vh, int tw, int th, double *out);
+
+/* src/common/shared/shared.c, linked for files/surf.c, prints through the engine */
+void
+Com_Printf(const char *msg, ...)
+{
+	(void)msg;
+}
 
 static int checks, failures;
 
@@ -183,7 +194,8 @@ test_stats(void)
 	const char *want =
 		"ref_metal: metal_stats: 23 frames, 1 without a drawable, 2 skipped, 3 failed command buffers, "
 		"4 readbacks, 5 no-op calls, 6 draws, 7 draws skipped, 8 uploads, 9 uploads skipped, "
-		"10 pass splits, 12 pipelines, 0 created after init, 1 live objects";
+		"10 pass splits, 12 pipelines, 0 created after init, 1 live objects, "
+		"skipped surfaces: 13 sky, 14 warped, 15 translucent, 16 flowing";
 	size_t n;
 
 	memset(&l, 0, sizeof(l));
@@ -201,6 +213,10 @@ test_stats(void)
 	s.upload_skips = 9;
 	s.splits = 10;
 	s.pipelines = 12;
+	s.sky_skips = 13;
+	s.warp_skips = 14;
+	s.trans_skips = 15;
+	s.flow_skips = 16;
 	CHECK(rm_stats_format(&s, &l, buf, sizeof(buf)) && strcmp(buf, want) == 0);
 
 	n = strlen(want);
@@ -559,10 +575,13 @@ test_ring_console(void)
 static void
 test_color_load(void)
 {
-	CHECK(rm_color_load(1, 0) == RM_LOAD_CLEAR);
-	CHECK(rm_color_load(1, 1) == RM_LOAD_CLEAR);
-	CHECK(rm_color_load(0, 1) == RM_LOAD_KEEP);
-	CHECK(rm_color_load(0, 0) == RM_LOAD_BLACK);
+	CHECK(rm_color_load(1, 0, 0) == RM_LOAD_CLEAR);
+	CHECK(rm_color_load(1, 1, 1) == RM_LOAD_CLEAR);
+	CHECK(rm_color_load(0, 1, 0) == RM_LOAD_KEEP);
+	CHECK(rm_color_load(0, 0, 0) == RM_LOAD_BLACK);
+	/* a frame gl1 does not clear starts black, as the shim's first pass does, not on the last frame */
+	CHECK(rm_color_load(0, 1, 1) == RM_LOAD_BLACK);
+	CHECK(rm_color_load(0, 0, 1) == RM_LOAD_BLACK);
 }
 
 /*
@@ -928,6 +947,544 @@ test_tint(void)
 	CHECK(out[0] == 0.25f && out[1] == 0.5f && out[2] == 1.5f && out[3] == 1.0f);
 }
 
+/* ---- the world (N4) ------------------------------------------------------------- */
+
+static int
+near(double a, double b, double eps)
+{
+	return a - b < eps && b - a < eps;
+}
+
+/* The mirrored flags and limits are q_shared.h's and files.h's; the material class of each flag. */
+static void
+test_material(void)
+{
+	CHECK(RM_TEX_SKY == SURF_SKY && RM_TEX_WARP == SURF_WARP && RM_TEX_TRANS33 == SURF_TRANS33
+			&& RM_TEX_TRANS66 == SURF_TRANS66 && RM_TEX_FLOWING == SURF_FLOWING);
+	CHECK(RM_MAX_MAP_FACES == MAX_MAP_FACES && RM_MAX_MAP_SURFEDGES == MAX_MAP_SURFEDGES
+			&& RM_MAX_MAP_LEAFS == MAX_MAP_LEAFS && RM_MAX_MAP_AREAS == MAX_MAP_AREAS);
+
+	CHECK(rm_material(0) == RM_MAT_WORLD);
+	CHECK(rm_material(SURF_LIGHT | SURF_SLICK | SURF_NODRAW) == RM_MAT_WORLD);
+	CHECK(rm_material(SURF_SKY) == RM_MAT_SKY);
+	CHECK(rm_material(SURF_WARP) == RM_MAT_WATER);
+	CHECK(rm_material(SURF_TRANS33) == RM_MAT_TRANSLUCENT);
+	CHECK(rm_material(SURF_TRANS66) == RM_MAT_TRANSLUCENT);
+	CHECK(rm_material(SURF_FLOWING) == RM_MAT_FLOWING);
+	/* gl1's order: sky first, then the alpha chain, then the warped and the flowing draws */
+	CHECK(rm_material(SURF_SKY | SURF_TRANS33 | SURF_WARP) == RM_MAT_SKY);
+	CHECK(rm_material(SURF_TRANS66 | SURF_WARP | SURF_FLOWING) == RM_MAT_TRANSLUCENT);
+	CHECK(rm_material(SURF_WARP | SURF_FLOWING) == RM_MAT_WATER);
+}
+
+/* The retained vertex: position at offset 0, w after it, one stride of 32 bytes; the record's normal. */
+static void
+test_wvert_record(void)
+{
+	const float pn[3] = { 0.0f, -0.6f, 0.8f };
+	float n[3];
+
+	CHECK(offsetof(rm_wvert_t, pos) == 0 && offsetof(rm_wvert_t, uv) == 16 && offsetof(rm_wvert_t, lmuv) == 24);
+	CHECK(sizeof(rm_wvert_t) == RM_WVERT_STRIDE && RM_WVERT_STRIDE % 4 == 0);
+
+	rm_surf_normal(pn, 0, n);
+	CHECK(n[0] == 0.0f && n[1] == -0.6f && n[2] == 0.8f);
+	rm_surf_normal(pn, SURF_PLANEBACK, n);
+	CHECK(n[0] == 0.0f && n[1] == 0.6f && n[2] == -0.8f);
+}
+
+/*
+ * The fan of gl1's R_SetBufferIndices into the static index buffer: a
+ * 5-vertex polygon at vertex 10 and a 3-vertex one after it; too small a
+ * capacity, a polygon of 2 and a base that would pass 32 bits write nothing.
+ */
+static void
+test_world_fan(void)
+{
+	unsigned idx[16];
+	const unsigned five[9] = { 10, 11, 12, 10, 12, 13, 10, 13, 14 };
+	const unsigned three[3] = { 15, 16, 17 };
+
+	memset(idx, 0xee, sizeof(idx));
+	CHECK(rm_world_fan(10, 5, idx, 16) == 9 && memcmp(idx, five, sizeof(five)) == 0 && idx[9] == 0xeeeeeeee);
+	CHECK(rm_world_fan(15, 3, idx + 9, 7) == 3 && memcmp(idx + 9, three, sizeof(three)) == 0 && idx[12] == 0xeeeeeeee);
+
+	memset(idx, 0xee, sizeof(idx));
+	CHECK(rm_world_fan(0, 5, idx, 8) == 0 && idx[0] == 0xeeeeeeee);
+	CHECK(rm_world_fan(0, 2, idx, 16) == 0 && rm_world_fan(0, -1, idx, 16) == 0);
+	CHECK(rm_world_fan(0xfffffffeul, 3, idx, 16) == 0 && idx[0] == 0xeeeeeeee);
+	CHECK(rm_world_fan(0xfffffffcul, 3, idx, 16) == 3 && idx[2] == 0xfffffffeu);
+
+	/* an exact fit (the last surface of every map), and a base past 32 bits */
+	CHECK(rm_world_fan(0, 5, idx, 9) == 9 && idx[8] == 4);
+	CHECK(rm_world_fan(0x100000000ul, 3, idx, 16) == 0);
+}
+
+/*
+ * The retained-buffer arithmetic and its bounds (plan section 2, "Inputs and
+ * bounds"): counts are added per polygon up to the loader's limits, and the
+ * bytes are formed only when they fit; oversized counts and products that
+ * would overflow are refused without changing anything.
+ */
+static void
+test_world_sizes(void)
+{
+	rm_world_size_t s, big;
+	size_t vb = 1, ib = 1, sb = 1;
+	long i;
+
+	memset(&s, 0, sizeof(s));
+	CHECK(rm_world_add(&s, 5) && rm_world_add(&s, 3) && rm_world_add(&s, 4));
+	CHECK(s.surfs == 3 && s.verts == 12 && s.indices == 3 * (3 + 1 + 2));
+	CHECK(rm_world_bytes(&s, RMB_STATIC_MAX_BYTES, &vb, &ib, &sb));
+	CHECK(vb == 12 * 32 && ib == 18 * 4 && sb == 3 * sizeof(rm_surfrec_t));
+
+	/* a polygon of fewer than 3 vertices, or one that is negative, adds nothing */
+	CHECK(!rm_world_add(&s, 2) && !rm_world_add(&s, -5) && !rm_world_add(&s, 0));
+	CHECK(s.surfs == 3 && s.verts == 12);
+
+	/* the vertex limit: exactly full, then one more refused */
+	memset(&s, 0, sizeof(s));
+	CHECK(rm_world_add(&s, RM_WORLD_MAX_VERTS - 3) && rm_world_add(&s, 3));
+	CHECK(s.verts == RM_WORLD_MAX_VERTS && !rm_world_add(&s, 3) && s.verts == RM_WORLD_MAX_VERTS);
+	CHECK(rm_world_bytes(&s, RMB_STATIC_MAX_BYTES, &vb, &ib, &sb) && vb == (size_t)RM_WORLD_MAX_VERTS * 32);
+
+	/* a polygon one vertex longer than what is left is refused */
+	memset(&s, 0, sizeof(s));
+	CHECK(rm_world_add(&s, RM_WORLD_MAX_VERTS - 3) && !rm_world_add(&s, 4) && s.verts == RM_WORLD_MAX_VERTS - 3);
+
+	/* the index limit on its own (a total near it with few vertices; rm_world_add alone cannot reach it) */
+	memset(&s, 0, sizeof(s));
+	s.indices = RM_WORLD_MAX_INDICES - 5;
+	CHECK(!rm_world_add(&s, 4) && s.indices == RM_WORLD_MAX_INDICES - 5 && s.surfs == 0);
+	CHECK(rm_world_add(&s, 3) && s.indices == RM_WORLD_MAX_INDICES - 2);
+
+	/* a count near LONG_MAX is refused, not wrapped */
+	memset(&s, 0, sizeof(s));
+	CHECK(!rm_world_add(&s, 0x7fffffffffffffffL) && s.verts == 0 && s.indices == 0);
+
+	/* the surface limit */
+	memset(&s, 0, sizeof(s));
+
+	for (i = 0; i < RM_MAX_MAP_FACES; i++)
+	{
+		rm_world_add(&s, 3);
+	}
+
+	CHECK(s.surfs == RM_MAX_MAP_FACES && !rm_world_add(&s, 3) && s.surfs == RM_MAX_MAP_FACES);
+
+	/* counts past the limits, and products that overflow size_t, are refused with 0 bytes */
+	memset(&big, 0, sizeof(big));
+	big.verts = (unsigned long)-1 / 9;
+	CHECK(!rm_world_bytes(&big, (size_t)-1, &vb, &ib, &sb) && vb == 0 && ib == 0 && sb == 0);
+	memset(&big, 0, sizeof(big));
+	big.indices = (unsigned long)-1 / 2;
+	CHECK(!rm_world_bytes(&big, (size_t)-1, &vb, &ib, &sb) && ib == 0);
+	memset(&big, 0, sizeof(big));
+	big.surfs = RM_MAX_MAP_FACES + 1;
+	CHECK(!rm_world_bytes(&big, (size_t)-1, &vb, &ib, &sb));
+	/* inside the limits but past the buffer cap */
+	memset(&big, 0, sizeof(big));
+	big.verts = 1000;
+	CHECK(!rm_world_bytes(&big, 1000 * 32 - 1, &vb, &ib, &sb) && vb == 0);
+	CHECK(rm_world_bytes(&big, 1000 * 32, &vb, &ib, &sb) && vb == 32000);
+
+	/* the index and record products against the cap, each at its exact fit */
+	memset(&s, 0, sizeof(s)); s.surfs = 1; s.verts = 3; s.indices = 1000;
+	CHECK(!rm_world_bytes(&s, 1000 * 4 - 1, &vb, &ib, &sb) && rm_world_bytes(&s, 1000 * 4, &vb, &ib, &sb) && ib == 4000);
+	memset(&s, 0, sizeof(s)); s.surfs = 100; s.verts = 3; s.indices = 3;
+	CHECK(!rm_world_bytes(&s, 100 * 48 - 1, &vb, &ib, &sb) && rm_world_bytes(&s, 100 * 48, &vb, &ib, &sb) && sb == 4800);
+}
+
+/* The BSP index checks: ranges, lumps, a face's edges, a surfedge, a leaf. */
+static void
+test_bsp_bounds(void)
+{
+	CHECK(rm_range_ok(0, 0, 0) && rm_range_ok(2, 3, 5) && !rm_range_ok(2, 4, 5));
+	CHECK(!rm_range_ok(-1, 1, 5) && !rm_range_ok(1, -1, 5) && !rm_range_ok(0x7fffffffffffffffL, 1, 5));
+	CHECK(!rm_range_ok(1, 0x7fffffffffffffffL, 0x7fffffffffffffffL));
+
+	CHECK(rm_lump_ok(160, 40, 200) && !rm_lump_ok(160, 41, 200) && !rm_lump_ok(-4, 4, 200));
+	CHECK(!rm_lump_ok(4, -4, 200) && !rm_lump_ok(0x7fffffff, 0x7fffffff, 200));
+	/* a lump's records are read as int and float fields: its offset is a multiple of 4 */
+	CHECK(!rm_lump_ok(161, 4, 200) && !rm_lump_ok(162, 0, 200) && !rm_lump_ok(3, 1, 200) && rm_lump_ok(196, 4, 200));
+
+	CHECK(rm_face_edges_ok(0, 3, 3) && rm_face_edges_ok(7, 5, 12) && !rm_face_edges_ok(8, 5, 12));
+	CHECK(!rm_face_edges_ok(0, 2, 12) && !rm_face_edges_ok(-1, 3, 12) && !rm_face_edges_ok(0, -3, 12));
+	CHECK(!rm_face_edges_ok(0x7fffffff, 0x7fff, 12));
+
+	CHECK(rm_surfedge_ok(0, 1) && rm_surfedge_ok(9, 10) && rm_surfedge_ok(-9, 10));
+	CHECK(!rm_surfedge_ok(10, 10) && !rm_surfedge_ok(-10, 10) && !rm_surfedge_ok(-2147483647L - 1, 10));
+
+	CHECK(rm_leaf_ok(-1, 0, 4, 1) && rm_leaf_ok(3, 255, 4, 1) && !rm_leaf_ok(4, 0, 4, 1));
+	CHECK(!rm_leaf_ok(-2, 0, 4, 1) && !rm_leaf_ok(0, 256, 4, 1) && !rm_leaf_ok(0, -1, 4, 1));
+	CHECK(rm_leaf_ok(70000, 0, 0, 0));   /* without visibility the cluster indexes nothing */
+
+	/* a leaf's contents may be anything but CONTENTS_NODE, the mark of a node */
+	CHECK(rm_leaf_contents_ok(0) && rm_leaf_contents_ok(1) && rm_leaf_contents_ok(-2) && rm_leaf_contents_ok(0x7fffffff));
+	CHECK(!rm_leaf_contents_ok(-1));
+
+	/* the world has a node, and model 0 starts at one of them */
+	CHECK(rm_world_head_ok(1, 1, 0) && rm_world_head_ok(5, 3, 4));
+	CHECK(!rm_world_head_ok(0, 1, 0) && !rm_world_head_ok(0, 1, -1) && !rm_world_head_ok(2, 0, 0));
+	CHECK(!rm_world_head_ok(2, 1, -1) && !rm_world_head_ok(2, 1, 2) && !rm_world_head_ok(-1, 1, 0));
+}
+
+/* nexttexinfo chains: in range, and each one ends or returns to its start (Mod_LoadTexinfo's count loop). */
+static void
+test_texinfo_chains(void)
+{
+	const int plain[3] = { 0, 0, -1 };
+	const int ring[4] = { 1, 2, 0, 0 };     /* 0 -> 1 -> 2 -> end (0 is the end) */
+	const int cycle[4] = { 0, 2, 3, 1 };    /* 1 -> 2 -> 3 -> 1 */
+	const int lasso[4] = { 1, 2, 3, 2 };    /* 0 -> 1 -> 2 -> 3 -> 2: never back to 0, never ends */
+	const int out[3] = { 0, 3, 0 };
+	const int neg[3] = { -7, 0, 0 };
+
+	CHECK(rm_texinfo_chains_ok(plain, 3) && rm_texinfo_chains_ok(ring, 4) && rm_texinfo_chains_ok(cycle, 4));
+	CHECK(rm_texinfo_chains_ok(neg, 3) && rm_texinfo_chains_ok(plain, 0));
+	CHECK(!rm_texinfo_chains_ok(lasso, 4));
+	CHECK(!rm_texinfo_chains_ok(out, 3));
+	CHECK(!rm_texinfo_chains_ok(plain, -1));
+}
+
+/* The visibility header and the bounded decompression of a PVS row. */
+static void
+test_vis(void)
+{
+	const unsigned char row[] = { 0x81, 0x00, 0x03, 0x7e };   /* 0x81, three zeros, 0x7e */
+	const unsigned char want[5] = { 0x81, 0, 0, 0, 0x7e };
+	const unsigned char longrun[] = { 0x01, 0x00, 0xff };     /* a run of 255 zeros in a row of 4 */
+	unsigned char out[8];
+
+	CHECK(rm_vis_header_ok(0, 4) && rm_vis_header_ok(2, 20) && !rm_vis_header_ok(2, 19));
+	CHECK(!rm_vis_header_ok(-1, 100) && !rm_vis_header_ok(RM_MAX_MAP_LEAFS + 1, 0x7fffffff));
+	CHECK(!rm_vis_header_ok(0x7fffffffffffffffL / 4, 0x7fffffffffffffffL) && !rm_vis_header_ok(0, 3));
+
+	memset(out, 0xee, sizeof(out));
+	CHECK(rm_decompress_vis(row, sizeof(row), 5, out, sizeof(out)) && memcmp(out, want, 5) == 0 && out[5] == 0xee);
+
+	/* the zero run is cut at the end of the row: nothing past it is written */
+	memset(out, 0xee, sizeof(out));
+	CHECK(rm_decompress_vis(longrun, sizeof(longrun), 4, out, sizeof(out)) && out[0] == 1 && out[3] == 0 && out[4] == 0xee);
+
+	/* input that ends inside the row, or a run without its count: all visible, never read past */
+	memset(out, 0xee, sizeof(out));
+	CHECK(!rm_decompress_vis(row, 2, 5, out, sizeof(out)) && out[0] == 0xff && out[4] == 0xff && out[5] == 0xee);
+	CHECK(!rm_decompress_vis(row, 1, 5, out, sizeof(out)) && out[1] == 0xff);
+	{
+		/* a zero as the last byte, its count past the end: not read (ASAN sees a read of tail[2]) */
+		const unsigned char tail[2] = { 0x81, 0x00 };
+
+		CHECK(!rm_decompress_vis(tail, sizeof(tail), 5, out, sizeof(out)) && out[0] == 0xff);
+	}
+	{
+		/* a two-byte lump that ends inside the row: never read past its end */
+		unsigned char lit[2] = { 1, 2 };
+
+		memset(out, 0xee, sizeof(out));
+		CHECK(!rm_decompress_vis(lit, sizeof(lit), 5, out, sizeof(out)) && out[0] == 0xff);
+	}
+	/* a row longer than the output writes nothing */
+	memset(out, 0xee, sizeof(out));
+	CHECK(!rm_decompress_vis(row, sizeof(row), 9, out, sizeof(out)) && out[0] == 0xee && out[7] == 0xee);
+}
+
+/* Each surface in at most one node: a second claim, or a range outside the table, marks nothing. */
+static void
+test_mark_once(void)
+{
+	unsigned char owner[6];
+
+	memset(owner, 0, sizeof(owner));
+	CHECK(rm_mark_once(owner, 6, 0, 2) && rm_mark_once(owner, 6, 4, 2) && rm_mark_once(owner, 6, 2, 0));
+	CHECK(owner[0] && owner[1] && !owner[2] && !owner[3] && owner[4] && owner[5]);
+	CHECK(!rm_mark_once(owner, 6, 1, 2) && !owner[2]);
+	CHECK(!rm_mark_once(owner, 6, 3, 4) && !owner[3]);
+	CHECK(!rm_mark_once(owner, 6, -1, 1) && rm_mark_once(owner, 6, 2, 2));
+
+	/* only the last surface of the range is taken already */
+	memset(owner, 0, sizeof(owner));
+	CHECK(rm_mark_once(owner, 6, 4, 1) && !rm_mark_once(owner, 6, 3, 2) && !owner[3]);
+}
+
+/*
+ * The node lump is a tree from node 0 before it is linked: a node named by
+ * two parents, twice by one, a cycle back to node 0 or through another
+ * node, and a child outside the nodes or the leafs are refused.
+ */
+static void
+test_node_tree(void)
+{
+	unsigned char seen[4];
+	const int tree[8] = { 1, 2, -1, -2, 3, -3, -4, -1 };      /* 0 -> 1, 2; 2 -> 3; leaves 0 to 3 */
+	const int leaves[2] = { -1, -1 };                          /* one node, a leaf twice */
+	const int shared[8] = { 1, 2, 3, -1, 3, -2, -3, -4 };      /* 3 is a child of 1 and of 2 */
+	const int twice[4] = { 1, 1, -1, -2 };                     /* 1 is both children of 0 */
+	const int to_root[4] = { 1, -1, 0, -2 };                   /* 0 -> 1 -> 0 */
+	const int loop[6] = { 1, -1, 2, -2, 1, -3 };               /* 0 -> 1 -> 2 -> 1 */
+	const int self[4] = { 1, -1, 1, -2 };                      /* 1 -> 1 */
+	const int far_node[4] = { 2, -1, -1, -1 };
+	const int far_leaf[4] = { 1, -5, -1, -1 };
+	const int least[4] = { 1, -2147483647 - 1, -1, -1 };
+	const int last_root[4] = { 1, -1, -1, 0 };                 /* the last slot names the root */
+	const int last_again[4] = { 1, -1, -1, 1 };                /* the last slot names node 1 again */
+
+	CHECK(rm_node_tree_ok(tree, 4, 4, seen) && rm_node_tree_ok(leaves, 1, 1, seen));
+	CHECK(!rm_node_tree_ok(shared, 4, 4, seen));
+	CHECK(!rm_node_tree_ok(twice, 2, 2, seen));
+	CHECK(!rm_node_tree_ok(to_root, 2, 2, seen));
+	CHECK(!rm_node_tree_ok(loop, 3, 3, seen) && !rm_node_tree_ok(self, 2, 2, seen));
+	memset(seen, 0, sizeof(seen));   /* a child at the node count, not seen before */
+	CHECK(!rm_node_tree_ok(far_node, 2, 4, seen) && !rm_node_tree_ok(far_leaf, 2, 4, seen));
+	CHECK(rm_node_tree_ok(far_leaf, 2, 5, seen) && !rm_node_tree_ok(least, 2, 4, seen));
+	CHECK(!rm_node_tree_ok(tree, 0, 4, seen) && !rm_node_tree_ok(tree, 4, 3, seen));
+	CHECK(!rm_node_tree_ok(last_root, 2, 2, seen) && !rm_node_tree_ok(last_again, 2, 2, seen));
+	/* the scratch is cleared on each call: the same valid tree passes twice */
+	CHECK(rm_node_tree_ok(tree, 4, 4, seen) && rm_node_tree_ok(tree, 4, 4, seen));
+}
+
+/*
+ * A model slot is handed out only when its load finished: the name alone
+ * (a loader dropped past Mod_ForName) or memory without the flag is an
+ * unfinished load, to be freed before the next one.
+ */
+static void
+test_slot_state(void)
+{
+	CHECK(rm_slot_state(0, 0, 0) == RM_SLOT_EMPTY);
+	CHECK(rm_slot_state(1, 1, 1) == RM_SLOT_LOADED && rm_slot_state(1, 1, 0) == RM_SLOT_LOADED);
+	CHECK(rm_slot_state(1, 0, 0) == RM_SLOT_UNFINISHED && rm_slot_state(1, 0, 1) == RM_SLOT_UNFINISHED);
+	CHECK(rm_slot_state(0, 0, 1) == RM_SLOT_UNFINISHED);
+	CHECK(rm_slot_state(0, 1, 0) == RM_SLOT_UNFINISHED && rm_slot_state(0, 1, 1) == RM_SLOT_UNFINISHED);
+}
+
+/*
+ * The 3D viewport of gl1's R_SetupGL on the target equals the shim's
+ * mgl_compute_raster of the same glViewport, for the full view and for a
+ * smaller centred one (viewsize below 100).
+ */
+static void
+test_view_rect(void)
+{
+	static const int rects[3][4] = { { 0, 0, 640, 480 }, { 64, 48, 512, 384 }, { 33, 7, 101, 55 } };
+	rm_viewport_t vp;
+	double shim[6];
+	int i;
+
+	for (i = 0; i < 3; i++)
+	{
+		const int *r = rects[i];
+		int x = floor(r[0] * 640 / (float)640), x2 = ceil((r[0] + r[2]) * 640 / (float)640);
+		int y = floor(480 - r[1] * 480 / (float)480), y2 = ceil(480 - (r[1] + r[3]) * 480 / (float)480);
+
+		rm_view_rect(r[0], r[1], r[2], r[3], 640, 480, 480, &vp);
+		rm_host_shim_raster(x, y2, x2 - x, y - y2, 640, 480, shim);
+		CHECK(vp.x == shim[0] && vp.y == shim[1] && vp.w == shim[2] && vp.h == shim[3]);
+		CHECK(vp.znear == shim[4] && vp.zfar == shim[5]);
+	}
+
+	/* hand-worked: the 64, 48 view of 512 by 384 starts 48 rows from the top in Metal */
+	rm_view_rect(64, 48, 512, 384, 640, 480, 480, &vp);
+	CHECK(vp.x == 64 && vp.y == 48 && vp.w == 512 && vp.h == 384 && vp.znear == 0 && vp.zfar == 1);
+	rm_view_rect(10, 20, 100, 50, 640, 480, 480, &vp);
+	CHECK(vp.x == 10 && vp.y == 20 && vp.w == 100 && vp.h == 50);
+}
+
+/* gl1's R_SetupGL modelview: as raw float bits through mtl_matrix.c, and what it does to a point. */
+static void
+test_view_matrix(void)
+{
+	const float angles[3] = { 10.0f, 30.0f, -5.0f }, org[3] = { 100.0f, -20.0f, 48.0f };
+	const float zero[3] = { 0, 0, 0 }, o2[3] = { 1, 2, 3 };
+	float m[16], want[16], r[16];
+	float eye[3];
+	int i;
+
+	mtl_mat_identity(want);
+	mtl_mat_rotate(r, -90, 1, 0, 0); mtl_mat_mul(want, want, r);
+	mtl_mat_rotate(r, 90, 0, 0, 1); mtl_mat_mul(want, want, r);
+	mtl_mat_rotate(r, -angles[2], 1, 0, 0); mtl_mat_mul(want, want, r);
+	mtl_mat_rotate(r, -angles[0], 0, 1, 0); mtl_mat_mul(want, want, r);
+	mtl_mat_rotate(r, -angles[1], 0, 0, 1); mtl_mat_mul(want, want, r);
+	mtl_mat_translate(r, -org[0], -org[1], -org[2]); mtl_mat_mul(want, want, r);
+
+	memset(m, 0x5a, sizeof(m));
+	rm_view_matrix(m, angles, org);
+	CHECK(memcmp(m, want, sizeof(m)) == 0);
+
+	/* with no angles a point 10 units ahead (+x) is 10 down GL's -z, up (+z) is +y, left (+y) is -x */
+	rm_view_matrix(m, zero, o2);
+
+	for (i = 0; i < 3; i++)
+	{
+		eye[i] = m[i] * 11 + m[4 + i] * 2 + m[8 + i] * 3 + m[12 + i];
+	}
+
+	CHECK(near(eye[0], 0, 1e-5) && near(eye[1], 0, 1e-5) && near(eye[2], -10, 1e-5));
+
+	for (i = 0; i < 3; i++)
+	{
+		eye[i] = m[i] * 1 + m[4 + i] * 7 + m[8 + i] * 8 + m[12 + i];
+	}
+
+	CHECK(near(eye[0], -5, 1e-5) && near(eye[1], 5, 1e-5) && near(eye[2], 0, 1e-5));
+
+	/* the screen blend's modelview: the first two rotations alone */
+	mtl_mat_identity(want);
+	mtl_mat_rotate(r, -90, 1, 0, 0); mtl_mat_mul(want, want, r);
+	mtl_mat_rotate(r, 90, 0, 0, 1); mtl_mat_mul(want, want, r);
+	rm_blend_matrix(m);
+	CHECK(memcmp(m, want, sizeof(m)) == 0);
+}
+
+/* gl1's R_SetPerspective, with and without r_farsee and the under-water wobble of gl1_waterwarp. */
+static void
+test_projection(void)
+{
+	float m[16], want[16], id[16];
+	double ymax, xmax, warp;
+
+	/* 90 degrees on 640 by 480, gl_znear 4 */
+	ymax = 4.0 * tan(90.0f * M_PI / 360.0);
+	xmax = ymax * ((double)640 / 480);
+	mtl_mat_identity(id);
+	mtl_mat_frustum(want, -xmax, xmax, -ymax, ymax, 4.0, 4096.0);
+	mtl_mat_mul(want, id, want);
+	CHECK(rm_projection(m, 90.0f, 640, 480, 4.0f, 0, 0, 1.0f, 1.0f) && memcmp(m, want, sizeof(m)) == 0);
+	CHECK(near(m[0], 0.75, 1e-6) && near(m[5], 1, 1e-6) && m[11] == -1.0f);
+	CHECK(near(m[10], -4100.0 / 4092.0, 1e-6) && near(m[14], -2.0 * 4096 * 4 / 4092.0, 1e-4));
+
+	/* r_farsee: zFar 8192; gl_znear below 0.1 is 0.1 */
+	CHECK(rm_projection(m, 90.0f, 640, 480, 4.0f, 1, 0, 1.0f, 1.0f) && near(m[10], -8196.0 / 8188.0, 1e-6));
+	CHECK(rm_projection(m, 90.0f, 640, 480, 0.0f, 0, 0, 1.0f, 1.0f) && near(m[14], -2.0 * 4096 * 0.1 / (4096 - 0.1), 1e-5));
+
+	/* under water at time 2: ymax shrinks and xmax grows by sin(3) * 0.03 */
+	warp = sin(2.0f * 1.5) * 0.03 * 1.0f;
+	ymax = 4.0 * tan(90.0f * M_PI / 360.0);
+	xmax = ymax * ((double)640 / 480);
+	ymax *= 1.0 - warp;
+	xmax *= 1.0 + warp;
+	mtl_mat_frustum(want, -xmax, xmax, -ymax, ymax, 4.0, 4096.0);
+	mtl_mat_mul(want, id, want);
+	CHECK(rm_projection(m, 90.0f, 640, 480, 4.0f, 0, 1, 2.0f, 1.0f) && memcmp(m, want, sizeof(m)) == 0);
+	CHECK(!near(m[5], 1, 1e-4));
+	/* gl1_waterwarp 0: no wobble under water */
+	CHECK(rm_projection(m, 90.0f, 640, 480, 4.0f, 0, 1, 2.0f, 0.0f) && near(m[5], 1, 1e-6));
+
+	/* glFrustum refuses a zero height: m is left as it was */
+	memset(m, 0x5a, sizeof(m));
+	CHECK(!rm_projection(m, 90.0f, 640, 0, 4.0f, 0, 0, 1.0f, 1.0f) && ((unsigned char *)m)[0] == 0x5a);
+}
+
+/* R_PolyBlend: the colour times sw_gamma, the alpha as given; no quad for gl_polyblend 0 or alpha 0. */
+static void
+test_polyblend(void)
+{
+	const float blend[4] = { 0.5f, 0.25f, 1.0f, 0.3f }, clear[4] = { 0.5f, 0.25f, 1.0f, 0.0f };
+	float rgba[4] = { 9, 9, 9, 9 };
+
+	CHECK(rm_polyblend(blend, 1.2f, 1.0f, rgba));
+	CHECK(rgba[0] == 0.5f * 1.2f && rgba[1] == 0.25f * 1.2f && rgba[2] == 1.0f * 1.2f && rgba[3] == 0.3f);
+	CHECK(!rm_polyblend(blend, 1.2f, 0.0f, rgba));
+	CHECK(!rm_polyblend(clear, 1.2f, 1.0f, rgba));
+}
+
+/*
+ * What ref_metal takes from files/surf.c unchanged: the frustum of
+ * R_SetFrustum against hand-worked planes, R_CullBox on boxes in front,
+ * behind and beside, and R_TextureAnimation's frame of a chain.
+ */
+static void
+test_frustum_cull(void)
+{
+	vec3_t vpn, vright, vup, org = { 0, 0, 0 }, org2 = { 100, 0, 0 }, ang = { 0, 0, 0 };
+	vec3_t a0 = { 10, -1, -1 }, a1 = { 20, 1, 1 };     /* ahead */
+	vec3_t b0 = { -20, -1, -1 }, b1 = { -10, 1, 1 };   /* behind */
+	vec3_t c0 = { 10, 50, 0 }, c1 = { 11, 60, 1 };     /* left, outside 45 degrees */
+	vec3_t d0 = { -5, -5, -5 }, d1 = { 5, 5, 5 };      /* around the eye */
+	vec3_t e0 = { 10, -1, 50 }, e1 = { 11, 1, 60 };    /* above, outside the top plane only */
+	cplane_t f[4];
+	const double h = sqrt(0.5);
+
+	AngleVectors(ang, vpn, vright, vup);
+	R_SetFrustum(vup, vpn, vright, org, 90, 90, f);
+
+	CHECK(near(f[0].normal[0], h, 1e-6) && near(f[0].normal[1], -h, 1e-6) && near(f[0].normal[2], 0, 1e-6));
+	CHECK(near(f[1].normal[0], h, 1e-6) && near(f[1].normal[1], h, 1e-6) && near(f[1].normal[2], 0, 1e-6));
+	CHECK(near(f[2].normal[0], h, 1e-6) && near(f[2].normal[1], 0, 1e-6) && near(f[2].normal[2], h, 1e-6));
+	CHECK(near(f[3].normal[0], h, 1e-6) && near(f[3].normal[1], 0, 1e-6) && near(f[3].normal[2], -h, 1e-6));
+	CHECK(f[0].dist == 0 && f[0].type == PLANE_ANYZ && f[0].signbits == 2 && f[3].signbits == 4);
+
+	CHECK(!R_CullBox(a0, a1, f) && R_CullBox(b0, b1, f) && R_CullBox(c0, c1, f) && !R_CullBox(d0, d1, f));
+	CHECK(R_CullBox(e0, e1, f));
+
+	/* from 100 units further on, the plane distances move and the box ahead is now behind */
+	R_SetFrustum(vup, vpn, vright, org2, 90, 90, f);
+	CHECK(near(f[1].dist, 100 * h, 1e-4) && R_CullBox(a0, a1, f));
+}
+
+static void
+test_texture_animation(void)
+{
+	struct image_s *imgs[3] = { (struct image_s *)&imgs[0], (struct image_s *)&imgs[1], (struct image_s *)&imgs[2] };
+	mtexinfo_t t[3];
+	entity_t e;
+	int i;
+
+	memset(t, 0, sizeof(t));
+	memset(&e, 0, sizeof(e));
+
+	for (i = 0; i < 3; i++)
+	{
+		t[i].image = imgs[i];
+		t[i].next = &t[(i + 1) % 3];
+		t[i].numframes = 3;
+	}
+
+	e.frame = 4;    /* 4 % 3: one step on */
+	CHECK(R_TextureAnimation(&e, &t[0]) == imgs[1] && R_TextureAnimation(&e, &t[2]) == imgs[0]);
+	e.frame = 6;
+	CHECK(R_TextureAnimation(&e, &t[1]) == imgs[1]);
+	e.frame = -5;   /* a negative frame is the first */
+	CHECK(R_TextureAnimation(&e, &t[0]) == imgs[0]);
+	CHECK(R_TextureAnimation(NULL, &t[0]) == imgs[0]);
+	t[0].next = NULL;
+	e.frame = 1;
+	CHECK(R_TextureAnimation(&e, &t[0]) == imgs[0]);
+}
+
+/* The per-map line of metal_stats, and the skipped-surface counts of the per-frame line. */
+static void
+test_world_line(void)
+{
+	rm_world_size_t s;
+	char buf[RM_STATS_LINE];
+	const char *want = "ref_metal: metal_stats: world maps/base1.bsp: 12 vertices (384 bytes), "
+		"18 indices (72 bytes), 3 surface records (144 bytes)";
+	size_t n = strlen(want);
+
+	s.surfs = 3;
+	s.verts = 12;
+	s.indices = 18;
+	CHECK(rm_world_format("maps/base1.bsp", &s, buf, sizeof(buf)) && strcmp(buf, want) == 0);
+	CHECK(rm_world_format("maps/base1.bsp", &s, buf, n + 1) && !rm_world_format("maps/base1.bsp", &s, buf, n));
+
+	/* the longest map name (MAX_QPATH) and counts fit RM_STATS_LINE; counts past the limits print nothing */
+	{
+		char name[MAX_QPATH];
+
+		memset(name, 'x', sizeof(name) - 1);
+		name[sizeof(name) - 1] = '\0';
+		s.surfs = RM_MAX_MAP_FACES;
+		s.verts = RM_WORLD_MAX_VERTS;
+		s.indices = RM_WORLD_MAX_INDICES;
+		CHECK(rm_world_format(name, &s, buf, sizeof(buf)) && strlen(buf) < sizeof(buf));
+		s.verts++;
+		CHECK(!rm_world_format(name, &s, buf, sizeof(buf)) && buf[0] == '\0');
+	}
+}
+
 int
 main(void)
 {
@@ -958,6 +1515,23 @@ main(void)
 	test_batch_fits();
 	test_quad_indices();
 	test_tint();
+	test_material();
+	test_wvert_record();
+	test_world_fan();
+	test_world_sizes();
+	test_bsp_bounds();
+	test_texinfo_chains();
+	test_vis();
+	test_mark_once();
+	test_slot_state();
+	test_node_tree();
+	test_view_rect();
+	test_view_matrix();
+	test_projection();
+	test_polyblend();
+	test_frustum_cull();
+	test_texture_animation();
+	test_world_line();
 
 	printf("rm_host_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

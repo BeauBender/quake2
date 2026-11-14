@@ -60,6 +60,9 @@ void rmb_encode_split(void);
 
 static id<MTLLibrary> library;
 static id<MTLRenderPipelineState> pipes[RM_PIPE_2D_COUNT];
+static id<MTLRenderPipelineState> pipes3d[RM_PIPE_3D_COUNT];
+static id<MTLDepthStencilState> depth_states[RMB_DS_COUNT];
+static id<MTLBuffer> buffers[RMB_MAX_BUFFERS];      /* the static (retained) buffers, private */
 static id<MTLSamplerState> samplers[RMB_SMP_CLASSES * 2];
 static int resources_open;
 
@@ -114,6 +117,69 @@ rmb_new_pipe_2d(rm_texenv_t env, int alpha_test, int blend, NSError **e)
 	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
 }
 
+/*
+ * The 3D pipelines (design section 4): world_tex and the blended color,
+ * for the 3D pass's colour target and its depth32Float_stencil8 attachment.
+ */
+static id<MTLRenderPipelineState>
+rmb_new_pipe_3d(rm_pipe3d_t which, NSError **e)
+{
+	MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+	id<MTLFunction> vf, ff;
+
+	if (which == RM_PIPE_WORLD_TEX)
+	{
+		vf = [library newFunctionWithName:@"rm_vertex_world"];
+		ff = [library newFunctionWithName:@"rm_fragment_world"];
+	}
+	else
+	{
+		vf = [library newFunctionWithName:@"rm_vertex_color"];
+		ff = [library newFunctionWithName:@"rm_fragment_color"];
+	}
+
+	if (!vf || !ff)
+	{
+		return nil;
+	}
+
+	d.vertexFunction = vf;
+	d.fragmentFunction = ff;
+	d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+	d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+	d.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+
+	if (which == RM_PIPE_COLOR_BLEND)
+	{
+		/* gl1's glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA), for colour and alpha */
+		d.colorAttachments[0].blendingEnabled = YES;
+		d.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+		d.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorSourceAlpha;
+		d.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+		d.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+	}
+
+	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
+}
+
+/* The depth-stencil states of the 3D pass: no test, and gl1's GL_LEQUAL with writes. */
+static int
+rmb_new_depth_states(void)
+{
+	MTLDepthStencilDescriptor *d = [MTLDepthStencilDescriptor new];
+
+	d.depthCompareFunction = MTLCompareFunctionAlways;
+	d.depthWriteEnabled = NO;
+	depth_states[RMB_DS_NONE] = [rmb_device newDepthStencilStateWithDescriptor:d];
+
+	d = [MTLDepthStencilDescriptor new];
+	d.depthCompareFunction = MTLCompareFunctionLessEqual;
+	d.depthWriteEnabled = YES;
+	depth_states[RMB_DS_LEQUAL_WRITE] = [rmb_device newDepthStencilStateWithDescriptor:d];
+
+	return depth_states[RMB_DS_NONE] && depth_states[RMB_DS_LEQUAL_WRITE];
+}
+
 int
 rmb_resources_open(const char *dir, char *err, size_t errlen)
 {
@@ -121,7 +187,7 @@ rmb_resources_open(const char *dir, char *err, size_t errlen)
 	{
 		NSError *e = nil;
 		NSString *path = [@(dir) stringByAppendingPathComponent:@"ref_metal.metallib"];
-		int env, a, b;
+		int env, a, b, i3;
 
 		if (resources_open)
 		{
@@ -162,6 +228,27 @@ rmb_resources_open(const char *dir, char *err, size_t errlen)
 					rmb_counts.pipelines++;
 				}
 			}
+		}
+
+		for (i3 = 0; i3 < RM_PIPE_3D_COUNT; i3++)
+		{
+			pipes3d[i3] = rmb_new_pipe_3d((rm_pipe3d_t)i3, &e);
+
+			if (!pipes3d[i3])
+			{
+				rmb_err(err, errlen, @"cannot build a 3D pipeline state", e);
+				rmb_resources_close();
+				return 0;
+			}
+
+			rmb_counts.pipelines++;
+		}
+
+		if (!rmb_new_depth_states())
+		{
+			snprintf(err, errlen, "cannot build the depth-stencil states");
+			rmb_resources_close();
+			return 0;
 		}
 
 		staging = [rmb_device newBufferWithLength:RMB_STAGING_BYTES options:MTLResourceStorageModeShared];
@@ -248,9 +335,24 @@ rmb_resources_close(void)
 			rmb_texture_free(i);
 		}
 
+		for (i = 0; i < RMB_MAX_BUFFERS; i++)
+		{
+			rmb_buffer_free(i);
+		}
+
 		for (i = 0; i < RM_PIPE_2D_COUNT; i++)
 		{
 			pipes[i] = nil;
+		}
+
+		for (i = 0; i < RM_PIPE_3D_COUNT; i++)
+		{
+			pipes3d[i] = nil;
+		}
+
+		for (i = 0; i < RMB_DS_COUNT; i++)
+		{
+			depth_states[i] = nil;
 		}
 
 		for (i = 0; i < RMB_SMP_CLASSES * 2; i++)
@@ -503,4 +605,91 @@ id<MTLSamplerState>
 rmb_sampler(int i)
 {
 	return (i >= 0 && i < RMB_SMP_CLASSES * 2) ? samplers[i] : nil;
+}
+
+id<MTLRenderPipelineState>
+rmb_pipe3d(int i)
+{
+	return (i >= 0 && i < RM_PIPE_3D_COUNT) ? pipes3d[i] : nil;
+}
+
+id<MTLDepthStencilState>
+rmb_depth_state(int i)
+{
+	return (i >= 0 && i < RMB_DS_COUNT) ? depth_states[i] : nil;
+}
+
+/*
+ * A static buffer: private storage, its bytes copied from a shared
+ * buffer by a blit on the upload command buffer, which is committed
+ * before any frame command buffer reads it (rmb_upload_flush). The shared
+ * source is kept alive by the command buffer that reads it.
+ */
+int
+rmb_buffer_static(const void *data, size_t bytes)
+{
+	int bid;
+
+	if (!resources_open || !data || (bytes == 0) || (bytes > RMB_STATIC_MAX_BYTES))
+	{
+		rmb_counts.upload_skips++;
+		return 0;
+	}
+
+	for (bid = 1; bid < RMB_MAX_BUFFERS && buffers[bid]; bid++)
+	{
+	}
+
+	if (bid == RMB_MAX_BUFFERS)
+	{
+		rmb_counts.upload_skips++;
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		id<MTLBuffer> src = [rmb_device newBufferWithBytes:data length:bytes options:MTLResourceStorageModeShared];
+		id<MTLBuffer> dst = [rmb_device newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
+
+		if (!upload_cmd)
+		{
+			upload_cmd = [rmb_queue commandBuffer];
+		}
+
+		if (upload_cmd && !upload_blit)
+		{
+			upload_blit = [upload_cmd blitCommandEncoder];
+		}
+
+		if (!src || !dst || !upload_blit)
+		{
+			rmb_counts.upload_skips++;
+			return 0;
+		}
+
+		[upload_blit copyFromBuffer:src sourceOffset:0 toBuffer:dst destinationOffset:0 size:bytes];
+		buffers[bid] = dst;
+		rm_ledger_create(&rmb_ledger, RM_OBJ_BUFFER);
+	}
+
+	rmb_counts.uploads++;
+	return bid;
+}
+
+void
+rmb_buffer_free(int bid)
+{
+	if ((bid > 0) && (bid < RMB_MAX_BUFFERS) && buffers[bid])
+	{
+		/* a command buffer that still reads it keeps it alive */
+		buffers[bid] = nil;
+		rm_ledger_destroy(&rmb_ledger, RM_OBJ_BUFFER);
+	}
+}
+
+/* For rmb_encode.m: a static buffer, nil for an id without one. */
+id<MTLBuffer>
+rmb_static_buffer(int bid)
+{
+	return ((bid > 0) && (bid < RMB_MAX_BUFFERS)) ? buffers[bid] : nil;
 }
