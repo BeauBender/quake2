@@ -531,3 +531,94 @@ intersection performance (RT9, RT10) only.
    `src/client/refresh/metal/common/` rather than copying it, proven
    neutral by byte-identical `gl1-metal` frames and an unchanged shim
    host-test count.
+
+## 16. As built
+
+### N1: the skeleton (TASK84)
+
+What exists: `make ref_metal` (Darwin only, not in `all`; elsewhere it
+fails with one line naming macOS) links `release/ref_metal.dylib`
+against Metal, QuartzCore and Foundation, with no OpenGL and the
+executable's SDL (`SDL_DYNAMIC_LOOKUP`). The files are those of
+section 2 that N1 needs: `header/local.h`, `header/rmb.h`, `rm_main.c`,
+`rm_sdl.c`, `rm_misc.c`, `rm_pure.c`, `rmb_device.m`, `rmb_encode.m`;
+`files/common.c` and `shared.c` are linked as the other renderers link
+them. Every `refexport_t` entry is filled; registration and drawing are
+no-ops that return NULL handles (`DrawGetPicSize` answers 0 by 0, as
+`ref.h` says for a missing pic) and count their calls. `BeginFrame`
+opens the frame's first pass, colour only, where gl1 calls `R_Clear`:
+colour cleared to 1, 0, 0.5 with `r_clear 1`, loaded with `r_clear 0`
+(gl1 then clears no colour and the frame starts on what the buffer
+holds; here the last frame, or black on a target no pass has written).
+`RenderFrame` opens the 3D pass with colour loaded, depth cleared to 1
+and stencil to 0 (gl1 clears depth in `R_Clear`; no 2D draw writes
+depth before the view, so the result is the same), and
+`EndWorldRenderpass` the 2D pass (colour loaded, no depth). With
+`r_clear 1` a `screenshot` in the main menu before any map is 640x480,
+every pixel 255, 0, 128; with `r_clear 0` every pixel 0, 0, 0. A
+readback of a colour target no pass has written (a new target in a
+skipped frame) is refused. The cvars read are gl1's `r_clear`, `r_mode`, `r_customwidth`,
+`r_customheight`, `r_norefresh`, `r_vsync`, `vid_fullscreen`, plus
+`metal_stats`; the one command is `screenshot`.
+
+Choices made where the design left room:
+
+- `rm_sdl.c` is the only file that includes SDL: it creates and destroys
+  the SDL Metal view and hands its `CAMetalLayer` to `rmb_attach`, and
+  passes the window's pixel size to `rmb_frame_begin`. The Objective-C
+  files include no SDL header.
+- The device and queue are opened in `Init` (before the window), so the
+  capability report and the apple5 refusal come before any window is
+  made; the decision itself is `rm_caps_floor_ok` in `rm_pure.c`,
+  host-tested.
+- The colour target follows the window's pixel size, and the screenshot
+  hands over the target's size. Outside a frame (a `screenshot` typed at
+  the console) it reads the last frame from the target.
+- After a readback the frame goes on with a new command buffer; nothing
+  reopens the pass, the next pass a later card opens loads the target.
+- The teardown line (always printed) counts creates and destroys per
+  kind and, through weak references, the colour and depth targets, the
+  readback buffer and the queue that are still alive after ref_metal
+  dropped them ("unreleased"). The system default device is shared with
+  the process and is not weak-checked. A test build that kept one
+  target in a static reference printed `1 live objects ... 1 unreleased`.
+- The vocabulary check looks for `gl[A-Z]` calls and `GL_` identifiers
+  in code only, outside comments and string literals, so N2 can copy
+  gl1's `gl_texturemode` value strings (`"GL_NEAREST"` and the rest) as
+  literals; `<OpenGL/` and `gl1/` includes are looked for in the raw
+  text, and a symbolic link under the directory fails the check. It
+  scans `.c`, `.h`, `.m` and `.metal` files; any other file there (a
+  `.mm`, `.cpp` or `.inc`) fails the check instead of going unscanned.
+- `scripts/pins.sh` needed no change (section 10): `metal` is a plain
+  module name.
+
+Measured on the build VM (T0, `Apple Paravirtual device`), commit
+`0da03fd3`, load averages between 7.9 and 12.2 (a shared host):
+
+| What | Result |
+|---|---|
+| `MTL_DEBUG_LAYER=1 scripts/pins.sh record metal hud2d`, release build, 3 runs (`--run 2`, `--run 3`) | each: 23 frames at 640x480, every `manifest.txt` line names `metal`, every pixel of every frame 255, 0, 128; the engine quit by itself with status 0; 689 timedemo frames in 0.2 to 0.3 s (2590 to 2883 fps); no failed command buffer; teardown `0 live objects`, `0 unreleased` |
+| the same record with the `ASAN=1` build (`PINS_BIN=debug/quake2`) | the same 23 uniform frames, no sanitizer line, 1837 fps |
+| capability lines in `engine.log` | `Metal device: Apple Paravirtual device`; `supportsFamily (apple5 to apple9): apple5`; `supportsRaytracing: no, supportsRaytracingFromRender: no` |
+| four `vid_restart` cycles `metal` to `soft` and back, `ASAN=1`, `MTL_DEBUG_LAYER=1`, 2 runs | status 0, no sanitizer line; 5 `ref_metal` sessions per run, each teardown `0 live objects ... 0 unreleased, 0 unmatched`; 0 frames without a drawable, 0 skipped, 0 failed command buffers |
+| `vid_renderer metal` with `ref_metal.dylib` absent | `Library ref_metal.dylib cannot be found!`, then the existing order (gl3, gl1, soft); `soft` loaded |
+| `tests/check-ref-metal.sh` | host test 36 checks, 0 failed; 12 vocabulary mutants refused and the clean file (GL_ in literals and comments) passed; build, `otool -L` and the other-OS refusal checked |
+
+The apple5 refusal cannot be shown on this hardware (it is apple5); the
+host test covers the decision (apple4 refused, apple5 and apple9
+accepted). The completion handlers are code in the dylib: one that
+arrives after the bounded teardown wait (a GPU hung past 5 s) would run
+after the module is unloaded, as in the shim; left for N10.
+
+The implementer did not run the full gate (`scripts/test.sh`); the
+host limits of this card keep it to the orchestrator, who runs it
+before merge. The change is about 2.5 times the card's estimate of 950
+lines because the estimate counted the module's own code only: the
+bounded frame slots, readback and object ledger of the Objective-C back
+end, the host test and the gate check with its vocabulary mutants, and
+the as-built and runbook text add as much again, and every `refexport_t`
+entry is spelled out as a counting no-op.
+
+Left for N2: the metallib rule (`xcrun metal`, which the gate already
+requires before it builds), textures and the 2D pipeline, and reopening
+a pass with a Load action after a readback when drawing continues.
