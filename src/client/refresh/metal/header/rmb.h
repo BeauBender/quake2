@@ -817,7 +817,7 @@ void rm_sky_clear(rm_skybounds_t *b);
  * gl1's R_ClipSkyPolygon: the polygon of nump vertices (x, y, z relative
  * to the view origin) clipped against the six box planes and the
  * projection of each piece on its face added to the bounds. 1 when done;
- * 0 when nump is below 1 or above RM_SKY_MAX_VERTS - 2 or a piece would
+ * 0 when nump is below 0 or above RM_SKY_MAX_VERTS - 2 or a piece would
  * pass the buffers (a polygon that is not convex can), with the bounds
  * perhaps grown by the pieces done before: the surface counts as not drawn.
  */
@@ -886,6 +886,9 @@ float rm_inverse_intensity(float gamma, float intensity);
  * (returns 1, rgba set).
  */
 int rm_warp_color(int overbright, float inverse_intensity, float *rgba);
+
+/* the world's texture animation frame, (int)(time * 2) of R_DrawWorld, saturated (gl1's cast is undefined past an int) */
+int rm_world_frame(float time);
 
 /*
  * gl1's R_UpdateGLBuffer test for the alpha chain: the batch is drawn

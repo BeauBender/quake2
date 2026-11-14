@@ -2469,9 +2469,7 @@ ref_subdivide(int numverts, float *verts, const float *vec0, const float *vec1)
 		ref_out[ref_nv + i + 1][4] = t;
 	}
 
-	ref_out[ref_nv][0] = total[0] * (1.0 / numverts);
-	ref_out[ref_nv][1] = total[1] * (1.0 / numverts);
-	ref_out[ref_nv][2] = total[2] * (1.0 / numverts);
+	VectorScale(total, (1.0 / numverts), ref_out[ref_nv]);
 	ref_out[ref_nv][3] = total_s / numverts;
 	ref_out[ref_nv][4] = total_t / numverts;
 	memcpy(ref_out[ref_nv + i + 1], ref_out[ref_nv + 1], 5 * sizeof(float));
@@ -2616,6 +2614,22 @@ test_warp_subdivide(void)
 
 		np = 7;
 		CHECK(rm_warp_subdivide(zig, 60, v0, v1, sub_out, RM_WARP_MAX_OUT, sub_len, RM_WARP_MAX_POLYS, &np, &nv) == 0 && np == 0);
+	}
+
+	/* a piece of exactly 61 vertices is refused: 41 vertices at x = +-16 alternating cut at no plane but the y bound */
+	{
+		float z61[41 * 3];
+		static const float a0[3] = { 1, 0, 0 }, a1[3] = { 0, 1, 0 };
+
+		for (i = 0; i < 41; i++)
+		{
+			z61[i * 3] = (i == 40 || !(i & 1)) ? 16.0f : -16.0f;
+			z61[i * 3 + 1] = (float)i * 0.1f;
+			z61[i * 3 + 2] = 0;
+		}
+
+		np = 7;
+		CHECK(rm_warp_subdivide(z61, 41, a0, a1, sub_out, RM_WARP_MAX_OUT, sub_len, RM_WARP_MAX_POLYS, &np, &nv) == 0 && np == 0);
 	}
 
 	/* structured polygons against gl1's function: vertices on a cut plane, a cut through a vertex, 8 units apart */
@@ -3328,6 +3342,9 @@ test_trans(void)
 	CHECK(rm_alpha_break(5, 3, 0.33f, 3, 0.66f));
 	CHECK(rm_alpha_break(1, 3, 0.33f, 4, 0.66f));
 	CHECK(!rm_alpha_break(-1, 3, 0.33f, 4, 0.66f));
+	CHECK(rm_alpha_break(1, 5, 0.66f, 5, 0.33f));   /* the alpha going down breaks the batch too */
+	CHECK(rm_world_frame(3.4f) == 6 && rm_world_frame(0) == 0 && rm_world_frame(-1.2f) == -2);
+	CHECK(rm_world_frame(6e9f) == 2147483647 && rm_world_frame(-6e9f) == (-2147483647 - 1) && rm_world_frame(NAN) == 0);
 }
 
 int

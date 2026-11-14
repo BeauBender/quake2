@@ -1901,9 +1901,14 @@ rm_warp_piece(rm_warp_ctx_t *c, int numverts, float *verts, int depth)
 		o[(i + 1) * RM_WARP_FLOATS + 4] = t;
 	}
 
-	o[0] = total[0] * (1.0 / numverts);
-	o[1] = total[1] * (1.0 / numverts);
-	o[2] = total[2] * (1.0 / numverts);
+	{
+		/* gl1's VectorScale takes its scale as a float */
+		float scale = 1.0 / numverts;
+
+		o[0] = total[0] * scale;
+		o[1] = total[1] * scale;
+		o[2] = total[2] * scale;
+	}
 	o[3] = total_s / numverts;
 	o[4] = total_t / numverts;
 
@@ -2419,6 +2424,12 @@ rm_warp_color(int overbright, float inverse_intensity, float *rgba)
 	rgba[0] = rgba[1] = rgba[2] = inverse_intensity;
 	rgba[3] = 1.0f;
 	return 1;
+}
+
+int
+rm_world_frame(float time)
+{
+	return rm_itrunc(time * 2);
 }
 
 int

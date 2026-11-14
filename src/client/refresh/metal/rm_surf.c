@@ -624,7 +624,7 @@ R_DrawWorld(const rm_view_t *view)
 
 	/* auto cycle the world frame for texture animation */
 	memset(&ent, 0, sizeof(ent));
-	ent.frame = (int)(r_newrefdef.time * 2);
+	ent.frame = rm_world_frame(r_newrefdef.time);
 
 	memset(lightmap_surfaces, 0, sizeof(lightmap_surfaces));
 
