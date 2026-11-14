@@ -20,3 +20,4 @@ them (record 0004); one becomes a record here when it is settled.
 | [0007](0007-pr-evidence-frames.md) | Rendered frames and short clips may be published as pull-request evidence |
 | [0008](0008-apple-platforms-only.md) | Apple platforms only: Linux test builds dropped, other platforms unmaintained |
 | [0009](0009-no-shared-memory.md) | Agent memory is not synced through the repository: shared memory off (addendum: the tracked notes are removed, TASK103) |
+| [0010](0010-rt-internal-resolution.md) | Ray tracing at an internal resolution, upscaled with the MetalFX temporal scaler; the denoised scaler and the frame interpolator are not used |
