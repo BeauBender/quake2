@@ -745,6 +745,18 @@ faults. `gl_polyblend 0` in `world`, as in `hud2d`, removes only the
 first (two frames). Judging the rest needs a reference from an
 accelerated OpenGL (INFORM9, T1), or a recorded exception per frame.
 
+TASK83 (#187) is the card that judges `world` again, against references
+from an accelerated OpenGL. Polygon offset and dynamic-light sub-uploads
+are host-tested only, not judged on frames (`world` has `gl_zfix 0` and
+`cl_lights 0`).
+
+The review checked this independently. A three-way comparison with
+`soft` on the 15 frames still over without the flash found 56 differing
+regions of 150 pixels or more (108,719 pixels), with `gl1` the odd one
+out in all 56 and `gl1-metal` alone in none. On passing frames the
+luminance ratio of `gl1-metal` to `gl1` is 0.9996 to 1.0015; with
+overbright forced to 2 and 4 both renderers brighten alike.
+
 ## Judging a renderer
 
 Prerequisites on the Mac: the owner's game data at `$PINS_BASEDIR/baseq2`,

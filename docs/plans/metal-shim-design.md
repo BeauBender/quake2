@@ -566,3 +566,6 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
   references from Apple's software renderer have faults of their own
   that no correct renderer reproduces, so `world` does not pass there
   at the defaults; no threshold was changed.
+- **Not covered.** No static assert ties the C uniform struct to the
+  shader's (follow-up), and no scenario pins `GL_COMBINE` because
+  overbright defaults to off.
