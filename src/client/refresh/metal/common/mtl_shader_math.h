@@ -74,4 +74,55 @@ mtl_point_coverage(float dx, float dy, float r)
 	return mtl_clamp01(r + 0.5f - MTL_SQRT(dx * dx + dy * dy));
 }
 
+/*
+ * ref_metal's lightmapped world (world_lm, N5): gl1's two texture units
+ * on its multitexture path as the shim computes them (mgl_texenv_stage
+ * of gl1/metal/mgl_texenv.h, the same expressions in the same order, so
+ * the host test holds the two equal bit for bit). Unit 0 is GL_REPLACE
+ * with the diffuse texel d (an image gl1 uploads as RGB is stored with
+ * alpha 255, so its alpha is the previous colour's 1, as the shim's
+ * opaque REPLACE keeps it); unit 1 applies the lightmap texel l (an
+ * RGBA texture) with env: GL_MODULATE, GL_REPLACE (r_lightmap 1) or
+ * GL_COMBINE (gl1_overbrightbits: texel times previous, the RGB scaled
+ * by scale, clamped to [0, 1], alpha not scaled).
+ */
+#define MTL_LM_MODULATE 0
+#define MTL_LM_REPLACE 1
+#define MTL_LM_COMBINE 2
+
+typedef struct
+{
+	float r, g, b, a;
+} mtl_rgba_t;
+
+static inline mtl_rgba_t
+mtl_world_lm(mtl_rgba_t d, mtl_rgba_t l, int env, float scale)
+{
+	mtl_rgba_t c = d;
+
+	if (env == MTL_LM_REPLACE)
+	{
+		c.r = l.r;
+		c.g = l.g;
+		c.b = l.b;
+		c.a = l.a;
+	}
+	else if (env == MTL_LM_COMBINE)
+	{
+		c.r = mtl_clamp01(d.r * l.r * scale);
+		c.g = mtl_clamp01(d.g * l.g * scale);
+		c.b = mtl_clamp01(d.b * l.b * scale);
+		c.a = d.a * l.a;
+	}
+	else
+	{
+		c.r = d.r * l.r;
+		c.g = d.g * l.g;
+		c.b = d.b * l.b;
+		c.a = d.a * l.a;
+	}
+
+	return c;
+}
+
 #endif /* MTL_SHADER_MATH_H */

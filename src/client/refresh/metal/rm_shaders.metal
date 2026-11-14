@@ -158,6 +158,48 @@ rm_fragment_world(rm_varying3d in [[stage_in]],
 	return tex.sample(smp, in.uv);
 }
 
+/* rmb_uniforms_lm_t: gl1's lightmap unit (MTL_LM_*, GL_RGB_SCALE) and the draw's slice of the array */
+struct rm_uniforms_lm
+{
+	int env;
+	float scale;
+	uint slice;
+	uint pad;
+};
+
+static mtl_rgba_t
+rm_rgba(float4 v)
+{
+	mtl_rgba_t c;
+
+	c.r = v.r;
+	c.g = v.g;
+	c.b = v.b;
+	c.a = v.a;
+	return c;
+}
+
+/*
+ * world_lm (N5): gl1's two texture units on its multitexture path, the
+ * diffuse texel replacing the colour and the lightmap slice's texel
+ * applied by gl1's lightmap environment (mtl_world_lm, the arithmetic the
+ * host test holds equal to the shim's mgl_texenv_stage); the vertex
+ * function is world_tex's.
+ */
+fragment float4
+rm_fragment_world_lm(rm_varying3d in [[stage_in]],
+		constant rm_uniforms_lm &u [[buffer(1)]],
+		texture2d<float> tex [[texture(0)]],
+		sampler smp [[sampler(0)]],
+		texture2d_array<float> lm [[texture(1)]],
+		sampler lsmp [[sampler(1)]])
+{
+	mtl_rgba_t c = mtl_world_lm(rm_rgba(tex.sample(smp, in.uv)), rm_rgba(lm.sample(lsmp, in.lmuv, u.slice)),
+			u.env, u.scale);
+
+	return float4(c.r, c.g, c.b, c.a);
+}
+
 /* color: one untextured colour per draw, carried as a vertex colour as the shim's glColor4f is; positions with w = 1 */
 vertex rm_varying3d
 rm_vertex_color(uint vid [[vertex_id]],

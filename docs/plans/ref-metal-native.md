@@ -93,7 +93,7 @@ and adds these rules for what it builds from their output:
   a bound checked against that buffer's size.
 - Every count taken from file data that sizes a retained buffer (the world
   vertex, index and surface-record buffers of N4), the lightmap array (its
-  slice count, at most `MAX_LIGHTMAPS`, N5), a staging-ring upload (an
+  slice count, at most `MAX_LIGHTMAPS`, N5; 126 as built, section 20), a staging-ring upload (an
   image's width times height, or a cinematic frame's, N2) or a frame-ring region (an alias model's
   vertex count, N7) is checked before the buffer is sized or written.
   A texture's width and its height are each also checked on their own,
@@ -185,7 +185,7 @@ static buffer:
 | Class | Vertex | Fragment | Used by |
 |---|---|---|---|
 | `2d` | float4 position, float2 uv, float4 colour (the shim's 48-byte layout, section 17) | texture modulate or replace, alpha test at 0.666 by function constant; untextured colour | pics, characters, fill, fade, cinematic |
-| `world_lm` | float3 position, float2 uv, float2 lightmap uv (static buffer) | diffuse times lightmap slice times the overbright scale, clamped (the shim's `GL_COMBINE` formula) | lightmapped world and brush surfaces |
+| `world_lm` | float3 position, float2 uv, float2 lightmap uv (static buffer) | diffuse times lightmap slice times the overbright scale, clamped (the shim's `GL_COMBINE` formula; as built by N5, gl1's lightmap unit in full, `GL_MODULATE`, `GL_REPLACE` with `r_lightmap` or `GL_COMBINE` with `gl1_overbrightbits`, the slice a per-draw uniform: see section 20) | lightmapped world and brush surfaces |
 | `world_tex` | as `world_lm` | diffuse, optionally modulated by a constant colour | `r_fullbright`, sky, warped water, translucent surfaces |
 | `alias` | float3 position, float2 uv, rgba8 colour (CPU-lerped into the ring) | modulate; untextured for shells | alias models, the view weapon |
 | `color` | float3 position, rgba8 colour | untextured colour | shadows, beams, flash blobs, null models, the screen blend |
@@ -224,13 +224,16 @@ shim's, since parity with it is the acceptance.
   solid internal format, which the shim makes opaque (alpha forced to
   255), so `ref_metal` uploads cinematic frames opaque.
 - **Lightmaps** are one `texture2d_array` of 128 by 128 slices, one slice
-  per gl1 block (`BLOCK_WIDTH`, `BLOCK_HEIGHT`, up to `MAX_LIGHTMAPS`), so
+  per gl1 block (`BLOCK_WIDTH`, `BLOCK_HEIGHT`, up to `MAX_LIGHTMAPS`; 126
+  as built, the blocks gl1 can fill, section 20), so
   lightmap coordinates, texel layout and linear sampling are gl1's and the
   world binds one lightmap texture per pass instead of one per chain.
   Lightstyle and dynamic-light changes rebuild the surface's rectangle on
   the CPU with gl1's `R_BuildLightMap` and upload the joined dirty
   rectangle per slice (gl1's `R_JoinAreas`) before the 3D pass, which is
-  the order gl1's multitexture path already uses.
+  the order gl1's multitexture path already uses. (As built by N5: at
+  most 126 slices, the blocks gl1 fills; the updates are staged inside
+  the 3D pass, before the chains: see section 20.)
 
 ## 6. Dynamic lights
 
@@ -787,7 +790,9 @@ the scrap and its uploads, `Draw_InitLocal` (conchars), gl1's buffered
 `GL_MODULATE` for coloured pics; the built-in textures (`r_notexture`,
 the particle texture) with N4 and N9 (section 18). After a split the next pass is a
 2D pass; reopening a 3D pass there (with its depth kept) is owed by the
-first card that rewrites a texture inside the 3D pass (N5).
+first card that rewrites a texture inside the 3D pass (N5). (As built by
+N5: a split inside the 3D pass reopens it with colour, depth and stencil
+loaded: see section 20.)
 
 ## 18. As built: N3, pics, characters, the scrap and the HUD (TASK86)
 
@@ -1186,7 +1191,9 @@ bounded here from above only (`firstnode < numnodes`); N7 and N8, which
 read `firstnode`, must check `-1 - headnode < numleafs` first (FIX40,
 #185). `Mod_CalcSurfaceExtents` (gl1's code) converts an unbounded float
 to `int`, so a surface's `extents` are not bounded; N5 must bound them
-before they size a lightmap.
+before they size a lightmap. (As built by N5: bounded in
+`Mod_CalcSurfaceExtents` and again before a lightmap is sized: see
+section 20.)
 
 Left for N5 and later: the lightmaps (`light_s`, `light_t`, the slice and
 rectangle of the record, the samples' bounds), the warp subdivision and
@@ -1195,3 +1202,213 @@ mutate gl1's translucent texinfo images as gl1's walk does), brush
 entities and alias models (N7), the clear of the `RDF_NOWORLDMODEL`
 rectangle (N7, the player model of the menu), `R_SetLightLevel` (N5), the
 particle texture (N9).
+
+## 20. As built: N5, lightmaps, lightstyles, overbright and staged updates (TASK88)
+
+What exists:
+
+- **The slices** (`rm_lightmap.c`, from `gl1_lightmap.c`): at registration
+  `Mod_LoadFaces` builds the lightmap of every lit surface (not sky,
+  translucent or warped, as gl1) with gl1's block allocator
+  (`rm_lm_place` on `rm_lm_alloc`, which is gl1's `LM_AllocBlock`, the
+  same loop as the scrap's `CommonAllocBlock`) into a CPU copy of its
+  slice, from the base lightstyles gl1 uses there (white 3), and
+  `RM_BuildWorld` makes one `texture2d_array` of 128 by 128 `rgba8Unorm`
+  slices (`rmb_texture_array`) and writes every slice through the staging
+  ring. Slice numbers start at 0 (gl1's block 1); gl1 fills blocks 1 to
+  126 at most (its block 0 is the classic path's dynamic block, and its
+  last upload drops at 128), so a map may have 1 to 126 slices
+  (`RM_LM_MAX_SLICES`). The lightmap coordinates of the retained vertices
+  (N4) now use the surface's `light_s` and `light_t`; the surface record
+  carries the slice and the rectangle (x, y, width, height). The CPU
+  copies belong to the world slot and are freed with it; the array is
+  freed with the world's buffers.
+- **The build** (`rm_light.c`, `rm_lm_build` in `rm_pure.c`, from
+  `gl1_light.c`'s `R_BuildLightMap`): the styles summed in float with
+  `r_modulate`, truncated, negative values to 0, scaled down when the
+  brightest passes 255, then gl1's minlight table (`gl1_minlight`, made
+  at init as gl1 makes it; a change needs `vid_restart`) and gamma table,
+  alpha the brightest. gl1's `R_AddDynamicLights` is not copied: it is a
+  step of its own between the styles and the store, which N8 adds and RT3
+  replaces; until then the CPU copy of every slice is the styles-only
+  lightmap the ray-tracing design asks for (section 9), so no second copy
+  is kept. `Q_ftol` is replaced by a saturating conversion for values a
+  float cannot give an int (a NaN, or a light past 10^9 from a huge
+  `r_modulate`); every other value is gl1's.
+- **The updates** (`rm_surf.c`, gl1's `R_RegenAllLightmaps`): the walk
+  chains every non-warped lit surface into its slice's list; before the
+  texture chains draw, a surface whose styles' white changed since its
+  build, or that a dynamic light touched this frame or the last
+  (`dlightframe`, `dirty_lightmap`), is rebuilt into its slice's CPU
+  copy, its cache updated for styles 0 and 32 and up as gl1 does, and the
+  joined rectangle of each changed slice (`rm_lm_join`, gl1's
+  `R_JoinAreas`) is uploaded (`rmb_texture_region`). gl1's tile-rendering
+  copies are left out (section 7). `gl1_dynamic 0` and `r_fullbright`
+  stop the updates, as in gl1.
+- **The draw** (`world_lm`, `rm_shaders.metal`, `mtl_world_lm` in
+  `common/mtl_shader_math.h`): each texture chain is drawn in runs of
+  one slice (gl1's `R_UpdateGLBuffer` flushes where the lightmap
+  changes), the slice a uniform of the draw, so the vertex keeps N4's 32
+  bytes. The fragment is gl1's two units as the shim computes them: the
+  diffuse texel replaces the colour, the lightmap texel (linear, repeat,
+  no mipmaps: gl1's `LM_UploadBlock` filters, whatever `gl_texturemode`
+  says) is applied with `GL_MODULATE`, `GL_REPLACE` under `r_lightmap 1`,
+  or `GL_COMBINE` with `GL_RGB_SCALE` under `gl1_overbrightbits` (gl1 sets
+  the combine after `R_EnableMultitexture`, so overbright wins over
+  `r_lightmap`; `rm_lm_env`). The host test holds `mtl_world_lm` equal to
+  the shim's `mgl_texenv_stage` bit for bit on 3,645 texel pairs in the
+  five environments. `gl1_overbrightbits` is clamped to 0, 1, 2 or 4 in
+  `RI_BeginFrame`, as gl1 does. With `r_fullbright` the chains are drawn
+  with N4's `world_tex`, one draw per chain.
+- **Dynamic lights** (section 6, N8): `R_PushDlights` and
+  `R_MarkSurfaceLights` are gl1's and mark the surfaces each light
+  touches; such a surface is drawn with its static lightmap and counted
+  (`metal_stats`: `N drawn without their dynamic light` ends the
+  per-frame line). A frame with a count above 0 is excluded from
+  judgment like one with a skipped surface (section 11).
+- **`R_SetLightLevel`** and `R_LightPoint` (with `R_RecursiveLightPoint`)
+  are gl1's. gl1 calls `R_SetLightLevel` without an entity, so
+  `r_lightlevel` is 150; `R_LightPoint` is there for N7's model lighting.
+  It is not reached in N5 (`R_LightPoint` returns before the trace
+  without an entity). Its bound is in place for N7: the traced point
+  lies on a node's plane, not on the face, and the loader bounds the
+  texture vectors only through the face's own vertices, so the texture
+  coordinates can be anything; `rm_lp_coords` refuses a coordinate that
+  is not finite or whose truncation does not fit an int (where gl1's
+  conversion is undefined), then runs gl1's truncation and four checks
+  in 64-bit arithmetic, so no difference wraps past them. On every input
+  where gl1's arithmetic is defined it accepts the same points with the
+  same `ds`, `dt` (a point up to one texture unit outside an edge is
+  truncated onto it, as in gl1): there is no deviation from gl1 there,
+  and the host test compares the two on 4000 points around the edges.
+  A point outside is a miss on that surface and the walk goes on, as
+  gl1's.
+- **The light counts**: both loops over the refdef's dynamic lights take
+  `rm_dlight_count` (clamped to `MAX_DLIGHTS`, which the client already
+  caps) and `R_PushDlights` marks with `rm_dlight_bit` (an unsigned
+  shift), so a count past 32 neither shifts past the word nor walks past
+  the 32 marks.
+- **A refused region upload** (`rmb_texture_region` returns 0 when the
+  staging ring has no room) leaves its slice's rebuilt surfaces dirty and
+  their styles unrecorded (`rm_lm_regen_mark`, decided after the upload),
+  so the next frame rebuilds and uploads them again; with every upload
+  accepted the result is gl1's.
+- **The split** (section 17's debt): `rmb_encode_split` inside the 3D
+  pass ends it with depth and stencil stored (the store action is chosen
+  when a pass ends: `MTLStoreActionUnknown` at creation, stored only for
+  this split, dropped otherwise) and reopens a 3D pass with colour, depth
+  and stencil loaded (`rm_split_reopen`); after a 2D pass the next 2D
+  draw reopens as before. A lightmap region rewritten after a draw of the
+  open command buffer read the array splits it (gl1's semantics); the
+  updates come before the chains, so `world` splits nothing.
+- **`metal_stats`**: the per-frame line ends with the dynamic-lit count; a
+  per-map line gives the slices and their bytes. 15 pipeline states (the
+  new `world_lm`), built with the context.
+
+Bounds (section 2, "Inputs and bounds"), each a plain function of
+`rm_pure.c` with host-test cases, checked before the data is used:
+
+- **Extents**: `Mod_CalcSurfaceExtents` (gl1's code) converted an
+  unbounded float to `int` and the result to `short`. `rm_surface_extents`
+  refuses a texture-coordinate range that is not finite or is reversed,
+  or whose `floor(mins / 16)` or extents do not fit a short; the map is
+  refused, except for a warped surface, whose extents gl1 replaces.
+- **Lightmap size** (`rm_lm_size`): smax and tmax from the extents, at most
+  127 wide (`LM_AllocBlock` never places a block of 128), 128 high and 867
+  luxels (gl1's `s_blocklights` check, `sizeof >> 4`). These are gl1's
+  limits, not stricter: soft refuses extents above 256 (17 by 17 luxels,
+  the original compiler's subdivision), gl1 and gl3 draw larger ones, and
+  `ref_metal` draws what the reference draws. A lit surface past them
+  refuses the map; `rm_lm_build` checks the size again, and the
+  placement checks the rectangle against its slice (`rm_lm_region_ok`).
+- **Light samples** (`rm_lm_samples_ok`): gl1 takes any light offset
+  (`lightdata + lightofs`, -1 for none). Here an offset other than -1 must
+  be inside the lighting lump with the surface's whole run of
+  `smax * tmax * 3` bytes per style, for every surface whose samples are
+  read: the lit ones and, because `R_LightPoint` reads them with their own
+  extents, the sky and translucent ones; a warped surface's samples are
+  never read and are dropped. Outside, the map is refused
+  (`ri.Sys_Error(ERR_DROP)`). N4's "an offset outside the lump gives no
+  samples" is replaced by this refusal.
+- **Slices**: a surface that would need slice 127 refuses the map
+  (`rm_lm_place`, `rm_lm_slices_ok`) before the array is sized; the back
+  end refuses an array outside 1 to 126 slices, a region outside the
+  texture it writes (`rm_region_ok`, against the texture's own size and
+  array length) and a draw whose slice is not one of the array's.
+- A refused map frees what it took through N4's refusal path; a failed
+  array or slice upload frees the array it made (`LM_UploadSlices`); a
+  failed per-frame region write keeps the texture and its id, the region
+  holding what it held (counted as an upload skip).
+
+All 109 maps of the stock game, the two mission packs and CTF load with
+these checks (a scratch harness reading the paks; the largest has 28
+slices).
+
+Choices made where the design left room:
+
+- **The slice is a per-draw uniform**, not a vertex attribute: N4 measured
+  that the vertex layout moves texels, and gl1 batches by lightmap
+  anyway. A `world` frame takes about twice N4's draws (37,730 over the
+  demo against 19,235 with `r_fullbright`).
+- **The array texture and the lightmap filter are kept as designed.** The
+  residual pixels of the judged frames are the ones N4 traced to the
+  diffuse texture's mip level (section 19): runs of both renderers with
+  `gl_texturemode GL_NEAREST` and with `GL_LINEAR` are pixel-identical on
+  frames 0 to 20, so the array and its linear sampling add no difference
+  and no alternative layout needed measuring.
+- The texels of a slice outside every rectangle start at 0 (gl1 leaves
+  them as `malloc` gives them); no draw samples them.
+
+Measured on the build VM (T0), source `83982904` (the next commit
+removes checks other checks imply; a `world` record at `20d47f5c` is
+byte-identical on all 23 frames), load averages 3.1 to 11.6 (a shared host), every record with `MTL_DEBUG_LAYER=1` and
+`PINS_TRACE=0`, references recorded at that source in a private store:
+
+| What | Result |
+|---|---|
+| two `gl1-metal` records of `world`, `--threshold 0 --bad-threshold 0` | 23 frames, score 0, bad 0 |
+| frames excluded by section 11 (`metal_stats 1`) | 19 (9 sky, 3 translucent), 20 (3 translucent), 21 (31 sky, 32 translucent), 22 (9 sky, 3 translucent); no frame has a surface drawn without its dynamic light (`cl_lights 0`); frames 0 to 18 are judged |
+| `compare metal world --ref gl1-metal --threshold 0.005 --bad-threshold 0.001`, three release records | each the same: frames 0 to 20 ok, every one printed at score 0.000000 and bad 0.000000; 0 to 6 differing pixels per frame (8 of the 21 identical), colour differences of 1 to 3 levels; frames 21 (0.049742, bad 0.264007) and 22 (0.000631, bad 0.001852) over, both excluded (the sky box and the translucent water, N6's) |
+| the same with the `ASAN=1` build | the same numbers, no sanitizer line |
+| both renderers with `gl_texturemode GL_NEAREST`, and again with `GL_LINEAR` (hand runs) | frames 0 to 20 identical (0 pixels) in both modes |
+| scratch `world` with `gl1_overbrightbits 2` (not committed), both renderers | frames 0 to 20 ok, the same exclusions; 2 to 5 differing pixels on the frames looked at; the setting took effect (it changes 300,951 of 307,200 pixels of frame 5 against `world`) |
+| scratch `world` on `demo2.dm2` at the default cadence (every 30th frame), both renderers | 190 uploads at the first capture, 586 at the last; every frame without a skipped surface (5, 7 to 20) ok; frame 6 (3 warped) over at 0.000120, bad 0.001178, excluded. This run proves nothing about the updates: no captured frame shows an animated style, and `metal` with `gl1_dynamic 0` gives every judged frame score 0 and bad 0 against the same reference (the correctness review's control) |
+| scratch `world` on `demo2.dm2` with `PINS_EVERY=7` (89 frames; re-measured at `5642f91e`, the rework's source, private store), both renderers | frames 8 (0.002867, bad 0.027956), 12 (bad 0.001484), 15 (bad 0.015618) and 26 (bad 0.001598) over, each excluded (9, 8, 6 and 3 warped surfaces skipped); the 85 others ok. Frames 51, 61, 63, 67 and 69 show an animated style: against the same `gl1-metal` reference, `metal` with `gl1_dynamic 0` (a scratch copy of `world` plus that line) gives 51 score 0.000001, 61 score 0.000105 bad 0.001130 (over), 63 score 0.000467, 67 score 0.000595 bad 0.006882 (over), 69 score 0.000447 bad 0.004303 (over), and with the updates on they are ok (bad 0.000000, 0.000013 on 61): the same numbers as the correctness review's three hand runs. Between the two `metal` runs frames 48, 57 and 59 also differ, by one level at most (score 0 at the comparator's precision); the other 81 are byte-identical. Counts from separate hand runs with `metal_stats 1` (it prints into the frame, so its frames are not compared): 190 uploads at the first capture, 586 at the last with the updates, 193 without; validation and teardown as below |
+| a scratch build forcing a split after every seventh chain (a one-texel region write of slice 0) | 2,206 pass splits over the demo; all 23 frames identical to the normal build. Mutants: the reopened pass clearing depth instead of loading it, 21 frames fail (score up to 0.053); the split not storing depth, 21 frames fail (score up to 0.137) |
+| `world-fullbright`, `hud2d`, `cinematic` against `gl1-metal` at that source | `world-fullbright` as in N4 (frames 0 to 20 ok, frames 0, 1, 10 and 16 at bad 0.000003 to 0.000013, 21 and 22 over and excluded); `hud2d` 23 frames and `cinematic` (`PINS_DEMO=idlog.cin PINS_EVERY=7`) 12 frames at score 0 and bad 0 |
+| validation and teardown, every record | `engine.log` holds only `Metal API Validation Enabled`; teardown `0 live objects` (texture 224/224, buffer 8/8 for `world`), `0 unreleased`, `0 unmatched` |
+| `metal_stats 1`, `world` outside the harness | every line `15 pipelines, 0 created after init`, `0 draws skipped`, `0 uploads skipped`, `0 pass splits`; `maps/base2.bsp`: 16 slices (1,048,576 bytes); 245 uploads at every capture: no surface of `demo1.dm2`'s view has an animated style |
+| timedemo of `world` (`demo1.dm2`, 689 frames, no validation layer), the same engine binary, `ref_metal` of `origin/main` (fullbright) and of this card alternated, four runs each | before 1648 to 1794 fps, after 1528 to 1614 fps (about 8 percent slower: the second texture and twice the draws); load averages 4.8 to 10.2 |
+| `tests/check-ref-metal.sh` | 576 checks, 0 failed (386 on `origin/main`) |
+| mutants of N5's pure code (a script applying each to a scratch copy and running the host test) | 98 mutants of `rm_pure.c` and `mtl_world_lm`, 96 killed. The first run left ten alive: five were checks implied by others and were removed, one changed nothing, and two showed missing cases (`floor(mins / 16)` at -2049, a different scale per channel of two styles), which were added. The two left are equivalent: gl1's clamp of `gl1_minlight` above 255 (the table clamps to 255 anyway) and `d * (l * scale)` for `(d * l) * scale` (a scale of 1, 2 or 4 is exact) |
+| a scratch sanitizer harness (the real `rm_model.c`, `rm_surf.c`, `rm_pure.c`, `rm_lightmap.c`, `rm_light.c`, `files/models.c`, `files/surf.c`, `files/pvs.c`, ASAN and UBSAN with the float-cast check on; back-end stubs that abort on a region, slice or array outside the array and read every byte a region upload reads) | N4's 53 cases with the same verdicts, and 23 new ones: huge, infinite and NaN texture vectors, extents past the lightmap limits, light offsets of -2, at, one past and far past the lump's end, four styles at and past the end, an empty lump, sky and translucent surfaces with large extents, warped surfaces with any offset: each refused or drawn as expected. 6,174 surfaces of 17 by 17 luxels fill exactly 126 slices and are drawn; 6,175 are refused. 400,000 mutated inputs (two seeds; faces, texinfo vectors as floats, lighting, nodes and leafs mutated, nothing pinned; 168,913 accepted and drawn with the styles changing every frame and two dynamic lights, 444,718 region uploads) gave no sanitizer report and no hang. With the sample check removed (a mutant) the harness reports a heap-buffer-overflow at once |
+
+Files changed outside the card's scope list, each needed by it: the
+`Makefile` (`rm_light` and `rm_lightmap` in `ref_metal`'s objects),
+`header/local.h`, `header/model.h`, `header/rmb.h`, `rm_main.c` (gl1's
+cvars `r_modulate`, `gl1_minlight`, `gl1_overbrightbits`, `r_lightmap`,
+`gl1_dynamic`, `gl1_flashblend`, `r_lightlevel`; `R_PushDlights`,
+`R_SetLightLevel`), `rm_pure.c`, `common/mtl_shader_math.h` (shared with
+the shim, which includes it: one new inline function and type the shim
+does not use; `tests/check-metal-shim.sh` 515 checks, 0 failed),
+`tests/metal/rm_host_shim.c` (the shim's two units for the host test) and
+`doc/040_cvarlist.md` (the `metal_stats` lines).
+
+The implementer did not run the full gate (`scripts/test.sh`): the host
+limits of this card keep it to the orchestrator; the checks above are its
+parts that this change touches. The change is about 2,430 lines of code
+and tests against the card's estimate of 850 (earlier cards ran about 3
+times theirs): about 560 are gl1's lightmap, light and update code copied
+into `rm_lightmap.c`, `rm_light.c` and `rm_surf.c` (with `R_LightPoint`,
+which the estimate did not count); the bounds and their refusal path about
+110 in `rm_model.c` and 450 in `rm_pure.c`, with 200 of declarations and
+contracts in `rmb.h`; the back end's array, region upload, split reopen and
+draw about 300; the host test and its shim about 510.
+
+Left for N6 and later: sky, warped, translucent and flowing surfaces (N6;
+the flowing surfaces' lightmaps are built and updated already), the brush
+entities' lightmap chains (`R_GetBrushesLighting`) and `R_LightPoint` with
+an entity (N7; the sampler's bound, `rm_lp_coords`, is in place since N5,
+a precondition N7 inherits already satisfied),
+`R_AddDynamicLights` between the styles and the store, the flash blobs and
+stencil shadows (N8).

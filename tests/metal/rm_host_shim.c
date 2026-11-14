@@ -54,3 +54,34 @@ rm_host_shim_raster(int vx, int vy, int vw, int vh, int tw, int th, double *out)
 	out[4] = r.znear;
 	out[5] = r.zfar;
 }
+
+/*
+ * What the shim's fragment function computes for gl1's multitexture
+ * world draw (gl1_buffer.c, R_ApplyGLBuffer with buf_mtex): the colour
+ * glColor4f(1, 1, 1, 1), unit 0 GL_REPLACE on the diffuse texel d
+ * (opaque0: an RGB texture), unit 1 on the lightmap texel l, an RGBA
+ * texture, with env1 named as ref_metal names it (MTL_LM_MODULATE,
+ * _REPLACE, _COMBINE with GL_RGB_SCALE scale) and given to the shim as
+ * its own MGL_TEXENV_*.
+ */
+void
+rm_host_shim_world_lm(int env1, float scale, int opaque0, const float *d, const float *l, float *out)
+{
+	mgl_rgba_t c = { 1, 1, 1, 1 }, t0, t1;
+
+	t0.r = d[0];
+	t0.g = d[1];
+	t0.b = d[2];
+	t0.a = d[3];
+	t1.r = l[0];
+	t1.g = l[1];
+	t1.b = l[2];
+	t1.a = l[3];
+	c = mgl_texenv_stage(MGL_TEXENV_REPLACE, opaque0, 1.0f, c, t0);
+	c = mgl_texenv_stage(env1 == MTL_LM_REPLACE ? MGL_TEXENV_REPLACE :
+			(env1 == MTL_LM_COMBINE ? MGL_TEXENV_COMBINE : MGL_TEXENV_MODULATE), 0, scale, c, t1);
+	out[0] = c.r;
+	out[1] = c.g;
+	out[2] = c.b;
+	out[3] = c.a;
+}

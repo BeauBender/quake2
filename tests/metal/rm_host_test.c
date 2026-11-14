@@ -38,9 +38,12 @@
 #include "../../src/client/refresh/metal/header/rmb.h"
 #include "../../src/client/refresh/metal/common/mtl_matrix.h"
 #include "../../src/client/refresh/metal/common/mtl_ring.h"
+#include "../../src/client/refresh/metal/common/mtl_shader_math.h"
 
 /* tests/metal/rm_host_shim.c: the shim's mgl_compute_raster for glViewport(vx, vy, vw, vh) */
 void rm_host_shim_raster(int vx, int vy, int vw, int vh, int tw, int th, double *out);
+/* the shim's two texture units on gl1's multitexture world draw */
+void rm_host_shim_world_lm(int env1, float scale, int opaque0, const float *d, const float *l, float *out);
 
 /* src/common/shared/shared.c, linked for files/surf.c, prints through the engine */
 void
@@ -195,7 +198,7 @@ test_stats(void)
 		"ref_metal: metal_stats: 23 frames, 1 without a drawable, 2 skipped, 3 failed command buffers, "
 		"4 readbacks, 5 no-op calls, 6 draws, 7 draws skipped, 8 uploads, 9 uploads skipped, "
 		"10 pass splits, 12 pipelines, 0 created after init, 1 live objects, "
-		"skipped surfaces: 13 sky, 14 warped, 15 translucent, 16 flowing";
+		"skipped surfaces: 13 sky, 14 warped, 15 translucent, 16 flowing; 17 drawn without their dynamic light";
 	size_t n;
 
 	memset(&l, 0, sizeof(l));
@@ -217,6 +220,7 @@ test_stats(void)
 	s.warp_skips = 14;
 	s.trans_skips = 15;
 	s.flow_skips = 16;
+	s.dlit_surfs = 17;
 	CHECK(rm_stats_format(&s, &l, buf, sizeof(buf)) && strcmp(buf, want) == 0);
 
 	n = strlen(want);
@@ -1485,6 +1489,718 @@ test_world_line(void)
 	}
 }
 
+/* ---- the lightmaps (N5) ------------------------------------------------------- */
+
+/*
+ * gl1's Mod_CalcSurfaceExtents per axis: floor and ceil of the sixteenths,
+ * texturemins and extents as shorts; a value that is not finite, a range
+ * the wrong way round, or a result outside a short is refused.
+ */
+static void
+test_surface_extents(void)
+{
+	short tm = 77, ex = 77;
+
+	/* floor(-8.5 / 16) = -1, ceil(100 / 16) = 7: texturemins -16, extents 128 */
+	CHECK(rm_surface_extents(-8.5f, 100.0f, &tm, &ex) && tm == -16 && ex == 128);
+	/* on the grid: 0 .. 256 is 17 luxels' worth, extents 256 */
+	CHECK(rm_surface_extents(0.0f, 256.0f, &tm, &ex) && tm == 0 && ex == 256);
+	CHECK(rm_surface_extents(5.0f, 5.0f, &tm, &ex) && tm == 0 && ex == 16);
+
+	/* the edges of a short: bmins -2048 and 2047, extents 2047 * 16 */
+	CHECK(rm_surface_extents(-32768.0f, -32768.0f, &tm, &ex) && tm == -32768 && ex == 0);
+	CHECK(rm_surface_extents(32752.0f, 32752.0f, &tm, &ex) && tm == 32752 && ex == 0);
+	CHECK(rm_surface_extents(0.0f, 32752.0f, &tm, &ex) && ex == 32752);
+
+	tm = ex = 77;
+	CHECK(!rm_surface_extents(-32769.0f, 0.0f, &tm, &ex) && tm == 77 && ex == 77);
+	CHECK(!rm_surface_extents(32768.0f, 32768.0f, &tm, &ex));
+	CHECK(!rm_surface_extents(-32769.0f, -32769.0f, &tm, &ex));    /* bmins -2049, extents 16 */
+	CHECK(!rm_surface_extents(-16.0f, 32752.0f, &tm, &ex));    /* extents 2048 * 16 */
+	CHECK(!rm_surface_extents(1e30f, 1e30f, &tm, &ex) && !rm_surface_extents(-1e30f, 0, &tm, &ex));
+	CHECK(!rm_surface_extents(NAN, 0.0f, &tm, &ex) && !rm_surface_extents(0.0f, INFINITY, &tm, &ex));
+	tm = ex = 77;
+	CHECK(!rm_surface_extents(10.0f, 9.0f, &tm, &ex) && tm == 77 && ex == 77);
+}
+
+/*
+ * The size arithmetic of a lightmap (plan section 2, "Inputs and bounds"):
+ * gl1's (extents >> 4) + 1 per axis, at most BLOCK_WIDTH - 1 wide (what
+ * LM_AllocBlock places), BLOCK_HEIGHT high and 867 luxels (R_BuildLightMap's
+ * s_blocklights check); every larger or negative one is refused.
+ */
+static void
+test_lm_size(void)
+{
+	int s = 0, t = 0;
+
+	CHECK(rm_lm_size(256, 256, &s, &t) && s == 17 && t == 17);    /* the stock compiler's largest */
+	CHECK(rm_lm_size(0, 0, &s, &t) && s == 1 && t == 1);
+	CHECK(rm_lm_size(15, 31, &s, &t) && s == 1 && t == 2);
+	CHECK(rm_lm_size(50 * 16, 16 * 16, &s, &t) && s == 51 && t == 17);   /* 867: the exact fit */
+	CHECK(rm_lm_size(126 * 16, 5 * 16, &s, &t) && s == 127 && t == 6);   /* the widest */
+	CHECK(rm_lm_size(5 * 16, 127 * 16, &s, &t) && s == 6 && t == 128);   /* the highest */
+
+	s = t = 9;
+	CHECK(!rm_lm_size(30 * 16, 27 * 16, &s, &t) && s == 9 && t == 9);    /* 31 * 28 = 868 */
+	CHECK(!rm_lm_size(127 * 16, 0, &s, &t));     /* 128 wide: LM_AllocBlock never places it */
+	CHECK(!rm_lm_size(0, 128 * 16, &s, &t));     /* 129 high */
+	CHECK(!rm_lm_size(-16, 0, &s, &t) && !rm_lm_size(0, -1, &s, &t));
+	CHECK(!rm_lm_size(16384, 16384, &s, &t));    /* a warped surface's extents */
+	CHECK(!rm_lm_size(32768, 0, &s, &t) && !rm_lm_size(1L << 40, 0, &s, &t));
+}
+
+/* The styles of a surface and the bound of its samples against the lighting lump. */
+static void
+test_lm_samples(void)
+{
+	const unsigned char none[4] = { 255, 0, 0, 0 }, two[4] = { 0, 5, 255, 7 }, four[4] = { 0, 1, 2, 3 };
+
+	CHECK(rm_lm_nummaps(none) == 0 && rm_lm_nummaps(two) == 2 && rm_lm_nummaps(four) == 4);
+
+	/* 3 by 2 luxels (extents 32, 16) of two styles: 36 bytes; exact end, one byte short */
+	CHECK(rm_lm_samples_ok(100, 32, 16, 2, 136));
+	CHECK(!rm_lm_samples_ok(100, 32, 16, 2, 135));
+	CHECK(!rm_lm_samples_ok(101, 32, 16, 2, 136));
+	CHECK(rm_lm_samples_ok(136, 32, 16, 0, 136));     /* no style reads nothing */
+	CHECK(!rm_lm_samples_ok(137, 32, 16, 0, 136));    /* but the offset is still inside the lump */
+	CHECK(!rm_lm_samples_ok(-1, 32, 16, 1, 136) && !rm_lm_samples_ok(0, -16, 16, 1, 136));
+	CHECK(!rm_lm_samples_ok(0, 16, -16, 1, 136) && !rm_lm_samples_ok(0, 16, 16, 5, 1 << 20));
+	CHECK(!rm_lm_samples_ok(0, 16, 16, -1, 1 << 20));
+	/* the largest extents of a short, four styles: 50 MB, larger than any lump, and no overflow */
+	CHECK(!rm_lm_samples_ok(0, 32767, 32767, 4, 0x200000L));
+	CHECK(rm_lm_samples_ok(0, 32767, 32767, 4, 2048L * 2048 * 3 * 4));
+	CHECK(!rm_lm_samples_ok(1, 32767, 32767, 4, 2048L * 2048 * 3 * 4));
+}
+
+/*
+ * gl1's R_RecursiveLightPoint on one surface (gl1_light.c), its four
+ * lines with s, t already converted to int: the reference rm_lp_coords
+ * is compared with on inputs where that arithmetic is defined.
+ */
+static int
+gl1_lp_coords(int s, int t, short smin, short tmin, short sext, short text, int *ds, int *dt)
+{
+	if ((s < smin) || (t < tmin))
+	{
+		return 0;
+	}
+
+	*ds = s - smin;
+	*dt = t - tmin;
+
+	return !((*ds > sext) || (*dt > text));
+}
+
+static unsigned lp_rand_state = 0x2545f491u;
+
+static unsigned
+lp_rand(void)
+{
+	/* xorshift32: deterministic, the same sequence on every run */
+	lp_rand_state ^= lp_rand_state << 13;
+	lp_rand_state ^= lp_rand_state >> 17;
+	lp_rand_state ^= lp_rand_state << 5;
+	return lp_rand_state;
+}
+
+/*
+ * a coordinate within two units of lo or of hi in eighths (the edges and
+ * the fractions next to them), or anywhere in lo - 4 .. hi + 4 in quarters
+ */
+static float
+lp_rand_coord(int lo, int hi)
+{
+	unsigned mode = lp_rand() % 3;
+
+	if (mode < 2)
+	{
+		return (float)(mode ? hi : lo) + (float)((int)(lp_rand() % 33) - 16) * 0.125f;
+	}
+
+	return (float)(lo - 4) + (float)(lp_rand() % (unsigned)(((hi - lo) + 8) * 4)) * 0.25f;
+}
+
+/*
+ * The light point's texture coordinates on one surface (rm_lp_coords):
+ * gl1's result inside, on each of the four edges, within one texture
+ * unit outside each edge (truncation toward zero puts -32.5 on -32 but
+ * 15.5 on 15) for negative and positive texturemins, and far outside;
+ * NaN and the infinities in each coordinate, values near INT_MAX with a
+ * negative texturemins (an int conversion first would wrap ds into the
+ * extents), the edges of the int range, a negative extent; nothing
+ * written when refused. Then a differential run against gl1's lines.
+ */
+static void
+test_lp_coords(void)
+{
+	const float in = 2147483520.0f; /* the largest float below 2^31 */
+	int ds, dt, i, gds, gdt, mismatch, accepted;
+
+	/* inside: texturemins 16, -32, extents 64, 48 */
+	CHECK(rm_lp_coords(40.5f, -20.25f, 16, -32, 64, 48, &ds, &dt) && ds == 24 && dt == 12);
+	/* a negative coordinate truncates toward zero: -31.5 is -31, 1 past -32 */
+	CHECK(rm_lp_coords(16, -31.5f, 16, -32, 64, 48, &ds, &dt) && ds == 0 && dt == 1);
+
+	/* each edge is inside */
+	CHECK(rm_lp_coords(16, 0, 16, -32, 64, 48, &ds, &dt) && ds == 0 && dt == 32);
+	CHECK(rm_lp_coords(80, 0, 16, -32, 64, 48, &ds, &dt) && ds == 64 && dt == 32);
+	CHECK(rm_lp_coords(20, -32, 16, -32, 64, 48, &ds, &dt) && ds == 4 && dt == 0);
+	CHECK(rm_lp_coords(20, 16, 16, -32, 64, 48, &ds, &dt) && ds == 4 && dt == 48);
+	CHECK(rm_lp_coords(-30000, 0, -30000, 0, 0, 0, &ds, &dt) && ds == 0 && dt == 0);
+
+	/* lower edge, positive texturemins 16: 15.5 and 15.99 truncate to 15 < 16, refused as gl1 */
+	ds = dt = 1234;
+	CHECK(!rm_lp_coords(15.5f, 0, 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(nextafterf(16, 0), 0, 16, -32, 64, 48, &ds, &dt));
+	CHECK(ds == 1234 && dt == 1234);
+	/* lower edge, negative texturemins -32: -32.5 and -32.99 truncate to -32, accepted with dt 0 */
+	CHECK(rm_lp_coords(20, -32.5f, 16, -32, 64, 48, &ds, &dt) && ds == 4 && dt == 0);
+	CHECK(rm_lp_coords(20, nextafterf(-33, 0), 16, -32, 64, 48, &ds, &dt) && ds == 4 && dt == 0);
+	CHECK(!rm_lp_coords(20, -33, 16, -32, 64, 48, &ds, &dt));
+	/* lower edge, texturemins 0: -0.5 truncates to 0, accepted; -1 refused */
+	CHECK(rm_lp_coords(-0.5f, 5, 0, 0, 16, 16, &ds, &dt) && ds == 0 && dt == 5);
+	CHECK(rm_lp_coords(5, nextafterf(-1, 0), 0, 0, 16, 16, &ds, &dt) && ds == 5 && dt == 0);
+	CHECK(!rm_lp_coords(-1, 5, 0, 0, 16, 16, &ds, &dt) && !rm_lp_coords(5, -1, 0, 0, 16, 16, &ds, &dt));
+	/* upper edge, positive end 80: 80.5 and 80.99 truncate to 80, ds 64 accepted; 81 refused */
+	CHECK(rm_lp_coords(80.5f, 0, 16, -32, 64, 48, &ds, &dt) && ds == 64 && dt == 32);
+	CHECK(rm_lp_coords(nextafterf(81, 0), 0, 16, -32, 64, 48, &ds, &dt) && ds == 64 && dt == 32);
+	CHECK(!rm_lp_coords(81, 0, 16, -32, 64, 48, &ds, &dt));
+	/* upper edge, end 16 from texturemins -32: 16.5 truncates to 16, dt 48 accepted; 17 refused */
+	CHECK(rm_lp_coords(20, 16.5f, 16, -32, 64, 48, &ds, &dt) && ds == 4 && dt == 48);
+	CHECK(!rm_lp_coords(20, 17, 16, -32, 64, 48, &ds, &dt));
+	/* upper edge, negative end -32 (texturemins -64, extent 32): -32.5 is -32, ds 32 accepted; -31.5 is -31, refused */
+	CHECK(rm_lp_coords(-32.5f, 0, -64, 0, 32, 0, &ds, &dt) && ds == 32 && dt == 0);
+	CHECK(!rm_lp_coords(-31.5f, 0, -64, 0, 32, 0, &ds, &dt));
+	/* the smallest texturemins: -32768.5 truncates to -32768, accepted; -32769 refused */
+	CHECK(rm_lp_coords(-32768.5f, 0, -32768, 0, 32767, 0, &ds, &dt) && ds == 0 && dt == 0);
+	CHECK(!rm_lp_coords(-32769, 0, -32768, 0, 32767, 0, &ds, &dt));
+	CHECK(rm_lp_coords(-1, 0, -32768, 0, 32767, 0, &ds, &dt) && ds == 32767 && dt == 0);
+
+	/* far outside each side; ds and dt untouched */
+	ds = dt = 1234;
+	CHECK(!rm_lp_coords(-1e6f, 0, 16, -32, 64, 48, &ds, &dt) && !rm_lp_coords(1e6f, 0, 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(20, -1e6f, 16, -32, 64, 48, &ds, &dt) && !rm_lp_coords(20, 1e6f, 16, -32, 64, 48, &ds, &dt));
+	CHECK(ds == 1234 && dt == 1234);
+
+	/* not finite, in either coordinate */
+	CHECK(!rm_lp_coords(NAN, 0, 16, -32, 64, 48, &ds, &dt) && !rm_lp_coords(20, NAN, 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(INFINITY, 0, 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(-INFINITY, 0, 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(20, INFINITY, 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(20, -INFINITY, 16, -32, 64, 48, &ds, &dt));
+
+	/* near and past INT_MAX with texturemins -30000, extents 0 (the wrap the security review built) */
+	ds = dt = 1234;
+	CHECK(!rm_lp_coords(in, 0, -30000, 0, 0, 0, &ds, &dt) && !rm_lp_coords(0, in, 0, -30000, 0, 0, &ds, &dt));
+	CHECK(!rm_lp_coords(5e9f, 0, -30000, 0, 0, 0, &ds, &dt) && !rm_lp_coords(-in, 0, -30000, 0, 0, 0, &ds, &dt));
+	/* 2^31 does not fit an int, -2^31 does (and is below texturemins); either refused */
+	CHECK(!rm_lp_coords(2147483648.0f, 0, -32768, 0, 32767, 0, &ds, &dt));
+	CHECK(!rm_lp_coords(-2147483648.0f, 0, -32768, 0, 32767, 0, &ds, &dt));
+	CHECK(!rm_lp_coords(0, 2147483648.0f, 0, -32768, 0, 32767, &ds, &dt));
+	CHECK(!rm_lp_coords(0, -2147483648.0f, 0, -32768, 0, 32767, &ds, &dt));
+	CHECK(!rm_lp_coords(-3e9f, 0, -32768, 0, 32767, 0, &ds, &dt));
+	/* finite but past any integer type */
+	CHECK(!rm_lp_coords(1e30f, 0, 16, -32, 64, 48, &ds, &dt) && !rm_lp_coords(-1e30f, 0, 16, -32, 64, 48, &ds, &dt));
+	CHECK(!rm_lp_coords(20, 1e30f, 16, -32, 64, 48, &ds, &dt) && !rm_lp_coords(20, -1e30f, 16, -32, 64, 48, &ds, &dt));
+	CHECK(ds == 1234 && dt == 1234);
+
+	/* a negative extent holds no point */
+	ds = dt = 1234;
+	CHECK(!rm_lp_coords(16, 0, 16, 0, -1, 0, &ds, &dt) && !rm_lp_coords(16, 0, 16, 0, 0, -1, &ds, &dt));
+	CHECK(ds == 1234 && dt == 1234);
+
+	/*
+	 * differential: 4000 deterministic points around surfaces of
+	 * texturemins -2048 .. 2047 and extents -16 .. 1007, where gl1's
+	 * conversion and differences are defined; the accept/reject and
+	 * ds, dt agree with gl1's lines on every one
+	 */
+	mismatch = 0;
+	accepted = 0;
+
+	for (i = 0; i < 4000; i++)
+	{
+		short smin = (short)((int)(lp_rand() % 4096) - 2048);
+		short tmin = (short)((int)(lp_rand() % 4096) - 2048);
+		short sext = (short)((int)(lp_rand() % 1024) - 16);
+		short text = (short)((int)(lp_rand() % 1024) - 16);
+		float s = lp_rand_coord(smin, smin + (sext < 0 ? 0 : sext));
+		float t = lp_rand_coord(tmin, tmin + (text < 0 ? 0 : text));
+		int r, g;
+
+		ds = dt = gds = gdt = -1;
+		r = rm_lp_coords(s, t, smin, tmin, sext, text, &ds, &dt);
+		g = gl1_lp_coords((int)s, (int)t, smin, tmin, sext, text, &gds, &gdt);
+
+		if ((r != g) || (r && ((ds != gds) || (dt != gdt))))
+		{
+			mismatch++;
+		}
+
+		accepted += r;
+	}
+
+	CHECK(mismatch == 0);
+	/* both outcomes come up often enough to mean something */
+	CHECK(accepted > 1000 && accepted < 3000);
+}
+
+/*
+ * The dynamic lights of a frame (rm_dlight_count): the count clamped to
+ * 0 .. MAX_DLIGHTS (ref.h, held equal); the mark bit of each, unsigned,
+ * every one of 32 distinct, 0 past them (rm_dlight_bit).
+ */
+static void
+test_dlights(void)
+{
+	unsigned all = 0;
+	int i, ok = 1;
+
+	CHECK(RM_MAX_DLIGHTS == MAX_DLIGHTS);
+	CHECK(rm_dlight_count(0) == 0 && rm_dlight_count(1) == 1 && rm_dlight_count(32) == 32);
+	CHECK(rm_dlight_count(33) == 32 && rm_dlight_count(INT32_MAX) == 32);
+	CHECK(rm_dlight_count(-1) == 0 && rm_dlight_count(INT32_MIN) == 0);
+
+	for (i = 0; i < RM_MAX_DLIGHTS; i++)
+	{
+		ok &= (rm_dlight_bit(i) != 0) && !(all & rm_dlight_bit(i));
+		all |= rm_dlight_bit(i);
+	}
+
+	CHECK(ok && all == 0xffffffffu && rm_dlight_bit(31) == 0x80000000u && rm_dlight_bit(0) == 1u);
+	CHECK(rm_dlight_bit(32) == 0 && rm_dlight_bit(-1) == 0 && rm_dlight_bit(INT32_MAX) == 0);
+}
+
+/*
+ * gl1's LM_AllocBlock positions for a fixed sequence of sizes on one
+ * block (the first spot with the lowest top, never in the last w
+ * columns), the exact fit, the full block, and the slice change of
+ * LM_CreateSurfaceLightmap when a block is full.
+ */
+static void
+test_lm_alloc(void)
+{
+	int col[RM_LM_WIDTH], x = -1, y = -1, slice = 0, i;
+
+	memset(col, 0, sizeof(col));
+	CHECK(rm_lm_alloc(col, 17, 17, &x, &y) && x == 0 && y == 0);
+	CHECK(rm_lm_alloc(col, 10, 5, &x, &y) && x == 17 && y == 0);
+	CHECK(rm_lm_alloc(col, 3, 3, &x, &y) && x == 27 && y == 0);
+	CHECK(rm_lm_alloc(col, 20, 2, &x, &y) && x == 30 && y == 0);
+	/* the lowest top is now at column 50; columns 17 to 26 stand at 5 */
+	CHECK(rm_lm_alloc(col, 97, 1, &x, &y) && x == 30 && y == 2);
+	CHECK(col[29] == 3 && col[30] == 3 && col[126] == 3 && col[127] == 0);
+	CHECK(rm_lm_alloc(col, 127, 1, &x, &y) && x == 0 && y == 17);
+	CHECK(col[0] == 18 && col[126] == 18 && col[127] == 0);
+
+	/* 120 by 110 from row 18 ends at row 128 exactly; one more row is a full block */
+	{
+		int full[RM_LM_WIDTH];
+
+		memcpy(full, col, sizeof(col));
+		CHECK(!rm_lm_alloc(full, 120, 111, &x, &y) && memcmp(full, col, sizeof(col)) == 0);
+		CHECK(rm_lm_alloc(full, 120, 110, &x, &y) && x == 0 && y == 18 && full[119] == 128);
+		CHECK(rm_lm_alloc(full, 1, 1, &x, &y));   /* column 127 is never taken, 120 to 126 are free */
+		CHECK(x == 120 && y == 18);
+	}
+
+	/* larger than a block, or empty */
+	CHECK(!rm_lm_alloc(col, RM_LM_WIDTH, 1, &x, &y) && !rm_lm_alloc(col, 1, RM_LM_HEIGHT + 1, &x, &y));
+	CHECK(!rm_lm_alloc(col, 0, 1, &x, &y) && !rm_lm_alloc(col, 1, 0, &x, &y));
+
+	/* the placement: a fresh block takes 17 by 17 blocks 7 to a row, 7 rows of them (49) */
+	memset(col, 0, sizeof(col));
+
+	for (i = 0; i < 49; i++)
+	{
+		CHECK(rm_lm_place(col, &slice, 17, 17, &x, &y) == 1 && slice == 0);
+	}
+
+	CHECK(x == 102 && y == 102);
+	/* the 50th starts slice 1 at its top left */
+	CHECK(rm_lm_place(col, &slice, 17, 17, &x, &y) == 2 && slice == 1 && x == 0 && y == 0 && col[0] == 17 &&
+		col[17] == 0);
+	CHECK(rm_lm_place(col, &slice, 17, 17, &x, &y) == 1 && slice == 1 && x == 17 && y == 0);
+
+	/* the last slice full: the map is refused, nothing changed */
+	slice = RM_LM_MAX_SLICES - 1;
+
+	for (i = 0; i < RM_LM_WIDTH; i++)
+	{
+		col[i] = RM_LM_HEIGHT;
+	}
+
+	x = y = -1;
+	CHECK(rm_lm_place(col, &slice, 1, 1, &x, &y) == 0 && slice == RM_LM_MAX_SLICES - 1 && x == -1 && y == -1);
+	slice = RM_LM_MAX_SLICES - 2;
+	CHECK(rm_lm_place(col, &slice, 1, 1, &x, &y) == 2 && slice == RM_LM_MAX_SLICES - 1 && x == 0 && y == 0);
+	/* a size no empty slice takes, and a slice outside the array */
+	slice = 0;
+	CHECK(rm_lm_place(col, &slice, RM_LM_WIDTH, 1, &x, &y) == 0 && slice == 0);
+	slice = RM_LM_MAX_SLICES;
+	CHECK(rm_lm_place(col, &slice, 1, 1, &x, &y) == 0);
+	slice = -1;
+	CHECK(rm_lm_place(col, &slice, 1, 1, &x, &y) == 0);
+}
+
+/*
+ * The oversized counts: a map needing more slices than gl1 fills
+ * (MAX_LIGHTMAPS less gl1's block 0 and its last-upload check), and a
+ * region outside its slice, are refused before anything is sized or
+ * written.
+ */
+static void
+test_lm_regions(void)
+{
+	CHECK(rm_lm_slices_ok(1) && rm_lm_slices_ok(RM_LM_MAX_SLICES) && RM_LM_MAX_SLICES == 126);
+	CHECK(!rm_lm_slices_ok(0) && !rm_lm_slices_ok(RM_LM_MAX_SLICES + 1) && !rm_lm_slices_ok(-1));
+
+	CHECK(rm_lm_region_ok(0, 1, 0, 0, RM_LM_WIDTH, RM_LM_HEIGHT));
+	CHECK(rm_lm_region_ok(125, 126, 111, 111, 17, 17));
+	CHECK(!rm_lm_region_ok(126, 126, 0, 0, 1, 1) && !rm_lm_region_ok(-1, 126, 0, 0, 1, 1));
+	CHECK(!rm_lm_region_ok(0, 127, 0, 0, 1, 1) && !rm_lm_region_ok(0, 0, 0, 0, 1, 1));
+	CHECK(!rm_lm_region_ok(0, 1, 112, 0, 17, 1) && !rm_lm_region_ok(0, 1, 0, 112, 1, 17));
+	CHECK(!rm_lm_region_ok(0, 1, -1, 0, 1, 1) && !rm_lm_region_ok(0, 1, 0, -1, 1, 1));
+	CHECK(!rm_lm_region_ok(0, 1, 0, 0, 0, 1) && !rm_lm_region_ok(0, 1, 0, 0, 1, 0));
+	CHECK(!rm_lm_region_ok(0, 1, 0, 0, RM_LM_WIDTH + 1, 1));
+	CHECK(!rm_lm_region_ok(0, 1, 0x7fffffffffffffffL, 0, 2, 1));
+
+	/* the back end's check of a texture of its own size */
+	CHECK(rm_region_ok(64, 32, 3, 2, 63, 31, 1, 1) && !rm_region_ok(64, 32, 3, 3, 0, 0, 1, 1));
+	CHECK(!rm_region_ok(64, 32, 3, 0, 63, 0, 2, 1) && !rm_region_ok(64, 32, 3, 0, 0, 31, 1, 2));
+	CHECK(!rm_region_ok(0, 32, 3, 0, 0, 0, 1, 1) && !rm_region_ok(64, 0, 3, 0, 0, 0, 1, 1));
+	CHECK(!rm_region_ok(64, 32, 3, 0, 0, 0, 65, 1) && !rm_region_ok(64, 32, 3, 0, 0, 0, 1, 33));
+}
+
+/* gl1's R_JoinAreas, from R_RegenAllLightmaps' empty start (top and left at the block's size). */
+static void
+test_lm_join(void)
+{
+	rm_lmrect_t best = { RM_LM_WIDTH, 0, RM_LM_HEIGHT, 0 };
+	rm_lmrect_t a = { 10, 27, 5, 22 }, b = { 20, 30, 15, 40 }, c = { 100, 110, 90, 95 };
+
+	rm_lm_join(&a, &best);
+	CHECK(best.left == 10 && best.right == 27 && best.top == 5 && best.bottom == 22);
+	rm_lm_join(&b, &best);     /* overlapping: right and bottom grow */
+	CHECK(best.left == 10 && best.right == 30 && best.top == 5 && best.bottom == 40);
+	rm_lm_join(&a, &best);     /* inside: nothing changes */
+	CHECK(best.left == 10 && best.right == 30 && best.top == 5 && best.bottom == 40);
+	rm_lm_join(&c, &best);     /* disjoint: the box around both */
+	CHECK(best.left == 10 && best.right == 110 && best.top == 5 && best.bottom == 95);
+
+	{
+		rm_lmrect_t d = { 50, 60, 50, 60 }, e = { 0, 1, 70, 71 };
+
+		rm_lm_join(&e, &d);    /* left and top of one, right and bottom of the other */
+		CHECK(d.left == 0 && d.right == 60 && d.top == 50 && d.bottom == 71);
+	}
+}
+
+/*
+ * After a rebuilt lightmap (rm_lm_regen_mark), gl1's R_RegenAllLightmaps
+ * keeps a surface dirty when a dynamic light touched it this frame, and
+ * records its styles as built when one is 0 or 32 and above; here also
+ * when its slice's upload was refused, it stays dirty and nothing is
+ * recorded, so the next frame rebuilds and uploads it again. Every row.
+ */
+static void
+test_lm_regen_mark(void)
+{
+	int up, dl, ca, dirty, ok = 1;
+
+	for (up = 0; up < 2; up++)
+	{
+		for (dl = 0; dl < 2; dl++)
+		{
+			for (ca = 0; ca < 2; ca++)
+			{
+				int cache;
+
+				dirty = 7;
+				cache = rm_lm_regen_mark(up, dl, ca, &dirty);
+				ok &= (dirty == (!up || dl)) && (cache == (up && !dl && ca));
+			}
+		}
+	}
+
+	CHECK(ok);
+	/* any non-zero value is true */
+	CHECK(rm_lm_regen_mark(2, 0, 3, &dirty) == 1 && dirty == 0);
+	CHECK(rm_lm_regen_mark(0, 0, 1, &dirty) == 0 && dirty == 1);
+}
+
+/* gl1's minlight table: the identity at 0, (255 - m) * i / 255 + m otherwise, m clamped. */
+static void
+test_minlight(void)
+{
+	unsigned char t[256];
+	int i, ok = 1;
+
+	CHECK(rm_minlight_table(0, t) == 0);
+
+	for (i = 0; i < 256; i++)
+	{
+		ok &= t[i] == i;
+	}
+
+	CHECK(ok);
+	CHECK(rm_minlight_table(64, t) == 1);
+	CHECK(t[0] == 64 && t[1] == 64 && t[15] == 75 && t[22] == 80 && t[29] == 85 && t[59] == 108);
+	CHECK(t[80] == 123 && t[127] == 159 && t[255] == 255);
+	CHECK(rm_minlight_table(300, t) == 1 && t[0] == 255 && t[100] == 255);
+	CHECK(rm_minlight_table(-5, t) == 0 && t[7] == 7);
+	CHECK(rm_minlight_table(NAN, t) == 0 && t[200] == 200);
+}
+
+/*
+ * gl1's R_BuildLightMap on a synthetic 3 by 2 surface of two styles at
+ * scales 0.5 and 2 (r_modulate 1), worked by hand from gl1_light.c:
+ *
+ *   luxel  style 0          style 1          sum (0.5 a + 2 b)   stored
+ *   0      10  20  30       5   6   7        15   22   29        15 22 29, a 29
+ *   1      200 100 0        100 10  0        300  70   0         max 300: t = 255/300 (0.85000002):
+ *                                                                255 59 0, a 255
+ *   2      2   4   6        1   1   1        3    4    5         3 4 5, a 5
+ *   3      1   3   0        0   0   0        0.5  1.5  0         0 1 0 (truncated), a 1
+ *   4      0   0   0        128 0   64       256  0    128       max 256: t = 0.99609375: 255 0 127, a 255
+ *   5      40  80  120      30  20  10       80   80   80        80 80 80, a 80
+ *
+ * then through gl1_minlight 64 (t[15] = 75, ...) and a gamma table that
+ * is not the identity (255 - i), each applied in gl1's order; the rows
+ * stride bytes apart, the padding untouched.
+ */
+static void
+test_lm_build(void)
+{
+	static const unsigned char samples[2 * 6 * 3] = {
+		10, 20, 30, 200, 100, 0, 2, 4, 6, 1, 3, 0, 0, 0, 0, 40, 80, 120,
+		5, 6, 7, 100, 10, 0, 1, 1, 1, 0, 0, 0, 128, 0, 64, 30, 20, 10,
+	};
+	static const unsigned char want[6][4] = {
+		{ 15, 22, 29, 29 }, { 255, 59, 0, 255 }, { 3, 4, 5, 5 },
+		{ 0, 1, 0, 1 }, { 255, 0, 127, 255 }, { 80, 80, 80, 80 },
+	};
+	const float rgb[2][3] = { { 0.5f, 0.5f, 0.5f }, { 2, 2, 2 } };
+	unsigned char ident[256], inv[256], ml[256], out[2][20];
+	float bl[RM_LM_MAX_LUXELS * 3];
+	int i, j, ok = 1;
+
+	for (i = 0; i < 256; i++)
+	{
+		ident[i] = (unsigned char)i;
+		inv[i] = (unsigned char)(255 - i);
+	}
+
+	memset(out, 0xee, sizeof(out));
+	CHECK(rm_lm_build(samples, 3, 2, 2, rgb, 1.0f, NULL, ident, &out[0][0], 20, bl));
+
+	for (i = 0; i < 6; i++)
+	{
+		ok &= memcmp(&out[i / 3][(i % 3) * 4], want[i], 4) == 0;
+	}
+
+	CHECK(ok);
+	CHECK(out[0][12] == 0xee && out[0][19] == 0xee && out[1][12] == 0xee && out[1][19] == 0xee);
+
+	/* minlight, then gamma: luxel 0 is 75 80 85 before the inverse, luxel 3 64 64 64, alpha untouched */
+	rm_minlight_table(64, ml);
+	CHECK(rm_lm_build(samples, 3, 2, 2, rgb, 1.0f, ml, inv, &out[0][0], 20, bl));
+	CHECK(out[0][0] == 255 - 75 && out[0][1] == 255 - 80 && out[0][2] == 255 - 85 && out[0][3] == 29);
+	CHECK(out[0][4] == 0 && out[0][5] == 255 - 108 && out[0][6] == 255 - 64 && out[0][7] == 255);
+	CHECK(out[1][0] == 255 - 64 && out[1][1] == 255 - 64 && out[1][3] == 1);
+	CHECK(out[1][4] == 0 && out[1][6] == 255 - 159 && out[1][8] == 255 - 123 && out[1][11] == 80);
+
+	/* r_modulate scales every style: 2 doubles the first luxel's 0.5 a + 2 b, alpha 58 */
+	CHECK(rm_lm_build(samples, 3, 2, 2, rgb, 2.0f, NULL, ident, &out[0][0], 20, bl));
+	CHECK(out[0][0] == 30 && out[0][1] == 44 && out[0][2] == 58 && out[0][3] == 58);
+
+	/* two styles of different colours: each channel takes its own scale (luxel 0: 5 + 15, 20 + 6, 60 + 3.5) */
+	{
+		const float col[2][3] = { { 0.5f, 1, 2 }, { 3, 1, 0.5f } };
+
+		CHECK(rm_lm_build(samples, 3, 2, 2, col, 1.0f, NULL, ident, &out[0][0], 20, bl));
+		CHECK(out[0][0] == 20 && out[0][1] == 26 && out[0][2] == 63 && out[0][3] == 63);
+	}
+
+	/* one style: scale 1 copies the samples, 1.5 truncates; no light data is 255 everywhere */
+	{
+		const float one[1][3] = { { 1, 1, 1 } }, half[1][3] = { { 1.5f, 1.5f, 0.25f } };
+
+		CHECK(rm_lm_build(samples, 3, 2, 1, one, 1.0f, NULL, ident, &out[0][0], 20, bl));
+		CHECK(out[0][0] == 10 && out[0][1] == 20 && out[0][2] == 30 && out[1][10] == 120 && out[1][11] == 120);
+		CHECK(rm_lm_build(samples, 3, 2, 1, half, 1.0f, NULL, ident, &out[0][0], 20, bl));
+		CHECK(out[0][0] == 15 && out[0][1] == 30 && out[0][2] == 7 && out[0][3] == 30);
+		/* 1.5 * 200 = 300 and 1.5 * 100 = 150, 0: max 300 scales them: 255, 127, 0 */
+		CHECK(out[0][4] == 255 && out[0][5] == 127 && out[0][6] == 0);
+		CHECK(rm_lm_build(NULL, 3, 2, 1, one, 1.0f, ml, inv, &out[0][0], 20, bl));
+		CHECK(out[0][0] == 0 && out[1][10] == 0 && out[1][11] == 255);
+	}
+
+	/* negative lights become 0; a NaN or a huge r_modulate stays defined */
+	{
+		const float neg[1][3] = { { -1, 1, 1 } };
+
+		CHECK(rm_lm_build(samples, 3, 2, 1, neg, 1.0f, NULL, ident, &out[0][0], 20, bl));
+		CHECK(out[0][0] == 0 && out[0][1] == 20 && out[0][3] == 30);
+		CHECK(rm_lm_build(samples, 3, 2, 2, rgb, NAN, NULL, ident, &out[0][0], 20, bl));
+		CHECK(out[0][0] == 0 && out[0][3] == 0);
+		CHECK(rm_lm_build(samples, 3, 2, 2, rgb, 1e30f, NULL, ident, &out[0][0], 20, bl));
+		CHECK(out[0][0] == 255 && out[0][3] == 255);
+	}
+
+	/*
+	 * one style with r_modulate 2 (the path most surfaces take); green the
+	 * brightest channel of an over-bright luxel (170 255 0); every channel
+	 * negative; the combine with gl1_overbrightbits 1
+	 */
+	{
+		const float one1[1][3] = { { 1, 1, 1 } }, grn[1][3] = { { 1, 3, 1 } }, allneg[1][3] = { { -1, -1, -1 } };
+
+		CHECK(rm_lm_build(samples, 3, 2, 1, one1, 2.0f, NULL, ident, &out[0][0], 20, bl));
+		CHECK(out[0][0] == 20 && out[0][1] == 40 && out[0][2] == 60 && out[0][3] == 60);
+		CHECK(rm_lm_build(samples, 3, 2, 1, grn, 1.0f, NULL, ident, &out[0][0], 20, bl));
+		CHECK(out[0][4] == 170 && out[0][5] == 255 && out[0][6] == 0 && out[0][7] == 255);
+		CHECK(rm_lm_build(samples, 3, 2, 1, allneg, 1.0f, NULL, ident, &out[0][0], 20, bl));
+		CHECK(out[0][0] == 0 && out[0][1] == 0 && out[0][2] == 0 && out[0][3] == 0 && out[1][9] == 0 && out[1][10] == 0);
+		CHECK(rm_lm_env(1, 1) == MTL_LM_COMBINE && rm_lm_env(1, 0) == MTL_LM_COMBINE);
+	}
+
+	/* refused: a stride below a row, sizes past rm_lm_size, styles past four; nothing written */
+	memset(out, 0xee, sizeof(out));
+	CHECK(!rm_lm_build(samples, 3, 2, 2, rgb, 1.0f, NULL, ident, &out[0][0], 11, bl));
+	CHECK(!rm_lm_build(samples, 0, 2, 2, rgb, 1.0f, NULL, ident, &out[0][0], 20, bl));
+	CHECK(!rm_lm_build(samples, 3, 0, 2, rgb, 1.0f, NULL, ident, &out[0][0], 20, bl));
+	CHECK(!rm_lm_build(samples, 128, 1, 1, rgb, 1.0f, NULL, ident, &out[0][0], 512, bl));
+	CHECK(!rm_lm_build(samples, 31, 28, 1, rgb, 1.0f, NULL, ident, &out[0][0], 512, bl));
+	CHECK(!rm_lm_build(samples, 3, 2, 5, rgb, 1.0f, NULL, ident, &out[0][0], 20, bl));
+	CHECK(!rm_lm_build(samples, 3, 2, -1, rgb, 1.0f, NULL, ident, &out[0][0], 20, bl));
+
+	for (i = 0, ok = 1; i < 2; i++)
+	{
+		for (j = 0; j < 20; j++)
+		{
+			ok &= out[i][j] == 0xee;
+		}
+	}
+
+	CHECK(ok);
+
+	/* the largest surface fills exactly RM_LM_MAX_LUXELS of the scratch */
+	{
+		static unsigned char big[RM_LM_MAX_LUXELS * 3], dst[17 * 51 * 4];
+
+		memset(big, 9, sizeof(big));
+		CHECK(rm_lm_build(big, 51, 17, 1, rgb, 1.0f, NULL, ident, dst, 51 * 4, bl));
+		CHECK(dst[0] == 4 && dst[sizeof(dst) - 2] == 4 && dst[sizeof(dst) - 1] == 4);
+	}
+}
+
+/*
+ * The world_lm fragment arithmetic (common/mtl_shader_math.h) against
+ * the shim's two texture units for the same draw, bit for bit, over a
+ * grid of texels in [0, 1] for each texture environment gl1 sets on the
+ * lightmap unit (GL_MODULATE, GL_REPLACE with r_lightmap, GL_COMBINE
+ * with gl1_overbrightbits 1, 2 and 4); and the combine by hand, a
+ * texel that clamps and one that does not.
+ */
+static void
+test_lm_combine(void)
+{
+	static const float v[] = { 0, 1.0f / 255, 0.25f, 0.5f, 100.0f / 255, 0.6f, 0.9f, 254.0f / 255, 1 };
+	const int n = (int)(sizeof(v) / sizeof(v[0]));
+	int i, j, k, e, ok = 1, cases = 0;
+	mtl_rgba_t d, l, c;
+
+	for (e = 0; e < 5; e++)
+	{
+		int env = e == 0 ? MTL_LM_MODULATE : (e == 1 ? MTL_LM_REPLACE : MTL_LM_COMBINE);
+		float scale = e == 2 ? 1.0f : (e == 3 ? 2.0f : (e == 4 ? 4.0f : 1.0f));
+
+		for (i = 0; i < n; i++)
+		{
+			for (j = 0; j < n; j++)
+			{
+				for (k = 0; k < n; k++)
+				{
+					float df[4] = { v[i], v[j], v[k], 1 }, lf[4] = { v[k], v[i], v[j], v[(i + j) % n] }, sh[4];
+
+					d.r = df[0];
+					d.g = df[1];
+					d.b = df[2];
+					d.a = df[3];
+					l.r = lf[0];
+					l.g = lf[1];
+					l.b = lf[2];
+					l.a = lf[3];
+					c = mtl_world_lm(d, l, env, scale);
+					rm_host_shim_world_lm(env, scale, 1, df, lf, sh);
+					ok &= memcmp(&c.r, &sh[0], 4) == 0 && memcmp(&c.g, &sh[1], 4) == 0 &&
+						memcmp(&c.b, &sh[2], 4) == 0 && memcmp(&c.a, &sh[3], 4) == 0;
+					cases++;
+				}
+			}
+		}
+	}
+
+	CHECK(ok && cases == 5 * 9 * 9 * 9);
+
+	d.r = 0.6f;
+	d.g = 0.25f;
+	d.b = 0.5f;
+	d.a = 1;
+	l.r = 0.9f;
+	l.g = 0.5f;
+	l.b = 0.5f;
+	l.a = 0.5f;
+	/* overbright 2: 0.6 * 0.9 * 2 = 1.08 clamps to 1; 0.25 * 0.5 * 2 = 0.25 does not; alpha not scaled */
+	c = mtl_world_lm(d, l, MTL_LM_COMBINE, 2);
+	CHECK(c.r == 1.0f && c.g == 0.25f && c.b == 0.5f && c.a == 0.5f);
+	/* overbright 4: 0.25 * 0.5 * 4 = 0.5, 0.5 * 0.5 * 4 = 1 (the edge), 0.6 * 0.9 * 4 clamps */
+	c = mtl_world_lm(d, l, MTL_LM_COMBINE, 4);
+	CHECK(c.r == 1.0f && c.g == 0.5f && c.b == 1.0f && c.a == 0.5f);
+	/* overbright 1 is the product, as GL_MODULATE is */
+	c = mtl_world_lm(d, l, MTL_LM_COMBINE, 1);
+	CHECK(c.r == 0.6f * 0.9f && c.g == 0.125f && c.b == 0.25f);
+	c = mtl_world_lm(d, l, MTL_LM_MODULATE, 4);    /* the scale is GL_COMBINE's only */
+	CHECK(c.r == 0.6f * 0.9f && c.g == 0.125f && c.a == 0.5f);
+	c = mtl_world_lm(d, l, MTL_LM_REPLACE, 4);
+	CHECK(c.r == 0.9f && c.g == 0.5f && c.a == 0.5f);
+
+	/* gl1's cvars to the environment and the scale */
+	CHECK(rm_overbright(0) == 0 && rm_overbright(1) == 1 && rm_overbright(2) == 2 && rm_overbright(3) == 2);
+	CHECK(rm_overbright(4) == 4 && rm_overbright(9) == 4 && rm_overbright(-1) == 0 && rm_overbright(2.7f) == 2);
+	CHECK(rm_overbright(NAN) == 0);
+	CHECK(rm_lm_env(0, 0) == MTL_LM_MODULATE && rm_lm_env(0, 1) == MTL_LM_REPLACE);
+	CHECK(rm_lm_env(2, 0) == MTL_LM_COMBINE && rm_lm_env(4, 1) == MTL_LM_COMBINE);
+}
+
+/* The lightmap line of metal_stats and the pass a split reopens. */
+static void
+test_lm_line(void)
+{
+	char buf[RM_STATS_LINE];
+	const char *want = "ref_metal: metal_stats: lightmaps maps/base2.bsp: 17 slices of 128 by 128 (1114112 bytes)";
+	size_t n = strlen(want);
+
+	CHECK(rm_lm_format("maps/base2.bsp", 17, buf, sizeof(buf)) && strcmp(buf, want) == 0);
+	CHECK(rm_lm_format("maps/base2.bsp", 17, buf, n + 1) && !rm_lm_format("maps/base2.bsp", 17, buf, n));
+	CHECK(buf[0] == '\0');
+	CHECK(!rm_lm_format("maps/base2.bsp", 0, buf, sizeof(buf)) && buf[0] == '\0');
+	CHECK(!rm_lm_format("maps/base2.bsp", RM_LM_MAX_SLICES + 1, buf, sizeof(buf)));
+
+	{
+		char name[MAX_QPATH];
+
+		memset(name, 'x', sizeof(name) - 1);
+		name[sizeof(name) - 1] = '\0';
+		CHECK(rm_lm_format(name, RM_LM_MAX_SLICES, buf, sizeof(buf)) && strlen(buf) < sizeof(buf));
+	}
+
+	CHECK(rm_split_reopen(0, 0) == RM_REOPEN_NONE && rm_split_reopen(0, 1) == RM_REOPEN_NONE);
+	CHECK(rm_split_reopen(1, 0) == RM_REOPEN_NONE && rm_split_reopen(1, 1) == RM_REOPEN_3D_KEEP);
+}
+
 int
 main(void)
 {
@@ -1532,6 +2248,19 @@ main(void)
 	test_frustum_cull();
 	test_texture_animation();
 	test_world_line();
+	test_surface_extents();
+	test_lm_size();
+	test_lm_samples();
+	test_lp_coords();
+	test_dlights();
+	test_lm_alloc();
+	test_lm_regions();
+	test_lm_join();
+	test_lm_regen_mark();
+	test_minlight();
+	test_lm_build();
+	test_lm_combine();
+	test_lm_line();
 
 	printf("rm_host_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

@@ -119,14 +119,34 @@ rmb_new_target(MTLPixelFormat format, int w, int h, MTLTextureUsage usage)
 	return [rmb_device newTextureWithDescriptor:d];
 }
 
+/*
+ * Ends the open pass. A 3D pass's depth and stencil are opened with an
+ * unknown store action and stored only when keep is set (the split that
+ * reopens the 3D pass, rm_split_reopen); otherwise they are dropped, as
+ * every pass did before N5.
+ */
 static void
-rmb_end_encoder(void)
+rmb_end_encoder_keep(int keep)
 {
 	if (frame_enc)
 	{
+		if (frame_depth)
+		{
+			MTLStoreAction a = keep ? MTLStoreActionStore : MTLStoreActionDontCare;
+
+			[frame_enc setDepthStoreAction:a];
+			[frame_enc setStencilStoreAction:a];
+		}
+
 		[frame_enc endEncoding];
 		frame_enc = nil;
 	}
+}
+
+static void
+rmb_end_encoder(void)
+{
+	rmb_end_encoder_keep(0);
 }
 
 static void
@@ -238,7 +258,8 @@ rmb_frame_begin(int w, int h, const float *clear_rgba)
 
 /*
  * A pass on the colour target, colour as rm_color_load says; depth and
- * stencil (cleared) only for the 3D pass.
+ * stencil only for the 3D pass: with_depth 1 clears them (the view's
+ * pass), 2 loads them (the 3D pass a split reopens).
  */
 static int
 rmb_pass(const float *clear_rgba, int with_depth)
@@ -276,14 +297,17 @@ rmb_pass(const float *clear_rgba, int with_depth)
 
 		if (with_depth)
 		{
+			MTLLoadAction load = (with_depth == 2) ? MTLLoadActionLoad : MTLLoadActionClear;
+
+			/* the store action is chosen when the pass ends (rmb_end_encoder_keep) */
 			rp.depthAttachment.texture = depth;
-			rp.depthAttachment.loadAction = MTLLoadActionClear;
+			rp.depthAttachment.loadAction = load;
 			rp.depthAttachment.clearDepth = 1.0;
-			rp.depthAttachment.storeAction = MTLStoreActionDontCare;
+			rp.depthAttachment.storeAction = MTLStoreActionUnknown;
 			rp.stencilAttachment.texture = depth;
-			rp.stencilAttachment.loadAction = MTLLoadActionClear;
+			rp.stencilAttachment.loadAction = load;
 			rp.stencilAttachment.clearStencil = 0;
-			rp.stencilAttachment.storeAction = MTLStoreActionDontCare;
+			rp.stencilAttachment.storeAction = MTLStoreActionUnknown;
 		}
 
 		frame_enc = [frame_cmd renderCommandEncoderWithDescriptor:rp];
@@ -294,7 +318,7 @@ rmb_pass(const float *clear_rgba, int with_depth)
 		}
 
 		frame_passes++;
-		frame_depth = with_depth;
+		frame_depth = with_depth != 0;
 		color_defined = 1;
 	}
 
@@ -543,19 +567,30 @@ rmb_encode_release(void)
 void
 rmb_encode_split(void)
 {
+	rm_reopen_t reopen;
+
 	if (!frame_open || frame_skipped || !frame_cmd)
 	{
 		return;
 	}
 
+	reopen = rm_split_reopen(frame_enc != nil, frame_depth);
+
 	@autoreleasepool
 	{
+		/* a 3D pass keeps its depth and stencil for the pass that goes on after the write */
+		rmb_end_encoder_keep(reopen == RM_REOPEN_3D_KEEP);
 		rmb_commit_partial();
 		frame_cmd = [rmb_queue commandBuffer];
 		rmb_frame_serial++;
 	}
 
 	rmb_counts.splits++;
+
+	if (reopen == RM_REOPEN_3D_KEEP)
+	{
+		rmb_pass(NULL, 2);
+	}
 }
 
 void
@@ -731,6 +766,77 @@ rmb_draw_world(int vbuf, const unsigned *idx, unsigned long count, int tex, int 
 		[frame_enc setVertexBuffer:vb offset:0 atIndex:0];
 		[frame_enc setFragmentTexture:t atIndex:0];
 		[frame_enc setFragmentSamplerState:ss atIndex:0];
+		[frame_enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+				indexCount:(NSUInteger)count
+				indexType:MTLIndexTypeUInt32
+				indexBuffer:frame_ring
+				indexBufferOffset:(NSUInteger)iat];
+	}
+
+	rmb_counts.draws++;
+	return 1;
+}
+
+/* rm_shaders.metal's rm_uniforms_lm: gl1's lightmap unit and the slice */
+typedef struct
+{
+	int env;
+	float scale;
+	unsigned slice;
+	unsigned pad;
+} rmb_uniforms_lm_t;
+
+int
+rmb_draw_world_lm(int vbuf, const unsigned *idx, unsigned long count, const rmb_lm_draw_t *d,
+		const float *mvp, const rm_viewport_t *vp, int cull)
+{
+	static const float white[4] = { 1, 1, 1, 1 };
+	long iat;
+
+	if (!d || !count || (count > RM_WORLD_MAX_INDICES))
+	{
+		rmb_counts.draw_skips++;
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		id<MTLBuffer> vb = rmb_static_buffer(vbuf);
+		id<MTLTexture> t = rmb_texture_for_draw(d->tex);
+		id<MTLTexture> lm = rmb_texture_for_draw(d->lmtex);
+		id<MTLSamplerState> ss = rmb_sampler(d->smp);
+		id<MTLSamplerState> ls = rmb_sampler(RMB_SAMPLER(RMB_SMP_LIGHTMAP, 0));
+		rmb_uniforms_lm_t u;
+
+		/* the slice must be one of the array's: a draw outside it is a skip */
+		if (!vb || !t || !lm || !ss || !ls || (lm.textureType != MTLTextureType2DArray) || (d->slice < 0) ||
+			((NSUInteger)d->slice >= lm.arrayLength) ||
+			!rmb_draw_3d_state(RM_PIPE_WORLD_LM, RMB_DS_LEQUAL_WRITE, mvp, white, vp, cull))
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+
+		iat = mtl_ring_alloc(&ring, (size_t)count * sizeof(idx[0]));
+
+		if (iat < 0)
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+
+		memset(&u, 0, sizeof(u));
+		u.env = d->env;
+		u.scale = d->scale;
+		u.slice = (unsigned)d->slice;
+
+		memcpy((unsigned char *)frame_ring.contents + iat, idx, (size_t)count * sizeof(idx[0]));
+		[frame_enc setVertexBuffer:vb offset:0 atIndex:0];
+		[frame_enc setFragmentTexture:t atIndex:0];
+		[frame_enc setFragmentSamplerState:ss atIndex:0];
+		[frame_enc setFragmentTexture:lm atIndex:1];
+		[frame_enc setFragmentSamplerState:ls atIndex:1];
+		[frame_enc setFragmentBytes:&u length:sizeof(u) atIndex:1];
 		[frame_enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
 				indexCount:(NSUInteger)count
 				indexType:MTLIndexTypeUInt32

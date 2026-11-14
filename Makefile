@@ -1170,6 +1170,8 @@ endif
 REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_draw.o \
 	src/client/refresh/metal/rm_image.o \
+	src/client/refresh/metal/rm_light.o \
+	src/client/refresh/metal/rm_lightmap.o \
 	src/client/refresh/metal/rm_main.o \
 	src/client/refresh/metal/rm_misc.o \
 	src/client/refresh/metal/rm_model.o \
