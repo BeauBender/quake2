@@ -586,7 +586,9 @@ Choices made where the design left room:
   in code only, outside comments and string literals, so N2 can copy
   gl1's `gl_texturemode` value strings (`"GL_NEAREST"` and the rest) as
   literals; `<OpenGL/` and `gl1/` includes are looked for in the raw
-  text, and a symbolic link under the directory fails the check.
+  text, and a symbolic link under the directory fails the check. It
+  scans `.c`, `.h`, `.m` and `.metal` files; any other file there (a
+  `.mm`, `.cpp` or `.inc`) fails the check instead of going unscanned.
 - `scripts/pins.sh` needed no change (section 10): `metal` is a plain
   module name.
 

@@ -19,10 +19,14 @@
 #     check (the probe runs with the make flags cleared, as the builds).
 # (c) Always: the vocabulary check. Under src/client/refresh/metal/ no
 #     gl[A-Z] call and no GL_ identifier in code (outside comments and
-#     string literals), no <OpenGL/ include, no include of a gl1/ path,
-#     and no symbolic link (which could hide either). It runs
-#     on scratch mutants first and must fail each of them, then on the
-#     tree. A grep that errors fails the check.
+#     string literals; a literal continued by a backslash at the end of
+#     its line goes on on the next), no <OpenGL/ include, no include of
+#     a gl1/ path, no symbolic link (which could hide either), and no
+#     file other than .c, .h, .m and .metal (a .mm, .cpp or .inc file
+#     fails the check rather than going unscanned). It runs on scratch
+#     mutants first, each text mutant once per scanned kind of file, and
+#     must fail each of them, then on the tree. A grep that errors fails
+#     the check.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -81,7 +85,9 @@ strip() {
 			if (c == "\"") { st = 2 } else if (c == q) { st = 3 }
 			out = out c; i++
 		}
-		if (st >= 2) { st = 0 }   # a literal ends with its line
+		# a literal ends with its line, unless the line ends in a backslash (spliced
+		# to the next one before the literal is read)
+		if (st >= 2 && substr($0, n, 1) != bs) { st = 0 }
 		print out
 	}' "$1"
 }
@@ -110,9 +116,13 @@ vocab() {
 		printf '  symbolic link: %s\n' $links
 		found=1
 	fi
-	files=$(find "$d" -type f \( -name '*.c' -o -name '*.h' -o -name '*.m' -o -name '*.metal' \) -print) ||
-		{ echo "  find failed on $d"; return 1; }
+	files=$(find "$d" -type f -print) || { echo "  find failed on $d"; return 1; }
 	for f in $files; do
+		# the scanned kinds; any other file (.mm, .cpp, .inc, ...) fails the check
+		case $f in
+			*.c|*.h|*.m|*.metal) ;;
+			*) echo "  $f: not a scanned kind of file (.c .h .m .metal)"; found=1; continue ;;
+		esac
 		strip "$f" > "${tmp:?}/vocab.code" || { echo "  awk failed on $f"; return 1; }
 		for pat in '(^|[^A-Za-z0-9_])gl[A-Z][A-Za-z0-9_]*[[:space:]]*\(' '(^|[^A-Za-z0-9_])GL_[A-Za-z0-9_]'; do
 			r=0; vgrep "$pat" "${tmp:?}/vocab.code" "$f" || r=$?
@@ -135,30 +145,57 @@ printf '%s\n' '/* glClear(GL_COLOR_BUFFER_BIT) in a comment' '   over two lines 
 	'static const char *modes[] = { "GL_NEAREST", "GL_LINEAR_MIPMAP_LINEAR", "a \" GL_X" };' \
 	"char q = '\"'; // GL_RGBA glFinish() after a line comment" 'const char *s = "glClear(";' \
 	"char e = '\\\\'; const char *t = \"GL_ZERO\";" > "${tmp:?}/mut/clean.c"
+for e in h m metal; do
+	cp "${tmp:?}/mut/clean.c" "${tmp:?}/mut/clean.$e"
+done
 vocab "${tmp:?}/mut" > "${tmp:?}/mut.out" || { cat "${tmp:?}/mut.out"; bad "the vocabulary check fails a clean file"; }
+# Each text mutant is written once per scanned kind of file (@NL@ is a line break):
+# a literal continued over a line by a backslash, and one left open at the end of its
+# line, are followed by code. Then a symbolic link and a file of an unscanned kind.
 mutants=0
-for m in 'glClear(0);' 'x = glGetError ();' 'int y = GL_RGBA;' 'f("GL_NEAREST", GL_LINEAR);' \
-	'/* a comment */ int z = GL_ONE; /* ends */' 'char *s = "a\"b"; int w = GL_ZERO;' \
-	"char c = '\"'; int v = GL_ONE;" \
-	'#include <OpenGL/gl.h>' '#import <OpenGL/gl3.h>' '#include "../gl1/header/local.h"' \
-	'#include <gl1/gl1.h>' 'link'; do
-	rm -rf "${tmp:?}/mut"
-	mkdir "${tmp:?}/mut"
-	cp "${tmp:?}/probe.c" "${tmp:?}/mut/ok.c"
-	if [ "$m" = link ]; then
-		ln -s "$PWD/src/client/refresh/gl1/gl1_main.c" "${tmp:?}/mut/hidden.c"
-	else
-		printf '%s\n' "$m" > "${tmp:?}/mut/m.m"
-	fi
+mutant() { # <label>: the check must fail the directory mut/
 	if vocab "${tmp:?}/mut" > "${tmp:?}/mut.out"; then
-		bad "the vocabulary check passes a mutant ($m)"
+		bad "the vocabulary check passes a mutant ($1)"
 	else
 		mutants=$((mutants + 1))
 	fi
+}
+fresh() {
+	rm -rf "${tmp:?}/mut"
+	mkdir "${tmp:?}/mut"
+	cp "${tmp:?}/probe.c" "${tmp:?}/mut/ok.c"
+}
+for m in 'glClear(0);' 'x = glGetError ();' 'int y = GL_RGBA;' 'f("GL_NEAREST", GL_LINEAR);' \
+	'/* a comment */ int z = GL_ONE; /* ends */' 'char *s = "a\"b"; int w = GL_ZERO;' \
+	"char c = '\"'; int v = GL_ONE;" \
+	'static const char *rm_s = "abc\@NL@def"; static int rm_x = GL_RGBA;' \
+	'const char *rm_u = "abc@NL@int rm_v = GL_ONE;' \
+	'#include <OpenGL/gl.h>' '#import <OpenGL/gl3.h>' '#include "../gl1/header/local.h"' \
+	'#include <gl1/gl1.h>' '#import "gl1/x.h"'; do
+	for e in c h m metal; do
+		fresh
+		printf '%s\n' "$m" | awk '{ gsub(/@NL@/, "\n"); print }' > "${tmp:?}/mut/m.$e"
+		mutant "$m in m.$e"
+	done
 done
-# a tool error fails it too
+fresh
+ln -s "$PWD/src/client/refresh/gl1/gl1_main.c" "${tmp:?}/mut/hidden.c"
+mutant "a symbolic link"
+for e in mm cpp inc; do
+	fresh
+	printf '%s\n' '#include <OpenGL/gl.h>' > "${tmp:?}/mut/m.$e"
+	mutant "an unscanned m.$e"
+done
+# a tool error fails it too: a missing directory, and a grep that exits 2
 if vocab "${tmp:?}/no-such-dir" > "${tmp:?}/mut.out"; then
 	bad "the vocabulary check passes a missing directory"
+fi
+fresh
+mkdir "${tmp:?}/stub"
+printf '#!/bin/sh\nexit 2\n' > "${tmp:?}/stub/grep"
+chmod +x "${tmp:?}/stub/grep"
+if (PATH="${tmp:?}/stub:$PATH"; vocab "${tmp:?}/mut" > "${tmp:?}/mut.out"); then
+	bad "the vocabulary check passes when grep fails"
 fi
 
 if ! vocab "$rm_dir" > "${tmp:?}/vocab.tree"; then
