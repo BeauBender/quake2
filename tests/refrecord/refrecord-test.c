@@ -4168,14 +4168,22 @@ TestCvarRules(void)
 		"r_customheight", "r_vsync", "r_msaa_samples", "gl3_libgl", "gl3_debugcontext", "gl1_stereo" };
 	const char *yes[] = { "r_lerpmodels", "gl1_minlight", "gl3_intensity", "gl_polyblend",
 		"sw_waterwarp", "vid_gamma" };
+	/* the player's identity, the address book and the server's name included */
 	const char *no[] = { "cl_gun", "rate", "r", "gl1", "R_lerpmodels", "xr_lerpmodels", "glx_a",
-		"logfile", "name", "" };
+		"logfile", "name", "skin", "adr0", "adr8", "hostname", "password", "rcon_password", "" };
 	char longname[REFREC_MAX_STRING + 1];
 	size_t i;
 
 	for (i = 0; i < sizeof(yes) / sizeof(yes[0]); i++)
 	{
 		CHECK(RefRec_CvarRecorded(yes[i], 0), "cvars: %s not recorded", yes[i]);
+		CHECK(RefRec_CvarRecorded(yes[i], CVAR_ARCHIVE), "cvars: archived %s not recorded", yes[i]);
+		/* only what a replay could restore: a live cvar of none of these flags */
+		CHECK(!RefRec_CvarRecorded(yes[i], -1), "cvars: %s recorded with flags -1", yes[i]);
+		CHECK(!RefRec_CvarRecorded(yes[i], CVAR_NOSET), "cvars: CVAR_NOSET %s recorded", yes[i]);
+		CHECK(!RefRec_CvarRecorded(yes[i], CVAR_LATCH | CVAR_ARCHIVE), "cvars: CVAR_LATCH %s recorded", yes[i]);
+		CHECK(!RefRec_CvarRecorded(yes[i], CVAR_USERINFO), "cvars: CVAR_USERINFO %s recorded", yes[i]);
+		CHECK(!RefRec_CvarRecorded(yes[i], CVAR_SERVERINFO), "cvars: CVAR_SERVERINFO %s recorded", yes[i]);
 		CHECK(RefRec_CvarRestorable(yes[i], "1", 0), "cvars: %s not restorable", yes[i]);
 		CHECK(RefRec_CvarRestorable(yes[i], "1", CVAR_ARCHIVE), "cvars: archived %s not restorable", yes[i]);
 		CHECK(!RefRec_CvarRestorable(yes[i], "1", -1), "cvars: %s restorable without a live cvar", yes[i]);
@@ -4189,8 +4197,9 @@ TestCvarRules(void)
 	for (i = 0; i < sizeof(no) / sizeof(no[0]); i++)
 	{
 		CHECK(!RefRec_CvarRecorded(no[i], 0), "cvars: %s recorded", no[i]);
-		/* an archived cvar is recorded, but a replay sets renderer cvars only */
-		CHECK(!no[i][0] || RefRec_CvarRecorded(no[i], CVAR_ARCHIVE), "cvars: archived %s not recorded", no[i]);
+		/* CVAR_ARCHIVE alone is not recorded: a replay sets renderer cvars only */
+		CHECK(!RefRec_CvarRecorded(no[i], CVAR_ARCHIVE), "cvars: archived %s recorded", no[i]);
+		CHECK(!RefRec_CvarRecorded(no[i], CVAR_ARCHIVE | CVAR_USERINFO), "cvars: userinfo %s recorded", no[i]);
 		CHECK(!RefRec_CvarRestorable(no[i], "1", CVAR_ARCHIVE), "cvars: %s restorable", no[i]);
 		CHECK(!RefRec_CvarRestorable(no[i], "1", 0), "cvars: %s restorable", no[i]);
 	}
@@ -4321,11 +4330,11 @@ TestRecordReplayCvars(void)
 	const int nt = (int)(sizeof(times) / sizeof(times[0]));
 	const char *names[] = { "r_lerpmodels", "cl_gun", "cl_nothing", "gl_polyblend", "r_noset",
 		"vid_renderer", "logfile", "hand", "r_absent", "sw_waterwarp", "r_long", "r_badvalue",
-		"r_drawworld", NULL, "" };
+		"r_drawworld", NULL, "", "r_userinfo" };
 	const char *values[] = { "0", "2", "1", "0", "5", "gl3", "1", "1", "1", "1", longvalue,
-		"a\"b", "1", "1", "1" };
+		"a\"b", "1", "1", "1", "1" };
 	const int flags[] = { CVAR_ARCHIVE, CVAR_ARCHIVE, 0, CVAR_ARCHIVE, 0, CVAR_ARCHIVE, CVAR_ARCHIVE,
-		CVAR_ARCHIVE | CVAR_USERINFO, 0, 0, 0, 0, 0, CVAR_ARCHIVE, CVAR_ARCHIVE };
+		CVAR_ARCHIVE | CVAR_USERINFO, 0, 0, 0, 0, 0, CVAR_ARCHIVE, CVAR_ARCHIVE, CVAR_USERINFO };
 	const int n = (int)(sizeof(names) / sizeof(names[0]));
 	char path[1200];
 	refrec_replay_stats_t st;
@@ -4406,9 +4415,9 @@ TestRecordReplayCvars(void)
 	CHECK(!st.failed && st.frames == (uint32_t)nt, "cvars: replay failed, %u frames", st.frames);
 	CHECK(strcmp(mock_setlog, "r_lerpmodels=0;gl_polyblend=0;sw_waterwarp=1;r_drawworld=1;") == 0,
 			"cvars: restored '%s'", mock_setlog);
-	/* recorded: r_lerpmodels cl_gun gl_polyblend r_noset vid_renderer logfile hand r_absent
-	   sw_waterwarp r_badvalue r_drawworld (11); set 4 */
-	CHECK(st.cvars_set == 4 && st.cvars_skipped == 7, "cvars: %u set, %u skipped", st.cvars_set, st.cvars_skipped);
+	/* recorded: r_lerpmodels gl_polyblend r_noset vid_renderer r_absent sw_waterwarp
+	   r_badvalue r_drawworld (8; not cl_gun, cl_nothing, logfile, hand, r_userinfo); set 4 */
+	CHECK(st.cvars_set == 4 && st.cvars_skipped == 4, "cvars: %u set, %u skipped", st.cvars_set, st.cvars_skipped);
 	CHECK(mock_nset == 4 && mock_set_at_log == 0 && mock.nlog > 0 && mock.log[0] == REC_BEGINREG,
 			"cvars: restored after %u forwarded calls, first %d", mock_set_at_log, mock.log[0]);
 
@@ -4432,7 +4441,7 @@ TestRecordReplayCvars(void)
 
 	RefRec_ReplayStats(&st);
 	RefRec_CloseReplay();
-	CHECK(!st.failed && st.cvars_set == 0 && st.cvars_skipped == 11 && !mock_setlog[0],
+	CHECK(!st.failed && st.cvars_set == 0 && st.cvars_skipped == 8 && !mock_setlog[0],
 			"cvars: without CvarFlags %u set, %u skipped", st.cvars_set, st.cvars_skipped);
 
 	/* nor with CvarFlags and no SetCvar */
@@ -4448,7 +4457,7 @@ TestRecordReplayCvars(void)
 
 	RefRec_ReplayStats(&st);
 	RefRec_CloseReplay();
-	CHECK(!st.failed && st.cvars_set == 0 && st.cvars_skipped == 11 && !mock_setlog[0],
+	CHECK(!st.failed && st.cvars_set == 0 && st.cvars_skipped == 8 && !mock_setlog[0],
 			"cvars: without SetCvar %u set, %u skipped", st.cvars_set, st.cvars_skipped);
 }
 

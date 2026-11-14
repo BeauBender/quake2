@@ -286,12 +286,21 @@ As built (TASK45).
 and compares the bits the mock renderer receives with the live ones.
 (b) `REC_CVARS`: at session open `VID_LoadRenderer` hands every cvar with
 its flags to `RefRec_Cvars`, which keeps those `RefRec_CvarRecorded`
-accepts: `CVAR_ARCHIVE`, or a name starting with one of
-`REFREC_CVAR_PREFIXES` (`gl1_`, `gl3_`, `gl_`, `r_`, `sw_`, `vid_`;
-`gl_` and `gl3_` were added to the card's list because `ref_gl1` reads
+accepts: a name starting with one of `REFREC_CVAR_PREFIXES` and none of
+`CVAR_NOSET`, `CVAR_LATCH`, `CVAR_USERINFO`, `CVAR_SERVERINFO`. This
+deliberately narrows the card's "`CVAR_ARCHIVE` or the prefix": the
+replayer can only ever restore a prefixed cvar of none of those flags
+(the allow-rule below), so an archived cvar without the prefix was
+stored and never used, and that set holds the player's `name`, `skin`
+and `rate`, the server address book `adr0`..`adr8` and `hostname`
+(with `pins_record` and no `pins_capture` the user's `config.cfg` is
+read, so these are the user's own values). The snapshot now stores
+exactly what a replay can use. The prefixes are `gl1_`, `gl3_`, `gl_`,
+`r_`, `sw_`, `vid_` (`gl_` and `gl3_` were added to the card's list
+because `ref_gl1` reads
 `gl_polyblend`, `gl_texturemode` and other `gl_` cvars, and `ref_gl3` its
-`gl3_` ones). A NULL or over-long name or value is left out with one
-`REFREC_WARN_NAME`, more than `REFREC_MAX_CVARS` with a
+`gl3_` ones). A NULL or over-long name, or a stored cvar's over-long
+value, is left out with one `REFREC_WARN_NAME`, more than `REFREC_MAX_CVARS` with a
 `REFREC_WARN_COUNT`. The replayer forwards the record in place (it comes
 before the first `REC_BEGINREG`) and sets a pair through the target's
 `SetCvar` (vid.c: `Cvar_Set`) only when `RefRec_CvarRestorable` accepts

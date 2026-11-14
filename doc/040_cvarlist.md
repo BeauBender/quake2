@@ -844,7 +844,11 @@ them given the engine behaves exactly as before.
   passes `trace.q2r`): registrations with stable ids in place of the
   renderer's pointers, each `refdef_t` copied in full, every 2D draw,
   the point of each captured frame, a string table naming the models,
-  skins and pics registered, and a frame index. A renderer restart is not
+  skins and pics registered, a frame index, and the values of the
+  renderer cvars a replay may restore (names starting with `gl1_`,
+  `gl3_`, `gl_`, `r_`, `sw_` or `vid_` that are not write-protected,
+  latched, userinfo or serverinfo; no other cvar, so never the player's
+  name or the server address book). A renderer restart is not
   recorded again. The file is streamed to disk; a failed write or a
   recorder limit (1 GiB of records) ends the recording with one message
   and the game carries on. The trace embeds data derived from the game

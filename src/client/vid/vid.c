@@ -506,8 +506,8 @@ VID_StartRecord(void)
 
 /*
  * The REC_CVARS snapshot at session open: every cvar with its flags;
- * RefRec_Cvars keeps those RefRec_CvarRecorded accepts (CVAR_ARCHIVE or
- * a renderer prefix, refrecord.h).
+ * RefRec_Cvars keeps those RefRec_CvarRecorded accepts (the renderer
+ * cvars a replay could restore, refrecord.h).
  */
 static void
 VID_RecordCvars(void)

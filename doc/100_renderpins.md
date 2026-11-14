@@ -133,7 +133,9 @@ and an error stops the engine. The replay first restores the renderer
 cvars the live run had (`r_*`, `gl_*`, `gl1_*`, `gl3_*`, `sw_*`,
 `vid_*`, from the trace), so it needs none of the scenario's settings on
 its command line; the cvars that choose the renderer, the window or the
-display mode are never changed, and nothing is saved. `scripts/pins.sh`
+display mode are never changed, and nothing is saved. The trace stores
+only those renderer cvars, never the player's name, the server address
+book or any other client or server setting. `scripts/pins.sh`
 does not drive this yet.
 
 ### Determinism

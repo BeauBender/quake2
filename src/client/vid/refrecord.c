@@ -2343,14 +2343,12 @@ RefRec_CvarRecorded(const char *name, int flags)
 {
 	size_t i;
 
-	if (!Rec_Fits(name) || !name[0])
+	/* only what a replay could restore: CVAR_ARCHIVE alone is not enough,
+	   so the player's name, the address book and the like are never stored */
+	if (!Rec_Fits(name) || !name[0] || (flags < 0) ||
+		(flags & (CVAR_NOSET | CVAR_LATCH | CVAR_USERINFO | CVAR_SERVERINFO)))
 	{
 		return false;
-	}
-
-	if ((flags >= 0) && (flags & CVAR_ARCHIVE))
-	{
-		return true;
 	}
 
 	for (i = 0; i < sizeof(rec_cvar_prefixes) / sizeof(rec_cvar_prefixes[0]); i++)
@@ -2370,7 +2368,7 @@ RefRec_CvarRestorable(const char *name, const char *value, int flags)
 	const unsigned char *p;
 	size_t i;
 
-	/* a live cvar, a renderer prefix (flags 0: CVAR_ARCHIVE alone is not enough) */
+	/* a live cvar of none of these flags, a renderer prefix */
 	if ((flags < 0) || (flags & (CVAR_NOSET | CVAR_LATCH | CVAR_USERINFO | CVAR_SERVERINFO)) ||
 		!RefRec_CvarRecorded(name, 0) || !Rec_Fits(value))
 	{
@@ -2419,7 +2417,7 @@ Rec_Cvars(int count, const char *const *names, const char *const *values, const 
 
 	for (i = 0; i < count; i++)
 	{
-		if (!Rec_Fits(names[i]) || !Rec_Fits(values[i]))
+		if (!Rec_Fits(names[i]))
 		{
 			cut = true;
 			continue;
@@ -2427,6 +2425,13 @@ Rec_Cvars(int count, const char *const *names, const char *const *values, const 
 
 		if (!RefRec_CvarRecorded(names[i], flags[i]))
 		{
+			continue;
+		}
+
+		/* a value that does not fit is warned about for a stored cvar only */
+		if (!Rec_Fits(values[i]))
+		{
+			cut = true;
 			continue;
 		}
 

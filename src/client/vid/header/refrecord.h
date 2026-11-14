@@ -275,9 +275,13 @@ void RefRec_Control(refrec_type_t t, float arg);
 /*
  * REC_CVARS (TASK45). At session open vid.c hands RefRec_Cvars every
  * cvar with its flags; the recorder keeps those RefRec_CvarRecorded
- * accepts: CVAR_ARCHIVE, or a renderer prefix (REFREC_CVAR_PREFIXES).
- * A name or value that does not fit REFREC_MAX_STRING, and any past
- * REFREC_MAX_CVARS, is left out with a REC_WARN. The replayer restores a
+ * accepts, the ones a replay could restore: a renderer prefix
+ * (REFREC_CVAR_PREFIXES) and none of CVAR_NOSET, CVAR_LATCH,
+ * CVAR_USERINFO, CVAR_SERVERINFO (flags -1: no such cvar). CVAR_ARCHIVE
+ * alone does not qualify, so the player's name, the address book and the
+ * other archived client and server cvars are never stored.
+ * A name, or a kept cvar's value, that does not fit REFREC_MAX_STRING,
+ * and any past REFREC_MAX_CVARS, is left out with a REC_WARN. The replayer restores a
  * pair only when RefRec_CvarRestorable accepts it against the LIVE
  * cvar's flags (the trace carries no flags): the cvar exists, its name
  * has a renderer prefix and only [A-Za-z0-9_], it is none of CVAR_NOSET,
