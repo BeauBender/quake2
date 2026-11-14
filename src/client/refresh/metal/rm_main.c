@@ -135,7 +135,7 @@ RM_Close(void)
 {
 	rmb_stats_t s;
 	rm_ledger_t l;
-	char line[256];
+	char line[RM_STATS_LINE];
 
 	if (!rm_opened)
 	{

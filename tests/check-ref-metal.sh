@@ -53,7 +53,7 @@ fi
 
 host=""
 # shellcheck disable=SC2086 # flags is a word list
-if ! $cc $flags -o "${tmp:?}/rm_host_test" tests/metal/rm_host_test.c "$rm_dir/rm_pure.c" > "${tmp:?}/cc.out" 2>&1; then
+if ! $cc $flags -o "${tmp:?}/rm_host_test" tests/metal/rm_host_test.c "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" -lm > "${tmp:?}/cc.out" 2>&1; then
 	cat "${tmp:?}/cc.out"
 	bad "tests/metal/rm_host_test.c does not compile"
 elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_host_test" > "${tmp:?}/out" 2>&1; then

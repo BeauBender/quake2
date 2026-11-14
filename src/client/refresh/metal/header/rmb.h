@@ -80,7 +80,17 @@ typedef struct
 	unsigned long failed;       /* command buffers that ended in error */
 	unsigned long readbacks;    /* successful rmb_read calls */
 	unsigned long noop_calls;   /* calls to entry points not implemented yet (front end) */
+	unsigned long draws;        /* draws encoded */
+	unsigned long uploads;      /* texture uploads blitted */
+	unsigned long upload_skips; /* uploads refused by the size check or a failed allocation */
+	unsigned long draw_skips;   /* draws refused: no texture, no pipeline, no ring space */
+	unsigned long splits;       /* frame command buffers split for a rewritten texture (section 3) */
+	unsigned long pipelines;    /* pipeline states built in InitContext */
+	unsigned long late_pipelines;   /* pipeline states built after InitContext: must stay 0 */
 } rmb_stats_t;
+
+/* A buffer of this size holds every metal_stats line (rm_stats_format, host-tested). */
+#define RM_STATS_LINE 512
 
 /* ---- rm_pure.c: no SDL, no Metal --------------------------------------------- */
 
@@ -131,6 +141,59 @@ rm_load_t rm_color_load(int clear, int defined);
  * the next frame) or the colour target is cw by ch, another size.
  */
 int rm_targets_rebuild(int have_color, int have_depth, int cw, int ch, int w, int h);
+
+/* ---- images, the 2D draws (rm_pure.c) ------------------------------------------- */
+
+/*
+ * The bytes of a w by h rgba8 upload. 1 with *bytes set when w and h are
+ * positive and w * h * 4 fits in cap (the staging ring, RMB_STAGING_BYTES),
+ * 0 otherwise: no upload of that size is staged. The product is checked
+ * for overflow before it is formed.
+ */
+int rm_upload_bytes(long w, long h, size_t cap, size_t *bytes);
+
+/*
+ * gl1's RDraw_StretchRaw, 8-bit frame (non-power-of-two path): each of
+ * cols * rows palette indices becomes its rgba8 entry of palette (r_rawpalette,
+ * gl1's byte order: r, g, b, 255 in memory), at the frame's own size, into
+ * out, which holds out_len bytes. 0 and nothing written when cols or rows is
+ * not positive or out cannot hold cols * rows * 4 bytes.
+ */
+int rm_raw8_to_rgba(const unsigned char *data, int cols, int rows, const unsigned *palette,
+		unsigned char *out, size_t out_len);
+
+/*
+ * The triangles of a fan of n vertices (GL_TRIANGLE_FAN, the shim's order:
+ * 0, i, i + 1 for i from 1 to n - 2) into idx, which holds cap entries.
+ * Returns the number of indices, 0 when n < 3 or they do not fit.
+ */
+int rm_fan_indices(int n, unsigned short *idx, int cap);
+
+/* What a 2D draw does with its texture (the shim's texture environments). */
+typedef enum
+{
+	RM_TEXENV_REPLACE,
+	RM_TEXENV_MODULATE,
+	RM_TEXENV_UNTEXTURED,   /* the vertex colour only */
+	RM_TEXENVS
+} rm_texenv_t;
+
+/*
+ * The index of a 2D pipeline in the table InitContext builds: texture
+ * environment, gl1's alpha test (GL_GREATER 0.666) on or off, blending
+ * (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA) on or off. -1 when the texenv is
+ * out of range.
+ */
+#define RM_PIPE_2D_COUNT (RM_TEXENVS * 2 * 2)
+int rm_pipe_2d(rm_texenv_t env, int alpha_test, int blend);
+
+/*
+ * gl_texturemode (gl1's names, R_TextureMode in gl1_image.c) to the
+ * minifying filter (0 to 5: GL_NEAREST, GL_LINEAR, then the four mipmap
+ * filters in GL's enum order) and the magnifying one (0 nearest, 1
+ * linear). 0 for a name gl1 does not know (nothing written).
+ */
+int rm_texture_mode(const char *name, int *min, int *mag_linear);
 
 /* ---- rmb_device.m and rmb_encode.m ------------------------------------------- */
 
@@ -194,5 +257,67 @@ void rmb_target_size(int *w, int *h);
 
 /* Blits the frame to the drawable when there is one, presents and commits. */
 void rmb_frame_end(void);
+
+/*
+ * gl1's mid-frame colour clear (RI_SetPalette clears to 0, 0, 0, 0): the
+ * open pass is ended and a colour-only pass cleared to rgba opened.
+ */
+void rmb_clear(const float *rgba);
+
+/* ---- rmb_resource.m: textures, samplers, pipelines ---------------------------- */
+
+/* The staging ring all texture uploads go through (section 3). */
+#define RMB_STAGING_BYTES (64u << 20)
+/* Texture ids run from 1 to RMB_MAX_TEXTURES - 1; 0 is none. */
+#define RMB_MAX_TEXTURES 4096
+
+/* The sampler classes of gl1's images, each in a repeat and a clamp form. */
+typedef enum
+{
+	RMB_SMP_MIP,        /* mipmapped: gl_texturemode's min and mag filter, r_anisotropic */
+	RMB_SMP_FLAT,       /* no mipmaps: gl_texturemode's mag filter for both */
+	RMB_SMP_NEAREST,    /* r_nolerp_list, r_2D_unfiltered, r_videos_unfiltered */
+	RMB_SMP_CLASSES
+} rmb_smp_t;
+
+#define RMB_SAMPLER(cls, clamp) ((cls) * 2 + ((clamp) ? 1 : 0))
+
+/*
+ * Loads ref_metal.metallib from dir and builds the 2D pipeline table and
+ * the samplers. 0 with err filled on failure.
+ */
+int rmb_resources_open(const char *dir, char *err, size_t errlen);
+void rmb_resources_close(void);
+
+/* Rebuilds the sampler table between frames: min 0 to 5, mag_linear, anisotropy 0 (off) or 1 to 16. */
+void rmb_samplers_set(int min, int mag_linear, int aniso);
+
+/*
+ * Writes w by h rgba8 texels (rows top down, tightly packed) into
+ * texture id, making it (or making it again at another size) first;
+ * with mipmapped the mip chain is generated. id 0 takes a free id.
+ * Returns the id, 0 when the size check refuses the upload or an
+ * allocation fails (counted as an upload skip; nothing is written).
+ * opaque forces alpha 255 (gl1's solid internal format on the shim).
+ */
+int rmb_texture_upload(int id, const unsigned char *rgba, int w, int h, int mipmapped, int opaque);
+void rmb_texture_free(int id);
+
+/* One 2D vertex: the shim's layout (float4 position, float2 uv, float4 colour). */
+typedef struct
+{
+	float pos[4];
+	float uv[2];
+	float pad[2];
+	float color[4];
+} rmb_vert2d_t;
+
+/*
+ * Draws a fan of n vertices (gl1's GL_TRIANGLE_FAN quads) with 2D
+ * pipeline pipe, texture tex (0 for the untextured pipelines) and
+ * sampler smp, in the open pass, at the full-target viewport, with mvp
+ * (column-major) on every vertex. 0 when the draw is skipped (counted).
+ */
+int rmb_draw_2d(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n, const float *mvp);
 
 #endif /* RM_RMB_H */

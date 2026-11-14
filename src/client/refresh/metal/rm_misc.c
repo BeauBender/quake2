@@ -34,7 +34,7 @@ RM_PrintStats(void)
 {
 	rmb_stats_t s;
 	rm_ledger_t l;
-	char line[256];
+	char line[RM_STATS_LINE];
 
 	rmb_stats(&s, &l);
 	s.noop_calls = rm_noop_calls;

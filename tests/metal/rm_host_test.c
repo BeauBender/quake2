@@ -29,11 +29,14 @@
  * =======================================================================
  */
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "../../src/client/refresh/metal/header/rmb.h"
+#include "../../src/client/refresh/metal/common/mtl_matrix.h"
+#include "../../src/client/refresh/metal/common/mtl_ring.h"
 
 static int checks, failures;
 
@@ -176,13 +179,15 @@ test_stats(void)
 {
 	rmb_stats_t s;
 	rm_ledger_t l;
-	char buf[256];
+	char buf[RM_STATS_LINE];
 	const char *want =
 		"ref_metal: metal_stats: 23 frames, 1 without a drawable, 2 skipped, 3 failed command buffers, "
-		"4 readbacks, 5 no-op calls, 1 live objects";
+		"4 readbacks, 5 no-op calls, 6 draws, 7 draws skipped, 8 uploads, 9 uploads skipped, "
+		"10 pass splits, 12 pipelines, 0 created after init, 1 live objects";
 	size_t n;
 
 	memset(&l, 0, sizeof(l));
+	memset(&s, 0, sizeof(s));
 	rm_ledger_create(&l, RM_OBJ_BUFFER);
 	s.frames = 23;
 	s.no_drawable = 1;
@@ -190,11 +195,230 @@ test_stats(void)
 	s.failed = 3;
 	s.readbacks = 4;
 	s.noop_calls = 5;
+	s.draws = 6;
+	s.draw_skips = 7;
+	s.uploads = 8;
+	s.upload_skips = 9;
+	s.splits = 10;
+	s.pipelines = 12;
 	CHECK(rm_stats_format(&s, &l, buf, sizeof(buf)) && strcmp(buf, want) == 0);
 
 	n = strlen(want);
 	CHECK(rm_stats_format(&s, &l, buf, n + 1) && strcmp(buf, want) == 0);
 	CHECK(!rm_stats_format(&s, &l, buf, n) && strlen(buf) == n - 1);
+
+	/* the longest line (every counter at its largest) fits the callers' RM_STATS_LINE */
+	memset(&s, 0xff, sizeof(s));
+	memset(&l, 0, sizeof(l));
+	l.unreleased = (unsigned long)-1;
+	CHECK(rm_stats_format(&s, &l, buf, sizeof(buf)) && strlen(buf) < sizeof(buf));
+}
+
+/*
+ * The size check of every upload (plan section 2, "Inputs and bounds"):
+ * w * h * 4 bytes within the staging ring, decided before the product
+ * is formed, so a product that would overflow is refused too.
+ */
+static void
+test_upload_bytes(void)
+{
+	size_t b = 1;
+
+	CHECK(rm_upload_bytes(320, 240, RMB_STAGING_BYTES, &b) && b == 307200);
+	CHECK(rm_upload_bytes(4096, 4096, RMB_STAGING_BYTES, &b) && b == RMB_STAGING_BYTES);
+	CHECK(!rm_upload_bytes(4097, 4096, RMB_STAGING_BYTES, &b) && b == 0);
+	CHECK(!rm_upload_bytes(4096, 4097, RMB_STAGING_BYTES, &b) && b == 0);
+	CHECK(rm_upload_bytes(1, 1, 4, &b) && b == 4);
+	CHECK(!rm_upload_bytes(1, 1, 3, &b));
+	CHECK(!rm_upload_bytes(0, 240, RMB_STAGING_BYTES, &b));
+	CHECK(!rm_upload_bytes(320, 0, RMB_STAGING_BYTES, &b));
+	CHECK(!rm_upload_bytes(-320, -240, RMB_STAGING_BYTES, &b));
+	/* the product of these wraps in 64 bits (2^32 * 2^32 * 4) and in 32 */
+	CHECK(!rm_upload_bytes(1L << 32, 1L << 32, (size_t)-1, &b) && b == 0);
+	CHECK(!rm_upload_bytes(65536, 65536, (size_t)-1 >> 31, &b));
+	CHECK(!rm_upload_bytes(0x7fffffffL, 0x7fffffffL, RMB_STAGING_BYTES, &b));
+}
+
+/*
+ * The 8-bit cinematic frame (gl1's RDraw_StretchRaw on the non-power-of-
+ * two path): each index becomes its r_rawpalette entry at the frame's
+ * own size; a buffer of 320 by 240 texels (gl1's image32) holds the
+ * largest frame gl1 converts without allocating, and one texel more is
+ * refused with nothing written.
+ */
+static void
+test_raw8(void)
+{
+	static unsigned char big[320 * 240 * 4], frame[320 * 240];
+	unsigned palette[256];
+	unsigned char *p = (unsigned char *)palette, out[3 * 2 * 4 + 4];
+	const unsigned char data[6] = { 0, 1, 255, 2, 1, 0 };
+	const unsigned char want[24] = {
+		10, 20, 30, 255,  11, 21, 31, 255,  12, 22, 32, 255,
+		13, 23, 33, 255,  11, 21, 31, 255,  10, 20, 30, 255
+	};
+	int i;
+
+	for (i = 0; i < 256; i++)
+	{
+		p[i * 4 + 0] = (unsigned char)(10 + (i == 255 ? 2 : i));
+		p[i * 4 + 1] = (unsigned char)(20 + (i == 255 ? 2 : i));
+		p[i * 4 + 2] = (unsigned char)(30 + (i == 255 ? 2 : i));
+		p[i * 4 + 3] = 0xff;
+	}
+
+	p[2 * 4 + 0] = 13;
+	p[2 * 4 + 1] = 23;
+	p[2 * 4 + 2] = 33;
+	memset(out, 0x5a, sizeof(out));
+	CHECK(rm_raw8_to_rgba(data, 3, 2, palette, out, 24));
+	CHECK(memcmp(out, want, 24) == 0 && out[24] == 0x5a && out[27] == 0x5a);
+
+	/* one row of three is not the same as three rows of one: the stride is cols */
+	CHECK(rm_raw8_to_rgba(data, 1, 3, palette, out, 12) && memcmp(out, want, 4) == 0 &&
+			out[4] == 11 && out[8] == 12);
+
+	memset(out, 0x5a, sizeof(out));
+	CHECK(!rm_raw8_to_rgba(data, 3, 2, palette, out, 23) && out[0] == 0x5a);
+	CHECK(!rm_raw8_to_rgba(data, 0, 2, palette, out, sizeof(out)) && out[0] == 0x5a);
+
+	memset(frame, 1, sizeof(frame));
+	CHECK(rm_raw8_to_rgba(frame, 320, 240, palette, big, sizeof(big)) && big[sizeof(big) - 4] == 11);
+	big[0] = 0x5a;
+	CHECK(!rm_raw8_to_rgba(frame, 321, 240, palette, big, sizeof(big)) && big[0] == 0x5a);
+	CHECK(!rm_raw8_to_rgba(frame, 320, 241, palette, big, sizeof(big)) && big[0] == 0x5a);
+}
+
+/* gl1's 2D quads are fans; the shim draws them as 0, i, i + 1 */
+static void
+test_fan(void)
+{
+	unsigned short idx[12];
+	const unsigned short quad[6] = { 0, 1, 2, 0, 2, 3 };
+	const unsigned short five[9] = { 0, 1, 2, 0, 2, 3, 0, 3, 4 };
+
+	memset(idx, 0xee, sizeof(idx));
+	CHECK(rm_fan_indices(4, idx, 12) == 6 && memcmp(idx, quad, sizeof(quad)) == 0 && idx[6] == 0xeeee);
+	CHECK(rm_fan_indices(5, idx, 9) == 9 && memcmp(idx, five, sizeof(five)) == 0);
+	CHECK(rm_fan_indices(3, idx, 3) == 3 && idx[0] == 0 && idx[1] == 1 && idx[2] == 2);
+	memset(idx, 0xee, sizeof(idx));
+	CHECK(rm_fan_indices(5, idx, 8) == 0 && idx[0] == 0xeeee);
+	CHECK(rm_fan_indices(2, idx, 12) == 0 && rm_fan_indices(70000, idx, 12) == 0);
+}
+
+/* The 2D pipeline table: every combination one index, all inside the table. */
+static void
+test_pipe_2d(void)
+{
+	int seen[RM_PIPE_2D_COUNT], e, a, b, ok = 1;
+
+	memset(seen, 0, sizeof(seen));
+
+	for (e = 0; e < RM_TEXENVS; e++)
+	{
+		for (a = 0; a < 2; a++)
+		{
+			for (b = 0; b < 2; b++)
+			{
+				int i = rm_pipe_2d((rm_texenv_t)e, a, b);
+
+				ok = ok && i >= 0 && i < RM_PIPE_2D_COUNT && !seen[i];
+
+				if (i >= 0 && i < RM_PIPE_2D_COUNT)
+				{
+					seen[i] = 1;
+				}
+			}
+		}
+	}
+
+	CHECK(ok);
+	CHECK(rm_pipe_2d(RM_TEXENVS, 0, 0) == -1 && rm_pipe_2d((rm_texenv_t)-1, 0, 0) == -1);
+}
+
+/* gl_texturemode by gl1's names, case-insensitive as Q_stricmp */
+static void
+test_texture_mode(void)
+{
+	int min = -1, mag = -1;
+
+	CHECK(rm_texture_mode("GL_LINEAR_MIPMAP_NEAREST", &min, &mag) && min == 3 && mag == 1);
+	CHECK(rm_texture_mode("gl_nearest", &min, &mag) && min == 0 && mag == 0);
+	CHECK(rm_texture_mode("GL_NEAREST_MIPMAP_LINEAR", &min, &mag) && min == 4 && mag == 0);
+	CHECK(rm_texture_mode("GL_LINEAR_MIPMAP_LINEAR", &min, &mag) && min == 5 && mag == 1);
+	min = mag = 7;
+	CHECK(!rm_texture_mode("GL_LINEAR_MIPMAP", &min, &mag) && min == 7 && mag == 7);
+	CHECK(!rm_texture_mode(NULL, &min, &mag));
+}
+
+/*
+ * gl1's 2D projection, glOrtho(0, 640, 480, 0, -99999, 99999), through
+ * common/mtl_matrix.c, as raw float bits: the values the shim's host
+ * test expects (m[10] is (float)(-2.0 / 199998.0), m[14] the -0 of
+ * -(99999 + -99999) / 199998), and the 2D product with the identity
+ * modelview, which the shim hands its vertex function (0 + -0 is +0).
+ */
+static void
+test_ortho(void)
+{
+	float m[16], ident[16], mvp[16];
+	uint32_t bits[16], want[16];
+	float f;
+	int i;
+
+	memset(want, 0, sizeof(want));
+	f = (float)(2.0 / 640.0); memcpy(&want[0], &f, 4);
+	f = (float)(2.0 / -480.0); memcpy(&want[5], &f, 4);
+	f = (float)(-2.0 / 199998.0); memcpy(&want[10], &f, 4);
+	f = -1.0f; memcpy(&want[12], &f, 4);
+	f = 1.0f; memcpy(&want[13], &f, 4);
+	want[14] = 0x80000000u;
+	f = 1.0f; memcpy(&want[15], &f, 4);
+
+	CHECK(mtl_mat_ortho(m, 0, 640, 480, 0, -99999, 99999));
+	memcpy(bits, m, sizeof(bits));
+	CHECK(memcmp(bits, want, sizeof(want)) == 0);
+	CHECK(want[0] == 0x3b4ccccdu && want[5] == 0xbb888889u);
+
+	mtl_mat_identity(ident);
+	mtl_mat_mul(mvp, m, ident);
+	want[14] = 0;
+	memcpy(bits, mvp, sizeof(bits));
+	CHECK(memcmp(bits, want, sizeof(want)) == 0);
+
+	/* GL refuses an empty volume; m stays as it was */
+	for (i = 0; i < 16; i++)
+	{
+		m[i] = 7.0f;
+	}
+
+	CHECK(!mtl_mat_ortho(m, 0, 0, 480, 0, -1, 1) && m[0] == 7.0f && m[15] == 7.0f);
+}
+
+/*
+ * The ring allocator moved from the shim (common/mtl_ring.c): aligned
+ * regions, and an allocation of more than the rest fails without moving
+ * the head, including a count near SIZE_MAX that would wrap.
+ */
+static void
+test_ring(void)
+{
+	mtl_ring_t r;
+
+	r.size = 4 * MTL_RING_ALIGN;
+	r.used = 0;
+	CHECK(mtl_ring_alloc(&r, 10) == 0 && r.used == 10);
+	CHECK(mtl_ring_alloc(&r, 1) == MTL_RING_ALIGN && r.used == MTL_RING_ALIGN + 1);
+	CHECK(mtl_ring_alloc(&r, 3 * MTL_RING_ALIGN) == -1 && r.used == MTL_RING_ALIGN + 1);
+	CHECK(mtl_ring_alloc(&r, (size_t)-1) == -1 && r.used == MTL_RING_ALIGN + 1);
+	CHECK(mtl_ring_alloc(&r, 0) == -1 && r.used == MTL_RING_ALIGN + 1);
+	CHECK(mtl_ring_alloc(&r, 2 * MTL_RING_ALIGN) == 2 * MTL_RING_ALIGN && r.used == r.size);
+	CHECK(mtl_ring_alloc(&r, 1) == -1 && r.used == r.size);
+
+	/* an image larger than the staging ring is refused by the ring as well */
+	r.size = RMB_STAGING_BYTES;
+	r.used = 0;
+	CHECK(mtl_ring_alloc(&r, (size_t)RMB_STAGING_BYTES + 4) == -1 && r.used == 0);
 }
 
 /*
@@ -278,6 +502,13 @@ main(void)
 	test_stats();
 	test_color_load();
 	test_targets_rebuild();
+	test_upload_bytes();
+	test_raw8();
+	test_fan();
+	test_pipe_2d();
+	test_texture_mode();
+	test_ortho();
+	test_ring();
 	test_len_zero();
 
 	printf("rm_host_test: %d checks, %d failed\n", checks, failures);
