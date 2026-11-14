@@ -699,39 +699,40 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
   the first overflow. Each mutant below is one changed line in a scratch
   copy; the host test is built as `tests/check-metal-shim.sh` builds it
   (ASAN, UBSAN), once whole and once with `main` calling `test_models`
-  alone, and all 28 are killed both ways. The lines are those of the
-  failing `CHECK`s of `test_models` in the file as committed.
+  alone, and all 28 are killed both ways. The cells name the
+  failing `CHECK`s of `test_models` by what they check, not by line
+  number (lines move with every edit of the file).
 
-| Mutant | File | `test_models` alone fails at |
+| Mutant | File | `test_models` alone fails at (check) |
 |---|---|---|
-| clip depth not shifted | mgl_texenv.h | lines 1590 1593 1595 |
-| clip depth not halved | mgl_texenv.h | lines 1590 1593 1595 |
-| depth range far ignored | mgl_raster.c | line 1593 |
-| glScalef drops x | mgl_state.c | lines 1589 1598 |
-| matrix product reversed | mgl_state.c | lines 1589 1598 |
-| push depth of the other stack | mgl_state.c | lines 1574 1589 1590 1593 |
-| push overflow one late | mgl_state.c | lines 1750 1752 1760 |
-| pop of the other stack | mgl_state.c | lines 1617 1747 1760 1762 |
-| pop underflow not caught | mgl_state.c | line 1762 |
-| glCullFace not stored | mgl_state.c | line 1576 |
-| byte colour array refused | mgl_state.c | line 1572, then a sanitizer report at the draw |
-| stencil reference not stored | mgl_state.c | line 1690 |
-| depth mask always on | mgl_state.c | line 1650 |
-| polygon mode front from GL_BACK | mgl_state.c | line 1730 |
-| byte colours over 256 | mgl_draw.c | lines 1601 1652 |
-| colour array ignored | mgl_draw.c | lines 1601 1652 |
-| strip odd triangles not swapped | mgl_draw.c | line 1733 |
-| blend destination in the source field | mgl_draw.c | lines 1631 1633 1649 1654 |
-| depth write without the mask | mgl_draw.c | line 1650 |
-| stencil test bit lost | mgl_draw.c | lines 1692 1705 1708 1711 |
-| stencil pass op in the depth-fail field | mgl_draw.c | lines 1692 1705 1708 1711 |
-| stencil read mask shifted | mgl_draw.c | lines 1692 1705 1713 |
-| texture unit enable ignored | mgl_draw.c | lines 1630 1648 1730 |
-| cull always on | mgl_draw.c | line 1730 |
-| cull swap lost | mgl_draw.c | line 1576 |
-| line fill lost | mgl_draw.c | line 1730 |
-| mvp reversed | mgl_draw.c | lines 1589 1590 1593 1598 |
-| mvp from the bottom of the projection stack | mgl_draw.c | line 1598 |
+| clip depth not shifted | mgl_texenv.h | weapon clip depth; weapon window depth; clip depth end points |
+| clip depth not halved | mgl_texenv.h | weapon clip depth; weapon window depth; clip depth end points |
+| depth range far ignored | mgl_raster.c | weapon window depth |
+| glScalef drops x | mgl_state.c | weapon clip x y w; model clip x y |
+| matrix product reversed | mgl_state.c | weapon clip x y w; model clip x y |
+| push depth of the other stack | mgl_state.c | push depth and first draw; weapon clip x y w; weapon clip depth; weapon window depth |
+| push overflow one late | mgl_state.c | push overflow error; matrix after overflow; pop to base |
+| pop of the other stack | mgl_state.c | pop restores projection; push to last level; pop to base; pop underflow error |
+| pop underflow not caught | mgl_state.c | pop underflow error |
+| glCullFace not stored | mgl_state.c | mirrored weapon cull front |
+| byte colour array refused | mgl_state.c | colour array accepted, then a sanitizer report at the draw |
+| stencil reference not stored | mgl_state.c | stencil reference |
+| depth mask always on | mgl_state.c | depth and stencil key |
+| polygon mode front from GL_BACK | mgl_state.c | bounding box state |
+| byte colours over 256 | mgl_draw.c | byte colours; colour array vertex colours |
+| colour array ignored | mgl_draw.c | byte colours; colour array vertex colours |
+| strip odd triangles not swapped | mgl_draw.c | strip indices |
+| blend destination in the source field | mgl_draw.c | blend key; blend destination; shadow pipeline key; translucent result |
+| depth write without the mask | mgl_draw.c | depth and stencil key |
+| stencil test bit lost | mgl_draw.c | stencil key; stencil darkening; stencil test fails; stencil test passes |
+| stencil pass op in the depth-fail field | mgl_draw.c | stencil key; stencil darkening; stencil test fails; stencil test passes |
+| stencil read mask shifted | mgl_draw.c | stencil key; stencil darkening; stencil test after pass |
+| texture unit enable ignored | mgl_draw.c | shadow texture unit off; shadow texenv; bounding box state |
+| cull always on | mgl_draw.c | bounding box state |
+| cull swap lost | mgl_draw.c | weapon culling back and key |
+| line fill lost | mgl_draw.c | bounding box state |
+| mvp reversed | mgl_draw.c | weapon clip x y w; weapon clip depth; weapon window depth; model clip x y |
+| mvp from the bottom of the projection stack | mgl_draw.c | model clip x y |
 
 - **Against the `gl1` references** see `docs/plans/metal-port-harness.md`,
   "The `models` scenario against the software renderer (TASK51)": the
@@ -739,3 +740,17 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
   flash drawn as a wedge, polygons crossing the screen edge dropped or
   garbled) reach the view weapon and close brush entities too, so
   `models` does not pass there at the defaults; no threshold was changed.
+
+- **Frame 19: decided.** The one region first suspected as a shim defect
+  (`models` frame 19, 589,461 to 638,479, a sliver of the view weapon at
+  the bottom edge) is decided by review: the reference is wrong and the
+  shim is right. In that rectangle `gl1` draws 328 pixels that
+  `gl1-metal` does not and none the other way. Three witnesses say no
+  weapon geometry is there: `gl1` itself at `r_gunfov 100`, where the
+  spot is away from every screen edge, covers 16 of the 328;
+  `gl1-metal` at `r_gunfov 100` covers 6; `soft` at `r_gunfov 96.379`,
+  which matches the weapon projection of `gl1` (`soft` reads the cvar as
+  a horizontal field of view, `gl1` as a vertical one), covers 19.
+  Frames 18, 20 and 21 have no differing pixel there. On frame 17 the
+  reference drops a piece of the weapon instead (81 pixels the other
+  way, 78 of them confirmed by `gl1` at fov 100).

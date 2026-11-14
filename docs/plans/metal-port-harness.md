@@ -943,12 +943,13 @@ frames (3, 5, 8, 11, 16), for blobs, or along the weapon's edges.
   `soft` is a witness and `gl1` is the odd one (frame 0, 488,431 to
   556,479: `gl1` leaves the floor black under the gun; frame 10, 295,416
   to 326,479: `gl1` drops a bright weapon triangle that `soft` and
-  `gl1-metal` draw). It is reported as suspected, not confirmed; it needs
-  the accelerated reference of TASK83.
+  `gl1-metal` draw). Review decided it as a fault of the reference, not of the
+  shim (see the conclusion below and design section 12, "Frame 19:
+  decided").
 - shadow and stencil: the same regions as `models`, plus in shadow one
   at frame 7 (203,158 to 220,182), the PRNG sprite of that frame.
-  Stencil adds no region: the stencil changes the same pixels in both
-  renderers (design section 12).
+  Stencil adds no region: the stencil changes 574 pixels in `gl1-metal`
+  and 635 in `gl1` (design section 12).
 - flash: 115 regions, `gl1` odd 53, `gl1-metal` odd 20, no witness 42;
   outside the flash frames the `gl1-metal`-odd ones are frame 2 and 7
   (world, as above), frame 13 (the garbled panel, as above), frame 10
@@ -975,6 +976,17 @@ So `compare gl1-metal models --ref gl1` cannot pass at the defaults
 against these references, with or without `gl1_stencilshadow 1`; no
 threshold or scenario was changed. TASK83 (#187) judges `models` again
 against references from an accelerated OpenGL.
+
+Frame 19 is decided: the reference is wrong and the shim is right. In
+589,461 to 638,479 `gl1` draws 328 pixels that `gl1-metal` does not and
+none the other way; three witnesses say no weapon geometry is there:
+`gl1` at `r_gunfov 100` (the spot is then away from every screen edge)
+covers 16 of the 328, `gl1-metal` at `r_gunfov 100` covers 6, and `soft`
+at `r_gunfov 96.379` (the value that matches the weapon projection of
+`gl1`; `soft` reads the cvar as a horizontal field of view, `gl1` as a
+vertical one) covers 19. Frames 18, 20 and 21 have no differing pixel
+there, and on frame 17 the reference drops a piece of the weapon instead
+(81 pixels the other way, 78 confirmed by `gl1` at fov 100).
 
 ## Judging a renderer
 
