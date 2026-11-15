@@ -113,6 +113,21 @@ if ! $cc $sflags -o "${tmp:?}/imgdecode_test" $srcs $libs > "${tmp:?}/cc.out" 2>
 	exit 1
 fi
 
+# the sky face order: pure functions in a header, no decoder needed
+# shellcheck disable=SC2086 # flags is a word list
+if ! $cc $flags -o "${tmp:?}/skyorder_test" tests/image/skyorder_test.c > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	echo "check-image-decoder: the sky order test does not build"
+	exit 1
+fi
+status=0
+bounded "${tmp:?}/skyorder_test" || status=$?
+expired "the sky order test"
+if [ "$status" -ne 0 ]; then
+	echo "check-image-decoder: the sky order test failed"
+	exit 1
+fi
+
 status=0
 bounded "${tmp:?}/imgdecode_test" || status=$?
 expired "the host test"

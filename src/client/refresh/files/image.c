@@ -34,6 +34,7 @@
 
 #include "../ref_shared.h"
 #include "imgdecode.h"
+#include "skyorder.h"
 
 // include resize implementation
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
@@ -438,8 +439,9 @@ scale3x(const byte *src, byte *dst, int width, int height)
 
 static struct image_s *
 LoadHiColorImage(const char *name, const char* namewe, const char *ext,
-	imagetype_t type, loadimage_t load_image)
+	imagetype_t type, qboolean r_retexturing, loadimage_t load_image)
 {
+	qboolean loaded = false;
 	int realwidth = 0, realheight = 0;
 	int width = 0, height = 0;
 	struct image_s	*image = NULL;
@@ -463,8 +465,49 @@ LoadHiColorImage(const char *name, const char* namewe, const char *ext,
 		GetM32Info(name, &realwidth, &realheight);
 	}
 
+	/*
+	 * A sky face's PNG comes before the stock .tga when it is at least
+	 * as large: the PNG upscale_textures writes to the write directory
+	 * is not reached by the order below, as the pak's .tga is found
+	 * first. Here and not in GetSkyImage, as that asks for the .tga
+	 * and this loader then tries the .tga before the .png for any name.
+	 * No PNG, or a smaller one: the order below, unchanged.
+	 */
+	if (type == it_sky && LoadDecoded(namewe, "png", &pic, &width, &height))
+	{
+		int stockw = realwidth, stockh = realheight;
+		char tganame[256];
+		byte *tgadata = NULL;
+		int tgasize;
+
+		FixFileExt(namewe, "tga", tganame, sizeof(tganame));
+		tgasize = ri.FS_LoadFile(tganame, (void **)&tgadata);
+
+		if (tgadata != NULL)
+		{
+			if (!SkyOrder_TgaSize(tgadata, tgasize > 0 ? (size_t)tgasize : 0,
+					&stockw, &stockh))
+			{
+				stockw = realwidth;
+				stockh = realheight;
+			}
+
+			ri.FS_FreeFile(tgadata);
+		}
+
+		loaded = SkyOrder_PngFirst(r_retexturing, type == it_sky,
+			width, height, stockw, stockh);
+
+		if (!loaded)
+		{
+			free(pic);
+			pic = NULL;
+		}
+	}
+
 	/* try to load a tga, png or jpg (in that order/priority) */
-	if (  LoadDecoded(namewe, "tga", &pic, &width, &height)
+	if (  loaded
+	   || LoadDecoded(namewe, "tga", &pic, &width, &height)
 	   || LoadDecoded(namewe, "png", &pic, &width, &height)
 	   || LoadDecoded(namewe, "jpg", &pic, &width, &height) )
 	{
@@ -501,7 +544,7 @@ R_LoadImage(const char *name, const char* namewe, const char *ext, imagetype_t t
 	// with retexturing and not skin
 	if (r_retexturing)
 	{
-		image = LoadHiColorImage(name, namewe, ext, type, load_image);
+		image = LoadHiColorImage(name, namewe, ext, type, r_retexturing, load_image);
 	}
 
 	if (!image)
