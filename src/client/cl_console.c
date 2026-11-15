@@ -653,11 +653,13 @@ Con_DrawConsole(float frac)
 	}
 
 	/* draw the background: stretched to the window, or with con_backaspect 1
-	   at 4:3 and cropped, which the software renderer cannot draw */
+	   at 4:3 and cropped, which the software renderer cannot draw when the
+	   window is narrower than 4:3 (it refuses a rectangle that leaves the
+	   window); the renderer that is loaded decides, not vid_renderer */
 	{
 		int bx, by, bw, bh;
 		int keep43 = (con_backaspect->value == 1.0f) &&
-				(Q_stricmp(vid_renderer->string, "soft") != 0);
+				(Q_stricmp(vid_loaded_renderer, "soft") != 0);
 
 		Con_BackRect(viddef.width, viddef.height, lines, keep43, &bx, &by, &bw, &bh);
 		Draw_StretchPic(bx, by, bw, bh, "conback");

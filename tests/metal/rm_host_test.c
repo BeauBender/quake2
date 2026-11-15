@@ -7963,8 +7963,12 @@ test_sharp_coord(void)
 		for (j = 0; j < w; j++)
 		{
 			const float t = ((float)j + 0.5f) / scales[s];
-			const float v = lin1(row, n, mtl_sharp_coord(t, d));
+			const float c = mtl_sharp_coord(t, d);
+			const float v = lin1(row, n, c);
 			int pure = 0, e;
+
+			CHECK(c >= prev);
+			prev = c;
 
 			for (e = 0; e < n; e++)
 			{
@@ -7979,7 +7983,6 @@ test_sharp_coord(void)
 				CHECK(fabsf(t - edge) <= d * 0.5f + 1e-4f);
 			}
 
-			(void)prev;
 		}
 
 		CHECK(mixed >= 1 && mixed <= n - 1);

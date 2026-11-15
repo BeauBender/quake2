@@ -365,8 +365,11 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   to cover the window, centred across and anchored at the console's
   lower edge, and what lies outside the window is cropped: the top of
   the picture on a wide window, its sides on a narrow one. On a 4:3
-  window it draws the same as `0`. The software renderer cannot crop a
-  picture, so it always stretches. Defaults to `0`. Saved with the
+  window it draws the same as `0`. The software renderer refuses a
+  picture that leaves the window, which this one does on a window narrower
+  than 4:3. It therefore always stretches (it could draw the cropped
+  rectangle on a window as wide as 4:3 or wider, but is kept the same). The renderer that is loaded decides, not
+  `vid_renderer`, which may have been changed without a `vid_restart`. Defaults to `0`. Saved with the
   configuration.
 
 * **cl_gun**: Decides whether the gun is drawn. If set to `0` the gun
@@ -465,8 +468,8 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   The Metal renderer takes it as the OpenGL 1.4 renderer does: an 8bit
   image outside the small-picture atlas is scaled by 2, or by 3 when it
   is lerped and the window is at least 720 pixels high, with `scale2x` or
-  `scale3x`, and every upload is smoothed. The pictures in the atlas (the
-  HUD digits and icons) are not scaled. Applies to images loaded after it
+  `scale3x`, and every upload, the atlas of small pictures (the HUD digits
+  and icons) included, is smoothed. The pictures in the atlas are not scaled. Applies to images loaded after it
   is set.
 
 * **r_shadows**: Enables rendering of shadows. Quake IIs shadows are

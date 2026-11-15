@@ -176,6 +176,14 @@ Scrap_Update(void)
 		}
 
 		memcpy(tmp, scrap_texels[texnum], scrap_size);
+
+		/* from gl1_image.c, R_Upload32: the copy is smoothed, the texels are not */
+		if (r_scale8bittextures->value)
+		{
+			SmoothColorImage((unsigned *)tmp, (size_t)RM_SCRAP_WIDTH * RM_SCRAP_HEIGHT,
+					(size_t)RM_SCRAP_WIDTH);
+		}
+
 		R_LightScaleTexture(tmp, RM_SCRAP_WIDTH, RM_SCRAP_HEIGHT, true);
 
 		for (i = 0; i < scrap_size / 4; i++)

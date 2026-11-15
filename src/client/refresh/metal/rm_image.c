@@ -427,10 +427,13 @@ R_LoadPic(const char *name, byte *pic, int width, int realwidth,
 				return NULL;
 			}
 
-			/* refused before the scaled copy allocates for it */
+			/*
+			 * Too large to scale within the staging limit: upload the picture
+			 * unscaled, as gl1 does, instead of dropping it.
+			 */
 			if (!rm_upload_bytes(sw, sh, RMB_STAGING_BYTES, &bytes))
 			{
-				rmb_upload_refused();
+				image->has_alpha = R_Upload8(image, pic, width, height, mipmap);
 			}
 			else if ((scaled = malloc((size_t)sw * (size_t)sh)) == NULL)
 			{

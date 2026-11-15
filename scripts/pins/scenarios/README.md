@@ -20,7 +20,7 @@ derived from game data, so the files are committed (INFORM9).
 | `world-lmcubic` | `world` with `metal_lightmap_filter 1`: the cubic lightmap filter of `ref_metal`; other renderers ignore the cvar (TASK120) |
 | `dlights-lmcubic` | `dlights` with `metal_lightmap_filter 1`; not deterministic unseeded, recorded with `PINS_SEED` (TASK120) |
 | `hud2d-sharp` | `hud2d` with `metal_2d_sharp 1`: the sharp-bilinear sample of the 2D pictures of `ref_metal`; other renderers ignore the cvar (TASK119) |
-| `hud2d-scale8` | `hud2d` with `r_scale8bittextures 1`; the HUD pictures are in the scrap, which gl1 does not scale (TASK119) |
+| `hud2d-scale8` | `hud2d` with `r_scale8bittextures 1`; the HUD pictures are in the scrap, which is smoothed but not scaled (TASK119) |
 | `world-scale8` | `world` with `r_scale8bittextures 1`: the 8-bit world textures scaled by `scale2x` or `scale3x` and smoothed (TASK119) |
 | `models` | world plus entities: alias models, sprites, beams, view weapon |
 | `particles` | everything, including particles, dynamic lights, screen blend |
