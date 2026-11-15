@@ -185,10 +185,58 @@ test_tgasize(void)
 	CHECK(SkyOrder_TgaSize(NULL, 18, &w, &hh) == 0);
 }
 
+/* the stock face's size: a known original, else the .tga's header, else none */
+static void
+stock(int line, int ow, int oh, int tw, int th, int ew, int eh)
+{
+	int w = 9, h = 9;
+
+	SkyOrder_StockSize(ow, oh, tw, th, &w, &h);
+	checks++;
+
+	if (w != ew || h != eh)
+	{
+		failed++;
+		printf("skyorder_test: line %d: stock size %dx%d, want %dx%d\n",
+			line, w, h, ew, eh);
+	}
+}
+
+#define STOCK(ow, oh, tw, th, ew, eh) stock(__LINE__, ow, oh, tw, th, ew, eh)
+
+static void
+test_stocksize(void)
+{
+	/* a known original decides, whatever the .tga is */
+	STOCK(256, 256, 512, 512, 256, 256);
+	STOCK(256, 256, 0, 0, 256, 256);
+	STOCK(256, 128, 512, 512, 256, 128);
+	STOCK(1, 1, 512, 512, 1, 1);
+	/* no original: the .tga's header */
+	STOCK(0, 0, 512, 512, 512, 512);
+	STOCK(0, 0, 300, 200, 300, 200);
+	/* half an original is none */
+	STOCK(256, 0, 512, 512, 512, 512);
+	STOCK(0, 256, 512, 512, 512, 512);
+	STOCK(-1, -1, 512, 512, 512, 512);
+	/* neither: not known, and half a .tga is none */
+	STOCK(0, 0, 0, 0, 0, 0);
+	STOCK(0, 0, 512, 0, 0, 0);
+	STOCK(0, 0, 0, 512, 0, 0);
+	STOCK(256, 0, 0, 512, 0, 0);
+
+	CHECK(SkyOrder_SizeKnown(1, 1) == 1);
+	CHECK(SkyOrder_SizeKnown(0, 1) == 0);
+	CHECK(SkyOrder_SizeKnown(1, 0) == 0);
+	CHECK(SkyOrder_SizeKnown(-1, 5) == 0);
+	CHECK(SkyOrder_SizeKnown(5, -1) == 0);
+}
+
 int
 main(void)
 {
 	test_order();
+	test_stocksize();
 	test_tgasize();
 	printf("skyorder_test: %d checks, %d failed\n", checks, failed);
 	return failed ? 1 : 0;

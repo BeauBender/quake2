@@ -483,25 +483,26 @@ LoadHiColorImage(const char *name, const char* namewe, const char *ext,
 		byte *tgadata = NULL;
 		int tgasize;
 
+		int tgaw = 0, tgah = 0;
+
 		pngw = width;
 		pngh = height;
-		stockw = realwidth;
-		stockh = realheight;
 
-		FixFileExt(namewe, "tga", tganame, sizeof(tganame));
-		tgasize = ri.FS_LoadFile(tganame, (void **)&tgadata);
-
-		if (tgadata != NULL)
+		/* a known original is the stock face: the .tga is read only without one */
+		if (!SkyOrder_SizeKnown(realwidth, realheight))
 		{
-			if (!SkyOrder_TgaSize(tgadata, tgasize > 0 ? (size_t)tgasize : 0,
-					&stockw, &stockh))
-			{
-				stockw = realwidth;
-				stockh = realheight;
-			}
+			FixFileExt(namewe, "tga", tganame, sizeof(tganame));
+			tgasize = ri.FS_LoadFile(tganame, (void **)&tgadata);
 
-			ri.FS_FreeFile(tgadata);
+			if (tgadata != NULL)
+			{
+				SkyOrder_TgaSize(tgadata, tgasize > 0 ? (size_t)tgasize : 0,
+					&tgaw, &tgah);
+				ri.FS_FreeFile(tgadata);
+			}
 		}
+
+		SkyOrder_StockSize(realwidth, realheight, tgaw, tgah, &stockw, &stockh);
 	}
 
 	order = SkyOrder_Choose(type == it_sky, pngw, pngh, stockw, stockh);

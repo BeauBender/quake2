@@ -296,12 +296,12 @@ colour is made: the result is sharper pixel art, not new detail.
   face, with `r_retexturing 1`, a `.png` that is at least the size of
   the stock face is used first: a generated PNG in the write directory
   would otherwise always lose to the pak's `.tga`, and the skies would
-  stay as they were. The stock face's size is the one in the header of
-  the `.tga` of that name; when there is none, or its header cannot be
-  read, it is the size of the original the lookup was made for (the
-  `.pcx` where paletted textures are used). A lookup that names the
-  `.tga` has no original, so with no readable `.tga` there is no stock
-  size and any `.png` is used, at its own size.
+  stay as they were. When the lookup is for an original with a known
+  size (the `.pcx` where paletted textures are used), that size is the
+  stock face's, and the `.tga` is not read. A lookup that names the
+  `.tga` has no original: the stock face's size is the one in the
+  header of that `.tga`, and with no readable `.tga` there is no stock
+  size, so any `.png` is used, at its own size.
 * This applies to every renderer. The OpenGL and Metal renderers upload
   the `.png` at its own size. The software renderer draws a sky face
   256 texels a row, so it resamples a larger face to the stock face's
@@ -312,8 +312,9 @@ colour is made: the result is sharper pixel art, not new detail.
   directory the `.tga` of that name is in: a `.png` in the write
   directory, including one that came from a server download, or one in
   `baseq2` when a mod ships a stock-size face of the same name, is used
-  over it. A smaller or undecodable `.png` is ignored (an undecodable
-  one prints its error once), and the order is `.tga`, `.png`, `.jpg`
-  as before.
+  over it. A smaller or undecodable `.png` is ignored, and the order is `.tga`,
+  `.png`, `.jpg` as before. An undecodable `.png` prints one decode
+  error per lookup; when no face decodes, the `.pcx` fallback is a
+  second lookup and prints it again.
 * There is no PNG encoder off Apple platforms; the command does
   nothing there.

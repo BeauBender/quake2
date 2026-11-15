@@ -63,6 +63,43 @@ SkyOrder_TgaSize(const unsigned char *data, size_t size, int *width, int *height
 	return 1;
 }
 
+/* 1 when both sides are above 0: a size is known only then. */
+static inline int
+SkyOrder_SizeKnown(int w, int h)
+{
+	return w >= 1 && h >= 1;
+}
+
+/*
+ * The size of the stock face. orig_w, orig_h: the size of the original
+ * the lookup was made for (the .pcx, .wal, .m8 or .m32), 0 and 0 for a
+ * .tga-named lookup or an original whose size could not be read. tga_w,
+ * tga_h: the size from the header of the .tga of that name, 0 and 0 when
+ * there is none or it cannot be read. A known original decides, as it
+ * did before the PNG came first: the software renderer with paletted
+ * textures draws a sky face 256 texels a row, whatever a third-party
+ * .tga is. Else the .tga's size, else 0 and 0 (not known).
+ */
+static inline void
+SkyOrder_StockSize(int orig_w, int orig_h, int tga_w, int tga_h, int *w, int *h)
+{
+	if (SkyOrder_SizeKnown(orig_w, orig_h))
+	{
+		*w = orig_w;
+		*h = orig_h;
+	}
+	else if (SkyOrder_SizeKnown(tga_w, tga_h))
+	{
+		*w = tga_w;
+		*h = tga_h;
+	}
+	else
+	{
+		*w = 0;
+		*h = 0;
+	}
+}
+
 /*
  * What SkyOrder_Choose decides for one lookup.
  *
