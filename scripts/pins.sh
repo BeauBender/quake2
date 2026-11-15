@@ -2015,6 +2015,9 @@ st_footprint_cmd() { # TASK133: pins.sh footprint prints per frame, names the fr
     case $out in *"OUT OF BAND: x-000002.tga"$'\n'*|*"OUT OF BAND: x-000002.tga") ;; *) st_fail "exactly x-000002.tga is outside the band: $out"; return 1;; esac
     printf '%s\n' "$out" | grep -q '^x-000001.tga  *0.015625  *0.015625  *0.000000  *60.00 *.* ok$' || st_fail "x-000001.tga is a row of ok: $out" || return 1
     printf '%s\n' "$out" | grep -q '^x-000002.tga  *0.083333 .*OUT:darker$' || st_fail "x-000002.tga is a row of OUT:darker: $out" || return 1
+    printf '%s\n' "$out" | grep -q '^x-000001.tga  *0.015625  *0.015625  *0.000000  *60.00  *60.00 ' || st_fail "x-000001.tga has the chmax column: $out" || return 1
+    printf '%s\n' "$out" | grep -q '^frame .* max  *chmax  *mean ' || st_fail "the table has a chmax column: $out" || return 1
+    printf '%s\n' "$out" | grep -q 'worst_max=60.00 worst_chmax=60.00 ' || st_fail "the summary has worst_chmax: $out" || return 1
     printf '%s\n' "$out" | grep -q 'frames=3 out_of_band=1 unmatched=0 worst_changed=0.083333 worst_darker=0.083333 worst_max=60.00 ' || st_fail "the summary counts: $out" || return 1
     # --band replaces the header: a wide one passes
     rc=0; out=$(cmd_footprint x --off "$tmp/foff" --on "$tmp/fon" --band 'darker 0..0.1' 2>&1) || rc=$?
@@ -2133,6 +2136,8 @@ st_footprint_guards() { # TASK133 rework: every refusal of footprint, where and 
         rc=0; "$diff" --zoom "$tmp/u100.tga" "$tmp/fpmix.tga" "$tmp/lk/$g" >/dev/null 2>&1 || rc=$?
         [ "$rc" != 0 ] || st_fail "--zoom must refuse $g (rc $rc)" || return 1
     done
+    rc=0; "$diff" --highlight "$tmp/u100.tga" "$tmp/fpmix.tga" /dev/null >/dev/null 2>&1 || rc=$?
+    [ "$rc" != 0 ] || st_fail "--highlight must refuse a device in place of a file" || return 1
     rc=0; "$diff" --gen "$tmp/lk/link" 4 4 1 >/dev/null 2>&1 || rc=$?
     [ "$rc" != 0 ] && [ "$(cat "$tmp/lk/target")" = KEEP ] && [ ! -e "$tmp/lk/nowhere" ] || st_fail "framediff wrote through a link (rc $rc)" || return 1
     printf 'OLD' > "$tmp/lk/plain"; "$diff" --highlight "$tmp/u100.tga" "$tmp/fpmix.tga" "$tmp/lk/plain" || st_fail "a regular file is replaced" || return 1
@@ -2146,7 +2151,7 @@ st_footprint_guards() { # TASK133 rework: every refusal of footprint, where and 
     [ "$rc" != 0 ] && [ ! -e "$tmp/lo/nowhere" ] || st_fail "footprint must refuse a dangling linked table ($rc: $out)" || return 1
     rm -f "$tmp/lo/footprint-x.txt"; mkdir "$tmp/lo/footprint-x.txt"
     rc=0; out=$( (cmd_footprint x --off "$tmp/foff" --on "$tmp/fon" --out "$tmp/lo") 2>&1) || rc=$?
-    [ "$rc" != 0 ] || st_fail "footprint must refuse a directory in place of the table" || return 1
+    [ "$rc" != 0 ] && case $out in *"nothing is written through it"*) ;; *) false;; esac || st_fail "footprint must refuse a directory in place of the table ($rc: $out)" || return 1
     rm -rf "$tmp/lo"; mkdir -p "$tmp/lo"; printf 'KEEP' > "$tmp/lo/victim"
     for g in x-000001-zoom x-000002-highlight; do
         rm -f "$tmp/lo"/*.tga; ln -s "$tmp/lo/victim" "$tmp/lo/$g.tga"
@@ -2213,7 +2218,7 @@ st_footprint_guards() { # TASK133 rework: every refusal of footprint, where and 
     [ "$rc" != 0 ] && case $out in *"an id is a directory name"*) ;; *) false;; esac || st_fail "where: an id starting with '.' must be refused ($rc: $out)" || return 1
     # --- a frame name with a control character forges no line of the table
     rm -rf "$tmp/cn"; mkdir -p "$tmp/cn/off" "$tmp/cn/on"
-    cp "$tmp/u100.tga" "$tmp/cn/off/a"$'\n'"b.tga"; cp "$tmp/u100.tga" "$tmp/cn/on/a"$'\n'"b.tga"
+    cp "$tmp/u100.tga" "$tmp/cn/off/a"$'\n'"b.tga"; cp "$tmp/u100.tga" "$tmp/cn/on/a.tga"
     rc=0; out=$( (cmd_footprint x --off "$tmp/cn/off" --on "$tmp/cn/on") 2>&1) || rc=$?
     [ "$rc" != 0 ] && case $out in *"control character"*) ;; *) false;; esac || st_fail "a frame name with a newline in the off record must be refused ($rc: $out)" || return 1
     rm -rf "$tmp/cn"; mkdir -p "$tmp/cn/off" "$tmp/cn/on"

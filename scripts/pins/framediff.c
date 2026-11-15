@@ -91,9 +91,8 @@ static FILE *open_out(const char *path)
 	struct stat st;
 	int fd;
 	FILE *fp;
-	if (lstat(path, &st) == 0 && !S_ISREG(st.st_mode)) { fprintf(stderr, "framediff: %s exists and is not a regular file (a symbolic link is never written through)\n", path); return NULL; }
 	fd = open(path, O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0666);
-	if (fd < 0) { fprintf(stderr, "framediff: cannot write %s: %s\n", path, strerror(errno)); return NULL; }
+	if (fd < 0) { fprintf(stderr, "framediff: cannot write %s (a symbolic link is never written through): %s\n", path, strerror(errno)); return NULL; }
 	if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || ftruncate(fd, 0) != 0) { fprintf(stderr, "framediff: %s is not a regular file\n", path); close(fd); return NULL; }
 	fp = fdopen(fd, "wb");
 	if (!fp) close(fd);
