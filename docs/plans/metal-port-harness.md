@@ -3503,18 +3503,25 @@ candidate; `--threshold 0.005 --bad-threshold 0.001`):
 The records have no validation message. The vertex grew by a member and
 the vertex output by a flat one, and no pixel moved.
 
-**At value 1** (the scenario file given one more line, `set
-metal_lightmap_filter 1`, in a scratch copy; the line is not in the tree,
-because a scenario's `set` lines are the harness's; a `config.cfg` line
-beside the binary did not take effect under the harness):
-`world` and `dlights` (seed 1) recorded twice each: run against run, 23 of
-23 frames identical (worst 0, bad 0) in both, with the validation layer
-clean. Against the bilinear record the filter is a small change, as it
-should be: `world` worst mean difference 0.002014 and worst bad fraction
-0.002816 (3 of 23 frames over the 0.001 bad value), `dlights` 0.002014 and
-0.001940 (2 of 23). The owner does not gate this; stills of three frames at
-each value are local under the card's scratch directory and are not
-published.
+**At value 1** (rework round: the scenarios `world-lmcubic` and
+`dlights-lmcubic`, `world` and `dlights` plus `set metal_lightmap_filter 1`,
+are in the tree; `MTL_DEBUG_LAYER=1`, 640x480, `dlights-lmcubic` with
+`PINS_SEED=1` and the trace on). Run against run (`--threshold 0
+--bad-threshold 0`): `world-lmcubic` 23 frames, 0 failed, worst 0, bad 0;
+`dlights-lmcubic` (seed 1) the same. Against the filter-0 record of
+`world` (the frames copied under the scenario's frame names, since a
+compare pairs frames by name; `--threshold 0.005 --bad-threshold 0.001`):
+all 23 frames differ (score 0.000345 to 0.002014, so the worst is above 0),
+bad at most 0.002816, 3 of 23 over the bad value. `dlights-lmcubic` against
+the seed-1 `dlights` record: score 0.000345 to 0.002014, bad at most
+0.001940, 2 of 23 over. A filter-1 record that is not the filter-0 one is
+what the scenarios are for; the owner does not gate the look.
+**Validation reaches the log**: a scratch build with the index buffer
+offset of the lightmapped draw made 2 bytes odd aborted `world-lmcubic`
+under `MTL_DEBUG_LAYER=1` (status 134, `engine.log`:
+`-[MTLDebugRenderCommandEncoder validateDrawIndexedPrimitives:...]: failed
+assertion`); the edit was reverted. The real records (7 `engine.log`)
+hold only `Metal API Validation Enabled`.
 
 **GPU time (VM numbers).** A measuring aid, `MTL_GPU_TIME=1` in the
 environment, prints one line `ref_metal: gpu_ms <ms>` per command buffer
