@@ -448,6 +448,61 @@ test_pixel_bytes(void)
 }
 
 static void
+test_file_size(void)
+{
+	CHECK(IMGDEC_FileSizeOk(1, IMGDEC_MAX_FILE) == 1, "1 byte");
+	CHECK(IMGDEC_FileSizeOk(IMGDEC_MAX_FILE, IMGDEC_MAX_FILE) == 1, "the cap");
+	CHECK(IMGDEC_FileSizeOk(IMGDEC_MAX_FILE + 1, IMGDEC_MAX_FILE) == 0, "the cap + 1");
+	CHECK(IMGDEC_FileSizeOk(0, IMGDEC_MAX_FILE) == 0, "0 bytes");
+	CHECK(IMGDEC_FileSizeOk(10, 10) == 1 && IMGDEC_FileSizeOk(11, 10) == 0, "a cap of 10");
+	CHECK(IMGDEC_FileSizeOk(SIZE_MAX, IMGDEC_MAX_FILE) == 0, "SIZE_MAX bytes");
+}
+
+#ifdef __APPLE__
+static void
+test_bitmap_layout(void)
+{
+	static const struct
+	{
+		uint32_t info, alpha;
+		int ok;
+		size_t swap;
+		imgdec_alpha_t want;
+	} c[] = {
+		{kCGBitmapByteOrderDefault, kCGImageAlphaNone, 1, 0, IMGDEC_ALPHA_NONE},
+		{kCGBitmapByteOrder16Big, kCGImageAlphaLast, 1, 0, IMGDEC_ALPHA_LAST},
+		{kCGBitmapByteOrder32Big, kCGImageAlphaFirst, 1, 0, IMGDEC_ALPHA_FIRST},
+		{kCGBitmapByteOrder16Little, kCGImageAlphaNoneSkipLast, 1, 2, IMGDEC_ALPHA_SKIP_LAST},
+		{kCGBitmapByteOrder32Little, kCGImageAlphaNoneSkipFirst, 1, 4, IMGDEC_ALPHA_SKIP_FIRST},
+		/* the alpha info arrives apart from the bitmap info's own alpha bits */
+		{kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst, kCGImageAlphaFirst, 1, 4, IMGDEC_ALPHA_FIRST},
+		{kCGBitmapByteOrderDefault, kCGImageAlphaPremultipliedLast, 0, 0, IMGDEC_ALPHA_NONE},
+		{kCGBitmapByteOrderDefault, kCGImageAlphaPremultipliedFirst, 0, 0, IMGDEC_ALPHA_NONE},
+		{kCGBitmapByteOrderDefault, kCGImageAlphaOnly, 0, 0, IMGDEC_ALPHA_NONE},
+		{kCGBitmapByteOrderDefault, 99, 0, 0, IMGDEC_ALPHA_NONE},
+		{kCGBitmapByteOrderDefault | kCGBitmapFloatComponents, kCGImageAlphaNone, 0, 0, IMGDEC_ALPHA_NONE},
+		{kCGBitmapByteOrder16Little | kCGBitmapFloatComponents, kCGImageAlphaLast, 0, 0, IMGDEC_ALPHA_NONE},
+		{5u << 12, kCGImageAlphaNone, 0, 0, IMGDEC_ALPHA_NONE},
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof(c) / sizeof(c[0]); i++)
+	{
+		size_t swap = 77;
+		imgdec_alpha_t alpha = (imgdec_alpha_t)77;
+		int ok = IMGDEC_BitmapLayout(c[i].info, c[i].alpha, &swap, &alpha);
+
+		CHECK(ok == c[i].ok, "bitmap layout %zu: returned %d", i, ok);
+		if (ok && c[i].ok)
+		{
+			CHECK(swap == c[i].swap && alpha == c[i].want,
+				"bitmap layout %zu: swap %zu alpha %d", i, swap, (int)alpha);
+		}
+	}
+}
+#endif
+
+static void
 test_result_strings(void)
 {
 	int i, j;
@@ -670,6 +725,13 @@ test_to_rgba(void)
 	l.bits_per_pixel = 8;
 	l.palette_count = 257;
 	expect_layout_refused("a palette above 256 entries", &l, indexes, sizeof(indexes), IMGDEC_ERR_LAYOUT);
+	l = base;
+	l.alpha = IMGDEC_ALPHA_NONE;
+	l.bits_per_pixel = 24;
+	l.bytes_per_row = 6;
+	l.palette = palette;
+	l.palette_count = 3;
+	expect_layout_refused("a palette with RGB and no alpha", &l, rgb, sizeof(rgb), IMGDEC_ERR_LAYOUT);
 }
 
 /* ---------- decoding generated files ---------- */
@@ -919,6 +981,14 @@ build_cases(void)
 	/* the side bound, checked on the declared size before decoding */
 	add_bad("png 16385x1", png_file(16385, 1, 8, 2, wide, 16385 * 3, 1, NULL, 0, NULL, 0), (size_t)-1, "png", IMGDEC_ERR_SIZE);
 	add_bad("png 1x16385", png_file(1, 16385, 8, 2, wide, 3, 16385, NULL, 0, NULL, 0), (size_t)-1, "png", IMGDEC_ERR_SIZE);
+	/* cut in the pixels, so only the declared size can refuse them as too large */
+	{
+		buf_t c = png_file(16385, 1, 8, 2, wide, 16385 * 3, 1, NULL, 0, NULL, 0);
+
+		add_bad("png 16385x1 cut in its pixels", c, c.n / 2, "png", IMGDEC_ERR_SIZE);
+		c = png_file(1, 16385, 8, 2, wide, 3, 16385, NULL, 0, NULL, 0);
+		add_bad("png 1x16385 cut in its pixels", c, c.n / 2, "png", IMGDEC_ERR_SIZE);
+	}
 	add_bad("png declaring 100000x100000", png_file(100000, 100000, 8, 2, rgb, 3, 1, NULL, 0, NULL, 0), (size_t)-1, "png", IMGDEC_OK);
 	{
 		buf_t t = tga_file(1, 1, 24, 0, 0, ref);
@@ -1037,6 +1107,10 @@ main(int argc, char **argv)
 	}
 
 	test_types();
+	test_file_size();
+#ifdef __APPLE__
+	test_bitmap_layout();
+#endif
 	test_pixel_bytes();
 	test_result_strings();
 	test_to_rgba();

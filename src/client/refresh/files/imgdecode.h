@@ -28,6 +28,7 @@
 #define SRC_CLIENT_REFRESH_FILES_IMGDECODE_H_
 
 #include <stddef.h>
+#include <stdint.h>
 
 /* The largest side of a decoded image (ref_metal's RMB_MAX_TEXTURE_SIDE). */
 #define IMGDEC_MAX_SIDE 16384
@@ -84,6 +85,9 @@ typedef struct
 imgdec_type_t IMGDEC_TypeOfExtension(const char *ext);
 imgdec_type_t IMGDEC_TypeOfIdentifier(const char *uti);
 
+/* 1 when a file of size bytes may be read: 1 to max_size bytes */
+int IMGDEC_FileSizeOk(size_t size, size_t max_size);
+
 /*
  * 1 and *bytes = width * height * 4 when both sides are in 1..max_side
  * and the product does not overflow, else 0.
@@ -98,6 +102,16 @@ int IMGDEC_PixelBytes(size_t width, size_t height, size_t max_side,
  */
 imgdec_result_t IMGDEC_ToRGBA(const imgdec_layout_t *layout,
 		const unsigned char *src, size_t srclen, unsigned char *dst);
+
+#ifdef __APPLE__
+/*
+ * The byte order and alpha of a CGBitmapInfo and a CGImageAlphaInfo in
+ * the converter's terms: 1, or 0 for float components, premultiplied or
+ * alpha-only images and unknown values.
+ */
+int IMGDEC_BitmapLayout(uint32_t bitmap_info, uint32_t alpha_info,
+		size_t *swap, imgdec_alpha_t *alpha);
+#endif
 
 /*
  * Decodes a PNG, JPEG or TGA file whose name has the extension ext.

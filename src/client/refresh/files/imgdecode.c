@@ -131,6 +131,12 @@ IMGDEC_TypeOfIdentifier(const char *uti)
 }
 
 int
+IMGDEC_FileSizeOk(size_t size, size_t max_size)
+{
+	return size >= 1 && size <= max_size;
+}
+
+int
 IMGDEC_PixelBytes(size_t width, size_t height, size_t max_side, size_t *bytes)
 {
 	if (width == 0 || height == 0 || width > max_side || height > max_side)
@@ -278,6 +284,57 @@ IMGDEC_ToRGBA(const imgdec_layout_t *l, const unsigned char *src, size_t srclen,
 
 #ifdef __APPLE__
 
+int
+IMGDEC_BitmapLayout(uint32_t bitmap_info, uint32_t alpha_info, size_t *swap,
+	imgdec_alpha_t *alpha)
+{
+	if (bitmap_info & kCGBitmapFloatComponents)
+	{
+		return 0;
+	}
+
+	switch (bitmap_info & kCGBitmapByteOrderMask)
+	{
+		case kCGBitmapByteOrderDefault:
+		case kCGBitmapByteOrder16Big:
+		case kCGBitmapByteOrder32Big:
+			*swap = 0;
+			break;
+		case kCGBitmapByteOrder16Little:
+			*swap = 2;
+			break;
+		case kCGBitmapByteOrder32Little:
+			*swap = 4;
+			break;
+		default:
+			return 0;
+	}
+
+	/* premultiplied and alpha-only images are not converted */
+	switch (alpha_info)
+	{
+		case kCGImageAlphaNone:
+			*alpha = IMGDEC_ALPHA_NONE;
+			break;
+		case kCGImageAlphaLast:
+			*alpha = IMGDEC_ALPHA_LAST;
+			break;
+		case kCGImageAlphaFirst:
+			*alpha = IMGDEC_ALPHA_FIRST;
+			break;
+		case kCGImageAlphaNoneSkipLast:
+			*alpha = IMGDEC_ALPHA_SKIP_LAST;
+			break;
+		case kCGImageAlphaNoneSkipFirst:
+			*alpha = IMGDEC_ALPHA_SKIP_FIRST;
+			break;
+		default:
+			return 0;
+	}
+
+	return 1;
+}
+
 static CFStringRef
 IMGDEC_Identifier(imgdec_type_t type)
 {
@@ -327,48 +384,9 @@ IMGDEC_LayoutOf(CGImageRef image, imgdec_layout_t *l, unsigned char *palette)
 	l->bits_per_pixel = CGImageGetBitsPerPixel(image);
 	l->bytes_per_row = CGImageGetBytesPerRow(image);
 
-	if (!space || (info & kCGBitmapFloatComponents))
+	if (!space || !IMGDEC_BitmapLayout(info, CGImageGetAlphaInfo(image), &l->swap, &l->alpha))
 	{
 		return IMGDEC_ERR_LAYOUT;
-	}
-
-	switch (info & kCGBitmapByteOrderMask)
-	{
-		case kCGBitmapByteOrderDefault:
-		case kCGBitmapByteOrder16Big:
-		case kCGBitmapByteOrder32Big:
-			l->swap = 0;
-			break;
-		case kCGBitmapByteOrder16Little:
-			l->swap = 2;
-			break;
-		case kCGBitmapByteOrder32Little:
-			l->swap = 4;
-			break;
-		default:
-			return IMGDEC_ERR_LAYOUT;
-	}
-
-	/* premultiplied and alpha-only images are not converted */
-	switch (CGImageGetAlphaInfo(image))
-	{
-		case kCGImageAlphaNone:
-			l->alpha = IMGDEC_ALPHA_NONE;
-			break;
-		case kCGImageAlphaLast:
-			l->alpha = IMGDEC_ALPHA_LAST;
-			break;
-		case kCGImageAlphaFirst:
-			l->alpha = IMGDEC_ALPHA_FIRST;
-			break;
-		case kCGImageAlphaNoneSkipLast:
-			l->alpha = IMGDEC_ALPHA_SKIP_LAST;
-			break;
-		case kCGImageAlphaNoneSkipFirst:
-			l->alpha = IMGDEC_ALPHA_SKIP_FIRST;
-			break;
-		default:
-			return IMGDEC_ERR_LAYOUT;
 	}
 
 	switch (CGColorSpaceGetModel(space))
@@ -603,7 +621,7 @@ IMGDEC_Decode(const void *data, size_t size, const char *ext,
 		return IMGDEC_ERR_EXTENSION;
 	}
 
-	if (!data || size == 0 || size > IMGDEC_MAX_FILE)
+	if (!data || !IMGDEC_FileSizeOk(size, IMGDEC_MAX_FILE))
 	{
 		return IMGDEC_ERR_FILESIZE;
 	}
