@@ -287,8 +287,497 @@ table. The scaler's cost on apple7 is TASK106
 
 ### Targets per GPU family and display, and the options (TASK116)
 
-Placeholder: the matrix, options A to E and the image-quality program
-follow.
+RT9's single criterion, every effect on at the native output at the
+display's refresh, is replaced by a matrix. A cell is a GPU family, a
+display class and an effect configuration; each cell has a frame budget
+and the cost of each option in it. INFORM12 (#262) is on hold by the
+owner's direction (2026-11-14) until image-quality data exists. The
+subsection above describes option A as RT11 would build it; this one
+costs every option (A to E, the hybrids and dynamic resolution) in every
+cell the measurements allow, defines the image-quality program, and
+keeps the decision open (the end of this subsection).
+
+**Sources.** Every cost below is quoted from section 8 (the M6, the
+compute-dispatch ray queries, the synthetic closed scene, the later level
+of a process, trace only) with its table, row and column, or computed
+from those numbers by model R below, with the computation shown and the
+number marked as modelled. The runbook's TASK97 section
+(`docs/plans/metal-port-harness.md`, "Frame rates on a physical GPU
+(TASK97)") gives no cost used here: its numbers are `timedemo` frame
+rates, not GPU times; none is at a native size; the three renderers that
+present through a `CAMetalLayer` run at 60.0 to 60.1 fps at 1920x1080
+(its Finding 3, diagnosed in the FIX52 section) and at a per-frame fixed
+cost of 3 to 4 ms up to 1600x900 (Finding 1); and the `ref_gl1` rate may
+be a CPU-submit rate (Finding 2). TASK108 (#259), which takes native-size
+frame rates of today's renderers, has not merged. No image quality is
+measured anywhere yet, so nothing below ranks the options by how they
+look.
+
+**Display classes.** Each is a pixel size and a refresh rate, not a Mac
+model.
+
+| Class | Pixels (millions) | Frame | Policy target (90 %, below) | Host in the plan |
+|---|---|---|---|---|
+| **5120 x 2880 at 60 Hz, the primary cell** | 14,745,600 (14.75) | 16.7 ms | 15.0 ms | the T2 host: the M6 drives this display at 60 Hz (section 8, "Display") |
+| 1920 x 1080 at 60 Hz | 2,073,600 (2.07) | 16.7 ms | 15.0 ms | none as a display |
+| 2560 x 1440 at 60 Hz | 3,686,400 (3.69) | 16.7 ms | 15.0 ms | none as a display |
+| 3840 x 2160 at 60 Hz | 8,294,400 (8.29) | 16.7 ms | 15.0 ms | none |
+| 3024 x 1964 at 120 Hz | 5,939,136 (5.94) | 8.3 ms | 7.5 ms | the owner's apple7 Mac has a built-in 120 Hz display of one of these two classes; TASK106 (#249) records which |
+| 3456 x 2234 at 120 Hz | 7,720,704 (7.72) | 8.3 ms | 7.5 ms | as above |
+| 6016 x 3384 at 60 Hz | 20,358,144 (20.36) | 16.7 ms | 15.0 ms | none |
+
+GPU time does not depend on the display (section 8, verdicts table, row
+RT9 (1)), so a window or render target of a class's size measures that
+class's cost on any host that can make one; the budget is the class's.
+
+**GPU families.** apple7 (M1) and apple8 (M2): the compute path on
+Metal's software traverser (section 4). apple9 and later (M3 on):
+hardware intersection and the render-stage path. Only apple9 is
+measured, on the M6 (section 8).
+
+**Effect configurations.** Each of the four passes of this section's
+table alone (dlight shadows at the cap of 4 rays per pixel, sun, AO,
+water reflections), and every effect on.
+
+**Model R: ray cost by traced pixels, and its check.** Before it is
+used, the per-pixel scaling is checked against section 8's closed table,
+1920 x 1080 and 2560 x 1440 columns:
+
+| Pass (closed table row) | 1920 x 1080 column, ms | ms per million pixels | 2560 x 1440 column, ms | ms per million pixels | 2560 x 1440 against 1920 x 1080 | 5120 x 2880 against 1920 x 1080 | 640 x 480 against 1920 x 1080 |
+|---|---|---|---|---|---|---|---|
+| Dlight shadows: any-hit shadow, every pixel casting, 4 rpp | 1.952 | 0.941 | 3.459 | 0.938 | -0.3 % | -0.2 % | +3.4 % |
+| Sun: any-hit shadow, every pixel casting, 1 rpp | 0.559 | 0.270 | 0.986 | 0.267 | -0.8 % | -1.5 % | +12.3 % |
+| AO: closest hit, 2 rpp (section 8's stand-in for the hemisphere rays) | 1.750 | 0.844 | 3.104 | 0.842 | -0.2 % | -0.3 % | +3.8 % |
+| Reflections: closest hit, 1 rpp on every pixel (an upper bound for water pixels) | 0.880 | 0.424 | 1.557 | 0.422 | -0.5 % | -0.7 % | +7.4 % |
+| Every effect on (sum of the four) | 5.141 | 2.479 | 9.106 | 2.470 | -0.4 % | -0.5 % | +5.2 % |
+
+Each ms-per-million value is the column's time over its pixels (1.952 /
+2.0736 = 0.941; 3.459 / 3.6864 = 0.938), and each percentage is a
+column's value per million pixels against the 1920 x 1080 one. Result of
+the check: 2560 x 1440 has 1.778 times the pixels of 1920 x 1080 and its
+passes cost 1.764 to 1.774 times as much, so per million pixels the two
+rows agree within 0.8 %; the 5120 x 2880 column agrees within 1.5 %
+(section 8 also finds native pixels "linear in pixels"). Linear scaling
+holds from 2.07 to 14.75 million pixels. Below that it holds less well:
+the 640 x 480 column (0.31 million) costs 3 to 12 % more per pixel. So
+model R is: rays = k x traced pixels, with k the 1920 x 1080 column's
+value per million pixels above (the largest of the three rows, so a
+modelled cost above 2.07 million pixels errs high), plus the per-frame
+items. The per-frame items are the instance rebuild and the 128 x 500
+refit, 0.174 + 0.203 = 0.377 ms (acceleration-structure table, "later"
+rows); they do not depend on pixels and are added once to every cell.
+Model R holds only for what section 8 measured: apple9 on the M6, the
+compute path, the closed scene with every pixel casting, the later level
+of a process. The first frames of a process run about 3.5 times slower
+(section 8, "Levels at the start of a process").
+
+Marks in the tables: **M** measured (the closed table's column of that
+traced size, plus the measured 0.377 ms); **+** modelled below 2.07
+million traced pixels, where the 640 x 480 column puts the cost up to
+5 % higher with every effect on (12 % for the sun alone); **x** modelled
+below 0.31 million, the smallest size measured, so extrapolated;
+unmarked numbers are modelled at or above 2.07 million.
+
+**The options as costed.**
+
+- **C**: every effect traced at the output; no scaler, no upsample. C is
+  A at `r_rt_scale 1` and E with every effect at scale 1: the three are
+  one frame at scale 1.
+- **A** (TASK105): the whole 3D frame at an internal size, upscaled by
+  `MTLFXTemporalScaler`, RT7 at the internal size (the subsection above).
+  Costed at the family default of the table above, 1080 rows on apple9,
+  clamped to the scaler's maximum ratio of 3.0 (section 8, text before
+  the MetalFX table), which gives 1128 rows on 6016 x 3384; and at 1440
+  rows in the primary cell.
+- **B**: as A, with `MTLFXTemporalDenoisedScaler` in place of RT7 and the
+  scaler. Measured in the primary cell only.
+- **D**: `MTLFXFrameInterpolator` on top of another option. Not timed
+  (section 8, text before the MetalFX table).
+- **E**: the 3D frame rasterized at the output; each effect traced at its
+  own fraction of the output's width and height, accumulated and
+  denoised by RT7 at that size, and upsampled to the output by a joint
+  bilateral upsample guided by the output's depth, normal and material
+  id; no whole-frame scaler. Costed with every effect at 1/2 (a design
+  point, not a default) and, in the primary cell, at 1/3. A mixed
+  configuration costs the sum of its effects' rays, each at its own
+  scale, plus the per-frame items once.
+- **H** (a hybrid of A and E): the 3D frame at 1/2 of the output's width
+  and height, upscaled by the temporal scaler (a ratio of 2.0, inside its
+  1.0 to 3.0), with each effect traced at 1/2 of that internal size and
+  upsampled to it as in E. It traces (1/2 x 1/2) squared, 1/16, of the
+  output's pixels.
+- **Dynamic resolution**: a controller that sets A's, E's or H's scale
+  each frame (below). At a given scale it costs that scale's row plus the
+  controller, which is not measured.
+
+On model R the ray cost depends only on the traced pixel count, so A, E
+and H tracing the same count cost the same in rays. They differ in the
+scaler, the upsample and the size the 3D frame is rasterized at, and of
+those only the scaler is measured, at a 5120 x 2880 output.
+
+**The primary cell: apple9, 5120 x 2880 at 60 Hz (the M6).** Every effect
+on, every cost item of each option. "Not measured" names the card that
+measures the item (list below the matrix). The measured frame of A and B
+is section 8's one command-buffer sequence, which also holds the 0.88 ms
+primary pass and a 1.00 ms (A) or 0.46 ms (B) gap before the scaler
+(verdicts table, row RT9 (2); MetalFX table, "Frame, trace start to
+scaler end").
+
+| Option | 3D raster at | Traced at | Rays | Per-frame items | Upscale or upsample | Raster, G-buffer, RT7, resolve, forward | Known total | Left of the 16.7 ms frame | Left of the 15.0 ms target |
+|---|---|---|---|---|---|---|---|---|---|
+| C | 5120 x 2880 | 5120 x 2880 | 36.39 M | 0.38 M | none | not measured, at 5120 x 2880 | 36.77 M (row RT9 (1): 36.8) | over by 20.1 | over by 21.8 |
+| A, 1080 rows | 1920 x 1080 | 1920 x 1080 | 5.14 M | 0.38 M | temporal scaler 1.82 M | not measured, at 1920 x 1080 | 7.34 M as a sum, 9.25 M as one frame (8.876 + 0.377) | 9.3 to 7.4 | 7.7 to 5.7 |
+| A, 1440 rows | 2560 x 1440 | 2560 x 1440 | 9.11 M | 0.38 M | temporal scaler 2.41 M | not measured, at 2560 x 1440 | 11.90 M as a sum, 15.02 M as one frame (14.638 + 0.377) | 4.8 to 1.7 | 3.1 as a sum; over by 0.02 as one frame |
+| B, 1080 rows | 1920 x 1080 | 1920 x 1080 | 5.14 M | 0.38 M | denoised scaler 12.03 M, in place of RT7 and the scaler | not measured, at 1920 x 1080 (no RT7) | 17.55 M as a sum, 18.93 M as one frame (18.553 + 0.377) | over by 0.9 to 2.3 | over by 2.6 to 3.9 |
+| B, 1440 rows | 2560 x 1440 | 2560 x 1440 | 9.11 M | 0.38 M | denoised scaler 19.50 M | not measured | 28.98 M as a sum, 31.45 M as one frame (31.077 + 0.377) | over by 12.3 to 14.8 | over by 14.0 to 16.5 |
+| D | as the option it is added to | | | | interpolator not timed | | not measured | | |
+| E, every effect at 1/2 | 5120 x 2880 | 2560 x 1440 | 9.11 M | 0.38 M | joint bilateral upsample, not measured (RT13) | not measured, raster at 5120 x 2880, RT7 at 2560 x 1440 | 9.48 M | 7.2 | 5.5 |
+| E, every effect at 1/3 | 5120 x 2880 | 1707 x 960 (1.64 million) | 2.479 x 1.6387 = 4.06 + | 0.38 M | as above | as above, RT7 at 1707 x 960 | 4.44 + | 12.2 | 10.6 |
+| H | 2560 x 1440 | 1280 x 720 (0.92 million) | 2.479 x 0.9216 = 2.28 + | 0.38 M | temporal scaler 2.41 M (from 2560 x 1440) and the upsample to 2560 x 1440, not measured | not measured, at 2560 x 1440, RT7 at 1280 x 720 | 5.07 + | 11.6 | 9.9 |
+
+The sums: A 5.14 + 0.38 + 1.82; A at 1440 rows 9.11 + 0.38 + 2.41; B
+5.14 + 0.38 + 12.03 and 9.11 + 0.38 + 19.50; E 9.11 + 0.38; H 2.28 + 0.38
++ 2.41. "Left" is 16.67 or 15.0 ms minus the known total, as a sum and as
+one frame where both exist. Every "left" is what remains for the items
+not measured, so no option is shown to hold this cell: A and E leave the
+most for the unmeasured work at the costs above (A 7.4 to 9.3 ms, E at
+1/2 7.2 ms), but E rasterizes 7.1 times the pixels A does
+(14,745,600 / 2,073,600) and adds an upsample, and A adds the
+scaler's measured 1.82 ms. C is over the frame before any raster; B is
+over it before any raster or resolve (row RT9 (2): "With the denoised
+scaler, not met at either input").
+
+Each effect alone in the primary cell, rays plus the per-frame items (ms):
+
+| Option | Traced at | Dlight shadows | Sun | AO | Reflections (upper bound) | Plus |
+|---|---|---|---|---|---|---|
+| C | 5120 x 2880 | 14.23 M | 4.29 M | 12.78 M | 6.59 M | – |
+| A, 1080 rows | 1920 x 1080 | 2.33 M | 0.94 M | 2.13 M | 1.26 M | the scaler, 1.82 M |
+| E at 1/2 | 2560 x 1440 | 3.84 M | 1.36 M | 3.48 M | 1.93 M | the upsample, not measured |
+| E at 1/3 | 1707 x 960 | 1.92 + | 0.82 + | 1.76 + | 1.07 + | the upsample, not measured |
+| H | 1280 x 720 | 1.24 + | 0.63 + | 1.15 + | 0.77 + | the scaler, 2.41 M, and the upsample |
+
+Each measured cell is the pass's closed-table value at that column plus
+0.377 (13.855 + 0.377 = 14.23); each modelled cell is k x traced
+millions + 0.377 (0.941 x 1.6387 + 0.377 = 1.92).
+
+**The matrix, apple9, the other display classes.** Rays plus per-frame
+items, ms, marks as above; the options add what the primary cell lists.
+On 1920 x 1080, A at 1080 rows is the output size, so it is C, with no
+scaler.
+
+| Class, frame | Option | Traced at (millions) | Dlight shadows | Sun | AO | Reflections | Every effect |
+|---|---|---|---|---|---|---|---|
+| 1920 x 1080, 60 Hz, 16.7 ms | C and A | 1920 x 1080 (2.07) | 2.33 M | 0.94 M | 2.13 M | 1.26 M | 5.52 M |
+| | E at 1/2 | 960 x 540 (0.52) | 0.86 + | 0.52 + | 0.81 + | 0.60 + | 1.66 + |
+| | H | 480 x 270 (0.13) | 0.50 x | 0.41 x | 0.49 x | 0.43 x | 0.70 x |
+| 2560 x 1440, 60 Hz, 16.7 ms | C | 2560 x 1440 (3.69) | 3.84 M | 1.36 M | 3.48 M | 1.93 M | 9.48 M |
+| | A, 1080 rows | 1920 x 1080 (2.07) | 2.33 M | 0.94 M | 2.13 M | 1.26 M | 5.52 M |
+| | E at 1/2 | 1280 x 720 (0.92) | 1.24 + | 0.63 + | 1.15 + | 0.77 + | 2.66 + |
+| | H | 640 x 360 (0.23) | 0.59 x | 0.44 x | 0.57 x | 0.47 x | 0.95 x |
+| 3840 x 2160, 60 Hz, 16.7 ms | C | 3840 x 2160 (8.29) | 8.19 | 2.61 | 7.38 | 3.90 | 20.94 |
+| | A, 1080 rows | 1920 x 1080 (2.07) | 2.33 M | 0.94 M | 2.13 M | 1.26 M | 5.52 M |
+| | E at 1/2 | 1920 x 1080 (2.07) | 2.33 M | 0.94 M | 2.13 M | 1.26 M | 5.52 M |
+| | H | 960 x 540 (0.52) | 0.86 + | 0.52 + | 0.81 + | 0.60 + | 1.66 + |
+| 3024 x 1964, 120 Hz, 8.3 ms | C | 3024 x 1964 (5.94) | 5.97 | 1.98 | 5.39 | 2.90 | 15.10 |
+| | A, 1080 rows | 1663 x 1080 (1.80) | 2.07 + | 0.86 + | 1.89 + | 1.14 + | 4.83 + |
+| | E at 1/2 | 1512 x 982 (1.48) | 1.77 + | 0.78 + | 1.63 + | 1.01 + | 4.06 + |
+| | H | 756 x 491 (0.37) | 0.73 + | 0.48 + | 0.69 + | 0.53 + | 1.30 + |
+| 3456 x 2234, 120 Hz, 8.3 ms | C | 3456 x 2234 (7.72) | 7.64 | 2.46 | 6.89 | 3.65 | 19.52 |
+| | A, 1080 rows | 1671 x 1080 (1.80) | 2.08 + | 0.86 + | 1.90 + | 1.14 + | 4.85 + |
+| | E at 1/2 | 1728 x 1117 (1.93) | 2.19 + | 0.90 + | 2.01 + | 1.20 + | 5.16 + |
+| | H | 864 x 558 (0.48) | 0.83 + | 0.51 + | 0.78 + | 0.58 + | 1.57 + |
+| 6016 x 3384, 60 Hz, 16.7 ms | C | 6016 x 3384 (20.36) | 19.54 | 5.87 | 17.56 | 9.02 | 50.85 |
+| | A, 1128 rows (clamped) | 2005 x 1128 (2.26) | 2.51 | 0.99 | 2.29 | 1.34 | 5.98 |
+| | E at 1/2 | 3008 x 1692 (5.09) | 5.17 | 1.75 | 4.67 | 2.54 | 13.00 |
+| | H | 1504 x 846 (1.27) | 1.57 + | 0.72 + | 1.45 + | 0.92 + | 3.53 + |
+
+What is left, every effect on (ms): the frame minus the "every effect"
+column, before every unmeasured item; for A and H also before the
+scaler, which is measured only at a 5120 x 2880 output (1.82 ms from
+1920 x 1080 and 2.41 ms from 2560 x 1440 there).
+
+| Class | C | A | E at 1/2 | H |
+|---|---|---|---|---|
+| 1920 x 1080, 60 Hz | 11.1 (M) | as C | 15.0 + | 16.0 x, before the scaler |
+| 2560 x 1440, 60 Hz | 7.2 (M) | 11.1 (M), before the scaler | 14.0 + | 15.7 x, before the scaler |
+| 3840 x 2160, 60 Hz | over by 4.3 | 11.1 (M), before the scaler | 11.1 (M) | 15.0 +, before the scaler |
+| 3024 x 1964, 120 Hz | over by 6.8 | 3.5 +, before the scaler | 4.3 + | 7.0 +, before the scaler |
+| 3456 x 2234, 120 Hz | over by 11.2 | 3.5 +, before the scaler | 3.2 + | 6.8 +, before the scaler |
+| 6016 x 3384, 60 Hz | over by 34.2 | 10.7, before the scaler | 3.7 | 13.1, before the scaler |
+
+What the matrix shows, and no more: C, tracing at the output, leaves
+time on 1920 x 1080 and 2560 x 1440 at 60 Hz (measured) and is over the
+frame on every larger class and on both 120 Hz classes (modelled). On
+the 120 Hz classes A, E and H leave 3.2 to 7.0 ms (modelled) before any
+raster, and A also before the scaler, so they are the tightest cells
+besides the primary one. On
+6016 x 3384 E at 1/2 leaves 3.7 ms (modelled) for a raster of 20.36
+million pixels, so E there needs a smaller effect scale.
+
+**apple7 and apple8.** No cell is costed: nothing below apple9 is
+measured. This section's "8 to 14 ms" at 1080p on apple7 is an
+assumption, not a measurement. TASK106 (#249) measures apple7 at 1920 x
+1080 and at its display's native size (one of the 120 Hz classes),
+scalers included; model R is used for apple7 only after the same check
+on TASK106's columns, with apple7's own k. No card measures apple8 and
+no apple8 device is named in the plan (a finding for the orchestrator).
+The traced pixel counts are geometry and hold for every family: E and H
+as in the apple9 table; A at the 720 rows *assumed* for apple6 to apple8
+(table above) traces 1280 x 720 (0.92 million) on 1920 x 1080, 2560 x
+1440 and 3840 x 2160, and 1109 x 720 (0.80 million) on 3024 x 1964. On
+5120 x 2880, 3456 x 2234 and 6016 x 3384 the ratio exceeds 3.0, and
+apple7's maximum is not measured (TASK106).
+
+**Unmeasured costs and the card that measures each.**
+
+| Item | Options it costs | Measured by |
+|---|---|---|
+| The G-buffer raster with its motion vectors, the lighting resolve and the forward pass at the internal size | A, B, H | RT10's per-pass table (TASK62, #105); RT2 (TASK54, #96) builds the G-buffer |
+| The same at the output size | C, E | RT13 (per-pass time at the T1 and T2 outputs) and RT10's table. Today's renderers at native size: TASK108 (#259), not merged; TASK97 bounds none of it (Findings 1 to 3) |
+| The joint bilateral upsample, per effect, at the output size (E) or the internal size (H) | E, H | RT13 |
+| RT7's accumulation and the 5x5 and 3x3 blurs, at the internal or effect size | A, C, E, H | RT10's per-pass table |
+| The temporal scaler at outputs other than 5120 x 2880 | A, H | RT11 (the T1 and T2 outputs), TASK111 (#265, the scaler's GPU time per mode and scale) |
+| The interpolator | D | TASK111 (#265), as a development option |
+| Every cost on apple7 | all | TASK106 (#249), then RT10 on the T1 host |
+| Every cost on apple8 | all | none |
+| The render-stage path | all | RT9 |
+| Hit shading of reflections (section 8 traced only) | all | RT6 (TASK58, #100), RT10 |
+| A real map's geometry instead of the soup | all | RT1 (TASK53, #95), RT10 |
+| The controller's own cost | dynamic resolution | the card that builds it; none yet (below) |
+
+**Option E, from first principles.** E keeps the stock raster at the
+output and lowers only the resolution of the ray-traced terms. Pass order
+under E (section 3's steps, renumbered for E):
+
+| Step | Pass | Size |
+|---|---|---|
+| 1 | IAS rebuild and alias refits | – |
+| 2 | G-buffer raster, no jitter | output (the world refdef's rectangle) |
+| 3 | Each ray pass at its own scale, each effect pixel taking the G-buffer sample of one output pixel in its block | effect |
+| 4 | RT7 per effect: accumulation and denoise | effect |
+| 5 | Joint bilateral upsample of each effect's result: for each output pixel the nearest effect samples, weighted by distance and by how closely each sample's depth, normal and material id match the output pixel's; a pixel with no matching sample (thin geometry, a silhouette) falls back to the sample nearest in depth and is counted on the `r_rt_stats 1` line | effect to output |
+| 6 | Lighting resolve | output |
+| 7 | Forward pass: sprites, particles, beams, the view weapon | output |
+| 8 | 2D | window |
+
+What is reduced and what is not: only the visibility and AO factors and
+the reflection colour come from the effect size. The resolve evaluates
+the rest per output pixel: the dlight falloff `(intensity - dist) x
+color`, the sun's `max(0, N·L)`, the lightmap and the albedo; the
+forward pass draws sprites, particles, beams and the view weapon at the
+output, as with every effect off. That is what E computes; how it looks
+is RT12's to measure. Its unmeasured costs: the raster, the resolve and
+the forward pass at the output size, and the upsample (table above). Its
+known risks, each a case for RT12, not a finding: silhouettes and thin
+geometry, where no effect sample lies on the surface; the view weapon's
+edges against the world; reflections on warped water, whose normal moves
+every frame (`r_turbsin`) and which keep no history (above).
+
+Per-frame rules under E, traced through the client: the output is the
+world refdef's rectangle, which `V_RenderView` (`cl_view.c`) sets from
+`scr_vrect` (`SCR_CalcVrect`, `cl_screen.c`), so each effect's size is
+its scale times that rectangle. The refdef with `RDF_NOWORLDMODEL`
+renders as with every effect off, as under A. RT7's histories reset on
+this section's events that do not concern the scaler (a map load, a
+`vid_restart`, a camera cut, a teleport, a change of the rectangle, an
+effect turned back on after a world refdef with every effect off), and
+an effect's history also on a change of that effect's scale. At every
+effect scale 1, E is C and A at `r_rt_scale 1`: one frame, so the four
+effect scenarios' pins at scale 1 cover E, and section 5's double-count
+invariant applies to E's output pixels. The render-stage path (section 4)
+puts the shadow and AO queries in the lighting-resolve fragment shader;
+under E the resolve runs at the output size, so queries there would trace
+the output's pixels, C's cost. Under E the render-stage path issues them
+from a fragment pass at each effect's size instead (RT9).
+
+**Hybrids.** In general a hybrid rasterizes at a fraction s_A of the
+output, upscales with the temporal scaler and traces each effect at a
+fraction s_E of the internal size, so it traces (s_A x s_E) squared of
+the output's pixels and adds the scaler (from s_A) and the upsample (to
+the internal size). H is (1/2, 1/2). Another is A with only some effects
+below the internal size, for example AO. With RT11's scaler and RT13's
+upsample both built, a hybrid needs no code of its own (RT13).
+
+**Dynamic resolution.** A controller sets the scale, A's internal height,
+E's effect scales or H's pair, for the next world refdef from the
+measured GPU time, to hold the frame target. Traced through how the
+client feeds the renderer:
+
+- What a frame is: `SCR_UpdateScreen` (`cl_screen.c`) draws one presented
+  frame between `R_BeginFrame` and one `R_EndFrame`. With `gl1_stereo`
+  set it calls `R_BeginFrame` and `V_RenderView` twice before that one
+  `R_EndFrame`; `ref_metal` ignores the separation (`RI_BeginFrame`, "no
+  stereo in ref_metal"), so the controller measures the presented frame,
+  both world refdefs included. A frame with no world refdef (the loading
+  plaque, a cinematic, the console with no map: `V_RenderView` returns
+  before `R_RenderFrame` when `cls.state` is not `ca_active` or the
+  refresh is not prepped) leaves the controller's state unchanged. The
+  model view with `RDF_NOWORLDMODEL` counts in the frame's time but is
+  never scaled.
+- Its input: each presented frame's GPU time from its command buffers
+  (`GPUEndTime - GPUStartTime`, section 8's timer). That is known only
+  when the frame completes, so the scale of a frame is set from frames
+  that completed before it, one or more frames old.
+- Its target: the client's pacing (`src/common/frame.c`): with `r_vsync`
+  on, the display's refresh, or `vid_maxfps` when that is set below the
+  refresh minus 2. With `r_vsync` off the target is still the refresh
+  (the matrix's budget), or `vid_maxfps` when lower. The renderer has no
+  API entry for the refresh (`GLimp_GetRefreshRate` is the client's), so
+  it reads the display's refresh itself and `vid_maxfps` through
+  `ri.Cvar_Get`; the renderer API does not change.
+- A paused client re-renders the previous refdef (`V_RenderView` keeps it
+  while `cl_paused` is set), so the GPU time is steady and the controller
+  settles.
+- Histories: this section resets both histories on a change of
+  `r_rt_scale`. A controller's step is not a change of the cvar. Section
+  8 reports a supported input content scale of 1.0 to 3.0 for the
+  temporal scaler; whether a per-frame change of the input size inside
+  that range keeps the scaler's history was neither measured nor read
+  here, and RT11 establishes it. RT7's history at the internal or effect
+  size would be resampled to the new size or reset. This subsection does
+  not change any reset rule; a card that builds the controller would
+  narrow them, in every place they are stated (the reset row and the
+  `r_rt_scale` bullets above, RT11's row and card).
+- Pins and measurements run with the controller off, at a fixed scale:
+  otherwise a `timedemo` rate measures the controller, not the option.
+
+Fixed per-family defaults against the controller:
+
+| | Fixed default per cell | Controller |
+|---|---|---|
+| Image | the same scale on every frame and every run; pinnable at the scale | the scale follows the load, so the resolution itself changes over time, which the image-quality program measures as part of its stability |
+| Frames heavier than the one the default was set on | missed: more dlights in range (up to the cap of 4 shadow rays, this section's table), more water pixels, and the first frames of a process at about 3.5 times (section 8) | held, by a lower scale |
+| Scene dependence in section 8 | the open scene at 1920 x 1080 costs 1.324 + 0.464 + 1.697 + 0.851 = 4.336 ms with every effect on (open table, same rows), against 5.141 closed: 16 % less with 57 % of pixels casting shadow rays. A default set on a closed scene leaves that margin unused in an open one | uses it |
+| Cost | none beyond the cell | the controller and any history resampling, not measured |
+
+Which is used is the default policy's choice (below): the controller is
+one more option, judged on frame time and on image quality, its
+stability included. RT10's frame-time spread at the fixed default over
+the scenarios shows whether fixed defaults miss the target; a card for
+the controller follows only if they do.
+
+**The image-quality program.** It compares each option against one
+reference, by region and by case, and turns the numbers into defaults.
+
+*Reference.* Every effect traced at the output (scale 1, no scaler, no
+upsample) with RT7's accumulation converged: the same world refdef is
+fed again and again with the per-frame noise index advancing, as a
+paused client feeds the previous refdef again (`V_RenderView`, above);
+the history is a running mean instead of the 0.9 blend, and the denoiser
+is off. It is converged when doubling the frames changes no pixel by
+more than 1/255 (section 5's tolerance). For a moving camera each frame
+of the replay is converged the same way in turn. It is not real time: in
+the primary cell every effect costs 36.8 ms a frame (row RT9 (1)), so 64
+frames of accumulation take 64 x 36.8 = 2.4 s per reference frame.
+
+*Candidates.* Each option the host supports, run through the same replay
+in sequence as in play: A at its default and at one other scale, E at
+its default effect scales, H, B and D where the host has them (TASK111
+and TASK113, #265 and #267, make them selectable), and the controller if
+it is built. Frames are captured at the output size, and the 2D layer
+separately.
+
+*Frame rate of the replay.* The replay is recorded at the class's rate,
+60 and 120 frames a second, because the histories see an event for a
+number of frames that depends on it: a muzzle flash's light dies at
+`cl.time` (`CL_AddMuzzleFlash`, `cl_effects.c`) and is kept 32 ms after
+(`CL_RunDLights`, `cl_lights.c`), about 2 frames at 60 Hz and 4 at 120
+Hz; a lightstyle steps every 100 ms (`CL_RunLightStyles`, `ofs = cl.time
+/ 100`), every 6 frames at 60 Hz and 12 at 120 Hz.
+
+*Metrics.* PSNR and SSIM (luminance) per region, on the 8-bit frames the
+capture writes. A perceptual metric (FLIP is one) only if it can be
+implemented from its published description with the toolchain alone, no
+install; otherwise the report says it is absent. Temporal stability: on
+a still camera, after the candidate has run a stated number of frames,
+the mean absolute frame-to-frame difference per region over the next
+frames (the converged reference's is 0 within its tolerance). Response to
+an event: after a muzzle flash or a lightstyle step, the frames until a
+region's error is back to its level before the event. The harness's
+`framediff` score and bad fraction are reported beside them.
+
+*Regions*, from masks the renderer writes for the reference frame at the
+output size (a debug output, not derived from the image): textured
+surfaces (world and alias material ids, less the silhouette mask);
+silhouettes and thin geometry (pixels within one output pixel of a depth
+step above a stated ratio or of a material-id change); particles,
+sprites and beams (pixels the forward pass writes); water (material id
+water); sky (material id sky); the view weapon (the entity with
+`RF_WEAPONMODEL`, `cl_entities.c`); 2D and the HUD (pixels 2D draws; it
+draws after the 3D frame at the window size in every option, so it is
+reported apart, as TASK117 does).
+
+*Cases*, each named with its frames, picked from the trace's data, not
+by eye: the four effect scenarios (`rt-shadows`, `rt-sun`, `rt-ao`,
+`rt-water`) and `world`; for each, a still camera (one frame repeated), a
+moving camera (the demo as recorded), fast turns (frames whose view yaw
+changes by more than a stated angle from the previous frame), disocclusion
+(frames where RT7's reprojection rejects more than a stated share of
+pixels, from the `r_rt_stats 1` line), muzzle flashes (frames with a
+muzzle-flash dlight in the refdef) and lightstyle changes (frames where a
+lightstyle value changes).
+
+*The default policy*, per cell (family and display class) and effect
+configuration:
+
+1. An option holds a cell when its GPU time per presented frame at the
+   95th percentile over the cases' frames, the first frames of a process
+   excluded (section 8), is at most 90 % of the frame: 15.0 ms at 60 Hz,
+   7.5 ms at 120 Hz. The 10 % headroom is a design choice, not a
+   measurement; the owner may set another.
+2. An option below the quality floor in any region of any case (its SSIM,
+   or its still-camera instability) is not offered as a default there. No
+   floor value exists yet, since no image quality is measured: RT12
+   reports the distributions, and the owner sets the floor on INFORM12.
+3. Among the options that hold the cell and pass the floor, the default
+   is the one with the highest worst-region SSIM (mean over the cases),
+   ties broken by the mean PSNR. Where none does, no ray-traced effect is
+   on by default in that cell; the effects stay selectable.
+4. A default needs a frame time measured on that family at the class's
+   output size. A class no host can output keeps the default of the
+   largest measured class below it, flagged as modelled, and a modelled
+   cell can only rule an option out. apple8 takes apple7's defaults until
+   it is measured; nothing measured says whether they hold there.
+
+*Stages and cards.*
+
+- Now: TASK117 (#272) measures, on real rasterized frames, what the
+  stock raster loses when rendered below the native size and upscaled
+  (`MTLFXSpatialScaler`, bilinear, Lanczos; PSNR, SSIM, the regions).
+  That is option A's raster cost for still frames, a pessimistic bound
+  because the temporal scaler is not measured there (its scope, item 4).
+  E rasterizes at the output, so that loss does not apply to it; E's own
+  loss, in the effect terms, is not measured by TASK117.
+- During development: TASK111 to TASK114 (#265 to #268) make the scalers,
+  the interpolator and the denoisers selectable and build the owner's
+  local comparison report.
+- After RT11 and RT13: RT12 runs the whole program on ray-traced frames
+  on the T2 host and records the scores here.
+- RT10 applies the policy per cell from RT12's scores, the per-pass
+  timings on T1 and T2, and TASK106's apple7 costs.
+
+**INFORM12: options A to E (decision open).** The owner put INFORM12
+(#262) on hold on 2026-11-14: TASK105's decision weighed cost only, at
+one cell. Restated over the matrix:
+
+| Option | Primary cell (5120 x 2880, 60 Hz, every effect on) | Elsewhere in the matrix | Built by | Image quality from |
+|---|---|---|---|---|
+| A: whole 3D frame at an internal size, temporal scaler, RT7 kept (TASK105's choice) | 7.3 ms sum, 9.3 ms frame (M); 7.4 to 9.3 ms left for unmeasured work | rays measured or modelled in every apple9 cell; the scaler measured only at this output | RT11 | TASK117 (raster, now), RT12 |
+| B: as A, the denoised scaler in place of RT7 and the scaler | 17.6 ms sum, 18.9 ms frame (M): over the frame before raster or resolve | not measured | TASK113 (#267), selectable for comparison | RT12, where selectable |
+| C: trace at the output, accept a rate below the refresh | 36.8 ms (M), over by 20.1 | leaves time at 1920 x 1080 and 2560 x 1440 at 60 Hz (M); over on every larger class and both 120 Hz classes | C is A or E at scale 1; no card of its own | the reference itself |
+| D: the frame interpolator on another option | not timed; presents generated frames between rendered ones, so the rendered rate, which the policy counts, is unchanged, and each rendered frame reaches the screen later | not measured | TASK111 (#265), a development option, off by default | TASK114's local report |
+| E: native raster, effects at reduced sizes, joint bilateral upsample | at 1/2: 9.48 ms (M) of rays and items, 7.2 ms left for the native raster and the upsample (not measured); at 1/3: 4.44 ms (modelled), 12.2 ms left | rays measured or modelled in every apple9 cell; raster at the output and the upsample not measured | RT13 | RT12 |
+| Hybrids (H and others) | H: 5.07 ms (modelled rays, measured scaler), 11.6 ms left | as A plus E | RT11 with RT13 | RT12 |
+| Dynamic resolution | as the scale it settles at, plus the controller | as the scale | a card only if RT10 shows fixed defaults miss | RT12, if built |
+
+Decision: open. It settles on image-quality data, which RT12 (TASK110,
+#264) produces on ray-traced frames once RT11 (TASK109, #263) and RT13
+have landed, with TASK117 (#272) giving A's raster loss now and TASK114
+(#268) the owner's local side-by-side report from the selectable modes
+of TASK111 to TASK113. Until then the subsection above describes A as
+RT11 builds it, and RT13 builds E, so that both can be measured; neither
+is the decision, and nothing is recorded in `docs/decisions/`.
 
 ## 3. What the rasterizer must expose
 
