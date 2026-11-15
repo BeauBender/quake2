@@ -992,13 +992,19 @@ takes the first):
 The raster draws the world (lightmapped and `r_fullbright` surfaces,
 material 1; opaque warped water, 3; the sky box, 4), the opaque brush
 models (1, and 3 for their warped faces) and the opaque alias models but
-the view weapon and shells (2). Everything else is the forward pass's, in
-the stock order: the view weapon, sprites, beams, null models and the
-stencil shadows of the raster's alias models, then the translucent
-entities, the flash blobs, the particles, the translucent surfaces
-(material 5 is not written: they are blended over the resolved image) and
-the screen blend. The forward pass loads the raster's depth, so it is
-occluded as before.
+the view weapon and shells (2). Everything else is the forward pass's
+(`rm_gb_entity_split`, held by the host test), in the stock order within
+that pass: the view weapon, sprites, beams, null models and the stencil
+shadows of the raster's alias models, then the translucent entities, the
+flash blobs, the particles, the translucent surfaces (material 5 is not
+written: they are blended over the resolved image) and the screen blend.
+The forward pass loads the raster's depth, so it is occluded as before.
+The stock order holds within the forward pass only: every rastered model
+is drawn before the forward pass starts, so the beams and the stencil
+shadows, which the stock view interleaves with the models in list order,
+now come after all of them. A beam that writes no depth, followed in the
+list by a model behind it, is overdrawn by that model in the stock view
+and blended over it here.
 
 The light attachment holds the other factor of each pixel's stock
 product: the lightmap sample as `rm_fragment_world_lm` reads it (bilinear
@@ -1012,7 +1018,10 @@ and from then the attachment is the static lightmap. The resolve
 `mtl_world_lm` with the frame's lightmap environment (`R_FlushChain`'s)
 for material 1 and `GL_MODULATE` for 2 to 4, and keeps the target's colour
 where no draw wrote (material 0). The world normal is the per-vertex copy
-of the surface's (`rm_world_t.normals`, `rm_surf_normal`); an alias normal
+of the surface's (`rm_world_t.normals`, `rm_surf_normal`), computed at map
+load and uploaded by the first G-buffer view of the map (`RM_WorldNormals`),
+so the default path makes no buffer for it and does not depend on one;
+without it the raster draws no static world. An alias normal
 is the two frames' `anorms.h` entries lerped by `backlerp` and normalised
 (`rm_gb_alias_normal`), both turned into world space by the model's
 rotation.
@@ -1049,7 +1058,14 @@ rotation.
   the render size (`rm_gb_render_size`), today the frame's;
   `r_rt_gbuffer_scale` (development) sets a smaller one, and the view is
   then stretched bilinearly into the frame's view rectangle (a stand-in
-  for the scaler) before the 2D, which stays at the output size.
+  for the scaler) before the 2D, which stays at the output size. Every
+  size of the 3D pass in frame pixels follows the render size: the
+  particles' point size, its bounds and the pixel grid they are snapped
+  to (`rm_gb_pixel_scale`, `rm_gb_point_scale`, `RM_GB_TargetSize`), so a
+  particle covers as much of the view as at the frame's size once it is
+  stretched. Nothing else in the 3D pass is sized in pixels: beams, flash
+  blobs, the sky, shadows and the screen blend are in world or view
+  units, and no draw sets a line width.
 
 **Previous-frame transforms.** `rm_gb_hist_t` (`header/rm_gbuf.h`;
 `rm_gbufscene.c` holds one) keeps the last world view's modelview,
@@ -1072,10 +1088,21 @@ matrices, carry the camera's motion, and a null model and the particles
 carry none.
 
 **The off state: measured, and the choice (an owner decision, reversible).**
-With every effect off, against `origin/main`'s `ref_metal` (`d9e76e40`,
-with the same `MTL_GPU_TIME` measuring aid), alternated run by run, three
-rounds, the `particles` scenario (world, entities, view weapon, particles,
-dynamic lights, blend), on the M6 (apple9). GPU time of the frame's drawing
+Timed on engine commit `4bf077a4`, before the card was rebased onto
+`aa5ab641`. What came in after it does not touch the timed draws:
+
+- TASK119 adds 2D options, all off by default.
+- FIX61 sizes the frame by the client's rule, with no change in behaviour.
+- The rework sizes particles in render pixels only below the frame's size
+  (the runs were at scale 1).
+- The world normals buffer is now made by the first G-buffer view, not at
+  map load. That is one upload, before the warm frames.
+
+The runs were taken with every effect off, against `origin/main`'s
+`ref_metal` at the time (`d9e76e40`, with the same `MTL_GPU_TIME` measuring
+aid), alternated run by run, three rounds, the `particles` scenario (world,
+entities, view weapon, particles, dynamic lights, blend), on the M6
+(apple9). GPU time of the frame's drawing
 per frame, warm (each run's frames 101 to the last 20), the median of the
 three runs' medians, with the range of their 10th and 90th percentiles:
 
