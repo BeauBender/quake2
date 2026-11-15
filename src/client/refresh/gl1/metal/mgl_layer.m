@@ -34,7 +34,9 @@
  *  - nextDrawable returns nil after one second (allowsNextDrawableTimeout,
  *    for example while the window cannot be shown); the frame is then
  *    drawn into an offscreen texture of the same size, which glReadPixels
- *    reads, and nothing is presented;
+ *    reads, and nothing is presented. With display sync off the frame
+ *    does not wait for it at all (FIX51, mgl_next_drawable): a frame that
+ *    finds no drawable acquired ahead is drawn offscreen in the same way;
  *  - glFinish and glReadPixels wait for their command buffer for
  *    MGL_GPU_WAIT_MS; a read that times out fails (sticky error, nothing
  *    written).
@@ -47,6 +49,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <dlfcn.h>
+#include <os/lock.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
@@ -125,6 +128,17 @@ static unsigned ring_slot;
 /* Texture uploads made outside a frame, committed before the next frame's command buffer. */
 static id<MTLCommandBuffer> upload_cmd;
 static id<MTLBlitCommandEncoder> upload_blit;
+
+/* FIX51 PROBE (temporary, removed before the last commit) */
+#include <stdlib.h>
+#include <time.h>
+static int fix51_on = -1;
+static unsigned long long fix51_t0, fix51_tsem, fix51_nd0, fix51_nd1, fix51_prev;
+static unsigned long fix51_n;
+static double fix51_ms(unsigned long long a, unsigned long long b) { return (double)(b - a) / 1e6; }
+static unsigned long long fix51_now(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
+static int fix51(void) { if (fix51_on < 0) fix51_on = getenv("FIX51_PROBE") != NULL; return fix51_on; }
+/* END FIX51 PROBE */
 
 static dispatch_time_t
 mgl_deadline(long ms)
@@ -281,10 +295,119 @@ mgl_force_alpha(id<MTLCommandBuffer> cmd, id<MTLTexture> tex)
 	[enc endEncoding];
 }
 
+/*
+ * FIX51: with display sync off a frame does not wait for a drawable. The
+ * window server hands drawables back at its own pace, whatever the frame
+ * costs, and waiting for one in nextDrawable made that pace the frame
+ * rate (docs/plans/metal-port-harness.md, "The fixed per-frame cost of the
+ * Metal renderers (FIX51)"). So the next drawable is acquired ahead, on a
+ * serial queue, and a frame that begins takes it when it is there; a frame
+ * that finds none is drawn into mgl_offscreen and not presented (counted
+ * as without a drawable). With display sync on the frame waits in
+ * nextDrawable as before, and every frame is presented.
+ */
+static dispatch_queue_t mgl_ahead_queue;
+static os_unfair_lock mgl_ahead_lock = OS_UNFAIR_LOCK_INIT;
+static id<CAMetalDrawable> mgl_ahead;   /* mgl_ahead_lock: the drawable acquired ahead */
+static int mgl_ahead_busy;              /* mgl_ahead_lock: an acquisition is on the queue */
+
+/* Puts an acquisition of the next drawable on the queue, unless one is there or done. */
+static void
+mgl_ahead_request(void)
+{
+	CAMetalLayer *layer = mgl_metal_layer;
+	int go;
+
+	if (!layer || !mgl_ahead_queue)
+	{
+		return;
+	}
+
+	os_unfair_lock_lock(&mgl_ahead_lock);
+	go = !mgl_ahead_busy && !mgl_ahead;
+
+	if (go)
+	{
+		mgl_ahead_busy = 1;
+	}
+
+	os_unfair_lock_unlock(&mgl_ahead_lock);
+
+	if (go)
+	{
+		dispatch_async(mgl_ahead_queue, ^{
+			@autoreleasepool
+			{
+				id<CAMetalDrawable> d = [layer nextDrawable];   /* nil after one second */
+
+				os_unfair_lock_lock(&mgl_ahead_lock);
+				mgl_ahead = d;
+				mgl_ahead_busy = 0;
+				os_unfair_lock_unlock(&mgl_ahead_lock);
+			}
+		});
+	}
+}
+
+/* Takes the drawable acquired ahead, if any. */
+static id<CAMetalDrawable>
+mgl_ahead_take(void)
+{
+	id<CAMetalDrawable> d;
+
+	os_unfair_lock_lock(&mgl_ahead_lock);
+	d = mgl_ahead;
+	mgl_ahead = nil;
+	os_unfair_lock_unlock(&mgl_ahead_lock);
+	return d;
+}
+
+/* Waits for the acquisition on the queue (bounded, as nextDrawable is) and drops what it got. */
+static void
+mgl_ahead_drop(void)
+{
+	if (mgl_ahead_queue)
+	{
+		dispatch_sync(mgl_ahead_queue, ^{});
+	}
+
+	(void)mgl_ahead_take();
+}
+
+/*
+ * The drawable of the frame that begins, w x h: with display sync on the
+ * next one, waited for; with it off the one acquired ahead, or nil when
+ * none is there yet or it is of another size (the drawable size changed
+ * after it was acquired). The next one is then acquired ahead.
+ */
+static id<CAMetalDrawable>
+mgl_next_drawable(int w, int h)
+{
+	id<CAMetalDrawable> d;
+
+	if (mgl_sync)
+	{
+		return [mgl_metal_layer nextDrawable];
+	}
+
+	d = mgl_ahead_take();
+
+	if (d && (((int)d.texture.width != w) || ((int)d.texture.height != h)))
+	{
+		d = nil;
+	}
+
+	mgl_ahead_request();
+	return d;
+}
+
 static void
 mgl_release_all(void)
 {
 	int i;
+
+	mgl_ahead_drop();       /* nothing of the layer is left on the queue */
+	mgl_ahead_queue = nil;
 
 	frame_enc = nil;
 	frame_cmd = nil;
@@ -397,6 +520,7 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 		/* an opaque layer of about 1720x700 points or more is shown once per refresh (FIX53) */
 		mgl_metal_layer.opaque = mgl_sync ? YES : NO;
 		mgl_metal_layer.drawableSize = CGSizeMake(w > 0 ? w : 1, h > 0 ? h : 1);
+		mgl_ahead_queue = dispatch_queue_create("mgl drawable", DISPATCH_QUEUE_SERIAL);
 
 		/*
 		 * Created at 0 and raised to 3: libdispatch traps when a
@@ -441,6 +565,12 @@ void
 mgl_layer_set_sync(int on)
 {
 	mgl_sync = on ? 1 : 0;
+
+	/* with display sync on every frame waits for its own drawable again */
+	if (mgl_sync)
+	{
+		mgl_ahead_drop();
+	}
 
 	if (mgl_metal_layer)
 	{
@@ -608,6 +738,7 @@ mgl_layer_frame_begin(int *tw, int *th)
 	frame_open = 1;
 	frame_skipped = 0;
 	frame_passes = 0;
+	if (fix51()) fix51_t0 = fix51_now(); /* FIX51 PROBE */
 
 	if (dispatch_semaphore_wait(mgl_frame_sem, mgl_deadline(MGL_FRAME_WAIT_MS)) != 0)
 	{
@@ -641,7 +772,9 @@ mgl_layer_frame_begin(int *tw, int *th)
 			mgl_last_drawable = nil;
 		}
 
-		frame_drawable = [mgl_metal_layer nextDrawable];
+		if (fix51()) fix51_tsem = fix51_nd0 = fix51_now(); /* FIX51 PROBE */
+		frame_drawable = mgl_next_drawable(w, h);   /* with display sync off, nil when none is ready (FIX51) */
+		if (fix51()) fix51_nd1 = fix51_now(); /* FIX51 PROBE */
 
 		if (frame_drawable)
 		{
@@ -651,7 +784,8 @@ mgl_layer_frame_begin(int *tw, int *th)
 		{
 			count_no_drawable++;
 
-			if (!once_drawable)
+			/* with display sync off a frame without a drawable is the rule, not a fault */
+			if (!once_drawable && mgl_sync)
 			{
 				once_drawable = 1;
 				fprintf(stderr, "mgl: no drawable (window not shown?), drawing offscreen and not presenting\n");
@@ -969,11 +1103,27 @@ mgl_layer_present(void)
 			}
 
 			mgl_watch(frame_cmd);   /* first: it counts before the slot is given back */
+			if (fix51()) /* FIX51 PROBE */
+			{
+				unsigned long fn = fix51_n;
+				[frame_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
+					fprintf(stderr, "fix51 gpu %lu %.4f 0\n", fn, (b.GPUEndTime - b.GPUStartTime) * 1000.0);
+				}];
+			}
 			[frame_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 				(void)b;
 				dispatch_semaphore_signal(sem);
 			}];
 			[frame_cmd commit];
+			if (fix51()) /* FIX51 PROBE: sem wait, (0), nextDrawable, after it to commit, frame interval */
+			{
+				unsigned long long t = fix51_now();
+				fprintf(stderr, "fix51 cpu %lu %.4f 0 %.4f %.4f %.4f %d\n", fix51_n, fix51_ms(fix51_t0, fix51_tsem),
+						fix51_ms(fix51_nd0, fix51_nd1), fix51_ms(fix51_nd1, t),
+						fix51_prev ? fix51_ms(fix51_prev, fix51_t0) : 0.0, frame_drawable ? 1 : 0);
+				fix51_prev = fix51_t0;
+				fix51_n++;
+			}
 
 			/* what is now on screen; a read between frames reads it in place */
 			mgl_last = frame_target;

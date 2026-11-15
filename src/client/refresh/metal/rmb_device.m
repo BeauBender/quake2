@@ -29,7 +29,8 @@
  * released by assigning nil.
  *
  * Every wait is bounded: a frame slot RMB_FRAME_WAIT_MS (the frame is
- * skipped after it), the GPU RMB_GPU_WAIT_MS (readback and teardown).
+ * skipped after it), the GPU RMB_GPU_WAIT_MS (readback and teardown), a
+ * drawable one second (allowsNextDrawableTimeout).
  *
  * =======================================================================
  */
@@ -38,6 +39,7 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 
+#include <os/lock.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,6 +80,120 @@ long
 rmb_frame_wait_ms(void)
 {
 	return RMB_FRAME_WAIT_MS;
+}
+
+/*
+ * FIX51: with display sync off a frame does not wait for a drawable. The
+ * window server hands drawables back at its own pace, whatever the frame
+ * costs, and waiting for one in nextDrawable made that pace the frame
+ * rate (docs/plans/metal-port-harness.md, "The fixed per-frame cost of the
+ * Metal renderers (FIX51)"). So the next drawable is acquired ahead, on a
+ * serial queue, and the frame that ends takes it when it is there. A frame
+ * that finds none is complete without one and is not presented (counted as
+ * without a drawable); every frame is drawn offscreen either way. With
+ * display sync on the frame waits in nextDrawable as before, and every
+ * frame is presented.
+ */
+static dispatch_queue_t rmb_ahead_queue;
+static os_unfair_lock rmb_ahead_lock = OS_UNFAIR_LOCK_INIT;
+static id<CAMetalDrawable> rmb_ahead;   /* rmb_ahead_lock: the drawable acquired ahead */
+static int rmb_ahead_busy;              /* rmb_ahead_lock: an acquisition is on the queue */
+
+/* Puts an acquisition of the next drawable on the queue, unless one is there or done. */
+static void
+rmb_ahead_request(void)
+{
+	CAMetalLayer *layer = rmb_layer;
+	int go;
+
+	if (!layer || !rmb_ahead_queue)
+	{
+		return;
+	}
+
+	os_unfair_lock_lock(&rmb_ahead_lock);
+	go = !rmb_ahead_busy && !rmb_ahead;
+
+	if (go)
+	{
+		rmb_ahead_busy = 1;
+	}
+
+	os_unfair_lock_unlock(&rmb_ahead_lock);
+
+	if (go)
+	{
+		dispatch_async(rmb_ahead_queue, ^{
+			@autoreleasepool
+			{
+				id<CAMetalDrawable> d = [layer nextDrawable];   /* nil after one second */
+
+				os_unfair_lock_lock(&rmb_ahead_lock);
+				rmb_ahead = d;
+				rmb_ahead_busy = 0;
+				os_unfair_lock_unlock(&rmb_ahead_lock);
+			}
+		});
+	}
+}
+
+/* Takes the drawable acquired ahead, if any. */
+static id<CAMetalDrawable>
+rmb_ahead_take(void)
+{
+	id<CAMetalDrawable> d;
+
+	os_unfair_lock_lock(&rmb_ahead_lock);
+	d = rmb_ahead;
+	rmb_ahead = nil;
+	os_unfair_lock_unlock(&rmb_ahead_lock);
+	return d;
+}
+
+/* Waits for the acquisition on the queue (bounded, as nextDrawable is) and drops what it got. */
+static void
+rmb_ahead_drop(void)
+{
+	if (rmb_ahead_queue)
+	{
+		dispatch_sync(rmb_ahead_queue, ^{});
+	}
+
+	(void)rmb_ahead_take();
+}
+
+/*
+ * The drawable of the frame that ends: with display sync on the next one,
+ * waited for; with it off the one acquired ahead, or nil when none is
+ * there yet or it is not of the layer's drawable size (the size changed
+ * after it was acquired). The next one is then acquired ahead.
+ */
+id<CAMetalDrawable>
+rmb_next_drawable(void)
+{
+	id<CAMetalDrawable> d;
+	CGSize want;
+
+	if (!rmb_layer)
+	{
+		return nil;
+	}
+
+	if (rmb_sync)
+	{
+		return [rmb_layer nextDrawable];
+	}
+
+	d = rmb_ahead_take();
+	want = rmb_layer.drawableSize;
+
+	if (d && ((d.texture.width != (NSUInteger)want.width) || (d.texture.height != (NSUInteger)want.height)))
+	{
+		d = nil;
+	}
+
+	rmb_ahead_request();
+	return d;
 }
 
 /*
@@ -237,6 +353,11 @@ rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen)
 	rmb_detach();
 	rmb_sync = vsync ? 1 : 0;
 
+	if (!rmb_ahead_queue)
+	{
+		rmb_ahead_queue = dispatch_queue_create("ref_metal drawable", DISPATCH_QUEUE_SERIAL);
+	}
+
 	@autoreleasepool
 	{
 		rmb_layer = (__bridge CAMetalLayer *)metal_layer;
@@ -288,6 +409,7 @@ rmb_detach(void)
 	{
 		rmb_encode_abandon();   /* commits an open frame, presenting nothing */
 		rmb_drain();
+		rmb_ahead_drop();       /* nothing of this layer is left on the queue */
 		rmb_layer = nil;        /* the SDL Metal view owns it */
 	}
 
@@ -301,6 +423,7 @@ rmb_close(rmb_stats_t *stats, rm_ledger_t *ledger)
 
 	rmb_detach();
 	rmb_resources_close();      /* textures, staging, pipelines, samplers (rmb_resource.m) */
+	rmb_ahead_queue = nil;      /* empty: rmb_detach drained it */
 
 	if (rmb_device)
 	{
@@ -337,6 +460,12 @@ void
 rmb_set_vsync(int on)
 {
 	rmb_sync = on ? 1 : 0;
+
+	/* with display sync on every frame waits for its own drawable again */
+	if (rmb_sync)
+	{
+		rmb_ahead_drop();
+	}
 
 	if (rmb_layer)
 	{
