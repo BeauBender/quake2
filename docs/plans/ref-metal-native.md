@@ -2048,3 +2048,61 @@ Handed over to N10 (TASK93, #204):
   `r_shadows 1`, `gl1_stencilshadow 1` and `gl1_flashblend 1`.
 - `r_shadows` and `gl1_stencilshadow` are archived (`CVAR_ARCHIVE`), as
   gl1's; `gl1_flashblend` and `gl1_dynamic` are not.
+
+## 24. As built: N9, particles, the parity sweep and frame time (TASK92)
+
+What exists:
+
+- **The particles** (`rm_effects.c`, from `gl1_main.c`), drawn by `R_RenderView` after the flash
+  blobs and before the translucent surfaces, with or without a world, as gl1. Each particle the
+  client sends is read once into a copy (`rm_particle_count`: 0 to the ring, `MAX_PARTICLES`, the
+  rest counted; `rm_particle_ok`: origin finite and within 10^9, colour 0 to 255, alpha 0 to 1),
+  and only the copy is drawn. With `gl1_pointparameters` set at start-up (gl1's
+  `gl_config.pointparameters`, the shim having the extension) the points are the shim's: one quad
+  per point in clip coordinates (`rm_point_quads`, the shim's `mgl_point_quads`: GL's clip test,
+  `mgl_point_size`'s attenuated, clamped size, the square snap of GL 1.4 section 3.3.1 and the
+  smooth disc of 3.3.2), in one draw of the new `particle` pipeline (the vertex colour, a smooth
+  point's `mtl_point_coverage` on its alpha, blended, depth tested without writes, not culled).
+  Otherwise gl1's `R_DrawParticles2`: a triangle per particle (`rm_particle_tri`,
+  `rm_particle_tex`) with `r_particletexture`, `GL_MODULATE`, blended, without depth writes, culled
+  as the world. The colour is gl1's bytes (`rm_particle_color`).
+- **The point state** is gl1's: `R_SetDefaultState`'s minimum, maximum and attenuation from the
+  cvars at start-up (`R_InitParticles`), `glPointSize(gl1_particle_size * height / 480)` per view,
+  and `gl1_particle_square` between frames (`R_ParticleSquare`: `GL_POINT_SMOOTH`, or without point
+  parameters the texture made again). The shim's refusals are kept: a size not above 0 keeps the
+  one before, a negative minimum or maximum is not taken.
+- **The particle texture** (`rm_misc.c`, gl1's `R_InitParticleTexture`, `rm_particle_texture`): made
+  at start-up beside `r_notexture`, kept by `R_FreeUnusedImages`, freed by `R_ShutdownImages`.
+- **24 pipelines**, 0 created after init. `metal_stats` adds `N particles refused`.
+- The cvars `gl1_particle_size`, `_min_size`, `_max_size`, `_att_a`, `_att_b`, `_att_c`,
+  `gl1_particle_square` and `gl1_pointparameters`, by gl1's names, defaults and flags.
+
+Deviations from gl1, each only on input gl1 cannot handle:
+
+- A particle with an origin coordinate not finite or past 10^9, a colour outside 0 to 255 (the
+  client masks it with `0xFF`) or an alpha outside 0 to 1 (the client clamps it) is not drawn
+  (counted): gl1 converts `alpha * 255` to a byte, undefined outside 0 to 255.
+- A textured particle whose vertex is not finite is not drawn (counted).
+- A count past the ring is cut to it (counted); gl1 would read past the client's array.
+- gl1 makes a new particle texture at each `gl1_particle_square` change without point parameters and
+  leaves the old one to the next `R_FreeUnusedImages`; here the old one is freed at once.
+
+Measured (the runbook's N9 subsection has the commands): every scenario of section 11 passes at
+its value in one sweep (the table there); `particles` seeded passes at the tight values on all 23
+frames against two `gl1-metal` records (worst 0.000039, bad 0.000589: N7's mip residue on frame 2),
+and so do its scratch copies with `gl1_pointparameters 0` and `gl1_particle_square 1`; a control
+without particles is over on 10 to 12 of 23 frames there. The card's unseeded value (0.02, 0.25)
+passes the control on every frame, so it does not judge particles: handed over below.
+
+Handed over to N10 (TASK93, #204) and the owner:
+
+- `scripts/pins/scenarios/particles.cfg` still names `--threshold 0.02 --bad-threshold 0.25` as its
+  accept value; a build that draws no particles passes it on all 23 frames (worst 0.011398, bad
+  0.105537). The unseeded accept value (0.02 / 0.25) does not detect missing particles, so
+  `particles` should be judged seeded only, at `--threshold 0.005 --bad-threshold 0.001`, as
+  `dlights` is (N8 did that for `dlights`). Changing `scripts/pins/scenarios/particles.cfg` and
+  `doc/100_renderpins.md` for that is handed to N10 (TASK93, #204); N9 could not change an existing
+  scenario file.
+- The frame time on this host depends on the display: while the display was in use the timedemo
+  of both renderers was held to 60 fps with the default `r_vsync 1`; the table is with
+  `+set r_vsync 0`.
