@@ -45,6 +45,38 @@ RM_ModuleDir(char *dir, size_t len)
 	return rm_dir_of(info.dli_fname, dir, len);
 }
 
+/*
+ * Keeps this image mapped for the rest of the process (N10). The
+ * completion handlers of ref_metal's command buffers are blocks whose
+ * code, and the helpers that release them, are in this image; Metal runs
+ * and releases each after its command buffer completes, which on a GPU
+ * hung past the bounded waits of teardown can be after the engine's
+ * dlclose. dyld already keeps an image with Objective-C metadata mapped
+ * after dlclose (measured for TASK93: a plain C dylib is unmapped,
+ * ref_metal is not); the RTLD_NODELETE reference makes that dlopen's
+ * documented behaviour instead of dyld's. Taken once and never closed;
+ * 0 when it could not be taken.
+ */
+int
+RM_KeepMapped(void)
+{
+	static void *self;
+	Dl_info info;
+
+	if (self)
+	{
+		return 1;
+	}
+
+	if (!dladdr((const void *)&RM_KeepMapped, &info) || !info.dli_fname)
+	{
+		return 0;
+	}
+
+	self = dlopen(info.dli_fname, RTLD_LAZY | RTLD_NOLOAD | RTLD_NODELETE);
+	return self != NULL;
+}
+
 /* from gl1_misc.c, R_InitParticleTexture: the particle texture (its tables are rm_particle_texture's) and r_notexture */
 static byte notex[4][4] = {
 	{0, 0, 0, 0},

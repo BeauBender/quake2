@@ -1516,22 +1516,25 @@ void rmb_ledger_note(rm_obj_kind_t kind, int created);
 /* Detaches, releases the device and the queue; fills the final counters. */
 void rmb_close(rmb_stats_t *stats, rm_ledger_t *ledger);
 
+/* Sets the layer's displaySyncEnabled (r_vsync), or keeps it for the next layer. */
 void rmb_set_vsync(int on);
+/* The layer's displaySyncEnabled read back, or the value kept without a layer (IsVSyncActive). */
 int rmb_vsync(void);
 
 /* The counters so far. */
 void rmb_stats(rmb_stats_t *stats, rm_ledger_t *ledger);
 
 /*
- * Takes a frame slot and a command buffer, sizes the targets and the
- * layer's drawable to w by h pixels (the window's size in pixels), and
- * opens the frame's first pass, colour only: cleared to clear_rgba, or
- * to black when it is NULL (rm_color_load). This is gl1's R_Clear at the
- * end of RI_BeginFrame, with the shim's black for a frame gl1 does not
- * clear. 0 when
- * the frame is skipped.
+ * Takes a frame slot and a command buffer, sizes the targets to w by h
+ * (the mode's size, rm_frame_size) and the layer's drawable to dw by dh
+ * (the window's pixels; w by h when either is not positive), making again
+ * only what rm_frame_remake names, and opens the frame's first pass,
+ * colour only: cleared to clear_rgba, or to black when it is NULL
+ * (rm_color_load). This is gl1's R_Clear at the end of RI_BeginFrame,
+ * with the shim's black for a frame gl1 does not clear. 0 when the frame
+ * is skipped.
  */
-int rmb_frame_begin(int w, int h, const float *clear_rgba);
+int rmb_frame_begin(int w, int h, int dw, int dh, const float *clear_rgba);
 
 /*
  * Ends the open pass and opens the 3D pass on the colour target and its
@@ -1557,7 +1560,7 @@ int rmb_read(unsigned char *bgra, size_t len);
 /* The size of the colour target, 0 0 without one. */
 void rmb_target_size(int *w, int *h);
 
-/* Blits the frame to the drawable when there is one, presents and commits. */
+/* Blits the frame to the drawable when there is one (at rm_present_region), presents and commits. */
 void rmb_frame_end(void);
 
 /*

@@ -274,6 +274,12 @@ RI_Init(void)
 	R_Register();
 	rm_noop_calls = 0;
 
+	/* before the first command buffer: its completion handler is this image's code */
+	if (!RM_KeepMapped())
+	{
+		R_Printf(PRINT_ALL, "ref_metal: cannot keep the module mapped (RTLD_NODELETE)\n");
+	}
+
 	if (!rmb_open(&caps, err, sizeof(err)))
 	{
 		R_Printf(PRINT_ALL, "ref_metal: %s\n", err);
@@ -333,14 +339,22 @@ RI_Shutdown(void)
 static void
 RI_BeginFrame(float camera_separation)
 {
-	int w = 0, h = 0;
+	int w = 0, h = 0, dw = 0, dh = 0;
 
 	(void)camera_separation;   /* no stereo in ref_metal */
 
+	/* the layer's displaySyncEnabled, read back by IsVSyncActive (gl1 sets the swap interval) */
 	if (r_vsync->modified)
 	{
 		r_vsync->modified = false;
 		rmb_set_vsync(r_vsync->value != 0);
+		R_Printf(PRINT_DEVELOPER, "ref_metal: displaySyncEnabled %s\n", rmb_vsync() ? "on" : "off");
+	}
+
+	/* gl1's RI_BeginFrame: vid_gamma takes effect in R_InitImages, so through vid_restart */
+	if (vid_gamma->modified)
+	{
+		vid_gamma->modified = false;
 	}
 
 	/*
@@ -378,8 +392,10 @@ RI_BeginFrame(float camera_separation)
 	 * on the shim (the reference), which clears its first pass of a
 	 * frame to black (TASK87: the cracks of the world show it).
 	 */
-	RI_GetDrawableSize(&w, &h);
-	rmb_frame_begin(w, h, r_clear->value ? rm_clear_color : NULL);
+	/* the mode's size, as gl1 draws and reads it; the window's pixels for the drawable (FIX45) */
+	rm_frame_size(vid.width, vid.height, &w, &h);
+	RI_GetDrawableSize(&dw, &dh);
+	rmb_frame_begin(w, h, dw, dh, r_clear->value ? rm_clear_color : NULL);
 }
 
 /* from gl1_main.c */

@@ -326,8 +326,14 @@ rmb_set_vsync(int on)
 	}
 }
 
+/* What the layer has: its displaySyncEnabled, or what the next layer gets without one. */
 int
 rmb_vsync(void)
 {
+	if (rmb_layer)
+	{
+		return rmb_layer.displaySyncEnabled ? 1 : 0;
+	}
+
 	return rmb_sync;
 }
