@@ -553,6 +553,7 @@ rmb_frame_end(void)
 		}
 
 		rmb_upload_flush();     /* committed ahead of the frame that reads it */
+		frame_cmd.label = @"ref_metal frame";   /* MTL_GPU_TIME's frame line (rmb_watch) */
 		rmb_watch(frame_cmd);   /* first: it counts before the slot is given back */
 		[frame_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 			(void)b;
