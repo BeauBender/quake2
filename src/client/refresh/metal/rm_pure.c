@@ -4142,6 +4142,27 @@ rm_particle_color(const unsigned *palette, const unsigned char *gamma, int color
 	rgba[3] = (unsigned char)(alpha * 255) / 255.0f;
 }
 
+/* metal_particle_cap: gl1's largest particle size, or that size scaled like the size itself, by height / 480 */
+float
+rm_particle_cap(float max, float height, int mode)
+{
+	double cap;
+
+	if ((mode != 1) || !(height > 0.0f) || !isfinite(max))
+	{
+		return max;
+	}
+
+	cap = (double)max * (double)height / 480.0;
+
+	if (!(cap < (double)RM_POINT_ALIASED_MAX))
+	{
+		return RM_POINT_ALIASED_MAX;
+	}
+
+	return (float)cap;
+}
+
 /* GL's initial point state (the shim's mgl_state_reset) */
 void
 rm_point_state_init(rm_points_t *s)

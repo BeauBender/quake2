@@ -7464,6 +7464,69 @@ test_point_state(void)
 }
 
 /*
+ * metal_particle_cap (TASK122): gl1's largest size at height 480 at both
+ * values and for any mode but 1; the size scaled by height / 480 with 1;
+ * an oversized value held to the width GL allows; a value that is not a
+ * size left as it is.
+ */
+static void
+test_particle_cap(void)
+{
+	static const float hts[] = { 1, 240, 480, 720, 1080, 1440, 2880, 1e9f };
+	static const int modes[] = { 0, 1, 2, -1, 1000 };
+	int i, m;
+
+	for (m = 0; m < (int)(sizeof(modes) / sizeof(modes[0])); m++)
+	{
+		CHECK(rm_particle_cap(40.0f, 480.0f, modes[m]) == 40.0f);
+	}
+
+	for (i = 0; i < (int)(sizeof(hts) / sizeof(hts[0])); i++)
+	{
+		CHECK(rm_particle_cap(40.0f, hts[i], 0) == 40.0f);
+		CHECK(rm_particle_cap(40.0f, hts[i], 2) == 40.0f);
+		CHECK(rm_particle_cap(40.0f, hts[i], -1) == 40.0f);
+	}
+
+	/* the cap scaled like the size: 40 at 480 lines, 120 at 1440, 240 at 2880, 20 at 240 */
+	CHECK(rm_particle_cap(40.0f, 1440.0f, 1) == 120.0f);
+	CHECK(rm_particle_cap(40.0f, 2880.0f, 1) == 240.0f);
+	CHECK(rm_particle_cap(40.0f, 240.0f, 1) == 20.0f);
+	CHECK(rm_particle_cap(40.0f, 1080.0f, 1) == 90.0f);
+	CHECK(rm_particle_cap(0.0f, 1440.0f, 1) == 0.0f);
+
+	/* oversized: bounded at the aliased maximum, also for a huge height and a huge max */
+	CHECK(rm_particle_cap(40.0f, 1e9f, 1) == RM_POINT_ALIASED_MAX);
+	CHECK(rm_particle_cap(1e30f, 1440.0f, 1) == RM_POINT_ALIASED_MAX);
+	CHECK(rm_particle_cap(8000.0f, 480.0f, 1) == 8000.0f);
+	CHECK(rm_particle_cap(8000.0f, 960.0f, 1) == RM_POINT_ALIASED_MAX);
+	CHECK(rm_particle_cap(40.0f, INFINITY, 1) == RM_POINT_ALIASED_MAX);
+
+	/* a height that is not a size, or a max that is not finite: max as it is */
+	CHECK(rm_particle_cap(40.0f, 0.0f, 1) == 40.0f);
+	CHECK(rm_particle_cap(40.0f, -480.0f, 1) == 40.0f);
+	CHECK(rm_particle_cap(40.0f, NAN, 1) == 40.0f);
+	CHECK(isnan(rm_particle_cap(NAN, 1440.0f, 1)));
+	CHECK(rm_particle_cap(INFINITY, 1440.0f, 1) == INFINITY);
+
+	/* through the state: the range the size is kept to, the 480-line size and the cap with it */
+	{
+		rm_points_t s;
+		const float eye[4] = { 0, 0, 1, 1 };
+
+		rm_point_state_init(&s);
+		s.att[0] = 0.0f;
+		s.att[1] = 0.0f;
+		s.att[2] = 0.0f;
+		rm_point_set_range(&s, 2.0f, rm_particle_cap(40.0f, 1440.0f, 1));
+		rm_point_set_size(&s, 40.0f * 1440.0f / 480.0f);
+		CHECK(rm_point_size(&s, eye) == 120.0f);
+		rm_point_set_range(&s, 2.0f, rm_particle_cap(40.0f, 1440.0f, 0));
+		CHECK(rm_point_size(&s, eye) == 40.0f);
+	}
+}
+
+/*
  * The quads of GL's points: the snapped square of an odd and an even
  * width at a fractional centre (GL 1.4, section 3.3.1), the disc of a
  * smooth point, a centre outside the clip volume dropped, and random
@@ -8171,6 +8234,7 @@ main(void)
 	test_particle_color();
 	test_point_size();
 	test_point_state();
+	test_particle_cap();
 	test_point_quads();
 	test_particle_tri();
 	test_particle_texture();

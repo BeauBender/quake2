@@ -245,6 +245,8 @@ R_DrawNullModel(const entity_t *currententity, const rm_view_t *view, int depth_
 /* gl1's point state (glPointSize, glPointParameterf, GL_POINT_SMOOTH) and gl_config.pointparameters */
 static rm_points_t r_points;
 static qboolean r_pointparameters;
+/* gl1_particle_max_size as the start-up set it: the cap's base, gl1 never reads the cvar again */
+static float r_point_max_base;
 static unsigned long particle_skips;
 
 /* the view's particles taken (position and colour), and their quads or triangles */
@@ -266,6 +268,7 @@ R_InitParticles(void)
 		r_points.att[1] = gl1_particle_att_b->value;
 		r_points.att[2] = gl1_particle_att_c->value;
 		r_points.smooth = !gl1_particle_square->value;
+		r_point_max_base = r_points.max;
 	}
 }
 
@@ -301,6 +304,10 @@ R_DrawPoints(const rm_view_t *view, int n)
 
 	/* assume the particle size looks good with window height 480px and scale according to real resolution */
 	rm_point_set_size(&r_points, gl1_particle_size->value * (float)r_newrefdef.height / 480.0f);
+
+	/* metal_particle_cap 1: the largest size scales by the same factor (0: gl1's, the start-up value) */
+	rm_point_set_range(&r_points, r_points.min,
+			rm_particle_cap(r_point_max_base, (float)r_newrefdef.height, metal_particle_cap->value == 1.0f ? 1 : 0));
 
 	/* R_SetupGL's glViewport, GL's bottom-left origin, which the quads are snapped in */
 	rmb_target_size(&tw, &th);

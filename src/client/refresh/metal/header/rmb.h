@@ -1445,6 +1445,15 @@ typedef struct
 	double vx, vy, vw, vh;
 } rm_points_t;
 
+/*
+ * The largest particle size (metal_particle_cap, TASK122): max, gl1's
+ * gl1_particle_max_size, when mode is not 1, or when height (the view's
+ * height in pixels) is not above 0 or max is not finite; with mode 1 max
+ * times height / 480, the scale R_DrawParticles gives the size, never above
+ * RM_POINT_ALIASED_MAX. At height 480 both are max.
+ */
+float rm_particle_cap(float max, float height, int mode);
+
 /* GL's initial state: size 1, the range 0 to RM_POINT_ALIASED_MAX, attenuation 1, 0, 0, not smooth */
 void rm_point_state_init(rm_points_t *s);
 

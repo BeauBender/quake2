@@ -78,6 +78,7 @@ scenario plays `PINS_DEMO`, so all of them follow the same camera path.
 | `hud2d-sharp` | `hud2d` with `metal_2d_sharp 1`: the sharp-bilinear sample of the 2D pictures of the Metal renderer (the others draw it as `hud2d`) |
 | `hud2d-scale8` | `hud2d` with `r_scale8bittextures 1` |
 | `world-scale8` | `world` with `r_scale8bittextures 1`: the 8-bit world textures scaled up and smoothed |
+| `particles-cap` | `particles` with `metal_particle_cap 1`: the particle size limit of the Metal renderer scaled by `height / 480` (the others draw it as `particles`); recorded with `PINS_SEED` like `particles` |
 | `models` | the world plus entities: models, sprites, beams, the view weapon |
 | `particles` | everything, including particles, dynamic lights and the screen blend |
 | `hud2d` | 2D only: status bar, crosshair, console text; the OpenGL renderers draw no screen blend there (`gl_polyblend 0`), the software renderer still darkens the screen on a pickup |
