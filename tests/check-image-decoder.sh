@@ -1,8 +1,13 @@
 #!/bin/sh
 # Invariant: the image decoder (src/client/refresh/files/imgdecode.c,
 # decision docs/decisions/0010-imageio-decoder.md) decodes PNG, JPEG and
-# TGA only, to the straight-alpha RGBA bytes stb_image returned, and
-# refuses everything else before decoding it.
+# TGA only, and refuses everything else before decoding it. PNG and TGA
+# decode to the straight-alpha RGBA bytes stb_image returned (a 16-bit
+# TGA to within one level); JPEG to within decoder rounding of them, not
+# byte for byte. Refused, where stb_image decoded them: CMYK and YCCK
+# JPEGs, a palette index past the palette, a colour-mapped TGA whose map
+# is not 24-bit, a 15-bit TGA, a truecolour TGA that carries a colour
+# map, and more than 2^26 pixels.
 #
 # (a) Always: tests/image/imgdecode_test.c is compiled with the system
 #     compiler against imgdecode.c alone, with ASAN and UBSAN when the
@@ -14,11 +19,65 @@
 #     every case, the refusals included, 20 times under
 #     "leaks --atExit", which must report 0 leaks. Without leaks(1) one
 #     line "check-image-decoder: leaks skipped: <reason>".
+#
+# Both runs have a wall bound of IMGDEC_CHECK_SECONDS (default 300). A
+# watchdog kills the run it started once the bound has passed, and the
+# check fails with "<run> outlived its <n> s bound". The test also ends
+# itself at the bound (--bound), because a killed leaks(1) leaves the
+# process it runs behind.
 set -eu
 cd "$(dirname "$0")/.."
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/image-decoder.XXXXXX")
 trap 'rm -rf "${tmp:?}"' EXIT
+
+bound=${IMGDEC_CHECK_SECONDS:-300}
+case $bound in
+	'' | *[!0-9]*)
+		echo "check-image-decoder: IMGDEC_CHECK_SECONDS is not a whole number of seconds"
+		exit 1
+		;;
+esac
+if [ "$bound" -lt 1 ]; then
+	echo "check-image-decoder: IMGDEC_CHECK_SECONDS is 0"
+	exit 1
+fi
+
+# bounded <command...>: runs the command under a watchdog and returns its
+# status. Once the bound has passed, the watchdog writes ${tmp}/expired
+# and kills the command's PID, and nothing else. The watchdog sleeps in
+# one-second steps, so when it is killed early no sleep outlives it.
+bounded()
+{
+	"$@" &
+	run=$!
+	(
+		n=0
+		while [ "$n" -lt "$bound" ]; do
+			sleep 1
+			n=$((n + 1))
+		done
+		if kill -0 "$run" 2>/dev/null; then
+			: > "${tmp:?}/expired"
+			kill "$run" 2>/dev/null
+		fi
+	) < /dev/null > /dev/null 2>&1 &
+	dog=$!
+	rc=0
+	wait "$run" || rc=$?
+	kill "$dog" 2>/dev/null || :
+	wait "$dog" 2>/dev/null || :
+	return "$rc"
+}
+
+# expired <run>: fails the check when the watchdog killed the run
+expired()
+{
+	if [ -e "${tmp:?}/expired" ]; then
+		echo "check-image-decoder: $1 outlived its $bound s bound and was killed"
+		exit 1
+	fi
+}
 
 cc=${CC:-cc}
 flags="-std=gnu99 -Wall -Wextra -Werror -g -O1 -fno-strict-aliasing -fwrapv"
@@ -46,7 +105,10 @@ if ! $cc $sflags -o "${tmp:?}/imgdecode_test" $srcs $libs > "${tmp:?}/cc.out" 2>
 	exit 1
 fi
 
-if ! "${tmp:?}/imgdecode_test"; then
+status=0
+bounded "${tmp:?}/imgdecode_test" --bound "$bound" || status=$?
+expired "the host test"
+if [ "$status" -ne 0 ]; then
 	echo "check-image-decoder: the host test failed"
 	exit 1
 fi
@@ -64,10 +126,18 @@ else
 		exit 1
 	fi
 	status=0
-	MallocStackLogging=1 leaks --atExit -- "${tmp:?}/imgdecode_plain" --loop 20 > "${tmp:?}/leaks.out" 2>&1 || status=$?
-	if [ "$status" -ne 0 ] || ! grep -q ' 0 leaks for 0 total leaked bytes' "${tmp:?}/leaks.out"; then
+	bounded env MallocStackLogging=1 leaks --atExit -- "${tmp:?}/imgdecode_plain" \
+		--bound "$bound" --loop 20 > "${tmp:?}/leaks.out" 2>&1 || status=$?
+	if [ -e "${tmp:?}/expired" ]; then
 		cat "${tmp:?}/leaks.out"
-		echo "check-image-decoder: leaks found, or leaks(1) failed (status $status)"
+	fi
+	expired "leaks(1)"
+	# leaks(1) exits 0 whatever the test's own status: the test's last line
+	# must show every loop run with no failure
+	if [ "$status" -ne 0 ] || ! grep -q ' 0 leaks for 0 total leaked bytes' "${tmp:?}/leaks.out" ||
+		! grep -Eq '^imgdecode_test: 20 loops of [0-9]+ cases, [0-9]+ checks, 0 failed$' "${tmp:?}/leaks.out"; then
+		cat "${tmp:?}/leaks.out"
+		echo "check-image-decoder: leaks found, the test failed or ended early, or leaks(1) failed (status $status)"
 		exit 1
 	fi
 	grep -E '^imgdecode_test:| leaks for ' "${tmp:?}/leaks.out"

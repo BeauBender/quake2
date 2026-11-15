@@ -24,14 +24,17 @@
  *
  *   imgdecode_test            all cases
  *   imgdecode_test --loop N   every decode case N times, for leaks(1)
+ *   --bound SECONDS           (with either) exit 3 once SECONDS have passed
  *
  * =======================================================================
  */
 
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "../../src/client/refresh/files/imgdecode.h"
 
@@ -1385,19 +1388,38 @@ free_cases(void)
 	}
 }
 
+static void
+on_alarm(int sig)
+{
+	static const char msg[] = "imgdecode_test: outlived its wall bound\n";
+
+	(void)sig;
+	(void)!write(STDOUT_FILENO, msg, sizeof(msg) - 1);
+	_exit(3);
+}
+
 int
 main(int argc, char **argv)
 {
 	int loops = 0, i;
 
-	if (argc == 3 && !strcmp(argv[1], "--loop"))
+	for (i = 1; i < argc; i += 2)
 	{
-		loops = atoi(argv[2]);
-	}
-	else if (argc != 1)
-	{
-		printf("usage: %s [--loop N]\n", argv[0]);
-		return 2;
+		if (i + 1 < argc && !strcmp(argv[i], "--loop"))
+		{
+			loops = atoi(argv[i + 1]);
+		}
+		else if (i + 1 < argc && !strcmp(argv[i], "--bound"))
+		{
+			/* ends the run at the bound, also under leaks(1) */
+			signal(SIGALRM, on_alarm);
+			alarm((unsigned)atoi(argv[i + 1]));
+		}
+		else
+		{
+			printf("usage: %s [--bound SECONDS] [--loop N]\n", argv[0]);
+			return 2;
+		}
 	}
 
 	build_cases();
