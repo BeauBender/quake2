@@ -9,9 +9,10 @@ on:
       - opened
       - synchronize
 concurrency:
-  # One group per pull request: a newer push cancels the superseded run.
-  # Runs on main (and any other ref) are never cancelled.
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # A pull request has one group, and a newer push to it cancels the run it
+  # supersedes. A push to main has a group of its own commit (github.sha),
+  # so it is never queued behind, replaced by or cancelled for another run.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   changes:
