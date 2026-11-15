@@ -123,6 +123,25 @@ Total budget at 1080p with everything on: about 5 rays per pixel
 *Assumed* on apple7 compute RT: 8 to 14 ms; TASK25's render-stage path on
 apple9 is expected to halve it. RT1 measures.
 
+Measured for the dlight shadows (RT3, TASK55; the runbook, "Ray-traced shadows from dynamic
+lights in `ref_metal`"). The pass as built:
+
+- one ray from the eye to find the pixel's surface, cast wherever a light reaches its plane;
+- gl1's falloff on that surface's texture axes at its four luxels;
+- up to four any-hit shadow rays.
+
+On the M6 (apple9, compute path), seeded `rt-shadows` over `demo1.dm2`, warm frames, three runs:
+
+- 1920 x 1080: median 2.47 ms (p10 1.57, p90 3.39 to 3.58);
+- 5120 x 2880: median 8.95 ms (p10 5.1 to 5.3, p90 11.2 to 11.7);
+- about 0.87 rays a pixel; 24 % of pixels trace, 32 % have a light in range.
+
+That is above the 1.952 ms the closed table gives 4 any-hit rays a pixel on every pixel. The
+surface ray (closest hit), the 32-light loops and the term's writes cost more than the shadow
+rays they serve. The surface ray is the first to cut: it could be traced only where a light is in
+range, or the raster could store the surface. `timedemo` reads the display's 60 fps at 1080p with
+the effect on and off.
+
 ### Internal resolution and upscaling with MetalFX (TASK105)
 
 This subsection describes option A (TASK105): with a ray-traced effect
