@@ -16,19 +16,25 @@
 # fetch moves only origin/main), on tracked changes, a diverged main, a
 # main ahead of origin/main (reported with its local commits, never as
 # updated), another branch, a HEAD that tracks .claude/memory/x.md (the
-# file stays), an ignored local file at a path the update starts tracking
-# or where it needs a directory (the file stays, byte for byte), a path
-# git prints quoted, a failed fetch, and a failing git status, ls-tree,
-# symbolic-ref, rev-list (either count) or diff-tree (a shim first on
-# PATH). It fast-forwards over a tracked file the update turns into a
-# directory. In a linked worktree it prints nothing and changes nothing.
-# Every run must exit 0 and print no path under the scratch directory, so
-# no remote URL.
+# file stays), a failed fetch, a held index lock, and a failing git status,
+# ls-tree, symbolic-ref or rev-list (either count; a shim first on PATH).
+# It refuses an update that would overwrite or delete a local file it does
+# not track, which stays byte for byte, or a link, which stays as it was:
+# an ignored file or dangling link at a path the update adds, an ignored
+# file or a link to a directory where the update needs a directory, and an
+# ignored or an untracked file inside a directory the update turns into a
+# file. It fast-forwards over a tracked file the update turns into a
+# directory and, on a case-insensitive scratch volume, over a case-only
+# rename. It merges the commit it counted, not one a concurrent fetch
+# brings in at the merge (a shim). In a linked worktree it prints nothing
+# and changes nothing. Every run must exit 0 and print no path under the
+# scratch directory, so no remote URL.
 #
 # The real check then reads the hook and the settings file in this
-# checkout: the hook holds no reset,
-# rebase, checkout, switch, restore, stash, clean or pull and no merge
-# without --ff-only; .claude/settings.json registers the hook for the
+# checkout: the hook holds no reset, rebase, checkout, switch, restore,
+# stash, clean or pull, and every merge it runs holds --ff-only and
+# --no-overwrite-ignore in the command, not in a trailing comment;
+# .claude/settings.json registers the hook for the
 # startup and resume matchers with a timeout of at most 30 seconds, keeps
 # the compact and Stop hooks, and its allow and deny lists are exactly the
 # ones main had before the hook (this card adds no permission rule); and
@@ -132,7 +138,8 @@ selftest()
 	put seed a.txt one
 	g -C "${tmp:?}/seed" push -q origin main
 	a=$(rev seed)
-	clone behind hostile dirty diverged other fetchfail wtmain shims inway leading
+	clone behind hostile dirty diverged other fetchfail wtmain shims inway leading \
+		inlink leadlink locked
 	put seed .claude/memory/x.md note
 	g -C "${tmp:?}/seed" push -q origin main
 	clone mem
@@ -199,27 +206,55 @@ selftest()
 	still mem "$m"
 	[ -f "${tmp:?}/mem/.claude/memory/x.md" ] || fail "selftest: mem: the memory file was deleted"
 
-	# keep <repo> <path>: an ignored local file at <path>, with a copy to
-	# compare against. The refusal names the count, never the path.
+	# kept <repo> <path> <behind> <sha>: the hook refused <repo>, <behind>
+	# commit(s) behind, for a local file in the way, without naming
+	# <path>, and HEAD is still <sha>.
+	kept()
+	{
+		says "$1" "not updated, $3 commit(s) behind origin/main: local untracked or ignored files would be overwritten; update by hand"
+		case $out in
+		*"$2"*) fail "selftest: $1: the hook named the path: $out" ;;
+		esac
+		still "$1" "$4"
+	}
+	# keep <repo> <path> [<target>]: an ignored local file at <path>, with
+	# a copy to compare against, or an ignored link there to <target>.
 	keep()
 	{
 		mkdir -p "${tmp:?}/$1/.git/info"
 		printf '%s\n' "$2" >> "${tmp:?}/$1/.git/info/exclude"
-		printf 'local %s\n' "$2" > "${tmp:?}/$1/$2"
-		cp -p "${tmp:?}/$1/$2" "${tmp:?}/$1.keep"
+		if [ -n "${3:-}" ]; then
+			ln -s "$3" "${tmp:?}/$1/$2"
+		else
+			printf 'local %s\n' "$2" > "${tmp:?}/$1/$2"
+			cp -p "${tmp:?}/$1/$2" "${tmp:?}/$1.keep"
+		fi
 		run "$1"
-		says "$1" "not updated, 2 commit(s) behind origin/main: 1 path(s) the update adds"
-		case $out in
-		*"$2"*) fail "selftest: $1: the hook named the path: $out" ;;
-		esac
-		still "$1" "$a"
-		cmp -s "${tmp:?}/$1.keep" "${tmp:?}/$1/$2" ||
-			fail "selftest: $1: the ignored file $2 was overwritten"
+		kept "$1" "$2" 2 "$a"
+		if [ -n "${3:-}" ]; then
+			[ -L "${tmp:?}/$1/$2" ] && [ "$(readlink "${tmp:?}/$1/$2")" = "$3" ] ||
+				fail "selftest: $1: the ignored link $2 was changed"
+		else
+			cmp -s "${tmp:?}/$1.keep" "${tmp:?}/$1/$2" ||
+				fail "selftest: $1: the ignored file $2 was overwritten"
+		fi
 	}
 	# b.txt, which the update starts tracking, and newdir, where the update
-	# needs a directory for newdir/c.txt.
+	# needs a directory for newdir/c.txt: a file, a dangling link, and a
+	# link to an empty directory that must stay empty.
 	keep inway b.txt
 	keep leading newdir
+	keep inlink b.txt nowhere
+	mkdir -p "${tmp:?}/linked"
+	keep leadlink newdir "${tmp:?}/linked"
+	[ -z "$(ls -A "${tmp:?}/linked")" ] || fail "selftest: leadlink: the update wrote through the link"
+
+	# Another git process holds the index lock: the merge fails for a reason
+	# other than a file in the way.
+	: > "${tmp:?}/locked/.git/index.lock"
+	run locked
+	says locked "not updated, 2 commit(s) behind origin/main: git merge --ff-only failed (another git process may be running); update by hand"
+	still locked "$a"
 
 	g -C "${tmp:?}/fetchfail" fetch -q origin
 	g -C "${tmp:?}/fetchfail" remote set-url origin "${tmp:?}/nowhere.git"
@@ -241,7 +276,7 @@ selftest()
 	# of local commits after it.
 	realgit=$(command -v git)
 	i=0
-	for w in status ls-tree symbolic-ref rev-list "$a..$b" "$b..$a" diff-tree; do
+	for w in status ls-tree symbolic-ref rev-list "$a..$b" "$b..$a"; do
 		i=$((i + 1))
 		mkdir -p "${tmp:?}/shim-$i"
 		printf '#!/bin/sh\ncase " $* " in *" %s "*) exit 128 ;; esac\nexec "%s" "$@"\n' \
@@ -254,8 +289,7 @@ selftest()
 
 	# Last, as they move origin/main past B. A tracked file the update
 	# turns into a directory is not in the way (C: a.txt becomes
-	# a.txt/d.txt), and a path git prints quoted (D: q"x.txt) is not
-	# checked and refuses the update even with nothing there.
+	# a.txt/d.txt).
 	clone typechange
 	g -C "${tmp:?}/seed" rm -q a.txt
 	put seed a.txt/d.txt four
@@ -264,33 +298,87 @@ selftest()
 	run typechange
 	says typechange "updated main from"
 	still typechange "$t"
-	clone quoted
-	put seed 'q"x.txt' five
+
+	# E turns the tracked directory newdir into a file: an ignored and an
+	# untracked file inside it are in the way and stay byte for byte.
+	clone dirign dirmix
+	mkdir -p "${tmp:?}/dirign/.git/info"
+	printf '%s\n' newdir/keep.o >> "${tmp:?}/dirign/.git/info/exclude"
+	printf '%s\n' ignored > "${tmp:?}/dirign/newdir/keep.o"
+	printf '%s\n' untracked > "${tmp:?}/dirmix/newdir/u.txt"
+	g -C "${tmp:?}/seed" rm -q -r newdir
+	put seed newdir five
 	g -C "${tmp:?}/seed" push -q origin main
-	run quoted
-	says quoted "not updated, 1 commit(s) behind origin/main: 1 path(s) the update adds"
-	still quoted "$t"
-	[ ! -e "${tmp:?}/quoted/q\"x.txt" ] || fail "selftest: quoted: the path was written"
+	run dirign
+	kept dirign keep.o 1 "$t"
+	[ "$(cat "${tmp:?}/dirign/newdir/keep.o")" = ignored ] || fail "selftest: dirign: the ignored file was lost"
+	run dirmix
+	kept dirmix u.txt 1 "$t"
+	[ "$(cat "${tmp:?}/dirmix/newdir/u.txt")" = untracked ] || fail "selftest: dirmix: the untracked file was lost"
+
+	# G renames readme.txt (F) to README.txt. On a case-insensitive volume
+	# the old file answers to the new name, and the update still goes on.
+	put seed readme.txt six
+	g -C "${tmp:?}/seed" push -q origin main
+	clone case
+	g -C "${tmp:?}/seed" mv readme.txt README.txt
+	g -C "${tmp:?}/seed" commit -q -m rename
+	g -C "${tmp:?}/seed" push -q origin main
+	r=$(rev seed)
+	: > "${tmp:?}/CaseProbe"
+	if [ -e "${tmp:?}/caseprobe" ]; then
+		run case
+		says case "updated main from"
+		still case "$r"
+	else
+		echo "$me: selftest: case: skipped, the scratch volume is case-sensitive"
+	fi
+
+	# The race: origin/main is at H when the hook counts, and a shim pushes
+	# I and fetches it as the merge starts. The hook merges H, the commit
+	# it counted, and says so.
+	clone race
+	put seed h.txt seven
+	g -C "${tmp:?}/seed" push -q origin main
+	h=$(rev seed)
+	put seed i.txt eight
+	mkdir -p "${tmp:?}/raceshim"
+	printf '#!/bin/sh\ncase " $* " in *" merge "*) "%s" -C "%s" push -q origin main > /dev/null 2>&1; "%s" fetch -q origin main > /dev/null 2>&1 ;; esac\nexec "%s" "$@"\n' \
+		"$realgit" "${tmp:?}/seed" "$realgit" "$realgit" > "${tmp:?}/raceshim/git"
+	chmod 755 "${tmp:?}/raceshim/git"
+	run race PATH="${tmp:?}/raceshim:$PATH"
+	says race "updated main from $(printf '%.12s' "$r") to $(printf '%.12s' "$h") (1 commit(s))"
+	still race "$h"
+	[ "$(g -C "${tmp:?}/race" rev-parse refs/remotes/origin/main)" = "$(rev seed)" ] ||
+		fail "selftest: race: the shim did not fetch the newer commit"
 }
 
 # Not on the left of ||, so set -e holds inside: a failed setup step stops it.
 ( selftest )
 
 # The hook runs no git command that can rewrite history or drop changes,
-# and merges only by fast-forward: a git subcommand (after any -c, -C or
-# --option) on a line that is not a comment. A grep failure fails.
+# and merges only by fast-forward, refusing to touch local files it does
+# not track: a git subcommand (after any -c, -C or --option) on a line
+# that is not a comment. A grep failure fails.
 [ -f "$hook" ] || fail "the hook .claude/hooks/checkout-current.sh is missing"
 grep -v '^[[:space:]]*#' "$hook" > "${tmp:?}/code" || fail "cannot read the hook"
 pre='(^|[^A-Za-z0-9_-])git( +-c +[^ ]+| +-C +[^ ]+| +--[a-z-]+)* +'
 rc=0
 grep -Eq "${pre}(reset|rebase|checkout|switch|restore|stash|clean|pull)([^A-Za-z0-9-]|\$)" "${tmp:?}/code" || rc=$?
 [ "$rc" -eq 1 ] || fail "the hook runs a git command it must never run (reset, rebase, checkout, switch, restore, stash, clean, pull), or grep failed"
+# Every line that names a git merge, outside quoted text that expands
+# nothing (a message), with its trailing comment cut: the merge command
+# itself must hold both flags. There must be one.
+sed -e 's/"[^"$`]*"//g' -e "s/'[^']*'//g" "${tmp:?}/code" > "${tmp:?}/lit" || fail "sed failed on the hook"
 rc=0
-grep -E "${pre}merge([^A-Za-z0-9-]|\$)" "${tmp:?}/code" > "${tmp:?}/merges" || rc=$?
-[ "$rc" -le 1 ] || fail "grep failed on the hook"
-rc=0
-grep -vq -e '--ff-only' "${tmp:?}/merges" || rc=$?
-[ "$rc" -eq 1 ] || fail "the hook runs a merge without --ff-only, or grep failed"
+grep -E "${pre}merge([^A-Za-z0-9-]|\$)" "${tmp:?}/lit" > "${tmp:?}/merges" || rc=$?
+[ "$rc" -eq 0 ] || fail "the hook runs no merge, or grep failed"
+sed 's/[[:space:]]#.*//' "${tmp:?}/merges" > "${tmp:?}/cut" || fail "sed failed on the hook"
+for flag in --ff-only --no-overwrite-ignore; do
+	rc=0
+	grep -Evq -e "${pre}merge( +[^ ;&|()]+)* +$flag([^A-Za-z0-9-]|\$)" "${tmp:?}/cut" || rc=$?
+	[ "$rc" -eq 1 ] || fail "the hook runs a merge without $flag in the command, or grep failed"
+done
 
 # Every hook command in the settings, as "<event> <matcher> <script> <timeout>".
 hooks=$(awk '
