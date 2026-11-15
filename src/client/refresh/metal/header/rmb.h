@@ -419,9 +419,12 @@ rm_material_t rm_material(int texflags);
 /*
  * One vertex of the retained world buffer: the float3 position at offset
  * 0 (what an acceleration structure reads, with this stride) and w = 1
- * after it, then the diffuse and the lightmap coordinates; one stride of
- * 32 bytes (static asserts in rm_pure.c, a runtime check in the host
- * test). The w is stored, not packed away, because the vertex function
+ * after it, then the diffuse and the lightmap coordinates, then (TASK120)
+ * the face's lightmap rectangle; one stride of 48 bytes (static asserts
+ * in rm_pure.c, a runtime check in the host test). The rectangle is
+ * left, top, right, bottom in luxels of the face's slice, all four 0 for a
+ * vertex without a lightmap (the flowing and the sky vertices), and the
+ * fragment function of metal_lightmap_filter 1 clamps its taps to it. The w is stored, not packed away, because the vertex function
  * then reads one float4 as the shim's does, and only that gives the
  * shim's clip coordinates to the bit (design section 19).
  */
@@ -430,9 +433,10 @@ typedef struct
 	float pos[4];
 	float uv[2];
 	float lmuv[2];
+	float lmrect[4];
 } rm_wvert_t;
 
-#define RM_WVERT_STRIDE 32
+#define RM_WVERT_STRIDE 48
 
 /*
  * One record of the per-surface buffer (design section 9): the plane
@@ -1786,6 +1790,7 @@ typedef struct
 	int lmtex, slice;       /* the lightmap array and the slice */
 	int env;                /* MTL_LM_MODULATE, MTL_LM_REPLACE, MTL_LM_COMBINE */
 	float scale;            /* GL_RGB_SCALE of GL_COMBINE: 1, 2 or 4 */
+	int filter;             /* metal_lightmap_filter: 0 bilinear, 1 bicubic (the static draw only; 0 for the batched) */
 } rmb_lm_draw_t;
 
 int rmb_draw_world_lm(int vbuf, const unsigned *idx, unsigned long count, const rmb_lm_draw_t *d,

@@ -848,6 +848,22 @@ RM_BuildWorld(model_t *mod)
 
 			v->lmuv[0] = s1;
 			v->lmuv[1] = t1;
+
+			/* the face's rectangle in its slice, for the filtered lightmap (all 0 without a lightmap) */
+			v->lmrect[0] = v->lmrect[1] = v->lmrect[2] = v->lmrect[3] = 0.0f;
+
+			if (fa->lightmaptexturenum >= 0)
+			{
+				int smax = 0, tmax = 0;
+
+				if (rm_lm_size(fa->extents[0], fa->extents[1], &smax, &tmax))
+				{
+					v->lmrect[0] = (float)fa->light_s;
+					v->lmrect[1] = (float)fa->light_t;
+					v->lmrect[2] = (float)(fa->light_s + smax);
+					v->lmrect[3] = (float)(fa->light_t + tmax);
+				}
+			}
 		}
 
 		n = rm_world_fan(vat, lnumverts, w->indices + iat, size.indices - iat);

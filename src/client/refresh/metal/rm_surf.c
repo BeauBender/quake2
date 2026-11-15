@@ -405,6 +405,7 @@ R_FlushChain(rm_world_t *w, const image_t *image, int slice, unsigned long n, co
 	d.slice = slice;
 	d.env = rm_lm_env(obb, gl_lightmap->value != 0);
 	d.scale = obb ? (float)obb : 1.0f;
+	d.filter = metal_lightmap_filter->value != 0.0f;
 	rmb_draw_world_lm(w->vbuf, w->scratch, n, &d, mvp, vp, cull);
 }
 

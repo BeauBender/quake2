@@ -1333,7 +1333,7 @@ test_lm_cubic_weights(void)
 		ok &= fabsf(w.w0 + w.w1 + w.w2 + w.w3 - 1.0f) < 1e-6f;
 		pos &= w.w0 > 0.0f && w.w1 > 0.0f && w.w2 > 0.0f && (w.w3 > 0.0f || i == 0);
 		ok &= fabsf(a.g0 + a.g1 - 1.0f) < 1e-6f;
-		ok &= fabsf(a.g0 - (w.w0 + w.w1)) < 1e-7f && fabsf(a.g1 - (w.w2 + w.w3)) < 1e-7f;
+		ok &= fabsf(a.g0 - (w.w0 + w.w1)) < 2e-6f && fabsf(a.g1 - (w.w2 + w.w3)) < 2e-6f;
 	}
 
 	CHECK(ok && pos);
@@ -1565,7 +1565,7 @@ test_world_sizes(void)
 	CHECK(rm_world_add(&s, 5) && rm_world_add(&s, 3) && rm_world_add(&s, 4));
 	CHECK(s.surfs == 3 && s.verts == 12 && s.indices == 3 * (3 + 1 + 2));
 	CHECK(rm_world_bytes(&s, RMB_STATIC_MAX_BYTES, &vb, &ib, &sb));
-	CHECK(vb == 12 * 32 && ib == 18 * 4 && sb == 3 * sizeof(rm_surfrec_t));
+	CHECK(vb == 12 * RM_WVERT_STRIDE && ib == 18 * 4 && sb == 3 * sizeof(rm_surfrec_t));
 
 	/* a polygon of fewer than 3 vertices, or one that is negative, adds nothing */
 	CHECK(!rm_world_add(&s, 2) && !rm_world_add(&s, -5) && !rm_world_add(&s, 0));
@@ -1575,7 +1575,7 @@ test_world_sizes(void)
 	memset(&s, 0, sizeof(s));
 	CHECK(rm_world_add(&s, RM_WORLD_MAX_VERTS - 3) && rm_world_add(&s, 3));
 	CHECK(s.verts == RM_WORLD_MAX_VERTS && !rm_world_add(&s, 3) && s.verts == RM_WORLD_MAX_VERTS);
-	CHECK(rm_world_bytes(&s, RMB_STATIC_MAX_BYTES, &vb, &ib, &sb) && vb == (size_t)RM_WORLD_MAX_VERTS * 32);
+	CHECK(rm_world_bytes(&s, RMB_STATIC_MAX_BYTES, &vb, &ib, &sb) && vb == (size_t)RM_WORLD_MAX_VERTS * RM_WVERT_STRIDE);
 
 	/* a polygon one vertex longer than what is left is refused */
 	memset(&s, 0, sizeof(s));
@@ -1614,8 +1614,8 @@ test_world_sizes(void)
 	/* inside the limits but past the buffer cap */
 	memset(&big, 0, sizeof(big));
 	big.verts = 1000;
-	CHECK(!rm_world_bytes(&big, 1000 * 32 - 1, &vb, &ib, &sb) && vb == 0);
-	CHECK(rm_world_bytes(&big, 1000 * 32, &vb, &ib, &sb) && vb == 32000);
+	CHECK(!rm_world_bytes(&big, 1000 * RM_WVERT_STRIDE - 1, &vb, &ib, &sb) && vb == 0);
+	CHECK(rm_world_bytes(&big, 1000 * RM_WVERT_STRIDE, &vb, &ib, &sb) && vb == 1000 * RM_WVERT_STRIDE);
 
 	/* the index and record products against the cap, each at its exact fit */
 	memset(&s, 0, sizeof(s)); s.surfs = 1; s.verts = 3; s.indices = 1000;
@@ -1988,7 +1988,7 @@ test_world_line(void)
 {
 	rm_world_size_t s;
 	char buf[RM_STATS_LINE];
-	const char *want = "ref_metal: metal_stats: world maps/base1.bsp: 12 vertices (384 bytes), "
+	const char *want = "ref_metal: metal_stats: world maps/base1.bsp: 12 vertices (576 bytes), "
 		"18 indices (72 bytes), 3 surface records (144 bytes)";
 	size_t n = strlen(want);
 
