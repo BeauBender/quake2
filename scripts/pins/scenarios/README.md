@@ -20,6 +20,8 @@ derived from game data, so the files are committed (INFORM9).
 | `world-lmcubic` | `world` with `metal_lightmap_filter 1`: the cubic lightmap filter of `ref_metal`; other renderers ignore the cvar (TASK120) |
 | `rt-shadows` | `dlights` with `r_rt_shadows 1`: the dynamic lights added in `ref_metal`'s resolve, each with a ray-traced shadow; other renderers ignore the cvar; no temporal accumulation exists yet and the pass draws no noise, so the frames are stateless; recorded with `PINS_SEED`, as `dlights`, and judged against `ref_metal` itself once the owner accepts the look (TASK55) |
 | `rt-shadows-entities` | `rt-shadows` with `cl_entities 1`: the brush entities, which gl1 lights in their model's space with the light's world origin, and the alias models, which the pass never lights, in the double-count check; recorded with `PINS_SEED`, as `dlights` (TASK55) |
+| `rt-ao` | `world` with `r_rt_ao 1`: the world's lightmap term darkened by `ref_metal`'s ray-traced ambient occlusion, two hemisphere rays a pixel; other renderers ignore the cvars; no temporal accumulation exists yet and the noise is fixed (`r_rt_ao_seed 1`), so the frames are stateless; judged against `ref_metal` itself once the owner accepts the look (TASK57) |
+| `rt-ao-entities` | `rt-ao` with `cl_entities 1`: the brush entities and the alias models, which the rays meet and the pass never darkens; recorded with `PINS_SEED`, as `models` (TASK57) |
 | `dlights-lmcubic` | `dlights` with `metal_lightmap_filter 1`; not deterministic unseeded, recorded with `PINS_SEED` (TASK120) |
 | `hud2d-sharp` | `hud2d` with `metal_2d_sharp 1`: the sharp-bilinear sample of the 2D pictures of `ref_metal`; other renderers ignore the cvar (TASK119). At the harness's default 640x480 the 2D scale is 1, so it draws exactly `hud2d`; it tests the switch only at another size: `PINS_WIDTH=2560 PINS_HEIGHT=1440 scripts/pins.sh record metal hud2d-sharp`, judged against `hud2d` at that size, from which it must differ |
 | `hud2d-scale8` | `hud2d` with `r_scale8bittextures 1`; the HUD pictures are in the scrap, which is smoothed but not scaled (TASK119) |
@@ -132,6 +134,8 @@ companion when a card judges them. For `hud2d*` and `cinematic`, which draw no
 | `cinematic` | cinematic | `models` |
 | `rt-shadows` | world,dynamic-lights | `rt-shadows-entities` |
 | `rt-shadows-entities` | world,entities,alias-models,dynamic-lights | `-` |
+| `rt-ao` | world | `rt-ao-entities` |
+| `rt-ao-entities` | world,entities,alias-models | `-` |
 
 TASK55 adds `rt-shadows` (tags `world`, `dynamic-lights`; companion
 `rt-shadows-entities`) and `rt-shadows-entities` (tags `world`, `entities`,

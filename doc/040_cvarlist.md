@@ -852,7 +852,7 @@ marked `(n/a)` and skipped.
   with the configuration; applies from the next frame.
 
 The `r_rt_*` cvars belong to the Metal renderer's ray tracing, which is
-being built: `r_rt_shadows` is its first effect; with `r_rt_stats` set, the renderer
+being built: `r_rt_shadows` is its first effect and `r_rt_ao` its second; with `r_rt_stats` set, the renderer
 builds acceleration structures for the world, the doors and platforms
 and every model the frame lists (not only those in view, since a model
 out of view can still cast into it), which nothing reads. On a GPU without ray
@@ -860,6 +860,58 @@ tracing they do nothing (the renderer says so once). The development
 switches `r_rt_gbuffer` and `r_rt_motion` and the settings beside them
 choose how a view is drawn, on any Metal GPU, and leave the picture as it
 is.
+
+* **r_rt_ao**: When set to `1`, the Metal renderer darkens the world's
+  creases and corners with ray-traced ambient occlusion: from each pixel
+  of the world two rays look for nearby surfaces in the half-space in
+  front of it, and the nearer what they meet, the less of the lightmap's
+  light the pixel keeps, never less than `r_rt_ao_min` of it. Only the
+  lightmap's light is darkened; the dynamic lights' added by
+  `r_rt_shadows` are not (with `r_rt_shadows 0` the dynamic lights are
+  part of the lightmap and are darkened with it), and models, water and
+  the sky are drawn as before. The rays meet the world, the doors and
+  platforms and the models, but not the view weapon or the player's own
+  model; the sky is open, and water and translucent surfaces let them
+  through. The rays' directions follow a blue-noise pattern that changes
+  every frame, so without the accumulation over frames a later version
+  adds the darkening is grainy. Needs a GPU with ray tracing and draws the
+  view through the G-buffer (see `r_rt_gbuffer`); with `r_fullbright 1`
+  there is no lightmap and it does nothing. With `0` (the default) nothing
+  is traced or allocated and the picture is as without ray tracing. Saved
+  with the configuration; applies from the next frame.
+
+* **r_rt_ao_min**: The least of its lightmap's light a pixel keeps under
+  `r_rt_ao`, from `0` to `1`: `0.4` (the default) keeps at least 40 % of
+  it, `1` turns the darkening off. A value outside the range counts as
+  the nearest end, one that is not a finite number as `0.4`. Saved with
+  the configuration; applies from the next frame.
+
+* **r_rt_ao_range**: How far, in world units, the rays of `r_rt_ao` look
+  for surfaces (`128` by default, about the height of two players): a
+  surface farther away does not darken the pixel, a nearer one darkens it
+  more the nearer it is. A value below `1` counts as `1`, one above `8192`
+  as `8192`, one that is not a finite number as `128`. Saved with the
+  configuration; applies from the next frame.
+
+* **r_rt_ao_seed**: A development setting of the Metal renderer's
+  `r_rt_ao`: with `0` (the default) the rays' blue-noise pattern moves on
+  every frame; with a whole number from `1` to `65535` it is fixed at that
+  step, the same on every frame, so that two runs draw the same frames
+  (the pin scenarios set it). A fraction is cut to the whole number below
+  it, a value above `65535` counts as `65535`, and one below `1` or not a
+  finite number as `0`. Applies from the next frame.
+
+* **r_rt_ao_show**: A development view of the Metal renderer's
+  `r_rt_ao`: with it on, `1` replaces the 3D view by the share of its
+  lightmap's light each world pixel keeps, as a grey (white keeps all of
+  it, black is drawn where the view shows no world), `2` by the pass's
+  classes: white not darkened, blue darkened, red darkened to
+  `r_rt_ao_min`, black not a world pixel. The view weapon, models drawn
+  over the world, particles and translucent surfaces are left out of
+  these views. `0` (the default) shows the picture; a value above `2`
+  counts as `2`, one that is not a finite number as `0`, and a fraction is
+  cut to the whole number below it. Cheat-protected: reset to `0` in
+  multiplayer. Applies from the next frame.
 
 * **r_rt_gbuffer**: A development switch of the Metal renderer. When
   set to anything but `0`, a view with the world is drawn through the
@@ -969,7 +1021,11 @@ is.
   model, sprites, the view weapon, shells, models it cannot build) and the
   bytes held, and with `r_rt_shadows` on a line for the shadow pass: the
   pixels it ran on, those with a dynamic light in range, those that traced
-  a ray and those shadowed, the rays and the pass's GPU time. Nothing is
+  a ray and those shadowed, the rays and the pass's GPU time; with
+  `r_rt_ao` on a line for the occlusion pass: the pixels it ran on, the
+  world pixels that traced, those darkened and those darkened to
+  `r_rt_ao_min`, the pixels facing up (floors) and of them those darkened,
+  the rays, those that met a surface and the pass's GPU time. Nothing is
   drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next
