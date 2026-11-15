@@ -38,6 +38,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "header/rmb.h"
@@ -481,6 +482,20 @@ rmb_read(unsigned char *bgra, size_t len)
 	return 1;
 }
 
+/* MTL_GPU_TIME is set (rmb_device.m's rmb_watch prints the GPU time of each command buffer) */
+static int
+rmb_frame_timing(void)
+{
+	static int timing = -1;
+
+	if (timing < 0)
+	{
+		timing = getenv("MTL_GPU_TIME") != NULL;
+	}
+
+	return timing;
+}
+
 void
 rmb_frame_end(void)
 {
@@ -511,6 +526,21 @@ rmb_frame_end(void)
 		}
 
 		rmb_end_encoder();
+
+		/*
+		 * MTL_GPU_TIME (a measuring aid, TASK54): the frame's drawing is
+		 * committed on its own, named, before the copy to the drawable, so
+		 * its GPU time leaves out the wait for a drawable the display holds
+		 */
+		if (rmb_frame_timing())
+		{
+			frame_cmd.label = @"ref_metal frame";
+			rmb_upload_flush();
+			rmb_watch(frame_cmd);
+			[frame_cmd commit];
+			frame_cmd = [rmb_queue commandBuffer];
+		}
+
 		drawable = [rmb_layer nextDrawable];
 
 		if (drawable)
@@ -553,7 +583,6 @@ rmb_frame_end(void)
 		}
 
 		rmb_upload_flush();     /* committed ahead of the frame that reads it */
-		frame_cmd.label = @"ref_metal frame";   /* MTL_GPU_TIME's frame line (rmb_watch) */
 		rmb_watch(frame_cmd);   /* first: it counts before the slot is given back */
 		[frame_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 			(void)b;
