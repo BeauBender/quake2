@@ -38,16 +38,32 @@
 qboolean
 GLimp_HighDPIWanted(float highdpiaware, const char *driver)
 {
-	(void)highdpiaware;
-	(void)driver;
-	return false; /* WIP: not written yet */
+	if ((highdpiaware == 0) || !driver)
+	{
+		return false;
+	}
+
+	return (strcmp(driver, "wayland") == 0) || (strcmp(driver, "cocoa") == 0) ||
+		(strcmp(driver, "uikit") == 0);
 }
 
+/*
+ * True when the client takes the renderer's drawable size, the window's
+ * pixels, for viddef; false when it takes the mode's size. A window made
+ * without the flag has its size in points, and the drawable SDL reports
+ * for it may be too small (window decorations), so the mode's size is
+ * used. A fullscreen window (vid_fullscreen 2) fills the screen, so its
+ * pixels are taken only when the native size was asked for (r_mode -2);
+ * any other mode keeps its own size there. The renderers decide the same
+ * way in their own SetMode code.
+ */
 qboolean
 GLimp_DrawableInPixels(qboolean highdpi, int fullscreen, float r_mode)
 {
-	(void)highdpi;
-	(void)fullscreen;
-	(void)r_mode;
-	return false; /* WIP: not written yet */
+	if (!highdpi)
+	{
+		return false;
+	}
+
+	return (fullscreen != 2) || (r_mode == -2);
 }
