@@ -27,6 +27,7 @@
 
 #include "header/client.h"
 #include "input/header/input.h"
+#include "header/cinsize.h"
 
 extern cvar_t *vid_renderer;
 
@@ -608,6 +609,8 @@ SCR_LoadHiColor(const char* namewe, const char *ext, int *width, int *height,
 {
 	byte *pic, *data = NULL, *palette_in = NULL;
 	char filename[256];
+	size_t bytes;
+	int verdict;
 
 	Q_strlcpy(filename, namewe, sizeof(filename));
 	Q_strlcat(filename, ".", sizeof(filename));
@@ -628,8 +631,37 @@ SCR_LoadHiColor(const char* namewe, const char *ext, int *width, int *height,
 		free(palette_in);
 	}
 
-	pic = Z_Malloc(cin.height * cin.width * (*bitsPerPixel) / 8);
-	memcpy(pic, data, cin.height * cin.width * (*bitsPerPixel) / 8);
+	/* the decoder admits 8192x8192, whose 32 bit size does not fit an int.
+	   Refuse what is above the decoder's bound; a failure below it is the
+	   zone allocator's fatal error, as for any other allocation. */
+	verdict = SCR_StillCheck(*width, *height, *bitsPerPixel, &bytes);
+
+	if (verdict != SCR_STILL_OK)
+	{
+		if (verdict == SCR_STILL_TOOLARGE)
+		{
+			Com_Printf("%s: %s is %dx%d at %d bits, too large to play as a still.\n",
+				__func__, filename, *width, *height, *bitsPerPixel);
+		}
+		else
+		{
+			Com_Printf("%s: %s is %dx%d at %d bits, not a usable still.\n",
+				__func__, filename, *width, *height, *bitsPerPixel);
+		}
+
+		free(data);
+
+		if (*palette)
+		{
+			Z_Free(*palette);
+			*palette = NULL;
+		}
+
+		return NULL;
+	}
+
+	pic = Z_Malloc(bytes);
+	memcpy(pic, data, bytes);
 	free(data);
 
 	return pic;
