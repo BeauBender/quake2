@@ -104,9 +104,10 @@ typedef struct
  * whole pixels) at scale (rm_fx_scale's): each side of the input the
  * output's times scale, rounded, at least 1 and at most the output's; a
  * scale that is not finite or not above 0 counts as 1. 0, with *s zeroed,
- * for a rectangle that is not finite, below 1 or above RM_GB_MAX_SIDE a
- * side, or that starts below 0.
+ * for a rectangle that is not finite, below 1 or above RM_FX_MAX_SIDE a
+ * side, or that starts below 0 or past RM_FX_MAX_SIDE.
  */
+#define RM_FX_MAX_SIDE 16384   /* the G-buffer's largest side (rm_gbuf.c) */
 int rm_fx_sizes(const rm_viewport_t *out, float scale, rm_fx_size_t *s);
 
 /* the viewport the view is drawn with at the input size: (0, 0, iw, ih), the depth range of out */

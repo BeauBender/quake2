@@ -65,6 +65,7 @@ typedef enum
 	RM_OBJ_BUFFER,
 	RM_OBJ_STATE,       /* the shader library, pipeline states, depth-stencil states, samplers (N10) */
 	RM_OBJ_RT,          /* ray tracing: acceleration structures, their buffers, the lerp pipeline (RT1, TASK53) */
+	RM_OBJ_FX,          /* MetalFX: the scalers and their output targets (TASK111) */
 	RM_OBJ_KINDS
 } rm_obj_kind_t;
 
