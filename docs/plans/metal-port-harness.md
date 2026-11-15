@@ -3660,3 +3660,13 @@ against `particles` at 2560x1440 (`--threshold 0.005 --bad-threshold 0.001`): 19
 23 frames identical, 4 differ (frames 5, 8, 12 and 16: worst score 0.000841, bad
 0.007824); the owner does not gate the look. The records have one validation line,
 `Metal API Validation Enabled`, and no message.
+
+**Mutants** of `rm_particle_cap` (17 run, each operand of the compound guard and
+each arithmetic and bound operator): 15 killed outright (the mode test inverted or
+disarmed, the height test in three spellings or dropped, the finite test dropped or
+inverted, `480` as 481 or a product, the product as a sum or a square, the upper
+bound dropped, each return replaced by `max`), 2 equivalent (`cap >` for `!(cap <`,
+and `!(cap <=` for `!(cap <`: they differ only where `cap` is exactly
+`RM_POINT_ALIASED_MAX`, where both branches give that value). One form of the mode
+test the compiler refused for an unused operand was re-run in a form that compiles
+and is killed.
