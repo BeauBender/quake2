@@ -75,6 +75,7 @@ scenario plays `PINS_DEMO`, so all of them follow the same camera path.
 | `dlights` | `world` with `cl_lights 1`: the dynamic lights on the world's lightmaps (with `gl1_flashblend 1`, the flash blobs instead) |
 | `world-lmcubic` | `world` with `metal_lightmap_filter 1`: the cubic lightmap filter of the Metal renderer (the others draw it as `world`) |
 | `dlights-lmcubic` | `dlights` with `metal_lightmap_filter 1`; recorded with `PINS_SEED` like `dlights` |
+| `particles-cap` | `particles` with `metal_particle_cap 1`: the particle size limit of the Metal renderer scaled by `height / 480` (the others draw it as `particles`); recorded with `PINS_SEED` like `particles` |
 | `models` | the world plus entities: models, sprites, beams, the view weapon |
 | `particles` | everything, including particles, dynamic lights and the screen blend |
 | `hud2d` | 2D only: status bar, crosshair, console text; the OpenGL renderers draw no screen blend there (`gl_polyblend 0`), the software renderer still darkens the screen on a pickup |

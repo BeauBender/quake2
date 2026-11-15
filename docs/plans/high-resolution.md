@@ -289,10 +289,13 @@ Three drawables can hold 25 ms of frames at 120 Hz. One card, about 500
 lines. After FIX53 (#250) and TASK107 (#251). Priority 12: needs a 120 Hz
 Mac to judge.
 
-### P13. Particle size cap relative to the resolution (filed)
+### P13. Particle size cap relative to the resolution (TASK122, built)
 
 With `metal_particle_cap 1`: near particles keep their 480-line
-proportions (the 40-pixel cap scaled by `height / 480`). Where:
+proportions (the 40-pixel cap scaled by `height / 480`). Built: the cvar
+`metal_particle_cap` (0 gl1's cap, the default; 1 scaled), no menu item;
+the size is `rm_particle_cap` in `rm_pure.c`, held by the host test, and
+the scenario `particles-cap` sets it. Where:
 [`rm_effects.c`](../../src/client/refresh/metal/rm_effects.c). One card,
 about 150 lines. After N9 (TASK92). Priority 13: small and correct.
 

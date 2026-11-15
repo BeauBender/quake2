@@ -85,6 +85,7 @@ cvar_t *gl1_particle_att_a;
 cvar_t *gl1_particle_att_b;
 cvar_t *gl1_particle_att_c;
 cvar_t *gl1_particle_square;
+cvar_t *metal_particle_cap;
 cvar_t *gl1_pointparameters;
 
 unsigned long rm_noop_calls;
@@ -154,6 +155,7 @@ R_Register(void)
 	gl1_particle_att_b = ri.Cvar_Get("gl1_particle_att_b", "0.0", CVAR_ARCHIVE);
 	gl1_particle_att_c = ri.Cvar_Get("gl1_particle_att_c", "0.01", CVAR_ARCHIVE);
 	gl1_particle_square = ri.Cvar_Get("gl1_particle_square", "0", CVAR_ARCHIVE);
+	metal_particle_cap = ri.Cvar_Get("metal_particle_cap", "0", CVAR_ARCHIVE);
 	gl1_pointparameters = ri.Cvar_Get("gl1_pointparameters", "1", CVAR_ARCHIVE);
 
 	ri.Cmd_AddCommand("screenshot", R_ScreenShot);

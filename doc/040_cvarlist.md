@@ -725,6 +725,20 @@ has) is not drawn.
   `0`. Other renderers do not have it. Saved with the
   configuration; applies from the next frame.
 
+* **metal_particle_cap**: How the Metal renderer limits the size of a
+  particle point (`gl1_particle_max_size`, 40 pixels by default). `0`
+  (the default) is the limit every renderer uses, and draws what it drew
+  before this cvar existed. `1` scales the limit with the height of the
+  3D view (the window's height when the view fills it) like `gl1_particle_size` is scaled, by `height / 480`, so particles
+  close to the camera keep the proportions they have at a height of 480
+  (at 1440 lines the limit is 120 pixels, at 2880 lines 240). At a height
+  of 480 both values are the same. The size is still never above what
+  the point style allows (256 pixels for smooth points, 8191 for
+  squares). Without point parameters (`gl1_pointparameters 0`) particles
+  are triangles and have no limit. Only `1` and `0` are
+  values: any other value is `0`. Other renderers do not have it. Saved with the
+  configuration; applies from the next frame.
+
 
 ## Gamepad
 
