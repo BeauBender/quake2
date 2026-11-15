@@ -40,6 +40,7 @@
 
 #include "header/local.h"
 #include "header/rm_gbufscene.h"
+#include "header/rm_rtscene.h"
 #include "common/mtl_matrix.h"
 #include "common/mtl_shader_math.h"
 #include "common/mtl_gbuf_math.h"
@@ -90,8 +91,8 @@ RM_GB_Choose(const refdef_t *fd)
 		return RM_GB_PATH_FORWARD;
 	}
 
-	/* no ray-traced effect exists before RT3: none is on */
-	return rm_gb_path(0, r_rt_gbuffer->value, r_rt_motion->value, (fd->rdflags & RDF_NOWORLDMODEL) != 0);
+	/* a ray-traced effect on (RT3's shadows, RM_RTS_Frame) takes the G-buffer */
+	return rm_gb_path(RM_RTS_Active(), r_rt_gbuffer->value, r_rt_motion->value, (fd->rdflags & RDF_NOWORLDMODEL) != 0);
 }
 
 static void

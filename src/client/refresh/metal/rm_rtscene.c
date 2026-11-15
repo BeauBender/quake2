@@ -47,6 +47,7 @@ static int rt_device;           /* rmb_caps_t.raytracing */
 static int rt_opened;           /* rmb_rt_open succeeded */
 static int rt_told;             /* the no-ray-tracing line was printed */
 static int rt_refused;          /* rmb_rt_open failed in this context: not tried again */
+static int rt_scene_ready;      /* this frame's instance structure was built (RT3 traces it) */
 
 /* the map the structures were built from (or refused for: rt_map_ok 0) */
 static const model_t *rt_world_mod;
@@ -82,6 +83,8 @@ RM_RT_Init(const rmb_caps_t *caps)
 	rt_map_ok = 0;
 	memset(rt_amodels, 0, sizeof(rt_amodels));
 	rt_ntimes = rt_frames = rt_busy_aliases = rt_busy_tris = 0;
+	rt_scene_ready = 0;
+	RM_RTS_Init(caps);   /* r_rt_shadows (RT3, TASK55) */
 }
 
 /* the summary of the frames since the map's structures were built, when there were any; the counts start again */
@@ -110,6 +113,7 @@ static void
 RM_RT_FreeAll(void)
 {
 	RM_RT_Summary();
+	RM_RTS_Shutdown();   /* the shadows' objects first: they use the structures */
 
 	if (rt_opened)
 	{
@@ -117,6 +121,7 @@ RM_RT_FreeAll(void)
 	}
 
 	rt_opened = 0;
+	rt_scene_ready = 0;
 	rt_world_mod = NULL;
 	rt_world = NULL;
 	rt_map_ok = 0;
@@ -181,7 +186,13 @@ RM_RT_ModelFree(const model_t *mod)
 static int
 RM_RT_Wanted(void)
 {
-	return r_rt_stats && rm_rt_wanted(r_rt_stats->value, rt_device);
+	return (r_rt_stats && rm_rt_wanted(r_rt_stats->value, rt_device)) || RM_RTS_Wanted();
+}
+
+int
+RM_RT_SceneReady(void)
+{
+	return rt_scene_ready;
 }
 
 static int
@@ -289,6 +300,7 @@ RM_RT_BuildMap(void)
 
 	free(mat);
 	rt_map_ok = 1;
+	RM_RTS_MapBuilt(w->recs, (long)w->size.surfs, w->size.indices);   /* the shadow rays' transmission (RT3) */
 	rt_ntimes = rt_frames = rt_busy_aliases = rt_busy_tris = 0;
 
 	{
@@ -395,6 +407,8 @@ RM_RT_Frame(const refdef_t *fd)
 	double ta[RMB_FRAMES_IN_FLIGHT], ti[RMB_FRAMES_IN_FLIGHT];
 	int i, n, ne, nl = 0, k, gun;
 
+	rt_scene_ready = 0;
+
 	/* the device check (and the off state): nothing below runs without ray tracing or with every setting at its default */
 	if (!RM_RT_Wanted())
 	{
@@ -491,6 +505,8 @@ RM_RT_Frame(const refdef_t *fd)
 	{
 		return;
 	}
+
+	rt_scene_ready = 1;
 
 	k = rmb_rt_times(ta, ti, RMB_FRAMES_IN_FLIGHT);
 

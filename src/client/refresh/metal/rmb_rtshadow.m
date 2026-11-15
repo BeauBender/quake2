@@ -1,0 +1,420 @@
+/*
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or (at
+ * your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ *
+ * See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+ * 02111-1307, USA.
+ *
+ * =======================================================================
+ *
+ * The Metal back end of ref_metal's ray-traced dynamic-light shadows (RT3,
+ * TASK55; header/rm_rtshadow.h): the kernel's and the resolve's
+ * pipelines, the kernel's output (an RG32Uint at the render size), the
+ * dispatch between the G-buffer raster and the resolve on the frame's
+ * command buffer (rmb_gbuf_resolve calls rmb_rts_trace and
+ * rmb_rts_resolve), and per frame slot the GPU counts and the pass's
+ * timestamps, read once the frame completed. Nothing here is made before
+ * the effect is first on (rmb_rts_open); every object is counted in the
+ * ledger as RM_OBJ_RT.
+ *
+ * =======================================================================
+ */
+
+#import <Metal/Metal.h>
+
+#include <stdatomic.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "header/rm_gbuf.h"
+#include "header/rm_rt.h"
+#include "header/rm_rtshadow.h"
+
+#if !__has_feature(objc_arc)
+#error "rmb_rtshadow.m is written for ARC: compile it with -fobjc-arc"
+#endif
+
+/* rmb_device.m */
+extern id<MTLDevice> rmb_device;
+extern rm_ledger_t rmb_ledger;
+extern rmb_stats_t rmb_counts;
+
+/* rmb_resource.m */
+id<MTLLibrary> rmb_library(void);
+
+/* rmb_encode.m */
+id<MTLCommandBuffer> rmb_frame_compute(unsigned long *frame);
+
+#define RMB_RTS_GROUP 8         /* the kernel's threadgroup side */
+#define RMB_RTS_COUNTS 4        /* in range, traced, shadowed, rays */
+
+_Static_assert(sizeof(rm_rts_light_t) == 32, "a light is rm_rtshadow.metal's 32 bytes");
+_Static_assert(sizeof(rm_rts_view_t) == 112, "the view is rm_rtshadow.metal's 112 bytes");
+
+static int rts_open;
+static id<MTLComputePipelineState> trace_pipe;
+static id<MTLRenderPipelineState> resolve_pipe;
+static id<MTLTexture> t_out;
+static id<MTLBuffer> counts;            /* RMB_FRAMES_IN_FLIGHT slots of RMB_RTS_COUNTS */
+static id<MTLCounterSampleBuffer> samples;
+
+static atomic_int slot_done[RMB_FRAMES_IN_FLIGHT];
+static int slot_pending[RMB_FRAMES_IN_FLIGHT];
+static int slot_timed[RMB_FRAMES_IN_FLIGHT];
+static unsigned long slot_frame[RMB_FRAMES_IN_FLIGHT], slot_pixels[RMB_FRAMES_IN_FLIGHT];
+static rm_rts_stats_t done[RMB_FRAMES_IN_FLIGHT];
+static int ndone;
+
+/* the view the next G-buffer view traces with, and whether this one traced */
+static rm_rts_view_t view;
+static rm_rts_light_t lights[MTL_RTS_MAX_LIGHTS];
+static int view_set, traced;
+
+/* Sets a strong slot to obj (nil releases it), counting both in the ledger as RM_OBJ_RT. */
+#define RMB_RTS_SET(slot, obj) \
+	do \
+	{ \
+		if (slot) \
+		{ \
+			rm_ledger_destroy(&rmb_ledger, RM_OBJ_RT); \
+		} \
+		(slot) = (obj); \
+		if (slot) \
+		{ \
+			rm_ledger_create(&rmb_ledger, RM_OBJ_RT); \
+		} \
+	} while (0)
+
+int
+rmb_rts_open(char *err, size_t errlen)
+{
+	if (rts_open)
+	{
+		return 1;
+	}
+
+	if (!rmb_device || !rmb_device.supportsRaytracing || !rmb_library())
+	{
+		snprintf(err, errlen, "%s", !rmb_device ? "no Metal device" :
+				!rmb_library() ? "no shader library" : "the device has no ray tracing");
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		NSError *e = nil;
+		id<MTLFunction> k = [rmb_library() newFunctionWithName:@"rm_rts_trace"];
+		MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+		id<MTLCounterSet> ts = nil;
+
+		d.vertexFunction = [rmb_library() newFunctionWithName:@"rm_vertex_fullscreen"];
+		d.fragmentFunction = [rmb_library() newFunctionWithName:@"rm_fragment_resolve_rts"];
+		d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+
+		if (!k || !d.vertexFunction || !d.fragmentFunction)
+		{
+			snprintf(err, errlen, "the shader library has no rm_rts_trace or rm_fragment_resolve_rts");
+			return 0;
+		}
+
+		RMB_RTS_SET(trace_pipe, [rmb_device newComputePipelineStateWithFunction:k error:&e]);
+		RMB_RTS_SET(resolve_pipe, trace_pipe ? [rmb_device newRenderPipelineStateWithDescriptor:d error:&e] : nil);
+		RMB_RTS_SET(counts, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * RMB_RTS_COUNTS * sizeof(uint32_t)
+				options:MTLResourceStorageModeShared]);
+
+		if (!trace_pipe || !resolve_pipe || !counts)
+		{
+			snprintf(err, errlen, "cannot build the shadow pipelines%s%s", e ? ": " : "",
+					e ? e.localizedDescription.UTF8String : "");
+			rmb_rts_close();
+			return 0;
+		}
+
+		/* the pass's GPU time, where the device samples timestamps at the encoders' boundaries */
+		for (id<MTLCounterSet> cs in rmb_device.counterSets)
+		{
+			if ([cs.name isEqualToString:MTLCommonCounterSetTimestamp])
+			{
+				ts = cs;
+			}
+		}
+
+		if (ts && [rmb_device supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary])
+		{
+			MTLCounterSampleBufferDescriptor *sd = [MTLCounterSampleBufferDescriptor new];
+
+			sd.counterSet = ts;
+			sd.storageMode = MTLStorageModeShared;
+			sd.sampleCount = RMB_FRAMES_IN_FLIGHT * 2;
+			RMB_RTS_SET(samples, [rmb_device newCounterSampleBufferWithDescriptor:sd error:&e]);
+		}
+	}
+
+	for (int i = 0; i < RMB_FRAMES_IN_FLIGHT; i++)
+	{
+		atomic_store(&slot_done[i], 0);
+		slot_pending[i] = 0;
+	}
+
+	ndone = 0;
+	view_set = traced = 0;
+	rts_open = 1;
+	return 1;
+}
+
+/* The frames still in flight keep what they use: a command buffer retains its resources. */
+void
+rmb_rts_close(void)
+{
+	@autoreleasepool
+	{
+		RMB_RTS_SET(trace_pipe, nil);
+		RMB_RTS_SET(resolve_pipe, nil);
+		RMB_RTS_SET(t_out, nil);
+		RMB_RTS_SET(counts, nil);
+		RMB_RTS_SET(samples, nil);
+	}
+
+	rts_open = 0;
+	view_set = traced = 0;
+	ndone = 0;
+}
+
+void
+rmb_rts_set_view(const rm_rts_view_t *v, const rm_rts_light_t *l, int n)
+{
+	view_set = 0;
+
+	if (!rts_open || !v || !l || (n <= 0))
+	{
+		return;
+	}
+
+	if (n > MTL_RTS_MAX_LIGHTS)
+	{
+		n = MTL_RTS_MAX_LIGHTS;
+	}
+
+	view = *v;
+	view.nlights = (unsigned)n;
+	memcpy(lights, l, (size_t)n * sizeof(lights[0]));
+	view_set = 1;
+}
+
+/* the counts and times of the slots whose frames completed since the last read */
+static void
+rmb_rts_read(void)
+{
+	int k;
+
+	for (k = 0; k < RMB_FRAMES_IN_FLIGHT; k++)
+	{
+		const uint32_t *c;
+		rm_rts_stats_t *s;
+
+		if (!slot_pending[k] || !atomic_load(&slot_done[k]))
+		{
+			continue;
+		}
+
+		slot_pending[k] = 0;
+
+		if (ndone >= RMB_FRAMES_IN_FLIGHT)
+		{
+			continue;
+		}
+
+		c = (const uint32_t *)counts.contents + k * RMB_RTS_COUNTS;
+		s = &done[ndone++];
+		memset(s, 0, sizeof(*s));
+		s->frame = slot_frame[k];
+		s->pixels = slot_pixels[k];
+		s->inrange = c[0];
+		s->traced = c[1];
+		s->shadowed = c[2];
+		s->rays = c[3];
+		s->ms = -1;
+
+		if (slot_timed[k] && samples)
+		{
+			NSData *d = [samples resolveCounterRange:NSMakeRange((NSUInteger)k * 2, 2)];
+			const MTLCounterResultTimestamp *t = d ? (const MTLCounterResultTimestamp *)d.bytes : NULL;
+
+			if (t && (d.length >= 2 * sizeof(*t)) && (t[0].timestamp != MTLCounterErrorValue) &&
+				(t[1].timestamp != MTLCounterErrorValue) && (t[1].timestamp >= t[0].timestamp))
+			{
+				s->ms = rmb_rt_gpu_ms(t[1].timestamp - t[0].timestamp);
+			}
+		}
+	}
+}
+
+int
+rmb_rts_stats(rm_rts_stats_t *s, int cap)
+{
+	int i, n;
+
+	if (!rts_open)
+	{
+		return 0;
+	}
+
+	rmb_rts_read();
+	n = (ndone < cap) ? ndone : cap;
+
+	for (i = 0; i < n; i++)
+	{
+		s[i] = done[i];
+	}
+
+	ndone = 0;
+	return n;
+}
+
+int
+rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> material)
+{
+	unsigned long fno = 0;
+	id<MTLCommandBuffer> cmd;
+	id<MTLComputeCommandEncoder> ce;
+	const NSUInteger w = depth.width, h = depth.height;
+	int slot, timed;
+
+	traced = 0;
+
+	if (!rts_open || !view_set || !depth || !normal || !material)
+	{
+		return 0;
+	}
+
+	view_set = 0;
+	rmb_rts_read();
+
+	@autoreleasepool
+	{
+		/* the output at the render size, made again when it changes */
+		if (!t_out || (t_out.width != w) || (t_out.height != h))
+		{
+			MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRG32Uint
+					width:w height:h mipmapped:NO];
+
+			d.storageMode = MTLStorageModePrivate;
+			d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+			RMB_RTS_SET(t_out, [rmb_device newTextureWithDescriptor:d]);
+
+			if (!t_out)
+			{
+				return 0;
+			}
+
+			fprintf(stderr, "ref_metal: rt shadows %lux%lu: %lu bytes allocated\n", (unsigned long)w,
+					(unsigned long)h, (unsigned long)t_out.allocatedSize);
+		}
+
+		/* ends the raster: the kernel reads what it wrote */
+		cmd = rmb_frame_compute(&fno);
+
+		if (!cmd)
+		{
+			return 0;
+		}
+
+		slot = (int)(fno % RMB_FRAMES_IN_FLIGHT);
+		timed = (samples != nil);
+
+		/* a slot still in flight is not counted again: its counts would race */
+		if (slot_pending[slot] && !atomic_load(&slot_done[slot]))
+		{
+			return 0;
+		}
+
+		memset((uint32_t *)counts.contents + slot * RMB_RTS_COUNTS, 0, RMB_RTS_COUNTS * sizeof(uint32_t));
+
+		if (timed)
+		{
+			MTLComputePassDescriptor *cp = [MTLComputePassDescriptor computePassDescriptor];
+
+			cp.sampleBufferAttachments[0].sampleBuffer = samples;
+			cp.sampleBufferAttachments[0].startOfEncoderSampleIndex = (NSUInteger)slot * 2;
+			cp.sampleBufferAttachments[0].endOfEncoderSampleIndex = (NSUInteger)slot * 2 + 1;
+			ce = [cmd computeCommandEncoderWithDescriptor:cp];
+		}
+		else
+		{
+			ce = [cmd computeCommandEncoder];
+		}
+
+		if (!ce)
+		{
+			return 0;
+		}
+
+		[ce setComputePipelineState:trace_pipe];
+
+		if (!rmb_rt_bind_scene(ce, fno, 2, 3, 4, 5))
+		{
+			[ce endEncoding];
+			return 0;
+		}
+
+		[ce setTexture:depth atIndex:0];
+		[ce setTexture:normal atIndex:1];
+		[ce setTexture:material atIndex:2];
+		[ce setTexture:t_out atIndex:3];
+		[ce setBytes:&view length:sizeof(view) atIndex:0];
+		[ce setBytes:lights length:sizeof(lights) atIndex:1];
+		[ce setBuffer:counts offset:(NSUInteger)slot * RMB_RTS_COUNTS * sizeof(uint32_t) atIndex:6];
+		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTS_GROUP, RMB_RTS_GROUP, 1)];
+		[ce endEncoding];
+
+		atomic_store(&slot_done[slot], 0);
+		slot_pending[slot] = 1;
+		slot_timed[slot] = timed;
+		slot_frame[slot] = fno;
+		slot_pixels[slot] = (unsigned long)(w * h);
+		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
+			(void)b;
+			atomic_store(&slot_done[slot], 1);
+		}];
+	}
+
+	traced = 1;
+	return 1;
+}
+
+int
+rmb_rts_resolve(id<MTLRenderCommandEncoder> enc, const void *resolve, size_t resolve_len,
+		id<MTLTexture> albedo, id<MTLTexture> light, id<MTLTexture> material, id<MTLTexture> depth,
+		id<MTLTexture> normal)
+{
+	if (!traced || !rts_open || !enc || !t_out)
+	{
+		traced = 0;
+		return 0;
+	}
+
+	traced = 0;
+	[enc setRenderPipelineState:resolve_pipe];
+	[enc setFragmentBytes:resolve length:resolve_len atIndex:0];
+	[enc setFragmentBytes:&view length:sizeof(view) atIndex:1];
+	[enc setFragmentBytes:lights length:sizeof(lights) atIndex:2];
+	[enc setFragmentTexture:albedo atIndex:0];
+	[enc setFragmentTexture:light atIndex:1];
+	[enc setFragmentTexture:material atIndex:2];
+	[enc setFragmentTexture:depth atIndex:3];
+	[enc setFragmentTexture:normal atIndex:4];
+	[enc setFragmentTexture:t_out atIndex:5];
+	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+	rmb_counts.draws++;
+	return 1;
+}

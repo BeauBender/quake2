@@ -39,6 +39,7 @@
 
 #include "header/rmb.h"
 #include "header/rm_gbuf.h"
+#include "header/rm_rtshadow.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_gbuf.m is written for ARC: compile it with -fobjc-arc"
@@ -654,6 +655,8 @@ rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 		MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
 		id<MTLRenderCommandEncoder> enc;
 
+		/* RT3 (TASK55): the shadow rays between the raster and the resolve, when the view asked for them */
+		rmb_rts_trace(t_depth, t_normal, t_material);
 		rmb_gbuf_att_target(rp);
 		enc = rmb_frame_open_pass(rp, 0, 0, 0);
 
@@ -664,13 +667,18 @@ rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 		}
 
 		pass_kind = RMB_GB_PASS_OTHER;
-		[enc setRenderPipelineState:resolve_pipe];
-		[enc setFragmentBytes:r length:sizeof(*r) atIndex:0];
-		[enc setFragmentTexture:t_albedo atIndex:0];
-		[enc setFragmentTexture:t_light atIndex:1];
-		[enc setFragmentTexture:t_material atIndex:2];
-		[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
-		rmb_counts.draws++;
+
+		/* the resolve that adds the shadowed dynamic lights where they were traced, else the stock one */
+		if (!rmb_rts_resolve(enc, r, sizeof(*r), t_albedo, t_light, t_material, t_depth, t_normal))
+		{
+			[enc setRenderPipelineState:resolve_pipe];
+			[enc setFragmentBytes:r length:sizeof(*r) atIndex:0];
+			[enc setFragmentTexture:t_albedo atIndex:0];
+			[enc setFragmentTexture:t_light atIndex:1];
+			[enc setFragmentTexture:t_material atIndex:2];
+			[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+			rmb_counts.draws++;
+		}
 
 		/* the forward pass over the resolved image: its depth and motion kept, the stencil cleared as the stock pass's */
 		return rmb_gbuf_open_motion(0, 0, 1);

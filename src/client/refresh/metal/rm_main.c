@@ -831,6 +831,7 @@ R_RenderViewGB(refdef_t *fd, int stencil)
 
 	if (!RM_GB_Begin(&r_view, stencil, r_clear->value ? rm_clear_color : NULL))
 	{
+		r_dlight_term = true;   /* the stock view: gl1's dynamic lights in the lightmaps (RT3) */
 		rmb_pass_3d(stencil);
 		R_RenderViewDraw();
 		return;
@@ -846,12 +847,19 @@ R_RenderViewGB(refdef_t *fd, int stencil)
 	R_MarkLeaves();
 	R_DrawWorld(&r_view);
 	R_DrawEntitiesSplit(1);
+	RM_RTS_View(&r_view);   /* the view and lights of RT3's shadow rays, traced at the resolve */
 	RM_GB_Resolve();
-	R_DrawEntitiesSplit(0);
-	R_RenderDlights(&r_view);
-	R_DrawParticles(&r_view);
-	R_DrawAlphaSurfaces(&r_view);
-	R_PolyBlend();
+
+	/* r_rt_shadows_show draws the shadow pass's view alone, the forward pass left out */
+	if (!RM_RTS_ShowOnly())
+	{
+		R_DrawEntitiesSplit(0);
+		R_RenderDlights(&r_view);
+		R_DrawParticles(&r_view);
+		R_DrawAlphaSurfaces(&r_view);
+		R_PolyBlend();
+	}
+
 	RM_GB_End();
 }
 
@@ -867,6 +875,9 @@ RI_RenderFrame(refdef_t *fd)
 
 	/* the acceleration structures of the view, before the raster (design section 3, step 1; TASK53) */
 	RM_RT_Frame(fd);
+
+	/* whether this frame traces RT3's shadows: gl1's dynamic-light term leaves the lightmaps when it does */
+	RM_RTS_Frame(fd, RM_RT_SceneReady());
 
 	/*
 	 * Colour loaded, so 2D drawn before a view (the player-config menu)

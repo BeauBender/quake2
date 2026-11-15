@@ -37,6 +37,7 @@
 #define RM_RT_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "rmb.h"
 
@@ -325,5 +326,27 @@ int rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, in
  * 0 where the device samples no timestamps at the encoders' boundaries.
  */
 int rmb_rt_times(double *alias_ms, double *ias_ms, int cap);
+
+/*
+ * RT3 (TASK55): the map's per-triangle transmission (rm_rts_transmit, ntris
+ * the map's triangles) for the shadow rays; 1 when kept. Freed with the map.
+ */
+int rmb_rt_set_transmit(const unsigned char *t, unsigned long ntris);
+
+/* GPU ticks of the device's timestamps to milliseconds (rmb_rt_open's correlation) */
+double rmb_rt_gpu_ms(uint64_t ticks);
+
+#ifdef __OBJC__
+/*
+ * RT3: binds frame fno's instance structure at buffer index ias_at (each
+ * structure it holds marked used by ce), each instance's first triangle
+ * of the map's buffers at base_at (~0 for an alias model), the
+ * per-triangle transmission at trans_at and the number of its triangles
+ * at ntris_at (0 without one). 0, with nothing bound, when frame fno
+ * built no instance structure.
+ */
+int rmb_rt_bind_scene(id<MTLComputeCommandEncoder> ce, unsigned long fno, int ias_at, int base_at, int trans_at,
+		int ntris_at);
+#endif
 
 #endif /* RM_RT_H */
