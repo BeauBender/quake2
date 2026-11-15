@@ -34,8 +34,9 @@
  *  6. once the pixels are decoded, ImageIO's status for the source and
  *     the image is complete: a JPEG cut inside its scan data is refused
  *     here. A PNG whose complete compressed data holds fewer rows than
- *     it declares, and a run-length TGA that ends early, get no other
- *     status from ImageIO and decode with the missing rows filled in;
+ *     it declares, and a run-length TGA that ends between two runs, get
+ *     no other status from ImageIO and decode with the missing rows
+ *     filled in;
  *  7. the decoded pixels are read in the image's own layout and
  *     converted to straight-alpha RGBA8 with no colour conversion, as
  *     stb_image returned them. Nothing is drawn into a bitmap context,

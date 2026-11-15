@@ -7,7 +7,11 @@
 # byte for byte. Refused, where stb_image decoded them: CMYK and YCCK
 # JPEGs, a palette index past the palette, a colour-mapped TGA whose map
 # is not 24-bit, a 15-bit TGA, a truecolour TGA that carries a colour
-# map, and more than 2^26 pixels.
+# map, more than 2^26 pixels, a JPEG cut inside its scan data and a
+# run-length TGA cut inside a run. Decoded, where stb_image refused it,
+# and kept in the host test as a known gap: a PNG whose complete zlib
+# stream holds fewer rows than it declares, for which ImageIO's status
+# stays complete.
 #
 # (a) Always: tests/image/imgdecode_test.c is compiled with the system
 #     compiler against imgdecode.c alone, with ASAN and UBSAN when the

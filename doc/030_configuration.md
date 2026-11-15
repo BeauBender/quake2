@@ -212,10 +212,18 @@ ImageIO decodes them to wrong pixels or not at all:
   not 24-bit, for example a 32-bit map with alpha;
 * TGAs with 15-bit pixels;
 * truecolour TGAs that carry a colour map, which ImageIO does not
-  decode.
+  decode;
+* truncated JPEGs, which end inside their image data, and run-length
+  TGAs cut inside a run of pixels.
 
 Re-save such a file as an RGB or RGBA PNG, or as a 24-bit or 32-bit
 truecolour TGA without a colour map.
+
+Other truncated PNGs and TGAs are refused, as before, with one
+exception: a PNG whose compressed data is complete but holds fewer rows
+than the image declares now loads, with the missing rows filled in
+(black in an RGB image). A run-length TGA that ends between two runs
+still loads, as it did before.
 
 The OpenGL and Metal renderers look for a sky face as a `.tga` first
 and then, now on every platform, as the `.pcx`, before the Heretic II
