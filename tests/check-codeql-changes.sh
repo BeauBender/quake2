@@ -270,6 +270,23 @@ else
 	bad "stdout: exit status $?"
 fi
 
+# A diff that writes a documentation-only list and then fails analyses.
+mkdir "${tmp:?}/failgit"
+realgit=$(command -v git)
+printf '%s\n' '#!/bin/sh' "real='$realgit'" 'for a in "$@"; do' \
+	'	[ "$a" = diff ] && { "$real" "$@"; exit 1; }' 'done' \
+	'exec "$real" "$@"' > "${tmp:?}/failgit/git"
+chmod 755 "${tmp:?}/failgit/git"
+cases=$((cases + 1))
+log=$tmp/diff-partial.log
+out=$tmp/diff-partial.out
+: > "$out"
+if (PATH=$tmp/failgit:$PATH; export PATH; run "$tmp/docs" pull_request "$out"); then
+	[ "$(cat "$out")" = analyze=true ] || bad "diff-partial: want analyze=true, got '$(cat "$out")'"
+else
+	bad "diff-partial: exit status $?"
+fi
+
 if [ "$failed" -ne 0 ]; then
 	echo "$me: $failed failures in $cases cases" >&2
 	exit 1
