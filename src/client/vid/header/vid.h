@@ -73,4 +73,8 @@ float GLimp_GetRefreshRate(void);
 qboolean GLimp_GetDesktopMode(int *pwidth, int *pheight);
 int GLimp_GetFrameworkVersion(void);
 
+/* The high pixel density decisions of the window code (glimp_hidpi.c). */
+qboolean GLimp_HighDPIWanted(float highdpiaware, const char *driver);
+qboolean GLimp_DrawableInPixels(qboolean highdpi, int fullscreen, float r_mode);
+
 #endif
