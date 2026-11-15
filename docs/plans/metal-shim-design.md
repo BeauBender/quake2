@@ -195,7 +195,7 @@ A stage is done when every GL-call pin for its entry points passes and the
 scenario's frames pass at the recorded threshold against `gl1` on real
 OpenGL (T1 references, INFORM9). TASK21 closed without any GL-call pin
 (none was recorded or replayed in this repository); see "Closing TASK21
-on the build host" in `docs/plans/metal-port-harness.md`.
+on the build host" in `docs/runbook/TASK21.md`.
 
 ## 5. Risks and unknowns
 
@@ -534,7 +534,7 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
   pin scenario uses them. Lines and points land with S6.
 - **Still not drawn:** texture unit 1 and `GL_COMBINE` (S3).
 - **The reference flaw.** `hud2d` now sets `gl_polyblend 0`
-  (`docs/plans/metal-port-harness.md`, "The screen flash and `hud2d`"):
+  (`docs/runbook/TASK82.md`, "The screen flash and `hud2d`"):
   with the matrices in place the shim darkens the whole screen on the
   pickup frames, where Apple's software renderer darkens a wedge. Against
   the re-recorded references `gl1-metal` is exact on all 23 frames.
@@ -591,7 +591,7 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
   only with `gl_zfix 1` (default 0) and the `world` scenario has no
   dynamic lights (`cl_lights 0`), so both are host-tested, not judged on
   frames.
-- **Against the `gl1` references** see `docs/plans/metal-port-harness.md`,
+- **Against the `gl1` references** see `docs/runbook/TASK49.md`,
   "The `world` scenario against the software renderer (TASK49)": the
   references from Apple's software renderer have faults of their own
   that no correct renderer reproduces, so `world` does not pass there
@@ -652,7 +652,7 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
   test in `main`, all 37 killed). An `ASAN=1 UBSAN=1` build recorded
   the three scenarios below with no sanitizer line, frames identical to
   the release build's.
-- **On frames:** see `docs/plans/metal-port-harness.md`, "Sky, water
+- **On frames:** see `docs/runbook/TASK50.md`, "Sky, water
   and translucent surfaces against the software renderer (TASK50)".
   Where the `gl1` reference is sound the shim matches it to within
   rounding (the sky of `world` frame 21: largest channel difference 1);
@@ -764,7 +764,7 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
 | mvp reversed | mgl_draw.c | weapon clip x y w; weapon clip depth; weapon window depth; model clip x y |
 | mvp from the bottom of the projection stack | mgl_draw.c | model clip x y |
 
-- **Against the `gl1` references** see `docs/plans/metal-port-harness.md`,
+- **Against the `gl1` references** see `docs/runbook/TASK51.md`,
   "The `models` scenario against the software renderer (TASK51)": the
   faults of Apple's software renderer that TASK49 found (the screen
   flash drawn as a wedge, polygons crossing the screen edge dropped or
@@ -848,7 +848,7 @@ Section 9 supersedes this: TASK82 chose `gl_polyblend 0` in the scenario and `hu
   host test as a whole runs 501 checks. An
   `ASAN=1 UBSAN=1` build recorded `particles`, with
   `gl1_pointparameters 0` and with `gl1_particle_square 1`, with no
-  sanitizer line. On frames see `docs/plans/metal-port-harness.md`,
+  sanitizer line. On frames see `docs/runbook/TASK52.md`,
   "Particles against the software renderer (TASK52)".
 
 ## 14. Coverage report (TASK21)
@@ -947,7 +947,7 @@ Beyond the 59 the shim exports `glReadnPixels` (in the proc table,
 called by no gl1 file). No pin run reaches a refused, partial or
 stubbed value: no record logs a `not implemented` line, and the
 `ASAN=1` (`DEBUG`) build, where gl1 checks `glGetError` after its
-calls, logs no `glError` line (`docs/plans/metal-port-harness.md`,
+calls, logs no `glError` line (`docs/runbook/TASK21.md`,
 "Closing TASK21 on the build host").
 
 TASK21 also added two reports to `mgl_layer.m`, neither of which

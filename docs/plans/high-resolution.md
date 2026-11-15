@@ -62,7 +62,7 @@ those numbers.
 
 | Fact | Where |
 |---|---|
-| The high-pixel-density window flag is set for the `wayland` driver only. Without it SDL's Cocoa Metal view keeps `contentsScale` 1 and a point-sized drawable, and its UIKit view uses scale 1.0 (visionOS 2.0 only with the flag). A Retina drawable cannot be produced on macOS | `Glimp_DetermineHighDPISupport` in [`glimp_sdl3.c`](../../src/client/vid/glimp_sdl3.c); [`SDL_cocoametalview.m`](../../third_party/SDL3/src/video/cocoa/SDL_cocoametalview.m), [`SDL_uikitmetalview.m`](../../third_party/SDL3/src/video/uikit/SDL_uikitmetalview.m); [runbook](metal-port-harness.md), TASK98 section; #234 |
+| The high-pixel-density window flag is set for the `wayland` driver only. Without it SDL's Cocoa Metal view keeps `contentsScale` 1 and a point-sized drawable, and its UIKit view uses scale 1.0 (visionOS 2.0 only with the flag). A Retina drawable cannot be produced on macOS | `Glimp_DetermineHighDPISupport` in [`glimp_sdl3.c`](../../src/client/vid/glimp_sdl3.c); [`SDL_cocoametalview.m`](../../third_party/SDL3/src/video/cocoa/SDL_cocoametalview.m), [`SDL_uikitmetalview.m`](../../third_party/SDL3/src/video/uikit/SDL_uikitmetalview.m); [runbook](../runbook/TASK98.md), TASK98 section; #234 |
 | Default 2D scale: the integer `min(width / 640, height / 240)`, at least 1 | `SCR_GetDefaultScale` in [`cl_screen.c`](../../src/client/cl_screen.c) |
 | The console background is stretched to the window | [`cl_console.c`](../../src/client/cl_console.c) |
 | Only `conchars` and the crosshairs are unfiltered by default; other 2D pictures are bilinear | `r_nolerp_list` in [`rm_main.c`](../../src/client/refresh/metal/rm_main.c) |
@@ -197,7 +197,7 @@ screen pixel of blend at its edge; at an integer scale the frame equals
 nearest filtering); and the client switch `con_backaspect`, the console
 background at 4:3 and cropped, with its arithmetic in
 [`cl_conback.c`](../../src/client/cl_conback.c). The measurements are in the
-TASK119 section of [`metal-port-harness.md`](metal-port-harness.md).
+TASK119 section of the runbook, [`TASK119.md`](../runbook/TASK119.md).
 
 ### P5. Bicubic lightmap filtering (built, TASK120)
 
@@ -227,7 +227,7 @@ The world vertex grew from 32 to 48 bytes: `lmrect`, four floats, follows
 for RT1 (TASK53) (retained world vertices, 11.7 MiB at the map limit of
 256,000 surface edges instead of 7.8 MiB). The record of the pins and the
 frame times is in the runbook,
-[Bicubic lightmaps in `ref_metal`](metal-port-harness.md#bicubic-lightmaps-in-ref_metal-task120).
+[Bicubic lightmaps in `ref_metal`](../runbook/TASK120.md).
 
 ### P6. A local texture upscaler on the player's machine (filed as two cards)
 
