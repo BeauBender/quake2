@@ -324,12 +324,12 @@ selftest()
 	g -C "${tmp:?}/seed" mv readme.txt README.txt
 	g -C "${tmp:?}/seed" commit -q -m rename
 	g -C "${tmp:?}/seed" push -q origin main
-	r=$(rev seed)
+	rn=$(rev seed)
 	: > "${tmp:?}/CaseProbe"
 	if [ -e "${tmp:?}/caseprobe" ]; then
 		run case
 		says case "updated main from"
-		still case "$r"
+		still case "$rn"
 	else
 		echo "$me: selftest: case: skipped, the scratch volume is case-sensitive"
 	fi
@@ -347,7 +347,7 @@ selftest()
 		"$realgit" "${tmp:?}/seed" "$realgit" "$realgit" > "${tmp:?}/raceshim/git"
 	chmod 755 "${tmp:?}/raceshim/git"
 	run race PATH="${tmp:?}/raceshim:$PATH"
-	says race "updated main from $(printf '%.12s' "$r") to $(printf '%.12s' "$h") (1 commit(s))"
+	says race "updated main from $(printf '%.12s' "$rn") to $(printf '%.12s' "$h") (1 commit(s))"
 	still race "$h"
 	[ "$(g -C "${tmp:?}/race" rev-parse refs/remotes/origin/main)" = "$(rev seed)" ] ||
 		fail "selftest: race: the shim did not fetch the newer commit"
