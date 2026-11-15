@@ -13,13 +13,15 @@
 # behind (also with a hostile GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE in
 # its environment) and writes nothing outside that clone, reports a current
 # one, and refuses, leaving HEAD and the working tree as they were (the
-# fetch moves only origin/main), on tracked changes, a diverged main,
-# another branch, a HEAD that tracks
-# .claude/memory/x.md (the file stays), a failed fetch, and a failing git
-# status, ls-tree, symbolic-ref or rev-list (a shim first on PATH); and
-# that in a linked worktree it prints nothing and changes nothing. Every
-# run must exit 0 and print no path under the scratch directory, so no
-# remote URL.
+# fetch moves only origin/main), on tracked changes, a diverged main, a
+# main ahead of origin/main (reported with its local commits, never as
+# updated), another branch, a HEAD that tracks .claude/memory/x.md (the
+# file stays), an ignored local file at a path the update starts tracking
+# or where it needs a directory (the file stays, byte for byte), a failed
+# fetch, and a failing git status, ls-tree, symbolic-ref, rev-list or
+# diff-tree (a shim first on PATH); and that in a linked worktree it
+# prints nothing and changes nothing. Every run must exit 0 and print no
+# path under the scratch directory, so no remote URL.
 #
 # The real check then reads the hook and the settings file in this
 # checkout: the hook holds no reset,
@@ -118,7 +120,8 @@ selftest()
 		[ "$(rev "$1")" = "$2" ] || fail "selftest: $1: HEAD moved"
 	}
 
-	# origin: A (a.txt), M (adds .claude/memory/x.md), B (removes it, adds b.txt).
+	# origin: A (a.txt), M (adds .claude/memory/x.md), B (removes it, adds
+	# b.txt and newdir/c.txt).
 	g init -q --bare --template= "${tmp:?}/origin.git"
 	g -C "${tmp:?}/origin.git" symbolic-ref HEAD refs/heads/main
 	g init -q --template= "${tmp:?}/seed"
@@ -127,16 +130,19 @@ selftest()
 	put seed a.txt one
 	g -C "${tmp:?}/seed" push -q origin main
 	a=$(rev seed)
-	clone behind hostile dirty diverged other fetchfail wtmain shims
+	clone behind hostile dirty diverged other fetchfail wtmain shims inway leading
 	put seed .claude/memory/x.md note
 	g -C "${tmp:?}/seed" push -q origin main
 	clone mem
 	m=$(rev mem)
 	g -C "${tmp:?}/seed" rm -q .claude/memory/x.md
+	mkdir -p "${tmp:?}/seed/newdir"
+	printf '%s\n' three > "${tmp:?}/seed/newdir/c.txt"
+	g -C "${tmp:?}/seed" add -- newdir/c.txt
 	put seed b.txt two
 	g -C "${tmp:?}/seed" push -q origin main
 	b=$(rev seed)
-	clone current
+	clone current ahead
 
 	# Making the marker touches the scratch directory itself, so that one
 	# entry is left out; any file written under it still shows.
@@ -173,6 +179,12 @@ selftest()
 	says diverged "not updated, 2 commit(s) behind origin/main: main has diverged"
 	still diverged "$c"
 
+	put ahead c.txt ahead
+	h=$(rev ahead)
+	run ahead
+	says ahead "not updated, 0 commit(s) behind origin/main: main has 1 local commit(s) not on origin/main"
+	still ahead "$h"
+
 	g -C "${tmp:?}/other" checkout -q -b feature
 	run other
 	says other "not updated, 2 commit(s) behind origin/main: the checkout is not on branch main"
@@ -184,6 +196,28 @@ selftest()
 	says mem "not updated, 1 commit(s) behind origin/main: HEAD tracks files under .claude/memory/"
 	still mem "$m"
 	[ -f "${tmp:?}/mem/.claude/memory/x.md" ] || fail "selftest: mem: the memory file was deleted"
+
+	# keep <repo> <path>: an ignored local file at <path>, with a copy to
+	# compare against. The refusal names the count, never the path.
+	keep()
+	{
+		mkdir -p "${tmp:?}/$1/.git/info"
+		printf '%s\n' "$2" >> "${tmp:?}/$1/.git/info/exclude"
+		printf 'local %s\n' "$2" > "${tmp:?}/$1/$2"
+		cp -p "${tmp:?}/$1/$2" "${tmp:?}/$1.keep"
+		run "$1"
+		says "$1" "not updated, 2 commit(s) behind origin/main: 1 path(s) the update adds"
+		case $out in
+		*"$2"*) fail "selftest: $1: the hook named the path: $out" ;;
+		esac
+		still "$1" "$a"
+		cmp -s "${tmp:?}/$1.keep" "${tmp:?}/$1/$2" ||
+			fail "selftest: $1: the ignored file $2 was overwritten"
+	}
+	# b.txt, which the update starts tracking, and newdir, where the update
+	# needs a directory for newdir/c.txt.
+	keep inway b.txt
+	keep leading newdir
 
 	g -C "${tmp:?}/fetchfail" fetch -q origin
 	g -C "${tmp:?}/fetchfail" remote set-url origin "${tmp:?}/nowhere.git"
@@ -202,7 +236,7 @@ selftest()
 	# A git subcommand that fails while the rest work: a shim first on PATH
 	# exits 128 when its arguments hold <word> and runs git otherwise.
 	realgit=$(command -v git)
-	for w in status ls-tree symbolic-ref rev-list; do
+	for w in status ls-tree symbolic-ref rev-list diff-tree; do
 		mkdir -p "${tmp:?}/shim-$w"
 		printf '#!/bin/sh\ncase " $* " in *" %s "*) exit 128 ;; esac\nexec "%s" "$@"\n' \
 			"$w" "$realgit" > "${tmp:?}/shim-$w/git"
