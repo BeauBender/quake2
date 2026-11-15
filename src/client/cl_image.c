@@ -25,21 +25,9 @@
  */
 
 #include "header/client.h"
+#include "refresh/files/imgdecode.h"
 
 #define PCX_IDENT ((0x05 << 8) + 0x0a)
-
-// don't need HDR stuff
-#define STBI_NO_LINEAR
-#define STBI_NO_HDR
-// make sure STB_image uses standard malloc(), as we'll use standard free() to deallocate
-#define STBI_MALLOC(sz)    malloc(sz)
-#define STBI_REALLOC(p,sz) realloc(p,sz)
-#define STBI_FREE(p)       free(p)
-// Switch of the thread local stuff. Breaks mingw under Windows.
-#define STBI_NO_THREAD_LOCALS
-// include implementation part of stb_image into this file
-#define STB_IMAGE_IMPLEMENTATION
-#include "refresh/files/stb_image.h"
 
 static const byte *
 PCX_RLE_Decode(byte *pix, byte *pix_max, const byte *raw, const byte *raw_max,
@@ -410,7 +398,7 @@ SCR_LoadImageWithPalette(char *filename, byte **pic, byte **palette,
 	}
 	else
 	{
-		int sourcebitsPerPixel = 0;
+		imgdec_result_t result;
 
 		/* other formats does not have palette directly */
 		if (palette)
@@ -418,13 +406,13 @@ SCR_LoadImageWithPalette(char *filename, byte **pic, byte **palette,
 			*palette = NULL;
 		}
 
-		*pic = stbi_load_from_memory(raw, len, width, height,
-			&sourcebitsPerPixel, STBI_rgb_alpha);
+		/* PNG, JPEG or TGA, of the name's extension (imgdecode.c) */
+		result = IMGDEC_Decode(raw, (size_t)len, ext, pic, width, height);
 
-		if (*pic == NULL)
+		if (result != IMGDEC_OK)
 		{
 			Com_DPrintf("%s couldn't load data from %s: %s!\n",
-				__func__, filename, stbi_failure_reason());
+				__func__, filename, IMGDEC_ResultString(result));
 		}
 
 		*bitsPerPixel = 32;
