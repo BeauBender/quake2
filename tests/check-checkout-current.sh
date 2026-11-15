@@ -237,11 +237,11 @@ selftest()
 
 	# A git subcommand that fails while the rest work: a shim first on PATH
 	# exits 128 when its arguments hold <word> and runs git otherwise. The
-	# range $b..$a is the count of local commits, after the count behind
-	# ($a..$b) has worked.
+	# range $a..$b fails only the count behind, and $b..$a only the count
+	# of local commits after it.
 	realgit=$(command -v git)
 	i=0
-	for w in status ls-tree symbolic-ref rev-list "$b..$a" diff-tree; do
+	for w in status ls-tree symbolic-ref rev-list "$a..$b" "$b..$a" diff-tree; do
 		i=$((i + 1))
 		mkdir -p "${tmp:?}/shim-$i"
 		printf '#!/bin/sh\ncase " $* " in *" %s "*) exit 128 ;; esac\nexec "%s" "$@"\n' \

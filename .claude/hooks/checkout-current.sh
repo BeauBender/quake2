@@ -83,42 +83,47 @@ if [ "$ahead" -gt 0 ]; then
 	say "$lag: main has diverged ($ahead local commit(s) not on origin/main); nothing was merged"
 fi
 
-# The paths the update adds, one per line. With core.quotePath=false only a
-# path holding a control character, a double quote or a backslash comes
-# quoted; such a line is not checked and counts as in the way.
-added=$(git -c core.quotePath=false diff-tree -r --no-renames --name-only --diff-filter=A "$from" "$to" 2> /dev/null) ||
+# The paths the update adds, one per line. diff-tree does no rename
+# detection unless asked, so a renamed file's new path is listed too. With
+# core.quotePath=false only a path holding a control character, a double
+# quote or a backslash comes quoted; such a line is not checked and counts
+# as in the way.
+added=$(git -c core.quotePath=false diff-tree -r --name-only --diff-filter=A "$from" "$to" 2> /dev/null) ||
 	say "$lag: git diff-tree failed"
 # untracked <path>: true unless HEAD tracks <path>; a git error counts as true.
 untracked()
 {
 	! git cat-file -e "$from:$1" 2> /dev/null
 }
-# A path is in the way when something HEAD does not track is at it, or is a
-# link or a non-directory at one of the directories above it. The list is
-# split on newlines only, with globbing off.
-k=0
-set -f
-IFS='
-'
-for p in $added; do
-	hit=
-	case $p in
-	\"*) hit=1 ;;
-	*) if { [ -e "$p" ] || [ -L "$p" ]; } && untracked "$p"; then hit=1; fi ;;
-	esac
-	q=$p
-	while [ -z "$hit" ]; do
-		case $q in
-		*/*) q=${q%/*} ;;
-		*) break ;;
+# inway: read paths, one per line, and print how many are in the way. A
+# path is in the way when something HEAD does not track is at it, or is a
+# link or a non-directory at one of the directories above it. (A function,
+# not inline: bash 3.2 misparses a case pattern inside $(...).)
+inway()
+{
+	k=0
+	while IFS= read -r p; do
+		[ -n "$p" ] || continue
+		hit=
+		case $p in
+		\"*) hit=1 ;;
+		*) if { [ -e "$p" ] || [ -L "$p" ]; } && untracked "$p"; then hit=1; fi ;;
 		esac
-		if { [ -L "$q" ] || { [ -e "$q" ] && [ ! -d "$q" ]; }; } && untracked "$q"; then hit=1; fi
+		q=$p
+		while [ -z "$hit" ]; do
+			case $q in
+			*/*) q=${q%/*} ;;
+			*) break ;;
+			esac
+			if { [ -L "$q" ] || { [ -e "$q" ] && [ ! -d "$q" ]; }; } && untracked "$q"; then hit=1; fi
+		done
+		[ -z "$hit" ] || k=$((k + 1))
 	done
-	[ -z "$hit" ] || k=$((k + 1))
-done
-unset IFS
-set +f
-[ "$k" -eq 0 ] ||
+	echo "$k"
+}
+# Anything but 0, an empty count included, refuses.
+k=$(printf '%s\n' "$added" | inway)
+[ "$k" = 0 ] ||
 	say "$lag: $k path(s) the update adds are taken by untracked or ignored local files, which the update would overwrite; move them, then update by hand"
 
 if git -c core.hooksPath=/dev/null merge --ff-only --no-autostash -q "$origin" < /dev/null > /dev/null 2>&1; then
