@@ -170,7 +170,7 @@ rm_ledger_live(const rm_ledger_t *l)
 int
 rm_ledger_format(const rm_ledger_t *l, char *buf, size_t len)
 {
-	static const char *names[RM_OBJ_KINDS] = { "device", "queue", "view", "texture", "buffer" };
+	static const char *names[RM_OBJ_KINDS] = { "device", "queue", "view", "texture", "buffer", "state" };
 	size_t used = 0;
 	int k, ok;
 
@@ -240,6 +240,53 @@ int
 rm_targets_rebuild(int have_color, int have_depth, int cw, int ch, int w, int h)
 {
 	return !have_color || !have_depth || (cw != w) || (ch != h);
+}
+
+/* N10 scaffolding: the tests come first */
+unsigned long
+rm_ledger_kind_live(const rm_ledger_t *l, rm_obj_kind_t kind)
+{
+	(void)l;
+	(void)kind;
+	return 0;
+}
+
+int
+rm_ledger_clean(const rm_ledger_t *l)
+{
+	(void)l;
+	return 1;
+}
+
+int
+rm_frame_size(int vid_w, int vid_h, int *w, int *h)
+{
+	(void)vid_w;
+	(void)vid_h;
+	*w = *h = 0;
+	return 0;
+}
+
+unsigned
+rm_frame_remake(const rm_frame_held_t *held, int w, int h, int dw, int dh)
+{
+	(void)held;
+	(void)w;
+	(void)h;
+	(void)dw;
+	(void)dh;
+	return 0;
+}
+
+int
+rm_present_region(int tw, int th, int dw, int dh, rm_present_t *out)
+{
+	(void)tw;
+	(void)th;
+	(void)dw;
+	(void)dh;
+	memset(out, 0, sizeof(*out));
+	return 0;
 }
 
 int

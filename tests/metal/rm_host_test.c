@@ -152,10 +152,10 @@ test_ledger(void)
 	char buf[256];
 	const char *want_live =
 		"ref_metal: teardown: 3 live objects (created/destroyed: device 1/0, queue 1/0, view 0/0, "
-		"texture 3/2, buffer 0/0), 0 unreleased, 0 unmatched";
+		"texture 3/2, buffer 0/0, state 0/0), 0 unreleased, 0 unmatched";
 	const char *want_clean =
 		"ref_metal: teardown: 0 live objects (created/destroyed: device 1/1, queue 1/1, view 0/0, "
-		"texture 3/3, buffer 0/0), 0 unreleased, 1 unmatched";
+		"texture 3/3, buffer 0/0, state 0/0), 0 unreleased, 1 unmatched";
 	size_t n;
 
 	memset(&l, 0, sizeof(l));
@@ -619,6 +619,253 @@ test_targets_rebuild(void)
 	CHECK(rm_targets_rebuild(0, 1, 0, 0, 640, 480));
 	CHECK(rm_targets_rebuild(1, 1, 640, 480, 641, 480));
 	CHECK(rm_targets_rebuild(1, 1, 640, 480, 640, 479));
+}
+
+/*
+ * One session of ref_metal as the ledger sees it, in the module's order
+ * (N10): rmb_open's device and queue, InitContext's view and resources
+ * (the library, 24 pipelines, 4 depth-stencil states, 10 samplers made
+ * twice: R_InitImages and the first R_TextureMode, the staging ring),
+ * the images, the first frame's two targets and three rings, a mode
+ * change (both targets again, nothing else), a readback, then
+ * RI_Shutdown: the images, the detach (rings, targets, readback buffer),
+ * the resources, the view, the queue and the device. With drop set, the
+ * last readback buffer is not destroyed.
+ */
+static void
+ledger_session(rm_ledger_t *l, int drop)
+{
+	int i;
+
+	rm_ledger_create(l, RM_OBJ_DEVICE);
+	rm_ledger_create(l, RM_OBJ_QUEUE);
+	rm_ledger_create(l, RM_OBJ_VIEW);
+
+	for (i = 0; i < 1 + 24 + 4 + 10; i++)
+	{
+		rm_ledger_create(l, RM_OBJ_STATE);
+	}
+
+	for (i = 0; i < 10; i++)
+	{
+		rm_ledger_destroy(l, RM_OBJ_STATE);
+		rm_ledger_create(l, RM_OBJ_STATE);
+	}
+
+	rm_ledger_create(l, RM_OBJ_BUFFER);
+
+	for (i = 0; i < 40; i++)
+	{
+		rm_ledger_create(l, RM_OBJ_TEXTURE);
+	}
+
+	rm_ledger_create(l, RM_OBJ_TEXTURE);
+	rm_ledger_create(l, RM_OBJ_TEXTURE);
+
+	for (i = 0; i < RMB_FRAMES_IN_FLIGHT; i++)
+	{
+		rm_ledger_create(l, RM_OBJ_BUFFER);
+	}
+
+	/* the frame's size changed: both targets again */
+	for (i = 0; i < 2; i++)
+	{
+		rm_ledger_destroy(l, RM_OBJ_TEXTURE);
+		rm_ledger_create(l, RM_OBJ_TEXTURE);
+	}
+
+	rm_ledger_create(l, RM_OBJ_BUFFER);
+
+	for (i = 0; i < 40; i++)
+	{
+		rm_ledger_destroy(l, RM_OBJ_TEXTURE);
+	}
+
+	for (i = 0; i < RMB_FRAMES_IN_FLIGHT; i++)
+	{
+		rm_ledger_destroy(l, RM_OBJ_BUFFER);
+	}
+
+	rm_ledger_destroy(l, RM_OBJ_TEXTURE);
+	rm_ledger_destroy(l, RM_OBJ_TEXTURE);
+
+	if (!drop)
+	{
+		rm_ledger_destroy(l, RM_OBJ_BUFFER);
+	}
+
+	rm_ledger_destroy(l, RM_OBJ_BUFFER);
+
+	for (i = 0; i < 1 + 24 + 4 + 10; i++)
+	{
+		rm_ledger_destroy(l, RM_OBJ_STATE);
+	}
+
+	rm_ledger_destroy(l, RM_OBJ_VIEW);
+	rm_ledger_destroy(l, RM_OBJ_QUEUE);
+	rm_ledger_destroy(l, RM_OBJ_DEVICE);
+}
+
+/*
+ * The ledger after two restarts (N10): every kind at zero, and clean;
+ * with one destroy dropped, that kind and only that kind is live and the
+ * teardown is not clean. Each operand of rm_ledger_clean on its own.
+ */
+static void
+test_ledger_restarts(void)
+{
+	rm_ledger_t l;
+	int k;
+
+	memset(&l, 0, sizeof(l));
+	CHECK(rm_ledger_clean(&l));
+	ledger_session(&l, 0);
+	ledger_session(&l, 0);
+
+	for (k = 0; k < RM_OBJ_KINDS; k++)
+	{
+		CHECK(rm_ledger_kind_live(&l, (rm_obj_kind_t)k) == 0);
+		CHECK(l.created[k] > 0 && l.created[k] == l.destroyed[k]);
+	}
+
+	CHECK(l.created[RM_OBJ_STATE] == 2 * (1 + 24 + 4 + 20));
+	CHECK(rm_ledger_live(&l) == 0 && l.unmatched == 0 && rm_ledger_clean(&l));
+
+	/* the second restart drops the readback buffer's destroy */
+	memset(&l, 0, sizeof(l));
+	ledger_session(&l, 0);
+	ledger_session(&l, 1);
+
+	for (k = 0; k < RM_OBJ_KINDS; k++)
+	{
+		CHECK(rm_ledger_kind_live(&l, (rm_obj_kind_t)k) == (k == RM_OBJ_BUFFER ? 1u : 0u));
+	}
+
+	CHECK(rm_ledger_live(&l) == 1 && l.unmatched == 0 && !rm_ledger_clean(&l));
+
+	/* each kind on its own, then unreleased and unmatched on their own */
+	for (k = 0; k < RM_OBJ_KINDS; k++)
+	{
+		memset(&l, 0, sizeof(l));
+		rm_ledger_create(&l, (rm_obj_kind_t)k);
+		CHECK(rm_ledger_kind_live(&l, (rm_obj_kind_t)k) == 1 && !rm_ledger_clean(&l));
+		rm_ledger_destroy(&l, (rm_obj_kind_t)k);
+		CHECK(rm_ledger_kind_live(&l, (rm_obj_kind_t)k) == 0 && rm_ledger_clean(&l));
+	}
+
+	memset(&l, 0, sizeof(l));
+	l.unreleased = 1;
+	CHECK(!rm_ledger_clean(&l));
+	memset(&l, 0, sizeof(l));
+	l.unmatched = 1;
+	CHECK(!rm_ledger_clean(&l) && rm_ledger_live(&l) == 0);
+
+	/* a kind out of range reads 0 and is never indexed */
+	memset(&l, 0, sizeof(l));
+	rm_ledger_create(&l, RM_OBJ_DEVICE);
+	CHECK(rm_ledger_kind_live(&l, RM_OBJ_KINDS) == 0);
+	CHECK(rm_ledger_kind_live(&l, (rm_obj_kind_t)-1) == 0);
+	CHECK(rm_ledger_kind_live(&l, RM_OBJ_DEVICE) == 1);
+}
+
+/*
+ * The frame's size is the mode's (FIX45): taken when both sides are 1 to
+ * RMB_MAX_TEXTURE_SIDE, refused otherwise, each bound on each side.
+ */
+static void
+test_frame_size(void)
+{
+	int w = -1, h = -1;
+
+	CHECK(rm_frame_size(640, 480, &w, &h) && w == 640 && h == 480);
+	CHECK(rm_frame_size(1, 1, &w, &h) && w == 1 && h == 1);
+	CHECK(rm_frame_size(RMB_MAX_TEXTURE_SIDE, RMB_MAX_TEXTURE_SIDE, &w, &h)
+			&& w == RMB_MAX_TEXTURE_SIDE && h == RMB_MAX_TEXTURE_SIDE);
+	CHECK(!rm_frame_size(0, 480, &w, &h) && w == 0 && h == 0);
+	CHECK(!rm_frame_size(640, 0, &w, &h) && w == 0 && h == 0);
+	CHECK(!rm_frame_size(-640, 480, &w, &h) && w == 0 && h == 0);
+	CHECK(!rm_frame_size(640, -480, &w, &h) && w == 0 && h == 0);
+	CHECK(!rm_frame_size(RMB_MAX_TEXTURE_SIDE + 1, 480, &w, &h) && w == 0 && h == 0);
+	CHECK(!rm_frame_size(640, RMB_MAX_TEXTURE_SIDE + 1, &w, &h) && w == 0 && h == 0);
+	CHECK(!rm_frame_size(INT_MIN, INT_MAX, &w, &h) && w == 0 && h == 0);
+}
+
+/*
+ * The resize decision (N10): a change of the frame's size makes both
+ * targets again and nothing else; a change of the window's pixels alone
+ * sets the drawable's size and makes no target (FIX45); a missing target
+ * makes both.
+ */
+static void
+test_frame_remake(void)
+{
+	const unsigned both = RM_REMAKE_COLOR | RM_REMAKE_DEPTH;
+	rm_frame_held_t held = { 1, 1, 640, 480, 640, 480 };
+	rm_frame_held_t none = { 0, 0, 0, 0, 0, 0 };
+
+	CHECK(rm_frame_remake(&held, 640, 480, 640, 480) == 0);
+	CHECK(rm_frame_remake(&none, 640, 480, 640, 480) == (both | RM_REMAKE_DRAWABLE));
+
+	/* the frame's size, each side */
+	CHECK(rm_frame_remake(&held, 800, 480, 640, 480) == both);
+	CHECK(rm_frame_remake(&held, 640, 600, 640, 480) == both);
+	CHECK(rm_frame_remake(&held, 800, 600, 800, 600) == (both | RM_REMAKE_DRAWABLE));
+
+	/* the window's pixels alone, each side: the targets stay */
+	CHECK(rm_frame_remake(&held, 640, 480, 960, 480) == RM_REMAKE_DRAWABLE);
+	CHECK(rm_frame_remake(&held, 640, 480, 640, 540) == RM_REMAKE_DRAWABLE);
+
+	/* a target missing */
+	held.color = 0;
+	CHECK(rm_frame_remake(&held, 640, 480, 640, 480) == both);
+	held.color = 1;
+	held.depth = 0;
+	CHECK(rm_frame_remake(&held, 640, 480, 640, 480) == both);
+	held.depth = 1;
+
+	/* the layer's size on each side */
+	held.lw = 641;
+	CHECK(rm_frame_remake(&held, 640, 480, 640, 480) == RM_REMAKE_DRAWABLE);
+	held.lw = 640;
+	held.lh = 479;
+	CHECK(rm_frame_remake(&held, 640, 480, 640, 480) == RM_REMAKE_DRAWABLE);
+}
+
+/*
+ * The present blit at gl1's place (FIX45): equal sizes copy the whole
+ * frame; a smaller frame lands in the drawable's bottom-left corner; a
+ * larger one gives its bottom-left part; no overlap copies nothing.
+ */
+static void
+test_present_region(void)
+{
+	rm_present_t p;
+
+	CHECK(rm_present_region(640, 480, 640, 480, &p));
+	CHECK(p.src_y == 0 && p.dst_y == 0 && p.w == 640 && p.h == 480);
+
+	/* the fullscreen fallback of TASK98: 640 by 480 asked, 960 by 540 given */
+	CHECK(rm_present_region(640, 480, 960, 540, &p));
+	CHECK(p.src_y == 0 && p.dst_y == 60 && p.w == 640 && p.h == 480);
+
+	/* a frame larger than the drawable */
+	CHECK(rm_present_region(1024, 768, 800, 600, &p));
+	CHECK(p.src_y == 168 && p.dst_y == 0 && p.w == 800 && p.h == 600);
+
+	/* wider only, taller only */
+	CHECK(rm_present_region(800, 480, 640, 480, &p));
+	CHECK(p.src_y == 0 && p.dst_y == 0 && p.w == 640 && p.h == 480);
+	CHECK(rm_present_region(640, 600, 640, 480, &p));
+	CHECK(p.src_y == 120 && p.dst_y == 0 && p.w == 640 && p.h == 480);
+
+	/* nothing to copy, each side on its own */
+	memset(&p, 0x55, sizeof(p));
+	CHECK(!rm_present_region(0, 480, 640, 480, &p) && p.w == 0 && p.h == 0 && p.src_y == 0 && p.dst_y == 0);
+	CHECK(!rm_present_region(640, 0, 640, 480, &p) && p.w == 0 && p.h == 0);
+	CHECK(!rm_present_region(640, 480, 0, 480, &p) && p.w == 0 && p.h == 0);
+	CHECK(!rm_present_region(640, 480, 640, 0, &p) && p.w == 0 && p.h == 0);
+	CHECK(!rm_present_region(-1, 480, 640, 480, &p) && p.w == 0);
+	CHECK(!rm_present_region(640, 480, 640, -1, &p) && p.h == 0);
 }
 
 /*
@@ -7293,6 +7540,10 @@ main(void)
 	test_stats();
 	test_color_load();
 	test_targets_rebuild();
+	test_ledger_restarts();
+	test_frame_size();
+	test_frame_remake();
+	test_present_region();
 	test_upload_bytes();
 	test_raw8();
 	test_fan();
