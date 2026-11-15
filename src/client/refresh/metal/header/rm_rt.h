@@ -37,6 +37,7 @@
 #define RM_RT_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "rmb.h"
 
@@ -164,6 +165,8 @@ typedef struct
 	int kind;               /* RM_RT_INST_* */
 	int model;              /* the inline model's number, the alias model's id; 0 for the world */
 	int ent;                /* the entity's index in the refdef, -1 for the world */
+	/* RT3 (TASK55): the lights the instance carries (rm_rts_carried, bit i light i), set by RM_RT_Frame; 0 here */
+	unsigned carry;
 	/* the object-to-world transform, column-major 4 by 3: three basis columns, then the translation (MTLPackedFloat4x3) */
 	float xform[12];
 } rm_rt_inst_t;
@@ -313,10 +316,14 @@ void rmb_rt_model_free(int mid);
  * for the j-th RM_RT_INST_ALIAS of inst), their structures built once and
  * refit after, then the instance structure rebuilt from the n instances.
  * GPU times are those of an earlier frame (the timestamps are read once
- * it completed). 1 with s filled; 0 when nothing was encoded (no frame, a
- * structure missing).
+ * it completed). With shadows (RT3's r_rt_shadows on) the frame also keeps
+ * its scene for rmb_rt_bind_scene (each instance's first triangle and the
+ * lights it carries, in the frame ring; each instance's mask is
+ * mtl_rts_inst_mask's); without, nothing beyond TASK53's structures is taken. 1 with
+ * s filled; 0 when nothing was encoded (no frame, a structure missing).
  */
-int rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nlerps, rm_rt_frame_stats_t *s);
+int rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nlerps, int shadows,
+		rm_rt_frame_stats_t *s);
 
 /*
  * The GPU times (ms) of the timed frames that completed since the last
@@ -325,5 +332,29 @@ int rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, in
  * 0 where the device samples no timestamps at the encoders' boundaries.
  */
 int rmb_rt_times(double *alias_ms, double *ias_ms, int cap);
+
+/*
+ * RT3 (TASK55): the map's per-triangle transmission (rm_rts_transmit, ntris
+ * the map's triangles) for the shadow rays; 1 when kept. Freed with the
+ * map, or by t NULL (the shadows turned off).
+ */
+int rmb_rt_set_transmit(const unsigned char *t, unsigned long ntris);
+
+/* GPU ticks of the device's timestamps to milliseconds (rmb_rt_open's correlation) */
+double rmb_rt_gpu_ms(uint64_t ticks);
+
+#ifdef __OBJC__
+/*
+ * RT3: binds frame fno's instance structure at buffer index ias_at (each
+ * structure it holds marked used by ce), two words an instance at base_at:
+ * its first triangle of the map's buffers (~0 for an alias model) and the
+ * lights it carries (rm_rts_carried), the
+ * per-triangle transmission at trans_at and the number of its triangles
+ * at ntris_at (0 without one). 0, with nothing bound, when frame fno
+ * built no instance structure.
+ */
+int rmb_rt_bind_scene(id<MTLComputeCommandEncoder> ce, unsigned long fno, int ias_at, int base_at, int trans_at,
+		int ntris_at);
+#endif
 
 #endif /* RM_RT_H */

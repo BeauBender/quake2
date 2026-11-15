@@ -13,9 +13,24 @@ set -eu
 cd "$(dirname "$0")/.."
 export LC_ALL=C
 
+# The video menu creates cvars by name through the VidRules_Cvar table, not
+# through Cvar_Get: every string literal in that function body is a cvar name.
+# Fails closed: a missing function or an empty list stops the check.
+vidrules_cvars() {
+	names=$(awk '/^VidRules_Cvar\(/ { on = 1 } on { print } on && /^}/ { exit }' \
+		src/client/menu/vidrules.c | grep -oE '"[A-Za-z0-9_]+"' | tr -d '"' | sort -u)
+	if [ -z "$names" ]; then
+		echo "check-cvar-docs: no cvar names found in VidRules_Cvar (src/client/menu/vidrules.c)" >&2
+		return 1
+	fi
+	echo "$names"
+}
 cvars() {
-	grep -rhoE '(Cvar_Get|[.>]cvar)[[:space:]]*\([[:space:]]*"[A-Za-z0-9_]+"' src --include='*.c' |
-		sed -E 's/.*"([^"]+)"/\1/' | sort -u
+	{
+		grep -rhoE '(Cvar_Get|[.>]cvar)[[:space:]]*\([[:space:]]*"[A-Za-z0-9_]+"' src --include='*.c' |
+			sed -E 's/.*"([^"]+)"/\1/'
+		vidrules_cvars
+	} | sort -u
 }
 commands() {
 	grep -rhoE 'Cmd_AddCommand[[:space:]]*\([[:space:]]*"[A-Za-z0-9_+-]+"' src --include='*.c' |
@@ -26,6 +41,10 @@ undocumented() { # $1 = names fn, $2 = doc file
 		grep -qwF -- "$name" "$2" || echo "$name"
 	done
 }
+
+# The table is read in a pipeline below, where an exit would not stop the
+# script: prove it is readable here, at the top level.
+vidrules_cvars > /dev/null || exit 1
 
 if [ "${1:-}" = "--print-baseline" ]; then
 	case "${2:-}" in

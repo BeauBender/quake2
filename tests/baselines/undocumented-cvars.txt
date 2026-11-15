@@ -72,6 +72,8 @@ gl1_texturesolidmode
 gl3_libgl
 gl3_show_draw_stats
 gl4_colorlight
+gl4_intensity
+gl4_overbrightbits
 gl_drawbuffer
 gl_farsee
 gl_finish
@@ -135,6 +137,7 @@ r_norefresh
 r_novis
 r_palettedtexture
 r_palettedtextures
+r_rt_denoiser
 r_speeds
 r_validation
 rcon_address
@@ -197,5 +200,7 @@ vid_displayindex
 vid_rate
 viewsize
 vk_dynamic
+vk_intensity
+vk_overbrightbits
 windowed_mouse
 zombietime

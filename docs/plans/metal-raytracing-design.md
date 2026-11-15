@@ -123,6 +123,35 @@ Total budget at 1080p with everything on: about 5 rays per pixel
 *Assumed* on apple7 compute RT: 8 to 14 ms; TASK25's render-stage path on
 apple9 is expected to halve it. RT1 measures.
 
+Measured for the dlight shadows (RT3, TASK55; the runbook, "Ray-traced shadows from dynamic
+lights in `ref_metal`"). The pass as built:
+
+- one ray from the eye to find the pixel's surface, cast wherever a light reaches its plane (on
+  every lit world pixel of a frame with a moved brush entity, whose surfaces gl1 lights in their
+  model's space);
+- gl1's falloff on that surface's texture axes at its four luxels, in its model's space;
+- up to four any-hit shadow rays; the ray of a light that a model carries (a rocket's light
+  inside it, a muzzle flash's) also takes a second query over the carriers' instance mask,
+  which passes that model's triangles.
+
+On the M6 (apple9, compute path), seeded `rt-shadows` over `demo1.dm2`, warm frames, three runs
+each, without and with entities (`rt-shadows-entities`):
+
+- 1920 x 1080: median 2.55 ms (p10 1.61 to 1.62, p90 3.48 to 3.49); with entities 3.58 ms (p10
+  2.01 to 2.03, p90 4.79 to 4.96);
+- 5120 x 2880: median 8.53 ms (p10 5.4 to 5.5, p90 11.6 to 11.9); with entities 9.05 ms (p10 6.1
+  to 6.3, p90 12.9 to 13.6);
+- about 0.86 rays a pixel without entities and 1.09 with them; 23 % of pixels trace, 31 % have a
+  light in range;
+- the rule that a model does not shadow the light it carries costs 0.02 ms at 1080p without
+  entities and 0.20 ms with them, against the pass without it.
+
+That is above the 1.952 ms the closed table gives 4 any-hit rays a pixel on every pixel. The
+surface ray (closest hit), the 32-light loops and the term's writes cost more than the shadow
+rays they serve. The surface ray is the first to cut: it could be traced only where a light is in
+range, or the raster could store the surface. `timedemo` reads the display's 60 fps at 1080p with
+the effect on and off.
+
 ### Internal resolution and upscaling with MetalFX (TASK105)
 
 This subsection describes option A (TASK105): with a ray-traced effect

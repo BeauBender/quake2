@@ -862,8 +862,10 @@ endif
 $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/rm_rt.metal \
 		src/client/refresh/metal/rm_gbuf.metal \
+		src/client/refresh/metal/rm_rtshadow.metal \
 		src/client/refresh/metal/common/mtl_shader_math.h \
-		src/client/refresh/metal/common/mtl_gbuf_math.h
+		src/client/refresh/metal/common/mtl_gbuf_math.h \
+		src/client/refresh/metal/common/mtl_rts_math.h
 	@echo "===> METAL $<"
 	${Q}command -v xcrun >/dev/null 2>&1 || { echo "ref_metal needs xcrun and the Xcode Metal toolchain" >&2; exit 1; }
 	${Q}xcrun -f metal >/dev/null 2>&1 || { echo "ref_metal needs the Metal compiler (xcrun metal); install the Xcode Metal toolchain" >&2; exit 1; }
@@ -871,8 +873,9 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 	${Q}xcrun -sdk macosx metal -c $< -o $(BUILDDIR)/ref_metal/rm_shaders.air
 	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_rt.metal -o $(BUILDDIR)/ref_metal/rm_rt.air
 	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_gbuf.metal -o $(BUILDDIR)/ref_metal/rm_gbuf.air
+	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_rtshadow.metal -o $(BUILDDIR)/ref_metal/rm_rtshadow.air
 	${Q}xcrun -sdk macosx metallib $(BUILDDIR)/ref_metal/rm_shaders.air $(BUILDDIR)/ref_metal/rm_rt.air \
-		$(BUILDDIR)/ref_metal/rm_gbuf.air -o $@
+		$(BUILDDIR)/ref_metal/rm_gbuf.air $(BUILDDIR)/ref_metal/rm_rtshadow.air -o $@
 
 # Header dependencies: the Darwin CFLAGS carry no -MMD (see above), but
 # the Apple clang this target needs writes them for C and Objective-C
@@ -1037,6 +1040,7 @@ CLIENT_OBJS_ := \
 	src/client/input/gyro.o \
 	src/client/menu/menu.o \
 	src/client/menu/qmenu.o \
+	src/client/menu/vidrules.o \
 	src/client/menu/videomenu.o \
 	src/client/refresh/files/imgdecode.o \
 	src/client/refresh/files/imgscale.o \
@@ -1232,6 +1236,8 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_pure.o \
 	src/client/refresh/metal/rm_rt.o \
 	src/client/refresh/metal/rm_rtscene.o \
+	src/client/refresh/metal/rm_rtshadow.o \
+	src/client/refresh/metal/rm_rtshadowscene.o \
 	src/client/refresh/metal/rm_scrap.o \
 	src/client/refresh/metal/rm_sdl.o \
 	src/client/refresh/metal/rm_surf.o \
@@ -1242,6 +1248,7 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rmb_metalfx.o \
 	src/client/refresh/metal/rmb_resource.o \
 	src/client/refresh/metal/rmb_rt.o \
+	src/client/refresh/metal/rmb_rtshadow.o \
 	src/client/refresh/metal/common/mtl_matrix.o \
 	src/client/refresh/metal/common/mtl_ring.o \
 	src/client/refresh/files/common.o \
@@ -1451,10 +1458,11 @@ endif
 # The unit-test suite (tests/unit, see doc/085_unittests.md). The test
 # binary links the dedicated server's own objects (SERVER_OBJS_ below,
 # built with q2ded's flags into a tree of their own) except the unix
-# main.c; tests/unit/main.c supplies main(). Nine client objects
+# main.c; tests/unit/main.c supplies main(). Ten client objects
 # (cl_conback, cl_download, cl_entities, cl_network, cl_parse, cl_screen,
 # the upscaler's checks and pixel arithmetic cl_upscale, the sound
-# frontend sound.c and the window code's SDL-free part vid/glimp_hidpi.c)
+# frontend sound.c, the window code's SDL-free part vid/glimp_hidpi.c and
+# the video menu's rules menu/vidrules.c)
 # are linked against the stubs in tests/unit/stub_client.c
 # and stub_client_full.c, and three renderer objects, refresh/files/imgscale.c, refresh/files/surf.c
 # and soft/sw_view.c, which need only shared.c; none of it includes SDL. Needs no SDL and no game
@@ -1498,6 +1506,7 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(TESTDIR)/src/client/cl_parse.o \
 	$(TESTDIR)/src/client/cl_screen.o \
 	$(TESTDIR)/src/client/cl_upscale.o \
+	$(TESTDIR)/src/client/menu/vidrules.o \
 	$(TESTDIR)/src/client/sound/sound.o \
 	$(TESTDIR)/src/client/vid/glimp_hidpi.o \
 	$(TESTDIR)/src/client/refresh/files/imgscale.o \
