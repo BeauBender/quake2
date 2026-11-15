@@ -18,7 +18,7 @@
  * =======================================================================
  *
  * The order in which a sky face's replacements are tried (files/image.c):
- * the decision and the size of the stock face, as pure functions that
+ * the decision, its asset size and the size of the stock face, as pure functions that
  * need no engine header, so tests/image/skyorder_test.c tests them alone.
  *
  * =======================================================================
@@ -64,28 +64,75 @@ SkyOrder_TgaSize(const unsigned char *data, size_t size, int *width, int *height
 }
 
 /*
- * 1 when a sky face's decoded PNG is tried before the stock .tga: only
- * with retexturing, for a sky face, when a PNG decoded (png_w and png_h
- * above 0) and it is at least the stock face's size. stock_w and stock_h
- * are 0 when the stock face's size is not known (no .tga, or one with
- * no readable header), which no PNG is smaller than. Else 0, and the
- * order is the one for every other image: .tga, .png, .jpg.
+ * What SkyOrder_Choose decides for one lookup.
+ *
+ * png_first: use the PNG that was decoded, before the .tga.
+ * try_png_later: when the .tga, tried next, fails, the chain may look
+ *   for the .png again. 0 when the PNG was already tried and failed (or
+ *   is absent), so a decode error is printed at most once and the file
+ *   is not decoded a second time in the lookup.
+ * asset_w, asset_h: the size to hand to load_image as the asset's own
+ *   size when png_first (the stock face's, so that the software renderer,
+ *   which draws a sky face as 256 texels a row, resamples the face to it
+ *   as it does a retextured wall; GL and Metal upload the PNG at its own
+ *   size). 0 and 0: leave the size the caller already has.
  */
-static inline int
-SkyOrder_PngFirst(int retexturing, int is_sky, int png_w, int png_h,
-		int stock_w, int stock_h)
+typedef struct
 {
-	if (!retexturing || !is_sky)
+	int png_first;
+	int try_png_later;
+	int asset_w;
+	int asset_h;
+} skyorder_t;
+
+/*
+ * The order in which a sky face's replacements are tried. is_sky: the
+ * image type is a sky face (retexturing is on whenever this is asked).
+ * png_w, png_h: the size of the PNG, or 0 when there is none or it did
+ * not decode. stock_w, stock_h: the size of the stock face, or 0 when
+ * not known (no .tga, or one with no readable header); a size is known
+ * only when both sides are above 0, and no PNG is smaller than an
+ * unknown size.
+ *
+ * For a sky face with a PNG at least the stock face's size in both
+ * sides, the PNG comes first. Every other case keeps the order for
+ * every other image: .tga, .png, .jpg.
+ */
+static inline skyorder_t
+SkyOrder_Choose(int is_sky, int png_w, int png_h, int stock_w, int stock_h)
+{
+	skyorder_t o = { 0, 1, 0, 0 };
+	int have_png = png_w >= 1 && png_h >= 1;
+	int known = stock_w >= 1 && stock_h >= 1;
+
+	if (!is_sky)
 	{
-		return 0;
+		return o;
 	}
 
-	if (png_w < 1 || png_h < 1)
+	/* the PNG is tried here: later only when it decoded and lost */
+	o.try_png_later = have_png;
+
+	if (!have_png)
 	{
-		return 0;
+		return o;
 	}
 
-	return png_w >= stock_w && png_h >= stock_h;
+	if (known && (png_w < stock_w || png_h < stock_h))
+	{
+		return o;
+	}
+
+	o.png_first = 1;
+	o.try_png_later = 0;
+
+	if (known)
+	{
+		o.asset_w = stock_w;
+		o.asset_h = stock_h;
+	}
+
+	return o;
 }
 
 #endif /* SRC_CLIENT_REFRESH_FILES_SKYORDER_H_ */

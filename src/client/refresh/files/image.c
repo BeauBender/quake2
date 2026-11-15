@@ -439,9 +439,10 @@ scale3x(const byte *src, byte *dst, int width, int height)
 
 static struct image_s *
 LoadHiColorImage(const char *name, const char* namewe, const char *ext,
-	imagetype_t type, qboolean r_retexturing, loadimage_t load_image)
+	imagetype_t type, loadimage_t load_image)
 {
-	qboolean loaded = false;
+	skyorder_t order;
+	int pngw = 0, pngh = 0, stockw = 0, stockh = 0;
 	int realwidth = 0, realheight = 0;
 	int width = 0, height = 0;
 	struct image_s	*image = NULL;
@@ -471,14 +472,21 @@ LoadHiColorImage(const char *name, const char* namewe, const char *ext,
 	 * is not reached by the order below, as the pak's .tga is found
 	 * first. Here and not in GetSkyImage, as that asks for the .tga
 	 * and this loader then tries the .tga before the .png for any name.
-	 * No PNG, or a smaller one: the order below, unchanged.
+	 * Only the file reads are here, skyorder.h decides (the order and
+	 * the asset size: the stock face's, as the software renderer draws
+	 * a sky face 256 texels a row). No PNG, or a smaller one: the order
+	 * below, unchanged.
 	 */
 	if (type == it_sky && LoadDecoded(namewe, "png", &pic, &width, &height))
 	{
-		int stockw = realwidth, stockh = realheight;
 		char tganame[256];
 		byte *tgadata = NULL;
 		int tgasize;
+
+		pngw = width;
+		pngh = height;
+		stockw = realwidth;
+		stockh = realheight;
 
 		FixFileExt(namewe, "tga", tganame, sizeof(tganame));
 		tgasize = ri.FS_LoadFile(tganame, (void **)&tgadata);
@@ -494,21 +502,26 @@ LoadHiColorImage(const char *name, const char* namewe, const char *ext,
 
 			ri.FS_FreeFile(tgadata);
 		}
+	}
 
-		loaded = SkyOrder_PngFirst(r_retexturing, type == it_sky,
-			width, height, stockw, stockh);
+	order = SkyOrder_Choose(type == it_sky, pngw, pngh, stockw, stockh);
 
-		if (!loaded)
-		{
-			free(pic);
-			pic = NULL;
-		}
+	if (!order.png_first && pic != NULL)
+	{
+		free(pic);
+		pic = NULL;
+	}
+
+	if (order.asset_w > 0 && order.asset_h > 0)
+	{
+		realwidth = order.asset_w;
+		realheight = order.asset_h;
 	}
 
 	/* try to load a tga, png or jpg (in that order/priority) */
-	if (  loaded
+	if (  order.png_first
 	   || LoadDecoded(namewe, "tga", &pic, &width, &height)
-	   || LoadDecoded(namewe, "png", &pic, &width, &height)
+	   || (order.try_png_later && LoadDecoded(namewe, "png", &pic, &width, &height))
 	   || LoadDecoded(namewe, "jpg", &pic, &width, &height) )
 	{
 		if (width >= realwidth && height >= realheight)
@@ -544,7 +557,7 @@ R_LoadImage(const char *name, const char* namewe, const char *ext, imagetype_t t
 	// with retexturing and not skin
 	if (r_retexturing)
 	{
-		image = LoadHiColorImage(name, namewe, ext, type, r_retexturing, load_image);
+		image = LoadHiColorImage(name, namewe, ext, type, load_image);
 	}
 
 	if (!image)

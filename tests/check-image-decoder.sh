@@ -114,8 +114,8 @@ if ! $cc $sflags -o "${tmp:?}/imgdecode_test" $srcs $libs > "${tmp:?}/cc.out" 2>
 fi
 
 # the sky face order: pure functions in a header, no decoder needed
-# shellcheck disable=SC2086 # flags is a word list
-if ! $cc $flags -o "${tmp:?}/skyorder_test" tests/image/skyorder_test.c > "${tmp:?}/cc.out" 2>&1; then
+# shellcheck disable=SC2086 # sflags is a word list
+if ! $cc $sflags -o "${tmp:?}/skyorder_test" tests/image/skyorder_test.c > "${tmp:?}/cc.out" 2>&1; then
 	cat "${tmp:?}/cc.out"
 	echo "check-image-decoder: the sky order test does not build"
 	exit 1

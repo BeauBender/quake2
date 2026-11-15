@@ -24,6 +24,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "../../src/client/refresh/files/skyorder.h"
@@ -40,41 +41,73 @@ static int checks, failed;
 		} \
 	} while (0)
 
+/* one lookup: is_sky, the PNG's size, the stock face's size */
+static void
+expect(int line, skyorder_t o, int first, int later, int aw, int ah)
+{
+	checks++;
+	if (o.png_first != first || o.try_png_later != later
+			|| o.asset_w != aw || o.asset_h != ah)
+	{
+		failed++;
+		printf("skyorder_test: line %d: got %d %d %d %d, want %d %d %d %d\n",
+			line, o.png_first, o.try_png_later, o.asset_w, o.asset_h,
+			first, later, aw, ah);
+	}
+}
+
+#define EXPECT(o, first, later, aw, ah) expect(__LINE__, (o), (first), (later), (aw), (ah))
+
 static void
 test_order(void)
 {
-	/* retexturing off, a sky, a larger PNG: the old order */
-	CHECK(SkyOrder_PngFirst(0, 1, 512, 512, 256, 256) == 0);
-	/* not a sky face */
-	CHECK(SkyOrder_PngFirst(1, 0, 512, 512, 256, 256) == 0);
-	/* no PNG decoded */
-	CHECK(SkyOrder_PngFirst(1, 1, 0, 0, 256, 256) == 0);
-	CHECK(SkyOrder_PngFirst(1, 1, 0, 512, 256, 256) == 0);
-	CHECK(SkyOrder_PngFirst(1, 1, 512, 0, 256, 256) == 0);
-	CHECK(SkyOrder_PngFirst(1, 1, -1, -1, 0, 0) == 0);
-	CHECK(SkyOrder_PngFirst(1, 1, -1, 512, 0, 0) == 0);
-	CHECK(SkyOrder_PngFirst(1, 1, 512, -1, 0, 0) == 0);
-	/* no PNG decoded, and no stock size either: still no PNG first */
-	CHECK(SkyOrder_PngFirst(1, 1, 0, 0, 0, 0) == 0);
-	CHECK(SkyOrder_PngFirst(1, 1, 0, 512, 0, 0) == 0);
-	CHECK(SkyOrder_PngFirst(1, 1, 512, 0, 0, 0) == 0);
-	CHECK(SkyOrder_PngFirst(1, 1, 1, 1, 0, 0) == 1);
-	/* smaller than the face, in either side */
-	CHECK(SkyOrder_PngFirst(1, 1, 128, 128, 256, 256) == 0);
-	CHECK(SkyOrder_PngFirst(1, 1, 255, 256, 256, 256) == 0);
-	CHECK(SkyOrder_PngFirst(1, 1, 256, 255, 256, 256) == 0);
-	CHECK(SkyOrder_PngFirst(1, 1, 512, 128, 256, 256) == 0);
-	CHECK(SkyOrder_PngFirst(1, 1, 128, 512, 256, 256) == 0);
-	/* equal to the face */
-	CHECK(SkyOrder_PngFirst(1, 1, 256, 256, 256, 256) == 1);
-	/* larger */
-	CHECK(SkyOrder_PngFirst(1, 1, 512, 512, 256, 256) == 1);
-	CHECK(SkyOrder_PngFirst(1, 1, 1024, 1024, 256, 256) == 1);
-	CHECK(SkyOrder_PngFirst(1, 1, 257, 256, 256, 256) == 1);
-	CHECK(SkyOrder_PngFirst(1, 1, 256, 257, 256, 256) == 1);
-	/* the .tga is missing: its size is not known, any PNG is used */
-	CHECK(SkyOrder_PngFirst(1, 1, 64, 64, 0, 0) == 1);
-	CHECK(SkyOrder_PngFirst(1, 1, 512, 512, 0, 0) == 1);
+	/* not a sky face: the order for every image, whatever the sizes */
+	EXPECT(SkyOrder_Choose(0, 0, 0, 0, 0), 0, 1, 0, 0);
+	EXPECT(SkyOrder_Choose(0, 512, 512, 256, 256), 0, 1, 0, 0);
+	EXPECT(SkyOrder_Choose(0, 512, 512, 0, 0), 0, 1, 0, 0);
+
+	/* a sky face with no PNG (or one that did not decode): no second try */
+	EXPECT(SkyOrder_Choose(1, 0, 0, 256, 256), 0, 0, 0, 0);
+	EXPECT(SkyOrder_Choose(1, 0, 512, 256, 256), 0, 0, 0, 0);
+	EXPECT(SkyOrder_Choose(1, 512, 0, 256, 256), 0, 0, 0, 0);
+	EXPECT(SkyOrder_Choose(1, -1, -1, 0, 0), 0, 0, 0, 0);
+	EXPECT(SkyOrder_Choose(1, -1, 512, 0, 0), 0, 0, 0, 0);
+	EXPECT(SkyOrder_Choose(1, 512, -1, 0, 0), 0, 0, 0, 0);
+	EXPECT(SkyOrder_Choose(1, 0, 0, 0, 0), 0, 0, 0, 0);
+
+	/* a smaller PNG, in either side: the .tga first, the PNG after it */
+	EXPECT(SkyOrder_Choose(1, 128, 128, 256, 256), 0, 1, 0, 0);
+	EXPECT(SkyOrder_Choose(1, 255, 256, 256, 256), 0, 1, 0, 0);
+	EXPECT(SkyOrder_Choose(1, 256, 255, 256, 256), 0, 1, 0, 0);
+	EXPECT(SkyOrder_Choose(1, 512, 128, 256, 256), 0, 1, 0, 0);
+	EXPECT(SkyOrder_Choose(1, 128, 512, 256, 256), 0, 1, 0, 0);
+
+	/* an equal PNG: first, at the stock size */
+	EXPECT(SkyOrder_Choose(1, 256, 256, 256, 256), 1, 0, 256, 256);
+
+	/* a larger PNG with a known stock size: first, the asset is the stock face */
+	EXPECT(SkyOrder_Choose(1, 512, 512, 256, 256), 1, 0, 256, 256);
+	EXPECT(SkyOrder_Choose(1, 1024, 1024, 256, 256), 1, 0, 256, 256);
+	EXPECT(SkyOrder_Choose(1, 257, 256, 256, 256), 1, 0, 256, 256);
+	EXPECT(SkyOrder_Choose(1, 256, 257, 256, 256), 1, 0, 256, 256);
+	/* a stock face that is not square: each side is its own */
+	EXPECT(SkyOrder_Choose(1, 600, 400, 300, 200), 1, 0, 300, 200);
+
+	/* a stock face of one texel a side is a size */
+	EXPECT(SkyOrder_Choose(1, 8, 8, 1, 1), 1, 0, 1, 1);
+	EXPECT(SkyOrder_Choose(1, 8, 8, 1, 4), 1, 0, 1, 4);
+	EXPECT(SkyOrder_Choose(1, 8, 8, 4, 1), 1, 0, 4, 1);
+
+	/* the stock size is not known: any PNG, the asset size is left alone */
+	EXPECT(SkyOrder_Choose(1, 64, 64, 0, 0), 1, 0, 0, 0);
+	EXPECT(SkyOrder_Choose(1, 512, 512, 0, 0), 1, 0, 0, 0);
+	EXPECT(SkyOrder_Choose(1, 1, 1, 0, 0), 1, 0, 0, 0);
+	/* half a size is no size */
+	EXPECT(SkyOrder_Choose(1, 512, 512, 256, 0), 1, 0, 0, 0);
+	EXPECT(SkyOrder_Choose(1, 512, 512, 0, 256), 1, 0, 0, 0);
+	EXPECT(SkyOrder_Choose(1, 8, 8, 256, 0), 1, 0, 0, 0);
+	EXPECT(SkyOrder_Choose(1, 8, 8, 0, 256), 1, 0, 0, 0);
+	EXPECT(SkyOrder_Choose(1, 512, 512, -1, -1), 1, 0, 0, 0);
 }
 
 static void
@@ -119,10 +152,35 @@ test_tgasize(void)
 	tga_header(h, 1, 1);
 	CHECK(SkyOrder_TgaSize(h, 18, &w, &hh) == 1 && w == 1 && hh == 1);
 
-	/* too short, or no data */
+	/* too short, or no data: a heap buffer of exactly the size passed */
 	tga_header(h, 256, 256);
-	w = hh = 5;
-	CHECK(SkyOrder_TgaSize(h, 17, &w, &hh) == 0 && w == 0 && hh == 0);
+	{
+		unsigned char *exact = malloc(17);
+
+		CHECK(exact != NULL);
+
+		if (exact != NULL)
+		{
+			memcpy(exact, h, 17);
+			w = hh = 5;
+			CHECK(SkyOrder_TgaSize(exact, 17, &w, &hh) == 0 && w == 0 && hh == 0);
+			free(exact);
+		}
+	}
+
+	{
+		unsigned char *exact = malloc(18);
+
+		CHECK(exact != NULL);
+
+		if (exact != NULL)
+		{
+			memcpy(exact, h, 18);
+			CHECK(SkyOrder_TgaSize(exact, 18, &w, &hh) == 1 && w == 256);
+			free(exact);
+		}
+	}
+
 	CHECK(SkyOrder_TgaSize(h, 0, &w, &hh) == 0);
 	CHECK(SkyOrder_TgaSize(NULL, 18, &w, &hh) == 0);
 }
