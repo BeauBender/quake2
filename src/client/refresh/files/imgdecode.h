@@ -132,6 +132,12 @@ imgdec_result_t IMGDEC_ToRGBA(const imgdec_layout_t *layout,
  */
 int IMGDEC_BitmapLayout(uint32_t bitmap_info, uint32_t alpha_info,
 		size_t *swap, imgdec_alpha_t *alpha);
+
+/*
+ * 1 when ImageIO's CGImageSourceStatus for a source and for its image
+ * are both kCGImageStatusComplete, else 0.
+ */
+int IMGDEC_StatusComplete(int32_t source_status, int32_t image_status);
 #endif
 
 /*

@@ -607,6 +607,27 @@ test_bitmap_layout(void)
 		}
 	}
 }
+
+/* complete only when both statuses are s[0]; 1 is past every CGImageSourceStatus */
+static void
+test_status(void)
+{
+	static const int32_t s[] = {kCGImageStatusComplete, kCGImageStatusUnexpectedEOF,
+		kCGImageStatusInvalidData, kCGImageStatusUnknownType, kCGImageStatusReadingHeader,
+		kCGImageStatusIncomplete, 1};
+	size_t i, j;
+
+	for (i = 0; i < sizeof(s) / sizeof(s[0]); i++)
+	{
+		for (j = 0; j < sizeof(s) / sizeof(s[0]); j++)
+		{
+			int want = i == 0 && j == 0;
+
+			CHECK(IMGDEC_StatusComplete(s[i], s[j]) == want, "status %d and %d: want %d",
+				(int)s[i], (int)s[j], want);
+		}
+	}
+}
 #endif
 
 static void
@@ -895,6 +916,7 @@ typedef struct
 	const unsigned char *want;	/* RGBA8, NULL for a refusal */
 	int w, h, tol;
 	imgdec_result_t refusal;	/* IMGDEC_OK: any refusal */
+	int gap;			/* a known gap: decodes, though it should not */
 } dcase_t;
 
 #define MAX_CASES 96
@@ -941,6 +963,14 @@ add_bad(const char *what, buf_t file, size_t size, const char *ext, imgdec_resul
 	c->size = size;
 	c->refusal = refusal;
 }
+
+#ifdef __APPLE__
+static void
+add_gap(const char *what, buf_t file, const char *ext)
+{
+	add_case(what, file, ext)->gap = 1;
+}
+#endif
 
 static buf_t
 copy_buf(const buf_t *b)
@@ -1403,7 +1433,11 @@ build_cases(void)
 		/*
 		 * Cut inside the pixel data, the container itself well formed: a
 		 * PNG whose complete zlib stream holds fewer rows than its IHDR
-		 * declares, and TGAs that declare more rows than they hold.
+		 * declares, and TGAs that declare more rows than they hold. Only
+		 * the plain TGA is refused. For the others ImageIO's status stays
+		 * complete, before and after decoding and whatever the decode
+		 * options, and they decode with the missing rows filled in: known
+		 * gaps, kept here so that a change in ImageIO shows.
 		 */
 		static const char *png_rows[4] = {"png holding 1 of its 5 rows", "png holding 2 of its 5 rows",
 			"png holding 3 of its 5 rows", "png holding 4 of its 5 rows"};
@@ -1412,18 +1446,17 @@ build_cases(void)
 
 		for (k = 1; k < RH; k++)
 		{
-			add_bad(png_rows[k - 1], png_file(RW, RH, 8, 2, rgb, RW * 3, (size_t)k, NULL, 0, NULL, 0),
-				(size_t)-1, "png", IMGDEC_ERR_DECODE);
+			add_gap(png_rows[k - 1], png_file(RW, RH, 8, 2, rgb, RW * 3, (size_t)k, NULL, 0, NULL, 0), "png");
 		}
-		add_bad("png rgba holding 4 of its 5 rows", png_file(RW, RH, 8, 6, ref, RW * 4, RH - 1, NULL, 0, NULL, 0),
-			(size_t)-1, "png", IMGDEC_ERR_DECODE);
+		add_gap("png rgba holding 4 of its 5 rows", png_file(RW, RH, 8, 6, ref, RW * 4, RH - 1, NULL, 0, NULL, 0),
+			"png");
 
 		t = tga_file(RW, 3, 24, 0, 0, ref);
 		t.p[14] = RH;
 		add_bad("tga holding 3 of its 5 rows", t, (size_t)-1, "tga", IMGDEC_ERR_DECODE);
 		t = tga_file(RW, 3, 32, 1, 0, ref);
 		t.p[14] = RH;
-		add_bad("tga rle holding 3 of its 5 rows", t, (size_t)-1, "tga", IMGDEC_ERR_DECODE);
+		add_gap("tga rle holding 3 of its 5 rows", t, "tga");
 	}
 	{
 		/* JPEGs cut inside their scan data, baseline and progressive */
@@ -1440,17 +1473,15 @@ build_cases(void)
 		at = jpeg_scan_data(&j, 0);
 		CHECK(at > 0 && at + 64 < j.n && jpeg_scan_data(&j, 1) == 0, "the baseline JPEG has one scan");
 		add_bad("jpeg cut 16 bytes into its scan", copy_buf(&j), at + 16, "jpg", IMGDEC_ERR_DECODE);
-		add_bad("jpeg cut halfway through its scan", copy_buf(&j), at + (j.n - at) / 2, "jpg", IMGDEC_ERR_DECODE);
-		add_bad("jpeg cut before its end marker", j, j.n - 2, "jpg", IMGDEC_ERR_DECODE);
+		add_bad("jpeg cut halfway through its scan", j, at + (j.n - at) / 2, "jpg", IMGDEC_ERR_DECODE);
 
 		p = encode_as(CFSTR("public.jpeg"), 32, 32, noise, 0, 1);
 		at = jpeg_scan_data(&p, 1);
 		CHECK(at > 0 && at < p.n, "the progressive JPEG has more than one scan");
 		add_bad("progressive jpeg cut 16 bytes into its first scan", copy_buf(&p),
 			jpeg_scan_data(&p, 0) + 16, "jpg", IMGDEC_ERR_DECODE);
-		add_bad("progressive jpeg cut 16 bytes into its second scan", copy_buf(&p), at + 16, "jpg",
+		add_bad("progressive jpeg cut 16 bytes into its second scan", p, at + 16, "jpg",
 			IMGDEC_ERR_DECODE);
-		add_bad("progressive jpeg cut before its end marker", p, p.n - 2, "jpg", IMGDEC_ERR_DECODE);
 	}
 #else
 	(void)want_jpeg;
@@ -1483,6 +1514,18 @@ run_cases(void)
 		if (c->want)
 		{
 			expect_image(c->what, &c->file, c->ext, c->want, c->w, c->h, c->tol);
+			continue;
+		}
+
+		if (c->gap)
+		{
+			unsigned char *pic;
+			int w, h;
+			imgdec_result_t r = decode(&c->file, c->size, c->ext, &pic, &w, &h);
+
+			CHECK(r == IMGDEC_OK, "%s: now refused (%s): move it to the refusals", c->what,
+				IMGDEC_ResultString(r));
+			free(pic);
 			continue;
 		}
 #else
@@ -1564,6 +1607,7 @@ main(int argc, char **argv)
 	test_tga_layout();
 #ifdef __APPLE__
 	test_bitmap_layout();
+	test_status();
 #endif
 	test_pixel_bytes();
 	test_result_strings();

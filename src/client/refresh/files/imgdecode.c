@@ -31,7 +31,12 @@
  *  5. the declared size is 1 to IMGDEC_MAX_SIDE on each side and at most
  *     IMGDEC_MAX_AREA pixels, before anything is decoded or allocated;
  *     the decoded image must have that size;
- *  6. the decoded pixels are read in the image's own layout and
+ *  6. once the pixels are decoded, ImageIO's status for the source and
+ *     the image is complete: a JPEG cut inside its scan data is refused
+ *     here. A PNG whose complete compressed data holds fewer rows than
+ *     it declares, and a run-length TGA that ends early, get no other
+ *     status from ImageIO and decode with the missing rows filled in;
+ *  7. the decoded pixels are read in the image's own layout and
  *     converted to straight-alpha RGBA8 with no colour conversion, as
  *     stb_image returned them. Nothing is drawn into a bitmap context,
  *     which would premultiply texels with partial alpha; a premultiplied
@@ -390,6 +395,13 @@ IMGDEC_BitmapLayout(uint32_t bitmap_info, uint32_t alpha_info, size_t *swap,
 	return 1;
 }
 
+int
+IMGDEC_StatusComplete(int32_t source_status, int32_t image_status)
+{
+	return source_status == kCGImageStatusComplete &&
+		image_status == kCGImageStatusComplete;
+}
+
 static CFStringRef
 IMGDEC_Identifier(imgdec_type_t type)
 {
@@ -623,6 +635,19 @@ IMGDEC_DecodeImageIO(const unsigned char *data, size_t size, imgdec_type_t want,
 	}
 
 	if (!decoded || CFDataGetLength(decoded) < 0)
+	{
+		r = IMGDEC_ERR_DECODE;
+		goto done;
+	}
+
+	/*
+	 * ImageIO's status once the pixels are decoded: a JPEG cut inside
+	 * its scan data decodes, and only its image's status, set while
+	 * decoding, says it ended early. Before decoding every cut file's
+	 * status is complete.
+	 */
+	if (!IMGDEC_StatusComplete(CGImageSourceGetStatus(source),
+		CGImageSourceGetStatusAtIndex(source, 0)))
 	{
 		r = IMGDEC_ERR_DECODE;
 		goto done;
