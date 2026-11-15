@@ -238,3 +238,59 @@ before. On platforms other than macOS,
 iOS, iPadOS, tvOS and visionOS there is no decoder for PNG, JPEG or TGA
 at all: replacements are not loaded there, and the stock skies are
 always drawn from their `.pcx` faces.
+
+### Textures upscaled on your own machine
+
+The console command `upscale_textures 2` (or `4`) makes replacements
+from your own game data: it writes a PNG twice (four times) the size of
+every world texture (`textures/**/*.wal`), sky face (`env/*.pcx`) and
+model and player skin (`.pcx` under `models/` and `players/`, not the
+`_i.pcx` icons) into the write directory, the one the startup line
+"Using '...' for writing." names, under the same name with `.png`. With
+`r_retexturing 1` the renderers load them at the original's size, as
+they load a texture pack.
+
+The palette indices are scaled with scale2x (EPX), once per doubling,
+and converted with the game's palette as the renderers convert an 8-bit
+texture: index 255 stays transparent, skins are flood-filled first.
+World textures are scaled as repeating tiles, so they still tile
+without a visible seam; skins and skies keep their own edges. No new
+colour is made: the result is sharper pixel art, not new detail.
+
+* A file that exists is left alone; `upscale_textures 2 force` writes
+  every file again. A link, or anything else that is not a regular
+  file, at an output name is never written through: it is left alone,
+  and with `force` refused. Each PNG is written to a temporary file in
+  its directory, synced to disk and renamed to its name only when all
+  of it was written, so a failed write leaves the earlier file, or
+  none. A file whose directory cannot be made, or has no real path, is
+  not written and counts as failed.
+* One line reports the files written, skipped, refused and failed and
+  the bytes written. It says so when a listing stopped at its limit
+  (4096 directories or 65536 files of a kind), and it counts the loose
+  directories that were not walked because their names are refused (see
+  below): in either case not every file was looked at.
+* Names are taken only when they consist of `a`-`z`, `A`-`Z` (kept as
+  they are), `0`-`9`, `_`, `-`, `+`, `.` and `/`, have no `..`, no
+  leading `/`, no empty component or component that begins with a dot,
+  and fit 63 characters with `.png`. `+` is the prefix of the animated
+  textures (`+0btshoot1` and the frames after it), so the 77 of the
+  stock data are upscaled too. Others are refused: in the stock data
+  two skins named with `..`, `models/monsters/tank/../ctank/skin.pcx`
+  and `models/monsters/tank/../ctank/pain.pcx`. A source larger than
+  1024 pixels on a side is refused.
+* Nothing is written when the write directory is inside a git work tree
+  (a `.git` entry in it or any directory above it), and no file is
+  written whose own directory is in one, such as a `textures`
+  directory that is a repository or a link into one: the results come
+  from id Software's data and must not be committed anywhere.
+* The command is refused while a demo plays and while the client is
+  connected to a server that is not local. That stops it when a demo
+  or a connected remote server sends it as console text, and nothing
+  more: console text from a server is not filtered, by design, so a
+  server that has the client disconnect first can still start it.
+* The stock sky faces are also shipped as `.tga` files, and the loader
+  looks for a `.tga` before a `.png`, so the stock skies keep their
+  `.tga` faces; the `.png` faces are used where a sky has no `.tga`.
+* There is no PNG encoder off Apple platforms; the command does
+  nothing there.

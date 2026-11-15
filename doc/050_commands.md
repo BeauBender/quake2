@@ -53,6 +53,18 @@ original clients (Vanilla Quake II) commands are still in place.
 
 * **teleport <x y z>**: Teleports the player to the given coordinates.
 
+* **upscale_textures <2|4> [force]**: Writes PNG versions, twice or four
+  times the size, of the world textures, the faces of the skies and the
+  model and player skin images of the game data into the write
+  directory, scaled with scale2x, where `r_retexturing 1` loads them.
+  Files that exist are skipped unless `force` is given, and a symlink at
+  an output name is never written through; names that are not plain
+  paths (letters, digits, `_`, `-`, `+`, `.` and `/`) are refused,
+  nothing is written inside a git work tree, and the command is refused
+  while a demo plays or while connected to a remote server (a server
+  that first ends the connection itself can still start it). See
+  "Textures upscaled on your own machine" in `030_configuration.md`.
+
 * **viewpos**: Show player position.
 
 * **vstr**: Inserts the current value of a variable as command text.

@@ -27,6 +27,7 @@
 
 #include <errno.h>
 #include "header/client.h"
+#include "header/upscale.h"
 #include "input/header/input.h"
 
 void CL_ForwardToServer_f(void);
@@ -634,6 +635,7 @@ CL_InitLocal(void)
 
 	Cmd_AddCommand("userinfo", CL_Userinfo_f);
 	Cmd_AddCommand("snd_restart", CL_Snd_Restart_f);
+	Cmd_AddCommand("upscale_textures", CL_UpscaleTextures_f);
 
 	Cmd_AddCommand("changing", CL_Changing_f);
 	Cmd_AddCommand("disconnect", CL_Disconnect_f);

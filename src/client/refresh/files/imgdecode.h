@@ -58,7 +58,8 @@ typedef enum
 	IMGDEC_ERR_LAYOUT,	/* a pixel layout that is not converted */
 	IMGDEC_ERR_DECODE,	/* the pixels could not be decoded */
 	IMGDEC_ERR_MEMORY,
-	IMGDEC_ERR_UNSUPPORTED	/* no decoder on this platform */
+	IMGDEC_ERR_UNSUPPORTED,	/* no decoder on this platform */
+	IMGDEC_ERR_ENCODE	/* IMGDEC_EncodePNG wrote no PNG */
 } imgdec_result_t;
 
 /* How the decoded pixels are laid out in memory (imgdecode.c). */
@@ -150,5 +151,17 @@ imgdec_result_t IMGDEC_Decode(const void *data, size_t size, const char *ext,
 		unsigned char **pixels, int *width, int *height);
 
 const char *IMGDEC_ResultString(imgdec_result_t result);
+
+/*
+ * Encodes width by height straight-alpha RGBA8 (rgba, width * 4 bytes a
+ * row) as a PNG file: on Apple platforms through ImageIO's
+ * CGImageDestination, the bytes as they are, tagged sRGB, with no
+ * colour conversion and no premultiplication, so that IMGDEC_Decode
+ * returns them unchanged. The size is bounded as IMGDEC_Decode bounds
+ * it. On IMGDEC_OK *png is malloc()ed, *pnglen bytes the caller
+ * free()s; on failure *png is NULL. Elsewhere IMGDEC_ERR_UNSUPPORTED.
+ */
+imgdec_result_t IMGDEC_EncodePNG(const unsigned char *rgba, size_t width,
+		size_t height, unsigned char **png, size_t *pnglen);
 
 #endif /* SRC_CLIENT_REFRESH_FILES_IMGDECODE_H_ */

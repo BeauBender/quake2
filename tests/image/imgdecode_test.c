@@ -635,7 +635,7 @@ test_result_strings(void)
 {
 	int i, j;
 
-	for (i = IMGDEC_OK; i <= IMGDEC_ERR_UNSUPPORTED; i++)
+	for (i = IMGDEC_OK; i <= IMGDEC_ERR_ENCODE; i++)
 	{
 		const char *s = IMGDEC_ResultString((imgdec_result_t)i);
 
@@ -647,6 +647,99 @@ test_result_strings(void)
 		}
 	}
 	CHECK(IMGDEC_ResultString((imgdec_result_t)99) != NULL, "an unknown result");
+}
+
+/*
+ * IMGDEC_EncodePNG (upscale_textures): what it writes decodes back byte
+ * for byte, alpha 0 and partial alpha included, so nothing is
+ * premultiplied or colour-converted on the way.
+ */
+static void
+test_encode_png(void)
+{
+	static const size_t sizes[][2] = { { 1, 1 }, { 3, 5 }, { 64, 64 }, { 256, 7 }, { 7, 256 } };
+	size_t i, k;
+	unsigned seed = 7;
+
+	for (i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++)
+	{
+		int kind;
+
+		/* 0: opaque, 1: alpha 0 or 255 (what upscale_textures writes), 2: any alpha */
+		for (kind = 0; kind < 3; kind++)
+		{
+			size_t w = sizes[i][0], h = sizes[i][1], n = w * h * 4;
+			unsigned char *rgba = malloc(n), *png = NULL, *back = NULL;
+			size_t pnglen = 0;
+			int bw = -1, bh = -1;
+			imgdec_result_t r;
+
+			CHECK(rgba != NULL, "encode: no memory");
+			if (!rgba)
+			{
+				return;
+			}
+
+			for (k = 0; k < n; k++)
+			{
+				seed = seed * 1103515245u + 12345u;
+				rgba[k] = (unsigned char)(seed >> 16);
+			}
+
+			for (k = 3; k < n; k += 4)
+			{
+				if (kind == 0)
+				{
+					rgba[k] = 255;
+				}
+				else if (kind == 1)
+				{
+					rgba[k] = (rgba[k] & 1) ? 255 : 0;
+				}
+			}
+
+			r = IMGDEC_EncodePNG(rgba, w, h, &png, &pnglen);
+#ifdef __APPLE__
+			CHECK(r == IMGDEC_OK, "encode %zux%zu kind %d: %s", w, h, kind, IMGDEC_ResultString(r));
+			CHECK(png != NULL && pnglen > 8 && !memcmp(png, "\x89PNG", 4),
+				"encode %zux%zu kind %d: no PNG", w, h, kind);
+			if (r == IMGDEC_OK && png)
+			{
+				r = IMGDEC_Decode(png, pnglen, "png", &back, &bw, &bh);
+				CHECK(r == IMGDEC_OK, "encode %zux%zu kind %d: decodes as %s", w, h, kind,
+					IMGDEC_ResultString(r));
+				CHECK(bw == (int)w && bh == (int)h, "encode %zux%zu kind %d: back as %dx%d",
+					w, h, kind, bw, bh);
+				CHECK(back && bw == (int)w && bh == (int)h && !memcmp(back, rgba, n),
+					"encode %zux%zu kind %d: not the same bytes back", w, h, kind);
+			}
+#else
+			CHECK(r == IMGDEC_ERR_UNSUPPORTED, "encode: %s off Apple platforms", IMGDEC_ResultString(r));
+			CHECK(png == NULL, "encode: a buffer off Apple platforms");
+#endif
+			free(back);
+			free(png);
+			free(rgba);
+		}
+	}
+
+	/* the decoder's bounds, before anything is made */
+	{
+		unsigned char px[4] = { 1, 2, 3, 4 }, *png = (unsigned char *)px;
+		size_t pnglen = 0;
+
+		CHECK(IMGDEC_EncodePNG(px, 0, 1, &png, &pnglen) == IMGDEC_ERR_SIZE, "encode 0x1");
+		CHECK(png == NULL, "encode 0x1: a buffer");
+		CHECK(IMGDEC_EncodePNG(px, 1, 0, &png, &pnglen) == IMGDEC_ERR_SIZE, "encode 1x0");
+		CHECK(IMGDEC_EncodePNG(px, IMGDEC_MAX_SIDE + 1, 1, &png, &pnglen) == IMGDEC_ERR_SIZE,
+			"encode a side too long");
+		CHECK(IMGDEC_EncodePNG(px, IMGDEC_MAX_SIDE, IMGDEC_MAX_SIDE, &png, &pnglen) == IMGDEC_ERR_SIZE,
+			"encode too many pixels");
+		CHECK(IMGDEC_EncodePNG(NULL, 1, 1, &png, &pnglen) == IMGDEC_ERR_ENCODE, "encode NULL");
+		CHECK(IMGDEC_EncodePNG(px, 1, 1, NULL, &pnglen) == IMGDEC_ERR_ENCODE, "encode to NULL");
+		CHECK(IMGDEC_EncodePNG(px, 1, 1, &png, NULL) == IMGDEC_ERR_ENCODE, "encode no length");
+		CHECK(png == NULL, "encode refused: a buffer");
+	}
 }
 
 /* converts one layout and compares with want */
@@ -1644,6 +1737,7 @@ main(int argc, char **argv)
 		for (i = 0; i < loops; i++)
 		{
 			run_cases();
+			test_encode_png();
 		}
 		free_cases();
 		printf("imgdecode_test: %d loops of %d cases, %d checks, %d failed\n",
@@ -1662,6 +1756,7 @@ main(int argc, char **argv)
 	test_pixel_bytes();
 	test_result_strings();
 	test_to_rgba();
+	test_encode_png();
 	run_cases();
 	free_cases();
 
