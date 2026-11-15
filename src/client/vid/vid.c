@@ -846,6 +846,10 @@ VID_CheckChanges(void)
 {
 	static const char *r_order[] = {
 		"gl3",
+#ifdef __APPLE__
+		/* the native Metal renderer, ahead of gl1 on macOS only (TASK93) */
+		"metal",
+#endif
 		"gl1",
 		"soft"
 	};
