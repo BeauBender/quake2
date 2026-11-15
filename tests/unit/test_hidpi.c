@@ -1,0 +1,164 @@
+/*
+ * Copyright (C) 2026 Yamagi Quake II contributors
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or (at
+ * your option) any later version.
+ *
+ * =======================================================================
+ *
+ * The high pixel density decisions of the window code (TASK118,
+ * src/client/vid/glimp_hidpi.c), and the 2D scale that follows the size
+ * the client takes (src/client/cl_screen.c):
+ *
+ * - GLimp_HighDPIWanted asks for SDL_WINDOW_HIGH_PIXEL_DENSITY for the
+ *   wayland, cocoa and uikit drivers when vid_highdpiaware is not 0, and
+ *   never for another driver, a near miss of a name or no name.
+ * - GLimp_DrawableInPixels takes the window's pixels for viddef on a
+ *   HighDPI window that is not a fullscreen window, or a fullscreen
+ *   window at r_mode -2; the mode's size otherwise.
+ * - With the two together, a 640x480 window on a display of pixel density
+ *   2 gives viddef 1280x960 and the default 2D scale 2 at
+ *   vid_highdpiaware 1, and 640x480 and scale 1 at 0.
+ *
+ * Not proven here: what SDL makes of the flag (the window's pixels);
+ * that is measured with the engine, see the runbook's TASK118 section.
+ *
+ * =======================================================================
+ */
+
+#include "test.h"
+#include "../../src/client/header/client.h"
+#include "stub_client.h"
+
+TEST(hidpi_wanted_on_the_apple_drivers_and_wayland)
+{
+	T_CHECK(GLimp_HighDPIWanted(1, "cocoa"));
+	T_CHECK(GLimp_HighDPIWanted(1, "uikit"));
+	T_CHECK(GLimp_HighDPIWanted(1, "wayland"));
+
+	/* any value but 0, as the window code has always read it */
+	T_CHECK(GLimp_HighDPIWanted(2, "cocoa"));
+	T_CHECK(GLimp_HighDPIWanted(-1, "uikit"));
+	T_CHECK(GLimp_HighDPIWanted(0.5f, "wayland"));
+}
+
+TEST(hidpi_not_wanted_at_0)
+{
+	T_CHECK(!GLimp_HighDPIWanted(0, "cocoa"));
+	T_CHECK(!GLimp_HighDPIWanted(0, "uikit"));
+	T_CHECK(!GLimp_HighDPIWanted(0, "wayland"));
+	T_CHECK(!GLimp_HighDPIWanted(-0.0f, "cocoa"));
+}
+
+TEST(hidpi_not_wanted_on_other_drivers)
+{
+	static const char *const others[] = {
+		"x11", "windows", "offscreen", "dummy", "kmsdrm", "emscripten", "",
+		"Cocoa", "UIKIT", "coco", "cocoa2", "uikit ", " uikit", "waylandx", "wayland\n"
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof(others) / sizeof(others[0]); i++)
+	{
+		if (GLimp_HighDPIWanted(1, others[i]))
+		{
+			t_fail(__FILE__, __LINE__, "the driver \"%s\" must not get the flag", others[i]);
+		}
+	}
+
+	T_CHECK(!GLimp_HighDPIWanted(1, NULL));
+	T_CHECK(!GLimp_HighDPIWanted(0, NULL));
+}
+
+TEST(hidpi_drawable_in_pixels_on_a_highdpi_window)
+{
+	/* windowed and exclusive fullscreen: always the window's pixels */
+	T_CHECK(GLimp_DrawableInPixels(true, 0, 4));
+	T_CHECK(GLimp_DrawableInPixels(true, 0, -1));
+	T_CHECK(GLimp_DrawableInPixels(true, 0, -2));
+	T_CHECK(GLimp_DrawableInPixels(true, 1, 4));
+	T_CHECK(GLimp_DrawableInPixels(true, 1, -2));
+
+	/* the fullscreen window: its pixels only for the native size */
+	T_CHECK(GLimp_DrawableInPixels(true, 2, -2));
+	T_CHECK(!GLimp_DrawableInPixels(true, 2, 4));
+	T_CHECK(!GLimp_DrawableInPixels(true, 2, -1));
+	T_CHECK(!GLimp_DrawableInPixels(true, 2, -3));
+	T_CHECK(!GLimp_DrawableInPixels(true, 2, -2.5f));
+	T_CHECK(!GLimp_DrawableInPixels(true, 2, 2));
+}
+
+TEST(hidpi_drawable_never_in_pixels_without_the_flag)
+{
+	int fullscreen;
+
+	for (fullscreen = 0; fullscreen <= 2; fullscreen++)
+	{
+		T_CHECK(!GLimp_DrawableInPixels(false, fullscreen, 4));
+		T_CHECK(!GLimp_DrawableInPixels(false, fullscreen, -1));
+		T_CHECK(!GLimp_DrawableInPixels(false, fullscreen, -2));
+	}
+}
+
+/*
+ * The client's choice for a 640x480 window on a display of the given
+ * density, as GLimp_InitGraphics makes it: SDL gives a HighDPI window the
+ * display's pixels and any other window its size in points.
+ */
+static void
+t_hidpi_viddef(float highdpiaware, int density, int fullscreen, float r_mode)
+{
+	const int mode_w = 640, mode_h = 480;
+	qboolean highdpi = GLimp_HighDPIWanted(highdpiaware, "cocoa");
+	int pix_w = highdpi ? mode_w * density : mode_w;
+	int pix_h = highdpi ? mode_h * density : mode_h;
+
+	if (GLimp_DrawableInPixels(highdpi, fullscreen, r_mode))
+	{
+		viddef.width = pix_w;
+		viddef.height = pix_h;
+	}
+	else
+	{
+		viddef.width = mode_w;
+		viddef.height = mode_h;
+	}
+}
+
+TEST(hidpi_2d_scale_follows_the_size_taken)
+{
+	stub_client_cvars();
+	Cvar_Set("r_hudscale", "-1");
+	Cvar_Set("r_consolescale", "-1");
+	Cvar_Set("r_menuscale", "-1");
+
+	t_hidpi_viddef(1, 2, 0, -1);
+	T_EQ_INT(viddef.width, 1280);
+	T_EQ_INT(viddef.height, 960);
+	T_EQ_FLT(SCR_GetHUDScale(), 2);
+	T_EQ_FLT(SCR_GetConsoleScale(), 2);
+	T_EQ_FLT(SCR_GetMenuScale(), 2);
+
+	t_hidpi_viddef(0, 2, 0, -1);
+	T_EQ_INT(viddef.width, 640);
+	T_EQ_INT(viddef.height, 480);
+	T_EQ_FLT(SCR_GetHUDScale(), 1);
+	T_EQ_FLT(SCR_GetMenuScale(), 1);
+
+	/* density 1: both values give the same size */
+	t_hidpi_viddef(1, 1, 0, -1);
+	T_EQ_INT(viddef.width, 640);
+	T_EQ_INT(viddef.height, 480);
+	T_EQ_FLT(SCR_GetMenuScale(), 1);
+
+	/* a fullscreen window at r_mode 4 keeps the mode's size */
+	t_hidpi_viddef(1, 2, 2, 4);
+	T_EQ_INT(viddef.width, 640);
+	T_EQ_INT(viddef.height, 480);
+	T_EQ_FLT(SCR_GetMenuScale(), 1);
+
+	viddef.width = 640;
+	viddef.height = 480;
+}
