@@ -326,7 +326,9 @@ void rmb_rt_model_free(int mid);
  * it completed). With shadows (RT3's r_rt_shadows on) the frame also keeps
  * its scene for rmb_rt_bind_scene (each instance's first triangle and the
  * lights it carries, in the frame ring; each instance's mask is
- * mtl_rts_inst_mask's); without, nothing beyond TASK53's structures is taken. 1 with
+ * mtl_rts_inst_mask's, with the AO rays' bit, mtl_rtao_inst_mask); RT5's
+ * AO (r_rt_ao) asks for the same with shadows 1; without, nothing beyond
+ * TASK53's structures is taken. 1 with
  * s filled; 0 when nothing was encoded (no frame, a structure missing).
  */
 int rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nlerps, int shadows,
@@ -362,6 +364,14 @@ double rmb_rt_gpu_ms(uint64_t ticks);
  */
 int rmb_rt_bind_scene(id<MTLComputeCommandEncoder> ce, unsigned long fno, int ias_at, int base_at, int trans_at,
 		int ntris_at);
+
+/*
+ * RT5 (TASK57): binds the map's per-triangle material ids (rm_rt_materials,
+ * one byte a triangle of the map's buffers, indexed as the scene's first
+ * triangle plus the primitive) at buffer index mat_at and their number at
+ * n_at. 0, with nothing bound, when the map has none.
+ */
+int rmb_rt_bind_materials(id<MTLComputeCommandEncoder> ce, int mat_at, int n_at);
 #endif
 
 #endif /* RM_RT_H */

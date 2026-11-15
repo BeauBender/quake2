@@ -40,6 +40,7 @@
 #include "header/rmb.h"
 #include "header/rm_gbuf.h"
 #include "header/rm_rtshadow.h"
+#include "header/rm_rtao.h"
 #include "header/rm_metalfx.h"
 
 #if !__has_feature(objc_arc)
@@ -656,9 +657,14 @@ rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 	{
 		MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
 		id<MTLRenderCommandEncoder> enc;
+		id<MTLTexture> lt;
 
 		/* RT3 (TASK55): the shadow rays between the raster and the resolve, when the view asked for them */
 		rmb_rts_trace(t_depth, t_normal, t_material);
+
+		/* RT5 (TASK57): the AO rays; the resolve then reads lightmap x AO in place of the light attachment */
+		lt = rmb_rtao_trace(t_depth, t_normal, t_material, t_light);
+		lt = lt ? lt : t_light;
 		rmb_gbuf_att_target(rp);
 		enc = rmb_frame_open_pass(rp, 0, 0, 0);
 
@@ -671,16 +677,19 @@ rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 		pass_kind = RMB_GB_PASS_OTHER;
 
 		/* the resolve that adds the shadowed dynamic lights where they were traced, else the stock one */
-		if (!rmb_rts_resolve(enc, r, sizeof(*r), t_albedo, t_light, t_material, t_depth, t_normal))
+		if (!rmb_rts_resolve(enc, r, sizeof(*r), t_albedo, lt, t_material, t_depth, t_normal))
 		{
 			[enc setRenderPipelineState:resolve_pipe];
 			[enc setFragmentBytes:r length:sizeof(*r) atIndex:0];
 			[enc setFragmentTexture:t_albedo atIndex:0];
-			[enc setFragmentTexture:t_light atIndex:1];
+			[enc setFragmentTexture:lt atIndex:1];
 			[enc setFragmentTexture:t_material atIndex:2];
 			[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 			rmb_counts.draws++;
 		}
+
+		/* r_rt_ao_show's view over the resolve, when the frame traced the AO */
+		rmb_rtao_show(enc, t_material);
 
 		/* the forward pass over the resolved image: its depth and motion kept, the stencil cleared as the stock pass's */
 		return rmb_gbuf_open_motion(0, 0, 1);

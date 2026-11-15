@@ -41,6 +41,7 @@
 #include "header/local.h"
 #include "header/rm_gbufscene.h"
 #include "header/rm_rtscene.h"
+#include "header/rm_rtaoscene.h"
 #include "header/rm_fxscene.h"
 #include "common/mtl_matrix.h"
 #include "common/mtl_shader_math.h"
@@ -92,9 +93,9 @@ RM_GB_Choose(const refdef_t *fd)
 		return RM_GB_PATH_FORWARD;
 	}
 
-	/* a ray-traced effect on (RT3's shadows, RM_RTS_Frame) takes the G-buffer;
+	/* a ray-traced effect on (RT3's shadows, RM_RTS_Frame; RT5's AO, RM_RTAO_Frame) takes the G-buffer;
 	   a MetalFX scaler asks for the motion path (TASK111) */
-	return rm_gb_path(RM_RTS_Active(), r_rt_gbuffer->value, RM_FX_WantsMotion() ? 1.0f : r_rt_motion->value,
+	return rm_gb_path(RM_RTS_Active() || RM_RTAO_Active(), r_rt_gbuffer->value, RM_FX_WantsMotion() ? 1.0f : r_rt_motion->value,
 			(fd->rdflags & RDF_NOWORLDMODEL) != 0);
 }
 
