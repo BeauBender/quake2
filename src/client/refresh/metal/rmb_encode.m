@@ -93,7 +93,7 @@ static unsigned long frames_begun;
  */
 unsigned long rmb_frame_serial = 1;
 
-/* rmb_device.m: the target of a present slot, and the frame's present (FIX51) */
+/* rmb_device.m: the target of a present slot, and the frame's present (FIX51); rmb_resource.m: its pipeline */
 id<MTLTexture> rmb_present_take(int w, int h);
 id<MTLRenderPipelineState> rmb_present_pipe(void);
 id<CAMetalDrawable> rmb_next_drawable(void);

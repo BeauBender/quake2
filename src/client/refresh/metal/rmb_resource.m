@@ -62,6 +62,7 @@ static id<MTLLibrary> library;
 static id<MTLRenderPipelineState> pipes[RM_PIPE_2D_COUNT];
 static id<MTLRenderPipelineState> pipes3d[RM_PIPE_3D_COUNT];
 static id<MTLRenderPipelineState> alpha_pipe;   /* FIX53: alpha 1 over a target, colour masked; nil if it did not build */
+static id<MTLRenderPipelineState> present_pipe; /* FIX51: the frame onto the drawable with alpha 1; nil if it did not build */
 static id<MTLDepthStencilState> depth_states[RMB_DS_COUNT];
 static id<MTLBuffer> buffers[RMB_MAX_BUFFERS];      /* the static (retained) buffers, private */
 static id<MTLSamplerState> samplers[RMB_SMP_CLASSES * 2];
@@ -117,6 +118,28 @@ rmb_new_pipe_alpha(NSError **e)
 
 	d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
 	d.colorAttachments[0].writeMask = MTLColorWriteMaskAlpha;
+	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
+}
+
+/*
+ * FIX51: the present of a layer that is not opaque in one pass, the
+ * frame's pixels with alpha 1 (rm_fragment_present), for rmb_present_pass
+ * (rmb_encode.m)
+ */
+static id<MTLRenderPipelineState>
+rmb_new_pipe_present(NSError **e)
+{
+	MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+
+	d.vertexFunction = [library newFunctionWithName:@"rm_vertex_alpha"];
+	d.fragmentFunction = [library newFunctionWithName:@"rm_fragment_present"];
+
+	if (!d.vertexFunction || !d.fragmentFunction)
+	{
+		return nil;
+	}
+
+	d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
 	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
 }
 
@@ -368,6 +391,18 @@ rmb_resources_open(const char *dir, char *err, size_t errlen)
 			rmb_counts.pipelines++;
 		}
 
+		/*
+		 * FIX51: the one-pass present of a layer that is not opaque. Not
+		 * fatal either: built once here, never retried, and when it is nil
+		 * rmb_frame_end copies the frame and writes FIX53's pass over it.
+		 */
+		RMB_SET_STATE(present_pipe, rmb_new_pipe_present(&e));
+
+		if (present_pipe)
+		{
+			rmb_counts.pipelines++;
+		}
+
 		if (!rmb_new_depth_states())
 		{
 			snprintf(err, errlen, "cannot build the depth-stencil states");
@@ -475,6 +510,7 @@ rmb_resources_close(void)
 		}
 
 		RMB_SET_STATE(alpha_pipe, nil);
+		RMB_SET_STATE(present_pipe, nil);
 
 		for (i = 0; i < RMB_DS_COUNT; i++)
 		{
@@ -868,6 +904,13 @@ id<MTLRenderPipelineState>
 rmb_alpha_pipe(void)
 {
 	return alpha_pipe;
+}
+
+/* FIX51: the one-pass present's pipeline, nil when it was not built (rmb_encode.m) */
+id<MTLRenderPipelineState>
+rmb_present_pipe(void)
+{
+	return present_pipe;
 }
 
 id<MTLSamplerState>

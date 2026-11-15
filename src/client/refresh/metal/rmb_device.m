@@ -126,64 +126,13 @@ static id<MTLTexture> rmb_present_target[RMB_PRESENTS];      /* the target the s
 static int rmb_present_slot = -1;              /* the slot the open frame holds, or -1 */
 static id<MTLCommandBuffer> rmb_present_cmd;   /* the present of the frame that ends, committed after it */
 
-/*
- * The pipeline of the one-pass present (rm_fragment_present), built once
- * a session by its first frame, from the library rmb_resources_open
- * loaded: never on the present path, and not again after a failure. Nil
- * then, and the frame is copied to the drawable and FIX53's alpha pass
- * written over it, as before.
- */
-static id<MTLRenderPipelineState> rmb_present_pso;
-static int rmb_present_tried;
-
 void rmb_watch(id<MTLCommandBuffer> cmd);
-id<MTLLibrary> rmb_library(void);   /* rmb_resource.m */
 
 /* With display sync off the frames are presented apart (with the present queue and its event made). */
 static int
 rmb_apart(void)
 {
 	return !rmb_sync && rmb_layer && rmb_present_sem[0];
-}
-
-static void
-rmb_present_build(void)
-{
-	MTLRenderPipelineDescriptor *d;
-	NSError *e = nil;
-
-	if (rmb_present_tried || !rmb_device)
-	{
-		return;
-	}
-
-	rmb_present_tried = 1;
-
-	@autoreleasepool
-	{
-		d = [MTLRenderPipelineDescriptor new];
-		d.vertexFunction = [rmb_library() newFunctionWithName:@"rm_vertex_alpha"];
-		d.fragmentFunction = [rmb_library() newFunctionWithName:@"rm_fragment_present"];
-
-		if (d.vertexFunction && d.fragmentFunction)
-		{
-			d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
-			rmb_present_pso = [rmb_device newRenderPipelineStateWithDescriptor:d error:&e];
-		}
-
-		if (rmb_present_pso)
-		{
-			rm_ledger_create(&rmb_ledger, RM_OBJ_STATE);
-			rmb_counts.pipelines++;
-		}
-	}
-}
-
-/* The one-pass present's pipeline, nil when it was not built (rmb_encode.m). */
-id<MTLRenderPipelineState>
-rmb_present_pipe(void)
-{
-	return rmb_present_pso;
 }
 
 /* Puts an acquisition of the next drawable on the queue, unless one is there or done. */
@@ -294,16 +243,13 @@ rmb_ahead_drop(void)
  * off the target of the first free present slot, which the frame then
  * holds, made (again) for the size; nil with display sync on, with every
  * slot held, or when the target cannot be made, and the frame is drawn
- * into its own target and not presented (rmb_encode.m). The first call of
- * a session builds the present's pipeline.
+ * into its own target and not presented (rmb_encode.m).
  */
 id<MTLTexture>
 rmb_present_take(int w, int h)
 {
 	MTLTextureDescriptor *d;
 	int i, slot = -1;
-
-	rmb_present_build();
 
 	/* a slot still held by a frame that never ended is given back first */
 	if ((rmb_present_slot >= 0) && !rmb_present_cmd)
@@ -755,14 +701,6 @@ rmb_close(rmb_stats_t *stats, rm_ledger_t *ledger)
 			{
 				rmb_present_sem[i] = nil;
 			}
-
-			if (rmb_present_pso)
-			{
-				rmb_present_pso = nil;
-				rm_ledger_destroy(&rmb_ledger, RM_OBJ_STATE);
-			}
-
-			rmb_present_tried = 0;
 
 			/* the system default device is shared with the rest of the process:
 			   only ref_metal's reference is dropped, it is not weak-checked */
