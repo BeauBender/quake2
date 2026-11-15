@@ -308,8 +308,6 @@ RI_Init(void)
 		return false;
 	}
 
-	RM_RT_Init(&caps);   /* the r_rt_* cvars (TASK53); builds nothing */
-
 	if (!R_SetMode())
 	{
 		R_Printf(PRINT_ALL, "ref_metal::%s - could not R_SetMode()\n", __func__);
@@ -325,6 +323,7 @@ RI_Init(void)
 	Mod_Init();
 	R_InitBuiltinTextures();
 	RM_InitDraw();
+	RM_RT_Init(&caps);   /* the r_rt_* cvars (TASK53); builds nothing */
 
 	ri.Vid_MenuInit();
 	return true;
