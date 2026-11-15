@@ -19,7 +19,7 @@
       "Bash(git -C ~/.config/agents/memory-store pull --rebase -q)",
       "Bash(git -C ~/.config/agents/memory-store push -q)",
       "Bash(git -C ~/.config/agents/memory-store -c core.editor=true rebase --continue)",
-      "Read(~/.config/agents/memory-store/**)",
+      "Read(~/.config/agents/memory-store/quake2/memory/**)",
       "Edit(~/.config/agents/memory-store/quake2/memory/**)",
       "Write(~/.config/agents/memory-store/quake2/memory/**)"
     ],

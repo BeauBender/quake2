@@ -411,7 +411,7 @@ want=$(printf '"%s"\n' 'Bash(git status:*)' 'Bash(git diff:*)' 'Bash(git log:*)'
 	'Bash(git -C ~/.config/agents/memory-store pull --rebase -q)' \
 	'Bash(git -C ~/.config/agents/memory-store push -q)' \
 	'Bash(git -C ~/.config/agents/memory-store -c core.editor=true rebase --continue)' \
-	'Read(~/.config/agents/memory-store/**)' \
+	'Read(~/.config/agents/memory-store/quake2/memory/**)' \
 	'Edit(~/.config/agents/memory-store/quake2/memory/**)' \
 	'Write(~/.config/agents/memory-store/quake2/memory/**)')
 # The memory-store rules above are TASK127's; tests/check-memory-rules.sh pins and justifies them.

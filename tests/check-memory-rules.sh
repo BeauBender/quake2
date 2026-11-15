@@ -17,10 +17,12 @@
 #    a store rm rule (a memory is removed only with the owner present); on a
 #    `git -C <store>` rule with a wildcard (* or :*), a second -C, a -c other
 #    than core.editor=true on rebase --continue or a push with arguments; on
-#    any allow rule at all (Bash, bare Bash, Edit or Write) that admits one
-#    of the probe commands, or an Edit or Write of the clone's .git or the
-#    slug file; on any store rule outside the card's list (TASK127, pinned
-#    below); and on that list not being there exactly once. A store rule is
+#    any allow rule at all (Bash, bare Bash, Read, Edit or Write) that
+#    admits one of the probe commands, an Edit or Write of the clone's .git
+#    or the slug file, or a Read of the clone's .git/config (a remote URL
+#    there may carry a credential); on any store rule outside the card's
+#    list (TASK127, pinned below); and on that list not being there exactly
+#    once. A store rule is
 #    any allow rule whose body names .config/agents (in any case), any Bash
 #    rule that runs git with -C, --git-dir or --work-tree before its
 #    subcommand, and any Read, Edit or Write rule that is bare or under a
@@ -87,14 +89,17 @@ detached='# branch.head (detached)'
 # neither shown nor committed; the second status check shows a stopped
 # rebase whose conflicts are staged, which the first cannot. Edit and
 # Write stop at quake2/memory, so neither reaches the clone's .git
-# (config, hooks), which the exact git commands would then run.
+# (config, hooks), which the exact git commands would then run. Read
+# stops there too: no sync step reads elsewhere (the git commands are
+# Bash rules), and the rest of the clone holds other projects' memory and
+# .git/config, where a remote URL may carry a credential.
 pinned()
 {
 	printf '%s\n' "Bash($pre rev-parse --show-prefix)" "Bash($pre status --porcelain quake2/memory)" \
 		"Bash($pre status --porcelain=v2 --branch quake2/memory)" "Bash($pre add -A quake2/memory)" \
 		"Bash($pre commit -q -m quake2-memory-sync quake2/memory)" "Bash($pre pull --rebase -q)" \
 		"Bash($pre push -q)" "Bash($pre -c core.editor=true rebase --continue)" \
-		"Read($store/**)" "Edit($store/quake2/memory/**)" "Write($store/quake2/memory/**)"
+		"Read($store/quake2/memory/**)" "Edit($store/quake2/memory/**)" "Write($store/quake2/memory/**)"
 }
 
 # What no allow rule may admit. Edit and Write rules are one kind here.
@@ -105,7 +110,8 @@ probes()
 		"Bash($pre push --force)" "Bash($pre commit -q -m x --no-verify)" \
 		"Bash($pre config core.hooksPath x)" "Bash($pre rm -q quake2/memory/x)" \
 		"Bash(cp x $store/quake2/memory/x)" "Edit($store/.git/config)" \
-		"Edit($store/.git/hooks/pre-commit)" "Edit(~/.config/agents/memory_repo)"
+		"Edit($store/.git/hooks/pre-commit)" "Edit(~/.config/agents/memory_repo)" \
+		"Read($store/.git/config)"
 }
 
 # allow_rules <settings>: permissions.allow, one rule per line, in $tmp/allow.
@@ -351,8 +357,12 @@ selftest_checks()
 	reject "a store path through \$HOME (m4)" "$notin" "$add" 'Bash(git -C $HOME/.config/agents/memory-*)'
 	reject "a store path in another case" "$notin" "$add" "Bash(cat ~/.Config/Agents/memory_repo)"
 	reject "a git -C after another option" "$notin" "$add" "Bash(/usr/bin/git -c x=y -C /x push -q)"
-	reject "a Read rule under the home directory" "$notin" "$add" "Read(~/**)"
-	reject "a bare Read rule" "$notin" "$add" "Read"
+	reject "a Read rule under the home directory" "$notin" "$add" "Read(~/.ssh/**)"
+	reject "a Read rule on the whole home directory" "admits probe" "$add" "Read(~/**)"
+	reject "a bare Read rule" "admits probe" "$add" "Read"
+	reject "the Read rule widened back to the whole store" "admits probe" \
+		'.permissions.allow |= map(if startswith("Read(") then "Read(~/.config/agents/memory-store/**)" else . end)'
+	reject "a Read of the clone's .git" "admits probe" "$add" "Read($store/.git/**)"
 	reject "an Edit rule on the whole store" "admits probe" "$add" "Edit($store/**)"
 	reject "a Write rule on the whole store" "admits probe" "$add" "Write($store/**)"
 	reject "a rule that admits the store without naming it" "admits probe" "$add" "Bash(git -C *)"
