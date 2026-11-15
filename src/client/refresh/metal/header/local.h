@@ -260,6 +260,16 @@ const byte *R_Minlight(void);
  * is refused or the draw is (the caller counts it), 1 when drawn or culled
  */
 int R_DrawAliasModel(const entity_t *currententity, const model_t *currentmodel, const rm_view_t *view, int depth_write);
+
+/*
+ * What R_DrawAliasModel draws (TASK54): the model and its shadow (ALL, the
+ * stock view), the model alone (MODEL, the G-buffer raster) or the shadow
+ * alone (SHADOW, the forward pass after the resolve)
+ */
+#define RM_ALIAS_ALL 0
+#define RM_ALIAS_MODEL 1
+#define RM_ALIAS_SHADOW 2
+void R_AliasPassMode(int mode);
 int R_DrawBrushModel(const entity_t *currententity, const model_t *currentmodel, const rm_view_t *view);
 
 /*

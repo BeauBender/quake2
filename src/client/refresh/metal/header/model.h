@@ -87,6 +87,8 @@ typedef struct
 	rm_surfrec_t *recs;
 	unsigned *scratch;      /* a frame's indices of one texture chain, size.indices entries */
 	int vbuf, ibuf, sbuf;   /* rmb_buffer_static ids, 0 when not made */
+	float (*normals)[4];    /* each vertex's surface normal, flipped for SURF_PLANEBACK, w 0 (the G-buffer's, TASK54) */
+	int nbuf;               /* their rmb_buffer_static id, 0 when not made */
 	int lmtex;              /* the lightmap array (rmb_texture_array), 0 when not made */
 	int lmslices;           /* its slices */
 	/* the warped surfaces' pieces (N6): x, y, z, s, t per vertex, the pieces' ranges, and their capacities */

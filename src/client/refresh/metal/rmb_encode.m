@@ -68,6 +68,16 @@ id<MTLRenderPipelineState> rmb_pipe3d(int i);
 id<MTLDepthStencilState> rmb_depth_state(int i);
 id<MTLBuffer> rmb_static_buffer(int bid);
 
+/* rmb_gbuf.m (TASK54): the passes of a MOTION or GBUFFER view and their draws' pipelines and bindings */
+int rmb_gbuf_pass_kind(void);
+int rmb_gbuf_reopen(void);
+id<MTLRenderPipelineState> rmb_gbuf_pipe3d(int pipe);
+void rmb_gbuf_bind_motion(id<MTLRenderCommandEncoder> enc, const float *mvp, const rm_viewport_t *vp);
+int rmb_gbuf_bind_world(id<MTLRenderCommandEncoder> enc, int dynamic, unsigned nv);
+int rmb_gbuf_bind_alias(id<MTLRenderCommandEncoder> enc, int pipe, const rm_avert_t *v, unsigned nv);
+void rmb_gbuf_frame_reset(void);
+void rmb_gbuf_release(void);
+
 /* the frame ring of 2D vertices and indices (RMB_RING_BYTES): one shared buffer per frame in flight */
 static id<MTLBuffer> ring_buf[RMB_FRAMES_IN_FLIGHT];
 static mtl_ring_t ring;
@@ -88,6 +98,8 @@ static int color_defined;        /* a pass has written color since it was made *
 
 /* the open frame */
 static int frame_open, frame_skipped, frame_passes, frame_depth;
+static int frame_stencil;   /* the open pass has a stencil attachment (every stock pass with depth has) */
+static int frame_keep;      /* its depth is stored whether or not a split reopens it (rmb_gbuf.m's passes) */
 static id<MTLBuffer> frame_ring;
 static id<MTLCommandBuffer> frame_cmd;
 static id<MTLRenderCommandEncoder> frame_enc;
@@ -134,8 +146,12 @@ rmb_end_encoder_keep(int keep)
 		{
 			MTLStoreAction a = keep ? MTLStoreActionStore : MTLStoreActionDontCare;
 
-			[frame_enc setDepthStoreAction:a];
-			[frame_enc setStencilStoreAction:a];
+			[frame_enc setDepthStoreAction:frame_keep ? MTLStoreActionStore : a];
+
+			if (frame_stencil)
+			{
+				[frame_enc setStencilStoreAction:a];
+			}
 		}
 
 		[frame_enc endEncoding];
@@ -153,6 +169,8 @@ static void
 rmb_frame_reset(void)
 {
 	frame_open = frame_skipped = frame_passes = frame_depth = 0;
+	frame_stencil = frame_keep = 0;
+	rmb_gbuf_frame_reset();
 	frame_cmd = nil;
 	frame_enc = nil;
 	frame_ring = nil;
@@ -288,6 +306,12 @@ rmb_pass(const float *clear_rgba, int with_depth)
 		return 0;
 	}
 
+	/* a split inside a pass of a MOTION or GBUFFER view reopens that pass (rmb_gbuf.m) */
+	if ((with_depth == 2) && rmb_gbuf_pass_kind())
+	{
+		return rmb_gbuf_reopen();
+	}
+
 	@autoreleasepool
 	{
 		MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -338,6 +362,8 @@ rmb_pass(const float *clear_rgba, int with_depth)
 
 		frame_passes++;
 		frame_depth = with_depth != 0;
+		frame_stencil = frame_depth;
+		frame_keep = 0;
 		color_defined = 1;
 	}
 
@@ -589,6 +615,7 @@ rmb_encode_release(void)
 		color_defined = 0;
 		rmb_set_texture(&color, nil);
 		rmb_set_texture(&depth, nil);
+		rmb_gbuf_release();
 
 		if (readbuf)
 		{
@@ -754,7 +781,7 @@ typedef struct
 static int
 rmb_draw_3d_state(int pipe, int ds, const float *mvp, const float *rgba, const rm_viewport_t *vp, int cull)
 {
-	id<MTLRenderPipelineState> ps = rmb_pipe3d(pipe);
+	id<MTLRenderPipelineState> ps = rmb_gbuf_pipe3d(pipe);   /* the stock one outside rmb_gbuf.m's passes */
 	id<MTLDepthStencilState> dss = rmb_depth_state(ds);
 	rmb_uniforms3d_t u;
 
@@ -774,6 +801,7 @@ rmb_draw_3d_state(int pipe, int ds, const float *mvp, const float *rgba, const r
 	[frame_enc setCullMode:(cull == RMB_CULL_BACK) ? MTLCullModeBack : (cull ? MTLCullModeFront : MTLCullModeNone)];
 	[frame_enc setViewport:(MTLViewport){ vp->x, vp->y, vp->w, vp->h, vp->znear, vp->zfar }];
 	[frame_enc setVertexBytes:&u length:sizeof(u) atIndex:1];
+	rmb_gbuf_bind_motion(frame_enc, mvp, vp);   /* nothing outside rmb_gbuf.m's passes */
 	return 1;
 }
 
@@ -796,7 +824,8 @@ rmb_draw_world(int vbuf, const unsigned *idx, unsigned long count, int tex, int 
 		id<MTLTexture> t = rmb_texture_for_draw(tex);
 		id<MTLSamplerState> ss = rmb_sampler(smp);
 
-		if (!vb || !t || !ss || !rmb_draw_3d_state(RM_PIPE_WORLD_TEX, RMB_DS_LEQUAL_WRITE, mvp, white, vp, cull))
+		if (!vb || !t || !ss || !rmb_draw_3d_state(RM_PIPE_WORLD_TEX, RMB_DS_LEQUAL_WRITE, mvp, white, vp, cull) ||
+			!rmb_gbuf_bind_world(frame_enc, 0, 0))
 		{
 			rmb_counts.draw_skips++;
 			return 0;
@@ -859,7 +888,8 @@ rmb_draw_world_lm(int vbuf, const unsigned *idx, unsigned long count, const rmb_
 		/* the slice must be one of the array's: a draw outside it is a skip */
 		if (!vb || !t || !lm || !ss || !ls || (lm.textureType != MTLTextureType2DArray) || (d->slice < 0) ||
 			((NSUInteger)d->slice >= lm.arrayLength) ||
-			!rmb_draw_3d_state(RM_PIPE_WORLD_LM, RMB_DS_LEQUAL_WRITE, mvp, white, vp, cull))
+			!rmb_draw_3d_state(RM_PIPE_WORLD_LM, RMB_DS_LEQUAL_WRITE, mvp, white, vp, cull) ||
+			!rmb_gbuf_bind_world(frame_enc, 0, 0))
 		{
 			rmb_counts.draw_skips++;
 			return 0;
@@ -936,7 +966,8 @@ rmb_draw_world_dyn(const rm_wvert_t *v, unsigned nv, const unsigned *idx, unsign
 		if (!t || !ss || (lm && (!lmt || !ls || (lmt.textureType != MTLTextureType2DArray) || (d->lm.slice < 0) ||
 			((NSUInteger)d->lm.slice >= lmt.arrayLength))) ||
 			!rmb_draw_3d_state(pipes[d->kind], RMB_DS_LEQUAL_WRITE, mvp, (d->kind == RM_DYN_TEXC) ||
-				(d->kind == RM_DYN_TEXC_BLEND) ? d->color : white, vp, cull))
+				(d->kind == RM_DYN_TEXC_BLEND) ? d->color : white, vp, cull) ||
+			!rmb_gbuf_bind_world(frame_enc, 1, nv))
 		{
 			rmb_counts.draw_skips++;
 			return 0;
@@ -1096,7 +1127,8 @@ rmb_draw_alias(const rm_avert_t *v, unsigned nv, const unsigned short *idx, unsi
 		id<MTLSamplerState> ss = d->tex ? rmb_sampler(d->smp) : nil;
 
 		if ((d->tex && (!t || !ss)) ||
-			!rmb_draw_3d_state(pipe, ds, mvp, white, &dvp, d->cull))
+			!rmb_draw_3d_state(pipe, ds, mvp, white, &dvp, d->cull) ||
+			!rmb_gbuf_bind_alias(frame_enc, pipe, v, nv))
 		{
 			rmb_counts.draw_skips++;
 			return 0;
@@ -1143,6 +1175,49 @@ rmb_draw_alias(const rm_avert_t *v, unsigned nv, const unsigned short *idx, unsi
  * the colour target as after any other pass, so the frame draws the same.
  * nil outside a frame or in a skipped one.
  */
+/*
+ * For rmb_gbuf.m (TASK54): ends the open pass and opens rp's on the frame's
+ * command buffer, as rmb_pass opens the stock ones: with_depth when rp has
+ * a depth attachment (its store chosen when the pass ends; keep: always
+ * stored), stencil when it has a stencil one. nil outside a frame.
+ */
+id<MTLRenderCommandEncoder>
+rmb_frame_open_pass(MTLRenderPassDescriptor *rp, int with_depth, int stencil, int keep)
+{
+	if (!frame_open || frame_skipped || !frame_cmd)
+	{
+		return nil;
+	}
+
+	rmb_end_encoder();
+	frame_enc = [frame_cmd renderCommandEncoderWithDescriptor:rp];
+
+	if (!frame_enc)
+	{
+		return nil;
+	}
+
+	frame_passes++;
+	frame_depth = with_depth != 0;
+	frame_stencil = frame_depth && stencil;
+	frame_keep = frame_depth && keep;
+	return frame_enc;
+}
+
+/* ends the open pass (rmb_gbuf.m) */
+void
+rmb_frame_close_pass(void)
+{
+	rmb_end_encoder();
+}
+
+/* the frame's colour target (rmb_gbuf.m), nil before the first frame */
+id<MTLTexture>
+rmb_frame_color(void)
+{
+	return color;
+}
+
 id<MTLCommandBuffer>
 rmb_frame_compute(unsigned long *frame)
 {

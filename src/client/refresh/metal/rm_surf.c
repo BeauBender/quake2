@@ -48,6 +48,7 @@
  */
 
 #include "header/local.h"
+#include "header/rm_gbufscene.h"
 #include "common/mtl_matrix.h"
 
 int r_framecount;     /* used for dlight push checking */
@@ -526,6 +527,7 @@ R_DrawTextureChains(const rm_view_t *view)
 		d.smp = image->sampler;
 
 		RM_DynBegin(view, &skip_warp);
+		RM_GB_SetMaterial(MTL_GB_MAT_WATER);   /* the G-buffer's material of the warped batch (TASK54) */
 		RM_DynState(&d);
 
 		/* a chain holds each surface once (the nodes are a tree: rm_model.c); bounded all the same */
@@ -543,6 +545,7 @@ R_DrawTextureChains(const rm_view_t *view)
 		}
 
 		RM_DynFlush();
+		RM_GB_SetMaterial(MTL_GB_MAT_WORLD);
 		image->texturechain = NULL;
 	}
 }
@@ -777,6 +780,7 @@ R_DrawInlineBModel(const entity_t *currententity, const model_t *currentmodel, c
 					RM_DYN_TEXC : RM_DYN_TEX;
 			d.tex = image->texnum;
 			d.smp = image->sampler;
+			RM_GB_SetMaterial(MTL_GB_MAT_WATER);   /* the batch keeps it (TASK54) */
 			RM_DynState(&d);
 			RM_DynSurface();
 
@@ -784,6 +788,8 @@ R_DrawInlineBModel(const entity_t *currententity, const model_t *currentmodel, c
 			{
 				skip_warp++;
 			}
+
+			RM_GB_SetMaterial(MTL_GB_MAT_WORLD);
 		}
 	}
 
@@ -840,7 +846,11 @@ R_DrawBrushModel(const entity_t *currententity, const model_t *currentmodel, con
 	rm_entity_matrix(ev.world, view->world, currententity->origin, a);
 	mtl_mat_mul(ev.mvp, view->proj, ev.world);
 
-	return R_DrawInlineBModel(currententity, currentmodel, &ev, emodelorg);
+	/* on a MOTION or GBUFFER view, its motion from the matched entity (TASK54) */
+	RM_GB_EntityMotion(currententity, ev.world, 1, NULL);
+	rotated = R_DrawInlineBModel(currententity, currentmodel, &ev, emodelorg);
+	RM_GB_WorldMotion(MTL_GB_MAT_WORLD);
+	return rotated;
 }
 
 /* from gl1_surf.c */

@@ -129,6 +129,7 @@ typedef struct
 	float world[16];        /* the modelview of the view (rm_view_matrix) */
 	float proj[16];         /* the projection, unjittered */
 	float wproj[16];        /* the view weapon's projection, unjittered */
+	int wvalid;             /* wproj was set: a view weapon was drawn */
 	float vieworg[3];
 	float time;             /* the refdef's time (the sky's rotation) */
 	double vw, vh;          /* the viewport's size in pixels at the render size */
@@ -219,5 +220,66 @@ typedef struct
 	float scale;
 	unsigned pad[2];
 } rm_gb_resolve_t;
+
+/* ---- the back end (rmb_gbuf.m) ------------------------------------------------------ */
+
+/* the pass of the 3D view that is open */
+#define RMB_GB_PASS_NONE 0      /* the stock 3D pass, or no pass of a G-buffer or motion view */
+#define RMB_GB_PASS_RASTER 1    /* the G-buffer raster: the six attachments */
+#define RMB_GB_PASS_MOTION 2    /* a forward pass with the motion attachment: MOTION's, and GBUFFER's after the resolve */
+#define RMB_GB_PASS_OTHER 3     /* the resolve or the copy: no 3D draw */
+
+/*
+ * Opens a view of path MOTION or GBUFFER at the render size rw x rh: the
+ * attachments are made (again) for that size and path, and the first pass
+ * opens (GBUFFER's raster, MOTION's forward pass with the motion
+ * attachment), the stencil cleared to stencil. Below the frame's size the
+ * view goes to a render-size colour target cleared to clear_rgba (black
+ * when NULL). 0 when nothing opened: the caller draws the stock view.
+ */
+int rmb_gbuf_view_begin(int path, int rw, int rh, int stencil, const float *clear_rgba);
+
+/* GBUFFER: ends the raster, resolves into the view's colour target (r: the world's lightmap environment), opens the forward pass */
+int rmb_gbuf_resolve(const rm_gb_resolve_t *r);
+
+/*
+ * Ends the view: below the frame's size the render-size colour target's
+ * rectangle src is stretched (bilinear) onto the frame's rectangle dst.
+ * The attachments stay valid until the frame's command buffer ends.
+ */
+void rmb_gbuf_view_end(const rm_viewport_t *src, const rm_viewport_t *dst);
+
+/* the motion uniforms of the next draws; NULL: none, the draw's own matrix both now and before (no motion) */
+void rmb_gbuf_set_motion(const rm_gb_uniforms_t *u);
+
+/* the material id of the next draws, the rest of the motion uniforms kept */
+void rmb_gbuf_set_material(unsigned material);
+
+/* the next alias draw's G-buffer data, one per vertex (n must be its vertex count, else it gets none) */
+void rmb_gbuf_set_alias_extra(const rm_gb_avx_t *x, unsigned n);
+
+/* the next dynamic world draw's normals, one per vertex (nv must be its vertex count, else they are 0) */
+void rmb_gbuf_set_dyn_normals(const float (*n)[4], unsigned nv);
+
+/* the static buffer of the world's per-vertex normals (rm_model.c), 0 without one */
+void rmb_gbuf_set_world_normals(int nbuf);
+
+/* RMB_GB_PASS_* */
+int rmb_gbuf_pass_kind(void);
+
+/* the attachments' size: 1 with it while a set is made, 0 otherwise */
+int rmb_gbuf_size(int *w, int *h);
+
+/*
+ * The G-buffer contract (design section 3, TASK111): the depth
+ * (depth32Float) and motion-vector (rg16Float) attachments of the last
+ * MOTION or GBUFFER view, at the render size, nil without one. Written by
+ * the raster (MOTION: the forward pass), valid from the end of that pass
+ * until the frame's command buffer ends.
+ */
+#ifdef __OBJC__
+id<MTLTexture> rmb_gbuf_depth(void);
+id<MTLTexture> rmb_gbuf_motion(void);
+#endif
 
 #endif

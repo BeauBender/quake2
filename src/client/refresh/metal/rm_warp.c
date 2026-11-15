@@ -33,6 +33,7 @@
  */
 
 #include "header/local.h"
+#include "header/rm_gbufscene.h"
 #include "common/mtl_matrix.h"
 
 /* gl1's sky state: the six images (suffix order), the rotation and the visible bounds */
@@ -149,6 +150,23 @@ RM_DrawSkyBox(const rm_view_t *view)
 	rm_sky_matrix(mv, view->world, r_origin, r_newrefdef.time, skyrotate, skyaxis);
 	mtl_mat_mul(mvp, view->proj, mv);
 
+	/* on a MOTION or GBUFFER view, the sky's motion from the previous view's matrix (TASK54) */
+	if (RM_GB_Path() != RM_GB_PATH_FORWARD)
+	{
+		const float *pworld, *porg;
+		float ptime, pmv[16];
+
+		if (RM_GB_PrevView(&pworld, &porg, &ptime))
+		{
+			rm_sky_matrix(pmv, pworld, porg, ptime, skyrotate, skyaxis);
+			RM_GB_SkyMotion(mv, pmv);
+		}
+		else
+		{
+			RM_GB_SkyMotion(mv, NULL);
+		}
+	}
+
 	for (i = 0; i < 6; i++)
 	{
 		rm_wvert_t v[4];
@@ -207,6 +225,7 @@ RM_DrawSkyBox(const rm_view_t *view)
 		}
 	}
 
+	RM_GB_WorldMotion(MTL_GB_MAT_WORLD);
 	return failed;
 }
 
@@ -229,6 +248,8 @@ static struct
 	const rm_view_t *view;
 	unsigned long *skips;   /* the counter of the surfaces whose batch is refused */
 	unsigned long surfs;    /* the surfaces in the batch */
+	float n[RM_DYN_MAX_VERTS][4];   /* the G-buffer raster's: each vertex's surface normal (TASK54) */
+	int material;           /* the G-buffer's material id the batch was begun with (TASK54) */
 } dyn;
 
 /* draws what is batched; a refused draw counts its surfaces as skipped */
@@ -237,11 +258,27 @@ RM_DynFlush(void)
 {
 	if (dyn.nv && dyn.view)
 	{
+		/* on a MOTION or GBUFFER view: the batch's material, and in the raster its normals (TASK54) */
+		if (RM_GB_Path() != RM_GB_PATH_FORWARD)
+		{
+			RM_GB_FlushMaterial(dyn.material);
+		}
+
+		if (RM_GB_Raster())
+		{
+			rmb_gbuf_set_dyn_normals((const float (*)[4])dyn.n, dyn.nv);
+		}
+
 		if (!rmb_draw_world_dyn(dyn.v, dyn.nv, dyn.idx, dyn.ni, &dyn.state, dyn.view->mvp, &dyn.view->vp,
 				dyn.view->cull) && dyn.skips)
 		{
 			*dyn.skips += dyn.surfs;
 		}
+	}
+
+	if (dyn.nv && dyn.view && (RM_GB_Path() != RM_GB_PATH_FORWARD))
+	{
+		RM_GB_FlushMaterial(RM_GB_Material());
 	}
 
 	dyn.nv = 0;
@@ -270,12 +307,14 @@ RM_DynState(const rmb_dyn_t *d)
 		(dyn.nv && ((dyn.state.kind != d->kind) || (dyn.state.smp != d->smp) ||
 			(dyn.state.color[0] != d->color[0]) || (dyn.state.lm.slice != d->lm.slice) ||
 			(dyn.state.lm.env != d->lm.env) || (dyn.state.lm.scale != d->lm.scale) ||
-			(dyn.state.lm.lmtex != d->lm.lmtex))))
+			(dyn.state.lm.lmtex != d->lm.lmtex))) ||
+		(dyn.nv && (dyn.material != RM_GB_Material())))
 	{
 		RM_DynFlush();
 	}
 
 	dyn.state = *d;
+	dyn.material = RM_GB_Material();
 }
 
 /* one surface of the batch (for the skipped count) */
@@ -321,6 +360,24 @@ RM_DynReserve(unsigned n)
 	return v;
 }
 
+/* in the G-buffer raster, the n vertices at fan take their surface's normal (TASK54) */
+static void
+RM_DynNormals(const rm_wvert_t *fan, unsigned n, const msurface_t *fa)
+{
+	unsigned i, at = (unsigned)(fan - dyn.v);
+
+	if (!RM_GB_Raster() || (at > RM_DYN_MAX_VERTS) || (n > RM_DYN_MAX_VERTS - at))
+	{
+		return;
+	}
+
+	for (i = 0; i < n; i++)
+	{
+		rm_surf_normal(fa->plane->normal, fa->flags & SURF_PLANEBACK, dyn.n[at + i]);
+		dyn.n[at + i][3] = 0.0f;
+	}
+}
+
 /*
  * A surface's retained polygon as one fan, its s coordinate moved by
  * scroll (gl1's R_DrawGLPoly and R_RenderLightmappedPoly: v[3] + scroll),
@@ -349,6 +406,8 @@ RM_DynPoly(const rm_world_t *w, const msurface_t *fa, float scroll)
 		fan[i] = w->verts[fa->first_vertex + i];
 		fan[i].uv[0] = fan[i].uv[0] + scroll;
 	}
+
+	RM_DynNormals(fan, n, fa);
 
 	return 1;
 }
@@ -406,6 +465,8 @@ RM_EmitWaterPolys(const rm_world_t *w, const msurface_t *fa)
 			fan[i].pos[3] = 1.0f;
 			rm_warp_st(v[3], v[4], r_newrefdef.time, scroll, &fan[i].uv[0], &fan[i].uv[1]);
 		}
+
+		RM_DynNormals(fan, piece->n, fa);
 
 	}
 

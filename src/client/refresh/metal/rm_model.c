@@ -52,6 +52,7 @@
 
 #include "header/local.h"
 #include "header/rm_rtscene.h"
+#include "header/rm_gbufscene.h"
 
 #define MAX_MOD_KNOWN 512
 
@@ -80,8 +81,10 @@ RM_FreeWorld(rm_world_t *w)
 	rmb_buffer_free(w->vbuf);
 	rmb_buffer_free(w->ibuf);
 	rmb_buffer_free(w->sbuf);
+	rmb_buffer_free(w->nbuf);
 	rmb_texture_free(w->lmtex);
 	free(w->verts);
+	free(w->normals);
 	free(w->indices);
 	free(w->recs);
 	free(w->scratch);
@@ -780,8 +783,9 @@ RM_BuildWorld(model_t *mod)
 	w->indices = malloc(ib ? ib : 1);
 	w->recs = malloc(sb ? sb : 1);
 	w->scratch = malloc(ib ? ib : 1);
+	w->normals = malloc(vb ? vb / RM_WVERT_STRIDE * sizeof(w->normals[0]) : 1);
 
-	if (!w->verts || !w->indices || !w->recs || !w->scratch)
+	if (!w->verts || !w->indices || !w->recs || !w->scratch || !w->normals)
 	{
 		RM_Refuse(mod, "out of memory for the retained buffers");
 	}
@@ -860,6 +864,10 @@ RM_BuildWorld(model_t *mod)
 
 			/* the face's rectangle in its slice, for the filtered lightmap (all 0 without a lightmap) */
 			rm_lm_face_rect(fa->light_s, fa->light_t, lm_s, lm_t, v->lmrect);
+
+			/* the G-buffer's normal of the vertex: its surface's (TASK54) */
+			rm_surf_normal(fa->plane->normal, fa->flags & SURF_PLANEBACK, w->normals[vat + i]);
+			w->normals[vat + i][3] = 0.0f;
 		}
 
 		n = rm_world_fan(vat, lnumverts, w->indices + iat, size.indices - iat);
@@ -899,7 +907,8 @@ RM_BuildWorld(model_t *mod)
 
 	/* the static buffers, private, written through the upload command buffer */
 	if (vb && (!(w->vbuf = rmb_buffer_static(w->verts, vb)) || !(w->ibuf = rmb_buffer_static(w->indices, ib)) ||
-		!(w->sbuf = rmb_buffer_static(w->recs, sb))))
+		!(w->sbuf = rmb_buffer_static(w->recs, sb)) ||
+		!(w->nbuf = rmb_buffer_static(w->normals, vb / RM_WVERT_STRIDE * sizeof(w->normals[0])))))
 	{
 		RM_Refuse(mod, "the retained buffers could not be made");
 	}
@@ -1408,6 +1417,7 @@ RI_EndRegistration(void)
 	model_t *mod;
 
 	RM_RT_MapLoaded();   /* the map's acceleration structures, when ray tracing is on (TASK53) */
+	RM_GB_Reset();       /* no previous frame for the G-buffer's motion (TASK54) */
 
 	if (Mod_HasFreeSpace() && R_ImageHasFreeSpace())
 	{
