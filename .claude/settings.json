@@ -10,10 +10,7 @@
       "Bash(tests/check-cvar-docs.sh)",
       "Bash(tests/check-removed-deps.sh)",
       "Bash(tests/check-doc-links.sh)",
-      "Bash(make config)",
-      "Bash(git -C ~/.config/agents/memory-store *)",
-      "Bash(cp -p ~/.claude/projects/*/memory/*.md ~/.config/agents/memory-store/quake2/memory/)",
-      "Bash(cp -p ~/.config/agents/memory-store/quake2/memory/*.md ~/.claude/projects/*/memory/)"
+      "Bash(make config)"
     ],
     "deny": [
       "Bash(git push --no-verify:*)",

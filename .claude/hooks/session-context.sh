@@ -11,6 +11,6 @@ quake2 working contract (re-stated after compaction):
 - Savegame format, network protocol and module API structs do not change without a card that asks for it.
 - No installs or new dependencies without the owner's approval.
 - This repository is public: nothing about other repositories goes into issues, PRs, commits or files.
-- Agent memory is never committed here; it is persisted to the owner's private store named in ~/.config/agents/memory_repo, cloned once per machine at ~/.config/agents/memory-store (no clone: report it and carry on without sync). At session start and after a memory changes, sync with exactly the pre-approved commands in CLAUDE.md, in order: cp -p the memory *.md into ~/.config/agents/memory-store/quake2/memory/, then git -C ~/.config/agents/memory-store add, commit, pull --rebase, push, then cp -p back. No other command shape; never force-push (see CLAUDE.md).
+- Agent memory is never committed here; it is persisted to the owner's private store named in ~/.config/agents/memory_repo, cloned outside this repository and every worktree of it (for example under ~/.cache/agents/), never inside a checkout (see CLAUDE.md).
 - Keep the list of modified files, the gate command and any open failures in view.
 TXT

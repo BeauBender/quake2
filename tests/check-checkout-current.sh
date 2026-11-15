@@ -27,9 +27,9 @@
 # without --ff-only; .claude/settings.json registers the hook for the
 # startup and resume matchers with a timeout of at most 30 seconds, keeps
 # the compact and Stop hooks, and its allow and deny lists are exactly the
-# expected ones (the deny rules unchanged, the three memory-store rules
-# added); and it parses as JSON when python3 is present. It never runs the
-# hook on this checkout, so it needs no network.
+# ones main had before the hook (this card adds no permission rule); and
+# it parses as JSON when python3 is present. It never runs the hook on
+# this checkout, so it needs no network.
 #
 # Usage: tests/check-checkout-current.sh
 set -eu
@@ -261,10 +261,7 @@ list()
 }
 want=$(printf '"%s"\n' 'Bash(git status:*)' 'Bash(git diff:*)' 'Bash(git log:*)' 'Bash(git show:*)' \
 	'Bash(scripts/test.sh)' 'Bash(tests/check-savegame-tables.sh)' 'Bash(tests/check-cvar-docs.sh)' \
-	'Bash(tests/check-removed-deps.sh)' 'Bash(tests/check-doc-links.sh)' 'Bash(make config)' \
-	'Bash(git -C ~/.config/agents/memory-store *)' \
-	'Bash(cp -p ~/.claude/projects/*/memory/*.md ~/.config/agents/memory-store/quake2/memory/)' \
-	'Bash(cp -p ~/.config/agents/memory-store/quake2/memory/*.md ~/.claude/projects/*/memory/)')
+	'Bash(tests/check-removed-deps.sh)' 'Bash(tests/check-doc-links.sh)' 'Bash(make config)')
 [ "$(list allow)" = "$want" ] || fail "permissions.allow in $settings is not the expected list"
 want=$(printf '"%s"\n' 'Bash(git push --no-verify:*)' 'Bash(git commit --no-verify:*)' \
 	'Bash(git push --force origin main:*)' 'Bash(git push -f origin main:*)' \
