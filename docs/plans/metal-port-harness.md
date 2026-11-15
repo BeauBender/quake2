@@ -4810,4 +4810,247 @@ drawable wait, so only the GPU time shows it.
 
 ## The fixed per-frame cost of the Metal renderers (FIX51)
 
-In progress.
+TASK97 (#224) found `ref_metal` and the Metal-backed `gl1` about eight times
+slower than `ref_gl1` and no faster than `ref_soft`, at 3 to 4 ms a frame
+whatever the size; TASK108 (#259) then read about 120 fps at 640x480 and
+1280x720 windowed for the three `CAMetalLayer` renderers. FIX51 (#238) times
+the four renderers against GPU completion, names the per-frame cost and
+removes it.
+
+**What was measured, and how.** The bare-metal host of TASK97 (Apple M6,
+macOS 27.2.1 build 26B131, the Studio Display at 2560x1440 points, 60 Hz).
+`timedemo` of `demo1.dm2` (689 frames), windowed, the TASK97 line plus
+`+set vid_highdpiaware 0` (TASK118, #303, made the default of 1 high-DPI on
+macOS, so without it a 640x480 window draws 1280x960 pixels and a
+1920x1080 one 3840x2160; every log here prints `Drawable size:` equal to
+the requested size) and `+set logfile 2` (the engine's console log, flushed
+per line, which the run script polls for the `fps` line; the engine is
+then ended by its own pid). Before every run the screen was unlocked
+(`CGSSessionScreenIsLocked` absent), no other `quake2` ran and this lane
+held the timing lock; every batch took the lock and released it within 20
+minutes. Renderers alternated run by run, three rounds per cell, and the
+`frames, ... fps` line is the number. Builds: `make client game ref_soft
+ref_gl1 ref_metal`, then `make ref_gl1 WITH_METAL_SHIM=yes` into a second
+copy of `release/`. Before is FIX53's tip, `fdcd4179`, with a timing probe
+added (below); after is `21ec0065` (this card's fix, no probe; an ancestor of
+this branch's head, only this section follows it). The logs, the probe's
+per-frame lines and the per-run tables are kept outside the repository.
+
+The probe (removed before `21ec0065`) printed, per frame, the CPU time
+waiting for a frame slot, the encode time, the time blocked in
+`nextDrawable`, the frame-to-frame interval, whether the frame got a
+drawable, and the frame command buffer's GPU time (`GPUEndTime -
+GPUStartTime`). Its figures below are p10/p50/p90 over the frames of a run
+after the first 100 (the demo's and the few after it). Two switches in the
+probe build made one-binary comparisons: the old blocking frame loop, and
+the FIX53 alpha pass off.
+
+**`ref_gl1` against GPU completion (Scope 1).** `gl_finish 1` calls
+`glFinish` at the start of every frame's view (`R_RenderView`), so a frame
+starts only once the GPU has finished everything before it, the previous
+frame's swap included: that rate is GPU-complete, and lower than the
+throughput, since the CPU and the GPU then never overlap. The Metal paths are
+GPU-complete within three frames of 689 (at most three frames in flight, the
+frame slots). One-minute load at run start 2.50 to 3.89 (`uptime` at the
+batch start `11:33 load averages: 3.89 3.97 3.41`, at its end `11:35 load
+averages: 3.15 3.51 3.29`); the before Metal columns are from the same
+alternation:
+
+| Size | `ref_soft` | `ref_gl1` | `ref_gl1`, `gl_finish 1` | `gl1-metal` before | `ref_metal` before |
+|---|---|---|---|---|---|
+| 640x480 | 120.0 (all three) | 2367.7 to 2460.7 | 1789.6 to 1808.4 | 120.2 (all three) | 120.0 to 120.1 |
+| 1920x1080 | 187.2 to 198.5 | 1709.7 to 1963.0 | 1332.7 to 1343.1 | 237.6 to 290.0 | 310.8 to 376.5 |
+
+An earlier batch of the same cells, on the probe build (42 runs, load 2.80
+to 4.28), agrees: `ref_gl1` 2400.7 to 2523.8 and 1882.5 to 1951.8, with
+`gl_finish 1` 1735.5 to 1803.7 and 1307.4 to 1364.4; the Metal paths 120.0 to
+120.2 and 272.9 to 306.1. So `ref_gl1`'s GPU-complete rate is about 25
+percent under its plain rate, and still five to seven times the Metal paths'.
+
+**Where the Metal frame went (Scope 2).** The probe, before the fix (load
+2.80 to 4.28):
+
+| Size | Renderer | `nextDrawable` (ms) | encode (ms) | GPU (ms) | interval, mean (ms) |
+|---|---|---|---|---|---|
+| 640x480 | `ref_metal` | 7.37 / 7.58 / 8.82 | 0.10 / 0.23 to 0.38 / 0.82 | 0.12 / 0.15 / 0.19 | 8.33 |
+| 640x480 | `gl1-metal` | 6.32 / 7.58 / 8.80 | (in the frame) | 0.11 / 0.17 to 0.18 / 0.23 | 8.33 |
+| 1920x1080 | `ref_metal` | 0.00 / 0.41 to 1.50 / 6.71 | 0.05 / 0.15 to 0.42 / 0.86 | 0.38 / 0.43 to 0.63 / 1.93 | 3.22 to 3.49 |
+| 1920x1080 | `gl1-metal` | 0.00 / 0.25 to 1.90 / 6.92 | (in the frame) | 0.35 / 0.68 to 1.23 / 2.55 | 3.12 to 3.57 |
+
+(p10 / p50 / p90, ranges over three runs; the shim draws into the drawable,
+so its encode is in the time after `nextDrawable`, 0.19 to 0.91 ms at the
+median.) The frame costs well under a millisecond on the CPU and the GPU;
+the rest is the wait for a drawable, 8.33 ms a frame on average at 640x480,
+exactly 120 a second.
+
+The first fix tried (acquiring the drawable ahead, on a serial queue, and
+presenting only when one was ready) showed the second half of the cost. The
+frame no longer waited in `nextDrawable` (p90 0.008 ms), but at 640x480 the
+timedemo rose only to 359.4 to 360.9 fps in both renderers, and the frame
+three after a presented one waited 6.5 to 6.6 ms for its frame slot (after
+an unpresented one 0.0 to 0.5 ms): the command buffer that writes a drawable
+the window server has not let go of yet waits on the GPU until it does
+(its own GPU time stays 0.11 to 0.16 ms), and with it the frame slot and the
+frames queued behind it. So the fixed cost is the window server's pace of
+handing back drawables, paid twice: in `nextDrawable`, and in the command
+buffer that writes the drawable.
+
+**The ~120 fps windowed ceiling: no commit causes it.** `ref_soft` at
+640x480 reads 119.9 to 120.1 fps from FIX53's tip, from TASK97's merge
+`462f8d3e` and from `41745a59`, the very source TASK97 measured at 253.6 to
+318.1 (three runs each, alternated, load 2.80 to 4.28; at 1920x1080 the
+first two read 180.1 to 208.5, `41745a59` 60.0, the opaque-layer cap FIX52
+removed after it). With the code and the launch line the same and the
+result not, the change is in the host between TASK97's runs and TASK108's,
+not in the tree, so there was nothing to bisect. The launch line is not it
+either: at 640x480, before the fix, the plain line, the plain line with an
+empty `config.cfg` beside the binary (found before the data directory's)
+and FIX52's pin-run line (`pins_capture 1000000`, no `config.cfg` read at
+all) read 119.9 to 120.1 fps in `ref_soft` and `ref_metal` alike (three runs
+each, load 2.31 to 2.79). What sets it is the window server: after the fix
+below the frame loop runs at 5341.1 to 8402.4 fps at 640x480 while the
+drawables presented stay at 119.4 to 121.2 a second (probe, six runs), so
+the window server takes a drawable of this window 120 times a second. A
+bare `CAMetalLayer` program in a window of its own (no quake2 code, clears
+and presents only, `displaySyncEnabled = NO`) presents 241.0 to 376.8 a
+second at 640x480 with the layer not opaque (eight runs, contents scale 1
+or 2) and 60.0 with it opaque (two runs; load 2.56 to 3.93), where FIX52's probe found 320.8 to 367.6
+either way: the window server's handling of small windows has changed
+since FIX52 too. What in the engine's window gives 120 rather than the bare
+window's rate was not isolated. FIX53's alpha-readback runs, which counted
+more frames than 120 a second at 640x480, were not repeated here.
+
+**The 1600x900 spread of TASK108 is gone.** Windowed 1600x900, before the
+fix (three runs, load 2.31 to 2.73): `ref_soft` 319.1 to 330.3, `ref_gl1`
+2050.6 to 2146.4, `gl1-metal` 330.0 to 402.0, `ref_metal` 364.2 to 407.0,
+against TASK108's 197.7 to 321.2, 2087.9 to 2194.3, 67.1 to 96.1 and 62.3 to
+75.2. It did not come back here, so its cause was not found; after the fix
+`gl1-metal` reads 5219.7 to 5341.1 and `ref_metal` 7252.6 to 7655.6.
+
+**The fix (Scope 3).** With display sync off a frame waits for no drawable
+(`rmb_next_drawable`, `rmb_present_begin` and `rmb_present_commit` in
+`src/client/refresh/metal/rmb_device.m`, called from `rmb_frame_end` in
+`rmb_encode.m`; `mgl_present_apart`, `mgl_present_apart_begin` and
+`mgl_present_commit` in `src/client/refresh/gl1/metal/mgl_layer.m`, called
+from `mgl_layer_frame_begin` and `mgl_layer_present`):
+
+- the next drawable is acquired ahead, on a serial dispatch queue, one at a
+  time, and taken by the frame only when it is there;
+- the frame is drawn offscreen (`ref_metal` always is; the shim then draws
+  into its offscreen texture, its path for a frame without a drawable),
+  copied to a stage texture on the frame's command buffer, which signals an
+  `MTLEvent`; the copy from the stage to the drawable, FIX53's alpha pass
+  and the present go on a second command queue that waits for that event,
+  so the wait for the drawable holds that queue and no frame slot;
+- one present is on its way at a time (a semaphore of one, given back when
+  the present's command buffer completes), so the stage is not written
+  again while it is read;
+- a frame that ends with no drawable ready, a present still on its way, or
+  a drawable of an old size is complete and not presented, and is counted
+  in the existing "without a drawable" counter of the teardown line.
+
+With `r_vsync 1` nothing changes: the frame waits in `nextDrawable` and
+writes the drawable itself, and every frame is presented. Turning display
+sync on drains the queue and drops the stage. Teardown drains both, bounded
+(one second for `nextDrawable`, `RMB_GPU_WAIT_MS` and `MGL_GPU_WAIT_MS` for the
+present); the second queue, the event and the stage are in `ref_metal`'s
+ledger (`queue 2/2`, `state 47/47` at teardown). No cvar, no change to a
+module API, the window or `glimp_sdl3.c`. No pure helper and no host test:
+the rule is which command buffer writes the drawable, and nothing in it can
+run without a window server; the measurements below are its test.
+
+**Before and after** (fps, three runs each, the timedemo's own rate, which
+counts every frame rendered; presented is the probe's count of frames that
+got a drawable per second over the same frames, from a probe build of the
+same code, one-binary runs alternated with the old loop, load 2.59 to 2.96):
+
+| Size | Renderer | Before | After, rendered | After, presented (a second) |
+|---|---|---|---|---|
+| 640x480 windowed | `ref_metal` | 120.0 to 120.1 | 7829.5 to 8402.4 | 119.8 to 121.2 |
+| 640x480 windowed | `gl1-metal` | 120.2 | 5341.1 to 6097.3 | 119.4 to 120.3 |
+| 1920x1080 windowed | `ref_metal` | 310.8 to 376.5 | 6439.3 to 6754.9 | 134.2 to 280.0 |
+| 1920x1080 windowed | `gl1-metal` | 237.6 to 290.0 | 4227.0 to 4818.2 | 200.7 to 326.0 |
+| 5120x2880 `vid_fullscreen 1` | `ref_metal` | 387.7 to 405.8 | 1309.9 to 1400.4 | 276.9 to 284.8 |
+| 5120x2880 `vid_fullscreen 1` | `gl1-metal` | 377.1 to 392.6 | 673.5 to 698.8 | 167.2 to 171.2 |
+
+Before and after at 640x480 and 1920x1080 are the batch of the
+GPU-complete table above (the same alternation and load). At 5120x2880 the
+after runs read 1309.9 to 1400.4 and 673.5 to 698.8 on `21ec0065` (load 3.15
+to 3.30) and 1297.6 to 1330.1 and 674.8 to 680.2 on the probe build, whose
+batch also holds the before column and `ref_gl1`: 622.4 to 648.2 fps, with
+`gl_finish 1` 583.9 to 602.8 (load 3.11 to 4.05 for those runs; another job
+lifted the load to 10.16 to 10.30 for the last three runs of that batch,
+which are alpha-pass runs below). The probe build's one-binary comparison
+agrees with the before column: with the old loop it read 120.0 to 120.2 at
+640x480 and 279.2 to 358.9 at 1920x1080.
+
+**Acceptance.** Both Metal paths now pass `ref_gl1`'s GPU-complete rate,
+and its plain rate, at 640x480 and 1920x1080 windowed: `ref_metal` 7829.5 to
+8402.4 and 6439.3 to 6754.9, `gl1-metal` 5341.1 to 6097.3 and 4227.0 to
+4818.2, against 1789.6 to 1808.4 and 1332.7 to 1343.1 (plain 2367.7 to
+2460.7 and 1709.7 to 1963.0). Also at 5120x2880 fullscreen (1309.9 to 1400.4
+and 673.5 to 698.8 against 583.9 to 602.8). Rendered is not presented:
+**with display sync off most frames are rendered and not presented.** The
+window server takes about 120 drawables a second from a 640x480 window here,
+130 to 330 from a 1920x1080 one and about 170 to 285 at 5120x2880
+fullscreen; the rest of the frames are drawn, counted by the timedemo, and
+never shown. How many of `ref_gl1`'s frames reach the screen at swap
+interval 0 was not measured: it presents through OpenGL, which gives the
+engine no count of what the window server took, and no Metal System Trace
+was recorded. All that is measured of it is that its 2367.7 to 2460.7 fps at
+640x480 are twenty times the 120 a second the window server takes from a
+Metal window of that size.
+
+**`r_vsync 1` is as before** (three runs each, before and after alternated,
+load 2.48 to 3.16): 1920x1080 windowed reads 60.0 to 60.1 before and 59.9 to
+60.0 after in both renderers, and every frame of the shim got a drawable
+(its teardown: 728 to 767 frames, 0 without a drawable, before and after, at
+both sizes; `ref_metal` printed no such count in these logs). At
+640x480 both read 120.0 to 120.2 before and after, as FIX53 found: the 60 a
+display-synced layer should give is not what this window gets at that size,
+and this card does not change it.
+
+**The alpha pass of FIX53.** With the old loop in one binary, the pass on
+and off, alternated (three runs each), the median GPU time of a frame's
+command buffer, which holds the pass: at 1920x1080 windowed `ref_metal`
+0.416 to 0.429 ms with it, 0.291 without it (two runs; the third 0.480), the
+shim 0.666 to 0.692 against 0.528 to 0.545 (the third 0.927), about 0.13
+ms a frame (load 2.55 to 3.20); at 5120x2880 fullscreen `ref_metal` 2.55 to
+2.68 against 1.42 to 1.51, the shim 3.19 to 3.75 against 1.89 to 2.18, about
+1.1 to 1.6 ms a frame (load 3.21 to 10.30, the last three runs at 10.16 to
+10.30). With the fix the pass runs only on the frames presented, on the
+present queue, so it no longer costs every frame; at 5120x2880 it is about
+a third of a presented frame's GPU time.
+
+**Validation.** One run each of `ref_metal` and `gl1-metal` on `21ec0065`
+at 1920x1080 windowed with `r_vsync 0` (the present queue running) under
+`MTL_DEBUG_LAYER=1`: `Metal API Validation Enabled` and no validation
+message; `ref_metal` 1183.8 fps (the layer slows it), teardown `0 live
+objects (created/destroyed: device 1/1, queue 2/2, view 1/1, texture
+233/233, buffer 7/7, state 47/47, rt 0/0), 0 unreleased, 0 unmatched`; the
+shim 966.3 fps, `4735 frames, 4370 without a drawable, 0 skipped`.
+
+**Pins.** `world`, `hud2d`, `particles`, `models`, `dlights` and
+`skywater` (`PINS_SEED=1`, the default 640x480 and the harness's display
+sync), and scratch copies of `world`, `hud2d` and `particles` that add `set
+r_vsync 0` (so the present queue runs; deleted after), were recorded for
+`metal` and `gl1-metal` with the renderer modules of FIX53's tip (the probe
+build; the probe draws nothing) and of `21ec0065`, one engine binary for
+both (`PINS_BIN`, the client is unchanged). The twelve pairs of the stock
+scenarios compared at `--threshold 0 --bad-threshold 0`: 23 frames each, 0
+failed, worst score 0, worst bad 0; all 414 frame files of the eighteen
+pairs are byte for byte equal (`cmp`). A pin reads the offscreen target (the
+shim's, with display sync off, is now always its offscreen texture), so the
+frames presented apart are not what it compares; the validation run above
+covers the present queue.
+
+**Not measured.** The cause of the window server's 120 drawables a second
+for the engine's 640x480 window (the bare window gets about twice that) and
+of the change since TASK97 and FIX52; `ref_gl1`'s presented frames; the
+1280x720 and 1600x1200 windowed sizes and any fullscreen mode but 5120x2880
+after the fix; the high-DPI default (`vid_highdpiaware 1`) after the fix.
+On the probe build before the fix, at the default of 1, 640x480 (1280x960
+pixels) read 120.0 to 120.1 for `ref_soft` and both Metal paths, and at
+1920x1080 (3840x2160) `ref_gl1` read 692.5 and 711.8 (`gl_finish` 0 and 1),
+`gl1-metal` 296.7 and `ref_metal` 360.5, with a GPU time of 2.17 ms a frame at
+the median for `ref_metal` (one run each).
