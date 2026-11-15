@@ -21,8 +21,14 @@
  *
  * The high pixel density decisions of the SDL window code
  * (glimp_sdl3.c), free of SDL so that the unit tests link them. The
- * software renderer links this file too and sizes its buffer with
- * GLimp_DrawableInPixels(), so that the two cannot drift apart.
+ * client decides viddef with GLimp_DrawableInPixels(). The software
+ * renderer links this file too and sizes its buffer and its vid with the
+ * same function (SWimp_DrawableInPixels() in sw_main.c). gl1 (and its
+ * Metal shim build), gl3 and metal do not link it: each keeps its own copy
+ * of the rule in its SetMode code. All of them take the fullscreen input
+ * from the vid_fullscreen cvar, which GLimp_InitGraphics() keeps at the
+ * value the window is made with, so each decides on the same value as
+ * the client.
  *
  * =======================================================================
  */
@@ -56,16 +62,11 @@ GLimp_HighDPIWanted(float highdpiaware, const char *driver)
  * for it may be too small (window decorations), so the mode's size is
  * used. A fullscreen window (vid_fullscreen 2) fills the screen, so its
  * pixels are taken only when the native size was asked for (r_mode -2);
- * any other mode keeps its own size there. fullscreen is the value passed
- * to GLimp_InitGraphics() (0 once it fell back to a window on its own),
- * not the vid_fullscreen cvar, which can differ.
- *
- * soft calls this function itself for its buffer and its vid size
- * (SWimp_DrawableInPixels() in sw_main.c), on the value it passed. gl1,
- * gl3 and metal keep their own copy of the rule in their SetMode code,
- * which reads the vid_fullscreen cvar instead, so they can differ from
- * this decision when the cvar is not the value passed (RE_SetMode()'s
- * invalid-mode fallback, a cvar of 2.5).
+ * any other mode keeps its own size there. fullscreen is the value the
+ * window is made with: the value passed to GLimp_InitGraphics(), or 0
+ * once it fell back to a window on its own. GLimp_InitGraphics() writes
+ * that value into the vid_fullscreen cvar before the renderer makes its
+ * context, so the renderers, which read the cvar, decide on it too.
  */
 qboolean
 GLimp_DrawableInPixels(qboolean highdpi, int fullscreen, float r_mode)
