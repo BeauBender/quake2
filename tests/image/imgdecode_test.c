@@ -1075,6 +1075,24 @@ jpeg_frame_size(const buf_t *b)
 	printf("no frame header in a JPEG test file\n");
 	exit(2);
 }
+
+/* the offset of the colour transform in the JPEG's Adobe (APP14) segment */
+static size_t
+jpeg_adobe_transform(const buf_t *b)
+{
+	size_t i;
+
+	for (i = 2; i + 16 < b->n; i++)
+	{
+		if (b->p[i] == 0xff && b->p[i + 1] == 0xee && !memcmp(b->p + i + 4, "Adobe", 5))
+		{
+			return i + 15;
+		}
+	}
+
+	printf("no Adobe segment in a JPEG test file\n");
+	exit(2);
+}
 #endif
 
 static unsigned char want_rgb[RW * RH * 4], want_grey[RW * RH * 4], want_grey_alpha[RW * RH * 4];
@@ -1300,6 +1318,15 @@ build_cases(void)
 			j.p[at + 3] = (unsigned char)(a[k].w & 255);
 			add_bad(a[k].what, j, j.n, "jpg", a[k].want);
 		}
+	}
+	{
+		/* ImageIO writes CMYK (Adobe transform 0); the same file marked YCCK */
+		buf_t j = encode_cmyk(16, 16);
+		size_t at = jpeg_adobe_transform(&j);
+
+		CHECK(j.p[at] == 0, "the CMYK JPEG's Adobe transform is %d", j.p[at]);
+		j.p[at] = 2;
+		add_bad("jpeg ycck", j, j.n, "jpg", IMGDEC_ERR_LAYOUT);
 	}
 	add_bad("png declaring 100000x100000", png_file(100000, 100000, 8, 2, rgb, 3, 1, NULL, 0, NULL, 0), (size_t)-1, "png", IMGDEC_OK);
 	{
