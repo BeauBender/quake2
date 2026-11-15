@@ -385,7 +385,8 @@ IMGDEC_LayoutOf(CGImageRef image, imgdec_layout_t *l, unsigned char *palette)
 	l->bits_per_pixel = CGImageGetBitsPerPixel(image);
 	l->bytes_per_row = CGImageGetBytesPerRow(image);
 
-	if (!space || !IMGDEC_BitmapLayout(info, CGImageGetAlphaInfo(image), &l->swap, &l->alpha))
+	if (!space ||
+		!IMGDEC_BitmapLayout(info, CGImageGetAlphaInfo(image), &l->swap, &l->alpha))
 	{
 		return IMGDEC_ERR_LAYOUT;
 	}
