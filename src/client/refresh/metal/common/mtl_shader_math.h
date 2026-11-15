@@ -64,10 +64,14 @@ mtl_gl_clip_z(float z, float w)
 #ifdef __METAL_VERSION__
 #define MTL_SQRT sqrt
 #define MTL_FLOOR floor
+#define MTL_FMIN fmin
+#define MTL_FMAX fmax
 #else
 #include <math.h>
 #define MTL_SQRT sqrtf
 #define MTL_FLOOR floorf
+#define MTL_FMIN fminf
+#define MTL_FMAX fmaxf
 #endif
 
 static inline float
@@ -192,10 +196,11 @@ typedef struct
 	float p0, p1, g0, g1;
 } mtl_cubic_axis_t;
 
+/* v clamped to [lo, hi]; lo for a NaN (fmax returns its other argument for a NaN), the bounds for the infinities */
 static inline float
 mtl_clamp_range(float v, float lo, float hi)
 {
-	return v < lo ? lo : (v > hi ? hi : v);
+	return MTL_FMIN(MTL_FMAX(v, lo), hi);
 }
 
 static inline mtl_cubic_axis_t

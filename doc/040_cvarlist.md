@@ -721,7 +721,8 @@ has) is not drawn.
   from the neighbouring face stored beside it, and the result is never
   brighter than the brightest or darker than the darkest luxel around the
   sample. A face with no lightmap, and the flowing surfaces, are not
-  filtered either way. Other renderers do not have it. Saved with the
+  filtered either way. Only `0` and `1` are values: any other value is
+  `0`. Other renderers do not have it. Saved with the
   configuration; applies from the next frame.
 
 

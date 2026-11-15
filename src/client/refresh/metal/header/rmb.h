@@ -423,9 +423,11 @@ rm_material_t rm_material(int texflags);
  * the face's lightmap rectangle; one stride of 48 bytes (static asserts
  * in rm_pure.c, a runtime check in the host test). The rectangle is
  * left, top, right, bottom in luxels of the face's slice, all four 0 for a
- * vertex without a lightmap (the flowing and the sky vertices), and the
- * fragment function of metal_lightmap_filter 1 clamps its taps to it. The w is stored, not packed away, because the vertex function
- * then reads one float4 as the shim's does, and only that gives the
+ * vertex without a lightmap, and the fragment function of
+ * metal_lightmap_filter 1 clamps its taps to it. (The flowing surfaces'
+ * vertices copy the rectangle of the face whole; they stay bilinear
+ * because the dynamic draw's uniforms have filter 0.) The w is stored,
+ * not packed away, because the vertex function then reads one float4 as the shim's does, and only that gives the
  * shim's clip coordinates to the bit (design section 19).
  */
 typedef struct
@@ -681,6 +683,14 @@ int rm_surface_extents(float mins, float maxs, short *texturemin, short *extent)
  * written otherwise (the map is refused).
  */
 int rm_lm_size(long extent0, long extent1, int *smax, int *tmax);
+
+/*
+ * The lightmap rectangle of a face in its slice (TASK120), as the
+ * vertices of a lit face carry it: left, top, right, bottom in luxels, the
+ * half-open [light_s, light_s + smax) by [light_t, light_t + tmax). out[4]
+ * is all 0 when smax or tmax is below 1 (no lightmap).
+ */
+void rm_lm_face_rect(int light_s, int light_t, int smax, int tmax, float *out);
 
 /* The styles of a surface before the first RM_LM_STYLE_END, at most RM_LM_STYLES. */
 int rm_lm_nummaps(const unsigned char *styles);

@@ -1504,13 +1504,77 @@ test_lm_cubic_edges(void)
 	CHECK(t.y0 > 28.9f && t.y0 < 30.5f && t.y1 > 30.5f && t.y1 < 32.1f);
 	CHECK(fabsf(t.w00 + t.w10 + t.w01 + t.w11 - 1.0f) < 1e-6f);
 
+	/* a NaN or an infinity in either axis: every tap still inside the rectangle (the low bound for a NaN) */
+	{
+		static const float bad[] = { NAN, INFINITY, -INFINITY };
+		int a, b2;
+
+		for (a = 0; a < 3; a++)
+		{
+			for (b2 = 0; b2 < 3; b2++)
+			{
+				t = mtl_lm_cubic(bad[a], bad[b2], 3.0f, 2.0f, 9.0f, 6.0f);
+				CHECK(t.x0 >= 3.5f && t.x0 <= 8.5f && t.x1 >= 3.5f && t.x1 <= 8.5f);
+				CHECK(t.y0 >= 2.5f && t.y0 <= 5.5f && t.y1 >= 2.5f && t.y1 <= 5.5f);
+			}
+		}
+
+		t = mtl_lm_cubic(NAN, 1.0f, 3.0f, 2.0f, 9.0f, 6.0f);
+		CHECK(t.x0 == 3.5f && t.x1 == 3.5f);
+		t = mtl_lm_cubic(1.0f, NAN, 3.0f, 2.0f, 9.0f, 6.0f);
+		CHECK(t.y0 == 2.5f && t.y1 == 2.5f);
+		CHECK(mtl_clamp_range(NAN, 1.0f, 2.0f) == 1.0f && mtl_clamp_range(INFINITY, 1.0f, 2.0f) == 2.0f &&
+			mtl_clamp_range(-INFINITY, 1.0f, 2.0f) == 1.0f);
+	}
+
 	/* a rectangle that cannot hold a luxel is not filtered: a vertex without a lightmap has the rectangle 0 */
 	CHECK(mtl_lm_rect_valid(0, 0, 1, 1) && mtl_lm_rect_valid(3, 4, 9, 7));
 	CHECK(!mtl_lm_rect_valid(0, 0, 0, 0) && !mtl_lm_rect_valid(2, 2, 2.5f, 9) && !mtl_lm_rect_valid(2, 2, 9, 2.5f));
 	CHECK(!mtl_lm_rect_valid(5, 0, 4, 9) && !mtl_lm_rect_valid(0, 5, 9, 4));
 }
 
-/* The retained vertex: position at offset 0, w after it, one stride of 32 bytes; the record's normal. */
+/*
+ * The face rectangle of a vertex: [light_s, light_s + smax) by [light_t, light_t + tmax) as
+ * left, top, right, bottom; each of the four edges is its own value, so an off-by-one on any
+ * of them (or two swapped) shows; all 0 for a size below 1.
+ */
+static void
+test_lm_face_rect(void)
+{
+	float r[4];
+	int s, t;
+
+	rm_lm_face_rect(10, 20, 3, 5, r);
+	CHECK(r[0] == 10.0f && r[1] == 20.0f && r[2] == 13.0f && r[3] == 25.0f);
+	rm_lm_face_rect(0, 0, 1, 1, r);
+	CHECK(r[0] == 0.0f && r[1] == 0.0f && r[2] == 1.0f && r[3] == 1.0f);
+	rm_lm_face_rect(126, 127, 1, 1, r);
+	CHECK(r[0] == 126.0f && r[1] == 127.0f && r[2] == 127.0f && r[3] == 128.0f);
+
+	/* every combination of small values: width and height are the sizes, not the sizes plus or minus one */
+	for (s = 1; s < 6; s++)
+	{
+		for (t = 1; t < 6; t++)
+		{
+			int ls = 7 * s, lt = 11 * t;
+
+			rm_lm_face_rect(ls, lt, s, t, r);
+			CHECK(r[0] == (float)ls && r[1] == (float)lt && r[2] - r[0] == (float)s && r[3] - r[1] == (float)t);
+			CHECK(r[2] == (float)(ls + s) && r[3] == (float)(lt + t));
+			CHECK(mtl_lm_rect_valid(r[0], r[1], r[2], r[3]));
+		}
+	}
+
+	/* no lightmap: the rectangle is 0, which mtl_lm_rect_valid refuses */
+	rm_lm_face_rect(10, 20, 0, 5, r);
+	CHECK(r[0] == 0.0f && r[1] == 0.0f && r[2] == 0.0f && r[3] == 0.0f);
+	rm_lm_face_rect(10, 20, 5, 0, r);
+	CHECK(r[0] == 0.0f && r[1] == 0.0f && r[2] == 0.0f && r[3] == 0.0f);
+	rm_lm_face_rect(10, 20, -1, 5, r);
+	CHECK(r[2] == 0.0f && !mtl_lm_rect_valid(r[0], r[1], r[2], r[3]));
+}
+
+/* The retained vertex: position at offset 0, w after it, one stride of 48 bytes (TASK120: the lightmap rectangle after the lightmap coordinates); the record's normal. */
 static void
 test_wvert_record(void)
 {
@@ -7832,6 +7896,7 @@ main(void)
 	test_quad_indices();
 	test_tint();
 	test_material();
+	test_lm_face_rect();
 	test_wvert_record();
 	test_lm_cubic_weights();
 	test_lm_cubic_bounds();

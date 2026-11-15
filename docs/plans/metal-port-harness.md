@@ -3544,17 +3544,17 @@ runs each, alternated, from the repository root (the engine ends itself
 after the demo; `PINS_BASEDIR` is the game data):
 
 ```sh
-mkdir -p "$PINS_STORE/gpu"
-MTL_GPU_TIME=1 release/quake2 -datadir "$PINS_BASEDIR" -portable \
+mkdir -p "${PINS_STORE:?}/gpu"
+MTL_GPU_TIME=1 release/quake2 -datadir "${PINS_BASEDIR:?}" -portable \
   +set timedemo 1 +set scr_conspeed 99999 +set cl_showfps 0 +set viewsize 100 \
   +set r_drawworld 1 +set crosshair 0 +set cl_gun 0 +set cl_entities 0 \
   +set cl_particles 0 +set cl_lights 0 +set cl_blend 0 \
   +set vid_renderer metal +set vid_fullscreen 0 +set r_mode -1 \
   +set r_customwidth 2560 +set r_customheight 1600 +set r_vsync 0 \
   +set s_initsound 0 +set metal_lightmap_filter VALUE \
-  +set pins_dir "$PINS_STORE/gpu" +set pins_scenario world +set pins_capture 100000 \
-  +demomap demo1.dm2 2> "$PINS_STORE/gpu/VALUE.log"
-grep gpu_ms "$PINS_STORE/gpu/VALUE.log" | awk '{print $3}' | sort -n \
+  +set pins_dir "${PINS_STORE:?}/gpu" +set pins_scenario world +set pins_capture 100000 \
+  +demomap demo1.dm2 2> "${PINS_STORE:?}/gpu/VALUE.log"
+grep gpu_ms "${PINS_STORE:?}/gpu/VALUE.log" | awk '{print $3}' | sort -n \
   | awk '{a[NR]=$1} END {print NR, a[int((NR+1)/2)], a[int(NR*0.9)]}'
 ```
 

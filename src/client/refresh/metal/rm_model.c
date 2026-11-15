@@ -790,7 +790,7 @@ RM_BuildWorld(model_t *mod)
 		msurface_t *fa = &mod->surfaces[s];
 		const mtexinfo_t *tex = fa->texinfo;
 		rm_surfrec_t *rec = &w->recs[s];
-		int i, lindex, lnumverts = fa->numedges;
+		int i, lindex, lnumverts = fa->numedges, lm_s, lm_t;
 		long n;
 
 		fa->first_vertex = (unsigned)vat;
@@ -801,6 +801,14 @@ RM_BuildWorld(model_t *mod)
 		{
 			RM_Refuse(mod, "surface %d (%d vertices, warped) cannot be subdivided within the limits", s,
 					fa->numedges);
+		}
+
+		/* the size of its lightmap in luxels, 0 by 0 for a face without one or one the limits refuse */
+		lm_s = lm_t = 0;
+
+		if ((fa->lightmaptexturenum >= 0) && !rm_lm_size(fa->extents[0], fa->extents[1], &lm_s, &lm_t))
+		{
+			lm_s = lm_t = 0;
 		}
 
 		for (i = 0; i < lnumverts; i++)
@@ -850,20 +858,7 @@ RM_BuildWorld(model_t *mod)
 			v->lmuv[1] = t1;
 
 			/* the face's rectangle in its slice, for the filtered lightmap (all 0 without a lightmap) */
-			v->lmrect[0] = v->lmrect[1] = v->lmrect[2] = v->lmrect[3] = 0.0f;
-
-			if (fa->lightmaptexturenum >= 0)
-			{
-				int smax = 0, tmax = 0;
-
-				if (rm_lm_size(fa->extents[0], fa->extents[1], &smax, &tmax))
-				{
-					v->lmrect[0] = (float)fa->light_s;
-					v->lmrect[1] = (float)fa->light_t;
-					v->lmrect[2] = (float)(fa->light_s + smax);
-					v->lmrect[3] = (float)(fa->light_t + tmax);
-				}
-			}
+			rm_lm_face_rect(fa->light_s, fa->light_t, lm_s, lm_t, v->lmrect);
 		}
 
 		n = rm_world_fan(vat, lnumverts, w->indices + iat, size.indices - iat);

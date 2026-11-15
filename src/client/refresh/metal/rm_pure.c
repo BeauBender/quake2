@@ -1495,6 +1495,21 @@ rm_ftol(float f)
 	return (long)f;
 }
 
+void
+rm_lm_face_rect(int light_s, int light_t, int smax, int tmax, float *out)
+{
+	if ((smax < 1) || (tmax < 1))
+	{
+		out[0] = out[1] = out[2] = out[3] = 0.0f;
+		return;
+	}
+
+	out[0] = (float)light_s;
+	out[1] = (float)light_t;
+	out[2] = (float)(light_s + smax);
+	out[3] = (float)(light_t + tmax);
+}
+
 /* the size rm_lm_size gives for the extents (smax - 1) * 16 and (tmax - 1) * 16 (below 1 is negative) */
 static int
 rm_lm_dims_ok(int smax, int tmax)
