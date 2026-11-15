@@ -71,6 +71,25 @@ static unsigned long tex_serial[RMB_MAX_TEXTURES];   /* rmb_frame_serial of its 
 
 static id<MTLBuffer> staging;
 static mtl_ring_t staging_ring;
+
+/*
+ * Sets a state slot (the library, a pipeline, a depth-stencil state, a
+ * sampler) to obj, nil to release it, and counts both in the ledger
+ * (RM_OBJ_STATE, N10), so the teardown line shows every one released.
+ */
+#define RMB_SET_STATE(slot, obj) \
+	do \
+	{ \
+		if (slot) \
+		{ \
+			rm_ledger_destroy(&rmb_ledger, RM_OBJ_STATE); \
+		} \
+		(slot) = (obj); \
+		if (slot) \
+		{ \
+			rm_ledger_create(&rmb_ledger, RM_OBJ_STATE); \
+		} \
+	} while (0)
 static id<MTLCommandBuffer> upload_cmd;
 static id<MTLBlitCommandEncoder> upload_blit;
 
@@ -218,17 +237,17 @@ rmb_new_depth_states(void)
 
 	d.depthCompareFunction = MTLCompareFunctionAlways;
 	d.depthWriteEnabled = NO;
-	depth_states[RMB_DS_NONE] = [rmb_device newDepthStencilStateWithDescriptor:d];
+	RMB_SET_STATE(depth_states[RMB_DS_NONE], [rmb_device newDepthStencilStateWithDescriptor:d]);
 
 	d = [MTLDepthStencilDescriptor new];
 	d.depthCompareFunction = MTLCompareFunctionLessEqual;
 	d.depthWriteEnabled = YES;
-	depth_states[RMB_DS_LEQUAL_WRITE] = [rmb_device newDepthStencilStateWithDescriptor:d];
+	RMB_SET_STATE(depth_states[RMB_DS_LEQUAL_WRITE], [rmb_device newDepthStencilStateWithDescriptor:d]);
 
 	d = [MTLDepthStencilDescriptor new];
 	d.depthCompareFunction = MTLCompareFunctionLessEqual;
 	d.depthWriteEnabled = NO;
-	depth_states[RMB_DS_LEQUAL] = [rmb_device newDepthStencilStateWithDescriptor:d];
+	RMB_SET_STATE(depth_states[RMB_DS_LEQUAL], [rmb_device newDepthStencilStateWithDescriptor:d]);
 
 	/* gl1's R_DrawAliasShadow: glStencilFunc(GL_EQUAL, 1, 2), glStencilOp(GL_KEEP, GL_KEEP, GL_INCR) */
 	{
@@ -246,7 +265,7 @@ rmb_new_depth_states(void)
 		d.depthWriteEnabled = YES;
 		d.frontFaceStencil = st;
 		d.backFaceStencil = st;
-		depth_states[RMB_DS_STENCIL_SHADOW] = [rmb_device newDepthStencilStateWithDescriptor:d];
+		RMB_SET_STATE(depth_states[RMB_DS_STENCIL_SHADOW], [rmb_device newDepthStencilStateWithDescriptor:d]);
 	}
 
 	return depth_states[RMB_DS_NONE] && depth_states[RMB_DS_LEQUAL_WRITE] && depth_states[RMB_DS_LEQUAL] &&
@@ -273,7 +292,7 @@ rmb_resources_open(const char *dir, char *err, size_t errlen)
 			return 0;
 		}
 
-		library = [rmb_device newLibraryWithURL:[NSURL fileURLWithPath:path] error:&e];
+		RMB_SET_STATE(library, [rmb_device newLibraryWithURL:[NSURL fileURLWithPath:path] error:&e]);
 
 		if (!library)
 		{
@@ -289,7 +308,7 @@ rmb_resources_open(const char *dir, char *err, size_t errlen)
 				{
 					int i = rm_pipe_2d((rm_texenv_t)env, a, b);
 
-					pipes[i] = rmb_new_pipe_2d((rm_texenv_t)env, a, b, &e);
+					RMB_SET_STATE(pipes[i], rmb_new_pipe_2d((rm_texenv_t)env, a, b, &e));
 
 					if (!pipes[i])
 					{
@@ -305,7 +324,7 @@ rmb_resources_open(const char *dir, char *err, size_t errlen)
 
 		for (i3 = 0; i3 < RM_PIPE_3D_COUNT; i3++)
 		{
-			pipes3d[i3] = rmb_new_pipe_3d((rm_pipe3d_t)i3, &e);
+			RMB_SET_STATE(pipes3d[i3], rmb_new_pipe_3d((rm_pipe3d_t)i3, &e));
 
 			if (!pipes3d[i3])
 			{
@@ -415,22 +434,22 @@ rmb_resources_close(void)
 
 		for (i = 0; i < RM_PIPE_2D_COUNT; i++)
 		{
-			pipes[i] = nil;
+			RMB_SET_STATE(pipes[i], nil);
 		}
 
 		for (i = 0; i < RM_PIPE_3D_COUNT; i++)
 		{
-			pipes3d[i] = nil;
+			RMB_SET_STATE(pipes3d[i], nil);
 		}
 
 		for (i = 0; i < RMB_DS_COUNT; i++)
 		{
-			depth_states[i] = nil;
+			RMB_SET_STATE(depth_states[i], nil);
 		}
 
 		for (i = 0; i < RMB_SMP_CLASSES * 2; i++)
 		{
-			samplers[i] = nil;
+			RMB_SET_STATE(samplers[i], nil);
 		}
 
 		if (staging)
@@ -439,7 +458,7 @@ rmb_resources_close(void)
 			rm_ledger_destroy(&rmb_ledger, RM_OBJ_BUFFER);
 		}
 
-		library = nil;
+		RMB_SET_STATE(library, nil);
 		upload_cmd = nil;
 		upload_blit = nil;
 		resources_open = 0;
@@ -490,7 +509,7 @@ rmb_samplers_set(int min, int mag_linear, int aniso)
 				}
 
 				d.sAddressMode = d.tAddressMode = wrap;
-				samplers[RMB_SAMPLER(cls, clamp)] = [rmb_device newSamplerStateWithDescriptor:d];
+				RMB_SET_STATE(samplers[RMB_SAMPLER(cls, clamp)], [rmb_device newSamplerStateWithDescriptor:d]);
 			}
 		}
 	}

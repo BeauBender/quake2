@@ -63,6 +63,7 @@ typedef enum
 	RM_OBJ_VIEW,
 	RM_OBJ_TEXTURE,
 	RM_OBJ_BUFFER,
+	RM_OBJ_STATE,       /* the shader library, pipeline states, depth-stencil states, samplers (N10) */
 	RM_OBJ_KINDS
 } rm_obj_kind_t;
 
@@ -132,6 +133,15 @@ void rm_ledger_create(rm_ledger_t *l, rm_obj_kind_t kind);
 void rm_ledger_destroy(rm_ledger_t *l, rm_obj_kind_t kind);
 unsigned long rm_ledger_live(const rm_ledger_t *l);
 
+/* The objects of one kind still live (created less destroyed); 0 for a kind out of range. */
+unsigned long rm_ledger_kind_live(const rm_ledger_t *l, rm_obj_kind_t kind);
+
+/*
+ * 1 when no object of any kind is live, none released is still alive and
+ * no destroy went unmatched: a clean teardown (N10).
+ */
+int rm_ledger_clean(const rm_ledger_t *l);
+
 /* The teardown line, without a newline. Returns 1 when it fits, 0 when truncated. */
 int rm_ledger_format(const rm_ledger_t *l, char *buf, size_t len);
 
@@ -161,6 +171,56 @@ rm_load_t rm_color_load(int clear, int defined, int first);
  * the next frame) or the colour target is cw by ch, another size.
  */
 int rm_targets_rebuild(int have_color, int have_depth, int cw, int ch, int w, int h);
+
+/*
+ * The size of a frame (FIX45): the mode's, vid_w by vid_h, which is gl1's
+ * viewport and what its R_ScreenShot reads, not the window's pixels, which
+ * differ from it in fullscreen when the display has no mode of that size
+ * (and are the drawable's size, rm_present_region). R_SetMode makes the
+ * two equal on a HighDPI window, as gl1's does. 1 with *w and *h set when
+ * both sides are positive and neither is above RMB_MAX_TEXTURE_SIDE; 0
+ * with both 0 otherwise (no frame is drawn).
+ */
+int rm_frame_size(int vid_w, int vid_h, int *w, int *h);
+
+/* What rmb_frame_begin holds from the frames before (rm_frame_remake). */
+typedef struct
+{
+	int color, depth;   /* 1 when the colour and the depth-stencil target exist */
+	int cw, ch;         /* the colour target's size */
+	int lw, lh;         /* the layer's drawableSize */
+} rm_frame_held_t;
+
+#define RM_REMAKE_COLOR 1u      /* the colour target is made again */
+#define RM_REMAKE_DEPTH 2u      /* the depth-stencil target is made again */
+#define RM_REMAKE_DRAWABLE 4u   /* the layer's drawableSize is set */
+
+/*
+ * What rmb_frame_begin makes again for a frame of w by h (rm_frame_size)
+ * on a window of dw by dh pixels: both targets when either is missing or
+ * the frame's size changed (rm_targets_rebuild), the drawable's size when
+ * the window's changed, and nothing else: the frame rings, the readback
+ * buffer, the textures, the pipelines and the samplers are kept through
+ * a size change.
+ */
+unsigned rm_frame_remake(const rm_frame_held_t *held, int w, int h, int dw, int dh);
+
+/* The rows of a present blit (rm_present_region); the columns start at 0 on both sides. */
+typedef struct
+{
+	int src_y, dst_y;   /* the first row read from the frame, written in the drawable */
+	int w, h;
+} rm_present_t;
+
+/*
+ * The blit of a tw by th frame to a dw by dh drawable, at gl1's place: GL
+ * draws a viewport of the frame's size from the bottom-left corner of the
+ * window's framebuffer, so the frame's bottom row lands on the drawable's
+ * bottom row (rows counted from the top, Metal's origin), left aligned,
+ * and only the overlap is copied. Equal sizes copy the whole frame at 0 0.
+ * 1 with *out set when the overlap is not empty, 0 with it zeroed.
+ */
+int rm_present_region(int tw, int th, int dw, int dh, rm_present_t *out);
 
 /* ---- images, the 2D draws (rm_pure.c) ------------------------------------------- */
 
@@ -1456,22 +1516,25 @@ void rmb_ledger_note(rm_obj_kind_t kind, int created);
 /* Detaches, releases the device and the queue; fills the final counters. */
 void rmb_close(rmb_stats_t *stats, rm_ledger_t *ledger);
 
+/* Sets the layer's displaySyncEnabled (r_vsync), or keeps it for the next layer. */
 void rmb_set_vsync(int on);
+/* The layer's displaySyncEnabled read back, or the value kept without a layer (IsVSyncActive). */
 int rmb_vsync(void);
 
 /* The counters so far. */
 void rmb_stats(rmb_stats_t *stats, rm_ledger_t *ledger);
 
 /*
- * Takes a frame slot and a command buffer, sizes the targets and the
- * layer's drawable to w by h pixels (the window's size in pixels), and
- * opens the frame's first pass, colour only: cleared to clear_rgba, or
- * to black when it is NULL (rm_color_load). This is gl1's R_Clear at the
- * end of RI_BeginFrame, with the shim's black for a frame gl1 does not
- * clear. 0 when
- * the frame is skipped.
+ * Takes a frame slot and a command buffer, sizes the targets to w by h
+ * (the mode's size, rm_frame_size) and the layer's drawable to dw by dh
+ * (the window's pixels; w by h when either is not positive), making again
+ * only what rm_frame_remake names, and opens the frame's first pass,
+ * colour only: cleared to clear_rgba, or to black when it is NULL
+ * (rm_color_load). This is gl1's R_Clear at the end of RI_BeginFrame,
+ * with the shim's black for a frame gl1 does not clear. 0 when the frame
+ * is skipped.
  */
-int rmb_frame_begin(int w, int h, const float *clear_rgba);
+int rmb_frame_begin(int w, int h, int dw, int dh, const float *clear_rgba);
 
 /*
  * Ends the open pass and opens the 3D pass on the colour target and its
@@ -1497,7 +1560,10 @@ int rmb_read(unsigned char *bgra, size_t len);
 /* The size of the colour target, 0 0 without one. */
 void rmb_target_size(int *w, int *h);
 
-/* Blits the frame to the drawable when there is one, presents and commits. */
+/*
+ * Blits the frame to the drawable when there is one (at rm_present_region,
+ * the rest of a larger drawable cleared to black), presents and commits.
+ */
 void rmb_frame_end(void);
 
 /*

@@ -419,7 +419,9 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 
 * **r_vsync**: Enables the vsync: frames are synchronized with
   display refresh rate, should (but doesn't always) prevent tearing.
-  Set to `1` for normal vsync and `2` for adaptive vsync.
+  Set to `1` for normal vsync and `2` for adaptive vsync. The Metal
+  renderer turns the display sync of its layer on for any value but `0`
+  and takes a change without `vid_restart`.
 
 * **r_anisotropic**: Anisotropic filtering. Possible values are
   dependent on the GPU driver, most of them support `1`, `2`, `4`, `8`
@@ -466,7 +468,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   the window in realtime via shaders (on all platforms). The
   OpenGL 1.4 renderer requires a
   `vid_restart` since gamma values are precomputed at renderer start
-  only. On MacOS the situation is similar; `vid_restart` is required.
+  only, and so does the Metal renderer. On MacOS the situation is similar; `vid_restart` is required.
   This cvar is also set by the brightness slider in the video menu.
 
 * **vid_fullscreen**: Sets the fullscreen mode. When set to `0` (the
@@ -502,7 +504,11 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 
 * **vid_renderer**: Selects the renderer library. Possible options are
   `gl3` (the default) for the OpenGL 3.2 renderer, `gl1` for the
-  original OpenGL 1.4 renderer and `soft` for the software renderer.
+  original OpenGL 1.4 renderer and `soft` for the software renderer;
+  on macOS also `metal` for the native Metal renderer, when it is built
+  (`make ref_metal`). When the selected renderer fails to load the next
+  one is tried, in the order `gl3`, `gl1`, `soft`; on macOS `gl3`,
+  `metal`, `gl1`, `soft`.
 
 
 ## Graphics (GL renderers only)
@@ -539,7 +545,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 
 * **gl1_intensity**: Sets the color intensity. Must be a floating point
   value, at least `1.0` - default is `2.0`. Applied when textures are
-  loaded, so it needs a `vid_restart`.
+  loaded, so it needs a `vid_restart` (the Metal renderer takes it too).
 
 * **gl1_minlight**: Sets the minimum light level on screen. Increasing
   this illuminates darker scenes, at the expense of the atmosphere.
@@ -661,8 +667,10 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 ## Graphics (Metal only)
 
 The native Metal renderer, `vid_renderer metal`, is built on macOS
-only, with `make ref_metal`. It is work in progress (see
-`doc/100_renderpins.md`): for now it draws the 2D elements, cinematics,
+only, with `make ref_metal`, and is listed in the video menu there
+when it is built (with the OpenGL 1.4 renderer's settings, which it
+takes). Its frames are judged against the OpenGL 1.4 renderer (see
+`doc/100_renderpins.md`). It draws the 2D elements, cinematics,
 the screen blend and the world's opaque surfaces with their lightmaps,
 animated lightstyles, `gl1_overbrightbits` and dynamic lights, the sky
 box, the warped water, the translucent and the flowing surfaces, the
@@ -698,7 +706,9 @@ has) is not drawn.
   map is loaded it also prints the vertex, index and surface-record counts
   and bytes of the map's retained buffers, and the number of its lightmap
   slices. The
-  teardown line with its object counts is printed at every shutdown
+  teardown line with its object counts (devices, queues, views,
+  textures, buffers and states: the shader library, pipeline,
+  depth-stencil and sampler states) is printed at every shutdown
   regardless. Defaults to `0`.
 
 

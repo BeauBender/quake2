@@ -22,7 +22,7 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | `src/client/` | Client: parsing server messages (`cl_parse.c`), downloads (`cl_download.c`), input, menus, sound, video |
 | `src/client/refresh/` | Renderers built as separate modules: `gl1`, `gl3`, `soft`, plus `files/` with the asset loaders they share |
 | `src/client/refresh/gl1/metal/` | The OpenGL subset on Metal that `ref_gl1` is built against with `WITH_METAL_SHIM=yes` on macOS (design: `docs/plans/metal-shim-design.md`); gl1's own files are not edited |
-| `src/client/refresh/metal/` | `ref_metal`, the native Metal renderer, macOS only, built with `make ref_metal` (design: `docs/plans/ref-metal-native.md`); C with an Objective-C back end behind `header/rmb.h`, checked by `tests/check-ref-metal.sh` |
+| `src/client/refresh/metal/` | `ref_metal`, the native Metal renderer, macOS only, built with `make ref_metal` and not by `make` (design and as-built record: `docs/plans/ref-metal-native.md`); `vid_renderer metal`, in the fallback order and the video menu on macOS only; C with an Objective-C back end behind `header/rmb.h`, checked by `tests/check-ref-metal.sh` |
 | `src/game/` | The game module: gameplay, monsters, weapons, savegames (`savegame/`) |
 | `src/backends/` | OS specifics: `unix`, `windows`, `generic` |
 | `src/win-wrapper/` | Windows launcher wrapper |
@@ -39,7 +39,7 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | `docs/DEPENDENCIES.md` | Every external library and vendored file, and its status |
 | `third_party/SDL3/` | SDL 3 source, byte-identical to the upstream release tarball and verified against `MANIFEST.sha256` by `scripts/check-vendored.sh`; built on macOS by `third_party/sdl3.make`. Provenance and update procedure in its `README.md` |
 | `scripts/pins.sh`, `scripts/pins/` | The renderer pin harness: record frames per scenario, compare renderers, make and publish pull-request evidence (`evidence.py`); user page `doc/100_renderpins.md`, procedure in `docs/plans/metal-port-harness.md` |
-| `tests/` | Repo invariants (`check-*.sh`), run by the gate and each runnable on its own; `baselines/` freezes the upstream gaps they tolerate; `pins/` holds the C driver `check-pins-latch.sh` builds; `refrecord/` holds the record-format test `check-refrecord.sh` builds; `metal/` holds the Metal shim host test `check-metal-shim.sh` builds |
+| `tests/` | Repo invariants (`check-*.sh`), run by the gate and each runnable on its own; `baselines/` freezes the upstream gaps they tolerate; `pins/` holds the C driver `check-pins-latch.sh` builds; `refrecord/` holds the record-format test `check-refrecord.sh` builds; `metal/` holds the Metal shim host test `check-metal-shim.sh` builds and the `ref_metal` host test `check-ref-metal.sh` builds |
 | `tests/unit/` | The unit-test suite: hand-written runner (`test.h`, `main.c`), one `test_*.c` per area, the client stubs (`stub_client.c`, `stub_client_full.c`) that let `cl_download.c`, the message parser, handshake, entity, HUD and sound-frontend files link without SDL; built and run by `make test` (in the gate); see `doc/085_unittests.md` |
 | `tests/pins/unit/` | Unit-test pins: committed expected outputs with a provenance header, rewritten by `make test UPDATE_PINS=1` (not the renderer frame pins of `scripts/pins.sh`) |
 | `scripts/coverage.sh`, `scripts/coverage-floor` | Line coverage of the suite with the compiler's own tools, and the floor it must not drop below |

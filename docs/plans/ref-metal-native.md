@@ -387,7 +387,7 @@ against `gl1`:
 |---|---|---|
 | `hud2d`, `cinematic`, `world`, `world-fullbright` (N4), `skywater` from `demo1.dm2` | `--threshold 0.005 --bad-threshold 0.001` | `gl1-metal` records of the existing four are identical to each other (`gl1` against itself is exact on them too), and N4 shows the same for `world-fullbright`; the shim's own two lightmap paths differ by at most 0.000417 and 0.000029 |
 | `models` | the defaults, 0.02 and 0.005, against two `gl1-metal` records | nondeterministic (engine PRNG); the scenario's line |
-| `particles` | `--threshold 0.02 --bad-threshold 0.25`, against two records | the scenario's `// nondeterministic:` line |
+| `particles` | seeded only (as `dlights`): `--threshold 0.005 --bad-threshold 0.001`, against two records | unseeded, a build that draws no particles passes the first accept value, `--threshold 0.02 --bad-threshold 0.25`, on all 23 frames (N9, section 24), so that value is kept in the scenario file as run-to-run data only (N10); seeded `gl1-metal` records are identical byte for byte |
 | `skywater` from `water.dm2` | `--threshold 0.02 --bad-threshold 0.03`, against two records | the scenario's line |
 | `dlights` (N8), from `demo1.dm2` and from `demo2.dm2` every 7th | seeded only (`PINS_SEED`, one seed for the reference and the candidate, the reference named with `--ref-id`): `--threshold 0.005 --bad-threshold 0.001` | the engine PRNG gives its lights their radii, so unseeded records differ by more than a missing lightstyle update and no unseeded value judges it; seeded `gl1-metal` records are identical byte for byte (N8, section 23 and the scenario file) |
 
@@ -2108,3 +2108,89 @@ Handed over to N10 (TASK93, #204) and the owner:
 - The frame time on this host depends on the display: while the display was in use the timedemo
   of both renderers was held to 60 fps with the default `r_vsync 1`; the table is with
   `+set r_vsync 0`.
+
+## 25. As built: N10, lifecycle, selection and the docs (TASK93, with FIX45)
+
+What exists:
+
+- **The frame's size is the mode's** (FIX45, #230). `RI_BeginFrame` sizes the colour and depth
+  targets to `vid.width` by `vid.height` (`rm_frame_size`: both sides 1 to
+  `RMB_MAX_TEXTURE_SIDE`, else no frame), which is gl1's viewport and what its `R_ScreenShot`
+  reads, and the client's `Drawable size` line. The layer's drawable stays the window's pixels
+  (`RI_GetDrawableSize`). Before, the targets were the window's pixels, so where the window has
+  another size than the mode (a fullscreen window, `vid_fullscreen 2`, with any `r_mode` but `-2`;
+  a fullscreen display mode the display does not have, TASK98) the 2D projection was stretched over
+  a larger target and `screenshot` and the pin capture had the window's size. The present blit
+  puts the frame where GL draws a smaller or larger viewport, its bottom-left corner on the
+  drawable's (`rm_present_region`), and a drawable larger than the frame is cleared to black
+  first, as the shim's first pass clears the whole window; with equal sizes, every windowed mode
+  on macOS, it copies the whole frame at 0, 0 as before, with no clear.
+- **The resize decision** (`rm_frame_remake`): a change of the frame's size makes both targets
+  again and nothing else (the frame rings, the readback buffer, the textures, the pipelines and
+  the samplers stay); a change of the window's pixels alone sets the layer's `drawableSize` and
+  makes no target; a missing target makes both (N1's retry). Every `r_mode` and `vid_fullscreen`
+  change goes through `vid_restart` (`VID_CheckChanges`), which makes all of them again anyway.
+- **HighDPI.** `R_SetMode` takes the drawable's size on a HighDPI window as gl1 does; on macOS the
+  client never asks for one (`Glimp_DetermineHighDPISupport` sets `SDL_WINDOW_HIGH_PIXEL_DENSITY`
+  on Wayland only), so there a window's pixels are the mode's size (measured: the base, which
+  read the window's pixels, wrote every windowed screenshot at the mode's size).
+- **vsync.** `r_vsync` sets the layer's `displaySyncEnabled` at attach and between frames when it
+  changes (any value but 0 is on, as gl1's swap interval); `IsVSyncActive` reads the property back
+  from the layer (`rmb_vsync`), and with `developer 1` the change prints the state read back.
+- **Gamma and intensity** as gl1: `vid_gamma` and `gl1_intensity` are read by `R_InitImages`
+  (the gamma and intensity tables, `rm_sw_gamma`), so a change applies at `vid_restart`;
+  `RI_BeginFrame` clears `vid_gamma->modified` as gl1's does.
+- **The ledger** counts a sixth kind, `state`: the shader library, the pipeline states, the
+  depth-stencil states and the samplers (`RMB_SET_STATE` in `rmb_resource.m`, made again by
+  `R_TextureMode`). `rm_ledger_kind_live` and `rm_ledger_clean` read it per kind; the teardown
+  line of every run reads `0 live objects`, `state 45/45` (1 library, 24 pipelines, 4
+  depth-stencil states, 8 samplers made twice).
+- **Completion handlers after unload.** The handlers of ref_metal's command buffers are blocks
+  whose code and release helpers are in `ref_metal.dylib`, and the bounded waits of teardown
+  (the frame slots, `RMB_GPU_WAIT_MS`) can give up on a hung GPU before Metal has run or released
+  them. They never run unmapped code because the image is never unmapped: `RI_Init`, before the
+  first command buffer, takes a reference with `dlopen(RTLD_NOLOAD | RTLD_NODELETE)` on its own
+  path (`RM_KeepMapped`, `rm_misc.c`), which dlopen(3) documents as never removed by `dlclose`;
+  and dyld already keeps an image with Objective-C metadata mapped (measured: after `dlclose` a
+  plain C dylib is unmapped and `ref_metal.dylib` and the shim's `ref_gl1.dylib` are not). The
+  handlers touch only the semaphores they captured (retained by the block) and an atomic counter
+  of the image, so a late one after `rmb_close` is harmless; the normal path's waits stay bounded.
+  Since the image was already kept by dyld, the statics surviving a `vid_restart` are what they
+  were before N10. The shim's open note (`docs/plans/metal-shim-design.md`, section 7) is met for
+  its dylib by dyld's behaviour alone; its code is not changed (not this group's).
+- **Selection.** `VID_CheckChanges` tries `gl3`, `metal`, `gl1`, `soft` under `__APPLE__` and
+  `gl3`, `gl1`, `soft` elsewhere (the preprocessed source, both). The video menu lists
+  `"[Metal     ]"` on macOS when `ref_metal` is present (the list shows only the renderers it finds, as for
+  `gl4` and `vk`), with gl1's settings: the intensity, overbright and minimum-light sliders and
+  the texture filter, which `ref_metal` reads by gl1's names (decision 7), and gl1's "apply
+  required" on the brightness slider. Off macOS the entry is not built. A static assertion holds
+  the table to `MAXRENDERERS` (6 entries with Metal, 6 slots).
+- **Failure paths.** Every failing step of `RI_Init` and `RI_InitContext` releases what it took:
+  `rmb_open` drops the device when the queue fails; a failed attach or resource load destroys the
+  view (`RI_ShutdownContext`); a failed pipeline, depth state or staging ring closes the resources
+  made so far (`rmb_resources_close`); a frame that cannot get its targets gives its slot back.
+  The engine calls `Shutdown` after a failed `Init`, and every shutdown step is safe on a
+  partial init (N1 to N9).
+
+Deviations from gl1, each only where gl1 cannot be copied:
+
+- gl1's frame is the default framebuffer; here it is the offscreen target, so a frame larger than
+  the window is drawn and read whole (gl1's `glReadPixels` outside the window reads undefined
+  pixels), and only its bottom-left part is presented, as gl1's.
+
+Measured (the runbook's section "`ref_metal` on the build host" has the commands and tables):
+every scenario of section 11 at its value, `particles` and `dlights` seeded, against two
+`gl1-metal` records at the base commit where there are two; a scratch `world` with `vid_gamma 1.6`
+and `gl1_intensity 3` at score 0; eight restart cycles through `metal`, `gl1` and `soft` under
+`ASAN=1` and the validation layer clean; `leaks --atExit` 0 leaks in every configuration, `metal`
+growing per restart within `gl1`'s and `soft`'s; the screenshot at the mode's size in every mode
+tried, where the base wrote the window's size in the two fullscreen-window cases; 51 mutants of
+the five new functions, all killed.
+
+Handed over:
+
+- The TASK98 case (`vid_fullscreen 1` falling back to another display mode) does not appear on
+  this host, where the display mode switch fails and the client reverts to a window; it is to be
+  repeated on the bare-metal host (FIX45's acceptance there). The fullscreen-window case, which
+  shows the same defect, is measured here.
+- Cppcheck is not installed on this host; CI runs it.

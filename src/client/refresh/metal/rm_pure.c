@@ -170,7 +170,7 @@ rm_ledger_live(const rm_ledger_t *l)
 int
 rm_ledger_format(const rm_ledger_t *l, char *buf, size_t len)
 {
-	static const char *names[RM_OBJ_KINDS] = { "device", "queue", "view", "texture", "buffer" };
+	static const char *names[RM_OBJ_KINDS] = { "device", "queue", "view", "texture", "buffer", "state" };
 	size_t used = 0;
 	int k, ok;
 
@@ -240,6 +240,84 @@ int
 rm_targets_rebuild(int have_color, int have_depth, int cw, int ch, int w, int h)
 {
 	return !have_color || !have_depth || (cw != w) || (ch != h);
+}
+
+unsigned long
+rm_ledger_kind_live(const rm_ledger_t *l, rm_obj_kind_t kind)
+{
+	if ((unsigned)kind >= RM_OBJ_KINDS)
+	{
+		return 0;
+	}
+
+	return l->created[kind] - l->destroyed[kind];
+}
+
+int
+rm_ledger_clean(const rm_ledger_t *l)
+{
+	int k;
+
+	for (k = 0; k < RM_OBJ_KINDS; k++)
+	{
+		if (rm_ledger_kind_live(l, (rm_obj_kind_t)k) != 0)
+		{
+			return 0;
+		}
+	}
+
+	return (l->unreleased == 0) && (l->unmatched == 0);
+}
+
+int
+rm_frame_size(int vid_w, int vid_h, int *w, int *h)
+{
+	*w = *h = 0;
+
+	if ((vid_w <= 0) || (vid_h <= 0) || (vid_w > RMB_MAX_TEXTURE_SIDE) || (vid_h > RMB_MAX_TEXTURE_SIDE))
+	{
+		return 0;
+	}
+
+	*w = vid_w;
+	*h = vid_h;
+	return 1;
+}
+
+unsigned
+rm_frame_remake(const rm_frame_held_t *held, int w, int h, int dw, int dh)
+{
+	unsigned make = 0;
+
+	if (rm_targets_rebuild(held->color, held->depth, held->cw, held->ch, w, h))
+	{
+		make |= RM_REMAKE_COLOR | RM_REMAKE_DEPTH;
+	}
+
+	if ((held->lw != dw) || (held->lh != dh))
+	{
+		make |= RM_REMAKE_DRAWABLE;
+	}
+
+	return make;
+}
+
+int
+rm_present_region(int tw, int th, int dw, int dh, rm_present_t *out)
+{
+	memset(out, 0, sizeof(*out));
+
+	if ((tw <= 0) || (th <= 0) || (dw <= 0) || (dh <= 0))
+	{
+		return 0;
+	}
+
+	out->w = (tw < dw) ? tw : dw;
+	out->h = (th < dh) ? th : dh;
+	/* the bottom rows of both: GL's origin is the framebuffer's bottom-left corner */
+	out->src_y = th - out->h;
+	out->dst_y = dh - out->h;
+	return 1;
 }
 
 int
