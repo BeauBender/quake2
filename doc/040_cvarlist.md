@@ -421,8 +421,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   display refresh rate, should (but doesn't always) prevent tearing.
   Set to `1` for normal vsync and `2` for adaptive vsync. The Metal
   renderer turns the display sync of its layer on for any value but `0`
-  and takes a change without `vid_restart`; with `developer 1` it
-  prints the state its layer reports.
+  and takes a change without `vid_restart`.
 
 * **r_anisotropic**: Anisotropic filtering. Possible values are
   dependent on the GPU driver, most of them support `1`, `2`, `4`, `8`
