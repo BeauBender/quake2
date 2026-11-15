@@ -824,7 +824,7 @@ typedef struct
 	int env;
 	float scale;
 	unsigned slice;
-	unsigned pad;
+	unsigned filter;
 } rmb_uniforms_lm_t;
 
 int
@@ -870,6 +870,7 @@ rmb_draw_world_lm(int vbuf, const unsigned *idx, unsigned long count, const rmb_
 		u.env = d->env;
 		u.scale = d->scale;
 		u.slice = (unsigned)d->slice;
+		u.filter = (unsigned)(d->filter == 1);
 
 		memcpy((unsigned char *)frame_ring.contents + iat, idx, (size_t)count * sizeof(idx[0]));
 		[frame_enc setVertexBuffer:vb offset:0 atIndex:0];

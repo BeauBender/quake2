@@ -419,10 +419,15 @@ rm_material_t rm_material(int texflags);
 /*
  * One vertex of the retained world buffer: the float3 position at offset
  * 0 (what an acceleration structure reads, with this stride) and w = 1
- * after it, then the diffuse and the lightmap coordinates; one stride of
- * 32 bytes (static asserts in rm_pure.c, a runtime check in the host
- * test). The w is stored, not packed away, because the vertex function
- * then reads one float4 as the shim's does, and only that gives the
+ * after it, then the diffuse and the lightmap coordinates, then (TASK120)
+ * the face's lightmap rectangle; one stride of 48 bytes (static asserts
+ * in rm_pure.c, a runtime check in the host test). The rectangle is
+ * left, top, right, bottom in luxels of the face's slice, all four 0 for a
+ * vertex without a lightmap, and the fragment function of
+ * metal_lightmap_filter 1 clamps its taps to it. (The flowing surfaces'
+ * vertices copy the rectangle of the face whole; they stay bilinear
+ * because the dynamic draw's uniforms have filter 0.) The w is stored,
+ * not packed away, because the vertex function then reads one float4 as the shim's does, and only that gives the
  * shim's clip coordinates to the bit (design section 19).
  */
 typedef struct
@@ -430,9 +435,10 @@ typedef struct
 	float pos[4];
 	float uv[2];
 	float lmuv[2];
+	float lmrect[4];
 } rm_wvert_t;
 
-#define RM_WVERT_STRIDE 32
+#define RM_WVERT_STRIDE 48
 
 /*
  * One record of the per-surface buffer (design section 9): the plane
@@ -677,6 +683,14 @@ int rm_surface_extents(float mins, float maxs, short *texturemin, short *extent)
  * written otherwise (the map is refused).
  */
 int rm_lm_size(long extent0, long extent1, int *smax, int *tmax);
+
+/*
+ * The lightmap rectangle of a face in its slice (TASK120), as the
+ * vertices of a lit face carry it: left, top, right, bottom in luxels, the
+ * half-open [light_s, light_s + smax) by [light_t, light_t + tmax). out[4]
+ * is all 0 when smax or tmax is below 1 (no lightmap).
+ */
+void rm_lm_face_rect(int light_s, int light_t, int smax, int tmax, float *out);
 
 /* The styles of a surface before the first RM_LM_STYLE_END, at most RM_LM_STYLES. */
 int rm_lm_nummaps(const unsigned char *styles);
@@ -1786,6 +1800,7 @@ typedef struct
 	int lmtex, slice;       /* the lightmap array and the slice */
 	int env;                /* MTL_LM_MODULATE, MTL_LM_REPLACE, MTL_LM_COMBINE */
 	float scale;            /* GL_RGB_SCALE of GL_COMBINE: 1, 2 or 4 */
+	int filter;             /* metal_lightmap_filter: 0 bilinear, 1 bicubic (the static draw only; 0 for the batched) */
 } rmb_lm_draw_t;
 
 int rmb_draw_world_lm(int vbuf, const unsigned *idx, unsigned long count, const rmb_lm_draw_t *d,

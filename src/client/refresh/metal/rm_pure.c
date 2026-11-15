@@ -728,8 +728,9 @@ rm_tint_color(float *rgba, const float *rgb)
 /* ---- the world (N4) ------------------------------------------------------------- */
 
 _Static_assert(offsetof(rm_wvert_t, pos) == 0, "the position of a world vertex is at offset 0");
-_Static_assert(sizeof(rm_wvert_t) == RM_WVERT_STRIDE, "a world vertex is 32 bytes, no padding");
+_Static_assert(sizeof(rm_wvert_t) == RM_WVERT_STRIDE, "a world vertex is 48 bytes, no padding");
 _Static_assert(offsetof(rm_wvert_t, uv) == 16, "the diffuse coordinates follow the position and its w");
+_Static_assert(offsetof(rm_wvert_t, lmrect) == 32, "the lightmap rectangle follows the lightmap coordinates");
 _Static_assert(RM_WVERT_STRIDE % 4 == 0, "the world vertex stride is a multiple of 4");
 _Static_assert(sizeof(rm_surfrec_t) == 48, "a surface record is 48 bytes, as rm_shaders.metal and RT read it");
 
@@ -1492,6 +1493,21 @@ rm_ftol(float f)
 	}
 
 	return (long)f;
+}
+
+void
+rm_lm_face_rect(int light_s, int light_t, int smax, int tmax, float *out)
+{
+	if ((smax < 1) || (tmax < 1))
+	{
+		out[0] = out[1] = out[2] = out[3] = 0.0f;
+		return;
+	}
+
+	out[0] = (float)light_s;
+	out[1] = (float)light_t;
+	out[2] = (float)(light_s + smax);
+	out[3] = (float)(light_t + tmax);
 }
 
 /* the size rm_lm_size gives for the extents (smax - 1) * 16 and (tmax - 1) * 16 (below 1 is negative) */

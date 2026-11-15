@@ -63,9 +63,15 @@ mtl_gl_clip_z(float z, float w)
  */
 #ifdef __METAL_VERSION__
 #define MTL_SQRT sqrt
+#define MTL_FLOOR floor
+#define MTL_FMIN fmin
+#define MTL_FMAX fmax
 #else
 #include <math.h>
 #define MTL_SQRT sqrtf
+#define MTL_FLOOR floorf
+#define MTL_FMIN fminf
+#define MTL_FMAX fmaxf
 #endif
 
 static inline float
@@ -142,6 +148,108 @@ mtl_world_color(mtl_rgba_t p, mtl_rgba_t t)
 	c.b = p.b * t.b;
 	c.a = p.a * t.a;
 	return c;
+}
+
+/*
+ * Bicubic lightmap filtering (TASK120, metal_lightmap_filter 1; P5 of
+ * docs/plans/high-resolution.md). A cubic B-spline over the 4 by 4
+ * luxels around a sample, built from four bilinear taps as GPU Gems 2,
+ * chapter 20 does: in one axis the weights w0 .. w3 of luxels i - 1 .. i + 2
+ * pair into g0 = w0 + w1 (the tap between i - 1 and i, at i - 1 + w1 / g0)
+ * and g1 = w2 + w3 (between i + 1 and i + 2, at i + 1 + w3 / g1), and the
+ * 2D sample is the sum of the four taps, each weighted by the product of
+ * its two axes' g. The weights are positive and sum to 1, so the result
+ * lies between the smallest and the largest luxel read: no ringing.
+ *
+ * Every tap position is clamped to half a luxel inside the face's
+ * lightmap rectangle, [lo + 1/2, hi - 1/2] in luxels (a luxel's centre is
+ * at its index + 1/2), so a bilinear tap there reads luxels of the
+ * rectangle only and never the neighbouring face's in the same slice. A
+ * rectangle one luxel wide has both bounds at its centre. Coordinates are
+ * in luxels (the texture coordinate times the slice's size); the rectangle
+ * is (left, top, right, bottom) of the half-open [left, right) by
+ * [top, bottom). The shader's function that reads the sample is
+ * rm_lm_sample_cubic (rm_shaders.metal), which RT2 (TASK54) calls too.
+ */
+typedef struct
+{
+	float w0, w1, w2, w3;
+} mtl_bspline_t;
+
+/* the uniform cubic B-spline weights of the luxels i - 1 .. i + 2 for the fraction f of [0, 1) */
+static inline mtl_bspline_t
+mtl_bspline_weights(float f)
+{
+	mtl_bspline_t w;
+	float f2 = f * f, f3 = f2 * f, m = 1.0f - f;
+
+	w.w0 = m * m * m / 6.0f;
+	w.w1 = (3.0f * f3 - 6.0f * f2 + 4.0f) / 6.0f;
+	w.w2 = (-3.0f * f3 + 3.0f * f2 + 3.0f * f + 1.0f) / 6.0f;
+	w.w3 = f3 / 6.0f;
+	return w;
+}
+
+/* one axis: the two tap positions (luxels) and their weights, which sum to 1 */
+typedef struct
+{
+	float p0, p1, g0, g1;
+} mtl_cubic_axis_t;
+
+/* v clamped to [lo, hi]; lo for a NaN (fmax returns its other argument for a NaN), the bounds for the infinities */
+static inline float
+mtl_clamp_range(float v, float lo, float hi)
+{
+	return MTL_FMIN(MTL_FMAX(v, lo), hi);
+}
+
+static inline mtl_cubic_axis_t
+mtl_lm_cubic_axis(float x, float lo, float hi)
+{
+	mtl_cubic_axis_t a;
+	float c = x - 0.5f;
+	float i = MTL_FLOOR(c);
+	mtl_bspline_t w = mtl_bspline_weights(c - i);
+	float inner = lo + 0.5f;
+	float outer = hi - 0.5f > inner ? hi - 0.5f : inner;
+
+	a.g0 = w.w0 + w.w1;
+	a.g1 = w.w2 + w.w3;
+	a.p0 = mtl_clamp_range(i - 1.0f + w.w1 / a.g0 + 0.5f, inner, outer);
+	a.p1 = mtl_clamp_range(i + 1.0f + w.w3 / a.g1 + 0.5f, inner, outer);
+	return a;
+}
+
+/* the four taps of a sample at (x, y) luxels in the rectangle (left, top, right, bottom): positions and weights */
+typedef struct
+{
+	float x0, x1, y0, y1;
+	float w00, w10, w01, w11;      /* w<ix><iy>: the tap at x<ix>, y<iy> */
+} mtl_cubic_taps_t;
+
+static inline mtl_cubic_taps_t
+mtl_lm_cubic(float x, float y, float left, float top, float right, float bottom)
+{
+	mtl_cubic_taps_t t;
+	mtl_cubic_axis_t ax = mtl_lm_cubic_axis(x, left, right);
+	mtl_cubic_axis_t ay = mtl_lm_cubic_axis(y, top, bottom);
+
+	t.x0 = ax.p0;
+	t.x1 = ax.p1;
+	t.y0 = ay.p0;
+	t.y1 = ay.p1;
+	t.w00 = ax.g0 * ay.g0;
+	t.w10 = ax.g1 * ay.g0;
+	t.w01 = ax.g0 * ay.g1;
+	t.w11 = ax.g1 * ay.g1;
+	return t;
+}
+
+/* 1 when the rectangle holds at least one luxel in each axis (a vertex without a lightmap has the rectangle 0) */
+static inline int
+mtl_lm_rect_valid(float left, float top, float right, float bottom)
+{
+	return (right - left >= 1.0f) && (bottom - top >= 1.0f);
 }
 
 #endif /* MTL_SHADER_MATH_H */

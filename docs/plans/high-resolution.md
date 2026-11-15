@@ -184,7 +184,7 @@ the console background kept at 4:3 and cropped. Where:
 [`cl_console.c`](../../src/client/cl_console.c). One card, about 500
 lines. After N10. Priority 4: the cheapest change seen in every frame.
 
-### P5. Bicubic lightmap filtering (filed)
+### P5. Bicubic lightmap filtering (built, TASK120)
 
 With `metal_lightmap_filter 1`: smooth light gradients and shadow edges
 without the bilinear diamond pattern. Where: the `world_lm` fragment
@@ -195,6 +195,24 @@ clamped to the face's lightmap rectangle, the weights in
 [`mtl_shader_math.h`](../../src/client/refresh/metal/common/mtl_shader_math.h)
 for the host test. One card, about 400 lines. After N10, ideally before RT2
 (TASK54). Priority 5: cheap, on every world pixel, no assets.
+
+Built by TASK120 (#276). The weights, the tap positions and the clamp are
+`mtl_bspline_weights`, `mtl_lm_cubic_axis` and `mtl_lm_cubic` in
+`mtl_shader_math.h`, held by `tests/metal/rm_host_test.c`; the fragment
+function `rm_fragment_world_lm` reads the sample through
+`rm_lm_sample_cubic` in `rm_shaders.metal`. **RT2 (TASK54) calls
+`rm_lm_sample_cubic(lm, sampler, uv, slice, rect, filter)` to read the same
+filtered sample** at a hit's lightmap coordinate, with the face's rectangle
+`(left, top, right, bottom)` in luxels from the world vertex's `lmrect`
+(or, for a hit read from the surface record, `rm_surfrec_t`'s `lm_rect`
+as left, top, left + width, top + height). The switch is the cvar
+`metal_lightmap_filter` (0 bilinear, the default; 1 cubic), no menu item.
+The world vertex grew from 32 to 48 bytes: `lmrect`, four floats, follows
+`lmuv` at offset 32, and the position stays at offset 0 with w = 1 after it
+for RT1 (TASK53) (retained world vertices, 11.7 MiB at the map limit of
+256,000 surface edges instead of 7.8 MiB). The record of the pins and the
+frame times is in the runbook,
+[Bicubic lightmaps in `ref_metal`](metal-port-harness.md#bicubic-lightmaps-in-ref_metal-task120).
 
 ### P6. A local texture upscaler on the player's machine (filed as two cards)
 

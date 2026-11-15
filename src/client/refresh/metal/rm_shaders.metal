@@ -107,12 +107,13 @@ rm_fragment_2d(rm_varying2d in [[stage_in]],
  * 0.1 to 1 percent of the pixels (design section 19).
  */
 
-/* rm_wvert_t: the position at offset 0 with w = 1, 32 bytes */
+/* rm_wvert_t: the position at offset 0 with w = 1, then the coordinates and the face's lightmap rectangle, 48 bytes */
 struct rm_wvert
 {
 	float4 pos;
 	float2 uv;
 	float2 lmuv;
+	float4 lmrect;
 };
 
 /* rmb_uniforms3d_t */
@@ -130,6 +131,7 @@ struct rm_varying3d
 	float2 lmuv;
 	float4 color;
 	float4 pt;
+	float4 lmrect [[flat]];     /* TASK120: the face's lightmap rectangle, 0 where there is none */
 };
 
 /* world_tex: the diffuse texel alone, gl1's GL_REPLACE with the lightmap unit off (r_fullbright) */
@@ -145,6 +147,7 @@ rm_vertex_world(uint vid [[vertex_id]],
 	out.position = p;
 	out.uv = v[vid].uv;
 	out.lmuv = v[vid].lmuv;
+	out.lmrect = v[vid].lmrect;
 	out.color = u.color;
 	out.pt = float4(0.0f);
 	return out;
@@ -164,7 +167,7 @@ struct rm_uniforms_lm
 	int env;
 	float scale;
 	uint slice;
-	uint pad;
+	uint filter;     /* metal_lightmap_filter: 0 bilinear, 1 bicubic */
 };
 
 static mtl_rgba_t
@@ -215,6 +218,35 @@ rm_fragment_world_color_at(rm_varying3d in [[stage_in]],
 }
 
 /*
+ * The lightmap texel at uv of the slice, filtered: bicubic for filter 1 on
+ * a face with a rectangle, the hardware's bilinear tap otherwise
+ * (metal_lightmap_filter 0 is the one call, as before). The bicubic is
+ * mtl_lm_cubic's four taps (mtl_shader_math.h, held by the host test),
+ * every tap clamped half a luxel inside rect = (left, top, right, bottom)
+ * in luxels of the slice, so none reads a neighbouring face's luxels. The
+ * taps use level 0 (the array has one level), so no derivative is taken
+ * in the branch. RT2 (TASK54) calls this function to read the same filtered
+ * sample at a hit's lightmap coordinate and face rectangle.
+ */
+static float4
+rm_lm_sample_cubic(texture2d_array<float> lm, sampler s, float2 uv, uint slice, float4 rect, uint filter)
+{
+	if (filter == 0 || !mtl_lm_rect_valid(rect.x, rect.y, rect.z, rect.w))
+	{
+		return lm.sample(s, uv, slice);
+	}
+
+	float2 size = float2(float(lm.get_width()), float(lm.get_height()));
+	float2 x = uv * size;
+	mtl_cubic_taps_t t = mtl_lm_cubic(x.x, x.y, rect.x, rect.y, rect.z, rect.w);
+
+	return t.w00 * lm.sample(s, float2(t.x0, t.y0) / size, slice, level(0.0f)) +
+		t.w10 * lm.sample(s, float2(t.x1, t.y0) / size, slice, level(0.0f)) +
+		t.w01 * lm.sample(s, float2(t.x0, t.y1) / size, slice, level(0.0f)) +
+		t.w11 * lm.sample(s, float2(t.x1, t.y1) / size, slice, level(0.0f));
+}
+
+/*
  * world_lm (N5): gl1's two texture units on its multitexture path, the
  * diffuse texel replacing the colour and the lightmap slice's texel
  * applied by gl1's lightmap environment (mtl_world_lm, the arithmetic the
@@ -229,7 +261,7 @@ rm_fragment_world_lm(rm_varying3d in [[stage_in]],
 		texture2d_array<float> lm [[texture(1)]],
 		sampler lsmp [[sampler(1)]])
 {
-	mtl_rgba_t c = mtl_world_lm(rm_rgba(tex.sample(smp, in.uv)), rm_rgba(lm.sample(lsmp, in.lmuv, u.slice)),
+	mtl_rgba_t c = mtl_world_lm(rm_rgba(tex.sample(smp, in.uv)), rm_rgba(rm_lm_sample_cubic(lm, lsmp, in.lmuv, u.slice, in.lmrect, u.filter)),
 			u.env, u.scale);
 
 	return float4(c.r, c.g, c.b, c.a);
@@ -263,6 +295,7 @@ rm_vertex_alias(uint vid [[vertex_id]],
 	out.position = p;
 	out.uv = v[vid].uv;
 	out.lmuv = float2(0.0f);
+	out.lmrect = float4(0.0f);
 	out.color = v[vid].color;
 	out.pt = float4(0.0f);
 	return out;
@@ -281,6 +314,7 @@ rm_vertex_color(uint vid [[vertex_id]],
 	out.position = p;
 	out.uv = float2(0.0f);
 	out.lmuv = float2(0.0f);
+	out.lmrect = float4(0.0f);
 	out.color = u.color;
 	out.pt = float4(0.0f);
 	return out;
@@ -310,6 +344,7 @@ rm_vertex_particle(uint vid [[vertex_id]],
 	out.position = p;
 	out.uv = float2(0.0f);
 	out.lmuv = float2(0.0f);
+	out.lmrect = float4(0.0f);
 	out.color = v[vid].color;
 	out.pt = float4(v[vid].uv, v[vid].pad);
 	return out;

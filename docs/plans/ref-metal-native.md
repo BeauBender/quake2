@@ -321,7 +321,7 @@ From `docs/plans/metal-raytracing-design.md` sections 1 and 3:
 
 | RT need | Provided by group N as |
 |---|---|
-| One static triangle mesh per map, AS-friendly | N4: a static vertex buffer (float3 position packed at offset 0, then the two uv pairs; one stride; as built by N4, a 32-byte vertex with w stored after the float3: see section 19) and a `uint32` index buffer of the fan-expanded world polys, built at registration, private storage, sizes logged per map. RT1 builds the primitive acceleration structure from these buffers without a copy |
+| One static triangle mesh per map, AS-friendly | N4: a static vertex buffer (float3 position packed at offset 0, then the two uv pairs; one stride; as built by N4, a 32-byte vertex with w stored after the float3: see section 19; 48 bytes from TASK120, the position still at offset 0, a lightmap rectangle at offset 32: RT1 reads the stride from `RM_WVERT_STRIDE`) and a `uint32` index buffer of the fan-expanded world polys, built at registration, private storage, sizes logged per map. RT1 builds the primitive acceleration structure from these buffers without a copy |
 | Inline brush models as separate meshes | N4: each submodel is a contiguous index range in the same buffers; RT1 builds one structure per range |
 | Per-surface material and normal | N4: a per-surface record buffer: plane normal flipped for `SURF_PLANEBACK`, material class (world, sky, water, translucent, flowing), texinfo flags, image index, lightmap slice and rectangle, styles. RT2 writes material id and normal from it |
 | Unwarped water | N6: water stays unwarped in the static buffers; the warp is applied to texture coordinates per frame on the CPU, as gl1 does |
@@ -1095,7 +1095,9 @@ which do not make this check.
 
 Choices made where the design left room:
 
-- **The vertex is 32 bytes, not packed.** The float3 position is at offset
+- **The vertex is 48 bytes, not packed** (32 as N4 built it; TASK120 added
+  the face's lightmap rectangle, four floats at offset 32, for the filtered
+  lightmaps). The float3 position is at offset
   0 with w = 1 stored after it, then the two coordinate pairs. With the
   packed 28-byte vertex the vertex function widened the position with a w
   of 1 (a constant or a uniform, both tried), and 21 of the 23 frames of
@@ -1105,7 +1107,8 @@ Choices made where the design left room:
   coordinates differing in the last bits. Reading one float4 from the
   buffer, as the shim's vertex function does, brought 15 of the 19 judged
   frames to score 0 and bad 0. An acceleration structure reads the float3
-  at offset 0 with a vertex stride of 32 bytes; the screen blend's
+  at offset 0 with a vertex stride of 48 bytes (`RM_WVERT_STRIDE`, which RT1
+  uses, not a number); the screen blend's
   positions are float4 too.
 - **A frame `r_clear` does not clear starts black**, as on the shim (its
   first pass of a frame clears to black, "so a frame is reproducible"),

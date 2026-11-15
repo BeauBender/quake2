@@ -1254,7 +1254,327 @@ test_material(void)
 	CHECK(rm_material(SURF_WARP | SURF_FLOWING) == RM_MAT_WATER);
 }
 
-/* The retained vertex: position at offset 0, w after it, one stride of 32 bytes; the record's normal. */
+/* ---- bicubic lightmap filtering (TASK120) ------------------------------------------ */
+
+#define LMF_W 12
+#define LMF_H 9
+
+/* a pseudo-random float in [0, 1) from an LCG, so the runs repeat */
+static float
+lmf_rand(unsigned *state)
+{
+	*state = *state * 1664525u + 1013904223u;
+	return (float)(*state >> 8) / 16777216.0f;
+}
+
+/*
+ * A bilinear tap at luxel coordinate (x, y) in the w by h luxels of lum: what the
+ * hardware does with a clamp-to-edge sampler. A luxel outside the rectangle [l, r) by
+ * [t, b) that carries weight is counted in *outside.
+ */
+static float
+lmf_bilinear(const float *lum, int w, int h, float x, float y, int l, int t, int r, int b, int *outside)
+{
+	float fx = x - 0.5f, fy = y - 0.5f;
+	int ix = (int)floorf(fx), iy = (int)floorf(fy), a, c;
+	float ax = fx - (float)ix, ay = fy - (float)iy, sum = 0.0f;
+
+	for (c = 0; c < 2; c++)
+	{
+		for (a = 0; a < 2; a++)
+		{
+			int u = ix + a, v = iy + c;
+			float wt = (a ? ax : 1.0f - ax) * (c ? ay : 1.0f - ay);
+			int cu = u < 0 ? 0 : (u >= w ? w - 1 : u), cv = v < 0 ? 0 : (v >= h ? h - 1 : v);
+
+			if (wt > 0.0f && (u < l || u >= r || v < t || v >= b))
+			{
+				(*outside)++;
+			}
+
+			sum += wt * lum[cv * w + cu];
+		}
+	}
+
+	return sum;
+}
+
+/* the shader's sample: the four taps of mtl_lm_cubic, each a bilinear tap, weighted */
+static float
+lmf_cubic(const float *lum, int w, int h, float x, float y, int l, int t, int r, int b, int *outside)
+{
+	mtl_cubic_taps_t k = mtl_lm_cubic(x, y, (float)l, (float)t, (float)r, (float)b);
+
+	return k.w00 * lmf_bilinear(lum, w, h, k.x0, k.y0, l, t, r, b, outside) +
+		k.w10 * lmf_bilinear(lum, w, h, k.x1, k.y0, l, t, r, b, outside) +
+		k.w01 * lmf_bilinear(lum, w, h, k.x0, k.y1, l, t, r, b, outside) +
+		k.w11 * lmf_bilinear(lum, w, h, k.x1, k.y1, l, t, r, b, outside);
+}
+
+/*
+ * The weights of the B-spline sum to 1 and are positive at every fraction, the two
+ * taps of an axis weigh 1 together, and away from an edge the four taps equal the
+ * direct sum over the 4 by 4 luxels.
+ */
+static void
+test_lm_cubic_weights(void)
+{
+	int i, ok = 1, pos = 1;
+	float lum[LMF_W * LMF_H];
+	unsigned seed = 7;
+	mtl_bspline_t w;
+
+	for (i = 0; i <= 1000; i++)
+	{
+		float f = (float)i / 1001.0f; /* [0, 1) */
+		mtl_cubic_axis_t a = mtl_lm_cubic_axis(5.0f + 0.5f + f, 0.0f, 100.0f);
+
+		w = mtl_bspline_weights(f);
+		ok &= fabsf(w.w0 + w.w1 + w.w2 + w.w3 - 1.0f) < 1e-6f;
+		pos &= w.w0 > 0.0f && w.w1 > 0.0f && w.w2 > 0.0f && (w.w3 > 0.0f || i == 0);
+		ok &= fabsf(a.g0 + a.g1 - 1.0f) < 1e-6f;
+		ok &= fabsf(a.g0 - (w.w0 + w.w1)) < 2e-6f && fabsf(a.g1 - (w.w2 + w.w3)) < 2e-6f;
+	}
+
+	CHECK(ok && pos);
+
+	/* the spline at f = 0 is 1/6, 4/6, 1/6, 0; at 1/2 it is 1, 23, 23, 1 over 48 */
+	w = mtl_bspline_weights(0.0f);
+	CHECK(fabsf(w.w0 - 1.0f / 6.0f) < 1e-7f && fabsf(w.w1 - 4.0f / 6.0f) < 1e-7f &&
+		fabsf(w.w2 - 1.0f / 6.0f) < 1e-7f && w.w3 == 0.0f);
+	w = mtl_bspline_weights(0.5f);
+	CHECK(fabsf(w.w0 - 1.0f / 48.0f) < 1e-7f && fabsf(w.w1 - 23.0f / 48.0f) < 1e-7f &&
+		fabsf(w.w2 - 23.0f / 48.0f) < 1e-7f && fabsf(w.w3 - 1.0f / 48.0f) < 1e-7f);
+
+	for (i = 0; i < LMF_W * LMF_H; i++)
+	{
+		lum[i] = lmf_rand(&seed);
+	}
+
+	ok = 1;
+
+	for (i = 0; i < 400; i++)
+	{
+		float x = 4.0f + 4.0f * lmf_rand(&seed), y = 3.0f + 3.0f * lmf_rand(&seed);
+		int outside = 0, ix = (int)floorf(x - 0.5f), iy = (int)floorf(y - 0.5f), u, v;
+		mtl_bspline_t wx = mtl_bspline_weights(x - 0.5f - (float)ix), wy = mtl_bspline_weights(y - 0.5f - (float)iy);
+		const float wxs[4] = { wx.w0, wx.w1, wx.w2, wx.w3 }, wys[4] = { wy.w0, wy.w1, wy.w2, wy.w3 };
+		float ref = 0.0f, got = lmf_cubic(lum, LMF_W, LMF_H, x, y, 0, 0, LMF_W, LMF_H, &outside);
+
+		for (v = 0; v < 4; v++)
+		{
+			for (u = 0; u < 4; u++)
+			{
+				ref += wxs[u] * wys[v] * lum[(iy - 1 + v) * LMF_W + (ix - 1 + u)];
+			}
+		}
+
+		ok &= fabsf(got - ref) < 2e-6f && !outside;
+	}
+
+	CHECK(ok);
+}
+
+/* a constant lightmap stays constant, and no result leaves the range of its 4 by 4 neighbourhood */
+static void
+test_lm_cubic_bounds(void)
+{
+	float lum[LMF_W * LMF_H];
+	unsigned seed = 12345;
+	int i, ok = 1;
+	int l = 2, t = 1, r = 10, b = 8, bad_range = 0, outside = 0;
+
+	for (i = 0; i < LMF_W * LMF_H; i++)
+	{
+		lum[i] = 0.37f;
+	}
+
+	for (i = 0; i < 2000; i++)
+	{
+		float x = (float)l + (float)(r - l) * lmf_rand(&seed), y = (float)t + (float)(b - t) * lmf_rand(&seed);
+
+		ok &= fabsf(lmf_cubic(lum, LMF_W, LMF_H, x, y, l, t, r, b, &outside) - 0.37f) < 2e-6f;
+	}
+
+	CHECK(ok && !outside);
+
+	for (i = 0; i < LMF_W * LMF_H; i++)
+	{
+		lum[i] = (i % 7 == 0) ? 1.0f : ((i % 5 == 0) ? 0.0f : lmf_rand(&seed));
+	}
+
+	for (i = 0; i < 20000; i++)
+	{
+		/* the whole rectangle and a margin past its edges (an interpolated coordinate can overshoot) */
+		float x = (float)l - 0.5f + (float)(r - l + 1) * lmf_rand(&seed);
+		float y = (float)t - 0.5f + (float)(b - t + 1) * lmf_rand(&seed);
+		int ix = (int)floorf(x - 0.5f), iy = (int)floorf(y - 0.5f), u, v;
+		float lo = 2.0f, hi = -1.0f, got;
+
+		for (v = iy - 1; v <= iy + 2; v++)
+		{
+			for (u = ix - 1; u <= ix + 2; u++)
+			{
+				int cu = u < l ? l : (u >= r ? r - 1 : u), cv = v < t ? t : (v >= b ? b - 1 : v);
+				float q = lum[cv * LMF_W + cu];
+
+				lo = q < lo ? q : lo;
+				hi = q > hi ? q : hi;
+			}
+		}
+
+		got = lmf_cubic(lum, LMF_W, LMF_H, x, y, l, t, r, b, &outside);
+		bad_range += !(got <= hi + 2e-6f) || !(got >= lo - 2e-6f);
+	}
+
+	CHECK(bad_range == 0 && outside == 0);
+}
+
+/* a sample near an edge or at a corner reads no luxel outside the rectangle; one luxel wide works */
+static void
+test_lm_cubic_edges(void)
+{
+	float lum[LMF_W * LMF_H];
+	unsigned seed = 99;
+	int i, outside = 0, k, inside = 1;
+	mtl_cubic_taps_t t;
+	static const int rects[][4] = {
+		{ 0, 0, LMF_W, LMF_H }, { 3, 2, 9, 7 }, { 4, 3, 5, 8 }, { 2, 6, 10, 7 }, { 6, 4, 7, 5 }, { 1, 1, 3, 3 }
+	};
+
+	for (i = 0; i < LMF_W * LMF_H; i++)
+	{
+		lum[i] = lmf_rand(&seed);
+	}
+
+	for (k = 0; k < (int)(sizeof(rects) / sizeof(rects[0])); k++)
+	{
+		int l = rects[k][0], tp = rects[k][1], r = rects[k][2], b = rects[k][3];
+		int corner;
+
+		for (i = 0; i < 4000; i++)
+		{
+			float x = (float)l - 1.0f + (float)(r - l + 2) * lmf_rand(&seed);
+			float y = (float)tp - 1.0f + (float)(b - tp + 2) * lmf_rand(&seed);
+
+			t = mtl_lm_cubic(x, y, (float)l, (float)tp, (float)r, (float)b);
+			/* every tap lies at least half a luxel inside the rectangle (on a bound at the most) */
+			inside &= t.x0 >= (float)l + 0.5f && t.x0 <= (float)r - 0.5f && t.x1 >= (float)l + 0.5f &&
+				t.x1 <= (float)r - 0.5f;
+			inside &= t.y0 >= (float)tp + 0.5f && t.y0 <= (float)b - 0.5f && t.y1 >= (float)tp + 0.5f &&
+				t.y1 <= (float)b - 0.5f;
+			lmf_cubic(lum, LMF_W, LMF_H, x, y, l, tp, r, b, &outside);
+		}
+
+		/* the four corners of the rectangle, and 3/4 of a luxel past each of them */
+		for (corner = 0; corner < 16; corner++)
+		{
+			float x = (corner & 1) ? (float)r + ((corner & 4) ? 0.75f : 0.0f) : (float)l - ((corner & 4) ? 0.75f : 0.0f);
+			float y = (corner & 2) ? (float)b + ((corner & 8) ? 0.75f : 0.0f) : (float)tp - ((corner & 8) ? 0.75f : 0.0f);
+
+			lmf_cubic(lum, LMF_W, LMF_H, x, y, l, tp, r, b, &outside);
+		}
+	}
+
+	CHECK(outside == 0 && inside);
+
+	/* the bounds of the clamp, exactly: left of the rectangle, right of it, above, below */
+	t = mtl_lm_cubic(-5.0f, 1.0f, 3.0f, 0.0f, 9.0f, 4.0f);
+	CHECK(t.x0 == 3.5f && t.x1 == 3.5f);
+	t = mtl_lm_cubic(50.0f, 1.0f, 3.0f, 0.0f, 9.0f, 4.0f);
+	CHECK(t.x0 == 8.5f && t.x1 == 8.5f);
+	t = mtl_lm_cubic(1.0f, -5.0f, 3.0f, 2.0f, 9.0f, 6.0f);
+	CHECK(t.y0 == 2.5f && t.y1 == 2.5f);
+	t = mtl_lm_cubic(1.0f, 50.0f, 3.0f, 2.0f, 9.0f, 6.0f);
+	CHECK(t.y0 == 5.5f && t.y1 == 5.5f);
+	/* one luxel in each axis: both taps at its centre, and the weights still sum to 1 */
+	t = mtl_lm_cubic(7.3f, 6.2f, 7.0f, 6.0f, 8.0f, 7.0f);
+	CHECK(t.x0 == 7.5f && t.x1 == 7.5f && t.y0 == 6.5f && t.y1 == 6.5f);
+	CHECK(fabsf(t.w00 + t.w10 + t.w01 + t.w11 - 1.0f) < 1e-6f);
+	/* a rectangle narrower than a luxel (never drawn filtered, but the function is total): the taps at its low bound plus a half */
+	t = mtl_lm_cubic(9.0f, 1.0f, 3.0f, 0.0f, 3.5f, 4.0f);
+	CHECK(t.x0 == 3.5f && t.x1 == 3.5f);
+	t = mtl_lm_cubic(9.0f, 1.0f, 3.0f, 0.0f, 3.0f, 4.0f);
+	CHECK(t.x0 == 3.5f && t.x1 == 3.5f);
+	t = mtl_lm_cubic(1.0f, 9.0f, 3.0f, 2.0f, 9.0f, 2.25f);
+	CHECK(t.y0 == 2.5f && t.y1 == 2.5f);
+	/* in the middle of a large rectangle nothing is clamped: a tap each side of the sample */
+	t = mtl_lm_cubic(20.5f, 30.5f, 0.0f, 0.0f, 64.0f, 64.0f);
+	CHECK(t.x0 > 18.9f && t.x0 < 20.5f && t.x1 > 20.5f && t.x1 < 22.1f);
+	CHECK(t.y0 > 28.9f && t.y0 < 30.5f && t.y1 > 30.5f && t.y1 < 32.1f);
+	CHECK(fabsf(t.w00 + t.w10 + t.w01 + t.w11 - 1.0f) < 1e-6f);
+
+	/* a NaN or an infinity in either axis: every tap still inside the rectangle (the low bound for a NaN) */
+	{
+		static const float bad[] = { NAN, INFINITY, -INFINITY };
+		int a, b2;
+
+		for (a = 0; a < 3; a++)
+		{
+			for (b2 = 0; b2 < 3; b2++)
+			{
+				t = mtl_lm_cubic(bad[a], bad[b2], 3.0f, 2.0f, 9.0f, 6.0f);
+				CHECK(t.x0 >= 3.5f && t.x0 <= 8.5f && t.x1 >= 3.5f && t.x1 <= 8.5f);
+				CHECK(t.y0 >= 2.5f && t.y0 <= 5.5f && t.y1 >= 2.5f && t.y1 <= 5.5f);
+			}
+		}
+
+		t = mtl_lm_cubic(NAN, 1.0f, 3.0f, 2.0f, 9.0f, 6.0f);
+		CHECK(t.x0 == 3.5f && t.x1 == 3.5f);
+		t = mtl_lm_cubic(1.0f, NAN, 3.0f, 2.0f, 9.0f, 6.0f);
+		CHECK(t.y0 == 2.5f && t.y1 == 2.5f);
+		CHECK(mtl_clamp_range(NAN, 1.0f, 2.0f) == 1.0f && mtl_clamp_range(INFINITY, 1.0f, 2.0f) == 2.0f &&
+			mtl_clamp_range(-INFINITY, 1.0f, 2.0f) == 1.0f);
+	}
+
+	/* a rectangle that cannot hold a luxel is not filtered: a vertex without a lightmap has the rectangle 0 */
+	CHECK(mtl_lm_rect_valid(0, 0, 1, 1) && mtl_lm_rect_valid(3, 4, 9, 7));
+	CHECK(!mtl_lm_rect_valid(0, 0, 0, 0) && !mtl_lm_rect_valid(2, 2, 2.5f, 9) && !mtl_lm_rect_valid(2, 2, 9, 2.5f));
+	CHECK(!mtl_lm_rect_valid(5, 0, 4, 9) && !mtl_lm_rect_valid(0, 5, 9, 4));
+}
+
+/*
+ * The face rectangle of a vertex: [light_s, light_s + smax) by [light_t, light_t + tmax) as
+ * left, top, right, bottom; each of the four edges is its own value, so an off-by-one on any
+ * of them (or two swapped) shows; all 0 for a size below 1.
+ */
+static void
+test_lm_face_rect(void)
+{
+	float r[4];
+	int s, t;
+
+	rm_lm_face_rect(10, 20, 3, 5, r);
+	CHECK(r[0] == 10.0f && r[1] == 20.0f && r[2] == 13.0f && r[3] == 25.0f);
+	rm_lm_face_rect(0, 0, 1, 1, r);
+	CHECK(r[0] == 0.0f && r[1] == 0.0f && r[2] == 1.0f && r[3] == 1.0f);
+	rm_lm_face_rect(126, 127, 1, 1, r);
+	CHECK(r[0] == 126.0f && r[1] == 127.0f && r[2] == 127.0f && r[3] == 128.0f);
+
+	/* every combination of small values: width and height are the sizes, not the sizes plus or minus one */
+	for (s = 1; s < 6; s++)
+	{
+		for (t = 1; t < 6; t++)
+		{
+			int ls = 7 * s, lt = 11 * t;
+
+			rm_lm_face_rect(ls, lt, s, t, r);
+			CHECK(r[0] == (float)ls && r[1] == (float)lt && r[2] - r[0] == (float)s && r[3] - r[1] == (float)t);
+			CHECK(r[2] == (float)(ls + s) && r[3] == (float)(lt + t));
+			CHECK(mtl_lm_rect_valid(r[0], r[1], r[2], r[3]));
+		}
+	}
+
+	/* no lightmap: the rectangle is 0, which mtl_lm_rect_valid refuses */
+	rm_lm_face_rect(10, 20, 0, 5, r);
+	CHECK(r[0] == 0.0f && r[1] == 0.0f && r[2] == 0.0f && r[3] == 0.0f);
+	rm_lm_face_rect(10, 20, 5, 0, r);
+	CHECK(r[0] == 0.0f && r[1] == 0.0f && r[2] == 0.0f && r[3] == 0.0f);
+	rm_lm_face_rect(10, 20, -1, 5, r);
+	CHECK(r[2] == 0.0f && !mtl_lm_rect_valid(r[0], r[1], r[2], r[3]));
+}
+
+/* The retained vertex: position at offset 0, w after it, one stride of 48 bytes (TASK120: the lightmap rectangle after the lightmap coordinates); the record's normal. */
 static void
 test_wvert_record(void)
 {
@@ -1262,6 +1582,8 @@ test_wvert_record(void)
 	float n[3];
 
 	CHECK(offsetof(rm_wvert_t, pos) == 0 && offsetof(rm_wvert_t, uv) == 16 && offsetof(rm_wvert_t, lmuv) == 24);
+	/* TASK120: the face's lightmap rectangle follows the existing attributes; the position stays at 0 */
+	CHECK(offsetof(rm_wvert_t, lmrect) == 32 && RM_WVERT_STRIDE == 48);
 	CHECK(sizeof(rm_wvert_t) == RM_WVERT_STRIDE && RM_WVERT_STRIDE % 4 == 0);
 
 	rm_surf_normal(pn, 0, n);
@@ -1314,7 +1636,7 @@ test_world_sizes(void)
 	CHECK(rm_world_add(&s, 5) && rm_world_add(&s, 3) && rm_world_add(&s, 4));
 	CHECK(s.surfs == 3 && s.verts == 12 && s.indices == 3 * (3 + 1 + 2));
 	CHECK(rm_world_bytes(&s, RMB_STATIC_MAX_BYTES, &vb, &ib, &sb));
-	CHECK(vb == 12 * 32 && ib == 18 * 4 && sb == 3 * sizeof(rm_surfrec_t));
+	CHECK(vb == 12 * RM_WVERT_STRIDE && ib == 18 * 4 && sb == 3 * sizeof(rm_surfrec_t));
 
 	/* a polygon of fewer than 3 vertices, or one that is negative, adds nothing */
 	CHECK(!rm_world_add(&s, 2) && !rm_world_add(&s, -5) && !rm_world_add(&s, 0));
@@ -1324,7 +1646,7 @@ test_world_sizes(void)
 	memset(&s, 0, sizeof(s));
 	CHECK(rm_world_add(&s, RM_WORLD_MAX_VERTS - 3) && rm_world_add(&s, 3));
 	CHECK(s.verts == RM_WORLD_MAX_VERTS && !rm_world_add(&s, 3) && s.verts == RM_WORLD_MAX_VERTS);
-	CHECK(rm_world_bytes(&s, RMB_STATIC_MAX_BYTES, &vb, &ib, &sb) && vb == (size_t)RM_WORLD_MAX_VERTS * 32);
+	CHECK(rm_world_bytes(&s, RMB_STATIC_MAX_BYTES, &vb, &ib, &sb) && vb == (size_t)RM_WORLD_MAX_VERTS * RM_WVERT_STRIDE);
 
 	/* a polygon one vertex longer than what is left is refused */
 	memset(&s, 0, sizeof(s));
@@ -1363,8 +1685,8 @@ test_world_sizes(void)
 	/* inside the limits but past the buffer cap */
 	memset(&big, 0, sizeof(big));
 	big.verts = 1000;
-	CHECK(!rm_world_bytes(&big, 1000 * 32 - 1, &vb, &ib, &sb) && vb == 0);
-	CHECK(rm_world_bytes(&big, 1000 * 32, &vb, &ib, &sb) && vb == 32000);
+	CHECK(!rm_world_bytes(&big, 1000 * RM_WVERT_STRIDE - 1, &vb, &ib, &sb) && vb == 0);
+	CHECK(rm_world_bytes(&big, 1000 * RM_WVERT_STRIDE, &vb, &ib, &sb) && vb == 1000 * RM_WVERT_STRIDE);
 
 	/* the index and record products against the cap, each at its exact fit */
 	memset(&s, 0, sizeof(s)); s.surfs = 1; s.verts = 3; s.indices = 1000;
@@ -1737,7 +2059,7 @@ test_world_line(void)
 {
 	rm_world_size_t s;
 	char buf[RM_STATS_LINE];
-	const char *want = "ref_metal: metal_stats: world maps/base1.bsp: 12 vertices (384 bytes), "
+	const char *want = "ref_metal: metal_stats: world maps/base1.bsp: 12 vertices (576 bytes), "
 		"18 indices (72 bytes), 3 surface records (144 bytes)";
 	size_t n = strlen(want);
 
@@ -7574,7 +7896,11 @@ main(void)
 	test_quad_indices();
 	test_tint();
 	test_material();
+	test_lm_face_rect();
 	test_wvert_record();
+	test_lm_cubic_weights();
+	test_lm_cubic_bounds();
+	test_lm_cubic_edges();
 	test_world_fan();
 	test_world_sizes();
 	test_bsp_bounds();

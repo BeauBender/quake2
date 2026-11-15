@@ -45,6 +45,7 @@ cvar_t *r_norefresh;
 cvar_t *r_vsync;
 cvar_t *vid_fullscreen;
 cvar_t *metal_stats;
+cvar_t *metal_lightmap_filter;
 cvar_t *gl_texturemode;
 cvar_t *gl_anisotropic;
 cvar_t *gl_nolerp_list;
@@ -111,6 +112,7 @@ R_Register(void)
 	r_vsync = ri.Cvar_Get("r_vsync", "1", CVAR_ARCHIVE);
 	vid_fullscreen = ri.Cvar_Get("vid_fullscreen", "0", CVAR_ARCHIVE);
 	metal_stats = ri.Cvar_Get("metal_stats", "0", 0);
+	metal_lightmap_filter = ri.Cvar_Get("metal_lightmap_filter", "0", CVAR_ARCHIVE);
 
 	/* gl1's, by gl1's names and defaults (gl1_main.c, R_Register) */
 	gl_texturemode = ri.Cvar_Get("gl_texturemode", "GL_LINEAR_MIPMAP_NEAREST", CVAR_ARCHIVE);

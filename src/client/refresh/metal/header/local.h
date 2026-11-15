@@ -47,6 +47,7 @@ extern cvar_t *r_norefresh;
 extern cvar_t *r_vsync;
 extern cvar_t *vid_fullscreen;
 extern cvar_t *metal_stats;
+extern cvar_t *metal_lightmap_filter;
 
 /* calls to entry points that do nothing yet (rm_main.c) */
 extern unsigned long rm_noop_calls;
