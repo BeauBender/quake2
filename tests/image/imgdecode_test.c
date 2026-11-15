@@ -961,9 +961,10 @@ bytes_buf(const unsigned char *p, size_t n)
 }
 
 #ifdef __APPLE__
-/* an RGBA8 (or grey) image encoded by ImageIO as uti */
+/* an RGBA8 (or grey) image encoded by ImageIO as uti; a progressive JPEG when asked */
 static buf_t
-encode(CFStringRef uti, unsigned w, unsigned h, const unsigned char *pix, int grey)
+encode_as(CFStringRef uti, unsigned w, unsigned h, const unsigned char *pix, int grey,
+	int progressive)
 {
 	CGColorSpaceRef cs = grey ? CGColorSpaceCreateDeviceGray() : CGColorSpaceCreateDeviceRGB();
 	CGDataProviderRef dp = CGDataProviderCreateWithData(NULL, pix, (size_t)w * h * (grey ? 1 : 4), NULL);
@@ -979,6 +980,16 @@ encode(CFStringRef uti, unsigned w, unsigned h, const unsigned char *pix, int gr
 	buf_t b = {0};
 
 	CFDictionarySetValue(p, kCGImageDestinationLossyCompressionQuality, qn);
+	if (progressive)
+	{
+		const void *k = kCGImagePropertyJFIFIsProgressive;
+		const void *v = kCFBooleanTrue;
+		CFDictionaryRef jfif = CFDictionaryCreate(NULL, &k, &v, 1, &kCFTypeDictionaryKeyCallBacks,
+			&kCFTypeDictionaryValueCallBacks);
+
+		CFDictionarySetValue(p, kCGImagePropertyJFIFDictionary, jfif);
+		CFRelease(jfif);
+	}
 	CGImageDestinationAddImage(dst, img, p);
 	if (!CGImageDestinationFinalize(dst))
 	{
@@ -995,6 +1006,32 @@ encode(CFStringRef uti, unsigned w, unsigned h, const unsigned char *pix, int gr
 	CGDataProviderRelease(dp);
 	CGColorSpaceRelease(cs);
 	return b;
+}
+
+static buf_t
+encode(CFStringRef uti, unsigned w, unsigned h, const unsigned char *pix, int grey)
+{
+	return encode_as(uti, w, h, pix, grey, 0);
+}
+
+/*
+ * The offset of the scan data after the JPEG's n-th (0-based) start of
+ * scan (SOS) segment, or 0 when there is no such scan.
+ */
+static size_t
+jpeg_scan_data(const buf_t *b, int n)
+{
+	size_t i;
+
+	for (i = 2; i + 4 < b->n; i++)
+	{
+		if (b->p[i] == 0xff && b->p[i + 1] == 0xda && n-- == 0)
+		{
+			return i + 2 + ((size_t)b->p[i + 2] << 8 | b->p[i + 3]);
+		}
+	}
+
+	return 0;
 }
 
 /*
@@ -1361,6 +1398,59 @@ build_cases(void)
 		add_bad("tga rle one byte short", r, r.n - 1, "tga", IMGDEC_OK);
 		add_bad("jpeg cut to 10 bytes", copy_buf(&j), 10, "jpg", IMGDEC_OK);
 		add_bad("jpeg cut in the scan", j, j.n / 2, "jpg", IMGDEC_OK);
+	}
+	{
+		/*
+		 * Cut inside the pixel data, the container itself well formed: a
+		 * PNG whose complete zlib stream holds fewer rows than its IHDR
+		 * declares, and TGAs that declare more rows than they hold.
+		 */
+		static const char *png_rows[4] = {"png holding 1 of its 5 rows", "png holding 2 of its 5 rows",
+			"png holding 3 of its 5 rows", "png holding 4 of its 5 rows"};
+		buf_t t;
+		int k;
+
+		for (k = 1; k < RH; k++)
+		{
+			add_bad(png_rows[k - 1], png_file(RW, RH, 8, 2, rgb, RW * 3, (size_t)k, NULL, 0, NULL, 0),
+				(size_t)-1, "png", IMGDEC_ERR_DECODE);
+		}
+		add_bad("png rgba holding 4 of its 5 rows", png_file(RW, RH, 8, 6, ref, RW * 4, RH - 1, NULL, 0, NULL, 0),
+			(size_t)-1, "png", IMGDEC_ERR_DECODE);
+
+		t = tga_file(RW, 3, 24, 0, 0, ref);
+		t.p[14] = RH;
+		add_bad("tga holding 3 of its 5 rows", t, (size_t)-1, "tga", IMGDEC_ERR_DECODE);
+		t = tga_file(RW, 3, 32, 1, 0, ref);
+		t.p[14] = RH;
+		add_bad("tga rle holding 3 of its 5 rows", t, (size_t)-1, "tga", IMGDEC_ERR_DECODE);
+	}
+	{
+		/* JPEGs cut inside their scan data, baseline and progressive */
+		static unsigned char noise[32 * 32 * 4];
+		buf_t j, p;
+		size_t at;
+
+		for (i = 0; i < 32 * 32 * 4; i++)
+		{
+			noise[i] = (unsigned char)(((uint32_t)i * 2654435761u) >> 13);
+		}
+
+		j = encode_as(CFSTR("public.jpeg"), 32, 32, noise, 0, 0);
+		at = jpeg_scan_data(&j, 0);
+		CHECK(at > 0 && at + 64 < j.n && jpeg_scan_data(&j, 1) == 0, "the baseline JPEG has one scan");
+		add_bad("jpeg cut 16 bytes into its scan", copy_buf(&j), at + 16, "jpg", IMGDEC_ERR_DECODE);
+		add_bad("jpeg cut halfway through its scan", copy_buf(&j), at + (j.n - at) / 2, "jpg", IMGDEC_ERR_DECODE);
+		add_bad("jpeg cut before its end marker", j, j.n - 2, "jpg", IMGDEC_ERR_DECODE);
+
+		p = encode_as(CFSTR("public.jpeg"), 32, 32, noise, 0, 1);
+		at = jpeg_scan_data(&p, 1);
+		CHECK(at > 0 && at < p.n, "the progressive JPEG has more than one scan");
+		add_bad("progressive jpeg cut 16 bytes into its first scan", copy_buf(&p),
+			jpeg_scan_data(&p, 0) + 16, "jpg", IMGDEC_ERR_DECODE);
+		add_bad("progressive jpeg cut 16 bytes into its second scan", copy_buf(&p), at + 16, "jpg",
+			IMGDEC_ERR_DECODE);
+		add_bad("progressive jpeg cut before its end marker", p, p.n - 2, "jpg", IMGDEC_ERR_DECODE);
 	}
 #else
 	(void)want_jpeg;
