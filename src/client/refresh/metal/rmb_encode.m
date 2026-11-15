@@ -642,7 +642,7 @@ rmb_clear(const float *rgba)
 
 /* one indexed draw of n vertices with count indices (rm_fan_indices or rm_quad_indices made them) */
 static int
-rmb_draw_2d_idx(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n,
+rmb_draw_2d_idx(int pipe, int tex, int smp, int sharp, const rmb_vert2d_t *v, int n,
 		const unsigned short *idx, int count, const float *mvp)
 {
 	size_t vbytes = (size_t)(n > 0 ? n : 0) * sizeof(rmb_vert2d_t);
@@ -693,6 +693,13 @@ rmb_draw_2d_idx(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n,
 		[frame_enc setVertexBuffer:frame_ring offset:(NSUInteger)vat atIndex:0];
 		[frame_enc setVertexBytes:mvp length:16 * sizeof(float) atIndex:1];
 
+		{
+			/* rm_params2d: x is the sharp-bilinear switch (metal_2d_sharp), the rest padding */
+			const float params[4] = { sharp ? 1.0f : 0.0f, 0, 0, 0 };
+
+			[frame_enc setFragmentBytes:params length:sizeof(params) atIndex:0];
+		}
+
 		if (t)
 		{
 			[frame_enc setFragmentTexture:t atIndex:0];
@@ -712,22 +719,22 @@ rmb_draw_2d_idx(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n,
 
 
 int
-rmb_draw_2d(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n, const float *mvp)
+rmb_draw_2d(int pipe, int tex, int smp, int sharp, const rmb_vert2d_t *v, int n, const float *mvp)
 {
 	unsigned short idx[3 * 62];
 	int count = rm_fan_indices(n, idx, (int)(sizeof(idx) / sizeof(idx[0])));
 
-	return rmb_draw_2d_idx(pipe, tex, smp, v, n, idx, count, mvp);
+	return rmb_draw_2d_idx(pipe, tex, smp, sharp, v, n, idx, count, mvp);
 }
 
 int
-rmb_draw_2d_quads(int pipe, int tex, int smp, const rmb_vert2d_t *v, int nquads, const float *mvp)
+rmb_draw_2d_quads(int pipe, int tex, int smp, int sharp, const rmb_vert2d_t *v, int nquads, const float *mvp)
 {
 	unsigned short idx[6 * RM_BATCH_QUADS];
 	int count = ((nquads >= 1) && (nquads <= RM_BATCH_QUADS))
 			? rm_quad_indices(nquads, idx, (int)(sizeof(idx) / sizeof(idx[0]))) : 0;
 
-	return rmb_draw_2d_idx(pipe, tex, smp, v, count ? nquads * 4 : 0, idx, count, mvp);
+	return rmb_draw_2d_idx(pipe, tex, smp, sharp, v, count ? nquads * 4 : 0, idx, count, mvp);
 }
 
 /* ---- the 3D pass (N4) ----------------------------------------------------------- */

@@ -7986,7 +7986,7 @@ test_sharp_coord(void)
 	}
 
 	/* a ramp is not reordered: the sharpened sample never leaves the nearest texel's neighbours */
-	for (j = 0; j < 80; j++)
+	for (j = 0; j < n * 13; j++)
 	{
 		const float t = ((float)j + 0.5f) / 13.0f;
 		const float v = lin1(row, n, mtl_sharp_coord(t, 1.0f / 13.0f));

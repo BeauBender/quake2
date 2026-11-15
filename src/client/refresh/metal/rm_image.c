@@ -25,8 +25,10 @@
  * image keeps its size (R_Upload32Native), with R_LightScaleTexture, the
  * gamma and intensity tables and the skin flood fill. Not copied: the
  * power-of-two path (R_Upload32Soft, gl1_picmip, gl1_round_down), the
- * paletted path and r_scale8bittextures (no scenario sets it). The scrap
- * is rm_scrap.c's (N3). The shared loaders in files/ parse the files.
+ * paletted path. r_scale8bittextures is taken as gl1 takes it (TASK119,
+ * docs/plans/high-resolution.md P4): R_Upload32 smooths every upload and
+ * R_LoadPic scales the 8-bit images outside the scrap with scale2x or
+ * scale3x of files/. The scrap is rm_scrap.c's (N3). The shared loaders in files/ parse the files.
  *
  * =======================================================================
  */
@@ -61,6 +63,13 @@ R_NoLerp(const char *name, imagetype_t type)
 	}
 
 	return (gl_nolerp_list->string != NULL) && (strstr(gl_nolerp_list->string, name) != NULL);
+}
+
+/* 1 when the unmipmapped filtered sampler class is linear: gl_texturemode's magnification filter as R_TextureMode last set it */
+int
+rm_image_flat_linear(void)
+{
+	return filter_mag != 0;
 }
 
 /* gl1's per-texture filter state as one of the back end's samplers, at load or after a mode change */
@@ -207,6 +216,13 @@ R_Upload32(image_t *image, unsigned *data, int width, int height, qboolean mipma
 	}
 
 	c = bytes / 4;
+
+	/* from gl1_image.c, R_Upload32: optimize 8bit images only when we forced such logic */
+	if (r_scale8bittextures->value)
+	{
+		SmoothColorImage(data, (size_t)width * (size_t)height, (size_t)width);
+	}
+
 	R_LightScaleTexture(data, width, height, !mipmap);
 
 	for (i = 0; i < c; i++)
@@ -394,7 +410,52 @@ R_LoadPic(const char *name, byte *pic, int width, int realwidth,
 	}
 	else if (bits == 8)
 	{
-		image->has_alpha = R_Upload8(image, pic, width, height, mipmap);
+		/* from gl1_image.c, R_LoadPic: resize 8bit images only when we forced such logic */
+		const int scale = rm_scale8_factor(r_scale8bittextures->value != 0.0f,
+				R_NoLerp(name, type), vid.height);
+
+		if (scale > 1)
+		{
+			int sw, sh;
+			size_t bytes;
+			byte *scaled;
+
+			if (!rm_scale8_dims(width, height, scale, &sw, &sh))
+			{
+				ri.Sys_Error(ERR_DROP, "%s: invalid dimensions", __func__);
+				memset(image, 0, sizeof(*image));
+				return NULL;
+			}
+
+			/* refused before the scaled copy allocates for it */
+			if (!rm_upload_bytes(sw, sh, RMB_STAGING_BYTES, &bytes))
+			{
+				rmb_upload_refused();
+			}
+			else if ((scaled = malloc((size_t)sw * (size_t)sh)) == NULL)
+			{
+				memset(image, 0, sizeof(*image));
+				return NULL;
+			}
+			else
+			{
+				if (scale == 3)
+				{
+					scale3x(pic, scaled, width, height);
+				}
+				else
+				{
+					scale2x(pic, scaled, width, height);
+				}
+
+				image->has_alpha = R_Upload8(image, scaled, sw, sh, mipmap);
+				free(scaled);
+			}
+		}
+		else
+		{
+			image->has_alpha = R_Upload8(image, pic, width, height, mipmap);
+		}
 	}
 	else if (bits == 32)
 	{

@@ -1625,6 +1625,26 @@ typedef enum
 int rm_image_sampler(int mipmapped, int nolerp, int mode_change);
 
 /*
+ * r_scale8bittextures, as gl1 takes it (R_LoadPic): the factor an 8-bit
+ * image that is not in the scrap is scaled up by with scale2x or scale3x,
+ * 1 when the cvar is off, else 2, or 3 for a lerped image on a target at
+ * least 720 pixels high. rm_scale8_dims answers 1 with the scaled sides
+ * when w and h are positive, the scale is 2 or 3 and w * h * scale * scale
+ * fits an int (gl1's own check, ERR_DROP there), else 0 with both sides 0.
+ */
+int rm_scale8_factor(int enabled, int nolerp, int height);
+int rm_scale8_dims(int w, int h, int scale, int *ow, int *oh);
+
+/*
+ * metal_2d_sharp: 1 when a 2D picture drawn with sampler smp takes the
+ * sharp-bilinear coordinate (mtl_sharp_coord), that is when the cvar is
+ * exactly 1 and the sampler is the unmipmapped filtered class, flat_linear
+ * saying gl_texturemode's magnification filter is linear. A nearest
+ * sampler, a mipmapped one and an index outside the table take 0.
+ */
+int rm_2d_sharp(float cvar, int smp, int flat_linear);
+
+/*
  * Loads ref_metal.metallib from dir and builds the 2D pipeline table and
  * the samplers. 0 with err filled on failure.
  */
@@ -1664,8 +1684,11 @@ typedef struct
  * pipeline pipe, texture tex (0 for the untextured pipelines) and
  * sampler smp, in the open pass, at the full-target viewport, with mvp
  * (column-major) on every vertex. 0 when the draw is skipped (counted).
+ * sharp 1 samples the texture with the sharp-bilinear coordinate
+ * (mtl_sharp_coord, metal_2d_sharp); the caller decides it per picture
+ * with rm_2d_sharp, and 0 is the plain sampler.
  */
-int rmb_draw_2d(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n, const float *mvp);
+int rmb_draw_2d(int pipe, int tex, int smp, int sharp, const rmb_vert2d_t *v, int n, const float *mvp);
 
 /*
  * The same for nquads quads of 4 vertices each (a batch of gl1's
@@ -1673,7 +1696,7 @@ int rmb_draw_2d(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n, const 
  * nquads is outside 1 to RM_BATCH_QUADS.
  */
 #define RM_BATCH_QUADS 1024
-int rmb_draw_2d_quads(int pipe, int tex, int smp, const rmb_vert2d_t *v, int nquads, const float *mvp);
+int rmb_draw_2d_quads(int pipe, int tex, int smp, int sharp, const rmb_vert2d_t *v, int nquads, const float *mvp);
 
 /* ---- the 3D pass (rmb_resource.m, rmb_encode.m, N4) ------------------------------ */
 

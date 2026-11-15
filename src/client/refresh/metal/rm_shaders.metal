@@ -51,6 +51,12 @@ struct rm_uniforms2d
 	float4x4 mvp;
 };
 
+/* the fragment function's: x is 1 for a picture drawn with the sharp-bilinear coordinate (metal_2d_sharp), 0 otherwise; the rest is padding */
+struct rm_params2d
+{
+	float4 sharp;
+};
+
 struct rm_varying2d
 {
 	float4 position [[position]];
@@ -75,19 +81,31 @@ rm_vertex_2d(uint vid [[vertex_id]],
 
 fragment float4
 rm_fragment_2d(rm_varying2d in [[stage_in]],
+		constant rm_params2d &params [[buffer(0)]],
 		texture2d<float> tex [[texture(0)]],
 		sampler smp [[sampler(0)]])
 {
 	float4 c = saturate(in.color);
+	float2 uv = in.uv;
+
+	/* metal_2d_sharp: the position in texels, and the texels a pixel covers, per axis (mtl_sharp_coord) */
+	if ((rm_texenv != 2) && (params.sharp.x != 0.0f))
+	{
+		const float2 size = float2(tex.get_width(), tex.get_height());
+		const float2 t = uv * size;
+		const float2 d = fwidth(t);
+
+		uv = float2(mtl_sharp_coord(t.x, d.x), mtl_sharp_coord(t.y, d.y)) / size;
+	}
 
 	if (rm_texenv == 0)
 	{
 		/* GL_REPLACE; every image is rgba8 with alpha 255 where gl1 asked for RGB */
-		c = tex.sample(smp, in.uv);
+		c = tex.sample(smp, uv);
 	}
 	else if (rm_texenv == 1)
 	{
-		c = c * tex.sample(smp, in.uv);   /* GL_MODULATE */
+		c = c * tex.sample(smp, uv);   /* GL_MODULATE */
 	}
 
 	if (rm_alpha_test && !(c.a > 0.666f))

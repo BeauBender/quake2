@@ -453,6 +453,46 @@ rm_image_sampler(int mipmapped, int nolerp, int mode_change)
 	return RMB_SAMPLER(mipmapped ? RMB_SMP_MIP : RMB_SMP_FLAT, 0);
 }
 
+/* from gl1_image.c, R_LoadPic: scale 2, or 3 if lerp image on a target of 240 * 3 lines or more */
+int
+rm_scale8_factor(int enabled, int nolerp, int height)
+{
+	if (!enabled)
+	{
+		return 1;
+	}
+
+	return (!nolerp && (height >= 240 * 3)) ? 3 : 2;
+}
+
+/* from gl1_image.c, R_LoadPic: width > INT_MAX / height / scale / scale is an error there */
+int
+rm_scale8_dims(int w, int h, int scale, int *ow, int *oh)
+{
+	*ow = 0;
+	*oh = 0;
+
+	if ((w <= 0) || (h <= 0) || (scale < 2) || (scale > 3) || (w > INT_MAX / h / scale / scale))
+	{
+		return 0;
+	}
+
+	*ow = w * scale;
+	*oh = h * scale;
+	return 1;
+}
+
+int
+rm_2d_sharp(float cvar, int smp, int flat_linear)
+{
+	if ((cvar != 1.0f) || !flat_linear || (smp < 0) || (smp >= RMB_SMP_CLASSES * 2))
+	{
+		return 0;
+	}
+
+	return (smp / 2) == RMB_SMP_FLAT;
+}
+
 /* from gl1_image.c, the modes table of R_TextureMode */
 int
 rm_texture_mode(const char *name, int *min, int *mag_linear)
