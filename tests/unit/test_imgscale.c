@@ -259,11 +259,11 @@ TEST(imgscale_floodfill_left_turn)
 }
 
 /*
- * Left, then right, then above, then below: the last that qualifies wins.
- * In 5 5 8 the fill reaches (1,0) from its left and (2,0) is a colour; the
- * pixel takes the colour of the last step that qualifies. With the right
- * step ahead of the left step the result differs in the first pixels.
-  */
+ * The flood fill tries its neighbours in the order left, right, above,
+ * below, and a pixel takes the colour of the last one that qualifies. In
+ * 5 5 8 the fill colour 5 becomes 7 at (0,0), and (1,0) takes 8 from its
+ * right; with the right step tried before the left one, (1,0) would be 7.
+ */
 TEST(imgscale_floodfill_right_last)
 {
 	byte skin[3] = { 5, 5, 8 };
@@ -279,7 +279,8 @@ TEST(imgscale_floodfill_right_last)
 
 /*
  * scale2x rule 3 needs c != a as well as b != d and the corner tests: in
- * 4 1 4 / 1 3 2 / 4 1 4 the centre's upper right pixel stays 3.
+ * 4 1 4 / 1 3 2 / 4 1 4 the centre's lower-left output pixel (got[20], row 3,
+ * column 2 of the 6-wide output) stays 3.
  */
 TEST(imgscale_scale2x_rule3_needs_c_ne_a)
 {
