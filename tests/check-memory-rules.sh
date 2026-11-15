@@ -102,6 +102,9 @@ check_rules()
 		"Bash(cp)" | "Bash(cp "* | "Bash(cp:"*)
 			say "allow rule $i is a cp rule; memory is never copied (see CLAUDE.md)"
 			return 1 ;;
+		"Bash($pre:"*)
+			say "allow rule $i is a store rule with a wildcard (* or :*); only the rm rule has one"
+			return 1 ;;
 		"Bash($pre "*")")
 			rest=${r#"Bash($pre "}
 			rest=${rest%")"}
@@ -217,56 +220,65 @@ isolate()
 selftest_checks()
 {
 	isolate
-	# reject <what> <jq filter> [<rule>]: the tracked settings changed by
-	# <filter> ($r is <rule>) fail part 2.
+	# expect <what> <message> <command>...: <command> fails, and with
+	# <message>, so each case is caught by its own test.
+	expect()
+	{
+		w=$1 msg=$2
+		shift 2
+		if out=$("$@" 2>&1); then say "selftest: $w was not detected"; exit 1; fi
+		case "$out" in *"$msg"*) ;; *) say "selftest: $w was detected, but not by its own test"; exit 1 ;; esac
+	}
+	# reject <what> <message> <jq filter> [<rule>]: part 2 fails with
+	# <message> on the tracked settings changed by <filter> ($r is <rule>).
 	reject()
 	{
-		jq --arg r "${3:-}" "$2" .claude/settings.json > "${tmp:?}/s.json" 2> /dev/null ||
+		jq --arg r "${4:-}" "$3" .claude/settings.json > "${tmp:?}/s.json" 2> /dev/null ||
 			{ say "selftest: cannot build the fixture for $1"; exit 1; }
-		if check_rules "${tmp:?}/s.json" 2> /dev/null; then say "selftest: $1 was not detected"; exit 1; fi
+		expect "$1" "$2" check_rules "${tmp:?}/s.json"
 	}
 	add='.permissions.allow += [$r]'
-	reject "a cp rule" "$add" "Bash(cp -p a b)"
-	reject "a git -C <store> * rule" "$add" "Bash($pre *)"
-	reject "a git -C <store> :* rule" "$add" "Bash($pre:*)"
-	reject "a second -C" "$add" "Bash($pre -C /x status --porcelain)"
-	reject "a -c other than core.editor=true" "$add" "Bash($pre -c core.pager=x status --porcelain)"
-	reject "a push with arguments" "$add" "Bash($pre push -q origin)"
-	reject "a widened rule" '.permissions.allow |= map(if endswith("pull --rebase -q)") then .[:-1] + " *)" else . end)'
-	reject "an Edit rule on the whole store" "$add" "Edit($store/**)"
-	reject "a rule that admits the store without naming it" "$add" "Bash(git -C *)"
-	reject "a bare Bash rule" "$add" "Bash"
-	reject "a missing store rule" '.permissions.allow |= map(select(endswith(" push -q)") | not))'
-	reject "an allow list that is not a list" '.permissions.allow = "x"'
+	wild="a store rule with a wildcard"
+	reject "a cp rule" "is a cp rule" "$add" "Bash(cp -p a b)"
+	reject "a git -C <store> * rule" "$wild" "$add" "Bash($pre *)"
+	reject "a git -C <store>:* rule" "$wild" "$add" "Bash($pre:*)"
+	reject "a widened rule" "$wild" '.permissions.allow |= map(if endswith("pull --rebase -q)") then .[:-1] + " *)" else . end)'
+	reject "a second -C" "a second -C" "$add" "Bash($pre -C /x status --porcelain)"
+	reject "a -c other than core.editor=true" "a -c other than" "$add" "Bash($pre -c core.pager=x status --porcelain)"
+	reject "a push with arguments" "push with arguments" "$add" "Bash($pre push -q origin)"
+	reject "a store rule of another form" "is not of the form" "$add" "Bash(env $pre push -q)"
+	reject "an Edit rule on the whole store" "admits probe" "$add" "Edit($store/**)"
+	reject "a Write rule on the whole store" "admits probe" "$add" "Write($store/**)"
+	reject "a rule that admits the store without naming it" "admits probe" "$add" "Bash(git -C *)"
+	reject "a bare Bash rule" "admits probe" "$add" "Bash"
+	reject "an extra store rule" "not exactly the card's list" "$add" "Bash($pre fetch -q)"
+	reject "a missing store rule" "not exactly the card's list" '.permissions.allow |= map(select(endswith(" push -q)") | not))'
+	reject "an allow list that is not a list" "cannot read permissions.allow" '.permissions.allow = "x"'
 	printf '{\n' > "${tmp:?}/s.json" || exit 1
-	if check_rules "${tmp:?}/s.json" 2> /dev/null; then say "selftest: a parse error was not detected"; exit 1; fi
+	expect "a parse error" "cannot read permissions.allow" check_rules "${tmp:?}/s.json"
 	mkdir -p "${tmp:?}/shim" || exit 1
 	printf '#!/bin/sh\nexit 127\n' > "${tmp:?}/shim/jq" && chmod 755 "${tmp:?}/shim/jq" || exit 1
-	if (PATH=$tmp/shim:$PATH; check_rules .claude/settings.json) 2> /dev/null; then
-		say "selftest: a failing jq was counted as clean"; exit 1
-	fi
-	# docmut <what> <sed script> <both|hook>: part 1 fails on copies of the
-	# documents with <sed script> applied to the hook, and with both, to
-	# CLAUDE.md too.
+	shimmed() { PATH=$tmp/shim:$PATH; check_rules .claude/settings.json; }
+	expect "a failing jq" "cannot read permissions.allow" shimmed
+	# docmut <what> <message> <sed script> <both|hook>: part 1 fails with
+	# <message> on copies of the documents, <sed script> applied to the hook
+	# and, with both, to CLAUDE.md too.
 	docmut()
 	{
-		if [ "$3" = both ]; then
-			sed "$2" CLAUDE.md > "${tmp:?}/c.md" || exit 1
+		if [ "$4" = both ]; then
+			sed "$3" CLAUDE.md > "${tmp:?}/c.md" || exit 1
+			! cmp -s CLAUDE.md "${tmp:?}/c.md" || { say "selftest: the fixture for $1 changed nothing"; exit 1; }
 		else
 			cp CLAUDE.md "${tmp:?}/c.md" || exit 1
 		fi
-		sed "$2" .claude/hooks/session-context.sh > "${tmp:?}/h.sh" || exit 1
-		if cmp -s .claude/hooks/session-context.sh "${tmp:?}/h.sh"; then
-			say "selftest: the fixture for $1 changed nothing"; exit 1
-		fi
-		if check_docs "${tmp:?}/c.md" "${tmp:?}/h.sh" .claude/settings.json 2> /dev/null; then
-			say "selftest: $1 was not detected"; exit 1
-		fi
+		sed "$3" .claude/hooks/session-context.sh > "${tmp:?}/h.sh" || exit 1
+		! cmp -s .claude/hooks/session-context.sh "${tmp:?}/h.sh" || { say "selftest: the fixture for $1 changed nothing"; exit 1; }
+		expect "$1" "$2" check_docs "${tmp:?}/c.md" "${tmp:?}/h.sh" .claude/settings.json
 	}
-	docmut "a command spelt unlike its rule" 's/pull --rebase -q`/pull --rebase --quiet`/' both
-	docmut "a hook that spells a command differently" 's/push -q`/push --quiet`/' hook
-	docmut "an unbalanced code span" 's/`git -C ~/git -C ~/' both
-	docmut "a memory rule not found" 's/^- Agent memory /- Memory /' both
+	docmut "a command spelt unlike its rule" "not allowed by an exact rule" 's/pull --rebase -q`/pull --rebase --quiet`/' both
+	docmut "a hook that spells a command differently" "does not spell out" 's/push -q`/push --quiet`/' hook
+	docmut "an unbalanced code span" "unbalanced backtick" 's/`git -C ~/git -C ~/' both
+	docmut "a memory rule not found" "cannot find the memory rule" 's/^- Agent memory /- Memory /' both
 }
 
 # run <machine> <command> [<file>]: a documented store command in the clone
