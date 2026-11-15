@@ -200,8 +200,10 @@ platforms. A file must hold the type its extension names (a PNG named
 no side may be larger than 16384 pixels, and an image may have at most
 2^26 pixels (64 megapixels, for example 8192x8192 or 16384x4096). PNG
 and TGA files decode to the same pixels as before (a 16-bit TGA to
-within one level); JPEG files decode to within decoder rounding of them,
-not byte for byte.
+within one level); JPEG files do not decode byte for byte: the JPEG IDCT and the
+chroma upsampling differ from the old decoder's by up to tens of levels
+at edges (the stock rerelease JPEGs differ by up to 56 levels, and 11.8%
+of their colour bytes differ).
 
 Some files that loaded before are now refused with a message, because
 ImageIO decodes them to wrong pixels or not at all:
@@ -210,7 +212,10 @@ ImageIO decodes them to wrong pixels or not at all:
 * paletted PNGs with a pixel whose index is past the palette;
 * colour-mapped TGAs (image types 1 and 9) whose colour map entries are
   not 24-bit, for example a 32-bit map with alpha;
-* TGAs with 15-bit pixels;
+* colour-mapped TGAs (types 1 and 9) with a 24-bit map whose first entry
+  index is not 0, and colour-mapped TGAs with 16-bit indices;
+* TGAs with 15-bit pixels, and truecolour (type 2) TGAs with 8-bit
+  pixels;
 * truecolour TGAs that carry a colour map, which ImageIO does not
   decode;
 * truncated JPEGs, which end inside their image data, and run-length

@@ -917,6 +917,9 @@ typedef struct
 	int w, h, tol;
 	imgdec_result_t refusal;	/* IMGDEC_OK: any refusal */
 	int gap;			/* a known gap: decodes, though it should not */
+	int gap_from, gap_to;		/* the rows [from, to) the file does not hold */
+	int gap_fill;			/* the byte the missing rows must hold */
+	int gap_alpha;			/* the fill check covers the alpha byte too */
 } dcase_t;
 
 #define MAX_CASES 96
@@ -966,9 +969,15 @@ add_bad(const char *what, buf_t file, size_t size, const char *ext, imgdec_resul
 
 #ifdef __APPLE__
 static void
-add_gap(const char *what, buf_t file, const char *ext)
+add_gap(const char *what, buf_t file, const char *ext, int from, int to, int fill, int alpha)
 {
-	add_case(what, file, ext)->gap = 1;
+	dcase_t *c = add_case(what, file, ext);
+
+	c->gap = 1;
+	c->gap_from = from;
+	c->gap_to = to;
+	c->gap_fill = fill;
+	c->gap_alpha = alpha;
 }
 #endif
 
@@ -1304,6 +1313,26 @@ build_cases(void)
 			IMGDEC_ERR_LAYOUT);
 		add_bad("tga colour-mapped rle, 32-bit map", bytes_buf(cmap32_rle, sizeof(cmap32_rle)), (size_t)-1,
 			"tga", IMGDEC_ERR_LAYOUT);
+		/* 2x1 colour-mapped, 24-bit map whose first entry index is 1 */
+		static const unsigned char cmap_first[] = {0, 1, 1, 1, 0, 4, 0, 24, 0, 0, 0, 0, 2, 0, 1, 0, 8, 0x20,
+			0, 0, 255, 0, 255, 0, 255, 0, 0, 30, 20, 10, 1, 2};
+		static const unsigned char cmap_first_rle[] = {0, 1, 9, 1, 0, 4, 0, 24, 0, 0, 0, 0, 2, 0, 1, 0, 8, 0x20,
+			0, 0, 255, 0, 255, 0, 255, 0, 0, 30, 20, 10, 0x01, 1, 2};
+		/* 2x1 colour-mapped, 16-bit indices */
+		static const unsigned char cmap_idx16[] = {0, 1, 1, 0, 0, 4, 0, 24, 0, 0, 0, 0, 2, 0, 1, 0, 16, 0x20,
+			0, 0, 255, 0, 255, 0, 255, 0, 0, 30, 20, 10, 1, 0, 2, 0};
+		/* 2x1 truecolour type 2 with 8-bit pixels */
+		static const unsigned char tc8[] = {0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 1, 0, 8, 0x20,
+			10, 20};
+
+		add_bad("tga colour-mapped, first entry index 1", bytes_buf(cmap_first, sizeof(cmap_first)),
+			(size_t)-1, "tga", IMGDEC_ERR_DECODE);
+		add_bad("tga colour-mapped rle, first entry index 1", bytes_buf(cmap_first_rle, sizeof(cmap_first_rle)),
+			(size_t)-1, "tga", IMGDEC_ERR_DECODE);
+		add_bad("tga colour-mapped, 16-bit indices", bytes_buf(cmap_idx16, sizeof(cmap_idx16)), (size_t)-1,
+			"tga", IMGDEC_ERR_DECODE);
+		add_bad("tga type 2, 8-bit pixels", bytes_buf(tc8, sizeof(tc8)), (size_t)-1, "tga",
+			IMGDEC_ERR_DECODE);
 		add_bad("tga 15-bit", bytes_buf(tc15, sizeof(tc15)), (size_t)-1, "tga", IMGDEC_ERR_LAYOUT);
 	}
 
@@ -1446,17 +1475,18 @@ build_cases(void)
 
 		for (k = 1; k < RH; k++)
 		{
-			add_gap(png_rows[k - 1], png_file(RW, RH, 8, 2, rgb, RW * 3, (size_t)k, NULL, 0, NULL, 0), "png");
+			add_gap(png_rows[k - 1], png_file(RW, RH, 8, 2, rgb, RW * 3, (size_t)k, NULL, 0, NULL, 0), "png",
+				k, RH, 0x00, 0);
 		}
 		add_gap("png rgba holding 4 of its 5 rows", png_file(RW, RH, 8, 6, ref, RW * 4, RH - 1, NULL, 0, NULL, 0),
-			"png");
+			"png", RH - 1, RH, 0x00, 0);
 
 		t = tga_file(RW, 3, 24, 0, 0, ref);
 		t.p[14] = RH;
 		add_bad("tga holding 3 of its 5 rows", t, (size_t)-1, "tga", IMGDEC_ERR_DECODE);
 		t = tga_file(RW, 3, 32, 1, 0, ref);
 		t.p[14] = RH;
-		add_gap("tga rle holding 3 of its 5 rows", t, "tga");
+		add_gap("tga rle holding 3 of its 5 rows", t, "tga", 0, RH - 3, 0xFF, 1);
 	}
 	{
 		/* JPEGs cut inside their scan data, baseline and progressive */
@@ -1525,6 +1555,24 @@ run_cases(void)
 
 			CHECK(r == IMGDEC_OK, "%s: now refused (%s): move it to the refusals", c->what,
 				IMGDEC_ResultString(r));
+			if (r == IMGDEC_OK)
+			{
+				/* the rows the file does not hold (the top ones in a bottom-origin TGA) are filled in, never left uninitialised */
+				int y, x, b, nb = c->gap_alpha ? 4 : 3;
+
+				for (y = c->gap_from; y < c->gap_to && y < h; y++)
+				{
+					for (x = 0; x < w; x++)
+					{
+						for (b = 0; b < nb; b++)
+						{
+							CHECK(pic[((size_t)y * w + x) * 4 + b] == c->gap_fill,
+								"%s: row %d byte %d is not the fill 0x%02x", c->what, y, b,
+								c->gap_fill);
+						}
+					}
+				}
+			}
 			free(pic);
 			continue;
 		}

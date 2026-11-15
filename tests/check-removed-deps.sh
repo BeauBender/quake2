@@ -17,6 +17,17 @@ cd "$(dirname "$0")/.."
 export LC_ALL=C
 
 fail=0
+
+# git grep exits 0 on a match and 1 on none; any other status (not a git
+# repository, a bad pattern) is a failed scan, never a clean one.
+grep_status()
+{
+	if [ "$1" -gt 1 ]; then
+		echo "check-removed-deps: git grep failed (status $1): the scan did not run"
+		exit 1
+	fi
+}
+
 for path in src/client/curl src/common/unzip src/client/sound/openal.c src/client/sound/qal.c src/client/vid/header/stb_image_write.h \
 	src/client/refresh/files/stb_image.h \
 	src/client/refresh/gl3/glad-gles3 CMakeLists.txt; do
@@ -31,7 +42,9 @@ done
 # (stbi_) and its macros (STBI_, STB_IMAGE_IMPLEMENTATION); stb_image_resize's
 # stbir_, STBIR_ and stb_image_resize.h do not match.
 pattern='USE_CURL|WITH_CURL|curl/curl\.h|libcurl|USE_OPENAL|WITH_OPENAL|AL/alc?\.h|libopenal|WITH_SYSTEM_MINIZIP|unzip\.h|miniz\.h|-lminizip|ref_gles[0-9]|YQ2_GL3_GLES|USE_GLES|WITH_SDL3|USE_SDL3|stb_image_write|stbi_write_|STB_IMAGE_WRITE|stb_image\.h|stbi_|STBI_|STB_IMAGE_IMPLEMENTATION'
-hits=$(git grep -nE "$pattern" -- src Makefile .github stuff/misc 2>/dev/null || true)
+rc=0
+hits=$(git grep -nE "$pattern" -- src Makefile .github stuff/misc 2>/dev/null) || rc=$?
+grep_status "$rc"
 if [ -n "$hits" ]; then
 	echo "check-removed-deps: references to removed dependencies:"
 	echo "$hits" | sed 's/^/  /'
@@ -44,7 +57,9 @@ fi
 # (SDL_VERSION_ATLEAST(2, ...)) and SDL2's bare <SDL.h> include (SDL3 headers
 # are <SDL3/SDL.h>, which this does not match).
 sdl2='SDL2|SDL_VERSION_ATLEAST[[:space:]]*\([[:space:]]*2|[<"]SDL\.h[>"]'
-hits=$(git grep -niE "$sdl2" -- src Makefile .github stuff/misc 2>/dev/null || true)
+rc=0
+hits=$(git grep -niE "$sdl2" -- src Makefile .github stuff/misc 2>/dev/null) || rc=$?
+grep_status "$rc"
 if [ -n "$hits" ]; then
 	echo "check-removed-deps: references to SDL2:"
 	echo "$hits" | sed 's/^/  /'

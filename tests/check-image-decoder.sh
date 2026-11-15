@@ -3,11 +3,15 @@
 # decision docs/decisions/0010-imageio-decoder.md) decodes PNG, JPEG and
 # TGA only, and refuses everything else before decoding it. PNG and TGA
 # decode to the straight-alpha RGBA bytes stb_image returned (a 16-bit
-# TGA to within one level); JPEG to within decoder rounding of them, not
-# byte for byte. Refused, where stb_image decoded them: CMYK and YCCK
+# TGA to within one level); JPEG not byte for byte: the JPEG IDCT and
+# the chroma upsampling differ from stb_image's by up to tens of levels
+# at edges (the stock rerelease JPEGs differ by up to 56 levels, and
+# 11.8% of their colour bytes differ). Refused, where stb_image decoded them: CMYK and YCCK
 # JPEGs, a palette index past the palette, a colour-mapped TGA whose map
 # is not 24-bit, a 15-bit TGA, a truecolour TGA that carries a colour
-# map, more than 2^26 pixels, a JPEG cut inside its scan data and a
+# map, a colour-mapped TGA (types 1 and 9) with a 24-bit map whose first
+# entry index is not 0, a colour-mapped TGA with 16-bit indices, a type 2
+# TGA with 8-bit pixels, more than 2^26 pixels, a JPEG cut inside its scan data and a
 # run-length TGA cut inside a run. Decoded, where stb_image refused it,
 # and kept in the host test as a known gap: a PNG whose complete zlib
 # stream holds fewer rows than it declares, for which ImageIO's status
