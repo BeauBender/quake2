@@ -52,6 +52,9 @@ TEST(upscale_name_ok_refuses)
 	/* a name of the stock pak0 */
 	T_EQ_INT(CL_UpscaleNameOk("models/monsters/tank/../ctank/pain.pcx"), 0);
 	T_EQ_INT(CL_UpscaleNameOk("a..b.wal"), 0);
+	/* an empty component */
+	T_EQ_INT(CL_UpscaleNameOk("textures//x.wal"), 0);
+	T_EQ_INT(CL_UpscaleNameOk("textures/"), 0);
 	/* a component that begins with a dot, the last one included */
 	T_EQ_INT(CL_UpscaleNameOk(".wal"), 0);
 	T_EQ_INT(CL_UpscaleNameOk("textures/.x.wal"), 0);
@@ -243,11 +246,12 @@ TEST(upscale_git_tree_walk_order)
 	T_EQ_STR(t.calls[0], "/.git");
 }
 
-/* UPSCALE_GIT_DEPTH components are walked to the root; one more is refused unwalked */
+/* UPSCALE_GIT_DEPTH components are walked to the root; with one more the walk stops short and refuses */
 TEST(upscale_git_tree_depth_bound)
 {
 	static const char *const none[] = { NULL };
 	char dir[MAX_OSPATH];
+	char big[MAX_OSPATH + 16];
 	synth_tree_t t;
 	int i;
 
@@ -266,13 +270,16 @@ TEST(upscale_git_tree_depth_bound)
 	memset(&t, 0, sizeof(t));
 	t.entries = none;
 	T_EQ_INT(CL_UpscaleInGitTree(dir, synth_exists, &t), 1);
-	T_EQ_INT(t.ncalls, 0);
+	T_EQ_INT(t.ncalls, UPSCALE_GIT_DEPTH + 1);
 
-	/* longer than a path buffer */
-	memset(dir, 'a', sizeof(dir));
-	dir[0] = '/';
-	dir[sizeof(dir) - 1] = '\0';
-	T_EQ_INT(in_synth(dir, none), 1);
+	/* a path buffer full is walked, one more character is refused */
+	memset(big, 'a', sizeof(big));
+	big[0] = '/';
+	big[MAX_OSPATH - 1] = '\0';
+	T_EQ_INT(in_synth(big, none), 0);
+	big[MAX_OSPATH - 1] = 'a';
+	big[MAX_OSPATH] = '\0';
+	T_EQ_INT(in_synth(big, none), 1);
 }
 
 /* the same refusal on disk, on a tree under the scratch directory */
@@ -331,19 +338,37 @@ TEST(upscale_wrap_pad_and_crop_4x4)
 	unsigned char pad[36], back[16], part[4];
 
 	memset(pad, 0xee, sizeof(pad));
-	CL_UpscaleWrapPad(tile4, 4, 4, pad);
+	T_EQ_INT(CL_UpscaleWrapPad(tile4, 4, 4, pad), 1);
 	T_EQ_MEM(pad, want, sizeof(want));
 
 	memset(back, 0xee, sizeof(back));
-	CL_UpscaleCrop(pad, 6, 1, 1, 4, 4, back);
+	T_EQ_INT(CL_UpscaleCrop(pad, 6, 6, 1, 1, 4, 4, back), 1);
 	T_EQ_MEM(back, tile4, sizeof(tile4));
 
 	/* a corner block across the seam */
-	CL_UpscaleCrop(pad, 6, 4, 4, 2, 2, part);
+	T_EQ_INT(CL_UpscaleCrop(pad, 6, 6, 4, 4, 2, 2, part), 1);
 	T_EQ_INT(part[0], 15);
 	T_EQ_INT(part[1], 12);
 	T_EQ_INT(part[2], 3);
 	T_EQ_INT(part[3], 0);
+
+	/* a block that leaves the source, or is empty, is not copied */
+	memset(part, 0xee, sizeof(part));
+	T_EQ_INT(CL_UpscaleCrop(pad, 6, 6, 5, 4, 2, 2, part), 0);
+	T_EQ_INT(CL_UpscaleCrop(pad, 6, 6, 4, 5, 2, 2, part), 0);
+	T_EQ_INT(CL_UpscaleCrop(pad, 6, 6, -1, 0, 2, 2, part), 0);
+	T_EQ_INT(CL_UpscaleCrop(pad, 6, 6, 0, -1, 2, 2, part), 0);
+	T_EQ_INT(CL_UpscaleCrop(pad, 6, 6, 0, 0, 0, 2, part), 0);
+	T_EQ_INT(CL_UpscaleCrop(pad, 6, 6, 0, 0, 2, 0, part), 0);
+	T_EQ_INT(part[0], 0xee);
+	T_EQ_INT(CL_UpscaleCrop(pad, 6, 6, 0, 0, 6, 6, pad), 1);
+	T_EQ_INT(CL_UpscaleCrop(pad, 6, 6, 5, 5, 1, 1, part), 1);
+	T_EQ_INT(part[0], 0);
+
+	/* nothing to wrap */
+	T_EQ_INT(CL_UpscaleWrapPad(tile4, 0, 4, pad), 0);
+	T_EQ_INT(CL_UpscaleWrapPad(tile4, 4, 0, pad), 0);
+	T_EQ_INT(CL_UpscaleWrapPad(tile4, 4, 4, pad), 1);
 }
 
 TEST(upscale_wrap_pad_1x1_and_2x1)
@@ -406,7 +431,7 @@ tiled_reference(const unsigned char *tile, int w, int h, int passes, unsigned ch
 		b = t;
 	}
 
-	CL_UpscaleCrop(a, tw, tw / 3, th / 3, tw / 3, th / 3, out);
+	T_CHECK(CL_UpscaleCrop(a, tw, th, tw / 3, th / 3, tw / 3, th / 3, out));
 	free(a);
 	free(b);
 }

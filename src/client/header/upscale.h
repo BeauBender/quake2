@@ -38,8 +38,9 @@
 /*
  * 1 when a name from a listing may be written: only the characters
  * a-z, A-Z, 0-9, '_', '/', '.' and '-' (an upper-case letter is kept
- * as it is, as the pak names it), not empty, no leading '/', and no
- * "..". 0 otherwise, NULL included.
+ * as it is, as the pak names it), not empty, no leading '/', no "..",
+ * no component that is empty or begins with '.'. 0 otherwise, NULL
+ * included.
  */
 int CL_UpscaleNameOk(const char *name);
 
@@ -55,7 +56,8 @@ int CL_UpscaleOutName(const char *name, char *out, size_t outsize);
  * 1 when the absolute directory dir is inside a git work tree: some
  * directory from dir up to "/" holds an entry named .git, as exists
  * says. Also 1, fail closed, when dir is not absolute, is longer than
- * a path buffer, or has more than UPSCALE_GIT_DEPTH components to walk.
+ * a path buffer, or is not walked to "/" in UPSCALE_GIT_DEPTH + 1 looks
+ * (more than UPSCALE_GIT_DEPTH components).
  */
 int CL_UpscaleInGitTree(const char *dir,
 		int (*exists)(const char *path, void *ctx), void *ctx);
@@ -71,13 +73,17 @@ int CL_UpscaleSizeOk(long long w, long long h);
 
 /*
  * The w by h image src with one texel of its own opposite edges around
- * it, as a repeating tile has them: (w + 2) by (h + 2) into dst.
+ * it, as a repeating tile has them: (w + 2) by (h + 2) into dst. 0, and
+ * nothing written, when a side is below 1.
  */
-void CL_UpscaleWrapPad(const unsigned char *src, int w, int h,
+int CL_UpscaleWrapPad(const unsigned char *src, int w, int h,
 		unsigned char *dst);
 
-/* The w by h block at (x, y) of src, which is sw wide, into dst. */
-void CL_UpscaleCrop(const unsigned char *src, int sw, int x, int y,
+/*
+ * The w by h block at (x, y) of src, which is sw by sh, into dst. 0, and
+ * nothing written, unless the block lies inside src and is not empty.
+ */
+int CL_UpscaleCrop(const unsigned char *src, int sw, int sh, int x, int y,
 		int w, int h, unsigned char *dst);
 
 /* scale2x of src/client/refresh/files/image.c: w by h to 2w by 2h */
