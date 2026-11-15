@@ -11,6 +11,7 @@ This file is the fork's dependency manifest. It lists the system libraries the b
 | libcurl | `src/client/curl/` (HTTP downloads) | Loaded at runtime with `dlopen`, never linked. | Removed by TASK3. |
 | bcrypt (Windows) | `src/backends/windows/system.c` `Sys_GetRandomBytes` | Linked at build time (Makefile LDLIBS) | Kept: OS random source |
 | OpenGL (system framework / libGL) | `ref_gl1`, `ref_gl3` via the vendored glad loader and the `qgl` function table | Function pointers for the GL renderers, resolved through the vendored glad loader and the `qgl` table. | Kept for now; superseded by the Metal renderer plan (`docs/plans/metal-renderer.md`) |
+| ImageIO, CoreGraphics, CoreFoundation (Apple system frameworks) | the client (`src/client/cl_image.c`) and every renderer (`src/client/refresh/files/image.c`), through `src/client/refresh/files/imgdecode.c` | Linked at build time on macOS (Makefile `IMGDECODE_LDLIBS`). ImageIO decodes the PNG, JPEG and TGA files the engine loads (high-colour replacements under `r_retexturing`, the stock TGA skies, cinematic pictures). Only those three types are accepted, the type ImageIO reads from the bytes must match the file's extension, and the size is bounded before decoding ([decision 0010](decisions/0010-imageio-decoder.md)). Off Apple platforms nothing is linked and there is no PNG, JPEG or TGA decoder: texture packs and other high-colour replacements do not load there, cinematic pictures in those formats do not show, and the stock skies draw from their PCX faces. Those platforms are unmaintained ([decision 0008](decisions/0008-apple-platforms-only.md)). | Kept: approved by the owner in decision 0010; replaced the vendored `stb_image.h` (TASK11). |
 | Metal, QuartzCore, Foundation (macOS system frameworks) and the Metal shader compiler (`xcrun metal`, a separate Xcode component) | `ref_gl1` when built with `WITH_METAL_SHIM=yes` (Makefile `WITH_METAL_SHIM` rules), and `ref_metal` (Makefile `ref_metal` target, macOS only, not part of `make`) | The three frameworks are linked at build time; the Metal toolchain is needed at build time only (`ref_metal` compiles no shaders yet; `tests/check-ref-metal.sh` builds it only where `xcrun -f metal` answers). Off by default; a default build of `ref_gl1` links none of them, and `make` does not build `ref_metal`. The client links Metal and QuartzCore through the vendored SDL (see the SDL 3 row). | Kept, optional: off by default. |
 
 ## Vendored libraries
@@ -56,8 +57,7 @@ Audited items (small files that stay) first, then the larger vendored files that
 | `src/game/savegame/tables/spawnfunc_decs.h` | Project file; hand-written | n/a | GPL-2-or-later | `16197400c4a940b363ac680ca31cd44a5ba134344491ef1420ba74c6ed18dfbf` | Audited, KEEP (TASK15) |
 | `src/game/savegame/tables/spawnfunc_list.h` | Project file; hand-written | n/a | GPL-2-or-later | `1d9cbed8dcc8fe20e4905f917837ab520a0f0f90d1b4e2bc1dd4c0cd46c85c4e` | Audited, KEEP (TASK15) |
 | `src/game/savegame/tables/stfields.h` | Project file; hand-written | n/a | GPL-2-or-later | `e5f8fe9accf0c61038db32de73a94584b5566b624070eccac7755f9ba24b1400` | Audited, KEEP (TASK15) |
-| `src/client/refresh/files/stb_image.h` | stb, http://nothings.org/stb (Sean Barrett) | v2.30 | Public domain / MIT (dual, stated in file) | `3b0ea6220d9645445721432b37e76d0c438eee0590f5bac2aa1b739d51b944b4` | Keep-or-replace decision: INFORM2 / TASK11 |
-| `src/client/refresh/files/stb_image_resize.h` | stb, http://github.com/nothings/stb | v0.97 | Public domain / MIT (dual, stated in file) | `6a0e75adbabb48df9031c2e39ccd97437bb226fe31e7d4a01c7bf70a18d32ec6` | Same decision as stb_image: INFORM2 / TASK11 |
+| `src/client/refresh/files/stb_image_resize.h` | stb, http://github.com/nothings/stb | v0.97 | Public domain / MIT (dual, stated in file) | `6a0e75adbabb48df9031c2e39ccd97437bb226fe31e7d4a01c7bf70a18d32ec6` | Kept by TASK11: `ResizeSTB` (`src/client/refresh/files/image.c`) resamples with it, for `ref_gl1`'s texture upload (`R_Upload32`, whenever a texture is uploaded at another size) and `ref_soft`'s high-colour replacements |
 | `src/client/sound/header/stb_vorbis.h` | stb_vorbis, http://nothings.org/stb_vorbis/ | v1.22 | Public domain / MIT (dual, stated in file) | `0bec65a0408e902b12da70ec5c3c7874434c5eecc4e0c7174a82d2bb34f8f062` | Keep-or-replace decision: INFORM1 / TASK10 |
 | `src/client/refresh/gl3/glad/include/glad/glad.h` | glad OpenGL loader generator (glad 0.1.36, generated 2023-05-14) | 0.1.36 | glad terms, see `LICENSE` ("The glad source code") | `d1821b801c6cfdaf4e043ac8d741276d90146bb606fe59a9f3b4e79cffdc0637` | Decision: INFORM3 / TASK12 |
 | `src/client/refresh/gl3/glad/include/KHR/khrplatform.h` | Khronos Group (shipped by glad) | not stated | MIT-style (Khronos Group, permission notice in file) | `7b1e01aaa7ad8f6fc34b5c7bdf79ebf5189bb09e2c4d2e79fc5d350623d11e83` | INFORM3 / TASK12 |
@@ -74,7 +74,7 @@ Audited items (small files that stay) first, then the larger vendored files that
 Notes:
 
 - `src/client/input/gyro.c` and `gyro.h` are also reproduced in the top-level `LICENSE`.
-- `src/client/refresh/files/stb_image_resize.h` is decided together with `stb_image.h` under INFORM2 / TASK11.
+- `src/client/refresh/files/stb_image_resize.h` stays (TASK11): it is a resampler, not a parser of untrusted bytes, and replacing it would change the pixels `ref_gl1` uploads.
 
 ## Removed from the tree
 
@@ -82,5 +82,6 @@ Notes:
 |-------------------|------------|------|------------------------|
 | `src/common/unzip/` (minizip 1.1 + miniz) | TASK8 | 2026-10-18 | git history: the TASK8 removal commit; hashes were listed in this file before that commit |
 | `src/client/vid/header/stb_image_write.h` (v1.16) | TASK9 | 2026-11-12 | git history; screenshots are written by a native TGA writer in `src/client/vid/vid.c` |
+| `src/client/refresh/files/stb_image.h` (v2.30, sha256 `3b0ea6220d9645445721432b37e76d0c438eee0590f5bac2aa1b739d51b944b4`) | TASK11 | 2026-11-14 | git history; ImageIO decodes PNG, JPEG and TGA on Apple platforms (`src/client/refresh/files/imgdecode.c`, decision 0010) |
 | `src/client/sound/openal.c`, `qal.c`, `header/qal.h` | TASK4 | 2026-10-18 | git history |
 | `src/client/curl/` | TASK3 | 2026-10-18 | git history (in flight) |

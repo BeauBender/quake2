@@ -190,3 +190,14 @@ Retexturing packs can be installed by placing the pak files in
 the *baseq2* directory. Archives distributed as `.pk3` or zip files must
 be extracted into the game directory as loose files, or repacked as
 `.pak`, because this fork loads only `.pak` archives.
+
+A replacement is a `.tga`, `.png` or `.jpg` file beside the original
+texture's `.wal` or `.pcx`, looked for in that order, and it is used
+when it is at least as large as the original. The formats and the order
+are unchanged; the files are decoded by the system's ImageIO on Apple
+platforms. A file must hold the type its extension names (a PNG named
+`.tga` is refused with a message, as are other image types such as GIF),
+and no side may be larger than 16384 pixels. On platforms other than
+macOS, iOS, iPadOS, tvOS and visionOS there is no decoder for these
+formats: replacements are not loaded there, and the stock skies are drawn
+from their `.pcx` faces.

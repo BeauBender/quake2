@@ -66,13 +66,13 @@ those numbers.
 | Default 2D scale: the integer `min(width / 640, height / 240)`, at least 1 | `SCR_GetDefaultScale` in [`cl_screen.c`](../../src/client/cl_screen.c) |
 | The console background is stretched to the window | [`cl_console.c`](../../src/client/cl_console.c) |
 | Only `conchars` and the crosshairs are unfiltered by default; other 2D pictures are bilinear | `r_nolerp_list` in [`rm_main.c`](../../src/client/refresh/metal/rm_main.c) |
-| `ref_metal` dropped `r_scale8bittextures` and refuses MSAA | [`ref-metal-native.md`](ref-metal-native.md) section 7; `scale2x`, `scale3x` in [`stb.c`](../../src/client/refresh/files/stb.c); [`gl1_image.c`](../../src/client/refresh/gl1/gl1_image.c) |
+| `ref_metal` dropped `r_scale8bittextures` and refuses MSAA | [`ref-metal-native.md`](ref-metal-native.md) section 7; `scale2x`, `scale3x` in [`image.c`](../../src/client/refresh/files/image.c); [`gl1_image.c`](../../src/client/refresh/gl1/gl1_image.c) |
 | Anisotropy and trilinear filtering exist (defaults: `r_anisotropic 0`, `GL_LINEAR_MIPMAP_NEAREST`) | [`rmb_resource.m`](../../src/client/refresh/metal/rmb_resource.m), [`videomenu.c`](../../src/client/menu/videomenu.c) |
 | Lightmaps are 128x128 slices of an array texture, sampled bilinearly | [`ref-metal-native.md`](ref-metal-native.md) section 5 |
 | Particle size is scaled by `height / 480`, then clamped at 40 pixels | `R_DrawParticles` in [`gl1_main.c`](../../src/client/refresh/gl1/gl1_main.c), [`gl1_misc.c`](../../src/client/refresh/gl1/gl1_misc.c), the shim's [`mgl_draw.c`](../../src/client/refresh/gl1/metal/mgl_draw.c) |
 | The 3D pass renders into an offscreen colour and depth-stencil target, blitted to one of three drawables | [`rmb_encode.m`](../../src/client/refresh/metal/rmb_encode.m), [`rmb_device.m`](../../src/client/refresh/metal/rmb_device.m) |
 | The layer's colour space is never set (nil: no colour matching) | `rmb_attach` in [`rmb_device.m`](../../src/client/refresh/metal/rmb_device.m); [Apple](https://developer.apple.com/documentation/quartzcore/cametallayer/colorspace) |
-| High-colour replacements (`.tga`, `.png`, `.jpg` beside a `.wal` or `.pcx`) load when at least as large, keeping the original's logical size; the stock skies load as TGA through the same decoder | `LoadHiColorImage`, `GetSkyImage` in [`stb.c`](../../src/client/refresh/files/stb.c) |
+| High-colour replacements (`.tga`, `.png`, `.jpg` beside a `.wal` or `.pcx`) load when at least as large, keeping the original's logical size; the stock skies load as TGA through the same decoder | `LoadHiColorImage`, `GetSkyImage` in [`image.c`](../../src/client/refresh/files/image.c) |
 | The model loaders read MD2 and SP2 only | [`models.c`](../../src/client/refresh/files/models.c) |
 | `ref_metal` ran at 237 to 318 fps at 640x480 on the M6, about 3 to 4 ms a frame whatever the size, not yet diagnosed | FIX51 (#238) |
 
@@ -144,16 +144,22 @@ existing pin is unchanged. One card, about 300 lines. Depends on N10
 measure at native size. Priority 1: every other item is invisible without
 it.
 
-### P2. Decode high-colour images with ImageIO (filed as TASK11)
+### P2. Decode high-colour images with ImageIO (built, TASK11)
 
 PNG, JPEG and TGA are decoded by ImageIO on Apple platforms and the
 vendored `stb_image` is removed ([decision 0010](../decisions/0010-imageio-decoder.md)),
 so texture packs, P6's textures and the stock TGA skies keep loading.
-Where: [`stb.c`](../../src/client/refresh/files/stb.c) and
+Where: `stb.c` (now [`image.c`](../../src/client/refresh/files/image.c)) and
 [`cl_image.c`](../../src/client/cl_image.c); a fixed list of accepted
 types, the existing size bounds, host tests with generated files. One card,
 about 500 lines, tier H. Depends on N10 (TASK93) and this plan's card
 (TASK115). Priority 2: it decides whether any texture work is possible.
+
+Built by TASK11: the decoder is
+[`imgdecode.c`](../../src/client/refresh/files/imgdecode.c), host-tested
+by [`check-image-decoder.sh`](../../tests/check-image-decoder.sh);
+`stb_image_resize.h` stays, because `ref_gl1`'s texture upload resamples
+with it.
 
 ### P3. The re-release MD5 models, from the player's own copy
 

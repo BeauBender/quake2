@@ -26,7 +26,7 @@ Work cards:
 - TASK8 — Remove minizip and miniz (vendored)
 - TASK9 — Remove stb_image_write, native TGA screenshots (vendored) — depends on TASK8
 - TASK10 — Remove stb_vorbis, WAV music (vendored) — depends on INFORM1
-- TASK11 — Remove stb_image and stb_image_resize (vendored) — depends on INFORM2
+- TASK11 — Remove stb_image and stb_image_resize (vendored) — depends on INFORM2; redirected by decision 0010: ImageIO decodes, `stb_image.h` removed, `stb_image_resize.h` kept
 - TASK12 — Remove GL3 renderer (vendored) — depends on INFORM3, TASK5
 - TASK13 — Consolidate on SDL3 (externals)
 - TASK14 — Vendor SDL3 at a pinned tag, static link (externals) — depends on INFORM4, TASK13
@@ -84,7 +84,7 @@ Principles, in priority order:
 | minizip + miniz (pk3/zip packs, PNG screenshot deflate) | `src/common/unzip/` | REMOVE; `.pak` only | High: owner endorsed; compiled into q2ded too | TASK |
 | stb_image_write (png/jpg/tga/bmp screenshots) | `client/vid/header/stb_image_write.h`, `vid.c` | REMOVE; native TGA writer (~40 lines) | High | TASK (after miniz) |
 | stb_vorbis (OGG music) | `client/sound/header/stb_vorbis.h`, `ogg.c` | REMOVE; music via WAV tracks or none | Medium: feature loss the owner may want | INFORM, then TASK |
-| stb_image + stb_image_resize (PNG/JPG/TGA textures, hi-res packs, texture rescale) | `refresh/files/stb*.h`, `stb.c`, `cl_image.c` | REMOVE; PCX/WAL native loaders remain; native TGA loader only if stock assets need it; nearest-neighbour resize | Medium: loses hi-res texture packs | INFORM, then TASK |
+| stb_image + stb_image_resize (PNG/JPG/TGA textures, hi-res packs, texture rescale) | `refresh/files/stb_image_resize.h`, `image.c` (was `stb.c`), `imgdecode.c`, `cl_image.c` | Done (TASK11, [decision 0010](../decisions/0010-imageio-decoder.md), which redirected INFORM2): `stb_image.h` REMOVED; ImageIO decodes PNG, JPEG and TGA on Apple platforms, only those three types and only the extension's, with the size bounded before decoding; `stb_image_resize.h` KEPT (`ResizeSTB`: `ref_gl1`'s texture upload and `ref_soft`'s replacements resample with it, so replacing it would change pixels). No decoder off Apple platforms | Hi-res packs and the stock TGA skies kept on Apple platforms | Done |
 | GL3 renderer + glad, HandmadeMath, DG_dynarr | `refresh/gl3/` | REMOVE; `gl1` becomes default until a Metal renderer exists | Medium: gl3 is today's default and best-looking renderer | INFORM, then TASK |
 | SDL2 code paths (parallel to SDL3) | `input/sdl2.c`, `vid/glimp_sdl2.c`, `WITH_SDL3` switch | REMOVE; SDL3 only | High: near-duplicate files, halves the glue to audit | TASK |
 | SDL3 itself | system library | KEEP, unavoidable. Provenance decision: vendor source at a pinned tag with recorded hash and build statically, versus Homebrew | INFORM, then TASK |
