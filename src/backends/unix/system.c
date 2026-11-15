@@ -512,10 +512,12 @@ Sys_FindClose(void)
 void
 Sys_UnloadGame(void)
 {
+#ifndef STATIC_MODULES
 	if (game_library)
 	{
 		dlclose(game_library);
 	}
+#endif
 
 	game_library = NULL;
 }
@@ -806,6 +808,7 @@ Sys_GetProcAddress(void *handle, const char *sym)
 	return dlsym(handle, sym);
 }
 
+#ifndef STATIC_MODULES
 void
 Sys_FreeLibrary(void *handle)
 {
@@ -856,6 +859,7 @@ Sys_LoadLibrary(const char *path, const char *sym, void **handle)
 
 	return entry;
 }
+#endif /* !STATIC_MODULES: no module is ever opened */
 
 /* ================================================================ */
 

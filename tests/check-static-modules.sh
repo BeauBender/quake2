@@ -15,6 +15,14 @@
 #   (b) a helper every module carries (_Q_strlcpy, from shared.c) is a
 #       local definition in it, and is not left undefined, so it binds
 #       to the module's own copy.
+# It also compiles the two client objects that hold the loader seats
+# (src/backends/unix/system.o, src/client/vid/vid.o) in static mode and
+# checks them with nm:
+#   (h) system.o leaves _GetGameAPI undefined (it calls the linked entry
+#       point) and vid.o leaves _GetRefAPI undefined, so a seat that
+#       returns NULL or skips the call fails here;
+#   (i) neither defines or references _Sys_LoadLibrary: the module
+#       loader is compiled out (not _dlopen, which SDL3 may use itself).
 # --full (CI, macOS job): additionally builds the whole client
 # executable ("make STATIC_MODULES=1 client", which links SDL and takes
 # minutes cold) and checks it:
@@ -87,8 +95,8 @@ if ! make -j"$jobs" QUIET=1 STATIC_MODULES=1 STATIC_RENDERER=$renderer STATIC_RO
 fi
 elapsed=$(( $(date +%s) - start ))
 
-game=$root/obj/static/game.o
-ref=$root/obj/static/ref_$renderer.o
+game=$root/obj-$renderer/static/game.o
+ref=$root/obj-$renderer/static/ref_$renderer.o
 for f in "$game" "$ref"; do
 	if [ ! -s "$f" ]; then
 		echo "check-static-modules: $f was not produced"
@@ -122,6 +130,26 @@ check_module() # <object> <entry point>
 check_module "$game" _GetGameAPI
 check_module "$ref" _GetRefAPI
 
+# the loader seats, from the client objects compiled in static mode
+check_seat() # <object> <entry point it must call>
+{
+	obj=$1
+	entry=$2
+	if [ ! -s "$obj" ]; then
+		echo "check-static-modules: $obj was not produced"
+		exit 1
+	fi
+	if ! undefined "$obj" | grep -x "$entry" >/dev/null; then
+		bad "$obj does not reference $entry: the loader seat does not call the linked entry point"
+	fi
+	if nm -a "$obj" | awk '$NF == "_Sys_LoadLibrary" { f = 1 } END { exit !f }'; then
+		bad "$obj still defines or references _Sys_LoadLibrary"
+	fi
+}
+cobj=$root/obj-$renderer/client/src
+check_seat "$cobj/backends/unix/system.o" _GetGameAPI
+check_seat "$cobj/client/vid/vid.o" _GetRefAPI
+
 if [ "$full" = 1 ]; then
 	exe=$root/bin/quake2
 	if [ ! -x "$exe" ]; then
@@ -151,13 +179,21 @@ if [ "$full" = 1 ]; then
 		bad "global symbols defined twice in the executable: $dups"
 	fi
 
+	# the seats, on the objects this executable was linked from
+	check_seat "$cobj/backends/unix/system.o" _GetGameAPI
+	check_seat "$cobj/client/vid/vid.o" _GetRefAPI
+	# no module loader in the executable (not _dlopen: SDL3 may use it)
+	if nm -a "$exe" | awk '$NF == "_Sys_LoadLibrary" { f = 1 } END { exit !f }'; then
+		bad "_Sys_LoadLibrary is in the executable"
+	fi
+
 	# the names the dynamic loaders look for, as strings
 	if strings -a "$exe" | grep -E '^(GetGameAPI|GetRefAPI|game\.dylib|game\.so)$' >/dev/null; then
 		bad "the executable still carries a loader's module name (GetGameAPI, GetRefAPI or game.dylib)"
 	fi
 
 	# every global the client's own objects define, against what the modules leave undefined
-	find "$root/obj/client" -name '*.o' | sort > "$tmp/client.list"
+	find "$root/obj-$renderer/client" -name '*.o' | sort > "$tmp/client.list"
 	: > "$tmp/clientdefs"
 	while read -r o; do
 		defined "$o" >> "$tmp/clientdefs"

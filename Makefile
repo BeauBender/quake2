@@ -47,7 +47,7 @@
 #   The renderer linked in by STATIC_MODULES=1: soft (default), gl1
 #   or metal.
 # STATIC_ROOT
-#   Where a STATIC_MODULES=1 build writes its objects (STATIC_ROOT/obj)
+#   Where a STATIC_MODULES=1 build writes its objects (STATIC_ROOT/obj-<renderer>)
 #   and the executable (STATIC_ROOT/bin). Default build/<debug|release>/
 #   static-<renderer>. Never release/ or debug/.
 # SOURCE_DATE_EPOCH
@@ -481,15 +481,26 @@ ifeq ($(STATIC_MODULES),1)
 ifneq ($(YQ2_OSTYPE), Darwin)
 $(error STATIC_MODULES=1 is for macOS only)
 endif
+ifneq ($(words $(STATIC_RENDERER)),1)
+$(error STATIC_RENDERER must be exactly one of soft, gl1 or metal, not "$(STATIC_RENDERER)")
+endif
 ifeq ($(filter $(STATIC_RENDERER),soft gl1 metal),)
-$(error STATIC_RENDERER must be soft, gl1 or metal, not "$(STATIC_RENDERER)")
+$(error STATIC_RENDERER must be exactly one of soft, gl1 or metal, not "$(STATIC_RENDERER)")
+endif
+# Only the client is built. The recursive "make <bindir>/quake2" of the
+# client target passes the executable as its goal.
+ifneq ($(filter-out client static_modules config clean cleanall %/bin/quake2,$(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)),)
+$(error STATIC_MODULES=1 builds only the client: make STATIC_MODULES=1 client (or static_modules, config, clean), not "$(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)")
 endif
 ifeq ($(WITH_METAL_SHIM)$(STATIC_RENDERER), yesgl1)
 $(error STATIC_MODULES=1 with STATIC_RENDERER=gl1 needs WITH_METAL_SHIM=no)
 endif
 STATIC_ROOT ?= $(BUILDDIR)/static-$(STATIC_RENDERER)
 override BINDIR := $(STATIC_ROOT)/bin
-override BUILDDIR := $(STATIC_ROOT)/obj
+# the renderer is in the object path, so an explicit STATIC_ROOT reused
+# with another renderer never links objects built with the old
+# -DSTATIC_RENDERER_NAME
+override BUILDDIR := $(STATIC_ROOT)/obj-$(STATIC_RENDERER)
 endif
 
 # ----------
@@ -1429,9 +1440,10 @@ endif
 STATIC_REF_OBJ := $(BUILDDIR)/static/ref_$(STATIC_RENDERER).o
 STATIC_LINK_OBJS := $(STATIC_GAME_OBJ) $(STATIC_REF_OBJ)
 
-# Just the two combined objects, without the client or SDL: what
+# The two combined objects and the two client objects that hold the
+# loader seats, without the rest of the client or SDL: what
 # tests/check-static-modules.sh checks in the gate.
-static_modules: $(STATIC_LINK_OBJS)
+static_modules: $(STATIC_LINK_OBJS) $(BUILDDIR)/client/src/backends/unix/system.o $(BUILDDIR)/client/src/client/vid/vid.o
 
 # Only the client's own objects see the macros the loaders check.
 $(BUILDDIR)/client/%.o : CFLAGS += -DSTATIC_MODULES -DSTATIC_RENDERER_NAME=\"$(STATIC_RENDERER)\"
@@ -1457,7 +1469,8 @@ $(BINDIR)/yquake2.exe : $(CLIENT_OBJS) icon
 $(BINDIR)/quake2.exe : src/win-wrapper/wrapper.c icon
 	$(Q)$(CC) -Wall -mwindows $(BUILDROOT)/icon/icon.res src/win-wrapper/wrapper.c -o $@
 else ifeq ($(YQ2_OSTYPE), Darwin)
-$(BINDIR)/quake2 : $(CLIENT_OBJS) $(STATIC_LINK_OBJS) $(SDL3_LIB)
+$(BINDIR)/quake2 : $(CLIENT_OBJS) $(SDL3_LIB)
+$(BINDIR)/quake2 : $(STATIC_LINK_OBJS)
 	@echo "===> LD $@"
 	${Q}$(CC) $(LDFLAGS) $(CLIENT_OBJS) $(STATIC_LINK_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(STATIC_LDLIBS) $(SDLLDFLAGS) -o $@
 else

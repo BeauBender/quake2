@@ -765,13 +765,13 @@ VID_LoadRenderer(void)
 #ifdef STATIC_MODULES
 	snprintf(reflib_name, sizeof(reflib_name), "ref_%s (linked in)", STATIC_RENDERER_NAME);
 
-	/* Only the linked renderer exists in this build. */
+	/* Only the linked renderer exists in this build. A different
+	   vid_renderer is not changed: it is archived, and the dynamic
+	   build shares the config. */
 	if (!VID_HasRenderer(vid_renderer->string))
 	{
 		Com_Printf("Renderer %s is not in this build, only %s is linked in.\n",
 				vid_renderer->string, STATIC_RENDERER_NAME);
-
-		return false;
 	}
 	Com_Printf("Using the linked-in renderer: %s\n", reflib_name);
 #else
@@ -827,7 +827,11 @@ VID_LoadRenderer(void)
 
 	// Declare the refresher as active.
 	ref_active = true;
+#ifdef STATIC_MODULES
+	Q_strlcpy(vid_loaded_renderer, STATIC_RENDERER_NAME, sizeof(vid_loaded_renderer));
+#else
 	Q_strlcpy(vid_loaded_renderer, vid_renderer->string, sizeof(vid_loaded_renderer));
+#endif
 
 	// Let's check if we've got a compatible renderer.
 	if (re.api_version != API_VERSION)
@@ -937,6 +941,12 @@ VID_CheckChanges(void)
 		while (!VID_LoadRenderer())
 		{
 			int next_test = 0;
+
+#ifdef STATIC_MODULES
+			/* one renderer, no fallback: never write vid_renderer */
+			Com_Error(ERR_FATAL, "No usable renderer found!\n");
+			return;
+#endif
 
 			/* Pin harness: frames filed under one renderer's name must
 			   come from that renderer, so never fall back while capturing. */
