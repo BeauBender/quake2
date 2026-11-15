@@ -1533,6 +1533,45 @@ weapon) and `particles` (everything on: particles, dynamic lights and the
 screen blend over the world and entities), as their scenario files
 describe them.
 
+**The screen blend.** `world` and `models` set `cl_blend 0`
+(`scripts/pins/scenarios/world.cfg:12`, `models.cfg:16`; `particles.cfg:16`
+sets `cl_blend 1`), and that does not turn the blend off: `V_RenderView`
+clears only its colour, not the alpha in `blend[3]`.
+
+```
+src/client/cl_view.c:569:		if (!cl_add_blend->value)
+src/client/cl_view.c:571:			VectorClear(cl.refdef.blend);
+src/common/header/shared.h:258:#define VectorClear(a) (a[0] = a[1] = a[2] = 0)
+```
+
+`ref_gl1` draws the blend over the 3D frame whenever that alpha is not 0
+(`gl_polyblend` is 1 in every trace's cvars), with the colour scaled by
+the gamma and the alpha as it is:
+
+```
+src/client/refresh/gl1/gl1_main.c:600:	if (!v_blend[3])
+src/client/refresh/gl1/gl1_main.c:615:	glColor4f( v_blend[0], v_blend[1], v_blend[2], v_blend[3] );
+src/client/refresh/gl1/gl1_main.c:713:		v_blend[i] = r_newrefdef.blend[i] * gl_state.sw_gamma;
+src/client/refresh/gl1/gl1_main.c:715:	v_blend[3] = r_newrefdef.blend[3];
+```
+
+So in `world` and `models` it draws a black overlay at the alpha the frame
+carries. `frametimes.tsv`, whose `blend_a` column is that alpha from each
+trace's refdef, gives `blend_a 0.247` on frame 4 and 0.000 on frames 0 to
+3, 5 and 6, in every run of the three scenes (9 of `world`, 9 of `models`,
+10 of `particles`; the "Blend alpha" column of the table below). The
+reader of the sprite counts (Regions, below) also prints the colour: on
+frame 4 it is 0.000, 0.000, 0.000 in every `world` and `models` run, and
+0.847, 0.698, 0.298 in every `particles` run, where the blend is on. So
+frame 4 carries an overlay in all three scenes, a black one in `world` and
+`models`. The `particles` colour is, to the demo's byte precision, that
+of the pickup flash (`src/game/player/view.c:621`, `SV_AddBlend(0.85,
+0.7, 0.3, ent->client->bonus_alpha,`); that is an inference from the
+colour. The `hud2d` scenario's comment states the same behaviour
+(`scripts/pins/scenarios/hud2d.cfg:15`, "cl_blend 0 clears the colour of
+the screen blend but not its alpha, so a pickup still darkens") and that
+scenario sets `gl_polyblend 0`; these three do not.
+
 The frame index and the demo time of each frame come from each run's
 trace: for every `REC_CAPTURE` record, the refdef of the `REC_RENDERFRAME`
 before it (`time`, `vieworg`, `viewangles`), read by a short reader of the
@@ -1645,8 +1684,18 @@ per mask (the edge, interior and particle counts add up to the frame):
 | models 6 | 79.400 | 25,312 (0.172 %) | 14,720,288 (99.828 %) | 0 | 178,420 (1.210 %) |
 
 `world` frame 4 has no pixel above the threshold (above 8, 0.108 % of its
-pixels; it is the frame whose refdef has a blend alpha of 0.247), so its
-edge cells are empty and the edge region has 20 frames. The particle
+pixels), so its edge cells are empty and the edge region has 20 frames.
+It is a frame with the black overlay at alpha 0.247 ("The screen blend",
+above). An inference, not tested: with the blend function `ref_gl1` sets
+by default and restores after its lightmap pass
+(`src/client/refresh/gl1/gl1_misc.c:207` and `gl1_surf.c:383`,
+`glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);`), the overlay scales
+every channel of the 3D frame by 1 - 0.247 = 0.753, and every Sobel
+magnitude about as much, so a step of 64 without it is about 48 with it;
+0.0006 % of the frame's pixels (under a hundred) are above 48 (the Sobel
+output kept with the frames). So the overlay may be why the frame has no
+edge pixel rather than a few. Frame 4 of `models` and of `particles`, under
+the same alpha, has the fewest edge pixels of its scene (2,209 and 2,219). The particle
 region has 4 frames: frames 2 and 4 of `particles` hold 40 and 17
 particles in the refdef, but no captured pixel changes with them.
 
