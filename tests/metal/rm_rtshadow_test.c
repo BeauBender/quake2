@@ -167,7 +167,7 @@ static void
 test_falloff_stock(void)
 {
 	static float bl[LUX * LUX * 3];
-	int c, k, cases = 0, lit = 0, wrong = 0, reach_wrong = 0;
+	int c, cases = 0, lit = 0, wrong = 0, reach_wrong = 0;
 
 	for (c = 0; c < 600; c++)
 	{
@@ -556,13 +556,19 @@ test_light(void)
 		l.a = 1;
 		o = mtl_rts_light(l, tr, tg, tb);
 
-		/* the store truncates where the resolve keeps the fraction: under one level */
+		/*
+		 * the store truncates where the resolve keeps the fraction: under one
+		 * level; where it scales a channel down it scales the truncated
+		 * channel by the truncated brightest and truncates again: under two
+		 */
 		for (i = 0; i < 3; i++)
 		{
 			const float got = ((i == 0) ? o.r : (i == 1) ? o.g : o.b) * 255.0f;
 			const int d = (int)fabsf(got - dest[i]);
+			const float most = (bl[0] > bl[1]) ? ((bl[0] > bl[2]) ? bl[0] : bl[2]) : ((bl[1] > bl[2]) ? bl[1] : bl[2]);
+			const float tol = (most >= 256.0f) ? 2.0f : 1.0f;
 
-			if (!(fabsf(got - dest[i]) < 1.0f + 1e-3f))
+			if (!(fabsf(got - dest[i]) < tol + 1e-3f))
 			{
 				worst = (d > worst) ? d : worst;
 				worst = worst ? worst : 1;
@@ -602,17 +608,13 @@ static void
 test_unproject(void)
 {
 	float proj[16], world[16], mvp[16];
-	const float eye[3] = { 100, -50, 30 };
+	const float eye[3] = { 100, -50, 30 }, angles[3] = { 0, 20, 0 };
 	rm_viewport_t vp = { 40, 20, 320, 240, 0, 1 };
 	rm_rts_view_t v;
 	int c, worst_ok = 1, tested = 0;
 
 	CHECK(mtl_mat_frustum(proj, -4 * 1.333333, 4 * 1.333333, -4, 4, 4, 4096));
-	mtl_mat_identity(world);
-	mtl_mat_rotate(world, -90, 1, 0, 0);    /* gl1's R_SetupGL: x forward, z up */
-	mtl_mat_rotate(world, 90, 0, 0, 1);
-	mtl_mat_rotate(world, -20, 0, 0, 1);    /* a yaw */
-	mtl_mat_translate(world, -eye[0], -eye[1], -eye[2]);
+	rm_view_matrix(world, angles, eye);     /* gl1's R_SetupGL: x forward, z up, a yaw of 20 */
 	mtl_mat_mul(mvp, proj, world);
 
 	CHECK(rm_rts_view(proj, world, &vp, eye, 4, &v));
@@ -665,6 +667,11 @@ test_unproject(void)
 
 	CHECK(worst_ok);
 	CHECK(tested > 300);
+
+	if (tested <= 300)
+	{
+		printf("unproject: %d points in view\n", tested);
+	}
 }
 
 static void
