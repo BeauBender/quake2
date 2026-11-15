@@ -381,3 +381,21 @@ rm_fragment_particle(rm_varying3d in [[stage_in]])
 
 	return c;
 }
+
+/*
+ * FIX53: the alpha pass of a layer that is not opaque. One triangle over
+ * the whole target, alpha 1 (the pipeline masks the colour channels).
+ */
+vertex float4
+rm_vertex_alpha(uint vid [[vertex_id]])
+{
+	float2 p = float2(float((vid << 1) & 2), float(vid & 2));
+
+	return float4(p * 2.0f - 1.0f, 0.0f, 1.0f);
+}
+
+fragment float4
+rm_fragment_alpha()
+{
+	return float4(0.0f, 0.0f, 0.0f, 1.0f);
+}

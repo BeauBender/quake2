@@ -33,6 +33,7 @@
 #include "header/local.h"
 #include "header/rm_rt.h"
 #include "header/rm_rtscene.h"
+#include "header/rm_rtshadow.h"
 
 #define RT_MAX_AMODELS 512   /* rm_model.c's MAX_MOD_KNOWN */
 #define RT_TIMES 8192        /* the frames whose GPU times the summary spreads */
@@ -47,6 +48,7 @@ static int rt_device;           /* rmb_caps_t.raytracing */
 static int rt_opened;           /* rmb_rt_open succeeded */
 static int rt_told;             /* the no-ray-tracing line was printed */
 static int rt_refused;          /* rmb_rt_open failed in this context: not tried again */
+static int rt_scene_ready;      /* this frame's instance structure was built (RT3 traces it) */
 
 /* the map the structures were built from (or refused for: rt_map_ok 0) */
 static const model_t *rt_world_mod;
@@ -82,6 +84,8 @@ RM_RT_Init(const rmb_caps_t *caps)
 	rt_map_ok = 0;
 	memset(rt_amodels, 0, sizeof(rt_amodels));
 	rt_ntimes = rt_frames = rt_busy_aliases = rt_busy_tris = 0;
+	rt_scene_ready = 0;
+	RM_RTS_Init(caps);   /* r_rt_shadows (RT3, TASK55) */
 }
 
 /* the summary of the frames since the map's structures were built, when there were any; the counts start again */
@@ -110,6 +114,7 @@ static void
 RM_RT_FreeAll(void)
 {
 	RM_RT_Summary();
+	RM_RTS_Shutdown();   /* the shadows' objects first: they use the structures */
 
 	if (rt_opened)
 	{
@@ -117,6 +122,7 @@ RM_RT_FreeAll(void)
 	}
 
 	rt_opened = 0;
+	rt_scene_ready = 0;
 	rt_world_mod = NULL;
 	rt_world = NULL;
 	rt_map_ok = 0;
@@ -181,7 +187,13 @@ RM_RT_ModelFree(const model_t *mod)
 static int
 RM_RT_Wanted(void)
 {
-	return r_rt_stats && rm_rt_wanted(r_rt_stats->value, rt_device);
+	return (r_rt_stats && rm_rt_wanted(r_rt_stats->value, rt_device)) || RM_RTS_Wanted();
+}
+
+int
+RM_RT_SceneReady(void)
+{
+	return rt_scene_ready;
 }
 
 static int
@@ -289,6 +301,7 @@ RM_RT_BuildMap(void)
 
 	free(mat);
 	rt_map_ok = 1;
+	RM_RTS_MapBuilt(wm);   /* the last map's shadow tables go; this map's are built when the shadows are on (RT3) */
 	rt_ntimes = rt_frames = rt_busy_aliases = rt_busy_tris = 0;
 
 	{
@@ -356,9 +369,13 @@ RM_RT_AliasModel(const model_t *mod)
 	return mid;
 }
 
-/* gl1's R_DrawAliasModel and R_DrawAliasFrameLerp up to the lerp: the frames as the draw bounds them, and the lerp's factors */
+/*
+ * gl1's R_DrawAliasModel and R_DrawAliasFrameLerp up to the lerp: the
+ * frames as the draw bounds them, and the lerp's factors; and the box of
+ * those frames (rm_rts_alias_box) into mins and maxs.
+ */
 static void
-RM_RT_Lerp(const entity_t *e, int mid, rmb_rt_lerp_t *l)
+RM_RT_Lerp(const entity_t *e, int mid, rmb_rt_lerp_t *l, float *mins, float *maxs)
 {
 	const dmdl_t *h = (const dmdl_t *)e->model->extradata;
 	const daliasframe_t *frame, *oldframe;
@@ -382,6 +399,45 @@ RM_RT_Lerp(const entity_t *e, int mid, rmb_rt_lerp_t *l)
 	l->mid = mid;
 	l->frame = rm_rt_frame_vertex(f, h->num_frames, h->framesize, RM_MD2_FRAME_HEADER);
 	l->oldframe = rm_rt_frame_vertex(of, h->num_frames, h->framesize, RM_MD2_FRAME_HEADER);
+	rm_rts_alias_box(frame->scale, frame->translate, oldframe->scale, oldframe->translate, mins, maxs);
+}
+
+/* the lights an alias instance of this frame carries, bit i light i (RM_RT_Carried) */
+static unsigned rt_carried;
+
+/*
+ * The frame's dynamic lights as R_TakeDlights takes them for the view, in
+ * its order and with its checks (rm_dlight_ok), at most the shadow pass's
+ * MTL_RTS_MAX_LIGHTS: light i here is light i of the kernel. Their
+ * origins, for rm_rts_carried.
+ */
+static int
+RM_RT_Lights(const refdef_t *fd, rm_rts_light_t *out)
+{
+	int i, k = 0, n = fd->dlights ? rm_dlight_count(fd->num_dlights) : 0;
+
+	for (i = 0; (i < n) && (k < MTL_RTS_MAX_LIGHTS); i++)
+	{
+		const dlight_t *dl = &fd->dlights[i];
+
+		if (!rm_dlight_ok(dl->origin, dl->color, dl->intensity))
+		{
+			continue;
+		}
+
+		memset(&out[k], 0, sizeof(out[k]));
+		VectorCopy(dl->origin, out[k].origin);
+		out[k].origin[3] = dl->intensity;
+		k++;
+	}
+
+	return k;
+}
+
+unsigned
+RM_RT_Carried(void)
+{
+	return rt_carried;
 }
 
 void
@@ -391,9 +447,13 @@ RM_RT_Frame(const refdef_t *fd)
 	static rm_rt_inst_t inst[RM_RT_MAX_INSTANCES];
 	static rmb_rt_lerp_t lerps[RM_RT_MAX_INSTANCES];
 	rm_rt_frame_stats_t fs;
+	static rm_rts_light_t lights[MTL_RTS_MAX_LIGHTS];
 	rm_rt_excl_t excl;
 	double ta[RMB_FRAMES_IN_FLIGHT], ti[RMB_FRAMES_IN_FLIGHT];
-	int i, n, ne, nl = 0, k, gun;
+	int i, n, ne, nl = 0, k, gun, nlights = 0;
+
+	rt_scene_ready = 0;
+	rt_carried = 0;
 
 	/* the device check (and the off state): nothing below runs without ray tracing or with every setting at its default */
 	if (!RM_RT_Wanted())
@@ -475,11 +535,21 @@ RM_RT_Frame(const refdef_t *fd)
 
 	n = rm_rt_instances(ents, ne, 1, gun, gl_lefthand->value, inst, RM_RT_MAX_INSTANCES, &excl);
 
+	/* RT3's shadows: the lights each alias instance carries, which its shadow rays pass (rm_rts_carried) */
+	if (RM_RTS_Wanted())
+	{
+		nlights = RM_RT_Lights(fd, lights);
+	}
+
 	for (i = 0; i < n; i++)
 	{
 		if (inst[i].kind == RM_RT_INST_ALIAS)
 		{
-			RM_RT_Lerp(&fd->entities[inst[i].ent], inst[i].model, &lerps[nl++]);
+			float mins[3], maxs[3];
+
+			RM_RT_Lerp(&fd->entities[inst[i].ent], inst[i].model, &lerps[nl++], mins, maxs);
+			inst[i].carry = rm_rts_carried(inst[i].xform, mins, maxs, lights, nlights);
+			rt_carried |= inst[i].carry;
 		}
 	}
 
@@ -487,10 +557,12 @@ RM_RT_Frame(const refdef_t *fd)
 	fs.excl = excl;
 	fs.alias_ms = fs.ias_ms = -1;
 
-	if (!rmb_rt_frame(inst, n, lerps, nl, &fs))
+	if (!rmb_rt_frame(inst, n, lerps, nl, RM_RTS_Wanted(), &fs))
 	{
 		return;
 	}
+
+	rt_scene_ready = 1;
 
 	k = rmb_rt_times(ta, ti, RMB_FRAMES_IN_FLIGHT);
 

@@ -61,6 +61,7 @@ void rmb_encode_split(void);
 static id<MTLLibrary> library;
 static id<MTLRenderPipelineState> pipes[RM_PIPE_2D_COUNT];
 static id<MTLRenderPipelineState> pipes3d[RM_PIPE_3D_COUNT];
+static id<MTLRenderPipelineState> alpha_pipe;   /* FIX53: alpha 1 over a target, colour masked; nil if it did not build */
 static id<MTLDepthStencilState> depth_states[RMB_DS_COUNT];
 static id<MTLBuffer> buffers[RMB_MAX_BUFFERS];      /* the static (retained) buffers, private */
 static id<MTLSamplerState> samplers[RMB_SMP_CLASSES * 2];
@@ -98,6 +99,25 @@ rmb_err(char *err, size_t errlen, NSString *what, NSError *e)
 {
 	snprintf(err, errlen, "%s%s%s", what.UTF8String, e ? ": " : "",
 			e ? e.localizedDescription.UTF8String : "");
+}
+
+/* FIX53: one triangle writing alpha 1 and nothing else, for rmb_force_alpha (rmb_encode.m) */
+static id<MTLRenderPipelineState>
+rmb_new_pipe_alpha(NSError **e)
+{
+	MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+
+	d.vertexFunction = [library newFunctionWithName:@"rm_vertex_alpha"];
+	d.fragmentFunction = [library newFunctionWithName:@"rm_fragment_alpha"];
+
+	if (!d.vertexFunction || !d.fragmentFunction)
+	{
+		return nil;
+	}
+
+	d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+	d.colorAttachments[0].writeMask = MTLColorWriteMaskAlpha;
+	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
 }
 
 static id<MTLRenderPipelineState>
@@ -336,6 +356,18 @@ rmb_resources_open(const char *dir, char *err, size_t errlen)
 			rmb_counts.pipelines++;
 		}
 
+		/*
+		 * FIX53: the alpha pass of a layer that is not opaque. Not fatal:
+		 * built once here, never retried, and rmb_frame_end reports a nil
+		 * one once and presents without the pass.
+		 */
+		RMB_SET_STATE(alpha_pipe, rmb_new_pipe_alpha(&e));
+
+		if (alpha_pipe)
+		{
+			rmb_counts.pipelines++;
+		}
+
 		if (!rmb_new_depth_states())
 		{
 			snprintf(err, errlen, "cannot build the depth-stencil states");
@@ -441,6 +473,8 @@ rmb_resources_close(void)
 		{
 			RMB_SET_STATE(pipes3d[i], nil);
 		}
+
+		RMB_SET_STATE(alpha_pipe, nil);
 
 		for (i = 0; i < RMB_DS_COUNT; i++)
 		{
@@ -828,6 +862,12 @@ id<MTLRenderPipelineState>
 rmb_pipe(int i)
 {
 	return (i >= 0 && i < RM_PIPE_2D_COUNT) ? pipes[i] : nil;
+}
+
+id<MTLRenderPipelineState>
+rmb_alpha_pipe(void)
+{
+	return alpha_pipe;
 }
 
 id<MTLSamplerState>
