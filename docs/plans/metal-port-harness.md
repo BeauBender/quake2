@@ -3658,7 +3658,11 @@ worst 0, bad 0. At 2560x1440 (the window opened at that size, frames of 2560x144
 `particles-cap` run against run: 23 frames, 0 failed, worst 0, bad 0. `particles-cap`
 against `particles` at 2560x1440 (`--threshold 0.005 --bad-threshold 0.001`): 19 of
 23 frames identical, 4 differ (frames 5, 8, 12 and 16: worst score 0.000841, bad
-0.007824); the owner does not gate the look. The records have one validation line,
+0.007824); the owner does not gate the look. That last comparison is the one that
+tests the switch: at the default height of 480 the factor is 1, and a run against
+run compares a build with itself, so both also pass without the wiring in
+`rm_effects.c`. Repeat it with `PINS_WIDTH=2560 PINS_HEIGHT=1440 PINS_SEED=1` for
+`particles` and `particles-cap`; the two must differ. The records have one validation line,
 `Metal API Validation Enabled`, and no message.
 
 **Mutants** of `rm_particle_cap` (17 run, each operand of the compound guard and
