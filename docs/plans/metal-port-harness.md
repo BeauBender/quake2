@@ -2606,9 +2606,9 @@ meant to be running, so those rows carry that spread; which round started
 at which load is not recoverable.
 
 **Not measured**, against the card's scope (as written by TASK97; TASK108
-(#259) has since measured every item below except the native-resolution
-number, see "Re-measurement (TASK108)" after the Findings, and what it
-still did not measure is listed there):
+(#259) has since measured every item below, the native-resolution number
+included (5120x2880 fullscreen), see "Re-measurement (TASK108)" after the
+Findings, and what it still did not measure is listed there):
 no native-resolution number (`vid_fullscreen 1` falls back to 960x540 on
 this host and the largest 16:9 windowed size that fits is 1920x1080); the
 `water` harness demo was not run (about 100 frames, too short for a stable
@@ -2662,85 +2662,135 @@ Finding 3 is FIX52 (#239)):
 
 ### Re-measurement (TASK108)
 
-TASK108 (#259) repeats the open cases above on `main` at `462f8d3e`
-(which has FIX52 (#254) at `8065c3ec`, TASK90 (#244) and TASK91 (#258)
-in it). The host, the launch line, the alternation (soft, gl1, gl1-metal,
-metal, then again; five rounds per row) and the `frames, ... fps` log line
-are as above; `ref_gl1` is `GL_RENDERER: Apple M6`, `GL_VERSION: 2.1 Metal -
-91.7`, the Metal-backed `gl1` `Metal shim on Apple M6 (gl1-metal)`,
-`GL_VERSION: 1.4 mgl`, `ref_metal` `Metal device: Apple M6`. Builds:
-`make -j4`, `make ref_metal`, then `make ref_gl1 WITH_METAL_SHIM=yes` into a
-second copy of `release/` (so `ref_gl1` and `gl1-metal` run from two
-directories, not by swapping one dylib). Every row: `Real display mode:
-2560x1440@60.00`, 689 frames (the `water` row 119). Before each run no other
-`quake2` was running (`pgrep -x quake2`); the one-minute load average
-(`uptime`) at each run start is in the last column. The logs and the per-run
+TASK108 (#259) repeats the open cases above on `main` at `462f8d3e` plus
+documentation commits, engine source `7085c8f1` (which has FIX52 (#254) at
+`8065c3ec`, TASK90 (#244) and TASK91 (#258) in it). The host, the launch
+line, the alternation (soft, gl1, gl1-metal, metal, then again; five
+rounds per row) and the `frames, ... fps` log line are as above; `ref_gl1`
+is `GL_RENDERER: Apple M6`, `GL_VERSION: 2.1 Metal - 91.7`, the Metal-backed
+`gl1` `Metal shim on Apple M6 (gl1-metal)`, `GL_VERSION: 1.4 mgl`,
+`ref_metal` `Metal device: Apple M6`. Builds: `make -j4`, `make ref_metal`,
+then `make ref_gl1 WITH_METAL_SHIM=yes` into a second copy of `release/` (so
+`ref_gl1` and `gl1-metal` run from two directories, not by swapping one
+dylib).
+
+**The first batch ran with the screen locked.** The host session's screen
+was locked while the first batch ran (the owner reported it; afterwards
+`ioreg -n Root -d1` printed `CGSSessionScreenIsLocked`, and the lock state
+was not recorded at the time). Its results are not measurements and no
+number from it is used below. What it logged, for the record: all 30 runs
+of each of `ref_soft`, the Metal-backed `gl1` and `ref_metal` read 119.9 to
+121.2 fps at every size from 640x480 to 2560x1440 and on the `water` demo,
+and every `vid_fullscreen 1` request other than the desktop mode failed
+with `Couldn't switch to exclusive fullscreen: CGDisplaySwitchToMode():
+Unknown Error` (seven cases, then `Reverting to windowed r_mode 4
+(640x480).`). The failed switches are locked-session results (FIX57 (#281)
+was filed for them: the switch works with the screen unlocked, below). The
+flat 120 is partly the same: unlocked, the 640x480 and 1280x720 windowed
+rows still read 120 (below), but 1600x900 and 1920x1080 windowed and every
+fullscreen row do not, so only the 640x480, 1280x720 and `water` windowed values of
+that batch agree with an unlocked one.
+
+The runs below were taken with the screen unlocked: `CGSSessionScreenIsLocked`
+read 0 (`ioreg -n Root -d1 | grep -c CGSSessionScreenIsLocked` printed 0)
+immediately before every run, kept in the per-run table beside the load.
+Before each run no other `quake2` was running (`pgrep -x quake2`) and the
+one-minute load average (`uptime`) was below 4; the load range of each row
+is in the table. Every run is a fresh engine in the foreground, killed after
+45 s (the engine does not quit after the demo). The logs and the per-run
 table are kept outside the repository.
 
-**Results** (fps, five runs each, `r_vsync 0`, `timedemo 1`, `+demomap
-demo1.dm2` unless said; "drawable" is the log's `Drawable size:` line):
+**Results** (fps, five runs each, `r_vsync 0` as the last `+set`,
+`timedemo 1`, `+demomap demo1.dm2` unless said, `vid_fullscreen 0` unless
+said; the engine commit is `7085c8f1` for every row, 689 frames a run, `Real
+display mode: 2560x1440@60.00` for every windowed row; "drawable" is the
+log's `Drawable size:` line, in pixels):
 
-| Size and mode | drawable | `ref_soft` | `ref_gl1` | `gl1-metal` | `ref_metal` | Load at start |
-|---|---|---|---|---|---|---|
-| 640x480 windowed | 640x480 | 119.9 to 120.0 | 3008.7 to 3427.9 | 120.2 to 120.2 | 120.0 to 120.0 | 1.54 to 2.67 |
-| 1280x720 windowed | 1280x720 | 120.0 to 120.0 | 2778.2 to 2823.8 | 120.1 to 120.2 | 120.0 to 120.0 | 1.49 to 5.61 |
-| 1600x900 windowed | 1600x900 | 120.0 to 120.0 | 2639.8 to 2982.7 | 120.1 to 120.2 | 120.0 to 120.0 | 1.67 to 3.03 |
-| 1920x1080 windowed | 1920x1080 | 120.0 to 120.0 | 2570.9 to 2745.0 | 120.1 to 120.2 | 120.0 to 120.0 | 1.30 to 2.67 |
-| 2560x1440 `vid_fullscreen 1` | 2560x1440 | 119.9 to 120.0 | 2823.8 to 2870.8 | 120.1 to 120.2 | 120.0 to 120.0 | 1.46 to 3.04 |
-| `water.dm2`, 1280x720 windowed, 119 frames | 1280x720 | 120.0 to 120.1 | 4958.3 to 5950.0 | 120.9 to 121.2 | 120.0 to 120.1 | 1.32 to 4.45 |
+| Size and mode | display mode | drawable | `ref_soft` | `ref_gl1` | `gl1-metal` | `ref_metal` | Load at start (20 runs) | Lock |
+|---|---|---|---|---|---|---|---|---|
+| 640x480 windowed | 2560x1440@60.00 | 640x480 | 119.8 to 120.0 | 2443.3 to 2570.9 | 120.2 to 120.2 | 120.0 to 120.1 | 1.97 to 3.64 | 0 |
+| 1280x720 windowed | 2560x1440@60.00 | 1280x720 | 120.0 to 120.0 | 2166.7 to 2327.7 | 120.1 to 120.2 | 120.0 to 120.1 | 2.32 to 3.69 | 0 |
+| 1600x900 windowed | 2560x1440@60.00 | 1600x900 | 197.7 to 321.2 | 2087.9 to 2194.3 | 67.1 to 96.1 | 62.3 to 75.2 | 1.92 to 3.62 | 0 |
+| 1920x1080 windowed | 2560x1440@60.00 | 1920x1080 | 163.1 to 225.6 | 1808.4 to 1997.1 | 60.1 to 60.1 | 60.0 to 60.0 | 1.72 to 3.75 | 0 |
+| 1920x1080 `vid_fullscreen 1` | 1920x1080@60.00 | 1920x1080 | 279.6 to 284.8 | 2312.1 to 2514.6 | 273.0 to 317.2 | 313.3 to 362.3 | 2.20 to 3.67 | 0 |
+| 5120x2880 `vid_fullscreen 1` | 5120x2880@60.00 | 5120x2880 | 44.3 to 45.0 | 602.8 to 661.9 | 283.7 to 402.0 | 349.0 to 389.5 | 2.61 to 3.92 | 0 |
+| `water.dm2`, 1280x720 windowed, 93 frames | 2560x1440@60.00 | 1280x720 | 120.0 to 120.8 | 3206.9 to 4428.6 | 121.3 to 121.4 | 120.0 to 121.3 | 1.94 to 3.35 | 0 |
 
-**The three `CAMetalLayer` renderers read 120 fps at every size.**
-`ref_soft`, the Metal-backed `gl1` and `ref_metal` give 119.9 to 121.2 in
-all 30 runs of each, from 640x480 to 2560x1440 and on the `water` demo. A
-value that does not move with the pixel count is not a throughput: none of
-these rows measures what the renderer costs. One extra `ref_soft` run at
-1280x720 with `r_vsync 1` read 120.0 too (a single run, load 2.27: a probe,
-not a row). The cause was not found. What the numbers show: it is not the
-60 fps TASK97 got at 1920x1080 (60.0 to 60.1 for all six runs of the same
-three renderers), and the 640x480 and 1280x720 values TASK97 recorded for the
-same renderers (237.2 to 328.1 and 294.3 to 326.2) were above 120, so the
-ceiling is new since those runs. FIX52 changes only `ref_soft`
-(`src/client/refresh/soft/sw_main.c`), and `gl1-metal` and `ref_metal` moved
-from 60.0 to 60.1 to 120.0 to 120.2 at 1920x1080 as well, so FIX52 does not explain the
-move. Candidates, none tested: the display's refresh rate at the time of
-these runs differing from TASK97's (the log says `@60.00` for the current
-mode in both, and `system_profiler` lists the panel as 5120x2880 Retina
-without a refresh rate), or a present path that follows the display link
-whatever `r_vsync` says. Whether FIX52 lifted the `ref_soft` ceiling
-cannot be read from these rows: `ref_soft` now reads the same as the two
-renderers FIX52 did not change. That check is open until the ceiling is
-explained.
+Values in run order (rounds 1 to 5):
 
-`ref_gl1` is not capped. It falls from 3008.7 to 3427.9 fps (640x480) to
-2570.9 to 2745.0 (1920x1080) and reads 2823.8 to 2870.8 at 2560x1440
-fullscreen. TASK97 had 2304.3 to 2600.0 and 1882.5 to 2126.5 at the first
-two sizes, so these are about 30 percent higher on a renderer whose code
-this card did not look at; not explained. TASK97's qualification stands
-(Finding 2: a submit rate, an upper bound, `gl_finish 1` not tried).
+- 640x480: soft 119.9 119.8 120.0 119.9 119.9; gl1 2443.3 2460.7 2460.7
+  2469.5 2570.9; gl1-metal 120.2 in all five; metal 120.1 120.0 120.0
+  120.0 120.0.
+- 1280x720: soft 120.0 in all five; gl1 2281.5 2208.3 2166.7 2327.7
+  2273.9; gl1-metal 120.2 120.2 120.1 120.1 120.1; metal 120.0 120.0
+  120.0 120.0 120.1.
+- 1600x900: soft 197.7 321.2 316.6 319.0 219.5; gl1 2087.9 2194.3 2107.0
+  2094.2 2146.4; gl1-metal 67.1 88.7 73.0 96.1 93.3; metal 66.5 70.2
+  75.2 62.3 74.6.
+- 1920x1080 windowed: soft 163.1 225.6 183.2 206.3 199.3; gl1 1957.4
+  1997.1 1847.2 1963.0 1808.4; gl1-metal 60.1 in all five; metal 60.0 in
+  all five.
+- 1920x1080 fullscreen: soft 283.5 282.6 284.8 279.6 284.2; gl1 2312.1
+  2460.7 2505.5 2514.6 2505.5; gl1-metal 302.6 287.7 273.0 304.3 317.2;
+  metal 314.5 341.9 324.5 313.3 362.3.
+- 5120x2880 fullscreen: soft 44.3 44.6 44.8 45.0 44.9; gl1 649.4 652.5
+  661.9 643.9 602.8; gl1-metal 393.0 313.8 283.7 402.0 396.4; metal 389.5
+  366.5 379.2 349.0 356.6.
+- `water` windowed: soft 120.0 120.8 120.3 120.2 120.2; gl1 3206.9 3875.0
+  4428.6 4043.5 3576.9; gl1-metal 121.4 121.4 121.3 121.4 121.3; metal
+  121.3 120.0 120.2 121.3 120.8.
 
-**`water` spread (Scope 3).** `water.dm2` was made by `scripts/pins.sh
-make-demo water` (it printed `(124 messages, 97 to 124 wanted)`) and plays
-119 frames in the timedemo. `ref_gl1` gave 4958.3, 5173.9, 5173.9, 5173.9
-and 5950.0 fps, range 4958.3 to 5950.0; the log prints `0.0 seconds`. The
-timer counts whole milliseconds (`src/client/cl_network.c`, the timedemo
-end), so the five runs took 24, 23, 23, 23 and 20 ms: a spread of four
-1 ms steps, each 4 to 5 percent of a run, and a `ref_gl1` rate from this
-demo is good to that range and no finer. The 4958.3 is run 3, the one
-started at the highest load (4.45, below); without it the range is 5173.9
-to 5950.0. The three capped renderers gave 120.0 to 121.2; their runs last
-about 1 s, so the 1 ms step is about 0.1 percent of a run. The demo
-is long enough to show the ceiling and too short to say more about
-`ref_gl1` than the range above.
+Runs that started at a one-minute load above 3.5, and what they do to their
+row: 5120x2880 `metal` round 1 (3.71, 389.5) is the row maximum; 5120x2880
+`gl1-metal` rounds 2 (3.92, 313.8) and 5 (3.77, 396.4) and `metal` rounds 3
+(3.52, 379.2) and 5 (3.74, 356.6) lie inside their rows; 1920x1080
+fullscreen `soft` round 3 (3.58, 284.8) is the row maximum and `gl1` round 5
+(3.67, 2505.5) is inside; 1600x900 `gl1-metal` round 4 (3.58, 96.1) is the
+row maximum, round 3 (3.62, 73.0) and round 5 (3.60, 93.3) are inside, and
+`metal` round 2 (3.61, 70.2) and `soft` round 3 (3.54, 316.6) are inside;
+the 1920x1080 windowed `gl1-metal` round 1 (3.75, 60.1), the 640x480
+`gl1-metal` round 5 (3.64, 120.2) and the 1280x720 `gl1-metal` round 5 (3.69,
+120.1, equal to the row minimum, shared with rounds 3 and 4) do not move
+their rows. The one-minute average is a trailing mean. The 5120x2880 loads
+(2.61 to 3.92) are the highest of any row, and the largest `gl1-metal` spread
+(283.7 to 402.0, the minimum from round 3 at 3.41) does not follow them.
 
-**Fullscreen and the native size (Scope 1).** The display lists 21 modes
+**Probes** (one run each, so not rows; `r_vsync 1` as the last `+set`, and
+`+cvarlist r_vsync` in each log, which printed `*    r_vsync "1"`; `lock`
+0 before each):
+
+| Mode | `ref_soft` | `ref_gl1` | `gl1-metal` | `ref_metal` | Load at start |
+|---|---|---|---|---|---|
+| 1920x1080 windowed (round 1) | 60.0 | 60.0 | 60.1 | 60.0 | 2.05 to 2.70 |
+| 1920x1080 windowed (round 2) | 60.0 | 60.0 | 60.1 | 60.0 | 2.02 to 2.53 |
+| 1920x1080 `vid_fullscreen 1` | 59.9 | 60.0 | 60.1 | 60.0 | 1.44 to 1.87 |
+| 5120x2880 `vid_fullscreen 1` | 46.7 | 60.0 | 60.1 | 60.0 | 1.80 to 2.54 |
+
+The first windowed round was taken without `+cvarlist`, so its logs hold no
+`r_vsync` line; round 2 repeated it with `+cvarlist r_vsync` in the logs.
+With vsync on every renderer that can reach 60 reads 60.0 to 60.1 at both
+sizes. At 5120x2880 `ref_soft` stays at 46.7, below the refresh, as it was
+(44.3 to 45.0) without vsync.
+
+**The native size (Scope 1) works.** With the screen unlocked
+`+set vid_fullscreen 1 +set r_mode -1 +set r_customwidth 5120 +set
+r_customheight 2880` switches the display to the 5120x2880 mode, on all four
+renderers, with no `Couldn't switch` or `SetVideoMode failed` line in any
+of the 28 logs of it. Each log says `User requested 5120x2880@-1.000000,
+setting closest mode 5120x2880@60.000000`, `Real display mode:
+5120x2880@60.00` and `Drawable size: 5120x2880`. That is the card's
+native-resolution number, the 5120x2880 row above (5120x2880 is the panel's
+size in pixels, `Mode  0: 5120x2880@60.00`; the desktop mode is 2560x1440
+points). The same holds at 1920x1080 (`Real display mode: 1920x1080@60.00`,
+`Drawable size: 1920x1080`, 28 logs). The two sizes show that the earlier
+run's fullscreen switch failure was the locked session.
+
+The 640x480 request still ends at 960x540. The display lists 21 modes
 (`SDL display modes:` in the log), `Mode  0: 5120x2880@60.00` to `Mode 20:
 960x540@60.00`, all `@60.00` and all 16:9: 5120x2880, 4096x2304, 3840x2160,
 3200x1800, 2880x1620, 2560x1440, 2048x1152, 1920x1080, 1600x900, 1440x810,
 1280x720, 1024x576 and 960x540 (eight of the sizes are listed twice). There
-is no 640x480, no 4:3 or 16:10 mode and nothing below 960x540. The desktop
-mode is 2560x1440@60 (`Real display mode:`).
-
-Why `r_mode -1`, 640x480 and `vid_fullscreen 1` ends at 960x540: the engine
+is no 640x480, no 4:3 or 16:10 mode and nothing below 960x540. The engine
 asks SDL for the closest mode, `SDL_GetClosestFullscreenDisplayMode(
 displays[last_display], w, h, 0, true, &closestMode)`
 (`src/client/vid/glimp_sdl3.c:238`, the branch for `vid_rate` not above 0;
@@ -2755,67 +2805,77 @@ found mode's aspect ratio is strictly closer to the request's (1417 to
 1420). The request is 4:3 and every listed mode is 16:9, so that test never
 skips, and the walk ends on the smallest mode at least 640 wide and 480
 high, 960x540, which is also the smallest mode in the list. So 960x540 is
-what SDL3 returns for this list; nothing in that selection is a defect, and
-the display's list has nothing nearer. (That the drawable then stays at the
-requested size is FIX45 (#230), TASK98 Finding 1.)
+what SDL3 returns for this list; nothing in that selection is a defect.
+Unlocked, the four 640x480 requests (one per renderer) logged `User
+requested 640x480@-1.000000, setting closest mode 960x540@60.000000`, `Real
+display mode: 960x540@60.00`, no switch error, and `Drawable size:
+640x480` (that the drawable then stays at the requested size is FIX45 (#230),
+TASK98 Finding 1). Those four runs are single runs from the first unlocked
+pass (`ref_soft` 255.5, `ref_gl1` 2823.8, `gl1-metal` 183.9, `ref_metal`
+208.0 fps, load 2.46 to 3.62), probes, not a row.
 
-What this build showed beyond the selection: every request that is not the
-desktop mode failed at the display switch on this host with `Couldn't switch
-to exclusive fullscreen: CGDisplaySwitchToMode(): Unknown Error`, then
-`SDL SetVideoMode failed: CGDisplaySwitchToMode(): Unknown Error` and
-`Reverting to windowed r_mode 4 (640x480).` (`glimp_sdl3.c:259` and `:720`),
-in seven cases: 640x480 (closest 960x540), 1280x720 and 1920x1080 (closest
-the same size) on `ref_soft`, and 640x480 and 1920x1080 on `ref_gl1` and on
-`ref_metal` (the Metal-backed `gl1` was not tried, and 1280x720 was not
-tried on `ref_gl1` or `ref_metal`). FIX57 (#281) is the card for this
-failure. The text is SDL's: `CG_SetError`
-(`third_party/SDL3/src/video/cocoa/SDL_cocoamodes.m:39`) prints `Unknown
-Error` (line 75) for any `CGError` it has no name for, after
-`CGDisplaySetDisplayMode` failed (665, 708): the OS refused the switch with
-a code SDL does not name. Why was not found. TASK98 got a 960x540 fullscreen
-on this host, so the refusal is a condition of the host at this time that
-was not identified. When the request equals the desktop mode SDL takes the
-"Restoring desktop mode" branch and does not use the result
-(`SDL_cocoamodes.m:692`).
+**The 60 fps cap on the `CAMetalLayer` renderers (FIX53 (#250)).** At 1920x1080
+windowed with `r_vsync 0`, `gl1-metal` and `ref_metal` read 60.1 and 60.0 in
+all five runs, and `+cvarlist r_vsync` printed `*    r_vsync "0"` in a
+`ref_metal` 1920x1080 windowed run (`logs/cvarlist-vs0.log`) that still read
+60.0. So with the cvar read as 0 the cap is still there. That is the cap
+FIX53 (#250) describes, and the data here goes no further than that: the
+cap holds at every windowed 1920x1080 run of the two (ten runs) and at
+neither fullscreen size with `r_vsync 0` (1920x1080: 273.0 to 317.2 and
+313.3 to 362.3; 5120x2880: 283.7 to 402.0 and 349.0 to 389.5). `ref_soft` is not capped
+windowed at that size now: 163.1 to 225.6 fps, the effect FIX52 (#254) was for
+(it read 60.0 in all six TASK97 runs). The FIX52 section at the end of this
+file has the probe of where the windowed cap starts.
 
-The desktop-mode route: `+set vid_fullscreen 1 +set r_mode -1 +set r_customwidth
-2560 +set r_customheight 1440` logs `User requested 2560x1440@-1.000000,
-setting closest mode 2560x1440@60.000000` and `Drawable size: 2560x1440`
-with no error, on `ref_soft`, `ref_gl1` and `ref_metal` in the log probe and
-on all four in the rows above. That is the fullscreen row of the table, in
-`vid_fullscreen 1` at a mode the display lists (the desktop mode, so no mode
-switch). It is not the display's native size. 2560x1440 is the desktop's
-size in points, and the panel is 5120x2880 pixels (`Mode  0:
-5120x2880@60.00`, and `system_profiler` above). On macOS the engine does not
-honour `vid_highdpiaware` (TASK98's table, "scaled drawable"), so the
-drawable is 2560x1440 pixels, which the system scales up two times on the
-panel. A 5120x2880 drawable needs either a Retina-native drawable (TASK118,
-#273) or a fullscreen switch to the 5120x2880 mode, which was not tried here
-(every switch away from the desktop mode failed, above). Windowed boots at 2560x1440,
-2560x1400, 2304x1296, 2048x1152, 1920x1200, 1600x1200 and 2560x1080 on
-`ref_soft` also logged `Drawable size:` equal to the request, but that line
-echoes the request when the window is not high-DPI aware, so it does not
-show that the window got the size; no windowed number was taken above
-1920x1080.
+Two more windowed ceilings are in the table, neither explained here:
+640x480 and 1280x720 read 119.8 to 120.2 for `ref_soft`, `gl1-metal` and
+`ref_metal` (they read the same in the locked first batch, so the lock is
+not the cause of those two rows), and 1600x900 reads neither: `ref_soft`
+197.7 to 321.2 (the runs split into 197.7 and 219.5 against 316.6 to 321.2),
+`gl1-metal` 67.1 to 96.1 and `ref_metal` 62.3 to 75.2, against TASK97's
+284.7 to 287.8, 245.5 to 252.7 and 277.5 to 283.4 at the same size. The cause
+was not found; no card yet.
 
-**Not measured, now.** A rate of the three `CAMetalLayer` renderers that
-says anything about the renderer (every row reads the 120 fps ceiling, which
-needs explaining first); a windowed timedemo above 1920x1080, or at the
-non-16:9 modes 1920x1200, 1600x1200 and 2560x1080 (booted only); any
-rate at the panel's native 5120x2880 pixels (above: the drawable is
-2560x1440 at most; it needs TASK118 (#273), or a working switch to the
-`5120x2880@60.00` mode, which FIX57 (#281) covers and which was not tried
-here); a fullscreen mode other than the desktop mode (the switch fails,
-above); `ref_gl1` against a GPU timestamp
-(`gl_finish 1`). The 120 fps ceiling has no card of its own; the data is on
-FIX53 (#250), whose 60 fps cap it replaces. The load at the start of five
-runs, in two rounds, was above 3.5 (1280x720 run 1: `gl1-metal` 5.61 and
-`metal` 4.21; `water` run 3: `gl1` 4.45, `gl1-metal` 4.06, `metal` 3.63).
-The one-minute average is a trailing mean. Three of the five lie inside the
-range of the other four runs of their row. Two do not: `water` run 3 is the
-row's minimum for `ref_gl1` (4958.3, the other four 5173.9 to 5950.0) and
-for `ref_metal` (120.0, the other four 120.1). All five were kept, and the
-`water` paragraph gives the `ref_gl1` range without run 3.
+**`ref_gl1`.** It is not capped: 2443.3 to 2570.9 at 640x480, 1808.4 to
+1997.1 at 1920x1080 windowed and 602.8 to 661.9 at 5120x2880 fullscreen. TASK97
+had 2304.3 to 2600.0 and 1882.5 to 2126.5 at the first two sizes, which these
+overlap. TASK97's qualification stands (Finding 2): the number may be a
+CPU-submit rate, an upper bound; it was not checked against a GPU timestamp,
+and `gl_finish 1` was not tried.
+
+**`water` spread (Scope 3).** `water.dm2` was made again by `scripts/pins.sh
+make-demo water` in each of the two release copies (it printed `(98
+messages, 97 to 124 wanted)` for both; the first run's demo had 124
+messages), because the first run's copy was removed with its build; this one plays 93
+frames in the timedemo, not 119, so it is not the same demo as the first
+batch's and the rows are not comparable with it. A first attempt of the five
+rounds ran before the demo existed and read `0 frames` (`ERROR: Couldn't
+open demos/water.dm2`); its rows are in `results.csv` as
+`water1280x720-nodemo` and are not measurements. `ref_gl1` gave 3206.9,
+3875.0, 4428.6, 4043.5 and 3576.9 fps, range 3206.9 to 4428.6; the log
+prints `0.0 seconds`. The timer counts whole milliseconds
+(`src/client/cl_network.c`, the timedemo end), so the five runs took 29, 24,
+21, 23 and 26 ms (a 1 ms step is 3 to 5 percent of a run), and a `ref_gl1`
+rate from this demo is good to that and no finer. The three `CAMetalLayer`
+renderers gave 120.0 to 121.4 (their runs last 0.8 s, so the 1 ms step is
+about 0.1 percent). No run of the row started above a load of 3.5 (1.94 to
+3.35). The demo is long enough to show the ceiling and too short to say more
+about `ref_gl1` than the range above.
+
+**Not measured, now.** The 1600x900 windowed spread, the 120 fps windowed
+ceiling at 640x480 and 1280x720, and the windowed 60 fps cap itself are
+seen, not explained. `ref_gl1` against a GPU timestamp (`gl_finish 1`). A
+windowed timedemo above 1920x1080, or at the non-16:9 modes 1920x1200,
+1600x1200 and 2560x1080 (booted only). Any fullscreen mode other than the
+desktop, 1920x1080 and 5120x2880 modes and the 640x480 request (one run each
+for the last). The `r_vsync 1` rows are one run each. `r_vsync` was read back
+from the log only in the runs of this pass that carry `+cvarlist`
+(everything from the 640x480 windowed row on and the `r_vsync 1` probes
+except the first 1920x1080 windowed round). The desktop-size fullscreen
+row of the first batch (2560x1440, which switches no mode) was not repeated
+unlocked. The `water` demo is 93 frames, not the first batch's 119. The
+lock state was read once per run before launch, not during it, and the owner
+may have been at the machine.
 
 ## Screenshot and capture readback on a physical GPU (TASK98)
 
