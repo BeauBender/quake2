@@ -70,3 +70,20 @@ Con_BackRect(int vw, int vh, int lines, int keep43, int *x, int *y, int *w, int 
 	*x = (int)-((rw - vw) / 2);
 	*y = lines - (int)rh;
 }
+
+/*
+ * Whether Con_DrawConsole keeps the background at 4:3: con_backaspect is
+ * exactly 1 and the renderer that is loaded (loaded, the name it was
+ * loaded as) is not the software renderer, which refuses a rectangle that
+ * leaves the window. A NULL name counts as not soft.
+ */
+int
+Con_BackKeep43(float aspect, const char *loaded)
+{
+	if (aspect != 1.0f)
+	{
+		return 0;
+	}
+
+	return (loaded == NULL) || (Q_stricmp(loaded, "soft") != 0);
+}

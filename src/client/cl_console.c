@@ -658,8 +658,7 @@ Con_DrawConsole(float frac)
 	   window); the renderer that is loaded decides, not vid_renderer */
 	{
 		int bx, by, bw, bh;
-		int keep43 = (con_backaspect->value == 1.0f) &&
-				(Q_stricmp(vid_loaded_renderer, "soft") != 0);
+		int keep43 = Con_BackKeep43(con_backaspect->value, vid_loaded_renderer);
 
 		Con_BackRect(viddef.width, viddef.height, lines, keep43, &bx, &by, &bw, &bh);
 		Draw_StretchPic(bx, by, bw, bh, "conback");

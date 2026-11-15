@@ -171,3 +171,22 @@ TEST(conback_degenerate_sizes_are_stretched)
 	T_EQ_INT(w, 1);
 	T_EQ_INT(x, 0);
 }
+
+/* the switch and the soft exception: only 1 keeps 4:3, and never under the software renderer that is loaded */
+TEST(conback_keep43_decision)
+{
+	T_EQ_INT(Con_BackKeep43(1.0f, "metal"), 1);
+	T_EQ_INT(Con_BackKeep43(1.0f, "gl1"), 1);
+	T_EQ_INT(Con_BackKeep43(1.0f, "gl3"), 1);
+	T_EQ_INT(Con_BackKeep43(1.0f, ""), 1);
+	T_EQ_INT(Con_BackKeep43(1.0f, NULL), 1);
+	T_EQ_INT(Con_BackKeep43(1.0f, "soft"), 0);
+	T_EQ_INT(Con_BackKeep43(1.0f, "SOFT"), 0);
+	T_EQ_INT(Con_BackKeep43(1.0f, "Soft"), 0);
+	T_EQ_INT(Con_BackKeep43(1.0f, "softx"), 1);
+	T_EQ_INT(Con_BackKeep43(0.0f, "metal"), 0);
+	T_EQ_INT(Con_BackKeep43(2.0f, "metal"), 0);
+	T_EQ_INT(Con_BackKeep43(-1.0f, "metal"), 0);
+	T_EQ_INT(Con_BackKeep43(0.5f, "metal"), 0);
+	T_EQ_INT(Con_BackKeep43(0.0f, "soft"), 0);
+}
