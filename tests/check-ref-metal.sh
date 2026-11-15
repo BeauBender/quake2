@@ -14,7 +14,9 @@
 #     tests/metal/rm_rt_test.c, the pure part of the ray tracing (rm_rt.c,
 #     RT1, TASK53), is compiled and run the same way, with rm_pure.c, and
 #     so is tests/metal/rm_gbuf_test.c, the pure part of the G-buffer
-#     (rm_gbuf.c and common/mtl_gbuf_math.h, RT2, TASK54).
+#     (rm_gbuf.c and common/mtl_gbuf_math.h, RT2, TASK54), and
+#     tests/metal/rm_rtshadow_test.c, the pure part of the dynamic-light
+#     shadows (rm_rtshadow.c and common/mtl_rts_math.h, RT3, TASK55).
 # (b) Only on Darwin with the Metal compiler (xcrun -f metal) and the
 #     vendored SDL 3 headers: "make ref_metal" in a scratch copy of
 #     Makefile, third_party/sdl3.make and src/ (third_party/SDL3 is linked,
@@ -131,6 +133,23 @@ elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_gbuf_test" > "${tmp:?}/out"
 else
 	gb=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_gbuf_test: //')
 	case $gb in *", 0 failed") ;; *) bad "tests/metal/rm_gbuf_test.c printed no result line"; gb="";; esac
+fi
+
+# the pure part of the dynamic-light shadows (RT3, TASK55): rm_rtshadow.c and common/mtl_rts_math.h,
+# held to gl1's falloff and lightmap store (rm_pure.c), with rm_rt.c for the material ids
+rts=""
+# shellcheck disable=SC2086 # flags is a word list
+if ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "${tmp:?}/rm_rtshadow_test" tests/metal/rm_rtshadow_test.c \
+	"$rm_dir/rm_rtshadow.c" "$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" \
+	"$rm_dir/common/mtl_ring.c" src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_rtshadow_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtshadow_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_rtshadow_test.c failed"
+else
+	rts=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtshadow_test: //')
+	case $rts in *", 0 failed") ;; *) bad "tests/metal/rm_rtshadow_test.c printed no result line"; rts="";; esac
 fi
 
 # strip <file>: the file with its comments and the contents of its string and
@@ -410,6 +429,6 @@ else
 fi
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $build)"
 fi
 exit $fail
