@@ -57,10 +57,12 @@ original clients (Vanilla Quake II) commands are still in place.
   times the size, of the world textures, the faces of the skies and the
   model and player skin images of the game data into the write
   directory, scaled with scale2x, where `r_retexturing 1` loads them.
-  Files that exist are skipped unless `force` is given; names that are
-  not plain paths are refused, and nothing is written inside a git work
-  tree. See "Textures upscaled on your own machine" in
-  `030_configuration.md`.
+  Files that exist are skipped unless `force` is given, and a symlink at
+  an output name is never written through; names that are not plain
+  paths (letters, digits, `_`, `-`, `+`, `.` and `/`) are refused,
+  nothing is written inside a git work tree, and the command is refused
+  while connected to a remote server. See "Textures upscaled on your
+  own machine" in `030_configuration.md`.
 
 * **viewpos**: Show player position.
 

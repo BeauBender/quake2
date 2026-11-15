@@ -12,8 +12,11 @@
  * src/client/cl_upscale.c): the names a listing may hand it, the git
  * work-tree refusal on a synthetic tree, wrap-padding and crop, scale2x
  * with wrapped and clamped edges, the transparent index, the skin flood
- * fill and the .wal and .pcx size checks. The command itself
- * (cl_upscale_cmd.c, ImageIO) is not linked here.
+ * fill, the .wal and .pcx size checks, and the command's decisions:
+ * which names are sources, the colormap's palette, skip, write or
+ * refuse (lstat, links), the paths, the git check of each output
+ * directory, the remote-server refusal, the counts and the summary.
+ * The command's I/O (cl_upscale_cmd.c, ImageIO) is not linked here.
  *
  * =======================================================================
  */
