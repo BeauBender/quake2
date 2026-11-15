@@ -1006,6 +1006,7 @@ GAME_OBJS_ = \
 CLIENT_OBJS_ := \
 	src/backends/generic/misc.o \
 	src/client/cl_cin.o \
+	src/client/cl_cinsize.o \
 	src/client/cl_image.o \
 	src/client/cl_conback.o \
 	src/client/cl_console.o \
@@ -1472,6 +1473,7 @@ endif
 
 TEST_SRCS := $(sort $(wildcard tests/unit/*.c))
 TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SERVER_OBJS_))) \
+	$(TESTDIR)/src/client/cl_cinsize.o \
 	$(TESTDIR)/src/client/cl_conback.o \
 	$(TESTDIR)/src/client/cl_download.o \
 	$(TESTDIR)/src/client/cl_entities.o \

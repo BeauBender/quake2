@@ -25,6 +25,7 @@
  */
 
 #include "header/client.h"
+#include "header/cinsize.h"
 #include "refresh/files/imgdecode.h"
 
 #define PCX_IDENT ((0x05 << 8) + 0x0a)
@@ -86,7 +87,7 @@ PCX_Decode(const char *name, const byte *raw, int len, byte **pic, byte **palett
 	int *width, int *height, int *bitsPerPixel)
 {
 	const pcx_t *pcx;
-	int full_size;
+	size_t full_size;
 	int pcx_width, pcx_height, bytes_per_line;
 	qboolean image_issues = false;
 	byte *out, *pix;
@@ -128,12 +129,20 @@ PCX_Decode(const char *name, const byte *raw, int len, byte **pic, byte **palett
 		return;
 	}
 
-	full_size = (pcx_height + 1) * (pcx_width + 1);
+	/* sides are at most 65536, so size_t holds the size; refuse a
+	   size past the decoder's bound before allocating */
 	if ((pcx->color_planes == 3 || pcx->color_planes == 4)
 		&& pcx->bits_per_pixel == 8)
 	{
-		full_size *= 4;
 		*bitsPerPixel = 32;
+	}
+
+	if (SCR_StillCheck(pcx_width + 1, pcx_height + 1, *bitsPerPixel,
+			&full_size) != SCR_STILL_OK)
+	{
+		Com_Printf("%s: %s is %dx%d, too large to decode.\n",
+			__func__, name, pcx_width + 1, pcx_height + 1);
+		return;
 	}
 
 	out = malloc(full_size);
