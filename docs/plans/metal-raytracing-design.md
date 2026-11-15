@@ -152,6 +152,15 @@ rays they serve. The surface ray is the first to cut: it could be traced only wh
 range, or the raster could store the surface. `timedemo` reads the display's 60 fps at 1080p with
 the effect on and off.
 
+TASK131 makes the raster store the surface. While the shadows trace, the G-buffer has a surface
+attachment (section 3). Each world pixel's surface comes from it, through the map's
+vertex-to-surface table. A brush entity's model space comes from the frame's entity table. The
+lights are tested against the surface's own plane in that space before the falloff. The eye ray
+is left only where the attachment names no surface: a dynamic world draw (the flowing batches,
+material 1) and a brush model the raster cannot name. The GPU time before and after, at 1920 x
+1080 and 5120 x 2880, is in the runbook,
+[TASK131](../runbook/TASK131.md). It is not measured yet: the engine runs are pending.
+
 ### Internal resolution and upscaling with MetalFX (TASK105)
 
 This subsection describes option A (TASK105): with a ray-traced effect
@@ -1063,6 +1072,7 @@ rotation.
 | depth | `rmb_gbuf_depth()` | `MTLPixelFormatDepth32Float`, the render size (`rmb_gbuf_size`) | every opaque draw (raster and forward pass; on the motion path the forward pass) |
 | motion vector | `rmb_gbuf_motion()` | `MTLPixelFormatRG16Float`, the render size | the raster's draws and the forward pass's opaque draws; blended draws leave it |
 | world normal, material id, light, albedo | internal (`rmb_gbuf.m`) | `RGB10A2Unorm` (n x 0.5 + 0.5, alpha 1, 0 where none), `R8Uint`, `RGBA8Unorm`, `RGBA8Unorm` | the raster |
+| surface (TASK131) | internal (`rmb_gbuf.m`), colour attachment 5 of the raster | `R32Uint`, the render size, only while RT3's shadows trace | the raster's draws from the world's vertex buffer: `(entity << 24) \| (vertex + 1)`; 0 elsewhere |
 
 - *Frame.* The current frame's world view, rasterized with the jittered
   projection (`r_rt_jitter_x`, `r_rt_jitter_y`, pixels, +x right, +y down,
@@ -1095,6 +1105,32 @@ rotation.
   stretched. Nothing else in the 3D pass is sized in pixels: beams, flash
   blobs, the sky, shadows and the screen blend are in world or view
   units, and no draw sets a line width.
+- *Surface (TASK131).* The raster gets the surface attachment only while
+  RT3's shadows trace (`RM_RTS_Active` when the view begins,
+  `rmb_gbuf_set_surface`). Its raster pipelines are a second set, built
+  with function constant 5 (`rm_gb_surf`) at the first view that needs
+  them. With the shadows off, the raster, its five attachments and its
+  pipelines are TASK54's, and the forward and motion paths never have
+  the attachment. It is cleared to 0. A draw from the world's static
+  vertex buffer writes `mtl_rts_gb_value` (`common/mtl_rts_math.h`):
+  - the low 24 bits hold the first vertex of the triangle (Metal's
+    provoking vertex, `[[vertex_id]]`) plus one. The vertex is an index
+    of the world's vertex buffer, and its surface is found through
+    `rm_rts_vertex_map`;
+  - the top 8 bits hold the entity that draws it: 0 for the world, i + 1
+    for the refdef's brush entity i (`RM_GB_EntityMotion`), and 255 for a
+    brush model that is not one of the refdef's entities.
+
+  Every other draw writes 0: alias models, and dynamic world draws (the
+  sky, the warped and flowing batches) are not that buffer's vertices.
+  `rmb_gbuf_bind_world` passes the draw's tag at vertex buffer 4. A map
+  with more than `MTL_RTS_GB_VMAX` (2^24 - 2) vertices gets no vertex
+  table, and every pixel takes the eye ray. The attachment costs 4 bytes
+  a pixel: 8,294,400 bytes at 1920 x 1080 and 58,982,400 (56.25 MiB) at
+  5120 x 2880, by the format. The allocated size is logged as `G-buffer
+  surface attachment`. The tables it reads cost 4 bytes per world vertex
+  for the vertex table, and 3 x 8 KiB for the entity table in the frame
+  ring.
 
 *As consumed by TASK111.* The scalers take the depth and motion as above:
 `motionVectorScaleX` and `motionVectorScaleY` 1, `depthReversed` NO, auto exposure off.
