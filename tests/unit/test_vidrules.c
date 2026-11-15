@@ -327,3 +327,28 @@ TEST(vidrules_scale_steps)
 	T_EQ_INT(VidRules_ScaleIndex(-0.5f), 0);
 	T_EQ_INT(VidRules_ScaleIndex(0.0f / 0.0f), 0);
 }
+
+/* a step over a mode the GPU lacks lands on the next one it has, else stays */
+TEST(vidrules_scaler_step_skips_missing_modes)
+{
+	/* mask 3: off, spatial */
+	T_EQ_INT(VidRules_ScalerStep(3, 0, 1), 1);
+	T_EQ_INT(VidRules_ScalerStep(3, 1, 2), 1);
+	T_EQ_INT(VidRules_ScalerStep(3, 1, 0), 0);
+	/* mask 15: all */
+	T_EQ_INT(VidRules_ScalerStep(15, 2, 3), 3);
+	T_EQ_INT(VidRules_ScalerStep(15, 2, 1), 1);
+	/* mask 9: off, denoised: spatial and temporal are skipped both ways */
+	T_EQ_INT(VidRules_ScalerStep(9, 0, 1), 3);
+	T_EQ_INT(VidRules_ScalerStep(9, 3, 2), 0);
+	/* mask 1: only off */
+	T_EQ_INT(VidRules_ScalerStep(1, 0, 1), 0);
+	/* a previous value the GPU lacks (set by hand) still moves to a real one */
+	T_EQ_INT(VidRules_ScalerStep(3, 2, 1), 1);
+	T_EQ_INT(VidRules_ScalerStep(3, 2, 3), 2);
+	/* out of range */
+	T_EQ_INT(VidRules_ScalerStep(15, 1, 4), 1);
+	T_EQ_INT(VidRules_ScalerStep(15, 1, -1), 1);
+	T_EQ_INT(VidRules_ScalerStep(15, 9, 2), 2);
+	T_EQ_INT(VidRules_ScalerStep(15, -3, 9), 0);
+}

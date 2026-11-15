@@ -821,6 +821,14 @@ Menu_SlideItem(menuframework_s *s, int dir)
 		return false;
 	}
 
+	/* A greyed slider or spin control cannot be changed, it only shows
+	   its value and, with the cursor on it, its status bar. */
+	if ((item->type == MTYPE_SLIDER || item->type == MTYPE_SPINCONTROL) &&
+		(item->flags & QMF_GRAYED))
+	{
+		return false;
+	}
+
 	switch (item->type)
 	{
 		case MTYPE_SLIDER:
@@ -967,8 +975,16 @@ Slider_Draw(menuslider_s *s)
 
 		Com_sprintf(buffer, sizeof(buffer),
 			(s->printformat)? s->printformat : "%.1f", value);
-		Menu_DrawString(x_rcol + ((SLIDER_RANGE + 2) * scale * 8),
-			y, buffer);
+		if (s->generic.flags & QMF_GRAYED)
+		{
+			Menu_DrawStringDark(x_rcol + ((SLIDER_RANGE + 2) * scale * 8),
+				y, buffer);
+		}
+		else
+		{
+			Menu_DrawString(x_rcol + ((SLIDER_RANGE + 2) * scale * 8),
+				y, buffer);
+		}
 	}
 }
 
@@ -1057,8 +1073,16 @@ SpinControl_Draw(menulist_s *s)
 
 	if (!nl)
 	{
-		Menu_DrawString(x + (RCOLUMN_OFFSET * scale),
-			y, item);
+		if (s->generic.flags & QMF_GRAYED)
+		{
+			Menu_DrawStringDark(x + (RCOLUMN_OFFSET * scale),
+				y, item);
+		}
+		else
+		{
+			Menu_DrawString(x + (RCOLUMN_OFFSET * scale),
+				y, item);
+		}
 	}
 	else
 	{

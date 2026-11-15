@@ -72,6 +72,36 @@ VidRules_ScalerModeAvailable(int modemask, int mode)
 	}
 }
 
+int
+VidRules_ScalerStep(int modemask, int prev, int cur)
+{
+	int dir;
+
+	if (prev < 0 || prev > 3)
+	{
+		prev = 0;
+	}
+	if (cur < 0 || cur > 3)
+	{
+		return prev;
+	}
+	if (VidRules_ScalerModeAvailable(modemask, cur))
+	{
+		return cur;
+	}
+
+	dir = (cur > prev) ? 1 : -1;
+	for (int i = cur + dir; i >= 0 && i <= 3; i += dir)
+	{
+		if (VidRules_ScalerModeAvailable(modemask, i))
+		{
+			return i;
+		}
+	}
+
+	return prev;
+}
+
 static int
 HasAnyScaler(int modemask)
 {

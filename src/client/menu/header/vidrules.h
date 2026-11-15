@@ -77,6 +77,11 @@ const char *VidRules_Cvar(viditem_t item, const char *renderer);
 /* whether the GPU has scaler mode 0 (off) to 3 (temporal denoised) */
 int VidRules_ScalerModeAvailable(int modemask, int mode);
 
+/* The scaler list was moved from index prev to index cur: cur when the GPU
+   has that mode, else the next mode the GPU has in the direction of the move,
+   else prev. Never a mode the GPU lacks, never out of 0 to 3. */
+int VidRules_ScalerStep(int modemask, int prev, int cur);
+
 /* the internal scale steps: index 0 is auto (the cvar's 0); returns the
    index nearest a cvar value, or VidRules_NumScales() for none within reach (custom) */
 int VidRules_NumScales(void);
