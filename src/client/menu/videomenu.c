@@ -28,6 +28,7 @@
 #include "../../client/header/client.h"
 #include "../../client/menu/header/qmenu.h"
 #include "header/qmenu.h"
+#include "header/vidrules.h"
 
 extern void M_ForceMenuOff(void);
 extern const char *Default_MenuKey(menuframework_s *m, int key);
@@ -45,31 +46,29 @@ extern cvar_t *vid_renderer;
 static cvar_t *r_vsync;
 static cvar_t *gl_anisotropic;
 static cvar_t *gl_msaa_samples;
-static cvar_t *gl3_colorlight;
-static cvar_t *gl4_colorlight;
-static cvar_t *gl4_bloom;
-static cvar_t *vk_dynamic;
 
 static menuframework_s s_opengl_menu;
+static menuframework_s s_ropts_menu;
+static menuaction_s s_ropts_action;
+static menuaction_s s_ropts_apply_action;
 
 static menulist_s s_renderer_list;
 static menulist_s s_mode_list;
 static menulist_s s_uiscale_list;
 static menuslider_s s_brightness_slider;
 static menuslider_s s_fov_slider;
-static menuslider_s s_gl1_intensity_slider;
-static menuslider_s s_gl3_intensity_slider;
-static menuslider_s s_gl4_intensity_slider;
-static menuslider_s s_vk_intensity_slider;
-static menuslider_s s_gl1_overbrightbits_slider;
-static menuslider_s s_gl3_overbrightbits_slider;
-static menuslider_s s_gl4_overbrightbits_slider;
-static menuslider_s s_vk_overbrightbits_slider;
-static menuslider_s s_gl1_minlight_slider;
-static menulist_s s_gl3_colorlight_list;
-static menulist_s s_gl4_colorlight_list;
-static menulist_s s_gl4_bloom_list;
-static menulist_s s_vk_dynamic_list;
+/* Every renderer-specific item is always in the menu, greyed with its
+   reason when the renderer does not have it (vidrules.c). */
+static menuslider_s s_intensity_slider;
+static menuslider_s s_overbrightbits_slider;
+static menuslider_s s_minlight_slider;
+static menulist_s s_colorlight_list;
+static menulist_s s_bloom_list;
+static menulist_s s_dynlight_list;
+static menulist_s s_mfx_scaler_list;
+static menulist_s s_mfx_scale_list;
+static menulist_s s_mfx_interp_list;
+static menulist_s s_denoiser_list;
 static menulist_s s_fs_box;
 static menulist_s s_vsync_list;
 static menulist_s s_af_list;
@@ -319,6 +318,119 @@ ApplyFilter(void* unused)
 	}
 }
 
+/*
+ * The modes of MetalFX the GPU has, r_metalfx_modes. A cvar a user or a
+ * server can write, read again each time the menu opens, and only
+ * advisory: it greys items, the renderer decides what it runs. A value
+ * that is not a mask counts as none.
+ */
+static int
+MetalModeMask(void)
+{
+	return VidRules_ModeMask(Cvar_VariableValue("r_metalfx_modes"));
+}
+
+/*
+ * The renderer the menu was built for: every item's greying, value and
+ * cvar name belong to it. "apply" writes the renderer's own cvar first, so
+ * vid_renderer no longer names it by then.
+ */
+static char s_built_renderer[32];
+
+/* Greys an item with its reason, or enables it with its note. */
+static void
+SetRule(menucommon_s *item, viditem_t id, int scaler)
+{
+	const vidrule_t rule = VidRules_Item(id, s_built_renderer,
+			MetalModeMask(), scaler);
+
+	if (rule.enabled)
+	{
+		item->flags &= ~QMF_GRAYED;
+	}
+	else
+	{
+		item->flags |= QMF_GRAYED;
+	}
+
+	item->statusbar = rule.text;
+}
+
+static int s_mfx_scaler_prev;
+
+/* The scale item's choices: the steps, and "custom" while the cvar holds
+   a value that is not a step. */
+static const char *s_scale_names[] = { "auto", "1/3", "1/2", "2/3", "3/4", "full", NULL };
+static const char *s_scale_names_custom[] = { "auto", "1/3", "1/2", "2/3", "3/4", "full", "custom", NULL };
+static const char *s_scale_na_names[] = { "n/a", NULL };
+
+/*
+ * The scale item follows its rule: greyed it shows "n/a", enabled it
+ * shows its choices with the value read from r_metalfx_scale. Called when
+ * the menu is built and whenever the scaler item moves.
+ */
+static void
+ScaleItemUpdate(int scaler)
+{
+	SetRule(&s_mfx_scale_list.generic, VIDITEM_MFX_SCALE, scaler);
+
+	if (s_mfx_scale_list.generic.flags & QMF_GRAYED)
+	{
+		s_mfx_scale_list.itemnames = s_scale_na_names;
+		s_mfx_scale_list.curvalue = 0;
+	}
+	else if (s_mfx_scale_list.itemnames == s_scale_na_names)
+	{
+		const int idx = VidRules_ScaleIndex(Cvar_VariableValue("r_metalfx_scale"));
+
+		s_mfx_scale_list.itemnames = (idx < VidRules_NumScales()) ? s_scale_names : s_scale_names_custom;
+		s_mfx_scale_list.curvalue = idx;
+	}
+}
+
+/* Stepping off "custom" removes it: it is shown, never chosen. */
+static void
+MetalScaleChanged(void *self)
+{
+	menulist_s *list = (menulist_s *)self;
+
+	if (list->curvalue < VidRules_NumScales())
+	{
+		list->itemnames = s_scale_names;
+	}
+}
+
+/*
+ * The scaler list was moved one step: a mode the GPU lacks is skipped
+ * (never selected), and the scale item follows whether a scaler is on.
+ */
+static void
+MetalScalerChanged(void *self)
+{
+	menulist_s *list = (menulist_s *)self;
+
+	list->curvalue = VidRules_ScalerStep(MetalModeMask(), s_mfx_scaler_prev, list->curvalue);
+	s_mfx_scaler_prev = list->curvalue;
+	ScaleItemUpdate(list->curvalue);
+}
+
+/* A yes/no item writes its cvar when it is not greyed. */
+static void
+ApplyList(menulist_s *list, viditem_t id)
+{
+	const char *name = VidRules_Cvar(id, s_built_renderer);
+
+	if (!name || (list->generic.flags & QMF_GRAYED))
+	{
+		return;
+	}
+
+	if ((int)(Cvar_VariableValue(name) != 0) != list->curvalue)
+	{
+		Cvar_SetValue(name, list->curvalue);
+	}
+}
+
 static void
 ApplyChanges(void *unused)
 {
@@ -391,19 +503,32 @@ ApplyChanges(void *unused)
 		restart = true;
 	}
 
-	if (gl3_colorlight && gl3_colorlight->value != s_gl3_colorlight_list.curvalue)
+	ApplyList(&s_colorlight_list, VIDITEM_COLORLIGHT);
+	ApplyList(&s_bloom_list, VIDITEM_BLOOM);
+	ApplyList(&s_dynlight_list, VIDITEM_DYNLIGHT);
+
+	/* The MetalFX options: the renderer reads them at the restart below
+	   and writes back what the GPU kept. */
+	ApplyList(&s_mfx_interp_list, VIDITEM_MFX_INTERP);
+
+	if (!(s_mfx_scaler_list.generic.flags & QMF_GRAYED))
 	{
-		Cvar_SetValue("gl3_colorlight", s_gl3_colorlight_list.curvalue);
+		if (VidRules_ScalerIndex(Cvar_VariableValue("r_metalfx")) != s_mfx_scaler_list.curvalue)
+		{
+			Cvar_SetValue("r_metalfx", s_mfx_scaler_list.curvalue);
+		}
 	}
 
-	if (gl4_colorlight && gl4_colorlight->value != s_gl4_colorlight_list.curvalue)
+	if (!(s_mfx_scale_list.generic.flags & QMF_GRAYED) &&
+		s_mfx_scale_list.curvalue < VidRules_NumScales())
 	{
-		Cvar_SetValue("gl4_colorlight", s_gl4_colorlight_list.curvalue);
-	}
+		const float want = VidRules_ScaleValue(s_mfx_scale_list.curvalue);
 
-	if (gl4_bloom && gl4_bloom->value != s_gl4_bloom_list.curvalue)
-	{
-		Cvar_SetValue("r_bloom", s_gl4_bloom_list.curvalue);
+		if (VidRules_ScaleIndex(Cvar_VariableValue("r_metalfx_scale")) !=
+			s_mfx_scale_list.curvalue)
+		{
+			Cvar_SetValue("r_metalfx_scale", want);
+		}
 	}
 
 	/* anisotropic filtering */
@@ -468,12 +593,37 @@ static void
 RestartNeededForAllMsg(void *unused)
 {
 	Menu_SetStatusBar(&s_opengl_menu, "apply required");
+	Menu_SetStatusBar(&s_ropts_menu, "apply required");
+}
+
+/*
+ * The renderer's own settings are a page of their own: one list of every
+ * item is 240 units tall, as tall as the smallest virtual screen, and
+ * centred it starts over the banner. Each page is centred and fits below
+ * the banner and above the bottom edge down to that height;
+ * tests/menu/videomenu_test.c asserts it.
+ */
+static void
+OpenRendererOptions(void *unused)
+{
+	s_ropts_menu.draw = Default_MenuDraw;
+	s_ropts_menu.key = Default_MenuKey;
+
+	M_PushMenu(&s_ropts_menu);
 }
 
 void
 VID_MenuInit(void)
 {
 	int y = 30;
+	int sy = 20;	/* the renderer page's own rows */
+
+	if (!vid_renderer)
+	{
+		vid_renderer = Cvar_Get("vid_renderer", "gl3", CVAR_ARCHIVE);
+	}
+
+	Q_strlcpy(s_built_renderer, vid_renderer->string, sizeof(s_built_renderer));
 
 	// Renderer selection box.
 	// MAXRENDERERS + Custom + NULL.
@@ -541,6 +691,11 @@ VID_MenuInit(void)
 		NULL
 	};
 
+	static const char *na_filter_names[] = {
+		"n/a",
+		NULL
+	};
+
 	// This must match 'gl_filter_list' values (except "custom")
 	static const char *filter_names[] = {
 		"pixelated",
@@ -583,7 +738,7 @@ VID_MenuInit(void)
 
 	if (!vid_renderer)
 	{
-		vid_renderer = Cvar_Get("vid_renderer", "gl1", CVAR_ARCHIVE);
+		vid_renderer = Cvar_Get("vid_renderer", "gl3", CVAR_ARCHIVE);
 	}
 
 	if (!r_vsync)
@@ -652,131 +807,111 @@ VID_MenuInit(void)
 	s_fov_slider.slidestep = 1;
 	s_fov_slider.printformat = "%.0f";
 
-	switch (current_renderer)
+	/* The sliders and lists of the renderer. Each is here with every
+	   renderer; where it does not apply it is greyed with its reason
+	   and sets no cvar. */
 	{
-		case ref_gl3:
-			s_gl3_intensity_slider.generic.type = MTYPE_SLIDER;
-			s_gl3_intensity_slider.generic.name = "color intensity";
-			s_gl3_intensity_slider.generic.x = 0;
-			s_gl3_intensity_slider.generic.y = (y += 10);
-			s_gl3_intensity_slider.cvar = "gl3_intensity";
-			s_gl3_intensity_slider.minvalue = 0.1f;
-			s_gl3_intensity_slider.maxvalue = 5.0f;
+		const char *rname = s_built_renderer;
+		const vidref_t ref = VidRules_Renderer(rname);
+		const char *cv;
 
-			s_gl3_overbrightbits_slider.generic.type = MTYPE_SLIDER;
-			s_gl3_overbrightbits_slider.generic.name = "overbrights";
-			s_gl3_overbrightbits_slider.generic.x = 0;
-			s_gl3_overbrightbits_slider.generic.y = (y += 10);
-			s_gl3_overbrightbits_slider.cvar = "gl3_overbrightbits";
-			s_gl3_overbrightbits_slider.minvalue = 0.1f;
-			s_gl3_overbrightbits_slider.maxvalue = 5.0f;
+		s_intensity_slider.generic.type = MTYPE_SLIDER;
+		s_intensity_slider.generic.name = "color intensity";
+		s_intensity_slider.generic.x = 0;
+		s_intensity_slider.generic.y = (sy += 10);
+		s_intensity_slider.generic.callback = NULL;
+		s_intensity_slider.cvar = (char *)VidRules_Cvar(VIDITEM_INTENSITY, rname);
+		s_intensity_slider.minvalue = 0.1f;
+		s_intensity_slider.maxvalue = 5.0f;
+		s_intensity_slider.slidestep = 0;
+		s_intensity_slider.printformat = NULL;
 
-			gl3_colorlight = Cvar_Get("gl3_colorlight", "1", CVAR_ARCHIVE);
-			s_gl3_colorlight_list.generic.type = MTYPE_SPINCONTROL;
-			s_gl3_colorlight_list.generic.name = "color light";
-			s_gl3_colorlight_list.generic.x = 0;
-			s_gl3_colorlight_list.generic.y = (y += 10);
-			s_gl3_colorlight_list.itemnames = yesno_names;
-			s_gl3_colorlight_list.curvalue = (gl3_colorlight->value != 0);
-			break;
+		s_overbrightbits_slider.generic.type = MTYPE_SLIDER;
+		s_overbrightbits_slider.generic.name = "overbrights";
+		s_overbrightbits_slider.generic.x = 0;
+		s_overbrightbits_slider.generic.y = (sy += 10);
+		s_overbrightbits_slider.cvar = (char *)VidRules_Cvar(VIDITEM_OVERBRIGHT, rname);
+		s_overbrightbits_slider.minvalue = 0.1f;
+		s_overbrightbits_slider.maxvalue = 5.0f;
+		s_overbrightbits_slider.slidestep = 0;
+		s_overbrightbits_slider.printformat = NULL;
 
-		case ref_gl4:
-			s_gl4_intensity_slider.generic.type = MTYPE_SLIDER;
-			s_gl4_intensity_slider.generic.name = "color intensity";
-			s_gl4_intensity_slider.generic.x = 0;
-			s_gl4_intensity_slider.generic.y = (y += 10);
-			s_gl4_intensity_slider.cvar = "gl4_intensity";
-			s_gl4_intensity_slider.minvalue = 0.1f;
-			s_gl4_intensity_slider.maxvalue = 5.0f;
+		if (ref == VIDREF_GL1 || ref == VIDREF_METAL)
+		{
+			/* gl1's ranges; Metal reads gl1's cvars */
+			s_intensity_slider.generic.callback = RestartNeededForAllMsg;
+			s_intensity_slider.minvalue = 1.0f;
+			s_intensity_slider.maxvalue = 10.0f;
 
-			s_gl4_overbrightbits_slider.generic.type = MTYPE_SLIDER;
-			s_gl4_overbrightbits_slider.generic.name = "overbrights";
-			s_gl4_overbrightbits_slider.generic.x = 0;
-			s_gl4_overbrightbits_slider.generic.y = (y += 10);
-			s_gl4_overbrightbits_slider.cvar = "gl4_overbrightbits";
-			s_gl4_overbrightbits_slider.minvalue = 0.1f;
-			s_gl4_overbrightbits_slider.maxvalue = 5.0f;
+			s_overbrightbits_slider.minvalue = 0;
+			s_overbrightbits_slider.maxvalue = 2;
+			s_overbrightbits_slider.slidestep = 1;
+			s_overbrightbits_slider.printformat = "%.0f";
+		}
+		else if (ref == VIDREF_VK)
+		{
+			s_intensity_slider.minvalue = 0;
+			s_intensity_slider.maxvalue = 5;
+			s_intensity_slider.slidestep = 1;
+			s_intensity_slider.printformat = "%.0f";
+		}
 
-			gl4_colorlight = Cvar_Get("gl4_colorlight", "1", CVAR_ARCHIVE);
-			s_gl4_colorlight_list.generic.type = MTYPE_SPINCONTROL;
-			s_gl4_colorlight_list.generic.name = "color light";
-			s_gl4_colorlight_list.generic.x = 0;
-			s_gl4_colorlight_list.generic.y = (y += 10);
-			s_gl4_colorlight_list.itemnames = yesno_names;
-			s_gl4_colorlight_list.curvalue = (gl4_colorlight->value != 0);
+		s_minlight_slider.generic.type = MTYPE_SLIDER;
+		s_minlight_slider.generic.name = "min. light level";
+		s_minlight_slider.generic.x = 0;
+		s_minlight_slider.generic.y = (sy += 10);
+		s_minlight_slider.generic.callback = RestartNeededForAllMsg;
+		s_minlight_slider.cvar = (char *)VidRules_Cvar(VIDITEM_MINLIGHT, rname);
+		s_minlight_slider.minvalue = 0;
+		s_minlight_slider.maxvalue = 32;
+		s_minlight_slider.slidestep = 4;
+		s_minlight_slider.printformat = "%.0f";
 
-			gl4_bloom = Cvar_Get("r_bloom", "1", CVAR_ARCHIVE);
-			s_gl4_bloom_list.generic.type = MTYPE_SPINCONTROL;
-			s_gl4_bloom_list.generic.name = "bloom";
-			s_gl4_bloom_list.generic.x = 0;
-			s_gl4_bloom_list.generic.y = (y += 10);
-			s_gl4_bloom_list.itemnames = yesno_names;
-			s_gl4_bloom_list.curvalue = (gl4_bloom->value != 0);
-			break;
+		/* color light: gl3 and gl4 */
+		s_colorlight_list.generic.type = MTYPE_SPINCONTROL;
+		s_colorlight_list.generic.name = "color light";
+		s_colorlight_list.generic.x = 0;
+		s_colorlight_list.generic.y = (sy += 10);
+		s_colorlight_list.itemnames = yesno_names;
+		cv = VidRules_Cvar(VIDITEM_COLORLIGHT, rname);
+		s_colorlight_list.curvalue = cv ? (Cvar_Get(cv, "1", CVAR_ARCHIVE)->value != 0) : 0;
 
-		case ref_vk:
-			s_vk_intensity_slider.generic.type = MTYPE_SLIDER;
-			s_vk_intensity_slider.generic.name = "color intensity";
-			s_vk_intensity_slider.generic.x = 0;
-			s_vk_intensity_slider.generic.y = (y += 10);
-			s_vk_intensity_slider.cvar = "vk_intensity";
-			s_vk_intensity_slider.minvalue = 0;
-			s_vk_intensity_slider.maxvalue = 5;
-			s_vk_intensity_slider.slidestep = 1;
-			s_vk_intensity_slider.printformat = "%.0f";
+		/* bloom: gl4 */
+		s_bloom_list.generic.type = MTYPE_SPINCONTROL;
+		s_bloom_list.generic.name = "bloom";
+		s_bloom_list.generic.x = 0;
+		s_bloom_list.generic.y = (sy += 10);
+		s_bloom_list.itemnames = yesno_names;
+		cv = VidRules_Cvar(VIDITEM_BLOOM, rname);
+		s_bloom_list.curvalue = cv ? (Cvar_Get(cv, "1", CVAR_ARCHIVE)->value != 0) : 0;
 
-			s_vk_overbrightbits_slider.generic.type = MTYPE_SLIDER;
-			s_vk_overbrightbits_slider.generic.name = "overbrights";
-			s_vk_overbrightbits_slider.generic.x = 0;
-			s_vk_overbrightbits_slider.generic.y = (y += 10);
-			s_vk_overbrightbits_slider.cvar = "vk_overbrightbits";
-			s_vk_overbrightbits_slider.minvalue = 0.1f;
-			s_vk_overbrightbits_slider.maxvalue = 5.0f;
+		/* dynamic light: vk */
+		s_dynlight_list.generic.type = MTYPE_SPINCONTROL;
+		s_dynlight_list.generic.name = "dynamic light";
+		s_dynlight_list.generic.x = 0;
+		s_dynlight_list.generic.y = (sy += 10);
+		s_dynlight_list.itemnames = yesno_names;
+		cv = VidRules_Cvar(VIDITEM_DYNLIGHT, rname);
+		s_dynlight_list.curvalue = cv ? (Cvar_Get(cv, "1", CVAR_ARCHIVE)->value != 0) : 0;
 
-			vk_dynamic = Cvar_Get("vk_dynamic", "1", CVAR_ARCHIVE);
-			s_vk_dynamic_list.generic.type = MTYPE_SPINCONTROL;
-			s_vk_dynamic_list.generic.name = "dynamic light";
-			s_vk_dynamic_list.generic.x = 0;
-			s_vk_dynamic_list.generic.y = (y += 10);
-			s_vk_dynamic_list.itemnames = yesno_names;
-			s_vk_dynamic_list.curvalue = (vk_dynamic->value != 0);
-			break;
+		SetRule(&s_intensity_slider.generic, VIDITEM_INTENSITY, 0);
+		SetRule(&s_overbrightbits_slider.generic, VIDITEM_OVERBRIGHT, 0);
+		SetRule(&s_minlight_slider.generic, VIDITEM_MINLIGHT, 0);
+		SetRule(&s_colorlight_list.generic, VIDITEM_COLORLIGHT, 0);
+		SetRule(&s_bloom_list.generic, VIDITEM_BLOOM, 0);
+		SetRule(&s_dynlight_list.generic, VIDITEM_DYNLIGHT, 0);
 
-		case ref_gl1:
-			gl3_colorlight = NULL;
-			s_gl1_intensity_slider.generic.type = MTYPE_SLIDER;
-			s_gl1_intensity_slider.generic.name = "color intensity";
-			s_gl1_intensity_slider.generic.x = 0;
-			s_gl1_intensity_slider.generic.y = (y += 10);
-			s_gl1_intensity_slider.generic.callback = RestartNeededForAllMsg;
-			s_gl1_intensity_slider.cvar = "gl1_intensity";
-			s_gl1_intensity_slider.minvalue = 1.0f;
-			s_gl1_intensity_slider.maxvalue = 10.0f;
-
-			s_gl1_overbrightbits_slider.generic.type = MTYPE_SLIDER;
-			s_gl1_overbrightbits_slider.generic.name = "overbrights";
-			s_gl1_overbrightbits_slider.generic.x = 0;
-			s_gl1_overbrightbits_slider.generic.y = (y += 10);
-			s_gl1_overbrightbits_slider.cvar = "gl1_overbrightbits";
-			s_gl1_overbrightbits_slider.minvalue = 0;
-			s_gl1_overbrightbits_slider.maxvalue = 2;
-			s_gl1_overbrightbits_slider.slidestep = 1;
-			s_gl1_overbrightbits_slider.printformat = "%.0f";
-
-			s_gl1_minlight_slider.generic.type = MTYPE_SLIDER;
-			s_gl1_minlight_slider.generic.name = "min. light level";
-			s_gl1_minlight_slider.generic.x = 0;
-			s_gl1_minlight_slider.generic.y = (y += 10);
-			s_gl1_minlight_slider.generic.callback = RestartNeededForAllMsg;
-			s_gl1_minlight_slider.cvar = "gl1_minlight";
-			s_gl1_minlight_slider.minvalue = 0;
-			s_gl1_minlight_slider.maxvalue = 32;
-			s_gl1_minlight_slider.slidestep = 4;
-			s_gl1_minlight_slider.printformat = "%.0f";
-			break;
-
-		default:
-			break;
+		/* A greyed list shows that it has no value here. */
+		static const char *na_names[] = { "n/a", NULL };
+		menulist_s *lists[] = { &s_colorlight_list, &s_bloom_list, &s_dynlight_list };
+		for (int i = 0; i < ARRLEN(lists); i++)
+		{
+			if (lists[i]->generic.flags & QMF_GRAYED)
+			{
+				lists[i]->itemnames = na_names;
+				lists[i]->curvalue = 0;
+			}
+		}
 	}
 
 	s_uiscale_list.generic.type = MTYPE_SPINCONTROL;
@@ -851,21 +986,17 @@ VID_MenuInit(void)
 		s_msaa_list.curvalue--;
 	}
 
+	/* ref_metal has no MSAA: greyed with the reason, with a single choice */
 	s_msaa_list.generic.flags = 0;
 	s_msaa_list.generic.statusbar = NULL;
-#ifdef __APPLE__
-	/* ref_metal has no MSAA: shown disabled, with the reason, and with
-	   a single choice so that it cannot be changed */
-	if (Q_stricmp(vid_renderer->string, "metal") == 0)
+	SetRule(&s_msaa_list.generic, VIDITEM_MSAA, 0);
+	if (s_msaa_list.generic.flags & QMF_GRAYED)
 	{
-		static const char *msaa_off_names[] = {"off", 0};
+		static const char *msaa_off_names[] = {"off", NULL};
 
 		s_msaa_list.itemnames = msaa_off_names;
 		s_msaa_list.curvalue = 0;
-		s_msaa_list.generic.flags |= QMF_GRAYED;
-		s_msaa_list.generic.statusbar = "no multisampling in the Metal renderer";
 	}
-#endif
 
 	s_filter_list.generic.type = MTYPE_SPINCONTROL;
 	s_filter_list.generic.name = "texture filter";
@@ -876,13 +1007,14 @@ VID_MenuInit(void)
 	const char* filter = NULL;
 	int mode = 0;
 
+	s_filter_list.generic.y = (y += 10);
+	s_filter_list.generic.flags = 0;
+	s_filter_list.itemnames = filter_names;
+
 	switch (current_renderer)
 	{
 		case ref_gl3:
 		case ref_gl1:
-			s_filter_list.generic.y = (y += 10);
-			s_filter_list.itemnames = filter_names;
-
 			filter = Cvar_VariableString("gl_texturemode");
 			mode = gl_filter_list_len;	// "custom" by default
 
@@ -897,7 +1029,6 @@ VID_MenuInit(void)
 			break;
 
 		case ref_soft:
-			s_filter_list.generic.y = (y += 10);
 			s_filter_list.itemnames = onoff_names;
 
 			filter = Cvar_VariableString("sw_texture_filtering");
@@ -910,16 +1041,117 @@ VID_MenuInit(void)
 			break;
 
 		default:
+			s_filter_list.itemnames = na_filter_names;
 			break;
 	}
 
+	SetRule(&s_filter_list.generic, VIDITEM_FILTER, 0);
+
 	s_filter_list.curvalue = mode;
+
+	/* The Metal options. The scaler applies from the next frame, after
+	   "apply" here; a mode the GPU lacks is marked and cannot be chosen,
+	   and what the renderer kept after the restart is what shows next. */
+	{
+		const int mask = MetalModeMask();
+		float v = Cvar_VariableValue("r_metalfx");
+		static const char *scaler_base[] = { "off", "spatial", "temporal", "temporal denoised" };
+		static char scaler_text[4][40];
+		static const char *scaler_names[5];
+		static const char *denoiser_names[] = { "off", "bilateral", "MetalFX", NULL };
+		static const char *na_names[] = { "n/a", NULL };
+		/* read without creating it: the ray-tracing code owns it */
+		const float dn = Cvar_VariableValue("r_rt_denoiser");
+
+		for (int i = 0; i < 4; i++)
+		{
+			if (VidRules_ScalerModeAvailable(mask, i))
+			{
+				scaler_names[i] = scaler_base[i];
+			}
+			else
+			{
+				Com_sprintf(scaler_text[i], sizeof(scaler_text[i]), "%s (n/a)", scaler_base[i]);
+				scaler_names[i] = scaler_text[i];
+			}
+		}
+		scaler_names[4] = NULL;
+
+		s_mfx_scaler_list.generic.type = MTYPE_SPINCONTROL;
+		s_mfx_scaler_list.generic.name = "MetalFX scaler";
+		s_mfx_scaler_list.generic.x = 0;
+		s_mfx_scaler_list.generic.y = (sy += 20);
+		s_mfx_scaler_list.generic.callback = MetalScalerChanged;
+		s_mfx_scaler_list.itemnames = scaler_names;
+		s_mfx_scaler_list.curvalue = VidRules_ScalerIndex(v);
+		s_mfx_scaler_prev = s_mfx_scaler_list.curvalue;
+
+		s_mfx_scale_list.generic.type = MTYPE_SPINCONTROL;
+		s_mfx_scale_list.generic.name = "MetalFX scale";
+		s_mfx_scale_list.generic.x = 0;
+		s_mfx_scale_list.generic.y = (sy += 10);
+		s_mfx_scale_list.generic.callback = MetalScaleChanged;
+		s_mfx_scale_list.itemnames = s_scale_na_names;
+		s_mfx_scale_list.curvalue = 0;
+
+		s_mfx_interp_list.generic.type = MTYPE_SPINCONTROL;
+		s_mfx_interp_list.generic.name = "frame generation";
+		s_mfx_interp_list.generic.x = 0;
+		s_mfx_interp_list.generic.y = (sy += 10);
+		s_mfx_interp_list.itemnames = onoff_names;
+		s_mfx_interp_list.curvalue = (Cvar_VariableValue("r_metalfx_interp") != 0);
+
+		s_denoiser_list.generic.type = MTYPE_SPINCONTROL;
+		s_denoiser_list.generic.name = "denoiser";
+		s_denoiser_list.generic.x = 0;
+		s_denoiser_list.generic.y = (sy += 10);
+		s_denoiser_list.itemnames = denoiser_names;
+		s_denoiser_list.curvalue = VidRules_DenoiserIndex(dn);
+
+		SetRule(&s_mfx_scaler_list.generic, VIDITEM_MFX_SCALER, s_mfx_scaler_list.curvalue);
+		ScaleItemUpdate(s_mfx_scaler_list.curvalue);
+		SetRule(&s_mfx_interp_list.generic, VIDITEM_MFX_INTERP, s_mfx_scaler_list.curvalue);
+		SetRule(&s_denoiser_list.generic, VIDITEM_DENOISER, s_mfx_scaler_list.curvalue);
+
+		/* A greyed list shows that it has no value here. */
+		if (s_mfx_scaler_list.generic.flags & QMF_GRAYED)
+		{
+			s_mfx_scaler_list.itemnames = na_names;
+			s_mfx_scaler_list.curvalue = 0;
+			s_mfx_scaler_prev = 0;
+		}
+		if (s_mfx_interp_list.generic.flags & QMF_GRAYED)
+		{
+			s_mfx_interp_list.itemnames = na_names;
+			s_mfx_interp_list.curvalue = 0;
+		}
+		if (s_denoiser_list.generic.flags & QMF_GRAYED)
+		{
+			s_denoiser_list.itemnames = na_names;
+			s_denoiser_list.curvalue = 0;
+		}
+	}
+
+	/* The renderer's own settings are a page of their own, with
+	   every item in it always shown. */
+	s_ropts_action.generic.type = MTYPE_ACTION;
+	s_ropts_action.generic.name = "renderer options...";
+	s_ropts_action.generic.x = 0;
+	s_ropts_action.generic.y = (y += 20);
+	s_ropts_action.generic.callback = OpenRendererOptions;
+	s_ropts_action.generic.statusbar = "lighting, MetalFX; greyed: n/a here";
 
 	s_defaults_action.generic.type = MTYPE_ACTION;
 	s_defaults_action.generic.name = "reset to default";
 	s_defaults_action.generic.x = 0;
-	s_defaults_action.generic.y = (y += 20);
+	s_defaults_action.generic.y = (y += 10);
 	s_defaults_action.generic.callback = ResetDefaults;
+
+	s_ropts_apply_action.generic.type = MTYPE_ACTION;
+	s_ropts_apply_action.generic.name = "apply";
+	s_ropts_apply_action.generic.x = 0;
+	s_ropts_apply_action.generic.y = (sy += 20);
+	s_ropts_apply_action.generic.callback = ApplyChanges;
 
 	s_apply_action.generic.type = MTYPE_ACTION;
 	s_apply_action.generic.name = "apply";
@@ -932,47 +1164,41 @@ VID_MenuInit(void)
 
 	Menu_AddItem(&s_opengl_menu, (void *)&s_brightness_slider);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_fov_slider);
-	switch (current_renderer)
-	{
-		case ref_gl3:
-			Menu_AddItem(&s_opengl_menu, (void *)&s_gl3_intensity_slider);
-			Menu_AddItem(&s_opengl_menu, (void *)&s_gl3_overbrightbits_slider);
-			Menu_AddItem(&s_opengl_menu, (void *)&s_gl3_colorlight_list);
-			break;
-		case ref_gl4:
-			Menu_AddItem(&s_opengl_menu, (void *)&s_gl4_intensity_slider);
-			Menu_AddItem(&s_opengl_menu, (void *)&s_gl4_overbrightbits_slider);
-			Menu_AddItem(&s_opengl_menu, (void *)&s_gl4_colorlight_list);
-			Menu_AddItem(&s_opengl_menu, (void *)&s_gl4_bloom_list);
-			break;
-		case ref_vk:
-			Menu_AddItem(&s_opengl_menu, (void *)&s_vk_intensity_slider);
-			Menu_AddItem(&s_opengl_menu, (void *)&s_vk_overbrightbits_slider);
-			Menu_AddItem(&s_opengl_menu, (void *)&s_vk_dynamic_list);
-			break;
-		case ref_gl1:
-			Menu_AddItem(&s_opengl_menu, (void *)&s_gl1_intensity_slider);
-			Menu_AddItem(&s_opengl_menu, (void *)&s_gl1_overbrightbits_slider);
-			Menu_AddItem(&s_opengl_menu, (void *)&s_gl1_minlight_slider);
-			break;
-		default:
-			break;
-	}
 	Menu_AddItem(&s_opengl_menu, (void *)&s_uiscale_list);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_fs_box);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_vsync_list);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_af_list);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_msaa_list);
-	if (current_renderer == ref_gl3 || current_renderer == ref_gl1 || current_renderer == ref_soft)
-	{
-		Menu_AddItem(&s_opengl_menu, (void *)&s_filter_list);
-	}
+	Menu_AddItem(&s_opengl_menu, (void *)&s_filter_list);
+	Menu_AddItem(&s_opengl_menu, (void *)&s_ropts_action);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_defaults_action);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_apply_action);
 
 	Menu_SetStatusBar(&s_opengl_menu, NULL);
 	Menu_Center(&s_opengl_menu);
 	s_opengl_menu.x -= 8;
+
+	/* the renderer's page */
+	s_ropts_menu.x = viddef.width * 0.50;
+	s_ropts_menu.nitems = 0;
+	s_ropts_menu.cursor = 0;
+	s_ropts_menu.banner = "m_banner_video";
+
+	Menu_AddItem(&s_ropts_menu, (void *)&s_intensity_slider);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_overbrightbits_slider);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_minlight_slider);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_colorlight_list);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_bloom_list);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_dynlight_list);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_mfx_scaler_list);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_mfx_scale_list);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_mfx_interp_list);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_denoiser_list);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_ropts_apply_action);
+
+	Menu_SetStatusBar(&s_ropts_menu, "Esc: back to the video menu");
+	Menu_Center(&s_ropts_menu);
+	s_ropts_menu.x -= 8;
 }
 
 /*

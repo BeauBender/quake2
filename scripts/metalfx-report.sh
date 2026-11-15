@@ -12,7 +12,7 @@
 #   shown beside this one), --bin PATH, --replace.
 # Build first: make client game ref_metal. The report holds frames made from game data: it goes
 # only outside every repository (the generator refuses any other path) and is never committed,
-# uploaded or attached. Procedure: docs/plans/metal-port-harness.md, "The MetalFX report (TASK114)".
+# uploaded or attached. Procedure: docs/runbook/TASK114.md.
 set -eu
 LC_ALL=C; export LC_ALL
 here=$(cd "$(dirname "$0")" && pwd -P)

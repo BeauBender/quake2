@@ -409,7 +409,7 @@ compute-dispatch ray queries, the synthetic closed scene, the later level
 of a process, trace only) with its table, row and column, or computed
 from those numbers by model R below, with the computation shown and the
 number marked as modelled. The runbook's TASK97 section
-(`docs/plans/metal-port-harness.md`, "Frame rates on a physical GPU
+(`docs/runbook/TASK97.md`, "Frame rates on a physical GPU
 (TASK97)") gives no cost used here: its numbers are `timedemo` frame
 rates, not GPU times; none is at a native size; the three renderers that
 present through a `CAMetalLayer` run at 60.0 to 60.1 fps at 1920x1080
@@ -1104,7 +1104,7 @@ frame's rectangle in place of the stretch. The jitter of the temporal modes is t
 (2, 3) pair minus 0.5 from index 1, a cycle of 32, started again on each reset
 (`rm_fx_jitter`). The reset events are those of section 2, with the client's teleport
 distance, 256 units on an axis, as the cut threshold (`RM_FX_CUT_DIST`). See the runbook,
-[MetalFX scalers for the 3D view](metal-port-harness.md#metalfx-scalers-for-the-3d-view-in-ref_metal-task111).
+[MetalFX scalers for the 3D view](../runbook/TASK111.md).
 
 **Previous-frame transforms.** `rm_gb_hist_t` (`header/rm_gbuf.h`;
 `rm_gbufscene.c` holds one) keeps the last world view's modelview,
@@ -1163,7 +1163,7 @@ off; the G-buffer path is taken when any effect is on or `r_rt_gbuffer` is
 set, and the forward path with depth and motion when `r_rt_motion` (or,
 later, a scaler) asks for it. Reversing it is one line in `rm_gb_path`
 (an effects-off view returning `RM_GB_PATH_GBUFFER`). The numbers and how
-they were taken are in `docs/plans/metal-port-harness.md`, TASK54.
+they were taken are in `docs/runbook/TASK54.md`.
 
 ## 4. Hardware gating
 
