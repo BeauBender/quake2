@@ -3811,7 +3811,7 @@ not the cause of those two rows). The ~120 is new against TASK97 (237.2 to
 328.1 at 640x480 and 294.3 to 326.2 at 1280x720 for the same renderers) and
 against the TASK92 section's frame-time table (`skywater`, `demo1.dm2`: 1285
 to 1398 fps for `metal` and 816 to 984 for `gl1-metal`, `r_vsync 0`, taken at a
-load of 7.8 to 13.4 on that section's host), both much higher. FIX53 (#250) now
+load of 7.8 to 13.4 on that section's host), both much higher. FIX51 (#238) now
 carries these data, for the windowed ceilings and the 1600x900 spread.
 The 1600x900 row reads neither: `ref_soft`
 197.7 to 321.2 (the runs split into 197.7 and 219.5 against 316.6 to 321.2),
@@ -4593,27 +4593,39 @@ Every cell is 0 in both renderers (20 runs of about 2,600 frames; per-run lines 
 kept outside the repository). The readback code is not in the tree: it
 changes the frame. It ran on an earlier form of this change (the pass's shader
 compiled from source on first use), built as `945b712f` on `22b786cd`. Its
-source is this branch's `58ede1ab`, an ancestor of the head
-(`git diff 945b712f 58ede1ab -- src` is empty). The pass was since moved into the shader libraries
+source change is the one in this branch's commit "FIX53: the Metal layer is
+not opaque when display sync is off, and the drawable's alpha is forced to 1
+then" (`58ede1ab` when measured; see the measured build below for its name
+now). The pass was since moved into the shader libraries
 and its pipeline into context creation (above); the shader and the pipeline
-state are the same, and the composited captures below, taken on the build at
-`68edb493`, are what cover the pass as it is now.
+state are the same, and the composited captures below, taken on the "after"
+build, are what cover the pass as it is now.
 
 **The measured build.** Before is main at `33845c6c`, built in a scratch
-worktree. After is `68edb493` (this branch, the first commit that has the
-pipeline built at init; every commit after it changes only documents, so
-`git diff 68edb493 HEAD -- src` was empty when measured). After the review
-the branch was rebased onto main at `9039f602` (TASK129, which changes only
-how a sky face's image is chosen, in `src/client/refresh/files/image.c`, and
-its tests). There `68edb493` is `f42611e1` and `58ede1ab` is `7d5b06d5`, and
-`git diff 68edb493 f42611e1 -- src/client/refresh/metal src/client/refresh/gl1`
-is empty, as is the same diff from `58ede1ab` to `7d5b06d5`. It was then
-rebased onto `a6f8532e` (TASK111, the MetalFX scalers), which does change
-renderer files under these numbers: in `rmb_encode.m` it adds
-`rmb_frame_cut` and a call to `rmb_fx_release` in the release path, and it
-touches `rmb_gbuf.m` and `rm_main.c`. The scalers are off by default, and
-these runs used no scaler. The merge may move the commits again; each keeps
-its subject line. Scratch builds, never committed:
+worktree. After is this branch's commit "FIX53: build the alpha pass
+pipeline at init, count it, latch a failure", which was `68edb493` on
+`33845c6c` when measured; every later commit of this branch changes only
+documents. Commit ids below that name a FIX53 commit (`68edb493`,
+`58ede1ab`) are those measured ids. The branch was rebased twice after the
+review, so the ids changed while the change did not:
+
+- onto `9039f602` (TASK129: how a sky face's image is chosen, in
+  `src/client/refresh/files/image.c`, and its tests): there the two commits
+  are `f42611e1` and `7d5b06d5`;
+- onto `a6f8532e` (TASK111, the MetalFX scalers): there they are `a25bbd0d`
+  and `c1b075f3`. TASK111 changes 12 files under `src/client/refresh/metal`
+  (`git diff --stat 9039f602 a6f8532e -- src`): five new MetalFX files,
+  `rmb_frame_cut` and an `rmb_fx_release` call in `rmb_encode.m`, a per-frame
+  `RM_FX_EndFrame` in `rm_main.c`, and small edits to `rmb_gbuf.m`,
+  `rm_gbufscene.c`, `rm_model.c`, `rm_pure.c` (the ledger line's new
+  `metalfx` kind) and `rmb.h`. None of them is in `rmb_frame_end`'s present
+  blit, the layer or the vsync path; the scalers are off by default and
+  these runs used none.
+
+The FIX53 source change itself is the same at every step: the added and
+removed lines of `git diff 33845c6c 68edb493 -- src` and of
+`git diff a6f8532e a25bbd0d -- src` are identical. A squash merge gives the
+change one more id; its subject lines identify it. Scratch builds, never committed:
 the pass disabled (the two `*_force_alpha` calls commented out at `68edb493`),
 and a probe build (`68edb493` plus `ScreenCaptureKit` captures, GPU
 timestamps in the shim and environment overrides of the layer's `opaque` and
@@ -4783,7 +4795,7 @@ the same `r_vsync` is 0 in both. `soft` was not captured: its layer is
 set by `sw_main.c` (C, no Objective-C in the file), so the probe does not
 fit there without more than a scratch edit; the `soft` window comparison is
 not made. `soft`'s layer change is FIX52's, not this card's; its capture is
-left to a card of its own.
+TASK132 (#319).
 
 **For FIX51 (#238).** At 1920x1080 with the layer not opaque `ref_metal`
 runs 330.8 to 346.9 fps (2.9 to 3.0 ms a frame) and the shim 238.2 to 287.1
