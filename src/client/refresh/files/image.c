@@ -34,6 +34,7 @@
 
 #include "../ref_shared.h"
 #include "imgdecode.h"
+#include "skyorder.h"
 
 // include resize implementation
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
@@ -440,6 +441,8 @@ static struct image_s *
 LoadHiColorImage(const char *name, const char* namewe, const char *ext,
 	imagetype_t type, loadimage_t load_image)
 {
+	skyorder_t order;
+	int pngw = 0, pngh = 0, stockw = 0, stockh = 0;
 	int realwidth = 0, realheight = 0;
 	int width = 0, height = 0;
 	struct image_s	*image = NULL;
@@ -463,9 +466,63 @@ LoadHiColorImage(const char *name, const char* namewe, const char *ext,
 		GetM32Info(name, &realwidth, &realheight);
 	}
 
+	/*
+	 * A sky face's PNG comes before the stock .tga when it is at least
+	 * as large: the PNG upscale_textures writes to the write directory
+	 * is not reached by the order below, as the pak's .tga is found
+	 * first. Here and not in GetSkyImage, as that asks for the .tga
+	 * and this loader then tries the .tga before the .png for any name.
+	 * Only the file reads are here, skyorder.h decides (the order and
+	 * the asset size: the stock face's, as the software renderer draws
+	 * a sky face 256 texels a row). No PNG, or a smaller one: the order
+	 * below, unchanged.
+	 */
+	if (type == it_sky && LoadDecoded(namewe, "png", &pic, &width, &height))
+	{
+		char tganame[256];
+		byte *tgadata = NULL;
+		int tgasize;
+
+		int tgaw = 0, tgah = 0;
+
+		pngw = width;
+		pngh = height;
+
+		/* a known original is the stock face: the .tga is read only without one */
+		if (!SkyOrder_SizeKnown(realwidth, realheight))
+		{
+			FixFileExt(namewe, "tga", tganame, sizeof(tganame));
+			tgasize = ri.FS_LoadFile(tganame, (void **)&tgadata);
+
+			if (tgadata != NULL)
+			{
+				SkyOrder_TgaSize(tgadata, tgasize > 0 ? (size_t)tgasize : 0,
+					&tgaw, &tgah);
+				ri.FS_FreeFile(tgadata);
+			}
+		}
+
+		SkyOrder_StockSize(realwidth, realheight, tgaw, tgah, &stockw, &stockh);
+	}
+
+	order = SkyOrder_Choose(type == it_sky, pngw, pngh, stockw, stockh);
+
+	if (!order.png_first && pic != NULL)
+	{
+		free(pic);
+		pic = NULL;
+	}
+
+	if (order.asset_w > 0 && order.asset_h > 0)
+	{
+		realwidth = order.asset_w;
+		realheight = order.asset_h;
+	}
+
 	/* try to load a tga, png or jpg (in that order/priority) */
-	if (  LoadDecoded(namewe, "tga", &pic, &width, &height)
-	   || LoadDecoded(namewe, "png", &pic, &width, &height)
+	if (  order.png_first
+	   || LoadDecoded(namewe, "tga", &pic, &width, &height)
+	   || (order.try_png_later && LoadDecoded(namewe, "png", &pic, &width, &height))
 	   || LoadDecoded(namewe, "jpg", &pic, &width, &height) )
 	{
 		if (width >= realwidth && height >= realheight)
