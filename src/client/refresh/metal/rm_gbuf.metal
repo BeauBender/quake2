@@ -50,6 +50,7 @@ using namespace metal;
 constant int rm_gb_kind [[function_constant(2)]];
 constant bool rm_gb_normals [[function_constant(3)]];   /* the world's per-vertex normals at buffer 2 */
 constant bool rm_gb_atest [[function_constant(4)]];     /* gl1's alpha test, GL_GREATER 0.666 */
+constant bool rm_gb_surf [[function_constant(5)]];      /* TASK131: the surface attachment at colour 5 (the raster while the shadows trace) */
 constant bool rm_gb_lm = (rm_gb_kind == 1);
 constant bool rm_gb_tex = (rm_gb_kind != 3);
 
@@ -97,7 +98,7 @@ struct rm_uniforms_mv
 	float4x4 nrm;
 	float2 half_vp;
 	uint material;
-	uint pad;
+	uint ent;           /* the surface attachment's entity (rm_gb_uniforms_t); read by rmb_gbuf_bind_world, not here */
 };
 
 struct rm_uniforms_resolve
@@ -120,6 +121,7 @@ struct rm_varying_gb
 	float4 cur;         /* this frame's clip position, unjittered */
 	float4 prev;        /* the previous frame's */
 	float3 normal;      /* world space */
+	uint surf [[flat, function_constant(rm_gb_surf)]];   /* the surface attachment's value (mtl_rts_gb_value) */
 };
 
 static mtl_rgba_t
@@ -173,7 +175,8 @@ rm_vertex_world_gb(uint vid [[vertex_id]],
 		const device rm_wvert *v [[buffer(0)]],
 		constant rm_uniforms3d &u [[buffer(1)]],
 		const device float4 *n [[buffer(2), function_constant(rm_gb_normals)]],
-		constant rm_uniforms_mv &m [[buffer(3)]])
+		constant rm_uniforms_mv &m [[buffer(3)]],
+		constant uint &tag [[buffer(4), function_constant(rm_gb_surf)]])
 {
 	rm_varying_gb out;
 	float4 p = u.mvp * v[vid].pos;
@@ -192,6 +195,12 @@ rm_vertex_world_gb(uint vid [[vertex_id]],
 	if (rm_gb_normals)
 	{
 		out.normal = (m.nrm * float4(n[vid].xyz, 0.0f)).xyz;
+	}
+
+	/* the vertex of the world's buffer and the entity (mtl_rts_gb_value); tag 0 for a dynamic draw */
+	if (rm_gb_surf)
+	{
+		out.surf = (tag != 0u) ? tag + vid : 0u;
 	}
 
 	return out;
@@ -218,6 +227,13 @@ rm_vertex_alias_gb(uint vid [[vertex_id]],
 	out.cur = m.cur * v[vid].pos;
 	out.prev = m.prev * x[vid].prev;
 	out.normal = (m.nrm * float4(x[vid].normal.xyz, 0.0f)).xyz;
+
+	/* an alias model names no surface */
+	if (rm_gb_surf)
+	{
+		out.surf = 0u;
+	}
+
 	return out;
 }
 
@@ -228,6 +244,7 @@ struct rm_gb_out
 	uint material [[color(2)]];
 	float2 motion [[color(3)]];
 	float4 light [[color(4)]];
+	uint surface [[color(5), function_constant(rm_gb_surf)]];
 };
 
 fragment rm_gb_out
@@ -259,6 +276,12 @@ rm_fragment_gbuf(rm_varying_gb in [[stage_in]],
 	out.normal = rm_gb_f4(mtl_gb_normal(nn.x, nn.y, nn.z));
 	out.material = m.material;
 	out.motion = rm_gb_motion(in, m);
+
+	if (rm_gb_surf)
+	{
+		out.surface = in.surf;
+	}
+
 	return out;
 }
 
