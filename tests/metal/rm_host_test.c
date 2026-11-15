@@ -48,6 +48,12 @@
 void rm_host_shim_raster(int vx, int vy, int vw, int vh, int tw, int th, double *out);
 /* the shim's two texture units on gl1's multitexture world draw */
 void rm_host_shim_world_lm(int env1, float scale, int opaque0, const float *d, const float *l, float *out);
+/* the shim's point arithmetic (mgl_point_size, mgl_point_quads), the original functions */
+void rm_host_shim_point_limits(float *out);
+void rm_host_shim_point_set(float size, float min, float max, float *out);
+float rm_host_shim_point_size(const rm_points_t *p, const float *eye);
+long rm_host_shim_point_quads(const rm_points_t *p, const float *mv, const float *proj, const rm_avert_t *in, long n,
+		float (*pos)[4], float (*pt)[4], unsigned short *idx);
 
 /* src/common/shared/shared.c, linked for files/surf.c, prints through the engine */
 void
@@ -202,7 +208,7 @@ test_stats(void)
 		"ref_metal: metal_stats: 23 frames, 1 without a drawable, 2 skipped, 3 failed command buffers, "
 		"4 readbacks, 5 no-op calls, 6 draws, 7 draws skipped, 8 uploads, 9 uploads skipped, "
 		"10 pass splits, 12 pipelines, 0 created after init, 1 live objects, "
-		"skipped surfaces: 13 sky, 14 warped, 15 translucent, 16 flowing; 17 dynamic lights left out; "
+		"skipped surfaces: 13 sky, 14 warped, 15 translucent, 16 flowing; 17 dynamic lights left out; 24 particles refused; "
 		"skipped entities: 18 sprites, 19 beams, 20 null models, 21 translucent brush models, 22 refused";
 	size_t n;
 
@@ -226,6 +232,7 @@ test_stats(void)
 	s.trans_skips = 15;
 	s.flow_skips = 16;
 	s.dlight_skips = 17;
+	s.particle_skips = 24;
 	s.sprite_skips = 18;
 	s.beam_skips = 19;
 	s.null_skips = 20;
@@ -6624,6 +6631,594 @@ test_flash_blob(void)
 	}
 }
 
+
+/* ---- particles (N9) ---- */
+
+/*
+ * The counts and bounds of a view's particles: the ring is the client's
+ * (MAX_PARTICLES), what lies past it is counted and not drawn, a negative
+ * count is none; a particle is drawn only with a finite origin within its
+ * bound, a colour that is a palette index and an alpha of 0 to 1.
+ */
+static void
+test_particle_bounds(void)
+{
+	const float o[3] = { 10, -20, 30 };
+	float b[3], big[3];
+	long refused = -1;
+	int i;
+
+	CHECK(RM_MAX_PARTICLES == MAX_PARTICLES);
+	CHECK(rm_particle_count(0, &refused) == 0 && refused == 0);
+	CHECK(rm_particle_count(1, &refused) == 1 && refused == 0);
+	CHECK(rm_particle_count(RM_MAX_PARTICLES, &refused) == RM_MAX_PARTICLES && refused == 0);
+	CHECK(rm_particle_count(RM_MAX_PARTICLES + 1, &refused) == RM_MAX_PARTICLES && refused == 1);
+	CHECK(rm_particle_count(100000, &refused) == RM_MAX_PARTICLES && refused == 100000 - RM_MAX_PARTICLES);
+	CHECK(rm_particle_count(-1, &refused) == 0 && refused == 0);
+	CHECK(rm_particle_count(LONG_MIN, &refused) == 0 && refused == 0);
+	CHECK(rm_particle_count(LONG_MAX, &refused) == RM_MAX_PARTICLES && refused == LONG_MAX - RM_MAX_PARTICLES);
+
+	CHECK(rm_particle_ok(o, 0, 0.0f) && rm_particle_ok(o, 255, 1.0f) && rm_particle_ok(o, 7, 0.5f));
+	CHECK(!rm_particle_ok(o, -1, 0.5f) && !rm_particle_ok(o, 256, 0.5f) && !rm_particle_ok(o, INT_MIN, 0.5f));
+	CHECK(!rm_particle_ok(o, INT_MAX, 0.5f));
+	CHECK(!rm_particle_ok(o, 7, -0.001f) && !rm_particle_ok(o, 7, 1.001f) && !rm_particle_ok(o, 7, NAN));
+	CHECK(!rm_particle_ok(o, 7, INFINITY) && !rm_particle_ok(o, 7, -INFINITY));
+
+	/* each axis: the bound itself is inside, past it, NaN and infinity are not */
+	for (i = 0; i < 3; i++)
+	{
+		memcpy(b, o, sizeof(b));
+		b[i] = RM_PARTICLE_BOUND;
+		CHECK(rm_particle_ok(b, 1, 1));
+		b[i] = -RM_PARTICLE_BOUND;
+		CHECK(rm_particle_ok(b, 1, 1));
+		b[i] = nextafterf(RM_PARTICLE_BOUND, INFINITY);
+		CHECK(!rm_particle_ok(b, 1, 1));
+		b[i] = -nextafterf(RM_PARTICLE_BOUND, INFINITY);
+		CHECK(!rm_particle_ok(b, 1, 1));
+		b[i] = NAN;
+		CHECK(!rm_particle_ok(b, 1, 1));
+		b[i] = INFINITY;
+		CHECK(!rm_particle_ok(b, 1, 1));
+		b[i] = -INFINITY;
+		CHECK(!rm_particle_ok(b, 1, 1));
+		b[i] = FLT_MAX;
+		CHECK(!rm_particle_ok(b, 1, 1));
+	}
+
+	big[0] = big[1] = big[2] = 0;
+	CHECK(rm_particle_ok(big, 0, 0));
+}
+
+/* gl1's colour bytes of R_DrawParticles: the palette entry's bytes through the gamma table, alpha * 255 as a byte */
+static void
+test_particle_color(void)
+{
+	unsigned pal[256];
+	unsigned char gam[256];
+	float c[4];
+	int i, same = 1;
+
+	for (i = 0; i < 256; i++)
+	{
+		pal[i] = (unsigned)(i * 3 + 1) | ((unsigned)(255 - i) << 8) | ((unsigned)((i * 7) & 0xff) << 16) | 0xff000000u;
+		gam[i] = (unsigned char)((i * 5 + 11) & 0xff);
+	}
+
+	rm_particle_color(pal, gam, 0, 1.0f, c);
+	CHECK(c[0] == gam[1] / 255.0f && c[1] == gam[255] / 255.0f && c[2] == gam[0] / 255.0f && c[3] == 1.0f);
+	rm_particle_color(pal, gam, 200, 0.5f, c);
+	/* 0.5 * 255 = 127.5: the byte is 127 */
+	CHECK(c[0] == gam[601 & 0xff] / 255.0f && c[1] == gam[55] / 255.0f && c[2] == gam[(1400) & 0xff] / 255.0f);
+	CHECK(c[3] == 127 / 255.0f);
+	rm_particle_color(pal, gam, 3, 0.0f, c);
+	CHECK(c[3] == 0.0f);
+
+	for (i = 0; i < 4000; i++)
+	{
+		const int col = (int)(rng() & 0xff);
+		const float a = rngf(0, 1);
+		const unsigned p = pal[col];
+		const unsigned char want[4] = { gam[p & 0xff], gam[(p >> 8) & 0xff], gam[(p >> 16) & 0xff], (unsigned char)(a * 255) };
+
+		rm_particle_color(pal, gam, col, a, c);
+		same = same && c[0] == want[0] / 255.0f && c[1] == want[1] / 255.0f && c[2] == want[2] / 255.0f &&
+			c[3] == want[3] / 255.0f;
+	}
+
+	CHECK(same);
+}
+
+static rm_points_t
+test_points(float size, float min, float max, float a, float b, float c, int smooth)
+{
+	rm_points_t p;
+
+	rm_point_state_init(&p);
+	p.size = size;
+	p.min = min;
+	p.max = max;
+	p.att[0] = a;
+	p.att[1] = b;
+	p.att[2] = c;
+	p.smooth = smooth;
+	p.vx = 0;
+	p.vy = 0;
+	p.vw = 640;
+	p.vh = 480;
+	return p;
+}
+
+/*
+ * The width of a point (gl1_particle_size scaled by the height over 480,
+ * gl1's attenuation 0.01, 0, 0.01, the range 2 to 40): at two eye
+ * distances, clamped to the minimum and to the maximum, square (a whole
+ * width) and smooth; each case against the shim's mgl_point_size.
+ */
+static void
+test_point_size(void)
+{
+	float lim[3], eye[4] = { 0, 0, 0, 1 };
+	/* gl1's defaults: size 40 at a height of 480, min 2, max 40, 0.01 0 0.01 */
+	rm_points_t sq = test_points(40, 2, 40, 0.01f, 0.0f, 0.01f, 0);
+	rm_points_t sm = test_points(40, 2, 40, 0.01f, 0.0f, 0.01f, 1);
+	int i, same = 1;
+
+	rm_host_shim_point_limits(lim);
+	CHECK(lim[0] == RM_POINT_ALIASED_MAX && lim[1] == RM_POINT_SMOOTH_MIN && lim[2] == RM_POINT_SMOOTH_MAX);
+
+	/* distance 100: 40 / sqrt(0.01 + 0.01 * 10000) = 40 / 10.0005 = 3.9998: a whole 4, smooth 3.9998 */
+	eye[2] = -100;
+	CHECK(rm_point_size(&sq, eye) == 4.0f);
+	CHECK(fabsf(rm_point_size(&sm, eye) - 3.9998f) < 1e-3f);
+	CHECK(rm_point_size(&sq, eye) == rm_host_shim_point_size(&sq, eye));
+	CHECK(rm_point_size(&sm, eye) == rm_host_shim_point_size(&sm, eye));
+
+	/* distance 10: 40 / sqrt(0.01 + 1) = 39.80: 40 whole; smooth 39.80 */
+	eye[2] = -10;
+	CHECK(rm_point_size(&sq, eye) == 40.0f);
+	CHECK(fabsf(rm_point_size(&sm, eye) - 39.8f) < 0.01f);
+
+	/* distance 1000: 40 / sqrt(0.01 + 10^4) = 0.4: clamped up to the minimum 2 */
+	eye[2] = -1000;
+	CHECK(rm_point_size(&sq, eye) == 2.0f && rm_point_size(&sm, eye) == 2.0f);
+
+	/* distance 0: 40 / sqrt(0.01) = 400: clamped down to the maximum 40 */
+	eye[2] = 0;
+	CHECK(rm_point_size(&sq, eye) == 40.0f && rm_point_size(&sm, eye) == 40.0f);
+
+	/* the distance, not the depth: a point 60 right and 80 up is at 100 */
+	eye[0] = 60;
+	eye[1] = 80;
+	CHECK(rm_point_size(&sq, eye) == 4.0f);
+
+	/* GL's own limits after the range: a smooth point at least 0.1 and at most 256; an aliased one at least 1, at most 8191 */
+	{
+		rm_points_t a = test_points(1000, 0, 100000, 1, 0, 0, 1), b = test_points(0.01f, 0, 1, 1, 0, 0, 1);
+		rm_points_t c = test_points(100000, 0, 100000, 1, 0, 0, 0), d = test_points(0.2f, 0, 1, 1, 0, 0, 0);
+
+		eye[0] = eye[1] = eye[2] = 0;
+		CHECK(rm_point_size(&a, eye) == 256.0f && rm_point_size(&b, eye) == 0.1f);
+		CHECK(rm_point_size(&c, eye) == 8191.0f && rm_point_size(&d, eye) == 1.0f);
+	}
+
+	/* a denominator that is not above 0 leaves the size; NaN and infinity are 1 */
+	{
+		rm_points_t z = test_points(7.4f, 0, 100, 0, 0, 0, 0), n = test_points(NAN, 0, 100, 1, 0, 0, 0);
+		rm_points_t i1 = test_points(5, 0, INFINITY, 0, 0, 0, 1);
+		rm_points_t i2 = test_points(INFINITY, 0, INFINITY, 1, 0, 0, 0), m = test_points(5, NAN, NAN, 1, 0, 0, 1);
+
+		CHECK(rm_point_size(&z, eye) == 7.0f);
+		CHECK(rm_point_size(&n, eye) == 1.0f);
+		CHECK(rm_point_size(&i1, eye) == 5.0f);
+		CHECK(rm_point_size(&i2, eye) == 1.0f);
+		CHECK(rm_point_size(&m, eye) == rm_host_shim_point_size(&m, eye));
+	}
+
+	/* random states and eyes against the shim's function */
+	for (i = 0; i < 20000; i++)
+	{
+		rm_points_t p = test_points(rngf(0.01f, 500), rngf(0, 20), rngf(0, 300), rngf(0, 2), rngf(-0.01f, 0.1f),
+				rngf(-0.001f, 0.1f), (int)(rng() & 1));
+		float e[4];
+
+		e[0] = rngf(-3000, 3000);
+		e[1] = rngf(-3000, 3000);
+		e[2] = rngf(-3000, 3000);
+		e[3] = 1;
+
+		if ((i % 7) == 0)
+		{
+			p.min = rngf(0, 600);
+			p.max = rngf(0, 600);
+		}
+
+		same = same && rm_point_size(&p, e) == rm_host_shim_point_size(&p, e);
+	}
+
+	CHECK(same);
+}
+
+/* glPointSize and glPointParameterf: what they refuse, as the shim does */
+static void
+test_point_state(void)
+{
+	rm_points_t s;
+	float sh[3];
+	const float vals[] = { 1, 0, -1, 0.5f, 40, NAN, INFINITY, -INFINITY, 1e30f, -0.0f };
+	int i, j, k, same = 1;
+
+	rm_point_state_init(&s);
+	CHECK(s.size == 1.0f && s.min == 0.0f && s.max == RM_POINT_ALIASED_MAX && s.att[0] == 1.0f && s.att[1] == 0.0f && s.att[2] == 0.0f);
+	CHECK(s.smooth == 0);
+
+	for (i = 0; i < (int)(sizeof(vals) / sizeof(vals[0])); i++)
+	{
+		for (j = 0; j < (int)(sizeof(vals) / sizeof(vals[0])); j++)
+		{
+			for (k = 0; k < (int)(sizeof(vals) / sizeof(vals[0])); k++)
+			{
+				rm_point_state_init(&s);
+				rm_point_set_size(&s, vals[i]);
+				rm_point_set_range(&s, vals[j], vals[k]);
+				rm_host_shim_point_set(vals[i], vals[j], vals[k], sh);
+				same = same && memcmp(&s.size, &sh[0], sizeof(float)) == 0 &&
+					memcmp(&s.min, &sh[1], sizeof(float)) == 0 && memcmp(&s.max, &sh[2], sizeof(float)) == 0;
+			}
+		}
+	}
+
+	CHECK(same);
+
+	/* a refused size keeps the one before it */
+	rm_point_state_init(&s);
+	rm_point_set_size(&s, 12);
+	rm_point_set_size(&s, 0);
+	rm_point_set_size(&s, -3);
+	rm_point_set_size(&s, NAN);
+	CHECK(s.size == 12.0f);
+	rm_point_set_range(&s, -1, -1);
+	CHECK(s.min == 0.0f && s.max == RM_POINT_ALIASED_MAX);
+}
+
+/*
+ * The quads of GL's points: the snapped square of an odd and an even
+ * width at a fractional centre (GL 1.4, section 3.3.1), the disc of a
+ * smooth point, a centre outside the clip volume dropped, and random
+ * points, states and viewports against the shim's mgl_point_quads, bit
+ * for bit.
+ */
+static void
+test_point_quads(void)
+{
+	static rm_avert_t in[64], got[4 * 64];
+	static unsigned short idx[6 * 64], widx[6 * 64];
+	static float wpos[4 * 64][4], wpt[4 * 64][4];
+	float id[16], mv[16], proj[16];
+	long n, k, i, j;
+	int same = 1, c;
+
+	mtl_mat_identity(id);
+
+	/* an orthographic-like view: identity matrices, clip = position, a 640 by 480 window at (0, 0) */
+	memset(in, 0, sizeof(in));
+	in[0].pos[3] = 1;
+	in[0].color[0] = 0.25f;
+	in[0].color[3] = 0.5f;
+
+	/* centre (0.3, 0.1): window x = 320 + 0.3 * 320 = 416, y = 240 + 0.1 * 240 = 264 exactly */
+	in[0].pos[0] = 0.3f;
+	in[0].pos[1] = 0.1f;
+	in[0].pos[2] = 0.5f;
+	{
+		rm_points_t p = test_points(3, 0, 100, 1, 0, 0, 0);
+
+		/* an odd width 3 is centred on a pixel centre: floor(416.0000x) + 0.5; the window x of 0.3f is 416.0000089 */
+		k = rm_point_quads(&p, id, id, in, 1, got, 4, idx, 6);
+		CHECK(k == 1);
+		CHECK(idx[0] == 0 && idx[1] == 1 && idx[2] == 2 && idx[3] == 0 && idx[4] == 2 && idx[5] == 3);
+
+		for (c = 0; c < 4; c++)
+		{
+			const double sx = (c == 0 || c == 3) ? -1 : 1, sy = (c < 2) ? -1 : 1;
+			const double wx = 416.5 + sx * 1.5, wy = 264.5 + sy * 1.5;
+
+			CHECK(fabs(got[c].pos[0] - ((wx - 0) * 2 / 640 - 1)) < 1e-6 && fabs(got[c].pos[1] - ((wy - 0) * 2 / 480 - 1)) < 1e-6);
+			CHECK(got[c].pos[2] == 0.5f && got[c].pos[3] == 1.0f);
+			CHECK(got[c].uv[0] == (float)(sx * 1.5) && got[c].uv[1] == (float)(sy * 1.5) && got[c].pad[0] == 1.5f && got[c].pad[1] == 0.0f);
+			CHECK(got[c].color[0] == 0.25f && got[c].color[3] == 0.5f);
+		}
+
+		/* an even width 4 is centred on a corner: floor(416.0000089 + 0.5) = 416, floor(264.0000x + 0.5) = 264 */
+		p.size = 4;
+		k = rm_point_quads(&p, id, id, in, 1, got, 4, idx, 6);
+		CHECK(k == 1);
+
+		for (c = 0; c < 4; c++)
+		{
+			const double sx = (c == 0 || c == 3) ? -1 : 1, sy = (c < 2) ? -1 : 1;
+			const double wx = 416 + sx * 2, wy = 264 + sy * 2;
+
+			CHECK(fabs(got[c].pos[0] - ((wx - 0) * 2 / 640 - 1)) < 1e-6 && fabs(got[c].pos[1] - ((wy - 0) * 2 / 480 - 1)) < 1e-6);
+		}
+
+		/* a fractional centre: x = 0.31 gives window 419.2, y = 0.12 gives 268.8: odd width 5 centres on 419.5, 268.5 */
+		in[0].pos[0] = 0.31f;
+		in[0].pos[1] = 0.12f;
+		p.size = 5;
+		k = rm_point_quads(&p, id, id, in, 1, got, 4, idx, 6);
+		CHECK(k == 1 && fabs(got[0].pos[0] - (((419.5 - 2.5) * 2 / 640) - 1)) < 1e-5 && fabs(got[0].pos[1] - (((268.5 - 2.5) * 2 / 480) - 1)) < 1e-5);
+		/* even width 6: floor(419.2 + 0.5) = 419, floor(268.8 + 0.5) = 269 */
+		p.size = 6;
+		k = rm_point_quads(&p, id, id, in, 1, got, 4, idx, 6);
+		CHECK(k == 1 && fabs(got[0].pos[0] - (((419.0 - 3) * 2 / 640) - 1)) < 1e-5 && fabs(got[0].pos[1] - (((269.0 - 3) * 2 / 480) - 1)) < 1e-5);
+
+		/* a smooth point is a disc about the exact centre: half the quad is the radius plus 1/2 */
+		p.smooth = 1;
+		p.size = 6;
+		k = rm_point_quads(&p, id, id, in, 1, got, 4, idx, 6);
+		CHECK(k == 1 && got[0].pad[0] == 3.0f && got[0].pad[1] == 1.0f && got[0].uv[0] == -3.5f && got[0].uv[1] == -3.5f);
+		CHECK(fabs(got[0].pos[0] - (((419.2 - 3.5) * 2 / 640) - 1)) < 1e-5);
+	}
+
+	/* a centre outside the clip volume drops the point: x, y past w, z past w, w not above 0, NaN */
+	{
+		rm_points_t p = test_points(3, 0, 100, 1, 0, 0, 0);
+		static const float out[][4] = {
+			{ 1.001f, 0, 0, 1 }, { -1.001f, 0, 0, 1 }, { 0, 1.001f, 0, 1 }, { 0, -1.001f, 0, 1 },
+			{ 0, 0, 1.001f, 1 }, { 0, 0, -1.001f, 1 }, { 0, 0, 0, 0 }, { 0, 0, 0, -1 }, { NAN, 0, 0, 1 },
+			{ 0, NAN, 0, 1 }, { 0, 0, NAN, 1 }
+		};
+		static const float edge[][4] = { { 1, 0, 0, 1 }, { -1, 0, 0, 1 }, { 0, 1, 0, 1 }, { 0, -1, 0, 1 }, { 0, 0, 1, 1 }, { 0, 0, -1, 1 } };
+
+		for (i = 0; i < (long)(sizeof(out) / sizeof(out[0])); i++)
+		{
+			memset(in, 0, sizeof(in[0]));
+			memcpy(in[0].pos, out[i], sizeof(out[i]));
+			k = rm_point_quads(&p, id, id, in, 1, got, 4, idx, 6);
+			CHECK(k == 0);
+		}
+
+		/* on the volume's edge it stays (GL: inside is |x| <= w) */
+		for (i = 0; i < (long)(sizeof(edge) / sizeof(edge[0])); i++)
+		{
+			memset(in, 0, sizeof(in[0]));
+			memcpy(in[0].pos, edge[i], sizeof(edge[i]));
+			k = rm_point_quads(&p, id, id, in, 1, got, 4, idx, 6);
+			CHECK(k == 1);
+		}
+
+		/* the dropped ones leave the rest in order: quad 0 is the second point's */
+		memset(in, 0, 3 * sizeof(in[0]));
+		in[0].pos[3] = 1;
+		in[0].pos[0] = 2;
+		in[1].pos[3] = 1;
+		in[1].pos[0] = 0.5f;
+		in[2].pos[3] = 1;
+		in[2].pos[0] = -3;
+		k = rm_point_quads(&p, id, id, in, 3, got, 12, idx, 18);
+		/* x = 0.5 is window 480: a width of 3 on the pixel centre 480.5, its first corner at 479 */
+		CHECK(k == 1 && fabs(got[0].pos[0] - (479.0 * 2 / 640 - 1)) < 1e-6);
+		CHECK(idx[6 * 0] == 0 && idx[5] == 3);
+
+		/* a viewport with no area draws nothing */
+		p.vw = 0;
+		k = rm_point_quads(&p, id, id, in, 3, got, 12, idx, 18);
+		CHECK(k == 0);
+	}
+
+	/* the capacity: -1 and nothing written when n or the buffers are out of bounds */
+	{
+		rm_points_t p = test_points(3, 0, 100, 1, 0, 0, 0);
+
+		memset(in, 0, sizeof(in));
+		memset(got, 0x5a, sizeof(got[0]) * 4);
+		idx[0] = 0x5a5a;
+		in[0].pos[3] = in[1].pos[3] = 1;
+		CHECK(rm_point_quads(&p, id, id, in, 2, got, 7, idx, 12) == -1);
+		CHECK(rm_point_quads(&p, id, id, in, 2, got, 8, idx, 11) == -1);
+		CHECK(rm_point_quads(&p, id, id, in, -1, got, 8, idx, 12) == -1);
+		CHECK(rm_point_quads(&p, id, id, in, RM_MAX_PARTICLES + 1, got, 4 * (RM_MAX_PARTICLES + 1), idx, 6 * (RM_MAX_PARTICLES + 1)) == -1);
+		CHECK(rm_point_quads(&p, id, id, NULL, 2, got, 8, idx, 12) == -1 && rm_point_quads(&p, id, id, in, 2, NULL, 8, idx, 12) == -1);
+		CHECK(rm_point_quads(&p, id, id, in, 2, got, 8, NULL, 12) == -1 && rm_point_quads(NULL, id, id, in, 2, got, 8, idx, 12) == -1);
+		CHECK(rm_point_quads(&p, NULL, id, in, 2, got, 8, idx, 12) == -1 && rm_point_quads(&p, id, NULL, in, 2, got, 8, idx, 12) == -1);
+		CHECK(((unsigned char *)got)[0] == 0x5a && idx[0] == 0x5a5a);
+		CHECK(rm_point_quads(&p, id, id, in, 2, got, 8, idx, 12) == 2);
+		CHECK(rm_point_quads(&p, id, id, in, 0, got, 0, idx, 0) == 0);
+	}
+
+	/* random views, states and points against the shim's mgl_point_quads, in 640 by 480 and other windows */
+	for (n = 0; n < 400; n++)
+	{
+		const float ang[3] = { rngf(-80, 80), rngf(0, 360), rngf(-30, 30) }, org[3] = { rngf(-500, 500), rngf(-500, 500), rngf(-100, 300) };
+		const int vw = 64 + (int)(rng() % 1500), vh = 48 + (int)(rng() % 900);
+		rm_points_t p = test_points(rngf(1, 80) * vh / 480.0f, rngf(0, 6), rngf(6, 60), 0.01f, 0, 0.01f, (int)(rng() & 1));
+		float mvp[16];
+		long m = 1 + (long)(rng() % 64), kq, wk;
+
+		if ((n % 5) == 0)
+		{
+			p.att[0] = rngf(0, 1);
+			p.att[1] = rngf(0, 0.01f);
+			p.att[2] = rngf(0, 0.001f);
+			p.max = rngf(1, 300);
+		}
+
+		p.vx = (double)(int)(rng() % 40);
+		p.vy = (double)(int)(rng() % 40);
+		p.vw = vw;
+		p.vh = vh;
+
+		rm_view_matrix(mv, ang, org);
+		CHECK(rm_projection(proj, rngf(30, 110), vw, vh, 4, (int)(rng() & 1), 0, 0, 0));
+		mtl_mat_mul(mvp, proj, mv);
+
+		memset(in, 0, sizeof(in));
+
+		for (i = 0; i < m; i++)
+		{
+			/* mostly in front of the view, some behind and far out */
+			float sp = (i % 5) == 0 ? 8000 : 700;
+
+			in[i].pos[0] = org[0] + rngf(-sp, sp);
+			in[i].pos[1] = org[1] + rngf(-sp, sp);
+			in[i].pos[2] = org[2] + rngf(-sp, sp);
+			in[i].pos[3] = 1;
+
+			for (j = 0; j < 4; j++)
+			{
+				in[i].color[j] = rngf(0, 1);
+			}
+		}
+
+		kq = rm_point_quads(&p, mv, mvp, in, m, got, 4 * m, idx, 6 * m);
+		wk = rm_host_shim_point_quads(&p, mv, proj, in, m, wpos, wpt, widx);
+		same = same && kq == wk;
+
+		for (i = 0; same && i < 4 * (wk < kq ? wk : kq); i++)
+		{
+			same = same && memcmp(got[i].pos, wpos[i], sizeof(wpos[i])) == 0;
+			same = same && got[i].uv[0] == wpt[i][0] && got[i].uv[1] == wpt[i][1] && got[i].pad[0] == wpt[i][2] && got[i].pad[1] == wpt[i][3];
+		}
+
+		for (i = 0; same && i < 6 * (wk < kq ? wk : kq); i++)
+		{
+			same = same && idx[i] == widx[i];
+		}
+
+		if (!same)
+		{
+			printf("point quads differ: view %ld, %ld points, %ld against %ld quads\n", n, m, kq, wk);
+			break;
+		}
+	}
+
+	CHECK(same);
+}
+
+/*
+ * gl1's textured particle (gl1_pointparameters 0): the triangle at the
+ * point, plus 1.5 vup and 1.5 vright times the scale (1 within 20 units
+ * of the eye along vpn, else 1 + distance * 0.004), worked by hand and in
+ * double on random views; the texture coordinates; a vertex that is not finite refuses it.
+ */
+static void
+test_particle_tri(void)
+{
+	const float eye[3] = { 100, 200, 300 }, vpn[3] = { 1, 0, 0 }, vup[3] = { 0, 0, 1 }, vright[3] = { 0, -1, 0 };
+	float v[3][3], tex[3][2];
+	float o[3];
+	int i, j, ok = 1;
+
+	/* 10 units ahead: scale 1 */
+	o[0] = 110; o[1] = 205; o[2] = 290;
+	CHECK(rm_particle_tri(o, eye, vpn, vup, vright, v));
+	CHECK(v[0][0] == 110 && v[0][1] == 205 && v[0][2] == 290);
+	CHECK(v[1][0] == 110 && v[1][1] == 205 && v[1][2] == 291.5f);
+	CHECK(v[2][0] == 110 && v[2][1] == 203.5f && v[2][2] == 290);
+
+	/* exactly 20 ahead is not "below 20" and gets 1 + 20 * 0.004 = 1.08 */
+	o[0] = 120;
+	CHECK(rm_particle_tri(o, eye, vpn, vup, vright, v));
+	CHECK(fabsf(v[1][2] - (290 + 1.5f * 1.08f)) < 1e-4f && fabsf(v[2][1] - (205 - 1.5f * 1.08f)) < 1e-4f);
+
+	/* 19.999 ahead is 1 */
+	o[0] = 119.999f;
+	CHECK(rm_particle_tri(o, eye, vpn, vup, vright, v) && v[1][2] == 291.5f);
+
+	/* behind the eye: scale 1 */
+	o[0] = 0;
+	CHECK(rm_particle_tri(o, eye, vpn, vup, vright, v) && v[1][2] == 291.5f);
+
+	/* 1000 ahead: 1 + 1000 * 0.004 = 5 */
+	o[0] = 1100;
+	CHECK(rm_particle_tri(o, eye, vpn, vup, vright, v) && fabsf(v[1][2] - (290 + 1.5f * 5)) < 1e-3f);
+
+	rm_particle_tex(tex);
+	CHECK(tex[0][0] == 0.0625f && tex[0][1] == 0.0625f && tex[1][0] == 1.0625f && tex[1][1] == 0.0625f);
+	CHECK(tex[2][0] == 0.0625f && tex[2][1] == 1.0625f);
+
+	/* random views against the same worked in double (the float arithmetic differs in the last bits only) */
+	for (i = 0; i < 5000; i++)
+	{
+		float e[3], n[3], u[3], r[3], p[3], t[3][3];
+		double d = 0, sc;
+
+		for (j = 0; j < 3; j++)
+		{
+			e[j] = rngf(-4000, 4000);
+			n[j] = rngf(-1, 1);
+			u[j] = rngf(-1, 1);
+			r[j] = rngf(-1, 1);
+			p[j] = e[j] + rngf(-3000, 3000);
+			d += (double)(p[j] - e[j]) * n[j];
+		}
+
+		sc = d < 20 ? 1.0 : 1 + d * 0.004;
+		ok = ok && rm_particle_tri(p, e, n, u, r, t);
+
+		for (j = 0; j < 3; j++)
+		{
+			ok = ok && t[0][j] == p[j] && fabs(t[1][j] - (p[j] + u[j] * 1.5 * sc)) < 1e-2 &&
+				fabs(t[2][j] - (p[j] + r[j] * 1.5 * sc)) < 1e-2;
+		}
+	}
+
+	CHECK(ok);
+
+	/* an origin far out makes a scale past the floats: refused, not drawn */
+	{
+		const float huge[3] = { 3e38f, 3e38f, 3e38f }, big_up[3] = { 3e38f, 3e38f, 3e38f };
+
+		CHECK(!rm_particle_tri(huge, eye, big_up, vup, vright, v));
+		o[0] = 1100;
+		CHECK(!rm_particle_tri(o, eye, vpn, big_up, vright, v));
+		o[0] = NAN;
+		CHECK(!rm_particle_tri(o, eye, vpn, vup, vright, v));
+	}
+}
+
+/* gl1's R_InitParticleTexture: white, alpha 85 times the table, the dot's and the square's corners and rows */
+static void
+test_particle_texture(void)
+{
+	unsigned char dot[16][16][4], sq[16][16][4];
+	int x, y, white = 1;
+
+	memset(dot, 0x5a, sizeof(dot));
+	memset(sq, 0x5a, sizeof(sq));
+	rm_particle_texture(0, dot);
+	rm_particle_texture(1, sq);
+
+	for (y = 0; y < 16; y++)
+	{
+		for (x = 0; x < 16; x++)
+		{
+			white = white && dot[y][x][0] == 255 && dot[y][x][1] == 255 && dot[y][x][2] == 255 &&
+				sq[y][x][0] == 255 && sq[y][x][1] == 255 && sq[y][x][2] == 255;
+			white = white && (dot[y][x][3] % 85) == 0 && (sq[y][x][3] % 85) == 0;
+		}
+	}
+
+	CHECK(white);
+
+	/* partData[y][x] = table[x][y] * 85: the dot's table row 1 is 0 0 1 2 3 3 2 1, so column 1 of the texture reads it down */
+	CHECK(dot[2][1][3] == 85 && dot[3][1][3] == 170 && dot[4][1][3] == 255 && dot[5][1][3] == 255 && dot[7][1][3] == 85 && dot[8][1][3] == 0);
+	CHECK(dot[0][0][3] == 0 && dot[1][1][3] == 0 && dot[15][15][3] == 0 && dot[4][4][3] == 255);
+	CHECK(dot[4][9][3] == 0 && dot[9][4][3] == 0);
+
+	/* the square: a 8 by 8 block of 255 from (1, 1), nothing else */
+	for (y = 0; y < 16; y++)
+	{
+		for (x = 0; x < 16; x++)
+		{
+			const int in_sq = (x >= 1 && x <= 8 && y >= 1 && y <= 8);
+
+			CHECK(sq[y][x][3] == (in_sq ? 255 : 0));
+		}
+	}
+}
+
 int
 main(void)
 {
@@ -6705,6 +7300,13 @@ main(void)
 	test_null_model();
 	test_shadow();
 	test_flash_blob();
+	test_particle_bounds();
+	test_particle_color();
+	test_point_size();
+	test_point_state();
+	test_point_quads();
+	test_particle_tri();
+	test_particle_texture();
 
 	printf("rm_host_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

@@ -93,6 +93,8 @@ typedef struct
 	unsigned long sky_skips, warp_skips, trans_skips, flow_skips;
 	/* the dynamic lights of the last 3D view left out: a float not finite or past its bound (rm_dlight_ok, N8) */
 	unsigned long dlight_skips;
+	/* the particles of the last 3D view not drawn: a field out of its bound (rm_particle_ok) or past the ring (N9) */
+	unsigned long particle_skips;
 	/*
 	 * the entities of the last 3D view not drawn, by class: sprites, beams
 	 * and null models whose draw was refused (N8: a float that is not
@@ -1320,6 +1322,105 @@ void rm_shadow_matrix(float *out, const float *world, const float *origin, float
 void rm_flash_blob(const float *origin, float intensity, const float *color, const float *vpn, const float *vright,
 		const float *vup, const unsigned char *gamma, rm_avert_t *out);
 
+/* ---- particles (rm_pure.c, N9) ------------------------------------------------------ */
+
+/* ref.h's MAX_PARTICLES: the client's ring, so the most one view holds (the host test holds them equal) */
+#define RM_MAX_PARTICLES 4096
+
+/*
+ * The particles a view draws of n: 0 to RM_MAX_PARTICLES; *refused is
+ * what lies past the ring (the client never sends more) and a negative n
+ * is none.
+ */
+int rm_particle_count(long n, long *refused);
+
+/* the largest magnitude of a particle origin coordinate taken: far past any map (a map is 8192 across) */
+#define RM_PARTICLE_BOUND 1e9f
+
+/*
+ * Whether a particle is drawn: its origin finite and within RM_PARTICLE_BOUND on every
+ * axis, its colour an index into the palette (0 to 255), its alpha 0 to 1
+ * (the client clamps it there). gl1 reads the colour table with the
+ * index it is given.
+ */
+int rm_particle_ok(const float *origin, int color, float alpha);
+
+/*
+ * gl1's colour of a particle (R_DrawParticles, R_DrawParticles2):
+ * gammatable of the palette entry's bytes and p->alpha * 255 as a byte,
+ * each as the shim reads a colour byte (b / 255.0f). The particle is one
+ * rm_particle_ok accepts.
+ */
+void rm_particle_color(const unsigned *palette, const unsigned char *gamma, int color, float alpha, float *rgba);
+
+/* GL's point sizes: the shim's MGL_POINT_ALIASED_MAX, _SMOOTH_MIN and _SMOOTH_MAX (the host test holds them equal) */
+#define RM_POINT_ALIASED_MAX 8191.0f
+#define RM_POINT_SMOOTH_MIN 0.1f
+#define RM_POINT_SMOOTH_MAX 256.0f
+
+/*
+ * The point state of gl1's draw (glPointSize, glPointParameterf and
+ * glPointParameterfv of the shim, R_SetDefaultState and R_DrawParticles)
+ * and the GL viewport the quads are snapped in: x, y of its bottom-left
+ * corner, w, h.
+ */
+typedef struct
+{
+	float size, min, max, att[3];
+	int smooth;             /* GL_POINT_SMOOTH: gl1_particle_square 0 */
+	double vx, vy, vw, vh;
+} rm_points_t;
+
+/* GL's initial state: size 1, the range 0 to RM_POINT_ALIASED_MAX, attenuation 1, 0, 0, not smooth */
+void rm_point_state_init(rm_points_t *s);
+
+/* the shim's glPointSize: a size not above 0 (NaN too) is refused, the old one kept */
+void rm_point_set_size(rm_points_t *s, float size);
+
+/* the shim's glPointParameterf of GL_POINT_SIZE_MIN and _MAX: a value below 0 is refused, the old one kept */
+void rm_point_set_range(rm_points_t *s, float min, float max);
+
+/*
+ * The shim's mgl_point_size: the width of a point at eye coordinates eye
+ * (4 floats): size over the square root of a + b d + c d d (d the distance
+ * from the eye; a denominator not above 0 leaves the size), kept to the
+ * range, then GL's: a smooth point 0.1 to 256, an aliased one a whole
+ * width of at least 1 and at most RM_POINT_ALIASED_MAX; a size that is
+ * not finite is 1.
+ */
+float rm_point_size(const rm_points_t *s, const float *eye);
+
+/*
+ * The shim's mgl_point_quads: the n points of in (the position and the
+ * colour; w = 1) become quads in clip coordinates for the identity
+ * matrix: mv is the modelview and mvp the product with the projection, a
+ * point outside the clip volume is dropped, a square (not smooth) point
+ * is snapped to the pixels as GL 1.4 section 3.3.1 has it and a smooth one
+ * is a disc about its centre (section 3.3.2: the quad's corners are
+ * (radius + 1/2) from the centre, and the fragment function covers the
+ * disc). The corners carry the offset from the centre in pixels (uv), the radius
+ * and the smooth flag (pad). The quads' vertices go to out (vcap of
+ * them) and their indices to idx (icap): quad k is 4k + (0 1 2 0 2 3).
+ * The number of quads written; -1, nothing written, when n is outside 0
+ * to RM_MAX_PARTICLES or out or idx cannot hold 4n vertices and 6n
+ * indices; 0 for a viewport with no area.
+ */
+long rm_point_quads(const rm_points_t *s, const float *mv, const float *mvp, const rm_avert_t *in, long n,
+		rm_avert_t *out, long vcap, unsigned short *idx, long icap);
+
+/*
+ * gl1's textured particle (R_DrawParticles2, gl1_pointparameters 0): the
+ * three vertices of the triangle of a particle at origin seen from eye
+ * along vpn with the view's vup and vright. 1; 0 when a vertex is not
+ * finite (not drawn). rm_particle_tex gives their texture coordinates.
+ */
+int rm_particle_tri(const float *origin, const float *eye, const float *vpn, const float *vup, const float *vright,
+		float (*vtx)[3]);
+void rm_particle_tex(float (*tex)[2]);
+
+/* gl1's R_InitParticleTexture: the 16 by 16 rgba texels of the dot (square 0) or the square (square 1) */
+void rm_particle_texture(int square, unsigned char (*data)[16][4]);
+
 /* ---- rmb_device.m and rmb_encode.m ------------------------------------------- */
 
 /*
@@ -1510,6 +1611,7 @@ typedef enum
 	RM_PIPE_ALIAS_SHELL_BLEND,  /* the same blended */
 	RM_PIPE_ALIAS_ATEST,    /* alias with gl1's alpha test (GL_GREATER 0.666): a sprite of alpha 1 (N8) */
 	RM_PIPE_ALIAS_SHELL_ADD,    /* alias, untextured, blended GL_ONE, GL_ONE: the flash blobs (gl1_flashblend, N8) */
+	RM_PIPE_PARTICLE,       /* particle: the vertex colour, a smooth point's coverage on its alpha, blended (N9) */
 	RM_PIPE_3D_COUNT
 } rm_pipe3d_t;
 
@@ -1684,6 +1786,7 @@ typedef struct
 	int atest;              /* textured and not blended: gl1's alpha test, GL_GREATER 0.666 (a sprite, N8) */
 	int add;                /* untextured: blended GL_ONE, GL_ONE instead (the flash blobs, N8) */
 	int stencil;            /* depth writes and gl1's stencil shadow test (RMB_DS_STENCIL_SHADOW, N8) */
+	int point;              /* untextured: the quads of gl1's GL_POINTS (rm_point_quads), blended, the particle pipeline (N9) */
 } rmb_alias_draw_t;
 
 /*
