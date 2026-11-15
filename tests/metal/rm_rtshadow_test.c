@@ -1305,6 +1305,377 @@ test_surface_map(void)
 	CHECK(rm_rts_surface_map(r, (long)MTL_RTS_SURF_UNLIT, 6, m) == -1);   /* an index would reach the bit */
 }
 
+/* TASK131: what the raster writes into the surface attachment, and the kernel's reading of it */
+static void
+test_gb_encode(void)
+{
+	const unsigned vids[] = { 0, 1, 2, 77, 65535, 65536, 1000000, MTL_RTS_GB_VMAX - 1 };
+	const unsigned ents[] = { 0, 1, 2, 64, 127, 128 };
+	unsigned i, j;
+	mtl_rts_gb_t g;
+
+	CHECK(mtl_rts_gb_tag(0) == 1u);
+	CHECK(mtl_rts_gb_tag(5) == ((5u << 24) | 1u));
+	CHECK(mtl_rts_gb_tag(MTL_RTS_GB_ENT_NONE) == 0xff000001u);
+	CHECK(mtl_rts_gb_value(0, 0) == 0 && mtl_rts_gb_value(0, 1234) == 0);   /* a draw that names no vertex */
+	CHECK(mtl_rts_gb_value(mtl_rts_gb_tag(0), 0) == 1u);
+	CHECK(mtl_rts_gb_value(mtl_rts_gb_tag(7), 41) == ((7u << 24) | 42u));
+
+	/* every vertex the table can hold and every entity, back as written */
+	for (i = 0; i < sizeof(vids) / sizeof(vids[0]); i++)
+	{
+		for (j = 0; j < sizeof(ents) / sizeof(ents[0]); j++)
+		{
+			const unsigned v = mtl_rts_gb_value(mtl_rts_gb_tag(ents[j]), vids[i]);
+
+			g = mtl_rts_gb_decode(v, MTL_RTS_GB_VMAX, MTL_RTS_GB_ENTS);
+			CHECK(g.ok && g.vid == vids[i] && g.ent == ents[j]);
+
+			/* a vertex past the map's table, an entity past the frame's rows */
+			g = mtl_rts_gb_decode(v, vids[i], MTL_RTS_GB_ENTS);
+			CHECK(!g.ok);
+			g = mtl_rts_gb_decode(v, MTL_RTS_GB_VMAX, ents[j] ? ents[j] - 1 : 0);
+			CHECK(g.ok == (ents[j] == 0));
+		}
+	}
+
+	CHECK(!mtl_rts_gb_decode(0, MTL_RTS_GB_VMAX, MTL_RTS_GB_ENTS).ok);        /* no static world draw wrote it */
+	CHECK(!mtl_rts_gb_decode(0x05000000u, MTL_RTS_GB_VMAX, MTL_RTS_GB_ENTS).ok);
+	CHECK(!mtl_rts_gb_decode(mtl_rts_gb_value(mtl_rts_gb_tag(MTL_RTS_GB_ENT_NONE), 3), 10, MTL_RTS_GB_ENTS).ok);
+	CHECK(!mtl_rts_gb_decode(mtl_rts_gb_value(mtl_rts_gb_tag(129), 3), 10, MTL_RTS_GB_ENTS).ok);
+	CHECK(!mtl_rts_gb_decode(mtl_rts_gb_value(mtl_rts_gb_tag(0), 3), 10, MTL_RTS_GB_ENTS + 1).ok);
+	CHECK(!mtl_rts_gb_decode(mtl_rts_gb_value(mtl_rts_gb_tag(0), 3), 0, 0).ok);   /* no table */
+	CHECK(mtl_rts_gb_decode(mtl_rts_gb_value(mtl_rts_gb_tag(0), 3), 4, 0).ok);
+
+	/* the table's bound: the last vertex plus one is the 24 bits' largest but one */
+	g = mtl_rts_gb_decode(mtl_rts_gb_value(mtl_rts_gb_tag(3), MTL_RTS_GB_VMAX - 1), MTL_RTS_GB_VMAX, 3);
+	CHECK(g.ok && g.vid == MTL_RTS_GB_VMAX - 1 && g.ent == 3);
+	CHECK(MTL_RTS_GB_VMAX + 1 == MTL_RTS_GB_VMASK);
+
+	CHECK(mtl_rts_gb_surf_ok(0, 1) && !mtl_rts_gb_surf_ok(1, 1));
+	CHECK(mtl_rts_gb_surf_ok(2 | MTL_RTS_SURF_UNLIT, 3) && !mtl_rts_gb_surf_ok(0xffffffffu, 0x7ffffffeu));
+	CHECK(!mtl_rts_gb_surf_ok(0, 0));
+}
+
+static void
+test_vertex_map(void)
+{
+	rm_rts_vrange_t r[3] = { { 0, 4, 0 }, { 4, 3, 1 }, { 9, 2, 0 } };
+	unsigned m[12], k;
+
+	CHECK(rm_rts_vertex_map(r, 3, 12, m) == 9);
+	CHECK(m[0] == 0 && m[1] == 0 && m[2] == 0 && m[3] == 0);
+	CHECK(m[4] == (1u | MTL_RTS_SURF_UNLIT) && m[5] == m[4] && m[6] == m[4]);
+	CHECK(m[7] == 0xffffffffu && m[8] == 0xffffffffu && m[11] == 0xffffffffu);
+	CHECK(m[9] == 2 && m[10] == 2);
+
+	CHECK(rm_rts_vertex_map(r, 3, 10, m) == -1);       /* past the buffer */
+	r[2].first_vertex = 6;
+	CHECK(rm_rts_vertex_map(r, 3, 12, m) == -1);       /* overlaps the second */
+	r[2].first_vertex = 0xfffffffeu;
+	CHECK(rm_rts_vertex_map(r, 3, 12, m) == -1);       /* its end wraps */
+	r[2].first_vertex = 9;
+	r[2].num_vertices = 0;
+	CHECK(rm_rts_vertex_map(r, 3, 12, m) == 7 && m[9] == 0xffffffffu);   /* a surface without vertices */
+	CHECK(rm_rts_vertex_map(r, 0, 12, m) == 0);
+
+	for (k = 0; k < 12; k++)
+	{
+		CHECK(m[k] == 0xffffffffu);
+	}
+
+	CHECK(rm_rts_vertex_map(NULL, 1, 12, m) == -1);
+	CHECK(rm_rts_vertex_map(r, -1, 12, m) == -1);
+	CHECK(rm_rts_vertex_map(r, (long)MTL_RTS_SURF_UNLIT, 12, m) == -1);   /* an index would reach the bit */
+	CHECK(rm_rts_vertex_map(r, 0, (unsigned long)MTL_RTS_GB_VMAX + 1, NULL) == -1);   /* past the 24 bits */
+}
+
+/* the object-to-world xform of rm_rt_transform (column-major 4 by 3) applied to p */
+static void
+o2w_point(const float *xf, const float *p, float *out)
+{
+	int k;
+
+	for (k = 0; k < 3; k++)
+	{
+		out[k] = xf[k] * p[0] + xf[3 + k] * p[1] + xf[6 + k] * p[2] + xf[9 + k];
+	}
+}
+
+static mtl_rts_v4_t
+row4(const float *f)
+{
+	mtl_rts_v4_t v;
+
+	v.x = f[0];
+	v.y = f[1];
+	v.z = f[2];
+	v.w = f[3];
+	return v;
+}
+
+static void
+test_ent_rows(void)
+{
+	const float zero[3] = { 0, 0, 0 };
+	float rows[RM_RTS_ROW_FLOATS], xf[12];
+	int c, i, bad = 0;
+
+	CHECK(rm_rts_ent_rows(zero, zero, rows) == 1);
+	CHECK(rows[0] == 1 && rows[1] == 0 && rows[2] == 0 && rows[3] == 0);
+	CHECK(rows[4] == 0 && rows[5] == 1 && rows[6] == 0 && rows[7] == 0);
+	CHECK(rows[8] == 0 && rows[9] == 0 && rows[10] == 1 && rows[11] == 0);
+	CHECK(rows[12] == 1 && rows[13] == 0 && rows[14] == 0 && rows[15] == 0);
+
+	/* the inverse of the instance's transform: a point of the model's space back from the world */
+	for (c = 0; c < 400; c++)
+	{
+		const float o[3] = { frand(-2000, 2000), frand(-2000, 2000), frand(-1000, 1000) };
+		const float a[3] = { (c % 3) ? frand(-90, 90) : 0.0f, frand(-360, 360), (c % 4 == 1) ? frand(-180, 180) : 0.0f };
+		mtl_rts_xform_t w;
+
+		CHECK(rm_rts_ent_rows(o, a, rows) == 1);
+		CHECK(rows[12] == 1);
+		w = mtl_rts_xform_rows(row4(rows), row4(rows + 4), row4(rows + 8));
+		rm_rt_transform(o, a, 1, xf);
+
+		for (i = 0; i < 4; i++)
+		{
+			const float pm[3] = { frand(-500, 500), frand(-500, 500), frand(-500, 500) };
+			float pw[3];
+			mtl_rts_v3_t back;
+
+			o2w_point(xf, pm, pw);
+			back = mtl_rts_xpoint(w, mtl_rts_v3(pw[0], pw[1], pw[2]));
+			bad += !(near(back.x, pm[0], 2e-3) && near(back.y, pm[1], 2e-3) && near(back.z, pm[2], 2e-3));
+		}
+	}
+
+	CHECK(bad == 0);
+
+	/* a transform that is not finite: the identity's rows, marked unusable */
+	{
+		const float o[3] = { NAN, 0, 0 }, a[3] = { 0, INFINITY, 0 };
+
+		rows[0] = 7;
+		CHECK(rm_rts_ent_rows(o, zero, rows) == 0);
+		CHECK(rows[0] == 1 && rows[5] == 1 && rows[10] == 1 && rows[3] == 0 && rows[12] == 0);
+		CHECK(rm_rts_ent_rows(zero, a, rows) == 0 && rows[12] == 0);
+	}
+}
+
+static void
+test_gb_lookup(void)
+{
+	static float bl[LUX * LUX * 3];
+	const rm_rts_vrange_t r[3] = { { 0, 4, 0 }, { 4, 4, 1 }, { 10, 4, 0 } };
+	const float zero[3] = { 0, 0, 0 }, white[3] = { 1, 1, 1 };
+	const float o1[3] = { 128, -64, 32 }, a1[3] = { 0, 90, 0 }, bad_o[3] = { NAN, 0, 0 };
+	float rows[3 * RM_RTS_ROW_FLOATS];
+	unsigned m[16], raw, k, e;
+	mtl_rts_xform_t w;
+	int c, cases = 0, wrong = 0;
+
+	CHECK(rm_rts_vertex_map(r, 3, 16, m) == 12);
+	CHECK(rm_rts_ent_rows(zero, zero, rows) == 1);          /* entity 0: a brush model in place */
+	CHECK(rm_rts_ent_rows(o1, a1, rows + 16) == 1);         /* entity 1: moved and turned */
+	CHECK(rm_rts_ent_rows(bad_o, zero, rows + 32) == 0);    /* entity 2: no usable transform */
+
+	/* every vertex, drawn by the world and by each entity */
+	for (k = 0; k < 16; k++)
+	{
+		for (e = 0; e <= 3; e++)
+		{
+			const unsigned v = mtl_rts_gb_value(mtl_rts_gb_tag(e), k);
+			const int want = (m[k] != 0xffffffffu) && (e != 3);
+			int got;
+
+			raw = 99;
+			got = rm_rts_gb_lookup(v, m, 16, 3, rows, 3, &raw, &w);
+			CHECK(got == want);
+
+			if (got)
+			{
+				const mtl_rts_v3_t p = mtl_rts_xpoint(w, mtl_rts_v3(1, 2, 3));
+
+				CHECK(raw == m[k]);
+
+				if (e == 2)
+				{
+					float xf1[12], q[3];
+					const float pm[3] = { 1, 2, 3 };
+					mtl_rts_v3_t back;
+
+					/* entity 1's transform taken back: its model-space point */
+					rm_rt_transform(o1, a1, 1, xf1);
+					o2w_point(xf1, pm, q);
+					back = mtl_rts_xpoint(w, mtl_rts_v3(q[0], q[1], q[2]));
+					CHECK(near(back.x, 1, 1e-3) && near(back.y, 2, 1e-3) && near(back.z, 3, 1e-3));
+					CHECK(!(near(p.x, 1, 1e-3) && near(p.y, 2, 1e-3)));   /* not the identity */
+				}
+
+				if (e <= 1)
+				{
+					CHECK(near(p.x, 1, 1e-6) && near(p.y, 2, 1e-6) && near(p.z, 3, 1e-6));   /* the world's space */
+				}
+			}
+		}
+	}
+
+	/* what names no surface: no draw, a model the raster could not name, a vertex past the table, fewer tables */
+	CHECK(!rm_rts_gb_lookup(0, m, 16, 3, rows, 3, &raw, &w));
+	CHECK(!rm_rts_gb_lookup(mtl_rts_gb_value(mtl_rts_gb_tag(MTL_RTS_GB_ENT_NONE), 0), m, 16, 3, rows, 3, &raw, &w));
+	CHECK(!rm_rts_gb_lookup(mtl_rts_gb_value(mtl_rts_gb_tag(0), 16), m, 16, 3, rows, 3, &raw, &w));
+	CHECK(!rm_rts_gb_lookup(mtl_rts_gb_value(mtl_rts_gb_tag(0), 10), m, 16, 2, rows, 3, &raw, &w));   /* surface 2 of 2 */
+	CHECK(rm_rts_gb_lookup(mtl_rts_gb_value(mtl_rts_gb_tag(0), 10), m, 16, 3, rows, 0, &raw, &w) && raw == 2);
+	CHECK(!rm_rts_gb_lookup(mtl_rts_gb_value(mtl_rts_gb_tag(2), 10), m, 16, 3, rows, 1, &raw, &w));   /* past the rows */
+	CHECK(!rm_rts_gb_lookup(mtl_rts_gb_value(mtl_rts_gb_tag(0), 10), NULL, 16, 3, rows, 3, &raw, &w));
+	CHECK(!rm_rts_gb_lookup(mtl_rts_gb_value(mtl_rts_gb_tag(1), 10), m, 16, 3, NULL, 3, &raw, &w));
+	CHECK(rm_rts_gb_lookup(mtl_rts_gb_value(mtl_rts_gb_tag(0), 10), m, 16, 3, NULL, 0, &raw, &w));
+	CHECK(rm_rts_gb_lookup(mtl_rts_gb_value(mtl_rts_gb_tag(0), 4), m, 16, 3, rows, 3, &raw, &w) &&
+		raw == (1u | MTL_RTS_SURF_UNLIT));
+
+	/*
+	 * Through the lookup, gl1's add at every luxel of turned and moved
+	 * brush models' faces: the pixel's world point, its entity's rows from
+	 * rm_rts_ent_rows and its surface from the vertex table, lit as
+	 * R_AddDynamicLights lights the face in the model's space with the
+	 * light's world origin (rm_lm_dlight).
+	 */
+	for (c = 0; c < 150; c++)
+	{
+		const float o[3] = { (float)(int)frand(-600, 600), (float)(int)frand(-600, 600), (float)(int)frand(-300, 300) };
+		const float a[3] = { (c % 3) ? frand(-60, 60) : 0.0f, frand(-180, 180), (c % 4 == 1) ? frand(-60, 60) : 0.0f };
+		const float intensity = (float)(int)frand(100, 400) + 0.5f;
+		const int tm0 = 16 * (int)frand(-20, 20), tm1 = 16 * (int)frand(-20, 20), axis = c % 3;
+		const int su = (axis == 0) ? 1 : 0, tvx = (axis == 2) ? 1 : 2;
+		float n[3] = { 0, 0, 0 }, vecs0[4] = { 0, 0, 0, 0 }, vecs1[4] = { 0, 0, 0, 0 }, origin[3], dist, xf[12];
+		float erow[2 * RM_RTS_ROW_FLOATS];
+		unsigned vtab[8];
+		const rm_rts_vrange_t fr[2] = { { 0, 4, 0 }, { 4, 4, 0 } };
+		rm_rts_light_t l[1];
+		mtl_rts_v4_t s4, t4, pl4;
+		int s, t, i;
+
+		n[axis] = (c % 2) ? 1.0f : -1.0f;
+		vecs0[su] = 1;
+		vecs1[tvx] = -1;
+		vecs0[3] = (float)(int)frand(-64, 64);
+		vecs1[3] = (float)(int)frand(-64, 64);
+		dist = (float)(int)frand(-100, 100);
+
+		for (i = 0; i < 3; i++)
+		{
+			origin[i] = n[i] * dist;
+		}
+
+		origin[su] = (tm0 + 8 * LUX - vecs0[3] + frand(-100, 100)) / vecs0[su];
+		origin[tvx] = (tm1 + 8 * LUX - vecs1[3] + frand(-100, 100)) / vecs1[tvx];
+
+		{
+			const float h = (float)(int)frand(1, intensity - 40) + 0.21f;
+
+			for (i = 0; i < 3; i++)
+			{
+				origin[i] += n[i] * h;
+			}
+		}
+
+		memset(bl, 0, sizeof(bl));
+
+		if (!rm_lm_dlight(bl, LUX, LUX, n, dist, vecs0, vecs1, tm0, tm1, origin, intensity, white))
+		{
+			continue;
+		}
+
+		cases++;
+		CHECK(rm_rts_vertex_map(fr, 2, 8, vtab) == 8);
+		CHECK(rm_rts_ent_rows(zero, zero, erow) == 1);
+		CHECK(rm_rts_ent_rows(o, a, erow + RM_RTS_ROW_FLOATS) == 1);
+		rm_rt_transform(o, a, 1, xf);
+		memcpy(&s4, vecs0, sizeof(s4));
+		memcpy(&t4, vecs1, sizeof(t4));
+		pl4.x = n[0];
+		pl4.y = n[1];
+		pl4.z = n[2];
+		pl4.w = dist;
+		memset(l, 0, sizeof(l));
+		memcpy(l[0].origin, origin, sizeof(origin));
+		l[0].origin[3] = intensity;
+		l[0].color[0] = l[0].color[1] = l[0].color[2] = 1;
+
+		for (t = 0; t < LUX; t++)
+		{
+			for (s = 0; s < LUX; s++)
+			{
+				float pm[3], pw[3], adds[MTL_RTS_MAX_LIGHTS];
+				unsigned flags = 0;
+				const float want = bl[(t * LUX + s) * 3];
+
+				pm[axis] = n[axis] * dist;
+				pm[su] = (tm0 + 16.0f * s - vecs0[3]) / vecs0[su];
+				pm[tvx] = (tm1 + 16.0f * t - vecs1[3]) / vecs1[tvx];
+				o2w_point(xf, pm, pw);
+
+				/* vertex 5, of surface 1, drawn by entity 1 (the second row) */
+				if (!rm_rts_gb_lookup(mtl_rts_gb_value(mtl_rts_gb_tag(2), 5), vtab, 8, 2, erow, 2, &raw, &w) ||
+					(raw != 1))
+				{
+					wrong++;
+					continue;
+				}
+
+				rm_rts_select(mtl_rts_surf(mtl_rts_v3(pw[0], pw[1], pw[2]), w, s4, t4, pl4, 0), l, 1, adds, &flags);
+				wrong += !near(adds[0], want, 0.05);
+
+				/* and the test before it never drops a luxel that a light reaches */
+				if ((want > 0) && !mtl_rts_near_plane(pl4, mtl_rts_xpoint(w, mtl_rts_v3(pw[0], pw[1], pw[2])),
+						mtl_rts_v3(origin[0], origin[1], origin[2]), intensity))
+				{
+					wrong++;
+				}
+			}
+		}
+	}
+
+	CHECK(cases > 100);
+	CHECK(wrong == 0);
+}
+
+/* TASK131: the test before a known surface is lit holds wherever the light is in range or adds */
+static void
+test_near_plane(void)
+{
+	const mtl_rts_v4_t sv = { 1, 0, 0, 0 }, tv = { 0, 1, 0, 0 }, up = { 0, 0, 1, 16 };
+	int c, kept = 0, dropped = 0, wrong = 0;
+
+	/* a light behind the plane, or too far above it to reach it, is dropped; one just above is kept */
+	CHECK(!mtl_rts_near_plane(up, mtl_rts_v3(0, 0, 16), mtl_rts_v3(0, 0, 10), 300));
+	CHECK(!mtl_rts_near_plane(up, mtl_rts_v3(0, 0, 16), mtl_rts_v3(0, 0, 16 + 300), 300));
+	CHECK(mtl_rts_near_plane(up, mtl_rts_v3(0, 0, 16), mtl_rts_v3(0, 0, 16.125f), 300));
+	CHECK(mtl_rts_near_plane(up, mtl_rts_v3(0, 0, 16), mtl_rts_v3(0, 0, 16 + 300 - 64), 300));
+
+	for (c = 0; c < 20000; c++)
+	{
+		const float a = frand(0, 6.2831853f), b = frand(-1.5f, 1.5f);
+		const mtl_rts_v3_t n = mtl_rts_v3(cosf(a) * cosf(b), sinf(a) * cosf(b), sinf(b));
+		const float d = frand(-500, 500), intensity = frand(50, 500);
+		const mtl_rts_v4_t pl = { n.x, n.y, n.z, d };
+		const mtl_rts_v3_t p = mtl_rts_v3(n.x * d + frand(-300, 300), n.y * d + frand(-300, 300), n.z * d + frand(-300, 300));
+		const mtl_rts_v3_t o = mtl_rts_v3(p.x + frand(-400, 400), p.y + frand(-400, 400), p.z + frand(-400, 400));
+		const mtl_rts_lit_t li = mtl_rts_surf_light(mtl_rts_surf(p, mtl_rts_xform_identity(), sv, tv, pl, 0), o, intensity);
+		const mtl_rts_v3_t pp = mtl_rts_surf(p, mtl_rts_xform_identity(), sv, tv, pl, 0).p;
+		const int keep = mtl_rts_near_plane(pl, pp, o, intensity);
+
+		wrong += (li.in_range || (li.add > 0)) && !keep;
+		kept += keep;
+		dropped += !keep;
+	}
+
+	CHECK(wrong == 0);
+	CHECK(kept > 1000 && dropped > 1000);   /* it prunes */
+}
+
 static void
 test_alias_box(void)
 {
@@ -1589,6 +1960,11 @@ main(void)
 	test_plane_exact();
 	test_unlit();
 	test_surface_map();
+	test_gb_encode();
+	test_vertex_map();
+	test_ent_rows();
+	test_gb_lookup();
+	test_near_plane();
 	test_alias_box();
 	test_carried();
 	test_light_bit();

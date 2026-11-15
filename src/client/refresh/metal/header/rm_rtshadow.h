@@ -178,6 +178,54 @@ typedef struct
 long rm_rts_surface_map(const rm_rts_range_t *r, long nsurf, unsigned long ntris, unsigned *tri_surf);
 
 /*
+ * TASK131: a surface's range of the world's vertex buffer (msurface_t's
+ * first_vertex and num_vertices), and unlit as above.
+ */
+typedef struct
+{
+	unsigned first_vertex;
+	unsigned num_vertices;
+	unsigned unlit;
+} rm_rts_vrange_t;
+
+/*
+ * The surface of each of the nverts vertices of the world's vertex
+ * buffer, from the nsurf surfaces' ranges, for the G-buffer's surface
+ * attachment (mtl_rts_gb_decode): vert_surf[k] as rm_rts_surface_map's
+ * tri_surf[k], ~0 for a vertex no surface holds. The number of vertices
+ * assigned; -1 when a range passes nverts or two ranges overlap, when
+ * nsurf is MTL_RTS_SURF_UNLIT or more, or nverts more than MTL_RTS_GB_VMAX
+ * (the attachment's 24 bits could not name every vertex).
+ */
+long rm_rts_vertex_map(const rm_rts_vrange_t *r, long nsurf, unsigned long nverts, unsigned *vert_surf);
+
+/*
+ * A refdef entity's row of the kernel's entity table (TASK131): for a
+ * brush model at origin and angles (gl1's, as rm_rt_transform takes them),
+ * the three rows of its world-to-object transform, the inverse of
+ * rm_rt_transform's (mtl_rts_xform_rows), then 1, 0, 0, 0: 16 floats into
+ * out. 0 with the identity's rows and a last row of 0 when the transform
+ * is not finite or cannot be inverted (the kernel then looks for the
+ * pixel's surface with a ray, as before).
+ */
+#define RM_RTS_ROW_FLOATS 16
+int rm_rts_ent_rows(const float *origin, const float *angles, float *out);
+
+/*
+ * The kernel's lookup of a pixel's surface from the G-buffer's surface
+ * attachment (rm_rts_trace), on the CPU: v the pixel's value, vert_surf
+ * the map's vertex table (nverts entries, rm_rts_vertex_map), nsurf its
+ * surfaces, rows the frame's entity table (nents rows of
+ * RM_RTS_ROW_FLOATS, rm_rts_ent_rows). 1 with *raw the vertex's entry
+ * (the surface index and MTL_RTS_SURF_UNLIT) and *w2o the pixel's
+ * world-to-object transform (the identity for the world); 0 when the
+ * value names no surface the tables hold (the kernel then traces the eye
+ * ray).
+ */
+int rm_rts_gb_lookup(unsigned v, const unsigned *vert_surf, unsigned long nverts, unsigned long nsurf,
+		const float *rows, int nents, unsigned *raw, mtl_rts_xform_t *w2o);
+
+/*
  * A surface's plane toward its front for the kernel (mtl_rts_surf): gl1's
  * plane (normal, dist), both negated when the surface faces its back
  * (SURF_PLANEBACK), into out[4]; a missing or non-finite plane gives
