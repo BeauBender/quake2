@@ -123,6 +123,52 @@ test_render_rect(void)
 	CHECK(o.x == 0 && o.y == 1 && o.w == 319 && o.h == 238 && o.znear == 0.25 && o.zfar == 1);
 }
 
+/* the raster/forward split of R_DrawEntitiesSplit: which pass draws an entity, and its shadow */
+static void
+test_entity_split(void)
+{
+	static const int shells[] = { RM_RF_SHELL_RED, RM_RF_SHELL_GREEN, RM_RF_SHELL_BLUE, RM_RF_SHELL_DOUBLE,
+		RM_RF_SHELL_HALF_DAM };
+	const int R = RM_GB_ENT_RASTER, F = RM_GB_ENT_FORWARD, S = RM_GB_ENT_SHADOW;
+	int i;
+
+	/* the opaque alias and brush models: the raster's; an alias model's shadow the forward pass's, with r_shadows */
+	CHECK(rm_gb_entity_split(0, RM_GB_KIND_ALIAS, 0) == R);
+	CHECK(rm_gb_entity_split(0, RM_GB_KIND_BRUSH, 0) == R);
+	CHECK(rm_gb_entity_split(0, RM_GB_KIND_ALIAS, 1) == (R | S));
+	CHECK(rm_gb_entity_split(0, RM_GB_KIND_BRUSH, 1) == R);
+	CHECK(rm_gb_entity_split(RM_RF_NOSHADOW, RM_GB_KIND_ALIAS, 1) == R);
+	/* flags that change how a model is lit, not where it is drawn */
+	CHECK(rm_gb_entity_split(RM_RF_MINLIGHT | RM_RF_FULLBRIGHT | RM_RF_GLOW | RM_RF_IR_VISIBLE | RM_RF_DEPTHHACK,
+			RM_GB_KIND_ALIAS, 0) == R);
+	CHECK(rm_gb_entity_split(RM_RF_FULLBRIGHT, RM_GB_KIND_BRUSH, 1) == R);
+
+	/* the view weapon, a beam, a translucent entity and every shell: the forward pass's whole */
+	CHECK(rm_gb_entity_split(RM_RF_WEAPONMODEL, RM_GB_KIND_ALIAS, 1) == F);
+	CHECK(rm_gb_entity_split(RM_RF_WEAPONMODEL, RM_GB_KIND_BRUSH, 0) == F);
+	CHECK(rm_gb_entity_split(RM_RF_BEAM, RM_GB_KIND_NONE, 1) == F);
+	CHECK(rm_gb_entity_split(RM_RF_BEAM, RM_GB_KIND_ALIAS, 1) == F);
+	CHECK(rm_gb_entity_split(RM_RF_BEAM, RM_GB_KIND_BRUSH, 0) == F);
+	CHECK(rm_gb_entity_split(RM_RF_TRANSLUCENT, RM_GB_KIND_ALIAS, 1) == F);
+	CHECK(rm_gb_entity_split(RM_RF_TRANSLUCENT, RM_GB_KIND_BRUSH, 0) == F);
+
+	for (i = 0; i < (int)(sizeof(shells) / sizeof(shells[0])); i++)
+	{
+		CHECK(rm_gb_entity_split(shells[i], RM_GB_KIND_ALIAS, 1) == F);
+		CHECK(rm_gb_entity_split(shells[i], RM_GB_KIND_BRUSH, 0) == F);
+	}
+
+	/* no model (the null model), a sprite, a kind not known: the forward pass's */
+	CHECK(rm_gb_entity_split(0, RM_GB_KIND_NONE, 1) == F);
+	CHECK(rm_gb_entity_split(0, RM_GB_KIND_OTHER, 1) == F);
+	CHECK(rm_gb_entity_split(0, 7, 0) == F);
+	CHECK(rm_gb_entity_split(0, -1, 0) == F);
+
+	/* r_shadows as gl1 reads it: any value but 0, NaN included */
+	CHECK(rm_gb_entity_split(0, RM_GB_KIND_ALIAS, -1) == (R | S));
+	CHECK(rm_gb_entity_split(0, RM_GB_KIND_ALIAS, NAN) == (R | S));
+}
+
 /*
  * A view drawn below the frame's size: its pixels per frame pixel (the heights', as gl1 scales a
  * particle by the height), and the point sizes in frame pixels scaled into it
@@ -661,6 +707,7 @@ main(void)
 	test_render_rect();
 	test_jitter();
 	test_show();
+	test_entity_split();
 	test_pixel_scale();
 	test_motion();
 	test_motion_camera();

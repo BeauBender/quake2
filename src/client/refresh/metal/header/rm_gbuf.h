@@ -119,6 +119,24 @@ float rm_gb_pixel_scale(const rm_viewport_t *frame, const rm_viewport_t *render)
 void rm_gb_point_scale(rm_points_t *s, float k);
 
 /*
+ * Which pass of a GBUFFER view draws an entity (R_DrawEntitiesSplit): its
+ * flags (RF_*, as RM_RF_*), its model's kind and r_shadows. The raster
+ * takes an alias or brush model that is not translucent, a beam, the
+ * view weapon or a shell, the model alone (RASTER), and the forward pass
+ * the shadow of such an alias model (SHADOW) as gl1 would draw it
+ * (rm_shadow_drawn); every other entity, a translucent one included, is
+ * the forward pass's whole (FORWARD).
+ */
+#define RM_GB_KIND_NONE 0       /* no model: the null model, a beam */
+#define RM_GB_KIND_ALIAS 1
+#define RM_GB_KIND_BRUSH 2
+#define RM_GB_KIND_OTHER 3      /* a sprite */
+#define RM_GB_ENT_RASTER 1      /* the raster draws the model without its shadow (RM_ALIAS_MODEL) */
+#define RM_GB_ENT_FORWARD 2     /* the forward pass draws it as the stock view (RM_ALIAS_ALL) */
+#define RM_GB_ENT_SHADOW 4      /* the forward pass draws the shadow alone (RM_ALIAS_SHADOW) */
+int rm_gb_entity_split(int flags, int kind, float shadows);
+
+/*
  * The development view of v (r_rt_gbuffer_show, rmb_gbuf_set_show):
  * v clamped to 0 to RM_GB_SHOW_MAX before it is truncated, so no value
  * reaches the conversion outside an int's range; 0 for a value that is

@@ -732,21 +732,23 @@ R_RenderView(refdef_t *fd)
 }
 
 /*
- * The entities in the G-buffer raster (RT2, TASK54): the opaque alias and
- * brush models, but the view weapon and a shell; every other one is drawn
- * by the forward pass over the resolved image.
+ * The passes of a GBUFFER view that draw an entity (RT2, TASK54;
+ * rm_gb_entity_split): the raster the opaque alias and brush models but
+ * the view weapon, a beam and a shell, the forward pass over the resolved
+ * image every other one and the shadows of the raster's alias models.
  */
 static int
-R_EntityInRaster(const entity_t *e)
+R_EntitySplit(const entity_t *e)
 {
 	const model_t *m = e->model;
+	int kind = RM_GB_KIND_NONE;
 
-	if (!m || (e->flags & (RF_BEAM | RF_TRANSLUCENT | RF_WEAPONMODEL | RM_RF_SHELLS)))
+	if (m)
 	{
-		return 0;
+		kind = (m->type == mod_alias) ? RM_GB_KIND_ALIAS : (m->type == mod_brush) ? RM_GB_KIND_BRUSH : RM_GB_KIND_OTHER;
 	}
 
-	return (m->type == mod_alias) || (m->type == mod_brush);
+	return rm_gb_entity_split(e->flags, kind, gl_shadows->value);
 }
 
 /*
@@ -754,7 +756,9 @@ R_EntityInRaster(const entity_t *e)
  * entities (an alias model without its shadow), raster 0 the forward
  * pass's: the other opaque ones and the shadows of the raster's alias
  * models, then the translucent ones as R_DrawEntitiesOnList, each in
- * list order.
+ * list order. The stock order holds within each pass only: every
+ * rastered model is drawn before any draw of the forward pass, so a beam
+ * or a stencil shadow comes after all of them.
  */
 static void
 R_DrawEntitiesSplit(int raster)
@@ -771,6 +775,7 @@ R_DrawEntitiesSplit(int raster)
 	for (i = 0; i < n; i++)
 	{
 		const entity_t *e = &r_newrefdef.entities[i];
+		int split;
 
 		if (e->flags & RF_TRANSLUCENT)
 		{
@@ -778,13 +783,14 @@ R_DrawEntitiesSplit(int raster)
 		}
 
 		depth_write = 1;
+		split = R_EntitySplit(e);
 
-		if (R_EntityInRaster(e) == raster)
+		if (raster ? (split & RM_GB_ENT_RASTER) : (split & RM_GB_ENT_FORWARD))
 		{
 			R_AliasPassMode(raster ? RM_ALIAS_MODEL : RM_ALIAS_ALL);
 			R_DrawEntity(e, &depth_write);
 		}
-		else if (!raster && e->model && (e->model->type == mod_alias) && rm_shadow_drawn(e->flags, gl_shadows->value))
+		else if (!raster && (split & RM_GB_ENT_SHADOW))
 		{
 			R_AliasPassMode(RM_ALIAS_SHADOW);
 			R_DrawEntity(e, &depth_write);

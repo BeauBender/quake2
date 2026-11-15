@@ -186,6 +186,18 @@ rm_gb_jitter(const float *m, float jx, float jy, double vw, double vh, float *ou
 	}
 }
 
+int
+rm_gb_entity_split(int flags, int kind, float shadows)
+{
+	if ((flags & (RM_RF_TRANSLUCENT | RM_RF_BEAM | RM_RF_WEAPONMODEL | RM_RF_SHELLS)) ||
+		((kind != RM_GB_KIND_ALIAS) && (kind != RM_GB_KIND_BRUSH)))
+	{
+		return RM_GB_ENT_FORWARD;
+	}
+
+	return RM_GB_ENT_RASTER | (((kind == RM_GB_KIND_ALIAS) && rm_shadow_drawn(flags, shadows)) ? RM_GB_ENT_SHADOW : 0);
+}
+
 float
 rm_gb_pixel_scale(const rm_viewport_t *frame, const rm_viewport_t *render)
 {
