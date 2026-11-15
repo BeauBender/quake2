@@ -1560,7 +1560,10 @@ int rmb_read(unsigned char *bgra, size_t len);
 /* The size of the colour target, 0 0 without one. */
 void rmb_target_size(int *w, int *h);
 
-/* Blits the frame to the drawable when there is one (at rm_present_region), presents and commits. */
+/*
+ * Blits the frame to the drawable when there is one (at rm_present_region,
+ * the rest of a larger drawable cleared to black), presents and commits.
+ */
 void rmb_frame_end(void);
 
 /*

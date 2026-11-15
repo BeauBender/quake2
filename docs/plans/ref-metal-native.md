@@ -2122,8 +2122,9 @@ What exists:
   a fullscreen display mode the display does not have, TASK98) the 2D projection was stretched over
   a larger target and `screenshot` and the pin capture had the window's size. The present blit
   puts the frame where GL draws a smaller or larger viewport, its bottom-left corner on the
-  drawable's (`rm_present_region`); with equal sizes, every windowed mode on macOS, it copies the
-  whole frame at 0, 0 as before.
+  drawable's (`rm_present_region`), and a drawable larger than the frame is cleared to black
+  first, as the shim's first pass clears the whole window; with equal sizes, every windowed mode
+  on macOS, it copies the whole frame at 0, 0 as before, with no clear.
 - **The resize decision** (`rm_frame_remake`): a change of the frame's size makes both targets
   again and nothing else (the frame rings, the readback buffer, the textures, the pipelines and
   the samplers stay); a change of the window's pixels alone sets the layer's `drawableSize` and

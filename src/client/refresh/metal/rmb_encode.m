@@ -495,7 +495,21 @@ rmb_frame_end(void)
 			/* at gl1's place: the frame's bottom-left corner on the drawable's (FIX45) */
 			if (rm_present_region((int)color.width, (int)color.height, (int)dst.width, (int)dst.height, &r))
 			{
-				id<MTLBlitCommandEncoder> blit = [frame_cmd blitCommandEncoder];
+				id<MTLBlitCommandEncoder> blit;
+
+				/* a smaller frame: the rest of the drawable black, as the shim's whole-window clear */
+				if (((NSUInteger)r.w < dst.width) || ((NSUInteger)r.h < dst.height))
+				{
+					MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+
+					rp.colorAttachments[0].texture = dst;
+					rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+					rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+					rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+					[[frame_cmd renderCommandEncoderWithDescriptor:rp] endEncoding];
+				}
+
+				blit = [frame_cmd blitCommandEncoder];
 
 				[blit copyFromTexture:color sourceSlice:0 sourceLevel:0
 						sourceOrigin:MTLOriginMake(0, (NSUInteger)r.src_y, 0)
