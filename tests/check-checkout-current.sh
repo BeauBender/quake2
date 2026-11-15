@@ -403,6 +403,7 @@ list()
 want=$(printf '"%s"\n' 'Bash(git status:*)' 'Bash(git diff:*)' 'Bash(git log:*)' 'Bash(git show:*)' \
 	'Bash(scripts/test.sh)' 'Bash(tests/check-savegame-tables.sh)' 'Bash(tests/check-cvar-docs.sh)' \
 	'Bash(tests/check-removed-deps.sh)' 'Bash(tests/check-doc-links.sh)' 'Bash(make config)' \
+	'Bash(git -C ~/.config/agents/memory-store rev-parse --show-prefix)' \
 	'Bash(git -C ~/.config/agents/memory-store status --porcelain quake2/memory)' \
 	'Bash(git -C ~/.config/agents/memory-store status --porcelain=v2 --branch quake2/memory)' \
 	'Bash(git -C ~/.config/agents/memory-store add -A quake2/memory)' \

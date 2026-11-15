@@ -32,6 +32,10 @@
 #    two machines, each with its memory directory a symbolic link into its
 #    clone, and the documented commands run in the documented order with
 #    the clone for the store, as word lists (no shell parses them). It shows
+#    that the clone check stops the sync before any other step on a plain
+#    directory inside another repository (which then has nothing staged,
+#    committed or pushed), on a directory in no repository and on a missing
+#    one, and that a real clone passes it;
 #    that edits on both sides merge and an older copy does not revert a
 #    newer one; that a removal made with the owner present reaches the other
 #    side and stays gone; that the first check and the commit leave another
@@ -74,16 +78,19 @@ store='~/.config/agents/memory-store'
 pre="git -C $store"
 detached='# branch.head (detached)'
 
-# The card's list (TASK127): the only store rules. No rule removes a file: a
-# memory is removed only with the owner present. The two checks and the
-# commit are limited to quake2/memory, so another project's changes in a
-# shared clone are neither shown nor committed; the second check shows a
-# stopped rebase whose conflicts are staged, which the first cannot. Edit
-# and Write stop at quake2/memory, so neither reaches the clone's .git
+# The card's list (TASK127): the only store rules. The clone check comes
+# first: it prints an empty line only in the clone's top level, so a plain
+# directory inside another repository (whose git would take the commits)
+# stops the sync. No rule removes a file: a memory is removed only with
+# the owner present. The two status checks and the commit are limited to
+# quake2/memory, so another project's changes in a shared clone are
+# neither shown nor committed; the second status check shows a stopped
+# rebase whose conflicts are staged, which the first cannot. Edit and
+# Write stop at quake2/memory, so neither reaches the clone's .git
 # (config, hooks), which the exact git commands would then run.
 pinned()
 {
-	printf '%s\n' "Bash($pre status --porcelain quake2/memory)" \
+	printf '%s\n' "Bash($pre rev-parse --show-prefix)" "Bash($pre status --porcelain quake2/memory)" \
 		"Bash($pre status --porcelain=v2 --branch quake2/memory)" "Bash($pre add -A quake2/memory)" \
 		"Bash($pre commit -q -m quake2-memory-sync quake2/memory)" "Bash($pre pull --rebase -q)" \
 		"Bash($pre push -q)" "Bash($pre -c core.editor=true rebase --continue)" \
@@ -408,19 +415,21 @@ run()
 	m=$1
 	shift 4
 	case "$1" in
-	status | add | commit | pull | push | rebase) ;;
+	rev-parse | status | add | commit | pull | push | rebase) ;;
 	-c) [ "$*" = "-c core.editor=true rebase --continue" ] || { say "selftest: a store command takes a -c the runner refuses"; return 1; } ;;
 	*) say "selftest: a store command runs a git command the runner refuses"; return 1 ;;
 	esac
 	git -C "${tmp:?}/$m/store" "$@" < /dev/null > "${tmp:?}/out" 2> "${tmp:?}/err"
 }
 
-# sync <machine>: the documented sync steps in order. A line of the first
-# status that starts with an unmerged code the memory rule names, or the
-# line $detached from the second, stops it before add and commit with
-# status 3 (take the conflict steps); add and commit run only when the first
-# status printed anything. Status 2 when a step stops on a rebase conflict,
-# 1 on any other failure. The subcommands it ran are in $tmp/ran.
+# sync <machine>: the documented sync steps in order. The clone check
+# failing, or printing anything but an empty line, stops it before every
+# later step with status 4 (no clone: report it and do not sync). A line of
+# the first status that starts with an unmerged code the memory rule names,
+# or the line $detached from the second, stops it before add and commit
+# with status 3 (take the conflict steps); add and commit run only when the
+# first status printed anything. Status 2 when a step stops on a rebase
+# conflict, 1 on any other failure. The subcommands it ran are in $tmp/ran.
 sync()
 {
 	dirty=''
@@ -430,11 +439,15 @@ sync()
 		case "$s" in add* | commit*) [ -n "$dirty" ] || continue ;; esac
 		printf '%s\n' "${s%% *}" >> "${tmp:?}/ran" || return 1
 		if ! run "$1" "$c"; then
+			case "$s" in rev-parse*) return 4 ;; esac
 			[ ! -d "${tmp:?}/$1/store/.git/rebase-merge" ] || return 2
 			return 1
 		fi
-		sc=0
+		sc=0 halt=3
 		case "$s" in
+		rev-parse*)
+			halt=4
+			awk 'NR > 1 || length($0) { f = 1 } END { exit !f }' "${tmp:?}/out" || sc=$? ;;
 		"status --porcelain=v2"*)
 			grep -Fxq -- "$detached" "${tmp:?}/out" || sc=$? ;;
 		status*)
@@ -443,7 +456,7 @@ sync()
 			[ ! -s "${tmp:?}/out" ] || dirty=1 ;;
 		*) sc=1 ;;
 		esac
-		case "$sc" in 0) return 3 ;; 1) ;; *) say "selftest: grep or awk failed"; return 1 ;; esac
+		case "$sc" in 0) return "$halt" ;; 1) ;; *) say "selftest: grep or awk failed"; return 1 ;; esac
 	done < "${tmp:?}/seg-sync"
 }
 
@@ -484,6 +497,46 @@ selftest_sync()
 		x mkdir -p "${tmp:?}/$m"
 		x git clone -q --template= "${tmp:?}/origin.git" "${tmp:?}/$m/store"
 		x ln -s "${tmp:?}/$m/store/quake2/memory" "${tmp:?}/$m/memory"
+	done
+
+	# The clone check (the reviewer's case): a plain directory inside
+	# another repository E, as a failed clone into it or a Write of its
+	# folders leaves on a machine whose home directory is kept in git,
+	# fails it, and the sync runs no other step, so E has nothing staged,
+	# committed or pushed to its remote. So do a directory in no repository
+	# (N) and a missing one (M); a real clone passes it.
+	x git init -q --bare --template= "${tmp:?}/E.git"
+	x git init -q --template= "${tmp:?}/E"
+	printf 'e\n' > "${tmp:?}/E/e.md" || exit 1
+	x git -C "${tmp:?}/E" add e.md
+	x git -C "${tmp:?}/E" commit -q -m e
+	x git -C "${tmp:?}/E" remote add origin "${tmp:?}/E.git"
+	x git -C "${tmp:?}/E" push -q -u origin main
+	for m in E N; do
+		x mkdir -p "${tmp:?}/$m/store/quake2/memory"
+		printf 'x\n' > "${tmp:?}/$m/store/quake2/memory/x.md" || exit 1
+	done
+	eh=$(git -C "${tmp:?}/E" rev-parse HEAD) && er=$(git -C "${tmp:?}/E.git" rev-parse refs/heads/main) ||
+		{ say "selftest: a setup step failed"; exit 1; }
+	for m in E N M; do
+		case "$m" in
+		E) w="a plain directory inside another repository" ;;
+		N) w="a directory in no repository" ;;
+		*) w="a missing directory" ;;
+		esac
+		sc=0
+		sync "$m" || sc=$?
+		[ "$(git -C "${tmp:?}/E" rev-parse HEAD 2> /dev/null)" = "$eh" ] &&
+			[ "$(git -C "${tmp:?}/E.git" rev-parse refs/heads/main 2> /dev/null)" = "$er" ] &&
+			git -C "${tmp:?}/E" diff --cached --quiet > /dev/null 2>&1 ||
+			{ say "selftest: the sync on $w staged, committed or pushed in the enclosing repository"; exit 1; }
+		[ "$sc" -eq 4 ] && [ "$(cat "${tmp:?}/ran")" = rev-parse ] ||
+			{ say "selftest: the sync on $w did not stop at the clone check, before every other step"; exit 1; }
+	done
+	cc=$(pick rev-parse) || { say "selftest: the sync steps lack the clone check"; exit 1; }
+	for m in A B; do
+		run "$m" "$cc" && awk 'length($0) { bad = 1 } END { exit bad || NR != 1 }' "${tmp:?}/out" ||
+			{ say "selftest: the clone check fails on a real clone (machine $m)"; exit 1; }
 	done
 	tip=''
 	# forward: the origin's main moved only forward since the last call.
