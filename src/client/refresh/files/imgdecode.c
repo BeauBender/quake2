@@ -167,12 +167,13 @@ IMGDEC_PixelByte(const unsigned char *pixel, size_t i, size_t swap)
 
 imgdec_result_t
 IMGDEC_ToRGBA(const imgdec_layout_t *l, const unsigned char *src, size_t srclen,
-	unsigned char *dst)
+	unsigned char *dst, size_t dstlen)
 {
 	size_t comp, channels, pixel, row, color, alpha, x, y, bytes;
 	int has_alpha;
 
-	if (!IMGDEC_PixelBytes(l->width, l->height, IMGDEC_MAX_SIDE, &bytes))
+	if (!IMGDEC_PixelBytes(l->width, l->height, IMGDEC_MAX_SIDE, &bytes) ||
+		bytes > dstlen)
 	{
 		return IMGDEC_ERR_SIZE;
 	}
@@ -558,7 +559,7 @@ IMGDEC_DecodeImageIO(const unsigned char *data, size_t size, imgdec_type_t want,
 	}
 
 	r = IMGDEC_ToRGBA(&layout, CFDataGetBytePtr(decoded),
-		(size_t)CFDataGetLength(decoded), out);
+		(size_t)CFDataGetLength(decoded), out, outbytes);
 	if (r != IMGDEC_OK)
 	{
 		goto done;

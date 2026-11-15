@@ -97,11 +97,12 @@ int IMGDEC_PixelBytes(size_t width, size_t height, size_t max_side,
 
 /*
  * Converts srclen bytes laid out as described into straight-alpha RGBA8
- * (width * height * 4 bytes at dst), with no colour conversion; 16-bit
- * components keep their high byte, as stb_image did.
+ * (width * height * 4 bytes at dst, which holds dstlen), with no colour
+ * conversion; 16-bit components keep their high byte, as stb_image did.
  */
 imgdec_result_t IMGDEC_ToRGBA(const imgdec_layout_t *layout,
-		const unsigned char *src, size_t srclen, unsigned char *dst);
+		const unsigned char *src, size_t srclen, unsigned char *dst,
+		size_t dstlen);
 
 #ifdef __APPLE__
 /*

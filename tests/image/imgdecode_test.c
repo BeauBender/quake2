@@ -414,6 +414,9 @@ test_types(void)
 	CHECK(IMGDEC_TypeOfIdentifier("public.tiff") == IMGDEC_TYPE_NONE, "tiff uti");
 	CHECK(IMGDEC_TypeOfIdentifier("public.pn") == IMGDEC_TYPE_NONE, "public.pn");
 	CHECK(IMGDEC_TypeOfIdentifier("public.pngx") == IMGDEC_TYPE_NONE, "public.pngx");
+	CHECK(IMGDEC_TypeOfIdentifier("public.jpegx") == IMGDEC_TYPE_NONE, "public.jpegx");
+	CHECK(IMGDEC_TypeOfIdentifier("com.truevision.tga") == IMGDEC_TYPE_NONE, "com.truevision.tga");
+	CHECK(IMGDEC_TypeOfIdentifier("com.truevision.tga-imagex") == IMGDEC_TYPE_NONE, "tga uti, longer");
 	CHECK(IMGDEC_TypeOfIdentifier("") == IMGDEC_TYPE_NONE, "empty uti");
 	CHECK(IMGDEC_TypeOfIdentifier(NULL) == IMGDEC_TYPE_NONE, "NULL uti");
 }
@@ -531,7 +534,7 @@ expect_rgba(const char *what, const imgdec_layout_t *l, const unsigned char *src
 	imgdec_result_t r;
 
 	memset(out, 0xcd, sizeof(out));
-	r = IMGDEC_ToRGBA(l, src, srclen, out);
+	r = IMGDEC_ToRGBA(l, src, srclen, out, n);
 	CHECK(r == IMGDEC_OK, "%s: returned %d (%s)", what, (int)r, IMGDEC_ResultString(r));
 	CHECK(r != IMGDEC_OK || !memcmp(out, want, n), "%s: wrong pixels", what);
 	CHECK(out[n] == 0xcd, "%s: wrote past the image", what);
@@ -544,7 +547,7 @@ expect_layout_refused(const char *what, const imgdec_layout_t *l, const unsigned
 	unsigned char out[4 * 16];
 	imgdec_result_t r;
 
-	r = IMGDEC_ToRGBA(l, src, srclen, out);
+	r = IMGDEC_ToRGBA(l, src, srclen, out, sizeof(out));
 	CHECK(r == want, "%s: returned %d (%s), want %d", what, (int)r, IMGDEC_ResultString(r), (int)want);
 }
 
@@ -590,6 +593,12 @@ test_to_rgba(void)
 
 	l = base;
 	expect_rgba("rgba", &l, rgba, sizeof(rgba), want2);
+	{
+		unsigned char out[8];
+
+		CHECK(IMGDEC_ToRGBA(&l, rgba, sizeof(rgba), out, 7) == IMGDEC_ERR_SIZE,
+			"a destination one byte short");
+	}
 	l.alpha = IMGDEC_ALPHA_FIRST;
 	expect_rgba("argb", &l, argb, sizeof(argb), want2);
 	l.swap = 4;
@@ -647,6 +656,21 @@ test_to_rgba(void)
 	expect_layout_refused("an index past the palette", &l, bad_index, sizeof(bad_index), IMGDEC_ERR_DECODE);
 	l.palette_count = 0;
 	expect_layout_refused("an empty palette", &l, indexes, sizeof(indexes), IMGDEC_ERR_DECODE);
+	{
+		static unsigned char full[256 * 3];
+		static const unsigned char last[2] = {255, 0};
+		unsigned char want_full[8] = {0, 0, 0, 255, 0, 0, 0, 255};
+		int k;
+
+		for (k = 0; k < 256 * 3; k++)
+		{
+			full[k] = (unsigned char)(k / 3);
+		}
+		want_full[0] = want_full[1] = want_full[2] = 255;
+		l.palette = full;
+		l.palette_count = 256;
+		expect_rgba("a palette of 256 entries", &l, last, sizeof(last), want_full);
+	}
 
 	l = base;
 	l.height = 2;
@@ -675,6 +699,25 @@ test_to_rgba(void)
 	l = base;
 	l.width = IMGDEC_MAX_SIDE + 1;
 	expect_layout_refused("width above the bound", &l, rgba, sizeof(rgba), IMGDEC_ERR_SIZE);
+	{
+		/* with room for every byte, only the side bound refuses it */
+		size_t n = (size_t)(IMGDEC_MAX_SIDE + 1) * 4;
+		unsigned char *big_src = calloc(n, 1), *big_dst = malloc(n);
+
+		l.bytes_per_row = n;
+		CHECK(big_src && big_dst && IMGDEC_ToRGBA(&l, big_src, n, big_dst, n) == IMGDEC_ERR_SIZE,
+			"width above the bound, with room for it");
+		l.width = 1;
+		l.height = IMGDEC_MAX_SIDE + 1;
+		l.bytes_per_row = 4;
+		CHECK(big_src && big_dst && IMGDEC_ToRGBA(&l, big_src, n, big_dst, n) == IMGDEC_ERR_SIZE,
+			"height above the bound, with room for it");
+		l.height = IMGDEC_MAX_SIDE;
+		CHECK(big_src && big_dst && IMGDEC_ToRGBA(&l, big_src, n, big_dst, n) == IMGDEC_OK,
+			"height at the bound");
+		free(big_src);
+		free(big_dst);
+	}
 	l = base;
 	l.bits_per_component = 4;
 	l.bits_per_pixel = 16;
@@ -697,6 +740,9 @@ test_to_rgba(void)
 	l = base;
 	l.alpha = (imgdec_alpha_t)9;
 	expect_layout_refused("an unknown alpha", &l, rgba, sizeof(rgba), IMGDEC_ERR_LAYOUT);
+	l.bits_per_pixel = 24;
+	l.bytes_per_row = 6;
+	expect_layout_refused("an unknown alpha, three channels", &l, rgb, sizeof(rgb), IMGDEC_ERR_LAYOUT);
 	l = base;
 	l.swap = 3;
 	expect_layout_refused("3-byte words", &l, rgba, sizeof(rgba), IMGDEC_ERR_LAYOUT);
@@ -932,6 +978,15 @@ build_cases(void)
 	add_good("png grey alpha", png_file(RW, RH, 8, 4, ga, RW * 2, RH, NULL, 0, NULL, 0), "png", want_grey_alpha, RW, RH, 0);
 	add_good("png paletted", png_file(RW, RH, 8, 3, idx, RW, RH, plte, 9, NULL, 0), "png", want_indexed, RW, RH, 0);
 	add_good("png paletted, tRNS", png_file(RW, RH, 8, 3, idx, RW, RH, plte, 9, trns, 3), "PNG", want_indexed_trns, RW, RH, 0);
+	{
+		/* the index 7 past a palette of 3, which ImageIO hands on as it is */
+		unsigned char bad_idx[RW * RH];
+
+		memcpy(bad_idx, idx, sizeof(bad_idx));
+		bad_idx[RW + 2] = 7;
+		add_bad("png paletted, an index past the palette",
+			png_file(RW, RH, 8, 3, bad_idx, RW, RH, plte, 9, NULL, 0), (size_t)-1, "png", IMGDEC_ERR_DECODE);
+	}
 	add_good("png grey 1-bit", png_file(4, 4, 1, 0, g1, 1, 4, NULL, 0, NULL, 0), "png", want_grey1, 4, 4, 0);
 	add_good("png rgb 16-bit", png_file(RW, RH, 16, 2, rgb16, RW * 6, RH, NULL, 0, NULL, 0), "png", want_rgb, RW, RH, 0);
 	add_good("png 16384x1", png_file(16384, 1, 8, 2, wide, 16384 * 3, 1, NULL, 0, NULL, 0), "png", want_wide, 16384, 1, 0);
