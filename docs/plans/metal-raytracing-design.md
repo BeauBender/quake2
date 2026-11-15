@@ -1832,6 +1832,48 @@ synthetic input (its MetalFX table, column "Alone": 2.191 ms from 1920 x
 1080, 1.656 ms from 2560 x 1440), so its numbers are not the same
 configuration as these.
 
+**GPU time per frame.** The table above times one input, the 2D-on
+`world` frame 3. The upscale's GPU time is set by the input and output
+sizes and the upscaler, not by the frame's content, to within a few
+percent for all but a few frames (below). The per-frame CSV holds one GPU time per upscale (`gpu_ms_once`,
+one per frame, input size, upscaler and 2D setting, repeated on the rows
+of its regions). Over the 21 frames (ms: minimum to maximum, and the
+median; "within 3 %" counts the frames within 3 % of the row's median; r
+is the Pearson correlation over the 21 frames between the time and the
+share of the native 2D-off frame's pixels with a Sobel magnitude above 8,
+from the Sobel output):
+
+| Input (pixels) | Upscaler | 2D off | Within 3 % | r | 2D on | Within 3 % | r |
+|---|---|---|---|---|---|---|---|
+| 3840 x 2160 | spatial | 4.893 to 5.089 (4.975) | 21 | 0.799 | 4.791 to 4.812 (4.793) | 21 | 0.263 |
+| 3840 x 2160 | bilinear | 0.621 to 0.644 (0.627) | 21 | 0.872 | 0.624 to 0.673 (0.634) | 19 | 0.871 |
+| 3840 x 2160 | Lanczos | 4.069 to 4.115 (4.073) | 21 | 0.253 | 4.071 to 4.650 (4.073) | 19 | -0.257 |
+| 2560 x 1440 | spatial | 4.791 to 4.798 (4.793) | 21 | 0.302 | 4.790 to 4.834 (4.793) | 21 | 0.037 |
+| 2560 x 1440 | bilinear | 0.623 to 0.684 (0.635) | 20 | 0.410 | 0.620 to 0.704 (0.636) | 19 | 0.824 |
+| 2560 x 1440 | Lanczos | 2.796 to 2.864 (2.800) | 21 | 0.078 | 2.797 to 3.005 (2.800) | 20 | 0.160 |
+| 1920 x 1080 | spatial | 4.790 to 4.952 (4.795) | 20 | 0.119 | 4.790 to 5.028 (4.793) | 20 | 0.052 |
+| 1920 x 1080 | bilinear | 0.619 to 1.422 (0.619) | 18 | -0.060 | 0.619 to 0.688 (0.619) | 17 | -0.239 |
+| 1920 x 1080 | Lanczos | 3.393 to 3.471 (3.394) | 21 | 0.278 | 3.393 to 3.511 (3.396) | 20 | -0.004 |
+
+The frames differ widely (0 to 45 entities, 0 to 430 particles, 0.108 % to
+35.170 % of the native pixels with a Sobel magnitude above 8), and 360 of
+the 378 times lie within 3 % of their row's median; the largest of the
+other 18 is 1.422 ms, `models` frame 5 from 1920 x 1080 bilinear with the
+2D layer off, 0.619 ms with it on. The same capture
+upscaled in two runs (frames 0 and 2 of `models` and of `particles` are
+byte-identical at every size, `cmp`) gives times up to 0.159 ms apart with
+the 2D layer off and 0.208 ms with it on. Four rows rise with the frame's
+detail, within their spread above (r 0.799 to 0.872: 3840 x 2160 spatial
+with the 2D layer off, 3840 x 2160 bilinear off and on, 2560 x 1440
+bilinear on); why was not investigated. The 2D-off 3840 x 2160 spatial
+upscale is the first of each probe process (the probe's loop order), and
+its median is above the other spatial rows'. These single times ran in the
+metrics batch ("Lock state and load", below), one upscale each between
+the CPU's metric computations of the same process and with no warm-up,
+under the load that made them unusable as levels and led to the timing
+sets: the row medians are 3.25 to 3.49 times set c's. So only their spread
+is used here, not their level; the level is set c's, in the table above.
+
 **Per frame.** Each cell is PSNR in dB / SSIM; each scene's "range" row is
 the minimum to maximum over its frames, with the number of frames.
 
@@ -1977,7 +2019,7 @@ one-minute average.
 | Batch | Time | Runs | Lock before, after | Load before | GPU utilization before, after | Used |
 |---|---|---|---|---|---|---|
 | Captures | 04:41:54 to 04:49:17 | 28 engine runs | 0, 0 in every run | 2.46 to 3.77 | not read | Yes (the frames) |
-| Upscale and metrics | 04:53:33 to 04:55:22 | 21 probe runs, one per frame | 0 before each | 2.80 to 8.29, rising during the batch, whose probe runs used about 8 cores (797 % CPU in `time`) | not read | Yes (PSNR and SSIM); the single GPU time per upscale it records is not used |
+| Upscale and metrics | 04:53:33 to 04:55:22 | 21 probe runs, one per frame | 0 before each | 2.80 to 8.29, rising during the batch, whose probe runs used about 8 cores (797 % CPU in `time`) | not read | Yes (PSNR and SSIM); of the single GPU time per upscale it records, only the spread over the frames is used, not the level ("GPU time per frame", above) |
 | Timing a | 04:55:43 to 04:56:10 | 3 invocations, 10 warm-up rounds | 0, 0 | 6.30, 5.41, 4.89 | not read | Superseded by c: it started at load 6.30, right after the metrics batch |
 | Timing b | 04:58:01 to 04:58:28 | 3, 10 warm-up rounds | 0, 0 | 1.40, 1.67, 1.65 | 8, 7 and 8 %; 7, 0 and 0 % | Superseded by c: the first configuration of each process, 3840 x 2160 spatial, had invocation medians 2.821, 1.622 and 1.427 ms |
 | Timing c | 04:59:16 to 04:59:52 | 3, at least 3 s of warm-up (305, 294, 305 rounds of 9) | 0, 0 | 1.85, 2.37, 2.28 | 8, 8 and 8 %; 7, 8 and 0 % | Yes |
@@ -2016,5 +2058,6 @@ scripts that drove the runs and made these tables. No frame, demo, trace or game
 - The upscalers inside a frame: each was timed alone.
 - Other renderers: `ref_gl1` only, the card's reference.
 - Ray-traced frames, and option E's loss in the effect terms.
-- The causes of the 2D region's order and of the spatial scaler's lower
-  whole-frame scores.
+- The causes of the 2D region's order, of the spatial scaler's lower
+  whole-frame scores and of the four rows of single GPU times that rise
+  with the frame's detail.
