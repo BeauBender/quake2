@@ -1331,23 +1331,6 @@ VectorCompareRound(const vec3_t v1, const vec3_t v2)
 
 cplane_t frustum[4];
 
-/*
- * Keeps the view rectangle inside the buffer. The client sizes the view
- * from viddef, this renderer draws it into the vid_buffer_width x
- * vid_buffer_height buffer. The two are the same size when both sides
- * agree on the window (SWimp_DrawableInPixels()), and then nothing
- * changes here. Should they ever disagree, the view is drawn into the
- * part of the buffer it covers, a wrong picture, instead of past the
- * end of the buffer.
- */
-static void
-R_ClampViewToBuffer(refdef_t *rd)
-{
-	rd->x = Q_clamp(rd->x, 0, vid_buffer_width - 1);
-	rd->y = Q_clamp(rd->y, 0, vid_buffer_height - 1);
-	rd->width = Q_clamp(rd->width, 1, vid_buffer_width - rd->x);
-	rd->height = Q_clamp(rd->height, 1, vid_buffer_height - rd->y);
-}
 
 /*
 ================
@@ -1362,8 +1345,8 @@ RE_RenderFrame(refdef_t *fd)
 	entity_t	ent;
 	qboolean	anytranslucent = false;
 
-	/* Before anything draws. */
-	R_ClampViewToBuffer(&r_newrefdef);
+	/* Before anything draws (sw_view.c). */
+	R_ClampViewToBuffer(&r_newrefdef, vid_buffer_width, vid_buffer_height);
 
 	if (!r_worldmodel && !( r_newrefdef.rdflags & RDF_NOWORLDMODEL ) )
 	{

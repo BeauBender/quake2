@@ -17,9 +17,11 @@ This builds `build/release/test/yq2test` (or `build/debug/test/` with
 `DEBUG=1`) and runs it. The test binary links the same objects as the
 dedicated server `q2ded`, built with the same flags, plus the client
 files `cl_download.c`, `cl_parse.c`, `cl_network.c`, `cl_entities.c`,
-`cl_screen.c` and the sound frontend `sound/sound.c` (see "Client
-stubs" below) and the shared renderer file
-`src/client/refresh/files/surf.c`; only `main()` is replaced by the
+`cl_screen.c`, the sound frontend `sound/sound.c` and the window
+code's SDL-free part `vid/glimp_hidpi.c` (see "Client stubs" below),
+the shared renderer file `src/client/refresh/files/surf.c` and the
+software renderer's SDL-free `src/client/refresh/soft/sw_view.c`; only
+`main()` is replaced by the
 test runner. The last line says how many tests ran and how many failed; the
 exit status is 1 when a test failed and 2 when no test ran at all (a
 name filter that matches nothing, or a usage error), so a run that
