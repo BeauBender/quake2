@@ -22,7 +22,7 @@ removes it.
 |---|---|---|---|
 | 1 | `1c2d4b12` | one present on its way at a time: the frame copied to a stage, the stage to the drawable, FIX53's alpha pass | presented fewer frames a second than before at every size |
 | 2 | `3427719d` | as many presents on their way as the layer has drawables, a stage each, the same three passes | rendered 4 to 20 times before; presented still below before: at 5120x2880 the present's GPU time (2.05 to 2.38 ms), windowed a measurement that ended inside the window server's slow phase |
-| 3 | this round (below) | the frame drawn into its present slot's own target; one pass writes the drawable with alpha 1 | measured below |
+| 3 | `d7cef009` | the frame drawn into its present slot's own target; one pass writes the drawable with alpha 1 | measured below |
 
 ## The fix (round 3)
 
@@ -43,13 +43,15 @@ from `rmb_frame_begin` and `rmb_frame_end` in `rmb_encode.m`, whose
   frame takes the first free slot when it begins and is drawn into that
   slot's target, so nothing copies the frame before its present.
 - When the frame ends with a drawable ready, its present goes on a second
-  command queue that waits for the frame's command buffer (an `MTLEvent`
-  the frame signals). One render pass writes the drawable from the slot's
-  target with alpha 1 (`rm_fragment_present`, `mgl_fragment_present`): the
-  copy and FIX53's alpha pass are one pass over the drawable. The slot
-  comes back when that command buffer completes, so a target is not drawn
-  into while its present reads it. The wait for a drawable the window
-  server still holds is that queue's, not a frame slot's.
+  command queue, and runs only after every write of the frame to the
+  slot's target (below, [the order of a frame and its
+  present](#the-order-of-a-frame-and-its-present)). One render pass writes
+  the drawable from the slot's target with alpha 1 (`rm_fragment_present`,
+  `mgl_fragment_present`): the copy and FIX53's alpha pass are one pass
+  over the drawable. The slot comes back when that command buffer
+  completes, so a target is not drawn into while its present reads it.
+  The wait for a drawable the window server still holds is that queue's,
+  not a frame slot's.
 - A frame that ends with no drawable ready, or with one of an old size,
   gives its slot back at once (a later frame that draws into that target
   is on the same queue, after it) and is counted in the teardown's
@@ -66,18 +68,70 @@ teardown, wait for every slot but the open frame's with one shared bound
 (`RMB_GPU_WAIT_MS`, `MGL_GPU_WAIT_MS`) and drop the targets. No cvar, no
 change to a module API, the window or `glimp_sdl3.c`.
 
-**The pipelines.** No pipeline is built on the present path. The shim
-builds the present's pipeline when the context is made, with FIX53's
-(`mgl_alpha_build`). `ref_metal` builds it once a session, when its first
-frame begins (`rmb_present_build`, from `rmb_present_take`), from the
-library `rmb_resources_open` loaded, and does not try again after a
-failure. The rest of `ref_metal`'s pipelines are built in
-`rmb_resource.m`, which this card does not touch, and `rmb_resources_open`
-is the only step of the context's start after the library loads; building
-the present's pipeline there is a move of the one function. When it was
-not built the frame is copied to the drawable and FIX53's alpha pass is
-written over it, as in round 2, and FIX53's line says so only if that
-pass's pipeline failed too.
+**The pipelines.** No pipeline is built on the present path: both are
+built at init with the others, FIX53's rule. The shim builds the
+present's pipeline when the context is made, with FIX53's
+(`mgl_alpha_build`). `ref_metal` builds it in `rmb_resources_open`
+(`rmb_new_pipe_present` in `rmb_resource.m`), next to FIX53's alpha pass,
+and releases it in `rmb_resources_close`; like the alpha pass a failed
+build is not fatal and is not tried again. When it was not built the
+frame is copied to the drawable and FIX53's alpha pass is written over it,
+as in round 2, and FIX53's line says so only if that pass's pipeline
+failed too.
+
+### The order of a frame and its present
+
+A frame is not always one command buffer. In `ref_metal` a readback
+(`rmb_read`), the in-frame split (`rmb_encode_split`), `rmb_frame_cut`
+(TASK111) and `MTL_GPU_TIME` each commit the frame so far and go on in a
+new one; in the shim `mgl_flush` (`glFinish`, `glReadPixels`) does. The
+present reads the slot's target on another queue, so it must follow every
+one of them. The first version of round 3 had the frame's last command
+buffer signal an `MTLEvent` that the present waited for, which covers the
+earlier command buffers only if a signal also follows work committed
+earlier to the same queue. Apple's page "encodeSignalEvent(_:value:)"
+(MTLCommandBuffer) says:
+
+> When the GPU device reaches the signal command that this method encodes,
+> Metal updates the event after the GPU finishes the buffer's prior
+> commands.
+
+"The buffer's prior commands": it says nothing about other command buffers
+of the queue. So neither renderer relies on that now; each relies on what
+Apple's page "addCompletedHandler(_:)" (MTLCommandBuffer) states:
+
+> Registers a completion handler the GPU device calls immediately after
+> the GPU finishes running the commands in the command buffer.
+
+- **`ref_metal` waits for every command buffer of the frame.** From the
+  moment a frame takes its slot (`rmb_present_take`) every command buffer
+  committed is entered in the frame's dispatch group (`rmb_watch`, which
+  runs before every commit) and leaves it in its completed handler. The
+  present waits for no event: at the frame's end `rmb_present_commit`
+  hands it to a serial dispatch queue (`rmb_present_order`), which commits
+  it once the group is empty, so the presents go to their queue in the
+  order of the frames. The wait is bounded (`RMB_GPU_WAIT_MS`): a frame
+  still on the GPU then is not presented and its slot comes back, with one
+  line on stderr. The `MTLEvent` is gone, and with it one `state` from the
+  ledger.
+- **The shim's earlier command buffers have completed.** Every command
+  buffer of a frame but its last is committed by `mgl_flush`, which waits
+  for it (`mgl_commit_wait`). Only the last one signals the event, after
+  its own prior commands (the quote above); the ones before it have
+  completed before it was made. When a wait ended first (the bound,
+  `MGL_GPU_WAIT_MS`), the frame is not presented and is counted without a
+  drawable (`frame_unseen`). A frame in one command buffer, the usual
+  case, is unchanged.
+
+A frame that is not presented gives its slot back when it ends, and a
+later frame may draw into that target while the earlier one's command
+buffers run. Both are on the frame queue and write the same texture,
+made from the device with no hazard tracking mode set. Apple's page
+"MTLHazardTrackingMode.default" says "Metal tracks hazards for MTLBuffer
+and MTLTexture instances when you create them with default", and
+"MTLHazardTrackingMode.tracked" that when a command writes a tracked
+resource Metal will "Prevent subsequent commands from running until write
+operations finish".
 
 ## What changed from round 2, and why
 
@@ -101,19 +155,27 @@ before.
 
 Round 2's `ref_metal` presented nothing with display sync off when the
 present queue or its event could not be made (no slot, so no drawable);
-round 3 then waits for the drawable as with display sync on. The shim did
-that already.
+round 3 then waits for the drawable as with display sync on (in
+`ref_metal` when the present queue or the serial queue that commits to it
+cannot be made). The shim did that already.
+
+After review, round 3 moved `ref_metal`'s present pipeline to init
+(`d4f0af6e`) and stopped relying on the order of an event and the earlier
+command buffers of a frame (`d7cef009`, the section above).
 
 ## Round 3 measurements
 
 Not run yet. The code was finished while engine runs on the host were
 paused (the display was in use), so this section has the method and none
-of the numbers.
+of the numbers. The measured engine commit is `d7cef009`, the last commit
+of this round that changes code; the commits after it change only this
+document.
 
 **The method.** The host, the launch line, the screen and timing-lock
 checks and the alternation of the earlier rounds (below), three runs a
 cell, before and after alternated run by run in the same batches. Before
-is `origin/main` at this round's merge, `718e59d4`. Windowed, each run
+is `origin/main` at this round's merge, `718e59d4`; after is `d7cef009`.
+Each is built twice, with the probe and without. Windowed, each run
 plays `demo1.dm2` in a loop from one cfg for at least 5 s and counts the
 frames presented a second from 1 s after the window's first frame to the
 end, the same way for both loops, so neither ends inside the window
