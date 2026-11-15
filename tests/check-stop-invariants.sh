@@ -150,6 +150,8 @@ selftest()
 		'echo $! >> "$STOPCK_TMP/hang.pids"' 'wait' > "$r/tests/check-hang.sh"
 	# Passes, and leaves a process behind that would hold the hook's output.
 	printf '%s\n' '#!/bin/sh' 'sleep 15 &' 'echo $! > "$STOPCK_TMP/leave.pid"' 'echo "$0: ok"' > "$r/tests/check-leave.sh"
+	# Leaves a mark that it ran, and fails.
+	printf '%s\n' '#!/bin/sh' ': > "$STOPCK_TMP/ran"' 'exit 1' > "$r/tests/check-mark.sh"
 	chmod 755 "$r"/tests/check-*.sh
 	printf '%s\n' 'int x;' > "$r/src/a.c"
 	g init -q --template= "$r"
@@ -259,16 +261,15 @@ selftest()
 	[ -z "$stray" ] || fail "selftest: TERM to the hook: process$stray of the check's group still ran 1 s later"
 
 	# No job control: a copy of the hook with set -m taken out.
-	hookwith tests/check-fail.sh
+	hookwith tests/check-mark.sh
 	sed 's/^(set -m) && set -m$/:/' "$r/$hook" > "${tmp:?}/h" && cat "${tmp:?}/h" > "$r/$hook"
 	grep -qx ':' "$r/$hook" && ! grep -q 'set -m$' "$r/$hook" ||
 		fail "selftest: cannot take set -m out of the copy of $hook"
+	rm -f "${tmp:?}/ran"
 	run st "$no"
 	exits "no job control" 2
 	says "no job control" "NOT RUN: any listed check, this shell has no job control"
-	case $out in
-	*FAILED*) fail "selftest: no job control: the hook ran a check: $out" ;;
-	esac
+	[ ! -e "${tmp:?}/ran" ] || fail "selftest: no job control: the hook ran a check; it printed: $out"
 	run st "$yes"
 	exits "no job control, stop_hook_active" 0
 	says "no job control, stop_hook_active" "not blocking again"
