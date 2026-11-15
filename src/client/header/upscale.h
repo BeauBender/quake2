@@ -100,7 +100,7 @@ int CL_UpscaleWrapPad(const unsigned char *src, int w, int h,
 int CL_UpscaleCrop(const unsigned char *src, int sw, int sh, int x, int y,
 		int w, int h, unsigned char *dst);
 
-/* scale2x of src/client/refresh/files/image.c: w by h to 2w by 2h */
+/* scale2x of src/client/refresh/files/imgscale.c: w by h to 2w by 2h */
 void CL_UpscaleScale2x(const unsigned char *src, unsigned char *dst,
 		int w, int h);
 
@@ -114,7 +114,7 @@ void CL_UpscaleScale2x(const unsigned char *src, unsigned char *dst,
 unsigned char *CL_UpscaleIndices(const unsigned char *src, int w, int h,
 		int factor, int wrap);
 
-/* R_FloodFillSkin of src/client/refresh/files/image.c, for a skin */
+/* R_FloodFillSkin of src/client/refresh/files/imgscale.c, for a skin */
 void CL_UpscaleFloodFillSkin(unsigned char *skin, int w, int h,
 		const unsigned *table);
 
@@ -126,7 +126,7 @@ void CL_UpscaleTable(const unsigned char *palette, unsigned *table);
 
 /*
  * The indices data (w by h) as RGBA8 into rgba, as R_Convert8to32 of
- * src/client/refresh/files/image.c converts them: index 255 keeps alpha
+ * src/client/refresh/files/imgscale.c converts them: index 255 keeps alpha
  * 0 and takes the colour of a neighbour that is not 255.
  */
 void CL_UpscaleToRGBA(const unsigned char *data, size_t w, size_t h,

@@ -28,6 +28,7 @@
 #define SRC_CLIENT_REFRESH_REF_SHARED_H_
 
 #include "../vid/header/ref.h"
+#include "files/imgscale.h"
 
 #ifdef _MSC_VER
 
@@ -95,7 +96,6 @@ extern void GetM32Info(const char *name, int *width, int *height);
 extern qboolean ResizeSTB(const byte *input_pixels, int input_width, int input_height,
 			  byte *output_pixels, int output_width, int output_height);
 extern void SmoothColorImage(unsigned *dst, size_t size, size_t rstep);
-extern void scale2x(const byte *src, byte *dst, int width, int height);
 extern void scale3x(const byte *src, byte *dst, int width, int height);
 
 extern float Mod_RadiusFromBounds(const vec3_t mins, const vec3_t maxs);
@@ -195,8 +195,6 @@ extern struct image_s *GetSkyImage(const char *skyname, const char* surfname,
 	qboolean palettedtexture, findimage_t find_image);
 extern struct image_s *GetTexImage(const char *name, findimage_t find_image);
 extern struct image_s *R_FindPic(const char *name, findimage_t find_image);
-extern void R_FloodFillSkin(byte *skin, int skinwidth, int skinheight, const unsigned *table_8to24);
-extern unsigned *R_Convert8to32(const byte *data, size_t width, size_t height, const unsigned *table_8to24);
 extern struct image_s *R_LoadImage(const char *name, const char *namewe, const char *ext,
 	imagetype_t type, qboolean r_retexturing, loadimage_t load_image);
 extern void Mod_LoadNodes(const char *name, cplane_t *planes, int numplanes,
