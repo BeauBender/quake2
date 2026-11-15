@@ -230,12 +230,13 @@ than the image declares now loads, with the missing rows filled in
 (black in an RGB image). A run-length TGA that ends between two runs
 still loads, as it did before.
 
-The OpenGL and Metal renderers look for a sky face as a `.png` first
-when it is at least the size of the stock face (see "Textures upscaled
-on your own machine" below), else as a `.tga`, and then, now on every
-platform, as the `.pcx`, before the Heretic II formats: when no `.tga`
-or `.png` face decodes, the sky is drawn from its `.pcx` faces. Where paletted textures are used, the `.pcx` comes first, as
-before. On platforms other than macOS,
+The loader is shared by every renderer. It looks for a sky face as a
+`.png` first when it is at least the size of the stock face (see
+"Textures upscaled on your own machine" below), else as a `.tga`, and
+then, now on every platform, as the `.pcx`, before the Heretic II
+formats: when no `.tga` or `.png` face decodes, the sky is drawn from
+its `.pcx` faces. Where paletted textures are used, the `.pcx` comes
+first, as before. On platforms other than macOS,
 iOS, iPadOS, tvOS and visionOS there is no decoder for PNG, JPEG or TGA
 at all: replacements are not loaded there, and the stock skies are
 always drawn from their `.pcx` faces.
@@ -293,10 +294,26 @@ colour is made: the result is sharper pixel art, not new detail.
 * The stock sky faces are also shipped as `.tga` files, and for every
   other image the loader looks for a `.tga` before a `.png`. For a sky
   face, with `r_retexturing 1`, a `.png` that is at least the size of
-  the stock face (the `.tga`'s size, or the original's when there is no
-  `.tga`) is used first: a generated PNG in the write directory would
-  otherwise always lose to the pak's `.tga`, and the skies would stay
-  as they were. A smaller or undecodable `.png` is ignored, and the
-  order is `.tga`, `.png`, `.jpg` as before.
+  the stock face is used first: a generated PNG in the write directory
+  would otherwise always lose to the pak's `.tga`, and the skies would
+  stay as they were. The stock face's size is the one in the header of
+  the `.tga` of that name; when there is none, or its header cannot be
+  read, it is the size of the original the lookup was made for (the
+  `.pcx` where paletted textures are used). A lookup that names the
+  `.tga` has no original, so with no readable `.tga` there is no stock
+  size and any `.png` is used, at its own size.
+* This applies to every renderer. The OpenGL and Metal renderers upload
+  the `.png` at its own size. The software renderer draws a sky face
+  256 texels a row, so it resamples a larger face to the stock face's
+  size, as it does for a retextured wall, and the sky looks as it did
+  with a stock-size face.
+* As for every retexturing replacement, the `.png` is looked up by its
+  own name along the search path and the first one found wins, whichever
+  directory the `.tga` of that name is in: a `.png` in the write
+  directory, including one that came from a server download, or one in
+  `baseq2` when a mod ships a stock-size face of the same name, is used
+  over it. A smaller or undecodable `.png` is ignored (an undecodable
+  one prints its error once), and the order is `.tga`, `.png`, `.jpg`
+  as before.
 * There is no PNG encoder off Apple platforms; the command does
   nothing there.
