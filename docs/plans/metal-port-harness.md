@@ -2839,13 +2839,17 @@ rework added the following:
 
 RT3 adds the first ray-traced effect, `r_rt_shadows` (`docs/plans/metal-raytracing-design.md`,
 section 2). Host: the bare-metal Mac, `Apple M6` (apple9, `supportsRaytracing: yes`), macOS
-27.2.1 (26B131). Base: `origin/main` at `85ad79bb` (TASK54). Every run below is of engine commit
-`45045034` (pin ids `450450343416-*`), an ancestor of the card's head; the commits after it change
-only the documentation. Before every run the wrapper checked that the screen was unlocked
-(`ioreg -n Root -d1 | grep -c CGSSessionScreenIsLocked` 0) and that no other `quake2` ran (it
-waited when one did), and logged the one-minute load: 2.4 to 4.3. The timing batch held the
-shared timing lock. Every log, frame, mask, script and result is in `<artifacts>/TASK55/` and
-`<pin store>`; nothing derived from game data is in the repository.
+27.2.1 (26B131). Base: `origin/main` at `33845c6c` (TASK123 and TASK100; neither touches
+`ref_metal`). Every run below is of engine commit `4deded44` (pin ids `4deded44024e-*`), an
+ancestor of the card's head; the commits after it change only the host test (a larger depth
+error in one case) and the documentation. The round before measured `45045034`, the pre-rebase
+twin of `0e14d7bc`; the rebase onto `33845c6c` brought in only main's TASK123 and TASK100 files,
+no `ref_metal` file. Before every run the wrapper checked that the screen was unlocked
+(`ioreg -n Root -d1 | grep -c CGSSessionScreenIsLocked` 0) and that no other `quake2` ran, and
+logged the one-minute load: 2.6 to 7.9 (other agents share the host). Every engine batch held
+the shared timing lock. Every log, frame, mask, script and result is in `<artifacts>/TASK55/`
+(this round in `rework1/`) and its scratch stores; nothing derived from game data is in the
+repository.
 
 **What it does.** With `r_rt_shadows 1`, on a device with ray tracing, and with gl1's dynamic
 lights on the lightmaps (`gl1_dynamic` on, neither `r_fullbright` nor `gl1_flashblend`), a frame
@@ -2903,116 +2907,156 @@ down by the brightest channel past 1). A light past the four adds its light unsh
   - a pixel whose eye ray does not meet its own triangle (an edge) takes the world's space, the
     base axes and the continuous falloff (on a moved brush entity, its world position).
 
-**Proof 1, effect off.** Every scenario recorded on `45045034` and on the base `85ad79bb` (an
+**Proof 1, effect off.** Every scenario recorded on `4deded44` and on the base `33845c6c` (an
 export of the tree built in scratch, recorded by its own `scripts/pins.sh` into a scratch store),
-with `MTL_DEBUG_LAYER=1`, seeded where the README says (`PINS_SEED=1`):
+with `MTL_DEBUG_LAYER=1` and `PINS_SEED=1`:
 
-- 14 scenarios, 23 frames each (`cinematic` 12): byte-identical to the base on every frame. The
-  scenarios are `world`, `world-fullbright`, `hud2d`, `hud2d-sharp`, `hud2d-scale8`,
-  `world-scale8`, `world-lmcubic`, `skywater`, `dlights`, `dlights-lmcubic`, `models`,
-  `particles`, `particles-cap` and `cinematic` (`idlog.cin`, every 7th).
+- 14 scenarios, 23 frames each (`cinematic` 12), and `dlights` at `PINS_DEMO=demo2.dm2
+  PINS_EVERY=7` (89 frames): byte-identical to the base on every frame. The scenarios are
+  `world`, `world-fullbright`, `hud2d`, `hud2d-sharp`, `hud2d-scale8`, `world-scale8`,
+  `world-lmcubic`, `skywater`, `dlights`, `dlights-lmcubic`, `models`, `particles`,
+  `particles-cap` and `cinematic` (`idlog.cin`, every 7th).
 - Every log holds the validation banner and no other validation line, no failed command buffer,
   `teardown: 0 live objects` and `rt 0/0`: nothing ray-traced is built or allocated.
+- With `r_rt_stats 1` and `r_rt_shadows 0` (the same trace replayed by both builds) the head
+  allocates what the base does: the same ledger (`rt 66/66`), the same structure lines, no
+  shadow line, the frames identical. `rmb_rt_frame` takes no ring entry and keeps no scene
+  without the shadows, and the map's shadow tables and transmission buffer are built when the
+  shadows are first on.
 
 Since the frames are the base's byte for byte, their scores against TASK83's `gl1` references
 are the base's, those TASK54 recorded at TASK28's values. They were not compared again.
 
-**Proof 2, effect on.** `rt-shadows` (the `dlights` scenario plus `r_rt_shadows 1`) records 23
-frames at `demo1.dm2` (`base2`) and 89 at `PINS_DEMO=demo2.dm2 PINS_EVERY=7` (`waste2`),
-`PINS_SEED=1`. The double-count check, `framediff --mask` on every frame, compares two records:
+**Proof 2, effect on.** The double-count check compares, pixel for pixel, a view with the effect
+on and the same view with it off, on the pixels an `r_rt_shadows_show 1` mask marks (no light in
+range). Its two views must have been given the same lights. A control settled whether separate
+records do: three RT-off records of `dlights` at `demo2.dm2` every 7th, and two at `demo1.dm2`,
+are byte-identical, and a developer print (since removed) showed the same light radii and times
+on every one of the 617 frames of each `demo2.dm2` run. The demo's frame time does not reach
+the lights (in a timedemo `cl.time` steps by the demo's 100 ms). So the round before's failures
+were not a frame-time effect. To give every view the same `refdef_t` all the same, each view
+below is a replay of one live record's trace (the harness's TASK46 replay, bit-identical to live
+by construction). The trace's cvar snapshot is the only thing that differs between the replays:
+the value of `r_rt_shadows`, `r_rt_shadows_show` or `r_rt_gbuffer`, rewritten in a copy of the
+trace with the same length (the replayer restores it over the command line). Each record's
+"on" replay is byte-identical to the live record.
 
-- *masks:* an `r_rt_shadows_show 1` record of the same seed and demo (white where no light is in
-  range; the view draws no forward pass), so 48,512 to 306,971 pixels a frame are compared;
-- *against:* the `dlights` record of the same seed on the G-buffer path with every effect off
-  (`r_rt_gbuffer 1`), and on the default path.
+The cause of the four failing `demo2.dm2` frames (33, 36, 76, 77) was the plane, not the time.
+Their lights are explosions, which sit an eighth of a unit above the floor they hit. The pass
+measured each light against the G-buffer's normal, 10 bits an axis and off by about 1/1000, so
+over a hundred units the light fell behind the floor on one side of a line through its foot.
+The floor there went dark where gl1 lit it. The pass now takes the surface's own plane for a
+found surface (`rm_rts_plane`, `mtl_rts_surf`), and the world's test before the search allows for
+the normal's and the depth's error (`mtl_rts_near`). The same replays then passed.
 
-| Demo | Against the G-buffer path, effect off | Against the default path |
-|---|---|---|
-| `demo1.dm2`, 23 frames | every frame equal on the masked pixels (worst max 0, score 0) | every frame within 1/255 (worst max 1, worst masked score 0.000504) |
-| `demo2.dm2` every 7th, 89 frames | 85 equal; frames 33, 36, 76, 77 not (worst max 71, worst masked score 0.002635) | 84 within 1/255; frames 9 (max 3), 33, 36, 76, 77 not |
+Records (`PINS_SEED=1`): `rt-shadows` and `rt-shadows-entities` (`cl_entities 1`) at `demo1.dm2`
+(23 frames) and `demo2.dm2` every 7th (89 frames). Against the G-buffer path with the effect off,
+the RT-off pixel on the path the effect takes:
 
-**The invariant does not hold on `demo2.dm2` (open).** On frames 33, 36, 76 and 77 a few
-thousand pixels at most get gl1's dynamic light while the pass finds no light in range there. In
-frame 33, 8,251 pixels on the floor beyond a straight face edge are lit by gl1 and are dark here.
-The cause is not found. Ruled out:
+| Record | Frames | Masked pixels a frame | Worst max, worst masked score |
+|---|---|---|---|
+| `rt-shadows`, `demo1.dm2` | 23 | 48,559 to 307,100 | 0, 0.000000 |
+| `rt-shadows`, `demo2.dm2` every 7th | 89 | 111,665 to 306,963 | 0, 0.000000 |
+| `rt-shadows-entities`, `demo1.dm2` | 23 | 49,294 to 307,100 | 0, 0.000000 |
+| `rt-shadows-entities`, `demo2.dm2` every 7th | 89 | 115,138 to 306,963 | 0, 0.000000 |
 
-- the normals (`r_rt_gbuffer_show 2`: the floor is (0, 0, 1) on both sides of the edge);
-- the material (`r_rt_gbuffer_show 3`: 1 everywhere);
-- the texture axes. A first version measured on the base axes. About 3 to 5% of the
-  lightmapped faces of `base2` and `waste2` have scaled or rotated axes, so the card moved to
-  each surface's own axes. The lit pixels changed by up to 54 levels; these four frames did not.
+The invariant holds on every frame of the four. Against the default path the masked pixels
+differ by what the G-buffer path itself differs from it with the effect off, frame for frame
+the same max and score: `rt-shadows` within 1/255 at `demo1.dm2`, up to 3 on `demo2.dm2`
+frame 9; with entities up to 44 (`demo1.dm2`) and 67 (`demo2.dm2`). That is TASK54's path, not
+this pass.
 
-The next step is a per-pixel readout of `frad`, `fdist` and the surface found, against
-`rm_lm_dlight` for that face. Frame 9's max of 3 against the default path is the G-buffer's own
-rounding (TASK54: a channel moves by one level now and then; 3 here on a lit edge).
+- *Moved brush entities.* Both entity records hold doors and lifts that move (`demo1.dm2`: `*50`
+  in 25 places, `*42` and `*43` in 14; `demo2.dm2`: `*32` in 33, `*36` in 9), with lights in 270
+  and 238 of their frames. The host test holds the review's probe (a floor at model z 0, its
+  entity at z -200, a light at world (8, 8, 50) of radius 200: gl1 adds 138 at luxel 0, and so
+  does the pass) and 200 turned and moved faces at every luxel.
+- *Alias models.* With the material view (`r_rt_gbuffer_show 3`) of the same replays: of
+  1,180,417 alias-model pixels none is in range and none changes with the effect; every pixel
+  the effect changes (1,895,766) is a world pixel with a light in range.
+- *A frame with nothing in range* (13 of 23 at `demo1.dm2`, 59 of 89 at `demo2.dm2`): its mask is
+  white wherever the 2D is not drawn. `r_rt_shadows_show` draws its view with no light in range
+  when nothing is traced.
 
-Per frame (`r_rt_shadows_show 2` records, the same seeds), pixels with a light in range, of
-307,200:
+Per frame (the classes view, `r_rt_shadows_show 2`, of the same replays), pixels with a light
+in range, of 307,200:
 
-- `demo1.dm2`: 0 to 258,169 (mean 49,035); traced 38,617 on average, of which 0.8 % shadowed;
-- `demo2.dm2`: 0 to 194,828 (mean 34,767); traced 28,261, of which 0.9 % shadowed.
+- `rt-shadows`, `demo1.dm2`: 0 to 258,122 (mean 49,046); traced 38,616 on average, 0.84 %
+  shadowed;
+- `rt-shadows`, `demo2.dm2`: 0 to 194,858 (mean 34,991); traced 28,392, 0.92 % shadowed;
+- `rt-shadows-entities`: 48 % (`demo1.dm2`) and 37 % (`demo2.dm2`) of traced pixels shadowed.
+  A monster's muzzle flash puts its light at the very origin of the flash and smoke models it
+  spawns, and a rocket or a bolt carries its light inside its own model. Every ray to such a light
+  meets the model around it, so the light is shadowed almost everywhere (`demo1.dm2` frame 8:
+  242,931 pixels). This is open: a light's own carrier should not shadow it.
 
-The per-frame lists are in `<artifacts>/TASK55/invariant2/`. Every `rt-shadows` record's
-`engine.log` holds the validation banner and no other validation line, no failed command buffer,
-`teardown: 0 live objects`, `rt 75/75` (`demo1.dm2`) and `rt 54/54` (`demo2.dm2`).
+The per-frame lists are in `<artifacts>/TASK55/rework1/invariant/`.
 
 **Proof 3, look.** For the owner, in `<artifacts>/TASK55/sidebyside/` (off, on and the classes
-view of the same frame). The frames with the most shadowed pixels show the effect best:
+view of the same frame, replays of one trace each). The frames with the most shadowed pixels
+show the effect best:
 
-- `demo1.dm2` frames 21 and 7 (about 3,500 shadowed pixels);
-- `demo2.dm2` frames 21 (7,363), 76, 36 and 15.
+- `rt-shadows`, `demo1.dm2` frames 21 and 7 (about 3,500 shadowed pixels);
+- `rt-shadows`, `demo2.dm2` frames 21 (7,363), 36, 76 and 15;
+- `rt-shadows-entities`, `demo1.dm2` frame 8 and `demo2.dm2` frame 23 show the open problem above.
 
-**Proof 4, performance** (no validation layer; a scratch store; the timing lock held):
+**Proof 4, performance** (no validation layer; a scratch store; the timing lock held; the load
+2.6 to 3.4, other agents on the host):
 
-- `timedemo.txt` at 1920 x 1080, `dlights` and `rt-shadows` alternated, three rounds: 60.0 fps
-  every time, on and off (689 frames in 11.5 s), the display's rate (TASK54).
+- `timedemo.txt` at 1920 x 1080, `dlights` and `rt-shadows` alternated, three rounds: 60.0, 59.9
+  and 60.0 fps off, 59.9, 60.0 and 59.9 on (689 frames in 11.5 s), the display's rate (TASK54).
 - The shadow pass's GPU time per frame: timestamps at the compute encoder's boundaries, the
-  `r_rt_stats 2` line. Warm: each run's frames past its first 100, the 291 that traced. Three runs
-  each, alternated:
-  - 1920 x 1080: median 2.467 ms (medians 2.453 to 2.484; p10 1.565 to 1.589, p90 3.374 to
-    3.582, max 5.361);
-  - 5120 x 2880 (`PINS_HIDPI=1` at 2560 x 1440): median 8.945 ms (8.636 to 9.054; p10 5.136 to
-    5.341, p90 11.199 to 11.723, max 16.349).
-- About 0.87 rays a pixel at both sizes: 32 % of pixels have a light in range, 24 % trace, and
-  the surface ray is cast wherever a light reaches the plane.
+  `r_rt_stats 2` line. Warm: each run's frames past its first 100 that traced, 308 a run. Three
+  runs each, alternated:
+  - 1920 x 1080: median 2.546 ms (medians 2.544 to 2.553; p10 1.603 to 1.622, p90 3.343 to
+    3.621, max 5.530);
+  - 5120 x 2880 (`PINS_HIDPI=1` at 2560 x 1440): median 8.681 ms (8.426 to 8.847; p10 5.444 to
+    5.779, p90 11.397 to 11.585, max 23.347).
+- About 0.86 rays a pixel at both sizes: 31.5 % of pixels have a light in range, 23.4 % trace.
+  Against the round before: 1080p 2.546 ms against 2.467, 2880 8.681 against 8.945.
 
 **Proof 5, validation and ASAN.**
 
-- Validation: every record above ran with `MTL_DEBUG_LAYER=1`, clean as stated.
+- Validation: every record and replay of Proofs 1 and 2 ran with `MTL_DEBUG_LAYER=1`: the banner
+  and no other validation line, no failed command buffer, `teardown: 0 live objects` (`rt 75/75`,
+  `rt 54/54` without entities, `rt 472/472` and `rt 318/318` with them).
 - ASAN: `make ASAN=1 client game ref_metal`, then `debug/quake2` with `MTL_DEBUG_LAYER=1` and a
   scratch script beside the binary, deleted after. The script sets `r_rt_shadows 1` and `cheats 1`,
   then plays `map base1`, the blaster fired for 200 frames, `vid_restart`, firing again, `map
   base2` and firing again.
-- Result: status 0, no sanitizer line, the pass's targets made in each renderer session (1280 x
-  960), both teardowns `0 live objects` (`rt 91/91`, `rt 186/186`).
-- A first script that started the demos with `demomap` from the script dropped at load
-  (`CM_InlineModel: bad number`) and drew no world; the play above replaced it.
+- Result: status 0, no sanitizer line, the pass's targets made in each renderer session (2560 x
+  1920), both teardowns `0 live objects` (`rt 92/92`, `rt 186/186`).
 
-**Host test and mutants.** `tests/metal/rm_rtshadow_test.c` (2,683 checks), run by
+**Host test and mutants.** `tests/metal/rm_rtshadow_test.c` (2,719 checks), run by
 `tests/check-ref-metal.sh`. It holds the falloff to `rm_lm_dlight`:
 
 - at every luxel of 600 axial faces (front and back);
 - at every luxel and a point inside every cell of 400 faces with scaled, rotated, sheared and
-  shifted axes.
+  shifted axes;
+- at every luxel of 200 faces of turned and moved brush entities, in their model's space with the
+  light's world origin, and the review's probe;
+- at every luxel of a floor with an explosion's light an eighth above it, the floor's normal as
+  rgb10a2 returns it (55 of its 100 lit luxels have the light behind that normal);
+- and none on a surface without light samples.
 
-It also holds the in-range margin, the choice of four, the packing, the bias, the resolve's
-light against `rm_lm_store`, the unprojection, the transmission and the surface map.
+It also holds the in-range margin, the choice of four, the packing, the bias, the resolve's light
+against `rm_lm_store`, the unprojection, the transmission, the surface map with its unlit bit,
+the plane and the world's test.
 
 Failing first:
 
-- against a stub `rm_rtshadow.c`: 53 of 2,160 checks;
-- with the shared header stubbed too: 2,045;
-- after the rework: the luxel-grid test against the stub header, and the surface-map test 8 of 8
-  against its stub.
+- the round before: against a stub `rm_rtshadow.c`, 53 of 2,160 checks; with the shared header
+  stubbed too, 2,045;
+- this round, each fix reverted in a copy: the pixel kept in the world's space fails the probe;
+  an unlit surface lit fails 2 checks, the table without the unlit bit 1;
+- the four `demo2.dm2` frames failed the replayed check before the exact plane and pass after.
 
-36 mutants of `common/mtl_rts_math.h` and `rm_rtshadow.c` (`<artifacts>/TASK55/tdd/mutants.*`):
-34 killed. The two survivors are equivalent:
+The round before's 36 mutants: 34 killed, 2 equivalent. This round's 11 new mutants of
+`common/mtl_rts_math.h` and `rm_rtshadow.c` (`<artifacts>/TASK55/rework1/tdd/`): 9 killed. The two
+survivors are equivalent:
 
-- `>=` for `>` between the two offsets: equal offsets give the same distance;
-- `frad > 64` for `frad >= 64` in `mtl_rts_add`: at 64 the second test, `fdist < 0`, never holds.
-
-The first run left two more, the luxel's edge and the stats line's exact length; two checks were
-added and kill them.
+- `sf.unlit = unlit` for `unlit ? 1 : 0`: the field is only tested for zero;
+- `>` for `>=` in the surface map's bound: an index at the bit needs 2^31 surfaces.
 
 ### Closing TASK27 on the build host
 

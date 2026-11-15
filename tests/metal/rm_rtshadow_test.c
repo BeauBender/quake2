@@ -1168,8 +1168,8 @@ test_plane_exact(void)
 	{
 		for (s = 0; s < LUX; s++)
 		{
-			/* the luxel's point as the depth gives it back: a hundredth of a unit off the plane */
-			const mtl_rts_v3_t p = mtl_rts_v3(16.0f * s, 16.0f * t, -448 + (((s + t) & 1) ? 0.01f : -0.01f));
+			/* the luxel's point as a far depth gives it back: a quarter of a unit off the plane, more than the light's eighth */
+			const mtl_rts_v3_t p = mtl_rts_v3(16.0f * s, 16.0f * t, -448 + (((s + t) & 1) ? 0.25f : -0.25f));
 			const mtl_rts_v3_t lp = mtl_rts_v3(lo[0] - p.x, lo[1] - p.y, lo[2] - p.z);
 			const float want = bl[(t * LUX + s) * 3];
 

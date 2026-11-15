@@ -134,9 +134,9 @@ lights in `ref_metal`"). The pass as built:
 
 On the M6 (apple9, compute path), seeded `rt-shadows` over `demo1.dm2`, warm frames, three runs:
 
-- 1920 x 1080: median 2.47 ms (p10 1.57, p90 3.39 to 3.58);
-- 5120 x 2880: median 8.95 ms (p10 5.1 to 5.3, p90 11.2 to 11.7);
-- about 0.87 rays a pixel; 24 % of pixels trace, 32 % have a light in range.
+- 1920 x 1080: median 2.55 ms (p10 1.60 to 1.62, p90 3.34 to 3.62);
+- 5120 x 2880: median 8.68 ms (p10 5.4 to 5.8, p90 11.4 to 11.6);
+- about 0.86 rays a pixel; 23 % of pixels trace, 32 % have a light in range.
 
 That is above the 1.952 ms the closed table gives 4 any-hit rays a pixel on every pixel. The
 surface ray (closest hit), the 32-light loops and the term's writes cost more than the shadow
