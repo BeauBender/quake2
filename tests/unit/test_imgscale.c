@@ -260,10 +260,9 @@ TEST(imgscale_floodfill_left_turn)
 
 /*
  * Left, then right, then above, then below: the last that qualifies wins.
- * In 5 5 8 the fill colour is 5 and 8 is a real colour: (0,0) has only its
- * right neighbour, (1,0) sees 7 on its left (already filled) and 8 on its
- * right, and the right one must win. With the right step before the left
- * step, (1,0) would take the 7.
+ * In 5 5 8 the fill reaches (1,0) from its left and (2,0) is a colour; the
+ * pixel takes the colour of the last step that qualifies. With the right
+ * step ahead of the left step the result differs in the first pixels.
   */
 TEST(imgscale_floodfill_right_last)
 {
