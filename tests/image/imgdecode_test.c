@@ -1558,7 +1558,7 @@ run_cases(void)
 			if (r == IMGDEC_OK)
 			{
 				/* the rows the file does not hold (the top ones in a bottom-origin TGA) are filled in, never left uninitialised */
-				int y, x, b, nb = c->gap_alpha ? 4 : 3;
+				int y, x, b, nb = c->gap_alpha ? 4 : 3, n = 0;
 
 				for (y = c->gap_from; y < c->gap_to && y < h; y++)
 				{
@@ -1569,9 +1569,11 @@ run_cases(void)
 							CHECK(pic[((size_t)y * w + x) * 4 + b] == c->gap_fill,
 								"%s: row %d byte %d is not the fill 0x%02x", c->what, y, b,
 								c->gap_fill);
+							n++;
 						}
 					}
 				}
+				CHECK(n > 0, "%s: no fill byte was checked", c->what);
 			}
 			free(pic);
 			continue;
