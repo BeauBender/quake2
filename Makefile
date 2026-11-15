@@ -1421,6 +1421,11 @@ else
 STATIC_REF_OBJS := $(REFMETAL_OBJS)
 STATIC_LDLIBS += -framework Metal -framework QuartzCore -framework Foundation -weak_framework MetalFX
 endif
+ifeq ($(STATIC_RENDERER)$(METAL_SHADERS), metalyes)
+# ref_metal finds its shader library beside the executable (dladdr on
+# the code, which now is the executable)
+$(BINDIR)/quake2 : $(BINDIR)/ref_metal.metallib
+endif
 STATIC_REF_OBJ := $(BUILDDIR)/static/ref_$(STATIC_RENDERER).o
 STATIC_LINK_OBJS := $(STATIC_GAME_OBJ) $(STATIC_REF_OBJ)
 
