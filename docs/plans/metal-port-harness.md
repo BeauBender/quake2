@@ -2662,10 +2662,17 @@ Finding 3 is FIX52 (#239)):
 
 ### Re-measurement (TASK108)
 
-TASK108 (#259) repeats the open cases above on `main` at `462f8d3e` plus
-documentation commits, engine source `7085c8f1` (which has FIX52 (#254) at
-`8065c3ec`, TASK90 (#244) and TASK91 (#258) in it). The host, the launch
-line, the alternation (soft, gl1, gl1-metal, metal, then again; five
+TASK108 (#259) repeats the open cases above on the engine source of
+`462f8d3e` (the runs were built from a worktree one documentation commit
+on, `7085c8f1`; `git diff --stat 462f8d3e 7085c8f1 -- src third_party
+Makefile` is empty, so `462f8d3e` is the engine commit of every row). It has
+FIX52 (#254) at `8065c3ec`, TASK90 (#244) and TASK91 (#258), and predates
+TASK92 (#286, N9), so the measured `ref_metal` draws no particles although
+`demo1.dm2` has them; the other three renderers are unaffected by TASK92. The
+host, the launch line (TASK97's, except that it passes `+set basedir
+/path/to/q2data` instead of `-datadir`, sets `r_vsync` as the last `+set`, and
+ends each run with a 45 s bounded wait in place of `timeout 20`), the
+alternation (soft, gl1, gl1-metal, metal, then again; five
 rounds per row) and the `frames, ... fps` log line are as above; `ref_gl1`
 is `GL_RENDERER: Apple M6`, `GL_VERSION: 2.1 Metal - 91.7`, the Metal-backed
 `gl1` `Metal shim on Apple M6 (gl1-metal)`, `GL_VERSION: 1.4 mgl`,
@@ -2684,12 +2691,13 @@ of each of `ref_soft`, the Metal-backed `gl1` and `ref_metal` read 119.9 to
 and every `vid_fullscreen 1` request other than the desktop mode failed
 with `Couldn't switch to exclusive fullscreen: CGDisplaySwitchToMode():
 Unknown Error` (seven cases, then `Reverting to windowed r_mode 4
-(640x480).`). The failed switches are locked-session results (FIX57 (#281)
-was filed for them: the switch works with the screen unlocked, below). The
-flat 120 is partly the same: unlocked, the 640x480 and 1280x720 windowed
-rows still read 120 (below), but 1600x900 and 1920x1080 windowed and every
-fullscreen row do not, so only the 640x480, 1280x720 and `water` windowed values of
-that batch agree with an unlocked one.
+(640x480).`). The switch failures are explained by the lock (FIX57 (#281) was filed for
+them: with the screen unlocked the switches work, below); the locked
+1280x720 `ref_soft` fullscreen case was not repeated unlocked (1280x720 is
+not among the fullscreen sizes run here). The flat 120 is not wholly the
+same: unlocked, the 640x480 and 1280x720 windowed rows still read about 120
+(below), while 1600x900 and 1920x1080 windowed and every fullscreen row do
+not. The `water` rows are not comparable (below).
 
 The runs below were taken with the screen unlocked: `CGSSessionScreenIsLocked`
 read 0 (`ioreg -n Root -d1 | grep -c CGSSessionScreenIsLocked` printed 0)
@@ -2702,9 +2710,11 @@ table are kept outside the repository.
 
 **Results** (fps, five runs each, `r_vsync 0` as the last `+set`,
 `timedemo 1`, `+demomap demo1.dm2` unless said, `vid_fullscreen 0` unless
-said; the engine commit is `7085c8f1` for every row, 689 frames a run, `Real
+said; the engine commit is `462f8d3e` for every row, 689 frames a run, `Real
 display mode: 2560x1440@60.00` for every windowed row; "drawable" is the
-log's `Drawable size:` line, in pixels):
+log's `Drawable size:` line, in pixels, which prints the requested size and
+so does not show the size the window or display got, TASK98; the native claim
+below rests on `Real display mode:`):
 
 | Size and mode | display mode | drawable | `ref_soft` | `ref_gl1` | `gl1-metal` | `ref_metal` | Load at start (20 runs) | Lock |
 |---|---|---|---|---|---|---|---|---|
@@ -2740,6 +2750,25 @@ Values in run order (rounds 1 to 5):
   4428.6 4043.5 3576.9; gl1-metal 121.4 121.4 121.3 121.4 121.3; metal
   121.3 120.0 120.2 121.3 120.8.
 
+**First-pass fullscreen probes** (one run per renderer, eight runs, taken
+before the five-round rows; they are in the 28 and 28 logs counted below and
+in no row above; `r_vsync 0`, `lock` 0; fps, one-minute load at start):
+
+| Mode | `ref_soft` | `ref_gl1` | `gl1-metal` | `ref_metal` |
+|---|---|---|---|---|
+| 5120x2880 `vid_fullscreen 1` | 45.2 (3.68) | 667.6 (3.79) | 300.6 (3.82) | 349.9 (3.48) |
+| 1920x1080 `vid_fullscreen 1` | 283.5 (3.66) | 2281.5 (3.60) | 292.9 (3.38) | 328.1 (2.88) |
+
+Five of the eight started above a load of 3.5 (3.68, 3.79, 3.82, 3.66,
+3.60). Five of the cells lie inside the five-round ranges. Three fall
+outside: 5120x2880 `ref_soft` 45.2 (above the 44.3 to 45.0 range) and
+`ref_gl1` 667.6 (above 602.8 to 661.9), and 1920x1080 `ref_gl1` 2281.5
+(below 2312.1 to 2514.6). With the probes the six-run ranges are 44.3 to
+45.2, 602.8 to 667.6 and 2281.5 to 2514.6. The rows exclude the first pass
+because it is one run per cell, taken before the alternation of five rounds
+began, and the probe 667.6 and 45.2 are each the maximum of the six, the
+2281.5 the minimum.
+
 Runs that started at a one-minute load above 3.5, and what they do to their
 row: 5120x2880 `metal` round 1 (3.71, 389.5) is the row maximum; 5120x2880
 `gl1-metal` rounds 2 (3.92, 313.8) and 5 (3.77, 396.4) and `metal` rounds 3
@@ -2766,9 +2795,10 @@ their rows. The one-minute average is a trailing mean. The 5120x2880 loads
 | 1920x1080 `vid_fullscreen 1` | 59.9 | 60.0 | 60.1 | 60.0 | 1.44 to 1.87 |
 | 5120x2880 `vid_fullscreen 1` | 46.7 | 60.0 | 60.1 | 60.0 | 1.80 to 2.54 |
 
-The first windowed round was taken without `+cvarlist`, so its logs hold no
-`r_vsync` line; round 2 repeated it with `+cvarlist r_vsync` in the logs.
-With vsync on every renderer that can reach 60 reads 60.0 to 60.1 at both
+The first windowed round (round 1) was taken without `+cvarlist`, so its
+logs hold no `r_vsync` line; round 2 repeated it with `+cvarlist r_vsync` in
+the logs.
+With vsync on every renderer that can reach 60 reads 59.9 to 60.1 at both
 sizes. At 5120x2880 `ref_soft` stays at 46.7, below the refresh, as it was
 (44.3 to 45.0) without vsync.
 
@@ -2830,7 +2860,13 @@ file has the probe of where the windowed cap starts.
 Two more windowed ceilings are in the table, neither explained here:
 640x480 and 1280x720 read 119.8 to 120.2 for `ref_soft`, `gl1-metal` and
 `ref_metal` (they read the same in the locked first batch, so the lock is
-not the cause of those two rows), and 1600x900 reads neither: `ref_soft`
+not the cause of those two rows). The ~120 is new against TASK97 (237.2 to
+328.1 at 640x480 and 294.3 to 326.2 at 1280x720 for the same renderers) and
+against the TASK92 section's frame-time table (`skywater`, `demo1.dm2`: 1285
+to 1398 fps for `metal` and 816 to 984 for `gl1-metal`, `r_vsync 0`, taken at a
+load of 7.8 to 13.4 on that section's host), both much higher. FIX53 (#250) now
+carries these data, for the windowed ceilings and the 1600x900 spread.
+And 1600x900 reads neither: `ref_soft`
 197.7 to 321.2 (the runs split into 197.7 and 219.5 against 316.6 to 321.2),
 `gl1-metal` 67.1 to 96.1 and `ref_metal` 62.3 to 75.2, against TASK97's
 284.7 to 287.8, 245.5 to 252.7 and 277.5 to 283.4 at the same size. The cause
@@ -2868,10 +2904,12 @@ seen, not explained. `ref_gl1` against a GPU timestamp (`gl_finish 1`). A
 windowed timedemo above 1920x1080, or at the non-16:9 modes 1920x1200,
 1600x1200 and 2560x1080 (booted only). Any fullscreen mode other than the
 desktop, 1920x1080 and 5120x2880 modes and the 640x480 request (one run each
-for the last). The `r_vsync 1` rows are one run each. `r_vsync` was read back
-from the log only in the runs of this pass that carry `+cvarlist`
-(everything from the 640x480 windowed row on and the `r_vsync 1` probes
-except the first 1920x1080 windowed round). The desktop-size fullscreen
+for the last). The `r_vsync 1` rows are one run each. Runs with no
+`r_vsync` readback in the log (no `+cvarlist`): the 1920x1080 windowed row
+(20 runs), the 5120x2880 fullscreen row (20 runs), the first windowed `r_vsync
+1` probe round (4) and the twelve first-pass fullscreen probes (5120x2880,
+1920x1080, 640x480); every other run's log has the `r_vsync` line, with the
+value set. The desktop-size fullscreen
 row of the first batch (2560x1440, which switches no mode) was not repeated
 unlocked. The `water` demo is 93 frames, not the first batch's 119. The
 lock state was read once per run before launch, not during it, and the owner
@@ -2921,7 +2959,7 @@ the windowed runs; every run was validated from its artifacts (23 frames,
 | `ref_metal` | harness `world`, windowed | against `ref_gl1`: score 0.000000 to 0.049744, bad up to 0.264, largest channel difference 254; its two runs agree with each other exactly (score 0.000000). The `ref_metal` of these runs was partial (built before N6 and N7 merged, see Commands); this is the 3D difference, not a readback difference (see below) |
 | all three | channel and row order | on every frame the as-is difference is the smallest of the three tests by a factor of 4 or more (for example `world` frame 11: as is 0.00000, flipped 0.03992, red and blue swapped 0.03259; `hud2d` frame 0: 0.00000, 0.00547, 0.33025), so no flip and no channel swap |
 | all three | not black, not gamma shifted | every frame has all three channels spread over 0 to 255 or the scene's maximum (`world` frame 0: mean 27.8 20.9 14.0, maximum 211 203 203, equal to the byte on the two GL renderers; `ref_metal` has windowed harness results only here, its fullscreen harness result is in finding 1) |
-| `screenshot`, windowed, 3D then menu | `ref_gl1`, shim, `ref_metal` | 640x480, not black, upright, `rgb` in order; `ref_gl1` run against run: 0.00000 to 0.00079 for map and menu together (menu alone 0.00008 to 0.00073; the map scene is live: items and monsters move, so this is scene noise); shim against `ref_gl1` 0.00028 to 0.00824 (two of three first pictures were brighter, mean 27.3 and 26.5 against 24.2, a screen flash present in some runs); `ref_metal` against `ref_gl1` 0.00765 to 0.00925 (map) and 0.00152 to 0.00172 (menu), mean 21.4 against 24.2 for the map, consistent every run (the `ref_metal` of these runs, built before N6 and N7 merged, draws no entities, view weapon, sky or translucent surfaces, which `ref_gl1` draws in this scene; particles (N9) and dynamic light (N8) were not drawn by any `ref_metal` then; TASK91 (#258) has since drawn dynamic light, sprites, beams, shadows and flash blobs, and particles still wait for N9, as the TASK91 section says; not a readback fault) |
+| `screenshot`, windowed, 3D then menu | `ref_gl1`, shim, `ref_metal` | 640x480, not black, upright, `rgb` in order; `ref_gl1` run against run: 0.00000 to 0.00079 for map and menu together (menu alone 0.00008 to 0.00073; the map scene is live: items and monsters move, so this is scene noise); shim against `ref_gl1` 0.00028 to 0.00824 (two of three first pictures were brighter, mean 27.3 and 26.5 against 24.2, a screen flash present in some runs); `ref_metal` against `ref_gl1` 0.00765 to 0.00925 (map) and 0.00152 to 0.00172 (menu), mean 21.4 against 24.2 for the map, consistent every run (the `ref_metal` of these runs, built before N6 and N7 merged, draws no entities, view weapon, sky or translucent surfaces, which `ref_gl1` draws in this scene; particles (N9) and dynamic light (N8) were not drawn by any `ref_metal` then; TASK91 (#258) has since drawn dynamic light, sprites, beams, shadows and flash blobs, and TASK92 (#286) has since drawn the particles (N9); not a readback fault) |
 | `screenshot`, fullscreen | `ref_gl1` and shim | 640x480; same statistics as windowed; run-against-run and renderer-against-renderer differences 0.00000 to 0.00140 (the split per renderer was not kept) |
 | `screenshot`, fullscreen | `ref_metal` | **960x540**, see finding 1 |
 | scaled drawable | all three | On macOS `vid_highdpiaware` is not honoured: `Glimp_DetermineHighDPISupport` (`src/client/vid/glimp_sdl3.c`) clears `SDL_WINDOW_HIGH_PIXEL_DENSITY` and sets it for the `wayland` driver only, so `vid_highdpiaware 0` and `1` run the same path and write the same 640x480 picture windowed (the written picture size, not the log's `Drawable size:` line, which prints the requested size). A Retina-scaled drawable cannot be produced with the engine as built; the case is **not run** for that reason |
