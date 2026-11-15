@@ -80,7 +80,7 @@ typedef struct
 	float color[4];
 } rm_rts_light_t;
 
-/* the view of the kernel and the resolve (rm_rtshadow.metal's rm_rts_view, 112 bytes) */
+/* the view of the kernel and the resolve (rm_rtshadow.metal's rm_rts_view, 128 bytes) */
 typedef struct
 {
 	float inv[16];      /* GL clip coordinates to world: the inverse of the jittered projection times the modelview */
@@ -90,6 +90,8 @@ typedef struct
 	unsigned nlights;   /* lights of the frame, at most MTL_RTS_MAX_LIGHTS */
 	unsigned trans;     /* 1 when the map holds a triangle that passes light (a ray then looks past it) */
 	unsigned show;      /* r_rt_shadows_show */
+	unsigned moved;     /* 1 when a brush entity of the frame is moved or turned: every pixel looks for its surface */
+	unsigned pad[3];
 } rm_rts_view_t;
 
 /* the 4 x 4 column-major inverse of m in double precision: 1, or 0 with out the identity when m is singular or not finite */
@@ -112,15 +114,13 @@ int rm_rts_view(const float *proj, const float *world, const rm_viewport_t *vp, 
 int rm_rts_unproject(const rm_rts_view_t *v, float px, float py, float depth, float *out);
 
 /*
- * The kernel's choice at a point p with front normal n among the nl
- * lights l (at most MTL_RTS_MAX_LIGHTS): each light's add into adds[i]
- * (mtl_rts_add_lm with the surface's texture axes st[0] and st[1] when st
- * is given, else mtl_rts_add with the base axes), the four that add the
- * most (mtl_rts_top_add), and in *flags MTL_RTS_IN_RANGE when any light
- * is in range (mtl_rts_in_range, along the same axes).
+ * The kernel's choice at a pixel of surface sf (mtl_rts_surf, or
+ * mtl_rts_surf_base) among the nl lights l (at most MTL_RTS_MAX_LIGHTS):
+ * each light's add into adds[i] (mtl_rts_surf_light), the four that add
+ * the most (mtl_rts_top_add), and in *flags MTL_RTS_IN_RANGE when any
+ * light is in range.
  */
-mtl_rts_top_t rm_rts_select(mtl_rts_v3_t p, mtl_rts_v3_t n, const rm_rts_light_t *l, int nl, const mtl_rts_v4_t *st,
-		float *adds, unsigned *flags);
+mtl_rts_top_t rm_rts_select(mtl_rts_surf_t sf, const rm_rts_light_t *l, int nl, float *adds, unsigned *flags);
 
 /*
  * The term the kernel hands the resolve: the sum over the lights of
@@ -129,19 +129,26 @@ mtl_rts_top_t rm_rts_select(mtl_rts_v3_t p, mtl_rts_v3_t n, const rm_rts_light_t
  */
 void rm_rts_term(const float *adds, const rm_rts_light_t *l, int nl, unsigned pidx, unsigned pvis, float *rgb);
 
-/* a surface's range of the world's index buffer (msurface_t's first_index and num_indices) */
+/*
+ * A surface's range of the world's index buffer (msurface_t's first_index
+ * and num_indices), and unlit: it has no light samples (gl1 adds no
+ * dynamic light to it).
+ */
 typedef struct
 {
 	unsigned first_index;
 	unsigned num_indices;
+	unsigned unlit;
 } rm_rts_range_t;
 
 /*
  * The surface of each of the ntris triangles of the world's index buffer,
  * from the nsurf surfaces' ranges: tri_surf[k] is the index of the
- * surface whose range holds triangle k, ~0 for a triangle no surface
- * holds. The number of triangles assigned; -1 when a range is not whole
- * triangles, passes ntris, or two ranges overlap.
+ * surface whose range holds triangle k, with MTL_RTS_SURF_UNLIT for an
+ * unlit one, ~0 for a triangle no surface holds. The number of triangles
+ * assigned; -1 when a range is not whole triangles, passes ntris, or two
+ * ranges overlap, or when nsurf is MTL_RTS_SURF_UNLIT or more (so ~0's
+ * index, MTL_RTS_SURF_UNLIT - 1, is never a surface's).
  */
 long rm_rts_surface_map(const rm_rts_range_t *r, long nsurf, unsigned long ntris, unsigned *tri_surf);
 
@@ -187,9 +194,18 @@ void rmb_rts_close(void);
 int rmb_rts_set_map(const unsigned *tri_surf, unsigned long ntris, const float *vecs, unsigned long nsurf);
 
 /*
+ * Before the G-buffer raster: the kernel's outputs at the render size w x
+ * h. 1 when the view can trace (the frame then leaves the dynamic lights
+ * out of the lightmaps); 0 when the pass is not open or they cannot be
+ * made.
+ */
+int rmb_rts_prepare(unsigned long w, unsigned long h);
+
+/*
  * The view and lights the next G-buffer view traces and resolves with
  * (copied); n 0, or v NULL, turns the pass off for that view: the resolve
- * is the stock one.
+ * is the stock one, or with v->show set the development view with no
+ * light in range.
  */
 void rmb_rts_set_view(const rm_rts_view_t *v, const rm_rts_light_t *lights, int n);
 

@@ -59,7 +59,7 @@ id<MTLCommandBuffer> rmb_frame_compute(unsigned long *frame);
 #define RMB_RTS_COUNTS 4        /* in range, traced, shadowed, rays */
 
 _Static_assert(sizeof(rm_rts_light_t) == 32, "a light is rm_rtshadow.metal's 32 bytes");
-_Static_assert(sizeof(rm_rts_view_t) == 112, "the view is rm_rtshadow.metal's 112 bytes");
+_Static_assert(sizeof(rm_rts_view_t) == 128, "the view is rm_rtshadow.metal's 128 bytes");
 
 static int rts_open;
 static id<MTLComputePipelineState> trace_pipe;
@@ -71,17 +71,19 @@ static uint32_t m_n[2];                 /* their triangles and surfaces */
 static id<MTLBuffer> counts;            /* RMB_FRAMES_IN_FLIGHT slots of RMB_RTS_COUNTS */
 static id<MTLCounterSampleBuffer> samples;
 
-static atomic_int slot_done[RMB_FRAMES_IN_FLIGHT];
+/* per slot: the frame whose pass completed (set by its handler), the frame whose counts are awaited */
+static atomic_ulong slot_done[RMB_FRAMES_IN_FLIGHT];
 static int slot_pending[RMB_FRAMES_IN_FLIGHT];
 static int slot_timed[RMB_FRAMES_IN_FLIGHT];
 static unsigned long slot_frame[RMB_FRAMES_IN_FLIGHT], slot_pixels[RMB_FRAMES_IN_FLIGHT];
 static rm_rts_stats_t done[RMB_FRAMES_IN_FLIGHT];
 static int ndone;
 
-/* the view the next G-buffer view traces with, and whether this one traced */
+/* the view the next G-buffer view traces with, whether this one traced, and its r_rt_shadows_show */
 static rm_rts_view_t view;
 static rm_rts_light_t lights[MTL_RTS_MAX_LIGHTS];
 static int view_set, traced;
+static unsigned view_show;
 
 /* Sets a strong slot to obj (nil releases it), counting both in the ledger as RM_OBJ_RT. */
 #define RMB_RTS_SET(slot, obj) \
@@ -165,12 +167,13 @@ rmb_rts_open(char *err, size_t errlen)
 
 	for (int i = 0; i < RMB_FRAMES_IN_FLIGHT; i++)
 	{
-		atomic_store(&slot_done[i], 0);
+		atomic_store(&slot_done[i], ~0UL);   /* no frame */
 		slot_pending[i] = 0;
 	}
 
 	ndone = 0;
 	view_set = traced = 0;
+	view_show = 0;
 	rts_open = 1;
 	return 1;
 }
@@ -193,8 +196,48 @@ rmb_rts_close(void)
 
 	rts_open = 0;
 	view_set = traced = 0;
+	view_show = 0;
 	ndone = 0;
 	m_n[0] = m_n[1] = 0;
+}
+
+int
+rmb_rts_prepare(unsigned long w, unsigned long h)
+{
+	if (!rts_open || !trace_pipe || !resolve_pipe || !counts || (w < 1) || (h < 1))
+	{
+		return 0;
+	}
+
+	/* the outputs at the render size, made again when it changes */
+	if (t_out && t_term && (t_out.width == w) && (t_out.height == h))
+	{
+		return 1;
+	}
+
+	@autoreleasepool
+	{
+		MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRG32Uint
+				width:w height:h mipmapped:NO];
+
+		d.storageMode = MTLStorageModePrivate;
+		d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+		RMB_RTS_SET(t_out, [rmb_device newTextureWithDescriptor:d]);
+		d.pixelFormat = MTLPixelFormatRGBA16Float;
+		RMB_RTS_SET(t_term, [rmb_device newTextureWithDescriptor:d]);
+
+		if (!t_out || !t_term)
+		{
+			RMB_RTS_SET(t_out, nil);
+			RMB_RTS_SET(t_term, nil);
+			return 0;
+		}
+
+		fprintf(stderr, "ref_metal: rt shadows %lux%lu: %lu bytes allocated\n", w, h,
+				(unsigned long)(t_out.allocatedSize + t_term.allocatedSize));
+	}
+
+	return 1;
 }
 
 int
@@ -234,6 +277,7 @@ void
 rmb_rts_set_view(const rm_rts_view_t *v, const rm_rts_light_t *l, int n)
 {
 	view_set = 0;
+	view_show = (rts_open && v) ? v->show : 0;
 
 	if (!rts_open || !v || !l || (n <= 0))
 	{
@@ -262,7 +306,7 @@ rmb_rts_read(void)
 		const uint32_t *c;
 		rm_rts_stats_t *s;
 
-		if (!slot_pending[k] || !atomic_load(&slot_done[k]))
+		if (!slot_pending[k] || (atomic_load(&slot_done[k]) != slot_frame[k]))
 		{
 			continue;
 		}
@@ -340,31 +384,14 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 	view_set = 0;
 	rmb_rts_read();
 
+	/* the outputs, made by rmb_rts_prepare before the raster at this size */
+	if (!t_out || !t_term || (t_out.width != w) || (t_out.height != h))
+	{
+		return 0;
+	}
+
 	@autoreleasepool
 	{
-		/* the outputs at the render size, made again when it changes */
-		if (!t_out || !t_term || (t_out.width != w) || (t_out.height != h))
-		{
-			MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRG32Uint
-					width:w height:h mipmapped:NO];
-
-			d.storageMode = MTLStorageModePrivate;
-			d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-			RMB_RTS_SET(t_out, [rmb_device newTextureWithDescriptor:d]);
-			d.pixelFormat = MTLPixelFormatRGBA16Float;
-			RMB_RTS_SET(t_term, [rmb_device newTextureWithDescriptor:d]);
-
-			if (!t_out || !t_term)
-			{
-				RMB_RTS_SET(t_out, nil);
-				RMB_RTS_SET(t_term, nil);
-				return 0;
-			}
-
-			fprintf(stderr, "ref_metal: rt shadows %lux%lu: %lu bytes allocated\n", (unsigned long)w,
-					(unsigned long)h, (unsigned long)(t_out.allocatedSize + t_term.allocatedSize));
-		}
-
 		/* ends the raster: the kernel reads what it wrote */
 		cmd = rmb_frame_compute(&fno);
 
@@ -376,12 +403,12 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 		slot = (int)(fno % RMB_FRAMES_IN_FLIGHT);
 		timed = (samples != nil);
 
-		/* a slot still in flight is not counted again: its counts would race */
-		if (slot_pending[slot] && !atomic_load(&slot_done[slot]))
-		{
-			return 0;
-		}
-
+		/*
+		 * The frame that used this slot before has completed on the GPU (the
+		 * frame semaphore), though its handler may not have run yet: its
+		 * counts are dropped, and its handler, naming its own frame, does not
+		 * mark this one done.
+		 */
 		memset((uint32_t *)counts.contents + slot * RMB_RTS_COUNTS, 0, RMB_RTS_COUNTS * sizeof(uint32_t));
 
 		if (timed)
@@ -427,14 +454,13 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTS_GROUP, RMB_RTS_GROUP, 1)];
 		[ce endEncoding];
 
-		atomic_store(&slot_done[slot], 0);
 		slot_pending[slot] = 1;
 		slot_timed[slot] = timed;
 		slot_frame[slot] = fno;
 		slot_pixels[slot] = (unsigned long)(w * h);
 		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 			(void)b;
-			atomic_store(&slot_done[slot], 1);
+			atomic_store(&slot_done[slot], fno);
 		}];
 	}
 
@@ -447,24 +473,48 @@ rmb_rts_resolve(id<MTLRenderCommandEncoder> enc, const void *resolve, size_t res
 		id<MTLTexture> albedo, id<MTLTexture> light, id<MTLTexture> material, id<MTLTexture> depth,
 		id<MTLTexture> normal)
 {
+	const int did = traced && t_out && t_term;
+	const unsigned show = view_show;
+	rm_rts_view_t none;
+
 	(void)depth;
 	(void)normal;
+	traced = 0;
+	view_show = 0;
 
-	if (!traced || !rts_open || !enc || !t_out || !t_term)
+	/* nothing traced and no development view asked for: the stock resolve */
+	if (!rts_open || !enc || !resolve_pipe || (!did && !show))
 	{
-		traced = 0;
 		return 0;
 	}
 
-	traced = 0;
 	[enc setRenderPipelineState:resolve_pipe];
 	[enc setFragmentBytes:resolve length:resolve_len atIndex:0];
-	[enc setFragmentBytes:&view length:sizeof(view) atIndex:1];
 	[enc setFragmentTexture:albedo atIndex:0];
 	[enc setFragmentTexture:light atIndex:1];
 	[enc setFragmentTexture:material atIndex:2];
-	[enc setFragmentTexture:t_out atIndex:5];
-	[enc setFragmentTexture:t_term atIndex:6];
+
+	if (did)
+	{
+		[enc setFragmentBytes:&view length:sizeof(view) atIndex:1];
+		[enc setFragmentTexture:t_out atIndex:5];
+		[enc setFragmentTexture:t_term atIndex:6];
+	}
+	else
+	{
+		/*
+		 * r_rt_shadows_show on a view that traced nothing (no light, or the
+		 * view could not be inverted): its view with no light, so no pixel
+		 * is in range (the shader reads no slot then); the material and the
+		 * light stand in for the two outputs, of the same types, unread.
+		 */
+		memset(&none, 0, sizeof(none));
+		none.show = show;
+		[enc setFragmentBytes:&none length:sizeof(none) atIndex:1];
+		[enc setFragmentTexture:material atIndex:5];
+		[enc setFragmentTexture:light atIndex:6];
+	}
+
 	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 	rmb_counts.draws++;
 	return 1;

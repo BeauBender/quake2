@@ -314,10 +314,13 @@ void rmb_rt_model_free(int mid);
  * for the j-th RM_RT_INST_ALIAS of inst), their structures built once and
  * refit after, then the instance structure rebuilt from the n instances.
  * GPU times are those of an earlier frame (the timestamps are read once
- * it completed). 1 with s filled; 0 when nothing was encoded (no frame, a
- * structure missing).
+ * it completed). With shadows (RT3's r_rt_shadows on) the frame also keeps
+ * its scene for rmb_rt_bind_scene (each instance's first triangle, in the
+ * frame ring); without, nothing beyond TASK53's structures is taken. 1 with
+ * s filled; 0 when nothing was encoded (no frame, a structure missing).
  */
-int rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nlerps, rm_rt_frame_stats_t *s);
+int rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nlerps, int shadows,
+		rm_rt_frame_stats_t *s);
 
 /*
  * The GPU times (ms) of the timed frames that completed since the last
@@ -329,7 +332,8 @@ int rmb_rt_times(double *alias_ms, double *ias_ms, int cap);
 
 /*
  * RT3 (TASK55): the map's per-triangle transmission (rm_rts_transmit, ntris
- * the map's triangles) for the shadow rays; 1 when kept. Freed with the map.
+ * the map's triangles) for the shadow rays; 1 when kept. Freed with the
+ * map, or by t NULL (the shadows turned off).
  */
 int rmb_rt_set_transmit(const unsigned char *t, unsigned long ntris);
 

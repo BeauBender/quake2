@@ -272,8 +272,7 @@ rm_rts_unproject(const rm_rts_view_t *v, float px, float py, float depth, float 
 }
 
 mtl_rts_top_t
-rm_rts_select(mtl_rts_v3_t p, mtl_rts_v3_t n, const rm_rts_light_t *l, int nl, const mtl_rts_v4_t *st,
-		float *adds, unsigned *flags)
+rm_rts_select(mtl_rts_surf_t sf, const rm_rts_light_t *l, int nl, float *adds, unsigned *flags)
 {
 	mtl_rts_top_t t = mtl_rts_top_init();
 	int i;
@@ -282,22 +281,12 @@ rm_rts_select(mtl_rts_v3_t p, mtl_rts_v3_t n, const rm_rts_light_t *l, int nl, c
 
 	for (i = 0; i < nl && i < MTL_RTS_MAX_LIGHTS; i++)
 	{
-		const mtl_rts_v3_t o = mtl_rts_v3(l[i].origin[0], l[i].origin[1], l[i].origin[2]);
-		mtl_rts_reach_t r;
+		const mtl_rts_lit_t li = mtl_rts_surf_light(sf, mtl_rts_v3(l[i].origin[0], l[i].origin[1], l[i].origin[2]),
+				l[i].origin[3]);
 
-		if (st)
-		{
-			r = mtl_rts_reach_st(p, n, o, l[i].origin[3], mtl_rts_v3(st[0].x, st[0].y, st[0].z),
-					mtl_rts_v3(st[1].x, st[1].y, st[1].z));
-			adds[i] = mtl_rts_add_lm(p, n, o, l[i].origin[3], st[0], st[1]);
-		}
-		else
-		{
-			r = mtl_rts_reach(p, n, o, l[i].origin[3]);
-			adds[i] = mtl_rts_add(r);
-		}
+		adds[i] = li.add;
 
-		if (mtl_rts_in_range(r))
+		if (li.in_range)
 		{
 			*flags |= MTL_RTS_IN_RANGE;
 		}
@@ -342,7 +331,7 @@ rm_rts_surface_map(const rm_rts_range_t *r, long nsurf, unsigned long ntris, uns
 		tri_surf[k] = 0xffffffffu;
 	}
 
-	if ((nsurf < 0) || (nsurf && !r))
+	if ((nsurf < 0) || (nsurf && !r) || ((unsigned long)nsurf >= MTL_RTS_SURF_UNLIT))
 	{
 		return -1;
 	}
@@ -363,7 +352,7 @@ rm_rts_surface_map(const rm_rts_range_t *r, long nsurf, unsigned long ntris, uns
 				return -1;
 			}
 
-			tri_surf[k] = (unsigned)i;
+			tri_surf[k] = (unsigned)i | (r[i].unlit ? MTL_RTS_SURF_UNLIT : 0);
 			done++;
 		}
 	}

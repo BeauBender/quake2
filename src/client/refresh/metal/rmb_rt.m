@@ -679,7 +679,8 @@ rmb_rt_take(int mid, unsigned long fno)
 }
 
 int
-rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nlerps, rm_rt_frame_stats_t *s)
+rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nlerps, int shadows,
+		rm_rt_frame_stats_t *s)
 {
 	unsigned long fno = 0;
 	id<MTLCommandBuffer> cmd;
@@ -716,7 +717,7 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 		MTLAccelerationStructureSizes isz;
 		id<MTLBuffer> ring = nil, bring = nil;
 		size_t ring_ofs = 0, bring_ofs = 0, need = 0, at;
-		uint32_t *ibase;
+		uint32_t *ibase = NULL;
 		unsigned base = (unsigned)slot * RMB_RT_SAMPLES;
 
 		stamp++;
@@ -763,10 +764,13 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 		/* the instance descriptors, in the frame ring */
 		desc = rmb_frame_ring_take(rm_rt_instance_bytes(n), &ring, &ring_ofs);
 
-		/* each instance's first triangle of the map's buffers (~0 for an alias model), for RT3's ray queries */
-		ibase = desc ? rmb_frame_ring_take((size_t)n * sizeof(uint32_t), &bring, &bring_ofs) : NULL;
+		/* with RT3's shadows: each instance's first triangle of the map's buffers (~0 for an alias model), for the ray queries */
+		if (desc && shadows)
+		{
+			ibase = rmb_frame_ring_take((size_t)n * sizeof(uint32_t), &bring, &bring_ofs);
+		}
 
-		if (!desc || !ibase)
+		if (!desc || (shadows && !ibase))
 		{
 			s->skipped += (unsigned long)n;
 			return 0;
@@ -822,7 +826,11 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 			desc[j].mask = 0xff;
 			desc[j].intersectionFunctionTableOffset = 0;
 			desc[j].accelerationStructureIndex = (uint32_t)k;
-			ibase[j] = (inst[i].kind == RM_RT_INST_ALIAS) ? 0xffffffffu : (uint32_t)map_first[inst[i].model];
+			if (ibase)
+			{
+				ibase[j] = (inst[i].kind == RM_RT_INST_ALIAS) ? 0xffffffffu : (uint32_t)map_first[inst[i].model];
+			}
+
 			j++;
 
 			if (inst[i].kind == RM_RT_INST_INLINE)
@@ -1036,11 +1044,20 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 			}];
 		}
 
-		scene_structs = [structs copy];
-		scene_base = bring;
-		scene_base_ofs = bring_ofs;
-		scene_frame = fno;
-		scene_ok = 1;
+		/* the scene of RT3's ray queries, kept only for the shadows */
+		if (shadows)
+		{
+			scene_structs = [structs copy];
+			scene_base = bring;
+			scene_base_ofs = bring_ofs;
+			scene_frame = fno;
+			scene_ok = 1;
+		}
+		else
+		{
+			scene_structs = nil;
+			scene_base = nil;
+		}
 
 		s->frame = fno;
 		s->instances = (unsigned long)id_desc.instanceCount;
@@ -1073,7 +1090,17 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 int
 rmb_rt_set_transmit(const unsigned char *t, unsigned long ntris)
 {
-	if (!rt_open || !t || (ntris == 0) || (ntris != map_ntris))
+	if (!t)
+	{
+		@autoreleasepool
+		{
+			RMB_RT_SET(map_trans, nil);
+		}
+
+		return 0;
+	}
+
+	if (!rt_open || (ntris == 0) || (ntris != map_ntris))
 	{
 		return 0;
 	}

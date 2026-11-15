@@ -844,11 +844,13 @@ R_RenderViewGB(refdef_t *fd, int stencil)
 		return;
 	}
 
+	/* RT3: the view and lights of the shadow rays, traced at the resolve; with them the dynamic lights leave the lightmaps */
+	RM_RTS_View(&r_view);
 	R_MarkLeaves();
 	R_DrawWorld(&r_view);
 	R_DrawEntitiesSplit(1);
-	RM_RTS_View(&r_view);   /* the view and lights of RT3's shadow rays, traced at the resolve */
 	RM_GB_Resolve();
+	r_dlight_term = true;   /* nothing after the resolve is resolved: a lightmap built from here keeps gl1's term */
 
 	/* r_rt_shadows_show draws the shadow pass's view alone, the forward pass left out */
 	if (!RM_RTS_ShowOnly())

@@ -22,9 +22,11 @@
  * development view r_rt_shadows_show, the frame's decision (rm_rts_on:
  * with it, gl1's dynamic-light term leaves the lightmaps, r_dlight_term,
  * and the view takes the G-buffer path), the map's per-triangle
- * transmission, the view and lights handed to the back end, and the
- * pass's r_rt_stats 2 line. With r_rt_shadows 0 (the default) nothing
- * here builds or allocates anything and r_dlight_term stays on.
+ * transmission and surface tables (built when the shadows are first on
+ * for a map), the view and lights handed to the back end before the
+ * raster (which is when r_dlight_term is decided), and the pass's
+ * r_rt_stats 2 line. With r_rt_shadows 0 (the default) nothing here
+ * builds or allocates anything and r_dlight_term stays on.
  *
  * =======================================================================
  */
@@ -33,6 +35,7 @@
 #include "header/rm_rt.h"
 #include "header/rm_rtshadow.h"
 #include "header/rm_rtscene.h"
+#include "header/rm_gbufscene.h"
 
 static cvar_t *r_rt_shadows;
 static cvar_t *r_rt_shadows_show;
@@ -49,6 +52,7 @@ static unsigned *rts_tri;
 static float *rts_vecs;
 static unsigned long rts_ntris, rts_nsurf;
 static int rts_uploaded;
+static const rm_world_t *rts_tables_for;    /* the world the tables were built (or refused) for */
 
 static void
 RM_RTS_FreeTables(void)
@@ -59,6 +63,25 @@ RM_RTS_FreeTables(void)
 	rts_vecs = NULL;
 	rts_ntris = rts_nsurf = 0;
 	rts_uploaded = 0;
+}
+
+/* the tables and the transmission buffer gone: the shadows are off, or the map changed */
+static void
+RM_RTS_DropMap(void)
+{
+	if (rts_tables_for && rts_ntrans)
+	{
+		rmb_rt_set_transmit(NULL, 0);
+	}
+
+	rts_ntrans = 0;
+	rts_tables_for = NULL;
+	RM_RTS_FreeTables();
+
+	if (rts_opened)
+	{
+		rmb_rts_set_map(NULL, 0, NULL, 0);
+	}
 }
 
 void
@@ -83,6 +106,7 @@ RM_RTS_Shutdown(void)
 
 	rts_opened = rts_active = 0;
 	rts_ntrans = 0;
+	rts_tables_for = NULL;
 	RM_RTS_FreeTables();
 	r_dlight_term = true;
 }
@@ -93,8 +117,17 @@ RM_RTS_Wanted(void)
 	return r_rt_shadows && rm_rt_wanted(r_rt_shadows->value, rts_device);
 }
 
+/* a new map's structures: the last map's tables go (its triangles are not the new map's); nothing is made here */
 void
 RM_RTS_MapBuilt(const model_t *wm)
+{
+	(void)wm;
+	RM_RTS_DropMap();
+}
+
+/* the map's tables, when the shadows are first on for it (RM_RTS_Frame) */
+static void
+RM_RTS_BuildTables(const model_t *wm)
 {
 	const rm_world_t *w = wm ? wm->world : NULL;
 	unsigned long ntris = w ? w->size.indices / 3 : 0, nt = 0;
@@ -102,14 +135,8 @@ RM_RTS_MapBuilt(const model_t *wm)
 	unsigned char *t;
 	long i, n = wm ? wm->numsurfaces : 0;
 
-	rts_ntrans = 0;
-	RM_RTS_FreeTables();
-
-	/* the last map's tables leave the GPU: the new map's triangles are not theirs */
-	if (rts_opened)
-	{
-		rmb_rts_set_map(NULL, 0, NULL, 0);
-	}
+	RM_RTS_DropMap();
+	rts_tables_for = w;
 
 	if (!ntris || (n <= 0))
 	{
@@ -147,6 +174,7 @@ RM_RTS_MapBuilt(const model_t *wm)
 
 		r[i].first_index = fa->first_index;
 		r[i].num_indices = fa->num_indices;
+		r[i].unlit = (fa->samples == NULL);   /* gl1 lights it white and adds no dynamic light (R_BuildLightMap) */
 
 		for (k = 0; k < 4; k++)
 		{
@@ -194,7 +222,12 @@ RM_RTS_Frame(const refdef_t *fd, int scene_ready)
 
 		rts_active = rts_opened;
 
-		/* the map's surface tables, once the pass is open */
+		/* the map's tables when the shadows are first on for it, then up to the GPU once the pass is open */
+		if (rts_opened && (rts_tables_for != r_worldmodel->world))
+		{
+			RM_RTS_BuildTables(r_worldmodel);
+		}
+
 		if (rts_opened && !rts_uploaded && rts_tri)
 		{
 			rts_uploaded = rmb_rts_set_map(rts_tri, rts_ntris, rts_vecs, rts_nsurf);
@@ -207,14 +240,17 @@ RM_RTS_Frame(const refdef_t *fd, int scene_ready)
 	}
 	else if (rts_opened && !RM_RTS_Wanted())
 	{
-		/* turned off: nothing kept on the GPU (the tables go up again when it is back on) */
+		/* turned off: nothing kept (the tables are built again when it is back on) */
+		RM_RTS_DropMap();
 		rmb_rts_close();
 		rts_opened = 0;
-		rts_uploaded = 0;
 	}
 
-	/* the dynamic-light term leaves the lightmaps only on a frame that adds it back */
-	r_dlight_term = !rts_active;
+	/*
+	 * gl1's dynamic-light term stays in the lightmaps until RM_RTS_View,
+	 * before the raster, knows the view can trace and add it back.
+	 */
+	r_dlight_term = true;
 
 	if (!rts_opened)
 	{
@@ -246,12 +282,34 @@ RM_RTS_ShowOnly(void)
 	return rts_active && r_rt_shadows_show && rm_rts_show(r_rt_shadows_show->value);
 }
 
+/* 1 when a brush entity of the frame is moved or turned: its surfaces are lit in its model's space */
+static unsigned
+RM_RTS_Moved(void)
+{
+	int i, ne = rm_entity_count(r_newrefdef.num_entities);
+
+	for (i = 0; i < ne; i++)
+	{
+		const entity_t *e = &r_newrefdef.entities[i];
+
+		if (e->model && (e->model->type == mod_brush) &&
+			(e->origin[0] || e->origin[1] || e->origin[2] || e->angles[0] || e->angles[1] || e->angles[2]))
+		{
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
 void
 RM_RTS_View(const rm_view_t *view)
 {
 	static rm_rts_light_t lights[MTL_RTS_MAX_LIGHTS];
 	rm_rts_view_t v;
-	int i, n;
+	int i, n, w, h;
+
+	r_dlight_term = true;
 
 	if (!rts_active)
 	{
@@ -265,9 +323,21 @@ RM_RTS_View(const rm_view_t *view)
 		n = MTL_RTS_MAX_LIGHTS;
 	}
 
-	if ((n <= 0) || !rm_rts_view(view->proj, view->world, &view->vp, r_newrefdef.vieworg, gl_znear->value, &v))
+	/*
+	 * Everything the trace needs that can fail is settled here, before the
+	 * raster builds the lightmaps: the view's inverse and the kernel's
+	 * outputs at the render size. Only then do the dynamic lights leave the
+	 * lightmaps; otherwise gl1's term stays in them and nothing is traced
+	 * (r_rt_shadows_show then draws its view with no light in range).
+	 */
+	RM_GB_TargetSize(&w, &h);
+
+	if ((n <= 0) || !rm_rts_view(view->proj, view->world, &view->vp, r_newrefdef.vieworg, gl_znear->value, &v) ||
+		!rmb_rts_prepare((unsigned long)w, (unsigned long)h))
 	{
-		rmb_rts_set_view(NULL, NULL, 0);
+		memset(&v, 0, sizeof(v));
+		v.show = (unsigned)rm_rts_show(r_rt_shadows_show->value);
+		rmb_rts_set_view(&v, NULL, 0);
 		return;
 	}
 
@@ -288,5 +358,9 @@ RM_RTS_View(const rm_view_t *view)
 
 	v.trans = rts_ntrans != 0;
 	v.show = (unsigned)rm_rts_show(r_rt_shadows_show->value);
+	v.moved = RM_RTS_Moved();
 	rmb_rts_set_view(&v, lights, n);
+
+	/* the dynamic-light term leaves the lightmaps: the resolve adds it back */
+	r_dlight_term = false;
 }

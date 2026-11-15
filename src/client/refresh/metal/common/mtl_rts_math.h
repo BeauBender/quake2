@@ -65,6 +65,14 @@
 #define MTL_RTS_IN_RANGE (1u << 24)     /* a light reaches it (mtl_rts_in_range) */
 #define MTL_RTS_SHADOWED (1u << 25)     /* a traced light's visibility is below 1 */
 
+/*
+ * The bit of a triangle's surface index (rm_rts_surface_map) that marks a
+ * surface without light samples: gl1 adds no dynamic light to it
+ * (R_BuildLightMap takes the store's white straight away), so neither
+ * does the pass.
+ */
+#define MTL_RTS_SURF_UNLIT 0x80000000u
+
 #ifdef __METAL_VERSION__
 #define MTL_RTS_FLOOR floor
 #else
@@ -284,6 +292,132 @@ mtl_rts_add_lm(mtl_rts_v3_t p, mtl_rts_v3_t n, mtl_rts_v3_t o, float intensity, 
 	a01 = mtl_rts_luxel(frad, ui, vi, s0, t0 + MTL_RTS_LUXEL);
 	a11 = mtl_rts_luxel(frad, ui, vi, s0 + MTL_RTS_LUXEL, t0 + MTL_RTS_LUXEL);
 	return (a00 * (1.0f - fs) + a10 * fs) * (1.0f - ft) + (a01 * (1.0f - fs) + a11 * fs) * ft;
+}
+
+/*
+ * A map instance's world-to-object transform as Metal's float4x3 holds it
+ * (intersection_result's world_to_object_transform): the columns c0 to c2
+ * the rotation, c3 the translation. The world's own instance has the
+ * identity; a brush entity's is the inverse of its origin and angles.
+ */
+typedef struct
+{
+	mtl_rts_v3_t c0, c1, c2, c3;
+} mtl_rts_xform_t;
+
+static inline mtl_rts_xform_t
+mtl_rts_xform_identity(void)
+{
+	mtl_rts_xform_t m;
+
+	m.c0 = mtl_rts_v3(1, 0, 0);
+	m.c1 = mtl_rts_v3(0, 1, 0);
+	m.c2 = mtl_rts_v3(0, 0, 1);
+	m.c3 = mtl_rts_v3(0, 0, 0);
+	return m;
+}
+
+/* a point through m */
+static inline mtl_rts_v3_t
+mtl_rts_xpoint(mtl_rts_xform_t m, mtl_rts_v3_t p)
+{
+	return mtl_rts_v3(m.c0.x * p.x + m.c1.x * p.y + m.c2.x * p.z + m.c3.x,
+			m.c0.y * p.x + m.c1.y * p.y + m.c2.y * p.z + m.c3.y,
+			m.c0.z * p.x + m.c1.z * p.y + m.c2.z * p.z + m.c3.z);
+}
+
+/* a direction through m's rotation (a brush entity's transform is rigid: a normal stays a unit normal) */
+static inline mtl_rts_v3_t
+mtl_rts_xdir(mtl_rts_xform_t m, mtl_rts_v3_t d)
+{
+	return mtl_rts_v3(m.c0.x * d.x + m.c1.x * d.y + m.c2.x * d.z,
+			m.c0.y * d.x + m.c1.y * d.y + m.c2.y * d.z,
+			m.c0.z * d.x + m.c1.z * d.y + m.c2.z * d.z);
+}
+
+/*
+ * A pixel's surface as gl1 lights it. p and n are in the surface's model
+ * space: gl1 marks and lights a brush entity's surfaces with the light's
+ * world origin, untransformed, against the model-space planes and texture
+ * axes (R_MarkBrushLights, R_AddDynamicLights), so the pass moves the
+ * pixel into the model's space instead (mtl_rts_surf) and keeps the
+ * light where it is; the world's space is its model's. st: s and t are
+ * the surface's own texture axes with their shifts (its triangle was
+ * found), else the base axes (mtl_rts_reach). unlit: the surface has no
+ * light samples (MTL_RTS_SURF_UNLIT), so no light adds there.
+ */
+typedef struct
+{
+	mtl_rts_v3_t p, n;
+	mtl_rts_v4_t s, t;
+	int st;
+	int unlit;
+} mtl_rts_surf_t;
+
+/* a pixel at world point p with world normal n where its surface is not known: the world's space, the base axes */
+static inline mtl_rts_surf_t
+mtl_rts_surf_base(mtl_rts_v3_t p, mtl_rts_v3_t n)
+{
+	mtl_rts_surf_t sf;
+
+	sf.p = p;
+	sf.n = n;
+	sf.s.x = sf.s.y = sf.s.z = sf.s.w = 0.0f;
+	sf.t = sf.s;
+	sf.st = 0;
+	sf.unlit = 0;
+	return sf;
+}
+
+/* a pixel at world point p with world normal n on a found surface: w2o the instance's transform, s and t its axes */
+static inline mtl_rts_surf_t
+mtl_rts_surf(mtl_rts_v3_t p, mtl_rts_v3_t n, mtl_rts_xform_t w2o, mtl_rts_v4_t s, mtl_rts_v4_t t, int unlit)
+{
+	mtl_rts_surf_t sf;
+
+	sf.p = mtl_rts_xpoint(w2o, p);
+	sf.n = mtl_rts_xdir(w2o, n);
+	sf.s = s;
+	sf.t = t;
+	sf.st = 1;
+	sf.unlit = unlit ? 1 : 0;
+	return sf;
+}
+
+/* one light at a pixel: what it adds there (mtl_rts_add_lm, or mtl_rts_add on the base axes) and whether it is in range */
+typedef struct
+{
+	float add;
+	int in_range;
+} mtl_rts_lit_t;
+
+static inline mtl_rts_lit_t
+mtl_rts_surf_light(mtl_rts_surf_t sf, mtl_rts_v3_t o, float intensity)
+{
+	mtl_rts_lit_t l;
+	mtl_rts_reach_t r;
+
+	l.add = 0.0f;
+	l.in_range = 0;
+
+	if (sf.unlit)
+	{
+		return l;
+	}
+
+	if (sf.st)
+	{
+		r = mtl_rts_reach_st(sf.p, sf.n, o, intensity, mtl_rts_v3(sf.s.x, sf.s.y, sf.s.z), mtl_rts_v3(sf.t.x, sf.t.y, sf.t.z));
+		l.add = mtl_rts_add_lm(sf.p, sf.n, o, intensity, sf.s, sf.t);
+	}
+	else
+	{
+		r = mtl_rts_reach(sf.p, sf.n, o, intensity);
+		l.add = mtl_rts_add(r);
+	}
+
+	l.in_range = mtl_rts_in_range(r);
+	return l;
 }
 
 /*

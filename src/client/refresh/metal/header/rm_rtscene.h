@@ -50,13 +50,15 @@ int RM_RT_SceneReady(void);
  * RT3 (TASK55), rm_rtshadowscene.c: the dynamic-light shadows. Init and
  * Shutdown with RM_RT_Init and the release of the ray-tracing objects;
  * Wanted: r_rt_shadows asks for the structures (rm_rt_wanted); MapBuilt:
- * the map's per-triangle transmission and its surfaces' texture axes,
- * after its structures; Frame, after
- * RM_RT_Frame: whether this frame traces (Active), which takes gl1's
- * dynamic-light term out of the lightmaps (r_dlight_term) and the view to
- * the G-buffer path; View, after RM_GB_Begin: the view and lights the
- * kernel and the resolve take; ShowOnly: r_rt_shadows_show is on, the
- * forward pass is left out so the view shows the pass alone.
+ * a new map's structures were built, the last map's shadow tables go
+ * (this map's per-triangle transmission and surface tables are built when
+ * the shadows are first on for it); Frame, after RM_RT_Frame: whether
+ * this frame traces (Active), which takes the view to the G-buffer path;
+ * View, after RM_GB_Begin and before the raster: the view and lights the
+ * kernel and the resolve take, and, when everything the trace needs is
+ * there, gl1's dynamic-light term out of the lightmaps (r_dlight_term);
+ * ShowOnly: r_rt_shadows_show is on, the forward pass is left out so the
+ * view shows the pass alone.
  */
 void RM_RTS_Init(const rmb_caps_t *caps);
 void RM_RTS_Shutdown(void);

@@ -73,6 +73,8 @@ struct rm_rts_view
 	uint nlights;
 	uint trans;
 	uint show;
+	uint moved;
+	uint pad[3];
 };
 
 /* rm_gbuf.metal's rm_uniforms_resolve and rm_fs_varying (rm_vertex_fullscreen's output) */
@@ -229,10 +231,15 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 			const uint nl = min(v.nlights, (uint)MTL_RTS_MAX_LIGHTS);
 			const float3 o = p + n * mtl_rts_bias(distance(p, v.eye.xyz), v.bias_k);
 			float adds[MTL_RTS_MAX_LIGHTS];
-			bool slab = false, have = false;
-			mtl_rts_v4_t sv, tv;
+			bool slab = false;
+			mtl_rts_surf_t sf = mtl_rts_surf_base(rm_rts_v(p), rm_rts_v(n));
 
-			/* a light whose plane distance leaves it light to add (gl1's surface test) */
+			/*
+			 * A light whose plane distance leaves it light to add (gl1's
+			 * surface test), in the world's space; with a brush entity moved
+			 * in the frame (v.moved) every pixel looks for its surface, which
+			 * may be that entity's, lit in its model's space.
+			 */
 			for (uint i = 0; i < nl; i++)
 			{
 				const float pd = dot(lights[i].origin.xyz - p, n);
@@ -240,7 +247,9 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 				slab = slab || ((pd >= 0.0f) && (lights[i].origin.w - pd >= MTL_RTS_CUTOFF));
 			}
 
-			/* the pixel's surface, for its texture axes: the triangle a ray from the eye meets at the depth's point */
+			slab = slab || (v.moved != 0);
+
+			/* the pixel's surface, for its texture axes and its model's space: the triangle a ray from the eye meets at the depth's point */
 			if (slab && (mapn.nsurf > 0))
 			{
 				const float3 dv = p - v.eye.xyz;
@@ -248,8 +257,8 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 
 				if (dl > 1.0f)
 				{
-					intersector<triangle_data, instancing> isect;
-					intersection_result<triangle_data, instancing> hit;
+					intersector<triangle_data, instancing, world_space_data> isect;
+					intersection_result<triangle_data, instancing, world_space_data> hit;
 
 					isect.assume_geometry_type(geometry_type::triangle);
 					hit = isect.intersect(ray(v.eye.xyz, dv / dl, 0.0f, dl + 4.0f), ias, 0xff);
@@ -261,13 +270,20 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 
 						if ((b != 0xffffffffu) && (b + hit.primitive_id < mapn.ntris))
 						{
-							const uint sidx = tri_surf[b + hit.primitive_id];
+							const uint raw = tri_surf[b + hit.primitive_id];
+							const uint sidx = raw & ~MTL_RTS_SURF_UNLIT;
 
 							if (sidx < mapn.nsurf)
 							{
-								sv = rm_rts_v4(vecs[2 * sidx]);
-								tv = rm_rts_v4(vecs[2 * sidx + 1]);
-								have = true;
+								const float4x3 w = hit.world_to_object_transform;
+								mtl_rts_xform_t xf;
+
+								xf.c0 = rm_rts_v(w[0]);
+								xf.c1 = rm_rts_v(w[1]);
+								xf.c2 = rm_rts_v(w[2]);
+								xf.c3 = rm_rts_v(w[3]);
+								sf = mtl_rts_surf(rm_rts_v(p), rm_rts_v(n), xf, rm_rts_v4(vecs[2 * sidx]), rm_rts_v4(vecs[2 * sidx + 1]),
+										(raw & MTL_RTS_SURF_UNLIT) != 0);
 							}
 						}
 					}
@@ -276,8 +292,7 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 
 			for (uint i = 0; i < nl; i++)
 			{
-				const mtl_rts_v3_t lo = rm_rts_v(lights[i].origin.xyz);
-				mtl_rts_reach_t r;
+				mtl_rts_lit_t li;
 
 				adds[i] = 0.0f;
 
@@ -286,19 +301,10 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 					continue;
 				}
 
-				if (have)
-				{
-					r = mtl_rts_reach_st(rm_rts_v(p), rm_rts_v(n), lo, lights[i].origin.w, mtl_rts_v3(sv.x, sv.y, sv.z),
-							mtl_rts_v3(tv.x, tv.y, tv.z));
-					adds[i] = mtl_rts_add_lm(rm_rts_v(p), rm_rts_v(n), lo, lights[i].origin.w, sv, tv);
-				}
-				else
-				{
-					r = mtl_rts_reach(rm_rts_v(p), rm_rts_v(n), lo, lights[i].origin.w);
-					adds[i] = mtl_rts_add(r);
-				}
+				li = mtl_rts_surf_light(sf, rm_rts_v(lights[i].origin.xyz), lights[i].origin.w);
+				adds[i] = li.add;
 
-				if (mtl_rts_in_range(r))
+				if (li.in_range)
 				{
 					flags |= MTL_RTS_IN_RANGE;
 				}
@@ -393,7 +399,7 @@ rm_fragment_resolve_rts(rm_fs_varying in [[stage_in]],
 {
 	const uint2 px = uint2(in.position.xy);
 	const uint m = mat.read(px).r;
-	const uint2 s = sh.read(px).rg;
+	const uint2 s = (v.nlights > 0) ? sh.read(px).rg : uint2(0);   /* no light: none in range (nothing traced) */
 	mtl_rgba_t l;
 
 	if (v.show == 1)

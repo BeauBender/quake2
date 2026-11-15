@@ -697,7 +697,7 @@ test_select_term(void)
 		l[i].color[2] = (float)i / 10;
 	}
 
-	t = rm_rts_select(p, up, l, 6, NULL, adds, &flags);
+	t = rm_rts_select(mtl_rts_surf_base(p, up), l, 6, adds, &flags);
 	CHECK(flags == MTL_RTS_IN_RANGE);
 	CHECK(t.idx[0] == 5 && t.idx[1] == 4 && t.idx[2] == 3 && t.idx[3] == 2);
 	CHECK(near(t.key[0], 290, 1e-4) && near(t.key[3], 260, 1e-4));
@@ -725,7 +725,7 @@ test_select_term(void)
 
 	/* no light in range: nothing chosen, no flag, no term */
 	l[0].origin[2] = -10;   /* behind */
-	t = rm_rts_select(p, up, l, 1, NULL, adds, &flags);
+	t = rm_rts_select(mtl_rts_surf_base(p, up), l, 1, adds, &flags);
 	CHECK(flags == 0 && t.idx[0] == MTL_RTS_NO_LIGHT);
 	rm_rts_term(adds, l, 1, mtl_rts_pack_idx(t, flags), 0, rgb);
 	CHECK(rgb[0] == 0 && rgb[1] == 0 && rgb[2] == 0);
@@ -733,11 +733,11 @@ test_select_term(void)
 	/* in range by the margin only: flagged, nothing to trace or add */
 	l[0].origin[0] = 150.5f;
 	l[0].origin[2] = 100;   /* frad 200, fdist 150: past 136, inside 184 */
-	t = rm_rts_select(p, up, l, 1, NULL, adds, &flags);
+	t = rm_rts_select(mtl_rts_surf_base(p, up), l, 1, adds, &flags);
 	CHECK(flags == MTL_RTS_IN_RANGE && t.idx[0] == MTL_RTS_NO_LIGHT);
 
 	/* more lights than the uniform holds: the first MTL_RTS_MAX_LIGHTS only, and none for a negative count */
-	t = rm_rts_select(p, up, l, -3, NULL, adds, &flags);
+	t = rm_rts_select(mtl_rts_surf_base(p, up), l, -3, adds, &flags);
 	CHECK(flags == 0 && t.idx[0] == MTL_RTS_NO_LIGHT);
 	rm_rts_term(adds, l, -3, 0, 0, rgb);
 	CHECK(rgb[0] == 0 && rgb[1] == 0 && rgb[2] == 0);
@@ -916,10 +916,251 @@ test_add_lm_stock(void)
 	}
 }
 
+/*
+ * A brush entity that has moved (round 1, I1): gl1 marks and lights its
+ * surfaces with the light's world origin against the model-space planes
+ * and texture axes (R_MarkBrushLights, R_AddDynamicLights), so the pass
+ * moves the pixel into the model's space (the hit's world-to-object
+ * transform) and keeps the light where it is. The review's probe: a floor
+ * at model z 0 whose entity was lowered to z -200, a light at world (8, 8,
+ * 50) of radius 200: gl1 adds 138 at luxel 0.
+ */
+static void
+test_moved_brush(void)
+{
+	static float bl[LUX * LUX * 3];
+	const float up[3] = { 0, 0, 1 }, sx[4] = { 1, 0, 0, 0 }, ty[4] = { 0, 1, 0, 0 }, white[3] = { 1, 1, 1 };
+	const float lo[3] = { 8, 8, 50 };
+	const mtl_rts_v4_t sv = { 1, 0, 0, 0 }, tv = { 0, 1, 0, 0 };
+	mtl_rts_xform_t xf = mtl_rts_xform_identity();
+	rm_rts_light_t l[1];
+	float adds[MTL_RTS_MAX_LIGHTS];
+	unsigned flags = 99;
+	int c, cases = 0, lit = 0, wrong = 0;
+
+	memset(bl, 0, sizeof(bl));
+	CHECK(rm_lm_dlight(bl, 2, 2, up, 0.0f, sx, ty, 0, 0, lo, 200.0f, white) == 1);
+	CHECK(near(bl[0], 138, 1e-4));
+
+	memset(l, 0, sizeof(l));
+	l[0].origin[0] = 8;
+	l[0].origin[1] = 8;
+	l[0].origin[2] = 50;
+	l[0].origin[3] = 200;
+	l[0].color[0] = l[0].color[1] = l[0].color[2] = 1;
+
+	/* the entity at z -200: world to object adds 200 to z */
+	xf.c3 = mtl_rts_v3(0, 0, 200);
+	rm_rts_select(mtl_rts_surf(mtl_rts_v3(8, 8, -200), mtl_rts_v3(0, 0, 1), xf, sv, tv, 0), l, 1, adds, &flags);
+	CHECK(near(adds[0], bl[0], 1e-3));
+	CHECK(flags == MTL_RTS_IN_RANGE);
+
+	/* in the world's space, as the pass took it before: the plane is 250 below the light, nothing in range */
+	rm_rts_select(mtl_rts_surf(mtl_rts_v3(8, 8, -200), mtl_rts_v3(0, 0, 1), mtl_rts_xform_identity(), sv, tv, 0), l, 1,
+			adds, &flags);
+	CHECK(adds[0] == 0 && flags == 0);
+
+	/* the true floor at world z -200 that gl1 leaves dark, the model's floor at model z 0 */
+	xf.c3 = mtl_rts_v3(0, 0, 200);
+	rm_rts_select(mtl_rts_surf(mtl_rts_v3(8, 8, 0), mtl_rts_v3(0, 0, 1), xf, sv, tv, 0), l, 1, adds, &flags);
+	CHECK(adds[0] == 0);
+
+	/* turned and moved entities: at every luxel, gl1's add on the model-space face with the world origin */
+	for (c = 0; c < 200; c++)
+	{
+		const float yaw = frand(-3.14159f, 3.14159f), pitch = (c % 3) ? frand(-1.2f, 1.2f) : 0.0f;
+		const float roll = (c % 4 == 1) ? frand(-1.0f, 1.0f) : 0.0f;
+		const float ax = (float)(int)frand(-600, 600), ay = (float)(int)frand(-600, 600), az = (float)(int)frand(-300, 300);
+		const float intensity = (float)(int)frand(100, 400) + 0.5f;
+		const int tm0 = 16 * (int)frand(-20, 20), tm1 = 16 * (int)frand(-20, 20);
+		const int axis = c % 3;
+		float n[3] = { 0, 0, 0 }, vecs0[4] = { 0, 0, 0, 0 }, vecs1[4] = { 0, 0, 0, 0 }, origin[3], dist, rm[3][3];
+		float cy = cosf(yaw), sy = sinf(yaw), cp = cosf(pitch), sp = sinf(pitch), cr = cosf(roll), sr = sinf(roll);
+		mtl_rts_v4_t s4, t4;
+		int s, t, i, k;
+
+		/* an axial face of the model: a floor, a wall facing x or one facing y, its base axes shifted */
+		n[axis] = (c % 2) ? 1.0f : -1.0f;
+		vecs0[axis == 0 ? 1 : 0] = 1;
+		vecs1[axis == 2 ? 1 : 2] = (axis == 2) ? -1.0f : -1.0f;
+		vecs0[3] = (float)(int)frand(-64, 64);
+		vecs1[3] = (float)(int)frand(-64, 64);
+		dist = (float)(int)frand(-100, 100);
+
+		/* the model to the world: rows of the rotation of the entity's angles (yaw about z, pitch about y, roll about x) */
+		rm[0][0] = cy * cp;
+		rm[0][1] = cy * sp * sr - sy * cr;
+		rm[0][2] = cy * sp * cr + sy * sr;
+		rm[1][0] = sy * cp;
+		rm[1][1] = sy * sp * sr + cy * cr;
+		rm[1][2] = sy * sp * cr - cy * sr;
+		rm[2][0] = -sp;
+		rm[2][1] = cp * sr;
+		rm[2][2] = cp * cr;
+
+		/* the world to the model: the transpose, and minus it times the translation */
+		xf.c0 = mtl_rts_v3(rm[0][0], rm[0][1], rm[0][2]);
+		xf.c1 = mtl_rts_v3(rm[1][0], rm[1][1], rm[1][2]);
+		xf.c2 = mtl_rts_v3(rm[2][0], rm[2][1], rm[2][2]);
+		xf.c3 = mtl_rts_v3(-(rm[0][0] * ax + rm[1][0] * ay + rm[2][0] * az), -(rm[0][1] * ax + rm[1][1] * ay + rm[2][1] * az),
+				-(rm[0][2] * ax + rm[1][2] * ay + rm[2][2] * az));
+
+		/* the light's world origin, which gl1 takes as a point of the model's space: in front of the face, near its middle */
+		for (i = 0; i < 3; i++)
+		{
+			origin[i] = n[i] * dist;
+		}
+
+		{
+			const int su = (axis == 0) ? 1 : 0, tvx = (axis == 2) ? 1 : 2;
+
+			origin[su] = (tm0 + 8 * LUX - vecs0[3] + frand(-100, 100)) / vecs0[su];
+			origin[tvx] = (tm1 + 8 * LUX - vecs1[3] + frand(-100, 100)) / vecs1[tvx];
+		}
+
+		{
+			const float h = (float)(int)frand(1, intensity - 40) + 0.21f;
+
+			for (i = 0; i < 3; i++)
+			{
+				origin[i] += n[i] * h;
+			}
+		}
+
+		memset(bl, 0, sizeof(bl));
+
+		if (!rm_lm_dlight(bl, LUX, LUX, n, dist, vecs0, vecs1, tm0, tm1, origin, intensity, white))
+		{
+			continue;
+		}
+
+		cases++;
+		memcpy(&s4, vecs0, sizeof(s4));
+		memcpy(&t4, vecs1, sizeof(t4));
+		l[0].origin[0] = origin[0];
+		l[0].origin[1] = origin[1];
+		l[0].origin[2] = origin[2];
+		l[0].origin[3] = intensity;
+
+		for (t = 0; t < LUX; t++)
+		{
+			for (s = 0; s < LUX; s++)
+			{
+				const int su = (axis == 0) ? 1 : 0, tvx = (axis == 2) ? 1 : 2;
+				float pm[3], pw[3], nw[3];
+				const float want = bl[(t * LUX + s) * 3];
+
+				/* the luxel's point on the model's face, then in the world */
+				pm[axis] = n[axis] * dist;
+				pm[su] = (tm0 + 16.0f * s - vecs0[3]) / vecs0[su];
+				pm[tvx] = (tm1 + 16.0f * t - vecs1[3]) / vecs1[tvx];
+
+				for (k = 0; k < 3; k++)
+				{
+					pw[k] = rm[k][0] * pm[0] + rm[k][1] * pm[1] + rm[k][2] * pm[2] + ((k == 0) ? ax : (k == 1) ? ay : az);
+					nw[k] = rm[k][0] * n[0] + rm[k][1] * n[1] + rm[k][2] * n[2];
+				}
+
+				rm_rts_select(mtl_rts_surf(mtl_rts_v3(pw[0], pw[1], pw[2]), mtl_rts_v3(nw[0], nw[1], nw[2]), xf, s4, t4, 0),
+						l, 1, adds, &flags);
+
+				if (want > 0)
+				{
+					lit++;
+
+					if (!(flags & MTL_RTS_IN_RANGE))
+					{
+						wrong++;
+					}
+				}
+
+				/* the transform's float steps may move a truncation by one unit: one unit of add */
+				if (!near(adds[0], want, 1.01))
+				{
+					wrong++;
+				}
+			}
+		}
+	}
+
+	CHECK(cases > 150);
+	CHECK(lit > 1500);
+	CHECK(wrong == 0);
+
+	if (wrong)
+	{
+		printf("moved brush: %d cases, %d lit, %d luxels differ\n", cases, lit, wrong);
+	}
+
+	/* the transform's pieces: a point takes the translation, a direction does not */
+	{
+		mtl_rts_xform_t m = mtl_rts_xform_identity();
+		mtl_rts_v3_t q;
+
+		m.c0 = mtl_rts_v3(0, 1, 0);     /* x to y */
+		m.c1 = mtl_rts_v3(-1, 0, 0);    /* y to -x */
+		m.c3 = mtl_rts_v3(10, 20, 30);
+		q = mtl_rts_xpoint(m, mtl_rts_v3(1, 2, 3));
+		CHECK(q.x == 8 && q.y == 21 && q.z == 33);
+		q = mtl_rts_xdir(m, mtl_rts_v3(1, 2, 3));
+		CHECK(q.x == -2 && q.y == 1 && q.z == 3);
+	}
+}
+
+/*
+ * A surface without light samples (round 1, I2): gl1 adds no dynamic
+ * light to it (R_BuildLightMap: rm_lm_styles' white, no R_AddDynamicLights),
+ * so the pass neither adds nor marks it in range; its triangles carry
+ * MTL_RTS_SURF_UNLIT.
+ */
+static void
+test_unlit(void)
+{
+	rm_rts_light_t l[2];
+	const mtl_rts_v4_t sv = { 1, 0, 0, 0 }, tv = { 0, 1, 0, 0 };
+	float adds[MTL_RTS_MAX_LIGHTS];
+	unsigned flags = 99;
+	mtl_rts_top_t t;
+
+	memset(l, 0, sizeof(l));
+	l[0].origin[0] = 8;
+	l[0].origin[1] = 8;
+	l[0].origin[2] = 60;
+	l[0].origin[3] = 200;   /* adds 140 - 12 */
+	l[0].color[0] = 1;
+	l[1] = l[0];            /* adds 170 - 12 */
+	l[1].origin[2] = 30;
+
+	t = rm_rts_select(mtl_rts_surf(mtl_rts_v3(8, 8, 0), mtl_rts_v3(0, 0, 1), mtl_rts_xform_identity(), sv, tv, 0), l, 2,
+			adds, &flags);
+	CHECK(adds[0] > 0 && adds[1] > 0 && flags == MTL_RTS_IN_RANGE && t.idx[0] == 1);
+
+	t = rm_rts_select(mtl_rts_surf(mtl_rts_v3(8, 8, 0), mtl_rts_v3(0, 0, 1), mtl_rts_xform_identity(), sv, tv, 1), l, 2,
+			adds, &flags);
+	CHECK(adds[0] == 0 && adds[1] == 0 && flags == 0 && t.idx[0] == MTL_RTS_NO_LIGHT);
+
+	{
+		const mtl_rts_lit_t li = mtl_rts_surf_light(mtl_rts_surf(mtl_rts_v3(8, 8, 0), mtl_rts_v3(0, 0, 1),
+					mtl_rts_xform_identity(), sv, tv, 7), mtl_rts_v3(8, 8, 30), 120);
+
+		CHECK(li.add == 0 && li.in_range == 0);
+	}
+
+	/* the bit on the triangles of an unlit surface, the index below it */
+	{
+		rm_rts_range_t r[2] = { { 0, 3, 1 }, { 3, 6, 0 } };
+		unsigned m[4];
+
+		CHECK(rm_rts_surface_map(r, 2, 4, m) == 3);
+		CHECK(m[0] == (0u | MTL_RTS_SURF_UNLIT) && m[1] == 1 && m[2] == 1 && m[3] == 0xffffffffu);
+		CHECK((m[0] & ~MTL_RTS_SURF_UNLIT) == 0);
+	}
+}
+
 static void
 test_surface_map(void)
 {
-	rm_rts_range_t r[3] = { { 0, 6 }, { 9, 3 }, { 6, 3 } };
+	rm_rts_range_t r[3] = { { 0, 6, 0 }, { 9, 3, 0 }, { 6, 3, 0 } };
 	unsigned m[6];
 
 	CHECK(rm_rts_surface_map(r, 3, 5, m) == 4);
@@ -934,6 +1175,7 @@ test_surface_map(void)
 	CHECK(rm_rts_surface_map(r, 3, 6, m) == -1);
 	CHECK(rm_rts_surface_map(r, 0, 6, m) == 0 && m[5] == 0xffffffffu);
 	CHECK(rm_rts_surface_map(NULL, 1, 6, m) == -1);
+	CHECK(rm_rts_surface_map(r, (long)MTL_RTS_SURF_UNLIT, 6, m) == -1);   /* an index would reach the bit */
 }
 
 static void
@@ -999,6 +1241,8 @@ main(void)
 	test_unproject();
 	test_select_term();
 	test_add_lm_stock();
+	test_moved_brush();
+	test_unlit();
 	test_surface_map();
 	test_show();
 	test_stats_format();

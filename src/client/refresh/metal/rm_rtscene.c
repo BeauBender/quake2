@@ -300,7 +300,7 @@ RM_RT_BuildMap(void)
 
 	free(mat);
 	rt_map_ok = 1;
-	RM_RTS_MapBuilt(wm);   /* the shadow rays' transmission and the surfaces' texture axes (RT3) */
+	RM_RTS_MapBuilt(wm);   /* the last map's shadow tables go; this map's are built when the shadows are on (RT3) */
 	rt_ntimes = rt_frames = rt_busy_aliases = rt_busy_tris = 0;
 
 	{
@@ -501,7 +501,7 @@ RM_RT_Frame(const refdef_t *fd)
 	fs.excl = excl;
 	fs.alias_ms = fs.ias_ms = -1;
 
-	if (!rmb_rt_frame(inst, n, lerps, nl, &fs))
+	if (!rmb_rt_frame(inst, n, lerps, nl, RM_RTS_Wanted(), &fs))
 	{
 		return;
 	}
