@@ -1091,7 +1091,7 @@ REFGL1_OBJS_ := \
 	src/client/refresh/files/surf.o \
 	src/client/refresh/files/models.o \
 	src/client/refresh/files/pcx.o \
-	src/client/refresh/files/stb.o \
+	src/client/refresh/files/image.o \
 	src/client/refresh/files/wal.o \
 	src/client/refresh/files/pvs.o \
 	src/common/shared/shared.o \
@@ -1124,7 +1124,7 @@ REFGL3_OBJS_ := \
 	src/client/refresh/files/surf.o \
 	src/client/refresh/files/models.o \
 	src/client/refresh/files/pcx.o \
-	src/client/refresh/files/stb.o \
+	src/client/refresh/files/image.o \
 	src/client/refresh/files/wal.o \
 	src/client/refresh/files/pvs.o \
 	src/common/shared/shared.o \
@@ -1165,7 +1165,7 @@ REFSOFT_OBJS_ := \
 	src/client/refresh/files/common.o \
 	src/client/refresh/files/models.o \
 	src/client/refresh/files/pcx.o \
-	src/client/refresh/files/stb.o \
+	src/client/refresh/files/image.o \
 	src/client/refresh/files/wal.o \
 	src/client/refresh/files/pvs.o \
 	src/common/shared/shared.o \
@@ -1205,7 +1205,7 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/files/models.o \
 	src/client/refresh/files/pcx.o \
 	src/client/refresh/files/pvs.o \
-	src/client/refresh/files/stb.o \
+	src/client/refresh/files/image.o \
 	src/client/refresh/files/surf.o \
 	src/client/refresh/files/wal.o \
 	src/backends/unix/shared/hunk.o \
