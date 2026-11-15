@@ -39,8 +39,8 @@ jobs:
     name: Analyze
     # Runs unless the changes job said false: a failed or missing decision
     # analyses. A skipped matrix job may report under its unexpanded name
-    # rather than as "Analyze (c-cpp)", so read the real check names from a
-    # run before making any of them required.
+    # (plain "Analyze"), not the names of its matrix jobs, so read the real
+    # check names from a run before making any of them required.
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.analyze != 'false' }}
     runs-on: ${{ matrix.runner }}
