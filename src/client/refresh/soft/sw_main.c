@@ -2045,27 +2045,22 @@ RE_SetMetalLayerOpaque(SDL_Renderer *r, qboolean opaque)
  * false when it keeps the mode's size in vid. The client decides viddef
  * in GLimp_InitGraphics() with the same function, GLimp_DrawableInPixels()
  * (glimp_hidpi.c, linked into this renderer too), on the same inputs: the
- * window's high pixel density flag, the fullscreen value the window was
- * made with and r_mode. That value is the one SWimp_SetMode() passed to
- * GLimp_InitGraphics(), never the vid_fullscreen cvar: in RE_SetMode()'s
- * invalid-mode fallback the cvar stays 2 while the window is made with 0,
- * and a cvar of 2.5 is passed as 2. When the client cannot make the window
- * it was asked for, it falls back to a window, fullscreen 0 and without
- * SDL_WINDOW_FULLSCREEN, so a window that is not fullscreen counts as 0
- * here as there. Should the two ever disagree all the same,
- * R_ClampViewToBuffer() keeps the 3D view inside the buffer.
+ * window's high pixel density flag, the fullscreen value and r_mode. That
+ * value is the one SWimp_SetMode() passed to GLimp_InitGraphics(), never
+ * the vid_fullscreen cvar: in RE_SetMode()'s invalid-mode fallback the
+ * cvar stays 2 while the window is made with 0, and a cvar of 2.5 is
+ * passed as 2. The window's own flags cannot stand in for it: on macOS a
+ * window made fullscreen does not report SDL_WINDOW_FULLSCREEN yet when
+ * the context is made. One case is left where the client decides on
+ * another value: when SDL cannot make the window at all, the client falls
+ * back to a 640x480 window with fullscreen 0 on its own. There, and
+ * should the two ever disagree otherwise, R_ClampViewToBuffer() keeps the
+ * 3D view inside the buffer.
  */
 static qboolean
 SWimp_DrawableInPixels(void)
 {
-	int fullscreen = sw_fullscreen;
-
-	if (!window || !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN))
-	{
-		fullscreen = 0;
-	}
-
-	return GLimp_DrawableInPixels(IsHighDPIaware, fullscreen, r_mode->value);
+	return GLimp_DrawableInPixels(IsHighDPIaware, sw_fullscreen, r_mode->value);
 }
 
 static int
@@ -2142,6 +2137,8 @@ RE_InitContext(void *win)
 		vid_buffer_height = vid.height;
 		vid_buffer_width = vid.width;
 	}
+
+	Com_DPrintf("%s: buffer %dx%d\n", __func__, vid_buffer_width, vid_buffer_height);
 
 	/* just buffer for 8bit -> 32bit covert and render */
 	texture = SDL_CreateTexture(renderer,

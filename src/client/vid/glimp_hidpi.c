@@ -56,15 +56,15 @@ GLimp_HighDPIWanted(float highdpiaware, const char *driver)
  * for it may be too small (window decorations), so the mode's size is
  * used. A fullscreen window (vid_fullscreen 2) fills the screen, so its
  * pixels are taken only when the native size was asked for (r_mode -2);
- * any other mode keeps its own size there. fullscreen is the value the
- * window was made with, the one passed to GLimp_InitGraphics() or 0 when
- * it fell back to a window; not the vid_fullscreen cvar, which can differ.
+ * any other mode keeps its own size there. fullscreen is the value passed
+ * to GLimp_InitGraphics() (0 once it fell back to a window on its own),
+ * not the vid_fullscreen cvar, which can differ.
  *
  * soft calls this function itself for its buffer and its vid size
- * (SWimp_DrawableInPixels() in sw_main.c), with the same inputs. gl1, gl3
- * and metal keep their own copy of the rule in their SetMode code, which
- * reads the vid_fullscreen cvar instead, so they can differ from this
- * decision when the cvar is not the value passed (RE_SetMode()'s
+ * (SWimp_DrawableInPixels() in sw_main.c), on the value it passed. gl1,
+ * gl3 and metal keep their own copy of the rule in their SetMode code,
+ * which reads the vid_fullscreen cvar instead, so they can differ from
+ * this decision when the cvar is not the value passed (RE_SetMode()'s
  * invalid-mode fallback, a cvar of 2.5).
  */
 qboolean
