@@ -65,7 +65,10 @@ text files and need no game data.
   writes the value as `hidpi 0` or `hidpi 1` into `settings.txt` beside
   the frames, `replay` into its `replay.txt`. `replay` refuses
   `PINS_HIDPI=1`: a trace is replayed at `PINS_WIDTH` x `PINS_HEIGHT`.
-  A scenario may not set `vid_highdpiaware`.
+  A scenario may not set `vid_highdpiaware`. Without `--ref-id`, `compare`
+  takes the newest complete pin of the reference renderer whatever its
+  `PINS_HIDPI`, as it does whatever its `PINS_WIDTH`; pass `--ref-id` to
+  compare a pin with one of the other value.
 
 The store path, `PINS_BASEDIR`, `PINS_DEMO` and scenario values may hold
 only `A-Z a-z 0-9 _ . / -`, except that `PINS_DEMO` is a bare file name
