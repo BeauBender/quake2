@@ -4807,3 +4807,7 @@ too, so it is not the layer and not lifted by it. The alpha pass costs about
 0.4 ms of GPU time a frame in the shim at 1920x1080 and 1.8 ms at 5120x2880
 (`ref_metal` about 0.4 to 0.5 ms a frame); the fps there is capped by the
 drawable wait, so only the GPU time shows it.
+
+## The fixed per-frame cost of the Metal renderers (FIX51)
+
+In progress.
