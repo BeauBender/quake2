@@ -9,37 +9,31 @@
 # configuration variables unset, no global or system configuration, no git
 # hooks, no signing, a synthetic author and committer, and HOME inside a
 # private mktemp -d, on throwaway repositories there: a bare origin and
-# clones of it. It shows that the hook fast-forwards a clean main that is
-# behind (also with a hostile GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE in
-# its environment) and writes nothing outside that clone, reports a current
-# one, and refuses, leaving HEAD and the working tree as they were (the
-# fetch moves only origin/main), on tracked changes, a diverged main, a
-# main ahead of origin/main (reported with its local commits, never as
-# updated), another branch, a HEAD that tracks .claude/memory/x.md (the
-# file stays), a failed fetch, a held index lock, and a failing git status,
-# ls-tree, symbolic-ref or rev-list (either count; a shim first on PATH).
-# It refuses an update that would overwrite or delete a local file it does
-# not track, which stays byte for byte, or a link, which stays as it was:
-# an ignored file or dangling link at a path the update adds, an ignored
-# file or a link to a directory where the update needs a directory, and an
-# ignored or an untracked file inside a directory the update turns into a
-# file. It fast-forwards over a tracked file the update turns into a
-# directory and, on a case-insensitive scratch volume, over a case-only
-# rename. It merges the commit it counted, not one a concurrent fetch
-# brings in at the merge (a shim). In a linked worktree it prints nothing
-# and changes nothing. Every run must exit 0 and print no path under the
-# scratch directory, so no remote URL.
+# clones of it. The hook must fast-forward a clean main that is behind
+# (also with a hostile GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE), writing
+# nothing outside that clone, also over a tracked file that becomes a
+# directory and, on a case-insensitive volume, a case-only rename; merge
+# the commit it counted when a fetch lands at the merge (a shim); and
+# report a current main. It must refuse, leaving HEAD and the working tree
+# as they were, on tracked changes, a diverged main, a main ahead (never
+# reported as updated), another branch, a HEAD that tracks
+# .claude/memory/x.md, a failed fetch, a held index lock, a failing git
+# status, ls-tree, symbolic-ref or rev-list (a shim), and a local file or
+# link it does not track in the update's way: ignored at an added path or
+# where a directory is needed, or ignored or untracked inside a directory
+# that becomes a file. In a linked worktree it prints nothing. Every run
+# must exit 0 and print no scratch path, so no remote URL.
 #
 # The real check then reads the hook and the settings file in this
 # checkout: the hook holds no reset, rebase, checkout, switch, restore,
-# stash, clean or pull, and every merge it runs holds --ff-only and
+# stash, clean or pull, and each merge holds --ff-only and
 # --no-overwrite-ignore in the command, not in a trailing comment;
-# .claude/settings.json registers the hook for the
-# startup and resume matchers with a timeout of at most 30 seconds, keeps
-# the compact and Stop hooks, and its allow and deny lists are exactly the
-# ones main had before the hook (this card adds no permission rule); and
-# it parses as JSON when python3 is present. It never runs the hook on
-# this checkout, so it needs no network.
+# .claude/settings.json registers the hook for the startup and resume
+# matchers with a timeout of at most 30 seconds, keeps the compact and
+# Stop hooks, and its allow and deny lists are exactly the ones main had
+# before the hook (this card adds no permission rule); and it parses as
+# JSON when python3 is present. It never runs the hook on this checkout,
+# so it needs no network.
 #
 # Usage: tests/check-checkout-current.sh
 set -eu
@@ -206,20 +200,9 @@ selftest()
 	still mem "$m"
 	[ -f "${tmp:?}/mem/.claude/memory/x.md" ] || fail "selftest: mem: the memory file was deleted"
 
-	# kept <repo> <path> <behind> <sha>: the hook refused <repo>, <behind>
-	# commit(s) behind, for a local file in the way, without naming
-	# <path>, and HEAD is still <sha>.
-	kept()
-	{
-		says "$1" "not updated, $3 commit(s) behind origin/main: local untracked or ignored files would be overwritten; update by hand"
-		case $out in
-		*"$2"*) fail "selftest: $1: the hook named the path: $out" ;;
-		esac
-		still "$1" "$4"
-	}
-	# keep <repo> <path> [<target>]: an ignored local file at <path>, with
-	# a copy to compare against, or an ignored link there to <target>.
-	keep()
+	# ign <repo> <path> [<target>]: an ignored local file at <path>, or an
+	# ignored link there to <target>.
+	ign()
 	{
 		mkdir -p "${tmp:?}/$1/.git/info"
 		printf '%s\n' "$2" >> "${tmp:?}/$1/.git/info/exclude"
@@ -227,26 +210,42 @@ selftest()
 			ln -s "$3" "${tmp:?}/$1/$2"
 		else
 			printf 'local %s\n' "$2" > "${tmp:?}/$1/$2"
+		fi
+	}
+	# keep <repo> <path> <behind> <sha>: with a local file or link at <path>,
+	# the hook refuses, <behind> commit(s) behind, without naming <path>;
+	# HEAD stays <sha> and the file stays byte for byte, or the link as it was.
+	keep()
+	{
+		if [ -L "${tmp:?}/$1/$2" ]; then
+			readlink "${tmp:?}/$1/$2" > "${tmp:?}/$1.keep"
+		else
 			cp -p "${tmp:?}/$1/$2" "${tmp:?}/$1.keep"
 		fi
 		run "$1"
-		kept "$1" "$2" 2 "$a"
-		if [ -n "${3:-}" ]; then
-			[ -L "${tmp:?}/$1/$2" ] && [ "$(readlink "${tmp:?}/$1/$2")" = "$3" ] ||
-				fail "selftest: $1: the ignored link $2 was changed"
+		says "$1" "not updated, $3 commit(s) behind origin/main: local untracked or ignored files would be overwritten; update by hand"
+		case $out in
+		*"$2"*) fail "selftest: $1: the hook named the path: $out" ;;
+		esac
+		still "$1" "$4"
+		if [ -L "${tmp:?}/$1/$2" ]; then
+			readlink "${tmp:?}/$1/$2" | cmp -s "${tmp:?}/$1.keep" -
 		else
-			cmp -s "${tmp:?}/$1.keep" "${tmp:?}/$1/$2" ||
-				fail "selftest: $1: the ignored file $2 was overwritten"
-		fi
+			cmp -s "${tmp:?}/$1.keep" "${tmp:?}/$1/$2"
+		fi || fail "selftest: $1: the local $2 was changed"
 	}
 	# b.txt, which the update starts tracking, and newdir, where the update
 	# needs a directory for newdir/c.txt: a file, a dangling link, and a
 	# link to an empty directory that must stay empty.
-	keep inway b.txt
-	keep leading newdir
-	keep inlink b.txt nowhere
+	ign inway b.txt
+	keep inway b.txt 2 "$a"
+	ign leading newdir
+	keep leading newdir 2 "$a"
+	ign inlink b.txt nowhere
+	keep inlink b.txt 2 "$a"
 	mkdir -p "${tmp:?}/linked"
-	keep leadlink newdir "${tmp:?}/linked"
+	ign leadlink newdir "${tmp:?}/linked"
+	keep leadlink newdir 2 "$a"
 	[ -z "$(ls -A "${tmp:?}/linked")" ] || fail "selftest: leadlink: the update wrote through the link"
 
 	# Another git process holds the index lock: the merge fails for a reason
@@ -299,22 +298,16 @@ selftest()
 	says typechange "updated main from"
 	still typechange "$t"
 
-	# E turns the tracked directory newdir into a file: an ignored and an
-	# untracked file inside it are in the way and stay byte for byte.
+	# E turns the tracked directory newdir into a file, with an ignored and
+	# an untracked file inside it.
 	clone dirign dirmix
-	mkdir -p "${tmp:?}/dirign/.git/info"
-	printf '%s\n' newdir/keep.o >> "${tmp:?}/dirign/.git/info/exclude"
-	printf '%s\n' ignored > "${tmp:?}/dirign/newdir/keep.o"
+	ign dirign newdir/keep.o
 	printf '%s\n' untracked > "${tmp:?}/dirmix/newdir/u.txt"
 	g -C "${tmp:?}/seed" rm -q -r newdir
 	put seed newdir five
 	g -C "${tmp:?}/seed" push -q origin main
-	run dirign
-	kept dirign keep.o 1 "$t"
-	[ "$(cat "${tmp:?}/dirign/newdir/keep.o")" = ignored ] || fail "selftest: dirign: the ignored file was lost"
-	run dirmix
-	kept dirmix u.txt 1 "$t"
-	[ "$(cat "${tmp:?}/dirmix/newdir/u.txt")" = untracked ] || fail "selftest: dirmix: the untracked file was lost"
+	keep dirign newdir/keep.o 1 "$t"
+	keep dirmix newdir/u.txt 1 "$t"
 
 	# G renames readme.txt (F) to README.txt. On a case-insensitive volume
 	# the old file answers to the new name, and the update still goes on.
