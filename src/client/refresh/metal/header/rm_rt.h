@@ -318,4 +318,12 @@ void rmb_rt_model_free(int mid);
  */
 int rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nlerps, rm_rt_frame_stats_t *s);
 
+/*
+ * The GPU times (ms) of the timed frames that completed since the last
+ * call: the alias lerps and refits (0 in a frame without an alias
+ * instance) and the instance rebuild, at most cap of each. Their number;
+ * 0 where the device samples no timestamps at the encoders' boundaries.
+ */
+int rmb_rt_times(double *alias_ms, double *ias_ms, int cap);
+
 #endif /* RM_RT_H */

@@ -1126,3 +1126,52 @@ rmb_draw_alias(const rm_avert_t *v, unsigned nv, const unsigned short *idx, unsi
 	rmb_counts.draws++;
 	return 1;
 }
+
+/*
+ * For rmb_rt.m (TASK53): the open frame's command buffer with no encoder
+ * open, for the compute and acceleration-structure work of design section
+ * 3, step 1, which goes before the 3D pass; *frame is the frame's number
+ * (frame slot frame % RMB_FRAMES_IN_FLIGHT). The pass opened next loads
+ * the colour target as after any other pass, so the frame draws the same.
+ * nil outside a frame or in a skipped one.
+ */
+id<MTLCommandBuffer>
+rmb_frame_compute(unsigned long *frame)
+{
+	if (!frame_open || frame_skipped || !frame_cmd)
+	{
+		return nil;
+	}
+
+	rmb_end_encoder();
+	*frame = frames_begun;
+	return frame_cmd;
+}
+
+/*
+ * For rmb_rt.m: n bytes of the frame ring for the GPU to read in this
+ * frame (the frame slot keeps them until the frame completes): their CPU
+ * address, with the ring's buffer and the offset; NULL when the ring is
+ * full or there is no frame.
+ */
+void *
+rmb_frame_ring_take(size_t n, __strong id<MTLBuffer> *buf, size_t *ofs)
+{
+	long at;
+
+	if (!frame_open || frame_skipped || !frame_ring)
+	{
+		return NULL;
+	}
+
+	at = mtl_ring_alloc(&ring, n);
+
+	if (at < 0)
+	{
+		return NULL;
+	}
+
+	*buf = frame_ring;
+	*ofs = (size_t)at;
+	return (unsigned char *)frame_ring.contents + at;
+}

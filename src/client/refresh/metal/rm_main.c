@@ -33,6 +33,7 @@
  */
 
 #include "header/local.h"
+#include "header/rm_rtscene.h"
 #include "common/mtl_matrix.h"
 
 refimport_t ri;
@@ -307,6 +308,8 @@ RI_Init(void)
 		return false;
 	}
 
+	RM_RT_Init(&caps);   /* the r_rt_* cvars (TASK53); builds nothing */
+
 	if (!R_SetMode())
 	{
 		R_Printf(PRINT_ALL, "ref_metal::%s - could not R_SetMode()\n", __func__);
@@ -330,6 +333,7 @@ RI_Init(void)
 static void
 RI_Shutdown(void)
 {
+	RM_RT_Shutdown();   /* the ray-tracing objects, before the models and the device */
 	ri.Cmd_RemoveCommand("screenshot");
 	ri.Cmd_RemoveCommand("imagelist");
 	ri.Cmd_RemoveCommand("modellist");
@@ -712,6 +716,9 @@ RI_RenderFrame(refdef_t *fd)
 	{
 		return;
 	}
+
+	/* the acceleration structures of the view, before the raster (design section 3, step 1; TASK53) */
+	RM_RT_Frame(fd);
 
 	/*
 	 * Colour loaded, so 2D drawn before a view (the player-config menu)
