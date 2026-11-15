@@ -29,7 +29,9 @@
  *   one fragment function writes the albedo (the texel), the normal
  *   (rgb10a2), the material id (r8uint), the motion vector (rg16float)
  *   and the light the stock product multiplies by (rgba8: the lightmap
- *   sample, the vertex colour, the warp's colour, or white);
+ *   sample, the vertex colour, the warp's colour, or white), and while
+ *   the shadows trace (rm_gb_surf, TASK131) the surface (r32uint: a
+ *   static world draw's vertex and entity, mtl_rts_gb_value);
  * - the forward pass with a motion vector: the stock fragment's colour
  *   and the motion vector as a second attachment;
  * - the lighting resolve: the stock product from the attachments
