@@ -23,9 +23,12 @@
  *
  * - rm_rts_trace, the compute pass between the G-buffer raster and the
  *   resolve: for each lightmapped world pixel (material 1), its position
- *   from the depth and its normal from the G-buffer; its surface from a
- *   ray from the eye to that point (the triangle it meets, through the
- *   map's triangle-to-surface table), whose texture axes and shifts give
+ *   from the depth and its normal from the G-buffer; its surface from the
+ *   G-buffer's surface attachment (TASK131: the vertex the raster drew
+ *   there, through the map's vertex-to-surface table, and the entity that
+ *   drew it, through the frame's entity table), or where that names none
+ *   (a dynamic draw) from a ray from the eye to that point (the triangle
+ *   it meets, through the map's triangle-to-surface table), whose texture axes and shifts give
  *   gl1's dynamic light at the pixel as the lightmap's sample holds it
  *   (mtl_rts_add_lm: the four luxels' adds, interpolated) against its
  *   exact plane, the pixel in the hit's model space (a brush entity's, which gl1 lights with the
