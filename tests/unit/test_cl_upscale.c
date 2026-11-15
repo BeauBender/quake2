@@ -15,14 +15,19 @@
  * fill, the .wal and .pcx size checks, and the command's decisions:
  * which names are sources, the colormap's palette, skip, write or
  * refuse (lstat, links), the paths, the git check of each output
- * directory, the remote-server refusal, the counts and the summary.
- * The command's I/O (cl_upscale_cmd.c, ImageIO) is not linked here.
+ * directory, the directories walked, the demo and remote-server
+ * refusal, the counts and the summary; the file write on disk, and the
+ * order of one file's steps with stubs. The listing, loading and
+ * encoding (cl_upscale_cmd.c, ImageIO) are not linked here.
  *
  * =======================================================================
  */
 
 #include <limits.h>
+#include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -1348,18 +1353,427 @@ TEST(upscale_out_dir_in_git_tree)
 	snprintf(path, sizeof(path), "%s/models/skin.png", home);
 	T_EQ_INT(CL_UpscalePathInGitTree(&cache, path), 1);
 
-	/* no directory in the path, or one that does not exist: refused */
-	T_EQ_INT(CL_UpscalePathInGitTree(&cache, "x.png"), 1);
+	/* no directory in the path, or one that does not exist: no real path */
+	T_EQ_INT(CL_UpscalePathInGitTree(&cache, "x.png"), UPSCALE_GIT_UNKNOWN);
 	snprintf(path, sizeof(path), "%s/missing/x.png", home);
-	T_EQ_INT(CL_UpscalePathInGitTree(&cache, path), 1);
+	T_EQ_INT(CL_UpscalePathInGitTree(&cache, path), UPSCALE_GIT_UNKNOWN);
+}
+
+/* the three answers, and the boolean form that fails closed on two */
+TEST(upscale_dir_git)
+{
+	char dir[MAX_OSPATH];
+	int inside;
+
+	t_write_file("upscale/dirgit/repo/.git", "x", 1);
+	t_write_file("upscale/dirgit/plain/.keep", "", 0);
+
+	snprintf(dir, sizeof(dir), "%s/upscale/dirgit/repo", t_tmpdir());
+	T_EQ_INT(CL_UpscaleDirGit(dir), UPSCALE_GIT_INSIDE);
+	T_EQ_INT(CL_UpscaleDirInGitTree(dir), 1);
+
+	snprintf(dir, sizeof(dir), "%s/upscale/dirgit/plain", t_tmpdir());
+	inside = oracle_in_git(dir);
+	T_EQ_INT(CL_UpscaleDirGit(dir), inside ? UPSCALE_GIT_INSIDE :
+		UPSCALE_GIT_OUTSIDE);
+	T_EQ_INT(CL_UpscaleDirInGitTree(dir), inside);
+
+	snprintf(dir, sizeof(dir), "%s/upscale/dirgit/missing", t_tmpdir());
+	T_EQ_INT(CL_UpscaleDirGit(dir), UPSCALE_GIT_UNKNOWN);
+	T_EQ_INT(CL_UpscaleDirInGitTree(dir), 1);
+	T_EQ_INT(CL_UpscaleDirGit(NULL), UPSCALE_GIT_UNKNOWN);
+	T_EQ_INT(CL_UpscaleDirInGitTree(NULL), 1);
+}
+
+TEST(upscale_dir_exists)
+{
+	char path[MAX_OSPATH];
+
+	t_write_file("upscale/direx/sub/file.png", "x", 1);
+	snprintf(path, sizeof(path), "%s/upscale/direx/sub/x.png", t_tmpdir());
+	T_EQ_INT(CL_UpscaleDirExists(path), 1);
+	snprintf(path, sizeof(path), "%s/upscale/direx/none/x.png", t_tmpdir());
+	T_EQ_INT(CL_UpscaleDirExists(path), 0);
+	/* a file where the directory would be */
+	snprintf(path, sizeof(path), "%s/upscale/direx/sub/file.png/x.png", t_tmpdir());
+	T_EQ_INT(CL_UpscaleDirExists(path), 0);
+	T_EQ_INT(CL_UpscaleDirExists("x.png"), 0);
+	T_EQ_INT(CL_UpscaleDirExists(NULL), 0);
+}
+
+TEST(upscale_list_dir)
+{
+	strlist_t dirs;
+	int cut = 0, refused = 0, i;
+
+	StrList_Init(&dirs, 0);
+	T_EQ_INT(CL_UpscaleListDir(&dirs, "textures/e1u1", &cut, &refused), 1);
+	T_EQ_INT(dirs.num, 1);
+	/* refused names are counted, not walked, and the walk goes on */
+	T_EQ_INT(CL_UpscaleListDir(&dirs, "textures/bad dir", &cut, &refused), 1);
+	T_EQ_INT(CL_UpscaleListDir(&dirs, "textures/.hidden", &cut, &refused), 1);
+	T_EQ_INT(CL_UpscaleListDir(&dirs, NULL, &cut, &refused), 1);
+	T_EQ_INT(dirs.num, 1);
+	T_EQ_INT(refused, 3);
+	T_EQ_INT(cut, 0);
+	/* a name already there is not walked twice */
+	T_EQ_INT(CL_UpscaleListDir(&dirs, "textures/e1u1", &cut, &refused), 1);
+	T_EQ_INT(dirs.num, 1);
+
+	/* full: the walk stops at UPSCALE_MAX_DIRS */
+	for (i = 1; i < UPSCALE_MAX_DIRS; i++)
+	{
+		char name[32];
+
+		snprintf(name, sizeof(name), "textures/d%d", i);
+		T_REQUIRE(CL_UpscaleListDir(&dirs, name, &cut, &refused) == 1);
+	}
+
+	T_EQ_INT(dirs.num, UPSCALE_MAX_DIRS);
+	T_EQ_INT(cut, 0);
+	T_EQ_INT(CL_UpscaleListDir(&dirs, "textures/one_more", &cut, &refused), 0);
+	T_EQ_INT(cut, 1);
+	T_EQ_INT(dirs.num, UPSCALE_MAX_DIRS);
+	T_EQ_INT(refused, 3);
+	StrList_Free(&dirs);
 }
 
 TEST(upscale_allowed)
 {
-	T_EQ_INT(CL_UpscaleAllowed(0, 0), 1);
-	T_EQ_INT(CL_UpscaleAllowed(0, 1), 1);
-	T_EQ_INT(CL_UpscaleAllowed(1, 1), 1);
-	T_EQ_INT(CL_UpscaleAllowed(1, 0), 0);
+	T_EQ_INT(CL_UpscaleAllowed(0, 0, 0), 1);
+	T_EQ_INT(CL_UpscaleAllowed(0, 1, 0), 1);
+	T_EQ_INT(CL_UpscaleAllowed(1, 1, 0), 1);
+	T_EQ_INT(CL_UpscaleAllowed(1, 0, 0), 0);
+	/* a demo plays from the local server: refused however it connects */
+	T_EQ_INT(CL_UpscaleAllowed(1, 1, 1), 0);
+	T_EQ_INT(CL_UpscaleAllowed(0, 0, 1), 0);
+	T_EQ_INT(CL_UpscaleAllowed(0, 1, 1), 0);
+	T_EQ_INT(CL_UpscaleAllowed(1, 0, 1), 0);
+}
+
+/* ---- the file write, on disk ---- */
+
+/* the bytes of the file at <t_tmpdir()>/rel into buf, -1 when there is none */
+static long
+read_back(const char *rel, char *buf, size_t size)
+{
+	char path[MAX_OSPATH];
+	FILE *f;
+	size_t n;
+
+	snprintf(path, sizeof(path), "%s/%s", t_tmpdir(), rel);
+	f = fopen(path, "rb");
+
+	if (!f)
+	{
+		return -1;
+	}
+
+	n = fread(buf, 1, size, f);
+	fclose(f);
+
+	return (long)n;
+}
+
+/* 1 when an entry named <path>.<this pid>.tmp is there, a link included */
+static int
+temp_left(const char *path)
+{
+	char tmp[MAX_OSPATH];
+	struct stat st;
+
+	T_REQUIRE(CL_UpscaleTempPath(path, (long)getpid(), tmp, sizeof(tmp)));
+
+	return lstat(tmp, &st) == 0;
+}
+
+TEST(upscale_write_file_new_and_replaced)
+{
+	char path[MAX_OSPATH], buf[64];
+
+	t_write_file("upscale/write/new/.keep", "", 0);
+	snprintf(path, sizeof(path), "%s/upscale/write/new/x.png", t_tmpdir());
+
+	/* (a) a new file, and no temporary file left */
+	T_EQ_INT(CL_UpscaleWriteFile(path, (const unsigned char *)"first", 5), 1);
+	T_EQ_INT(read_back("upscale/write/new/x.png", buf, sizeof(buf)), 5);
+	T_EQ_MEM(buf, "first", 5);
+	T_EQ_INT(temp_left(path), 0);
+
+	/* (b) a regular file there is replaced, a longer one cut to the new */
+	t_write_file("upscale/write/new/y.png", "an older and longer file", 24);
+	snprintf(path, sizeof(path), "%s/upscale/write/new/y.png", t_tmpdir());
+	T_EQ_INT(CL_UpscaleWriteFile(path, (const unsigned char *)"second", 6), 1);
+	T_EQ_INT(read_back("upscale/write/new/y.png", buf, sizeof(buf)), 6);
+	T_EQ_MEM(buf, "second", 6);
+	T_EQ_INT(temp_left(path), 0);
+
+	/* nothing at all is a file too */
+	T_EQ_INT(CL_UpscaleWriteFile(path, (const unsigned char *)"", 0), 1);
+	T_EQ_INT(read_back("upscale/write/new/y.png", buf, sizeof(buf)), 0);
+
+	/* no directory, or no name: nothing */
+	snprintf(path, sizeof(path), "%s/upscale/write/none/x.png", t_tmpdir());
+	T_EQ_INT(CL_UpscaleWriteFile(path, (const unsigned char *)"x", 1), 0);
+	T_EQ_INT(temp_left(path), 0);
+	T_EQ_INT(CL_UpscaleWriteFile(NULL, (const unsigned char *)"x", 1), 0);
+}
+
+TEST(upscale_write_file_never_through_a_link)
+{
+	char path[MAX_OSPATH], tmp[MAX_OSPATH], target[MAX_OSPATH], buf[64];
+	struct stat st;
+
+	t_write_file("upscale/write/link/target.png", "target", 6);
+	t_write_file("upscale/write/link/x.png", "old", 3);
+	snprintf(target, sizeof(target), "%s/upscale/write/link/target.png", t_tmpdir());
+	snprintf(path, sizeof(path), "%s/upscale/write/link/x.png", t_tmpdir());
+	T_REQUIRE(CL_UpscaleTempPath(path, (long)getpid(), tmp, sizeof(tmp)));
+
+	/* (c) a link at the temporary name: not followed, path as it was */
+	T_REQUIRE(symlink(target, tmp) == 0);
+	T_EQ_INT(CL_UpscaleWriteFile(path, (const unsigned char *)"new", 3), 0);
+	T_EQ_INT(read_back("upscale/write/link/target.png", buf, sizeof(buf)), 6);
+	T_EQ_MEM(buf, "target", 6);
+	T_EQ_INT(read_back("upscale/write/link/x.png", buf, sizeof(buf)), 3);
+	T_EQ_MEM(buf, "old", 3);
+	/* the link is not this process's to remove */
+	T_REQUIRE(lstat(tmp, &st) == 0);
+	T_CHECK(S_ISLNK(st.st_mode));
+	T_REQUIRE(unlink(tmp) == 0);
+
+	/* a regular file at the temporary name is not taken over either */
+	T_REQUIRE(CL_UpscaleTempPath("upscale/write/link/x.png", (long)getpid(),
+		tmp, sizeof(tmp)));
+	t_write_file(tmp, "stale", 5);
+	T_EQ_INT(CL_UpscaleWriteFile(path, (const unsigned char *)"new", 3), 0);
+	T_EQ_INT(read_back(tmp, buf, sizeof(buf)), 5);
+	T_EQ_MEM(buf, "stale", 5);
+	T_EQ_INT(read_back("upscale/write/link/x.png", buf, sizeof(buf)), 3);
+	T_EQ_MEM(buf, "old", 3);
+	T_REQUIRE(CL_UpscaleTempPath(path, (long)getpid(), tmp, sizeof(tmp)));
+	T_REQUIRE(unlink(tmp) == 0);
+
+	/* a link at path itself is replaced by the file, its target untouched */
+	T_REQUIRE(unlink(path) == 0);
+	T_REQUIRE(symlink(target, path) == 0);
+	T_EQ_INT(CL_UpscaleWriteFile(path, (const unsigned char *)"new", 3), 1);
+	T_REQUIRE(lstat(path, &st) == 0);
+	T_CHECK(S_ISREG(st.st_mode));
+	T_EQ_INT(read_back("upscale/write/link/x.png", buf, sizeof(buf)), 3);
+	T_EQ_MEM(buf, "new", 3);
+	T_EQ_INT(read_back("upscale/write/link/target.png", buf, sizeof(buf)), 6);
+	T_EQ_MEM(buf, "target", 6);
+	T_EQ_INT(temp_left(path), 0);
+}
+
+TEST(upscale_write_file_fails_clean)
+{
+	char path[MAX_OSPATH], buf[64];
+	unsigned char big[4096];
+	struct rlimit old, low;
+	void (*xfsz)(int);
+	struct stat st;
+	int ok;
+
+	/* (d) a directory at path: the rename fails, no temporary file left */
+	t_write_file("upscale/write/dir/x.png/inside", "in", 2);
+	snprintf(path, sizeof(path), "%s/upscale/write/dir/x.png", t_tmpdir());
+	T_EQ_INT(CL_UpscaleWriteFile(path, (const unsigned char *)"new", 3), 0);
+	T_EQ_INT(temp_left(path), 0);
+	T_REQUIRE(lstat(path, &st) == 0);
+	T_CHECK(S_ISDIR(st.st_mode));
+	T_EQ_INT(read_back("upscale/write/dir/x.png/inside", buf, sizeof(buf)), 2);
+
+	/* a short write (the file size limit): path as it was, no temporary */
+	t_write_file("upscale/write/dir/y.png", "old", 3);
+	snprintf(path, sizeof(path), "%s/upscale/write/dir/y.png", t_tmpdir());
+	memset(big, 'b', sizeof(big));
+	T_REQUIRE(getrlimit(RLIMIT_FSIZE, &old) == 0);
+	low = old;
+	low.rlim_cur = 1024;
+	xfsz = signal(SIGXFSZ, SIG_IGN);
+	T_REQUIRE(setrlimit(RLIMIT_FSIZE, &low) == 0);
+	ok = CL_UpscaleWriteFile(path, big, sizeof(big));
+	T_REQUIRE(setrlimit(RLIMIT_FSIZE, &old) == 0);
+	signal(SIGXFSZ, xfsz);
+	T_EQ_INT(ok, 0);
+	T_EQ_INT(temp_left(path), 0);
+	T_EQ_INT(read_back("upscale/write/dir/y.png", buf, sizeof(buf)), 3);
+	T_EQ_MEM(buf, "old", 3);
+}
+
+/* ---- the order of one file's steps, with stubs ---- */
+
+typedef struct
+{
+	upscale_entry_t entry;
+	int dirs;	/* makedirs' answer */
+	int git;
+	upscale_outcome_t made;
+	int nodata;	/* make says written but gives no PNG */
+	int wrote;	/* write's answer */
+	char log[128];
+	char said[160];
+	int developer;
+} stub_steps_t;
+
+static void
+stub_log(stub_steps_t *s, const char *step)
+{
+	size_t len = strlen(s->log);
+
+	snprintf(s->log + len, sizeof(s->log) - len, "%s%s", len ? " " : "", step);
+}
+
+static upscale_entry_t
+stub_entry(void *ctx, const char *path)
+{
+	(void)path;
+	stub_log(ctx, "entry");
+	return ((stub_steps_t *)ctx)->entry;
+}
+
+static int
+stub_makedirs(void *ctx, const char *path)
+{
+	(void)path;
+	stub_log(ctx, "dirs");
+	return ((stub_steps_t *)ctx)->dirs;
+}
+
+static int
+stub_git(void *ctx, const char *path)
+{
+	(void)path;
+	stub_log(ctx, "git");
+	return ((stub_steps_t *)ctx)->git;
+}
+
+static upscale_outcome_t
+stub_make(void *ctx, unsigned char **data, size_t *len)
+{
+	stub_steps_t *s = ctx;
+
+	stub_log(s, "make");
+
+	if ((s->made == UPSCALE_WRITTEN) && !s->nodata)
+	{
+		*data = malloc(3);
+		T_REQUIRE(*data != NULL);
+		memcpy(*data, "png", 3);
+		*len = 3;
+	}
+
+	return s->made;
+}
+
+static int
+stub_write(void *ctx, const char *path, const unsigned char *data, size_t len)
+{
+	(void)path;
+	T_REQUIRE(data != NULL);
+	T_EQ_INT((int)len, 3);
+	T_EQ_MEM(data, "png", 3);
+	stub_log(ctx, "write");
+	return ((stub_steps_t *)ctx)->wrote;
+}
+
+static void
+stub_say(void *ctx, int developer, const char *path, const char *text)
+{
+	stub_steps_t *s = ctx;
+
+	T_EQ_STR(path, "/g/baseq2/textures/x.png");
+	T_EQ_STR(s->said, "");
+	snprintf(s->said, sizeof(s->said), "%s", text);
+	s->developer = developer;
+}
+
+static const upscale_steps_t stub_steps = {
+	stub_entry, stub_makedirs, stub_git, stub_make, stub_write, stub_say
+};
+
+/* every step answers yes but the one a case changes */
+static stub_steps_t
+stub_yes(void)
+{
+	stub_steps_t s;
+
+	memset(&s, 0, sizeof(s));
+	s.entry = UPSCALE_ENTRY_NONE;
+	s.dirs = 1;
+	s.git = UPSCALE_GIT_OUTSIDE;
+	s.made = UPSCALE_WRITTEN;
+	s.wrote = 1;
+
+	return s;
+}
+
+/* one case: the outcome, the steps run in order, and the message */
+static void
+write_out_case(stub_steps_t s, int force, upscale_outcome_t outcome,
+		const char *log, const char *said, int developer)
+{
+	size_t bytes = 99;
+
+	T_EQ_INT(CL_UpscaleWriteOut("/g/baseq2/textures/x.png", force,
+		&stub_steps, &s, &bytes), outcome);
+	T_EQ_STR(s.log, log);
+	T_EQ_STR(s.said, said);
+	T_EQ_INT(s.developer, developer);
+	T_CHECK(bytes == ((outcome == UPSCALE_WRITTEN) ? 3 : 0));
+}
+
+TEST(upscale_write_out_order)
+{
+	stub_steps_t s;
+	const char *all = "entry dirs git make write";
+
+	write_out_case(stub_yes(), 0, UPSCALE_WRITTEN, all, "", 0);
+
+	s = stub_yes();
+	s.entry = UPSCALE_ENTRY_FILE;
+	write_out_case(s, 0, UPSCALE_SKIPPED, "entry", "", 0);
+	write_out_case(s, 1, UPSCALE_WRITTEN, all, "", 0);
+
+	s.entry = UPSCALE_ENTRY_OTHER;
+	write_out_case(s, 0, UPSCALE_SKIPPED, "entry", "", 0);
+	write_out_case(s, 1, UPSCALE_REFUSED, "entry", UPSCALE_SAY_NOT_FILE, 0);
+
+	s.entry = UPSCALE_ENTRY_UNKNOWN;
+	write_out_case(s, 0, UPSCALE_REFUSED, "entry", UPSCALE_SAY_UNKNOWN, 0);
+	write_out_case(s, 1, UPSCALE_REFUSED, "entry", UPSCALE_SAY_UNKNOWN, 0);
+
+	/* no directory: failed, nothing read or written */
+	s = stub_yes();
+	s.dirs = 0;
+	write_out_case(s, 0, UPSCALE_FAILED, "entry dirs", UPSCALE_SAY_NO_DIR, 0);
+
+	/* the git check comes after the directories and before anything is made */
+	s = stub_yes();
+	s.git = UPSCALE_GIT_INSIDE;
+	write_out_case(s, 0, UPSCALE_REFUSED, "entry dirs git", UPSCALE_SAY_GIT, 1);
+	s.git = UPSCALE_GIT_UNKNOWN;
+	write_out_case(s, 0, UPSCALE_FAILED, "entry dirs git", UPSCALE_SAY_NO_REALPATH, 0);
+	s.git = 7;
+	write_out_case(s, 0, UPSCALE_FAILED, "entry dirs git", UPSCALE_SAY_NO_REALPATH, 0);
+
+	/* make's own answer; it says its own message */
+	s = stub_yes();
+	s.made = UPSCALE_REFUSED;
+	write_out_case(s, 0, UPSCALE_REFUSED, "entry dirs git make", "", 0);
+	s.made = UPSCALE_FAILED;
+	write_out_case(s, 0, UPSCALE_FAILED, "entry dirs git make", "", 0);
+	s.made = UPSCALE_SKIPPED;
+	write_out_case(s, 0, UPSCALE_FAILED, "entry dirs git make", "", 0);
+	s.made = UPSCALE_WRITTEN;
+	s.nodata = 1;
+	write_out_case(s, 0, UPSCALE_FAILED, "entry dirs git make", "", 0);
+
+	s = stub_yes();
+	s.wrote = 0;
+	write_out_case(s, 0, UPSCALE_FAILED, all, UPSCALE_SAY_WRITE, 0);
 }
 
 TEST(upscale_count)
@@ -1407,4 +1821,19 @@ TEST(upscale_summary)
 	T_EQ_STR(out, "upscale_textures: 3 written, 1 skipped, 2 refused, 4 failed, "
 		"5000000000 bytes, 4x, in /g/baseq2; a listing was cut at its limit, "
 		"not every file was looked at\n");
+
+	/* loose directories whose names are refused: their files not looked at */
+	n.cut = 0;
+	n.baddirs = 1;
+	CL_UpscaleSummary(&n, 2, "/g/baseq2", out, sizeof(out));
+	T_EQ_STR(out, "upscale_textures: 3 written, 1 skipped, 2 refused, 4 failed, "
+		"5000000000 bytes, 2x, in /g/baseq2; 1 directory with a refused name "
+		"not looked at\n");
+	n.cut = 1;
+	n.baddirs = 2147483647;
+	CL_UpscaleSummary(&n, 2, "/g/baseq2", out, sizeof(out));
+	T_EQ_STR(out, "upscale_textures: 3 written, 1 skipped, 2 refused, 4 failed, "
+		"5000000000 bytes, 2x, in /g/baseq2; 2147483647 directories with a "
+		"refused name not looked at; a listing was cut at its limit, not "
+		"every file was looked at\n");
 }
