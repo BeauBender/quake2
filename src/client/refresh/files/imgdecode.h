@@ -88,6 +88,12 @@ typedef struct
 imgdec_type_t IMGDEC_TypeOfExtension(const char *ext);
 imgdec_type_t IMGDEC_TypeOfIdentifier(const char *uti);
 
+/*
+ * IMGDEC_OK when the type identifier uti names want, IMGDEC_ERR_TYPE
+ * when it names no PNG, JPEG or TGA, else IMGDEC_ERR_MISMATCH.
+ */
+imgdec_result_t IMGDEC_TypeCheck(const char *uti, imgdec_type_t want);
+
 /* 1 when a file of size bytes may be read: 1 to max_size bytes */
 int IMGDEC_FileSizeOk(size_t size, size_t max_size);
 

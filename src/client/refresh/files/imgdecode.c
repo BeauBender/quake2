@@ -23,7 +23,9 @@
  *  1. the name's extension is png, jpg or tga;
  *  2. the file has 1 to IMGDEC_MAX_FILE bytes;
  *  3. the type ImageIO reads from the bytes is PNG, JPEG or TGA and is
- *     the extension's (a GIF, or a PNG named .tga, is refused);
+ *     the extension's (a GIF, or a PNG named .tga, is refused). From
+ *     the 27.0 systems on ImageIO itself is told to read only that type;
+ *     the check after it stays as the backstop;
  *  4. a TGA whose header names a layout ImageIO decodes to wrong pixels
  *     (a colour map that is not 24-bit, 15-bit pixels) is refused;
  *  5. the declared size is 1 to IMGDEC_MAX_SIDE on each side and at most
@@ -52,6 +54,20 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <ImageIO/ImageIO.h>
+
+/*
+ * kCGImageSourceAllowableTypes, the per-source list of the formats
+ * ImageIO may read, is declared from the 27.0 SDKs on and works from the
+ * 27.0 systems on (checked again at run time). The process-wide
+ * CGImageSourceSetAllowableTypes is not used: it would also restrict the
+ * image decoding of AppKit and SDL in the client, for the process's life.
+ */
+#if (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000) || \
+	(defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 270000) || \
+	(defined(__TV_OS_VERSION_MAX_ALLOWED) && __TV_OS_VERSION_MAX_ALLOWED >= 270000) || \
+	(defined(__WATCH_OS_VERSION_MAX_ALLOWED) && __WATCH_OS_VERSION_MAX_ALLOWED >= 270000)
+#define IMGDEC_HAVE_ALLOWABLE_TYPES 1
+#endif
 #endif
 
 /* ASCII only, whatever the locale */
@@ -130,6 +146,24 @@ IMGDEC_TypeOfIdentifier(const char *uti)
 	}
 
 	return IMGDEC_TYPE_NONE;
+}
+
+imgdec_result_t
+IMGDEC_TypeCheck(const char *uti, imgdec_type_t want)
+{
+	imgdec_type_t got = IMGDEC_TypeOfIdentifier(uti);
+
+	if (got == IMGDEC_TYPE_NONE)
+	{
+		return IMGDEC_ERR_TYPE;
+	}
+
+	if (got != want)
+	{
+		return IMGDEC_ERR_MISMATCH;
+	}
+
+	return IMGDEC_OK;
 }
 
 int
@@ -454,9 +488,11 @@ static imgdec_result_t
 IMGDEC_DecodeImageIO(const unsigned char *data, size_t size, imgdec_type_t want,
 	unsigned char **pixels, int *width, int *height)
 {
-	const void *keys[2];
-	const void *values[2];
+	const void *keys[3];
+	const void *values[3];
+	CFIndex nopts = 0;
 	CFDataRef bytes = NULL;
+	CFArrayRef allowed = NULL;
 	CFDictionaryRef options = NULL;
 	CGImageSourceRef source = NULL;
 	CFDictionaryRef props = NULL;
@@ -467,7 +503,6 @@ IMGDEC_DecodeImageIO(const unsigned char *data, size_t size, imgdec_type_t want,
 	unsigned char palette[256 * 3];
 	char name[64];
 	imgdec_layout_t layout;
-	imgdec_type_t got;
 	imgdec_result_t r;
 	size_t w = 0, h = 0, outbytes = 0;
 
@@ -480,11 +515,30 @@ IMGDEC_DecodeImageIO(const unsigned char *data, size_t size, imgdec_type_t want,
 	}
 
 	/* the hint helps TGA, which has no signature; it overrides no type */
-	keys[0] = kCGImageSourceShouldCache;
-	values[0] = kCFBooleanFalse;
-	keys[1] = kCGImageSourceTypeIdentifierHint;
-	values[1] = IMGDEC_Identifier(want);
-	options = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 2,
+	keys[nopts] = kCGImageSourceShouldCache;
+	values[nopts++] = kCFBooleanFalse;
+	keys[nopts] = kCGImageSourceTypeIdentifierHint;
+	values[nopts++] = IMGDEC_Identifier(want);
+
+#ifdef IMGDEC_HAVE_ALLOWABLE_TYPES
+	/* ImageIO itself reads no format but the extension's; the type check stays */
+	if (__builtin_available(macOS 27.0, iOS 27.0, tvOS 27.0, watchOS 27.0, *))
+	{
+		const void *one = IMGDEC_Identifier(want);
+
+		allowed = CFArrayCreate(kCFAllocatorDefault, &one, 1, &kCFTypeArrayCallBacks);
+		if (!allowed)
+		{
+			r = IMGDEC_ERR_MEMORY;
+			goto done;
+		}
+
+		keys[nopts] = kCGImageSourceAllowableTypes;
+		values[nopts++] = allowed;
+	}
+#endif
+
+	options = CFDictionaryCreate(kCFAllocatorDefault, keys, values, nopts,
 		&kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
 	if (!options)
 	{
@@ -507,16 +561,10 @@ IMGDEC_DecodeImageIO(const unsigned char *data, size_t size, imgdec_type_t want,
 		goto done;
 	}
 
-	got = IMGDEC_TypeOfIdentifier(name);
-	if (got == IMGDEC_TYPE_NONE)
+	/* the backstop behind the allowed type, and before 27.0 the only check */
+	r = IMGDEC_TypeCheck(name, want);
+	if (r != IMGDEC_OK)
 	{
-		r = IMGDEC_ERR_TYPE;
-		goto done;
-	}
-
-	if (got != want)
-	{
-		r = IMGDEC_ERR_MISMATCH;
 		goto done;
 	}
 
@@ -625,6 +673,11 @@ done:
 	if (options)
 	{
 		CFRelease(options);
+	}
+
+	if (allowed)
+	{
+		CFRelease(allowed);
 	}
 
 	if (bytes)

@@ -421,6 +421,17 @@ test_types(void)
 	CHECK(IMGDEC_TypeOfIdentifier("com.truevision.tga-imagex") == IMGDEC_TYPE_NONE, "tga uti, longer");
 	CHECK(IMGDEC_TypeOfIdentifier("") == IMGDEC_TYPE_NONE, "empty uti");
 	CHECK(IMGDEC_TypeOfIdentifier(NULL) == IMGDEC_TYPE_NONE, "NULL uti");
+
+	/* the backstop behind ImageIO's own allowed type */
+	CHECK(IMGDEC_TypeCheck("public.png", IMGDEC_TYPE_PNG) == IMGDEC_OK, "png as png");
+	CHECK(IMGDEC_TypeCheck("public.jpeg", IMGDEC_TYPE_JPEG) == IMGDEC_OK, "jpeg as jpeg");
+	CHECK(IMGDEC_TypeCheck("com.truevision.tga-image", IMGDEC_TYPE_TGA) == IMGDEC_OK, "tga as tga");
+	CHECK(IMGDEC_TypeCheck("public.png", IMGDEC_TYPE_TGA) == IMGDEC_ERR_MISMATCH, "png as tga");
+	CHECK(IMGDEC_TypeCheck("public.jpeg", IMGDEC_TYPE_PNG) == IMGDEC_ERR_MISMATCH, "jpeg as png");
+	CHECK(IMGDEC_TypeCheck("com.truevision.tga-image", IMGDEC_TYPE_JPEG) == IMGDEC_ERR_MISMATCH, "tga as jpeg");
+	CHECK(IMGDEC_TypeCheck("com.compuserve.gif", IMGDEC_TYPE_PNG) == IMGDEC_ERR_TYPE, "gif as png");
+	CHECK(IMGDEC_TypeCheck("public.tiff", IMGDEC_TYPE_TGA) == IMGDEC_ERR_TYPE, "tiff as tga");
+	CHECK(IMGDEC_TypeCheck(NULL, IMGDEC_TYPE_PNG) == IMGDEC_ERR_TYPE, "no uti");
 }
 
 static void
@@ -982,6 +993,24 @@ encode(CFStringRef uti, unsigned w, unsigned h, const unsigned char *pix, int gr
 	return b;
 }
 
+/*
+ * The refusal of a PNG, JPEG or TGA named as another of the three. From
+ * the 27.0 SDK and system on, ImageIO is told the one type it may read
+ * and refuses the file itself (IMGDEC_ERR_TYPE); before, the type check
+ * behind it does (IMGDEC_ERR_MISMATCH).
+ */
+static imgdec_result_t
+other_type_refusal(void)
+{
+#if defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
+	if (__builtin_available(macOS 27.0, *))
+	{
+		return IMGDEC_ERR_TYPE;
+	}
+#endif
+	return IMGDEC_ERR_MISMATCH;
+}
+
 /* a CMYK JPEG of w x h, encoded by ImageIO */
 static buf_t
 encode_cmyk(unsigned w, unsigned h)
@@ -1205,12 +1234,12 @@ build_cases(void)
 	add_good("jpeg", encode(CFSTR("public.jpeg"), 16, 16, jpeg_src, 0), "jpg", want_jpeg, 16, 16, 3);
 	add_good("jpeg grey", encode(CFSTR("public.jpeg"), 16, 16, jpeg_grey_src, 1), "jpg", want_jpeg_grey, 16, 16, 1);
 
-	/* the type check and the extension match */
-	add_bad("png named .tga", copy_buf(&b), b.n, "tga", IMGDEC_ERR_MISMATCH);
-	add_bad("png named .jpg", copy_buf(&b), b.n, "jpg", IMGDEC_ERR_MISMATCH);
-	add_bad("tga named .png", tga_file(RW, RH, 24, 0, 0, ref), (size_t)-1, "png", IMGDEC_ERR_MISMATCH);
-	add_bad("jpeg named .png", encode(CFSTR("public.jpeg"), 16, 16, jpeg_src, 0), (size_t)-1, "png", IMGDEC_ERR_MISMATCH);
-	add_bad("jpeg named .tga", encode(CFSTR("public.jpeg"), 16, 16, jpeg_src, 0), (size_t)-1, "tga", IMGDEC_ERR_MISMATCH);
+	/* the type check and the extension match: inside ImageIO where it can be told */
+	add_bad("png named .tga", copy_buf(&b), b.n, "tga", other_type_refusal());
+	add_bad("png named .jpg", copy_buf(&b), b.n, "jpg", other_type_refusal());
+	add_bad("tga named .png", tga_file(RW, RH, 24, 0, 0, ref), (size_t)-1, "png", other_type_refusal());
+	add_bad("jpeg named .png", encode(CFSTR("public.jpeg"), 16, 16, jpeg_src, 0), (size_t)-1, "png", other_type_refusal());
+	add_bad("jpeg named .tga", encode(CFSTR("public.jpeg"), 16, 16, jpeg_src, 0), (size_t)-1, "tga", other_type_refusal());
 	add_bad("gif named .gif", encode(CFSTR("com.compuserve.gif"), 16, 16, jpeg_src, 0), (size_t)-1, "gif", IMGDEC_ERR_EXTENSION);
 	add_bad("gif named .png", encode(CFSTR("com.compuserve.gif"), 16, 16, jpeg_src, 0), (size_t)-1, "png", IMGDEC_ERR_TYPE);
 	add_bad("gif named .tga", encode(CFSTR("com.compuserve.gif"), 16, 16, jpeg_src, 0), (size_t)-1, "tga", IMGDEC_ERR_TYPE);
