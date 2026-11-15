@@ -864,10 +864,12 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/rm_gbuf.metal \
 		src/client/refresh/metal/rm_rtshadow.metal \
 		src/client/refresh/metal/rm_rtao.metal \
+		src/client/refresh/metal/rm_rtwater.metal \
 		src/client/refresh/metal/common/mtl_shader_math.h \
 		src/client/refresh/metal/common/mtl_gbuf_math.h \
 		src/client/refresh/metal/common/mtl_rts_math.h \
-		src/client/refresh/metal/common/mtl_rtao_math.h
+		src/client/refresh/metal/common/mtl_rtao_math.h \
+		src/client/refresh/metal/common/mtl_rtw_math.h
 	@echo "===> METAL $<"
 	${Q}command -v xcrun >/dev/null 2>&1 || { echo "ref_metal needs xcrun and the Xcode Metal toolchain" >&2; exit 1; }
 	${Q}xcrun -f metal >/dev/null 2>&1 || { echo "ref_metal needs the Metal compiler (xcrun metal); install the Xcode Metal toolchain" >&2; exit 1; }
@@ -877,9 +879,10 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_gbuf.metal -o $(BUILDDIR)/ref_metal/rm_gbuf.air
 	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_rtshadow.metal -o $(BUILDDIR)/ref_metal/rm_rtshadow.air
 	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_rtao.metal -o $(BUILDDIR)/ref_metal/rm_rtao.air
+	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_rtwater.metal -o $(BUILDDIR)/ref_metal/rm_rtwater.air
 	${Q}xcrun -sdk macosx metallib $(BUILDDIR)/ref_metal/rm_shaders.air $(BUILDDIR)/ref_metal/rm_rt.air \
 		$(BUILDDIR)/ref_metal/rm_gbuf.air $(BUILDDIR)/ref_metal/rm_rtshadow.air \
-		$(BUILDDIR)/ref_metal/rm_rtao.air -o $@
+		$(BUILDDIR)/ref_metal/rm_rtao.air $(BUILDDIR)/ref_metal/rm_rtwater.air -o $@
 
 # Header dependencies: the Darwin CFLAGS carry no -MMD (see above), but
 # the Apple clang this target needs writes them for C and Objective-C
@@ -1244,6 +1247,8 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_rtshadowscene.o \
 	src/client/refresh/metal/rm_rtao.o \
 	src/client/refresh/metal/rm_rtaoscene.o \
+	src/client/refresh/metal/rm_rtwater.o \
+	src/client/refresh/metal/rm_rtwaterscene.o \
 	src/client/refresh/metal/rm_scrap.o \
 	src/client/refresh/metal/rm_sdl.o \
 	src/client/refresh/metal/rm_surf.o \
@@ -1256,6 +1261,7 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rmb_rt.o \
 	src/client/refresh/metal/rmb_rtshadow.o \
 	src/client/refresh/metal/rmb_rtao.o \
+	src/client/refresh/metal/rmb_rtwater.o \
 	src/client/refresh/metal/common/mtl_matrix.o \
 	src/client/refresh/metal/common/mtl_ring.o \
 	src/client/refresh/files/common.o \

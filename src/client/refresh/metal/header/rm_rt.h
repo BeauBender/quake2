@@ -352,6 +352,9 @@ int rmb_rt_set_transmit(const unsigned char *t, unsigned long ntris);
 /* GPU ticks of the device's timestamps to milliseconds (rmb_rt_open's correlation) */
 double rmb_rt_gpu_ms(uint64_t ticks);
 
+/* RT6 (TASK58): the water triangles (material 3) of the map whose structures are built; 0 without them */
+unsigned long rmb_rt_map_water(void);
+
 #ifdef __OBJC__
 /*
  * RT3: binds frame fno's instance structure at buffer index ias_at (each
@@ -372,6 +375,16 @@ int rmb_rt_bind_scene(id<MTLComputeCommandEncoder> ce, unsigned long fno, int ia
  * n_at. 0, with nothing bound, when the map has none.
  */
 int rmb_rt_bind_materials(id<MTLComputeCommandEncoder> ce, int mat_at, int n_at);
+
+/*
+ * RT6 (TASK58): binds the buffers the map's structures were built from:
+ * the vertex buffer (RM_WVERT_STRIDE a vertex, the position first) at
+ * vert_at, the uint32 index buffer (three a triangle, indexed as the
+ * scene's first triangle plus the primitive) at idx_at, and at geom_at
+ * four uint32s: their vertices, their triangles, the stride in float4s
+ * and 0. 0, with nothing bound, when the map has none.
+ */
+int rmb_rt_bind_geometry(id<MTLComputeCommandEncoder> ce, int vert_at, int idx_at, int geom_at);
 #endif
 
 #endif /* RM_RT_H */
