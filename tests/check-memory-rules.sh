@@ -374,6 +374,11 @@ selftest_checks()
 	reject "a Read rule under the home directory" "$notin" "$add" "Read(~/.ssh/**)"
 	reject "a Read rule on the whole home directory" "admits probe" "$add" "Read(~/**)"
 	reject "a bare Read rule" "admits probe" "$add" "Read"
+	# The probes shadow the bare clause of store_rule in check_rules, so it
+	# is tested by itself: a bare Read, Edit or Write is a store rule.
+	for k in Read Edit Write; do
+		store_rule "$k" '*' 1 || { say "selftest: a bare $k rule is not a store rule"; exit 1; }
+	done
 	reject "the Read rule widened back to the whole store" "admits probe" \
 		'.permissions.allow |= map(if startswith("Read(") then "Read(~/.config/agents/memory-store/**)" else . end)'
 	reject "a Read of the clone's .git" "admits probe" "$add" "Read($store/.git/**)"
