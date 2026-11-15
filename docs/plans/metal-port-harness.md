@@ -2874,7 +2874,8 @@ pixel (material 1):
 - evaluates gl1's `R_AddDynamicLights` for every light on that surface's own texture axes and
   shifts: at the four luxels around the pixel, interpolated as the bilinear lightmap sample
   (`mtl_rts_add_lm`, `mtl_rts_surf_light`);
-- traces one shadow ray toward each of the four lights that add the most (`intensity - dist`).
+- traces one shadow ray toward each of the four lights that add the most (`intensity - dist`),
+  which passes the models that carry its light (*a light's own model*, below).
 
 The eye ray is cast where a light reaches the pixel's plane in the world, and on every world
 pixel of a frame with a moved or turned brush entity (its pixels are tested in its model's
@@ -2897,6 +2898,19 @@ down by the brightest channel past 1). A light past the four adds its light unsh
 - *Alias models* are lit as before, by `R_LightPoint`, whose vertex light holds the dynamic
   lights once; the resolve adds no term to material 2. They cast shadows (they are in the
   instance structure, the view weapon only with `r_rt_gunshadow`); they receive none.
+- *A light's own model.* An alias model does not shadow a light it carries: one whose origin,
+  taken into the model's space, lies in gl1's box of the model's frame and old frame
+  (`R_CullAliasModel`) grown by one unit on every side (`rm_rts_carried`, `RM_RTS_CARRY_TOL`).
+  That is a rocket's or a bolt's light inside its own model, an explosion's at the origin of its
+  model, a monster's muzzle flash at the origin of the flash and smoke models it spawns and at
+  the gun of the monster that fires it. `RM_RT_Frame` finds them per frame for the lights as
+  `R_TakeDlights` takes them, `rmb_rt_frame` keeps each instance's lights beside its first
+  triangle and makes an instance that carries one non-opaque, and the shadow query of a carried
+  light passes that instance's triangles and stops at any other (`rm_rts_first`); a light no
+  model carries keeps the opaque any-hit query. Real shadows stay: the world and brush entities
+  are never carriers, and another model shadows the light unless the light is inside that
+  model's own box. The unit covers the rounding of the transform and a light on the box's face
+  (a gun's tip); a model a unit from a light it does not hold would cover half its sky anyway.
 - *Where it cannot match per texel.* The term is added after the store, not before:
   - the store truncates the sum and scales a saturated luxel down before filtering; the resolve
     does so per pixel after filtering (within two levels on the host test's luxels);

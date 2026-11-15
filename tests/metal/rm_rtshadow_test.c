@@ -1406,6 +1406,19 @@ test_carried(void)
 		CHECK(rm_rts_carried(xf2, mins2, maxs2, l, 1) == 0);
 	}
 
+	/* the inverse of any transform, not only a turn: a basis scaled by 2 and sheared */
+	{
+		const float sx[12] = { 2, 0, 0, 0, 2, 0, 0.5f, 0, 2, 10, 20, 30 };
+
+		l[0] = light_at(10 + 2 * 7, 20, 30);            /* model (7, 0, 0) */
+		l[1] = light_at(10 + 2 * 9.5f, 20, 30);         /* model (9.5, 0, 0) */
+		l[2] = light_at(10 + 0.5f * 20, 20, 30 + 2 * 20); /* model (0, 0, 20) */
+		l[3] = light_at(10, 20, 30 + 2 * 20);           /* model (-5, 0, 20) */
+		CHECK(rm_rts_carried(sx, mins, maxs, l, 4) == ((1u << 0) | (1u << 2) | (1u << 3)));
+		l[3] = light_at(10 - 0.5f * 20 - 2, 20, 30 + 2 * 20);   /* model (-11, 0, 20) */
+		CHECK(rm_rts_carried(sx, mins, maxs, l, 4) == ((1u << 0) | (1u << 2)));
+	}
+
 	/* every one of 40 lights at the origin: the first 32 bits, no more */
 	for (i = 0; i < 40; i++)
 	{

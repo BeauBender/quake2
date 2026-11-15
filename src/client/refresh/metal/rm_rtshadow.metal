@@ -139,7 +139,7 @@ struct rm_rts_hit
  * not on a model carrying its light. inst holds two words an instance
  * (rmb_rt_frame): its first triangle of the map's buffers and the lights
  * it carries. With lbit 0 (mtl_rts_light_bit: no model carries the light)
- * it is the opaque query of TASK55's first rounds. With lbit set, the
+ * it is an opaque query, as for every light before. With lbit set, the
  * structure's instances that carry a light are non-opaque: the query hands
  * their triangles here, and the ray passes those of the instances carrying
  * this light (mtl_rts_passes) and stops at any other, as at every opaque

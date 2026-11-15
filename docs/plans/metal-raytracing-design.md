@@ -130,7 +130,8 @@ lights in `ref_metal`"). The pass as built:
   every lit world pixel of a frame with a moved brush entity, whose surfaces gl1 lights in their
   model's space);
 - gl1's falloff on that surface's texture axes at its four luxels, in its model's space;
-- up to four any-hit shadow rays.
+- up to four any-hit shadow rays; the ray of a light that a model carries (a rocket's light
+  inside it, a muzzle flash's) is a query that passes that model's non-opaque triangles.
 
 On the M6 (apple9, compute path), seeded `rt-shadows` over `demo1.dm2`, warm frames, three runs:
 
