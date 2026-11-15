@@ -4602,7 +4602,13 @@ state are the same, and the composited captures below, taken on the build at
 **The measured build.** Before is main at `33845c6c`, built in a scratch
 worktree. After is `68edb493` (this branch, the first commit that has the
 pipeline built at init; every commit after it changes only documents, so
-`git diff 68edb493 HEAD -- src` is empty). Scratch builds, never committed:
+`git diff 68edb493 HEAD -- src` was empty when measured). After the review
+the branch was rebased onto main at `9039f602` (TASK129, which changes only
+how a sky face's image is chosen, in `src/client/refresh/files/image.c`, and
+its tests). There `68edb493` is `f42611e1` and `58ede1ab` is `7d5b06d5`, and
+`git diff 68edb493 f42611e1 -- src/client/refresh/metal src/client/refresh/gl1`
+is empty, as is the same diff from `58ede1ab` to `7d5b06d5`. The merge may
+move them again; each commit keeps its subject line. Scratch builds, never committed:
 the pass disabled (the two `*_force_alpha` calls commented out at `68edb493`),
 and a probe build (`68edb493` plus `ScreenCaptureKit` captures, GPU
 timestamps in the shim and environment overrides of the layer's `opaque` and
