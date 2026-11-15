@@ -2772,13 +2772,20 @@ was not identified. When the request equals the desktop mode SDL takes the
 "Restoring desktop mode" branch and does not use the result
 (`SDL_cocoamodes.m:692`).
 
-The native route: `+set vid_fullscreen 1 +set r_mode -1 +set r_customwidth
+The desktop-mode route: `+set vid_fullscreen 1 +set r_mode -1 +set r_customwidth
 2560 +set r_customheight 1440` logs `User requested 2560x1440@-1.000000,
 setting closest mode 2560x1440@60.000000` and `Drawable size: 2560x1440`
 with no error, on `ref_soft`, `ref_gl1` and `ref_metal` in the log probe and
-on all four in the rows above. That is the fullscreen row of the table:
-the display's native size, in `vid_fullscreen 1` at a mode the display lists
-(the desktop mode, so no mode switch). Windowed boots at 2560x1440,
+on all four in the rows above. That is the fullscreen row of the table, in
+`vid_fullscreen 1` at a mode the display lists (the desktop mode, so no mode
+switch). It is not the display's native size. 2560x1440 is the desktop's
+size in points, and the panel is 5120x2880 pixels (`Mode  0:
+5120x2880@60.00`, and `system_profiler` above). On macOS the engine does not
+honour `vid_highdpiaware` (TASK98's table, "scaled drawable"), so the
+drawable is 2560x1440 pixels, which the system scales up two times on the
+panel. A 5120x2880 drawable needs either a Retina-native drawable (TASK118,
+#273) or a fullscreen switch to the 5120x2880 mode, which was not tried here
+(every switch away from the desktop mode failed, above). Windowed boots at 2560x1440,
 2560x1400, 2304x1296, 2048x1152, 1920x1200, 1600x1200 and 2560x1080 on
 `ref_soft` also logged `Drawable size:` equal to the request, but that line
 echoes the request when the window is not high-DPI aware, so it does not
@@ -2788,8 +2795,9 @@ show that the window got the size; no windowed number was taken above
 **Not measured, now.** A rate of the three `CAMetalLayer` renderers that
 says anything about the renderer (every row reads the 120 fps ceiling, which
 needs explaining first); a windowed timedemo above 1920x1080, or at the
-non-16:9 modes 1920x1200, 1600x1200 and 2560x1080 (booted only; the
-fullscreen row covers the native size); a fullscreen mode other than the
+non-16:9 modes 1920x1200, 1600x1200 and 2560x1080 (booted only); any
+rate at the panel's native 5120x2880 pixels (above: the drawable is
+2560x1440 at most); a fullscreen mode other than the
 desktop mode (the switch fails, above); `ref_gl1` against a GPU timestamp
 (`gl_finish 1`). The load at the start of three runs was above 3.5 (1280x720
 run 1: `gl1-metal` 5.61 and `metal` 4.21; `water` run 3: `gl1` 4.45,
