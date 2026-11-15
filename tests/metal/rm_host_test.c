@@ -152,10 +152,10 @@ test_ledger(void)
 	char buf[256];
 	const char *want_live =
 		"ref_metal: teardown: 3 live objects (created/destroyed: device 1/0, queue 1/0, view 0/0, "
-		"texture 3/2, buffer 0/0, state 0/0), 0 unreleased, 0 unmatched";
+		"texture 3/2, buffer 0/0, state 0/0, rt 0/0), 0 unreleased, 0 unmatched";
 	const char *want_clean =
 		"ref_metal: teardown: 0 live objects (created/destroyed: device 1/1, queue 1/1, view 0/0, "
-		"texture 3/3, buffer 0/0, state 0/0), 0 unreleased, 1 unmatched";
+		"texture 3/3, buffer 0/0, state 0/0, rt 0/0), 0 unreleased, 1 unmatched";
 	size_t n;
 
 	memset(&l, 0, sizeof(l));
@@ -179,6 +179,14 @@ test_ledger(void)
 	CHECK(l.destroyed[RM_OBJ_VIEW] == 0 && l.unmatched == 1);
 	CHECK(rm_ledger_live(&l) == 0);
 	CHECK(rm_ledger_format(&l, buf, sizeof(buf)) && strcmp(buf, want_clean) == 0);
+
+	/* a ray-tracing object (TASK53) is a kind of its own, live until it is destroyed */
+	rm_ledger_create(&l, RM_OBJ_RT);
+	CHECK(rm_ledger_live(&l) == 1 && rm_ledger_kind_live(&l, RM_OBJ_RT) == 1 && !rm_ledger_clean(&l));
+	CHECK(rm_ledger_format(&l, buf, sizeof(buf)) && strstr(buf, ", rt 1/0), ") != NULL);
+	rm_ledger_destroy(&l, RM_OBJ_RT);
+	CHECK(rm_ledger_live(&l) == 0 && rm_ledger_kind_live(&l, RM_OBJ_RT) == 0);
+	l.created[RM_OBJ_RT] = l.destroyed[RM_OBJ_RT] = 0;
 
 	/* objects released but still alive count as live */
 	l.unreleased = 2;
@@ -728,7 +736,16 @@ test_ledger_restarts(void)
 	for (k = 0; k < RM_OBJ_KINDS; k++)
 	{
 		CHECK(rm_ledger_kind_live(&l, (rm_obj_kind_t)k) == 0);
-		CHECK(l.created[k] > 0 && l.created[k] == l.destroyed[k]);
+
+		/* a session with every ray-tracing setting at its default makes no ray-tracing object (TASK53) */
+		if (k == RM_OBJ_RT)
+		{
+			CHECK(l.created[k] == 0 && l.destroyed[k] == 0);
+		}
+		else
+		{
+			CHECK(l.created[k] > 0 && l.created[k] == l.destroyed[k]);
+		}
 	}
 
 	CHECK(l.created[RM_OBJ_STATE] == 2 * (LEDGER_STATES + RMB_SMP_CLASSES * 2));

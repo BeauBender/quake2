@@ -782,6 +782,38 @@ has) is not drawn.
   values: any other value is `0`. Other renderers do not have it. Saved with the
   configuration; applies from the next frame.
 
+The `r_rt_*` cvars belong to the Metal renderer's ray tracing, which is
+being built and changes nothing drawn yet: with them set, the renderer
+builds acceleration structures for the world, the doors and platforms
+and every model the frame lists (not only those in view, since a model
+out of view can still cast into it), which nothing reads. On a GPU without ray
+tracing they do nothing (the renderer says so once).
+
+* **r_rt_gunshadow**: When set to `1`, the view weapon is part of the
+  ray-traced scene, so that later ray-traced effects shade it and let it
+  cast shadows; with `0` (the default) it is left out, since from the
+  player's eye it would shadow most of the view. It is not part of the
+  scene either way when `hand` is `2` (the weapon is not drawn). Saved
+  with the configuration.
+
+* **r_rt_stats**: When set to `1`, the Metal renderer builds its
+  ray-tracing acceleration structures and prints what they hold: when a
+  map is loaded, the world's triangles by material (world, sky, water,
+  translucent), the doors and platforms with their triangles, the bytes
+  of each structure kind and the GPU time of the build; and when the map
+  is left, `r_rt_stats` is set back to `0` or the renderer shuts down, a
+  summary of the frames since the map was loaded, with the GPU time of the
+  per-frame work (the models' updates and the rebuild of the scene's
+  instance structure: least, median, 95th percentile and most) and the
+  busiest frame's models and triangles. `2` also prints one line per
+  frame: the instances, the models' triangles, how many model structures
+  were built and updated, what was left out (beams, entities without a
+  model, sprites, the view weapon, shells, models it cannot build) and the
+  bytes held. Nothing is drawn differently. The objects it makes are
+  counted as `rt` in the teardown line. With `0` (the default) nothing is
+  built and nothing is allocated for ray tracing. Applies from the next
+  frame.
+
 
 ## Gamepad
 
