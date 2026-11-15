@@ -59,6 +59,7 @@ static int path, raster, material;
 static float proj_u[16];
 static float jitter[2];
 static rm_viewport_t vp_frame, vp_render;
+static int render_w, render_h;
 
 void
 RM_GB_Init(void)
@@ -199,6 +200,8 @@ RM_GB_Begin(rm_view_t *view, int stencil, const float *clear_rgba)
 
 	raster = (path == RM_GB_PATH_GBUFFER);
 	RM_GB_WorldMotion(MTL_GB_MAT_WORLD);
+	render_w = rw;
+	render_h = rh;
 	return 1;
 }
 
@@ -209,6 +212,25 @@ RM_GB_Path(void)
 }
 
 int
+float
+RM_GB_PixelScale(void)
+{
+	return (path == RM_GB_PATH_FORWARD) ? 1.0f : rm_gb_pixel_scale(&vp_frame, &vp_render);
+}
+
+void
+RM_GB_TargetSize(int *w, int *h)
+{
+	if (path == RM_GB_PATH_FORWARD)
+	{
+		rmb_target_size(w, h);
+		return;
+	}
+
+	*w = render_w;
+	*h = render_h;
+}
+
 RM_GB_Raster(void)
 {
 	return raster;

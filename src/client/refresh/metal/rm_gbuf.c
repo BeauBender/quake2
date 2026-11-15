@@ -186,6 +186,33 @@ rm_gb_jitter(const float *m, float jx, float jy, double vw, double vh, float *ou
 	}
 }
 
+float
+rm_gb_pixel_scale(const rm_viewport_t *frame, const rm_viewport_t *render)
+{
+	double k;
+
+	if (!frame || !render || !isfinite(frame->h) || !isfinite(render->h) || !(frame->h > 0) || !(render->h > 0))
+	{
+		return 1.0f;
+	}
+
+	k = render->h / frame->h;
+	return (k < 1.0) ? (float)k : 1.0f;
+}
+
+void
+rm_gb_point_scale(rm_points_t *s, float k)
+{
+	if (!s || !isfinite(k) || !(k > 0.0f) || !(k < 1.0f))
+	{
+		return;
+	}
+
+	s->size *= k;
+	s->min *= k;
+	s->max *= k;
+}
+
 int
 rm_gb_show(float v)
 {

@@ -103,6 +103,22 @@ void rm_gb_render_rect(const rm_viewport_t *vp, int fw, int fh, int rw, int rh, 
 void rm_gb_jitter(const float *m, float jx, float jy, double vw, double vh, float *out);
 
 /*
+ * The pixels of the view at the render size (render, rm_gb_render_rect's
+ * of frame) per pixel of the frame's view: the ratio of the heights, as
+ * gl1 scales a particle by the height. 1 where either is missing, not
+ * above 0 or not finite, or render is not below frame.
+ */
+float rm_gb_pixel_scale(const rm_viewport_t *frame, const rm_viewport_t *render);
+
+/*
+ * Point state s of the frame's size at the render size: the size and
+ * the bounds of GL_POINT_SIZE_MIN and _MAX (in pixels) times k
+ * (rm_gb_pixel_scale), the rest kept. A k that is not above 0, not
+ * finite or not below 1 leaves s as it is.
+ */
+void rm_gb_point_scale(rm_points_t *s, float k);
+
+/*
  * The development view of v (r_rt_gbuffer_show, rmb_gbuf_set_show):
  * v clamped to 0 to RM_GB_SHOW_MAX before it is truncated, so no value
  * reaches the conversion outside an int's range; 0 for a value that is

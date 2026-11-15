@@ -59,6 +59,16 @@ int RM_GB_Begin(rm_view_t *view, int stencil, const float *clear_rgba);
 /* the path of the view being drawn, FORWARD outside one */
 int RM_GB_Path(void);
 
+/*
+ * The pixels of the view being drawn per frame pixel (rm_gb_pixel_scale):
+ * below 1 on a MOTION or GBUFFER view drawn below the frame's size, which
+ * every size in frame pixels follows; 1 otherwise.
+ */
+float RM_GB_PixelScale(void);
+
+/* the size of the target the view is drawn into: the render size in a MOTION or GBUFFER view, else rmb_target_size */
+void RM_GB_TargetSize(int *w, int *h);
+
 /* the G-buffer raster is open (the world's dynamic draws keep their normals) */
 int RM_GB_Raster(void);
 

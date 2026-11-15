@@ -123,6 +123,71 @@ test_render_rect(void)
 	CHECK(o.x == 0 && o.y == 1 && o.w == 319 && o.h == 238 && o.znear == 0.25 && o.zfar == 1);
 }
 
+/*
+ * A view drawn below the frame's size: its pixels per frame pixel (the heights', as gl1 scales a
+ * particle by the height), and the point sizes in frame pixels scaled into it
+ */
+static void
+test_pixel_scale(void)
+{
+	rm_viewport_t f = { 0, 0, 640, 480, 0, 1 }, r;
+	rm_points_t s, k;
+
+	rm_gb_render_rect(&f, 640, 480, 320, 240, &r);
+	CHECK(rm_gb_pixel_scale(&f, &r) == 0.5f);
+	CHECK(rm_gb_pixel_scale(&f, &f) == 1.0f);
+	rm_gb_render_rect(&f, 640, 480, 480, 360, &r);
+	CHECK(rm_gb_pixel_scale(&f, &r) == 0.75f);
+	/* the heights', not the widths': 641 x 481 at 0.5 is 321 x 241 */
+	f.w = 641;
+	f.h = 481;
+	rm_gb_render_rect(&f, 641, 481, 321, 241, &r);
+	CHECK(near(rm_gb_pixel_scale(&f, &r), 241.0f / 481.0f, 1e-6f));
+	/* a sub-rectangle of the frame (viewsize) takes its own heights */
+	f.x = 64;
+	f.y = 48;
+	f.w = 512;
+	f.h = 384;
+	rm_gb_render_rect(&f, 640, 480, 320, 240, &r);
+	CHECK(rm_gb_pixel_scale(&f, &r) == 0.5f);
+	/* nothing to scale by: 1 */
+	r.h = 0;
+	CHECK(rm_gb_pixel_scale(&f, &r) == 1.0f);
+	r.h = NAN;
+	CHECK(rm_gb_pixel_scale(&f, &r) == 1.0f);
+	r.h = 192;
+	f.h = 0;
+	CHECK(rm_gb_pixel_scale(&f, &r) == 1.0f);
+	f.h = INFINITY;
+	CHECK(rm_gb_pixel_scale(&f, &r) == 1.0f);
+	f.h = 384;
+	r.h = 768;   /* never above the frame's: rm_gb_render_size */
+	CHECK(rm_gb_pixel_scale(&f, &r) == 1.0f);
+	CHECK(rm_gb_pixel_scale(NULL, &r) == 1.0f && rm_gb_pixel_scale(&f, NULL) == 1.0f);
+
+	/* gl1's sizes: 4.5 pixels, at least 2, at most 40; at half the size they are half */
+	rm_point_state_init(&s);
+	rm_point_set_size(&s, 4.5f);
+	rm_point_set_range(&s, 2, 40);
+	s.att[1] = 0.25f;
+	s.smooth = 1;
+	k = s;
+	rm_gb_point_scale(&k, 0.5f);
+	CHECK(k.size == 2.25f && k.min == 1.0f && k.max == 20.0f);
+	CHECK(k.att[0] == s.att[0] && k.att[1] == s.att[1] && k.att[2] == s.att[2] && k.smooth == s.smooth);
+	/* 1, or no scale: unchanged, byte for byte */
+	k = s;
+	rm_gb_point_scale(&k, 1);
+	CHECK(memcmp(&k, &s, sizeof(k)) == 0);
+	rm_gb_point_scale(&k, 0);
+	rm_gb_point_scale(&k, -0.5f);
+	rm_gb_point_scale(&k, NAN);
+	rm_gb_point_scale(&k, INFINITY);
+	rm_gb_point_scale(&k, 2);   /* never above the frame's */
+	CHECK(memcmp(&k, &s, sizeof(k)) == 0);
+	rm_gb_point_scale(NULL, 0.5f);
+}
+
 /* r_rt_gbuffer_show: 0 to 6, clamped before the conversion, 0 for a value that is not finite */
 static void
 test_show(void)
@@ -596,6 +661,7 @@ main(void)
 	test_render_rect();
 	test_jitter();
 	test_show();
+	test_pixel_scale();
 	test_motion();
 	test_motion_camera();
 	test_normal();
