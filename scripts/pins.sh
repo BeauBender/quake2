@@ -278,16 +278,24 @@ stale_engine() {
     done
 }
 scenario_hash() {
+    local hd; hd=$(hidpi) || exit 1
     { cat "$scen_dir/$1.cfg"; echo "${PINS_DEMO:-demo1.dm2} ${PINS_WIDTH:-640}x${PINS_HEIGHT:-480} every=${PINS_EVERY:-30}"; demo_sum
       if [ -n "${PINS_SEED:-}" ]; then echo "seed=$PINS_SEED"; fi
-      if [ "$(hidpi)" = 1 ]; then echo "hidpi=1"; fi; } | cksum | awk '{print $1}'
+      if [ "$hd" = 1 ]; then echo "hidpi=1"; fi; } | cksum | awk '{print $1}'
 }
-# hidpi: the vid_highdpiaware the engine runs with, 1 only for PINS_HIDPI=1
-hidpi() { if [ "${PINS_HIDPI:-0}" = 1 ]; then echo 1; else echo 0; fi; }
-# check_hidpi: PINS_HIDPI is unset, empty, 0 or 1
-check_hidpi() {
-    case ${PINS_HIDPI:-0} in 0|1) ;; *) die "PINS_HIDPI must be 0 or 1, got '$PINS_HIDPI'";; esac
+# hidpi: the vid_highdpiaware the engine runs with: 1 for PINS_HIDPI=1, 0
+# when it is unset, empty or 0. Any other value dies here, whether or not
+# the caller ran check_hidpi; callers take the value into a variable with
+# "|| exit 1", so that a death inside $(...) stops them as well.
+hidpi() {
+    case ${PINS_HIDPI-} in
+        ''|0) echo 0 ;;
+        1) echo 1 ;;
+        *) die "PINS_HIDPI must be 0 or 1, got '$PINS_HIDPI'" ;;
+    esac
 }
+# check_hidpi: PINS_HIDPI is unset, empty, 0 or 1 (hidpi's own test)
+check_hidpi() { hidpi > /dev/null; }
 # demo_sum: the checksum of PINS_DEMO when it lies beside the engine binary,
 # where make-demo writes it, so a demo made again never shares a pin id with
 # the one it replaced; nothing for a demo found only in the game data
@@ -351,9 +359,10 @@ build_args() {
         engine_args+=(+set "$name" "$value")
     done < "$scen_dir/$scenario.cfg"
     set +f
+    local hd; hd=$(hidpi) || exit 1
     engine_args+=(+set vid_renderer "$(engine_renderer "$renderer")" +set vid_fullscreen 0 +set r_mode -1
         +set r_customwidth "${PINS_WIDTH:-640}" +set r_customheight "${PINS_HEIGHT:-480}"
-        +set s_initsound 0 +set vid_highdpiaware "$(hidpi)"
+        +set s_initsound 0 +set vid_highdpiaware "$hd"
         +set pins_dir "$out" +set pins_scenario "$scenario" +set pins_capture "${PINS_EVERY:-30}")
     if [ "${PINS_TRACE:-1}" != 0 ]; then engine_args+=(+set pins_record trace.q2r); fi
     if [ -n "${PINS_SEED:-}" ]; then engine_args+=(+set pins_seed "$PINS_SEED"); fi
@@ -456,7 +465,8 @@ cmd_record() {
     local reason="" n=0 run_status=0 run_timedout=0
     rm -rf "$out"; mkdir -p "$out"
     # the settings the pin id does not spell out, written before the engine runs
-    echo "hidpi $(hidpi)" > "$out/settings.txt"
+    local hd; hd=$(hidpi) || exit 1
+    echo "hidpi $hd" > "$out/settings.txt"
     run_engine "$bin" "$out" "$limit"
     judge_pin "$out" "$renderer" "$limit"
     if [ -n "$reason" ]; then
@@ -1455,9 +1465,10 @@ check_demo_place() {
 # Fills engine_args for the make-demo run of <script copy name>: a local,
 # windowed, silent single-player game that execs the script; pin capture is off
 build_demo_args() {
+    local hd; hd=$(hidpi) || exit 1
     engine_args=(-datadir "${PINS_BASEDIR:-}" -portable +set vid_renderer soft +set vid_fullscreen 0 +set r_mode -1
         +set r_customwidth "${PINS_WIDTH:-640}" +set r_customheight "${PINS_HEIGHT:-480}" +set s_initsound 0
-        +set vid_highdpiaware "$(hidpi)"
+        +set vid_highdpiaware "$hd"
         +set vid_pauseonfocuslost 0 +set deathmatch 0 +set coop 0 +exec "$1")
 }
 
@@ -2388,7 +2399,16 @@ st_hidpi() { # TASK118: vid_highdpiaware 0 unless PINS_HIDPI=1, which alone chan
     [ "$(PINS_HIDPI=1 scenario_hash world)" != "$(scenario_hash world)" ] || st_fail "PINS_HIDPI=1 must change the pin id" || return 1
     for v in 2 yes true -1 01 00 ' 1' '1 ' '1;quit'; do
         if (PINS_HIDPI="$v" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "PINS_HIDPI='$v' must be refused by record"; return 1; fi
+        # hidpi fails closed by itself, for a caller that skips check_hidpi
+        if (PINS_HIDPI="$v" hidpi) >/dev/null 2>&1; then st_fail "hidpi must die on PINS_HIDPI='$v'"; return 1; fi
+        if (PINS_HIDPI="$v" scenario_hash world) >/dev/null 2>&1; then st_fail "scenario_hash must die on PINS_HIDPI='$v'"; return 1; fi
+        if (PINS_HIDPI="$v" build_args gl1 world /x; echo "${engine_args[*]}") >/dev/null 2>&1; then
+            st_fail "build_args must die on PINS_HIDPI='$v'"; return 1; fi
+        if (PINS_HIDPI="$v" build_demo_args water; echo "${engine_args[*]}") >/dev/null 2>&1; then
+            st_fail "build_demo_args must die on PINS_HIDPI='$v'"; return 1; fi
     done
+    [ "$(PINS_HIDPI= hidpi)" = 0 ] && [ "$(PINS_HIDPI=0 hidpi)" = 0 ] && [ "$(PINS_HIDPI=1 hidpi)" = 1 ] &&
+        [ "$(unset PINS_HIDPI; hidpi)" = 0 ] || st_fail "hidpi must give 0 unset, empty or 0 and 1 for 1" || return 1
     # the record writes the value beside its frames, the id tells the two apart
     PINS_BASEDIR="$tmp/gd" cmd_record gl1 world >/dev/null || st_fail "record must pass" || return 1
     PINS_HIDPI=1 PINS_BASEDIR="$tmp/gd" cmd_record gl1 world >/dev/null || st_fail "record with PINS_HIDPI=1 must pass" || return 1
