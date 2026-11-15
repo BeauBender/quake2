@@ -1037,6 +1037,7 @@ CLIENT_OBJS_ := \
 	src/client/input/gyro.o \
 	src/client/menu/menu.o \
 	src/client/menu/qmenu.o \
+	src/client/menu/vidrules.o \
 	src/client/menu/videomenu.o \
 	src/client/refresh/files/imgdecode.o \
 	src/client/sound/ogg.o \
@@ -1493,6 +1494,7 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(TESTDIR)/src/client/cl_parse.o \
 	$(TESTDIR)/src/client/cl_screen.o \
 	$(TESTDIR)/src/client/cl_upscale.o \
+	$(TESTDIR)/src/client/menu/vidrules.o \
 	$(TESTDIR)/src/client/sound/sound.o \
 	$(TESTDIR)/src/client/vid/glimp_hidpi.o \
 	$(TESTDIR)/src/client/refresh/files/surf.o \
