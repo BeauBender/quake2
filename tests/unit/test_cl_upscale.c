@@ -18,6 +18,8 @@
  * =======================================================================
  */
 
+#include <limits.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -146,6 +148,18 @@ TEST(upscale_out_name)
 	T_EQ_INT(CL_UpscaleOutName(name, out, sizeof(out)), 1);
 	T_EQ_INT((int)strlen(out), 63);
 
+	/* MAX_QPATH bounds it with a larger buffer too */
+	{
+		char big[MAX_QPATH + 16];
+
+		memset(name, 'a', sizeof(name));
+		memcpy(name + 60, ".wal", 5);
+		T_EQ_INT(CL_UpscaleOutName(name, big, sizeof(big)), 0);
+		memcpy(name + 59, ".wal", 5);
+		T_EQ_INT(CL_UpscaleOutName(name, big, sizeof(big)), 1);
+		T_EQ_INT((int)strlen(big), 63);
+	}
+
 	/* the caller's buffer bounds it as well */
 	T_EQ_INT(CL_UpscaleOutName("abc.wal", out, 8), 1);
 	T_EQ_STR(out, "abc.png");
@@ -244,6 +258,14 @@ TEST(upscale_git_tree_walk_order)
 	T_EQ_INT(CL_UpscaleInGitTree("/", synth_exists, &t), 0);
 	T_EQ_INT(t.ncalls, 1);
 	T_EQ_STR(t.calls[0], "/.git");
+	/* repeated and trailing slashes are dropped, not looked at twice */
+	memset(&t, 0, sizeof(t));
+	t.entries = none;
+	T_EQ_INT(CL_UpscaleInGitTree("/a//b/", synth_exists, &t), 0);
+	T_EQ_INT(t.ncalls, 3);
+	T_EQ_STR(t.calls[0], "/a//b/.git");
+	T_EQ_STR(t.calls[1], "/a/.git");
+	T_EQ_STR(t.calls[2], "/.git");
 }
 
 /* UPSCALE_GIT_DEPTH components are walked to the root; with one more the walk stops short and refuses */
@@ -282,6 +304,48 @@ TEST(upscale_git_tree_depth_bound)
 	T_EQ_INT(in_synth(big, none), 1);
 }
 
+/*
+ * An oracle for the on-disk test, apart from the code under test: an
+ * entry named .git in the real path of dir or in a directory above it.
+ */
+static int
+oracle_in_git(const char *dir)
+{
+	char real[PATH_MAX + 8], probe[PATH_MAX + 16];
+	size_t len;
+
+	if (!realpath(dir, real))
+	{
+		return 1;
+	}
+
+	for (len = strlen(real); ; )
+	{
+		struct stat st;
+
+		snprintf(probe, sizeof(probe), "%.*s/.git", (int)(len == 1 ? 0 : len), real);
+		if (lstat(probe, &st) == 0)
+		{
+			return 1;
+		}
+
+		if (len <= 1)
+		{
+			return 0;
+		}
+
+		while (len > 1 && real[len - 1] != '/')
+		{
+			len--;
+		}
+
+		if (len > 1)
+		{
+			len--;
+		}
+	}
+}
+
 /* the same refusal on disk, on a tree under the scratch directory */
 TEST(upscale_git_tree_on_disk)
 {
@@ -310,6 +374,23 @@ TEST(upscale_git_tree_on_disk)
 	T_EQ_INT(CL_UpscaleDirInGitTree(path), 1);
 	/* a relative path is resolved first */
 	T_EQ_INT(CL_UpscaleDirInGitTree("."), CL_UpscaleDirInGitTree(getcwd(path, sizeof(path))));
+	/* outside the synthetic repositories: as the oracle says (0 unless the scratch directory is in a work tree) */
+	snprintf(path, sizeof(path), "%s/upscale/plain/c", t_tmpdir());
+	T_EQ_INT(CL_UpscaleDirInGitTree(path), oracle_in_git(path));
+	/* the real path is walked: a link into a repository is inside it */
+	{
+		char target[MAX_OSPATH];
+
+		snprintf(target, sizeof(target), "%s/upscale/repo/a", t_tmpdir());
+		snprintf(path, sizeof(path), "%s/upscale/plain/link", t_tmpdir());
+		T_REQUIRE(symlink(target, path) == 0);
+		T_EQ_INT(CL_UpscaleDirInGitTree(path), 1);
+		/* and a link out of one, to the plain tree, is where it leads */
+		snprintf(target, sizeof(target), "%s/upscale/plain/c", t_tmpdir());
+		snprintf(path, sizeof(path), "%s/upscale/repo/out", t_tmpdir());
+		T_REQUIRE(symlink(target, path) == 0);
+		T_EQ_INT(CL_UpscaleDirInGitTree(path), oracle_in_git(target));
+	}
 	/* a directory that does not exist has no real path: refused */
 	snprintf(path, sizeof(path), "%s/upscale/missing/x", t_tmpdir());
 	T_EQ_INT(CL_UpscaleDirInGitTree(path), 1);
