@@ -2283,7 +2283,10 @@ case now reads a 1 through such an index, so it fails without a sanitizer too.
 #### HighDPI windows on the bare-metal host (TASK118)
 
 From TASK118 the window code asks for `SDL_WINDOW_HIGH_PIXEL_DENSITY` on the `cocoa` and
-`uikit` drivers at `vid_highdpiaware 1` (the default), and the pin harness passes `+set vid_highdpiaware 0` unless `PINS_HIDPI=1`. Engine:
+`uikit` drivers at `vid_highdpiaware 1` (the default), and the pin harness passes `+set vid_highdpiaware 0` unless `PINS_HIDPI=1`.
+The harness records the value in `settings.txt` (`record`) and `replay.txt` (`replay`), as
+`doc/100_renderpins.md` says: the card's "manifest" is these two files, because `manifest.txt` is
+the engine's frame list, which the harness counts against the frames. Engine:
 `bdda9812` (no file under `src` or the Makefile changes after it on the branch; the pin ids read
 `bdda98128905`); base: `3103b1f3` (`main`; `git diff c01bd7d2 3103b1f3 -- src Makefile` is empty),
 built from `git archive` in a scratch directory with `make client game ref_soft ref_metal` and
@@ -2345,9 +2348,12 @@ points. The client adds the motion only in the game (`SDL_EVENT_MOUSE_MOTION` in
 enters; with a menu or the console open in a window the mouse is released (`windowed_mouse 0`,
 `CL_UpdateWindowedMouse`; `in_grab 2`) and the system pointer moves in points. So the same mouse
 travel crosses the window, and turns the view, by the same amount at both values, and no input
-code changed. The unit test `hidpi_menu_spans_the_window_in_points` pins the one thing the density
-could move: the menu in its own units spans the window's 640x480 points at both values. No
-physical mouse was moved and no input was synthesized for this.
+code changed. The card's menu cursor line is therefore closed by analysis of that code path, not
+by a measurement: the menu cursor is the selection marker that keys move (`M_DrawCursor`,
+`menu.c`), and `input/sdl3.c` counts mouse motion only while `cls.key_dest == key_game`. No
+physical mouse was moved, no input was synthesized, and no unit test stands in for it (the one the
+first round called the measurement modelled the drawable itself and could not fail; rework 1
+removed it).
 
 *Restarts under `ASAN=1`.* `make ASAN=1 client game ref_metal ref_soft` and `make ASAN=1 ref_gl1
 WITH_METAL_SHIM=yes`; a console script (deleted after): `developer 1`, `map base1`, 120 `wait`s,
@@ -2358,6 +2364,7 @@ WITH_METAL_SHIM=yes`; a console script (deleted after): `developer 1`, `map base
 |---|---|---|---|---|
 | `metal`, 10 | 0 | 11, alternating 1280x960 and 640x480 | 0 | 11, each `0 live objects ... 0 unreleased, 0 unmatched` |
 | `soft`, 4 | 0 | 5, alternating 1280x960 and 640x480 | 0 | none (not loaded) |
+| `soft`, 10 (rework 1, engine `d7aa5540`) | 0 | 11, alternating 1280x960 and 640x480; the 10 `RE_InitContext: buffer` lines alternate 640x480 and 1280x960 with them | 0 | none (not loaded) |
 | `gl1-metal`, 4 | 0 | 5, alternating 1280x960 and 640x480 | 0 | none (not loaded) |
 
 *The fullscreen window* (not an acceptance line of the card), `vid_fullscreen 2`,
@@ -2365,17 +2372,82 @@ WITH_METAL_SHIM=yes`; a console script (deleted after): `developer 1`, `map base
 mode -2: 2560x1440` and `Drawable size: 5120x2880` and its screenshot is 5120x2880, the native
 size; at `r_mode 4` `metal` and `gl1-metal` keep 640x480 (drawable line and screenshot) and `soft`
 853x480, which the base's `soft` prints and writes too. The soft renderer's buffer takes the
-drawable only where `SWimp_SetMode` does (TASK118 changed `RE_InitContext` to that rule): before,
-a HighDPI fullscreen window at any mode but `-2` got a buffer of the window's pixels under a `vid`
+drawable only where the client's `viddef` does (rework 1 below: both call
+`GLimp_DrawableInPixels` on the `fullscreen` value `SWimp_SetMode` passes): before TASK118, a
+HighDPI fullscreen window at any mode but `-2` got a buffer of the window's pixels under a `vid`
 of the mode's size. Status 0 and no sanitizer line in every run.
+
+*Rework 1: the soft buffer and the client's size from one rule.* The first round sized the `soft`
+buffer (`RE_InitContext`) and `vid` (the tail of `SWimp_SetMode`) from the `vid_fullscreen` cvar,
+while the client sizes `viddef` (`GLimp_InitGraphics`) from the `fullscreen` value `SWimp_SetMode`
+passes. Two inputs set them apart, both archived cvars a server can also send with `stufftext`:
+`vid_fullscreen 2` with `r_mode 99` (the mode is invalid, `RE_SetMode` retries `r_mode 4` with
+fullscreen 0 while the cvar stays 2: a HighDPI 640x480-point window), and `vid_fullscreen 2.5`
+(passed as 2, compared as 2.5). Since rework 1 `soft` calls the client's own function,
+`GLimp_DrawableInPixels` (`glimp_hidpi.c`, now linked into `ref_soft` as well), on the value it
+passed (`SWimp_DrawableInPixels`), and `RE_RenderFrame` clamps `r_newrefdef`'s rectangle to
+`vid_buffer_width` x `vid_buffer_height` before anything draws (`R_ClampViewToBuffer`), a no-op
+whenever the two sizes agree. The window's `SDL_WINDOW_FULLSCREEN` flag cannot stand in for the
+value: a first attempt read it, and on this host a window made fullscreen does not report it yet
+when `RE_InitContext` runs (`vid_fullscreen 2.5` then got a 5120x2880 buffer under a 5333x3000
+`viddef` again, held inside the buffer by the clamp). The one case left where the client decides on
+another value is its own fallback when SDL cannot make a `vid_fullscreen 2` window at all (it then
+makes a 640x480 window with fullscreen 0); the clamp covers it. Every run below: `make ASAN=1
+client game ref_soft` (plus `ref_metal`, and `ref_gl1 WITH_METAL_SHIM=yes`), `vid_highdpiaware 1`,
+`+set developer 1` on the command line, `map base1`, 120 `wait`s, `screenshot`, 30 `wait`s, `quit`; screen
+unlocked, no other `quake2`; `RE_InitContext: buffer WxH` is a `developer 1` line rework 1 added.
+The base is `d7e230a4` (the first round's head) from `git archive`, with only that one print added:
+
+| Build, input | Status | `Drawable size` | `soft` buffer | Screenshot | Sanitizer |
+|---|---|---|---|---|---|
+| base, `vid_fullscreen 2`, `r_mode 99` | 134 | 1280x960 | 640x480 | none | `heap-buffer-overflow`, `WRITE of size 7680 ... 0 bytes after 5120-byte region`, in `R_BeginEdgeFrame sw_edge.c:99` (`newedges`, one entry per buffer column, cleared for 960 rows), allocated in `SWimp_CreateRender` |
+| base, `vid_fullscreen 2.5`, `r_mode -1` at 2560x3000 | 134 | 5333x3000 | 5120x2880 | none | `SEGV on unknown address ... caused by a WRITE memory access` in `D_DrawSpan sw_scan.c:520`, from `D_DrawSpansPow2` (`ASAN_OPTIONS=allow_user_segv_handler=0`; with the engine's own handler the run dies on signal 11 in `D_DrawSpansPow2`) |
+| head `d7aa5540`, the same two | 0, 0 | 1280x960, 5333x3000 | 1280x960, 5333x3000 | 1280x960, 5333x3000 | none |
+| head without the clamp | 0, 0 | 1280x960, 5333x3000 | 1280x960, 5333x3000 | 1280x960, 5333x3000 | none |
+| the clamp, the decision reverted to the cvar | 0, 0 | 1280x960, 5333x3000 | 640x480, 5120x2880 | 640x480, 5120x2880 | none |
+
+A 3000-row mode is used for the second input because only a `viddef` taller than the panel's 2880
+pixels exceeds the buffer there: at `vid_fullscreen 2` `SWimp_SetMode` widens the mode to the
+desktop's aspect (2560x3000 to 5333x3000), and the buffer of the 2.5 run is the drawable of the
+fullscreen window, 5120x2880. ASAN reports the second as a `SEGV`, not a `heap-buffer-overflow`:
+the two frames are one allocation of 5120 x 2880 x 2 = 29,491,200 bytes, exactly 1800 pages of
+16 KiB, so no redzone follows it: rows past 2880 run from one frame into the other or past the
+end of the allocation, where the write faults. The last row is the property the clamp alone gives: a wrong
+picture (the view in the buffer's part), not a write past it.
+
+The same two inputs on the renderers this card does not change, `MTL_DEBUG_LAYER=1` (`Metal API
+Validation Enabled`, no other validation line), status 0 and no sanitizer line each:
+
+| Renderer, input | `Drawable size` | Screenshot |
+|---|---|---|
+| `metal`, `vid_fullscreen 2`, `r_mode 99` | 1280x960 | 640x480 |
+| `metal`, `vid_fullscreen 2.5`, 2560x3000 | 2560x3000 | 5120x2880 |
+| `gl1-metal`, `vid_fullscreen 2`, `r_mode 99` | 1280x960 | 640x480 |
+| `gl1-metal`, `vid_fullscreen 2.5`, 2560x3000 | 2560x3000 | 5120x2880 |
+
+Both mismatch the client the same way, on the GPU side: `src/client/refresh/metal/rm_main.c:188`
+and `src/client/refresh/gl1/gl1_main.c:1400` decide the frame size from the `vid_fullscreen` cvar,
+not the value passed (left for their owner: the metal and shim trees are another card's, gl1's own
+files are out of this card's scope). `metal`'s teardown stays at 0 live objects in both runs.
+
+The re-run at engine `d7aa5540` (pin ids `d7aa55409e0d-*`; after it no file under `src` or the
+Makefile changes on the branch), `PINS_HIDPI` unset, against the same base records as above:
+`soft` in every scenario 23 of 23 frames byte-identical (`cinematic` 12 of 12), `worst=0
+worst_bad=0`, 640x480; `metal` and `gl1-metal` `world` 23 of 23 byte-identical. The size script on
+`soft`: `vid_highdpiaware 1` `Drawable size: 1280x960` and a 1280x960 screenshot, `0` 640x480 and
+640x480, status 0; `PINS_HIDPI=1 pins.sh record soft world`: 23 frames of 1280x960,
+`settings.txt` `hidpi 1`. Ten `vid_restart` cycles on `soft` under `ASAN=1`: the restarts table
+above. Scripts, logs, screenshots and the two proof diffs are in `<artifacts>/TASK118/rework1/`
+(`fallback-final.tsv`, `compare-summary.tsv`, `sizes-summary.tsv`, `restarts/asan-soft.log`).
 
 | Acceptance line (TASK118) | Verdict |
 |---|---|
 | `PINS_HIDPI` unset: pins unchanged against the base, score 0, bad 0 | pass, 24 of 24 pairs byte-identical |
 | `vid_highdpiaware 1`, 640x480 window: screenshot, capture and `Drawable size` 1280x960, 2D scale 2 | pass on all three renderers |
 | `vid_highdpiaware 0`: 640x480 | pass on all three renderers |
-| The menu cursor crosses the screen in the same mouse travel | pass by the code path above and the unit test; no pointer is drawn, nothing to scale |
-| Ten `vid_restart` cycles switching the value under `ASAN=1` | pass: status 0, 11 teardowns at 0 live objects |
+| The menu cursor crosses the screen in the same mouse travel | closed by analysis of the code path above, not measured: no pointer is drawn, mouse motion counts only in the game, nothing to scale |
+| Ten `vid_restart` cycles switching the value under `ASAN=1` | pass: status 0, 11 teardowns at 0 live objects (`metal`); `soft` 10 cycles at status 0 in rework 1 |
+| (rework 1) `soft` buffer equal to the client's size in the invalid-mode fallback and at `vid_fullscreen 2.5` | pass under `ASAN=1`: the base overflows, the head and each half alone do not |
 
 ### Closing TASK27 on the build host
 
