@@ -229,8 +229,11 @@ the 1080p path on the M6 is met by the 7.3 ms sum and not by the 9.3 ms
 measured frame (row RT9 (2)). RT10 sets the default per cell by the
 default policy of the next subsection, replacing this table; until then
 a lower `r_rt_scale` is the player's choice. Section 8's host has a 60 Hz
-display, so a 120 Hz class is measured on the T1 host's built-in display
-(TASK106, #249, and RT10).
+display, so a 120 Hz class's presented rate is measured only on the T1
+host's built-in display, for apple7 (TASK106, #249, and RT10). For
+apple9 at the 120 Hz classes RT10 takes GPU times on T2 at those sizes
+as windows, and no card measures the presented rate (the next
+subsection, unmeasured costs and default policy item 4).
 
 **Other MetalFX scalers.** `MTLFXSpatialScaler` costs 1.668 ms in frame at
 1080p input and 1.653 ms at 2560 x 1440, against the temporal scaler's
@@ -343,7 +346,7 @@ model.
 | 1920 x 1080 at 60 Hz | 2,073,600 (2.07) | 16.7 ms | 15.0 ms | none as a display |
 | 2560 x 1440 at 60 Hz | 3,686,400 (3.69) | 16.7 ms | 15.0 ms | none as a display |
 | 3840 x 2160 at 60 Hz | 8,294,400 (8.29) | 16.7 ms | 15.0 ms | none |
-| 3024 x 1964 at 120 Hz | 5,939,136 (5.94) | 8.3 ms | 7.5 ms | the owner's apple7 Mac has a built-in 120 Hz display of one of these two classes; TASK106 (#249) records which |
+| 3024 x 1964 at 120 Hz | 5,939,136 (5.94) | 8.3 ms | 7.5 ms | the owner's apple7 Mac has a built-in 120 Hz display of one of these two classes; TASK106 (#249) records which. No apple9 host has a 120 Hz display: T2 makes the size as a window, for GPU time only (RT10) |
 | 3456 x 2234 at 120 Hz | 7,720,704 (7.72) | 8.3 ms | 7.5 ms | as above |
 | 6016 x 3384 at 60 Hz | 20,358,144 (20.36) | 16.7 ms | 15.0 ms | none |
 
@@ -584,6 +587,7 @@ apple7's maximum is not measured (TASK106).
 | The interpolator | D | TASK111 (#265), as a development option |
 | Every cost on apple7 | all | TASK106 (#249), then RT10 on the T1 host |
 | Every cost on apple8 | all | none |
+| apple9 at the 120 Hz classes: the presented rate at 120 Hz (the default policy's `timedemo` condition, item 1) | all | none (no apple9 host with a 120 Hz display; a finding for the orchestrator, as apple8's row is). The GPU time at those two sizes is RT10's, as windows on T2, judged against the cell's own 7.5 ms target (policy item 4) |
 | The render-stage path | all | RT9 |
 | Hit shading of reflections (section 8 traced only) | all | RT6 (TASK58, #100), RT10 |
 | A real map's geometry instead of the soup | all | RT1 (TASK53, #95), RT10 |
@@ -793,8 +797,10 @@ configuration:
    7.5 ms at 120 Hz; and when its `timedemo` rate with `r_vsync 1` is
    the refresh rate, because the presented rate also depends on CPU time
    and presentation (TASK97's Finding 1 saw a fixed cost of 3 to 4 ms a
-   frame on the `CAMetalLayer` path). The 10 % headroom is a design
-   choice, not a measurement; the owner may set another.
+   frame on the `CAMetalLayer` path). Where no host of the family shows
+   the class's refresh, item 4 says what is judged instead. The 10 %
+   headroom is a design choice, not a measurement; the owner may set
+   another.
 2. An option below the quality floor in any region of any case (its SSIM,
    or its still-camera instability) is not offered as a default there. No
    floor value exists yet, since no image quality is measured: RT12
@@ -808,8 +814,16 @@ configuration:
 4. A default needs a frame time measured on that family at the class's
    output size. A class no host can output keeps the default of the
    largest measured class below it, flagged as modelled, and a modelled
-   cell can only rule an option out. apple8 takes apple7's defaults until
-   it is measured; nothing measured says whether they hold there.
+   cell can only rule an option out. A class whose size a host can make
+   as a window but whose refresh no host of that family shows (apple9 at
+   the two 120 Hz classes: T2's display is 60 Hz) does not take a 60 Hz
+   class's default, which was chosen against 15.0 ms. Its options are
+   judged by item 1's GPU-time test alone, on GPU times taken at the
+   class's size as a window (RT10), against that cell's own target, 7.5
+   ms; the `timedemo` condition is recorded as not measurable there, and
+   the default is flagged as set without it. apple8 takes apple7's
+   defaults until it is measured; nothing measured says whether they
+   hold there.
 
 *Stages and cards.*
 
@@ -955,7 +969,7 @@ green, pins as stated.
 | RT13 (TASK25) | Option E and the hybrids (section 2, "Targets per GPU family and display, and the options", TASK116): the world refdef's 3D frame rasterized at its rectangle; each effect traced, accumulated and denoised (RT7) at its own scale of that rectangle, one archived cvar per effect, its default as section 2 states ("The effect scales": 1 for every effect, E off, until RT10), with its `doc/040_cvarlist.md` entry; a joint bilateral upsample of each effect to the rectangle on depth, normal and material id, with a counted fallback where no sample matches; with RT11's scaler on, the effect scales apply to the internal size (the hybrid); a refdef with `RDF_NOWORLDMODEL` takes no effect (depends RT7, RT8, RT11) | each effect scale's default as section 2 states (1 for every effect), so that with `r_rt_scale` and every effect scale at their defaults the frame is configuration A; every effect off: all gl1 pins unchanged; every effect scale at 1: the four effect scenarios' pins unchanged, and the frame byte-identical to RT11's at `r_rt_scale 1`; with an effect scale below 1, section 5's double-count invariant holds at the output pixels; the upsample's weights are host-tested with mutants killed (a sample across a depth step or a material-id change gets no weight; the fallback is counted on the `r_rt_stats 1` line); each effect's history resets on section 2's events that do not concern the scaler and on a change of that effect's scale, shown by the same line, and the model view and a `fov` change from 90 to 30 reset nothing; where the device has no ray tracing (the VM) the effect scales do nothing and the report line says so; on T1 and T2 at each host's output, the GPU time of the raster, resolve and forward pass at the output size and of each effect's upsample, and for each effect alone and every effect on in section 2's configuration E (every effect scale at 1/2, `r_rt_scale 1`) and configuration H (`r_rt_scale 0.5`, every effect scale at 1/2), the GPU time per presented frame and the `timedemo` rate, recorded in `docs/audits/rt-performance.md` |
 | RT9 (TASK25) | Render-stage ray queries on apple9, compute path kept for apple6 to apple8, at the traced size of the option in use: under A and the hybrids, shadows and AO in the resolve shader at the internal size; under E, in a fragment pass at each effect's size, since E's resolve runs at the output size (section 4) (depends RT7, RT11, RT13) | identical pins on both paths at 0.005 (pins run at scale 1, `r_rt_scale 1` and every effect scale 1, temporal accumulation off); in the T2 host's cell of the target matrix (apple9, 5120 x 2880 at 60 Hz, section 2), for each effect alone and every effect on, in section 2's configuration A (the default `r_rt_scale`, every effect scale at 1) and configuration E (every effect scale at 1/2, `r_rt_scale 1`), both paths' GPU time per presented frame at the 95th percentile and `timedemo` rate with `r_vsync 1`, the first frames of a process excluded, recorded against the cell's 16.7 ms frame and the default policy's 15.0 ms target; the render-stage path holds the cell by the default policy (section 2) with every effect on in at least one of configurations A and E; the times, the option and the internal, effect and output sizes recorded in `docs/audits/rt-performance.md`, the compute path beside them. Tracing at native pixels (option C) is not the target: 36.8 ms on the M6 (section 8, verdicts table, row RT9 (1)) |
 | RT12 (TASK25) | Image quality of options A, E and the hybrids on real ray-traced frames, by section 2's image-quality program (depends RT11, RT13 and the owner's acceptance of the RT look, section 5) | for the four effect scenarios and `world`, each case of the program (still and moving camera, fast turns, disocclusion, muzzle flashes, lightstyle changes) is named with its frames from the trace, replayed at 60 and at 120 frames a second; the candidates (each in a configuration section 2 names, "Configurations a test names", with its scales recorded: A (the default `r_rt_scale`, every effect scale at 1) and A at one other `r_rt_scale` with every effect scale at 1; E (every effect scale at 1/2, `r_rt_scale 1`); H (`r_rt_scale 0.5`, every effect scale at 1/2); and B and D where TASK111 and TASK113, #265 and #267, make them selectable) run at the T2 host's output and are compared with the converged reference at the same output from the same replay; PSNR, SSIM, the perceptual metric if it can be built with the toolchain alone (or its absence stated), still-camera stability and event response, per region (textured surfaces, silhouettes and thin geometry, particles, sprites and beams, water, sky, the view weapon, 2D and the HUD), recorded in this document per option, case and region (they include the cases option A's subsection lists); a quality floor proposed from the distributions and recorded here, which the owner may change on INFORM12; nothing derived from game data is committed; a default that should change is a finding for RT10 |
-| RT10 (TASK25) | Acceleration-structure refit vs rebuild tuning, GPU timestamps, and the default option and scale per cell of the target matrix (depends RT9, RT12 and TASK106, #249) | per-pass timings table in `docs/audits/rt-performance.md` for apple7 (T1) and apple9 (T2) at each host's output and at the 60 Hz classes it can show as a window, including the G-buffer raster with its motion vectors at the internal and at the output size, RT7's accumulation and denoiser, the scaler and the upsample; model R checked again on each family's own columns, as section 2 checks it on section 8's, before it fills a cell no host can output; the default option and scale per cell (family and display class, each effect configuration) set by section 2's default policy from those timings, RT12's scores and the quality floor recorded in section 2, replacing section 2's design defaults (option A's per-family `r_rt_scale` heights and every effect scale at 1); the frame-time spread at the fixed defaults over the scenarios, and whether it misses the target (a finding for a dynamic-resolution card if it does); no pin change |
+| RT10 (TASK25) | Acceleration-structure refit vs rebuild tuning, GPU timestamps, and the default option and scale per cell of the target matrix (depends RT9, RT12 and TASK106, #249) | per-pass timings table in `docs/audits/rt-performance.md` for apple7 (T1) and apple9 (T2) at each host's output and at the 60 Hz classes it can show as a window, including the G-buffer raster with its motion vectors at the internal and at the output size, RT7's accumulation and denoiser, the scaler and the upsample; on T2 also at the two 120 Hz classes' sizes (3024 x 1964 and 3456 x 2234) as windows, the same table and the GPU time per presented frame at the 95th percentile, with the default policy's `timedemo` condition recorded as not measurable there (T2's display is 60 Hz; GPU time does not depend on the display) and those cells judged against their own 7.5 ms target by section 2's policy item 4; model R checked again on each family's own columns, as section 2 checks it on section 8's, before it fills a cell no host can output; the default option and scale per cell (family and display class, each effect configuration) set by section 2's default policy from those timings, RT12's scores and the quality floor recorded in section 2, replacing section 2's design defaults (option A's per-family `r_rt_scale` heights and every effect scale at 1); the frame-time spread at the fixed defaults over the scenarios, and whether it misses the target (a finding for a dynamic-resolution card if it does); no pin change |
 
 Out of scope, decided after RT10 per the plan: path tracing (Phase G),
 global illumination beyond AO, RT for particles or beams. No RT row and
