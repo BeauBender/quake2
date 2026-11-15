@@ -822,8 +822,8 @@ is.
   light, `6` the depth; `1` to `3` and `5` only with `r_rt_gbuffer`. `0`
   (the default) shows the picture; a value above `6` counts as `6`, a
   value that is not a finite number counts as `0`, and a fraction is cut
-  to the whole number below it. Applies from the next
-  frame.
+  to the whole number below it. Cheat-protected: reset to `0` in
+  multiplayer. Applies from the next frame.
 
 * **r_rt_gunshadow**: When set to `1`, the view weapon is part of the
   ray-traced scene, so that later ray-traced effects shade it and let it
@@ -877,10 +877,11 @@ is.
   classes: black no light in range, blue in range but adding nothing,
   green traced and lit, red shadowed from at least one light. The view
   weapon, models drawn over the world, particles and translucent surfaces
-  are left out of these views. `0` (the default) shows the picture; a
+  are left out of these views; on a frame with no dynamic light both are
+  the view with none in range. `0` (the default) shows the picture; a
   value above `2` counts as `2`, one that is not a finite number as `0`,
-  and a fraction is cut to the whole number below it. Applies from the
-  next frame.
+  and a fraction is cut to the whole number below it. Cheat-protected:
+  reset to `0` in multiplayer. Applies from the next frame.
 
 * **r_rt_stats**: When set to `1`, the Metal renderer builds its
   ray-tracing acceleration structures and prints what they hold: when a
