@@ -52,6 +52,7 @@
 
 #include "header/local.h"
 #include "header/rm_rtscene.h"
+#include "header/rm_gbufscene.h"
 
 #define MAX_MOD_KNOWN 512
 
@@ -80,14 +81,44 @@ RM_FreeWorld(rm_world_t *w)
 	rmb_buffer_free(w->vbuf);
 	rmb_buffer_free(w->ibuf);
 	rmb_buffer_free(w->sbuf);
+	rmb_buffer_free(w->nbuf);
 	rmb_texture_free(w->lmtex);
 	free(w->verts);
+	free(w->normals);
 	free(w->indices);
 	free(w->recs);
 	free(w->scratch);
 	free(w->wverts);
 	free(w->wpolys);
 	free(w);
+}
+
+/*
+ * The world's normals buffer for the G-buffer raster (TASK54), made on the
+ * first view of the map that asks for it, so the default path never makes
+ * or reads it: the upload is committed ahead of the frame that draws with
+ * it (rmb_upload_flush). 0 without a world, without the normals (out of
+ * memory at load) or when the buffer cannot be made, which is not asked
+ * again on this map; the raster then draws no static world
+ * (rmb_gbuf_bind_world).
+ */
+int
+RM_WorldNormals(void)
+{
+	rm_world_t *w = r_worldmodel ? r_worldmodel->world : NULL;
+
+	if (!w || !w->normals || !w->vbuf)
+	{
+		return 0;
+	}
+
+	if (!w->nbuf && !w->ntried)
+	{
+		w->ntried = 1;
+		w->nbuf = rmb_buffer_static(w->normals, w->size.verts * sizeof(w->normals[0]));
+	}
+
+	return w->nbuf;
 }
 
 /*
@@ -780,6 +811,8 @@ RM_BuildWorld(model_t *mod)
 	w->indices = malloc(ib ? ib : 1);
 	w->recs = malloc(sb ? sb : 1);
 	w->scratch = malloc(ib ? ib : 1);
+	/* the G-buffer's alone (TASK54): without them the world is drawn as ever, the raster draws no world */
+	w->normals = size.verts ? malloc(size.verts * sizeof(w->normals[0])) : NULL;
 
 	if (!w->verts || !w->indices || !w->recs || !w->scratch)
 	{
@@ -860,6 +893,13 @@ RM_BuildWorld(model_t *mod)
 
 			/* the face's rectangle in its slice, for the filtered lightmap (all 0 without a lightmap) */
 			rm_lm_face_rect(fa->light_s, fa->light_t, lm_s, lm_t, v->lmrect);
+
+			/* the G-buffer's normal of the vertex: its surface's (TASK54) */
+			if (w->normals)
+			{
+				rm_surf_normal(fa->plane->normal, fa->flags & SURF_PLANEBACK, w->normals[vat + i]);
+				w->normals[vat + i][3] = 0.0f;
+			}
 		}
 
 		n = rm_world_fan(vat, lnumverts, w->indices + iat, size.indices - iat);
@@ -1408,6 +1448,7 @@ RI_EndRegistration(void)
 	model_t *mod;
 
 	RM_RT_MapLoaded();   /* the map's acceleration structures, when ray tracing is on (TASK53) */
+	RM_GB_Reset();       /* no previous frame for the G-buffer's motion (TASK54) */
 
 	if (Mod_HasFreeSpace() && R_ImageHasFreeSpace())
 	{

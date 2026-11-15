@@ -859,14 +859,18 @@ endif
 
 $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/rm_rt.metal \
-		src/client/refresh/metal/common/mtl_shader_math.h
+		src/client/refresh/metal/rm_gbuf.metal \
+		src/client/refresh/metal/common/mtl_shader_math.h \
+		src/client/refresh/metal/common/mtl_gbuf_math.h
 	@echo "===> METAL $<"
 	${Q}command -v xcrun >/dev/null 2>&1 || { echo "ref_metal needs xcrun and the Xcode Metal toolchain" >&2; exit 1; }
 	${Q}xcrun -f metal >/dev/null 2>&1 || { echo "ref_metal needs the Metal compiler (xcrun metal); install the Xcode Metal toolchain" >&2; exit 1; }
 	${Q}mkdir -p $(BUILDDIR)/ref_metal $(@D)
 	${Q}xcrun -sdk macosx metal -c $< -o $(BUILDDIR)/ref_metal/rm_shaders.air
 	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_rt.metal -o $(BUILDDIR)/ref_metal/rm_rt.air
-	${Q}xcrun -sdk macosx metallib $(BUILDDIR)/ref_metal/rm_shaders.air $(BUILDDIR)/ref_metal/rm_rt.air -o $@
+	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_gbuf.metal -o $(BUILDDIR)/ref_metal/rm_gbuf.air
+	${Q}xcrun -sdk macosx metallib $(BUILDDIR)/ref_metal/rm_shaders.air $(BUILDDIR)/ref_metal/rm_rt.air \
+		$(BUILDDIR)/ref_metal/rm_gbuf.air -o $@
 
 # Header dependencies: the Darwin CFLAGS carry no -MMD (see above), but
 # the Apple clang this target needs writes them for C and Objective-C
@@ -1208,6 +1212,8 @@ endif
 REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_draw.o \
 	src/client/refresh/metal/rm_effects.o \
+	src/client/refresh/metal/rm_gbuf.o \
+	src/client/refresh/metal/rm_gbufscene.o \
 	src/client/refresh/metal/rm_image.o \
 	src/client/refresh/metal/rm_light.o \
 	src/client/refresh/metal/rm_lightmap.o \
@@ -1224,6 +1230,7 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_warp.o \
 	src/client/refresh/metal/rmb_device.o \
 	src/client/refresh/metal/rmb_encode.o \
+	src/client/refresh/metal/rmb_gbuf.o \
 	src/client/refresh/metal/rmb_resource.o \
 	src/client/refresh/metal/rmb_rt.o \
 	src/client/refresh/metal/common/mtl_matrix.o \

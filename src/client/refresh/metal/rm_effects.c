@@ -35,6 +35,7 @@
  */
 
 #include "header/local.h"
+#include "header/rm_gbufscene.h"
 #include "common/mtl_matrix.h"
 
 /* one draw's vertices and indices: the beam is the largest (a strip of RM_BEAM_VERTS) */
@@ -298,6 +299,7 @@ static int
 R_DrawPoints(const rm_view_t *view, int n)
 {
 	rmb_alias_draw_t d;
+	rm_points_t pts;
 	float identity[16];
 	int tw = 0, th = 0;
 	long q;
@@ -309,14 +311,23 @@ R_DrawPoints(const rm_view_t *view, int n)
 	rm_point_set_range(&r_points, r_points.min,
 			rm_particle_cap(r_point_max_base, (float)r_newrefdef.height, metal_particle_cap->value == 1.0f ? 1 : 0));
 
-	/* R_SetupGL's glViewport, GL's bottom-left origin, which the quads are snapped in */
-	rmb_target_size(&tw, &th);
-	r_points.vx = view->vp.x;
-	r_points.vy = th - view->vp.y - view->vp.h;
-	r_points.vw = view->vp.w;
-	r_points.vh = view->vp.h;
+	/*
+	 * The sizes above are in frame pixels: a G-buffer or motion view drawn
+	 * below the frame's size (r_rt_gbuffer_scale, TASK54) takes them in its
+	 * own, so a particle covers as much of the view as at the frame's size
+	 * once the view is stretched. Elsewhere the scale is 1 and pts is r_points.
+	 */
+	pts = r_points;
+	rm_gb_point_scale(&pts, RM_GB_PixelScale());
 
-	q = rm_point_quads(&r_points, view->world, view->mvp, p_in, n, p_verts, 4 * RM_MAX_PARTICLES,
+	/* R_SetupGL's glViewport, GL's bottom-left origin in the target the view is drawn into, which the quads are snapped in */
+	RM_GB_TargetSize(&tw, &th);
+	pts.vx = view->vp.x;
+	pts.vy = th - view->vp.y - view->vp.h;
+	pts.vw = view->vp.w;
+	pts.vh = view->vp.h;
+
+	q = rm_point_quads(&pts, view->world, view->mvp, p_in, n, p_verts, 4 * RM_MAX_PARTICLES,
 			p_idx, 6 * RM_MAX_PARTICLES);
 
 	if (q <= 0)

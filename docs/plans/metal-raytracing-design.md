@@ -974,6 +974,158 @@ With every effect
 cvar at 0 steps 1, 3, 4 and 7 are skipped and step 5 reduces to the stock product,
 which is the state that must keep every gl1 pin.
 
+### The G-buffer as RT2 built it (TASK54)
+
+**Three paths.** A world view takes one of three paths (`rm_gb_path`,
+`rm_gbuf.c`; a view without the world, the menu's player model, always
+takes the first):
+
+- *forward*: the renderer before RT2, unchanged;
+- *forward plus depth and motion* (`r_rt_motion 1`, or a scaler's request
+  once TASK111 makes one): the stock passes and pipelines' colour, with a
+  kept `depth32Float` attachment and one `rg16Float` motion-vector
+  attachment, and none of the other four;
+- *G-buffer* (`r_rt_gbuffer 1`, or any ray-traced effect on once RT3 adds
+  one): step 2 (the raster), step 5 (the resolve), step 6 (the forward
+  pass), then the 2D as before.
+
+The raster draws the world (lightmapped and `r_fullbright` surfaces,
+material 1; opaque warped water, 3; the sky box, 4), the opaque brush
+models (1, and 3 for their warped faces) and the opaque alias models but
+the view weapon and shells (2). Everything else is the forward pass's
+(`rm_gb_entity_split`, held by the host test), in the stock order within
+that pass: the view weapon, sprites, beams, null models and the stencil
+shadows of the raster's alias models, then the translucent entities, the
+flash blobs, the particles, the translucent surfaces (material 5 is not
+written: they are blended over the resolved image) and the screen blend.
+The forward pass loads the raster's depth, so it is occluded as before.
+The stock order holds within the forward pass only: every rastered model
+is drawn before the forward pass starts, so the beams and the stencil
+shadows, which the stock view interleaves with the models in list order,
+now come after all of them. A beam that writes no depth, followed in the
+list by a model behind it, is overdrawn by that model in the stock view
+and blended over it here.
+
+The light attachment holds the other factor of each pixel's stock
+product: the lightmap sample as `rm_fragment_world_lm` reads it (bilinear
+or `metal_lightmap_filter`'s bicubic), the alias model's CPU vertex light,
+the warp's colour, or white for the sky and `r_fullbright`. While no
+ray-traced dynamic light is on, the lightmap holds gl1's dynamic lights
+(`R_BuildLightMap`), so the attachment does too and the resolve's dlight
+term is 0; RT3 stops adding them to the lightmap when its effect is on,
+and from then the attachment is the static lightmap. The resolve
+(`mtl_gb_resolve`, `common/mtl_gbuf_math.h`, held by the host test) takes
+`mtl_world_lm` with the frame's lightmap environment (`R_FlushChain`'s)
+for material 1 and `GL_MODULATE` for 2 to 4, and keeps the target's colour
+where no draw wrote (material 0). The world normal is the per-vertex copy
+of the surface's (`rm_world_t.normals`, `rm_surf_normal`), computed at map
+load and uploaded by the first G-buffer view of the map (`RM_WorldNormals`),
+so the default path makes no buffer for it and does not depend on one;
+without it the raster draws no static world. An alias normal
+is the two frames' `anorms.h` entries lerped by `backlerp` and normalised
+(`rm_gb_alias_normal`), both turned into world space by the model's
+rotation.
+
+**The G-buffer contract (for TASK111).** The back end's accessors are in
+`header/rm_gbuf.h` (`rmb_gbuf.m`):
+
+| Attachment | Texture | Format, size | Written by |
+|---|---|---|---|
+| depth | `rmb_gbuf_depth()` | `MTLPixelFormatDepth32Float`, the render size (`rmb_gbuf_size`) | every opaque draw (raster and forward pass; on the motion path the forward pass) |
+| motion vector | `rmb_gbuf_motion()` | `MTLPixelFormatRG16Float`, the render size | the raster's draws and the forward pass's opaque draws; blended draws leave it |
+| world normal, material id, light, albedo | internal (`rmb_gbuf.m`) | `RGB10A2Unorm` (n x 0.5 + 0.5, alpha 1, 0 where none), `R8Uint`, `RGBA8Unorm`, `RGBA8Unorm` | the raster |
+
+- *Frame.* The current frame's world view, rasterized with the jittered
+  projection (`r_rt_jitter_x`, `r_rt_jitter_y`, pixels, +x right, +y down,
+  default 0: `rm_gb_jitter` moves a point by that much and leaves its
+  depth); the motion vectors come from the unjittered current and
+  previous projections, so they exclude the jitter (MetalFX's convention).
+- *Valid* from the end of the raster (the motion path: of the forward
+  pass) until the frame's command buffer ends; the next frame's view
+  writes them again. They are made again when the render size or the path
+  changes, so a consumer holds no reference across frames.
+- *Motion units and sign.* Pixels of the render-size texture, where the
+  point was minus where it is (previous minus current), +x right, +y down
+  (the texture's rows): `MTLFXTemporalScaler`'s `motionVectorScaleX` and
+  `motionVectorScaleY` are 1 (a scaler that wants current minus previous
+  takes -1). A pixel no draw wrote has (0, 0); so does a point behind
+  either camera's plane.
+- *Depth.* GL's clip depth mapped to [0, 1] (`mtl_gl_clip_z`): 0 at the
+  near plane (`gl_znear`), 1 at the far plane, not reversed
+  (`depthReversed` NO), cleared to 1; the view weapon's `RF_DEPTHHACK`
+  draws keep their 0 to 0.3 depth range.
+- *Render size.* Every attachment and the 3D pass take their size from
+  the render size (`rm_gb_render_size`), today the frame's;
+  `r_rt_gbuffer_scale` (development) sets a smaller one, and the view is
+  then stretched bilinearly into the frame's view rectangle (a stand-in
+  for the scaler) before the 2D, which stays at the output size. Every
+  size of the 3D pass in frame pixels follows the render size: the
+  particles' point size, its bounds and the pixel grid they are snapped
+  to (`rm_gb_pixel_scale`, `rm_gb_point_scale`, `RM_GB_TargetSize`), so a
+  particle covers as much of the view as at the frame's size once it is
+  stretched. Nothing else in the 3D pass is sized in pixels: beams, flash
+  blobs, the sky, shadows and the screen blend are in world or view
+  units, and no draw sets a line width.
+
+**Previous-frame transforms.** `rm_gb_hist_t` (`header/rm_gbuf.h`;
+`rm_gbufscene.c` holds one) keeps the last world view's modelview,
+unjittered projection, the view weapon's unjittered projection, origin and
+time, and, per entity, its model, origin, old origin, angles, frames,
+`backlerp` and flags. `entity_t` carries no stable id, so each entity of
+this frame is matched, in list order, to the nearest unmatched previous
+entity with the same model and the same `RF_WEAPONMODEL` bit whose origin
+lies within 256 units (`rm_gb_match`). An alias model's previous
+positions are its matched entity's frames lerped with that entity's
+`backlerp`, origin and angles (`R_AliasMotion`, `rm_mesh.c`); a moving brush
+model's previous matrix is its matched entity's; the camera's is the
+previous view's. Left out: an entity without a match (new this frame, a
+teleport past 256 units) takes its own state as the previous one, so its
+pixels carry the camera's motion alone; the first frame after a map load
+or a `vid_restart` (`RM_GB_Reset`) has no previous view, so every vector
+is 0; a camera cut or the player's teleport is not detected here (RT11
+adds those reset events); sprites and beams, drawn with the world's
+matrices, carry the camera's motion, and a null model and the particles
+carry none.
+
+**The off state: measured, and the choice (an owner decision, reversible).**
+Timed on engine commit `4bf077a4`, before the card was rebased onto
+`aa5ab641`. What came in after it does not touch the timed draws:
+
+- TASK119 adds 2D options, all off by default.
+- FIX61 sizes the frame by the client's rule, with no change in behaviour.
+- The rework sizes particles in render pixels only below the frame's size
+  (the runs were at scale 1).
+- The world normals buffer is now made by the first G-buffer view, not at
+  map load. That is one upload, before the warm frames.
+
+The runs were taken with every effect off, against `origin/main`'s
+`ref_metal` at the time (`d9e76e40`, with the same `MTL_GPU_TIME` measuring
+aid), alternated run by run, three rounds, the `particles` scenario (world,
+entities, view weapon, particles, dynamic lights, blend), on the M6
+(apple9). GPU time of the frame's drawing
+per frame, warm (each run's frames 101 to the last 20), the median of the
+three runs' medians, with the range of their 10th and 90th percentiles:
+
+| Path | 640 x 480 | 1920 x 1080 | 5120 x 2880 | Attachments added at 5120 x 2880 |
+|---|---|---|---|---|
+| base | 0.105 ms (0.086 to 0.132) | 0.200 ms (0.178 to 0.268) | 1.091 ms (0.933 to 1.619) | none |
+| forward | 0.107 ms (0.087 to 0.137) | 0.200 ms (0.178 to 0.268) | 1.103 ms (0.980 to 1.800) | none |
+| forward + depth and motion | 0.135 ms (0.109 to 0.165) | 0.304 ms (0.272 to 0.434) | 1.728 ms (1.502 to 4.935) | 132.7 MB by the formats, 136.2 MB allocated |
+| G-buffer | 0.243 ms (0.211 to 0.295) | 0.904 ms (0.755 to 1.066) | 6.796 ms (5.493 to 8.852) | 324.4 MB by the formats, 332.4 MB allocated |
+
+At 640 x 480 the motion path's attachments are 3.0 MB allocated and the
+G-buffer's 7.3 MB; at 1920 x 1080, 19.3 MB and 47.1 MB. `timedemo` ran at
+the display's rate on every path (120 fps at 640 x 480, 60 at the other
+two, whatever `r_vsync` said, as earlier runs on this host found), so it
+does not tell the paths apart. **Choice:** the G-buffer path is not free
+with everything off (6.2 times the forward path's GPU time and 332 MB at
+5120 x 2880), so the forward path stays, unchanged, when every effect is
+off; the G-buffer path is taken when any effect is on or `r_rt_gbuffer` is
+set, and the forward path with depth and motion when `r_rt_motion` (or,
+later, a scaler) asks for it. Reversing it is one line in `rm_gb_path`
+(an effects-off view returning `RM_GB_PATH_GBUFFER`). The numbers and how
+they were taken are in `docs/plans/metal-port-harness.md`, TASK54.
+
 ## 4. Hardware gating
 
 | Check at startup (`MTLDevice`) | Enables |
