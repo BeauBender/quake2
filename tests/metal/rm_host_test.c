@@ -624,14 +624,17 @@ test_targets_rebuild(void)
 /*
  * One session of ref_metal as the ledger sees it, in the module's order
  * (N10): rmb_open's device and queue, InitContext's view and resources
- * (the library, 24 pipelines, 4 depth-stencil states, 10 samplers made
- * twice: R_InitImages and the first R_TextureMode, the staging ring),
+ * (the library, the 2D and 3D pipelines, the depth-stencil states and the
+ * samplers, made again by R_TextureMode; the staging ring), as the
+ * teardown lines of the N10 sweep count them,
  * the images, the first frame's two targets and three rings, a mode
  * change (both targets again, nothing else), a readback, then
  * RI_Shutdown: the images, the detach (rings, targets, readback buffer),
  * the resources, the view, the queue and the device. With drop set, the
  * last readback buffer is not destroyed.
  */
+#define LEDGER_STATES (1 + RM_PIPE_2D_COUNT + RM_PIPE_3D_COUNT + RMB_DS_COUNT + RMB_SMP_CLASSES * 2)
+
 static void
 ledger_session(rm_ledger_t *l, int drop)
 {
@@ -641,12 +644,12 @@ ledger_session(rm_ledger_t *l, int drop)
 	rm_ledger_create(l, RM_OBJ_QUEUE);
 	rm_ledger_create(l, RM_OBJ_VIEW);
 
-	for (i = 0; i < 1 + 24 + 4 + 10; i++)
+	for (i = 0; i < LEDGER_STATES; i++)
 	{
 		rm_ledger_create(l, RM_OBJ_STATE);
 	}
 
-	for (i = 0; i < 10; i++)
+	for (i = 0; i < RMB_SMP_CLASSES * 2; i++)
 	{
 		rm_ledger_destroy(l, RM_OBJ_STATE);
 		rm_ledger_create(l, RM_OBJ_STATE);
@@ -696,7 +699,7 @@ ledger_session(rm_ledger_t *l, int drop)
 
 	rm_ledger_destroy(l, RM_OBJ_BUFFER);
 
-	for (i = 0; i < 1 + 24 + 4 + 10; i++)
+	for (i = 0; i < LEDGER_STATES; i++)
 	{
 		rm_ledger_destroy(l, RM_OBJ_STATE);
 	}
@@ -728,7 +731,7 @@ test_ledger_restarts(void)
 		CHECK(l.created[k] > 0 && l.created[k] == l.destroyed[k]);
 	}
 
-	CHECK(l.created[RM_OBJ_STATE] == 2 * (1 + 24 + 4 + 20));
+	CHECK(l.created[RM_OBJ_STATE] == 2 * (LEDGER_STATES + RMB_SMP_CLASSES * 2));
 	CHECK(rm_ledger_live(&l) == 0 && l.unmatched == 0 && rm_ledger_clean(&l));
 
 	/* the second restart drops the readback buffer's destroy */
