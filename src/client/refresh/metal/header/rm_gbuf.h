@@ -103,6 +103,15 @@ void rm_gb_render_rect(const rm_viewport_t *vp, int fw, int fh, int rw, int rh, 
 void rm_gb_jitter(const float *m, float jx, float jy, double vw, double vh, float *out);
 
 /*
+ * The development view of v (r_rt_gbuffer_show, rmb_gbuf_set_show):
+ * v clamped to 0 to RM_GB_SHOW_MAX before it is truncated, so no value
+ * reaches the conversion outside an int's range; 0 for a value that is
+ * not finite.
+ */
+#define RM_GB_SHOW_MAX 6
+int rm_gb_show(float v);
+
+/*
  * The state of an entity the previous frame is matched on, from its
  * entity_t (rm_gbufscene.c): its model, where it is and was, its angles,
  * its two frames and lerp, and its flags.

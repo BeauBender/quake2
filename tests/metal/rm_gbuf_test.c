@@ -6,6 +6,7 @@
  * tests/check-ref-metal.sh; prints "rm_gbuf_test: N checks, M failed".
  */
 
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -120,6 +121,25 @@ test_render_rect(void)
 	vp.znear = 0.25;
 	rm_gb_render_rect(&vp, 640, 480, 320, 240, &o);
 	CHECK(o.x == 0 && o.y == 1 && o.w == 319 && o.h == 238 && o.znear == 0.25 && o.zfar == 1);
+}
+
+/* r_rt_gbuffer_show: 0 to 6, clamped before the conversion, 0 for a value that is not finite */
+static void
+test_show(void)
+{
+	CHECK(rm_gb_show(0) == 0);
+	CHECK(rm_gb_show(1) == 1);
+	CHECK(rm_gb_show(4.75f) == 4);
+	CHECK(rm_gb_show(6) == 6);
+	CHECK(rm_gb_show(7) == RM_GB_SHOW_MAX);
+	CHECK(rm_gb_show(1e10f) == RM_GB_SHOW_MAX);
+	CHECK(rm_gb_show(FLT_MAX) == RM_GB_SHOW_MAX);
+	CHECK(rm_gb_show(-1) == 0);
+	CHECK(rm_gb_show(-1e10f) == 0);
+	CHECK(rm_gb_show(0.5f) == 0);
+	CHECK(rm_gb_show(NAN) == 0);
+	CHECK(rm_gb_show(INFINITY) == 0);
+	CHECK(rm_gb_show(-INFINITY) == 0);
 }
 
 static void
@@ -575,6 +595,7 @@ main(void)
 	test_bytes();
 	test_render_rect();
 	test_jitter();
+	test_show();
 	test_motion();
 	test_motion_camera();
 	test_normal();

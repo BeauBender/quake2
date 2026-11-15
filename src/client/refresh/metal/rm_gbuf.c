@@ -186,6 +186,17 @@ rm_gb_jitter(const float *m, float jx, float jy, double vw, double vh, float *ou
 	}
 }
 
+int
+rm_gb_show(float v)
+{
+	if (!isfinite(v) || !(v > 0.0f))
+	{
+		return 0;
+	}
+
+	return (v < (float)RM_GB_SHOW_MAX) ? (int)v : RM_GB_SHOW_MAX;
+}
+
 void
 rm_gb_hist_reset(rm_gb_hist_t *h)
 {

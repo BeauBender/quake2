@@ -252,7 +252,7 @@ RM_GB_End(void)
 		return;
 	}
 
-	rmb_gbuf_set_show(isfinite(r_rt_gbuffer_show->value) ? (int)r_rt_gbuffer_show->value : 0);
+	rmb_gbuf_set_show(rm_gb_show(r_rt_gbuffer_show->value));
 	rmb_gbuf_view_end(&vp_render, &vp_frame);
 	rm_gb_hist_end(&hist);
 	path = RM_GB_PATH_FORWARD;
