@@ -27,29 +27,21 @@ jobs:
       with:
         # The pull request checkout is a merge commit: HEAD^1 is the base.
         fetch-depth: 2
-    - name: Does the change touch code or the build
+    - name: Is the change documentation only
       id: diff
-      run: |
-        # Pushes to main always analyse. A pull request analyses when it
-        # changes C, Objective-C, Metal shader, header or build files,
-        # or a workflow.
-        if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
-          echo "analyze=true" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-        files=$(git diff --name-only HEAD^1 HEAD)
-        echo "$files"
-        if printf '%s\n' "$files" | grep -Eq '^(src/|third_party/|\.github/|Makefile$|tests/.*\.[ch]$)|\.make$'; then
-          echo "analyze=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "analyze=false" >> "$GITHUB_OUTPUT"
-        fi
+      # Every push to main analyses. A pull request skips the analyses only
+      # when every changed path is Markdown under doc/ or docs/ or at the
+      # top level; anything else, or anything unexpected, analyses. The
+      # script prints counts only, never a file name.
+      run: bash .github/scripts/codeql-changes.sh
   analyze:
     name: Analyze
-    # A job skipped by this condition reports "skipped", which counts as
-    # passing for a required check.
+    # Runs unless the changes job said false: a failed or missing decision
+    # analyses. A skipped matrix job may report under its unexpanded name
+    # rather than as "Analyze (c-cpp)", so read the real check names from a
+    # run before making any of them required.
     needs: changes
-    if: needs.changes.outputs.analyze == 'true'
+    if: ${{ !cancelled() && needs.changes.outputs.analyze != 'false' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       security-events: write
