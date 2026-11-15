@@ -167,6 +167,8 @@ typedef struct
 	int ent;                /* the entity's index in the refdef, -1 for the world */
 	/* RT3 (TASK55): the lights the instance carries (rm_rts_carried, bit i light i), set by RM_RT_Frame; 0 here */
 	unsigned carry;
+	/* RT5 (TASK57): 1 for the view weapon and the viewer's own model, which AO rays pass (mtl_rtao_inst_mask) */
+	unsigned noao;
 	/* the object-to-world transform, column-major 4 by 3: three basis columns, then the translation (MTLPackedFloat4x3) */
 	float xform[12];
 } rm_rt_inst_t;
@@ -198,7 +200,12 @@ void rm_rt_transform(const float *origin, const float *angles, int brush, float 
  * (hand 2, rm_alias_drawn), an entity whose model has no structure
  * (nomodel), and one with a float that is not finite (bad). At most n
  * entities (rm_entity_count) and cap instances. The number of instances.
+ * An instance of the view weapon (with gunshadow) or of the viewer's own
+ * model (RF_VIEWERMODEL, which the client keeps out of the refdef in the
+ * first person) has noao 1: AO rays (RT5) pass it (RM_RT_RF_VIEWERMODEL
+ * is shared.h's RF_VIEWERMODEL, checked in rm_rtaoscene.c).
  */
+#define RM_RT_RF_VIEWERMODEL 0x2
 int rm_rt_instances(const rm_rt_ent_t *ents, long n, int world, int gunshadow, float hand, rm_rt_inst_t *out,
 		int cap, rm_rt_excl_t *excl);
 
