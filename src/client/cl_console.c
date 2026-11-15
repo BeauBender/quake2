@@ -30,6 +30,7 @@
 
 console_t con;
 cvar_t *con_notifytime;
+cvar_t *con_backaspect;
 
 extern char key_lines[NUM_KEY_LINES][MAXCMDLINE];
 extern int edit_line;
@@ -340,6 +341,7 @@ Con_Init(void)
 
 	/* register our commands */
 	con_notifytime = Cvar_Get("con_notifytime", "3", 0);
+	con_backaspect = Cvar_Get("con_backaspect", "0", CVAR_ARCHIVE);
 
 	Cmd_AddCommand("toggleconsole", Con_ToggleConsole_f);
 	Cmd_AddCommand("togglechat", Con_ToggleChat_f);
@@ -650,9 +652,16 @@ Con_DrawConsole(float frac)
 		lines = viddef.height;
 	}
 
-	/* draw the background */
-	Draw_StretchPic(0, -viddef.height + lines, viddef.width,
-			viddef.height, "conback");
+	/* draw the background: stretched to the window, or with con_backaspect 1
+	   at 4:3 and cropped, which the software renderer cannot draw */
+	{
+		int bx, by, bw, bh;
+		int keep43 = (con_backaspect->value == 1.0f) &&
+				(Q_stricmp(vid_renderer->string, "soft") != 0);
+
+		Con_BackRect(viddef.width, viddef.height, lines, keep43, &bx, &by, &bw, &bh);
+		Draw_StretchPic(bx, by, bw, bh, "conback");
+	}
 	SCR_AddDirtyPoint(0, 0);
 	SCR_AddDirtyPoint(viddef.width - 1, lines - 1);
 

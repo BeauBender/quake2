@@ -360,6 +360,15 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   with an aspect ratio of 4:3, regardless what the actual windows size
   or resolution is.
 
+* **con_backaspect**: If set to `1` the console background picture keeps
+  its 4:3 shape instead of being stretched to the window. It is scaled
+  to cover the window, centred across and anchored at the console's
+  lower edge, and what lies outside the window is cropped: the top of
+  the picture on a wide window, its sides on a narrow one. On a 4:3
+  window it draws the same as `0`. The software renderer cannot crop a
+  picture, so it always stretches. Defaults to `0`. Saved with the
+  configuration.
+
 * **cl_gun**: Decides whether the gun is drawn. If set to `0` the gun
   is omitted. If set to `1` the gun is only drawn if the FOV is equal
   or smaller than 90. This was the default with Vanilla Quake II. If set
@@ -453,6 +462,12 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   is installed, the high resolution textures are used.
 
 * **r_scale8bittextures**: If set to `1`, scale up all 8bit textures.
+  The Metal renderer takes it as the OpenGL 1.4 renderer does: an 8bit
+  image outside the small-picture atlas is scaled by 2, or by 3 when it
+  is lerped and the window is at least 720 pixels high, with `scale2x` or
+  `scale3x`, and every upload is smoothed. The pictures in the atlas (the
+  HUD digits and icons) are not scaled. Applies to images loaded after it
+  is set.
 
 * **r_shadows**: Enables rendering of shadows. Quake IIs shadows are
   very simple and are prone to render errors.
@@ -724,6 +739,18 @@ has) is not drawn.
   filtered either way. Only `0` and `1` are values: any other value is
   `0`. Other renderers do not have it. Saved with the
   configuration; applies from the next frame.
+
+* **metal_2d_sharp**: How the Metal renderer samples the 2D pictures (HUD,
+  menus, the console background) that are filtered. `0` (the default) is
+  the bilinear filter, which blurs a picture drawn at a large scale. `1`
+  draws each texel of the picture as a block with no blur at an integer
+  scale, where the result equals nearest filtering, and at a scale that
+  is not an integer keeps the blocks and blends one screen pixel across
+  the edge between two texels. Pictures on `r_nolerp_list` or drawn with
+  `r_2D_unfiltered 1` are already unfiltered and are not changed, nor are
+  the cinematics. Only `0` and `1` are values: any other value is `0`.
+  Other renderers do not have it. Saved with the configuration; applies
+  from the next frame.
 
 
 ## Gamepad
