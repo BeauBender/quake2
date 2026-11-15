@@ -10,7 +10,10 @@
       "Bash(tests/check-cvar-docs.sh)",
       "Bash(tests/check-removed-deps.sh)",
       "Bash(tests/check-doc-links.sh)",
-      "Bash(make config)"
+      "Bash(make config)",
+      "Bash(git -C ~/.config/agents/memory-store *)",
+      "Bash(cp -p ~/.claude/projects/*/memory/*.md ~/.config/agents/memory-store/quake2/memory/)",
+      "Bash(cp -p ~/.config/agents/memory-store/quake2/memory/*.md ~/.claude/projects/*/memory/)"
     ],
     "deny": [
       "Bash(git push --no-verify:*)",
@@ -27,6 +30,18 @@
         "matcher": "compact",
         "hooks": [
           { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-context.sh" }
+        ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/checkout-current.sh", "timeout": 30 }
+        ]
+      },
+      {
+        "matcher": "resume",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/checkout-current.sh", "timeout": 30 }
         ]
       }
     ],
