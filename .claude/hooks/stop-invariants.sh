@@ -19,7 +19,7 @@
 #   check-cvar-docs.sh      1.7   check-savegame-tables.sh  0.2
 #   check-doc-links.sh      0.4   check-title-fit.sh        0.2
 #   check-mode-size.sh      0.3   check-vendored.sh         0.3
-# 3.7 s in all; the whole hook took 3.4 to 4.0 s in five runs. The Stop
+# 3.7 s in all; the whole hook took 3.7 to 4.1 s in three runs. The Stop
 # entry in .claude/settings.json gives it 60 s. tests/check-stop-invariants.sh
 # fails when the hook takes more than half of that, when the list names a
 # check that does not exist, or when the deadline and the grace do not fit
