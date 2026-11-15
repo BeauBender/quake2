@@ -1452,7 +1452,7 @@ endif
 # The unit-test suite (tests/unit, see doc/085_unittests.md). The test
 # binary links the dedicated server's own objects (SERVER_OBJS_ below,
 # built with q2ded's flags into a tree of their own) except the unix
-# main.c; tests/unit/main.c supplies main(). Nine client objects
+# main.c; tests/unit/main.c supplies main(). Ten client objects
 # (cl_conback, cl_download, cl_entities, cl_network, cl_parse, cl_screen,
 # the upscaler's checks and pixel arithmetic cl_upscale, the sound
 # frontend sound.c, the window code's SDL-free part vid/glimp_hidpi.c and

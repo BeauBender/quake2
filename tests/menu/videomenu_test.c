@@ -187,7 +187,9 @@ void Draw_PicScaled(int x, int y, const char *p, float s) { (void)x; (void)y; (v
 void IN_GetClipboardText(char *o, size_t n) { (void)o; (void)n; }
 int IN_SetClipboardText(const char *s) { (void)s; return 0; }
 qboolean R_EndWorldRenderpass(void) { return true; }
-float SCR_GetMenuScale(void) { return 1; }
+static float test_scale = 1;
+float SCR_GetMenuScale(void) { return test_scale; }
+void Draw_GetPicSize(int *w, int *h, const char *n) { (void)n; *w = 232; *h = 32; }
 int Sys_Milliseconds(void) { return 0; }
 qboolean VID_HasRenderer(const char *r) { return strcmp(r, "vk") != 0; }
 
@@ -215,16 +217,27 @@ static int failed, checks;
 		} \
 	} while (0)
 
+/* The video menu and the page of the renderer's options, as opened. */
+static menuframework_s *main_menu, *sub_menu;
+
+/* Finds an item on either page and makes its page the current menu. */
 static int
 Find(const char *name)
 {
-	for (int i = 0; i < menu->nitems; i++)
-	{
-		const menucommon_s *c = menu->items[i];
+	menuframework_s *pages[2] = { main_menu, sub_menu };
 
-		if (c->name && !strcmp(c->name, name))
+	for (int p = 0; p < 2; p++)
+	{
+		for (int i = 0; pages[p] && i < pages[p]->nitems; i++)
 		{
-			return i;
+			const menucommon_s *c = pages[p]->items[i];
+
+			if (c->name && !strcmp(c->name, name))
+			{
+				menu = pages[p];
+
+				return i;
+			}
 		}
 	}
 
@@ -233,16 +246,32 @@ Find(const char *name)
 	exit(1);
 }
 
+static void
+Cursor(const char *name)
+{
+	const int i = Find(name);
+
+	menu->cursor = i;
+}
+
+static menucommon_s *
+Item(const char *name)
+{
+	const int i = Find(name);
+
+	return menu->items[i];
+}
+
 static menulist_s *
 List(const char *name)
 {
-	return (menulist_s *)menu->items[Find(name)];
+	return (menulist_s *)Item(name);
 }
 
 static int
 Greyed(const char *name)
 {
-	return (((menucommon_s *)menu->items[Find(name)])->flags & QMF_GRAYED) != 0;
+	return (Item(name)->flags & QMF_GRAYED) != 0;
 }
 
 static int
@@ -269,7 +298,7 @@ Shown(const char *name)
 static int
 Slide(const char *name, int dir)
 {
-	menu->cursor = Find(name);
+	Cursor(name);
 
 	return Menu_SlideItem(menu, dir);
 }
@@ -277,7 +306,7 @@ Slide(const char *name, int dir)
 static void
 Apply(void)
 {
-	menu->cursor = Find("apply");
+	Cursor("apply");
 	Menu_SelectItem(menu);
 }
 
@@ -287,8 +316,18 @@ Open(const char *renderer, const char *modes)
 {
 	SetCv("vid_renderer", renderer);
 	SetCv("r_metalfx_modes", modes);
-	menu = NULL;
+	menu = main_menu = sub_menu = NULL;
 	M_Menu_Video_f();
+	main_menu = menu;
+
+	/* into the renderer's page, as a player does with Enter */
+	Cursor("renderer options...");
+	if (!Menu_SelectItem(menu) || menu == main_menu)
+	{
+		printf("FAIL: \"renderer options...\" did not open its page\n");
+		exit(1);
+	}
+	sub_menu = menu;
 }
 
 /* Steps the renderer item to the one whose box text contains want. */
@@ -446,11 +485,12 @@ test_greyed_items_cannot_be_changed(void)
 	{
 		Reset();
 		Open(renderers[r], "15");
-		menu->statusbar = NULL;
+		main_menu->statusbar = NULL;
+		sub_menu->statusbar = NULL;
 
 		for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
 		{
-			menucommon_s *c = menu->items[Find(names[i])];
+			menucommon_s *c = Item(names[i]);
 			int before = 0;
 
 			if (!(c->flags & QMF_GRAYED))
@@ -463,12 +503,12 @@ test_greyed_items_cannot_be_changed(void)
 				before = ((menulist_s *)c)->curvalue;
 			}
 
-			menu->cursor = Find(names[i]);
+			Cursor(names[i]);
 			CHECK(!Menu_SlideItem(menu, 1) && !Menu_SlideItem(menu, -1),
 				"%s: %s slid while greyed", renderers[r], names[i]);
 			CHECK(!Menu_SelectItem(menu), "%s: %s selected while greyed", renderers[r], names[i]);
-			CHECK(menu->statusbar == NULL, "%s: %s ran its callback while greyed (status \"%s\")",
-				renderers[r], names[i], menu->statusbar);
+			CHECK(main_menu->statusbar == NULL && sub_menu->statusbar == NULL,
+				"%s: %s ran its callback while greyed", renderers[r], names[i]);
 
 			if (c->type == MTYPE_SPINCONTROL)
 			{
@@ -525,6 +565,59 @@ test_custom_scale_is_not_a_choice(void)
 	CHECK(!strcmp(Str("r_metalfx_scale"), "1"), "r_metalfx_scale %s", Str("r_metalfx_scale"));
 }
 
+/*
+ * No item is drawn over the banner. Both edges are computed the way the
+ * menu draws them, in the menu's own units (pixels / scale): the banner
+ * (M_Banner) from its picture's height, the first item from the menu's
+ * y (Menu_Center) plus the item's y (Menu_Draw); and the last item,
+ * the apply action, ends inside the screen.
+ */
+static void
+test_the_banner_is_clear_of_the_items(void)
+{
+	static const struct { int w, h; float scale; } screens[] = {
+		{ 640, 480, 1 },	/* r_menuscale auto at 640x480 */
+		{ 640, 480, 2 },	/* the smallest virtual height, 240 */
+		{ 1280, 960, 4 },
+	};
+
+	for (size_t i = 0; i < sizeof(screens) / sizeof(screens[0]); i++)
+	{
+		int bw, bh;
+
+		viddef.width = screens[i].w;
+		viddef.height = screens[i].h;
+		test_scale = screens[i].scale;
+		Reset();
+		Open("metal", "15");
+
+		Draw_GetPicSize(&bw, &bh, "m_banner_video");
+
+		for (int p = 0; p < 2; p++)
+		{
+			const menuframework_s *page = p ? sub_menu : main_menu;
+			const float vh = viddef.height / test_scale;
+			const float banner_bottom = vh / 2 - 110 + bh;
+			const menucommon_s *first = page->items[0];
+			const menucommon_s *last = page->items[page->nitems - 1];
+			const float first_top = page->y + first->y;
+			const float last_bottom = page->y + last->y + 10;
+
+			printf("%dx%d scale %g, %s page: banner bottom %g, first item %g, last item bottom %g of %g\n",
+				screens[i].w, screens[i].h, test_scale, p ? "renderer" : "video", banner_bottom,
+				first_top, last_bottom, vh);
+			CHECK(first_top >= banner_bottom, "%dx%d scale %g page %d: the first item (%g) is over the banner (bottom %g)",
+				screens[i].w, screens[i].h, test_scale, p, first_top, banner_bottom);
+			CHECK(last_bottom <= vh, "%dx%d scale %g page %d: the last item ends at %g below the screen %g",
+				screens[i].w, screens[i].h, test_scale, p, last_bottom, vh);
+		}
+	}
+
+	viddef.width = 640;
+	viddef.height = 480;
+	test_scale = 1;
+}
+
 int
 main(void)
 {
@@ -544,6 +637,7 @@ main(void)
 	}
 	test_greyed_items_cannot_be_changed();
 	test_custom_scale_is_not_a_choice();
+	test_the_banner_is_clear_of_the_items();
 
 	printf("videomenu_test: %d checks, %d failed\n", checks, failed);
 

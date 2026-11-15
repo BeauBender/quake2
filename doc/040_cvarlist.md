@@ -796,7 +796,8 @@ With every mode off (the default) nothing of MetalFX is made and the
 picture is the same as before these cvars existed.
 
 The video menu has an item for each of them (the scaler, its scale, frame
-generation and the denoiser). No item of the video menu is hidden: one
+generation and the denoiser), on the "renderer options..." page of the
+video menu, with the lighting items of each renderer. No item is hidden: one
 that the selected renderer or the GPU does not have is greyed out, cannot be
 changed, and shows the reason in the status bar when the cursor is on it.
 The items write their cvars with `apply`, which restarts the renderer, and

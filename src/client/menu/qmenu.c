@@ -795,6 +795,12 @@ Menu_SelectItem(menuframework_s *s)
 {
 	menucommon_s *item = (menucommon_s *)Menu_ItemAtCursor(s);
 
+	/* A greyed item does nothing: it only shows its value and reason. */
+	if (!item || (item->flags & QMF_GRAYED))
+	{
+		return false;
+	}
+
 	if (item->callback)
 	{
 		item->callback(item);
