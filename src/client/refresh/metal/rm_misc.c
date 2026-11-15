@@ -45,7 +45,7 @@ RM_ModuleDir(char *dir, size_t len)
 	return rm_dir_of(info.dli_fname, dir, len);
 }
 
-/* from gl1_misc.c, R_InitParticleTexture: r_notexture (the particle texture is N9's) */
+/* from gl1_misc.c, R_InitParticleTexture: the particle texture (its tables are rm_particle_texture's) and r_notexture */
 static byte notex[4][4] = {
 	{0, 0, 0, 0},
 	{0, 0, 1, 1},
@@ -53,11 +53,36 @@ static byte notex[4][4] = {
 	{0, 1, 1, 1}
 };
 
+/*
+ * gl1 makes a new particle texture each time (gl1_particle_square
+ * changed without point parameters) and leaves the old one to the next
+ * R_FreeUnusedImages after it; here the old one is freed at once, so
+ * there is one at any time, freed at shutdown by R_ShutdownImages
+ */
+void
+R_InitParticleTexture(void)
+{
+	byte partData[16][16][4];
+
+	rm_particle_texture(gl1_particle_square->value != 0, partData);
+
+	if (r_particletexture)
+	{
+		rmb_texture_free(r_particletexture->texnum);
+		memset(r_particletexture, 0, sizeof(*r_particletexture));
+		r_particletexture = NULL;
+	}
+
+	r_particletexture = R_LoadPic("***particle***", (byte *)partData, 16, 0, 16, 0, 16 * 16, it_sprite, 32);
+}
+
 void
 R_InitBuiltinTextures(void)
 {
 	byte notexData[8][8][4];
 	int x, y;
+
+	R_InitParticleTexture();
 
 	/* also use this for bad textures, but without alpha */
 	for (x = 0; x < 8; x++)
@@ -86,6 +111,7 @@ RM_PrintStats(void)
 	RM_WorldSkips(&s);
 	RM_EntitySkips(&s);
 	RM_DlightSkips(&s);
+	RM_ParticleSkips(&s);
 
 	if (rm_stats_format(&s, &l, line, sizeof(line)))
 	{
