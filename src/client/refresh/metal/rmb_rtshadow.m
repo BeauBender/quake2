@@ -65,6 +65,9 @@ static int rts_open;
 static id<MTLComputePipelineState> trace_pipe;
 static id<MTLRenderPipelineState> resolve_pipe;
 static id<MTLTexture> t_out;
+static id<MTLTexture> t_term;           /* the term, RGBA16Float at the render size */
+static id<MTLBuffer> m_tri, m_vecs;     /* the map's triangle-to-surface table and surfaces' texture axes */
+static uint32_t m_n[2];                 /* their triangles and surfaces */
 static id<MTLBuffer> counts;            /* RMB_FRAMES_IN_FLIGHT slots of RMB_RTS_COUNTS */
 static id<MTLCounterSampleBuffer> samples;
 
@@ -181,6 +184,9 @@ rmb_rts_close(void)
 		RMB_RTS_SET(trace_pipe, nil);
 		RMB_RTS_SET(resolve_pipe, nil);
 		RMB_RTS_SET(t_out, nil);
+		RMB_RTS_SET(t_term, nil);
+		RMB_RTS_SET(m_tri, nil);
+		RMB_RTS_SET(m_vecs, nil);
 		RMB_RTS_SET(counts, nil);
 		RMB_RTS_SET(samples, nil);
 	}
@@ -188,6 +194,40 @@ rmb_rts_close(void)
 	rts_open = 0;
 	view_set = traced = 0;
 	ndone = 0;
+	m_n[0] = m_n[1] = 0;
+}
+
+int
+rmb_rts_set_map(const unsigned *tri_surf, unsigned long ntris, const float *vecs, unsigned long nsurf)
+{
+	@autoreleasepool
+	{
+		RMB_RTS_SET(m_tri, nil);
+		RMB_RTS_SET(m_vecs, nil);
+		m_n[0] = m_n[1] = 0;
+
+		if (!rts_open || !tri_surf || !vecs || !ntris || !nsurf || (ntris > 0xffffffffu) || (nsurf > 0xffffffffu))
+		{
+			return 0;
+		}
+
+		RMB_RTS_SET(m_tri, [rmb_device newBufferWithBytes:tri_surf length:ntris * sizeof(unsigned)
+				options:MTLResourceStorageModeShared]);
+		RMB_RTS_SET(m_vecs, [rmb_device newBufferWithBytes:vecs length:nsurf * 8 * sizeof(float)
+				options:MTLResourceStorageModeShared]);
+
+		if (!m_tri || !m_vecs)
+		{
+			RMB_RTS_SET(m_tri, nil);
+			RMB_RTS_SET(m_vecs, nil);
+			return 0;
+		}
+
+		m_n[0] = (uint32_t)ntris;
+		m_n[1] = (uint32_t)nsurf;
+	}
+
+	return 1;
 }
 
 void
@@ -302,8 +342,8 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 
 	@autoreleasepool
 	{
-		/* the output at the render size, made again when it changes */
-		if (!t_out || (t_out.width != w) || (t_out.height != h))
+		/* the outputs at the render size, made again when it changes */
+		if (!t_out || !t_term || (t_out.width != w) || (t_out.height != h))
 		{
 			MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRG32Uint
 					width:w height:h mipmapped:NO];
@@ -311,14 +351,18 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 			d.storageMode = MTLStorageModePrivate;
 			d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
 			RMB_RTS_SET(t_out, [rmb_device newTextureWithDescriptor:d]);
+			d.pixelFormat = MTLPixelFormatRGBA16Float;
+			RMB_RTS_SET(t_term, [rmb_device newTextureWithDescriptor:d]);
 
-			if (!t_out)
+			if (!t_out || !t_term)
 			{
+				RMB_RTS_SET(t_out, nil);
+				RMB_RTS_SET(t_term, nil);
 				return 0;
 			}
 
 			fprintf(stderr, "ref_metal: rt shadows %lux%lu: %lu bytes allocated\n", (unsigned long)w,
-					(unsigned long)h, (unsigned long)t_out.allocatedSize);
+					(unsigned long)h, (unsigned long)(t_out.allocatedSize + t_term.allocatedSize));
 		}
 
 		/* ends the raster: the kernel reads what it wrote */
@@ -371,9 +415,15 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 		[ce setTexture:normal atIndex:1];
 		[ce setTexture:material atIndex:2];
 		[ce setTexture:t_out atIndex:3];
+		[ce setTexture:t_term atIndex:4];
 		[ce setBytes:&view length:sizeof(view) atIndex:0];
 		[ce setBytes:lights length:sizeof(lights) atIndex:1];
 		[ce setBuffer:counts offset:(NSUInteger)slot * RMB_RTS_COUNTS * sizeof(uint32_t) atIndex:6];
+
+		/* the map's tables; without them (0 surfaces) the kernel takes the base axes and reads neither */
+		[ce setBuffer:(m_tri ? m_tri : counts) offset:0 atIndex:7];
+		[ce setBuffer:(m_vecs ? m_vecs : counts) offset:0 atIndex:8];
+		[ce setBytes:m_n length:sizeof(m_n) atIndex:9];
 		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTS_GROUP, RMB_RTS_GROUP, 1)];
 		[ce endEncoding];
 
@@ -397,7 +447,10 @@ rmb_rts_resolve(id<MTLRenderCommandEncoder> enc, const void *resolve, size_t res
 		id<MTLTexture> albedo, id<MTLTexture> light, id<MTLTexture> material, id<MTLTexture> depth,
 		id<MTLTexture> normal)
 {
-	if (!traced || !rts_open || !enc || !t_out)
+	(void)depth;
+	(void)normal;
+
+	if (!traced || !rts_open || !enc || !t_out || !t_term)
 	{
 		traced = 0;
 		return 0;
@@ -407,13 +460,11 @@ rmb_rts_resolve(id<MTLRenderCommandEncoder> enc, const void *resolve, size_t res
 	[enc setRenderPipelineState:resolve_pipe];
 	[enc setFragmentBytes:resolve length:resolve_len atIndex:0];
 	[enc setFragmentBytes:&view length:sizeof(view) atIndex:1];
-	[enc setFragmentBytes:lights length:sizeof(lights) atIndex:2];
 	[enc setFragmentTexture:albedo atIndex:0];
 	[enc setFragmentTexture:light atIndex:1];
 	[enc setFragmentTexture:material atIndex:2];
-	[enc setFragmentTexture:depth atIndex:3];
-	[enc setFragmentTexture:normal atIndex:4];
 	[enc setFragmentTexture:t_out atIndex:5];
+	[enc setFragmentTexture:t_term atIndex:6];
 	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 	rmb_counts.draws++;
 	return 1;

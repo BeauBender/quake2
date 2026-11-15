@@ -44,6 +44,23 @@ static int rts_refused;         /* it failed in this context: not tried again */
 static int rts_active;          /* this frame traces the shadows */
 static unsigned long rts_ntrans;    /* the map's triangles that pass light */
 
+/* the map's surface tables (rm_rts_surface_map, the texture axes), uploaded when the pass is open */
+static unsigned *rts_tri;
+static float *rts_vecs;
+static unsigned long rts_ntris, rts_nsurf;
+static int rts_uploaded;
+
+static void
+RM_RTS_FreeTables(void)
+{
+	free(rts_tri);
+	free(rts_vecs);
+	rts_tri = NULL;
+	rts_vecs = NULL;
+	rts_ntris = rts_nsurf = 0;
+	rts_uploaded = 0;
+}
+
 void
 RM_RTS_Init(const rmb_caps_t *caps)
 {
@@ -66,6 +83,7 @@ RM_RTS_Shutdown(void)
 
 	rts_opened = rts_active = 0;
 	rts_ntrans = 0;
+	RM_RTS_FreeTables();
 	r_dlight_term = true;
 }
 
@@ -76,25 +94,78 @@ RM_RTS_Wanted(void)
 }
 
 void
-RM_RTS_MapBuilt(const rm_surfrec_t *recs, long nrecs, unsigned long nindices)
+RM_RTS_MapBuilt(const model_t *wm)
 {
-	unsigned long ntris = nindices / 3, nt = 0;
+	const rm_world_t *w = wm ? wm->world : NULL;
+	unsigned long ntris = w ? w->size.indices / 3 : 0, nt = 0;
+	rm_rts_range_t *r;
 	unsigned char *t;
+	long i, n = wm ? wm->numsurfaces : 0;
 
 	rts_ntrans = 0;
+	RM_RTS_FreeTables();
 
-	if (!ntris || !(t = malloc(ntris)))
+	/* the last map's tables leave the GPU: the new map's triangles are not theirs */
+	if (rts_opened)
+	{
+		rmb_rts_set_map(NULL, 0, NULL, 0);
+	}
+
+	if (!ntris || (n <= 0))
 	{
 		return;
 	}
 
-	if ((rm_rts_transmit(recs, nrecs, nindices, t, ntris, &nt) == (long)ntris) && nt &&
-		rmb_rt_set_transmit(t, ntris))
+	/* what a shadow ray keeps through each triangle */
+	if ((t = malloc(ntris)))
 	{
-		rts_ntrans = nt;
+		if ((rm_rts_transmit(w->recs, (long)w->size.surfs, w->size.indices, t, ntris, &nt) == (long)ntris) && nt &&
+			rmb_rt_set_transmit(t, ntris))
+		{
+			rts_ntrans = nt;
+		}
+
+		free(t);
 	}
 
-	free(t);
+	/* each triangle's surface and each surface's texture axes with their shifts (gl1's vecs) */
+	r = malloc((size_t)n * sizeof(*r));
+	rts_tri = malloc(ntris * sizeof(*rts_tri));
+	rts_vecs = malloc((size_t)n * 8 * sizeof(*rts_vecs));
+
+	if (!r || !rts_tri || !rts_vecs)
+	{
+		free(r);
+		RM_RTS_FreeTables();
+		return;
+	}
+
+	for (i = 0; i < n; i++)
+	{
+		const msurface_t *fa = &wm->surfaces[i];
+		int k;
+
+		r[i].first_index = fa->first_index;
+		r[i].num_indices = fa->num_indices;
+
+		for (k = 0; k < 4; k++)
+		{
+			rts_vecs[i * 8 + k] = fa->texinfo ? fa->texinfo->vecs[0][k] : 0;
+			rts_vecs[i * 8 + 4 + k] = fa->texinfo ? fa->texinfo->vecs[1][k] : 0;
+		}
+	}
+
+	if (rm_rts_surface_map(r, n, ntris, rts_tri) < 0)
+	{
+		R_Printf(PRINT_ALL, "ref_metal: rt shadows: the surfaces do not map the index buffer; base axes only\n");
+		free(r);
+		RM_RTS_FreeTables();
+		return;
+	}
+
+	free(r);
+	rts_ntris = ntris;
+	rts_nsurf = (unsigned long)n;
 }
 
 void
@@ -122,12 +193,24 @@ RM_RTS_Frame(const refdef_t *fd, int scene_ready)
 		}
 
 		rts_active = rts_opened;
+
+		/* the map's surface tables, once the pass is open */
+		if (rts_opened && !rts_uploaded && rts_tri)
+		{
+			rts_uploaded = rmb_rts_set_map(rts_tri, rts_ntris, rts_vecs, rts_nsurf);
+
+			if (!rts_uploaded)
+			{
+				RM_RTS_FreeTables();
+			}
+		}
 	}
 	else if (rts_opened && !RM_RTS_Wanted())
 	{
-		/* turned off: nothing kept */
+		/* turned off: nothing kept on the GPU (the tables go up again when it is back on) */
 		rmb_rts_close();
 		rts_opened = 0;
+		rts_uploaded = 0;
 	}
 
 	/* the dynamic-light term leaves the lightmaps only on a frame that adds it back */

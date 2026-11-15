@@ -272,7 +272,8 @@ rm_rts_unproject(const rm_rts_view_t *v, float px, float py, float depth, float 
 }
 
 mtl_rts_top_t
-rm_rts_select(mtl_rts_v3_t p, mtl_rts_v3_t n, const rm_rts_light_t *l, int nl, unsigned *flags)
+rm_rts_select(mtl_rts_v3_t p, mtl_rts_v3_t n, const rm_rts_light_t *l, int nl, const mtl_rts_v4_t *st,
+		float *adds, unsigned *flags)
 {
 	mtl_rts_top_t t = mtl_rts_top_init();
 	int i;
@@ -281,23 +282,34 @@ rm_rts_select(mtl_rts_v3_t p, mtl_rts_v3_t n, const rm_rts_light_t *l, int nl, u
 
 	for (i = 0; i < nl && i < MTL_RTS_MAX_LIGHTS; i++)
 	{
-		const mtl_rts_reach_t r = mtl_rts_reach(p, n, mtl_rts_v3(l[i].origin[0], l[i].origin[1], l[i].origin[2]),
-				l[i].origin[3]);
+		const mtl_rts_v3_t o = mtl_rts_v3(l[i].origin[0], l[i].origin[1], l[i].origin[2]);
+		mtl_rts_reach_t r;
+
+		if (st)
+		{
+			r = mtl_rts_reach_st(p, n, o, l[i].origin[3], mtl_rts_v3(st[0].x, st[0].y, st[0].z),
+					mtl_rts_v3(st[1].x, st[1].y, st[1].z));
+			adds[i] = mtl_rts_add_lm(p, n, o, l[i].origin[3], st[0], st[1]);
+		}
+		else
+		{
+			r = mtl_rts_reach(p, n, o, l[i].origin[3]);
+			adds[i] = mtl_rts_add(r);
+		}
 
 		if (mtl_rts_in_range(r))
 		{
 			*flags |= MTL_RTS_IN_RANGE;
 		}
 
-		t = mtl_rts_top_add(t, (unsigned)i, mtl_rts_add(r));
+		t = mtl_rts_top_add(t, (unsigned)i, adds[i]);
 	}
 
 	return t;
 }
 
 void
-rm_rts_term(mtl_rts_v3_t p, mtl_rts_v3_t n, const rm_rts_light_t *l, int nl, unsigned pidx, unsigned pvis,
-		float *rgb)
+rm_rts_term(const float *adds, const rm_rts_light_t *l, int nl, unsigned pidx, unsigned pvis, float *rgb)
 {
 	int i;
 
@@ -305,20 +317,58 @@ rm_rts_term(mtl_rts_v3_t p, mtl_rts_v3_t n, const rm_rts_light_t *l, int nl, uns
 
 	for (i = 0; i < nl && i < MTL_RTS_MAX_LIGHTS; i++)
 	{
-		const float add = mtl_rts_add(mtl_rts_reach(p, n,
-				mtl_rts_v3(l[i].origin[0], l[i].origin[1], l[i].origin[2]), l[i].origin[3]));
 		float w;
 
-		if (!(add > 0))
+		if (!(adds[i] > 0))
 		{
 			continue;
 		}
 
-		w = mtl_rts_light_vis(pidx, pvis, (unsigned)i) * add;
+		w = mtl_rts_light_vis(pidx, pvis, (unsigned)i) * adds[i];
 		rgb[0] += w * l[i].color[0];
 		rgb[1] += w * l[i].color[1];
 		rgb[2] += w * l[i].color[2];
 	}
+}
+
+long
+rm_rts_surface_map(const rm_rts_range_t *r, long nsurf, unsigned long ntris, unsigned *tri_surf)
+{
+	unsigned long k, done = 0;
+	long i;
+
+	for (k = 0; k < ntris; k++)
+	{
+		tri_surf[k] = 0xffffffffu;
+	}
+
+	if ((nsurf < 0) || (nsurf && !r))
+	{
+		return -1;
+	}
+
+	for (i = 0; i < nsurf; i++)
+	{
+		const unsigned long first = r[i].first_index, n = r[i].num_indices;
+
+		if ((first % 3) || (n % 3) || (first / 3 > ntris) || (n / 3 > ntris - first / 3))
+		{
+			return -1;
+		}
+
+		for (k = first / 3; k < (first + n) / 3; k++)
+		{
+			if (tri_surf[k] != 0xffffffffu)
+			{
+				return -1;
+			}
+
+			tri_surf[k] = (unsigned)i;
+			done++;
+		}
+	}
+
+	return (long)done;
 }
 
 int

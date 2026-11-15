@@ -113,19 +113,37 @@ int rm_rts_unproject(const rm_rts_view_t *v, float px, float py, float depth, fl
 
 /*
  * The kernel's choice at a point p with front normal n among the nl
- * lights l: the four that add the most (mtl_rts_top_add of mtl_rts_add),
- * and in *flags MTL_RTS_IN_RANGE when any light is in range
- * (mtl_rts_in_range).
+ * lights l (at most MTL_RTS_MAX_LIGHTS): each light's add into adds[i]
+ * (mtl_rts_add_lm with the surface's texture axes st[0] and st[1] when st
+ * is given, else mtl_rts_add with the base axes), the four that add the
+ * most (mtl_rts_top_add), and in *flags MTL_RTS_IN_RANGE when any light
+ * is in range (mtl_rts_in_range, along the same axes).
  */
-mtl_rts_top_t rm_rts_select(mtl_rts_v3_t p, mtl_rts_v3_t n, const rm_rts_light_t *l, int nl, unsigned *flags);
+mtl_rts_top_t rm_rts_select(mtl_rts_v3_t p, mtl_rts_v3_t n, const rm_rts_light_t *l, int nl, const mtl_rts_v4_t *st,
+		float *adds, unsigned *flags);
 
 /*
- * The resolve's term at that point: the sum over the lights of
- * mtl_rts_light_vis x mtl_rts_add x colour (pidx and pvis the kernel's
- * packed slots), per channel into rgb, in the 0 to 255 scale of gl1's sums.
+ * The term the kernel hands the resolve: the sum over the lights of
+ * mtl_rts_light_vis x adds[i] x colour (pidx and pvis the packed slots),
+ * per channel into rgb, in the 0 to 255 scale of gl1's sums.
  */
-void rm_rts_term(mtl_rts_v3_t p, mtl_rts_v3_t n, const rm_rts_light_t *l, int nl, unsigned pidx, unsigned pvis,
-		float *rgb);
+void rm_rts_term(const float *adds, const rm_rts_light_t *l, int nl, unsigned pidx, unsigned pvis, float *rgb);
+
+/* a surface's range of the world's index buffer (msurface_t's first_index and num_indices) */
+typedef struct
+{
+	unsigned first_index;
+	unsigned num_indices;
+} rm_rts_range_t;
+
+/*
+ * The surface of each of the ntris triangles of the world's index buffer,
+ * from the nsurf surfaces' ranges: tri_surf[k] is the index of the
+ * surface whose range holds triangle k, ~0 for a triangle no surface
+ * holds. The number of triangles assigned; -1 when a range is not whole
+ * triangles, passes ntris, or two ranges overlap.
+ */
+long rm_rts_surface_map(const rm_rts_range_t *r, long nsurf, unsigned long ntris, unsigned *tri_surf);
 
 /*
  * r_rt_shadows_show (development): 0 the picture, 1 the mask of the
@@ -158,8 +176,15 @@ int rm_rts_stats_format(const rm_rts_stats_t *s, char *buf, size_t len);
 /* the kernel's and the resolve's pipelines: 1, or 0 with err set; their objects are counted as RM_OBJ_RT */
 int rmb_rts_open(char *err, size_t errlen);
 
-/* releases the pipelines, the output texture and the counters */
+/* releases the pipelines, the output textures, the map's tables and the counters */
 void rmb_rts_close(void);
+
+/*
+ * The map's tables: tri_surf (rm_rts_surface_map, ntris entries) and each
+ * of the nsurf surfaces' texture axes, vecs[0] then vecs[1] (8 floats a
+ * surface). 1 when kept; 0 frees them (the kernel then takes the base axes).
+ */
+int rmb_rts_set_map(const unsigned *tri_surf, unsigned long ntris, const float *vecs, unsigned long nsurf);
 
 /*
  * The view and lights the next G-buffer view traces and resolves with

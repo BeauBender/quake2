@@ -50,7 +50,8 @@ int RM_RT_SceneReady(void);
  * RT3 (TASK55), rm_rtshadowscene.c: the dynamic-light shadows. Init and
  * Shutdown with RM_RT_Init and the release of the ray-tracing objects;
  * Wanted: r_rt_shadows asks for the structures (rm_rt_wanted); MapBuilt:
- * the map's per-triangle transmission, after its structures; Frame, after
+ * the map's per-triangle transmission and its surfaces' texture axes,
+ * after its structures; Frame, after
  * RM_RT_Frame: whether this frame traces (Active), which takes gl1's
  * dynamic-light term out of the lightmaps (r_dlight_term) and the view to
  * the G-buffer path; View, after RM_GB_Begin: the view and lights the
@@ -60,7 +61,7 @@ int RM_RT_SceneReady(void);
 void RM_RTS_Init(const rmb_caps_t *caps);
 void RM_RTS_Shutdown(void);
 int RM_RTS_Wanted(void);
-void RM_RTS_MapBuilt(const rm_surfrec_t *recs, long nrecs, unsigned long nindices);
+void RM_RTS_MapBuilt(const model_t *world);
 void RM_RTS_Frame(const refdef_t *fd, int scene_ready);
 int RM_RTS_Active(void);
 int RM_RTS_ShowOnly(void);

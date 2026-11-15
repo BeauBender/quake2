@@ -300,7 +300,7 @@ RM_RT_BuildMap(void)
 
 	free(mat);
 	rt_map_ok = 1;
-	RM_RTS_MapBuilt(w->recs, (long)w->size.surfs, w->size.indices);   /* the shadow rays' transmission (RT3) */
+	RM_RTS_MapBuilt(wm);   /* the shadow rays' transmission and the surfaces' texture axes (RT3) */
 	rt_ntimes = rt_frames = rt_busy_aliases = rt_busy_tris = 0;
 
 	{

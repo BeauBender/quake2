@@ -23,19 +23,23 @@
  *
  * - rm_rts_trace, the compute pass between the G-buffer raster and the
  *   resolve: for each lightmapped world pixel (material 1), its position
- *   from the depth, its normal from the G-buffer, the four lights that
- *   add the most there (common/mtl_rts_math.h) and one ray query per
- *   light against the frame's instance structure (TASK53), from the
+ *   from the depth and its normal from the G-buffer; its surface from a
+ *   ray from the eye to that point (the triangle it meets, through the
+ *   map's triangle-to-surface table), whose texture axes and shifts give
+ *   gl1's dynamic light at the pixel as the lightmap's sample holds it
+ *   (mtl_rts_add_lm: the four luxels' adds, interpolated); the four
+ *   lights that add the most (common/mtl_rts_math.h) and one ray query
+ *   per light against the frame's instance structure (TASK53), from the
  *   surface offset along its normal (mtl_rts_bias) to the light; a
  *   triangle of water or a translucent surface passes the ray on with
  *   its transmission, any other stops it. Out: an RG32Uint per pixel,
  *   the four visibilities at 8 bits each and the four light indices with
- *   the in-range and shadowed flags; and the frame's counts;
+ *   the in-range and shadowed flags; an RGBA16Float, the term; and the
+ *   frame's counts;
  * - rm_fragment_resolve_rts, the resolve with the term: the stock
  *   product of rm_fragment_resolve (mtl_gb_resolve) with the light of a
- *   world pixel raised by the visibility x (intensity - dist) x colour of
- *   every light that adds there (mtl_rts_light, R_BuildLightMap's store),
- *   and r_rt_shadows_show's two views.
+ *   world pixel raised by the term (mtl_rts_light, R_BuildLightMap's
+ *   store), and r_rt_shadows_show's two views.
  *
  * =======================================================================
  */
@@ -170,11 +174,31 @@ rm_rts_visibility(ray r, instance_acceleration_structure ias, device const uint 
 	return 0.0f;
 }
 
+static mtl_rts_v4_t
+rm_rts_v4(float4 v)
+{
+	mtl_rts_v4_t r;
+
+	r.x = v.x;
+	r.y = v.y;
+	r.z = v.z;
+	r.w = v.w;
+	return r;
+}
+
+/* the map's tables (rmb_rts_set_map): triangles in tri_surf, surfaces in vecs */
+struct rm_rts_mapn
+{
+	uint ntris;
+	uint nsurf;
+};
+
 kernel void
 rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 		texture2d<float, access::read> normal [[texture(1)]],
 		texture2d<uint, access::read> mat [[texture(2)]],
 		texture2d<uint, access::write> out [[texture(3)]],
+		texture2d<float, access::write> term [[texture(4)]],
 		constant rm_rts_view &v [[buffer(0)]],
 		constant rm_rts_light *lights [[buffer(1)]],
 		instance_acceleration_structure ias [[buffer(2)]],
@@ -182,12 +206,16 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 		device const uchar *transmit [[buffer(4)]],
 		constant uint &ntris [[buffer(5)]],
 		device atomic_uint *counts [[buffer(6)]],
+		device const uint *tri_surf [[buffer(7)]],
+		device const float4 *vecs [[buffer(8)]],
+		constant rm_rts_mapn &mapn [[buffer(9)]],
 		uint2 px [[thread_position_in_grid]])
 {
 	const bool inside = (px.x < out.get_width()) && (px.y < out.get_height());
 	mtl_rts_top_t top = mtl_rts_top_init();
-	uint flags = 0, rays = 0;
+	uint flags = 0, rays = 0, primary = 0;
 	float vis[MTL_RTS_CAP] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	float3 t = float3(0.0f);
 
 	if (inside && (v.nlights > 0) && (mat.read(px).r == MTL_GB_MAT_WORLD))
 	{
@@ -200,18 +228,82 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 			const float3 p = rm_rts_position(v, px, d);
 			const uint nl = min(v.nlights, (uint)MTL_RTS_MAX_LIGHTS);
 			const float3 o = p + n * mtl_rts_bias(distance(p, v.eye.xyz), v.bias_k);
+			float adds[MTL_RTS_MAX_LIGHTS];
+			bool slab = false, have = false;
+			mtl_rts_v4_t sv, tv;
+
+			/* a light whose plane distance leaves it light to add (gl1's surface test) */
+			for (uint i = 0; i < nl; i++)
+			{
+				const float pd = dot(lights[i].origin.xyz - p, n);
+
+				slab = slab || ((pd >= 0.0f) && (lights[i].origin.w - pd >= MTL_RTS_CUTOFF));
+			}
+
+			/* the pixel's surface, for its texture axes: the triangle a ray from the eye meets at the depth's point */
+			if (slab && (mapn.nsurf > 0))
+			{
+				const float3 dv = p - v.eye.xyz;
+				const float dl = length(dv);
+
+				if (dl > 1.0f)
+				{
+					intersector<triangle_data, instancing> isect;
+					intersection_result<triangle_data, instancing> hit;
+
+					isect.assume_geometry_type(geometry_type::triangle);
+					hit = isect.intersect(ray(v.eye.xyz, dv / dl, 0.0f, dl + 4.0f), ias, 0xff);
+					primary = 1;
+
+					if ((hit.type == intersection_type::triangle) && (fabs(hit.distance - dl) <= max(2.0f, dl * 0.002f)))
+					{
+						const uint b = base[hit.instance_id];
+
+						if ((b != 0xffffffffu) && (b + hit.primitive_id < mapn.ntris))
+						{
+							const uint sidx = tri_surf[b + hit.primitive_id];
+
+							if (sidx < mapn.nsurf)
+							{
+								sv = rm_rts_v4(vecs[2 * sidx]);
+								tv = rm_rts_v4(vecs[2 * sidx + 1]);
+								have = true;
+							}
+						}
+					}
+				}
+			}
 
 			for (uint i = 0; i < nl; i++)
 			{
-				const mtl_rts_reach_t r = mtl_rts_reach(rm_rts_v(p), rm_rts_v(n), rm_rts_v(lights[i].origin.xyz),
-						lights[i].origin.w);
+				const mtl_rts_v3_t lo = rm_rts_v(lights[i].origin.xyz);
+				mtl_rts_reach_t r;
+
+				adds[i] = 0.0f;
+
+				if (!slab)
+				{
+					continue;
+				}
+
+				if (have)
+				{
+					r = mtl_rts_reach_st(rm_rts_v(p), rm_rts_v(n), lo, lights[i].origin.w, mtl_rts_v3(sv.x, sv.y, sv.z),
+							mtl_rts_v3(tv.x, tv.y, tv.z));
+					adds[i] = mtl_rts_add_lm(rm_rts_v(p), rm_rts_v(n), lo, lights[i].origin.w, sv, tv);
+				}
+				else
+				{
+					r = mtl_rts_reach(rm_rts_v(p), rm_rts_v(n), lo, lights[i].origin.w);
+					adds[i] = mtl_rts_add(r);
+				}
 
 				if (mtl_rts_in_range(r))
 				{
 					flags |= MTL_RTS_IN_RANGE;
 				}
 
-				top = mtl_rts_top_add(top, i, mtl_rts_add(r));
+				top = mtl_rts_top_add(top, i, adds[i]);
 			}
 
 			for (int k = 0; k < MTL_RTS_CAP; k++)
@@ -241,20 +333,34 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 					flags |= MTL_RTS_SHADOWED;
 				}
 			}
+
+			/* the term: each light's add, times its visibility where traced (1 past the four) */
+			{
+				const uint pidx = mtl_rts_pack_idx(top, flags), pvis = mtl_rts_pack_vis(vis[0], vis[1], vis[2], vis[3]);
+
+				for (uint i = 0; i < nl; i++)
+				{
+					if (adds[i] > 0.0f)
+					{
+						t += mtl_rts_light_vis(pidx, pvis, i) * adds[i] * lights[i].color.rgb;
+					}
+				}
+			}
 		}
 	}
 
 	if (inside)
 	{
 		out.write(uint4(mtl_rts_pack_vis(vis[0], vis[1], vis[2], vis[3]), mtl_rts_pack_idx(top, flags), 0, 0), px);
+		term.write(float4(t, 0.0f), px);
 	}
 
-	/* the frame's counts, one atomic per SIMD group */
+	/* the frame's counts, one atomic per SIMD group (rays: the shadow rays and the primary ones) */
 	{
 		const uint c_in = simd_sum((flags & MTL_RTS_IN_RANGE) ? 1u : 0u);
 		const uint c_tr = simd_sum(rays ? 1u : 0u);
 		const uint c_sh = simd_sum((flags & MTL_RTS_SHADOWED) ? 1u : 0u);
-		const uint c_ry = simd_sum(rays);
+		const uint c_ry = simd_sum(rays + primary);
 
 		if (simd_is_first())
 		{
@@ -269,23 +375,21 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 /*
  * The resolve with the shadows on: rm_fragment_resolve's stock product,
  * where a world pixel's light is the static lightmap's sample (the
- * dynamic lights are out of the lightmaps) raised by each light's
- * visibility x (intensity - dist) x colour (rm_rts_term's sum, through
- * R_BuildLightMap's store, mtl_rts_light). show 1 is the mask of the
- * double-count check over every pixel of the target (white: no light in
- * range), show 2 the classes of rm_rts_show.
+ * dynamic lights are out of the lightmaps) raised by the kernel's term,
+ * each light's visibility x (intensity - dist) x colour (rm_rts_term),
+ * through R_BuildLightMap's store (mtl_rts_light). show 1 is the mask of
+ * the double-count check over every pixel of the target (white: no light
+ * in range), show 2 the classes of rm_rts_show.
  */
 fragment float4
 rm_fragment_resolve_rts(rm_fs_varying in [[stage_in]],
 		constant rm_uniforms_resolve &r [[buffer(0)]],
 		constant rm_rts_view &v [[buffer(1)]],
-		constant rm_rts_light *lights [[buffer(2)]],
 		texture2d<float> albedo [[texture(0)]],
 		texture2d<float> light [[texture(1)]],
 		texture2d<uint> mat [[texture(2)]],
-		depth2d<float> depth [[texture(3)]],
-		texture2d<float> normal [[texture(4)]],
-		texture2d<uint> sh [[texture(5)]])
+		texture2d<uint> sh [[texture(5)]],
+		texture2d<float> term [[texture(6)]])
 {
 	const uint2 px = uint2(in.position.xy);
 	const uint m = mat.read(px).r;
@@ -319,25 +423,11 @@ rm_fragment_resolve_rts(rm_fs_varying in [[stage_in]],
 
 	l = rm_rts_rgba(light.read(px));
 
-	if ((m == MTL_GB_MAT_WORLD) && (s.g & MTL_RTS_IN_RANGE))
+	if (m == MTL_GB_MAT_WORLD)
 	{
-		const float3 n = normalize(normal.read(px).xyz * 2.0f - 1.0f);
-		const float3 p = rm_rts_position(v, px, depth.read(px));
-		const uint nl = min(v.nlights, (uint)MTL_RTS_MAX_LIGHTS);
-		float3 t = float3(0.0f);
+		const float3 tt = term.read(px).rgb;
 
-		for (uint i = 0; i < nl; i++)
-		{
-			const float add = mtl_rts_add(mtl_rts_reach(rm_rts_v(p), rm_rts_v(n), rm_rts_v(lights[i].origin.xyz),
-					lights[i].origin.w));
-
-			if (add > 0.0f)
-			{
-				t += mtl_rts_light_vis(s.g, s.r, i) * add * lights[i].color.rgb;
-			}
-		}
-
-		l = mtl_rts_light(l, t.r, t.g, t.b);
+		l = mtl_rts_light(l, tt.r, tt.g, tt.b);
 	}
 
 	{

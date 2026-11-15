@@ -681,7 +681,7 @@ test_select_term(void)
 	const mtl_rts_v3_t p = mtl_rts_v3(0, 0, 0), up = mtl_rts_v3(0, 0, 1);
 	mtl_rts_top_t t;
 	unsigned flags = 99, pidx, pvis;
-	float rgb[3], want[3] = { 0, 0, 0 };
+	float rgb[3], want[3] = { 0, 0, 0 }, adds[MTL_RTS_MAX_LIGHTS];
 	int i;
 
 	memset(l, 0, sizeof(l));
@@ -697,10 +697,11 @@ test_select_term(void)
 		l[i].color[2] = (float)i / 10;
 	}
 
-	t = rm_rts_select(p, up, l, 6, &flags);
+	t = rm_rts_select(p, up, l, 6, NULL, adds, &flags);
 	CHECK(flags == MTL_RTS_IN_RANGE);
 	CHECK(t.idx[0] == 5 && t.idx[1] == 4 && t.idx[2] == 3 && t.idx[3] == 2);
 	CHECK(near(t.key[0], 290, 1e-4) && near(t.key[3], 260, 1e-4));
+	CHECK(near(adds[0], 240, 1e-4) && near(adds[5], 290, 1e-4));
 
 	pidx = mtl_rts_pack_idx(t, flags);
 	pvis = mtl_rts_pack_vis(1, 0, 1, 1);    /* light 4 shadowed */
@@ -719,27 +720,213 @@ test_select_term(void)
 		want[2] += add * l[i].color[2];
 	}
 
-	rm_rts_term(p, up, l, 6, pidx, pvis, rgb);
+	rm_rts_term(adds, l, 6, pidx, pvis, rgb);
 	CHECK(near(rgb[0], want[0], 1e-2) && near(rgb[1], want[1], 1e-2) && near(rgb[2], want[2], 1e-2));
 
 	/* no light in range: nothing chosen, no flag, no term */
 	l[0].origin[2] = -10;   /* behind */
-	t = rm_rts_select(p, up, l, 1, &flags);
+	t = rm_rts_select(p, up, l, 1, NULL, adds, &flags);
 	CHECK(flags == 0 && t.idx[0] == MTL_RTS_NO_LIGHT);
-	rm_rts_term(p, up, l, 1, mtl_rts_pack_idx(t, flags), 0, rgb);
+	rm_rts_term(adds, l, 1, mtl_rts_pack_idx(t, flags), 0, rgb);
 	CHECK(rgb[0] == 0 && rgb[1] == 0 && rgb[2] == 0);
 
 	/* in range by the margin only: flagged, nothing to trace or add */
 	l[0].origin[0] = 150.5f;
 	l[0].origin[2] = 100;   /* frad 200, fdist 150: past 136, inside 184 */
-	t = rm_rts_select(p, up, l, 1, &flags);
+	t = rm_rts_select(p, up, l, 1, NULL, adds, &flags);
 	CHECK(flags == MTL_RTS_IN_RANGE && t.idx[0] == MTL_RTS_NO_LIGHT);
 
 	/* more lights than the uniform holds: the first MTL_RTS_MAX_LIGHTS only, and none for a negative count */
-	t = rm_rts_select(p, up, l, -3, &flags);
+	t = rm_rts_select(p, up, l, -3, NULL, adds, &flags);
 	CHECK(flags == 0 && t.idx[0] == MTL_RTS_NO_LIGHT);
-	rm_rts_term(p, up, l, -3, 0, 0, rgb);
+	rm_rts_term(adds, l, -3, 0, 0, rgb);
 	CHECK(rgb[0] == 0 && rgb[1] == 0 && rgb[2] == 0);
+}
+
+/*
+ * The luxel-grid falloff against gl1's R_AddDynamicLights (rm_lm_dlight)
+ * on surfaces of any texture axes: scaled, rotated, sheared, shifted. At
+ * each luxel's point it is gl1's add there; between luxels it is the
+ * bilinear interpolation of the four around, as the lightmap's sample.
+ */
+static void
+test_add_lm_stock(void)
+{
+	static float bl[LUX * LUX * 3];
+	int c, cases = 0, lit = 0, wrong = 0, wrong_mid = 0, reach_wrong = 0;
+
+	for (c = 0; c < 400; c++)
+	{
+		/* a plane through the origin's neighbourhood, with axes of their own in it */
+		const float th = frand(0, 6.2831853f), ph = frand(0.05f, 3.09f);
+		float n[3] = { sinf(ph) * cosf(th), sinf(ph) * sinf(th), cosf(ph) };
+		float e1[3], e2[3], vecs0[4], vecs1[4], origin[3], color[3] = { 1, 1, 1 }, dist, len;
+		const float scale0 = (c % 4 == 0) ? 1.0f : frand(0.4f, 2.5f), scale1 = (c % 4 == 0) ? 1.0f : frand(0.4f, 2.5f);
+		const float rot = (c % 3 == 0) ? 0.0f : frand(0, 6.2831853f), shear = (c % 5 == 0) ? frand(-0.3f, 0.3f) : 0.0f;
+		const float intensity = (float)(int)frand(100, 400) + 0.5f;
+		const int tm0 = 16 * (int)frand(-20, 20), tm1 = 16 * (int)frand(-20, 20);
+		int s, t, i;
+		mtl_rts_v4_t sv, tv;
+
+		/* e1, e2: an orthonormal pair in the plane */
+		e1[0] = -n[1];
+		e1[1] = n[0];
+		e1[2] = 0;
+		len = sqrtf(e1[0] * e1[0] + e1[1] * e1[1]);
+		e1[0] /= len;
+		e1[1] /= len;
+		e2[0] = n[1] * e1[2] - n[2] * e1[1];
+		e2[1] = n[2] * e1[0] - n[0] * e1[2];
+		e2[2] = n[0] * e1[1] - n[1] * e1[0];
+
+		for (i = 0; i < 3; i++)
+		{
+			vecs0[i] = (cosf(rot) * e1[i] + sinf(rot) * e2[i]) / scale0;
+			vecs1[i] = (-sinf(rot) * e1[i] + cosf(rot) * e2[i] + shear * e1[i]) / scale1;
+		}
+
+		vecs0[3] = (float)(int)frand(-64, 64);
+		vecs1[3] = (float)(int)frand(-64, 64);
+		dist = (float)(int)frand(-200, 200);
+
+		/* the plane's point at texture position (u, v): solve vecs . p + shift = (u, v), n . p = dist */
+#define POINT(u, v, out) \
+		do \
+		{ \
+			float a = vecs0[0] * e1[0] + vecs0[1] * e1[1] + vecs0[2] * e1[2], b = vecs0[0] * e2[0] + vecs0[1] * e2[1] + vecs0[2] * e2[2]; \
+			float cc = vecs1[0] * e1[0] + vecs1[1] * e1[1] + vecs1[2] * e1[2], dd = vecs1[0] * e2[0] + vecs1[1] * e2[1] + vecs1[2] * e2[2]; \
+			float base_u = vecs0[0] * n[0] * dist + vecs0[1] * n[1] * dist + vecs0[2] * n[2] * dist + vecs0[3]; \
+			float base_v = vecs1[0] * n[0] * dist + vecs1[1] * n[1] * dist + vecs1[2] * n[2] * dist + vecs1[3]; \
+			float ru = (u) - base_u, rv = (v) - base_v, det = a * dd - b * cc; \
+			float x = (ru * dd - b * rv) / det, y = (a * rv - cc * ru) / det; \
+			int q; \
+			for (q = 0; q < 3; q++) \
+			{ \
+				(out)[q] = n[q] * dist + e1[q] * x + e2[q] * y; \
+			} \
+		} while (0)
+
+		/* the light: in front, its foot near the middle of the surface, off the integers */
+		POINT(tm0 + 8 * LUX + frand(-100, 100), tm1 + 8 * LUX + frand(-100, 100), origin);
+
+		{
+			const float h = (float)(int)frand(1, intensity - 40) + 0.21f;
+
+			for (i = 0; i < 3; i++)
+			{
+				origin[i] += n[i] * h;
+			}
+		}
+
+		memset(bl, 0, sizeof(bl));
+
+		if (!rm_lm_dlight(bl, LUX, LUX, n, dist, vecs0, vecs1, tm0, tm1, origin, intensity, color))
+		{
+			continue;
+		}
+
+		cases++;
+		sv.x = vecs0[0];
+		sv.y = vecs0[1];
+		sv.z = vecs0[2];
+		sv.w = vecs0[3];
+		tv.x = vecs1[0];
+		tv.y = vecs1[1];
+		tv.z = vecs1[2];
+		tv.w = vecs1[3];
+
+		for (t = 0; t < LUX; t++)
+		{
+			for (s = 0; s < LUX; s++)
+			{
+				float p[3];
+				const mtl_rts_v3_t pn = mtl_rts_v3(n[0], n[1], n[2]), o = mtl_rts_v3(origin[0], origin[1], origin[2]);
+				float got, want = bl[(t * LUX + s) * 3];
+
+				POINT(tm0 + 16.0f * s, tm1 + 16.0f * t, p);
+				got = mtl_rts_add_lm(mtl_rts_v3(p[0], p[1], p[2]), pn, o, intensity, sv, tv);
+
+				if (want > 0)
+				{
+					lit++;
+				}
+
+				/* gl1's float steps and the point's solve may move a truncation by one unit: one unit of add */
+				if (!near(got, want, 1.01))
+				{
+					wrong++;
+				}
+
+				/* a point inside the cell of four luxels: their bilinear mix */
+				if ((s < LUX - 1) && (t < LUX - 1))
+				{
+					const float fs = frand(0.05f, 0.95f), ft = frand(0.05f, 0.95f);
+					const float w = (bl[(t * LUX + s) * 3] * (1 - fs) + bl[(t * LUX + s + 1) * 3] * fs) * (1 - ft) +
+						(bl[((t + 1) * LUX + s) * 3] * (1 - fs) + bl[((t + 1) * LUX + s + 1) * 3] * fs) * ft;
+					mtl_rts_reach_t r;
+
+					POINT(tm0 + 16.0f * (s + fs), tm1 + 16.0f * (t + ft), p);
+					got = mtl_rts_add_lm(mtl_rts_v3(p[0], p[1], p[2]), pn, o, intensity, sv, tv);
+
+					if (!near(got, w, 1.01))
+					{
+						wrong_mid++;
+					}
+
+					/* a sample that reads a lit luxel is in range along the surface's axes */
+					r = mtl_rts_reach_st(mtl_rts_v3(p[0], p[1], p[2]), pn, o, intensity,
+							mtl_rts_v3(sv.x, sv.y, sv.z), mtl_rts_v3(tv.x, tv.y, tv.z));
+
+					if ((w > 0) && !mtl_rts_in_range(r))
+					{
+						reach_wrong++;
+					}
+				}
+			}
+		}
+#undef POINT
+	}
+
+	CHECK(cases > 300);
+	CHECK(lit > 3000);
+	CHECK(wrong == 0);
+	CHECK(wrong_mid == 0);
+	CHECK(reach_wrong == 0);
+
+	if (wrong || wrong_mid || reach_wrong)
+	{
+		printf("add_lm: %d cases, %d lit, %d luxels and %d mid-points differ, %d lit but not in range\n", cases, lit,
+				wrong, wrong_mid, reach_wrong);
+	}
+
+	/* a light behind the plane adds nothing */
+	{
+		mtl_rts_v4_t sv = { 1, 0, 0, 0 }, tv = { 0, -1, 0, 0 };
+
+		CHECK(mtl_rts_add_lm(mtl_rts_v3(0, 0, 0), mtl_rts_v3(0, 0, 1), mtl_rts_v3(0.5f, 0.5f, -20), 300, sv, tv) == 0);
+		CHECK(near(mtl_rts_add_lm(mtl_rts_v3(0, 0, 0), mtl_rts_v3(0, 0, 1), mtl_rts_v3(0.5f, 0.5f, 20), 300, sv, tv),
+				280, 1e-3));
+	}
+}
+
+static void
+test_surface_map(void)
+{
+	rm_rts_range_t r[3] = { { 0, 6 }, { 9, 3 }, { 6, 3 } };
+	unsigned m[6];
+
+	CHECK(rm_rts_surface_map(r, 3, 5, m) == 4);
+	CHECK(m[0] == 0 && m[1] == 0 && m[2] == 2 && m[3] == 1 && m[4] == 0xffffffffu);
+	CHECK(rm_rts_surface_map(r, 3, 3, m) == -1);       /* past the buffer */
+	r[1].first_index = 3;
+	CHECK(rm_rts_surface_map(r, 3, 5, m) == -1);       /* overlaps the first */
+	r[1].first_index = 10;
+	CHECK(rm_rts_surface_map(r, 3, 6, m) == -1);       /* not on a triangle */
+	r[1].first_index = 9;
+	r[1].num_indices = 4;
+	CHECK(rm_rts_surface_map(r, 3, 6, m) == -1);
+	CHECK(rm_rts_surface_map(r, 0, 6, m) == 0 && m[5] == 0xffffffffu);
+	CHECK(rm_rts_surface_map(NULL, 1, 6, m) == -1);
 }
 
 static void
@@ -797,6 +984,8 @@ main(void)
 	test_invert();
 	test_unproject();
 	test_select_term();
+	test_add_lm_stock();
+	test_surface_map();
 	test_show();
 	test_stats_format();
 

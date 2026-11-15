@@ -65,10 +65,25 @@
 #define MTL_RTS_IN_RANGE (1u << 24)     /* a light reaches it (mtl_rts_in_range) */
 #define MTL_RTS_SHADOWED (1u << 25)     /* a traced light's visibility is below 1 */
 
+#ifdef __METAL_VERSION__
+#define MTL_RTS_FLOOR floor
+#else
+#define MTL_RTS_FLOOR floorf
+#endif
+
+/* a luxel's side in texture units (gl1's 16) */
+#define MTL_RTS_LUXEL 16.0f
+
 typedef struct
 {
 	float x, y, z;
 } mtl_rts_v3_t;
+
+/* a texture axis of a surface as its texinfo holds it: the axis and the shift (gl1's vecs[i]) */
+typedef struct
+{
+	float x, y, z, w;
+} mtl_rts_v4_t;
 
 static inline mtl_rts_v3_t
 mtl_rts_v3(float x, float y, float z)
@@ -146,14 +161,20 @@ typedef struct
 	float fdist;
 } mtl_rts_reach_t;
 
+/* gl1's in-plane distance of two truncated offsets: the larger plus half the smaller */
+static inline float
+mtl_rts_octagon(int sd, int td)
+{
+	return (float)((sd > td) ? (sd + (td >> 1)) : (td + (sd >> 1)));
+}
+
+/* the same along the surface's texture axes s and t (gl1's vecs[0] and vecs[1] without their shift) */
 static inline mtl_rts_reach_t
-mtl_rts_reach(mtl_rts_v3_t p, mtl_rts_v3_t n, mtl_rts_v3_t o, float intensity)
+mtl_rts_reach_st(mtl_rts_v3_t p, mtl_rts_v3_t n, mtl_rts_v3_t o, float intensity, mtl_rts_v3_t s, mtl_rts_v3_t t)
 {
 	mtl_rts_reach_t r;
 	mtl_rts_v3_t op = mtl_rts_v3(o.x - p.x, o.y - p.y, o.z - p.z);
 	const float d = mtl_rts_dot(op, n);
-	float u, v;
-	int sd, td, axis;
 
 	r.frad = -1.0f;
 	r.fdist = 0.0f;
@@ -165,15 +186,20 @@ mtl_rts_reach(mtl_rts_v3_t p, mtl_rts_v3_t n, mtl_rts_v3_t o, float intensity)
 
 	/* the foot of the light on the plane, less the point: in the plane */
 	op = mtl_rts_v3(op.x - n.x * d, op.y - n.y * d, op.z - n.z * d);
-	axis = mtl_rts_axis(n);
-	u = (axis == 0) ? op.y : op.x;
-	v = (axis == 2) ? op.y : op.z;
-	sd = mtl_rts_trunc(u);
-	td = mtl_rts_trunc(v);
-
 	r.frad = intensity - d;
-	r.fdist = (float)((sd > td) ? (sd + (td >> 1)) : (td + (sd >> 1)));
+	r.fdist = mtl_rts_octagon(mtl_rts_trunc(mtl_rts_dot(op, s)), mtl_rts_trunc(mtl_rts_dot(op, t)));
 	return r;
+}
+
+/* with the compiler's base axes at scale 1 (mtl_rts_axis): where the surface's own axes are not known */
+static inline mtl_rts_reach_t
+mtl_rts_reach(mtl_rts_v3_t p, mtl_rts_v3_t n, mtl_rts_v3_t o, float intensity)
+{
+	const int axis = mtl_rts_axis(n);
+	const mtl_rts_v3_t s = (axis == 0) ? mtl_rts_v3(0, 1, 0) : mtl_rts_v3(1, 0, 0);
+	const mtl_rts_v3_t t = (axis == 2) ? mtl_rts_v3(0, 1, 0) : mtl_rts_v3(0, 0, 1);
+
+	return mtl_rts_reach_st(p, n, o, intensity, s, t);
 }
 
 /*
@@ -197,6 +223,67 @@ static inline int
 mtl_rts_in_range(mtl_rts_reach_t r)
 {
 	return (r.frad >= MTL_RTS_CUTOFF) && (r.fdist < r.frad - MTL_RTS_CUTOFF + MTL_RTS_REACH);
+}
+
+/*
+ * gl1's add at one luxel (R_AddDynamicLights' inner loop): frad as
+ * above, (ui, vi) the light's foot in texture units (vecs . impact +
+ * shift) and (ls, lt) the luxel's (a multiple of 16 on each axis: the
+ * luxel at s of a surface is at texturemins + 16 s, and texturemins is a
+ * multiple of 16).
+ */
+static inline float
+mtl_rts_luxel(float frad, float ui, float vi, float ls, float lt)
+{
+	float fdist;
+
+	if (!(frad >= MTL_RTS_CUTOFF))
+	{
+		return 0.0f;
+	}
+
+	fdist = mtl_rts_octagon(mtl_rts_trunc(ui - ls), mtl_rts_trunc(vi - lt));
+	return (fdist < frad - MTL_RTS_CUTOFF) ? (frad - fdist) : 0.0f;
+}
+
+/*
+ * The dynamic light the lightmap's bilinear sample holds at point p of a
+ * surface with front normal n and texture axes s and t (with their
+ * shifts): gl1's add at the four luxels around p, interpolated as the
+ * sampler does (the luxel at texture position 16 k is the centre of a
+ * texel; p's texture position is s . p + s.w). 0 for a light behind the
+ * plane.
+ */
+static inline float
+mtl_rts_add_lm(mtl_rts_v3_t p, mtl_rts_v3_t n, mtl_rts_v3_t o, float intensity, mtl_rts_v4_t s, mtl_rts_v4_t t)
+{
+	const mtl_rts_v3_t s3 = mtl_rts_v3(s.x, s.y, s.z), t3 = mtl_rts_v3(t.x, t.y, t.z);
+	const float d = mtl_rts_dot(mtl_rts_v3(o.x - p.x, o.y - p.y, o.z - p.z), n);
+	mtl_rts_v3_t impact;
+	float frad, ui, vi, up, vp, s0, t0, fs, ft, a00, a10, a01, a11;
+
+	if (!(d >= 0.0f))
+	{
+		return 0.0f;
+	}
+
+	frad = intensity - d;
+	impact = mtl_rts_v3(o.x - n.x * d, o.y - n.y * d, o.z - n.z * d);
+	ui = mtl_rts_dot(impact, s3) + s.w;
+	vi = mtl_rts_dot(impact, t3) + t.w;
+	up = (mtl_rts_dot(p, s3) + s.w) / MTL_RTS_LUXEL;
+	vp = (mtl_rts_dot(p, t3) + t.w) / MTL_RTS_LUXEL;
+	s0 = MTL_RTS_FLOOR(up);
+	t0 = MTL_RTS_FLOOR(vp);
+	fs = up - s0;
+	ft = vp - t0;
+	s0 *= MTL_RTS_LUXEL;
+	t0 *= MTL_RTS_LUXEL;
+	a00 = mtl_rts_luxel(frad, ui, vi, s0, t0);
+	a10 = mtl_rts_luxel(frad, ui, vi, s0 + MTL_RTS_LUXEL, t0);
+	a01 = mtl_rts_luxel(frad, ui, vi, s0, t0 + MTL_RTS_LUXEL);
+	a11 = mtl_rts_luxel(frad, ui, vi, s0 + MTL_RTS_LUXEL, t0 + MTL_RTS_LUXEL);
+	return (a00 * (1.0f - fs) + a10 * fs) * (1.0f - ft) + (a01 * (1.0f - fs) + a11 * fs) * ft;
 }
 
 /*
