@@ -345,7 +345,7 @@ model.
 | **5120 x 2880 at 60 Hz, the primary cell** | 14,745,600 (14.75) | 16.7 ms | 15.0 ms | the T2 host: the M6 drives this display at 60 Hz (section 8, "Display") |
 | 1920 x 1080 at 60 Hz | 2,073,600 (2.07) | 16.7 ms | 15.0 ms | none as a display |
 | 2560 x 1440 at 60 Hz | 3,686,400 (3.69) | 16.7 ms | 15.0 ms | none as a display |
-| 3840 x 2160 at 60 Hz | 8,294,400 (8.29) | 16.7 ms | 15.0 ms | none |
+| 3840 x 2160 at 60 Hz | 8,294,400 (8.29) | 16.7 ms | 15.0 ms | none as a display; T2 as a window (RT10) |
 | 3024 x 1964 at 120 Hz | 5,939,136 (5.94) | 8.3 ms | 7.5 ms | the owner's apple7 Mac has a built-in 120 Hz display of one of these two classes; TASK106 (#249) records which. No apple9 host has a 120 Hz display: T2 makes the size as a window, for GPU time only (RT10) |
 | 3456 x 2234 at 120 Hz | 7,720,704 (7.72) | 8.3 ms | 7.5 ms | as above |
 | 6016 x 3384 at 60 Hz | 20,358,144 (20.36) | 16.7 ms | 15.0 ms | none |
@@ -454,8 +454,9 @@ hybrid is never left implicit:
 Before RT13 there are no effect scales, and A is the default
 `r_rt_scale` alone. With both design defaults (`r_rt_scale` 0 and every
 effect scale 1, "The effect scales" below) a frame with an effect on is
-configuration A: the scaler runs and no effect is traced below the
-internal size, so no hybrid is on by default.
+configuration A: the scaler runs wherever the default internal size is
+below the output, and no effect is traced below the internal size, so no
+hybrid is on by default.
 
 On model R the ray cost depends only on the traced pixel count, so A, E
 and H tracing the same count cost the same in rays. They differ in the
@@ -486,8 +487,8 @@ table, row "Temporal, 2560 x 1440", same column) or 0.84 ms for B (row
 | B, 1440 rows | 2560 x 1440 | 2560 x 1440 | 9.11 M | 0.38 M | denoised scaler 19.50 M | not measured | 28.98 M as a sum, 31.45 M as one frame (31.077 + 0.377) | over by 12.3 to 14.8 | over by 14.0 to 16.5 |
 | D | as the option it is added to | | | | interpolator not timed | | not measured | | |
 | E, every effect at 1/2 | 5120 x 2880 | 2560 x 1440 | 9.11 M | 0.38 M | joint bilateral upsample, not measured (RT13) | not measured, raster at 5120 x 2880, RT7 at 2560 x 1440 | 9.48 M | 7.2 | 5.5 |
-| E, every effect at 1/3 | 5120 x 2880 | 1707 x 960 (1.64 million) | 2.479 x 1.6387 = 4.06 + | 0.38 M | as above | as above, RT7 at 1707 x 960 | 4.44 + | 12.2 | 10.6 |
-| H | 2560 x 1440 | 1280 x 720 (0.92 million) | 2.479 x 0.9216 = 2.28 + | 0.38 M | temporal scaler 2.41 M (from 2560 x 1440) and the upsample to 2560 x 1440, not measured | not measured, at 2560 x 1440, RT7 at 1280 x 720 | 5.07 + | 11.6 | 9.9 |
+| E, every effect at 1/3 | 5120 x 2880 | 1707 x 960 (1.64 million) | 2.479 x 1.6387 = 4.06 + | 0.38 M | as above | as above, RT7 at 1707 x 960 | 4.44 + | 12.2 + | 10.6 + |
+| H | 2560 x 1440 | 1280 x 720 (0.92 million) | 2.479 x 0.9216 = 2.28 + | 0.38 M | temporal scaler 2.41 M (from 2560 x 1440) and the upsample to 2560 x 1440, not measured | not measured, at 2560 x 1440, RT7 at 1280 x 720 | 5.07 + | 11.6 + | 9.9 + |
 
 The sums: A 5.14 + 0.38 + 1.82; A at 1440 rows 9.11 + 0.38 + 2.41; B
 5.14 + 0.38 + 12.03 and 9.11 + 0.38 + 19.50; E 9.11 + 0.38; H 2.28 + 0.38
@@ -875,8 +876,8 @@ one cell. Restated over the matrix:
 | B: as A, the denoised scaler in place of RT7 and the scaler | 17.6 ms sum, 18.9 ms frame (M): over the frame before raster or resolve | not measured | TASK113 (#267), selectable for comparison | RT12, where selectable |
 | C: trace at the output, accept a rate below the refresh | 36.8 ms (M), over by 20.1 | leaves time at 1920 x 1080 and 2560 x 1440 at 60 Hz (M); over on every larger class and both 120 Hz classes | C is A or E at scale 1; no card of its own | the reference itself |
 | D: the frame interpolator on another option | not timed; presents generated frames between rendered ones. The policy counts only the rendered frames under D (item 1): the GPU time per rendered frame, the interpolator's work included, and the rendered rate. So D holds a cell only where the option under it does, with the interpolator's cost added, and each rendered frame reaches the screen later | not measured | TASK111 (#265), a development option, off by default | TASK114's local report |
-| E: native raster, effects at reduced sizes, joint bilateral upsample | at 1/2: 9.48 ms (M) of rays and items, 7.2 ms left for the native raster and the upsample (not measured); at 1/3: 4.44 ms (modelled), 12.2 ms left | rays measured or modelled in every apple9 cell; raster at the output and the upsample not measured | RT13 | RT12 |
-| Hybrids (H and others) | H: 5.07 ms (modelled rays, measured scaler), 11.6 ms left | as A plus E | RT11 with RT13 | RT12 |
+| E: native raster, effects at reduced sizes, joint bilateral upsample | at 1/2: 9.48 ms (M) of rays and items, 7.2 ms left for the native raster and the upsample (not measured); at 1/3: 4.44 ms (modelled), 12.2 ms left (modelled) | rays measured or modelled in every apple9 cell; raster at the output and the upsample not measured | RT13 | RT12 |
+| Hybrids (H and others) | H: 5.07 ms (modelled rays, measured scaler), 11.6 ms left (modelled) | as A plus E | RT11 with RT13 | RT12 |
 | Dynamic resolution | as the scale it settles at, plus the controller | as the scale | a card only if RT10 shows fixed defaults miss | RT12, if built |
 
 Decision: open. It settles on image-quality data, which RT12 (TASK110,
@@ -954,8 +955,8 @@ Metal provides, no separate code path.
    captured at 1080p. From RT11 on it is captured at the host's native
    output size in one configuration, A of section 2 ("Configurations a
    test names"): `r_rt_scale 0` (its default, the family default) with
-   every effect scale at 1, both set explicitly for the capture. RT13
-   does not change it, since every effect scale's design default is 1.
+   every effect scale at 1 once RT13 has landed, both set explicitly for
+   the capture. RT13 does not change it, since every effect scale's design default is 1.
    The number also states the internal, effect and output sizes.
 4. What an agent can judge alone: pin parity with RT off, drift against an
    accepted RT look, fps, the double-count invariant (a pixel with no
