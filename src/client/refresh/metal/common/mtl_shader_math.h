@@ -252,4 +252,35 @@ mtl_lm_rect_valid(float left, float top, float right, float bottom)
 	return (right - left >= 1.0f) && (bottom - top >= 1.0f);
 }
 
+/*
+ * Sharp-bilinear sampling of the 2D pictures (metal_2d_sharp, TASK119,
+ * docs/plans/high-resolution.md P4). One axis: t is the sample position
+ * in texels (u times the texture's size), d the texels one screen pixel
+ * covers (fwidth of t). The result is the position to hand a bilinear
+ * sampler: inside a texel it is the texel's centre, so the pixel reads
+ * that texel alone, and across the edge between two texels it ramps over
+ * one pixel's width, so an edge is one pixel of blend at any scale. At an
+ * integer scale the pixel centres are half a pixel from every edge, the
+ * ramp is at its ends there, and the picture equals nearest filtering. At
+ * d of 1 or more (a texel per pixel or fewer) it is the plain bilinear
+ * position t, whatever the magnification the shader's derivative says; d
+ * that is zero, negative or not a number leaves t alone.
+ */
+static inline float
+mtl_sharp_coord(float t, float d)
+{
+	float f, i, w;
+
+	if (!(d > 0.0f))
+	{
+		return t;
+	}
+
+	d = d > 1.0f ? 1.0f : d;
+	f = t - 0.5f;
+	i = MTL_FLOOR(f);
+	w = mtl_clamp01((f - i - 0.5f) / d + 0.5f);
+	return i + 0.5f + w;
+}
+
 #endif /* MTL_SHADER_MATH_H */

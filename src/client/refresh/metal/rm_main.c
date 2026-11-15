@@ -53,6 +53,8 @@ cvar_t *gl_nolerp_list;
 cvar_t *r_lerp_list;
 cvar_t *r_2D_unfiltered;
 cvar_t *r_videos_unfiltered;
+cvar_t *r_scale8bittextures;
+cvar_t *metal_2d_sharp;
 cvar_t *r_retexturing;
 cvar_t *r_validation;
 cvar_t *vid_gamma;
@@ -126,6 +128,8 @@ R_Register(void)
 	r_lerp_list = ri.Cvar_Get("r_lerp_list", "", CVAR_ARCHIVE);
 	r_2D_unfiltered = ri.Cvar_Get("r_2D_unfiltered", "0", CVAR_ARCHIVE);
 	r_videos_unfiltered = ri.Cvar_Get("r_videos_unfiltered", "0", CVAR_ARCHIVE);
+	r_scale8bittextures = ri.Cvar_Get("r_scale8bittextures", "0", CVAR_ARCHIVE);
+	metal_2d_sharp = ri.Cvar_Get("metal_2d_sharp", "0", CVAR_ARCHIVE);
 	r_farsee = ri.Cvar_Get("r_farsee", "0", CVAR_LATCH | CVAR_ARCHIVE);
 	r_fullbright = ri.Cvar_Get("r_fullbright", "0", 0);
 	r_drawworld = ri.Cvar_Get("r_drawworld", "1", 0);
