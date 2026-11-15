@@ -11,6 +11,8 @@
 #     shared.c (what ref_metal takes from them unchanged) and the shim's
 #     mgl_raster.c behind tests/metal/rm_host_shim.c (its viewport); the
 #     model checks (N7) link files/models.c, the shared MD2 and SP2 loader.
+#     tests/metal/rm_rt_test.c, the pure part of the ray tracing (rm_rt.c,
+#     RT1, TASK53), is compiled and run the same way, with rm_pure.c.
 # (b) Only on Darwin with the Metal compiler (xcrun -f metal) and the
 #     vendored SDL 3 headers: "make ref_metal" in a scratch copy of
 #     Makefile, third_party/sdl3.make and src/ (third_party/SDL3 is linked,
@@ -95,6 +97,22 @@ elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_host_test" > "${tmp:?}/out"
 else
 	host=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_host_test: //')
 	case $host in *", 0 failed") ;; *) bad "tests/metal/rm_host_test.c printed no result line"; host="";; esac
+fi
+
+# the pure part of the ray tracing (RT1, TASK53): rm_rt.c with rm_pure.c, whose entity matrix it reuses
+rt=""
+# shellcheck disable=SC2086 # flags is a word list
+if ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "${tmp:?}/rm_rt_test" tests/metal/rm_rt_test.c \
+	"$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" \
+	src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_rt_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rt_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_rt_test.c failed"
+else
+	rt=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rt_test: //')
+	case $rt in *", 0 failed") ;; *) bad "tests/metal/rm_rt_test.c printed no result line"; rt="";; esac
 fi
 
 # strip <file>: the file with its comments and the contents of its string and
@@ -374,6 +392,6 @@ else
 fi
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $build)"
 fi
 exit $fail

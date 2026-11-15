@@ -477,7 +477,13 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   must be supported by the display, otherwise the game tries several
   steps to recover. When set to `2` a fullscreen window is created.
   It's recommended to use the displays native resolution with the
-  fullscreen window, use `r_mode -2` to switch to it.
+  fullscreen window, use `r_mode -2` to switch to it.  
+  The cvar always holds the mode the window was actually made with,
+  and that value is saved to `config.cfg`: a fraction is cut to its
+  whole number (`2.5` is used and saved as `2`), and when the game
+  falls back to a window, because the requested `r_mode` is invalid
+  or the fullscreen window could not be made, it is set to `0`, so
+  the next start opens a window too.
 
 * **vid_highdpiaware**: When set to `1` the client is high DPI aware
   and scales the window (and thus the requested resolution) by the
@@ -487,7 +493,12 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   When set to `0` the client leaves the decision if the window should
   be scaled to the underlying compositor. Scaling applied by the
   compositor may introduce blur and sluggishness.  
-  Currently high dpi awareness is only supported under Wayland.  
+  High dpi awareness is supported under Wayland and on Apple platforms
+  (macOS, iOS, iPadOS, tvOS and visionOS). On a Retina display of
+  scaling factor 2 a 640x480 window draws 1280x960 pixels and the
+  default 2D scale is 2, so menus, console and HUD keep their size on
+  the screen; with `0` it draws 640x480 pixels, which the system
+  stretches to the window. Changing it needs a `vid_restart`.  
   Defaults to `1`.
 
 * **vid_maxfps**: The maximum framerate. *Note* that vsync (`r_vsync`) 
@@ -724,6 +735,52 @@ has) is not drawn.
   filtered either way. Only `0` and `1` are values: any other value is
   `0`. Other renderers do not have it. Saved with the
   configuration; applies from the next frame.
+
+* **metal_particle_cap**: How the Metal renderer limits the size of a
+  particle point (`gl1_particle_max_size`, 40 pixels by default). `0`
+  (the default) is the limit every renderer uses, and draws what it drew
+  before this cvar existed. `1` scales the limit with the height of the
+  3D view (the window's height when the view fills it) like `gl1_particle_size` is scaled, by `height / 480`, so particles
+  close to the camera keep the proportions they have at a height of 480
+  (at 1440 lines the limit is 120 pixels, at 2880 lines 240). At a height
+  of 480 both values are the same. The size is still never above what
+  the point style allows (256 pixels for smooth points, 8191 for
+  squares). Without point parameters (`gl1_pointparameters 0`) particles
+  are triangles and have no limit. Only `1` and `0` are
+  values: any other value is `0`. Other renderers do not have it. Saved with the
+  configuration; applies from the next frame.
+
+The `r_rt_*` cvars belong to the Metal renderer's ray tracing, which is
+being built and changes nothing drawn yet: with them set, the renderer
+builds acceleration structures for the world, the doors and platforms
+and every model the frame lists (not only those in view, since a model
+out of view can still cast into it), which nothing reads. On a GPU without ray
+tracing they do nothing (the renderer says so once).
+
+* **r_rt_gunshadow**: When set to `1`, the view weapon is part of the
+  ray-traced scene, so that later ray-traced effects shade it and let it
+  cast shadows; with `0` (the default) it is left out, since from the
+  player's eye it would shadow most of the view. It is not part of the
+  scene either way when `hand` is `2` (the weapon is not drawn). Saved
+  with the configuration.
+
+* **r_rt_stats**: When set to `1`, the Metal renderer builds its
+  ray-tracing acceleration structures and prints what they hold: when a
+  map is loaded, the world's triangles by material (world, sky, water,
+  translucent), the doors and platforms with their triangles, the bytes
+  of each structure kind and the GPU time of the build; and when the map
+  is left, `r_rt_stats` is set back to `0` or the renderer shuts down, a
+  summary of the frames since the map was loaded, with the GPU time of the
+  per-frame work (the models' updates and the rebuild of the scene's
+  instance structure: least, median, 95th percentile and most) and the
+  busiest frame's models and triangles. `2` also prints one line per
+  frame: the instances, the models' triangles, how many model structures
+  were built and updated, what was left out (beams, entities without a
+  model, sprites, the view weapon, shells, models it cannot build) and the
+  bytes held. Nothing is drawn differently. The objects it makes are
+  counted as `rt` in the teardown line. With `0` (the default) nothing is
+  built and nothing is allocated for ray tracing. Applies from the next
+  frame.
 
 
 ## Gamepad

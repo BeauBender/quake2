@@ -24,15 +24,69 @@ measurement in the first sub-card (RT1); the engine limits are from the tree.
 
 Instance acceleration structure (IAS): rebuilt every frame from the visible
 entity list (`refdef_t.entities`, ≤128) plus the world and the inline brush
-models. Rebuilding ~140 instances is microseconds on every apple6+ GPU.
+models. Rebuilding it is a fraction of a millisecond: 0.17 ms for 141
+instances later in a process and about 0.6 ms in its first frames on the
+synthetic scene of section 8, and 0.28 to 0.42 ms (median) for 15 to 83
+instances in `ref_metal` on real maps (below).
 
-Memory budget, *assumed* for a retail map: 4k to 8k faces (`MAX_MAP_FACES`
-is 65536), fan triangulation gives 2.5 triangles per face, so 10k to 20k
-world triangles; the PAS at Metal's typical 64 bytes per triangle plus
-nodes is under 4 MB. An alias model is at most 4096 triangles (MD2
-`MAX_TRIANGLES`), typically 300 to 800; 128 instances refit per frame is
-under 1 M triangles, well inside a per-frame compute budget on apple7.
-RT1 measures the real counts on the owner's maps and records them here.
+Memory budget: an alias model is at most 4096 triangles (MD2
+`MAX_TRIANGLES`); `MAX_MAP_FACES` is 65536. Measured by RT1 (TASK53,
+below) on `base1` and the two maps the stock demos play (the owner's data
+has `demo1.dm2`, which plays `base2`, and `demo2.dm2`, which plays
+`waste2`; there is no `demo3.dm2`): 19k to 22k world triangles, a world
+PAS of 1.8 to 2.1 MB (93.7 bytes per triangle on all three maps, the
+94 of section 7's soup), under the 4 MB the design assumed, and on a busy
+demo frame 65 to 77 alias instances of about 100 triangles each on
+average (not 300 to 800), 6.9k to 7.7k triangles refit per frame, far
+inside the 1 M bound.
+
+As built (RT1, TASK53; `rm_rt.c`, `rm_rtscene.c`, `rmb_rt.m`,
+`rm_rt.metal`): the world PAS and one PAS per inline model are built at
+map load from N4's retained buffers without a copy (the vertex buffer at
+`RM_WVERT_STRIDE`, the uint32 index buffer at each model's range), with a
+per-triangle material buffer of the ids of section 3 (a warped face is
+`water` even when it is translucent, as stock water is, so RT6 finds it;
+`SURF_TRANS33`/`66` otherwise `alpha`; flowing faces `world`). Each alias
+model's frames and triangle list go to the GPU on its first visible frame
+(the file's triangles checked against `num_xyz`, which the loader does not
+do); each alias instance takes a structure from a pool keyed by model,
+built on its first use and refit after, from a compute lerp of its
+`oldframe`, `frame` and `backlerp` with the factors of gl1's
+`R_DrawAliasFrameLerp` (`rm_alias_lerp_setup`). Shells (`RF_SHELL_*`) are
+left out as well as the rows above: the client adds a shell as a second
+entity over its model, which would occlude it. Entities are not frustum
+culled (an entity outside the view still casts into it). The frame's work
+is three encoders in the frame's command buffer before the 3D pass (the
+lerps, the alias builds and refits, the IAS build), with GPU timestamps at
+their boundaries. Nothing reads the structures. Building is on with
+`r_rt_stats` (any value but 0), which also prints the counts; with every
+`r_rt_*` cvar at its default, or on a device without `supportsRaytracing`,
+nothing is built or allocated (`rm_rt_wanted`), and the teardown line
+counts the ray-tracing objects as `rt` (`rt 0/0` then).
+
+| Measured (TASK53, Apple M6, 640 x 480) | `base1` | `base2` (`demo1.dm2`) | `waste2` (`demo2.dm2`) |
+|---|---|---|---|
+| World triangles (world, sky, water, alpha) | 20,495 (19,561, 608, 326, 0) | 22,324 (21,188, 312, 824, 0) | 19,042 (18,205, 229, 608, 0) |
+| World PAS bytes | 1,921,280 | 2,092,608 | 1,785,088 |
+| Inline models with triangles, their triangles, PAS bytes in all | 34, 1,272 (1,228 world, 44 alpha), 131,456 | 59, 3,532 (all world), 350,464 | 38, 1,902 (all world), 191,424 |
+| Material ids (one byte per triangle of the map) | 21,767 | 25,856 | 20,944 |
+| Build scratch (freed after the build) | 942,592 | 1,047,296 | 883,456 |
+| Build at map load, world and inline PASes in one command buffer (GPU ms, every run) | 2.201 to 2.567 (4 runs) | 2.124 to 2.355 (6) | 2.129 to 2.302 (3) |
+| Busiest frame: instances (inline, alias), alias triangles | 15 (3, 11), 2,642 (the spawn point, no demo) | 71 (5, 65), 6,882 | 83 (5, 77), 7,701; 8,656 on another frame |
+| Busiest frame's bytes: alias PASes, lerped vertices, alias models' frames and triangles, IAS, per-frame scratch | 253,440, 23,088, 41,686, 3,712, 14,336 | 720,192, 61,856, 470,238, 15,872, 28,672 | 929,536, 82,368, 888,482, 18,432, 33,024 |
+| Per frame, warm (frames after the first 100): alias lerps and refits, GPU ms median (min, p95, max) | 0.322 (0.300, 0.360, 1.036), 873 frames | 0.442 (0.310, 0.562, 1.210), 588 | 0.504 (0.354, 0.849, 2.106), 517 |
+| The same, IAS rebuild | 0.283 (0.264, 0.319, 0.965) | 0.351 (0.276, 0.430, 0.698) | 0.418 (0.298, 0.527, 0.661) |
+
+The build at map load (about 2.2 ms for 21k to 26k triangles) and the
+per-frame times are at or near section 8's start level, not its later
+level (0.50 to 0.71 ms for a 10k to 20k build, 0.17 ms for a 141-instance
+rebuild): the frames of these runs hold about 0.15 ms of raster each
+(`MTL_GPU_TIME`, `base2` with every `r_rt_*` cvar at its default: median
+0.142 ms per frame command buffer, 0.841 ms with the structures built), so
+the GPU never does the milliseconds-long work after which section 8 saw
+the level change. This is consistent with section 8's hypothesis that the
+level follows the load, and was not tested further. Commands and runs:
+the runbook, "Acceleration structures in `ref_metal` (TASK53, RT1)".
 
 ## 2. The three effects, as compute passes
 

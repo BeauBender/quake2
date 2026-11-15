@@ -55,6 +55,20 @@ text files and need no game data.
   particles, and `dlights` the same lights, on every record. It needs the trace (`PINS_TRACE=0` is
   refused) and is part of the pin's name. Default: unset, the seed comes
   from the operating system as in a normal game.
+* `PINS_HIDPI`: `1` runs the engine with `vid_highdpiaware 1`, so on a
+  display of pixel density 2 (a Retina display) the `PINS_WIDTH` x
+  `PINS_HEIGHT` window draws and captures twice that size in pixels;
+  `PINS_HIDPI=1` is part of the pin's name. Default: unset (or `0`), the
+  engine runs with `vid_highdpiaware 0` and captures `PINS_WIDTH` x
+  `PINS_HEIGHT` pixels on any display, and a pin keeps the name it had
+  before this setting existed. Any other value is refused. `record`
+  writes the value as `hidpi 0` or `hidpi 1` into `settings.txt` beside
+  the frames, `replay` into its `replay.txt`. `replay` refuses
+  `PINS_HIDPI=1`: a trace is replayed at `PINS_WIDTH` x `PINS_HEIGHT`.
+  A scenario may not set `vid_highdpiaware`. Without `--ref-id`, `compare`
+  takes the newest complete pin of the reference renderer whatever its
+  `PINS_HIDPI`, as it does whatever its `PINS_WIDTH`; pass `--ref-id` to
+  compare a pin with one of the other value.
 
 The store path, `PINS_BASEDIR`, `PINS_DEMO` and scenario values may hold
 only `A-Z a-z 0-9 _ . / -`, except that `PINS_DEMO` is a bare file name
@@ -75,6 +89,7 @@ scenario plays `PINS_DEMO`, so all of them follow the same camera path.
 | `dlights` | `world` with `cl_lights 1`: the dynamic lights on the world's lightmaps (with `gl1_flashblend 1`, the flash blobs instead) |
 | `world-lmcubic` | `world` with `metal_lightmap_filter 1`: the cubic lightmap filter of the Metal renderer (the others draw it as `world`) |
 | `dlights-lmcubic` | `dlights` with `metal_lightmap_filter 1`; recorded with `PINS_SEED` like `dlights` |
+| `particles-cap` | `particles` with `metal_particle_cap 1`: the particle size limit of the Metal renderer scaled by `height / 480` (the others draw it as `particles`); recorded with `PINS_SEED` like `particles` |
 | `models` | the world plus entities: models, sprites, beams, the view weapon |
 | `particles` | everything, including particles, dynamic lights and the screen blend |
 | `hud2d` | 2D only: status bar, crosshair, console text; the OpenGL renderers draw no screen blend there (`gl_polyblend 0`), the software renderer still darkens the screen on a pickup |

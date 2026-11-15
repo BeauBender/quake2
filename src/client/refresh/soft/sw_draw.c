@@ -71,6 +71,7 @@ RE_Draw_CharScaled(int x, int y, int c, float scale)
 	byte	*source, *pic_pixels;
 	int	drawline;
 	int	row, col, v, iscale, sscale, width, height;
+	int	ustart, uend;
 
 	iscale = (int) scale;
 
@@ -107,7 +108,17 @@ RE_Draw_CharScaled(int x, int y, int c, float scale)
 	else
 		drawline = 8;
 
-	dest = vid_buffer + y * vid_buffer_width + x;
+	/* the columns inside the buffer: a character on its left or
+	   right edge is clipped there, as RE_Draw_Fill() clips, and
+	   never written into the next row or past the buffer */
+	ustart = (x < 0) ? -x : 0;
+	uend = 8 * iscale;
+	if (x + uend > vid_buffer_width)
+		uend = vid_buffer_width - x;
+	if (ustart >= uend)
+		return;
+
+	dest = vid_buffer + y * vid_buffer_width;
 
 	// clipped last lines
 	if ((y + iscale * (drawline + 1)) > vid_buffer_height)
@@ -125,13 +136,13 @@ RE_Draw_CharScaled(int x, int y, int c, float scale)
 		int f, fstep, u;
 		int sv = v * height / (iscale * draw_chars->asset_height);
 		source = pic_pixels + sv * width;
-		f = 0;
 		fstep = (width << SHIFT16XYZ) / (scale * draw_chars->asset_width);
-		for (u=0 ; u < (8 * iscale) ; u++)
+		f = ustart * fstep;
+		for (u = ustart; u < uend; u++)
 		{
 			if (source[f>>16] != TRANSPARENT_COLOR)
 			{
-				dest[u] = source[f>>16];
+				dest[x + u] = source[f>>16];
 			}
 			f += fstep;
 		}

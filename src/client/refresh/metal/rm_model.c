@@ -51,6 +51,7 @@
  */
 
 #include "header/local.h"
+#include "header/rm_rtscene.h"
 
 #define MAX_MOD_KNOWN 512
 
@@ -1292,6 +1293,8 @@ Mod_Free(model_t *mod)
 {
 	qboolean unfinished = (RM_SlotState(mod) == RM_SLOT_UNFINISHED);
 
+	RM_RT_ModelFree(mod);   /* what ray tracing built from it (TASK53) */
+
 	/* the world's slot (only the world is a brush model here): its lightmaps' CPU copies go with it */
 	if (mod == mod_known)
 	{
@@ -1403,6 +1406,8 @@ RI_EndRegistration(void)
 {
 	int i;
 	model_t *mod;
+
+	RM_RT_MapLoaded();   /* the map's acceleration structures, when ray tracing is on (TASK53) */
 
 	if (Mod_HasFreeSpace() && R_ImageHasFreeSpace())
 	{

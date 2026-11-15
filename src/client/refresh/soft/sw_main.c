@@ -1345,6 +1345,9 @@ RE_RenderFrame(refdef_t *fd)
 	entity_t	ent;
 	qboolean	anytranslucent = false;
 
+	/* Before anything draws (sw_view.c). */
+	R_ClampViewToBuffer(&r_newrefdef, vid_buffer_width, vid_buffer_height);
+
 	if (!r_worldmodel && !( r_newrefdef.rdflags & RDF_NOWORLDMODEL ) )
 	{
 		Com_Error(ERR_FATAL, "%s: NULL worldmodel", __func__);
@@ -2017,6 +2020,32 @@ RE_SetMetalLayerOpaque(SDL_Renderer *r, qboolean opaque)
 }
 #endif
 
+/*
+ * True when the buffer takes the drawable's size (the window's pixels),
+ * false when it keeps the mode's size in vid. The client decides viddef
+ * in GLimp_InitGraphics() with the same function, GLimp_DrawableInPixels()
+ * (glimp_hidpi.c, linked into this renderer too), on the same inputs: the
+ * window's high pixel density flag, the fullscreen value and r_mode. The
+ * fullscreen value is the vid_fullscreen cvar, which GLimp_InitGraphics()
+ * sets to the value the window is made with before the context is made:
+ * the value SWimp_SetMode() passed (0 in RE_SetMode()'s invalid-mode
+ * fallback, 2 for a cvar of 2.5), or 0 when SDL could not make the
+ * fullscreen window and the client fell back to a 640x480 window on its
+ * own (it sets r_mode to 4 there too). This function is called only from
+ * RE_InitContext() and after GLimp_InitGraphics() returned, so it always
+ * sees that value. The window's own flags cannot stand in for it: on
+ * macOS a window made fullscreen does not report SDL_WINDOW_FULLSCREEN
+ * yet when the context is made. Should the sizes ever disagree anyway,
+ * R_ClampViewToBuffer() keeps the 3D view inside the buffer and the
+ * Draw_* functions clip or refuse what lies outside it.
+ */
+static qboolean
+SWimp_DrawableInPixels(void)
+{
+	return GLimp_DrawableInPixels(IsHighDPIaware, (int)vid_fullscreen->value,
+		r_mode->value);
+}
+
 static int
 RE_InitContext(void *win)
 {
@@ -2078,8 +2107,11 @@ RE_InitContext(void *win)
 
 	/* We can't rely on vid, because the context is created
 	   before we had a chance to overwrite it with the drawable
-	   size. */
-	if (IsHighDPIaware)
+	   size. The buffer takes the size the client takes for
+	   viddef, and SWimp_SetMode() leaves in vid: the drawable,
+	   but on a fullscreen window only for the native resolution;
+	   every other mode keeps its own size. */
+	if (SWimp_DrawableInPixels())
 	{
 		RE_GetDrawableSize(&vid_buffer_width, &vid_buffer_height);
 	}
@@ -2088,6 +2120,8 @@ RE_InitContext(void *win)
 		vid_buffer_height = vid.height;
 		vid_buffer_width = vid.width;
 	}
+
+	Com_DPrintf("%s: buffer %dx%d\n", __func__, vid_buffer_width, vid_buffer_height);
 
 	/* just buffer for 8bit -> 32bit covert and render */
 	texture = SDL_CreateTexture(renderer,
@@ -2565,21 +2599,12 @@ SWimp_SetMode(int *pwidth, int *pheight, int mode, int fullscreen )
 	   drawable size, it would scale all cases to the size of the
 	   window. Instead use the drawable size when the user wants
 	   native resolution (the fullscreen window fills the screen)
-	   and use the requested resolution in all other cases. */
-	if (IsHighDPIaware)
+	   and use the requested resolution in all other cases.
+	   SWimp_DrawableInPixels() makes the choice, the same one as
+	   RE_InitContext() and the client. */
+	if (SWimp_DrawableInPixels())
 	{
-		if (vid_fullscreen->value != 2)
-		{
-			RE_GetDrawableSize(pwidth, pheight);
-		}
-		else
-		{
-			if (r_mode->value == -2)
-			{
-				/* User requested native resolution. */
-				RE_GetDrawableSize(pwidth, pheight);
-			}
-		}
+		RE_GetDrawableSize(pwidth, pheight);
 	}
 	return retval;
 }

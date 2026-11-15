@@ -2184,7 +2184,8 @@ CGDisplaySwitchToMode(): Unknown Error`, then the client's `Reverting to windowe
 and is to be repeated on the bare-metal host (done: **On the bare-metal host (FIX45)**, below). The fullscreen window shows the same defect: its
 pixels (1333x748 here) are neither the desktop mode nor the mode asked for, and the base rendered
 and read back at them. With the frame at the mode's size `metal` writes what `gl1-metal` writes
-and what the client's line says, in every mode. HighDPI windows are not made on macOS (section 25).
+and what the client's line says, in every mode. HighDPI windows are not made on macOS (section 25)
+until TASK118 (below).
 
 **On the bare-metal host (FIX45).** The case above, run on the bare-metal Apple Silicon Mac
 (Apple M6) at engine `c01bd7d2` (the TASK93 merge on `main`): `make client game ref_metal
@@ -2278,6 +2279,336 @@ killed by `tests/metal/rm_host_test.c` under ASAN and UBSAN. Three that made a p
 were refused by `-Werror`; each was run again with the parameter cast to `void` and killed. The
 one that let `RM_OBJ_KINDS` through `rm_ledger_kind_live` was killed only by UBSAN at first; the
 case now reads a 1 through such an index, so it fails without a sanitizer too.
+
+#### HighDPI windows on the bare-metal host (TASK118)
+
+From TASK118 the window code asks for `SDL_WINDOW_HIGH_PIXEL_DENSITY` on the `cocoa` and
+`uikit` drivers at `vid_highdpiaware 1` (the default), and the pin harness passes `+set vid_highdpiaware 0` unless `PINS_HIDPI=1`.
+The harness records the value in `settings.txt` (`record`) and `replay.txt` (`replay`), as
+`doc/100_renderpins.md` says: the card's "manifest" is these two files, because `manifest.txt` is
+the engine's frame list, which the harness counts against the frames. Engine:
+`bdda9812` (no file under `src` or the Makefile changes after it on the branch; the pin ids read
+`bdda98128905`); base: `3103b1f3` (`main`; `git diff c01bd7d2 3103b1f3 -- src Makefile` is empty),
+built from `git archive` in a scratch directory with `make client game ref_soft ref_metal` and
+`make ref_gl1 WITH_METAL_SHIM=yes`, and run as `PINS_BIN=<scratch>/release/quake2` (pin ids
+`bdda98128905-b2705498477-*`). The display: 5120x2880 pixels, 2560x1440 points (the client's
+`Real display mode: 2560x1440@60.00`), 60 Hz. Every batch with the screen unlocked
+(`CGSSessionScreenIsLocked` absent) and no other `quake2` running; one-minute load 2.1 to 3.8.
+Scripts, logs, screenshots and the measurement outputs are in `<artifacts>/TASK118/`, the pins in
+`<pin store>`.
+
+*Pins with `PINS_HIDPI` unset.* Every scenario recorded at the base and at the card for `metal`,
+`gl1-metal` and `soft` (`PINS_DEMO=idlog.cin PINS_EVERY=7` for `cinematic`, `PINS_SEED=1` for
+`models`, `dlights` and `particles`, `demo1.dm2` for the rest), then `pins.sh compare <r> <s> --ref
+<r> --ref-id <base> --cand-id <card> --threshold 0 --bad-threshold 0`:
+
+| Renderer | `world`, `world-fullbright`, `hud2d`, `skywater`, `models`, `dlights`, `particles` | `cinematic` |
+|---|---|---|
+| `metal` | 23 of 23 each, `worst=0 worst_bad=0`, byte-identical | 12 of 12, 0, 0, byte-identical |
+| `gl1-metal` | 23 of 23 each, `worst=0 worst_bad=0`, byte-identical | 12 of 12, 0, 0, byte-identical |
+| `soft` | 23 of 23 each, `worst=0 worst_bad=0`, byte-identical | 12 of 12, 0, 0, byte-identical |
+
+Every frame is 640x480 (`manifest.txt`), every record's `settings.txt` reads `hidpi 0`, and the
+pin names are the ones made before `PINS_HIDPI` existed (`world` `-2420249005`, `hud2d`
+`-506029871`, `cinematic` `-2483540229`, `world-fullbright` `-2060017375`, the same hashes as the
+older records in the store).
+
+*Sizes.* A console script beside the binary (deleted after): `developer 1`, `map base1`, 120
+`wait`s, `screenshot`, 30 `wait`s, `quit`; run as `./quake2 -datadir <game data> -portable +set
+vid_renderer R +set vid_fullscreen 0 +set r_mode 4 +set s_initsound 0 +set vid_highdpiaware V +exec
+<script>`; the size from the TGA header (bytes 12 to 15). The harness captures: `PINS_HIDPI=1
+pins.sh record R hud2d` and `world`, against the records above:
+
+| Renderer | `vid_highdpiaware 1`: `Drawable size`, screenshot, capture | `vid_highdpiaware 0`: `Drawable size`, screenshot, capture |
+|---|---|---|
+| `metal` | 1280x960, 1280x960, 23 frames 1280x960 each | 640x480, 640x480, 23 frames 640x480 each |
+| `gl1-metal` | 1280x960, 1280x960, 23 frames 1280x960 each | 640x480, 640x480, 23 frames 640x480 each |
+| `soft` | 1280x960, 1280x960, 23 frames 1280x960 each | 640x480, 640x480, 23 frames 640x480 each |
+
+Every run: status 0, `Setting mode 4: 640x480 (vid_fullscreen 0)`; the capture's `engine.log` has
+the same `Drawable size` line and its `settings.txt` reads `hidpi 1`.
+
+*The 2D scale.* `SCR_GetDefaultScale` (`cl_screen.c`) is `min(width / 640, height / 240)` of the
+client's size, 2 at 1280x960; the unit test `hidpi_2d_scale_follows_the_size_taken` runs the real
+`SCR_GetHUDScale`, `SCR_GetConsoleScale` and `SCR_GetMenuScale` on that size and gets 2 (1 at
+640x480). On the frames, `scale2d.py` (in the artifacts) takes the bounding box of every pixel that
+is not the clear colour in each `hud2d` frame (world off, only 2D drawn): on all 23 frames of each
+renderer every edge of the box at `PINS_HIDPI=1` is exactly twice the edge at `PINS_HIDPI` unset
+(middle frame: (356, 474, 960, 960) against (178, 237, 480, 480)), and the 1280x960 frame
+box-filtered down by 2 differs from the 640x480 one by a mean of at most 0.000363 (`metal`,
+`gl1-metal`) and 0 (`soft`).
+
+*The mouse.* The engine draws no mouse pointer: menus are driven by keys, and mouse buttons act as
+Enter (`Key_GetMenuKey`, `menu.c`). SDL reports mouse motion in points at both values: in relative
+mode the Cocoa driver sends `[event deltaX]`/`[event deltaY]` unscaled (`Cocoa_HandleMouseEvent`,
+`SDL_cocoamouse.m`; `SDL_mouse.c` scales it only by the relative-speed and system-scale hints,
+neither of which the engine sets), and outside it positions are window coordinates, which are
+points. The client adds the motion only in the game (`SDL_EVENT_MOUSE_MOTION` in
+`input/sdl3.c`, `key_dest == key_game`) and turns the view by its count (`IN_Move`), which no size
+enters; with a menu or the console open in a window the mouse is released (`windowed_mouse 0`,
+`CL_UpdateWindowedMouse`; `in_grab 2`) and the system pointer moves in points. So the same mouse
+travel crosses the window, and turns the view, by the same amount at both values, and no input
+code changed. The card's menu cursor line is therefore closed by analysis of that code path, not
+by a measurement: the menu cursor is the selection marker that keys move (`M_DrawCursor`,
+`menu.c`), and `input/sdl3.c` counts mouse motion only while `cls.key_dest == key_game`. No
+physical mouse was moved, no input was synthesized, and no unit test stands in for it (the one the
+first round called the measurement modelled the drawable itself and could not fail; rework 1
+removed it).
+
+*Restarts under `ASAN=1`.* `make ASAN=1 client game ref_metal ref_soft` and `make ASAN=1 ref_gl1
+WITH_METAL_SHIM=yes`; a console script (deleted after): `developer 1`, `map base1`, 120 `wait`s,
+`screenshot`, then N cycles of `set vid_highdpiaware V` (0, 1, 0, ...), `vid_restart`, 120
+`wait`s, `screenshot`, then `quit`, started at `vid_highdpiaware 1` in a 640x480 window:
+
+| Renderer, cycles | Status | Screenshots and `Drawable size` lines | Sanitizer lines | `ref_metal` teardowns |
+|---|---|---|---|---|
+| `metal`, 10 | 0 | 11, alternating 1280x960 and 640x480 | 0 | 11, each `0 live objects ... 0 unreleased, 0 unmatched` |
+| `soft`, 4 | 0 | 5, alternating 1280x960 and 640x480 | 0 | none (not loaded) |
+| `soft`, 10 (rework 1, engine `d7aa5540`) | 0 | 11, alternating 1280x960 and 640x480; the 10 `RE_InitContext: buffer` lines alternate 640x480 and 1280x960 with them | 0 | none (not loaded) |
+| `gl1-metal`, 4 | 0 | 5, alternating 1280x960 and 640x480 | 0 | none (not loaded) |
+
+*The fullscreen window* (not an acceptance line of the card), `vid_fullscreen 2`,
+`vid_highdpiaware 1`, `ASAN=1`, the size script: at `r_mode -2` every renderer printed `Setting
+mode -2: 2560x1440` and `Drawable size: 5120x2880` and its screenshot is 5120x2880, the native
+size; at `r_mode 4` `metal` and `gl1-metal` keep 640x480 (drawable line and screenshot) and `soft`
+853x480, which the base's `soft` prints and writes too. The soft renderer's buffer takes the
+drawable only where the client's `viddef` does (rework 1 below: both call
+`GLimp_DrawableInPixels` on the `fullscreen` value `SWimp_SetMode` passes): before TASK118, a
+HighDPI fullscreen window at any mode but `-2` got a buffer of the window's pixels under a `vid`
+of the mode's size. Status 0 and no sanitizer line in every run.
+
+*Rework 1: the soft buffer and the client's size from one rule.* The first round sized the `soft`
+buffer (`RE_InitContext`) and `vid` (the tail of `SWimp_SetMode`) from the `vid_fullscreen` cvar,
+while the client sizes `viddef` (`GLimp_InitGraphics`) from the `fullscreen` value `SWimp_SetMode`
+passes. Two inputs set them apart, both archived cvars a server can also send with `stufftext`:
+`vid_fullscreen 2` with `r_mode 99` (the mode is invalid, `RE_SetMode` retries `r_mode 4` with
+fullscreen 0 while the cvar stays 2: a HighDPI 640x480-point window), and `vid_fullscreen 2.5`
+(passed as 2, compared as 2.5). Since rework 1 `soft` calls the client's own function,
+`GLimp_DrawableInPixels` (`glimp_hidpi.c`, now linked into `ref_soft` as well), on the value it
+passed (`SWimp_DrawableInPixels`), and `RE_RenderFrame` clamps `r_newrefdef`'s rectangle to
+`vid_buffer_width` x `vid_buffer_height` before anything draws (`R_ClampViewToBuffer`), a no-op
+whenever the two sizes agree. The window's `SDL_WINDOW_FULLSCREEN` flag cannot stand in for the
+value: a first attempt read it, and on this host a window made fullscreen does not report it yet
+when `RE_InitContext` runs (`vid_fullscreen 2.5` then got a 5120x2880 buffer under a 5333x3000
+`viddef` again, held inside the buffer by the clamp). The one case left where the client decides on
+another value is its own fallback when SDL cannot make a `vid_fullscreen 2` window at all (it then
+makes a 640x480 window with fullscreen 0); the clamp was meant to cover it, and rework 2 below
+shows it does not. Every run below: `make ASAN=1
+client game ref_soft` (plus `ref_metal`, and `ref_gl1 WITH_METAL_SHIM=yes`), `vid_highdpiaware 1`,
+`+set developer 1` on the command line, `map base1`, 120 `wait`s, `screenshot`, 30 `wait`s, `quit`; screen
+unlocked, no other `quake2`; `RE_InitContext: buffer WxH` is a `developer 1` line rework 1 added.
+The base is `d7e230a4` (the first round's head) from `git archive`, with only that one print added:
+
+| Build, input | Status | `Drawable size` | `soft` buffer | Screenshot | Sanitizer |
+|---|---|---|---|---|---|
+| base, `vid_fullscreen 2`, `r_mode 99` | 134 | 1280x960 | 640x480 | none | `heap-buffer-overflow`, `WRITE of size 7680 ... 0 bytes after 5120-byte region`, in `R_BeginEdgeFrame sw_edge.c:99` (`newedges`, one entry per buffer column, cleared for 960 rows), allocated in `SWimp_CreateRender` |
+| base, `vid_fullscreen 2.5`, `r_mode -1` at 2560x3000 | 134 | 5333x3000 | 5120x2880 | none | `SEGV on unknown address ... caused by a WRITE memory access` in `D_DrawSpan sw_scan.c:520`, from `D_DrawSpansPow2` (`ASAN_OPTIONS=allow_user_segv_handler=0`; with the engine's own handler the run dies on signal 11 in `D_DrawSpansPow2`) |
+| head `d7aa5540`, the same two | 0, 0 | 1280x960, 5333x3000 | 1280x960, 5333x3000 | 1280x960, 5333x3000 | none |
+| head without the clamp | 0, 0 | 1280x960, 5333x3000 | 1280x960, 5333x3000 | 1280x960, 5333x3000 | none |
+| the clamp, the decision reverted to the cvar | 0, 0 | 1280x960, 5333x3000 | 640x480, 5120x2880 | 640x480, 5120x2880 | none |
+
+A 3000-row mode is used for the second input because only a `viddef` taller than the panel's 2880
+pixels exceeds the buffer there: at `vid_fullscreen 2` `SWimp_SetMode` widens the mode to the
+desktop's aspect (2560x3000 to 5333x3000), and the buffer of the 2.5 run is the drawable of the
+fullscreen window, 5120x2880. ASAN reports the second as a `SEGV`, not a `heap-buffer-overflow`:
+the two frames are one allocation of 5120 x 2880 x 2 = 29,491,200 bytes, exactly 1800 pages of
+16 KiB, so no redzone follows it: rows past 2880 run from one frame into the other or past the
+end of the allocation, where the write faults. The last row is the property the clamp alone gives: a wrong
+picture (the view in the buffer's part), not a write past it.
+
+The same two inputs on the renderers this card does not change, `MTL_DEBUG_LAYER=1` (`Metal API
+Validation Enabled`, no other validation line), status 0 and no sanitizer line each:
+
+| Renderer, input | `Drawable size` | Screenshot |
+|---|---|---|
+| `metal`, `vid_fullscreen 2`, `r_mode 99` | 1280x960 | 640x480 |
+| `metal`, `vid_fullscreen 2.5`, 2560x3000 | 2560x3000 | 5120x2880 |
+| `gl1-metal`, `vid_fullscreen 2`, `r_mode 99` | 1280x960 | 640x480 |
+| `gl1-metal`, `vid_fullscreen 2.5`, 2560x3000 | 2560x3000 | 5120x2880 |
+
+Both mismatch the client the same way, on the GPU side: `src/client/refresh/metal/rm_main.c:188`
+and `src/client/refresh/gl1/gl1_main.c:1400` decide the frame size from the `vid_fullscreen` cvar,
+not the value passed (left for their owner: the metal and shim trees are another card's, gl1's own
+files are out of this card's scope). `metal`'s teardown stays at 0 live objects in both runs.
+Rework 2 below closes this from the client's side, with no change to those files.
+
+The re-run at engine `d7aa5540` (pin ids `d7aa55409e0d-*`; after it no file under `src` or the
+Makefile changes on the branch), `PINS_HIDPI` unset, against the same base records as above:
+`soft` in every scenario 23 of 23 frames byte-identical (`cinematic` 12 of 12), `worst=0
+worst_bad=0`, 640x480; `metal` and `gl1-metal` `world` 23 of 23 byte-identical. The size script on
+`soft`: `vid_highdpiaware 1` `Drawable size: 1280x960` and a 1280x960 screenshot, `0` 640x480 and
+640x480, status 0; `PINS_HIDPI=1 pins.sh record soft world`: 23 frames of 1280x960,
+`settings.txt` `hidpi 1`. Ten `vid_restart` cycles on `soft` under `ASAN=1`: the restarts table
+above. Scripts, logs, screenshots and the two proof diffs are in `<artifacts>/TASK118/rework1/`
+(`fallback-final.tsv`, `compare-summary.tsv`, `sizes-summary.tsv`, `restarts/asan-soft.log`).
+
+*Rework 2: one fullscreen value per window.* Rework 1 left one case where `soft` decided on
+another value than the client: when SDL cannot make the `vid_fullscreen 2` window,
+`GLimp_InitGraphics` falls back to a 640x480 window with fullscreen 0 on its own (it writes
+`vid_fullscreen 0` and `r_mode 4`), while `soft` kept the 2 it had passed: a 640x480 buffer under a
+1280x960 `viddef`. The clamp covers only the 3D view, and `RE_Draw_CharScaled` bounded y but not
+x, so a full console row drawn while disconnected went past the end of `swap_buffers` (the rework
+1 runs loaded a map and never drew the full console). `metal` and `gl1-metal` read the cvar, so
+they disagreed with `viddef` in the invalid-mode fallback and at 2.5 (the table above: the top-left
+quarter of the picture, no HUD; filed as FIX61). The rule now: one fullscreen value per window,
+the one the client uses, and every renderer decides from it. `GLimp_InitGraphics` writes its
+`fullscreen` argument into `vid_fullscreen` on entry, and its own fallback writes 0 as before, so
+the cvar holds the value the window is made with when `re.InitContext` runs and when the
+renderer's `SetMode` returns. `soft` passes the cvar to `GLimp_DrawableInPixels`
+(`SWimp_DrawableInPixels`, `sw_fullscreen` is gone); `metal` and `gl1-metal` compare it in their
+own copy of the rule, unchanged. Second guard: `RE_Draw_CharScaled` clips its columns to the buffer
+as `RE_Draw_Fill` clips, and a character inside the buffer is drawn exactly as before.
+`R_ClampViewToBuffer` moved to `src/client/refresh/soft/sw_view.c`, which needs no SDL, and the
+unit test links it (`tests/unit/test_sw_view.c`; with the clamp's body removed two of its three
+tests fail).
+
+What the write does not do, by reading the code. It starts no restart: `vid_fullscreen->modified`
+is read only by `VID_CheckChanges` while `restart_state` is `RESTART_UNDEF`, every renderer's
+`GetRefAPI` sets `RESTART_NO` before `re.Init` reaches `SetMode`, and `VID_CheckChanges` keeps it
+there; every run below has one `----- refresher initialization -----` line, the ten restarts 11.
+It does not split the window-reuse path: the early return of `GLimp_InitGraphics` (a fullscreen
+window of the same size) skips both `re.InitContext` and the `viddef` code, so the buffer and
+`viddef` keep the sizes of the last window made, decided on the same value; `SWimp_SetMode`'s tail
+recomputes only `soft`'s `vid`, which sizes nothing but the triangle spans there, as on the base.
+What `config.cfg` saves changes in two cases, documented under `vid_fullscreen` in
+`doc/040_cvarlist.md`: after a renderer's invalid-mode fallback it saves `0` (before: `2`, the
+next start went fullscreen with the fallback's `r_mode`), and a fraction is saved whole (`2`, not
+`2.5`). After the client's own fallback it saves `0`, as before.
+
+The client fallback needs SDL to fail, so the runs use a **test patch**, scratch only and never
+committed (`<artifacts>/TASK118/rework2/test-patch.diff`): with `TASK118_FAIL_FS` set in the
+environment, the first fullscreen `CreateSDLWindow` call prints `Creating window failed` and
+returns false, as when `SDL_CreateWindowWithProperties` returns NULL; without it the patch does
+nothing. Every run: `make ASAN=1`, `vid_highdpiaware 1`, `+set developer 1`, no map at start (the
+full console, disconnected), 120 `wait`s, `screenshot`, `map base1`, 120 `wait`s, `screenshot`,
+`quit`; screen unlocked, no other `quake2`. The client fallback input is `vid_fullscreen 2`,
+`r_mode 4` with `TASK118_FAIL_FS=1`. The base is `2ec88921` (rework 1's head) with the test patch;
+the halves are scratch copies:
+
+| Build, client fallback, `soft` | Status | `Drawable size` | Buffer | Screenshots | Sanitizer |
+|---|---|---|---|---|---|
+| base `2ec88921` | 134 | 1280x960 | 640x480 | none | `heap-buffer-overflow`, `WRITE of size 1 ... 2 bytes after 614400-byte region`, in `RE_Draw_CharScaled sw_draw.c:134` from `Con_DrawConsole cl_console.c:716`, allocated in `SWimp_CreateRender` |
+| head `4b492a35` | 0 | 1280x960 | 1280x960 | 1280x960, 1280x960 | none |
+| the single value without the column clip | 0 | 1280x960 | 1280x960 | 1280x960, 1280x960 | none |
+| the column clip, the decision as at `2ec88921` | 0 | 1280x960 | 640x480 | 640x480, 640x480 | none |
+
+The last row is the clip alone: a wrong picture, no write past the buffer. The three renderers at
+the head (the round-1 inputs from the head's own build, the client fallback from the head with the
+test patch; `metal` with `MTL_DEBUG_LAYER=1`, no validation line), status 0 and no sanitizer line
+in every run, and the same inputs at `2ec88921`:
+
+| Renderer, input | `Drawable size` | Screenshots, head | Screenshots, `2ec88921` | `vid_fullscreen` saved, head (`2ec88921`) |
+|---|---|---|---|---|
+| `soft`, `vid_fullscreen 2`, `r_mode 99` | 1280x960 | 1280x960 | 1280x960 | `0` (`2`) |
+| `soft`, `vid_fullscreen 2.5`, 2560x3000 | 5333x3000 | 5333x3000 | 5333x3000 | `2` (`2.5`) |
+| `soft`, client fallback | 1280x960 | 1280x960 | overflow, above | `0` (`0`) |
+| `metal`, `vid_fullscreen 2`, `r_mode 99` | 1280x960 | 1280x960 | 640x480 | `0` (`2`) |
+| `metal`, `vid_fullscreen 2.5`, 2560x3000 | 2560x3000 | 2560x3000 | 5120x2880 | `2` (`2.5`) |
+| `metal`, client fallback | 1280x960 | 1280x960 | not run | `0` |
+| `gl1-metal`, `vid_fullscreen 2`, `r_mode 99` | 1280x960 | 1280x960 | 640x480 | `0` (`2`) |
+| `gl1-metal`, `vid_fullscreen 2.5`, 2560x3000 | 2560x3000 | 2560x3000 | 5120x2880 | `2` (`2.5`) |
+| `gl1-metal`, client fallback | 1280x960 | 1280x960 | not run | `0` |
+
+Both screenshots of a run have the size given. Every row's screenshot now equals its `Drawable
+size`, so `metal` and `gl1-metal` agree with the client in every row, which closes the mismatch
+FIX61 was filed for. The `soft` buffer line equals the drawable in each `soft` row. The
+pins at engine `4b492a35` (pin ids `4b492a35ffee-*`; after it no file under `src` or the Makefile
+changes on the branch), `PINS_HIDPI` unset, against the same base records as above: `soft` in
+every scenario 23 of 23 frames byte-identical (`cinematic` 12 of 12), `worst=0 worst_bad=0`,
+640x480; `metal` and `gl1-metal` `world` 23 of 23 byte-identical. Ten `vid_restart` cycles on
+`soft` under `ASAN=1`: status 0, no sanitizer line, 11 screenshots and `Drawable size` lines
+alternating 1280x960 and 640x480, and the 10 buffer lines of the restarts equal to them.
+Scripts, logs, screenshots, saved configs and diffs are in `<artifacts>/TASK118/rework2/`
+(`summary.tsv`, `compare-summary.tsv`, `restarts/asan-soft.log`, `n1-probe.txt`).
+
+| Acceptance line (TASK118) | Verdict |
+|---|---|
+| `PINS_HIDPI` unset: pins unchanged against the base, score 0, bad 0 | pass, 24 of 24 pairs byte-identical |
+| `vid_highdpiaware 1`, 640x480 window: screenshot, capture and `Drawable size` 1280x960, 2D scale 2 | pass on all three renderers |
+| `vid_highdpiaware 0`: 640x480 | pass on all three renderers |
+| The menu cursor crosses the screen in the same mouse travel | closed by analysis of the code path above, not measured: no pointer is drawn, mouse motion counts only in the game, nothing to scale |
+| Ten `vid_restart` cycles switching the value under `ASAN=1` | pass: status 0, 11 teardowns at 0 live objects (`metal`); `soft` 10 cycles at status 0 in rework 1 |
+| (rework 1) `soft` buffer equal to the client's size in the invalid-mode fallback and at `vid_fullscreen 2.5` | pass under `ASAN=1`: the base overflows, the head and each half alone do not |
+| (rework 2) one fullscreen value per window: `soft`, `metal` and `gl1-metal` take the client's size in the client's own fallback, the invalid-mode fallback and at 2.5 | pass under `ASAN=1`: the base overflows in `RE_Draw_CharScaled`, the head and each half alone do not; every screenshot equals `Drawable size` |
+
+### Acceleration structures in `ref_metal` (TASK53, RT1)
+
+RT1 builds the acceleration structures of `docs/plans/metal-raytracing-design.md`,
+section 1, which nothing reads yet; the counts and times are in that section. Host: the
+bare-metal Mac, `Apple M6` (`supportsRaytracing: yes`), macOS 27.2.1 (26B131). The pins,
+the validation runs and the ASAN run are of engine commit `0269ca35` (pin ids
+`0269ca350d6b-*`), the card's final source on its first base, `1701a052`. The card was then
+rebased onto `82f2671f` (TASK122, #301), whose only source change is `metal_particle_cap`, off
+by default, so the card's own `src` and Makefile are unchanged by the rebase; the counts and times are
+of `eaf80979`, which differs from it only in where `RI_Init` registers the two cvars (a run of
+`base2` at `0269ca35` gave the same counts). Screen unlocked before every run (`ioreg -n Root -d1 | grep -c
+CGSSessionScreenIsLocked` 0), no other `quake2`; one-minute load 2.0 to 4.0 for the single runs
+and 3.5 to 5.3 for the records (another agent was building). Every log and frame is in
+`<artifacts>/TASK53/` and `<pin store>`.
+
+```sh
+export PINS_STORE=<pin store> PINS_BASEDIR=<game data> MTL_DEBUG_LAYER=1
+make client game ref_metal
+scripts/pins.sh record metal <scenario>            # PINS_SEED=1 for models, particles, dlights as well
+# with the structures built: scenarios/<s>-rtb.cfg (<s>.cfg plus "set r_rt_stats 1"), deleted after;
+# the cinematic by the line appended to cinematic.cfg for one record (only that scenario plays a .cin)
+scripts/pins.sh record metal <s>-rtb
+scripts/pins.sh compare metal <scenario> --ref gl1 --ref-id <TASK83 record> --cand-id <record> [values]
+cmp <default frame> <the -rtb record's frame of the same number>
+```
+
+**Pins.** Against the `gl1` records of TASK83 (`de1da7fdba66-*`, `f6bb192775b8-*`, the two
+accelerated references), at the values of "Accept `gl1-metal` against `gl1` at":
+
+| Scenario | Value | Each of the two `gl1` references |
+|---|---|---|
+| `world` | the defaults | 23 of 23, worst 0.000010, bad 0.000033 |
+| `world-fullbright` | the defaults | 23 of 23, worst 0.000031, bad 0.000072 |
+| `hud2d` | the defaults | 23 of 23, 0, 0 |
+| `skywater`, `demo1.dm2` | the defaults | 23 of 23, worst 0.000010, bad 0.000033 |
+| `cinematic` (`idlog.cin`, every 7th) | the defaults | 12 of 12, 0, 0 |
+| `models` | the defaults | 23 of 23, worst 0.000084 and 0.000236, bad 0.000612 |
+| `particles` | 0.02, 0.25 | 23 of 23, worst 0.010409 and 0.010403, bad 0.153356 and 0.181045 (the references' scenario file differs from today's by its header comment only) |
+
+The store holds no `gl1` record of `dlights`; seeded `dlights`, `models` and `particles`
+(`PINS_SEED=1`) were compared with the seeded `gl1-metal` records of `bdda98128905` at 0.005 and
+0.001: 23 of 23 each, `dlights` 0 and 0, the other two worst 0.000039, bad 0.000589. With the
+structures built, every frame of `world`, `world-fullbright`, `hud2d`, `skywater`, `cinematic`
+and of seeded `models`, `particles` and `dlights` is byte-identical to the frame recorded without
+them (`cmp`: 23 of 23, 12 of 12 for `cinematic`), so those records pass as the ones above do.
+Unseeded `models` and `particles` were not recorded with the structures (two unseeded records
+differ by themselves). Every record's `engine.log` holds `Metal API Validation Enabled` and no
+other validation line, no failed command buffer and `teardown: 0 live objects`; without the
+structures it has no `rt:` line and `rt 0/0`, with them the map's line and `rt 66/66` (no
+alias models in the scenario, `cl_entities 0`) or `rt 309/309` (`models`, `particles`). The
+cinematic's record with `r_rt_stats 1` built nothing (`rt 0/0`): a cinematic draws no 3D view.
+
+**Counts and times.** `r_rt_stats 2`, one line per frame, 640 x 480, `r_vsync 0`, `timedemo 1`,
+nothing captured (`pins_capture 100000`): `+demomap demo1.dm2` (plays `base2`), `+demomap
+demo2.dm2` (`waste2`; the data has no `demo3.dm2`), and `base1` from a scratch script beside the
+binary (`map base1`, 400 one-frame waits, `quit`), each without the validation layer; the warm
+figures skip each run's first 100 frame lines. The GPU times are counter samples at the encoders'
+boundaries (`MTLCommonCounterSetTimestamp`, converted through `sampleTimestamps`); a run of
+`base2` with `MTL_GPU_TIME=1` gave 0.142 ms per frame command buffer (median) without the
+structures and 0.841 ms with them, against 0.821 ms of lerps, refits and rebuild by the samples,
+which places the samples' scale. `r_rt_gunshadow 1` on `base2` adds the view weapon (72
+instances on frame 91 instead of 71, `0 weapon` left out).
+
+**Validation.** One run per map with `MTL_DEBUG_LAYER=1` and `r_rt_stats 2`: status 0, only the
+validation banner, no failed command buffer, `teardown: 0 live objects` (`rt 309/309` on
+`base2`, `463/463` on `waste2`, `74/74` on `base1`).
+
+**ASAN.** `make ASAN=1 client game ref_metal`; `debug/quake2` with `MTL_DEBUG_LAYER=1`,
+`r_rt_stats 1` and a scratch script (`map base1`, 200 waits, `map base2`, 200 waits,
+`vid_restart`, 300 waits, `quit`): status 0, no sanitizer line, both maps' structures built and
+the summary line printed at each map change, two renderer sessions, each teardown `0 live
+objects` (`rt 176/176`, then `rt 120/120`).
+
+**No device.** This host cannot show the path without ray tracing (the VM's); the decision is
+`rm_rt_wanted` (`rm_rt.c`), host-tested (`r_rt_stats 1` or `2` with no ray tracing on the
+device: 0), called by `RM_RT_Wanted` (`rm_rtscene.c`) before anything else in
+`RM_RT_MapLoaded` and `RM_RT_Frame`, whose only other effect is one line saying the device has
+no ray tracing; `rmb_rt_open` checks `supportsRaytracing` again.
 
 ### Closing TASK27 on the build host
 
@@ -3631,3 +3962,46 @@ needs a display that holds it (windowed); if it does not fit, say which size
 ran. The VM's two values being equal, the expected finding is a cost below
 the noise; a median that rises by more than a tenth of a millisecond at 1
 is a finding to report on the card.
+
+## Particle size cap relative to the resolution in `ref_metal` (TASK122)
+
+`metal_particle_cap 1` scales the largest particle size (`gl1_particle_max_size`,
+the value the start-up took) by `height / 480` each view, the factor the size
+already has (the plan, [P13](high-resolution.md)); the default `0` leaves it as
+it was. The formula is `rm_particle_cap` in `rm_pure.c`. Host: the build VM (a
+paravirtualised Metal device), at base `1701a052` and the branch.
+
+**Host test** (`test_particle_cap`): the cap equals `max` at height 480 for every
+mode and at every height for a mode other than 1; at mode 1 it is `max * height /
+480` (40 gives 120 at 1440, 240 at 2880, 20 at 240, 90 at 1080); a huge height,
+a huge `max` or an infinite height is held to `RM_POINT_ALIASED_MAX`; a height
+not above 0 or NaN, and a `max` that is NaN or infinite, leave `max` alone; and
+through `rm_point_size` the 1440-line size of a near particle is 120 with the
+cap and 40 without.
+
+**Pins** (`MTL_DEBUG_LAYER=1`, `PINS_SEED=1`, trace on, 23 frames each,
+`--threshold 0 --bad-threshold 0`; the reference a record of `metal` built from
+`1701a052`): at `metal_particle_cap 0` the scenarios `world`, `world-fullbright`,
+`skywater`, `dlights`, `models`, `hud2d` and `particles` (640x480) all 23 frames,
+0 failed, worst 0, bad 0. `particles-cap` at 640x480 against the `particles`
+record (frames copied under the scenario's frame names): 23 frames, 0 failed,
+worst 0, bad 0. At 2560x1440 (the window opened at that size, frames of 2560x1440)
+`particles-cap` run against run: 23 frames, 0 failed, worst 0, bad 0. `particles-cap`
+against `particles` at 2560x1440 (`--threshold 0.005 --bad-threshold 0.001`): 19 of
+23 frames identical, 4 differ (frames 5, 8, 12 and 16: worst score 0.000841, bad
+0.007824); the owner does not gate the look. That last comparison is the one that
+tests the switch: at the default height of 480 the factor is 1, and a run against
+run compares a build with itself, so both also pass without the wiring in
+`rm_effects.c`. Repeat it with `PINS_WIDTH=2560 PINS_HEIGHT=1440 PINS_SEED=1` for
+`particles` and `particles-cap`; the two must differ. The records have one validation line,
+`Metal API Validation Enabled`, and no message.
+
+**Mutants** of `rm_particle_cap` (17 run, each operand of the compound guard and
+each arithmetic and bound operator): 15 killed outright (the mode test inverted or
+disarmed, the height test in three spellings or dropped, the finite test dropped or
+inverted, `480` as 481 or a product, the product as a sum or a square, the upper
+bound dropped, each return replaced by `max`), 2 equivalent (`cap >` for `!(cap <`,
+and `!(cap <=` for `!(cap <`: they differ only where `cap` is exactly
+`RM_POINT_ALIASED_MAX`, where both branches give that value). One form of the mode
+test the compiler refused for an unused operand was re-run in a form that compiles
+and is killed.

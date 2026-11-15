@@ -170,7 +170,7 @@ rm_ledger_live(const rm_ledger_t *l)
 int
 rm_ledger_format(const rm_ledger_t *l, char *buf, size_t len)
 {
-	static const char *names[RM_OBJ_KINDS] = { "device", "queue", "view", "texture", "buffer", "state" };
+	static const char *names[RM_OBJ_KINDS] = { "device", "queue", "view", "texture", "buffer", "state", "rt" };
 	size_t used = 0;
 	int k, ok;
 
@@ -4099,6 +4099,27 @@ rm_particle_color(const unsigned *palette, const unsigned char *gamma, int color
 	rgba[2] = gamma[(p >> 16) & 0xFF] / 255.0f;
 	/* a valid alpha is 0 to 1, so the byte is 0 to 255 */
 	rgba[3] = (unsigned char)(alpha * 255) / 255.0f;
+}
+
+/* metal_particle_cap: gl1's largest particle size, or that size scaled like the size itself, by height / 480 */
+float
+rm_particle_cap(float max, float height, int mode)
+{
+	double cap;
+
+	if ((mode != 1) || !(height > 0.0f) || !isfinite(max))
+	{
+		return max;
+	}
+
+	cap = (double)max * (double)height / 480.0;
+
+	if (!(cap < (double)RM_POINT_ALIASED_MAX))
+	{
+		return RM_POINT_ALIASED_MAX;
+	}
+
+	return (float)cap;
 }
 
 /* GL's initial point state (the shim's mgl_state_reset) */
