@@ -2073,6 +2073,133 @@ One-minute load 7.8 to 13.4 (the cinematic rows 11.9 to 25.1). `metal` was faste
 `skywater` 1, `skywater` from `water.dm2` 3, `models` 2, `dlights` 1, `particles-sq` 1), by up to
 24 percent (`water.dm2`, 0.5 s runs); at that load the two ranges overlap on every scenario.
 
+### `ref_metal` on the build host (TASK93, N10)
+
+N10 closes group N: the lifecycle (restarts, sizes, vsync, gamma), the selection on macOS and
+the sweep again (`docs/plans/ref-metal-native.md`, section 25). FIX45 (#230) is folded in: the
+frame is the mode's size, not the window's.
+
+**The sweep.** References: `gl1-metal` at the card's base, `9a38a4e9`, built from a detached
+checkout of that commit (the Makefile has no header dependencies on macOS, so `ref_gl1.dylib`
+was relinked and every `ref_metal` object rebuilt after each checkout; `stale_engine` refuses a
+module older than a header otherwise). Candidates: `metal` at `93be24f9` (pin ids
+`93be24f93eea-*`); the later commits change no file under `src` or the Makefile (`git diff
+93be24f9 <head> -- src Makefile` is empty). `particles` was recorded again at `fe97ef2e`, whose
+scenario file has the new header comment (a comment changes the pin id, not the engine's input).
+A scratch `world-gamma` (`world.cfg` plus `set vid_gamma 1.6` and `set gl1_intensity 3`) was put
+in `scripts/pins/scenarios/` for the records and deleted after. Every record with
+`MTL_DEBUG_LAYER=1`; the seeded ones with `PINS_SEED=1` and the trace; `water.dm2` made once by
+`make-demo water` at the base and deleted after. Recorded 19:35 to 19:38 and 20:16 local, load
+about 10:
+
+```sh
+export PINS_STORE=<private store> PINS_BASEDIR=<game data> MTL_DEBUG_LAYER=1
+# at the base: make client game ref_soft && make ref_gl1 WITH_METAL_SHIM=yes
+scripts/pins.sh record gl1-metal <scenario> [--run 2]        # PINS_SEED=1 for models (second pair), dlights, particles
+# at the card: make client game ref_metal
+scripts/pins.sh record metal <scenario>
+scripts/pins.sh compare metal <scenario> --ref gl1-metal --ref-id <reference> --cand-id <candidate> <values>
+```
+
+| Scenario | Value (design section 11) | `metal` against each reference |
+|---|---|---|
+| `hud2d` | 0.005, 0.001 | 23 of 23, score 0, bad 0 |
+| `cinematic` (`idlog.cin`, every 7th) | 0.005, 0.001 | 12 of 12, 0, 0 |
+| `world` | 0.005, 0.001 | 23 of 23, 0, 0 |
+| `world-fullbright` | 0.005, 0.001 | 23 of 23, score 0, bad at most 0.000013 |
+| `skywater`, `demo1.dm2` | 0.005, 0.001 | 23 of 23, 0, 0 |
+| `skywater`, `water.dm2`, two records | 0.02, 0.03 | 4 of 4 each, 0, 0 |
+| `models`, two records | 0.02, 0.005 | 23 of 23 each (worst 0.000103, bad 0.000589; 0.000152, 0.000589); also at 0.005, 0.001 |
+| `models` seeded, two records | 0.005, 0.001 | 23 of 23 each, worst 0.000039, bad 0.000589 |
+| `dlights` seeded, `demo1.dm2`, two records | 0.005, 0.001 | 23 of 23 each, 0, 0 |
+| `dlights` seeded, `demo2.dm2` every 7th, two records | 0.005, 0.001 | 89 of 89 each, worst 0.000001, bad 0.000013 |
+| `particles` seeded, two records | 0.005, 0.001 | 23 of 23 each, worst 0.000039, bad 0.000589; the `fe97ef2e` record byte-identical to the `93be24f9` one |
+| `world-gamma` (scratch) | 0.005, 0.001 | 23 of 23, 0, 0; its frames differ from `world`'s on 99 percent of the pixels |
+| `gl1-metal` record 2 against record 1 | 0, 0 | seeded `models`, `dlights` (both demos), `particles` and `skywater` from `water.dm2`: identical; unseeded `models` over on 1 frame (0.000116) |
+
+Every `engine.log` holds only `Metal API Validation Enabled` beside the game's output and, for
+`metal`, `teardown: 0 live objects`, `state 45/45`, `0 unreleased`, `0 unmatched`.
+
+**Restarts under `ASAN=1`.** `make ASAN=1 client game ref_metal ref_soft` and `make ASAN=1
+ref_gl1 WITH_METAL_SHIM=yes` (in `debug/`); a console script beside the binary (deleted after):
+`set r_shadows 1`, `set gl1_stencilshadow 1`, `map base1`, then eight cycles of `set vid_renderer
+R`, `vid_restart`, a wait, `screenshot`, for `gl1`, `soft` and `metal`, with `gl1_flashblend 1`
+and `map base2` before cycle 3, the three off and `map base1` before cycle 5, shadows on and `map
+base3` before cycle 7, then `quit`; run as `MTL_DEBUG_LAYER=1 ./quake2 -datadir <game data>
+-portable +set vid_renderer metal +set r_mode 4 +set s_initsound 0 +exec <script>`. `wait` waits
+one frame of at least 16 ms whatever its argument (`Cmd_Wait_f`), so the wait is an alias of 120
+`wait`s; with single `wait`s restarts given in quick succession were lost (one `vid_restart`
+taking effect for two `set vid_renderer` lines), which is the engine's command timing, not a
+renderer's. Result: status 0, 25 loads in the order asked (`metal`, then `gl1`, `soft`, `metal`
+eight times), 25 screenshots, no sanitizer line, no validation message beyond `Metal API
+Validation Enabled`, nine `ref_metal` teardowns each `0 live objects ... 0 unreleased, 0
+unmatched`.
+
+**`leaks --atExit`.** FIX41's procedure ("`vid_restart` and the main thread's autorelease pool"):
+release build, 30 `wait`s, N cycles of `set vid_renderer R; vid_restart` and 30 `wait`s, `quit`,
+under `MallocStackLogging=1 leaks --outputGraph=<file> --atExit --`; `leaks <file>` for the
+count, `heap <file>` for the footprint, the node count and the classes. Two runs of each, load
+about 10:
+
+| Configuration | 1 cycle: footprint, nodes | 8 cycles: footprint, nodes | per restart, 1 to 8 cycles |
+|---|---|---|---|
+| `soft` | 62.3, 60.5 MB; 37,782, 37,669 | 61.4, 61.5 MB; 38,515, 38,515 | 105 to 121 nodes |
+| `gl1` (shim) | 62.2, 62.0 MB; 37,598, 37,615 | 61.7, 61.7 MB; 38,528, 38,547 | 133 nodes |
+| `metal` | 61.7, 61.6 MB; 37,631, 37,590 | 61.7, 61.9 MB; 38,457, 38,463 | 118 to 125 nodes |
+| mix3 (`metal`, then `gl1`, `soft`, `metal` a cycle), one run | 64.8 MB; 38,079 | 67.8 MB; 40,390 | 110 nodes (330 a cycle) |
+
+Every run: status 0, `0 leaks for 0 total leaked bytes`, 0 `NSCGSWindow`, 0 `CAMetalLayer`, 0
+`SDL3_cocoametalview` at exit, every `ref_metal` teardown (2 after 1 cycle, 9 after 8) at `0 live
+objects`. A `metal` restart grows the heap by less than a `gl1` one and within the spread of
+`soft`'s; the footprint moves by -0.13 to 0.14 MB a cycle in every configuration but mix3 (0.4 MB
+a cycle of three restarts, FIX41's 0.3 to 0.4), within the run-to-run spread at this load.
+
+**Sizes and FIX45.** A console script beside the binary (deleted after) with `developer 1`, `map
+base1`, then for each mode a `vid_restart`, a wait and `screenshot`; the size of each TGA from its
+header. The same script for this card's `metal`, the base's (`ref_metal.dylib` built from `git
+archive 9a38a4e9` in a scratch directory, next to a copy of the engine) and `gl1-metal`:
+
+| Mode | Client's `Drawable size` | `metal` | `metal` at the base | `gl1-metal` |
+|---|---|---|---|---|
+| `r_mode 4`, windowed | 640x480 | 640x480 | 640x480 | 640x480 |
+| `r_mode 6`, windowed | 800x600 | 800x600 | 800x600 | 800x600 |
+| `r_mode -1`, 1024x640, windowed | 1024x640 | 1024x640 | 1024x640 | 1024x640 |
+| `r_mode 10`, `vid_fullscreen 1` | 640x480 (reverted) | 640x480 | 640x480 | 640x480 |
+| `r_mode -2`, `vid_fullscreen 2` | 1333x888 | 1333x888 | 1333x748 | 1333x888 |
+| `r_mode 4`, `vid_fullscreen 2` | 640x480 | 640x480 | 1333x748 | 640x480 |
+
+`vid_fullscreen 1` cannot change the display mode on this host (`SDL SetVideoMode failed:
+CGDisplaySwitchToMode(): Unknown Error`, then the client's `Reverting to windowed r_mode 4
+(640x480)`), so TASK98's case, a display mode other than the one asked for, does not appear here
+and is to be repeated on the bare-metal host. The fullscreen window shows the same defect: its
+pixels (1333x748 here) are neither the desktop mode nor the mode asked for, and the base rendered
+and read back at them. With the frame at the mode's size `metal` writes what `gl1-metal` writes
+and what the client's line says, in every mode. HighDPI windows are not made on macOS (section 25).
+
+**vsync.** In the same run, `set r_vsync 0`, `1`, `0`, `1` between frames printed
+`ref_metal: displaySyncEnabled off`, `on`, `off`, `on`: the property read back from the layer,
+which is also what `IsVSyncActive` returns.
+
+**Selection.** `+set vid_renderer gl3` with no `ref_gl3.dylib` beside the binary: `Library
+ref_gl3.dylib cannot be found!`, `Retrying with metal...`, `Successfully loaded ref_metal.dylib`.
+The preprocessed `vid.c` (the Makefile's compile line with `-E -P`) has `"gl3", "metal", "gl1",
+"soft"`; the `r_order` block preprocessed without `__APPLE__` (and with `_WIN32`) has `"gl3",
+"gl1", "soft"`. The menu's `fulllist` preprocessed the same way has `[Metal     ]` on macOS and
+not without `__APPLE__`.
+
+**The module mapping.** A scratch program that `dlopen`s a module, `dlclose`s it and asks
+`dlopen(RTLD_NOLOAD)` again: a plain C dylib is unmapped, `ref_metal.dylib` and the shim's
+`ref_gl1.dylib` stay mapped (dyld keeps an image with Objective-C metadata). `RM_KeepMapped`
+adds the documented `RTLD_NODELETE` reference.
+
+**Mutants.** Each of the five new functions of `rm_pure.c` (`rm_ledger_kind_live`,
+`rm_ledger_clean`, `rm_frame_size`, `rm_frame_remake`, `rm_present_region`), every operand of
+each compound guard on its own, each comparison moved by one, each result field: 51 mutants, all
+killed by `tests/metal/rm_host_test.c` under ASAN and UBSAN. Three that made a parameter unused
+were refused by `-Werror`; each was run again with the parameter cast to `void` and killed. The
+one that let `RM_OBJ_KINDS` through `rm_ledger_kind_live` was killed only by UBSAN at first; the
+case now reads a 1 through such an index, so it fails without a sanitizer too.
+
 ### Closing TASK27 on the build host
 
 The umbrella card's acceptance list, checked end to end after P1 to P3
