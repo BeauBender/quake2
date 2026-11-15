@@ -787,16 +787,15 @@ cfg_bands() {
         fi
     done < "$1"
 }
-# scenario_bands <scenario>: the bands of the scenario's cfg, which must exist
+# scenario_bands <scenario>: the bands of the scenario's cfg (the caller has checked it exists)
 scenario_bands() {
-    [ -f "$scen_dir/$1.cfg" ] || die "no scenario $1 (see $scen_dir)"
     cfg_bands "$scen_dir/$1.cfg"
 }
 # fp_dir <scenario> <renderer> <value>: a directory of frames, named by path
 # (a value holding "/") or as an id under <store>/<scenario>/<renderer>/
 fp_dir() {
     local d=$3
-    case $d in */*) ;; ''|.*) die "an id is a directory name not starting with '.', got '$d'";; *) check_store "$1" "$2"; d="$(store)/$1/$2/$d";; esac
+    case $d in */*) ;; .*) die "an id is a directory name not starting with '.', got '$d'";; *) check_store "$1" "$2"; d="$(store)/$1/$2/$d";; esac
     [ -d "$d" ] || die "no frames at $d"
     echo "${d%/}"
 }
@@ -2112,10 +2111,14 @@ st_footprint_guards() { # TASK133 rework: every refusal of footprint, where and 
     done
     # --- framediff: an output over 65535 pixels either way does not fit a TGA
     "$diff" --gen "$tmp/wide.tga" 2048 4 1; "$diff" --gen "$tmp/tall.tga" 4 4370 1
-    rc=0; "$diff" --zoom "$tmp/wide.tga" "$tmp/wide.tga" "$tmp/wide-zm.tga" --window 2048x1 --scale 16 >/dev/null 2>&1 || rc=$?
-    [ "$rc" != 0 ] && [ ! -e "$tmp/wide-zm.tga" ] || st_fail "a zoom 65536 wide must be refused (rc $rc)" || return 1
-    rc=0; "$diff" --zoom "$tmp/tall.tga" "$tmp/tall.tga" "$tmp/tall-zm.tga" --window 1x4370 --scale 15 >/dev/null 2>&1 || rc=$?
-    [ "$rc" != 0 ] && [ ! -e "$tmp/tall-zm.tga" ] || st_fail "a zoom 65550 high must be refused (rc $rc)" || return 1
+    out=$("$diff" --zoom "$tmp/wide.tga" "$tmp/wide.tga" "$tmp/wide-zm.tga" --window 2048x1 --scale 16 2>&1) && rc=0 || rc=$?
+    [ "$rc" != 0 ] && [ ! -e "$tmp/wide-zm.tga" ] && case $out in *"the zoom image would be 65536x16"*) ;; *) false;; esac || st_fail "a zoom 65536 wide must be refused before it is drawn (rc $rc: $out)" || return 1
+    out=$("$diff" --zoom "$tmp/tall.tga" "$tmp/tall.tga" "$tmp/tall-zm.tga" --window 1x4370 --scale 15 2>&1) && rc=0 || rc=$?
+    [ "$rc" != 0 ] && [ ! -e "$tmp/tall-zm.tga" ] && case $out in *"the zoom image would be 30x65550"*) ;; *) false;; esac || st_fail "a zoom 65550 high must be refused before it is drawn (rc $rc: $out)" || return 1
+    for g in "65536 1" "1 65536" "0 4"; do
+        rc=0; "$diff" --gen "$tmp/toobig.tga" $g 0 >/dev/null 2>&1 || rc=$?
+        [ "$rc" != 0 ] && [ ! -e "$tmp/toobig.tga" ] || st_fail "an image of $g pixels does not fit a TGA and is not written (rc $rc)" || return 1
+    done
     rc=0; "$diff" --zoom "$tmp/tall.tga" "$tmp/tall.tga" "$tmp/tall-zm.tga" --window 1x4369 --scale 15 >/dev/null 2>&1 || rc=$?
     [ "$rc" = 0 ] && [ "$(od -An -tu1 -j 14 -N2 "$tmp/tall-zm.tga" | tr -s ' ' | sed -e 's/^ //' -e 's/ $//')" = "255 255" ] || st_fail "a zoom exactly 65535 high is written (rc $rc)" || return 1
     rm -f "$tmp/tall-zm.tga"
