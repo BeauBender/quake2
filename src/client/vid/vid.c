@@ -417,6 +417,7 @@ const char* lib_ext = "so";
 refexport_t GetRefAPI(refimport_t imp);
 #endif
 
+#ifndef STATIC_MODULES
 /*
  * Returns platform specific path to a renderer lib.
  */
@@ -425,6 +426,7 @@ VID_GetRendererLibPath(const char *renderer, char *path, size_t len)
 {
 	snprintf(path, len, "%sref_%s.%s", Sys_GetBinaryDir(), renderer, lib_ext);
 }
+#endif
 
 /*
  * Checks if a renderer DLL is available.

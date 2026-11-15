@@ -505,7 +505,7 @@ endif
 # ----------
 
 # Phony targets
-.PHONY : all client game icon server ref_gl1 ref_gl3 ref_soft ref_metal
+.PHONY : all client game icon server ref_gl1 ref_gl3 ref_soft ref_metal static_modules
 
 # ----------
 
@@ -1406,6 +1406,10 @@ SERVER_DEPS= $(SERVER_OBJS:.o=.d)
 # modules reach the engine only through game_import_t and refimport_t,
 # as before, and SDL through the executable's own copy. Checked on the
 # executable by tests/check-static-modules.sh.
+ifneq ($(STATIC_MODULES),1)
+static_modules:
+	@echo "static_modules needs STATIC_MODULES=1" >&2; exit 1
+endif
 ifeq ($(STATIC_MODULES),1)
 STATIC_GAME_OBJ := $(BUILDDIR)/static/game.o
 ifeq ($(STATIC_RENDERER),soft)
@@ -1419,6 +1423,10 @@ STATIC_LDLIBS += -framework Metal -framework QuartzCore -framework Foundation -w
 endif
 STATIC_REF_OBJ := $(BUILDDIR)/static/ref_$(STATIC_RENDERER).o
 STATIC_LINK_OBJS := $(STATIC_GAME_OBJ) $(STATIC_REF_OBJ)
+
+# Just the two combined objects, without the client or SDL: what
+# tests/check-static-modules.sh checks in the gate.
+static_modules: $(STATIC_LINK_OBJS)
 
 # Only the client's own objects see the macros the loaders check.
 $(BUILDDIR)/client/%.o : CFLAGS += -DSTATIC_MODULES -DSTATIC_RENDERER_NAME=\"$(STATIC_RENDERER)\"
