@@ -783,11 +783,44 @@ has) is not drawn.
   configuration; applies from the next frame.
 
 The `r_rt_*` cvars belong to the Metal renderer's ray tracing, which is
-being built and changes nothing drawn yet: with them set, the renderer
+being built and changes nothing drawn yet: with `r_rt_stats` set, the renderer
 builds acceleration structures for the world, the doors and platforms
 and every model the frame lists (not only those in view, since a model
 out of view can still cast into it), which nothing reads. On a GPU without ray
-tracing they do nothing (the renderer says so once).
+tracing they do nothing (the renderer says so once). The development
+switches `r_rt_gbuffer` and `r_rt_motion` and the settings beside them
+choose how a view is drawn, on any Metal GPU, and leave the picture as it
+is.
+
+* **r_rt_gbuffer**: A development switch of the Metal renderer. When
+  set to anything but `0`, a view with the world is drawn through the
+  G-buffer the ray-traced effects will build on: the world and the opaque
+  models are drawn into six images (depth, the surface's direction, a
+  material number, how far each pixel moved since the last frame, the
+  lightmap and the texture colour), a second pass multiplies them back
+  into the picture, and the view weapon, sprites, particles, beams and
+  translucent surfaces are drawn over it as before. The picture is the
+  same within one level of a colour channel (the images keep 8 bits of the
+  texture and of the light where the default path multiplies them
+  unrounded). With `0` (the default) nothing of it is made: the default
+  path is faster when no ray-traced effect is on (see
+  `docs/plans/metal-raytracing-design.md`, section 3). The menu's player
+  model is always drawn the default way. Applies from the next frame.
+
+* **r_rt_gbuffer_scale**: A development setting of the Metal renderer:
+  with `r_rt_gbuffer` or `r_rt_motion` on, the 3D view is drawn at this
+  fraction of the window's size (above `0` and below `1`; any other value
+  is `1`, the default) and stretched to it, a stand-in for an upscaler
+  that will take its place; the status bar, the menus and the console
+  stay at the window's size. Applies from the next frame.
+
+* **r_rt_gbuffer_show**: A development view of the Metal renderer: with
+  `r_rt_gbuffer` or `r_rt_motion` on, one of the images replaces the 3D
+  view: `1` the texture colour, `2` the surface direction, `3` the
+  material number, `4` the motion (red and green are half plus the motion
+  in pixels over 16, blue is set where something was drawn), `5` the
+  light, `6` the depth; `1` to `3` and `5` only with `r_rt_gbuffer`. `0`
+  (the default) shows the picture. Applies from the next frame.
 
 * **r_rt_gunshadow**: When set to `1`, the view weapon is part of the
   ray-traced scene, so that later ray-traced effects shade it and let it
@@ -795,6 +828,27 @@ tracing they do nothing (the renderer says so once).
   player's eye it would shadow most of the view. It is not part of the
   scene either way when `hand` is `2` (the weapon is not drawn). Saved
   with the configuration.
+
+* **r_rt_jitter_x**, **r_rt_jitter_y**: A development setting of the
+  Metal renderer: with `r_rt_gbuffer` or `r_rt_motion` on, the 3D view is
+  drawn moved by this many pixels to the right and down (a fraction of a
+  pixel, as an upscaler's sub-pixel jitter); the motion images do not
+  include the move. `0` (the default) draws it in place. Applies from the
+  next frame.
+
+* **r_rt_motion**: A development switch of the Metal renderer. When set
+  to anything but `0` (and `r_rt_gbuffer` is `0`), a view with the world
+  is drawn as by default and also keeps its depth and how far each pixel
+  moved since the last frame, which an upscaler needs; the picture is the
+  same. With `0` (the default) neither is kept. Applies from the next
+  frame.
+
+* **r_rt_motion_test**: A development check of the Metal renderer's
+  motion images: when set to an angle in degrees, the last frame is taken
+  to be this one turned by that angle about the camera's vertical axis,
+  so that every pixel's motion is that of a known turn (shown with
+  `r_rt_gbuffer_show 4`). `0` (the default) uses the real last frame.
+  Applies from the next frame.
 
 * **r_rt_stats**: When set to `1`, the Metal renderer builds its
   ray-tracing acceleration structures and prints what they hold: when a

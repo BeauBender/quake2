@@ -415,6 +415,13 @@ test_hist(void)
 	rm_gb_hist_match(&h, 64, 4);
 	CHECK(h.match[0] == -1);
 
+	/* entities kept from a view that is not valid match nothing */
+	h.prev.nents = 1;
+	h.prev.ents[0] = ent(&ma, 4, 0, 0);
+	h.prev.valid = 0;
+	rm_gb_hist_match(&h, 64, 4);
+	CHECK(h.match[0] == -1);
+
 	/* a count past the arrays is bounded */
 	h.cur.nents = RM_GB_MAX_ENTS + 5;
 	h.prev.valid = 1;
