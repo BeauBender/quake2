@@ -47,7 +47,8 @@
 static cvar_t *r_rt_gbuffer;
 static cvar_t *r_rt_motion;
 static cvar_t *r_rt_gbuffer_scale;
-static cvar_t *r_rt_jitter;
+static cvar_t *r_rt_jitter_x;
+static cvar_t *r_rt_jitter_y;
 static cvar_t *r_rt_gbuffer_show;
 static cvar_t *r_rt_motion_test;
 
@@ -65,7 +66,8 @@ RM_GB_Init(void)
 	r_rt_gbuffer = ri.Cvar_Get("r_rt_gbuffer", "0", 0);
 	r_rt_motion = ri.Cvar_Get("r_rt_motion", "0", 0);
 	r_rt_gbuffer_scale = ri.Cvar_Get("r_rt_gbuffer_scale", "1", 0);
-	r_rt_jitter = ri.Cvar_Get("r_rt_jitter", "0 0", 0);
+	r_rt_jitter_x = ri.Cvar_Get("r_rt_jitter_x", "0", 0);
+	r_rt_jitter_y = ri.Cvar_Get("r_rt_jitter_y", "0", 0);
 	r_rt_gbuffer_show = ri.Cvar_Get("r_rt_gbuffer_show", "0", 0);
 	r_rt_motion_test = ri.Cvar_Get("r_rt_motion_test", "0", 0);
 	RM_GB_Reset();
@@ -94,12 +96,7 @@ RM_GB_Choose(const refdef_t *fd)
 static void
 RM_GB_ParseJitter(void)
 {
-	float x = 0, y = 0;
-
-	if (sscanf(r_rt_jitter->string, "%f %f", &x, &y) < 1)
-	{
-		x = y = 0;
-	}
+	const float x = r_rt_jitter_x->value, y = r_rt_jitter_y->value;
 
 	jitter[0] = isfinite(x) ? x : 0.0f;
 	jitter[1] = isfinite(y) ? y : 0.0f;

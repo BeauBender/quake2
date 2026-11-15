@@ -20,7 +20,8 @@
  * =======================================================================
  *
  * The engine side of ref_metal's G-buffer (RT2, TASK54): the r_rt_gbuffer,
- * r_rt_motion, r_rt_gbuffer_scale and r_rt_jitter cvars, the path of a
+ * r_rt_motion, r_rt_gbuffer_scale, r_rt_jitter_x and r_rt_jitter_y cvars
+ * (and the development views r_rt_gbuffer_show and r_rt_motion_test), the path of a
  * view, its render size and jittered projection, the previous-frame
  * history (rm_gb_hist_t) and the motion uniforms of the world's and each
  * entity's draws. rm_gbufscene.c.
