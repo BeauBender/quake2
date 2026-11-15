@@ -14,7 +14,9 @@
 #  - a self-test, on a copy of the hook with stub checks and a 2 s deadline
 #    in a throwaway repository, does not show that the hook runs nothing on
 #    a clean tree; on a change under src/ exits 0 and prints nothing when
-#    the checks pass; blocks (exit 2) on a failing check and names it, and
+#    the checks pass, also when one leaves a process behind (which must not
+#    hold the hook's output open); blocks (exit 2) on a failing check and
+#    names it, and
 #    with stop_hook_active true names it and exits 0; names a missing
 #    listed check and blocks; stops a check that hangs and ignores TERM at
 #    the deadline, with every process in its group, names it and the
@@ -137,6 +139,8 @@ selftest()
 	# Ignores TERM, as does the sleep it starts, so only KILL stops them.
 	printf '#!/bin/sh\ntrap "" TERM\necho $$ > "%s/hang.pids"\nsleep 20 &\necho $! >> "%s/hang.pids"\nwait\n' \
 		"${tmp:?}" "${tmp:?}" > "$r/tests/check-hang.sh"
+	# Passes, and leaves a process behind that would hold the hook's output.
+	printf '#!/bin/sh\nsleep 10 &\necho $! > "%s/leave.pid"\necho "$0: ok"\n' "${tmp:?}" > "$r/tests/check-leave.sh"
 	chmod 755 "$r"/tests/check-*.sh
 	printf '%s\n' 'int x;' > "$r/src/a.c"
 	g init -q --template= "$r"
@@ -170,6 +174,13 @@ selftest()
 	hookwith tests/check-pass.sh tests/check-pass2.sh
 	run st "$no"
 	quiet "passing checks"
+
+	hookwith tests/check-pass.sh tests/check-leave.sh
+	run st "$no"
+	quiet "a check that leaves a process behind"
+	[ "$secs" -le 4 ] ||
+		fail "selftest: a check that leaves a process behind: the hook's output stayed open $secs s, held by that process"
+	kill "$(cat "${tmp:?}/leave.pid")" 2> /dev/null || true
 
 	hookwith tests/check-pass.sh tests/check-fail.sh tests/check-pass2.sh
 	run st "$no"

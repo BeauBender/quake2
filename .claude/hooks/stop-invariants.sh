@@ -57,7 +57,9 @@ trap '[ -z "$c" ] || kill -KILL -- "-$c"; [ -z "$w" ] || kill -KILL -- "-$w"; ex
 
 # Job control puts each background job in a process group of its own,
 # led by $!. Its notices about killed jobs go to /dev/null with the rest
-# of the loop's stderr; the checks write to $tmp/out.
+# of the loop's stderr; the checks write to $tmp/out. No check or watcher
+# holds the hook's stderr (fd 3 here), so nothing left behind by a check
+# keeps Claude Code reading it after the hook exits.
 exec 3>&2 2> /dev/null
 set -m
 end=$(($(date +%s) + deadline))
@@ -72,7 +74,7 @@ for check in $checks; do
 		continue
 	fi
 	rm -f "${tmp:?}/late"
-	"$check" < /dev/null > "${tmp:?}/out" 2>&1 &
+	"$check" < /dev/null > "${tmp:?}/out" 2>&1 3>&- &
 	c=$!
 	(
 		sleep "$left"
@@ -80,7 +82,7 @@ for check in $checks; do
 		kill -TERM -- "-$c"
 		sleep "$grace"
 		kill -KILL -- "-$c"
-	) < /dev/null > /dev/null 2>&1 &
+	) < /dev/null > /dev/null 2>&1 3>&- &
 	w=$!
 	rc=0
 	wait "$c" || rc=$?
