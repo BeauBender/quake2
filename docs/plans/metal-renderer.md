@@ -12,6 +12,7 @@ Decision record (owner-gated, `manual:BeauBender`):
 - INFORM8 (#35) — Metal path: pin at two seams, grow an in-tree OpenGL-subset shim first, then specialize into native `ref_metal` (closed, accepted by the owner on 2026-11-12)
 - INFORM9 (#36) — Pin fixtures: reference frames and traces come from the owner's game data on a Mac where `ref_gl1` runs, kept in a local pin store; CI runs only synthetic traces (closed, accepted by the owner on 2026-11-12)
 - INFORM11 (#101) — the look of the four ray-traced effects, accepted by the owner from the frames RT3 to RT6 captured (owner-gated, `gate:manual:BeauBender`) — depends on TASK55, TASK56, TASK57, TASK58
+- INFORM12 (#262) — the ray passes run at an internal resolution and the MetalFX temporal scaler upscales the frame, decided by TASK105 (owner-gated, `gate:manual:BeauBender`)
 
 Work cards:
 - TASK20 — Static-link build mode (platform) — tier T0
@@ -48,8 +49,10 @@ inside the manifest; each card also carries its group's parent dependencies):
 - TASK58 (#100) — Water reflections, one bounce — tier T1; depends on TASK55
 - TASK59 (#102) — Temporal accumulation and the denoiser — tier T1; depends on INFORM11
 - TASK60 (#103) — Hardware gating and fallbacks, with ray tracing forced off on the VM — tier T0 and T1; depends on TASK54
-- TASK61 (#104) — Render-stage ray queries on M3 or later, compute path kept for older families — tier T2; depends on TASK59
-- TASK62 (#105) — Refit against rebuild tuning and resolution-scale defaults per GPU family — tier T2; depends on TASK61
+- TASK61 (#104) — Render-stage ray queries on M3 or later, compute path kept for older families, both at the internal resolution — tier T2; depends on TASK59 and TASK109
+- TASK62 (#105) — Refit against rebuild tuning and resolution-scale defaults per GPU family — tier T2; depends on TASK61, TASK110 and TASK106 (#249)
+- TASK109 (#263) — Internal resolution and the MetalFX temporal scaler — tier T0, T1 and T2; depends on TASK59 and TASK60
+- TASK110 (#264) — Image quality of the upscaled frame on real frames — tier T2; depends on TASK109 and INFORM11
 - TASK84 (#195) — N1: `ref_metal` skeleton: build target, window seat, clear, present, frame capture, capability report, gate check — tier T0
 - TASK85 (#196) — N2: Images, textures, the 2D pipeline and the cinematic; the shim's GL-free arithmetic moved to `metal/common/` — tier T0; depends on TASK84
 - TASK86 (#197) — N3: Pics, characters, the scrap and the HUD — tier T0; depends on TASK85
