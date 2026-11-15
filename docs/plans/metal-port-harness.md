@@ -2120,6 +2120,14 @@ scripts/pins.sh compare metal <scenario> --ref gl1-metal --ref-id <reference> --
 Every `engine.log` holds only `Metal API Validation Enabled` beside the game's output and, for
 `metal`, `teardown: 0 live objects`, `state 45/45`, `0 unreleased`, `0 unmatched`.
 
+At `f1e23000` (the present clears a drawable larger than the frame; nothing else under `src`
+changed) every `metal` record but `skywater` from `water.dm2` and the scratch `world-gamma` was
+made again: each passes against each reference as above (unseeded `models` worst 0.000233 and
+0.000123, bad 0.000589), and `hud2d`, `cinematic`, `world`, `world-fullbright`, `skywater`,
+seeded `models`, both `dlights` and `particles` are byte-identical to the `93be24f9` records.
+The two left out read the same target and present path as the others (pin frames are windowed,
+the frame the drawable's size, so the new clear never runs).
+
 **Restarts under `ASAN=1`.** `make ASAN=1 client game ref_metal ref_soft` and `make ASAN=1
 ref_gl1 WITH_METAL_SHIM=yes` (in `debug/`); a console script beside the binary (deleted after):
 `set r_shadows 1`, `set gl1_stencilshadow 1`, `map base1`, then eight cycles of `set vid_renderer
