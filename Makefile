@@ -38,6 +38,18 @@
 #   i686-w64-mingw32   -> indicates i386
 # QUIET
 #   If defined, "===> CC ..." lines are silenced.
+# STATIC_MODULES
+#   STATIC_MODULES=1 (macOS only) links the game module and one
+#   renderer into the client executable: no game.dylib and no
+#   ref_*.dylib, GetGameAPI and GetRefAPI are resolved at link time.
+#   Builds only the client (make STATIC_MODULES=1 client).
+# STATIC_RENDERER
+#   The renderer linked in by STATIC_MODULES=1: soft (default), gl1
+#   or metal.
+# STATIC_ROOT
+#   Where a STATIC_MODULES=1 build writes its objects (STATIC_ROOT/obj)
+#   and the executable (STATIC_ROOT/bin). Default build/<debug|release>/
+#   static-<renderer>. Never release/ or debug/.
 # SOURCE_DATE_EPOCH
 #   For reproduceable builds, look here for details:
 #   https://reproducible-builds.org/specs/source-date-epoch/
@@ -457,6 +469,31 @@ endif
 
 # ----------
 
+# STATIC_MODULES=1: the game and one renderer are linked into the
+# client executable (see the variables at the top). The objects of
+# the three go to a tree of their own, so the dynamic build is not
+# touched. This comes after the SDL3 include on purpose: the SDL
+# library keeps its place and is shared by both builds.
+STATIC_RENDERER ?= soft
+STATIC_LINK_OBJS :=
+STATIC_LDLIBS :=
+ifeq ($(STATIC_MODULES),1)
+ifneq ($(YQ2_OSTYPE), Darwin)
+$(error STATIC_MODULES=1 is for macOS only)
+endif
+ifeq ($(filter $(STATIC_RENDERER),soft gl1 metal),)
+$(error STATIC_RENDERER must be soft, gl1 or metal, not "$(STATIC_RENDERER)")
+endif
+ifeq ($(WITH_METAL_SHIM)$(STATIC_RENDERER), yesgl1)
+$(error STATIC_MODULES=1 with STATIC_RENDERER=gl1 needs WITH_METAL_SHIM=no)
+endif
+STATIC_ROOT ?= $(BUILDDIR)/static-$(STATIC_RENDERER)
+override BINDIR := $(STATIC_ROOT)/bin
+override BUILDDIR := $(STATIC_ROOT)/obj
+endif
+
+# ----------
+
 # When make is invoked by "make VERBOSE=1" print
 # the compiler and linker commands.
 ifdef VERBOSE
@@ -493,6 +530,7 @@ config:
 	@echo "WITH_XDG = $(WITH_XDG)"
 	@echo "WITH_METAL_SHIM = $(WITH_METAL_SHIM)"
 	@echo "METAL_SHADERS = $(METAL_SHADERS)"
+	@echo "STATIC_MODULES = $(STATIC_MODULES), STATIC_RENDERER = $(STATIC_RENDERER)"
 	@echo "============================"
 	@echo ""
 
@@ -1358,6 +1396,46 @@ SERVER_DEPS= $(SERVER_OBJS:.o=.d)
 
 # ----------
 
+# STATIC_MODULES=1: the modules in the client executable. The game
+# and the chosen renderer are each combined by "ld -r" into one
+# relocatable object that exports only its entry point (GetGameAPI,
+# GetRefAPI). Every other global of the module becomes local to that
+# object, so the three copies of shared.c, hunk.c, md4.c and the
+# helpers (the client's, the game's, the renderer's) neither clash nor
+# bind to one another, as they did not as separate libraries. The
+# modules reach the engine only through game_import_t and refimport_t,
+# as before, and SDL through the executable's own copy. Checked on the
+# executable by tests/check-static-modules.sh.
+ifeq ($(STATIC_MODULES),1)
+STATIC_GAME_OBJ := $(BUILDDIR)/static/game.o
+ifeq ($(STATIC_RENDERER),soft)
+STATIC_REF_OBJS := $(REFSOFT_OBJS)
+else ifeq ($(STATIC_RENDERER),gl1)
+STATIC_REF_OBJS := $(REFGL1_OBJS)
+STATIC_LDLIBS += -framework OpenGL
+else
+STATIC_REF_OBJS := $(REFMETAL_OBJS)
+STATIC_LDLIBS += -framework Metal -framework QuartzCore -framework Foundation -weak_framework MetalFX
+endif
+STATIC_REF_OBJ := $(BUILDDIR)/static/ref_$(STATIC_RENDERER).o
+STATIC_LINK_OBJS := $(STATIC_GAME_OBJ) $(STATIC_REF_OBJ)
+
+# Only the client's own objects see the macros the loaders check.
+$(BUILDDIR)/client/%.o : CFLAGS += -DSTATIC_MODULES -DSTATIC_RENDERER_NAME=\"$(STATIC_RENDERER)\"
+
+$(STATIC_GAME_OBJ) : $(GAME_OBJS)
+	@echo "===> LD -r $@"
+	${Q}mkdir -p $(@D)
+	${Q}$(LD) -r -arch $(YQ2_ARCH) -exported_symbol _GetGameAPI $(GAME_OBJS) -o $@
+
+$(STATIC_REF_OBJ) : $(STATIC_REF_OBJS)
+	@echo "===> LD -r $@"
+	${Q}mkdir -p $(@D)
+	${Q}$(LD) -r -arch $(YQ2_ARCH) -exported_symbol _GetRefAPI $(STATIC_REF_OBJS) -o $@
+endif
+
+# ----------
+
 # quake2
 ifeq ($(YQ2_OSTYPE), Windows)
 $(BINDIR)/yquake2.exe : $(CLIENT_OBJS) icon
@@ -1366,9 +1444,9 @@ $(BINDIR)/yquake2.exe : $(CLIENT_OBJS) icon
 $(BINDIR)/quake2.exe : src/win-wrapper/wrapper.c icon
 	$(Q)$(CC) -Wall -mwindows $(BUILDROOT)/icon/icon.res src/win-wrapper/wrapper.c -o $@
 else ifeq ($(YQ2_OSTYPE), Darwin)
-$(BINDIR)/quake2 : $(CLIENT_OBJS) $(SDL3_LIB)
+$(BINDIR)/quake2 : $(CLIENT_OBJS) $(STATIC_LINK_OBJS) $(SDL3_LIB)
 	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(CLIENT_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(SDLLDFLAGS) -o $@
+	${Q}$(CC) $(LDFLAGS) $(CLIENT_OBJS) $(STATIC_LINK_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(STATIC_LDLIBS) $(SDLLDFLAGS) -o $@
 else
 $(BINDIR)/quake2 : $(CLIENT_OBJS)
 	@echo "===> LD $@"

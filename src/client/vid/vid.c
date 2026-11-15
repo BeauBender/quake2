@@ -408,6 +408,15 @@ const char* lib_ext = "dll";
 const char* lib_ext = "so";
 #endif
 
+#ifdef STATIC_MODULES
+/*
+ * Static build (Makefile STATIC_MODULES=1): one renderer, named by
+ * STATIC_RENDERER_NAME, is linked into the executable and GetRefAPI
+ * is resolved at link time. No renderer library is ever opened.
+ */
+refexport_t GetRefAPI(refimport_t imp);
+#endif
+
 /*
  * Returns platform specific path to a renderer lib.
  */
@@ -423,6 +432,9 @@ VID_GetRendererLibPath(const char *renderer, char *path, size_t len)
 qboolean
 VID_HasRenderer(const char *renderer)
 {
+#ifdef STATIC_MODULES
+	return strcmp(renderer, STATIC_RENDERER_NAME) == 0;
+#else
 	char reflib_path[MAX_OSPATH] = {0};
 	VID_GetRendererLibPath(renderer, reflib_path, sizeof(reflib_path));
 
@@ -432,6 +444,7 @@ VID_HasRenderer(const char *renderer)
 	}
 
 	return false;
+#endif
 }
 
 /*
@@ -710,7 +723,9 @@ VID_ShutdownRenderer(void)
 		/* Shut down the renderer */
 		re.Shutdown();
 		GLimp_ShutdownGraphics();
+#ifndef STATIC_MODULES
 		Sys_FreeLibrary(reflib_handle);
+#endif
 		reflib_handle = NULL;
 		memset(&re, 0, sizeof(re));
 		vid_loaded_renderer[0] = '\0';
@@ -729,10 +744,14 @@ static qboolean
 VID_LoadRenderer(void)
 {
 	refimport_t	ri;
+#ifndef STATIC_MODULES
 	GetRefAPI_t	GetRefAPI;
+#endif
 
 	char reflib_name[64] = {0};
+#ifndef STATIC_MODULES
 	char reflib_path[MAX_OSPATH] = {0};
+#endif
 
 	// If the refresher is already active we need
 	// to shut it down before loading a new one
@@ -741,6 +760,19 @@ VID_LoadRenderer(void)
 	// Log what we're doing.
 	Com_Printf("----- refresher initialization -----\n");
 
+#ifdef STATIC_MODULES
+	snprintf(reflib_name, sizeof(reflib_name), "ref_%s (linked in)", STATIC_RENDERER_NAME);
+
+	/* Only the linked renderer exists in this build. */
+	if (!VID_HasRenderer(vid_renderer->string))
+	{
+		Com_Printf("Renderer %s is not in this build, only %s is linked in.\n",
+				vid_renderer->string, STATIC_RENDERER_NAME);
+
+		return false;
+	}
+	Com_Printf("Using the linked-in renderer: %s\n", reflib_name);
+#else
 	snprintf(reflib_name, sizeof(reflib_name), "ref_%s.%s", vid_renderer->string, lib_ext);
 	VID_GetRendererLibPath(vid_renderer->string, reflib_path, sizeof(reflib_path));
 	Com_Printf("Loading library: %s\n", reflib_name);
@@ -765,6 +797,7 @@ VID_LoadRenderer(void)
 		return false;
 	}
 
+#endif
 	// Fill in the struct exported to the renderer.
 	// FIXME: Do we really need all these?
 	ri.Cmd_AddCommand = Cmd_AddCommand;
@@ -850,6 +883,11 @@ void
 VID_CheckChanges(void)
 {
 	static const char *r_order[] = {
+#ifdef STATIC_MODULES
+		/* the one renderer this build links in; any other
+		   vid_renderer value falls back to it */
+		STATIC_RENDERER_NAME
+#else
 		"gl3",
 #ifdef __APPLE__
 		/* the native Metal renderer, ahead of gl1 on macOS only (TASK93) */
@@ -857,6 +895,7 @@ VID_CheckChanges(void)
 #endif
 		"gl1",
 		"soft"
+#endif
 	};
 	static const int r_order_len = ARRLEN(r_order);
 
@@ -944,7 +983,11 @@ VID_Init(void)
 	// Console variables
 	vid_gamma = Cvar_Get("vid_gamma", "1.0", CVAR_ARCHIVE);
 	vid_fullscreen = Cvar_Get("vid_fullscreen", "0", CVAR_ARCHIVE);
+#ifdef STATIC_MODULES
+	vid_renderer = Cvar_Get("vid_renderer", STATIC_RENDERER_NAME, CVAR_ARCHIVE);
+#else
 	vid_renderer = Cvar_Get("vid_renderer", "gl3", CVAR_ARCHIVE);
+#endif
 
 	// Commands
 	Cmd_AddCommand("vid_restart", VID_Restart_f);

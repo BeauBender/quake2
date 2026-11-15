@@ -520,6 +520,24 @@ Sys_UnloadGame(void)
 	game_library = NULL;
 }
 
+#ifdef STATIC_MODULES
+/*
+ * Static build (Makefile STATIC_MODULES=1): the game module is linked
+ * into the executable and GetGameAPI is resolved at link time. No
+ * library is searched for or opened, in any game directory. The game
+ * cvar still selects data directories; a game library of a mod is
+ * not loaded in this build.
+ */
+void *GetGameAPI(const void *import);
+
+void *
+Sys_GetGameAPI(void *parms)
+{
+	Com_Printf("Game module: linked into the executable\n");
+
+	return GetGameAPI(parms);
+}
+#else
 void *
 Sys_GetGameAPI(void *parms)
 {
@@ -611,6 +629,7 @@ Sys_GetGameAPI(void *parms)
 
 	return GetGameAPI(parms);
 }
+#endif
 
 /* ================================================================ */
 
