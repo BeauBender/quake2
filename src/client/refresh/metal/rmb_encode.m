@@ -588,7 +588,26 @@ rmb_frame_end(void)
 			(void)b;
 			dispatch_semaphore_signal(sem);
 		}];
-		[frame_cmd commit];
+
+		/*
+		 * MTL_GPU_TIME: the next frame starts on an idle GPU (bounded), so
+		 * its drawing's time holds no wait on this frame's present (TASK54)
+		 */
+		if (rmb_frame_timing())
+		{
+			dispatch_semaphore_t idle = dispatch_semaphore_create(0);
+
+			[frame_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
+				(void)b;
+				dispatch_semaphore_signal(idle);
+			}];
+			[frame_cmd commit];
+			dispatch_semaphore_wait(idle, rmb_deadline(rmb_frame_wait_ms()));
+		}
+		else
+		{
+			[frame_cmd commit];
+		}
 	}
 
 	rmb_counts.frames++;
