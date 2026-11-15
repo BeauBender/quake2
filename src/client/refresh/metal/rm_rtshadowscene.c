@@ -363,6 +363,7 @@ RM_RTS_View(const rm_view_t *view)
 	v.trans = rts_ntrans != 0;
 	v.show = (unsigned)rm_rts_show(r_rt_shadows_show->value);
 	v.moved = RM_RTS_Moved();
+	v.carried = RM_RT_Carried();
 	rmb_rts_set_view(&v, lights, n);
 
 	/* the dynamic-light term leaves the lightmaps: the resolve adds it back */

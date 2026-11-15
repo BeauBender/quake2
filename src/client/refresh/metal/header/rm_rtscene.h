@@ -47,6 +47,12 @@ void RM_RT_Frame(const refdef_t *fd);
 int RM_RT_SceneReady(void);
 
 /*
+ * RT3 (TASK55): the lights an alias instance of this frame carries, bit i
+ * the view's light i (rm_rts_carried, with the shadows on; 0 otherwise)
+ */
+unsigned RM_RT_Carried(void);
+
+/*
  * RT3 (TASK55), rm_rtshadowscene.c: the dynamic-light shadows. Init and
  * Shutdown with RM_RT_Init and the release of the ray-tracing objects;
  * Wanted: r_rt_shadows asks for the structures (rm_rt_wanted); MapBuilt:

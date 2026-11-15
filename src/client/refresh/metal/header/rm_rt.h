@@ -165,6 +165,8 @@ typedef struct
 	int kind;               /* RM_RT_INST_* */
 	int model;              /* the inline model's number, the alias model's id; 0 for the world */
 	int ent;                /* the entity's index in the refdef, -1 for the world */
+	/* RT3 (TASK55): the lights the instance carries (rm_rts_carried, bit i light i), set by RM_RT_Frame; 0 here */
+	unsigned carry;
 	/* the object-to-world transform, column-major 4 by 3: three basis columns, then the translation (MTLPackedFloat4x3) */
 	float xform[12];
 } rm_rt_inst_t;
@@ -315,8 +317,9 @@ void rmb_rt_model_free(int mid);
  * refit after, then the instance structure rebuilt from the n instances.
  * GPU times are those of an earlier frame (the timestamps are read once
  * it completed). With shadows (RT3's r_rt_shadows on) the frame also keeps
- * its scene for rmb_rt_bind_scene (each instance's first triangle, in the
- * frame ring); without, nothing beyond TASK53's structures is taken. 1 with
+ * its scene for rmb_rt_bind_scene (each instance's first triangle and the
+ * lights it carries, in the frame ring; an instance that carries one is
+ * non-opaque); without, nothing beyond TASK53's structures is taken. 1 with
  * s filled; 0 when nothing was encoded (no frame, a structure missing).
  */
 int rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nlerps, int shadows,
@@ -343,8 +346,9 @@ double rmb_rt_gpu_ms(uint64_t ticks);
 #ifdef __OBJC__
 /*
  * RT3: binds frame fno's instance structure at buffer index ias_at (each
- * structure it holds marked used by ce), each instance's first triangle
- * of the map's buffers at base_at (~0 for an alias model), the
+ * structure it holds marked used by ce), two words an instance at base_at:
+ * its first triangle of the map's buffers (~0 for an alias model) and the
+ * lights it carries (rm_rts_carried), the
  * per-triangle transmission at trans_at and the number of its triangles
  * at ntris_at (0 without one). 0, with nothing bound, when frame fno
  * built no instance structure.

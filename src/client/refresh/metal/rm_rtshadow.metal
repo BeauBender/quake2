@@ -34,7 +34,9 @@
  *   per light against the frame's instance structure (TASK53), from the
  *   surface offset along its normal (mtl_rts_bias) to the light; a
  *   triangle of water or a translucent surface passes the ray on with
- *   its transmission, any other stops it. Out: an RG32Uint per pixel,
+ *   its transmission, one of a model that carries the light
+ *   (rm_rts_carried: a rocket's light inside it, a muzzle flash's) passes
+ *   it, any other stops it. Out: an RG32Uint per pixel,
  *   the four visibilities at 8 bits each and the four light indices with
  *   the in-range and shadowed flags; an RGBA16Float, the term; and the
  *   frame's counts;
@@ -76,7 +78,8 @@ struct rm_rts_view
 	uint trans;
 	uint show;
 	uint moved;
-	uint pad[3];
+	uint carried;       /* bit i: a model of the frame carries light i (mtl_rts_light_bit) */
+	uint pad[2];
 };
 
 /* rm_gbuf.metal's rm_uniforms_resolve and rm_fs_varying (rm_vertex_fullscreen's output) */
@@ -122,43 +125,107 @@ rm_rts_position(constant rm_rts_view &v, uint2 px, float depth)
 	return h.xyz / h.w;
 }
 
+/* the triangle a shadow ray stops at (rm_rts_first) */
+struct rm_rts_hit
+{
+	bool hit;
+	uint inst;
+	uint prim;
+	float dist;
+};
+
+/*
+ * The nearest triangle a shadow ray meets (any one, with any set) that is
+ * not on a model carrying its light. inst holds two words an instance
+ * (rmb_rt_frame): its first triangle of the map's buffers and the lights
+ * it carries. With lbit 0 (mtl_rts_light_bit: no model carries the light)
+ * it is the opaque query of TASK55's first rounds. With lbit set, the
+ * structure's instances that carry a light are non-opaque: the query hands
+ * their triangles here, and the ray passes those of the instances carrying
+ * this light (mtl_rts_passes) and stops at any other, as at every opaque
+ * triangle (the world, a brush entity, a model that carries no light).
+ */
+static rm_rts_hit
+rm_rts_first(ray r, instance_acceleration_structure ias, device const uint *inst, uint lbit, bool any)
+{
+	rm_rts_hit h;
+
+	if (lbit == 0)
+	{
+		intersector<triangle_data, instancing> isect;
+		intersection_result<triangle_data, instancing> hit;
+
+		isect.assume_geometry_type(geometry_type::triangle);
+		isect.force_opacity(forced_opacity::opaque);
+		isect.accept_any_intersection(any);
+		hit = isect.intersect(r, ias, 0xff);
+		h.hit = hit.type == intersection_type::triangle;
+		h.inst = hit.instance_id;
+		h.prim = hit.primitive_id;
+		h.dist = hit.distance;
+		return h;
+	}
+
+	{
+		intersection_params p;
+		intersection_query<triangle_data, instancing> q;
+
+		p.assume_geometry_type(geometry_type::triangle);
+		p.accept_any_intersection(any);
+		q.reset(r, ias, 0xff, p);
+
+		while (q.next())
+		{
+			if ((q.get_candidate_intersection_type() == intersection_type::triangle) &&
+				!mtl_rts_passes(inst[2 * q.get_candidate_instance_id() + 1], lbit))
+			{
+				q.commit_triangle_intersection();
+			}
+		}
+
+		h.hit = q.get_committed_intersection_type() == intersection_type::triangle;
+		h.inst = h.hit ? q.get_committed_instance_id() : 0;
+		h.prim = h.hit ? q.get_committed_primitive_id() : 0;
+		h.dist = h.hit ? q.get_committed_distance() : 0.0f;
+	}
+
+	return h;
+}
+
 /*
  * The light a shadow ray keeps from its start to the light: 1 when it
  * reaches it, 0 when an opaque triangle is in the way; through water and
  * translucent surfaces (trans set: the map holds such triangles) the
- * product of their transmissions, the nearest first.
+ * product of their transmissions, the nearest first. The models that
+ * carry the light (lbit) are passed (rm_rts_first).
  */
 static float
-rm_rts_visibility(ray r, instance_acceleration_structure ias, device const uint *base,
-		device const uchar *transmit, uint ntris, uint trans)
+rm_rts_visibility(ray r, instance_acceleration_structure ias, device const uint *inst,
+		device const uchar *transmit, uint ntris, uint trans, uint lbit)
 {
-	intersector<triangle_data, instancing> isect;
 	float vis = 1.0f;
-
-	isect.assume_geometry_type(geometry_type::triangle);
 
 	if (!trans)
 	{
-		isect.accept_any_intersection(true);
-		return (isect.intersect(r, ias, 0xff).type == intersection_type::none) ? 1.0f : 0.0f;
+		return rm_rts_first(r, ias, inst, lbit, true).hit ? 0.0f : 1.0f;
 	}
 
 	for (int layer = 0; layer < RM_RTS_LAYERS; layer++)
 	{
-		intersection_result<triangle_data, instancing> hit = isect.intersect(r, ias, 0xff);
+		const rm_rts_hit hit = rm_rts_first(r, ias, inst, lbit, false);
 		uint b, t = 0;
 
-		if (hit.type == intersection_type::none)
+		if (!hit.hit)
 		{
 			return vis;
 		}
 
 		/* an alias instance (base ~0) is opaque; a map triangle has its transmission */
-		b = base[hit.instance_id];
+		b = inst[2 * hit.inst];
 
-		if ((b != 0xffffffffu) && (b + hit.primitive_id < ntris))
+		if ((b != 0xffffffffu) && (b + hit.prim < ntris))
 		{
-			t = transmit[b + hit.primitive_id];
+			t = transmit[b + hit.prim];
 		}
 
 		if (t == 0)
@@ -167,7 +234,7 @@ rm_rts_visibility(ray r, instance_acceleration_structure ias, device const uint 
 		}
 
 		vis *= float(t) / 255.0f;
-		r.min_distance = hit.distance + 0.01f;
+		r.min_distance = hit.dist + 0.01f;
 
 		if (!(r.min_distance < r.max_distance))
 		{
@@ -206,7 +273,7 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 		constant rm_rts_view &v [[buffer(0)]],
 		constant rm_rts_light *lights [[buffer(1)]],
 		instance_acceleration_structure ias [[buffer(2)]],
-		device const uint *base [[buffer(3)]],
+		device const uint *inst [[buffer(3)]],
 		device const uchar *transmit [[buffer(4)]],
 		constant uint &ntris [[buffer(5)]],
 		device atomic_uint *counts [[buffer(6)]],
@@ -270,12 +337,13 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 					intersection_result<triangle_data, instancing, world_space_data> hit;
 
 					isect.assume_geometry_type(geometry_type::triangle);
+					isect.force_opacity(forced_opacity::opaque);
 					hit = isect.intersect(ray(v.eye.xyz, dv / dl, dl - tol, dl + tol), ias, 0xff);
 					primary = 1;
 
 					if (hit.type == intersection_type::triangle)
 					{
-						const uint b = base[hit.instance_id];
+						const uint b = inst[2 * hit.instance_id];
 
 						if ((b != 0xffffffffu) && (b + hit.primitive_id < mapn.ntris))
 						{
@@ -340,7 +408,8 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 					continue;
 				}
 
-				vis[k] = rm_rts_visibility(ray(o, dir / len, 0.0f, len - 0.5f), ias, base, transmit, ntris, v.trans);
+				vis[k] = rm_rts_visibility(ray(o, dir / len, 0.0f, len - 0.5f), ias, inst, transmit, ntris, v.trans,
+						mtl_rts_light_bit(v.carried, top.idx[k]));
 				rays++;
 
 				if (vis[k] < 1.0f)

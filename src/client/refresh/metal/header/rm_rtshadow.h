@@ -91,7 +91,8 @@ typedef struct
 	unsigned trans;     /* 1 when the map holds a triangle that passes light (a ray then looks past it) */
 	unsigned show;      /* r_rt_shadows_show */
 	unsigned moved;     /* 1 when a brush entity of the frame is moved or turned: every pixel looks for its surface */
-	unsigned pad[3];
+	unsigned carried;   /* bit i: a model of the frame carries light i (RM_RT_Carried), its rays pass that model */
+	unsigned pad[2];
 } rm_rts_view_t;
 
 /*

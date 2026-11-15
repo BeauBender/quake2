@@ -764,10 +764,14 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 		/* the instance descriptors, in the frame ring */
 		desc = rmb_frame_ring_take(rm_rt_instance_bytes(n), &ring, &ring_ofs);
 
-		/* with RT3's shadows: each instance's first triangle of the map's buffers (~0 for an alias model), for the ray queries */
+		/*
+		 * with RT3's shadows, two words an instance for the ray queries: its
+		 * first triangle of the map's buffers (~0 for an alias model) and the
+		 * lights it carries (rm_rt_inst_t's carry)
+		 */
 		if (desc && shadows)
 		{
-			ibase = rmb_frame_ring_take((size_t)n * sizeof(uint32_t), &bring, &bring_ofs);
+			ibase = rmb_frame_ring_take((size_t)n * 2 * sizeof(uint32_t), &bring, &bring_ofs);
 		}
 
 		if (!desc || (shadows && !ibase))
@@ -828,7 +832,16 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 			desc[j].accelerationStructureIndex = (uint32_t)k;
 			if (ibase)
 			{
-				ibase[j] = (inst[i].kind == RM_RT_INST_ALIAS) ? 0xffffffffu : (uint32_t)map_first[inst[i].model];
+				const uint32_t carry = (inst[i].kind == RM_RT_INST_ALIAS) ? (uint32_t)inst[i].carry : 0;
+
+				ibase[2 * j] = (inst[i].kind == RM_RT_INST_ALIAS) ? 0xffffffffu : (uint32_t)map_first[inst[i].model];
+				ibase[2 * j + 1] = carry;
+
+				/* a model that carries a light: its triangles go to the shadow query of that light, which passes them */
+				if (carry)
+				{
+					desc[j].options |= MTLAccelerationStructureInstanceOptionNonOpaque;
+				}
 			}
 
 			j++;
