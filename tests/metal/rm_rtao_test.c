@@ -155,14 +155,23 @@ test_bluenoise(void)
 		return;
 	}
 
-	/* blue: the first eighth of the ranks lie apart, no two within 2 pixels (white noise has neighbours) */
-	for (i = 0; i < MTL_RTAO_TILE_N / 8; i++)
+	/*
+	 * Blue: the ranks below a sixteenth lie apart, no two within 2.8 pixels,
+	 * and those below a tenth (the initial pattern) within 2 (white noise
+	 * of either density has neighbours that touch).
+	 */
+	for (i = 0; i < MTL_RTAO_TILE_N / 10; i++)
 	{
 		for (j = 0; j < i; j++)
 		{
 			const int d2 = tdist2(pos[i], pos[j]);
 
 			worst2 = (d2 < worst2) ? d2 : worst2;
+		}
+
+		if (i == MTL_RTAO_TILE_N / 16 - 1)
+		{
+			CHECK(worst2 >= 8);
 		}
 	}
 
@@ -247,6 +256,8 @@ dot3(mtl_rtao_v3_t a, mtl_rtao_v3_t b)
 	return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
+static mtl_rtao_v3_t stored_normal(mtl_rtao_v3_t n);
+
 static void
 test_dir(void)
 {
@@ -287,6 +298,26 @@ test_dir(void)
 	CHECK(ok_half);
 	/* cosine-weighted: the mean cosine is 2/3 (a uniform hemisphere's is 1/2) */
 	CHECK(near(sum_cos / n, 2.0 / 3.0, 0.01));
+
+	/*
+	 * The smallest cosine is above twice the angle by which the G-buffer's
+	 * 10-bit normal can turn the true one, so a ray never points under the
+	 * true plane, at any range.
+	 */
+	{
+		double worst = 0;
+
+		for (i = 0; i < 100000; i++)
+		{
+			const mtl_rtao_v3_t t = unit(frand(-1, 1), frand(-1, 1), frand(-1, 1)), q = stored_normal(t);
+			const double c = dot3(t, q), a = acos(c > 1 ? 1 : c);
+
+			worst = (a > worst) ? a : worst;
+		}
+
+		CHECK(worst < 0.0018);
+		CHECK(MTL_RTAO_MIN_COS > 2 * 0.0018);
+	}
 
 	/* the elevation number 0 is along the normal, the largest at the smallest cosine */
 	{
@@ -552,11 +583,17 @@ test_open_plane(void)
 
 						rays++;
 
-						/* the plane, met from above within the range */
-						if ((dn < 0) && (above / -dn < range))
+						/*
+						 * The plane, met within the range: from above going down,
+						 * or from a start below it going up (the structures cull
+						 * no face, so a ray meets the plane's back too).
+						 */
+						const double th = (above > 0) ? ((dn < 0) ? above / -dn : -1) : ((dn > 0) ? -above / dn : 0);
+
+						if ((th >= 0) && (th < range))
 						{
 							hits++;
-							occ[r] = mtl_rtao_occlusion(1, (float)(above / -dn), range);
+							occ[r] = mtl_rtao_occlusion(1, (float)th, range);
 						}
 					}
 
@@ -677,15 +714,22 @@ test_stats(void)
 	s.ms = 1.25;
 
 	CHECK(rm_rtao_stats_format(&s, buf, sizeof(buf)) == 1);
-	CHECK(strstr(buf, "rt ao: frame 12") == buf);
-	CHECK(strstr(buf, "1500000 traced") != NULL);
-	CHECK(strstr(buf, "3000 at the floor") != NULL);
-	CHECK(strstr(buf, "1.250 ms") != NULL);
+	CHECK(strcmp(buf, "ref_metal: rt ao: frame 12: 2073600 pixels, 1500000 traced, 400000 occluded, 3000 at the floor, "
+			"600000 up (90000 occluded), 3000000 rays, 500000 hits, 1.250 ms") == 0);
 	CHECK(strchr(buf, '\n') == NULL);
 
 	s.ms = -1;
 	CHECK(rm_rtao_stats_format(&s, buf, sizeof(buf)) == 1);
-	CHECK(strstr(buf, "not measured") != NULL);
+	CHECK(strstr(buf, ", - ms") != NULL);
+
+	/* the exact length fits, one byte less does not */
+	{
+		const size_t l = strlen(buf);
+
+		CHECK(rm_rtao_stats_format(&s, buf, l + 1) == 1);
+		CHECK(rm_rtao_stats_format(&s, buf, l) == 0);
+		CHECK(buf[0] == 0);
+	}
 
 	CHECK(rm_rtao_stats_format(&s, small, sizeof(small)) == 0);
 	CHECK(small[0] == 0);
