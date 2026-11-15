@@ -4037,13 +4037,20 @@ or whether it moved it where it should. For a card that adds an effect
    entities identical. Do it for the scenario and for its companion, the
    same scene with entities on (`scripts/pins/scenarios/README.md`, "Content"):
    an effect judged only with `cl_entities 0` is judged on a picture a player
-   does not see.
+   does not see. A scenario that declares a band and sets `cl_entities 0` has a
+   companion that `check-content` holds to this: it sets `cl_entities 1`,
+   declares the same band and sets every other cvar of the scenario to the same
+   value, bar the content cvars and the demo and frame settings the README
+   lists. For a scenario with no band the companion is nominal, and every
+   scenario in the tree is one.
 2. `scripts/pins.sh footprint <scenario> --off <record> --on <record>` prints the
    share of pixels changed per frame (darker and brighter apart), the largest
    change and the mean change. Set the band in the cfg header
    (`// footprint darker 0..0.05`), a small multiple of the worst frame without
    entities, on the scenario and on its companion; the command then names every
-   frame outside it and fails.
+   frame outside it and fails. A misspelled scenario, a frame the on record
+   lacks or has extra, an empty off record and a link where an output file
+   goes are refused, not read as a pass.
 3. `scripts/pins.sh where <scenario> --off ... --on ... --out <dir outside the
    repository>` writes, for the frames that changed most, a highlight (the off
    frame grey, darker red, brighter green) and a zoom of the busiest window
