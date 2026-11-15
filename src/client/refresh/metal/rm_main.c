@@ -35,6 +35,7 @@
 #include "header/local.h"
 #include "header/rm_rtscene.h"
 #include "header/rm_gbufscene.h"
+#include "header/rm_fxscene.h"
 #include "common/mtl_matrix.h"
 
 refimport_t ri;
@@ -336,6 +337,7 @@ RI_Init(void)
 	RM_InitDraw();
 	RM_RT_Init(&caps);   /* the r_rt_* cvars (TASK53); builds nothing */
 	RM_GB_Init();        /* the G-buffer's development cvars (TASK54) */
+	RM_FX_Init(&caps);   /* the MetalFX cvars and what the device supports (TASK111); makes no scaler */
 
 	ri.Vid_MenuInit();
 	return true;
@@ -912,6 +914,7 @@ static void
 RI_EndFrame(void)
 {
 	RM_Flush2D();   /* to draw buffered 2D text */
+	RM_FX_EndFrame();
 	rmb_frame_end();
 }
 

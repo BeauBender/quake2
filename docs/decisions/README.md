@@ -21,3 +21,4 @@ them (record 0004); one becomes a record here when it is settled.
 | [0008](0008-apple-platforms-only.md) | Apple platforms only: Linux test builds dropped, other platforms unmaintained |
 | [0009](0009-no-shared-memory.md) | Agent memory is not synced through the repository: shared memory off (addendum: the tracked notes are removed, TASK103) |
 | [0010](0010-imageio-decoder.md) | ImageIO decodes PNG, JPEG and TGA on Apple platforms; the vendored `stb_image` is removed (redirects INFORM2) |
+| [0011](0011-metalfx-framework.md) | MetalFX is linked, weak, into `ref_metal` only, on Apple platforms, for the selectable scalers and frame generation |

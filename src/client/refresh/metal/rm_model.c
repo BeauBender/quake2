@@ -53,6 +53,7 @@
 #include "header/local.h"
 #include "header/rm_rtscene.h"
 #include "header/rm_gbufscene.h"
+#include "header/rm_fxscene.h"
 
 #define MAX_MOD_KNOWN 512
 
@@ -1449,6 +1450,7 @@ RI_EndRegistration(void)
 
 	RM_RT_MapLoaded();   /* the map's acceleration structures, when ray tracing is on (TASK53) */
 	RM_GB_Reset();       /* no previous frame for the G-buffer's motion (TASK54) */
+	RM_FX_Reset();       /* nor for the MetalFX scaler's history (TASK111) */
 
 	if (Mod_HasFreeSpace() && R_ImageHasFreeSpace())
 	{

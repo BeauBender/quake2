@@ -683,6 +683,22 @@ TEST(upscale_table_index_255_transparent)
 	}
 }
 
+/*
+ * CL_UpscaleToRGBA's buffer copied into out, w * h * 4 bytes, and freed.
+ * Its NULL return needs R_Convert8to32 to fail, which it does only through
+ * Com_Error, and that does not return, so no test reaches it.
+ */
+static void
+to_rgba(const unsigned char *data, size_t w, size_t h, const unsigned *table,
+		unsigned char *out)
+{
+	unsigned char *got = CL_UpscaleToRGBA(data, w, h, table);
+
+	T_REQUIRE(got != NULL);
+	memcpy(out, got, w * h * 4);
+	free(got);
+}
+
 /* R_Convert8to32's order for a 255 texel's colour: above, below, left, right, else index 0 */
 TEST(upscale_to_rgba_neighbour_colour)
 {
@@ -700,7 +716,7 @@ TEST(upscale_to_rgba_neighbour_colour)
 	grey_palette(pal);
 	CL_UpscaleTable(pal, table);
 
-	CL_UpscaleToRGBA(img, 3, 3, table, rgba);
+	to_rgba(img, 3, 3, table, rgba);
 	for (i = 0; i < 9; i++)
 	{
 		int want = img[i] == 255 ? 20 : img[i];
@@ -714,14 +730,14 @@ TEST(upscale_to_rgba_neighbour_colour)
 	/* above is 255 too: below */
 	memcpy(copy, img, sizeof(copy));
 	copy[1] = 255;
-	CL_UpscaleToRGBA(copy, 3, 3, table, rgba);
+	to_rgba(copy, 3, 3, table, rgba);
 	T_EQ_INT(rgba[4 * 4 + 0], pal[80 * 3]);
 	T_EQ_INT(rgba[1 * 4 + 3], 0);
 	/* index 1, in the first row: above is out, below is 255, so left */
 	T_EQ_INT(rgba[1 * 4 + 0], pal[10 * 3]);
 	/* and with the left 255 too: right */
 	copy[0] = 255;
-	CL_UpscaleToRGBA(copy, 3, 3, table, rgba);
+	to_rgba(copy, 3, 3, table, rgba);
 	T_EQ_INT(rgba[1 * 4 + 0], pal[30 * 3]);
 	/* index 0: nothing above or left, below (40) */
 	T_EQ_INT(rgba[0 * 4 + 0], pal[40 * 3]);
@@ -731,11 +747,11 @@ TEST(upscale_to_rgba_neighbour_colour)
 	/* index i == w: the texel above is index 0, which R_Convert8to32's i > w passes over */
 	memcpy(copy, img, sizeof(copy));
 	copy[3] = 255;
-	CL_UpscaleToRGBA(copy, 3, 3, table, rgba);
+	to_rgba(copy, 3, 3, table, rgba);
 	T_EQ_INT(rgba[3 * 4 + 0], pal[70 * 3]);
 
 	/* one row: left, then right, and index 0 when neither */
-	CL_UpscaleToRGBA(row, 3, 1, table, rgba);
+	to_rgba(row, 3, 1, table, rgba);
 	T_EQ_INT(rgba[0 * 4 + 0], pal[0]);
 	T_EQ_INT(rgba[1 * 4 + 0], pal[7 * 3]);
 	T_EQ_INT(rgba[0 * 4 + 3], 0);
@@ -743,7 +759,7 @@ TEST(upscale_to_rgba_neighbour_colour)
 	T_EQ_INT(rgba[2 * 4 + 3], 255);
 
 	/* nothing around it: index 0's colour */
-	CL_UpscaleToRGBA(lone, 1, 1, table, rgba);
+	to_rgba(lone, 1, 1, table, rgba);
 	T_EQ_INT(rgba[0], pal[0]);
 	T_EQ_INT(rgba[1], pal[1]);
 	T_EQ_INT(rgba[2], pal[2]);
@@ -770,7 +786,7 @@ TEST(upscale_transparent_kept_through_scale)
 		T_REQUIRE(big != NULL);
 		rgba = malloc((size_t)s * s * 4);
 		T_REQUIRE(rgba != NULL);
-		CL_UpscaleToRGBA(big, s, s, table, rgba);
+		to_rgba(big, s, s, table, rgba);
 
 		for (y = 0; y < s; y++)
 		{

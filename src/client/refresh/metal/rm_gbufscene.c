@@ -41,6 +41,7 @@
 #include "header/local.h"
 #include "header/rm_gbufscene.h"
 #include "header/rm_rtscene.h"
+#include "header/rm_fxscene.h"
 #include "common/mtl_matrix.h"
 #include "common/mtl_shader_math.h"
 #include "common/mtl_gbuf_math.h"
@@ -91,8 +92,10 @@ RM_GB_Choose(const refdef_t *fd)
 		return RM_GB_PATH_FORWARD;
 	}
 
-	/* a ray-traced effect on (RT3's shadows, RM_RTS_Frame) takes the G-buffer */
-	return rm_gb_path(RM_RTS_Active(), r_rt_gbuffer->value, r_rt_motion->value, (fd->rdflags & RDF_NOWORLDMODEL) != 0);
+	/* a ray-traced effect on (RT3's shadows, RM_RTS_Frame) takes the G-buffer;
+	   a MetalFX scaler asks for the motion path (TASK111) */
+	return rm_gb_path(RM_RTS_Active(), r_rt_gbuffer->value, RM_FX_WantsMotion() ? 1.0f : r_rt_motion->value,
+			(fd->rdflags & RDF_NOWORLDMODEL) != 0);
 }
 
 static void
@@ -132,10 +135,16 @@ RM_GB_Begin(rm_view_t *view, int stencil, const float *clear_rgba)
 
 	/* the view at the render size, drawn with the jittered projection; the motion takes the unjittered one */
 	vp_frame = view->vp;
-	rm_gb_render_rect(&vp_frame, fw, fh, rw, rh, &view->vp);
+
+	/* a MetalFX scaler (TASK111): the view at its input size, at the target's origin, with its jitter */
+	if (!RM_FX_Begin(&vp_frame, r_newrefdef.vieworg, &rw, &rh, &view->vp, jitter))
+	{
+		rm_gb_render_rect(&vp_frame, fw, fh, rw, rh, &view->vp);
+		RM_GB_ParseJitter();
+	}
+
 	vp_render = view->vp;
 	memcpy(proj_u, view->proj, sizeof(proj_u));
-	RM_GB_ParseJitter();
 	rm_gb_jitter(proj_u, jitter[0], jitter[1], vp_render.w, vp_render.h, view->proj);
 	mtl_mat_mul(view->mvp, view->proj, view->world);
 
@@ -278,6 +287,7 @@ RM_GB_End(void)
 
 	rmb_gbuf_set_show(rm_gb_show(r_rt_gbuffer_show->value));
 	rmb_gbuf_view_end(&vp_render, &vp_frame);
+	RM_FX_End();
 	rm_gb_hist_end(&hist);
 	path = RM_GB_PATH_FORWARD;
 	raster = 0;

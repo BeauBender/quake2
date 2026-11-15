@@ -1096,6 +1096,16 @@ rotation.
   blobs, the sky, shadows and the screen blend are in world or view
   units, and no draw sets a line width.
 
+*As consumed by TASK111.* The scalers take the depth and motion as above:
+`motionVectorScaleX` and `motionVectorScaleY` 1, `depthReversed` NO, auto exposure off.
+On a scaled view the render size is the scaler's input, the view drawn at the target's
+origin (`rm_fx_input_viewport`), not `r_rt_gbuffer_scale`'s, and the scaler writes the
+frame's rectangle in place of the stretch. The jitter of the temporal modes is the Halton
+(2, 3) pair minus 0.5 from index 1, a cycle of 32, started again on each reset
+(`rm_fx_jitter`). The reset events are those of section 2, with the client's teleport
+distance, 256 units on an axis, as the cut threshold (`RM_FX_CUT_DIST`). See the runbook,
+[MetalFX scalers for the 3D view](metal-port-harness.md#metalfx-scalers-for-the-3d-view-in-ref_metal-task111).
+
 **Previous-frame transforms.** `rm_gb_hist_t` (`header/rm_gbuf.h`;
 `rm_gbufscene.c` holds one) keeps the last world view's modelview,
 unjittered projection, the view weapon's unjittered projection, origin and

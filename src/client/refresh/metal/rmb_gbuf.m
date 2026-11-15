@@ -40,6 +40,7 @@
 #include "header/rmb.h"
 #include "header/rm_gbuf.h"
 #include "header/rm_rtshadow.h"
+#include "header/rm_metalfx.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_gbuf.m is written for ARC: compile it with -fobjc-arc"
@@ -594,7 +595,8 @@ rmb_gbuf_view_begin(int path, int rw, int rh, int stencil, const float *clear_rg
 	}
 
 	view_path = path;
-	view_scaled = ((NSUInteger)rw != color.width) || ((NSUInteger)rh != color.height);
+	/* a MetalFX scaler (TASK111) reads the view from the render-size colour target, at any size */
+	view_scaled = ((NSUInteger)rw != color.width) || ((NSUInteger)rh != color.height) || rmb_fx_ready();
 	view_cleared = 0;
 	view_stencil = (stencil > 0) ? (unsigned)(stencil & 0xff) : 0;
 
@@ -733,6 +735,13 @@ rmb_gbuf_view_end(const rm_viewport_t *src, const rm_viewport_t *dst)
 
 	if (!view_scaled || !t_rcolor || !color || !src || !dst)
 	{
+		return;
+	}
+
+	/* the seam of the G-buffer contract: a prepared MetalFX scaler (TASK111) writes the frame's rectangle */
+	if (rmb_fx_upscale(t_rcolor, t_depth, t_motion, color))
+	{
+		rmb_counts.draws++;
 		return;
 	}
 
