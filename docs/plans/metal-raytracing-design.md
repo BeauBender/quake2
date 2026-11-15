@@ -69,10 +69,227 @@ Total budget at 1080p with everything on: about 5 rays per pixel
 *Assumed* on apple7 compute RT: 8 to 14 ms; TASK25's render-stage path on
 apple9 is expected to halve it. RT1 measures.
 
+### Internal resolution and upscaling with MetalFX (TASK105)
+
+With a ray-traced effect on, the 3D frame is rendered and traced at an
+internal resolution and upscaled to the output size with
+`MTLFXTemporalScaler`. Tracing at the output size does not fit. On the M6
+at its native 5120 x 2880 pixels, the ray passes and the per-frame items
+cost 36.8 ms against the 16.7 ms frame of its 60 Hz display (section 8,
+verdicts table, row RT9 (1)). Tracing at 1920 x 1080 and upscaling to
+5120 x 2880 costs 7.3 ms as a sum and 9.3 ms as one measured frame (row
+RT9 (2); the scaler is 1.822 ms in frame, section 8, table "MetalFX
+upscaling to the native size"). The decision is INFORM12 (#262), tracked
+until the owner settles it.
+
+Every measured cost in this subsection is quoted from section 8: the M6,
+the compute-dispatch ray queries, the synthetic closed scene, synthetic scaler
+inputs, the later level of a process. Section 8 did not measure the
+render-stage path, an apple7 device, the G-buffer raster, shading, the
+temporal accumulation and denoiser above, or image quality. Where this
+design needs one of those, it names the card that measures it.
+
+**What runs at the internal resolution.** The whole 3D frame of the world
+refdef: the `refdef_t` without `RDF_NOWORLDMODEL` that `V_RenderView`
+(`src/client/cl_view.c`) passes to `R_RenderFrame`. That is the G-buffer
+raster (section 3), the ray passes, the temporal accumulation and denoiser,
+the lighting resolve and the forward pass for sprites, particles, beams and
+the view weapon.
+
+**The output is the world refdef's rectangle, not the window.** The client
+sets the refdef's `x`, `y`, `width` and `height` from `viewsize`
+(`SCR_CalcVrect`, `src/client/cl_screen.c`): the whole window at
+`viewsize 100`, a centred sub-rectangle below it, down to 40 % of the
+window's width and height. In this subsection the output size is the size
+of that rectangle, and the internal size is a fraction of it. The scaler
+writes the rectangle at its place in the frame, either through its
+`outputOffsetX` and `outputOffsetY` (declared from macOS 27 in the SDK's
+`MTLFXTemporalScaler.h`) or into a texture of the rectangle's size that is
+copied there; RT11 picks one. 2D (HUD, console, menus, cinematics) draws
+after it at the window size, unscaled. With every `r_rt_*` effect off there
+is no internal resolution and no scaler: the frame renders at the refdef's
+rectangle, as before, so the gl1 pins are untouched.
+
+**A refdef without a world.** In the client, the refdef with
+`RDF_NOWORLDMODEL` is the player-setup menu's model view
+(`PlayerConfig_ModelDraw`, `src/client/menu/menu.c`): a 144 x 168
+rectangle times the menu scale, `fov_x` 40. With that menu open in game it
+is a second `R_RenderFrame` in the same frame, drawn after the world refdef
+and after 2D (`SCR_UpdateScreen` calls `M_Draw` after `V_RenderView` and
+the 2D draws). It renders at its own rectangle
+as with every effect off: no internal resolution, no jitter, no ray pass
+and no scaler. It touches neither the scaler's history, RT7's history nor
+the last-frame state the cut test compares (below). Only the world refdef
+drives them.
+
+**Pass order.** Section 3's order, with the scaler added as step 7:
+
+| Step | Pass | Size |
+|---|---|---|
+| 1 | IAS rebuild and alias refits | – |
+| 2 | G-buffer raster, projection jittered | internal |
+| 3 | Ray passes: dlight shadows, sun, AO, reflections | internal |
+| 4 | Temporal accumulation and denoise (RT7), as above: shadow, sun and AO history, the 5x5 blur on AO and sun, the 3x3 blur on reflections | internal |
+| 5 | Lighting resolve | internal |
+| 6 | Forward pass | internal |
+| 7 | `MTLFXTemporalScaler`: lit colour, depth and motion vectors in, colour out | internal to output |
+| 8 | 2D | window |
+
+**The scaler and RT7.** The scaler keeps its own history at the output
+size. It accumulates the lit colour over frames and is designed to use the
+jitter to recover detail finer than an internal pixel. It does not replace
+RT7. RT7 accumulates and denoises each effect before the resolve, where the
+effects are still separate: AO multiplies the lightmap term only and is clamped to
+`r_rt_ao_min`, and the dlight visibility replaces the term of
+`R_AddDynamicLights`. The scaler sees only their sum. So RT7 removes the
+noise per effect at the internal resolution, and the scaler upscales a
+colour that is already denoised. The two histories are separate. RT7's is
+at the internal resolution, reprojected with the motion vectors and
+rejected on depth, material id and dlight-set changes, as above. The
+scaler's is at the output size and kept by MetalFX. Both reset on the same
+events (below). RT7's passes cost less at the internal resolution than at
+the output size; section 8 traces only, so their cost is not measured.
+RT10's per-pass table records it.
+
+The G-buffer of each frame is offset by the jitter, and RT7 reprojects
+with the unjittered motion vectors, so its history is sampled up to half an
+internal pixel off. Whether that softens AO and shadows visibly is for the
+image-quality card (RT12), not decided here.
+
+**What the scaler needs from the renderer.**
+
+| Input | Source | Note |
+|---|---|---|
+| Colour | the forward pass's output at the internal size | `RGBA16Float`, the format section 8 measured |
+| Depth | section 3's `depth32float` attachment | `Depth32Float` measured; the scaler's reversed-depth setting follows the renderer's depth convention |
+| Motion vectors | section 3's `rg16float` attachment, from the unjittered current and previous view, each with its own projection, so a change of the field of view is carried by them | `RG16Float` measured. The scaler's motion-vector scale matches section 3's units, which RT2 fixes. RT7 already needs them, so the scaler adds no attachment. Their raster cost is part of RT2's G-buffer and not measured; RT10's per-pass table records it |
+| Jitter | the Halton (2, 3) sequence minus 0.5, in internal pixels, added to the projection and passed to the scaler each frame | the sequence section 8 drove the scaler with |
+| Exposure | auto exposure off, fixed exposure | the resolve writes the stock display-referred product, not scene light; section 8 also ran with auto exposure off |
+| Reset | set for one frame on a map load, a `vid_restart`, a camera cut, a teleport, a change of `r_rt_scale` or of the world refdef's rectangle, and the first world refdef with an effect on after one with every effect off | the same frame resets RT7's history |
+
+The renderer detects these events from what it already receives; the
+renderer API (`ref.h`, `API_VERSION`) does not change. A map load is
+`BeginRegistration`. A `vid_restart`, a change of `r_rt_scale`, a
+change of the world refdef's rectangle and an effect turned back on
+after a world refdef with every effect off create the scaler anew (with
+every effect off nothing writes either history, so what they hold is
+stale); the rectangle changes with `viewsize` and with the window size. A camera cut
+or a teleport is a world refdef whose view origin moved further than a
+threshold from the last world refdef's, or the first world refdef after a
+frame that drew none (a cinematic, the console with no map). The last world
+refdef is the state the cut test compares; a refdef with `RDF_NOWORLDMODEL`
+does not replace it. RT11 sets the threshold and records it here. A change
+of the field of view is not a cut: the client interpolates `fov` across a
+server frame (`cl_entities.c`), so a zoom changes it a little on every
+rendered frame, and the motion vectors already carry it. While a loading
+plaque is up the renderer receives no frame at all; the map load that
+normally ends it is a reset event of its own.
+
+**The scale: `r_rt_scale`.** Named and described here only; no cvar is
+added to the code by TASK105. RT11 adds it, with its entry in
+`doc/040_cvarlist.md`, which every new cvar needs.
+
+- Archived. Default 0, which picks the family default below.
+- Any other value is the internal width and height as a fraction of the
+  output's, applied only while a ray-traced effect is on. 1 renders at the
+  output size and creates no scaler, and the projection is not jittered.
+- The fraction is clamped so that the ratio of output to internal size
+  stays inside the input content scale the scaler reports (1.0 to 3.0 on
+  the M6, section 8, text before the MetalFX table). The aspect ratio is
+  kept.
+- A change takes effect on the next frame, through the path a window
+  resize takes, and resets both histories.
+- It reads 1, with a line in the `vid_restart` output, where the scaler is
+  unavailable or the device has no ray tracing (section 4, "neither"; table
+  below). Unlike the effect cvars, section 4 does not force it to 0,
+  because 0 here means the family default.
+
+**Default internal size per family.** A height in rows, so that the
+default follows the output; the fraction is that height over the output's.
+A ratio above the scaler's maximum is clamped to it. With the M6's maximum
+of 3.0, a default of 720 rows on a 5120 x 2880 output would become 960.
+The 720-row default is for apple6 to apple8, whose maximum is not measured;
+TASK106 (#249) measures apple7.
+
+| Family | Ray tracing (section 4) | Default internal height | Basis |
+|---|---|---|---|
+| apple9 and later (M3 and later; the M6 measured) | hardware intersection; render-stage path | 1080 rows | Measured on the M6 at a 5120 x 2880 output on the compute path, the only device and output measured: the 1080p trace with the temporal scaler is 7.3 ms as a sum and 9.3 ms as one measured frame, which leaves 7.4 to 9.3 ms of the 60 Hz frame for raster, shading and RT7 (section 8, verdicts table, row RT9 (2)). An internal 2560 x 1440 leaves 1.7 to 4.8 ms (same row), too little for work that is not measured yet. For other apple9 devices and outputs this is a default to be measured (RT10) |
+| apple6 to apple8 (M1 is apple7, M2 apple8) | compute path, Metal's software traverser | 720 rows, *assumed* | Not measured: section 8 is the M6 only. Section 2 assumes 8 to 14 ms for the 1080p trace on apple7, a large part of the 60 Hz frame before the scaler, so the default sits below apple9's. TASK106 (#249) measures apple7, the scalers included; RT10 sets the default from it |
+| a device without ray tracing (section 4, "neither"), or one where `MTLFXTemporalScalerDescriptor` `supportsDevice:` is NO | none, or as section 4 | output size; `r_rt_scale` reads 1 | reported in the `vid_restart` output |
+
+The default does not depend on the refresh rate. At 120 Hz (an 8.3 ms
+frame) the 1080p path on the M6 is met by the 7.3 ms sum and not by the
+9.3 ms measured frame (row RT9 (2)); a lower `r_rt_scale` is the player's
+choice. Section 8's host has a 60 Hz display, so a 120 Hz measurement
+needs another display and is RT10's.
+
+**Other MetalFX scalers.** `MTLFXSpatialScaler` costs 1.668 ms in frame at
+1080p input and 1.653 ms at 2560 x 1440, against the temporal scaler's
+1.822 and 2.413 ms (section 8, MetalFX table, "In frame, scaler"). It
+keeps no history and takes no jitter, so it is designed only to
+interpolate the internal pixels. Not used: it saves 0.15 ms at 1080p and 0.76 ms at 2560 x 1440.
+
+`MTLFXTemporalDenoisedScaler` against the bilateral denoiser above, on
+section 8's numbers (M6, 5120 x 2880 output):
+
+| | `MTLFXTemporalScaler` after RT7's accumulation and denoiser (chosen) | `MTLFXTemporalDenoisedScaler` in place of both (rejected) |
+|---|---|---|
+| Scaler in frame (MetalFX table, "In frame, scaler") | 1.822 ms at 1080p input, 2.413 ms at 2560 x 1440 | 12.032 ms at 1080p, 19.497 ms at 2560 x 1440 |
+| Trace, per-frame items and scaler (verdicts table, row RT9 (2)) | 7.3 ms sum, 9.3 ms measured (1080p); 11.9 and 15.0 ms (2560 x 1440) | 17.6 ms sum, 18.9 ms measured (1080p); 29.0 and 31.5 ms (2560 x 1440) |
+| Left of the 16.7 ms frame for raster, shading and denoise | 7.4 to 9.3 ms (1080p), 1.7 to 4.8 ms (2560 x 1440) | none: over the frame at both inputs before any raster or shading |
+| Cost of the denoise it relies on | RT7's accumulation and the 5x5 and 3x3 blurs: not measured, part of the time left | inside the scaler |
+| Inputs beyond colour, depth, motion and jitter | none | diffuse albedo, specular albedo, normals, roughness, the world-to-view and view-to-clip matrices (section 8, MetalFX setup) |
+| From section 3's G-buffer | depth and motion vectors, already there | also albedo (`rgba8`) and normal (`rgb10a2`), measured only as `RGBA16Float`; Quake II materials have no specular albedo or roughness, so those are constants, as section 8 used |
+| What is denoised | each effect, before the resolve | the lit colour, all terms summed |
+| What it would replace | – | RT7's accumulation and both blurs, and the temporal scaler |
+
+Outcome: the denoised scaler is not used, and section 2's accumulation and
+bilateral denoiser stay. The deciding reason is cost: with the trace it is
+over the 60 Hz frame at both measured inputs on the M6, before
+rasterization or shading (verdicts table, row RT9 (2): "With the denoised
+scaler, not met at either input"). Two further reasons hold without a
+number. Section 2's denoiser is needed anyway at `r_rt_scale 1` and on a
+device without the scaler, so the denoised scaler would be a second
+denoising path, not a replacement. And it denoises the summed colour, where
+section 2 denoises each effect before it is composed. It was not measured
+below a 1080p input or on apple7; a measurement that puts it inside the
+frame, with an image-quality result that favours it, would reopen this.
+
+**Frame interpolator.** `MTLFXFrameInterpolator` reports support on the M6
+and was not timed (section 8, text before the MetalFX table). It is out of
+scope, with no card. It builds a frame between two rendered frames, so
+each rendered frame reaches the screen later than without it, and the frames
+it adds do not respond to input. In a game that is added latency.
+
+**RT7 and RT9.** RT7's acceptance does not change. It lands before RT11,
+so its 60 fps at 1080p on apple7 is measured at a 1920 x 1080 output,
+which traces 1080 rows with no scaler. RT9's changes: its fps target is at
+the native output size with the default `r_rt_scale`, not tracing at native
+pixels (section 6).
+
+**Not measured here, and where it is measured.** Image quality of the
+upscaled frame on real frames is RT12; no quality is claimed before it.
+The cases it names: particles, sprites and beams, which write no motion
+vectors of their own; water reflections, which RT7 keeps without history
+but the scaler accumulates; lightstyle changes and muzzle flashes, which
+change the lighting from one frame to the next; the view weapon; the jitter in RT7's
+history. A lead for RT11 and RT12, not a decision: the scaler takes a
+reactive mask (`reactiveMaskTexture`, with `reactiveMaskTextureEnabled` on
+its descriptor, in the SDK's `MTLFXTemporalScaler.h`), a per-pixel value
+from 0 to 1 that tells it to favour the current frame over its history,
+meant for alpha-blended or fast-moving content whose motion vectors are
+inaccurate. The forward pass could write it for particles, sprites, beams
+and water; RT12's frames show whether that is needed. The cost of the
+motion vectors, the G-buffer raster, shading and RT7 is RT10's per-pass
+table. The scaler's cost on apple7 is TASK106
+(#249). The first frames of a process run at the start level (section 8,
+"Levels at the start of a process"), so a frame-time test excludes them.
+
 ## 3. What the rasterizer must expose
 
 `ref_metal` (TASK28) renders the world and entities into a G-buffer before
-lighting is resolved. Required attachments, all at the frame's resolution:
+lighting is resolved. Required attachments, all at the frame's resolution
+(the internal resolution of section 2 while a ray-traced effect is on):
 
 | Attachment | Format | Written by |
 |---|---|---|
@@ -89,9 +306,10 @@ reflections (each a compute dispatch; reflections last because it reads
 the lit result of the others for hit shading), (4) temporal + denoise,
 (5) lighting resolve: `albedo × (lightmap × AO + dlight × vis + sun × vis)`
 plus reflection blend, (6) forward pass for sprites, particles, beams and
-the view weapon over the resolved image, (7) 2D. With `r_rt_* 0` steps 1,
-3 and 4 are skipped and step 5 reduces to the stock product, which is the
-state that must keep every gl1 pin.
+the view weapon over the resolved image, (7) `MTLFXTemporalScaler` from the
+internal to the output size (section 2, RT11), (8) 2D. With every effect
+cvar at 0 steps 1, 3, 4 and 7 are skipped and step 5 reduces to the stock product,
+which is the state that must keep every gl1 pin.
 
 ## 4. Hardware gating
 
@@ -99,7 +317,7 @@ state that must keep every gl1 pin.
 |---|---|
 | `supportsFamily(.apple6)` and `supportsRaytracing` | compute RT passes (TASK24); M1 is apple7 |
 | `supportsFamily(.apple9)` and `supportsRaytracingFromRender` | render-stage intersection: shadows and AO move into the lighting-resolve fragment shader, no separate dispatches or history reprojection for shadows (TASK25); M3 and later |
-| neither | `r_rt_*` cvars are forced to 0 and reported as unavailable in `vid_restart` output; the rasterizer path is byte-identical to RT off |
+| neither | the effect cvars (the `r_rt_*` cvars that switch an effect on, such as `r_rt_shadows`) are forced to 0 and reported as unavailable in `vid_restart` output; `r_rt_scale`, once RT11 adds it, reads 1 (section 2); the rasterizer path is byte-identical to RT off |
 
 The VM's paravirtual GPU reports no ray-tracing support: TASK24 builds
 there but validates on the M1 Max (T1); TASK25 validates on the M6 (T2).
@@ -116,15 +334,19 @@ Metal provides, no separate code path.
    regressions would appear.
 2. **One scenario per effect**, committed as `rt-shadows.cfg`,
    `rt-sun.cfg`, `rt-ao.cfg`, `rt-water.cfg` (each the base scenario plus
-   the one `r_rt_*` cvar on, temporal accumulation disabled for the pin so
-   frames are stateless, blue-noise seed fixed by `pins_capture`). They are
+   the one effect cvar on, temporal accumulation disabled for the pin so
+   frames are stateless, blue-noise seed fixed by `pins_capture`; RT11 adds
+   `r_rt_scale 1`, so no scaler runs and no MetalFX history enters a pin). They are
    pinned against **`ref_metal` itself** at the commit where the owner
    accepted the look: `scripts/pins.sh record metal rt-ao` on that commit
    becomes the reference, later commits compare against it at 0.02. The
    pin catches drift, not quality.
 3. **Performance** is the fps line `pins.sh record` writes to
-   `timedemo.txt`, captured with all effects on at 1080p; each card states
-   its number and the machine (apple family) it came from.
+   `timedemo.txt`, captured with all effects on; each card states its
+   number and the machine (apple family) it came from. Before RT11 it is
+   captured at 1080p. From RT11 on it is captured at the host's native
+   output size with the default `r_rt_scale`, and the number also states
+   the internal and output sizes.
 4. What an agent can judge alone: pin parity with RT off, drift against an
    accepted RT look, fps, the double-count invariant (a pixel with no
    dlight in range and no sun visibility must equal the RT-off pixel within
@@ -153,12 +375,17 @@ green, pins as stated.
 | RT5 | Ambient occlusion with blue noise and the lightmap-only multiply | same shape with `rt-ao`; AO never drops a pixel below `r_rt_ao_min × lightmap` |
 | RT6 | Water reflections, one bounce, warp-perturbed normal | same shape with `rt-water`; non-water pixels byte-identical to RT off |
 | RT7 | Temporal accumulation and denoiser (depends RT3 to RT5) | pins unchanged (pins run with temporal off); fps with everything on ≥ 60 at 1080p on apple7, number recorded |
-| RT8 | Hardware gating and fallbacks, `vid_restart` reporting, VM build | all `r_rt_*` forced 0 on the VM with the report line; pins unchanged there |
-| RT9 (TASK25) | Render-stage ray queries on apple9: shadows and AO in the resolve shader, compute path kept for apple6 to apple8 | identical pins on both paths at 0.005; fps on the M6 at native resolution ≥ display refresh with everything on, recorded in `docs/audits/rt-performance.md` |
-| RT10 (TASK25) | Acceleration-structure refit vs rebuild tuning and resolution-scale defaults per family, GPU timestamps | per-pass timings table in `docs/audits/rt-performance.md` for apple7 and apple9; no pin change |
+| RT8 | Hardware gating and fallbacks, `vid_restart` reporting, VM build | every effect cvar forced 0 on the VM with the report line; pins unchanged there (`r_rt_scale` is not RT8's: RT11 adds it, and it reads 1 there, section 4) |
+| RT11 (TASK25) | Internal resolution and `MTLFXTemporalScaler` (section 2, TASK105): the world refdef's 3D frame at `r_rt_scale` with a jittered projection, upscaled to that refdef's rectangle, 2D at the window size, a refdef with `RDF_NOWORLDMODEL` at its own size with no scaler; the cvar with its `doc/040_cvarlist.md` entry; the reset events for the scaler and RT7's history; the per-family defaults of section 2 (depends RT7, RT8) | every effect off: all gl1 pins unchanged and no scaler created; the four effect scenarios carry `r_rt_scale 1` and their pins are unchanged; with an effect on and the scale below 1, each reset event (map load, `vid_restart`, camera cut, teleport, a change of the scale or of the world refdef's rectangle through `viewsize` or the window size, an effect turned back on after a frame with every effect off) resets the scaler and RT7's history on that frame, shown by a `r_rt_stats 1` line, and the player-setup menu's model view open in game and a `fov` change from 90 to 30 reset neither, shown by the same line; at `viewsize` below 100 the upscaled view fills the same centred rectangle as with every effect off; where `supportsDevice:` is NO or the device has no ray tracing (the VM), `r_rt_scale` reads 1 with a report line; fps with everything on at the default scale on T1 and T2, with the internal and output sizes, recorded in `docs/audits/rt-performance.md` |
+| RT9 (TASK25) | Render-stage ray queries on apple9: shadows and AO in the resolve shader, compute path kept for apple6 to apple8; both at the internal resolution (depends RT7, RT11) | identical pins on both paths at 0.005 (pins run at `r_rt_scale 1`, temporal accumulation off); with everything on and the default `r_rt_scale` (1080 rows upscaled by `MTLFXTemporalScaler` to the M6's 5120 x 2880, section 2), the render-stage path holds fps ≥ display refresh (60 Hz on the T2 host), the first frames of a process excluded; the fps, the internal and the output size recorded in `docs/audits/rt-performance.md`, the compute path's fps beside it. Tracing at native pixels is not the target: 36.8 ms on the M6 (section 8, verdicts table, row RT9 (1)) |
+| RT10 (TASK25) | Acceleration-structure refit vs rebuild tuning and resolution-scale defaults per family, GPU timestamps (depends RT9, RT12 and TASK106, #249) | per-pass timings table in `docs/audits/rt-performance.md` for apple7 and apple9, including the G-buffer raster with its motion vectors, RT7's accumulation and denoiser and the scaler; the `r_rt_scale` default per family set from those timings and TASK106's (#249), replacing section 2's design defaults; no pin change |
+| RT12 (TASK25) | Image quality of the upscaled frame on real frames (depends RT11 and the owner's acceptance of the RT look, section 5) | for the four effect scenarios and `world`, frames at the default `r_rt_scale` upscaled to the T2 host's native output are compared with frames at `r_rt_scale 1` at the same output, from the same replay; the per-frame scores are recorded in this document, and each case section 2 lists (particles, sprites and beams, water reflections, lightstyle changes and muzzle flashes, the view weapon, the jitter in RT7's history) is named with the frames that show it; a default that should change is a finding for RT10 |
 
 Out of scope, decided after RT10 per the plan: path tracing (Phase G),
-global illumination beyond AO, RT for particles or beams.
+global illumination beyond AO, RT for particles or beams. Out of scope
+with no card (section 2, TASK105): `MTLFXFrameInterpolator`, which adds
+latency in a game, and `MTLFXTemporalDenoisedScaler` in place of section
+2's denoiser, which is over the 60 Hz frame on the M6.
 
 ## 7. Measured device capabilities (TASK99)
 
@@ -237,7 +464,8 @@ Per-decision verdicts, section 4 and section 6, for this device:
    intersection (TASK25):** unchanged; both true. This host is a valid
    T2 device for TASK25.
 3. **Neither forces `r_rt_*` to 0 (TASK60 / RT8):** unchanged; this device
-   never takes the branch. The forced-off half stays VM-only, and on this
+   never takes the branch. (Since TASK105, section 4 forces only the effect
+   cvars to 0 there, and `r_rt_scale` reads 1.) The forced-off half stays VM-only, and on this
    host it can only be tested by an override cvar that pretends the
    capability is absent. Finding for the RT8 card: add such an override
    (or a way to cap the family) so the fallback and the apple6 to apple8

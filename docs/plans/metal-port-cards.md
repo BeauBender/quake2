@@ -4,7 +4,10 @@ Status: **filed on 2026-11-12.** Each table row below is one card filed
 under the epic `metal-renderer`. The keys in the first column (P1, R1, S1,
 RT1 and so on) are placeholders, not card ids; card bodies refer to them as
 "row P1" and so on. The id minted for each row is in its "Filed as" cell; a
-row with an id there is never filed again.
+row with an id there is never filed again. RT11 and RT12 were added by
+TASK105 (#248) on 2026-11-14 and filed the same day as TASK109 (#263) and
+TASK110 (#264); RT9 (TASK61, #104) carries `depends:TASK109`, and RT8, RT9 and
+RT10 (#103, #104, #105) were rewritten from their new rows.
 
 This manifest is the authoritative card list. The four design documents
 keep their own sub-card lists as the detailed scope behind each row; where
@@ -131,8 +134,8 @@ No sub-cards here.
 ## Group RT: ray tracing (parents TASK24, #31, and TASK25, #32)
 
 Parent dependencies carried by RT1 to RT8 and RTA: INFORM7 (closed, accepted
-by the owner on 2026-11-12), TASK28. RT9 and
-RT10 belong to TASK25 and carry TASK24. Design:
+by the owner on 2026-11-12), TASK28. RT9 to
+RT12 belong to TASK25 and carry TASK24. Design:
 `docs/plans/metal-raytracing-design.md`.
 
 | Key | Title | Depends | Tier | Model | Design reference | Acceptance | Filed as |
@@ -145,9 +148,11 @@ RT10 belong to TASK25 and carry TASK24. Design:
 | RT6 | Water reflections, one bounce | RT3 | T1 | opus | section 2; row RT6 | As RT3 with `rt-water`. Pixels that are not water are byte-identical to effect off | TASK58 (#100) |
 | RTA | INFORM: the look of the four ray-traced effects, accepted by the owner from the frames RT3 to RT6 captured (owner-gated, `gate:manual:BeauBender`) | RT3, RT4, RT5, RT6 | none | opus | section 5 | The owner closes the card. The commit accepted becomes the reference each effect scenario is pinned against | INFORM11 (#101) |
 | RT7 | Temporal accumulation and the denoiser | RTA | T1 | opus | section 2; row RT7 | Pins unchanged with temporal accumulation off. Every effect on: the fps target in the design document is met on the T1 host and the number is recorded | TASK59 (#102) |
-| RT8 | Hardware gating and fallbacks, with ray tracing forced off on the VM | RT2 | T0 and T1 | opus | section 4; row RT8 | On the VM every `r_rt_*` cvar reads 0 with a report line at start-up, and all pins are unchanged there | TASK60 (#103) |
-| RT9 | Render-stage ray queries on M3 or later, compute path kept for older families | RT7 | T2 | opus | section 4; row RT9 | Both paths produce the same pins within 0.005. fps on the T2 host at native resolution is recorded in `docs/audits/rt-performance.md` | TASK61 (#104) |
-| RT10 | Refit against rebuild tuning and resolution-scale defaults per GPU family | RT9 | T2 | opus | row RT10 | A per-pass timing table for each host is in `docs/audits/rt-performance.md`. No pin changes | TASK62 (#105) |
+| RT8 | Hardware gating and fallbacks, with ray tracing forced off on the VM | RT2 | T0 and T1 | opus | section 4; row RT8 | On the VM every effect cvar (the `r_rt_*` cvars that switch an effect on) reads 0 with a report line at start-up, and all pins are unchanged there. `r_rt_scale` is RT11's | TASK60 (#103) |
+| RT11 | Internal resolution and the MetalFX temporal scaler: the world view's 3D frame at `r_rt_scale` with a jittered projection, upscaled to that view's rectangle, 2D at the window size, the reset events and the per-family defaults | RT7, RT8 | T0 (the VM check), T1 and T2 | opus | section 2, internal resolution (TASK105); row RT11; INFORM12 (#262) | Every effect off: all gl1 pins unchanged and no scaler is created. The four effect scenarios carry `r_rt_scale 1` and their pins are unchanged. With an effect on and the scale below 1, each reset event (map load, `vid_restart`, camera cut, teleport, a change of the scale or of the world view's rectangle through `viewsize` or the window size, an effect turned back on after a frame with every effect off) resets the scaler and the temporal history on that frame, shown by a `r_rt_stats 1` line, and the player-setup menu's model view open in game and a `fov` change from 90 to 30 reset neither, shown by the same line. At `viewsize` below 100 the upscaled view fills the same centred rectangle as with every effect off. Where the scaler is unsupported or the device has no ray tracing (the VM), `r_rt_scale` reads 1 with a report line. `r_rt_scale` is in `doc/040_cvarlist.md`. fps with every effect on at the default scale on the T1 and T2 hosts, with the internal and output sizes, is recorded in `docs/audits/rt-performance.md` | TASK109 (#263) |
+| RT9 | Render-stage ray queries on M3 or later, compute path kept for older families, both at the internal resolution | RT7, RT11 | T2 | opus | section 4; section 2, internal resolution; row RT9 | Both paths produce the same pins within 0.005, at `r_rt_scale 1` with temporal accumulation off. With every effect on and the default `r_rt_scale` (1080 rows upscaled by the MetalFX temporal scaler to the T2 host's native 5120 x 2880), the render-stage path holds fps at or above the display refresh (60 Hz on the T2 host), the first frames of a process excluded. The fps, the internal size and the output size are recorded in `docs/audits/rt-performance.md`, with the compute path's fps beside it. Tracing at native pixels is not the target (36.8 ms on the M6, design section 8, verdicts table, row RT9 (1)) | TASK61 (#104) |
+| RT10 | Refit against rebuild tuning and resolution-scale defaults per GPU family | RT9, RT12, TASK106 (#249) | T2 | opus | row RT10; section 2, internal resolution | A per-pass timing table for each host is in `docs/audits/rt-performance.md`, including the G-buffer raster with its motion vectors, the temporal accumulation and denoiser, and the scaler. The `r_rt_scale` default per family is set from those timings and from TASK106 (#249), replacing the design defaults. No pin changes | TASK62 (#105) |
+| RT12 | Image quality of the upscaled frame on real frames | RT11, RTA | T2 | sonnet | section 2, internal resolution; row RT12 | For the four effect scenarios and `world`, frames at the default `r_rt_scale` upscaled to the T2 host's native output are compared with frames at `r_rt_scale 1` at the same output, from the same replay. The per-frame scores are recorded in the design document, and each case the design lists (particles, sprites and beams, water reflections, lightstyle changes and muzzle flashes, the view weapon, the jitter in the temporal history) is named with the frames that show it. A default that should change is a finding for RT10 | TASK110 (#264) |
 
 ## Pull order
 
@@ -155,7 +160,7 @@ Record 0006 (`docs/decisions/0006-port-first.md`) sets the queue. The port
 queue is the rows of this file, in the order the sections list them: P1 to
 P3, R1 to R5, S1 to S6 (the shim cards S2 to S6 form one chain; each
 stacks on its predecessor's open pull request and waits when there is
-none), then N1 to N10 (one chain, stacked the same way) and TASK28, TASK20, TASK22, TASK23, then RT1 to RT10 with RTA.
+none), then N1 to N10 (one chain, stacked the same way) and TASK28, TASK20, TASK22, TASK23, then RT1 to RT12 with RTA (RT11 before RT9, RT12 before RT10).
 Their parents (TASK27, TASK21, TASK28, TASK24, TASK25) follow their children.
 
 Everything else is parked: the card carries the label
@@ -176,7 +181,7 @@ outside a port card's scope goes to a parked card.
 4. P1, P2, P3 and R1 to R5, then TASK27 itself.
 5. S1 to S6, then TASK21.
 6. N1 to N10, then TASK28.
-7. RT1 to RT8 with RTA, then TASK24; RT9 and RT10, then TASK25.
+7. RT1 to RT8 with RTA, then TASK24; RT11, RT9, RT12 and RT10, then TASK25.
 
 What the build VM can finish alone: P1, P2, R1 to R5 on `soft`, S1 and
 RT8's VM half. P3 and everything after S1 need `ref_gl1` references, which
