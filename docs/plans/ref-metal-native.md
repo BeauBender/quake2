@@ -2077,7 +2077,7 @@ What exists:
   one before, a negative minimum or maximum is not taken.
 - **The particle texture** (`rm_misc.c`, gl1's `R_InitParticleTexture`, `rm_particle_texture`): made
   at start-up beside `r_notexture`, kept by `R_FreeUnusedImages`, freed by `R_ShutdownImages`.
-- **24 pipelines**, 0 created after init. `metal_stats` adds `N particles refused`.
+- **25 pipelines** (the 24 and the alpha pass, FIX53), 0 created after init. `metal_stats` adds `N particles refused`.
 - The cvars `gl1_particle_size`, `_min_size`, `_max_size`, `_att_a`, `_att_b`, `_att_c`,
   `gl1_particle_square` and `gl1_pointparameters`, by gl1's names, defaults and flags.
 
@@ -2147,8 +2147,8 @@ What exists:
 - **The ledger** counts a sixth kind, `state`: the shader library, the pipeline states, the
   depth-stencil states and the samplers (`RMB_SET_STATE` in `rmb_resource.m`, made again by
   `R_TextureMode`). `rm_ledger_kind_live` and `rm_ledger_clean` read it per kind; the teardown
-  line of every run reads `0 live objects`, `state 45/45` (1 library, 24 pipelines, 4
-  depth-stencil states, 8 samplers made twice).
+  line of every run reads `0 live objects`, `state 46/46` (1 library, 25 pipelines (the 24 and
+  the alpha pass, FIX53), 4 depth-stencil states, 8 samplers made twice).
 - **Completion handlers after unload.** The handlers of ref_metal's command buffers are blocks
   whose code and release helpers are in `ref_metal.dylib`, and the bounded waits of teardown
   (the frame slots, `RMB_GPU_WAIT_MS`) can give up on a hung GPU before Metal has run or released
