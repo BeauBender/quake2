@@ -836,8 +836,9 @@ picture is the same as before these cvars existed.
   default) picks the GPU family's default: 1080 lines on Apple GPU family
   9 and later (M3 and later), 720 lines below, as a fraction of the
   view's height. Any value is kept between `1/3` (the largest ratio the
-  scalers take, lower where the GPU reports a smaller one) and `1`; at
-  `1` the view is drawn at full size and the scaler still runs. A
+  scalers take, lower where the GPU reports a smaller one) and `1`, and
+  each side is rounded up, so the view is never scaled by more than that
+  ratio; at `1` the view is drawn at full size and the scaler still runs. A
   negative value or one that is not a finite number counts as `0`. Saved
   with the configuration; applies from the next frame.
 

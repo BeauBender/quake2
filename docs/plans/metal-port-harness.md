@@ -2848,8 +2848,10 @@ the world view's rectangle, copied into the frame at that rectangle; the 2D draw
 Every decision is a pure function in `rm_metalfx.c`, held by `tests/metal/rm_fx_test.c`.
 
 Host: this VM, `Apple Paravirtual device` (`apple5` only, no ray tracing), macOS 27.2.1, SDK
-27.2. Branch base: `origin/main` at `33845c6c`. Every log, script and result is in
-`<artifacts>/TASK111/`; the pin store is a scratch one.
+27.2. The first runs were of engine commit `27fd81fd` on `origin/main` at `33845c6c`; after
+the review round the branch has `origin/main` at `9039f602` (TASK129) merged, and the pins
+below were recorded again at `a8e0dd77` against a base built at `9039f602`. Every log,
+script and result is in `<artifacts>/TASK111/`; the pin store is a scratch one.
 
 **What `supportsDevice:` reports here** (three runs of a probe, and the renderer's own line
 at every start, `ref_metal: MetalFX supportsDevice: ...`):
@@ -2873,7 +2875,8 @@ scripts/pins.sh compare metal <s> --ref metal --ref-id <base id> --cand-id <id> 
 cmp <base frame> <frame>                                            # every frame
 ```
 
-**Defaults: every scenario against the base** (`r_metalfx 0`, `r_metalfx_interp 0`):
+**Defaults: every scenario against the base** (`r_metalfx 0`, `r_metalfx_interp 0`; at
+`a8e0dd77` against `9039f602`, and the same at `27fd81fd` against `33845c6c`):
 
 | Scenario | Result |
 |---|---|
@@ -2894,13 +2897,18 @@ and 0 (the default, which is 1 at a 480-line output) each draw all 23 frames, va
 clean, `teardown: 0 live objects` with `metalfx 2/2` (the scaler and its output target), and
 the `metal_stats` line, for example `metalfx spatial: input 320x240, output 640x480 at 0,0,
 reset first, scaler not timed` on the first view and `reset none, scaler 0.170 ms` after.
-The input sizes were 320 x 240, 480 x 360, 218 x 163 and 640 x 480. The scaler's GPU time,
+The input sizes were 320 x 240, 480 x 360, 218 x 163 and 640 x 480 at `27fd81fd`. The review
+round rounds an input side up, so the output-to-input ratio never passes the clamp: at
+`a8e0dd77` the 0.34 run of `world` takes 218 x 164 (ratio 2.94 at most), with the same
+validation, teardown and ledger. The scaler's GPU time,
 from the 11 timed lines of each run (not a quiet window, a VM's paravirtual GPU, one run
 each: a range, not a measurement for the design): 0.000 to 0.555 ms, medians 0.096 to
 0.329 ms.
 
-**Fallbacks** (the committed scenarios, no `metal_stats`, compared pixel by pixel, since the
-TGA header names the scenario):
+**Fallbacks** (the committed scenarios at `a8e0dd77`, no `metal_stats`, compared pixel by
+pixel, since the TGA header names the scenario, so the files differ even where the pixels
+do not; `world-metalfx1` at `a8e0dd77` is also 23 of 23 pixel-identical to its record at
+`27fd81fd`):
 
 - `world-metalfx2`: `ref_metal: r_metalfx 2 (temporal) is not supported on this device, it
   reads 1 (spatial)`; 23 of 23 frames pixel-identical to `world-metalfx1`'s.
@@ -2941,7 +2949,8 @@ quit                             // teardown 0 live objects, metalfx 2/2; status
 ```
 
 (`w50` between the steps.) Every expectation held, on the frame of the event; the 1,303
-other lines say `reset none`. A change of mode between two scalers (`reset mode`) cannot
+other lines say `reset none`. The same run at `a8e0dd77`, where the step is `rm_fx_step` and
+`rm_fx_frame_end`, gave the same reset lines (`resets2.log`). A change of mode between two scalers (`reset mode`) cannot
 happen on this VM, which has one; the host test holds it.
 
 **A known edge** (from the bare-metal host): with a scaled view the smooth-point particle
@@ -2950,12 +2959,15 @@ above 256 frame pixels is drawn smaller than its stock size. Reaching it needs
 `gl1_particle_max_size` above 256. The cap is not changed; `doc/040_cvarlist.md` says so
 under `r_metalfx`.
 
-**Mutants.** 80 mutants of `rm_metalfx.c` (`<artifacts>/TASK111/mutants.py`, one text
+**Mutants.** 112 mutants of `rm_metalfx.c` (`<artifacts>/TASK111/mutants.py`, one text
 replacement each, built with ASAN and UBSAN, run with a 20 s bound), over every function and
-every operand of its compound guards: 77 fail `tests/metal/rm_fx_test.c` (by a failed check,
-a sanitizer, or the bound: `rm_fx_halton` with base 1 loops). The first run had four
-survivors. One (`v < 0` as `v < -1` in `rm_fx_mode_of`) was a missing case: `-1` truncates
-to `-1`. The case was added and the mutant now fails. Three are equivalent:
+every operand of its compound guards, the review round's included (the rounding of a side,
+`rm_fx_same_size`, `rm_fx_step`, `rm_fx_frame_end`, the refusal memo, `rm_fx_note_format`):
+109 fail `tests/metal/rm_fx_test.c` (by a failed check, a sanitizer, or the bound:
+`rm_fx_halton` with base 1 loops). Two survivors were missing cases and have them now: `v <
+0` as `v < -1` in `rm_fx_mode_of` (`-1` truncates to `-1`), and the floor of a side lowered
+to 0 (a product inside the rounding slack). The refusal memo without its mode (review I1)
+fails 2 checks. Three are equivalent:
 
 - `m < 0` as `m < -1` in `rm_fx_supported`: the loop never runs for `m` at or below 0;
 - `m > RM_FX_OFF` as `m >= RM_FX_OFF` there: bit 0 gives off, as the end does;
