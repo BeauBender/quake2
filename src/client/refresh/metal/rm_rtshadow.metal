@@ -27,7 +27,9 @@
  *   ray from the eye to that point (the triangle it meets, through the
  *   map's triangle-to-surface table), whose texture axes and shifts give
  *   gl1's dynamic light at the pixel as the lightmap's sample holds it
- *   (mtl_rts_add_lm: the four luxels' adds, interpolated); the four
+ *   (mtl_rts_add_lm: the four luxels' adds, interpolated), the pixel in
+ *   the hit's model space (a brush entity's, which gl1 lights with the
+ *   light's world origin), none on a surface without light samples; the four
  *   lights that add the most (common/mtl_rts_math.h) and one ray query
  *   per light against the frame's instance structure (TASK53), from the
  *   surface offset along its normal (mtl_rts_bias) to the light; a
