@@ -863,7 +863,9 @@ is.
   unshadowed. Translucent surfaces and translucent water let a third or
   two thirds of the light through, as they let the view through. Models
   are lit as before, by the light at their position without a shadow, but
-  they cast shadows. Needs a GPU with ray tracing and draws the view
+  they cast shadows, except on a light they carry: a rocket does not
+  shadow its own light, nor a monster its muzzle flash. Needs a GPU with
+  ray tracing and draws the view
   through the G-buffer (see `r_rt_gbuffer`); with `gl1_dynamic 0`,
   `r_fullbright 1` or `gl1_flashblend 1` there are no dynamic lights on
   the lightmaps and it does nothing. With `0` (the default) nothing is

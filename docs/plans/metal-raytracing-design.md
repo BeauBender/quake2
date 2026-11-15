@@ -134,11 +134,17 @@ lights in `ref_metal`"). The pass as built:
   inside it, a muzzle flash's) also takes a second query over the carriers' instance mask,
   which passes that model's triangles.
 
-On the M6 (apple9, compute path), seeded `rt-shadows` over `demo1.dm2`, warm frames, three runs:
+On the M6 (apple9, compute path), seeded `rt-shadows` over `demo1.dm2`, warm frames, three runs
+each, without and with entities (`rt-shadows-entities`):
 
-- 1920 x 1080: median 2.55 ms (p10 1.60 to 1.62, p90 3.34 to 3.62);
-- 5120 x 2880: median 8.68 ms (p10 5.4 to 5.8, p90 11.4 to 11.6);
-- about 0.86 rays a pixel; 23 % of pixels trace, 32 % have a light in range.
+- 1920 x 1080: median 2.55 ms (p10 1.61 to 1.62, p90 3.48 to 3.49); with entities 3.58 ms (p10
+  2.01 to 2.03, p90 4.79 to 4.96);
+- 5120 x 2880: median 8.53 ms (p10 5.4 to 5.5, p90 11.6 to 11.9); with entities 9.05 ms (p10 6.1
+  to 6.3, p90 12.9 to 13.6);
+- about 0.86 rays a pixel without entities and 1.09 with them; 23 % of pixels trace, 31 % have a
+  light in range;
+- the rule that a model does not shadow the light it carries costs 0.02 ms at 1080p without
+  entities and 0.20 ms with them, against the pass without it.
 
 That is above the 1.952 ms the closed table gives 4 any-hit rays a pixel on every pixel. The
 surface ray (closest hit), the 32-light loops and the term's writes cost more than the shadow

@@ -3095,15 +3095,19 @@ and 22.7 % trace. Without entities the round before measured 2.546 and 8.681 ms.
 
 **Proof 5, validation and ASAN.**
 
-- Validation: every record and replay of Proofs 1 and 2 ran with `MTL_DEBUG_LAYER=1`: the banner
-  and no other validation line, no failed command buffer, `teardown: 0 live objects` (`rt 75/75`,
-  `rt 54/54` without entities, `rt 472/472` and `rt 318/318` with them).
+- Validation: every record and replay of Proofs 1 and 2 ran with `MTL_DEBUG_LAYER=1` (15 records
+  with the effect off, 4 with it on and 24 replays of them): the banner and no other validation
+  line, no failed command buffer, `teardown: 0 live objects` (`rt 0/0` with the effect off; on,
+  `rt 75/75` and `rt 54/54` without entities, `rt 472/472` and `rt 318/318` with them, as the
+  round before).
 - ASAN: `make ASAN=1 client game ref_metal`, then `debug/quake2` with `MTL_DEBUG_LAYER=1` and a
-  scratch script beside the binary, deleted after. The script sets `r_rt_shadows 1` and `cheats 1`,
-  then plays `map base1`, the blaster fired for 200 frames, `vid_restart`, firing again, `map
+  scratch script beside the binary, deleted after with the `config.cfg` the run saves. The
+  script sets `r_rt_shadows 1`, `r_rt_stats 1` and `cheats 1`, then plays `map base1`, the
+  blaster fired for 200 frames (its bolts carry their light), `vid_restart`, firing again, `map
   base2` and firing again.
-- Result: status 0, no sanitizer line, the pass's targets made in each renderer session (2560 x
-  1920), both teardowns `0 live objects` (`rt 92/92`, `rt 186/186`).
+- Result: status 0, no sanitizer line, no validation line past the banner, the pass's targets
+  made in each renderer session (2560 x 1920), an instance structure in 446, 441 and 445 frames
+  (the `r_rt_stats` summaries of the three maps' sessions), both teardowns `0 live objects` (`rt 93/93`, `rt 186/186`).
 
 **Host test and mutants.** `tests/metal/rm_rtshadow_test.c` (2,767 checks), run by
 `tests/check-ref-metal.sh`. It holds the falloff to `rm_lm_dlight`:
