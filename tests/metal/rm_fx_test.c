@@ -202,6 +202,10 @@ test_sizes(void)
 	o = vp(0, 0, 1, 2);
 	CHECK(rm_fx_sizes(&o, 1.0f / 3, &s) == 1);
 	CHECK(s.iw == 1 && s.ih == 1);
+	/* a product inside the slack rounds to 0: still 1 */
+	o = vp(0, 0, 1, 1);
+	CHECK(rm_fx_sizes(&o, 0.0005f, &s) == 1);
+	CHECK(s.iw == 1 && s.ih == 1);
 	o = vp(0, 0, 640, 480);
 	CHECK(rm_fx_sizes(&o, 0.0001f, &s) == 1);
 	CHECK(s.iw == 1 && s.ih == 1);
