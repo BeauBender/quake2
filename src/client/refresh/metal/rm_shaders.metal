@@ -291,3 +291,40 @@ rm_fragment_color(rm_varying3d in [[stage_in]])
 {
 	return saturate(in.color);
 }
+
+/*
+ * particle (N9): the quads of gl1's GL_POINTS as the shim makes them
+ * (rm_point_quads: clip coordinates, drawn with the identity), each
+ * corner's offset from the centre in uv and the radius and the smooth
+ * flag in pad, carried in pt as the shim's vertex carries them
+ */
+vertex rm_varying3d
+rm_vertex_particle(uint vid [[vertex_id]],
+		const device rm_avert *v [[buffer(0)]],
+		constant rm_uniforms3d &u [[buffer(1)]])
+{
+	rm_varying3d out;
+	float4 p = u.mvp * v[vid].pos;
+
+	p.z = mtl_gl_clip_z(p.z, p.w);
+	out.position = p;
+	out.uv = float2(0.0f);
+	out.lmuv = float2(0.0f);
+	out.color = v[vid].color;
+	out.pt = float4(v[vid].uv, v[vid].pad);
+	return out;
+}
+
+/* the shim's fragment function untextured: a smooth point's coverage multiplies the alpha (GL 1.4, section 3.12) */
+fragment float4
+rm_fragment_particle(rm_varying3d in [[stage_in]])
+{
+	float4 c = saturate(in.color);
+
+	if (in.pt.w > 0.5)
+	{
+		c.a *= mtl_point_coverage(in.pt.x, in.pt.y, in.pt.z);
+	}
+
+	return c;
+}

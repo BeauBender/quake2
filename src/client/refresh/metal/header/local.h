@@ -101,6 +101,16 @@ extern cvar_t *r_gunfov;
 extern cvar_t *gl_shadows;      /* r_shadows */
 extern cvar_t *gl1_stencilshadow;
 
+/* the particles (N9), by gl1's names */
+extern cvar_t *gl1_particle_min_size;
+extern cvar_t *gl1_particle_max_size;
+extern cvar_t *gl1_particle_size;
+extern cvar_t *gl1_particle_att_a;
+extern cvar_t *gl1_particle_att_b;
+extern cvar_t *gl1_particle_att_c;
+extern cvar_t *gl1_particle_square;
+extern cvar_t *gl1_pointparameters;
+
 /* from gl1's header/local.h, without the GL fields; a scrap image has no texture of its own (texnum RM_TEXNUM_SCRAP) */
 #define MAX_GLTEXTURES 1024
 #define RM_TEXNUM_SCRAP -1               /* a scrap image's texnum: the slot is used, its texture is the atlas's */
@@ -129,6 +139,7 @@ typedef struct image_s
 
 extern image_t gltextures[MAX_GLTEXTURES];
 extern image_t *r_notexture;
+extern image_t *r_particletexture;  /* gl1's: the textured particles' dot (rm_misc.c makes it, N9) */
 extern int registration_sequence;
 extern float rm_sw_gamma;
 extern float rm_inverse_intensity_value;
@@ -258,8 +269,22 @@ int R_DrawSpriteModel(const entity_t *currententity, const model_t *currentmodel
 int R_DrawBeam(const entity_t *currententity, const rm_view_t *view, int *drawn);
 int R_DrawNullModel(const entity_t *currententity, const rm_view_t *view, int depth_write);
 
+/*
+ * rm_effects.c, the particles (gl1_main.c, N9): gl1's point state from
+ * the cvars at start-up (R_SetDefaultState; gl1_pointparameters is read
+ * then), gl1_particle_square's change between frames, the view's
+ * particles after the flash blobs (0 when the draw is refused) and the
+ * particles of the last view not drawn (metal_stats)
+ */
+void R_InitParticles(void);
+void R_ParticleSquare(void);
+int R_DrawParticles(const rm_view_t *view);
+void RM_ParticleSkips(rmb_stats_t *s);
+
 /* rm_misc.c */
 void R_InitBuiltinTextures(void);
+/* gl1's R_InitParticleTexture: r_particletexture, the dot or (gl1_particle_square) the square, made again */
+void R_InitParticleTexture(void);
 void R_ScreenShot(void);
 void RM_PrintStats(void);
 /* the directory of ref_metal.dylib, where ref_metal.metallib lies; 0 when unknown */
