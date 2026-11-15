@@ -797,7 +797,8 @@ cmd_footprint() {
     local src=flags
     if [ ${#bands[@]} -eq 0 ]; then
         src="$scenario.cfg"
-        while IFS= read -r b; do [ -n "$b" ] && bands+=("$b"); done <<< "$(scenario_bands "$scenario")"
+        local blist; blist=$(scenario_bands "$scenario") || exit 1
+        while IFS= read -r b; do [ -n "$b" ] && bands+=("$b"); done <<< "$blist"
     fi
     [ -n "$out" ] && check_out_path "$out"
     local offd ond diff; offd=$(fp_dir "$scenario" "$renderer" "$off"); ond=$(fp_dir "$scenario" "$renderer" "$on")
@@ -908,8 +909,8 @@ cfg_value() { sed -n "s/^set $2 \([A-Za-z0-9_.-]*\)\$/\1/p" "$1" | head -n 1; }
 check_content() {
     local readme=$1 dir=$2 bad=0 cfg name row tags comp t want e rows
     # the rows of the Content table: scenario, tags, companion
-    rows=$(awk -F'|' '/^## Content/ { on=1; next } /^## / { on=0 } on && /^\| `/ { n=$2; gsub(/[ `]/, "", n); t=$3; gsub(/ /, "", t); c=$4; gsub(/[ `]/, "", c); print n " " t " " c }' "$readme")
-    [ -n "$rows" ] || { echo "content: $readme has no '## Content' table of scenario rows"; return 1; }
+    rows=$(awk -F'|' '/^## / { on=0 } /^\| Scenario \| Tags \| Companion \|/ { on=1; next } on && /^\| `/ { n=$2; gsub(/[ `]/, "", n); t=$3; gsub(/ /, "", t); c=$4; gsub(/[ `]/, "", c); print n " " t " " c }' "$readme")
+    [ -n "$rows" ] || { echo "content: $readme has no '| Scenario | Tags | Companion |' table of scenario rows"; return 1; }
     for cfg in "$dir"/*.cfg; do
         [ -f "$cfg" ] || continue
         name=$(basename "$cfg" .cfg)
@@ -1845,6 +1846,216 @@ st_framediff_mask() { # RT2 (TASK54): --mask limits the comparison to the pixels
     rc=0; "$diff" "$tmp/a.tga" "$tmp/mdefect.tga" --mask >/dev/null 2>&1 || rc=$?
     [ "$rc" = 1 ] || st_fail "--mask without a file must be a usage error (1), not $rc" || return 1
 }
+# fp_frames: makes uniform frames of 64x48 (u100 = every channel 100, so every change is exact):
+# u100.tga; fpdark.tga with a 16x16 block of 40 at 8,8 (256 px, 60 levels darker);
+# fpmix.tga that block plus an 8x8 block of 160 at 40,24 (64 px, 60 levels brighter);
+# fpsmall.tga with a 4x4 block of 105 at 0,0 (16 px, 5 levels brighter);
+# fpmask.tga marking only the dark block
+fp_frames() {
+    "$diff" --block "$tmp/a.tga" "$tmp/u100.tga" 0 0 64 48 100
+    "$diff" --block "$tmp/u100.tga" "$tmp/fpdark.tga" 8 8 16 16 40
+    "$diff" --block "$tmp/fpdark.tga" "$tmp/fpmix.tga" 40 24 8 8 160
+    "$diff" --block "$tmp/u100.tga" "$tmp/fpsmall.tga" 0 0 4 4 105
+    "$diff" --block "$tmp/a.tga" "$tmp/fpz.tga" 0 0 64 48 0
+    "$diff" --block "$tmp/fpz.tga" "$tmp/fpmask.tga" 8 8 16 16 255
+}
+# fp_has <line> <fragment>: the footprint line holds the fragment
+fp_has() { case " $1 " in *" $2 "*) return 0;; esac; st_fail "expected '$2' in: $1"; }
+st_footprint() { # TASK133: the footprint numbers, exact on uniform frames
+    local l rc=0
+    fp_frames
+    l=$("$diff" --footprint "$tmp/u100.tga" "$tmp/u100.tga") || st_fail "identical frames: exit 0" || return 1
+    fp_has "$l" changed=0.000000 && fp_has "$l" max=0.00 && fp_has "$l" mean=0.0000 && fp_has "$l" band=none || return 1
+    l=$("$diff" --footprint "$tmp/u100.tga" "$tmp/fpmix.tga") || st_fail "a footprint with no band exits 0 however much changed" || return 1
+    # 256 px darker and 64 px brighter by 60 levels in 3072: 0.083333, 0.020833, 0.104167; mean 60 * 320 / 3072
+    fp_has "$l" changed=0.104167 && fp_has "$l" darker=0.083333 && fp_has "$l" brighter=0.020833 || return 1
+    fp_has "$l" max=60.00 && fp_has "$l" maxdark=60.00 && fp_has "$l" maxbright=60.00 && fp_has "$l" mean=6.2500 || return 1
+    fp_has "$l" w=64 && fp_has "$l" h=48 && fp_has "$l" delta=8 || return 1
+    # B darker than A is "darker": swapping the frames swaps the directions
+    l=$("$diff" --footprint "$tmp/fpmix.tga" "$tmp/u100.tga")
+    fp_has "$l" darker=0.020833 && fp_has "$l" brighter=0.083333 || return 1
+    # a change of 5 levels is under the default delta of 8, and over a delta of 4
+    l=$("$diff" --footprint "$tmp/u100.tga" "$tmp/fpsmall.tga")
+    fp_has "$l" changed=0.000000 && fp_has "$l" max=5.00 || return 1
+    l=$("$diff" --footprint "$tmp/u100.tga" "$tmp/fpsmall.tga" --delta 4)
+    fp_has "$l" changed=0.005208 && fp_has "$l" brighter=0.005208 && fp_has "$l" delta=4 || return 1
+    # exactly 8 levels is not "more than" the default delta of 8, and is over a delta of 7
+    "$diff" --block "$tmp/u100.tga" "$tmp/fpeight.tga" 0 0 4 4 108
+    l=$("$diff" --footprint "$tmp/u100.tga" "$tmp/fpeight.tga"); fp_has "$l" changed=0.000000 || return 1
+    l=$("$diff" --footprint "$tmp/u100.tga" "$tmp/fpeight.tga" --delta 7); fp_has "$l" changed=0.005208 || return 1
+    # --mask counts only the marked pixels: all 256 of the dark block are darker
+    l=$("$diff" --footprint "$tmp/u100.tga" "$tmp/fpmix.tga" --mask "$tmp/fpmask.tga")
+    fp_has "$l" darker=1.000000 && fp_has "$l" brighter=0.000000 && fp_has "$l" masked=256 && fp_has "$l" mean=60.0000 || return 1
+    l=$("$diff" --footprint "$tmp/u100.tga" "$tmp/fpmix.tga" --mask "$tmp/fpz.tga")
+    fp_has "$l" changed=0.000000 && fp_has "$l" masked=0 || return 1
+    "$diff" --footprint "$tmp/u100.tga" "$tmp/d.tga" >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 3 ] || st_fail "a size mismatch must exit 3, not $rc" || return 1
+    rc=0; "$diff" --footprint "$tmp/u100.tga" "$tmp/fpmix.tga" --mask "$tmp/d.tga" >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 3 ] || st_fail "a mask of another size must exit 3, not $rc" || return 1
+    rc=0; "$diff" --footprint "$tmp/u100.tga" "$tmp/fpmix.tga" --delta x >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 1 ] || st_fail "a bad --delta must exit 1, not $rc" || return 1
+    # the compare mode is untouched
+    "$diff" "$tmp/u100.tga" "$tmp/fpdark.tga" | grep -q '^score=0.019608 max=60 bad=0.083333 w=64 h=48 threshold=0.020000 bad_threshold=0.005000$' ||
+        st_fail "the compare line must be unchanged" || return 1
+}
+st_footprint_band() { # TASK133: a band is inclusive, names the metrics outside it, and exits 2
+    local l rc
+    fp_frames
+    band_rc() { rc=0; l=$("$diff" --footprint "$tmp/u100.tga" "$tmp/fpmix.tga" "$@") || rc=$?; }
+    band_rc --band darker=0..0.1; [ "$rc" = 0 ] && fp_has "$l" band=ok || st_fail "darker 0.083 is inside 0..0.1 ($rc)" || return 1
+    band_rc --band darker=0..0.05; [ "$rc" = 2 ] && fp_has "$l" band=OUT:darker || st_fail "darker 0.083 is outside 0..0.05 ($rc)" || return 1
+    band_rc --band brighter=0.05..1; [ "$rc" = 2 ] && fp_has "$l" band=OUT:brighter || st_fail "brighter 0.021 is under the lower bound 0.05 ($rc)" || return 1
+    band_rc --band max=0..60; [ "$rc" = 0 ] || st_fail "max 60 is inside 0..60: the bounds are inclusive ($rc)" || return 1
+    band_rc --band max=0..59.99; [ "$rc" = 2 ] && fp_has "$l" band=OUT:max || st_fail "max 60 is outside 0..59.99 ($rc)" || return 1
+    band_rc --band mean=0..6.25; [ "$rc" = 0 ] || st_fail "mean 6.25 is inside 0..6.25 ($rc)" || return 1
+    band_rc --band changed=0..0.1; [ "$rc" = 2 ] && fp_has "$l" band=OUT:changed || st_fail "changed 0.104 is outside 0..0.1 ($rc)" || return 1
+    band_rc --band darker=0..0.1 --band brighter=0..0.01 --band max=0..50; [ "$rc" = 2 ] && fp_has "$l" band=OUT:brighter,max ||
+        st_fail "every metric outside a repeated band is named, the ones inside are not ($rc: $l)" || return 1
+    # 8x6 = 48 px of 3072 is exactly 1/64: the bound is inclusive at the number itself
+    "$diff" --block "$tmp/u100.tga" "$tmp/fpedge.tga" 0 0 8 6 40
+    rc=0; l=$("$diff" --footprint "$tmp/u100.tga" "$tmp/fpedge.tga" --band darker=0..0.015625) || rc=$?
+    [ "$rc" = 0 ] || st_fail "darker 0.015625 is inside 0..0.015625 ($rc)" || return 1
+    rc=0; l=$("$diff" --footprint "$tmp/u100.tga" "$tmp/fpedge.tga" --band darker=0..0.015624) || rc=$?
+    [ "$rc" = 2 ] || st_fail "darker 0.015625 is outside 0..0.015624 ($rc)" || return 1
+    local bad
+    for bad in darker bogus=0..1 darker=0.5..0.1 darker=0..x darker=-1..1 =0..1 darker=0.1; do
+        rc=0; "$diff" --footprint "$tmp/u100.tga" "$tmp/fpmix.tga" --band "$bad" >/dev/null 2>&1 || rc=$?
+        [ "$rc" = 1 ] || st_fail "--band $bad must be a usage error (1), not $rc" || return 1
+    done
+}
+# fp_records: $tmp/foff and $tmp/fon, each three frames x-00000N.tga: 0 unchanged, 1 a 48 px
+# block darker (1/64 of the frame), 2 a 256 px block darker (0.083333)
+fp_records() {
+    local d
+    fp_frames
+    rm -rf "$tmp/foff" "$tmp/fon"; mkdir -p "$tmp/foff" "$tmp/fon"
+    for d in 0 1 2; do cp "$tmp/u100.tga" "$tmp/foff/x-00000$d.tga"; done
+    cp "$tmp/u100.tga" "$tmp/fon/x-000000.tga"
+    "$diff" --block "$tmp/u100.tga" "$tmp/fon/x-000001.tga" 0 0 8 6 40
+    cp "$tmp/fpdark.tga" "$tmp/fon/x-000002.tga"
+    rm -rf "$tmp/scen"; mkdir -p "$tmp/scen"
+    printf '%s\n' '// a scenario with a band' '// footprint darker 0..0.05' 'set timedemo 1' > "$tmp/scen/x.cfg"
+    printf '%s\n' 'set timedemo 1' > "$tmp/scen/nobandx.cfg"
+}
+st_footprint_cmd() { # TASK133: pins.sh footprint prints per frame, names the frames outside the band, exits non-zero
+    local out rc
+    fp_records
+    scen_dir=$tmp/scen
+    rc=0; out=$(cmd_footprint x --off "$tmp/foff" --on "$tmp/fon" 2>&1) || rc=$?
+    [ "$rc" != 0 ] || st_fail "a frame outside the cfg band must fail the command" || return 1
+    case $out in *"band: darker=0..0.05 (from x.cfg)"*) ;; *) st_fail "the band of the cfg header must be named: $out"; return 1;; esac
+    case $out in *"OUT OF BAND: x-000002.tga"$'\n'*|*"OUT OF BAND: x-000002.tga") ;; *) st_fail "exactly x-000002.tga is outside the band: $out"; return 1;; esac
+    printf '%s\n' "$out" | grep -q '^x-000001.tga  *0.015625  *0.015625  *0.000000  *60.00 *.* ok$' || st_fail "x-000001.tga is a row of ok: $out" || return 1
+    printf '%s\n' "$out" | grep -q '^x-000002.tga  *0.083333 .*OUT:darker$' || st_fail "x-000002.tga is a row of OUT:darker: $out" || return 1
+    printf '%s\n' "$out" | grep -q 'frames=3 out_of_band=1 unmatched=0 worst_changed=0.083333 worst_darker=0.083333 worst_max=60.00 ' || st_fail "the summary counts: $out" || return 1
+    # --band replaces the header: a wide one passes
+    rc=0; out=$(cmd_footprint x --off "$tmp/foff" --on "$tmp/fon" --band 'darker 0..0.1' 2>&1) || rc=$?
+    [ "$rc" = 0 ] || st_fail "--band 'darker 0..0.1' must pass (rc $rc): $out" || return 1
+    case $out in *"all frames inside the band"*) ;; *) st_fail "a pass says so"; return 1;; esac
+    # a scenario without a band reports and never fails
+    rc=0; out=$(cmd_footprint nobandx --off "$tmp/foff" --on "$tmp/fon" 2>&1) || rc=$?
+    [ "$rc" = 0 ] || st_fail "no band must never fail (rc $rc)" || return 1
+    case $out in *"no band declared"*) ;; *) st_fail "no band must be said: $out"; return 1;; esac
+    # a mask directory limits the count: the mask marks nothing of frame 2
+    mkdir -p "$tmp/fmask"; cp "$tmp/fpz.tga" "$tmp/fmask/x-000000.tga"; cp "$tmp/fpz.tga" "$tmp/fmask/x-000001.tga"; cp "$tmp/fpz.tga" "$tmp/fmask/x-000002.tga"
+    rc=0; out=$(cmd_footprint x --off "$tmp/foff" --on "$tmp/fon" --mask-dir "$tmp/fmask" 2>&1) || rc=$?
+    [ "$rc" = 0 ] || st_fail "an empty mask counts nothing, so every frame is inside the band (rc $rc)" || return 1
+    # a frame the on record lacks, or only it has, fails
+    rm -rf "$tmp/fon2"; cp -R "$tmp/fon" "$tmp/fon2"; rm "$tmp/fon2/x-000001.tga"
+    rc=0; out=$(cmd_footprint x --off "$tmp/foff" --on "$tmp/fon2" --band 'darker 0..1' 2>&1) || rc=$?
+    [ "$rc" != 0 ] || st_fail "a frame missing from the on record must fail" || return 1
+    case $out in *"MISSING"*) ;; *) st_fail "the missing frame is named: $out"; return 1;; esac
+    # an id names a record in the store
+    mkdir -p "$PINS_STORE/x/metal"; cp -R "$tmp/foff" "$PINS_STORE/x/metal/offid"; cp -R "$tmp/fon" "$PINS_STORE/x/metal/onid"
+    rc=0; out=$(cmd_footprint x --off offid --on onid 2>&1) || rc=$?
+    [ "$rc" != 0 ] && case $out in *"OUT OF BAND: x-000002.tga"*) ;; *) false;; esac || st_fail "ids resolve under <store>/<scenario>/<renderer>: $out" || return 1
+    # a header line that starts '// footprint' and does not parse is an error, not skipped
+    printf '%s\n' '// footprint darker 0-0.05' 'set timedemo 1' > "$tmp/scen/badx.cfg"
+    rc=0; out=$( (cmd_footprint badx --off "$tmp/foff" --on "$tmp/fon") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && case $out in *"a band is"*) ;; *) false;; esac || st_fail "a malformed band line must be refused: $out" || return 1
+    printf '%s\n' '// footprint volume 0..1' 'set timedemo 1' > "$tmp/scen/badx.cfg"
+    rc=0; out=$( (cmd_footprint badx --off "$tmp/foff" --on "$tmp/fon") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && case $out in *"metric is one of"*) ;; *) false;; esac || st_fail "an unknown metric must be refused: $out" || return 1
+    # the table goes only outside the repository
+    rc=0; out=$( (cmd_footprint x --off "$tmp/foff" --on "$tmp/fon" --out "$root/fp-out-test") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && [ ! -e "$root/fp-out-test" ] && case $out in *"inside this repository"*) ;; *) false;; esac || st_fail "--out inside the repository must be refused: $out" || return 1
+    rc=0; cmd_footprint x --off "$tmp/foff" --on "$tmp/fon" --out "$tmp/fpout" >/dev/null 2>&1 || rc=$?
+    [ -s "$tmp/fpout/footprint-x.txt" ] || st_fail "--out writes footprint-x.txt" || return 1
+}
+st_where() { # TASK133: highlight and zoom images of the frames that changed most, outside the repository
+    local out rc px
+    fp_records
+    scen_dir=$tmp/scen
+    # the pixels: darker red, brighter green, unchanged grey of the off frame (B G R order in a TGA)
+    "$diff" --highlight "$tmp/u100.tga" "$tmp/fpmix.tga" "$tmp/hl.tga"
+    [ "$(wc -c < "$tmp/hl.tga" | tr -d ' ')" = 9234 ] || st_fail "a 64x48 highlight is 18 + 64*48*3 bytes" || return 1
+    px() { od -An -tu1 -j $((18 + ($2 * 64 + $1) * 3)) -N3 "$tmp/hl.tga" | tr -s ' ' | sed -e 's/^ //' -e 's/ $//'; }
+    [ "$(px 10 10)" = "0 0 255" ] || st_fail "a darker pixel is red (got $(px 10 10))" || return 1
+    [ "$(px 42 26)" = "0 255 0" ] || st_fail "a brighter pixel is green (got $(px 42 26))" || return 1
+    [ "$(px 0 40)" = "100 100 100" ] || st_fail "an unchanged pixel is the off frame in grey (got $(px 0 40))" || return 1
+    # a small change is a faint tint: 5 levels at gain 8 is 5*8/255 = 16 % green
+    "$diff" --highlight "$tmp/u100.tga" "$tmp/fpsmall.tga" "$tmp/hl2.tga"
+    [ "$(od -An -tu1 -j 18 -N3 "$tmp/hl2.tga" | tr -s ' ' | sed -e 's/^ //' -e 's/ $//')" = "84 124 84" ] || st_fail "5 levels brighter at gain 8 tints 16 % green (got $(od -An -tu1 -j 18 -N3 "$tmp/hl2.tga"))" || return 1
+    "$diff" --highlight "$tmp/u100.tga" "$tmp/fpmix.tga" "$tmp/hl3.tga" --mask "$tmp/fpz.tga"
+    [ "$(od -An -tu1 -j $((18 + (10 * 64 + 10) * 3)) -N3 "$tmp/hl3.tga" | tr -s ' ' | sed -e 's/^ //' -e 's/ $//')" = "100 100 100" ] || st_fail "a pixel the mask leaves out is not highlighted" || return 1
+    # the origin flag of the frame is kept: a top-left TGA (descriptor 0x20) stays one
+    printf '\000\000\002\000\000\000\000\000\000\000\000\000\002\000\002\000\030\040%s' 'abcdefghijkl' > "$tmp/top.tga"
+    "$diff" --highlight "$tmp/top.tga" "$tmp/top.tga" "$tmp/top-hl.tga"
+    [ "$(od -An -tu1 -j 17 -N1 "$tmp/top-hl.tga" | tr -d ' ')" = 32 ] || st_fail "--highlight must keep the descriptor byte of the frame (top-left origin)" || return 1
+    "$diff" --zoom "$tmp/top.tga" "$tmp/top.tga" "$tmp/top-zm.tga" --window 1x1 --scale 1 >/dev/null
+    [ "$(od -An -tu1 -j 17 -N1 "$tmp/top-zm.tga" | tr -d ' ')" = 32 ] || st_fail "--zoom must keep the descriptor byte of the frame" || return 1
+    # the zoom: the busiest 16x12 window (a quarter of the frame each way), off then on, each 3x
+    [ "$("$diff" --zoom "$tmp/u100.tga" "$tmp/fpmix.tga" "$tmp/zm.tga")" = "window=8,8,16,12" ] || st_fail "the zoom window is the block's: 8,8,16,12" || return 1
+    [ "$(wc -c < "$tmp/zm.tga" | tr -d ' ')" = 10386 ] || st_fail "a 2 x 16 x 3 by 12 x 3 zoom is 18 + 96*36*3 bytes" || return 1
+    [ "$(od -An -tu1 -j $((18 + (5 * 96 + 3) * 3)) -N3 "$tmp/zm.tga" | tr -s ' ' | sed -e 's/^ //' -e 's/ $//')" = "100 100 100" ] || st_fail "the zoom's left half is the off frame" || return 1
+    [ "$(od -An -tu1 -j $((18 + (5 * 96 + 51) * 3)) -N3 "$tmp/zm.tga" | tr -s ' ' | sed -e 's/^ //' -e 's/ $//')" = "40 40 40" ] || st_fail "the zoom's right half is the on frame" || return 1
+    [ "$("$diff" --zoom "$tmp/u100.tga" "$tmp/fpmix.tga" "$tmp/zm2.tga" --window 8x8 --scale 2 --mask "$tmp/fpz.tga")" = "window=0,0,8,8" ] || st_fail "with nothing marked the window is the first" || return 1
+    # the command: the --top frames that changed most, by name
+    out=$(cmd_where x --off "$tmp/foff" --on "$tmp/fon" --out "$tmp/wout" --top 2) || st_fail "where must pass" || return 1
+    [ -s "$tmp/wout/x-000002-highlight.tga" ] && [ -s "$tmp/wout/x-000002-zoom.tga" ] && [ -s "$tmp/wout/x-000001-highlight.tga" ] && [ -s "$tmp/wout/x-000001-zoom.tga" ] ||
+        st_fail "the two frames that changed most get a highlight and a zoom: $out" || return 1
+    [ ! -e "$tmp/wout/x-000000-highlight.tga" ] || st_fail "--top 2 leaves the unchanged frame out" || return 1
+    [ "$(ls "$tmp/wout" | wc -l | tr -d ' ')" = 4 ] || st_fail "exactly four files" || return 1
+    rc=0; out=$( (cmd_where x --off "$tmp/foff" --on "$tmp/fon" --out "$root/where-out-test") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && [ ! -e "$root/where-out-test" ] && case $out in *"inside this repository"*) ;; *) false;; esac || st_fail "--out inside the repository must be refused: $out" || return 1
+    rc=0; (cmd_where x --off "$tmp/foff" --on "$tmp/fon") >/dev/null 2>&1 || rc=$?
+    [ "$rc" != 0 ] || st_fail "where without --out must be refused" || return 1
+}
+st_content_tags() { # TASK133: every scenario has its tags, and one without entities names a companion that has them
+    local d="$tmp/ct" out rc
+    check_content "$scen_dir/README.md" "$scen_dir" || st_fail "the tree's content table must pass" || return 1
+    ct_fresh() { rm -rf "$d"; mkdir -p "$d"; cp "$scen_dir"/*.cfg "$d/"; cp "$scen_dir/README.md" "$d/README.md"; }
+    # ct_no <message fragment> <readme edit as sed script>: the edited table must fail with the fragment
+    ct_no() {
+        local why=$1; shift
+        sed -e "$1" "$scen_dir/README.md" > "$d/README.md"
+        rc=0; out=$(check_content "$d/README.md" "$d") || rc=$?
+        [ "$rc" != 0 ] || { st_fail "must fail ($why)"; return 1; }
+        case $out in *"$why"*) ;; *) st_fail "must fail with '$why', got: $out"; return 1;; esac
+    }
+    ct_fresh
+    ct_no "world has no row" '/^| `world` |/d' || return 1
+    ct_no "sets cl_entities 0 and names no full-content companion" 's/^\(| `world` | world | \)`models` |/\1`-` |/' || return 1
+    ct_no "names no full-content companion" 's/^\(| `world` | world | \)`models` |/\1 |/' || return 1
+    ct_no "names the companion nosuch, which is not a scenario" 's/^\(| `world` | world | \)`models` |/\1`nosuch` |/' || return 1
+    ct_no "the companion hud2d of world does not set cl_entities 1" 's/^\(| `world` | world | \)`models` |/\1`hud2d` |/' || return 1
+    ct_no "world draws world" 's/^| `world` | world |/| `world` | 2d |/' || return 1
+    ct_no "world is tagged particles but its cvars do not draw it" 's/^| `world` | world |/| `world` | world,particles |/' || return 1
+    ct_no "models draws entities" 's/^| `models` | world,entities,alias-models |/| `models` | world,alias-models |/' || return 1
+    ct_no "unknown tag 'shiny'" 's/^| `world` | world |/| `world` | world,shiny |/' || return 1
+    ct_no "only the cinematic scenario is tagged cinematic" 's/^| `world` | world |/| `world` | world,cinematic |/' || return 1
+    ct_no "the Content table names ghost, which is not a scenario" 's/^| `world` | world | `models` |$/&\
+| `ghost` | world | `models` |/' || return 1
+    # a new scenario that sets cl_entities 0 and has a row without a companion
+    printf '%s\n' 'set timedemo 1' 'set r_drawworld 1' 'set cl_entities 0' 'set cl_particles 0' 'set cl_lights 0' > "$d/newfx.cfg"
+    sed -e '/^| `world` |/{p;s/`world`/`newfx`/;s/`models`/`-`/;}' "$scen_dir/README.md" > "$d/README.md"
+    rc=0; out=$(check_content "$d/README.md" "$d") || rc=$?
+    [ "$rc" != 0 ] && case $out in *"newfx sets cl_entities 0 and names no full-content companion"*) ;; *) false;; esac || st_fail "a new cl_entities 0 scenario without a companion must fail: $out" || return 1
+    # and one without any row
+    sed -e '/^| `world` |/d' "$scen_dir/README.md" > "$d/README.md"; cp "$scen_dir/world.cfg" "$d/world.cfg"
+    rc=0; out=$(check_content "$d/README.md" "$d") || rc=$?
+    [ "$rc" != 0 ] || st_fail "a scenario without a row must fail" || return 1
+}
 st_compare_basic() {
     fixture gl1 ref "$tmp/a.tga"; fixture metal "$cid" "$tmp/b.tga"
     cmd_compare metal world --ref gl1 >/dev/null || st_fail "compare must pass on a near-identical frame" || return 1
@@ -2732,7 +2943,8 @@ cmd_selftest() {
         scenario_lines store_place fast_fail demo_name replace engine_id metal_shim usage hidpi
         replay_args replay_pick replay_refused replay_header replay_place replay_run replay_keep replay_fail replay_compare
         replay_tools
-        make_demo_args make_demo_script make_demo_run make_demo_place make_demo_case demo_sum"
+        make_demo_args make_demo_script make_demo_run make_demo_place make_demo_case demo_sum
+        footprint footprint_band footprint_cmd where content_tags"
     # "selftest <case>..." runs only those cases (each must be one of the list)
     if [ $# -gt 0 ]; then
         for c in "$@"; do case " $(echo $cases) " in *" $c "*) ;; *) die "no selftest case '$c'";; esac; done

@@ -52,6 +52,90 @@ Rules:
   line and is accepted at a looser threshold, recorded with the pin, or,
   like `dlights`, is recorded with `PINS_SEED` and judged only seeded.
 
+## Content
+
+What each scenario draws, as tags, and the full-content companion of every
+scenario that draws no entities (TASK133). A scenario that sets
+`cl_entities 0` isolates its effect from the alias models, sprites and beams
+on the screen, and the effect is then judged on a picture that is not the
+one a player sees: TASK55's ray-traced shadows passed on `cl_entities 0`
+frames while a muzzle flash's light, inside its own model, shadowed 37 to 48 %
+of the traced pixels with entities on. So a scenario with `cl_entities 0`
+names a companion, a scenario that sets `cl_entities 1`, to be recorded and
+judged beside it. Tags, from the cvars the scenario sets:
+
+| Tag | The scenario draws it when |
+|---|---|
+| `world` | `r_drawworld 1` (not the cinematic) |
+| `entities` | `cl_entities 1` |
+| `alias-models` | `cl_entities 1` (the alias models, sprites and beams are one switch) |
+| `particles` | `cl_particles 1` |
+| `dynamic-lights` | `cl_lights 1` |
+| `2d` | `r_drawworld 0`: the 2D elements are the subject |
+| `cinematic` | the `cinematic` scenario only |
+
+The status bar is in every scenario and is not a tag. The scenario, its
+tags (comma separated) and its companion (`-` when it sets `cl_entities 1`)
+form one row each; `scripts/pins.sh check-content`, which the selftest runs
+(case `content_tags`) and so the gate, fails on a scenario without a row, a
+row without a scenario, a tag that does not follow the cvars, and a
+`cl_entities 0` scenario whose companion is missing, is not a scenario, or does
+not set `cl_entities 1`. For `hud2d*` and `cinematic`, which draw no 3D view,
+the companion is nominal: a later effect that reaches the 3D view adds its own
+scenario and companion. A card that adds a scenario adds its row.
+
+| Scenario | Tags | Companion |
+|---|---|---|
+| `world` | world | `models` |
+| `world-fullbright` | world | `models` |
+| `world-lmcubic` | world | `models` |
+| `world-scale8` | world | `models` |
+| `world-metalfx1` | world | `models` |
+| `world-metalfx2` | world | `models` |
+| `world-metalfx3` | world | `models` |
+| `world-metalfx-interp` | world | `models` |
+| `dlights` | world,dynamic-lights | `particles` |
+| `dlights-lmcubic` | world,dynamic-lights | `particles` |
+| `models` | world,entities,alias-models | `-` |
+| `particles` | world,entities,alias-models,particles,dynamic-lights | `-` |
+| `particles-cap` | world,entities,alias-models,particles,dynamic-lights | `-` |
+| `hud2d` | 2d | `models` |
+| `hud2d-sharp` | 2d | `models` |
+| `hud2d-scale8` | 2d | `models` |
+| `skywater` | world | `models` |
+| `cinematic` | cinematic | `models` |
+
+TASK55 adds `rt-shadows` (tags `world`, `dynamic-lights`; companion
+`rt-shadows-entities`) and `rt-shadows-entities` (tags `world`, `entities`,
+`alias-models`, `dynamic-lights`; companion `-`) here, and the cfg of each
+carries `// footprint darker 0..0.05`.
+
+## Footprint band
+
+What an effect changes in the picture, and how much it may. Record the
+scenario with the effect off and on (the cvar that switches it, or a replay of
+one trace, which keeps the camera and the entities identical), then
+`scripts/pins.sh footprint <scenario> --off <record> --on <record>` prints, per
+frame, the share of pixels changed by more than 8 levels (`changed`), split
+into `darker` and `brighter`, the largest change in levels (`max`) and the mean
+change in levels (`mean`). A scenario declares the band its effect must stay
+in with header lines in its cfg:
+
+    // footprint darker 0..0.05
+    // footprint max 0..90
+
+A line is `// footprint <metric> <lo>..<hi>`, the metric one of `changed`,
+`darker`, `brighter` (shares of the pixels, 0 to 1), `max` or `mean` (levels,
+0 to 255), both bounds inclusive; any number of lines. The command names every
+frame outside a band and exits non-zero. A scenario without such a line has its
+footprint reported and never fails. To set a band: record the effect on the
+`cl_entities 0` scenario, read the worst frame, and set the upper bound at a
+small multiple of it (TASK55: about 1 % darker without entities, band
+`darker 0..0.05`); the entity-bearing companion carries the same band, which is
+where a defect that only shows with entities is caught. `--band` replaces the
+cfg lines for one run. `scripts/pins.sh where` draws where the effect changed
+the picture, for the owner.
+
 First run on game data (TASK39, `soft`): `world` and `hud2d` are
 identical run to run; `models` and `particles` are not and carry their
 measured thresholds in their `// nondeterministic:` lines. The owner's data
