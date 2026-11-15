@@ -11,7 +11,11 @@ ships with releases; `docs/` (this directory) is for working on the code.
 - `scripts/test.sh`: the gate. Every commit must pass it. It ends with `make test`, the unit-test suite.
 - Platforms: only Apple platforms are built and tested; other platforms are
   unmaintained (`docs/decisions/0008-apple-platforms-only.md`). CI runs the
-  macOS test build, CodeQL and Cppcheck.
+  macOS test build, CodeQL and Cppcheck. CodeQL's C analysis runs on pushes
+  to `main` and on pull requests that change `src/`, `third_party/`,
+  `.github/`, `Makefile`, `*.make` or `tests/**/*.c|h`; otherwise it is skipped
+  (a skipped job counts as passing). A newer push to a pull request cancels the
+  older run (`docs/runbook/FIX66.md`).
 
 ## Source (`src/`)
 
