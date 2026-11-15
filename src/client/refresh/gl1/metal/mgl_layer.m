@@ -223,58 +223,51 @@ mgl_library_path(char *path, size_t len)
 
 /*
  * FIX53: a layer that is not opaque (r_vsync 0) is blended with what is
- * behind the window, so every drawable pixel needs alpha 1. The blended draws, straight into the drawable, leave alpha below 1.
- * This pass writes alpha 1, and only alpha, over the drawable after it. Its
- * shader is compiled from source on first use, with no entry in the
- * shader library.
+ * behind the window, so every drawable pixel needs alpha 1. The blended
+ * draws, straight into the drawable, leave alpha below 1. This pass
+ * writes alpha 1, and only alpha, over the drawable after it. Its
+ * pipeline is built with the context (mgl_alpha_build) from the shim's
+ * shader library, once: it is nil when that failed, the frames are then
+ * presented without the pass, and one line says so.
  */
 static id<MTLRenderPipelineState> mgl_alpha_pso;
+static int mgl_alpha_reported;
 
-static id<MTLRenderPipelineState>
-mgl_alpha_pipeline(void)
+static void
+mgl_alpha_build(void)
 {
-	static const char *src =
-		"#include <metal_stdlib>\n"
-		"using namespace metal;\n"
-		"vertex float4 alpha_vs(uint vid [[vertex_id]])\n"
-		"{ float2 p = float2((vid << 1) & 2, vid & 2); return float4(p * 2.0 - 1.0, 0.0, 1.0); }\n"
-		"fragment float4 alpha_fs() { return float4(0.0, 0.0, 0.0, 1.0); }\n";
+	NSError *e = nil;
+	MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
 
-	if (!mgl_alpha_pso)
+	d.vertexFunction = [mgl_library newFunctionWithName:@"mgl_vertex_alpha"];
+	d.fragmentFunction = [mgl_library newFunctionWithName:@"mgl_fragment_alpha"];
+	mgl_alpha_pso = nil;
+
+	if (d.vertexFunction && d.fragmentFunction)
 	{
-		NSError *e = nil;
-		id<MTLLibrary> lib = [mgl_device newLibraryWithSource:@(src) options:nil error:&e];
-		MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
-
-		if (lib)
-		{
-			d.vertexFunction = [lib newFunctionWithName:@"alpha_vs"];
-			d.fragmentFunction = [lib newFunctionWithName:@"alpha_fs"];
-			d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
-			d.colorAttachments[0].writeMask = MTLColorWriteMaskAlpha;
-			mgl_alpha_pso = [mgl_device newRenderPipelineStateWithDescriptor:d error:&e];
-		}
-
-		if (!mgl_alpha_pso)
-		{
-			fprintf(stderr, "mgl: the alpha pass failed to build: %s\n",
-					e ? e.localizedDescription.UTF8String : "");
-		}
+		d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+		d.colorAttachments[0].writeMask = MTLColorWriteMaskAlpha;
+		mgl_alpha_pso = [mgl_device newRenderPipelineStateWithDescriptor:d error:&e];
 	}
-
-	return mgl_alpha_pso;
 }
 
 /* Alpha 1 over the whole of tex, colour untouched. */
 static void
 mgl_force_alpha(id<MTLCommandBuffer> cmd, id<MTLTexture> tex)
 {
-	id<MTLRenderPipelineState> pso = mgl_alpha_pipeline();
+	id<MTLRenderPipelineState> pso = mgl_alpha_pso;
 	MTLRenderPassDescriptor *rp;
 	id<MTLRenderCommandEncoder> enc;
 
 	if (!pso)
 	{
+		if (!mgl_alpha_reported)
+		{
+			mgl_alpha_reported = 1;
+			fprintf(stderr, "mgl: no alpha pass (its pipeline was not built): "
+					"the window shows the frame's own alpha\n");
+		}
+
 		return;
 	}
 
@@ -306,6 +299,7 @@ mgl_release_all(void)
 	upload_cmd = nil;
 	mgl_pipelines = nil;
 	mgl_alpha_pso = nil;
+	mgl_alpha_reported = 0;
 	mgl_samplers = nil;
 	mgl_depth_states = nil;
 	mgl_unbound = nil;
@@ -417,6 +411,7 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 		}
 
 		mgl_pipelines = [NSMutableDictionary dictionary];
+		mgl_alpha_build();
 		mgl_samplers = [NSMutableDictionary dictionary];
 		mgl_depth_states = [NSMutableDictionary dictionary];
 

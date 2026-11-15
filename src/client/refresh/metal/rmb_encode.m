@@ -66,6 +66,7 @@ id<MTLTexture> rmb_texture_for_draw(int id);
 id<MTLRenderPipelineState> rmb_pipe(int i);
 id<MTLSamplerState> rmb_sampler(int i);
 id<MTLRenderPipelineState> rmb_pipe3d(int i);
+id<MTLRenderPipelineState> rmb_alpha_pipe(void);
 id<MTLDepthStencilState> rmb_depth_state(int i);
 id<MTLBuffer> rmb_static_buffer(int bid);
 
@@ -502,57 +503,29 @@ rmb_frame_timing(void)
  * behind the window, so every drawable pixel needs alpha 1. The frame's
  * blended draws leave alpha below 1 and the copy brings it over: this
  * pass writes alpha 1, and only alpha, over the drawable after it. Its
- * shader is compiled from source on first use, with no entry in the
- * shader library.
+ * pipeline is built with the others (rmb_resources_open) and is nil when
+ * that failed: the frames are then presented without the pass, and one
+ * line says so.
  */
-static id<MTLRenderPipelineState> rmb_alpha_pso;
-
-static id<MTLRenderPipelineState>
-rmb_alpha_pipeline(void)
-{
-	static const char *src =
-		"#include <metal_stdlib>\n"
-		"using namespace metal;\n"
-		"vertex float4 alpha_vs(uint vid [[vertex_id]])\n"
-		"{ float2 p = float2((vid << 1) & 2, vid & 2); return float4(p * 2.0 - 1.0, 0.0, 1.0); }\n"
-		"fragment float4 alpha_fs() { return float4(0.0, 0.0, 0.0, 1.0); }\n";
-
-	if (!rmb_alpha_pso)
-	{
-		NSError *e = nil;
-		id<MTLLibrary> lib = [rmb_device newLibraryWithSource:@(src) options:nil error:&e];
-		MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
-
-		if (lib)
-		{
-			d.vertexFunction = [lib newFunctionWithName:@"alpha_vs"];
-			d.fragmentFunction = [lib newFunctionWithName:@"alpha_fs"];
-			d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
-			d.colorAttachments[0].writeMask = MTLColorWriteMaskAlpha;
-			rmb_alpha_pso = [rmb_device newRenderPipelineStateWithDescriptor:d error:&e];
-			rm_ledger_create(&rmb_ledger, RM_OBJ_STATE);
-		}
-
-		if (!rmb_alpha_pso)
-		{
-			fprintf(stderr, "ref_metal: the alpha pass failed to build: %s\n",
-					e ? e.localizedDescription.UTF8String : "");
-		}
-	}
-
-	return rmb_alpha_pso;
-}
+static int rmb_alpha_reported;
 
 /* Alpha 1 over the whole of tex, colour untouched. */
 static void
 rmb_force_alpha(id<MTLCommandBuffer> cmd, id<MTLTexture> tex)
 {
-	id<MTLRenderPipelineState> pso = rmb_alpha_pipeline();
+	id<MTLRenderPipelineState> pso = rmb_alpha_pipe();
 	MTLRenderPassDescriptor *rp;
 	id<MTLRenderCommandEncoder> enc;
 
 	if (!pso)
 	{
+		if (!rmb_alpha_reported)
+		{
+			rmb_alpha_reported = 1;
+			fprintf(stderr, "ref_metal: no alpha pass (its pipeline was not built): "
+					"the window shows the frame's own alpha\n");
+		}
+
 		return;
 	}
 
@@ -736,11 +709,7 @@ rmb_encode_release(void)
 			}
 		}
 
-		if (rmb_alpha_pso)
-		{
-			rmb_alpha_pso = nil;
-			rm_ledger_destroy(&rmb_ledger, RM_OBJ_STATE);
-		}
+		rmb_alpha_reported = 0;
 
 		color_defined = 0;
 		rmb_set_texture(&color, nil);
