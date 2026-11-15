@@ -125,12 +125,14 @@ void CL_UpscaleFloodFillSkin(unsigned char *skin, int w, int h,
 void CL_UpscaleTable(const unsigned char *palette, unsigned *table);
 
 /*
- * The indices data (w by h) as RGBA8 into rgba, as R_Convert8to32 of
+ * The indices data (w by h) as RGBA8 in a malloc'd buffer of w * h * 4
+ * bytes that the caller frees, or NULL when it cannot be made, as
+ * R_Convert8to32 of
  * src/client/refresh/files/imgscale.c converts them: index 255 keeps alpha
  * 0 and takes the colour of a neighbour that is not 255.
  */
-void CL_UpscaleToRGBA(const unsigned char *data, size_t w, size_t h,
-		const unsigned *table, unsigned char *rgba);
+unsigned char *CL_UpscaleToRGBA(const unsigned char *data, size_t w,
+		size_t h, const unsigned *table);
 
 /*
  * The first mip level of a .wal file of len bytes: 1 with its size and

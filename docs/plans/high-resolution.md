@@ -66,7 +66,7 @@ those numbers.
 | Default 2D scale: the integer `min(width / 640, height / 240)`, at least 1 | `SCR_GetDefaultScale` in [`cl_screen.c`](../../src/client/cl_screen.c) |
 | The console background is stretched to the window | [`cl_console.c`](../../src/client/cl_console.c) |
 | Only `conchars` and the crosshairs are unfiltered by default; other 2D pictures are bilinear | `r_nolerp_list` in [`rm_main.c`](../../src/client/refresh/metal/rm_main.c) |
-| `ref_metal` dropped `r_scale8bittextures` and refuses MSAA | [`ref-metal-native.md`](ref-metal-native.md) section 7; `scale2x`, `scale3x` in [`image.c`](../../src/client/refresh/files/image.c); [`gl1_image.c`](../../src/client/refresh/gl1/gl1_image.c) |
+| `ref_metal` dropped `r_scale8bittextures` and refuses MSAA | [`ref-metal-native.md`](ref-metal-native.md) section 7; `scale2x`, `scale3x` in [`imgscale.c`](../../src/client/refresh/files/imgscale.c); [`gl1_image.c`](../../src/client/refresh/gl1/gl1_image.c) |
 | Anisotropy and trilinear filtering exist (defaults: `r_anisotropic 0`, `GL_LINEAR_MIPMAP_NEAREST`) | [`rmb_resource.m`](../../src/client/refresh/metal/rmb_resource.m), [`videomenu.c`](../../src/client/menu/videomenu.c) |
 | Lightmaps are 128x128 slices of an array texture, sampled bilinearly | [`ref-metal-native.md`](ref-metal-native.md) section 5 |
 | Particle size is scaled by `height / 480`, then clamped at 40 pixels | `R_DrawParticles` in [`gl1_main.c`](../../src/client/refresh/gl1/gl1_main.c), [`gl1_misc.c`](../../src/client/refresh/gl1/gl1_misc.c), the shim's [`mgl_draw.c`](../../src/client/refresh/gl1/metal/mgl_draw.c) |

@@ -257,3 +257,37 @@ TEST(imgscale_floodfill_left_turn)
 	R_FloodFillSkin(skin, 3, 3, table);
 	T_EQ_MEM(skin, want, sizeof(want));
 }
+
+/*
+ * Left, then right, then above, then below: the last that qualifies wins.
+ * In 5 5 8 the fill colour is 5 and 8 is a real colour: (0,0) has only its
+ * right neighbour, (1,0) sees 7 on its left (already filled) and 8 on its
+ * right, and the right one must win. With the right step before the left
+ * step, (1,0) would take the 7.
+  */
+TEST(imgscale_floodfill_right_last)
+{
+	byte skin[3] = { 5, 5, 8 };
+	const byte want[3] = { 7, 8, 8 };
+	unsigned table[256];
+
+	memset(table, 0, sizeof(table));
+	table[7] = 255;
+
+	R_FloodFillSkin(skin, 3, 1, table);
+	T_EQ_MEM(skin, want, sizeof(want));
+}
+
+/*
+ * scale2x rule 3 needs c != a as well as b != d and the corner tests: in
+ * 4 1 4 / 1 3 2 / 4 1 4 the centre's upper right pixel stays 3.
+ */
+TEST(imgscale_scale2x_rule3_needs_c_ne_a)
+{
+	const byte src[9] = { 4, 1, 4, 1, 3, 2, 4, 1, 4 };
+	byte got[36];
+
+	memset(got, 0xEE, sizeof(got));
+	scale2x(src, got, 3, 3);
+	T_REQUIRE(got[20] == 3);
+}

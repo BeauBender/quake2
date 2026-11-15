@@ -513,20 +513,12 @@ CL_UpscaleTable(const unsigned char *palette, unsigned *table)
 	}
 }
 
-void
+unsigned char *
 CL_UpscaleToRGBA(const unsigned char *data, size_t w, size_t h,
-		const unsigned *table, unsigned char *rgba)
+		const unsigned *table)
 {
-	/* R_Convert8to32 allocates, the caller's buffer is filled from it */
-	unsigned *trans = R_Convert8to32(data, w, h, table);
-
-	if (!trans)
-	{
-		return;
-	}
-
-	memcpy(rgba, trans, w * h * sizeof(unsigned));
-	free(trans);
+	/* R_Convert8to32 allocates the RGBA buffer; the caller owns it */
+	return (unsigned char *)R_Convert8to32(data, w, h, table);
 }
 
 /* ---- the command's decisions ---- */
