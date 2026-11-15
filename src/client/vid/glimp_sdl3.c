@@ -29,7 +29,6 @@
 
 /* TODO SDL3:
  *  * Bump copyright.
- *  * Do we need to request High DPI modes when vid_highdpiaware > 0?
  *  * `fullscreen` should be an enum to make the code more readable.
  *  * Debug fullscreen handling, maybe refactor it further.
  *  * Check if window size handling is correct.
@@ -543,15 +542,11 @@ Glimp_DetermineHighDPISupport(SDL_WindowFlags flags)
 	/* Make sure that high dpi is never set when we don't want it. */
 	flags &= ~SDL_WINDOW_HIGH_PIXEL_DENSITY;
 
-	if (vid_highdpiaware->value == 0)
-	{
-		return flags;
-	}
-
 	/* Handle high dpi awareness based on the render backend.
 	   SDL doesn't support high dpi awareness for all backends
-	   and the quality and behavior differs between them. */
-	if ((strcmp(SDL_GetCurrentVideoDriver(), "wayland") == 0))
+	   and the quality and behavior differs between them:
+	   wayland, cocoa and uikit (GLimp_HighDPIWanted). */
+	if (GLimp_HighDPIWanted(vid_highdpiaware->value, SDL_GetCurrentVideoDriver()))
 	{
 		flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
 	}
@@ -778,39 +773,25 @@ GLimp_InitGraphics(int fullscreen, int *pwidth, int *pheight)
 
 	   The fullscreen window is special. We want it to fill
 	   the screen when native resolution is requestes, all
-	   other cases should look broken. */
-	if (flags & SDL_WINDOW_HIGH_PIXEL_DENSITY)
-	{
-		if (fullscreen != FULLSCREEN_DESKTOP)
-		{
-			re.GetDrawableSize(&viddef.width, &viddef.height);
-		}
-		else
-		{
-			cvar_t *r_mode = Cvar_Get("r_mode", "4", 0);
+	   other cases should look broken.
 
-			if (r_mode->value == -2 )
-			{
-				re.GetDrawableSize(&viddef.width, &viddef.height);
-			}
-			else
-			{
-				/* User likes it broken. */
-				viddef.width = *pwidth;
-				viddef.height = *pheight;
-			}
-		}
+	   Another bug or design failure in SDL: When we are
+	   not high dpi aware the drawable size returned by
+	   SDL may be too small. It seems like the window
+	   decoration are taken into account when they shouldn't.
+	   It can be seen when creating a fullscreen window.
+
+	   Work around that by always using the resolution and
+	   not the drawable size when we are not high dpi aware.
+	   GLimp_DrawableInPixels() makes the choice. */
+	if (GLimp_DrawableInPixels((flags & SDL_WINDOW_HIGH_PIXEL_DENSITY) ? true : false,
+			fullscreen, Cvar_Get("r_mode", "4", 0)->value))
+	{
+		re.GetDrawableSize(&viddef.width, &viddef.height);
 	}
 	else
 	{
-		/* Another bug or design failure in SDL: When we are
-		   not high dpi aware the drawable size returned by
-		   SDL may be too small. It seems like the window
-		   decoration are taken into account when they shouldn't.
-		   It can be seen when creating a fullscreen window.
-
-		   Work around that by always using the resolution and
-		   not the drawable size when we are not high dpi aware. */
+		/* Not high dpi aware, or the user likes it broken. */
 		viddef.width = *pwidth;
 		viddef.height = *pheight;
 	}
