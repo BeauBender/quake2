@@ -2071,7 +2071,8 @@ What exists:
   as the world. The colour is gl1's bytes (`rm_particle_color`).
 - **The point state** is gl1's: `R_SetDefaultState`'s minimum, maximum and attenuation from the
   cvars at start-up (`R_InitParticles`), `glPointSize(gl1_particle_size * height / 480)` per view,
-  and `gl1_particle_square` between frames (`R_ParticleSquare`: `GL_POINT_SMOOTH`, or without point
+  `metal_particle_cap 1` (TASK122) scales the largest size by `height / 480` each view
+  (`rm_particle_cap` of the start-up maximum; 0 leaves it), and `gl1_particle_square` between frames (`R_ParticleSquare`: `GL_POINT_SMOOTH`, or without point
   parameters the texture made again). The shim's refusals are kept: a size not above 0 keeps the
   one before, a negative minimum or maximum is not taken.
 - **The particle texture** (`rm_misc.c`, gl1's `R_InitParticleTexture`, `rm_particle_texture`): made

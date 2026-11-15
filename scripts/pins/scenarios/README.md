@@ -19,6 +19,7 @@ derived from game data, so the files are committed (INFORM9).
 | `dlights` | `world` with `cl_lights 1`: the dynamic lights on the world's lightmaps; not deterministic unseeded (the engine PRNG gives the lights their radii), so recorded with `PINS_SEED`, also with `PINS_DEMO=demo2.dm2 PINS_EVERY=7` for the animated lightstyles (TASK91, `ref_metal` N8) |
 | `world-lmcubic` | `world` with `metal_lightmap_filter 1`: the cubic lightmap filter of `ref_metal`; other renderers ignore the cvar (TASK120) |
 | `dlights-lmcubic` | `dlights` with `metal_lightmap_filter 1`; not deterministic unseeded, recorded with `PINS_SEED` (TASK120) |
+| `particles-cap` | `particles` with `metal_particle_cap 1`: the largest particle size of `ref_metal` scaled by `height / 480`; other renderers ignore the cvar; recorded with `PINS_SEED` (TASK122) |
 | `models` | world plus entities: alias models, sprites, beams, view weapon |
 | `particles` | everything, including particles, dynamic lights, screen blend |
 | `hud2d` | 2D only: status bar, crosshair, console text; the GL renderers' screen blend off (`gl_polyblend 0`, TASK82) |
