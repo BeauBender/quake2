@@ -477,7 +477,13 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   must be supported by the display, otherwise the game tries several
   steps to recover. When set to `2` a fullscreen window is created.
   It's recommended to use the displays native resolution with the
-  fullscreen window, use `r_mode -2` to switch to it.
+  fullscreen window, use `r_mode -2` to switch to it.  
+  The cvar always holds the mode the window was actually made with,
+  and that value is saved to `config.cfg`: a fraction is cut to its
+  whole number (`2.5` is used and saved as `2`), and when the game
+  falls back to a window, because the requested `r_mode` is invalid
+  or the fullscreen window could not be made, it is set to `0`, so
+  the next start opens a window too.
 
 * **vid_highdpiaware**: When set to `1` the client is high DPI aware
   and scales the window (and thus the requested resolution) by the
