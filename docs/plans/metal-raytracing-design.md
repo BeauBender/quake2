@@ -71,16 +71,21 @@ apple9 is expected to halve it. RT1 measures.
 
 ### Internal resolution and upscaling with MetalFX (TASK105)
 
-With a ray-traced effect on, the 3D frame is rendered and traced at an
-internal resolution and upscaled to the output size with
-`MTLFXTemporalScaler`. Tracing at the output size does not fit. On the M6
-at its native 5120 x 2880 pixels, the ray passes and the per-frame items
-cost 36.8 ms against the 16.7 ms frame of its 60 Hz display (section 8,
-verdicts table, row RT9 (1)). Tracing at 1920 x 1080 and upscaling to
-5120 x 2880 costs 7.3 ms as a sum and 9.3 ms as one measured frame (row
-RT9 (2); the scaler is 1.822 ms in frame, section 8, table "MetalFX
-upscaling to the native size"). The decision is INFORM12 (#262), tracked
-until the owner settles it.
+This subsection describes option A (TASK105): with a ray-traced effect
+on, the 3D frame is rendered and traced at an internal resolution and
+upscaled to the output size with `MTLFXTemporalScaler`. Tracing at the
+output size does not fit the primary cell of the target matrix. On the
+M6 at its native 5120 x 2880 pixels, the ray passes and the per-frame
+items cost 36.8 ms against the 16.7 ms frame of its 60 Hz display
+(section 8, verdicts table, row RT9 (1)). Tracing at 1920 x 1080 and
+upscaling to 5120 x 2880 costs 7.3 ms as a sum and 9.3 ms as one
+measured frame (row RT9 (2); the scaler is 1.822 ms in frame, section 8,
+table "MetalFX upscaling to the native size"). A is one of the options
+the next subsection ("Targets per GPU family and display, and the
+options") costs over the whole matrix, beside option E, which RT13
+builds so that both can be measured. The decision is INFORM12 (#262),
+open: the owner put it on hold on 2026-11-14 until image-quality data
+exists.
 
 Every measured cost in this subsection is quoted from section 8: the M6,
 the compute-dispatch ray queries, the synthetic closed scene, synthetic scaler
@@ -217,11 +222,15 @@ TASK106 (#249) measures apple7.
 | apple6 to apple8 (M1 is apple7, M2 apple8) | compute path, Metal's software traverser | 720 rows, *assumed* | Not measured: section 8 is the M6 only. Section 2 assumes 8 to 14 ms for the 1080p trace on apple7, a large part of the 60 Hz frame before the scaler, so the default sits below apple9's. TASK106 (#249) measures apple7, the scalers included; RT10 sets the default from it |
 | a device without ray tracing (section 4, "neither"), or one where `MTLFXTemporalScalerDescriptor` `supportsDevice:` is NO | none, or as section 4 | output size; `r_rt_scale` reads 1 | reported in the `vid_restart` output |
 
-The default does not depend on the refresh rate. At 120 Hz (an 8.3 ms
-frame) the 1080p path on the M6 is met by the 7.3 ms sum and not by the
-9.3 ms measured frame (row RT9 (2)); a lower `r_rt_scale` is the player's
-choice. Section 8's host has a 60 Hz display, so a 120 Hz measurement
-needs another display and is RT10's.
+These are option A's design defaults, by family only. The target matrix
+(next subsection) gives each cell, a family and a display class, a
+budget that does depend on the refresh rate: at 120 Hz (an 8.3 ms frame)
+the 1080p path on the M6 is met by the 7.3 ms sum and not by the 9.3 ms
+measured frame (row RT9 (2)). RT10 sets the default per cell by the
+default policy of the next subsection, replacing this table; until then
+a lower `r_rt_scale` is the player's choice. Section 8's host has a 60 Hz
+display, so a 120 Hz class is measured on the T1 host's built-in display
+(TASK106, #249, and RT10).
 
 **Other MetalFX scalers.** `MTLFXSpatialScaler` costs 1.668 ms in frame at
 1080p input and 1.653 ms at 2560 x 1440, against the temporal scaler's
@@ -232,7 +241,7 @@ interpolate the internal pixels. Not used: it saves 0.15 ms at 1080p and 0.76 ms
 `MTLFXTemporalDenoisedScaler` against the bilateral denoiser above, on
 section 8's numbers (M6, 5120 x 2880 output):
 
-| | `MTLFXTemporalScaler` after RT7's accumulation and denoiser (chosen) | `MTLFXTemporalDenoisedScaler` in place of both (rejected) |
+| | `MTLFXTemporalScaler` after RT7's accumulation and denoiser (option A) | `MTLFXTemporalDenoisedScaler` in place of both (option B, not a default) |
 |---|---|---|
 | Scaler in frame (MetalFX table, "In frame, scaler") | 1.822 ms at 1080p input, 2.413 ms at 2560 x 1440 | 12.032 ms at 1080p, 19.497 ms at 2560 x 1440 |
 | Trace, per-frame items and scaler (verdicts table, row RT9 (2)) | 7.3 ms sum, 9.3 ms measured (1080p); 11.9 and 15.0 ms (2560 x 1440) | 17.6 ms sum, 18.9 ms measured (1080p); 29.0 and 31.5 ms (2560 x 1440) |
@@ -243,8 +252,11 @@ section 8's numbers (M6, 5120 x 2880 output):
 | What is denoised | each effect, before the resolve | the lit colour, all terms summed |
 | What it would replace | – | RT7's accumulation and both blurs, and the temporal scaler |
 
-Outcome: the denoised scaler is not used, and section 2's accumulation and
-bilateral denoiser stay. The deciding reason is cost: with the trace it is
+Outcome for the defaults (TASK105; part of INFORM12, which is open): the
+denoised scaler is not a default, and section 2's accumulation and
+bilateral denoiser stay; TASK113 (#267) makes it selectable for the
+comparison (option B in the next subsection). The deciding reason is
+cost: with the trace it is
 over the 60 Hz frame at both measured inputs on the M6, before
 rasterization or shading (verdicts table, row RT9 (2): "With the denoised
 scaler, not met at either input"). Two further reasons hold without a
@@ -256,19 +268,26 @@ below a 1080p input or on apple7; a measurement that puts it inside the
 frame, with an image-quality result that favours it, would reopen this.
 
 **Frame interpolator.** `MTLFXFrameInterpolator` reports support on the M6
-and was not timed (section 8, text before the MetalFX table). It is out of
-scope, with no card. It builds a frame between two rendered frames, so
+and was not timed (section 8, text before the MetalFX table). It is
+option D of the next subsection: not a way to hold a cell's refresh,
+not a default and not an RT row; TASK111 (#265) adds it as a development
+option, off by default, and measures the delay it adds. It builds a
+frame between two rendered frames, so
 each rendered frame reaches the screen later than without it, and the frames
 it adds do not respond to input. In a game that is added latency.
 
 **RT7 and RT9.** RT7's acceptance does not change. It lands before RT11,
 so its 60 fps at 1080p on apple7 is measured at a 1920 x 1080 output,
-which traces 1080 rows with no scaler. RT9's changes: its fps target is at
-the native output size with the default `r_rt_scale`, not tracing at native
-pixels (section 6).
+which traces 1080 rows with no scaler. In the target matrix that is one
+cell: apple7, 1920 x 1080 at 60 Hz, every effect on, option C. RT9's
+target is the T2 host's cell (apple9, 5120 x 2880 at 60 Hz) under A and
+under E at their default scales, held with the default policy's
+headroom, not tracing at native pixels (section 6).
 
 **Not measured here, and where it is measured.** Image quality of the
-upscaled frame on real frames is RT12; no quality is claimed before it.
+upscaled frame on real frames is RT12, which measures A, E and the
+hybrids by the image-quality program of the next subsection; no quality
+is claimed before it.
 The cases it names: particles, sprites and beams, which write no motion
 vectors of their own; water reflections, which RT7 keeps without history
 but the scaler accumulates; lightstyle changes and muzzle flashes, which
@@ -724,8 +743,11 @@ configuration:
 1. An option holds a cell when its GPU time per presented frame at the
    95th percentile over the cases' frames, the first frames of a process
    excluded (section 8), is at most 90 % of the frame: 15.0 ms at 60 Hz,
-   7.5 ms at 120 Hz. The 10 % headroom is a design choice, not a
-   measurement; the owner may set another.
+   7.5 ms at 120 Hz; and when its `timedemo` rate with `r_vsync 1` is
+   the refresh rate, because the presented rate also depends on CPU time
+   and presentation (TASK97's Finding 1 saw a fixed cost of 3 to 4 ms a
+   frame on the `CAMetalLayer` path). The 10 % headroom is a design
+   choice, not a measurement; the owner may set another.
 2. An option below the quality floor in any region of any case (its SSIM,
    or its still-camera instability) is not offered as a default there. No
    floor value exists yet, since no image quality is measured: RT12
@@ -783,7 +805,8 @@ is the decision, and nothing is recorded in `docs/decisions/`.
 
 `ref_metal` (TASK28) renders the world and entities into a G-buffer before
 lighting is resolved. Required attachments, all at the frame's resolution
-(the internal resolution of section 2 while a ray-traced effect is on):
+(the internal resolution of option A or a hybrid while a ray-traced
+effect is on; the world refdef's rectangle under option E, section 2):
 
 | Attachment | Format | Written by |
 |---|---|---|
@@ -801,7 +824,10 @@ the lit result of the others for hit shading), (4) temporal + denoise,
 (5) lighting resolve: `albedo × (lightmap × AO + dlight × vis + sun × vis)`
 plus reflection blend, (6) forward pass for sprites, particles, beams and
 the view weapon over the resolved image, (7) `MTLFXTemporalScaler` from the
-internal to the output size (section 2, RT11), (8) 2D. With every effect
+internal to the output size (section 2, RT11), (8) 2D. Under option E
+there is no step 7: each effect is traced and denoised at its own size
+and upsampled to the G-buffer's size before step 5 (section 2, RT13).
+With every effect
 cvar at 0 steps 1, 3, 4 and 7 are skipped and step 5 reduces to the stock product,
 which is the state that must keep every gl1 pin.
 
@@ -810,7 +836,7 @@ which is the state that must keep every gl1 pin.
 | Check at startup (`MTLDevice`) | Enables |
 |---|---|
 | `supportsFamily(.apple6)` and `supportsRaytracing` | compute RT passes (TASK24); M1 is apple7 |
-| `supportsFamily(.apple9)` and `supportsRaytracingFromRender` | render-stage intersection: shadows and AO move into the lighting-resolve fragment shader, no separate dispatches or history reprojection for shadows (TASK25); M3 and later |
+| `supportsFamily(.apple9)` and `supportsRaytracingFromRender` | render-stage intersection: shadows and AO move into the lighting-resolve fragment shader, no separate dispatches or history reprojection for shadows (TASK25); M3 and later. Under option A the resolve runs at the internal size; under option E it runs at the output size, so the queries go to a fragment pass at each effect's size instead (section 2, RT9) |
 | neither | the effect cvars (the `r_rt_*` cvars that switch an effect on, such as `r_rt_shadows`) are forced to 0 and reported as unavailable in `vid_restart` output; `r_rt_scale`, once RT11 adds it, reads 1 (section 2); the rasterizer path is byte-identical to RT off |
 
 The VM's paravirtual GPU reports no ray-tracing support: TASK24 builds
@@ -830,7 +856,8 @@ Metal provides, no separate code path.
    `rt-sun.cfg`, `rt-ao.cfg`, `rt-water.cfg` (each the base scenario plus
    the one effect cvar on, temporal accumulation disabled for the pin so
    frames are stateless, blue-noise seed fixed by `pins_capture`; RT11 adds
-   `r_rt_scale 1`, so no scaler runs and no MetalFX history enters a pin). They are
+   `r_rt_scale 1` and RT13 sets each effect's scale to 1, so no scaler or
+   upsample runs and no MetalFX history enters a pin). They are
    pinned against **`ref_metal` itself** at the commit where the owner
    accepted the look: `scripts/pins.sh record metal rt-ao` on that commit
    becomes the reference, later commits compare against it at 0.02. The
@@ -839,8 +866,9 @@ Metal provides, no separate code path.
    `timedemo.txt`, captured with all effects on; each card states its
    number and the machine (apple family) it came from. Before RT11 it is
    captured at 1080p. From RT11 on it is captured at the host's native
-   output size with the default `r_rt_scale`, and the number also states
-   the internal and output sizes.
+   output size with the option and scales in use (A's default
+   `r_rt_scale`; from RT13 on also E's default effect scales), and the
+   number also states the internal, effect and output sizes.
 4. What an agent can judge alone: pin parity with RT off, drift against an
    accepted RT look, fps, the double-count invariant (a pixel with no
    dlight in range and no sun visibility must equal the RT-off pixel within
@@ -870,16 +898,20 @@ green, pins as stated.
 | RT6 | Water reflections, one bounce, warp-perturbed normal | same shape with `rt-water`; non-water pixels byte-identical to RT off |
 | RT7 | Temporal accumulation and denoiser (depends RT3 to RT5) | pins unchanged (pins run with temporal off); fps with everything on ≥ 60 at 1080p on apple7, number recorded |
 | RT8 | Hardware gating and fallbacks, `vid_restart` reporting, VM build | every effect cvar forced 0 on the VM with the report line; pins unchanged there (`r_rt_scale` is not RT8's: RT11 adds it, and it reads 1 there, section 4) |
-| RT11 (TASK25) | Internal resolution and `MTLFXTemporalScaler` (section 2, TASK105): the world refdef's 3D frame at `r_rt_scale` with a jittered projection, upscaled to that refdef's rectangle, 2D at the window size, a refdef with `RDF_NOWORLDMODEL` at its own size with no scaler; the cvar with its `doc/040_cvarlist.md` entry; the reset events for the scaler and RT7's history; the per-family defaults of section 2 (depends RT7, RT8) | every effect off: all gl1 pins unchanged and no scaler created; the four effect scenarios carry `r_rt_scale 1` and their pins are unchanged; with an effect on and the scale below 1, each reset event (map load, `vid_restart`, camera cut, teleport, a change of the scale or of the world refdef's rectangle through `viewsize` or the window size, an effect turned back on after a frame with every effect off) resets the scaler and RT7's history on that frame, shown by a `r_rt_stats 1` line, and the player-setup menu's model view open in game and a `fov` change from 90 to 30 reset neither, shown by the same line; at `viewsize` below 100 the upscaled view fills the same centred rectangle as with every effect off; where `supportsDevice:` is NO or the device has no ray tracing (the VM), `r_rt_scale` reads 1 with a report line; fps with everything on at the default scale on T1 and T2, with the internal and output sizes, recorded in `docs/audits/rt-performance.md` |
-| RT9 (TASK25) | Render-stage ray queries on apple9: shadows and AO in the resolve shader, compute path kept for apple6 to apple8; both at the internal resolution (depends RT7, RT11) | identical pins on both paths at 0.005 (pins run at `r_rt_scale 1`, temporal accumulation off); with everything on and the default `r_rt_scale` (1080 rows upscaled by `MTLFXTemporalScaler` to the M6's 5120 x 2880, section 2), the render-stage path holds fps ≥ display refresh (60 Hz on the T2 host), the first frames of a process excluded; the fps, the internal and the output size recorded in `docs/audits/rt-performance.md`, the compute path's fps beside it. Tracing at native pixels is not the target: 36.8 ms on the M6 (section 8, verdicts table, row RT9 (1)) |
-| RT10 (TASK25) | Acceleration-structure refit vs rebuild tuning and resolution-scale defaults per family, GPU timestamps (depends RT9, RT12 and TASK106, #249) | per-pass timings table in `docs/audits/rt-performance.md` for apple7 and apple9, including the G-buffer raster with its motion vectors, RT7's accumulation and denoiser and the scaler; the `r_rt_scale` default per family set from those timings and TASK106's (#249), replacing section 2's design defaults; no pin change |
-| RT12 (TASK25) | Image quality of the upscaled frame on real frames (depends RT11 and the owner's acceptance of the RT look, section 5) | for the four effect scenarios and `world`, frames at the default `r_rt_scale` upscaled to the T2 host's native output are compared with frames at `r_rt_scale 1` at the same output, from the same replay; the per-frame scores are recorded in this document, and each case section 2 lists (particles, sprites and beams, water reflections, lightstyle changes and muzzle flashes, the view weapon, the jitter in RT7's history) is named with the frames that show it; a default that should change is a finding for RT10 |
+| RT11 (TASK25) | Option A: internal resolution and `MTLFXTemporalScaler` (section 2, TASK105): the world refdef's 3D frame at `r_rt_scale` with a jittered projection, upscaled to that refdef's rectangle, 2D at the window size, a refdef with `RDF_NOWORLDMODEL` at its own size with no scaler; the cvar with its `doc/040_cvarlist.md` entry; the reset events for the scaler and RT7's history; option A's per-family design defaults of section 2 (depends RT7, RT8) | every effect off: all gl1 pins unchanged and no scaler created; the four effect scenarios carry `r_rt_scale 1` and their pins are unchanged; with an effect on and the scale below 1, each reset event (map load, `vid_restart`, camera cut, teleport, a change of the scale or of the world refdef's rectangle through `viewsize` or the window size, an effect turned back on after a frame with every effect off) resets the scaler and RT7's history on that frame, shown by a `r_rt_stats 1` line, and the player-setup menu's model view open in game and a `fov` change from 90 to 30 reset neither, shown by the same line; at `viewsize` below 100 the upscaled view fills the same centred rectangle as with every effect off; where `supportsDevice:` is NO or the device has no ray tracing (the VM), `r_rt_scale` reads 1 with a report line; for each effect alone and every effect on at the default scale on T1 and T2, the GPU time per presented frame and the `timedemo` rate, the scaler's GPU time at each host's output (cells section 2's target matrix leaves unmeasured) and the internal and output sizes, recorded in `docs/audits/rt-performance.md` |
+| RT13 (TASK25) | Option E and the hybrids (section 2, "Targets per GPU family and display, and the options", TASK116): the world refdef's 3D frame rasterized at its rectangle; each effect traced, accumulated and denoised (RT7) at its own scale of that rectangle, one archived cvar per effect with its `doc/040_cvarlist.md` entry; a joint bilateral upsample of each effect to the rectangle on depth, normal and material id, with a counted fallback where no sample matches; with RT11's scaler on, the effect scales apply to the internal size (the hybrid); a refdef with `RDF_NOWORLDMODEL` takes no effect (depends RT7, RT8, RT11) | every effect off: all gl1 pins unchanged; every effect scale at 1: the four effect scenarios' pins unchanged, and the frame byte-identical to RT11's at `r_rt_scale 1`; with an effect scale below 1, section 5's double-count invariant holds at the output pixels; the upsample's weights are host-tested with mutants killed (a sample across a depth step or a material-id change gets no weight; the fallback is counted on the `r_rt_stats 1` line); each effect's history resets on section 2's events that do not concern the scaler and on a change of that effect's scale, shown by the same line, and the model view and a `fov` change from 90 to 30 reset nothing; where the device has no ray tracing (the VM) the effect scales do nothing and the report line says so; on T1 and T2 at each host's output, the GPU time of the raster, resolve and forward pass at the output size and of each effect's upsample, and for each effect alone and every effect on at the design point of section 2 (every effect at 1/2) and at H, the GPU time per presented frame and the `timedemo` rate, recorded in `docs/audits/rt-performance.md` |
+| RT9 (TASK25) | Render-stage ray queries on apple9, compute path kept for apple6 to apple8, at the traced size of the option in use: under A and the hybrids, shadows and AO in the resolve shader at the internal size; under E, in a fragment pass at each effect's size, since E's resolve runs at the output size (section 4) (depends RT7, RT11, RT13) | identical pins on both paths at 0.005 (pins run at scale 1, `r_rt_scale 1` and every effect scale 1, temporal accumulation off); in the T2 host's cell of the target matrix (apple9, 5120 x 2880 at 60 Hz, section 2), for each effect alone and every effect on, under A at its default `r_rt_scale` and under E at its default effect scales, both paths' GPU time per presented frame at the 95th percentile and `timedemo` rate with `r_vsync 1`, the first frames of a process excluded, recorded against the cell's 16.7 ms frame and the default policy's 15.0 ms target; the render-stage path holds the cell by the default policy (section 2) with every effect on under at least one of A and E; the times, the option and the internal, effect and output sizes recorded in `docs/audits/rt-performance.md`, the compute path beside them. Tracing at native pixels (option C) is not the target: 36.8 ms on the M6 (section 8, verdicts table, row RT9 (1)) |
+| RT12 (TASK25) | Image quality of options A, E and the hybrids on real ray-traced frames, by section 2's image-quality program (depends RT11, RT13 and the owner's acceptance of the RT look, section 5) | for the four effect scenarios and `world`, each case of the program (still and moving camera, fast turns, disocclusion, muzzle flashes, lightstyle changes) is named with its frames from the trace, replayed at 60 and at 120 frames a second; the candidates (A at its default and one other scale, E at its default effect scales, H, and B and D where TASK111 and TASK113, #265 and #267, make them selectable) at the T2 host's output are compared with the converged reference at the same output from the same replay; PSNR, SSIM, the perceptual metric if it can be built with the toolchain alone (or its absence stated), still-camera stability and event response, per region (textured surfaces, silhouettes and thin geometry, particles, sprites and beams, water, sky, the view weapon, 2D and the HUD), recorded in this document per option, case and region; the distributions are given to the owner for the quality floor (INFORM12); nothing derived from game data is committed; a default that should change is a finding for RT10 |
+| RT10 (TASK25) | Acceleration-structure refit vs rebuild tuning, GPU timestamps, and the default option and scale per cell of the target matrix (depends RT9, RT12 and TASK106, #249) | per-pass timings table in `docs/audits/rt-performance.md` for apple7 (T1) and apple9 (T2) at each host's output and at the 60 Hz classes it can show as a window, including the G-buffer raster with its motion vectors at the internal and at the output size, RT7's accumulation and denoiser, the scaler and the upsample; model R checked again on each family's own columns, as section 2 checks it on section 8's, before it fills a cell no host can output; the default option and scale per cell (family and display class, each effect configuration) set by section 2's default policy from those timings, RT12's scores and the owner's quality floor, replacing section 2's design defaults; the frame-time spread at the fixed defaults over the scenarios, and whether it misses the target (a finding for a dynamic-resolution card if it does); no pin change |
 
 Out of scope, decided after RT10 per the plan: path tracing (Phase G),
-global illumination beyond AO, RT for particles or beams. Out of scope
-with no card (section 2, TASK105): `MTLFXFrameInterpolator`, which adds
+global illumination beyond AO, RT for particles or beams. No RT row and
+not a default (section 2): `MTLFXFrameInterpolator` (option D), which adds
 latency in a game, and `MTLFXTemporalDenoisedScaler` in place of section
-2's denoiser, which is over the 60 Hz frame on the M6.
+2's denoiser (option B), which is over the 60 Hz frame on the M6; TASK111
+and TASK113 (#265, #267) make them selectable for the comparison. A
+dynamic-resolution controller has no row until RT10 shows that fixed
+defaults miss the target.
 
 ## 7. Measured device capabilities (TASK99)
 
