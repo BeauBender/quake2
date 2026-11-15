@@ -37,9 +37,22 @@ ${HOME:-}"
 for _v in $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p'); do
 	unset "$_v"
 done
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/prepush.XXXXXX")
+# The directory is under /tmp, not $TMPDIR: git prints its paths (the remote's
+# address in a push), and a $TMPDIR that holds the login name would put a real
+# identity value into the output that leaks() rightly refuses. The path is
+# checked against the real values and refused if it holds one.
+tmp=$(mktemp -d /tmp/q2-prepush.XXXXXX)
 # A shell error must not exit 0 (bash 3.2 loses the status in an EXIT trap).
-trap 'rm -rf "$tmp"; [ "${_ok:-}" = 1 ] || exit 1' EXIT
+trap 'rm -rf "${tmp:?}"; [ "${_ok:-}" = 1 ] || exit 1' EXIT
+_tl=$(printf '%s' "$tmp" | tr '[:upper:]' '[:lower:]')
+printf '%s\n' "$real_words" | while IFS= read -r _w; do
+	[ "${#_w}" -ge 3 ] || continue
+	_w=$(printf '%s' "$_w" | tr '[:upper:]' '[:lower:]')
+	case $_tl in *"$_w"*) echo x ;; esac
+done | grep -q x && {
+	echo "check-pre-push-hook: the temporary directory's path holds an identity value; this check needs a /tmp path without one"
+	exit 1
+}
 mkdir "$tmp/tpl" "$tmp/bin" "$tmp/hooks"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TEMPLATE_DIR="$tmp/tpl"
 export XDG_CONFIG_HOME="$tmp/xdg"
