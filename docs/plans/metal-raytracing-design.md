@@ -1600,10 +1600,22 @@ image kept with the frames.
   seeded run is otherwise the same. Particle pixels are taken out of the
   edge and interior regions.
 - **Textured interiors (interior)**: every other pixel of the 3D frame.
-- **Sprites and beams**: not isolated. No cvar removes sprites or beams
-  alone (`cl_entities 0` removes every entity, alias models included), so
-  that region is not reported. Sky, water and the view weapon are not
-  separate regions either.
+- **Sprites and beams**: none in these frames. The traces record each
+  entity's model id and flags (`src/client/vid/refrecord.c:474`,
+  `W_U32(w, e->model_id);`, and `:498`, `W_I32(w, e->flags);`), and the
+  `REC_MODEL` records name each model id. A second short reader, kept with
+  the frames, counts in every captured frame of every run the refdef's
+  entities with a sprite model (a name ending in `.sp2`) and those with
+  `RF_BEAM` in their flags (`src/common/header/shared.h:763`, `#define
+  RF_BEAM 128`): 0 sprites and 0 beams in each of the 196 frames of the 28
+  runs. The one sprite model the runs register, `sprites/s_bfg2.sp2`, is
+  in no captured frame. The 219 entities of the 7 frames of `models` (and
+  of `particles`) are 188 MD2 models and 31 inline brush models (`*1`,
+  `*24` and the like), in every run; `world` has none. So the region is
+  empty here and is not reported. A frame that had sprites or beams would
+  need engine output to isolate them: no cvar removes them alone
+  (`cl_entities 0` removes every entity, alias models included). Sky,
+  water and the view weapon are not separate regions either.
 
 The 3D regions are scored on the frames with the 2D layer off. Pixels
 per mask (the edge, interior and particle counts add up to the frame):
@@ -1937,16 +1949,17 @@ the run table, the frame-time table, the 49 masks and the 378 upscaled
 frames (PNG, named `<scene>-f<frame>-5120x2880-mask-<edge|2d|particles>.png`
 and `<scene>-f<frame>-<width>x<height>-<upscaler>-<hud|no2d>.png`), the
 per-frame CSV, the self-test, Sobel and timing outputs, the probe's source,
-binary and build line, and the scripts that drove the runs and made these
-tables. No frame, demo, trace or game data is in the repository.
+binary and build line, the two trace readers and their outputs, and the
+scripts that drove the runs and made these tables. No frame, demo, trace or game data is in the repository.
 
 ### Not measured
 
 - The temporal scaler, the denoised scaler and the frame interpolator
   (RT11, TASK111 to TASK113): this measures the spatial scaler and two
   baselines only, so it is not a measurement of option A (above).
-- Sprites and beams as a region (not isolable without engine output), and
-  sky, water and the view weapon as regions.
+- Sprites and beams as a region: none in these frames (Regions, above),
+  and a frame with them would need engine output to isolate them. Sky,
+  water and the view weapon as regions.
 - A moving camera, temporal stability and the response to an event: still
   frames only. No perceptual metric (FLIP was not implemented).
 - The 2D layer drawn at the native size over the upscaled 3D frame as one
