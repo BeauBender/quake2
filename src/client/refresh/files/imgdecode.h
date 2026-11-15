@@ -1,0 +1,113 @@
+/*
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or (at
+ * your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ *
+ * See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+ * 02111-1307, USA.
+ *
+ * =======================================================================
+ *
+ * PNG, JPEG and TGA decoding, shared by the renderers (files/image.c)
+ * and the client (cl_image.c). See imgdecode.c and decision 0010.
+ * Needs no engine header, so the host test links it alone.
+ *
+ * =======================================================================
+ */
+
+#ifndef SRC_CLIENT_REFRESH_FILES_IMGDECODE_H_
+#define SRC_CLIENT_REFRESH_FILES_IMGDECODE_H_
+
+#include <stddef.h>
+
+/* The largest side of a decoded image (ref_metal's RMB_MAX_TEXTURE_SIDE). */
+#define IMGDEC_MAX_SIDE 16384
+
+/* The largest file read: an uncompressed 32-bit TGA of 8192x8192 fits. */
+#define IMGDEC_MAX_FILE ((size_t)512 * 1024 * 1024)
+
+typedef enum
+{
+	IMGDEC_TYPE_NONE = 0,
+	IMGDEC_TYPE_PNG,
+	IMGDEC_TYPE_JPEG,
+	IMGDEC_TYPE_TGA
+} imgdec_type_t;
+
+typedef enum
+{
+	IMGDEC_OK = 0,
+	IMGDEC_ERR_EXTENSION,	/* the name's extension is not png, jpg or tga */
+	IMGDEC_ERR_FILESIZE,	/* no bytes, or more than IMGDEC_MAX_FILE */
+	IMGDEC_ERR_TYPE,	/* the bytes are not a PNG, JPEG or TGA image */
+	IMGDEC_ERR_MISMATCH,	/* the bytes' type is not the extension's */
+	IMGDEC_ERR_SIZE,	/* a side is 0 or above IMGDEC_MAX_SIDE */
+	IMGDEC_ERR_LAYOUT,	/* a pixel layout that is not converted */
+	IMGDEC_ERR_DECODE,	/* the pixels could not be decoded */
+	IMGDEC_ERR_MEMORY,
+	IMGDEC_ERR_UNSUPPORTED	/* no decoder on this platform */
+} imgdec_result_t;
+
+/* How the decoded pixels are laid out in memory (imgdecode.c). */
+typedef enum
+{
+	IMGDEC_ALPHA_NONE = 0,	/* colour channels only */
+	IMGDEC_ALPHA_LAST,	/* straight alpha after the colour */
+	IMGDEC_ALPHA_FIRST,	/* straight alpha before the colour */
+	IMGDEC_ALPHA_SKIP_LAST,	/* an unused channel after the colour */
+	IMGDEC_ALPHA_SKIP_FIRST	/* an unused channel before the colour */
+} imgdec_alpha_t;
+
+typedef struct
+{
+	size_t width;
+	size_t height;
+	size_t bits_per_component;	/* 8 or 16 */
+	size_t bits_per_pixel;
+	size_t bytes_per_row;
+	int colors;			/* 1: grey or a palette index, 3: RGB */
+	imgdec_alpha_t alpha;
+	size_t swap;			/* 0, or 2 or 4: little-endian words of that many bytes */
+	const unsigned char *palette;	/* RGB triples when indexed, else NULL */
+	size_t palette_count;
+} imgdec_layout_t;
+
+imgdec_type_t IMGDEC_TypeOfExtension(const char *ext);
+imgdec_type_t IMGDEC_TypeOfIdentifier(const char *uti);
+
+/*
+ * 1 and *bytes = width * height * 4 when both sides are in 1..max_side
+ * and the product does not overflow, else 0.
+ */
+int IMGDEC_PixelBytes(size_t width, size_t height, size_t max_side,
+		size_t *bytes);
+
+/*
+ * Converts srclen bytes laid out as described into straight-alpha RGBA8
+ * (width * height * 4 bytes at dst), with no colour conversion; 16-bit
+ * components keep their high byte, as stb_image did.
+ */
+imgdec_result_t IMGDEC_ToRGBA(const imgdec_layout_t *layout,
+		const unsigned char *src, size_t srclen, unsigned char *dst);
+
+/*
+ * Decodes a PNG, JPEG or TGA file whose name has the extension ext.
+ * On IMGDEC_OK *pixels is malloc()ed straight-alpha RGBA8 the caller
+ * free()s, and *width and *height are set. On failure *pixels is NULL
+ * and *width and *height are unchanged.
+ */
+imgdec_result_t IMGDEC_Decode(const void *data, size_t size, const char *ext,
+		unsigned char **pixels, int *width, int *height);
+
+const char *IMGDEC_ResultString(imgdec_result_t result);
+
+#endif /* SRC_CLIENT_REFRESH_FILES_IMGDECODE_H_ */
