@@ -1021,6 +1021,7 @@ CLIENT_OBJS_ := \
 	src/client/sound/sdl.o \
 	src/client/sound/sound.o \
 	src/client/sound/wave.o \
+	src/client/vid/glimp_hidpi.o \
 	src/client/vid/refrecord.o \
 	src/client/vid/vid.o \
 	src/common/argproc.o \
@@ -1162,6 +1163,7 @@ REFSOFT_OBJS_ := \
 	src/client/refresh/soft/sw_scan.o \
 	src/client/refresh/soft/sw_sprite.o \
 	src/client/refresh/soft/sw_surf.o \
+	src/client/refresh/soft/sw_view.o \
 	src/client/refresh/files/surf.o \
 	src/client/refresh/files/common.o \
 	src/client/refresh/files/models.o \
@@ -1169,6 +1171,7 @@ REFSOFT_OBJS_ := \
 	src/client/refresh/files/stb.o \
 	src/client/refresh/files/wal.o \
 	src/client/refresh/files/pvs.o \
+	src/client/vid/glimp_hidpi.o \
 	src/common/shared/shared.o \
 	src/common/md4.o
 
@@ -1406,11 +1409,12 @@ endif
 # The unit-test suite (tests/unit, see doc/085_unittests.md). The test
 # binary links the dedicated server's own objects (SERVER_OBJS_ below,
 # built with q2ded's flags into a tree of their own) except the unix
-# main.c; tests/unit/main.c supplies main(). Seven client objects
-# (cl_conback, cl_download, cl_entities, cl_network, cl_parse, cl_screen and the sound
-# frontend sound.c) are linked against the stubs in tests/unit/stub_client.c
-# and stub_client_full.c, and one renderer object, refresh/files/surf.c,
-# which needs only shared.c; none of it includes SDL. Needs no SDL and no game
+# main.c; tests/unit/main.c supplies main(). Eight client objects
+# (cl_conback, cl_download, cl_entities, cl_network, cl_parse, cl_screen, the sound
+# frontend sound.c and the window code's SDL-free part vid/glimp_hidpi.c)
+# are linked against the stubs in tests/unit/stub_client.c
+# and stub_client_full.c, and two renderer objects, refresh/files/surf.c
+# and soft/sw_view.c, which need only shared.c; none of it includes SDL. Needs no SDL and no game
 # data. `make test` builds and runs it; UPDATE_PINS=1 (exactly 1, any
 # other value is ignored) rewrites the pins under tests/pins/unit/
 # instead of comparing; TEST_ARGS passes options or test-name filters to
@@ -1450,7 +1454,9 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(TESTDIR)/src/client/cl_parse.o \
 	$(TESTDIR)/src/client/cl_screen.o \
 	$(TESTDIR)/src/client/sound/sound.o \
+	$(TESTDIR)/src/client/vid/glimp_hidpi.o \
 	$(TESTDIR)/src/client/refresh/files/surf.o \
+	$(TESTDIR)/src/client/refresh/soft/sw_view.o \
 	$(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS))
 TEST_BIN = $(TESTDIR)/yq2test
 

@@ -379,6 +379,9 @@ extern float	d_scalemip[NUM_MIPS-1];
 extern int vid_buffer_height;
 extern int vid_buffer_width;
 
+/* sw_view.c */
+void R_ClampViewToBuffer(refdef_t *rd, int width, int height);
+
 
 //===================================================================
 

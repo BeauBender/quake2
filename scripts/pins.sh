@@ -50,6 +50,16 @@
 #                 explosions draw the same random numbers on every record.
 #                 Needs the trace (not PINS_TRACE=0). Default: unset, the
 #                 seed comes from OS entropy as in a normal client
+#   PINS_HIDPI    1: the engine runs with vid_highdpiaware 1, so on a display
+#                 of pixel density 2 the PINS_WIDTH x PINS_HEIGHT window
+#                 draws and captures twice that size in pixels (record and
+#                 make-demo; replay refuses it, a trace is replayed at
+#                 PINS_WIDTH x PINS_HEIGHT). Default: unset or 0, the engine
+#                 runs with vid_highdpiaware 0 and captures PINS_WIDTH x
+#                 PINS_HEIGHT on any display. Only 1 is part of the pin id,
+#                 so a pin made without it keeps its id. The value is
+#                 written as "hidpi 0" or "hidpi 1" into the pin's
+#                 settings.txt (a record) or replay.txt (a replay)
 #   PINS_EVIDENCE_DIR     where evidence writes its sets, never inside the
 #                 pin store. Default: evidence/ of this checkout (git-ignored)
 #   PINS_EVIDENCE_REPO    owner/name evidence-publish uploads to. Default: the
@@ -116,7 +126,7 @@
 # A scenario is a list of "set <cvar> <value>" lines
 # (scripts/pins/scenarios/*.cfg); any other line, and a line setting a cvar
 # the driver sets itself (pins_*, vid_renderer, vid_fullscreen, r_mode,
-# r_customwidth, r_customheight, s_initsound) or one that chooses a directory
+# r_customwidth, r_customheight, s_initsound, vid_highdpiaware) or one that chooses a directory
 # or the game module (basedir, cddir, game, datadir, cfgdir), is refused, as
 # is a value holding ".." or starting with "-" that is not a number. The driver passes
 # each line to the engine as a "+set" argument, then its own settings, then
@@ -268,9 +278,24 @@ stale_engine() {
     done
 }
 scenario_hash() {
+    local hd; hd=$(hidpi) || exit 1
     { cat "$scen_dir/$1.cfg"; echo "${PINS_DEMO:-demo1.dm2} ${PINS_WIDTH:-640}x${PINS_HEIGHT:-480} every=${PINS_EVERY:-30}"; demo_sum
-      if [ -n "${PINS_SEED:-}" ]; then echo "seed=$PINS_SEED"; fi; } | cksum | awk '{print $1}'
+      if [ -n "${PINS_SEED:-}" ]; then echo "seed=$PINS_SEED"; fi
+      if [ "$hd" = 1 ]; then echo "hidpi=1"; fi; } | cksum | awk '{print $1}'
 }
+# hidpi: the vid_highdpiaware the engine runs with: 1 for PINS_HIDPI=1, 0
+# when it is unset, empty or 0. Any other value dies here, whether or not
+# the caller ran check_hidpi; callers take the value into a variable with
+# "|| exit 1", so that a death inside $(...) stops them as well.
+hidpi() {
+    case ${PINS_HIDPI-} in
+        ''|0) echo 0 ;;
+        1) echo 1 ;;
+        *) die "PINS_HIDPI must be 0 or 1, got '$PINS_HIDPI'" ;;
+    esac
+}
+# check_hidpi: PINS_HIDPI is unset, empty, 0 or 1 (hidpi's own test)
+check_hidpi() { hidpi > /dev/null; }
 # demo_sum: the checksum of PINS_DEMO when it lies beside the engine binary,
 # where make-demo writes it, so a demo made again never shares a pin id with
 # the one it replaced; nothing for a demo found only in the game data
@@ -280,7 +305,10 @@ demo_sum() {
 }
 # run_id <scenario> <run>
 run_id() {
-    local id; id="$(engine_sha)-$(scenario_hash "$1")"
+    # scenario_hash dies on a bad PINS_HIDPI; "|| exit 1" passes that on
+    # to run_id's own caller, which is a $(...) too
+    local id sh; sh=$(scenario_hash "$1") || exit 1
+    id="$(engine_sha)-$sh"
     if [ "$2" -gt 1 ]; then id="$id-r$2"; fi
     echo "$id"
 }
@@ -324,7 +352,7 @@ build_args() {
         read -r verb name value extra <<< "$line"
         [ "$verb" = set ] && [ -n "$value" ] && [ -z "$extra" ] || die "$scenario.cfg line $n: not 'set <cvar> <value>': $line"
         case $name in ''|*[!a-z0-9_]*) die "$scenario.cfg line $n: the cvar must match [a-z0-9_]+, got '$name'";; esac
-        case $name in pins_*|vid_renderer|vid_fullscreen|r_mode|r_customwidth|r_customheight|s_initsound)
+        case $name in pins_*|vid_renderer|vid_fullscreen|r_mode|r_customwidth|r_customheight|s_initsound|vid_highdpiaware)
             die "$scenario.cfg line $n: $name is set by the driver, a scenario may not set it";; esac
         case $name in basedir|cddir|game|datadir|cfgdir)
             die "$scenario.cfg line $n: $name chooses a directory or the game module, a scenario may not set it";; esac
@@ -334,9 +362,10 @@ build_args() {
         engine_args+=(+set "$name" "$value")
     done < "$scen_dir/$scenario.cfg"
     set +f
+    local hd; hd=$(hidpi) || exit 1
     engine_args+=(+set vid_renderer "$(engine_renderer "$renderer")" +set vid_fullscreen 0 +set r_mode -1
         +set r_customwidth "${PINS_WIDTH:-640}" +set r_customheight "${PINS_HEIGHT:-480}"
-        +set s_initsound 0
+        +set s_initsound 0 +set vid_highdpiaware "$hd"
         +set pins_dir "$out" +set pins_scenario "$scenario" +set pins_capture "${PINS_EVERY:-30}")
     if [ "${PINS_TRACE:-1}" != 0 ]; then engine_args+=(+set pins_record trace.q2r); fi
     if [ -n "${PINS_SEED:-}" ]; then engine_args+=(+set pins_seed "$PINS_SEED"); fi
@@ -411,7 +440,7 @@ cmd_record() {
     case $limit in ''|*[!0-9]*) die "PINS_TIMEOUT must be a number of seconds, got '$limit'";; esac
     check_count PINS_WIDTH "${PINS_WIDTH:-640}"; check_count PINS_HEIGHT "${PINS_HEIGHT:-480}"; check_count PINS_EVERY "${PINS_EVERY:-30}"
     check_demo "${PINS_DEMO:-demo1.dm2}"
-    check_seed
+    check_seed; check_hidpi
     if [ -n "${PINS_SEED:-}" ]; then
         [ "${PINS_TRACE:-1}" != 0 ] || die "PINS_SEED needs the trace: the engine takes pins_seed only beside pins_record"
     fi
@@ -422,7 +451,8 @@ cmd_record() {
     [ -f "$scen_dir/$scenario.cfg" ] || die "no scenario $scenario (see $scen_dir)"
     [ -z "${PINS_BIN:-}" ] || [ -f "$PINS_BIN" ] || die "no engine binary at $PINS_BIN (build the client, or set PINS_BIN)"
     check_store "$scenario" "$renderer"
-    local out; out=$(printf '%s' "$(store)/$scenario/$renderer/$(run_id "$scenario" "$run")" | tr -s /)
+    local rid; rid=$(run_id "$scenario" "$run") || exit 1
+    local out; out=$(printf '%s' "$(store)/$scenario/$renderer/$rid" | tr -s /)
     check_arg "the pin store path" "$out" path
     if [ -n "${PINS_BASEDIR:-}" ]; then check_arg PINS_BASEDIR "$PINS_BASEDIR" path; fi
     build_args "$renderer" "$scenario" "$out"
@@ -438,6 +468,9 @@ cmd_record() {
     fi
     local reason="" n=0 run_status=0 run_timedout=0
     rm -rf "$out"; mkdir -p "$out"
+    # the settings the pin id does not spell out, written before the engine runs
+    local hd; hd=$(hidpi) || exit 1
+    echo "hidpi $hd" > "$out/settings.txt"
     run_engine "$bin" "$out" "$limit"
     judge_pin "$out" "$renderer" "$limit"
     if [ -n "$reason" ]; then
@@ -466,10 +499,11 @@ cmd_compare() {
         shift 2
     done
     [ -f "$scen_dir/$scenario.cfg" ] || die "no scenario $scenario (see $scen_dir)"
+    check_hidpi
     check_store "$scenario" "$renderer" "$ref"
     local s; s=$(store)
     local cand ref_dir
-    [ -n "$cand_id" ] || cand_id=$(run_id "$scenario" "$run")
+    [ -n "$cand_id" ] || cand_id=$(run_id "$scenario" "$run") || exit 1
     cand="$s/$scenario/$renderer/$cand_id"
     [ -d "$cand" ] || die "no candidate frames at $cand (run: pins.sh record $renderer $scenario, with this engine and these PINS_* settings)"
     [ -f "$cand/complete" ] || die "the candidate $cand is incomplete (no 'complete' marker; record it again)"
@@ -567,7 +601,9 @@ cmd_replay() {
     [ -n "$from" ] || from=$renderer
     case $limit in ''|*[!0-9]*) die "PINS_TIMEOUT must be a number of seconds, got '$limit'";; esac
     check_count PINS_WIDTH "${PINS_WIDTH:-640}"; check_count PINS_HEIGHT "${PINS_HEIGHT:-480}"; check_count PINS_EVERY "${PINS_EVERY:-30}"
-    check_seed
+    check_seed; check_hidpi
+    # a trace is replayed into a window of its own size in pixels, PINS_WIDTH x PINS_HEIGHT
+    [ "$(hidpi)" = 0 ] || die "replay takes no PINS_HIDPI=1: a trace is replayed at PINS_WIDTH x PINS_HEIGHT pixels, with vid_highdpiaware 0"
     [ -f "$scen_dir/$scenario.cfg" ] || die "no scenario $scenario (see $scen_dir)"
     [ -z "${PINS_BIN:-}" ] || [ -f "$PINS_BIN" ] || die "no engine binary at $PINS_BIN (build the client, or set PINS_BIN)"
     if [ -n "${PINS_BASEDIR:-}" ]; then check_arg PINS_BASEDIR "$PINS_BASEDIR" path; fi
@@ -638,6 +674,7 @@ cmd_replay() {
     fi
     engine_args=(-datadir "${PINS_BASEDIR:-}" -portable +set vid_renderer "$(engine_renderer "$renderer")" +set vid_fullscreen 0
         +set r_mode -1 +set r_customwidth "${PINS_WIDTH:-640}" +set r_customheight "${PINS_HEIGHT:-480}" +set s_initsound 0
+        +set vid_highdpiaware 0
         +set pins_dir "$out" +set pins_scenario "$scenario" +set pins_capture "${PINS_EVERY:-30}" +set pins_replay "$trace")
     if [ -n "${PINS_SEED:-}" ]; then engine_args+=(+set pins_seed "$PINS_SEED"); fi
     if [ -n "${PINS_DRYRUN:-}" ]; then echo "$bin ${engine_args[*]}"; return 0; fi
@@ -656,7 +693,7 @@ cmd_replay() {
     { echo "replay of $scenario/$from/$trace_id/trace.q2r"
       echo "trace-bytes $tbytes"; echo "trace-cksum $tsum"
       echo "trace-frames $th_frames"; echo "record-frames $nlive"
-      echo "renderer $renderer"; echo "engine $(engine_sha)"; echo "seed ${PINS_SEED:-none}"
+      echo "renderer $renderer"; echo "engine $(engine_sha)"; echo "seed ${PINS_SEED:-none}"; echo "hidpi 0"
       echo "game-module $(game_module "$bin")"; } > "$out/replay.txt"
     run_engine "$bin" "$out" "$limit"
     judge_pin "$out" "$renderer" "$limit"
@@ -1299,7 +1336,8 @@ cmd_evidence_selftest() {
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR \
         GIT_NAMESPACE GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM
     unset PINS_EVIDENCE_BUDGET PINS_EVIDENCE_UPLOADER PINS_EVIDENCE_REPO PINS_EVIDENCE_DIR \
-        PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF PINS_TRACE PINS_SEED
+        PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF PINS_TRACE PINS_SEED \
+        PINS_HIDPI
     ev_py selftest
     scratch_outside_git pins-ev
     trap 'rm -rf "$tmp"' EXIT
@@ -1431,8 +1469,10 @@ check_demo_place() {
 # Fills engine_args for the make-demo run of <script copy name>: a local,
 # windowed, silent single-player game that execs the script; pin capture is off
 build_demo_args() {
+    local hd; hd=$(hidpi) || exit 1
     engine_args=(-datadir "${PINS_BASEDIR:-}" -portable +set vid_renderer soft +set vid_fullscreen 0 +set r_mode -1
         +set r_customwidth "${PINS_WIDTH:-640}" +set r_customheight "${PINS_HEIGHT:-480}" +set s_initsound 0
+        +set vid_highdpiaware "$hd"
         +set vid_pauseonfocuslost 0 +set deathmatch 0 +set coop 0 +exec "$1")
 }
 
@@ -1444,7 +1484,7 @@ cmd_make_demo() {
         --replace) replace=1; shift;;
         *) die "unknown option $1";; esac; done
     case $limit in ''|*[!0-9]*) die "PINS_TIMEOUT must be a number of seconds, got '$limit'";; esac
-    check_count PINS_WIDTH "${PINS_WIDTH:-640}"; check_count PINS_HEIGHT "${PINS_HEIGHT:-480}"
+    check_count PINS_WIDTH "${PINS_WIDTH:-640}"; check_count PINS_HEIGHT "${PINS_HEIGHT:-480}"; check_hidpi
     local script="$demo_dir/$name.cfg"
     [ -f "$script" ] || die "no demo script $name (see $demo_dir)"
     check_demo_script "$script" "$name"
@@ -1694,7 +1734,7 @@ st_scenarios() {
     done
     # the commands, cvars and pin arguments the driver itself passes exist in this tree
     grep -qF 'Cmd_AddCommand("demomap"' "$root/src/server/sv_cmd.c" || st_fail "demomap is not a command in src/server/sv_cmd.c" || return 1
-    for name in vid_renderer vid_fullscreen r_mode r_customwidth r_customheight s_initsound; do
+    for name in vid_renderer vid_fullscreen r_mode r_customwidth r_customheight s_initsound vid_highdpiaware; do
         grep -rqF "\"$name\"" "$root/src" || st_fail "the driver sets $name, which is not a cvar in src/" || return 1
     done
     for name in pins_dir pins_scenario pins_capture pins_record pins_seed; do
@@ -1744,7 +1784,7 @@ st_scenario_lines() { # TASK39 (b, c): only "set <cvar> <value>", never a driver
     case $line in *"+set cl_gun 0 "*"+set pins_dir "*"+set pins_capture 30 +set pins_record trace.q2r +demomap demo1.dm2") ;; *) st_fail "the driver's own arguments must follow the scenario's: $line"; return 1;; esac
     printf '%s\n' 'set timedemo 1' 'set cl_gun -1' 'set cl_gun -0.5' 'set cl_gun -.5' > "$tmp/scen/neg.cfg"
     PINS_DRYRUN=1 cmd_record gl1 neg >/dev/null || st_fail "negative numbers must be accepted" || return 1
-    for bad in 'set pins_capture 1' 'set pins_dir /tmp/x' 'set vid_renderer gl1' 'set r_customwidth 9' 'set s_initsound 1' \
+    for bad in 'set pins_capture 1' 'set pins_dir /tmp/x' 'set vid_renderer gl1' 'set r_customwidth 9' 'set s_initsound 1' 'set vid_highdpiaware 1' \
         'set basedir /opt/x' 'set cddir /opt/x' 'set game mymod' 'set datadir /opt/x' 'set cfgdir /opt/x' \
         'set timedemo ../x' 'set timedemo a..b' 'set timedemo -datadir' 'set timedemo -cfgdir' 'set timedemo -b' 'set timedemo -1x' 'set timedemo -' \
         'exec evil.cfg' 'quit' '+set timedemo 1' 'set timedemo' 'set timedemo 1 2' 'set TimeDemo 1' 'set time-demo 1' ' set timedemo 1'; do
@@ -1914,7 +1954,7 @@ st_replay_args() { # TASK46: what replay passes to the engine
     trace_fixture gl1 rec1
     local line t; t="$(phys_dir "$PINS_STORE")/world/gl1/rec1/trace.q2r"
     line=$(PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) || st_fail "a dry run of replay must pass" || return 1
-    case $line in "${tmp:?}/fake-ok -datadir  -portable +set vid_renderer soft +set vid_fullscreen 0 +set r_mode -1 +set r_customwidth 640 +set r_customheight 480 +set s_initsound 0 +set pins_dir $(phys_dir "$PINS_STORE")/world/soft/$(engine_sha)-replay-gl1-rec1 +set pins_scenario world +set pins_capture 30 +set pins_replay $t") ;;
+    case $line in "${tmp:?}/fake-ok -datadir  -portable +set vid_renderer soft +set vid_fullscreen 0 +set r_mode -1 +set r_customwidth 640 +set r_customheight 480 +set s_initsound 0 +set vid_highdpiaware 0 +set pins_dir $(phys_dir "$PINS_STORE")/world/soft/$(engine_sha)-replay-gl1-rec1 +set pins_scenario world +set pins_capture 30 +set pins_replay $t") ;;
         *) st_fail "the replay command line is not the expected one: $line"; return 1;; esac
     case $(PINS_SEED=7 PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) in *"/world/soft/$(engine_sha)-replay-gl1-rec1-s7 "*"+set pins_replay $t +set pins_seed 7") ;; *) st_fail "PINS_SEED=7 must pass pins_seed 7 and name the replay -s7"; return 1;; esac
     case $(PINS_SEED=7 PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1 --run 2) in *"-replay-gl1-rec1-s7-r2 "*) ;; *) st_fail "PINS_SEED=7 --run 2 must name the replay -s7-r2"; return 1;; esac
@@ -2349,9 +2389,64 @@ scratch_outside_git() {
     [ -n "$tmp" ] || die "no scratch directory outside a git work tree under TMPDIR, /tmp or /var/tmp"
 }
 
+st_hidpi() { # TASK118: vid_highdpiaware 0 unless PINS_HIDPI=1, which alone changes the pin id
+    local line v d1
+    line=$(PINS_DRYRUN=1 cmd_record gl1 world) || st_fail "a dry run of record must pass" || return 1
+    case $line in *" +set s_initsound 0 +set vid_highdpiaware 0 +set pins_dir "*) ;; *) st_fail "record must pass vid_highdpiaware 0 without PINS_HIDPI: $line"; return 1;; esac
+    case $(PINS_HIDPI=0 PINS_DRYRUN=1 cmd_record gl1 world) in *" +set vid_highdpiaware 0 +set pins_dir "*) ;; *) st_fail "PINS_HIDPI=0 must pass vid_highdpiaware 0"; return 1;; esac
+    case $(PINS_HIDPI=1 PINS_DRYRUN=1 cmd_record gl1 world) in *" +set vid_highdpiaware 1 +set pins_dir "*) ;; *) st_fail "PINS_HIDPI=1 must pass vid_highdpiaware 1"; return 1;; esac
+    # a pin made before PINS_HIDPI keeps its id: the hash input is the old one unless PINS_HIDPI=1
+    [ "$(scenario_hash world)" = "$( { cat "$scen_dir/world.cfg"; echo "demo1.dm2 640x480 every=30"; demo_sum; } | cksum | awk '{print $1}')" ] ||
+        st_fail "without PINS_HIDPI the pin id must be the one made before it" || return 1
+    [ "$(PINS_HIDPI=0 scenario_hash world)" = "$(scenario_hash world)" ] && [ "$(PINS_HIDPI= scenario_hash world)" = "$(scenario_hash world)" ] ||
+        st_fail "PINS_HIDPI=0 or empty must keep the pin id" || return 1
+    [ "$(PINS_HIDPI=1 scenario_hash world)" != "$(scenario_hash world)" ] || st_fail "PINS_HIDPI=1 must change the pin id" || return 1
+    for v in 2 yes true -1 01 00 ' 1' '1 ' '1;quit'; do
+        if (PINS_HIDPI="$v" PINS_DRYRUN=1 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "PINS_HIDPI='$v' must be refused by record"; return 1; fi
+        # hidpi fails closed by itself, for a caller that skips check_hidpi
+        if (PINS_HIDPI="$v" hidpi) >/dev/null 2>&1; then st_fail "hidpi must die on PINS_HIDPI='$v'"; return 1; fi
+        if (PINS_HIDPI="$v" scenario_hash world) >/dev/null 2>&1; then st_fail "scenario_hash must die on PINS_HIDPI='$v'"; return 1; fi
+        if (PINS_HIDPI="$v" run_id world 1) >/dev/null 2>&1; then st_fail "run_id must die on PINS_HIDPI='$v'"; return 1; fi
+        if (PINS_HIDPI="$v" build_args gl1 world /x; echo "${engine_args[*]}") >/dev/null 2>&1; then
+            st_fail "build_args must die on PINS_HIDPI='$v'"; return 1; fi
+        if (PINS_HIDPI="$v" build_demo_args water; echo "${engine_args[*]}") >/dev/null 2>&1; then
+            st_fail "build_demo_args must die on PINS_HIDPI='$v'"; return 1; fi
+    done
+    [ "$(PINS_HIDPI= hidpi)" = 0 ] && [ "$(PINS_HIDPI=0 hidpi)" = 0 ] && [ "$(PINS_HIDPI=1 hidpi)" = 1 ] &&
+        [ "$(unset PINS_HIDPI; hidpi)" = 0 ] || st_fail "hidpi must give 0 unset, empty or 0 and 1 for 1" || return 1
+    # the record writes the value beside its frames, the id tells the two apart
+    PINS_BASEDIR="$tmp/gd" cmd_record gl1 world >/dev/null || st_fail "record must pass" || return 1
+    PINS_HIDPI=1 PINS_BASEDIR="$tmp/gd" cmd_record gl1 world >/dev/null || st_fail "record with PINS_HIDPI=1 must pass" || return 1
+    d1="$PINS_STORE/world/gl1/$(PINS_HIDPI=1 run_id world 1)"
+    [ "$(cat "$PINS_STORE/world/gl1/$cid/settings.txt")" = "hidpi 0" ] && [ "$(cat "$d1/settings.txt")" = "hidpi 1" ] &&
+        [ -f "$PINS_STORE/world/gl1/$cid/complete" ] && [ -f "$d1/complete" ] ||
+        st_fail "settings.txt must hold hidpi 0 and hidpi 1 in two complete pins" || return 1
+    # compare finds the candidate of these settings, and refuses a value it cannot place
+    fixture soft ref "$tmp/a.tga"
+    (cmd_compare gl1 world --ref soft --ref-id ref) >/dev/null 2>&1 || st_fail "compare without PINS_HIDPI must pass" || return 1
+    (PINS_HIDPI=1 cmd_compare gl1 world --ref soft --ref-id ref) >/dev/null 2>&1 || st_fail "compare with PINS_HIDPI=1 must pass" || return 1
+    for v in 2 yes ' 1'; do
+        if (PINS_HIDPI="$v" cmd_compare gl1 world --ref soft --ref-id ref) >/dev/null 2>&1; then st_fail "PINS_HIDPI='$v' must be refused by compare"; return 1; fi
+    done
+    # replay: never PINS_HIDPI=1, always vid_highdpiaware 0, and says so in replay.txt
+    trace_fixture gl1 rec1
+    PINS_HIDPI=1 replay_no "replay takes no PINS_HIDPI=1" soft world --trace-of gl1 || return 1
+    PINS_HIDPI=2 replay_no "PINS_HIDPI must be 0 or 1" soft world --trace-of gl1 || return 1
+    case $(PINS_HIDPI=0 PINS_DRYRUN=1 cmd_replay soft world --trace-of gl1) in *" +set s_initsound 0 +set vid_highdpiaware 0 +set pins_dir "*) ;;
+        *) st_fail "replay must pass vid_highdpiaware 0"; return 1;; esac
+    PINS_BASEDIR="$tmp/gd" cmd_replay soft world --trace-of gl1 >/dev/null || st_fail "the replay must pass" || return 1
+    grep -qx 'hidpi 0' "$(phys_dir "$PINS_STORE")/world/soft/$(engine_sha)-replay-gl1-rec1/replay.txt" || st_fail "replay.txt must say hidpi 0" || return 1
+    # make-demo passes the same value
+    case $(PINS_BASEDIR="$tmp/gd" PINS_DRYRUN=1 cmd_make_demo water) in *" +set s_initsound 0 +set vid_highdpiaware 0 +set vid_pauseonfocuslost 0 "*) ;;
+        *) st_fail "make-demo must pass vid_highdpiaware 0 without PINS_HIDPI"; return 1;; esac
+    case $(PINS_HIDPI=1 PINS_BASEDIR="$tmp/gd" PINS_DRYRUN=1 cmd_make_demo water) in *" +set vid_highdpiaware 1 +set vid_pauseonfocuslost 0 "*) ;;
+        *) st_fail "make-demo must pass vid_highdpiaware 1 with PINS_HIDPI=1"; return 1;; esac
+    if (PINS_HIDPI=yes PINS_BASEDIR="$tmp/gd" PINS_DRYRUN=1 cmd_make_demo water) >/dev/null 2>&1; then st_fail "make-demo must refuse PINS_HIDPI=yes"; return 1; fi
+}
+
 cmd_selftest() {
     # the selftest must not depend on, or act on, the caller's environment
-    unset PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF PINS_TRACE PINS_SEED
+    unset PINS_BIN PINS_BASEDIR PINS_DEMO PINS_WIDTH PINS_HEIGHT PINS_EVERY PINS_TIMEOUT PINS_DRYRUN PINS_STORE PINS_DIFF PINS_TRACE PINS_SEED PINS_HIDPI
     scratch_outside_git pins
     trap 'rm -rf "$tmp"' EXIT
     export PINS_STORE="$tmp/store"
@@ -2375,7 +2470,7 @@ cmd_selftest() {
     [ -n "$tver" ] && [ -n "$tapi" ] || die "selftest: cannot read REFREC_VERSION and API_VERSION"
     local c failed="" cases="framediff framediff_block compare_basic compare_bad_threshold ref_mtime missing_frame self_compare
         two_runs incomplete record_engine timeout fallback names cmdline thresholds scenarios argcount frame_failed list
-        scenario_lines store_place fast_fail demo_name replace engine_id metal_shim usage
+        scenario_lines store_place fast_fail demo_name replace engine_id metal_shim usage hidpi
         replay_args replay_pick replay_refused replay_header replay_place replay_run replay_keep replay_fail replay_compare
         replay_tools
         make_demo_args make_demo_script make_demo_run make_demo_place make_demo_case demo_sum"
