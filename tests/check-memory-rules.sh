@@ -37,9 +37,10 @@
 #    side and stays gone; that the first check and the commit leave another
 #    project's staged change in a shared clone alone; that after an
 #    interrupted conflict (an edit of the same line, its resolution staged;
-#    an add/add; a modify/delete) the next sync runs neither add nor commit,
-#    git's unmerged code is one the memory rule names, and the documented
-#    conflict steps resolve it with no conflict marker reaching the origin;
+#    an add/add; a modify/delete; a merge left stopped, with no rebase) the
+#    next sync runs neither add nor commit and git's unmerged code is one
+#    the memory rule names; that the documented conflict steps resolve each
+#    stopped rebase with no conflict marker reaching the origin;
 #    and that the origin only ever moves forward. Then parts 1 and 2 reject
 #    a fixture for each case they name (settings holding the card's list
 #    plus one change; copies of the documents with one change), a parse
@@ -635,6 +636,22 @@ selftest_sync()
 	for m in A B; do
 		want "$m" d.md 'd v2' "machine $m lacks the edit the modify/delete resolution keeps"
 	done
+
+	# An unmerged file with no rebase in progress (a merge the owner left
+	# stopped): only the first check shows it. Undone by hand afterwards.
+	b="${tmp:?}/B/store"
+	x git -C "$b" checkout -q -b side
+	put B MEMORY.md '# index' '- from side'
+	x git -C "$b" commit -q -a -m side
+	x git -C "$b" checkout -q main
+	put B MEMORY.md '# index' '- from main'
+	x git -C "$b" commit -q -a -m main
+	! git -C "$b" merge -q side > /dev/null 2>&1 || { say "selftest: the merge fixture did not conflict"; exit 1; }
+	next B "a merge left stopped on a conflict"
+	named B "a merge left stopped on a conflict"
+	x git -C "$b" merge --abort
+	x git -C "$b" reset -q --hard "$tip"
+	x git -C "$b" branch -q -D side
 
 	nomarkers
 	for m in A B; do
