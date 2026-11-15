@@ -46,6 +46,7 @@
 #include <string.h>
 
 #include "header/rm_rt.h"
+#include "common/mtl_rts_math.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_rt.m is written for ARC: compile it with -fobjc-arc"
@@ -837,11 +838,8 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 				ibase[2 * j] = (inst[i].kind == RM_RT_INST_ALIAS) ? 0xffffffffu : (uint32_t)map_first[inst[i].model];
 				ibase[2 * j + 1] = carry;
 
-				/* a model that carries a light: its triangles go to the shadow query of that light, which passes them */
-				if (carry)
-				{
-					desc[j].options |= MTLAccelerationStructureInstanceOptionNonOpaque;
-				}
+				/* a model that carries a light has its own mask: the shadow rays of that light test it apart and pass it */
+				desc[j].mask = mtl_rts_inst_mask(carry);
 			}
 
 			j++;

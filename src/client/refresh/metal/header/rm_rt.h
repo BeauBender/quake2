@@ -318,8 +318,8 @@ void rmb_rt_model_free(int mid);
  * GPU times are those of an earlier frame (the timestamps are read once
  * it completed). With shadows (RT3's r_rt_shadows on) the frame also keeps
  * its scene for rmb_rt_bind_scene (each instance's first triangle and the
- * lights it carries, in the frame ring; an instance that carries one is
- * non-opaque); without, nothing beyond TASK53's structures is taken. 1 with
+ * lights it carries, in the frame ring; each instance's mask is
+ * mtl_rts_inst_mask's); without, nothing beyond TASK53's structures is taken. 1 with
  * s filled; 0 when nothing was encoded (no frame, a structure missing).
  */
 int rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nlerps, int shadows,

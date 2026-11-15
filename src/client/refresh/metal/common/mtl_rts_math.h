@@ -83,7 +83,35 @@
 #define MTL_RTS_LUXEL 16.0f
 
 /*
- * The bit a shadow ray toward light idx takes into its query (TASK55):
+ * The instance masks of the frame's structure with the shadows on
+ * (mtl_rts_inst_mask): an alias instance that carries a light (rm_rts_carried)
+ * is MTL_RTS_MASK_CARRIER, every other instance MTL_RTS_MASK_OTHER. A ray
+ * of mask 0xff meets every instance.
+ */
+#define MTL_RTS_MASK_OTHER 0x01u
+#define MTL_RTS_MASK_CARRIER 0x02u
+
+/* the mask of an instance that carries the lights carry */
+static inline unsigned
+mtl_rts_inst_mask(unsigned carry)
+{
+	return carry ? MTL_RTS_MASK_CARRIER : MTL_RTS_MASK_OTHER;
+}
+
+/*
+ * The mask of the first query of a shadow ray of light bit lbit
+ * (mtl_rts_light_bit): every instance (0xff) when no model carries the
+ * light; otherwise every instance but the carriers, whose triangles a
+ * second query (mask MTL_RTS_MASK_CARRIER) passes or stops at.
+ */
+static inline unsigned
+mtl_rts_ray_mask(unsigned lbit)
+{
+	return lbit ? MTL_RTS_MASK_OTHER : 0xffu;
+}
+
+/*
+ * The bit a shadow ray toward light idx takes into its queries (TASK55):
  * 1 << idx when a model of the frame carries that light (bit idx of
  * carried, the union of the instances' rm_rts_carried), 0 otherwise and
  * for an index past the lights. With 0 the ray is every other light's

@@ -1492,6 +1492,15 @@ test_light_bit(void)
 	CHECK(!mtl_rts_passes(0x10u, 0x20u));   /* a model that carries another light shadows this one */
 	CHECK(!mtl_rts_passes(0, 0x20u));
 	CHECK(!mtl_rts_passes(0xffffffffu, 0)); /* a light no model carries: nothing passes */
+
+	/* the masks: a light no model carries meets every instance; a carried one first every instance but the carriers */
+	CHECK(mtl_rts_inst_mask(0) == MTL_RTS_MASK_OTHER);
+	CHECK(mtl_rts_inst_mask(0x20u) == MTL_RTS_MASK_CARRIER);
+	CHECK(mtl_rts_ray_mask(0) == 0xffu);
+	CHECK(mtl_rts_ray_mask(0x20u) == MTL_RTS_MASK_OTHER);
+	CHECK((mtl_rts_ray_mask(0) & mtl_rts_inst_mask(0)) && (mtl_rts_ray_mask(0) & mtl_rts_inst_mask(1)));
+	CHECK((mtl_rts_ray_mask(1) & mtl_rts_inst_mask(0)) && !(mtl_rts_ray_mask(1) & mtl_rts_inst_mask(1)));
+	CHECK(!(MTL_RTS_MASK_CARRIER & mtl_rts_inst_mask(0)) && (MTL_RTS_MASK_CARRIER & mtl_rts_inst_mask(4)));
 }
 
 static void
