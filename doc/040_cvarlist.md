@@ -820,8 +820,9 @@ is.
   material number, `4` the motion (red and green are half plus the motion
   in pixels over 16, blue is set where something was drawn), `5` the
   light, `6` the depth; `1` to `3` and `5` only with `r_rt_gbuffer`. `0`
-  (the default) shows the picture; a value above `6` counts as `6`, and a
-  fraction is cut to the whole number below it. Applies from the next
+  (the default) shows the picture; a value above `6` counts as `6`, a
+  value that is not a finite number counts as `0`, and a fraction is cut
+  to the whole number below it. Applies from the next
   frame.
 
 * **r_rt_gunshadow**: When set to `1`, the view weapon is part of the

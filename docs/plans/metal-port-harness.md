@@ -2664,7 +2664,11 @@ and then rebased onto `aa5ab641`, which adds TASK119 (2D options, all off by def
 FIX61 (the frame sized by the client's rule, `GLimp_DrawableInPixels`).
 
 After the rebase and the first rework, these were run again on engine commit `f0127557`
-(pin ids `f012755714a9-*`), an ancestor of the card's head:
+(pin ids `f012755714a9-*`), on base `aa5ab641`. The card was then rebased onto `5f476f88`
+(TASK11, #308), which replaces the image decoder (ImageIO for stb_image). Every stock TGA
+and PNG decodes byte for byte as before, and TASK11's own `metal` and `gl1-metal` pins match
+its base byte for byte. So that rebase changes nothing these runs measured. The
+card's own source is unchanged by it (`git range-diff` shows every commit equal):
 
 - the pins of `world`, `hud2d`, `models` (seeded) and `particles` (seeded), on both paths;
 - the render-size check, the motion-vector check and the particle-size check.
