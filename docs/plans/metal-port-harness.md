@@ -4568,8 +4568,11 @@ completion handler, printed per frame; removed before the commit) counted
 drawable pixels with alpha other than 255 at 640x480, `timedemo`
 `demo1.dm2`, per scenario of `scripts/pins/scenarios/` plus the main menu
 (`+menu_main`), the console (`+toggleconsole`), the console over the demo and
-the cinematic (`idlog.cin`), 11 s each, one run per cell, on the build from
-`22b786cd` (this branch before its rebase onto `33845c6c`, a rules document only) plus the readback. Before the fix, in both renderers, on the
+the cinematic (`idlog.cin`), 11 s each, one run per cell. The "before" rows
+ran on main at `22b786cd` (this branch's base before its rebase onto
+`33845c6c`, which adds a rules document only) plus the readback; the "after"
+rows on the earlier form of the fix plus the readback (see the end of this
+paragraph). Before the fix, in both renderers, on the
 frames of the demo (689 of them) up to 305,449 of 307,200 pixels (304,488 to
 305,449 at most across the demo scenarios) had alpha below 1 in every frame
 of every demo scenario (not traced to a draw: the SrcAlpha, OneMinusSrcAlpha
@@ -4589,8 +4592,9 @@ same alpha. After the fix, with `r_vsync 0`:
 Every cell is 0 in both renderers (20 runs of about 2,600 frames; per-run lines are
 kept outside the repository). The readback code is not in the tree: it
 changes the frame. It ran on an earlier form of this change (the pass's shader
-compiled from source on first use; a commit that is not on this branch, so not
-an ancestor of its head). The pass was since moved into the shader libraries
+compiled from source on first use), built as `945b712f` on `22b786cd`. Its
+source is this branch's `58ede1ab`, an ancestor of the head
+(`git diff 945b712f 58ede1ab -- src` is empty). The pass was since moved into the shader libraries
 and its pipeline into context creation (above); the shader and the pipeline
 state are the same, and the composited captures below, taken on the build at
 `68edb493`, are what cover the pass as it is now.
@@ -4652,9 +4656,10 @@ about 120 fps (120.0 to 120.2) in both renderers, with `r_vsync 0` and with
 `r_vsync 1`, on the build before this change as well as after it. The ceiling
 is therefore there before the change and is not the opaque layer. FIX52's
 329.7 to 348.9 at 640x480 on the same host is not reproduced by this launch
-line on either build, and why is not explained here (FIX51 is investigating
-the ceiling). The "no loss at 640x480" criterion is judged on what is
-readable: the GPU time per frame, below.
+line on either build, and why is not explained here: FIX51 (#238) carries
+the ceiling. The "no loss at 640x480" criterion is judged on what is
+readable: the pass's GPU time per frame at 1920x1080 and 5120x2880, below.
+No 640x480 row was taken.
 
 **Fullscreen, 5120x2880, `r_vsync 0`** (fps; the log says `Setting mode -1:
 5120x2880 (vid_fullscreen 1)` and `Drawable size: 5120x2880`):
@@ -4670,7 +4675,7 @@ No loss that these runs separate from their own spread.
 fullscreen with `r_vsync 0` the fps is bounded by the wait for the drawable
 (about 240 to 440), so command-buffer GPU timestamps were used: `ref_metal`'s
 own `MTL_GPU_TIME` line (the mean over command buffers; 1,724 buffers for 689
-frames, so about 2.6 buffers per frame, and the pass is in one of them), and
+frames, so about 2.5 buffers per frame, and the pass is in one of them), and
 the `gpu_ms` of the frame's command buffer printed by a probe in the shim (one
 per frame). Mean GPU milliseconds, pass disabled against pass on, three runs
 alternated, the timing lock held and no `make`, `cc`, `clang` or `quake2`
@@ -4699,7 +4704,10 @@ fullscreen 432.5 to 486.2 off, 371.4 to 374.9 on).
 1000 frames, sets `r_vsync 1`, waits 400, sets `r_vsync 0`, waits 1000 more
 (no `vid_restart`; the cfg is run with no demo loading). A temporary print
 once a second of the layer's `opaque`, `displaySyncEnabled` and the present
-rate (removed before the commit):
+rate (removed before the commit). These runs used the same earlier form as the
+readback above (`945b712f` on `22b786cd`, source equal to this branch's
+`58ede1ab`) plus the print; `rmb_set_vsync` and `mgl_layer_set_sync` have not
+changed since:
 
 | Phase | `opaque` / `displaySync` | `ref_metal` (fps, per second) | Metal-backed `gl1` |
 |---|---|---|---|
@@ -4763,11 +4771,13 @@ the same call index), unrelated to the layer: opaque against not opaque at
 the same `r_vsync` is 0 in both. `soft` was not captured: its layer is
 set by `sw_main.c` (C, no Objective-C in the file), so the probe does not
 fit there without more than a scratch edit; the `soft` window comparison is
-not made.
+not made. `soft`'s layer change is FIX52's, not this card's; its capture is
+left to a card of its own.
 
 **For FIX51 (#238).** At 1920x1080 with the layer not opaque `ref_metal`
 runs 330.8 to 346.9 fps (2.9 to 3.0 ms a frame) and the shim 238.2 to 287.1
-(3.5 to 4.2 ms) in the timedemo; 5120x2880 fullscreen reads 339 to 438 in both.
+(3.5 to 4.2 ms) in the timedemo; 5120x2880 fullscreen reads 386 to 400
+(`ref_metal`) and 371 to 386 (the shim).
 The 3 to 4 ms of fixed cost is not the opaque layer. At 640x480 the 120 fps
 ceiling is present with FIX52's launch line on the build before this change
 too, so it is not the layer and not lifted by it. The alpha pass costs about
