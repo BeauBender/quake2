@@ -21,7 +21,8 @@
 # run must exit 0 and print no path under the scratch directory, so no
 # remote URL.
 #
-# The real check then reads the tracked files: the hook holds no reset,
+# The real check then reads the hook and the settings file in this
+# checkout: the hook holds no reset,
 # rebase, checkout, switch, restore, stash, clean or pull and no merge
 # without --ff-only; .claude/settings.json registers the hook for the
 # startup and resume matchers with a timeout of at most 30 seconds, keeps
@@ -212,7 +213,8 @@ selftest()
 	done
 }
 
-( selftest ) || exit 1
+# Not on the left of ||, so set -e holds inside: a failed setup step stops it.
+( selftest )
 
 # The hook runs no git command that can rewrite history or drop changes,
 # and merges only by fast-forward: a git subcommand (after any -c, -C or
