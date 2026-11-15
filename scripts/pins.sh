@@ -1586,6 +1586,29 @@ st_framediff_block() { # C-I3: a 77x77 block of 255 in 640x480 keeps the mean lo
     if "$diff" "$tmp/big.tga" "$tmp/bigblock.tga" >/dev/null; then st_fail "a 77x77 defect in 640x480 must fail at the default thresholds"; return 1; fi
     "$diff" "$tmp/big.tga" "$tmp/bigblock.tga" --bad-threshold 0.05 >/dev/null || st_fail "the 77x77 defect must pass with --bad-threshold 0.05 (the mean is under 0.02)" || return 1
 }
+st_framediff_mask() { # RT2 (TASK54): --mask limits the comparison to the pixels the mask marks
+    "$diff" --block "$tmp/a.tga" "$tmp/mdefect.tga" 8 8 16 16 255
+    "$diff" --block "$tmp/a.tga" "$tmp/mall.tga" 0 0 64 48 255
+    "$diff" --block "$tmp/mall.tga" "$tmp/mout.tga" 8 8 16 16 0
+    "$diff" --block "$tmp/a.tga" "$tmp/mnone.tga" 0 0 64 48 0
+    "$diff" --block "$tmp/mnone.tga" "$tmp/min.tga" 8 8 16 16 255
+    if "$diff" "$tmp/a.tga" "$tmp/mdefect.tga" >/dev/null; then st_fail "a 16x16 defect in 64x48 must fail unmasked"; return 1; fi
+    "$diff" "$tmp/a.tga" "$tmp/mdefect.tga" --mask "$tmp/mout.tga" | grep -q '^score=0.000000 .*bad=0.000000 .*masked=2816$' ||
+        st_fail "the defect must not count where the mask leaves it out (2816 pixels marked)" || return 1
+    if "$diff" "$tmp/a.tga" "$tmp/mdefect.tga" --mask "$tmp/min.tga" >/dev/null; then st_fail "the defect must fail where the mask marks it"; return 1; fi
+    "$diff" "$tmp/a.tga" "$tmp/mdefect.tga" --mask "$tmp/min.tga" | grep -q 'bad=1.000000 .*masked=256$' ||
+        st_fail "every marked pixel of the defect is bad" || return 1
+    # the score is the mean over the marked pixels, not over the frame: 0.73 over the 256, 0.06 over all 3072
+    if "$diff" "$tmp/a.tga" "$tmp/mdefect.tga" --mask "$tmp/min.tga" --threshold 0.5 --bad-threshold 1 >/dev/null; then
+        st_fail "the masked score is the mean over the marked pixels"; return 1; fi
+    "$diff" "$tmp/a.tga" "$tmp/mdefect.tga" --mask "$tmp/mall.tga" | grep -q 'masked=3072$' || st_fail "a full mask marks every pixel" || return 1
+    "$diff" "$tmp/a.tga" "$tmp/mdefect.tga" --mask "$tmp/mnone.tga" | grep -q '^score=0.000000 .*masked=0$' ||
+        st_fail "an empty mask compares nothing and passes" || return 1
+    local rc=0; "$diff" "$tmp/a.tga" "$tmp/mdefect.tga" --mask "$tmp/d.tga" >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 3 ] || st_fail "a mask of another size must be a size mismatch (3), not $rc" || return 1
+    rc=0; "$diff" "$tmp/a.tga" "$tmp/mdefect.tga" --mask >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 1 ] || st_fail "--mask without a file must be a usage error (1), not $rc" || return 1
+}
 st_compare_basic() {
     fixture gl1 ref "$tmp/a.tga"; fixture metal "$cid" "$tmp/b.tga"
     cmd_compare metal world --ref gl1 >/dev/null || st_fail "compare must pass on a near-identical frame" || return 1
@@ -2468,7 +2491,7 @@ cmd_selftest() {
     cid=$(run_id world 1)
     tver=$(src_define src/client/vid/header/refrecord.h REFREC_VERSION); tapi=$(src_define src/client/vid/header/ref.h API_VERSION)
     [ -n "$tver" ] && [ -n "$tapi" ] || die "selftest: cannot read REFREC_VERSION and API_VERSION"
-    local c failed="" cases="framediff framediff_block compare_basic compare_bad_threshold ref_mtime missing_frame self_compare
+    local c failed="" cases="framediff framediff_block framediff_mask compare_basic compare_bad_threshold ref_mtime missing_frame self_compare
         two_runs incomplete record_engine timeout fallback names cmdline thresholds scenarios argcount frame_failed list
         scenario_lines store_place fast_fail demo_name replace engine_id metal_shim usage hidpi
         replay_args replay_pick replay_refused replay_header replay_place replay_run replay_keep replay_fail replay_compare

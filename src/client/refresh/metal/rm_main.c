@@ -34,6 +34,7 @@
 
 #include "header/local.h"
 #include "header/rm_rtscene.h"
+#include "header/rm_gbufscene.h"
 #include "common/mtl_matrix.h"
 
 refimport_t ri;
@@ -334,6 +335,7 @@ RI_Init(void)
 	R_InitBuiltinTextures();
 	RM_InitDraw();
 	RM_RT_Init(&caps);   /* the r_rt_* cvars (TASK53); builds nothing */
+	RM_GB_Init();        /* the G-buffer's development cvars (TASK54) */
 
 	ri.Vid_MenuInit();
 	return true;
@@ -674,11 +676,11 @@ R_PolyBlend(void)
 }
 
 /*
- * from gl1_main.c. The dynamic lights are the renderer's checked copy
- * from here on (R_TakeDlights)
+ * from gl1_main.c, R_RenderView up to its draws. The dynamic lights are
+ * the renderer's checked copy from here on (R_TakeDlights)
  */
 static void
-R_RenderView(refdef_t *fd)
+R_RenderViewSetup(refdef_t *fd)
 {
 	r_newrefdef = *fd;
 	R_TakeDlights();
@@ -694,6 +696,12 @@ R_RenderView(refdef_t *fd)
 	R_SetupFrame();
 	R_SetFrustum(vup, vpn, vright, r_origin, r_newrefdef.fov_x, r_newrefdef.fov_y, frustum);
 	R_SetupGL();
+}
+
+/* from gl1_main.c, R_RenderView's draws */
+static void
+R_RenderViewDraw(void)
+{
 	R_ClearNoWorld();
 
 	if (!(r_newrefdef.rdflags & RDF_NOWORLDMODEL))
@@ -717,6 +725,137 @@ R_RenderView(refdef_t *fd)
 }
 
 static void
+R_RenderView(refdef_t *fd)
+{
+	R_RenderViewSetup(fd);
+	R_RenderViewDraw();
+}
+
+/*
+ * The passes of a GBUFFER view that draw an entity (RT2, TASK54;
+ * rm_gb_entity_split): the raster the opaque alias and brush models but
+ * the view weapon, a beam and a shell, the forward pass over the resolved
+ * image every other one and the shadows of the raster's alias models.
+ */
+static int
+R_EntitySplit(const entity_t *e)
+{
+	const model_t *m = e->model;
+	int kind = RM_GB_KIND_NONE;
+
+	if (m)
+	{
+		kind = (m->type == mod_alias) ? RM_GB_KIND_ALIAS : (m->type == mod_brush) ? RM_GB_KIND_BRUSH : RM_GB_KIND_OTHER;
+	}
+
+	return rm_gb_entity_split(e->flags, kind, gl_shadows->value);
+}
+
+/*
+ * R_DrawEntitiesOnList split at the resolve: raster 1 draws the raster's
+ * entities (an alias model without its shadow), raster 0 the forward
+ * pass's: the other opaque ones and the shadows of the raster's alias
+ * models, then the translucent ones as R_DrawEntitiesOnList, each in
+ * list order. The stock order holds within each pass only: every
+ * rastered model is drawn before any draw of the forward pass, so a beam
+ * or a stencil shadow comes after all of them.
+ */
+static void
+R_DrawEntitiesSplit(int raster)
+{
+	int i, n, depth_write;
+
+	if (!r_drawentities->value)
+	{
+		return;
+	}
+
+	n = rm_entity_count(r_newrefdef.num_entities);
+
+	for (i = 0; i < n; i++)
+	{
+		const entity_t *e = &r_newrefdef.entities[i];
+		int split;
+
+		if (e->flags & RF_TRANSLUCENT)
+		{
+			continue;
+		}
+
+		depth_write = 1;
+		split = R_EntitySplit(e);
+
+		if (raster ? (split & RM_GB_ENT_RASTER) : (split & RM_GB_ENT_FORWARD))
+		{
+			R_AliasPassMode(raster ? RM_ALIAS_MODEL : RM_ALIAS_ALL);
+			R_DrawEntity(e, &depth_write);
+		}
+		else if (!raster && (split & RM_GB_ENT_SHADOW))
+		{
+			R_AliasPassMode(RM_ALIAS_SHADOW);
+			R_DrawEntity(e, &depth_write);
+		}
+	}
+
+	R_AliasPassMode(RM_ALIAS_ALL);
+
+	if (raster)
+	{
+		return;
+	}
+
+	depth_write = 0;
+
+	for (i = 0; i < n; i++)
+	{
+		if (r_newrefdef.entities[i].flags & RF_TRANSLUCENT)
+		{
+			R_DrawEntity(&r_newrefdef.entities[i], &depth_write);
+		}
+	}
+}
+
+/*
+ * A world view on the MOTION or GBUFFER path (RT2, TASK54; design
+ * section 3): the G-buffer raster of the world and the raster's
+ * entities, the lighting resolve, then the forward pass of the other
+ * entities, the flash blobs, the particles, the translucent surfaces and
+ * the screen blend over the resolved image; MOTION draws the stock view
+ * into a pass with the motion attachment. Where the view cannot be
+ * opened it is the stock one.
+ */
+static void
+R_RenderViewGB(refdef_t *fd, int stencil)
+{
+	R_RenderViewSetup(fd);
+
+	if (!RM_GB_Begin(&r_view, stencil, r_clear->value ? rm_clear_color : NULL))
+	{
+		rmb_pass_3d(stencil);
+		R_RenderViewDraw();
+		return;
+	}
+
+	if (RM_GB_Path() == RM_GB_PATH_MOTION)
+	{
+		R_RenderViewDraw();
+		RM_GB_End();
+		return;
+	}
+
+	R_MarkLeaves();
+	R_DrawWorld(&r_view);
+	R_DrawEntitiesSplit(1);
+	RM_GB_Resolve();
+	R_DrawEntitiesSplit(0);
+	R_RenderDlights(&r_view);
+	R_DrawParticles(&r_view);
+	R_DrawAlphaSurfaces(&r_view);
+	R_PolyBlend();
+	RM_GB_End();
+}
+
+static void
 RI_RenderFrame(refdef_t *fd)
 {
 	RM_Flush2D();   /* menu rendering when needed */
@@ -737,6 +876,13 @@ RI_RenderFrame(refdef_t *fd)
 	 * bits), and no 2D draw writes depth or stencil before the view, so a
 	 * clear here gives the same.
 	 */
+	if (RM_GB_Choose(fd) != RM_GB_PATH_FORWARD)
+	{
+		R_RenderViewGB(fd, (gl_shadows->value && gl1_stencilshadow->value) ? 1 : 0);
+		R_SetLightLevel(NULL);
+		return;
+	}
+
 	rmb_pass_3d((gl_shadows->value && gl1_stencilshadow->value) ? 1 : 0);
 	R_RenderView(fd);
 	R_SetLightLevel(NULL);

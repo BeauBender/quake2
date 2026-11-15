@@ -11,10 +11,15 @@
  * the fraction of pixels whose largest channel difference exceeds 8/255,
  * so a large localized defect fails even when the mean stays low.
  *
+ * With --mask M.tga (RT2, TASK54) only the pixels M marks count (any of
+ * its three channels above 0): score is the mean over those pixels' channels
+ * and bad the fraction of them, "masked=<n>" ends the line, and a mask
+ * that marks nothing passes. M must have the frames' size (3 otherwise).
+ *
  * Reads uncompressed 24/32-bit TGA (type 2), the format the engine's pin
  * capture writes. Portable C99, no dependencies: cc -O2 -o framediff framediff.c
  *
- *   framediff A.tga B.tga [--threshold T] [--bad-threshold B]
+ *   framediff A.tga B.tga [--threshold T] [--bad-threshold B] [--mask M.tga]
  *                                             compare (default T = 0.02, B = 0.005)
  *   framediff --gen OUT.tga W H SEED          deterministic synthetic frame
  *   framediff --perturb IN.tga OUT.tga AMOUNT  shift every channel by AMOUNT
@@ -78,9 +83,15 @@ int main(int argc, char **argv)
 			for (int c = 0; c < 3; c++) f.px[((size_t)y * f.w + x) * f.bpp + c] = (unsigned char)v;
 		return write_tga(argv[3], &f) ? 0 : 1;
 	}
-	if (argc < 3) { fprintf(stderr, "usage: framediff A.tga B.tga [--threshold T] [--bad-threshold B] | --gen OUT W H SEED | --perturb IN OUT AMOUNT | --block IN OUT X Y W H V\n"); return 1; }
+	if (argc < 3) { fprintf(stderr, "usage: framediff A.tga B.tga [--threshold T] [--bad-threshold B] [--mask M.tga] | --gen OUT W H SEED | --perturb IN OUT AMOUNT | --block IN OUT X Y W H V\n"); return 1; }
 	double threshold = 0.02, bad_threshold = 0.005;
+	const char *mask_path = NULL;
 	for (int i = 3; i < argc; i++) {
+		if (!strcmp(argv[i], "--mask")) {
+			if (i + 1 >= argc) { fprintf(stderr, "framediff: --mask needs a file\n"); return 1; }
+			mask_path = argv[++i];
+			continue;
+		}
 		double *dst = !strcmp(argv[i], "--threshold") ? &threshold : !strcmp(argv[i], "--bad-threshold") ? &bad_threshold : NULL;
 		char *end;
 		if (!dst || i + 1 >= argc) { fprintf(stderr, "framediff: unknown or incomplete option %s\n", argv[i]); return 1; }
@@ -90,9 +101,16 @@ int main(int argc, char **argv)
 	frame_t a, b;
 	if (!read_tga(argv[1], &a) || !read_tga(argv[2], &b)) return 3;
 	if (a.w != b.w || a.h != b.h) { fprintf(stderr, "framediff: size mismatch %dx%d vs %dx%d\n", a.w, a.h, b.w, b.h); return 3; }
-	double sum = 0; int maxd = 0; size_t bad = 0, npx = (size_t)a.w * a.h;
+	frame_t m = {0, 0, 0, NULL};
+	if (mask_path) {
+		if (!read_tga(mask_path, &m)) return 3;
+		if (m.w != a.w || m.h != a.h) { fprintf(stderr, "framediff: mask size mismatch %dx%d vs %dx%d\n", m.w, m.h, a.w, a.h); return 3; }
+	}
+	double sum = 0; int maxd = 0; size_t bad = 0, npx = (size_t)a.w * a.h, marked = 0;
 	for (size_t i = 0; i < npx; i++) {
 		int worst = 0;
+		if (m.px && !(m.px[i * m.bpp] | m.px[i * m.bpp + 1] | m.px[i * m.bpp + 2])) continue;
+		marked++;
 		for (int c = 0; c < 3; c++) {
 			int d = abs((int)a.px[i * a.bpp + c] - (int)b.px[i * b.bpp + c]);
 			sum += d; if (d > worst) worst = d;
@@ -100,7 +118,9 @@ int main(int argc, char **argv)
 		if (worst > maxd) maxd = worst;
 		if (worst > 8) bad++;
 	}
-	double score = sum / (npx * 3.0 * 255.0), badf = (double)bad / npx;
-	printf("score=%.6f max=%d bad=%.6f w=%d h=%d threshold=%.6f bad_threshold=%.6f\n", score, maxd, badf, a.w, a.h, threshold, bad_threshold);
+	double score = marked ? sum / (marked * 3.0 * 255.0) : 0, badf = marked ? (double)bad / marked : 0;
+	printf("score=%.6f max=%d bad=%.6f w=%d h=%d threshold=%.6f bad_threshold=%.6f", score, maxd, badf, a.w, a.h, threshold, bad_threshold);
+	if (m.px) printf(" masked=%zu", marked);
+	printf("\n");
 	return (score <= threshold && badf <= bad_threshold) ? 0 : 2;
 }

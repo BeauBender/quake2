@@ -37,12 +37,25 @@
  */
 
 #include "header/local.h"
+#include "header/rm_gbufscene.h"
 #include "common/mtl_matrix.h"
 
 /* gl1's s_lerped, and one draw's vertices and indices (the ring region's contents) */
 static float s_lerped[RM_MD2_MAX_VERTS][4];
 static rm_avert_t s_verts[RM_ALIAS_MAX_VERTS];
 static unsigned short s_idx[RM_ALIAS_MAX_INDICES];
+
+/* the G-buffer's (TASK54): the previous frame's lerped vertices, each drawn vertex's xyz index and its data */
+static float s_prev[RM_MD2_MAX_VERTS][4];
+static unsigned short s_map[RM_ALIAS_MAX_VERTS];
+static rm_gb_avx_t s_avx[RM_ALIAS_MAX_VERTS];
+static int s_pass_mode = RM_ALIAS_ALL;
+
+void
+R_AliasPassMode(int mode)
+{
+	s_pass_mode = mode;
+}
 
 /* frame f of a model rm_md2_check accepted (f is bounded by rm_alias_frames before) */
 static const daliasframe_t *
@@ -121,9 +134,69 @@ R_DrawAliasShadow(const entity_t *e, const rm_view_t *view, long nv, long ni)
 }
 
 /*
+ * The G-buffer's data of an alias draw (TASK54): the previous frame's
+ * position of each of its nv vertices, from the matched entity's frames,
+ * lerp, origin and angles lerped as this frame's (s_lerped when it has no
+ * match), and each vertex's lerped light normal; then the entity's
+ * motion uniforms, vm its modelview now, wproj the view weapon's
+ * projection (unjittered) or NULL.
+ */
+static void
+R_AliasMotion(const entity_t *cur, const entity_t *e, const dmdl_t *paliashdr, int shell, long nv,
+		const float *vm, const float *wproj)
+{
+	const rm_gb_ent_t *p = RM_GB_Prev(cur);
+	const daliasframe_t *frame = R_AliasFrame(paliashdr, e->frame), *oldframe = R_AliasFrame(paliashdr, e->oldframe);
+	long n;
+
+	if (p && rm_entity_floats_ok(p->origin, p->oldorigin, p->angles, p->backlerp, 1.0f))
+	{
+		const daliasframe_t *pf, *pof;
+		vec3_t delta, vectors[3], move, frontv, backv;
+		int f = p->frame, of = p->oldframe;
+		float backlerp = r_lerpmodels->value ? p->backlerp : 0;
+
+		if (!(p->flags & RF_WEAPONMODEL))
+		{
+			rm_alias_frames(&f, &of, paliashdr->num_frames, 1);
+		}
+
+		rm_alias_frames(&f, &of, paliashdr->num_frames, 0);
+		pf = R_AliasFrame(paliashdr, f);
+		pof = R_AliasFrame(paliashdr, of);
+		VectorSubtract(p->oldorigin, p->origin, delta);
+		AngleVectors(p->angles, vectors[0], vectors[1], vectors[2]);
+		rm_alias_lerp_setup(pf->scale, pf->translate, pof->scale, pof->translate, backlerp, delta,
+				vectors[0], vectors[1], vectors[2], move, frontv, backv);
+		rm_alias_lerp(paliashdr->num_xyz, (const byte *)pf->verts, (const byte *)pof->verts, shell, move, frontv,
+				backv, s_prev);
+	}
+	else
+	{
+		memcpy(s_prev, s_lerped, (size_t)paliashdr->num_xyz * sizeof(s_prev[0]));
+	}
+
+	n = rm_gb_alias_map((const int *)((const byte *)paliashdr + paliashdr->ofs_glcmds), paliashdr->num_glcmds,
+			paliashdr->num_xyz, s_map, RM_ALIAS_MAX_VERTS);
+
+	if ((n == nv) && rm_gb_alias_extra(s_map, nv, paliashdr->num_xyz, (const float (*)[4])s_prev,
+			(const byte *)frame->verts, (const byte *)oldframe->verts, e->backlerp, s_avx))
+	{
+		rmb_gbuf_set_alias_extra(s_avx, (unsigned)nv);
+	}
+	else
+	{
+		rmb_gbuf_set_alias_extra(NULL, 0);
+	}
+
+	RM_GB_EntityMotion(cur, vm, 0, wproj);
+}
+
+/*
  * from gl1_mesh.c and gl1_buffer.c (buf_alias): draws the entity, in the
  * pass whose depth writes are depth_write (gl1's glDepthMask). 0 when a
  * model or entity value is refused or the draw is (the caller counts it).
+ * R_AliasPassMode can leave out the model or the shadow (TASK54).
  */
 int
 R_DrawAliasModel(const entity_t *currententity, const model_t *currentmodel, const rm_view_t *view, int depth_write)
@@ -132,7 +205,7 @@ R_DrawAliasModel(const entity_t *currententity, const model_t *currentmodel, con
 	const daliasframe_t *frame, *oldframe;
 	entity_t e;
 	vec3_t shadelight, point, delta, vectors[3], move, frontv, backv;
-	float a[3], mv[16], wproj[16], mvp[16];
+	float a[3], mv[16], wproj[16], wproj_u[16], mvp[16];
 	const float *proj = view->proj;
 	const image_t *skin;
 	rmb_alias_draw_t d;
@@ -245,6 +318,7 @@ R_DrawAliasModel(const entity_t *currententity, const model_t *currentmodel, con
 		rm_weapon_projection(wproj, r_newrefdef.fov_y, r_gunfov->value, gl_lefthand->value, r_newrefdef.width,
 				r_newrefdef.height, gl_znear->value, r_farsee->value != 0, (r_newrefdef.rdflags & RDF_UNDERWATER) != 0,
 				r_newrefdef.time, gl1_waterwarp->value);
+		RM_GB_JitterProj(wproj, wproj_u);   /* jittered as the view's on a MOTION or GBUFFER view (TASK54) */
 		proj = wproj;
 	}
 
@@ -264,10 +338,22 @@ R_DrawAliasModel(const entity_t *currententity, const model_t *currentmodel, con
 	d.cull = rm_alias_cull_mode(view->cull, e.flags, gl_lefthand->value);
 	rm_alias_depth(e.flags, &d.znear, &d.zfar);
 
-	ok = rmb_draw_alias(s_verts, (unsigned)nv, s_idx, (unsigned long)ni, &d, mvp, &view->vp);
+	ok = 1;
+
+	if (s_pass_mode != RM_ALIAS_SHADOW)
+	{
+		if (RM_GB_Path() != RM_GB_PATH_FORWARD)
+		{
+			R_AliasMotion(currententity, &e, paliashdr, shell, nv, mv, (e.flags & RF_WEAPONMODEL) ? wproj_u : NULL);
+		}
+
+		ok = rmb_draw_alias(s_verts, (unsigned)nv, s_idx, (unsigned long)ni, &d, mvp, &view->vp);
+		RM_GB_WorldMotion(MTL_GB_MAT_WORLD);
+	}
 
 	/* gl1 draws the shadow after the model, never for a translucent one or the view weapon */
-	if (rm_shadow_drawn(e.flags, gl_shadows->value) && !R_DrawAliasShadow(&e, view, nv, ni))
+	if ((s_pass_mode != RM_ALIAS_MODEL) && rm_shadow_drawn(e.flags, gl_shadows->value) &&
+		!R_DrawAliasShadow(&e, view, nv, ni))
 	{
 		ok = 0;
 	}

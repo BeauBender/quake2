@@ -102,7 +102,9 @@ rmb_watch(id<MTLCommandBuffer> cmd)
 
 		if (timing && b.status == MTLCommandBufferStatusCompleted)
 		{
-			fprintf(stderr, "ref_metal: gpu_ms %.4f\n", (b.GPUEndTime - b.GPUStartTime) * 1000.0);
+			/* the frame's last command buffer says so (TASK54): its GPU time apart from the uploads' */
+			fprintf(stderr, "ref_metal: gpu_ms %.4f%s\n", (b.GPUEndTime - b.GPUStartTime) * 1000.0,
+					[b.label isEqualToString:@"ref_metal frame"] ? " frame" : "");
 		}
 
 		if (b.status != MTLCommandBufferStatusError)
