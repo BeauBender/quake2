@@ -4529,3 +4529,137 @@ and `!(cap <=` for `!(cap <`: they differ only where `cap` is exactly
 `RM_POINT_ALIASED_MAX`, where both branches give that value). One form of the mode
 test the compiler refused for an unused operand was re-run in a form that compiles
 and is killed.
+
+## The opaque layer of `ref_metal` and the shim (FIX53)
+
+FIX52 (#239) found that an opaque `CAMetalLayer` of about 1720x700 points
+or more is shown once per display refresh whatever `displaySyncEnabled`
+says, and that only `opaque = NO` lifts it (section "The 60 fps cap at
+1920x1080 windowed (FIX52)"). FIX53 (#250) applies it to `ref_metal` and the
+Metal-backed `gl1`.
+
+**The change.** The layer's `opaque` follows display sync: `NO` with
+`r_vsync 0`, `YES` with `r_vsync 1`, set where `displaySyncEnabled` is set,
+at creation and at the runtime toggle (`rmb_attach` and `rmb_set_vsync` in
+`src/client/refresh/metal/rmb_device.m`; `mgl_layer_create` and
+`mgl_layer_set_sync` in `src/client/refresh/gl1/metal/mgl_layer.m`). No pure
+helper: the rule is one assignment from the value beside it, nothing a host
+test could hold that the readback below does not. The alpha precondition
+needed a change (below): `rmb_frame_end` in
+`src/client/refresh/metal/rmb_encode.m` (after the present blit) and
+`mgl_layer_present` in `mgl_layer.m` (before the present) run a render pass
+that writes alpha 1, and only alpha (colour write mask alpha, a
+three-vertex triangle), over the drawable while the layer is not opaque.
+Its two-function shader is compiled from source on first use, so
+`rm_shaders.metal` and `shaders.metal` are untouched; the pipeline is a
+ledger state of `ref_metal` and released with the targets (the teardown line
+reads `state 46/46`). With `r_vsync 1` the layer is opaque, ignores alpha,
+and the pass does not run.
+
+**The drawable's alpha was not 1.** A temporary readback (a blit of the
+drawable into a shared buffer in the frame's command buffer, counted in its
+completion handler, printed per frame; removed before the commit) counted
+drawable pixels with alpha other than 255 at 640x480, `timedemo`
+`demo1.dm2`, per scenario of `scripts/pins/scenarios/` plus the main menu
+(`+menu_main`), the console (`+toggleconsole`), the console over the demo and
+the cinematic (`idlog.cin`), 11 s each, one run per cell, on the build from
+`22b786cd` plus the readback. Before the fix, in both renderers, on the
+frames of the demo (689 of them) up to 305,449 of 307,200 pixels (304,488 to
+305,449 at most across the demo scenarios) had alpha below 1 in every frame
+of every demo scenario (not traced to a draw: the SrcAlpha, OneMinusSrcAlpha
+blend factors of the blended draws are applied to alpha too, which cannot
+keep it at 1); the menu had up to 273,358 in every frame, the console
+304,530 in 274 to 275 of its 711 to 712 frames, the cinematic 304,530 in
+its first frame. `ref_metal` and the shim agree to the pixel on `world` and
+`skywater` (208,327,326 pixels over 689 frames each), as they draw the
+same alpha. After the fix, with `r_vsync 0`:
+
+| Scenario | Frames read, `ref_metal` / shim | Pixels with alpha below 1 |
+|---|---|---|
+| `world`, `hud2d`, `particles`, `models`, `dlights`, `skywater` | 2,448 to 2,610 | 0 |
+| main menu, console, console over the demo | 2,368 to 2,610 | 0 |
+| cinematic | 2,608 | 0 |
+
+Every cell is 0 in both renderers (20 runs of about 2,600 frames; per-run lines are
+kept outside the repository). The readback code is not in the tree: it
+changes the frame, and it was run on the build at `945b712f`.
+
+**Before and after** (`timedemo` of `demo1.dm2`, windowed,
+`+set vid_highdpiaware 0`, three runs per cell, alternated run by run, `fps`
+line of the log, each run killed after 15 s; screen unlocked and no other
+`quake2` before each run; timing lock held; `uptime` at the start `9:42
+load averages: 2.96 3.34 2.84`, at the end `9:54 load averages: 2.33 2.53
+2.61`, the one-minute load before each run 2.01 to 2.97, so not the quiet
+host of FIX52). Before is main at `22b786cd`; after is `945b712f` (the
+fix; an ancestor of this branch's head, only this section follows it):
+
+| Renderer | Size | `r_vsync` | Before (fps) | After (fps) |
+|---|---|---|---|---|
+| `ref_metal` | 1920x1080 | 0 | 60.0 | 327.2 to 351.0 |
+| `ref_metal` | 1920x1080 | 1 | 59.9 to 60.0 | 59.9 to 60.0 |
+| `ref_metal` | 640x480 | 0 | 120.0 to 120.1 | 120.0 to 120.2 |
+| `ref_metal` | 640x480 | 1 | 120.0 to 120.1 | 120.0 |
+| Metal-backed `gl1` | 1920x1080 | 0 | 60.1 | 277.0 to 305.1 |
+| Metal-backed `gl1` | 1920x1080 | 1 | 60.1 | 60.1 |
+| Metal-backed `gl1` | 640x480 | 0 | 120.2 | 120.1 to 120.2 |
+| Metal-backed `gl1` | 640x480 | 1 | 120.1 to 120.2 | 120.2 |
+
+At 1920x1080 the cap is gone with `r_vsync 0` and `r_vsync 1` stays at 60. At
+640x480 nothing changed, and both read 120 with `r_vsync 0` and `r_vsync 1`,
+before and after: that is the windowed ~120 fps ceiling TASK108 found at 640x480
+and 1280x720 (its re-measurement section), which is not the opaque layer and
+is not lifted by it. FIX52's scratch numbers at 640x480 (329.7 to 348.9) do
+not agree with this; the difference is not explained here.
+
+**The runtime toggle.** One session each, 1920x1080 windowed, started with
+`r_vsync 1`, `+toggleconsole +exec` a cfg that sets `r_vsync 0`, waits about
+1000 frames, sets `r_vsync 1`, waits 400, sets `r_vsync 0`, waits 1000 more
+(no `vid_restart`; the cfg is run with no demo loading). A temporary print
+once a second of the layer's `opaque`, `displaySyncEnabled` and the present
+rate (removed before the commit):
+
+| Phase | `opaque` / `displaySync` | `ref_metal` (fps, per second) | Metal-backed `gl1` |
+|---|---|---|---|
+| `r_vsync 0` | 0 / 0 | 205.0 to 272.8 (35 s) | 238.9 to 283.6 (35 s) |
+| `r_vsync 1` | 1 / 1 | 60.0 (9 s) | 60.0 (8 s) |
+| `r_vsync 0` | 0 / 0 | 267.7 to 284.9 (12 s) | 242.2 to 268.6 (13 s) |
+
+The first second after each switch is left out (it straddles the change);
+both flips took effect at once, in both directions.
+
+**Pins.** All six scenarios of the table above except the cinematic
+(`world`, `hud2d`, `particles`, `models`, `dlights`, `skywater`; `PINS_SEED=1`;
+the default 640x480, `r_vsync` as the harness leaves it) were recorded for
+`metal` and `gl1-metal` from main's sources (`22b786cd`, the three files
+restored to it) and from this branch, and compared at `--threshold 0
+--bad-threshold 0`: 12 comparisons, 23 frames each, 0 failed, worst score 0,
+worst bad 0, and all 276 frame files byte for byte equal (`cmp`). A pin
+captures the offscreen target and runs at the harness's default sync, where
+the new pass does not run; the alpha readback above is what covers the
+pass.
+
+**Validation.** One `ref_metal` run under `MTL_DEBUG_LAYER=1` at 1920x1080
+with `r_vsync 0` (the pass running), `particles`: 689 frames at 251.3 fps,
+one line with `Metal`, `Metal API Validation Enabled`, and no validation
+message; teardown `0 live objects ... 0 unreleased, 0 unmatched`. (Another
+`quake2` of another lane was in the process list at its start; the run was
+not touched by it.)
+
+**The composited window: not captured.** `screencapture -x -o -l <window id>`
+(the id from a small CoreGraphics program) fails here with `could not create
+image from window`, and `screencapture -x` of the display with `could not
+create image from display`: the session has no Screen Recording permission.
+No setting was changed. The window comparison (opaque against not opaque,
+for `ref_metal`, the shim and `soft`) is left for the owner; the alpha
+readback is the proof that the two layers show the same pixels, as alpha 1
+makes a non-opaque layer composite to the colour written. Not measured: the
+`soft` window itself.
+
+**For FIX51 (#238).** At 1920x1080 with the layer not opaque `ref_metal`
+runs 327.2 to 351.0 fps (2.9 to 3.1 ms a frame) and the shim 277.0 to 305.1
+(3.3 to 3.6 ms) in the timedemo, about 250 to 285 fps on the idle console;
+the 3 to 4 ms of fixed cost is not the opaque layer. At 640x480 the 120 fps
+ceiling above hides whatever the layer cost there (FIX52 put it at 0.4 to
+0.9 ms), so no per-frame cost under 8.3 ms can be read at that size on this
+host. The alpha pass is one extra full-drawable pass per frame when the
+layer is not opaque; its cost was not isolated.
