@@ -808,8 +808,8 @@ def rng(v, nd=1, unit=""):
 EXTERNAL_PATTERNS = [
     r"(?i)(https?:)?//[a-z0-9]", r"(?i)<link\b", r"(?i)@import", r"(?i)<script[^>]*\bsrc\s*=",
     r"(?i)<iframe\b", r"(?i)<object\b", r"(?i)<embed\b", r"(?i)\bsrcset\s*=",
-    r"(?i)\burl\(\s*['\"]?(?!data:)", r"(?i)\bhref\s*=\s*['\"]?(?!#)",
-    r"(?i)\bsrc\s*=\s*['\"]?(?!data:image/png;base64,)", r"(?i)<base\b", r"(?i)\bformaction\b",
+    r"(?i)\burl\(\s*(?!['\"]?data:)", r"(?i)\bhref\s*=\s*(?!['\"]?#)",
+    r"(?i)\bsrc\s*=\s*(?!['\"]?data:image/png;base64,)", r"(?i)<base\b", r"(?i)\bformaction\b",
 ]
 
 
@@ -898,6 +898,10 @@ def build_report(rdir, others, out_html):
         for r in h["res"]:
             if r["option"] not in optorder:
                 optorder.append(r["option"])
+    for h in hosts:  # an option another host could not run still has its row, saying why
+        for s in h["skipped"]:
+            if s["option"] != "*" and s["option"] not in optorder:
+                optorder.append(s["option"])
     optorder.sort(key=lambda o: (o != "native", o))
     label_of = {"native": "native size, r_metalfx 0 (reference)"}
     try:
