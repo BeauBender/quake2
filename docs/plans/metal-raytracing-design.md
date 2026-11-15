@@ -873,7 +873,7 @@ one cell. Restated over the matrix:
 
 | Option | Primary cell (5120 x 2880, 60 Hz, every effect on) | Elsewhere in the matrix | Built by | Image quality from |
 |---|---|---|---|---|
-| A: whole 3D frame at an internal size, temporal scaler, RT7 kept (TASK105's choice) | 7.3 ms sum, 9.3 ms frame (M); 7.4 to 9.3 ms left for unmeasured work | rays measured or modelled in every apple9 cell; the scaler measured only at this output | RT11 | TASK117 (raster, now), RT12 |
+| A: whole 3D frame at an internal size, temporal scaler, RT7 kept (TASK105's choice) | 7.3 ms sum, 9.3 ms frame (M); 7.4 to 9.3 ms left for unmeasured work | rays measured or modelled in every apple9 cell; the scaler measured only at this output | RT11 | TASK117 (now: a pessimistic bound on A's raster loss, from the spatial scaler), RT12 |
 | B: as A, the denoised scaler in place of RT7 and the scaler | 17.6 ms sum, 18.9 ms frame (M): over the frame before raster or resolve | not measured | TASK113 (#267), selectable for comparison | RT12, where selectable |
 | C: trace at the output, accept a rate below the refresh | 36.8 ms (M), over by 20.1 | leaves time at 1920 x 1080 and 2560 x 1440 at 60 Hz (M); over on every larger class and both 120 Hz classes | C is A or E at scale 1; no card of its own | the reference itself |
 | D: the frame interpolator on another option | not timed; presents generated frames between rendered ones. The policy counts only the rendered frames under D (item 1): the GPU time per rendered frame, the interpolator's work included, and the rendered rate. So D holds a cell only where the option under it does, with the interpolator's cost added, and each rendered frame reaches the screen later | not measured | TASK111 (#265), a development option, off by default | TASK114's local report |
@@ -883,9 +883,9 @@ one cell. Restated over the matrix:
 
 Decision: open. It settles on image-quality data, which RT12 (TASK110,
 #264) produces on ray-traced frames once RT11 (TASK109, #263) and RT13
-have landed, with TASK117 (#272) giving A's raster loss now and TASK114
-(#268) the owner's local side-by-side report from the selectable modes
-of TASK111 to TASK113. Until then the subsection above describes A as
+have landed, with TASK117 (#272) giving now a pessimistic bound on A's
+raster loss from the spatial scaler and TASK114 (#268) the owner's local
+side-by-side report from the selectable modes of TASK111 to TASK113. Until then the subsection above describes A as
 RT11 builds it, and RT13 builds E, so that both can be measured; neither
 is the decision, and nothing is recorded in `docs/decisions/`.
 
