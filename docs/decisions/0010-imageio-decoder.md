@@ -11,7 +11,8 @@ with a GIF decoder that has an unpatched heap overflow, CVE-2026-5185) and
 `stb_image_resize.h`, keep only the native PCX, WAL, M8 and M32 loaders,
 and add a native TGA loader only if the stock data needs one. That would
 also remove every PNG, JPEG and TGA replacement that `r_retexturing` loads
-(`LoadHiColorImage` in [`stb.c`](../../src/client/refresh/files/stb.c)).
+(`LoadHiColorImage` in `stb.c`, since TASK11
+[`image.c`](../../src/client/refresh/files/image.c)).
 
 The high-resolution plan measured what that costs:
 
@@ -30,7 +31,8 @@ The high-resolution plan measured what that costs:
 
 1. On Apple platforms PNG, JPEG and TGA are decoded by ImageIO, through
    its C API (`CGImageSource`), in the shared loaders every renderer links
-   (the role of [`stb.c`](../../src/client/refresh/files/stb.c)) and in the
+   (the role of `stb.c`, since TASK11
+   [`image.c`](../../src/client/refresh/files/image.c)) and in the
    client's [`cl_image.c`](../../src/client/cl_image.c). Only these three
    types are accepted; the type is checked before decoding, and any other
    type ImageIO could read (GIF among them) is refused. The bounds the

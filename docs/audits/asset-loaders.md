@@ -11,6 +11,11 @@ Plan anchor: [trust-boundary plan](../plans/trust-boundary.md), "Audits after
 removal". Threat model: the "Security-relevant boundaries" section of
 `CLAUDE.md`.
 
+Note, 2026-11-15: TASK11 has since landed. `src/client/refresh/files/stb.c`
+became `image.c` and its `LoadSTB` became `LoadDecoded`, which decodes through
+`imgdecode.c` (ImageIO) instead of `stb_image.h`. The text below is the audit
+as written and still names the old file and function.
+
 ## Contents
 
 1. [Method and coverage](#method-and-coverage)
