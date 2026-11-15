@@ -126,6 +126,29 @@ rm_rts_transmit(const rm_surfrec_t *recs, long nrecs, unsigned long nindices, un
 	return (long)tri;
 }
 
+void
+rm_rts_alias_box(const float *scale, const float *translate, const float *oldscale, const float *oldtranslate,
+		float *mins, float *maxs)
+{
+	(void)scale;
+	(void)translate;
+	(void)oldscale;
+	(void)oldtranslate;
+	memset(mins, 0, 3 * sizeof(float));
+	memset(maxs, 0, 3 * sizeof(float));
+}
+
+unsigned
+rm_rts_carried(const float *xform, const float *mins, const float *maxs, const rm_rts_light_t *l, int nl)
+{
+	(void)xform;
+	(void)mins;
+	(void)maxs;
+	(void)l;
+	(void)nl;
+	return 0;
+}
+
 int
 rm_rts_invert(const float *m, float *out)
 {

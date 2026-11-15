@@ -94,6 +94,30 @@ typedef struct
 	unsigned pad[3];
 } rm_rts_view_t;
 
+/*
+ * gl1's box of an alias entity in its model's space (R_CullAliasModel):
+ * the union of its frame's and its old frame's, each translate to
+ * translate + 255 x scale, into mins[3] and maxs[3].
+ */
+void rm_rts_alias_box(const float *scale, const float *translate, const float *oldscale, const float *oldtranslate,
+		float *mins, float *maxs);
+
+/*
+ * The lights an alias instance carries (TASK55): bit i set when light i's
+ * origin, taken into the instance's model space by the inverse of xform
+ * (rm_rt_inst_t's object-to-world transform, column-major 4 by 3), lies
+ * in its box mins..maxs (rm_rts_alias_box) grown by RM_RTS_CARRY_TOL on
+ * every side. A shadow ray toward a light passes the instances that carry
+ * it: a rocket's or a bolt's light inside its own model, a muzzle flash's
+ * at the origin of the flash and smoke models it spawns and at the gun of
+ * the monster that fires it. Every other instance shadows the light. The
+ * first nl lights, at most MTL_RTS_MAX_LIGHTS; 0 for a transform that
+ * cannot be inverted or a box that is not finite, and no bit for a light
+ * that is not.
+ */
+#define RM_RTS_CARRY_TOL 1.0f
+unsigned rm_rts_carried(const float *xform, const float *mins, const float *maxs, const rm_rts_light_t *l, int nl);
+
 /* the 4 x 4 column-major inverse of m in double precision: 1, or 0 with out the identity when m is singular or not finite */
 int rm_rts_invert(const float *m, float *out);
 
