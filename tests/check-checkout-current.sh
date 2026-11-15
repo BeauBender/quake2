@@ -17,11 +17,13 @@
 # main ahead of origin/main (reported with its local commits, never as
 # updated), another branch, a HEAD that tracks .claude/memory/x.md (the
 # file stays), an ignored local file at a path the update starts tracking
-# or where it needs a directory (the file stays, byte for byte), a failed
-# fetch, and a failing git status, ls-tree, symbolic-ref, rev-list or
-# diff-tree (a shim first on PATH); and that in a linked worktree it
-# prints nothing and changes nothing. Every run must exit 0 and print no
-# path under the scratch directory, so no remote URL.
+# or where it needs a directory (the file stays, byte for byte), a path
+# git prints quoted, a failed fetch, and a failing git status, ls-tree,
+# symbolic-ref, rev-list (either count) or diff-tree (a shim first on
+# PATH). It fast-forwards over a tracked file the update turns into a
+# directory. In a linked worktree it prints nothing and changes nothing.
+# Every run must exit 0 and print no path under the scratch directory, so
+# no remote URL.
 #
 # The real check then reads the hook and the settings file in this
 # checkout: the hook holds no reset,
@@ -234,17 +236,41 @@ selftest()
 	still wt "$a"
 
 	# A git subcommand that fails while the rest work: a shim first on PATH
-	# exits 128 when its arguments hold <word> and runs git otherwise.
+	# exits 128 when its arguments hold <word> and runs git otherwise. The
+	# range $b..$a is the count of local commits, after the count behind
+	# ($a..$b) has worked.
 	realgit=$(command -v git)
-	for w in status ls-tree symbolic-ref rev-list diff-tree; do
-		mkdir -p "${tmp:?}/shim-$w"
+	i=0
+	for w in status ls-tree symbolic-ref rev-list "$b..$a" diff-tree; do
+		i=$((i + 1))
+		mkdir -p "${tmp:?}/shim-$i"
 		printf '#!/bin/sh\ncase " $* " in *" %s "*) exit 128 ;; esac\nexec "%s" "$@"\n' \
-			"$w" "$realgit" > "${tmp:?}/shim-$w/git"
-		chmod 755 "${tmp:?}/shim-$w/git"
-		run shims PATH="${tmp:?}/shim-$w:$PATH"
+			"$w" "$realgit" > "${tmp:?}/shim-$i/git"
+		chmod 755 "${tmp:?}/shim-$i/git"
+		run shims PATH="${tmp:?}/shim-$i:$PATH"
 		says "shims ($w)" "not updated"
 		still shims "$a"
 	done
+
+	# Last, as they move origin/main past B. A tracked file the update
+	# turns into a directory is not in the way (C: a.txt becomes
+	# a.txt/d.txt), and a path git prints quoted (D: q"x.txt) is not
+	# checked and refuses the update even with nothing there.
+	clone typechange
+	g -C "${tmp:?}/seed" rm -q a.txt
+	put seed a.txt/d.txt four
+	g -C "${tmp:?}/seed" push -q origin main
+	t=$(rev seed)
+	run typechange
+	says typechange "updated main from"
+	still typechange "$t"
+	clone quoted
+	put seed 'q"x.txt' five
+	g -C "${tmp:?}/seed" push -q origin main
+	run quoted
+	says quoted "not updated, 1 commit(s) behind origin/main: 1 path(s) the update adds"
+	still quoted "$t"
+	[ ! -e "${tmp:?}/quoted/q\"x.txt" ] || fail "selftest: quoted: the path was written"
 }
 
 # Not on the left of ||, so set -e holds inside: a failed setup step stops it.
