@@ -2,17 +2,22 @@
 # SessionStart hook (matchers: startup, resume). Keeps the main checkout of
 # this repository current, so the checked-in .claude/ settings and rules
 # reach every machine. On the main checkout ($CLAUDE_PROJECT_DIR with a .git
-# directory), it fetches origin main, then fast-forwards to it when the
-# checkout is on branch main, has no tracked changes and its HEAD tracks
-# nothing under .claude/memory/ (an update from such a commit deletes those
-# files; see CLAUDE.md). The fetch comes first so that every line can say
-# how far behind origin/main the checkout is; it writes only in .git.
+# directory), it fetches origin main, on any branch, then fast-forwards to
+# it when the checkout is on branch main, has no tracked changes, has no
+# local commits that origin/main lacks, its HEAD tracks nothing under
+# .claude/memory/ (an update from such a commit deletes those files; see
+# CLAUDE.md), and no path the update adds is taken by an untracked or
+# ignored local file (git overwrites an ignored file, and one where the
+# update needs a directory, without asking). The fetch comes first so that
+# every line can say how far behind origin/main the checkout is; it writes
+# only in .git.
 #
 # It prints one line, which Claude Code adds to the context: updated from a
 # to b, already current, or not updated with the count behind and the
-# reason (a failed fetch, another branch, tracked changes, tracked memory,
-# a diverged main, a failing git command). In a linked worktree (its .git
-# is a file) it prints nothing and does nothing.
+# reason (a failed fetch, another branch, tracked changes, local commits on
+# main, a diverged main, tracked memory, paths in the way, counted but not
+# named, a failing git command). In a linked worktree (its .git is a file)
+# it prints nothing and does nothing.
 #
 # It never runs reset, rebase, checkout, stash or clean, merges only with
 # --ff-only, runs no git hooks, and writes nothing outside the checkout's
@@ -71,11 +76,53 @@ mem=$(git ls-tree -r --name-only "$from" -- .claude/memory 2> /dev/null) ||
 
 a=$(printf '%.12s' "$from")
 [ "$from" != "$to" ] || say "main is already current with origin/main ($a)"
+ahead=$(git rev-list --count "$to..$from" 2> /dev/null) ||
+	say "$lag: cannot count the local commits on main"
+if [ "$ahead" -gt 0 ]; then
+	[ "$n" -gt 0 ] || say "$lag: main has $ahead local commit(s) not on origin/main"
+	say "$lag: main has diverged ($ahead local commit(s) not on origin/main); nothing was merged"
+fi
+
+# The paths the update adds, one per line. With core.quotePath=false only a
+# path holding a control character, a double quote or a backslash comes
+# quoted; such a line is not checked and counts as in the way.
+added=$(git -c core.quotePath=false diff-tree -r --no-renames --name-only --diff-filter=A "$from" "$to" 2> /dev/null) ||
+	say "$lag: git diff-tree failed"
+# untracked <path>: true unless HEAD tracks <path>; a git error counts as true.
+untracked()
+{
+	! git cat-file -e "$from:$1" 2> /dev/null
+}
+# A path is in the way when something HEAD does not track is at it, or is a
+# link or a non-directory at one of the directories above it. The list is
+# split on newlines only, with globbing off.
+k=0
+set -f
+IFS='
+'
+for p in $added; do
+	hit=
+	case $p in
+	\"*) hit=1 ;;
+	*) if { [ -e "$p" ] || [ -L "$p" ]; } && untracked "$p"; then hit=1; fi ;;
+	esac
+	q=$p
+	while [ -z "$hit" ]; do
+		case $q in
+		*/*) q=${q%/*} ;;
+		*) break ;;
+		esac
+		if { [ -L "$q" ] || { [ -e "$q" ] && [ ! -d "$q" ]; }; } && untracked "$q"; then hit=1; fi
+	done
+	[ -z "$hit" ] || k=$((k + 1))
+done
+unset IFS
+set +f
+[ "$k" -eq 0 ] ||
+	say "$lag: $k path(s) the update adds are taken by untracked or ignored local files, which the update would overwrite; move them, then update by hand"
+
 if git -c core.hooksPath=/dev/null merge --ff-only --no-autostash -q "$origin" < /dev/null > /dev/null 2>&1; then
 	now=$(git rev-parse -q --verify HEAD 2> /dev/null) || now=unknown
 	say "updated main from $a to $(printf '%.12s' "$now") ($n commit(s))"
 fi
-ahead=$(git rev-list --count "$to..$from" 2> /dev/null) || ahead=0
-[ "$ahead" -gt 0 ] 2> /dev/null ||
-	say "$lag: git merge --ff-only failed (for example, untracked files in the way)"
-say "$lag: main has diverged ($ahead local commit(s) not on origin/main); nothing was merged"
+say "$lag: git merge --ff-only failed"
