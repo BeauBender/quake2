@@ -3673,10 +3673,17 @@ the monotonic check now runs and a slow decrease of 2e-5 per texel is killed
 (together with the other checks, which also fire). The scrap smoothing:
 removing the call is killed (`hud2d-scale8` against `gl1-metal` then differs
 by 55 bytes), making its guard always true is killed (`hud2d-scale8` then
-equals `hud2d`). Not killed by any committed test: the fallback of `R_LoadPic`
-to an unscaled upload (a picture past the staging limit when scaled needs a
-multi-megabyte 8-bit pic that no scenario has; the pure sizes it rests on are
-tested) and `vid_loaded_renderer` (a name set and cleared in `vid.c`).
+equals `hud2d`). The fallback of `R_LoadPic` to an unscaled upload is now the
+pure `rm_scale8_plan` (drop, unscaled or scaled), pinned in `test_scale8`:
+(3000, 3000) unscaled, (320, 240) scaled to 640x480, the overflow dropped,
+the cvar off unscaled, the limit exactly and one under. Round 2 mutants over
+its guards, 9 in all, all killed except one equivalent (the explicit zeroing of
+the sides on the drop path, which `rm_scale8_dims` already does; the line was
+removed): the factor guard (never, or also at 2), the dims guard, the
+staging guard (off, inverted, the unscaled sides not restored), the `nolerp`
+and `enabled` operands. Not killed by any committed test: `vid_loaded_renderer`
+(a name set and cleared in `vid.c`) and the call site in `R_LoadPic`
+(which needs a picture of that size; the helper it calls is tested).
 
 **Default pins unchanged.** The reference is a record of `metal` built at
 `1701a052`; the candidate is this branch with every switch at its default,

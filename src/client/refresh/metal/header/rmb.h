@@ -1645,6 +1645,19 @@ int rm_scale8_factor(int enabled, int nolerp, int height);
 int rm_scale8_dims(int w, int h, int scale, int *ow, int *oh);
 
 /*
+ * The decision R_LoadPic takes for an 8-bit image outside the scrap:
+ * RM_SCALE8_DROP (the scaled sides overflow an int; both sides 0),
+ * RM_SCALE8_UNSCALED (the cvar is off, or the scaled picture passes
+ * staging_limit bytes: sides w and h) or RM_SCALE8_SCALED (sides sw and sh,
+ * the scale is sw / w).
+ */
+#define RM_SCALE8_DROP 0
+#define RM_SCALE8_UNSCALED 1
+#define RM_SCALE8_SCALED 2
+int rm_scale8_plan(int enabled, int nolerp, int height, int w, int h,
+		size_t staging_limit, int *sw, int *sh);
+
+/*
  * metal_2d_sharp: 1 when a 2D picture drawn with sampler smp takes the
  * sharp-bilinear coordinate (mtl_sharp_coord), that is when the cvar is
  * exactly 1 and the sampler is the unmipmapped filtered class, flat_linear

@@ -411,49 +411,37 @@ R_LoadPic(const char *name, byte *pic, int width, int realwidth,
 	else if (bits == 8)
 	{
 		/* from gl1_image.c, R_LoadPic: resize 8bit images only when we forced such logic */
-		const int scale = rm_scale8_factor(r_scale8bittextures->value != 0.0f,
-				R_NoLerp(name, type), vid.height);
+		int sw, sh;
+		const int plan = rm_scale8_plan(r_scale8bittextures->value != 0.0f,
+				R_NoLerp(name, type), vid.height, width, height, RMB_STAGING_BYTES, &sw, &sh);
 
-		if (scale > 1)
+		if (plan == RM_SCALE8_DROP)
 		{
-			int sw, sh;
-			size_t bytes;
-			byte *scaled;
+			ri.Sys_Error(ERR_DROP, "%s: invalid dimensions", __func__);
+			memset(image, 0, sizeof(*image));
+			return NULL;
+		}
+		else if (plan == RM_SCALE8_SCALED)
+		{
+			byte *scaled = malloc((size_t)sw * (size_t)sh);
 
-			if (!rm_scale8_dims(width, height, scale, &sw, &sh))
+			if (scaled == NULL)
 			{
-				ri.Sys_Error(ERR_DROP, "%s: invalid dimensions", __func__);
 				memset(image, 0, sizeof(*image));
 				return NULL;
 			}
 
-			/*
-			 * Too large to scale within the staging limit: upload the picture
-			 * unscaled, as gl1 does, instead of dropping it.
-			 */
-			if (!rm_upload_bytes(sw, sh, RMB_STAGING_BYTES, &bytes))
+			if (sw == width * 3)
 			{
-				image->has_alpha = R_Upload8(image, pic, width, height, mipmap);
-			}
-			else if ((scaled = malloc((size_t)sw * (size_t)sh)) == NULL)
-			{
-				memset(image, 0, sizeof(*image));
-				return NULL;
+				scale3x(pic, scaled, width, height);
 			}
 			else
 			{
-				if (scale == 3)
-				{
-					scale3x(pic, scaled, width, height);
-				}
-				else
-				{
-					scale2x(pic, scaled, width, height);
-				}
-
-				image->has_alpha = R_Upload8(image, scaled, sw, sh, mipmap);
-				free(scaled);
+				scale2x(pic, scaled, width, height);
 			}
+
+			image->has_alpha = R_Upload8(image, scaled, sw, sh, mipmap);
+			free(scaled);
 		}
 		else
 		{

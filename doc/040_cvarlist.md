@@ -470,7 +470,9 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   is lerped and the window is at least 720 pixels high, with `scale2x` or
   `scale3x`, and every upload, the atlas of small pictures (the HUD digits
   and icons) included, is smoothed. The pictures in the atlas are not scaled. Applies to images loaded after it
-  is set.
+  is set. The smoothing of the atlas follows the cvar at the atlas's next
+  upload, so pictures already in the atlas change when a new picture enters
+  it.
 
 * **r_shadows**: Enables rendering of shadows. Quake IIs shadows are
   very simple and are prone to render errors.

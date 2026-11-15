@@ -482,6 +482,42 @@ rm_scale8_dims(int w, int h, int scale, int *ow, int *oh)
 	return 1;
 }
 
+/*
+ * What R_LoadPic does with an 8-bit picture outside the scrap: drop it when the
+ * scaled sides overflow, upload it unscaled when the cvar is off or the scaled
+ * picture would pass the staging limit (as gl1 does), else upload it scaled.
+ */
+int
+rm_scale8_plan(int enabled, int nolerp, int height, int w, int h, size_t staging_limit,
+		int *sw, int *sh)
+{
+	const int scale = rm_scale8_factor(enabled, nolerp, height);
+	size_t bytes;
+
+	*sw = w;
+	*sh = h;
+
+	if (scale <= 1)
+	{
+		return RM_SCALE8_UNSCALED;
+	}
+
+	if (!rm_scale8_dims(w, h, scale, sw, sh))
+	{
+		/* rm_scale8_dims left both sides 0 */
+		return RM_SCALE8_DROP;
+	}
+
+	if (!rm_upload_bytes(*sw, *sh, staging_limit, &bytes))
+	{
+		*sw = w;
+		*sh = h;
+		return RM_SCALE8_UNSCALED;
+	}
+
+	return RM_SCALE8_SCALED;
+}
+
 int
 rm_2d_sharp(float cvar, int smp, int flat_linear)
 {

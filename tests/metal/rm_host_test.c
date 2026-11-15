@@ -8069,13 +8069,32 @@ test_scale8(void)
 {
 	int w = -1, h = -1;
 
-	/* a picture that fits unscaled but not scaled is uploaded unscaled (R_LoadPic), not dropped */
+	/* the plan R_LoadPic follows: over the staging limit when scaled, a picture is uploaded unscaled, not dropped */
 	{
+		int sw = -1, sh = -1;
 		size_t b;
 
 		CHECK(rm_upload_bytes(3000, 3000, RMB_STAGING_BYTES, &b));
 		CHECK(!rm_upload_bytes(6000, 6000, RMB_STAGING_BYTES, &b));
-		CHECK(rm_scale8_dims(3000, 3000, 2, &w, &h) && w == 6000 && h == 6000);
+		CHECK(rm_scale8_plan(1, 1, 720, 3000, 3000, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_UNSCALED
+				&& sw == 3000 && sh == 3000);
+		CHECK(rm_scale8_plan(1, 0, 719, 3000, 3000, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_UNSCALED
+				&& sw == 3000 && sh == 3000);
+		CHECK(rm_scale8_plan(1, 1, 720, 320, 240, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_SCALED
+				&& sw == 640 && sh == 480);
+		CHECK(rm_scale8_plan(1, 0, 720, 275, 32, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_SCALED
+				&& sw == 825 && sh == 96);
+		CHECK(rm_scale8_plan(1, 1, 720, INT_MAX, INT_MAX, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_DROP
+				&& sw == 0 && sh == 0);
+		CHECK(rm_scale8_plan(1, 1, 720, INT_MAX / 4 / 2 + 1, 2, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_DROP);
+		CHECK(rm_scale8_plan(1, 1, 720, 0, 5, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_DROP);
+		CHECK(rm_scale8_plan(0, 1, 720, 320, 240, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_UNSCALED
+				&& sw == 320 && sh == 240);
+		CHECK(rm_scale8_plan(0, 0, 720, INT_MAX, INT_MAX, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_UNSCALED);
+		/* the limit exactly: 640x480 scaled is 640*480*4 bytes */
+		CHECK(rm_scale8_plan(1, 1, 720, 320, 240, 640 * 480 * 4, &sw, &sh) == RM_SCALE8_SCALED);
+		CHECK(rm_scale8_plan(1, 1, 720, 320, 240, 640 * 480 * 4 - 1, &sw, &sh) == RM_SCALE8_UNSCALED
+				&& sw == 320 && sh == 240);
 	}
 
 	CHECK(rm_scale8_factor(0, 0, 2000) == 1);
