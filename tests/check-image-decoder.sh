@@ -22,9 +22,9 @@
 #
 # Both runs have a wall bound of IMGDEC_CHECK_SECONDS (default 300). A
 # watchdog kills the run it started once the bound has passed, and the
-# check fails with "<run> outlived its <n> s bound". The test also ends
-# itself at the bound (--bound), because a killed leaks(1) leaves the
-# process it runs behind.
+# check fails with "<run> outlived its <n> s bound". Under leaks(1) the
+# test also ends itself at the bound (--bound), because a killed leaks(1)
+# leaves the process it runs behind.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -106,7 +106,7 @@ if ! $cc $sflags -o "${tmp:?}/imgdecode_test" $srcs $libs > "${tmp:?}/cc.out" 2>
 fi
 
 status=0
-bounded "${tmp:?}/imgdecode_test" --bound "$bound" || status=$?
+bounded "${tmp:?}/imgdecode_test" || status=$?
 expired "the host test"
 if [ "$status" -ne 0 ]; then
 	echo "check-image-decoder: the host test failed"

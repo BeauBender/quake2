@@ -562,6 +562,7 @@ test_tga_layout(void)
 	expect_tga_layout("3 bytes", 1, 32, 8, 3, 0);
 	expect_tga_layout("0 bytes", 1, 32, 8, 0, 0);
 	CHECK(IMGDEC_TgaLayoutRefused(NULL, 0) == 0, "tga layout: NULL");
+	CHECK(IMGDEC_TgaLayoutRefused(NULL, 18) == 0, "tga layout: NULL, 18 bytes");
 }
 
 #ifdef __APPLE__
@@ -1328,6 +1329,9 @@ build_cases(void)
 		j.p[at] = 2;
 		add_bad("jpeg ycck", j, j.n, "jpg", IMGDEC_ERR_LAYOUT);
 	}
+	/* byte 16 of a PNG (its width's high byte) is 15: the TGA layout check is not applied */
+	add_bad("png declaring 251658241x1", png_file(0x0f000001u, 1, 8, 0, wide, 16, 1, NULL, 0, NULL, 0),
+		(size_t)-1, "png", IMGDEC_ERR_DECODE);
 	add_bad("png declaring 100000x100000", png_file(100000, 100000, 8, 2, rgb, 3, 1, NULL, 0, NULL, 0), (size_t)-1, "png", IMGDEC_OK);
 	{
 		buf_t t = tga_file(1, 1, 24, 0, 0, ref);
