@@ -981,6 +981,68 @@ encode(CFStringRef uti, unsigned w, unsigned h, const unsigned char *pix, int gr
 	CGColorSpaceRelease(cs);
 	return b;
 }
+
+/* a CMYK JPEG of w x h, encoded by ImageIO */
+static buf_t
+encode_cmyk(unsigned w, unsigned h)
+{
+	size_t n = (size_t)w * h * 4, i;
+	unsigned char *pix = malloc(n);
+	CGColorSpaceRef cs = CGColorSpaceCreateDeviceCMYK();
+	CGDataProviderRef dp;
+	CGImageRef img;
+	CFMutableDataRef out = CFDataCreateMutable(NULL, 0);
+	CGImageDestinationRef dst = CGImageDestinationCreateWithData(out, CFSTR("public.jpeg"), 1, NULL);
+	buf_t b = {0};
+
+	if (!pix)
+	{
+		printf("out of memory\n");
+		exit(2);
+	}
+
+	for (i = 0; i < n; i++)
+	{
+		pix[i] = (unsigned char)(i * 7);
+	}
+
+	dp = CGDataProviderCreateWithData(NULL, pix, n, NULL);
+	img = CGImageCreate(w, h, 8, 32, w * 4, cs, kCGImageAlphaNone, dp, NULL, false,
+		kCGRenderingIntentDefault);
+	CGImageDestinationAddImage(dst, img, NULL);
+	if (!CGImageDestinationFinalize(dst))
+	{
+		printf("ImageIO could not encode a CMYK test file\n");
+		exit(2);
+	}
+
+	put(&b, CFDataGetBytePtr(out), (size_t)CFDataGetLength(out));
+	CFRelease(dst);
+	CFRelease(out);
+	CGImageRelease(img);
+	CGDataProviderRelease(dp);
+	CGColorSpaceRelease(cs);
+	free(pix);
+	return b;
+}
+
+/* the offset of the height in the JPEG's baseline frame header (SOF0) */
+static size_t
+jpeg_frame_size(const buf_t *b)
+{
+	size_t i;
+
+	for (i = 2; i + 9 < b->n; i++)
+	{
+		if (b->p[i] == 0xff && b->p[i + 1] == 0xc0)
+		{
+			return i + 5;
+		}
+	}
+
+	printf("no frame header in a JPEG test file\n");
+	exit(2);
+}
 #endif
 
 static unsigned char want_rgb[RW * RH * 4], want_grey[RW * RH * 4], want_grey_alpha[RW * RH * 4];
@@ -1174,41 +1236,37 @@ build_cases(void)
 		add_bad("png 1x16385 cut in its pixels", c, c.n / 2, "png", IMGDEC_ERR_SIZE);
 	}
 	/*
-	 * The area bound, 2^26 pixels, on the declared size: one row written.
-	 * At the bound the cut TGAs pass it and fail to decode.
+	 * The area bound, 2^26 pixels, on the declared size. The PNG has one
+	 * row written. The CMYK JPEG's frame header is patched to declare the
+	 * size: at the bound it passes and its layout is refused, past it the
+	 * size is.
 	 */
 	add_bad("png 16384x4097, past the area bound", png_file(16384, 4097, 8, 0, wide, 16384, 1, NULL, 0, NULL, 0),
-		(size_t)-1, "png", IMGDEC_ERR_SIZE);
-	add_bad("png 4097x16384, past the area bound", png_file(4097, 16384, 8, 0, wide, 4097, 1, NULL, 0, NULL, 0),
 		(size_t)-1, "png", IMGDEC_ERR_SIZE);
 	{
 		static const struct
 		{
 			const char *what;
-			int type, bpp;
 			unsigned w, h;
 			imgdec_result_t want;
 		} a[] = {
-			{"tga 8192x8192 cut, at the area bound", 2, 24, 8192, 8192, IMGDEC_ERR_DECODE},
-			{"tga grey 16384x4096 cut, at the area bound", 3, 8, 16384, 4096, IMGDEC_ERR_DECODE},
-			{"tga 8193x8192 cut, past the area bound", 2, 24, 8193, 8192, IMGDEC_ERR_SIZE},
-			{"tga grey 16384x4097 cut, past the area bound", 3, 8, 16384, 4097, IMGDEC_ERR_SIZE},
+			{"jpeg cmyk", 16, 16, IMGDEC_ERR_LAYOUT},
+			{"jpeg cmyk declaring 8192x8192, at the area bound", 8192, 8192, IMGDEC_ERR_LAYOUT},
+			{"jpeg cmyk declaring 8193x8192, past the area bound", 8193, 8192, IMGDEC_ERR_SIZE},
+			{"jpeg cmyk declaring 8192x8193, past the area bound", 8192, 8193, IMGDEC_ERR_SIZE},
 		};
 		size_t k;
 
 		for (k = 0; k < sizeof(a) / sizeof(a[0]); k++)
 		{
-			buf_t t = {0};
-			unsigned char hd[18];
+			buf_t j = encode_cmyk(16, 16);
+			size_t at = jpeg_frame_size(&j);
 
-			tga_header(hd, a[k].type, 0, a[k].bpp);
-			hd[12] = a[k].w & 255;
-			hd[13] = a[k].w >> 8;
-			hd[14] = a[k].h & 255;
-			hd[15] = a[k].h >> 8;
-			put(&t, hd, sizeof(hd));
-			put(&t, wide, 30);
-			add_bad(a[k].what, t, t.n, "tga", a[k].want);
+			j.p[at + 0] = (unsigned char)(a[k].h >> 8);
+			j.p[at + 1] = (unsigned char)(a[k].h & 255);
+			j.p[at + 2] = (unsigned char)(a[k].w >> 8);
+			j.p[at + 3] = (unsigned char)(a[k].w & 255);
+			add_bad(a[k].what, j, j.n, "jpg", a[k].want);
 		}
 	}
 	add_bad("png declaring 100000x100000", png_file(100000, 100000, 8, 2, rgb, 3, 1, NULL, 0, NULL, 0), (size_t)-1, "png", IMGDEC_OK);

@@ -24,10 +24,12 @@
  *  2. the file has 1 to IMGDEC_MAX_FILE bytes;
  *  3. the type ImageIO reads from the bytes is PNG, JPEG or TGA and is
  *     the extension's (a GIF, or a PNG named .tga, is refused);
- *  4. the declared size is 1 to IMGDEC_MAX_SIDE on each side and its
- *     RGBA8 bytes do not overflow, before anything is decoded or
- *     allocated; the decoded image must have that size;
- *  5. the decoded pixels are read in the image's own layout and
+ *  4. a TGA whose header names a layout ImageIO decodes to wrong pixels
+ *     (a colour map that is not 24-bit, 15-bit pixels) is refused;
+ *  5. the declared size is 1 to IMGDEC_MAX_SIDE on each side and at most
+ *     IMGDEC_MAX_AREA pixels, before anything is decoded or allocated;
+ *     the decoded image must have that size;
+ *  6. the decoded pixels are read in the image's own layout and
  *     converted to straight-alpha RGBA8 with no colour conversion, as
  *     stb_image returned them. Nothing is drawn into a bitmap context,
  *     which would premultiply texels with partial alpha; a premultiplied
@@ -156,18 +158,19 @@ IMGDEC_PixelBytes(size_t width, size_t height, size_t max_side, size_t *bytes)
 int
 IMGDEC_AreaOk(size_t width, size_t height, size_t max_area)
 {
-	(void)width;
-	(void)height;
-	(void)max_area;
-	return 1;
+	return height == 0 || width <= max_area / height;
 }
 
 int
 IMGDEC_TgaLayoutRefused(const unsigned char *data, size_t size)
 {
-	(void)data;
-	(void)size;
-	return 0;
+	/* header bytes 2: image type, 7: map entry bits, 16: pixel bits */
+	if (!data || size < 18)
+	{
+		return 0;
+	}
+
+	return ((data[2] == 1 || data[2] == 9) && data[7] != 24) || data[16] == 15;
 }
 
 /* byte i of a pixel, counted in big-endian channel order */
@@ -517,6 +520,13 @@ IMGDEC_DecodeImageIO(const unsigned char *data, size_t size, imgdec_type_t want,
 		goto done;
 	}
 
+	/* TGA layouts ImageIO decodes to wrong pixels, from the header bytes */
+	if (want == IMGDEC_TYPE_TGA && IMGDEC_TgaLayoutRefused(data, size))
+	{
+		r = IMGDEC_ERR_LAYOUT;
+		goto done;
+	}
+
 	if (CGImageSourceGetCount(source) < 1)
 	{
 		r = IMGDEC_ERR_DECODE;
@@ -532,7 +542,8 @@ IMGDEC_DecodeImageIO(const unsigned char *data, size_t size, imgdec_type_t want,
 		goto done;
 	}
 
-	if (!IMGDEC_PixelBytes(w, h, IMGDEC_MAX_SIDE, &outbytes))
+	if (!IMGDEC_PixelBytes(w, h, IMGDEC_MAX_SIDE, &outbytes) ||
+		!IMGDEC_AreaOk(w, h, IMGDEC_MAX_AREA))
 	{
 		r = IMGDEC_ERR_SIZE;
 		goto done;
@@ -670,7 +681,7 @@ IMGDEC_ResultString(imgdec_result_t result)
 		case IMGDEC_ERR_MISMATCH:
 			return "the image type does not match the extension";
 		case IMGDEC_ERR_SIZE:
-			return "a side is 0 or larger than 16384";
+			return "a side is 0 or larger than 16384, or more than 2^26 pixels";
 		case IMGDEC_ERR_LAYOUT:
 			return "a pixel layout that is not converted";
 		case IMGDEC_ERR_DECODE:
