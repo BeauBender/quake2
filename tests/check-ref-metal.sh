@@ -18,7 +18,9 @@
 #     tests/metal/rm_rtshadow_test.c, the pure part of the dynamic-light
 #     shadows (rm_rtshadow.c and common/mtl_rts_math.h, RT3, TASK55),
 #     tests/metal/rm_rtao_test.c, the pure part of the ambient occlusion
-#     (rm_rtao.c and common/mtl_rtao_math.h, RT5, TASK57), and
+#     (rm_rtao.c and common/mtl_rtao_math.h, RT5, TASK57),
+#     tests/metal/rm_rtwater_test.c, the pure part of the water reflections
+#     (rm_rtwater.c and common/mtl_rtw_math.h, RT6, TASK58), and
 #     tests/metal/rm_fx_test.c, the pure part of the MetalFX scalers
 #     (rm_metalfx.c, TASK111).
 # (b) Only on Darwin with the Metal compiler (xcrun -f metal) and the
@@ -171,6 +173,23 @@ elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtao_test" > "${tmp:?}/out"
 else
 	ao=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtao_test: //')
 	case $ao in *", 0 failed") ;; *) bad "tests/metal/rm_rtao_test.c printed no result line"; ao="";; esac
+fi
+
+# the pure part of the water reflections (RT6, TASK58): rm_rtwater.c and common/mtl_rtw_math.h, with
+# rm_rtshadow.c for the view's inverse, rm_rt.c for the instances the rays test and rm_pure.c for gl1's warp
+rtw=""
+# shellcheck disable=SC2086 # flags is a word list
+if ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "${tmp:?}/rm_rtwater_test" tests/metal/rm_rtwater_test.c \
+	"$rm_dir/rm_rtwater.c" "$rm_dir/rm_rtshadow.c" "$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" \
+	"$rm_dir/common/mtl_ring.c" src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_rtwater_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtwater_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_rtwater_test.c failed"
+else
+	rtw=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtwater_test: //')
+	case $rtw in *", 0 failed") ;; *) bad "tests/metal/rm_rtwater_test.c printed no result line"; rtw="";; esac
 fi
 
 # the pure part of the MetalFX scalers (TASK111): rm_metalfx.c alone
@@ -468,6 +487,6 @@ else
 fi
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $build)"
 fi
 exit $fail
