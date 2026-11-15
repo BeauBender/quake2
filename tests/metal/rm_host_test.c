@@ -152,10 +152,10 @@ test_ledger(void)
 	char buf[256];
 	const char *want_live =
 		"ref_metal: teardown: 3 live objects (created/destroyed: device 1/0, queue 1/0, view 0/0, "
-		"texture 3/2, buffer 0/0, state 0/0), 0 unreleased, 0 unmatched";
+		"texture 3/2, buffer 0/0, state 0/0, rt 0/0), 0 unreleased, 0 unmatched";
 	const char *want_clean =
 		"ref_metal: teardown: 0 live objects (created/destroyed: device 1/1, queue 1/1, view 0/0, "
-		"texture 3/3, buffer 0/0, state 0/0), 0 unreleased, 1 unmatched";
+		"texture 3/3, buffer 0/0, state 0/0, rt 0/0), 0 unreleased, 1 unmatched";
 	size_t n;
 
 	memset(&l, 0, sizeof(l));
@@ -179,6 +179,14 @@ test_ledger(void)
 	CHECK(l.destroyed[RM_OBJ_VIEW] == 0 && l.unmatched == 1);
 	CHECK(rm_ledger_live(&l) == 0);
 	CHECK(rm_ledger_format(&l, buf, sizeof(buf)) && strcmp(buf, want_clean) == 0);
+
+	/* a ray-tracing object (TASK53) is a kind of its own, live until it is destroyed */
+	rm_ledger_create(&l, RM_OBJ_RT);
+	CHECK(rm_ledger_live(&l) == 1 && rm_ledger_kind_live(&l, RM_OBJ_RT) == 1 && !rm_ledger_clean(&l));
+	CHECK(rm_ledger_format(&l, buf, sizeof(buf)) && strstr(buf, ", rt 1/0), ") != NULL);
+	rm_ledger_destroy(&l, RM_OBJ_RT);
+	CHECK(rm_ledger_live(&l) == 0 && rm_ledger_kind_live(&l, RM_OBJ_RT) == 0);
+	l.created[RM_OBJ_RT] = l.destroyed[RM_OBJ_RT] = 0;
 
 	/* objects released but still alive count as live */
 	l.unreleased = 2;
@@ -728,7 +736,16 @@ test_ledger_restarts(void)
 	for (k = 0; k < RM_OBJ_KINDS; k++)
 	{
 		CHECK(rm_ledger_kind_live(&l, (rm_obj_kind_t)k) == 0);
-		CHECK(l.created[k] > 0 && l.created[k] == l.destroyed[k]);
+
+		/* a session with every ray-tracing setting at its default makes no ray-tracing object (TASK53) */
+		if (k == RM_OBJ_RT)
+		{
+			CHECK(l.created[k] == 0 && l.destroyed[k] == 0);
+		}
+		else
+		{
+			CHECK(l.created[k] > 0 && l.created[k] == l.destroyed[k]);
+		}
 	}
 
 	CHECK(l.created[RM_OBJ_STATE] == 2 * (LEDGER_STATES + RMB_SMP_CLASSES * 2));
@@ -7924,6 +7941,242 @@ test_particle_texture(void)
 	}
 }
 
+/* ---- crisp 2D (TASK119) -------------------------------------------------------------- */
+
+/* GL_LINEAR over a 1D row of n texels, clamped to the edge: what the sampler does with the coordinate p (in texels) the shader hands it */
+static float
+lin1(const float *row, int n, float p)
+{
+	float f = p - 0.5f, i = floorf(f), x = f - i;
+	int a = (int)i, b = a + 1;
+
+	a = a < 0 ? 0 : (a > n - 1 ? n - 1 : a);
+	b = b < 0 ? 0 : (b > n - 1 ? n - 1 : b);
+	return row[a] * (1.0f - x) + row[b] * x;
+}
+
+/*
+ * mtl_sharp_coord, the sharp-bilinear coordinate: at an integer scale the
+ * sample at every pixel centre is the nearest texel's value, as many pixels
+ * as the scale says (1 to 8); a texel's centre keeps its coordinate and an
+ * edge is the half-way blend; at a magnification of one texel per pixel or
+ * less it is the plain bilinear coordinate; a bad derivative leaves it
+ * alone; at a non-integer scale only the pixel at an edge is blended.
+ */
+static void
+test_sharp_coord(void)
+{
+	static const float row[6] = { 10, 200, 30, 250, 60, 140 };
+	static const float scales[] = { 1.5f, 2.5f, 3.7f, 5.25f, 7.9f };
+	int s, j, k, n = 6;
+
+	/* integer scales: equal to nearest */
+	for (s = 1; s <= 8; s++)
+	{
+		const float d = 1.0f / (float)s;
+
+		for (j = 0; j < n * s; j++)
+		{
+			const float t = ((float)j + 0.5f) / (float)s;
+			const float v = lin1(row, n, mtl_sharp_coord(t, d));
+
+			CHECK(near(v, row[(int)floorf(t)], 1e-3));
+		}
+	}
+
+	/* texel centres stay, for every magnification */
+	for (k = 0; k < 6; k++)
+	{
+		for (s = 1; s <= 16; s++)
+		{
+			CHECK(mtl_sharp_coord((float)k + 0.5f, 1.0f / (float)s) == (float)k + 0.5f);
+		}
+	}
+
+	/* an edge is the half-way blend */
+	for (k = 1; k < 6; k++)
+	{
+		for (s = 1; s <= 8; s++)
+		{
+			CHECK(near(mtl_sharp_coord((float)k, 1.0f / (float)s), (float)k, 1e-5));
+		}
+	}
+
+	/* a texel per pixel or fewer: bilinear, the coordinate itself */
+	for (k = 0; k < 40; k++)
+	{
+		const float t = 0.37f * (float)k;
+
+		CHECK(near(mtl_sharp_coord(t, 1.0f), t, 1e-5));
+		CHECK(near(mtl_sharp_coord(t, 2.0f), t, 1e-5));
+		CHECK(near(mtl_sharp_coord(t, 1000.0f), t, 1e-3));
+	}
+
+	/* no usable derivative: untouched */
+	CHECK(mtl_sharp_coord(3.3f, 0.0f) == 3.3f);
+	CHECK(mtl_sharp_coord(3.3f, -0.25f) == 3.3f);
+	CHECK(mtl_sharp_coord(3.3f, NAN) == 3.3f);
+
+	/* the result stays between the centres of the two texels the sample falls between */
+	for (k = 0; k < 400; k++)
+	{
+		const float t = 0.0173f * (float)k;
+		const float lo = floorf(t - 0.5f) + 0.5f;
+		float d;
+
+		for (d = 0.0625f; d <= 1.5f; d += 0.0625f)
+		{
+			const float p = mtl_sharp_coord(t, d);
+
+			CHECK(p >= lo && p <= lo + 1.0f);
+		}
+	}
+
+	/* non-integer scales: no pixel is blended but the one at an edge, and it is monotonic */
+	for (s = 0; s < (int)(sizeof(scales) / sizeof(scales[0])); s++)
+	{
+		const float d = 1.0f / scales[s];
+		const int w = (int)ceilf((float)n * scales[s]);
+		int mixed = 0;
+		float prev = -1.0f;
+
+		for (j = 0; j < w; j++)
+		{
+			const float t = ((float)j + 0.5f) / scales[s];
+			const float c = mtl_sharp_coord(t, d);
+			const float v = lin1(row, n, c);
+			int pure = 0, e;
+
+			CHECK(c >= prev);
+			prev = c;
+
+			for (e = 0; e < n; e++)
+			{
+				pure |= near(v, row[e], 1e-3);
+			}
+
+			if (!pure)
+			{
+				const float edge = floorf(t + 0.5f);
+
+				mixed++;
+				CHECK(fabsf(t - edge) <= d * 0.5f + 1e-4f);
+			}
+
+		}
+
+		CHECK(mixed >= 1 && mixed <= n - 1);
+	}
+
+	/* a ramp is not reordered: the sharpened sample never leaves the nearest texel's neighbours */
+	for (j = 0; j < n * 13; j++)
+	{
+		const float t = ((float)j + 0.5f) / 13.0f;
+		const float v = lin1(row, n, mtl_sharp_coord(t, 1.0f / 13.0f));
+		const int a = (int)floorf(t), b = a + 1 < n ? a + 1 : a, c = a > 0 ? a - 1 : a;
+		const float lo = fminf(row[a], fminf(row[b], row[c])), hi = fmaxf(row[a], fmaxf(row[b], row[c]));
+
+		CHECK(v >= lo - 1e-3f && v <= hi + 1e-3f);
+	}
+}
+
+/* r_scale8bittextures: gl1's choice of the factor and its dimension check */
+static void
+test_scale8(void)
+{
+	int w = -1, h = -1;
+
+	/* the plan R_LoadPic follows: over the staging limit when scaled, a picture is uploaded unscaled, not dropped */
+	{
+		int sw = -1, sh = -1;
+		size_t b;
+
+		CHECK(rm_upload_bytes(3000, 3000, RMB_STAGING_BYTES, &b));
+		CHECK(!rm_upload_bytes(6000, 6000, RMB_STAGING_BYTES, &b));
+		CHECK(rm_scale8_plan(1, 1, 720, 3000, 3000, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_UNSCALED
+				&& sw == 3000 && sh == 3000);
+		CHECK(rm_scale8_plan(1, 0, 719, 3000, 3000, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_UNSCALED
+				&& sw == 3000 && sh == 3000);
+		CHECK(rm_scale8_plan(1, 1, 720, 320, 240, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_SCALED
+				&& sw == 640 && sh == 480);
+		CHECK(rm_scale8_plan(1, 0, 720, 275, 32, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_SCALED
+				&& sw == 825 && sh == 96);
+		CHECK(rm_scale8_plan(1, 1, 720, INT_MAX, INT_MAX, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_DROP
+				&& sw == 0 && sh == 0);
+		CHECK(rm_scale8_plan(1, 1, 720, INT_MAX / 4 / 2 + 1, 2, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_DROP);
+		CHECK(rm_scale8_plan(1, 1, 720, 0, 5, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_DROP);
+		CHECK(rm_scale8_plan(0, 1, 720, 320, 240, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_UNSCALED
+				&& sw == 320 && sh == 240);
+		CHECK(rm_scale8_plan(0, 0, 720, INT_MAX, INT_MAX, RMB_STAGING_BYTES, &sw, &sh) == RM_SCALE8_UNSCALED);
+		/* the limit exactly: 640x480 scaled is 640*480*4 bytes */
+		CHECK(rm_scale8_plan(1, 1, 720, 320, 240, 640 * 480 * 4, &sw, &sh) == RM_SCALE8_SCALED);
+		CHECK(rm_scale8_plan(1, 1, 720, 320, 240, 640 * 480 * 4 - 1, &sw, &sh) == RM_SCALE8_UNSCALED
+				&& sw == 320 && sh == 240);
+	}
+
+	CHECK(rm_scale8_factor(0, 0, 2000) == 1);
+	CHECK(rm_scale8_factor(0, 1, 2000) == 1);
+	CHECK(rm_scale8_factor(1, 0, 719) == 2);
+	CHECK(rm_scale8_factor(1, 0, 720) == 3);
+	CHECK(rm_scale8_factor(1, 0, 2880) == 3);
+	CHECK(rm_scale8_factor(1, 1, 2880) == 2);
+	CHECK(rm_scale8_factor(1, 1, 100) == 2);
+	CHECK(rm_scale8_factor(1, 0, 0) == 2);
+	CHECK(rm_scale8_factor(1, 0, -5) == 2);
+
+	CHECK(rm_scale8_dims(320, 240, 2, &w, &h) && w == 640 && h == 480);
+	CHECK(rm_scale8_dims(275, 32, 3, &w, &h) && w == 825 && h == 96);
+	CHECK(rm_scale8_dims(1, 1, 2, &w, &h) && w == 2 && h == 2);
+
+	w = h = -1;
+	CHECK(!rm_scale8_dims(0, 5, 2, &w, &h) && w == 0 && h == 0);
+	CHECK(!rm_scale8_dims(5, 0, 2, &w, &h));
+	CHECK(!rm_scale8_dims(-4, 5, 2, &w, &h));
+	CHECK(!rm_scale8_dims(5, -4, 2, &w, &h));
+	CHECK(!rm_scale8_dims(5, 5, 1, &w, &h));
+	CHECK(!rm_scale8_dims(5, 5, 4, &w, &h));
+	CHECK(!rm_scale8_dims(5, 5, 0, &w, &h));
+
+	/* the product of the sides and the scale squared must fit an int: the limit exactly, and one over */
+	CHECK(rm_scale8_dims(INT_MAX / 4 / 2, 2, 2, &w, &h) && w == (INT_MAX / 4 / 2) * 2 && h == 4);
+	CHECK(!rm_scale8_dims(INT_MAX / 4 / 2 + 1, 2, 2, &w, &h));
+	CHECK(rm_scale8_dims(INT_MAX / 9 / 3, 3, 3, &w, &h));
+	CHECK(!rm_scale8_dims(INT_MAX / 9 / 3 + 1, 3, 3, &w, &h));
+	CHECK(!rm_scale8_dims(INT_MAX, INT_MAX, 2, &w, &h));
+	CHECK(!rm_scale8_dims(1, INT_MAX, 2, &w, &h));
+	CHECK(w == 0 && h == 0);
+}
+
+/* metal_2d_sharp: on for the value 1 and a filtered flat sampler, off for everything else */
+static void
+test_2d_sharp(void)
+{
+	const int flat = RMB_SAMPLER(RMB_SMP_FLAT, 0), flatc = RMB_SAMPLER(RMB_SMP_FLAT, 1);
+	int smp;
+
+	CHECK(rm_2d_sharp(1.0f, flat, 1) == 1);
+	CHECK(rm_2d_sharp(1.0f, flatc, 1) == 1);
+	CHECK(rm_2d_sharp(0.0f, flat, 1) == 0);
+	CHECK(rm_2d_sharp(2.0f, flat, 1) == 0);
+	CHECK(rm_2d_sharp(0.5f, flat, 1) == 0);
+	CHECK(rm_2d_sharp(-1.0f, flat, 1) == 0);
+	CHECK(rm_2d_sharp(NAN, flat, 1) == 0);
+	CHECK(rm_2d_sharp(1.0f, flat, 0) == 0);
+	CHECK(rm_2d_sharp(1.0f, RMB_SAMPLER(RMB_SMP_NEAREST, 0), 1) == 0);
+	CHECK(rm_2d_sharp(1.0f, RMB_SAMPLER(RMB_SMP_NEAREST, 1), 1) == 0);
+	CHECK(rm_2d_sharp(1.0f, RMB_SAMPLER(RMB_SMP_MIP, 0), 1) == 0);
+	CHECK(rm_2d_sharp(1.0f, RMB_SAMPLER(RMB_SMP_LIGHTMAP, 1), 1) == 0);
+	CHECK(rm_2d_sharp(1.0f, -1, 1) == 0);
+	CHECK(rm_2d_sharp(1.0f, RMB_SMP_CLASSES * 2, 1) == 0);
+	CHECK(rm_2d_sharp(1.0f, INT_MAX, 1) == 0);
+	CHECK(rm_2d_sharp(1.0f, INT_MIN, 1) == 0);
+
+	for (smp = -3; smp < RMB_SMP_CLASSES * 2 + 3; smp++)
+	{
+		CHECK(rm_2d_sharp(1.0f, smp, 1) == ((smp == flat || smp == flatc) ? 1 : 0));
+	}
+}
+
 int
 main(void)
 {
@@ -8021,6 +8274,9 @@ main(void)
 	test_point_quads();
 	test_particle_tri();
 	test_particle_texture();
+	test_sharp_coord();
+	test_scale8();
+	test_2d_sharp();
 
 	printf("rm_host_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

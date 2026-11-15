@@ -393,6 +393,9 @@ void *reflib_handle = NULL;
 // Is a renderer loaded and active?
 qboolean ref_active = false;
 
+/* the name of the renderer that is loaded; vid_renderer may have been changed since */
+char vid_loaded_renderer[32] = "";
+
 // Renderer restart type requested.
 ref_restart_t restart_state = RESTART_UNDEF;
 
@@ -710,6 +713,7 @@ VID_ShutdownRenderer(void)
 		Sys_FreeLibrary(reflib_handle);
 		reflib_handle = NULL;
 		memset(&re, 0, sizeof(re));
+		vid_loaded_renderer[0] = '\0';
 
 		CL_ClearTEntModels();
 	}
@@ -788,6 +792,7 @@ VID_LoadRenderer(void)
 
 	// Declare the refresher as active.
 	ref_active = true;
+	Q_strlcpy(vid_loaded_renderer, vid_renderer->string, sizeof(vid_loaded_renderer));
 
 	// Let's check if we've got a compatible renderer.
 	if (re.api_version != API_VERSION)

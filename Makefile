@@ -848,13 +848,15 @@ $(BINDIR)/ref_metal.dylib : $(BINDIR)/ref_metal.metallib
 endif
 
 $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
+		src/client/refresh/metal/rm_rt.metal \
 		src/client/refresh/metal/common/mtl_shader_math.h
 	@echo "===> METAL $<"
 	${Q}command -v xcrun >/dev/null 2>&1 || { echo "ref_metal needs xcrun and the Xcode Metal toolchain" >&2; exit 1; }
 	${Q}xcrun -f metal >/dev/null 2>&1 || { echo "ref_metal needs the Metal compiler (xcrun metal); install the Xcode Metal toolchain" >&2; exit 1; }
 	${Q}mkdir -p $(BUILDDIR)/ref_metal $(@D)
 	${Q}xcrun -sdk macosx metal -c $< -o $(BUILDDIR)/ref_metal/rm_shaders.air
-	${Q}xcrun -sdk macosx metallib $(BUILDDIR)/ref_metal/rm_shaders.air -o $@
+	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_rt.metal -o $(BUILDDIR)/ref_metal/rm_rt.air
+	${Q}xcrun -sdk macosx metallib $(BUILDDIR)/ref_metal/rm_shaders.air $(BUILDDIR)/ref_metal/rm_rt.air -o $@
 
 # Header dependencies: the Darwin CFLAGS carry no -MMD (see above), but
 # the Apple clang this target needs writes them for C and Objective-C
@@ -995,6 +997,7 @@ CLIENT_OBJS_ := \
 	src/backends/generic/misc.o \
 	src/client/cl_cin.o \
 	src/client/cl_image.o \
+	src/client/cl_conback.o \
 	src/client/cl_console.o \
 	src/client/cl_download.o \
 	src/client/cl_effects.o \
@@ -1196,6 +1199,8 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_misc.o \
 	src/client/refresh/metal/rm_model.o \
 	src/client/refresh/metal/rm_pure.o \
+	src/client/refresh/metal/rm_rt.o \
+	src/client/refresh/metal/rm_rtscene.o \
 	src/client/refresh/metal/rm_scrap.o \
 	src/client/refresh/metal/rm_sdl.o \
 	src/client/refresh/metal/rm_surf.o \
@@ -1203,6 +1208,7 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rmb_device.o \
 	src/client/refresh/metal/rmb_encode.o \
 	src/client/refresh/metal/rmb_resource.o \
+	src/client/refresh/metal/rmb_rt.o \
 	src/client/refresh/metal/common/mtl_matrix.o \
 	src/client/refresh/metal/common/mtl_ring.o \
 	src/client/refresh/files/common.o \
@@ -1410,8 +1416,8 @@ endif
 # The unit-test suite (tests/unit, see doc/085_unittests.md). The test
 # binary links the dedicated server's own objects (SERVER_OBJS_ below,
 # built with q2ded's flags into a tree of their own) except the unix
-# main.c; tests/unit/main.c supplies main(). Seven client objects
-# (cl_download, cl_entities, cl_network, cl_parse, cl_screen, the sound
+# main.c; tests/unit/main.c supplies main(). Eight client objects
+# (cl_conback, cl_download, cl_entities, cl_network, cl_parse, cl_screen, the sound
 # frontend sound.c and the window code's SDL-free part vid/glimp_hidpi.c)
 # are linked against the stubs in tests/unit/stub_client.c
 # and stub_client_full.c, and two renderer objects, refresh/files/surf.c
@@ -1448,6 +1454,7 @@ endif
 
 TEST_SRCS := $(sort $(wildcard tests/unit/*.c))
 TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SERVER_OBJS_))) \
+	$(TESTDIR)/src/client/cl_conback.o \
 	$(TESTDIR)/src/client/cl_download.o \
 	$(TESTDIR)/src/client/cl_entities.o \
 	$(TESTDIR)/src/client/cl_network.o \

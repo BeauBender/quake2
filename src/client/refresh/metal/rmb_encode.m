@@ -642,7 +642,7 @@ rmb_clear(const float *rgba)
 
 /* one indexed draw of n vertices with count indices (rm_fan_indices or rm_quad_indices made them) */
 static int
-rmb_draw_2d_idx(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n,
+rmb_draw_2d_idx(int pipe, int tex, int smp, int sharp, const rmb_vert2d_t *v, int n,
 		const unsigned short *idx, int count, const float *mvp)
 {
 	size_t vbytes = (size_t)(n > 0 ? n : 0) * sizeof(rmb_vert2d_t);
@@ -693,6 +693,13 @@ rmb_draw_2d_idx(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n,
 		[frame_enc setVertexBuffer:frame_ring offset:(NSUInteger)vat atIndex:0];
 		[frame_enc setVertexBytes:mvp length:16 * sizeof(float) atIndex:1];
 
+		{
+			/* rm_params2d: x is the sharp-bilinear switch (metal_2d_sharp), the rest padding */
+			const float params[4] = { sharp ? 1.0f : 0.0f, 0, 0, 0 };
+
+			[frame_enc setFragmentBytes:params length:sizeof(params) atIndex:0];
+		}
+
 		if (t)
 		{
 			[frame_enc setFragmentTexture:t atIndex:0];
@@ -712,22 +719,22 @@ rmb_draw_2d_idx(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n,
 
 
 int
-rmb_draw_2d(int pipe, int tex, int smp, const rmb_vert2d_t *v, int n, const float *mvp)
+rmb_draw_2d(int pipe, int tex, int smp, int sharp, const rmb_vert2d_t *v, int n, const float *mvp)
 {
 	unsigned short idx[3 * 62];
 	int count = rm_fan_indices(n, idx, (int)(sizeof(idx) / sizeof(idx[0])));
 
-	return rmb_draw_2d_idx(pipe, tex, smp, v, n, idx, count, mvp);
+	return rmb_draw_2d_idx(pipe, tex, smp, sharp, v, n, idx, count, mvp);
 }
 
 int
-rmb_draw_2d_quads(int pipe, int tex, int smp, const rmb_vert2d_t *v, int nquads, const float *mvp)
+rmb_draw_2d_quads(int pipe, int tex, int smp, int sharp, const rmb_vert2d_t *v, int nquads, const float *mvp)
 {
 	unsigned short idx[6 * RM_BATCH_QUADS];
 	int count = ((nquads >= 1) && (nquads <= RM_BATCH_QUADS))
 			? rm_quad_indices(nquads, idx, (int)(sizeof(idx) / sizeof(idx[0]))) : 0;
 
-	return rmb_draw_2d_idx(pipe, tex, smp, v, count ? nquads * 4 : 0, idx, count, mvp);
+	return rmb_draw_2d_idx(pipe, tex, smp, sharp, v, count ? nquads * 4 : 0, idx, count, mvp);
 }
 
 /* ---- the 3D pass (N4) ----------------------------------------------------------- */
@@ -1125,4 +1132,54 @@ rmb_draw_alias(const rm_avert_t *v, unsigned nv, const unsigned short *idx, unsi
 
 	rmb_counts.draws++;
 	return 1;
+}
+
+/*
+ * For rmb_rt.m (TASK53): the open frame's command buffer with no encoder
+ * open, for the compute and acceleration-structure work of design section
+ * 3, step 1, which goes before the 3D pass; *frame is the frame's number
+ * (its ring and semaphore slot is (frame - 1) % RMB_FRAMES_IN_FLIGHT,
+ * since frames_begun counts up after the slot is picked). The pass opened next loads
+ * the colour target as after any other pass, so the frame draws the same.
+ * nil outside a frame or in a skipped one.
+ */
+id<MTLCommandBuffer>
+rmb_frame_compute(unsigned long *frame)
+{
+	if (!frame_open || frame_skipped || !frame_cmd)
+	{
+		return nil;
+	}
+
+	rmb_end_encoder();
+	*frame = frames_begun;
+	return frame_cmd;
+}
+
+/*
+ * For rmb_rt.m: n bytes of the frame ring for the GPU to read in this
+ * frame (the frame slot keeps them until the frame completes): their CPU
+ * address, with the ring's buffer and the offset; NULL when the ring is
+ * full or there is no frame.
+ */
+void *
+rmb_frame_ring_take(size_t n, __strong id<MTLBuffer> *buf, size_t *ofs)
+{
+	long at;
+
+	if (!frame_open || frame_skipped || !frame_ring)
+	{
+		return NULL;
+	}
+
+	at = mtl_ring_alloc(&ring, n);
+
+	if (at < 0)
+	{
+		return NULL;
+	}
+
+	*buf = frame_ring;
+	*ofs = (size_t)at;
+	return (unsigned char *)frame_ring.contents + at;
 }

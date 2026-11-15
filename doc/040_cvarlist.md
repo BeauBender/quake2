@@ -360,6 +360,18 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   with an aspect ratio of 4:3, regardless what the actual windows size
   or resolution is.
 
+* **con_backaspect**: If set to `1` the console background picture keeps
+  its 4:3 shape instead of being stretched to the window. It is scaled
+  to cover the window, centred across and anchored at the console's
+  lower edge, and what lies outside the window is cropped: the top of
+  the picture on a wide window, its sides on a narrow one. On a 4:3
+  window it draws the same as `0`. The software renderer refuses a
+  picture that leaves the window, which this one does on a window narrower
+  than 4:3. It therefore always stretches (it could draw the cropped
+  rectangle on a window as wide as 4:3 or wider, but is kept the same). The renderer that is loaded decides, not
+  `vid_renderer`, which may have been changed without a `vid_restart`. Defaults to `0`. Saved with the
+  configuration.
+
 * **cl_gun**: Decides whether the gun is drawn. If set to `0` the gun
   is omitted. If set to `1` the gun is only drawn if the FOV is equal
   or smaller than 90. This was the default with Vanilla Quake II. If set
@@ -453,6 +465,14 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   is installed, the high resolution textures are used.
 
 * **r_scale8bittextures**: If set to `1`, scale up all 8bit textures.
+  The Metal renderer takes it as the OpenGL 1.4 renderer does: an 8bit
+  image outside the small-picture atlas is scaled by 2, or by 3 when it
+  is lerped and the window is at least 720 pixels high, with `scale2x` or
+  `scale3x`, and every upload, the atlas of small pictures (the HUD digits
+  and icons) included, is smoothed. The pictures in the atlas are not scaled. Applies to images loaded after it
+  is set. The smoothing of the atlas follows the cvar at the atlas's next
+  upload, so pictures already in the atlas change when a new picture enters
+  it.
 
 * **r_shadows**: Enables rendering of shadows. Quake IIs shadows are
   very simple and are prone to render errors.
@@ -736,6 +756,18 @@ has) is not drawn.
   `0`. Other renderers do not have it. Saved with the
   configuration; applies from the next frame.
 
+* **metal_2d_sharp**: How the Metal renderer samples the 2D pictures (HUD,
+  menus, the console background) that are filtered. `0` (the default) is
+  the bilinear filter, which blurs a picture drawn at a large scale. `1`
+  draws each texel of the picture as a block with no blur at an integer
+  scale, where the result equals nearest filtering, and at a scale that
+  is not an integer keeps the blocks and blends one screen pixel across
+  the edge between two texels. Pictures on `r_nolerp_list` or drawn with
+  `r_2D_unfiltered 1` are already unfiltered and are not changed, nor are
+  the cinematics. Only `0` and `1` are values: any other value is `0`.
+  Other renderers do not have it. Saved with the configuration; applies
+  from the next frame.
+
 * **metal_particle_cap**: How the Metal renderer limits the size of a
   particle point (`gl1_particle_max_size`, 40 pixels by default). `0`
   (the default) is the limit every renderer uses, and draws what it drew
@@ -749,6 +781,38 @@ has) is not drawn.
   are triangles and have no limit. Only `1` and `0` are
   values: any other value is `0`. Other renderers do not have it. Saved with the
   configuration; applies from the next frame.
+
+The `r_rt_*` cvars belong to the Metal renderer's ray tracing, which is
+being built and changes nothing drawn yet: with them set, the renderer
+builds acceleration structures for the world, the doors and platforms
+and every model the frame lists (not only those in view, since a model
+out of view can still cast into it), which nothing reads. On a GPU without ray
+tracing they do nothing (the renderer says so once).
+
+* **r_rt_gunshadow**: When set to `1`, the view weapon is part of the
+  ray-traced scene, so that later ray-traced effects shade it and let it
+  cast shadows; with `0` (the default) it is left out, since from the
+  player's eye it would shadow most of the view. It is not part of the
+  scene either way when `hand` is `2` (the weapon is not drawn). Saved
+  with the configuration.
+
+* **r_rt_stats**: When set to `1`, the Metal renderer builds its
+  ray-tracing acceleration structures and prints what they hold: when a
+  map is loaded, the world's triangles by material (world, sky, water,
+  translucent), the doors and platforms with their triangles, the bytes
+  of each structure kind and the GPU time of the build; and when the map
+  is left, `r_rt_stats` is set back to `0` or the renderer shuts down, a
+  summary of the frames since the map was loaded, with the GPU time of the
+  per-frame work (the models' updates and the rebuild of the scene's
+  instance structure: least, median, 95th percentile and most) and the
+  busiest frame's models and triangles. `2` also prints one line per
+  frame: the instances, the models' triangles, how many model structures
+  were built and updated, what was left out (beams, entities without a
+  model, sprites, the view weapon, shells, models it cannot build) and the
+  bytes held. Nothing is drawn differently. The objects it makes are
+  counted as `rt` in the teardown line. With `0` (the default) nothing is
+  built and nothing is allocated for ray tracing. Applies from the next
+  frame.
 
 
 ## Gamepad

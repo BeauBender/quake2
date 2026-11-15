@@ -170,7 +170,7 @@ rm_ledger_live(const rm_ledger_t *l)
 int
 rm_ledger_format(const rm_ledger_t *l, char *buf, size_t len)
 {
-	static const char *names[RM_OBJ_KINDS] = { "device", "queue", "view", "texture", "buffer", "state" };
+	static const char *names[RM_OBJ_KINDS] = { "device", "queue", "view", "texture", "buffer", "state", "rt" };
 	size_t used = 0;
 	int k, ok;
 
@@ -451,6 +451,83 @@ rm_image_sampler(int mipmapped, int nolerp, int mode_change)
 	}
 
 	return RMB_SAMPLER(mipmapped ? RMB_SMP_MIP : RMB_SMP_FLAT, 0);
+}
+
+/* from gl1_image.c, R_LoadPic: scale 2, or 3 if lerp image on a target of 240 * 3 lines or more */
+int
+rm_scale8_factor(int enabled, int nolerp, int height)
+{
+	if (!enabled)
+	{
+		return 1;
+	}
+
+	return (!nolerp && (height >= 240 * 3)) ? 3 : 2;
+}
+
+/* from gl1_image.c, R_LoadPic: width > INT_MAX / height / scale / scale is an error there */
+int
+rm_scale8_dims(int w, int h, int scale, int *ow, int *oh)
+{
+	*ow = 0;
+	*oh = 0;
+
+	if ((w <= 0) || (h <= 0) || (scale < 2) || (scale > 3) || (w > INT_MAX / h / scale / scale))
+	{
+		return 0;
+	}
+
+	*ow = w * scale;
+	*oh = h * scale;
+	return 1;
+}
+
+/*
+ * What R_LoadPic does with an 8-bit picture outside the scrap: drop it when the
+ * scaled sides overflow, upload it unscaled when the cvar is off or the scaled
+ * picture would pass the staging limit (as gl1 does), else upload it scaled.
+ */
+int
+rm_scale8_plan(int enabled, int nolerp, int height, int w, int h, size_t staging_limit,
+		int *sw, int *sh)
+{
+	const int scale = rm_scale8_factor(enabled, nolerp, height);
+	size_t bytes;
+
+	*sw = w;
+	*sh = h;
+
+	if (scale <= 1)
+	{
+		return RM_SCALE8_UNSCALED;
+	}
+
+	if (!rm_scale8_dims(w, h, scale, sw, sh))
+	{
+		/* rm_scale8_dims left both sides 0 */
+		return RM_SCALE8_DROP;
+	}
+
+	if (!rm_upload_bytes(*sw, *sh, staging_limit, &bytes))
+	{
+		*sw = w;
+		*sh = h;
+		return RM_SCALE8_UNSCALED;
+	}
+
+	return RM_SCALE8_SCALED;
+}
+
+int
+rm_2d_sharp(float cvar, int smp, int flat_linear)
+{
+	if ((cvar != 1.0f) || !flat_linear)
+	{
+		return 0;
+	}
+
+	/* the repeat and the clamp form of the flat class, and nothing else, whatever the index */
+	return (smp == RMB_SAMPLER(RMB_SMP_FLAT, 0)) || (smp == RMB_SAMPLER(RMB_SMP_FLAT, 1));
 }
 
 /* from gl1_image.c, the modes table of R_TextureMode */
