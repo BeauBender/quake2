@@ -80,7 +80,7 @@ static int frame_open;
 static int frame_skipped;
 static int frame_passes;
 static id<CAMetalDrawable> frame_drawable;
-static id<MTLTexture> frame_target;        /* the drawable's texture, or mgl_offscreen */
+static id<MTLTexture> frame_target;        /* the drawable's texture, a present slot's target (FIX51), or mgl_offscreen */
 static id<MTLCommandBuffer> frame_cmd;
 static id<MTLRenderCommandEncoder> frame_enc;
 static int frame_w, frame_h;
@@ -233,8 +233,14 @@ mgl_library_path(char *path, size_t len)
  * pipeline is built with the context (mgl_alpha_build) from the shim's
  * shader library, once: it is nil when that failed, the frames are then
  * presented without the pass, and one line says so.
+ *
+ * FIX51: a frame presented apart (below) is written to the drawable in
+ * one pass that is the copy and this pass together (mgl_present_pass,
+ * mgl_fragment_present), with a pipeline built here too; when that one
+ * was not built the frame is copied and this pass written over it.
  */
 static id<MTLRenderPipelineState> mgl_alpha_pso;
+static id<MTLRenderPipelineState> mgl_present_pso;
 static int mgl_alpha_reported;
 
 static void
@@ -246,12 +252,21 @@ mgl_alpha_build(void)
 	d.vertexFunction = [mgl_library newFunctionWithName:@"mgl_vertex_alpha"];
 	d.fragmentFunction = [mgl_library newFunctionWithName:@"mgl_fragment_alpha"];
 	mgl_alpha_pso = nil;
+	mgl_present_pso = nil;
 
 	if (d.vertexFunction && d.fragmentFunction)
 	{
 		d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
 		d.colorAttachments[0].writeMask = MTLColorWriteMaskAlpha;
 		mgl_alpha_pso = [mgl_device newRenderPipelineStateWithDescriptor:d error:&e];
+	}
+
+	d.fragmentFunction = [mgl_library newFunctionWithName:@"mgl_fragment_present"];
+
+	if (d.vertexFunction && d.fragmentFunction)
+	{
+		d.colorAttachments[0].writeMask = MTLColorWriteMaskAll;
+		mgl_present_pso = [mgl_device newRenderPipelineStateWithDescriptor:d error:&e];
 	}
 }
 
@@ -286,31 +301,70 @@ mgl_force_alpha(id<MTLCommandBuffer> cmd, id<MTLTexture> tex)
 }
 
 /*
+ * FIX51: src, of the drawable's size, onto dst: with alpha 1 in one pass
+ * when the layer is not opaque and the pipeline was built, otherwise a
+ * copy, and FIX53's alpha pass over it when the layer is not opaque.
+ */
+static void
+mgl_present_pass(id<MTLCommandBuffer> cmd, id<MTLTexture> src, id<MTLTexture> dst)
+{
+	MTLRenderPassDescriptor *rp;
+	id<MTLRenderCommandEncoder> enc;
+	id<MTLBlitCommandEncoder> blit;
+
+	if (!mgl_metal_layer.opaque && mgl_present_pso)
+	{
+		rp = [MTLRenderPassDescriptor renderPassDescriptor];
+		rp.colorAttachments[0].texture = dst;
+		rp.colorAttachments[0].loadAction = MTLLoadActionDontCare;   /* every pixel is written */
+		rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+		enc = [cmd renderCommandEncoderWithDescriptor:rp];
+		[enc setRenderPipelineState:mgl_present_pso];
+		[enc setFragmentTexture:src atIndex:0];
+		[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+		[enc endEncoding];
+		return;
+	}
+
+	blit = [cmd blitCommandEncoder];
+	[blit copyFromTexture:src toTexture:dst];
+	[blit endEncoding];
+
+	if (!mgl_metal_layer.opaque)
+	{
+		mgl_force_alpha(cmd, dst);
+	}
+}
+
+/*
  * FIX51: with display sync off a frame waits for no drawable
- * (docs/plans/metal-port-harness.md, "The fixed per-frame cost of the
- * Metal renderers (FIX51)"). The window server hands a drawable back at
- * its own pace, whatever the frame costs, and that pace was the frame
- * rate twice over: a frame waited for the drawable in nextDrawable, and a
+ * (docs/runbook/FIX51.md). The window server hands a drawable back at its
+ * own pace, whatever the frame costs, and that pace was the frame rate
+ * twice over: a frame waited for the drawable in nextDrawable, and a
  * drawable the window server had not let go of yet held the command
  * buffer that drew into it on the GPU, and with it the frame slot.
  *
- * So with display sync off every frame is drawn into mgl_offscreen, the
- * next drawable is acquired ahead, on a serial queue, and the present is
- * apart from the frame: the frame copies mgl_offscreen to a stage and
- * signals mgl_present_event; the copy to the drawable and the present go
- * on mgl_present_queue, which waits for that event, so a wait for the
- * drawable holds that queue and no frame slot. As many presents are on
- * their way as the layer has drawables (maximumDrawableCount, at most
- * MGL_PRESENTS), each with a present slot of its own: a semaphore of one
- * (mgl_present_sem), given back when the present has completed, and the
- * stage it reads (mgl_stage), so a stage is not written again before the
- * present that reads it has completed. A frame that ends with no drawable
- * ready, or with every present slot on its way, is not presented (counted
- * as without a drawable). With display sync on the frame waits in
- * nextDrawable and draws into the drawable, as before, and every frame is
- * presented.
+ * So with display sync off the next drawable is acquired ahead, on a
+ * serial queue, and the present is apart from the frame, from the very
+ * target the frame was drawn into. There are MGL_PRESENTS present slots,
+ * one for each of the layer's drawables and one for the frame being
+ * drawn: a semaphore of one (mgl_present_sem) and a colour target
+ * (mgl_present_target). A frame takes a free slot when it begins and is
+ * drawn into the slot's target (mgl_present_take). When it ends with a
+ * drawable ready, the present goes on mgl_present_queue, which waits for
+ * the frame's command buffer (mgl_present_event), and writes the drawable
+ * from that target in one pass (mgl_present_pass): the wait for the
+ * drawable holds that queue and no frame slot, and nothing copies the
+ * frame first. The slot comes back when its present has completed, so its
+ * target is not drawn into again while it is read; a frame that is not
+ * presented gives its slot back when it ends (a later frame that draws
+ * into that target is on the same queue, after it). A frame that begins
+ * with every slot held is drawn into mgl_offscreen and is not presented,
+ * nor is one that ends with no drawable ready (counted as without a
+ * drawable). With display sync on the frame waits in nextDrawable and
+ * draws into the drawable, as before, and every frame is presented.
  */
-#define MGL_PRESENTS 3
+#define MGL_PRESENTS (MGL_FRAMES_IN_FLIGHT + 1)   /* maximumDrawableCount (mgl_layer_create), and the open frame */
 
 static dispatch_queue_t mgl_ahead_queue;
 static os_unfair_lock mgl_ahead_lock = OS_UNFAIR_LOCK_INIT;
@@ -320,8 +374,9 @@ static int mgl_ahead_busy;              /* mgl_ahead_lock: an acquisition is on 
 static id<MTLCommandQueue> mgl_present_queue;
 static id<MTLEvent> mgl_present_event;
 static uint64_t mgl_present_value;
-static dispatch_semaphore_t mgl_present_sem[MGL_PRESENTS];   /* 1: no present of this slot on its way */
-static id<MTLTexture> mgl_stage[MGL_PRESENTS];               /* the copy of the frame its present reads */
+static dispatch_semaphore_t mgl_present_sem[MGL_PRESENTS];   /* 1: no frame and no present holds this slot */
+static id<MTLTexture> mgl_present_target[MGL_PRESENTS];      /* the target the slot's frame is drawn into */
+static int frame_slot = -1;                                  /* the slot the open frame holds, or -1 */
 
 static void mgl_watch(id<MTLCommandBuffer> cmd);
 static id<MTLTexture> mgl_new_texture(MTLPixelFormat format, int w, int h, MTLTextureUsage usage);
@@ -333,24 +388,64 @@ mgl_present_apart(void)
 	return !mgl_sync && mgl_present_sem[0];
 }
 
-/* Takes the first present slot with no present on its way, or returns -1. */
-static int
-mgl_present_take(void)
+/*
+ * The target of the first free present slot, which the open frame then
+ * holds (frame_slot), made (again) for w by h; nil with every slot held or
+ * when it cannot be made.
+ */
+static id<MTLTexture>
+mgl_present_take(int w, int h)
 {
-	int i, n = mgl_metal_layer ? (int)mgl_metal_layer.maximumDrawableCount : 1;
+	int i, slot = -1;
 
-	/* one for each of the layer's drawables, at most MGL_PRESENTS */
-	n = n < 1 ? 1 : (n > MGL_PRESENTS ? MGL_PRESENTS : n);
-
-	for (i = 0; i < n; i++)
+	for (i = 0; (i < MGL_PRESENTS) && (slot < 0); i++)
 	{
 		if (mgl_present_sem[i] && (dispatch_semaphore_wait(mgl_present_sem[i], DISPATCH_TIME_NOW) == 0))
 		{
-			return i;
+			slot = i;
 		}
 	}
 
-	return -1;
+	if (slot < 0)
+	{
+		return nil;
+	}
+
+	/* a new size: no target of the old one is drawn into again */
+	if (mgl_present_target[slot] && (((int)mgl_present_target[slot].width != w) ||
+			((int)mgl_present_target[slot].height != h)))
+	{
+		for (i = 0; i < MGL_PRESENTS; i++)
+		{
+			mgl_present_target[i] = nil;
+		}
+	}
+
+	if (!mgl_present_target[slot])
+	{
+		mgl_present_target[slot] = mgl_new_texture(MTLPixelFormatBGRA8Unorm, w, h,
+				MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead);
+	}
+
+	if (!mgl_present_target[slot])
+	{
+		dispatch_semaphore_signal(mgl_present_sem[slot]);
+		return nil;
+	}
+
+	frame_slot = slot;
+	return mgl_present_target[slot];
+}
+
+/* Gives the open frame's present slot back, if it holds one and nothing presents it. */
+static void
+mgl_present_give(void)
+{
+	if (frame_slot >= 0)
+	{
+		dispatch_semaphore_signal(mgl_present_sem[frame_slot]);
+		frame_slot = -1;
+	}
 }
 
 /* Puts an acquisition of the next drawable on the queue, unless one is there or done. */
@@ -406,8 +501,8 @@ mgl_ahead_take(void)
 
 /*
  * Waits for the acquisition on the queue (bounded, as nextDrawable is) and
- * for the presents on their way (bounded, MGL_GPU_WAIT_MS for them all),
- * and drops the drawable acquired ahead and the stages.
+ * for every present slot but the open frame's (bounded, MGL_GPU_WAIT_MS
+ * for them all), and drops the drawable acquired ahead and the targets.
  */
 static void
 mgl_ahead_drop(void)
@@ -424,7 +519,7 @@ mgl_ahead_drop(void)
 
 	for (i = 0; i < MGL_PRESENTS; i++)
 	{
-		if (!mgl_present_sem[i])
+		if (!mgl_present_sem[i] || (i == frame_slot))
 		{
 			continue;
 		}
@@ -441,37 +536,27 @@ mgl_ahead_drop(void)
 
 	for (i = 0; i < MGL_PRESENTS; i++)
 	{
-		mgl_stage[i] = nil;
+		mgl_present_target[i] = nil;
 	}
 }
 
 /*
- * Presents the frame drawn into src (w x h) on the drawable acquired ahead,
- * apart from the frame (see above): the copy into the stage of a present
- * slot and the event go on the frame's command buffer, which is committed
- * after this; the present goes on the present queue and is returned, to be
- * committed after the frame by mgl_present_commit with *sem, the slot's
- * semaphore. nil when the frame is not presented: no drawable is ready, it
- * is of another size than the frame (the drawable size changed after it
- * was acquired), or every present slot is on its way.
+ * The present of the frame drawn into src, the target of the open frame's
+ * present slot, on the drawable acquired ahead, apart from the frame (see
+ * above): the event goes on the frame's command buffer, which is committed
+ * after this, and is signalled after everything committed to the frame's
+ * queue before it, so after every write of the frame to src; the present
+ * goes on the present queue, waits for it, and is returned, to be
+ * committed after the frame by mgl_present_commit. nil when the frame is
+ * not presented: no drawable is ready, or it is of another size than the
+ * frame (the drawable size changed after it was acquired).
  */
 static id<MTLCommandBuffer>
-mgl_present_apart_begin(id<MTLCommandBuffer> frame, id<MTLTexture> src, __strong dispatch_semaphore_t *sem)
+mgl_present_apart_begin(id<MTLCommandBuffer> frame, id<MTLTexture> src)
 {
-	id<CAMetalDrawable> d;
+	id<CAMetalDrawable> d = mgl_ahead_take();
 	id<MTLCommandBuffer> cmd = nil;
-	id<MTLBlitCommandEncoder> blit;
-	int slot = mgl_present_take();
 
-	*sem = nil;
-
-	if (slot < 0)
-	{
-		mgl_ahead_request();
-		return nil;
-	}
-
-	d = mgl_ahead_take();
 	mgl_ahead_request();
 
 	if (d && ((d.texture.width != src.width) || (d.texture.height != src.height)))
@@ -479,58 +564,52 @@ mgl_present_apart_begin(id<MTLCommandBuffer> frame, id<MTLTexture> src, __strong
 		d = nil;
 	}
 
-	if (d && mgl_stage[slot] && ((mgl_stage[slot].width != src.width) || (mgl_stage[slot].height != src.height)))
-	{
-		mgl_stage[slot] = nil;
-	}
-
-	if (d && !mgl_stage[slot])
-	{
-		mgl_stage[slot] = mgl_new_texture(MTLPixelFormatBGRA8Unorm, (int)src.width, (int)src.height,
-				MTLTextureUsageShaderRead);
-	}
-
-	if (d && mgl_stage[slot])
+	if (d)
 	{
 		cmd = [mgl_present_queue commandBuffer];
 	}
 
 	if (!cmd)
 	{
-		dispatch_semaphore_signal(mgl_present_sem[slot]);
 		return nil;
 	}
 
-	blit = [frame blitCommandEncoder];
-	[blit copyFromTexture:src toTexture:mgl_stage[slot]];
-	[blit endEncoding];
 	mgl_present_value++;
 	[frame encodeSignalEvent:mgl_present_event value:mgl_present_value];
-
 	[cmd encodeWaitForEvent:mgl_present_event value:mgl_present_value];
-	blit = [cmd blitCommandEncoder];
-	[blit copyFromTexture:mgl_stage[slot] toTexture:d.texture];
-	[blit endEncoding];
-
-	if (!mgl_metal_layer.opaque)
-	{
-		mgl_force_alpha(cmd, d.texture);
-	}
-
+	mgl_present_pass(cmd, src, d.texture);
 	[cmd presentDrawable:d];
-	*sem = mgl_present_sem[slot];
 	return cmd;
 }
 
-/* Commits a present of mgl_present_apart_begin; it gives sem, its slot's, back when it completes. */
+/*
+ * After the frame's command buffer is committed: commits cmd, the frame's
+ * present, which gives the frame's present slot back when it has
+ * completed, or with no present gives the slot back now.
+ */
 static void
-mgl_present_commit(id<MTLCommandBuffer> cmd, dispatch_semaphore_t sem)
+mgl_present_commit(id<MTLCommandBuffer> cmd)
 {
+	dispatch_semaphore_t sem;
+
+	if (!cmd)
+	{
+		mgl_present_give();
+		return;
+	}
+
+	sem = (frame_slot >= 0) ? mgl_present_sem[frame_slot] : nil;
+	frame_slot = -1;
 	mgl_watch(cmd);
-	[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
-		(void)b;
-		dispatch_semaphore_signal(sem);
-	}];
+
+	if (sem)
+	{
+		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
+			(void)b;
+			dispatch_semaphore_signal(sem);
+		}];
+	}
+
 	[cmd commit];
 }
 
@@ -549,6 +628,7 @@ mgl_release_all(void)
 		mgl_present_sem[i] = nil;
 	}
 
+	frame_slot = -1;
 	frame_enc = nil;
 	frame_cmd = nil;
 	frame_drawable = nil;
@@ -562,6 +642,7 @@ mgl_release_all(void)
 	upload_cmd = nil;
 	mgl_pipelines = nil;
 	mgl_alpha_pso = nil;
+	mgl_present_pso = nil;
 	mgl_alpha_reported = 0;
 	mgl_samplers = nil;
 	mgl_depth_states = nil;
@@ -922,15 +1003,17 @@ mgl_layer_frame_begin(int *tw, int *th)
 			mgl_last_drawable = nil;
 		}
 
-		/* with display sync off the frame is drawn offscreen and presented apart (FIX51) */
+		/* with display sync off the frame is drawn offscreen, into a present slot's target, and presented apart (FIX51) */
 		frame_drawable = mgl_present_apart() ? nil : [mgl_metal_layer nextDrawable];
+		frame_target = mgl_present_apart() ? mgl_present_take(w, h) : nil;
 
 		if (frame_drawable)
 		{
 			frame_target = frame_drawable.texture;
 		}
-		else
+		else if (!frame_target)
 		{
+			/* with display sync off every slot is held: drawn here, and not presented */
 			/* with display sync off: counted at the present, when no drawable takes the frame */
 			if (!mgl_present_apart())
 			{
@@ -972,6 +1055,7 @@ mgl_layer_frame_begin(int *tw, int *th)
 			frame_cmd = nil;
 			frame_skipped = 1;
 			count_skipped++;
+			mgl_present_give();   /* nothing to present: the present slot comes back */
 			dispatch_semaphore_signal(mgl_frame_sem);
 			return 0;
 		}
@@ -1245,16 +1329,20 @@ mgl_layer_present(void)
 		if (frame_cmd)
 		{
 			id<MTLCommandBuffer> pcmd = nil;
-			dispatch_semaphore_t psem = nil;   /* the present slot pcmd gives back */
 
-			if (!frame_drawable && mgl_present_apart() && (frame_target == mgl_offscreen))
+			if (frame_slot >= 0)
 			{
-				pcmd = mgl_present_apart_begin(frame_cmd, frame_target, &psem);
+				pcmd = mgl_present_apart_begin(frame_cmd, frame_target);
+			}
+			else if (mgl_present_apart())
+			{
+				mgl_ahead_request();   /* every slot was held: a drawable ready is left for the next frame */
+			}
 
-				if (!pcmd)
-				{
-					count_no_drawable++;
-				}
+			/* with display sync off, a frame no drawable takes */
+			if (!frame_drawable && !pcmd && ((frame_slot >= 0) || mgl_present_apart()))
+			{
+				count_no_drawable++;
 			}
 
 			if (frame_drawable)
@@ -1273,11 +1361,7 @@ mgl_layer_present(void)
 				dispatch_semaphore_signal(sem);
 			}];
 			[frame_cmd commit];
-
-			if (pcmd)
-			{
-				mgl_present_commit(pcmd, psem);   /* after the frame it copies */
-			}
+			mgl_present_commit(pcmd);   /* after the frame it reads; without one the slot comes back */
 
 			/* what is now on screen; a read between frames reads it in place */
 			mgl_last = frame_target;
@@ -1285,6 +1369,7 @@ mgl_layer_present(void)
 		}
 		else
 		{
+			mgl_present_give();
 			dispatch_semaphore_signal(sem);
 		}
 
@@ -1329,6 +1414,8 @@ mgl_layer_destroy(void)
 			}];
 			[frame_cmd commit];
 		}
+
+		mgl_present_give();   /* the open frame is not presented (FIX51) */
 
 		/*
 		 * wait for the frames on the GPU, bounded; the semaphore outlives a hung one.
