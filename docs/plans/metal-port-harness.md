@@ -2654,6 +2654,110 @@ device: 0), called by `RM_RT_Wanted` (`rm_rtscene.c`) before anything else in
 `RM_RT_MapLoaded` and `RM_RT_Frame`, whose only other effect is one line saying the device has
 no ray tracing; `rmb_rt_open` checks `supportsRaytracing` again.
 
+### The G-buffer and the lighting resolve in `ref_metal` (TASK54, RT2)
+
+RT2 adds the G-buffer of `docs/plans/metal-raytracing-design.md`, section 3 (its
+subsection "The G-buffer as RT2 built it" has the paths, the contract and the off-state
+decision). Host: the bare-metal Mac, `Apple M6`, macOS 27.2.1. Base: `origin/main` at
+`d9e76e40` (TASK53). The pins, the validation runs, the motion and jitter checks and the
+ASAN run are of engine commit `fde68b47` (pin ids `fde68b47738c-*`); the timing is of
+`4bf077a4`. The commits after `fde68b47` change only what `MTL_GPU_TIME` does (the frame's
+drawing committed apart from the present, named, and the next frame started on an idle
+GPU), the documentation and one host check, so nothing drawn; both are ancestors of the
+card's head. Screen unlocked before every run, no other `quake2` (the wrapper checked both
+and printed the one-minute load, 1.3 to 3.4); the timing waited for another card's
+hardware check to end. Every log, frame list, script and timing is in `<artifacts>/TASK54/`
+and `<pin store>`.
+
+```sh
+export PINS_STORE=<pin store> PINS_BASEDIR=<game data> MTL_DEBUG_LAYER=1
+make client game ref_metal
+scripts/pins.sh record metal <scenario>          # PINS_SEED=1 too for models, particles; dlights seeded only
+# the G-buffer path: scenarios/<s>-gb.cfg (<s>.cfg plus "set r_rt_gbuffer 1"), deleted after;
+# the cinematic by the line appended to cinematic.cfg for one record (only that scenario plays a .cin)
+scripts/pins.sh record metal <s>-gb
+framediff <gl1 reference frame> <frame> --threshold T --bad-threshold B   # every frame, both references
+cmp <base 0269ca35 frame> <frame>
+```
+
+**Pins.** Against the `gl1` records of TASK83 (`de1da7fdba66-*`, `f6bb192775b8-*`) at
+TASK53's values, seeded `models`, `particles` and `dlights` against the seeded `gl1-metal`
+records of `bdda98128905` at 0.005 and 0.001; "identical" counts frames byte-identical to
+the base build's `ref_metal` record of the same settings (TASK53's `0269ca35`, whose frames
+are the base's: TASK53 drew nothing differently):
+
+| Scenario | Values | Default path (forward) | G-buffer path, every effect off |
+|---|---|---|---|
+| `world` | defaults | 23 of 23 each, worst 0.000010, bad 0.000033; 23 identical | 23 of 23 each, worst 0.000493, bad 0.000033; 0 identical |
+| `world-fullbright` | defaults | 23 of 23, worst 0.000031, bad 0.000072; 23 identical | the same; 23 identical |
+| `hud2d` | defaults | 23 of 23, 0, 0; 23 identical | 23 of 23, 0, 0; 23 identical |
+| `skywater` | defaults | 23 of 23, worst 0.000010, bad 0.000033; 23 identical | 23 of 23, worst 0.000493, bad 0.000033; 0 identical |
+| `cinematic` (`idlog.cin`, every 7th) | defaults | 12 of 12, 0, 0; 12 identical | 12 of 12, 0, 0; 12 identical (no 3D view) |
+| `models` | defaults | 23 of 23, worst 0.000084 and 0.000232, bad 0.000612; 22 identical (unseeded) | 23 of 23, worst 0.000549 and 0.000694, bad 0.000618; 0 identical |
+| `models`, seeded | 0.005, 0.001 | 23 of 23, worst 0.000039, bad 0.000589; 23 identical | 23 of 23, worst 0.000462, bad 0.000596; 0 identical |
+| `particles` | 0.02, 0.25 | 23 of 23, worst 0.010542 and 0.010208, bad 0.175205; 7 identical (unseeded) | 23 of 23, worst 0.010410 and 0.010318, bad 0.150456; 0 identical |
+| `particles`, seeded | 0.005, 0.001 | 23 of 23, worst 0.000039, bad 0.000589; 23 identical | 23 of 23, worst 0.000471, bad 0.000596; 0 identical |
+| `dlights`, seeded | 0.005, 0.001 | 23 of 23, 0, 0; 23 identical | 23 of 23, worst 0.000501, bad 0; 0 identical |
+
+Every score is under 0.005 but unseeded `particles`, which two unseeded records reach by
+themselves (TASK53). Byte identity on the G-buffer path holds where the light is white
+(`world-fullbright`, `hud2d`, the cinematic) and not where it is a lightmap or a vertex
+colour: the raster stores the texel and the light in `rgba8` and the resolve multiplies the
+rounded values, where the stock fragment multiplies them unrounded, so a channel moves by
+one level now and then (the largest score added is 0.0005, on `dlights`; a bad fraction
+moves by 0.000007 at most). The forward
+path with depth and motion (`r_rt_motion 1`) is byte-identical to the base on all 23 frames
+of `world`. With `gl_shadows 1` and `gl1_stencilshadow 1` (seeded `models`), the G-buffer
+path is within 0.000460 of the default path on every frame (the shadows are the forward
+pass's).
+
+**Validation and ASAN.** Every record above ran with `MTL_DEBUG_LAYER=1`: each `engine.log`
+holds `Metal API Validation Enabled`, the attachments line on the G-buffer path, no other
+validation line, no failed command buffer and `teardown: 0 live objects`; so does a
+G-buffer record of `models` over `demo2.dm2` (`waste2`, every 7th, 89 frames). `make ASAN=1
+client game ref_metal`; `debug/quake2` with `MTL_DEBUG_LAYER=1`, `r_rt_gbuffer 1` and a
+scratch script beside the binary (`map base1`, 200 waits, `map base2`, 200 waits,
+`vid_restart`, 300 waits, `quit`): status 0, no sanitizer line, both renderer sessions
+`0 live objects` (1280x960 attachments: `vid_highdpiaware` is 1 by default).
+
+**Motion vectors.** `r_rt_motion_test 0.5` takes the previous view to be this one turned
+0.5 degrees about the camera's vertical axis, every entity its own previous one, and
+`r_rt_gbuffer_show 4` draws the vectors over the view (red and green 0.5 plus the motion
+over 16 pixels). Over the 23 frames of `world` (`<artifacts>/TASK54/mvcheck.c`: each pixel's
+expected motion from the projection the log printed, 1.0 and 1.333333, rows under the 2D
+text and status bar left out, 5,990,175 pixels), the error is 0.024 px on average and at most
+0.062 px on both the G-buffer and the motion path, against an expected motion of 3.76 px on
+average and 6.0 px at most; the 8-bit view alone rounds by up to 0.031 px a channel.
+
+**Jitter.** `r_rt_jitter_x 0.5`, `r_rt_jitter_y 0.25` against 0, on the G-buffer path: the
+colour moves (no frame identical, scores 0.00077 to 0.0073), the depth moves (`r_rt_gbuffer_show
+6`: no frame identical, 0.000028 to 0.00011), and the vectors do not: with the turn above,
+the jittered frames' vectors still match the unjittered expectation (0.024 px on average,
+0.13 px at most, one pixel over 0.1 px, on an edge); a jitter in them would show as a 0.56 px
+error everywhere. At 0 every frame is the frames above.
+
+**Render size.** `r_rt_gbuffer_scale 0.5` at 640 x 480: `G-buffer attachments 320x240`
+(2.3 MB allocated) and `motion attachments 320x240`, the view stretched into the frame,
+validation clean; against the full-size frames the scores are 0.00066 to 0.0106 (the
+stretch of a half-size image), the status bar unchanged.
+
+**Cost.** `MTL_GPU_TIME=1`, the `particles` scenario with `r_vsync 0` and one capture
+(`PINS_EVERY=100000`, `PINS_TRACE=0`, a scratch pin store), windowed 640 x 480 and 1920 x 1080,
+and `PINS_HIDPI=1` at 2560 x 1440 for a 5120x2880 drawable; base, forward, motion and
+G-buffer alternated in each of three rounds; the base is `d9e76e40`'s `ref_metal` with the
+same `MTL_GPU_TIME` aid beside the same `quake2`. The table and the decision are in design
+section 3; in short, at 5120 x 2880 the frame's drawing takes 1.09 ms (base), 1.10 ms
+(forward), 1.73 ms (forward with depth and motion, 136 MB added) and 6.80 ms (G-buffer, 332 MB
+added), so the forward path stays the default with every effect off. A first attempt timed the
+whole frame command buffer: at 1920 x 1080 the G-buffer's then read 16 ms, the wait for the
+previous frame's present, since the raster can start before it; the timing above has none.
+
+**Mutants.** 34 mutants of `rm_gbuf.c` and `common/mtl_gbuf_math.h`
+(`<artifacts>/TASK54/mutants.sh`): 33 fail `tests/metal/rm_gbuf_test.c`; the survivor
+(`rm_gb_render_size` scaling a scale of 1 to 3) is equivalent, since a side is never above
+the frame's. The host test failed 60 of its 108 checks against a stub first; `scripts/pins.sh
+selftest framediff_mask` failed on the framediff before `--mask` and passes with it.
+
 ### Closing TASK27 on the build host
 
 The umbrella card's acceptance list, checked end to end after P1 to P3
