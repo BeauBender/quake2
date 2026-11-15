@@ -2078,8 +2078,11 @@ RE_InitContext(void *win)
 
 	/* We can't rely on vid, because the context is created
 	   before we had a chance to overwrite it with the drawable
-	   size. */
-	if (IsHighDPIaware)
+	   size. The buffer takes the size SWimp_SetMode() leaves in
+	   vid: the drawable, but on a fullscreen window only for the
+	   native resolution; every other mode keeps its own size. */
+	if (IsHighDPIaware &&
+		((vid_fullscreen->value != 2) || (r_mode->value == -2)))
 	{
 		RE_GetDrawableSize(&vid_buffer_width, &vid_buffer_height);
 	}
