@@ -130,11 +130,14 @@ companion when a card judges them. For `hud2d*` and `cinematic`, which draw no
 | `hud2d-scale8` | 2d | `models` |
 | `skywater` | world | `models` |
 | `cinematic` | cinematic | `models` |
+| `rt-shadows` | world,dynamic-lights | `rt-shadows-entities` |
+| `rt-shadows-entities` | world,entities,alias-models,dynamic-lights | `-` |
 
 TASK55 adds `rt-shadows` (tags `world`, `dynamic-lights`; companion
 `rt-shadows-entities`) and `rt-shadows-entities` (tags `world`, `entities`,
 `alias-models`, `dynamic-lights`; companion `-`) here, and the cfg of each
-carries `// footprint darker 0..0.05` in its leading comment block. `rt-shadows`
+carries `// footprint darker 0..0.12` in its leading comment block (0.05 holds without
+entities, whose worst frame is 1.44 % darker, but not with them: see the runbook). `rt-shadows`
 then has to pass the rule above: `rt-shadows-entities` declares the same band and
 sets every cvar of `rt-shadows` (the ray-tracing ones too) to the same value,
 and sets `cl_entities 1`.
@@ -165,7 +168,7 @@ names every frame outside a band and exits non-zero. A scenario without such a l
 footprint reported and never fails. To set a band: record the effect on the
 `cl_entities 0` scenario, read the worst frame, and set the upper bound at a
 small multiple of it (TASK55: about 1 % darker without entities, band
-`darker 0..0.05`); the entity-bearing companion carries the same band, which is
+`darker 0..0.05` held without entities); the entity-bearing companion carries the same band, which is
 where a defect that only shows with entities is caught. `--band` replaces the
 cfg lines for one run. `scripts/pins.sh where` draws where the effect changed
 the picture, for the owner.
