@@ -94,6 +94,34 @@ RM_FreeWorld(rm_world_t *w)
 }
 
 /*
+ * The world's normals buffer for the G-buffer raster (TASK54), made on the
+ * first view of the map that asks for it, so the default path never makes
+ * or reads it: the upload is committed ahead of the frame that draws with
+ * it (rmb_upload_flush). 0 without a world, without the normals (out of
+ * memory at load) or when the buffer cannot be made, which is not asked
+ * again on this map; the raster then draws no static world
+ * (rmb_gbuf_bind_world).
+ */
+int
+RM_WorldNormals(void)
+{
+	rm_world_t *w = r_worldmodel ? r_worldmodel->world : NULL;
+
+	if (!w || !w->normals || !w->vbuf)
+	{
+		return 0;
+	}
+
+	if (!w->nbuf && !w->ntried)
+	{
+		w->ntried = 1;
+		w->nbuf = rmb_buffer_static(w->normals, w->size.verts * sizeof(w->normals[0]));
+	}
+
+	return w->nbuf;
+}
+
+/*
  * Refuses the brush model being loaded: frees it (its hunk, its file and
  * its retained buffers, Mod_Free of an unfinished slot) so the slot does
  * not keep a half-loaded map, then drops to the console.
@@ -783,9 +811,10 @@ RM_BuildWorld(model_t *mod)
 	w->indices = malloc(ib ? ib : 1);
 	w->recs = malloc(sb ? sb : 1);
 	w->scratch = malloc(ib ? ib : 1);
-	w->normals = malloc(vb ? vb / RM_WVERT_STRIDE * sizeof(w->normals[0]) : 1);
+	/* the G-buffer's alone (TASK54): without them the world is drawn as ever, the raster draws no world */
+	w->normals = size.verts ? malloc(size.verts * sizeof(w->normals[0])) : NULL;
 
-	if (!w->verts || !w->indices || !w->recs || !w->scratch || !w->normals)
+	if (!w->verts || !w->indices || !w->recs || !w->scratch)
 	{
 		RM_Refuse(mod, "out of memory for the retained buffers");
 	}
@@ -866,8 +895,11 @@ RM_BuildWorld(model_t *mod)
 			rm_lm_face_rect(fa->light_s, fa->light_t, lm_s, lm_t, v->lmrect);
 
 			/* the G-buffer's normal of the vertex: its surface's (TASK54) */
-			rm_surf_normal(fa->plane->normal, fa->flags & SURF_PLANEBACK, w->normals[vat + i]);
-			w->normals[vat + i][3] = 0.0f;
+			if (w->normals)
+			{
+				rm_surf_normal(fa->plane->normal, fa->flags & SURF_PLANEBACK, w->normals[vat + i]);
+				w->normals[vat + i][3] = 0.0f;
+			}
 		}
 
 		n = rm_world_fan(vat, lnumverts, w->indices + iat, size.indices - iat);
@@ -907,8 +939,7 @@ RM_BuildWorld(model_t *mod)
 
 	/* the static buffers, private, written through the upload command buffer */
 	if (vb && (!(w->vbuf = rmb_buffer_static(w->verts, vb)) || !(w->ibuf = rmb_buffer_static(w->indices, ib)) ||
-		!(w->sbuf = rmb_buffer_static(w->recs, sb)) ||
-		!(w->nbuf = rmb_buffer_static(w->normals, vb / RM_WVERT_STRIDE * sizeof(w->normals[0])))))
+		!(w->sbuf = rmb_buffer_static(w->recs, sb))))
 	{
 		RM_Refuse(mod, "the retained buffers could not be made");
 	}

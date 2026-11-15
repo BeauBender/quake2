@@ -211,6 +211,8 @@ void R_DrawAlphaSurfaces(const rm_view_t *view);
 /* the surfaces of the last view R_DrawWorld skipped, by class, into s (metal_stats) */
 void RM_WorldSkips(rmb_stats_t *s);
 void RM_WorldSkipsClear(void);
+/* the world's normals buffer for the G-buffer raster, made on the first call of a map (rm_model.c, TASK54); 0 without */
+int RM_WorldNormals(void);
 /* the entities of the last view not drawn, by class (rm_main.c, N7), into s (metal_stats) */
 void RM_EntitySkips(rmb_stats_t *s);
 
