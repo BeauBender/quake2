@@ -2606,8 +2606,9 @@ meant to be running, so those rows carry that spread; which round started
 at which load is not recoverable.
 
 **Not measured**, against the card's scope (as written by TASK97; TASK108
-(#259) has since measured every item below, see "Re-measurement (TASK108)"
-after the Findings, and what it still did not measure is listed there):
+(#259) has since measured every item below except the native-resolution
+number, see "Re-measurement (TASK108)" after the Findings, and what it
+still did not measure is listed there):
 no native-resolution number (`vid_fullscreen 1` falls back to 960x540 on
 this host and the largest 16:9 windowed size that fits is 1920x1080); the
 `water` harness demo was not run (about 100 frames, too short for a stable
@@ -2695,12 +2696,12 @@ value that does not move with the pixel count is not a throughput: none of
 these rows measures what the renderer costs. One extra `ref_soft` run at
 1280x720 with `r_vsync 1` read 120.0 too (a single run, load 2.27: a probe,
 not a row). The cause was not found. What the numbers show: it is not the
-60 fps TASK97 got at 1920x1080 (60.0 for all six, the same three
-renderers), and the 640x480 and 1280x720 values TASK97 recorded for the
+60 fps TASK97 got at 1920x1080 (60.0 to 60.1 for all six runs of the same
+three renderers), and the 640x480 and 1280x720 values TASK97 recorded for the
 same renderers (237.2 to 328.1 and 294.3 to 326.2) were above 120, so the
 ceiling is new since those runs. FIX52 changes only `ref_soft`
 (`src/client/refresh/soft/sw_main.c`), and `gl1-metal` and `ref_metal` moved
-from 60.0 to 120.0 at 1920x1080 as well, so FIX52 does not explain the
+from 60.0 to 60.1 to 120.0 to 120.2 at 1920x1080 as well, so FIX52 does not explain the
 move. Candidates, none tested: the display's refresh rate at the time of
 these runs differing from TASK97's (the log says `@60.00` for the current
 mode in both, and `system_profiler` lists the panel as 5120x2880 Retina
@@ -2720,11 +2721,14 @@ this card did not look at; not explained. TASK97's qualification stands
 **`water` spread (Scope 3).** `water.dm2` was made by `scripts/pins.sh
 make-demo water` (it printed `(124 messages, 97 to 124 wanted)`) and plays
 119 frames in the timedemo. `ref_gl1` gave 4958.3, 5173.9, 5173.9, 5173.9
-and 5950.0 fps, range 4958.3 to 5950.0; the log prints `0.0 seconds`, and
-at these rates the timer's 1 ms step is 4 to 5 percent of a run, so the
-spread is one to three timer steps and a `ref_gl1` rate from this demo is
-good to that range and no finer. The three capped renderers gave 120.0 to
-121.2 (the log prints `1.0 seconds`, so the step is 1 s of a run). The demo
+and 5950.0 fps, range 4958.3 to 5950.0; the log prints `0.0 seconds`. The
+timer counts whole milliseconds (`src/client/cl_network.c`, the timedemo
+end), so the five runs took 24, 23, 23, 23 and 20 ms: a spread of four
+1 ms steps, each 4 to 5 percent of a run, and a `ref_gl1` rate from this
+demo is good to that range and no finer. The 4958.3 is run 3, the one
+started at the highest load (4.45, below); without it the range is 5173.9
+to 5950.0. The three capped renderers gave 120.0 to 121.2; their runs last
+about 1 s, so the 1 ms step is about 0.1 percent of a run. The demo
 is long enough to show the ceiling and too short to say more about
 `ref_gl1` than the range above.
 
@@ -2760,9 +2764,11 @@ desktop mode failed at the display switch on this host with `Couldn't switch
 to exclusive fullscreen: CGDisplaySwitchToMode(): Unknown Error`, then
 `SDL SetVideoMode failed: CGDisplaySwitchToMode(): Unknown Error` and
 `Reverting to windowed r_mode 4 (640x480).` (`glimp_sdl3.c:259` and `:720`),
-for 640x480 (closest 960x540), 1280x720 and 1920x1080 (closest the same
-size) on `ref_soft`, `ref_gl1` and `ref_metal` (the Metal-backed `gl1` was
-not tried at these). The text is SDL's: `CG_SetError`
+in seven cases: 640x480 (closest 960x540), 1280x720 and 1920x1080 (closest
+the same size) on `ref_soft`, and 640x480 and 1920x1080 on `ref_gl1` and on
+`ref_metal` (the Metal-backed `gl1` was not tried, and 1280x720 was not
+tried on `ref_gl1` or `ref_metal`). FIX57 (#281) is the card for this
+failure. The text is SDL's: `CG_SetError`
 (`third_party/SDL3/src/video/cocoa/SDL_cocoamodes.m:39`) prints `Unknown
 Error` (line 75) for any `CGError` it has no name for, after
 `CGDisplaySetDisplayMode` failed (665, 708): the OS refused the switch with
@@ -2797,13 +2803,19 @@ says anything about the renderer (every row reads the 120 fps ceiling, which
 needs explaining first); a windowed timedemo above 1920x1080, or at the
 non-16:9 modes 1920x1200, 1600x1200 and 2560x1080 (booted only); any
 rate at the panel's native 5120x2880 pixels (above: the drawable is
-2560x1440 at most); a fullscreen mode other than the
-desktop mode (the switch fails, above); `ref_gl1` against a GPU timestamp
-(`gl_finish 1`). The load at the start of three runs was above 3.5 (1280x720
-run 1: `gl1-metal` 5.61 and `metal` 4.21; `water` run 3: `gl1` 4.45,
-`gl1-metal` 4.06, `metal` 3.63); the one-minute average is a trailing mean,
-those values lie inside the range of the other four runs of their row, and
-they were kept.
+2560x1440 at most; it needs TASK118 (#273), or a working switch to the
+`5120x2880@60.00` mode, which FIX57 (#281) covers and which was not tried
+here); a fullscreen mode other than the desktop mode (the switch fails,
+above); `ref_gl1` against a GPU timestamp
+(`gl_finish 1`). The 120 fps ceiling has no card of its own; the data is on
+FIX53 (#250), whose 60 fps cap it replaces. The load at the start of five
+runs, in two rounds, was above 3.5 (1280x720 run 1: `gl1-metal` 5.61 and
+`metal` 4.21; `water` run 3: `gl1` 4.45, `gl1-metal` 4.06, `metal` 3.63).
+The one-minute average is a trailing mean. Three of the five lie inside the
+range of the other four runs of their row. Two do not: `water` run 3 is the
+row's minimum for `ref_gl1` (4958.3, the other four 5173.9 to 5950.0) and
+for `ref_metal` (120.0, the other four 120.1). All five were kept, and the
+`water` paragraph gives the `ref_gl1` range without run 3.
 
 ## Screenshot and capture readback on a physical GPU (TASK98)
 
