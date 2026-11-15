@@ -41,6 +41,7 @@ NAME_RE = re.compile(r"^[a-z0-9_][a-z0-9_-]*$")
 CVAR_RE = re.compile(r"^[a-z0-9_]+$")
 VALUE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 PATH_OK_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
+LOAD_QUIET = 8.0  # a 1-minute load above this at a run start marks its timings "measured under load"
 MAX_MODE = 30  # r_metalfx_modes is a bit set, one bit per mode
 
 
@@ -443,6 +444,8 @@ def check_validation(text):
         raise RuntimeError("the Metal validation layer was not enabled (no %r in the engine's output)" % VALIDATION_ON)
     for line in text.splitlines():
         low = line.lower()
+        if CVARLIST_RE.match(line):
+            continue  # a cvar named for validation (r_validation) is a cvar, not a message
         if "validation" in low and VALIDATION_ON.lower() not in low:
             raise RuntimeError("a validation message: " + line.strip()[:200])
 
@@ -487,6 +490,13 @@ def parse_scenario(path):
 
 
 # ---------------------------------------------------------------- the run
+
+def load_note(loads):
+    """The note of a row whose timing runs started under a busy machine."""
+    if loads and max(loads) > LOAD_QUIET:
+        return "measured under load (1-minute load up to %.1f at a run start)" % max(loads)
+    return ""
+
 
 def tsv_write(path, header, rows):
     lines = ["\t".join(header)]
@@ -734,7 +744,7 @@ def _run(a, ctx, rdir, work, host, date, errors):
         out_rows.append((oid, sc, "ok", " ".join("%s=%s" % kv for kv in r["sets"]), csv_floats(w["fps"], 1),
                          ",".join("%.2f" % x for x in w["load"]), csv_floats(w["gpu"], 4), csv_floats(w["scaler"], 4),
                          w["in"], w["out"], w["capture"], w["frames"],
-                         *(["", "", "", "", ""] if q is None else [fnum(x, 6) for x in q]), ""))
+                         *(["", "", "", "", ""] if q is None else [fnum(x, 6) for x in q]), load_note(w["load"])))
     tsv_write(os.path.join(rdir, "results.tsv"), RESULT_COLS, out_rows)
     tsv_write(os.path.join(rdir, "skipped.tsv"), SKIPPED_COLS, skipped)
     meta = [("host", host), ("date", date), ("commit", commit), ("tree", dirty), ("device", device), ("family", family),
@@ -875,6 +885,9 @@ def host_cell(h, scenario, oid):
                 q = "not measured"
             size = "%s to %s" % (r["input_size"], r["output_size"]) if r["input_size"] else ("%s, native" % r["capture_size"])
             extra = ("; scaler pass %s" % rng(sc, 3, " ms")) if sc else ""
+            loaded = load_note(floats(r["load_runs"]))
+            if loaded:
+                fps += " [" + loaded + "]"
             return ['<td class="n">%s</td><td class="n">%s%s</td><td class="n">%s</td><td>%s</td>' % (
                 esc(fps), esc(gpu), esc(extra), esc(size), esc(q))], r
     for s in h["skipped"]:

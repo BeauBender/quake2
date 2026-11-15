@@ -51,7 +51,7 @@ printf 'set timedemo 1\nset r_rt_shadows 1\n' > "$tmp/scen/rt-shadows.cfg"
 cvl() { printf '%s\n' '*    r_metalfx "0"' "     r_metalfx_modes \"$1\"" '*    r_metalfx_scale "0"' '*    r_metalfx_interp "0"' \
     '     timedemo "0"' '     r_drawworld "1"'; }
 { cvl 3; echo 'ref_metal: warning r_rt_denoiser "1"'; echo 'Unknown command "r_rt_denoiser"'; echo '5 cvars'; } > "$tmp/cv-absent"
-{ cvl 31; echo '     r_rt_denoiser "0"'; echo '     r_rt_shadows "0"'; echo '12 cvars'; } > "$tmp/cv-present"
+{ cvl 31; echo '*    r_validation "0"'; echo '     r_rt_denoiser "0"'; echo '     r_rt_shadows "0"'; echo '12 cvars'; } > "$tmp/cv-present"
 { cvl 1099511627779; echo '12 cvars'; } > "$tmp/cv-big"
 printf 'bound\tbound\tstd\tr_metalfx=40\n' > "$tmp/opts-bound"
 "$tmp/framediff" --gen "$tmp/a.tga" 64 48 1 || exit 1
@@ -126,7 +126,7 @@ assertions() {
     # engine runs: a failure to run or to say what it did is an error
     if has engine; then
     mkdir -p "$w/logs"
-    out=$(python3 -I "$HELP" "$d" probe "$tmp/eng-good" "$w/logs" 2>&1); want_has probe-ok "ok 8 cvars" "$out"
+    out=$(python3 -I "$HELP" "$d" probe "$tmp/eng-good" "$w/logs" 2>&1); want_has probe-ok "ok 9 cvars" "$out"
     out=$(python3 -I "$HELP" "$d" probe "$tmp/eng-fail" "$w/logs" 2>&1); want_has probe-status "error: the probe run exited with status 1" "$out"
     out=$(python3 -I "$HELP" "$d" probe "$tmp/eng-novalid" "$w/logs" 2>&1); want_has probe-validation "error: the Metal validation layer was not enabled" "$out"
     out=$(python3 -I "$HELP" "$d" timed "$tmp/eng-good" "$w/logs" 2>&1); want_has timed-ok "ok 114.9" "$out"
@@ -147,6 +147,8 @@ assertions() {
     want_has host-range "100.0 to 140.0 (5 runs)" "$html"
     want_has host-range "300.0 to 340.0 (5 runs)" "$html"
     want_has host-both "not run: unsupported: r_metalfx 3 is not in r_metalfx_modes 3" "$html"
+    want_has load-mark "300.0 to 340.0 (5 runs) [measured under load (1-minute load up to 60.0" "$html"
+    want_not load-quiet "140.0 (5 runs) [measured" "$html"
     b64a=$(base64 < "$w/ha/crops/world__native.png" | tr -d '\n')
     b64b=$(base64 < "$w/hb/crops/world__native.png" | tr -d '\n')
     want_has host-images "$b64a" "$html"
@@ -228,6 +230,8 @@ mutant probe-status-ignored probe-status py 'if st != 0:
         raise RuntimeError("the probe run exited'
 mutant validation-unchecked probe-validation py 'if VALIDATION_ON not in text:' 'if False:'
 mutant no-fps-passes timed-nofps py 'raise RuntimeError("no timedemo result (%s)" % log)' 'return 0.0, text'
+mutant load-limit-high load-mark py 'LOAD_QUIET = 8.0 ' 'LOAD_QUIET = 800.0 '
+mutant load-always load-quiet py 'if loads and max(loads) > LOAD_QUIET:' 'if loads:'
 mutant second-host-hidden host-both py 'cells, _ = host_cell(h, sc, oid)' 'cells, _ = host_cell(hosts[0], sc, oid)'
 mutant range-collapsed host-range py 't = ("%.*f" % (nd, lo)) if lo == hi else' 't = ("%.*f" % (nd, lo)) if True else'
 mutant other-host-images host-images py 'png = os.path.join(rdir, "crops", "%s__%s.png" % (sc, oid))' 'png = os.path.join(others[-1] if others else rdir, "crops", "%s__%s.png" % (sc, oid))'

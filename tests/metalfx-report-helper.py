@@ -99,7 +99,7 @@ def main(argv):
         for oid, scale in (("native", 1.0), ("fx1-s50", 1.4)):
             fps = ",".join(m.fnum(x * scale, 1) for x in runs)
             rows.append((oid, "world", "ok", "r_metalfx=0" if oid == "native" else "r_metalfx=1 r_metalfx_scale=0.50", fps,
-                         "1.10,1.20,1.30,1.40,1.50", "3.0000,3.2000,3.1000", "" if oid == "native" else "0.4000,0.4500,0.4200",
+                         ("9.50,60.00,1.30,1.40,1.50" if host.startswith("hostb") else "1.10,1.20,1.30,1.40,1.50"), "3.0000,3.2000,3.1000", "" if oid == "native" else "0.4000,0.4500,0.4200",
                          "" if oid == "native" else "640x360", "" if oid == "native" else "1280x720", "1280x720", "12",
                          *(["", "", "", "", ""] if oid == "native" else ["0.010000", "0.020000", "0.300000", "0.950000", "0.900000"]), ""))
         m.tsv_write(os.path.join(d, "results.tsv"), m.RESULT_COLS, rows)
