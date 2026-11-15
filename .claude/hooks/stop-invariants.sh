@@ -10,22 +10,24 @@
 # The list holds only the checks that build nothing. The others build
 # ref_metal, the Metal shim or the pin harness, or run throwaway git
 # repositories, and take minutes together; scripts/test.sh runs all of them.
-# Measured with a change under src/, three runs each (seconds):
-#   check-compat-names.sh   0.2   check-removed-deps.sh     0.4
+# Measured on a copy of HEAD with a change under src/, the slowest of
+# three runs each (seconds):
+#   check-compat-names.sh   0.3   check-removed-deps.sh     0.3
 #   check-cvar-docs.sh      1.7   check-savegame-tables.sh  0.2
 #   check-doc-links.sh      0.4   check-title-fit.sh        0.2
-#   check-mode-size.sh      0.4   check-vendored.sh         0.3
-# about 4 s in all; the whole hook takes 4 to 5 s. The Stop entry in
-# .claude/settings.json gives it 60 s. tests/check-stop-invariants.sh fails
-# when the hook takes more than half of that, when the list names a check
-# that does not exist, or when the deadline and the grace do not fit well
-# inside the timeout.
+#   check-mode-size.sh      0.3   check-vendored.sh         0.3
+# 3.7 s in all; the whole hook took 3.4 to 4.0 s in five runs. The Stop
+# entry in .claude/settings.json gives it 60 s. tests/check-stop-invariants.sh
+# fails when the hook takes more than half of that, when the list names a
+# check that does not exist, or when the deadline and the grace do not fit
+# well inside the timeout.
 #
 # The deadline: the checks run one at a time, each in its own process group
 # (set -m), and $deadline seconds after the first one starts the one still
 # running gets TERM, its whole group KILL $grace seconds later; the checks
 # not started by then are not run. Both are reported, and block like a
-# failure. The hook signals only the process groups it started.
+# failure; the hook then ends about $deadline + $grace s after it started.
+# It signals only the process groups it started.
 #
 # Usage: registered in .claude/settings.json; reads the hook JSON on stdin.
 checks='
@@ -56,8 +58,8 @@ trap '[ -z "$c" ] || kill -KILL -- "-$c"; [ -z "$w" ] || kill -KILL -- "-$w"; ex
 # Job control puts each background job in a process group of its own,
 # led by $!. Its notices about killed jobs go to /dev/null with the rest
 # of the loop's stderr; the checks write to $tmp/out.
-set -m
 exec 3>&2 2> /dev/null
+set -m
 end=$(($(date +%s) + deadline))
 for check in $checks; do
 	if [ ! -f "$check" ]; then
@@ -93,8 +95,8 @@ for check in $checks; do
 	c=
 	w=
 done
-exec 2>&3 3>&-
 set +m
+exec 2>&3 3>&-
 
 [ -s "${tmp:?}/log" ] || exit 0
 case $input in
