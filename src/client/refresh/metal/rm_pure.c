@@ -485,12 +485,13 @@ rm_scale8_dims(int w, int h, int scale, int *ow, int *oh)
 int
 rm_2d_sharp(float cvar, int smp, int flat_linear)
 {
-	if ((cvar != 1.0f) || !flat_linear || (smp < 0) || (smp >= RMB_SMP_CLASSES * 2))
+	if ((cvar != 1.0f) || !flat_linear)
 	{
 		return 0;
 	}
 
-	return (smp / 2) == RMB_SMP_FLAT;
+	/* the repeat and the clamp form of the flat class, and nothing else, whatever the index */
+	return (smp == RMB_SAMPLER(RMB_SMP_FLAT, 0)) || (smp == RMB_SAMPLER(RMB_SMP_FLAT, 1));
 }
 
 /* from gl1_image.c, the modes table of R_TextureMode */

@@ -281,7 +281,7 @@ against gl1's source:
 | `gl1_saturatelighting` | dropped | read only by `R_BlendLightmaps` (`gl1_surf.c`), the classic two-pass lightmap path that is left out |
 | `gl1_picmip`, `gl1_round_down` | dropped | read only by `R_Upload32Soft` (`gl1_image.c`), the power-of-two path gl1 does not take on the shim (section 5) |
 | `gl1_texturealphamode`, `gl1_texturesolidmode` | dropped | they pick the GL internal format; `ref_metal` stores every image as `rgba8Unorm`, as the shim does whatever internal format gl1 asks for (`mgl_layer.m`), so the reference ignores them too |
-| `r_scale8bittextures` | dropped | read only by `R_Upload32` (the smoothing of 8-bit images, `SmoothColorImage`) and `R_LoadPic` (the 8-bit scale-up) in `gl1_image.c`; no pin scenario sets it (section 17) |
+| `r_scale8bittextures` | copied by TASK119 (first dropped) | read only by `R_Upload32` (the smoothing of 8-bit images, `SmoothColorImage`) and `R_LoadPic` (the 8-bit scale-up) in `gl1_image.c`; taken as gl1 takes it in `rm_image.c`, with the factor and the dimension check in `rm_pure.c` (`rm_scale8_factor`, `rm_scale8_dims`); the scenarios `world-scale8` and `hud2d-scale8` set it |
 | `r_retexturing` | copied | `R_FindImage` (`gl1_image.c`) passes it to the shared loader in `files/` |
 
 `gl1_buffer.c`, gl1's draw batch, is copied as `rm_buffer.c` (section 2),

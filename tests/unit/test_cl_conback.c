@@ -162,4 +162,12 @@ TEST(conback_degenerate_sizes_are_stretched)
 	T_EQ_INT(h, INT_MAX);
 	T_EQ_INT(w, 1);   /* 4 * INT_MAX / 3 does not fit */
 	T_EQ_INT(x, 0);
+
+	/* the covering width that is INT_MAX exactly still fits, one more does not */
+	rect(1, 1610612735, 1610612735, 1, &x, &y, &w, &h);
+	T_EQ_INT(w, INT_MAX);
+	T_EQ_INT(x, -1073741823);
+	rect(1, 1610612736, 1610612736, 1, &x, &y, &w, &h);
+	T_EQ_INT(w, 1);
+	T_EQ_INT(x, 0);
 }

@@ -59,11 +59,10 @@ Con_BackRect(int vw, int vh, int lines, int keep43, int *x, int *y, int *w, int 
 		}
 	}
 
-	/* a window so large that the covering rectangle does not fit an int is not cropped */
-	if ((rw > INT_MAX) || (rh > INT_MAX))
+	/* a window so narrow that the covering width does not fit an int is not cropped (the height is the window's there) */
+	if (rw > INT_MAX)
 	{
 		rw = vw;
-		rh = vh;
 	}
 
 	*w = (int)rw;
