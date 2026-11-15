@@ -11,8 +11,10 @@
 # private mktemp -d, on throwaway repositories there: a bare origin and
 # clones of it. It shows that the hook fast-forwards a clean main that is
 # behind (also with a hostile GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE in
-# its environment), reports a current one, and refuses, changing nothing,
-# on tracked changes, a diverged main, another branch, a HEAD that tracks
+# its environment) and writes nothing outside that clone, reports a current
+# one, and refuses, leaving HEAD and the working tree as they were (the
+# fetch moves only origin/main), on tracked changes, a diverged main,
+# another branch, a HEAD that tracks
 # .claude/memory/x.md (the file stays), a failed fetch, and a failing git
 # status, ls-tree, symbolic-ref or rev-list (a shim first on PATH); and
 # that in a linked worktree it prints nothing and changes nothing. Every
@@ -135,9 +137,14 @@ selftest()
 	b=$(rev seed)
 	clone current
 
+	# Making the marker touches the scratch directory itself, so that one
+	# entry is left out; any file written under it still shows.
+	touch "${tmp:?}/marker"
 	run behind
 	says behind "updated main from"
 	still behind "$b"
+	[ -z "$(find "${tmp:?}" -newer "${tmp:?}/marker" ! -path "${tmp:?}" ! -path "${tmp:?}/behind" ! -path "${tmp:?}/behind/*")" ] ||
+		fail "selftest: behind: the hook wrote outside the checkout"
 
 	g init -q --template= "${tmp:?}/decoy"
 	g -C "${tmp:?}/decoy" symbolic-ref HEAD refs/heads/main
