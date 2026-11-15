@@ -497,6 +497,75 @@ rmb_frame_timing(void)
 	return timing;
 }
 
+/*
+ * FIX53: a layer that is not opaque (r_vsync 0) is blended with what is
+ * behind the window, so every drawable pixel needs alpha 1. The frame's
+ * blended draws leave alpha below 1 and the copy brings it over: this
+ * pass writes alpha 1, and only alpha, over the drawable after it. Its
+ * shader is compiled from source on first use, with no entry in the
+ * shader library.
+ */
+static id<MTLRenderPipelineState> rmb_alpha_pso;
+
+static id<MTLRenderPipelineState>
+rmb_alpha_pipeline(void)
+{
+	static const char *src =
+		"#include <metal_stdlib>\n"
+		"using namespace metal;\n"
+		"vertex float4 alpha_vs(uint vid [[vertex_id]])\n"
+		"{ float2 p = float2((vid << 1) & 2, vid & 2); return float4(p * 2.0 - 1.0, 0.0, 1.0); }\n"
+		"fragment float4 alpha_fs() { return float4(0.0, 0.0, 0.0, 1.0); }\n";
+
+	if (!rmb_alpha_pso)
+	{
+		NSError *e = nil;
+		id<MTLLibrary> lib = [rmb_device newLibraryWithSource:@(src) options:nil error:&e];
+		MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+
+		if (lib)
+		{
+			d.vertexFunction = [lib newFunctionWithName:@"alpha_vs"];
+			d.fragmentFunction = [lib newFunctionWithName:@"alpha_fs"];
+			d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+			d.colorAttachments[0].writeMask = MTLColorWriteMaskAlpha;
+			rmb_alpha_pso = [rmb_device newRenderPipelineStateWithDescriptor:d error:&e];
+			rm_ledger_create(&rmb_ledger, RM_OBJ_STATE);
+		}
+
+		if (!rmb_alpha_pso)
+		{
+			fprintf(stderr, "ref_metal: the alpha pass failed to build: %s\n",
+					e ? e.localizedDescription.UTF8String : "");
+		}
+	}
+
+	return rmb_alpha_pso;
+}
+
+/* Alpha 1 over the whole of tex, colour untouched. */
+static void
+rmb_force_alpha(id<MTLCommandBuffer> cmd, id<MTLTexture> tex)
+{
+	id<MTLRenderPipelineState> pso = rmb_alpha_pipeline();
+	MTLRenderPassDescriptor *rp;
+	id<MTLRenderCommandEncoder> enc;
+
+	if (!pso)
+	{
+		return;
+	}
+
+	rp = [MTLRenderPassDescriptor renderPassDescriptor];
+	rp.colorAttachments[0].texture = tex;
+	rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
+	rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+	enc = [cmd renderCommandEncoderWithDescriptor:rp];
+	[enc setRenderPipelineState:pso];
+	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+	[enc endEncoding];
+}
+
 void
 rmb_frame_end(void)
 {
@@ -574,6 +643,11 @@ rmb_frame_end(void)
 						toTexture:dst destinationSlice:0 destinationLevel:0
 						destinationOrigin:MTLOriginMake(0, (NSUInteger)r.dst_y, 0)];
 				[blit endEncoding];
+
+				if (!rmb_layer.opaque)
+				{
+					rmb_force_alpha(frame_cmd, dst);
+				}
 			}
 
 			[frame_cmd presentDrawable:drawable];
@@ -660,6 +734,12 @@ rmb_encode_release(void)
 				ring_buf[i] = nil;
 				rm_ledger_destroy(&rmb_ledger, RM_OBJ_BUFFER);
 			}
+		}
+
+		if (rmb_alpha_pso)
+		{
+			rmb_alpha_pso = nil;
+			rm_ledger_destroy(&rmb_ledger, RM_OBJ_STATE);
 		}
 
 		color_defined = 0;
