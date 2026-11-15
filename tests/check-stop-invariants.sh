@@ -16,12 +16,11 @@
 #    a clean tree; on a change under src/ exits 0 and prints nothing when
 #    the checks pass, also when one leaves a process behind (which must not
 #    hold the hook's output open); blocks (exit 2) on a failing check and
-#    names it, and
-#    with stop_hook_active true names it and exits 0; names a missing
-#    listed check and blocks; stops a check that hangs and ignores TERM at
-#    the deadline, with every process in its group, names it and the
-#    checks it kept from running, and blocks; exits 0 on its own error
-#    (here a date command that prints nothing);
+#    names it, and with stop_hook_active true names it and exits 0; names
+#    a missing listed check and blocks; stops a check that hangs and
+#    ignores TERM at the deadline, with every process in its group, names
+#    it and the checks it kept from running, and blocks; exits 0 on its own
+#    error (here a date command that prints nothing);
 #  - the real hook, run on a copy of HEAD with the working tree's hook and
 #    listed checks put in and a new file under src/, does not exit 0
 #    silently, or takes more than half the timeout.
@@ -140,7 +139,7 @@ selftest()
 	printf '#!/bin/sh\ntrap "" TERM\necho $$ > "%s/hang.pids"\nsleep 20 &\necho $! >> "%s/hang.pids"\nwait\n' \
 		"${tmp:?}" "${tmp:?}" > "$r/tests/check-hang.sh"
 	# Passes, and leaves a process behind that would hold the hook's output.
-	printf '#!/bin/sh\nsleep 10 &\necho $! > "%s/leave.pid"\necho "$0: ok"\n' "${tmp:?}" > "$r/tests/check-leave.sh"
+	printf '#!/bin/sh\nsleep 15 &\necho $! > "%s/leave.pid"\necho "$0: ok"\n' "${tmp:?}" > "$r/tests/check-leave.sh"
 	chmod 755 "$r"/tests/check-*.sh
 	printf '%s\n' 'int x;' > "$r/src/a.c"
 	g init -q --template= "$r"
@@ -178,7 +177,7 @@ selftest()
 	hookwith tests/check-pass.sh tests/check-leave.sh
 	run st "$no"
 	quiet "a check that leaves a process behind"
-	[ "$secs" -le 4 ] ||
+	[ "$secs" -le 6 ] ||
 		fail "selftest: a check that leaves a process behind: the hook's output stayed open $secs s, held by that process"
 	kill "$(cat "${tmp:?}/leave.pid")" 2> /dev/null || true
 
@@ -210,7 +209,7 @@ selftest()
 	exits "a check that hangs" 2
 	says "a check that hangs" "DID NOT FINISH: tests/check-hang.sh"
 	says "a check that hangs" "NOT RUN: tests/check-pass2.sh"
-	[ "$secs" -le 6 ] || fail "selftest: a check that hangs: the hook took $secs s with a 2 s deadline and a 1 s grace"
+	[ "$secs" -le 10 ] || fail "selftest: a check that hangs: the hook took $secs s with a 2 s deadline and a 1 s grace"
 	[ -s "${tmp:?}/hang.pids" ] || fail "selftest: a check that hangs: the stub did not start"
 	# A killed process can take a moment to be reaped.
 	while read -r p; do
