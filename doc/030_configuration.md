@@ -238,3 +238,39 @@ before. On platforms other than macOS,
 iOS, iPadOS, tvOS and visionOS there is no decoder for PNG, JPEG or TGA
 at all: replacements are not loaded there, and the stock skies are
 always drawn from their `.pcx` faces.
+
+### Textures upscaled on your own machine
+
+The console command `upscale_textures 2` (or `4`) makes replacements
+from your own game data: it writes a PNG twice (four times) the size of
+every world texture (`textures/**/*.wal`), sky face (`env/*.pcx`) and
+model and player skin (`.pcx` under `models/` and `players/`, not the
+`_i.pcx` icons) into the write directory, the one the startup line
+"Using '...' for writing." names, under the same name with `.png`. With
+`r_retexturing 1` the renderers load them at the original's size, as
+they load a texture pack.
+
+The palette indices are scaled with scale2x (EPX), once per doubling,
+and converted with the game's palette as the renderers convert an 8-bit
+texture: index 255 stays transparent, skins are flood-filled first.
+World textures are treated as repeating tiles, so their seams stay
+seamless; skins and skies keep their own edges. Nothing is drawn in
+new colours: the result is sharper pixel art, not new detail.
+
+* A file that exists is left alone; `upscale_textures 2 force` writes
+  every file again. One line reports the files written, skipped,
+  refused and failed and the bytes written.
+* Names are taken only when they consist of `a`-`z`, `A`-`Z` (kept as
+  they are), `0`-`9`, `_`, `-`, `.` and `/`, have no `..`, no leading
+  `/`, no empty component or component that begins with a dot, and fit
+  63 characters with `.png`. Others are refused: in the stock data the
+  77 textures whose names begin with `+` and one skin named with `..`.
+  A source larger than 1024 pixels on a side is refused.
+* Nothing is written when the write directory is inside a git work tree
+  (a `.git` entry in it or any directory above it): the results come
+  from id Software's data and must not be committed anywhere.
+* The stock sky faces are also shipped as `.tga` files, and the loader
+  looks for a `.tga` before a `.png`, so the stock skies keep their
+  `.tga` faces; the `.png` faces are used where a sky has no `.tga`.
+* There is no PNG encoder off Apple platforms; the command does
+  nothing there.
