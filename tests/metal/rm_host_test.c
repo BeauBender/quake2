@@ -6813,6 +6813,10 @@ test_point_size(void)
 		CHECK(rm_point_size(&i1, eye) == 5.0f);
 		CHECK(rm_point_size(&i2, eye) == 1.0f);
 		CHECK(rm_point_size(&m, eye) == rm_host_shim_point_size(&m, eye));
+
+		/* a smooth point too: 1 (inside 0.1 to 256), not GL's smooth minimum */
+		n.smooth = 1;
+		CHECK(rm_point_size(&n, eye) == 1.0f && rm_host_shim_point_size(&n, eye) == 1.0f);
 	}
 
 	/* random states and eyes against the shim's function */
@@ -7134,6 +7138,14 @@ test_particle_tri(void)
 	o[0] = 1100;
 	CHECK(rm_particle_tri(o, eye, vpn, vup, vright, v) && fabsf(v[1][2] - (290 + 1.5f * 5)) < 1e-3f);
 
+	/*
+	 * 662 ahead: gl1's 0.004 is a double, so the scale is 1 + 662 * 0.004
+	 * in double, 3.648 as a float, and the vertex 290 + 1.5 * 3.648 =
+	 * 295.471985 (with a float 0.004 it would be 295.472015)
+	 */
+	o[0] = 762;
+	CHECK(rm_particle_tri(o, eye, vpn, vup, vright, v) && v[1][2] == 295.471985f && v[2][1] == 205 - 1.5f * 3.648f);
+
 	rm_particle_tex(tex);
 	CHECK(tex[0][0] == 0.0625f && tex[0][1] == 0.0625f && tex[1][0] == 1.0625f && tex[1][1] == 0.0625f);
 	CHECK(tex[2][0] == 0.0625f && tex[2][1] == 1.0625f);
@@ -7206,6 +7218,29 @@ test_particle_texture(void)
 	CHECK(dot[2][1][3] == 85 && dot[3][1][3] == 170 && dot[4][1][3] == 255 && dot[5][1][3] == 255 && dot[7][1][3] == 85 && dot[8][1][3] == 0);
 	CHECK(dot[0][0][3] == 0 && dot[1][1][3] == 0 && dot[15][15][3] == 0 && dot[4][4][3] == 255);
 	CHECK(dot[4][9][3] == 0 && dot[9][4][3] == 0);
+
+	/*
+	 * the dot is a disc in the 8 by 8 block from (1, 1): its alpha is the
+	 * same under a transpose and under the mirror x to 9 - x, nothing lies
+	 * outside the block, and the table sums to 156 (alpha 13,260)
+	 */
+	{
+		int sym = 1, sum = 0;
+
+		for (y = 0; y < 16; y++)
+		{
+			for (x = 0; x < 16; x++)
+			{
+				const int in_block = (x >= 1 && x <= 8 && y >= 1 && y <= 8);
+
+				sum += dot[y][x][3];
+				sym = sym && dot[y][x][3] == dot[x][y][3] && (in_block || dot[y][x][3] == 0);
+				sym = sym && (!in_block || dot[y][x][3] == dot[y][9 - x][3]);
+			}
+		}
+
+		CHECK(sym && sum == 156 * 85);
+	}
 
 	/* the square: a 8 by 8 block of 255 from (1, 1), nothing else */
 	for (y = 0; y < 16; y++)
