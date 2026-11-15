@@ -66,6 +66,8 @@ static int t_w, t_h, t_path, t_scaled;
 
 /* the pipelines, made at the first view that needs them; failed once, never again in the session */
 static id<MTLRenderPipelineState> gb_pipes[RM_PIPE_3D_COUNT], mv_pipes[RM_PIPE_3D_COUNT], resolve_pipe, blit_pipe;
+static id<MTLRenderPipelineState> show_mv_pipe, show_gb_pipe;   /* r_rt_gbuffer_show's */
+static int show_what;
 static int pipes_state;   /* 0 not made, 1 made, -1 failed */
 
 /* the view */
@@ -424,6 +426,8 @@ rmb_gbuf_free_pipes(void)
 
 	rmb_gbuf_state(&resolve_pipe, nil);
 	rmb_gbuf_state(&blit_pipe, nil);
+	rmb_gbuf_state(&show_mv_pipe, nil);
+	rmb_gbuf_state(&show_gb_pipe, nil);
 }
 
 static int
@@ -462,9 +466,11 @@ rmb_gbuf_pipes(void)
 		{
 			rmb_gbuf_state(&resolve_pipe, rmb_gbuf_new_simple(@"rm_vertex_fullscreen", @"rm_fragment_resolve", &e));
 			rmb_gbuf_state(&blit_pipe, rmb_gbuf_new_simple(@"rm_vertex_blit", @"rm_fragment_blit", &e));
+			rmb_gbuf_state(&show_mv_pipe, rmb_gbuf_new_simple(@"rm_vertex_fullscreen", @"rm_fragment_show_motion", &e));
+			rmb_gbuf_state(&show_gb_pipe, rmb_gbuf_new_simple(@"rm_vertex_fullscreen", @"rm_fragment_show_gbuf", &e));
 		}
 
-		if (!resolve_pipe || !blit_pipe)
+		if (!resolve_pipe || !blit_pipe || !show_mv_pipe || !show_gb_pipe)
 		{
 			fprintf(stderr, "ref_metal: the G-buffer's pipelines cannot be made: %s\n",
 					e ? e.localizedDescription.UTF8String : "a function is missing");
@@ -685,6 +691,38 @@ rmb_gbuf_view_end(const rm_viewport_t *src, const rm_viewport_t *dst)
 	mv_set = 0;
 	rmb_frame_close_pass();
 
+	/* r_rt_gbuffer_show: an attachment over the view (the G-buffer's own only on its path) */
+	if ((show_what == 4) || (show_what == 6) || ((view_path == RM_GB_PATH_GBUFFER) && (show_what >= 1) && (show_what <= 5)))
+	{
+		@autoreleasepool
+		{
+			MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+			id<MTLRenderCommandEncoder> enc;
+			const int mvd = (show_what == 4) || (show_what == 6);
+			struct { int what; float scale; unsigned pad[2]; } u = { show_what, 16.0f, { 0, 0 } };
+
+			rmb_gbuf_att(rp, 0, rmb_gbuf_target(), 0);
+			enc = rmb_frame_open_pass(rp, 0, 0, 0);
+
+			if (enc)
+			{
+				[enc setRenderPipelineState:mvd ? show_mv_pipe : show_gb_pipe];
+				[enc setFragmentBytes:&u length:sizeof(u) atIndex:0];
+				[enc setFragmentTexture:mvd ? t_motion : t_albedo atIndex:0];
+				[enc setFragmentTexture:mvd ? t_depth : t_normal atIndex:1];
+
+				if (!mvd)
+				{
+					[enc setFragmentTexture:t_material atIndex:2];
+					[enc setFragmentTexture:t_light atIndex:3];
+				}
+
+				[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+				rmb_frame_close_pass();
+			}
+		}
+	}
+
 	if (!view_scaled || !t_rcolor || !color || !src || !dst)
 	{
 		return;
@@ -767,6 +805,12 @@ rmb_gbuf_set_motion(const rm_gb_uniforms_t *u)
 	{
 		mv_set = 0;
 	}
+}
+
+void
+rmb_gbuf_set_show(int what)
+{
+	show_what = what;
 }
 
 void

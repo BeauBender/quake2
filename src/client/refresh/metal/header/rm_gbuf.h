@@ -252,6 +252,9 @@ void rmb_gbuf_view_end(const rm_viewport_t *src, const rm_viewport_t *dst);
 /* the motion uniforms of the next draws; NULL: none, the draw's own matrix both now and before (no motion) */
 void rmb_gbuf_set_motion(const rm_gb_uniforms_t *u);
 
+/* r_rt_gbuffer_show: the attachment drawn over the view when it ends (0 none, 1 albedo, 2 normal, 3 material, 4 motion, 5 light, 6 depth) */
+void rmb_gbuf_set_show(int what);
+
 /* the material id of the next draws, the rest of the motion uniforms kept */
 void rmb_gbuf_set_material(unsigned material);
 

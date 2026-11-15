@@ -48,6 +48,8 @@ static cvar_t *r_rt_gbuffer;
 static cvar_t *r_rt_motion;
 static cvar_t *r_rt_gbuffer_scale;
 static cvar_t *r_rt_jitter;
+static cvar_t *r_rt_gbuffer_show;
+static cvar_t *r_rt_motion_test;
 
 static rm_gb_hist_t hist;
 
@@ -64,6 +66,8 @@ RM_GB_Init(void)
 	r_rt_motion = ri.Cvar_Get("r_rt_motion", "0", 0);
 	r_rt_gbuffer_scale = ri.Cvar_Get("r_rt_gbuffer_scale", "1", 0);
 	r_rt_jitter = ri.Cvar_Get("r_rt_jitter", "0 0", 0);
+	r_rt_gbuffer_show = ri.Cvar_Get("r_rt_gbuffer_show", "0", 0);
+	r_rt_motion_test = ri.Cvar_Get("r_rt_motion_test", "0", 0);
 	RM_GB_Reset();
 }
 
@@ -164,6 +168,24 @@ RM_GB_Begin(rm_view_t *view, int stencil, const float *clear_rgba)
 		g->backlerp = e->backlerp;
 	}
 
+	/*
+	 * r_rt_motion_test: the previous view is this one turned by the cvar's
+	 * degrees about the camera's vertical axis, every entity its own
+	 * previous one, so every pixel's motion is that of a known camera turn
+	 */
+	if (isfinite(r_rt_motion_test->value) && (r_rt_motion_test->value != 0.0f))
+	{
+		float r[16];
+
+		hist.prev = hist.cur;
+		mtl_mat_identity(r);
+		mtl_mat_rotate(r, r_rt_motion_test->value, 0, 1, 0);
+		mtl_mat_mul(hist.prev.world, r, hist.cur.world);
+		hist.prev.wvalid = 0;
+		R_Printf(PRINT_DEVELOPER, "ref_metal: r_rt_motion_test %g: projection %f %f, viewport %gx%g\n",
+				r_rt_motion_test->value, proj_u[0], proj_u[5], vp_render.w, vp_render.h);
+	}
+
 	rm_gb_hist_match(&hist, RM_GB_MATCH_DIST, RF_WEAPONMODEL);
 
 	rmb_gbuf_set_world_normals((r_worldmodel && r_worldmodel->world) ? r_worldmodel->world->nbuf : 0);
@@ -233,6 +255,7 @@ RM_GB_End(void)
 		return;
 	}
 
+	rmb_gbuf_set_show(isfinite(r_rt_gbuffer_show->value) ? (int)r_rt_gbuffer_show->value : 0);
 	rmb_gbuf_view_end(&vp_render, &vp_frame);
 	rm_gb_hist_end(&hist);
 	path = RM_GB_PATH_FORWARD;

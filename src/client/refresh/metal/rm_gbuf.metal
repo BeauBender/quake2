@@ -373,3 +373,59 @@ rm_fragment_blit(rm_fs_varying in [[stage_in]], texture2d<float> src [[texture(0
 
 	return src.sample(s, in.uv);
 }
+
+/*
+ * r_rt_gbuffer_show (a development view, TASK54): an attachment drawn over
+ * the view instead of the image. Motion (what 4): red 0.5 + x / scale,
+ * green 0.5 + y / scale (pixels, clamped), blue 1 where a draw wrote depth;
+ * depth (6): its value in all three channels.
+ */
+struct rm_uniforms_show
+{
+	int what;
+	float scale;
+	uint pad0;
+	uint pad1;
+};
+
+fragment float4
+rm_fragment_show_motion(rm_fs_varying in [[stage_in]],
+		constant rm_uniforms_show &s [[buffer(0)]],
+		texture2d<float> motion [[texture(0)]],
+		depth2d<float> depth [[texture(1)]])
+{
+	uint2 px = uint2(in.position.xy);
+	float d = depth.read(px);
+	float2 m = motion.read(px).xy;
+
+	if (s.what == 6)
+	{
+		return float4(d, d, d, 1.0f);
+	}
+
+	return float4(saturate(0.5f + m.x / s.scale), saturate(0.5f + m.y / s.scale), (d < 1.0f) ? 1.0f : 0.0f, 1.0f);
+}
+
+/* the G-buffer's own: albedo (1), normal (2), material id (3, times 40), light (5) */
+fragment float4
+rm_fragment_show_gbuf(rm_fs_varying in [[stage_in]],
+		constant rm_uniforms_show &s [[buffer(0)]],
+		texture2d<float> albedo [[texture(0)]],
+		texture2d<float> normal [[texture(1)]],
+		texture2d<uint> mat [[texture(2)]],
+		texture2d<float> light [[texture(3)]])
+{
+	uint2 px = uint2(in.position.xy);
+
+	switch (s.what)
+	{
+		case 1:
+			return float4(albedo.read(px).rgb, 1.0f);
+		case 2:
+			return float4(normal.read(px).rgb, 1.0f);
+		case 3:
+			return float4(float3(float(mat.read(px).r) * 40.0f / 255.0f), 1.0f);
+		default:
+			return float4(light.read(px).rgb, 1.0f);
+	}
+}
