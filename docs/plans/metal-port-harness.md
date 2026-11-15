@@ -2844,7 +2844,14 @@ section 2). Host: the bare-metal Mac, `Apple M6` (apple9, `supportsRaytracing: y
 ancestor of the card's head; the commits after it change only the host test and the
 documentation. Two results are the round before's, of `4deded44`, and say so: the ledger with
 `r_rt_stats 1` and the shadows off (Proof 1) and the fps line (Proof 4); the commits since
-change only what runs with the shadows on. Before every run the wrapper checked that the screen
+change only what runs with the shadows on. After the measurements the lane merged `origin/main`
+at `0fb0603c` (merged, not rebased, so `3d659a2b` stays an ancestor). That brought in TASK111
+(the MetalFX scalers, which change `RM_GB_Choose`, `RM_GB_Begin`, `RM_GB_End`, `rmb_gbuf.m` and
+`rm_main.c`), TASK123, TASK129, TASK100 and TASK130 (the shared image helpers). The merged head
+was not measured again. With the scalers off (`r_metalfx 0`, the default, as in every run
+here), `RM_GB_Choose` takes the same path as before and TASK111's other hooks do nothing;
+TASK111's own bare-metal run found all 14 scenarios byte-identical to its base with the
+scalers off (#265). The merge's resolution is in the merge commit. Before every run the wrapper checked that the screen
 was unlocked (`ioreg -n Root -d1 | grep -c CGSSessionScreenIsLocked` 0) and that no other
 `quake2` ran, and logged the one-minute load: 2.4 to 5.6 (other agents share the host). Every
 engine batch held the shared timing lock. Every log, frame, mask, script and result is in
