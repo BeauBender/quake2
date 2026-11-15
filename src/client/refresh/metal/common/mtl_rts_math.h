@@ -341,10 +341,15 @@ mtl_rts_xdir(mtl_rts_xform_t m, mtl_rts_v3_t d)
  * world origin, untransformed, against the model-space planes and texture
  * axes (R_MarkBrushLights, R_AddDynamicLights), so the pass moves the
  * pixel into the model's space instead (mtl_rts_surf) and keeps the
- * light where it is; the world's space is its model's. st: s and t are
- * the surface's own texture axes with their shifts (its triangle was
- * found), else the base axes (mtl_rts_reach). unlit: the surface has no
- * light samples (MTL_RTS_SURF_UNLIT), so no light adds there.
+ * light where it is; the world's space is its model's. For a found
+ * surface n is its plane's exact normal toward its front and p the
+ * pixel's point on that plane, as gl1 measures a light against the plane
+ * (the G-buffer's 10-bit normal is off by up to about 1/1000, which tilts
+ * the plane by a unit every 1000 units: enough to put a light an eighth
+ * of a unit above a floor, where an explosion's light sits, behind it).
+ * st: s and t are the surface's own texture axes with their shifts, else
+ * the base axes (mtl_rts_reach). unlit: the surface has no light samples
+ * (MTL_RTS_SURF_UNLIT), so no light adds there.
  */
 typedef struct
 {
@@ -354,7 +359,7 @@ typedef struct
 	int unlit;
 } mtl_rts_surf_t;
 
-/* a pixel at world point p with world normal n where its surface is not known: the world's space, the base axes */
+/* a pixel at world point p with world normal n (the G-buffer's) where its surface is not known: the world's space, the base axes */
 static inline mtl_rts_surf_t
 mtl_rts_surf_base(mtl_rts_v3_t p, mtl_rts_v3_t n)
 {
@@ -369,19 +374,43 @@ mtl_rts_surf_base(mtl_rts_v3_t p, mtl_rts_v3_t n)
 	return sf;
 }
 
-/* a pixel at world point p with world normal n on a found surface: w2o the instance's transform, s and t its axes */
+/*
+ * A pixel at world point p on a found surface: w2o its instance's
+ * transform, s and t its texture axes, plane its plane in its model's
+ * space facing its front (the unit normal, and in w the distance from the
+ * origin: gl1's plane, negated for a SURF_PLANEBACK surface).
+ */
 static inline mtl_rts_surf_t
-mtl_rts_surf(mtl_rts_v3_t p, mtl_rts_v3_t n, mtl_rts_xform_t w2o, mtl_rts_v4_t s, mtl_rts_v4_t t, int unlit)
+mtl_rts_surf(mtl_rts_v3_t p, mtl_rts_xform_t w2o, mtl_rts_v4_t s, mtl_rts_v4_t t, mtl_rts_v4_t plane, int unlit)
 {
 	mtl_rts_surf_t sf;
+	const mtl_rts_v3_t pm = mtl_rts_xpoint(w2o, p);
+	const mtl_rts_v3_t n = mtl_rts_v3(plane.x, plane.y, plane.z);
+	const float off = mtl_rts_dot(pm, n) - plane.w;
 
-	sf.p = mtl_rts_xpoint(w2o, p);
-	sf.n = mtl_rts_xdir(w2o, n);
+	sf.p = mtl_rts_v3(pm.x - n.x * off, pm.y - n.y * off, pm.z - n.z * off);
+	sf.n = n;
 	sf.s = s;
 	sf.t = t;
 	sf.st = 1;
 	sf.unlit = unlit ? 1 : 0;
 	return sf;
+}
+
+/*
+ * The world's test before the surface is looked for: a light that may
+ * add at a pixel whose plane, from the G-buffer's normal n and the
+ * depth's point p, is pd below it (dot(o - p, n)), dist from it. It holds
+ * wherever gl1's exact test (pd at least 0, intensity - pd at least
+ * DLIGHT_CUTOFF) may, with the normal's error over that distance and the
+ * depth's: half a unit plus 1/250 of the distance.
+ */
+static inline int
+mtl_rts_near(float pd, float intensity, float dist)
+{
+	const float tol = 0.5f + dist * 0.004f;
+
+	return (pd >= -tol) && (intensity - pd >= MTL_RTS_CUTOFF - tol);
 }
 
 /* one light at a pixel: what it adds there (mtl_rts_add_lm, or mtl_rts_add on the base axes) and whether it is in range */

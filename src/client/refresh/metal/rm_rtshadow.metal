@@ -27,8 +27,8 @@
  *   ray from the eye to that point (the triangle it meets, through the
  *   map's triangle-to-surface table), whose texture axes and shifts give
  *   gl1's dynamic light at the pixel as the lightmap's sample holds it
- *   (mtl_rts_add_lm: the four luxels' adds, interpolated), the pixel in
- *   the hit's model space (a brush entity's, which gl1 lights with the
+ *   (mtl_rts_add_lm: the four luxels' adds, interpolated) against its
+ *   exact plane, the pixel in the hit's model space (a brush entity's, which gl1 lights with the
  *   light's world origin), none on a surface without light samples; the four
  *   lights that add the most (common/mtl_rts_math.h) and one ray query
  *   per light against the frame's instance structure (TASK53), from the
@@ -244,29 +244,36 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 			 */
 			for (uint i = 0; i < nl; i++)
 			{
-				const float pd = dot(lights[i].origin.xyz - p, n);
+				const float3 lp = lights[i].origin.xyz - p;
 
-				slab = slab || ((pd >= 0.0f) && (lights[i].origin.w - pd >= MTL_RTS_CUTOFF));
+				slab = slab || mtl_rts_near(dot(lp, n), lights[i].origin.w, length(lp));
 			}
 
 			slab = slab || (v.moved != 0);
 
-			/* the pixel's surface, for its texture axes and its model's space: the triangle a ray from the eye meets at the depth's point */
+			/*
+			 * The pixel's surface, for its texture axes and its model's space:
+			 * the triangle a ray from the eye meets at the depth's point. The
+			 * ray looks only within the depth's error of that point, so a
+			 * triangle the raster does not draw in front of it (a face of the
+			 * structure the G-buffer leaves out) does not hide it.
+			 */
 			if (slab && (mapn.nsurf > 0))
 			{
 				const float3 dv = p - v.eye.xyz;
 				const float dl = length(dv);
+				const float tol = max(2.0f, dl * 0.002f);
 
-				if (dl > 1.0f)
+				if (dl > tol + 1.0f)
 				{
 					intersector<triangle_data, instancing, world_space_data> isect;
 					intersection_result<triangle_data, instancing, world_space_data> hit;
 
 					isect.assume_geometry_type(geometry_type::triangle);
-					hit = isect.intersect(ray(v.eye.xyz, dv / dl, 0.0f, dl + 4.0f), ias, 0xff);
+					hit = isect.intersect(ray(v.eye.xyz, dv / dl, dl - tol, dl + tol), ias, 0xff);
 					primary = 1;
 
-					if ((hit.type == intersection_type::triangle) && (fabs(hit.distance - dl) <= max(2.0f, dl * 0.002f)))
+					if (hit.type == intersection_type::triangle)
 					{
 						const uint b = base[hit.instance_id];
 
@@ -284,8 +291,8 @@ rm_rts_trace(depth2d<float, access::read> depth [[texture(0)]],
 								xf.c1 = rm_rts_v(w[1]);
 								xf.c2 = rm_rts_v(w[2]);
 								xf.c3 = rm_rts_v(w[3]);
-								sf = mtl_rts_surf(rm_rts_v(p), rm_rts_v(n), xf, rm_rts_v4(vecs[2 * sidx]), rm_rts_v4(vecs[2 * sidx + 1]),
-										(raw & MTL_RTS_SURF_UNLIT) != 0);
+								sf = mtl_rts_surf(rm_rts_v(p), xf, rm_rts_v4(vecs[3 * sidx]), rm_rts_v4(vecs[3 * sidx + 1]),
+										rm_rts_v4(vecs[3 * sidx + 2]), (raw & MTL_RTS_SURF_UNLIT) != 0);
 							}
 						}
 					}

@@ -360,6 +360,27 @@ rm_rts_surface_map(const rm_rts_range_t *r, long nsurf, unsigned long ntris, uns
 	return (long)done;
 }
 
+void
+rm_rts_plane(const float *normal, float dist, int back, float *out)
+{
+	const float k = back ? -1.0f : 1.0f;
+
+	out[0] = 0;
+	out[1] = 0;
+	out[2] = 1;
+	out[3] = 0;
+
+	if (!normal || !isfinite(normal[0]) || !isfinite(normal[1]) || !isfinite(normal[2]) || !isfinite(dist))
+	{
+		return;
+	}
+
+	out[0] = k * normal[0];
+	out[1] = k * normal[1];
+	out[2] = k * normal[2];
+	out[3] = k * dist;
+}
+
 int
 rm_rts_show(float v)
 {

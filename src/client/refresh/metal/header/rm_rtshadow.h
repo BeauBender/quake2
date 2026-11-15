@@ -153,6 +153,14 @@ typedef struct
 long rm_rts_surface_map(const rm_rts_range_t *r, long nsurf, unsigned long ntris, unsigned *tri_surf);
 
 /*
+ * A surface's plane toward its front for the kernel (mtl_rts_surf): gl1's
+ * plane (normal, dist), both negated when the surface faces its back
+ * (SURF_PLANEBACK), into out[4]; a missing or non-finite plane gives
+ * (0, 0, 1, 0).
+ */
+void rm_rts_plane(const float *normal, float dist, int back, float *out);
+
+/*
  * r_rt_shadows_show (development): 0 the picture, 1 the mask of the
  * double-count check (white where no dynamic light is in range, black
  * where one is), 2 the classes (black none in range, blue in range but no
@@ -187,9 +195,10 @@ int rmb_rts_open(char *err, size_t errlen);
 void rmb_rts_close(void);
 
 /*
- * The map's tables: tri_surf (rm_rts_surface_map, ntris entries) and each
- * of the nsurf surfaces' texture axes, vecs[0] then vecs[1] (8 floats a
- * surface). 1 when kept; 0 frees them (the kernel then takes the base axes).
+ * The map's tables: tri_surf (rm_rts_surface_map, ntris entries) and for
+ * each of the nsurf surfaces its texture axes, vecs[0] then vecs[1], and
+ * its plane (rm_rts_plane): 12 floats a surface. 1 when kept; 0 frees
+ * them (the kernel then takes the base axes).
  */
 int rmb_rts_set_map(const unsigned *tri_surf, unsigned long ntris, const float *vecs, unsigned long nsurf);
 

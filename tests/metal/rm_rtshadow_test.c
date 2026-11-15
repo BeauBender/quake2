@@ -17,6 +17,7 @@
 #include "../../src/client/refresh/metal/header/rm_rtshadow.h"
 #include "../../src/client/refresh/metal/header/rm_rt.h"
 #include "../../src/client/refresh/metal/common/mtl_matrix.h"
+#include "../../src/client/refresh/metal/common/mtl_gbuf_math.h"
 
 /* src/common/shared/shared.c, linked for rm_pure.c, prints through the engine */
 void
@@ -932,6 +933,7 @@ test_moved_brush(void)
 	const float up[3] = { 0, 0, 1 }, sx[4] = { 1, 0, 0, 0 }, ty[4] = { 0, 1, 0, 0 }, white[3] = { 1, 1, 1 };
 	const float lo[3] = { 8, 8, 50 };
 	const mtl_rts_v4_t sv = { 1, 0, 0, 0 }, tv = { 0, 1, 0, 0 };
+	const mtl_rts_v4_t floor0 = { 0, 0, 1, 0 }, floorw = { 0, 0, 1, -200 };
 	mtl_rts_xform_t xf = mtl_rts_xform_identity();
 	rm_rts_light_t l[1];
 	float adds[MTL_RTS_MAX_LIGHTS];
@@ -951,19 +953,21 @@ test_moved_brush(void)
 
 	/* the entity at z -200: world to object adds 200 to z */
 	xf.c3 = mtl_rts_v3(0, 0, 200);
-	rm_rts_select(mtl_rts_surf(mtl_rts_v3(8, 8, -200), mtl_rts_v3(0, 0, 1), xf, sv, tv, 0), l, 1, adds, &flags);
+	rm_rts_select(mtl_rts_surf(mtl_rts_v3(8, 8, -200), xf, sv, tv, floor0, 0), l, 1, adds, &flags);
 	CHECK(near(adds[0], bl[0], 1e-3));
 	CHECK(flags == MTL_RTS_IN_RANGE);
 
 	/* in the world's space, as the pass took it before: the plane is 250 below the light, nothing in range */
-	rm_rts_select(mtl_rts_surf(mtl_rts_v3(8, 8, -200), mtl_rts_v3(0, 0, 1), mtl_rts_xform_identity(), sv, tv, 0), l, 1,
-			adds, &flags);
+	rm_rts_select(mtl_rts_surf(mtl_rts_v3(8, 8, -200), mtl_rts_xform_identity(), sv, tv, floorw, 0), l, 1, adds, &flags);
 	CHECK(adds[0] == 0 && flags == 0);
 
-	/* the true floor at world z -200 that gl1 leaves dark, the model's floor at model z 0 */
-	xf.c3 = mtl_rts_v3(0, 0, 200);
-	rm_rts_select(mtl_rts_surf(mtl_rts_v3(8, 8, 0), mtl_rts_v3(0, 0, 1), xf, sv, tv, 0), l, 1, adds, &flags);
-	CHECK(adds[0] == 0);
+	/* the reverse: a light 50 above the lowered floor in the world is 150 below the model's floor, which gl1 leaves dark */
+	l[0].origin[2] = -150;
+	rm_rts_select(mtl_rts_surf(mtl_rts_v3(8, 8, -200), xf, sv, tv, floor0, 0), l, 1, adds, &flags);
+	CHECK(adds[0] == 0 && flags == 0);
+	rm_rts_select(mtl_rts_surf(mtl_rts_v3(8, 8, -200), mtl_rts_xform_identity(), sv, tv, floorw, 0), l, 1, adds, &flags);
+	CHECK(near(adds[0], 138, 1e-3));    /* where the world's own floor would be lit */
+	l[0].origin[2] = 50;
 
 	/* turned and moved entities: at every luxel, gl1's add on the model-space face with the world origin */
 	for (c = 0; c < 200; c++)
@@ -976,7 +980,7 @@ test_moved_brush(void)
 		const int axis = c % 3;
 		float n[3] = { 0, 0, 0 }, vecs0[4] = { 0, 0, 0, 0 }, vecs1[4] = { 0, 0, 0, 0 }, origin[3], dist, rm[3][3];
 		float cy = cosf(yaw), sy = sinf(yaw), cp = cosf(pitch), sp = sinf(pitch), cr = cosf(roll), sr = sinf(roll);
-		mtl_rts_v4_t s4, t4;
+		mtl_rts_v4_t s4, t4, pl4;
 		int s, t, i, k;
 
 		/* an axial face of the model: a floor, a wall facing x or one facing y, its base axes shifted */
@@ -1037,6 +1041,10 @@ test_moved_brush(void)
 		cases++;
 		memcpy(&s4, vecs0, sizeof(s4));
 		memcpy(&t4, vecs1, sizeof(t4));
+		pl4.x = n[0];
+		pl4.y = n[1];
+		pl4.z = n[2];
+		pl4.w = dist;
 		l[0].origin[0] = origin[0];
 		l[0].origin[1] = origin[1];
 		l[0].origin[2] = origin[2];
@@ -1047,7 +1055,7 @@ test_moved_brush(void)
 			for (s = 0; s < LUX; s++)
 			{
 				const int su = (axis == 0) ? 1 : 0, tvx = (axis == 2) ? 1 : 2;
-				float pm[3], pw[3], nw[3];
+				float pm[3], pw[3];
 				const float want = bl[(t * LUX + s) * 3];
 
 				/* the luxel's point on the model's face, then in the world */
@@ -1058,11 +1066,9 @@ test_moved_brush(void)
 				for (k = 0; k < 3; k++)
 				{
 					pw[k] = rm[k][0] * pm[0] + rm[k][1] * pm[1] + rm[k][2] * pm[2] + ((k == 0) ? ax : (k == 1) ? ay : az);
-					nw[k] = rm[k][0] * n[0] + rm[k][1] * n[1] + rm[k][2] * n[2];
 				}
 
-				rm_rts_select(mtl_rts_surf(mtl_rts_v3(pw[0], pw[1], pw[2]), mtl_rts_v3(nw[0], nw[1], nw[2]), xf, s4, t4, 0),
-						l, 1, adds, &flags);
+				rm_rts_select(mtl_rts_surf(mtl_rts_v3(pw[0], pw[1], pw[2]), xf, s4, t4, pl4, 0), l, 1, adds, &flags);
 
 				if (want > 0)
 				{
@@ -1108,6 +1114,129 @@ test_moved_brush(void)
 }
 
 /*
+ * The exact plane (round 1, B1): an explosion's light sits an eighth of a
+ * unit above the floor it hit (network coordinates). gl1 measures it
+ * against the floor's plane; the G-buffer's normal, 10 bits an axis, is
+ * off by about 1/1000, so measured against it the light falls behind the
+ * floor on one side of a line through its foot, and the floor there went
+ * dark. On a found surface the pass takes the surface's plane, and the
+ * world's test before the search (mtl_rts_near) allows for the error.
+ */
+static void
+test_plane_exact(void)
+{
+	static float bl[LUX * LUX * 3];
+	const float up[3] = { 0, 0, 1 }, sx[4] = { 1, 0, 0, 0 }, ty[4] = { 0, 1, 0, 0 }, white[3] = { 1, 1, 1 };
+	const mtl_rts_v4_t sv = { 1, 0, 0, 0 }, tv = { 0, 1, 0, 0 }, floor = { 0, 0, 1, -448 };
+	float lo[3], adds[MTL_RTS_MAX_LIGHTS], q[3];
+	mtl_rts_v3_t nq;
+	rm_rts_light_t l[1];
+	unsigned flags;
+	int s, t, i, lit = 0, wrong = 0, behind = 0, near_miss = 0;
+
+	/* the floor's normal as the G-buffer gives it back: rgb10a2, decoded as the kernel does */
+	{
+		const mtl_rgba_t e = mtl_gb_normal(0, 0, 1);
+		const float c[3] = { e.r, e.g, e.b };
+		float len = 0;
+
+		for (i = 0; i < 3; i++)
+		{
+			q[i] = floorf(c[i] * 1023.0f + 0.5f) / 1023.0f * 2.0f - 1.0f;
+			len += q[i] * q[i];
+		}
+
+		len = sqrtf(len);
+		nq = mtl_rts_v3(q[0] / len, q[1] / len, q[2] / len);
+		CHECK((nq.x != 0) || (nq.y != 0));      /* the quantized normal is not the plane's */
+	}
+
+	/* a floor at z -448 and an explosion's light 1/8 above it, its foot near the face's corner */
+	lo[0] = 3.375f;
+	lo[1] = 5.625f;
+	lo[2] = -448 + 0.125f;
+	memset(bl, 0, sizeof(bl));
+	CHECK(rm_lm_dlight(bl, LUX, LUX, up, -448, sx, ty, 0, 0, lo, 240.625f, white) == 1);
+	memset(l, 0, sizeof(l));
+	l[0].origin[0] = lo[0];
+	l[0].origin[1] = lo[1];
+	l[0].origin[2] = lo[2];
+	l[0].origin[3] = 240.625f;
+	l[0].color[0] = l[0].color[1] = l[0].color[2] = 1;
+
+	for (t = 0; t < LUX; t++)
+	{
+		for (s = 0; s < LUX; s++)
+		{
+			/* the luxel's point as the depth gives it back: a hundredth of a unit off the plane */
+			const mtl_rts_v3_t p = mtl_rts_v3(16.0f * s, 16.0f * t, -448 + (((s + t) & 1) ? 0.01f : -0.01f));
+			const mtl_rts_v3_t lp = mtl_rts_v3(lo[0] - p.x, lo[1] - p.y, lo[2] - p.z);
+			const float want = bl[(t * LUX + s) * 3];
+
+			rm_rts_select(mtl_rts_surf(p, mtl_rts_xform_identity(), sv, tv, floor, 0), l, 1, adds, &flags);
+
+			if (want > 0)
+			{
+				lit++;
+
+				if (!(flags & MTL_RTS_IN_RANGE) || !mtl_rts_near(mtl_rts_dot(lp, nq), 240.625f,
+							sqrtf(mtl_rts_dot(lp, lp))))
+				{
+					wrong++;
+				}
+
+				/* measured against the G-buffer's normal the light is behind the floor here */
+				if (mtl_rts_dot(lp, nq) < 0)
+				{
+					behind++;
+				}
+			}
+
+			if (!near(adds[0], want, 1.01))
+			{
+				wrong++;
+			}
+		}
+	}
+
+	CHECK(lit > 90);
+	CHECK(behind > 40);     /* the case that failed: 55 of the 100 lit luxels */
+	CHECK(wrong == 0);
+
+	if (wrong)
+	{
+		printf("exact plane: %d lit, %d behind the quantized normal, %d wrong\n", lit, behind, wrong);
+	}
+
+	/* the world's test: the error allowed for, and no more than that */
+	CHECK(mtl_rts_near(0, 64, 0));
+	CHECK(mtl_rts_near(-0.6f, 300, 100));       /* tolerance 0.9 */
+	CHECK(!mtl_rts_near(-1.0f, 300, 100));
+	CHECK(mtl_rts_near(10, 73.5f, 0));          /* 63.5 to add: within half a unit of the cutoff */
+	CHECK(!mtl_rts_near(10, 73.4f, 0));
+	CHECK(!mtl_rts_near(-3, 300, 500));         /* tolerance 2.5 */
+	near_miss = mtl_rts_near(-2.4f, 300, 500);
+	CHECK(near_miss);
+
+	/* a plane missing or not finite: the floor's, (0, 0, 1, 0); one facing its back: negated */
+	{
+		float pl[4];
+		const float nrm[3] = { 0, 0.6f, 0.8f }, bad[3] = { NAN, 0, 1 };
+
+		rm_rts_plane(nrm, 12, 0, pl);
+		CHECK(pl[0] == 0 && pl[1] == 0.6f && pl[2] == 0.8f && pl[3] == 12);
+		rm_rts_plane(nrm, 12, 1, pl);
+		CHECK(pl[0] == 0 && pl[1] == -0.6f && pl[2] == -0.8f && pl[3] == -12);
+		rm_rts_plane(NULL, 12, 0, pl);
+		CHECK(pl[0] == 0 && pl[1] == 0 && pl[2] == 1 && pl[3] == 0);
+		rm_rts_plane(bad, 12, 0, pl);
+		CHECK(pl[2] == 1 && pl[3] == 0);
+		rm_rts_plane(nrm, INFINITY, 0, pl);
+		CHECK(pl[2] == 1 && pl[3] == 0);
+	}
+}
+
+/*
  * A surface without light samples (round 1, I2): gl1 adds no dynamic
  * light to it (R_BuildLightMap: rm_lm_styles' white, no R_AddDynamicLights),
  * so the pass neither adds nor marks it in range; its triangles carry
@@ -1117,7 +1246,7 @@ static void
 test_unlit(void)
 {
 	rm_rts_light_t l[2];
-	const mtl_rts_v4_t sv = { 1, 0, 0, 0 }, tv = { 0, 1, 0, 0 };
+	const mtl_rts_v4_t sv = { 1, 0, 0, 0 }, tv = { 0, 1, 0, 0 }, up4 = { 0, 0, 1, 0 };
 	float adds[MTL_RTS_MAX_LIGHTS];
 	unsigned flags = 99;
 	mtl_rts_top_t t;
@@ -1131,17 +1260,15 @@ test_unlit(void)
 	l[1] = l[0];            /* adds 170 - 12 */
 	l[1].origin[2] = 30;
 
-	t = rm_rts_select(mtl_rts_surf(mtl_rts_v3(8, 8, 0), mtl_rts_v3(0, 0, 1), mtl_rts_xform_identity(), sv, tv, 0), l, 2,
-			adds, &flags);
+	t = rm_rts_select(mtl_rts_surf(mtl_rts_v3(8, 8, 0), mtl_rts_xform_identity(), sv, tv, up4, 0), l, 2, adds, &flags);
 	CHECK(adds[0] > 0 && adds[1] > 0 && flags == MTL_RTS_IN_RANGE && t.idx[0] == 1);
 
-	t = rm_rts_select(mtl_rts_surf(mtl_rts_v3(8, 8, 0), mtl_rts_v3(0, 0, 1), mtl_rts_xform_identity(), sv, tv, 1), l, 2,
-			adds, &flags);
+	t = rm_rts_select(mtl_rts_surf(mtl_rts_v3(8, 8, 0), mtl_rts_xform_identity(), sv, tv, up4, 1), l, 2, adds, &flags);
 	CHECK(adds[0] == 0 && adds[1] == 0 && flags == 0 && t.idx[0] == MTL_RTS_NO_LIGHT);
 
 	{
-		const mtl_rts_lit_t li = mtl_rts_surf_light(mtl_rts_surf(mtl_rts_v3(8, 8, 0), mtl_rts_v3(0, 0, 1),
-					mtl_rts_xform_identity(), sv, tv, 7), mtl_rts_v3(8, 8, 30), 120);
+		const mtl_rts_lit_t li = mtl_rts_surf_light(mtl_rts_surf(mtl_rts_v3(8, 8, 0), mtl_rts_xform_identity(), sv, tv, up4, 7),
+				mtl_rts_v3(8, 8, 30), 120);
 
 		CHECK(li.add == 0 && li.in_range == 0);
 	}
@@ -1242,6 +1369,7 @@ main(void)
 	test_select_term();
 	test_add_lm_stock();
 	test_moved_brush();
+	test_plane_exact();
 	test_unlit();
 	test_surface_map();
 	test_show();

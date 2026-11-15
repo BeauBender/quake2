@@ -256,7 +256,7 @@ rmb_rts_set_map(const unsigned *tri_surf, unsigned long ntris, const float *vecs
 
 		RMB_RTS_SET(m_tri, [rmb_device newBufferWithBytes:tri_surf length:ntris * sizeof(unsigned)
 				options:MTLResourceStorageModeShared]);
-		RMB_RTS_SET(m_vecs, [rmb_device newBufferWithBytes:vecs length:nsurf * 8 * sizeof(float)
+		RMB_RTS_SET(m_vecs, [rmb_device newBufferWithBytes:vecs length:nsurf * 12 * sizeof(float)
 				options:MTLResourceStorageModeShared]);
 
 		if (!m_tri || !m_vecs)

@@ -155,10 +155,10 @@ RM_RTS_BuildTables(const model_t *wm)
 		free(t);
 	}
 
-	/* each triangle's surface and each surface's texture axes with their shifts (gl1's vecs) */
+	/* each triangle's surface, and each surface's texture axes with their shifts (gl1's vecs) and its plane */
 	r = malloc((size_t)n * sizeof(*r));
 	rts_tri = malloc(ntris * sizeof(*rts_tri));
-	rts_vecs = malloc((size_t)n * 8 * sizeof(*rts_vecs));
+	rts_vecs = malloc((size_t)n * 12 * sizeof(*rts_vecs));
 
 	if (!r || !rts_tri || !rts_vecs)
 	{
@@ -178,9 +178,13 @@ RM_RTS_BuildTables(const model_t *wm)
 
 		for (k = 0; k < 4; k++)
 		{
-			rts_vecs[i * 8 + k] = fa->texinfo ? fa->texinfo->vecs[0][k] : 0;
-			rts_vecs[i * 8 + 4 + k] = fa->texinfo ? fa->texinfo->vecs[1][k] : 0;
+			rts_vecs[i * 12 + k] = fa->texinfo ? fa->texinfo->vecs[0][k] : 0;
+			rts_vecs[i * 12 + 4 + k] = fa->texinfo ? fa->texinfo->vecs[1][k] : 0;
 		}
+
+		/* its plane toward its front, as gl1 measures a light against it (R_MarkSurfaceLights, R_AddDynamicLights) */
+		rm_rts_plane(fa->plane ? fa->plane->normal : NULL, fa->plane ? fa->plane->dist : 0,
+				(fa->flags & SURF_PLANEBACK) != 0, &rts_vecs[i * 12 + 8]);
 	}
 
 	if (rm_rts_surface_map(r, n, ntris, rts_tri) < 0)
