@@ -324,6 +324,7 @@ decode(const buf_t *b, size_t size, const char *ext, unsigned char **pic, int *w
 	return IMGDEC_Decode(b ? b->p : NULL, size, ext, pic, w, h);
 }
 
+#ifdef __APPLE__
 /* decodes b as ext and compares with want (RGBA8, w x h), each channel within tol */
 static void
 expect_image(const char *what, const buf_t *b, const char *ext,
@@ -360,6 +361,7 @@ expect_image(const char *what, const buf_t *b, const char *ext,
 
 	free(pic);
 }
+#endif
 
 static void
 expect_refused(const char *what, const buf_t *b, size_t size, const char *ext,
