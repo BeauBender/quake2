@@ -424,8 +424,12 @@ ApplyChanges(void *unused)
 		}
 	}
 
-	/* multisample anti-aliasing */
-	if (s_msaa_list.curvalue == 0)
+	/* multisample anti-aliasing; a greyed item is not a setting */
+	if (s_msaa_list.generic.flags & QMF_GRAYED)
+	{
+		/* nothing to write */
+	}
+	else if (s_msaa_list.curvalue == 0)
 	{
 		if (gl_msaa_samples->value != 0)
 		{
@@ -846,6 +850,22 @@ VID_MenuInit(void)
 				pow(2, s_msaa_list.curvalue) <= gl_msaa_samples->value);
 		s_msaa_list.curvalue--;
 	}
+
+	s_msaa_list.generic.flags = 0;
+	s_msaa_list.generic.statusbar = NULL;
+#ifdef __APPLE__
+	/* ref_metal has no MSAA: shown disabled, with the reason, and with
+	   a single choice so that it cannot be changed */
+	if (Q_stricmp(vid_renderer->string, "metal") == 0)
+	{
+		static const char *msaa_off_names[] = {"off", 0};
+
+		s_msaa_list.itemnames = msaa_off_names;
+		s_msaa_list.curvalue = 0;
+		s_msaa_list.generic.flags |= QMF_GRAYED;
+		s_msaa_list.generic.statusbar = "no multisampling in the Metal renderer";
+	}
+#endif
 
 	s_filter_list.generic.type = MTYPE_SPINCONTROL;
 	s_filter_list.generic.name = "texture filter";

@@ -2083,8 +2083,10 @@ frame is the mode's size, not the window's.
 checkout of that commit (the Makefile has no header dependencies on macOS, so `ref_gl1.dylib`
 was relinked and every `ref_metal` object rebuilt after each checkout; `stale_engine` refuses a
 module older than a header otherwise). Candidates: `metal` at `93be24f9` (pin ids
-`93be24f93eea-*`); the later commits change no file under `src` or the Makefile (`git diff
-93be24f9 <head> -- src Makefile` is empty). `particles` was recorded again at `fe97ef2e`, whose
+`93be24f93eea-*`); the commits up to `1e53d562` change no file under `src` or the Makefile
+(`git diff 93be24f9 1e53d562 -- src Makefile` is empty); `f1e23000` changes `rmb.h` and
+`rmb_encode.m` (the black clear of a drawable larger than the frame), covered by the records
+made again below and by the fullscreen-window run under **Sizes and FIX45**. `particles` was recorded again at `fe97ef2e`, whose
 scenario file has the new header comment (a comment changes the pin id, not the engine's input).
 A scratch `world-gamma` (`world.cfg` plus `set vid_gamma 1.6` and `set gl1_intensity 3`) was put
 in `scripts/pins/scenarios/` for the records and deleted after. Every record with
@@ -2183,6 +2185,16 @@ and is to be repeated on the bare-metal host. The fullscreen window shows the sa
 pixels (1333x748 here) are neither the desktop mode nor the mode asked for, and the base rendered
 and read back at them. With the frame at the mode's size `metal` writes what `gl1-metal` writes
 and what the client's line says, in every mode. HighDPI windows are not made on macOS (section 25).
+
+At `67e56ab` (after `f1e23000`, whose black clear runs only when the drawable is larger than the
+frame) the fullscreen-window case was run once more under the validation layer: `MTL_DEBUG_LAYER=1
+./quake2 -datadir <game data> -portable +set vid_renderer metal +set vid_fullscreen 2 +set r_mode
+4 +set s_initsound 0 +exec <script>`, the script `developer 1`, `map base1`, 30 `wait`s,
+`screenshot`, 10 `wait`s, `quit` (status 0, no kill needed). The client printed `Setting mode 4:
+640x480 (vid_fullscreen 2)`, `Real display mode: 1333x888@60.00`, `Drawable size: 640x480`; the
+screenshot's TGA header reads 640x480; the log holds `Metal API Validation Enabled` and no other
+validation message and no failed command buffer, and ends `ref_metal: teardown: 0 live objects
+(... texture 203/203, buffer 8/8, state 45/45), 0 unreleased, 0 unmatched`.
 
 **vsync.** In the same run, `set r_vsync 0`, `1`, `0`, `1` between frames printed
 `ref_metal: displaySyncEnabled off`, `on`, `off`, `on`: the property read back from the layer,
