@@ -33,6 +33,9 @@
 /* The largest side of a decoded image (ref_metal's RMB_MAX_TEXTURE_SIDE). */
 #define IMGDEC_MAX_SIDE 16384
 
+/* The most pixels in a decoded image: 64 Mpx, 256 MiB of RGBA8. */
+#define IMGDEC_MAX_AREA ((size_t)1 << 26)
+
 /* The largest file read: an uncompressed 32-bit TGA of 8192x8192 fits. */
 #define IMGDEC_MAX_FILE ((size_t)512 * 1024 * 1024)
 
@@ -94,6 +97,17 @@ int IMGDEC_FileSizeOk(size_t size, size_t max_size);
  */
 int IMGDEC_PixelBytes(size_t width, size_t height, size_t max_side,
 		size_t *bytes);
+
+/* 1 when width * height is at most max_area, computed without overflow */
+int IMGDEC_AreaOk(size_t width, size_t height, size_t max_area);
+
+/*
+ * 1 when the size bytes at data start with a TGA header naming a layout
+ * ImageIO decodes to wrong pixels: a colour map (type 1 or 9) whose
+ * entries are not 24-bit, or 15-bit pixels. Reads only header bytes
+ * inside size; 0 when there are fewer than the header's 18.
+ */
+int IMGDEC_TgaLayoutRefused(const unsigned char *data, size_t size);
 
 /*
  * Converts srclen bytes laid out as described into straight-alpha RGBA8

@@ -153,6 +153,23 @@ IMGDEC_PixelBytes(size_t width, size_t height, size_t max_side, size_t *bytes)
 	return 1;
 }
 
+int
+IMGDEC_AreaOk(size_t width, size_t height, size_t max_area)
+{
+	(void)width;
+	(void)height;
+	(void)max_area;
+	return 1;
+}
+
+int
+IMGDEC_TgaLayoutRefused(const unsigned char *data, size_t size)
+{
+	(void)data;
+	(void)size;
+	return 0;
+}
+
 /* byte i of a pixel, counted in big-endian channel order */
 static unsigned char
 IMGDEC_PixelByte(const unsigned char *pixel, size_t i, size_t swap)

@@ -463,6 +463,93 @@ test_file_size(void)
 	CHECK(IMGDEC_FileSizeOk(SIZE_MAX, IMGDEC_MAX_FILE) == 0, "SIZE_MAX bytes");
 }
 
+static void
+test_area(void)
+{
+	CHECK(IMGDEC_AreaOk(1, 1, IMGDEC_MAX_AREA) == 1, "1x1");
+	CHECK(IMGDEC_AreaOk(16384, 4096, IMGDEC_MAX_AREA) == 1, "16384x4096, the bound");
+	CHECK(IMGDEC_AreaOk(4096, 16384, IMGDEC_MAX_AREA) == 1, "4096x16384, the bound");
+	CHECK(IMGDEC_AreaOk(8192, 8192, IMGDEC_MAX_AREA) == 1, "8192x8192, the bound");
+	CHECK(IMGDEC_AreaOk(16384, 4097, IMGDEC_MAX_AREA) == 0, "16384x4097, past the bound");
+	CHECK(IMGDEC_AreaOk(4097, 16384, IMGDEC_MAX_AREA) == 0, "4097x16384, past the bound");
+	CHECK(IMGDEC_AreaOk(8193, 8192, IMGDEC_MAX_AREA) == 0, "8193x8192, past the bound");
+	CHECK(IMGDEC_AreaOk(16384, 16384, IMGDEC_MAX_AREA) == 0, "16384x16384");
+	CHECK(IMGDEC_AreaOk(10, 10, 100) == 1 && IMGDEC_AreaOk(10, 11, 100) == 0 &&
+		IMGDEC_AreaOk(11, 10, 100) == 0, "a bound of 100");
+	/* no overflow in the product */
+	CHECK(IMGDEC_AreaOk(SIZE_MAX, 2, IMGDEC_MAX_AREA) == 0, "SIZE_MAX x 2");
+	CHECK(IMGDEC_AreaOk((size_t)1 << 32, (size_t)1 << 32, IMGDEC_MAX_AREA) == 0, "2^32 squared");
+	CHECK(IMGDEC_AreaOk(5, 0, 100) == 1 && IMGDEC_AreaOk(0, 5, 100) == 1, "a side of 0 has no area");
+}
+
+/* the 18 header bytes of a TGA: image type, map entry size and pixel size */
+static void
+tga_header(unsigned char *hd, int type, int map_bits, int pixel_bits)
+{
+	memset(hd, 0, 18);
+	hd[1] = map_bits ? 1 : 0;
+	hd[2] = (unsigned char)type;
+	hd[5] = map_bits ? 4 : 0;
+	hd[7] = (unsigned char)map_bits;
+	hd[12] = 2;
+	hd[14] = 1;
+	hd[16] = (unsigned char)pixel_bits;
+	hd[17] = 0x20;
+}
+
+static void
+expect_tga_layout(const char *what, int type, int map_bits, int pixel_bits, size_t size,
+	int want)
+{
+	unsigned char hd[18];
+	unsigned char *exact;
+
+	tga_header(hd, type, map_bits, pixel_bits);
+	/* exactly size bytes, so that a read past them is caught by ASAN */
+	exact = malloc(size ? size : 1);
+	if (!exact)
+	{
+		printf("out of memory\n");
+		exit(2);
+	}
+	memcpy(exact, hd, size < sizeof(hd) ? size : sizeof(hd));
+	CHECK(IMGDEC_TgaLayoutRefused(exact, size) == want, "tga layout %s: want %d", what, want);
+	free(exact);
+}
+
+static void
+test_tga_layout(void)
+{
+	/* refused: a colour map that is not 24-bit, 15-bit pixels */
+	expect_tga_layout("type 1, 32-bit map", 1, 32, 8, 18, 1);
+	expect_tga_layout("type 9, 32-bit map", 9, 32, 8, 18, 1);
+	expect_tga_layout("type 1, 16-bit map", 1, 16, 8, 18, 1);
+	expect_tga_layout("type 9, 15-bit map", 9, 15, 8, 18, 1);
+	expect_tga_layout("type 1, no map size", 1, 0, 8, 18, 1);
+	expect_tga_layout("type 2, 15-bit", 2, 0, 15, 18, 1);
+	expect_tga_layout("type 10, 15-bit", 10, 0, 15, 18, 1);
+	expect_tga_layout("type 1, 32-bit map, a longer file", 1, 32, 8, 64, 1);
+
+	/* decoded */
+	expect_tga_layout("type 1, 24-bit map", 1, 24, 8, 18, 0);
+	expect_tga_layout("type 9, 24-bit map", 9, 24, 8, 18, 0);
+	expect_tga_layout("type 2, 24-bit", 2, 0, 24, 18, 0);
+	expect_tga_layout("type 2, 32-bit", 2, 0, 32, 18, 0);
+	expect_tga_layout("type 2, 16-bit", 2, 0, 16, 18, 0);
+	expect_tga_layout("type 10, 32-bit", 10, 0, 32, 18, 0);
+	expect_tga_layout("type 3, 8-bit grey", 3, 0, 8, 18, 0);
+	expect_tga_layout("type 11, 8-bit grey", 11, 0, 8, 18, 0);
+	/* a truecolour image with a map is left to ImageIO, which refuses it */
+	expect_tga_layout("type 2, 24-bit, an unused 32-bit map", 2, 32, 24, 18, 0);
+
+	/* shorter than a header: not judged here, nothing past size is read */
+	expect_tga_layout("type 1, 32-bit map, 17 bytes", 1, 32, 8, 17, 0);
+	expect_tga_layout("type 2, 15-bit, 17 bytes", 2, 0, 15, 17, 0);
+	expect_tga_layout("3 bytes", 1, 32, 8, 3, 0);
+	expect_tga_layout("0 bytes", 1, 32, 8, 0, 0);
+	CHECK(IMGDEC_TgaLayoutRefused(NULL, 0) == 0, "tga layout: NULL");
+}
+
 #ifdef __APPLE__
 static void
 test_bitmap_layout(void)
@@ -795,7 +882,7 @@ typedef struct
 	imgdec_result_t refusal;	/* IMGDEC_OK: any refusal */
 } dcase_t;
 
-#define MAX_CASES 64
+#define MAX_CASES 96
 static dcase_t cases[MAX_CASES];
 static int ncases;
 
@@ -846,6 +933,15 @@ copy_buf(const buf_t *b)
 	buf_t c = {0};
 
 	put(&c, b->p, b->n);
+	return c;
+}
+
+static buf_t
+bytes_buf(const unsigned char *p, size_t n)
+{
+	buf_t c = {0};
+
+	put(&c, p, n);
 	return c;
 }
 
@@ -999,6 +1095,37 @@ build_cases(void)
 	add_good("tga 32-bit, top origin", tga_file(RW, RH, 32, 0, 1, ref), "TGA", ref, RW, RH, 0);
 	add_good("tga 24-bit rle", tga_file(RW, RH, 24, 1, 0, ref), "tga", want_rgb, RW, RH, 0);
 	add_good("tga 32-bit rle", tga_file(RW, RH, 32, 1, 0, ref), "tga", ref, RW, RH, 0);
+	{
+		/* 2x1, map entries red, green, blue, (10,20,30); indices 1 and 2 */
+		static const unsigned char cmap24[] = {0, 1, 1, 0, 0, 4, 0, 24, 0, 0, 0, 0, 2, 0, 1, 0, 8, 0x20,
+			0, 0, 255, 0, 255, 0, 255, 0, 0, 30, 20, 10, 1, 2};
+		static const unsigned char cmap24_rle[] = {0, 1, 9, 0, 0, 4, 0, 24, 0, 0, 0, 0, 2, 0, 1, 0, 8, 0x20,
+			0, 0, 255, 0, 255, 0, 255, 0, 0, 30, 20, 10, 0x01, 1, 2};
+		static const unsigned char want_cmap24[8] = {0, 255, 0, 255, 0, 0, 255, 255};
+		/* the same with a 32-bit map: alpha 0, 100, 200, 255 */
+		static const unsigned char cmap32[] = {0, 1, 1, 0, 0, 4, 0, 32, 0, 0, 0, 0, 2, 0, 1, 0, 8, 0x28,
+			0, 0, 255, 0, 0, 255, 0, 100, 255, 0, 0, 200, 30, 20, 10, 255, 1, 2};
+		static const unsigned char cmap32_rle[] = {0, 1, 9, 0, 0, 4, 0, 32, 0, 0, 0, 0, 2, 0, 1, 0, 8, 0x28,
+			0, 0, 255, 0, 0, 255, 0, 100, 255, 0, 0, 200, 30, 20, 10, 255, 0x01, 1, 2};
+		/* 2x1 truecolour, 15-bit pixels */
+		static const unsigned char tc15[] = {0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 1, 0, 15, 0x20,
+			0x34, 0x12, 0xff, 0x7f};
+		/* 2x1 truecolour, 24-bit, after an unused 32-bit map: ImageIO refuses it */
+		static const unsigned char unused_map[] = {0, 1, 2, 0, 0, 4, 0, 32, 0, 0, 0, 0, 2, 0, 1, 0, 24, 0x20,
+			0, 0, 255, 0, 0, 255, 0, 100, 255, 0, 0, 200, 30, 20, 10, 255, 10, 20, 30, 50, 100, 200};
+
+		add_good("tga colour-mapped, 24-bit map", bytes_buf(cmap24, sizeof(cmap24)), "tga",
+			want_cmap24, 2, 1, 0);
+		add_good("tga colour-mapped rle, 24-bit map", bytes_buf(cmap24_rle, sizeof(cmap24_rle)), "tga",
+			want_cmap24, 2, 1, 0);
+		add_bad("tga 24-bit, an unused 32-bit map", bytes_buf(unused_map, sizeof(unused_map)), (size_t)-1,
+			"tga", IMGDEC_ERR_DECODE);
+		add_bad("tga colour-mapped, 32-bit map", bytes_buf(cmap32, sizeof(cmap32)), (size_t)-1, "tga",
+			IMGDEC_ERR_LAYOUT);
+		add_bad("tga colour-mapped rle, 32-bit map", bytes_buf(cmap32_rle, sizeof(cmap32_rle)), (size_t)-1,
+			"tga", IMGDEC_ERR_LAYOUT);
+		add_bad("tga 15-bit", bytes_buf(tc15, sizeof(tc15)), (size_t)-1, "tga", IMGDEC_ERR_LAYOUT);
+	}
 
 	/* refusals that need no decoder: the extension and the file size */
 	b = png_file(RW, RH, 8, 2, rgb, RW * 3, RH, NULL, 0, NULL, 0);
@@ -1045,6 +1172,44 @@ build_cases(void)
 		add_bad("png 16385x1 cut in its pixels", c, c.n / 2, "png", IMGDEC_ERR_SIZE);
 		c = png_file(1, 16385, 8, 2, wide, 3, 16385, NULL, 0, NULL, 0);
 		add_bad("png 1x16385 cut in its pixels", c, c.n / 2, "png", IMGDEC_ERR_SIZE);
+	}
+	/*
+	 * The area bound, 2^26 pixels, on the declared size: one row written.
+	 * At the bound the cut TGAs pass it and fail to decode.
+	 */
+	add_bad("png 16384x4097, past the area bound", png_file(16384, 4097, 8, 0, wide, 16384, 1, NULL, 0, NULL, 0),
+		(size_t)-1, "png", IMGDEC_ERR_SIZE);
+	add_bad("png 4097x16384, past the area bound", png_file(4097, 16384, 8, 0, wide, 4097, 1, NULL, 0, NULL, 0),
+		(size_t)-1, "png", IMGDEC_ERR_SIZE);
+	{
+		static const struct
+		{
+			const char *what;
+			int type, bpp;
+			unsigned w, h;
+			imgdec_result_t want;
+		} a[] = {
+			{"tga 8192x8192 cut, at the area bound", 2, 24, 8192, 8192, IMGDEC_ERR_DECODE},
+			{"tga grey 16384x4096 cut, at the area bound", 3, 8, 16384, 4096, IMGDEC_ERR_DECODE},
+			{"tga 8193x8192 cut, past the area bound", 2, 24, 8193, 8192, IMGDEC_ERR_SIZE},
+			{"tga grey 16384x4097 cut, past the area bound", 3, 8, 16384, 4097, IMGDEC_ERR_SIZE},
+		};
+		size_t k;
+
+		for (k = 0; k < sizeof(a) / sizeof(a[0]); k++)
+		{
+			buf_t t = {0};
+			unsigned char hd[18];
+
+			tga_header(hd, a[k].type, 0, a[k].bpp);
+			hd[12] = a[k].w & 255;
+			hd[13] = a[k].w >> 8;
+			hd[14] = a[k].h & 255;
+			hd[15] = a[k].h >> 8;
+			put(&t, hd, sizeof(hd));
+			put(&t, wide, 30);
+			add_bad(a[k].what, t, t.n, "tga", a[k].want);
+		}
 	}
 	add_bad("png declaring 100000x100000", png_file(100000, 100000, 8, 2, rgb, 3, 1, NULL, 0, NULL, 0), (size_t)-1, "png", IMGDEC_OK);
 	{
@@ -1165,6 +1330,8 @@ main(int argc, char **argv)
 
 	test_types();
 	test_file_size();
+	test_area();
+	test_tga_layout();
 #ifdef __APPLE__
 	test_bitmap_layout();
 #endif
