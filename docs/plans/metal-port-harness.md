@@ -2229,7 +2229,7 @@ its teardown line reads `ref_metal: teardown: 0 live objects (created/destroyed:
 232/232` in the two harness runs). 22 runs, 21:56 to 22:01 local, each status 0 with no kill;
 before and after each the screen was unlocked (`ioreg -n Root -d1 | grep -c
 CGSSessionScreenIsLocked` printed 0), no other `quake2` was running before each (`pgrep -x
-quake2`) and none after the last; one-minute load 2.52 to 4.63.
+quake2`); one-minute load 2.52 to 4.63.
 After every fullscreen run, the last `vid_fullscreen 1` one (`gl1-metal` at 5120x2880) included,
 the probe printed the desktop mode again (`points 2560x1440 pixels 5120x2880 refresh 60.00`), and
 after the last run `system_profiler SPDisplaysDataType` reported `Resolution: 5120 x 2880 Retina`
