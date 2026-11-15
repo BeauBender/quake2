@@ -1,11 +1,14 @@
-#!/bin/sh
+#!/bin/bash
 # Stop hook. When the working tree has uncommitted changes under src/, doc/,
 # docs/, tests/ or any Markdown file, run the repo invariants named in
 # $checks below and block the stop once if one fails, is missing or does not
 # finish by the deadline. It never blocks twice in a row: when Claude Code
 # reports stop_hook_active, the hook only prints the failure and lets the
-# turn end. It never blocks on its own error: only the one line that sets
-# status=2 makes it exit 2, whatever else goes wrong.
+# turn end. Apart from the two failures below that keep it from running the
+# checks at all, it never blocks on its own error: only the one line that
+# sets status=2 makes it exit 2, whatever else goes wrong; bash runs it in
+# POSIX mode, as /bin/sh does, so an expansion error (a date command that
+# prints nothing, say) ends it, and the EXIT trap makes that exit 0.
 #
 # The list holds only the checks that build nothing. The others build
 # ref_metal, the Metal shim or the pin harness, or run throwaway git
@@ -29,6 +32,11 @@
 # failure; the hook then ends about $deadline + $grace s after it started.
 # It signals only the process groups it started.
 #
+# It needs bash: the deadline holds only with job control, and dash, or zsh
+# run as sh, give none without a terminal. When set -m does not take
+# effect, or no temporary directory can be made under $TMPDIR or /tmp, the
+# hook runs no check, says why, and blocks once like a failure.
+#
 # Usage: registered in .claude/settings.json; reads the hook JSON on stdin.
 checks='
 tests/check-compat-names.sh
@@ -43,12 +51,31 @@ tests/check-vendored.sh
 deadline=40
 grace=2
 
+[ -z "${BASH_VERSION:-}" ] || set -o posix
 status=0
 input=$(cat)
+
+# report <text>: print the failures and exit as the block-once rule says.
+report()
+{
+	case $input in
+	*'"stop_hook_active":true'*|*'"stop_hook_active": true'*)
+		echo "repo invariants still failing (not blocking again):" >&2
+		printf '%s\n' "$1" >&2
+		exit 0 ;;
+	esac
+	echo "repo invariants fail on the working tree; fix them or say why they cannot be fixed:" >&2
+	printf '%s\n' "$1" >&2
+	status=2
+	exit 2
+}
+
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 0
 [ -n "$(git status --porcelain -- src doc docs tests '*.md' 2>/dev/null)" ] || exit 0
 
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/stopinv.XXXXXX") || exit 0
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/stopinv.XXXXXX" 2> /dev/null) ||
+	tmp=$(mktemp -d /tmp/stopinv.XXXXXX 2> /dev/null) ||
+	report "NOT RUN: any listed check, no temporary directory could be made under ${TMPDIR:-/tmp} or /tmp"
 c=
 w=
 trap 'rm -rf "${tmp:?}"; exit "$status"' EXIT
@@ -61,7 +88,13 @@ trap '[ -z "$c" ] || kill -KILL -- "-$c"; [ -z "$w" ] || kill -KILL -- "-$w"; ex
 # holds the hook's stderr (fd 3 here), so nothing left behind by a check
 # keeps Claude Code reading it after the hook exits.
 exec 3>&2 2> /dev/null
-set -m
+(set -m) && set -m
+case $- in
+*m*) ;;
+*)
+	echo "NOT RUN: any listed check, this shell has no job control (set -m) to keep the ${deadline} s deadline" >> "${tmp:?}/log"
+	checks= ;;
+esac
 end=$(($(date +%s) + deadline))
 for check in $checks; do
 	if [ ! -f "$check" ]; then
@@ -101,13 +134,4 @@ set +m
 exec 2>&3 3>&-
 
 [ -s "${tmp:?}/log" ] || exit 0
-case $input in
-*'"stop_hook_active":true'*|*'"stop_hook_active": true'*)
-	echo "repo invariants still failing (not blocking again):" >&2
-	cat "${tmp:?}/log" >&2
-	exit 0 ;;
-esac
-echo "repo invariants fail on the working tree; fix them or say why they cannot be fixed:" >&2
-cat "${tmp:?}/log" >&2
-status=2
-exit 2
+report "$(cat "${tmp:?}/log")"
