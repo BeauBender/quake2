@@ -1040,6 +1040,7 @@ CLIENT_OBJS_ := \
 	src/client/menu/vidrules.o \
 	src/client/menu/videomenu.o \
 	src/client/refresh/files/imgdecode.o \
+	src/client/refresh/files/imgscale.o \
 	src/client/sound/ogg.o \
 	src/client/sound/sdl.o \
 	src/client/sound/sound.o \
@@ -1118,6 +1119,7 @@ REFGL1_OBJS_ := \
 	src/client/refresh/files/pcx.o \
 	src/client/refresh/files/image.o \
 	src/client/refresh/files/imgdecode.o \
+	src/client/refresh/files/imgscale.o \
 	src/client/refresh/files/wal.o \
 	src/client/refresh/files/pvs.o \
 	src/client/vid/glimp_hidpi.o \
@@ -1153,6 +1155,7 @@ REFGL3_OBJS_ := \
 	src/client/refresh/files/pcx.o \
 	src/client/refresh/files/image.o \
 	src/client/refresh/files/imgdecode.o \
+	src/client/refresh/files/imgscale.o \
 	src/client/refresh/files/wal.o \
 	src/client/refresh/files/pvs.o \
 	src/common/shared/shared.o \
@@ -1196,6 +1199,7 @@ REFSOFT_OBJS_ := \
 	src/client/refresh/files/pcx.o \
 	src/client/refresh/files/image.o \
 	src/client/refresh/files/imgdecode.o \
+	src/client/refresh/files/imgscale.o \
 	src/client/refresh/files/wal.o \
 	src/client/refresh/files/pvs.o \
 	src/client/vid/glimp_hidpi.o \
@@ -1247,6 +1251,7 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/files/pvs.o \
 	src/client/refresh/files/image.o \
 	src/client/refresh/files/imgdecode.o \
+	src/client/refresh/files/imgscale.o \
 	src/client/refresh/files/surf.o \
 	src/client/refresh/files/wal.o \
 	src/client/vid/glimp_hidpi.o \
@@ -1453,7 +1458,7 @@ endif
 # frontend sound.c, the window code's SDL-free part vid/glimp_hidpi.c and
 # the video menu's rules menu/vidrules.c)
 # are linked against the stubs in tests/unit/stub_client.c
-# and stub_client_full.c, and two renderer objects, refresh/files/surf.c
+# and stub_client_full.c, and three renderer objects, refresh/files/imgscale.c, refresh/files/surf.c
 # and soft/sw_view.c, which need only shared.c; none of it includes SDL. Needs no SDL and no game
 # data. `make test` builds and runs it; UPDATE_PINS=1 (exactly 1, any
 # other value is ignored) rewrites the pins under tests/pins/unit/
@@ -1498,6 +1503,7 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(TESTDIR)/src/client/menu/vidrules.o \
 	$(TESTDIR)/src/client/sound/sound.o \
 	$(TESTDIR)/src/client/vid/glimp_hidpi.o \
+	$(TESTDIR)/src/client/refresh/files/imgscale.o \
 	$(TESTDIR)/src/client/refresh/files/surf.o \
 	$(TESTDIR)/src/client/refresh/soft/sw_view.o \
 	$(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS))
