@@ -820,10 +820,10 @@ configuration:
    GPU time is per rendered frame, the interpolator's work for the
    frames it generates included, and the rate is the rendered rate,
    because generated frames do not respond to input ("Frame
-   interpolator", option A's subsection). Where no host of the family shows
-   the class's refresh, item 4 says what is judged instead. The 10 %
-   headroom is a design choice, not a measurement; the owner may set
-   another.
+   interpolator", option A's subsection). Where no host of the family
+   shows the class's refresh, item 4 says what is judged instead. The
+   10 % headroom is a design choice, not a measurement; the owner may
+   set another.
 2. An option below the quality floor in any region of any case (its SSIM,
    or its still-camera instability) is not offered as a default there. No
    floor value exists yet, since no image quality is measured: RT12
