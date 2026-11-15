@@ -711,6 +711,19 @@ has) is not drawn.
   depth-stencil and sampler states) is printed at every shutdown
   regardless. Defaults to `0`.
 
+* **metal_lightmap_filter**: How the Metal renderer filters the lightmaps
+  of the world. `0` (the default) is the bilinear filter every renderer
+  uses, and draws what it drew before this cvar existed. `1` filters each
+  lightmap sample with a cubic B-spline (four bilinear taps), which
+  smooths light gradients and shadow edges and removes the diamond
+  pattern the bilinear filter leaves on them. Every tap stays half a
+  luxel inside the lightmap of its own face, so light never bleeds in
+  from the neighbouring face stored beside it, and the result is never
+  brighter than the brightest or darker than the darkest luxel around the
+  sample. A face with no lightmap, and the flowing surfaces, are not
+  filtered either way. Other renderers do not have it. Saved with the
+  configuration; applies from the next frame.
+
 
 ## Gamepad
 

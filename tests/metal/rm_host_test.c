@@ -1491,6 +1491,13 @@ test_lm_cubic_edges(void)
 	t = mtl_lm_cubic(7.3f, 6.2f, 7.0f, 6.0f, 8.0f, 7.0f);
 	CHECK(t.x0 == 7.5f && t.x1 == 7.5f && t.y0 == 6.5f && t.y1 == 6.5f);
 	CHECK(fabsf(t.w00 + t.w10 + t.w01 + t.w11 - 1.0f) < 1e-6f);
+	/* a rectangle narrower than a luxel (never drawn filtered, but the function is total): the taps at its low bound plus a half */
+	t = mtl_lm_cubic(9.0f, 1.0f, 3.0f, 0.0f, 3.5f, 4.0f);
+	CHECK(t.x0 == 3.5f && t.x1 == 3.5f);
+	t = mtl_lm_cubic(9.0f, 1.0f, 3.0f, 0.0f, 3.0f, 4.0f);
+	CHECK(t.x0 == 3.5f && t.x1 == 3.5f);
+	t = mtl_lm_cubic(1.0f, 9.0f, 3.0f, 2.0f, 9.0f, 2.25f);
+	CHECK(t.y0 == 2.5f && t.y1 == 2.5f);
 	/* in the middle of a large rectangle nothing is clamped: a tap each side of the sample */
 	t = mtl_lm_cubic(20.5f, 30.5f, 0.0f, 0.0f, 64.0f, 64.0f);
 	CHECK(t.x0 > 18.9f && t.x0 < 20.5f && t.x1 > 20.5f && t.x1 < 22.1f);

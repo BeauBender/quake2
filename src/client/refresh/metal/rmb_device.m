@@ -40,6 +40,7 @@
 
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "header/rmb.h"
@@ -88,8 +89,21 @@ rmb_frame_wait_ms(void)
 void
 rmb_watch(id<MTLCommandBuffer> cmd)
 {
+	/* MTL_GPU_TIME set in the environment: one line per command buffer with its GPU time (a measuring aid, TASK120) */
+	static int timing = -1;
+
+	if (timing < 0)
+	{
+		timing = getenv("MTL_GPU_TIME") != NULL;
+	}
+
 	[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 		unsigned long n;
+
+		if (timing && b.status == MTLCommandBufferStatusCompleted)
+		{
+			fprintf(stderr, "ref_metal: gpu_ms %.4f\n", (b.GPUEndTime - b.GPUStartTime) * 1000.0);
+		}
 
 		if (b.status != MTLCommandBufferStatusError)
 		{
