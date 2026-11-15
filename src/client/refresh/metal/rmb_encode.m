@@ -1026,7 +1026,12 @@ rmb_draw_alias(const rm_avert_t *v, unsigned nv, const unsigned short *idx, unsi
 		}
 	}
 
-	if (d->tex)
+	if (d->point)
+	{
+		/* N9: the quads of gl1's points (rm_point_quads), untextured: the caller names no texture */
+		pipe = RM_PIPE_PARTICLE;
+	}
+	else if (d->tex)
 	{
 		pipe = d->blend ? RM_PIPE_ALIAS_BLEND : (d->atest ? RM_PIPE_ALIAS_ATEST : RM_PIPE_ALIAS);
 	}

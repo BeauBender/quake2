@@ -77,6 +77,14 @@ cvar_t *gl_lefthand;
 cvar_t *r_gunfov;
 cvar_t *gl_shadows;
 cvar_t *gl1_stencilshadow;
+cvar_t *gl1_particle_min_size;
+cvar_t *gl1_particle_max_size;
+cvar_t *gl1_particle_size;
+cvar_t *gl1_particle_att_a;
+cvar_t *gl1_particle_att_b;
+cvar_t *gl1_particle_att_c;
+cvar_t *gl1_particle_square;
+cvar_t *gl1_pointparameters;
 
 unsigned long rm_noop_calls;
 
@@ -137,6 +145,14 @@ R_Register(void)
 	r_gunfov = ri.Cvar_Get("r_gunfov", "80", CVAR_ARCHIVE);
 	gl_shadows = ri.Cvar_Get("r_shadows", "0", CVAR_ARCHIVE);
 	gl1_stencilshadow = ri.Cvar_Get("gl1_stencilshadow", "0", CVAR_ARCHIVE);
+	gl1_particle_min_size = ri.Cvar_Get("gl1_particle_min_size", "2", CVAR_ARCHIVE);
+	gl1_particle_max_size = ri.Cvar_Get("gl1_particle_max_size", "40", CVAR_ARCHIVE);
+	gl1_particle_size = ri.Cvar_Get("gl1_particle_size", "40", CVAR_ARCHIVE);
+	gl1_particle_att_a = ri.Cvar_Get("gl1_particle_att_a", "0.01", CVAR_ARCHIVE);
+	gl1_particle_att_b = ri.Cvar_Get("gl1_particle_att_b", "0.0", CVAR_ARCHIVE);
+	gl1_particle_att_c = ri.Cvar_Get("gl1_particle_att_c", "0.01", CVAR_ARCHIVE);
+	gl1_particle_square = ri.Cvar_Get("gl1_particle_square", "0", CVAR_ARCHIVE);
+	gl1_pointparameters = ri.Cvar_Get("gl1_pointparameters", "1", CVAR_ARCHIVE);
 
 	ri.Cmd_AddCommand("screenshot", R_ScreenShot);
 	ri.Cmd_AddCommand("imagelist", R_ImageList_f);
@@ -289,6 +305,7 @@ RI_Init(void)
 		return false;
 	}
 
+	R_InitParticles();    /* gl1's R_SetDefaultState: the point state, gl1_pointparameters taken */
 	R_InitImages();   /* runs R_TextureMode: the flags RI_BeginFrame tests start clear */
 	RM_ClearTextureModeFlags();
 	R_InitLight();    /* gl1's minlight table, which gl1 makes in R_InitImages */
@@ -344,6 +361,13 @@ RI_BeginFrame(float camera_separation)
 	{
 		ri.Cvar_SetValue("gl1_overbrightbits", rm_overbright(gl1_overbrightbits->value));
 		gl1_overbrightbits->modified = false;
+	}
+
+	/* gl1's RI_BeginFrame: GL_POINT_SMOOTH, or the particle texture without point parameters */
+	if (gl1_particle_square->modified)
+	{
+		R_ParticleSquare();
+		gl1_particle_square->modified = false;
 	}
 
 	/*
@@ -617,8 +641,8 @@ R_PolyBlend(void)
 }
 
 /*
- * from gl1_main.c; the particles (N9) are not drawn yet. The dynamic
- * lights are the renderer's checked copy from here on (R_TakeDlights)
+ * from gl1_main.c. The dynamic lights are the renderer's checked copy
+ * from here on (R_TakeDlights)
  */
 static void
 R_RenderView(refdef_t *fd)
@@ -647,12 +671,12 @@ R_RenderView(refdef_t *fd)
 
 	R_DrawEntitiesOnList();
 
-	/* gl1_flashblend's blobs, with or without a world (as gl1) */
+	/* gl1_flashblend's blobs, then the particles (N9), with or without a world (as gl1) */
 	R_RenderDlights(&r_view);
+	R_DrawParticles(&r_view);
 
 	if (!(r_newrefdef.rdflags & RDF_NOWORLDMODEL))
 	{
-		/* the particles (N9) are drawn here, before the translucent surfaces */
 		R_DrawAlphaSurfaces(&r_view);
 	}
 

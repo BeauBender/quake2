@@ -39,6 +39,7 @@ unsigned d_8to24table[256];
 byte gammatable[256];
 
 image_t *r_notexture;    /* the fallback of a missing world texture (rm_misc.c makes it) */
+image_t *r_particletexture;  /* little dot for particles (rm_misc.c makes it) */
 float rm_sw_gamma = 1;   /* gl1's gl_state.sw_gamma: vid_gamma, at least 0.1, as R_InitImages read it */
 float rm_inverse_intensity_value = 0.5f;   /* gl1's gl_state.inverse_intensity: the gamma over gl1_intensity, as R_InitImages computed it */
 int registration_sequence;
@@ -509,10 +510,15 @@ R_FreeUnusedImages(void)
 	image_t *image;
 	int i, used = 0;
 
-	/* never free r_notexture (gl1 keeps the particle texture too: N9) */
+	/* never free r_notexture or particle texture */
 	if (r_notexture)
 	{
 		r_notexture->registration_sequence = registration_sequence;
+	}
+
+	if (r_particletexture)
+	{
+		r_particletexture->registration_sequence = registration_sequence;
 	}
 
 	for (i = 0, image = gltextures; i < numgltextures; i++, image++)
@@ -642,4 +648,5 @@ R_ShutdownImages(void)
 
 	numgltextures = 0;
 	r_notexture = NULL;
+	r_particletexture = NULL;
 }

@@ -233,3 +233,205 @@ R_DrawNullModel(const entity_t *currententity, const rm_view_t *view, int depth_
 
 	return rmb_draw_alias(e_verts, RM_NULL_VERTS, e_idx, (unsigned long)ni, &d, mvp, &view->vp);
 }
+
+/*
+ * The particles (N9), from gl1_main.c: R_DrawParticles draws gl1's
+ * GL_POINTS as the shim does, CPU-made quads (rm_point_quads) with GL's
+ * size, snapping and smooth coverage; with gl1_pointparameters 0 at
+ * start-up R_DrawParticles2 draws a textured triangle per particle with
+ * r_particletexture. Both blend without depth writes.
+ */
+
+/* gl1's point state (glPointSize, glPointParameterf, GL_POINT_SMOOTH) and gl_config.pointparameters */
+static rm_points_t r_points;
+static qboolean r_pointparameters;
+static unsigned long particle_skips;
+
+/* the view's particles taken (position and colour), and their quads or triangles */
+static rm_avert_t p_in[RM_MAX_PARTICLES];
+static rm_avert_t p_verts[4 * RM_MAX_PARTICLES];
+static unsigned short p_idx[6 * RM_MAX_PARTICLES];
+
+/* from gl1_main.c, R_Init (the extension is the shim's), and gl1_misc.c, R_SetDefaultState */
+void
+R_InitParticles(void)
+{
+	rm_point_state_init(&r_points);
+	r_pointparameters = gl1_pointparameters->value != 0;
+
+	if (r_pointparameters)
+	{
+		rm_point_set_range(&r_points, gl1_particle_min_size->value, gl1_particle_max_size->value);
+		r_points.att[0] = gl1_particle_att_a->value;
+		r_points.att[1] = gl1_particle_att_b->value;
+		r_points.att[2] = gl1_particle_att_c->value;
+		r_points.smooth = !gl1_particle_square->value;
+	}
+}
+
+/* from gl1_main.c, RI_BeginFrame: gl1_particle_square changed */
+void
+R_ParticleSquare(void)
+{
+	if (r_pointparameters)
+	{
+		r_points.smooth = !gl1_particle_square->value;
+	}
+	else
+	{
+		/* particles aren't drawn as GL_POINTS, but as textured triangles */
+		R_InitParticleTexture();
+	}
+}
+
+void
+RM_ParticleSkips(rmb_stats_t *s)
+{
+	s->particle_skips = particle_skips;
+}
+
+/* gl1's points: the quads of n points of p_in, untextured, in clip coordinates (drawn with the identity) */
+static int
+R_DrawPoints(const rm_view_t *view, int n)
+{
+	rmb_alias_draw_t d;
+	float identity[16];
+	int tw = 0, th = 0;
+	long q;
+
+	/* assume the particle size looks good with window height 480px and scale according to real resolution */
+	rm_point_set_size(&r_points, gl1_particle_size->value * (float)r_newrefdef.height / 480.0f);
+
+	/* R_SetupGL's glViewport, GL's bottom-left origin, which the quads are snapped in */
+	rmb_target_size(&tw, &th);
+	r_points.vx = view->vp.x;
+	r_points.vy = th - view->vp.y - view->vp.h;
+	r_points.vw = view->vp.w;
+	r_points.vh = view->vp.h;
+
+	q = rm_point_quads(&r_points, view->world, view->mvp, p_in, n, p_verts, 4 * RM_MAX_PARTICLES,
+			p_idx, 6 * RM_MAX_PARTICLES);
+
+	if (q <= 0)
+	{
+		return q == 0;  /* every point outside the clip volume: nothing to draw */
+	}
+
+	memset(&d, 0, sizeof(d));
+	d.point = 1;
+	d.blend = 1;
+	d.cull = RMB_CULL_NONE;  /* GL culls polygons only */
+	d.zfar = 1;
+	mtl_mat_identity(identity);
+
+	return rmb_draw_alias(p_verts, (unsigned)(4 * q), p_idx, (unsigned long)(6 * q), &d, identity, &view->vp);
+}
+
+/* from gl1_main.c: the textured triangles of n particles of p_in (gl1_pointparameters 0) */
+static int
+R_DrawParticles2(const rm_view_t *view, int n)
+{
+	float vtx[3][3], tex[3][2];
+	rmb_alias_draw_t d;
+	int i, j, k = 0;
+
+	if (!r_particletexture)
+	{
+		particle_skips += n;
+		return 0;
+	}
+
+	rm_particle_tex(tex);
+
+	/* n is rm_particle_count's, at most the ring: the bound is restated for the arrays */
+	for (i = 0; (i < n) && (i < RM_MAX_PARTICLES); i++)
+	{
+		if (!rm_particle_tri(p_in[i].pos, r_origin, vpn, vup, vright, vtx))
+		{
+			particle_skips++;
+			continue;
+		}
+
+		for (j = 0; j < 3; j++)
+		{
+			rm_avert_t *v = &p_verts[3 * k + j];
+
+			memset(v, 0, sizeof(*v));
+			memcpy(v->pos, vtx[j], sizeof(vtx[j]));
+			v->pos[3] = 1;
+			v->uv[0] = tex[j][0];
+			v->uv[1] = tex[j][1];
+			memcpy(v->color, p_in[i].color, sizeof(v->color));
+			p_idx[3 * k + j] = (unsigned short)(3 * k + j);
+		}
+
+		k++;
+	}
+
+	if (!k)
+	{
+		return 1;
+	}
+
+	/* R_Bind(r_particletexture->texnum), glDepthMask(GL_FALSE), GL_BLEND, GL_MODULATE */
+	memset(&d, 0, sizeof(d));
+	d.tex = r_particletexture->texnum;
+	d.smp = r_particletexture->sampler;
+	d.blend = 1;
+	d.cull = R_EffectCull(view);
+	d.zfar = 1;
+
+	return rmb_draw_alias(p_verts, (unsigned)(3 * k), p_idx, (unsigned long)(3 * k), &d, view->mvp, &view->vp);
+}
+
+/*
+ * from gl1_main.c: each particle the client sends is read once, into a
+ * copy that is checked (rm_particle_ok) and drawn; one past the ring or
+ * with a field out of its bound is counted and not drawn
+ */
+int
+R_DrawParticles(const rm_view_t *view)
+{
+	const particle_t *in = r_newrefdef.particles;
+	long refused;
+	int n, i, k = 0;
+
+	n = rm_particle_count(r_newrefdef.num_particles, &refused);
+	particle_skips = (unsigned long)refused;
+
+	if (n <= 0) /* avoiding VLA with no size and vertexes built on it */
+	{
+		return 1;
+	}
+
+	if (!in)
+	{
+		particle_skips += n;
+		return 0;
+	}
+
+	/* n is 0 to the ring (rm_particle_count): the bound is restated for the arrays */
+	for (i = 0; (i < n) && (i < RM_MAX_PARTICLES); i++)
+	{
+		particle_t p = in[i];
+
+		if (!rm_particle_ok(p.origin, p.color, p.alpha))
+		{
+			particle_skips++;
+			continue;
+		}
+
+		memset(&p_in[k], 0, sizeof(p_in[k]));
+		memcpy(p_in[k].pos, p.origin, sizeof(p.origin));
+		p_in[k].pos[3] = 1;
+		rm_particle_color(d_8to24table, gammatable, p.color, p.alpha, p_in[k].color);
+		k++;
+	}
+
+	if (!k)
+	{
+		return 1;
+	}
+
+	return r_pointparameters ? R_DrawPoints(view, k) : R_DrawParticles2(view, k);
+}

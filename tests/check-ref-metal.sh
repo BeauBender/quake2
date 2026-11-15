@@ -71,7 +71,8 @@ fi
 host=""
 # the world's tests (N4) also run what ref_metal takes from files/surf.c (with shared.c, which it
 # calls), hold the model checks to files/models.c (N7), and compare the 3D viewport with the shim's
-# mgl_compute_raster (gl1/metal/mgl_raster.c, behind tests/metal/rm_host_shim.c); the engine headers
+# mgl_compute_raster (gl1/metal/mgl_raster.c, behind tests/metal/rm_host_shim.c) and the point arithmetic
+# of the particles (mgl_point_size and mgl_point_quads of mgl_draw.c, with mgl_state.c and mgl_tex.c); the engine headers
 # need the two names the Makefile defines. files/models.c is the shared loader, not ref_metal's code:
 # its one -Wextra finding (a sign comparison) is not this module's
 # shellcheck disable=SC2086 # flags is a word list
@@ -83,7 +84,8 @@ if ! $cc $flags -Wno-sign-compare '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -c -o 
 elif ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "${tmp:?}/rm_host_test" \
 	tests/metal/rm_host_test.c tests/metal/rm_host_shim.c \
 	"$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" \
-	src/client/refresh/gl1/metal/mgl_raster.c src/client/refresh/files/surf.c "${tmp:?}/models.o" \
+	src/client/refresh/gl1/metal/mgl_raster.c src/client/refresh/gl1/metal/mgl_state.c \
+	src/client/refresh/gl1/metal/mgl_tex.c src/client/refresh/gl1/metal/mgl_draw.c src/client/refresh/files/surf.c "${tmp:?}/models.o" \
 	src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
 	cat "${tmp:?}/cc.out"
 	bad "tests/metal/rm_host_test.c does not compile"

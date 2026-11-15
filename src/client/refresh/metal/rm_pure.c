@@ -217,6 +217,7 @@ rm_stats_format(const rmb_stats_t *s, const rm_ledger_t *l, char *buf, size_t le
 	ok = ok && rm_append(buf, len, &used, "skipped surfaces: %lu sky, %lu warped, %lu translucent, %lu flowing",
 			s->sky_skips, s->warp_skips, s->trans_skips, s->flow_skips);
 	ok = ok && rm_append(buf, len, &used, "; %lu dynamic lights left out", s->dlight_skips);
+	ok = ok && rm_append(buf, len, &used, "; %lu particles refused", s->particle_skips);
 	ok = ok && rm_append(buf, len, &used, "; skipped entities: %lu sprites, %lu beams, %lu null models, ",
 			s->sprite_skips, s->beam_skips, s->null_skips);
 	ok = ok && rm_append(buf, len, &used, "%lu translucent brush models, %lu refused", s->bmodel_trans_skips,
@@ -3962,5 +3963,354 @@ rm_flash_blob(const float *origin, float intensity, const float *color, const fl
 		out[k].pos[3] = 1;
 		out[k].color[3] = 255 / 255.0f;
 		k++;
+	}
+}
+
+/* ---- particles (N9) ------------------------------------------------------------- */
+
+int
+rm_particle_count(long n, long *refused)
+{
+	long kept = (n < 0) ? 0 : ((n > RM_MAX_PARTICLES) ? RM_MAX_PARTICLES : n);
+
+	*refused = (n > kept) ? (n - kept) : 0;
+	return (int)kept;
+}
+
+int
+rm_particle_ok(const float *origin, int color, float alpha)
+{
+	int i;
+
+	for (i = 0; i < 3; i++)
+	{
+		/* the negated form refuses NaN as well */
+		if (!(fabsf(origin[i]) <= RM_PARTICLE_BOUND))
+		{
+			return 0;
+		}
+	}
+
+	return (color >= 0) && (color < 256) && (alpha >= 0.0f) && (alpha <= 1.0f);
+}
+
+/* from gl1_main.c, R_DrawParticles and R_DrawParticles2: gammatable[colour byte] and p->alpha * 255 as bytes, read as the shim reads them */
+void
+rm_particle_color(const unsigned *palette, const unsigned char *gamma, int color, float alpha, float *rgba)
+{
+	const unsigned p = palette[color & 0xFF];
+
+	rgba[0] = gamma[p & 0xFF] / 255.0f;
+	rgba[1] = gamma[(p >> 8) & 0xFF] / 255.0f;
+	rgba[2] = gamma[(p >> 16) & 0xFF] / 255.0f;
+	/* a valid alpha is 0 to 1, so the byte is 0 to 255 */
+	rgba[3] = (unsigned char)(alpha * 255) / 255.0f;
+}
+
+/* GL's initial point state (the shim's mgl_state_reset) */
+void
+rm_point_state_init(rm_points_t *s)
+{
+	memset(s, 0, sizeof(*s));
+	s->size = 1.0f;
+	s->min = 0.0f;
+	s->max = RM_POINT_ALIASED_MAX;
+	s->att[0] = 1.0f;
+}
+
+/* the shim's glPointSize: a size that is not above 0 (NaN included) is refused and the old one stays */
+void
+rm_point_set_size(rm_points_t *s, float size)
+{
+	if (size > 0.0f)
+	{
+		s->size = size;
+	}
+}
+
+/* the shim's glPointParameterf of GL_POINT_SIZE_MIN and _MAX: each a value below 0 refused (NaN is stored) */
+void
+rm_point_set_range(rm_points_t *s, float min, float max)
+{
+	if (!(min < 0.0f))
+	{
+		s->min = min;
+	}
+
+	if (!(max < 0.0f))
+	{
+		s->max = max;
+	}
+}
+
+/* the shim's mgl_xform: out = m * (x, y, z, w), column-major as GL keeps m */
+static void
+rm_point_xform(const float *m, const float *v, double *out)
+{
+	int r;
+
+	for (r = 0; r < 4; r++)
+	{
+		out[r] = (double)m[r] * v[0] + (double)m[4 + r] * v[1] + (double)m[8 + r] * v[2] + (double)m[12 + r] * v[3];
+	}
+}
+
+/* from the shim's mgl_point_size (gl1/metal/mgl_draw.c): ARB_point_parameters, then the sizes GL allows */
+float
+rm_point_size(const rm_points_t *s, const float *eye)
+{
+	const float *a = s->att;
+	double d2 = (double)eye[0] * eye[0] + (double)eye[1] * eye[1] + (double)eye[2] * eye[2];
+	double den = a[0] + a[1] * sqrt(d2) + a[2] * d2;
+	double size = s->size;
+
+	if (den > 0.0)
+	{
+		size /= sqrt(den);
+	}
+
+	size = size < s->min ? s->min : size;
+	size = size > s->max ? s->max : size;
+
+	/* NaN or infinity (from the state or the attenuation) never leaves: 1 */
+	if (!isfinite(size))
+	{
+		size = 1.0;
+	}
+
+	if (s->smooth)
+	{
+		size = size < RM_POINT_SMOOTH_MIN ? RM_POINT_SMOOTH_MIN : size;
+		return (float)(size > RM_POINT_SMOOTH_MAX ? RM_POINT_SMOOTH_MAX : size);
+	}
+
+	size = floor(size + 0.5);
+	size = size < 1.0 ? 1.0 : size;
+	return (float)(size > RM_POINT_ALIASED_MAX ? RM_POINT_ALIASED_MAX : size);
+}
+
+/*
+ * from the shim's mgl_point_quads: each point (position, colour) becomes
+ * one quad in clip coordinates, corners in the shim's order, as the
+ * smooth-point pipeline reads it (uv: the corner's offset from the centre
+ * in pixels, pad: the radius and 1 for a smooth point, else 0). The
+ * indices of quad k are 4k + (0 1 2 0 2 3).
+ */
+long
+rm_point_quads(const rm_points_t *s, const float *mv, const float *mvp, const rm_avert_t *in, long n,
+		rm_avert_t *out, long vcap, unsigned short *idx, long icap)
+{
+	static const double corner[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+	double clip[4], eye[4], xw, yw, cx, cy, half;
+	float e[4], size;
+	long i, k = 0;
+	int c;
+
+	if (!s || !mv || !mvp || !in || !out || !idx || (n < 0) || (n > RM_MAX_PARTICLES) ||
+		(vcap < 4 * n) || (icap < 6 * n))
+	{
+		return -1;
+	}
+
+	if (!(s->vw > 0) || !(s->vh > 0))
+	{
+		return 0;
+	}
+
+	for (i = 0; i < n; i++)
+	{
+		const rm_avert_t *p = &in[i];
+
+		rm_point_xform(mvp, p->pos, clip);
+
+		/* GL 1.4, section 2.12: a point outside the clip volume is discarded */
+		if (!(clip[3] > 0) || !(fabs(clip[0]) <= clip[3]) || !(fabs(clip[1]) <= clip[3]) || !(fabs(clip[2]) <= clip[3]))
+		{
+			continue;
+		}
+
+		rm_point_xform(mv, p->pos, eye);
+		e[0] = (float)eye[0];
+		e[1] = (float)eye[1];
+		e[2] = (float)eye[2];
+		e[3] = (float)eye[3];
+		size = rm_point_size(s, e);
+
+		/* window coordinates, GL's bottom-left origin */
+		xw = s->vx + (clip[0] / clip[3] + 1) * s->vw * 0.5;
+		yw = s->vy + (clip[1] / clip[3] + 1) * s->vh * 0.5;
+
+		if (s->smooth)
+		{
+			/* section 3.3.2: a disc about the exact centre; no pixel past r + 1/2 is covered */
+			cx = xw;
+			cy = yw;
+			half = size * 0.5 + 0.5;
+		}
+		else if ((long)size & 1)
+		{
+			/* section 3.3.1: an odd width is centred on a pixel, an even one on a corner */
+			cx = floor(xw) + 0.5;
+			cy = floor(yw) + 0.5;
+			half = size * 0.5;
+		}
+		else
+		{
+			cx = floor(xw + 0.5);
+			cy = floor(yw + 0.5);
+			half = size * 0.5;
+		}
+
+		for (c = 0; c < 4; c++)
+		{
+			rm_avert_t *q = &out[4 * k + c];
+			double x = cx + corner[c][0] * half, y = cy + corner[c][1] * half;
+
+			*q = *p;
+			/* back to clip coordinates at the point's w: the same depth on every corner */
+			q->pos[0] = (float)(((x - s->vx) * 2 / s->vw - 1) * clip[3]);
+			q->pos[1] = (float)(((y - s->vy) * 2 / s->vh - 1) * clip[3]);
+			q->pos[2] = (float)clip[2];
+			q->pos[3] = (float)clip[3];
+			q->uv[0] = (float)(corner[c][0] * half);
+			q->uv[1] = (float)(corner[c][1] * half);
+			q->pad[0] = size * 0.5f;
+			q->pad[1] = s->smooth ? 1.0f : 0.0f;
+		}
+
+		idx[6 * k] = (unsigned short)(4 * k);
+		idx[6 * k + 1] = (unsigned short)(4 * k + 1);
+		idx[6 * k + 2] = (unsigned short)(4 * k + 2);
+		idx[6 * k + 3] = (unsigned short)(4 * k);
+		idx[6 * k + 4] = (unsigned short)(4 * k + 2);
+		idx[6 * k + 5] = (unsigned short)(4 * k + 3);
+		k++;
+	}
+
+	return k;
+}
+
+/*
+ * from gl1_main.c, R_DrawParticles2 (gl1_pointparameters 0): the triangle
+ * of one particle, the point itself and the point plus the view's up and
+ * right vectors (1.5 long) scaled up with the distance along the view
+ * direction, with gl1's arithmetic; its texture coordinates are
+ * rm_particle_tex. 1, 0 when a vertex is not finite (not drawn).
+ */
+int
+rm_particle_tri(const float *origin, const float *eye, const float *vpn, const float *vup, const float *vright,
+		float (*vtx)[3])
+{
+	float up[3], right[3], scale;
+	int i, j;
+
+	for (i = 0; i < 3; i++)
+	{
+		up[i] = vup[i] * 1.5;
+		right[i] = vright[i] * 1.5;
+	}
+
+	/* hack a scale up to keep particles from disapearing */
+	scale = ( origin [ 0 ] - eye [ 0 ] ) * vpn [ 0 ] +
+		( origin [ 1 ] - eye [ 1 ] ) * vpn [ 1 ] +
+		( origin [ 2 ] - eye [ 2 ] ) * vpn [ 2 ];
+
+	if ( scale < 20 )
+	{
+		scale = 1;
+	}
+	else
+	{
+		scale = 1 + scale * 0.004;
+	}
+
+	for (i = 0; i < 3; i++)
+	{
+		vtx[0][i] = origin[i];
+		vtx[1][i] = origin [ i ] + up [ i ] * scale;
+		vtx[2][i] = origin [ i ] + right [ i ] * scale;
+	}
+
+	for (i = 0; i < 3; i++)
+	{
+		for (j = 0; j < 3; j++)
+		{
+			if (!isfinite(vtx[i][j]))
+			{
+				return 0;
+			}
+		}
+	}
+
+	return 1;
+}
+
+/* from gl1_main.c, R_DrawParticles2: the texture coordinates of the three vertices of a particle */
+void
+rm_particle_tex(float (*tex)[2])
+{
+	tex[0][0] = 0.0625f;
+	tex[0][1] = 0.0625f;
+	tex[1][0] = 1.0625f;
+	tex[1][1] = 0.0625f;
+	tex[2][0] = 0.0625f;
+	tex[2][1] = 1.0625f;
+}
+
+/* from gl1_misc.c: the particle texture's two tables, alpha in steps of 85 */
+static const unsigned char rm_dot_texture[16][16] = {
+	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0, 1, 2, 3, 3, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 1, 3, 3, 3, 3, 3, 3, 1, 0, 0, 0, 0, 0, 0, 0},
+	{0, 2, 3, 3, 3, 3, 3, 3, 2, 0, 0, 0, 0, 0, 0, 0},
+	{0, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0},
+	{0, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0},
+	{0, 2, 3, 3, 3, 3, 3, 3, 2, 0, 0, 0, 0, 0, 0, 0},
+	{0, 1, 3, 3, 3, 3, 3, 3, 1, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0, 1, 2, 3, 3, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+};
+
+static const unsigned char rm_square_texture[16][16] = {
+	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0},
+	{0, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0},
+	{0, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0},
+	{0, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0},
+	{0, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0},
+	{0, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0},
+	{0, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0},
+	{0, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+};
+
+/* from gl1_misc.c, R_InitParticleTexture: white, the table's alpha times 85, partData[y][x] from the table at [x][y] */
+void
+rm_particle_texture(int square, unsigned char (*data)[16][4])
+{
+	const unsigned char (*t)[16] = square ? rm_square_texture : rm_dot_texture;
+	int x, y;
+
+	for (x = 0; x < 16; x++)
+	{
+		for (y = 0; y < 16; y++)
+		{
+			data[y][x][0] = 255;
+			data[y][x][1] = 255;
+			data[y][x][2] = 255;
+			data[y][x][3] = t[x][y] * 85;
+		}
 	}
 }

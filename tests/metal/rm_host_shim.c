@@ -110,3 +110,144 @@ rm_host_shim_modulate(const float *p, const float *t, float *out)
 	out[2] = c.b;
 	out[3] = c.a;
 }
+
+/*
+ * The shim's point arithmetic (mgl_point_size and mgl_point_quads of gl1/
+ * metal/mgl_draw.c, linked with mgl_state.c and mgl_tex.c) for the
+ * particle tests of ref_metal: the original functions, not a copy. The
+ * layer functions mgl_draw.c and mgl_tex.c call are stubbed; nothing here
+ * draws.
+ */
+#include "../../src/client/refresh/metal/header/rmb.h"
+
+void
+mgl_layer_update_raster(void)
+{
+}
+
+void *
+mgl_layer_tex_create(int w, int h, int levels)
+{
+	(void)w;
+	(void)h;
+	(void)levels;
+	return NULL;
+}
+
+void
+mgl_layer_tex_release(void *tex)
+{
+	(void)tex;
+}
+
+int
+mgl_layer_tex_upload(void *tex, int level, int x, int y, int w, int h, const unsigned char *rgba, int gen_mips)
+{
+	(void)tex;
+	(void)level;
+	(void)x;
+	(void)y;
+	(void)w;
+	(void)h;
+	(void)rgba;
+	(void)gen_mips;
+	return 0;
+}
+
+int
+mgl_layer_draw(const mgl_draw_t *d)
+{
+	(void)d;
+	return 0;
+}
+
+/* the shim's limits, which rmb.h repeats */
+void
+rm_host_shim_point_limits(float *out)
+{
+	out[0] = MGL_POINT_ALIASED_MAX;
+	out[1] = MGL_POINT_SMOOTH_MIN;
+	out[2] = MGL_POINT_SMOOTH_MAX;
+}
+
+/* the state glPointSize, glPointParameterf and glPointParameterfv leave, as ref_metal keeps it */
+static void
+rm_host_shim_points_state(const rm_points_t *p)
+{
+	mgl_state_reset();
+	glPointSize(p->size);
+	glPointParameterf(GL_POINT_SIZE_MIN, p->min);
+	glPointParameterf(GL_POINT_SIZE_MAX, p->max);
+	glPointParameterfv(GL_POINT_DISTANCE_ATTENUATION, p->att);
+
+	if (p->smooth)
+	{
+		glEnable(GL_POINT_SMOOTH);
+	}
+	else
+	{
+		glDisable(GL_POINT_SMOOTH);
+	}
+
+	mgl_state.viewport[0] = (GLint)p->vx;
+	mgl_state.viewport[1] = (GLint)p->vy;
+	mgl_state.viewport[2] = (GLint)p->vw;
+	mgl_state.viewport[3] = (GLint)p->vh;
+}
+
+float
+rm_host_shim_point_size(const rm_points_t *p, const float *eye)
+{
+	rm_host_shim_points_state(p);
+	return mgl_point_size(&mgl_state, eye, p->smooth);
+}
+
+/*
+ * mgl_point_quads on the points in (positions and colours) under the
+ * matrices mv and proj; the corners' clip positions and their pt (the
+ * offset, the radius, the smooth flag) go to pos and pt, the indices to
+ * idx. The number of quads. n is at most 4096.
+ */
+long
+rm_host_shim_point_quads(const rm_points_t *p, const float *mv, const float *proj, const rm_avert_t *in, long n,
+		float (*pos)[4], float (*pt)[4], unsigned short *idx)
+{
+	static mgl_vertex_t pts[4096], quads[4 * 4096];
+	size_t k, i;
+
+	rm_host_shim_points_state(p);
+	memcpy(mgl_state.modelview[0], mv, sizeof(mgl_state.modelview[0]));
+	memcpy(mgl_state.projection[0], proj, sizeof(mgl_state.projection[0]));
+	mgl_state.modelview_depth = mgl_state.projection_depth = 0;
+
+	memset(pts, 0, sizeof(pts));
+
+	for (i = 0; i < (size_t)n; i++)
+	{
+		memcpy(pts[i].pos, in[i].pos, sizeof(pts[i].pos));
+		memcpy(pts[i].color, in[i].color, sizeof(pts[i].color));
+	}
+
+	k = mgl_point_quads(&mgl_state, pts, (size_t)n, quads, idx);
+
+	for (i = 0; i < 4 * k; i++)
+	{
+		memcpy(pos[i], quads[i].pos, sizeof(pos[i]));
+		memcpy(pt[i], quads[i].pt, sizeof(pt[i]));
+	}
+
+	return (long)k;
+}
+
+/* what glPointSize, glPointParameterf (the minimum, then the maximum) leave of GL's initial state: size, min, max */
+void
+rm_host_shim_point_set(float size, float min, float max, float *out)
+{
+	mgl_state_reset();
+	glPointSize(size);
+	glPointParameterf(GL_POINT_SIZE_MIN, min);
+	glPointParameterf(GL_POINT_SIZE_MAX, max);
+	out[0] = mgl_state.point_size;
+	out[1] = mgl_state.point_size_min;
+	out[2] = mgl_state.point_size_max;
+}
