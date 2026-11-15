@@ -45,6 +45,9 @@ light_t		vid_lightthreshold = 0;
 static int	vid_minu, vid_minv, vid_maxu, vid_maxv;
 static int	vid_zminu, vid_zminv, vid_zmaxu, vid_zmaxv;
 static qboolean IsHighDPIaware = false;
+/* The fullscreen value SWimp_SetMode() last passed to
+   GLimp_InitGraphics(), see SWimp_DrawableInPixels(). */
+static int sw_fullscreen = 0;
 static qboolean texture_high_color = false;
 
 // last position  on map
@@ -1331,6 +1334,23 @@ VectorCompareRound(const vec3_t v1, const vec3_t v2)
 
 cplane_t frustum[4];
 
+/*
+ * Keeps the view rectangle inside the buffer. The client sizes the view
+ * from viddef, this renderer draws it into the vid_buffer_width x
+ * vid_buffer_height buffer. The two are the same size when both sides
+ * agree on the window (SWimp_DrawableInPixels()), and then nothing
+ * changes here. Should they ever disagree, the view is drawn into the
+ * part of the buffer it covers, a wrong picture, instead of past the
+ * end of the buffer.
+ */
+static void
+R_ClampViewToBuffer(refdef_t *rd)
+{
+	rd->x = Q_clamp(rd->x, 0, vid_buffer_width - 1);
+	rd->y = Q_clamp(rd->y, 0, vid_buffer_height - 1);
+	rd->width = Q_clamp(rd->width, 1, vid_buffer_width - rd->x);
+	rd->height = Q_clamp(rd->height, 1, vid_buffer_height - rd->y);
+}
 
 /*
 ================
@@ -1344,6 +1364,9 @@ RE_RenderFrame(refdef_t *fd)
 	r_newrefdef = *fd;
 	entity_t	ent;
 	qboolean	anytranslucent = false;
+
+	/* Before anything draws. */
+	R_ClampViewToBuffer(&r_newrefdef);
 
 	if (!r_worldmodel && !( r_newrefdef.rdflags & RDF_NOWORLDMODEL ) )
 	{
@@ -2017,6 +2040,34 @@ RE_SetMetalLayerOpaque(SDL_Renderer *r, qboolean opaque)
 }
 #endif
 
+/*
+ * True when the buffer takes the drawable's size (the window's pixels),
+ * false when it keeps the mode's size in vid. The client decides viddef
+ * in GLimp_InitGraphics() with the same function, GLimp_DrawableInPixels()
+ * (glimp_hidpi.c, linked into this renderer too), on the same inputs: the
+ * window's high pixel density flag, the fullscreen value the window was
+ * made with and r_mode. That value is the one SWimp_SetMode() passed to
+ * GLimp_InitGraphics(), never the vid_fullscreen cvar: in RE_SetMode()'s
+ * invalid-mode fallback the cvar stays 2 while the window is made with 0,
+ * and a cvar of 2.5 is passed as 2. When the client cannot make the window
+ * it was asked for, it falls back to a window, fullscreen 0 and without
+ * SDL_WINDOW_FULLSCREEN, so a window that is not fullscreen counts as 0
+ * here as there. Should the two ever disagree all the same,
+ * R_ClampViewToBuffer() keeps the 3D view inside the buffer.
+ */
+static qboolean
+SWimp_DrawableInPixels(void)
+{
+	int fullscreen = sw_fullscreen;
+
+	if (!window || !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN))
+	{
+		fullscreen = 0;
+	}
+
+	return GLimp_DrawableInPixels(IsHighDPIaware, fullscreen, r_mode->value);
+}
+
 static int
 RE_InitContext(void *win)
 {
@@ -2078,11 +2129,11 @@ RE_InitContext(void *win)
 
 	/* We can't rely on vid, because the context is created
 	   before we had a chance to overwrite it with the drawable
-	   size. The buffer takes the size SWimp_SetMode() leaves in
-	   vid: the drawable, but on a fullscreen window only for the
-	   native resolution; every other mode keeps its own size. */
-	if (IsHighDPIaware &&
-		((vid_fullscreen->value != 2) || (r_mode->value == -2)))
+	   size. The buffer takes the size the client takes for
+	   viddef, and SWimp_SetMode() leaves in vid: the drawable,
+	   but on a fullscreen window only for the native resolution;
+	   every other mode keeps its own size. */
+	if (SWimp_DrawableInPixels())
 	{
 		RE_GetDrawableSize(&vid_buffer_width, &vid_buffer_height);
 	}
@@ -2536,6 +2587,10 @@ SWimp_SetMode(int *pwidth, int *pheight, int mode, int fullscreen )
 		Com_Printf("Used corrected %dx%d mode\n", *pwidth, *pheight);
 	}
 
+	/* RE_InitContext() and the tail below decide the sizes on
+	   the value passed, as the client does. */
+	sw_fullscreen = fullscreen;
+
 	if (!ri.GLimp_InitGraphics(fullscreen, pwidth, pheight))
 	{
 		// failed to set a valid mode in windowed mode
@@ -2568,21 +2623,12 @@ SWimp_SetMode(int *pwidth, int *pheight, int mode, int fullscreen )
 	   drawable size, it would scale all cases to the size of the
 	   window. Instead use the drawable size when the user wants
 	   native resolution (the fullscreen window fills the screen)
-	   and use the requested resolution in all other cases. */
-	if (IsHighDPIaware)
+	   and use the requested resolution in all other cases.
+	   SWimp_DrawableInPixels() makes the choice, the same one as
+	   RE_InitContext() and the client. */
+	if (SWimp_DrawableInPixels())
 	{
-		if (vid_fullscreen->value != 2)
-		{
-			RE_GetDrawableSize(pwidth, pheight);
-		}
-		else
-		{
-			if (r_mode->value == -2)
-			{
-				/* User requested native resolution. */
-				RE_GetDrawableSize(pwidth, pheight);
-			}
-		}
+		RE_GetDrawableSize(pwidth, pheight);
 	}
 	return retval;
 }

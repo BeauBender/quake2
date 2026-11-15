@@ -1169,6 +1169,7 @@ REFSOFT_OBJS_ := \
 	src/client/refresh/files/stb.o \
 	src/client/refresh/files/wal.o \
 	src/client/refresh/files/pvs.o \
+	src/client/vid/glimp_hidpi.o \
 	src/common/shared/shared.o \
 	src/common/md4.o
 

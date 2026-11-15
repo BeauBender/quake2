@@ -20,12 +20,14 @@
  * =======================================================================
  *
  * The high pixel density decisions of the SDL window code
- * (glimp_sdl3.c), free of SDL so that the unit tests link them.
+ * (glimp_sdl3.c), free of SDL so that the unit tests link them. The
+ * software renderer links this file too and sizes its buffer with
+ * GLimp_DrawableInPixels(), so that the two cannot drift apart.
  *
  * =======================================================================
  */
 
-#include "../header/client.h"
+#include "header/vid.h"
 
 /*
  * True when the window is to be made with SDL_WINDOW_HIGH_PIXEL_DENSITY:
@@ -54,8 +56,16 @@ GLimp_HighDPIWanted(float highdpiaware, const char *driver)
  * for it may be too small (window decorations), so the mode's size is
  * used. A fullscreen window (vid_fullscreen 2) fills the screen, so its
  * pixels are taken only when the native size was asked for (r_mode -2);
- * any other mode keeps its own size there. The renderers decide the same
- * way in their own SetMode code.
+ * any other mode keeps its own size there. fullscreen is the value the
+ * window was made with, the one passed to GLimp_InitGraphics() or 0 when
+ * it fell back to a window; not the vid_fullscreen cvar, which can differ.
+ *
+ * soft calls this function itself for its buffer and its vid size
+ * (SWimp_DrawableInPixels() in sw_main.c), with the same inputs. gl1, gl3
+ * and metal keep their own copy of the rule in their SetMode code, which
+ * reads the vid_fullscreen cvar instead, so they can differ from this
+ * decision when the cvar is not the value passed (RE_SetMode()'s
+ * invalid-mode fallback, a cvar of 2.5).
  */
 qboolean
 GLimp_DrawableInPixels(qboolean highdpi, int fullscreen, float r_mode)
