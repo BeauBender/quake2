@@ -2849,18 +2849,32 @@ shared timing lock. Every log, frame, mask, script and result is in `<artifacts>
 
 **What it does.** With `r_rt_shadows 1`, on a device with ray tracing, and with gl1's dynamic
 lights on the lightmaps (`gl1_dynamic` on, neither `r_fullbright` nor `gl1_flashblend`), a frame
-whose instance structure was built takes the G-buffer path and leaves gl1's dynamic-light term
-out of the lightmaps (`r_dlight_term`). A compute pass between the raster and the resolve
-(`rm_rts_trace`, `rm_rtshadow.metal`) does the following for each lightmapped world pixel
-(material 1):
+whose instance structure was built takes the G-buffer path. Before the raster builds the
+lightmaps, `RM_RTS_View` settles everything the trace needs that can fail (the view's inverse
+and the kernel's outputs at the render size, `rmb_rts_prepare`); only then does gl1's
+dynamic-light term leave the lightmaps (`r_dlight_term`), and only until the resolve. A frame
+that cannot trace keeps the stock lightmaps. The remaining failures are a command buffer or an
+encoder Metal does not give, which lose the frame anyway. A compute pass between the raster and
+the resolve (`rm_rts_trace`, `rm_rtshadow.metal`) does the following for each lightmapped world
+pixel (material 1):
 
 - reconstructs the position from the depth and takes the normal from the G-buffer;
 - finds the pixel's surface by a ray from the eye to that point, through a triangle-to-surface
-  table made at map load (`rm_rts_surface_map`);
+  table (`rm_rts_surface_map`) built when the shadows are first on for the map;
+- moves the pixel into that triangle's model space (the hit's world-to-object transform, the
+  identity for the world), because gl1 marks and lights a brush entity's surfaces with the
+  light's untransformed world origin against the model-space planes and texture axes
+  (`R_MarkBrushLights`); the light stays where it is (`mtl_rts_surf`);
+- skips a surface without light samples, which gl1 lights white and adds no dynamic light to
+  (`R_BuildLightMap`; the table marks its triangles, `MTL_RTS_SURF_UNLIT`);
 - evaluates gl1's `R_AddDynamicLights` for every light on that surface's own texture axes and
   shifts: at the four luxels around the pixel, interpolated as the bilinear lightmap sample
-  (`mtl_rts_add_lm`);
+  (`mtl_rts_add_lm`, `mtl_rts_surf_light`);
 - traces one shadow ray toward each of the four lights that add the most (`intensity - dist`).
+
+The eye ray is cast where a light reaches the pixel's plane in the world, and on every world
+pixel of a frame with a moved or turned brush entity (its pixels are tested in its model's
+space, where the world's test does not hold).
 
 It writes the four visibilities at 8 bits each with the four light indices (an `RG32Uint`) and the
 term, `visibility x add x colour` summed over the lights (an `RGBA16Float`). The resolve adds the
@@ -2886,11 +2900,8 @@ down by the brightest channel past 1). A light past the four adds its light unsh
     static part only;
   - `metal_lightmap_filter 1` filters the static part with its cubic, while the term is
     interpolated bilinearly;
-  - a surface without light data is white in gl1 with no dynamic light, and gets the term here;
-  - a moved brush model is lit in gl1 with its model-space plane and the light's world origin,
-    and here where it is;
-  - a pixel whose eye ray does not meet its own triangle (an edge) takes the base axes and the
-    continuous falloff.
+  - a pixel whose eye ray does not meet its own triangle (an edge) takes the world's space, the
+    base axes and the continuous falloff (on a moved brush entity, its world position).
 
 **Proof 1, effect off.** Every scenario recorded on `45045034` and on the base `85ad79bb` (an
 export of the tree built in scratch, recorded by its own `scripts/pins.sh` into a scratch store),

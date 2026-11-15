@@ -126,8 +126,10 @@ apple9 is expected to halve it. RT1 measures.
 Measured for the dlight shadows (RT3, TASK55; the runbook, "Ray-traced shadows from dynamic
 lights in `ref_metal`"). The pass as built:
 
-- one ray from the eye to find the pixel's surface, cast wherever a light reaches its plane;
-- gl1's falloff on that surface's texture axes at its four luxels;
+- one ray from the eye to find the pixel's surface, cast wherever a light reaches its plane (on
+  every lit world pixel of a frame with a moved brush entity, whose surfaces gl1 lights in their
+  model's space);
+- gl1's falloff on that surface's texture axes at its four luxels, in its model's space;
 - up to four any-hit shadow rays.
 
 On the M6 (apple9, compute path), seeded `rt-shadows` over `demo1.dm2`, warm frames, three runs:
