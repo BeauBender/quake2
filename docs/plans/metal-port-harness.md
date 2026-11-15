@@ -2184,7 +2184,8 @@ CGDisplaySwitchToMode(): Unknown Error`, then the client's `Reverting to windowe
 and is to be repeated on the bare-metal host (done: **On the bare-metal host (FIX45)**, below). The fullscreen window shows the same defect: its
 pixels (1333x748 here) are neither the desktop mode nor the mode asked for, and the base rendered
 and read back at them. With the frame at the mode's size `metal` writes what `gl1-metal` writes
-and what the client's line says, in every mode. HighDPI windows are not made on macOS (section 25).
+and what the client's line says, in every mode. HighDPI windows are not made on macOS (section 25)
+until TASK118 (below).
 
 **On the bare-metal host (FIX45).** The case above, run on the bare-metal Apple Silicon Mac
 (Apple M6) at engine `c01bd7d2` (the TASK93 merge on `main`): `make client game ref_metal
@@ -2278,6 +2279,103 @@ killed by `tests/metal/rm_host_test.c` under ASAN and UBSAN. Three that made a p
 were refused by `-Werror`; each was run again with the parameter cast to `void` and killed. The
 one that let `RM_OBJ_KINDS` through `rm_ledger_kind_live` was killed only by UBSAN at first; the
 case now reads a 1 through such an index, so it fails without a sanitizer too.
+
+#### HighDPI windows on the bare-metal host (TASK118)
+
+From TASK118 the window code asks for `SDL_WINDOW_HIGH_PIXEL_DENSITY` on the `cocoa` and
+`uikit` drivers at `vid_highdpiaware 1` (the default), and the pin harness passes `+set vid_highdpiaware 0` unless `PINS_HIDPI=1`. Engine:
+`bdda9812` (no file under `src` or the Makefile changes after it on the branch; the pin ids read
+`bdda98128905`); base: `3103b1f3` (`main`; `git diff c01bd7d2 3103b1f3 -- src Makefile` is empty),
+built from `git archive` in a scratch directory with `make client game ref_soft ref_metal` and
+`make ref_gl1 WITH_METAL_SHIM=yes`, and run as `PINS_BIN=<scratch>/release/quake2` (pin ids
+`bdda98128905-b2705498477-*`). The display: 5120x2880 pixels, 2560x1440 points (the client's
+`Real display mode: 2560x1440@60.00`), 60 Hz. Every batch with the screen unlocked
+(`CGSSessionScreenIsLocked` absent) and no other `quake2` running; one-minute load 2.1 to 3.8.
+Scripts, logs, screenshots and the measurement outputs are in `<artifacts>/TASK118/`, the pins in
+`<pin store>`.
+
+*Pins with `PINS_HIDPI` unset.* Every scenario recorded at the base and at the card for `metal`,
+`gl1-metal` and `soft` (`PINS_DEMO=idlog.cin PINS_EVERY=7` for `cinematic`, `PINS_SEED=1` for
+`models`, `dlights` and `particles`, `demo1.dm2` for the rest), then `pins.sh compare <r> <s> --ref
+<r> --ref-id <base> --cand-id <card> --threshold 0 --bad-threshold 0`:
+
+| Renderer | `world`, `world-fullbright`, `hud2d`, `skywater`, `models`, `dlights`, `particles` | `cinematic` |
+|---|---|---|
+| `metal` | 23 of 23 each, `worst=0 worst_bad=0`, byte-identical | 12 of 12, 0, 0, byte-identical |
+| `gl1-metal` | 23 of 23 each, `worst=0 worst_bad=0`, byte-identical | 12 of 12, 0, 0, byte-identical |
+| `soft` | 23 of 23 each, `worst=0 worst_bad=0`, byte-identical | 12 of 12, 0, 0, byte-identical |
+
+Every frame is 640x480 (`manifest.txt`), every record's `settings.txt` reads `hidpi 0`, and the
+pin names are the ones made before `PINS_HIDPI` existed (`world` `-2420249005`, `hud2d`
+`-506029871`, `cinematic` `-2483540229`, `world-fullbright` `-2060017375`, the same hashes as the
+older records in the store).
+
+*Sizes.* A console script beside the binary (deleted after): `developer 1`, `map base1`, 120
+`wait`s, `screenshot`, 30 `wait`s, `quit`; run as `./quake2 -datadir <game data> -portable +set
+vid_renderer R +set vid_fullscreen 0 +set r_mode 4 +set s_initsound 0 +set vid_highdpiaware V +exec
+<script>`; the size from the TGA header (bytes 12 to 15). The harness captures: `PINS_HIDPI=1
+pins.sh record R hud2d` and `world`, against the records above:
+
+| Renderer | `vid_highdpiaware 1`: `Drawable size`, screenshot, capture | `vid_highdpiaware 0`: `Drawable size`, screenshot, capture |
+|---|---|---|
+| `metal` | 1280x960, 1280x960, 23 frames 1280x960 each | 640x480, 640x480, 23 frames 640x480 each |
+| `gl1-metal` | 1280x960, 1280x960, 23 frames 1280x960 each | 640x480, 640x480, 23 frames 640x480 each |
+| `soft` | 1280x960, 1280x960, 23 frames 1280x960 each | 640x480, 640x480, 23 frames 640x480 each |
+
+Every run: status 0, `Setting mode 4: 640x480 (vid_fullscreen 0)`; the capture's `engine.log` has
+the same `Drawable size` line and its `settings.txt` reads `hidpi 1`.
+
+*The 2D scale.* `SCR_GetDefaultScale` (`cl_screen.c`) is `min(width / 640, height / 240)` of the
+client's size, 2 at 1280x960; the unit test `hidpi_2d_scale_follows_the_size_taken` runs the real
+`SCR_GetHUDScale`, `SCR_GetConsoleScale` and `SCR_GetMenuScale` on that size and gets 2 (1 at
+640x480). On the frames, `scale2d.py` (in the artifacts) takes the bounding box of every pixel that
+is not the clear colour in each `hud2d` frame (world off, only 2D drawn): on all 23 frames of each
+renderer every edge of the box at `PINS_HIDPI=1` is exactly twice the edge at `PINS_HIDPI` unset
+(middle frame: (356, 474, 960, 960) against (178, 237, 480, 480)), and the 1280x960 frame
+box-filtered down by 2 differs from the 640x480 one by a mean of at most 0.000363 (`metal`,
+`gl1-metal`) and 0 (`soft`).
+
+*The mouse.* The engine draws no mouse pointer: menus are driven by keys, and mouse buttons act as
+Enter (`Key_GetMenuKey`, `menu.c`). SDL reports mouse motion in points at both values: in relative
+mode the Cocoa driver sends `[event deltaX]`/`[event deltaY]` unscaled (`Cocoa_HandleMouseEvent`,
+`SDL_cocoamouse.m`; `SDL_mouse.c` scales it only by the relative-speed and system-scale hints,
+neither of which the engine sets), and outside it positions are window coordinates, which are
+points. The client adds the motion only in the game (`SDL_EVENT_MOUSE_MOTION` in
+`input/sdl3.c`, `key_dest == key_game`) and turns the view by its count (`IN_Move`), which no size
+enters; with a menu or the console open in a window the mouse is released (`windowed_mouse 0`,
+`CL_UpdateWindowedMouse`; `in_grab 2`) and the system pointer moves in points. So the same mouse
+travel crosses the window, and turns the view, by the same amount at both values, and no input
+code changed. The unit test `hidpi_menu_spans_the_window_in_points` pins the one thing the density
+could move: the menu in its own units spans the window's 640x480 points at both values. No
+physical mouse was moved and no input was synthesized for this.
+
+*Restarts under `ASAN=1`.* `make ASAN=1 client game ref_metal ref_soft` and `make ASAN=1 ref_gl1
+WITH_METAL_SHIM=yes`; a console script (deleted after): `developer 1`, `map base1`, 120 `wait`s,
+`screenshot`, then N cycles of `set vid_highdpiaware V` (0, 1, 0, ...), `vid_restart`, 120
+`wait`s, `screenshot`, then `quit`, started at `vid_highdpiaware 1` in a 640x480 window:
+
+| Renderer, cycles | Status | Screenshots and `Drawable size` lines | Sanitizer lines | `ref_metal` teardowns |
+|---|---|---|---|---|
+| `metal`, 10 | 0 | 11, alternating 1280x960 and 640x480 | 0 | 11, each `0 live objects ... 0 unreleased, 0 unmatched` |
+| `soft`, 4 | 0 | 5, alternating 1280x960 and 640x480 | 0 | none (not loaded) |
+| `gl1-metal`, 4 | 0 | 5, alternating 1280x960 and 640x480 | 0 | none (not loaded) |
+
+*The fullscreen window* (not an acceptance line of the card), `vid_fullscreen 2`,
+`vid_highdpiaware 1`, `ASAN=1`, the size script: at `r_mode -2` every renderer printed `Setting
+mode -2: 2560x1440` and `Drawable size: 5120x2880` and its screenshot is 5120x2880, the native
+size; at `r_mode 4` `metal` and `gl1-metal` keep 640x480 (drawable line and screenshot) and `soft`
+853x480, which the base's `soft` prints and writes too. The soft renderer's buffer takes the
+drawable only where `SWimp_SetMode` does (TASK118 changed `RE_InitContext` to that rule): before,
+a HighDPI fullscreen window at any mode but `-2` got a buffer of the window's pixels under a `vid`
+of the mode's size. Status 0 and no sanitizer line in every run.
+
+| Acceptance line (TASK118) | Verdict |
+|---|---|
+| `PINS_HIDPI` unset: pins unchanged against the base, score 0, bad 0 | pass, 24 of 24 pairs byte-identical |
+| `vid_highdpiaware 1`, 640x480 window: screenshot, capture and `Drawable size` 1280x960, 2D scale 2 | pass on all three renderers |
+| `vid_highdpiaware 0`: 640x480 | pass on all three renderers |
+| The menu cursor crosses the screen in the same mouse travel | pass by the code path above and the unit test; no pointer is drawn, nothing to scale |
+| Ten `vid_restart` cycles switching the value under `ASAN=1` | pass: status 0, 11 teardowns at 0 live objects |
 
 ### Closing TASK27 on the build host
 
