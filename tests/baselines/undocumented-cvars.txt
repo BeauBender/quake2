@@ -61,12 +61,6 @@ gamename
 gender
 gender_auto
 gl1_palettedtexture
-gl1_particle_att_a
-gl1_particle_att_b
-gl1_particle_att_c
-gl1_particle_max_size
-gl1_particle_min_size
-gl1_particle_size
 gl1_picmip
 gl1_round_down
 gl1_saturatelighting

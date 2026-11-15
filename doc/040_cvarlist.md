@@ -557,8 +557,23 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   liquids), `2` (scale lighting by factor 2), and `4` (scale by factor
   4). Applied in realtime, does not need `vid_restart`.
 
+* **gl1_particle_size**: The size of a particle point at a window
+  height of 480; it is scaled with the height. Defaults to `40`. The
+  Metal renderer takes it too.
+
+* **gl1_particle_min_size**, **gl1_particle_max_size**: The smallest
+  and the largest size a particle point is given after the distance
+  attenuation. Default to `2` and `40`. Taken when the renderer starts,
+  with point parameters only. The Metal renderer takes them too.
+
+* **gl1_particle_att_a**, **gl1_particle_att_b**,
+  **gl1_particle_att_c**: The distance attenuation of the point size,
+  `size / sqrt(a + b d + c d^2)` for a distance `d`. Default to `0.01`,
+  `0` and `0.01`. Taken when the renderer starts, with point parameters
+  only. The Metal renderer takes them too.
+
 * **gl1_particle_square**: If set to `1` particles are rendered as
-  squares.
+  squares (the Metal renderer takes it too).
 
 * **gl1_pointparameters**: If set to `1` (default) and the driver
   offers point parameters (`glPointParameterf`), particles are drawn as
@@ -566,7 +581,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   lacks them, or `gl1_stereo` is a split-screen mode (`6` or `7`) with
   a camera separation, particles are drawn as small textured triangles
   instead. Checked when the renderer starts, so it needs a
-  `vid_restart`.
+  `vid_restart` (the Metal renderer takes it too).
 
 * **gl1_stencilshadow**: If `gl_shadows` is set to `1`, this makes them
   look a bit better (no flickering) by using the stencil buffer. Does
@@ -652,13 +667,12 @@ the screen blend and the world's opaque surfaces with their lightmaps,
 animated lightstyles, `gl1_overbrightbits` and dynamic lights, the sky
 box, the warped water, the translucent and the flowing surfaces, the
 brush entities (doors and platforms), the alias models with their
-shells, shadows and the view weapon, sprites, beams and the flash
-blobs. It takes the OpenGL 1.4 renderer's `r_drawentities`,
+shells, shadows and the view weapon, sprites, beams, the flash
+blobs and the particles (`gl1_particle_*`, `gl1_pointparameters`). It takes the OpenGL 1.4 renderer's `r_drawentities`,
 `r_lerpmodels`, `hand`, `r_gunfov`, `r_shadows`, `gl1_stencilshadow`
 and `gl1_flashblend` as that renderer does, and `gl1_dynamic` (`0`
 leaves every lightmap as it was built: no animated lightstyle and no
-dynamic light, as in that renderer). Particles are not drawn yet, and
-`gl_zfix`, `gl1_ztrick` (the OpenGL 1.4 renderer's alternating depth
+dynamic light, as in that renderer). `gl_zfix`, `gl1_ztrick` (the OpenGL 1.4 renderer's alternating depth
 range) and `gl_showbbox` (its outline of each model's bounding box) are
 not taken. A brush entity drawn translucent (which no map of the game
 has) is not drawn.
@@ -679,7 +693,8 @@ has) is not drawn.
   out of bounds), and the entities of the last 3D view it did not draw:
   sprites, beams, null models and models whose draw it refused (a
   position or angle that is not a finite number, no room in the frame
-  ring, a missing texture), and translucent brush models. When a
+  ring, a missing texture), the particles of the last 3D view it did not
+  draw, and translucent brush models. When a
   map is loaded it also prints the vertex, index and surface-record counts
   and bytes of the map's retained buffers, and the number of its lightmap
   slices. The

@@ -161,6 +161,12 @@ rmb_new_pipe_3d(rm_pipe3d_t which, NSError **e)
 		vf = [library newFunctionWithName:@"rm_vertex_alias"];
 		ff = [library newFunctionWithName:@"rm_fragment_color"];
 	}
+	else if (which == RM_PIPE_PARTICLE)
+	{
+		/* N9: the point quads, the vertex colour and a smooth point's coverage */
+		vf = [library newFunctionWithName:@"rm_vertex_particle"];
+		ff = [library newFunctionWithName:@"rm_fragment_particle"];
+	}
 	else
 	{
 		vf = [library newFunctionWithName:@"rm_vertex_color"];
@@ -179,7 +185,7 @@ rmb_new_pipe_3d(rm_pipe3d_t which, NSError **e)
 	d.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
 
 	if ((which == RM_PIPE_COLOR_BLEND) || (which == RM_PIPE_WORLD_TEXC_BLEND) || (which == RM_PIPE_ALIAS_BLEND) ||
-		(which == RM_PIPE_ALIAS_SHELL_BLEND))
+		(which == RM_PIPE_ALIAS_SHELL_BLEND) || (which == RM_PIPE_PARTICLE))
 	{
 		/* gl1's glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA), for colour and alpha */
 		d.colorAttachments[0].blendingEnabled = YES;
