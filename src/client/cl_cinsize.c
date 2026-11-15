@@ -19,6 +19,21 @@
 
 #include "header/client.h"
 #include "header/cinsize.h"
+#include "refresh/files/imgdecode.h"
+
+/*
+ * The largest still the client allocates: the decoder's bound on the
+ * pixels at 4 bytes each. A larger one is refused before the allocation.
+ */
+#define SCR_STILL_MAX_BYTES (IMGDEC_MAX_AREA * 4)
+
+/* True when both sides are positive and the depth is 8, 16, 24 or 32. */
+static int
+SCR_StillFormatOk(int width, int height, int bpp)
+{
+	return !((width <= 0) || (height <= 0) || (bpp <= 0) || (bpp > 32) ||
+		((bpp % 8) != 0));
+}
 
 /*
  * The bytes of a still of width by height pixels at bpp bits per pixel,
@@ -31,8 +46,7 @@ SCR_StillBytes(int width, int height, int bpp)
 {
 	size_t w, h, bytes;
 
-	if ((width <= 0) || (height <= 0) || (bpp <= 0) || (bpp > 32) ||
-		((bpp % 8) != 0))
+	if (!SCR_StillFormatOk(width, height, bpp))
 	{
 		return 0;
 	}
@@ -52,4 +66,42 @@ SCR_StillBytes(int width, int height, int bpp)
 	}
 
 	return w * h * bytes;
+}
+
+/*
+ * True when a size from SCR_StillBytes may be allocated: not 0 (which
+ * SCR_StillBytes returns for an unusable size) and not above
+ * SCR_STILL_MAX_BYTES. A failure below that limit is the zone
+ * allocator's fatal error, as for any other allocation.
+ */
+int
+SCR_StillSizeOk(size_t bytes)
+{
+	return (bytes != 0) && (bytes <= SCR_STILL_MAX_BYTES);
+}
+
+/*
+ * Sorts a still of width by height pixels at bpp bits into usable,
+ * badly formed (a side or the depth) and too large, and stores its
+ * size in *bytes when it is usable.
+ */
+int
+SCR_StillCheck(int width, int height, int bpp, size_t *bytes)
+{
+	size_t size;
+
+	if (!SCR_StillFormatOk(width, height, bpp))
+	{
+		return SCR_STILL_BADFORMAT;
+	}
+
+	size = SCR_StillBytes(width, height, bpp);
+
+	if (!SCR_StillSizeOk(size))
+	{
+		return SCR_STILL_TOOLARGE;
+	}
+
+	*bytes = size;
+	return SCR_STILL_OK;
 }

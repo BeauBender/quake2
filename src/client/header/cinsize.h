@@ -18,6 +18,16 @@
 
 #include <stddef.h>
 
+/* the verdicts of SCR_StillCheck */
+enum
+{
+	SCR_STILL_OK = 0,
+	SCR_STILL_BADFORMAT,	/* a side or the depth is not usable */
+	SCR_STILL_TOOLARGE		/* the size is 0 or above SCR_STILL_MAX_BYTES */
+};
+
 size_t SCR_StillBytes(int width, int height, int bpp);
+int SCR_StillCheck(int width, int height, int bpp, size_t *bytes);
+int SCR_StillSizeOk(size_t bytes);
 
 #endif

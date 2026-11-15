@@ -21,6 +21,7 @@
 #include "test.h"
 #include "../../src/client/header/client.h"
 #include "../../src/client/header/cinsize.h"
+#include "../../src/client/refresh/files/imgdecode.h"
 
 /* the arithmetic cl_cin.c had: height * width * bpp / 8 in int */
 static int
@@ -77,6 +78,39 @@ TEST(cinsize_bad_depth)
 	T_CHECK(SCR_StillBytes(16, 16, -8) == 0);
 	T_CHECK(SCR_StillBytes(16, 16, 7) == 0);
 	T_CHECK(SCR_StillBytes(16, 16, 40) == 0);
+	/* multiples of 8 would give bytes 1 and 0.5 without the guard */
+	T_CHECK(SCR_StillBytes(16, 16, 12) == 0);
+	T_CHECK(SCR_StillBytes(16, 16, 4) == 0);
 	T_CHECK(SCR_StillBytes(16, 16, 24) == 16 * 16 * 3);
 	T_CHECK(SCR_StillBytes(16, 16, 16) == 16 * 16 * 2);
+}
+
+TEST(cinsize_size_limit)
+{
+	size_t limit = (size_t)IMGDEC_MAX_AREA * 4;
+
+	T_CHECK(!SCR_StillSizeOk(0));
+	T_CHECK(SCR_StillSizeOk(1));
+	T_CHECK(SCR_StillSizeOk(limit - 1));
+	T_CHECK(SCR_StillSizeOk(limit));
+	T_CHECK(!SCR_StillSizeOk(limit + 1));
+	T_CHECK(!SCR_StillSizeOk((size_t)-1));
+}
+
+TEST(cinsize_check_verdicts)
+{
+	size_t bytes = 0;
+
+	T_CHECK(SCR_StillCheck(8192, 8192, 32, &bytes) == SCR_STILL_OK);
+	T_CHECK(bytes == (size_t)8192 * 8192 * 4);
+	bytes = 7;
+	T_CHECK(SCR_StillCheck(8193, 8192, 32, &bytes) == SCR_STILL_TOOLARGE);
+	T_CHECK(SCR_StillCheck(65536, 65536, 32, &bytes) == SCR_STILL_TOOLARGE);
+	T_CHECK(SCR_StillCheck(65536, 65536, 8, &bytes) == SCR_STILL_TOOLARGE);
+	T_CHECK(SCR_StillCheck(0, 480, 8, &bytes) == SCR_STILL_BADFORMAT);
+	T_CHECK(SCR_StillCheck(640, -1, 8, &bytes) == SCR_STILL_BADFORMAT);
+	T_CHECK(SCR_StillCheck(16, 16, 12, &bytes) == SCR_STILL_BADFORMAT);
+	T_CHECK(SCR_StillCheck(16, 16, 40, &bytes) == SCR_STILL_BADFORMAT);
+	/* a refusal leaves *bytes alone */
+	T_CHECK(bytes == 7);
 }
