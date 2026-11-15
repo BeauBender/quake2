@@ -10,7 +10,9 @@ TASK110 (#264); RT9 (TASK61, #104) carries `depends:TASK109`, and RT8, RT9 and
 RT10 (#103, #104, #105) were rewritten from their new rows. TASK116 (#271)
 restated RT9 to RT12 on 2026-11-14 from the design's target matrix
 (section 2, "Targets per GPU family and display, and the options") and
-added RT13 (option E and the hybrids), not filed yet.
+added RT13 (option E and the hybrids), not filed yet. The orchestrator
+regenerates the card bodies of RT9 to RT12 (#104, #105, #263, #264) from
+the new rows and files RT13.
 
 This manifest is the authoritative card list. The four design documents
 keep their own sub-card lists as the detailed scope behind each row; where

@@ -398,9 +398,12 @@ of a process. The first frames of a process run about 3.5 times slower
 Marks in the tables: **M** measured (the closed table's column of that
 traced size, plus the measured 0.377 ms); **+** modelled below 2.07
 million traced pixels, where the 640 x 480 column puts the cost up to
-5 % higher with every effect on (12 % for the sun alone); **x** modelled
-below 0.31 million, the smallest size measured, so extrapolated;
-unmarked numbers are modelled at or above 2.07 million.
+5 % higher with every effect on (12 % for the sun alone); **r**
+modelled from 2.07 to 14.75 million traced pixels, the range the check
+covers, where model R errs high (by at most 1.5 % on the check); **x**
+modelled outside the sizes measured, so extrapolated: below 0.31
+million, the smallest, or above 14.75 million, the largest (only C on
+6016 x 3384, 20.36 million). Every modelled cost carries its mark.
 
 **The options as costed.**
 
@@ -529,21 +532,21 @@ scaler.
 | | A, 1080 rows | 1920 x 1080 (2.07) | 2.33 M | 0.94 M | 2.13 M | 1.26 M | 5.52 M |
 | | E at 1/2 | 1280 x 720 (0.92) | 1.24 + | 0.63 + | 1.15 + | 0.77 + | 2.66 + |
 | | H | 640 x 360 (0.23) | 0.59 x | 0.44 x | 0.57 x | 0.47 x | 0.95 x |
-| 3840 x 2160, 60 Hz, 16.7 ms | C | 3840 x 2160 (8.29) | 8.19 | 2.61 | 7.38 | 3.90 | 20.94 |
+| 3840 x 2160, 60 Hz, 16.7 ms | C | 3840 x 2160 (8.29) | 8.19 r | 2.61 r | 7.38 r | 3.90 r | 20.94 r |
 | | A, 1080 rows | 1920 x 1080 (2.07) | 2.33 M | 0.94 M | 2.13 M | 1.26 M | 5.52 M |
 | | E at 1/2 | 1920 x 1080 (2.07) | 2.33 M | 0.94 M | 2.13 M | 1.26 M | 5.52 M |
 | | H | 960 x 540 (0.52) | 0.86 + | 0.52 + | 0.81 + | 0.60 + | 1.66 + |
-| 3024 x 1964, 120 Hz, 8.3 ms | C | 3024 x 1964 (5.94) | 5.97 | 1.98 | 5.39 | 2.90 | 15.10 |
+| 3024 x 1964, 120 Hz, 8.3 ms | C | 3024 x 1964 (5.94) | 5.97 r | 1.98 r | 5.39 r | 2.90 r | 15.10 r |
 | | A, 1080 rows | 1663 x 1080 (1.80) | 2.07 + | 0.86 + | 1.89 + | 1.14 + | 4.83 + |
 | | E at 1/2 | 1512 x 982 (1.48) | 1.77 + | 0.78 + | 1.63 + | 1.01 + | 4.06 + |
 | | H | 756 x 491 (0.37) | 0.73 + | 0.48 + | 0.69 + | 0.53 + | 1.30 + |
-| 3456 x 2234, 120 Hz, 8.3 ms | C | 3456 x 2234 (7.72) | 7.64 | 2.46 | 6.89 | 3.65 | 19.52 |
+| 3456 x 2234, 120 Hz, 8.3 ms | C | 3456 x 2234 (7.72) | 7.64 r | 2.46 r | 6.89 r | 3.65 r | 19.52 r |
 | | A, 1080 rows | 1671 x 1080 (1.80) | 2.08 + | 0.86 + | 1.90 + | 1.14 + | 4.85 + |
 | | E at 1/2 | 1728 x 1117 (1.93) | 2.19 + | 0.90 + | 2.01 + | 1.20 + | 5.16 + |
 | | H | 864 x 558 (0.48) | 0.83 + | 0.51 + | 0.78 + | 0.58 + | 1.57 + |
-| 6016 x 3384, 60 Hz, 16.7 ms | C | 6016 x 3384 (20.36) | 19.54 | 5.87 | 17.56 | 9.02 | 50.85 |
-| | A, 1128 rows (clamped) | 2005 x 1128 (2.26) | 2.51 | 0.99 | 2.29 | 1.34 | 5.98 |
-| | E at 1/2 | 3008 x 1692 (5.09) | 5.17 | 1.75 | 4.67 | 2.54 | 13.00 |
+| 6016 x 3384, 60 Hz, 16.7 ms | C | 6016 x 3384 (20.36) | 19.54 x | 5.87 x | 17.56 x | 9.02 x | 50.85 x |
+| | A, 1128 rows (clamped) | 2005 x 1128 (2.26) | 2.51 r | 0.99 r | 2.29 r | 1.34 r | 5.98 r |
+| | E at 1/2 | 3008 x 1692 (5.09) | 5.17 r | 1.75 r | 4.67 r | 2.54 r | 13.00 r |
 | | H | 1504 x 846 (1.27) | 1.57 + | 0.72 + | 1.45 + | 0.92 + | 3.53 + |
 
 What is left, every effect on (ms): the frame minus the "every effect"
@@ -555,10 +558,10 @@ scaler, which is measured only at a 5120 x 2880 output (1.82 ms from
 |---|---|---|---|---|
 | 1920 x 1080, 60 Hz | 11.1 (M) | as C | 15.0 + | 16.0 x, before the scaler |
 | 2560 x 1440, 60 Hz | 7.2 (M) | 11.1 (M), before the scaler | 14.0 + | 15.7 x, before the scaler |
-| 3840 x 2160, 60 Hz | over by 4.3 | 11.1 (M), before the scaler | 11.1 (M) | 15.0 +, before the scaler |
-| 3024 x 1964, 120 Hz | over by 6.8 | 3.5 +, before the scaler | 4.3 + | 7.0 +, before the scaler |
-| 3456 x 2234, 120 Hz | over by 11.2 | 3.5 +, before the scaler | 3.2 + | 6.8 +, before the scaler |
-| 6016 x 3384, 60 Hz | over by 34.2 | 10.7, before the scaler | 3.7 | 13.1, before the scaler |
+| 3840 x 2160, 60 Hz | over by 4.3 r | 11.1 (M), before the scaler | 11.1 (M) | 15.0 +, before the scaler |
+| 3024 x 1964, 120 Hz | over by 6.8 r | 3.5 +, before the scaler | 4.3 + | 7.0 +, before the scaler |
+| 3456 x 2234, 120 Hz | over by 11.2 r | 3.5 +, before the scaler | 3.2 + | 6.8 +, before the scaler |
+| 6016 x 3384, 60 Hz | over by 34.2 x | 10.7 r, before the scaler | 3.7 r | 13.1 +, before the scaler |
 
 What the matrix shows, and no more: C, tracing at the output, leaves
 time on 1920 x 1080 and 2560 x 1440 at 60 Hz (measured) and is over the
@@ -579,9 +582,16 @@ no apple8 device is named in the plan (a finding for the orchestrator).
 The traced pixel counts are geometry and hold for every family: E and H
 as in the apple9 table; A at the 720 rows *assumed* for apple6 to apple8
 (table above) traces 1280 x 720 (0.92 million) on 1920 x 1080, 2560 x
-1440 and 3840 x 2160, and 1109 x 720 (0.80 million) on 3024 x 1964. On
-5120 x 2880, 3456 x 2234 and 6016 x 3384 the ratio exceeds 3.0, and
-apple7's maximum is not measured (TASK106).
+1440 and 3840 x 2160, and 1109 x 720 (0.80 million) on 3024 x 1964. The
+ratio of output to internal height is 1.5, 2.0 and 2.73 on 1920 x 1080,
+2560 x 1440 and 3024 x 1964 (1080 / 720, 1440 / 720, 1964 / 720), and
+exactly 3.0 on 3840 x 2160 (2160 / 720): the top of the 1.0 to 3.0 the
+M6 reports (section 8, text before the MetalFX table). On 5120 x 2880,
+3456 x 2234 and 6016 x 3384 it exceeds 3.0 (4.0, 3.10 and 4.70).
+apple7's range is not measured (TASK106), so the classes at risk are
+3840 x 2160, 5120 x 2880, 3456 x 2234 and 6016 x 3384: if apple7's
+maximum is below a class's ratio, the clamp raises the internal height
+there and the traced pixels with it.
 
 **Unmeasured costs and the card that measures each.**
 
