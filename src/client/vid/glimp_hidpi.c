@@ -22,13 +22,15 @@
  * The high pixel density decisions of the SDL window code
  * (glimp_sdl3.c), free of SDL so that the unit tests link them. The
  * client decides viddef with GLimp_DrawableInPixels(). The software
- * renderer links this file too and sizes its buffer and its vid with the
- * same function (SWimp_DrawableInPixels() in sw_main.c). gl1 (and its
- * Metal shim build), gl3 and metal do not link it: each keeps its own copy
- * of the rule in its SetMode code. All of them take the fullscreen input
- * from the vid_fullscreen cvar, which GLimp_InitGraphics() keeps at the
- * value the window is made with, so each decides on the same value as
- * the client.
+ * renderer, gl1 (both its OpenGL and its Metal shim build) and metal link
+ * this file too and size their frame with the same function, on the same
+ * inputs: SWimp_DrawableInPixels() in sw_main.c, SetMode_impl() in
+ * gl1_main.c and rm_main.c (tests/check-mode-size.sh keeps the three
+ * calls equal). gl3 alone does not link it and keeps its own copy of the
+ * rule in its SetMode code. All of them take the fullscreen input from
+ * the vid_fullscreen cvar, which GLimp_InitGraphics() keeps at the value
+ * the window is made with, so each decides on the same value as the
+ * client.
  *
  * =======================================================================
  */
