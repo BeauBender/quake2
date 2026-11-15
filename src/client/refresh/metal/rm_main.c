@@ -193,8 +193,14 @@ SetMode_impl(int *pwidth, int *pheight, int mode, int fullscreen)
 		return false;
 	}
 
-	/* the drawable size, as gl1 takes it (see the comment in gl1_main.c) */
-	if (IsHighDPIaware && ((vid_fullscreen->value != 2) || (r_mode->value == -2)))
+	/* The drawable size where the client takes it for viddef: the
+	   client's rule, GLimp_DrawableInPixels() (glimp_hidpi.c, linked
+	   in), on the inputs the client and soft give it. vid_fullscreen
+	   holds the value the window was just made with: GLimp_InitGraphics()
+	   writes the value passed into it (0 in the fallback below, 2 for a
+	   cvar of 2.5), and 0 when it fell back to a window on its own.
+	   tests/check-mode-size.sh keeps this call equal to soft's. */
+	if (GLimp_DrawableInPixels(IsHighDPIaware, (int)vid_fullscreen->value, r_mode->value))
 	{
 		RI_GetDrawableSize(pwidth, pheight);
 	}

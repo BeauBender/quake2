@@ -1394,21 +1394,18 @@ SetMode_impl(int *pwidth, int *pheight, int mode, int fullscreen)
 	   drawable size, it would scale all cases to the size of the
 	   window. Instead use the drawable size when the user wants
 	   native resolution (the fullscreen window fills the screen)
-	   and use the requested resolution in all other cases. */
-	if (IsHighDPIaware)
+	   and use the requested resolution in all other cases.
+
+	   The client's rule, GLimp_DrawableInPixels() (glimp_hidpi.c,
+	   linked in), makes the choice, on the inputs the client and the
+	   software renderer give it. vid_fullscreen holds the value the
+	   window was just made with: GLimp_InitGraphics() writes the value
+	   passed into it (0 in R_SetMode()'s fallbacks, 2 for a cvar of
+	   2.5), and 0 when it fell back to a window on its own.
+	   tests/check-mode-size.sh keeps this call equal to soft's. */
+	if (GLimp_DrawableInPixels(IsHighDPIaware, (int)vid_fullscreen->value, r_mode->value))
 	{
-		if (vid_fullscreen->value != 2)
-		{
-			RI_GetDrawableSize(pwidth, pheight);
-		}
-		else
-		{
-			if (r_mode->value == -2)
-			{
-				/* User requested native resolution. */
-				RI_GetDrawableSize(pwidth, pheight);
-			}
-		}
+		RI_GetDrawableSize(pwidth, pheight);
 	}
 
 	return rserr_ok;

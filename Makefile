@@ -1110,6 +1110,7 @@ REFGL1_OBJS_ := \
 	src/client/refresh/files/imgdecode.o \
 	src/client/refresh/files/wal.o \
 	src/client/refresh/files/pvs.o \
+	src/client/vid/glimp_hidpi.o \
 	src/common/shared/shared.o \
 	src/common/md4.o
 
@@ -1232,6 +1233,7 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/files/imgdecode.o \
 	src/client/refresh/files/surf.o \
 	src/client/refresh/files/wal.o \
+	src/client/vid/glimp_hidpi.o \
 	src/backends/unix/shared/hunk.o \
 	src/common/md4.o \
 	src/common/shared/shared.o

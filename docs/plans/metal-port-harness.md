@@ -2531,6 +2531,50 @@ Scripts, logs, screenshots, saved configs and diffs are in `<artifacts>/TASK118/
 | (rework 1) `soft` buffer equal to the client's size in the invalid-mode fallback and at `vid_fullscreen 2.5` | pass under `ASAN=1`: the base overflows, the head and each half alone do not |
 | (rework 2) one fullscreen value per window: `soft`, `metal` and `gl1-metal` take the client's size in the client's own fallback, the invalid-mode fallback and at 2.5 | pass under `ASAN=1`: the base overflows in `RE_Draw_CharScaled`, the head and each half alone do not; every screenshot equals `Drawable size` |
 
+*FIX61: one rule in every renderer.* `SetMode_impl` in `rm_main.c` and in `gl1_main.c` (both
+builds of `ref_gl1`) no longer keeps its own copy of the rule. Each calls `GLimp_DrawableInPixels`
+(`glimp_hidpi.c`, now linked into `ref_metal` and `ref_gl1` as into `ref_soft`) with the arguments
+`soft`'s `SWimp_DrawableInPixels` passes, `IsHighDPIaware, (int)vid_fullscreen->value,
+r_mode->value`, read after `GLimp_InitGraphics` returned. `tests/check-mode-size.sh` keeps the
+three calls equal; it fails at the base `8d63d071` and refuses its 12 mutants. The fullscreen
+input stays the cvar, as for `soft`: only the cvar carries the client's own fallback to a window
+(it writes `vid_fullscreen 0` and `r_mode 4`). After that fallback from `vid_fullscreen 2`, `r_mode
+4`, the value passed, `r_mode` and the size handed back are the same as for the fullscreen window
+made as asked, so a decision on the value passed would keep 640x480 under a 1280x960 `viddef`.
+Nothing else changes: TASK118's write already made the cvar hold the value the window is made with.
+
+On the build host (Apple Paravirtual device; a 640x480 window is 1280x960 pixels; desktop
+1333x888 points), engine `bd0a456b` and the base `8d63d071` from `git archive`, each built with
+`make client game ref_metal` and `make ref_gl1 WITH_METAL_SHIM=yes`, `MTL_DEBUG_LAYER=1` for both
+renderers (`Metal API Validation Enabled` in every log, no other validation line),
+`vid_highdpiaware 1`, the size script above (`developer 1`, `map base1`, 120 `wait`s, `screenshot
+tga`, `quit`):
+
+| Input | `Drawable size` | `metal` | `gl1-metal` |
+|---|---|---|---|
+| `vid_fullscreen 2`, `r_mode 99` (renderer's fallback) | 1280x960 | 1280x960 | 1280x960 |
+| `vid_fullscreen 2.5`, `r_mode -1`, 2560x3000 | 2560x3000 | 2560x3000 | 2560x3000 |
+| windowed, `r_mode 4` | 1280x960 | 1280x960 | 1280x960 |
+| windowed, `r_mode 6` | 1600x1200 | 1600x1200 | 1600x1200 |
+| `vid_fullscreen 1`, `r_mode 10` (client's own fallback: `CGDisplaySwitchToMode(): Unknown Error`, `Reverting to windowed r_mode 4`) | 1280x960 | 1280x960 | 1280x960 |
+| `vid_fullscreen 2`, `r_mode -2` | 2666x1776 | 2666x1776 | 2666x1776 |
+| `vid_fullscreen 2`, `r_mode 4` | 640x480 | 640x480 | 640x480 |
+
+Status 0 in every run, and the base gives the same sizes in every row. Pins with `PINS_HIDPI`
+unset, every scenario at the base (`PINS_BIN`) and at the engine, `PINS_SEED=1` for `models`,
+`dlights`, `dlights-lmcubic`, `particles` and `particles-cap`, `PINS_DEMO=idlog.cin PINS_EVERY=7`
+for `cinematic`, `compare --ref-id <base> --cand-id <engine> --threshold 0 --bad-threshold 0`:
+all 11 scenarios on `metal` and on `gl1-metal` byte-identical (23 of 23 frames, `cinematic` 12 of
+12), `worst=0 worst_bad=0`, 640x480, `hidpi 0`. Logs and the tables are in `<artifacts>/FIX61/`.
+
+Left for the bare-metal host: the client's own fallback from `vid_fullscreen 2`, the one fallback
+where the value used changes the rule's answer. SDL makes that window on this host, so it needs
+TASK118's scratch test patch (`TASK118_FAIL_FS=1`, rework 2 above) on this card's engine,
+`vid_fullscreen 2`, `r_mode 4`, `vid_highdpiaware 1`, `metal` and `gl1-metal`, `MTL_DEBUG_LAYER=1`,
+the size script with no map at start. Expected: `Drawable size: 1280x960`, both screenshots
+1280x960, no validation line. Repeat there the first two rows of the table, where the 5K panel
+showed the mismatch.
+
 ### Acceleration structures in `ref_metal` (TASK53, RT1)
 
 RT1 builds the acceleration structures of `docs/plans/metal-raytracing-design.md`,
