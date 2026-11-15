@@ -93,7 +93,10 @@ the candidate, the reference named with `--ref-id`, and judged only
 seeded; its file gives the values it is judged at and, for information,
 the unseeded run-to-run values, at which no record is judged. Record it
 also with `PINS_DEMO=demo2.dm2 PINS_EVERY=7`, whose frames show animated
-lightstyles. The others were identical from run to run, observed on one
+lightstyles. `particles` is judged the same way, seeded only, at
+`--threshold 0.005 --bad-threshold 0.001`: at its unseeded run-to-run
+values (`--threshold 0.02 --bad-threshold 0.25`, kept in its file as
+data) a build that draws no particles at all passes every frame. The others were identical from run to run, observed on one
 host with the software renderer (`world-fullbright` with the Metal shim
 build of gl1). `skywater` played from `water.dm2` (below) is also
 marked nondeterministic: the water warp follows the client's clock, and
@@ -252,13 +255,19 @@ scripts/pins.sh record metal hud2d
 ```
 
 The engine loads it as `vid_renderer metal` and the pin harness records
-it as `metal`. It is being built up step by step: for now every frame is
-the cleared screen (with `r_clear 1`, the colour 255, 0, 128 that `gl1`
-clears to), and nothing is compared against it yet. At start it prints
-the Metal device, the Apple GPU families it supports and whether it
-supports ray tracing; it refuses a device older than the apple5 family.
-`MTL_DEBUG_LAYER=1` in the environment turns on Metal's validation
-layer for a record.
+it as `metal`. It draws everything `gl1` draws in the scenarios above,
+and is judged against `gl1-metal` (the shim build of `gl1` on the same
+GPU), recorded with `MTL_DEBUG_LAYER=1` (Metal's validation layer) at
+`--threshold 0.005 --bad-threshold 0.001`; `models` unseeded and
+`skywater` from `water.dm2` at the values in their files, `dlights` and
+`particles` seeded only. The values and the last sweep of every scenario
+are in `docs/plans/ref-metal-native.md` (section 11) and
+`docs/plans/metal-port-harness.md`. At start it prints the Metal device,
+the Apple GPU families it supports and whether it supports ray tracing;
+it refuses a device older than the apple5 family. At each shutdown it
+prints its Metal objects created and destroyed, by kind, which must read
+`0 live objects`. Its frames have the size the mode asks for, as `gl1`'s
+do, also in fullscreen when the window has another size.
 
 ### The gl1 frames on a host without accelerated OpenGL
 
