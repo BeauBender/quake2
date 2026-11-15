@@ -487,7 +487,12 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   When set to `0` the client leaves the decision if the window should
   be scaled to the underlying compositor. Scaling applied by the
   compositor may introduce blur and sluggishness.  
-  Currently high dpi awareness is only supported under Wayland.  
+  High dpi awareness is supported under Wayland and on Apple platforms
+  (macOS, iOS, iPadOS, tvOS and visionOS). On a Retina display of
+  scaling factor 2 a 640x480 window draws 1280x960 pixels and the
+  default 2D scale is 2, so menus, console and HUD keep their size on
+  the screen; with `0` it draws 640x480 pixels, which the system
+  stretches to the window. Changing it needs a `vid_restart`.  
   Defaults to `1`.
 
 * **vid_maxfps**: The maximum framerate. *Note* that vsync (`r_vsync`) 

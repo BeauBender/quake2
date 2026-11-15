@@ -55,6 +55,17 @@ text files and need no game data.
   particles, and `dlights` the same lights, on every record. It needs the trace (`PINS_TRACE=0` is
   refused) and is part of the pin's name. Default: unset, the seed comes
   from the operating system as in a normal game.
+* `PINS_HIDPI`: `1` runs the engine with `vid_highdpiaware 1`, so on a
+  display of pixel density 2 (a Retina display) the `PINS_WIDTH` x
+  `PINS_HEIGHT` window draws and captures twice that size in pixels;
+  `PINS_HIDPI=1` is part of the pin's name. Default: unset (or `0`), the
+  engine runs with `vid_highdpiaware 0` and captures `PINS_WIDTH` x
+  `PINS_HEIGHT` pixels on any display, and a pin keeps the name it had
+  before this setting existed. Any other value is refused. `record`
+  writes the value as `hidpi 0` or `hidpi 1` into `settings.txt` beside
+  the frames, `replay` into its `replay.txt`. `replay` refuses
+  `PINS_HIDPI=1`: a trace is replayed at `PINS_WIDTH` x `PINS_HEIGHT`.
+  A scenario may not set `vid_highdpiaware`.
 
 The store path, `PINS_BASEDIR`, `PINS_DEMO` and scenario values may hold
 only `A-Z a-z 0-9 _ . / -`, except that `PINS_DEMO` is a bare file name
