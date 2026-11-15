@@ -402,7 +402,19 @@ list()
 }
 want=$(printf '"%s"\n' 'Bash(git status:*)' 'Bash(git diff:*)' 'Bash(git log:*)' 'Bash(git show:*)' \
 	'Bash(scripts/test.sh)' 'Bash(tests/check-savegame-tables.sh)' 'Bash(tests/check-cvar-docs.sh)' \
-	'Bash(tests/check-removed-deps.sh)' 'Bash(tests/check-doc-links.sh)' 'Bash(make config)')
+	'Bash(tests/check-removed-deps.sh)' 'Bash(tests/check-doc-links.sh)' 'Bash(make config)' \
+	'Bash(git -C ~/.config/agents/memory-store rev-parse --show-prefix)' \
+	'Bash(git -C ~/.config/agents/memory-store status --porcelain quake2/memory)' \
+	'Bash(git -C ~/.config/agents/memory-store status --porcelain=v2 --branch quake2/memory)' \
+	'Bash(git -C ~/.config/agents/memory-store add -A quake2/memory)' \
+	'Bash(git -C ~/.config/agents/memory-store commit -q -m quake2-memory-sync quake2/memory)' \
+	'Bash(git -C ~/.config/agents/memory-store pull --rebase -q)' \
+	'Bash(git -C ~/.config/agents/memory-store push -q)' \
+	'Bash(git -C ~/.config/agents/memory-store -c core.editor=true rebase --continue)' \
+	'Read(~/.config/agents/memory-store/quake2/memory/**)' \
+	'Edit(~/.config/agents/memory-store/quake2/memory/**)' \
+	'Write(~/.config/agents/memory-store/quake2/memory/**)')
+# The memory-store rules above are TASK127's; tests/check-memory-rules.sh pins and justifies them.
 [ "$(list allow)" = "$want" ] || fail "permissions.allow in $settings is not the expected list"
 want=$(printf '"%s"\n' 'Bash(git push --no-verify:*)' 'Bash(git commit --no-verify:*)' \
 	'Bash(git push --force origin main:*)' 'Bash(git push -f origin main:*)' \

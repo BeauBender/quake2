@@ -2181,10 +2181,69 @@ archive 9a38a4e9` in a scratch directory, next to a copy of the engine) and `gl1
 `vid_fullscreen 1` cannot change the display mode on this host (`SDL SetVideoMode failed:
 CGDisplaySwitchToMode(): Unknown Error`, then the client's `Reverting to windowed r_mode 4
 (640x480)`), so TASK98's case, a display mode other than the one asked for, does not appear here
-and is to be repeated on the bare-metal host. The fullscreen window shows the same defect: its
+and is to be repeated on the bare-metal host (done: **On the bare-metal host (FIX45)**, below). The fullscreen window shows the same defect: its
 pixels (1333x748 here) are neither the desktop mode nor the mode asked for, and the base rendered
 and read back at them. With the frame at the mode's size `metal` writes what `gl1-metal` writes
 and what the client's line says, in every mode. HighDPI windows are not made on macOS (section 25).
+
+**On the bare-metal host (FIX45).** The case above, run on the bare-metal Apple Silicon Mac
+(Apple M6) at engine `c01bd7d2` (the TASK93 merge on `main`): `make client game ref_metal
+ref_gl1` in a worktree, `release/` copied out, then `make ref_gl1 WITH_METAL_SHIM=yes` and copied
+again, so `ref_gl1` (`GL_RENDERER: Apple M6`) and the shim (`GL_RENDERER: Metal shim on Apple M6
+(gl1-metal)`) ran beside the same `quake2` and `ref_metal.dylib`. The display: one 5120x2880
+Retina panel, desktop mode 2560x1440 points, 5120x2880 pixels, 60 Hz (a 24-line C probe kept
+outside the repository, `CGDisplayCopyDisplayMode` on the main display, printed `points 2560x1440
+pixels 5120x2880 refresh 60.00`). A console script beside the binary (deleted after): `developer
+1`, `map base1`, 100 `wait`s (an alias), `screenshot tga`, 30 `wait`s, `quit`; one run per mode,
+the mode on the command line: `./quake2 -datadir <game data> -portable +set vid_renderer R +set
+vid_fullscreen F +set r_mode M [+set r_customwidth W +set r_customheight H] +set s_initsound 0
++exec <script>` under `timeout 120`, `config.cfg` removed before each run, every `metal` run with
+`MTL_DEBUG_LAYER=1`. The harness capture is the line `PINS_DRYRUN=1 scripts/pins.sh record metal
+world` printed (`r_mode -1`, 640x480, `demo1.dm2`, `pins_capture 30`) with `vid_renderer` and
+`vid_fullscreen 1` set by hand and a private `pins_dir`, as TASK98 ran it, under `timeout 300`. Each TGA's size from its header. The client's lines are
+the same for the three renderers in every mode:
+
+| Mode | `Setting mode` | `User requested ..., setting closest mode` | `Real display mode` | `Drawable size` | `metal` | `gl1-metal` | `ref_gl1` |
+|---|---|---|---|---|---|---|---|
+| `r_mode 4`, `vid_fullscreen 1` | `4: 640x480 (vid_fullscreen 1)` | `640x480@-1.000000`, `960x540@60.000000` | `960x540@60.00` | `640x480` | 640x480 | 640x480 | 640x480 |
+| harness `world`, `r_mode -1` 640x480, `vid_fullscreen 1` | `-1: 640x480 (vid_fullscreen 1)` | `640x480@-1.000000`, `960x540@60.000000` | `960x540@60.00` | `640x480` | 23 frames, each 640x480 | 23, each 640x480 | 23, each 640x480 |
+| `r_mode -1`, 1920x1080, `vid_fullscreen 1` | `-1: 1920x1080 (vid_fullscreen 1)` | `1920x1080@-1.000000`, `1920x1080@60.000000` | `1920x1080@60.00` | `1920x1080` | 1920x1080 | 1920x1080 | 1920x1080 |
+| `r_mode -1`, 2560x1440, `vid_fullscreen 1` | `-1: 2560x1440 (vid_fullscreen 1)` | `2560x1440@-1.000000`, `2560x1440@60.000000` | `2560x1440@60.00` | `2560x1440` | 2560x1440 | 2560x1440 | 2560x1440 |
+| `r_mode -1`, 5120x2880, `vid_fullscreen 1` | `-1: 5120x2880 (vid_fullscreen 1)` | `5120x2880@-1.000000`, `5120x2880@60.000000` | `5120x2880@60.00` | `5120x2880` | 5120x2880 | 5120x2880 | 5120x2880 |
+| `r_mode 4`, windowed | `4: 640x480 (vid_fullscreen 0)` | none | `2560x1440@60.00` | `640x480` | 640x480 | 640x480 | 640x480 |
+| `r_mode 4`, `vid_fullscreen 2` | `4: 640x480 (vid_fullscreen 2)` | none | `2560x1440@60.00` | `640x480` | 640x480 | 640x480 | 640x480 |
+
+So the display really switched for every `vid_fullscreen 1` run, and 640x480 fell back to
+960x540 as in TASK98 (`User requested 640x480@-1.000000, setting closest mode 960x540@60.000000`,
+then `Real display mode: 960x540@60.00` and `Drawable size: 640x480`). No log has a `SDL
+SetVideoMode failed`, `Couldn't switch` or `Reverting to windowed` line. The harness manifests
+list every frame at 640x480 (`world-000000.tga metal 640x480`). One more `metal` harness capture,
+the same line with `vid_fullscreen 0`, has 23 frames byte-identical to the fullscreen ones
+(`cmp`; `framediff` score 0, bad 0): the fallback mode changes neither the size nor a byte of the
+frame. With `scripts/pins/framediff.c` at 0.005, 0.001, the fullscreen `metal` capture against
+the fullscreen `gl1-metal` one passes 23 of 23 (worst score 0.000002, bad at most 0.000016), and
+`gl1-metal` against `ref_gl1` 23 of 23 (0.000010, 0.000042). Each of the eight `metal` logs holds
+`Metal API Validation Enabled` and no other validation message and no failed command buffer, and
+its teardown line reads `ref_metal: teardown: 0 live objects (created/destroyed: device 1/1, queue
+1/1, view 1/1, texture 203/203, buffer 8/8, state 45/45), 0 unreleased, 0 unmatched` (`texture
+232/232` in the two harness runs). 22 runs, 21:56 to 22:01 local, each status 0 with no kill;
+before and after each the screen was unlocked (`ioreg -n Root -d1 | grep -c
+CGSSessionScreenIsLocked` printed 0), no other `quake2` was running before each (`pgrep -x
+quake2`); one-minute load 2.52 to 4.63.
+After every fullscreen run, the last `vid_fullscreen 1` one (`gl1-metal` at 5120x2880) included,
+the probe printed the desktop mode again (`points 2560x1440 pixels 5120x2880 refresh 60.00`), and
+after the last run `system_profiler SPDisplaysDataType` reported `Resolution: 5120 x 2880 Retina`
+as before the first; what the panel showed during the runs was not looked at, the runs are judged
+from their files. FIX45's acceptance:
+
+- With `vid_fullscreen 1` and 640x480 asked for, `screenshot` and the harness capture from
+  `ref_metal` are 640x480 (TASK98's finding 1 had them at the fallback mode's size): **holds**.
+- The `Drawable size` line matches the size actually rendered: **holds**. The line says 640x480,
+  the frame read back from `ref_metal`'s colour target is 640x480, and it is the windowed frame
+  byte for byte; in the other modes the line and the `metal` picture agree too.
+- Windowed behaviour is unchanged: **holds**. `r_mode 4` windowed and `vid_fullscreen 2` write
+  640x480 on all three renderers, as in TASK93's table; the client's `Real display mode` is the
+  desktop's 2560x1440 here.
 
 At `67e56ab` (after `f1e23000`, whose black clear runs only when the drawable is larger than the
 frame) the fullscreen-window case was run once more under the validation layer: `MTL_DEBUG_LAYER=1
