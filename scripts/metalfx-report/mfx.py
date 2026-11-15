@@ -583,7 +583,7 @@ def cmd_run(a):
     ctx.width, ctx.height = int(m.group(1)), int(m.group(2))
     ctx.bin = a.bin or os.environ.get("PINS_BIN") or os.path.join(ROOT, "release", "quake2")
     ctx.demo = "demo1.dm2"
-    ctx.timeout = 180
+    ctx.timeout = a.timeout
     ctx.every = a.every
     ctx.seed = a.seed
     ctx.scen_dir = os.path.join(ROOT, "scripts", "pins", "scenarios")
@@ -1001,6 +1001,7 @@ def main(argv):
     r.add_argument("--runs", type=int, default=5)
     r.add_argument("--gpu-runs", type=int, default=3)
     r.add_argument("--every", type=int, default=60)
+    r.add_argument("--timeout", type=int, default=180, help="seconds a timedemo run may take")
     r.add_argument("--seed", type=int, default=1)
     r.add_argument("--scenarios", default="")
     r.add_argument("--only", default="")

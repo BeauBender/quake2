@@ -8,7 +8,7 @@
 #
 # run options: --host-name NAME (default: this host's short name), --size WxH (1280x720),
 #   --runs N (5 timedemo rounds), --gpu-runs N (3), --every N (capture one frame in N, 60),
-#   --seed N (1), --scenarios a,b, --only option,..., --other DIR (a second host's results,
+#   --timeout S (180, the bound of one timedemo run), --seed N (1), --scenarios a,b, --only option,..., --other DIR (a second host's results,
 #   shown beside this one), --bin PATH, --replace.
 # Build first: make client game ref_metal. The report holds frames made from game data: it goes
 # only outside every repository (the generator refuses any other path) and is never committed,
