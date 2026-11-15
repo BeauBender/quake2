@@ -416,7 +416,8 @@ unmarked numbers are modelled at or above 2.07 million.
 - **B**: as A, with `MTLFXTemporalDenoisedScaler` in place of RT7 and the
   scaler. Measured in the primary cell only.
 - **D**: `MTLFXFrameInterpolator` on top of another option. Not timed
-  (section 8, text before the MetalFX table).
+  (section 8, text before the MetalFX table). The default policy counts
+  its rendered frames, not the generated ones (item 1).
 - **E**: the 3D frame rasterized at the output; each effect traced at its
   own fraction of the output's width and height, accumulated and
   denoised by RT7 at that size, and upsampled to the output by a joint
@@ -461,10 +462,17 @@ those only the scaler is measured, at a 5120 x 2880 output.
 **The primary cell: apple9, 5120 x 2880 at 60 Hz (the M6).** Every effect
 on, every cost item of each option. "Not measured" names the card that
 measures the item (list below the matrix). The measured frame of A and B
-is section 8's one command-buffer sequence, which also holds the 0.88 ms
-primary pass and a 1.00 ms (A) or 0.46 ms (B) gap before the scaler
-(verdicts table, row RT9 (2); MetalFX table, "Frame, trace start to
-scaler end").
+("as one frame" below) is section 8's one command-buffer sequence
+(MetalFX table, column "Frame, trace start to scaler end"; verdicts
+table, row RT9 (2)), which also holds a primary pass and a gap before
+the scaler. At 1080 rows: the 0.878 ms primary pass (closed table, row
+"Primary", column 1920 x 1080) and a gap of 1.00 ms for A (MetalFX
+table, row "Temporal, 1920 x 1080", column "Frame, trace start to
+scaler end") or 0.46 ms for B (row "Temporal denoised, 1920 x 1080",
+same column). At 1440 rows: the 1.550 ms primary pass (closed table,
+row "Primary", column 2560 x 1440) and a gap of 1.50 ms for A (MetalFX
+table, row "Temporal, 2560 x 1440", same column) or 0.84 ms for B (row
+"Temporal denoised, 2560 x 1440", same column).
 
 | Option | 3D raster at | Traced at | Rays | Per-frame items | Upscale or upsample | Raster, G-buffer, RT7, resolve, forward | Known total | Left of the 16.7 ms frame | Left of the 15.0 ms target |
 |---|---|---|---|---|---|---|---|---|---|
@@ -556,7 +564,7 @@ What the matrix shows, and no more: C, tracing at the output, leaves
 time on 1920 x 1080 and 2560 x 1440 at 60 Hz (measured) and is over the
 frame on every larger class and on both 120 Hz classes (modelled). On
 the 120 Hz classes A, E and H leave 3.2 to 7.0 ms (modelled) before any
-raster, and A also before the scaler, so they are the tightest cells
+raster, and A and H also before the scaler, so they are the tightest cells
 besides the primary one. On 6016 x 3384 E at 1/2 leaves 3.7 ms
 (modelled) for a raster of 20.36 million pixels, less than any option
 but C leaves there; a smaller effect scale leaves more.
@@ -797,7 +805,12 @@ configuration:
    7.5 ms at 120 Hz; and when its `timedemo` rate with `r_vsync 1` is
    the refresh rate, because the presented rate also depends on CPU time
    and presentation (TASK97's Finding 1 saw a fixed cost of 3 to 4 ms a
-   frame on the `CAMetalLayer` path). Where no host of the family shows
+   frame on the `CAMetalLayer` path). Under D (the frame interpolator)
+   the frames counted are the rendered ones, not the presented ones: the
+   GPU time is per rendered frame, the interpolator's work for the
+   frames it generates included, and the rate is the rendered rate,
+   because generated frames do not respond to input ("Frame
+   interpolator", option A's subsection). Where no host of the family shows
    the class's refresh, item 4 says what is judged instead. The 10 %
    headroom is a design choice, not a measurement; the owner may set
    another.
@@ -851,7 +864,7 @@ one cell. Restated over the matrix:
 | A: whole 3D frame at an internal size, temporal scaler, RT7 kept (TASK105's choice) | 7.3 ms sum, 9.3 ms frame (M); 7.4 to 9.3 ms left for unmeasured work | rays measured or modelled in every apple9 cell; the scaler measured only at this output | RT11 | TASK117 (raster, now), RT12 |
 | B: as A, the denoised scaler in place of RT7 and the scaler | 17.6 ms sum, 18.9 ms frame (M): over the frame before raster or resolve | not measured | TASK113 (#267), selectable for comparison | RT12, where selectable |
 | C: trace at the output, accept a rate below the refresh | 36.8 ms (M), over by 20.1 | leaves time at 1920 x 1080 and 2560 x 1440 at 60 Hz (M); over on every larger class and both 120 Hz classes | C is A or E at scale 1; no card of its own | the reference itself |
-| D: the frame interpolator on another option | not timed; presents generated frames between rendered ones, so the rendered rate, which the policy counts, is unchanged, and each rendered frame reaches the screen later | not measured | TASK111 (#265), a development option, off by default | TASK114's local report |
+| D: the frame interpolator on another option | not timed; presents generated frames between rendered ones. The policy counts only the rendered frames under D (item 1): the GPU time per rendered frame, the interpolator's work included, and the rendered rate. So D holds a cell only where the option under it does, with the interpolator's cost added, and each rendered frame reaches the screen later | not measured | TASK111 (#265), a development option, off by default | TASK114's local report |
 | E: native raster, effects at reduced sizes, joint bilateral upsample | at 1/2: 9.48 ms (M) of rays and items, 7.2 ms left for the native raster and the upsample (not measured); at 1/3: 4.44 ms (modelled), 12.2 ms left | rays measured or modelled in every apple9 cell; raster at the output and the upsample not measured | RT13 | RT12 |
 | Hybrids (H and others) | H: 5.07 ms (modelled rays, measured scaler), 11.6 ms left | as A plus E | RT11 with RT13 | RT12 |
 | Dynamic resolution | as the scale it settles at, plus the controller | as the scale | a card only if RT10 shows fixed defaults miss | RT12, if built |
