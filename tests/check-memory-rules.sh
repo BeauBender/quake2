@@ -22,11 +22,16 @@
 #    or the slug file, or a Read of the clone's .git/config (a remote URL
 #    there may carry a credential); on any store rule outside the card's
 #    list (TASK127, pinned below); and on that list not being there exactly
-#    once. A store rule is
-#    any allow rule whose body names .config/agents (in any case), any Bash
-#    rule that runs git with -C, --git-dir or --work-tree before its
-#    subcommand, and any Read, Edit or Write rule that is bare or under a
-#    home or absolute path (~, $, % or /).
+#    once. A store rule is any allow rule whose body names .config/agents
+#    (in any case), any Bash rule that runs git with -C, --git-dir or
+#    --work-tree before its subcommand (the value after -c, --config-env,
+#    --namespace or --attr-source is skipped, so it cannot hide a later
+#    -C), and any Read, Edit or Write rule that is bare, under a home or
+#    absolute path (~, $, % or /), or holds .. (a relative path that climbs
+#    can reach the home directory). One probe runs a store command through
+#    env; another wrapper (command, xargs, a shell's -c) can still pass
+#    this check, and the exact pin of the whole allow list in
+#    tests/check-checkout-current.sh is the backstop for it.
 # 3. Self-tests, in subshells with the GIT_* repository, configuration,
 #    editor, ssh and identity variables unset or fixed, no global or system
 #    configuration, hooks off (core.hooksPath=/dev/null), signing off and
@@ -102,14 +107,15 @@ pinned()
 		"Read($store/quake2/memory/**)" "Edit($store/quake2/memory/**)" "Write($store/quake2/memory/**)"
 }
 
-# What no allow rule may admit. Edit and Write rules are one kind here.
+# What no allow rule may admit. Edit and Write rules are one kind here; env
+# stands for a wrapper that runs a store command (see part 2).
 probes()
 {
 	printf '%s\n' "Bash($pre -C /x push -q)" "Bash($pre -c core.pager=x status --porcelain)" \
 		"Bash($pre -c core.editor=x rebase --continue)" "Bash($pre push -q https://example.invalid/x)" \
 		"Bash($pre push --force)" "Bash($pre commit -q -m x --no-verify)" \
 		"Bash($pre config core.hooksPath x)" "Bash($pre rm -q quake2/memory/x)" \
-		"Bash(cp x $store/quake2/memory/x)" "Edit($store/.git/config)" \
+		"Bash(cp x $store/quake2/memory/x)" "Bash(env $pre push --force)" "Edit($store/.git/config)" \
 		"Edit($store/.git/hooks/pre-commit)" "Edit(~/.config/agents/memory_repo)" \
 		"Read($store/.git/config)"
 }
@@ -144,14 +150,14 @@ store_rule()
 			fi
 			case "$sw" in
 			-C* | --git-dir* | --work-tree*) return 0 ;;
-			-c) skip=1 ;;
+			-c | --config-env | --namespace | --attr-source) skip=1 ;;
 			-*) ;;
 			*) g='' ;;
 			esac
 		done ;;
 	Read | Edit | Write)
 		[ -z "$3" ] || return 0
-		case "$2" in "~"* | /* | '$'* | %*) return 0 ;; esac ;;
+		case "$2" in "~"* | /* | '$'* | %* | *..*) return 0 ;; esac ;;
 	esac
 	return 1
 }
@@ -161,7 +167,7 @@ check_rules()
 {
 	allow_rules "$1" || return 1
 	probes > "${tmp:?}/probes" && pinned > "${tmp:?}/pin" && : > "${tmp:?}/named" || return 1
-	notin="is a store rule (it names .config/agents, runs git -C, or reads or edits a home or absolute path) outside the card's list (TASK127, pinned in this script)"
+	notin="is a store rule (it names .config/agents, runs git -C, or reads or edits a home, absolute or climbing (..) path) outside the card's list (TASK127, pinned in this script)"
 	i=0
 	while IFS= read -r r; do
 		i=$((i + 1))
@@ -357,6 +363,14 @@ selftest_checks()
 	reject "a store path through \$HOME (m4)" "$notin" "$add" 'Bash(git -C $HOME/.config/agents/memory-*)'
 	reject "a store path in another case" "$notin" "$add" "Bash(cat ~/.Config/Agents/memory_repo)"
 	reject "a git -C after another option" "$notin" "$add" "Bash(/usr/bin/git -c x=y -C /x push -q)"
+	reject "a git -C after --config-env <value>" "$notin" "$add" "Bash(git --config-env x=y -C /x push -q)"
+	reject "a git -C after --namespace <value>" "$notin" "$add" "Bash(git --namespace x -C /x push -q)"
+	reject "a git -C after --attr-source <value>" "$notin" "$add" "Bash(git --attr-source HEAD -C /x push -q)"
+	reject "an env * rule (m6)" "admits probe" "$add" "Bash(env *)"
+	reject "an env:* rule" "admits probe" "$add" "Bash(env:*)"
+	reject "an Edit rule that climbs (m7)" "$notin" "$add" "Edit(../../**)"
+	reject "a Write rule that climbs from ." "$notin" "$add" "Write(./../**)"
+	reject "a Read rule that climbs from a subdirectory" "$notin" "$add" "Read(src/../../../**)"
 	reject "a Read rule under the home directory" "$notin" "$add" "Read(~/.ssh/**)"
 	reject "a Read rule on the whole home directory" "admits probe" "$add" "Read(~/**)"
 	reject "a bare Read rule" "admits probe" "$add" "Read"
