@@ -23,7 +23,7 @@
 #     not copied), so release/ and build/ of this checkout are not
 #     touched; the build must write ref_metal.metallib next to the dylib,
 #     and otool -L of the dylib must list Metal and QuartzCore and no
-#     OpenGL. In the same copy "make ref_metal YQ2_OSTYPE=Linux" must fail
+#     OpenGL, and otool -l must show MetalFX as a weak dylib (decision 0011). In the same copy "make ref_metal YQ2_OSTYPE=Linux" must fail
 #     with a line naming macOS. Otherwise one line
 #     "check-ref-metal: build skipped: <reason>". When the vendored
 #     headers exist, a Makefile that cannot be evaluated, or gives an
@@ -416,6 +416,9 @@ else
 		case $libs in *QuartzCore.framework*) ;; *) bad "ref_metal.dylib does not link QuartzCore";; esac
 		case $libs in *OpenGL.framework*) bad "ref_metal.dylib links OpenGL";; esac
 		case $libs in *libSDL3*) bad "ref_metal.dylib links an SDL of its own";; esac
+		# MetalFX (decision 0011): linked, and weak, as a target OS may lack it
+		weak=$(otool -l "${tmp:?}/tree/release/ref_metal.dylib" 2>&1 | awk '/cmd LC_LOAD_WEAK_DYLIB/ { w = 1 } w && / name / { print $2; w = 0 }')
+		case $weak in *MetalFX.framework*) ;; *) bad "ref_metal.dylib does not weak-link MetalFX";; esac
 	fi
 	rc=0
 	(unset MAKEFLAGS GNUMAKEFLAGS MFLAGS; make -C "${tmp:?}/tree" -s ref_metal YQ2_OSTYPE=Linux) > "${tmp:?}/other.out" 2>&1 || rc=$?
