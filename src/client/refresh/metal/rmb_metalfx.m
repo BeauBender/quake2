@@ -63,7 +63,10 @@ static id<MTLTexture> fx_out;       /* the output, the world view's rectangle */
 static int fx_mode;                 /* the mode of the scaler made, 0 for none */
 static rm_fx_size_t fx_size;
 static int fx_ready;                /* prepared for the view being drawn */
-static int fx_refused;              /* the scaler of fx_mode at fx_size could not be made */
+static rm_fx_refusal_t fx_refusal;  /* the last scaler that could not be made */
+static int fx_note;                 /* RM_FX_NOTE_* for the engine to print (rmb_fx_note) */
+static int fx_note_mode;
+static rm_fx_size_t fx_note_size;
 static float fx_jx, fx_jy;
 static int fx_reset;
 static int fx_timing;
@@ -142,8 +145,29 @@ rmb_fx_max_ratio(int mode)
 	return RM_FX_RATIO_MAX;
 }
 
-void
-rmb_fx_release(void)
+/* the engine prints it: once for each mode and size, as the callers see to */
+static void
+rmb_fx_tell(int note, int mode, const rm_fx_size_t *s)
+{
+	fx_note = note;
+	fx_note_mode = mode;
+	fx_note_size = *s;
+}
+
+int
+rmb_fx_note(int *mode, rm_fx_size_t *s)
+{
+	const int note = fx_note;
+
+	*mode = fx_note_mode;
+	*s = fx_note_size;
+	fx_note = RM_FX_NOTE_NONE;
+	return note;
+}
+
+/* frees the scaler and its output target; the refusal memo is kept */
+static void
+rmb_fx_free(void)
 {
 	@autoreleasepool
 	{
@@ -168,8 +192,15 @@ rmb_fx_release(void)
 
 	fx_mode = 0;
 	fx_ready = 0;
-	fx_refused = 0;
 	memset(&fx_size, 0, sizeof(fx_size));
+}
+
+void
+rmb_fx_release(void)
+{
+	rmb_fx_free();
+	rm_fx_refusal_clear(&fx_refusal);
+	fx_note = RM_FX_NOTE_NONE;
 }
 
 /* the scaler of mode at s and its output target; 0, with nothing kept, when one cannot be made */
@@ -241,7 +272,7 @@ rmb_fx_make(int mode, const rm_fx_size_t *s)
 
 	if (!fx_out)
 	{
-		rmb_fx_release();
+		rmb_fx_free();
 		return 0;
 	}
 
@@ -258,33 +289,35 @@ rmb_fx_prepare(int mode, const rm_fx_size_t *s, float jx, float jy, int reset)
 
 	if ((mode != RM_FX_SPATIAL) && (mode != RM_FX_TEMPORAL))
 	{
-		if (fx_mode || fx_refused)
+		if (fx_mode)
 		{
-			rmb_fx_release();
+			rmb_fx_free();
 		}
 
+		/* a mode turned off: the next one is tried again */
+		rm_fx_refusal_clear(&fx_refusal);
 		return 0;
 	}
 
-	if ((mode != fx_mode) || memcmp(s, &fx_size, sizeof(*s)))
+	if ((mode != fx_mode) || !rm_fx_same_size(s, &fx_size))
 	{
-		const int was_refused = fx_refused && (memcmp(s, &fx_size, sizeof(*s)) == 0);
+		/* a scaler refused before in this mode and at these sizes is not tried again */
+		const int was_refused = rm_fx_refused(&fx_refusal, mode, s);
 
-		rmb_fx_release();
+		rmb_fx_free();
+
+		if (was_refused)
+		{
+			return 0;
+		}
 
 		@autoreleasepool
 		{
-			if (was_refused || !rmb_fx_make(mode, s))
+			if (!rmb_fx_make(mode, s))
 			{
-				/* told once for each mode and size, the view is stretched as without a scaler */
-				if (!was_refused)
-				{
-					fprintf(stderr, "ref_metal: the MetalFX %s scaler from %dx%d to %dx%d cannot be made; "
-							"the view is stretched\n", rm_fx_name(mode), s->iw, s->ih, s->ow, s->oh);
-				}
-
-				fx_refused = 1;
-				fx_size = *s;
+				/* told once for each mode and size; the view is stretched as without a scaler */
+				rm_fx_refuse(&fx_refusal, mode, s);
+				rmb_fx_tell(RM_FX_NOTE_UNMADE, mode, s);
 				return 0;
 			}
 		}
@@ -304,6 +337,12 @@ int
 rmb_fx_ready(void)
 {
 	return fx_ready;
+}
+
+void
+rmb_fx_unready(void)
+{
+	fx_ready = 0;
 }
 
 void
@@ -329,7 +368,6 @@ rmb_fx_fits(id<MTLTexture> t, MTLTextureUsage need, MTLPixelFormat f, int w, int
 int
 rmb_fx_upscale(id<MTLTexture> color, id<MTLTexture> depth, id<MTLTexture> motion, id<MTLTexture> frame)
 {
-	static int told;
 	unsigned long serial = 0;
 	id<MTLCommandBuffer> cmd, fcmd;
 	const rm_fx_size_t *s = &fx_size;
@@ -363,13 +401,10 @@ rmb_fx_upscale(id<MTLTexture> color, id<MTLTexture> depth, id<MTLTexture> motion
 
 		if (!ok)
 		{
-			if (!told)
-			{
-				told = 1;
-				fprintf(stderr, "ref_metal: the view's targets do not fit the MetalFX %s scaler; the view is stretched\n",
-						rm_fx_name(fx_mode));
-			}
-
+			/* told once for each mode and size: the scaler is dropped and refused at them */
+			rmb_fx_tell(RM_FX_NOTE_UNFIT, fx_mode, s);
+			rm_fx_refuse(&fx_refusal, fx_mode, s);
+			rmb_fx_free();
 			return 0;
 		}
 

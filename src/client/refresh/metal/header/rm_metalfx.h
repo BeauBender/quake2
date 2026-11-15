@@ -102,12 +102,16 @@ typedef struct
 /*
  * The sizes for the world view's rectangle out (frame pixels, rounded to
  * whole pixels) at scale (rm_fx_scale's): each side of the input the
- * output's times scale, rounded, at least 1 and at most the output's; a
- * scale that is not finite or not above 0 counts as 1. 0, with *s zeroed,
+ * output's times scale, rounded up, so the output-to-input ratio is never
+ * above 1 / scale (a product within RM_FX_SIDE_SLACK above a whole number
+ * is taken as that number, for a scale that is not exact in a float), at
+ * least 1 and at most the output's; a scale that is not finite or not
+ * above 0 counts as 1. 0, with *s zeroed,
  * for a rectangle that is not finite, below 1 or above RM_FX_MAX_SIDE a
  * side, or that starts below 0 or past RM_FX_MAX_SIDE.
  */
 #define RM_FX_MAX_SIDE 16384   /* the G-buffer's largest side (rm_gbuf.c) */
+#define RM_FX_SIDE_SLACK 1e-3
 int rm_fx_sizes(const rm_viewport_t *out, float scale, rm_fx_size_t *s);
 
 /* the viewport the view is drawn with at the input size: (0, 0, iw, ih), the depth range of out */
@@ -174,6 +178,66 @@ unsigned rm_fx_reset(const rm_fx_last_t *last, int mode, const rm_fx_size_t *s, 
 /* this view becomes last */
 void rm_fx_keep(rm_fx_last_t *last, int mode, const rm_fx_size_t *s, const float *org);
 
+/* every side and the place of a and b are the same */
+int rm_fx_same_size(const rm_fx_size_t *a, const rm_fx_size_t *b);
+
+/* the history of the world views' scaler across views and frames (rm_fxscene.c holds one) */
+typedef struct
+{
+	rm_fx_last_t last;      /* the last scaled view since the last reset of the state */
+	unsigned n;             /* scaled views since the last history reset: the jitter's index */
+	int drew;               /* this frame drew a scaled view */
+} rm_fx_state_t;
+
+/* forgets everything: the renderer's start, a map load; the next view resets (FIRST) */
+void rm_fx_state_reset(rm_fx_state_t *st);
+
+/*
+ * One scaled world view of mode at sizes s from org: its reset reasons
+ * against the last view (rm_fx_reset, cut), the jitter index started again
+ * on a reset, this view's jitter (rm_fx_jitter at that index) into jx and
+ * jy, the index advanced, the view kept as the last and the frame marked
+ * as having drawn one. The reasons, 0 when the history is kept.
+ */
+unsigned rm_fx_step(rm_fx_state_t *st, int mode, const rm_fx_size_t *s, const float *org, float cut, float *jx,
+		float *jy);
+
+/* the frame ended: one that drew no scaled view forgets the last, so the next view resets (FIRST) */
+void rm_fx_frame_end(rm_fx_state_t *st);
+
+/*
+ * The back end's memo of a scaler it could not make: a scaler of the same
+ * mode and sizes is not tried again (and its line not repeated) until the
+ * memo is cleared; another mode or size is tried.
+ */
+typedef struct
+{
+	int refused;
+	int mode;
+	rm_fx_size_t size;
+} rm_fx_refusal_t;
+
+/* a scaler of mode at s was refused before: do not try it again */
+int rm_fx_refused(const rm_fx_refusal_t *r, int mode, const rm_fx_size_t *s);
+
+/* the scaler of mode at s could not be made */
+void rm_fx_refuse(rm_fx_refusal_t *r, int mode, const rm_fx_size_t *s);
+
+/* forgets the refusal: a mode turned off, a vid_restart */
+void rm_fx_refusal_clear(rm_fx_refusal_t *r);
+
+/* what the back end has to report (rmb_fx_note) */
+#define RM_FX_NOTE_NONE 0
+#define RM_FX_NOTE_UNMADE 1     /* the scaler cannot be made */
+#define RM_FX_NOTE_UNFIT 2      /* the view's targets do not fit the scaler */
+
+/*
+ * The line of a back end's note (without a newline): the mode and the
+ * sizes, and that the view is stretched. 0, with buf empty, for
+ * RM_FX_NOTE_NONE, an unknown note or a line that does not fit.
+ */
+int rm_fx_note_format(int note, int mode, const rm_fx_size_t *s, char *buf, size_t len);
+
 /*
  * The report line of a fallback (without a newline): what was asked and
  * what is run, and why. 1 when it fits; 0, with buf empty, when it does
@@ -212,6 +276,15 @@ int rmb_fx_prepare(int mode, const rm_fx_size_t *s, float jx, float jy, int rese
 
 /* a scaler is prepared for the view being drawn (its view goes to the render-size colour target) */
 int rmb_fx_ready(void);
+
+/* no scaler is prepared: every view begins with it (RM_FX_Begin), so none is left from an earlier one */
+void rmb_fx_unready(void);
+
+/*
+ * The back end's last note (RM_FX_NOTE_*), with its mode and sizes, taken
+ * once: the engine prints it (R_Printf), told once for each mode and size.
+ */
+int rmb_fx_note(int *mode, rm_fx_size_t *s);
 
 /* metal_stats is on: the scaler pass runs in a command buffer of its own, whose GPU time it keeps */
 void rmb_fx_set_timing(int on);

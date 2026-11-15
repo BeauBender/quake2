@@ -190,8 +190,19 @@ test_sizes(void)
 	CHECK(rm_fx_sizes(&o, 0.5f, &s) == 1);
 	CHECK(s.iw == 256 && s.ih == 192 && s.ow == 512 && s.oh == 384 && s.ox == 64 && s.oy == 48);
 	o = vp(0, 0, 640, 480);
+	/* rounded up: 640 / 3 is 213.3, so 214; 480 / 3 is 160 within a float's error, so 160 */
 	CHECK(rm_fx_sizes(&o, 1.0f / 3, &s) == 1);
-	CHECK(s.iw == 213 && s.ih == 160);
+	CHECK(s.iw == 214 && s.ih == 160);
+	/* the ratio never above the clamp's 3: 1000 / 3 is 333.3 (333 would be 3.003), 2161 / 3 is 720.3 */
+	o = vp(0, 0, 1000, 2161);
+	CHECK(rm_fx_sizes(&o, rm_fx_scale(0.1f, 720, 2161, 3), &s) == 1);
+	CHECK(s.iw == 334 && s.ih == 721);
+	CHECK(rm_fx_sizes(&o, 1.0f / 3, &s) == 1);
+	CHECK(s.iw == 334 && s.ih == 721);
+	o = vp(0, 0, 1, 2);
+	CHECK(rm_fx_sizes(&o, 1.0f / 3, &s) == 1);
+	CHECK(s.iw == 1 && s.ih == 1);
+	o = vp(0, 0, 640, 480);
 	CHECK(rm_fx_sizes(&o, 0.0001f, &s) == 1);
 	CHECK(s.iw == 1 && s.ih == 1);
 	CHECK(rm_fx_sizes(&o, 1, &s) == 1);
@@ -250,6 +261,40 @@ test_sizes(void)
 	rm_fx_sizes(&o, 0.5f, &s);
 	rm_fx_input_viewport(&o, &s, &in);
 	CHECK(in.x == 0 && in.y == 0 && in.w == 256 && in.h == 192 && in.znear == 0.25 && in.zfar == 0.75);
+}
+
+/* over every side, at the clamp of a ratio of 3 and of 2, the output-to-input ratio stays at or below it */
+static void
+test_ratio_bound(void)
+{
+	const float ratios[] = { 3.0f, 2.0f, 1.5f };
+	rm_fx_size_t s;
+	rm_viewport_t o;
+	int side, r, over = 0, small = 0;
+
+	for (r = 0; r < 3; r++)
+	{
+		const float k = rm_fx_scale(0.01f, 720, 1000, ratios[r]);
+
+		for (side = 1; side <= RM_FX_MAX_SIDE; side++)
+		{
+			o = vp(0, 0, side, side);
+
+			if (!rm_fx_sizes(&o, k, &s))
+			{
+				over++;
+				continue;
+			}
+
+			/* ow / iw <= ratio, with the slack of a scale that is not exact in a float */
+			over += (double)s.ow > (double)s.iw * ratios[r] * (1.0 + 1e-6);
+			/* and no side larger than needed: one less would be over the ratio */
+			small += (s.iw > 1) && ((double)s.ow <= (double)(s.iw - 1) * ratios[r]);
+		}
+	}
+
+	CHECK(over == 0);
+	CHECK(small == 0);
 }
 
 static void
@@ -418,6 +463,126 @@ test_reset(void)
 	CHECK(last.mode == 3 && last.size.iw == 1 && last.size.ox == 2 && last.org[0] == o[0]);
 }
 
+/* the sizes alike: each side and the place on its own */
+static void
+test_same_size(void)
+{
+	const rm_fx_size_t a = { 320, 240, 640, 480, 64, 48 };
+	rm_fx_size_t b = a;
+
+	CHECK(rm_fx_same_size(&a, &b));
+	b.iw++;
+	CHECK(!rm_fx_same_size(&a, &b));
+	b = a;
+	b.ih++;
+	CHECK(!rm_fx_same_size(&a, &b));
+	b = a;
+	b.ow++;
+	CHECK(!rm_fx_same_size(&a, &b));
+	b = a;
+	b.oh++;
+	CHECK(!rm_fx_same_size(&a, &b));
+	b = a;
+	b.ox++;
+	CHECK(!rm_fx_same_size(&a, &b));
+	b = a;
+	b.oy++;
+	CHECK(!rm_fx_same_size(&a, &b));
+}
+
+/* the per-view step over a sequence of views and frames, as rm_fxscene.c drives it */
+static void
+test_step(void)
+{
+	rm_fx_state_t st;
+	rm_fx_size_t s = { 320, 240, 640, 480, 0, 0 }, t;
+	float org[3] = { 100, 200, 300 }, far[3] = { 100, 200, 300 + 257 }, jx, jy, ex, ey;
+	unsigned i;
+
+	rm_fx_state_reset(&st);
+	CHECK(st.last.valid == 0 && st.n == 0 && st.drew == 0);
+
+	/* the first view: FIRST, the jitter at index 0, the index 1 after it */
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, org, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_FIRST);
+	rm_fx_jitter(RM_FX_TEMPORAL, 0, &ex, &ey);
+	CHECK(jx == ex && jy == ey && st.n == 1 && st.drew == 1 && st.last.valid == 1);
+	rm_fx_frame_end(&st);
+	CHECK(st.drew == 0 && st.last.valid == 1);
+
+	/* views that keep the history: the index goes on */
+	for (i = 1; i < 5; i++)
+	{
+		CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, org, RM_FX_CUT_DIST, &jx, &jy) == 0);
+		rm_fx_jitter(RM_FX_TEMPORAL, i, &ex, &ey);
+		CHECK(jx == ex && jy == ey && st.n == i + 1);
+		rm_fx_frame_end(&st);
+	}
+
+	/* a move over 256: CUT, the index starts again */
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, far, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_CUT);
+	rm_fx_jitter(RM_FX_TEMPORAL, 0, &ex, &ey);
+	CHECK(jx == ex && jy == ey && st.n == 1);
+	rm_fx_frame_end(&st);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, far, RM_FX_CUT_DIST, &jx, &jy) == 0 && st.n == 2);
+	rm_fx_frame_end(&st);
+
+	/* a frame without a scaled view (a cinematic, the console, a mode turned off), then a view: FIRST */
+	rm_fx_frame_end(&st);
+	CHECK(st.last.valid == 0);
+	CHECK(rm_fx_step(&st, RM_FX_TEMPORAL, &s, far, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_FIRST && st.n == 1);
+	rm_fx_frame_end(&st);
+
+	/* a mode change: MODE */
+	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &s, far, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_MODE && st.n == 1);
+	CHECK(jx == 0 && jy == 0);
+	rm_fx_frame_end(&st);
+
+	/* the size, then the place of the rectangle */
+	t = s;
+	t.iw = 480;
+	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &t, far, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_SIZE);
+	rm_fx_frame_end(&st);
+	t.ox = 64;
+	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &t, far, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_RECT);
+	rm_fx_frame_end(&st);
+	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &t, far, RM_FX_CUT_DIST, &jx, &jy) == 0 && st.n == 2);
+
+	/* two views in one frame (a second world view) keep it, and the frame ends with one drawn */
+	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &t, far, RM_FX_CUT_DIST, &jx, &jy) == 0 && st.n == 3);
+	rm_fx_frame_end(&st);
+	CHECK(st.last.valid == 1);
+
+	/* a map load or vid_restart: the state forgotten, FIRST */
+	rm_fx_state_reset(&st);
+	CHECK(rm_fx_step(&st, RM_FX_SPATIAL, &t, far, RM_FX_CUT_DIST, &jx, &jy) == RM_FX_RESET_FIRST && st.n == 1);
+}
+
+/* the refusal memo: the same mode and sizes are not tried again, another mode or size is */
+static void
+test_refusal(void)
+{
+	rm_fx_refusal_t r;
+	rm_fx_size_t s = { 320, 240, 640, 480, 0, 0 }, t = s;
+
+	rm_fx_refusal_clear(&r);
+	CHECK(!rm_fx_refused(&r, RM_FX_SPATIAL, &s));
+	rm_fx_refuse(&r, RM_FX_SPATIAL, &s);
+	CHECK(rm_fx_refused(&r, RM_FX_SPATIAL, &s));
+	CHECK(!rm_fx_refused(&r, RM_FX_TEMPORAL, &s));
+	t.iw = 321;
+	CHECK(!rm_fx_refused(&r, RM_FX_SPATIAL, &t));
+	t = s;
+	t.oy = 1;
+	CHECK(!rm_fx_refused(&r, RM_FX_SPATIAL, &t));
+	rm_fx_refuse(&r, RM_FX_TEMPORAL, &s);
+	CHECK(rm_fx_refused(&r, RM_FX_TEMPORAL, &s) && !rm_fx_refused(&r, RM_FX_SPATIAL, &s));
+	rm_fx_refusal_clear(&r);
+	CHECK(!rm_fx_refused(&r, RM_FX_TEMPORAL, &s));
+	/* a cleared memo refuses nothing, not even a zero size in mode 0 */
+	memset(&t, 0, sizeof(t));
+	CHECK(!rm_fx_refused(&r, 0, &t));
+}
+
 static void
 test_format(void)
 {
@@ -470,6 +635,20 @@ test_format(void)
 	CHECK(strstr(buf, "spatial no, temporal yes, temporal denoised yes, frame interpolator no (r_metalfx_modes 13)"));
 	CHECK(rm_fx_support_format(RM_FX_HAS_INTERP, buf, sizeof(buf)) && strstr(buf, "interpolator yes (r_metalfx_modes 17)"));
 	CHECK(rm_fx_support_format(0, buf, 10) == 0 && buf[0] == '\0');
+
+	s.ox = s.oy = 0;
+	CHECK(rm_fx_note_format(RM_FX_NOTE_UNMADE, 2, &s, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: the MetalFX temporal scaler from 320x240 to 640x480 cannot be made; "
+			"the view is stretched") == 0);
+	CHECK(rm_fx_note_format(RM_FX_NOTE_UNFIT, 1, &s, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: the view's targets do not fit the MetalFX spatial scaler from 320x240 to "
+			"640x480; the view is stretched") == 0);
+	buf[0] = 'x';
+	CHECK(rm_fx_note_format(RM_FX_NOTE_NONE, 1, &s, buf, sizeof(buf)) == 0 && buf[0] == '\0');
+	buf[0] = 'x';
+	CHECK(rm_fx_note_format(3, 1, &s, buf, sizeof(buf)) == 0 && buf[0] == '\0');
+	CHECK(rm_fx_note_format(RM_FX_NOTE_UNMADE, 1, &s, buf, 20) == 0 && buf[0] == '\0');
+	CHECK(rm_fx_note_format(RM_FX_NOTE_UNMADE, 1, &s, buf, 0) == 0);
 	CHECK(rm_fx_support_format(0, buf, 0) == 0);
 }
 
@@ -488,6 +667,10 @@ main(void)
 	test_jitter();
 	test_wants();
 	test_reset();
+	test_ratio_bound();
+	test_same_size();
+	test_step();
+	test_refusal();
 	test_format();
 
 	printf("rm_fx_test: %d checks, %d failed\n", checks, failures);

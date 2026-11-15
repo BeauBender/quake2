@@ -130,11 +130,11 @@ rm_fx_scale(float v, int rows, int out_h, float ratio)
 	return (v < lo) ? lo : (v > 1.0f) ? 1.0f : v;
 }
 
-/* a side of the input: the output's times scale, rounded, 1 to the output's */
+/* a side of the input: the output's times scale, rounded up (within the slack), 1 to the output's */
 static int
 rm_fx_side(int side, float scale)
 {
-	double v = floor((double)side * scale + 0.5);
+	double v = ceil((double)side * scale - RM_FX_SIDE_SLACK);
 
 	if (v < 1.0)
 	{
@@ -289,6 +289,67 @@ rm_fx_keep(rm_fx_last_t *last, int mode, const rm_fx_size_t *s, const float *org
 	memcpy(last->org, org, sizeof(last->org));
 }
 
+int
+rm_fx_same_size(const rm_fx_size_t *a, const rm_fx_size_t *b)
+{
+	return (a->iw == b->iw) && (a->ih == b->ih) && (a->ow == b->ow) && (a->oh == b->oh) && (a->ox == b->ox) &&
+		(a->oy == b->oy);
+}
+
+void
+rm_fx_state_reset(rm_fx_state_t *st)
+{
+	memset(st, 0, sizeof(*st));
+}
+
+unsigned
+rm_fx_step(rm_fx_state_t *st, int mode, const rm_fx_size_t *s, const float *org, float cut, float *jx, float *jy)
+{
+	const unsigned reset = rm_fx_reset(&st->last, mode, s, org, cut);
+
+	if (reset)
+	{
+		st->n = 0;
+	}
+
+	rm_fx_jitter(mode, st->n, jx, jy);
+	st->n++;
+	rm_fx_keep(&st->last, mode, s, org);
+	st->drew = 1;
+	return reset;
+}
+
+void
+rm_fx_frame_end(rm_fx_state_t *st)
+{
+	if (!st->drew)
+	{
+		st->last.valid = 0;
+	}
+
+	st->drew = 0;
+}
+
+int
+rm_fx_refused(const rm_fx_refusal_t *r, int mode, const rm_fx_size_t *s)
+{
+	return r->refused && (r->mode == mode) && rm_fx_same_size(&r->size, s);
+}
+
+void
+rm_fx_refuse(rm_fx_refusal_t *r, int mode, const rm_fx_size_t *s)
+{
+	r->refused = 1;
+	r->mode = mode;
+	r->size = *s;
+}
+
+void
+rm_fx_refusal_clear(rm_fx_refusal_t *r)
+{
+	memset(r, 0, sizeof(*r));
+}
+
 /* appends to buf at *used; 0, with buf emptied, when it does not fit */
 static int
 rm_fx_append(char *buf, size_t len, size_t *used, const char *fmt, ...)
@@ -376,4 +437,31 @@ rm_fx_support_format(unsigned has, char *buf, size_t len)
 			(has & RM_FX_HAS(RM_FX_SPATIAL)) ? "yes" : "no", (has & RM_FX_HAS(RM_FX_TEMPORAL)) ? "yes" : "no",
 			(has & RM_FX_HAS(RM_FX_DENOISED)) ? "yes" : "no", (has & RM_FX_HAS_INTERP) ? "yes" : "no",
 			(has & RM_FX_HAS_ALL) | RM_FX_HAS(RM_FX_OFF));
+}
+
+int
+rm_fx_note_format(int note, int mode, const rm_fx_size_t *s, char *buf, size_t len)
+{
+	size_t used = 0;
+
+	if (len == 0)
+	{
+		return 0;
+	}
+
+	buf[0] = '\0';
+
+	if (note == RM_FX_NOTE_UNMADE)
+	{
+		return rm_fx_append(buf, len, &used, "ref_metal: the MetalFX %s scaler from %dx%d to %dx%d cannot be made; "
+				"the view is stretched", rm_fx_name(mode), s->iw, s->ih, s->ow, s->oh);
+	}
+
+	if (note == RM_FX_NOTE_UNFIT)
+	{
+		return rm_fx_append(buf, len, &used, "ref_metal: the view's targets do not fit the MetalFX %s scaler from "
+				"%dx%d to %dx%d; the view is stretched", rm_fx_name(mode), s->iw, s->ih, s->ow, s->oh);
+	}
+
+	return 0;
 }

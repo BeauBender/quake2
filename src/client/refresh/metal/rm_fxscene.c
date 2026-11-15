@@ -49,9 +49,7 @@ static unsigned fx_has;         /* RM_FX_HAS bits of the device */
 static unsigned fx_families;
 static int fx_mode;             /* the mode the world views run */
 static int fx_interp;
-static rm_fx_last_t fx_last;
-static unsigned fx_n;           /* views since the last reset: the jitter's index */
-static int fx_drew;             /* this frame drew a world view with a scaler */
+static rm_fx_state_t fx_state;  /* the history's last view, the jitter's index, this frame's view */
 
 /* the view being drawn */
 static int fx_view;
@@ -90,7 +88,6 @@ RM_FX_Init(const rmb_caps_t *caps)
 	fx_mode = RM_FX_OFF;
 	fx_interp = 0;
 	fx_view = 0;
-	fx_drew = 0;
 	fx_views = 0;
 	RM_FX_Reset();
 
@@ -103,8 +100,19 @@ RM_FX_Init(const rmb_caps_t *caps)
 void
 RM_FX_Reset(void)
 {
-	memset(&fx_last, 0, sizeof(fx_last));
-	fx_n = 0;
+	rm_fx_state_reset(&fx_state);
+}
+
+/* the back end's note, when it has one (a scaler that cannot be made, targets that do not fit) */
+static void
+RM_FX_Notes(void)
+{
+	char line[256];
+	rm_fx_size_t s;
+	int mode;
+	const int note = rmb_fx_note(&mode, &s);
+
+	RM_FX_Say(rm_fx_note_format(note, mode, &s, line, sizeof(line)), line);
 }
 
 /* r_metalfx and r_metalfx_interp as the device allows, written back with a line when they are not */
@@ -189,6 +197,7 @@ RM_FX_Begin(const rm_viewport_t *out, const float *vieworg, int *rw, int *rh, rm
 	float scale, org[3];
 
 	fx_view = 0;
+	rmb_fx_unready();   /* nothing left prepared from an earlier view, whatever this one does */
 	RM_FX_Read();
 	rmb_fx_set_timing(metal_stats && metal_stats->value);
 
@@ -207,20 +216,11 @@ RM_FX_Begin(const rm_viewport_t *out, const float *vieworg, int *rw, int *rh, rm
 	}
 
 	VectorCopy(vieworg, org);
-	reset = rm_fx_reset(&fx_last, fx_mode, &s, org, RM_FX_CUT_DIST);
-
-	if (reset)
-	{
-		fx_n = 0;
-	}
-
-	rm_fx_jitter(fx_mode, fx_n, &jitter[0], &jitter[1]);
-	fx_n++;
-	rm_fx_keep(&fx_last, fx_mode, &s, org);
-	fx_drew = 1;
+	reset = rm_fx_step(&fx_state, fx_mode, &s, org, RM_FX_CUT_DIST, &jitter[0], &jitter[1]);
 
 	if (!rmb_fx_prepare(fx_mode, &s, jitter[0], jitter[1], reset != 0))
 	{
+		RM_FX_Notes();
 		jitter[0] = jitter[1] = 0.0f;
 		return 0;
 	}
@@ -238,6 +238,8 @@ void
 RM_FX_End(void)
 {
 	char line[256];
+
+	RM_FX_Notes();   /* the seam may have refused the view's targets */
 
 	if (!fx_view)
 	{
@@ -259,10 +261,5 @@ RM_FX_End(void)
 void
 RM_FX_EndFrame(void)
 {
-	if (!fx_drew)
-	{
-		fx_last.valid = 0;
-	}
-
-	fx_drew = 0;
+	rm_fx_frame_end(&fx_state);
 }
