@@ -246,11 +246,9 @@ VidRules_Item(viditem_t item, const char *renderer, int modemask, int scaler)
 			{
 				return (vidrule_t){ 0, "Metal renderer only" };
 			}
-			if (!(modemask & VIDMFX_INTERP))
-			{
-				return (vidrule_t){ 0, "not built yet; GPU has no interpolator" };
-			}
-			return (vidrule_t){ 1, "adds input delay; applies on apply" };
+			/* The renderer forces r_metalfx_interp back to 0 until frame
+			   generation is built, so bit 16 does not make it available. */
+			return (vidrule_t){ 0, "not built yet; adds input delay" };
 
 		case VIDITEM_DENOISER:
 			if (ref != VIDREF_METAL)

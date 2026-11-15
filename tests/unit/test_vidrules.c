@@ -161,16 +161,18 @@ TEST(vidrules_metal_scale_needs_a_scaler)
 	T_EQ_STR(why(VIDITEM_MFX_SCALE, "metal", 1, 0), "not supported on this GPU");
 }
 
-TEST(vidrules_metal_frame_generation_follows_bit_16)
+TEST(vidrules_metal_frame_generation_is_greyed_whatever_bit_16_says)
 {
-	T_EQ_INT(on(VIDITEM_MFX_INTERP, "metal", 1, 0), 0);
-	T_EQ_INT(on(VIDITEM_MFX_INTERP, "metal", 3, 0), 0);
-	T_EQ_INT(on(VIDITEM_MFX_INTERP, "metal", 7, 0), 0);
-	T_EQ_INT(on(VIDITEM_MFX_INTERP, "metal", 15, 0), 0);
-	T_EQ_INT(on(VIDITEM_MFX_INTERP, "metal", 31, 0), 1);
-	T_EQ_INT(on(VIDITEM_MFX_INTERP, "metal", 16, 0), 1);
-	T_CHECK(strstr(why(VIDITEM_MFX_INTERP, "metal", 3, 0), "not built yet") != NULL);
-	T_CHECK(strstr(why(VIDITEM_MFX_INTERP, "metal", 31, 0), "input delay") != NULL);
+	/* the renderer does not build it yet: bit 16 does not enable it */
+	for (int m = 0; m <= 31; m++)
+	{
+		for (int sc = 0; sc <= 3; sc++)
+		{
+			T_EQ_INT(on(VIDITEM_MFX_INTERP, "metal", m, sc), 0);
+			T_CHECK(strstr(why(VIDITEM_MFX_INTERP, "metal", m, sc), "not built yet") != NULL);
+			T_CHECK(strstr(why(VIDITEM_MFX_INTERP, "metal", m, sc), "input delay") != NULL);
+		}
+	}
 }
 
 TEST(vidrules_denoiser_is_always_greyed_today)

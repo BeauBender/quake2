@@ -513,7 +513,7 @@ ApplyChanges(void *unused)
 
 	if (!(s_mfx_scaler_list.generic.flags & QMF_GRAYED))
 	{
-		if ((int)Cvar_VariableValue("r_metalfx") != s_mfx_scaler_list.curvalue)
+		if (VidRules_ScalerIndex(Cvar_VariableValue("r_metalfx")) != s_mfx_scaler_list.curvalue)
 		{
 			Cvar_SetValue("r_metalfx", s_mfx_scaler_list.curvalue);
 		}
@@ -620,7 +620,7 @@ VID_MenuInit(void)
 
 	if (!vid_renderer)
 	{
-		vid_renderer = Cvar_Get("vid_renderer", "gl1", CVAR_ARCHIVE);
+		vid_renderer = Cvar_Get("vid_renderer", "gl3", CVAR_ARCHIVE);
 	}
 
 	Q_strlcpy(s_built_renderer, vid_renderer->string, sizeof(s_built_renderer));
@@ -738,7 +738,7 @@ VID_MenuInit(void)
 
 	if (!vid_renderer)
 	{
-		vid_renderer = Cvar_Get("vid_renderer", "gl1", CVAR_ARCHIVE);
+		vid_renderer = Cvar_Get("vid_renderer", "gl3", CVAR_ARCHIVE);
 	}
 
 	if (!r_vsync)
@@ -1122,7 +1122,13 @@ VID_MenuInit(void)
 		}
 		if (s_mfx_interp_list.generic.flags & QMF_GRAYED)
 		{
+			s_mfx_interp_list.itemnames = na_names;
 			s_mfx_interp_list.curvalue = 0;
+		}
+		if (s_denoiser_list.generic.flags & QMF_GRAYED)
+		{
+			s_denoiser_list.itemnames = na_names;
+			s_denoiser_list.curvalue = 0;
 		}
 	}
 
@@ -1133,7 +1139,7 @@ VID_MenuInit(void)
 	s_ropts_action.generic.x = 0;
 	s_ropts_action.generic.y = (y += 20);
 	s_ropts_action.generic.callback = OpenRendererOptions;
-	s_ropts_action.generic.statusbar = "lighting and MetalFX; greyed ones do not apply to this renderer";
+	s_ropts_action.generic.statusbar = "lighting, MetalFX; greyed: n/a here";
 
 	s_defaults_action.generic.type = MTYPE_ACTION;
 	s_defaults_action.generic.name = "reset to default";

@@ -24,6 +24,7 @@
 
 #include "src/client/header/client.h"
 #include "src/client/menu/header/qmenu.h"
+#include "src/client/menu/header/vidrules.h"
 
 /* ---- stubs the two files link against ---- */
 
@@ -364,14 +365,6 @@ PickRenderer(const char *want)
 	return strstr(l->itemnames[l->curvalue], want) != NULL;
 }
 
-static int
-HasRenderer(const char *want)
-{
-	Open("gl1", "0");
-
-	return PickRenderer(want);
-}
-
 static void
 Reset(void)
 {
@@ -455,29 +448,112 @@ test_apply_uses_the_built_renderer(void)
 	CHECK(Writes("gl4_colorlight") == 0, "gl4_colorlight written");
 }
 
-/* Leaving Metal with frame generation set: it is written under Metal's
-   name, the one it was shown under, so the choice is kept for when the
-   player comes back. */
+/* Frame generation is greyed under Metal whatever bit 16 says (the renderer
+   does not build it yet): it shows "n/a", apply writes nothing for it, also
+   when the player leaves Metal, and its cvar is kept as it was. */
 static void
-test_leaving_metal_keeps_frame_generation(void)
+test_frame_generation_is_greyed_and_not_written(void)
 {
 	Reset();
 	SetCv("r_metalfx_interp", "1");
 	Open("metal", "31");
 
-	if (!PickRenderer("OpenGL 1.4"))
+	CHECK(Greyed("frame generation"), "enabled with the interpolator present");
+	CHECK(!strcmp(Shown("frame generation"), "n/a"), "shows %s", Shown("frame generation"));
+	CHECK(!Slide("frame generation", -1), "frame generation Left changed a greyed item");
+	CHECK(!strcmp(Shown("frame generation"), "n/a"), "shows %s after Left", Shown("frame generation"));
+	Apply();
+	CHECK(!strcmp(Str("r_metalfx_interp"), "1"), "r_metalfx_interp %s, written", Str("r_metalfx_interp"));
+
+	if (PickRenderer("OpenGL 1.4"))
 	{
-		printf("skip: no Metal in the renderer list\n");
-		return;
+		Apply();
+		CHECK(!strcmp(Str("vid_renderer"), "gl1"), "vid_renderer %s", Str("vid_renderer"));
+		CHECK(!strcmp(Str("r_metalfx_interp"), "1"), "r_metalfx_interp %s after leaving Metal", Str("r_metalfx_interp"));
 	}
 
-	CHECK(!Greyed("frame generation"), "greyed with the interpolator present");
-	CHECK(!strcmp(Shown("frame generation"), "on"), "shows %s", Shown("frame generation"));
-	CHECK(Slide("frame generation", -1), "frame generation Left");
-	Apply();
+	/* the denoiser is greyed in the same way */
+	Open("metal", "31");
+	CHECK(Greyed("denoiser"), "denoiser enabled");
+	CHECK(!strcmp(Shown("denoiser"), "n/a"), "denoiser shows %s", Shown("denoiser"));
+}
 
-	CHECK(!strcmp(Str("vid_renderer"), "gl1"), "vid_renderer %s", Str("vid_renderer"));
-	CHECK(!strcmp(Str("r_metalfx_interp"), "0"), "r_metalfx_interp %s, dropped", Str("r_metalfx_interp"));
+/* r_metalfx is a cvar anyone can set: apply reads it as an index, so a value
+   that is not a number or is huge neither traps nor writes. */
+static void
+test_apply_reads_r_metalfx_as_an_index(void)
+{
+	static const char *values[] = { "nan", "1e30", "-1e30", "inf", "2.9" };
+
+	for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++)
+	{
+		Reset();
+		SetCv("r_metalfx", values[i]);
+		Open("metal", "15");
+		Apply();
+		CHECK(Writes("r_metalfx") == 0 && !strcmp(Str("r_metalfx"), values[i]),
+			"r_metalfx %s was written, now %s", values[i], Str("r_metalfx"));
+	}
+
+	Reset();
+	SetCv("r_metalfx", "1e30");
+	Open("metal", "15");
+	CHECK(!strcmp(Shown("MetalFX scaler"), "temporal denoised"), "1e30 shows %s", Shown("MetalFX scaler"));
+	Apply();
+	CHECK(Writes("r_metalfx") == 0, "r_metalfx written for an unchanged 1e30");
+
+	Reset();
+	SetCv("r_metalfx", "nan");
+	Open("metal", "15");
+	CHECK(!strcmp(Shown("MetalFX scaler"), "off"), "nan shows %s", Shown("MetalFX scaler"));
+	Apply();
+	CHECK(Writes("r_metalfx") == 0, "r_metalfx written for an unchanged nan");
+}
+
+/* Every status line either page can show fits the smallest virtual width,
+   320 units of 8 per character: 40 characters. */
+#define STATUS_MAX 40
+
+static void
+CheckStatus(const char *what, const char *text)
+{
+	CHECK(!text || strlen(text) <= STATUS_MAX, "%s: status \"%s\" is %d characters", what,
+		text, (int)(text ? strlen(text) : 0));
+}
+
+static void
+test_status_text_fits_the_screen(void)
+{
+	static const char *renderers[] = { "gl1", "gl3", "gl4", "vk", "soft", "metal", "mylib" };
+	static const int masks[] = { 1, 3, 15, 31 };
+	static const char *mnames[] = { "1", "3", "15", "31" };
+
+	for (size_t r = 0; r < sizeof(renderers) / sizeof(renderers[0]); r++)
+	{
+		for (size_t m = 0; m < sizeof(masks) / sizeof(masks[0]); m++)
+		{
+			for (int it = 0; it < VIDITEM_COUNT; it++)
+			{
+				for (int sc = 0; sc <= 3; sc++)
+				{
+					CheckStatus("rule", VidRules_Item((viditem_t)it, renderers[r], masks[m], sc).text);
+				}
+			}
+
+			Reset();
+			Open(renderers[r], mnames[m]);
+
+			for (int p = 0; p < 2; p++)
+			{
+				const menuframework_s *page = p ? sub_menu : main_menu;
+
+				for (int i = 0; i < page->nitems; i++)
+				{
+					CheckStatus(renderers[r], ((const menucommon_s *)page->items[i])->statusbar);
+				}
+			}
+		}
+	}
 }
 
 /* Enter, Left and Right on a greyed item change nothing and run nothing. */
@@ -661,14 +737,9 @@ main(void)
 
 	test_scale_item_follows_the_scaler();
 	test_apply_uses_the_built_renderer();
-	if (HasRenderer("Metal"))
-	{
-		test_leaving_metal_keeps_frame_generation();
-	}
-	else
-	{
-		printf("skip: no Metal in the renderer list\n");
-	}
+	test_frame_generation_is_greyed_and_not_written();
+	test_apply_reads_r_metalfx_as_an_index();
+	test_status_text_fits_the_screen();
 	test_greyed_items_cannot_be_changed();
 	test_scale_survives_a_scaler_move_and_greyed_cvars_stay();
 	test_custom_scale_is_not_a_choice();
