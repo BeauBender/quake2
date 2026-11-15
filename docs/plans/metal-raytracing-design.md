@@ -1469,3 +1469,7 @@ native pixels. Findings for cards (no edit to any decision):
    about 0.1 s of GPU work made of short dispatches) so a frame-time test
    does not count the first frames, and test whether it recurs after a
    map load, which is a hypothesis here.
+
+## 9. Image-quality cost of rendering below the native size and upscaling (TASK117)
+
+Work in progress.
