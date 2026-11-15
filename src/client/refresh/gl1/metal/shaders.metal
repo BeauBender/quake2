@@ -155,3 +155,21 @@ mgl_fragment_main(mgl_varying in [[stage_in]],
 
 	return float4(c.r, c.g, c.b, c.a);
 }
+
+/*
+ * FIX53: the alpha pass of a layer that is not opaque. One triangle over
+ * the whole target, alpha 1 (the pipeline masks the colour channels).
+ */
+vertex float4
+mgl_vertex_alpha(uint vid [[vertex_id]])
+{
+	float2 p = float2(float((vid << 1) & 2), float(vid & 2));
+
+	return float4(p * 2.0f - 1.0f, 0.0f, 1.0f);
+}
+
+fragment float4
+mgl_fragment_alpha()
+{
+	return float4(0.0f, 0.0f, 0.0f, 1.0f);
+}
