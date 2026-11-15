@@ -47,8 +47,8 @@ static int
 CL_UpscaleNameChar(int c)
 {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-		(c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' ||
-		c == '/';
+		(c >= '0' && c <= '9') || c == '_' || c == '-' || c == '+' ||
+		c == '.' || c == '/';
 }
 
 int
@@ -201,6 +201,28 @@ CL_UpscaleEntryExists(const char *path, void *ctx)
 	return (errno != ENOENT) && (errno != ENOTDIR);
 }
 
+upscale_entry_t
+CL_UpscaleEntryKind(const char *path)
+{
+	struct stat st;
+
+	if (!path)
+	{
+		return UPSCALE_ENTRY_UNKNOWN;
+	}
+
+#ifdef _WIN32
+	if (stat(path, &st) == 0)
+#else
+	if (lstat(path, &st) == 0)
+#endif
+	{
+		return S_ISREG(st.st_mode) ? UPSCALE_ENTRY_FILE : UPSCALE_ENTRY_OTHER;
+	}
+
+	return (errno == ENOENT) ? UPSCALE_ENTRY_NONE : UPSCALE_ENTRY_UNKNOWN;
+}
+
 int
 CL_UpscaleDirInGitTree(const char *dir)
 {
@@ -285,6 +307,28 @@ CL_UpscalePcxSize(const unsigned char *data, size_t len, int *w, int *h)
 	*h = (int)ph;
 
 	return 1;
+}
+
+const unsigned char *
+CL_UpscalePalette(const unsigned char *data, size_t len)
+{
+	int w, h;
+
+	/* after the header and at least one byte of the image */
+	if (!CL_UpscalePcxSize(data, len, &w, &h) ||
+		(len <= offsetof(pcx_t, data) + 768))
+	{
+		return NULL;
+	}
+
+	return data + len - 768;
+}
+
+int
+CL_UpscalePcxDecodedOk(const unsigned char *pic, int bits, int pw, int ph,
+		int w, int h)
+{
+	return pic && (bits == 8) && (pw == w) && (ph == h);
 }
 
 /* ---- pixels ---- */
@@ -651,4 +695,257 @@ CL_UpscaleToRGBA(const unsigned char *data, size_t w, size_t h,
 			memcpy(rgba + i * 4, &table[p], 3);
 		}
 	}
+}
+
+/* ---- the command's decisions ---- */
+
+static const upscale_kind_t upscale_kinds[UPSCALE_KINDS] = {
+	{ "textures", "wal", NULL, 1, 1, 0 },
+	{ "env", "pcx", NULL, 0, 0, 0 },
+	{ "models", "pcx", NULL, 0, 0, 1 },
+	{ "players", "pcx", "_i.pcx", 0, 0, 1 }
+};
+
+const upscale_kind_t *
+CL_UpscaleKind(int k)
+{
+	if ((k < 0) || (k >= UPSCALE_KINDS))
+	{
+		return NULL;
+	}
+
+	return &upscale_kinds[k];
+}
+
+/* 1 when name ends with suffix, ignoring case */
+static int
+CL_UpscaleEndsWith(const char *name, const char *suffix)
+{
+	size_t n = strlen(name), s = strlen(suffix);
+
+	return (n >= s) && !Q_stricmp(name + n - s, suffix);
+}
+
+int
+CL_UpscaleIsSource(const upscale_kind_t *kind, const char *name)
+{
+	size_t d, e, n;
+
+	if (!kind || !name)
+	{
+		return 0;
+	}
+
+	d = strlen(kind->dir);
+	e = strlen(kind->ext);
+	n = strlen(name);
+
+	/* "dir/", at least one character, '.' and ext */
+	if ((n < d + 1 + 1 + 1 + e) || Q_strncasecmp(name, kind->dir, (int)d) ||
+		(name[d] != '/') || (name[n - e - 1] != '.') ||
+		Q_stricmp(name + n - e, kind->ext))
+	{
+		return 0;
+	}
+
+	return !kind->notsuffix || !CL_UpscaleEndsWith(name, kind->notsuffix);
+}
+
+int
+CL_UpscaleListAdd(strlist_t *list, const char *name, int max, int *cut)
+{
+	if (StrList_Contains(list, name))
+	{
+		return 1;
+	}
+
+	if (list->num >= max)
+	{
+		*cut = 1;
+		return 0;
+	}
+
+	StrList_Append(list, name);
+
+	return 1;
+}
+
+int
+CL_UpscaleOutPath(const char *gamedir, const char *outname, char *out,
+		size_t outsize)
+{
+	if (!out || (outsize == 0))
+	{
+		return 0;
+	}
+
+	out[0] = '\0';
+
+	if (!gamedir || !outname ||
+		(strlen(gamedir) + 1 + strlen(outname) >= outsize))
+	{
+		return 0;
+	}
+
+	snprintf(out, outsize, "%s/%s", gamedir, outname);
+
+	return 1;
+}
+
+int
+CL_UpscaleTempPath(const char *path, long id, char *out, size_t outsize)
+{
+	int len;
+
+	if (!out || (outsize == 0))
+	{
+		return 0;
+	}
+
+	out[0] = '\0';
+
+	if (!path)
+	{
+		return 0;
+	}
+
+	len = snprintf(out, outsize, "%s.%ld.tmp", path, id);
+
+	if ((len < 0) || ((size_t)len >= outsize))
+	{
+		out[0] = '\0';
+		return 0;
+	}
+
+	return 1;
+}
+
+int
+CL_UpscaleParentDir(const char *path, char *out, size_t outsize)
+{
+	const char *slash;
+	size_t len;
+
+	if (!out || (outsize == 0))
+	{
+		return 0;
+	}
+
+	out[0] = '\0';
+	slash = path ? strrchr(path, '/') : NULL;
+
+	if (!slash)
+	{
+		return 0;
+	}
+
+	len = (slash == path) ? 1 : (size_t)(slash - path);
+
+	if (len >= outsize)
+	{
+		return 0;
+	}
+
+	memcpy(out, path, len);
+	out[len] = '\0';
+
+	return 1;
+}
+
+upscale_action_t
+CL_UpscaleAction(upscale_entry_t entry, int force)
+{
+	switch (entry)
+	{
+		case UPSCALE_ENTRY_NONE:
+			return UPSCALE_WRITE;
+		case UPSCALE_ENTRY_FILE:
+			return force ? UPSCALE_WRITE : UPSCALE_SKIP;
+		case UPSCALE_ENTRY_OTHER:
+			/* written through, a link would write its target */
+			return force ? UPSCALE_REFUSE : UPSCALE_SKIP;
+		default:
+			return UPSCALE_REFUSE;
+	}
+}
+
+int
+CL_UpscaleCachedInGitTree(upscale_gitcache_t *cache, const char *dir,
+		int (*check)(const char *dir))
+{
+	size_t len;
+
+	if (!cache || !dir || !check)
+	{
+		return 1;
+	}
+
+	if (cache->valid && !strcmp(cache->dir, dir))
+	{
+		return cache->answer;
+	}
+
+	len = strlen(dir);
+
+	if (len >= sizeof(cache->dir))
+	{
+		return check(dir);
+	}
+
+	memcpy(cache->dir, dir, len + 1);
+	cache->answer = check(dir);
+	cache->valid = 1;
+
+	return cache->answer;
+}
+
+int
+CL_UpscalePathInGitTree(upscale_gitcache_t *cache, const char *path)
+{
+	char dir[MAX_OSPATH];
+
+	if (!CL_UpscaleParentDir(path, dir, sizeof(dir)))
+	{
+		return 1;
+	}
+
+	return CL_UpscaleCachedInGitTree(cache, dir, CL_UpscaleDirInGitTree);
+}
+
+int
+CL_UpscaleAllowed(int connected, int local)
+{
+	return !connected || local;
+}
+
+void
+CL_UpscaleCount(upscale_count_t *n, upscale_outcome_t outcome, size_t bytes)
+{
+	switch (outcome)
+	{
+		case UPSCALE_WRITTEN:
+			n->written++;
+			n->bytes += bytes;
+			break;
+		case UPSCALE_SKIPPED:
+			n->skipped++;
+			break;
+		case UPSCALE_REFUSED:
+			n->refused++;
+			break;
+		default:
+			n->failed++;
+			break;
+	}
+}
+
+void
+CL_UpscaleSummary(const upscale_count_t *n, int factor, const char *dir,
+		char *out, size_t outsize)
+{
+	snprintf(out, outsize, "upscale_textures: %d written, %d skipped, "
+		"%d refused, %d failed, %llu bytes, %dx, in %s%s\n", n->written,
+		n->skipped, n->refused, n->failed, n->bytes, factor, dir,
+		n->cut ? "; a listing was cut at its limit, not every file was "
+		"looked at" : "");
 }

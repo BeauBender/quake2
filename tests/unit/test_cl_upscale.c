@@ -39,6 +39,10 @@ TEST(upscale_name_ok_accepts_listing_names)
 	T_EQ_INT(CL_UpscaleNameOk("a-b_c.d/e.f"), 1);
 	T_EQ_INT(CL_UpscaleNameOk("x"), 1);
 	T_EQ_INT(CL_UpscaleNameOk("a.b.c/d.e"), 1);
+	/* the animation prefix of the stock textures */
+	T_EQ_INT(CL_UpscaleNameOk("textures/e1u1/+0btshoot1.wal"), 1);
+	T_EQ_INT(CL_UpscaleNameOk("textures/e2u3/+a_fan.wal"), 1);
+	T_EQ_INT(CL_UpscaleNameOk("+"), 1);
 }
 
 TEST(upscale_name_ok_refuses)
@@ -62,7 +66,6 @@ TEST(upscale_name_ok_refuses)
 	T_EQ_INT(CL_UpscaleNameOk("textures/.x.wal"), 0);
 	T_EQ_INT(CL_UpscaleNameOk("./x.wal"), 0);
 	T_EQ_INT(CL_UpscaleNameOk("textures/./x.wal"), 0);
-	T_EQ_INT(CL_UpscaleNameOk("textures/+0btshoot1.wal"), 0);
 	T_EQ_INT(CL_UpscaleNameOk("textures\\x.wal"), 0);
 	T_EQ_INT(CL_UpscaleNameOk("c:x.wal"), 0);
 	T_EQ_INT(CL_UpscaleNameOk("tex tures/x.wal"), 0);
@@ -80,7 +83,7 @@ TEST(upscale_name_ok_character_set)
 	for (c = 1; c < 256; c++)
 	{
 		int want = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-			(c >= '0' && c <= '9') || c == '_' || c == '-';
+			(c >= '0' && c <= '9') || c == '_' || c == '-' || c == '+';
 		char mid[8], first[8], last[8];
 
 		snprintf(mid, sizeof(mid), "a%cb", c);
@@ -118,6 +121,8 @@ TEST(upscale_out_name)
 	T_EQ_STR(out, "a.b/c.d.png");
 	T_EQ_INT(CL_UpscaleOutName("a.p", out, sizeof(out)), 1);
 	T_EQ_STR(out, "a.png");
+	T_EQ_INT(CL_UpscaleOutName("textures/e1u1/+0btshoot1.wal", out, sizeof(out)), 1);
+	T_EQ_STR(out, "textures/e1u1/+0btshoot1.png");
 
 	/* no extension in the last component */
 	T_EQ_INT(CL_UpscaleOutName("a.b/c", out, sizeof(out)), 0);
@@ -964,4 +969,436 @@ TEST(upscale_pcx_size)
 	pcx_header(pcx, 0, 0, 3, 3);
 	pcx[2] = 0;
 	T_EQ_INT(CL_UpscalePcxSize(pcx, sizeof(pcx), &w, &h), 0);
+}
+
+/* the colormap's palette: the last 768 bytes, of an 8-bit one-plane file only */
+TEST(upscale_palette)
+{
+	static unsigned char pcx[128 + 1 + 768];
+
+	pcx_header(pcx, 0, 0, 255, 319);
+	pcx[128] = 0x0c;
+	pcx[129] = 0x11;
+	pcx[sizeof(pcx) - 1] = 0x22;
+	T_CHECK(CL_UpscalePalette(pcx, sizeof(pcx)) == pcx + sizeof(pcx) - 768);
+	T_EQ_INT(CL_UpscalePalette(pcx, sizeof(pcx))[0], 0x11);
+	T_EQ_INT(CL_UpscalePalette(pcx, sizeof(pcx))[767], 0x22);
+
+	/* the palette after the header, not over it */
+	T_CHECK(CL_UpscalePalette(pcx, sizeof(pcx) - 1) == NULL);
+	T_CHECK(CL_UpscalePalette(pcx, 768) == NULL);
+	T_CHECK(CL_UpscalePalette(pcx, 129) == NULL);
+	T_CHECK(CL_UpscalePalette(NULL, sizeof(pcx)) == NULL);
+
+	/* the header as the skins are checked: 8 bits, one plane */
+	pcx[3] = 4;
+	T_CHECK(CL_UpscalePalette(pcx, sizeof(pcx)) == NULL);
+	pcx[3] = 8;
+	pcx[65] = 3;
+	T_CHECK(CL_UpscalePalette(pcx, sizeof(pcx)) == NULL);
+	pcx[65] = 1;
+	T_CHECK(CL_UpscalePalette(pcx, sizeof(pcx)) != NULL);
+}
+
+TEST(upscale_pcx_decoded_ok)
+{
+	unsigned char pic[1];
+
+	T_EQ_INT(CL_UpscalePcxDecodedOk(pic, 8, 4, 3, 4, 3), 1);
+	T_EQ_INT(CL_UpscalePcxDecodedOk(NULL, 8, 4, 3, 4, 3), 0);
+	T_EQ_INT(CL_UpscalePcxDecodedOk(pic, 24, 4, 3, 4, 3), 0);
+	T_EQ_INT(CL_UpscalePcxDecodedOk(pic, 8, 5, 3, 4, 3), 0);
+	T_EQ_INT(CL_UpscalePcxDecodedOk(pic, 8, 4, 2, 4, 3), 0);
+	T_EQ_INT(CL_UpscalePcxDecodedOk(pic, 8, 3, 4, 4, 3), 0);
+}
+
+/* ---- the command's decisions ---- */
+
+TEST(upscale_kinds)
+{
+	const upscale_kind_t *k;
+
+	k = CL_UpscaleKind(0);
+	T_REQUIRE(k != NULL);
+	T_EQ_STR(k->dir, "textures");
+	T_EQ_STR(k->ext, "wal");
+	T_CHECK(k->notsuffix == NULL);
+	T_EQ_INT(k->wal, 1);
+	T_EQ_INT(k->wrap, 1);
+	T_EQ_INT(k->skin, 0);
+
+	k = CL_UpscaleKind(1);
+	T_REQUIRE(k != NULL);
+	T_EQ_STR(k->dir, "env");
+	T_EQ_STR(k->ext, "pcx");
+	T_CHECK(k->notsuffix == NULL);
+	T_EQ_INT(k->wal, 0);
+	T_EQ_INT(k->wrap, 0);
+	T_EQ_INT(k->skin, 0);
+
+	k = CL_UpscaleKind(2);
+	T_REQUIRE(k != NULL);
+	T_EQ_STR(k->dir, "models");
+	T_EQ_STR(k->ext, "pcx");
+	T_CHECK(k->notsuffix == NULL);
+	T_EQ_INT(k->wal, 0);
+	T_EQ_INT(k->wrap, 0);
+	T_EQ_INT(k->skin, 1);
+
+	k = CL_UpscaleKind(3);
+	T_REQUIRE(k != NULL);
+	T_EQ_STR(k->dir, "players");
+	T_EQ_STR(k->ext, "pcx");
+	T_EQ_STR(k->notsuffix, "_i.pcx");
+	T_EQ_INT(k->wal, 0);
+	T_EQ_INT(k->wrap, 0);
+	T_EQ_INT(k->skin, 1);
+
+	T_CHECK(CL_UpscaleKind(UPSCALE_KINDS) == NULL);
+	T_CHECK(CL_UpscaleKind(-1) == NULL);
+}
+
+TEST(upscale_is_source)
+{
+	const upscale_kind_t *tex = CL_UpscaleKind(0), *env = CL_UpscaleKind(1);
+	const upscale_kind_t *mod = CL_UpscaleKind(2), *pl = CL_UpscaleKind(3);
+
+	T_EQ_INT(CL_UpscaleIsSource(tex, "textures/e1u1/floor1_1.wal"), 1);
+	T_EQ_INT(CL_UpscaleIsSource(tex, "textures/e1u1/FLOOR1_1.WAL"), 1);
+	T_EQ_INT(CL_UpscaleIsSource(tex, "textures/x.wal"), 1);
+	T_EQ_INT(CL_UpscaleIsSource(tex, "TEXTURES/x.wal"), 1);
+	/* the shortest: one character before the extension */
+	T_EQ_INT(CL_UpscaleIsSource(tex, "textures/.wal"), 0);
+	T_EQ_INT(CL_UpscaleIsSource(tex, "textures/"), 0);
+	T_EQ_INT(CL_UpscaleIsSource(tex, "textures"), 0);
+	T_EQ_INT(CL_UpscaleIsSource(tex, "textures/e1u1/x.pcx"), 0);
+	T_EQ_INT(CL_UpscaleIsSource(tex, "textures/e1u1/xwal"), 0);
+	T_EQ_INT(CL_UpscaleIsSource(tex, "textures/e1u1/x.wal.bak"), 0);
+	T_EQ_INT(CL_UpscaleIsSource(tex, "texturesx/x.wal"), 0);
+	T_EQ_INT(CL_UpscaleIsSource(tex, "textures.wal"), 0);
+	T_EQ_INT(CL_UpscaleIsSource(tex, "env/x.wal"), 0);
+	T_EQ_INT(CL_UpscaleIsSource(tex, "a/textures/x.wal"), 0);
+	T_EQ_INT(CL_UpscaleIsSource(env, "env/unit1_bk.pcx"), 1);
+	T_EQ_INT(CL_UpscaleIsSource(env, "env/unit1_bk.tga"), 0);
+
+	/* the players' _i.pcx icons are not sources, the models' are */
+	T_EQ_INT(CL_UpscaleIsSource(pl, "players/male/grunt.pcx"), 1);
+	T_EQ_INT(CL_UpscaleIsSource(pl, "players/male/grunt_i.pcx"), 0);
+	T_EQ_INT(CL_UpscaleIsSource(pl, "players/male/GRUNT_I.PCX"), 0);
+	T_EQ_INT(CL_UpscaleIsSource(pl, "players/male/_i.pcx"), 0);
+	T_EQ_INT(CL_UpscaleIsSource(pl, "players/male/i.pcx"), 1);
+	T_EQ_INT(CL_UpscaleIsSource(pl, "players/male/grunt_j.pcx"), 1);
+	T_EQ_INT(CL_UpscaleIsSource(mod, "models/x/skin_i.pcx"), 1);
+	T_EQ_INT(CL_UpscaleIsSource(mod, "players/male/grunt.pcx"), 0);
+
+	T_EQ_INT(CL_UpscaleIsSource(NULL, "textures/x.wal"), 0);
+	T_EQ_INT(CL_UpscaleIsSource(tex, NULL), 0);
+}
+
+TEST(upscale_list_add)
+{
+	strlist_t l;
+	int cut = 0;
+
+	StrList_Init(&l, 0);
+	T_EQ_INT(CL_UpscaleListAdd(&l, "a", 2, &cut), 1);
+	T_EQ_INT(CL_UpscaleListAdd(&l, "a", 2, &cut), 1);
+	T_EQ_INT(l.num, 1);
+	T_EQ_INT(CL_UpscaleListAdd(&l, "b", 2, &cut), 1);
+	T_EQ_INT(l.num, 2);
+	T_EQ_INT(cut, 0);
+	/* full: a name that is there is not a cut, a new one is */
+	T_EQ_INT(CL_UpscaleListAdd(&l, "b", 2, &cut), 1);
+	T_EQ_INT(cut, 0);
+	T_EQ_INT(CL_UpscaleListAdd(&l, "c", 2, &cut), 0);
+	T_EQ_INT(cut, 1);
+	T_EQ_INT(l.num, 2);
+	T_EQ_STR(l.data[0], "a");
+	T_EQ_STR(l.data[1], "b");
+	StrList_Free(&l);
+
+	cut = 0;
+	StrList_Init(&l, 0);
+	T_EQ_INT(CL_UpscaleListAdd(&l, "x", 0, &cut), 0);
+	T_EQ_INT(cut, 1);
+	T_EQ_INT(l.num, 0);
+	StrList_Free(&l);
+}
+
+TEST(upscale_out_path)
+{
+	char out[32];
+
+	T_EQ_INT(CL_UpscaleOutPath("/g/baseq2", "textures/x.png", out, sizeof(out)), 1);
+	T_EQ_STR(out, "/g/baseq2/textures/x.png");
+	/* 24 characters and the terminator */
+	T_EQ_INT(CL_UpscaleOutPath("/g/baseq2", "textures/x.png", out, 25), 1);
+	T_EQ_INT(CL_UpscaleOutPath("/g/baseq2", "textures/x.png", out, 24), 0);
+	T_EQ_STR(out, "");
+	T_EQ_INT(CL_UpscaleOutPath(NULL, "x.png", out, sizeof(out)), 0);
+	T_EQ_INT(CL_UpscaleOutPath("/g", NULL, out, sizeof(out)), 0);
+	T_EQ_INT(CL_UpscaleOutPath("/g", "x.png", out, 0), 0);
+}
+
+TEST(upscale_temp_path)
+{
+	char out[32];
+
+	T_EQ_INT(CL_UpscaleTempPath("/g/x.png", 4321, out, sizeof(out)), 1);
+	T_EQ_STR(out, "/g/x.png.4321.tmp");
+	/* 17 characters and the terminator */
+	T_EQ_INT(CL_UpscaleTempPath("/g/x.png", 4321, out, 18), 1);
+	T_EQ_INT(CL_UpscaleTempPath("/g/x.png", 4321, out, 17), 0);
+	T_EQ_STR(out, "");
+	T_EQ_INT(CL_UpscaleTempPath(NULL, 1, out, sizeof(out)), 0);
+	T_EQ_INT(CL_UpscaleTempPath("/g/x.png", 1, out, 0), 0);
+}
+
+TEST(upscale_parent_dir)
+{
+	char out[32];
+
+	T_EQ_INT(CL_UpscaleParentDir("/g/baseq2/textures/x.png", out, sizeof(out)), 1);
+	T_EQ_STR(out, "/g/baseq2/textures");
+	T_EQ_INT(CL_UpscaleParentDir("/x.png", out, sizeof(out)), 1);
+	T_EQ_STR(out, "/");
+	T_EQ_INT(CL_UpscaleParentDir("/a/b", out, 3), 1);
+	T_EQ_STR(out, "/a");
+	T_EQ_INT(CL_UpscaleParentDir("/a/b", out, 2), 0);
+	T_EQ_STR(out, "");
+	T_EQ_INT(CL_UpscaleParentDir("x.png", out, sizeof(out)), 0);
+	T_EQ_STR(out, "");
+	T_EQ_INT(CL_UpscaleParentDir(NULL, out, sizeof(out)), 0);
+	T_EQ_INT(CL_UpscaleParentDir("/a/b", out, 0), 0);
+}
+
+TEST(upscale_action)
+{
+	T_EQ_INT(CL_UpscaleAction(UPSCALE_ENTRY_NONE, 0), UPSCALE_WRITE);
+	T_EQ_INT(CL_UpscaleAction(UPSCALE_ENTRY_NONE, 1), UPSCALE_WRITE);
+	T_EQ_INT(CL_UpscaleAction(UPSCALE_ENTRY_FILE, 0), UPSCALE_SKIP);
+	T_EQ_INT(CL_UpscaleAction(UPSCALE_ENTRY_FILE, 1), UPSCALE_WRITE);
+	/* a link is never followed: left alone, and with force refused */
+	T_EQ_INT(CL_UpscaleAction(UPSCALE_ENTRY_OTHER, 0), UPSCALE_SKIP);
+	T_EQ_INT(CL_UpscaleAction(UPSCALE_ENTRY_OTHER, 1), UPSCALE_REFUSE);
+	T_EQ_INT(CL_UpscaleAction(UPSCALE_ENTRY_UNKNOWN, 0), UPSCALE_REFUSE);
+	T_EQ_INT(CL_UpscaleAction(UPSCALE_ENTRY_UNKNOWN, 1), UPSCALE_REFUSE);
+	T_EQ_INT(CL_UpscaleAction((upscale_entry_t)99, 1), UPSCALE_REFUSE);
+}
+
+/* a directory with mode 000 above the path; the caller restores it */
+static int
+locked_dir(char *dir, size_t size)
+{
+	t_write_file("upscale/locked/sub/.keep", "", 0);
+	snprintf(dir, size, "%s/upscale/locked", t_tmpdir());
+
+	/* root searches any directory: the case cannot be made */
+	return (geteuid() != 0) && (chmod(dir, 0) == 0);
+}
+
+TEST(upscale_entry_kind_on_disk)
+{
+	char path[MAX_OSPATH], target[MAX_OSPATH], dir[MAX_OSPATH];
+
+	t_write_file("upscale/entry/file.png", "x", 1);
+	snprintf(path, sizeof(path), "%s/upscale/entry/file.png", t_tmpdir());
+	T_EQ_INT(CL_UpscaleEntryKind(path), UPSCALE_ENTRY_FILE);
+	snprintf(target, sizeof(target), "%s", path);
+	snprintf(path, sizeof(path), "%s/upscale/entry/missing.png", t_tmpdir());
+	T_EQ_INT(CL_UpscaleEntryKind(path), UPSCALE_ENTRY_NONE);
+	snprintf(path, sizeof(path), "%s/upscale/entry", t_tmpdir());
+	T_EQ_INT(CL_UpscaleEntryKind(path), UPSCALE_ENTRY_OTHER);
+
+	/* a link to a file, or to nothing, is a link */
+	snprintf(path, sizeof(path), "%s/upscale/entry/link.png", t_tmpdir());
+	T_REQUIRE(symlink(target, path) == 0);
+	T_EQ_INT(CL_UpscaleEntryKind(path), UPSCALE_ENTRY_OTHER);
+	snprintf(target, sizeof(target), "%s/upscale/entry/nothing", t_tmpdir());
+	snprintf(path, sizeof(path), "%s/upscale/entry/dangling.png", t_tmpdir());
+	T_REQUIRE(symlink(target, path) == 0);
+	T_EQ_INT(CL_UpscaleEntryKind(path), UPSCALE_ENTRY_OTHER);
+
+	/* below a file: lstat cannot tell, so it is not "none" */
+	snprintf(path, sizeof(path), "%s/upscale/entry/file.png/x.png", t_tmpdir());
+	T_EQ_INT(CL_UpscaleEntryKind(path), UPSCALE_ENTRY_UNKNOWN);
+
+	if (locked_dir(dir, sizeof(dir)))
+	{
+		snprintf(path, sizeof(path), "%s/sub/x.png", dir);
+		T_EQ_INT(CL_UpscaleEntryKind(path), UPSCALE_ENTRY_UNKNOWN);
+		T_REQUIRE(chmod(dir, 0755) == 0);
+	}
+}
+
+/* the .git probe fails closed: an entry lstat cannot look at counts as there */
+TEST(upscale_git_probe_fails_closed)
+{
+	char path[MAX_OSPATH], dir[MAX_OSPATH];
+
+	if (!locked_dir(dir, sizeof(dir)))
+	{
+		return;
+	}
+
+	snprintf(path, sizeof(path), "%s/sub/.git", dir);
+	T_EQ_INT(CL_UpscaleEntryExists(path, NULL), 1);
+	T_REQUIRE(chmod(dir, 0755) == 0);
+	/* searchable again: the answer is the entry's */
+	T_EQ_INT(CL_UpscaleEntryExists(path, NULL), 0);
+}
+
+typedef struct
+{
+	int calls;
+	int answer;
+} count_check_t;
+
+static count_check_t count_check;
+
+static int
+counted_check(const char *dir)
+{
+	(void)dir;
+	count_check.calls++;
+	return count_check.answer;
+}
+
+TEST(upscale_cached_git_check)
+{
+	upscale_gitcache_t cache;
+	char big[MAX_OSPATH + 8];
+
+	memset(&cache, 0, sizeof(cache));
+	memset(&count_check, 0, sizeof(count_check));
+
+	count_check.answer = 1;
+	T_EQ_INT(CL_UpscaleCachedInGitTree(&cache, "/g/a", counted_check), 1);
+	T_EQ_INT(count_check.calls, 1);
+	count_check.answer = 0;
+	T_EQ_INT(CL_UpscaleCachedInGitTree(&cache, "/g/a", counted_check), 1);
+	T_EQ_INT(count_check.calls, 1);
+	T_EQ_INT(CL_UpscaleCachedInGitTree(&cache, "/g/b", counted_check), 0);
+	T_EQ_INT(count_check.calls, 2);
+	count_check.answer = 1;
+	T_EQ_INT(CL_UpscaleCachedInGitTree(&cache, "/g/b", counted_check), 0);
+	T_EQ_INT(count_check.calls, 2);
+	/* the last directory only: a prefix is another directory */
+	T_EQ_INT(CL_UpscaleCachedInGitTree(&cache, "/g", counted_check), 1);
+	T_EQ_INT(count_check.calls, 3);
+	T_EQ_INT(CL_UpscaleCachedInGitTree(&cache, "/g/a", counted_check), 1);
+	T_EQ_INT(count_check.calls, 4);
+
+	/* too long for the cache: checked every time */
+	memset(big, 'a', sizeof(big));
+	big[0] = '/';
+	big[sizeof(big) - 1] = '\0';
+	count_check.answer = 0;
+	T_EQ_INT(CL_UpscaleCachedInGitTree(&cache, big, counted_check), 0);
+	T_EQ_INT(CL_UpscaleCachedInGitTree(&cache, big, counted_check), 0);
+	T_EQ_INT(count_check.calls, 6);
+	/* and the directory kept is still the last one that fitted */
+	T_EQ_INT(CL_UpscaleCachedInGitTree(&cache, "/g/a", counted_check), 1);
+	T_EQ_INT(count_check.calls, 6);
+
+	/* no directory: refused, nothing called */
+	T_EQ_INT(CL_UpscaleCachedInGitTree(&cache, NULL, counted_check), 1);
+	T_EQ_INT(count_check.calls, 6);
+}
+
+/* each output file's own directory: a nested repository, a link into one */
+TEST(upscale_out_dir_in_git_tree)
+{
+	char path[MAX_OSPATH], target[MAX_OSPATH], home[MAX_OSPATH];
+	upscale_gitcache_t cache;
+
+	memset(&cache, 0, sizeof(cache));
+
+	t_write_file("upscale/home/baseq2/textures/.git/HEAD", "x", 1);
+	t_write_file("upscale/home/baseq2/textures/e1u1/.keep", "", 0);
+	t_write_file("upscale/home/baseq2/env/.keep", "", 0);
+	t_write_file("upscale/linked/.git", "gitdir: elsewhere\n", 18);
+	t_write_file("upscale/linked/m/.keep", "", 0);
+	t_write_file("upscale/home2/baseq2/.keep", "", 0);
+
+	snprintf(home, sizeof(home), "%s/upscale/home/baseq2", t_tmpdir());
+	T_EQ_INT(CL_UpscaleDirInGitTree(home), oracle_in_git(home));
+
+	snprintf(path, sizeof(path), "%s/textures/e1u1/x.png", home);
+	T_EQ_INT(CL_UpscalePathInGitTree(&cache, path), 1);
+	snprintf(path, sizeof(path), "%s/textures/x.png", home);
+	T_EQ_INT(CL_UpscalePathInGitTree(&cache, path), 1);
+	snprintf(path, sizeof(path), "%s/env/x.png", home);
+	T_EQ_INT(CL_UpscalePathInGitTree(&cache, path), oracle_in_git(home));
+
+	/* models/ is a link into a repository */
+	snprintf(target, sizeof(target), "%s/upscale/linked", t_tmpdir());
+	snprintf(path, sizeof(path), "%s/upscale/home2/baseq2/models", t_tmpdir());
+	T_REQUIRE(symlink(target, path) == 0);
+	snprintf(home, sizeof(home), "%s/upscale/home2/baseq2", t_tmpdir());
+	T_EQ_INT(CL_UpscaleDirInGitTree(home), oracle_in_git(home));
+	snprintf(path, sizeof(path), "%s/models/m/skin.png", home);
+	T_EQ_INT(CL_UpscalePathInGitTree(&cache, path), 1);
+	snprintf(path, sizeof(path), "%s/models/skin.png", home);
+	T_EQ_INT(CL_UpscalePathInGitTree(&cache, path), 1);
+
+	/* no directory in the path, or one that does not exist: refused */
+	T_EQ_INT(CL_UpscalePathInGitTree(&cache, "x.png"), 1);
+	snprintf(path, sizeof(path), "%s/missing/x.png", home);
+	T_EQ_INT(CL_UpscalePathInGitTree(&cache, path), 1);
+}
+
+TEST(upscale_allowed)
+{
+	T_EQ_INT(CL_UpscaleAllowed(0, 0), 1);
+	T_EQ_INT(CL_UpscaleAllowed(0, 1), 1);
+	T_EQ_INT(CL_UpscaleAllowed(1, 1), 1);
+	T_EQ_INT(CL_UpscaleAllowed(1, 0), 0);
+}
+
+TEST(upscale_count)
+{
+	upscale_count_t n;
+
+	memset(&n, 0, sizeof(n));
+	CL_UpscaleCount(&n, UPSCALE_WRITTEN, 100);
+	CL_UpscaleCount(&n, UPSCALE_WRITTEN, 23);
+	CL_UpscaleCount(&n, UPSCALE_SKIPPED, 1000);
+	CL_UpscaleCount(&n, UPSCALE_REFUSED, 1000);
+	CL_UpscaleCount(&n, UPSCALE_REFUSED, 1000);
+	CL_UpscaleCount(&n, UPSCALE_FAILED, 1000);
+	CL_UpscaleCount(&n, UPSCALE_FAILED, 1000);
+	CL_UpscaleCount(&n, UPSCALE_FAILED, 1000);
+	T_EQ_INT(n.written, 2);
+	T_EQ_INT(n.skipped, 1);
+	T_EQ_INT(n.refused, 2);
+	T_EQ_INT(n.failed, 3);
+	T_CHECK(n.bytes == 123);
+	T_EQ_INT(n.cut, 0);
+	/* an outcome that is none of these is a failure */
+	CL_UpscaleCount(&n, (upscale_outcome_t)99, 1000);
+	T_EQ_INT(n.failed, 4);
+	T_CHECK(n.bytes == 123);
+}
+
+TEST(upscale_summary)
+{
+	upscale_count_t n;
+	char out[256];
+
+	memset(&n, 0, sizeof(n));
+	n.written = 3;
+	n.skipped = 1;
+	n.refused = 2;
+	n.failed = 4;
+	n.bytes = 5000000000ULL;
+	CL_UpscaleSummary(&n, 2, "/g/baseq2", out, sizeof(out));
+	T_EQ_STR(out, "upscale_textures: 3 written, 1 skipped, 2 refused, 4 failed, "
+		"5000000000 bytes, 2x, in /g/baseq2\n");
+
+	n.cut = 1;
+	CL_UpscaleSummary(&n, 4, "/g/baseq2", out, sizeof(out));
+	T_EQ_STR(out, "upscale_textures: 3 written, 1 skipped, 2 refused, 4 failed, "
+		"5000000000 bytes, 4x, in /g/baseq2; a listing was cut at its limit, "
+		"not every file was looked at\n");
 }

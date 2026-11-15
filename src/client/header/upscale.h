@@ -39,8 +39,9 @@
 
 /*
  * 1 when a name from a listing may be written: only the characters
- * a-z, A-Z, 0-9, '_', '/', '.' and '-' (an upper-case letter is kept
- * as it is, as the pak names it), not empty, no leading '/', no "..",
+ * a-z, A-Z, 0-9, '_', '-', '+' (the animation prefix), '/' and '.' (an
+ * upper-case letter is kept as it is, as the pak names it), not empty,
+ * no leading '/', no "..",
  * no component that is empty or begins with '.'. 0 otherwise, NULL
  * included.
  */
@@ -243,6 +244,13 @@ typedef struct
  */
 int CL_UpscaleCachedInGitTree(upscale_gitcache_t *cache, const char *dir,
 		int (*check)(const char *dir));
+
+/*
+ * 1 when the directory of the file path is inside a git work tree, as
+ * CL_UpscaleDirInGitTree says of its real path (cached as above), or
+ * path has no directory: the file is not written.
+ */
+int CL_UpscalePathInGitTree(upscale_gitcache_t *cache, const char *path);
 
 /*
  * 1 when the command may run: not connected to a server, or connected
