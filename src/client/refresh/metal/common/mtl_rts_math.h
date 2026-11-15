@@ -82,6 +82,31 @@
 /* a luxel's side in texture units (gl1's 16) */
 #define MTL_RTS_LUXEL 16.0f
 
+/*
+ * The bit a shadow ray toward light idx takes into its query (TASK55):
+ * 1 << idx when a model of the frame carries that light (bit idx of
+ * carried, the union of the instances' rm_rts_carried), 0 otherwise and
+ * for an index past the lights. With 0 the ray is every other light's
+ * opaque query; with the bit it passes the triangles of the instances
+ * that carry the light (mtl_rts_passes) and stops at any other.
+ */
+static inline unsigned
+mtl_rts_light_bit(unsigned carried, unsigned idx)
+{
+	(void)carried;
+	(void)idx;
+	return 0;
+}
+
+/* 1 when a shadow ray of light bit lbit (mtl_rts_light_bit) passes a triangle of an instance carrying the lights carry */
+static inline int
+mtl_rts_passes(unsigned carry, unsigned lbit)
+{
+	(void)carry;
+	(void)lbit;
+	return 0;
+}
+
 typedef struct
 {
 	float x, y, z;

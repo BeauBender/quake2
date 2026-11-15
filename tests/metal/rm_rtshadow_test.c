@@ -1306,6 +1306,181 @@ test_surface_map(void)
 }
 
 static void
+test_alias_box(void)
+{
+	const float s[3] = { 0.1f, 0.2f, 0.3f }, t[3] = { -10, -20, -5 };
+	const float os[3] = { 0.2f, 0.1f, 0.3f }, ot[3] = { -12, -15, 0 };
+	const float ns[3] = { -0.1f, 0.1f, 0 }, nt[3] = { 0, 1, 2 };
+	float mins[3], maxs[3];
+
+	/* the frame and the old frame: their union, as R_CullAliasModel */
+	rm_rts_alias_box(s, t, os, ot, mins, maxs);
+	CHECK(near(mins[0], -12, 1e-5) && near(mins[1], -20, 1e-5) && near(mins[2], -5, 1e-5));
+	CHECK(near(maxs[0], 39, 1e-4) && near(maxs[1], 31, 1e-4) && near(maxs[2], 76.5, 1e-4));
+
+	/* one frame: translate to translate + 255 x scale */
+	rm_rts_alias_box(s, t, s, t, mins, maxs);
+	CHECK(near(mins[0], -10, 1e-5) && near(mins[1], -20, 1e-5) && near(mins[2], -5, 1e-5));
+	CHECK(near(maxs[0], 15.5, 1e-4) && near(maxs[1], 31, 1e-4) && near(maxs[2], 71.5, 1e-4));
+
+	/* a negative or zero scale still gives mins <= maxs */
+	rm_rts_alias_box(ns, nt, ns, nt, mins, maxs);
+	CHECK(near(mins[0], -25.5, 1e-4) && near(maxs[0], 0, 1e-6));
+	CHECK(near(mins[1], 1, 1e-6) && near(maxs[1], 26.5, 1e-4));
+	CHECK(near(mins[2], 2, 1e-6) && near(maxs[2], 2, 1e-6));
+}
+
+/* the world point of model point q under xform (column-major 4 by 3), in double */
+static void
+xform_point(const float *xf, const double *q, float *out)
+{
+	int r;
+
+	for (r = 0; r < 3; r++)
+	{
+		out[r] = (float)(xf[r] * q[0] + xf[3 + r] * q[1] + xf[6 + r] * q[2] + xf[9 + r]);
+	}
+}
+
+static rm_rts_light_t
+light_at(float x, float y, float z)
+{
+	rm_rts_light_t l;
+
+	memset(&l, 0, sizeof(l));
+	l.origin[0] = x;
+	l.origin[1] = y;
+	l.origin[2] = z;
+	l.origin[3] = 200;
+	l.color[0] = l.color[1] = l.color[2] = 1;
+	return l;
+}
+
+static void
+test_carried(void)
+{
+	const float mins[3] = { -8, -4, -2 }, maxs[3] = { 8, 4, 30 };
+	const float org[3] = { 100, -50, 20 }, yaw[3] = { 0, 90, 0 };
+	rm_rts_light_t l[40];
+	float xf[12], bad[3];
+	int i, wrong = 0, n = 0;
+
+	rm_rt_transform(org, yaw, 0, xf);
+
+	/* a model at (100, -50, 20) turned 90 degrees: its x axis is the world's y, its y the world's -x */
+	l[0] = light_at(100, -50, 20);          /* at its origin: a rocket's light, a flash model's */
+	l[1] = light_at(100, -43, 20);          /* model (7, 0, 0): inside */
+	l[2] = light_at(107, -50, 20);          /* model (0, -7, 0): outside (inside only if the turn were ignored) */
+	l[3] = light_at(100, -41.1f, 20);       /* model (8.9, 0, 0): inside the tolerance */
+	l[4] = light_at(100, -40.8f, 20);       /* model (9.2, 0, 0): outside it */
+	l[5] = light_at(100, -50, 50.9f);       /* model z 30.9: inside the tolerance */
+	l[6] = light_at(100, -50, 16.8f);       /* model z -3.2: outside it */
+	l[7] = light_at(300, 0, 0);             /* another light, far off */
+	l[8] = light_at(NAN, -50, 20);          /* not finite: no bit */
+	l[9] = light_at(100, INFINITY, 20);
+	CHECK(rm_rts_carried(xf, mins, maxs, l, 10) == ((1u << 0) | (1u << 1) | (1u << 3) | (1u << 5)));
+	CHECK(rm_rts_carried(xf, mins, maxs, l, 1) == 1u);
+	CHECK(rm_rts_carried(xf, mins, maxs, l, 0) == 0);
+	CHECK(rm_rts_carried(xf, mins, maxs, l, -3) == 0);
+	CHECK(rm_rts_carried(xf, mins, maxs, NULL, 4) == 0);
+
+	/*
+	 * The rule keeps real shadows: a second monster standing between the
+	 * first one's muzzle flash (model point (12, 0, 20) of the first, just
+	 * past its box) and a wall carries none of it, nor does the first.
+	 */
+	{
+		const float org2[3] = { 100, 0, 20 }, mins2[3] = { -16, -16, -24 }, maxs2[3] = { 16, 16, 32 };
+		const double q[3] = { 12, 0, 20 };
+		float xf2[12], p[3];
+
+		rm_rt_transform(org2, yaw, 0, xf2);
+		xform_point(xf, q, p);
+		l[0] = light_at(p[0], p[1], p[2]);
+		CHECK(rm_rts_carried(xf, mins, maxs, l, 1) == 0);
+		CHECK(rm_rts_carried(xf2, mins2, maxs2, l, 1) == 0);
+
+		/* at its gun, inside its box: the monster that fires carries it */
+		l[0] = light_at(100, -42, 30);
+		CHECK(rm_rts_carried(xf, mins, maxs, l, 1) == 1u);
+		CHECK(rm_rts_carried(xf2, mins2, maxs2, l, 1) == 0);
+	}
+
+	/* every one of 40 lights at the origin: the first 32 bits, no more */
+	for (i = 0; i < 40; i++)
+	{
+		l[i] = light_at(100, -50, 20);
+	}
+
+	CHECK(rm_rts_carried(xf, mins, maxs, l, 40) == 0xffffffffu);
+	CHECK(rm_rts_carried(xf, mins, maxs, l, 32) == 0xffffffffu);
+	CHECK(rm_rts_carried(xf, mins, maxs, l, 31) == 0x7fffffffu);
+
+	/* a transform that cannot be inverted, a box or a transform that is not finite: none */
+	memset(bad, 0, sizeof(bad));
+	{
+		float zero[12], nanx[12];
+		float nmins[3] = { -8, NAN, -2 };
+
+		memset(zero, 0, sizeof(zero));
+		memcpy(nanx, xf, sizeof(nanx));
+		nanx[4] = NAN;
+		CHECK(rm_rts_carried(zero, mins, maxs, l, 4) == 0);
+		CHECK(rm_rts_carried(nanx, mins, maxs, l, 4) == 0);
+		CHECK(rm_rts_carried(xf, nmins, maxs, l, 4) == 0);
+		CHECK(rm_rts_carried(xf, mins, bad, l, 4) == 0);   /* maxs below mins: an empty box */
+	}
+
+	/* turned every way (an alias model's pitch, yaw and roll): the box test in the model's own space */
+	for (i = 0; i < 400; i++)
+	{
+		const float o[3] = { frand(-2000, 2000), frand(-2000, 2000), frand(-500, 500) };
+		const float a[3] = { frand(-180, 180), frand(-180, 180), frand(-180, 180) };
+		const double q[3] = { frand(-14, 14), frand(-10, 10), frand(-8, 36) };
+		float p[3];
+		int k, inside = 1, edge = 0;
+
+		for (k = 0; k < 3; k++)
+		{
+			const double lo = mins[k] - RM_RTS_CARRY_TOL, hi = maxs[k] + RM_RTS_CARRY_TOL;
+
+			inside = inside && (q[k] >= lo) && (q[k] <= hi);
+			edge = edge || (fabs(q[k] - lo) < 0.01) || (fabs(q[k] - hi) < 0.01);
+		}
+
+		if (edge)
+		{
+			continue;
+		}
+
+		rm_rt_transform(o, a, 0, xf);
+		xform_point(xf, q, p);
+		l[0] = light_at(p[0], p[1], p[2]);
+		n += inside;
+		wrong += (rm_rts_carried(xf, mins, maxs, l, 1) != (inside ? 1u : 0u));
+	}
+
+	CHECK(wrong == 0);
+	CHECK(n > 50);  /* both sides of the box are exercised */
+}
+
+static void
+test_light_bit(void)
+{
+	CHECK(mtl_rts_light_bit(0, 0) == 0);
+	CHECK(mtl_rts_light_bit(1u, 0) == 1u);
+	CHECK(mtl_rts_light_bit(0x80000000u, 31) == 0x80000000u);
+	CHECK(mtl_rts_light_bit(0x80000000u, 30) == 0);
+	CHECK(mtl_rts_light_bit(0xffffffffu, 32) == 0);
+	CHECK(mtl_rts_light_bit(0xffffffffu, MTL_RTS_NO_LIGHT) == 0);
+	CHECK(mtl_rts_light_bit(0x00000024u, 5) == 0x20u);
+	CHECK(mtl_rts_passes(0x20u, 0x20u));
+	CHECK(!mtl_rts_passes(0x10u, 0x20u));   /* a model that carries another light shadows this one */
+	CHECK(!mtl_rts_passes(0, 0x20u));
+	CHECK(!mtl_rts_passes(0xffffffffu, 0)); /* a light no model carries: nothing passes */
+}
+
+static void
 test_show(void)
 {
 	CHECK(rm_rts_show(0) == 0);
@@ -1372,6 +1547,9 @@ main(void)
 	test_plane_exact();
 	test_unlit();
 	test_surface_map();
+	test_alias_box();
+	test_carried();
+	test_light_bit();
 	test_show();
 	test_stats_format();
 
