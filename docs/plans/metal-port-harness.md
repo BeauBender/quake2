@@ -2866,7 +2866,7 @@ against the TASK92 section's frame-time table (`skywater`, `demo1.dm2`: 1285
 to 1398 fps for `metal` and 816 to 984 for `gl1-metal`, `r_vsync 0`, taken at a
 load of 7.8 to 13.4 on that section's host), both much higher. FIX53 (#250) now
 carries these data, for the windowed ceilings and the 1600x900 spread.
-And 1600x900 reads neither: `ref_soft`
+The 1600x900 row reads neither: `ref_soft`
 197.7 to 321.2 (the runs split into 197.7 and 219.5 against 316.6 to 321.2),
 `gl1-metal` 67.1 to 96.1 and `ref_metal` 62.3 to 75.2, against TASK97's
 284.7 to 287.8, 245.5 to 252.7 and 277.5 to 283.4 at the same size. The cause
