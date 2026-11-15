@@ -79,6 +79,7 @@ static char mgl_device_name[128];
 static int frame_open;
 static int frame_skipped;
 static int frame_passes;
+static int frame_unseen;                   /* a command buffer of the frame was not seen complete (mgl_flush, FIX51) */
 static id<CAMetalDrawable> frame_drawable;
 static id<MTLTexture> frame_target;        /* the drawable's texture, a present slot's target (FIX51), or mgl_offscreen */
 static id<MTLCommandBuffer> frame_cmd;
@@ -355,7 +356,13 @@ mgl_present_pass(id<MTLCommandBuffer> cmd, id<MTLTexture> src, id<MTLTexture> ds
  * the frame's command buffer (mgl_present_event), and writes the drawable
  * from that target in one pass (mgl_present_pass): the wait for the
  * drawable holds that queue and no frame slot, and nothing copies the
- * frame first. The slot comes back when its present has completed, so its
+ * frame first. Metal states only that an event a command buffer signals
+ * follows that buffer's own commands, so the frame's earlier command
+ * buffers (mgl_flush: glFinish, glReadPixels) are each waited for until
+ * they have completed, and a frame with one that did not complete in the
+ * bound is not presented.
+ *
+ * The slot comes back when its present has completed, so its
  * target is not drawn into again while it is read; a frame that is not
  * presented gives its slot back when it ends (a later frame that draws
  * into that target is on the same queue, after it). A frame that begins
@@ -544,8 +551,10 @@ mgl_ahead_drop(void)
  * The present of the frame drawn into src, the target of the open frame's
  * present slot, on the drawable acquired ahead, apart from the frame (see
  * above): the event goes on the frame's command buffer, which is committed
- * after this, and is signalled after everything committed to the frame's
- * queue before it, so after every write of the frame to src; the present
+ * after this, and is signalled after that buffer's own commands; every
+ * earlier command buffer of the frame has completed (mgl_flush waited for
+ * it, and mgl_layer_present does not call this when a wait ended first),
+ * so it is signalled after every write of the frame to src. The present
  * goes on the present queue, waits for it, and is returned, to be
  * committed after the frame by mgl_present_commit. nil when the frame is
  * not presented: no drawable is ready, or it is of another size than the
@@ -970,6 +979,7 @@ mgl_layer_frame_begin(int *tw, int *th)
 	frame_open = 1;
 	frame_skipped = 0;
 	frame_passes = 0;
+	frame_unseen = 0;
 
 	if (dispatch_semaphore_wait(mgl_frame_sem, mgl_deadline(MGL_FRAME_WAIT_MS)) != 0)
 	{
@@ -1174,7 +1184,11 @@ mgl_layer_read_prepare(void)
 	return mgl_layer_ensure_pass() ? 0 : -1;
 }
 
-/* Commits the frame so far and opens a new command buffer for the rest of it. */
+/*
+ * Commits the frame so far, waits for it, and opens a new command buffer
+ * for the rest of it. When the wait ends before the command buffer has
+ * completed, the frame is not presented apart (FIX51, mgl_present_apart_begin).
+ */
 static int
 mgl_flush(void)
 {
@@ -1183,6 +1197,12 @@ mgl_flush(void)
 	mgl_end_encoder();
 	ok = mgl_commit_wait(frame_cmd);
 	frame_cmd = [mgl_queue commandBuffer];
+
+	if (!ok)
+	{
+		frame_unseen = 1;
+	}
+
 	return ok;
 }
 
@@ -1330,13 +1350,15 @@ mgl_layer_present(void)
 		{
 			id<MTLCommandBuffer> pcmd = nil;
 
-			if (frame_slot >= 0)
+			if ((frame_slot >= 0) && !frame_unseen)
 			{
 				pcmd = mgl_present_apart_begin(frame_cmd, frame_target);
 			}
 			else if (mgl_present_apart())
 			{
-				mgl_ahead_request();   /* every slot was held: a drawable ready is left for the next frame */
+				/* every slot was held, or the frame's earlier command buffer was not seen complete:
+				   a drawable ready is left for the next frame */
+				mgl_ahead_request();
 			}
 
 			/* with display sync off, a frame no drawable takes */

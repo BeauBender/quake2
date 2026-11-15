@@ -97,10 +97,19 @@ rmb_frame_wait_ms(void)
  * semaphore of one (rmb_present_sem) and a colour target
  * (rmb_present_target). A frame takes a free slot when it begins and is
  * drawn into the slot's target (rmb_present_take). When it ends with a
- * drawable ready, the present goes on rmb_present_queue, which waits for
- * the frame's command buffer (rmb_present_event), and writes the drawable
- * from that target in one pass (rmb_frame_end): the wait for the drawable
+ * drawable ready, the present writes the drawable from that target in one
+ * pass (rmb_frame_end), on rmb_present_queue: the wait for the drawable
  * holds that queue and no frame slot, and nothing copies the frame first.
+ *
+ * A frame can be drawn in several command buffers (a readback, the
+ * in-frame split, rmb_frame_cut, MTL_GPU_TIME), and Metal states only that
+ * an event a command buffer signals follows that buffer's own commands.
+ * So the present waits for no event: every command buffer committed while
+ * the frame holds its slot is in the frame's dispatch group
+ * (rmb_present_group, rmb_watch), left when its completed handler runs,
+ * and the present is committed, on the serial rmb_present_order and so in
+ * frame order, once the group is empty (rmb_present_commit).
+ *
  * The slot comes back when its present has completed, so its target is
  * not drawn into again while it is read; a frame that is not presented
  * gives its slot back when it ends (a later frame that draws into that
@@ -119,8 +128,8 @@ static id<CAMetalDrawable> rmb_ahead;   /* rmb_ahead_lock: the drawable acquired
 static int rmb_ahead_busy;              /* rmb_ahead_lock: an acquisition is on the queue */
 
 static id<MTLCommandQueue> rmb_present_queue;
-static id<MTLEvent> rmb_present_event;
-static uint64_t rmb_present_value;
+static dispatch_queue_t rmb_present_order;   /* serial: commits each present once its frame has completed */
+static dispatch_group_t rmb_present_group;   /* the command buffers committed while the open frame holds a slot */
 static dispatch_semaphore_t rmb_present_sem[RMB_PRESENTS];   /* 1: no frame and no present holds this slot */
 static id<MTLTexture> rmb_present_target[RMB_PRESENTS];      /* the target the slot's frame is drawn into */
 static int rmb_present_slot = -1;              /* the slot the open frame holds, or -1 */
@@ -128,7 +137,7 @@ static id<MTLCommandBuffer> rmb_present_cmd;   /* the present of the frame that 
 
 void rmb_watch(id<MTLCommandBuffer> cmd);
 
-/* With display sync off the frames are presented apart (with the present queue and its event made). */
+/* With display sync off the frames are presented apart (with the present queue and its order queue made). */
 static int
 rmb_apart(void)
 {
@@ -256,6 +265,7 @@ rmb_present_take(int w, int h)
 	{
 		dispatch_semaphore_signal(rmb_present_sem[rmb_present_slot]);
 		rmb_present_slot = -1;
+		rmb_present_group = nil;
 	}
 
 	if (!rmb_apart() || (rmb_present_slot >= 0))
@@ -305,6 +315,15 @@ rmb_present_take(int w, int h)
 		}
 
 		rm_ledger_create(&rmb_ledger, RM_OBJ_TEXTURE);
+	}
+
+	/* every command buffer committed from here to the frame's end joins it (rmb_watch) */
+	rmb_present_group = dispatch_group_create();
+
+	if (!rmb_present_group)
+	{
+		dispatch_semaphore_signal(rmb_present_sem[slot]);
+		return nil;
 	}
 
 	rmb_present_slot = slot;
@@ -357,9 +376,8 @@ rmb_next_drawable(void)
  * The command buffer that writes the drawable rmb_next_drawable returned:
  * the frame's own (display sync on, the frame holds no present slot, or no
  * command buffer of the present queue could be made), or one of the
- * present queue that waits for the frame's: the event is signalled after
- * everything committed to the frame's queue before it, so after every
- * write of the frame to its target.
+ * present queue, which rmb_present_commit commits only once every command
+ * buffer of the frame has completed.
  */
 id<MTLCommandBuffer>
 rmb_present_begin(id<MTLCommandBuffer> frame)
@@ -378,25 +396,32 @@ rmb_present_begin(id<MTLCommandBuffer> frame)
 		return frame;   /* the slot comes back when the frame ends */
 	}
 
-	rmb_present_value++;
-	[frame encodeSignalEvent:rmb_present_event value:rmb_present_value];
-	[cmd encodeWaitForEvent:rmb_present_event value:rmb_present_value];
 	rmb_present_cmd = cmd;
 	return cmd;
 }
 
+static int rmb_present_late_reported;   /* rmb_present_order only */
+
 /*
- * After the frame's command buffer is committed, or when a frame ends with
- * nothing committed: commits the frame's present, which gives the frame's
- * present slot back when it has completed, or gives the slot back now.
+ * After the frame's last command buffer is committed, or when a frame ends
+ * with nothing to present: gives the slot back now when there is no
+ * present, or hands the present to rmb_present_order, which commits it
+ * once every command buffer of the frame's group has completed (bounded,
+ * RMB_GPU_WAIT_MS), so after every write of the frame to its target; the
+ * present gives the slot back when it has completed. A frame still on the
+ * GPU at the bound is not presented and its slot comes back.
  */
 void
 rmb_present_commit(void)
 {
 	dispatch_semaphore_t sem;
+	dispatch_group_t group = rmb_present_group;
+	id<MTLCommandBuffer> cmd = rmb_present_cmd;
 	int slot = rmb_present_slot;
 
 	rmb_present_slot = -1;
+	rmb_present_group = nil;   /* before rmb_watch below: the present is not in its own frame's group */
+	rmb_present_cmd = nil;
 
 	if (slot < 0)
 	{
@@ -405,19 +430,34 @@ rmb_present_commit(void)
 
 	sem = rmb_present_sem[slot];
 
-	if (!rmb_present_cmd)
+	if (!cmd)
 	{
 		dispatch_semaphore_signal(sem);
 		return;
 	}
 
-	rmb_watch(rmb_present_cmd);
-	[rmb_present_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
+	rmb_watch(cmd);
+	[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 		(void)b;
 		dispatch_semaphore_signal(sem);
 	}];
-	[rmb_present_cmd commit];
-	rmb_present_cmd = nil;
+
+	dispatch_async(rmb_present_order, ^{
+		if (!group || (dispatch_group_wait(group, rmb_deadline(RMB_GPU_WAIT_MS)) == 0))
+		{
+			[cmd commit];
+			return;
+		}
+
+		if (!rmb_present_late_reported)
+		{
+			rmb_present_late_reported = 1;
+			fprintf(stderr, "ref_metal: a frame is still on the GPU after %d ms, not presented\n",
+					RMB_GPU_WAIT_MS);
+		}
+
+		dispatch_semaphore_signal(sem);
+	});
 }
 
 /*
@@ -435,6 +475,18 @@ rmb_watch(id<MTLCommandBuffer> cmd)
 	if (timing < 0)
 	{
 		timing = getenv("MTL_GPU_TIME") != NULL;
+	}
+
+	/* FIX51: committed while the open frame holds a present slot, the frame's present waits for it */
+	if (rmb_present_group)
+	{
+		dispatch_group_t group = rmb_present_group;
+
+		dispatch_group_enter(group);
+		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
+			(void)b;
+			dispatch_group_leave(group);
+		}];
 	}
 
 	[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
@@ -534,10 +586,10 @@ rmb_open(rmb_caps_t *caps, char *err, size_t errlen)
 
 		rm_ledger_create(&rmb_ledger, RM_OBJ_QUEUE);
 
-		/* the present queue and its event (FIX51); without them every frame writes its own drawable */
+		/* the present queue and the queue that commits to it (FIX51); without them every frame writes its own drawable */
 		rmb_present_queue = [rmb_device newCommandQueue];
-		rmb_present_event = [rmb_device newEvent];
-		rmb_present_value = 0;
+		rmb_present_order = dispatch_queue_create("ref_metal present", DISPATCH_QUEUE_SERIAL);
+		rmb_present_group = nil;
 		rmb_present_slot = -1;
 
 		if (rmb_present_queue)
@@ -545,16 +597,11 @@ rmb_open(rmb_caps_t *caps, char *err, size_t errlen)
 			rm_ledger_create(&rmb_ledger, RM_OBJ_QUEUE);
 		}
 
-		if (rmb_present_event)
-		{
-			rm_ledger_create(&rmb_ledger, RM_OBJ_STATE);
-		}
-
 		for (i = 0; i < RMB_PRESENTS; i++)
 		{
 			rmb_present_sem[i] = nil;
 
-			if (rmb_present_queue && rmb_present_event)
+			if (rmb_present_queue && rmb_present_order)
 			{
 				rmb_present_sem[i] = dispatch_semaphore_create(0);
 				dispatch_semaphore_signal(rmb_present_sem[i]);
@@ -691,11 +738,9 @@ rmb_close(rmb_stats_t *stats, rm_ledger_t *ledger)
 				rm_ledger_destroy(&rmb_ledger, RM_OBJ_QUEUE);
 			}
 
-			if (rmb_present_event)
-			{
-				rmb_present_event = nil;
-				rm_ledger_destroy(&rmb_ledger, RM_OBJ_STATE);
-			}
+			/* a present still on it (the GPU past the bound at teardown) keeps it alive */
+			rmb_present_order = nil;
+			rmb_present_group = nil;
 
 			for (i = 0; i < RMB_PRESENTS; i++)
 			{
