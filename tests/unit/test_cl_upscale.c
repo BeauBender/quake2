@@ -1070,6 +1070,9 @@ TEST(upscale_is_source)
 	T_EQ_INT(CL_UpscaleIsSource(tex, "textures/e1u1/FLOOR1_1.WAL"), 1);
 	T_EQ_INT(CL_UpscaleIsSource(tex, "textures/x.wal"), 1);
 	T_EQ_INT(CL_UpscaleIsSource(tex, "TEXTURES/x.wal"), 1);
+	/* another directory of the same length */
+	T_EQ_INT(CL_UpscaleIsSource(tex, "texturez/x.wal"), 0);
+	T_EQ_INT(CL_UpscaleIsSource(mod, "players/x/y.pcx"), 0);
 	/* the shortest: one character before the extension */
 	T_EQ_INT(CL_UpscaleIsSource(tex, "textures/.wal"), 0);
 	T_EQ_INT(CL_UpscaleIsSource(tex, "textures/"), 0);
