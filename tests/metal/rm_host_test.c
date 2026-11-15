@@ -763,9 +763,15 @@ test_ledger_restarts(void)
 	l.unmatched = 1;
 	CHECK(!rm_ledger_clean(&l) && rm_ledger_live(&l) == 0);
 
-	/* a kind out of range reads 0 and is never indexed */
+	/*
+	 * a kind out of range reads 0 and is never indexed: created[RM_OBJ_KINDS]
+	 * would be destroyed[0] (1 here) and destroyed[RM_OBJ_KINDS] unmatched (0),
+	 * so an index let through reads 1 without a sanitizer too
+	 */
 	memset(&l, 0, sizeof(l));
 	rm_ledger_create(&l, RM_OBJ_DEVICE);
+	rm_ledger_create(&l, RM_OBJ_DEVICE);
+	rm_ledger_destroy(&l, RM_OBJ_DEVICE);
 	CHECK(rm_ledger_kind_live(&l, RM_OBJ_KINDS) == 0);
 	CHECK(rm_ledger_kind_live(&l, (rm_obj_kind_t)-1) == 0);
 	CHECK(rm_ledger_kind_live(&l, RM_OBJ_DEVICE) == 1);
