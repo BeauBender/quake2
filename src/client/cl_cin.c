@@ -27,6 +27,7 @@
 
 #include "header/client.h"
 #include "input/header/input.h"
+#include "header/cinsize.h"
 
 extern cvar_t *vid_renderer;
 
@@ -606,8 +607,9 @@ static byte *
 SCR_LoadHiColor(const char* namewe, const char *ext, int *width, int *height,
 	byte **palette, int *bitsPerPixel)
 {
-	byte *pic, *data = NULL, *palette_in = NULL;
+	byte *pic, *data = NULL, *palette_in = NULL, *probe;
 	char filename[256];
+	size_t bytes;
 
 	Q_strlcpy(filename, namewe, sizeof(filename));
 	Q_strlcat(filename, ".", sizeof(filename));
@@ -628,8 +630,30 @@ SCR_LoadHiColor(const char* namewe, const char *ext, int *width, int *height,
 		free(palette_in);
 	}
 
-	pic = Z_Malloc(cin.height * cin.width * (*bitsPerPixel) / 8);
-	memcpy(pic, data, cin.height * cin.width * (*bitsPerPixel) / 8);
+	/* the decoder admits 8192x8192, whose 32 bit size does not fit an int */
+	bytes = SCR_StillBytes(*width, *height, *bitsPerPixel);
+	probe = bytes ? malloc(bytes) : NULL;
+
+	if (probe == NULL)
+	{
+		Com_Printf("%s: %s is %dx%d at %d bits, too large to play as a still.\n",
+			__func__, filename, *width, *height, *bitsPerPixel);
+		free(data);
+
+		if (*palette)
+		{
+			Z_Free(*palette);
+			*palette = NULL;
+		}
+
+		return NULL;
+	}
+
+	/* the zone allocator treats a failure as fatal, so ask malloc first */
+	free(probe);
+
+	pic = Z_Malloc(bytes);
+	memcpy(pic, data, bytes);
 	free(data);
 
 	return pic;
