@@ -11,25 +11,31 @@
 #    to be equal and in the same order, and requires each command to be
 #    allowed by an exact rule in .claude/settings.json (the rm command's
 #    <file> stands for the one wildcard of its rule).
-# 2. Fails on a cp allow rule; on any store rule outside the card's list
-#    (TASK127, pinned below), reporting on its own a store rule with a
-#    wildcard (`git -C <store> *` or `:*`), a second -C, a -c other than
-#    core.editor=true on rebase --continue and a push with arguments; and on
-#    any allow rule at all (Bash, bare Bash, Edit or Write) that admits one
-#    of the probe commands, or an Edit or Write of the clone's .git or the
-#    slug file.
+# 2. Fails on a cp allow rule (its first word cp, or a path ending /cp); on
+#    any store rule outside the card's list (TASK127, pinned below),
+#    reporting on its own a store rule with a wildcard (`git -C <store> *`
+#    or `:*`), a second -C, a -c other than core.editor=true on rebase
+#    --continue, a push with arguments and a store rule of another form; and
+#    on any allow rule at all (Bash, bare Bash, Edit or Write) that admits
+#    one of the probe commands, or an Edit or Write of the clone's .git or
+#    the slug file.
 # 3. Self-tests, in subshells with the GIT_* repository, configuration,
 #    editor, ssh and identity variables unset or fixed, no global or system
 #    configuration, hooks off (core.hooksPath=/dev/null), signing off and
-#    HOME in a private mktemp -d: parts 1 and 2 reject a fixture for each
-#    case they name, a parse error and a failing jq. Then a bare origin and
-#    two clones stand in for two machines, each with its memory directory a
-#    symbolic link into its clone, and the documented commands run in the
-#    documented order with the clone for the store, as word lists (no shell
-#    parses them). It shows that edits on both sides merge and an older copy
-#    does not revert a newer one, that a deletion reaches the other side and
-#    stays gone, that a conflict resolves with the documented conflict
-#    steps, and that the origin only ever moves forward.
+#    HOME in a private mktemp -d. A bare origin and two clones stand in for
+#    two machines, each with its memory directory a symbolic link into its
+#    clone, and the documented commands run in the documented order with
+#    the clone for the store, as word lists (no shell parses them). It shows
+#    that edits on both sides merge and an older copy does not revert a
+#    newer one, that a deletion reaches the other side and stays gone, that
+#    a conflict resolves with the documented conflict steps, and that the
+#    origin only ever moves forward. Then parts 1 and 2 reject a fixture for
+#    each case they name (settings holding the card's list plus one change;
+#    copies of the documents with one change), a parse error and a failing
+#    jq, each with the message of its own test.
+#
+# The real checks run first, so a fault in a tracked file is reported as
+# itself rather than as a self-test failure.
 #
 # Fails closed: a missing tool, a parse error, a memory rule not found, an
 # unbalanced code span or a signal is a failure. Output names files and
@@ -76,7 +82,6 @@ probes()
 		"Bash($pre -c core.editor=x rebase --continue)" "Bash($pre push -q https://example.invalid/x)" \
 		"Bash($pre push --force)" "Bash($pre commit -q -m x --no-verify)" \
 		"Bash($pre config core.hooksPath x)" "Bash(cp x $store/quake2/memory/x)" \
-		"Bash(cp -p ~/.claude/projects/x/memory/x.md $store/quake2/memory/)" \
 		"Edit($store/.git/config)" "Edit($store/.git/hooks/pre-commit)" \
 		"Edit(~/.config/agents/memory_repo)"
 }
@@ -98,10 +103,17 @@ check_rules()
 	i=0
 	while IFS= read -r r; do
 		i=$((i + 1))
+		# The tool, and the rule's body (a bare tool name allows it all).
 		case "$r" in
-		"Bash(cp)" | "Bash(cp "* | "Bash(cp:"*)
+		*"("*")") k=${r%%"("*} b=${r#*"("} b=${b%")"} ;;
+		*) k=$r b='*' ;;
+		esac
+		w=${b%% *} w=${w%%:*}
+		case "$k:$w" in Bash:cp | Bash:*/cp)
 			say "allow rule $i is a cp rule; memory is never copied (see CLAUDE.md)"
 			return 1 ;;
+		esac
+		case "$r" in
 		"Bash($pre:"*)
 			say "allow rule $i is a store rule with a wildcard (* or :*); only the rm rule has one"
 			return 1 ;;
@@ -125,10 +137,6 @@ check_rules()
 		esac
 		# A rule's wildcards, and anything a case pattern would treat
 		# specially, become *, so the match errs towards admitting.
-		case "$r" in
-		*"("*")") k=${r%%"("*} b=${r#*"("} b=${b%")"} ;;
-		*) k=$r b='*' ;;
-		esac
 		[ "$k" != Write ] || k=Edit
 		pat=$(printf '%s' "$b" | sed -e 's/[][?\\*]/*/g' -e 's/:\*$/*/') ||
 			{ say "sed failed"; return 1; }
@@ -230,16 +238,22 @@ selftest_checks()
 		case "$out" in *"$msg"*) ;; *) say "selftest: $w was detected, but not by its own test"; exit 1 ;; esac
 	}
 	# reject <what> <message> <jq filter> [<rule>]: part 2 fails with
-	# <message> on the tracked settings changed by <filter> ($r is <rule>).
+	# <message> on settings holding the card's list, changed by <filter>
+	# ($r is <rule>).
+	pinned > "${tmp:?}/pinned" && jq -R . "${tmp:?}/pinned" > "${tmp:?}/rules.json" &&
+		jq -s '{permissions: {allow: .}}' "${tmp:?}/rules.json" > "${tmp:?}/base.json" 2> /dev/null &&
+		check_rules "${tmp:?}/base.json" || { say "selftest: the card's list alone was rejected"; exit 1; }
 	reject()
 	{
-		jq --arg r "${4:-}" "$3" .claude/settings.json > "${tmp:?}/s.json" 2> /dev/null ||
+		jq --arg r "${4:-}" "$3" "${tmp:?}/base.json" > "${tmp:?}/s.json" 2> /dev/null ||
 			{ say "selftest: cannot build the fixture for $1"; exit 1; }
 		expect "$1" "$2" check_rules "${tmp:?}/s.json"
 	}
 	add='.permissions.allow += [$r]'
 	wild="a store rule with a wildcard"
 	reject "a cp rule" "is a cp rule" "$add" "Bash(cp -p a b)"
+	reject "a cp rule by path" "is a cp rule" "$add" "Bash(/bin/cp:*)"
+	reject "a cp* rule" "admits probe" "$add" "Bash(cp*)"
 	reject "a git -C <store> * rule" "$wild" "$add" "Bash($pre *)"
 	reject "a git -C <store>:* rule" "$wild" "$add" "Bash($pre:*)"
 	reject "a widened rule" "$wild" '.permissions.allow |= map(if endswith("pull --rebase -q)") then .[:-1] + " *)" else . end)'
@@ -258,7 +272,7 @@ selftest_checks()
 	expect "a parse error" "cannot read permissions.allow" check_rules "${tmp:?}/s.json"
 	mkdir -p "${tmp:?}/shim" || exit 1
 	printf '#!/bin/sh\nexit 127\n' > "${tmp:?}/shim/jq" && chmod 755 "${tmp:?}/shim/jq" || exit 1
-	shimmed() { PATH=$tmp/shim:$PATH; check_rules .claude/settings.json; }
+	shimmed() { PATH=$tmp/shim:$PATH; check_rules "${tmp:?}/base.json"; }
 	expect "a failing jq" "cannot read permissions.allow" shimmed
 	# docmut <what> <message> <sed script> <both|hook>: part 1 fails with
 	# <message> on copies of the documents, <sed script> applied to the hook
@@ -298,7 +312,7 @@ run()
 		{ say "selftest: a store command is not git -C <store> <command>"; return 1; }
 	shift 3
 	case "$1" in
-	status | add | commit | pull | push | rm) ;;
+	status | add | commit | pull | push | rm | rebase) ;;
 	-c) [ "$*" = "-c core.editor=true rebase --continue" ] || { say "selftest: a store command takes a -c the runner refuses"; return 1; } ;;
 	*) say "selftest: a store command runs a git command the runner refuses"; return 1 ;;
 	esac
@@ -339,7 +353,7 @@ selftest_sync()
 	seg == 0 { print > (d "/seg-sync"); if (s == "push") seg = 1; next }
 	seg == 1 { print > (d "/seg-conflict"); if (s == "push") seg = 2; next }
 	{ extra = 1 }
-	END { exit extra }' "${tmp:?}/doc" || { say "selftest: a store command follows the conflict steps"; exit 1; }
+	END { exit extra }' "${tmp:?}/cmds" || { say "selftest: a store command follows the conflict steps"; exit 1; }
 	[ -s "${tmp:?}/seg-sync" ] && [ -s "${tmp:?}/seg-conflict" ] && read -r rmc < "${tmp:?}/seg-rm" ||
 		{ say "selftest: the memory rule lacks the sync steps, the conflict steps or the rm command"; exit 1; }
 	# A bare origin and two clones (two machines), each memory directory a
@@ -414,8 +428,11 @@ selftest_sync()
 	done
 }
 
-( selftest_checks ) || exit 1
+# The real checks first, so a fault in the tracked files is reported as
+# such; the self-tests then show the checks and the sequence work.
 check_docs CLAUDE.md .claude/hooks/session-context.sh .claude/settings.json || exit 1
+cp "${tmp:?}/doc" "${tmp:?}/cmds" || exit 1
 check_rules .claude/settings.json || exit 1
 ( selftest_sync ) || exit 1
+( selftest_checks ) || exit 1
 echo "$me: ok"
