@@ -253,9 +253,9 @@ they load a texture pack.
 The palette indices are scaled with scale2x (EPX), once per doubling,
 and converted with the game's palette as the renderers convert an 8-bit
 texture: index 255 stays transparent, skins are flood-filled first.
-World textures are treated as repeating tiles, so their seams stay
-seamless; skins and skies keep their own edges. Nothing is drawn in
-new colours: the result is sharper pixel art, not new detail.
+World textures are scaled as repeating tiles, so they still tile
+without a visible seam; skins and skies keep their own edges. No new
+colour is made: the result is sharper pixel art, not new detail.
 
 * A file that exists is left alone; `upscale_textures 2 force` writes
   every file again. One line reports the files written, skipped,
