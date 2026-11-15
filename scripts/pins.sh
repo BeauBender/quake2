@@ -305,7 +305,10 @@ demo_sum() {
 }
 # run_id <scenario> <run>
 run_id() {
-    local id; id="$(engine_sha)-$(scenario_hash "$1")"
+    # scenario_hash dies on a bad PINS_HIDPI; "|| exit 1" passes that on
+    # to run_id's own caller, which is a $(...) too
+    local id sh; sh=$(scenario_hash "$1") || exit 1
+    id="$(engine_sha)-$sh"
     if [ "$2" -gt 1 ]; then id="$id-r$2"; fi
     echo "$id"
 }
@@ -448,7 +451,8 @@ cmd_record() {
     [ -f "$scen_dir/$scenario.cfg" ] || die "no scenario $scenario (see $scen_dir)"
     [ -z "${PINS_BIN:-}" ] || [ -f "$PINS_BIN" ] || die "no engine binary at $PINS_BIN (build the client, or set PINS_BIN)"
     check_store "$scenario" "$renderer"
-    local out; out=$(printf '%s' "$(store)/$scenario/$renderer/$(run_id "$scenario" "$run")" | tr -s /)
+    local rid; rid=$(run_id "$scenario" "$run") || exit 1
+    local out; out=$(printf '%s' "$(store)/$scenario/$renderer/$rid" | tr -s /)
     check_arg "the pin store path" "$out" path
     if [ -n "${PINS_BASEDIR:-}" ]; then check_arg PINS_BASEDIR "$PINS_BASEDIR" path; fi
     build_args "$renderer" "$scenario" "$out"
@@ -499,7 +503,7 @@ cmd_compare() {
     check_store "$scenario" "$renderer" "$ref"
     local s; s=$(store)
     local cand ref_dir
-    [ -n "$cand_id" ] || cand_id=$(run_id "$scenario" "$run")
+    [ -n "$cand_id" ] || cand_id=$(run_id "$scenario" "$run") || exit 1
     cand="$s/$scenario/$renderer/$cand_id"
     [ -d "$cand" ] || die "no candidate frames at $cand (run: pins.sh record $renderer $scenario, with this engine and these PINS_* settings)"
     [ -f "$cand/complete" ] || die "the candidate $cand is incomplete (no 'complete' marker; record it again)"
@@ -2402,6 +2406,7 @@ st_hidpi() { # TASK118: vid_highdpiaware 0 unless PINS_HIDPI=1, which alone chan
         # hidpi fails closed by itself, for a caller that skips check_hidpi
         if (PINS_HIDPI="$v" hidpi) >/dev/null 2>&1; then st_fail "hidpi must die on PINS_HIDPI='$v'"; return 1; fi
         if (PINS_HIDPI="$v" scenario_hash world) >/dev/null 2>&1; then st_fail "scenario_hash must die on PINS_HIDPI='$v'"; return 1; fi
+        if (PINS_HIDPI="$v" run_id world 1) >/dev/null 2>&1; then st_fail "run_id must die on PINS_HIDPI='$v'"; return 1; fi
         if (PINS_HIDPI="$v" build_args gl1 world /x; echo "${engine_args[*]}") >/dev/null 2>&1; then
             st_fail "build_args must die on PINS_HIDPI='$v'"; return 1; fi
         if (PINS_HIDPI="$v" build_demo_args water; echo "${engine_args[*]}") >/dev/null 2>&1; then
