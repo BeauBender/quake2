@@ -4026,6 +4026,35 @@ the harness ones are `tests/check-pins.sh` (synthetic frames, fake engines),
 game data or a pin store ("Closing TASK27 on the build host" above). Pins on
 real data are run inside a card, never by CI.
 
+### Judging an effect's footprint (TASK133)
+
+A pin says a frame is the same; it does not say how much an effect moved it,
+or whether it moved it where it should. For a card that adds an effect
+(shadows, ambient occlusion, reflections, the denoiser, the scalers):
+
+1. Record the scenario with the effect off and on: the cvar that switches
+   it, or two replays of one trace (`replay`), which keep the camera and the
+   entities identical. Do it for the scenario and for its companion, the
+   same scene with entities on (`scripts/pins/scenarios/README.md`, "Content"):
+   an effect judged only with `cl_entities 0` is judged on a picture a player
+   does not see.
+2. `scripts/pins.sh footprint <scenario> --off <record> --on <record>` prints the
+   share of pixels changed per frame (darker and brighter apart), the largest
+   change and the mean change. Set the band in the cfg header
+   (`// footprint darker 0..0.05`), a small multiple of the worst frame without
+   entities, on the scenario and on its companion; the command then names every
+   frame outside it and fails.
+3. `scripts/pins.sh where <scenario> --off ... --on ... --out <dir outside the
+   repository>` writes, for the frames that changed most, a highlight (the off
+   frame grey, darker red, brighter green) and a zoom of the busiest window
+   (off and on side by side) as TGA. Only the owner opens them (Preview).
+4. A card reports the table (not the images) and names the band it set.
+
+TASK55's records, on the round-1 build (`darker 0..0.05`): without entities 23
+frames of `demo1` and 89 of `demo2`, none outside the band, the worst frame
+0.66 % and 1.44 % of the picture darker; with entities 4 of 23 and 8 of 89
+frames outside it, the worst 52.6 % and 46.9 % darker.
+
 ## Design documents
 
 | Document | Feeds |

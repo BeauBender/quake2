@@ -355,6 +355,48 @@ scripts/pins.sh compare soft world --run 2 --ref soft
 reference only when `--ref-id` names it; without it `compare` takes the
 newest live record.
 
+## Footprint of an effect
+
+```sh
+scripts/pins.sh footprint <scenario> --off <dir|id> --on <dir|id> [--renderer r] [--mask-dir d] [--delta n] [--band 'metric lo..hi']... [--out dir]
+scripts/pins.sh where <scenario> --off <dir|id> --on <dir|id> --out <dir> [--renderer r] [--mask-dir d] [--top N] [--delta n]
+scripts/pins.sh check-content
+```
+
+`footprint` measures what an effect changes. `--off` and `--on` are two
+records of one scenario, the effect off and on (a directory path, or an id under
+`<store>/<scenario>/<renderer>/`, `--renderer` default `metal`); their frames
+are matched by name. For each frame it prints the share of pixels whose change
+(the mean over the three channels of on minus off) is more than `--delta` levels
+(default 8): `changed`, split into `darker` and `brighter`, then `max`, the
+largest change in levels, and `mean`, the mean change in levels over all counted
+pixels. `--mask-dir` counts only the pixels the same-named frame there marks (any
+channel above 0). A summary follows, and `--out` also writes it to
+`footprint-<scenario>.txt`. The per-frame numbers come from
+`framediff --footprint` (`scripts/pins/framediff.c`, whose header documents its
+options), which does not change what a plain `framediff A B` prints.
+
+A band bounds a metric: `changed`, `darker` and `brighter` as shares from 0
+to 1, `max` and `mean` in levels. A scenario declares its band in its cfg
+header, `// footprint darker 0..0.05` (inclusive, any number of lines), and
+`--band 'darker 0..0.05'` replaces it for one run. The command names every frame
+outside the band and exits non-zero; with no band it reports and never fails.
+How to set one: `scripts/pins/scenarios/README.md`, "Footprint band".
+
+`where` writes, for the `--top` frames (default 8) that changed most, a
+highlight, `<frame>-highlight.tga` (the off frame in grey, darker pixels red,
+brighter pixels green, the more saturated the larger the change: 32 levels is
+full colour), and a zoom, `<frame>-zoom.tga` (the 160x120 window, a quarter of
+a 640x480 frame each way, with the most change, the off frame on the left and
+the on frame on the right, each 3 times larger). The images are TGA, which
+Preview opens. `--out` must lie outside this repository and any git work tree:
+frames are game data and never enter the repository.
+
+`check-content` (the selftest case `content_tags` runs it, so the gate does)
+checks the "Content" table of `scripts/pins/scenarios/README.md`: every scenario
+has a row, its tags follow the cvars it sets, and a scenario that sets
+`cl_entities 0` names a companion that sets it to 1.
+
 ## Replaying a trace
 
 ```sh
@@ -500,6 +542,8 @@ portable start without the pin arguments does.
 * `scripts/pins.sh list`: how many frames each record in the store holds,
   and the trace coverage (records with a trace, and replays, per
   scenario and renderer).
+* `scripts/pins.sh footprint`, `where` and `check-content`: "Footprint of an
+  effect" above.
 * `scripts/pins.sh selftest [case...]`: tests the driver and the comparator with
   generated frames and a stand-in engine. It needs no game data and runs
   as part of `scripts/test.sh`.
