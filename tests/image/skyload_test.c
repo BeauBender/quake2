@@ -37,7 +37,7 @@ struct ent { const char *name; unsigned char *data; };
 static struct ent fs[8];
 static int nfs;
 static int loads, decodes, printed, orig_w, orig_h, lcalls;
-static int lw, lrw, lh, lrh;
+static int lw, lrw, lh, lrh, lnull, frees;
 
 static void
 add(const char *name, int good, int w, int h)
@@ -66,7 +66,7 @@ reset(void)
 
 	nfs = 0;
 	loads = decodes = printed = orig_w = orig_h = lcalls = 0;
-	lw = lrw = lh = lrh = 0;
+	lw = lrw = lh = lrh = lnull = frees = 0;
 }
 
 static int
@@ -89,7 +89,7 @@ t_load(const char *name, void **buf)
 	return -1;
 }
 
-static void t_free(void *buf) { free(buf); }
+static void t_free(void *buf) { frees++; free(buf); }
 
 imgdec_result_t
 IMGDEC_Decode(const void *data, size_t size, const char *ext, byte **pic, int *w, int *h)
@@ -154,8 +154,13 @@ struct image_s *LoadM32(const char *n, imagetype_t t, loadimage_t l) { (void)n; 
 static struct image_s *
 t_li(const char *n, byte *p, int w, int rw, int h, int rh, size_t ds, imagetype_t t, int b)
 {
-	(void)n; (void)p; (void)ds; (void)t; (void)b;
+	(void)n; (void)ds; (void)t; (void)b;
 	lcalls++;
+	if (p == NULL)
+	{
+		lnull++;
+	}
+
 	lw = w; lrw = rw; lh = h; lrh = rh;
 	return (struct image_s *)&lcalls;
 }
@@ -178,7 +183,8 @@ static int checks, failed;
 static void
 expect(int line, struct image_s *img, int yes, int w, int rw)
 {
-	int ok = (img != NULL) == yes && (!yes || (lw == w && lh == w && lrw == rw && lrh == rw));
+	/* every file read is freed, and load_image always gets pixels */
+	int ok = frees == loads && lnull == 0 && (img != NULL) == yes && (!yes || (lw == w && lh == w && lrw == rw && lrh == rw));
 
 	checks++;
 
@@ -271,6 +277,18 @@ main(void)
 	/* a PCX lookup whose size cannot be read: the .tga's header decides */
 	reset(); TGA(1, 256); PNG(1, 512);
 	EXPECT(t_find("env/s_up.pcx", it_sky), 1, 512, 256);
+
+	/* a non-square stock face: each side is its own, from the header's own bytes */
+	reset(); add("env/s_up.tga", 1, 300, 200); add("env/s_up.png", 1, 600, 400);
+	t_find("env/s_up.tga", it_sky);
+	COUNT("loaded width", lw, 600);
+	COUNT("loaded height", lh, 400);
+	COUNT("asset width", lrw, 300);
+	COUNT("asset height", lrh, 200);
+
+	/* a PCX lookup with a PNG smaller than the original and a .tga that is not: the .tga */
+	reset(); orig_w = orig_h = 256; TGA(1, 256); PNG(1, 128);
+	EXPECT(t_find("env/s_up.pcx", it_sky), 1, 256, 256);
 
 	/* a wall texture is unchanged: the .tga, though a larger PNG exists */
 	reset(); add("textures/w.png", 1, 512, 512); add("textures/w.tga", 1, 64, 64);
