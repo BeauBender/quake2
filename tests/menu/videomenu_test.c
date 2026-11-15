@@ -328,6 +328,15 @@ Open(const char *renderer, const char *modes)
 		exit(1);
 	}
 	sub_menu = menu;
+
+	/* the page has its own apply, the same action as the video menu's */
+	{
+		const menucommon_s *a = sub_menu->items[sub_menu->nitems - 1];
+		const menucommon_s *b = main_menu->items[main_menu->nitems - 1];
+
+		CHECK(a->name && b->name && !strcmp(a->name, "apply") && !strcmp(b->name, "apply") &&
+			a->callback == b->callback, "the pages' apply items differ");
+	}
 }
 
 /* Steps the renderer item to the one whose box text contains want. */
