@@ -2935,11 +2935,11 @@ built in scratch, recorded by its own `scripts/pins.sh` into a scratch store, th
 - Every log holds the validation banner and no other validation line, no failed command buffer,
   `teardown: 0 live objects` and `rt 0/0`: nothing ray-traced is built or allocated.
 - With `r_rt_stats 1` and `r_rt_shadows 0` (the same trace replayed by both builds; measured on
-  `4deded44`) the head allocates what the base does: the same ledger (`rt 66/66`), the same structure lines, no
-  shadow line, the frames identical. `rmb_rt_frame` takes no ring entry and keeps no scene
-  without the shadows, and the map's shadow tables and transmission buffer are built when the
-  shadows are first on. Without the shadows every instance keeps TASK53's mask (`0xff`) and no
-  carrier is looked for.
+  `4deded44`) the head allocates what the base does: the same ledger (`rt 66/66`), the same
+  structure lines, no shadow line, the frames identical. `rmb_rt_frame` takes no ring entry and
+  keeps no scene without the shadows, and the map's shadow tables and transmission buffer are
+  built when the shadows are first on. Without the shadows every instance keeps TASK53's mask
+  (`0xff`) and no carrier is looked for.
 
 Since the frames are the base's byte for byte, their scores against TASK83's `gl1` references
 are the base's, those TASK54 recorded at TASK28's values. They were not compared again.
@@ -3107,7 +3107,8 @@ and 22.7 % trace. Without entities the round before measured 2.546 and 8.681 ms.
   base2` and firing again.
 - Result: status 0, no sanitizer line, no validation line past the banner, the pass's targets
   made in each renderer session (2560 x 1920), an instance structure in 446, 441 and 445 frames
-  (the `r_rt_stats` summaries of the three maps' sessions), both teardowns `0 live objects` (`rt 93/93`, `rt 186/186`).
+  (the `r_rt_stats` summaries of the three maps' sessions), both teardowns `0 live objects`
+  (`rt 93/93`, `rt 186/186`).
 
 **Host test and mutants.** `tests/metal/rm_rtshadow_test.c` (2,767 checks), run by
 `tests/check-ref-metal.sh`. It holds the falloff to `rm_lm_dlight`:
@@ -3138,9 +3139,9 @@ Failing first:
 - rework 1, each fix reverted in a copy: the pixel kept in the world's space fails the probe;
   an unlit surface lit fails 2 checks, the table without the unlit bit 1;
 - the four `demo2.dm2` frames failed the replayed check before the exact plane and pass after;
-- rework 2, a light's own model: against stubs of `rm_rts_alias_box`, `rm_rts_carried`, `mtl_rts_light_bit`
-  and `mtl_rts_passes`, 18 of 2,755 checks; `demo1.dm2` frame 8 and `demo2.dm2` frame 23 shadowed
-  everywhere before the rule and lit after (Proof 2).
+- rework 2, a light's own model: against stubs of `rm_rts_alias_box`, `rm_rts_carried`,
+  `mtl_rts_light_bit` and `mtl_rts_passes`, 18 of 2,755 checks; `demo1.dm2` frame 8 and
+  `demo2.dm2` frame 23 shadowed everywhere before the rule and lit after (Proof 2).
 
 Mutants:
 
