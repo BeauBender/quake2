@@ -19,11 +19,17 @@
 #    names it, and with stop_hook_active true names it and exits 0; names
 #    a missing listed check and blocks; stops a check that hangs and
 #    ignores TERM at the deadline, with every process in its group, names
-#    it and the checks it kept from running, and blocks; exits 0 on its own
-#    error (here a date command that prints nothing);
+#    it and the checks it kept from running, and blocks; on TERM, kills the
+#    running check's group and exits 0; with no job control (a copy with
+#    set -m taken out) runs no check, says so and blocks once; falls back
+#    to /tmp when $TMPDIR is missing, and with no temporary directory at
+#    all (a mktemp that fails) runs no check, says so and blocks once;
+#    exits 0 on its own error (here a date command that prints nothing);
 #  - the real hook, run on a copy of HEAD with the working tree's hook and
 #    listed checks put in and a new file under src/, does not exit 0
-#    silently, or takes more than half the timeout.
+#    silently, or takes more than half the timeout; or, with an
+#    undocumented cvar added under src/, does not block naming
+#    tests/check-cvar-docs.sh.
 #
 # Usage: tests/check-stop-invariants.sh
 set -eu
@@ -135,11 +141,15 @@ selftest()
 	printf '#!/bin/sh\necho "$0: ok"\n' > "$r/tests/check-pass.sh"
 	printf '#!/bin/sh\necho "$0: ok"\n' > "$r/tests/check-pass2.sh"
 	printf '#!/bin/sh\necho "stub: the thing is broken"\nexit 1\n' > "$r/tests/check-fail.sh"
+	# The stubs find $tmp in the environment, so no text of $TMPDIR's is
+	# ever read as shell code.
+	STOPCK_TMP=$tmp
+	export STOPCK_TMP
 	# Ignores TERM, as does the sleep it starts, so only KILL stops them.
-	printf '#!/bin/sh\ntrap "" TERM\necho $$ > "%s/hang.pids"\nsleep 20 &\necho $! >> "%s/hang.pids"\nwait\n' \
-		"${tmp:?}" "${tmp:?}" > "$r/tests/check-hang.sh"
+	printf '%s\n' '#!/bin/sh' 'trap "" TERM' 'echo $$ > "$STOPCK_TMP/hang.pids"' 'sleep 20 &' \
+		'echo $! >> "$STOPCK_TMP/hang.pids"' 'wait' > "$r/tests/check-hang.sh"
 	# Passes, and leaves a process behind that would hold the hook's output.
-	printf '#!/bin/sh\nsleep 15 &\necho $! > "%s/leave.pid"\necho "$0: ok"\n' "${tmp:?}" > "$r/tests/check-leave.sh"
+	printf '%s\n' '#!/bin/sh' 'sleep 15 &' 'echo $! > "$STOPCK_TMP/leave.pid"' 'echo "$0: ok"' > "$r/tests/check-leave.sh"
 	chmod 755 "$r"/tests/check-*.sh
 	printf '%s\n' 'int x;' > "$r/src/a.c"
 	g init -q --template= "$r"
@@ -221,6 +231,65 @@ selftest()
 		done
 	done < "${tmp:?}/hang.pids"
 
+	# TERM to the hook, as at a timeout: it kills the running check's group
+	# on the way out. A 20 s deadline keeps the watcher from doing it first.
+	hookwith tests/check-hang.sh
+	sed 's/^deadline=2$/deadline=20/' "$r/$hook" > "${tmp:?}/h" && cat "${tmp:?}/h" > "$r/$hook"
+	grep -qx 'deadline=20' "$r/$hook" || fail "selftest: TERM to the hook: cannot set the deadline in the copy of $hook"
+	rm -f "${tmp:?}/hang.pids"
+	printf '%s\n' "$no" > "${tmp:?}/no.json"
+	(cd "$r" && exec "$hook" < "${tmp:?}/no.json" > /dev/null 2>&1) &
+	hp=$!
+	n=0
+	until [ -s "${tmp:?}/hang.pids" ] && [ $(($(wc -l < "${tmp:?}/hang.pids"))) -ge 2 ]; do
+		n=$((n + 1))
+		[ "$n" -le 10 ] || { kill -KILL "$hp"; fail "selftest: TERM to the hook: the stub did not start"; }
+		sleep 1
+	done
+	kill -TERM "$hp"
+	rc=0
+	wait "$hp" || rc=$?
+	sleep 1
+	stray=
+	while read -r p; do
+		! kill -0 "$p" 2> /dev/null || stray="$stray $p"
+	done < "${tmp:?}/hang.pids"
+	[ -z "$stray" ] || kill -KILL $stray 2> /dev/null || true
+	[ "$rc" -eq 0 ] || fail "selftest: TERM to the hook: the hook exited $rc, not 0"
+	[ -z "$stray" ] || fail "selftest: TERM to the hook: process$stray of the check's group still ran 1 s later"
+
+	# No job control: a copy of the hook with set -m taken out.
+	hookwith tests/check-fail.sh
+	sed 's/^(set -m) && set -m$/:/' "$r/$hook" > "${tmp:?}/h" && cat "${tmp:?}/h" > "$r/$hook"
+	grep -qx ':' "$r/$hook" && ! grep -q 'set -m$' "$r/$hook" ||
+		fail "selftest: cannot take set -m out of the copy of $hook"
+	run st "$no"
+	exits "no job control" 2
+	says "no job control" "NOT RUN: any listed check, this shell has no job control"
+	case $out in
+	*FAILED*) fail "selftest: no job control: the hook ran a check: $out" ;;
+	esac
+	run st "$yes"
+	exits "no job control, stop_hook_active" 0
+	says "no job control, stop_hook_active" "not blocking again"
+	says "no job control, stop_hook_active" "this shell has no job control"
+
+	# $TMPDIR is missing: the hook falls back to /tmp and runs the checks.
+	hookwith tests/check-fail.sh
+	run st "$no" TMPDIR="${tmp:?}/missing"
+	exits "a missing TMPDIR" 2
+	says "a missing TMPDIR" "FAILED: tests/check-fail.sh"
+	# No temporary directory anywhere (a mktemp that fails): no check runs.
+	mkdir -p "${tmp:?}/nomktemp"
+	printf '#!/bin/sh\nexit 1\n' > "${tmp:?}/nomktemp/mktemp"
+	chmod 755 "${tmp:?}/nomktemp/mktemp"
+	run st "$no" PATH="${tmp:?}/nomktemp:$PATH"
+	exits "no temporary directory" 2
+	says "no temporary directory" "NOT RUN: any listed check, no temporary directory could be made"
+	run st "$yes" PATH="${tmp:?}/nomktemp:$PATH"
+	exits "no temporary directory, stop_hook_active" 0
+	says "no temporary directory, stop_hook_active" "not blocking again"
+
 	mkdir -p "${tmp:?}/nodate"
 	printf '#!/bin/sh\nexit 1\n' > "${tmp:?}/nodate/date"
 	chmod 755 "${tmp:?}/nodate/date"
@@ -234,7 +303,8 @@ selftest()
 # HEAD with a new file under src/.
 r=${tmp:?}/real
 mkdir -p "$r"
-git archive HEAD | tar -x -C "$r" || fail "cannot copy HEAD"
+git archive -o "${tmp:?}/head.tar" HEAD || fail "cannot archive HEAD"
+tar -x -f "${tmp:?}/head.tar" -C "$r" || fail "cannot unpack the archive of HEAD"
 mkdir -p "$r/.claude/hooks"
 cp -p "$hook" "$r/$hook"
 while IFS= read -r c; do
@@ -249,4 +319,12 @@ run real '{"session_id":"x","stop_hook_active":false}'
 	fail "the hook exited $rc on a copy of HEAD with a change under src/; it printed: $out"
 [ $((2 * secs)) -le "$timeout" ] ||
 	fail "the hook took $secs s on a copy of HEAD with a change under src/, more than half of its $timeout s timeout"
-echo "$me: ok (the hook took $secs s of $timeout s)"
+took=$secs
+# The listed checks really run: an undocumented cvar blocks the stop.
+printf '%s\n' 'static void probe(void) { Cvar_Get("fix60_probe_cvar", "0", 0); }' > "$r/src/stop-invariants-probe.c"
+run real '{"session_id":"x","stop_hook_active":false}'
+case $rc:$out in
+2:*"FAILED: tests/check-cvar-docs.sh"*) ;;
+*) fail "with an undocumented cvar under src/, the hook exited $rc, not 2 naming tests/check-cvar-docs.sh; it printed: $out" ;;
+esac
+echo "$me: ok (the hook took $took s of $timeout s)"
