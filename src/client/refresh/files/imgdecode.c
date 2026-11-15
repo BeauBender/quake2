@@ -47,6 +47,10 @@
  * refused with IMGDEC_ERR_UNSUPPORTED. Host-tested by
  * tests/image/imgdecode_test.c (tests/check-image-decoder.sh).
  *
+ * Beside the decoder, IMGDEC_EncodePNG writes straight-alpha RGBA8 as a
+ * PNG through ImageIO's CGImageDestination, for upscale_textures
+ * (src/client/cl_upscale_cmd.c); the decoder does not use it.
+ *
  * =======================================================================
  */
 
@@ -714,7 +718,136 @@ done:
 	return r;
 }
 
+static imgdec_result_t
+IMGDEC_EncodeImageIO(const unsigned char *rgba, size_t w, size_t h,
+	size_t bytes, unsigned char **png, size_t *pnglen)
+{
+	CFDataRef pixels = NULL;
+	CGDataProviderRef provider = NULL;
+	CGColorSpaceRef space = NULL;
+	CGImageRef image = NULL;
+	CFMutableDataRef file = NULL;
+	CGImageDestinationRef dest = NULL;
+	unsigned char *out = NULL;
+	imgdec_result_t r = IMGDEC_ERR_MEMORY;
+	CFIndex len;
+
+	/* a copy: the image ImageIO is handed owns its bytes */
+	pixels = CFDataCreate(kCFAllocatorDefault, rgba, (CFIndex)bytes);
+	provider = pixels ? CGDataProviderCreateWithCFData(pixels) : NULL;
+	space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+	if (!provider || !space)
+	{
+		goto done;
+	}
+
+	/* R, G, B, then straight alpha, a byte each in memory order */
+	image = CGImageCreate(w, h, 8, 32, w * 4, space,
+		kCGBitmapByteOrderDefault | (CGBitmapInfo)kCGImageAlphaLast,
+		provider, NULL, false, kCGRenderingIntentDefault);
+	if (!image)
+	{
+		r = IMGDEC_ERR_LAYOUT;
+		goto done;
+	}
+
+	file = CFDataCreateMutable(kCFAllocatorDefault, 0);
+	dest = file ? CGImageDestinationCreateWithData(file, CFSTR("public.png"), 1, NULL) : NULL;
+	if (!dest)
+	{
+		goto done;
+	}
+
+	/* no options: no colour matching, no premultiplication */
+	CGImageDestinationAddImage(dest, image, NULL);
+	if (!CGImageDestinationFinalize(dest))
+	{
+		r = IMGDEC_ERR_ENCODE;
+		goto done;
+	}
+
+	len = CFDataGetLength(file);
+	if (len < 1 || !IMGDEC_FileSizeOk((size_t)len, IMGDEC_MAX_FILE))
+	{
+		r = IMGDEC_ERR_ENCODE;
+		goto done;
+	}
+
+	out = malloc((size_t)len);
+	if (!out)
+	{
+		goto done;
+	}
+
+	memcpy(out, CFDataGetBytePtr(file), (size_t)len);
+	*png = out;
+	*pnglen = (size_t)len;
+	r = IMGDEC_OK;
+
+done:
+	if (dest)
+	{
+		CFRelease(dest);
+	}
+
+	if (file)
+	{
+		CFRelease(file);
+	}
+
+	if (image)
+	{
+		CGImageRelease(image);
+	}
+
+	if (space)
+	{
+		CGColorSpaceRelease(space);
+	}
+
+	if (provider)
+	{
+		CGDataProviderRelease(provider);
+	}
+
+	if (pixels)
+	{
+		CFRelease(pixels);
+	}
+
+	return r;
+}
+
 #endif /* __APPLE__ */
+
+imgdec_result_t
+IMGDEC_EncodePNG(const unsigned char *rgba, size_t width, size_t height,
+	unsigned char **png, size_t *pnglen)
+{
+	size_t bytes = 0;
+
+	if (png)
+	{
+		*png = NULL;
+	}
+
+	if (!rgba || !png || !pnglen)
+	{
+		return IMGDEC_ERR_ENCODE;
+	}
+
+	if (!IMGDEC_PixelBytes(width, height, IMGDEC_MAX_SIDE, &bytes) ||
+		!IMGDEC_AreaOk(width, height, IMGDEC_MAX_AREA))
+	{
+		return IMGDEC_ERR_SIZE;
+	}
+
+#ifdef __APPLE__
+	return IMGDEC_EncodeImageIO(rgba, width, height, bytes, png, pnglen);
+#else
+	return IMGDEC_ERR_UNSUPPORTED;
+#endif
+}
 
 imgdec_result_t
 IMGDEC_Decode(const void *data, size_t size, const char *ext,
@@ -769,6 +902,8 @@ IMGDEC_ResultString(imgdec_result_t result)
 			return "out of memory";
 		case IMGDEC_ERR_UNSUPPORTED:
 			return "no PNG, JPEG or TGA decoder on this platform";
+		case IMGDEC_ERR_ENCODE:
+			return "the PNG could not be encoded";
 	}
 
 	return "unknown result";
