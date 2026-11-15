@@ -230,13 +230,8 @@ CL_UpscaleStepMake(void *ctx, unsigned char **png, size_t *pnglen)
 	/* w and h are at most UPSCALE_MAX_SIDE, so the RGBA size fits */
 	if (big)
 	{
-		rgba = malloc((size_t)w * factor * h * factor * 4);
-	}
-
-	if (rgba)
-	{
-		CL_UpscaleToRGBA(big, (size_t)w * factor, (size_t)h * factor,
-			job->table, rgba);
+		rgba = CL_UpscaleToRGBA(big, (size_t)w * factor,
+			(size_t)h * factor, job->table);
 	}
 
 	free(big);
