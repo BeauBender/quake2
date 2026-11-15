@@ -359,3 +359,21 @@ rm_fx_stats_format(int mode, const rm_fx_size_t *s, unsigned resets, double gpu_
 			rm_fx_append(buf, len, &used, ", scaler not timed"));
 	return ok;
 }
+
+int
+rm_fx_support_format(unsigned has, char *buf, size_t len)
+{
+	size_t used = 0;
+
+	if (len == 0)
+	{
+		return 0;
+	}
+
+	buf[0] = '\0';
+	return rm_fx_append(buf, len, &used, "ref_metal: MetalFX supportsDevice: spatial %s, temporal %s, "
+			"temporal denoised %s, frame interpolator %s (r_metalfx_modes %u)",
+			(has & RM_FX_HAS(RM_FX_SPATIAL)) ? "yes" : "no", (has & RM_FX_HAS(RM_FX_TEMPORAL)) ? "yes" : "no",
+			(has & RM_FX_HAS(RM_FX_DENOISED)) ? "yes" : "no", (has & RM_FX_HAS_INTERP) ? "yes" : "no",
+			(has & RM_FX_HAS_ALL) | RM_FX_HAS(RM_FX_OFF));
+}

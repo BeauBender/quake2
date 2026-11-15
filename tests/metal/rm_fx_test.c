@@ -438,6 +438,21 @@ test_format(void)
 			"reset first mode size rect cut, scaler 2.000 ms") == 0);
 	CHECK(rm_fx_stats_format(2, &s, 0, 1, buf, 30) == 0 && buf[0] == '\0');
 	CHECK(rm_fx_stats_format(2, &s, 0, 1, buf, 0) == 0);
+
+	CHECK(rm_fx_support_format(VM_HAS, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: MetalFX supportsDevice: spatial yes, temporal no, temporal denoised no, "
+			"frame interpolator no (r_metalfx_modes 3)") == 0);
+	CHECK(rm_fx_support_format(RM_FX_HAS_ALL, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: MetalFX supportsDevice: spatial yes, temporal yes, temporal denoised yes, "
+			"frame interpolator yes (r_metalfx_modes 31)") == 0);
+	CHECK(rm_fx_support_format(0, buf, sizeof(buf)));
+	CHECK(strcmp(buf, "ref_metal: MetalFX supportsDevice: spatial no, temporal no, temporal denoised no, "
+			"frame interpolator no (r_metalfx_modes 1)") == 0);
+	CHECK(rm_fx_support_format(RM_FX_HAS(2) | RM_FX_HAS(3) | 0x100u, buf, sizeof(buf)));
+	CHECK(strstr(buf, "spatial no, temporal yes, temporal denoised yes, frame interpolator no (r_metalfx_modes 13)"));
+	CHECK(rm_fx_support_format(RM_FX_HAS_INTERP, buf, sizeof(buf)) && strstr(buf, "interpolator yes (r_metalfx_modes 17)"));
+	CHECK(rm_fx_support_format(0, buf, 10) == 0 && buf[0] == '\0');
+	CHECK(rm_fx_support_format(0, buf, 0) == 0);
 }
 
 int

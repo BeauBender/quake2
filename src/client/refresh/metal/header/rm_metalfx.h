@@ -188,6 +188,12 @@ int rm_fx_fallback_format(const char *what, int asked, int got, const char *why,
  */
 int rm_fx_stats_format(int mode, const rm_fx_size_t *s, unsigned resets, double gpu_ms, char *buf, size_t len);
 
+/*
+ * The line of what the device supports (without a newline): each
+ * descriptor's supportsDevice: and r_metalfx_modes's value. 1 when it fits.
+ */
+int rm_fx_support_format(unsigned has, char *buf, size_t len);
+
 /* ---- the back end (rmb_metalfx.m) --------------------------------------------- */
 
 /* RM_FX_HAS bits of the device: each descriptor's supportsDevice:, 0 where MetalFX is missing */
@@ -203,6 +209,9 @@ float rmb_fx_max_ratio(int mode);
  * without one.
  */
 int rmb_fx_prepare(int mode, const rm_fx_size_t *s, float jx, float jy, int reset);
+
+/* a scaler is prepared for the view being drawn (its view goes to the render-size colour target) */
+int rmb_fx_ready(void);
 
 /* metal_stats is on: the scaler pass runs in a command buffer of its own, whose GPU time it keeps */
 void rmb_fx_set_timing(int on);
