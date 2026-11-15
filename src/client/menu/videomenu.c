@@ -324,14 +324,7 @@ ApplyFilter(void* unused)
 static int
 MetalModeMask(void)
 {
-	const float v = Cvar_VariableValue("r_metalfx_modes");
-
-	if (!(v >= 0.0f && v <= (float)VIDMFX_ALL))
-	{
-		return 0;
-	}
-
-	return (int)v;
+	return VidRules_ModeMask(Cvar_VariableValue("r_metalfx_modes"));
 }
 
 /* Greys an item with its reason, or enables it with its note. */
@@ -1014,7 +1007,7 @@ VID_MenuInit(void)
 		s_mfx_scaler_list.generic.y = (y += 20);
 		s_mfx_scaler_list.generic.callback = MetalScalerChanged;
 		s_mfx_scaler_list.itemnames = scaler_names;
-		s_mfx_scaler_list.curvalue = (v >= 1.0f) ? ((v >= 3.0f) ? 3 : (int)v) : 0;
+		s_mfx_scaler_list.curvalue = VidRules_ScalerIndex(v);
 		s_mfx_scaler_prev = s_mfx_scaler_list.curvalue;
 
 		s_mfx_scale_list.generic.type = MTYPE_SPINCONTROL;
@@ -1036,11 +1029,7 @@ VID_MenuInit(void)
 		s_denoiser_list.generic.x = 0;
 		s_denoiser_list.generic.y = (y += 10);
 		s_denoiser_list.itemnames = denoiser_names;
-		s_denoiser_list.curvalue = 0;
-		if (dn >= 1.0f)
-		{
-			s_denoiser_list.curvalue = (dn >= 2.0f) ? 2 : 1;
-		}
+		s_denoiser_list.curvalue = VidRules_DenoiserIndex(dn);
 
 		SetRule(&s_mfx_scaler_list.generic, VIDITEM_MFX_SCALER, s_mfx_scaler_list.curvalue);
 		SetRule(&s_mfx_scale_list.generic, VIDITEM_MFX_SCALE, s_mfx_scaler_list.curvalue);

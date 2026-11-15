@@ -795,6 +795,14 @@ bar, the menus and the console are drawn after it at the window's size.
 With every mode off (the default) nothing of MetalFX is made and the
 picture is the same as before these cvars existed.
 
+The video menu has an item for each of them (the scaler, its scale, frame
+generation and the denoiser). No item of the video menu is hidden: one
+that the selected renderer or the GPU does not have is greyed out, cannot be
+changed, and shows the reason in the status bar when the cursor is on it.
+The items write their cvars with `apply`, which restarts the renderer, and
+show what the renderer kept. A scaler mode that `r_metalfx_modes` lacks is
+marked `(n/a)` and skipped.
+
 * **r_metalfx**: The scaler. `0` (the default) is none. `1` is
   `MTLFXSpatialScaler`, which scales the colour of each frame on its own.
   `2` is `MTLFXTemporalScaler`, which also takes the depth, how far each

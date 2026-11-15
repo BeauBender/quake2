@@ -88,4 +88,12 @@ int VidRules_NumScales(void);
 float VidRules_ScaleValue(int index);
 int VidRules_ScaleIndex(float value);
 
+/* What the menu reads from cvars, as the index it shows. r_metalfx_modes as
+   a mask (a value that is not one, or not finite, is no mode); r_metalfx as
+   a scaler index 0 to 3 (a fraction is cut, above 3 is 3, below 1 or not a
+   number is 0); r_rt_denoiser as 0 to 2 in the same way. */
+int VidRules_ModeMask(float value);
+int VidRules_ScalerIndex(float value);
+int VidRules_DenoiserIndex(float value);
+
 #endif

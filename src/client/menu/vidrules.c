@@ -81,10 +81,6 @@ VidRules_ScalerStep(int modemask, int prev, int cur)
 	{
 		prev = 0;
 	}
-	if (cur < 0 || cur > 3)
-	{
-		return prev;
-	}
 	if (VidRules_ScalerModeAvailable(modemask, cur))
 	{
 		return cur;
@@ -166,11 +162,6 @@ VidRules_Item(viditem_t item, const char *renderer, int modemask, int scaler)
 	const vidref_t ref = VidRules_Renderer(renderer);
 	const vidref_t r = SettingsOf(ref);
 	vidrule_t ok = { 1, NULL };
-
-	if (modemask < 0 || modemask > VIDMFX_ALL)
-	{
-		modemask &= VIDMFX_ALL;
-	}
 
 	switch (item)
 	{
@@ -309,4 +300,37 @@ VidRules_ScaleIndex(float value)
 	}
 
 	return ARRSIZE(scale_values);
+}
+
+int
+VidRules_ModeMask(float value)
+{
+	if (!(value >= 0.0f && value <= (float)VIDMFX_ALL))
+	{
+		return 0;
+	}
+
+	return (int)value;
+}
+
+int
+VidRules_ScalerIndex(float value)
+{
+	if (!(value >= 1.0f))
+	{
+		return 0;
+	}
+
+	return (value >= 3.0f) ? 3 : (int)value;
+}
+
+int
+VidRules_DenoiserIndex(float value)
+{
+	if (!(value >= 1.0f))
+	{
+		return 0;
+	}
+
+	return (value >= 2.0f) ? 2 : 1;
 }

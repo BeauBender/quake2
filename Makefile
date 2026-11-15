@@ -1450,7 +1450,8 @@ endif
 # main.c; tests/unit/main.c supplies main(). Nine client objects
 # (cl_conback, cl_download, cl_entities, cl_network, cl_parse, cl_screen,
 # the upscaler's checks and pixel arithmetic cl_upscale, the sound
-# frontend sound.c and the window code's SDL-free part vid/glimp_hidpi.c)
+# frontend sound.c, the window code's SDL-free part vid/glimp_hidpi.c and
+# the video menu's rules menu/vidrules.c)
 # are linked against the stubs in tests/unit/stub_client.c
 # and stub_client_full.c, and two renderer objects, refresh/files/surf.c
 # and soft/sw_view.c, which need only shared.c; none of it includes SDL. Needs no SDL and no game

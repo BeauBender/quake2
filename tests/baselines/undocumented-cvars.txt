@@ -71,7 +71,6 @@ gl1_texturealphamode
 gl1_texturesolidmode
 gl3_libgl
 gl3_show_draw_stats
-gl4_colorlight
 gl_drawbuffer
 gl_farsee
 gl_finish
@@ -122,7 +121,6 @@ port
 protocol
 public
 qport
-r_bloom
 r_clear
 r_cull
 r_drawworld
@@ -196,6 +194,5 @@ timescale
 vid_displayindex
 vid_rate
 viewsize
-vk_dynamic
 windowed_mouse
 zombietime

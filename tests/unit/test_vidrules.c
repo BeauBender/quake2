@@ -112,7 +112,7 @@ TEST(vidrules_metal_scaler_follows_the_mask)
 	T_EQ_INT(on(VIDITEM_MFX_SCALER, "metal", 8, 0), 1);
 	T_EQ_INT(on(VIDITEM_MFX_SCALER, "metal", 16, 0), 0);
 	T_EQ_INT(on(VIDITEM_MFX_SCALER, "metal", 17, 0), 0);
-	/* a value outside the mask is cut to it */
+	/* bits above the mask are not modes */
 	T_EQ_INT(on(VIDITEM_MFX_SCALER, "metal", 32, 0), 0);
 	T_EQ_INT(on(VIDITEM_MFX_SCALER, "metal", 34, 0), 1);
 	T_EQ_INT(on(VIDITEM_MFX_SCALER, "metal", -1, 0), 1);
@@ -346,9 +346,54 @@ TEST(vidrules_scaler_step_skips_missing_modes)
 	/* a previous value the GPU lacks (set by hand) still moves to a real one */
 	T_EQ_INT(VidRules_ScalerStep(3, 2, 1), 1);
 	T_EQ_INT(VidRules_ScalerStep(3, 2, 3), 2);
+	/* no move at all from a mode the GPU lacks: down to the nearest it has */
+	T_EQ_INT(VidRules_ScalerStep(3, 2, 2), 1);
+	T_EQ_INT(VidRules_ScalerStep(1, 3, 3), 0);
 	/* out of range */
 	T_EQ_INT(VidRules_ScalerStep(15, 1, 4), 1);
 	T_EQ_INT(VidRules_ScalerStep(15, 1, -1), 1);
 	T_EQ_INT(VidRules_ScalerStep(15, 9, 2), 2);
 	T_EQ_INT(VidRules_ScalerStep(15, -3, 9), 0);
+	T_EQ_INT(VidRules_ScalerStep(3, 9, 2), 0);
+	T_EQ_INT(VidRules_ScalerStep(1, 9, 1), 0);
+	T_EQ_INT(VidRules_ScalerStep(1, -3, 1), 0);
+	T_EQ_INT(VidRules_ScalerStep(3, 1, 7), 1);
+	T_EQ_INT(VidRules_ScalerStep(3, 1, -7), 1);
+}
+
+TEST(vidrules_cvar_values_to_indexes)
+{
+	/* r_metalfx_modes: a mask, else no mode */
+	T_EQ_INT(VidRules_ModeMask(0.0f), 0);
+	T_EQ_INT(VidRules_ModeMask(1.0f), 1);
+	T_EQ_INT(VidRules_ModeMask(3.0f), 3);
+	T_EQ_INT(VidRules_ModeMask(31.0f), 31);
+	T_EQ_INT(VidRules_ModeMask(3.9f), 3);
+	T_EQ_INT(VidRules_ModeMask(32.0f), 0);
+	T_EQ_INT(VidRules_ModeMask(-1.0f), 0);
+	T_EQ_INT(VidRules_ModeMask(1e30f), 0);
+	T_EQ_INT(VidRules_ModeMask(0.0f / 0.0f), 0);
+
+	/* r_metalfx */
+	T_EQ_INT(VidRules_ScalerIndex(0.0f), 0);
+	T_EQ_INT(VidRules_ScalerIndex(0.9f), 0);
+	T_EQ_INT(VidRules_ScalerIndex(1.0f), 1);
+	T_EQ_INT(VidRules_ScalerIndex(1.9f), 1);
+	T_EQ_INT(VidRules_ScalerIndex(2.0f), 2);
+	T_EQ_INT(VidRules_ScalerIndex(2.9f), 2);
+	T_EQ_INT(VidRules_ScalerIndex(3.0f), 3);
+	T_EQ_INT(VidRules_ScalerIndex(7.0f), 3);
+	T_EQ_INT(VidRules_ScalerIndex(1e30f), 3);
+	T_EQ_INT(VidRules_ScalerIndex(-2.0f), 0);
+	T_EQ_INT(VidRules_ScalerIndex(0.0f / 0.0f), 0);
+
+	/* r_rt_denoiser */
+	T_EQ_INT(VidRules_DenoiserIndex(0.0f), 0);
+	T_EQ_INT(VidRules_DenoiserIndex(0.9f), 0);
+	T_EQ_INT(VidRules_DenoiserIndex(1.0f), 1);
+	T_EQ_INT(VidRules_DenoiserIndex(1.9f), 1);
+	T_EQ_INT(VidRules_DenoiserIndex(2.0f), 2);
+	T_EQ_INT(VidRules_DenoiserIndex(9.0f), 2);
+	T_EQ_INT(VidRules_DenoiserIndex(-1.0f), 0);
+	T_EQ_INT(VidRules_DenoiserIndex(0.0f / 0.0f), 0);
 }
