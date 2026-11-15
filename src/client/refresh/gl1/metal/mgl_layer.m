@@ -130,7 +130,6 @@ static unsigned ring_slot;
 static id<MTLCommandBuffer> upload_cmd;
 static id<MTLBlitCommandEncoder> upload_blit;
 
-
 static dispatch_time_t
 mgl_deadline(long ms)
 {

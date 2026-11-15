@@ -190,8 +190,6 @@ rmb_commit_partial(void)
 	[frame_cmd commit];
 }
 
-
-
 static int rmb_pass(const float *clear_rgba, int with_depth);
 
 /* the stencil the next 3D pass clears to (rmb_pass_3d): gl1's glClearStencil */
@@ -228,7 +226,6 @@ rmb_frame_begin(int w, int h, int dw, int dh, const float *clear_rgba)
 
 		return 0;
 	}
-
 
 	@autoreleasepool
 	{
@@ -669,7 +666,6 @@ rmb_frame_end(void)
 		}
 
 		rmb_present_commit();   /* after the frame it copies (FIX51) */
-
 	}
 
 	rmb_counts.frames++;
