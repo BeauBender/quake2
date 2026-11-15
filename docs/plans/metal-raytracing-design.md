@@ -857,7 +857,8 @@ configuration:
   That is option A's raster cost for still frames, a pessimistic bound
   because the temporal scaler is not measured there (its scope, item 4).
   E rasterizes at the output, so that loss does not apply to it; E's own
-  loss, in the effect terms, is not measured by TASK117.
+  loss, in the effect terms, is not measured by TASK117. Its frames,
+  metrics by region and upscaler GPU times are in section 9.
 - During development: TASK111 to TASK114 (#265 to #268) make the scalers,
   the interpolator and the denoisers selectable and build the owner's
   local comparison report.
@@ -1472,4 +1473,484 @@ native pixels. Findings for cards (no edit to any decision):
 
 ## 9. Image-quality cost of rendering below the native size and upscaling (TASK117)
 
-Work in progress.
+TASK117 (#272) measures what the stock raster loses when the frame is
+rendered below the display's native size and upscaled to it, on real
+frames of `ref_gl1` (accelerated OpenGL, the reference renderer) on the
+bare-metal host: the Apple M6 of sections 7 and 8, macOS 27.2.1 (26B131).
+Every log says `GL_VENDOR: Apple`, `GL_RENDERER: Apple M6` and
+`GL_VERSION: 2.1 Metal - 91.7`. Engine source: `main` at `9a38a4e9` (the
+build's checkout differed from it only in this document), release build,
+`make -j4 client game ref_gl1`. Nothing here is ray traced.
+
+**What this does not measure (the card's scope, item 4).** The frames are
+upscaled with `MTLFXSpatialScaler`. Option A (section 2) uses
+`MTLFXTemporalScaler`, which needs a jittered projection, depth and motion
+vectors from the engine; it is RT11's (TASK109, #263) to measure on real
+frames, and this probe does not run it. On a still scene the temporal
+scaler usually recovers more detail than the spatial one (the card's
+statement, not measured here), so every spatial-scaler number below is a
+pessimistic bound for still frames, not a measurement of option A.
+Bilinear and Lanczos are baselines. Option E rasterizes at the output, so
+this loss does not apply to it; E's own loss, in the effect terms, is not
+measured here.
+
+### Frames
+
+The display's pixel size is 5120 x 2880; its desktop size in points is
+2560 x 1440 (section 8, "Display"). Every capture is a fresh engine with
+`vid_fullscreen 1` at a mode the display lists, `r_mode -1` with
+`r_customwidth` and `r_customheight` at the request, the route TASK108
+(#259) found for the native size (its re-measurement of the runbook's
+TASK97 section, on TASK108's branch). Each of
+the 28 logs holds, once each, the three lines for its size, for example at
+the native size:
+
+```
+User requested 5120x2880@-1.000000, setting closest mode 5120x2880@60.000000
+Real display mode: 5120x2880@60.00
+Drawable size: 5120x2880
+```
+
+and the same lines with `3840x2160`, `2560x1440` or `1920x1080` in the
+logs of those sizes; no log holds `Couldn't switch`, `SetVideoMode failed`
+or `Reverting to windowed`. All 196 manifest lines name `gl1` and the
+run's requested size.
+
+The capture is the pin harness's (`scripts/pins.sh`): the engine
+arguments that `PINS_DRYRUN=1 scripts/pins.sh record gl1 <scenario>`
+prints, run by hand with `vid_fullscreen 1` in place of 0 and the size
+set, as TASK98 did
+(the runbook's TASK98 section). So each run plays `demo1.dm2` from
+`$PINS_BASEDIR` with the scenario's lines (each sets `timedemo 1`), with
+`pins_capture 100` (a frame every 100th rendered frame), `pins_seed 1` (a
+fixed PRNG seed at each map registration, so particles and explosions
+draw the same numbers in every run) and `pins_record trace.q2r`. Every run
+exited 0 with 7 frames and no `FAILED` line. A display-sleep assertion
+(`caffeinate -d -i`) was held during each run.
+
+Scenes: `world` (world geometry, lightmaps, sky and water, no entities),
+`models` (the world plus entities: alias models, sprites, beams, the view
+weapon) and `particles` (everything on: particles, dynamic lights and the
+screen blend over the world and entities), as their scenario files
+describe them.
+
+The frame index and the demo time of each frame come from each run's
+trace: for every `REC_CAPTURE` record, the refdef of the `REC_RENDERFRAME`
+before it (`time`, `vieworg`, `viewangles`), read by a short reader of the
+format in `src/client/vid/refrecord.c` (kept with the frames). For each
+scene, every run (9 of `world` and of `models`, 10 of `particles`, at
+every size and with the 2D layer on and off) gives the same 7 tuples of
+capture index, render number, demo time, view origin and view angles, so
+the frame numbers match across the sizes. The frames, from the native
+2D-on runs (entities, particles and dynamic lights are the refdef's
+counts):
+
+| Frame | Render number | Demo time (s) | View origin | View angles (pitch, yaw, roll) | Entities `world` / `models` / `particles` | Particles in the refdef (`particles`) | Dlights (`particles`) | Blend alpha |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 1 | 19.400 | 832.188, 2292.188, -209.812 | 0.000, -180.000, 0.000 | 0 / 24 / 24 | 0 | 0 | 0.000 |
+| 1 | 101 | 29.400 | 602.938, 2353.438, -209.188 | 2.637, -139.081, -1.500 | 0 / 41 / 41 | 60 | 0 | 0.000 |
+| 2 | 201 | 39.400 | -74.188, 2313.812, -144.438 | 6.938, 205.735, 0.250 | 0 / 45 / 45 | 40 | 0 | 0.000 |
+| 3 | 301 | 49.400 | 379.562, 1909.688, -145.312 | 4.046, -88.923, -1.250 | 0 / 29 / 29 | 400 | 1 | 0.000 |
+| 4 | 401 | 59.400 | 168.688, 1983.688, -129.062 | 5.370, 89.275, -1.000 | 0 / 20 / 20 | 17 | 0 | 0.247 |
+| 5 | 501 | 69.400 | 128.938, 1270.188, -144.688 | 6.797, 85.320, 1.000 | 0 / 32 / 32 | 430 | 1 | 0.000 |
+| 6 | 601 | 79.400 | 240.938, 982.688, 47.062 | 17.405, -6.422, -0.500 | 0 / 28 / 28 | 420 | 1 | 0.000 |
+
+The native 2D-off capture of each scene was taken twice: all 21 frames
+are byte-identical between the two runs (`cmp`).
+
+### The 2D layer
+
+A real renderer would draw the 2D layer at the native size after the
+upscale, so every frame was captured a second time with the 2D layer off,
+at every size, with three of the engine's own cvars, read in the source:
+`r_hudscale 0`, which `SCR_GetHUDScale` (`src/client/cl_screen.c`) turns
+into a scale of 0 ("HACK: allow scale 0 to hide the HUD"), the scale of
+the status bar and layouts (`SCR_ExecuteLayoutString`) and the inventory
+(`src/client/cl_inventory.c`); `scr_centertime 0`, the time a centre
+print stays up (`SCR_CheckDrawCenterString`); and `con_notifytime -1`, so
+`Con_DrawNotify` (`src/client/cl_console.c`) skips every notify line. The
+scenarios already set `crosshair 0`, `cl_showfps 0` and `scr_conspeed
+99999`. With the 2D layer on, `r_hudscale` is at its default of -1, so the
+HUD scale is `SCR_GetDefaultScale`: the smaller of width / 640 and height
+/ 240 as an integer, 3, 4, 6 and 8 at 1920 x 1080, 2560 x 1440, 3840 x
+2160 and 5120 x 2880 pixels, the same fraction of the frame at all four
+sizes. On `world` frame 3 the pixels that differ between the 2D-on and
+2D-off captures lie in x 1425 to 3838, y 2689 to 2878 at 5120 x 2880
+(179,288 pixels) and in x 534 to 1439, y 1008 to 1079 at 1920 x 1080
+(25,883 pixels).
+
+### Regions
+
+No engine buffer (depth, material id) is available for these frames, so
+each mask is made from the native captures; every mask is a 5120 x 2880
+image kept with the frames.
+
+- **2D and HUD**: the pixels where the native 2D-on and 2D-off captures
+  differ in any channel. It is scored on the frames with the 2D layer on.
+- **Silhouettes and thin geometry (edge)**: the pixels whose 3 x 3 Sobel
+  gradient magnitude on the native 2D-off frame's 8-bit luma is above 64;
+  an axis-aligned one-pixel step of 16 luma levels gives exactly 64. The
+  one-pixel border is left out and the mask is not dilated. It is a
+  gradient mask, not a geometry mask: a texture or lightmap step that
+  strong counts as well as a silhouette.
+- **Particles**: in the `particles` scene, the pixels where the native
+  2D-off capture differs in any channel from a third native capture, also
+  with the 2D layer off, with `cl_particles 0`. `V_RenderView` (`src/client/cl_view.c`) sets the
+  refdef's particle count to 0 when `cl_particles` is 0, after the client
+  has run the particles, so the seeded run is otherwise the same. Particle
+  pixels are taken out of the edge and interior regions.
+- **Textured interiors (interior)**: every other pixel of the 3D frame.
+- **Sprites and beams**: not isolated. No cvar removes sprites or beams
+  alone (`cl_entities 0` removes every entity, alias models included), so
+  that region is not reported. Sky, water and the view weapon are not
+  separate regions either.
+
+The 3D regions are scored on the frames with the 2D layer off. Pixels
+per mask (the edge, interior and particle counts add up to the frame):
+
+| Scene, frame | Demo time (s) | Edge | Interior | Particles | 2D |
+|---|---|---|---|---|---|
+| world 0 | 19.400 | 42,675 (0.289 %) | 14,702,925 (99.711 %) | 0 | 122,563 (0.831 %) |
+| world 1 | 29.400 | 34,923 (0.237 %) | 14,710,677 (99.763 %) | 0 | 172,246 (1.168 %) |
+| world 2 | 39.400 | 141,958 (0.963 %) | 14,603,642 (99.037 %) | 0 | 229,212 (1.554 %) |
+| world 3 | 49.400 | 29,809 (0.202 %) | 14,715,791 (99.798 %) | 0 | 179,288 (1.216 %) |
+| world 4 | 59.400 | 0 | 14,745,600 (100.000 %) | 0 | 222,844 (1.511 %) |
+| world 5 | 69.400 | 12,039 (0.082 %) | 14,733,561 (99.918 %) | 0 | 189,591 (1.286 %) |
+| world 6 | 79.400 | 5,013 (0.034 %) | 14,740,587 (99.966 %) | 0 | 178,420 (1.210 %) |
+| particles 0 | 19.400 | 96,222 (0.653 %) | 14,649,378 (99.347 %) | 0 | 122,563 (0.831 %) |
+| particles 1 | 29.400 | 74,676 (0.506 %) | 14,667,089 (99.468 %) | 3,835 (0.026 %) | 172,246 (1.168 %) |
+| particles 2 | 39.400 | 153,322 (1.040 %) | 14,592,278 (98.960 %) | 0 | 229,212 (1.554 %) |
+| particles 3 | 49.400 | 54,721 (0.371 %) | 14,685,979 (99.596 %) | 4,900 (0.033 %) | 179,296 (1.216 %) |
+| particles 4 | 59.400 | 2,219 (0.015 %) | 14,743,381 (99.985 %) | 0 | 222,844 (1.511 %) |
+| particles 5 | 69.400 | 48,579 (0.329 %) | 14,675,812 (99.527 %) | 21,209 (0.144 %) | 189,596 (1.286 %) |
+| particles 6 | 79.400 | 50,806 (0.345 %) | 14,654,640 (99.383 %) | 40,154 (0.272 %) | 178,420 (1.210 %) |
+| models 0 | 19.400 | 96,222 (0.653 %) | 14,649,378 (99.347 %) | 0 | 122,563 (0.831 %) |
+| models 1 | 29.400 | 74,676 (0.506 %) | 14,670,924 (99.494 %) | 0 | 172,246 (1.168 %) |
+| models 2 | 39.400 | 153,322 (1.040 %) | 14,592,278 (98.960 %) | 0 | 229,212 (1.554 %) |
+| models 3 | 49.400 | 48,002 (0.326 %) | 14,697,598 (99.674 %) | 0 | 179,287 (1.216 %) |
+| models 4 | 59.400 | 2,209 (0.015 %) | 14,743,391 (99.985 %) | 0 | 222,844 (1.511 %) |
+| models 5 | 69.400 | 26,634 (0.181 %) | 14,718,966 (99.819 %) | 0 | 189,591 (1.286 %) |
+| models 6 | 79.400 | 25,312 (0.172 %) | 14,720,288 (99.828 %) | 0 | 178,420 (1.210 %) |
+
+`world` frame 4 has no pixel above the threshold (above 8, 0.108 % of its
+pixels; it is the frame whose refdef has a blend alpha of 0.247), so its
+edge cells are empty and the edge region has 20 frames. The particle
+region has 4 frames: frames 2 and 4 of `particles` hold 40 and 17
+particles in the refdef, but no captured pixel changes with them.
+
+### The probe
+
+A standalone Objective-C program, as TASK101's was (section 8): built with
+`xcrun clang` (Apple clang 21.0.0) against the SDK's Foundation, Metal,
+MetalFX, MetalPerformanceShaders, CoreGraphics and ImageIO frameworks, no
+install, not committed; its source, binary and build line are kept with the
+frames. Default `MTLDevice`: Apple M6.
+
+- Each capture's 8-bit RGB goes into an `RGBA8Unorm` private texture (by a
+  blit); the output is an `RGBA8Unorm` private texture of 5120 x 2880
+  pixels, read back by a blit. All three upscalers resample the stored
+  8-bit values (no sRGB decode).
+- `MTLFXSpatialScaler`: one per input size, color and output formats
+  `RGBA8Unorm`, `MTLFXSpatialScalerColorProcessingModePerceptual`, input
+  content size equal to the input size.
+- `MPSImageBilinearScale` and `MPSImageLanczosScale`: no `scaleTransform`,
+  so "the source image fits exactly into the destination texture"
+  (`MPSImageResampling.h`); `edgeMode` `MPSImageEdgeModeClamp`.
+- Metrics, against the native capture of the same frame and 2D setting:
+  luma Y = round(0.299 R + 0.587 G + 0.114 B) of the 8-bit frames. PSNR =
+  10 log10(255² / MSE) over the region's pixels. SSIM as Wang et al.
+  (2004) define it: an 11 x 11 Gaussian window with sigma 1.5, K1 0.01,
+  K2 0.03, L 255, no downsampling; the map is computed where the window
+  lies inside the frame (a 5-pixel border is left out: 14,665,700 of the
+  14,745,600 pixels), and a region's SSIM is the mean of the map over the
+  window centres inside the region.
+- GPU time: `GPUEndTime - GPUStartTime` of a command buffer that holds one
+  upscale and nothing else, waited on before the next.
+
+**Self-tests of the metrics** (the probe's `selftest` mode on the native
+2D-off frame 3 of each scene, values as printed):
+
+| Test | `world` frame 3 | `particles` frame 3 | `models` frame 3 |
+|---|---|---|---|
+| Image against itself | inf, 1.000000000 (MSE 0.000000) | inf, 1.000000000 (MSE 0.000000) | inf, 1.000000000 (MSE 0.000000) |
+| Against itself shifted one pixel right (first column repeated) | 50.2455 dB, 0.995359786 (MSE 0.614516) | 44.5192 dB, 0.993084169 (MSE 2.296982) | 46.2451 dB, 0.993873521 (MSE 1.543725) |
+| Against itself shifted one pixel down (first row repeated) | 50.1820 dB, 0.995109921 (MSE 0.623557) | 44.6085 dB, 0.993204997 (MSE 2.250257) | 46.1556 dB, 0.993951407 (MSE 1.575863) |
+| Luma against luma plus 1 | 48.1308 dB, 0.986518391 (MSE 1.000000) | 48.1308 dB, 0.987023667 (MSE 1.000000) | 48.1308 dB, 0.986711498 (MSE 1.000000) |
+| Against the second capture of the same frame | inf, 1.000000000 (MSE 0.000000) | inf, 1.000000000 (MSE 0.000000) | inf, 1.000000000 (MSE 0.000000) |
+
+An image against itself and against a second capture of the same frame
+gives infinite PSNR and an SSIM of exactly 1; a one-pixel shift scores
+lower on both. Raising every luma value by 1 gives an MSE of exactly 1
+(no luma value is 255 in these frames) and 48.1308 dB, which is 10
+log10(255²).
+
+### Results
+
+Every value is computed from the probe's per-frame CSV (972 rows: 21
+frames, 3 input sizes, 3 upscalers, the 3D regions and the 2D region; it
+also holds the whole frame with the 2D layer on, which no table here
+uses). Each upscaled frame goes to 5120 x 2880 pixels.
+
+**Per input size and upscaler, the range over the frames** (PSNR in dB;
+SSIM; the number of frames). The spatial-scaler rows are a pessimistic
+bound for still frames, not a measurement of option A, which uses the
+temporal scaler (RT11; "What this does not measure" above).
+
+| Input | Upscaler | 3D, whole frame | 3D, edge | 3D, interior | 3D, particles | 2D and HUD |
+|---|---|---|---|---|---|---|
+| 3840 x 2160 | spatial | 47.14 to 58.93; 0.9891 to 0.9987; 21 | 23.82 to 35.54; 0.8861 to 0.9750; 20 | 48.41 to 58.93; 0.9892 to 0.9987; 21 | 32.58 to 48.32; 0.9670 to 0.9869; 4 | 35.60 to 44.95; 0.9796 to 0.9870; 21 |
+| 3840 x 2160 | bilinear | 49.56 to 63.50; 0.9954 to 0.9995; 21 | 25.20 to 36.01; 0.9030 to 0.9797; 20 | 52.96 to 63.50; 0.9956 to 0.9995; 21 | 32.91 to 50.93; 0.9607 to 0.9929; 4 | 34.39 to 47.55; 0.9841 to 0.9942; 21 |
+| 3840 x 2160 | Lanczos | 49.28 to 63.30; 0.9954 to 0.9995; 21 | 25.10 to 36.37; 0.9085 to 0.9837; 20 | 52.90 to 63.30; 0.9956 to 0.9995; 21 | 34.23 to 51.27; 0.9741 to 0.9931; 4 | 34.79 to 47.70; 0.9844 to 0.9941; 21 |
+| 2560 x 1440 | spatial | 45.17 to 58.53; 0.9864 to 0.9985; 21 | 23.88 to 32.73; 0.8622 to 0.9467; 20 | 47.23 to 58.53; 0.9868 to 0.9985; 21 | 30.01 to 47.99; 0.9309 to 0.9856; 4 | 27.44 to 39.36; 0.9373 to 0.9709; 21 |
+| 2560 x 1440 | bilinear | 46.38 to 61.62; 0.9911 to 0.9993; 21 | 23.95 to 32.09; 0.8319 to 0.9286; 20 | 49.57 to 61.62; 0.9918 to 0.9993; 21 | 29.78 to 49.23; 0.8983 to 0.9896; 4 | 28.37 to 41.23; 0.9482 to 0.9815; 21 |
+| 2560 x 1440 | Lanczos | 46.38 to 61.41; 0.9915 to 0.9993; 21 | 23.80 to 32.62; 0.8479 to 0.9462; 20 | 49.74 to 61.41; 0.9921 to 0.9993; 21 | 30.31 to 49.87; 0.9302 to 0.9908; 4 | 28.14 to 41.41; 0.9498 to 0.9836; 21 |
+| 1920 x 1080 | spatial | 43.74 to 57.81; 0.9814 to 0.9983; 21 | 22.67 to 30.34; 0.8159 to 0.8984; 20 | 45.39 to 57.81; 0.9823 to 0.9983; 21 | 26.19 to 47.19; 0.8391 to 0.9831; 4 | 33.28 to 41.78; 0.9432 to 0.9619; 21 |
+| 1920 x 1080 | bilinear | 44.63 to 61.10; 0.9870 to 0.9992; 21 | 22.85 to 30.90; 0.7749 to 0.8865; 20 | 46.95 to 61.10; 0.9881 to 0.9992; 21 | 26.81 to 47.79; 0.8151 to 0.9859; 4 | 32.46 to 56.52; 0.9724 to 0.9897; 21 |
+| 1920 x 1080 | Lanczos | 44.69 to 60.61; 0.9876 to 0.9991; 21 | 22.80 to 30.79; 0.7980 to 0.9024; 20 | 47.40 to 60.61; 0.9885 to 0.9991; 21 | 26.57 to 48.22; 0.8449 to 0.9870; 4 | 32.62 to 48.55; 0.9663 to 0.9852; 21 |
+
+What the CSV shows, and no more:
+
+- Input size: with every upscaler and in every 3D region, every frame
+  scores higher from 3840 x 2160 than from 2560 x 1440, and higher from
+  2560 x 1440 than from 1920 x 1080, in PSNR and in SSIM (whole frame and
+  interior 21 of 21 frames, particles 4 of 4, edge 20 of 20, except the
+  spatial scaler's edge PSNR, 19 of 20).
+- Regions: the edge region scores below the interior in every comparison
+  (180 of 180, PSNR and SSIM): edge 22.67 to 36.37 dB, interior 45.39 to
+  63.50 dB over all sizes and upscalers.
+- Upscalers, 3D: on the whole frame and the interior, the spatial scaler
+  scores below bilinear and below Lanczos in every comparison (63 of 63,
+  PSNR and SSIM). On the edge region it does not: its SSIM is above
+  bilinear's in 44 of 60 and below Lanczos's in 40 of 60, and Lanczos's
+  edge SSIM is above bilinear's in 60 of 60. On the particle region
+  Lanczos's SSIM is above bilinear's in 12 of 12 and the spatial scaler's
+  below Lanczos's in 11 of 12. Why the spatial scaler scores lower on the
+  whole frame was not investigated. PSNR and SSIM measure the difference
+  from the native frame pixel by pixel; they do not say which upscaled
+  frame looks better, and nothing here ranks the upscalers by look.
+- 2D and HUD: the region does not follow the input size. 2560 x 1440
+  scores below 1920 x 1080 in PSNR in 19 of 21 frames with each upscaler
+  (in SSIM: bilinear 21 of 21, Lanczos 19 of 21, the spatial scaler 3 of
+  21). The cause was not investigated.
+- Particles: read in the source, not measured: `ref_gl1` draws particles
+  as points of `gl1_particle_size` (40) times the frame height over 480
+  pixels (`src/client/refresh/gl1/gl1_main.c`), attenuated with distance
+  and clamped to `gl1_particle_min_size` (2) and `gl1_particle_max_size`
+  (40) pixels (`gl1_misc.c`; every log reports `Point parameters: Okay`). An
+  inference: a point at the 40-pixel clamp covers the same number of
+  pixels at every frame size, so after the upscale it is larger than at
+  the native size, and part of the particle region's error may be that
+  size difference rather than the upscaler.
+
+**GPU time of one upscale to 5120 x 2880 pixels** (ms, timing set c
+below: three process invocations 5 s apart, each with at least 3 s of
+untimed upscales first, then per configuration one discarded run and 20
+timed runs; the median of the three invocation medians, the lowest to
+highest invocation median, then the minimum to maximum of all 60 runs;
+the input is the 2D-on `world` frame 3 at each size; "again" is the
+3840 x 2160 input timed a second time at the end of each process):
+
+| Input (pixels) | Upscaler | Median | Invocation medians | All runs |
+|---|---|---|---|---|
+| 3840 x 2160 | spatial | 1.428 | 1.428 to 1.430 | 1.425 to 1.462 (60 runs) |
+| 3840 x 2160 | bilinear | 0.192 | 0.191 to 0.193 | 0.190 to 0.199 (60 runs) |
+| 3840 x 2160 | Lanczos | 1.236 | 1.235 to 1.238 | 1.229 to 1.293 (60 runs) |
+| 2560 x 1440 | spatial | 1.423 | 1.423 to 1.423 | 1.419 to 1.534 (60 runs) |
+| 2560 x 1440 | bilinear | 0.182 | 0.182 to 0.183 | 0.181 to 0.184 (60 runs) |
+| 2560 x 1440 | Lanczos | 0.861 | 0.860 to 0.861 | 0.854 to 0.885 (60 runs) |
+| 1920 x 1080 | spatial | 1.422 | 1.421 to 1.422 | 1.418 to 1.456 (60 runs) |
+| 1920 x 1080 | bilinear | 0.180 | 0.180 to 0.180 | 0.179 to 0.181 (60 runs) |
+| 1920 x 1080 | Lanczos | 0.993 | 0.992 to 0.995 | 0.991 to 1.131 (60 runs) |
+| 3840 x 2160, again | spatial | 1.428 | 1.428 to 1.429 | 1.426 to 1.477 (60 runs) |
+| 3840 x 2160, again | bilinear | 0.193 | 0.189 to 0.194 | 0.189 to 0.205 (60 runs) |
+| 3840 x 2160, again | Lanczos | 1.236 | 1.236 to 1.238 | 1.229 to 1.360 (60 runs) |
+
+Section 8 timed the spatial scaler on `RGBA16Float` textures with a
+synthetic input (its MetalFX table, column "Alone": 2.191 ms from 1920 x
+1080, 1.656 ms from 2560 x 1440), so its numbers are not the same
+configuration as these.
+
+**Per frame.** Each cell is PSNR in dB / SSIM; each scene's "range" row is
+the minimum to maximum over its frames, with the number of frames.
+
+3D only (2D off), whole frame:
+
+| Scene, frame | 3840 x 2160, spatial | 3840 x 2160, bilinear | 3840 x 2160, Lanczos | 2560 x 1440, spatial | 2560 x 1440, bilinear | 2560 x 1440, Lanczos | 1920 x 1080, spatial | 1920 x 1080, bilinear | 1920 x 1080, Lanczos |
+|---|---|---|---|---|---|---|---|---|---|
+| world 0 | 48.10 / 0.9894 | 50.97 / 0.9954 | 50.89 / 0.9954 | 47.05 / 0.9871 | 48.49 / 0.9918 | 48.65 / 0.9922 | 45.53 / 0.9830 | 46.60 / 0.9882 | 46.74 / 0.9888 |
+| world 1 | 50.63 / 0.9933 | 54.23 / 0.9974 | 54.07 / 0.9974 | 49.57 / 0.9919 | 51.55 / 0.9954 | 51.64 / 0.9955 | 48.32 / 0.9897 | 49.77 / 0.9935 | 49.97 / 0.9938 |
+| world 2 | 47.80 / 0.9894 | 51.98 / 0.9965 | 52.14 / 0.9965 | 46.32 / 0.9868 | 47.93 / 0.9931 | 48.45 / 0.9935 | 44.38 / 0.9821 | 45.28 / 0.9893 | 45.93 / 0.9903 |
+| world 3 | 52.69 / 0.9958 | 55.71 / 0.9982 | 55.69 / 0.9982 | 51.20 / 0.9948 | 52.75 / 0.9969 | 52.99 / 0.9970 | 50.16 / 0.9936 | 51.60 / 0.9960 | 51.75 / 0.9961 |
+| world 4 | 58.93 / 0.9987 | 63.50 / 0.9995 | 63.30 / 0.9995 | 58.53 / 0.9985 | 61.62 / 0.9993 | 61.41 / 0.9993 | 57.81 / 0.9983 | 61.10 / 0.9992 | 60.61 / 0.9991 |
+| world 5 | 52.66 / 0.9953 | 56.40 / 0.9981 | 56.18 / 0.9980 | 51.66 / 0.9942 | 54.12 / 0.9970 | 54.06 / 0.9969 | 50.79 / 0.9932 | 52.95 / 0.9962 | 52.88 / 0.9961 |
+| world 6 | 52.36 / 0.9946 | 56.97 / 0.9983 | 56.55 / 0.9981 | 51.49 / 0.9936 | 54.68 / 0.9972 | 54.44 / 0.9970 | 50.53 / 0.9926 | 53.20 / 0.9966 | 53.06 / 0.9964 |
+| world range | 47.80 to 58.93 / 0.9894 to 0.9987 (7) | 50.97 to 63.50 / 0.9954 to 0.9995 (7) | 50.89 to 63.30 / 0.9954 to 0.9995 (7) | 46.32 to 58.53 / 0.9868 to 0.9985 (7) | 47.93 to 61.62 / 0.9918 to 0.9993 (7) | 48.45 to 61.41 / 0.9922 to 0.9993 (7) | 44.38 to 57.81 / 0.9821 to 0.9983 (7) | 45.28 to 61.10 / 0.9882 to 0.9992 (7) | 45.93 to 60.61 / 0.9888 to 0.9991 (7) |
+| particles 0 | 47.14 / 0.9900 | 49.56 / 0.9955 | 49.44 / 0.9955 | 45.17 / 0.9864 | 46.38 / 0.9911 | 46.38 / 0.9915 | 43.74 / 0.9819 | 44.63 / 0.9870 | 44.69 / 0.9876 |
+| particles 1 | 48.66 / 0.9925 | 51.10 / 0.9969 | 50.93 / 0.9968 | 47.31 / 0.9906 | 48.53 / 0.9943 | 48.56 / 0.9945 | 45.85 / 0.9878 | 46.73 / 0.9919 | 46.83 / 0.9922 |
+| particles 2 | 47.25 / 0.9891 | 50.67 / 0.9962 | 50.64 / 0.9962 | 45.79 / 0.9864 | 47.11 / 0.9926 | 47.44 / 0.9930 | 43.89 / 0.9814 | 44.66 / 0.9887 | 45.14 / 0.9896 |
+| particles 3 | 48.97 / 0.9943 | 50.35 / 0.9976 | 50.10 / 0.9975 | 47.40 / 0.9930 | 47.97 / 0.9959 | 47.84 / 0.9959 | 46.12 / 0.9908 | 46.74 / 0.9946 | 46.60 / 0.9945 |
+| particles 4 | 55.34 / 0.9978 | 60.25 / 0.9995 | 59.99 / 0.9994 | 54.95 / 0.9975 | 58.73 / 0.9992 | 58.57 / 0.9991 | 54.34 / 0.9973 | 57.78 / 0.9991 | 57.40 / 0.9990 |
+| particles 5 | 48.38 / 0.9932 | 50.04 / 0.9972 | 49.76 / 0.9970 | 47.10 / 0.9916 | 47.98 / 0.9954 | 47.81 / 0.9953 | 45.81 / 0.9893 | 46.64 / 0.9939 | 46.50 / 0.9937 |
+| particles 6 | 47.66 / 0.9919 | 49.61 / 0.9972 | 49.28 / 0.9969 | 46.00 / 0.9902 | 47.02 / 0.9954 | 46.78 / 0.9951 | 44.73 / 0.9878 | 45.56 / 0.9940 | 45.41 / 0.9938 |
+| particles range | 47.14 to 55.34 / 0.9891 to 0.9978 (7) | 49.56 to 60.25 / 0.9955 to 0.9995 (7) | 49.28 to 59.99 / 0.9955 to 0.9994 (7) | 45.17 to 54.95 / 0.9864 to 0.9975 (7) | 46.38 to 58.73 / 0.9911 to 0.9992 (7) | 46.38 to 58.57 / 0.9915 to 0.9991 (7) | 43.74 to 54.34 / 0.9814 to 0.9973 (7) | 44.63 to 57.78 / 0.9870 to 0.9991 (7) | 44.69 to 57.40 / 0.9876 to 0.9990 (7) |
+| models 0 | 47.14 / 0.9900 | 49.56 / 0.9955 | 49.44 / 0.9955 | 45.17 / 0.9864 | 46.38 / 0.9911 | 46.38 / 0.9915 | 43.74 / 0.9819 | 44.63 / 0.9870 | 44.69 / 0.9876 |
+| models 1 | 48.66 / 0.9925 | 51.10 / 0.9969 | 50.93 / 0.9968 | 47.31 / 0.9906 | 48.53 / 0.9943 | 48.56 / 0.9945 | 45.85 / 0.9878 | 46.73 / 0.9919 | 46.83 / 0.9922 |
+| models 2 | 47.25 / 0.9891 | 50.67 / 0.9962 | 50.64 / 0.9962 | 45.79 / 0.9864 | 47.11 / 0.9926 | 47.44 / 0.9930 | 43.89 / 0.9814 | 44.66 / 0.9887 | 45.14 / 0.9896 |
+| models 3 | 50.13 / 0.9950 | 51.81 / 0.9978 | 51.53 / 0.9977 | 48.65 / 0.9939 | 49.39 / 0.9962 | 49.25 / 0.9963 | 47.55 / 0.9921 | 48.29 / 0.9951 | 48.12 / 0.9951 |
+| models 4 | 57.36 / 0.9985 | 60.27 / 0.9994 | 60.03 / 0.9994 | 56.91 / 0.9984 | 58.76 / 0.9991 | 58.60 / 0.9991 | 55.86 / 0.9981 | 57.80 / 0.9990 | 57.46 / 0.9989 |
+| models 5 | 50.84 / 0.9946 | 53.21 / 0.9976 | 52.92 / 0.9975 | 49.68 / 0.9933 | 51.10 / 0.9961 | 50.93 / 0.9960 | 48.61 / 0.9916 | 49.82 / 0.9948 | 49.67 / 0.9947 |
+| models 6 | 50.24 / 0.9938 | 52.85 / 0.9977 | 52.48 / 0.9975 | 48.66 / 0.9925 | 50.12 / 0.9962 | 49.86 / 0.9960 | 47.52 / 0.9909 | 48.71 / 0.9952 | 48.53 / 0.9949 |
+| models range | 47.14 to 57.36 / 0.9891 to 0.9985 (7) | 49.56 to 60.27 / 0.9955 to 0.9994 (7) | 49.44 to 60.03 / 0.9955 to 0.9994 (7) | 45.17 to 56.91 / 0.9864 to 0.9984 (7) | 46.38 to 58.76 / 0.9911 to 0.9991 (7) | 46.38 to 58.60 / 0.9915 to 0.9991 (7) | 43.74 to 55.86 / 0.9814 to 0.9981 (7) | 44.63 to 57.80 / 0.9870 to 0.9990 (7) | 44.69 to 57.46 / 0.9876 to 0.9989 (7) |
+
+3D only, edge region (`world` frame 4 has none):
+
+| Scene, frame | 3840 x 2160, spatial | 3840 x 2160, bilinear | 3840 x 2160, Lanczos | 2560 x 1440, spatial | 2560 x 1440, bilinear | 2560 x 1440, Lanczos | 1920 x 1080, spatial | 1920 x 1080, bilinear | 1920 x 1080, Lanczos |
+|---|---|---|---|---|---|---|---|---|---|
+| world 0 | 29.50 / 0.9195 | 29.90 / 0.9294 | 29.80 / 0.9317 | 28.21 / 0.9104 | 28.31 / 0.8985 | 28.31 / 0.9122 | 26.82 / 0.8473 | 27.19 / 0.8429 | 27.09 / 0.8587 |
+| world 1 | 32.64 / 0.9533 | 32.84 / 0.9569 | 32.67 / 0.9583 | 30.79 / 0.9242 | 30.98 / 0.9161 | 30.83 / 0.9248 | 29.74 / 0.8984 | 30.03 / 0.8865 | 29.98 / 0.9024 |
+| world 2 | 35.54 / 0.9750 | 36.01 / 0.9797 | 36.37 / 0.9837 | 32.73 / 0.9467 | 32.09 / 0.9286 | 32.62 / 0.9462 | 30.34 / 0.8934 | 29.73 / 0.8628 | 30.38 / 0.8953 |
+| world 3 | 33.37 / 0.9571 | 33.91 / 0.9600 | 33.80 / 0.9662 | 30.40 / 0.9232 | 30.84 / 0.9092 | 30.82 / 0.9345 | 29.76 / 0.8678 | 30.16 / 0.8556 | 30.18 / 0.8841 |
+| world 4 | – | – | – | – | – | – | – | – | – |
+| world 5 | 32.25 / 0.9434 | 33.02 / 0.9505 | 32.79 / 0.9523 | 30.80 / 0.9094 | 31.63 / 0.9092 | 31.52 / 0.9192 | 30.04 / 0.8821 | 30.90 / 0.8807 | 30.79 / 0.8936 |
+| world 6 | 30.71 / 0.9320 | 30.67 / 0.9254 | 30.47 / 0.9266 | 29.75 / 0.9014 | 29.66 / 0.8827 | 29.47 / 0.8901 | 28.94 / 0.8797 | 28.94 / 0.8513 | 28.77 / 0.8657 |
+| world range | 29.50 to 35.54 / 0.9195 to 0.9750 (6) | 29.90 to 36.01 / 0.9254 to 0.9797 (6) | 29.80 to 36.37 / 0.9266 to 0.9837 (6) | 28.21 to 32.73 / 0.9014 to 0.9467 (6) | 28.31 to 32.09 / 0.8827 to 0.9286 (6) | 28.31 to 32.62 / 0.8901 to 0.9462 (6) | 26.82 to 30.34 / 0.8473 to 0.8984 (6) | 27.19 to 30.90 / 0.8429 to 0.8865 (6) | 27.09 to 30.79 / 0.8587 to 0.9024 (6) |
+| particles 0 | 29.72 / 0.9394 | 30.16 / 0.9468 | 30.11 / 0.9497 | 26.80 / 0.8917 | 27.34 / 0.8898 | 27.19 / 0.9020 | 25.72 / 0.8245 | 26.24 / 0.8271 | 26.13 / 0.8451 |
+| particles 1 | 30.12 / 0.9464 | 30.36 / 0.9490 | 30.20 / 0.9529 | 28.38 / 0.9088 | 28.37 / 0.8964 | 28.31 / 0.9101 | 27.06 / 0.8659 | 27.08 / 0.8499 | 27.07 / 0.8708 |
+| particles 2 | 33.57 / 0.9713 | 33.56 / 0.9749 | 33.58 / 0.9786 | 31.34 / 0.9432 | 30.61 / 0.9241 | 30.86 / 0.9410 | 29.28 / 0.8915 | 28.65 / 0.8599 | 29.04 / 0.8911 |
+| particles 3 | 27.71 / 0.9470 | 27.29 / 0.9445 | 27.09 / 0.9491 | 25.69 / 0.9149 | 25.25 / 0.8952 | 25.09 / 0.9142 | 24.87 / 0.8712 | 24.40 / 0.8497 | 24.29 / 0.8731 |
+| particles 4 | 23.82 / 0.8861 | 25.20 / 0.9058 | 25.10 / 0.9115 | 23.88 / 0.8718 | 24.39 / 0.8584 | 24.63 / 0.8781 | 22.67 / 0.8318 | 23.13 / 0.8092 | 23.19 / 0.8382 |
+| particles 5 | 26.77 / 0.9362 | 26.58 / 0.9378 | 26.37 / 0.9408 | 25.42 / 0.9070 | 24.95 / 0.8932 | 24.83 / 0.9067 | 24.35 / 0.8689 | 23.99 / 0.8522 | 23.90 / 0.8720 |
+| particles 6 | 26.27 / 0.9325 | 26.14 / 0.9334 | 25.95 / 0.9377 | 24.30 / 0.8797 | 23.95 / 0.8605 | 23.80 / 0.8763 | 23.23 / 0.8254 | 22.85 / 0.7989 | 22.80 / 0.8209 |
+| particles range | 23.82 to 33.57 / 0.8861 to 0.9713 (7) | 25.20 to 33.56 / 0.9058 to 0.9749 (7) | 25.10 to 33.58 / 0.9115 to 0.9786 (7) | 23.88 to 31.34 / 0.8718 to 0.9432 (7) | 23.95 to 30.61 / 0.8584 to 0.9241 (7) | 23.80 to 30.86 / 0.8763 to 0.9410 (7) | 22.67 to 29.28 / 0.8245 to 0.8915 (7) | 22.85 to 28.65 / 0.7989 to 0.8599 (7) | 22.80 to 29.04 / 0.8209 to 0.8911 (7) |
+| models 0 | 29.72 / 0.9394 | 30.16 / 0.9468 | 30.11 / 0.9497 | 26.80 / 0.8917 | 27.34 / 0.8898 | 27.19 / 0.9020 | 25.72 / 0.8245 | 26.24 / 0.8271 | 26.13 / 0.8451 |
+| models 1 | 30.12 / 0.9464 | 30.36 / 0.9490 | 30.20 / 0.9529 | 28.38 / 0.9088 | 28.37 / 0.8964 | 28.31 / 0.9101 | 27.06 / 0.8659 | 27.08 / 0.8499 | 27.07 / 0.8708 |
+| models 2 | 33.57 / 0.9713 | 33.56 / 0.9749 | 33.58 / 0.9786 | 31.34 / 0.9432 | 30.61 / 0.9241 | 30.86 / 0.9410 | 29.28 / 0.8915 | 28.65 / 0.8599 | 29.04 / 0.8911 |
+| models 3 | 28.69 / 0.9467 | 28.48 / 0.9454 | 28.25 / 0.9499 | 26.76 / 0.9143 | 26.42 / 0.8956 | 26.22 / 0.9152 | 26.03 / 0.8721 | 25.63 / 0.8507 | 25.47 / 0.8743 |
+| models 4 | 25.25 / 0.9171 | 25.21 / 0.9030 | 25.12 / 0.9085 | 24.89 / 0.8888 | 24.41 / 0.8531 | 24.64 / 0.8715 | 23.23 / 0.8400 | 23.16 / 0.8018 | 23.23 / 0.8270 |
+| models 5 | 28.57 / 0.9318 | 28.47 / 0.9312 | 28.27 / 0.9337 | 27.14 / 0.8994 | 26.92 / 0.8846 | 26.78 / 0.8972 | 26.29 / 0.8679 | 26.13 / 0.8470 | 26.04 / 0.8653 |
+| models 6 | 27.57 / 0.9260 | 27.42 / 0.9198 | 27.21 / 0.9233 | 25.47 / 0.8622 | 25.20 / 0.8319 | 25.01 / 0.8479 | 24.62 / 0.8159 | 24.37 / 0.7749 | 24.26 / 0.7980 |
+| models range | 25.25 to 33.57 / 0.9171 to 0.9713 (7) | 25.21 to 33.56 / 0.9030 to 0.9749 (7) | 25.12 to 33.58 / 0.9085 to 0.9786 (7) | 24.89 to 31.34 / 0.8622 to 0.9432 (7) | 24.41 to 30.61 / 0.8319 to 0.9241 (7) | 24.64 to 30.86 / 0.8479 to 0.9410 (7) | 23.23 to 29.28 / 0.8159 to 0.8915 (7) | 23.16 to 28.65 / 0.7749 to 0.8599 (7) | 23.23 to 29.04 / 0.7980 to 0.8911 (7) |
+
+3D only, interior:
+
+| Scene, frame | 3840 x 2160, spatial | 3840 x 2160, bilinear | 3840 x 2160, Lanczos | 2560 x 1440, spatial | 2560 x 1440, bilinear | 2560 x 1440, Lanczos | 1920 x 1080, spatial | 1920 x 1080, bilinear | 1920 x 1080, Lanczos |
+|---|---|---|---|---|---|---|---|---|---|
+| world 0 | 49.10 / 0.9896 | 52.96 / 0.9956 | 52.90 / 0.9956 | 48.13 / 0.9873 | 50.04 / 0.9921 | 50.27 / 0.9925 | 46.58 / 0.9834 | 47.85 / 0.9886 | 48.08 / 0.9892 |
+| world 1 | 51.32 / 0.9934 | 55.93 / 0.9975 | 55.78 / 0.9974 | 50.41 / 0.9920 | 52.90 / 0.9956 | 53.10 / 0.9957 | 49.13 / 0.9899 | 50.86 / 0.9938 | 51.14 / 0.9940 |
+| world 2 | 48.53 / 0.9896 | 54.02 / 0.9967 | 54.06 / 0.9966 | 47.35 / 0.9872 | 49.88 / 0.9937 | 50.41 / 0.9940 | 45.55 / 0.9830 | 47.08 / 0.9905 | 47.72 / 0.9912 |
+| world 3 | 53.50 / 0.9959 | 57.29 / 0.9983 | 57.31 / 0.9982 | 52.40 / 0.9950 | 54.38 / 0.9971 | 54.75 / 0.9971 | 51.24 / 0.9938 | 53.03 / 0.9963 | 53.23 / 0.9963 |
+| world 4 | 58.93 / 0.9987 | 63.50 / 0.9995 | 63.30 / 0.9995 | 58.53 / 0.9985 | 61.62 / 0.9993 | 61.41 / 0.9993 | 57.81 / 0.9983 | 61.10 / 0.9992 | 60.61 / 0.9991 |
+| world 5 | 53.07 / 0.9953 | 57.25 / 0.9982 | 57.02 / 0.9981 | 52.11 / 0.9943 | 54.79 / 0.9970 | 54.74 / 0.9970 | 51.23 / 0.9933 | 53.55 / 0.9963 | 53.49 / 0.9962 |
+| world 6 | 52.58 / 0.9946 | 57.65 / 0.9983 | 57.20 / 0.9981 | 51.71 / 0.9937 | 55.18 / 0.9973 | 54.93 / 0.9971 | 50.75 / 0.9926 | 53.61 / 0.9967 | 53.47 / 0.9965 |
+| world range | 48.53 to 58.93 / 0.9896 to 0.9987 (7) | 52.96 to 63.50 / 0.9956 to 0.9995 (7) | 52.90 to 63.30 / 0.9956 to 0.9995 (7) | 47.35 to 58.53 / 0.9872 to 0.9985 (7) | 49.88 to 61.62 / 0.9921 to 0.9993 (7) | 50.27 to 61.41 / 0.9925 to 0.9993 (7) | 45.55 to 57.81 / 0.9830 to 0.9983 (7) | 47.08 to 61.10 / 0.9886 to 0.9992 (7) | 47.72 to 60.61 / 0.9892 to 0.9991 (7) |
+| particles 0 | 49.05 / 0.9903 | 53.19 / 0.9959 | 52.97 / 0.9958 | 47.73 / 0.9870 | 49.57 / 0.9918 | 49.74 / 0.9921 | 46.03 / 0.9829 | 47.21 / 0.9881 | 47.40 / 0.9885 |
+| particles 1 | 50.59 / 0.9927 | 55.06 / 0.9971 | 54.87 / 0.9970 | 49.47 / 0.9910 | 51.75 / 0.9948 | 51.87 / 0.9949 | 47.92 / 0.9884 | 49.44 / 0.9926 | 49.65 / 0.9928 |
+| particles 2 | 48.41 / 0.9892 | 53.95 / 0.9965 | 53.87 / 0.9963 | 47.23 / 0.9868 | 49.78 / 0.9934 | 50.19 / 0.9936 | 45.39 / 0.9823 | 46.95 / 0.9901 | 47.49 / 0.9906 |
+| particles 3 | 52.06 / 0.9945 | 56.69 / 0.9978 | 56.18 / 0.9977 | 51.02 / 0.9933 | 53.43 / 0.9963 | 53.31 / 0.9963 | 49.37 / 0.9913 | 51.54 / 0.9952 | 51.32 / 0.9950 |
+| particles 4 | 56.38 / 0.9978 | 63.09 / 0.9995 | 62.70 / 0.9995 | 55.88 / 0.9975 | 61.02 / 0.9992 | 60.59 / 0.9992 | 55.43 / 0.9973 | 60.28 / 0.9991 | 59.60 / 0.9990 |
+| particles 5 | 51.26 / 0.9934 | 56.06 / 0.9974 | 55.43 / 0.9972 | 50.11 / 0.9919 | 53.04 / 0.9958 | 52.64 / 0.9957 | 48.70 / 0.9897 | 51.07 / 0.9944 | 50.75 / 0.9942 |
+| particles 6 | 50.49 / 0.9921 | 56.11 / 0.9975 | 55.26 / 0.9972 | 49.16 / 0.9906 | 52.43 / 0.9959 | 51.91 / 0.9956 | 47.70 / 0.9885 | 50.18 / 0.9948 | 49.83 / 0.9945 |
+| particles range | 48.41 to 56.38 / 0.9892 to 0.9978 (7) | 53.19 to 63.09 / 0.9959 to 0.9995 (7) | 52.97 to 62.70 / 0.9958 to 0.9995 (7) | 47.23 to 55.88 / 0.9868 to 0.9975 (7) | 49.57 to 61.02 / 0.9918 to 0.9992 (7) | 49.74 to 60.59 / 0.9921 to 0.9992 (7) | 45.39 to 55.43 / 0.9823 to 0.9973 (7) | 46.95 to 60.28 / 0.9881 to 0.9991 (7) | 47.40 to 59.60 / 0.9885 to 0.9990 (7) |
+| models 0 | 49.05 / 0.9903 | 53.19 / 0.9959 | 52.97 / 0.9958 | 47.73 / 0.9870 | 49.57 / 0.9918 | 49.74 / 0.9921 | 46.03 / 0.9829 | 47.21 / 0.9881 | 47.40 / 0.9885 |
+| models 1 | 50.59 / 0.9927 | 55.06 / 0.9971 | 54.87 / 0.9970 | 49.47 / 0.9910 | 51.75 / 0.9948 | 51.87 / 0.9949 | 47.92 / 0.9884 | 49.44 / 0.9926 | 49.65 / 0.9928 |
+| models 2 | 48.41 / 0.9892 | 53.95 / 0.9965 | 53.87 / 0.9963 | 47.23 / 0.9868 | 49.78 / 0.9934 | 50.19 / 0.9936 | 45.39 / 0.9823 | 46.95 / 0.9901 | 47.49 / 0.9906 |
+| models 3 | 52.74 / 0.9952 | 57.01 / 0.9979 | 56.65 / 0.9979 | 51.67 / 0.9941 | 53.86 / 0.9965 | 53.86 / 0.9966 | 50.22 / 0.9925 | 52.24 / 0.9956 | 52.08 / 0.9955 |
+| models 4 | 58.58 / 0.9985 | 63.10 / 0.9995 | 62.74 / 0.9994 | 58.09 / 0.9984 | 61.04 / 0.9992 | 60.63 / 0.9991 | 57.26 / 0.9981 | 60.29 / 0.9991 | 59.65 / 0.9990 |
+| models 5 | 52.41 / 0.9947 | 56.57 / 0.9977 | 56.16 / 0.9976 | 51.37 / 0.9934 | 53.87 / 0.9963 | 53.67 / 0.9962 | 50.20 / 0.9918 | 52.20 / 0.9951 | 52.00 / 0.9950 |
+| models 6 | 51.89 / 0.9939 | 56.81 / 0.9979 | 56.21 / 0.9977 | 50.58 / 0.9927 | 53.41 / 0.9965 | 53.08 / 0.9962 | 49.29 / 0.9912 | 51.43 / 0.9955 | 51.19 / 0.9953 |
+| models range | 48.41 to 58.58 / 0.9892 to 0.9985 (7) | 53.19 to 63.10 / 0.9959 to 0.9995 (7) | 52.97 to 62.74 / 0.9958 to 0.9994 (7) | 47.23 to 58.09 / 0.9868 to 0.9984 (7) | 49.57 to 61.04 / 0.9918 to 0.9992 (7) | 49.74 to 60.63 / 0.9921 to 0.9991 (7) | 45.39 to 57.26 / 0.9823 to 0.9981 (7) | 46.95 to 60.29 / 0.9881 to 0.9991 (7) | 47.40 to 59.65 / 0.9885 to 0.9990 (7) |
+
+3D only, particle region (`particles`, the frames that have one):
+
+| Scene, frame | 3840 x 2160, spatial | 3840 x 2160, bilinear | 3840 x 2160, Lanczos | 2560 x 1440, spatial | 2560 x 1440, bilinear | 2560 x 1440, Lanczos | 1920 x 1080, spatial | 1920 x 1080, bilinear | 1920 x 1080, Lanczos |
+|---|---|---|---|---|---|---|---|---|---|
+| particles 1 | 48.32 / 0.9869 | 50.93 / 0.9929 | 51.27 / 0.9931 | 47.99 / 0.9856 | 49.23 / 0.9896 | 49.87 / 0.9908 | 47.19 / 0.9831 | 47.79 / 0.9859 | 48.22 / 0.9870 |
+| particles 3 | 32.58 / 0.9670 | 32.91 / 0.9607 | 34.23 / 0.9741 | 30.01 / 0.9309 | 29.78 / 0.8983 | 30.31 / 0.9302 | 26.19 / 0.8391 | 26.81 / 0.8151 | 26.57 / 0.8449 |
+| particles 5 | 39.70 / 0.9849 | 38.62 / 0.9826 | 40.74 / 0.9882 | 36.26 / 0.9690 | 35.04 / 0.9572 | 36.79 / 0.9698 | 33.17 / 0.9439 | 32.69 / 0.9325 | 33.86 / 0.9471 |
+| particles 6 | 43.54 / 0.9824 | 43.54 / 0.9842 | 45.15 / 0.9885 | 40.69 / 0.9687 | 39.83 / 0.9623 | 41.25 / 0.9720 | 38.45 / 0.9469 | 37.89 / 0.9408 | 39.01 / 0.9525 |
+| particles range | 32.58 to 48.32 / 0.9670 to 0.9869 (4) | 32.91 to 50.93 / 0.9607 to 0.9929 (4) | 34.23 to 51.27 / 0.9741 to 0.9931 (4) | 30.01 to 47.99 / 0.9309 to 0.9856 (4) | 29.78 to 49.23 / 0.8983 to 0.9896 (4) | 30.31 to 49.87 / 0.9302 to 0.9908 (4) | 26.19 to 47.19 / 0.8391 to 0.9831 (4) | 26.81 to 47.79 / 0.8151 to 0.9859 (4) | 26.57 to 48.22 / 0.8449 to 0.9870 (4) |
+
+2D and HUD region (2D on):
+
+| Scene, frame | 3840 x 2160, spatial | 3840 x 2160, bilinear | 3840 x 2160, Lanczos | 2560 x 1440, spatial | 2560 x 1440, bilinear | 2560 x 1440, Lanczos | 1920 x 1080, spatial | 1920 x 1080, bilinear | 1920 x 1080, Lanczos |
+|---|---|---|---|---|---|---|---|---|---|
+| world 0 | 42.00 / 0.9842 | 42.40 / 0.9908 | 42.78 / 0.9910 | 34.92 / 0.9575 | 36.08 / 0.9695 | 36.03 / 0.9719 | 40.51 / 0.9530 | 55.02 / 0.9828 | 47.12 / 0.9785 |
+| world 1 | 44.95 / 0.9870 | 47.55 / 0.9942 | 47.70 / 0.9941 | 39.36 / 0.9703 | 41.23 / 0.9815 | 41.41 / 0.9836 | 41.02 / 0.9619 | 56.25 / 0.9897 | 47.45 / 0.9852 |
+| world 2 | 40.77 / 0.9824 | 40.40 / 0.9888 | 40.85 / 0.9891 | 33.30 / 0.9515 | 34.39 / 0.9638 | 34.32 / 0.9657 | 40.65 / 0.9512 | 52.09 / 0.9811 | 46.31 / 0.9755 |
+| world 3 | 41.81 / 0.9843 | 41.69 / 0.9902 | 42.13 / 0.9904 | 34.65 / 0.9589 | 35.74 / 0.9699 | 35.69 / 0.9720 | 40.79 / 0.9544 | 52.19 / 0.9828 | 46.53 / 0.9778 |
+| world 4 | 40.62 / 0.9865 | 39.47 / 0.9939 | 39.09 / 0.9926 | 35.05 / 0.9709 | 33.38 / 0.9784 | 33.54 / 0.9787 | 33.28 / 0.9613 | 32.46 / 0.9816 | 32.62 / 0.9771 |
+| world 5 | 44.16 / 0.9862 | 45.30 / 0.9923 | 45.57 / 0.9921 | 37.63 / 0.9638 | 38.92 / 0.9739 | 38.91 / 0.9759 | 41.78 / 0.9599 | 56.52 / 0.9854 | 48.55 / 0.9817 |
+| world 6 | 43.44 / 0.9856 | 44.52 / 0.9924 | 44.79 / 0.9924 | 37.04 / 0.9643 | 38.19 / 0.9751 | 38.17 / 0.9770 | 41.26 / 0.9589 | 55.66 / 0.9859 | 47.93 / 0.9822 |
+| world range | 40.62 to 44.95 / 0.9824 to 0.9870 (7) | 39.47 to 47.55 / 0.9888 to 0.9942 (7) | 39.09 to 47.70 / 0.9891 to 0.9941 (7) | 33.30 to 39.36 / 0.9515 to 0.9709 (7) | 33.38 to 41.23 / 0.9638 to 0.9815 (7) | 33.54 to 41.41 / 0.9657 to 0.9836 (7) | 33.28 to 41.78 / 0.9512 to 0.9619 (7) | 32.46 to 56.52 / 0.9811 to 0.9897 (7) | 32.62 to 48.55 / 0.9755 to 0.9852 (7) |
+| particles 0 | 42.02 / 0.9843 | 42.41 / 0.9909 | 42.79 / 0.9910 | 34.97 / 0.9579 | 36.09 / 0.9696 | 36.05 / 0.9720 | 40.52 / 0.9530 | 55.02 / 0.9829 | 47.13 / 0.9786 |
+| particles 1 | 44.66 / 0.9868 | 47.16 / 0.9941 | 47.26 / 0.9940 | 39.00 / 0.9698 | 40.78 / 0.9811 | 40.88 / 0.9831 | 40.99 / 0.9617 | 56.24 / 0.9895 | 47.40 / 0.9850 |
+| particles 2 | 40.96 / 0.9832 | 40.73 / 0.9898 | 41.11 / 0.9899 | 33.58 / 0.9553 | 34.69 / 0.9676 | 34.58 / 0.9694 | 40.76 / 0.9531 | 52.02 / 0.9821 | 46.35 / 0.9772 |
+| particles 3 | 35.60 / 0.9796 | 34.39 / 0.9841 | 34.79 / 0.9844 | 27.44 / 0.9395 | 28.37 / 0.9502 | 28.14 / 0.9515 | 40.01 / 0.9432 | 46.78 / 0.9731 | 42.89 / 0.9665 |
+| particles 4 | 39.48 / 0.9821 | 38.42 / 0.9877 | 38.53 / 0.9872 | 32.42 / 0.9509 | 32.45 / 0.9592 | 32.51 / 0.9603 | 35.04 / 0.9476 | 34.91 / 0.9724 | 34.97 / 0.9663 |
+| particles 5 | 37.10 / 0.9800 | 36.16 / 0.9846 | 36.58 / 0.9850 | 29.01 / 0.9373 | 29.91 / 0.9482 | 29.70 / 0.9498 | 41.23 / 0.9454 | 51.83 / 0.9729 | 45.94 / 0.9676 |
+| particles 6 | 39.24 / 0.9819 | 38.50 / 0.9873 | 38.96 / 0.9878 | 31.56 / 0.9475 | 32.35 / 0.9581 | 32.22 / 0.9601 | 40.93 / 0.9489 | 52.20 / 0.9781 | 46.42 / 0.9730 |
+| particles range | 35.60 to 44.66 / 0.9796 to 0.9868 (7) | 34.39 to 47.16 / 0.9841 to 0.9941 (7) | 34.79 to 47.26 / 0.9844 to 0.9940 (7) | 27.44 to 39.00 / 0.9373 to 0.9698 (7) | 28.37 to 40.78 / 0.9482 to 0.9811 (7) | 28.14 to 40.88 / 0.9498 to 0.9831 (7) | 35.04 to 41.23 / 0.9432 to 0.9617 (7) | 34.91 to 56.24 / 0.9724 to 0.9895 (7) | 34.97 to 47.40 / 0.9663 to 0.9850 (7) |
+| models 0 | 42.02 / 0.9843 | 42.41 / 0.9909 | 42.79 / 0.9910 | 34.97 / 0.9579 | 36.09 / 0.9696 | 36.05 / 0.9720 | 40.52 / 0.9530 | 55.02 / 0.9829 | 47.13 / 0.9786 |
+| models 1 | 44.66 / 0.9868 | 47.16 / 0.9941 | 47.26 / 0.9940 | 39.00 / 0.9698 | 40.78 / 0.9811 | 40.88 / 0.9831 | 40.99 / 0.9617 | 56.24 / 0.9895 | 47.40 / 0.9850 |
+| models 2 | 40.96 / 0.9832 | 40.73 / 0.9898 | 41.11 / 0.9899 | 33.58 / 0.9553 | 34.69 / 0.9676 | 34.58 / 0.9694 | 40.76 / 0.9531 | 52.02 / 0.9821 | 46.35 / 0.9772 |
+| models 3 | 38.48 / 0.9824 | 37.59 / 0.9879 | 37.98 / 0.9882 | 30.60 / 0.9513 | 31.55 / 0.9620 | 31.36 / 0.9637 | 40.52 / 0.9501 | 49.73 / 0.9795 | 44.76 / 0.9735 |
+| models 4 | 40.57 / 0.9864 | 39.45 / 0.9939 | 39.07 / 0.9926 | 34.97 / 0.9708 | 33.35 / 0.9784 | 33.51 / 0.9787 | 33.28 / 0.9613 | 32.46 / 0.9816 | 32.62 / 0.9771 |
+| models 5 | 43.85 / 0.9860 | 44.76 / 0.9920 | 45.08 / 0.9919 | 37.23 / 0.9629 | 38.46 / 0.9729 | 38.43 / 0.9748 | 41.74 / 0.9595 | 56.50 / 0.9851 | 48.50 / 0.9813 |
+| models 6 | 43.40 / 0.9856 | 44.43 / 0.9923 | 44.75 / 0.9924 | 37.05 / 0.9642 | 38.14 / 0.9748 | 38.14 / 0.9768 | 41.25 / 0.9588 | 55.65 / 0.9859 | 47.93 / 0.9821 |
+| models range | 38.48 to 44.66 / 0.9824 to 0.9868 (7) | 37.59 to 47.16 / 0.9879 to 0.9941 (7) | 37.98 to 47.26 / 0.9882 to 0.9940 (7) | 30.60 to 39.00 / 0.9513 to 0.9708 (7) | 31.55 to 40.78 / 0.9620 to 0.9811 (7) | 31.36 to 40.88 / 0.9637 to 0.9831 (7) | 33.28 to 41.74 / 0.9501 to 0.9617 (7) | 32.46 to 56.50 / 0.9795 to 0.9895 (7) | 32.62 to 48.50 / 0.9735 to 0.9850 (7) |
+
+### Lock state and load
+
+Before every capture, every metrics run and every timing invocation:
+`ioreg -n Root -d1 | grep -c
+CGSSessionScreenIsLocked` printed 0, `pgrep -x quake2` listed no engine
+(none of the runs overlapped another), and `uptime` was noted; before and
+after each timing invocation also the number of `make`, `cc`, `clang`,
+`quake2` and `q2ded` processes (0 at every check) and, from timing set b
+on, the GPU's `"Device Utilization %"` (`ioreg -r -c IOAccelerator -d 1
+-w0`). The screen was never locked. Times are UTC on 2026-11-15; load is
+the one-minute average.
+
+| Batch | Time | Runs | Lock before, after | Load before | GPU utilization before, after | Used |
+|---|---|---|---|---|---|---|
+| Captures | 04:41:54 to 04:49:17 | 28 engine runs | 0, 0 in every run | 2.46 to 3.77 | not read | Yes (the frames) |
+| Upscale and metrics | 04:53:33 to 04:55:22 | 21 probe runs, one per frame | 0 before each | 2.80 to 8.29, rising with the probe's own CPU work (about 8 cores) | not read | Yes (PSNR and SSIM); the single GPU time per upscale it records is not used |
+| Timing a | 04:55:43 to 04:56:10 | 3 invocations, 10 warm-up rounds | 0, 0 | 6.30, 5.41, 4.89 | not read | Superseded by c: it started at load 6.30, right after the metrics batch |
+| Timing b | 04:58:01 to 04:58:28 | 3, 10 warm-up rounds | 0, 0 | 1.40, 1.67, 1.65 | 8, 7 and 8 %; 7, 0 and 0 % | Superseded by c: the first configuration of each process, 3840 x 2160 spatial, had invocation medians 2.821, 1.622 and 1.427 ms |
+| Timing c | 04:59:16 to 04:59:52 | 3, at least 3 s of warm-up (305, 294, 305 rounds of 9) | 0, 0 | 1.85, 2.37, 2.28 | 8, 8 and 8 %; 7, 8 and 0 % | Yes |
+
+In a and b every row but 3840 x 2160 spatial has a median within 0.005
+ms of c's. The slow first row of b looks like section 8's start-of-process
+level ("Levels at the start of a process"); that is an inference, no
+clock was read. With c's longer warm-up, the first row and its repeat at
+the end of the process have the same median (1.428 ms).
+
+### Artifacts
+
+Kept on the bare-metal host, outside the repository, where the owner can
+view them: the 196 captured frames (TGA, named
+`<scene>-<width>x<height>-<hud|no2d|no2drep|nopart>-<frame>.tga`, one
+directory per run with its `manifest.txt` and `trace.q2r`), the 28 logs,
+the run table, the frame-time table, the 49 masks and the 378 upscaled
+frames (PNG, named `<scene>-f<frame>-5120x2880-mask-<edge|2d|particles>.png`
+and `<scene>-f<frame>-<width>x<height>-<upscaler>-<hud|no2d>.png`), the
+per-frame CSV, the self-test, Sobel and timing outputs, the probe's source,
+binary and build line, and the scripts that drove the runs and made these
+tables. No frame, demo, trace or game data is in the repository.
+
+### Not measured
+
+- The temporal scaler, the denoised scaler and the frame interpolator
+  (RT11, TASK111 to TASK113): this measures the spatial scaler and two
+  baselines only, so it is not a measurement of option A (above).
+- Sprites and beams as a region (not isolable without engine output), and
+  sky, water and the view weapon as regions.
+- A moving camera, temporal stability and the response to an event: still
+  frames only. No perceptual metric (FLIP was not implemented).
+- The 2D layer drawn at the native size over the upscaled 3D frame as one
+  composite: the 3D and 2D regions are scored apart instead.
+- The upscalers inside a frame: each was timed alone.
+- Other renderers: `ref_gl1` only, the card's reference.
+- Ray-traced frames, and option E's loss in the effect terms.
+- The causes of the 2D region's order and of the spatial scaler's lower
+  whole-frame scores.
