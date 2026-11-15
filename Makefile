@@ -862,8 +862,10 @@ endif
 $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/rm_rt.metal \
 		src/client/refresh/metal/rm_gbuf.metal \
+		src/client/refresh/metal/rm_rtshadow.metal \
 		src/client/refresh/metal/common/mtl_shader_math.h \
-		src/client/refresh/metal/common/mtl_gbuf_math.h
+		src/client/refresh/metal/common/mtl_gbuf_math.h \
+		src/client/refresh/metal/common/mtl_rts_math.h
 	@echo "===> METAL $<"
 	${Q}command -v xcrun >/dev/null 2>&1 || { echo "ref_metal needs xcrun and the Xcode Metal toolchain" >&2; exit 1; }
 	${Q}xcrun -f metal >/dev/null 2>&1 || { echo "ref_metal needs the Metal compiler (xcrun metal); install the Xcode Metal toolchain" >&2; exit 1; }
@@ -871,8 +873,9 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 	${Q}xcrun -sdk macosx metal -c $< -o $(BUILDDIR)/ref_metal/rm_shaders.air
 	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_rt.metal -o $(BUILDDIR)/ref_metal/rm_rt.air
 	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_gbuf.metal -o $(BUILDDIR)/ref_metal/rm_gbuf.air
+	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_rtshadow.metal -o $(BUILDDIR)/ref_metal/rm_rtshadow.air
 	${Q}xcrun -sdk macosx metallib $(BUILDDIR)/ref_metal/rm_shaders.air $(BUILDDIR)/ref_metal/rm_rt.air \
-		$(BUILDDIR)/ref_metal/rm_gbuf.air -o $@
+		$(BUILDDIR)/ref_metal/rm_gbuf.air $(BUILDDIR)/ref_metal/rm_rtshadow.air -o $@
 
 # Header dependencies: the Darwin CFLAGS carry no -MMD (see above), but
 # the Apple clang this target needs writes them for C and Objective-C
@@ -1039,6 +1042,7 @@ CLIENT_OBJS_ := \
 	src/client/menu/qmenu.o \
 	src/client/menu/videomenu.o \
 	src/client/refresh/files/imgdecode.o \
+	src/client/refresh/files/imgscale.o \
 	src/client/sound/ogg.o \
 	src/client/sound/sdl.o \
 	src/client/sound/sound.o \
@@ -1117,6 +1121,7 @@ REFGL1_OBJS_ := \
 	src/client/refresh/files/pcx.o \
 	src/client/refresh/files/image.o \
 	src/client/refresh/files/imgdecode.o \
+	src/client/refresh/files/imgscale.o \
 	src/client/refresh/files/wal.o \
 	src/client/refresh/files/pvs.o \
 	src/client/vid/glimp_hidpi.o \
@@ -1152,6 +1157,7 @@ REFGL3_OBJS_ := \
 	src/client/refresh/files/pcx.o \
 	src/client/refresh/files/image.o \
 	src/client/refresh/files/imgdecode.o \
+	src/client/refresh/files/imgscale.o \
 	src/client/refresh/files/wal.o \
 	src/client/refresh/files/pvs.o \
 	src/common/shared/shared.o \
@@ -1195,6 +1201,7 @@ REFSOFT_OBJS_ := \
 	src/client/refresh/files/pcx.o \
 	src/client/refresh/files/image.o \
 	src/client/refresh/files/imgdecode.o \
+	src/client/refresh/files/imgscale.o \
 	src/client/refresh/files/wal.o \
 	src/client/refresh/files/pvs.o \
 	src/client/vid/glimp_hidpi.o \
@@ -1228,6 +1235,8 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_pure.o \
 	src/client/refresh/metal/rm_rt.o \
 	src/client/refresh/metal/rm_rtscene.o \
+	src/client/refresh/metal/rm_rtshadow.o \
+	src/client/refresh/metal/rm_rtshadowscene.o \
 	src/client/refresh/metal/rm_scrap.o \
 	src/client/refresh/metal/rm_sdl.o \
 	src/client/refresh/metal/rm_surf.o \
@@ -1238,6 +1247,7 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rmb_metalfx.o \
 	src/client/refresh/metal/rmb_resource.o \
 	src/client/refresh/metal/rmb_rt.o \
+	src/client/refresh/metal/rmb_rtshadow.o \
 	src/client/refresh/metal/common/mtl_matrix.o \
 	src/client/refresh/metal/common/mtl_ring.o \
 	src/client/refresh/files/common.o \
@@ -1246,6 +1256,7 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/files/pvs.o \
 	src/client/refresh/files/image.o \
 	src/client/refresh/files/imgdecode.o \
+	src/client/refresh/files/imgscale.o \
 	src/client/refresh/files/surf.o \
 	src/client/refresh/files/wal.o \
 	src/client/vid/glimp_hidpi.o \
@@ -1451,7 +1462,7 @@ endif
 # the upscaler's checks and pixel arithmetic cl_upscale, the sound
 # frontend sound.c and the window code's SDL-free part vid/glimp_hidpi.c)
 # are linked against the stubs in tests/unit/stub_client.c
-# and stub_client_full.c, and two renderer objects, refresh/files/surf.c
+# and stub_client_full.c, and three renderer objects, refresh/files/imgscale.c, refresh/files/surf.c
 # and soft/sw_view.c, which need only shared.c; none of it includes SDL. Needs no SDL and no game
 # data. `make test` builds and runs it; UPDATE_PINS=1 (exactly 1, any
 # other value is ignored) rewrites the pins under tests/pins/unit/
@@ -1495,6 +1506,7 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(TESTDIR)/src/client/cl_upscale.o \
 	$(TESTDIR)/src/client/sound/sound.o \
 	$(TESTDIR)/src/client/vid/glimp_hidpi.o \
+	$(TESTDIR)/src/client/refresh/files/imgscale.o \
 	$(TESTDIR)/src/client/refresh/files/surf.o \
 	$(TESTDIR)/src/client/refresh/soft/sw_view.o \
 	$(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS))

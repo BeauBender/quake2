@@ -2835,6 +2835,334 @@ rework added the following:
 - The host test of `rm_gb_show`, run with UBSAN against the old expression. UBSAN reported
   the conversion of 1e10, and 5 checks failed.
 
+### Ray-traced shadows from dynamic lights in `ref_metal` (TASK55, RT3)
+
+RT3 adds the first ray-traced effect, `r_rt_shadows` (`docs/plans/metal-raytracing-design.md`,
+section 2). Host: the bare-metal Mac, `Apple M6` (apple9, `supportsRaytracing: yes`), macOS
+27.2.1 (26B131). Base: `origin/main` at `33845c6c` (TASK123 and TASK100; neither touches
+`ref_metal`). Every run below is of engine commit `3d659a2b` (pin ids `3d659a2bb17b-*`), an
+ancestor of the card's head; the commits after it change only the host test and the
+documentation. Two results are the round before's, of `4deded44`, and say so: the ledger with
+`r_rt_stats 1` and the shadows off (Proof 1) and the fps line (Proof 4); the commits since
+change only what runs with the shadows on. After the measurements the lane merged `origin/main`
+at `0fb0603c` (merged, not rebased, so `3d659a2b` stays an ancestor). That brought in TASK111
+(the MetalFX scalers, which change `RM_GB_Choose`, `RM_GB_Begin`, `RM_GB_End`, `rmb_gbuf.m` and
+`rm_main.c`), TASK123, TASK129, TASK100 and TASK130 (the shared image helpers). The merged head
+was not measured again. With the scalers off (`r_metalfx 0`, the default, as in every run
+here), `RM_GB_Choose` takes the same path as before and TASK111's other hooks do nothing;
+TASK111's own bare-metal run found all 14 scenarios byte-identical to its base with the
+scalers off (#265). The merge's resolution is in the merge commit. Before every run the wrapper checked that the screen
+was unlocked (`ioreg -n Root -d1 | grep -c CGSSessionScreenIsLocked` 0) and that no other
+`quake2` ran, and logged the one-minute load: 2.4 to 5.6 (other agents share the host). Every
+engine batch held the shared timing lock. Every log, frame, mask, script and result is in
+`<artifacts>/TASK55/` (this round in `rework2/`, the round before in `rework1/`) and its scratch
+stores; nothing derived from game data is in the repository.
+
+**What it does.** With `r_rt_shadows 1`, on a device with ray tracing, and with gl1's dynamic
+lights on the lightmaps (`gl1_dynamic` on, neither `r_fullbright` nor `gl1_flashblend`), a frame
+whose instance structure was built takes the G-buffer path. Before the raster builds the
+lightmaps, `RM_RTS_View` settles everything the trace needs that can fail (the view's inverse
+and the kernel's outputs at the render size, `rmb_rts_prepare`); only then does gl1's
+dynamic-light term leave the lightmaps (`r_dlight_term`), and only until the resolve. A frame
+that cannot trace keeps the stock lightmaps. The remaining failures are a command buffer or an
+encoder Metal does not give, which lose the frame anyway. A compute pass between the raster and
+the resolve (`rm_rts_trace`, `rm_rtshadow.metal`) does the following for each lightmapped world
+pixel (material 1):
+
+- reconstructs the position from the depth and takes the normal from the G-buffer;
+- finds the pixel's surface by a ray from the eye to that point, through a triangle-to-surface
+  table (`rm_rts_surface_map`) built when the shadows are first on for the map;
+- moves the pixel into that triangle's model space (the hit's world-to-object transform, the
+  identity for the world), because gl1 marks and lights a brush entity's surfaces with the
+  light's untransformed world origin against the model-space planes and texture axes
+  (`R_MarkBrushLights`); the light stays where it is (`mtl_rts_surf`);
+- skips a surface without light samples, which gl1 lights white and adds no dynamic light to
+  (`R_BuildLightMap`; the table marks its triangles, `MTL_RTS_SURF_UNLIT`);
+- evaluates gl1's `R_AddDynamicLights` for every light on that surface's own texture axes and
+  shifts: at the four luxels around the pixel, interpolated as the bilinear lightmap sample
+  (`mtl_rts_add_lm`, `mtl_rts_surf_light`);
+- traces one shadow ray toward each of the four lights that add the most (`intensity - dist`),
+  which passes the models that carry its light (*a light's own model*, below).
+
+The eye ray is cast where a light reaches the pixel's plane in the world, and on every world
+pixel of a frame with a moved or turned brush entity (its pixels are tested in its model's
+space, where the world's test does not hold).
+
+It writes the four visibilities at 8 bits each with the four light indices (an `RG32Uint`) and the
+term, `visibility x add x colour` summed over the lights (an `RGBA16Float`). The resolve adds the
+term to the static lightmap's sample as `R_BuildLightMap`'s store would (`mtl_rts_light`: scaled
+down by the brightest channel past 1). A light past the four adds its light unshadowed.
+
+- *Ray origin.* The surface point moved along its normal by `0.5 + k d^2` units, `d` the distance
+  from the eye and `k = 4 x 2^-24 / gl_znear` (`mtl_rts_bias`). The depth buffer's step at `d` is
+  `2^-24 d^2 / znear`, so the start is above the true plane within four depth steps. Half a unit is
+  under the thinnest brush (one unit). The ray ends half a unit short of the light.
+- *Translucency.* A per-triangle transmission built at map load (`rm_rts_transmit`): water and
+  translucent triangles pass 171/255 (`SURF_TRANS33`) or 87/255 (`SURF_TRANS66`), as gl1 draws
+  them. Water drawn opaque, the sky, the world and models stop the ray. On a map with such
+  triangles a ray looks past each one, nearest first (at most 8). Neither demo map has any
+  (TASK53's counts), so the frames below do not exercise it; the host test does.
+- *Alias models* are lit as before, by `R_LightPoint`, whose vertex light holds the dynamic
+  lights once; the resolve adds no term to material 2. They cast shadows (they are in the
+  instance structure, the view weapon only with `r_rt_gunshadow`); they receive none.
+- *A light's own model.* An alias model does not shadow a light it carries: one whose origin,
+  taken into the model's space, lies in gl1's box of the model's frame and old frame
+  (`R_CullAliasModel`) grown by one unit on every side (`rm_rts_carried`, `RM_RTS_CARRY_TOL`).
+  That is a rocket's or a bolt's light inside its own model, an explosion's at the origin of its
+  model, a monster's muzzle flash at the origin of the flash and smoke models it spawns and at
+  the gun of the monster that fires it. `RM_RT_Frame` finds them per frame for the lights as
+  `R_TakeDlights` takes them, and `rmb_rt_frame` keeps each instance's lights beside its first
+  triangle and gives a carrier its own instance mask (`mtl_rts_inst_mask`). A light no model
+  carries keeps the any-hit query over every instance. The ray of a carried light first tests
+  every instance but the carriers, as any light; then the carriers alone, the nearest first: it
+  passes a triangle of a model that carries this light (`mtl_rts_passes`) and stops at one that
+  does not (`rm_rts_visibility`; past 16 of its own model's triangles it counts as through).
+  Nothing is non-opaque. Real shadows stay: the world and brush entities are never carriers,
+  and another model shadows the light unless the light is inside that model's own box. The unit
+  covers the rounding of the transform and a light on the box's face (a gun's tip).
+- *Where it cannot match per texel.* The term is added after the store, not before:
+  - the store truncates the sum and scales a saturated luxel down before filtering; the resolve
+    does so per pixel after filtering (within two levels on the host test's luxels);
+  - `vid_gamma` other than 1 and `gl1_minlight` are applied by gl1 to the sum and here to the
+    static part only;
+  - `metal_lightmap_filter 1` filters the static part with its cubic, while the term is
+    interpolated bilinearly;
+  - a pixel whose eye ray does not meet its own triangle (an edge) takes the world's space, the
+    base axes and the continuous falloff (on a moved brush entity, its world position).
+
+**Proof 1, effect off.** Every scenario recorded on `3d659a2b`, with `MTL_DEBUG_LAYER=1` and
+`PINS_SEED=1`, against the round before's records of the base `33845c6c` (an export of the tree
+built in scratch, recorded by its own `scripts/pins.sh` into a scratch store, the same settings):
+
+- 14 scenarios, 23 frames each (`cinematic` 12), and `dlights` at `PINS_DEMO=demo2.dm2
+  PINS_EVERY=7` (89 frames): byte-identical to the base on every frame. The scenarios are
+  `world`, `world-fullbright`, `hud2d`, `hud2d-sharp`, `hud2d-scale8`, `world-scale8`,
+  `world-lmcubic`, `skywater`, `dlights`, `dlights-lmcubic`, `models`, `particles`,
+  `particles-cap` and `cinematic` (`idlog.cin`, every 7th).
+- Every log holds the validation banner and no other validation line, no failed command buffer,
+  `teardown: 0 live objects` and `rt 0/0`: nothing ray-traced is built or allocated.
+- With `r_rt_stats 1` and `r_rt_shadows 0` (the same trace replayed by both builds; measured on
+  `4deded44`) the head allocates what the base does: the same ledger (`rt 66/66`), the same
+  structure lines, no shadow line, the frames identical. `rmb_rt_frame` takes no ring entry and
+  keeps no scene without the shadows, and the map's shadow tables and transmission buffer are
+  built when the shadows are first on. Without the shadows every instance keeps TASK53's mask
+  (`0xff`) and no carrier is looked for.
+
+Since the frames are the base's byte for byte, their scores against TASK83's `gl1` references
+are the base's, those TASK54 recorded at TASK28's values. They were not compared again.
+
+**Proof 2, effect on.** The double-count check compares, pixel for pixel, a view with the effect
+on and the same view with it off, on the pixels an `r_rt_shadows_show 1` mask marks (no light in
+range). Its two views must have been given the same lights. A control settled whether separate
+records do: three RT-off records of `dlights` at `demo2.dm2` every 7th, and two at `demo1.dm2`,
+are byte-identical, and a developer print (since removed) showed the same light radii and times
+on every one of the 617 frames of each `demo2.dm2` run. The demo's frame time does not reach
+the lights (in a timedemo `cl.time` steps by the demo's 100 ms). So the round before's failures
+were not a frame-time effect. To give every view the same `refdef_t` all the same, each view
+below is a replay of one live record's trace (the harness's TASK46 replay, bit-identical to live
+by construction). The trace's cvar snapshot is the only thing that differs between the replays:
+the value of `r_rt_shadows`, `r_rt_shadows_show` or `r_rt_gbuffer`, rewritten in a copy of the
+trace with the same length (the replayer restores it over the command line). Each record's
+"on" replay is byte-identical to the live record.
+
+The cause of the four failing `demo2.dm2` frames (33, 36, 76, 77) was the plane, not the time.
+Their lights are explosions, which sit an eighth of a unit above the floor they hit. The pass
+measured each light against the G-buffer's normal, 10 bits an axis and off by about 1/1000, so
+over a hundred units the light fell behind the floor on one side of a line through its foot.
+The floor there went dark where gl1 lit it. The pass now takes the surface's own plane for a
+found surface (`rm_rts_plane`, `mtl_rts_surf`), and the world's test before the search allows for
+the normal's and the depth's error (`mtl_rts_near`). The same replays then passed.
+
+Records (`PINS_SEED=1`): `rt-shadows` and `rt-shadows-entities` (`cl_entities 1`) at `demo1.dm2`
+(23 frames) and `demo2.dm2` every 7th (89 frames). Against the G-buffer path with the effect off,
+the RT-off pixel on the path the effect takes:
+
+| Record | Frames | Masked pixels a frame | Worst max, worst masked score |
+|---|---|---|---|
+| `rt-shadows`, `demo1.dm2` | 23 | 48,559 to 307,100 | 0, 0.000000 |
+| `rt-shadows`, `demo2.dm2` every 7th | 89 | 111,665 to 306,963 | 0, 0.000000 |
+| `rt-shadows-entities`, `demo1.dm2` | 23 | 49,294 to 307,100 | 0, 0.000000 |
+| `rt-shadows-entities`, `demo2.dm2` every 7th | 89 | 115,138 to 306,963 | 0, 0.000000 |
+
+The invariant holds on every frame of the four. Against the default path the masked pixels
+differ by what the G-buffer path itself differs from it with the effect off, frame for frame
+the same max and score: `rt-shadows` within 1/255 at `demo1.dm2`, up to 3 on `demo2.dm2`
+frame 9; with entities up to 44 (`demo1.dm2`) and 67 (`demo2.dm2`). That is TASK54's path, not
+this pass.
+
+- *Moved brush entities.* Both entity records hold doors and lifts that move (`demo1.dm2`: `*50`
+  in 25 places, `*42` and `*43` in 14; `demo2.dm2`: `*32` in 33, `*36` in 9), with lights in 270
+  and 238 of their frames. The host test holds the review's probe (a floor at model z 0, its
+  entity at z -200, a light at world (8, 8, 50) of radius 200: gl1 adds 138 at luxel 0, and so
+  does the pass) and 200 turned and moved faces at every luxel.
+- *Alias models* (the round before's replays, `4deded44`). With the material view
+  (`r_rt_gbuffer_show 3`): of
+  1,180,417 alias-model pixels none is in range and none changes with the effect; every pixel
+  the effect changes (1,895,766) is a world pixel with a light in range.
+- *A frame with nothing in range* (13 of 23 at `demo1.dm2`, 59 of 89 at `demo2.dm2`): its mask is
+  white wherever the 2D is not drawn. `r_rt_shadows_show` draws its view with no light in range
+  when nothing is traced.
+
+Per frame (the classes view, `r_rt_shadows_show 2`, of the same replays), pixels with a light
+in range, of 307,200:
+
+- `rt-shadows`, `demo1.dm2`: 0 to 258,122 (mean 49,046); traced 38,616 on average, 0.84 %
+  shadowed;
+- `rt-shadows`, `demo2.dm2`: 0 to 194,858 (mean 34,991); traced 28,392, 0.92 % shadowed;
+- `rt-shadows-entities`, `demo1.dm2`: 0 to 257,387 (mean 47,999); traced 37,701, 1.71 %
+  shadowed (14,793 of 867,130 traced pixels), 48.4 % before the rule;
+- `rt-shadows-entities`, `demo2.dm2`: 0 to 191,385 (mean 32,929); traced 26,637, 4.76 % shadowed
+  (112,935 of 2,370,702), 36.6 % before.
+
+Both records without entities are as the round before, frame for frame. The round before's own
+four traces, replayed on `3d659a2b`, give the same classes as this round's records: the same
+`refdef_t` before and after the rule.
+
+*A light's own model, the numbers.* Before the rule a monster's muzzle flash put its light at the
+very origin of the flash and smoke models it spawns, and a rocket or a bolt carries its light
+inside its own model, so every ray to such a light met the model around it. Per frame with a
+light in range, in range / shadowed pixels, with the round before's shadowed in brackets:
+
+- `demo1.dm2` (10 of 23 frames): 5: 12,384 / 374 (6,110); 7: 59,708 / 3,665 (40,180); 8:
+  257,387 / 0 (242,931); 10: 95,665 / 0 (70,898); 14: 91,601 / 4,919 (4,919); 16: 122,324 /
+  1,894 (1,894); 18: 42,828 / 0 (0); 19: 125,334 / 0 (0); 20: 195,355 / 383 (383); 21: 101,394 /
+  3,558 (52,217);
+- `demo2.dm2` (29 of 89 frames): 4: 179,337 / 583 (583); 5: 174,901 / 2,421 (2,421); 6: 139,373 /
+  32,038 (32,038); 9: 99,101 / 0 (0); 10: 95,798 / 157 (157); 11: 103,579 / 203 (203); 12:
+  101,197 / 5 (5); 13: 105,326 / 21 (21); 14: 62,825 / 55 (16,935); 15: 72,986 / 3,249 (3,249);
+  21: 125,851 / 7,365 (7,365); 23: 191,385 / 1,006 (166,114); 27: 24,966 / 284 (6,153); 28:
+  87,827 / 0 (0); 32: 39,748 / 2,232 (3,694); 33: 170,228 / 24,648 (93,419); 34: 11,597 / 755
+  (3,166); 36: 29,269 / 4,065 (24,008); 42: 93,374 / 0 (0); 44: 109,545 / 89 (78,832); 45:
+  104,158 / 793 (12,926); 47: 96,967 / 2,975 (2,975); 49: 91,112 / 30 (30); 58: 83,770 / 404
+  (404); 76: 122,492 / 20,774 (83,010); 77: 7,887 / 582 (1,660); 78: 81,834 / 1 (40,296); 82:
+  174,737 / 5,597 (153,984); 83: 149,518 / 2,603 (134,284).
+
+`demo1.dm2` frame 8 goes from 242,931 shadowed pixels of 242,931 traced to none, `demo2.dm2` frame
+23 from 166,114 of 166,114 to 1,006. What is left is explained by two diagnostic builds (never
+committed: `RM_RT_Frame` patched in a scratch build, the same replays of the classes):
+
+- every alias model passing every light: 0.85 % (`demo1.dm2`) and 0.81 % (`demo2.dm2`) shadowed,
+  the world's and the brush entities' share, as without entities (0.84 % and 0.92 %);
+- the carriers' boxes grown by 15 more units: 1.17 % and 3.14 %.
+
+So of `demo2.dm2`'s 112,935 shadowed pixels the world and the brush entities cast 19,139, models
+the light is within 16 units of but outside 38,514, and models farther from it 55,282
+(`demo1.dm2`: 7,406, 4,622 and 2,765). Those are real shadows: a model between the light and the
+surface, which gl1 never draws and the effect is for.
+
+*Real shadows stay.* `demo2.dm2` frame 6 keeps its 32,038 shadowed pixels, the same as before the
+rule; with every alias model passing every light only 50 are left (the world's), so models cast
+the other 31,988 (22,800 of them are within 16 units of the light). Frame 21 keeps 7,365, all of
+them the world's (as with the models passing), and frame 23's 1,006 are the world's too.
+
+The per-frame lists are in `<artifacts>/TASK55/rework2/invariant/`, the diagnostics in
+`rework2/e84fed75/diag/`.
+
+**Proof 3, look.** For the owner, in `<artifacts>/TASK55/sidebyside/` (off, on and the classes
+view of the same frame, replays of one trace each, `3d659a2b`; its README gives the counts). The
+frames with the most shadowed pixels show the effect best:
+
+- `rt-shadows`, `demo1.dm2` frames 21 and 7 (about 3,500 shadowed pixels);
+- `rt-shadows`, `demo2.dm2` frames 21 (7,363), 36 (4,344), 76 (3,902) and 15 (2,598);
+- `rt-shadows-entities`, `demo2.dm2` frames 6 (32,038) and 33 (24,648), shadows of models, and
+  76 (20,774), `demo1.dm2` frame 14 (4,919);
+- `rt-shadows-entities`, `demo1.dm2` frame 8 and `demo2.dm2` frame 23, the round before's open
+  finding: lit now (0 and 1,006 shadowed).
+
+**Proof 4, performance** (no validation layer; a scratch store; the timing lock held; the load
+2.4 to 4.4, other agents on the host):
+
+- `timedemo.txt` at 1920 x 1080 (`4deded44`), `dlights` and `rt-shadows` alternated, three
+  rounds: 60.0, 59.9 and 60.0 fps off, 59.9, 60.0 and 59.9 on (689 frames in 11.5 s), the
+  display's rate (TASK54).
+- The shadow pass's GPU time per frame: timestamps at the compute encoder's boundaries, the
+  `r_rt_stats 2` line, over `demo1.dm2` whole. Warm: each run's frames past its first 100 that
+  traced, 308 a run (309 with entities). Three runs each of `rt-shadows` and
+  `rt-shadows-entities`, alternated:
+
+| Size | Entities | Median (run medians) | p10 | p90 | Max |
+|---|---|---|---|---|---|
+| 1920 x 1080 | off | 2.550 ms (2.546 to 2.557) | 1.609 to 1.624 | 3.476 to 3.488 | 4.662 |
+| 1920 x 1080 | on | 3.577 ms (3.483 to 3.633) | 2.007 to 2.026 | 4.791 to 4.962 | 8.102 |
+| 5120 x 2880 | off | 8.525 ms (8.486 to 8.597) | 5.427 to 5.511 | 11.602 to 11.908 | 22.912 |
+| 5120 x 2880 | on | 9.053 ms (8.504 to 9.473) | 6.103 to 6.325 | 12.933 to 13.595 | 34.100 |
+
+5120 x 2880 is `PINS_HIDPI=1` at 2560 x 1440. Rays a pixel (the eye rays and the shadow rays):
+0.86 without entities, 1.09 with them; 31.5 % and 30.7 % of pixels have a light in range, 23.4 %
+and 22.7 % trace. Without entities the round before measured 2.546 and 8.681 ms.
+
+- *The rule's own cost*, against the build without it: the two 1080p traces of the records
+  above replayed by three builds beside the same `quake2`, three rounds alternated. `37b7a7da`
+  (the round before's head, no rule) 2.509 ms without entities and 3.275 ms with them; this
+  round's first build (`e84fed75`: carriers non-opaque, the carried light's ray a ray query)
+  3.048 and 3.854; `3d659a2b` (instance masks) 2.528 and 3.475. The query cost half a
+  millisecond even without entities, a heavier kernel for every pixel, and was replaced; the
+  masks cost 0.02 ms without entities and 0.20 ms (6 %) with them. Both builds give the same
+  frames.
+
+**Proof 5, validation and ASAN.**
+
+- Validation: every record and replay of Proofs 1 and 2 ran with `MTL_DEBUG_LAYER=1` (15 records
+  with the effect off, 4 with it on and 24 replays of them): the banner and no other validation
+  line, no failed command buffer, `teardown: 0 live objects` (`rt 0/0` with the effect off; on,
+  `rt 75/75` and `rt 54/54` without entities, `rt 472/472` and `rt 318/318` with them, as the
+  round before).
+- ASAN: `make ASAN=1 client game ref_metal`, then `debug/quake2` with `MTL_DEBUG_LAYER=1` and a
+  scratch script beside the binary, deleted after with the `config.cfg` the run saves. The
+  script sets `r_rt_shadows 1`, `r_rt_stats 1` and `cheats 1`, then plays `map base1`, the
+  blaster fired for 200 frames (its bolts carry their light), `vid_restart`, firing again, `map
+  base2` and firing again.
+- Result: status 0, no sanitizer line, no validation line past the banner, the pass's targets
+  made in each renderer session (2560 x 1920), an instance structure in 446, 441 and 445 frames
+  (the `r_rt_stats` summaries of the three maps' sessions), both teardowns `0 live objects`
+  (`rt 93/93`, `rt 186/186`).
+
+**Host test and mutants.** `tests/metal/rm_rtshadow_test.c` (2,767 checks), run by
+`tests/check-ref-metal.sh`. It holds the falloff to `rm_lm_dlight`:
+
+- at every luxel of 600 axial faces (front and back);
+- at every luxel and a point inside every cell of 400 faces with scaled, rotated, sheared and
+  shifted axes;
+- at every luxel of 200 faces of turned and moved brush entities, in their model's space with the
+  light's world origin, and the review's probe;
+- at every luxel of a floor with an explosion's light an eighth above it, the floor's normal as
+  rgb10a2 returns it (55 of its 100 lit luxels have the light behind that normal);
+- and none on a surface without light samples.
+
+It also holds the in-range margin, the choice of four, the packing, the bias, the resolve's light
+against `rm_lm_store`, the unprojection, the transmission, the surface map with its unlit bit,
+the plane and the world's test. For a light's own model it holds gl1's box of two frames, and
+`rm_rts_carried`: lights at the model's origin, inside, just inside and just outside the grown
+box on each side under a turn, a second monster between a muzzle flash and a wall (it carries
+none of it), the flash at the gun of the monster that fires it, a scaled and sheared transform,
+400 models turned every way against the box test in their own space, 32 lights and no more, an
+inverted box, a basis too small to invert and lights that are not finite; and the light bit and
+the instance and ray masks.
+
+Failing first:
+
+- the card's first round: against a stub `rm_rtshadow.c`, 53 of 2,160 checks; with the shared
+  header stubbed too, 2,045;
+- rework 1, each fix reverted in a copy: the pixel kept in the world's space fails the probe;
+  an unlit surface lit fails 2 checks, the table without the unlit bit 1;
+- the four `demo2.dm2` frames failed the replayed check before the exact plane and pass after;
+- rework 2, a light's own model: against stubs of `rm_rts_alias_box`, `rm_rts_carried`,
+  `mtl_rts_light_bit` and `mtl_rts_passes`, 18 of 2,755 checks; `demo1.dm2` frame 8 and
+  `demo2.dm2` frame 23 shadowed everywhere before the rule and lit after (Proof 2).
+
+Mutants:
+
+- the card's first round's 36: 34 killed, 2 equivalent;
+- rework 1's 11, of `common/mtl_rts_math.h` and `rm_rtshadow.c`: 9 killed; the two survivors
+  are equivalent (`sf.unlit = unlit` for `unlit ? 1 : 0`, the field only tested for zero; `>` for
+  `>=` in the surface map's bound, an index at the bit needs 2^31 surfaces);
+- rework 2's 16, of the box, `rm_rts_carried`, the light bit, `mtl_rts_passes` and the masks
+  (`<artifacts>/TASK55/rework2/tdd/`): 15 killed. The survivor is equivalent: without the test
+  for a transform that is not finite, a basis that is not finite gives a determinant that is not,
+  and a translation that is not finite fails every box test, so the result is 0 either way. Three
+  of the 16 survived the first run (an inverted box, a near-singular basis, no cap at 32 lights)
+  and are killed by the checks added for them.
+
 ### MetalFX scalers for the 3D view in `ref_metal` (TASK111)
 
 TASK111 makes the MetalFX scalers selectable for the world view
@@ -3811,7 +4139,7 @@ not the cause of those two rows). The ~120 is new against TASK97 (237.2 to
 328.1 at 640x480 and 294.3 to 326.2 at 1280x720 for the same renderers) and
 against the TASK92 section's frame-time table (`skywater`, `demo1.dm2`: 1285
 to 1398 fps for `metal` and 816 to 984 for `gl1-metal`, `r_vsync 0`, taken at a
-load of 7.8 to 13.4 on that section's host), both much higher. FIX53 (#250) now
+load of 7.8 to 13.4 on that section's host), both much higher. FIX51 (#238) now
 carries these data, for the windowed ceilings and the 1600x900 spread.
 The 1600x900 row reads neither: `ref_soft`
 197.7 to 321.2 (the runs split into 197.7 and 219.5 against 316.6 to 321.2),
@@ -4565,3 +4893,281 @@ and `!(cap <=` for `!(cap <`: they differ only where `cap` is exactly
 `RM_POINT_ALIASED_MAX`, where both branches give that value). One form of the mode
 test the compiler refused for an unused operand was re-run in a form that compiles
 and is killed.
+
+## The opaque layer of `ref_metal` and the shim (FIX53)
+
+FIX52 (#239) found that an opaque `CAMetalLayer` of about 1720x700 points
+or more is shown once per display refresh whatever `displaySyncEnabled`
+says, and that only `opaque = NO` lifts it (section "The 60 fps cap at
+1920x1080 windowed (FIX52)"). FIX53 (#250) applies it to `ref_metal` and the
+Metal-backed `gl1`.
+
+**The change.** The layer's `opaque` follows display sync: `NO` with
+`r_vsync 0`, `YES` with `r_vsync 1`, set where `displaySyncEnabled` is set,
+at creation and at the runtime toggle (`rmb_attach` and `rmb_set_vsync` in
+`src/client/refresh/metal/rmb_device.m`; `mgl_layer_create` and
+`mgl_layer_set_sync` in `src/client/refresh/gl1/metal/mgl_layer.m`). No pure
+helper: the rule is one assignment from the value beside it, nothing a host
+test could hold that the readback below does not. The alpha precondition
+needed a change (below): `rmb_frame_end` in
+`src/client/refresh/metal/rmb_encode.m` (after the present blit) and
+`mgl_layer_present` in `mgl_layer.m` (before the present) run a render pass
+that writes alpha 1, and only alpha (colour write mask alpha, a
+three-vertex triangle), over the drawable while the layer is not opaque.
+Its two-function shader is in the shader libraries
+(`rm_vertex_alpha` and `rm_fragment_alpha` in `rm_shaders.metal`,
+`mgl_vertex_alpha` and `mgl_fragment_alpha` in `shaders.metal`), and its
+pipeline is built with the other pipelines at context creation
+(`rmb_resources_open` in `rmb_resource.m`; `mgl_layer_create` in the shim),
+counted in `rmb_counts.pipelines` and the ledger only when it exists, and
+never rebuilt. If it is nil (the build failed), a frame with a layer that is
+not opaque is presented without the pass and one line says so (latched; the
+latch is reset on release). `ref_metal` has 25 pipelines and the teardown line
+reads `state 46/46`. With `r_vsync 1` the layer is opaque, ignores alpha,
+and the pass does not run.
+
+**The drawable's alpha was not 1.** A temporary readback (a blit of the
+drawable into a shared buffer in the frame's command buffer, counted in its
+completion handler, printed per frame; removed before the commit) counted
+drawable pixels with alpha other than 255 at 640x480, `timedemo`
+`demo1.dm2`, per scenario of `scripts/pins/scenarios/` plus the main menu
+(`+menu_main`), the console (`+toggleconsole`), the console over the demo and
+the cinematic (`idlog.cin`), 11 s each, one run per cell. The "before" rows
+ran on main at `22b786cd` (this branch's base before its rebase onto
+`33845c6c`, which adds a rules document only) plus the readback; the "after"
+rows on the earlier form of the fix plus the readback (see the end of this
+paragraph). Before the fix, in both renderers, on the
+frames of the demo (689 of them) up to 305,449 of 307,200 pixels (304,488 to
+305,449 at most across the demo scenarios) had alpha below 1 in every frame
+of every demo scenario (not traced to a draw: the SrcAlpha, OneMinusSrcAlpha
+blend factors of the blended draws are applied to alpha too, which cannot
+keep it at 1); the menu had up to 273,358 in every frame, the console
+304,530 in 274 to 275 of its 711 to 712 frames, the cinematic 304,530 in
+its first frame. `ref_metal` and the shim agree to the pixel on `world` and
+`skywater` (208,327,326 pixels over 689 frames each), as they draw the
+same alpha. After the fix, with `r_vsync 0`:
+
+| Scenario | Frames read, `ref_metal` / shim | Pixels with alpha below 1 |
+|---|---|---|
+| `world`, `hud2d`, `particles`, `models`, `dlights`, `skywater` | 2,448 to 2,610 | 0 |
+| main menu, console, console over the demo | 2,368 to 2,610 | 0 |
+| cinematic | 2,608 | 0 |
+
+Every cell is 0 in both renderers (20 runs of about 2,600 frames; per-run lines are
+kept outside the repository). The readback code is not in the tree: it
+changes the frame. It ran on an earlier form of this change (the pass's shader
+compiled from source on first use), built as `945b712f` on `22b786cd`. Its
+source change is the one in this branch's commit "FIX53: the Metal layer is
+not opaque when display sync is off, and the drawable's alpha is forced to 1
+then" (`58ede1ab` when measured; see the measured build below for its name
+now). The pass was since moved into the shader libraries
+and its pipeline into context creation (above); the shader and the pipeline
+state are the same, and the composited captures below, taken on the "after"
+build, are what cover the pass as it is now.
+
+**The measured build.** Before is main at `33845c6c`, built in a scratch
+worktree. After is this branch's commit "FIX53: build the alpha pass
+pipeline at init, count it, latch a failure", which was `68edb493` on
+`33845c6c` when measured; every later commit of this branch changes only
+documents. Commit ids below that name a FIX53 commit (`68edb493`,
+`58ede1ab`) are those measured ids. The branch was rebased twice after the
+review, so the ids changed while the change did not:
+
+- onto `9039f602` (TASK129: how a sky face's image is chosen, in
+  `src/client/refresh/files/image.c`, and its tests): there the two commits
+  are `f42611e1` and `7d5b06d5`;
+- onto `a6f8532e` (TASK111, the MetalFX scalers): there they are `a25bbd0d`
+  and `c1b075f3`. TASK111 changes 12 files under `src/client/refresh/metal`
+  (`git diff --stat 9039f602 a6f8532e -- src`): five new MetalFX files,
+  `rmb_frame_cut` and an `rmb_fx_release` call in `rmb_encode.m`, a per-frame
+  `RM_FX_EndFrame` in `rm_main.c`, and small edits to `rmb_gbuf.m`,
+  `rm_gbufscene.c`, `rm_model.c`, `rm_pure.c` (the ledger line's new
+  `metalfx` kind) and `rmb.h`. None of them is in `rmb_frame_end`'s present
+  blit, the layer or the vsync path; the scalers are off by default and
+  these runs used none.
+
+The FIX53 source change itself is the same at every step: the added and
+removed lines of `git diff 33845c6c 68edb493 -- src` and of
+`git diff a6f8532e a25bbd0d -- src` are identical. A squash merge gives the
+change one more id; its subject lines identify it. Scratch builds, never committed:
+the pass disabled (the two `*_force_alpha` calls commented out at `68edb493`),
+and a probe build (`68edb493` plus `ScreenCaptureKit` captures, GPU
+timestamps in the shim and environment overrides of the layer's `opaque` and
+of the pass).
+
+**Before and after** (`timedemo` of `demo1.dm2`, FIX52's launch line: a pin
+run with `pins_capture 1000000` that quits by itself at the demo's end, plus
+`+set timedemo 1 +demomap demo1.dm2`, `-portable`, `s_initsound 0`,
+`vid_fullscreen 0`, `r_mode -1`, the size in `r_customwidth` and
+`r_customheight`, `vid_highdpiaware 0`, `pins_seed 1`; the `fps` line of the
+engine; three runs per cell, before and after alternated run by run). The
+timing lock was held for every batch, and before each run the screen was
+unlocked and no other `quake2` was running. The quiet-window table, per batch
+(`uptime` one-minute load before the first and after the last run; processes
+among `make`, `cc`, `clang` and `quake2` found with `pgrep -x`; GPU "Device
+Utilization %" from `ioreg` before and after, the second reading right after
+the last engine exited). The host was never as quiet as FIX52's: the load
+decayed from other lanes' builds and stayed above 1.8. No batch had a
+listed process before or after, except one `clang` after the batch marked:
+
+| Batch | Load before, after | Processes | GPU % before, after |
+|---|---|---|---|
+| `ref_metal` 640x480 `r_vsync 0` | 2.09, 2.36 | none | 6, 13 |
+| `ref_metal` 640x480 `r_vsync 1` | 2.36, 2.10 | none | 0, 0 |
+| `ref_metal` 1920x1080 `r_vsync 0` | 2.10, 1.87 | none | 0, 55 |
+| `ref_metal` 1920x1080 `r_vsync 1` | 1.87, 1.81 | none | 0, 20 |
+| `gl1` 640x480 `r_vsync 0` | 1.81, 1.96 | none | 0, 12 |
+| `gl1` 640x480 `r_vsync 1` | 1.96, 2.16 | none | 0, 14 |
+| `gl1` 1920x1080 `r_vsync 0` | 2.16, 3.07 | none | 0, 53 |
+| `gl1` 1920x1080 `r_vsync 1` | 3.07, 3.49 | `clang` after | 18, 15 |
+| 5120x2880 fullscreen, `ref_metal` | 3.25, 3.55 | none | 0, 78 |
+| 5120x2880 fullscreen, `gl1` | 3.55, 3.65 | none | 0, 87 |
+
+Windowed, fps:
+
+| Renderer | Size | `r_vsync` | Before (fps) | After (fps) |
+|---|---|---|---|---|
+| `ref_metal` | 1920x1080 | 0 | 60.0 | 330.8 to 346.9 |
+| `ref_metal` | 1920x1080 | 1 | 60.0 | 60.0 |
+| `ref_metal` | 640x480 | 0 | 120.0 | 120.0 to 120.1 |
+| `ref_metal` | 640x480 | 1 | 120.0 to 120.1 | 120.0 to 120.1 |
+| Metal-backed `gl1` | 1920x1080 | 0 | 60.1 | 238.2 to 287.1 |
+| Metal-backed `gl1` | 1920x1080 | 1 | 60.0 to 60.1 | 60.1 |
+| Metal-backed `gl1` | 640x480 | 0 | 120.1 to 120.2 | 120.2 |
+| Metal-backed `gl1` | 640x480 | 1 | 120.2 | 120.1 to 120.2 |
+
+At 1920x1080 the cap is gone with `r_vsync 0` and `r_vsync 1` stays at 60.
+
+**The 640x480 ceiling.** With FIX52's own launch line, 640x480 still reads
+about 120 fps (120.0 to 120.2) in both renderers, with `r_vsync 0` and with
+`r_vsync 1`, on the build before this change as well as after it. The ceiling
+is therefore there before the change and is not the opaque layer. FIX52's
+329.7 to 348.9 at 640x480 on the same host is not reproduced by this launch
+line on either build, and why is not explained here: FIX51 (#238) carries
+the ceiling. The "no loss at 640x480" criterion is judged on what is
+readable: the pass's GPU time per frame at 1920x1080 and 5120x2880, below.
+No 640x480 row was taken.
+
+**Fullscreen, 5120x2880, `r_vsync 0`** (fps; the log says `Setting mode -1:
+5120x2880 (vid_fullscreen 1)` and `Drawable size: 5120x2880`):
+
+| Renderer | Before | After |
+|---|---|---|
+| `ref_metal` | 360.0, 339.4, 438.3 | 394.2, 386.4, 400.3 |
+| Metal-backed `gl1` | 319.9, 368.1, 468.1 | 378.4, 370.6, 385.8 |
+
+No loss that these runs separate from their own spread.
+
+**The alpha pass's own cost.** At 1920x1080 windowed and at 5120x2880
+fullscreen with `r_vsync 0` the fps is bounded by the wait for the drawable
+(about 240 to 440), so command-buffer GPU timestamps were used: `ref_metal`'s
+own `MTL_GPU_TIME` line (the mean over command buffers; 1,724 buffers for 689
+frames, so about 2.5 buffers per frame, and the pass is in one of them), and
+the `gpu_ms` of the frame's command buffer printed by a probe in the shim (one
+per frame). Mean GPU milliseconds, pass disabled against pass on, three runs
+alternated, the timing lock held and no `make`, `cc`, `clang` or `quake2`
+process after each row (the one-minute load at the end of each row, 5.2 to
+5.9, includes the batch's own runs and the builds before it):
+
+| Renderer, size | Pass off | Pass on | Difference |
+|---|---|---|---|
+| `ref_metal` 1920x1080 | 0.334, 0.398, 0.432 | 0.532, 0.558, 0.520 | about 0.15 per buffer |
+| `ref_metal` 5120x2880 | 0.728, 0.708, 0.640 | 0.891, 0.890, 0.932 | about 0.2 per buffer |
+| `gl1` 1920x1080 | 1.293, 1.106, 1.179 | 1.644, 1.522, 1.581 | about 0.4 per frame |
+| `gl1` 5120x2880 | 2.284, 2.310, 2.036 | 4.088, 3.944, 3.928 | about 1.8 per frame |
+
+The pass costs about 0.4 ms of GPU time a frame in the shim at 1920x1080 and
+about 1.8 ms at 5120x2880, and about 0.4 to 0.5 ms a frame in `ref_metal` (the
+per-buffer difference times its buffers per frame). That is under the 8.3 ms
+of the 120 fps ceiling at 640x480, so it cannot be read in fps there. The fps
+of the same pass-off and pass-on builds overlaps within the spread of the
+runs for `ref_metal` (1920x1080 windowed 296.1 to 310.6 off, 249.5 to 318.2
+on; fullscreen 379.2 to 382.6 off, 368.3 to 432.2 on); the shim reads lower
+with the pass on (1920x1080 259.8 to 313.2 off, 236.8 to 263.8 on;
+fullscreen 432.5 to 486.2 off, 371.4 to 374.9 on).
+
+**The runtime toggle.** One session each, 1920x1080 windowed, started with
+`r_vsync 1`, `+toggleconsole +exec` a cfg that sets `r_vsync 0`, waits about
+1000 frames, sets `r_vsync 1`, waits 400, sets `r_vsync 0`, waits 1000 more
+(no `vid_restart`; the cfg is run with no demo loading). A temporary print
+once a second of the layer's `opaque`, `displaySyncEnabled` and the present
+rate (removed before the commit). These runs used the same earlier form as the
+readback above (`945b712f` on `22b786cd`, source equal to this branch's
+`58ede1ab`) plus the print; `rmb_set_vsync` and `mgl_layer_set_sync` have not
+changed since:
+
+| Phase | `opaque` / `displaySync` | `ref_metal` (fps, per second) | Metal-backed `gl1` |
+|---|---|---|---|
+| `r_vsync 0` | 0 / 0 | 205.0 to 272.8 (35 s) | 238.9 to 283.6 (35 s) |
+| `r_vsync 1` | 1 / 1 | 60.0 (9 s) | 60.0 (8 s) |
+| `r_vsync 0` | 0 / 0 | 267.7 to 284.9 (12 s) | 242.2 to 268.6 (13 s) |
+
+The first second after each switch is left out (it straddles the change);
+both flips took effect at once, in both directions.
+
+**Pins.** All six scenarios of the table above except the cinematic
+(`world`, `hud2d`, `particles`, `models`, `dlights`, `skywater`; `PINS_SEED=1`;
+the default 640x480, `r_vsync` as the harness leaves it) were recorded for
+`metal` and `gl1-metal` with the renderer modules of main (`33845c6c`) and of
+this branch (`68edb493`) under one engine executable, and compared at
+`--threshold 0 --bad-threshold 0`: 12 comparisons, 23 frames each, 0 failed,
+worst score 0, worst bad 0. A pin captures the offscreen target and runs at
+the harness's default sync, where the new pass does not run; the composited
+captures below are what cover the pass.
+
+**Validation.** One `ref_metal` run under `MTL_DEBUG_LAYER=1` at 1920x1080
+with `r_vsync 0` (the pass running), on `68edb493`: 689 frames at 340.8 fps,
+`Metal API Validation Enabled`, no validation message; teardown `0 live
+objects (... state 46/46 ...), 0 unreleased, 0 unmatched`.
+
+**The pipeline that does not build.** Run with the metallib of main (which has
+no alpha functions) beside the new dylibs, at 1920x1080 `r_vsync 0`: each
+renderer prints its one line (`no alpha pass (its pipeline was not built)`)
+once, the 689 frames run, and `ref_metal`'s teardown reads `state 45/45`, 0
+unreleased, 0 unmatched. There is no retry and no message per frame.
+
+**The composited window, captured from inside the engine.** `screencapture`
+fails here without the Screen Recording permission (`could not create image
+from window`, `could not create image from display`), and no setting was
+changed. A scratch probe build (never committed, linked with
+`ScreenCaptureKit` in that build only) calls
+`+[SCShareableContent getCurrentProcessShareableContentWithCompletionHandler:]`
+(macOS 14.4 and later) and `SCScreenshotManager` on the engine's own window
+after frame 300 of `timedemo demo1.dm2` (half a second after the present, so
+the compositor shows that frame), 960x540 windowed, `r_vsync 0` unless said
+otherwise, and writes the 960x572 pixels (title bar included) to a raw file.
+It needed no permission and asked for none: the call listed the process's
+windows and returned the image. The captures stay outside the repository.
+The diff is a pixel by pixel comparison of the four channels (a small C
+program: differing pixels, largest channel difference):
+
+| Comparison, same frame | `ref_metal` | Metal-backed `gl1` |
+|---|---|---|
+| opaque against opaque (two runs) | 0 differing, max 0 | 0 differing, max 0 |
+| not opaque against not opaque (two runs) | 0, max 0 | 0, max 0 |
+| **opaque against not opaque** (`layer.opaque` forced by environment, `r_vsync 0`, the pass runs when not opaque) | **0 differing, max 0** | **0 differing, max 0** |
+| `r_vsync 1`, opaque forced NO against `r_vsync 1` opaque | 0, max 0 | 0, max 0 |
+| negative control: not opaque with the pass disabled, against opaque | 255,332 differing, max 9 | 255,332 differing, max 9 |
+| `r_vsync 1` against `r_vsync 0`, both opaque (not a layer difference) | 516,880 differing, max 196 | 516,880 differing, max 196 |
+
+So with the pass the composited window is pixel-identical whether the layer is
+opaque or not, in both renderers, and the same capture does see the
+difference without the pass (the negative control). The last row is a
+different demo frame (what `r_vsync` changes in the frames the demo plays at
+the same call index), unrelated to the layer: opaque against not opaque at
+the same `r_vsync` is 0 in both. `soft` was not captured: its layer is
+set by `sw_main.c` (C, no Objective-C in the file), so the probe does not
+fit there without more than a scratch edit; the `soft` window comparison is
+not made. `soft`'s layer change is FIX52's, not this card's; its capture is
+TASK132 (#319).
+
+**For FIX51 (#238).** At 1920x1080 with the layer not opaque `ref_metal`
+runs 330.8 to 346.9 fps (2.9 to 3.0 ms a frame) and the shim 238.2 to 287.1
+(3.5 to 4.2 ms) in the timedemo; 5120x2880 fullscreen reads 386 to 400
+(`ref_metal`) and 371 to 386 (the shim).
+The 3 to 4 ms of fixed cost is not the opaque layer. At 640x480 the 120 fps
+ceiling is present with FIX52's launch line on the build before this change
+too, so it is not the layer and not lifted by it. The alpha pass costs about
+0.4 ms of GPU time a frame in the shim at 1920x1080 and 1.8 ms at 5120x2880
+(`ref_metal` about 0.4 to 0.5 ms a frame); the fps there is capped by the
+drawable wait, so only the GPU time shows it.

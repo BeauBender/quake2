@@ -746,6 +746,8 @@ cheatvar_t cheatvars[] = {
 	{"g_footsteps", "1"},
 	{"g_machinegun_norecoil", "0"},
 	{"g_swap_speed", "1"},
+	{"r_rt_gbuffer_show", "0"},
+	{"r_rt_shadows_show", "0"},
 	{NULL, NULL}
 };
 

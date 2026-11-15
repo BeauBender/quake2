@@ -221,6 +221,66 @@ mgl_library_path(char *path, size_t len)
 	return 1;
 }
 
+/*
+ * FIX53: a layer that is not opaque (r_vsync 0) is blended with what is
+ * behind the window, so every drawable pixel needs alpha 1. The blended
+ * draws, straight into the drawable, leave alpha below 1. This pass
+ * writes alpha 1, and only alpha, over the drawable after it. Its
+ * pipeline is built with the context (mgl_alpha_build) from the shim's
+ * shader library, once: it is nil when that failed, the frames are then
+ * presented without the pass, and one line says so.
+ */
+static id<MTLRenderPipelineState> mgl_alpha_pso;
+static int mgl_alpha_reported;
+
+static void
+mgl_alpha_build(void)
+{
+	NSError *e = nil;
+	MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+
+	d.vertexFunction = [mgl_library newFunctionWithName:@"mgl_vertex_alpha"];
+	d.fragmentFunction = [mgl_library newFunctionWithName:@"mgl_fragment_alpha"];
+	mgl_alpha_pso = nil;
+
+	if (d.vertexFunction && d.fragmentFunction)
+	{
+		d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+		d.colorAttachments[0].writeMask = MTLColorWriteMaskAlpha;
+		mgl_alpha_pso = [mgl_device newRenderPipelineStateWithDescriptor:d error:&e];
+	}
+}
+
+/* Alpha 1 over the whole of tex, colour untouched. */
+static void
+mgl_force_alpha(id<MTLCommandBuffer> cmd, id<MTLTexture> tex)
+{
+	id<MTLRenderPipelineState> pso = mgl_alpha_pso;
+	MTLRenderPassDescriptor *rp;
+	id<MTLRenderCommandEncoder> enc;
+
+	if (!pso)
+	{
+		if (!mgl_alpha_reported)
+		{
+			mgl_alpha_reported = 1;
+			fprintf(stderr, "mgl: no alpha pass (its pipeline was not built): "
+					"the window shows the frame's own alpha\n");
+		}
+
+		return;
+	}
+
+	rp = [MTLRenderPassDescriptor renderPassDescriptor];
+	rp.colorAttachments[0].texture = tex;
+	rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
+	rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+	enc = [cmd renderCommandEncoderWithDescriptor:rp];
+	[enc setRenderPipelineState:pso];
+	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+	[enc endEncoding];
+}
+
 static void
 mgl_release_all(void)
 {
@@ -238,6 +298,8 @@ mgl_release_all(void)
 	upload_blit = nil;
 	upload_cmd = nil;
 	mgl_pipelines = nil;
+	mgl_alpha_pso = nil;
+	mgl_alpha_reported = 0;
 	mgl_samplers = nil;
 	mgl_depth_states = nil;
 	mgl_unbound = nil;
@@ -332,6 +394,8 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 		mgl_metal_layer.framebufferOnly = NO;          /* glReadPixels blits from it */
 		mgl_metal_layer.allowsNextDrawableTimeout = YES;
 		mgl_metal_layer.displaySyncEnabled = mgl_sync ? YES : NO;
+		/* an opaque layer of about 1720x700 points or more is shown once per refresh (FIX53) */
+		mgl_metal_layer.opaque = mgl_sync ? YES : NO;
 		mgl_metal_layer.drawableSize = CGSizeMake(w > 0 ? w : 1, h > 0 ? h : 1);
 
 		/*
@@ -347,6 +411,7 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 		}
 
 		mgl_pipelines = [NSMutableDictionary dictionary];
+		mgl_alpha_build();
 		mgl_samplers = [NSMutableDictionary dictionary];
 		mgl_depth_states = [NSMutableDictionary dictionary];
 
@@ -380,6 +445,8 @@ mgl_layer_set_sync(int on)
 	if (mgl_metal_layer)
 	{
 		mgl_metal_layer.displaySyncEnabled = mgl_sync ? YES : NO;
+		/* an opaque layer of about 1720x700 points or more is shown once per refresh (FIX53) */
+		mgl_metal_layer.opaque = mgl_sync ? YES : NO;
 	}
 }
 
@@ -893,6 +960,11 @@ mgl_layer_present(void)
 		{
 			if (frame_drawable)
 			{
+				if (!mgl_metal_layer.opaque)
+				{
+					mgl_force_alpha(frame_cmd, frame_drawable.texture);
+				}
+
 				[frame_cmd presentDrawable:frame_drawable];
 			}
 

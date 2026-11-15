@@ -46,6 +46,8 @@
 #include <string.h>
 
 #include "header/rm_rt.h"
+#include "common/mtl_shader_math.h"
+#include "common/mtl_rts_math.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_rt.m is written for ARC: compile it with -fobjc-arc"
@@ -110,6 +112,16 @@ static id<MTLComputePipelineState> lerp_pipe;
 static id<MTLAccelerationStructure> map_as[RMB_RT_MAX_MAP];
 static size_t map_bytes[RMB_RT_MAX_MAP];
 static id<MTLBuffer> map_mat;   /* the world's per-triangle material ids */
+static unsigned long map_first[RMB_RT_MAX_MAP];   /* each structure's first triangle of the world's index buffer */
+static id<MTLBuffer> map_trans; /* the world's per-triangle transmission (RT3, rmb_rt_set_transmit) */
+static unsigned long map_ntris;
+
+/* the last frame's scene for a ray query (RT3): its structures, the instances' first triangles, its frame */
+static NSArray<id<MTLAccelerationStructure>> *scene_structs;
+static id<MTLBuffer> scene_base;
+static size_t scene_base_ofs;
+static unsigned long scene_frame;
+static int scene_ok;
 
 static rmb_rt_model_t models[RMB_RT_MAX_MODELS];
 static rmb_rt_entry_t pool[RMB_RT_POOL];
@@ -232,9 +244,15 @@ rmb_rt_free_map(void)
 	{
 		RMB_RT_SET(map_as[i], nil);
 		map_bytes[i] = 0;
+		map_first[i] = 0;
 	}
 
 	RMB_RT_SET(map_mat, nil);
+	RMB_RT_SET(map_trans, nil);
+	map_ntris = 0;
+	scene_ok = 0;
+	scene_structs = nil;
+	scene_base = nil;
 }
 
 static void
@@ -292,6 +310,9 @@ rmb_rt_close(void)
 		scratch_size = 0;
 		RMB_RT_SET(samples, nil);
 		RMB_RT_SET(lerp_pipe, nil);
+		scene_ok = 0;
+		scene_structs = nil;
+		scene_base = nil;
 	}
 
 	rt_open = 0;
@@ -381,6 +402,7 @@ rmb_rt_build_map(int vbuf, int ibuf, const rmb_rt_range_t *ranges, int nranges, 
 			}
 
 			map_bytes[i] = map_as[i].size;
+			map_first[i] = ranges[i].first_tri;
 			ofs[i] = total;
 			total += rmb_rt_align(sz.buildScratchBufferSize);
 		}
@@ -437,6 +459,7 @@ rmb_rt_build_map(int vbuf, int ibuf, const rmb_rt_range_t *ranges, int nranges, 
 
 	s->world_bytes = map_bytes[0];
 	s->material_bytes = ntris_all;
+	map_ntris = ntris_all;
 
 	for (i = 1; i < nranges; i++)
 	{
@@ -658,7 +681,8 @@ rmb_rt_take(int mid, unsigned long fno)
 }
 
 int
-rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nlerps, rm_rt_frame_stats_t *s)
+rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nlerps, int shadows,
+		rm_rt_frame_stats_t *s)
 {
 	unsigned long fno = 0;
 	id<MTLCommandBuffer> cmd;
@@ -672,6 +696,7 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 		return 0;
 	}
 
+	scene_ok = 0;
 	cmd = rmb_frame_compute(&fno);
 
 	if (!cmd)
@@ -692,8 +717,9 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 		MTLAccelerationStructureInstanceDescriptor *desc;
 		MTLInstanceAccelerationStructureDescriptor *id_desc;
 		MTLAccelerationStructureSizes isz;
-		id<MTLBuffer> ring = nil;
-		size_t ring_ofs = 0, need = 0, at;
+		id<MTLBuffer> ring = nil, bring = nil;
+		size_t ring_ofs = 0, bring_ofs = 0, need = 0, at;
+		uint32_t *ibase = NULL;
 		unsigned base = (unsigned)slot * RMB_RT_SAMPLES;
 
 		stamp++;
@@ -740,7 +766,17 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 		/* the instance descriptors, in the frame ring */
 		desc = rmb_frame_ring_take(rm_rt_instance_bytes(n), &ring, &ring_ofs);
 
-		if (!desc)
+		/*
+		 * with RT3's shadows, two words an instance for the ray queries: its
+		 * first triangle of the map's buffers (~0 for an alias model) and the
+		 * lights it carries (rm_rt_inst_t's carry)
+		 */
+		if (desc && shadows)
+		{
+			ibase = rmb_frame_ring_take((size_t)n * 2 * sizeof(uint32_t), &bring, &bring_ofs);
+		}
+
+		if (!desc || (shadows && !ibase))
 		{
 			s->skipped += (unsigned long)n;
 			return 0;
@@ -796,6 +832,17 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 			desc[j].mask = 0xff;
 			desc[j].intersectionFunctionTableOffset = 0;
 			desc[j].accelerationStructureIndex = (uint32_t)k;
+			if (ibase)
+			{
+				const uint32_t carry = (inst[i].kind == RM_RT_INST_ALIAS) ? (uint32_t)inst[i].carry : 0;
+
+				ibase[2 * j] = (inst[i].kind == RM_RT_INST_ALIAS) ? 0xffffffffu : (uint32_t)map_first[inst[i].model];
+				ibase[2 * j + 1] = carry;
+
+				/* a model that carries a light has its own mask: the shadow rays of that light test it apart and pass it */
+				desc[j].mask = mtl_rts_inst_mask(carry);
+			}
+
 			j++;
 
 			if (inst[i].kind == RM_RT_INST_INLINE)
@@ -1009,6 +1056,21 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 			}];
 		}
 
+		/* the scene of RT3's ray queries, kept only for the shadows */
+		if (shadows)
+		{
+			scene_structs = [structs copy];
+			scene_base = bring;
+			scene_base_ofs = bring_ofs;
+			scene_frame = fno;
+			scene_ok = 1;
+		}
+		else
+		{
+			scene_structs = nil;
+			scene_base = nil;
+		}
+
 		s->frame = fno;
 		s->instances = (unsigned long)id_desc.instanceCount;
 		s->ias_bytes = ias_size;
@@ -1033,4 +1095,66 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 	}
 
 	return 1;
+}
+
+/* ---- RT3 (TASK55): the scene for the shadow rays ---------------------------------------- */
+
+int
+rmb_rt_set_transmit(const unsigned char *t, unsigned long ntris)
+{
+	if (!t)
+	{
+		@autoreleasepool
+		{
+			RMB_RT_SET(map_trans, nil);
+		}
+
+		return 0;
+	}
+
+	if (!rt_open || (ntris == 0) || (ntris != map_ntris))
+	{
+		return 0;
+	}
+
+	@autoreleasepool
+	{
+		RMB_RT_SET(map_trans, [rmb_device newBufferWithBytes:t length:ntris options:MTLResourceStorageModeShared]);
+	}
+
+	return map_trans != nil;
+}
+
+int
+rmb_rt_bind_scene(id<MTLComputeCommandEncoder> ce, unsigned long fno, int ias_at, int base_at, int trans_at,
+		int ntris_at)
+{
+	uint32_t nt;
+
+	if (!rt_open || !scene_ok || (scene_frame != fno) || !ias || !scene_base || !scene_structs.count)
+	{
+		return 0;
+	}
+
+	/* the instance structure, and every structure it holds marked used: a query reads them through it */
+	[ce setAccelerationStructure:ias atBufferIndex:(NSUInteger)ias_at];
+
+	for (id<MTLAccelerationStructure> as in scene_structs)
+	{
+		[ce useResource:as usage:MTLResourceUsageRead];
+	}
+
+	[ce setBuffer:scene_base offset:scene_base_ofs atIndex:(NSUInteger)base_at];
+
+	/* without a transmission buffer every triangle stops a ray (the kernel reads it only with trans set) */
+	nt = map_trans ? (uint32_t)map_ntris : 0;
+	[ce setBuffer:(map_trans ? map_trans : scene_base) offset:(map_trans ? 0 : scene_base_ofs) atIndex:(NSUInteger)trans_at];
+	[ce setBytes:&nt length:sizeof(nt) atIndex:(NSUInteger)ntris_at];
+	return 1;
+}
+
+double
+rmb_rt_gpu_ms(uint64_t ticks)
+{
+	return rmb_rt_ticks_ms(ticks);
 }
