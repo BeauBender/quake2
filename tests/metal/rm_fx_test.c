@@ -45,6 +45,8 @@ test_mode_of(void)
 	CHECK(rm_fx_mode_of(4) == 3);
 	CHECK(rm_fx_mode_of(1e30f) == 3);
 	CHECK(rm_fx_mode_of(-0.5f) == 0);
+	CHECK(rm_fx_mode_of(-1) == 0);
+	CHECK(rm_fx_mode_of(-2.5f) == 0);
 	CHECK(rm_fx_mode_of(-1e30f) == 0);
 	CHECK(rm_fx_mode_of(NAN) == 0);
 	CHECK(rm_fx_mode_of(INFINITY) == 0);
@@ -202,6 +204,10 @@ test_sizes(void)
 	CHECK(s.iw == 640 && s.ih == 480);
 	CHECK(rm_fx_sizes(&o, -1, &s) == 1);
 	CHECK(s.iw == 640 && s.ih == 480);
+	/* rounded, not truncated: 641 x 0.75 is 480.75 */
+	o = vp(0, 0, 641, 481);
+	CHECK(rm_fx_sizes(&o, 0.75f, &s) == 1);
+	CHECK(s.iw == 481 && s.ih == 361);
 	o = vp(0.4, 0.6, 639.6, 479.4);
 	CHECK(rm_fx_sizes(&o, 1, &s) == 1);
 	CHECK(s.ox == 0 && s.oy == 1 && s.ow == 640 && s.oh == 479);
@@ -220,6 +226,10 @@ test_sizes(void)
 	CHECK(rm_fx_sizes(&o, 0.5f, &s) == 0);
 	o = vp(-1, 0, 640, 480);
 	CHECK(rm_fx_sizes(&o, 0.5f, &s) == 0 && s.ox == 0);
+	o = vp(-0.4, 0, 640, 480);
+	CHECK(rm_fx_sizes(&o, 0.5f, &s) == 0);
+	o = vp(0, -0.4, 640, 480);
+	CHECK(rm_fx_sizes(&o, 0.5f, &s) == 0);
 	o = vp(0, -1, 640, 480);
 	CHECK(rm_fx_sizes(&o, 0.5f, &s) == 0);
 	o = vp(NAN, 0, 640, 480);
@@ -436,7 +446,15 @@ test_format(void)
 	CHECK(rm_fx_stats_format(2, &s, RM_FX_RESET_ALL, 2, buf, sizeof(buf)));
 	CHECK(strcmp(buf, "ref_metal: metal_stats: metalfx temporal: input 320x240, output 640x480 at 64,48, "
 			"reset first mode size rect cut, scaler 2.000 ms") == 0);
-	CHECK(rm_fx_stats_format(2, &s, 0, 1, buf, 30) == 0 && buf[0] == '\0');
+	CHECK(rm_fx_stats_format(2, &s, 0, 0, buf, sizeof(buf)) && strstr(buf, ", scaler 0.000 ms"));
+		CHECK(rm_fx_stats_format(2, &s, 0, 1, buf, 30) == 0 && buf[0] == '\0');
+	/* an exact fit leaves no room for the terminator: refused; one byte more fits */
+	{
+		const char *want = "ref_metal: r_metalfx 2 (temporal) x 1 (spatial)";
+
+		CHECK(rm_fx_fallback_format("r_metalfx", 2, 1, "x", buf, strlen(want)) == 0 && buf[0] == '\0');
+		CHECK(rm_fx_fallback_format("r_metalfx", 2, 1, "x", buf, strlen(want) + 1) && strcmp(buf, want) == 0);
+	}
 	CHECK(rm_fx_stats_format(2, &s, 0, 1, buf, 0) == 0);
 
 	CHECK(rm_fx_support_format(VM_HAS, buf, sizeof(buf)));

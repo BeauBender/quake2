@@ -92,6 +92,8 @@ scenario plays `PINS_DEMO`, so all of them follow the same camera path.
 | `hud2d-sharp` | `hud2d` with `metal_2d_sharp 1`: the sharp-bilinear sample of the 2D pictures of the Metal renderer (the others draw it as `hud2d`). At the harness's default 640x480 the 2D scale is 1, so it draws exactly `hud2d`; it tests the switch only at another size: `PINS_WIDTH=2560 PINS_HEIGHT=1440 scripts/pins.sh record metal hud2d-sharp`, judged against `hud2d` at that size, from which it must differ |
 | `hud2d-scale8` | `hud2d` with `r_scale8bittextures 1` |
 | `world-scale8` | `world` with `r_scale8bittextures 1`: the 8-bit world textures scaled up and smoothed |
+| `world-metalfx1`, `world-metalfx2`, `world-metalfx3` | `world` with `r_metalfx` 1, 2 or 3 at `r_metalfx_scale 0.5`: the 3D view drawn at half size and upscaled by a MetalFX scaler (the others draw it as `world`). Where the GPU lacks a mode it falls back to the best one below, so on a GPU with only the spatial scaler all three draw `world-metalfx1`'s frames |
+| `world-metalfx-interp` | `world` with `r_metalfx_interp 1`; frame generation is not built yet, so it draws `world`'s frames on every GPU |
 | `particles-cap` | `particles` with `metal_particle_cap 1`: the particle size limit of the Metal renderer scaled by `height / 480` (the others draw it as `particles`); recorded with `PINS_SEED` like `particles` |
 | `models` | the world plus entities: models, sprites, beams, the view weapon |
 | `particles` | everything, including particles, dynamic lights and the screen blend |

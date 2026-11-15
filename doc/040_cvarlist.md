@@ -740,7 +740,12 @@ has) is not drawn.
   teardown line with its object counts (devices, queues, views,
   textures, buffers and states: the shader library, pipeline,
   depth-stencil and sampler states) is printed at every shutdown
-  regardless. Defaults to `0`.
+  regardless. With a MetalFX scaler on (`r_metalfx`) it also prints a
+  line on every 60th scaled view and on each view whose history is
+  dropped: the mode, the input and output sizes, the reasons for the drop
+  and the GPU time of the scaler's pass (the pass then runs in a command
+  buffer of its own); `2` prints that line on every scaled view. Defaults
+  to `0`.
 
 * **metal_lightmap_filter**: How the Metal renderer filters the lightmaps
   of the world. `0` (the default) is the bilinear filter every renderer
@@ -781,6 +786,60 @@ has) is not drawn.
   are triangles and have no limit. Only `1` and `0` are
   values: any other value is `0`. Other renderers do not have it. Saved with the
   configuration; applies from the next frame.
+
+The `r_metalfx*` cvars choose the MetalFX upscaler of the Metal
+renderer's 3D view (decision 0011), a development option for comparing
+the scalers. The 3D view is drawn at a smaller size and MetalFX scales it
+to the view's rectangle (the whole window at the full screen size); the status
+bar, the menus and the console are drawn after it at the window's size.
+With every mode off (the default) nothing of MetalFX is made and the
+picture is the same as before these cvars existed.
+
+* **r_metalfx**: The scaler. `0` (the default) is none. `1` is
+  `MTLFXSpatialScaler`, which scales the colour of each frame on its own.
+  `2` is `MTLFXTemporalScaler`, which also takes the depth, how far each
+  pixel moved and a sub-pixel jitter of the view, and keeps a history
+  across frames. `3` is `MTLFXTemporalDenoisedScaler`, which needs a
+  ray-traced effect; until one exists it runs as `2` and says so. A mode
+  the GPU lacks is set back to the best mode below it that the GPU has,
+  with a line in the console (`r_metalfx_modes` says which it has). A
+  fraction is cut to the whole number below it, a value above `3` counts
+  as `3`, and a negative value or one that is not a finite number as
+  `0`. The history is dropped on a map load, a `vid_restart`, a frame
+  drawn without the world, a change of the mode, of `r_metalfx_scale` or
+  of the view's rectangle (the screen size, the window's size), and when the
+  view moves more than 256 units at once (a teleport or a camera cut,
+  the distance the client itself does not smooth); a change of `fov` and
+  the player-setup menu's model do not drop it. With a scaled view the
+  limit of a smooth particle point (256 pixels) is in the smaller view's
+  pixels, so a particle above 256 pixels of the window is drawn smaller
+  than without a scaler; this needs `gl1_particle_max_size` above 256.
+  Other renderers do not have it. Saved with the configuration; applies
+  from the next frame.
+
+* **r_metalfx_interp**: Frame generation with `MTLFXFrameInterpolator`,
+  a development option. Frame generation is not built yet: on every GPU
+  `1` is set back to `0` with a line in the console (on a GPU without the
+  interpolator the line says so). Defaults to `0`. Other renderers do not
+  have it. Saved with the configuration.
+
+* **r_metalfx_modes**: Read only, set by the Metal renderer when it
+  starts: the modes the GPU supports (MetalFX's `supportsDevice:` for each
+  scaler and for the frame interpolator), as the sum of `1` (off, always
+  there), `2` (`r_metalfx 1`), `4` (`r_metalfx 2`), `8` (`r_metalfx 3`)
+  and `16` (the frame interpolator). The menu uses it to grey out what the
+  GPU lacks. A value written to it is put back. `1` where MetalFX is
+  missing; under other renderers it is not set.
+
+* **r_metalfx_scale**: The size the 3D view is drawn at with a scaler, as
+  a fraction of the view's rectangle, width and height alike. `0` (the
+  default) picks the GPU family's default: 1080 lines on Apple GPU family
+  9 and later (M3 and later), 720 lines below, as a fraction of the
+  view's height. Any value is kept between `1/3` (the largest ratio the
+  scalers take, lower where the GPU reports a smaller one) and `1`; at
+  `1` the view is drawn at full size and the scaler still runs. A
+  negative value or one that is not a finite number counts as `0`. Saved
+  with the configuration; applies from the next frame.
 
 The `r_rt_*` cvars belong to the Metal renderer's ray tracing, which is
 being built and changes nothing drawn yet: with `r_rt_stats` set, the renderer
