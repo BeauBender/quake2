@@ -21,11 +21,12 @@
  * - With the two together, a 640x480 window on a display of pixel density
  *   2 gives viddef 1280x960 and the default 2D scale 2 at
  *   vid_highdpiaware 1, and 640x480 and scale 1 at 0.
- * - At both values the menu, in its own units, spans the window's 640x480
- *   points, the units SDL moves the mouse in.
  *
  * Not proven here: what SDL makes of the flag (the window's pixels);
  * that is measured with the engine, see the runbook's TASK118 section.
+ * Nor the mouse: the engine draws no menu pointer and counts motion only
+ * in game (src/client/input/sdl3.c), so the card's menu cursor item is
+ * closed by that code path in the runbook, not by a test here.
  *
  * =======================================================================
  */
@@ -160,33 +161,6 @@ TEST(hidpi_2d_scale_follows_the_size_taken)
 	T_EQ_INT(viddef.width, 640);
 	T_EQ_INT(viddef.height, 480);
 	T_EQ_FLT(SCR_GetMenuScale(), 1);
-
-	viddef.width = 640;
-	viddef.height = 480;
-}
-
-/*
- * The mouse pointer: the engine draws none. SDL reports mouse positions
- * and relative motion in points, not pixels, at both values; the system
- * pointer over a windowed menu moves in points, and in-game motion turns
- * the view by its count, not across the drawable. What the drawable's
- * density could change is where the menu lies under a pointer that moves
- * in points: the menu, laid out in its own units (the drawable divided by
- * the menu scale), must span the window's 640x480 points at both values.
- */
-TEST(hidpi_menu_spans_the_window_in_points)
-{
-	float v;
-
-	stub_client_cvars();
-	Cvar_Set("r_menuscale", "-1");
-
-	for (v = 0; v <= 1; v++)
-	{
-		t_hidpi_viddef(v, 2, 0, -1);
-		T_EQ_INT((int)(viddef.width / SCR_GetMenuScale()), 640);
-		T_EQ_INT((int)(viddef.height / SCR_GetMenuScale()), 480);
-	}
 
 	viddef.width = 640;
 	viddef.height = 480;
