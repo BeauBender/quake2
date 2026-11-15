@@ -518,6 +518,31 @@ test_greyed_items_cannot_be_changed(void)
 	}
 }
 
+/* A scaler moved between two modes keeps the scale the player stepped to,
+   and a greyed item's cvar is not written from its "n/a" value. */
+static void
+test_scale_survives_a_scaler_move_and_greyed_cvars_stay(void)
+{
+	Reset();
+	Open("metal", "15");
+	CHECK(Slide("MetalFX scaler", 1), "scaler Right");
+	CHECK(Slide("MetalFX scale", 1), "scale Right");
+	CHECK(Slide("MetalFX scaler", 1), "scaler Right again");
+	CHECK(!strcmp(Shown("MetalFX scale"), "2/3"), "the step was lost: shows %s", Shown("MetalFX scale"));
+
+	/* modes 15 has no interpolator: frame generation is greyed and its cvar kept */
+	Reset();
+	SetCv("r_metalfx_interp", "1");
+	Open("metal", "15");
+	CHECK(Greyed("frame generation"), "enabled without an interpolator");
+	Apply();
+	CHECK(!strcmp(Str("r_metalfx_interp"), "1"), "r_metalfx_interp %s", Str("r_metalfx_interp"));
+
+	/* no item at the cursor: nothing runs */
+	main_menu->cursor = -1;
+	CHECK(!Menu_SelectItem(main_menu), "selected with the cursor off the list");
+}
+
 /* "custom" is a choice only while the cvar holds a value that is not a step. */
 static void
 test_custom_scale_is_not_a_choice(void)
@@ -636,6 +661,7 @@ main(void)
 		printf("skip: no Metal in the renderer list\n");
 	}
 	test_greyed_items_cannot_be_changed();
+	test_scale_survives_a_scaler_move_and_greyed_cvars_stay();
 	test_custom_scale_is_not_a_choice();
 	test_the_banner_is_clear_of_the_items();
 

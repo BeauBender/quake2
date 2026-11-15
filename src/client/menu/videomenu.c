@@ -597,35 +597,12 @@ RestartNeededForAllMsg(void *unused)
 }
 
 /*
- * The video menu's top, in the menu's own units: the menu is centred,
- * but its first item must start below the banner (drawn by M_Banner at
- * the screen's middle less 110 units, as tall as its picture) and a few
- * units clear of it. The renderer's own settings are on a page of their
- * own because one list of them all is taller than the screen at the
- * smallest virtual height, 240.
+ * The renderer's own settings are a page of their own: one list of every
+ * item is 240 units tall, as tall as the smallest virtual screen, and
+ * centred it starts over the banner. Each page is centred and fits below
+ * the banner and above the bottom edge down to that height;
+ * tests/menu/videomenu_test.c asserts it.
  */
-#define BANNER_NAME "m_banner_video"
-#define BANNER_GAP 4
-
-static void
-PlaceBelowBanner(menuframework_s *menu)
-{
-	const float scale = SCR_GetMenuScale();
-	int w, h;
-
-	Menu_Center(menu);
-
-	Draw_GetPicSize(&w, &h, BANNER_NAME);
-
-	const float below = viddef.height / scale / 2 - 110 + h + BANNER_GAP;
-	const float first = menu->y + ((menucommon_s *)menu->items[0])->y;
-
-	if (first < below)
-	{
-		menu->y += below - first;
-	}
-}
-
 static void
 OpenRendererOptions(void *unused)
 {
@@ -1192,7 +1169,7 @@ VID_MenuInit(void)
 	Menu_AddItem(&s_opengl_menu, (void *)&s_apply_action);
 
 	Menu_SetStatusBar(&s_opengl_menu, NULL);
-	PlaceBelowBanner(&s_opengl_menu);
+	Menu_Center(&s_opengl_menu);
 	s_opengl_menu.x -= 8;
 
 	/* the renderer's page */
@@ -1214,7 +1191,7 @@ VID_MenuInit(void)
 	Menu_AddItem(&s_ropts_menu, (void *)&s_ropts_apply_action);
 
 	Menu_SetStatusBar(&s_ropts_menu, "Esc: back to the video menu");
-	PlaceBelowBanner(&s_ropts_menu);
+	Menu_Center(&s_ropts_menu);
 	s_ropts_menu.x -= 8;
 }
 
