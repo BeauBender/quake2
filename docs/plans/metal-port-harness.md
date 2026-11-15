@@ -2537,7 +2537,9 @@ RT1 builds the acceleration structures of `docs/plans/metal-raytracing-design.md
 section 1, which nothing reads yet; the counts and times are in that section. Host: the
 bare-metal Mac, `Apple M6` (`supportsRaytracing: yes`), macOS 27.2.1 (26B131). The pins,
 the validation runs and the ASAN run are of engine commit `0269ca35` (pin ids
-`0269ca350d6b-*`), whose `src` and Makefile are the card's final ones; the counts and times are
+`0269ca350d6b-*`), the card's final source on its first base, `1701a052`. The card was then
+rebased onto `82f2671f` (TASK122, #301), whose only source change is `metal_particle_cap`, off
+by default, so the card's own `src` and Makefile are unchanged by the rebase; the counts and times are
 of `eaf80979`, which differs from it only in where `RI_Init` registers the two cvars (a run of
 `base2` at `0269ca35` gave the same counts). Screen unlocked before every run (`ioreg -n Root -d1 | grep -c
 CGSSessionScreenIsLocked` 0), no other `quake2`; one-minute load 2.0 to 4.0 for the single runs

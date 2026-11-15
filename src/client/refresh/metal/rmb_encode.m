@@ -1131,7 +1131,8 @@ rmb_draw_alias(const rm_avert_t *v, unsigned nv, const unsigned short *idx, unsi
  * For rmb_rt.m (TASK53): the open frame's command buffer with no encoder
  * open, for the compute and acceleration-structure work of design section
  * 3, step 1, which goes before the 3D pass; *frame is the frame's number
- * (frame slot frame % RMB_FRAMES_IN_FLIGHT). The pass opened next loads
+ * (its ring and semaphore slot is (frame - 1) % RMB_FRAMES_IN_FLIGHT,
+ * since frames_begun counts up after the slot is picked). The pass opened next loads
  * the colour target as after any other pass, so the frame draws the same.
  * nil outside a frame or in a skipped one.
  */

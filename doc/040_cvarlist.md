@@ -753,7 +753,8 @@ has) is not drawn.
 The `r_rt_*` cvars belong to the Metal renderer's ray tracing, which is
 being built and changes nothing drawn yet: with them set, the renderer
 builds acceleration structures for the world, the doors and platforms
-and the models in view, which nothing reads. On a GPU without ray
+and every model the frame lists (not only those in view, since a model
+out of view can still cast into it), which nothing reads. On a GPU without ray
 tracing they do nothing (the renderer says so once).
 
 * **r_rt_gunshadow**: When set to `1`, the view weapon is part of the

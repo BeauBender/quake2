@@ -139,6 +139,7 @@ test_range(void)
 	CHECK(rm_rt_range(3, 4, 18, &first, &n) == 0);
 	CHECK(rm_rt_range(12, 9, 18, &first, &n) == 0);
 	CHECK(rm_rt_range(18, 3, 18, &first, &n) == 0);
+	CHECK(rm_rt_range(21, 3, 18, &first, &n) == 0);
 	CHECK(rm_rt_range(~0ul - 2, 6, ~0ul, &first, &n) == 0);
 }
 
