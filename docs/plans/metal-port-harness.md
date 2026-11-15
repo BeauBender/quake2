@@ -2535,9 +2535,11 @@ Scripts, logs, screenshots, saved configs and diffs are in `<artifacts>/TASK118/
 
 RT1 builds the acceleration structures of `docs/plans/metal-raytracing-design.md`,
 section 1, which nothing reads yet; the counts and times are in that section. Host: the
-bare-metal Mac, `Apple M6` (`supportsRaytracing: yes`), macOS 27.2.1 (26B131), engine commit
-`eaf80979` (pin ids `eaf809794d81-*`; the later commits of the card change no file under `src`
-or the Makefile). Screen unlocked before every run (`ioreg -n Root -d1 | grep -c
+bare-metal Mac, `Apple M6` (`supportsRaytracing: yes`), macOS 27.2.1 (26B131). The pins,
+the validation runs and the ASAN run are of engine commit `0269ca35` (pin ids
+`0269ca350d6b-*`), whose `src` and Makefile are the card's final ones; the counts and times are
+of `eaf80979`, which differs from it only in where `RI_Init` registers the two cvars (a run of
+`base2` at `0269ca35` gave the same counts). Screen unlocked before every run (`ioreg -n Root -d1 | grep -c
 CGSSessionScreenIsLocked` 0), no other `quake2`; one-minute load 2.0 to 4.0 for the single runs
 and 3.5 to 5.3 for the records (another agent was building). Every log and frame is in
 `<artifacts>/TASK53/` and `<pin store>`.
@@ -2563,8 +2565,8 @@ accelerated references), at the values of "Accept `gl1-metal` against `gl1` at":
 | `hud2d` | the defaults | 23 of 23, 0, 0 |
 | `skywater`, `demo1.dm2` | the defaults | 23 of 23, worst 0.000010, bad 0.000033 |
 | `cinematic` (`idlog.cin`, every 7th) | the defaults | 12 of 12, 0, 0 |
-| `models` | the defaults | 23 of 23, worst 0.000041 and 0.000302, bad 0.000612 |
-| `particles` | 0.02, 0.25 | 23 of 23, worst 0.010206 and 0.010157, bad 0.132044 and 0.177646 (the references' scenario file differs from today's by its header comment only) |
+| `models` | the defaults | 23 of 23, worst 0.000084 and 0.000236, bad 0.000612 |
+| `particles` | 0.02, 0.25 | 23 of 23, worst 0.010409 and 0.010403, bad 0.153356 and 0.181045 (the references' scenario file differs from today's by its header comment only) |
 
 The store holds no `gl1` record of `dlights`; seeded `dlights`, `models` and `particles`
 (`PINS_SEED=1`) were compared with the seeded `gl1-metal` records of `bdda98128905` at 0.005 and
