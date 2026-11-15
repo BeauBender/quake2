@@ -566,6 +566,18 @@ GLimp_InitGraphics(int fullscreen, int *pwidth, int *pheight)
 	int width = *pwidth;
 	int height = *pheight;
 
+	/* One fullscreen value per window: vid_fullscreen holds the
+	   value this window is made with, from here on. A renderer
+	   passes the cvar truncated to an int (2.5 is passed as 2),
+	   and its own fallback passes 0 while the cvar may still
+	   say 2; the fallback below writes 0 when SDL can't make a
+	   fullscreen window. Every renderer reads the cvar to pick
+	   its size, so it decides on the same value as viddef below
+	   (GLimp_DrawableInPixels()). Nothing restarts on this
+	   write: vid_fullscreen->modified is read only while no
+	   renderer was loaded yet (VID_CheckChanges()). */
+	Cvar_SetValue("vid_fullscreen", fullscreen);
+
 	if (fullscreen == FULLSCREEN_EXCLUSIVE || fullscreen == FULLSCREEN_DESKTOP)
 	{
 		fs_flag = SDL_WINDOW_FULLSCREEN;
@@ -714,7 +726,8 @@ GLimp_InitGraphics(int fullscreen, int *pwidth, int *pheight)
 				Com_Printf("SDL SetVideoMode failed: %s\n", SDL_GetError());
 				Com_Printf("Reverting to windowed r_mode 4 (640x480).\n");
 
-				/* Try to recover */
+				/* Try to recover. vid_fullscreen keeps the
+				   value the window is made with (see above). */
 				Cvar_SetValue("r_mode", 4);
 				Cvar_SetValue("vid_fullscreen", 0);
 				Cvar_SetValue("vid_rate", -1);

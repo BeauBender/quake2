@@ -45,9 +45,6 @@ light_t		vid_lightthreshold = 0;
 static int	vid_minu, vid_minv, vid_maxu, vid_maxv;
 static int	vid_zminu, vid_zminv, vid_zmaxu, vid_zmaxv;
 static qboolean IsHighDPIaware = false;
-/* The fullscreen value SWimp_SetMode() last passed to
-   GLimp_InitGraphics(), see SWimp_DrawableInPixels(). */
-static int sw_fullscreen = 0;
 static qboolean texture_high_color = false;
 
 // last position  on map
@@ -2045,22 +2042,25 @@ RE_SetMetalLayerOpaque(SDL_Renderer *r, qboolean opaque)
  * false when it keeps the mode's size in vid. The client decides viddef
  * in GLimp_InitGraphics() with the same function, GLimp_DrawableInPixels()
  * (glimp_hidpi.c, linked into this renderer too), on the same inputs: the
- * window's high pixel density flag, the fullscreen value and r_mode. That
- * value is the one SWimp_SetMode() passed to GLimp_InitGraphics(), never
- * the vid_fullscreen cvar: in RE_SetMode()'s invalid-mode fallback the
- * cvar stays 2 while the window is made with 0, and a cvar of 2.5 is
- * passed as 2. The window's own flags cannot stand in for it: on macOS a
- * window made fullscreen does not report SDL_WINDOW_FULLSCREEN yet when
- * the context is made. One case is left where the client decides on
- * another value: when SDL cannot make the window at all, the client falls
- * back to a 640x480 window with fullscreen 0 on its own. There, and
- * should the two ever disagree otherwise, R_ClampViewToBuffer() keeps the
- * 3D view inside the buffer.
+ * window's high pixel density flag, the fullscreen value and r_mode. The
+ * fullscreen value is the vid_fullscreen cvar, which GLimp_InitGraphics()
+ * sets to the value the window is made with before the context is made:
+ * the value SWimp_SetMode() passed (0 in RE_SetMode()'s invalid-mode
+ * fallback, 2 for a cvar of 2.5), or 0 when SDL could not make the
+ * fullscreen window and the client fell back to a 640x480 window on its
+ * own (it sets r_mode to 4 there too). This function is called only from
+ * RE_InitContext() and after GLimp_InitGraphics() returned, so it always
+ * sees that value. The window's own flags cannot stand in for it: on
+ * macOS a window made fullscreen does not report SDL_WINDOW_FULLSCREEN
+ * yet when the context is made. Should the sizes ever disagree anyway,
+ * R_ClampViewToBuffer() keeps the 3D view inside the buffer and the
+ * Draw_* functions clip or refuse what lies outside it.
  */
 static qboolean
 SWimp_DrawableInPixels(void)
 {
-	return GLimp_DrawableInPixels(IsHighDPIaware, sw_fullscreen, r_mode->value);
+	return GLimp_DrawableInPixels(IsHighDPIaware, (int)vid_fullscreen->value,
+		r_mode->value);
 }
 
 static int
@@ -2583,10 +2583,6 @@ SWimp_SetMode(int *pwidth, int *pheight, int mode, int fullscreen )
 
 		Com_Printf("Used corrected %dx%d mode\n", *pwidth, *pheight);
 	}
-
-	/* RE_InitContext() and the tail below decide the sizes on
-	   the value passed, as the client does. */
-	sw_fullscreen = fullscreen;
 
 	if (!ri.GLimp_InitGraphics(fullscreen, pwidth, pheight))
 	{
