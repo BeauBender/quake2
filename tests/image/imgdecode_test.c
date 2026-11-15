@@ -521,6 +521,7 @@ test_to_rgba(void)
 		9, 10, 11, 0, 13, 14, 15, 0, 0xee, 0xee, 0xee};
 	static const unsigned char want_padded[16] = {1, 2, 3, 255, 5, 6, 7, 255,
 		9, 10, 11, 255, 13, 14, 15, 255};
+	static const unsigned char unpadded[16] = {1, 2, 3, 0, 5, 6, 7, 0, 9, 10, 11, 0, 13, 14, 15, 0};
 	imgdec_layout_t l, base;
 
 	memset(&base, 0, sizeof(base));
@@ -605,7 +606,7 @@ test_to_rgba(void)
 	l.bytes_per_row = 0;
 	expect_layout_refused("rows of 0 bytes", &l, padded, sizeof(padded), IMGDEC_ERR_LAYOUT);
 	l.bytes_per_row = 8;
-	expect_rgba("exact rows", &l, padded, 16, want_padded);	/* rows 0..7 and 8..15 */
+	expect_rgba("rows without padding", &l, unpadded, sizeof(unpadded), want_padded);
 	l.height = 1;
 	expect_layout_refused("no bytes", &l, padded, 0, IMGDEC_ERR_DECODE);
 	expect_layout_refused("one pixel short", &l, padded, 7, IMGDEC_ERR_DECODE);
@@ -934,7 +935,7 @@ build_cases(void)
 	add_bad("png cut in IHDR", copy_buf(&b), 20, "png", IMGDEC_OK);
 	add_bad("png cut after IHDR", copy_buf(&b), 33, "png", IMGDEC_OK);
 	add_bad("png cut in IDAT", copy_buf(&b), b.n / 2, "png", IMGDEC_OK);
-	add_bad("png cut 13 bytes short", copy_buf(&b), b.n - 13, "png", IMGDEC_OK);
+	add_bad("png cut in its last row", copy_buf(&b), b.n - 30, "png", IMGDEC_OK);
 	{
 		buf_t t = tga_file(RW, RH, 24, 0, 0, ref);
 		buf_t r = tga_file(RW, RH, 32, 1, 0, ref);
