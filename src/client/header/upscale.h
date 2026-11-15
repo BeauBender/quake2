@@ -29,6 +29,8 @@
 
 #include <stddef.h>
 
+/* after header/client.h: strlist_t, MAX_OSPATH */
+
 /* The largest side of a source image; 4096 after 4x. */
 #define UPSCALE_MAX_SIDE 1024
 
@@ -128,6 +130,148 @@ int CL_UpscaleWalPixels(const unsigned char *data, size_t len, int *w,
 
 /* The size of a .pcx file's image from its header, as CL_UpscaleWalPixels. */
 int CL_UpscalePcxSize(const unsigned char *data, size_t len, int *w, int *h);
+
+/*
+ * The 768 bytes of RGB at the end of a .pcx colormap of len bytes, as
+ * PCX_Decode takes them: when the header passes CL_UpscalePcxSize (one
+ * plane of 8 bits) and the palette lies after the header (len > 768
+ * and more); else NULL.
+ */
+const unsigned char *CL_UpscalePalette(const unsigned char *data, size_t len);
+
+/*
+ * 1 when a decoded .pcx is what its header said: pic, 8-bit indices,
+ * pw by ph equal to w by h.
+ */
+int CL_UpscalePcxDecodedOk(const unsigned char *pic, int bits, int pw,
+		int ph, int w, int h);
+
+/* ---- the command's decisions; cl_upscale_cmd.c does the I/O ---- */
+
+/* What is scaled: the names below dir with the extension ext. */
+typedef struct
+{
+	const char *dir;
+	const char *ext;
+	const char *notsuffix;	/* names that end so are not sources */
+	int wal;		/* a .wal; else an 8-bit .pcx */
+	int wrap;		/* a repeating world texture: seamless */
+	int skin;		/* flood-filled first, as the renderers fill skins */
+} upscale_kind_t;
+
+#define UPSCALE_KINDS 4
+
+/* The kind k, 0 to UPSCALE_KINDS - 1; NULL for any other k. */
+const upscale_kind_t *CL_UpscaleKind(int k);
+
+/*
+ * 1 when name is a source of kind: it begins with kind's dir and a '/',
+ * ends with '.' and kind's ext and not with kind's notsuffix (case
+ * ignored), so a player's _i.pcx icon is not one.
+ */
+int CL_UpscaleIsSource(const upscale_kind_t *kind, const char *name);
+
+/* the most directories walked and names taken from the listings */
+#define UPSCALE_MAX_DIRS 4096
+#define UPSCALE_MAX_FILES 65536
+
+/*
+ * Appends name to list unless it is there: 1 when it is in the list
+ * afterwards. 0, and *cut set to 1, when list already holds max names.
+ */
+int CL_UpscaleListAdd(strlist_t *list, const char *name, int max, int *cut);
+
+/*
+ * "gamedir/outname" into out: 1 when it fits outsize, else 0 and out
+ * is "".
+ */
+int CL_UpscaleOutPath(const char *gamedir, const char *outname, char *out,
+		size_t outsize);
+
+/*
+ * The temporary name a file is written to before it is renamed to
+ * path, in the same directory: "path.<id>.tmp". 1 when it fits outsize,
+ * else 0 and out is "".
+ */
+int CL_UpscaleTempPath(const char *path, long id, char *out, size_t outsize);
+
+/*
+ * The directory of path, up to its last '/' ("/" for a file in the
+ * root): 1 when path has a '/' and the directory fits outsize, else 0
+ * and out is "".
+ */
+int CL_UpscaleParentDir(const char *path, char *out, size_t outsize);
+
+/* what lstat finds at a final name: a link is not followed */
+typedef enum
+{
+	UPSCALE_ENTRY_NONE,	/* no such entry */
+	UPSCALE_ENTRY_FILE,	/* a regular file */
+	UPSCALE_ENTRY_OTHER,	/* a symbolic link, a directory, ... */
+	UPSCALE_ENTRY_UNKNOWN	/* lstat cannot tell */
+} upscale_entry_t;
+
+upscale_entry_t CL_UpscaleEntryKind(const char *path);
+
+typedef enum
+{
+	UPSCALE_SKIP,
+	UPSCALE_WRITE,
+	UPSCALE_REFUSE
+} upscale_action_t;
+
+/*
+ * What is done with a final name: nothing there is written; a file
+ * there is skipped, or written again with force; anything else there
+ * (a link, a directory) is skipped, and with force refused, never
+ * followed; when lstat cannot tell, refused.
+ */
+upscale_action_t CL_UpscaleAction(upscale_entry_t entry, int force);
+
+/* the answer of the git work-tree check for the last directory asked */
+typedef struct
+{
+	char dir[MAX_OSPATH];
+	int answer;
+	int valid;
+} upscale_gitcache_t;
+
+/*
+ * check(dir), from cache when dir is the directory asked last; else
+ * check is called and its answer kept for dir. A dir that does not fit
+ * the cache is checked every time.
+ */
+int CL_UpscaleCachedInGitTree(upscale_gitcache_t *cache, const char *dir,
+		int (*check)(const char *dir));
+
+/*
+ * 1 when the command may run: not connected to a server, or connected
+ * to the local one, so a remote server's stufftext cannot run it.
+ */
+int CL_UpscaleAllowed(int connected, int local);
+
+typedef enum
+{
+	UPSCALE_WRITTEN,
+	UPSCALE_SKIPPED,
+	UPSCALE_REFUSED,
+	UPSCALE_FAILED
+} upscale_outcome_t;
+
+typedef struct
+{
+	int written, skipped, refused, failed;
+	unsigned long long bytes;	/* of the files written */
+	int cut;	/* a listing stopped at its limit */
+} upscale_count_t;
+
+/* counts one file's outcome; bytes count only when it was written */
+void CL_UpscaleCount(upscale_count_t *n, upscale_outcome_t outcome,
+		size_t bytes);
+
+/* the summary line of a run, with its newline, into out */
+void CL_UpscaleSummary(const upscale_count_t *n, int factor,
+		const char *dir, char *out, size_t outsize);
 
 /* the upscale_textures console command */
 void CL_UpscaleTextures_f(void);
