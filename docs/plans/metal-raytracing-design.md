@@ -458,13 +458,16 @@ The sums: A 5.14 + 0.38 + 1.82; A at 1440 rows 9.11 + 0.38 + 2.41; B
 5.14 + 0.38 + 12.03 and 9.11 + 0.38 + 19.50; E 9.11 + 0.38; H 2.28 + 0.38
 + 2.41. "Left" is 16.67 or 15.0 ms minus the known total, as a sum and as
 one frame where both exist. Every "left" is what remains for the items
-not measured, so no option is shown to hold this cell: A and E leave the
-most for the unmeasured work at the costs above (A 7.4 to 9.3 ms, E at
-1/2 7.2 ms), but E rasterizes 7.1 times the pixels A does
-(14,745,600 / 2,073,600) and adds an upsample, and A adds the
-scaler's measured 1.82 ms. C is over the frame before any raster; B is
-over it before any raster or resolve (row RT9 (2): "With the denoised
-scaler, not met at either input").
+not measured, so no option is shown to hold this cell. A at 1080 rows
+leaves 7.4 to 9.3 ms (measured) and E at 1/2 7.2 ms (measured rays);
+E at 1/3 and H leave more, 12.2 and 11.6 ms (modelled), because they
+trace fewer pixels. What the "left" must pay for differs: E rasterizes,
+resolves and draws the forward pass at 7.1 times the pixels of A at 1080
+rows (14,745,600 / 2,073,600) and adds an upsample per effect; H
+rasterizes at 2560 x 1440 and adds an upsample; A's scaler is already in
+its total. C is over the frame before any raster; B is over it before
+any raster or resolve (row RT9 (2): "With the denoised scaler, not met
+at either input").
 
 Each effect alone in the primary cell, rays plus the per-frame items (ms):
 
@@ -530,9 +533,9 @@ time on 1920 x 1080 and 2560 x 1440 at 60 Hz (measured) and is over the
 frame on every larger class and on both 120 Hz classes (modelled). On
 the 120 Hz classes A, E and H leave 3.2 to 7.0 ms (modelled) before any
 raster, and A also before the scaler, so they are the tightest cells
-besides the primary one. On
-6016 x 3384 E at 1/2 leaves 3.7 ms (modelled) for a raster of 20.36
-million pixels, so E there needs a smaller effect scale.
+besides the primary one. On 6016 x 3384 E at 1/2 leaves 3.7 ms
+(modelled) for a raster of 20.36 million pixels, less than any option
+but C leaves there; a smaller effect scale leaves more.
 
 **apple7 and apple8.** No cell is costed: nothing below apple9 is
 measured. This section's "8 to 14 ms" at 1080p on apple7 is an
@@ -615,8 +618,9 @@ output, upscales with the temporal scaler and traces each effect at a
 fraction s_E of the internal size, so it traces (s_A x s_E) squared of
 the output's pixels and adds the scaler (from s_A) and the upsample (to
 the internal size). H is (1/2, 1/2). Another is A with only some effects
-below the internal size, for example AO. With RT11's scaler and RT13's
-upsample both built, a hybrid needs no code of its own (RT13).
+below the internal size, for example AO. A hybrid is RT13's effect
+scales applied to RT11's internal size, so RT13 builds it once RT11 has
+landed.
 
 **Dynamic resolution.** A controller sets the scale, A's internal height,
 E's effect scales or H's pair, for the next world refdef from the
