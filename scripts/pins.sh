@@ -880,7 +880,7 @@ cmd_footprint() {
     else summary="$summary"$'\n'"all frames inside the band"; fi
     printf '%s\n' "$report"; printf '%s\n' "$summary"
     if [ -n "$out" ]; then
-        mkdir -p "$out"; check_out_file "$out/footprint-$scenario.txt"
+        mkdir -p "$out"
         printf '%s\n%s\n' "$report" "$summary" > "$out/footprint-$scenario.txt"
         echo "written: $out/footprint-$scenario.txt"
     fi
@@ -963,11 +963,10 @@ cfg_sets() { awk '/^set [^ ]+ [^ ]+$/ { v[$2] = $3 } END { for (k in v) print k,
 # Prints each problem, returns non-zero when there is one.
 check_content() {
     local readme=$1 dir=$2 bad=0 cfg name row tags comp t want e rows bands cbands k v cv cfgs
-    cfgs=("$dir"/*.cfg)
-    set -f   # the README's names and tags are read literally, never as globs
+    cfgs=("$dir"/*.cfg)   # the README's names and tags are read literally below, never as globs
     # the rows of the Content table: scenario, tags, companion
     rows=$(awk -F'|' '/^## / { on=0 } /^\| Scenario \| Tags \| Companion \|/ { on=1; next } on && /^\| `/ { n=$2; gsub(/[ `]/, "", n); t=$3; gsub(/ /, "", t); c=$4; gsub(/[ `]/, "", c); print n " " t " " c }' "$readme")
-    [ -n "$rows" ] || { set +f; echo "content: $readme has no '| Scenario | Tags | Companion |' table of scenario rows"; return 1; }
+    [ -n "$rows" ] || { echo "content: $readme has no '| Scenario | Tags | Companion |' table of scenario rows"; return 1; }
     for cfg in "${cfgs[@]}"; do
         [ -f "$cfg" ] || continue
         name=$(basename "$cfg" .cfg)
@@ -1012,7 +1011,6 @@ check_content() {
     while IFS= read -r name; do
         [ -f "$dir/$name.cfg" ] || { echo "content: the Content table names $name, which is not a scenario"; bad=1; }
     done <<< "$(printf '%s\n' "$rows" | awk '{print $1}')"
-    set +f
     return $bad
 }
 
@@ -2092,6 +2090,142 @@ st_where() { # TASK133: highlight and zoom images of the frames that changed mos
     rc=0; (cmd_where x --off "$tmp/foff" --on "$tmp/fon") >/dev/null 2>&1 || rc=$?
     [ "$rc" != 0 ] || st_fail "where without --out must be refused" || return 1
 }
+st_footprint_guards() { # TASK133 rework: every refusal of footprint, where and framediff is reached by a test
+    local out rc l g
+    fp_records
+    scen_dir=$tmp/scen
+    # --- framediff: a colour-only shift, red down and blue up, leaves changed and mean at 0 and shows in chmax
+    printf '\000\000\002\000\000\000\000\000\000\000\000\000\001\000\001\000\030\000\144\144\144' > "$tmp/c1a.tga"
+    printf '\000\000\002\000\000\000\000\000\000\000\000\000\001\000\001\000\030\000\202\144\106' > "$tmp/c1b.tga"
+    l=$("$diff" --footprint "$tmp/c1a.tga" "$tmp/c1b.tga" --band changed=0..0) || st_fail "a colour-only shift has no mean change ($l)" || return 1
+    fp_has "$l" changed=0.000000 && fp_has "$l" mean=0.0000 && fp_has "$l" chmax=30.00 || return 1
+    # --- framediff: a frame with no pixels is refused (3), never read past
+    printf '\000\000\002\000\000\000\000\000\000\000\000\000\000\000\005\000\030\000' > "$tmp/w0.tga"
+    printf '\000\000\002\000\000\000\000\000\000\000\000\000\005\000\000\000\030\000' > "$tmp/h0.tga"
+    for g in w0 h0; do
+        rc=0; "$diff" --footprint "$tmp/$g.tga" "$tmp/$g.tga" >/dev/null 2>&1 || rc=$?
+        [ "$rc" = 3 ] || st_fail "--footprint on a $g frame must exit 3, not $rc" || return 1
+        rc=0; "$diff" --zoom "$tmp/$g.tga" "$tmp/$g.tga" "$tmp/$g-zm.tga" >/dev/null 2>&1 || rc=$?
+        [ "$rc" = 3 ] && [ ! -e "$tmp/$g-zm.tga" ] || st_fail "--zoom on a $g frame must exit 3 and write nothing, not $rc" || return 1
+        rc=0; "$diff" "$tmp/$g.tga" "$tmp/$g.tga" >/dev/null 2>&1 || rc=$?
+        [ "$rc" = 3 ] || st_fail "a compare of $g frames must exit 3, not $rc" || return 1
+    done
+    # --- framediff: an output over 65535 pixels either way does not fit a TGA
+    "$diff" --gen "$tmp/wide.tga" 2048 4 1; "$diff" --gen "$tmp/tall.tga" 4 4370 1
+    rc=0; "$diff" --zoom "$tmp/wide.tga" "$tmp/wide.tga" "$tmp/wide-zm.tga" --window 2048x1 --scale 16 >/dev/null 2>&1 || rc=$?
+    [ "$rc" != 0 ] && [ ! -e "$tmp/wide-zm.tga" ] || st_fail "a zoom 65536 wide must be refused (rc $rc)" || return 1
+    rc=0; "$diff" --zoom "$tmp/tall.tga" "$tmp/tall.tga" "$tmp/tall-zm.tga" --window 1x4370 --scale 15 >/dev/null 2>&1 || rc=$?
+    [ "$rc" != 0 ] && [ ! -e "$tmp/tall-zm.tga" ] || st_fail "a zoom 65550 high must be refused (rc $rc)" || return 1
+    rc=0; "$diff" --zoom "$tmp/tall.tga" "$tmp/tall.tga" "$tmp/tall-zm.tga" --window 1x4369 --scale 15 >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 0 ] && [ "$(od -An -tu1 -j 14 -N2 "$tmp/tall-zm.tga" | tr -s ' ' | sed -e 's/^ //' -e 's/ $//')" = "255 255" ] || st_fail "a zoom exactly 65535 high is written (rc $rc)" || return 1
+    rm -f "$tmp/tall-zm.tga"
+    rc=0; "$diff" --zoom "$tmp/wide.tga" "$tmp/wide.tga" "$tmp/wide-zm.tga" --window 2047x1 --scale 16 >/dev/null 2>&1 || rc=$?
+    [ "$rc" = 0 ] || st_fail "a zoom 65504 wide is written (rc $rc)" || return 1
+    rm -f "$tmp/wide-zm.tga"
+    # --- framediff: an image is never written through a link or over a non-regular file
+    mkdir -p "$tmp/lk"; printf 'KEEP' > "$tmp/lk/target"; ln -s "$tmp/lk/target" "$tmp/lk/link"; ln -s "$tmp/lk/nowhere" "$tmp/lk/dangling"; mkdir -p "$tmp/lk/dir"
+    for g in link dangling dir; do
+        rc=0; "$diff" --highlight "$tmp/u100.tga" "$tmp/fpmix.tga" "$tmp/lk/$g" >/dev/null 2>&1 || rc=$?
+        [ "$rc" != 0 ] || st_fail "--highlight must refuse $g (rc $rc)" || return 1
+        rc=0; "$diff" --zoom "$tmp/u100.tga" "$tmp/fpmix.tga" "$tmp/lk/$g" >/dev/null 2>&1 || rc=$?
+        [ "$rc" != 0 ] || st_fail "--zoom must refuse $g (rc $rc)" || return 1
+    done
+    rc=0; "$diff" --gen "$tmp/lk/link" 4 4 1 >/dev/null 2>&1 || rc=$?
+    [ "$rc" != 0 ] && [ "$(cat "$tmp/lk/target")" = KEEP ] && [ ! -e "$tmp/lk/nowhere" ] || st_fail "framediff wrote through a link (rc $rc)" || return 1
+    printf 'OLD' > "$tmp/lk/plain"; "$diff" --highlight "$tmp/u100.tga" "$tmp/fpmix.tga" "$tmp/lk/plain" || st_fail "a regular file is replaced" || return 1
+    [ "$(wc -c < "$tmp/lk/plain" | tr -d ' ')" = 9234 ] || st_fail "a regular file is replaced whole" || return 1
+    # --- pins.sh: the table and the images are never written through a link either
+    rm -rf "$tmp/lo"; mkdir -p "$tmp/lo"; printf 'KEEP' > "$tmp/lo/victim"; ln -s "$tmp/lo/victim" "$tmp/lo/footprint-x.txt"
+    rc=0; out=$( (cmd_footprint x --off "$tmp/foff" --on "$tmp/fon" --out "$tmp/lo") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && [ "$(cat "$tmp/lo/victim")" = KEEP ] && case $out in *"nothing is written through it"*) ;; *) false;; esac || st_fail "footprint must refuse a linked table and leave its target ($rc: $out)" || return 1
+    rm -f "$tmp/lo/footprint-x.txt"; ln -s "$tmp/lo/nowhere" "$tmp/lo/footprint-x.txt"
+    rc=0; out=$( (cmd_footprint x --off "$tmp/foff" --on "$tmp/fon" --out "$tmp/lo") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && [ ! -e "$tmp/lo/nowhere" ] || st_fail "footprint must refuse a dangling linked table ($rc: $out)" || return 1
+    rm -f "$tmp/lo/footprint-x.txt"; mkdir "$tmp/lo/footprint-x.txt"
+    rc=0; out=$( (cmd_footprint x --off "$tmp/foff" --on "$tmp/fon" --out "$tmp/lo") 2>&1) || rc=$?
+    [ "$rc" != 0 ] || st_fail "footprint must refuse a directory in place of the table" || return 1
+    rm -rf "$tmp/lo"; mkdir -p "$tmp/lo"; printf 'KEEP' > "$tmp/lo/victim"
+    for g in x-000001-zoom x-000002-highlight; do
+        rm -f "$tmp/lo"/*.tga; ln -s "$tmp/lo/victim" "$tmp/lo/$g.tga"
+        rc=0; out=$( (cmd_where x --off "$tmp/foff" --on "$tmp/fon" --out "$tmp/lo" --top 2) 2>&1) || rc=$?
+        [ "$rc" != 0 ] && [ "$(cat "$tmp/lo/victim")" = KEEP ] || st_fail "where must refuse a linked $g and leave its target ($rc: $out)" || return 1
+        # every file is judged before the first is written
+        [ ! -e "$tmp/lo/x-000002-highlight.tga" ] || [ -L "$tmp/lo/x-000002-highlight.tga" ] || st_fail "where wrote an image before it had judged them all ($g)" || return 1
+    done
+    # --- the output directory: never inside a git work tree, never a dangling link
+    rm -rf "$tmp/gitd"; mkdir -p "$tmp/gitd"; git init -q "$tmp/gitd" >/dev/null 2>&1 || { st_fail "git init failed"; return 1; }
+    rc=0; out=$( (cmd_footprint x --off "$tmp/foff" --on "$tmp/fon" --out "$tmp/gitd/o") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && [ ! -e "$tmp/gitd/o" ] && case $out in *"inside a git work tree"*) ;; *) false;; esac || st_fail "footprint --out inside a git work tree must be refused ($rc: $out)" || return 1
+    rc=0; out=$( (cmd_where x --off "$tmp/foff" --on "$tmp/fon" --out "$tmp/gitd/o") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && [ ! -e "$tmp/gitd/o" ] && case $out in *"inside a git work tree"*) ;; *) false;; esac || st_fail "where --out inside a git work tree must be refused ($rc: $out)" || return 1
+    rm -rf "$tmp/dl"; ln -s "$tmp/dl-nowhere" "$tmp/dl"
+    rc=0; out=$( (cmd_footprint x --off "$tmp/foff" --on "$tmp/fon" --out "$tmp/dl") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && [ ! -e "$tmp/dl-nowhere" ] && case $out in *"dangling"*) ;; *) false;; esac || st_fail "footprint --out through a dangling link must be refused ($rc: $out)" || return 1
+    rc=0; out=$( (cmd_where x --off "$tmp/foff" --on "$tmp/fon" --out "$tmp/dl") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && [ ! -e "$tmp/dl-nowhere" ] && case $out in *"dangling"*) ;; *) false;; esac || st_fail "where --out through a dangling link must be refused ($rc: $out)" || return 1
+    # --- the store is checked before framediff is compiled into it
+    rc=0; out=$( (PINS_STORE="$tmp/gitd/store" cmd_footprint x --off "$tmp/foff" --on "$tmp/fon") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && [ ! -e "$tmp/gitd/store" ] || st_fail "footprint with a store inside a git work tree must be refused and compile nothing there ($rc: $out)" || return 1
+    rc=0; out=$( (PINS_STORE="$tmp/gitd/store" cmd_where x --off "$tmp/foff" --on "$tmp/fon" --out "$tmp/wo2") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && [ ! -e "$tmp/gitd/store" ] || st_fail "where with a store inside a git work tree must be refused and compile nothing there ($rc: $out)" || return 1
+    # --- a scenario that has no cfg is a typo, not a scenario without a band
+    rc=0; out=$( (cmd_footprint xx --off "$tmp/foff" --on "$tmp/fon") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && case $out in *"no scenario xx"*) ;; *) false;; esac || st_fail "footprint of an unknown scenario must be refused ($rc: $out)" || return 1
+    rc=0; out=$( (cmd_footprint xx --off "$tmp/foff" --on "$tmp/fon" --band 'darker 0..1') 2>&1) || rc=$?
+    [ "$rc" != 0 ] && case $out in *"no scenario xx"*) ;; *) false;; esac || st_fail "footprint of an unknown scenario is refused with --band too ($rc: $out)" || return 1
+    rc=0; out=$( (cmd_where xx --off "$tmp/foff" --on "$tmp/fon" --out "$tmp/wo3") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && [ ! -e "$tmp/wo3" ] && case $out in *"no scenario xx"*) ;; *) false;; esac || st_fail "where of an unknown scenario must be refused ($rc: $out)" || return 1
+    # --- a header line that looks like a band and does not parse is an error; only the leading comment block counts
+    printf '%s\n' '//footprint darker 0..0.05' 'set timedemo 1' > "$tmp/scen/nospx.cfg"
+    rc=0; out=$( (cmd_footprint nospx --off "$tmp/foff" --on "$tmp/fon") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && case $out in *"a footprint line is"*) ;; *) false;; esac || st_fail "'//footprint' without the space must be refused ($rc: $out)" || return 1
+    printf '%s\n' '// Footprint-free' '//  footprint darker 0..0.05' 'set timedemo 1' > "$tmp/scen/nospx.cfg"
+    rc=0; out=$( (cmd_footprint nospx --off "$tmp/foff" --on "$tmp/fon") 2>&1) || rc=$?
+    [ "$rc" != 0 ] || st_fail "'//  footprint' with two spaces must be refused" || return 1
+    printf '%s\n' '// a header' '' 'set timedemo 1' '// footprint darker 0..0.05' > "$tmp/scen/late.cfg"
+    rc=0; out=$(cmd_footprint late --off "$tmp/foff" --on "$tmp/fon" 2>&1) || rc=$?
+    [ "$rc" = 0 ] && case $out in *"no band declared"*) ;; *) false;; esac || st_fail "a footprint line after the first set is not a band ($rc: $out)" || return 1
+    printf '%s\n' '// a header' '' '// footprint darker 0..0.05' 'set timedemo 1' > "$tmp/scen/lead.cfg"
+    rc=0; out=$(cmd_footprint lead --off "$tmp/foff" --on "$tmp/fon" 2>&1) || rc=$?
+    [ "$rc" != 0 ] && case $out in *"band: darker=0..0.05 (from lead.cfg)"*) ;; *) false;; esac || st_fail "a footprint line in the leading block (blank lines allowed) is a band ($rc: $out)" || return 1
+    # --- the off record holds no frames: refused, and the summary does not say the frames are inside the band
+    rm -rf "$tmp/fempty"; mkdir -p "$tmp/fempty"
+    rc=0; out=$(cmd_footprint x --off "$tmp/fempty" --on "$tmp/fon" --band 'darker 0..1' 2>&1) || rc=$?
+    [ "$rc" != 0 ] && case $out in *"holds no frames"*) ;; *) false;; esac || st_fail "an empty off record must fail ($rc: $out)" || return 1
+    case $out in *"all frames inside"*) st_fail "an empty off record must not say all frames are inside the band: $out"; return 1;; esac
+    rc=0; out=$( (cmd_where x --off "$tmp/fempty" --on "$tmp/fon" --out "$tmp/wo4") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && case $out in *"holds no frames"*) ;; *) false;; esac || st_fail "where on an empty off record must fail ($rc: $out)" || return 1
+    # --- a frame only the on record has, and one the on record lacks: refused, named, and the mean counts compared frames
+    rm -rf "$tmp/fon3"; cp -R "$tmp/fon" "$tmp/fon3"; cp "$tmp/u100.tga" "$tmp/fon3/x-000009.tga"
+    rc=0; out=$(cmd_footprint x --off "$tmp/foff" --on "$tmp/fon3" --band 'darker 0..1' 2>&1) || rc=$?
+    [ "$rc" != 0 ] && case $out in *"EXTRA in the on record"*"UNMATCHED: 1 "*) ;; *) false;; esac || st_fail "an extra frame in the on record must fail and be named ($rc: $out)" || return 1
+    case $out in *"all frames inside"*) st_fail "the summary must not contradict the exit code: $out"; return 1;; esac
+    rm -rf "$tmp/fon2"; cp -R "$tmp/fon" "$tmp/fon2"; rm "$tmp/fon2/x-000001.tga"
+    rc=0; out=$(cmd_footprint x --off "$tmp/foff" --on "$tmp/fon2" --band 'darker 0..1' 2>&1) || rc=$?
+    case $out in *"mean_darker=0.041667"*) ;; *) st_fail "the mean darker is over the two compared frames: $out"; return 1;; esac
+    # --- ids are directory names: '.' and '..' name no record
+    rc=0; out=$( (cmd_footprint x --off .. --on "$tmp/fon") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && case $out in *"an id is a directory name"*) ;; *) false;; esac || st_fail "an id starting with '.' must be refused ($rc: $out)" || return 1
+    rc=0; out=$( (cmd_where x --off "$tmp/foff" --on .hidden --out "$tmp/wo5") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && case $out in *"an id is a directory name"*) ;; *) false;; esac || st_fail "where: an id starting with '.' must be refused ($rc: $out)" || return 1
+    # --- a frame name with a control character forges no line of the table
+    rm -rf "$tmp/cn"; mkdir -p "$tmp/cn/off" "$tmp/cn/on"
+    cp "$tmp/u100.tga" "$tmp/cn/off/a"$'\n'"b.tga"; cp "$tmp/u100.tga" "$tmp/cn/on/a"$'\n'"b.tga"
+    rc=0; out=$( (cmd_footprint x --off "$tmp/cn/off" --on "$tmp/cn/on") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && case $out in *"control character"*) ;; *) false;; esac || st_fail "a frame name with a newline in the off record must be refused ($rc: $out)" || return 1
+    rm -rf "$tmp/cn"; mkdir -p "$tmp/cn/off" "$tmp/cn/on"
+    cp "$tmp/u100.tga" "$tmp/cn/off/a.tga"; cp "$tmp/u100.tga" "$tmp/cn/on/a.tga"; cp "$tmp/u100.tga" "$tmp/cn/on/b"$'\n'"c.tga"
+    rc=0; out=$( (cmd_footprint x --off "$tmp/cn/off" --on "$tmp/cn/on") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && case $out in *"control character"*) ;; *) false;; esac || st_fail "a frame name with a newline in the on record must be refused ($rc: $out)" || return 1
+    rm -rf "$tmp/cn"; mkdir -p "$tmp/cn/off" "$tmp/cn/on"
+    cp "$tmp/u100.tga" "$tmp/cn/off/a"$'\n'"b.tga"; cp "$tmp/u100.tga" "$tmp/cn/on/a"$'\n'"b.tga"
+    rc=0; out=$( (cmd_where x --off "$tmp/cn/off" --on "$tmp/cn/on" --out "$tmp/wo6") 2>&1) || rc=$?
+    [ "$rc" != 0 ] && case $out in *"control character"*) ;; *) false;; esac || st_fail "where: a frame name with a newline must be refused ($rc: $out)" || return 1
+    # --- a frame with no pixels in a record fails the command
+    rm -rf "$tmp/ze"; mkdir -p "$tmp/ze/off" "$tmp/ze/on"; cp "$tmp/w0.tga" "$tmp/ze/off/a.tga"; cp "$tmp/w0.tga" "$tmp/ze/on/a.tga"
+    rc=0; out=$( (cmd_where x --off "$tmp/ze/off" --on "$tmp/ze/on" --out "$tmp/wo7") 2>&1) || rc=$?
+    [ "$rc" != 0 ] || st_fail "where on frames with no pixels must fail ($out)" || return 1
+}
 st_content_tags() { # TASK133: every scenario has its tags, and one without entities names a companion that has them
     local d="$tmp/ct" out rc
     check_content "$scen_dir/README.md" "$scen_dir" || st_fail "the tree's content table must pass" || return 1
@@ -2115,6 +2249,10 @@ st_content_tags() { # TASK133: every scenario has its tags, and one without enti
     ct_no "models draws entities" 's/^| `models` | world,entities,alias-models |/| `models` | world,alias-models |/' || return 1
     ct_no "unknown tag 'shiny'" 's/^| `world` | world |/| `world` | world,shiny |/' || return 1
     ct_no "only the cinematic scenario is tagged cinematic" 's/^| `world` | world |/| `world` | world,cinematic |/' || return 1
+    # the table is read literally: a * is a name and a tag, never a glob of the working directory
+    ct_no "the Content table names *, which is not a scenario" 's/^| `world` | world | `models` |$/&\
+| `*` | world | `models` |/' || return 1
+    ct_no "carries the unknown tag '*'" 's/^| `world` | world |/| `world` | world,* |/' || return 1
     ct_no "the Content table names ghost, which is not a scenario" 's/^| `world` | world | `models` |$/&\
 | `ghost` | world | `models` |/' || return 1
     # a new scenario that sets cl_entities 0 and has a row without a companion
@@ -2126,6 +2264,50 @@ st_content_tags() { # TASK133: every scenario has its tags, and one without enti
     sed -e '/^| `world` |/d' "$scen_dir/README.md" > "$d/README.md"; cp "$scen_dir/world.cfg" "$d/world.cfg"
     rc=0; out=$(check_content "$d/README.md" "$d") || rc=$?
     [ "$rc" != 0 ] || st_fail "a scenario without a row must fail" || return 1
+    # the last set of a cvar is the one the engine runs with
+    ct_fresh
+    printf '%s\n' 'set timedemo 1' 'set r_drawworld 1' 'set cl_entities 1' 'set cl_entities 0' 'set cl_particles 0' 'set cl_lights 0' > "$d/lastset.cfg"
+    sed -e '/^| `world` |/{p;s/`world`/`lastset`/;s/`models`/`-`/;}' "$scen_dir/README.md" > "$d/README.md"
+    rc=0; out=$(check_content "$d/README.md" "$d") || rc=$?
+    [ "$rc" != 0 ] && case $out in *"lastset sets cl_entities 0 and names no full-content companion"*) ;; *) false;; esac || st_fail "the last set of cl_entities decides: $out" || return 1
+    # a scenario with a band: the companion carries the band and the effect (every cvar but the content and frame ones)
+    ct_fresh
+    sed -e '/^| `world` |/a\
+| `fxa` | world | `fxb` |\
+| `fxb` | world,entities,alias-models | `-` |' "$scen_dir/README.md" > "$d/README.md"
+    # ct_fx <fragment|ok> <fxa line>... -- <fxb line>...: fxa and fxb are written from the lines, then checked
+    ct_fx() {
+        local want=$1 a=() b=() side=a x; shift
+        for x in "$@"; do if [ "$x" = -- ]; then side=b; elif [ $side = a ]; then a+=("$x"); else b+=("$x"); fi; done
+        printf '%s\n' "${a[@]}" > "$d/fxa.cfg"; printf '%s\n' "${b[@]}" > "$d/fxb.cfg"
+        rc=0; out=$(check_content "$d/README.md" "$d") || rc=$?
+        if [ "$want" = ok ]; then [ "$rc" = 0 ] || { st_fail "must pass ($*): $out"; return 1; }
+        else
+            [ "$rc" != 0 ] || { st_fail "must fail with '$want' ($*)"; return 1; }
+            case $out in *"$want"*) ;; *) st_fail "must fail with '$want', got: $out"; return 1;; esac
+        fi
+    }
+    local fxa=('// fxa' '// footprint darker 0..0.05' 'set timedemo 1' 'set r_drawworld 1' 'set cl_entities 0' 'set cl_particles 0' 'set cl_lights 0' 'set r_metalfx 1' 'set r_metalfx_scale 0.5')
+    local fxb=('// fxb' '// footprint darker 0..0.05' 'set timedemo 1' 'set r_drawworld 1' 'set cl_entities 1' 'set cl_particles 0' 'set cl_lights 0' 'set r_metalfx 1' 'set r_metalfx_scale 0.5')
+    ct_fx ok "${fxa[@]}" -- "${fxb[@]}" || return 1
+    ct_fx "the companion fxb of fxa does not declare the same footprint band as fxa" "${fxa[@]}" -- '// fxb' 'set timedemo 1' 'set r_drawworld 1' 'set cl_entities 1' 'set cl_particles 0' 'set cl_lights 0' 'set r_metalfx 1' 'set r_metalfx_scale 0.5' || return 1
+    ct_fx "does not declare the same footprint band" "${fxa[@]}" -- '// fxb' '// footprint darker 0..0.1' 'set timedemo 1' 'set r_drawworld 1' 'set cl_entities 1' 'set cl_particles 0' 'set cl_lights 0' 'set r_metalfx 1' 'set r_metalfx_scale 0.5' || return 1
+    ct_fx "does not declare the same footprint band" "${fxa[@]}" -- '// fxb' '// footprint darker 0..0.05' '// footprint max 0..90' 'set timedemo 1' 'set r_drawworld 1' 'set cl_entities 1' 'set cl_particles 0' 'set cl_lights 0' 'set r_metalfx 1' 'set r_metalfx_scale 0.5' || return 1
+    # a band line after the first set is not a band: the companion without it declares the same (none) as a scenario that has it only there
+    ct_fx ok '// fxa' 'set timedemo 1' 'set r_drawworld 1' 'set cl_entities 0' 'set cl_particles 0' 'set cl_lights 0' '// footprint darker 0..0.05' -- "${fxb[@]}" || return 1
+    ct_fx "the companion fxb of fxa does not set r_metalfx 1 (it has 'nothing')" "${fxa[@]}" -- '// fxb' '// footprint darker 0..0.05' 'set timedemo 1' 'set r_drawworld 1' 'set cl_entities 1' 'set cl_particles 0' 'set cl_lights 0' 'set r_metalfx_scale 0.5' || return 1
+    ct_fx "does not set r_metalfx_scale 0.5 (it has '0.25')" "${fxa[@]}" -- '// fxb' '// footprint darker 0..0.05' 'set timedemo 1' 'set r_drawworld 1' 'set cl_entities 1' 'set cl_particles 0' 'set cl_lights 0' 'set r_metalfx 1' 'set r_metalfx_scale 0.25' || return 1
+    ct_fx "does not set r_metalfx 1 (it has '0')" "${fxa[@]}" -- "${fxb[@]}" 'set r_metalfx 0' || return 1
+    ct_fx "does not set r_drawworld 1 (it has '0')" "${fxa[@]}" -- "${fxb[@]}" 'set r_drawworld 0' || return 1
+    # the content and frame cvars may differ, and an extra cvar of the companion does not matter
+    ct_fx "does not set cl_entities 1" "${fxa[@]}" -- "${fxb[@]}" 'set cl_entities 0' || return 1
+    ct_fx ok "${fxa[@]}" -- "${fxb[@]}" 'set cl_gun 2' 'set cl_blend 0' 'set gl_polyblend 0' 'set viewsize 90' 'set crosshair 1' 'set scr_conspeed 1' 'set cl_showfps 1' 'set metal_particle_cap 5' || return 1
+    ct_fx ok "${fxa[@]}" 'set cl_gun 0' 'set cl_blend 0' 'set gl_polyblend 0' 'set viewsize 100' 'set crosshair 0' -- "${fxb[@]}" 'set cl_gun 2' 'set cl_blend 1' 'set gl_polyblend 1' 'set viewsize 90' 'set crosshair 1' || return 1
+    ct_fx ok "${fxa[@]}" -- "${fxb[@]}" 'set timedemo 0' || return 1
+    # a scenario without a band: its companion stays nominal
+    ct_fx ok '// fxa' 'set timedemo 1' 'set r_drawworld 1' 'set cl_entities 0' 'set cl_particles 0' 'set cl_lights 0' 'set r_metalfx 1' -- '// fxb' 'set timedemo 1' 'set r_drawworld 1' 'set cl_entities 1' 'set cl_particles 0' 'set cl_lights 0' || return 1
+    # a band line that does not parse is a problem of the check too
+    ct_fx "fxa.cfg: a footprint line is" '// fxa' '//footprint darker 0..0.05' 'set timedemo 1' 'set r_drawworld 1' 'set cl_entities 0' 'set cl_particles 0' 'set cl_lights 0' -- "${fxb[@]}" || return 1
 }
 st_compare_basic() {
     fixture gl1 ref "$tmp/a.tga"; fixture metal "$cid" "$tmp/b.tga"
@@ -3015,7 +3197,7 @@ cmd_selftest() {
         replay_args replay_pick replay_refused replay_header replay_place replay_run replay_keep replay_fail replay_compare
         replay_tools
         make_demo_args make_demo_script make_demo_run make_demo_place make_demo_case demo_sum
-        footprint footprint_band footprint_cmd where content_tags"
+        footprint footprint_band footprint_cmd where footprint_guards content_tags"
     # "selftest <case>..." runs only those cases (each must be one of the list)
     if [ $# -gt 0 ]; then
         for c in "$@"; do case " $(echo $cases) " in *" $c "*) ;; *) die "no selftest case '$c'";; esac; done
