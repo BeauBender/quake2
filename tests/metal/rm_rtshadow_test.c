@@ -1429,6 +1429,25 @@ test_carried(void)
 	CHECK(rm_rts_carried(xf, mins, maxs, l, 32) == 0xffffffffu);
 	CHECK(rm_rts_carried(xf, mins, maxs, l, 31) == 0x7fffffffu);
 
+	/* lights past the 32nd are not looked at, even inside */
+	for (i = 0; i < 32; i++)
+	{
+		l[i] = light_at(300, 0, 0);
+	}
+
+	CHECK(rm_rts_carried(xf, mins, maxs, l, 40) == 0);
+
+	/* an inverted box (mins above maxs), even one the tolerance would open, and a basis too small to invert */
+	{
+		const float imins[3] = { -8, -4, -2 }, imaxs[3] = { -8.5f, 4, 30 };
+		const float tiny[12] = { 1e-5f, 0, 0, 0, 1e-5f, 0, 0, 0, 1e-5f, 100, -50, 20 };
+
+		l[0] = light_at(100, -50 - 8.2f, 20);   /* model (-8.2, 0, 0) under the turn: x is the world's y */
+		CHECK(rm_rts_carried(xf, imins, imaxs, l, 1) == 0);
+		l[0] = light_at(100, -50, 20);
+		CHECK(rm_rts_carried(tiny, mins, maxs, l, 1) == 0);
+	}
+
 	/* a transform that cannot be inverted, a box or a transform that is not finite: none */
 	bad[0] = -9;    /* below mins[0] */
 	bad[1] = bad[2] = 40;
