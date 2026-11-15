@@ -1598,6 +1598,9 @@ st_framediff_mask() { # RT2 (TASK54): --mask limits the comparison to the pixels
     if "$diff" "$tmp/a.tga" "$tmp/mdefect.tga" --mask "$tmp/min.tga" >/dev/null; then st_fail "the defect must fail where the mask marks it"; return 1; fi
     "$diff" "$tmp/a.tga" "$tmp/mdefect.tga" --mask "$tmp/min.tga" | grep -q 'bad=1.000000 .*masked=256$' ||
         st_fail "every marked pixel of the defect is bad" || return 1
+    # the score is the mean over the marked pixels, not over the frame: 0.73 over the 256, 0.06 over all 3072
+    if "$diff" "$tmp/a.tga" "$tmp/mdefect.tga" --mask "$tmp/min.tga" --threshold 0.5 --bad-threshold 1 >/dev/null; then
+        st_fail "the masked score is the mean over the marked pixels"; return 1; fi
     "$diff" "$tmp/a.tga" "$tmp/mdefect.tga" --mask "$tmp/mall.tga" | grep -q 'masked=3072$' || st_fail "a full mask marks every pixel" || return 1
     "$diff" "$tmp/a.tga" "$tmp/mdefect.tga" --mask "$tmp/mnone.tga" | grep -q '^score=0.000000 .*masked=0$' ||
         st_fail "an empty mask compares nothing and passes" || return 1
