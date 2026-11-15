@@ -230,10 +230,11 @@ than the image declares now loads, with the missing rows filled in
 (black in an RGB image). A run-length TGA that ends between two runs
 still loads, as it did before.
 
-The OpenGL and Metal renderers look for a sky face as a `.tga` first
-and then, now on every platform, as the `.pcx`, before the Heretic II
-formats: when no `.tga` face decodes, the sky is drawn from its `.pcx`
-faces. Where paletted textures are used, the `.pcx` comes first, as
+The OpenGL and Metal renderers look for a sky face as a `.png` first
+when it is at least the size of the stock face (see "Textures upscaled
+on your own machine" below), else as a `.tga`, and then, now on every
+platform, as the `.pcx`, before the Heretic II formats: when no `.tga`
+or `.png` face decodes, the sky is drawn from its `.pcx` faces. Where paletted textures are used, the `.pcx` comes first, as
 before. On platforms other than macOS,
 iOS, iPadOS, tvOS and visionOS there is no decoder for PNG, JPEG or TGA
 at all: replacements are not loaded there, and the stock skies are
@@ -289,8 +290,13 @@ colour is made: the result is sharper pixel art, not new detail.
   or a connected remote server sends it as console text, and nothing
   more: console text from a server is not filtered, by design, so a
   server that has the client disconnect first can still start it.
-* The stock sky faces are also shipped as `.tga` files, and the loader
-  looks for a `.tga` before a `.png`, so the stock skies keep their
-  `.tga` faces; the `.png` faces are used where a sky has no `.tga`.
+* The stock sky faces are also shipped as `.tga` files, and for every
+  other image the loader looks for a `.tga` before a `.png`. For a sky
+  face, with `r_retexturing 1`, a `.png` that is at least the size of
+  the stock face (the `.tga`'s size, or the original's when there is no
+  `.tga`) is used first: a generated PNG in the write directory would
+  otherwise always lose to the pak's `.tga`, and the skies would stay
+  as they were. A smaller or undecodable `.png` is ignored, and the
+  order is `.tga`, `.png`, `.jpg` as before.
 * There is no PNG encoder off Apple platforms; the command does
   nothing there.
