@@ -285,6 +285,11 @@ table. The scaler's cost on apple7 is TASK106
 (#249). The first frames of a process run at the start level (section 8,
 "Levels at the start of a process"), so a frame-time test excludes them.
 
+### Targets per GPU family and display, and the options (TASK116)
+
+Placeholder: the matrix, options A to E and the image-quality program
+follow.
+
 ## 3. What the rasterizer must expose
 
 `ref_metal` (TASK28) renders the world and entities into a G-buffer before
