@@ -2198,3 +2198,19 @@ Handed over:
   repeated on the bare-metal host (FIX45's acceptance there). The fullscreen-window case, which
   shows the same defect, is measured here.
 - Cppcheck is not installed on this host; CI runs it.
+
+## 26. As built: MetalFX scalers for the 3D view (TASK111)
+
+`r_metalfx` selects `MTLFXSpatialScaler` (1), `MTLFXTemporalScaler` (2) or
+`MTLFXTemporalDenoisedScaler` (3, run as 2 until a ray-traced effect exists) for the world
+view, at `r_metalfx_scale` (0: 1080 lines from apple9 on, 720 below), with
+`r_metalfx_modes` the read-only mask of what the GPU supports
+([decision 0011](../decisions/0011-metalfx-framework.md), `doc/040_cvarlist.md`). MetalFX
+is weak-linked into `ref_metal` only. The pure part is `rm_metalfx.c`
+(`tests/metal/rm_fx_test.c`), the engine side `rm_fxscene.c`, the back end `rmb_metalfx.m`;
+the scaler runs at the G-buffer contract's seam, in place of the bilinear stretch of
+`rmb_gbuf_view_end`. With the defaults every pin is byte-identical to the base and no
+MetalFX object is made. Frame generation (`r_metalfx_interp`) reads 0 everywhere: it is
+not built. The runs, the fallbacks on this VM, the reset events, the mutants and the
+bare-metal hosts' commands are in the runbook,
+[MetalFX scalers for the 3D view](metal-port-harness.md#metalfx-scalers-for-the-3d-view-in-ref_metal-task111).

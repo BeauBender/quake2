@@ -850,6 +850,8 @@ ref_metal:
 	$(MAKE) $(BINDIR)/ref_metal.dylib
 
 $(BINDIR)/ref_metal.dylib : LDFLAGS += -shared -framework Metal -framework QuartzCore -framework Foundation
+# MetalFX (decision 0011): ref_metal only, weak, as a target OS may lack it
+$(BINDIR)/ref_metal.dylib : LDFLAGS += -weak_framework MetalFX
 
 # The shaders, loaded from next to the dylib when the context is made,
 # compiled with the shim's xcrun metal flags (design section 4).
@@ -1218,6 +1220,8 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_light.o \
 	src/client/refresh/metal/rm_lightmap.o \
 	src/client/refresh/metal/rm_main.o \
+	src/client/refresh/metal/rm_metalfx.o \
+	src/client/refresh/metal/rm_fxscene.o \
 	src/client/refresh/metal/rm_mesh.o \
 	src/client/refresh/metal/rm_misc.o \
 	src/client/refresh/metal/rm_model.o \
@@ -1231,6 +1235,7 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rmb_device.o \
 	src/client/refresh/metal/rmb_encode.o \
 	src/client/refresh/metal/rmb_gbuf.o \
+	src/client/refresh/metal/rmb_metalfx.o \
 	src/client/refresh/metal/rmb_resource.o \
 	src/client/refresh/metal/rmb_rt.o \
 	src/client/refresh/metal/common/mtl_matrix.o \

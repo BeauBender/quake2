@@ -78,6 +78,7 @@ int rmb_gbuf_bind_world(id<MTLRenderCommandEncoder> enc, int dynamic, unsigned n
 int rmb_gbuf_bind_alias(id<MTLRenderCommandEncoder> enc, int pipe, const rm_avert_t *v, unsigned nv);
 void rmb_gbuf_frame_reset(void);
 void rmb_gbuf_release(void);
+void rmb_fx_release(void);
 
 /* the frame ring of 2D vertices and indices (RMB_RING_BYTES): one shared buffer per frame in flight */
 static id<MTLBuffer> ring_buf[RMB_FRAMES_IN_FLIGHT];
@@ -665,6 +666,7 @@ rmb_encode_release(void)
 		rmb_set_texture(&color, nil);
 		rmb_set_texture(&depth, nil);
 		rmb_gbuf_release();
+		rmb_fx_release();
 
 		if (readbuf)
 		{
@@ -1265,6 +1267,35 @@ id<MTLTexture>
 rmb_frame_color(void)
 {
 	return color;
+}
+
+/*
+ * For rmb_metalfx.m (TASK111, metal_stats): commits the frame's command
+ * buffer so far, after the uploads before it, and goes on with a new one,
+ * so a pass committed in between runs in a command buffer of its own; 0,
+ * with the frame's buffer kept, outside a frame or when none is made.
+ */
+int
+rmb_frame_cut(void)
+{
+	id<MTLCommandBuffer> next;
+
+	if (!frame_open || frame_skipped || !frame_cmd)
+	{
+		return 0;
+	}
+
+	next = [rmb_queue commandBuffer];
+
+	if (!next)
+	{
+		return 0;
+	}
+
+	rmb_commit_partial();
+	frame_cmd = next;
+	rmb_frame_serial++;
+	return 1;
 }
 
 id<MTLCommandBuffer>

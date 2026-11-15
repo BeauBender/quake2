@@ -170,7 +170,7 @@ rm_ledger_live(const rm_ledger_t *l)
 int
 rm_ledger_format(const rm_ledger_t *l, char *buf, size_t len)
 {
-	static const char *names[RM_OBJ_KINDS] = { "device", "queue", "view", "texture", "buffer", "state", "rt" };
+	static const char *names[RM_OBJ_KINDS] = { "device", "queue", "view", "texture", "buffer", "state", "rt", "metalfx" };
 	size_t used = 0;
 	int k, ok;
 
