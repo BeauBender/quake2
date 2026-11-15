@@ -1501,9 +1501,8 @@ The display's pixel size is 5120 x 2880; its desktop size in points is
 `vid_fullscreen 1` at a mode the display lists, `r_mode -1` with
 `r_customwidth` and `r_customheight` at the request, the route TASK108
 (#259) found for the native size (its re-measurement of the runbook's
-TASK97 section, on TASK108's branch). Each of
-the 28 logs holds, once each, the three lines for its size, for example at
-the native size:
+TASK97 section, on TASK108's branch). Each of the 28 logs holds, once
+each, the three lines for its size, for example at the native size:
 
 ```
 User requested 5120x2880@-1.000000, setting closest mode 5120x2880@60.000000
@@ -1519,14 +1518,14 @@ run's requested size.
 The capture is the pin harness's (`scripts/pins.sh`): the engine
 arguments that `PINS_DRYRUN=1 scripts/pins.sh record gl1 <scenario>`
 prints, run by hand with `vid_fullscreen 1` in place of 0 and the size
-set, as TASK98 did
-(the runbook's TASK98 section). So each run plays `demo1.dm2` from
-`$PINS_BASEDIR` with the scenario's lines (each sets `timedemo 1`), with
-`pins_capture 100` (a frame every 100th rendered frame), `pins_seed 1` (a
-fixed PRNG seed at each map registration, so particles and explosions
-draw the same numbers in every run) and `pins_record trace.q2r`. Every run
-exited 0 with 7 frames and no `FAILED` line. A display-sleep assertion
-(`caffeinate -d -i`) was held during each run.
+set, as TASK98 did (the runbook's TASK98 section). So each run plays
+`demo1.dm2` from `$PINS_BASEDIR` with the scenario's lines (each sets
+`timedemo 1`), with `pins_capture 100` (a frame every 100th rendered
+frame), `pins_seed 1` (a fixed PRNG seed at each map registration, so
+particles and explosions draw the same numbers in every run) and
+`pins_record trace.q2r`. Every run exited 0 with 7 frames and no `FAILED`
+line. A display-sleep assertion (`caffeinate -d -i`) was held during each
+run.
 
 Scenes: `world` (world geometry, lightmaps, sky and water, no entities),
 `models` (the world plus entities: alias models, sprites, beams, the view
@@ -1595,10 +1594,11 @@ image kept with the frames.
   strong counts as well as a silhouette.
 - **Particles**: in the `particles` scene, the pixels where the native
   2D-off capture differs in any channel from a third native capture, also
-  with the 2D layer off, with `cl_particles 0`. `V_RenderView` (`src/client/cl_view.c`) sets the
-  refdef's particle count to 0 when `cl_particles` is 0, after the client
-  has run the particles, so the seeded run is otherwise the same. Particle
-  pixels are taken out of the edge and interior regions.
+  with the 2D layer off, with `cl_particles 0`. `V_RenderView`
+  (`src/client/cl_view.c`) sets the refdef's particle count to 0 when
+  `cl_particles` is 0, after the client has run the particles, so the
+  seeded run is otherwise the same. Particle pixels are taken out of the
+  edge and interior regions.
 - **Textured interiors (interior)**: every other pixel of the 3D frame.
 - **Sprites and beams**: not isolated. No cvar removes sprites or beams
   alone (`cl_entities 0` removes every entity, alias models included), so
@@ -1668,7 +1668,8 @@ frames. Default `MTLDevice`: Apple M6.
   upscale and nothing else, waited on before the next.
 
 **Self-tests of the metrics** (the probe's `selftest` mode on the native
-2D-off frame 3 of each scene, values as printed):
+2D-off frame 3 of each scene; each cell is PSNR, SSIM and the MSE, as
+printed):
 
 | Test | `world` frame 3 | `particles` frame 3 | `models` frame 3 |
 |---|---|---|---|
@@ -1680,9 +1681,9 @@ frames. Default `MTLDevice`: Apple M6.
 
 An image against itself and against a second capture of the same frame
 gives infinite PSNR and an SSIM of exactly 1; a one-pixel shift scores
-lower on both. Raising every luma value by 1 gives an MSE of exactly 1
-(no luma value is 255 in these frames) and 48.1308 dB, which is 10
-log10(255²).
+lower on both. Raising every luma value below 255 by 1 gives the MSE of
+1.000000 and the 48.1308 dB (10 log10(255²), rounded) that the formula
+predicts.
 
 ### Results
 
@@ -1696,7 +1697,7 @@ SSIM; the number of frames). The spatial-scaler rows are a pessimistic
 bound for still frames, not a measurement of option A, which uses the
 temporal scaler (RT11; "What this does not measure" above).
 
-| Input | Upscaler | 3D, whole frame | 3D, edge | 3D, interior | 3D, particles | 2D and HUD |
+| Input (pixels) | Upscaler | 3D, whole frame | 3D, edge | 3D, interior | 3D, particles | 2D and HUD |
 |---|---|---|---|---|---|---|
 | 3840 x 2160 | spatial | 47.14 to 58.93; 0.9891 to 0.9987; 21 | 23.82 to 35.54; 0.8861 to 0.9750; 20 | 48.41 to 58.93; 0.9892 to 0.9987; 21 | 32.58 to 48.32; 0.9670 to 0.9869; 4 | 35.60 to 44.95; 0.9796 to 0.9870; 21 |
 | 3840 x 2160 | bilinear | 49.56 to 63.50; 0.9954 to 0.9995; 21 | 25.20 to 36.01; 0.9030 to 0.9797; 20 | 52.96 to 63.50; 0.9956 to 0.9995; 21 | 32.91 to 50.93; 0.9607 to 0.9929; 4 | 34.39 to 47.55; 0.9841 to 0.9942; 21 |
@@ -1733,10 +1734,10 @@ What the CSV shows, and no more:
   (in SSIM: bilinear 21 of 21, Lanczos 19 of 21, the spatial scaler 3 of
   21). The cause was not investigated.
 - Particles: read in the source, not measured: `ref_gl1` draws particles
-  as points of `gl1_particle_size` (40) times the frame height over 480
-  pixels (`src/client/refresh/gl1/gl1_main.c`), attenuated with distance
-  and clamped to `gl1_particle_min_size` (2) and `gl1_particle_max_size`
-  (40) pixels (`gl1_misc.c`; every log reports `Point parameters: Okay`). An
+  as points of `gl1_particle_size` (40) times the frame height divided by
+  480 (`src/client/refresh/gl1/gl1_main.c`), attenuated with distance and
+  clamped to `gl1_particle_min_size` (2) and `gl1_particle_max_size` (40)
+  pixels (`gl1_misc.c`; every log reports `Point parameters: Okay`). An
   inference: a point at the 40-pixel clamp covers the same number of
   pixels at every frame size, so after the upscale it is larger than at
   the native size, and part of the particle region's error may be that
@@ -1901,20 +1902,21 @@ the minimum to maximum over its frames, with the number of frames.
 
 ### Lock state and load
 
-Before every capture, every metrics run and every timing invocation:
-`ioreg -n Root -d1 | grep -c
-CGSSessionScreenIsLocked` printed 0, `pgrep -x quake2` listed no engine
-(none of the runs overlapped another), and `uptime` was noted; before and
-after each timing invocation also the number of `make`, `cc`, `clang`,
-`quake2` and `q2ded` processes (0 at every check) and, from timing set b
-on, the GPU's `"Device Utilization %"` (`ioreg -r -c IOAccelerator -d 1
--w0`). The screen was never locked. Times are UTC on 2026-11-15; load is
-the one-minute average.
+Before every capture, every metrics run and every timing invocation,
+`ioreg -n Root -d1 | grep -c CGSSessionScreenIsLocked` printed 0,
+`pgrep -x quake2` listed no engine (none of the runs overlapped another),
+and `uptime` was noted. Before and after each timing invocation the
+number of `make`, `cc`, `clang`, `quake2` and `q2ded` processes was also
+read (0 at every check) and, from timing set b on, the GPU's
+`"Device Utilization %"` (`ioreg -r -c IOAccelerator -d 1 -w0`). The
+screen was never locked. Times are UTC on 2026-11-15 (for the captures
+and the metrics runs, the first and last run's start); load is the
+one-minute average.
 
 | Batch | Time | Runs | Lock before, after | Load before | GPU utilization before, after | Used |
 |---|---|---|---|---|---|---|
 | Captures | 04:41:54 to 04:49:17 | 28 engine runs | 0, 0 in every run | 2.46 to 3.77 | not read | Yes (the frames) |
-| Upscale and metrics | 04:53:33 to 04:55:22 | 21 probe runs, one per frame | 0 before each | 2.80 to 8.29, rising with the probe's own CPU work (about 8 cores) | not read | Yes (PSNR and SSIM); the single GPU time per upscale it records is not used |
+| Upscale and metrics | 04:53:33 to 04:55:22 | 21 probe runs, one per frame | 0 before each | 2.80 to 8.29, rising during the batch, whose probe runs used about 8 cores (797 % CPU in `time`) | not read | Yes (PSNR and SSIM); the single GPU time per upscale it records is not used |
 | Timing a | 04:55:43 to 04:56:10 | 3 invocations, 10 warm-up rounds | 0, 0 | 6.30, 5.41, 4.89 | not read | Superseded by c: it started at load 6.30, right after the metrics batch |
 | Timing b | 04:58:01 to 04:58:28 | 3, 10 warm-up rounds | 0, 0 | 1.40, 1.67, 1.65 | 8, 7 and 8 %; 7, 0 and 0 % | Superseded by c: the first configuration of each process, 3840 x 2160 spatial, had invocation medians 2.821, 1.622 and 1.427 ms |
 | Timing c | 04:59:16 to 04:59:52 | 3, at least 3 s of warm-up (305, 294, 305 rounds of 9) | 0, 0 | 1.85, 2.37, 2.28 | 8, 8 and 8 %; 7, 8 and 0 % | Yes |
