@@ -46,6 +46,7 @@
 #include <string.h>
 
 #include "header/rm_rt.h"
+#include "common/mtl_shader_math.h"
 #include "common/mtl_rts_math.h"
 
 #if !__has_feature(objc_arc)
