@@ -61,8 +61,9 @@ original clients (Vanilla Quake II) commands are still in place.
   an output name is never written through; names that are not plain
   paths (letters, digits, `_`, `-`, `+`, `.` and `/`) are refused,
   nothing is written inside a git work tree, and the command is refused
-  while connected to a remote server. See "Textures upscaled on your
-  own machine" in `030_configuration.md`.
+  while a demo plays or while connected to a remote server (a server
+  that has the client disconnect first can still start it). See
+  "Textures upscaled on your own machine" in `030_configuration.md`.
 
 * **viewpos**: Show player position.
 
