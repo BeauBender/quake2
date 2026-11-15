@@ -843,7 +843,7 @@ picture is the same as before these cvars existed.
   with the configuration; applies from the next frame.
 
 The `r_rt_*` cvars belong to the Metal renderer's ray tracing, which is
-being built and changes nothing drawn yet: with `r_rt_stats` set, the renderer
+being built: `r_rt_shadows` is its first effect; with `r_rt_stats` set, the renderer
 builds acceleration structures for the world, the doors and platforms
 and every model the frame lists (not only those in view, since a model
 out of view can still cast into it), which nothing reads. On a GPU without ray
@@ -882,8 +882,8 @@ is.
   light, `6` the depth; `1` to `3` and `5` only with `r_rt_gbuffer`. `0`
   (the default) shows the picture; a value above `6` counts as `6`, a
   value that is not a finite number counts as `0`, and a fraction is cut
-  to the whole number below it. Applies from the next
-  frame.
+  to the whole number below it. Cheat-protected: reset to `0` in
+  multiplayer. Applies from the next frame.
 
 * **r_rt_gunshadow**: When set to `1`, the view weapon is part of the
   ray-traced scene, so that later ray-traced effects shade it and let it
@@ -913,6 +913,38 @@ is.
   `r_rt_gbuffer_show 4`). `0` (the default) uses the real last frame.
   Applies from the next frame.
 
+* **r_rt_shadows**: When set to `1`, the Metal renderer gives the dynamic
+  lights (muzzle flashes, explosions, rockets in flight) ray-traced shadows
+  on the world: instead of adding each light into the lightmaps, it adds
+  the same light (the same fall-off with distance) to each pixel the light
+  reaches without anything in the way, so a wall or a pillar between the
+  light and a surface leaves that surface unlit by it. At a pixel the four
+  lights that add the most are traced; any further one adds its light
+  unshadowed. Translucent surfaces and translucent water let a third or
+  two thirds of the light through, as they let the view through. Models
+  are lit as before, by the light at their position without a shadow, but
+  they cast shadows, except on a light they carry: a rocket does not
+  shadow its own light, nor a monster its muzzle flash. Needs a GPU with
+  ray tracing and draws the view
+  through the G-buffer (see `r_rt_gbuffer`); with `gl1_dynamic 0`,
+  `r_fullbright 1` or `gl1_flashblend 1` there are no dynamic lights on
+  the lightmaps and it does nothing. With `0` (the default) nothing is
+  traced or allocated and the picture is as without ray tracing. Saved
+  with the configuration; applies from the next frame.
+
+* **r_rt_shadows_show**: A development view of the Metal renderer's
+  ray-traced shadows: with `r_rt_shadows` on, `1` replaces the 3D view by
+  white where no dynamic light is in range and black where one is (the
+  mask of the check that no light is counted twice), `2` by the pass's
+  classes: black no light in range, blue in range but adding nothing,
+  green traced and lit, red shadowed from at least one light. The view
+  weapon, models drawn over the world, particles and translucent surfaces
+  are left out of these views; on a frame with no dynamic light both are
+  the view with none in range. `0` (the default) shows the picture; a
+  value above `2` counts as `2`, one that is not a finite number as `0`,
+  and a fraction is cut to the whole number below it. Cheat-protected:
+  reset to `0` in multiplayer. Applies from the next frame.
+
 * **r_rt_stats**: When set to `1`, the Metal renderer builds its
   ray-tracing acceleration structures and prints what they hold: when a
   map is loaded, the world's triangles by material (world, sky, water,
@@ -926,7 +958,10 @@ is.
   frame: the instances, the models' triangles, how many model structures
   were built and updated, what was left out (beams, entities without a
   model, sprites, the view weapon, shells, models it cannot build) and the
-  bytes held. Nothing is drawn differently. The objects it makes are
+  bytes held, and with `r_rt_shadows` on a line for the shadow pass: the
+  pixels it ran on, those with a dynamic light in range, those that traced
+  a ray and those shadowed, the rays and the pass's GPU time. Nothing is
+  drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next
   frame.
