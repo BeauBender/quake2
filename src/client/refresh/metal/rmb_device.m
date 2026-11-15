@@ -84,30 +84,34 @@ rmb_frame_wait_ms(void)
 
 /*
  * FIX51: with display sync off a frame waits for no drawable
- * (docs/plans/metal-port-harness.md, "The fixed per-frame cost of the
- * Metal renderers (FIX51)"). The window server hands a drawable back at
- * its own pace, whatever the frame costs, and that pace was the frame
- * rate twice over: a frame waited for the drawable in nextDrawable, and a
+ * (docs/runbook/FIX51.md). The window server hands a drawable back at its
+ * own pace, whatever the frame costs, and that pace was the frame rate
+ * twice over: a frame waited for the drawable in nextDrawable, and a
  * drawable the window server had not let go of yet held the command
  * buffer that wrote it on the GPU, and with it the frame slot.
  *
  * So with display sync off the next drawable is acquired ahead, on a
- * serial queue, and is written apart from the frame: the frame that ends
- * copies its colour target to a stage and signals rmb_present_event;
- * the copy to the drawable and the present go on rmb_present_queue, which
- * waits for that event, so a wait for the drawable holds that queue and
- * no frame slot. As many presents are on their way as the layer has
- * drawables (maximumDrawableCount, at most RMB_PRESENTS), each with a
- * present slot of its own: a semaphore of one (rmb_present_sem), given
- * back when the present has completed, and the stage it reads
- * (rmb_stage), so a stage is not written again before the present that
- * reads it has completed. A frame that ends with no drawable ready, or
- * with every present slot on its way, is complete and not presented
- * (counted as without a drawable); every frame is drawn offscreen either
- * way. With display sync on the frame waits in nextDrawable and writes the
- * drawable itself, as before, and every frame is presented.
+ * serial queue, and is written apart from the frame, from the very target
+ * the frame was drawn into. There are RMB_PRESENTS present slots, one for
+ * each of the layer's drawables and one for the frame being drawn: a
+ * semaphore of one (rmb_present_sem) and a colour target
+ * (rmb_present_target). A frame takes a free slot when it begins and is
+ * drawn into the slot's target (rmb_present_take). When it ends with a
+ * drawable ready, the present goes on rmb_present_queue, which waits for
+ * the frame's command buffer (rmb_present_event), and writes the drawable
+ * from that target in one pass (rmb_frame_end): the wait for the drawable
+ * holds that queue and no frame slot, and nothing copies the frame first.
+ * The slot comes back when its present has completed, so its target is
+ * not drawn into again while it is read; a frame that is not presented
+ * gives its slot back when it ends (a later frame that draws into that
+ * target is on the same queue, after it). A frame that begins with every
+ * slot held is drawn into the frame's own target (rmb_encode.m) and is not
+ * presented, nor is one that ends with no drawable ready: both are
+ * complete and counted as without a drawable. With display sync on the
+ * frame waits in nextDrawable and writes the drawable itself, as before,
+ * and every frame is presented.
  */
-#define RMB_PRESENTS 3
+#define RMB_PRESENTS (RMB_FRAMES_IN_FLIGHT + 1)   /* maximumDrawableCount (rmb_attach), and the open frame */
 
 static dispatch_queue_t rmb_ahead_queue;
 static os_unfair_lock rmb_ahead_lock = OS_UNFAIR_LOCK_INIT;
@@ -117,37 +121,69 @@ static int rmb_ahead_busy;              /* rmb_ahead_lock: an acquisition is on 
 static id<MTLCommandQueue> rmb_present_queue;
 static id<MTLEvent> rmb_present_event;
 static uint64_t rmb_present_value;
-static dispatch_semaphore_t rmb_present_sem[RMB_PRESENTS];   /* 1: no present of this slot on its way */
-static id<MTLTexture> rmb_stage[RMB_PRESENTS];               /* the copy of the frame its present reads */
-static int rmb_present_slot = -1;              /* the slot this frame took, or -1 */
+static dispatch_semaphore_t rmb_present_sem[RMB_PRESENTS];   /* 1: no frame and no present holds this slot */
+static id<MTLTexture> rmb_present_target[RMB_PRESENTS];      /* the target the slot's frame is drawn into */
+static int rmb_present_slot = -1;              /* the slot the open frame holds, or -1 */
 static id<MTLCommandBuffer> rmb_present_cmd;   /* the present of the frame that ends, committed after it */
 
+/*
+ * The pipeline of the one-pass present (rm_fragment_present), built once
+ * a session by its first frame, from the library rmb_resources_open
+ * loaded: never on the present path, and not again after a failure. Nil
+ * then, and the frame is copied to the drawable and FIX53's alpha pass
+ * written over it, as before.
+ */
+static id<MTLRenderPipelineState> rmb_present_pso;
+static int rmb_present_tried;
+
 void rmb_watch(id<MTLCommandBuffer> cmd);
+id<MTLLibrary> rmb_library(void);   /* rmb_resource.m */
 
-/* The present slots in use: one for each of the layer's drawables, at most RMB_PRESENTS. */
+/* With display sync off the frames are presented apart (with the present queue and its event made). */
 static int
-rmb_present_slots(void)
+rmb_apart(void)
 {
-	int n = rmb_layer ? (int)rmb_layer.maximumDrawableCount : 1;
-
-	return n < 1 ? 1 : (n > RMB_PRESENTS ? RMB_PRESENTS : n);
+	return !rmb_sync && rmb_layer && rmb_present_sem[0];
 }
 
-/* Takes the first present slot with no present on its way, or returns -1. */
-static int
-rmb_present_take(void)
+static void
+rmb_present_build(void)
 {
-	int i, n = rmb_present_slots();
+	MTLRenderPipelineDescriptor *d;
+	NSError *e = nil;
 
-	for (i = 0; i < n; i++)
+	if (rmb_present_tried || !rmb_device)
 	{
-		if (rmb_present_sem[i] && (dispatch_semaphore_wait(rmb_present_sem[i], DISPATCH_TIME_NOW) == 0))
-		{
-			return i;
-		}
+		return;
 	}
 
-	return -1;
+	rmb_present_tried = 1;
+
+	@autoreleasepool
+	{
+		d = [MTLRenderPipelineDescriptor new];
+		d.vertexFunction = [rmb_library() newFunctionWithName:@"rm_vertex_alpha"];
+		d.fragmentFunction = [rmb_library() newFunctionWithName:@"rm_fragment_present"];
+
+		if (d.vertexFunction && d.fragmentFunction)
+		{
+			d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+			rmb_present_pso = [rmb_device newRenderPipelineStateWithDescriptor:d error:&e];
+		}
+
+		if (rmb_present_pso)
+		{
+			rm_ledger_create(&rmb_ledger, RM_OBJ_STATE);
+			rmb_counts.pipelines++;
+		}
+	}
+}
+
+/* The one-pass present's pipeline, nil when it was not built (rmb_encode.m). */
+id<MTLRenderPipelineState>
+rmb_present_pipe(void)
+{
+	return rmb_present_pso;
 }
 
 /* Puts an acquisition of the next drawable on the queue, unless one is there or done. */
@@ -201,10 +237,21 @@ rmb_ahead_take(void)
 	return d;
 }
 
+/* Drops the target of slot i (a command buffer that reads it keeps it alive). */
+static void
+rmb_present_target_drop(int i)
+{
+	if (rmb_present_target[i])
+	{
+		rmb_present_target[i] = nil;
+		rm_ledger_destroy(&rmb_ledger, RM_OBJ_TEXTURE);
+	}
+}
+
 /*
  * Waits for the acquisition on the queue (bounded, as nextDrawable is) and
- * for the presents on their way (bounded, RMB_GPU_WAIT_MS for them all),
- * and drops the drawable acquired ahead and the stages.
+ * for every present slot but the open frame's (bounded, RMB_GPU_WAIT_MS
+ * for them all), and drops the drawable acquired ahead and the targets.
  */
 static void
 rmb_ahead_drop(void)
@@ -221,7 +268,7 @@ rmb_ahead_drop(void)
 
 	for (i = 0; i < RMB_PRESENTS; i++)
 	{
-		if (!rmb_present_sem[i])
+		if (!rmb_present_sem[i] || (i == rmb_present_slot))
 		{
 			continue;
 		}
@@ -238,43 +285,112 @@ rmb_ahead_drop(void)
 
 	for (i = 0; i < RMB_PRESENTS; i++)
 	{
-		if (rmb_stage[i])
+		rmb_present_target_drop(i);
+	}
+}
+
+/*
+ * The colour target of the frame that begins, w by h: with display sync
+ * off the target of the first free present slot, which the frame then
+ * holds, made (again) for the size; nil with display sync on, with every
+ * slot held, or when the target cannot be made, and the frame is drawn
+ * into its own target and not presented (rmb_encode.m). The first call of
+ * a session builds the present's pipeline.
+ */
+id<MTLTexture>
+rmb_present_take(int w, int h)
+{
+	MTLTextureDescriptor *d;
+	int i, slot = -1;
+
+	rmb_present_build();
+
+	/* a slot still held by a frame that never ended is given back first */
+	if ((rmb_present_slot >= 0) && !rmb_present_cmd)
+	{
+		dispatch_semaphore_signal(rmb_present_sem[rmb_present_slot]);
+		rmb_present_slot = -1;
+	}
+
+	if (!rmb_apart() || (rmb_present_slot >= 0))
+	{
+		return nil;
+	}
+
+	for (i = 0; (i < RMB_PRESENTS) && (slot < 0); i++)
+	{
+		if (dispatch_semaphore_wait(rmb_present_sem[i], DISPATCH_TIME_NOW) == 0)
 		{
-			rmb_stage[i] = nil;
-			rm_ledger_destroy(&rmb_ledger, RM_OBJ_TEXTURE);
+			slot = i;
 		}
 	}
+
+	if (slot < 0)
+	{
+		return nil;
+	}
+
+	/* a new size: no target of the old one is drawn into again */
+	if (rmb_present_target[slot] && ((rmb_present_target[slot].width != (NSUInteger)w) ||
+			(rmb_present_target[slot].height != (NSUInteger)h)))
+	{
+		for (i = 0; i < RMB_PRESENTS; i++)
+		{
+			rmb_present_target_drop(i);
+		}
+	}
+
+	if (!rmb_present_target[slot])
+	{
+		@autoreleasepool
+		{
+			/* as rmb_encode.m's own target */
+			d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+					width:(NSUInteger)w height:(NSUInteger)h mipmapped:NO];
+			d.storageMode = MTLStorageModePrivate;
+			d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+			rmb_present_target[slot] = [rmb_device newTextureWithDescriptor:d];
+		}
+
+		if (!rmb_present_target[slot])
+		{
+			dispatch_semaphore_signal(rmb_present_sem[slot]);
+			return nil;
+		}
+
+		rm_ledger_create(&rmb_ledger, RM_OBJ_TEXTURE);
+	}
+
+	rmb_present_slot = slot;
+	return rmb_present_target[slot];
 }
 
 /*
  * The drawable of the frame that ends: with display sync on the next one,
  * waited for; with it off the one acquired ahead, or nil when none is
- * there yet, when every present slot is on its way, or when it is not of
- * the layer's drawable size (the size changed after it was acquired).
- * With display sync off the next one is then acquired ahead, and a
- * drawable returned holds a present slot until rmb_present_commit.
+ * there yet, when it is not of the layer's drawable size (the size changed
+ * after it was acquired), or when the frame holds no present slot (the
+ * drawable is then left for the next frame). With display sync off the
+ * next one is then acquired ahead.
  */
 id<CAMetalDrawable>
 rmb_next_drawable(void)
 {
 	id<CAMetalDrawable> d;
 	CGSize want;
-	int slot;
 
 	if (!rmb_layer)
 	{
 		return nil;
 	}
 
-	if (rmb_sync)
+	if (rmb_present_slot < 0)
 	{
-		return [rmb_layer nextDrawable];
-	}
+		if (!rmb_apart())
+		{
+			return [rmb_layer nextDrawable];
+		}
 
-	slot = rmb_present_take();
-
-	if (slot < 0)
-	{
 		rmb_ahead_request();
 		return nil;
 	}
@@ -287,96 +403,68 @@ rmb_next_drawable(void)
 		d = nil;
 	}
 
-	if (d)
-	{
-		rmb_present_slot = slot;
-	}
-	else
-	{
-		dispatch_semaphore_signal(rmb_present_sem[slot]);
-	}
-
 	rmb_ahead_request();
 	return d;
 }
 
 /*
- * The command buffer that writes the drawable rmb_next_drawable returned,
- * and the texture it copies from: the frame's own command buffer and its
- * colour target (display sync on, or no stage could be made), or a
- * command buffer of the present queue and the stage of the frame's
- * present slot, after the frame's command buffer has copied its colour
- * target there.
+ * The command buffer that writes the drawable rmb_next_drawable returned:
+ * the frame's own (display sync on, the frame holds no present slot, or no
+ * command buffer of the present queue could be made), or one of the
+ * present queue that waits for the frame's: the event is signalled after
+ * everything committed to the frame's queue before it, so after every
+ * write of the frame to its target.
  */
 id<MTLCommandBuffer>
-rmb_present_begin(id<MTLCommandBuffer> frame, id<MTLTexture> color, __strong id<MTLTexture> *src)
+rmb_present_begin(id<MTLCommandBuffer> frame)
 {
-	id<MTLBlitCommandEncoder> blit;
 	id<MTLCommandBuffer> cmd;
-	int slot = rmb_present_slot;
 
-	*src = color;
-
-	if (slot < 0)
+	if (rmb_present_slot < 0)
 	{
 		return frame;
 	}
 
-	if (rmb_stage[slot] && ((rmb_stage[slot].width != color.width) || (rmb_stage[slot].height != color.height)))
-	{
-		rmb_stage[slot] = nil;
-		rm_ledger_destroy(&rmb_ledger, RM_OBJ_TEXTURE);
-	}
-
-	if (!rmb_stage[slot])
-	{
-		MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:color.pixelFormat
-				width:color.width height:color.height mipmapped:NO];
-
-		d.storageMode = MTLStorageModePrivate;
-		d.usage = MTLTextureUsageShaderRead;
-		rmb_stage[slot] = [rmb_device newTextureWithDescriptor:d];
-
-		if (rmb_stage[slot])
-		{
-			rm_ledger_create(&rmb_ledger, RM_OBJ_TEXTURE);
-		}
-	}
-
-	cmd = rmb_stage[slot] ? [rmb_present_queue commandBuffer] : nil;
+	cmd = [rmb_present_queue commandBuffer];
 
 	if (!cmd)
 	{
-		/* written by the frame, as with display sync on */
-		rmb_present_slot = -1;
-		dispatch_semaphore_signal(rmb_present_sem[slot]);
-		return frame;
+		return frame;   /* the slot comes back when the frame ends */
 	}
 
-	blit = [frame blitCommandEncoder];
-	[blit copyFromTexture:color toTexture:rmb_stage[slot]];
-	[blit endEncoding];
 	rmb_present_value++;
 	[frame encodeSignalEvent:rmb_present_event value:rmb_present_value];
 	[cmd encodeWaitForEvent:rmb_present_event value:rmb_present_value];
-
 	rmb_present_cmd = cmd;
-	*src = rmb_stage[slot];
 	return cmd;
 }
 
-/* Commits the present of the frame that ended (after the frame's command buffer); it gives its present slot back. */
+/*
+ * After the frame's command buffer is committed, or when a frame ends with
+ * nothing committed: commits the frame's present, which gives the frame's
+ * present slot back when it has completed, or gives the slot back now.
+ */
 void
 rmb_present_commit(void)
 {
 	dispatch_semaphore_t sem;
+	int slot = rmb_present_slot;
 
-	if (!rmb_present_cmd)
+	rmb_present_slot = -1;
+
+	if (slot < 0)
 	{
 		return;
 	}
 
-	sem = rmb_present_sem[rmb_present_slot];
+	sem = rmb_present_sem[slot];
+
+	if (!rmb_present_cmd)
+	{
+		dispatch_semaphore_signal(sem);
+		return;
+	}
+
 	rmb_watch(rmb_present_cmd);
 	[rmb_present_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 		(void)b;
@@ -384,7 +472,6 @@ rmb_present_commit(void)
 	}];
 	[rmb_present_cmd commit];
 	rmb_present_cmd = nil;
-	rmb_present_slot = -1;
 }
 
 /*
@@ -668,6 +755,14 @@ rmb_close(rmb_stats_t *stats, rm_ledger_t *ledger)
 			{
 				rmb_present_sem[i] = nil;
 			}
+
+			if (rmb_present_pso)
+			{
+				rmb_present_pso = nil;
+				rm_ledger_destroy(&rmb_ledger, RM_OBJ_STATE);
+			}
+
+			rmb_present_tried = 0;
 
 			/* the system default device is shared with the rest of the process:
 			   only ref_metal's reference is dropped, it is not weak-checked */

@@ -93,8 +93,16 @@ static unsigned long frames_begun;
  */
 unsigned long rmb_frame_serial = 1;
 
+/* rmb_device.m: the target of a present slot, and the frame's present (FIX51) */
+id<MTLTexture> rmb_present_take(int w, int h);
+id<MTLRenderPipelineState> rmb_present_pipe(void);
+id<CAMetalDrawable> rmb_next_drawable(void);
+id<MTLCommandBuffer> rmb_present_begin(id<MTLCommandBuffer> frame);
+void rmb_present_commit(void);
+
 /* kept across frames, rebuilt when the size changes */
-static id<MTLTexture> color;     /* the frame, private */
+static id<MTLTexture> color;     /* the frame's: own, or with display sync off a present slot's (FIX51) */
+static id<MTLTexture> own;       /* the frame's own colour target, private */
 static id<MTLTexture> depth;     /* depth32Float_stencil8, private */
 static id<MTLBuffer> readbuf;    /* shared, for rmb_read */
 static int color_defined;        /* a pass has written color since it was made */
@@ -230,6 +238,9 @@ rmb_frame_begin(int w, int h, int dw, int dh, const float *clear_rgba)
 	@autoreleasepool
 	{
 		MTLTextureUsage rt = MTLTextureUsageRenderTarget;
+		/* with display sync off the frame is drawn into a present slot's target, which its present reads (FIX51) */
+		id<MTLTexture> slot = rmb_present_take(w, h);
+		id<MTLTexture> target = slot ? slot : own;
 		rm_frame_held_t held;
 		unsigned make;
 
@@ -240,10 +251,10 @@ rmb_frame_begin(int w, int h, int dw, int dh, const float *clear_rgba)
 			dh = h;
 		}
 
-		held.color = color != nil;
+		held.color = target != nil;
 		held.depth = depth != nil;
-		held.cw = color ? (int)color.width : 0;
-		held.ch = color ? (int)color.height : 0;
+		held.cw = target ? (int)target.width : 0;
+		held.ch = target ? (int)target.height : 0;
 		held.lw = (int)rmb_layer.drawableSize.width;
 		held.lh = (int)rmb_layer.drawableSize.height;
 		make = rm_frame_remake(&held, w, h, dw, dh);
@@ -252,8 +263,24 @@ rmb_frame_begin(int w, int h, int dw, int dh, const float *clear_rgba)
 		if (make & (RM_REMAKE_COLOR | RM_REMAKE_DEPTH))
 		{
 			color_defined = 0;
-			rmb_set_texture(&color, rmb_new_target(MTLPixelFormatBGRA8Unorm, w, h, rt | MTLTextureUsageShaderRead));
-			rmb_set_texture(&depth, rmb_new_target(MTLPixelFormatDepth32Float_Stencil8, w, h, rt));
+
+			if (!slot)
+			{
+				rmb_set_texture(&own, rmb_new_target(MTLPixelFormatBGRA8Unorm, w, h, rt | MTLTextureUsageShaderRead));
+				target = own;
+			}
+
+			if (!depth || (depth.width != (NSUInteger)w) || (depth.height != (NSUInteger)h))
+			{
+				rmb_set_texture(&depth, rmb_new_target(MTLPixelFormatDepth32Float_Stencil8, w, h, rt));
+			}
+		}
+
+		/* another frame's contents: the first pass clears it (rm_color_load) */
+		if (color != target)
+		{
+			color_defined = 0;
+			color = target;
 		}
 
 		if (make & RM_REMAKE_DRAWABLE)
@@ -287,6 +314,7 @@ rmb_frame_begin(int w, int h, int dw, int dh, const float *clear_rgba)
 			frame_cmd = nil;
 			frame_skipped = 1;
 			rmb_counts.skipped++;
+			rmb_present_commit();   /* nothing to present: the present slot comes back */
 			dispatch_semaphore_signal(rmb_frame_sem);
 			return 0;
 		}
@@ -505,7 +533,9 @@ rmb_frame_timing(void)
  * pass writes alpha 1, and only alpha, over the drawable after it. Its
  * pipeline is built with the others (rmb_resources_open) and is nil when
  * that failed: the frames are then presented without the pass, and one
- * line says so.
+ * line says so. FIX51 folds the copy and this pass into one
+ * (rmb_present_pass); this pass is left for when that pass's pipeline
+ * was not built.
  */
 static int rmb_alpha_reported;
 
@@ -539,10 +569,32 @@ rmb_force_alpha(id<MTLCommandBuffer> cmd, id<MTLTexture> tex)
 	[enc endEncoding];
 }
 
-/* rmb_device.m: the drawable, and the command buffer that writes and presents it (FIX51) */
-id<CAMetalDrawable> rmb_next_drawable(void);
-id<MTLCommandBuffer> rmb_present_begin(id<MTLCommandBuffer> frame, id<MTLTexture> color, __strong id<MTLTexture> *src);
-void rmb_present_commit(void);
+/*
+ * FIX51: the frame onto the drawable of a layer that is not opaque, in one
+ * pass: the frame's rows of r with alpha 1 (rm_fragment_present), the rest
+ * of the drawable black, as the copy and FIX53's alpha pass leave it.
+ */
+static void
+rmb_present_pass(id<MTLCommandBuffer> cmd, id<MTLRenderPipelineState> pso, id<MTLTexture> dst, const rm_present_t *r)
+{
+	MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+	id<MTLRenderCommandEncoder> enc;
+	MTLViewport vp = { 0.0, (double)r->dst_y, (double)r->w, (double)r->h, 0.0, 1.0 };
+	int ofs[2] = { 0, r->src_y - r->dst_y };   /* the frame's pixel of a drawable pixel */
+	int whole = ((NSUInteger)r->w == dst.width) && ((NSUInteger)r->h == dst.height);
+
+	rp.colorAttachments[0].texture = dst;
+	rp.colorAttachments[0].loadAction = whole ? MTLLoadActionDontCare : MTLLoadActionClear;
+	rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+	rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+	enc = [cmd renderCommandEncoderWithDescriptor:rp];
+	[enc setRenderPipelineState:pso];
+	[enc setViewport:vp];
+	[enc setFragmentTexture:color atIndex:0];
+	[enc setFragmentBytes:ofs length:sizeof(ofs) atIndex:0];
+	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+	[enc endEncoding];
+}
 
 void
 rmb_frame_end(void)
@@ -556,6 +608,7 @@ rmb_frame_end(void)
 	{
 		if (!frame_skipped)
 		{
+			rmb_present_commit();   /* nothing to present: the present slot comes back */
 			dispatch_semaphore_signal(rmb_frame_sem);
 		}
 
@@ -594,13 +647,19 @@ rmb_frame_end(void)
 		if (drawable)
 		{
 			id<MTLTexture> dst = drawable.texture;
-			id<MTLTexture> src;
-			/* the frame's command buffer, or with display sync off the present queue's after a copy (FIX51) */
-			id<MTLCommandBuffer> pcmd = rmb_present_begin(frame_cmd, color, &src);
+			/* the frame's command buffer, or with display sync off the present queue's, which reads color (FIX51) */
+			id<MTLCommandBuffer> pcmd = rmb_present_begin(frame_cmd);
+			id<MTLRenderPipelineState> pso = rmb_layer.opaque ? nil : rmb_present_pipe();
 			rm_present_t r;
-
 			/* at gl1's place: the frame's bottom-left corner on the drawable's (FIX45) */
-			if (rm_present_region((int)src.width, (int)src.height, (int)dst.width, (int)dst.height, &r))
+			int region = rm_present_region((int)color.width, (int)color.height, (int)dst.width, (int)dst.height, &r);
+
+			if (region && pso)
+			{
+				/* a layer that is not opaque: the copy and the alpha 1 of FIX53 in one pass (FIX51) */
+				rmb_present_pass(pcmd, pso, dst, &r);
+			}
+			else if (region)
 			{
 				id<MTLBlitCommandEncoder> blit;
 
@@ -618,7 +677,7 @@ rmb_frame_end(void)
 
 				blit = [pcmd blitCommandEncoder];
 
-				[blit copyFromTexture:src sourceSlice:0 sourceLevel:0
+				[blit copyFromTexture:color sourceSlice:0 sourceLevel:0
 						sourceOrigin:MTLOriginMake(0, (NSUInteger)r.src_y, 0)
 						sourceSize:MTLSizeMake((NSUInteger)r.w, (NSUInteger)r.h, 1)
 						toTexture:dst destinationSlice:0 destinationLevel:0
@@ -690,6 +749,7 @@ rmb_encode_abandon(void)
 				dispatch_semaphore_signal(sem);
 			}];
 			[frame_cmd commit];
+			rmb_present_commit();   /* nothing presented: the present slot comes back (FIX51) */
 		}
 	}
 
@@ -706,7 +766,7 @@ rmb_encode_release(void)
 
 	@autoreleasepool
 	{
-		wc = color;
+		wc = own;
 		wd = depth;
 		wb = readbuf;
 
@@ -722,7 +782,8 @@ rmb_encode_release(void)
 		rmb_alpha_reported = 0;
 
 		color_defined = 0;
-		rmb_set_texture(&color, nil);
+		color = nil;   /* own, or a present slot's, which rmb_device.m dropped */
+		rmb_set_texture(&own, nil);
 		rmb_set_texture(&depth, nil);
 		rmb_gbuf_release();
 		rmb_fx_release();
