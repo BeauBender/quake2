@@ -80,7 +80,7 @@ static menuaction_s s_apply_action;
 
 // --------
 
-// gl1, gl3, gl4, vk, soft
+// gl1, gl3, gl4, vk, soft and, on macOS, metal
 #define MAXRENDERERS 6
 
 typedef enum
@@ -111,9 +111,16 @@ Renderer_FillRenderdef(void)
 		{"[OpenGL 4.6]", "gl4"},
 		{"[Vulkan    ]", "vk"},
 		{"[Software  ]", "soft"},
+#ifdef __APPLE__
+		// The native Metal renderer, macOS only.
+		{"[Metal     ]", "metal"},
+#endif
 		{NULL, NULL}
 	};
 	int idx = 0;
+
+	// Every entry but the terminator fits in rendererlist.
+	_Static_assert(ARRLEN(fulllist) - 1 <= MAXRENDERERS, "MAXRENDERERS is too small");
 
 	numrenderer = -1;
 
@@ -265,6 +272,13 @@ CurrentRendererByCvar(void)
 	{
 		return ref_vk;
 	}
+#ifdef __APPLE__
+	// Metal reads gl1's cvars by gl1's names: gl1's settings apply.
+	if (Q_stricmp(vid_renderer->string, "metal") == 0)
+	{
+		return ref_gl1;
+	}
+#endif
 	return ref_custom;
 }
 
@@ -410,8 +424,12 @@ ApplyChanges(void *unused)
 		}
 	}
 
-	/* multisample anti-aliasing */
-	if (s_msaa_list.curvalue == 0)
+	/* multisample anti-aliasing; a greyed item is not a setting */
+	if (s_msaa_list.generic.flags & QMF_GRAYED)
+	{
+		/* nothing to write */
+	}
+	else if (s_msaa_list.curvalue == 0)
 	{
 		if (gl_msaa_samples->value != 0)
 		{
@@ -439,7 +457,8 @@ ApplyChanges(void *unused)
 static void
 RestartNeededSDL3Msg(void *unused)
 {
-	if (Q_stricmp(vid_renderer->string, "gl1") == 0)
+	// gl1 and Metal take vid_gamma at vid_restart.
+	if (CurrentRendererByCvar() == ref_gl1)
 	{
 		Menu_SetStatusBar(&s_opengl_menu, "apply required");
 	}
@@ -831,6 +850,22 @@ VID_MenuInit(void)
 				pow(2, s_msaa_list.curvalue) <= gl_msaa_samples->value);
 		s_msaa_list.curvalue--;
 	}
+
+	s_msaa_list.generic.flags = 0;
+	s_msaa_list.generic.statusbar = NULL;
+#ifdef __APPLE__
+	/* ref_metal has no MSAA: shown disabled, with the reason, and with
+	   a single choice so that it cannot be changed */
+	if (Q_stricmp(vid_renderer->string, "metal") == 0)
+	{
+		static const char *msaa_off_names[] = {"off", 0};
+
+		s_msaa_list.itemnames = msaa_off_names;
+		s_msaa_list.curvalue = 0;
+		s_msaa_list.generic.flags |= QMF_GRAYED;
+		s_msaa_list.generic.statusbar = "no multisampling in the Metal renderer";
+	}
+#endif
 
 	s_filter_list.generic.type = MTYPE_SPINCONTROL;
 	s_filter_list.generic.name = "texture filter";

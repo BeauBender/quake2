@@ -289,5 +289,7 @@ void R_ScreenShot(void);
 void RM_PrintStats(void);
 /* the directory of ref_metal.dylib, where ref_metal.metallib lies; 0 when unknown */
 int RM_ModuleDir(char *dir, size_t len);
+/* Keeps this image mapped after the engine's dlclose (RTLD_NODELETE): completion handlers run its code. */
+int RM_KeepMapped(void);
 
 #endif /* RM_LOCAL_H */

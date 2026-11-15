@@ -175,7 +175,7 @@ static int rmb_pass(const float *clear_rgba, int with_depth);
 static unsigned pass_stencil;
 
 int
-rmb_frame_begin(int w, int h, const float *clear_rgba)
+rmb_frame_begin(int w, int h, int dw, int dh, const float *clear_rgba)
 {
 	static int once_skip;
 
@@ -209,19 +209,35 @@ rmb_frame_begin(int w, int h, const float *clear_rgba)
 	@autoreleasepool
 	{
 		MTLTextureUsage rt = MTLTextureUsageRenderTarget;
+		rm_frame_held_t held;
+		unsigned make;
+
+		/* without the window's pixels the drawable is the frame's size */
+		if ((dw <= 0) || (dh <= 0))
+		{
+			dw = w;
+			dh = h;
+		}
+
+		held.color = color != nil;
+		held.depth = depth != nil;
+		held.cw = color ? (int)color.width : 0;
+		held.ch = color ? (int)color.height : 0;
+		held.lw = (int)rmb_layer.drawableSize.width;
+		held.lh = (int)rmb_layer.drawableSize.height;
+		make = rm_frame_remake(&held, w, h, dw, dh);
 
 		/* a target that failed to allocate is tried again on the next frame */
-		if (rm_targets_rebuild(color != nil, depth != nil, color ? (int)color.width : 0,
-				color ? (int)color.height : 0, w, h))
+		if (make & (RM_REMAKE_COLOR | RM_REMAKE_DEPTH))
 		{
 			color_defined = 0;
 			rmb_set_texture(&color, rmb_new_target(MTLPixelFormatBGRA8Unorm, w, h, rt | MTLTextureUsageShaderRead));
 			rmb_set_texture(&depth, rmb_new_target(MTLPixelFormatDepth32Float_Stencil8, w, h, rt));
 		}
 
-		if (rmb_layer.drawableSize.width != w || rmb_layer.drawableSize.height != h)
+		if (make & RM_REMAKE_DRAWABLE)
 		{
-			rmb_layer.drawableSize = CGSizeMake(w, h);
+			rmb_layer.drawableSize = CGSizeMake(dw, dh);
 		}
 
 		frame_cmd = [rmb_queue commandBuffer];
@@ -474,14 +490,35 @@ rmb_frame_end(void)
 		if (drawable)
 		{
 			id<MTLTexture> dst = drawable.texture;
-			id<MTLBlitCommandEncoder> blit = [frame_cmd blitCommandEncoder];
-			NSUInteger w = MIN(color.width, dst.width), h = MIN(color.height, dst.height);
+			rm_present_t r;
 
-			[blit copyFromTexture:color sourceSlice:0 sourceLevel:0
-					sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(w, h, 1)
-					toTexture:dst destinationSlice:0 destinationLevel:0
-					destinationOrigin:MTLOriginMake(0, 0, 0)];
-			[blit endEncoding];
+			/* at gl1's place: the frame's bottom-left corner on the drawable's (FIX45) */
+			if (rm_present_region((int)color.width, (int)color.height, (int)dst.width, (int)dst.height, &r))
+			{
+				id<MTLBlitCommandEncoder> blit;
+
+				/* a smaller frame: the rest of the drawable black, as the shim's whole-window clear */
+				if (((NSUInteger)r.w < dst.width) || ((NSUInteger)r.h < dst.height))
+				{
+					MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+
+					rp.colorAttachments[0].texture = dst;
+					rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+					rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+					rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+					[[frame_cmd renderCommandEncoderWithDescriptor:rp] endEncoding];
+				}
+
+				blit = [frame_cmd blitCommandEncoder];
+
+				[blit copyFromTexture:color sourceSlice:0 sourceLevel:0
+						sourceOrigin:MTLOriginMake(0, (NSUInteger)r.src_y, 0)
+						sourceSize:MTLSizeMake((NSUInteger)r.w, (NSUInteger)r.h, 1)
+						toTexture:dst destinationSlice:0 destinationLevel:0
+						destinationOrigin:MTLOriginMake(0, (NSUInteger)r.dst_y, 0)];
+				[blit endEncoding];
+			}
+
 			[frame_cmd presentDrawable:drawable];
 		}
 		else

@@ -180,7 +180,12 @@ by eye, became two steps pinned at two seams:
    references. Design: `docs/plans/metal-shim-design.md`; state of the
    acceptance on the build host: `docs/plans/metal-port-harness.md`,
    "Closing TASK21 on the build host".
-2. **Renderer-API seam: native `ref_metal` (TASK28).** Each call site is
+2. **Renderer-API seam: native `ref_metal` (TASK28). Done on the build
+   host (group N, N1 to N10, TASK84 to TASK93, the last on 2026-11-14):
+   `vid_renderer metal` draws every pin scenario within the design's
+   section 11 values against the shim, is selectable on macOS (fallback
+   order and video menu) and survives restarts clean; as built,
+   `docs/plans/ref-metal-native.md` sections 16 to 25.** Each call site is
    specialized from the shim into direct Metal, concept by concept, with
    the shim as the per-concept reference and the renderer-API frame pins
    (which also compare `soft` against `gl1`) as acceptance. The result is
