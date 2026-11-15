@@ -553,8 +553,10 @@ rmb_force_alpha(id<MTLCommandBuffer> cmd, id<MTLTexture> tex)
 	[enc endEncoding];
 }
 
-/* rmb_device.m: the drawable to present this frame on, or nil (FIX51) */
+/* rmb_device.m: the drawable, and the command buffer that writes and presents it (FIX51) */
 id<CAMetalDrawable> rmb_next_drawable(void);
+id<MTLCommandBuffer> rmb_present_begin(id<MTLCommandBuffer> frame, id<MTLTexture> color, __strong id<MTLTexture> *src);
+void rmb_present_commit(void);
 
 void
 rmb_frame_end(void)
@@ -608,10 +610,13 @@ rmb_frame_end(void)
 		if (drawable)
 		{
 			id<MTLTexture> dst = drawable.texture;
+			id<MTLTexture> src;
+			/* the frame's command buffer, or with display sync off the present queue's after a copy (FIX51) */
+			id<MTLCommandBuffer> pcmd = rmb_present_begin(frame_cmd, color, &src);
 			rm_present_t r;
 
 			/* at gl1's place: the frame's bottom-left corner on the drawable's (FIX45) */
-			if (rm_present_region((int)color.width, (int)color.height, (int)dst.width, (int)dst.height, &r))
+			if (rm_present_region((int)src.width, (int)src.height, (int)dst.width, (int)dst.height, &r))
 			{
 				id<MTLBlitCommandEncoder> blit;
 
@@ -624,25 +629,25 @@ rmb_frame_end(void)
 					rp.colorAttachments[0].loadAction = MTLLoadActionClear;
 					rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
 					rp.colorAttachments[0].storeAction = MTLStoreActionStore;
-					[[frame_cmd renderCommandEncoderWithDescriptor:rp] endEncoding];
+					[[pcmd renderCommandEncoderWithDescriptor:rp] endEncoding];
 				}
 
-				blit = [frame_cmd blitCommandEncoder];
+				blit = [pcmd blitCommandEncoder];
 
-				[blit copyFromTexture:color sourceSlice:0 sourceLevel:0
+				[blit copyFromTexture:src sourceSlice:0 sourceLevel:0
 						sourceOrigin:MTLOriginMake(0, (NSUInteger)r.src_y, 0)
 						sourceSize:MTLSizeMake((NSUInteger)r.w, (NSUInteger)r.h, 1)
 						toTexture:dst destinationSlice:0 destinationLevel:0
 						destinationOrigin:MTLOriginMake(0, (NSUInteger)r.dst_y, 0)];
 				[blit endEncoding];
 
-				if (!rmb_layer.opaque)
+				if (!rmb_layer.opaque && !getenv("FIX51_NOALPHA")) /* FIX51 PROBE */
 				{
-					rmb_force_alpha(frame_cmd, dst);
+					rmb_force_alpha(pcmd, dst);
 				}
 			}
 
-			[frame_cmd presentDrawable:drawable];
+			[pcmd presentDrawable:drawable];
 		}
 		else
 		{
@@ -683,6 +688,8 @@ rmb_frame_end(void)
 		{
 			[frame_cmd commit];
 		}
+
+		rmb_present_commit();   /* after the frame it copies (FIX51) */
 
 		if (fix51()) /* FIX51 PROBE: sem wait, begin to nextDrawable, nextDrawable, after it to commit, frame interval */
 		{

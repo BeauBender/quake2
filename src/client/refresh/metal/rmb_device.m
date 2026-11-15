@@ -83,21 +83,41 @@ rmb_frame_wait_ms(void)
 }
 
 /*
- * FIX51: with display sync off a frame does not wait for a drawable. The
- * window server hands drawables back at its own pace, whatever the frame
- * costs, and waiting for one in nextDrawable made that pace the frame
- * rate (docs/plans/metal-port-harness.md, "The fixed per-frame cost of the
- * Metal renderers (FIX51)"). So the next drawable is acquired ahead, on a
- * serial queue, and the frame that ends takes it when it is there. A frame
- * that finds none is complete without one and is not presented (counted as
- * without a drawable); every frame is drawn offscreen either way. With
- * display sync on the frame waits in nextDrawable as before, and every
- * frame is presented.
+ * FIX51: with display sync off a frame waits for no drawable
+ * (docs/plans/metal-port-harness.md, "The fixed per-frame cost of the
+ * Metal renderers (FIX51)"). The window server hands a drawable back at
+ * its own pace, whatever the frame costs, and that pace was the frame
+ * rate twice over: a frame waited for the drawable in nextDrawable, and a
+ * drawable the window server had not let go of yet held the command
+ * buffer that wrote it on the GPU, and with it the frame slot.
+ *
+ * So with display sync off the next drawable is acquired ahead, on a
+ * serial queue, and is written apart from the frame: the frame that ends
+ * copies its colour target to rmb_stage and signals rmb_present_event;
+ * the copy to the drawable and the present go on rmb_present_queue, which
+ * waits for that event, so a wait for the drawable holds that queue and
+ * no frame slot. One present is on its way at a time (rmb_present_sem),
+ * so the stage is not written again before the present that reads it has
+ * completed. A frame that ends with no drawable ready, or with a present
+ * still on its way, is complete and not presented (counted as without a
+ * drawable); every frame is drawn offscreen either way. With display sync
+ * on the frame waits in nextDrawable and writes the drawable itself, as
+ * before, and every frame is presented.
  */
 static dispatch_queue_t rmb_ahead_queue;
 static os_unfair_lock rmb_ahead_lock = OS_UNFAIR_LOCK_INIT;
 static id<CAMetalDrawable> rmb_ahead;   /* rmb_ahead_lock: the drawable acquired ahead */
 static int rmb_ahead_busy;              /* rmb_ahead_lock: an acquisition is on the queue */
+
+static id<MTLCommandQueue> rmb_present_queue;
+static id<MTLEvent> rmb_present_event;
+static uint64_t rmb_present_value;
+static dispatch_semaphore_t rmb_present_sem;   /* 1: no present on its way */
+static int rmb_present_held;                   /* this frame took rmb_present_sem */
+static id<MTLCommandBuffer> rmb_present_cmd;   /* the present of the frame that ends, committed after it */
+static id<MTLTexture> rmb_stage;               /* the copy of the frame the present reads */
+
+void rmb_watch(id<MTLCommandBuffer> cmd);
 
 /* Puts an acquisition of the next drawable on the queue, unless one is there or done. */
 static void
@@ -150,7 +170,11 @@ rmb_ahead_take(void)
 	return d;
 }
 
-/* Waits for the acquisition on the queue (bounded, as nextDrawable is) and drops what it got. */
+/*
+ * Waits for the acquisition on the queue (bounded, as nextDrawable is) and
+ * for the present on its way (bounded, RMB_GPU_WAIT_MS), and drops the
+ * drawable acquired ahead and the stage.
+ */
 static void
 rmb_ahead_drop(void)
 {
@@ -160,13 +184,33 @@ rmb_ahead_drop(void)
 	}
 
 	(void)rmb_ahead_take();
+
+	if (rmb_present_sem)
+	{
+		if (dispatch_semaphore_wait(rmb_present_sem, rmb_deadline(RMB_GPU_WAIT_MS)) == 0)
+		{
+			dispatch_semaphore_signal(rmb_present_sem);
+		}
+		else
+		{
+			fprintf(stderr, "ref_metal: a present is still on the GPU after %d ms\n", RMB_GPU_WAIT_MS);
+		}
+	}
+
+	if (rmb_stage)
+	{
+		rmb_stage = nil;
+		rm_ledger_destroy(&rmb_ledger, RM_OBJ_TEXTURE);
+	}
 }
 
 /*
  * The drawable of the frame that ends: with display sync on the next one,
  * waited for; with it off the one acquired ahead, or nil when none is
- * there yet or it is not of the layer's drawable size (the size changed
- * after it was acquired). The next one is then acquired ahead.
+ * there yet, when a present is still on its way, or when it is not of the
+ * layer's drawable size (the size changed after it was acquired). With
+ * display sync off the next one is then acquired ahead, and a drawable
+ * returned holds rmb_present_sem until rmb_present_commit.
  */
 id<CAMetalDrawable>
 rmb_next_drawable(void)
@@ -179,9 +223,15 @@ rmb_next_drawable(void)
 		return nil;
 	}
 
-	if (rmb_sync)
+	if (rmb_sync || getenv("FIX51_BLOCK")) /* FIX51 PROBE */
 	{
 		return [rmb_layer nextDrawable];
+	}
+
+	if (!rmb_present_sem || (dispatch_semaphore_wait(rmb_present_sem, DISPATCH_TIME_NOW) != 0))
+	{
+		rmb_ahead_request();
+		return nil;
 	}
 
 	d = rmb_ahead_take();
@@ -192,8 +242,101 @@ rmb_next_drawable(void)
 		d = nil;
 	}
 
+	if (d)
+	{
+		rmb_present_held = 1;
+	}
+	else
+	{
+		dispatch_semaphore_signal(rmb_present_sem);
+	}
+
 	rmb_ahead_request();
 	return d;
+}
+
+/*
+ * The command buffer that writes the drawable rmb_next_drawable returned,
+ * and the texture it copies from: the frame's own command buffer and its
+ * colour target (display sync on, or no stage could be made), or a
+ * command buffer of the present queue and rmb_stage, after the frame's
+ * command buffer has copied its colour target there.
+ */
+id<MTLCommandBuffer>
+rmb_present_begin(id<MTLCommandBuffer> frame, id<MTLTexture> color, __strong id<MTLTexture> *src)
+{
+	id<MTLBlitCommandEncoder> blit;
+	id<MTLCommandBuffer> cmd;
+
+	*src = color;
+
+	if (!rmb_present_held)
+	{
+		return frame;
+	}
+
+	if (rmb_stage && ((rmb_stage.width != color.width) || (rmb_stage.height != color.height)))
+	{
+		rmb_stage = nil;
+		rm_ledger_destroy(&rmb_ledger, RM_OBJ_TEXTURE);
+	}
+
+	if (!rmb_stage)
+	{
+		MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:color.pixelFormat
+				width:color.width height:color.height mipmapped:NO];
+
+		d.storageMode = MTLStorageModePrivate;
+		d.usage = MTLTextureUsageShaderRead;
+		rmb_stage = [rmb_device newTextureWithDescriptor:d];
+
+		if (rmb_stage)
+		{
+			rm_ledger_create(&rmb_ledger, RM_OBJ_TEXTURE);
+		}
+	}
+
+	cmd = rmb_stage ? [rmb_present_queue commandBuffer] : nil;
+
+	if (!cmd)
+	{
+		/* written by the frame, as with display sync on */
+		rmb_present_held = 0;
+		dispatch_semaphore_signal(rmb_present_sem);
+		return frame;
+	}
+
+	blit = [frame blitCommandEncoder];
+	[blit copyFromTexture:color toTexture:rmb_stage];
+	[blit endEncoding];
+	rmb_present_value++;
+	[frame encodeSignalEvent:rmb_present_event value:rmb_present_value];
+	[cmd encodeWaitForEvent:rmb_present_event value:rmb_present_value];
+
+	rmb_present_cmd = cmd;
+	*src = rmb_stage;
+	return cmd;
+}
+
+/* Commits the present of the frame that ended (after the frame's command buffer); it gives rmb_present_sem back. */
+void
+rmb_present_commit(void)
+{
+	dispatch_semaphore_t sem = rmb_present_sem;
+
+	if (!rmb_present_cmd)
+	{
+		return;
+	}
+
+	rmb_watch(rmb_present_cmd);
+	[rmb_present_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
+		(void)b;
+		dispatch_semaphore_signal(sem);
+	}];
+	[rmb_present_cmd commit];
+	rmb_present_cmd = nil;
+	rmb_present_held = 0;
 }
 
 /*
@@ -309,6 +452,28 @@ rmb_open(rmb_caps_t *caps, char *err, size_t errlen)
 		}
 
 		rm_ledger_create(&rmb_ledger, RM_OBJ_QUEUE);
+
+		/* the present queue and its event (FIX51); without them every frame writes its own drawable */
+		rmb_present_queue = [rmb_device newCommandQueue];
+		rmb_present_event = [rmb_device newEvent];
+		rmb_present_value = 0;
+		rmb_present_sem = dispatch_semaphore_create(0);
+		dispatch_semaphore_signal(rmb_present_sem);
+
+		if (rmb_present_queue)
+		{
+			rm_ledger_create(&rmb_ledger, RM_OBJ_QUEUE);
+		}
+
+		if (rmb_present_event)
+		{
+			rm_ledger_create(&rmb_ledger, RM_OBJ_STATE);
+		}
+
+		if (!rmb_present_queue || !rmb_present_event)
+		{
+			rmb_present_sem = nil;
+		}
 
 		snprintf(caps->device, sizeof(caps->device), "%s", rmb_device.name.UTF8String);
 
@@ -432,6 +597,20 @@ rmb_close(rmb_stats_t *stats, rm_ledger_t *ledger)
 			queue = rmb_queue;
 			rmb_queue = nil;
 			rm_ledger_destroy(&rmb_ledger, RM_OBJ_QUEUE);
+
+			if (rmb_present_queue)
+			{
+				rmb_present_queue = nil;
+				rm_ledger_destroy(&rmb_ledger, RM_OBJ_QUEUE);
+			}
+
+			if (rmb_present_event)
+			{
+				rmb_present_event = nil;
+				rm_ledger_destroy(&rmb_ledger, RM_OBJ_STATE);
+			}
+
+			rmb_present_sem = nil;
 			/* the system default device is shared with the rest of the process:
 			   only ref_metal's reference is dropped, it is not weak-checked */
 			rmb_device = nil;
@@ -462,7 +641,7 @@ rmb_set_vsync(int on)
 	rmb_sync = on ? 1 : 0;
 
 	/* with display sync on every frame waits for its own drawable again */
-	if (rmb_sync)
+	if (rmb_sync || getenv("FIX51_BLOCK")) /* FIX51 PROBE */
 	{
 		rmb_ahead_drop();
 	}
