@@ -1417,7 +1417,8 @@ test_carried(void)
 	CHECK(rm_rts_carried(xf, mins, maxs, l, 31) == 0x7fffffffu);
 
 	/* a transform that cannot be inverted, a box or a transform that is not finite: none */
-	memset(bad, 0, sizeof(bad));
+	bad[0] = -9;    /* below mins[0] */
+	bad[1] = bad[2] = 40;
 	{
 		float zero[12], nanx[12];
 		float nmins[3] = { -8, NAN, -2 };

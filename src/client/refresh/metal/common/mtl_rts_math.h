@@ -93,18 +93,14 @@
 static inline unsigned
 mtl_rts_light_bit(unsigned carried, unsigned idx)
 {
-	(void)carried;
-	(void)idx;
-	return 0;
+	return ((idx < MTL_RTS_MAX_LIGHTS) && ((carried >> idx) & 1u)) ? (1u << idx) : 0u;
 }
 
 /* 1 when a shadow ray of light bit lbit (mtl_rts_light_bit) passes a triangle of an instance carrying the lights carry */
 static inline int
 mtl_rts_passes(unsigned carry, unsigned lbit)
 {
-	(void)carry;
-	(void)lbit;
-	return 0;
+	return (carry & lbit) != 0;
 }
 
 typedef struct

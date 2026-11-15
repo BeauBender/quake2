@@ -130,23 +130,101 @@ void
 rm_rts_alias_box(const float *scale, const float *translate, const float *oldscale, const float *oldtranslate,
 		float *mins, float *maxs)
 {
-	(void)scale;
-	(void)translate;
-	(void)oldscale;
-	(void)oldtranslate;
-	memset(mins, 0, 3 * sizeof(float));
-	memset(maxs, 0, 3 * sizeof(float));
+	int i;
+
+	for (i = 0; i < 3; i++)
+	{
+		const float a = translate[i], b = translate[i] + scale[i] * 255;
+		const float c = oldtranslate[i], d = oldtranslate[i] + oldscale[i] * 255;
+
+		mins[i] = fminf(fminf(a, b), fminf(c, d));
+		maxs[i] = fmaxf(fmaxf(a, b), fmaxf(c, d));
+	}
 }
 
 unsigned
 rm_rts_carried(const float *xform, const float *mins, const float *maxs, const rm_rts_light_t *l, int nl)
 {
-	(void)xform;
-	(void)mins;
-	(void)maxs;
-	(void)l;
-	(void)nl;
-	return 0;
+	double m[9], inv[9], det;
+	unsigned carry = 0;
+	int i, k;
+
+	if (!xform || !mins || !maxs || !l || (nl <= 0))
+	{
+		return 0;
+	}
+
+	for (i = 0; i < 12; i++)
+	{
+		if (!isfinite(xform[i]))
+		{
+			return 0;
+		}
+	}
+
+	for (i = 0; i < 3; i++)
+	{
+		if (!isfinite(mins[i]) || !isfinite(maxs[i]) || (mins[i] > maxs[i]))
+		{
+			return 0;
+		}
+	}
+
+	/* the basis, row r and column c at m[3 * r + c] (xform holds the columns), and its inverse by the adjugate */
+	for (i = 0; i < 3; i++)
+	{
+		for (k = 0; k < 3; k++)
+		{
+			m[3 * i + k] = xform[3 * k + i];
+		}
+	}
+
+	inv[0] = m[4] * m[8] - m[5] * m[7];
+	inv[1] = m[2] * m[7] - m[1] * m[8];
+	inv[2] = m[1] * m[5] - m[2] * m[4];
+	inv[3] = m[5] * m[6] - m[3] * m[8];
+	inv[4] = m[0] * m[8] - m[2] * m[6];
+	inv[5] = m[2] * m[3] - m[0] * m[5];
+	inv[6] = m[3] * m[7] - m[4] * m[6];
+	inv[7] = m[1] * m[6] - m[0] * m[7];
+	inv[8] = m[0] * m[4] - m[1] * m[3];
+	det = m[0] * inv[0] + m[1] * inv[3] + m[2] * inv[6];
+
+	if (!isfinite(det) || (fabs(det) < 1e-12))
+	{
+		return 0;
+	}
+
+	if (nl > MTL_RTS_MAX_LIGHTS)
+	{
+		nl = MTL_RTS_MAX_LIGHTS;
+	}
+
+	for (i = 0; i < nl; i++)
+	{
+		double d[3];
+		int inside = 1;
+
+		for (k = 0; k < 3; k++)
+		{
+			d[k] = (double)l[i].origin[k] - xform[9 + k];
+		}
+
+		/* the light in the model's space, against the box grown by the tolerance (a light not finite fails every test) */
+		for (k = 0; k < 3 && inside; k++)
+		{
+			const double q = (inv[3 * k] * d[0] + inv[3 * k + 1] * d[1] + inv[3 * k + 2] * d[2]) / det;
+
+			inside = (q >= (double)mins[k] - RM_RTS_CARRY_TOL) && (q <= (double)maxs[k] + RM_RTS_CARRY_TOL);
+		}
+
+		if (inside)
+		{
+			carry |= 1u << i;
+		}
+	}
+
+	return carry;
 }
 
 int
