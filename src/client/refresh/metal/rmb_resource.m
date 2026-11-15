@@ -922,3 +922,10 @@ rmb_static_buffer(int bid)
 {
 	return ((bid > 0) && (bid < RMB_MAX_BUFFERS)) ? buffers[bid] : nil;
 }
+
+/* For rmb_rt.m (TASK53): the shader library, nil before rmb_resources_open. */
+id<MTLLibrary>
+rmb_library(void)
+{
+	return library;
+}
