@@ -1,6 +1,6 @@
 # Crisp 2D in `ref_metal` (TASK119)
 
-Three switches, all off by default (the plan, [P4](high-resolution.md)):
+Three switches, all off by default (the plan, [P4](../plans/high-resolution.md)):
 `r_scale8bittextures` as gl1 takes it, `metal_2d_sharp` (sharp-bilinear
 sampling of the filtered 2D pictures) and the client's `con_backaspect` (the
 console background at 4:3, cropped). Host: the build VM (a paravirtualised

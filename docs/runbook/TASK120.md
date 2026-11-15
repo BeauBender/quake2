@@ -3,7 +3,7 @@
 `metal_lightmap_filter 1` filters each lightmap sample of the lightmapped
 world with a cubic B-spline built from four bilinear taps, every tap clamped
 half a luxel inside the face's rectangle of the slice (the plan,
-[P5](high-resolution.md)). The default `0` is the bilinear tap as before.
+[P5](../plans/high-resolution.md)). The default `0` is the bilinear tap as before.
 Host: the build VM (a paravirtualised Metal device), at this card's base
 `c01bd7d2` and the branch.
 

@@ -2213,4 +2213,4 @@ the scaler runs at the G-buffer contract's seam, in place of the bilinear stretc
 MetalFX object is made. Frame generation (`r_metalfx_interp`) reads 0 everywhere: it is
 not built. The runs, the fallbacks on this VM, the reset events, the mutants and the
 bare-metal hosts' commands are in the runbook,
-[MetalFX scalers for the 3D view](metal-port-harness.md#metalfx-scalers-for-the-3d-view-in-ref_metal-task111).
+[MetalFX scalers for the 3D view](../runbook/TASK111.md).

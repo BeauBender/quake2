@@ -178,7 +178,7 @@ identical run to run; `models` and `particles` are not and carry their
 measured thresholds in their `// nondeterministic:` lines. The owner's data
 holds `demo1.dm2` and `demo2.dm2`. Behind the 2D elements of `hud2d`,
 `soft` shows a uniform dark grey; other renderers are not measured yet
-(see `docs/plans/metal-port-harness.md`).
+(see `docs/runbook/TASK39.md`).
 
 Added by TASK40 (`soft`, two runs each and a third): `skywater` and
 `cinematic` are identical run to run (score 0 on every frame). On
@@ -220,4 +220,4 @@ identical byte for byte on all 23 frames of `demo1.dm2` and all 89 of
 animated lightstyle; a seeded control with `gl1_dynamic 0` goes over those
 values on 61, 67 and 69 (and on 29 frames whose dynamic light it drops),
 while on 51 and 63 it moves pixels by one level only. See
-`docs/plans/metal-port-harness.md` (the N8 subsection).
+`docs/runbook/TASK91.md`.

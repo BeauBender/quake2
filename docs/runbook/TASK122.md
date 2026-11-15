@@ -2,7 +2,7 @@
 
 `metal_particle_cap 1` scales the largest particle size (`gl1_particle_max_size`,
 the value the start-up took) by `height / 480` each view, the factor the size
-already has (the plan, [P13](high-resolution.md)); the default `0` leaves it as
+already has (the plan, [P13](../plans/high-resolution.md)); the default `0` leaves it as
 it was. The formula is `rm_particle_cap` in `rm_pure.c`. Host: the build VM (a
 paravirtualised Metal device), at base `1701a052` and the branch.
 

@@ -37,7 +37,7 @@ renderer is judged with it, and what the first run on real data found.
 
 The client and `ref_soft` link and run on macOS arm64 against SDL3
 3.4.20 (`make client ref_soft game`, SDL 3 built from `third_party/SDL3/`). `ref_gl1`
-and `ref_gl3` build there too; `gl1` references are card P3's (TASK41, below).
+and `ref_gl3` build there too; `gl1` references are card P3's (TASK41, [`../runbook/TASK41.md`](../runbook/TASK41.md)).
 
 In the tree from the renderer-API recorder (design in
 `docs/plans/refapi-record-replay.md`): the record serializers, the wrapper
@@ -198,7 +198,7 @@ the harness ones are `tests/check-pins.sh` (synthetic frames, fake engines),
 `tests/check-pins-latch.sh` (the command-line latch, no engine),
 `tests/check-refrecord.sh` (traces it writes itself) and
 `tests/check-evidence.sh` (a generated test pattern), and none reads the
-game data or a pin store ("Closing TASK27 on the build host" above). Pins on
+game data or a pin store ([`TASK27`](../runbook/TASK27.md), "Closing TASK27 on the build host"). Pins on
 real data are run inside a card, never by CI.
 
 ### Judging an effect's footprint (TASK133)

@@ -284,7 +284,7 @@ GPU), recorded with `MTL_DEBUG_LAYER=1` (Metal's validation layer) at
 `skywater` from `water.dm2` at the values in their files, `dlights` and
 `particles` seeded only. The values and the last sweep of every scenario
 are in `docs/plans/ref-metal-native.md` (section 11) and
-`docs/plans/metal-port-harness.md`. At start it prints the Metal device,
+the card files in `docs/runbook/`, listed in `docs/plans/metal-port-harness.md`. At start it prints the Metal device,
 the Apple GPU families it supports and whether it supports ray tracing;
 it refuses a device older than the apple5 family. At each shutdown it
 prints its Metal objects created and destroyed, by kind, which must read
@@ -321,7 +321,7 @@ a few times (`--run 2`, `--run 3`) and compare them with each other as
 shown under *Comparing*. `soft` and `gl1` do not draw the same picture
 (palette against true colour, filtering, lighting), so a candidate is
 judged against `gl1`, not `soft`. The measured numbers, the host and the
-renderer string are in `docs/plans/metal-port-harness.md`.
+renderer string are in `docs/runbook/TASK41.md`.
 
 ## Comparing
 
