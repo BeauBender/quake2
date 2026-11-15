@@ -4607,8 +4607,13 @@ the branch was rebased onto main at `9039f602` (TASK129, which changes only
 how a sky face's image is chosen, in `src/client/refresh/files/image.c`, and
 its tests). There `68edb493` is `f42611e1` and `58ede1ab` is `7d5b06d5`, and
 `git diff 68edb493 f42611e1 -- src/client/refresh/metal src/client/refresh/gl1`
-is empty, as is the same diff from `58ede1ab` to `7d5b06d5`. The merge may
-move them again; each commit keeps its subject line. Scratch builds, never committed:
+is empty, as is the same diff from `58ede1ab` to `7d5b06d5`. It was then
+rebased onto `a6f8532e` (TASK111, the MetalFX scalers), which does change
+renderer files under these numbers: in `rmb_encode.m` it adds
+`rmb_frame_cut` and a call to `rmb_fx_release` in the release path, and it
+touches `rmb_gbuf.m` and `rm_main.c`. The scalers are off by default, and
+these runs used no scaler. The merge may move the commits again; each keeps
+its subject line. Scratch builds, never committed:
 the pass disabled (the two `*_force_alpha` calls commented out at `68edb493`),
 and a probe build (`68edb493` plus `ScreenCaptureKit` captures, GPU
 timestamps in the shim and environment overrides of the layer's `opaque` and
