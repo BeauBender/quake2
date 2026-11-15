@@ -885,8 +885,9 @@ Decision: open. It settles on image-quality data, which RT12 (TASK110,
 #264) produces on ray-traced frames once RT11 (TASK109, #263) and RT13
 have landed, with TASK117 (#272) giving now a pessimistic bound on A's
 raster loss from the spatial scaler and TASK114 (#268) the owner's local
-side-by-side report from the selectable modes of TASK111 to TASK113. Until then the subsection above describes A as
-RT11 builds it, and RT13 builds E, so that both can be measured; neither
+side-by-side report from the selectable modes of TASK111 to TASK113.
+Until then the subsection above describes A as RT11 builds it, and RT13
+builds E, so that both can be measured; neither
 is the decision, and nothing is recorded in `docs/decisions/`.
 
 ## 3. What the rasterizer must expose
@@ -1534,7 +1535,7 @@ screen blend over the world and entities), as their scenario files
 describe them.
 
 **The screen blend.** `world` and `models` set `cl_blend 0`
-(`scripts/pins/scenarios/world.cfg:12`, `models.cfg:16`; `particles.cfg:16`
+(`scripts/pins/scenarios/world.cfg:12`, `models.cfg:16`; `particles.cfg:20`
 sets `cl_blend 1`), and that does not turn the blend off: `V_RenderView`
 clears only its colour, not the alpha in `blend[3]`.
 
@@ -1857,8 +1858,8 @@ from the Sobel output):
 
 The frames differ widely (0 to 45 entities, 0 to 430 particles, 0.108 % to
 35.170 % of the native pixels with a Sobel magnitude above 8), and 360 of
-the 378 times lie within 3 % of their row's median; the largest of the
-other 18 is 1.422 ms, `models` frame 5 from 1920 x 1080 bilinear with the
+the 378 times lie within 3 % of their row's median; of the other 18, the
+farthest from its row's median (2.3 times it) is 1.422 ms, `models` frame 5 from 1920 x 1080 bilinear with the
 2D layer off, 0.619 ms with it on. The same capture
 upscaled in two runs (frames 0 and 2 of `models` and of `particles` are
 byte-identical at every size, `cmp`) gives times up to 0.159 ms apart with
@@ -2019,13 +2020,16 @@ one-minute average.
 | Batch | Time | Runs | Lock before, after | Load before | GPU utilization before, after | Used |
 |---|---|---|---|---|---|---|
 | Captures | 04:41:54 to 04:49:17 | 28 engine runs | 0, 0 in every run | 2.46 to 3.77 | not read | Yes (the frames) |
-| Upscale and metrics | 04:53:33 to 04:55:22 | 21 probe runs, one per frame | 0 before each | 2.80 to 8.29, rising during the batch, whose probe runs used about 8 cores (797 % CPU in `time`) | not read | Yes (PSNR and SSIM); of the single GPU time per upscale it records, only the spread over the frames is used, not the level ("GPU time per frame", above) |
+| Upscale and metrics | 04:53:33 to 04:55:22 | 21 probe runs, one per frame | 0 before each | 2.80 to 8.29, rising during the batch, whose probe runs computed the metrics on the CPU (their `time` output was not kept) | not read | Yes (PSNR and SSIM); of the single GPU time per upscale it records, only the spread over the frames is used, not the level ("GPU time per frame", above) |
 | Timing a | 04:55:43 to 04:56:10 | 3 invocations, 10 warm-up rounds | 0, 0 | 6.30, 5.41, 4.89 | not read | Superseded by c: it started at load 6.30, right after the metrics batch |
 | Timing b | 04:58:01 to 04:58:28 | 3, 10 warm-up rounds | 0, 0 | 1.40, 1.67, 1.65 | 8, 7 and 8 %; 7, 0 and 0 % | Superseded by c: the first configuration of each process, 3840 x 2160 spatial, had invocation medians 2.821, 1.622 and 1.427 ms |
 | Timing c | 04:59:16 to 04:59:52 | 3, at least 3 s of warm-up (305, 294, 305 rounds of 9) | 0, 0 | 1.85, 2.37, 2.28 | 8, 8 and 8 %; 7, 8 and 0 % | Yes |
 
-In a and b every row but 3840 x 2160 spatial has a median within 0.005
-ms of c's. The slow first row of b looks like section 8's start-of-process
+In a and b every 2560 x 1440 and 1920 x 1080 row has a median within
+0.005 ms of the same invocation's in c. The 3840 x 2160 rows, the first
+three of each process, are not: spatial is 0.097 to 1.391 ms above c in
+four of the six invocations, bilinear up to 0.046 ms above and Lanczos
+up to 0.072 ms above (both in b's first). The slow first row of b looks like section 8's start-of-process
 level ("Levels at the start of a process"); that is an inference, no
 clock was read. With c's longer warm-up, the first row and its repeat at
 the end of the process have the same median (1.428 ms).
