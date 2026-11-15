@@ -997,6 +997,7 @@ CLIENT_OBJS_ := \
 	src/backends/generic/misc.o \
 	src/client/cl_cin.o \
 	src/client/cl_image.o \
+	src/client/cl_conback.o \
 	src/client/cl_console.o \
 	src/client/cl_download.o \
 	src/client/cl_effects.o \
@@ -1413,8 +1414,8 @@ endif
 # The unit-test suite (tests/unit, see doc/085_unittests.md). The test
 # binary links the dedicated server's own objects (SERVER_OBJS_ below,
 # built with q2ded's flags into a tree of their own) except the unix
-# main.c; tests/unit/main.c supplies main(). Seven client objects
-# (cl_download, cl_entities, cl_network, cl_parse, cl_screen, the sound
+# main.c; tests/unit/main.c supplies main(). Eight client objects
+# (cl_conback, cl_download, cl_entities, cl_network, cl_parse, cl_screen, the sound
 # frontend sound.c and the window code's SDL-free part vid/glimp_hidpi.c)
 # are linked against the stubs in tests/unit/stub_client.c
 # and stub_client_full.c, and two renderer objects, refresh/files/surf.c
@@ -1451,6 +1452,7 @@ endif
 
 TEST_SRCS := $(sort $(wildcard tests/unit/*.c))
 TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SERVER_OBJS_))) \
+	$(TESTDIR)/src/client/cl_conback.o \
 	$(TESTDIR)/src/client/cl_download.o \
 	$(TESTDIR)/src/client/cl_entities.o \
 	$(TESTDIR)/src/client/cl_network.o \

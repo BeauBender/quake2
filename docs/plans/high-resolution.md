@@ -170,7 +170,7 @@ and 500 lines). After N10, ideally before RT1 (TASK53). Priority 3: the
 largest gain in geometry, from licensed data, and it removes a defect
 native resolution makes six times worse.
 
-### P4. Crisp 2D at large scales (filed)
+### P4. Crisp 2D at large scales (built, TASK119)
 
 HUD digits, icons, menu pictures and the crosshair drawn sharp instead of
 blurred; optional scale2x/scale3x smoothing of 8-bit 2D pictures (gl1's
@@ -183,6 +183,15 @@ the console background kept at 4:3 and cropped. Where:
 [`rm_shaders.metal`](../../src/client/refresh/metal/rm_shaders.metal),
 [`cl_console.c`](../../src/client/cl_console.c). One card, about 500
 lines. After N10. Priority 4: the cheapest change seen in every frame.
+
+Built by TASK119 as three switches, all off by default: `r_scale8bittextures`
+as gl1 takes it; `metal_2d_sharp`, whose coordinate function
+`mtl_sharp_coord` is in `mtl_shader_math.h` (nearest inside a texel, one
+screen pixel of blend at its edge; at an integer scale the frame equals
+nearest filtering); and the client switch `con_backaspect`, the console
+background at 4:3 and cropped, with its arithmetic in
+[`cl_conback.c`](../../src/client/cl_conback.c). The measurements are in the
+TASK119 section of [`metal-port-harness.md`](metal-port-harness.md).
 
 ### P5. Bicubic lightmap filtering (built, TASK120)
 

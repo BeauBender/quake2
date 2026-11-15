@@ -50,7 +50,7 @@ static image_t *draw_chars;
 
 /* the batch of quads: one texture and sampler, RM_BATCH_QUADS at most (gl1's buffer holds 4096) */
 static rmb_vert2d_t batch_v[RM_BATCH_QUADS * 4];
-static int batch_n, batch_tex, batch_smp;
+static int batch_n, batch_tex, batch_smp, batch_sharp;
 
 /*
  * gl1's 2D product: the projection of R_SetGL2D times the identity
@@ -117,6 +117,13 @@ RM_QuadF(rmb_vert2d_t *v, const rm_quad_t *q, const float *rgba)
 	}
 }
 
+/* metal_2d_sharp for a picture drawn with sampler smp (rm_2d_sharp); a nearest sampler is never sharpened */
+static int
+RM_Sharp(int smp)
+{
+	return rm_2d_sharp(metal_2d_sharp->value, smp, rm_image_flat_linear());
+}
+
 /* from gl1_buffer.c, R_ApplyGLBuffer for buf_2d: draws what is queued */
 void
 RM_Flush2D(void)
@@ -129,7 +136,7 @@ RM_Flush2D(void)
 	}
 
 	RM_Mvp2D(mvp);
-	rmb_draw_2d_quads(rm_pipe_2d(RM_TEXENV_REPLACE, 1, 0), batch_tex, batch_smp, batch_v, batch_n, mvp);
+	rmb_draw_2d_quads(rm_pipe_2d(RM_TEXENV_REPLACE, 1, 0), batch_tex, batch_smp, batch_sharp, batch_v, batch_n, mvp);
 	batch_n = 0;
 }
 
@@ -157,8 +164,9 @@ static void
 RM_BufferQuad(int tex, int smp, const rm_quad_t *q)
 {
 	static const float white[4] = { 1, 1, 1, 1 };
+	const int sharp = RM_Sharp(smp);
 
-	if ((batch_n > 0) && ((batch_tex != tex) || (batch_smp != smp)))
+	if ((batch_n > 0) && ((batch_tex != tex) || (batch_smp != smp) || (batch_sharp != sharp)))
 	{
 		RM_Flush2D();
 	}
@@ -175,6 +183,7 @@ RM_BufferQuad(int tex, int smp, const rm_quad_t *q)
 
 	batch_tex = tex;
 	batch_smp = smp;
+	batch_sharp = sharp;
 	RM_QuadF(&batch_v[batch_n * 4], q, white);
 	batch_n++;
 }
@@ -188,7 +197,7 @@ RM_DrawPicNow(const image_t *gl, const rm_quad_t *q, rm_texenv_t env, const floa
 
 	RM_QuadF(v, q, rgba);
 	RM_Mvp2D(mvp);
-	rmb_draw_2d(rm_pipe_2d(env, 1, 0), RM_PicTexture(gl), RM_PicSampler(gl), v, 4, mvp);
+	rmb_draw_2d(rm_pipe_2d(env, 1, 0), RM_PicTexture(gl), RM_PicSampler(gl), RM_Sharp(RM_PicSampler(gl)), v, 4, mvp);
 }
 
 /* from gl1_draw.c */
@@ -397,7 +406,7 @@ RDraw_Fill(int x, int y, int w, int h, int c)
 
 	RM_Quad(v, x, y, w, h, NULL, rgba);
 	RM_Mvp2D(mvp);
-	rmb_draw_2d(rm_pipe_2d(RM_TEXENV_UNTEXTURED, 1, 0), 0, 0, v, 4, mvp);
+	rmb_draw_2d(rm_pipe_2d(RM_TEXENV_UNTEXTURED, 1, 0), 0, 0, 0, v, 4, mvp);
 }
 
 /* from gl1_draw.c */
@@ -411,7 +420,7 @@ RDraw_FadeScreen(void)
 	RM_Flush2D();   /* draw what needs to be hidden */
 	RM_Quad(v, 0, 0, vid.width, vid.height, NULL, rgba);
 	RM_Mvp2D(mvp);
-	rmb_draw_2d(rm_pipe_2d(RM_TEXENV_UNTEXTURED, 1, 1), 0, 0, v, 4, mvp);
+	rmb_draw_2d(rm_pipe_2d(RM_TEXENV_UNTEXTURED, 1, 1), 0, 0, 0, v, 4, mvp);
 }
 
 /*
@@ -477,7 +486,7 @@ RDraw_StretchRaw(int x, int y, int w, int h, int cols, int rows, const byte *dat
 	smp = RMB_SAMPLER(r_videos_unfiltered->value == 0 ? RMB_SMP_FLAT : RMB_SMP_NEAREST, 0);
 	RM_Quad(v, x, y, w, h, tex, white);
 	RM_Mvp2D(mvp);
-	rmb_draw_2d(rm_pipe_2d(RM_TEXENV_REPLACE, 1, 0), cin_texnum, smp, v, 4, mvp);
+	rmb_draw_2d(rm_pipe_2d(RM_TEXENV_REPLACE, 1, 0), cin_texnum, smp, 0, v, 4, mvp);   /* a cinematic is not a 2D picture: P15's */
 }
 
 /* from gl1_main.c */
