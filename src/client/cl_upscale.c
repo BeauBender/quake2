@@ -23,7 +23,8 @@
  * the console command (cl_upscale_cmd.c) so that the unit tests run
  * them: the names a listing hands it, the git work-tree refusal, the
  * size checks of .wal and .pcx sources, and scale2x on palette indices
- * with wrapped or clamped edges.
+ * with wrapped or clamped edges, the order of one output file's steps
+ * (CL_UpscaleWriteOut) and the file write itself (CL_UpscaleWriteFile).
  *
  * scale2x, the skin flood fill and the 8-bit conversion are copies of
  * scale2x, R_FloodFillSkin and R_Convert8to32 in
@@ -37,6 +38,11 @@
 #include <errno.h>
 #include <stddef.h>
 #include <sys/stat.h>
+
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 #include "header/client.h"
 #include "header/upscale.h"
@@ -224,17 +230,24 @@ CL_UpscaleEntryKind(const char *path)
 }
 
 int
-CL_UpscaleDirInGitTree(const char *dir)
+CL_UpscaleDirGit(const char *dir)
 {
 	char real[MAX_OSPATH];
 
 	if (!dir || !Sys_Realpath(dir, real, sizeof(real)) ||
 		(strlen(real) >= sizeof(real) - 1))
 	{
-		return 1;
+		return UPSCALE_GIT_UNKNOWN;
 	}
 
-	return CL_UpscaleInGitTree(real, CL_UpscaleEntryExists, NULL);
+	return CL_UpscaleInGitTree(real, CL_UpscaleEntryExists, NULL) ?
+		UPSCALE_GIT_INSIDE : UPSCALE_GIT_OUTSIDE;
+}
+
+int
+CL_UpscaleDirInGitTree(const char *dir)
+{
+	return CL_UpscaleDirGit(dir) != UPSCALE_GIT_OUTSIDE;
 }
 
 /* ---- sizes ---- */
@@ -771,6 +784,18 @@ CL_UpscaleListAdd(strlist_t *list, const char *name, int max, int *cut)
 }
 
 int
+CL_UpscaleListDir(strlist_t *dirs, const char *name, int *cut, int *refused)
+{
+	if (!CL_UpscaleNameOk(name))
+	{
+		(*refused)++;
+		return 1;
+	}
+
+	return CL_UpscaleListAdd(dirs, name, UPSCALE_MAX_DIRS, cut);
+}
+
+int
 CL_UpscaleOutPath(const char *gamedir, const char *outname, char *out,
 		size_t outsize)
 {
@@ -852,6 +877,16 @@ CL_UpscaleParentDir(const char *path, char *out, size_t outsize)
 	return 1;
 }
 
+int
+CL_UpscaleDirExists(const char *path)
+{
+	char dir[MAX_OSPATH];
+	struct stat st;
+
+	return CL_UpscaleParentDir(path, dir, sizeof(dir)) &&
+		(stat(dir, &st) == 0) && S_ISDIR(st.st_mode);
+}
+
 upscale_action_t
 CL_UpscaleAction(upscale_entry_t entry, int force)
 {
@@ -906,16 +941,149 @@ CL_UpscalePathInGitTree(upscale_gitcache_t *cache, const char *path)
 
 	if (!CL_UpscaleParentDir(path, dir, sizeof(dir)))
 	{
-		return 1;
+		return UPSCALE_GIT_UNKNOWN;
 	}
 
-	return CL_UpscaleCachedInGitTree(cache, dir, CL_UpscaleDirInGitTree);
+	return CL_UpscaleCachedInGitTree(cache, dir, CL_UpscaleDirGit);
 }
 
 int
-CL_UpscaleAllowed(int connected, int local)
+CL_UpscaleAllowed(int connected, int local, int demo)
 {
-	return !connected || local;
+	return !demo && (!connected || local);
+}
+
+int
+CL_UpscaleWriteFile(const char *path, const unsigned char *data, size_t len)
+{
+#ifdef _WIN32
+	(void)path;
+	(void)data;
+	(void)len;
+
+	return 0;
+#else
+	char tmp[MAX_OSPATH];
+	size_t done = 0;
+	int fd, ok;
+
+	if (!CL_UpscaleTempPath(path, (long)getpid(), tmp, sizeof(tmp)))
+	{
+		return 0;
+	}
+
+	/* a new file: not one that is there, and never through a link */
+	fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0666);
+
+	if (fd < 0)
+	{
+		return 0;
+	}
+
+	while (done < len)
+	{
+		ssize_t n = write(fd, data + done, len - done);
+
+		if ((n < 0) && (errno == EINTR))
+		{
+			continue;
+		}
+
+		if (n <= 0)
+		{
+			break;
+		}
+
+		done += (size_t)n;
+	}
+
+	/* on disk before it takes the name */
+	ok = (done == len) && (fsync(fd) == 0);
+
+	if (close(fd) != 0)
+	{
+		ok = 0;
+	}
+
+	if (ok && (rename(tmp, path) != 0))
+	{
+		ok = 0;
+	}
+
+	if (!ok)
+	{
+		unlink(tmp);
+	}
+
+	return ok;
+#endif
+}
+
+upscale_outcome_t
+CL_UpscaleWriteOut(const char *path, int force, const upscale_steps_t *steps,
+		void *ctx, size_t *bytes)
+{
+	upscale_entry_t entry;
+	upscale_outcome_t made;
+	unsigned char *data = NULL;
+	size_t len = 0;
+	int git;
+
+	*bytes = 0;
+	entry = steps->entry(ctx, path);
+
+	switch (CL_UpscaleAction(entry, force))
+	{
+		case UPSCALE_SKIP:
+			return UPSCALE_SKIPPED;
+		case UPSCALE_WRITE:
+			break;
+		default:
+			steps->say(ctx, 0, path, (entry == UPSCALE_ENTRY_OTHER) ?
+				UPSCALE_SAY_NOT_FILE : UPSCALE_SAY_UNKNOWN);
+			return UPSCALE_REFUSED;
+	}
+
+	if (!steps->makedirs(ctx, path))
+	{
+		steps->say(ctx, 0, path, UPSCALE_SAY_NO_DIR);
+		return UPSCALE_FAILED;
+	}
+
+	/* before anything is read: a file in a work tree is not even made */
+	git = steps->git(ctx, path);
+
+	if (git == UPSCALE_GIT_INSIDE)
+	{
+		steps->say(ctx, 1, path, UPSCALE_SAY_GIT);
+		return UPSCALE_REFUSED;
+	}
+
+	if (git != UPSCALE_GIT_OUTSIDE)
+	{
+		steps->say(ctx, 0, path, UPSCALE_SAY_NO_REALPATH);
+		return UPSCALE_FAILED;
+	}
+
+	made = steps->make(ctx, &data, &len);
+
+	if ((made != UPSCALE_WRITTEN) || !data)
+	{
+		free(data);
+		return (made == UPSCALE_REFUSED) ? UPSCALE_REFUSED : UPSCALE_FAILED;
+	}
+
+	if (!steps->write(ctx, path, data, len))
+	{
+		free(data);
+		steps->say(ctx, 0, path, UPSCALE_SAY_WRITE);
+		return UPSCALE_FAILED;
+	}
+
+	free(data);
+	*bytes = len;
+
+	return UPSCALE_WRITTEN;
 }
 
 void
@@ -943,9 +1111,17 @@ void
 CL_UpscaleSummary(const upscale_count_t *n, int factor, const char *dir,
 		char *out, size_t outsize)
 {
+	char dirs[96] = "";
+
+	if (n->baddirs > 0)
+	{
+		snprintf(dirs, sizeof(dirs), "; %d director%s with a refused name "
+			"not looked at", n->baddirs, (n->baddirs == 1) ? "y" : "ies");
+	}
+
 	snprintf(out, outsize, "upscale_textures: %d written, %d skipped, "
-		"%d refused, %d failed, %llu bytes, %dx, in %s%s\n", n->written,
-		n->skipped, n->refused, n->failed, n->bytes, factor, dir,
+		"%d refused, %d failed, %llu bytes, %dx, in %s%s%s\n", n->written,
+		n->skipped, n->refused, n->failed, n->bytes, factor, dir, dirs,
 		n->cut ? "; a listing was cut at its limit, not every file was "
 		"looked at" : "");
 }

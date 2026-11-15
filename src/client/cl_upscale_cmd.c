@@ -28,12 +28,14 @@
  * PNG is written by ImageIO (decision 0010). A file that exists is left
  * alone unless force is given; a link is never written through.
  *
- * This file does the I/O only: listing, loading, writing. Every
- * decision is made in cl_upscale.c, where the unit tests run it: which
- * names are sources and how they are written (CL_UpscaleOutName), skip,
- * write or refuse, the git work-tree check of the write directory and
- * of each output file's directory, the remote-server refusal, the
- * counts and the summary line.
+ * This file does the I/O only: listing, loading, scaling, and it hands
+ * the real steps to CL_UpscaleWriteOut. Every decision is made in
+ * cl_upscale.c, where the unit tests run it: which names are sources
+ * and how they are written (CL_UpscaleOutName), which directories are
+ * walked, skip, write or refuse, the order of one file's steps, the
+ * git work-tree check of the write directory and of each output file's
+ * directory, the file write itself, the demo and remote-server
+ * refusal, the counts and the summary line.
  *
  * =======================================================================
  */
@@ -42,21 +44,17 @@
 #include "header/upscale.h"
 #include "refresh/files/imgdecode.h"
 
-#ifndef _WIN32
-#include <errno.h>
-#include <fcntl.h>
-#include <unistd.h>
-#endif
-
 /*
  * Every name with the extension ext in dir and the directories below
  * it, from the paks and the loose files of every search path, into
  * files (once each). The listing is bounded: UPSCALE_MAX_DIRS
- * directories, UPSCALE_MAX_FILES names; *cut is set when it stops at
- * either.
+ * directories, UPSCALE_MAX_FILES names; n->cut is set when it stops at
+ * either, and a loose directory whose name is refused is counted in
+ * n->baddirs.
  */
 static void
-CL_UpscaleList(const char *dir, const char *ext, strlist_t *files, int *cut)
+CL_UpscaleList(const char *dir, const char *ext, strlist_t *files,
+		upscale_count_t *n)
 {
 	strlist_t dirs;
 	int d;
@@ -77,7 +75,7 @@ CL_UpscaleList(const char *dir, const char *ext, strlist_t *files, int *cut)
 
 		for (i = 0; i < found.num; i++)
 		{
-			if (!CL_UpscaleListAdd(files, found.data[i], UPSCALE_MAX_FILES, cut))
+			if (!CL_UpscaleListAdd(files, found.data[i], UPSCALE_MAX_FILES, &n->cut))
 			{
 				break;
 			}
@@ -91,8 +89,7 @@ CL_UpscaleList(const char *dir, const char *ext, strlist_t *files, int *cut)
 
 		for (i = 0; i < found.num; i++)
 		{
-			if (CL_UpscaleNameOk(found.data[i]) &&
-				!CL_UpscaleListAdd(&dirs, found.data[i], UPSCALE_MAX_DIRS, cut))
+			if (!CL_UpscaleListDir(&dirs, found.data[i], &n->cut, &n->baddirs))
 			{
 				break;
 			}
@@ -170,133 +167,64 @@ CL_UpscaleLoad(const char *name, int wal, int *w, int *h, int *refused)
 	return idx;
 }
 
-/*
- * len bytes of data into path: written to a new temporary name in the
- * same directory (O_EXCL, a link never followed), closed, then renamed
- * over path, so path is either what it was or all of the new file. The
- * temporary file is removed on any failure. 1 on success.
- */
-static int
-CL_UpscaleWriteFile(const char *path, const unsigned char *data, size_t len)
+/* one source and what is needed to scale it: the steps' context */
+typedef struct
 {
-#ifdef _WIN32
-	(void)path;
-	(void)data;
-	(void)len;
+	const char *name;
+	const upscale_kind_t *kind;
+	int factor;
+	const unsigned *table;
+	upscale_gitcache_t *git;
+} upscale_job_t;
 
-	return 0;
-#else
-	char tmp[MAX_OSPATH];
-	size_t done = 0;
-	int fd, ok;
+static upscale_entry_t
+CL_UpscaleStepEntry(void *ctx, const char *path)
+{
+	(void)ctx;
 
-	if (!CL_UpscaleTempPath(path, (long)getpid(), tmp, sizeof(tmp)))
-	{
-		return 0;
-	}
-
-	fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0666);
-
-	if (fd < 0)
-	{
-		return 0;
-	}
-
-	while (done < len)
-	{
-		ssize_t n = write(fd, data + done, len - done);
-
-		if ((n < 0) && (errno == EINTR))
-		{
-			continue;
-		}
-
-		if (n <= 0)
-		{
-			break;
-		}
-
-		done += (size_t)n;
-	}
-
-	ok = (done == len);
-
-	if (close(fd) != 0)
-	{
-		ok = 0;
-	}
-
-	if (ok && (rename(tmp, path) != 0))
-	{
-		ok = 0;
-	}
-
-	if (!ok)
-	{
-		unlink(tmp);
-	}
-
-	return ok;
-#endif
+	return CL_UpscaleEntryKind(path);
 }
 
-/* scales name and writes it as its output name in the write directory */
-static upscale_outcome_t
-CL_UpscaleOne(const char *name, const upscale_kind_t *kind, int factor,
-		int force, const unsigned *table, upscale_gitcache_t *git,
-		size_t *bytes)
+static int
+CL_UpscaleStepMakeDirs(void *ctx, const char *path)
 {
-	char outname[MAX_QPATH], path[MAX_OSPATH];
-	unsigned char *idx, *big, *rgba = NULL, *png = NULL;
-	size_t pnglen = 0;
-	int w = 0, h = 0, refused = 0;
-	upscale_action_t action;
+	(void)ctx;
 
-	*bytes = 0;
-
-	if (!CL_UpscaleOutName(name, outname, sizeof(outname)) ||
-		!CL_UpscaleOutPath(FS_Gamedir(), outname, path, sizeof(path)))
-	{
-		Com_DPrintf("upscale_textures: refused name %s\n", name);
-		return UPSCALE_REFUSED;
-	}
-
-	action = CL_UpscaleAction(CL_UpscaleEntryKind(path), force);
-
-	if (action == UPSCALE_SKIP)
-	{
-		return UPSCALE_SKIPPED;
-	}
-
-	if (action != UPSCALE_WRITE)
-	{
-		Com_Printf("upscale_textures: %s is a link or not a file, left as it is\n", path);
-		return UPSCALE_REFUSED;
-	}
-
-	/* outname has no "..", so FS_CreatePath makes its directories */
+	/* the output name has no "..", so FS_CreatePath makes its directories */
 	FS_CreatePath(path);
 
-	if (CL_UpscalePathInGitTree(git, path))
-	{
-		Com_DPrintf("upscale_textures: refused %s: its directory is inside a git work tree\n", path);
-		return UPSCALE_REFUSED;
-	}
+	return CL_UpscaleDirExists(path);
+}
 
-	idx = CL_UpscaleLoad(name, kind->wal, &w, &h, &refused);
+static int
+CL_UpscaleStepGit(void *ctx, const char *path)
+{
+	return CL_UpscalePathInGitTree(((upscale_job_t *)ctx)->git, path);
+}
+
+/* the source loaded, scaled and encoded as a PNG */
+static upscale_outcome_t
+CL_UpscaleStepMake(void *ctx, unsigned char **png, size_t *pnglen)
+{
+	const upscale_job_t *job = ctx;
+	unsigned char *idx, *big, *rgba = NULL;
+	int w = 0, h = 0, refused = 0, factor = job->factor;
+
+	idx = CL_UpscaleLoad(job->name, job->kind->wal, &w, &h, &refused);
 
 	if (!idx)
 	{
-		Com_DPrintf("upscale_textures: %s %s\n", refused ? "refused size of" : "cannot read", name);
+		Com_DPrintf("upscale_textures: %s %s\n", refused ? "refused size of" :
+			"cannot read", job->name);
 		return refused ? UPSCALE_REFUSED : UPSCALE_FAILED;
 	}
 
-	if (kind->skin)
+	if (job->kind->skin)
 	{
-		CL_UpscaleFloodFillSkin(idx, w, h, table);
+		CL_UpscaleFloodFillSkin(idx, w, h, job->table);
 	}
 
-	big = CL_UpscaleIndices(idx, w, h, factor, kind->wrap);
+	big = CL_UpscaleIndices(idx, w, h, factor, job->kind->wrap);
 	free(idx);
 
 	/* w and h are at most UPSCALE_MAX_SIDE, so the RGBA size fits */
@@ -307,33 +235,86 @@ CL_UpscaleOne(const char *name, const upscale_kind_t *kind, int factor,
 
 	if (rgba)
 	{
-		CL_UpscaleToRGBA(big, (size_t)w * factor, (size_t)h * factor, table, rgba);
+		CL_UpscaleToRGBA(big, (size_t)w * factor, (size_t)h * factor,
+			job->table, rgba);
 	}
 
 	free(big);
 
 	if (!rgba || (IMGDEC_EncodePNG(rgba, (size_t)w * factor,
-		(size_t)h * factor, &png, &pnglen) != IMGDEC_OK))
+		(size_t)h * factor, png, pnglen) != IMGDEC_OK))
 	{
-		Com_DPrintf("upscale_textures: cannot scale %s\n", name);
+		Com_DPrintf("upscale_textures: cannot scale %s\n", job->name);
 		free(rgba);
-		free(png);
+		free(*png);
+		*png = NULL;
 		return UPSCALE_FAILED;
 	}
 
 	free(rgba);
 
-	if (!CL_UpscaleWriteFile(path, png, pnglen))
+	return UPSCALE_WRITTEN;
+}
+
+static int
+CL_UpscaleStepWrite(void *ctx, const char *path, const unsigned char *data,
+		size_t len)
+{
+	(void)ctx;
+
+	return CL_UpscaleWriteFile(path, data, len);
+}
+
+static void
+CL_UpscaleStepSay(void *ctx, int developer, const char *path,
+		const char *text)
+{
+	(void)ctx;
+
+	if (developer)
 	{
-		Com_Printf("upscale_textures: cannot write %s\n", path);
-		free(png);
-		return UPSCALE_FAILED;
+		Com_DPrintf("upscale_textures: %s: %s\n", path, text);
+	}
+	else
+	{
+		Com_Printf("upscale_textures: %s: %s\n", path, text);
+	}
+}
+
+static const upscale_steps_t upscale_steps = {
+	CL_UpscaleStepEntry,
+	CL_UpscaleStepMakeDirs,
+	CL_UpscaleStepGit,
+	CL_UpscaleStepMake,
+	CL_UpscaleStepWrite,
+	CL_UpscaleStepSay
+};
+
+/* scales name and writes it as its output name in the write directory */
+static upscale_outcome_t
+CL_UpscaleOne(const char *name, const upscale_kind_t *kind, int factor,
+		int force, const unsigned *table, upscale_gitcache_t *git,
+		size_t *bytes)
+{
+	char outname[MAX_QPATH], path[MAX_OSPATH];
+	upscale_job_t job;
+
+	*bytes = 0;
+
+	if (!CL_UpscaleOutName(name, outname, sizeof(outname)) ||
+		!CL_UpscaleOutPath(FS_Gamedir(), outname, path, sizeof(path)))
+	{
+		Com_DPrintf("upscale_textures: refused name %s\n", name);
+		return UPSCALE_REFUSED;
 	}
 
-	free(png);
-	*bytes = pnglen;
+	job.name = name;
+	job.kind = kind;
+	job.factor = factor;
+	job.table = table;
+	job.git = git;
 
-	return UPSCALE_WRITTEN;
+	return CL_UpscaleWriteOut(path, force, &upscale_steps, &job, bytes);
 }
 
 void
@@ -342,7 +323,7 @@ CL_UpscaleTextures_f(void)
 	const char *colormap = "pics/colormap.pcx";
 	const unsigned char *palette;
 	unsigned char *raw = NULL;
-	char line[MAX_OSPATH + 256];
+	char line[MAX_OSPATH + 512];
 	upscale_count_t n;
 	upscale_gitcache_t git;
 	unsigned table[256];
@@ -360,9 +341,9 @@ CL_UpscaleTextures_f(void)
 	force = (Cmd_Argc() == 3);
 
 	if (!CL_UpscaleAllowed(cls.state >= ca_connected,
-		NET_IsLocalAddress(cls.netchan.remote_address)))
+		NET_IsLocalAddress(cls.netchan.remote_address), cl.attractloop))
 	{
-		Com_Printf("upscale_textures: refused while connected to a remote server\n");
+		Com_Printf("upscale_textures: refused while a demo plays or while connected to a remote server\n");
 		return;
 	}
 
@@ -406,7 +387,7 @@ CL_UpscaleTextures_f(void)
 		int i;
 
 		StrList_Init(&files, 0);
-		CL_UpscaleList(kind->dir, kind->ext, &files, &n.cut);
+		CL_UpscaleList(kind->dir, kind->ext, &files, &n);
 
 		for (i = 0; i < files.num; i++)
 		{

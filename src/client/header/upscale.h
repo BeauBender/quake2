@@ -68,7 +68,18 @@ int CL_UpscaleInGitTree(const char *dir,
 /* exists for CL_UpscaleInGitTree: lstat finds path, or cannot tell */
 int CL_UpscaleEntryExists(const char *path, void *ctx);
 
-/* CL_UpscaleInGitTree of dir's real path on disk; 1 when it has none */
+/* what the git work-tree check says of a directory */
+typedef enum
+{
+	UPSCALE_GIT_OUTSIDE,	/* not inside a git work tree */
+	UPSCALE_GIT_INSIDE,	/* inside one, or not walked to "/" */
+	UPSCALE_GIT_UNKNOWN	/* no real path: missing, or not resolved */
+} upscale_git_t;
+
+/* CL_UpscaleInGitTree of dir's real path on disk, as upscale_git_t */
+int CL_UpscaleDirGit(const char *dir);
+
+/* 1 unless CL_UpscaleDirGit says UPSCALE_GIT_OUTSIDE */
 int CL_UpscaleDirInGitTree(const char *dir);
 
 /* 1 when a source of w by h may be scaled: 1 to UPSCALE_MAX_SIDE each */
@@ -183,6 +194,15 @@ int CL_UpscaleIsSource(const upscale_kind_t *kind, const char *name);
 int CL_UpscaleListAdd(strlist_t *list, const char *name, int max, int *cut);
 
 /*
+ * A loose directory name from a listing, added to dirs to be walked
+ * (CL_UpscaleListAdd, at most UPSCALE_MAX_DIRS): 1 when the walk goes
+ * on. A name CL_UpscaleNameOk refuses is not walked and is counted in
+ * *refused, so the summary says its files were not looked at.
+ */
+int CL_UpscaleListDir(strlist_t *dirs, const char *name, int *cut,
+		int *refused);
+
+/*
  * "gamedir/outname" into out: 1 when it fits outsize, else 0 and out
  * is "".
  */
@@ -213,6 +233,9 @@ typedef enum
 } upscale_entry_t;
 
 upscale_entry_t CL_UpscaleEntryKind(const char *path);
+
+/* 1 when the directory of the file path (CL_UpscaleParentDir) is one */
+int CL_UpscaleDirExists(const char *path);
 
 typedef enum
 {
@@ -246,17 +269,21 @@ int CL_UpscaleCachedInGitTree(upscale_gitcache_t *cache, const char *dir,
 		int (*check)(const char *dir));
 
 /*
- * 1 when the directory of the file path is inside a git work tree, as
- * CL_UpscaleDirInGitTree says of its real path (cached as above), or
- * path has no directory: the file is not written.
+ * CL_UpscaleDirGit of the directory of the file path (cached as above):
+ * UPSCALE_GIT_UNKNOWN when path has no directory. The file is written
+ * only on UPSCALE_GIT_OUTSIDE.
  */
 int CL_UpscalePathInGitTree(upscale_gitcache_t *cache, const char *path);
 
 /*
- * 1 when the command may run: not connected to a server, or connected
- * to the local one, so a remote server's stufftext cannot run it.
+ * 1 when the command may run: no demo plays (demo, cl.attractloop), and
+ * the client is not connected to a server or is connected to the local
+ * one. This stops the command when a connected remote server or a demo
+ * sends it as stufftext, and nothing more: stufftext is not filtered
+ * (by design), so a server that has the client disconnect first can
+ * still start it.
  */
-int CL_UpscaleAllowed(int connected, int local);
+int CL_UpscaleAllowed(int connected, int local, int demo);
 
 typedef enum
 {
@@ -271,7 +298,56 @@ typedef struct
 	int written, skipped, refused, failed;
 	unsigned long long bytes;	/* of the files written */
 	int cut;	/* a listing stopped at its limit */
+	int baddirs;	/* loose directories not walked: name refused */
 } upscale_count_t;
+
+/*
+ * len bytes of data into path: written to a new temporary name in the
+ * same directory (CL_UpscaleTempPath with the process id; O_EXCL, a
+ * link never followed), synced, closed, then renamed over path, so
+ * path is either what it was or all of the new file, and a link at
+ * path is replaced, not written through. The temporary file is removed
+ * on any failure after it was made; one that was there before is not
+ * touched. 1 on success; always 0 on Windows.
+ */
+int CL_UpscaleWriteFile(const char *path, const unsigned char *data,
+		size_t len);
+
+/* the messages of CL_UpscaleWriteOut, after the path */
+#define UPSCALE_SAY_NOT_FILE "a link or not a regular file is there, left as it is"
+#define UPSCALE_SAY_UNKNOWN "lstat cannot tell what is there, left as it is"
+#define UPSCALE_SAY_NO_DIR "its directory cannot be made, nothing written"
+#define UPSCALE_SAY_GIT "its directory is inside a git work tree, refused"
+#define UPSCALE_SAY_NO_REALPATH "its directory has no real path, nothing written"
+#define UPSCALE_SAY_WRITE "cannot be written"
+
+/* the steps of one output file; cl_upscale_cmd.c has the real ones */
+typedef struct
+{
+	upscale_entry_t (*entry)(void *ctx, const char *path);
+	/* creates path's directories: 1 when its directory is there after */
+	int (*makedirs)(void *ctx, const char *path);
+	/* path's directory, as upscale_git_t */
+	int (*git)(void *ctx, const char *path);
+	/* loads and scales the source: on UPSCALE_WRITTEN the PNG, freed with free */
+	upscale_outcome_t (*make)(void *ctx, unsigned char **data, size_t *len);
+	int (*write)(void *ctx, const char *path, const unsigned char *data,
+			size_t len);
+	/* a message about path, one of UPSCALE_SAY_*; developer: only then */
+	void (*say)(void *ctx, int developer, const char *path, const char *text);
+} upscale_steps_t;
+
+/*
+ * One output file at path, in this order: what is there
+ * (CL_UpscaleAction: skipped, refused, or on), its directories made
+ * (failed when it is not there after), the git check of its directory
+ * (refused inside a work tree, failed without a real path), the PNG
+ * made (refused or failed as make says), then written (failed when the
+ * write fails). Nothing is made or written after a step that stops.
+ * *bytes is the PNG's size when written, else 0.
+ */
+upscale_outcome_t CL_UpscaleWriteOut(const char *path, int force,
+		const upscale_steps_t *steps, void *ctx, size_t *bytes);
 
 /* counts one file's outcome; bytes count only when it was written */
 void CL_UpscaleCount(upscale_count_t *n, upscale_outcome_t outcome,
