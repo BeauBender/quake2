@@ -59,6 +59,8 @@ static unsigned fx_resets;
 static rm_fx_size_t fx_size;
 static unsigned long fx_views;
 
+static void RM_FX_Read(void);
+
 static void
 RM_FX_Say(int ok, const char *line)
 {
@@ -85,15 +87,17 @@ RM_FX_Init(const rmb_caps_t *caps)
 	r_metalfx_modes->modified = false;
 	RM_FX_Say(rm_fx_support_format(fx_has, line, sizeof(line)), line);
 
-	/* read at the first world view */
-	r_metalfx->modified = true;
-	r_metalfx_interp->modified = true;
 	fx_mode = RM_FX_OFF;
 	fx_interp = 0;
 	fx_view = 0;
 	fx_drew = 0;
 	fx_views = 0;
 	RM_FX_Reset();
+
+	/* read now, so a fallback's line comes with the renderer's own, before a map clears the notify lines */
+	r_metalfx->modified = true;
+	r_metalfx_interp->modified = true;
+	RM_FX_Read();
 }
 
 void
@@ -242,7 +246,9 @@ RM_FX_End(void)
 
 	fx_view = 0;
 
-	if (metal_stats && metal_stats->value && (fx_resets || ((fx_views % RM_FX_STATS_EVERY) == 0)))
+	/* metal_stats 1: on a view that resets and on every RM_FX_STATS_EVERY-th; 2 and above: on every one */
+	if (metal_stats && metal_stats->value &&
+		(fx_resets || (metal_stats->value >= 2) || ((fx_views % RM_FX_STATS_EVERY) == 0)))
 	{
 		RM_FX_Say(rm_fx_stats_format(fx_mode, &fx_size, fx_resets, rmb_fx_gpu_ms(), line, sizeof(line)), line);
 	}
