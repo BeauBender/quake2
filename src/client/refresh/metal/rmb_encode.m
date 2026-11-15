@@ -191,15 +191,6 @@ rmb_commit_partial(void)
 }
 
 
-/* FIX51 PROBE (temporary, removed before the last commit) */
-#include <time.h>
-static int fix51_on = -1;
-static unsigned long long fix51_t0, fix51_tsem, fix51_prev;
-static unsigned long fix51_n;
-static double fix51_ms(unsigned long long a, unsigned long long b) { return (double)(b - a) / 1e6; }
-static unsigned long long fix51_now(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
-static int fix51(void) { if (fix51_on < 0) fix51_on = getenv("FIX51_PROBE") != NULL; return fix51_on; }
-/* END FIX51 PROBE */
 
 static int rmb_pass(const float *clear_rgba, int with_depth);
 
@@ -222,7 +213,6 @@ rmb_frame_begin(int w, int h, int dw, int dh, const float *clear_rgba)
 	}
 
 	frame_open = 1;
-	if (fix51()) fix51_t0 = fix51_now(); /* FIX51 PROBE */
 
 	if (dispatch_semaphore_wait(rmb_frame_sem, rmb_deadline(rmb_frame_wait_ms())) != 0)
 	{
@@ -239,7 +229,6 @@ rmb_frame_begin(int w, int h, int dw, int dh, const float *clear_rgba)
 		return 0;
 	}
 
-	if (fix51()) fix51_tsem = fix51_now(); /* FIX51 PROBE */
 
 	@autoreleasepool
 	{
@@ -603,9 +592,7 @@ rmb_frame_end(void)
 			frame_cmd = [rmb_queue commandBuffer];
 		}
 
-		unsigned long long fix51_nd0 = fix51() ? fix51_now() : 0; /* FIX51 PROBE */
 		drawable = rmb_next_drawable();   /* with display sync off, nil when none is ready (FIX51) */
-		unsigned long long fix51_nd1 = fix51() ? fix51_now() : 0; /* FIX51 PROBE */
 
 		if (drawable)
 		{
@@ -641,7 +628,7 @@ rmb_frame_end(void)
 						destinationOrigin:MTLOriginMake(0, (NSUInteger)r.dst_y, 0)];
 				[blit endEncoding];
 
-				if (!rmb_layer.opaque && !getenv("FIX51_NOALPHA")) /* FIX51 PROBE */
+				if (!rmb_layer.opaque)
 				{
 					rmb_force_alpha(pcmd, dst);
 				}
@@ -656,14 +643,6 @@ rmb_frame_end(void)
 
 		rmb_upload_flush();     /* committed ahead of the frame that reads it */
 		rmb_watch(frame_cmd);   /* first: it counts before the slot is given back */
-		if (fix51()) /* FIX51 PROBE */
-		{
-			unsigned long fn = fix51_n;
-			[frame_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
-				fprintf(stderr, "fix51 gpu %lu %.4f %.4f\n", fn, (b.GPUEndTime - b.GPUStartTime) * 1000.0,
-						(b.GPUEndTime - (double)fix51_now() / 1e9) * 1000.0);
-			}];
-		}
 		[frame_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 			(void)b;
 			dispatch_semaphore_signal(sem);
@@ -691,15 +670,6 @@ rmb_frame_end(void)
 
 		rmb_present_commit();   /* after the frame it copies (FIX51) */
 
-		if (fix51()) /* FIX51 PROBE: sem wait, begin to nextDrawable, nextDrawable, after it to commit, frame interval */
-		{
-			unsigned long long t = fix51_now();
-			fprintf(stderr, "fix51 cpu %lu %.4f %.4f %.4f %.4f %.4f %d\n", fix51_n, fix51_ms(fix51_t0, fix51_tsem),
-					fix51_ms(fix51_tsem, fix51_nd0), fix51_ms(fix51_nd0, fix51_nd1), fix51_ms(fix51_nd1, t),
-					fix51_prev ? fix51_ms(fix51_prev, fix51_t0) : 0.0, drawable ? 1 : 0);
-			fix51_prev = fix51_t0;
-			fix51_n++;
-		}
 	}
 
 	rmb_counts.frames++;

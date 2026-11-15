@@ -223,7 +223,7 @@ rmb_next_drawable(void)
 		return nil;
 	}
 
-	if (rmb_sync || getenv("FIX51_BLOCK")) /* FIX51 PROBE */
+	if (rmb_sync)
 	{
 		return [rmb_layer nextDrawable];
 	}
@@ -641,7 +641,7 @@ rmb_set_vsync(int on)
 	rmb_sync = on ? 1 : 0;
 
 	/* with display sync on every frame waits for its own drawable again */
-	if (rmb_sync || getenv("FIX51_BLOCK")) /* FIX51 PROBE */
+	if (rmb_sync)
 	{
 		rmb_ahead_drop();
 	}

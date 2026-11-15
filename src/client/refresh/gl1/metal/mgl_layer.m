@@ -130,16 +130,6 @@ static unsigned ring_slot;
 static id<MTLCommandBuffer> upload_cmd;
 static id<MTLBlitCommandEncoder> upload_blit;
 
-/* FIX51 PROBE (temporary, removed before the last commit) */
-#include <stdlib.h>
-#include <time.h>
-static int fix51_on = -1;
-static unsigned long long fix51_t0, fix51_tsem, fix51_nd0, fix51_nd1, fix51_prev;
-static unsigned long fix51_n;
-static double fix51_ms(unsigned long long a, unsigned long long b) { return (double)(b - a) / 1e6; }
-static unsigned long long fix51_now(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
-static int fix51(void) { if (fix51_on < 0) fix51_on = getenv("FIX51_PROBE") != NULL; return fix51_on; }
-/* END FIX51 PROBE */
 
 static dispatch_time_t
 mgl_deadline(long ms)
@@ -336,7 +326,7 @@ static id<MTLTexture> mgl_new_texture(MTLPixelFormat format, int w, int h, MTLTe
 static int
 mgl_present_apart(void)
 {
-	return !mgl_sync && mgl_present_sem && !getenv("FIX51_BLOCK"); /* FIX51 PROBE: the getenv */
+	return !mgl_sync && mgl_present_sem;
 }
 
 /* Puts an acquisition of the next drawable on the queue, unless one is there or done. */
@@ -483,7 +473,7 @@ mgl_present_apart_begin(id<MTLCommandBuffer> frame, id<MTLTexture> src)
 	[blit copyFromTexture:mgl_stage toTexture:d.texture];
 	[blit endEncoding];
 
-	if (!mgl_metal_layer.opaque && !getenv("FIX51_NOALPHA")) /* FIX51 PROBE: the getenv */
+	if (!mgl_metal_layer.opaque)
 	{
 		mgl_force_alpha(cmd, d.texture);
 	}
@@ -686,7 +676,7 @@ mgl_layer_set_sync(int on)
 	mgl_sync = on ? 1 : 0;
 
 	/* with display sync on every frame waits for its own drawable again */
-	if (mgl_sync || getenv("FIX51_BLOCK")) /* FIX51 PROBE */
+	if (mgl_sync)
 	{
 		mgl_ahead_drop();
 	}
@@ -857,7 +847,6 @@ mgl_layer_frame_begin(int *tw, int *th)
 	frame_open = 1;
 	frame_skipped = 0;
 	frame_passes = 0;
-	if (fix51()) fix51_t0 = fix51_now(); /* FIX51 PROBE */
 
 	if (dispatch_semaphore_wait(mgl_frame_sem, mgl_deadline(MGL_FRAME_WAIT_MS)) != 0)
 	{
@@ -891,10 +880,8 @@ mgl_layer_frame_begin(int *tw, int *th)
 			mgl_last_drawable = nil;
 		}
 
-		if (fix51()) fix51_tsem = fix51_nd0 = fix51_now(); /* FIX51 PROBE */
 		/* with display sync off the frame is drawn offscreen and presented apart (FIX51) */
 		frame_drawable = mgl_present_apart() ? nil : [mgl_metal_layer nextDrawable];
-		if (fix51()) fix51_nd1 = fix51_now(); /* FIX51 PROBE */
 
 		if (frame_drawable)
 		{
@@ -1229,7 +1216,7 @@ mgl_layer_present(void)
 
 			if (frame_drawable)
 			{
-				if (!mgl_metal_layer.opaque && !getenv("FIX51_NOALPHA")) /* FIX51 PROBE */
+				if (!mgl_metal_layer.opaque)
 				{
 					mgl_force_alpha(frame_cmd, frame_drawable.texture);
 				}
@@ -1238,13 +1225,6 @@ mgl_layer_present(void)
 			}
 
 			mgl_watch(frame_cmd);   /* first: it counts before the slot is given back */
-			if (fix51()) /* FIX51 PROBE */
-			{
-				unsigned long fn = fix51_n;
-				[frame_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
-					fprintf(stderr, "fix51 gpu %lu %.4f 0\n", fn, (b.GPUEndTime - b.GPUStartTime) * 1000.0);
-				}];
-			}
 			[frame_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 				(void)b;
 				dispatch_semaphore_signal(sem);
@@ -1254,15 +1234,6 @@ mgl_layer_present(void)
 			if (pcmd)
 			{
 				mgl_present_commit(pcmd);   /* after the frame it copies */
-			}
-			if (fix51()) /* FIX51 PROBE: sem wait, (0), nextDrawable, after it to commit, frame interval */
-			{
-				unsigned long long t = fix51_now();
-				fprintf(stderr, "fix51 cpu %lu %.4f 0 %.4f %.4f %.4f %d\n", fix51_n, fix51_ms(fix51_t0, fix51_tsem),
-						fix51_ms(fix51_nd0, fix51_nd1), fix51_ms(fix51_nd1, t),
-						fix51_prev ? fix51_ms(fix51_prev, fix51_t0) : 0.0, (frame_drawable || pcmd) ? 1 : 0);
-				fix51_prev = fix51_t0;
-				fix51_n++;
 			}
 
 			/* what is now on screen; a read between frames reads it in place */
