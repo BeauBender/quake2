@@ -246,6 +246,8 @@ rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen)
 		rmb_layer.framebufferOnly = NO;              /* the present blit writes it */
 		rmb_layer.allowsNextDrawableTimeout = YES;   /* nextDrawable gives up after one second */
 		rmb_layer.displaySyncEnabled = rmb_sync ? YES : NO;
+		/* an opaque layer of about 1720x700 points or more is shown once per refresh (FIX53) */
+		rmb_layer.opaque = rmb_sync ? YES : NO;
 	}
 
 	return 1;
@@ -339,6 +341,8 @@ rmb_set_vsync(int on)
 	if (rmb_layer)
 	{
 		rmb_layer.displaySyncEnabled = rmb_sync ? YES : NO;
+		/* an opaque layer of about 1720x700 points or more is shown once per refresh (FIX53) */
+		rmb_layer.opaque = rmb_sync ? YES : NO;
 	}
 }
 

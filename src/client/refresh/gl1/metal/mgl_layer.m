@@ -332,6 +332,8 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 		mgl_metal_layer.framebufferOnly = NO;          /* glReadPixels blits from it */
 		mgl_metal_layer.allowsNextDrawableTimeout = YES;
 		mgl_metal_layer.displaySyncEnabled = mgl_sync ? YES : NO;
+		/* an opaque layer of about 1720x700 points or more is shown once per refresh (FIX53) */
+		mgl_metal_layer.opaque = mgl_sync ? YES : NO;
 		mgl_metal_layer.drawableSize = CGSizeMake(w > 0 ? w : 1, h > 0 ? h : 1);
 
 		/*
@@ -380,6 +382,8 @@ mgl_layer_set_sync(int on)
 	if (mgl_metal_layer)
 	{
 		mgl_metal_layer.displaySyncEnabled = mgl_sync ? YES : NO;
+		/* an opaque layer of about 1720x700 points or more is shown once per refresh (FIX53) */
+		mgl_metal_layer.opaque = mgl_sync ? YES : NO;
 	}
 }
 
