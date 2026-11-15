@@ -899,6 +899,13 @@ test_add_lm_stock(void)
 				wrong, wrong_mid, reach_wrong);
 	}
 
+	/* one luxel: lit below frad - 64, not at it; the offsets truncated toward 0 on both sides */
+	CHECK(near(mtl_rts_luxel(200.5f, 135.0f, 0.0f, 0.0f, 0.0f), 65.5, 1e-4));
+	CHECK(mtl_rts_luxel(200.0f, 136.0f, 0.0f, 0.0f, 0.0f) == 0);
+	CHECK(near(mtl_rts_luxel(200.0f, 135.9f, 0.0f, 0.0f, 0.0f), 65, 1e-4));
+	CHECK(near(mtl_rts_luxel(200.0f, -16.0f, 40.7f, -32.0f, 32.0f), 200 - 16 - 4, 1e-4));
+	CHECK(mtl_rts_luxel(63.9f, 0.0f, 0.0f, 0.0f, 0.0f) == 0);
+
 	/* a light behind the plane adds nothing */
 	{
 		mtl_rts_v4_t sv = { 1, 0, 0, 0 }, tv = { 0, -1, 0, 0 };
@@ -964,6 +971,13 @@ test_stats_format(void)
 	CHECK(rm_rts_stats_format(&s, buf, sizeof(buf)));
 	CHECK(strstr(buf, "1200 rays, - ms") != NULL);
 	CHECK(!rm_rts_stats_format(&s, buf, 20) && buf[0] == 0);
+	{
+		const size_t len = strlen("ref_metal: rt shadows: frame 12: 307200 pixels, 1000 in range, 900 traced, "
+				"300 shadowed, 1200 rays, - ms");
+
+		CHECK(!rm_rts_stats_format(&s, buf, len) && buf[0] == 0);   /* no room for the terminator */
+		CHECK(rm_rts_stats_format(&s, buf, len + 1) && strlen(buf) == len);
+	}
 	CHECK(!rm_rts_stats_format(&s, buf, 0));
 }
 
