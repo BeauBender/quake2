@@ -20,28 +20,20 @@
  *
  * =======================================================================
  *
- * File formats supported by stb_image, for now only tga, png, jpg
- * See also https://github.com/nothings/stb
+ * The image loading shared by the renderers: the search for a picture,
+ * a sky or a wall texture, the high-colour replacements (r_retexturing),
+ * which imgdecode.c decodes (tga, png, jpg), and the helpers the
+ * renderers convert, scale and resample with. ResizeSTB resamples with
+ * stb_image_resize, see https://github.com/nothings/stb
  *
  * =======================================================================
  */
 
+#include <limits.h>
 #include <stdlib.h>
 
 #include "../ref_shared.h"
-
-// don't need HDR stuff
-#define STBI_NO_LINEAR
-#define STBI_NO_HDR
-// make sure STB_image uses standard malloc(), as we'll use standard free() to deallocate
-#define STBI_MALLOC(sz)    malloc(sz)
-#define STBI_REALLOC(p,sz) realloc(p,sz)
-#define STBI_FREE(p)       free(p)
-// Switch of the thread local stuff. Breaks mingw under Windows.
-#define STBI_NO_THREAD_LOCALS
-// include implementation part of stb_image into this file
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
+#include "imgdecode.h"
 
 // include resize implementation
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
@@ -69,38 +61,36 @@ FixFileExt(const char *origname, const char *ext, char *filename, size_t size)
  * pic: pointer RGBA pixel data will be assigned to
  */
 static qboolean
-LoadSTB(const char *origname, const char* type, byte **pic, int *width, int *height)
+LoadDecoded(const char *origname, const char* type, byte **pic, int *width, int *height)
 {
 	char filename[256];
+	byte *rawdata = NULL;
+	imgdec_result_t result;
+	int rawsize;
 
 	FixFileExt(origname, type, filename, sizeof(filename));
 
 	*pic = NULL;
 
-	byte* rawdata = NULL;
-	int rawsize = ri.FS_LoadFile(filename, (void **)&rawdata);
+	rawsize = ri.FS_LoadFile(filename, (void **)&rawdata);
 	if (rawdata == NULL)
 	{
 		return false;
 	}
 
-	int w, h, bytesPerPixel;
-	byte* data = NULL;
-	data = stbi_load_from_memory(rawdata, rawsize, &w, &h, &bytesPerPixel, STBI_rgb_alpha);
-	if (data == NULL)
+	result = IMGDEC_Decode(rawdata, rawsize > 0 ? (size_t)rawsize : 0, type,
+		pic, width, height);
+	ri.FS_FreeFile(rawdata);
+
+	if (result != IMGDEC_OK)
 	{
-		Com_Printf("%s couldn't load data from %s: %s!\n", __func__, filename, stbi_failure_reason());
-		ri.FS_FreeFile(rawdata);
+		Com_Printf("%s couldn't load data from %s: %s!\n", __func__, filename,
+			IMGDEC_ResultString(result));
 		return false;
 	}
 
-	ri.FS_FreeFile(rawdata);
-
 	Com_DPrintf("%s() loaded: %s\n", __func__, filename);
 
-	*pic = data;
-	*width = w;
-	*height = h;
 	return true;
 }
 
@@ -474,9 +464,9 @@ LoadHiColorImage(const char *name, const char* namewe, const char *ext,
 	}
 
 	/* try to load a tga, png or jpg (in that order/priority) */
-	if (  LoadSTB(namewe, "tga", &pic, &width, &height)
-	   || LoadSTB(namewe, "png", &pic, &width, &height)
-	   || LoadSTB(namewe, "jpg", &pic, &width, &height) )
+	if (  LoadDecoded(namewe, "tga", &pic, &width, &height)
+	   || LoadDecoded(namewe, "png", &pic, &width, &height)
+	   || LoadDecoded(namewe, "jpg", &pic, &width, &height) )
 	{
 		if (width >= realwidth && height >= realheight)
 		{
@@ -556,7 +546,7 @@ R_LoadImage(const char *name, const char* namewe, const char *ext, imagetype_t t
 			byte *pic = NULL;
 			int width = 0, height = 0;
 
-			if (LoadSTB (namewe, ext, &pic, &width, &height) && pic)
+			if (LoadDecoded(namewe, ext, &pic, &width, &height) && pic)
 			{
 				image = load_image(name, pic,
 					width, width,
@@ -590,6 +580,14 @@ GetSkyImage(const char *skyname, const char* surfname, qboolean palettedtexture,
 	if (!image)
 	{
 		Com_sprintf(pathname, sizeof(pathname), "env/%s%s.tga",
+				skyname, surfname);
+		image = find_image(pathname, it_sky);
+	}
+
+	/* the PCX face, where no TGA decodes (no decoder off Apple platforms) */
+	if (!image && !palettedtexture)
+	{
+		Com_sprintf(pathname, sizeof(pathname), "env/%s%s.pcx",
 				skyname, surfname);
 		image = find_image(pathname, it_sky);
 	}

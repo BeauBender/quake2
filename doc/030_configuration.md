@@ -190,3 +190,51 @@ Retexturing packs can be installed by placing the pak files in
 the *baseq2* directory. Archives distributed as `.pk3` or zip files must
 be extracted into the game directory as loose files, or repacked as
 `.pak`, because this fork loads only `.pak` archives.
+
+A replacement is a `.tga`, `.png` or `.jpg` file beside the original
+texture's `.wal` or `.pcx`, looked for in that order, and it is used
+when it is at least as large as the original. The formats and the order
+are unchanged; the files are decoded by the system's ImageIO on Apple
+platforms. A file must hold the type its extension names (a PNG named
+`.tga` is refused with a message, as are other image types such as GIF),
+no side may be larger than 16384 pixels, and an image may have at most
+2^26 pixels (64 megapixels, for example 8192x8192 or 16384x4096). PNG
+and TGA files decode to the same pixels as before (a 16-bit TGA to
+within one level); JPEG files do not decode byte for byte: the JPEG IDCT and the
+chroma upsampling differ from the old decoder's by up to tens of levels
+at edges (the stock rerelease JPEGs differ by up to 56 levels, and 11.8%
+of their colour bytes differ).
+
+Some files that loaded before are now refused with a message, because
+ImageIO decodes them to wrong pixels or not at all:
+
+* CMYK and YCCK JPEGs;
+* paletted PNGs with a pixel whose index is past the palette;
+* colour-mapped TGAs (image types 1 and 9) whose colour map entries are
+  not 24-bit, for example a 32-bit map with alpha;
+* colour-mapped TGAs (types 1 and 9) with a 24-bit map whose first entry
+  index is not 0, and colour-mapped TGAs with 16-bit indices;
+* TGAs with 15-bit pixels, and truecolour (type 2) TGAs with 8-bit
+  pixels;
+* truecolour TGAs that carry a colour map, which ImageIO does not
+  decode;
+* truncated JPEGs, which end inside their image data, and run-length
+  TGAs cut inside a run of pixels.
+
+Re-save such a file as an RGB or RGBA PNG, or as a 24-bit or 32-bit
+truecolour TGA without a colour map.
+
+Other truncated PNGs and TGAs are refused, as before, with one
+exception: a PNG whose compressed data is complete but holds fewer rows
+than the image declares now loads, with the missing rows filled in
+(black in an RGB image). A run-length TGA that ends between two runs
+still loads, as it did before.
+
+The OpenGL and Metal renderers look for a sky face as a `.tga` first
+and then, now on every platform, as the `.pcx`, before the Heretic II
+formats: when no `.tga` face decodes, the sky is drawn from its `.pcx`
+faces. Where paletted textures are used, the `.pcx` comes first, as
+before. On platforms other than macOS,
+iOS, iPadOS, tvOS and visionOS there is no decoder for PNG, JPEG or TGA
+at all: replacements are not loaded there, and the stock skies are
+always drawn from their `.pcx` faces.

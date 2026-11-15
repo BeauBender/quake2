@@ -447,6 +447,16 @@ endif
 
 # ----------
 
+# The image decoder (src/client/refresh/files/imgdecode.c), linked into
+# the client and every renderer: on OS X ImageIO decodes PNG, JPEG and
+# TGA (docs/decisions/0010-imageio-decoder.md). Elsewhere there is no
+# decoder and nothing is linked.
+ifeq ($(YQ2_OSTYPE), Darwin)
+IMGDECODE_LDLIBS := -framework ImageIO -framework CoreGraphics -framework CoreFoundation
+endif
+
+# ----------
+
 # When make is invoked by "make VERBOSE=1" print
 # the compiler and linker commands.
 ifdef VERBOSE
@@ -1019,6 +1029,7 @@ CLIENT_OBJS_ := \
 	src/client/menu/menu.o \
 	src/client/menu/qmenu.o \
 	src/client/menu/videomenu.o \
+	src/client/refresh/files/imgdecode.o \
 	src/client/sound/ogg.o \
 	src/client/sound/sdl.o \
 	src/client/sound/sound.o \
@@ -1095,7 +1106,8 @@ REFGL1_OBJS_ := \
 	src/client/refresh/files/surf.o \
 	src/client/refresh/files/models.o \
 	src/client/refresh/files/pcx.o \
-	src/client/refresh/files/stb.o \
+	src/client/refresh/files/image.o \
+	src/client/refresh/files/imgdecode.o \
 	src/client/refresh/files/wal.o \
 	src/client/refresh/files/pvs.o \
 	src/client/vid/glimp_hidpi.o \
@@ -1129,7 +1141,8 @@ REFGL3_OBJS_ := \
 	src/client/refresh/files/surf.o \
 	src/client/refresh/files/models.o \
 	src/client/refresh/files/pcx.o \
-	src/client/refresh/files/stb.o \
+	src/client/refresh/files/image.o \
+	src/client/refresh/files/imgdecode.o \
 	src/client/refresh/files/wal.o \
 	src/client/refresh/files/pvs.o \
 	src/common/shared/shared.o \
@@ -1171,7 +1184,8 @@ REFSOFT_OBJS_ := \
 	src/client/refresh/files/common.o \
 	src/client/refresh/files/models.o \
 	src/client/refresh/files/pcx.o \
-	src/client/refresh/files/stb.o \
+	src/client/refresh/files/image.o \
+	src/client/refresh/files/imgdecode.o \
 	src/client/refresh/files/wal.o \
 	src/client/refresh/files/pvs.o \
 	src/client/vid/glimp_hidpi.o \
@@ -1215,7 +1229,8 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/files/models.o \
 	src/client/refresh/files/pcx.o \
 	src/client/refresh/files/pvs.o \
-	src/client/refresh/files/stb.o \
+	src/client/refresh/files/image.o \
+	src/client/refresh/files/imgdecode.o \
 	src/client/refresh/files/surf.o \
 	src/client/refresh/files/wal.o \
 	src/client/vid/glimp_hidpi.o \
@@ -1326,7 +1341,7 @@ $(BINDIR)/quake2.exe : src/win-wrapper/wrapper.c icon
 else ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/quake2 : $(CLIENT_OBJS) $(SDL3_LIB)
 	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(CLIENT_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
+	${Q}$(CC) $(LDFLAGS) $(CLIENT_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(SDLLDFLAGS) -o $@
 else
 $(BINDIR)/quake2 : $(CLIENT_OBJS)
 	@echo "===> LD $@"
@@ -1352,7 +1367,7 @@ $(BINDIR)/ref_gl1.dll : $(REFGL1_OBJS)
 else ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/ref_gl1.dylib : $(REFGL1_OBJS)
 	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(REFGL1_OBJS) $(LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
+	${Q}$(CC) $(LDFLAGS) $(REFGL1_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
 else
 $(BINDIR)/ref_gl1.so : $(REFGL1_OBJS)
 	@echo "===> LD $@"
@@ -1367,7 +1382,7 @@ $(BINDIR)/ref_gl3.dll : $(REFGL3_OBJS)
 else ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/ref_gl3.dylib : $(REFGL3_OBJS)
 	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(REFGL3_OBJS) $(LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
+	${Q}$(CC) $(LDFLAGS) $(REFGL3_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
 else
 $(BINDIR)/ref_gl3.so : $(REFGL3_OBJS)
 	@echo "===> LD $@"
@@ -1382,7 +1397,7 @@ $(BINDIR)/ref_soft.dll : $(REFSOFT_OBJS)
 else ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/ref_soft.dylib : $(REFSOFT_OBJS)
 	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(REFSOFT_OBJS) $(LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
+	${Q}$(CC) $(LDFLAGS) $(REFSOFT_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
 else
 $(BINDIR)/ref_soft.so : $(REFSOFT_OBJS)
 	@echo "===> LD $@"
@@ -1393,7 +1408,7 @@ endif
 ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/ref_metal.dylib : $(REFMETAL_OBJS)
 	@echo "===> LD $@"
-	${Q}$(CC) $(LDFLAGS) $(REFMETAL_OBJS) $(LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
+	${Q}$(CC) $(LDFLAGS) $(REFMETAL_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
 endif
 
 # baseq2/game.so
