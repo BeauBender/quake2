@@ -2100,9 +2100,11 @@ Handed over to N10 (TASK93, #204) and the owner:
   accept value; a build that draws no particles passes it on all 23 frames (worst 0.011398, bad
   0.105537). The unseeded accept value (0.02 / 0.25) does not detect missing particles, so
   `particles` should be judged seeded only, at `--threshold 0.005 --bad-threshold 0.001`, as
-  `dlights` is (N8 did that for `dlights`). Changing `scripts/pins/scenarios/particles.cfg` and
-  `doc/100_renderpins.md` for that is handed to N10 (TASK93, #204); N9 could not change an existing
-  scenario file.
+  `dlights` is (N8 did that for `dlights`). N10 (TASK93, #204) must change three places for that:
+  the header comment of `scripts/pins/scenarios/particles.cfg` (its accept value),
+  `doc/100_renderpins.md`, and the `particles` row of section 11's table (line 390 above), which
+  still says `--threshold 0.02 --bad-threshold 0.25`. N9 could not change an existing scenario
+  file and left all three as they are.
 - The frame time on this host depends on the display: while the display was in use the timedemo
   of both renderers was held to 60 fps with the default `r_vsync 1`; the table is with
   `+set r_vsync 0`.

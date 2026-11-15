@@ -4124,7 +4124,7 @@ rm_point_quads(const rm_points_t *s, const float *mv, const float *mvp, const rm
 		rm_point_xform(mvp, p->pos, clip);
 
 		/* GL 1.4, section 2.12: a point outside the clip volume is discarded */
-		if (!(clip[3] > 0) || !(fabs(clip[0]) <= clip[3]) || !(fabs(clip[1]) <= clip[3]) || fabs(clip[2]) > clip[3])
+		if (!(clip[3] > 0) || !(fabs(clip[0]) <= clip[3]) || !(fabs(clip[1]) <= clip[3]) || !(fabs(clip[2]) <= clip[3]))
 		{
 			continue;
 		}

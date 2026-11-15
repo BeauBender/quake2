@@ -6972,7 +6972,7 @@ test_point_quads(void)
 			{ 1.001f, 0, 0, 1 }, { -1.001f, 0, 0, 1 }, { 0, 1.001f, 0, 1 }, { 0, -1.001f, 0, 1 },
 			{ 0, 0, 1.001f, 1 }, { 0, 0, -1.001f, 1 }, { 0, 0, 0, 0 }, { 0, 0, 0, -1 }, { NAN, 0, 0, 1 },
 			{ 0, NAN, 0, 1 }, { 0, 0, NAN, 1 }
-		};
+		};	/* the last is dropped by the x test (0 * NaN is NaN in every clip row), not the z test */
 		static const float edge[][4] = { { 1, 0, 0, 1 }, { -1, 0, 0, 1 }, { 0, 1, 0, 1 }, { 0, -1, 0, 1 }, { 0, 0, 1, 1 }, { 0, 0, -1, 1 } };
 
 		for (i = 0; i < (long)(sizeof(out) / sizeof(out[0])); i++)
@@ -7009,6 +7009,26 @@ test_point_quads(void)
 		p.vw = 0;
 		k = rm_point_quads(&p, id, id, in, 3, got, 12, idx, 18);
 		CHECK(k == 0);
+
+		/* nor does one with a width but no height */
+		p.vw = 640;
+		p.vh = 0;
+		k = rm_point_quads(&p, id, id, in, 3, got, 12, idx, 18);
+		CHECK(k == 0);
+	}
+
+	/* a NaN depth with x, y and w finite is refused like the others: m[10] NaN makes clip z NaN only */
+	{
+		rm_points_t p = test_points(3, 0, 100, 1, 0, 0, 0);
+		float nz[16];
+
+		memcpy(nz, id, sizeof(nz));
+		nz[10] = NAN;
+		memset(in, 0, sizeof(in[0]));
+		in[0].pos[2] = 1;
+		in[0].pos[3] = 1;
+		CHECK(rm_point_quads(&p, id, id, in, 1, got, 4, idx, 6) == 1);
+		CHECK(rm_point_quads(&p, id, nz, in, 1, got, 4, idx, 6) == 0);
 	}
 
 	/* the capacity: -1 and nothing written when n or the buffers are out of bounds */
@@ -7187,6 +7207,15 @@ test_particle_tri(void)
 		CHECK(!rm_particle_tri(o, eye, vpn, big_up, vright, v));
 		o[0] = NAN;
 		CHECK(!rm_particle_tri(o, eye, vpn, vup, vright, v));
+	}
+
+	/* only the z of vertex 1, then only the x of vertex 2, not finite (1.5 * 3e38 is inf as a float) */
+	{
+		const float zup[3] = { 0, 0, 3e38f }, xr[3] = { 3e38f, 0, 0 };
+
+		o[0] = 110; o[1] = 205; o[2] = 290;
+		CHECK(!rm_particle_tri(o, eye, vpn, zup, vright, v));
+		CHECK(!rm_particle_tri(o, eye, vpn, vup, xr, v));
 	}
 }
 

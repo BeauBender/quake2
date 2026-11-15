@@ -2009,7 +2009,8 @@ PINS_SEED=1 scripts/pins.sh compare metal particles --ref gl1-metal --ref-id <ea
 # every other scenario as in N8 (models and skywater from water.dm2 against two records)
 ```
 
-The sweep, one source (`77c46ced` plus the change, pin id `77c46ced6e72-d3752008510`), 17:58 to
+The sweep, one source (`77c46ced` plus the change, pin id `77c46ced6e72-d3752008510`; that source is the one of commit
+`786790e9`: `git diff 77c46ced 786790e9 -- src Makefile | cksum` gives 3752008510), 17:58 to
 17:59 local, every record with the validation layer, every `engine.log` holding only `Metal API
 Validation Enabled` and, for `metal`, `teardown: 0 live objects`, `0 unreleased`, `0 unmatched`:
 
