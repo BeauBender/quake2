@@ -8006,6 +8006,15 @@ test_scale8(void)
 {
 	int w = -1, h = -1;
 
+	/* a picture that fits unscaled but not scaled is uploaded unscaled (R_LoadPic), not dropped */
+	{
+		size_t b;
+
+		CHECK(rm_upload_bytes(3000, 3000, RMB_STAGING_BYTES, &b));
+		CHECK(!rm_upload_bytes(6000, 6000, RMB_STAGING_BYTES, &b));
+		CHECK(rm_scale8_dims(3000, 3000, 2, &w, &h) && w == 6000 && h == 6000);
+	}
+
 	CHECK(rm_scale8_factor(0, 0, 2000) == 1);
 	CHECK(rm_scale8_factor(0, 1, 2000) == 1);
 	CHECK(rm_scale8_factor(1, 0, 719) == 2);

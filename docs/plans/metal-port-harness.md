@@ -3688,13 +3688,18 @@ WITH_METAL_SHIM=yes`) with the same setting, `--threshold 0.005
 --bad-threshold 0.001`: `world-scale8` at 640x480 (factor 2) 23 frames, 0
 failed, worst score 0 (a frame has 5 pixels that differ, by at most 4 of
 255); at 1280x720 (factor 3) 23 frames, 0 failed, worst 1e-06, worst bad
-9e-06; `hud2d-scale8` 23 frames, 0 failed, worst 0. The setting acts: a
-`world-scale8` frame differs from a `world` frame in 125,000 pixels of
-307,200. `hud2d-scale8` is the same as `hud2d` because the HUD pictures are
-in the scrap, which gl1 does not scale; the console background and the
-menus are the pictures it changes, and no pin plays them (a scenario is a
-list of `set` lines, and the demo's console is shut), so those are
-stills.
+9e-06. The setting acts: a `world-scale8` frame differs from a `world`
+frame in 125,000 pixels of 307,200. `hud2d-scale8` is smoothed, not
+scaled: the HUD pictures are in the scrap, and gl1 smooths the scrap copy
+(`Scrap_Update` reaches `R_Upload32`), as `rm_scrap.c` now does (the
+first version of this branch did not, and the comparison at 0.005 could not
+see a step of 2 in a channel). Rework: `hud2d-scale8` from `metal` against
+`gl1-metal` at `--threshold 0 --bad-threshold 0`, 23 frames, 0 failed,
+worst 0, worst bad 0; and `metal` `hud2d-scale8` against `metal` `hud2d`
+differs in all 23 frames, 55 bytes in all, the same 55 as `gl1-metal`'s
+pair. The console background and the menus are the other pictures it
+changes, and no pin plays them (a scenario is a list of `set` lines, and
+the demo's console is shut), so those are stills.
 
 **`metal_2d_sharp 1`.** At 2560x1440 (this VM opens it; the window is the
 drawable) the 2D scale is 4, an integer: all 23 frames of `hud2d-sharp`
