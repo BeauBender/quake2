@@ -3667,6 +3667,17 @@ side that was already right) led to the simpler code, and the exact-limit
 case was added for a third; `rm_2d_sharp` first had redundant index bounds
 whose mutants survived, and is now the two sampler values it accepts.
 
+Rework mutants (round 1): `mtl_sharp_coord` (the offset of the blend, the
+shape of the ramp, the `d` clamp) and the over-size case, 6 mutants, 6 killed;
+the monotonic check now runs and a slow decrease of 2e-5 per texel is killed
+(together with the other checks, which also fire). The scrap smoothing:
+removing the call is killed (`hud2d-scale8` against `gl1-metal` then differs
+by 55 bytes), making its guard always true is killed (`hud2d-scale8` then
+equals `hud2d`). Not killed by any committed test: the fallback of `R_LoadPic`
+to an unscaled upload (a picture past the staging limit when scaled needs a
+multi-megabyte 8-bit pic that no scenario has; the pure sizes it rests on are
+tested) and `vid_loaded_renderer` (a name set and cleared in `vid.c`).
+
 **Default pins unchanged.** The reference is a record of `metal` built at
 `1701a052`; the candidate is this branch with every switch at its default,
 `--threshold 0 --bad-threshold 0`, 640x480, `PINS_SEED=1` for `dlights`,
