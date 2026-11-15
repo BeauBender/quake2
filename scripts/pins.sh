@@ -756,23 +756,47 @@ parse_band() {
     case " $fp_metrics " in *" $m "*) ;; *) die "a band's metric is one of: $fp_metrics; got '$m'";; esac
     echo "$m=$r"
 }
-# scenario_bands <scenario>: one "<metric>=<lo>..<hi>" per "// footprint ..."
-# line of the scenario file. A line that starts that way and does not parse
-# is an error, never skipped
-scenario_bands() {
-    local cfg="$scen_dir/$1.cfg" line
-    [ -f "$cfg" ] || return 0
+# check_out_file <path>: a file this command writes is never an existing
+# symbolic link (dangling or not) or anything but a regular file
+check_out_file() {
+    if [ -L "$1" ] || { [ -e "$1" ] && [ ! -f "$1" ]; }; then
+        die "$1 is a symbolic link or not a regular file; nothing is written through it"
+    fi
+}
+# check_frame_name <name> <dir>: a frame name never holds a control character
+# (a newline would forge a line of the table)
+check_frame_name() {
+    case $1 in *[[:cntrl:]]*) die "a frame name in $2 holds a control character; nothing is compared";; esac
+}
+# cfg_bands <cfg>: one "<metric>=<lo>..<hi>" per "// footprint ..." line of the
+# scenario file's leading comment block (the lines before its first "set").
+# A line that looks like a band ("//" then "footprint") and does not parse is
+# an error, never skipped
+cfg_bands() {
+    local line
     while IFS= read -r line || [ -n "$line" ]; do
         case $line in
-            '// footprint '*) parse_band "${line#// footprint }";;
+            ''|//*) ;;
+            *) break;;
         esac
-    done < "$cfg"
+        if [[ $line =~ ^[[:space:]]*//[[:space:]]*footprint ]]; then
+            case $line in
+                '// footprint '*) parse_band "${line#// footprint }";;
+                *) die "$1: a footprint line is '// footprint <metric> <lo>..<hi>' with single spaces, got: $line";;
+            esac
+        fi
+    done < "$1"
+}
+# scenario_bands <scenario>: the bands of the scenario's cfg, which must exist
+scenario_bands() {
+    [ -f "$scen_dir/$1.cfg" ] || die "no scenario $1 (see $scen_dir)"
+    cfg_bands "$scen_dir/$1.cfg"
 }
 # fp_dir <scenario> <renderer> <value>: a directory of frames, named by path
 # (a value holding "/") or as an id under <store>/<scenario>/<renderer>/
 fp_dir() {
     local d=$3
-    case $d in */*) ;; *) check_store "$1" "$2"; d="$(store)/$1/$2/$d";; esac
+    case $d in */*) ;; ''|.*) die "an id is a directory name not starting with '.', got '$d'";; *) check_store "$1" "$2"; d="$(store)/$1/$2/$d";; esac
     [ -d "$d" ] || die "no frames at $d"
     echo "${d%/}"
 }
@@ -794,29 +818,32 @@ cmd_footprint() {
         shift 2
     done
     [ -n "$off" ] && [ -n "$on" ] || die "usage: pins.sh footprint <scenario> --off <dir|id> --on <dir|id> [--renderer r] [--mask-dir d] [--delta n] [--band 'metric lo..hi']... [--out dir]"
+    [ -f "$scen_dir/$scenario.cfg" ] || die "no scenario $scenario (see $scen_dir)"
     local src=flags
     if [ ${#bands[@]} -eq 0 ]; then
         src="$scenario.cfg"
         local blist; blist=$(scenario_bands "$scenario") || exit 1
         while IFS= read -r b; do [ -n "$b" ] && bands+=("$b"); done <<< "$blist"
     fi
-    [ -n "$out" ] && check_out_path "$out"
+    if [ -n "$out" ]; then check_out_path "$out"; check_out_file "$out/footprint-$scenario.txt"; fi
     local offd ond diff; offd=$(fp_dir "$scenario" "$renderer" "$off"); ond=$(fp_dir "$scenario" "$renderer" "$on")
     [ -z "$maskdir" ] || [ -d "$maskdir" ] || die "no mask directory $maskdir"
+    check_store
     diff=$(PINS_DIFF= difftool)
     local bargs=() band_text="none"
     if [ ${#bands[@]} -gt 0 ]; then
         for b in "${bands[@]}"; do bargs+=(--band "$b"); done
         band_text="${bands[*]} (from $src)"
     fi
-    local report="" f base line rc nfr=0 nout=0 outframes="" worst_dark=0 worst_chg=0 sum_dark=0 worst_max=0 miss=0 v mask_args
-    report=$(printf '%-24s %-9s %-9s %-9s %-7s %-8s %s\n' frame changed darker brighter max mean band)
+    local report="" f base line rc nfr=0 nout=0 outframes="" worst_dark=0 worst_chg=0 sum_dark=0 worst_max=0 worst_ch=0 miss=0 ncmp=0 v mask_args
+    report=$(printf '%-24s %-9s %-9s %-9s %-7s %-7s %-8s %s\n' frame changed darker brighter max chmax mean band)
     for f in "$offd"/*.tga; do
         [ -f "$f" ] || continue
-        base=$(basename "$f"); nfr=$((nfr+1))
+        base=$(basename "$f"); check_frame_name "$base" "$offd"; nfr=$((nfr+1))
         if [ ! -f "$ond/$base" ]; then
             report="$report"$'\n'$(printf '%-24s %s' "$base" "MISSING in the on record"); miss=$((miss+1)); continue
         fi
+        ncmp=$((ncmp+1))
         mask_args=()
         if [ -n "$maskdir" ]; then
             [ -f "$maskdir/$base" ] || die "the mask directory has no $base"
@@ -825,32 +852,39 @@ cmd_footprint() {
         rc=0; line=$("$diff" --footprint "$f" "$ond/$base" --delta "$delta" ${mask_args[@]+"${mask_args[@]}"} ${bargs[@]+"${bargs[@]}"}) || rc=$?
         case $rc in 0|2) ;; *) die "framediff --footprint failed on $base (exit $rc)";; esac
         v=$(fp_field "$line" band)
-        report="$report"$'\n'$(printf '%-24s %-9s %-9s %-9s %-7s %-8s %s' "$base" "$(fp_field "$line" changed)" "$(fp_field "$line" darker)" "$(fp_field "$line" brighter)" "$(fp_field "$line" max)" "$(fp_field "$line" mean)" "$v")
+        report="$report"$'\n'$(printf '%-24s %-9s %-9s %-9s %-7s %-7s %-8s %s' "$base" "$(fp_field "$line" changed)" "$(fp_field "$line" darker)" "$(fp_field "$line" brighter)" "$(fp_field "$line" max)" "$(fp_field "$line" chmax)" "$(fp_field "$line" mean)" "$v")
         if [ "$rc" = 2 ]; then nout=$((nout+1)); outframes="$outframes $base"; fi
         worst_dark=$(awk -v a="$worst_dark" -v b="$(fp_field "$line" darker)" 'BEGIN{print (b>a)?b:a}')
         worst_chg=$(awk -v a="$worst_chg" -v b="$(fp_field "$line" changed)" 'BEGIN{print (b>a)?b:a}')
         worst_max=$(awk -v a="$worst_max" -v b="$(fp_field "$line" max)" 'BEGIN{print (b>a)?b:a}')
+        worst_ch=$(awk -v a="$worst_ch" -v b="$(fp_field "$line" chmax)" 'BEGIN{print (b>a)?b:a}')
         sum_dark=$(awk -v a="$sum_dark" -v b="$(fp_field "$line" darker)" 'BEGIN{printf "%.6f", a+b}')
     done
     for f in "$ond"/*.tga; do
         [ -f "$f" ] || continue
+        check_frame_name "$(basename "$f")" "$ond"
         [ -f "$offd/$(basename "$f")" ] || { report="$report"$'\n'$(printf '%-24s %s' "$(basename "$f")" "EXTRA in the on record"); miss=$((miss+1)); }
     done
     local summary
     summary="scenario=$scenario off=$offd on=$ond"$'\n'"delta=$delta${maskdir:+ mask=$maskdir}"$'\n'"band: $band_text"$'\n'
-    summary="${summary}frames=$nfr out_of_band=$nout unmatched=$miss worst_changed=$worst_chg worst_darker=$worst_dark worst_max=$worst_max"
-    [ "$nfr" -eq 0 ] || summary="$summary mean_darker=$(awk -v s="$sum_dark" -v n="$nfr" 'BEGIN{printf "%.6f", s/n}')"
-    if [ ${#bands[@]} -eq 0 ]; then summary="$summary"$'\n'"no band declared: the footprint is reported and never fails"
-    elif [ "$nout" -gt 0 ]; then summary="$summary"$'\n'"OUT OF BAND:$outframes"
+    summary="${summary}frames=$nfr out_of_band=$nout unmatched=$miss worst_changed=$worst_chg worst_darker=$worst_dark worst_max=$worst_max worst_chmax=$worst_ch"
+    [ "$ncmp" -eq 0 ] || summary="$summary mean_darker=$(awk -v s="$sum_dark" -v n="$ncmp" 'BEGIN{printf "%.6f", s/n}')"
+    # the verdict line is decided last, from the same checks as the exit code
+    local rc_fp=0
+    if [ "$nfr" -eq 0 ]; then summary="$summary"$'\n'"the off record holds no frames: nothing was compared"; rc_fp=1
+    elif [ "$miss" -gt 0 ]; then
+        summary="$summary"$'\n'"UNMATCHED: $miss frame(s) missing from the on record or only in it"; rc_fp=1
+        [ "$nout" -eq 0 ] || summary="$summary"$'\n'"OUT OF BAND:$outframes"
+    elif [ ${#bands[@]} -eq 0 ]; then summary="$summary"$'\n'"no band declared: the footprint is reported and never fails"
+    elif [ "$nout" -gt 0 ]; then summary="$summary"$'\n'"OUT OF BAND:$outframes"; rc_fp=1
     else summary="$summary"$'\n'"all frames inside the band"; fi
     printf '%s\n' "$report"; printf '%s\n' "$summary"
     if [ -n "$out" ]; then
-        mkdir -p "$out"; printf '%s\n%s\n' "$report" "$summary" > "$out/footprint-$scenario.txt"
+        mkdir -p "$out"; check_out_file "$out/footprint-$scenario.txt"
+        printf '%s\n%s\n' "$report" "$summary" > "$out/footprint-$scenario.txt"
         echo "written: $out/footprint-$scenario.txt"
     fi
-    [ "$nfr" -gt 0 ] || { echo "the off record holds no frames"; return 1; }
-    [ "$miss" -eq 0 ] || return 1
-    [ "$nout" -eq 0 ]
+    return "$rc_fp"
 }
 
 # where <scenario> --off <dir|id> --on <dir|id> --out <dir> [--renderer r] [--mask-dir d] [--top N] [--delta n]
@@ -871,21 +905,30 @@ cmd_where() {
         shift 2
     done
     [ -n "$off" ] && [ -n "$on" ] && [ -n "$out" ] || die "usage: pins.sh where <scenario> --off <dir|id> --on <dir|id> --out <dir> [--renderer r] [--mask-dir d] [--top N] [--delta n]"
+    [ -f "$scen_dir/$scenario.cfg" ] || die "no scenario $scenario (see $scen_dir)"
     check_out_path "$out"
     local offd ond diff; offd=$(fp_dir "$scenario" "$renderer" "$off"); ond=$(fp_dir "$scenario" "$renderer" "$on")
     [ -z "$maskdir" ] || [ -d "$maskdir" ] || die "no mask directory $maskdir"
+    check_store
     diff=$(PINS_DIFF= difftool)
-    mkdir -p "$out"
-    local f base line rc list="" mask_args n=0 win
+    local f base line rc list="" mask_args n=0 win chosen
     for f in "$offd"/*.tga; do
         [ -f "$f" ] || continue
-        base=$(basename "$f"); [ -f "$ond/$base" ] || die "the on record has no $base"
+        base=$(basename "$f"); check_frame_name "$base" "$offd"; [ -f "$ond/$base" ] || die "the on record has no $base"
         mask_args=(); if [ -n "$maskdir" ]; then [ -f "$maskdir/$base" ] || die "the mask directory has no $base"; mask_args=(--mask "$maskdir/$base"); fi
         rc=0; line=$("$diff" --footprint "$f" "$ond/$base" --delta "$delta" ${mask_args[@]+"${mask_args[@]}"}) || rc=$?
         [ "$rc" = 0 ] || die "framediff --footprint failed on $base (exit $rc)"
         list="$list$(fp_field "$line" changed) $base"$'\n'
     done
     [ -n "$list" ] || die "the off record holds no frames"
+    chosen=$(printf '%s' "$list" | sort -k1,1gr -k2,2 | head -n "$top")
+    # nothing is written through a link: every file is judged before the first is written
+    while IFS=' ' read -r _ base; do
+        [ -n "$base" ] || continue
+        base=${base%.tga}
+        check_out_file "$out/$base-highlight.tga"; check_out_file "$out/$base-zoom.tga"
+    done <<< "$chosen"
+    mkdir -p "$out"
     while IFS=' ' read -r _ base; do
         [ -n "$base" ] || continue
         mask_args=(); if [ -n "$maskdir" ]; then mask_args=(--mask "$maskdir/$base"); fi
@@ -894,33 +937,47 @@ cmd_where() {
         win=$("$diff" --zoom "$offd/$base.tga" "$ond/$base.tga" "$out/$base-zoom.tga" ${mask_args[@]+"${mask_args[@]}"}) || die "zoom failed on $base"
         echo "$base: $out/$base-highlight.tga, $out/$base-zoom.tga ($win)"
         n=$((n+1))
-    done <<< "$(printf '%s' "$list" | sort -k1,1gr -k2,2 | head -n "$top")"
+    done <<< "$chosen"
     echo "wrote $n frame pairs into $out (TGA; open them in Preview)"
 }
 
 # ---- content tags (TASK133) ----
 content_tags='world entities alias-models particles dynamic-lights 2d cinematic'
-# cfg_value <cfg> <cvar>: the value a scenario file sets, empty when it does not
-cfg_value() { sed -n "s/^set $2 \([A-Za-z0-9_.-]*\)\$/\1/p" "$1" | head -n 1; }
+# The cvars that decide what the scene contains. A companion of a scenario with
+# a footprint band may differ from it in these (that is the point of a
+# companion: the same scene with entities on) and in the demo and frame
+# settings, and in nothing else.
+content_cvars='cl_entities cl_particles cl_lights cl_gun cl_blend gl_polyblend'
+frame_cvars='timedemo scr_conspeed cl_showfps viewsize crosshair'
+# cfg_value <cfg> <cvar>: the value a scenario file sets, empty when it does
+# not. The last "set" wins, as it does in the engine's argument list
+cfg_value() { sed -n "s/^set $2 \([A-Za-z0-9_.-]*\)\$/\1/p" "$1" | tail -n 1; }
+# cfg_sets <cfg>: "<cvar> <value>" for every cvar the file sets, the last value of each
+cfg_sets() { awk '/^set [^ ]+ [^ ]+$/ { v[$2] = $3 } END { for (k in v) print k, v[k] }' "$1" | sort; }
 # check_content <readme> <scenario dir>: every scenario file has one row in the
 # README's "Content" table with tags that match what its cvars draw, and a
-# scenario that sets cl_entities 0 names a companion that sets it to 1.
+# scenario that sets cl_entities 0 names a companion that sets it to 1. When
+# that scenario declares a footprint band, the companion also declares the same
+# bands and sets every other cvar of the scenario to the same value (the content
+# and frame cvars above excepted), so that the companion carries the effect.
 # Prints each problem, returns non-zero when there is one.
 check_content() {
-    local readme=$1 dir=$2 bad=0 cfg name row tags comp t want e rows
+    local readme=$1 dir=$2 bad=0 cfg name row tags comp t want e rows bands cbands k v cv cfgs
+    cfgs=("$dir"/*.cfg)
+    set -f   # the README's names and tags are read literally, never as globs
     # the rows of the Content table: scenario, tags, companion
     rows=$(awk -F'|' '/^## / { on=0 } /^\| Scenario \| Tags \| Companion \|/ { on=1; next } on && /^\| `/ { n=$2; gsub(/[ `]/, "", n); t=$3; gsub(/ /, "", t); c=$4; gsub(/[ `]/, "", c); print n " " t " " c }' "$readme")
-    [ -n "$rows" ] || { echo "content: $readme has no '| Scenario | Tags | Companion |' table of scenario rows"; return 1; }
-    for cfg in "$dir"/*.cfg; do
+    [ -n "$rows" ] || { set +f; echo "content: $readme has no '| Scenario | Tags | Companion |' table of scenario rows"; return 1; }
+    for cfg in "${cfgs[@]}"; do
         [ -f "$cfg" ] || continue
         name=$(basename "$cfg" .cfg)
         row=$(printf '%s\n' "$rows" | awk -v n="$name" '$1 == n')
         if [ -z "$row" ]; then echo "content: scenario $name has no row in the Content table"; bad=1; continue; fi
         [ "$(printf '%s\n' "$row" | wc -l | tr -d ' ')" = 1 ] || { echo "content: scenario $name has more than one row"; bad=1; continue; }
         read -r _ tags comp <<< "$row"
-        for t in $(echo "$tags" | tr , ' '); do
+        while IFS= read -r t; do
             case " $content_tags " in *" $t "*) ;; *) echo "content: $name carries the unknown tag '$t' (one of: $content_tags)"; bad=1;; esac
-        done
+        done <<< "$(echo "$tags" | tr , '\n')"
         # the tags follow the scenario's cvars
         e=$(cfg_value "$cfg" cl_entities)
         for want in "world:$([ "$(cfg_value "$cfg" r_drawworld)" = 1 ] && [ "$name" != cinematic ] && echo y || echo n)" "entities:$([ "$e" = 1 ] && echo y || echo n)" "alias-models:$([ "$e" = 1 ] && echo y || echo n)" \
@@ -932,16 +989,30 @@ check_content() {
                 *) [ "${want#*:}" = n ] || { echo "content: $name draws $t (see its cvars) but is not tagged $t"; bad=1; };; esac
         done
         case ",$tags," in *",cinematic,"*) [ "$name" = cinematic ] || { echo "content: only the cinematic scenario is tagged cinematic"; bad=1; };; esac
+        # a header line that looks like a band and does not parse is an error here too
+        bands=$(cfg_bands "$cfg" 2>&1) || { echo "content: $bands"; bad=1; bands=""; }
         # a scenario without entities names a companion that has them
         if [ "$e" = 0 ]; then
             if [ -z "$comp" ] || [ "$comp" = - ]; then echo "content: $name sets cl_entities 0 and names no full-content companion"; bad=1
             elif [ ! -f "$dir/$comp.cfg" ]; then echo "content: $name names the companion $comp, which is not a scenario"; bad=1
-            elif [ "$(cfg_value "$dir/$comp.cfg" cl_entities)" != 1 ]; then echo "content: the companion $comp of $name does not set cl_entities 1"; bad=1; fi
+            elif [ "$(cfg_value "$dir/$comp.cfg" cl_entities)" != 1 ]; then echo "content: the companion $comp of $name does not set cl_entities 1"; bad=1
+            elif [ -n "$bands" ]; then
+                # a scenario with a band: the companion carries the band and the effect
+                cbands=$(cfg_bands "$dir/$comp.cfg" 2>&1)
+                [ "$(printf '%s\n' "$bands" | sort)" = "$(printf '%s\n' "$cbands" | sort)" ] || { echo "content: the companion $comp of $name does not declare the same footprint band as $name"; bad=1; }
+                while read -r k v; do
+                    [ -n "$k" ] || continue
+                    case " $content_cvars $frame_cvars " in *" $k "*) continue;; esac
+                    cv=$(cfg_value "$dir/$comp.cfg" "$k")
+                    [ "$cv" = "$v" ] || { echo "content: the companion $comp of $name does not set $k $v (it has '${cv:-nothing}'): it would not carry the effect"; bad=1; }
+                done <<< "$(cfg_sets "$cfg")"
+            fi
         fi
     done
-    for name in $(printf '%s\n' "$rows" | awk '{print $1}'); do
+    while IFS= read -r name; do
         [ -f "$dir/$name.cfg" ] || { echo "content: the Content table names $name, which is not a scenario"; bad=1; }
-    done
+    done <<< "$(printf '%s\n' "$rows" | awk '{print $1}')"
+    set +f
     return $bad
 }
 

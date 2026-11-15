@@ -17,7 +17,9 @@
  * that marks nothing passes. M must have the frames' size (3 otherwise).
  *
  * Reads uncompressed 24/32-bit TGA (type 2), the format the engine's pin
- * capture writes. Portable C99, no dependencies: cc -O2 -o framediff framediff.c
+ * capture writes; a frame with no pixels (width or height 0) is refused (3).
+ * An image it writes is never written through a symbolic link or over
+ * anything but a regular file, and is at most 65535 pixels each way. Portable C99, no dependencies: cc -O2 -o framediff framediff.c
  *
  *   framediff A.tga B.tga [--threshold T] [--bad-threshold B] [--mask M.tga]
  *                                             compare (default T = 0.02, B = 0.005)
@@ -33,11 +35,14 @@
  *
  *   framediff --footprint A.tga B.tga [--delta D] [--mask M.tga] [--band METRIC=LO..HI]...
  *       prints one line, "footprint changed=<f> darker=<f> brighter=<f>
- *       max=<levels> maxdark=<levels> maxbright=<levels> mean=<levels>
+ *       max=<levels> maxdark=<levels> maxbright=<levels> chmax=<levels> mean=<levels>
  *       w=<n> h=<n> delta=<D> [masked=<n>] band=<none|ok|OUT:metric,...>":
  *       changed, darker and brighter are shares (0..1) of the counted
  *       pixels, max is the largest |change|, mean the mean |change| over
- *       all counted pixels. Exits 0, or 2 when a --band is violated
+ *       all counted pixels. chmax is the largest change of any single
+ *       channel (max and mean average the three channels, so a colour-only
+ *       shift, red down and blue up, leaves them at 0 and shows in chmax).
+ *       Exits 0, or 2 when a --band is violated
  *       (METRIC is changed, darker, brighter, max or mean; LO..HI inclusive;
  *       the option may repeat), 3 on a format or size mismatch, 1 on a
  *       usage error.
@@ -55,6 +60,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 typedef struct { int w, h, bpp, desc; unsigned char *px; } frame_t;
 
@@ -65,6 +74,7 @@ static int read_tga(const char *path, frame_t *f)
 	if (!fp) { fprintf(stderr, "framediff: cannot open %s\n", path); return 0; }
 	if (fread(hdr, 1, 18, fp) != 18 || hdr[2] != 2) { fprintf(stderr, "framediff: %s is not an uncompressed truecolor TGA\n", path); fclose(fp); return 0; }
 	f->w = hdr[12] | (hdr[13] << 8); f->h = hdr[14] | (hdr[15] << 8); f->bpp = hdr[16] / 8; f->desc = hdr[17];
+	if (f->w < 1 || f->h < 1) { fprintf(stderr, "framediff: %s has no pixels (%dx%d)\n", path, f->w, f->h); fclose(fp); return 0; }
 	if (f->bpp != 3 && f->bpp != 4) { fprintf(stderr, "framediff: %s: unsupported depth %d\n", path, hdr[16]); fclose(fp); return 0; }
 	fseek(fp, hdr[0], SEEK_CUR);
 	size_t n = (size_t)f->w * f->h * f->bpp;
@@ -74,11 +84,29 @@ static int read_tga(const char *path, frame_t *f)
 	return 1;
 }
 
+/* open an output file for writing, never through a symbolic link and never
+ * over anything but a regular file: the path of an image may be planted */
+static FILE *open_out(const char *path)
+{
+	struct stat st;
+	int fd;
+	FILE *fp;
+	if (lstat(path, &st) == 0 && !S_ISREG(st.st_mode)) { fprintf(stderr, "framediff: %s exists and is not a regular file (a symbolic link is never written through)\n", path); return NULL; }
+	fd = open(path, O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0666);
+	if (fd < 0) { fprintf(stderr, "framediff: cannot write %s: %s\n", path, strerror(errno)); return NULL; }
+	if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || ftruncate(fd, 0) != 0) { fprintf(stderr, "framediff: %s is not a regular file\n", path); close(fd); return NULL; }
+	fp = fdopen(fd, "wb");
+	if (!fp) close(fd);
+	return fp;
+}
+
 static int write_tga(const char *path, const frame_t *f)
 {
 	unsigned char hdr[18] = {0};
+	FILE *fp;
+	if (f->w < 1 || f->h < 1 || f->w > 65535 || f->h > 65535) { fprintf(stderr, "framediff: an image of %dx%d does not fit a TGA (1 to 65535 each way)\n", f->w, f->h); return 0; }
 	hdr[2] = 2; hdr[12] = f->w & 255; hdr[13] = f->w >> 8; hdr[14] = f->h & 255; hdr[15] = f->h >> 8; hdr[16] = f->bpp * 8; hdr[17] = f->desc;
-	FILE *fp = fopen(path, "wb");
+	fp = open_out(path);
 	if (!fp) return 0;
 	fwrite(hdr, 1, 18, fp); fwrite(f->px, 1, (size_t)f->w * f->h * f->bpp, fp); fclose(fp);
 	return 1;
@@ -134,13 +162,18 @@ static int footprint_main(int argc, char **argv)
 	frame_t a, b, m;
 	if (!read_pair(argv[2], argv[3], mask_path, &a, &b, &m)) return 3;
 	size_t npx = (size_t)a.w * a.h, n = 0, nchg = 0, ndark = 0, nbright = 0;
-	double maxdark = 0, maxbright = 0, sumabs = 0;
+	double maxdark = 0, maxbright = 0, sumabs = 0, chmax = 0;
 	for (size_t i = 0; i < npx; i++) {
 		if (!marked_px(&m, i)) continue;
 		n++;
 		int s = change_sum(&a, &b, i);
 		double d = s / 3.0, ad = d < 0 ? -d : d;
 		sumabs += ad;
+		for (int c = 0; c < 3; c++) {
+			double dc = (double)b.px[i * b.bpp + c] - (double)a.px[i * a.bpp + c];
+			if (dc < 0) dc = -dc;
+			if (dc > chmax) chmax = dc;
+		}
 		if (s < 0 && ad > maxdark) maxdark = ad;
 		if (s > 0 && ad > maxbright) maxbright = ad;
 		if (ad > delta) { nchg++; if (s < 0) ndark++; else nbright++; }
@@ -148,8 +181,8 @@ static int footprint_main(int argc, char **argv)
 	double vals[5], maxv = maxdark > maxbright ? maxdark : maxbright;
 	vals[0] = n ? (double)nchg / n : 0; vals[1] = n ? (double)ndark / n : 0; vals[2] = n ? (double)nbright / n : 0; vals[3] = maxv; vals[4] = n ? sumabs / n : 0;
 	static const char *names[5] = { "changed", "darker", "brighter", "max", "mean" };
-	printf("footprint changed=%.6f darker=%.6f brighter=%.6f max=%.2f maxdark=%.2f maxbright=%.2f mean=%.4f w=%d h=%d delta=%g",
-		vals[0], vals[1], vals[2], maxv, maxdark, maxbright, vals[4], a.w, a.h, delta);
+	printf("footprint changed=%.6f darker=%.6f brighter=%.6f max=%.2f maxdark=%.2f maxbright=%.2f chmax=%.2f mean=%.4f w=%d h=%d delta=%g",
+		vals[0], vals[1], vals[2], maxv, maxdark, maxbright, chmax, vals[4], a.w, a.h, delta);
 	if (m.px) printf(" masked=%zu", n);
 	char viol[128] = ""; int out = 0;
 	for (int k = 0; k < nb; k++) for (int j = 0; j < 5; j++) if (!strcmp(bm[k], names[j])) {
@@ -231,6 +264,7 @@ static int zoom_main(int argc, char **argv)
 		if (v > best) { best = v; bx = x; by = y; }
 	}
 	free(sat);
+	if ((long)2 * ww * scale > 65535 || (long)wh * scale > 65535) { fprintf(stderr, "framediff: the zoom image would be %ldx%ld, over the 65535 a TGA holds; use a smaller --window or --scale\n", (long)2 * ww * scale, (long)wh * scale); return 1; }
 	o.w = 2 * ww * scale; o.h = wh * scale; o.bpp = 3; o.desc = a.desc;
 	o.px = malloc((size_t)o.w * o.h * 3);
 	if (!o.px) return 1;
