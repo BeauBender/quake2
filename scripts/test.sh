@@ -49,7 +49,13 @@ gate_t0=$(date +%s)
 # builds among them (autorelease-pool, metal-shim, ref-metal) copy the tree
 # into it; static-modules builds in the checkout with STATIC_ROOT in it.
 gate_serial=""
-scripts/gate-checks.sh "$gate_serial" tests/check-*.sh
+# gate_first: the long checks, longest first, started before the others so
+# that a long one does not start late and set the gate's wall time
+# (GATE_JOBS=1 ignores it). Wall times one at a time on the 6-core build VM
+# (2026-11-15, load 3 to 5): metalfx-report 269 s, pins 148 s, bench 107 s,
+# identity-env 46 s, ref-metal 35 s; every other check 23 s or less.
+gate_first="check-metalfx-report.sh check-pins.sh check-bench.sh check-identity-env.sh check-ref-metal.sh"
+scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh
 
 make -B -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)" server game
 make -B -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)" UPDATE_PINS= TEST_ARGS= test
