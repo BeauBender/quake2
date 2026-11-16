@@ -58,7 +58,8 @@
 #     devices): one listed before the run and missing after it is a
 #     warning naming its UDID, never a failure. This script's own
 #     mutating simctl calls (shutdown, delete, erase, uninstall,
-#     terminate, and the lookup of a lost device) name only this run's
+#     terminate, boot, bootstatus -b, install, launch, and the lookup of
+#     a lost device) name only this run's
 #     UDID, never one of the others. A list that fails, cannot be read or
 #     names no device is a failure.
 #
@@ -77,9 +78,14 @@
 # Each --launch "ARGS" is one start of the app, in order, on the same
 # device and container (a setting or a save is read back by the next
 # one); ARGS are engine arguments, split at spaces. With none, one start
-# with no argument, the app until the person quits it. --shot SECONDS:
+# with no argument, the app until the person quits it. Each word of ARGS
+# is passed as it is (a * or ? matches no file). A start that ended on its
+# own must show Com_Quit's "shutting down" line in its engine log
+# (engine.<n>.log, the engine's own, not the launcher's output): without
+# it the app was killed or crashed, and the run fails. --shot SECONDS:
 # a simctl screenshot that long after each start (DIR/screen.<n>.png),
-# then simctl terminate. After each start DIR/engine.<n>.log is the
+# then simctl terminate (that start needs no quit path; an app that ended
+# before the shot says so and takes none). After each start DIR/engine.<n>.log is the
 # engine's own log (qconsole.log), DIR/documents.<n>.list the files of
 # Documents/baseq2/ with their sizes (names, never contents) and
 # DIR/frames.<n>/ its scrnshot/ files. With --data these hold the
@@ -117,7 +123,12 @@
 # fails and still deletes the device, an app that outlives
 # IOS_SIM_RUN_SECONDS is terminated and fails, each --launch is a start
 # with its own log and listing, --shot ends the app and keeps the frame,
-# --background launches the other app and the app again, in that order.
+# --background launches the other app and the app again, in that order; a
+# --launch word is not glob-expanded; a start that ended on its own with no
+# quit path in its log fails, one the shot ended does not, and an app that
+# ended before the shot says so; the runtime pick follows one rule, in the
+# default and within a version or name given; a bad version names its
+# runtime and a runtime that cannot be a candidate is skipped.
 # tests/check-ios.sh runs it.
 #
 # Limits, in seconds (digits only, or the script refuses):
