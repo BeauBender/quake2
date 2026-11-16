@@ -310,7 +310,13 @@ launch)
 		echo $$ > "$st/app.pid"
 		exec sleep 30
 	fi
-	sleep $([ "$sc" = bgshot ] && echo 5 || echo 1) &
+	# a run with --background (IOS_SIM_BACKGROUND_AFTER is set) keeps the app alive through the background;
+	# bgdies is the app that ends during it
+	life=1
+	[ -n "${IOS_SIM_BACKGROUND_AFTER-}" ] && life=4
+	[ "$sc" = bgshot ] && life=5
+	[ "$sc" = bgdies ] && life=1
+	sleep "$life" &
 	p=$!
 	echo $p > "$st/app.pid"
 	echo "$4: $p"
@@ -579,6 +585,9 @@ EOF
 	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-before-shot bgshot ok "run ok, 1 start(s)" 30 IOS_SIM_BACKGROUND_AFTER=2
 	st_has run-background-before-shot grep state/relaunches "com.apple.Preferences"
 	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-fails bgfail fail "simctl launch of the other app failed" 30 IOS_SIM_BACKGROUND_AFTER=0
+	# the app ends during the background: the return is a restart, the run fails before any shot
+	ST_CMD="run --out @D@/out --no-data --background 2 --shot 0" st_case run-background-app-dies bgdies fail "the app did not survive the background" 30 IOS_SIM_BACKGROUND_AFTER=0
+	st_has run-background-app-dies nofile out/screen.1.png
 	ST_CMD="run --out @D@/out --no-data" st_case run-no-background extra ok "run ok, 1 start(s)" 30
 	st_has run-no-background nofile state/relaunches
 	ST_CMD="run --out @D@/out --background 3s" st_case run-background-not-digits extra fail "--background must be a number of seconds" 5
@@ -887,6 +896,8 @@ launch_app()
 			bounded 30 "${tmp:?}/fg.out" xcrun simctl launch "$udid" "$bid" || die "simctl launch of the app (the return) failed"
 			bgdone=1
 			shotbase=$t
+			# the same process must have lived through the background: a launch of a dead app starts a new one, which is a restart, not a resume
+			kill -0 "$apid" 2>/dev/null || die "the app did not survive the background (the process $apid ended; the return started it again)"
 			# the system's own log of the app (a command buffer submitted in the background is reported there)
 			[ -n "$shotat" ] || shotat=0
 		fi
