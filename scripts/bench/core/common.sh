@@ -240,7 +240,9 @@ BENCH_SPAWN_SAID=
 # shell (set -m), which bash (3.2 and later, also as sh) and zsh have: the
 # command then starts with the signal dispositions of this shell (an
 # asynchronous list without job control starts with SIGINT and SIGQUIT
-# ignored), and bench_stop_group reaches everything it starts. A shell
+# ignored), and bench_stop_group reaches its whole process group (not a
+# descendant that moves itself into another group or session, with
+# setsid or a job-control shell). A shell
 # without it (dash with no terminal) leaves the command in this shell's
 # group; it is said once, and the stop then reaches only the command's pid.
 # The command gets this shell's standard input (through fd 3), or /dev/null
@@ -330,14 +332,17 @@ bench_stop_group() {
 # bench_watch <pid> <end> <cap>: polls the command bench_spawn started as
 # <pid> until it exits (0), it is stopped (2: state T, a stop signal, or
 # the terminal it touched from its background process group), or the clock
-# passes <end> (1; seconds since the epoch, empty for none). The poll backs
-# off from 0.02 s to <cap> seconds, so a short command costs little. Its
-# standard error is /dev/null (the shell's job notices).
+# passes <end> (1; seconds since the epoch, empty for none). It polls after
+# 0.01 s, 0.02 s, then every 0.05 s up to the 40th poll (about 2 s), so a
+# short command is seen to end at once, every 0.2 s for the next 100
+# (about 20 s), then every
+# <cap> seconds, so a long one costs little. Its standard error is
+# /dev/null (the shell's job notices).
 bench_watch() {
 	_bw_p=$1
 	_bw_end=$2
 	_bw_cap=$3
-	_bw_nap=0.02
+	_bw_n=0
 	while kill -0 "$_bw_p"; do
 		case $(ps -o stat= -p "$_bw_p") in
 		Z*) return 0 ;;
@@ -346,13 +351,16 @@ bench_watch() {
 		if [ -n "$_bw_end" ] && [ "$(date +%s)" -gt "$_bw_end" ]; then
 			return 1
 		fi
-		bench_nap "$_bw_nap"
-		case $_bw_nap in
-		0.02) _bw_nap=0.05 ;;
-		0.05) _bw_nap=0.1 ;;
-		0.1) _bw_nap=0.2 ;;
-		*) _bw_nap=$_bw_cap ;;
-		esac
+		_bw_n=$((_bw_n + 1))
+		if [ "$_bw_n" -le 2 ]; then
+			bench_nap "0.0$_bw_n"
+		elif [ "$_bw_n" -le 40 ]; then
+			bench_nap 0.05
+		elif [ "$_bw_n" -le 140 ]; then
+			bench_nap 0.2
+		else
+			bench_nap "$_bw_cap"
+		fi
 	done
 	return 0
 } 2> /dev/null
@@ -363,6 +371,7 @@ bench_watch() {
 # it had to stop something. Nothing to do without job control: the command
 # then leads no group.
 bench_end_group() {
+	kill -0 -- "-$1" 2> /dev/null || return 0
 	_eg_end=$(($(date +%s) + 1))
 	while kill -0 -- "-$1" 2> /dev/null; do
 		if [ "$(date +%s)" -gt "$_eg_end" ]; then
@@ -384,7 +393,7 @@ BENCH_BOUNDED_REAPED=
 # it is stopped (bench_watch). Returns its status; 124 past the wall time,
 # 74 when it was stopped. Once the command has exited, what it left running
 # in its group is stopped too (bench_end_group) before the bound returns.
-# For adapters. The poll backs off from 0.02 s to 0.5 s.
+# For adapters. The poll settles at every 0.5 s.
 bench_bounded() {
 	_bb_s=$1
 	shift

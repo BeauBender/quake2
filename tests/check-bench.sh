@@ -11,16 +11,23 @@
 #     and a forged or stale token waits like anyone; release on EXIT, TERM
 #     and HUP; the stop of the command's whole process group, before the
 #     lock is free, on TERM and on INT to the lock shell's group (Ctrl-C),
-#     a grandchild and a command that catches TERM included; the command's
-#     own INT trap; reclaim of a dead holder, logged, and of two waiters
-#     that reclaim at once exactly one gets the lock; a held reclaim guard
-#     and a holder-less lock inside its grace left alone, and that lock
-#     reclaimed after it; the BENCH_LOCK_POLL limits; a maker stalled
-#     between its mkdir and its write backs off; the default state
-#     directory and its override, and the outside-repository guard (a
-#     relative path, a git ceiling, a failing git);
-#   - the wall-time bound: it stops a grandchild, and bounds a command that
-#     ignores TERM;
+#     a grandchild and a command that catches TERM included, with the
+#     lock's grace floor; a TERM held in the window before the pid is
+#     stored; a stopped command (a STOP to its group, and stty on a pty
+#     from script when there is one) said and ended with 74; work a
+#     command leaves running on a normal exit stopped before the lock is
+#     free; no job notice on standard error; the command's own INT trap;
+#     reclaim of a dead holder, logged, and of two waiters that reclaim at
+#     once exactly one gets the lock; a held reclaim guard, a holder whose
+#     command's group still runs, and a holder-less lock inside its grace
+#     left alone, and that lock reclaimed after it; the BENCH_LOCK_POLL
+#     limits; a maker stalled between its mkdir and its write backs off;
+#     the default state directory and its override, and the
+#     outside-repository guard (a relative path, a . or .. segment, a git
+#     ceiling, a failing git; a host without git uses the .git walk);
+#   - the wall-time bound: it stops a grandchild, bounds a command that
+#     ignores TERM, stops the work a command leaves running, and shows no
+#     job notice;
 #   - the host token and class line: stable, from system facts only, and
 #     free of the identity values tests/check-no-local-identity.sh refuses
 #     (hostname -s, whoami, $HOME), with the scrub and the salt tried on
@@ -32,8 +39,8 @@
 #     error;
 #   - case files: the key whitelist, no evaluation of values, the hash of
 #     the normalised content, the name cap of 58;
-#   - the store: its layout, a store inside a repository or relative
-#     refused, a set stored whole or not at all (a failed copy or rename
+#   - the store: its layout, a store inside a repository, relative or with
+#     a .. segment refused, a set stored whole or not at all (a failed copy or rename
 #     leaves the old baseline live), reads that take only the runs of the
 #     live set, the live set by number, the runs oldest first, a preflight
 #     refusal, the wall-time bound and its default;
@@ -42,10 +49,11 @@
 #   - the core and bench.sh name no game and no project layout, and use no
 #     eval.
 # The tests that do not test the host facts use a fast stand-in for
-# system_profiler (fast_profiler). Then nine mutants, each applied to a copy
-# of scripts/bench/ and each required to fail the test it targets: the lock
-# made neither exclusively nor linked, the holder renamed over another's,
-# the command spawned without its own process group, re-entry accepts any
+# system_profiler (fast_profiler). Then eleven mutants, each applied to a
+# copy of scripts/bench/ and each required to fail the test it targets: the
+# lock made neither exclusively nor linked, the holder renamed over
+# another's, the command spawned without its own process group, a signal
+# in the spawn window dropped, or acted on at once, re-entry accepts any
 # token, the drift rule drops t, the core names a game, the reclaim guard
 # made with mkdir -p, the holder-less grace dropped, the store's
 # outside-repository check deleted.
@@ -364,6 +372,18 @@ t_lock_stop() {
 	[ "$_st" -eq 143 ] || bad "stop: wanted exit 143 on TERM, got $_st"
 	[ "$(B lock status)" = lock=free ] || bad "stop: TERM did not release the lock"
 	if pid_running "$(cat "${E:?}/gc.term")"; then bad "stop: a grandchild of the command outlived the lock (TERM)"; fi
+	# A command that catches TERM and goes on is killed after the grace,
+	# which is at least BENCH_STOP_GRACE + 5 s even when that is 0, so a
+	# nested bench.sh stopping a group of its own finishes first. It runs
+	# under a lock of its own (s2) while the tests below run, and its end
+	# is checked after them.
+	mkdir "${E:?}/s2"
+	start sh -c 'st=0; env BENCH_STATE="$1/state" BENCH_STOP_GRACE=0 sh "$2/bench.sh" lock run stubborn -- sh "$3" "$1/pid" "$1/log" > "$1/out" 2>&1 || st=$?; echo "$st" > "$1/st"; date +%s > "$1/end"' x "${E:?}/s2" "$R" "${E:?}/stubborn.sh"
+	wait_file 5 "${E:?}/s2/pid" || bad "stop: the stubborn command never started"
+	_sl=$(sed -n 's/^pid=//p' "${E:?}/s2/state/lock/holder")
+	echo "$_sl" >> "${tmp:?}/pids"
+	_t0=$(date +%s)
+	pid_running "$_sl" && kill -TERM "$_sl" || bad "stop: the stubborn command's lock shell is not running"
 	# Ctrl-C at a terminal: INT to the lock shell's process group.
 	if [ -n "$INT_OK" ]; then
 		set -m
@@ -414,27 +434,6 @@ t_lock_stop() {
 	[ "$(B lock status)" = lock=free ] || bad "stop: the lock was not released after a command that left work running"
 	grep -q '^bench: stopped what the command left running' "${E:?}/left.err" || bad "stop: the work a command left running was not said"
 	_tl=$(date +%s)
-	# A command that catches TERM and goes on is killed after the grace,
-	# which is at least BENCH_STOP_GRACE + 5 s even when that is 0, so a
-	# nested bench.sh stopping a group of its own finishes first.
-	start env BENCH_STOP_GRACE=0 sh "$R/bench.sh" lock run stubborn -- sh "${E:?}/stubborn.sh" "${E:?}/stub.pid" "${E:?}/log" > "${E:?}/stub.out" 2>&1
-	_h=$BG
-	wait_file 5 "${E:?}/stub.pid" || bad "stop: the stubborn command never started"
-	_t0=$(date +%s)
-	kill -TERM "$_h"
-	wait_gone 20 "$_h" || bad "stop: the lock shell did not exit after TERM to a command that ignores it"
-	_t1=$(date +%s)
-	[ $((_t1 - _t0)) -ge 4 ] || bad "stop: with BENCH_STOP_GRACE=0 the lock shell killed its command after $((_t1 - _t0)) s, under its floor of 5 s"
-	[ $((_t1 - _t0)) -le 9 ] || bad "stop: a command that ignores TERM was stopped after $((_t1 - _t0)) s, not within the grace floor of 5 s and a margin"
-	[ "$(B lock status)" = lock=free ] || bad "stop: the stubborn command's lock was not released"
-	grep -q got-term "${E:?}/log" || bad "stop: the stubborn command never got TERM"
-	if pid_running "$(cat "${E:?}/stub.pid")"; then bad "stop: the stubborn command outlived the lock"; fi
-	# Commands that print nothing themselves: no job notice either.
-	grep -v '^bench: ' "${E:?}/stopped.out" "${E:?}/term.out" "${E:?}/left.err" > /dev/null && bad "stop: the lock shell printed a line that is not its own (a job notice)"
-	# By now each grandchild would have written its line.
-	while [ "$(date +%s)" -le $((_tl + 3)) ]; do sleep 0.2; done
-	if grep -q 'late$' "${E:?}/log"; then bad "stop: something wrote after the lock was free: $(grep 'late$' "${E:?}/log" | tr '\n' ' ')"; fi
-	if pid_running "$(cat "${E:?}/gc.left" 2> /dev/null)"; then bad "stop: the work a command left running outlived the lock"; fi
 	# At a terminal (a pty from script, when there is one): a command that
 	# touches it from its background process group is said and stopped.
 	if script -q /dev/null true < /dev/null > /dev/null 2>&1; then
@@ -445,6 +444,7 @@ t_lock_stop() {
 			bad "stop: a command that touched the terminal held the lock"
 			reap "$_h"
 		fi
+		wait_file 10 "${E:?}/tty.st" || bad "stop: the terminal test never ended"
 		[ "$(cat "${E:?}/tty.st" 2> /dev/null)" = 74 ] || bad "stop: a command that touched the terminal: wanted 74, got $(cat "${E:?}/tty.st" 2> /dev/null)"
 		grep -q '^bench: the command stopped' "${E:?}/tty.out" || bad "stop: a command that touched the terminal was not said"
 		grep -q after-stty "${E:?}/tty.out" && bad "stop: a command that touched the terminal went on"
@@ -452,6 +452,21 @@ t_lock_stop() {
 	else
 		echo "$me: no working script(1) here, so the terminal test is skipped"
 	fi
+	# The command that catches TERM, started above: killed after the floor.
+	wait_file 15 "${E:?}/s2/end" || bad "stop: the lock shell did not exit after TERM to a command that ignores it"
+	_t1=$(cat "${E:?}/s2/end" 2> /dev/null || echo 0)
+	[ "$(cat "${E:?}/s2/st" 2> /dev/null)" = 143 ] || bad "stop: wanted exit 143 from the stubborn command's lock shell, got $(cat "${E:?}/s2/st" 2> /dev/null)"
+	[ $((_t1 - _t0)) -ge 4 ] || bad "stop: with BENCH_STOP_GRACE=0 the lock shell killed its command after $((_t1 - _t0)) s, under its floor of 5 s"
+	[ $((_t1 - _t0)) -le 9 ] || bad "stop: a command that ignores TERM was stopped after $((_t1 - _t0)) s, not within the grace floor of 5 s and a margin"
+	[ "$(env BENCH_STATE="${E:?}/s2/state" sh "$R/bench.sh" lock status)" = lock=free ] || bad "stop: the stubborn command's lock was not released"
+	grep -q got-term "${E:?}/s2/log" || bad "stop: the stubborn command never got TERM"
+	if pid_running "$(cat "${E:?}/s2/pid")"; then bad "stop: the stubborn command outlived the lock"; fi
+	# Commands that print nothing themselves: no job notice either.
+	grep -v '^bench: ' "${E:?}/stopped.out" "${E:?}/term.out" "${E:?}/left.err" > /dev/null && bad "stop: the lock shell printed a line that is not its own (a job notice)"
+	# By now each grandchild would have written its line.
+	while [ "$(date +%s)" -le $((_tl + 3)) ]; do sleep 0.2; done
+	if grep -q 'late$' "${E:?}/log"; then bad "stop: something wrote after the lock was free: $(grep 'late$' "${E:?}/log" | tr '\n' ' ')"; fi
+	if pid_running "$(cat "${E:?}/gc.left" 2> /dev/null)"; then bad "stop: the work a command left running outlived the lock"; fi
 	[ "$fails" -eq 0 ]
 }
 
@@ -464,7 +479,7 @@ t_lock_defer() {
 	_s=${tmp:?}/defer-bench
 	rm -rf "${_s:?}"
 	cp -R "$R" "$_s"
-	lit "${_s:?}/core/common.sh" 'BENCH_SPAWN_PID=$!' 'sleep 2; BENCH_SPAWN_PID=$!' || bad "defer: the injected stall does not apply"
+	lit "${_s:?}/core/common.sh" 'BENCH_SPAWN_PID=$!' 'sleep 1; BENCH_SPAWN_PID=$!' || bad "defer: the injected stall does not apply"
 	start env BENCH_STOP_GRACE=1 sh "$_s/bench.sh" lock run defer -- sh "${E:?}/gc.sh" "${E:?}/d.gc" "${E:?}/log" defer 4 > "${E:?}/defer.out" 2>&1
 	_h=$BG
 	wait_file 5 "${E:?}/d.gc" || bad "defer: the grandchild never started"
@@ -490,21 +505,21 @@ t_bounded() {
 		BENCH_ROOT=$R
 		. "$R/core/common.sh"
 		BENCH_STOP_GRACE=1
+		# A command that exits and leaves work running in its group (its
+		# line due after 2.5 s, past the 1 to 2 s it is given): the work is
+		# stopped before the bound returns. Checked at the end, once it
+		# would have written.
+		_st=0
+		bench_bounded 5 sh -c 'sh "$1" "$2" "$3" bleft 2.5 &' x "${E:?}/gc.sh" "${E:?}/b.left" "${E:?}/log" 2> "${E:?}/bleft.err" || _st=$?
+		[ "$_st" -eq 0 ] || { echo "$me: bounded: a command that left work running gave $_st, not 0"; exit 1; }
+		grep -q '^bench: stopped what the command left running' "${E:?}/bleft.err" || { echo "$me: bounded: the work a command left running was not said"; exit 1; }
+		_tl=$(date +%s)
 		# The wall bound (stops between 1 and 2.5 s) stops the command's
 		# grandchild too.
 		_st=0
 		bench_bounded 1 sh "${E:?}/gc.sh" "${E:?}/b.gc" "${E:?}/log" wall 3.5 2> /dev/null || _st=$?
 		[ "$_st" -eq 124 ] || { echo "$me: bounded: wanted 124 from a command over its wall time, got $_st"; exit 1; }
 		if pid_running "$(cat "${E:?}/b.gc" 2> /dev/null)"; then echo "$me: bounded: a grandchild outlived the wall bound"; exit 1; fi
-		# A command that exits and leaves work running in its group (its
-		# line due after 2.5 s, past the 1 to 2 s it is given): the work is
-		# stopped before the bound returns. Checked below, once it would
-		# have written.
-		_st=0
-		bench_bounded 5 sh -c 'sh "$1" "$2" "$3" bleft 2.5 &' x "${E:?}/gc.sh" "${E:?}/b.left" "${E:?}/log" 2> "${E:?}/bleft.err" || _st=$?
-		[ "$_st" -eq 0 ] || { echo "$me: bounded: a command that left work running gave $_st, not 0"; exit 1; }
-		grep -q '^bench: stopped what the command left running' "${E:?}/bleft.err" || { echo "$me: bounded: the work a command left running was not said"; exit 1; }
-		_tl=$(date +%s)
 		# A command killed by a signal gives its status, and no job notice
 		# (it names an internal path) reaches standard error.
 		_st=0

@@ -28,7 +28,8 @@
 # caller.
 #
 # Reclaim: a lock whose holder pid and child pid are both gone (kill -0
-# fails) is reclaimed and the reclaim is logged, on standard error and in
+# fails), and whose command's process group has no member left, is
+# reclaimed and the reclaim is logged, on standard error and in
 # <state>/lock.log. Two waiters that see the same dead holder race for the
 # guard directory <state>/reclaim.<token> (mkdir again): the winner reads
 # the holder again under the guard and removes the lock only if it still
@@ -42,18 +43,27 @@
 #
 # The command: lock run starts it in its own process group (bench_spawn),
 # so it keeps the signal dispositions of the caller (SIGINT and SIGQUIT are
-# not ignored, and its own traps run) and the lock reaches everything it
-# starts. Its standard input is the caller's, or /dev/null when that is a
-# terminal: a command in a background process group cannot read the
-# terminal. A terminal's Ctrl-C reaches the lock shell, not the command.
+# not ignored, and its own traps run) and the lock reaches its process
+# group: a descendant that moves itself into another group or session
+# (setsid, a shell with job control) is out of its reach. Its standard
+# input is the caller's, or /dev/null when that is a terminal. The group
+# is in the background: a command that uses the terminal (reads it, sets
+# it with stty, or writes to it under stty tostop) is stopped by the
+# terminal. The lock shell polls the command (bench_watch) instead of
+# waiting on it, so it sees such a stop: it says so, stops the group as on
+# a signal, and exits 74 with the lock freed. A terminal's Ctrl-C reaches
+# the lock shell, not the command.
 #
 # Release: the EXIT, INT, TERM and HUP traps of bench.sh call
 # bench_lock_release, which removes the lock only while the holder file
 # still carries this process's token. On INT, TERM or HUP the lock shell
 # first stops the command's whole process group (bench_stop_group: TERM,
-# then KILL after twice BENCH_STOP_GRACE, so that a command stopping a
-# group of its own with that grace, as bench_bounded does, finishes first),
-# so nothing the command started outlives the lock.
+# then KILL after twice BENCH_STOP_GRACE and at least BENCH_STOP_GRACE +
+# 5 s, so that a nested bench.sh stopping a group of its own with that
+# grace, as bench_bounded does, finishes first). When the command exits,
+# what it left running in its group gets 1 s to end and is then stopped
+# the same way (bench_end_group) before the lock is released. So nothing
+# left in the command's process group outlives the lock.
 
 BENCH_STATE_DIR=
 BENCH_LOCK_DIR=
@@ -270,7 +280,8 @@ bench_lock_alive() {
 }
 
 # bench_lock_run <label> -- <command...>: runs the command under the lock
-# and exits with its status (75 when the wait ran out).
+# and exits with its status (75 when the wait ran out, 74 when the command
+# stopped).
 bench_lock_run() {
 	if [ "$#" -lt 3 ] || [ "$2" != -- ]; then
 		bench_die 2 "usage: bench.sh lock run <label> -- <command> [args...]"

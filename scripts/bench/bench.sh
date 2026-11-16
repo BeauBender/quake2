@@ -26,14 +26,16 @@
 # Exit status: 0 done; 1 compare's verdict failed, or baseline get, drift
 # or compare found no baseline, or baseline put found one already; 2 a
 # usage, case, commit or setting error; 3 the adapter refused or failed;
-# 75 the lock wait ran out; a command run under the lock exits with its own
-# status.
+# 74 a command run under the lock stopped (a stop signal, or the terminal)
+# and was ended; 75 the lock wait ran out; a command run under the lock
+# otherwise exits with its own status.
 #
 # Environment: BENCH_STATE (lock state directory), BENCH_STORE (result
 # store), BENCH_LOCK_WAIT (seconds, default 3600), BENCH_LOCK_POLL (seconds,
 # default 2, at least 0.01), BENCH_LOCK_GRACE (seconds, default 10),
 # BENCH_STOP_GRACE (seconds a stopped command gets between TERM and KILL,
-# default 10; the lock gives its command twice that), BENCH_LOCK_TOKEN (set
+# default 10; the lock gives its command twice that, and at least that
+# plus 5), BENCH_LOCK_TOKEN (set
 # by the lock for its command), BENCH_HASH (shasum or cksum).
 set -eu
 LC_ALL=C
