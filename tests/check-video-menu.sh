@@ -10,9 +10,10 @@
 # mode, fullscreen, display, vertical sync and renderer are greyed with their
 # reasons, never hidden, and apply writes none of them. No SDL, no engine, no game data.
 #
-# Built with ASAN and UBSAN when the compiler has them. The run has a wall
-# bound of VIDEOMENU_CHECK_SECONDS (default 120); a watchdog kills the run it
-# started once the bound has passed and the check fails.
+# Built with ASAN and UBSAN when the compiler has them. Each of the two runs
+# (desktop, then iOS) has a wall bound of VIDEOMENU_CHECK_SECONDS (default
+# 120); a watchdog kills the test it started once the bound has passed and
+# the check fails.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -66,34 +67,44 @@ if ! $cc $sflags $inc $defs -DTEST_IOS=1 -DVID_PLATFORM=VIDPLAT_IOS -Wno-unused-
 	exit 1
 fi
 
-# the desktop build first, then iOS, in one run under the one bound
-{ "${tmp:?}/videomenu_test" && "${tmp:?}/videomenu_test_ios"; } > "${tmp:?}/run.out" 2>&1 &
-run=$!
-(
-	n=0
-	while [ "$n" -lt "$bound" ]; do
-		sleep 1
-		n=$((n + 1))
-	done
-	if kill -0 "$run" 2>/dev/null; then
-		: > "${tmp:?}/expired"
-		kill "$run" 2>/dev/null
-	fi
-) < /dev/null > /dev/null 2>&1 &
-dog=$!
-status=0
-wait "$run" || status=$?
-kill "$dog" 2>/dev/null || :
-wait "$dog" 2>/dev/null || :
+# run_bounded <binary>: runs one host test as a simple background command
+# (so the pid the watchdog kills is the test's own, never a subshell that
+# would leave the test running) under the bound; the status is the test's
+run_bounded()
+{
+	rm -f "${tmp:?}/expired"
+	"$1" > "${tmp:?}/run.out" 2>&1 &
+	run=$!
+	(
+		n=0
+		while [ "$n" -lt "$bound" ]; do
+			sleep 1
+			n=$((n + 1))
+		done
+		if kill -0 "$run" 2>/dev/null; then
+			: > "${tmp:?}/expired"
+			kill "$run" 2>/dev/null
+		fi
+	) < /dev/null > /dev/null 2>&1 &
+	dog=$!
+	status=0
+	wait "$run" || status=$?
+	kill "$dog" 2>/dev/null || :
+	wait "$dog" 2>/dev/null || :
 
-cat "${tmp:?}/run.out"
-if [ -e "${tmp:?}/expired" ]; then
-	echo "check-video-menu: the host test outlived its $bound s bound and was killed"
-	exit 1
-fi
-if [ "$status" -ne 0 ]; then
-	echo "check-video-menu: the host test failed"
-	exit 1
-fi
+	cat "${tmp:?}/run.out"
+	if [ -e "${tmp:?}/expired" ]; then
+		echo "check-video-menu: the host test $(basename "$1") outlived its $bound s bound and was killed"
+		exit 1
+	fi
+	if [ "$status" -ne 0 ]; then
+		echo "check-video-menu: the host test $(basename "$1") failed"
+		exit 1
+	fi
+}
+
+# the desktop build first, then iOS, each under the bound
+run_bounded "${tmp:?}/videomenu_test"
+run_bounded "${tmp:?}/videomenu_test_ios"
 
 echo "check-video-menu: ok"
