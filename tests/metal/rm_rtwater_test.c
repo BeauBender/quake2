@@ -612,6 +612,15 @@ test_cvars(void)
 	CHECK(rm_rtw_show(9) == RM_RTW_SHOW_MAX);
 	CHECK(rm_rtw_show(-1) == 0);
 	CHECK(rm_rtw_show(NAN) == 0);
+
+	/* TASK158: r_rt_water_hits, 0 TASK58's screen-space path, 1 world space from 1 up */
+	CHECK(rm_rtw_hits(0) == 0);
+	CHECK(rm_rtw_hits(0.9f) == 0);
+	CHECK(rm_rtw_hits(1) == 1);
+	CHECK(rm_rtw_hits(2.5f) == 1);
+	CHECK(rm_rtw_hits(-1) == 0);
+	CHECK(rm_rtw_hits(NAN) == 0);
+	CHECK(rm_rtw_hits(INFINITY) == 0);
 }
 
 static void
@@ -744,9 +753,24 @@ test_stats(void)
 	CHECK(strlen(buf) < RM_STATS_LINE);
 	CHECK(strchr(buf, '\n') == NULL);
 
+	/* TASK158: r_rt_water_hits 1 adds its passes' split and the span from the raster's start to the trace's end */
+	s.ws = 1;
+	s.raster_ms = 0.25;
+	s.compact_ms = 0.125;
+	s.trace_ms = 0.5;
+	s.span_ms = 1.5;
+	CHECK(rm_rtw_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(strstr(buf, ", 0.875 ms, world space: raster 0.250, compaction 0.125, trace 0.500, span 1.500 ms") != NULL);
+	CHECK(strlen(buf) < RM_STATS_LINE);
+	s.raster_ms = s.compact_ms = s.trace_ms = s.span_ms = -1;
+	CHECK(rm_rtw_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(strstr(buf, "world space: raster -, compaction -, trace -, span - ms") != NULL);
+	s.ws = 0;
+
 	s.ms = -1;
 	CHECK(rm_rtw_stats_format(&s, buf, sizeof(buf)) == 1);
 	CHECK(strstr(buf, ", - ms") != NULL);
+	CHECK(strstr(buf, "world space") == NULL);
 	CHECK(rm_rtw_stats_format(&s, small, sizeof(small)) == 0);
 	CHECK(small[0] == 0);
 	CHECK(rm_rtw_stats_format(&s, small, 0) == 0);
