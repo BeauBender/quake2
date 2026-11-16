@@ -48,6 +48,7 @@
 #include "../common/mtl_shader_math.h"
 #include "../common/mtl_gbuf_math.h"
 #include "../common/mtl_rtao_math.h"
+#include "../common/mtl_rts_math.h"
 #include "../common/mtl_rtw_math.h"
 
 /* ---- rm_rtwater.c: no SDL, no Metal --------------------------------------------------- */
@@ -92,7 +93,7 @@ int rm_rtw_show(float v);
  */
 int rm_rtw_turb_table(float *out);
 
-/* the view of the kernel (rm_rtwater.metal's rm_rtw_view, 192 bytes) */
+/* the view of the kernel (rm_rtwater.metal's rm_rtw_view, 288 bytes) */
 typedef struct
 {
 	float inv[16];      /* GL clip coordinates to world: the inverse of the jittered projection times the modelview */
@@ -104,7 +105,18 @@ typedef struct
 	float amp;          /* rm_rtw_amp */
 	float reflect;      /* rm_rtw_reflect */
 	unsigned show;      /* rm_rtw_show */
-	unsigned pad[3];
+
+	/* TASK158: the world-space shading of a hit (rm_rtw_shading) */
+	int env;            /* gl1's lightmap unit (rm_lm_env), as the resolve's */
+	float scale;        /* its scale: the overbright bits, or 1 */
+	float lod_k;        /* mtl_rtw_lod's k: 2 / (the viewport's height x proj[5]) */
+	float flow;         /* a flowing face's scroll (rm_flow_scroll) */
+	unsigned nlights;   /* the dynamic lights the lightmaps left out (RT3 traced), at most MTL_RTS_MAX_LIGHTS */
+	unsigned fullbright;   /* r_fullbright: the texel alone */
+	unsigned sky;       /* 1 when the sky box's six images are in the table (MTL_RTW_TEX_SKY) */
+	float warp[4];      /* a warped face's colour (rm_warp_color, white where it gives none) */
+	float trans[4];     /* a translucent face's (rm_trans_color's RGB) */
+	float sky_rows[12]; /* the sky's rotation, its rows as three float4s (rm_rtw_sky_rows) */
 } rm_rtw_view_t;
 
 /*
@@ -117,16 +129,73 @@ typedef struct
 int rm_rtw_view(const float *proj, const float *world, const rm_viewport_t *vp, const float *eye, float znear,
 		float time, float amp, float reflect, unsigned show, rm_rtw_view_t *out);
 
+/*
+ * TASK158: the world-space shading of the view (the fields after show):
+ * gl1's lightmap unit and its scale, the flowing scroll, the warp's and
+ * the translucent faces' colours (RGBA, their alpha unused), r_fullbright,
+ * the number of dynamic lights the lightmaps left out (clamped to
+ * MTL_RTS_MAX_LIGHTS) and the sky (rotation rows, rm_rtw_sky_rows; sky 0
+ * for none). The mip factor lod_k comes from proj[5] and the viewport's
+ * height: 0 when either is not above 0 or not finite.
+ */
+typedef struct
+{
+	int env;
+	float scale;
+	float flow;
+	float warp[4];
+	float trans[4];
+	int fullbright;
+	int nlights;
+	int sky;
+	float sky_rows[12];
+} rm_rtw_shading_t;
+
+void rm_rtw_shading(const rm_rtw_shading_t *sh, const float *proj, rm_rtw_view_t *out);
+
+/*
+ * TASK158: the sky's rotation as gl1 turns the box (rm_sky_matrix about
+ * the origin: time x rotate degrees about axis), its three rows as float4s
+ * (w 0); the identity with rotate 0, a zero axis or a value not finite.
+ */
+void rm_rtw_sky_rows(float time, float rotate, const float *axis, float *rows);
+
+/*
+ * TASK158: the world's textures as the kernel's table holds them: each
+ * record's image (img[s], its slot in gltextures, below 0 for none) given
+ * an index of the table, the first record of an image its next, at most
+ * cap (MTL_RTW_TEX_WORLD). slot[i] the image of index i, tex[s] the index
+ * of record s (-1 for none). The number of indices, or -1 when there are
+ * more images than cap.
+ */
+int rm_rtw_tex_slots(const int *img, long nrecs, int *slot, int cap, int *tex);
+
+/*
+ * TASK158: the shading records of the world's triangles (mtl_rtw_shade_pack),
+ * one a triangle of the index buffer, in the walk of rm_rt_materials: each
+ * surface record where the last ended, whole triangles, inside nindices.
+ * tex[s] the record's index in the table (rm_rtw_tex_slots; below 0 or
+ * not below MTL_RTW_TEX_WORLD for none), its lightmap slice (none below 0
+ * or above 254), its flags from texflags (RM_TEX_WARP, _FLOWING,
+ * _TRANS33 or 66, _SKY). The number of triangles written, or -1 when the
+ * records do not cover the index buffer or it does not fit in cap.
+ */
+long rm_rtw_shade_build(const rm_surfrec_t *recs, long nrecs, unsigned long nindices, const int *tex, unsigned *out,
+		unsigned long cap);
+
 /* One frame's pass, for the r_rt_stats 2 line (counted on the GPU, read once the frame completed). */
 typedef struct
 {
 	unsigned long frame;
-	unsigned long pixels;   /* pixels the kernel ran on: the render size */
+	unsigned long pixels;   /* the render size (the compaction runs on every pixel) */
 	unsigned long opaque;   /* pixels of opaque water (material 3) */
 	unsigned long trans;    /* pixels whose eye ray found translucent water */
 	unsigned long eye;      /* eye rays */
+	unsigned long listed;   /* TASK158: pixels the trace ran on (the compaction's list) */
 	unsigned long lit;      /* water pixels whose reflection is a lit pixel */
-	unsigned long sky;      /* of the sky */
+	unsigned long world;    /* TASK158: a face shaded in world space */
+	unsigned long sky;      /* of the sky, from the picture */
+	unsigned long skybox;   /* TASK158: the sky box's texel, in world space */
 	unsigned long miss;     /* with none */
 	double ms;              /* the pass's GPU time; below 0 when not measured */
 } rm_rtw_stats_t;

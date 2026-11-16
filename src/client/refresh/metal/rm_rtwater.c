@@ -147,6 +147,161 @@ rm_rtw_view(const float *proj, const float *world, const rm_viewport_t *vp, cons
 	return 1;
 }
 
+void
+rm_rtw_shading(const rm_rtw_shading_t *sh, const float *proj, rm_rtw_view_t *out)
+{
+	const float h = out->vp[3];
+	int i;
+
+	out->env = sh->env;
+	out->scale = isfinite(sh->scale) ? sh->scale : 1.0f;
+	out->flow = isfinite(sh->flow) ? sh->flow : 0.0f;
+	out->fullbright = sh->fullbright != 0;
+	out->nlights = (sh->nlights < 0) ? 0 : (sh->nlights > MTL_RTS_MAX_LIGHTS) ? MTL_RTS_MAX_LIGHTS :
+			(unsigned)sh->nlights;
+	out->sky = sh->sky != 0;
+
+	for (i = 0; i < 4; i++)
+	{
+		out->warp[i] = sh->warp[i];
+		out->trans[i] = sh->trans[i];
+	}
+
+	memcpy(out->sky_rows, sh->sky_rows, sizeof(out->sky_rows));
+
+	/* the side of a pixel one unit from the eye: the view's height spans 2 / proj[5] there */
+	out->lod_k = 0.0f;
+
+	if (isfinite(h) && (h > 0) && isfinite(proj[5]) && (proj[5] > 0))
+	{
+		out->lod_k = 2.0f / (h * proj[5]);
+	}
+}
+
+void
+rm_rtw_sky_rows(float time, float rotate, const float *axis, float *rows)
+{
+	static const float id[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+	const float o[3] = { 0, 0, 0 };
+	float m[16];
+	int r, c;
+
+	memcpy(m, id, sizeof(m));
+
+	/* rm_sky_matrix about the origin: the box's rotation, the shim's glRotatef (a zero axis leaves it) */
+	if (isfinite(time) && isfinite(rotate) && (rotate != 0) && isfinite(axis[0]) && isfinite(axis[1]) &&
+		isfinite(axis[2]))
+	{
+		rm_sky_matrix(m, id, o, time, rotate, axis);
+	}
+
+	for (r = 0; r < 3; r++)
+	{
+		for (c = 0; c < 3; c++)
+		{
+			rows[r * 4 + c] = m[c * 4 + r];
+		}
+
+		rows[r * 4 + 3] = 0;
+	}
+
+	/* a product that is not a rotation (a value too large to turn by): the identity */
+	for (r = 0; r < 12; r++)
+	{
+		if (!isfinite(rows[r]))
+		{
+			memset(rows, 0, 12 * sizeof(float));
+			rows[0] = rows[5] = rows[10] = 1;
+			return;
+		}
+	}
+}
+
+int
+rm_rtw_tex_slots(const int *img, long nrecs, int *slot, int cap, int *tex)
+{
+	int n = 0;
+	long s;
+
+	for (s = 0; s < nrecs; s++)
+	{
+		int i;
+
+		tex[s] = -1;
+
+		if (img[s] < 0)
+		{
+			continue;
+		}
+
+		/* the images a map names are few: a search of those given an index so far */
+		for (i = 0; i < n && slot[i] != img[s]; i++)
+		{
+		}
+
+		if (i == n)
+		{
+			if (n >= cap)
+			{
+				return -1;
+			}
+
+			slot[n++] = img[s];
+		}
+
+		tex[s] = i;
+	}
+
+	return n;
+}
+
+long
+rm_rtw_shade_build(const rm_surfrec_t *recs, long nrecs, unsigned long nindices, const int *tex, unsigned *out,
+		unsigned long cap)
+{
+	unsigned long at = 0, tri = 0;
+	long s;
+
+	if ((nrecs < 0) || (nindices % 3) || (nindices / 3 > cap) || (nrecs && (!recs || !tex || !out)))
+	{
+		return -1;
+	}
+
+	/* the walk of rm_rt_materials: each record where the last ended, whole triangles, inside the buffer */
+	for (s = 0; s < nrecs; s++)
+	{
+		const rm_surfrec_t *r = &recs[s];
+		const unsigned long n = r->num_indices / 3;
+		const unsigned t = ((tex[s] >= 0) && ((unsigned)tex[s] < MTL_RTW_TEX_WORLD)) ? (unsigned)tex[s] :
+				MTL_RTW_SHADE_NOTEX;
+		const unsigned sl = ((r->lm_slice >= 0) && (r->lm_slice < (int)MTL_RTW_SHADE_NOLM)) ? (unsigned)r->lm_slice :
+				MTL_RTW_SHADE_NOLM;
+		unsigned f = 0, w;
+		unsigned long k;
+
+		if ((r->first_index != at) || (r->num_indices % 3) || (r->num_indices > nindices - at))
+		{
+			return -1;
+		}
+
+		f |= (r->texflags & RM_TEX_WARP) ? MTL_RTW_SF_WARP : 0;
+		f |= (r->texflags & RM_TEX_FLOWING) ? MTL_RTW_SF_FLOW : 0;
+		f |= (r->texflags & (RM_TEX_TRANS33 | RM_TEX_TRANS66)) ? MTL_RTW_SF_TRANS : 0;
+		f |= (r->texflags & RM_TEX_SKY) ? MTL_RTW_SF_SKY : 0;
+		w = mtl_rtw_shade_pack(t, sl, f);
+
+		for (k = 0; k < n; k++)
+		{
+			out[tri + k] = w;
+		}
+
+		tri += n;
+		at += r->num_indices;
+	}
+
+	return (at == nindices) ? (long)tri : -1;
+}
+
 int
 rm_rtw_stats_format(const rm_rtw_stats_t *s, char *buf, size_t len)
 {
@@ -167,9 +322,9 @@ rm_rtw_stats_format(const rm_rtw_stats_t *s, char *buf, size_t len)
 		snprintf(ms, sizeof(ms), "-");
 	}
 
-	n = snprintf(buf, len, "ref_metal: rt water: frame %lu: %lu pixels, %lu opaque water, %lu translucent water, "
-			"%lu eye rays, %lu lit, %lu sky, %lu none, %s ms", s->frame, s->pixels, s->opaque, s->trans, s->eye,
-			s->lit, s->sky, s->miss, ms);
+	n = snprintf(buf, len, "ref_metal: rt water: frame %lu: %lu pixels, %lu listed, %lu opaque water, "
+			"%lu translucent water, %lu eye rays, %lu lit, %lu world, %lu sky, %lu sky box, %lu none, %s ms", s->frame,
+			s->pixels, s->listed, s->opaque, s->trans, s->eye, s->lit, s->world, s->sky, s->skybox, s->miss, ms);
 
 	if ((n < 0) || ((size_t)n >= len))
 	{
