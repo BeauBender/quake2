@@ -535,8 +535,8 @@ rmb_fx_unready(void)
 int
 rmb_fx_note(int *mode, rm_fx_size_t *s)
 {
-	(void)mode;
-	(void)s;
+	*mode = RM_FX_OFF;
+	memset(s, 0, sizeof(*s));
 	return RM_FX_NOTE_NONE;
 }
 
