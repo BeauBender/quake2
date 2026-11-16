@@ -164,10 +164,21 @@ EOF
 # through the instrumented make and then fails for want of coverage data.
 printf '#!/bin/sh\necho "gcc version 0 (stub)"\n' > "${tmp:?}/cov/cc"
 printf '#!/bin/sh\nexit 0\n' > "${tmp:?}/cov/gcov"
-chmod +x "${tmp:?}/mk/make" "${tmp:?}/cov/cc" "${tmp:?}/cov/gcov" "${tmp:?}/check-a.sh" "${tmp:?}/stub-bench.sh"
-# GATEPATH: the stub make; COVPATH: the stub compiler too.
+# A make that logs its pid and process group, then runs for 30 s: a make
+# for a KILL to land in.
+mkdir -p "${tmp:?}/mk-slow"
+cat > "${tmp:?}/mk-slow/make" << 'EOF'
+#!/bin/sh
+printf 'make %s pid=%s pgid=%s\n' "$*" "$$" "$(ps -o pgid= -p "$$" | tr -d ' ')" >> "$LOG"
+sleep 30
+echo make-end >> "$LOG"
+EOF
+chmod +x "${tmp:?}/mk/make" "${tmp:?}/mk-slow/make" "${tmp:?}/cov/cc" "${tmp:?}/cov/gcov" "${tmp:?}/check-a.sh" "${tmp:?}/stub-bench.sh"
+# GATEPATH: the stub make; COVPATH: the stub compiler too; SLOWPATH: the
+# slow make.
 GATEPATH=${tmp:?}/mk:$PATH
 COVPATH=${tmp:?}/cov:$GATEPATH
+SLOWPATH=${tmp:?}/mk-slow:$PATH
 
 # mktree <name> [nobench|real]: a throwaway tree T holding the entry points
 # from SRC, a coverage floor and one gate check; beside the stub bench.sh,
@@ -442,8 +453,155 @@ t_cov_lc() {
 	[ "$fails" -eq 0 ]
 }
 
+# wait_line <seconds> <pattern>: waits until a line of LOG matches the grep
+# pattern; fails past <seconds>.
+wait_line() {
+	_n=0
+	until grep -q -- "$2" "${LOG:?}"; do
+		[ "$_n" -lt $(($1 * 10)) ] || return 1
+		sleep 0.1
+		_n=$((_n + 1))
+	done
+	return 0
+}
+# lock_down: the lock in T is free, or its holder is stale (its lock shell,
+# its command and that command's process group all gone; the next taker
+# reclaims it).
+lock_down() {
+	case $(sh "${T:?}/scripts/bench/bench.sh" lock status) in
+	lock=free | *' alive=no '*) return 0 ;;
+	esac
+	return 1
+}
+# stray_stop <pid> <text> [group]: what a failed test left running is
+# ended, so that it does not outlive this check: TERM to <pid> (with
+# "group", to the process group it leads), only while it runs, its command
+# line holds <text> and the group is not this check's own; then up to 15 s
+# for it to go.
+stray_stop() {
+	pid_running "$1" || return 0
+	case $(ps -o args= -p "$1" 2> /dev/null) in *"$2"*) ;; *) return 0 ;; esac
+	if [ "${3:-}" = group ]; then
+		[ "$(ps -o pgid= -p "$1" | tr -d ' ')" = "$1" ] && [ "$1" != "$(ps -o pgid= -p "$$" | tr -d ' ')" ] || return 0
+		kill -TERM -- "-$1" 2> /dev/null || true
+	else
+		kill -TERM "$1" 2> /dev/null || true
+	fi
+	wait_gone 15 "$1" || true
+}
+
+# t_kgrp, with the real bench core (the lock on): a KILL to the gate's
+# process group reaches its lock shell alone (the run under the lock leads a
+# group of its own). The run of test.sh under the lock must see its lock
+# shell go and stop: every check ends and no make runs; a KILL during the
+# makes ends the make as well. The lock is then free, or stale.
+t_kgrp() {
+	mktree kgrp real
+	cat > "${T:?}/tests/check-a.sh" << 'EOF'
+#!/bin/sh
+echo "start $$ $PPID" >> "$LOG"
+sleep 30
+echo "end a" >> "$LOG"
+EOF
+	BENCH_STATE=${T:?}/state
+	export BENCH_STATE
+	# a KILL while a check runs: the check (pid $1) and the scheduler (its
+	# parent, $2) end within a few seconds, and no make runs
+	set -m
+	env GATE_JOBS=1 PATH="$GATEPATH" sh "${T:?}/scripts/test.sh" > "${T:?}/out" 2>&1 &
+	_kp=$!
+	set +m
+	echo "$_kp" >> "${tmp:?}/pids"
+	wait_line 60 '^start ' || bad "kgrp: the check did not start; $(say)"
+	kill -KILL -- "-$_kp" 2> /dev/null || true
+	wait "$_kp" 2> /dev/null || true
+	forget "$_kp"
+	# shellcheck disable=SC2046 # the check's two pids
+	set -- $(sed -n 's/^start //p' "${LOG:?}") 0 0
+	if ! wait_gone 12 "$1" || ! wait_gone 3 "$2"; then
+		stray_stop "$2" gate-checks.sh
+		bad "kgrp: a check or the scheduler outlived a KILL to the gate's process group under the lock; $(say)"
+	fi
+	_n=0
+	until lock_down; do
+		[ "$_n" -lt 100 ] || break
+		sleep 0.1
+		_n=$((_n + 1))
+	done
+	lock_down || bad "kgrp: the lock is still held, by a live holder, after a KILL to the gate's process group; $(sh "${T:?}/scripts/bench/bench.sh" lock status)"
+	[ "$(lines '^make ')" -eq 0 ] || bad "kgrp: a make ran after a KILL to the gate's process group; $(say)"
+	grep -q '^test.sh: the lock shell .* is gone' "${T:?}/out" || bad "kgrp: the gate did not say why it stopped; $(say)"
+	# a KILL during the first make: the make ends, and the second never runs
+	mktree kgrp-make real
+	BENCH_STATE=${T:?}/state
+	set -m
+	env GATE_JOBS=1 PATH="$SLOWPATH" sh "${T:?}/scripts/test.sh" > "${T:?}/out" 2>&1 &
+	_kp=$!
+	set +m
+	echo "$_kp" >> "${tmp:?}/pids"
+	wait_line 60 '^make ' || bad "kgrp: the first make did not start; $(say)"
+	kill -KILL -- "-$_kp" 2> /dev/null || true
+	wait "$_kp" 2> /dev/null || true
+	forget "$_kp"
+	_mp=$(sed -n 's/^make .* pid=\([0-9]*\) pgid=.*/\1/p' "${LOG:?}")
+	_mg=$(sed -n 's/^make .* pgid=\([0-9]*\)$/\1/p' "${LOG:?}")
+	if ! wait_gone 12 "${_mp:-0}"; then
+		stray_stop "${_mg:-0}" scripts/test.sh group
+		bad "kgrp: a make outlived a KILL to the gate's process group under the lock; $(say)"
+	fi
+	_n=0
+	until lock_down; do
+		[ "$_n" -lt 100 ] || break
+		sleep 0.1
+		_n=$((_n + 1))
+	done
+	lock_down || bad "kgrp: the lock is still held, by a live holder, after a KILL during the makes; $(sh "${T:?}/scripts/bench/bench.sh" lock status)"
+	[ "$(lines '^make ')" -eq 1 ] && [ "$(lines '^make-end')" -eq 0 ] || bad "kgrp: a make ran on after a KILL during the makes; $(say)"
+	unset BENCH_STATE
+	[ "$fails" -eq 0 ]
+}
+
+# t_grace, with the real bench core: a TERM to the lock shell, with
+# BENCH_STOP_GRACE=1 from the caller and a check that ignores TERM. The
+# scheduler KILLs that check 10 s after its TERM, so the lock's own grace
+# must be longer: once the lock shell has exited, nothing the gate started
+# runs on, and the lock is free. The run under the lock sees the caller's
+# BENCH_STOP_GRACE.
+t_grace() {
+	mktree grace real
+	cat > "${T:?}/tests/check-a.sh" << 'EOF'
+#!/bin/sh
+trap '' TERM
+echo "start $$ $PPID grace=${BENCH_STOP_GRACE-unset}" >> "$LOG"
+sleep 60
+EOF
+	BENCH_STATE=${T:?}/state
+	export BENCH_STATE
+	env GATE_JOBS=1 BENCH_STOP_GRACE=1 PATH="$GATEPATH" sh "${T:?}/scripts/test.sh" > "${T:?}/out" 2>&1 &
+	_gp=$!
+	echo "$_gp" >> "${tmp:?}/pids"
+	wait_line 60 '^start ' || bad "grace: the check did not start; $(say)"
+	kill -TERM "$_gp" 2> /dev/null || true
+	wait_gone 60 "$_gp" || reap "$_gp"
+	_gs=0
+	wait "$_gp" 2> /dev/null || _gs=$?
+	forget "$_gp"
+	# shellcheck disable=SC2046 # the check's two pids
+	set -- $(sed -n 's/^start \([0-9]*\) \([0-9]*\) .*/\1 \2/p' "${LOG:?}") 0 0
+	_ga=
+	pid_running "$1" && _ga="the check (it ignores TERM)"
+	pid_running "$2" && _ga="${_ga:+$_ga and }the scheduler"
+	wait_gone 15 "$1" || true
+	[ -z "$_ga" ] || bad "grace: $_ga outlived the lock shell after a TERM to it, with BENCH_STOP_GRACE=1 (status $_gs); $(say)"
+	[ "$(sh "${T:?}/scripts/bench/bench.sh" lock status)" = lock=free ] || bad "grace: the lock is not free after the lock shell exited"
+	grep -q '^start .* grace=1$' "${LOG:?}" || bad "grace: the run under the lock did not get the caller's BENCH_STOP_GRACE (1) back; $(say)"
+	[ "$_gs" -ne 0 ] || bad "grace: the gate exited 0 after a TERM; $(say)"
+	unset BENCH_STATE
+	[ "$fails" -eq 0 ]
+}
+
 # ---- The real entry points. ---------------------------------------------
-all="t_gate t_coverage t_cov_lc t_pins t_off t_nested"
+all="t_gate t_coverage t_cov_lc t_pins t_off t_nested t_kgrp t_grace"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
