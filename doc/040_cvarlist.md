@@ -1095,7 +1095,11 @@ is.
   as before; `r_rt_water_hits 1` draws it instead. A model (a player, a
   monster, an item, a weapon) the view does not show is passed over: the
   reflection shows what lies behind it, as without the model, so it
-  never shows the model's outline. The reflection is mixed into
+  does not show the model's outline. This works per face, and up to four
+  hidden model faces: past four (one hidden player with its weapon is
+  four) the ray is traced against the map alone, so a model the view
+  shows behind them is passed too, and the reflection there shows what
+  lies behind it (at `0`, none). The reflection is mixed into
   the water's colour by `r_rt_water_reflect`; translucent water keeps
   its transparency. The rays meet the world, the doors and platforms and
   the models, but not the view weapon or the player's own model. Needs a
@@ -1133,8 +1137,12 @@ is.
   ambient occlusion; the sky the view does not show comes from the sky
   box. At both settings what is passed over is exactly this: a model (a
   player, a monster, an item, a weapon) the view does not show, so the
-  reflection shows what lies behind it, however many of them the
-  reflection crosses, and neither the model nor its outline. A brush
+  reflection shows what lies behind it, and neither the model nor its
+  outline. This works per face (a shown model's unseen far side is
+  passed too) and up to four hidden model faces: past four the ray is
+  traced against the map alone, so a model the view shows behind them is
+  passed too, and the reflection there shows what lies behind it (at
+  `0`, none). A brush
   model the view does not show (a door, a platform, a lift) is part of
   the map: at `1` it is drawn on its own like any other surface, so the
   reflection can show where it stands, and at `0` it gives no

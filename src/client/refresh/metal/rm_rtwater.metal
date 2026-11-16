@@ -35,7 +35,8 @@
  *   instance structure with MTL_RTW_MASK (all but the view weapon and the
  *   viewer's own model); every face it meets stops it but an alias model
  *   the picture does not show, which it passes (mtl_rtw_ss_next, FIX81:
- *   never a hole in the model's outline). Its colour is the
+ *   no hole in the model's outline, within the bound of MTL_RTW_LAYERS
+ *   faces, see the pass-over block). Its colour is the
  *   lit pixel (the resolve's) where the screen shows the hit, the sky
  *   pixel in its direction for the sky brush or nothing met, else none
  *   (mtl_rtw_choose). Out: the reflection and the pixel's class
@@ -680,7 +681,7 @@ rm_rtw_trace(depth2d<float, access::read> depth [[texture(0)]],
 			r3 = rm_rtw_f3(rd);
 			o = p + n * mtl_rtao_bias(dist, v.bias_k);
 
-			/* one bounce: every face stops the ray, the water and translucent faces too (design section 1) */
+			/* the first hit: every face stops it, the water and translucent faces too (design section 1); past an alias model the picture does not show it goes on, see FIX81 below */
 			isect.assume_geometry_type(geometry_type::triangle);
 			hit = isect.intersect(ray(o, r3, 0.0f, MTL_RTW_FAR), ias, MTL_RTW_MASK);
 
@@ -730,8 +731,16 @@ rm_rtw_trace(depth2d<float, access::read> depth [[texture(0)]],
 			 * (mtl_rtw_ss_next, r_rt_water_hits 1's rule), after
 			 * MTL_RTW_LAYERS model faces with the map's instances alone
 			 * (MTL_RTW_MASK_MAP), so it ends where it would end without the
-			 * models and a hidden model never leaves its outline as a hole
-			 * in the reflection. The first hit's choice above is TASK58's
+			 * models and a hidden model does not leave its outline as a hole
+			 * in the reflection. The bound: past MTL_RTW_LAYERS (four) hidden
+			 * model faces the ray is traced against the map alone, so a model
+			 * the picture shows behind them is passed too and the reflection
+			 * there shows what lies behind it (at 0, no reflection); one
+			 * hidden player with its weapon is already four faces (the rays
+			 * cull none). It keeps the cost at five casts per water pixel at
+			 * most. It works per face: a face of a model the view does not
+			 * show at that pixel is passed, so a shown model's unseen far
+			 * side is passed too. The first hit's choice above is TASK58's
 			 * code as it was, and this block runs only past a hidden model,
 			 * so every other ray is cast once and gives TASK58's colour bit
 			 * for bit (the compiler's arithmetic included).
@@ -948,7 +957,7 @@ rm_rtw_trace_ws(depth2d<float, access::read> depth [[texture(0)]],
 			r3 = rm_rtw_f3(rd);
 			o = p + n * mtl_rtao_bias(dist, v.bias_k);
 
-			/* one bounce: every face stops the ray, the water and translucent faces too (design section 1) */
+			/* the first hit: every face stops it, the water and translucent faces too (design section 1); past an alias model the picture does not show it goes on, see TASK158 below */
 			isect.assume_geometry_type(geometry_type::triangle);
 			hit = isect.intersect(ray(o, r3, 0.0f, MTL_RTW_FAR), ias, MTL_RTW_MASK);
 
@@ -957,7 +966,9 @@ rm_rtw_trace_ws(depth2d<float, access::read> depth [[texture(0)]],
 			 * picture does not show (off the screen or hidden). The ray goes on
 			 * past it (mtl_rtw_ws_next), after MTL_RTW_LAYERS model faces with
 			 * the map's instances alone (MTL_RTW_MASK_MAP), so it ends where it
-			 * would end without the models, however many it crosses. A model is
+			 * would end without the models, however many it crosses (but see
+			 * the bound in mtl_rtw_ws_next: past MTL_RTW_LAYERS hidden faces a
+			 * model the picture shows is passed too). A model is
 			 * shaded only as the picture shows it, so a hidden one neither
 			 * reflects nor leaves a hole in the world-space reflection behind
 			 * it. A hidden brush model (a door, a plat) is not passed over: it

@@ -444,7 +444,11 @@ mtl_rtw_choose_ws(int hit, int on_screen, unsigned mat, float off, float dist, i
  * otherwise. Every other choice stands. A closed model has a front and a
  * back face (the rays cull none), so after MTL_RTW_LAYERS model faces the
  * ray is traced on with the map's instances alone, and ends at what it
- * would meet without the models. Hidden brush models (doors, plats) are
+ * would meet without the models. That is the bound: past MTL_RTW_LAYERS
+ * hidden model faces a model the picture shows is passed too, and the
+ * reflection there shows what lies behind it (at 0, none). The step works
+ * per face: a face of a model the view does not show at that pixel is
+ * passed, so a shown model's unseen far side is passed too. Hidden brush models (doors, plats) are
  * map faces and are shaded. r_rt_water_hits 0 takes the same step
  * (mtl_rtw_ss_next, FIX81).
  */
@@ -469,7 +473,9 @@ mtl_rtw_ws_next(int hit, int alias, unsigned from, int layer, int map)
  * hole in front of a wall the picture shows. Now the ray goes on behind
  * such a model and ends where it would end without it: after
  * MTL_RTW_LAYERS of their faces with the map's instances alone
- * (MTL_RTW_MASK_MAP), so in at most MTL_RTW_LAYERS + 1 intersections. A
+ * (MTL_RTW_MASK_MAP), so in at most MTL_RTW_LAYERS + 1 intersections. Past
+ * that bound a model the picture shows behind them is passed too (no
+ * reflection at 0, see mtl_rtw_ws_next). A
  * ray whose first hit is anything else is cast once, as before, and a map
  * face the picture does not show (a hidden door too) still gives none.
  */

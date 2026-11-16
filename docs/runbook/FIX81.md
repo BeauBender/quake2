@@ -202,3 +202,40 @@ never committed, never viewed here).
 ## Checks
 
 On `f8baa052`, each through `tools/heavy.sh`: `tests/check-doc-links.sh` and `tests/check-no-local-identity.sh`, in the card's report.
+
+## Review round 1: the stated bound
+
+The review of `abc0aad4` found that the doc and the comments promised "never a hole" and "however many models" where the code passes at most `MTL_RTW_LAYERS` (four) hidden model faces. After that the ray is traced against the map alone, so a model the picture shows that lies behind four hidden faces is passed too: at `r_rt_water_hits 0` the reflection there is none (a hole), at `1` it is the wall behind the model in world space. One hidden player with its weapon is already four faces, because the rays cull no triangle.
+
+**The bound stays.** It keeps the cost at five casts per water pixel at most (`MTL_RTW_LAYERS + 1`); lifting it would make the cost depend on how many models stand in line. So no compiled code changes: the kernel comments, the header comments, the `r_rt_water` and `r_rt_water_hits` rows of `doc/040_cvarlist.md` and this runbook now state the bound, and also that the pass-over works per face (a face of a model the view does not show at that pixel is passed, so a shown model's unseen far side is passed too).
+
+### The test
+
+`test_ss_models` in `tests/metal/rm_rtwater_test.c` pins it. Faces in order along the ray, values read from the code before they were asserted:
+
+| case | faces | result |
+| --- | --- | --- |
+| A | shown model, hidden wall | `MTL_RTW_LIT`, 1 cast |
+| D | three hidden model faces, shown model, hidden wall (hits 0) | `MTL_RTW_LIT`, 4 casts |
+| B | four hidden model faces, shown model, hidden wall (hits 0) | `MTL_RTW_MISS`, 5 casts |
+| C | the faces of B at hits 1 (`rtw_trace_ws`) | `MTL_RTW_LIT \| MTL_RTW_WS` |
+
+B and C are the bound: the model the picture shows is passed, the ray ends at the hidden wall. The suite prints `438 checks` before and `445 checks, 0 failed` after.
+
+### The code is unchanged
+
+Preprocessed with comments stripped, the kernel at `abc0aad4` and at this head give an empty diff, and so does the header:
+
+```sh
+xcrun -sdk macosx metal -E -P src/client/refresh/metal/rm_rtwater.metal > kernel.i   # 2039 lines at both heads
+diff kernel.i.abc0aad4 kernel.i.head    # empty
+# header: a file that includes mtl_rtao_math.h, then mtl_rtw_math.h (the header needs it first)
+cc -std=gnu99 -E -P inc.c > header.i                                                  # 898 lines at both heads
+diff header.i.abc0aad4 header.i.head    # empty
+```
+
+So the replays, the masked comparison and the costs of the sections above stand for the new head unchanged: no byte of the compiled kernel or the host code differs.
+
+### Checks
+
+`tests/check-ref-metal.sh`, `tests/check-doc-links.sh`, `tests/check-runbook-index.sh` and `tests/check-no-local-identity.sh`, each through `tools/heavy.sh`: see the card's report.
