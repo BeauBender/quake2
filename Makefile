@@ -49,7 +49,9 @@
 #   IOS_BUNDLE_DATA: optional, a directory whose baseq2/ is copied
 #   into the bundle; local builds only, never game data in a commit.
 #   IOS_ROOT: the output, default build/ios-<IOS_SDK>/<debug|release>.
-#   Never release/ or debug/.
+#   Never release/ or debug/ or under them, however spelled (symlinks
+#   and .. resolved). IOS_ROOT and IOS_BUNDLE_DATA hold letters, digits
+#   and . _ / + @ - only: no make or shell metacharacter.
 # QUIET
 #   If defined, "===> CC ..." lines are silenced.
 # STATIC_MODULES
@@ -283,17 +285,33 @@ endif
 # The iOS mode writes everything under IOS_ROOT, the vendored SDL
 # objects too (third_party/sdl3.make puts them under BUILDDIR as it is
 # when included): never the copy the macOS builds share.
+# IOS_ROOT and IOS_BUNDLE_DATA are paths, not make or shell text: their
+# raw value ($(value), not expanded) holds no "$", and the value only
+# the characters of IOS_PATH_RE, so a recipe can quote them as '...'.
 ifeq ($(IOS_MODE),1)
+IOS_PATH_RE := [A-Za-z0-9._/][A-Za-z0-9._/+@-]*
+ios_path_ok = $(and $(if $(findstring $$,$(value $(1))),,1),$(filter $(shell printf '%s' '$(subst ',,$($(1)))' | LC_ALL=C grep -E -x '$(IOS_PATH_RE)'),$($(1))))
+ifeq ($(origin IOS_ROOT),undefined)
 ifdef DEBUG
-IOS_ROOT ?= $(BUILDROOT)/ios-$(IOS_SDK)/debug
+IOS_ROOT := $(BUILDROOT)/ios-$(IOS_SDK)/debug
 else
-IOS_ROOT ?= $(BUILDROOT)/ios-$(IOS_SDK)/release
+IOS_ROOT := $(BUILDROOT)/ios-$(IOS_SDK)/release
 endif
-ifneq ($(words $(IOS_ROOT)),1)
-$(error IOS_ROOT must be one directory, not "$(IOS_ROOT)")
 endif
-ifneq ($(filter release release/% debug debug/% ./release ./release/% ./debug ./debug/%,$(IOS_ROOT)),)
-$(error IOS_ROOT must not be release/ or debug/ or under them, not "$(IOS_ROOT)")
+ifeq ($(call ios_path_ok,IOS_ROOT),)
+$(error IOS_ROOT must be one path of letters, digits and . _ / + @ - (no make or shell metacharacter, no leading + @ -), not "$(value IOS_ROOT)")
+endif
+ifneq ($(value IOS_BUNDLE_DATA),)
+ifeq ($(call ios_path_ok,IOS_BUNDLE_DATA),)
+$(error IOS_BUNDLE_DATA must be one path of letters, digits and . _ / + @ - (no make or shell metacharacter, no leading + @ -), not "$(value IOS_BUNDLE_DATA)")
+endif
+endif
+# the path with the symlinks of its longest existing prefix resolved
+ios_physical = $(if $(realpath $(1)),$(realpath $(1)),$(call ios_physical,$(or $(patsubst %/,%,$(dir $(1))),/))/$(notdir $(1)))
+IOS_ROOT_ABS := $(abspath $(call ios_physical,$(abspath $(IOS_ROOT))))
+IOS_NOT_ROOTS := $(sort $(foreach d,release debug,$(abspath $(d)) $(abspath $(call ios_physical,$(abspath $(d))))))
+ifneq ($(filter $(IOS_NOT_ROOTS) $(addsuffix /%,$(IOS_NOT_ROOTS)),$(abspath $(IOS_ROOT)) $(IOS_ROOT_ABS)),)
+$(error IOS_ROOT must not be release/ or debug/ or under them, not "$(IOS_ROOT)" ($(IOS_ROOT_ABS)))
 endif
 override BUILDDIR := $(IOS_ROOT)
 override STATIC_ROOT := $(IOS_ROOT)
@@ -1568,9 +1586,6 @@ endif
 # and the Info.plist only, without SDL and the link: what
 # tests/check-ios.sh checks in the gate.
 ifeq ($(IOS_MODE),1)
-ifneq ($(findstring ',$(IOS_BUNDLE_DATA)),)
-$(error IOS_BUNDLE_DATA must not hold a quote, not "$(IOS_BUNDLE_DATA)")
-endif
 IOS_APP := $(IOS_ROOT)/Quake2.app
 IOS_PLIST := $(IOS_ROOT)/Info.plist
 # CFBundleVersion takes digits and dots only: 8.71 of 8.71pre
@@ -1583,12 +1598,12 @@ endif
 
 ios_plist:
 	@echo "===> PLIST $(IOS_PLIST)"
-	${Q}mkdir -p $(dir $(IOS_PLIST))
+	${Q}mkdir -p '$(dir $(IOS_PLIST))'
 	${Q}sed -e 's/@BUNDLE_ID@/$(IOS_BUNDLE_ID)/g' -e 's/@VERSION@/$(IOS_VERSION)/g' \
 		-e 's/@PLATFORM@/$(IOS_PLATFORM)/g' -e 's/@MIN_OS@/$(IOS_MIN)/g' \
-		stuff/ios/Info.plist.in > $(IOS_PLIST).tmp
-	${Q}plutil -lint -s $(IOS_PLIST).tmp
-	${Q}mv $(IOS_PLIST).tmp $(IOS_PLIST)
+		stuff/ios/Info.plist.in > '$(IOS_PLIST).tmp'
+	${Q}plutil -lint -s '$(IOS_PLIST).tmp'
+	${Q}mv '$(IOS_PLIST).tmp' '$(IOS_PLIST)'
 
 ios_objects: $(CLIENT_OBJS) $(STATIC_LINK_OBJS) ios_plist
 
@@ -1604,19 +1619,19 @@ endif
 
 ios: $(BINDIR)/quake2 ios_plist
 	@echo "===> APP $(IOS_APP)"
-	${Q}rm -rf $(IOS_APP)
-	${Q}mkdir -p $(IOS_APP)
-	${Q}cp $(BINDIR)/quake2 $(IOS_APP)/quake2
-	${Q}cp $(IOS_PLIST) $(IOS_APP)/Info.plist
+	${Q}rm -rf '$(IOS_APP)'
+	${Q}mkdir -p '$(IOS_APP)'
+	${Q}cp '$(BINDIR)/quake2' '$(IOS_APP)/quake2'
+	${Q}cp '$(IOS_PLIST)' '$(IOS_APP)/Info.plist'
 ifeq ($(METAL_SHADERS), yes)
-	${Q}cp $(BINDIR)/ref_metal.metallib $(IOS_APP)/ref_metal.metallib
+	${Q}cp '$(BINDIR)/ref_metal.metallib' '$(IOS_APP)/ref_metal.metallib'
 endif
 ifneq ($(IOS_BUNDLE_DATA),)
 	${Q}test -d '$(IOS_BUNDLE_DATA)/baseq2' || { echo "IOS_BUNDLE_DATA has no baseq2 directory: $(IOS_BUNDLE_DATA)" >&2; exit 1; }
-	${Q}cp -R '$(IOS_BUNDLE_DATA)/baseq2' $(IOS_APP)/baseq2
+	${Q}cp -R '$(IOS_BUNDLE_DATA)/baseq2' '$(IOS_APP)/baseq2'
 endif
 ifeq ($(IOS_SDK), iphonesimulator)
-	${Q}codesign --force --sign - --timestamp=none $(IOS_APP)
+	${Q}codesign --force --sign - --timestamp=none '$(IOS_APP)'
 endif
 endif
 
