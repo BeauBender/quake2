@@ -1,0 +1,20 @@
+# FIX51 (docs/runbook/FIX51.md, "Round 3 measurements"): the rendered rate of a
+# timedemo of demo1.dm2 (its fps line) in the Metal shim build of ref_gl1, 5120x2880 vid_fullscreen 1, r_vsync 0,
+# with the stock game settings and metal_stats 1 (the presented and the
+# drawable-less frames, counted over the whole run, at the renderer's close).
+# FIX51's presented a second over a window of seconds came from a probe
+# the engine does not carry, so this case does not reproduce that column.
+adapter=quake2
+description=FIX51 presents: gl1-metal, 5120x2880 vid_fullscreen 1, r_vsync 0, timedemo of demo1.dm2
+targets=client game ref_gl1
+build_flags=WITH_METAL_SHIM=yes
+settings=renderer=gl1-metal size=5120x2880 fullscreen=1 vsync=0 pace=timedemo seconds=8 cvar.metal_stats=1
+requires=physical-gpu
+runs=3
+warmup=1
+wall=40
+metric=fps
+better=higher
+abs_tol=1
+rel_tol=0.1
+accept=0
