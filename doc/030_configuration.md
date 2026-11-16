@@ -183,8 +183,10 @@ On iOS the home directory is the app's *Documents* folder, not
 active mod), next to the game data, and the Files app shows them under
 "On My iPhone" (or "On My iPad") > "Quake II". The options *-cfgdir* and
 *-portable* have no effect there; *-portable* prints a line that says so,
-because the app bundle is read-only. See [Installation](020_installation.md)
-for the game data.
+because the app bundle is read-only. A start with no game data writes
+there too, before it shows the alert and quits: *qconsole.log* and
+*scrnshot/* in *Documents/baseq2/*, and *console_history.txt* in
+*Documents/*. See [Installation](020_installation.md) for the game data.
 
 
 ## Retexturing Packs
