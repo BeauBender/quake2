@@ -2,12 +2,15 @@
 # scale on the M6"): the MetalFX spatial scaler's GPU time per view, the
 # metal_stats 2 line's "scaler <t> ms", at r_metalfx_scale 0.5, output
 # 5120x2880 fullscreen, vid_highdpiaware 1, the world pin scenario's settings,
-# demo1.dm2 at the engine's own pace with display sync, about 14 s, past
-# the first 60 lines.
+# demo1.dm2 at the engine's own pace, about 14 s, past the first 60 lines.
+# Display sync is off and vid_maxfps 300, where TASK111 had it on: at 60
+# frames a second on a quiet host the GPU clocks down between frames and
+# the pass reads about twice its time, spread over 9 percent between runs
+# (docs/runbook/TASK154.md); kept busy it repeats to the microsecond.
 adapter=quake2
-description=TASK111 MetalFX scaler GPU time: 5120x2880, r_metalfx 1, scale 0.5
+description=TASK111 MetalFX scaler GPU time: 5120x2880, r_metalfx 1, scale 0.5, display sync off
 targets=client game ref_metal
-settings=renderer=metal size=5120x2880 fullscreen=1 hidpi=1 vsync=1 scenario=world pace=own seconds=14 skip=60 cvar.r_metalfx=1 cvar.r_metalfx_scale=0.5 cvar.metal_stats=2
+settings=renderer=metal size=5120x2880 fullscreen=1 hidpi=1 vsync=0 maxfps=300 scenario=world pace=own seconds=14 skip=60 cvar.r_metalfx=1 cvar.r_metalfx_scale=0.5 cvar.metal_stats=2
 requires=physical-gpu metalfx
 runs=3
 warmup=1
