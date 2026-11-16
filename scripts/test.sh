@@ -34,9 +34,23 @@ if [ "$(git config --get core.hooksPath || true)" != ".githooks" ]; then
 	echo "test.sh: warning: core.hooksPath is not .githooks in this checkout, so the commit and push hooks are not wired; run scripts/setup.sh (if it says it skipped, wire them by hand: git config core.hooksPath .githooks)"
 fi
 
-for check in tests/check-*.sh; do
-	"$check"
-done
+gate_t0=$(date +%s)
+
+# The checks run through scripts/gate-checks.sh (FIX72): GATE_JOBS at a
+# time (default half the CPUs, at least 1; GATE_JOBS=1 runs them one after
+# another in the glob's order, as before), each into a log of its own that
+# is printed whole and in the glob's order with its wall time. The run fails
+# if any check fails, and names every one that did; then nothing below runs.
+#
+# gate_serial lists the checks that write a fixed path another check also
+# uses (a build directory, release/, debug/, a scratch path made without
+# mktemp, a tracked file of the checkout): they run alone, after the others.
+# None does today: each check writes only below its own mktemp -d, and the
+# builds among them (autorelease-pool, metal-shim, ref-metal) copy the tree
+# into it; static-modules builds in the checkout with STATIC_ROOT in it.
+gate_serial=""
+scripts/gate-checks.sh "$gate_serial" tests/check-*.sh
 
 make -B -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)" server game
 make -B -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)" UPDATE_PINS= TEST_ARGS= test
+echo "test.sh: the gate passed in $(($(date +%s) - gate_t0)) s"
