@@ -22,7 +22,9 @@
 #       list of the macOS SDK's AppKit.tbd; Cocoa is AppKit's umbrella);
 #   (d) the Info.plist passes plutil -lint, names quake2 as its
 #       CFBundleExecutable, iPhoneSimulator and 17.0, and holds no
-#       template key;
+#       template key, and holds UIFileSharingEnabled and
+#       LSSupportsOpeningDocumentsInPlace as true (TASK149: the Files
+#       app shows the app's Documents folder only with them);
 #   (e) "make -n -B VERBOSE=1 client ref_metal" without the iOS mode
 #       prints no -target, iPhone or ios token (assert_macos_cmds);
 #   (f) the objects of ios_objects are compiled with the commands ios
@@ -177,6 +179,10 @@ assert_plist() # <Info.plist>
 	[ "$min" = "$minos" ] || { echo "$1: MinimumOSVersion is $min, not $minos"; rc=1; }
 	id=$(plutil -extract CFBundleIdentifier raw -o - "$1" 2>/dev/null) || id=
 	[ -n "$id" ] || { echo "$1: no CFBundleIdentifier"; rc=1; }
+	for key in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
+		v=$(plutil -extract "$key" raw -o - "$1" 2>/dev/null) || v="(none)"
+		[ "$v" = true ] || { echo "$1: $key is $v, not true (the Files app shows Documents only with it)"; rc=1; }
+	done
 	if grep -E '@[A-Z_]+@' "$1" >/dev/null; then
 		echo "$1 holds a template key: $(grep -E -o '@[A-Z_]+@' "$1" | sort -u | tr '\n' ' ')"
 		rc=1
@@ -387,6 +393,15 @@ sed -e 's/@BUNDLE_ID@/org.example.check/g' -e 's/@VERSION@/1.0/g' -e "s/@PLATFOR
 cp "${m:?}/good.app/Info.plist" "${m:?}/noexe.plist"
 plutil -remove CFBundleExecutable "${m:?}/noexe.plist"
 refused "Info.plist without CFBundleExecutable" "CFBundleExecutable is (none)" assert_plist "${m:?}/noexe.plist"
+cp "${m:?}/good.app/Info.plist" "${m:?}/nosharing.plist"
+plutil -remove UIFileSharingEnabled "${m:?}/nosharing.plist"
+refused "Info.plist without UIFileSharingEnabled" "UIFileSharingEnabled is (none)" assert_plist "${m:?}/nosharing.plist"
+cp "${m:?}/good.app/Info.plist" "${m:?}/noinplace.plist"
+plutil -remove LSSupportsOpeningDocumentsInPlace "${m:?}/noinplace.plist"
+refused "Info.plist without LSSupportsOpeningDocumentsInPlace" "LSSupportsOpeningDocumentsInPlace is (none)" assert_plist "${m:?}/noinplace.plist"
+cp "${m:?}/good.app/Info.plist" "${m:?}/sharingoff.plist"
+plutil -replace UIFileSharingEnabled -bool NO "${m:?}/sharingoff.plist"
+refused "Info.plist with file sharing off" "UIFileSharingEnabled is false, not true" assert_plist "${m:?}/sharingoff.plist"
 refused "Info.plist template unfilled" "template key: @BUNDLE_ID@" assert_plist stuff/ios/Info.plist.in
 accepted "Info.plist filled in" assert_plist "${m:?}/good.app/Info.plist"
 # (e)
