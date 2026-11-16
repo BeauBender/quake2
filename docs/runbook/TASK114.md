@@ -8,6 +8,12 @@ git work tree, through a symbolic link at any component, or that it cannot write
 a run goes into the repository, an issue, a pull request or a release (the pull request of a
 change to the generator carries numbers only).
 
+"Inside a git work tree" means a `.git` entry at the output path or at any directory above it
+(or `git rev-parse` saying so from the deepest directory that exists). A work tree that is
+separated from its git directory (`core.worktree`, or a bare repository used with `--work-tree`,
+as some dotfile setups do) leaves no mark on its own path, so the generator cannot see it: keep
+`--out` away from such a tree yourself.
+
 **Run it** (macOS with the Xcode tools; nothing else is installed):
 
 ```sh
@@ -63,7 +69,22 @@ scripts/metalfx-report.sh report --dir <this host's results folder> --other <the
 The second form rebuilds the page from existing results without an engine. The other host's
 numbers show beside this host's, per scenario and option, and an option that host could not run
 shows its reason; images come only from the host the report is built on. A results folder is
-validated when read (header, column count, every number), and a malformed one is an error.
+validated when read (a regular file, header, column count, every number, option and scenario
+names that are plain names, a known status), and a malformed one is an error.
+
+**Reruns and the engine's own state.** Every engine run starts from the engine's defaults: the
+generator moves the binary's `baseq2/config.cfg` aside to `config.cfg.mfx-saved` for the whole
+run, removes what the previous run saved before each engine run, sets every cvar a row or scenario
+sets (and each `r_rt_*` and `r_metalfx*` cvar the probe reports) to its default first, and puts
+your file back at the end, also after an error, Ctrl-C, SIGTERM or SIGHUP. A SIGKILL or a power
+cut cannot be caught and leaves your file at `config.cfg.mfx-saved`; the next run puts it back
+before it does anything, or rename it by hand. `--replace` empties the earlier run's `crops/` and
+result files, and a crop is embedded only for a row that ran. The freshness check and the commit
+in `meta.tsv` are those of the tree the binary is in (`<tree>/release/quake2`, run through
+`--bin` or `PINS_BIN` too); a binary outside such a tree is not checked, is recorded with the commit
+`unknown`, and the generator says so. The scratch scenarios the quality records need are written to
+`scripts/pins/scenarios/mfxr-*.cfg` (pins.sh reads scenarios only from there; git ignores them) and
+removed when the run ends or at the start of the next.
 
 **Self-test.** `tests/check-metalfx-report.sh` (in the gate) needs no engine and no game data.
 It feeds synthetic results, synthetic TGAs and a fake engine, in a scratch directory with the

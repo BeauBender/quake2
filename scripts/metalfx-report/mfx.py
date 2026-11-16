@@ -21,6 +21,7 @@ import pty
 import re
 import select
 import shutil
+import signal
 import stat
 import struct
 import subprocess
@@ -54,14 +55,20 @@ class Refuse(Exception):
 
 # ---------------------------------------------------------------- the output path
 
-def _git_says_inside(path):
-    """True when git reports path inside a work tree. Run with no git environment
-    and no user or system config, so the caller's GIT_DIR and the like cannot
-    change the answer. A git that cannot run is an error, never 'outside'."""
+def git_env():
+    """The environment for a git run: no GIT_* variable, no user or system config."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env["GIT_CONFIG_GLOBAL"] = os.devnull
     env["GIT_CONFIG_SYSTEM"] = os.devnull
     env["GIT_CONFIG_NOSYSTEM"] = "1"
+    return env
+
+
+def _git_says_inside(path):
+    """True when git reports path inside a work tree. Run with no git environment
+    and no user or system config, so the caller's GIT_DIR and the like cannot
+    change the answer. A git that cannot run is an error, never 'outside'."""
+    env = git_env()
     try:
         p = subprocess.run(["git", "-C", path, "rev-parse", "--is-inside-work-tree"], env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
@@ -146,6 +153,31 @@ def write_file(path, data):
         os.close(fd)
 
 
+def write_atomic(path, data):
+    """Write bytes to a new file in path's directory and rename it over path, so a hard
+    link at path is replaced and never written through. A symbolic link at path, or
+    anything that is not a regular file, is refused."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        st = None
+    if st is not None and not stat.S_ISREG(st.st_mode):
+        raise Refuse("%s exists and is not a regular file" % path)
+    d = os.path.dirname(path)
+    fd, tmpname = tempfile.mkstemp(prefix=".mfx-", suffix=".tmp", dir=d)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.chmod(tmpname, 0o644)
+        os.rename(tmpname, path)
+    except BaseException:
+        try:
+            os.unlink(tmpname)
+        except OSError:
+            pass
+        raise
+
+
 # ---------------------------------------------------------------- cvars and the plan
 
 CVARLIST_RE = re.compile(r'^[ *][ U][ S][ L-] ([A-Za-z0-9_]+) "(.*)"$')
@@ -159,6 +191,28 @@ def parse_cvarlist(text):
         if m:
             out[m.group(1)] = m.group(2)
     return out
+
+
+NOSET_RE = re.compile(r'^[ *][ U][ S]- ([A-Za-z0-9_]+) "')
+RENDERER_REPORTED = ("r_metalfx_modes",)  # written by the renderer, not a setting
+
+
+def default_cvars(base_cv, noset, options, scenarios):
+    """cvar -> its default, for every cvar an option or a scenario sets and every gating cvar
+    the base probe (nothing set, no config.cfg) reported: each engine run sets them first, so no run
+    starts from the value an earlier run left. Only a cvar the engine reports and lets be set."""
+    names = set(c for c in base_cv if c.startswith(GATING_PREFIXES))
+    for o in options:
+        names.update(k for k, _ in o["set"])
+    for s in scenarios.values():
+        names.update(s)
+    return dict((c, base_cv[c]) for c in sorted(names) if c in base_cv and c not in noset and c not in RENDERER_REPORTED
+                and CVAR_RE.match(c) and VALUE_RE.match(base_cv[c]))
+
+
+def parse_noset(text):
+    """The names of the cvars the engine's cvarlist marks as not settable."""
+    return set(m.group(1) for m in (NOSET_RE.match(l.rstrip("\r")) for l in text.splitlines()) if m)
 
 
 def parse_set(s):
@@ -360,7 +414,7 @@ def crop_png(img, x0, y0, ww, wh, scale):
 
 TIMEDEMO_RE = re.compile(r"(\d+) frames, ([0-9.]+) seconds: ([0-9.]+) fps")
 GPU_FRAME_RE = re.compile(r"ref_metal: gpu_ms ([0-9.]+) frame")
-STATS_RE = re.compile(r"metal_stats: metalfx [a-z ]+: input (\d+)x(\d+), output (\d+)x(\d+) at [0-9,]+, reset \w+, scaler ([0-9.]+) ms")
+STATS_RE = re.compile(r"metal_stats: metalfx [a-z ]+: input (\d+)x(\d+), output (\d+)x(\d+) at [0-9,]+, reset [a-z ]+, scaler (?:([0-9.]+) ms|not timed)")
 LOAD_RE = re.compile(r"load averages?: *([0-9.]+)")
 VALIDATION_ON = "Metal API Validation Enabled"
 
@@ -372,7 +426,56 @@ def median(v):
 
 
 class Ctx:
-    pass
+    cfg = None
+    defaults = {}
+
+
+class CfgGuard:
+    """The engine's portable config.cfg (<binary dir>/baseq2/config.cfg). The engine reads it at
+    start and rewrites it at exit, so a cvar one run set would reach the next run, and the owner's
+    file would end holding the last run's settings. hold() moves the owner's file aside (renamed to
+    config.cfg.mfx-saved beside it), clear() removes what a run left before the next run starts,
+    restore() puts the owner's file back, and the generator calls it in a finally and from a
+    SIGTERM/SIGHUP handler (SIGINT unwinds as KeyboardInterrupt). A SIGKILL or a power cut cannot be
+    caught: it leaves the owner's file at config.cfg.mfx-saved, and the next run puts it back before
+    it does anything else (or rename it by hand)."""
+
+    def __init__(self, binpath):
+        self.path = os.path.join(os.path.dirname(os.path.abspath(binpath)), "baseq2", "config.cfg")
+        self.saved = self.path + ".mfx-saved"
+        self.held = False
+        self.recovered = False
+
+    def _remove(self, p):
+        try:
+            st = os.lstat(p)
+        except FileNotFoundError:
+            return
+        if stat.S_ISDIR(st.st_mode):
+            raise Refuse("%s is a directory" % p)
+        os.unlink(p)
+
+    def hold(self):
+        if os.path.lexists(self.saved):  # a run that was killed left the owner's file here
+            self._remove(self.path)
+            os.rename(self.saved, self.path)
+            self.recovered = True
+        if os.path.lexists(self.path):
+            if os.path.isdir(self.path) and not os.path.islink(self.path):
+                raise Refuse("%s is a directory" % self.path)
+            os.rename(self.path, self.saved)
+        self.held = True
+
+    def clear(self):
+        self._remove(self.path)
+
+    def restore(self):
+        if not self.held:
+            return
+        self._remove(self.path)
+        if os.path.lexists(self.saved):
+            os.rename(self.saved, self.path)
+        self.held = False
 
 
 def sh(cmd, cwd=None, env=None, timeout=None):
@@ -391,6 +494,8 @@ def load1():
 
 def engine_args(ctx, scenario_sets, extra_sets, tail):
     a = ["-datadir", ctx.basedir, "-portable"]
+    for k, v in sorted(ctx.defaults.items()):  # first: every cvar a row sets starts at its default
+        a += ["+set", k, v]
     for k, v in scenario_sets + extra_sets:
         a += ["+set", k, v]
     a += ["+set", "vid_renderer", "metal", "+set", "vid_fullscreen", "0", "+set", "r_mode", "-1",
@@ -414,7 +519,10 @@ def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=Tr
     master, slave = pty.openpty()
     buf = bytearray()
     status, why = None, None
+    p = None
     try:
+        if ctx.cfg is not None:
+            ctx.cfg.clear()  # the run starts from the engine's defaults, not from what the last run saved
         p = subprocess.Popen([ctx.bin] + args, cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=slave,
                              stderr=slave, close_fds=True)
         os.close(slave)
@@ -458,6 +566,9 @@ def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=Tr
                 p.kill()
                 p.wait()
     finally:
+        if p is not None and p.poll() is None:  # an interrupt must not leave the engine running
+            p.kill()
+            p.wait()
         if slave >= 0:
             os.close(slave)
         os.close(master)
@@ -573,7 +684,7 @@ def record(ctx, scen_name, base_sets, sets, tag):
     name = "mfxr-%s-%s" % (scen_name, tag)
     if not NAME_RE.match(name):
         raise RuntimeError("bad scenario name " + name)
-    cfg = os.path.join(ctx.scen_dir, name + ".cfg")
+    cfg = os.path.join(ctx.pins_scen_dir, name + ".cfg")
     body = "// scratch scenario of scripts/metalfx-report.sh, deleted when it ends\n"
     with open(os.path.join(ctx.scen_dir, scen_name + ".cfg")) as f:
         body += f.read()
@@ -587,10 +698,16 @@ def record(ctx, scen_name, base_sets, sets, tag):
     env = dict(os.environ)
     env.update({"PINS_STORE": ctx.store, "PINS_BASEDIR": ctx.basedir, "PINS_WIDTH": str(ctx.width),
                 "PINS_HEIGHT": str(ctx.height), "PINS_EVERY": str(ctx.every), "PINS_SEED": str(ctx.seed),
-                "PINS_TIMEOUT": "600", "MTL_DEBUG_LAYER": "1"})
-    rc, out = sh([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)
-    os.remove(cfg)
-    ctx.scratch_cfgs.remove(cfg)
+                "PINS_TIMEOUT": "600", "MTL_DEBUG_LAYER": "1", "PINS_BIN": ctx.bin})
+    try:
+        rc, out = sh([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)
+    finally:
+        try:
+            os.remove(cfg)
+        except OSError:
+            pass
+        if cfg in ctx.scratch_cfgs:
+            ctx.scratch_cfgs.remove(cfg)
     if rc != 0:
         raise RuntimeError("pins.sh record %s failed: %s" % (name, out.strip()[-300:]))
     dirs = [d for d in sorted(os.listdir(os.path.join(ctx.store, name, "metal")))
@@ -615,6 +732,101 @@ def frames_by_index(d):
     return out
 
 
+def frame_keys(frames):
+    """The frame numbers of frames_by_index, in numeric order."""
+    return sorted(frames, key=int)
+
+
+def engine_tree(binpath):
+    """(tree, why): the source tree a binary was built in, taken from its place
+    <tree>/release/quake2 under a directory with a Makefile and src/; else (None, why)."""
+    real = os.path.realpath(binpath)
+    rel = os.path.dirname(real)
+    if os.path.basename(real) != "quake2" or os.path.basename(rel) != "release":
+        return None, "the binary is not <tree>/release/quake2"
+    tree = os.path.dirname(rel)
+    if not (os.path.isfile(os.path.join(tree, "Makefile")) and os.path.isdir(os.path.join(tree, "src"))):
+        return None, "no Makefile and src/ above the binary"
+    return tree, ""
+
+
+def check_build(tree):
+    """Refuse when make says the engine or the renderer of this tree is out of date."""
+    rc, _ = sh(["make", "-C", tree, "-q", "release/quake2", "release/ref_metal.dylib"])
+    if rc != 0:
+        raise Refuse("the build in %s is out of date (or make cannot say): run make client game ref_metal there first" % tree)
+
+
+def engine_commit(tree):
+    """(commit, 'clean'|'dirty') of the tree the engine was built from, or ('unknown', 'unknown')."""
+    if tree is None:
+        return "unknown", "unknown"
+    env = git_env()
+    p = subprocess.run(["git", "-C", tree, "rev-parse", "--short=8", "HEAD"], env=env, stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE, universal_newlines=True)
+    commit = p.stdout.strip()
+    if p.returncode != 0 or not re.match(r"^[0-9a-f]{8}$", commit):
+        return "unknown", "unknown"
+    p = subprocess.run(["git", "-C", tree, "status", "--porcelain", "--", "src", "Makefile"], env=env,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    if p.returncode != 0:
+        raise RuntimeError("git status failed: " + p.stderr[:200])
+    return commit, ("dirty" if p.stdout.strip() else "clean")
+
+
+def prepare_rdir(out, host, date, replace):
+    """The results directory of this run, made. An existing one is refused without replace;
+    with it the earlier run's crops and result files are removed first, so nothing of it is
+    left to be reported as this run's."""
+    rdir = os.path.join(out, "metalfx-%s-%s" % (host, date))
+    if os.path.lexists(rdir) and not replace:
+        raise Refuse("%s exists; pass --replace" % rdir)
+    make_dirs_physical(out)
+    make_dirs_physical(rdir)
+    crops = os.path.join(rdir, "crops")
+    make_dirs_physical(crops)
+    for d, names in ((crops, os.listdir(crops)), (rdir, ["results.tsv", "skipped.tsv", "meta.tsv"])):
+        for n in names:
+            f = os.path.join(d, n)
+            try:
+                st = os.lstat(f)
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                raise Refuse("%s is not a regular file: it is not removed" % f)
+            os.unlink(f)
+    return rdir
+
+
+def clear_scratch_cfgs(scen_dir):
+    """Remove the scratch scenarios of a run that was killed before it cleaned up."""
+    for f in os.listdir(scen_dir):
+        if f.startswith("mfxr-"):
+            p = os.path.join(scen_dir, f)
+            if not stat.S_ISREG(os.lstat(p).st_mode):
+                raise Refuse("%s is in the way and is not a regular file" % p)
+            os.unlink(p)
+
+
+def probe_options(ctx, options, rows, work):
+    """(ok_opts, skipped): the options of rows whose values the engine reads back as asked. An
+    option whose probe run fails is skipped with the reason, and the others go on."""
+    ok_opts, skipped, byid = {}, [], {o["id"]: o for o in options}
+    for oid in sorted({r[0] for r in rows}, key=[o["id"] for o in options].index):
+        o = byid[oid]
+        try:
+            cv, _ = probe(ctx, o["set"], os.path.join(work, "probe-%s.log" % oid))
+        except RuntimeError as e:
+            skipped.append((oid, "*", ("probe failed: %s" % e).replace("\t", " ").replace("\n", " ")[:300]))
+            continue
+        good, why = accepted(o["set"], cv)
+        if good:
+            ok_opts[oid] = o
+        else:
+            skipped.append((oid, "*", "unsupported: " + why))
+    return ok_opts, skipped
+
+
 def cmd_run(a):
     ctx = Ctx()
     out = check_out_path(a.out)
@@ -631,52 +843,60 @@ def cmd_run(a):
     ctx.every = a.every
     ctx.seed = a.seed
     ctx.scen_dir = os.path.join(ROOT, "scripts", "pins", "scenarios")
+    ctx.pins_scen_dir = ctx.scen_dir  # pins.sh reads its scenarios from here (scripts/pins.sh scen_dir)
     ctx.scratch_cfgs = []
     ctx.framediff, ctx.ssim = a.framediff, a.ssim
     for t in (ctx.bin, ctx.framediff, ctx.ssim):
         if not os.access(t, os.X_OK):
             raise Refuse("%s is not an executable" % t)
-    if not a.bin and not os.environ.get("PINS_BIN"):
-        rc, _ = sh(["make", "-C", ROOT, "-q", "release/quake2", "release/ref_metal.dylib"])
-        if rc != 0:
-            raise Refuse("the build is out of date (or make cannot say): run make client game ref_metal first")
-    for f in os.listdir(ctx.scen_dir):
-        if f.startswith("mfxr-"):
-            raise Refuse("a scratch scenario %s is left over in scripts/pins/scenarios; remove it" % f)
+    # the freshness check and the commit are those of the tree the binary was built in; a binary
+    # that does not sit in such a tree is not checked, and says so in the report's meta
+    ctx.tree, why = engine_tree(ctx.bin)
+    if ctx.tree is not None:
+        check_build(ctx.tree)
+        ctx.build_note = "checked"
+    else:
+        ctx.build_note = "not checked: " + why
+        print("metalfx-report: the build of %s is not checked for freshness (%s); its commit is recorded as unknown" % (ctx.bin, why),
+              file=sys.stderr)
+    clear_scratch_cfgs(ctx.pins_scen_dir)
     host = a.host
     if not re.match(r"^[a-z0-9][a-z0-9-]*$", host):
         raise Refuse("--host-name must match [a-z0-9][a-z0-9-]*")
     date = time.strftime("%Y%m%d")
-    rdir = os.path.join(out, "metalfx-%s-%s" % (host, date))
-    if os.path.lexists(rdir) and not a.replace:
-        raise Refuse("%s exists; pass --replace" % rdir)
-    make_dirs_physical(out)
-    make_dirs_physical(rdir)
-    make_dirs_physical(os.path.join(rdir, "crops"))
+    rdir = prepare_rdir(out, host, date, a.replace)
     work = tempfile.mkdtemp(prefix=".work-", dir=out)
     ctx.store = os.path.join(work, "store")
     os.mkdir(ctx.store)
     errors = []
+    ctx.cfg = CfgGuard(ctx.bin)
+    old = {}
+
+    def on_signal(signum, frame):
+        raise SystemExit(128 + signum)  # unwinds through the finally below
+    for s in (signal.SIGTERM, signal.SIGHUP):
+        old[s] = signal.signal(s, on_signal)
     try:
+        ctx.cfg.hold()
+        if ctx.cfg.recovered:
+            print("metalfx-report: the owner's config.cfg of an earlier killed run was put back from " + ctx.cfg.saved, file=sys.stderr)
         return _run(a, ctx, rdir, work, host, date, errors)
     finally:
-        for c in ctx.scratch_cfgs:
-            try:
-                os.remove(c)
-            except OSError:
-                pass
-        shutil.rmtree(work, ignore_errors=True)
+        try:
+            ctx.cfg.restore()
+        finally:
+            for s, h in old.items():
+                signal.signal(s, h)
+            for c in ctx.scratch_cfgs:
+                try:
+                    os.remove(c)
+                except OSError:
+                    pass
+            shutil.rmtree(work, ignore_errors=True)
 
 
 def _run(a, ctx, rdir, work, host, date, errors):
-    rc, commit = sh(["git", "-C", ROOT, "rev-parse", "--short=8", "HEAD"])
-    commit = commit.strip()
-    if rc != 0 or not re.match(r"^[0-9a-f]{8}$", commit):
-        raise RuntimeError("git cannot name the engine commit: " + commit[:200])
-    rc, st = sh(["git", "-C", ROOT, "status", "--porcelain", "--", "src", "Makefile"])
-    if rc != 0:
-        raise RuntimeError("git status failed: " + st[:200])
-    dirty = "dirty" if st.strip() else "clean"
+    commit, dirty = engine_commit(ctx.tree)
 
     # what the engine reports: its cvars (nothing set, so none is created by asking)
     base_cv, text = probe(ctx, [], os.path.join(work, "probe-base.log"))
@@ -697,18 +917,12 @@ def _run(a, ctx, rdir, work, host, date, errors):
     if a.only:
         keep = set(a.only.split(","))
         options = [o for o in options if o["id"] in keep]
+    ctx.defaults = default_cvars(base_cv, parse_noset(text), load_options(os.path.join(HERE, "options.tsv")), scen)
     rows, skipped = plan(options, base_cv, scen)
 
     # the read-back: an option runs only when the engine reports each value as asked
-    ok_opts, byid = {}, {o["id"]: o for o in options}
-    for oid in sorted({r[0] for r in rows}, key=[o["id"] for o in options].index):
-        o = byid[oid]
-        cv, _ = probe(ctx, o["set"], os.path.join(work, "probe-%s.log" % oid))
-        good, why = accepted(o["set"], cv)
-        if good:
-            ok_opts[oid] = o
-        else:
-            skipped.append((oid, "*", "unsupported: " + why))
+    ok_opts, more = probe_options(ctx, options, rows, work)
+    skipped += more
     rows = [r for r in rows if r[0] in ok_opts]
     live_scen = [s for s in scen if not any(x[0] == "*" and x[1] == s for x in skipped)]
     results = {}  # (option, scenario) -> dict
@@ -734,7 +948,9 @@ def _run(a, ctx, rdir, work, host, date, errors):
                     row[oid]["gpu"].append(median(fr))
                     st = STATS_RE.findall(text)
                     if st:
-                        row[oid]["scaler"].append(median([float(x[4]) for x in st]))
+                        timed = [float(x[4]) for x in st if x[4]]
+                        if timed:
+                            row[oid]["scaler"].append(median(timed))
                         row[oid]["in"] = "%sx%s" % (st[-1][0], st[-1][1])
                         row[oid]["out"] = "%sx%s" % (st[-1][2], st[-1][3])
             # the quality: one seeded record of each, against the native record
@@ -744,23 +960,23 @@ def _run(a, ctx, rdir, work, host, date, errors):
             nat = frames_by_index(pins["native"])
             if not nat:
                 raise RuntimeError("the native record of %s holds no frames" % sc)
+            nkeys = frame_keys(nat)
             for oid, sets in opts:
                 fr = frames_by_index(pins[oid])
                 if sorted(fr) != sorted(nat):
                     raise RuntimeError("%s %s: its frames (%d) are not the native record's (%d)" % (sc, oid, len(fr), len(nat)))
-                t0 = read_tga_header(fr[sorted(fr)[0]])
+                t0 = read_tga_header(fr[frame_keys(fr)[0]])
                 row[oid]["capture"] = "%dx%d" % t0
                 row[oid]["frames"] = len(fr)
                 if oid == "native":
                     continue
                 sc_l, bad_l, ss_l = [], [], []
-                for k in sorted(fr):
+                for k in frame_keys(fr):
                     s, b, ss, _ = diff_frames(ctx, nat[k], fr[k])
                     sc_l.append(s); bad_l.append(b); ss_l.append(ss)
                 row[oid]["q"] = (sum(sc_l) / len(sc_l), max(sc_l), max(bad_l), sum(ss_l) / len(ss_l), min(ss_l))
             # matched crops of the same frame
-            keys = sorted(nat)
-            mid = keys[len(keys) // 2]
+            mid = nkeys[len(nkeys) // 2]
             nimg = read_tga(nat[mid])
             first = [o for o, _ in opts if o != "native"]
             ww, wh = min(nimg[0], 200), min(nimg[1], 150)
@@ -795,7 +1011,7 @@ def _run(a, ctx, rdir, work, host, date, errors):
                          *(["", "", "", "", ""] if q is None else [fnum(x, 6) for x in q]), load_note(w["load"])))
     tsv_write(os.path.join(rdir, "results.tsv"), RESULT_COLS, out_rows)
     tsv_write(os.path.join(rdir, "skipped.tsv"), SKIPPED_COLS, skipped)
-    meta = [("host", host), ("date", date), ("commit", commit), ("tree", dirty), ("device", device), ("family", family),
+    meta = [("host", host), ("date", date), ("commit", commit), ("tree", dirty), ("build", ctx.build_note), ("device", device), ("family", family),
             ("modes", base_cv.get("r_metalfx_modes", "")), ("size", "%dx%d" % (ctx.width, ctx.height)),
             ("fps_runs", a.runs), ("gpu_runs", a.gpu_runs), ("seed", ctx.seed), ("every", ctx.every),
             ("uptime_start", uptime_start), ("uptime_end", uptime_end), ("errors", len(errors))]
@@ -819,9 +1035,24 @@ def read_tga_header(path):
 
 # ---------------------------------------------------------------- the report
 
+def read_regular(path):
+    """The text of a regular file. Anything else (a FIFO, a device, a directory, a symbolic link) is
+    refused, and opening never waits: a FIFO in a results folder must not stop the report."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except OSError as e:
+        raise ValueError("%s: cannot be read as a file of results: %s" % (path, e))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("%s: not a regular file" % path)
+        with os.fdopen(fd, "r", closefd=False) as f:
+            return f.read()
+    finally:
+        os.close(fd)
+
+
 def read_tsv(path, cols):
-    with open(path) as f:
-        lines = f.read().split("\n")
+    lines = read_regular(path).split("\n")
     if lines and lines[-1] == "":
         lines.pop()
     if not lines or lines[0].split("\t") != cols:
@@ -845,10 +1076,42 @@ def load_host(d):
     res = read_tsv(os.path.join(d, "results.tsv"), RESULT_COLS)
     skp = read_tsv(os.path.join(d, "skipped.tsv"), SKIPPED_COLS)
     for r in res:
+        # names that choose a file (a crop) or a row are names, never paths; a status is one the generator writes
+        if not NAME_RE.match(r["option"]) or not NAME_RE.match(r["scenario"]):
+            raise ValueError("%s: results.tsv names an option or scenario that is not a plain name: %r %r" % (d, r["option"], r["scenario"]))
+        if r["status"] not in ("ok", "error"):
+            raise ValueError("%s: results.tsv has the status %r" % (d, r["status"]))
         for k in ("fps_runs", "gpu_frame_ms_runs", "scaler_ms_runs", "load_runs"):
             for x in [x for x in r[k].split(",") if x]:
                 float(x)  # a number or the file is refused
+    for s in skp:
+        if not NAME_RE.match(s["option"]) and s["option"] != "*":
+            raise ValueError("%s: skipped.tsv names an option that is not a plain name: %r" % (d, s["option"]))
+        if not NAME_RE.match(s["scenario"]) and s["scenario"] != "*":
+            raise ValueError("%s: skipped.tsv names a scenario that is not a plain name: %r" % (d, s["scenario"]))
     return {"dir": d, "meta": meta, "res": res, "skipped": skp}
+
+
+def read_crop(rdir, sc, oid):
+    """The bytes of the crop of this host's own results folder for a scenario and option, or None.
+    Only a plain file directly inside <rdir>/crops, under a name made of two plain names: no
+    link at the crops folder or the file, nothing else."""
+    if not NAME_RE.match(sc) or not NAME_RE.match(oid):
+        return None
+    cdir = os.path.join(rdir, "crops")
+    try:
+        if not stat.S_ISDIR(os.lstat(cdir).st_mode):
+            return None
+        fd = os.open(os.path.join(cdir, "%s__%s.png" % (sc, oid)), os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            return f.read()
+    finally:
+        os.close(fd)
 
 
 def floats(s):
@@ -1011,17 +1274,21 @@ def build_report(rdir, others, out_html):
     for sc in scenarios:
         figs = []
         for oid in optorder:
-            png = os.path.join(rdir, "crops", "%s__%s.png" % (sc, oid))
-            if os.path.isfile(png) and not os.path.islink(png):
-                with open(png, "rb") as f:
-                    b64 = base64.b64encode(f.read()).decode()
+            # a crop is embedded only for a row of this host that ran (a skipped or failed row of a
+            # rerun may have a crop of an earlier run beside it)
+            if not any(r["option"] == oid and r["scenario"] == sc and r["status"] == "ok" for r in local["res"]):
+                continue
+            png = read_crop(rdir, sc, oid)
+            if png is not None:
+                b64 = base64.b64encode(png).decode()
                 figs.append("<figure><img alt=\"%s, %s\" src=\"data:image/png;base64,%s\"><figcaption>%s</figcaption></figure>" % (esc(sc), esc(oid), b64, esc(oid)))
         if figs:
             info = ""
             tx = os.path.join(rdir, "crops", sc + ".txt")
-            if os.path.isfile(tx):
-                with open(tx) as f:
-                    info = " ".join(f.read().split())
+            try:
+                info = " ".join(read_regular(tx).split())
+            except ValueError:
+                info = ""
             p.append("<h3>%s <span class=\"mut\">%s</span></h3><div class=\"strip\">%s</div>" % (esc(sc), esc(info), "".join(figs)))
     p.append("<h2>Not measured here</h2><table><tr><th>Measure</th><th>What would give it</th></tr>")
     for a, b in NOT_MEASURED:
@@ -1035,7 +1302,7 @@ def build_report(rdir, others, out_html):
         raise Refuse("the report would refer outside itself: %r" % ext[:3])
     outp = check_out_path(os.path.abspath(out_html), file=True)
     make_dirs_physical(os.path.dirname(outp))
-    write_file(outp, doc.encode("utf-8"))
+    write_atomic(outp, doc.encode("utf-8"))
     return outp
 
 
