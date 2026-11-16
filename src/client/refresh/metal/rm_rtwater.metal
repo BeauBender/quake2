@@ -421,7 +421,9 @@ rm_rtw_trace(depth2d<float, access::read> depth [[texture(0)]],
 /*
  * The reflection over the opaque water, drawn over the resolved target
  * with the blend (source alpha the weight, the target's alpha not
- * written): every other pixel is discarded, so it keeps its colour.
+ * written): every other pixel is discarded, so it keeps its colour, as
+ * is one outside the reflection or the material attachment (they are the
+ * target's size today; the read is not left to it).
  */
 fragment float4
 rm_fragment_rtw_blend(rm_fs_varying in [[stage_in]],
@@ -430,9 +432,19 @@ rm_fragment_rtw_blend(rm_fs_varying in [[stage_in]],
 		texture2d<uint> mat [[texture(1)]])
 {
 	const uint2 px = uint2(in.position.xy);
-	const float4 r = refl.read(px);
-	const uint cls = rm_rtw_cls(r.a);
+	float4 r;
+	uint cls;
 	const float k = mtl_rtw_weight(v.reflect);
+
+	if ((px.x >= refl.get_width()) || (px.y >= refl.get_height()) || (px.x >= mat.get_width()) ||
+		(px.y >= mat.get_height()))
+	{
+		discard_fragment();
+		return float4(0.0f);
+	}
+
+	r = refl.read(px);
+	cls = rm_rtw_cls(r.a);
 
 	if (!(cls & MTL_RTW_CLASS_WATER) || (cls & MTL_RTW_CLASS_TRANS) || ((cls & MTL_RTW_CLASS_FROM) == MTL_RTW_MISS) ||
 		!mtl_rtw_is_water(mat.read(px).r) || (k == 0.0f))
@@ -447,14 +459,16 @@ rm_fragment_rtw_blend(rm_fs_varying in [[stage_in]],
  * r_rt_water_show over every pixel of the target: show 1, the mask of the
  * pixels that must keep their colour (white where no water was found,
  * black on the water); show 2, the classes: black not water, green a
- * reflection from a lit pixel, blue from the sky, red none.
+ * reflection from a lit pixel, blue from the sky, red none. A pixel
+ * outside the reflection is shown as one without water.
  */
 fragment float4
 rm_fragment_rtw_show(rm_fs_varying in [[stage_in]],
 		constant rm_rtw_view &v [[buffer(0)]],
 		texture2d<float> refl [[texture(0)]])
 {
-	const uint cls = rm_rtw_cls(refl.read(uint2(in.position.xy)).a);
+	const uint2 px = uint2(in.position.xy);
+	const uint cls = ((px.x < refl.get_width()) && (px.y < refl.get_height())) ? rm_rtw_cls(refl.read(px).a) : 0u;
 
 	if (v.show == 1)
 	{
