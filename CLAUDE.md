@@ -63,6 +63,7 @@ Non-negotiables:
 
 - Never commit on `main`. Work in a worktree on a branch; changes land through a pull request.
 - Never skip, weaken or bypass the gate (`scripts/test.sh`), and never push with `--no-verify`. A red gate means the work is not done.
+- On a shared host, run a bare `make` as `scripts/bench/bench.sh lock run build -- make ...` (the gate, `scripts/pins.sh` and `scripts/coverage.sh` take that lock themselves), and measure timing only through `bench.sh baseline put` and `bench.sh drift`.
 - Never change the savegame format, the network protocol, or a struct that crosses a module API without a card that asks for it (see Architecture).
 - Never install packages or add a dependency without the owner's approval. A missing tool is reported, not installed.
 - Do not commit secrets, game data (`.pak` files) or build output.

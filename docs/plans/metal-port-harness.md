@@ -340,5 +340,6 @@ which refuse a host without the capability they require).
 - [TASK131](../runbook/TASK131.md): The dynamic-light shadow pass finds each pixel's surface without an eye ray
 - [TASK132](../runbook/TASK132.md): `soft`'s window captured opaque and not opaque
 - [TASK154](../runbook/TASK154.md): The quake2 bench adapter and the first cases, each reproduced against its card
+- [TASK155](../runbook/TASK155.md): Every heavy entry point takes the bench lock itself
 - [TASK158](../runbook/TASK158.md): water reflections shaded in world space, as a setting
 - [TASK157](../runbook/TASK157.md): the AO pass within its GPU-time share
