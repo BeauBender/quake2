@@ -1603,6 +1603,17 @@ int rmb_open(rmb_caps_t *caps, char *err, size_t errlen);
  */
 int rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen);
 
+/*
+ * metal_colorspace (TASK121): 0 leaves the layer untagged, 1 tags it
+ * kCGColorSpaceSRGB. Kept across a detach and applied at the next attach;
+ * with a layer attached it applies now. The colour-space object is counted
+ * in the ledger (RM_OBJ_STATE) and released at detach or when set back to 0.
+ */
+void rmb_colorspace_set(int mode);
+
+/* 1 while a colour-space object is alive (the ledger counts it too). */
+int rmb_colorspace_live(void);
+
 /* Waits (bounded) for the frames on the GPU and releases the layer and the targets. */
 void rmb_detach(void);
 
@@ -1746,6 +1757,13 @@ int rm_scale8_plan(int enabled, int nolerp, int height, int w, int h,
  * sampler, a mipmapped one and an index outside the table take 0.
  */
 int rm_2d_sharp(float cvar, int smp, int flat_linear);
+
+/*
+ * metal_colorspace (TASK121): 1 when the layer is tagged sRGB, that is when
+ * the cvar is exactly 1; 0 (untagged) for every other value, a value that
+ * is not finite included.
+ */
+int rm_colorspace_mode(float cvar);
 
 /*
  * Loads ref_metal.metallib from dir and builds the 2D pipeline table and

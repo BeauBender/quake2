@@ -8444,9 +8444,23 @@ test_2d_sharp(void)
 	}
 }
 
+/* metal_colorspace: 1 tags the layer sRGB; 0 and every other value leave it untagged */
+static void
+test_colorspace_mode(void)
+{
+	CHECK(rm_colorspace_mode(0.0f) == 0);
+	CHECK(rm_colorspace_mode(1.0f) == 1);
+	CHECK(rm_colorspace_mode(2.0f) == 0);
+	CHECK(rm_colorspace_mode(0.5f) == 0);
+	CHECK(rm_colorspace_mode(-1.0f) == 0);
+	CHECK(rm_colorspace_mode(NAN) == 0);
+	CHECK(rm_colorspace_mode(INFINITY) == 0);
+}
+
 int
 main(void)
 {
+	test_colorspace_mode();
 	test_readback();
 	test_floor();
 	test_family_list();

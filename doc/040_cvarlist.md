@@ -786,6 +786,16 @@ has) is not drawn.
   Other renderers do not have it. Saved with the configuration; applies
   from the next frame.
 
+* **metal_colorspace**: The colour space the Metal renderer tags its
+  layer with. `0` (the default) leaves the layer untagged, as before: the
+  display treats the pixels as it does for any content that is not
+  colour-matched. `1` tags the layer `kCGColorSpaceSRGB`, so the system
+  converts the game's sRGB-era colours to the display's profile. Only `0`
+  and `1` are values: any other value is `0`. Other renderers do not have
+  it. Saved with the configuration; applies from the next frame. The
+  readback of the frame (screenshots, the pins) is taken before the
+  layer's colour space comes into it and does not change.
+
 * **metal_particle_cap**: How the Metal renderer limits the size of a
   particle point (`gl1_particle_max_size`, 40 pixels by default). `0`
   (the default) is the limit every renderer uses, and draws what it drew
