@@ -1103,7 +1103,7 @@ origin (`rm_fx_input_viewport`), not `r_rt_gbuffer_scale`'s, and the scaler writ
 frame's rectangle in place of the stretch. The jitter of the temporal modes is the Halton
 (2, 3) pair minus 0.5 from index 1, a cycle of 32, started again on each reset
 (`rm_fx_jitter`). The reset events are those of section 2, with the client's teleport
-distance, 256 units on an axis, as the cut threshold (`RM_FX_CUT_DIST`). See the runbook,
+distance, 256 units on an axis, as the cut threshold (`RM_FX_CUT_DIST`). See the runbook file
 [MetalFX scalers for the 3D view](../runbook/TASK111.md).
 
 **Previous-frame transforms.** `rm_gb_hist_t` (`header/rm_gbuf.h`;
