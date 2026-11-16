@@ -121,7 +121,19 @@ chmod +x "$tmp/eng-failopt" "$tmp/eng-cfg" "$tmp/eng-slow"
   echo 'for n in 60 120 180; do cp "$src" "$d/$name-$n.tga" || exit 1; done'
   echo 'echo "Metal API Validation Enabled" > "$d/engine.log"'
   echo 'echo complete > "$d/complete"'; } > "$tmp/pins-stub"
-chmod +x "$tmp/pins-stub"
+# the same stub run the way scripts/pins.sh runs itself: as the command of the real host lock
+# (scripts/bench/bench.sh lock run pins-record, the bench harness copied into the tree), so that the
+# generator's pid is the lock shell and the run under it is in a process group of the lock's own; under
+# the lock it writes its pid and that of a grandchild of the lock shell standing in for the engine
+{ echo '#!/bin/sh'
+  echo 'if [ "${BENCH_LOCK_ENTRY:-}" != pins-record ] || [ -z "${BENCH_LOCK_TOKEN:-}" ]; then'
+  echo '    exec sh "$(dirname "$0")/bench/bench.sh" lock run pins-record -- env BENCH_LOCK_ENTRY=pins-record /bin/sh "$0" "$@"'
+  echo 'fi'
+  echo 'echo $$ > "$MFX_STUB_SH"; sleep 300 & echo $! > "$MFX_STUB_CHILD"; wait'; } > "$tmp/pins-stub-locked"
+chmod +x "$tmp/pins-stub" "$tmp/pins-stub-locked"
+# starts python3 -I with SIGINT at its default, which a background job of this script ignores, so that a
+# Ctrl-C (SIGINT) reaches the generator as KeyboardInterrupt
+INTDFL='import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execv(sys.executable, [sys.executable, "-I"] + sys.argv[1:])'
 # a tree copy for the generator: its own scripts/pins/scenarios and a stub scripts/pins.sh, so that a run
 # writes and deletes nothing in the caller's checkout
 mktree() { # <tree> <mfx.py>
@@ -384,6 +396,40 @@ limit" "$out"
         if kill -0 "$cpid" 2>/dev/null; then kill -KILL "$cpid" 2>/dev/null; ko e2e-group "the child of pins.sh was left running after SIGTERM"; fi
     fi
     kill -KILL $pid 2>/dev/null
+    # the same under the real host lock, which scripts/pins.sh takes itself (a private BENCH_STATE): a
+    # timeout, a SIGTERM and a Ctrl-C to the generator during record() each end the run under the lock,
+    # the grandchild included, and leave the lock free. A KILL to the group first ends the lock shell
+    # alone; the stop must be TERM, which the lock shell's trap passes on to its command's group, and KILL
+    # only after the lock's grace (BENCH_STOP_GRACE=1 here: 6 s, so the generator waits at most 11 s)
+    out=$(python3 -I "$HELP" "$d" stop-wait 2>&1); [ "$out" = "25 11 25 65" ] || ko e2e-lock-grace "$out"
+    lt="$w/lt"; mktree "$lt" "$d/mfx.py"; cp "$tmp/pins-stub-locked" "$lt/scripts/pins.sh"; cp -R "$root/scripts/bench" "$lt/scripts/bench"
+    for how in timeout TERM INT; do
+        st="$w/lt-state-$how"; rm -f "$w/lt-sh" "$w/lt-child"
+        lenv=(env -u BENCH_LOCK_TOKEN -u BENCH_LOCK_ENTRY -u BENCH_LOCK -u BENCH_LOCK_WAIT -u BENCH_LOCK_POLL BENCH_STATE="$st"
+              BENCH_STOP_GRACE=1 MFX_STUB_SH="$w/lt-sh" MFX_STUB_CHILD="$w/lt-child" PATH="$tmp/maketrue:$PATH")
+        if [ $how = timeout ]; then
+            "${lenv[@]}" python3 -I "$HELP" "$lt/scripts/metalfx-report" group-timeout "$lt" 5 > "$w/lt-$how.log" 2>&1 &
+        else
+            mkeng "$w/lt-eng-$how" "$tmp/eng-cfg"; mkdir -p "$w/lt-out-$how"
+            "${lenv[@]}" python3 -I -c "$INTDFL" "$lt/scripts/metalfx-report/mfx.py" run --out "$w/lt-out-$how" --basedir "$tmp/basedir" \
+                --host-name t1 --runs 1 --gpu-runs 1 --scenarios world --only fx1-s75 --timeout 20 --framediff "$tmp/framediff" \
+                --ssim "$w/ssim" --bin "$w/lt-eng-$how/quake2" > "$w/lt-$how.log" 2>&1 &
+        fi
+        pid=$!
+        n=0; while [ ! -s "$w/lt-child" ] && kill -0 $pid 2>/dev/null && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done
+        spid=$(cat "$w/lt-sh" 2>/dev/null); cpid=$(cat "$w/lt-child" 2>/dev/null)
+        [ -n "$cpid" ] || ko e2e-lock "$how: the stub pins.sh did not start under the lock: $(tail -3 "$w/lt-$how.log")"
+        [ $how = timeout ] || kill -$how $pid 2>/dev/null
+        n=0; while kill -0 $pid 2>/dev/null && [ $n -lt 200 ]; do sleep 0.1; n=$((n+1)); done
+        if kill -0 $pid 2>/dev/null; then kill -KILL $pid 2>/dev/null; ko e2e-lock "$how: the generator did not end within 20 s"; fi
+        wait $pid 2>/dev/null
+        [ $how != timeout ] || want_has e2e-lock "timed out" "$(cat "$w/lt-$how.log")"
+        for q in $spid $cpid; do
+            if kill -0 "$q" 2>/dev/null; then kill -KILL "$q" 2>/dev/null; ko e2e-lock "$how: the run under the lock was left running"; fi
+        done
+        ls=$(BENCH_STATE="$st" sh "$lt/scripts/bench/bench.sh" lock status 2>&1)
+        [ "$ls" = lock=free ] || ko e2e-lock "$how: the lock is not free afterwards: $ls"
+    done
     # an option over the engine's argument limit costs its own row; the others, native included, still run
     printf 'small\tr_metalfx 1\tall\tr_metalfx=1\n' >> "$d/options.tsv"
     out=$(python3 -I "$HELP" "$d" pad-scenario "$tmp/cv-present" "$d/../pins/scenarios/world.cfg" fx1-s75 small 2>&1); want_has e2e-pad "padded" "$out"
