@@ -786,6 +786,15 @@ test_colorspace_item(void)
 		CHECK(Writes("metal_colorspace") == 0, "%s: metal_colorspace written while greyed", others[r]);
 	}
 
+	/* a value of 1 with a greyed item: apply must not write it (the guard is the only thing that stops it) */
+	Reset();
+	SetCv("metal_colorspace", "1");
+	Open("gl1", "15");
+	CHECK(Greyed("colour space"), "gl1 with 1: colour space enabled");
+	Apply();
+	CHECK(Writes("metal_colorspace") == 0, "gl1 with 1: metal_colorspace written while greyed");
+	SetCv("metal_colorspace", "0");
+
 	Reset();
 	Open("metal", "15");
 	CHECK(!Greyed("colour space"), "colour space greyed on Metal");
