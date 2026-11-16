@@ -621,6 +621,22 @@ test_cvars(void)
 	CHECK(rm_rtw_hits(-1) == 0);
 	CHECK(rm_rtw_hits(NAN) == 0);
 	CHECK(rm_rtw_hits(INFINITY) == 0);
+
+	/* TASK158: setting 1 without its resources: TASK58's path, the refusal said once; setting 0 never needs them */
+	{
+		int told = 0, say = 1;
+
+		CHECK((rm_rtw_path(0, 0, &told, &say) == 0) && !say && !told);
+		CHECK((rm_rtw_path(NAN, 0, &told, &say) == 0) && !say && !told);
+		CHECK((rm_rtw_path(1, 1, &told, &say) == 1) && !say && !told);
+		CHECK((rm_rtw_path(0, 1, &told, &say) == 0) && !say && !told);
+		CHECK((rm_rtw_path(1, 0, &told, &say) == 0) && say && told);
+		CHECK((rm_rtw_path(1, 0, &told, &say) == 0) && !say && told);
+		CHECK((rm_rtw_path(2, 0, &told, &say) == 0) && !say && told);
+		CHECK((rm_rtw_path(0, 0, &told, &say) == 0) && !say && told);
+		told = 0;   /* the pass opened again */
+		CHECK((rm_rtw_path(1, 0, &told, &say) == 0) && say && told);
+	}
 }
 
 static void

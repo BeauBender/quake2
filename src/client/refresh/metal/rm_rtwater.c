@@ -85,6 +85,15 @@ rm_rtw_hits(float v)
 }
 
 int
+rm_rtw_path(float hits, int ws_ok, int *told, int *say)
+{
+	(void)ws_ok;
+	(void)told;
+	*say = 0;
+	return rm_rtw_hits(hits);
+}
+
+int
 rm_rtw_turb_table(float *out)
 {
 	float m = 0;

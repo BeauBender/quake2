@@ -96,6 +96,16 @@ int rm_rtw_show(float v);
 int rm_rtw_hits(float v);
 
 /*
+ * TASK158: the path a view takes at r_rt_water_hits hits: 1 the
+ * world-space path where hits asks for it (rm_rtw_hits) and the pass
+ * built its resources (ws_ok, rmb_rtw_ws_ok); else 0, TASK58's, which
+ * needs none of them. Where hits asks for it and they were not built,
+ * *say is 1 the first time (*told 0, then set), so the refusal is
+ * printed once a pass; 0 otherwise.
+ */
+int rm_rtw_path(float hits, int ws_ok, int *told, int *say);
+
+/*
  * The stock turbulence table as the kernel takes it (MTL_RTW_TURB_SIZE
  * floats): gl1's r_turbsin as its RI_Init halves it (rm_turb_sin), over
  * its largest magnitude, so -1 to 1. 1 with out filled; 0 when the table
