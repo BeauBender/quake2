@@ -223,3 +223,11 @@ launchd as its parent, so its lock shell read as pid 1 and the watcher
 never signalled; a run under the lock whose parent at start is pid 1 now
 prints `test.sh: the lock shell is gone before the gate started` and
 exits 143 before it starts the watcher, the scheduler, a check or a make.
+
+`t_orphan` in `tests/check-bench-entry.sh` starts the run as
+`bench_spawn` would, from a parent that is gone before the run starts,
+and fails on `d09fd86e` (the check and both makes ran); the mutant
+`gate-orphan-runs` (the check dropped) fails it, the thirtieth. The
+checks passed under the host's timing lock (`check-bench-entry.sh` also
+as a background job with SIGINT ignored), and the full gate, with a
+temporary `BENCH_STATE`, passed in 413 s.
