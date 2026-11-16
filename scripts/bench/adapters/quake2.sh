@@ -317,7 +317,11 @@ q2_basedir() {
 }
 
 # q2_quiet: the screen is unlocked and no quake2 is running; says which is
-# not so. Prints pre.screen and pre.engines lines.
+# not so. Prints pre.screen and pre.engines lines. It fails closed: the
+# screen reads as unlocked only when ioreg exits 0 and lists the registry's
+# root node; no other quake2 only when pgrep exits 1 (no match). A tool
+# that is missing, fails or answers anything else is pre.<line>=unknown and
+# a refusal, never a pass.
 q2_quiet() {
 	_qz_bad=0
 	if ! command -v ioreg > /dev/null 2>&1; then
@@ -325,13 +329,18 @@ q2_quiet() {
 		echo pre.screen=unknown
 		_qz_bad=1
 	else
-		_qz_n=$(ioreg -n Root -d1 2> /dev/null | grep -c CGSSessionScreenIsLocked || true)
-		if [ "$_qz_n" = 0 ]; then
-			echo pre.screen=unlocked
-		else
+		_qz_st=0
+		_qz_o=$(ioreg -n Root -d1 2> /dev/null) || _qz_st=$?
+		if [ "$_qz_st" -ne 0 ] || ! printf '%s\n' "$_qz_o" | grep -q -F -e '+-o Root'; then
+			q2_say "cannot tell whether the screen is locked (ioreg exited $_qz_st without listing the registry root)"
+			echo pre.screen=unknown
+			_qz_bad=1
+		elif printf '%s\n' "$_qz_o" | grep -q CGSSessionScreenIsLocked; then
 			q2_say "the screen is locked"
 			echo pre.screen=locked
 			_qz_bad=1
+		else
+			echo pre.screen=unlocked
 		fi
 	fi
 	if ! command -v pgrep > /dev/null 2>&1; then
@@ -339,12 +348,17 @@ q2_quiet() {
 		echo pre.engines=unknown
 		_qz_bad=1
 	else
-		_qz_p=$(pgrep -x quake2 2> /dev/null || true)
-		if [ -z "$_qz_p" ]; then
+		_qz_st=0
+		_qz_p=$(pgrep -x quake2 2> /dev/null) || _qz_st=$?
+		if [ "$_qz_st" -eq 1 ]; then
 			echo pre.engines=0
-		else
+		elif [ "$_qz_st" -eq 0 ] && [ -n "$_qz_p" ]; then
 			q2_say "another quake2 is running (pid $(printf '%s\n' "$_qz_p" | paste -s -d , -)); wait for it, never stop it"
 			printf 'pre.engines=%s\n' "$(printf '%s\n' "$_qz_p" | awk 'END { print NR }')"
+			_qz_bad=1
+		else
+			q2_say "cannot tell whether another quake2 runs (pgrep exited $_qz_st)"
+			echo pre.engines=unknown
 			_qz_bad=1
 		fi
 	fi

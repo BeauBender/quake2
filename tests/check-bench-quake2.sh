@@ -57,8 +57,18 @@ bad() {
 # system_profiler, and a make that refuses, so nothing here ever builds. A
 # test switches them with STUB_LOCKED and STUB_PIDS.
 mkdir -p "${T:?}/bin" "${T:?}/data/baseq2"
-printf '#!/bin/sh\nif [ -n "${STUB_LOCKED:-}" ]; then echo "  \\"CGSSessionScreenIsLocked\\" = Yes"; fi\necho "+-o Root"\n' > "${T:?}/bin/ioreg"
-printf '#!/bin/sh\nif [ -n "${STUB_PIDS:-}" ]; then printf "%%s\\n" $STUB_PIDS; exit 0; fi\nexit 1\n' > "${T:?}/bin/pgrep"
+{
+	printf '#!/bin/sh\n'
+	printf 'if [ -n "${STUB_IOREG_FAIL:-}" ]; then echo "ioreg: cannot read the registry" >&2; exit 1; fi\n'
+	printf '[ -z "${STUB_IOREG_EMPTY:-}" ] || exit 0\n'
+	printf 'echo "+-o Root  <class IORegistryEntry>"\n'
+	printf 'if [ -n "${STUB_LOCKED:-}" ]; then echo "  \\"CGSSessionScreenIsLocked\\" = Yes"; fi\n'
+} > "${T:?}/bin/ioreg"
+{
+	printf '#!/bin/sh\n'
+	printf 'if [ -n "${STUB_PGREP_FAIL:-}" ]; then echo "pgrep: cannot read the process table" >&2; exit "$STUB_PGREP_FAIL"; fi\n'
+	printf 'if [ -n "${STUB_PIDS:-}" ]; then printf "%%s\\n" $STUB_PIDS; exit 0; fi\nexit 1\n'
+} > "${T:?}/bin/pgrep"
 printf '#!/bin/sh\necho "      Chipset Model: Zzq GPU"\n' > "${T:?}/bin/system_profiler"
 printf '#!/bin/sh\necho "make is not run by this check" >&2\nexit 99\n' > "${T:?}/bin/make"
 chmod +x "${T:?}/bin/ioreg" "${T:?}/bin/pgrep" "${T:?}/bin/system_profiler" "${T:?}/bin/make"
@@ -204,6 +214,16 @@ refuse_pre engine "${T:?}/caps-all" '' 'another quake2 is running (pid 4242)' ST
 refuse_pre layer "${T:?}/caps-all" '' 'MTL_DEBUG_LAYER is set' MTL_DEBUG_LAYER=1
 refuse_pre data "${T:?}/caps-all" '' 'holds no baseq2' BENCH_Q2_BASEDIR=${T:?}/bin
 refuse_pre nocaps "${T:?}/none" '' 'BENCH_Q2_CAPS names no file'
+# A tool that fails is not a pass: ioreg failing or not listing the root,
+# pgrep failing (any status but 0 and 1) refuse, and say unknown.
+refuse_pre ioreg-fails "${T:?}/caps-all" '' 'cannot tell whether the screen is locked' STUB_IOREG_FAIL=1
+refuse_pre ioreg-empty "${T:?}/caps-all" '' 'cannot tell whether the screen is locked' STUB_IOREG_EMPTY=1
+refuse_pre pgrep-fails "${T:?}/caps-all" '' 'cannot tell whether another quake2 runs (pgrep exited 3)' STUB_PGREP_FAIL=3
+with_env STUB_IOREG_FAIL=1 STUB_PGREP_FAIL=2 -- q2h "${T:?}/rp.case" q2_quiet > "${T:?}/quiet.out" 2> /dev/null &&
+	bad "q2_quiet passed with ioreg and pgrep failing"
+for l in pre.screen=unknown pre.engines=unknown; do
+	grep -qx "$l" "${T:?}/quiet.out" || bad "q2_quiet with failing tools did not print $l: $(tr '\n' ' ' < "${T:?}/quiet.out")"
+done
 
 # Through bench.sh: the refusal exits 3, says why, and builds nothing.
 e2e_refusal() { # <bench root>
@@ -267,6 +287,7 @@ grep -q 'reports no ray tracing' "${T:?}/run.err" || bad "the missing ray tracin
 run_fake "${T:?}/run.case" FAKE_EXIT=3 && bad "an engine that exits 3 was accepted"
 grep -q 'exited with status 3' "${T:?}/run.err" || bad "the failing exit is not said: $(cat "${T:?}/run.err")"
 run_fake "${T:?}/run.case" STUB_PIDS=99 && bad "a run beside another quake2 was accepted"
+run_fake "${T:?}/run.case" STUB_PGREP_FAIL=3 && bad "a run whose pgrep failed was accepted"
 
 # ---- the metrics --------------------------------------------------------------
 
