@@ -157,9 +157,24 @@ attachment (section 3). Each world pixel's surface comes from it, through the ma
 vertex-to-surface table. A brush entity's model space comes from the frame's entity table. The
 lights are tested against the surface's own plane in that space before the falloff. The eye ray
 is left only where the attachment names no surface: a dynamic world draw (the flowing batches,
-material 1) and a brush model the raster cannot name. The GPU time before and after, at 1920 x
-1080 and 5120 x 2880, is in the runbook,
-[TASK131](../runbook/TASK131.md). It is not measured yet: the engine runs are pending.
+material 1) and a brush model the raster cannot name. Measured on the M6 the same way, against
+the pass on `main` before it (`718e59d4`). The runs were three of each build, alternated, on the
+same warm frames ([TASK131](../runbook/TASK131.md)):
+
+- 1920 x 1080: median 1.66 ms (p10 1.35 to 1.37, p90 2.07 to 2.14), from 2.58 ms; with entities
+  1.73 ms (p10 1.35 to 1.37, p90 2.97 to 3.34), from 3.23 ms;
+- 5120 x 2880: median 7.30 ms (p10 4.6 to 5.3, p90 8.8 to 9.1), from 8.81 ms; with entities
+  7.28 ms (p10 4.2 to 4.4, p90 10.1 to 10.5), from 9.57 ms;
+- about 0.25 rays a pixel, down from 0.86 and 1.09;
+- the attachment takes 4 bytes a pixel while the shadows trace: 8.5 MB allocated at 1080p and
+  60.0 MB at 5120 x 2880.
+
+At 1080p the median is now under the 1.952 ms of 4 rays on every pixel; the p90, the frames lit
+over most of the picture, is not. What is left is mostly the pass's floor. On a frame with no
+light in range it costs 1.3 ms at 1080p and about 6 ms at 5120 x 2880, before and after alike.
+There the kernel still reads the G-buffer, tests the lights and writes its two outputs at every
+pixel; which of those costs most is not measured. That floor, not the rays, is the next thing to
+cut at the native size.
 
 ### Internal resolution and upscaling with MetalFX (TASK105)
 
