@@ -297,6 +297,7 @@ which refuse a host without the capability they require).
 - [FIX58](../runbook/FIX58.md): `tests/check-pre-push-hook.sh` and a temporary directory that holds the login name
 - [FIX66](../runbook/FIX66.md): CodeQL analysis skipped for documentation-only pull requests
 - [FIX68](../runbook/FIX68.md): The shim's presented rate at 5120x2880 with display sync off
+- [FIX69](../runbook/FIX69.md): presents drained at teardown, and the shim's present wait bounded
 - [TASK21](../runbook/TASK21.md): Closing TASK21 on the build host
 - [TASK27](../runbook/TASK27.md): Closing TASK27 on the build host
 - [TASK39](../runbook/TASK39.md): Observed on the first run

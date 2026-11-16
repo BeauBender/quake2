@@ -225,6 +225,21 @@ rm_stats_format(const rmb_stats_t *s, const rm_ledger_t *l, char *buf, size_t le
 	return ok;
 }
 
+int
+rm_presents_format(const rmb_stats_t *s, char *buf, size_t len)
+{
+	size_t used = 0;
+
+	if (len == 0)
+	{
+		return 0;
+	}
+
+	buf[0] = '\0';
+	return rm_append(buf, len, &used, "ref_metal: teardown: %lu presents apart, %lu waits for them past the bound",
+			s->presents, s->present_drains_late);
+}
+
 rm_load_t
 rm_color_load(int clear, int defined, int first)
 {
@@ -292,6 +307,12 @@ rm_frame_remake(const rm_frame_held_t *held, int w, int h, int dw, int dh)
 	if (rm_targets_rebuild(held->color, held->depth, held->cw, held->ch, w, h))
 	{
 		make |= RM_REMAKE_COLOR | RM_REMAKE_DEPTH;
+	}
+
+	/* a present slot's colour target is already of the frame's size (FIX51): the depth target follows the frame */
+	if ((held->zw != w) || (held->zh != h))
+	{
+		make |= RM_REMAKE_DEPTH;
 	}
 
 	if ((held->lw != dw) || (held->lh != dh))
