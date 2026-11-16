@@ -1,0 +1,16 @@
+# The null case: the null adapter sleeps briefly and reports known values,
+# so the self-test (tests/check-bench.sh) runs every core path without an
+# engine. Its numbers measure nothing.
+adapter=null
+description=sleeps and reports the values below; measures nothing
+targets=none
+build_flags=NULL=1
+settings=sleep=0 values=10,12,11
+runs=3
+warmup=1
+wall=10
+metric=ms
+better=lower
+abs_tol=0.5
+rel_tol=0.02
+accept=5
