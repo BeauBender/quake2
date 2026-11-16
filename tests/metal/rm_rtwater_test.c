@@ -117,6 +117,13 @@ test_mask(void)
 	CHECK(ok_water);
 	CHECK(MTL_GB_MAT_WATER == 3);
 
+	/* the kernel reads the map's ids (rm_rt_materials) with the G-buffer's names: the same numbers */
+	CHECK(RM_RT_MAT_WATER == MTL_GB_MAT_WATER);
+	CHECK(RM_RT_MAT_SKY == MTL_GB_MAT_SKY);
+	CHECK(RM_RT_MAT_ALPHA == MTL_GB_MAT_TRANS);
+	CHECK(RM_RT_MAT_WORLD == MTL_GB_MAT_WORLD);
+	CHECK(MTL_RTW_MAT_ALIAS >= RM_RT_MATS);
+
 	/* an eye ray: water found, a translucent face or a model passed, the rest stops it */
 	for (m = 0; m < 256; m++)
 	{
