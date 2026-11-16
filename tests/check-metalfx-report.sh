@@ -595,7 +595,7 @@ limit" "$out"
     parts=$({ cut -f1-5,7-17 "$r1/results.tsv"; cut -f1-5,7-17 "$r2/results.tsv"; } 2>/dev/null | grep -v '^option	' | sort)
     [ -n "$full" ] && [ "$full" = "$parts" ] || ko chunk-merge "the chunks' rows are not the full run's"
     # the report of the chunks shows what the full run's own report shows: the scenario tables and every crop
-    sec() { sed -e 's/\[measured under load[^]]*\]//g' "$1" 2>/dev/null | awk '{ gsub(">", ">\n"); print }' | sed -n '/<h2>Scenario /,/<h2>Skipped/p' | grep -v '^<h2>Skipped'; }
+    sec() { sed -e 's/\[measured under load[^]]*\]//g' "$1" 2>/dev/null | awk 'BEGIN { RS = "<h2>" } /^Scenario / { print }'; }
     [ -n "$(sec "$w/out/chunks.html")" ] && [ "$(sec "$w/out/chunks.html")" = "$(sec "$(ls "$w"/c0/metalfx-t1-*.html | head -1)")" ] || ko chunk-merge "the chunks' scenario tables differ from the full run's"
     nf=$(grep -o '<figure>' "$w/out/chunks.html" | wc -l | tr -d ' '); nf0=$(grep -o '<figure>' "$(ls "$w"/c0/metalfx-t1-*.html | head -1)" | wc -l | tr -d ' ')
     [ "$nf" -gt 0 ] && [ "$nf" = "$nf0" ] || ko chunk-merge "the crops of the chunks ($nf) are not the full run's ($nf0)"
@@ -724,10 +724,8 @@ mutant args-set-pairs-run e2e-args py 'a += ["+exec", RUN_CFG]' 'a += ["+exec", 
         a += ["+set"] + l.split()[1:]'
 mutant script-not-exec e2e-args py 'a += ["+exec", RUN_CFG]' 'a += []'
 mutant script-not-written e2e-script py 'write_file(run_cfg_path(ctx), text.encode())' 'pass'
-mutant script-kept-restore cfg-script-restore py '  # the console script of the run goes with it' '  # mutant
-        pass'
-mutant script-kept-hold cfg-script-hold py '  # one a killed run left' '  # mutant
-        pass'
+mutant script-kept-restore cfg-script-restore py 'self._remove(os.path.join(os.path.dirname(self.path), RUN_CFG))  # the console script of the run goes with it' 'pass'
+mutant script-kept-hold cfg-script-hold py 'self._remove(os.path.join(os.path.dirname(self.path), RUN_CFG))  # one a killed run left' 'pass'
 mutant script-value-unchecked cfg-unsafe py 'if not VALUE_RE.match(v):' 'if False:'
 mutant script-name-unchecked cfg-unsafe py 'if not CVAR_RE.match(k):' 'if False:'
 mutant script-fixed-settable cfg-fixed py 'if k in FIXED_NAMES:' 'if False:'
@@ -745,9 +743,7 @@ mutant args-unbounded cfg-limit py 'if len(a) > MAX_ENGINE_ARGS:' 'if False:'
 mutant cfg-not-cleared cfg-clear py 'ctx.cfg.clear()  # the run starts' 'pass  # the run starts'
 mutant owner-not-set-aside cfg-restored py 'os.rename(self.path, self.saved)' 'pass'
 mutant restore-noop cfg-restored py 'if not self.held:
-            return
-        self._remove(self.path)' 'return
-        self._remove(self.path)'
+            return' 'return'
 mutant recover-off cfg-recover py 'belongs to a run that was killed
         if os.path.lexists(self.saved):' 'belongs to a run that was killed
         if False:'
