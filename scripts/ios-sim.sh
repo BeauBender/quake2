@@ -412,6 +412,7 @@ EOF
 	# the usage: no --out, both data options, a limit that is not digits
 	ST_CMD="run" st_case run-no-out extra fail "usage: scripts/ios-sim.sh" 5
 	ST_CMD="run --out @D@/out --data /x --no-data" st_case run-data-and-no-data extra fail "usage: scripts/ios-sim.sh" 5
+	ST_CMD="run --out @D@/out --no-data --data /x" st_case run-no-data-and-data extra fail "usage: scripts/ios-sim.sh" 5
 	ST_CMD="run --out @D@/out --shot 3s" st_case run-shot-not-digits extra fail "--shot must be a number of seconds" 5
 	ST_CMD="run --out @D@/out" st_case run-limit-not-digits extra fail "IOS_SIM_RUN_SECONDS must be" 5 IOS_SIM_RUN_SECONDS=1h
 	st_case list-empty empty fail "simctl list devices: no device list" 30

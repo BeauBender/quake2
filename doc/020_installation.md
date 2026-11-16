@@ -426,3 +426,12 @@ with no data at all, `--launch "ARGS"` (repeatable) is one start of the
 app with engine arguments, and `--shot SECONDS` takes a simulator
 screenshot and ends the app. Without either data option the synthetic
 data of the smoke is used.
+
+The script touches only its own device. Every `simctl` call that changes
+something (`shutdown`, `delete`, `erase`, `uninstall`, `terminate`) names
+the UDID of the device it created, never another. That device must be
+absent from the device list before `simctl create`, present in the list
+taken after it and gone from the list at the end; each of the three is a
+failure. Other devices come and go on a Mac (Xcode Previews creates and
+deletes its own): one that was listed before the run and is missing at the
+end is printed as a warning that names its UDID, and does not fail the run.
