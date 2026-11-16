@@ -6,12 +6,25 @@ holds the card's results. The method sections it uses are in the shared runbook:
 [shadows' proofs](../plans/metal-port-harness.md#ray-traced-shadows-from-dynamic-lights-in-ref_metal-task55-rt3)
 (the replays of one trace with a cvar rewritten, the GPU time from the encoder's timestamps)
 and [judging an effect's footprint](../plans/metal-port-harness.md#judging-an-effects-footprint-task133).
-It is stacked on TASK57 (RT5, [its file](TASK57.md)).
+It was written on TASK57 (RT5, [its file](TASK57.md)) before that card merged, and then merged
+with `origin/main` at `ddbfb6ff` (TASK57 merged, with TASK131's shadow surface attachment,
+TASK20's static-link mode, TASK111's MetalFX scalers and FIX51).
 
-**Status.** The pass, its cvars, its host test, the scenario and the documentation are in the
-branch. Every check the card names passes (see *Checks*). No engine run has been made: the
-host's display was taken for other use while the card was worked. The runs still to make are
-listed under *Runs to make*; their results go in the sections named there.
+**Status.** The pass, its cvars, its host test, the scenarios and the documentation are in the
+branch, and the engine runs are made (*Runs on the bare-metal host*): with the effect off every
+scenario is byte-identical to `origin/main`; with it on every pixel outside the water is
+byte-identical to the effect off, alone and with the shadows and the AO on. The pins are not
+recorded: the owner accepts the look first (design section 5).
+
+**The merge.** TASK57's own files are main's (its review fixes: the noise in fixed point, the
+view cleared each frame). The shared hookups keep every card's behaviour, in the order the hit
+shading needs: the shadow rays (with TASK131's surface attachment, `rmb_rts_trace(..., t_surface)`),
+then the AO, then the resolve, then the reflections last, from the resolve's lit result
+(`rmb_gbuf_resolve`). Two changes beyond the merge itself: the reflection rays have an instance
+mask bit of their own (`MTL_RTW_MASK` `0x08`, where it was TASK57's AO bit `0x04`; *Geometry
+tested*), and `RM_RTW_Frame` takes TASK57's review fix for its view (no view survives from an
+earlier frame, and `r_rt_water_show` draws only for a view that was handed over). The water pass
+uses one TASK57 helper, `mtl_rtao_bias`, which main did not change; it does not use the noise.
 
 ## What it does
 
@@ -47,15 +60,19 @@ resolve, the last of the ray passes, because its hit shading reads their lit res
   TASK55's rule, `k = 4 x 2^-24 / gl_znear`): above the true plane wherever the depth is within
   four float steps, and with the direction above the plane the ray's distance to it only grows,
   so a ray from the water never meets that water (the host test holds it for 50,000 starts).
-- *Geometry tested.* The frame's instance structure (TASK53) with `MTL_RTW_MASK`, the AO rays'
-  bit (`0x04`, which `rmb_rt_frame` sets on every instance but the view weapon and the viewer's
-  own model): the world, the brush entities in their moved place and the alias models (monsters,
-  players, items). Never the view weapon: it is in the structure only with `r_rt_gunshadow 1`,
-  and then without the bit, as in RT5. Never the viewer's own model: the client keeps it out of
-  the refdef in the first person and an instance of it would have no bit. Sprites, beams, shells
-  and particles are not in the structure. Sharing the bit changes no instance's mask, so the
-  shadow and AO rays meet what they met before. Every face stops a reflection ray, water and
-  translucent ones too (design section 1, "opaque for reflection rays"). One bounce, no recursion.
+- *Geometry tested.* The frame's instance structure (TASK53) with `MTL_RTW_MASK`, the
+  reflection rays' own bit (`0x08`, beside TASK55's `0x01` and `0x02` and TASK57's AO bit
+  `0x04`), which `rmb_rt_frame` sets on the same instances as the AO bit
+  (`mtl_rtw_inst_mask`): every one but the view weapon and the viewer's own model, so the world,
+  the brush entities in their moved place and the alias models (monsters, players, items). Never
+  the view weapon: it is in the structure only with `r_rt_gunshadow 1`, and then without the
+  bit, as in RT5. Never the viewer's own model: the client keeps it out of the refdef in the
+  first person and an instance of it would have no bit. Sprites, beams, shells and particles are
+  not in the structure. Every instance carries a shadow bit already, so the new bit changes what
+  no shadow query (`0xff`, `0x01`, `0x02`) or AO query (`0x04`) meets; with the bits distinct a
+  later card can give the reflections their own set. Every face stops a reflection ray, water
+  and translucent ones too (design section 1, "opaque for reflection rays"). One bounce, no
+  recursion.
 - *The hit's colour* (`mtl_rtw_choose`, the sky lookup's choice). The hit projected into the view
   with the forward matrix: where it lands inside the view at a pixel whose depth gives a point
   within 4 units, or 1 %, of the hit along the eye's ray, the colour is that pixel of the
@@ -76,8 +93,13 @@ resolve, the last of the ray passes, because its hit shading reads their lit res
   alpha composes it over what lies behind as before. A pane in front of the water, or any other
   translucent face, keeps its stock colour.
 
-Left out, by this design: a hit the screen does not show gives no reflection (shading it would
-need every map texture and the lightmaps bound to the kernel); the warp's phase follows qbsp's
+Left out, by this design: a hit the screen does not show gives no reflection. The hit shading
+is screen-space: it reads the colour the picture already has at the hit, so a hit off the
+screen, behind the camera or hidden behind something nearer on the screen has no colour to read,
+and that water pixel keeps its stock colour (the `none` class: 2.4 % of the water pixels above
+the pool and 8.5 % under it, *Runs*). The ceiling over the pool, the sky behind the camera and
+the far side of a wall are never reflected. Shading such a hit would need every map texture and
+the lightmaps bound to the kernel; a follow-up card covers world-space hit shading. The warp's phase follows qbsp's
 axes, not the face's texinfo (a rotated or scaled water texture ripples in its own phase); a
 moved translucent brush entity's water, which gl1 draws with the world's matrix
 (`R_DrawAlphaSurfaces`), is not where the ray finds it and keeps its stock colour; the eye ray is
@@ -110,7 +132,7 @@ which is the safe side.
 
 ## The host test
 
-`tests/metal/rm_rtwater_test.c`, run by `tests/check-ref-metal.sh` (152 checks):
+`tests/metal/rm_rtwater_test.c`, run by `tests/check-ref-metal.sh` (193 checks):
 
 - *The material mask.* Of the 256 ids only 3 is a water pixel; the eye ray finds water at 3,
   passes 5 and alias models, stops at every other id; the map's ids are the G-buffer's numbers;
@@ -131,68 +153,175 @@ which is the safe side.
   alpha (0.33, 0.66, 1) always kept; the mix exact; the weight clamped to 1.
 - The cvars' readings, the view (RT3's inverse, viewport, eye and bias; the forward matrix times
   the inverse is the identity), the instances (the gun with `r_rt_gunshadow 1` and an
-  `RF_VIEWERMODEL` entity without the bit, the rest with it) and the stats line.
+  `RF_VIEWERMODEL` entity without the bit, the rest with it, for both shadow masks; the other
+  bits as before; the bit one of the eight and none of the shadow or AO bits) and the stats line.
 
 Red first: the same test against a copy of `common/mtl_rtw_math.h` and `rm_rtwater.c` whose 17
 math functions and 7 pure functions return 0, the input or the flat normal fails 77 of its then
-147 checks (`<artifacts>/TASK58/tdd/red-against-stubs.out`).
+147 checks (`<artifacts>/TASK58/tdd/red-against-stubs.out`). The mask bit's checks, after the
+merge, failed 7 of 193 with the shared bit (`<artifacts>/TASK58/tdd/red-mask-collision.out`).
 
 ## Checks
 
-On the branch head (no engine run):
+On the merged branch:
 
 - `make test`: `yq2test: 163 tests, 0 failed`.
-- `tests/check-ref-metal.sh`: ok (water 152 checks, 0 failed; `ref_metal` built).
-- `tests/check-pins.sh`: `pins selftest: ok` (with `content_tags`: `rt-water`, companion `models`).
-- `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-no-local-identity.sh`: ok.
+- `tests/check-ref-metal.sh`: ok (water 193 checks, 0 failed; AO 220; shadows 4384; `ref_metal`
+  built).
+- `tests/check-pins.sh`: `pins selftest: ok` (with `content_tags`: `rt-water`, companion
+  `rt-water-entities`).
+- `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-no-local-identity.sh`,
+  `tests/check-runbook-index.sh`: ok.
 - Builds: `make client`, `make -B ref_metal` with and without `METAL_SHADERS=no`, `make
-  ref_gl1 WITH_METAL_SHIM=yes`, and `make ASAN=1 client game ref_metal`: no error, no warning in
-  the new files.
+  ref_gl1 WITH_METAL_SHIM=yes`, `make STATIC_MODULES=1 STATIC_RENDERER=metal client` and `make
+  ASAN=1 client game ref_metal`: no error, no warning in the Metal renderer's files.
 
-## Runs to make
+## Runs on the bare-metal host
 
-Each under the brief's rules (screen unlocked, no other `quake2`, the timing lock, the load
-before and after), artifacts in `<artifacts>/TASK58/`. Water needs `PINS_DEMO=water.dm2` from
-`scripts/pins.sh make-demo water` (TASK70), the camera path of `skywater`: its first half above
-the pool of base1, its second half under it.
+Host: the bare-metal host (Apple M6, `supportsRaytracing`). Engine commit measured: `d89bf519`
+(pin ids `d89bf519f27c-*`), the merge with the mask bit and the index line; the commits after it
+change only the scenario cfgs' comment headers (the footprint band), the new companion
+scenario, the scenarios README and this file. Every engine batch checked that the screen was
+unlocked and that no other `quake2` ran, held the shared timing lock (`tools/heavy.sh`, at most
+about three minutes a hold) and logged the one-minute load before and after: 1.8 to 4.1 (other
+lanes share the host). Every record is `PINS_SEED=1`, and under `MTL_DEBUG_LAYER=1` except the
+timing runs. The views compared within one record are replays of its trace (TASK46) with
+renderer cvars rewritten in a copy of the trace at the same length, as TASK55 and TASK57 did:
+`r_rt_water 1` to `0` with `r_rt_gbuffer 0` to `1` (the *off* view, the same G-buffer path),
+`r_rt_water_show` to `1` (the mask) or `2` (the classes), `r_rt_stats` to `2`, and
+`r_rt_shadows`, `r_rt_ao` and `r_rt_ao_seed` to `1`. Each record's trace replayed as it is gives
+the live record byte for byte (25 of 25 frames). Every log, frame, tool and list is in
+`<artifacts>/TASK58/`; nothing derived from game data is in the repository.
 
-1. **Effect off.** Every scenario recorded on the head with `MTL_DEBUG_LAYER=1`, against
-   records of TASK57's head built in scratch with the same settings: the scenarios of TASK57's
-   run 1 (TASK55's Proof 1, `dlights` at `PINS_DEMO=demo2.dm2 PINS_EVERY=7`, `rt-shadows`,
-   `rt-shadows-entities`, `rt-ao`, `rt-ao-entities`); byte-identical expected (with `r_rt_water
-   0` nothing of the pass is made, no pipeline is swapped and no instance's mask changes). The
-   logs: the validation banner only, `teardown: 0 live objects`, `rt 0/0` where no effect is on.
-   Also `skywater` at `PINS_DEMO=water.dm2` with `r_rt_water 0`, compared as `skywater` is
-   (`--bad-threshold 0.03`, the warp follows the client clock).
-2. **Effect on.** `rt-water` at `PINS_DEMO=water.dm2` (`PINS_EVERY=30`, and every 7th for more
-   frames), each record's trace replayed with `r_rt_water` rewritten to `0` and `r_rt_gbuffer` to
-   `1` (the off view on the same path) and with `r_rt_water_show 1` (the mask) and `2` (the
-   classes). From these:
-   - the masked comparison on every frame: `framediff OFF.tga ON.tga --mask SHOW1.tga --threshold
-     0 --bad-threshold 0`, score 0 expected (every white pixel byte-identical), over every frame by
-     `<artifacts>/TASK58/tools/masked-compare.sh FRAMEDIFF OFFDIR ONDIR MASKDIR`. The warp follows
-     the client clock, so a replay frame may be at another warp time than its record; the water
-     pixels are outside the mask, so only a stall that moves the camera would show, and the run
-     states the frames it compared and any it did not;
-   - the share of water pixels per class from the `r_rt_stats 2` line (lit, sky, none), above
-     the pool and under it;
-   - `scripts/pins.sh footprint rt-water` (`--off` the off replay, `--on` the record, over the
-     whole frame), the worst frame, and the band `// footprint changed <lo>..<hi>` set from it in
-     `rt-water.cfg`, replacing the placeholder line; a scenario with a band and `cl_entities 0`
-     needs a companion that carries the effect (`check-content`), so the card that sets it adds
-     `rt-water-entities`, as TASK55 and TASK57 did;
-   - the pins are not recorded: the owner accepts the look first (design section 5).
-3. **Frames for the owner.** Four off/on pairs at 1920 x 1080 (`PINS_WIDTH=1920
-   PINS_HEIGHT=1080`), two above the pool and two under it, with the most reflected pixels,
-   converted to PNG (`sips -s format png`) as `<artifacts>/TASK58/frames/<n>-off.png` and
-   `<n>-on.png`, with the classes view of each, never committed.
-4. **Cost.** The pass's GPU time per frame (the `r_rt_stats 2` line's timestamps), warm (frames
-   past the first 100 of each run), three runs of `rt-water` over `water.dm2` whole, at 1920 x
-   1080 and at 5120 x 2880 (`PINS_HIDPI=1` at 2560 x 1440): median, p10, p90 and max, against
-   design section 2's budget (no budget of its own; section 8 bounds the reflection rays at 0.88
-   ms at 1080p on every pixel, and the eye ray on every pixel that is not opaque water adds about
-   as much); the fps of `timedemo.txt` at 1920 x 1080, `skywater` and `rt-water` alternated,
-   three rounds, on the bare-metal host (Apple M6). The measured cost goes into design section 2.
-5. **Validation and ASAN.** The effect-on records above with `MTL_DEBUG_LAYER=1` (no validation
-   line, a matched teardown, `teardown: 0 live objects`), and one `rt-water` record from a `make
-   ASAN=1` build (no report).
+**The demo.** `scripts/pins.sh make-demo water` made a demo of 144 to 145 messages on three
+tries, over the script's range of 97 to 124 (its waits ran long on the shared host); the third
+was used as made (140 rendered frames). The camera is over the pool for the first 63 frames and
+under it after, so `PINS_EVERY=30` captures 5 frames (3 over, 2 under) and `PINS_EVERY=7` 20 (9
+over, 11 under). The same file was put beside both builds' binaries, so their pin ids match.
+
+### Effect off
+
+Every scenario recorded on the head against records of `origin/main` (`ddbfb6ff`, an export
+of the tree built in scratch and recorded by its own `scripts/pins.sh`, the same settings,
+stored for later lanes in `<artifacts>/baselines/ddbfb6ff88b8/`): the 18 scenarios at
+`demo1.dm2` (23 frames each; `cinematic` 12, `idlog.cin` every 7th), `rt-shadows`,
+`rt-shadows-entities`, `rt-ao` and `rt-ao-entities` at `demo1.dm2`, the same four and `dlights`
+at `demo2.dm2` every 7th (89), and `skywater` at `water.dm2` (5). **28 records, 945 frames,
+every one byte-identical to the base.** Every log holds the validation banner and no other
+validation line, and `teardown: 0 live objects`; `rt 0/0` for the 19 records without an
+effect, and as main's for the rest: `rt-shadows` 77/77 and 56/56 (`demo1.dm2`, `demo2.dm2`),
+with entities 320/320 and 474/474, `rt-ao` 73/73 and 52/52, with entities 316/316 and 470/470.
+So with `r_rt_water 0` nothing of the pass runs, and the shadow and AO queries meet the same
+instances now that they carry the reflections' bit.
+
+### Effect on: the masked comparison
+
+The mask is the `r_rt_water_show 1` replay of the same trace (*The mask*): white where the
+kernel found no water, black on the water it found. `masked-compare.sh` runs `framediff OFF ON
+--mask SHOW1 --threshold 0 --bad-threshold 0` on every frame. Each frame's replays are of one
+trace, so they are at the same warp time.
+
+| Record | Frames | Score 0 | Masked pixels a frame (no water) | Water pixels a frame |
+|---|---|---|---|---|
+| `rt-water`, every 30th | 5 | 5 | 179,683 to 183,832 of 307,200 | 123,368 to 127,517 |
+| `rt-water`, every 7th | 20 | 20 | 179,113 to 183,926 | 123,274 to 128,087 |
+| `rt-water`, 1920 x 1080, every 30th | 5 | 5 | 1,241,463 to 1,272,670 of 2,073,600 | 800,930 to 832,137 |
+| `rt-water-entities`, every 30th and 7th | 25 | 25 | as `rt-water` | as `rt-water` |
+
+**Every pixel outside the water is byte-identical to the effect off, on every frame.** The
+HUD's pixels over the water (about 2,000 a frame) are white in the mask, as the 2D is drawn
+over the view, and unchanged. `rt-water-entities` draws the same frames as `rt-water` on this
+camera path (no entity is in view: `rt 49/49` in both).
+
+### Effect on: what the pass touches
+
+The `r_rt_stats 2` replay of the every-7th trace, all 138 traced frames:
+
+| Camera | Water pixels | Opaque | From the picture | From the sky | None |
+|---|---|---|---|---|---|
+| over the pool (63 frames) | 42.2 % | 0 | 97.6 % | 0 | 2.4 % |
+| under it (75 frames) | 40.3 % | 0 | 91.5 % | 0 | 8.5 % |
+
+The pool's water is translucent, so every water pixel there is found by the eye ray. No
+reflection ray on this path meets the sky brush.
+
+### Effect on: the footprint
+
+`scripts/pins.sh footprint rt-water` (TASK133), the off replay against the record, the share of
+the picture changed by more than 8 levels:
+
+| Record | Frames | Worst changed (over the pool) | Under it | Brighter, worst | Largest change |
+|---|---|---|---|---|---|
+| `rt-water`, every 30th | 5 | 0.0574 | 0.0011 to 0.0013 | 0.0002 | 54 levels |
+| `rt-water`, every 7th | 20 | 0.0579 | 0.0011 to 0.0014 | 0.0002 | 57 levels |
+| `rt-water`, 1920 x 1080 | 5 | 0.0579 | 0.0012 to 0.0013 | 0.0006 | 57 levels |
+
+The reflection darkens the pool's water toward the walls it mirrors; under the pool the
+reflected surface is close to the water's own colour. Band: `// footprint changed 0..0.08` in
+`rt-water.cfg` and in its new companion `rt-water-entities.cfg` (`cl_entities 1`, which
+`check-content` asks of a scenario with a band and `cl_entities 0`), 1.4 times the worst frame;
+every frame of the five records is inside it.
+
+### Water with the shadows and the AO
+
+- The `rt-water` traces (5 and 20 frames) replayed with `r_rt_shadows 1`, `r_rt_ao 1` and
+  `r_rt_ao_seed 1`, with and without the water: under the water mask of the all-on view
+  (byte-identical to the water-only mask on every frame), the frame with all three equals the
+  shadows-plus-AO frame on every frame (score 0). `cl_lights 0` leaves no dynamic light here.
+- The `rt-shadows` traces, which carry dynamic lights (`demo1.dm2`, 23 frames; `demo2.dm2`
+  every 7th, 89), replayed with `r_rt_ao 1` and `r_rt_ao_seed 1`, with and without
+  `r_rt_water 1`: under the all-on view's water mask every frame scores 0. The water these maps
+  show: 33,184 pixels in 1 frame of `demo1.dm2`, 61,515 in 4 frames of `demo2.dm2`; over the
+  whole demos (the stats line) 406,463 translucent water pixels (`demo1.dm2`: 75.3 % from the
+  picture, 1.1 % the sky, 23.6 % none) and 119,617 opaque ones (`demo2.dm2`: 90.5 % and 9.5 %).
+
+### Frames for the owner
+
+Four off/on pairs at 1920 x 1080 of the one `rt-water` record, replays of its trace, converted
+with `sips`, in `<artifacts>/TASK58/frames/` (`<n>-off.png`, `<n>-on.png`, and `<n>-classes.png`,
+the classes view), never committed: captures 1 and 2 over the pool and 3 and 4 under it (the
+over-pool captures with the most reflected pixels), with 816,215, 812,604, 753,719 and 738,472
+pixels reflected from the picture.
+
+### Cost
+
+The pass's GPU time per frame from the compute encoder's timestamps (the `r_rt_stats 2` line),
+`water.dm2` whole, warm (each run's lines past its first 20: 118 frames a run), three runs a
+case alternated, no validation layer, from a scratch copy of the harness whose `rt-water` cfg
+adds `r_rt_stats 2` (and `r_metalfx 2`) and runs the head's binary:
+
+| Output | Pass at | Median (run medians) | p10 | p90 | Max |
+|---|---|---|---|---|---|
+| 1920 x 1080 | 1920 x 1080 | 3.40 ms (3.37 to 3.43) | 2.58 | 3.99 | 4.40 |
+| 5120 x 2880 | 5120 x 2880 | 9.52 ms (9.31 to 9.74) | 7.02 | 10.01 | 11.91 |
+| 5120 x 2880, `r_metalfx 2` | 1920 x 1080 | 3.48 ms (3.41 to 3.52) | 2.55 | 3.88 | 4.52 |
+
+5120 x 2880 is `PINS_HIDPI=1` at 2560 x 1440. With the temporal scaler at its default size
+(1080 lines on this GPU family) the pass runs at 1920 x 1080 and costs what it costs there. At
+640 x 480 it takes about 0.53 ms. Over the pool and under it cost the same (3.37 and 3.41 ms at
+1080p). The pass's targets: 2.7 MB at 640 x 480, 17.0 MB at 1920 x 1080, 120.1 MB at 5120 x 2880.
+The load was 2.7 to 3.5 over the runs; the numbers are stored in
+`<artifacts>/baselines/d89bf519f27c/`.
+
+Against design section 2: the effect has no time budget of its own. Section 8 bounds the
+reflection rays at 0.88 ms at 1080p on every pixel, trace only; the pass here also casts the eye
+ray on every pixel that is not opaque water (all of them on this path) and shades the hit, and
+takes 3.4 ms, about four times that bound and more than TASK57's AO (3.67 ms) of the 4 to 7 ms
+that section 2 expects for every effect together on apple9. At 5120 x 2880 it is 57 % of a 60 Hz
+frame, so on that output the effect needs the internal resolution (with MetalFX, 3.5 ms).
+
+`timedemo.txt` at 1920 x 1080, `skywater` and `rt-water` alternated, three rounds: 60.0, 60.1
+and 60.2 fps off, 60.1, 60.0 and 60.2 on (140 frames in 2.3 s), the display's rate.
+
+### Validation and ASAN
+
+- Validation: the 37 effect-on logs under `MTL_DEBUG_LAYER=1` (the 5 records, their 23 replays
+  on `water.dm2`, the 8 replays of the `rt-shadows` traces with all three effects, the ASAN
+  record) hold the banner and no other validation line, and end in a matched teardown, `0 live
+  objects`, `0 unreleased, 0 unmatched`, with `rt 49/49` (the water alone), `57/57` (shadows and
+  AO on `water.dm2`), `65/65` (all three), and `84/84` and `92/92` (`demo1.dm2`), `63/63` and
+  `71/71` (`demo2.dm2`) for shadows plus AO and all three.
+- ASAN: `make ASAN=1 client game ref_metal` (both binaries link the sanitizer's runtime), one
+  `rt-water` record at `water.dm2` with `MTL_DEBUG_LAYER=1`: no sanitizer line, no validation
+  line, the teardown matched (`rt 49/49`), and the 5 frames byte-identical to the release
+  build's.
