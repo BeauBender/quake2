@@ -229,7 +229,20 @@ for l in open(sys.argv[1]):
     devs.append({"udid": u, "name": n, "state": "Shutdown"})
 print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-27-2": devs}}))' "$st/devices" ;;
 	devicetypes) echo '{"devicetypes": [{"name": "iPhone 17", "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}' ;;
-	runtimes) echo '{"runtimes": [{"isAvailable": true, "platform": "iOS", "version": "27.2", "name": "iOS 27.2", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-2", "supportedDeviceTypes": [{"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}]}' ;;
+	runtimes)
+		g='{"isAvailable": true, "platform": "iOS", "version": "27.2", "name": "iOS 27.2", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-2", "supportedDeviceTypes": [{"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}, {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Pro"}]}'
+		b='{"isAvailable": true, "platform": "iOS", "version": "%s", "name": "iOS %s bound", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-bound-%s", "supportedDeviceTypes": [{"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone19-4"}]}'
+		case $sc in
+		rttie) echo "{\"runtimes\": [$(printf "$b" 27.2 27.2 27.2), $g]}" ;;
+		rtnewer) echo "{\"runtimes\": [$(printf "$b" 27.10 27.10 27.10), $g]}" ;;
+		rttielist) echo "{\"runtimes\": [$(printf "$b" 27.2 27.2 27.2 | sed 's/iPhone19-4/iPhone-17/'), $g]}" ;;
+		rtnolist) echo "{\"runtimes\": [$(printf "$b" 27.2 27.2 27.2 | sed 's/iPhone19-4/iPhone-17/'), $(printf '%s' "$g" | sed 's/, "supportedDeviceTypes.*}$/}/')]}" ;;
+		rtnum) echo "{\"runtimes\": [$(printf '%s' "$g" | sed 's/27\.2/27.10/g'), $(printf '%s' "$g" | sed 's/27\.2/27.9/g; s/iOS-27-2/iOS-27-9/')]}" ;;
+		rtnone) echo "{\"runtimes\": [$(printf "$b" 27.2 27.2 27.2)]}" ;;
+		rtempty) echo '{"runtimes": []}' ;;
+		rtbadver) echo '{"runtimes": [{"isAvailable": true, "platform": "iOS", "version": "x", "name": "iOS x", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-x"}]}' ;;
+		*) echo '{"runtimes": [{"isAvailable": true, "platform": "iOS", "version": "27.2", "name": "iOS 27.2", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-2", "supportedDeviceTypes": [{"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}]}' ;;
+		esac ;;
 	*) exit 1 ;;
 	esac ;;
 create)
@@ -594,6 +607,17 @@ EOF
 	ST_CMD="run --out @D@/out --no-data --background 1" st_case run-background-after-not-digits extra fail "IOS_SIM_BACKGROUND_AFTER must be" 5 IOS_SIM_BACKGROUND_AFTER=x
 	ST_CMD="run --out @D@/out --shot 3s" st_case run-shot-not-digits extra fail "--shot must be a number of seconds" 5
 	ST_CMD="run --out @D@/out" st_case run-limit-not-digits extra fail "IOS_SIM_RUN_SECONDS must be" 5 IOS_SIM_RUN_SECONDS=1h
+	# the runtime pick: the newest runtime that lists the device type, the general one on a tie
+	st_case runtime-tie-picks-general rttie ok "iOS 27.2)" 30
+	st_case runtime-newer-bound-picks-general rtnewer ok "iOS 27.2)" 30
+	st_case runtime-tie-both-list-picks-most rttielist ok "iOS 27.2)" 30
+	st_case runtime-tie-unlisted-picks-unlisted rtnolist ok "iOS 27.2)" 30
+	st_case runtime-version-numeric rtnum ok "iOS 27.10)" 30
+	st_case runtime-none-lists-type rtnone fail "iPhone 17 is not supported by any available iOS runtime; tried iOS 27.2 bound (com.apple.CoreSimulator.SimRuntime.iOS-bound-27.2)" 30
+	st_case runtime-list-empty rtempty fail "no available iOS runtime" 30
+	st_case runtime-bad-version rtbadver fail "has no numeric version" 30
+	st_case runtime-set-bound-refused rttie fail "iPhone 17 is not supported by iOS 27.2 bound" 30 IOS_SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-bound-27.2
+	st_case runtime-set-general rttie ok "iOS 27.2)" 30 IOS_SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-27-2
 	st_case list-empty empty fail "simctl list devices: no device list" 30
 	st_case list-fails listfail fail "simctl list devices failed" 30
 	st_case list-hangs hang fail "timed out after 2 s: xcrun simctl list devices" 10
@@ -830,10 +854,28 @@ if want_rt:
     ios = [r for r in ios if want_rt in (r["identifier"], r["version"], r["name"])]
 if not ios:
     sys.exit("no available iOS runtime" + (" " + want_rt if want_rt else ""))
-rt = max(ios, key=lambda r: [int(x) for x in r["version"].split(".")])
-ok = [s["identifier"] for s in rt.get("supportedDeviceTypes", [])]
-if ok and t[0]["identifier"] not in ok:
-    sys.exit(t[0]["name"] + " is not supported by " + rt["name"])
+tid = t[0]["identifier"]
+def ver(r):
+    return [int(x) for x in r["version"].split(".")]
+try:
+    for r in ios:
+        ver(r)
+except (KeyError, ValueError, AttributeError):
+    sys.exit("an iOS runtime in the list has no numeric version")
+def lists(r):
+    # a runtime with no list of device types stays a candidate
+    ok = [s["identifier"] for s in r.get("supportedDeviceTypes", [])]
+    return not ok or tid in ok
+if want_rt:
+    rt = max(ios, key=ver)
+    if not lists(rt):
+        sys.exit(t[0]["name"] + " is not supported by " + rt["name"])
+else:
+    cand = [r for r in ios if lists(r)]
+    if not cand:
+        sys.exit(t[0]["name"] + " is not supported by any available iOS runtime; tried " + ", ".join(r["name"] + " (" + r["identifier"] + ")" for r in ios))
+    # newest first; on a version tie the runtime that lists the most device types (the general one)
+    rt = max(cand, key=lambda r: (ver(r), len(r["supportedDeviceTypes"]) if r.get("supportedDeviceTypes") else 1 << 30))
 print(t[0]["identifier"], rt["identifier"], rt["name"])
 EOF
 ) || die "no device for the run"
