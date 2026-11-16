@@ -511,7 +511,9 @@ mutant restore-noop cfg-restored py 'if not self.held:
             return
         self._remove(self.path)' 'return
         self._remove(self.path)'
-mutant recover-off cfg-recover py 'if os.path.lexists(self.saved):  # a run that was killed' 'if False:  # a run that was killed'
+mutant recover-off cfg-recover py 'belongs to a run that was killed
+        if os.path.lexists(self.saved):' 'belongs to a run that was killed
+        if False:'
 mutant pair-by-name frames-pair py 'k = f[:-4].rsplit("-", 1)[-1]' 'k = f'
 mutant order-by-string frames-order py 'return sorted(frames, key=int)' 'return sorted(frames)'
 mutant stats-one-word stats-multi py 'reset [a-z ]+, scaler' 'reset \w+, scaler'
