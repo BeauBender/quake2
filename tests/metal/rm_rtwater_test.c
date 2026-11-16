@@ -759,12 +759,15 @@ test_stats(void)
 	s.compact_ms = 0.125;
 	s.trace_ms = 0.5;
 	s.span_ms = 1.5;
+	s.vert_ms = 0.061;
+	s.frag_ms = 0.125;
 	CHECK(rm_rtw_stats_format(&s, buf, sizeof(buf)) == 1);
-	CHECK(strstr(buf, ", 0.875 ms, world space: raster 0.250, compaction 0.125, trace 0.500, span 1.500 ms") != NULL);
+	CHECK(strstr(buf, ", 0.875 ms, world space: raster 0.250 (vertex 0.061, fragment 0.125), compaction 0.125, trace 0.500, "
+			"span 1.500 ms") != NULL);
 	CHECK(strlen(buf) < RM_STATS_LINE);
-	s.raster_ms = s.compact_ms = s.trace_ms = s.span_ms = -1;
+	s.raster_ms = s.compact_ms = s.trace_ms = s.span_ms = s.vert_ms = s.frag_ms = -1;
 	CHECK(rm_rtw_stats_format(&s, buf, sizeof(buf)) == 1);
-	CHECK(strstr(buf, "world space: raster -, compaction -, trace -, span - ms") != NULL);
+	CHECK(strstr(buf, "world space: raster - (vertex -, fragment -), compaction -, trace -, span - ms") != NULL);
 	s.ws = 0;
 
 	s.ms = -1;

@@ -216,10 +216,11 @@ typedef struct
 	 * to the end of its fragment stage), the compaction (its encoder, with
 	 * the arguments) and the trace (its encoder); span_ms is the whole,
 	 * the raster's start to the trace's end, which is below the sum where
-	 * the spans overlap.
+	 * the spans overlap; vert_ms and frag_ms the raster's vertex stage (its
+	 * start to its end) and its fragment stage, apart.
 	 */
 	int ws;
-	double raster_ms, compact_ms, trace_ms, span_ms;
+	double raster_ms, compact_ms, trace_ms, span_ms, vert_ms, frag_ms;
 } rm_rtw_stats_t;
 
 /* the r_rt_stats 2 line of a frame's pass, without a newline: 1 when it fits in len; 0 with buf empty otherwise */

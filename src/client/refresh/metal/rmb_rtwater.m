@@ -73,7 +73,8 @@ unsigned long rmb_rt_bind_water_raster(id<MTLRenderCommandEncoder> enc, int list
 #define RMB_RTW_SLOT 16         /* uint32s a frame slot of the counts buffer (rm_rtwater.metal's RM_RTW_C_*) */
 #define RMB_RTW_C_LISTED 9
 #define RMB_RTW_C_ARGS 10
-#define RMB_RTW_SAMPLES 6       /* per slot (world space): the raster's start and end, the compaction's, the trace's */
+#define RMB_RTW_SAMPLES 8       /* per slot (world space): the raster's start and end, the compaction's, the trace's,
+                                   then the end of the raster's vertex stage and the start of its fragment stage */
 
 _Static_assert(sizeof(rm_rtw_view_t) == 288, "the view is rm_rtwater.metal's 288 bytes");
 _Static_assert(RMB_RTW_C_ARGS * 4 % 4 == 0, "the indirect arguments are 4-byte aligned");
@@ -542,7 +543,7 @@ rmb_rtw_read(void)
 		s->skybox = c[7];
 		s->ws = slot_ws[k];
 		s->listed = slot_ws[k] ? c[RMB_RTW_C_LISTED] : slot_pixels[k];   /* TASK58's path traces every pixel */
-		s->ms = s->raster_ms = s->compact_ms = s->trace_ms = s->span_ms = -1;
+		s->ms = s->raster_ms = s->compact_ms = s->trace_ms = s->span_ms = s->vert_ms = s->frag_ms = -1;
 
 		/*
 		 * TASK58's path: its compute encoder. The world-space path (TASK158):
@@ -566,6 +567,8 @@ rmb_rtw_read(void)
 				s->compact_ms = rmb_rtw_span(t, n, 2, 3);
 				s->trace_ms = rmb_rtw_span(t, n, 4, 5);
 				s->span_ms = rmb_rtw_span(t, n, 0, 5);
+				s->vert_ms = rmb_rtw_span(t, n, 0, 6);
+				s->frag_ms = rmb_rtw_span(t, n, 7, 1);
 
 				if ((s->raster_ms >= 0) && (s->compact_ms >= 0) && (s->trace_ms >= 0))
 				{
@@ -624,8 +627,8 @@ rmb_rtw_cand(id<MTLCommandBuffer> cmd, id<MTLTexture> depth, int slot, int timed
 	{
 		rp.sampleBufferAttachments[0].sampleBuffer = samples;
 		rp.sampleBufferAttachments[0].startOfVertexSampleIndex = (NSUInteger)slot * RMB_RTW_SAMPLES;
-		rp.sampleBufferAttachments[0].endOfVertexSampleIndex = MTLCounterDontSample;
-		rp.sampleBufferAttachments[0].startOfFragmentSampleIndex = MTLCounterDontSample;
+		rp.sampleBufferAttachments[0].endOfVertexSampleIndex = (NSUInteger)slot * RMB_RTW_SAMPLES + 6;
+		rp.sampleBufferAttachments[0].startOfFragmentSampleIndex = (NSUInteger)slot * RMB_RTW_SAMPLES + 7;
 		rp.sampleBufferAttachments[0].endOfFragmentSampleIndex = (NSUInteger)slot * RMB_RTW_SAMPLES + 1;
 	}
 
