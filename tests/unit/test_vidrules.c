@@ -15,6 +15,7 @@
  * =======================================================================
  */
 
+#include <math.h>
 #include <string.h>
 
 #include "test.h"
@@ -467,4 +468,21 @@ TEST(vidrules_ao_settings)
 	T_EQ_INT(VidRules_AORaysIndex(0.0f), 0);
 	T_EQ_INT(VidRules_AORaysIndex(9.0f), 1);
 	T_EQ_INT(VidRules_AORaysIndex(0.0f / 0.0f), 1);    /* the default, 2 */
+
+	/* the values the renderer reads as not finite or huge (rm_rtao_div and
+	   rm_rtao_rays): not finite is the default, a huge finite one is read
+	   as the value it is (a divisor 1, and 2 rays) */
+	T_EQ_INT(VidRules_AOScaleIndex(-INFINITY), 1);
+	T_EQ_INT(VidRules_AOScaleIndex(INFINITY), 1);
+	T_EQ_INT(VidRules_AOScaleIndex(NAN), 1);
+	T_EQ_INT(VidRules_AOScaleIndex(1e30f), 0);
+	T_EQ_INT(VidRules_AOScaleIndex(3.0e38f), 0);
+	T_EQ_INT(VidRules_AORaysIndex(-INFINITY), 1);
+	T_EQ_INT(VidRules_AORaysIndex(INFINITY), 1);
+	T_EQ_INT(VidRules_AORaysIndex(NAN), 1);
+	T_EQ_INT(VidRules_AORaysIndex(1e30f), 1);
+
+	/* the rounding of 1 / value: 1.5 goes up to divisor 2, 2.5 down to 2 */
+	T_EQ_INT(VidRules_AOScaleIndex(1.0f / 1.5f), 1);
+	T_EQ_INT(VidRules_AOScaleIndex(1.0f / 2.5f), 1);
 }

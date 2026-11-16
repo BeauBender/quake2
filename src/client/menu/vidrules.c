@@ -374,12 +374,13 @@ VidRules_AOScaleIndex(float value)
 {
 	float d;
 
-	if (!(value > 0.0f) || !(value < 1e30f))
+	/* as rm_rtao_div: a value that is not finite or not above 0 is the default */
+	if (!isfinite(value) || !(value > 0.0f))
 	{
 		return 1;
 	}
 
-	/* the nearest divisor to 1 / value, an exact half going down */
+	/* the nearest divisor to 1 / value; 1.5 goes up to 2 and 2.5 down to 2 */
 	d = 1.0f / value;
 
 	if (d < 1.5f)
@@ -393,7 +394,8 @@ VidRules_AOScaleIndex(float value)
 int
 VidRules_AORaysIndex(float value)
 {
-	if (!(value == value))
+	/* as rm_rtao_rays: a value that is not finite is the default, 2 */
+	if (!isfinite(value))
 	{
 		return 1;
 	}

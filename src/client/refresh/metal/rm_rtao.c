@@ -84,7 +84,7 @@ rm_rtao_div(float v)
 		return rm_rtao_div(RM_RTAO_SCALE);
 	}
 
-	/* the nearest divisor to 1 / v, an exact half going down */
+	/* the nearest divisor to 1 / v; 1.5 goes up to 2 and 2.5 down to 2 */
 	d = 1.0f / v;
 
 	if (!(d < 1.5f))

@@ -196,3 +196,13 @@ On `2949d1d8`'s source with these documents, every one through the host's lock w
 Every log, script, record and tool (`cost.sh`, `iq.sh`, `aocmp.c`, the stores) is in the lane's
 scratch space and `<artifacts>/TASK157/`; main's measured baseline is in
 `<artifacts>/baselines/cfec997d5c39/`. Nothing derived from game data is in the repository.
+
+## Review round 1
+
+The panel's findings, none of which changes the renderer: a menu test for the AO items'
+enabled path (`test_ao_items_apply` in `tests/menu/videomenu_test.c`: shown values,
+index-to-value writes, no write for an unchanged item, nothing written while greyed); the menu's
+two readers now use `isfinite` and no `1e30` cut, as `rm_rtao_div` and `rm_rtao_rays` do, with
+unit cases for -inf, +inf, NaN and 1e30; the "exact half" comments say what 1.5 and 2.5 do; the
+`rt-ao` and `rt-ao-entities` scenario comments name the defaults (half-size trace, two rays), and
+the cfgs keep their settings, so their settings hashes are unchanged.

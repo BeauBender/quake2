@@ -102,9 +102,10 @@ int VidRules_DenoiserIndex(float value);
 
 /* The ray-traced AO's items (TASK157), read as the renderer reads the cvars:
    r_rt_ao_scale as index 0 (full), 1 (1/2) or 2 (1/3), the nearest to
-   1 / value, the default 1/2 for 0, below 0 or not a number, and the value
-   of each index (1/2 for one out of range); r_rt_ao_rays as index 0 (1 ray)
-   or 1 (2 rays), the nearest, 2 rays when not a number. */
+   1 / value (1.5 goes to 2, 2.5 to 2), the default 1/2 for 0, below 0, or
+   not finite, and the value of each index (1/2 for one out of range);
+   r_rt_ao_rays as index 0 (1 ray) or 1 (2 rays), the nearest, 2 rays when not
+   finite. */
 int VidRules_NumAOScales(void);
 float VidRules_AOScaleValue(int index);
 int VidRules_AOScaleIndex(float value);
