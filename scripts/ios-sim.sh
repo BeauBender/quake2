@@ -9,7 +9,12 @@
 # content) to a scratch directory, builds "make ios IOS_BUNDLE_DATA=<it>"
 # with IOS_ROOT=DIR/build, creates a device of its own with "simctl create"
 # (IOS_SIM_TYPE, default "iPhone 17", on IOS_SIM_RUNTIME, default the newest
-# available iOS runtime), boots it, installs the app and launches it with
+# available iOS runtime that lists that device type; on a version tie the
+# one that lists the most types, and a runtime with no list counts as
+# general; a version or name in IOS_SIM_RUNTIME is picked the same way
+# among the runtimes it matches, a runtime that does not list the type is
+# skipped, and a candidate with no numeric version is refused by name),
+# boots it, installs the app and launches it with
 # --console-pty and Metal's validation layer (SIMCTL_CHILD_MTL_DEBUG_LAYER=1)
 # on "+set vid_renderer metal" and "+exec smoke.cfg" (written into the
 # data: about 30 frames, "screenshot tga", 900 frames at the console, then
@@ -240,6 +245,7 @@ print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-27-2": dev
 		rtnum) echo "{\"runtimes\": [$(printf '%s' "$g" | sed 's/27\.2/27.10/g'), $(printf '%s' "$g" | sed 's/27\.2/27.9/g; s/iOS-27-2/iOS-27-9/')]}" ;;
 		rtnone) echo "{\"runtimes\": [$(printf "$b" 27.2 27.2 27.2)]}" ;;
 		rtempty) echo '{"runtimes": []}' ;;
+		rtbadnon) echo "{\"runtimes\": [$(printf "$b" x x x), $g]}" ;;
 		rtbadver) echo '{"runtimes": [{"isAvailable": true, "platform": "iOS", "version": "x", "name": "iOS x", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-x"}]}' ;;
 		*) echo '{"runtimes": [{"isAvailable": true, "platform": "iOS", "version": "27.2", "name": "iOS 27.2", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-2", "supportedDeviceTypes": [{"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}]}' ;;
 		esac ;;
@@ -454,7 +460,7 @@ EOF
 		t0=$(date +%s)
 		cmd=${ST_CMD:-smoke --out @D@/out}; cmd=${cmd//@D@/$d}
 		bounded 60 "${d:?}/run.log" env PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
-			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=2 IOS_SIM_CREATE_SECONDS=2 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10 "$@" \
+			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=20 IOS_SIM_CREATE_SECONDS=20 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10 "$@" \
 			bash "$self" $cmd || rc=$?
 		t0=$(( $(date +%s) - t0 ))
 		if [ "$rc" = 124 ]; then
@@ -615,20 +621,24 @@ EOF
 	st_case runtime-version-numeric rtnum ok "iOS 27.10)" 30
 	st_case runtime-none-lists-type rtnone fail "iPhone 17 is not supported by any available iOS runtime; tried iOS 27.2 bound (com.apple.CoreSimulator.SimRuntime.iOS-bound-27.2)" 30
 	st_case runtime-list-empty rtempty fail "no available iOS runtime" 30
-	st_case runtime-bad-version rtbadver fail "has no numeric version" 30
+	st_case runtime-bad-version rtbadver fail "the iOS runtime iOS x (com.apple.CoreSimulator.SimRuntime.iOS-x) has no numeric version" 30
+	st_case runtime-bad-version-not-candidate-skipped rtbadnon ok "iOS 27.2)" 30
+	st_case runtime-set-version-tie-picks-general rttie ok "iOS 27.2)" 30 IOS_SIM_RUNTIME=27.2
+	st_case runtime-set-name-picks-general rttie ok "iOS 27.2)" 30 "IOS_SIM_RUNTIME=iOS 27.2"
+	st_case runtime-set-version-tie-both-list-picks-most rttielist ok "iOS 27.2)" 30 IOS_SIM_RUNTIME=27.2
 	st_case runtime-set-bound-refused rttie fail "iPhone 17 is not supported by iOS 27.2 bound" 30 IOS_SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-bound-27.2
 	st_case runtime-set-general rttie ok "iOS 27.2)" 30 IOS_SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-27-2
 	st_case list-empty empty fail "simctl list devices: no device list" 30
 	st_case list-fails listfail fail "simctl list devices failed" 30
-	st_case list-hangs hang fail "timed out after 2 s: xcrun simctl list devices" 10
+	st_case list-hangs hang fail "timed out after 2 s: xcrun simctl list devices" 10 IOS_SIM_LIST_SECONDS=2
 	st_case device-from-before-gone vanish ok "not a failure): 22222222-2222-2222-2222-222222222222" 30
 	ST_CMD="run --out @D@/out" st_case run-device-from-before-gone vanish ok "not a failure): 22222222-2222-2222-2222-222222222222" 30
 	st_case own-device-left leftover fail "is still listed after its delete" 30
 	ST_CMD="run --out @D@/out" st_case run-own-device-left leftover fail "is still listed after its delete" 30
-	st_case create-times-out createhang fail "deleting AAAAAAAA-0000-0000-0000-" 30
+	st_case create-times-out createhang fail "deleting AAAAAAAA-0000-0000-0000-" 30 IOS_SIM_CREATE_SECONDS=2
 	st_case created-device-not-listed ghost fail "is not in the device list taken after simctl create" 30
 	st_case created-device-listed-before reuse fail "was already listed before simctl create" 30
-	st_case lost-device-listed-before samename fail "not deleting 55555555-5555-5555-5555-555555555555" 30
+	st_case lost-device-listed-before samename fail "not deleting 55555555-5555-5555-5555-555555555555" 30 IOS_SIM_CREATE_SECONDS=2
 	st_case launch-ignores-term launchterm ok "the launch client did not exit after the app" 40
 	st_case family-refused floorrefused fail "ref_metal refused it (its floor)" 30
 	st_case portrait-framebuffer portrait ok "smoke ok" 30
@@ -841,6 +851,9 @@ bid=$(plutil -extract CFBundleIdentifier raw -o - "$app/Info.plist" 2>/dev/null)
 list_devices "$out/devices.before" || die "no device list before the run"
 bounded "$list_s" "${tmp:?}/types.json" -e "${tmp:?}/types.err" xcrun simctl list devicetypes -j || die "simctl list devicetypes failed"
 bounded "$list_s" "${tmp:?}/runtimes.json" -e "${tmp:?}/runtimes.err" xcrun simctl list runtimes -j || die "simctl list runtimes failed"
+# the runtime: the newest that lists the device type, on a version tie the one that lists the
+# most types (a runtime with no list counts as general); IOS_SIM_RUNTIME narrows the set, then
+# the same rule picks within it
 pick=$(python3 -I - "${tmp:?}/types.json" "${tmp:?}/runtimes.json" "${IOS_SIM_TYPE:-iPhone 17}" "${IOS_SIM_RUNTIME:-}" <<'EOF'
 import json, sys
 types = json.load(open(sys.argv[1]))["devicetypes"]
@@ -851,31 +864,30 @@ if not t:
     sys.exit("no device type " + want_type)
 ios = [r for r in runtimes if r.get("isAvailable") and r.get("platform", "") == "iOS"]
 if want_rt:
-    ios = [r for r in ios if want_rt in (r["identifier"], r["version"], r["name"])]
+    ios = [r for r in ios if want_rt in (r.get("identifier"), r.get("version"), r.get("name"))]
 if not ios:
     sys.exit("no available iOS runtime" + (" " + want_rt if want_rt else ""))
 tid = t[0]["identifier"]
-def ver(r):
-    return [int(x) for x in r["version"].split(".")]
-try:
-    for r in ios:
-        ver(r)
-except (KeyError, ValueError, AttributeError):
-    sys.exit("an iOS runtime in the list has no numeric version")
+def label(r):
+    return str(r.get("name")) + " (" + str(r.get("identifier")) + ")"
 def lists(r):
     # a runtime with no list of device types stays a candidate
     ok = [s["identifier"] for s in r.get("supportedDeviceTypes", [])]
     return not ok or tid in ok
-if want_rt:
-    rt = max(ios, key=ver)
-    if not lists(rt):
-        sys.exit(t[0]["name"] + " is not supported by " + rt["name"])
-else:
-    cand = [r for r in ios if lists(r)]
-    if not cand:
-        sys.exit(t[0]["name"] + " is not supported by any available iOS runtime; tried " + ", ".join(r["name"] + " (" + r["identifier"] + ")" for r in ios))
-    # newest first; on a version tie the runtime that lists the most device types (the general one)
-    rt = max(cand, key=lambda r: (ver(r), len(r["supportedDeviceTypes"]) if r.get("supportedDeviceTypes") else 1 << 30))
+def ver(r):
+    try:
+        return [int(x) for x in r["version"].split(".")]
+    except (KeyError, ValueError, AttributeError):
+        sys.exit("the iOS runtime " + label(r) + " has no numeric version")
+# the same rule for the default and for a version or name given: only a runtime that lists the
+# device type is a candidate (the others are skipped, whatever their version says); newest first;
+# on a version tie the runtime that lists the most device types (the general one)
+cand = [r for r in ios if lists(r)]
+if not cand:
+    if want_rt:
+        sys.exit(t[0]["name"] + " is not supported by " + ", ".join(r["name"] for r in ios))
+    sys.exit(t[0]["name"] + " is not supported by any available iOS runtime; tried " + ", ".join(label(r) for r in ios))
+rt = max(cand, key=lambda r: (ver(r), len(r["supportedDeviceTypes"]) if r.get("supportedDeviceTypes") else 1 << 30))
 print(t[0]["identifier"], rt["identifier"], rt["name"])
 EOF
 ) || die "no device for the run"
