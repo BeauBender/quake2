@@ -151,6 +151,16 @@ Two runs of one renderer, as P1 and P2 require:
 `pins.sh record soft world`, `pins.sh record soft world --run 2`, then
 `pins.sh compare soft world --run 2 --ref soft`.
 
+A timing (a frame rate, a pass's GPU time) is not a pin run. It is a case
+of the bench harness, `scripts/bench/bench.sh` with the quake2 adapter:
+the case fixes the commit's build, the scenario, the size, display sync,
+the seed, the counting window and the runs, the adapter checks the
+host's capability, the screen and that no other `quake2` runs, and the
+result is stored per host and reused as the baseline of that build
+([Timings with bench.sh](../../doc/100_renderpins.md#timings-with-benchsh);
+the first cases and their reproductions are in
+[TASK154](../runbook/TASK154.md)).
+
 ## Evidence on pull requests (TASK73)
 
 Decision record `docs/decisions/0007-pr-evidence-frames.md`: rendered
@@ -254,15 +264,20 @@ Frame pins cannot judge whether lighting looks better. For TASK24 and
 TASK25 the harness is used three ways: with every ray-traced effect off,
 `ref_metal` still passes all pins against `gl1`; each effect has its own
 scenario, pinned against `ref_metal` at the commit whose look the owner
-accepted; and `timedemo.txt` in each record holds the performance number
-the card reports.
+accepted; and the performance number the card reports is measured with
+`scripts/bench/bench.sh` and its quake2 cases (`rt-shadows-gpu-*`,
+`rt-ao-gpu-*`, `metalfx-scaler-*`;
+[Timings with bench.sh](../../doc/100_renderpins.md#timings-with-benchsh)).
+The `timedemo.txt` of a record is the rate of a run that also captured
+frames.
 
 ## Hardware tiers (from the plan)
 
 T0, any Mac or the build VM: the harness, `soft` references, builds. T1, a
 bare-metal Mac where `ref_gl1` renders: the `gl1` references, shim and
 rasterizer parity, ray tracing in compute. T2, an M3 or later:
-render-stage ray queries and the performance numbers.
+render-stage ray queries and the performance numbers (the bench cases,
+which refuse a host without the capability they require).
 
 ## Open decisions for the owner
 
@@ -319,3 +334,4 @@ render-stage ray queries and the performance numbers.
 - [TASK122](../runbook/TASK122.md): Particle size cap relative to the resolution in `ref_metal`
 - [TASK131](../runbook/TASK131.md): The dynamic-light shadow pass finds each pixel's surface without an eye ray
 - [TASK132](../runbook/TASK132.md): `soft`'s window captured opaque and not opaque
+- [TASK154](../runbook/TASK154.md): The quake2 bench adapter and the first cases, each reproduced against its card
