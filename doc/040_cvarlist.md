@@ -419,6 +419,19 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   the windows will be *r_customheight* pixels high and *r_customwidth*
   pixels wide. Set *r_mode* to `-1` to use the custom resolution.
 
+* **iOS, iPadOS and the screen's own size**: On iPhone and iPad the
+  window is always the whole screen, in landscape (either way up), at
+  the screen's own pixels, and everything the game draws lies inside
+  the safe area, clear of the rounded corners, the sensor housing and
+  the home indicator. So `r_mode` (always `-2` there), `vid_fullscreen`
+  (always `2`), `vid_displayindex` (one screen), `vid_highdpiaware`
+  (always on) and `r_vsync` (a layer is always presented in step with
+  the display) have no effect: the engine sets the first two itself
+  when it starts the video, and the video menu shows the mode,
+  fullscreen, display, vertical sync and renderer items greyed with
+  their reasons. A change of the safe area, as in a turn between the
+  two landscape positions, restarts the video.
+
 * **r_farsee**: Normally Quake II renders only up to 4096 units. If set
   to `1` the limit is increased to 8192 units. This helps with some
   custom maps and is problematic with other custom maps.

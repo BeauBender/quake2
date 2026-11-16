@@ -6,7 +6,9 @@
 # item gets its choices back when a scaler is turned on and apply writes only
 # a scale the player chose; apply names every cvar under the renderer the menu
 # was built for; a greyed item cannot be changed by Left, Right or Enter; the
-# scale item's "custom" entry is not a step. No SDL, no engine, no game data.
+# scale item's "custom" entry is not a step; built for iOS (TASK147), the
+# mode, fullscreen, display, vertical sync and renderer are greyed with their
+# reasons, never hidden, and apply writes none of them. No SDL, no engine, no game data.
 #
 # Built with ASAN and UBSAN when the compiler has them. The run has a wall
 # bound of VIDEOMENU_CHECK_SECONDS (default 120); a watchdog kills the run it
@@ -53,7 +55,19 @@ if ! $cc $sflags $inc $defs -Wno-unused-parameter -Wno-sign-compare -o "${tmp:?}
 	exit 1
 fi
 
-"${tmp:?}/videomenu_test" > "${tmp:?}/run.out" 2>&1 &
+# TASK147: the same menu built for iOS, where the screen's own items are greyed with their reasons
+# shellcheck disable=SC2086 # sflags, inc and defs are word lists
+if ! $cc $sflags $inc $defs -DTEST_IOS=1 -DVID_PLATFORM=VIDPLAT_IOS -Wno-unused-parameter -Wno-sign-compare \
+	-o "${tmp:?}/videomenu_test_ios" \
+	tests/menu/videomenu_test.c src/client/menu/videomenu.c src/client/menu/qmenu.c \
+	src/client/menu/vidrules.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	echo "check-video-menu: the host test does not build for iOS"
+	exit 1
+fi
+
+# the desktop build first, then iOS, in one run under the one bound
+{ "${tmp:?}/videomenu_test" && "${tmp:?}/videomenu_test_ios"; } > "${tmp:?}/run.out" 2>&1 &
 run=$!
 (
 	n=0
