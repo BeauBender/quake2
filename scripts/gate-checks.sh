@@ -27,6 +27,10 @@
 # cannot be printed, and an error of the scheduler itself (a bad GATE_JOBS, a
 # list word that names no check, no scratch directory) fail the run, and every
 # check that failed is named. Nothing here limits how long a check may run.
+#
+# A SIGHUP, SIGINT or SIGTERM to this script ends the run at once: no other
+# check starts, every running one and all it started get SIGTERM, and SIGKILL
+# 3 s later (see gate_cleanup), and the exit status is 129, 130 or 143.
 set -eu
 me=gate
 
@@ -50,12 +54,19 @@ gate_in() {
 	return 1
 }
 
-# gate_start <index>: starts check <index>, its output into its own log
+# gate_start <index>: starts check <index>, its output into its own log, as
+# the leader of a process group of its own (job control, set -m, is on for
+# that one command), so that gate_cleanup can end everything it started.
+# Job control also leaves its SIGINT as it was: a check started in the
+# background without it would ignore SIGINT, and so would all it runs.
 gate_start() {
 	_gsc=$(cat "$_gd/$1.path")
 	_gs0=$(date +%s)
+	set -m
 	"$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 &
-	_grun="$_grun $1:$!:$_gs0"
+	_gsp=$!
+	set +m
+	_grun="$_grun $1:$_gsp:$_gs0"
 	_gnr=$((_gnr + 1))
 }
 
@@ -121,11 +132,43 @@ gate_phase() {
 	while [ "$_gnr" -gt 0 ]; do gate_reap; done
 }
 
+# gate_kill <signal> <group>...: sends <signal> to each of those process
+# groups, every process in it
+gate_kill() {
+	_gks=$1
+	shift
+	for _gkg; do kill -s "$_gks" -- "-$_gkg" 2> /dev/null || :; done
+}
+
+# gate_alive <group>...: some process of one of those groups is still there
+gate_alive() {
+	for _gag; do
+		if kill -0 -- "-$_gag" 2> /dev/null; then return 0; fi
+	done
+	return 1
+}
+
+# gate_cleanup: on the way out (a signal, an error), ends every check still
+# running and everything it started: TERM to each check's process group,
+# up to 3 s for them to end, then KILL to all of them; then removes the logs
 gate_cleanup() {
+	_gcg=
 	for _gcp in $_grun; do
 		_gcr=${_gcp#*:}
-		kill -TERM "${_gcr%%:*}" 2> /dev/null || :
+		_gcg="$_gcg ${_gcr%%:*}"
 	done
+	if [ -n "$_gcg" ]; then
+		# shellcheck disable=SC2086 # a list of process groups
+		gate_kill TERM $_gcg
+		_gcw=0
+		# shellcheck disable=SC2086
+		while [ "$_gcw" -lt 15 ] && gate_alive $_gcg; do
+			sleep 0.2 2> /dev/null || sleep 1
+			_gcw=$((_gcw + 1))
+		done
+		# shellcheck disable=SC2086
+		gate_kill KILL $_gcg
+	fi
 	rm -rf "${_gd:?}"
 }
 

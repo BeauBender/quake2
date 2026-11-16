@@ -55,7 +55,25 @@ gate_serial=""
 # (2026-11-15, load 3 to 5): metalfx-report 269 s, pins 148 s, bench 107 s,
 # identity-env 46 s, ref-metal 35 s; every other check 23 s or less.
 gate_first="check-metalfx-report.sh check-pins.sh check-bench.sh check-identity-env.sh check-ref-metal.sh"
-scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh
+# The scheduler runs in the background so that a SIGHUP, SIGINT or SIGTERM
+# to this script is acted on at once (a trap waits for a command in the
+# foreground to end): gate_stop passes it on as SIGTERM, which ends the
+# scheduler and every check it runs, waits for that, and fails the gate.
+gate_sched=
+gate_stop() {
+	if [ -n "$gate_sched" ]; then
+		kill -s TERM "$gate_sched" 2> /dev/null || :
+		wait
+	fi
+	exit "$1"
+}
+trap 'gate_stop 129' HUP
+trap 'gate_stop 130' INT
+trap 'gate_stop 143' TERM
+scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh &
+gate_sched=$!
+wait "$gate_sched"
+trap - HUP INT TERM
 
 make -B -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)" server game
 make -B -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)" UPDATE_PINS= TEST_ARGS= test
