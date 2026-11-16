@@ -74,14 +74,14 @@ off reason takes no lock and says so in its one line; `CI=true` alone,
 leave the lock on. The caller's `LC_ALL`, unset or set, comes back under
 the real lock for the gate and for coverage. Every pid the check waits for
 leaves its cleanup list, which must be empty after the tests.
-Twenty-nine mutants, each caught: the lock call removed from the gate,
+Thirty mutants, each caught: the lock call removed from the gate,
 from coverage and from each of the eight pins commands, the run under the
 lock taking the lock again (the gate, `pins.sh`), a `BENCH_LOCK_ENTRY`
 without a token taken as a hold, an unset `LC_ALL` not given back (the
 gate, coverage), `GATE_PARENT` naming the lock shell, the four of the
-merge with FIX72 (below), and, for each of the three scripts, no state
-directory taking the lock, `CI=true` alone turning it off and a silent
-lock-off.
+merge with FIX72 and the one of review round 6 (below), and, for each
+of the three scripts, no state directory taking the lock, `CI=true`
+alone turning it off and a silent lock-off.
 Against the entry points before this card, the gate, coverage and pins
 tests fail, each with "not one call of bench.sh"; against those of the
 first review round, the off-reason tests fail (no line, and with no state
@@ -214,3 +214,12 @@ afterwards, no lock-off line), passed in 414 s, its 33 checks in 410 s,
 its `t_lock_stop` assertion that the lock shell prints no job notice: a
 self-test of the bench core, which this change does not touch. It passed
 alone just before and in the second run.
+
+## Review round 6
+
+A KILL to the caller's group that lands after `bench_spawn` has forked
+the run but before the run's shell has started leaves the run with
+launchd as its parent, so its lock shell read as pid 1 and the watcher
+never signalled; a run under the lock whose parent at start is pid 1 now
+prints `test.sh: the lock shell is gone before the gate started` and
+exits 143 before it starts the watcher, the scheduler, a check or a make.
