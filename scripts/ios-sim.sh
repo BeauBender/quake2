@@ -235,6 +235,9 @@ print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-27-2": dev
 		case $sc in
 		rttie) echo "{\"runtimes\": [$(printf "$b" 27.2 27.2 27.2), $g]}" ;;
 		rtnewer) echo "{\"runtimes\": [$(printf "$b" 27.10 27.10 27.10), $g]}" ;;
+		rttielist) echo "{\"runtimes\": [$(printf "$b" 27.2 27.2 27.2 | sed 's/iPhone19-4/iPhone-17/'), $g]}" ;;
+		rtnolist) echo "{\"runtimes\": [$(printf "$b" 27.2 27.2 27.2 | sed 's/iPhone19-4/iPhone-17/'), $(printf '%s' "$g" | sed 's/, "supportedDeviceTypes.*}$/}/')]}" ;;
+		rtnum) echo "{\"runtimes\": [$(printf '%s' "$g" | sed 's/27\.2/27.10/g'), $(printf '%s' "$g" | sed 's/27\.2/27.9/g; s/iOS-27-2/iOS-27-9/')]}" ;;
 		rtnone) echo "{\"runtimes\": [$(printf "$b" 27.2 27.2 27.2)]}" ;;
 		rtempty) echo '{"runtimes": []}' ;;
 		rtbadver) echo '{"runtimes": [{"isAvailable": true, "platform": "iOS", "version": "x", "name": "iOS x", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-x"}]}' ;;
@@ -607,6 +610,9 @@ EOF
 	# the runtime pick: the newest runtime that lists the device type, the general one on a tie
 	st_case runtime-tie-picks-general rttie ok "iOS 27.2)" 30
 	st_case runtime-newer-bound-picks-general rtnewer ok "iOS 27.2)" 30
+	st_case runtime-tie-both-list-picks-most rttielist ok "iOS 27.2)" 30
+	st_case runtime-tie-unlisted-picks-unlisted rtnolist ok "iOS 27.2)" 30
+	st_case runtime-version-numeric rtnum ok "iOS 27.10)" 30
 	st_case runtime-none-lists-type rtnone fail "iPhone 17 is not supported by any available iOS runtime; tried iOS 27.2 bound (com.apple.CoreSimulator.SimRuntime.iOS-bound-27.2)" 30
 	st_case runtime-list-empty rtempty fail "no available iOS runtime" 30
 	st_case runtime-bad-version rtbadver fail "has no numeric version" 30
