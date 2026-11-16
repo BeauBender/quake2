@@ -68,6 +68,7 @@ int curtime;
 void Key_Init(void);
 void CL_PinsLatch(void);
 qboolean CL_PinsRun(void);
+void Key_DefaultPadBinds(void);
 qboolean CL_PinsReplaying(void);
 void CL_PinsReplay(void);
 void Key_Shutdown(void);
@@ -243,6 +244,11 @@ void Qcommon_ExecConfigs(qboolean gameStartUp)
 	}
 
 	Cbuf_Execute();
+
+#ifndef DEDICATED_ONLY
+	/* iOS only: the gamepad keys a fresh start has no binding for (TASK150) */
+	Key_DefaultPadBinds();
+#endif
 }
 
 static qboolean checkForHelp(int argc, char **argv)

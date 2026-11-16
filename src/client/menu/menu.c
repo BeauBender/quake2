@@ -6361,6 +6361,26 @@ M_Keydown(int key)
 	}
 }
 
+/*
+ * True when the menu on top has a text field under its cursor, so that
+ * typed text goes to it (the on-screen keyboard of iOS, TASK150).
+ */
+qboolean
+M_TextFieldActive(void)
+{
+	menuframework_s *menu = M_GetActiveMenu();
+	menucommon_s *item;
+
+	if (!menu)
+	{
+		return false;
+	}
+
+	item = (menucommon_s *)Menu_ItemAtCursor(menu);
+
+	return item && item->type == MTYPE_FIELD;
+}
+
 void
 M_Free(void)
 {
