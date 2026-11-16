@@ -27,8 +27,9 @@ of supported modes); an option runs only when every cvar it sets is in that list
 `cvarlist` again, and the option is kept only when each value reads back as asked. The option
 table is `scripts/metalfx-report/options.tsv` (id, label, scenarios, `cvar=value` list): a row for
 `r_rt_denoiser` is there already and appears on a host once the engine has that cvar, with no
-change to the generator. A scenario runs when every cvar its file sets exists, so the `rt-*`
-scenarios appear with the ray-traced effects. For each option and scenario:
+change to the generator. A scenario runs when every `r_rt_*` or `r_metalfx*` cvar its file sets exists (the others,
+such as the software renderer's, are harmless to ref_metal), so the `rt-*` scenarios appear with the
+ray-traced effects. For each option and scenario:
 
 - `timedemo` fps over N alternated runs, as a range (no validation layer, so the layer's cost
   is not in the number);

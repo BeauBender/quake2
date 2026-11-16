@@ -45,7 +45,7 @@ chmod 555 "$tmp/ro"
 printf '#!/bin/sh\necho boom >&2\nexit 1\n' > "$tmp/stubfail/git"
 printf '#!/bin/sh\necho true\nexit 0\n' > "$tmp/stubtrue/git"
 chmod +x "$tmp/stubfail/git" "$tmp/stubtrue/git"
-printf 'set timedemo 1\nset r_drawworld 1\n' > "$tmp/scen/world.cfg"
+printf 'set timedemo 1\nset r_drawworld 1\nset sw_waterwarp 1\n' > "$tmp/scen/world.cfg"
 printf 'set timedemo 1\nset r_rt_shadows 1\n' > "$tmp/scen/rt-shadows.cfg"
 # the engine's cvarlist: flags, name, "value". Mentions in other lines are not cvars.
 cvl() { printf '%s\n' '*    r_metalfx "0"' "     r_metalfx_modes \"$1\"" '*    r_metalfx_scale "0"' '*    r_metalfx_interp "0"' \
@@ -219,7 +219,7 @@ mutant unwritable-allowed unwritable py 'if not os.access(deepest, os.W_OK | os.
 mutant relative-allowed relative py 'if not path or "\0" in path or not os.path.isabs(path):' 'if not path:' 'if not os.access(deepest, os.W_OK | os.X_OK):' 'if False:'
 mutant write-follows-link write-link py 'os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW' 'os.O_WRONLY | os.O_CREAT'
 mutant absent-runs plan-absent py 'gone = [k for k, _ in o["set"] if k not in cvars]' 'gone = []'
-mutant scenario-absent-runs plan-absent py 'gone = sorted(c for c in scenarios[sc] if c not in cvars)' 'gone = []'
+mutant scenario-absent-runs plan-absent py 'gone = sorted(c for c in scenarios[sc] if c not in cvars and c.startswith(GATING_PREFIXES))' 'gone = []'
 mutant present-skipped plan-present py 'gone = [k for k, _ in o["set"] if k not in cvars]' 'gone = [k for k, _ in o["set"]]'
 mutant mode-unchecked plan-modes py 'elif not (0 <= m <= MAX_MODE) or not ((modes >> m) & 1):' 'elif not (0 <= m <= MAX_MODE):'
 mutant mode-unbounded plan-bound py 'elif not (0 <= m <= MAX_MODE) or not ((modes >> m) & 1):' 'elif not ((modes >> m) & 1):'
@@ -236,6 +236,7 @@ mutant load-limit-high load-mark py 'LOAD_QUIET = 8.0 ' 'LOAD_QUIET = 800.0 '
 mutant load-always load-quiet py 'if loads and max(loads) > LOAD_QUIET:' 'if loads:'
 mutant rewrite-refused report-rewrite py 'if file and i == len(parts) - 1 and stat.S_ISREG(st.st_mode):' 'if False:'
 mutant base64-scanned ext-b64 py 'doc = re.sub(r'"'"'(src="data:image/png;base64,)[A-Za-z0-9+/=]*'"'"', r"\1", doc)' 'pass'
+mutant scenario-gated-by-any-cvar plan-present py 'if c not in cvars and c.startswith(GATING_PREFIXES))' 'if c not in cvars)'
 mutant second-host-hidden host-both py 'cells, _ = host_cell(h, sc, oid)' 'cells, _ = host_cell(hosts[0], sc, oid)'
 mutant range-collapsed host-range py 't = ("%.*f" % (nd, lo)) if lo == hi else' 't = ("%.*f" % (nd, lo)) if True else'
 mutant other-host-images host-images py 'png = os.path.join(rdir, "crops", "%s__%s.png" % (sc, oid))' 'png = os.path.join(others[-1] if others else rdir, "crops", "%s__%s.png" % (sc, oid))'

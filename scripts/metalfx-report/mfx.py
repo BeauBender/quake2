@@ -44,6 +44,7 @@ CVAR_RE = re.compile(r"^[a-z0-9_]+$")
 VALUE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 PATH_OK_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
 LOAD_QUIET = 8.0  # a 1-minute load above this at a run start marks its timings "measured under load"
+GATING_PREFIXES = ("r_rt_", "r_metalfx")  # the cvars whose absence stops a scenario from running
 MAX_MODE = 30  # r_metalfx_modes is a bit set, one bit per mode
 
 
@@ -220,7 +221,9 @@ def plan(options, cvars, scenarios):
     rows, skipped = [], []
     live = []
     for sc in sorted(scenarios):
-        gone = sorted(c for c in scenarios[sc] if c not in cvars)
+        # only a cvar of a renderer feature gates a scenario; the others (the software renderer's, say)
+        # are set for the renderers that have them and are harmless to the rest
+        gone = sorted(c for c in scenarios[sc] if c not in cvars and c.startswith(GATING_PREFIXES))
         if gone:
             skipped.append(("*", sc, "absent cvar in the scenario: " + " ".join(gone)))
         else:
