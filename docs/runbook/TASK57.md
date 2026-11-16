@@ -16,7 +16,9 @@ blend rounds the 8-bit frame a second time, in both views, which that check's on
 not allow for. With the shadows on as well, the pixels that come out brighter than the
 shadows-only frame are gl1's rule for a light sum past 1 (normalise by the brightest
 channel), applied to the AO'd lightmap term; the resolve already follows it. The `rt-ao`
-pins are not recorded: the owner accepts the look first.
+pins are not recorded: the owner accepts the look first. Main's TASK131 (the shadows' surface
+attachment) is merged in and the engine results re-verified on the merge (*After merging
+TASK131*).
 
 ## What it does
 
@@ -453,6 +455,126 @@ traced pixels, rays, hits and GPU time):
   failed). `tests/check-pins.sh`, `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`,
   `tests/check-no-local-identity.sh`: ok. `make client`, `make -B ref_metal` with and without
   `METAL_SHADERS=no`: no error, no warning.
+
+## After merging TASK131
+
+Main took TASK131 (#347, `c9ecf7d7`): while the shadows trace, the G-buffer raster has a
+sixth colour attachment, the surface (`R32Uint` at colour 5), drawn by a second set of raster
+pipelines, and RT3's kernel reads each pixel's surface from it. The merge, `e37d89bb`,
+conflicted in two places, both resolved to keep both cards:
+
+- *`rmb_gbuf_resolve`* (`rmb_gbuf.m`): TASK131 passes the surface attachment to
+  `rmb_rts_trace`; this card adds the AO trace after it and binds the AO's light to the
+  resolve. Kept in that order: RT3's kernel (with the attachment when the view has it), then
+  the AO's, then the resolve (RT3's or the stock one) reading the AO's light. Both effects on,
+  both kernels run on the same G-buffer view. The AO reads the depth, normal, material and
+  light attachments, which TASK131 left as they were. The surface attachment stays RT3's alone:
+  `RM_GB_Begin` asks for it only while the shadows trace, so with the AO alone the raster, its
+  pipelines and its attachments are the lane's.
+- *Design section 2*: TASK131's paragraph on the surface attachment and its cost, then this
+  card's measured cost.
+
+The rest merged on its own (`rm_gbufscene.c`'s path choice, the `Makefile`); no other file
+needed a change to build.
+
+**Engine commit measured: `e37d89bb`**, the merge (pin ids `718ada2af145-*`, its child, which
+adds only the index line). Host: the bare-metal host (Apple M6). Every build and engine run went
+through the host's lock wrapper, which holds the shared timing lock for the whole command;
+before each run the batch checked that the screen was unlocked and no other `quake2` ran, and
+logged the one-minute load: 2.2 to 5.5 over the batch, 2.2 to 3.5 during the timing runs. The
+base is an export of `origin/main` at `c9ecf7d7`, built once and recorded once by its own
+`scripts/pins.sh` (pin ids `nogit-*`), kept as the host's baseline record of that commit. The
+replays rewrite cvars in a clone of the trace as above (the rewrite reproduces two of the first
+round's clones byte for byte). Every record and replay below ran under `MTL_DEBUG_LAYER=1` except
+the timing runs, and every log holds the validation banner and no other validation line and
+ends in `teardown: 0 live objects`, `0 unreleased, 0 unmatched`.
+
+### Effect off and the shadows alone
+
+23 records on each build, seeded: the 18 scenarios at the default cadence (`world`,
+`world-fullbright`, `hud2d`, `hud2d-sharp`, `hud2d-scale8`, `world-scale8`, `world-lmcubic`,
+`skywater`, `dlights`, `dlights-lmcubic`, `models`, `particles`, `particles-cap`,
+`world-metalfx-interp`, `world-metalfx1` to `3`, and `cinematic` on `idlog.cin` every 7th),
+`dlights` at `demo2.dm2` every 7th, and `rt-shadows` and `rt-shadows-entities` at both demos (AO
+off). **716 frames, every one byte-identical to `origin/main`'s.** Both builds' logs read `rt
+0/0` for the 19 records without an effect, and `rt 77/77`, `56/56` (`rt-shadows`, the two demos),
+`320/320` and `474/474` (with entities) for the shadows.
+
+### AO on
+
+- *The records.* `rt-ao` and `rt-ao-entities` at `demo1.dm2` (23 frames) and `demo2.dm2` every
+  7th (89): **all 224 frames byte-identical to the lane's pre-merge records** (`4654bfeb`; and
+  `rt-ao` at `demo1.dm2` to `603a7fee`'s), with the same `rt 73/73`, `52/52`, `316/316` and
+  `470/470`. With the shadows off the raster has no surface attachment.
+- *The floor check*, `aofloor off on 0.4` with the derived allowance, against off replays of the
+  head's records (`r_rt_ao 0`, `r_rt_gbuffer 1`), which are byte-identical to the pre-merge off
+  replays: all 224 frames pass, 0 channels under and 0 brighter; the smallest on / off is 0.353
+  (`demo1.dm2`) and 0.348 (`demo2.dm2`), the largest `0.4 x off - on` 1.0 and 1.2 levels. The
+  channels past one rounding are in the screen-blend frames *Rework 1* lists, and only there.
+
+### Both effects on
+
+The head's `rt-shadows` traces (`demo1.dm2`, 23 frames; `demo2.dm2` every 7th, 89) replayed with
+`r_rt_ao 1` and `r_rt_ao_seed 1`:
+
+- *The two passes in one session.* Each log shows the surface attachment and the AO's targets
+  made, and the teardown counts both cards' objects: `texture 240/240, state 70/70, rt 84/84` at
+  `demo1.dm2` against the pre-merge both replay's `239/239, 66/66, 82/82` (TASK131's attachment,
+  its four raster pipelines with it, and its vertex and entity tables); `187/187, 70/70, 63/63`
+  at `demo2.dm2` against `186/186, 66/66, 61/61`.
+  This is the card's validation run with both effects on: the banner only, the teardown matched.
+- *Against the shadows-only frames* (`aofloor shadows both 0.4`): no channel under on either
+  demo. 48,146 channels in 5 frames (`demo1.dm2`) and 35,254 in 12 (`demo2.dm2`) come out
+  brighter, the same counts and frames as before the merge: gl1's normalisation of a light sum
+  past 1 (*Rework 1*, part 2).
+- *Against the pre-merge both replays*: 4 frames differ, in 17 pixels, all in the frames where
+  the merge's shadows-only records differ from the pre-merge ones. Those differ in 15 pixels
+  (`demo1.dm2` frame 10, 4 pixels by 1 level; `demo2.dm2` frames 6, 23 and 28, 11 pixels by up
+  to 38), the counts of [TASK131](TASK131.md)'s "on frames": the lookup's edge pixels, and in
+  frames 10 and 23 a few pixels whose static sample TASK131's surface pipelines change in the
+  last levels. 14 of the 17 are those pixels, at the same positions. The other 3 are one level
+  each, in those two frames (`demo1.dm2` frame 10 at the next pixel of the group, which in turn
+  no longer differs at one of its own; `demo2.dm2` frame 23, two): with the AO the lightmap term
+  is scaled before it is rounded, so a last-level difference of the sample can round out on
+  other pixels. With the shadows off nothing differs (above), so none of this is the AO's.
+
+### Cost
+
+The method of *Cost* above (the `r_rt_stats 2` line's GPU time, `demo1.dm2` whole, each run's
+lines past its first 100: 587 frames a run, no validation layer, 1920 x 1080, the same scenario
+cfgs: their pin ids' scenario hashes are the first round's). The first round's numbers are the
+before; one drift run of the pre-merge build (an export of `32afe666`, whose `src/` is
+`4654bfeb`'s) checks that they still hold on the host.
+
+| Build | Entities | Run medians | Median of runs | p10 | p90 | Max |
+|---|---|---|---|---|---|---|
+| pre-merge, first round | off | 3.630 to 3.673 | 3.673 ms | 3.096 to 3.166 | 4.599 to 4.718 | 6.748 |
+| pre-merge, drift run | off | 3.644 | | 3.096 | 4.814 | 6.120 |
+| merge, three runs | off | 3.623 to 3.664 | 3.633 ms | 3.072 to 3.131 | 4.723 to 4.979 | 7.427 |
+| pre-merge, first round | on | 3.829 to 4.228 | 4.102 ms | 3.066 to 3.222 | 4.799 to 5.143 | 6.569 |
+| pre-merge, three runs | on | 3.987 to 4.482 | 4.420 ms | 3.058 to 3.169 | 4.975 to 5.105 | 7.015 |
+| merge, five runs | on | 3.930 to 4.442 | 4.326 ms | 3.036 to 3.193 | 5.030 to 5.125 | 7.467 |
+
+- *Without entities* the drift run is inside the first round's range, so those numbers stand as
+  the before, and the merge's median is 0.04 ms under them, inside the runs' own spread.
+- *With entities* the drift run (4.420) was above the first round's range, so the case was
+  measured again: two more pre-merge runs alternated with the merge's. Both builds spread over
+  about 0.5 ms from run to run; on the same 587 frames, the merge's per-frame mean minus the
+  pre-merge's is a median -0.013 ms (p10 -0.515, p90 +0.467).
+
+So the merge did not move the AO pass: TASK131's change to the raster is the surface attachment,
+which a view without the shadows does not have. `timedemo` reads the display's 60.0 fps (59.9 on
+one run) on every run.
+
+### Checks on the merge
+
+`make test`: `yq2test: 163 tests, 0 failed`. `tests/check-ref-metal.sh`: ok (AO 164 checks and
+shadows 4,384, 0 failed). `tests/check-pins.sh` (`pins selftest: ok`), `tests/check-cvar-docs.sh`,
+`tests/check-doc-links.sh`, `tests/check-no-local-identity.sh` and `tests/check-runbook-index.sh`:
+ok. Builds: `make client`, `make -B ref_metal` with and without `METAL_SHADERS=no`, `make ref_gl1
+WITH_METAL_SHIM=yes` and `make ASAN=1 client game ref_metal`: no error, and no warning in a file
+of either card (the ASAN build's eight are the `sprintf` deprecations of common, client, game and
+server files and the vendored `stb_vorbis.h`'s).
 
 ## The runs as planned
 
