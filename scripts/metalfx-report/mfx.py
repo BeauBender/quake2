@@ -624,6 +624,10 @@ def cmd_run(a):
     for t in (ctx.bin, ctx.framediff, ctx.ssim):
         if not os.access(t, os.X_OK):
             raise Refuse("%s is not an executable" % t)
+    if not a.bin and not os.environ.get("PINS_BIN"):
+        rc, _ = sh(["make", "-C", ROOT, "-q", "release/quake2", "release/ref_metal.dylib"])
+        if rc != 0:
+            raise Refuse("the build is out of date (or make cannot say): run make client game ref_metal first")
     for f in os.listdir(ctx.scen_dir):
         if f.startswith("mfxr-"):
             raise Refuse("a scratch scenario %s is left over in scripts/pins/scenarios; remove it" % f)
