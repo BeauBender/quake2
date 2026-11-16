@@ -29,13 +29,15 @@
 #             ignores SIGTERM) and two waiting: it ends within 20 s with
 #             status 130, what the running checks started (a sleep, by its
 #             recorded pid) is gone, and no other check starts;
-#   interrupt1  the same with SIGTERM and SIGHUP at GATE_JOBS=1;
+#   interrupt1  SIGTERM, then SIGHUP, at GATE_JOBS=1, one check running and
+#             one waiting: the same, with status 143 or 129;
 #   testsh    SIGTERM, SIGHUP and SIGINT to scripts/test.sh itself, run on a
 #             copy of the gate's layout with fake checks: the same, with
 #             test.sh's status 143, 129 or 130.
 # Then each case is shown failing against at least one mutant of the
-# scheduler (or of scripts/test.sh, for wiring). Every run of the scheduler
-# is bounded in time here; one that outlives its bound fails its case.
+# scheduler (or of scripts/test.sh, for wiring and testsh). Every run of the
+# scheduler is bounded in time here; one that outlives its bound fails its
+# case. The bounds leave room for a loaded host: they only catch a hang.
 #
 # Usage: tests/check-gate-parallel.sh
 set -eu
