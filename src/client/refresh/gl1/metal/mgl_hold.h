@@ -34,18 +34,22 @@
 /*
  * A present slot after its frame: the command buffers that hold it, the
  * present, and past the bound the one that ends the present's wait
- * (mgl_present_end_wait).
+ * (mgl_present_end_wait). mgl_layer.m makes one for each slot of each
+ * context, and the completed handlers capture it, so a handler that
+ * completes after its context was torn down counts down that context's
+ * hold, never the next one's (FIX77).
  */
 typedef struct mgl_hold_s
 {
 	atomic_int holds;   /* 0, 1 (the present), or 2 past the bound */
-	int lost;           /* the engine's thread: a drop gave up on the slot */
+	int lost;           /* the engine's thread: a drop gave up on the slot, and no later drop waits for it */
 } mgl_hold_t;
 
 /* The present of the slot's frame is committed: it holds the slot. */
 static inline void
 mgl_hold_commit(mgl_hold_t *h)
 {
+	h->lost = 0;   /* the present given up on has completed: the frame took the slot */
 	atomic_store(&h->holds, 1);
 }
 
@@ -85,35 +89,64 @@ typedef struct mgl_drop_ops_s
 
 /*
  * Waits for every present slot of holds[0..n) but skip (the open frame's)
- * and those without a hold, and gives each back. A slot still held at the
- * deadline has its present's wait ended and is waited for once more,
- * MGL_GPU_WAIT_MS. Returns the number of slots given up on.
+ * and those without a hold (at most 32), and gives each back, in two
+ * stages of one deadline each, MGL_GPU_WAIT_MS: the slots still held at
+ * the first have their presents' waits ended and share the second. A slot
+ * still held then is given up on (lost): left held, and a later drop does
+ * not wait for it again, it only takes it back if it is free by then. So a
+ * hung GPU holds a drop two deadlines at most, whatever the number of
+ * slots, and a second drop no longer than it takes to look. Returns the
+ * number of slots given up on in this drop.
  */
 static inline int
 mgl_drop_presents(mgl_hold_t *const *holds, int n, int skip, const mgl_drop_ops_t *ops)
 {
 	uint64_t until = ops->deadline(ops->ctx);
+	unsigned late = 0;
 	int i, lost = 0;
 
-	for (i = 0; i < n; i++)
+	for (i = 0; (i < n) && (i < 32); i++)
 	{
 		if (!holds[i] || (i == skip))
 		{
 			continue;
 		}
 
-		if (!ops->take(ops->ctx, i, until))
+		if (ops->take(ops->ctx, i, holds[i]->lost ? 0 : until))
+		{
+			holds[i]->lost = 0;
+			ops->give(ops->ctx, i);
+		}
+		else if (!holds[i]->lost)
 		{
 			ops->end_wait(ops->ctx, i);
+			late |= 1u << i;
+		}
+	}
 
-			if (!ops->take(ops->ctx, i, ops->deadline(ops->ctx)))
-			{
-				lost++;
-				continue;
-			}
+	if (!late)
+	{
+		return 0;
+	}
+
+	until = ops->deadline(ops->ctx);
+
+	for (i = 0; (i < n) && (i < 32); i++)
+	{
+		if (!(late & (1u << i)))
+		{
+			continue;
 		}
 
-		ops->give(ops->ctx, i);
+		if (ops->take(ops->ctx, i, until))
+		{
+			ops->give(ops->ctx, i);
+		}
+		else
+		{
+			holds[i]->lost = 1;
+			lost++;
+		}
 	}
 
 	return lost;
