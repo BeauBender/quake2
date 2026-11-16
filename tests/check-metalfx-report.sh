@@ -17,7 +17,10 @@
 #     recorded commit are those of the binary's own tree, a binary outside one is said to be unchecked;
 #   - one run per engine binary and per scenarios folder (a directory flock; a held lock is exit 3), a
 #     config.cfg newer than a saved one is kept, a command line over the engine's argument limit costs
-#     only that option's row, pins.sh runs in a process group that SIGTERM ends;
+#     only that option's row, pins.sh runs in a process group that SIGTERM ends; under the real host lock
+#     (a stub pins.sh run by scripts/bench/bench.sh lock run, a private BENCH_STATE) a timeout, a SIGTERM
+#     and a Ctrl-C each end the run under the lock, its grandchild included, and leave the lock free (TERM
+#     first, KILL only after the lock's grace, which follows BENCH_STOP_GRACE);
 #   - the run end to end in a tree copy with a stub scripts/pins.sh: an option's SSIM is below 1, its crop
 #     is not the native one, the crop frame is the middle one by number; nothing touches the checkout;
 #   - the run paths: an existing results folder is refused, --replace empties the old crops, frames
@@ -616,7 +619,9 @@ mutant lock-fails-open run-lock-bin py 'raise Refuse("another run holds %s (%s),
 mutant quality-vs-itself e2e-quality py 'diff_frames(ctx, nat[k], fr[k])' 'diff_frames(ctx, nat[k], nat[k])'
 mutant crop-is-native e2e-crop py 'img = nimg if oid == "native" else read_tga(frames_by_index(pins[oid])[mid])' 'img = nimg'
 mutant crop-frame-first e2e-index py 'mid = nkeys[len(nkeys) // 2]' 'mid = nkeys[0]'
-mutant pins-not-in-group e2e-group py 'os.killpg(p.pid, signal.SIGKILL)' 'p.kill()'
+mutant pins-not-in-group e2e-group py 'os.killpg(p.pid, signal.SIGTERM)' 'p.terminate()' 'os.killpg(p.pid, signal.SIGKILL)' 'p.kill()'
+mutant pins-kill-first e2e-lock py 'os.killpg(p.pid, signal.SIGTERM)' 'os.killpg(p.pid, signal.SIGKILL)'
+mutant stop-wait-unfloored e2e-lock-grace py 'return max(2 * g, g + 5) + 5' 'return 2 * g + 5'
 mutant pins-no-group e2e-group py 'rc, out = sh_group([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)' 'rc, out = sh([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)'
 
 wait

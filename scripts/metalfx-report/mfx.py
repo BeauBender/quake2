@@ -510,23 +510,64 @@ def sh(cmd, cwd=None, env=None, timeout=None):
     return p.returncode, p.stdout
 
 
+def lock_stop_wait(env=None):
+    """The seconds sh_group gives a stopped command between TERM and KILL: the host lock's grace
+    (scripts/bench/core/lock.sh, bench_lock_grace: twice BENCH_STOP_GRACE, default 10, and at least
+    BENCH_STOP_GRACE + 5), read from the command's environment as the lock reads it, plus 5 s for the
+    lock shell to reap its command and free the lock. A BENCH_STOP_GRACE that is not whole seconds
+    counts as the default (bench.sh refuses it and runs nothing)."""
+    g = (os.environ if env is None else env).get("BENCH_STOP_GRACE", "")
+    g = int(g) if re.match(r"[0-9]+\Z", g) else 10
+    return max(2 * g, g + 5) + 5
+
+
+STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+
+
+def stop_group(p, wait):
+    """Stops the process group p leads: TERM to the group, up to <wait> seconds for p to end (its
+    output read meanwhile), then KILL to the group. A second SIGINT, SIGTERM or SIGHUP meanwhile is held
+    until the stop is over, so it cannot cut the wait short."""
+    held = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+    try:
+        try:
+            os.killpg(p.pid, signal.SIGTERM)
+        except OSError:
+            pass
+        ended = False
+        try:
+            p.communicate(timeout=wait)
+            ended = True
+        except Exception:  # the wait ran out (or the pipe failed): KILL
+            pass
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        if not ended:
+            try:
+                p.communicate(timeout=5)  # bounded: a process that left the group may hold the pipe
+            except Exception:
+                pass
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, held)
+
+
 def sh_group(cmd, cwd=None, env=None, timeout=None):
-    """Like sh(), with the command in a process group of its own, which is ended (SIGKILL) on any
-    way out: a SIGTERM/SIGHUP (SystemExit from the handler), Ctrl-C or the timeout. A command that
-    starts the engine (scripts/pins.sh) leaves nothing running."""
+    """Like sh(), with the command in a process group of its own, which is stopped (stop_group) on
+    any way out: a SIGTERM/SIGHUP (SystemExit from the handler), Ctrl-C or the timeout. TERM first,
+    KILL only after the host lock's grace (lock_stop_wait): scripts/pins.sh runs itself under the lock
+    (scripts/bench/bench.sh lock run), so the command's pid is the lock shell, and the run under it,
+    the engine included, is in a process group of the lock's own, which only the lock shell's TERM trap
+    stops before it frees the lock. A KILL first would end the lock shell alone and leave that run
+    going, the lock held. So a command that starts the engine (scripts/pins.sh) leaves nothing
+    running."""
     p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                          universal_newlines=True, start_new_session=True)
     try:
         out, _ = p.communicate(timeout=timeout)
     except BaseException:
-        try:
-            os.killpg(p.pid, signal.SIGKILL)
-        except OSError:
-            pass
-        try:
-            p.communicate()
-        except Exception:
-            pass
+        stop_group(p, lock_stop_wait(env))
         raise
     return p.returncode, out
 
