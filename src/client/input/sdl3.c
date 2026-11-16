@@ -300,6 +300,10 @@ SDL_COMPILE_TIME_ASSERT(touch_btn_north, TOUCH_BTN_NORTH == SDL_GAMEPAD_BUTTON_N
 SDL_COMPILE_TIME_ASSERT(touch_btn_back, TOUCH_BTN_BACK == SDL_GAMEPAD_BUTTON_BACK);
 SDL_COMPILE_TIME_ASSERT(touch_btn_start, TOUCH_BTN_START == SDL_GAMEPAD_BUTTON_START);
 SDL_COMPILE_TIME_ASSERT(touch_btn_misc1, TOUCH_BTN_MISC1 == SDL_GAMEPAD_BUTTON_MISC1);
+SDL_COMPILE_TIME_ASSERT(touch_btn_dpad_up, TOUCH_BTN_DPAD_UP == SDL_GAMEPAD_BUTTON_DPAD_UP);
+SDL_COMPILE_TIME_ASSERT(touch_btn_dpad_down, TOUCH_BTN_DPAD_DOWN == SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+SDL_COMPILE_TIME_ASSERT(touch_btn_dpad_left, TOUCH_BTN_DPAD_LEFT == SDL_GAMEPAD_BUTTON_DPAD_LEFT);
+SDL_COMPILE_TIME_ASSERT(touch_btn_dpad_right, TOUCH_BTN_DPAD_RIGHT == SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
 SDL_COMPILE_TIME_ASSERT(touch_axis_lx, TOUCH_AXIS_LEFTX == SDL_GAMEPAD_AXIS_LEFTX);
 SDL_COMPILE_TIME_ASSERT(touch_axis_ry, TOUCH_AXIS_RIGHTY == SDL_GAMEPAD_AXIS_RIGHTY);
 SDL_COMPILE_TIME_ASSERT(touch_axis_lt, TOUCH_AXIS_LTRIG == SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
@@ -935,6 +939,20 @@ IN_TouchAttach(void)
 		return;
 	}
 
+	/* off iOS the cvar stays visible and does nothing: the finger events there are a trackpad's */
+	if (!Touch_Supported())
+	{
+		static qboolean said;
+
+		if (!said)
+		{
+			said = true;
+			Com_Printf("in_touch is set, but there is no touch screen here: the touch controls stay off.\n");
+		}
+
+		return;
+	}
+
 	SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
 
 	if (!SDL_WasInit(SDL_INIT_GAMEPAD | SDL_INIT_HAPTIC))
@@ -999,12 +1017,41 @@ IN_TouchDetach(void)
  * rectangle, in points. A finger that lifts or is cancelled is let go
  * whatever else is the case.
  */
+/*
+ * The layout of the window now, from its safe area, and the mode: the
+ * game, or a menu, the console or a message. False when the window
+ * has no size. The size of the window in points is given back.
+ */
+static qboolean
+IN_TouchSync(SDL_Window *win, int *w, int *h)
+{
+	SDL_Rect r;
+	touch_rect_t safe;
+
+	if (!win || !SDL_GetWindowSize(win, w, h) || *w <= 0 || *h <= 0)
+	{
+		return false;
+	}
+
+	if (!SDL_GetWindowSafeArea(win, &r) || r.w <= 0 || r.h <= 0)
+	{
+		r.x = r.y = 0;
+		r.w = *w;
+		r.h = *h;
+	}
+
+	safe.x = r.x;
+	safe.y = r.y;
+	safe.w = r.w;
+	safe.h = r.h;
+	Touch_SetLayout(&touch, safe, in_touch_scale->value, in_touch_swap->value != 0);
+	Touch_SetMode(&touch, cls.key_dest != key_game);
+	return true;
+}
+
 static void
 IN_TouchEvent(const SDL_TouchFingerEvent *f, Uint32 type)
 {
-	SDL_Window *win;
-	SDL_Rect r;
-	touch_rect_t safe;
 	int w, h;
 
 	if (type == SDL_EVENT_FINGER_UP || type == SDL_EVENT_FINGER_CANCELED)
@@ -1018,25 +1065,10 @@ IN_TouchEvent(const SDL_TouchFingerEvent *f, Uint32 type)
 		return;
 	}
 
-	win = SDL_GetWindowFromID(f->windowID);
-
-	if (!win || !SDL_GetWindowSize(win, &w, &h) || w <= 0 || h <= 0)
+	if (!IN_TouchSync(SDL_GetWindowFromID(f->windowID), &w, &h))
 	{
 		return;
 	}
-
-	if (!SDL_GetWindowSafeArea(win, &r) || r.w <= 0 || r.h <= 0)
-	{
-		r.x = r.y = 0;
-		r.w = w;
-		r.h = h;
-	}
-
-	safe.x = r.x;
-	safe.y = r.y;
-	safe.w = r.w;
-	safe.h = r.h;
-	Touch_SetLayout(&touch, safe, in_touch_scale->value, in_touch_swap->value != 0);
 
 	if (type == SDL_EVENT_FINGER_DOWN)
 	{
@@ -1046,6 +1078,40 @@ IN_TouchEvent(const SDL_TouchFingerEvent *f, Uint32 type)
 	{
 		Touch_Motion(&touch, f->fingerID, f->x * w, f->y * h);
 	}
+}
+
+/*
+ * What the overlay draws now (TASK151): the list, and the pixels a point
+ * is. None unless the touch controls are attached, and none with a
+ * physical gamepad in use.
+ */
+int
+IN_TouchOverlay(touch_draw_t *list, int max, float *pixels_per_point)
+{
+	SDL_Window *win = SDL_GetKeyboardFocus();
+	int w, h, count = 0;
+
+	/* in_touch is read at start: the overlay follows what is attached */
+	if (!touch_joy || !viddef.width)
+	{
+		return 0;
+	}
+
+	if (!win)
+	{
+		SDL_Window **all = SDL_GetWindows(&count);
+
+		win = (all && count > 0) ? all[0] : NULL;
+		SDL_free(all);
+	}
+
+	if (!IN_TouchSync(win, &w, &h))
+	{
+		return 0;
+	}
+
+	*pixels_per_point = (float)viddef.width / (float)w;
+	return Touch_Drawables(&touch, !touch_in_use, list, max);
 }
 
 /*
@@ -1619,15 +1685,21 @@ IN_Update(void)
 	{
 		// The on-screen keyboard only while text is typed: in the console,
 		// in a chat message or in a menu's text field (TASK150).
-		static int typing = -1;
-		const int want = (cls.key_dest == key_console || cls.key_dest == key_message ||
-				(cls.key_dest == key_menu && M_TextFieldActive())) ? 1 : 0;
+		// The system can stop text input itself (the hide key of an iPad):
+		// then it is started again, and said.
+		static int typing = -1, asks;
+		const int want = Touch_WantText(cls.key_dest == key_console || cls.key_dest == key_message,
+				cls.key_dest == key_menu, cls.key_dest == key_menu && M_TextFieldActive());
+		const int act = Touch_TextInput(want, typing, GLimp_TextInputActive(), &asks);
 
-		if (want != typing)
+		if (act >= 0)
 		{
+			const int again = (typing == want);
+
 			typing = want;
-			GLimp_TextInput(want != 0);
-			Com_Printf("Text input %s.\n", want ? "on, the keyboard is shown" : "off, the keyboard is hidden");
+			GLimp_TextInput(act != 0);
+			Com_Printf("Text input %s.\n", again ? "asked again, the system had stopped it" :
+					(act ? "on, the keyboard is shown" : "off, the keyboard is hidden"));
 		}
 	}
 #endif

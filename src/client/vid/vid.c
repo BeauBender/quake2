@@ -1005,14 +1005,27 @@ VID_CheckGameData(void)
 {
 	char dir[MAX_OSPATH];
 	char text[1024];
+	const char *home;
 
 	if (FS_LoadFile("pics/colormap.pcx", NULL) >= 0)
 	{
 		return;
 	}
 
-	Com_sprintf(dir, sizeof(dir), "%sbaseq2", Sys_GetHomeDir());
-	Sys_MissingDataMessage(dir, text, sizeof(text));
+	home = Sys_GetHomeDir();
+
+	// No home directory: the plain message, with no folder to look in
+	// for a pak in the wrong case.
+	if (home != NULL)
+	{
+		Com_sprintf(dir, sizeof(dir), "%sbaseq2", home);
+		Sys_MissingDataMessage(dir, text, sizeof(text));
+	}
+	else
+	{
+		Sys_MissingDataMessage(NULL, text, sizeof(text));
+	}
+
 	Com_Printf("%s\n", text);
 	if (!SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Quake II", text, NULL))
 	{
