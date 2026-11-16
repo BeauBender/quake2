@@ -19,7 +19,7 @@
  *
  * The pure part of ref_metal's ray-traced ambient occlusion (RT5,
  * TASK57; header/rm_rtao.h): when a frame traces it, the cvars as the
- * pass takes them, the blue-noise tile (void-and-cluster, made here, no
+ * pass takes them (TASK157's traced size and rays among them), the blue-noise tile (void-and-cluster, made here, no
  * asset data), the view the kernel unprojects with and the stats line.
  * No SDL, no Metal: tests/metal/rm_rtao_test.c runs it on the host.
  *
@@ -72,6 +72,38 @@ rm_rtao_floor(float v)
 	}
 
 	return (v < 0) ? 0.0f : (v > 1) ? 1.0f : v;
+}
+
+int
+rm_rtao_div(float v)
+{
+	float d;
+
+	if (!isfinite(v) || !(v > 0))
+	{
+		return rm_rtao_div(RM_RTAO_SCALE);
+	}
+
+	/* the nearest divisor to 1 / v; 1.5 goes up to 2 and 2.5 down to 2 */
+	d = 1.0f / v;
+
+	if (!(d < 1.5f))
+	{
+		return (d <= 2.5f) ? 2 : MTL_RTAO_DIV_MAX;
+	}
+
+	return 1;
+}
+
+int
+rm_rtao_rays(float v)
+{
+	if (!isfinite(v))
+	{
+		return RM_RTAO_NRAYS;
+	}
+
+	return (v < 1.5f) ? 1 : MTL_RTAO_RAYS;
 }
 
 unsigned
@@ -241,7 +273,7 @@ out:
 
 int
 rm_rtao_view(const float *proj, const float *world, const rm_viewport_t *vp, const float *eye, float znear,
-		float range, float floor_, unsigned frame, unsigned show, rm_rtao_view_t *out)
+		float range, float floor_, unsigned frame, unsigned show, unsigned div, unsigned rays, rm_rtao_view_t *out)
 {
 	rm_rts_view_t s;
 
@@ -261,6 +293,8 @@ rm_rtao_view(const float *proj, const float *world, const rm_viewport_t *vp, con
 	out->floor_ = floor_;
 	out->frame = frame;
 	out->show = show;
+	out->div = div;
+	out->rays = rays;
 	return 1;
 }
 

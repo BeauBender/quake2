@@ -233,6 +233,7 @@ void RM_EntitySkips(rmb_stats_t *s);
 /* rm_warp.c (gl1_warp.c): the sky box, the warped water and the batches of per-frame vertices */
 void RM_SetSky(const char *name, float rotate, vec3_t axis);
 void RM_SkyClear(void);
+int RM_SkyBox(int *texnums, float *rotate, float *axis);   /* TASK158: the water reflections' world-space sky */
 int RM_AddSkySurface(const rm_world_t *w, const msurface_t *fa);
 int RM_DrawSkyBox(const rm_view_t *view);
 int RM_SubdivideSurface(model_t *loadmodel, rm_world_t *w, msurface_t *fa);

@@ -19,7 +19,8 @@
  *
  * The engine side of ref_metal's ray-traced ambient occlusion (RT5,
  * TASK57; header/rm_rtao.h, header/rm_rtaoscene.h): the r_rt_ao cvars
- * (r_rt_ao, r_rt_ao_range, r_rt_ao_min, r_rt_ao_seed) and the development
+ * (r_rt_ao, r_rt_ao_range, r_rt_ao_min, r_rt_ao_seed, and TASK157's
+ * r_rt_ao_scale and r_rt_ao_rays) and the development
  * view r_rt_ao_show, the frame's decision (rm_rtao_on: with it the view
  * takes the G-buffer path), the view handed to the back end before the
  * raster, and the pass's r_rt_stats 2 line. With r_rt_ao 0 (the default)
@@ -41,6 +42,8 @@ static cvar_t *r_rt_ao_range;
 static cvar_t *r_rt_ao_min;
 static cvar_t *r_rt_ao_seed;
 static cvar_t *r_rt_ao_show;
+static cvar_t *r_rt_ao_scale;   /* TASK157: the traced size, a fraction of the view's width and height */
+static cvar_t *r_rt_ao_rays;    /* TASK157: the rays a traced pixel */
 static cvar_t *r_rt_stats_ref;
 
 static int ao_device;           /* rmb_caps_t.raytracing */
@@ -58,6 +61,8 @@ RM_RTAO_Init(const rmb_caps_t *caps)
 	r_rt_ao_min = ri.Cvar_Get("r_rt_ao_min", "0.4", CVAR_ARCHIVE);
 	r_rt_ao_seed = ri.Cvar_Get("r_rt_ao_seed", "0", 0);
 	r_rt_ao_show = ri.Cvar_Get("r_rt_ao_show", "0", 0);
+	r_rt_ao_scale = ri.Cvar_Get("r_rt_ao_scale", "0.5", CVAR_ARCHIVE);
+	r_rt_ao_rays = ri.Cvar_Get("r_rt_ao_rays", "2", CVAR_ARCHIVE);
 	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
 	ao_device = caps->raytracing != 0;
 	ao_opened = ao_refused = ao_active = ao_viewed = 0;
@@ -155,7 +160,7 @@ void
 RM_RTAO_View(const rm_view_t *view)
 {
 	rm_rtao_view_t v;
-	int w, h;
+	int w, h, div;
 
 	ao_viewed = 0;
 
@@ -166,11 +171,13 @@ RM_RTAO_View(const rm_view_t *view)
 
 	/* everything the trace needs that can fail, before the raster: the view's inverse and the outputs */
 	RM_GB_TargetSize(&w, &h);
+	div = rm_rtao_div(r_rt_ao_scale->value);
 
 	if (!rm_rtao_view(view->proj, view->world, &view->vp, r_newrefdef.vieworg, gl_znear->value,
 			rm_rtao_range(r_rt_ao_range->value), rm_rtao_floor(r_rt_ao_min->value),
-			rm_rtao_frame(r_rt_ao_seed->value, ao_count), (unsigned)rm_rtao_show(r_rt_ao_show->value), &v) ||
-		!rmb_rtao_prepare((unsigned long)w, (unsigned long)h))
+			rm_rtao_frame(r_rt_ao_seed->value, ao_count), (unsigned)rm_rtao_show(r_rt_ao_show->value),
+			(unsigned)div, (unsigned)rm_rtao_rays(r_rt_ao_rays->value), &v) ||
+		!rmb_rtao_prepare((unsigned long)w, (unsigned long)h, (unsigned)div))
 	{
 		rmb_rtao_set_view(NULL);
 		return;
