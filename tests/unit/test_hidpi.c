@@ -261,3 +261,55 @@ TEST(hidpi_other_drivers_keep_their_mode)
 		T_EQ_FLT(mode, 4);
 	}
 }
+
+/*
+ * FIX76: on uikit (iOS) the engine does not ask for relative mouse mode
+ * to be turned on while no mouse is connected; turning it off is always
+ * asked, and every other driver is asked as before.
+ */
+TEST(hidpi_ios_no_relative_mouse_without_a_mouse)
+{
+	T_CHECK(!GLimp_RelativeMouseWanted("uikit", false, true));
+	T_CHECK(GLimp_RelativeMouseWanted("uikit", true, true));
+	T_CHECK(GLimp_RelativeMouseWanted("uikit", false, false));
+	T_CHECK(GLimp_RelativeMouseWanted("uikit", true, false));
+	T_CHECK(GLimp_RelativeMouseWanted("cocoa", false, true));
+	T_CHECK(GLimp_RelativeMouseWanted("cocoa", true, true));
+	T_CHECK(GLimp_RelativeMouseWanted("x11", false, true));
+	T_CHECK(GLimp_RelativeMouseWanted(NULL, false, true));
+}
+
+/*
+ * FIX76: a failed request is reported once per run of failures, not once
+ * per frame; a success lets the next failure be reported again.
+ */
+TEST(hidpi_relative_mouse_failure_reported_once)
+{
+	qboolean reported = false;
+	int printed = 0;
+	int i;
+
+	for (i = 0; i < 1000; i++)
+	{
+		if (GLimp_RelativeMouseReport(false, &reported))
+		{
+			printed++;
+		}
+	}
+
+	T_EQ_INT(printed, 1);
+
+	/* a success prints nothing and re-arms the report */
+	T_CHECK(!GLimp_RelativeMouseReport(true, &reported));
+	T_CHECK(GLimp_RelativeMouseReport(false, &reported));
+	T_CHECK(!GLimp_RelativeMouseReport(false, &reported));
+
+	/* successes alone never print */
+	reported = false;
+	for (i = 0; i < 10; i++)
+	{
+		T_CHECK(!GLimp_RelativeMouseReport(true, &reported));
+	}
+
+	T_CHECK(!GLimp_RelativeMouseReport(false, NULL));
+}
