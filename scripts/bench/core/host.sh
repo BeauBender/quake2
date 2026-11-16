@@ -124,8 +124,8 @@ bench_holds_word() {
 bench_host_init() {
 	[ -z "$BENCH_HOST_TOKEN" ] || return 0
 	bench_tmp
-	bench_identity_words "$BENCH_TMP/identity"
-	BENCH_HOST_FACTS=$(bench_host_facts | bench_scrub "$BENCH_TMP/identity")
+	bench_identity_words "${BENCH_TMP:?}/identity"
+	BENCH_HOST_FACTS=$(bench_host_facts | bench_scrub "${BENCH_TMP:?}/identity")
 	_hi_salt=0
 	while :; do
 		if [ "$_hi_salt" -eq 0 ]; then
@@ -133,10 +133,10 @@ bench_host_init() {
 		else
 			BENCH_HOST_TOKEN=$(printf '%s\nsalt=%s\n' "$BENCH_HOST_FACTS" "$_hi_salt" | bench_id h-)
 		fi
-		printf '%s\n' "$BENCH_HOST_TOKEN" | bench_holds_word "$BENCH_TMP/identity" || break
+		printf '%s\n' "$BENCH_HOST_TOKEN" | bench_holds_word "${BENCH_TMP:?}/identity" || break
 		_hi_salt=$((_hi_salt + 1))
 	done
 	BENCH_HOST_CLASS=$(printf '%s, %s GPU, %s, %s\n' \
 		"$(bench_kv "$BENCH_HOST_FACTS" cpu)" "$(bench_kv "$BENCH_HOST_FACTS" gpu)" \
-		"$(bench_kv "$BENCH_HOST_FACTS" os)" "$(bench_kv "$BENCH_HOST_FACTS" vm)" | bench_scrub "$BENCH_TMP/identity")
+		"$(bench_kv "$BENCH_HOST_FACTS" os)" "$(bench_kv "$BENCH_HOST_FACTS" vm)" | bench_scrub "${BENCH_TMP:?}/identity")
 }

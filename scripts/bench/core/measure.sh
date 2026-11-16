@@ -44,13 +44,13 @@ bench_lines_ok() {
 }
 
 # bench_prepare: preflight and build, once per measurement. Sets
-# BENCH_BUILD_DIR; the preflight lines are kept in $BENCH_TMP/pre.
+# BENCH_BUILD_DIR; the preflight lines are kept in ${BENCH_TMP:?}/pre.
 bench_prepare() {
 	_bp_st=0
-	adapter_preflight "$BENCH_CASE_FILE" > "$BENCH_TMP/pre" || _bp_st=$?
+	adapter_preflight "$BENCH_CASE_FILE" > "${BENCH_TMP:?}/pre" || _bp_st=$?
 	[ "$_bp_st" -eq 0 ] || bench_die 3 "the adapter refused the run in its preflight (status $_bp_st)"
-	bench_lines_ok pre "$BENCH_TMP/pre" || bench_die 3 "the preflight printed a line that is not pre.<name>=<value>"
-	BENCH_BUILD_DIR=$BENCH_TMP/build
+	bench_lines_ok pre "${BENCH_TMP:?}/pre" || bench_die 3 "the preflight printed a line that is not pre.<name>=<value>"
+	BENCH_BUILD_DIR=${BENCH_TMP:?}/build
 	mkdir -p "$BENCH_BUILD_DIR"
 	_bp_t=$(bench_case_get targets)
 	set -f
@@ -67,23 +67,23 @@ bench_run_one() {
 	BENCH_RUN_KIND=$1
 	BENCH_RUN_INDEX=$2
 	export BENCH_RUN_KIND BENCH_RUN_INDEX
-	_ro_log=$BENCH_TMP/log.$1.$2
+	_ro_log=${BENCH_TMP:?}/log.$1.$2
 	_ro_lb=$(bench_load)
 	_ro_t=$(bench_utc)
 	_ro_st=0
 	adapter_run "$BENCH_CASE_FILE" "$BENCH_BUILD_DIR" "$_ro_log" || _ro_st=$?
 	[ "$_ro_st" -eq 0 ] || bench_die 3 "$1 $2 failed (status $_ro_st)"
 	[ "$1" = run ] || return 0
-	adapter_metrics "$BENCH_CASE_FILE" "$_ro_log" > "$BENCH_TMP/metrics" || _ro_st=$?
+	adapter_metrics "$BENCH_CASE_FILE" "$_ro_log" > "${BENCH_TMP:?}/metrics" || _ro_st=$?
 	[ "$_ro_st" -eq 0 ] || bench_die 3 "the adapter could not read the metrics of run $2 (status $_ro_st)"
-	bench_lines_ok metric "$BENCH_TMP/metrics" || bench_die 3 "run $2 printed a line that is not metric.<name>=<number>"
+	bench_lines_ok metric "${BENCH_TMP:?}/metrics" || bench_die 3 "run $2 printed a line that is not metric.<name>=<number>"
 	_ro_m=$(bench_case_get metric)
-	[ -n "$(bench_file_kv "$BENCH_TMP/metrics" "metric.$_ro_m")" ] || bench_die 3 "run $2 has no value for the metric $_ro_m"
+	[ -n "$(bench_file_kv "${BENCH_TMP:?}/metrics" "metric.$_ro_m")" ] || bench_die 3 "run $2 has no value for the metric $_ro_m"
 	{
 		printf 'case=%s\ncase_hash=%s\ncommit=%s\ninputs=%s\n' "$BENCH_CASE_NAME" "$BENCH_CASE_HASH" "$BENCH_COMMIT" "$BENCH_INPUTS"
 		printf 'host=%s\nclass=%s\nhash=%s\n' "$BENCH_HOST_TOKEN" "$BENCH_HOST_CLASS" "$(bench_hash_tool)"
 		printf 'kind=%s\nindex=%s\nstart=%s\nload.before=%s\nload.after=%s\n' "$1" "$2" "$_ro_t" "$_ro_lb" "$(bench_load)"
-		cat "$BENCH_TMP/pre" "$BENCH_TMP/metrics"
+		cat "${BENCH_TMP:?}/pre" "${BENCH_TMP:?}/metrics"
 	} > "$3"
 }
 
@@ -96,10 +96,10 @@ bench_measure() {
 		bench_run_one warmup "$_bm_k" /dev/null
 		_bm_k=$((_bm_k + 1))
 	done
-	mkdir -p "$2"
+	mkdir -p "${2:?}"
 	_bm_k=1
 	while [ "$_bm_k" -le "$1" ]; do
-		bench_run_one run "$_bm_k" "$2/$_bm_k.run"
+		bench_run_one run "$_bm_k" "${2:?}/$_bm_k.run"
 		_bm_k=$((_bm_k + 1))
 	done
 }

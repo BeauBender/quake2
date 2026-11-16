@@ -28,7 +28,7 @@ adapter_preflight() {
 }
 
 adapter_build() {
-	printf 'commit=%s\n' "$1" > "$2/built"
+	printf 'commit=%s\n' "$1" > "${2:?}/built"
 }
 
 adapter_run() {
@@ -43,12 +43,12 @@ adapter_run() {
 	bench_is_num "$_nr_v" || { echo "null: not a number: a value of values=" >&2; return 1; }
 	set -- $(awk -v v="$_nr_v" 'BEGIN { print v - 1, v + 0, v + 1 }')
 	bench_bounded "$(bench_case_get wall)" sh -c 'sleep "$1"; shift; for s; do printf "sample ms=%s\n" "$s"; done' \
-		null "${_nr_sleep:-0}" "$@" > "$_nr_log"
+		null "${_nr_sleep:-0}" "$@" > "${_nr_log:?}"
 }
 
 adapter_metrics() {
-	sed -n 's/^sample ms=//p' "$2" > "$2.ms"
-	_nm_s=$(bench_stats < "$2.ms") || return 1
+	sed -n 's/^sample ms=//p' "${2:?}" > "${2:?}.ms"
+	_nm_s=$(bench_stats < "${2:?}.ms") || return 1
 	printf 'metric.ms=%s\n' "$(printf '%s\n' "$_nm_s" | sed 's/.* median=\([^ ]*\) .*/\1/')"
-	printf 'metric.frames=%s\n' "$(awk 'END { print NR }' "$2.ms")"
+	printf 'metric.frames=%s\n' "$(awk 'END { print NR }' "${2:?}.ms")"
 }

@@ -52,7 +52,7 @@ BENCH_SELF=$BENCH_ROOT/bench.sh
 bench_on_exit() {
 	_oe_st=$?
 	bench_lock_release
-	if [ -n "${BENCH_LOCK_GUARD:-}" ]; then rmdir "$BENCH_LOCK_GUARD" 2> /dev/null || true; fi
+	if [ -n "${BENCH_LOCK_GUARD:-}" ]; then rmdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null || true; fi
 	if [ -n "${BENCH_TMP:-}" ]; then rm -rf "${BENCH_TMP:?}"; fi
 	exit "$_oe_st"
 }
@@ -113,23 +113,23 @@ summary() {
 	done
 }
 
-# measure_baseline: measures a full baseline into $BENCH_TMP/new and
+# measure_baseline: measures a full baseline into ${BENCH_TMP:?}/new and
 # prints nothing; the caller stores it.
 measure_baseline() {
 	rm -rf "${BENCH_TMP:?}/new"
-	bench_measure "$(bench_case_get runs)" "$BENCH_TMP/new"
+	bench_measure "$(bench_case_get runs)" "${BENCH_TMP:?}/new"
 }
 
 # store_new: supersedes the baseline in DIR (if any) and stores the runs
-# measured into $BENCH_TMP/new.
+# measured into ${BENCH_TMP:?}/new.
 store_new() {
 	if [ "$(bench_store_count "$DIR")" -gt 0 ]; then
 		_sn_old=$(bench_store_supersede "$DIR") || bench_die 2 "cannot supersede the old baseline"
 		printf 'superseded=%s\n' "$_sn_old"
 	fi
 	_sn_k=1
-	while [ -f "$BENCH_TMP/new/$_sn_k.run" ]; do
-		bench_store_write "$DIR" "$BENCH_TMP/new/$_sn_k.run"
+	while [ -f "${BENCH_TMP:?}/new/$_sn_k.run" ]; do
+		bench_store_write "$DIR" "${BENCH_TMP:?}/new/$_sn_k.run"
 		_sn_k=$((_sn_k + 1))
 	done
 }
@@ -193,13 +193,13 @@ cmd_drift() {
 		bench_run_one warmup "$_dr_k" /dev/null
 		_dr_k=$((_dr_k + 1))
 	done
-	bench_run_one run 1 "$BENCH_TMP/drift.run"
+	bench_run_one run 1 "${BENCH_TMP:?}/drift.run"
 	_dr_m=$(bench_case_get metric)
-	_dr_x=$(bench_file_kv "$BENCH_TMP/drift.run" "metric.$_dr_m")
+	_dr_x=$(bench_file_kv "${BENCH_TMP:?}/drift.run" "metric.$_dr_m")
 	_dr_line=$(bench_store_values "$_dr_m" "$DIR" |
 		bench_drift_rule "$_dr_x" "$(bench_case_get abs_tol)" "$(bench_case_get rel_tol)") ||
 		bench_die 2 "the stored runs of $BENCH_CASE_NAME have no usable $_dr_m values"
-	bench_store_write "$DIR/drift" "$BENCH_TMP/drift.run"
+	bench_store_write "$DIR/drift" "${BENCH_TMP:?}/drift.run"
 	printf '%s metric=%s\n' "$_dr_line" "$_dr_m"
 	case $_dr_line in
 	drift=inside*) return 0 ;;

@@ -46,11 +46,11 @@ bench_store_count() {
 
 # bench_store_write <dir> <file>: stores <file> as a new run file in <dir>.
 bench_store_write() {
-	mkdir -p "$1" || bench_die 2 "cannot make a store directory"
+	mkdir -p "${1:?}" || bench_die 2 "cannot make a store directory"
 	BENCH_STORE_SEQ=$((BENCH_STORE_SEQ + 1))
 	_sw_n=r-$(date -u +%Y%m%dT%H%M%SZ)-$$-$BENCH_STORE_SEQ.run
-	cp "$2" "$1/.tmp.$_sw_n" || bench_die 2 "cannot write to the store"
-	if ! mv -f "$1/.tmp.$_sw_n" "$1/$_sw_n"; then
+	cp "$2" "${1:?}/.tmp.$_sw_n" || bench_die 2 "cannot write to the store"
+	if ! mv -f "${1:?}/.tmp.$_sw_n" "${1:?}/$_sw_n"; then
 		bench_die 2 "cannot rename a run file into place in the store"
 	fi
 }
@@ -59,11 +59,11 @@ bench_store_write() {
 # <dir>/superseded/<UTC>-<pid>/ and prints that name.
 bench_store_supersede() {
 	_ss_n=$(date -u +%Y%m%dT%H%M%SZ)-$$
-	mkdir -p "$1/superseded/$_ss_n" || bench_die 2 "cannot make a superseded directory"
-	bench_store_runs "$1" > "$BENCH_TMP/supersede"
+	mkdir -p "${1:?}/superseded/$_ss_n" || bench_die 2 "cannot make a superseded directory"
+	bench_store_runs "$1" > "${BENCH_TMP:?}/supersede"
 	while IFS= read -r _ss_f; do
-		mv -f "$_ss_f" "$1/superseded/$_ss_n/" || bench_die 2 "cannot move a run to superseded"
-	done < "$BENCH_TMP/supersede"
+		mv -f "$_ss_f" "${1:?}/superseded/$_ss_n/" || bench_die 2 "cannot move a run to superseded"
+	done < "${BENCH_TMP:?}/supersede"
 	printf '%s\n' "$_ss_n"
 }
 

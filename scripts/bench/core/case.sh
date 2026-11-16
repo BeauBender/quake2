@@ -55,7 +55,7 @@ bench_case_load() {
 	[ -f "$_cl_f" ] || bench_die 2 "no case file for the case $_cl_n"
 	bench_tmp
 	BENCH_CASE_NAME=$_cl_n
-	BENCH_CASE_FILE=$BENCH_TMP/case
+	BENCH_CASE_FILE=${BENCH_TMP:?}/case
 	_cl_st=0
 	awk -v keys="$BENCH_CASE_KEYS" '
 		BEGIN { n = split(keys, k, " "); for (i = 1; i <= n; i++) ok[k[i]] = 1 }
@@ -86,9 +86,9 @@ bench_case_load() {
 			gsub(/[ \t]+/, " ", val)
 			print key "=" val
 		}
-		END { exit bad }' "$_cl_f" > "$BENCH_TMP/case.raw" || _cl_st=$?
+		END { exit bad }' "$_cl_f" > "${BENCH_TMP:?}/case.raw" || _cl_st=$?
 	[ "$_cl_st" -eq 0 ] || bench_die 2 "the case $_cl_n is refused"
-	sort "$BENCH_TMP/case.raw" > "$BENCH_CASE_FILE"
+	sort "${BENCH_TMP:?}/case.raw" > "$BENCH_CASE_FILE"
 	for _cl_k in adapter runs metric abs_tol rel_tol; do
 		[ -n "$(bench_case_get "$_cl_k")" ] || bench_die 2 "the case $_cl_n has no $_cl_k"
 	done

@@ -49,17 +49,17 @@ bench_lock_init() {
 		BENCH_STATE_DIR=$BENCH_STATE
 	else
 		BENCH_STATE_DIR=$(bench_cache_home) || bench_die 2 "set BENCH_STATE or HOME: no per-user directory for the lock"
-		BENCH_STATE_DIR=$BENCH_STATE_DIR/bench-state
+		BENCH_STATE_DIR=${BENCH_STATE_DIR:?}/bench-state
 	fi
 	bench_outside_repo "$BENCH_STATE_DIR" "the lock state directory (BENCH_STATE)"
-	mkdir -p "$BENCH_STATE_DIR" || bench_die 2 "cannot make the lock state directory"
-	BENCH_LOCK_DIR=$BENCH_STATE_DIR/lock
-	BENCH_LOCK_LOG=$BENCH_STATE_DIR/lock.log
+	mkdir -p "${BENCH_STATE_DIR:?}" || bench_die 2 "cannot make the lock state directory"
+	BENCH_LOCK_DIR=${BENCH_STATE_DIR:?}/lock
+	BENCH_LOCK_LOG=${BENCH_STATE_DIR:?}/lock.log
 }
 
 # bench_lock_holder: the holder file's text, empty when there is none.
 bench_lock_holder() {
-	cat "$BENCH_LOCK_DIR/holder" 2> /dev/null || true
+	cat "${BENCH_LOCK_DIR:?}/holder" 2> /dev/null || true
 }
 
 # bench_lock_mine: this process runs under the lock already, through the
@@ -74,7 +74,7 @@ bench_lock_write() {
 	_lw_t=$BENCH_LOCK_DIR/holder.tmp.$$
 	printf 'label=%s\npid=%s\nchild=%s\nstart=%s\ntoken=%s\n' \
 		"$1" "$$" "$2" "$BENCH_LOCK_SINCE" "$BENCH_LOCK_MINE" > "$_lw_t" 2> /dev/null || return 1
-	mv -f "$_lw_t" "$BENCH_LOCK_DIR/holder" 2> /dev/null
+	mv -f "$_lw_t" "${BENCH_LOCK_DIR:?}/holder" 2> /dev/null
 }
 
 # bench_lock_reclaim <token>: removes the lock left by the dead holder that
@@ -84,8 +84,8 @@ bench_lock_reclaim() {
 	case $1 in
 	*[!A-Za-z0-9-]*) return 1 ;;
 	esac
-	BENCH_LOCK_GUARD=$BENCH_STATE_DIR/reclaim.${1:-noholder}
-	if ! mkdir "$BENCH_LOCK_GUARD" 2> /dev/null; then
+	BENCH_LOCK_GUARD=${BENCH_STATE_DIR:?}/reclaim.${1:-noholder}
+	if ! mkdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then
 		BENCH_LOCK_GUARD=
 		return 1
 	fi
@@ -95,21 +95,21 @@ bench_lock_reclaim() {
 	if [ -n "$1" ]; then
 		if [ "$_lr_tok" = "$1" ] && ! bench_pid_alive "$(bench_kv "$_lr_h" pid)" &&
 			! bench_pid_alive "$(bench_kv "$_lr_h" child)"; then
-			rm -f "$BENCH_LOCK_DIR/holder" "$BENCH_LOCK_DIR"/holder.tmp.*
-			if rmdir "$BENCH_LOCK_DIR" 2> /dev/null; then _lr_st=0; fi
+			rm -f "${BENCH_LOCK_DIR:?}/holder" "${BENCH_LOCK_DIR:?}"/holder.tmp.*
+			if rmdir "${BENCH_LOCK_DIR:?}" 2> /dev/null; then _lr_st=0; fi
 		fi
-	elif [ -d "$BENCH_LOCK_DIR" ] && [ ! -e "$BENCH_LOCK_DIR/holder" ]; then
-		rm -f "$BENCH_LOCK_DIR"/holder.tmp.*
-		if rmdir "$BENCH_LOCK_DIR" 2> /dev/null; then _lr_st=0; fi
+	elif [ -d "${BENCH_LOCK_DIR:?}" ] && [ ! -e "${BENCH_LOCK_DIR:?}/holder" ]; then
+		rm -f "${BENCH_LOCK_DIR:?}"/holder.tmp.*
+		if rmdir "${BENCH_LOCK_DIR:?}" 2> /dev/null; then _lr_st=0; fi
 	fi
-	rmdir "$BENCH_LOCK_GUARD" 2> /dev/null || true
+	rmdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null || true
 	BENCH_LOCK_GUARD=
 	if [ "$_lr_st" -eq 0 ]; then
 		_lr_l=$(bench_kv "$_lr_h" label)
 		_lr_p=$(bench_kv "$_lr_h" pid)
 		_lr_line="reclaimed a stale lock: label=${_lr_l:-none} pid=${_lr_p:-none} (gone) by pid=$$"
 		bench_note "$_lr_line"
-		printf '%s %s\n' "$(bench_utc)" "$_lr_line" >> "$BENCH_LOCK_LOG" 2> /dev/null || true
+		printf '%s %s\n' "$(bench_utc)" "$_lr_line" >> "${BENCH_LOCK_LOG:?}" 2> /dev/null || true
 	fi
 	return "$_lr_st"
 }
@@ -133,7 +133,7 @@ bench_lock_acquire() {
 	_la_said=
 	_la_bare=
 	while :; do
-		if mkdir "$BENCH_LOCK_DIR" 2> /dev/null; then
+		if mkdir "${BENCH_LOCK_DIR:?}" 2> /dev/null; then
 			BENCH_LOCK_OWNED=1
 			BENCH_LOCK_SINCE=$(bench_utc)
 			if bench_lock_write "$_la_label" "" &&
@@ -150,7 +150,7 @@ bench_lock_acquire() {
 			if ! bench_pid_alive "$(bench_kv "$_la_h" pid)" && ! bench_pid_alive "$(bench_kv "$_la_h" child)"; then
 				if bench_lock_reclaim "$_la_tok"; then continue; fi
 			fi
-		elif [ -d "$BENCH_LOCK_DIR" ]; then
+		elif [ -d "${BENCH_LOCK_DIR:?}" ]; then
 			_la_now=$(date +%s)
 			if [ -z "$_la_bare" ]; then
 				_la_bare=$_la_now
@@ -188,8 +188,8 @@ bench_lock_release() {
 	[ "${BENCH_LOCK_OWNED:-}" = 1 ] || return 0
 	BENCH_LOCK_OWNED=
 	if [ "$(bench_kv "$(bench_lock_holder)" token)" = "$BENCH_LOCK_MINE" ]; then
-		rm -f "$BENCH_LOCK_DIR/holder" "$BENCH_LOCK_DIR/holder.tmp.$$"
-		rmdir "$BENCH_LOCK_DIR" 2> /dev/null || true
+		rm -f "${BENCH_LOCK_DIR:?}/holder" "${BENCH_LOCK_DIR:?}/holder.tmp.$$"
+		rmdir "${BENCH_LOCK_DIR:?}" 2> /dev/null || true
 	fi
 	return 0
 }
@@ -247,7 +247,7 @@ bench_lock_run() {
 # bench_lock_status: prints "lock=free", or "lock=held" with the holder.
 bench_lock_status() {
 	bench_lock_init
-	if [ ! -d "$BENCH_LOCK_DIR" ]; then
+	if [ ! -d "${BENCH_LOCK_DIR:?}" ]; then
 		echo lock=free
 		return 0
 	fi
