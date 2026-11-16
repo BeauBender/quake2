@@ -198,13 +198,26 @@ fresh() {
 }
 # foreign <file...>: prints the lines of the files that are not the lock
 # shell's own ("bench: ..."), at most five, each cut to 200 characters and
-# shown after the name of the file it came from, with this check's
-# temporary directory as <tmp>; fails when there is none.
+# shown after the name of the file it came from (the name is not part of
+# the 200), with this check's temporary directory as <tmp> and the bench
+# root as <bench>; fails when there is none. A file it cannot read counts
+# as a finding, so the caller fails.
 foreign() {
-	awk -v me="$me" -v t="$tmp" '!/^bench: / && n < 5 {
-		f = FILENAME; sub(/.*\//, "", f); s = $0
-		while ((i = index(s, t)) > 0) s = substr(s, 1, i - 1) "<tmp>" substr(s, i + length(t))
-		print me ":   " substr(f ": " s, 1, 200); n++
+	for _f in "$@"; do
+		[ -r "$_f" ] || {
+			printf '%s:   foreign: cannot read %s\n' "$me" "${_f##*/}"
+			return 0
+		}
+	done
+	awk -v me="$me" -v t="$tmp" -v b="$REAL" '
+	function mask(s, p, r,   i) {
+		while ((i = index(s, p)) > 0) s = substr(s, 1, i - 1) r substr(s, i + length(p))
+		return s
+	}
+	!/^bench: / && n < 5 {
+		f = FILENAME; sub(/.*\//, "", f)
+		s = mask(mask($0, t, "<tmp>"), b, "<bench>")
+		print me ":   " f ": " substr(s, 1, 200); n++
 	} END { exit !n }' "$@"
 }
 # lit <file> <old> <new>: replaces the first occurrence of <old> on each
@@ -396,7 +409,7 @@ t_lock_stop() {
 	# lives on (the order a TERM to the group can take under load), under
 	# the lock and into one file, as below. gc.sh then exits with 143, and
 	# its leftover sleep is stopped by the lock.
-	start sh "$R/bench.sh" lock run quiet -- sh "${E:?}/gc.sh" "${E:?}/gc.quiet" "${E:?}/log" quiet 30 > "${E:?}/quiet.out" 2>&1
+	start sh "$R/bench.sh" lock run quiet -- sh "${E:?}/gc.sh" "${E:?}/gc.quiet" "${E:?}/log" quiet 3 > "${E:?}/quiet.out" 2>&1
 	_h=$BG
 	wait_file 5 "${E:?}/gc.quiet" || bad "stop: the quiet probe's grandchild never started"
 	kill -TERM "$(cat "${E:?}/gc.quiet")" 2> /dev/null || bad "stop: the quiet probe's grandchild is gone"
@@ -568,6 +581,22 @@ t_spawn_stderr() {
 	_st=0
 	B lock run noerr -- sh -c 'echo ran > "$1"; echo to-stderr >&2' x "${E:?}/noerr" 2>&- || _st=$?
 	[ "$_st" -eq 0 ] && [ "$(cat "${E:?}/noerr" 2> /dev/null)" = ran ] || bad "spawn: with standard error closed, wanted the command run with /dev/null for it (status 0 and its line), got status $_st"
+	# foreign itself: it masks the bench root and the scratch directory, it
+	# fails closed on a file it cannot read, and the file name is not part
+	# of the 200 characters of the line.
+	printf '%s\n' "$REAL/core/common.sh: line 9: x: ${tmp:?}/y: nope" > "${E:?}/f.one"
+	_out=$(foreign "${E:?}/f.one") || _out=
+	case $_out in
+	*"f.one: <bench>/core/common.sh: line 9: x: <tmp>/y: nope") ;;
+	*) bad "spawn: foreign did not mask the bench root and the scratch directory, got: $_out" ;;
+	esac
+	case $_out in *"$REAL"* | *"$tmp"*) bad "spawn: foreign printed a path" ;; esac
+	foreign "${E:?}/f.one" "${E:?}/f.missing" > "${E:?}/f.out" || bad "spawn: foreign passed over a file it cannot read"
+	grep -q 'cannot read f.missing' "${E:?}/f.out" || bad "spawn: foreign did not name the file it cannot read"
+	awk 'BEGIN { for (i = 0; i < 200; i++) printf "z"; print "END" }' > "${E:?}/f.long"
+	foreign "${E:?}/f.long" > "${E:?}/f.out" || true
+	case $(cat "${E:?}/f.out") in *"f.long: zzzz"*) ;; *) bad "spawn: foreign did not show the line after the file name" ;; esac
+	[ "$(awk '{ print length($0) }' "${E:?}/f.out")" -eq $((${#me} + 4 + 6 + 2 + 200)) ] || bad "spawn: foreign counted the file name in the 200 characters"
 	[ "$fails" -eq 0 ]
 }
 

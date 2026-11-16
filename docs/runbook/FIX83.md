@@ -178,3 +178,24 @@ runbook), without load, all passing:
   `/dev/null` for standard input (no change to `t_lock_stop` or to what
   the core does);
 - `59b090af`: this runbook over `78ca72e1`, the tree of the checks.
+
+## Review round 1
+
+Review of `233771b8`: one Important and notes. Fixed in the commit that
+follows it (see `git log`):
+
+- Correctness I1: the quiet probe of `t_lock_stop` ran `sleep 30` as its
+  leftover, which under the `spawn-no-group` mutant (the command stays in the
+  check's own process group) outlived the check and drew the outer lock's
+  "stopped what the command left running" line. The leftover is now 3 s.
+- Security N1: `foreign` masks the bench root as `<bench>` besides the
+  scratch directory as `<tmp>`, so a printed bash diagnostic shows no home
+  path. `t_spawn_stderr` has a case for it.
+- Security N3, correctness N3: `foreign` reports a file it cannot read as a
+  finding (the caller fails), and the file name is outside the 200
+  characters. Both are cases of `t_spawn_stderr`.
+- Correctness N2: `docs/plans/bench-harness.md`, "The host lock", says the
+  fork runs with standard error on `/dev/null`, the command gets the
+  caller's standard error, and the caller's fd 9 does not reach it.
+
+Checks are listed below the commit line.
