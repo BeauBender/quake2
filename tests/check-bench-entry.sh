@@ -29,7 +29,8 @@
 #     75 and runs nothing; the caller's LC_ALL, set or unset, reaches the
 #     heavy part, though bench.sh sets it to C.
 # Then one mutant per lock call (each removing it from a copy of its entry
-# point) and two that break the pass-through of the run under the lock;
+# point) and three more: the run under the lock taking the lock again (the
+# gate, pins.sh), and a BENCH_LOCK_ENTRY without a token taken as a hold;
 # each must fail the test that targets it.
 #
 # Usage: tests/check-bench-entry.sh [<test>...]   (named tests only, no mutants)
