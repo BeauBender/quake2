@@ -8,6 +8,12 @@
 # docs/runbook/<CARD>.md with no index line, on an index line whose file does
 # not exist, and on a card indexed twice.
 #
+# Also fails on a bare "the runbook" pointer in the card files and the
+# harness document: since the split there is no single runbook, so a pointer
+# names the card's file, or docs/plans/metal-port-harness.md for the method
+# ("the shared runbook" and a linked "[the runbook](...)" are allowed). The
+# text is joined across line breaks first, so a wrapped pointer is found too.
+#
 # Usage: tests/check-runbook-index.sh
 set -eu
 cd "$(dirname "$0")/.."
@@ -46,6 +52,15 @@ for f in "$dir"/*.md; do
 	[ "$card" = README ] && continue
 	if ! grep -qx "$card" "${tmp:?}/names"; then
 		echo "check-runbook-index: $f has no index line in $index"
+		fail=1
+	fi
+done
+
+for f in "$dir"/*.md "$index"; do
+	n=$(tr '\n' ' ' < "$f" | sed -E 's/  +/ /g' |
+		grep -oiE '(^|[^[])the runbook' | wc -l | tr -d ' ')
+	if [ "$n" -ne 0 ]; then
+		echo "check-runbook-index: $f has $n bare \"the runbook\" pointer(s): name the card file or $index"
 		fail=1
 	fi
 done
