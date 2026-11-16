@@ -399,7 +399,68 @@ so, while a device build still refuses a GPU below it.
 `tests/check-ios.sh`, part of the gate, compiles the objects for the
 simulator and checks their platform, exports and AppKit references;
 `--full` also builds and checks the bundle. Both print one skipped line
-where there is no iOS simulator SDK.
+where there is no iOS simulator SDK. With the device SDK they do the same
+for a device (`IOS_SDK=iphoneos`, below), and they run
+`scripts/ios-device.sh --selftest`.
+
+### Running on an iPhone or iPad
+
+A device runs only an app signed by the owner's Apple developer team, so
+the device build is made unsigned and signed afterwards, on the Mac that
+holds the signing identity. What the owner needs:
+
+- an Apple developer team: the paid Apple Developer Program, or a free
+  personal team, whose profiles last 7 days and hold fewer entitlements;
+- an "Apple Development" signing identity (certificate and key) in the
+  login keychain;
+- a development provisioning profile for the app's bundle identifier
+  (`IOS_BUNDLE_ID`, `org.yquake2.quake2` unless the build sets another)
+  that lists the device, as a *.mobileprovision* file. The profile's
+  App ID must be that identifier exactly; a wildcard App ID is refused;
+- the device paired with the Mac, with Developer Mode on (Settings >
+  Privacy & Security > Developer Mode);
+- Xcode, whose `xcrun devicectl` installs and starts the app.
+
+The three commands, from the checkout:
+
+```sh
+make ios IOS_SDK=iphoneos
+scripts/ios-device.sh sign --identity "Apple Development: NAME (ID)" --profile PROFILE.mobileprovision
+scripts/ios-device.sh install --device DEVICE
+scripts/ios-device.sh launch --device DEVICE
+```
+
+`make ios IOS_SDK=iphoneos` builds
+*build/ios-iphoneos/release/Quake2.app* for `arm64-apple-ios17.0`, with
+MetalFX linked weak (`ref_metal` uses it where the device has it), the
+shaders compiled for the device and `CFBundleSupportedPlatforms`
+`iPhoneOS`, and leaves it unsigned: a device refuses the ad hoc signature
+of the simulator's build. With a bundle identifier of your own, pass
+`IOS_BUNDLE_ID=...` to `make` and set it in the environment for the
+script too.
+
+`scripts/ios-device.sh sign` takes the identity's name (as Keychain
+Access shows the certificate) and the profile on the command line or in
+`IOS_SIGN_IDENTITY` and `IOS_PROFILE`; neither is stored anywhere. It
+refuses a profile that `security cms -D` cannot decode, that has no
+application identifier or team, or that is for another bundle identifier
+than the app's (it names both), and an app that is not the device build.
+It then writes the profile's entitlements to a private scratch file,
+copies the profile into the bundle as *embedded.mobileprovision* and signs
+the bundle with `codesign --force --sign IDENTITY --entitlements FILE`;
+the signature is checked with `codesign --verify --strict`. Nothing of the
+decoded profile, which holds the team's certificates, is printed.
+
+`install` and `launch` take the device's identifier as `xcrun devicectl
+list devices` shows it (or `IOS_DEVICE`). `launch` passes any further
+arguments to the engine, for example `scripts/ios-device.sh launch
+--device DEVICE +map base1`. Each step is bounded (`IOS_DEVICE_SIGN_SECONDS`,
+`IOS_DEVICE_INSTALL_SECONDS`, `IOS_DEVICE_LAUNCH_SECONDS`) and the
+script's header describes the rest. The game data then goes into the
+app's folder as described below; the app finds it there with no option.
+
+Distribution through the App Store or TestFlight is not covered: the
+build is for the owner's own devices.
 
 ### Game data on iPhone and iPad
 
