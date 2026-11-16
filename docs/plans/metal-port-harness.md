@@ -292,6 +292,7 @@ render-stage ray queries and the performance numbers.
 - [TASK53](../runbook/TASK53.md): Acceleration structures in `ref_metal` (RT1)
 - [TASK54](../runbook/TASK54.md): The G-buffer and the lighting resolve in `ref_metal` (RT2)
 - [TASK55](../runbook/TASK55.md): Ray-traced shadows from dynamic lights in `ref_metal` (RT3)
+- [TASK57](../runbook/TASK57.md): Ray-traced ambient occlusion in `ref_metal` (RT5)
 - [TASK70](../runbook/TASK70.md): Observed on the scripted water demo
 - [TASK73](../runbook/TASK73.md): Evidence on pull requests: the synthetic test and the first real run
 - [TASK80](../runbook/TASK80.md): `gl1` on the build host
