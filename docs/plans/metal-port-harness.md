@@ -321,3 +321,4 @@ render-stage ray queries and the performance numbers.
 - [TASK122](../runbook/TASK122.md): Particle size cap relative to the resolution in `ref_metal`
 - [TASK131](../runbook/TASK131.md): The dynamic-light shadow pass finds each pixel's surface without an eye ray
 - [TASK132](../runbook/TASK132.md): `soft`'s window captured opaque and not opaque
+- [TASK155](../runbook/TASK155.md): Every heavy entry point takes the bench lock itself
