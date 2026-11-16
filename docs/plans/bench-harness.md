@@ -1,6 +1,6 @@
 # Bench harness: quiet, repeatable measurements that carry across hosts and games
 
-Plan anchor for the bench cards. Status: the core (card 1, TASK153) and the lock in every heavy entry point (card 3, TASK155) are built; cards 2 and 4 are planned.
+Plan anchor for the bench cards. Status: the core (card 1, TASK153), the quake2 adapter with its first cases (card 2, TASK154) and the lock in every heavy entry point (card 3, TASK155) are built; card 4 is planned.
 
 ## Why
 
@@ -74,7 +74,7 @@ The hash is `shasum -a 256` when it is present and `cksum` otherwise (two CRC-32
 
 ### Build-input identity
 
-`bench.sh inputs <commit> [<case>]` hashes exactly what the measured build compiles: the `git rev-parse <commit>:<path>` ids of the paths the case's adapter names (`adapter_inputs_paths <commit>`), plus the build flags the case names (`build_flags`). The core names no project layout: without a case, or with an adapter that names no path, the default is the whole tree (the commit's root tree id), so any change gives new inputs. A path the commit lacks hashes as the marker `missing`. The result is `i-` and 12 hex digits; `--list` prints the hashed text and the hash tool. The quake2 adapter (card 2) names `Makefile`, `src/`, `third_party/` and every top-level `*.make` file, as the `null` adapter already does for the self-test; with that list a docs-only commit has the same inputs, so its baseline stays valid, and a code change gets new inputs.
+`bench.sh inputs <commit> [<case>]` hashes exactly what the measured build compiles: the `git rev-parse <commit>:<path>` ids of the paths the case's adapter names (`adapter_inputs_paths <commit>`), plus the build flags the case names (`build_flags`). The core names no project layout: without a case, or with an adapter that names no path, the default is the whole tree (the commit's root tree id), so any change gives new inputs. A path the commit lacks hashes as the marker `missing`. The result is `i-` and 12 hex digits; `--list` prints the hashed text and the hash tool. The quake2 adapter (card 2) names `Makefile`, `src/`, `third_party/` and every top-level `*.make` file, as the `null` adapter already does for the self-test, plus the pin scenario file a case names (`scripts/pins/scenarios/<name>.cfg`), whose `set` lines are part of what is measured; with that list a docs-only commit has the same inputs, so its baseline stays valid, and a code or scenario change gets new inputs.
 
 ### Case files
 
@@ -123,13 +123,21 @@ An adapter is a sourced shell file that defines:
 
 `<case>` is the normalised case file, read with `bench_case_get <key>`. Each run sees `BENCH_RUN_KIND` (`warmup` or `run`) and `BENCH_RUN_INDEX`. The core refuses preflight or metric lines of another shape, and a run without the case's `metric`.
 
+The quake2 adapter (`scripts/bench/adapters/quake2.sh`, card 2; its header lists every setting word and metric):
+- its preflight reads the capabilities from the system with a probe it builds with the host's `cc` (`quake2-caps.m`: the default Metal device, `supportsRaytracing`, MetalFX's spatial `supportsDevice`, the main display's refresh rate) and `kern.hv_vmm_present`; `BENCH_Q2_CAPS` names a file to read instead, for the self-test. A run then checks the engine's own support line for each required capability, so a capability claimed by that file but missing fails the run instead of storing a number. It refuses `MTL_DEBUG_LAYER`, and it checks the screen and other engines again before every run;
+- its build is a `git archive` export per inputs id in a cache outside the repository (`BENCH_Q2_BUILDS`), built with `make`, the measurement working on a copy of `release/`. `scripts/pins.sh` does not export a commit, so nothing of it is reused;
+- its run removes the saved `config.cfg` first, passes a seed only with a trace in the run's scratch directory (the engine takes `pins_seed` only beside `pins_record`; no frame is captured), and sends the engine TERM after the case's `seconds=`;
+- its counting window is in frames, not seconds: `skip=` drops a run's first lines of a kind, `after_frame=` keeps the pass lines of frames numbered above it (the shadow pass prints a line only on a frame it runs). The engine prints no time per frame, so FIX51's presented frames a second over a window of seconds, and its count of frames that found every present slot held, are not measured: that needs a stats line in the engine, a card of its own.
+
 ## Cases
 
-The first cases cover what the open cards measured, so their numbers become reproducible:
-- `present-*`: FIX51, both renderers, 640x480, 1920x1080 and 5120x2880, `r_vsync` 0 and 1;
-- `rt-shadows-gpu`: TASK131;
-- `rt-ao-gpu`: TASK57;
-- `metalfx-scaler-*`: TASK111.
+The first cases cover what the open cards measured, so their numbers become reproducible (card 2 built them; the reproductions are in `docs/runbook/TASK154.md`):
+- `present-*`: FIX51, both renderers, 640x480, 1920x1080 and 5120x2880, `r_vsync` 0 and 1 (12);
+- `rt-shadows-gpu-*`: TASK131, at 1920x1080 and 5120x2880, with and without entities (4);
+- `rt-ao-gpu-*`: TASK57, the same four (4);
+- `metalfx-scaler-*`: TASK111, the spatial and temporal scalers at its three scales and two outputs (12), with display sync off, where TASK111 had it on: at 60 Hz on a quiet host the GPU clocks down between frames, and the pass's time then doubles and varies between runs. TASK111's mode 3 runs as mode 2 without a ray-traced effect, so it has no case.
+
+A case is one measurement (its name keys the store and the lock label, and `bench.sh` takes no cell parameter), so each cell is its own file, not a key of a family file.
 
 ## Working on several hosts
 
@@ -138,6 +146,6 @@ Every host runs the same tool. The VM's token differs, so its numbers never mix 
 ## Cards
 
 1. **Core** (TASK153, opus): the lock, host identity, inputs, store, statistics, drift and compare, with a hermetic self-test `tests/check-bench.sh` (no engine) and its mutants, plus this plan as `docs/plans/bench-harness.md` and the commands in `doc/085_unittests.md`.
-2. **quake2 adapter and first cases** (TASK, opus; needs 1 and a physical GPU): the adapter, the four case families, a user page, and the runbook method sections pointing at `bench.sh`. Each case is reproduced against one stored result from its card's runbook.
+2. **quake2 adapter and first cases** (TASK154, opus; needs 1 and a physical GPU): the adapter, the four case families, the user section ("Timings with bench.sh" in `doc/100_renderpins.md`, beside the pins, whose game data, scenarios and rules it shares), the runbook method sections pointing at `bench.sh`, and the hermetic check `tests/check-bench-quake2.sh`. One case per family is reproduced against its card's runbook. Built.
 3. **The lock in every heavy entry point** (TASK155, sonnet; needs 1; built): `scripts/test.sh`, `scripts/pins.sh` and `scripts/coverage.sh` take the lock re-entrantly, and `tests/check-bench-entry.sh` proves it with a mutant per lock call and a nested-call test. The agent rules in `CLAUDE.md` point a bare `make` at `bench.sh lock run build`.
 4. **The generic core in the shared agent tooling** (plugin candidate): measurement lanes as a first-class swarm concept, so the scheduler holds heavy work while a measurement runs, plus the core of card 1 moved there.
