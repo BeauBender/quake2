@@ -238,14 +238,15 @@ assert_entry_points() # <executable>
 }
 
 # main.c is SDL's on iOS: SDL_main.h renames its main SDL_main and adds
-# SDL's main, which calls SDL_RunApp (UIApplicationMain)
+# SDL's main, which calls SDL_RunApp (UIApplicationMain). In the linked
+# executable both mains are local (t), -fvisibility=hidden.
 assert_sdl_main() # <object or executable>
 {
-	if ! nm -g "$1" > "${tmp:?}/nm" 2>&1; then
+	if ! nm "$1" > "${tmp:?}/nm" 2>&1; then
 		echo "nm failed on $1: $(head -n 1 "${tmp:?}/nm")"
 		return 1
 	fi
-	if ! awk 'NF == 3 && $2 == "T" && $3 == "_SDL_main" { f = 1 } END { exit !f }' "${tmp:?}/nm"; then
+	if ! awk 'NF == 3 && ($2 == "T" || $2 == "t") && $3 == "_SDL_main" { f = 1 } END { exit !f }' "${tmp:?}/nm"; then
 		echo "$1 defines no _SDL_main: main.c does not include SDL_main.h, so UIApplicationMain never runs"
 		return 1
 	fi
