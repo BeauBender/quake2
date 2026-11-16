@@ -579,23 +579,42 @@ scripts/bench/bench.sh compare rt-ao-gpu-1920x1080 --before HEAD~1 --after HEAD
 | Variable | Meaning |
 |---|---|
 | `BENCH_Q2_BASEDIR` | the directory that holds `baseq2/`; default `PINS_BASEDIR` |
-| `BENCH_Q2_BUILDS` | the build cache, one export and build per inputs id, outside any repository; default `<cache home>/<repository>-bench-builds` |
+| `BENCH_Q2_BUILDS` | the build cache, one export and build per inputs id, outside any repository, owned by you and writable by no one else; default `<cache home>/<repository>-bench-builds` (below) |
 | `BENCH_Q2_JOBS` | `make -j` of a build; default the number of CPUs |
 | `BENCH_Q2_LOGS` | a directory, outside any repository, that keeps each run's engine log (text only); default unset |
-| `BENCH_Q2_CAPS` | a file of capability lines (`physical-gpu=yes`, `raytracing=no`, `metalfx=yes`, `display-hz=60`) read in place of the system probe |
+| `BENCH_Q2_CAPS` | a file of capability lines (`physical-gpu=yes`, `raytracing=no`, `metalfx=yes`, `metalfx-temporal=yes`, `display-hz=60`) read in place of the system probe; `physical-gpu` is still checked against `kern.hv_vmm_present`, and a `display-hz` requirement is refused with a file |
 
 Before a measurement the adapter checks the case's settings and its
 `requires`: `physical-gpu`, `raytracing`, `metalfx` and `display-hz>=N`,
 read from the system by a small probe built with the host's `cc`
 (`scripts/bench/adapters/quake2-caps.m`, which asks Metal and the
-display what `ref_metal` asks). A capability the host lacks refuses the
-case with its reason (`bench.sh` exits 3), so the build VM refuses every
-quake2 case rather than measure something else. It also refuses a run
-while `MTL_DEBUG_LAYER` is set, while the screen is locked or while
-another `quake2` runs, and it never stops a process it did not start.
-Each run starts without a saved `config.cfg`, plays with sound off, is
-sent TERM `seconds=` after launch and must show the case's renderer and,
-for a ray-traced or MetalFX case, the engine's own support line.
+display what `ref_metal` asks). A case that runs the temporal scaler
+(`r_metalfx 2`) needs the temporal scaler's support as well as
+`metalfx`, since the engine would quietly fall back to the spatial one.
+A capability the host lacks refuses the case with its reason (`bench.sh`
+exits 3), so the build VM refuses every quake2 case rather than measure
+something else. It also refuses a run while `MTL_DEBUG_LAYER` is set,
+while the screen is locked or while another `quake2` runs, and when
+`ioreg` or `pgrep` fails, so it cannot tell; it never stops a process it
+did not start. Each run starts without a saved `config.cfg`, plays with
+sound off, is sent TERM `seconds=` after launch and must show the case's
+renderer and, for a ray-traced or MetalFX case, the engine's own support
+line (for a temporal case, the temporal scaler's).
+
+The build cache is `$XDG_CACHE_HOME/<repository>-bench-builds`, else
+`~/.cache/<repository>-bench-builds`, where `<repository>` is the name
+of the repository's directory (`quake2` for a clone of that name), or
+`BENCH_Q2_BUILDS`. It holds one directory per inputs id (`bench.sh
+inputs <commit> <case>` prints it): `tree/`, an export of the commit,
+about 40 MB before the build (three quarters of it `third_party/`),
+then its objects and `release/`; `exported`, the marker of a finished
+export; and `build.log`. Builds run with the caller's build variables
+cleared (`CC`, `CFLAGS`, `LDFLAGS`, `DEBUG`, `ASAN`, every `WITH_*` and
+the rest of `Q2_BUILD_ENV` in the adapter), so an entry does not depend
+on who ran it; a case's `build_flags` are part of its inputs id. Nothing
+prunes it. Remove an entry, or the whole directory, with `rm -rf` while
+no bench run is in progress (`bench.sh lock status`); the next run of
+that inputs id exports and builds it again.
 
 | Cases | From | Metric | Settings |
 |---|---|---|---|
