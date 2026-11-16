@@ -702,8 +702,8 @@ c_kgrp() {
 }
 
 # sigs: a probe check-a.sh run through scripts/test.sh (or $WIRING), on a
-# copy of the gate's layout, gets SIGINT, SIGQUIT, SIGHUP, SIGTERM and
-# SIGTSTP as it does when it is started directly from here, as
+# copy of the gate's layout, gets SIGINT, SIGQUIT, SIGHUP, SIGTERM, SIGTSTP,
+# SIGTTIN and SIGTTOU as it does when it is started directly from here, as
 # origin/main's test.sh ran each check (in its own foreground, no trap set),
 # and SIGINT is delivered to it (when SIGINT is ignored here, both show it
 # ignored, and that last is skipped)
@@ -732,6 +732,37 @@ c_sigs() {
 	else
 		skipint "sigs' assertion that SIGINT is delivered"
 	fi
+}
+
+# tty: scripts/test.sh (or $WIRING), on a copy of the gate's layout and one
+# passing check that prints a line, run on a terminal (script(1)) set to
+# `stty tostop`. The scheduler is in a process group of its own, not the
+# terminal's foreground group, so it must ignore SIGTTOU or its first write
+# to the terminal stops it and the gate hangs. The run must end with status
+# 0 within 30 s and show the check's line; on timeout what it left (test.sh,
+# whose pid is recorded before its exec, and what descends from it) is
+# ended by pid
+c_tty() {
+	_tf=${WIRING:-$top/scripts/test.sh}
+	d=$(newcase)
+	gtree "$d" "$_tf" 1 0 0
+	launch "$d" script -q /dev/null sh -c 'printf "%s\n" "$$" > "$1/shpid"; stty tostop; shift; exec "$@"' sh "$d" \
+		env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" PATH="$tmp/make:$PATH" sh "$d/tree/scripts/test.sh"
+	rc=0
+	lwait 30 || rc=$?
+	if [ "$rc" -eq 124 ]; then
+		_ty=$(cat "$d/shpid" 2> /dev/null || :)
+		if [ -n "$_ty" ]; then
+			for _tk in $(ps -ax -o pid= -o ppid= | awk -v p="$_ty" '$2 == p { print $1 }'); do
+				kill -s KILL -- "-$_tk" 2> /dev/null || kill -s KILL "$_tk" 2> /dev/null || :
+			done
+			kill -s KILL "$_ty" 2> /dev/null || :
+		fi
+		say "tty: the run stopped on a terminal with tostop (test.sh pid ${_ty:-unknown}), and was ended by pid"
+		return 1
+	fi
+	[ "$rc" -eq 0 ] || { say "tty: status $rc on a terminal with tostop, want 0"; return 1; }
+	grep -q 'a line 1' "$d/out" || { say "tty: the check's line did not reach the terminal"; return 1; }
 }
 
 # leave: a check that leaves a sleep running in the background (its output
@@ -784,7 +815,7 @@ lit() {
 		END { exit c != 1 }' "$1"
 }
 
-cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs leave intskip"
+cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs tty leave intskip"
 [ -z "$only" ] || cases=$only
 for c in $cases; do
 	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; [ -z "$only" ] || break; fi
@@ -795,7 +826,8 @@ if [ -n "$only" ]; then
 	exit 0
 fi
 
-# mutant <name> <case> <old> <new>: the scheduler with <old> replaced must fail <case>
+# mutant <name> <case> <old> <new> [<prefix>]: the scheduler with <old> replaced (on
+# no line that starts with <prefix>) must fail <case>
 mutants=0
 # intmut <mutant|wmut> <name> <case> <old> <new>: a mutant that only SIGINT
 # can catch; when SIGINT is ignored here it is skipped, and counted so
@@ -809,7 +841,7 @@ intmut() {
 	fi
 }
 mutant() {
-	lit "$real" "$3" "$4" > "$tmp/mut-$1.sh" || { bad "mutant $1 does not apply"; return 0; }
+	lit "$real" "$3" "$4" "${5:-}" > "$tmp/mut-$1.sh" || { bad "mutant $1 does not apply"; return 0; }
 	SCHED=$tmp/mut-$1.sh quiet=1
 	if "c_$2"; then bad "mutant $1 was not caught by case $2"; else mutants=$((mutants + 1)); fi
 	SCHED=$real quiet=0
@@ -876,6 +908,9 @@ wmut wiring-no-errexit wiring 'set -eu' 'set -u'
 wmut stop-not-passed testsh '		kill -s TERM "$gate_sched" 2> /dev/null || :' '		:'
 wmut stop-passes testsh "trap 'gate_stop 143' TERM" "trap 'gate_stop 0' TERM"
 mutant ttou-to-checks sigs '	trap - TTOU' '	:'
+# (the two re-ignores: the one in gate_start is told apart by its comment)
+mutant ttou-after-start tty "trap '' TTOU # the scheduler again" ':'
+mutant ttou-scheduler tty "trap '' TTOU" ':' "	trap '' TTOU #"
 # (without its own group the scheduler, and every check, ignore SIGINT and
 # SIGQUIT; when this self-test already ignores both, nothing differs)
 intmut wmut no-own-group sigs 'set -m' ':'
