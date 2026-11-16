@@ -324,21 +324,135 @@ rm_frame_remake(const rm_frame_held_t *held, int w, int h, int dw, int dh)
 }
 
 int
-rm_present_region(int tw, int th, int dw, int dh, rm_present_t *out)
+rm_present_region_in(int tw, int th, int dw, int dh, const rm_inset_t *in, rm_present_t *out)
 {
+	long sw, sh;
+
 	memset(out, 0, sizeof(*out));
 
-	if ((tw <= 0) || (th <= 0) || (dw <= 0) || (dh <= 0))
+	if ((tw <= 0) || (th <= 0) || (dw <= 0) || (dh <= 0) || !in)
 	{
 		return 0;
 	}
 
-	out->w = (tw < dw) ? tw : dw;
-	out->h = (th < dh) ? th : dh;
-	/* the bottom rows of both: GL's origin is the framebuffer's bottom-left corner */
+	if ((in->left < 0) || (in->top < 0) || (in->right < 0) || (in->bottom < 0))
+	{
+		return 0;
+	}
+
+	/* the safe rectangle, each side measured from the drawable's edge; the sums in long, so they cannot wrap */
+	sw = (long)dw - in->left - in->right;
+	sh = (long)dh - in->top - in->bottom;
+
+	if ((sw <= 0) || (sh <= 0))
+	{
+		return 0;
+	}
+
+	out->w = (tw < sw) ? tw : (int)sw;
+	out->h = (th < sh) ? th : (int)sh;
+	/* the bottom rows of both: GL's origin is the framebuffer's bottom-left corner, here the rectangle's */
 	out->src_y = th - out->h;
-	out->dst_y = dh - out->h;
+	out->dst_x = in->left;
+	out->dst_y = in->top + (int)sh - out->h;
 	return 1;
+}
+
+int
+rm_present_region(int tw, int th, int dw, int dh, rm_present_t *out)
+{
+	static const rm_inset_t none = { 0, 0, 0, 0 };
+
+	return rm_present_region_in(tw, th, dw, dh, &none, out);
+}
+
+/* v in points to the nearest pixel; 0 when v is not finite or is not above 0, the side when it is not below it */
+static int
+rm_edge_px(float v, float density, int side)
+{
+	float px = v * density;
+
+	if (!(px > 0.0f))
+	{
+		return 0;
+	}
+
+	if (!(px < (float)side))
+	{
+		return side;
+	}
+
+	return (int)(px + 0.5f);
+}
+
+int
+rm_safe_insets(float x, float y, float w, float h, float density, int pw, int ph, rm_inset_t *out)
+{
+	int l, t, r, b;
+
+	memset(out, 0, sizeof(*out));
+
+	if (!(density > 0.0f) || (pw <= 0) || (ph <= 0) || !(w > 0.0f) || !(h > 0.0f))
+	{
+		return 0;
+	}
+
+	l = rm_edge_px(x, density, pw);
+	t = rm_edge_px(y, density, ph);
+	r = pw - rm_edge_px(x + w, density, pw);
+	b = ph - rm_edge_px(y + h, density, ph);
+
+	if ((r < 0) || (b < 0) || (l + r >= pw) || (t + b >= ph))
+	{
+		return 0;
+	}
+
+	out->left = l;
+	out->top = t;
+	out->right = r;
+	out->bottom = b;
+	return 1;
+}
+
+int
+rm_window_sizes(int pw, int ph, const rm_inset_t *in, rm_sizes_t *out)
+{
+	long sw, sh;
+
+	memset(out, 0, sizeof(*out));
+
+	if ((pw <= 0) || (ph <= 0))
+	{
+		return 0;
+	}
+
+	out->vw = out->lw = pw;
+	out->vh = out->lh = ph;
+
+	if (!in || (in->left < 0) || (in->top < 0) || (in->right < 0) || (in->bottom < 0))
+	{
+		return 0;
+	}
+
+	/* the sums in long, so they cannot wrap */
+	sw = (long)pw - in->left - in->right;
+	sh = (long)ph - in->top - in->bottom;
+
+	if ((sw <= 0) || (sh <= 0))
+	{
+		return 0;
+	}
+
+	out->vw = (int)sw;
+	out->vh = (int)sh;
+	/* the layer stays the whole window: the present puts the frame at the rectangle's place in it */
+	return 1;
+}
+
+int
+rm_display_sync(int always, int wanted)
+{
+	return (always || wanted) ? 1 : 0;
 }
 
 int

@@ -177,6 +177,11 @@ assert_plist() # <Info.plist>
 	[ "$min" = "$minos" ] || { echo "$1: MinimumOSVersion is $min, not $minos"; rc=1; }
 	id=$(plutil -extract CFBundleIdentifier raw -o - "$1" 2>/dev/null) || id=
 	[ -n "$id" ] || { echo "$1: no CFBundleIdentifier"; rc=1; }
+	# TASK147: ProMotion phones present above 60 Hz, and the screen is held in landscape, either way up
+	fr=$(plutil -extract CADisableMinimumFrameDurationOnPhone raw -o - "$1" 2>/dev/null) || fr="(none)"
+	[ "$fr" = true ] || { echo "$1: CADisableMinimumFrameDurationOnPhone is $fr, not true"; rc=1; }
+	ori=$(plutil -extract UISupportedInterfaceOrientations xml1 -o - "$1" 2>/dev/null | grep -o '<string>[^<]*</string>' | sed -e 's/<string>//' -e 's/<\/string>//' | sort | tr '\n' ' ') || ori=
+	[ "$ori" = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight " ] || { echo "$1: UISupportedInterfaceOrientations are '$ori', not landscape left and right only"; rc=1; }
 	if grep -E '@[A-Z_]+@' "$1" >/dev/null; then
 		echo "$1 holds a template key: $(grep -E -o '@[A-Z_]+@' "$1" | sort -u | tr '\n' ' ')"
 		rc=1
@@ -388,6 +393,21 @@ cp "${m:?}/good.app/Info.plist" "${m:?}/noexe.plist"
 plutil -remove CFBundleExecutable "${m:?}/noexe.plist"
 refused "Info.plist without CFBundleExecutable" "CFBundleExecutable is (none)" assert_plist "${m:?}/noexe.plist"
 refused "Info.plist template unfilled" "template key: @BUNDLE_ID@" assert_plist stuff/ios/Info.plist.in
+cp "${m:?}/good.app/Info.plist" "${m:?}/nofr.plist"
+plutil -remove CADisableMinimumFrameDurationOnPhone "${m:?}/nofr.plist"
+refused "Info.plist without CADisableMinimumFrameDurationOnPhone" "CADisableMinimumFrameDurationOnPhone is (none)" assert_plist "${m:?}/nofr.plist"
+cp "${m:?}/good.app/Info.plist" "${m:?}/fr0.plist"
+plutil -replace CADisableMinimumFrameDurationOnPhone -bool NO "${m:?}/fr0.plist"
+refused "Info.plist with CADisableMinimumFrameDurationOnPhone false" "CADisableMinimumFrameDurationOnPhone is false" assert_plist "${m:?}/fr0.plist"
+cp "${m:?}/good.app/Info.plist" "${m:?}/portrait.plist"
+plutil -insert UISupportedInterfaceOrientations.2 -string UIInterfaceOrientationPortrait "${m:?}/portrait.plist"
+refused "Info.plist offering portrait" "not landscape left and right only" assert_plist "${m:?}/portrait.plist"
+cp "${m:?}/good.app/Info.plist" "${m:?}/oneside.plist"
+plutil -remove UISupportedInterfaceOrientations.1 "${m:?}/oneside.plist"
+refused "Info.plist offering one landscape only" "not landscape left and right only" assert_plist "${m:?}/oneside.plist"
+cp "${m:?}/good.app/Info.plist" "${m:?}/noori.plist"
+plutil -remove UISupportedInterfaceOrientations "${m:?}/noori.plist"
+refused "Info.plist with no orientations" "not landscape left and right only" assert_plist "${m:?}/noori.plist"
 accepted "Info.plist filled in" assert_plist "${m:?}/good.app/Info.plist"
 # (e)
 printf '%s\n' "cc -c -O2 -target $target -isysroot $sdk src/x.c -o build/x.o" > "${m:?}/ioscmds.txt"
