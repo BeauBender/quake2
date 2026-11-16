@@ -168,7 +168,7 @@ the translucent surface pass. The water half of S4 stays open: the shim
 passes all 30 comparisons on the 144-message demo (6 pairs, 5 frames each,
 at `--bad-threshold 0.03` and at the defaults, worst score 0.000004, bad
 0.000013), but that demo was refused by `make-demo water` and renamed by
-hand, so by this runbook's rule the numbers are indicative and not
+hand, so by [TASK50's rule](TASK50.md) the numbers are indicative and not
 acceptance evidence. It is accepted when `make-demo water` accepts a demo
 on this host, tracked by #232 ("`make-demo water` refuses every demo on a
 fast host"). TASK51 (S5) met for `models` and for `models` with
