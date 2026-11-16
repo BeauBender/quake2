@@ -2,7 +2,7 @@
 # scripts/ios-sim.sh -- the iOS simulator app on a throwaway device (TASK146).
 #
 #   scripts/ios-sim.sh smoke --out DIR
-#   scripts/ios-sim.sh run --out DIR [--data DIR | --no-data] [--launch "ARGS"]... [--shot SECONDS]
+#   scripts/ios-sim.sh run --out DIR [--data DIR | --no-data] [--launch "ARGS"]... [--shot SECONDS] [--background SECONDS]
 #   scripts/ios-sim.sh selftest
 #
 # smoke: writes the synthetic data (scripts/ios/smokepak.py, no id Software
@@ -79,6 +79,15 @@
 # Documents/baseq2/ with their sizes (names, never contents) and
 # DIR/frames.<n>/ its scrnshot/ files. With --data these hold the
 # owner's data: DIR is the artifacts folder, never published.
+# --background SECONDS (TASK148): simctl has no Home button, so a start of
+# the app is sent to the background the way a person leaves it: another
+# app (com.apple.Preferences) is launched IOS_SIM_BACKGROUND_AFTER (15)
+# seconds after the start, the script waits SECONDS of wall time, and
+# launches the app again, which brings the running process back to the
+# front. --shot then counts from that return. What the app saw is in its
+# own log (engine.<n>.log), not in this script's output; with --background
+# the shot is always taken (0 s after the return when none is given), and
+# DIR/oslog.<n>.txt is the system's log of the app (simctl spawn log show).
 #
 # selftest: runs "smoke" against a fake xcrun and a fake make (no
 # simulator, no build, seconds) and checks its rules: a hung "simctl
@@ -102,7 +111,8 @@
 # a pak refused before a device is made, a container that cannot be found
 # fails and still deletes the device, an app that outlives
 # IOS_SIM_RUN_SECONDS is terminated and fails, each --launch is a start
-# with its own log and listing, --shot ends the app and keeps the frame.
+# with its own log and listing, --shot ends the app and keeps the frame,
+# --background launches the other app and the app again, in that order.
 # tests/check-ios.sh runs it.
 #
 # Limits, in seconds (digits only, or the script refuses):
@@ -127,7 +137,7 @@ die() { echo "ios-sim: $*" >&2; exit 1; }
 usage()
 {
 	echo "usage: scripts/ios-sim.sh smoke --out DIR" >&2
-	echo "       scripts/ios-sim.sh run --out DIR [--data DIR | --no-data] [--launch \"ARGS\"]... [--shot SECONDS]" >&2
+	echo "       scripts/ios-sim.sh run --out DIR [--data DIR | --no-data] [--launch \"ARGS\"]... [--shot SECONDS] [--background SECONDS]" >&2
 	echo "       scripts/ios-sim.sh selftest" >&2
 	exit 2
 }
@@ -219,7 +229,20 @@ for l in open(sys.argv[1]):
     devs.append({"udid": u, "name": n, "state": "Shutdown"})
 print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-27-2": devs}}))' "$st/devices" ;;
 	devicetypes) echo '{"devicetypes": [{"name": "iPhone 17", "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}' ;;
-	runtimes) echo '{"runtimes": [{"isAvailable": true, "platform": "iOS", "version": "27.2", "name": "iOS 27.2", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-2", "supportedDeviceTypes": [{"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}]}' ;;
+	runtimes)
+		g='{"isAvailable": true, "platform": "iOS", "version": "27.2", "name": "iOS 27.2", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-2", "supportedDeviceTypes": [{"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}, {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Pro"}]}'
+		b='{"isAvailable": true, "platform": "iOS", "version": "%s", "name": "iOS %s bound", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-bound-%s", "supportedDeviceTypes": [{"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone19-4"}]}'
+		case $sc in
+		rttie) echo "{\"runtimes\": [$(printf "$b" 27.2 27.2 27.2), $g]}" ;;
+		rtnewer) echo "{\"runtimes\": [$(printf "$b" 27.10 27.10 27.10), $g]}" ;;
+		rttielist) echo "{\"runtimes\": [$(printf "$b" 27.2 27.2 27.2 | sed 's/iPhone19-4/iPhone-17/'), $g]}" ;;
+		rtnolist) echo "{\"runtimes\": [$(printf "$b" 27.2 27.2 27.2 | sed 's/iPhone19-4/iPhone-17/'), $(printf '%s' "$g" | sed 's/, "supportedDeviceTypes.*}$/}/')]}" ;;
+		rtnum) echo "{\"runtimes\": [$(printf '%s' "$g" | sed 's/27\.2/27.10/g'), $(printf '%s' "$g" | sed 's/27\.2/27.9/g; s/iOS-27-2/iOS-27-9/')]}" ;;
+		rtnone) echo "{\"runtimes\": [$(printf "$b" 27.2 27.2 27.2)]}" ;;
+		rtempty) echo '{"runtimes": []}' ;;
+		rtbadver) echo '{"runtimes": [{"isAvailable": true, "platform": "iOS", "version": "x", "name": "iOS x", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-x"}]}' ;;
+		*) echo '{"runtimes": [{"isAvailable": true, "platform": "iOS", "version": "27.2", "name": "iOS 27.2", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-2", "supportedDeviceTypes": [{"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}]}' ;;
+		esac ;;
 	*) exit 1 ;;
 	esac ;;
 create)
@@ -246,6 +269,7 @@ create)
 	echo "$u" ;;
 terminate) [ -f "$st/app.pid" ] && kill "$(cat "$st/app.pid")" 2>/dev/null; echo "$*" >> "$st/terminates"; exit 0 ;;
 bootstatus|install|shutdown) ;;
+spawn) echo "fake log: quake2 line" ;;
 io)
 		case $4 in
 		*/app.png)
@@ -256,6 +280,12 @@ io)
 			printf '\211PNG\r\n\032\n\000\000\000\015IHDR\000\000\000\020\000\000\000\010' > "$4" ;;
 		esac ;;
 launch)
+	# launch <udid> <bundle id>: another app, or the running app brought back (no --console-pty)
+	if [ "${2:-}" != --console-pty ]; then
+		printf '%s\n' "$*" >> "$st/relaunches"
+		[ "$sc" = bgfail ] && [ "${3:-}" = com.apple.Preferences ] && exit 1
+		exit 0
+	fi
 	# launch --console-pty <udid> <bundle id> <args>...
 	printf '%s\n' "$*" >> "$st/launches"
 	c=$st/container/Documents/baseq2
@@ -293,7 +323,13 @@ launch)
 		echo $$ > "$st/app.pid"
 		exec sleep 30
 	fi
-	sleep 1 &
+	# a run with --background (IOS_SIM_BACKGROUND_AFTER is set) keeps the app alive through the background;
+	# bgdies is the app that ends during it
+	life=1
+	[ -n "${IOS_SIM_BACKGROUND_AFTER-}" ] && life=4
+	[ "$sc" = bgshot ] && life=5
+	[ "$sc" = bgdies ] && life=1
+	sleep "$life" &
 	p=$!
 	echo $p > "$st/app.pid"
 	echo "$4: $p"
@@ -465,6 +501,8 @@ EOF
 		nofile) [ ! -e "$f" ] || why="$3 exists" ;;
 		grep) grep -F -e "$text" "$f" >/dev/null 2>&1 || why="$3 does not hold \"$text\"" ;;
 		nogrep) ! grep -F -e "$text" "$f" >/dev/null 2>&1 || why="$3 holds \"$text\"" ;;
+		line1) sed -n 1p "$f" 2>/dev/null | grep -F -e "$text" >/dev/null || why="$3's first line does not hold \"$text\"" ;;
+		line2) sed -n 2p "$f" 2>/dev/null | grep -F -e "$text" >/dev/null || why="$3's second line does not hold \"$text\"" ;;
 		esac
 		if [ -n "$why" ]; then
 			echo "ios-sim: selftest: FAIL $name: $why"
@@ -546,8 +584,40 @@ EOF
 	ST_CMD="run" st_case run-no-out extra fail "usage: scripts/ios-sim.sh" 5
 	ST_CMD="run --out @D@/out --data /x --no-data" st_case run-data-and-no-data extra fail "usage: scripts/ios-sim.sh" 5
 	ST_CMD="run --out @D@/out --no-data --data /x" st_case run-no-data-and-data extra fail "usage: scripts/ios-sim.sh" 5
+	# --background: the other app, then the app again, in that order, once each
+	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background extra ok "run ok, 1 start(s)" 30 IOS_SIM_BACKGROUND_AFTER=0
+	st_has run-background grep state/relaunches "com.apple.Preferences"
+	st_has run-background file out/screen.1.png
+	st_has run-background grep out/oslog.1.txt "fake log: quake2 line"
+	ST_CMD="run --out @D@/out --no-data --background 1" st_case run-background-default-shot extra ok "run ok, 1 start(s)" 30 IOS_SIM_BACKGROUND_AFTER=0
+	st_has run-background-default-shot file out/oslog.1.txt
+	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-order extra ok "run ok, 1 start(s)" 30 IOS_SIM_BACKGROUND_AFTER=0
+	st_has run-background-order line1 state/relaunches "com.apple.Preferences"
+	st_has run-background-order line2 state/relaunches "org.example.selftest"
+	# the shot is after the return, not before the background (the app lives 5 s here)
+	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-before-shot bgshot ok "run ok, 1 start(s)" 30 IOS_SIM_BACKGROUND_AFTER=2
+	st_has run-background-before-shot grep state/relaunches "com.apple.Preferences"
+	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-fails bgfail fail "simctl launch of the other app failed" 30 IOS_SIM_BACKGROUND_AFTER=0
+	# the app ends during the background: the return is a restart, the run fails before any shot
+	ST_CMD="run --out @D@/out --no-data --background 2 --shot 0" st_case run-background-app-dies bgdies fail "the app did not survive the background" 30 IOS_SIM_BACKGROUND_AFTER=0
+	st_has run-background-app-dies nofile out/screen.1.png
+	ST_CMD="run --out @D@/out --no-data" st_case run-no-background extra ok "run ok, 1 start(s)" 30
+	st_has run-no-background nofile state/relaunches
+	ST_CMD="run --out @D@/out --background 3s" st_case run-background-not-digits extra fail "--background must be a number of seconds" 5
+	ST_CMD="run --out @D@/out --no-data --background 1" st_case run-background-after-not-digits extra fail "IOS_SIM_BACKGROUND_AFTER must be" 5 IOS_SIM_BACKGROUND_AFTER=x
 	ST_CMD="run --out @D@/out --shot 3s" st_case run-shot-not-digits extra fail "--shot must be a number of seconds" 5
 	ST_CMD="run --out @D@/out" st_case run-limit-not-digits extra fail "IOS_SIM_RUN_SECONDS must be" 5 IOS_SIM_RUN_SECONDS=1h
+	# the runtime pick: the newest runtime that lists the device type, the general one on a tie
+	st_case runtime-tie-picks-general rttie ok "iOS 27.2)" 30
+	st_case runtime-newer-bound-picks-general rtnewer ok "iOS 27.2)" 30
+	st_case runtime-tie-both-list-picks-most rttielist ok "iOS 27.2)" 30
+	st_case runtime-tie-unlisted-picks-unlisted rtnolist ok "iOS 27.2)" 30
+	st_case runtime-version-numeric rtnum ok "iOS 27.10)" 30
+	st_case runtime-none-lists-type rtnone fail "iPhone 17 is not supported by any available iOS runtime; tried iOS 27.2 bound (com.apple.CoreSimulator.SimRuntime.iOS-bound-27.2)" 30
+	st_case runtime-list-empty rtempty fail "no available iOS runtime" 30
+	st_case runtime-bad-version rtbadver fail "has no numeric version" 30
+	st_case runtime-set-bound-refused rttie fail "iPhone 17 is not supported by iOS 27.2 bound" 30 IOS_SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-bound-27.2
+	st_case runtime-set-general rttie ok "iOS 27.2)" 30 IOS_SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-27-2
 	st_case list-empty empty fail "simctl list devices: no device list" 30
 	st_case list-fails listfail fail "simctl list devices failed" 30
 	st_case list-hangs hang fail "timed out after 2 s: xcrun simctl list devices" 10
@@ -600,6 +670,7 @@ out=
 data=
 nodata=0
 shot=
+bg=
 launches=()
 case $mode in
 smoke)
@@ -613,6 +684,7 @@ run)
 		--no-data) [ -z "$data" ] && [ "$nodata" = 0 ] || usage; nodata=1; shift ;;
 		--launch) [ $# -ge 2 ] || usage; launches+=("$2"); shift 2 ;;
 		--shot) [ $# -ge 2 ] && [ -z "$shot" ] || usage; shot=$2; shift 2 ;;
+		--background) [ $# -ge 2 ] && [ -z "$bg" ] || usage; bg=$2; shift 2 ;;
 		*) usage ;;
 		esac
 	done ;;
@@ -637,6 +709,9 @@ digits IOS_SIM_LIST_SECONDS "$list_s"
 digits IOS_SIM_CREATE_SECONDS "$create_s"
 digits IOS_SIM_RUN_SECONDS "$run_s"
 [ -z "$shot" ] || digits "--shot" "$shot"
+[ -z "$bg" ] || digits "--background" "$bg"
+bgafter=${IOS_SIM_BACKGROUND_AFTER-15}
+digits IOS_SIM_BACKGROUND_AFTER "$bgafter"
 
 # the owner's data: checked before anything is built or created
 if [ -n "$data" ]; then
@@ -779,10 +854,28 @@ if want_rt:
     ios = [r for r in ios if want_rt in (r["identifier"], r["version"], r["name"])]
 if not ios:
     sys.exit("no available iOS runtime" + (" " + want_rt if want_rt else ""))
-rt = max(ios, key=lambda r: [int(x) for x in r["version"].split(".")])
-ok = [s["identifier"] for s in rt.get("supportedDeviceTypes", [])]
-if ok and t[0]["identifier"] not in ok:
-    sys.exit(t[0]["name"] + " is not supported by " + rt["name"])
+tid = t[0]["identifier"]
+def ver(r):
+    return [int(x) for x in r["version"].split(".")]
+try:
+    for r in ios:
+        ver(r)
+except (KeyError, ValueError, AttributeError):
+    sys.exit("an iOS runtime in the list has no numeric version")
+def lists(r):
+    # a runtime with no list of device types stays a candidate
+    ok = [s["identifier"] for s in r.get("supportedDeviceTypes", [])]
+    return not ok or tid in ok
+if want_rt:
+    rt = max(ios, key=ver)
+    if not lists(rt):
+        sys.exit(t[0]["name"] + " is not supported by " + rt["name"])
+else:
+    cand = [r for r in ios if lists(r)]
+    if not cand:
+        sys.exit(t[0]["name"] + " is not supported by any available iOS runtime; tried " + ", ".join(r["name"] + " (" + r["identifier"] + ")" for r in ios))
+    # newest first; on a version tie the runtime that lists the most device types (the general one)
+    rt = max(cand, key=lambda r: (ver(r), len(r["supportedDeviceTypes"]) if r.get("supportedDeviceTypes") else 1 << 30))
 print(t[0]["identifier"], rt["identifier"], rt["name"])
 EOF
 ) || die "no device for the run"
@@ -825,7 +918,7 @@ data_container()
 # bounded frame wait and quit handling, TASK147)
 launch_app()
 {
-	local limit=$1 what=$2 shotat=$3 n=$4 log t w=0
+	local limit=$1 what=$2 shotat=$3 n=$4 log t t0 w=0 shotbase=0 bgdone=0
 	shift 4
 	log=$out/console.$n.log
 	SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "$@" > "$log" 2>&1 &
@@ -835,9 +928,27 @@ launch_app()
 	apid=$lpid
 	echo "ios-sim: app $bid pid $apid"
 	t=0
+	t0=$SECONDS
 	while kill -0 "$apid" 2>/dev/null; do
-		if [ -n "$shotat" ] && [ "$t" -ge "$shotat" ]; then
+		if [ -n "$bg" ] && [ "$bgdone" = 0 ] && [ "$t" -ge "$bgafter" ]; then
+			# the app goes to the background as a person's Home does: another app takes the screen
+			bounded 30 "${tmp:?}/bg.out" xcrun simctl launch "$udid" com.apple.Preferences || die "simctl launch of the other app failed"
+			sleep "$bg"
+			t=$((t + bg))
+			bounded 30 "${tmp:?}/fg.out" xcrun simctl launch "$udid" "$bid" || die "simctl launch of the app (the return) failed"
+			bgdone=1
+			shotbase=$t
+			# the same process must have lived through the background: a launch of a dead app starts a new one, which is a restart, not a resume
+			kill -0 "$apid" 2>/dev/null || die "the app did not survive the background (the process $apid ended; the return started it again)"
+			# the system's own log of the app (a command buffer submitted in the background is reported there)
+			[ -n "$shotat" ] || shotat=0
+		fi
+		# with --background the shot waits for the return
+		if [ -n "$shotat" ] && { [ -z "$bg" ] || [ "$bgdone" = 1 ]; } && [ "$t" -ge $((shotat + shotbase)) ]; then
 			bounded 60 "${tmp:?}/shot.out" xcrun simctl io "$udid" screenshot "$out/screen.$n.png" || die "simctl io screenshot failed"
+			if [ -n "$bg" ]; then
+				bounded 90 "$out/oslog.$n.txt" xcrun simctl spawn "$udid" log show --last 5m --predicate 'process == "quake2"' || die "simctl spawn log show failed"
+			fi
 			bounded 30 "${tmp:?}/term.out" xcrun simctl terminate "$udid" "$bid" || true
 			break
 		fi
@@ -848,6 +959,7 @@ launch_app()
 		sleep 1
 		t=$((t + 1))
 	done
+	echo "ios-sim: start $n: the app ran $((SECONDS - t0)) s"
 	while kill -0 "$lpid" 2>/dev/null && [ "$w" -lt 10 ]; do sleep 1; w=$((w + 1)); done
 	if kill -0 "$lpid" 2>/dev/null; then
 		echo "ios-sim: the launch client did not exit after the app; stopping it" >&2
