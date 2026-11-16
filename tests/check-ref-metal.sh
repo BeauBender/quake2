@@ -16,7 +16,9 @@
 #     so is tests/metal/rm_gbuf_test.c, the pure part of the G-buffer
 #     (rm_gbuf.c and common/mtl_gbuf_math.h, RT2, TASK54),
 #     tests/metal/rm_rtshadow_test.c, the pure part of the dynamic-light
-#     shadows (rm_rtshadow.c and common/mtl_rts_math.h, RT3, TASK55), and
+#     shadows (rm_rtshadow.c and common/mtl_rts_math.h, RT3, TASK55),
+#     tests/metal/rm_rtao_test.c, the pure part of the ambient occlusion
+#     (rm_rtao.c and common/mtl_rtao_math.h, RT5, TASK57), and
 #     tests/metal/rm_fx_test.c, the pure part of the MetalFX scalers
 #     (rm_metalfx.c, TASK111).
 # (b) Only on Darwin with the Metal compiler (xcrun -f metal) and the
@@ -152,6 +154,23 @@ elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtshadow_test" > "${tmp:?}/
 else
 	rts=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtshadow_test: //')
 	case $rts in *", 0 failed") ;; *) bad "tests/metal/rm_rtshadow_test.c printed no result line"; rts="";; esac
+fi
+
+# the pure part of the ambient occlusion (RT5, TASK57): rm_rtao.c and common/mtl_rtao_math.h, with
+# rm_rtshadow.c for the view's inverse, rm_rt.c for the instances AO rays test and rm_pure.c
+ao=""
+# shellcheck disable=SC2086 # flags is a word list
+if ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "${tmp:?}/rm_rtao_test" tests/metal/rm_rtao_test.c \
+	"$rm_dir/rm_rtao.c" "$rm_dir/rm_rtshadow.c" "$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" \
+	"$rm_dir/common/mtl_ring.c" src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_rtao_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtao_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_rtao_test.c failed"
+else
+	ao=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtao_test: //')
+	case $ao in *", 0 failed") ;; *) bad "tests/metal/rm_rtao_test.c printed no result line"; ao="";; esac
 fi
 
 # the pure part of the MetalFX scalers (TASK111): rm_metalfx.c alone
@@ -449,6 +468,6 @@ else
 fi
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $build)"
 fi
 exit $fail
