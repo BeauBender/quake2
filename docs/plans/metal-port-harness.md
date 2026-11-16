@@ -343,3 +343,4 @@ which refuse a host without the capability they require).
 - [TASK155](../runbook/TASK155.md): Every heavy entry point takes the bench lock itself
 - [TASK158](../runbook/TASK158.md): water reflections shaded in world space, as a setting
 - [TASK157](../runbook/TASK157.md): the AO pass within its GPU-time share
+- [FIX86](../runbook/FIX86.md): The MetalFX report's settings go through a console script, and its chunks combine

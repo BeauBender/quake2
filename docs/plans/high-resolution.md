@@ -197,7 +197,7 @@ screen pixel of blend at its edge; at an integer scale the frame equals
 nearest filtering); and the client switch `con_backaspect`, the console
 background at 4:3 and cropped, with its arithmetic in
 [`cl_conback.c`](../../src/client/cl_conback.c). The measurements are in the
-TASK119 section of the runbook, [`TASK119.md`](../runbook/TASK119.md).
+card file [`TASK119.md`](../runbook/TASK119.md).
 
 ### P5. Bicubic lightmap filtering (built, TASK120)
 
@@ -226,7 +226,7 @@ The world vertex grew from 32 to 48 bytes: `lmrect`, four floats, follows
 `lmuv` at offset 32, and the position stays at offset 0 with w = 1 after it
 for RT1 (TASK53) (retained world vertices, 11.7 MiB at the map limit of
 256,000 surface edges instead of 7.8 MiB). The record of the pins and the
-frame times is in the runbook file
+frame times is in the card file
 [Bicubic lightmaps in `ref_metal`](../runbook/TASK120.md).
 
 ### P6. A local texture upscaler on the player's machine (filed as two cards)
