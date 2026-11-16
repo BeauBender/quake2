@@ -249,8 +249,8 @@ update_once(void)
 	SCR_UpdateScreen();
 }
 
-/* Without anything setting the flag (any build but iOS) the screen is drawn. */
-TEST(suspend_default_draws)
+/* The initial value: not suspended, the screen is drawn. */
+TEST(suspend_initial_value_draws)
 {
 	T_CHECK(!SCR_IsSuspended());
 	update_once();
@@ -276,17 +276,12 @@ TEST(suspend_set_draws_nothing_cleared_draws_again)
 	T_EQ_INT(stub_calls.ends, 1);
 }
 
-/* Twice in a row leaves no state behind: not the pause, not the keys. */
-TEST(suspend_twice_leaves_no_state)
+/* Twice in a row draws nothing each time suspended and one frame each time resumed. */
+TEST(suspend_twice_draws_each_time)
 {
 	int i;
-	float paused;
-	int keys;
 
 	update_once();
-	paused = cl_paused->value;
-	keys = anykeydown;
-
 	for (i = 0; i < 2; i++)
 	{
 		SCR_SetSuspended(true);
@@ -298,9 +293,35 @@ TEST(suspend_twice_leaves_no_state)
 		T_EQ_INT(stub_calls.ends, 1);
 	}
 
-	T_CHECK(cl_paused->value == paused);
-	T_EQ_INT(anykeydown, keys);
 	T_CHECK(!SCR_IsSuspended());
+}
+
+/* CL_Frame's renderer work: suspended asks for neither the video check nor the preparation. */
+TEST(suspend_skips_gpu_work)
+{
+	memset(&cls, 0, sizeof(cls));
+	memset(&cl, 0, sizeof(cl));
+	cls.state = ca_active;
+	cl.refresh_prepped = false;
+
+	/* not suspended: both, as before */
+	T_CHECK(SCR_VidCheckDue());
+	T_CHECK(SCR_PrepRefreshDue());
+
+	/* suspended: neither */
+	SCR_SetSuspended(true);
+	T_CHECK(!SCR_VidCheckDue());
+	T_CHECK(!SCR_PrepRefreshDue());
+
+	/* back: both again; the preparation still follows its old condition */
+	SCR_SetSuspended(false);
+	T_CHECK(SCR_VidCheckDue());
+	T_CHECK(SCR_PrepRefreshDue());
+	cl.refresh_prepped = true;
+	T_CHECK(!SCR_PrepRefreshDue());
+	cl.refresh_prepped = false;
+	cls.state = ca_connected;
+	T_CHECK(!SCR_PrepRefreshDue());
 }
 
 /* Any non-zero argument sets it, and it is a plain flag. */

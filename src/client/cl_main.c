@@ -1027,10 +1027,14 @@ CL_Frame(int packetdelta, int renderdelta, int timedelta, qboolean packetframe, 
 
 	if (renderframe)
 	{
-		VID_CheckChanges();
+		if (SCR_VidCheckDue())
+		{
+			VID_CheckChanges();
+		}
+
 		CL_PredictMovement();
 
-		if (!cl.refresh_prepped && (cls.state == ca_active))
+		if (SCR_PrepRefreshDue())
 		{
 			CL_PrepRefresh();
 		}

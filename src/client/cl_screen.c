@@ -1735,6 +1735,24 @@ SCR_IsSuspended(void)
 	return scr_suspended;
 }
 
+/*
+ * The per-frame renderer work besides drawing (CL_Frame): a video
+ * change check and the refresh preparation both submit GPU work (a
+ * renderer start, texture uploads), so neither runs while suspended;
+ * the first frame after the return does them.
+ */
+qboolean
+SCR_VidCheckDue(void)
+{
+	return !scr_suspended;
+}
+
+qboolean
+SCR_PrepRefreshDue(void)
+{
+	return !scr_suspended && !cl.refresh_prepped && cls.state == ca_active;
+}
+
 void
 SCR_UpdateScreen(void)
 {
