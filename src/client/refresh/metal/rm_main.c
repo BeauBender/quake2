@@ -425,12 +425,11 @@ RI_BeginFrame(float camera_separation)
 	 */
 	/* the mode's size, as gl1 draws and reads it; the window's pixels for the drawable (FIX45) */
 	rm_frame_size(vid.width, vid.height, &w, &h);
-	RI_GetDrawableSize(&dw, &dh);
 	{
-		/* the frame goes into the safe rectangle of the drawable (iOS; no inset elsewhere) */
+		/* the layer is the window's pixels, the frame goes into its safe rectangle (iOS; no inset elsewhere) */
 		rm_inset_t in;
 
-		RI_GetSafeInsets(&in);
+		RI_GetLayer(&dw, &dh, &in);
 		rmb_present_inset_set(&in);
 	}
 	rmb_frame_begin(w, h, dw, dh, r_clear->value ? rm_clear_color : NULL);

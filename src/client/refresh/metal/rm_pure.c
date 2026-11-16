@@ -394,6 +394,41 @@ rm_safe_insets(float x, float y, float w, float h, float density, int pw, int ph
 }
 
 int
+rm_window_sizes(int pw, int ph, const rm_inset_t *in, rm_sizes_t *out)
+{
+	long sw, sh;
+
+	memset(out, 0, sizeof(*out));
+
+	if ((pw <= 0) || (ph <= 0))
+	{
+		return 0;
+	}
+
+	out->vw = out->lw = pw;
+	out->vh = out->lh = ph;
+
+	if (!in || (in->left < 0) || (in->top < 0) || (in->right < 0) || (in->bottom < 0))
+	{
+		return 0;
+	}
+
+	/* the sums in long, so they cannot wrap */
+	sw = (long)pw - in->left - in->right;
+	sh = (long)ph - in->top - in->bottom;
+
+	if ((sw <= 0) || (sh <= 0))
+	{
+		return 0;
+	}
+
+	out->vw = (int)sw;
+	out->vh = (int)sh;
+	/* the layer stays the whole window: the present puts the frame at the rectangle's place in it */
+	return 1;
+}
+
+int
 rm_display_sync(int always, int wanted)
 {
 	return (always || wanted) ? 1 : 0;

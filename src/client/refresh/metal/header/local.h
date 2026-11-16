@@ -60,11 +60,16 @@ extern qboolean IsHighDPIaware;
 int RI_PrepareForWindow(void);
 int RI_InitContext(void *win);
 void RI_GetDrawableSize(int *width, int *height);
-/* the safe rectangle's insets in pixels: iOS only (rm_sdl.c), 0 elsewhere (TASK147) */
+/*
+ * The layer's drawable and the insets of its safe rectangle, where the
+ * present puts the frame: on iOS the window's whole pixels and the
+ * rectangle (rm_sdl.c, TASK147); elsewhere the drawable's size, no inset.
+ */
 #if defined(__APPLE__) && TARGET_OS_IPHONE
-void RI_GetSafeInsets(rm_inset_t *in);
+void RI_GetLayer(int *width, int *height, rm_inset_t *in);
 #else
-#define RI_GetSafeInsets(in) memset((in), 0, sizeof(rm_inset_t))
+#define RI_GetLayer(width, height, in) \
+	do { RI_GetDrawableSize((width), (height)); memset((in), 0, sizeof(rm_inset_t)); } while (0)
 #endif
 void RI_ShutdownContext(void);
 qboolean RI_IsVSyncActive(void);

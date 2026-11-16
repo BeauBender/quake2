@@ -261,6 +261,25 @@ int rm_display_sync(int always, int wanted);
  */
 int rm_safe_insets(float x, float y, float w, float h, float density, int pw, int ph, rm_inset_t *out);
 
+/* The two sizes of a window with a safe rectangle (rm_window_sizes). */
+typedef struct
+{
+	int vw, vh;   /* the view: viddef, the frame and the HUD, the safe rectangle */
+	int lw, lh;   /* the layer's drawable: the window's whole pixels */
+} rm_sizes_t;
+
+/*
+ * The sizes of a window of pw by ph pixels with the insets in of its safe
+ * rectangle (TASK147): the view is the rectangle, the window less the
+ * insets, and the layer's drawable is the whole window, so the present
+ * (rm_present_region_in, with the same insets) puts the whole frame,
+ * unscaled, at the rectangle's place in it. 1 with *out set when the
+ * insets are not negative and leave some width and some height; else 0
+ * with both sizes the whole window (no inset), or all 0 when the window
+ * has no size.
+ */
+int rm_window_sizes(int pw, int ph, const rm_inset_t *in, rm_sizes_t *out);
+
 /* ---- images, the 2D draws (rm_pure.c) ------------------------------------------- */
 
 /*

@@ -1009,6 +1009,96 @@ test_safe_insets(void)
 	CHECK(!rm_safe_insets(900.0f, 0.0f, 50.0f, 393.0f, 3.0f, 2556, 1179, &in));
 }
 
+/*
+ * TASK147: the whole chain of an iOS frame, as RI_BeginFrame runs it:
+ * the window's pixels and its insets give the view (viddef) and the
+ * layer (rm_window_sizes), the view gives the frame (rm_frame_size),
+ * rmb_frame_begin sets the layer's drawable (rm_frame_remake) and the
+ * present copies into that drawable (rm_present_region_in). The whole
+ * frame is copied, unscaled, at the safe rectangle's place, and the
+ * drawable is the window's pixels: a layer of the view's size would be
+ * shown stretched over the window and the present would crop the frame.
+ */
+static void
+test_present_chain(void)
+{
+	static const struct
+	{
+		int pw, ph;
+		rm_inset_t in;
+	} c[] = {
+		{ 2556, 1179, { 177, 0, 177, 63 } },   /* the iPhone of test_present_region_inset */
+		{ 2622, 1206, { 186, 0, 186, 60 } },   /* the iPhone 17 simulator, measured */
+		{ 2420, 1668, { 0, 0, 0, 40 } },       /* the iPad Pro 11-inch simulator, measured */
+		{ 2622, 1206, { 0, 0, 186, 60 } },     /* the sensor housing on one side only */
+		{ 1920, 1080, { 0, 0, 0, 0 } },        /* no inset: the view is the window */
+	};
+	int i;
+
+	for (i = 0; i < (int)(sizeof(c) / sizeof(c[0])); i++)
+	{
+		rm_frame_held_t held;
+		rm_present_t p;
+		rm_sizes_t s;
+		int w, h, sw, sh;
+
+		sw = c[i].pw - c[i].in.left - c[i].in.right;
+		sh = c[i].ph - c[i].in.top - c[i].in.bottom;
+
+		CHECK(rm_window_sizes(c[i].pw, c[i].ph, &c[i].in, &s));
+		CHECK(s.vw == sw && s.vh == sh);                 /* viddef is the safe rectangle */
+		CHECK(s.lw == c[i].pw && s.lh == c[i].ph);       /* the layer is the window's pixels */
+		CHECK(rm_frame_size(s.vw, s.vh, &w, &h) && w == sw && h == sh);
+
+		/* the first frame makes everything, and sets the layer to the size it was given */
+		memset(&held, 0, sizeof(held));
+		CHECK(rm_frame_remake(&held, w, h, s.lw, s.lh) == (RM_REMAKE_COLOR | RM_REMAKE_DEPTH | RM_REMAKE_DRAWABLE));
+		held.color = held.depth = 1;
+		held.cw = w;
+		held.ch = h;
+		held.lw = s.lw;
+		held.lh = s.lh;
+		/* the next frame of the same window makes nothing again */
+		CHECK(rm_frame_remake(&held, w, h, s.lw, s.lh) == 0);
+
+		/* the present into that drawable: the whole frame at the rectangle's top-left corner */
+		CHECK(rm_present_region_in(w, h, held.lw, held.lh, &c[i].in, &p));
+		CHECK(p.w == w && p.h == h);
+		CHECK(p.dst_x == c[i].in.left && p.dst_y == c[i].in.top && p.src_y == 0);
+		CHECK(held.lw == c[i].pw && held.lh == c[i].ph);
+	}
+
+	/* insets that are negative, missing or leave nothing: no inset, the view and the layer the whole window */
+	{
+		static const rm_inset_t neg[] = { { -1, 0, 0, 0 }, { 0, -1, 0, 0 }, { 0, 0, -1, 0 }, { 0, 0, 0, -1 } };
+		rm_inset_t wide = { 1311, 0, 1311, 0 }, tall = { 0, 600, 0, 606 };
+		rm_sizes_t s;
+
+		for (i = 0; i < 4; i++)
+		{
+			memset(&s, 0x55, sizeof(s));
+			CHECK(!rm_window_sizes(2622, 1206, &neg[i], &s));
+			CHECK(s.vw == 2622 && s.vh == 1206 && s.lw == 2622 && s.lh == 1206);
+		}
+
+		CHECK(!rm_window_sizes(2622, 1206, NULL, &s) && s.vw == 2622 && s.lh == 1206);
+		CHECK(!rm_window_sizes(2622, 1206, &wide, &s) && s.vw == 2622 && s.vh == 1206 && s.lw == 2622);
+		CHECK(!rm_window_sizes(2622, 1206, &tall, &s) && s.vw == 2622 && s.vh == 1206 && s.lh == 1206);
+
+		/* one pixel left either way is a view */
+		wide.right = 1310;
+		tall.bottom = 605;
+		CHECK(rm_window_sizes(2622, 1206, &wide, &s) && s.vw == 1 && s.vh == 1206 && s.lw == 2622);
+		CHECK(rm_window_sizes(2622, 1206, &tall, &s) && s.vw == 2622 && s.vh == 1 && s.lh == 1206);
+
+		/* no window: all 0 */
+		memset(&s, 0x55, sizeof(s));
+		CHECK(!rm_window_sizes(0, 1206, &wide, &s) && s.vw == 0 && s.vh == 0 && s.lw == 0 && s.lh == 0);
+		memset(&s, 0x55, sizeof(s));
+		CHECK(!rm_window_sizes(2622, -1, &wide, &s) && s.vw == 0 && s.vh == 0 && s.lw == 0 && s.lh == 0);
+	}
+}
+
 /* TASK147: where the layer always presents in step with the display, r_vsync has no effect. */
 static void
 test_display_sync(void)
@@ -8318,6 +8408,7 @@ main(void)
 	test_frame_remake();
 	test_present_region();
 	test_present_region_inset();
+	test_present_chain();
 	test_display_sync();
 	test_safe_insets();
 	test_upload_bytes();

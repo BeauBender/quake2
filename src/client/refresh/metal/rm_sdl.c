@@ -100,9 +100,9 @@ RI_InitContext(void *win)
  * The insets of the window's safe rectangle in pixels (TASK147), the
  * corners, the sensor housing and the home indicator of an iPhone or iPad.
  * All 0 when SDL has no rectangle or it leaves nothing. (Elsewhere
- * local.h's RI_GetSafeInsets gives 0, and the rest of the file is as it was.)
+ * local.h's RI_GetLayer gives no inset, and the rest of the file is as it was.)
  */
-void
+static void
 RI_GetSafeInsets(rm_inset_t *in)
 {
 	SDL_Rect r;
@@ -135,6 +135,43 @@ RI_GetSafeInsets(rm_inset_t *in)
 				pw, ph, in->left, in->top, in->right, in->bottom);
 	}
 }
+
+/*
+ * The view and the layer of the window (rm_window_sizes) with the insets
+ * the present places the frame by: no inset when the sizes refuse them.
+ */
+static void
+RI_GetWindowSizes(rm_sizes_t *s, rm_inset_t *in)
+{
+	int pw = 0, ph = 0;
+
+	RI_GetSafeInsets(in);
+
+	if (!window || !SDL_GetWindowSizeInPixels(window, &pw, &ph))
+	{
+		pw = ph = 0;
+	}
+
+	if (!rm_window_sizes(pw, ph, in, s))
+	{
+		memset(in, 0, sizeof(*in));
+	}
+}
+
+/*
+ * The layer's drawable, the window's whole pixels, and the insets of its
+ * safe rectangle, where the present puts the frame (TASK147): viddef is
+ * the rectangle (RI_GetDrawableSize), the drawable is not.
+ */
+void
+RI_GetLayer(int *width, int *height, rm_inset_t *in)
+{
+	rm_sizes_t s;
+
+	RI_GetWindowSizes(&s, in);
+	*width = s.lw;
+	*height = s.lh;
+}
 #endif
 
 void
@@ -150,10 +187,11 @@ RI_GetDrawableSize(int *width, int *height)
 	{
 		/* viddef is the safe rectangle: the HUD, the console, the menus and the 3D view lie inside it */
 		rm_inset_t in;
+		rm_sizes_t s;
 
-		RI_GetSafeInsets(&in);
-		*width -= in.left + in.right;
-		*height -= in.top + in.bottom;
+		RI_GetWindowSizes(&s, &in);
+		*width = s.vw;
+		*height = s.vh;
 	}
 #endif
 }
