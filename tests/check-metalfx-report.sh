@@ -142,6 +142,7 @@ assertions() {
     python3 -I "$HELP" "$d" make-host "$w/hc" "http://evil.test/x" 1 2 "$tmp/a.tga" || ko ext-refuse "make-host c"
     out=$($py report --dir "$w/ha" --other "$w/hb" --html "$w/out/r.html" 2>&1); want_rc host-both 0 $?
     html=$(cat "$w/out/r.html" 2>/dev/null)
+    out=$($py report --dir "$w/ha" --other "$w/hb" --html "$w/out/r.html" 2>&1); want_rc report-rewrite 0 $?
     want_has host-both "hosta" "$html"; want_has host-both "hostbb" "$html"
     want_has host-both "420.0 to 476.0 (5 runs)" "$html"      # host B, fx1-s50 (x1.4)
     want_has host-range "100.0 to 140.0 (5 runs)" "$html"
@@ -232,12 +233,13 @@ mutant validation-unchecked probe-validation py 'if VALIDATION_ON not in text:' 
 mutant no-fps-passes timed-nofps py 'raise RuntimeError("no timedemo result (%s)" % log)' 'return 0.0, text'
 mutant load-limit-high load-mark py 'LOAD_QUIET = 8.0 ' 'LOAD_QUIET = 800.0 '
 mutant load-always load-quiet py 'if loads and max(loads) > LOAD_QUIET:' 'if loads:'
+mutant rewrite-refused report-rewrite py 'if file and i == len(parts) - 1 and stat.S_ISREG(st.st_mode):' 'if False:'
 mutant second-host-hidden host-both py 'cells, _ = host_cell(h, sc, oid)' 'cells, _ = host_cell(hosts[0], sc, oid)'
 mutant range-collapsed host-range py 't = ("%.*f" % (nd, lo)) if lo == hi else' 't = ("%.*f" % (nd, lo)) if True else'
 mutant other-host-images host-images py 'png = os.path.join(rdir, "crops", "%s__%s.png" % (sc, oid))' 'png = os.path.join(others[-1] if others else rdir, "crops", "%s__%s.png" % (sc, oid))'
 mutant external-allowed ext-refuse py 'raise Refuse("the report would refer outside itself: %r" % ext[:3])' 'pass'
 mutant external-emitted ext-none py 'raise Refuse("the report would refer outside itself: %r" % ext[:3])' 'pass' 'p.append("</main></body></html>\n")' 'p.append("<link rel=stylesheet href=x.css></main></body></html>\n")'
-mutant report-in-tree report-path py 'outp = check_out_path(os.path.abspath(out_html))' 'outp = os.path.abspath(out_html)'
+mutant report-in-tree report-path py 'outp = check_out_path(os.path.abspath(out_html), file=True)' 'outp = os.path.abspath(out_html)'
 mutant ssim-no-covariance ssim-one c 's = ((2 * ma * mb + c1) * (2 * cov + c2))' 's = ((2 * ma * mb + c1) * (2 * 0 + c2))'
 mutant ssim-always-one ssim-less c 'sum += s;' 'sum += 1.0;'
 mutant ssim-size-ignored ssim-mismatch c 'size mismatch %dx%d vs %dx%d\n", a.w, a.h, b.w, b.h); return 3;' 'size mismatch %dx%d vs %dx%d\n", a.w, a.h, b.w, b.h); return 0;'

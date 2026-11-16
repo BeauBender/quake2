@@ -74,7 +74,7 @@ def _git_says_inside(path):
     raise Refuse("git failed (%s): the output path cannot be checked" % p.stderr.strip()[:200])
 
 
-def check_out_path(path):
+def check_out_path(path, file=False):
     """The physical output path, or Refuse. Refused: a relative path, a symbolic link at any
     component (so the path is already physical), a component that exists and is not a directory,
     a place inside a git work tree (a .git entry at it or any ancestor, or git saying so), and
@@ -96,6 +96,8 @@ def check_out_path(path):
             raise Refuse("cannot inspect %s: %s" % (cur, e))
         if stat.S_ISLNK(st.st_mode):
             raise Refuse("%s is a symbolic link: the output path must be physical, with no link on the way" % cur)
+        if file and i == len(parts) - 1 and stat.S_ISREG(st.st_mode):
+            break  # an earlier report of the same name, to be replaced
         if not stat.S_ISDIR(st.st_mode):
             raise Refuse("%s exists and is not a directory" % cur)
         deepest = cur
@@ -1013,7 +1015,7 @@ def build_report(rdir, others, out_html):
     ext = external_refs(doc)
     if ext:
         raise Refuse("the report would refer outside itself: %r" % ext[:3])
-    outp = check_out_path(os.path.abspath(out_html))
+    outp = check_out_path(os.path.abspath(out_html), file=True)
     make_dirs_physical(os.path.dirname(outp))
     write_file(outp, doc.encode("utf-8"))
     return outp
