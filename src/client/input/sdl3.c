@@ -45,6 +45,7 @@
 #include "SDL3/SDL_stdinc.h"
 #include "header/input.h"
 #include "header/gyro.h"
+#include "header/touch.h"
 #include "../header/keyboard.h"
 #include "../header/client.h"
 
@@ -281,6 +282,42 @@ static unsigned short int front_sample = 0;
 static int trig_thresh;
 
 extern void CalibrationFinishedCallback(void);
+
+/* ------------------------------------------------------------------ */
+
+/*
+ * The touch controls (TASK150): the fingers drive one virtual gamepad,
+ * "Touch controls", which the controller code below opens like any
+ * other, so the stick curves, the deadzones and the bindings all
+ * apply. A physical gamepad is preferred over it; while one is the
+ * controller in use, the touch layer is idle.
+ */
+
+SDL_COMPILE_TIME_ASSERT(touch_btn_south, TOUCH_BTN_SOUTH == SDL_GAMEPAD_BUTTON_SOUTH);
+SDL_COMPILE_TIME_ASSERT(touch_btn_east, TOUCH_BTN_EAST == SDL_GAMEPAD_BUTTON_EAST);
+SDL_COMPILE_TIME_ASSERT(touch_btn_west, TOUCH_BTN_WEST == SDL_GAMEPAD_BUTTON_WEST);
+SDL_COMPILE_TIME_ASSERT(touch_btn_north, TOUCH_BTN_NORTH == SDL_GAMEPAD_BUTTON_NORTH);
+SDL_COMPILE_TIME_ASSERT(touch_btn_back, TOUCH_BTN_BACK == SDL_GAMEPAD_BUTTON_BACK);
+SDL_COMPILE_TIME_ASSERT(touch_btn_start, TOUCH_BTN_START == SDL_GAMEPAD_BUTTON_START);
+SDL_COMPILE_TIME_ASSERT(touch_btn_misc1, TOUCH_BTN_MISC1 == SDL_GAMEPAD_BUTTON_MISC1);
+SDL_COMPILE_TIME_ASSERT(touch_axis_lx, TOUCH_AXIS_LEFTX == SDL_GAMEPAD_AXIS_LEFTX);
+SDL_COMPILE_TIME_ASSERT(touch_axis_ry, TOUCH_AXIS_RIGHTY == SDL_GAMEPAD_AXIS_RIGHTY);
+SDL_COMPILE_TIME_ASSERT(touch_axis_lt, TOUCH_AXIS_LTRIG == SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
+SDL_COMPILE_TIME_ASSERT(touch_axis_rt, TOUCH_AXIS_RTRIG == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
+
+static cvar_t *in_touch;
+static cvar_t *in_touch_scale;
+static cvar_t *in_touch_swap;
+
+static touch_t touch;
+static SDL_JoystickID touch_joy_id;	// the virtual joystick, 0 when not attached
+static SDL_Joystick *touch_joy;		// our handle on it, to set its axes and buttons
+static qboolean touch_in_use;		// it is the controller in use
+
+// What was last handed to the virtual joystick
+static int touch_sent_axes[TOUCH_NUM_AXES];
+static uint32_t touch_sent_buttons;
+static qboolean touch_sent_valid;
 
 /* ------------------------------------------------------------------ */
 
@@ -846,6 +883,7 @@ IN_AppEventWatch(void *userdata, SDL_Event *event)
 		case SDL_EVENT_WILL_ENTER_BACKGROUND:
 			SCR_SetSuspended(true);
 			Key_MarkAllUp();
+			Touch_Reset(&touch);
 			Com_Printf("App: entering the background, no frames are drawn.\n");
 			break;
 
@@ -876,6 +914,199 @@ IN_AppEventWatch(void *userdata, SDL_Event *event)
 	return true;
 }
 #endif
+
+/*
+ * Attaches the virtual gamepad when in_touch is on. The touches are
+ * not mouse clicks as well (SDL_HINT_TOUCH_MOUSE_EVENTS).
+ */
+static void
+IN_TouchAttach(void)
+{
+	SDL_VirtualJoystickDesc desc;
+
+	touch_joy_id = 0;
+	touch_joy = NULL;
+	touch_in_use = false;
+	touch_sent_valid = false;
+	Touch_Reset(&touch);
+
+	if (!in_touch->value)
+	{
+		return;
+	}
+
+	SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+
+	if (!SDL_WasInit(SDL_INIT_GAMEPAD | SDL_INIT_HAPTIC))
+	{
+		if (!SDL_Init(SDL_INIT_GAMEPAD | SDL_INIT_HAPTIC))
+		{
+			Com_Printf("Couldn't init SDL Gamepad for the touch controls: %s.\n", SDL_GetError());
+			return;
+		}
+	}
+
+	SDL_INIT_INTERFACE(&desc);
+	desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+	desc.naxes = TOUCH_NUM_AXES;
+	desc.nbuttons = TOUCH_NUM_BUTTONS;
+	desc.axis_mask = (1u << TOUCH_NUM_AXES) - 1;
+	desc.button_mask = (1u << TOUCH_NUM_BUTTONS) - 1;
+	desc.name = "Touch controls";
+
+	touch_joy_id = SDL_AttachVirtualJoystick(&desc);
+
+	if (!touch_joy_id)
+	{
+		Com_Printf("Couldn't attach the touch controls: %s.\n", SDL_GetError());
+		return;
+	}
+
+	touch_joy = SDL_OpenJoystick(touch_joy_id);
+
+	if (!touch_joy)
+	{
+		Com_Printf("Couldn't open the touch controls: %s.\n", SDL_GetError());
+		SDL_DetachVirtualJoystick(touch_joy_id);
+		touch_joy_id = 0;
+		return;
+	}
+
+	Com_Printf("Touch controls attached.\n");
+}
+
+static void
+IN_TouchDetach(void)
+{
+	if (touch_joy)
+	{
+		SDL_CloseJoystick(touch_joy);
+		touch_joy = NULL;
+	}
+
+	if (touch_joy_id)
+	{
+		SDL_DetachVirtualJoystick(touch_joy_id);
+		touch_joy_id = 0;
+	}
+
+	touch_in_use = false;
+	Touch_Reset(&touch);
+}
+
+/*
+ * A finger event: down and motion are mapped into the window's safe
+ * rectangle, in points. A finger that lifts or is cancelled is let go
+ * whatever else is the case.
+ */
+static void
+IN_TouchEvent(const SDL_TouchFingerEvent *f, Uint32 type)
+{
+	SDL_Window *win;
+	SDL_Rect r;
+	touch_rect_t safe;
+	int w, h;
+
+	if (type == SDL_EVENT_FINGER_UP || type == SDL_EVENT_FINGER_CANCELED)
+	{
+		Touch_Up(&touch, f->fingerID);
+		return;
+	}
+
+	if (!touch_joy || !touch_in_use)
+	{
+		return;
+	}
+
+	win = SDL_GetWindowFromID(f->windowID);
+
+	if (!win || !SDL_GetWindowSize(win, &w, &h) || w <= 0 || h <= 0)
+	{
+		return;
+	}
+
+	if (!SDL_GetWindowSafeArea(win, &r) || r.w <= 0 || r.h <= 0)
+	{
+		r.x = r.y = 0;
+		r.w = w;
+		r.h = h;
+	}
+
+	safe.x = r.x;
+	safe.y = r.y;
+	safe.w = r.w;
+	safe.h = r.h;
+	Touch_SetLayout(&touch, safe, in_touch_scale->value, in_touch_swap->value != 0);
+
+	if (type == SDL_EVENT_FINGER_DOWN)
+	{
+		Touch_Down(&touch, f->fingerID, f->x * w, f->y * h);
+	}
+	else
+	{
+		Touch_Motion(&touch, f->fingerID, f->x * w, f->y * h);
+	}
+}
+
+/*
+ * Hands the state of the fingers to the virtual joystick, once a
+ * frame, the values that changed. While a physical gamepad is the
+ * controller the fingers are let go and the pad rests.
+ */
+static void
+IN_TouchSend(void)
+{
+	int axes[TOUCH_NUM_AXES];
+	uint32_t buttons;
+	int i;
+
+	if (!touch_joy)
+	{
+		return;
+	}
+
+	if (touch_in_use)
+	{
+		Touch_Output(&touch, axes, &buttons);
+	}
+	else
+	{
+		Touch_Reset(&touch);
+		memset(axes, 0, sizeof(axes));
+		buttons = 0;
+	}
+
+	for (i = 0; i < TOUCH_NUM_AXES; i++)
+	{
+		if (!touch_sent_valid || axes[i] != touch_sent_axes[i])
+		{
+			int raw = axes[i];
+
+			// the triggers rest at the bottom of the joystick's range
+			if (i == TOUCH_AXIS_LTRIG || i == TOUCH_AXIS_RTRIG)
+			{
+				raw = raw * 2 + TOUCH_AXIS_MIN;
+			}
+
+			raw = SDL_clamp(raw, TOUCH_AXIS_MIN, TOUCH_AXIS_MAX);
+			SDL_SetJoystickVirtualAxis(touch_joy, i, (Sint16)raw);
+			touch_sent_axes[i] = axes[i];
+		}
+	}
+
+	for (i = 0; i < TOUCH_NUM_BUTTONS; i++)
+	{
+		const uint32_t bit = 1u << i;
+
+		if (!touch_sent_valid || (buttons & bit) != (touch_sent_buttons & bit))
+		{
+			SDL_SetJoystickVirtualButton(touch_joy, i, (buttons & bit) != 0);
+		}
+	}
+
+	touch_sent_buttons = buttons;
+	touch_sent_valid = true;
+}
 
 /*
  * Updates the input queue state. Called every
@@ -1103,6 +1334,13 @@ IN_Update(void)
 				break;
 			}
 
+			case SDL_EVENT_FINGER_DOWN :
+			case SDL_EVENT_FINGER_MOTION :
+			case SDL_EVENT_FINGER_UP :
+			case SDL_EVENT_FINGER_CANCELED :
+				IN_TouchEvent(&event.tfinger, event.type);
+				break;
+
 			case SDL_EVENT_GAMEPAD_BUTTON_UP :
 			case SDL_EVENT_GAMEPAD_BUTTON_DOWN :
 			{
@@ -1238,7 +1476,8 @@ IN_Update(void)
 				break;
 
 			case SDL_EVENT_JOYSTICK_ADDED :
-				if (!controller)
+				// a physical device is preferred over the touch controls: look again
+				if (!controller || (touch_in_use && event.jdevice.which != touch_joy_id))
 				{
 					// This should be lower, but some controllers just don't want to get detected by the OS
 					updates_countdown = 100;
@@ -1370,6 +1609,27 @@ IN_Update(void)
 		IN_GamepadTrigger_Changed();
 	}
 	IN_CheckGyroModified();
+
+	if (touch_joy)
+	{
+		IN_TouchSend();
+	}
+
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+	{
+		// The on-screen keyboard only while text is typed: in the console,
+		// in a chat message or in a menu's text field (TASK150).
+		static int typing = -1;
+		const int want = (cls.key_dest == key_console || cls.key_dest == key_message ||
+				(cls.key_dest == key_menu && M_TextFieldActive())) ? 1 : 0;
+
+		if (want != typing)
+		{
+			typing = want;
+			GLimp_TextInput(want != 0);
+		}
+	}
+#endif
 }
 
 /*
@@ -2730,6 +2990,17 @@ IN_Controller_Init(qboolean notify_user)
 		Com_Printf ("%i joysticks were found.\n", numjoysticks);
 	}
 
+	// A physical gamepad is preferred over the touch controls
+	bool physical = false;
+
+	for (i = 0; joysticks != NULL && i < numjoysticks; i++)
+	{
+		if (joysticks[i] != touch_joy_id && SDL_IsGamepad(joysticks[i]))
+		{
+			physical = true;
+		}
+	}
+
 	if (numjoysticks == 0)
 	{
 		joystick_haptic = SDL_OpenHapticFromMouse();
@@ -2752,6 +3023,12 @@ IN_Controller_Init(qboolean notify_user)
 	i = joy_num;
 	do
 	{
+		if (physical && touch_joy_id && joysticks[i] == touch_joy_id)
+		{
+			Com_Printf ("Skipping the touch controls, a gamepad is connected.\n");
+			goto next_joy;
+		}
+
 		joystick = SDL_OpenJoystick(joysticks[i]);
 		if (!joystick)
 		{
@@ -2801,6 +3078,15 @@ IN_Controller_Init(qboolean notify_user)
 
 			show_gamepad = true;
 			Com_Printf("Enabled as Gamepad.\n");
+
+			touch_in_use = (touch_joy_id && joysticks[i] == touch_joy_id);
+
+			if (touch_joy_id)
+			{
+				Com_Printf("Gamepad in use: '%s'%s\n", SDL_GetGamepadName(controller),
+					touch_in_use ? "" : ", the touch controls are idle.");
+			}
+
 			Com_DPrintf("SDL mapping: %s\n", SDL_GetGamepadMapping(controller));
 			IN_Gyro_and_LED_Enabling();
 
@@ -2980,6 +3266,16 @@ IN_Init(void)
 
 	s_muteonfocusloss = Cvar_Get("s_muteonfocusloss", "1", CVAR_ARCHIVE);
 
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+	in_touch = Cvar_Get("in_touch", "1", CVAR_ARCHIVE);
+	// the keyboard stays up across Enter in the console
+	SDL_SetHint(SDL_HINT_RETURN_KEY_HIDES_IME, "0");
+#else
+	in_touch = Cvar_Get("in_touch", "0", CVAR_ARCHIVE);
+#endif
+	in_touch_scale = Cvar_Get("in_touch_scale", "1", CVAR_ARCHIVE);
+	in_touch_swap = Cvar_Get("in_touch_swap", "0", CVAR_ARCHIVE);
+
 	Cmd_AddCommand("+mlook", IN_MLookDown);
 	Cmd_AddCommand("-mlook", IN_MLookUp);
 
@@ -2996,6 +3292,7 @@ IN_Init(void)
 		}
 	}
 
+	IN_TouchAttach();
 	IN_Controller_Init(false);
 
 	Com_Printf("------------------------------------\n\n");
@@ -3024,6 +3321,7 @@ IN_Controller_Shutdown(qboolean notify_user)
 		SDL_CloseGamepad(controller);
 		controller = NULL;
 	}
+	touch_in_use = false;
 	show_gamepad = show_gyro = show_haptic = gyro_active = gyro_enabled = false;
 	joystick_left_x = joystick_left_y = joystick_right_x = joystick_right_y = 0;
 	joy_active_layout = LAYOUT_NONE;
@@ -3059,6 +3357,7 @@ IN_Shutdown(void)
 	Com_Printf("Shutting down input.\n");
 
 	IN_Controller_Shutdown(false);
+	IN_TouchDetach();
 
 	const Uint32 subsystems = SDL_INIT_GAMEPAD | SDL_INIT_JOYSTICK | SDL_INIT_HAPTIC | SDL_INIT_EVENTS;
 	if (SDL_WasInit(subsystems) == subsystems)

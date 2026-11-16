@@ -88,6 +88,9 @@ qboolean GLimp_ScreenChanged(const int *made, const int *now);
 qboolean GLimp_RelativeMouseWanted(const char *driver, qboolean have_mouse, qboolean grab);
 qboolean GLimp_RelativeMouseReport(qboolean ok, qboolean *reported);
 
+/* iOS only (glimp_sdl3.c): text input and the on-screen keyboard on or off; the window does not start it there. */
+void GLimp_TextInput(qboolean on);
+
 /* iOS only (glimp_sdl3.c): the safe area or the pixel size moved; asks for a vid_restart when the screen is not the one the video was made for. */
 void GLimp_ScreenEvent(void);
 
