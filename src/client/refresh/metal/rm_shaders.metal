@@ -399,3 +399,16 @@ rm_fragment_alpha()
 {
 	return float4(0.0f, 0.0f, 0.0f, 1.0f);
 }
+
+/*
+ * FIX51: the present of a layer that is not opaque, in one pass. The
+ * triangle of rm_vertex_alpha over the viewport the frame lands on; each
+ * pixel is the frame's, ofs rows away, with alpha 1, so the copy and
+ * FIX53's alpha pass are one pass over the drawable.
+ */
+fragment float4
+rm_fragment_present(float4 pos [[position]], texture2d<float, access::read> frame [[texture(0)]],
+		constant int2 &ofs [[buffer(0)]])
+{
+	return float4(frame.read(uint2(int2(pos.xy) + ofs)).rgb, 1.0f);
+}

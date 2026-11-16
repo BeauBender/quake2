@@ -173,3 +173,15 @@ mgl_fragment_alpha()
 {
 	return float4(0.0f, 0.0f, 0.0f, 1.0f);
 }
+
+/*
+ * FIX51: the present of a layer that is not opaque, in one pass. The
+ * triangle of mgl_vertex_alpha over the drawable, each pixel the frame's
+ * (of the drawable's size) with alpha 1, so the copy and FIX53's alpha
+ * pass are one pass over the drawable.
+ */
+fragment float4
+mgl_fragment_present(float4 pos [[position]], texture2d<float, access::read> frame [[texture(0)]])
+{
+	return float4(frame.read(uint2(pos.xy)).rgb, 1.0f);
+}
