@@ -11,7 +11,13 @@ ships with releases; `docs/` (this directory) is for working on the code.
 - `scripts/test.sh`: the gate. Every commit must pass it. It ends with `make test`, the unit-test suite.
 - Platforms: only Apple platforms are built and tested; other platforms are
   unmaintained (`docs/decisions/0008-apple-platforms-only.md`). CI runs the
-  macOS test build, CodeQL and Cppcheck.
+  macOS test build, CodeQL and Cppcheck. Both CodeQL analyses (C and
+  Actions) run on every push to `main`; a pull request skips them only when
+  it is documentation only, every changed file being Markdown under `doc/` or
+  `docs/` or at the top level, and anything else runs them
+  (`.github/scripts/codeql-changes.sh`, tested by
+  `tests/check-codeql-changes.sh`). Cppcheck always runs. A newer push to a
+  pull request cancels the older run (`docs/runbook/FIX66.md`).
 
 ## Source (`src/`)
 
@@ -48,5 +54,5 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | `stuff/` | Maintainer tools: savegame table generators (`fngen/`, `mmgen/`), map entity fixes (`mapfixes/`), icons, the Dockerfile and the uncrustify style file (`misc/`) |
 | `.claude/` | Agent configuration: settings and hooks, path-scoped rules (`rules/`), skills (`skills/`), and `memory/`, a leftover location from older checkouts that is ignored and never committed (`tests/check-no-tracked-memory.sh` keeps it out of the index); agent memory lives outside the tree, see `CLAUDE.md` and [decision 0009](decisions/0009-no-shared-memory.md) |
 | `.githooks/` | The commit hook and the push hook (refuses a ref name or commit message carrying the working machine's host name, user name or home path), wired by `scripts/setup.sh`; see [decision 0005](decisions/0005-push-identity-hook.md) |
-| `.github/` | CI workflows, the PR template, the `main` branch ruleset |
+| `.github/` | CI workflows, the scripts they run (`scripts/`), the PR template, the `main` branch ruleset |
 | `CHANGELOG` | Upstream release notes, updated per release |

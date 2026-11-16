@@ -323,3 +323,41 @@ For the addons download or clone their source, change into the source
 directory and type *make* (Linux, MacOS, Windows) or *gmake* (FreeBSD,
 NetBSD, OpenBSD). After the compilation finishes the *release/game.so*
 is copied to the corresponding directory in the Quake II installation.
+
+
+### Compiling one executable with the modules linked in (MacOS)
+
+`make STATIC_MODULES=1 STATIC_RENDERER=soft client` builds a single
+*quake2* executable that contains the game and one renderer. There is no
+*game.dylib* and no *ref_\*.dylib*, and the executable never calls
+`dlopen` for either: `GetGameAPI` and `GetRefAPI` are resolved by the
+linker. `STATIC_RENDERER` is `soft` (the default), `gl1` or `metal`;
+`STATIC_ROOT` sets where the objects (*obj-<renderer>/*) and the executable (*bin/*)
+go, by default `build/release/static-<renderer>/`, never *release/*. The
+default build, with its libraries, is unchanged. This is the layout the
+platforms that forbid loading code at run time (iOS, iPadOS, tvOS,
+visionOS) need, and on MacOS it removes the search for a game library in
+the game directories.
+
+In this build:
+
+* The game module is the one linked in. The `game` cvar still selects
+  data directories (maps, models, sounds), but a code mod, a *game.dylib*
+  in a game directory, is not loaded: it is unsupported.
+* The renderer is the one linked in. If `vid_renderer` names another
+  renderer, the engine prints two lines (the cvar value is not in this
+  build, and the linked renderer is used) and loads the linked one. The
+  cvar itself is left as it is, so a static run never rewrites the
+  archived `vid_renderer` that a dynamic build shares.
+* The build compiles out every module loader (`Sys_LoadLibrary`, the
+  game library search), so no library is opened as a module. Only the
+  client is built: `make STATIC_MODULES=1 client`; any other goal
+  (`all`, `server`, `game`) is an error. `STATIC_RENDERER` must be
+  exactly one of `soft`, `gl1`, `metal`.
+* `STATIC_RENDERER=metal` needs *ref_metal.metallib* beside the
+  executable (the build writes it there).
+
+The `tests/check-static-modules.sh` check, part of the gate, builds the
+objects of the mode and checks that each module exports only its entry
+point; `tests/check-static-modules.sh --full` also links the executable and
+checks it with `otool` and `nm` (CI's macOS job runs it).

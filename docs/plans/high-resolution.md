@@ -226,7 +226,7 @@ The world vertex grew from 32 to 48 bytes: `lmrect`, four floats, follows
 `lmuv` at offset 32, and the position stays at offset 0 with w = 1 after it
 for RT1 (TASK53) (retained world vertices, 11.7 MiB at the map limit of
 256,000 surface edges instead of 7.8 MiB). The record of the pins and the
-frame times is in the runbook,
+frame times is in the runbook file
 [Bicubic lightmaps in `ref_metal`](../runbook/TASK120.md).
 
 ### P6. A local texture upscaler on the player's machine (filed as two cards)

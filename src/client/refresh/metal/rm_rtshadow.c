@@ -461,6 +461,143 @@ rm_rts_surface_map(const rm_rts_range_t *r, long nsurf, unsigned long ntris, uns
 	return (long)done;
 }
 
+long
+rm_rts_vertex_map(const rm_rts_vrange_t *r, long nsurf, unsigned long nverts, unsigned *vert_surf)
+{
+	unsigned long k, done = 0;
+	long i;
+
+	if (nverts > MTL_RTS_GB_VMAX)
+	{
+		return -1;
+	}
+
+	for (k = 0; k < nverts; k++)
+	{
+		vert_surf[k] = 0xffffffffu;
+	}
+
+	if ((nsurf < 0) || (nsurf && !r) || ((unsigned long)nsurf >= MTL_RTS_SURF_UNLIT))
+	{
+		return -1;
+	}
+
+	for (i = 0; i < nsurf; i++)
+	{
+		const unsigned long first = r[i].first_vertex, n = r[i].num_vertices;
+
+		if ((first > nverts) || (n > nverts - first))
+		{
+			return -1;
+		}
+
+		for (k = first; k < first + n; k++)
+		{
+			if (vert_surf[k] != 0xffffffffu)
+			{
+				return -1;
+			}
+
+			vert_surf[k] = (unsigned)i | (r[i].unlit ? MTL_RTS_SURF_UNLIT : 0);
+			done++;
+		}
+	}
+
+	return (long)done;
+}
+
+int
+rm_rts_ent_rows(const float *origin, const float *angles, float *out)
+{
+	float xf[12], m[16], inv[16];
+	int c, r, ok = 1;
+
+	for (c = 0; c < 3; c++)
+	{
+		ok = ok && isfinite(origin[c]) && isfinite(angles[c]);
+	}
+
+	/* the instance's object-to-world transform as rm_rt_instances makes it, as a 4 x 4 (column-major) */
+	if (ok)
+	{
+		rm_rt_transform(origin, angles, 1, xf);
+
+		for (c = 0; c < 4; c++)
+		{
+			m[4 * c] = xf[3 * c];
+			m[4 * c + 1] = xf[3 * c + 1];
+			m[4 * c + 2] = xf[3 * c + 2];
+			m[4 * c + 3] = (c == 3) ? 1.0f : 0.0f;
+		}
+
+		ok = rm_rts_invert(m, inv);
+	}
+
+	if (!ok)
+	{
+		for (c = 0; c < 16; c++)
+		{
+			inv[c] = (c % 5 == 0) ? 1.0f : 0.0f;
+		}
+	}
+
+	/* the inverse's upper three rows, then whether it may be used */
+	for (r = 0; r < 3; r++)
+	{
+		for (c = 0; c < 4; c++)
+		{
+			out[4 * r + c] = inv[4 * c + r];
+		}
+	}
+
+	out[12] = ok ? 1.0f : 0.0f;
+	out[13] = out[14] = out[15] = 0.0f;
+	return ok;
+}
+
+static mtl_rts_v4_t
+rm_rts_row(const float *f)
+{
+	mtl_rts_v4_t v;
+
+	v.x = f[0];
+	v.y = f[1];
+	v.z = f[2];
+	v.w = f[3];
+	return v;
+}
+
+int
+rm_rts_gb_lookup(unsigned v, const unsigned *vert_surf, unsigned long nverts, unsigned long nsurf,
+		const float *rows, int nents, unsigned *raw, mtl_rts_xform_t *w2o)
+{
+	const mtl_rts_gb_t g = mtl_rts_gb_decode(v, (nverts > MTL_RTS_GB_VMAX) ? 0u : (unsigned)nverts,
+			(nents < 0) ? 0u : (unsigned)nents);
+
+	*w2o = mtl_rts_xform_identity();
+
+	/* the kernel's order: the value, the vertex's surface, then the entity's row */
+	if (!g.ok || !vert_surf || (nsurf > MTL_RTS_SURF_UNLIT) || !mtl_rts_gb_surf_ok(vert_surf[g.vid], (unsigned)nsurf))
+	{
+		return 0;
+	}
+
+	if (g.ent)
+	{
+		const float *row = rows ? rows + (size_t)(g.ent - 1) * RM_RTS_ROW_FLOATS : NULL;
+
+		if (!row || (row[12] == 0.0f))
+		{
+			return 0;
+		}
+
+		*w2o = mtl_rts_xform_rows(rm_rts_row(row), rm_rts_row(row + 4), rm_rts_row(row + 8));
+	}
+
+	*raw = vert_surf[g.vid];
+	return 1;
+}
+
 void
 rm_rts_plane(const float *normal, float dist, int back, float *out)
 {
