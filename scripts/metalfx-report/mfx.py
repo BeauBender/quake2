@@ -330,12 +330,13 @@ def plan(options, cvars, scenarios):
 
 
 def largest_run(options, cvarlist_text, cv, scen_dir, rows):
-    """(n, was): the argument count, the engine's own name included, of the largest engine run of
-    rows (the GPU run, which adds metal_stats), and what it would be if each cvar went on the command
-    line as a +set pair, as it did before RUN_CFG."""
+    """(n, kind, was): the argument count, the engine's own name included, of the largest engine command
+    line of a run of rows (a timed run with the GPU stats, the probe of each option, the record of each
+    row, whose line is pins.sh's), which kind of run that is, and what the timed runs would be if each
+    cvar went on the command line as a +set pair, as it did before RUN_CFG."""
     by = dict((o["id"], o["set"]) for o in options)
     by["native"] = [("r_metalfx", "0")]
-    scen, n, was = {}, 0, 0
+    scen, n, kind, was = {}, 0, "", 0
     for oid, sc in [("native", s) for s in sorted(set(r[1] for r in rows))] + list(rows):
         if sc not in scen:
             scen[sc] = parse_scenario(os.path.join(scen_dir, sc + ".cfg"))
@@ -345,9 +346,13 @@ def largest_run(options, cvarlist_text, cv, scen_dir, rows):
                                    parse_archived(cvarlist_text))
         sets = by[oid] + [("metal_stats", "1")]
         a = engine_args(c, scen[sc], sets, ["+demomap", "demo1.dm2"])
-        n = max(n, len(a) + 1)
+        probe_a = engine_args(c, [], by[oid], ["+demomap", "demo1.dm2"] + ["+wait"] * 8 + ["+cvarlist", "+quit"])
+        for count, what in ((len(a) + 1, "timed run of %s with %s" % (sc, oid)), (len(probe_a) + 1, "probe with %s" % oid),
+                            (record_argc(scenario_body(scen_dir, sc, by[oid])), "record of %s with %s" % (sc, oid))):
+            if count > n:
+                n, kind = count, what
         was = max(was, len(a) + 1 - 2 + 3 * (len(c.defaults) + len(scen[sc]) + len(sets)))
-    return n, was
+    return n, kind, was
 
 
 def same_value(asked, got):
@@ -520,11 +525,16 @@ class CfgGuard:
     def restore(self):
         if not self.held:
             return
-        self._remove(os.path.join(os.path.dirname(self.path), RUN_CFG))  # the console script of the run goes with it
-        self._remove(self.path)
-        if os.path.lexists(self.saved):
-            os.rename(self.saved, self.path)
-        self.held = False
+        try:  # the owner's config goes back first; the run's console script goes after it, whatever happens
+            self._remove(self.path)
+            if os.path.lexists(self.saved):
+                os.rename(self.saved, self.path)
+            self.held = False
+        finally:
+            try:
+                self._remove(os.path.join(os.path.dirname(self.path), RUN_CFG))  # the console script of the run goes with it
+            except (OSError, Refuse):
+                pass
 
 
 def sh(cmd, cwd=None, env=None, timeout=None):
@@ -654,6 +664,8 @@ def load1():
 # The cvars every run sets itself, on the command line because the window, the renderer and the sound
 # read them before any console script runs. Every other cvar a run sets, however many, goes through
 # RUN_CFG: the engine stops at 128 arguments (argproc.c) and each +set would cost three of them.
+# RUN_CFG runs after the renderer is loaded, so a cvar the engine reads only at init, or one that is
+# latched, must stay on the command line (here), never go in the script.
 FIXED_SETS = (("vid_renderer", "metal"), ("vid_fullscreen", "0"), ("r_mode", "-1"), ("s_initsound", "0"),
               ("vid_highdpiaware", "0"), ("r_vsync", "0"))
 FIXED_NAMES = frozenset([k for k, _ in FIXED_SETS] + ["r_customwidth", "r_customheight"])
@@ -664,6 +676,17 @@ def run_cfg_path(ctx):
     return os.path.join(os.path.dirname(os.path.abspath(ctx.bin)), "baseq2", RUN_CFG)
 
 
+def check_console_set(k, v):
+    """Refuse a cvar name or value that cannot be one console token (the whole string is matched)."""
+    if not CVAR_RE.fullmatch(k):
+        raise Refuse("the cvar name %r cannot be set from a console script" % k)
+    if not VALUE_RE.fullmatch(v):
+        raise Refuse("the value %r of the cvar %s cannot be written safely into a console script "
+                     "(only letters, digits and _ . - are allowed)" % (v, k))
+    if k in FIXED_NAMES:
+        raise Refuse("the cvar %s is set by the generator itself; a scenario or option may not set it" % k)
+
+
 def run_cfg_text(ctx, scenario_sets, extra_sets):
     """The console script of one run, `set name value` a line: the defaults first (every cvar a row
     sets starts at its default), then the scenario's, then the row's own. A name or value that cannot
@@ -671,13 +694,7 @@ def run_cfg_text(ctx, scenario_sets, extra_sets):
     semicolon or a newline, and a value with a space is two."""
     lines = ["// scratch console script of scripts/metalfx-report.sh, deleted when the run ends"]
     for k, v in sorted(ctx.defaults.items()) + list(scenario_sets) + list(extra_sets):
-        if not CVAR_RE.match(k):
-            raise Refuse("the cvar name %r cannot be set from a console script" % k)
-        if not VALUE_RE.match(v):
-            raise Refuse("the value %r of the cvar %s cannot be written safely into a console script "
-                         "(only letters, digits and _ . - are allowed)" % (v, k))
-        if k in FIXED_NAMES:
-            raise Refuse("the cvar %s is set by the generator itself; a scenario or option may not set it" % k)
+        check_console_set(k, v)
         lines.append("set %s %s" % (k, v))
     return "\n".join(lines) + "\n"
 
@@ -696,7 +713,7 @@ def engine_args(ctx, scenario_sets, extra_sets, tail, write=False):
         raise RuntimeError("the engine command line would have %d arguments (the limit is %d)" % (len(a), MAX_ENGINE_ARGS))
     if write:
         os.makedirs(os.path.dirname(run_cfg_path(ctx)), exist_ok=True)
-        write_file(run_cfg_path(ctx), text.encode())
+        write_atomic(run_cfg_path(ctx), text.encode())  # a link at that path is replaced, never written through
     return a
 
 
@@ -780,6 +797,12 @@ def read_log(log):
         return f.read().decode("utf-8", "replace")
 
 
+def check_script_ran(text, log):
+    """The engine must say it executed the run's console script; without that its cvars were never set."""
+    if ("execing %s." % RUN_CFG) not in text:
+        raise RuntimeError("the engine did not execute the console script %s (no 'execing %s.' in %s)" % (RUN_CFG, RUN_CFG, log))
+
+
 def check_validation(text):
     """Metal API Validation must be on, and say nothing else about validation."""
     if VALIDATION_ON not in text:
@@ -798,6 +821,7 @@ def probe(ctx, sets, log):
     args = engine_args(ctx, [], sets, ["+demomap", ctx.demo] + ["+wait"] * 8 + ["+cvarlist", "+quit"], write=True)
     st = run_engine(ctx, args, log, timeout=120)
     text = read_log(log)
+    check_script_ran(text, log)
     if st != 0:
         raise RuntimeError("the probe run exited with status %s (%s)" % (st, log))
     cv = parse_cvarlist(text)
@@ -813,6 +837,7 @@ def timed_run(ctx, sc_sets, sets, log, gpu):
     run_engine(ctx, args, log, until=r"\d+ frames, [0-9.]+ seconds: [0-9.]+ fps", timeout=ctx.timeout, debug=False,
                extra_env={"MTL_GPU_TIME": "1"} if gpu else None)
     text = read_log(log)
+    check_script_ran(text, log)
     m = TIMEDEMO_RE.search(text)
     if not m:
         raise RuntimeError("no timedemo result (%s)" % log)
@@ -875,19 +900,52 @@ def diff_frames(ctx, a, b):
     return float(m.group(1)), float(m.group(2)), float(s.group(1)), float(s.group(2))
 
 
+# The words of one `scripts/pins.sh record` engine command line besides the scenario's own: its name, -datadir
+# and -portable with the path (3), the ten driver `+set` pairs (30), pins_record trace.q2r (3), pins_seed (3)
+# and +demomap with the demo (2). Each `set` line of the scratch scenario adds three more (build_args).
+PINS_FIXED_WORDS = 1 + 3 + 30 + 3 + 3 + 2
+
+
+def scenario_body(scen_dir, scen_name, sets):
+    """The scratch scenario of one record: the scenario's file, then the option's cvars."""
+    body = "// scratch scenario of scripts/metalfx-report.sh, deleted when it ends\n"
+    with open(os.path.join(scen_dir, scen_name + ".cfg")) as f:
+        body += f.read()
+    if not body.endswith("\n"):
+        body += "\n"
+    for k, v in sets:
+        body += "set %s %s\n" % (k, v)
+    return body
+
+
+def record_argc(body):
+    """The argument count, the engine's own name included, of the engine command line pins.sh builds for body."""
+    return PINS_FIXED_WORDS + 3 * sum(1 for l in body.splitlines() if l.strip() and not l.startswith("//"))
+
+
+def option_runs_on(o, sc):
+    return not ((o["group"] == "rt" and not sc.startswith("rt-")) or (o["group"] == "std" and sc not in STD_SCENARIOS))
+
+
+def check_record_lengths(scen_dir, options, names):
+    """Refuse a run in which a record would put more than the engine's 128 arguments on its command line
+    (pins.sh passes every cvar of the scratch scenario as a +set pair), naming the scenario and option."""
+    for sc in names:
+        for oid, sets in [("native", [("r_metalfx", "0")])] + [(o["id"], o["set"]) for o in options if option_runs_on(o, sc)]:
+            n = record_argc(scenario_body(scen_dir, sc, sets))
+            if n > MAX_ENGINE_ARGS + 1:
+                raise Refuse("the record of scenario %s with option %s would put %d arguments on the engine's command line "
+                             "(the limit is %d): scripts/pins.sh passes each cvar as a +set pair; fewer cvars in the scenario or option"
+                             % (sc, oid, n, MAX_ENGINE_ARGS + 1))
+
+
 def record(ctx, scen_name, base_sets, sets, tag):
     """Record a pin of the scenario with the option's cvars; returns the pin directory."""
     name = "mfxr-%s-%s" % (scen_name, tag)
     if not NAME_RE.match(name):
         raise RuntimeError("bad scenario name " + name)
     cfg = os.path.join(ctx.pins_scen_dir, name + ".cfg")
-    body = "// scratch scenario of scripts/metalfx-report.sh, deleted when it ends\n"
-    with open(os.path.join(ctx.scen_dir, scen_name + ".cfg")) as f:
-        body += f.read()
-    if not body.endswith("\n"):
-        body += "\n"
-    for k, v in sets:
-        body += "set %s %s\n" % (k, v)
+    body = scenario_body(ctx.scen_dir, scen_name, sets)
     with open(cfg, "w") as f:
         f.write(body)
     ctx.scratch_cfgs.append(cfg)
@@ -1049,7 +1107,7 @@ def cmd_run(a, argv=None):
     if not m:
         raise Refuse("--size must be WxH")
     ctx.width, ctx.height = int(m.group(1)), int(m.group(2))
-    ctx.bin = a.bin or os.environ.get("PINS_BIN") or os.path.join(ROOT, "release", "quake2")
+    ctx.bin = os.path.abspath(a.bin or os.environ.get("PINS_BIN") or os.path.join(ROOT, "release", "quake2"))
     ctx.demo = "demo1.dm2"
     ctx.timeout = a.timeout
     ctx.every = a.every
@@ -1134,14 +1192,6 @@ def _cmd_run_locked(a, ctx, out):
 def _run(a, ctx, rdir, work, host, date, errors):
     commit, dirty = engine_commit(ctx.tree)
 
-    # what the engine reports: its cvars (nothing set, so none is created by asking)
-    base_cv, text = probe(ctx, [], os.path.join(work, "probe-base.log"))
-    dm = re.search(r"Metal device: (.+)", text)
-    fm = re.search(r"Metal supportsFamily \([^)]*\): (\S+)", text)
-    device = dm.group(1).strip() if dm else "unknown"
-    family = fm.group(1).strip() if fm else "unknown"
-    load_start, uptime_start = load1()
-
     options = load_options(os.path.join(HERE, "options.tsv"))
     names = [s for s in a.scenarios.split(",") if s] if a.scenarios else \
         STD_SCENARIOS + sorted(f[:-4] for f in os.listdir(ctx.scen_dir) if f.startswith("rt-") and f.endswith(".cfg"))
@@ -1153,8 +1203,26 @@ def _run(a, ctx, rdir, work, host, date, errors):
     if a.only:
         keep = set(a.only.split(","))
         options = [o for o in options if o["id"] in keep]
+    # before any engine run: a value that cannot be written into the run's console script, and a record whose
+    # command line would be over the engine's limit, refuse the run (the defaults come from the first probe)
+    for sc in scen:
+        for k, v in parse_scenario(os.path.join(ctx.scen_dir, sc + ".cfg")):
+            check_console_set(k, v)
+    for o in options:
+        for k, v in o["set"]:
+            check_console_set(k, v)
+    check_record_lengths(ctx.scen_dir, options, scen)
+
+    # what the engine reports: its cvars (nothing set, so none is created by asking)
+    base_cv, text = probe(ctx, [], os.path.join(work, "probe-base.log"))
+    dm = re.search(r"Metal device: (.+)", text)
+    fm = re.search(r"Metal supportsFamily \([^)]*\): (\S+)", text)
+    device = dm.group(1).strip() if dm else "unknown"
+    family = fm.group(1).strip() if fm else "unknown"
+    load_start, uptime_start = load1()
+
     ctx.defaults = default_cvars(base_cv, parse_noset(text), load_options(os.path.join(HERE, "options.tsv")), scen, parse_archived(text))
-    for s in scen:  # a value that cannot be written into the run's console script refuses the run, before any engine run
+    for s in scen:  # the defaults, which only the probe tells, are checked as well
         run_cfg_text(ctx, parse_scenario(os.path.join(ctx.scen_dir, s + ".cfg")), [])
     for o in options:
         run_cfg_text(ctx, [], o["set"])
@@ -1641,8 +1709,8 @@ def main(argv):
                 print("run\t%s\t%s" % (o, s))
             for o, s, why in skipped:
                 print("skip\t%s\t%s\t%s" % (o, s, why))
-            n, was = largest_run(options, text, cv, a.scenarios_dir, rows)
-            print("args\t%d\tlimit %d\twith one +set pair per cvar it would be %d" % (n, MAX_ENGINE_ARGS + 1, was))
+            n, kind, was = largest_run(options, text, cv, a.scenarios_dir, rows)
+            print("args\t%d\tlimit %d\t%s\twith one +set pair per cvar the timed runs would be %d" % (n, MAX_ENGINE_ARGS + 1, kind, was))
             return 0
         if a.cmd == "report":
             print(build_report(a.dir, a.other or [], a.html))

@@ -93,8 +93,9 @@ printf 'bound\tbound\tstd\tr_metalfx=40\n' > "$tmp/opts-bound"
 "$tmp/framediff" --block "$tmp/a.tga" "$tmp/block.tga" 0 0 32 24 255 || exit 1
 "$tmp/framediff" --gen "$tmp/small.tga" 32 24 1 || exit 1
 # a fake engine: prints what a real one does for the probe and the timing run
-mkfake() { # name validation(yes|no) status fps(yes|no)
+mkfake() { # name validation(yes|no) status fps(yes|no) [noexec]
     { echo '#!/bin/sh'
+      [ "${5:-}" = noexec ] || echo 'echo "execing mfx-run.cfg."'
       [ "$2" = yes ] && echo 'echo "Metal API Validation Enabled"'
       echo "cat '$tmp/cv-present'"
       [ "$4" = yes ] && echo 'echo "689 frames, 6.0 seconds: 114.9 fps"'
@@ -105,9 +106,10 @@ mkfake eng-good yes 0 yes
 mkfake eng-fail yes 1 yes
 mkfake eng-novalid no 0 yes
 mkfake eng-nofps yes 0 no
+mkfake eng-noexec yes 0 yes noexec
 # a probe that fails for one option only
 { echo '#!/bin/sh'; echo 'case "$*" in *r_metalfx_interp*) exit 1;; esac'
-  echo 'grep -q r_metalfx_interp "$(dirname "$0")/baseq2/mfx-run.cfg" 2>/dev/null && exit 1'; echo 'echo "Metal API Validation Enabled"'
+  echo 'grep -q r_metalfx_interp "$(dirname "$0")/baseq2/mfx-run.cfg" 2>/dev/null && exit 1'; echo 'echo "execing mfx-run.cfg."'; echo 'echo "Metal API Validation Enabled"'
   echo "cat '$tmp/cv-present'"; echo 'exit 0'; } > "$tmp/eng-failopt"
 # an engine that reads and rewrites <its dir>/baseq2/config.cfg as the real one does (it saves the +set
 # arguments), and notes in $MFX_TRACE what config it found at each start
@@ -116,6 +118,7 @@ mkfake eng-nofps yes 0 no
   echo '[ -z "${MFX_TRACE:-}" ] || echo START >> "$MFX_TRACE"'
   echo 'if [ -f "$d/baseq2/config.cfg" ]; then cat "$d/baseq2/config.cfg"; [ -z "${MFX_TRACE:-}" ] || sed "s/^/seen: /" "$d/baseq2/config.cfg" >> "$MFX_TRACE"; fi'
   echo '[ -z "${MFX_ARGC:-}" ] || echo "$# $(grep -c "^set " "$d/baseq2/mfx-run.cfg" 2>/dev/null)" >> "$MFX_ARGC"'
+  echo '[ ! -f "$d/baseq2/mfx-run.cfg" ] || echo "execing mfx-run.cfg."'
   echo 'echo "Metal API Validation Enabled"'
   echo 'mkdir -p "$d/baseq2"; : > "$d/baseq2/config.cfg.n"'
   echo 'while [ $# -gt 0 ]; do if [ "$1" = +set ]; then echo "set $2 \"$3\"" >> "$d/baseq2/config.cfg.n"; shift 3; elif [ "$1" = +exec ]; then sed -n "s/^set \([^ ]*\) \(.*\)\$/set \1 \"\2\"/p" "$d/baseq2/$2" >> "$d/baseq2/config.cfg.n"; shift 2; else shift; fi; done'
@@ -132,6 +135,9 @@ chmod +x "$tmp/eng-failopt" "$tmp/eng-cfg" "$tmp/eng-slow"
 { echo '#!/bin/sh'
   echo '[ "$1" = record ] || exit 2'
   echo 'name=$3; d="$PINS_STORE/$name/metal/stub1"; mkdir -p "$d" || exit 1'
+  # the real record puts every `set` line of the scratch scenario on the engine command line as three arguments,
+  # besides 42 words of its own, and the engine refuses more than 128
+  echo 'n=$(grep -c "^set " "$(dirname "$0")/pins/scenarios/$name.cfg"); [ $((42 + 3 * n)) -le 128 ] || { echo "stub: the engine would get $((42 + 3 * n)) arguments" >&2; exit 1; }'
   echo 'if [ -n "${MFX_STUB_CHILD:-}" ]; then sleep 300 & echo $! > "$MFX_STUB_CHILD"; wait; fi'
   echo 'case $name in *-native) src=$MFX_NATIVE_TGA;; *) src=$MFX_OPT_TGA;; esac'
   echo 'for n in 60 120 180; do cp "$src" "$d/$name-$n.tga" || exit 1; done'
@@ -220,11 +226,17 @@ assertions() {
     want_has plan-present "run	den1	rt-shadows" "$out"
     want_not plan-present "run	den1	world" "$out"
     want_has plan-present "run	fx3-s50	world" "$out"
-    # the largest run's argument count is printed: 70 cvars in a scenario leave it far under the engine's 128
+    # the largest command line of any run is printed with its kind: 70 cvars in a scenario leave the timed runs
+    # and the probes far under the engine's 128, and the record, whose line is pins.sh's, is the largest and over it
     out=$($py plan --options "$SRC/options.tsv" --cvarlist "$tmp/cv-wide" --scenarios-dir "$tmp/scen" --scenarios world,rt-wide 2>&1)
     want_has plan-args "run	fx1-s50	rt-wide" "$out"
-    n=$(printf '%s\n' "$out" | sed -n 's/^args	\([0-9]*\)	limit 128	.*/\1/p'); [ -n "$n" ] && [ "$n" -lt 128 ] && [ "$n" -gt 20 ] || ko plan-args "the count is '$n': $out"
+    n=$(printf '%s\n' "$out" | sed -n 's/^args	\([0-9]*\)	limit 128	.*/\1/p'); [ -n "$n" ] && [ "$n" -gt 128 ] || ko plan-args "the count is '$n': $out"
+    want_has plan-args "limit 128	record of rt-wide with " "$out"
     was=$(printf '%s\n' "$out" | sed -n 's/^args	.*would be \([0-9]*\)$/\1/p'); [ -n "$was" ] && [ "$was" -gt 128 ] || ko plan-args "the +set count is '$was': $out"
+    # a scenario of the real size: its largest is a record or a timed run, under the limit
+    out=$($py plan --options "$SRC/options.tsv" --cvarlist "$tmp/cv-present" --scenarios-dir "$tmp/scen" --scenarios world 2>&1)
+    n=$(printf '%s\n' "$out" | sed -n 's/^args	\([0-9]*\)	limit 128	.*/\1/p'); [ -n "$n" ] && [ "$n" -lt 128 ] && [ "$n" -gt 42 ] || ko plan-args "the count of world is '$n': $out"
+    want_has plan-args "record of world with " "$out"
     out=$($py plan --options "$tmp/opts-bound" --cvarlist "$tmp/cv-big" --scenarios-dir "$tmp/scen" --scenarios world 2>&1)
     want_not plan-bound "run	bound" "$out"
     want_has plan-bound "skip	bound" "$out"
@@ -242,6 +254,9 @@ assertions() {
     out=$(python3 -I "$HELP" "$d" probe "$tmp/eng-novalid" "$w/logs" 2>&1); want_has probe-validation "error: the Metal validation layer was not enabled" "$out"
     out=$(python3 -I "$HELP" "$d" timed "$tmp/eng-good" "$w/logs" 2>&1); want_has timed-ok "ok 114.9" "$out"
     out=$(python3 -I "$HELP" "$d" timed "$tmp/eng-nofps" "$w/logs" 2>&1); want_has timed-nofps "error: no timedemo result" "$out"
+    # an engine that never executed the run's console script: its cvars were not set, so the run is an error
+    out=$(python3 -I "$HELP" "$d" probe "$tmp/eng-noexec" "$w/logs" 2>&1); want_has probe-noexec "error: the engine did not execute the console script mfx-run.cfg" "$out"
+    out=$(python3 -I "$HELP" "$d" timed "$tmp/eng-noexec" "$w/logs" 2>&1); want_has timed-noexec "error: the engine did not execute the console script mfx-run.cfg" "$out"
     out=$(python3 -I "$HELP" "$d" probe-opts "$tmp/eng-failopt" "$w/logs" 2>&1); want_has probe-skip "ok good skipped bad:probe failed:" "$out"
 
     fi
@@ -272,7 +287,15 @@ limit" "$out"
     want_has cfg-unsafe "name refused: the cvar name 'r_rt_q;quit'" "$out"
     want_has cfg-fixed "fixed refused: the cvar vid_renderer is set by the generator" "$out"
     want_has cfg-fixed "width refused: the cvar r_customwidth is set by the generator" "$out"
+    want_has cfg-unsafe "tailname refused: the cvar name 'r_rt_t\\n'" "$out"
+    want_has cfg-unsafe "tailvalue refused: the value '1\\n' of the cvar r_rt_t " "$out"
     want_has cfg-unsafe "plain accepted" "$out"
+    # a link at the script's path is replaced, never written through; the owner's config is put back even when
+    # the script cannot be removed
+    out=$(python3 -I "$HELP" "$d" cfg-link "$w/cfglink" 2>&1)
+    want_has cfg-link "victim intact" "$out"; want_has cfg-link "script written" "$out"
+    out=$(python3 -I "$HELP" "$d" cfg-restore-order "$w/cfgorder" 2>&1)
+    want_has cfg-restore-order "owner config back" "$out"; want_has cfg-restore-order "saved gone" "$out"
     # the console script goes when the held config is put back, and one a killed run left goes at the next hold
     out=$(python3 -I "$HELP" "$d" cfg-script-gone "$w/cfggone" 2>&1)
     want_has cfg-script-hold "after hold gone" "$out"; want_has cfg-script-restore "after restore gone" "$out"
@@ -561,7 +584,8 @@ limit" "$out"
     if has run; then
     # a scenario of 70 cvars runs: the engine gets under 128 arguments and the cvars through the console script
     # (the fake engine counts its arguments and the `set` lines of mfx-run.cfg at each start)
-    for i in $(seq 1 70); do printf 'set mfxpad%d 1\n' $i; done >> "$d/../pins/scenarios/world.cfg"
+    # (the scenario is as large as a record can be: pins.sh puts three arguments on the line for each cvar of it)
+    for i in $(seq 1 15); do printf 'set mfxpad%d 1\n' $i; done >> "$d/../pins/scenarios/world.cfg"
     mkeng "$w/lim" "$tmp/eng-cfg"; mkdir -p "$w/og"
     out=$(PATH="$tmp/maketrue:$PATH" MFX_ARGC="$w/argc" e2e "$w/lim/quake2" "$w/og" 2>&1); want_rc e2e-args 0 $?
     rq=$(ls -d "$w"/og/metalfx-t1-* 2>/dev/null | head -1)
@@ -570,7 +594,7 @@ limit" "$out"
     mx=$(awk 'BEGIN { m = 0 } $1 > m { m = $1 } END { print m }' "$w/argc" 2>/dev/null)
     [ "${mx:-0}" -gt 10 ] && [ "$mx" -lt 128 ] || ko e2e-args "the largest argument count was '$mx'"
     ln=$(awk 'BEGIN { m = 0 } $2 > m { m = $2 } END { print m }' "$w/argc" 2>/dev/null)
-    [ "${ln:-0}" -ge 70 ] || ko e2e-script "the console script held at most '$ln' set lines"
+    [ "${ln:-0}" -ge 26 ] || ko e2e-script "the console script held at most '$ln' set lines"
     [ ! -e "$w/lim/baseq2/mfx-run.cfg" ] || ko e2e-script "the console script is left after the run"
     out=$(python3 -I "$HELP" "$d" check-run "$rq" fx1-s75 world 2>&1)
     want_has e2e-quality "ssim_less_than_one yes" "$out"
@@ -579,9 +603,28 @@ limit" "$out"
     mkeng "$w/uns" "$tmp/eng-cfg"; mkdir -p "$w/ou"
     out=$(PATH="$tmp/maketrue:$PATH" e2e "$w/uns/quake2" "$w/ou" --scenarios unsafe 2>&1); want_rc e2e-unsafe 3 $?
     want_has e2e-unsafe "the value '1;quit' of the cvar r_drawworld" "$out"
-    want_has e2e-unsafe-clean "config.cfg" "$(ls "$w/uns/baseq2")"
+    [ -f "$w/uns/baseq2/config.cfg" ] && [ ! -e "$w/uns/baseq2/config.cfg.mfx-saved" ] && grep -q owner_cvar "$w/uns/baseq2/config.cfg" \
+        || ko e2e-unsafe-clean "the owner's config.cfg is not back: $(ls "$w/uns/baseq2")"
     [ ! -e "$w/uns/baseq2/mfx-run.cfg" ] || ko e2e-script "the console script is left after a refused run"
     rm -f "$d/../pins/scenarios/unsafe.cfg"
+    # a record whose command line would be over the engine's limit (pins.sh passes every cvar as a +set pair)
+    # refuses the run, naming the scenario and the option, before any engine run
+    for i in $(seq 1 40); do printf 'set mfxlong%d 1\n' $i; done > "$d/../pins/scenarios/long.cfg"
+    mkeng "$w/rl" "$tmp/eng-cfg"; mkdir -p "$w/orl"
+    out=$(PATH="$tmp/maketrue:$PATH" MFX_ARGC="$w/argc-rl" e2e "$w/rl/quake2" "$w/orl" --scenarios long 2>&1); want_rc e2e-record-limit 3 $?
+    want_has e2e-record-limit "the record of scenario long with option native would put 165 arguments" "$out"
+    [ ! -s "$w/argc-rl" ] || ko e2e-record-limit "an engine ran before the refusal"
+    grep -q owner_cvar "$w/rl/baseq2/config.cfg" 2>/dev/null || ko e2e-record-limit "the owner's config.cfg is not back"
+    rm -f "$d/../pins/scenarios/long.cfg"
+    # an engine that does not execute the run's console script is an error, never a measured row
+    mkeng "$w/nx" "$tmp/eng-noexec"; mkdir -p "$w/onx"
+    out=$(PATH="$tmp/maketrue:$PATH" e2e "$w/nx/quake2" "$w/onx" 2>&1); want_rc e2e-noexec 1 $?
+    want_has e2e-noexec "did not execute the console script mfx-run.cfg" "$out"
+    ! grep -qs "	ok	" "$w"/onx/metalfx-t1-*/results.tsv 2>/dev/null || ko e2e-noexec "a row was recorded as measured"
+    # a relative --bin, from another directory, is the same binary: the script lands where the engine looks
+    mkeng "$w/rel" "$tmp/eng-cfg"; mkdir -p "$w/orel"
+    out=$(cd "$w/rel" && PATH="$tmp/maketrue:$PATH" e2e ./quake2 "$w/orel" 2>&1); want_rc e2e-relative 0 $?
+    want_has e2e-relative "native	world	ok" "$(cut -f1-3 "$w"/orel/metalfx-t1-*/results.tsv 2>/dev/null)"
 
     # a run split into chunks, one --out each, is combined by report with one --dir each; the rows are those of
     # the one full run, and a row two chunks both hold, or a chunk of another commit or setting, is refused
@@ -723,11 +766,30 @@ mutant args-set-pairs-run e2e-args py 'a += ["+exec", RUN_CFG]' 'a += ["+exec", 
     for l in text.split("\n")[1:-1]:
         a += ["+set"] + l.split()[1:]'
 mutant script-not-exec e2e-args py 'a += ["+exec", RUN_CFG]' 'a += []'
-mutant script-not-written e2e-script py 'write_file(run_cfg_path(ctx), text.encode())' 'pass'
+mutant script-not-written e2e-script py 'write_atomic(run_cfg_path(ctx), text.encode())' 'pass'
+mutant script-through-link cfg-link py 'write_atomic(run_cfg_path(ctx), text.encode())' 'write_file(run_cfg_path(ctx), text.encode())'
+mutant script-not-checked-probe probe-noexec py 'check_script_ran(text, log)
+    if st != 0:' 'if st != 0:'
+mutant script-not-checked-timed timed-noexec py 'check_script_ran(text, log)
+    m = TIMEDEMO_RE.search(text)' 'm = TIMEDEMO_RE.search(text)'
+mutant script-not-checked-run e2e-noexec py 'def check_script_ran(text, log):' 'def check_script_ran(text, log):
+    return'
+mutant bin-relative e2e-relative py 'ctx.bin = os.path.abspath(a.bin or os.environ.get("PINS_BIN") or os.path.join(ROOT, "release", "quake2"))' 'ctx.bin = a.bin or os.environ.get("PINS_BIN") or os.path.join(ROOT, "release", "quake2")'
+mutant record-limit-unchecked e2e-record-limit py 'check_record_lengths(ctx.scen_dir, options, scen)' 'pass'
+mutant record-limit-lax e2e-record-limit py 'if n > MAX_ENGINE_ARGS + 1:
+                raise Refuse("the record' 'if n > 10 * MAX_ENGINE_ARGS:
+                raise Refuse("the record'
+mutant plan-record-uncounted plan-args py '(record_argc(scenario_body(scen_dir, sc, by[oid])), "record of %s with %s" % (sc, oid))' '(0, "record of %s with %s" % (sc, oid))'
+mutant restore-script-first cfg-restore-order py "try:  # the owner's config goes back first; the run's console script goes after it, whatever happens
+            self._remove(self.path)" "self._remove(os.path.join(os.path.dirname(self.path), RUN_CFG))
+        try:
+            self._remove(self.path)"
+mutant name-prefix-match cfg-unsafe py 'if not CVAR_RE.fullmatch(k):' 'if not CVAR_RE.match(k):'
+mutant value-prefix-match cfg-unsafe py 'if not VALUE_RE.fullmatch(v):' 'if not VALUE_RE.match(v):'
 mutant script-kept-restore cfg-script-restore py 'self._remove(os.path.join(os.path.dirname(self.path), RUN_CFG))  # the console script of the run goes with it' 'pass'
 mutant script-kept-hold cfg-script-hold py 'self._remove(os.path.join(os.path.dirname(self.path), RUN_CFG))  # one a killed run left' 'pass'
-mutant script-value-unchecked cfg-unsafe py 'if not VALUE_RE.match(v):' 'if False:'
-mutant script-name-unchecked cfg-unsafe py 'if not CVAR_RE.match(k):' 'if False:'
+mutant script-value-unchecked cfg-unsafe py 'if not VALUE_RE.fullmatch(v):' 'if False:'
+mutant script-name-unchecked cfg-unsafe py 'if not CVAR_RE.fullmatch(k):' 'if False:'
 mutant script-fixed-settable cfg-fixed py 'if k in FIXED_NAMES:' 'if False:'
 mutant chunk-dup-allowed chunk-dup py 'raise Refuse("the row %s %s is in both %s and %s" % (key[0], key[1], where[key], h["dir"]))' 'pass'
 mutant chunk-commit-unchecked chunk-commit py 'if h["meta"].get(k, "") != first["meta"].get(k, ""):' 'if False:'

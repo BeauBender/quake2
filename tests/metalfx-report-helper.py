@@ -181,12 +181,49 @@ def main(argv):
         c = ctx_for(m, os.path.join(a[0], "quake2"))
         for what, sc in (("quote", [("r_rt_q", 'a"b')]), ("semicolon", [("r_rt_s", "1;quit")]), ("newline", [("r_rt_n", "1\nquit")]),
                          ("space", [("r_rt_p", "1 2")]), ("empty", [("r_rt_e", "")]), ("name", [("r_rt_q;quit", "1")]),
+                         ("tailname", [("r_rt_t\n", "1")]), ("tailvalue", [("r_rt_t", "1\n")]),
                          ("fixed", [("vid_renderer", "gl1")]), ("width", [("r_customwidth", "1")]), ("plain", [("r_rt_ok", "-0.5")])):
             try:
                 m.engine_args(c, sc, [], [], write=True)
                 print("%s accepted" % what)
             except m.Refuse as e:
                 print("%s refused: %s" % (what, e))
+        return 0
+    if cmd == "cfg-link":
+        # cfg-link BINDIR: a hard link at the console script's path is replaced by the new script, and what it
+        # links to is left alone
+        d = os.path.join(a[0], "baseq2")
+        os.makedirs(d, exist_ok=True)
+        victim = os.path.join(a[0], "victim")
+        with open(victim, "w") as f:
+            f.write("owner data\n")
+        cfg = os.path.join(d, "mfx-run.cfg")
+        if os.path.lexists(cfg):
+            os.unlink(cfg)
+        os.link(victim, cfg)
+        c = ctx_for(m, os.path.join(a[0], "quake2"))
+        m.engine_args(c, [("r_rt_ok", "1")], [], [], write=True)
+        print("victim " + ("intact" if open(victim).read() == "owner data\n" else "overwritten"))
+        print("script " + ("written" if "set r_rt_ok 1\n" in open(cfg).read() else "missing"))
+        return 0
+    if cmd == "cfg-restore-order":
+        # cfg-restore-order BINDIR: the script cannot be removed (a directory is in its place): the owner's config
+        # is back all the same
+        d = os.path.join(a[0], "baseq2")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "config.cfg"), "w") as f:
+            f.write("set owner_cvar \"7\"\n")
+        g = m.CfgGuard(os.path.join(a[0], "quake2"))
+        g.hold()
+        os.makedirs(os.path.join(d, "mfx-run.cfg"))
+        try:
+            g.restore()
+            print("restore returned")
+        except Exception as e:
+            print("restore raised %s" % type(e).__name__)
+        back = os.path.join(d, "config.cfg")
+        print("owner config " + ("back" if os.path.isfile(back) and "owner_cvar" in open(back).read() else "not back"))
+        print("saved " + ("left" if os.path.lexists(back + ".mfx-saved") else "gone"))
         return 0
     if cmd == "cfg-script-gone":
         # cfg-script-gone BINDIR: the run's console script goes when the held config is restored, and one a killed
