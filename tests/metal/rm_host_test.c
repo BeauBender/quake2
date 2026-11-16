@@ -1096,6 +1096,10 @@ test_present_chain(void)
 		CHECK(!rm_window_sizes(0, 1206, &wide, &s) && s.vw == 0 && s.vh == 0 && s.lw == 0 && s.lh == 0);
 		memset(&s, 0x55, sizeof(s));
 		CHECK(!rm_window_sizes(2622, -1, &wide, &s) && s.vw == 0 && s.vh == 0 && s.lw == 0 && s.lh == 0);
+		memset(&s, 0x55, sizeof(s));
+		CHECK(!rm_window_sizes(2622, 0, &wide, &s) && s.vw == 0 && s.vh == 0 && s.lw == 0 && s.lh == 0);
+		memset(&s, 0x55, sizeof(s));
+		CHECK(!rm_window_sizes(-1, 1206, &tall, &s) && s.vw == 0 && s.vh == 0 && s.lw == 0 && s.lh == 0);
 	}
 }
 

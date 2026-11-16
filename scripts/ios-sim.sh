@@ -67,8 +67,8 @@
 # one with nothing inside it fails, a stretched, cropped or shifted one
 # fails and one within the colour tolerance passes, the turn that fits is
 # found when the other has nothing lit inside, a hung get_app_container is
-# timed out within the run's limit, an app killed, crashed or not quitting
-# fails, one vid_restart passes and three fail, and a limit that is not
+# timed out within the run's limit, an app killed, crashed, not quitting or
+# not closing its renderer fails, one vid_restart passes and two fail, and a limit that is not
 # digits is refused.
 # tests/check-ios.sh runs it.
 #
@@ -232,13 +232,15 @@ launch)
 		case $sc in
 		killed|appstays) ;;
 		crashed) printf '%s\n' "Received signal 11, exiting..." ;;
+		noclose) printf '%s\n' "" "----------- shutting down ----------" ;;
 		*) printf '%s\n' "" "----------- shutting down ----------" \
 			"ref_metal: metal_stats: 31 frames, 0 without a drawable, 0 skipped, 0 failed command buffers, " ;;
 		esac
 	} > "$c/qconsole.log"
 	python3 -I "$(dirname "$0")/fakepix.py" tga "$c/scrnshot/q2_0000.tga" "$sc"
 	[ "$sc" = launchterm ] && trap "" TERM
-	if [ "$sc" = appstays ]; then
+	# an app that stays at the console: appstays, and containerhang (the frame wait must end at its limit, not on the app's end)
+	if [ "$sc" = appstays ] || [ "$sc" = containerhang ]; then
 		echo "Metal API Validation Enabled"
 		exec sleep 30
 	fi
@@ -423,6 +425,7 @@ EOF
 	st_case app-killed killed fail "it was killed or it crashed" 30
 	st_case app-crashed crashed fail "it was killed or it crashed" 30
 	st_case app-does-not-quit appstays fail "it was killed or it crashed" 40
+	st_case quit-without-renderer-close noclose fail "it was killed or it crashed" 30
 	st_case one-vid-restart restartonce ok "smoke ok" 30
 	st_case vid-restart-loop restartloop fail "a restart loop" 30
 	st_case smoke-limit-not-digits extra fail "IOS_SIM_SMOKE_SECONDS must be" 5 IOS_SIM_SMOKE_SECONDS=3m
