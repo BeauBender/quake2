@@ -383,9 +383,7 @@ Makefile. `make ios_objects` builds the objects alone.
 (*scripts/ios/smokepak.py*: a palette and a console font made from
 formulas, no id Software data), runs it on a simulator device it creates
 and deletes again, and checks from the engine's own log and frame that
-`ref_metal` reached the console. `scripts/ios-sim.sh run --data DIR`
-starts the app with the paks of *DIR/baseq2/* in that local bundle, for a
-person to look at in Simulator.app. Both write the build and the logs to
+`ref_metal` reached the console. It writes the build and the logs to
 DIR, which must be outside the checkout; the app's write directory is
 *Library/YamagiQ2/* in its data container (`-cfgdir`). The simulator's
 Metal device may report no Apple GPU family from apple5 on, which
@@ -394,5 +392,5 @@ the line that says so.
 
 `tests/check-ios.sh`, part of the gate, compiles the objects for the
 simulator and checks their platform, exports and AppKit references;
-`--full` also builds and checks the bundle (CI's macOS job runs it). Both
-print one skipped line where there is no iOS simulator SDK.
+`--full` also builds and checks the bundle. Both print one skipped line
+where there is no iOS simulator SDK.

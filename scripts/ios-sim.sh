@@ -2,7 +2,6 @@
 # scripts/ios-sim.sh -- the iOS simulator app on a throwaway device (TASK146).
 #
 #   scripts/ios-sim.sh smoke --out DIR
-#   scripts/ios-sim.sh run [--data DIR] [--out DIR] [-- ENGINE ARGS...]
 #
 # smoke: writes the synthetic data (scripts/ios/smokepak.py, no id Software
 # content) to a scratch directory, builds "make ios IOS_BUNDLE_DATA=<it>"
@@ -23,11 +22,8 @@
 #     DIR/console.log), no validation message, and 0 failed command
 #     buffers in ref_metal's metal_stats line;
 #   - "simctl list devices" lists the same devices before and after.
-# run: the same app, without the scripted quit, for a person to look at in
-# Simulator.app; with --data, DIR's baseq2/ (the owner's paks) goes into
-# the bundle of this local build and nowhere else. It waits until the app
-# exits or IOS_SIM_RUN_SECONDS pass (default 300), and with IOS_SIM_SHOT=N
-# saves the simulator's screen after N seconds to DIR/run.png.
+# A "run" subcommand (the app for a person to look at, optionally with the
+# owner's data in the local bundle) is left to a later card.
 #
 # Rules: every wait is bounded; the app is watched by its PID; nothing is
 # killed but a PID this script started, and the app only through "simctl
@@ -40,37 +36,21 @@ export LC_ALL=C
 
 repo=$(cd "$(dirname "$0")/.." && pwd -P) || exit 1
 die() { echo "ios-sim: $*" >&2; exit 1; }
-usage() { echo "usage: scripts/ios-sim.sh smoke --out DIR | run [--data DIR] [--out DIR] [-- ENGINE ARGS...]" >&2; exit 2; }
+usage() { echo "usage: scripts/ios-sim.sh smoke --out DIR" >&2; exit 2; }
 
-[ $# -ge 1 ] || usage
-cmd=$1
-shift
-case "$cmd" in smoke|run) ;; *) usage ;; esac
-out=
-data=
-extra_args=()
-while [ $# -gt 0 ]; do
-	case "$1" in
-	--out) [ $# -ge 2 ] || usage; out=$2; shift 2 ;;
-	--data) [ "$cmd" = run ] && [ $# -ge 2 ] || usage; data=$2; shift 2 ;;
-	--) shift; extra_args=("$@"); break ;;
-	*) usage ;;
-	esac
-done
-[ "$cmd" = smoke ] && [ -z "$out" ] && usage
-[ -n "$out" ] || out=$(mktemp -d "${TMPDIR:-/tmp}/ios-run.XXXXXX") || die "no scratch directory"
+[ $# -eq 3 ] && [ "$1" = smoke ] && [ "$2" = --out ] && [ -n "$3" ] || usage
+out=$3
 
 for tool in xcrun python3 make plutil; do
 	command -v "$tool" >/dev/null 2>&1 || die "$tool not found: a missing tool is a failure"
 done
 
+# outside the checkout before anything is made, and again once resolved
+case "$out" in /*) ;; *) out=$PWD/$out ;; esac
+case "$out/" in "$repo/"*|"$(cd "$(dirname "$0")/.." && pwd -L)/"*) die "--out must be outside the checkout ($repo), not $out" ;; esac
 mkdir -p "${out:?}" || die "cannot create $out"
 out=$(cd "${out:?}" && pwd -P) || die "cannot enter $out"
 case "$out/" in "$repo/"*) die "--out must be outside the checkout ($repo), not $out" ;; esac
-if [ -n "$data" ]; then
-	[ -d "$data/baseq2" ] || die "--data needs a directory holding baseq2/, not $data"
-	data=$(cd "$data" && pwd -P) || die "cannot enter $data"
-fi
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/ios-sim.XXXXXX") || die "no scratch directory"
 udid=
@@ -125,14 +105,10 @@ for rt, devs in json.load(sys.stdin)["devices"].items():
 
 # ---- the data and the build --------------------------------------------
 
-if [ "$cmd" = smoke ]; then
-	python3 -I "$repo/scripts/ios/smokepak.py" --out "${tmp:?}/data" > "${tmp:?}/smokepak.out" 2>&1 \
-		|| { cat "${tmp:?}/smokepak.out" >&2; die "smokepak.py failed"; }
-	data=$tmp/data
-fi
+python3 -I "$repo/scripts/ios/smokepak.py" --out "${tmp:?}/data" > "${tmp:?}/smokepak.out" 2>&1 \
+	|| { cat "${tmp:?}/smokepak.out" >&2; die "smokepak.py failed"; }
 build=$out/build
-makeargs=(-C "$repo" -j"${IOS_SIM_JOBS:-3}" QUIET=1 ios IOS_SDK=iphonesimulator IOS_ROOT="$build")
-[ -n "$data" ] && makeargs+=(IOS_BUNDLE_DATA="$data")
+makeargs=(-C "$repo" -j"${IOS_SIM_JOBS:-3}" QUIET=1 ios IOS_SDK=iphonesimulator IOS_ROOT="$build" IOS_BUNDLE_DATA="$tmp/data")
 echo "ios-sim: make ios (into $build)"
 if ! (unset MAKEFLAGS GNUMAKEFLAGS MFLAGS; make "${makeargs[@]}") > "$out/build.log" 2>&1; then
 	tail -n 20 "$out/build.log" >&2
@@ -182,15 +158,9 @@ bounded 180 "${tmp:?}/install.out" xcrun simctl install "$udid" "$app" || { cat 
 # The write directory: the default ~/.local/share/YamagiQ2 is not made
 # in a fresh app container (Sys_Mkdir makes one level), Library/ is there.
 args=(-cfgdir Library/YamagiQ2 +set vid_renderer metal +set logfile 2 +set metal_stats 1)
-if [ "$cmd" = smoke ]; then
-	for _ in $(seq 30); do args+=(+wait); done
-	args+=(+screenshot tga +quit)
-	limit=${IOS_SIM_SMOKE_SECONDS:-180}
-else
-	open -a Simulator --args -CurrentDeviceUDID "$udid" > /dev/null 2>&1 || echo "ios-sim: Simulator.app did not open; the device runs headless" >&2
-	limit=${IOS_SIM_RUN_SECONDS:-300}
-fi
-args+=(${extra_args[@]+"${extra_args[@]}"})
+for _ in $(seq 30); do args+=(+wait); done
+args+=(+screenshot tga +quit)
+limit=${IOS_SIM_SMOKE_SECONDS:-180}
 SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "${args[@]}" > "$out/console.log" 2>&1 &
 lpid=$!
 apid=
@@ -205,16 +175,10 @@ done
 [ -n "$apid" ] || { tail -n 5 "$out/console.log" >&2; die "the app did not start (log: $out/console.log)"; }
 echo "ios-sim: app $bid pid $apid"
 t=0
-shot=${IOS_SIM_SHOT:-}
 while kill -0 "$apid" 2>/dev/null; do
-	if [ -n "$shot" ] && [ "$t" -eq "$shot" ]; then
-		bounded 60 "${tmp:?}/shot2.out" xcrun simctl io "$udid" screenshot "$out/run.png" || echo "ios-sim: no screenshot at $t s" >&2
-	fi
 	if [ "$t" -ge "$limit" ]; then
-		echo "ios-sim: the app ran past $limit s; terminating it" >&2
 		bounded 30 "${tmp:?}/term.out" xcrun simctl terminate "$udid" "$bid" || true
-		[ "$cmd" = smoke ] && die "the app did not quit within $limit s"
-		break
+		die "the app did not quit within $limit s; terminated it"
 	fi
 	sleep 1
 	t=$((t + 1))
@@ -231,10 +195,8 @@ container=$(tail -n 1 "${tmp:?}/container.out")
 log=$(find "$container" -name qconsole.log -type f | head -n 1)
 [ -n "$log" ] || die "the engine wrote no qconsole.log in its data container"
 cp "$log" "$out/engine.log"
-if [ "$cmd" = smoke ]; then
-	tga=$(find "$container" -name 'q2_0000.tga' -type f | head -n 1)
-	[ -n "$tga" ] && cp "$tga" "$out/q2_0000.tga"
-fi
+tga=$(find "$container" -name 'q2_0000.tga' -type f | head -n 1)
+[ -n "$tga" ] && cp "$tga" "$out/q2_0000.tga"
 
 cleanup_device()
 {
@@ -244,12 +206,6 @@ cleanup_device()
 }
 cleanup_device
 devices > "$out/devices.after" || die "simctl list devices failed"
-
-if [ "$cmd" = run ]; then
-	cmp -s "$out/devices.before" "$out/devices.after" || echo "ios-sim: the device list changed during the run" >&2
-	echo "ios-sim: run done (engine log: $out/engine.log)"
-	exit 0
-fi
 
 # ---- the smoke's decisions, from the artifacts --------------------------
 

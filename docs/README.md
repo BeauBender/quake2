@@ -45,7 +45,7 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | `docs/analysis/` | Measured inventories of existing code that plans and cards cite |
 | `docs/DEPENDENCIES.md` | Every external library and vendored file, and its status |
 | `third_party/SDL3/` | SDL 3 source, byte-identical to the upstream release tarball and verified against `MANIFEST.sha256` by `scripts/check-vendored.sh`; built on macOS by `third_party/sdl3.make`. Provenance and update procedure in its `README.md` |
-| `scripts/ios-sim.sh` | The iOS simulator app on a throwaway device: `smoke` (synthetic data, checks the engine reaches the console) and `run` (for a person to look at); see `doc/020_installation.md` |
+| `scripts/ios-sim.sh` | The iOS simulator app on a throwaway device: `smoke` builds it with synthetic data and checks from the engine's log and frame that it reaches the console; see `doc/020_installation.md` |
 | `scripts/ios/` | `smokepak.py`, the synthetic pak of the iOS smoke run (a palette and a console font made from formulas) |
 | `stuff/ios/` | `Info.plist.in`, the iOS app bundle's template, filled in by `make ios` |
 | `scripts/pins.sh`, `scripts/pins/` | The renderer pin harness: record frames per scenario, compare renderers, make and publish pull-request evidence (`evidence.py`); user page `doc/100_renderpins.md`, procedure in `docs/plans/metal-port-harness.md` |

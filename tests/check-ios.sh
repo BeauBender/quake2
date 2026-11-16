@@ -27,7 +27,7 @@
 #       prints no -target, iPhone or ios token (assert_macos_cmds);
 #   (f) the objects of ios_objects are compiled with the commands ios
 #       links them from (make -n of both goals).
-# --full (CI's macOS job, and by hand): additionally "make ios" (the
+# --full (by hand): additionally "make ios" (the
 # vendored SDL3 for the simulator, the link, the bundle, the ad hoc
 # signature; METAL_SHADERS from the environment, default yes) and:
 #   (g) the executable has platform 7 and defines _GetGameAPI and
@@ -44,8 +44,8 @@
 #
 # Build time, measured here (6 cores, -j3): the default about 8 s; --full
 # about 25 s more, most of it the 231 vendored SDL3 sources, which the
-# default does not compile. So the gate runs the default, and CI's macOS
-# job runs --full.
+# default does not compile. So the gate runs the default, and --full is
+# run by hand (a CI step for it is left to a later card).
 #
 # Without the iOS simulator SDK (another OS, or Xcode without its iOS
 # platform) the check prints one "skipped" line and exits 0. With the
