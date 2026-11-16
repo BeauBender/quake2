@@ -828,14 +828,16 @@ test_frame_size(void)
  * The resize decision (N10): a change of the frame's size makes both
  * targets again and nothing else; a change of the window's pixels alone
  * sets the drawable's size and makes no target (FIX45); a missing target
- * makes both.
+ * makes both; a depth target of another size than the frame's is made
+ * again with the colour target kept (FIX69: with display sync off the
+ * colour target is a present slot's, already of the frame's size).
  */
 static void
 test_frame_remake(void)
 {
 	const unsigned both = RM_REMAKE_COLOR | RM_REMAKE_DEPTH;
-	rm_frame_held_t held = { 1, 1, 640, 480, 640, 480 };
-	rm_frame_held_t none = { 0, 0, 0, 0, 0, 0 };
+	rm_frame_held_t held = { 1, 1, 640, 480, 640, 480, 640, 480 };
+	rm_frame_held_t none = { 0, 0, 0, 0, 0, 0, 0, 0 };
 
 	CHECK(rm_frame_remake(&held, 640, 480, 640, 480) == 0);
 	CHECK(rm_frame_remake(&none, 640, 480, 640, 480) == (both | RM_REMAKE_DRAWABLE));
@@ -863,6 +865,24 @@ test_frame_remake(void)
 	held.lw = 640;
 	held.lh = 479;
 	CHECK(rm_frame_remake(&held, 640, 480, 640, 480) == RM_REMAKE_DRAWABLE);
+	held.lh = 480;
+
+	/* the depth target of another size on each side, the colour target of the frame's: depth alone */
+	held.zw = 800;
+	CHECK(rm_frame_remake(&held, 640, 480, 640, 480) == RM_REMAKE_DEPTH);
+	held.zw = 640;
+	held.zh = 600;
+	CHECK(rm_frame_remake(&held, 640, 480, 640, 480) == RM_REMAKE_DEPTH);
+
+	/* a new frame size that the colour target already has (a present slot's, remade for it) */
+	held.cw = 800;
+	held.ch = 600;
+	held.zw = 640;
+	held.zh = 480;
+	CHECK(rm_frame_remake(&held, 800, 600, 800, 600) == (RM_REMAKE_DEPTH | RM_REMAKE_DRAWABLE));
+	held.zw = 800;
+	held.zh = 600;
+	CHECK(rm_frame_remake(&held, 800, 600, 640, 480) == 0);
 }
 
 /*

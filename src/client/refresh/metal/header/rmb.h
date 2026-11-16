@@ -190,6 +190,7 @@ typedef struct
 {
 	int color, depth;   /* 1 when the colour and the depth-stencil target exist */
 	int cw, ch;         /* the colour target's size */
+	int zw, zh;         /* the depth-stencil target's size (FIX69) */
 	int lw, lh;         /* the layer's drawableSize */
 } rm_frame_held_t;
 
