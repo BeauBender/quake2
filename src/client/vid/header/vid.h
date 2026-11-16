@@ -77,4 +77,11 @@ int GLimp_GetFrameworkVersion(void);
 qboolean GLimp_HighDPIWanted(float highdpiaware, const char *driver);
 qboolean GLimp_DrawableInPixels(qboolean highdpi, int fullscreen, float r_mode);
 
+/* The screen a window was made for: width and height in pixels, the safe rectangle's x, y, width and height in points. */
+#define GLIMP_SCREEN_INTS 6
+qboolean GLimp_ScreenChanged(const int *made, const int *now);
+
+/* iOS only (glimp_sdl3.c): the safe area or the pixel size moved; asks for a vid_restart when the screen is not the one the video was made for. */
+void GLimp_ScreenEvent(void);
+
 #endif

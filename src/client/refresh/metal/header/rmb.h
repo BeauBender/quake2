@@ -251,6 +251,16 @@ int rm_present_region_in(int tw, int th, int dw, int dh, const rm_inset_t *in, r
  */
 int rm_display_sync(int always, int wanted);
 
+/*
+ * The insets in pixels of a drawable of pw by ph pixels from SDL's safe
+ * rectangle (x, y, w, h in the window's points) and the pixel density
+ * (pixels per point): each edge rounded to the nearest pixel and kept in
+ * the drawable. 1 with *out set when the rectangle leaves some width and
+ * some height, else 0 with *out all 0 (a bad density, size or rectangle:
+ * the caller uses no inset).
+ */
+int rm_safe_insets(float x, float y, float w, float h, float density, int pw, int ph, rm_inset_t *out);
+
 /* ---- images, the 2D draws (rm_pure.c) ------------------------------------------- */
 
 /*
@@ -1587,6 +1597,14 @@ void rmb_stats(rmb_stats_t *stats, rm_ledger_t *ledger);
  * is skipped.
  */
 int rmb_frame_begin(int w, int h, int dw, int dh, const float *clear_rgba);
+
+/*
+ * The insets of the drawable's safe rectangle (iOS, TASK147), read by the
+ * present of each frame: the frame is blitted into the rectangle and the
+ * rest of the drawable is cleared black. All 0 (the default) is the whole
+ * drawable; a negative value is taken as 0.
+ */
+void rmb_present_inset_set(const rm_inset_t *in);
 
 /*
  * Ends the open pass and opens the 3D pass on the colour target and its

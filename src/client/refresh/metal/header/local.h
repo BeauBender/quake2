@@ -31,6 +31,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 #include <string.h>
 
 #include "../../ref_shared.h"
@@ -57,6 +60,12 @@ extern qboolean IsHighDPIaware;
 int RI_PrepareForWindow(void);
 int RI_InitContext(void *win);
 void RI_GetDrawableSize(int *width, int *height);
+/* the safe rectangle's insets in pixels: iOS only (rm_sdl.c), 0 elsewhere (TASK147) */
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+void RI_GetSafeInsets(rm_inset_t *in);
+#else
+#define RI_GetSafeInsets(in) memset((in), 0, sizeof(rm_inset_t))
+#endif
 void RI_ShutdownContext(void);
 qboolean RI_IsVSyncActive(void);
 int RI_GetSDLVersion(void);

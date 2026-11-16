@@ -31,6 +31,10 @@
 
 #include <SDL3/SDL.h>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 static SDL_Window *window;
 static SDL_MetalView view;
 qboolean IsHighDPIaware = false;
@@ -91,6 +95,29 @@ RI_InitContext(void *win)
 	return true;
 }
 
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+/*
+ * The insets of the window's safe rectangle in pixels (TASK147), the
+ * corners, the sensor housing and the home indicator of an iPhone or iPad.
+ * All 0 when SDL has no rectangle or it leaves nothing. (Elsewhere
+ * local.h's RI_GetSafeInsets gives 0, and the rest of the file is as it was.)
+ */
+void
+RI_GetSafeInsets(rm_inset_t *in)
+{
+	SDL_Rect r;
+	int pw, ph;
+
+	memset(in, 0, sizeof(*in));
+
+	if (window && SDL_GetWindowSizeInPixels(window, &pw, &ph) && SDL_GetWindowSafeArea(window, &r))
+	{
+		rm_safe_insets((float)r.x, (float)r.y, (float)r.w, (float)r.h,
+				SDL_GetWindowPixelDensity(window), pw, ph, in);
+	}
+}
+#endif
+
 void
 RI_GetDrawableSize(int *width, int *height)
 {
@@ -99,6 +126,17 @@ RI_GetDrawableSize(int *width, int *height)
 		*width = 0;
 		*height = 0;
 	}
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+	else
+	{
+		/* viddef is the safe rectangle: the HUD, the console, the menus and the 3D view lie inside it */
+		rm_inset_t in;
+
+		RI_GetSafeInsets(&in);
+		*width -= in.left + in.right;
+		*height -= in.top + in.bottom;
+	}
+#endif
 }
 
 void

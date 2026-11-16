@@ -973,6 +973,42 @@ test_present_region_inset(void)
 	}
 }
 
+/* TASK147: the insets in pixels from SDL's safe rectangle in points (an iPhone 17 landscape: 852 by 393 points at 3x). */
+static void
+test_safe_insets(void)
+{
+	rm_inset_t in;
+
+	/* 59 points at each side and 21 at the bottom: 177 and 63 pixels */
+	CHECK(rm_safe_insets(59.0f, 0.0f, 734.0f, 372.0f, 3.0f, 2556, 1179, &in));
+	CHECK(in.left == 177 && in.top == 0 && in.right == 177 && in.bottom == 63);
+
+	/* the whole window: no inset */
+	CHECK(rm_safe_insets(0.0f, 0.0f, 852.0f, 393.0f, 3.0f, 2556, 1179, &in));
+	CHECK(in.left == 0 && in.top == 0 && in.right == 0 && in.bottom == 0);
+
+	/* a quarter point rounds to the nearest pixel, a density of 2 */
+	CHECK(rm_safe_insets(20.25f, 0.0f, 100.0f, 50.0f, 2.0f, 400, 200, &in));
+	CHECK(in.left == 41 && in.right == 400 - 241);
+
+	/* a rectangle past the drawable's edge is kept inside it */
+	CHECK(rm_safe_insets(0.0f, 0.0f, 900.0f, 400.0f, 3.0f, 2556, 1179, &in));
+	CHECK(in.right == 0 && in.bottom == 0);
+	/* a rectangle that starts below zero is kept inside */
+	CHECK(rm_safe_insets(-5.0f, -5.0f, 100.0f, 100.0f, 3.0f, 2556, 1179, &in));
+	CHECK(in.left == 0 && in.top == 0 && in.right == 2556 - 285 && in.bottom == 1179 - 285);
+
+	/* no width or height, a bad density or size, or a rectangle right of the drawable: refused, all 0 */
+	CHECK(!rm_safe_insets(0.0f, 0.0f, 0.0f, 400.0f, 3.0f, 2556, 1179, &in) && in.left == 0 && in.right == 0);
+	CHECK(!rm_safe_insets(0.0f, 0.0f, 852.0f, 0.0f, 3.0f, 2556, 1179, &in));
+	CHECK(!rm_safe_insets(0.0f, 0.0f, 852.0f, 393.0f, 0.0f, 2556, 1179, &in));
+	CHECK(!rm_safe_insets(0.0f, 0.0f, 852.0f, 393.0f, -1.0f, 2556, 1179, &in));
+	CHECK(!rm_safe_insets(0.0f, 0.0f, 852.0f, 393.0f, 3.0f, 0, 1179, &in));
+	CHECK(!rm_safe_insets(0.0f, 0.0f, 852.0f, 393.0f, 3.0f, 2556, -1, &in));
+	CHECK(!rm_safe_insets(0.0f / 0.0f, 0.0f, 852.0f, 393.0f, 3.0f, 2556, 1179, &in));
+	CHECK(!rm_safe_insets(900.0f, 0.0f, 50.0f, 393.0f, 3.0f, 2556, 1179, &in));
+}
+
 /* TASK147: where the layer always presents in step with the display, r_vsync has no effect. */
 static void
 test_display_sync(void)
@@ -8283,6 +8319,7 @@ main(void)
 	test_present_region();
 	test_present_region_inset();
 	test_display_sync();
+	test_safe_insets();
 	test_upload_bytes();
 	test_raw8();
 	test_fan();

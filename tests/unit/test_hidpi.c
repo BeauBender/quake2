@@ -165,3 +165,48 @@ TEST(hidpi_2d_scale_follows_the_size_taken)
 	viddef.width = 640;
 	viddef.height = 480;
 }
+
+/*
+ * TASK147: the screen an iOS window was made for. A rotation moves the
+ * safe rectangle (and may swap the pixel size); any one of the six
+ * numbers differing is a change, and an unmeasured screen is one.
+ */
+TEST(hidpi_screen_changed_on_any_number)
+{
+	/* an iPhone 17 landscape: 2556x1179 pixels, 852x393 points, 59 points of corner on each side, 21 below */
+	const int made[GLIMP_SCREEN_INTS] = { 2556, 1179, 59, 0, 734, 372 };
+	int now[GLIMP_SCREEN_INTS];
+	int i;
+
+	memcpy(now, made, sizeof(now));
+	T_CHECK(!GLimp_ScreenChanged(made, now));
+
+	for (i = 0; i < GLIMP_SCREEN_INTS; i++)
+	{
+		memcpy(now, made, sizeof(now));
+		now[i] += 1;
+		T_CHECK(GLimp_ScreenChanged(made, now));
+	}
+
+	/* the other landscape: the housing on the other side, the safe rectangle's x moved */
+	memcpy(now, made, sizeof(now));
+	now[2] = 0;
+	now[4] = 793;
+	T_CHECK(GLimp_ScreenChanged(made, now));
+}
+
+TEST(hidpi_screen_unmeasured_is_a_change)
+{
+	const int made[GLIMP_SCREEN_INTS] = { 2556, 1179, 59, 0, 734, 372 };
+	const int empty_w[GLIMP_SCREEN_INTS] = { 0, 1179, 59, 0, 734, 372 };
+	const int empty_h[GLIMP_SCREEN_INTS] = { 2556, 0, 59, 0, 734, 372 };
+	const int zero[GLIMP_SCREEN_INTS] = { 0, 0, 0, 0, 0, 0 };
+
+	T_CHECK(GLimp_ScreenChanged(NULL, made));
+	T_CHECK(GLimp_ScreenChanged(made, NULL));
+	T_CHECK(GLimp_ScreenChanged(NULL, NULL));
+	/* an empty drawable is a change even against itself */
+	T_CHECK(GLimp_ScreenChanged(empty_w, empty_w));
+	T_CHECK(GLimp_ScreenChanged(empty_h, empty_h));
+	T_CHECK(GLimp_ScreenChanged(zero, zero));
+}

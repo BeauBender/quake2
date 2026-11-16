@@ -345,6 +345,54 @@ rm_present_region(int tw, int th, int dw, int dh, rm_present_t *out)
 	return rm_present_region_in(tw, th, dw, dh, &none, out);
 }
 
+/* v in points to the nearest pixel; 0 when v is not finite or is not above 0, the side when it is not below it */
+static int
+rm_edge_px(float v, float density, int side)
+{
+	float px = v * density;
+
+	if (!(px > 0.0f))
+	{
+		return 0;
+	}
+
+	if (!(px < (float)side))
+	{
+		return side;
+	}
+
+	return (int)(px + 0.5f);
+}
+
+int
+rm_safe_insets(float x, float y, float w, float h, float density, int pw, int ph, rm_inset_t *out)
+{
+	int l, t, r, b;
+
+	memset(out, 0, sizeof(*out));
+
+	if (!(density > 0.0f) || (pw <= 0) || (ph <= 0) || !(w > 0.0f) || !(h > 0.0f))
+	{
+		return 0;
+	}
+
+	l = rm_edge_px(x, density, pw);
+	t = rm_edge_px(y, density, ph);
+	r = pw - rm_edge_px(x + w, density, pw);
+	b = ph - rm_edge_px(y + h, density, ph);
+
+	if ((r < 0) || (b < 0) || (l + r >= pw) || (t + b >= ph))
+	{
+		return 0;
+	}
+
+	out->left = l;
+	out->top = t;
+	out->right = r;
+	out->bottom = b;
+	return 1;
+}
+
 int
 rm_display_sync(int always, int wanted)
 {
