@@ -68,6 +68,7 @@ rmb_stats_t rmb_counts;
 /* metal_colorspace (TASK121): the mode asked for, and the object while it is on the layer */
 static int rmb_cs_mode;
 static CGColorSpaceRef rmb_cs;
+static CGColorSpaceRef rmb_cs_own;   /* the layer's own colour space, kept while ours is on it (may be NULL) */
 
 /* rmb_encode.m */
 void rmb_encode_abandon(void);
@@ -723,6 +724,26 @@ rmb_open(rmb_caps_t *caps, char *err, size_t errlen)
 	return 1;
 }
 
+/* Puts the layer's own colour space back, then releases ours and the kept one; the object is counted. */
+static void
+rmb_cs_release(void)
+{
+	if (rmb_layer)
+	{
+		rmb_layer.colorspace = rmb_cs_own;   /* as found, not untagged */
+	}
+
+	if (rmb_cs_own)
+	{
+		CGColorSpaceRelease(rmb_cs_own);
+		rmb_cs_own = NULL;
+	}
+
+	CGColorSpaceRelease(rmb_cs);
+	rmb_cs = NULL;
+	rm_ledger_destroy(&rmb_ledger, RM_OBJ_STATE);
+}
+
 /* Puts the colour space asked for on the layer, or takes it off; the object is counted. */
 static void
 rmb_cs_apply(void)
@@ -733,19 +754,18 @@ rmb_cs_apply(void)
 		if (rmb_cs)
 		{
 			rm_ledger_create(&rmb_ledger, RM_OBJ_STATE);
+			rmb_cs_own = rmb_layer.colorspace;
+			if (rmb_cs_own)
+			{
+				CGColorSpaceRetain(rmb_cs_own);
+			}
+
 			rmb_layer.colorspace = rmb_cs;
 		}
 	}
 	else if (rmb_cs && (!rmb_layer || !rmb_cs_mode))
 	{
-		if (rmb_layer)
-		{
-			rmb_layer.colorspace = NULL;
-		}
-
-		CGColorSpaceRelease(rmb_cs);
-		rmb_cs = NULL;
-		rm_ledger_destroy(&rmb_ledger, RM_OBJ_STATE);
+		rmb_cs_release();
 	}
 }
 
@@ -754,12 +774,6 @@ rmb_colorspace_set(int mode)
 {
 	rmb_cs_mode = mode ? 1 : 0;
 	rmb_cs_apply();
-}
-
-int
-rmb_colorspace_live(void)
-{
-	return rmb_cs != NULL;
 }
 
 int
@@ -838,12 +852,11 @@ rmb_detach(void)
 		rmb_encode_abandon();   /* commits an open frame, presenting nothing */
 		rmb_drain();
 		rmb_ahead_drop();       /* nothing of this layer is left on the queue */
-		if (rmb_cs && rmb_layer)
+		if (rmb_cs)
 		{
-			rmb_layer.colorspace = NULL;   /* the view's layer is left as found */
+			rmb_cs_release();   /* the view's layer is left as found */
 		}
 		rmb_layer = nil;        /* the SDL Metal view owns it */
-		rmb_cs_apply();         /* no layer: the colour-space object is released */
 	}
 
 	rmb_encode_release();       /* the targets, once no command buffer holds them */

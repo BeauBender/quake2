@@ -1604,15 +1604,13 @@ int rmb_open(rmb_caps_t *caps, char *err, size_t errlen);
 int rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen);
 
 /*
- * metal_colorspace (TASK121): 0 leaves the layer untagged, 1 tags it
- * kCGColorSpaceSRGB. Kept across a detach and applied at the next attach;
+ * metal_colorspace (TASK121): 0 leaves the layer's own colour space (the
+ * system gives it kCGColorSpaceSRGB for BGRA8Unorm on macOS), 1 tags it
+ * kCGColorSpaceSRGB. Going back to 0 restores the layer's own value. Kept across a detach and applied at the next attach;
  * with a layer attached it applies now. The colour-space object is counted
  * in the ledger (RM_OBJ_STATE) and released at detach or when set back to 0.
  */
 void rmb_colorspace_set(int mode);
-
-/* 1 while a colour-space object is alive (the ledger counts it too). */
-int rmb_colorspace_live(void);
 
 /* Waits (bounded) for the frames on the GPU and releases the layer and the targets. */
 void rmb_detach(void);

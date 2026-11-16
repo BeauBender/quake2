@@ -792,9 +792,9 @@ has) is not drawn.
   from the next frame.
 
 * **metal_colorspace**: The colour space the Metal renderer tags its
-  layer with. `0` (the default) leaves the layer untagged, as before: the
-  display treats the pixels as it does for any content that is not
-  colour-matched. `1` tags the layer `kCGColorSpaceSRGB`, so the system
+  layer with. `0` (the default) leaves the layer's own colour space, as
+  before: the system gives it `kCGColorSpaceSRGB` for this pixel format
+  on macOS, and setting `1` and then `0` again restores that value. `1` tags the layer `kCGColorSpaceSRGB`, so the system
   converts the game's sRGB-era colours to the display's profile. Only `0`
   and `1` are values: any other value is `0`. Other renderers do not have
   it. Saved with the configuration; applies from the next frame. The
