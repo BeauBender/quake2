@@ -142,8 +142,14 @@ bench_repo_name() {
 }
 
 # bench_outside_repo <dir> <what>: refuses a relative path, and a directory
-# that lies inside a git work tree (tested on its nearest existing
-# ancestor, so nothing is made first). The message names <what>, never the
+# that lies inside a git repository, tested on its nearest existing
+# ancestor (so nothing is made first), with symbolic links resolved. It
+# fails closed: refused when that directory or any ancestor of it holds a
+# .git entry, whatever git says; when git, run with no GIT_DIR,
+# GIT_WORK_TREE, GIT_CEILING_DIRECTORIES or GIT_DISCOVERY_ACROSS_FILESYSTEM
+# from the caller, finds a repository there (a work tree or a git
+# directory); and when git fails for any other reason than "not a git
+# repository" (git missing, say). The message names <what>, never the
 # path, since the path may hold a home directory.
 bench_outside_repo() {
 	case $1 in
@@ -154,13 +160,27 @@ bench_outside_repo() {
 	while [ ! -d "$_or_d" ]; do
 		_or_d=$(dirname "$_or_d")
 	done
-	_or_in=$(
-		unset GIT_DIR GIT_WORK_TREE
-		git -C "$_or_d" rev-parse --is-inside-work-tree 2> /dev/null
-	) || _or_in=false
-	if [ "$_or_in" = true ]; then
-		bench_die 2 "$2 lies inside a git work tree; point it at a directory outside any repository"
+	_or_d=$(cd "$_or_d" 2> /dev/null && pwd -P) || bench_die 2 "cannot read the directory that holds $2"
+	_or_a=$_or_d
+	while :; do
+		if [ -e "$_or_a/.git" ]; then
+			bench_die 2 "$2 lies inside a git work tree; point it at a directory outside any repository"
+		fi
+		[ -n "$_or_a" ] && [ "$_or_a" != / ] || break
+		_or_a=${_or_a%/*}
+	done
+	_or_st=0
+	_or_out=$(
+		unset GIT_DIR GIT_WORK_TREE GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM
+		git -C "$_or_d" rev-parse --is-inside-work-tree 2>&1
+	) || _or_st=$?
+	if [ "$_or_st" -eq 0 ]; then
+		bench_die 2 "$2 lies inside a git repository; point it at a directory outside any repository"
 	fi
+	case $_or_out in
+	*'not a git repository'*) ;;
+	*) bench_die 2 "cannot tell whether $2 lies inside a git work tree: git failed (status $_or_st)" ;;
+	esac
 }
 
 # bench_pid_alive <pid>: kill -0 succeeds. An empty, zero or non-numeric

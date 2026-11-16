@@ -518,6 +518,32 @@ t_lock_state_dir() {
 	_st=0
 	(cd "${E:?}" && env BENCH_STATE=relative sh "$R/bench.sh" lock status 2> /dev/null) || _st=$?
 	[ "$_st" -eq 2 ] || bad "state: a relative state directory was not refused"
+	# The guard fails closed: neither a git ceiling nor a failing git lets
+	# a state directory into a repository.
+	_st=0
+	env GIT_CEILING_DIRECTORIES="${repo:?}" BENCH_STATE="${repo:?}/src/zz/state" sh "$R/bench.sh" lock status > /dev/null 2>&1 || _st=$?
+	[ "$_st" -eq 2 ] || bad "state: a state directory inside a repository was accepted under GIT_CEILING_DIRECTORIES (status $_st)"
+	[ ! -e "${repo:?}/src/zz" ] || bad "state: the state directory refused under a ceiling was made"
+	mkdir "${E:?}/gitshim"
+	printf '#!/bin/sh\necho "fatal: zzq" >&2\nexit 128\n' > "${E:?}/gitshim/git"
+	chmod +x "${E:?}/gitshim/git"
+	_st=0
+	env PATH="${E:?}/gitshim:$PATH" sh "$R/bench.sh" lock status > /dev/null 2>&1 || _st=$?
+	[ "$_st" -eq 2 ] || bad "state: a failing git was read as 'outside any repository' (status $_st)"
+	[ "$fails" -eq 0 ]
+}
+
+t_store_guard() {
+	fresh sguard
+	cd "${repo:?}" || exit 1
+	_st=0
+	env BENCH_STORE="${repo:?}/store" sh "$R/bench.sh" baseline put null-sleep "$cA" > /dev/null 2>&1 || _st=$?
+	[ "$_st" -eq 2 ] || bad "store guard: a store inside a repository was not refused (status $_st)"
+	[ ! -e "${repo:?}/store" ] || bad "store guard: the refused store was made"
+	_st=0
+	env BENCH_STORE=relstore sh "$R/bench.sh" baseline put null-sleep "$cA" > /dev/null 2>&1 || _st=$?
+	[ "$_st" -eq 2 ] || bad "store guard: a relative store was not refused (status $_st)"
+	[ ! -e "${repo:?}/relstore" ] || bad "store guard: the refused relative store was made"
 	[ "$fails" -eq 0 ]
 }
 
@@ -829,7 +855,7 @@ t_compare() {
 }
 
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_bounded t_lock_reclaim t_lock_guard t_lock_state_dir t_host t_inputs t_case t_stats t_store t_drift t_compare"
+all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_bounded t_lock_reclaim t_lock_guard t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
@@ -876,6 +902,8 @@ mutant drift-no-t core/stats.sh 'lo = mn - t; hi = mx + t' 'lo = mn; hi = mx' t_
 mutant core-names-game core/common.sh '' '# the Quake II adapter' t_generic || mfail=1
 mutant reclaim-guard core/lock.sh 'if ! mkdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' 'if ! mkdir -p "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' t_lock_guard || mfail=1
 mutant bare-no-grace core/lock.sh '-ge "$_la_grace" ]; then' '-ge 0 ]; then' t_lock_guard || mfail=1
+# Last: it writes into the throwaway repository's work tree.
+mutant store-in-repo core/store.sh 'bench_outside_repo "$BENCH_STORE_ROOT" "the store (BENCH_STORE)"' ':' t_store_guard || mfail=1
 [ "$mfail" -eq 0 ] || exit 1
 
 _ok=1
