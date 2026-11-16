@@ -90,9 +90,10 @@ typedef struct
 	unsigned nlights;   /* lights of the frame, at most MTL_RTS_MAX_LIGHTS */
 	unsigned trans;     /* 1 when the map holds a triangle that passes light (a ray then looks past it) */
 	unsigned show;      /* r_rt_shadows_show */
-	unsigned moved;     /* 1 when a brush entity of the frame is moved or turned: every pixel looks for its surface */
+	unsigned moved;     /* 1 when a brush entity of the frame is moved or turned: every pixel of unknown surface looks for it */
 	unsigned carried;   /* bit i: a model of the frame carries light i (RM_RT_Carried), its rays pass that model */
-	unsigned pad[2];
+	unsigned nents;     /* TASK131: the rows of the frame's entity table (rmb_rts_set_ents), set by the back end */
+	unsigned gsurf;     /* TASK131: 1 when the G-buffer's surface attachment is bound, set by the back end */
 } rm_rts_view_t;
 
 /*
@@ -178,6 +179,54 @@ typedef struct
 long rm_rts_surface_map(const rm_rts_range_t *r, long nsurf, unsigned long ntris, unsigned *tri_surf);
 
 /*
+ * TASK131: a surface's range of the world's vertex buffer (msurface_t's
+ * first_vertex and num_vertices), and unlit as above.
+ */
+typedef struct
+{
+	unsigned first_vertex;
+	unsigned num_vertices;
+	unsigned unlit;
+} rm_rts_vrange_t;
+
+/*
+ * The surface of each of the nverts vertices of the world's vertex
+ * buffer, from the nsurf surfaces' ranges, for the G-buffer's surface
+ * attachment (mtl_rts_gb_decode): vert_surf[k] as rm_rts_surface_map's
+ * tri_surf[k], ~0 for a vertex no surface holds. The number of vertices
+ * assigned; -1 when a range passes nverts or two ranges overlap, when
+ * nsurf is MTL_RTS_SURF_UNLIT or more, or nverts more than MTL_RTS_GB_VMAX
+ * (the attachment's 24 bits could not name every vertex).
+ */
+long rm_rts_vertex_map(const rm_rts_vrange_t *r, long nsurf, unsigned long nverts, unsigned *vert_surf);
+
+/*
+ * A refdef entity's row of the kernel's entity table (TASK131): for a
+ * brush model at origin and angles (gl1's, as rm_rt_transform takes them),
+ * the three rows of its world-to-object transform, the inverse of
+ * rm_rt_transform's (mtl_rts_xform_rows), then 1, 0, 0, 0: 16 floats into
+ * out. 0 with the identity's rows and a last row of 0 when the transform
+ * is not finite or cannot be inverted (the kernel then looks for the
+ * pixel's surface with a ray, as before).
+ */
+#define RM_RTS_ROW_FLOATS 16
+int rm_rts_ent_rows(const float *origin, const float *angles, float *out);
+
+/*
+ * The kernel's lookup of a pixel's surface from the G-buffer's surface
+ * attachment (rm_rts_trace), on the CPU: v the pixel's value, vert_surf
+ * the map's vertex table (nverts entries, rm_rts_vertex_map), nsurf its
+ * surfaces, rows the frame's entity table (nents rows of
+ * RM_RTS_ROW_FLOATS, rm_rts_ent_rows). 1 with *raw the vertex's entry
+ * (the surface index and MTL_RTS_SURF_UNLIT) and *w2o the pixel's
+ * world-to-object transform (the identity for the world); 0 when the
+ * value names no surface the tables hold (the kernel then traces the eye
+ * ray).
+ */
+int rm_rts_gb_lookup(unsigned v, const unsigned *vert_surf, unsigned long nverts, unsigned long nsurf,
+		const float *rows, int nents, unsigned *raw, mtl_rts_xform_t *w2o);
+
+/*
  * A surface's plane toward its front for the kernel (mtl_rts_surf): gl1's
  * plane (normal, dist), both negated when the surface faces its back
  * (SURF_PLANEBACK), into out[4]; a missing or non-finite plane gives
@@ -220,12 +269,24 @@ int rmb_rts_open(char *err, size_t errlen);
 void rmb_rts_close(void);
 
 /*
- * The map's tables: tri_surf (rm_rts_surface_map, ntris entries) and for
- * each of the nsurf surfaces its texture axes, vecs[0] then vecs[1], and
- * its plane (rm_rts_plane): 12 floats a surface. 1 when kept; 0 frees
- * them (the kernel then takes the base axes).
+ * The map's tables: tri_surf (rm_rts_surface_map, ntris entries), for the
+ * eye ray; vert_surf (rm_rts_vertex_map, nverts entries; NULL or 0 without
+ * one, and every pixel then takes the eye ray), for the G-buffer's surface
+ * attachment (TASK131); and for each of the nsurf surfaces its texture
+ * axes, vecs[0] then vecs[1], and its plane (rm_rts_plane): 12 floats a
+ * surface. 1 when kept; 0 frees them (the kernel then takes the base axes).
  */
-int rmb_rts_set_map(const unsigned *tri_surf, unsigned long ntris, const float *vecs, unsigned long nsurf);
+int rmb_rts_set_map(const unsigned *tri_surf, unsigned long ntris, const unsigned *vert_surf, unsigned long nverts,
+		const float *vecs, unsigned long nsurf);
+
+/*
+ * TASK131: the frame's entity table, n rows of RM_RTS_ROW_FLOATS
+ * (rm_rts_ent_rows, row i the refdef's entity i), at most MTL_RTS_GB_ENTS
+ * (copied): the world-to-object transforms of the brush models the
+ * surface attachment names. n 0 or rows NULL: none (a moved brush model's
+ * pixels then take the eye ray).
+ */
+void rmb_rts_set_ents(const float *rows, int n);
 
 /*
  * Before the G-buffer raster: the kernel's outputs at the render size w x
@@ -250,13 +311,14 @@ int rmb_rts_stats(rm_rts_stats_t *s, int cap);
 /*
  * rmb_gbuf_resolve's hooks (rmb_gbuf.m). rmb_rts_trace, after the
  * raster ended: the kernel on the frame's command buffer over the
- * render-size depth, normal and material attachments; 1 when it was
- * encoded. rmb_rts_resolve, in the resolve's pass: binds the resolve that
+ * render-size depth, normal and material attachments, and the surface
+ * attachment (TASK131; nil without one: every pixel takes the eye ray);
+ * 1 when it was encoded. rmb_rts_resolve, in the resolve's pass: binds the resolve that
  * adds the term (and r_rt_shadows_show's views) when the frame traced,
  * with the stock resolve's uniforms and attachments; 0 otherwise (the
  * caller binds the stock resolve).
  */
-int rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> material);
+int rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> material, id<MTLTexture> surface);
 int rmb_rts_resolve(id<MTLRenderCommandEncoder> enc, const void *resolve, size_t resolve_len,
 		id<MTLTexture> albedo, id<MTLTexture> light, id<MTLTexture> material, id<MTLTexture> depth,
 		id<MTLTexture> normal);

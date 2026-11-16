@@ -23,7 +23,7 @@
  *   vid_highdpiaware 1, and 640x480 and scale 1 at 0.
  *
  * Not proven here: what SDL makes of the flag (the window's pixels);
- * that is measured with the engine, see the runbook's TASK118 section.
+ * that is measured with the engine, see docs/runbook/TASK118.md.
  * Nor the mouse: the engine draws no menu pointer and counts motion only
  * in game (src/client/input/sdl3.c), so the card's menu cursor item is
  * closed by that code path in the runbook, not by a test here.

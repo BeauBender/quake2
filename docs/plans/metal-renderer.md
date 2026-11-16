@@ -21,7 +21,7 @@ Work cards:
 - TASK23 — Apple TV and Apple Vision Pro targets (platform) — tier T0 simulators; depends on TASK22
 - TASK24 — Hybrid ray tracing, compute-based (raytracing) — tier T1 to build, T2 to validate; depends on TASK21, INFORM7
 - TASK25 — Render-stage ray queries and hardware-RT tuning (raytracing) — tier T2 only; depends on TASK24
-- TASK27 (#37) — Pin harness: capture hook, capture before present, unattended quit, `scripts/pins.sh`, comparator, scenarios, gate check; real-data pins and record/replay landed as TASK39 to TASK46; closing pass on the build host done (criterion 1 met with a limit: replay exact on all three renderers, the `soft` references of `models`, `particles` and `skywater` from `demo1.dm2` are at an older settings hash and recording new ones is the owner's step; 2 met with software-OpenGL references only, accelerated ones are TASK83 (#187); 3 met; 4 met as far as the checks go, the full gate is the orchestrator's run; `docs/plans/metal-port-harness.md`, "Closing TASK27 on the build host") — depends on INFORM8, INFORM9, TASK29
+- TASK27 (#37) — Pin harness: capture hook, capture before present, unattended quit, `scripts/pins.sh`, comparator, scenarios, gate check; real-data pins and record/replay landed as TASK39 to TASK46; closing pass on the build host done (criterion 1 met with a limit: replay exact on all three renderers, the `soft` references of `models`, `particles` and `skywater` from `demo1.dm2` are at an older settings hash and recording new ones is the owner's step; 2 met with software-OpenGL references only, accelerated ones are TASK83 (#187); 3 met; 4 met as far as the checks go, the full gate is the orchestrator's run; `docs/runbook/TASK27.md`, "Closing TASK27 on the build host") — depends on INFORM8, INFORM9, TASK29
 - TASK28 (#38) — Specialize into native `ref_metal`: replace the shim at gl1's 441 call sites with direct Metal, concept by concept, frame pins as acceptance — depends on TASK93 (closes when N10 lands; its children TASK84 to TASK93 form one chain, `docs/plans/ref-metal-native.md`)
 
 Cards filed from `docs/plans/metal-port-cards.md` on 2026-11-12 (dependencies
@@ -178,7 +178,7 @@ by eye, became two steps pinned at two seams:
    `supportsFamily` (apple5 to apple9) and `supportsRaytracing`; apple5 is
    the floor. Acceptance is the frame pins of TASK27 against `ref_gl1`
    references. Design: `docs/plans/metal-shim-design.md`; state of the
-   acceptance on the build host: `docs/plans/metal-port-harness.md`,
+   acceptance on the build host: `docs/runbook/TASK21.md`,
    "Closing TASK21 on the build host".
 2. **Renderer-API seam: native `ref_metal` (TASK28). Done on the build
    host (group N, N1 to N10, TASK84 to TASK93, the last on 2026-11-14):
@@ -206,7 +206,7 @@ currently loads the game module and renderer with `dlopen` (`Sys_GetGameAPI`,
 `Sys_LoadLibrary`). A build mode that compiles the game and one renderer into
 the executable, with `GetGameAPI` and `GetRefAPI` resolved at link time, is
 required for every non-Mac Apple platform and removes a runtime trust
-boundary on macOS. Small: Makefile plus two loader functions.
+boundary on macOS. Small: Makefile plus two loader functions. Done (TASK20): `STATIC_MODULES=1`, the size estimate held (a Makefile block, a `static_modules` target and two `#ifdef STATIC_MODULES` seats, about 200 lines with the check).
 
 ### Phase C — iPhone and iPad (T0 for simulator, any device for testing)
 

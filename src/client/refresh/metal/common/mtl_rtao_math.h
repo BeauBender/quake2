@@ -38,6 +38,10 @@
 #define MTL_RTAO_TILE 64
 #define MTL_RTAO_TILE_N (MTL_RTAO_TILE * MTL_RTAO_TILE)
 
+#ifndef __METAL_VERSION__
+_Static_assert(MTL_RTAO_TILE_N == 4096, "mtl_rtao_noise puts a rank at bits 20 to 31");
+#endif
+
 /*
  * The instance mask bit of what an AO ray tests (rmb_rt_frame sets it on
  * every instance but the view weapon and the viewer's own model, with
@@ -84,11 +88,13 @@ mtl_rtao_v3(float x, float y, float z)
 #define MTL_RTAO_COS cos
 #define MTL_RTAO_SIN sin
 #define MTL_RTAO_FLOOR floor
+#define MTL_RTAO_ISNAN isnan
 #else
 #include <math.h>
 #define MTL_RTAO_COS cosf
 #define MTL_RTAO_SIN sinf
 #define MTL_RTAO_FLOOR floorf
+#define MTL_RTAO_ISNAN isnan
 #endif
 
 /*
@@ -133,11 +139,15 @@ mtl_rtao_dim_oy(unsigned d)
 	return (d == 0) ? 0u : (d == 1) ? 21u : (d == 2) ? 45u : 7u;
 }
 
-/* the per-frame step of each number (the R2 and R4 sequences' constants): a frame moves every rank by it */
-static inline float
+/*
+ * The per-frame step of each number (the R2 and R4 sequences' constants,
+ * 0.61803399, 0.75487767, 0.56984029 and 0.81917251) in 32-bit fixed
+ * point, the constant times 2^32 rounded: a frame moves every rank by it.
+ */
+static inline unsigned
 mtl_rtao_dim_step(unsigned d)
 {
-	return (d == 0) ? 0.61803399f : (d == 1) ? 0.75487767f : (d == 2) ? 0.56984029f : 0.81917251f;
+	return (d == 0) ? 2654435775u : (d == 1) ? 3242174905u : (d == 2) ? 2447445409u : 3518319140u;
 }
 
 /* the index into the tile of pixel (px, py)'s number d */
@@ -154,14 +164,25 @@ mtl_rtao_tile_index(unsigned px, unsigned py, unsigned d)
  * at frame frame: the rank's centre, moved on by frame steps of d's
  * constant and wrapped (a toroidal shift, which keeps the tile's spectrum
  * within a frame and spreads each pixel's numbers over the frames).
+ *
+ * In 32-bit fixed point, where the unsigned sum and product wrap modulo
+ * 2^32, which is the wrap itself, exactly: the rank's centre is rank x 2^20
+ * plus 2^19, the shift frame x step. The top 24 bits of the sum, which a
+ * float holds exactly, times 2^-24 (a power of two) are the number, so the
+ * kernel and the host compute the same bits, fast math or not. One shift
+ * added to every rank is a bijection of the 32-bit values, and any two
+ * ranks stay at least 2^20 apart, so at every frame the tile's
+ * MTL_RTAO_TILE_N numbers stay distinct. (A float frame x step does not: past
+ * frame 2^11 its step is coarser than a rank's, 2^-12, and neighbouring
+ * ranks round to one number, 256 of 4096 left at frame 65535.)
  */
 static inline float
 mtl_rtao_noise(unsigned rank, unsigned frame, unsigned d)
 {
-	const float base = ((float)rank + 0.5f) / (float)MTL_RTAO_TILE_N;
+	/* rank x 2^20 with MTL_RTAO_TILE_N 2^12 ranks fills the 32 bits; the caller wraps the frame at 2^16 */
+	const unsigned u = (rank << 20) + (1u << 19) + (frame & 0xffffu) * mtl_rtao_dim_step(d);
 
-	/* frame below 2^16 keeps frame x step exact enough in a float; the caller wraps it */
-	return mtl_rtao_fract(base + (float)(frame & 0xffffu) * mtl_rtao_dim_step(d));
+	return (float)(u >> 8) * (1.0f / 16777216.0f);
 }
 
 /*
@@ -247,7 +268,7 @@ mtl_rtao_ao(float o0, float o1)
 static inline float
 mtl_rtao_factor(float ao, float floor_)
 {
-	if (!(ao >= 0.0f) && !(ao < 0.0f))
+	if (MTL_RTAO_ISNAN(ao))
 	{
 		return 1.0f;
 	}
