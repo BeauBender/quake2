@@ -612,6 +612,31 @@ test_cvars(void)
 	CHECK(rm_rtw_show(9) == RM_RTW_SHOW_MAX);
 	CHECK(rm_rtw_show(-1) == 0);
 	CHECK(rm_rtw_show(NAN) == 0);
+
+	/* TASK158: r_rt_water_hits, 0 TASK58's screen-space path, 1 world space from 1 up */
+	CHECK(rm_rtw_hits(0) == 0);
+	CHECK(rm_rtw_hits(0.9f) == 0);
+	CHECK(rm_rtw_hits(1) == 1);
+	CHECK(rm_rtw_hits(2.5f) == 1);
+	CHECK(rm_rtw_hits(-1) == 0);
+	CHECK(rm_rtw_hits(NAN) == 0);
+	CHECK(rm_rtw_hits(INFINITY) == 0);
+
+	/* TASK158: setting 1 without its resources: TASK58's path, the refusal said once; setting 0 never needs them */
+	{
+		int told = 0, say = 1;
+
+		CHECK((rm_rtw_path(0, 0, &told, &say) == 0) && !say && !told);
+		CHECK((rm_rtw_path(NAN, 0, &told, &say) == 0) && !say && !told);
+		CHECK((rm_rtw_path(1, 1, &told, &say) == 1) && !say && !told);
+		CHECK((rm_rtw_path(0, 1, &told, &say) == 0) && !say && !told);
+		CHECK((rm_rtw_path(1, 0, &told, &say) == 0) && say && told);
+		CHECK((rm_rtw_path(1, 0, &told, &say) == 0) && !say && told);
+		CHECK((rm_rtw_path(2, 0, &told, &say) == 0) && !say && told);
+		CHECK((rm_rtw_path(0, 0, &told, &say) == 0) && !say && told);
+		told = 0;   /* the pass opened again */
+		CHECK((rm_rtw_path(1, 0, &told, &say) == 0) && say && told);
+	}
 }
 
 static void
@@ -637,7 +662,7 @@ test_view(void)
 	CHECK(memcmp(v.eye, s.eye, sizeof(v.eye)) == 0);
 	CHECK(v.bias_k == s.bias_k);
 	CHECK((v.time == 12.5f) && (v.amp == 0.08f) && (v.reflect == 0.5f) && (v.show == 2));
-	CHECK((v.pad[0] == 0) && (v.pad[1] == 0) && (v.pad[2] == 0));
+	CHECK((v.env == 0) && (v.scale == 0) && (v.lod_k == 0) && (v.nlights == 0) && (v.sky == 0) && (v.fullbright == 0));
 
 	/* the projection is the matrix the inverse inverts: their product is the identity */
 	mtl_mat_mul(id, v.mvp, v.inv);
@@ -655,7 +680,7 @@ test_view(void)
 	CHECK(rm_rtw_view(proj, world, &vp, eye, 4, NAN, 0.08f, 0.5f, 0, &v) == 1);
 	CHECK(v.time == 0);
 	CHECK(rm_rtw_view(proj, world, &vp, eye, 0, 1, 0.08f, 0.5f, 0, &v) == 0);
-	CHECK(sizeof(rm_rtw_view_t) == 192);
+	CHECK(sizeof(rm_rtw_view_t) == 288);
 }
 
 static void
@@ -726,25 +751,637 @@ test_stats(void)
 	memset(&s, 0, sizeof(s));
 	s.frame = 9;
 	s.pixels = 2073600;
+	s.listed = 301200;
 	s.opaque = 1200;
 	s.trans = 300000;
-	s.eye = 2072400;
+	s.eye = 300000;
 	s.lit = 200000;
+	s.world = 40000;
 	s.sky = 60000;
-	s.miss = 41200;
+	s.skybox = 1000;
+	s.miss = 200;
 	s.ms = 0.875;
 
 	CHECK(rm_rtw_stats_format(&s, buf, sizeof(buf)) == 1);
-	CHECK(strcmp(buf, "ref_metal: rt water: frame 9: 2073600 pixels, 1200 opaque water, 300000 translucent water, "
-			"2072400 eye rays, 200000 lit, 60000 sky, 41200 none, 0.875 ms") == 0);
+	CHECK(strcmp(buf, "ref_metal: rt water: frame 9: 2073600 pixels, 301200 listed, 1200 opaque water, "
+			"300000 translucent water, 300000 eye rays, 200000 lit, 40000 world, 60000 sky, 1000 sky box, 200 none, "
+			"0.875 ms") == 0);
+	CHECK(strlen(buf) < RM_STATS_LINE);
 	CHECK(strchr(buf, '\n') == NULL);
+
+	/* TASK158: r_rt_water_hits 1 adds its passes' split and the span from the raster's start to the trace's end */
+	s.ws = 1;
+	s.raster_ms = 0.25;
+	s.compact_ms = 0.125;
+	s.trace_ms = 0.5;
+	s.span_ms = 1.5;
+	s.vert_ms = 0.061;
+	s.frag_ms = 0.125;
+	CHECK(rm_rtw_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(strstr(buf, ", 0.875 ms, world space: raster 0.250 (vertex 0.061, fragment 0.125), compaction 0.125, trace 0.500, "
+			"span 1.500 ms") != NULL);
+	CHECK(strlen(buf) < RM_STATS_LINE);
+	s.raster_ms = s.compact_ms = s.trace_ms = s.span_ms = s.vert_ms = s.frag_ms = -1;
+	CHECK(rm_rtw_stats_format(&s, buf, sizeof(buf)) == 1);
+	CHECK(strstr(buf, "world space: raster - (vertex -, fragment -), compaction -, trace -, span - ms") != NULL);
+	s.ws = 0;
 
 	s.ms = -1;
 	CHECK(rm_rtw_stats_format(&s, buf, sizeof(buf)) == 1);
 	CHECK(strstr(buf, ", - ms") != NULL);
+	CHECK(strstr(buf, "world space") == NULL);
 	CHECK(rm_rtw_stats_format(&s, small, sizeof(small)) == 0);
 	CHECK(small[0] == 0);
 	CHECK(rm_rtw_stats_format(&s, small, 0) == 0);
+}
+
+/* TASK158: the choice with world-space shading behind the picture */
+static void
+test_choose_ws(void)
+{
+	/* the picture's colour wherever the screen-space choice finds one, whatever the world could do */
+	CHECK(mtl_rtw_choose_ws(2, 1, MTL_GB_MAT_WORLD, 1.0f, 100.0f, 1, 1) == MTL_RTW_LIT);
+	CHECK(mtl_rtw_choose_ws(2, 1, MTL_GB_MAT_WORLD, 1.0f, 100.0f, 0, 0) == MTL_RTW_LIT);
+	CHECK(mtl_rtw_choose_ws(1, 1, MTL_GB_MAT_SKY, -1.0f, 0.0f, 1, 1) == MTL_RTW_SKY);
+	CHECK(mtl_rtw_choose_ws(0, 1, MTL_GB_MAT_SKY, -1.0f, 0.0f, 0, 1) == MTL_RTW_SKY);
+
+	/* a face off the screen or hidden: in world space where it can be shaded, else none */
+	CHECK(mtl_rtw_choose_ws(2, 0, MTL_GB_MAT_NONE, -1.0f, 100.0f, 1, 0) == (MTL_RTW_LIT | MTL_RTW_WS));
+	CHECK(mtl_rtw_choose_ws(2, 1, MTL_GB_MAT_WORLD, 50.0f, 100.0f, 1, 0) == (MTL_RTW_LIT | MTL_RTW_WS));
+	CHECK(mtl_rtw_choose_ws(2, 1, MTL_GB_MAT_SKY, 0.0f, 100.0f, 1, 0) == (MTL_RTW_LIT | MTL_RTW_WS));
+	CHECK(mtl_rtw_choose_ws(2, 0, MTL_GB_MAT_NONE, -1.0f, 100.0f, 0, 1) == MTL_RTW_MISS);
+	CHECK(mtl_rtw_choose_ws(2, 1, MTL_GB_MAT_WORLD, 50.0f, 100.0f, 0, 1) == MTL_RTW_MISS);
+
+	/* the sky brush or nothing met, where the screen does not show the sky: the box, or none without it */
+	CHECK(mtl_rtw_choose_ws(1, 0, MTL_GB_MAT_NONE, -1.0f, 0.0f, 1, 1) == (MTL_RTW_SKY | MTL_RTW_WS));
+	CHECK(mtl_rtw_choose_ws(0, 1, MTL_GB_MAT_WORLD, -1.0f, 0.0f, 0, 1) == (MTL_RTW_SKY | MTL_RTW_WS));
+	CHECK(mtl_rtw_choose_ws(1, 0, MTL_GB_MAT_NONE, -1.0f, 0.0f, 1, 0) == MTL_RTW_MISS);
+
+	/* the class keeps the world-space bit; the blend takes such a colour; the candidates' byte has no water */
+	CHECK(mtl_rtw_class(1, 0, MTL_RTW_LIT | MTL_RTW_WS) == (MTL_RTW_CLASS_WATER | MTL_RTW_LIT | MTL_RTW_CLASS_WS));
+	CHECK(mtl_rtw_class(1, 1, MTL_RTW_SKY | MTL_RTW_WS) ==
+			(MTL_RTW_CLASS_WATER | MTL_RTW_CLASS_TRANS | MTL_RTW_SKY | MTL_RTW_CLASS_WS));
+	CHECK(mtl_rtw_class(0, 1, MTL_RTW_LIT | MTL_RTW_WS) == 0);
+	CHECK((mtl_rtw_class(1, 0, MTL_RTW_LIT | MTL_RTW_WS) & MTL_RTW_CLASS_FROM) == MTL_RTW_LIT);
+	CHECK(!(MTL_RTW_CLASS_CAND & (MTL_RTW_CLASS_WATER | MTL_RTW_CLASS_TRANS | MTL_RTW_CLASS_FROM | MTL_RTW_CLASS_WS)));
+	CHECK(MTL_RTW_CLASS_CAND < 256u);
+	CHECK(!mtl_rtw_is_trans_water(MTL_RTW_CLASS_CAND, 100.0f, 100.0f));
+
+	{
+		mtl_rgba_t c = { 0.25f, 0.5f, 0.75f, 0.33f }, o;
+
+		o = mtl_rtw_blend(c, 1.0f, 1.0f, 1.0f, 0.5f, MTL_RTW_LIT | MTL_RTW_WS);
+		CHECK((o.r == 0.625f) && (o.g == 0.75f) && (o.b == 0.875f) && (o.a == 0.33f));
+		o = mtl_rtw_blend(c, 1.0f, 1.0f, 1.0f, 0.5f, MTL_RTW_SKY | MTL_RTW_WS);
+		CHECK(o.r == 0.625f);
+	}
+}
+
+/*
+ * TASK158: a face along a scripted reflection ray, nearest first: an
+ * alias model's or the map's (the world's, or an inline brush model's),
+ * the sky brush or not, and whether the picture shows it at its point.
+ */
+typedef struct
+{
+	int alias, sky, seen;
+} rtw_face_t;
+
+/* an instance's mask as rmb_rt_frame gives it (no light carried, not the gun nor the viewer's model) */
+static unsigned
+rtw_face_mask(const rtw_face_t *f)
+{
+	return mtl_rtw_inst_mask_ws(mtl_rtao_inst_mask(mtl_rts_inst_mask(0), 0), 0, (unsigned)f->alias);
+}
+
+/* the intersector: the nearest face at or past at that mask meets, n for none */
+static int
+rtw_isect(const rtw_face_t *f, int n, int at, unsigned mask)
+{
+	for (; at < n; at++)
+	{
+		if (rtw_face_mask(&f[at]) & mask)
+		{
+			break;
+		}
+	}
+
+	return at;
+}
+
+/*
+ * rm_rtw_trace_ws's loop over the faces f[0..n) (rm_rtwater.metal): the
+ * choice at each hit as the kernel makes it (a face the picture does not
+ * show is 50 units off at its pixel; the sky or nothing met off the
+ * screen), and mtl_rtw_ws_next's step. casts counts the intersections.
+ */
+static unsigned
+rtw_trace_ws(const rtw_face_t *f, int n, int sky_ok, int *casts)
+{
+	unsigned mask = MTL_RTW_MASK, from = MTL_RTW_MISS;
+	int at = rtw_isect(f, n, 0, mask), map = 0, layer;
+
+	*casts = 1;
+
+	for (layer = 0; layer < 64; layer++)
+	{
+		const int kind = (at >= n) ? 0 : f[at].sky ? 1 : 2;
+		const int alias = (kind == 2) && f[at].alias;
+		const int seen = (kind != 0) && f[at].seen;
+		int step;
+
+		if (kind == 2)
+		{
+			from = mtl_rtw_choose_ws(2, 1, MTL_GB_MAT_WORLD, seen ? 0.0f : 50.0f, 100.0f, !alias, sky_ok);
+		}
+		else
+		{
+			from = mtl_rtw_choose_ws(kind, seen, seen ? MTL_GB_MAT_SKY : MTL_GB_MAT_NONE, -1.0f, 0.0f, 0, sky_ok);
+		}
+
+		step = mtl_rtw_ws_next(kind, alias, from, layer, map);
+
+		if (step == MTL_RTW_NEXT_STOP)
+		{
+			return from;
+		}
+
+		if (step == MTL_RTW_NEXT_MAP)
+		{
+			mask = MTL_RTW_MASK_MAP;
+			map = 1;
+		}
+
+		at = rtw_isect(f, n, at + 1, mask);
+		(*casts)++;
+	}
+
+	*casts = -1;
+	return from;
+}
+
+/* TASK158: a model the picture does not show is passed, however many of its faces the ray meets */
+static void
+test_ws_models(void)
+{
+	static const rtw_face_t hidden_model = { 1, 0, 0 }, seen_model = { 1, 0, 1 };
+	static const rtw_face_t hidden_wall = { 0, 0, 0 }, seen_wall = { 0, 0, 1 };
+	static const rtw_face_t seen_sky = { 0, 1, 1 }, hidden_sky = { 0, 1, 0 };
+	const rtw_face_t ends[5] = { hidden_wall, seen_wall, seen_sky, hidden_sky, { 0, 0, 0 } };
+	rtw_face_t f[16];
+	int k, i, casts, ok = 1, ok_casts = 1;
+
+	/* the step alone: a hidden model is passed, after MTL_RTW_LAYERS of its faces with the map's mask alone */
+	CHECK(mtl_rtw_ws_next(2, 1, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_PASS);
+	CHECK(mtl_rtw_ws_next(2, 1, MTL_RTW_MISS, MTL_RTW_LAYERS - 2, 0) == MTL_RTW_NEXT_PASS);
+	CHECK(mtl_rtw_ws_next(2, 1, MTL_RTW_MISS, MTL_RTW_LAYERS - 1, 0) == MTL_RTW_NEXT_MAP);
+	CHECK(mtl_rtw_ws_next(2, 1, MTL_RTW_MISS, MTL_RTW_LAYERS + 3, 0) == MTL_RTW_NEXT_MAP);
+
+	/* every other choice stands: a model the picture shows, a map face, the sky, nothing, the map's pass */
+	CHECK(mtl_rtw_ws_next(2, 1, MTL_RTW_LIT, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ws_next(2, 0, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ws_next(2, 0, MTL_RTW_LIT | MTL_RTW_WS, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ws_next(1, 0, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ws_next(0, 0, MTL_RTW_SKY | MTL_RTW_WS, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ws_next(2, 1, MTL_RTW_MISS, 0, 1) == MTL_RTW_NEXT_STOP);
+
+	/* the masks: alias instances lack the map's bit, the map's carry it, the gun and the viewer neither */
+	CHECK((MTL_RTW_MASK_MAP & (MTL_RTW_MASK_MAP - 1)) == 0);
+	CHECK((MTL_RTW_MASK_MAP & (MTL_RTW_MASK | MTL_RTAO_MASK | MTL_RTS_MASK_OTHER | MTL_RTS_MASK_CARRIER)) == 0);
+	CHECK(MTL_RTW_MASK_MAP <= 0x80u);
+
+	for (unsigned carry = 0; carry < 2; carry++)
+	{
+		for (unsigned norefl = 0; norefl < 2; norefl++)
+		{
+			const unsigned ao = mtl_rtao_inst_mask(mtl_rts_inst_mask(carry), norefl);
+
+			for (unsigned alias = 0; alias < 2; alias++)
+			{
+				const unsigned m = mtl_rtw_inst_mask_ws(ao, norefl, alias);
+
+				/* every other query meets what it met: the bit is added, nothing else */
+				CHECK((m & ~MTL_RTW_MASK_MAP) == mtl_rtw_inst_mask(ao, norefl));
+				CHECK(((m & MTL_RTW_MASK_MAP) != 0) == (!norefl && !alias));
+			}
+		}
+	}
+
+	/* the cases that worked before the fix work as before */
+	CHECK(rtw_trace_ws(&hidden_wall, 1, 1, &casts) == (MTL_RTW_LIT | MTL_RTW_WS));
+	CHECK(casts == 1);
+	CHECK(rtw_trace_ws(&seen_wall, 1, 1, &casts) == MTL_RTW_LIT);
+	CHECK(rtw_trace_ws(&seen_model, 1, 1, &casts) == MTL_RTW_LIT);
+	CHECK(rtw_trace_ws(&hidden_model, 1, 1, &casts) == (MTL_RTW_SKY | MTL_RTW_WS));
+	CHECK(rtw_trace_ws(&hidden_model, 1, 0, &casts) == MTL_RTW_MISS);
+
+	/* a hidden door is a map face: shaded where it is, the wall behind it not reached */
+	f[0] = hidden_wall;
+	f[1] = seen_wall;
+	CHECK(rtw_trace_ws(f, 2, 1, &casts) == (MTL_RTW_LIT | MTL_RTW_WS));
+	CHECK(casts == 1);
+
+	/* a hidden model, its two faces, in front of a hidden wall: the wall in world space */
+	f[0] = f[1] = hidden_model;
+	f[2] = hidden_wall;
+	CHECK(rtw_trace_ws(f, 3, 1, &casts) == (MTL_RTW_LIT | MTL_RTW_WS));
+	CHECK(casts == 3);
+
+	/* a hidden model in front of one the picture shows: the picture's model */
+	f[0] = f[1] = hidden_model;
+	f[2] = seen_model;
+	f[3] = hidden_wall;
+	CHECK(rtw_trace_ws(f, 4, 1, &casts) == MTL_RTW_LIT);
+
+	/* four hidden model faces or more (a player and its weapon) in front of a wall: the wall, never a hole */
+	for (k = MTL_RTW_LAYERS; k <= 9; k++)
+	{
+		for (i = 0; i < k; i++)
+		{
+			f[i] = hidden_model;
+		}
+
+		f[k] = hidden_wall;
+		CHECK(rtw_trace_ws(f, k + 1, 1, &casts) == (MTL_RTW_LIT | MTL_RTW_WS));
+		CHECK((casts >= 1) && (casts <= MTL_RTW_LAYERS + 1));
+		f[k] = seen_wall;
+		CHECK(rtw_trace_ws(f, k + 1, 0, &casts) == MTL_RTW_LIT);
+		CHECK(rtw_trace_ws(f, k, 1, &casts) == (MTL_RTW_SKY | MTL_RTW_WS));
+		CHECK(rtw_trace_ws(f, k, 0, &casts) == MTL_RTW_MISS);
+	}
+
+	/* any number of hidden model faces before any end: what the ray gives without the models, in at most 5 casts */
+	for (k = 0; k <= 9; k++)
+	{
+		for (unsigned e = 0; e < 5; e++)
+		{
+			for (int sky_ok = 0; sky_ok < 2; sky_ok++)
+			{
+				const int n = (e == 4) ? k : k + 1;
+				int alone_casts;
+				unsigned with, alone;
+
+				for (i = 0; i < k; i++)
+				{
+					f[i] = hidden_model;
+				}
+
+				f[k] = ends[e];
+				with = rtw_trace_ws(f, n, sky_ok, &casts);
+				alone = rtw_trace_ws(&f[k], n - k, sky_ok, &alone_casts);
+
+				if (with != alone)
+				{
+					ok = 0;
+				}
+
+				if ((casts < 1) || (casts > MTL_RTW_LAYERS + 1) || (alone_casts != 1))
+				{
+					ok_casts = 0;
+				}
+			}
+		}
+	}
+
+	CHECK(ok);
+	CHECK(ok_casts);
+}
+
+/* TASK158: the shading record, the barycentrics, the mip level, the list */
+static void
+test_shade_record(void)
+{
+	unsigned s;
+	int ok = 1;
+
+	for (unsigned tex = 0; tex < 0x1000u; tex += 37)
+	{
+		for (unsigned slice = 0; slice < 256u; slice += 11)
+		{
+			for (unsigned f = 0; f < 16u; f++)
+			{
+				s = mtl_rtw_shade_pack(tex, slice, f);
+
+				if ((mtl_rtw_shade_tex(s) != tex) || (mtl_rtw_shade_slice(s) != slice) || (mtl_rtw_shade_flags(s) != f))
+				{
+					ok = 0;
+				}
+			}
+		}
+	}
+
+	CHECK(ok);
+	CHECK(mtl_rtw_shade_ok(mtl_rtw_shade_pack(0, MTL_RTW_SHADE_NOLM, 0)));
+	CHECK(mtl_rtw_shade_ok(mtl_rtw_shade_pack(MTL_RTW_TEX_WORLD - 1, 3, MTL_RTW_SF_WARP | MTL_RTW_SF_FLOW)));
+	CHECK(!mtl_rtw_shade_ok(mtl_rtw_shade_pack(MTL_RTW_SHADE_NOTEX, 3, 0)));
+	CHECK(!mtl_rtw_shade_ok(mtl_rtw_shade_pack(MTL_RTW_TEX_WORLD, 3, 0)));
+	CHECK(!mtl_rtw_shade_ok(mtl_rtw_shade_pack(5, 3, MTL_RTW_SF_SKY)));
+	CHECK(MTL_RTW_TEX_COUNT == MTL_RTW_TEX_SKY + 6u);
+
+	/* an attribute at the vertices, the edges' middles and the centroid */
+	CHECK(mtl_rtw_bary(1.0f, 2.0f, 4.0f, 0.0f, 0.0f) == 1.0f);
+	CHECK(mtl_rtw_bary(1.0f, 2.0f, 4.0f, 1.0f, 0.0f) == 2.0f);
+	CHECK(mtl_rtw_bary(1.0f, 2.0f, 4.0f, 0.0f, 1.0f) == 4.0f);
+	CHECK(mtl_rtw_bary(1.0f, 2.0f, 4.0f, 0.5f, 0.5f) == 3.0f);
+	CHECK(fabsf(mtl_rtw_bary(1.0f, 2.0f, 4.0f, 1.0f / 3.0f, 1.0f / 3.0f) - 7.0f / 3.0f) < 1e-6f);
+
+	/* the mip level: a texel or less is 0, then log2 of the footprint, bounded; not finite is 0 */
+	CHECK(mtl_rtw_lod(100.0f, 0.001f) == 0.0f);
+	CHECK(mtl_rtw_lod(1000.0f, 0.001f) == 0.0f);
+	CHECK(fabsf(mtl_rtw_lod(2000.0f, 0.001f) - 1.0f) < 1e-5f);
+	CHECK(fabsf(mtl_rtw_lod(8000.0f, 0.001f) - 3.0f) < 1e-4f);
+	CHECK(mtl_rtw_lod(1e9f, 1.0f) == MTL_RTW_LOD_MAX);
+	CHECK(mtl_rtw_lod(NAN, 1.0f) == 0.0f);
+	CHECK(mtl_rtw_lod(100.0f, NAN) == 0.0f);
+	CHECK(mtl_rtw_lod(-100.0f, 1.0f) == 0.0f);
+	CHECK(mtl_rtw_lod(INFINITY, 1.0f) == MTL_RTW_LOD_MAX);
+
+	/* the trace's threadgroups and the list's entries */
+	CHECK(mtl_rtw_groups(0) == 0);
+	CHECK(mtl_rtw_groups(1) == 1);
+	CHECK(mtl_rtw_groups(MTL_RTW_LIST_GROUP) == 1);
+	CHECK(mtl_rtw_groups(MTL_RTW_LIST_GROUP + 1) == 2);
+	CHECK(mtl_rtw_groups(5120u * 2880u) == (5120u * 2880u) / MTL_RTW_LIST_GROUP);
+	CHECK(mtl_rtw_list_pack(0, 0) == 0);
+	CHECK(mtl_rtw_list_pack(5119, 2879) == (5119u | (2879u << 16)));
+	CHECK((mtl_rtw_list_pack(16383, 16383) & 0xffffu) == 16383u);
+	CHECK((mtl_rtw_list_pack(16383, 16383) >> 16) == 16383u);
+
+	/* the list: opaque water, or a mark in the nine; nothing else */
+	CHECK(mtl_rtw_listed(MTL_GB_MAT_WATER, 0));
+	CHECK(mtl_rtw_listed(MTL_GB_MAT_WORLD, 1));
+	CHECK(mtl_rtw_listed(MTL_GB_MAT_NONE, 9));
+	CHECK(!mtl_rtw_listed(MTL_GB_MAT_WORLD, 0));
+	CHECK(!mtl_rtw_listed(MTL_GB_MAT_SKY, 0));
+	CHECK(!mtl_rtw_listed(MTL_GB_MAT_TRANS, 0));
+}
+
+/* TASK158: a face's colour in world space is the stock product of its kind */
+static void
+test_face_color(void)
+{
+	const mtl_rgba_t a = { 0.4f, 0.6f, 0.8f, 1.0f }, l = { 0.5f, 0.25f, 0.75f, 1.0f };
+	const mtl_rgba_t warp = { 0.5f, 0.5f, 0.5f, 1.0f }, trans = { 0.7f, 0.7f, 0.7f, 0.33f };
+	mtl_rgba_t c, r;
+	int env;
+
+	for (env = 0; env < 4; env++)
+	{
+		const float scale = (env == 1) ? 2.0f : 1.0f;
+
+		c = mtl_rtw_face_color(a, l, 0, env, scale, warp, trans, 0);
+		r = mtl_gb_resolve(a, l, MTL_GB_MAT_WORLD, env, scale);
+		CHECK(memcmp(&c, &r, sizeof(c)) == 0);
+		c = mtl_rtw_face_color(a, l, MTL_RTW_SF_FLOW, env, scale, warp, trans, 0);
+		CHECK(memcmp(&c, &r, sizeof(c)) == 0);
+	}
+
+	/* the warp's colour, as the resolve shades water; the translucent faces' inverse intensity */
+	c = mtl_rtw_face_color(a, l, MTL_RTW_SF_WARP, 0, 1.0f, warp, trans, 0);
+	r = mtl_gb_resolve(a, warp, MTL_GB_MAT_WATER, 0, 1.0f);
+	CHECK(memcmp(&c, &r, sizeof(c)) == 0);
+	c = mtl_rtw_face_color(a, l, MTL_RTW_SF_WARP | MTL_RTW_SF_TRANS, 0, 1.0f, warp, trans, 0);
+	CHECK(memcmp(&c, &r, sizeof(c)) == 0);
+	c = mtl_rtw_face_color(a, l, MTL_RTW_SF_TRANS, 0, 1.0f, warp, trans, 0);
+	r = mtl_world_color(trans, a);
+	CHECK(memcmp(&c, &r, sizeof(c)) == 0);
+
+	/* r_fullbright: the texel alone */
+	c = mtl_rtw_face_color(a, l, 0, 0, 1.0f, warp, trans, 1);
+	CHECK(memcmp(&c, &a, sizeof(c)) == 0);
+	c = mtl_rtw_face_color(a, l, MTL_RTW_SF_WARP, 0, 1.0f, warp, trans, 1);
+	CHECK(memcmp(&c, &a, sizeof(c)) == 0);
+}
+
+/* TASK158: the sky box's texel in a direction is the one gl1 draws there */
+static void
+test_sky(void)
+{
+	int face, ok_face = 1, ok_st = 1, ok_dir = 1, ok_rows = 1, n = 0;
+	float rows[12];
+	const float axis[3] = { 0.0f, 0.6f, 0.8f }, zero[3] = { 0, 0, 0 };
+
+	/* every face's inner points as rm_sky_vec places them */
+	for (face = 0; face < 6; face++)
+	{
+		for (int i = 0; i <= 20; i++)
+		{
+			for (int j = 0; j <= 20; j++)
+			{
+				const float s = -0.95f + 1.9f * (float)i / 20.0f, t = -0.95f + 1.9f * (float)j / 20.0f;
+				float v[3], st[2];
+				mtl_rtw_sky_t k;
+
+				if (!rm_sky_vec(s, t, face, 0, v, st))
+				{
+					ok_face = 0;
+					continue;
+				}
+
+				k = mtl_rtw_sky_st(mtl_rtw_v3(v[0], v[1], v[2]));
+				n++;
+
+				if (!k.ok || (k.face != face))
+				{
+					ok_face = 0;
+				}
+				else if ((fabsf(k.s - st[0]) > 1e-5f) || (fabsf(k.t - st[1]) > 1e-5f))
+				{
+					ok_st = 0;
+				}
+			}
+		}
+	}
+
+	CHECK(n == 6 * 21 * 21);
+	CHECK(ok_face);
+	CHECK(ok_st);
+	CHECK(!mtl_rtw_sky_st(mtl_rtw_v3(0, 0, 0)).ok);
+	CHECK(!mtl_rtw_sky_st(mtl_rtw_v3(NAN, 0, 0)).ok);
+
+	/* the clamp: a direction on a face's edge is inside 1/512 .. 511/512 */
+	{
+		const mtl_rtw_sky_t k = mtl_rtw_sky_st(mtl_rtw_v3(1.0f, 1.0f - 1e-6f, -1.0f + 1e-6f));
+
+		CHECK(k.ok && (k.s >= 1.0f / 512.0f) && (k.s <= 511.0f / 512.0f) && (k.t >= 1.0f / 512.0f) &&
+				(k.t <= 511.0f / 512.0f));
+	}
+
+	/* the rotation: rm_sky_matrix's about the origin, a direction turned back into the box's frame */
+	rm_rtw_sky_rows(12.5f, 10.0f, axis, rows);
+
+	{
+		float m[16], id[16];
+		const float o[3] = { 0, 0, 0 };
+
+		mtl_mat_identity(id);
+		rm_sky_matrix(m, id, o, 12.5f, 10.0f, axis);
+
+		for (int r = 0; r < 3; r++)
+		{
+			for (int c = 0; c < 3; c++)
+			{
+				if (fabsf(rows[r * 4 + c] - m[c * 4 + r]) > 1e-6f)
+				{
+					ok_rows = 0;
+				}
+			}
+
+			if (rows[r * 4 + 3] != 0.0f)
+			{
+				ok_rows = 0;
+			}
+		}
+
+		for (int i = 0; i < 1000; i++)
+		{
+			const mtl_rtw_v3_t b = rand_unit();
+			const mtl_rtw_v3_t w = mtl_rtw_v3(m[0] * b.x + m[4] * b.y + m[8] * b.z, m[1] * b.x + m[5] * b.y + m[9] * b.z,
+					m[2] * b.x + m[6] * b.y + m[10] * b.z);
+			const mtl_rtw_v3_t back = mtl_rtw_sky_dir(w, mtl_rtw_v3(rows[0], rows[1], rows[2]),
+					mtl_rtw_v3(rows[4], rows[5], rows[6]), mtl_rtw_v3(rows[8], rows[9], rows[10]));
+
+			if ((fabsf(back.x - b.x) > 1e-5f) || (fabsf(back.y - b.y) > 1e-5f) || (fabsf(back.z - b.z) > 1e-5f))
+			{
+				ok_dir = 0;
+			}
+		}
+	}
+
+	CHECK(ok_rows);
+	CHECK(ok_dir);
+
+	/* no rotation, a zero axis or a value not finite: the identity */
+	rm_rtw_sky_rows(12.5f, 0.0f, axis, rows);
+	CHECK((rows[0] == 1) && (rows[5] == 1) && (rows[10] == 1) && (rows[1] == 0) && (rows[4] == 0) && (rows[9] == 0));
+	rm_rtw_sky_rows(12.5f, 10.0f, zero, rows);
+	CHECK((rows[0] == 1) && (rows[5] == 1) && (rows[10] == 1) && (rows[2] == 0) && (rows[8] == 0));
+	rm_rtw_sky_rows(NAN, 10.0f, axis, rows);
+	CHECK((rows[0] == 1) && (rows[5] == 1) && (rows[10] == 1));
+	rm_rtw_sky_rows(12.5f, INFINITY, axis, rows);
+	CHECK((rows[0] == 1) && (rows[5] == 1) && (rows[10] == 1));
+}
+
+/* TASK158: the world's texture table and the triangles' records */
+static void
+test_shade_build(void)
+{
+	static int big[MTL_RTW_TEX_WORLD + 1], bigtex[MTL_RTW_TEX_WORLD + 1], bigslot[MTL_RTW_TEX_WORLD];
+	const int img[6] = { 7, 3, 7, -1, 900, 3 };
+	const int t4[4] = { 0, 5, -1, (int)MTL_RTW_TEX_WORLD };
+	int slot[8], tex[6];
+	rm_surfrec_t r[4];
+	unsigned out[16];
+	int i;
+
+	CHECK(rm_rtw_tex_slots(img, 6, slot, 8, tex) == 3);
+	CHECK((slot[0] == 7) && (slot[1] == 3) && (slot[2] == 900));
+	CHECK((tex[0] == 0) && (tex[1] == 1) && (tex[2] == 0) && (tex[3] == -1) && (tex[4] == 2) && (tex[5] == 1));
+	CHECK(rm_rtw_tex_slots(img, 6, slot, 2, tex) == -1);
+	CHECK(rm_rtw_tex_slots(img, 0, slot, 8, tex) == 0);
+
+	for (i = 0; i < (int)MTL_RTW_TEX_WORLD + 1; i++)
+	{
+		big[i] = i;
+	}
+
+	CHECK(rm_rtw_tex_slots(big, MTL_RTW_TEX_WORLD, bigslot, MTL_RTW_TEX_WORLD, bigtex) == (int)MTL_RTW_TEX_WORLD);
+	CHECK(rm_rtw_tex_slots(big, MTL_RTW_TEX_WORLD + 1, bigslot, MTL_RTW_TEX_WORLD, bigtex) == -1);
+
+	memset(r, 0, sizeof(r));
+	r[0].num_indices = 6;
+	r[0].lm_slice = 2;
+	r[1].first_index = 6;
+	r[1].num_indices = 3;
+	r[1].lm_slice = -1;
+	r[1].texflags = RM_TEX_WARP | RM_TEX_TRANS33;
+	r[2].first_index = 9;
+	r[2].num_indices = 3;
+	r[2].lm_slice = 300;
+	r[2].texflags = RM_TEX_FLOWING | RM_TEX_TRANS66;
+	r[3].first_index = 12;
+	r[3].num_indices = 3;
+	r[3].texflags = RM_TEX_SKY;
+
+	CHECK(rm_rtw_shade_build(r, 4, 15, t4, out, 16) == 5);
+	CHECK((out[0] == mtl_rtw_shade_pack(0, 2, 0)) && (out[1] == out[0]));
+	CHECK(out[2] == mtl_rtw_shade_pack(5, MTL_RTW_SHADE_NOLM, MTL_RTW_SF_WARP | MTL_RTW_SF_TRANS));
+	CHECK(out[3] == mtl_rtw_shade_pack(MTL_RTW_SHADE_NOTEX, MTL_RTW_SHADE_NOLM, MTL_RTW_SF_FLOW | MTL_RTW_SF_TRANS));
+	CHECK(out[4] == mtl_rtw_shade_pack(MTL_RTW_SHADE_NOTEX, 0, MTL_RTW_SF_SKY));
+	CHECK(!mtl_rtw_shade_ok(out[3]) && !mtl_rtw_shade_ok(out[4]) && mtl_rtw_shade_ok(out[0]));
+
+	/* the walk of rm_rt_materials: records short of the buffer, a short cap, a gap, a part triangle */
+	CHECK(rm_rtw_shade_build(r, 4, 18, t4, out, 16) == -1);
+	CHECK(rm_rtw_shade_build(r, 4, 15, t4, out, 4) == -1);
+	CHECK(rm_rtw_shade_build(r, 4, 14, t4, out, 16) == -1);
+	r[1].first_index = 7;
+	CHECK(rm_rtw_shade_build(r, 4, 15, t4, out, 16) == -1);
+	r[1].first_index = 6;
+	r[2].num_indices = 4;
+	CHECK(rm_rtw_shade_build(r, 4, 15, t4, out, 16) == -1);
+	r[2].num_indices = 3;
+	CHECK(rm_rtw_shade_build(r, 4, 15, t4, out, 16) == 5);
+	CHECK(rm_rtw_shade_build(r, 0, 0, t4, out, 16) == 0);
+	CHECK(rm_rtw_shade_build(r, -1, 0, t4, out, 16) == -1);
+}
+
+/* TASK158: the view's world-space shading */
+static void
+test_shading(void)
+{
+	float proj[16], world[16];
+	rm_viewport_t vp = { 0, 0, 1920, 1080, 0, 1 };
+	const float eye[3] = { 0, 0, 0 };
+	rm_rtw_shading_t sh;
+	rm_rtw_view_t v;
+
+	mtl_mat_frustum(proj, -4, 4, -2.25f, 2.25f, 4, 4096);
+	mtl_mat_identity(world);
+	CHECK(rm_rtw_view(proj, world, &vp, eye, 4, 1, 0.08f, 0.5f, 0, &v) == 1);
+
+	memset(&sh, 0, sizeof(sh));
+	sh.env = 2;
+	sh.scale = 2.0f;
+	sh.flow = -12.5f;
+	sh.warp[0] = sh.warp[1] = sh.warp[2] = 0.5f;
+	sh.warp[3] = 1;
+	sh.trans[0] = sh.trans[1] = sh.trans[2] = 0.7f;
+	sh.trans[3] = 0.33f;
+	sh.fullbright = 1;
+	sh.nlights = 40;
+	sh.sky = 1;
+	rm_rtw_sky_rows(0, 0, eye, sh.sky_rows);
+	rm_rtw_shading(&sh, proj, &v);
+
+	CHECK((v.env == 2) && (v.scale == 2.0f) && (v.flow == -12.5f) && (v.fullbright == 1) && (v.sky == 1));
+	CHECK(v.nlights == MTL_RTS_MAX_LIGHTS);
+	CHECK((v.warp[0] == 0.5f) && (v.warp[3] == 1) && (v.trans[2] == 0.7f) && (v.trans[3] == 0.33f));
+	CHECK((v.sky_rows[0] == 1) && (v.sky_rows[5] == 1) && (v.sky_rows[10] == 1));
+
+	/* the side of a pixel one unit away: 2 / (height x proj[5]); proj[5] = 2 near / (top - bottom) */
+	CHECK(fabsf(v.lod_k - 2.0f / (1080.0f * proj[5])) < 1e-9f);
+	CHECK(fabsf(v.lod_k - 4.5f / (1080.0f * 4.0f)) < 1e-7f);
+
+	sh.nlights = -3;
+	rm_rtw_shading(&sh, proj, &v);
+	CHECK(v.nlights == 0);
+
+	/* no height or no projection: no mip factor (level 0) */
+	v.vp[3] = 0;
+	rm_rtw_shading(&sh, proj, &v);
+	CHECK(v.lod_k == 0);
+	v.vp[3] = 1080;
+	proj[5] = NAN;
+	rm_rtw_shading(&sh, proj, &v);
+	CHECK(v.lod_k == 0);
+
+	/* a flow not finite is no scroll; a scale not finite is 1 */
+	proj[5] = 1;
+	sh.flow = NAN;
+	sh.scale = NAN;
+	rm_rtw_shading(&sh, proj, &v);
+	CHECK(v.flow == 0);
+	CHECK(v.scale == 1);
 }
 
 int
@@ -761,6 +1398,13 @@ main(void)
 	test_view();
 	test_instances();
 	test_stats();
+	test_choose_ws();
+	test_ws_models();
+	test_shade_record();
+	test_face_color();
+	test_sky();
+	test_shade_build();
+	test_shading();
 
 	printf("rm_rtwater_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

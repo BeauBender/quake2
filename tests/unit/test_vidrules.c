@@ -193,6 +193,48 @@ TEST(vidrules_denoiser_is_always_greyed_today)
 	T_EQ_STR(why(VIDITEM_DENOISER, "metal", 31, 3), "needs ray tracing");
 }
 
+/*
+ * TASK158: the water reflections' hit shading (r_rt_water_hits). Metal
+ * only; greyed with its reason while r_rt_water is off (the scaler
+ * argument carries whether it is on), whatever the MetalFX modes.
+ */
+TEST(vidrules_water_hits_needs_metal_and_the_water)
+{
+	static const int masks[] = { 0, 1, 3, 7, 15, 31 };
+
+	for (int m = 0; m < 6; m++)
+	{
+		for (int r = 1; r < NREFS; r++)
+		{
+			T_EQ_INT(on(VIDITEM_RTW_HITS, refs[r], masks[m], 1), 0);
+			T_EQ_STR(why(VIDITEM_RTW_HITS, refs[r], masks[m], 1), "Metal renderer only");
+			T_CHECK(VidRules_Cvar(VIDITEM_RTW_HITS, refs[r]) == NULL);
+		}
+
+		T_EQ_INT(on(VIDITEM_RTW_HITS, "metal", masks[m], 0), 0);
+		T_EQ_STR(why(VIDITEM_RTW_HITS, "metal", masks[m], 0), "needs r_rt_water 1");
+		T_EQ_INT(on(VIDITEM_RTW_HITS, "metal", masks[m], 1), 1);
+		T_EQ_STR(why(VIDITEM_RTW_HITS, "metal", masks[m], 1), "world space costs more GPU time");
+	}
+
+	T_EQ_STR(VidRules_Cvar(VIDITEM_RTW_HITS, "metal"), "r_rt_water_hits");
+	T_CHECK(VidRules_Cvar(VIDITEM_RTW_HITS, NULL) == NULL);
+
+	/* the cvars as the renderer reads them: r_rt_water on when finite and not 0, the hits 1 from 1 up */
+	T_EQ_INT(VidRules_WaterOn(1.0f), 1);
+	T_EQ_INT(VidRules_WaterOn(-1.0f), 1);
+	T_EQ_INT(VidRules_WaterOn(0.0f), 0);
+	T_EQ_INT(VidRules_WaterOn(0.0f / 0.0f), 0);
+	T_EQ_INT(VidRules_WaterOn(1.0f / 0.0f), 0);
+	T_EQ_INT(VidRules_WaterHitsIndex(0.0f), 0);
+	T_EQ_INT(VidRules_WaterHitsIndex(0.9f), 0);
+	T_EQ_INT(VidRules_WaterHitsIndex(1.0f), 1);
+	T_EQ_INT(VidRules_WaterHitsIndex(7.0f), 1);
+	T_EQ_INT(VidRules_WaterHitsIndex(-1.0f), 0);
+	T_EQ_INT(VidRules_WaterHitsIndex(0.0f / 0.0f), 0);
+	T_EQ_INT(VidRules_WaterHitsIndex(1.0f / 0.0f), 0);
+}
+
 TEST(vidrules_renderer_specific_settings)
 {
 	/* gl1 and metal share gl1's settings */
