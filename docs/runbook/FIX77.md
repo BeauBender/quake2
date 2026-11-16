@@ -218,6 +218,101 @@ or a warning from the changed files.
 - `ref_metal`'s second `rmb_detach` still waits again for the frames
   (`rmb_drain`, the frame semaphore): on a GPU hung past the bound that is
   5 s in each of the two. This card is about the presents' waits.
+  [FIX84](#fix84-the-marks-end-with-what-they-mark) does this.
 - A command buffer that fails after a teardown gave up on it is counted in
   a static count (`count_failed` in the shim, `rmb_failed` in `ref_metal`),
   which the next context or session has reset: it counts there.
+
+## FIX84: the marks end with what they mark
+
+FIX77's review left four notes on the teardown waits; FIX84 settles them.
+Its builds: base `2da65254` (TASK121's head, which FIX84 is stacked on:
+main of FIX77 plus the colour-space restore in `rmb_detach`) and the fix
+`0299c238`.
+
+**The changes.** The shim's `lost` mark on a slot now also ends when a
+frame takes the slot (`mgl_hold_take`, called by `mgl_present_take`), not
+only when a present is committed: a slot given up on, freed, taken by a
+frame that ends without a present (display sync on commits none) and then
+held again is waited for by the next drop with the shared deadline, where
+the mark made it look once and leave it. In `ref_metal` a drain that gives
+up marks the group it gave up on (`rmb_present_spent`) and no longer
+starts a new one at once: a later drain of that group (teardown's second
+`rmb_detach`) waits for nothing and counts nothing, and the next present
+starts a new group, whose drain waits the shared deadline for the group
+and for the slots; a slot still held when such a group is done is held by
+a present given up on before, is waited for with the same deadline, and
+marks the group when it does not come back. A group that cannot be made
+leaves the present uncommitted. `ref_metal`'s frames share one deadline
+(each had a fresh one), and the slots a drain gave up on
+(`rmb_frames_lost`) are not waited for again until `rmb_attach` puts on a
+new layer (a frame begins only with one, `rmb_frame_begin`): the second
+`rmb_detach` of teardown and `rmb_attach`'s own, after
+`RI_ShutdownContext`'s, take them back only if they are free at once, as
+the shim's `mgl_release_all` waits for no frame. The shim's teardown wait
+for its frames shares one deadline too.
+
+**The host test** (`test_present_holds`) runs the first through the seam:
+slot 0 given up on at 10000, freed, `mgl_hold_take`, given back, held
+again until 13000; the next drop must take it at 13000. `4696fc2a` holds
+the test with `mgl_hold_take` leaving the mark: `555 checks, 3 failed`;
+the fix: `555 checks, 0 failed`. Mutants, each in a scratch copy, all
+killed: the take a no-op (3 failed), the take setting the mark (4), the
+take touching the count (1), the drop ignoring the mark (3), every slot
+looked at once (10), a slot taken back keeping its mark (1), a commit
+keeping it (2). The test's comment now says that it holds the seam only:
+`tests/check-metal-shim.sh` builds no `mgl_layer.m` into it, so the
+handlers' capture of their context's hold, the take's call and the waits
+on the semaphores are held by the probes, not by it. The `ref_metal` items
+have no host test: `ref_metal` may not include a `gl1/` header
+(`tests/check-ref-metal.sh`), so `mgl_hold.h` cannot carry its decisions,
+and the card's files hold no `ref_metal` test; the probe below holds them.
+
+**The fault probe, on a VM.** This host is a virtual machine: its Metal
+device is `Apple Paravirtual device`, not the bare-metal GPU of the runs
+above. The probe is built as FIX77's were, from `git archive` exports of
+base and fix with the probe (never committed), with `make -j3 ref_metal`
+and `make -j3 ref_gl1 WITH_METAL_SHIM=yes`, beside the engine and game of
+the fix's own build. Once the console script has written a file
+(`condump`), every completed handler that the renderer watches
+(`rmb_watch_until`, `mgl_watch`) waits 30 s, past the run, before the
+rest of its command buffer's handlers run: frames and presents are both
+held. The script then waits two frames and quits. 1280x720 windowed,
+`r_vsync 0`, `demo1.dm2`, `MTL_DEBUG_LAYER=1` (`Metal API Validation
+Enabled`), every run under the host's timing lock, 15:29 to 15:31 local
+time, one run each:
+
+| Renderer | Build | First teardown stage | Second | Teardown |
+|---|---|---|---|---|
+| `ref_metal` | base | `rmb_detach`: frames 5000.6 ms, presents 5003.3 ms | `rmb_detach`: frames 5004.1 ms, presents 0.0 ms | 15008 ms |
+| `ref_metal` | fix | `rmb_detach`: frames 5005.3 ms, presents 5002.7 ms | `rmb_detach`: 0.0 ms, 0.0 ms | 10008 ms |
+| shim | base | frames 5002.0 ms, first drop 10004.5 ms | `mgl_release_all` 0.3 ms | 15006.9 ms |
+| shim | fix | frames 5000.5 ms, first drop 10005.0 ms | `mgl_release_all` 0.4 ms | 15006.0 ms |
+
+So each stage waits one deadline (the shim's drop two, as FIX77 made it)
+and the second `rmb_detach` none: base printed `the GPU still holds a
+frame after 5000 ms` twice, the fix once. Both `ref_metal` runs ended with
+`1 waits for them past the bound` and `1 unreleased` (the command queue,
+which its held command buffers keep alive); the shim's with `3
+presents are still on the GPU after 10000 ms, not waited for again`. The
+shim's numbers do not move: with every frame held its first wait timed out
+at once on base too; the shared deadline bounds the case where the frames
+complete one by one. The first note (a slot freed and taken again) and the
+second (a group done while an older present holds a slot) are not
+reproduced by the probe: the handlers held here complete in order, so a
+newer group cannot be done while an older present is held; the host test
+holds the first, the code the second.
+
+**Pins.** This host holds no `metal` reference in the owner's pin store
+for any of `world`, `hud2d`, `particles`, `models`, `dlights` and
+`skywater`, and none of `gl1-metal` for `particles`, `models` and
+`dlights`; none was recorded. `gl1-metal` `world` and `hud2d` were
+recorded with the fix's build into a scratch store, with the references'
+settings hash, and every frame compared with `cmp` against the newest
+complete reference: 23 of 23 byte for byte equal in each. The `skywater`
+reference has another settings hash (5 frames): not compared.
+
+**The checks.** `tests/check-metal-shim.sh` (`555 checks, 0 failed; shim
+built`) and `tests/check-ref-metal.sh` (`12831 checks, 0 failed`, `ref_metal
+built`); `make client game`, `make ref_metal` and `make ref_gl1
+WITH_METAL_SHIM=yes` with no warning from the changed files.
