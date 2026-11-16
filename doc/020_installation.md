@@ -388,8 +388,8 @@ reached the console, that the simulator's screenshot of the screen's
 safe area is that frame pixel for pixel (so a stretched, cropped or
 shifted picture fails), and that the app quit through its own quit
 path. It writes the build and the logs to
-DIR, which must be outside the checkout; the app's write directory is
-*Library/YamagiQ2/* in its data container (`-cfgdir`). The simulator's
+DIR, which must be outside the checkout; the app's data and write
+directory is *Documents/* in its data container (see below). The simulator's
 Metal device reports no Apple GPU family; in the simulator only,
 `ref_metal` does not check its apple5 floor and logs a line that says
 so, while a device build still refuses a GPU below it.
@@ -400,3 +400,42 @@ so, while a device build still refuses a GPU below it.
 simulator and checks their platform, exports and AppKit references;
 `--full` also builds and checks the bundle. Both print one skipped line
 where there is no iOS simulator SDK.
+
+### Game data on iPhone and iPad
+
+The app holds no game data. On iOS the only place a person can put files
+into an app is its *Documents* folder, which the Files app shows under
+"On My iPhone" (or "On My iPad") > "Quake II" (the app sets
+`UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace`). The engine
+uses *Documents* as its home directory, so it searches *Documents/baseq2/*
+first and needs no option:
+
+1. Start the app once. It creates *Documents/baseq2/* and, with no game
+   data, shows an alert that names this place and *pak0.pak*, then quits.
+2. Copy *pak0.pak* (and *pak1.pak*, *pak2.pak* if you have them) from the
+   *baseq2/* folder of your Quake II into *Quake II > baseq2* in the Files
+   app, or into the app's folder through Finder's device file sharing. The
+   optional *players/*, *video/* and *music/* folders go next to them.
+3. Start the app again.
+
+The device's volume is case sensitive and the engine opens numbered paks
+as *pak0.pak*, *pak1.pak* and so on, in lower case. A file named
+*PAK0.PAK* is not found; the alert says to rename it.
+
+`scripts/ios-sim.sh run --out DIR --data GAMEDIR` does the same on the
+simulator: it copies *GAMEDIR/baseq2/\*.pak* (and *players/*, *video/*,
+*music/* when present) into the app's *Documents/baseq2/*, starts the app
+on a throwaway device and deletes the device at the end. `--no-data` runs
+with no data at all, `--launch "ARGS"` (repeatable) is one start of the
+app with engine arguments, and `--shot SECONDS` takes a simulator
+screenshot and ends the app. Without either data option the synthetic
+data of the smoke is used.
+
+The script touches only its own device. Every `simctl` call that changes
+something (`shutdown`, `delete`, `erase`, `uninstall`, `terminate`) names
+the UDID of the device it created, never another. That device must be
+absent from the device list before `simctl create`, present in the list
+taken after it and gone from the list at the end; each of the three is a
+failure. Other devices come and go on a Mac (Xcode Previews creates and
+deletes its own): one that was listed before the run and is missing at the
+end is printed as a warning that names its UDID, and does not fail the run.

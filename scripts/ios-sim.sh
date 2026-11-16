@@ -2,6 +2,7 @@
 # scripts/ios-sim.sh -- the iOS simulator app on a throwaway device (TASK146).
 #
 #   scripts/ios-sim.sh smoke --out DIR
+#   scripts/ios-sim.sh run --out DIR [--data DIR | --no-data] [--launch "ARGS"]... [--shot SECONDS]
 #   scripts/ios-sim.sh selftest
 #
 # smoke: writes the synthetic data (scripts/ios/smokepak.py, no id Software
@@ -46,19 +47,44 @@
 #     DIR/console.log), no validation message, and 0 failed command
 #     buffers in ref_metal's metal_stats line;
 #   - the device lists (DIR/devices.{before,created,after}.json, each
-#     "simctl list devices -j"): every device listed before the run is
-#     listed after it, and this run's device is in the list taken after
-#     "simctl create", not in the one before and not in the one after.
-#     Devices that others create or delete meanwhile (Xcode Previews) are
-#     not this run's. A list that fails, cannot be read or names no
-#     device is a failure.
-# A "run" subcommand (the app for a person to look at, optionally with the
-# owner's data in the local bundle) is left to a later card.
+#     "simctl list devices -j"): this run's device is in the list taken
+#     after "simctl create", not in the one before and not in the one
+#     after. Other devices come and go (the owner's Xcode Previews
+#     devices): one listed before the run and missing after it is a
+#     warning naming its UDID, never a failure. This script's own
+#     mutating simctl calls (shutdown, delete, erase, uninstall,
+#     terminate, and the lookup of a lost device) name only this run's
+#     UDID, never one of the others. A list that fails, cannot be read or
+#     names no device is a failure.
+#
+# run (TASK149): what smoke does up to the launch, without the scripted
+# quit and the decisions: the app on the throwaway device for a person to
+# look at (the device is shut down and deleted when the app ends, or past
+# IOS_SIM_RUN_SECONDS). The paks go where a person puts them on a device,
+# the app's data container, Documents/baseq2/ (simctl get_app_container
+# <udid> <id> data); the engine finds them there with no option:
+#   without --data: the synthetic data in the bundle, as smoke does;
+#   --data DIR: DIR/baseq2/*.pak, and players/, video/ and music/ of
+#     DIR/baseq2 when present, are copied into Documents/baseq2/; the
+#     bundle holds no data; nothing is copied anywhere else. DIR must hold
+#     baseq2/ with at least one .pak, or the run does not start;
+#   --no-data: no data at all (the missing-data alert).
+# Each --launch "ARGS" is one start of the app, in order, on the same
+# device and container (a setting or a save is read back by the next
+# one); ARGS are engine arguments, split at spaces. With none, one start
+# with no argument, the app until the person quits it. --shot SECONDS:
+# a simctl screenshot that long after each start (DIR/screen.<n>.png),
+# then simctl terminate. After each start DIR/engine.<n>.log is the
+# engine's own log (qconsole.log), DIR/documents.<n>.list the files of
+# Documents/baseq2/ with their sizes (names, never contents) and
+# DIR/frames.<n>/ its scrnshot/ files. With --data these hold the
+# owner's data: DIR is the artifacts folder, never published.
 #
 # selftest: runs "smoke" against a fake xcrun and a fake make (no
 # simulator, no build, seconds) and checks its rules: a hung "simctl
 # list" is timed out, a failed or empty device list fails, another device
-# appearing meanwhile passes, a device from before that disappears fails,
+# appearing meanwhile passes, a device from before that disappears warns and passes,
+# a mutating simctl call naming any UDID but this run's fails,
 # this run's device left behind fails, the device of a create that timed
 # out is deleted, a create whose UDID is not listed after it, or was
 # listed before it, fails (and leaves that device alone), ref_metal's
@@ -68,14 +94,21 @@
 # fails and one within the colour tolerance passes, the turn that fits is
 # found when the other has nothing lit inside, a hung get_app_container is
 # timed out within the run's limit, an app killed, crashed, not quitting or
-# not closing its renderer fails, one vid_restart passes and two fail, and a limit that is not
-# digits is refused.
+# not closing its renderer fails, one vid_restart passes and two fail, and a
+# limit that is not digits is refused; for run:
+# the synthetic data without --data, the pak and the three folders of
+# --data copied into Documents/baseq2 and nothing else (not a stray file,
+# not another folder, not the bundle), a --data without baseq2 or without
+# a pak refused before a device is made, a container that cannot be found
+# fails and still deletes the device, an app that outlives
+# IOS_SIM_RUN_SECONDS is terminated and fails, each --launch is a start
+# with its own log and listing, --shot ends the app and keeps the frame.
 # tests/check-ios.sh runs it.
 #
 # Limits, in seconds (digits only, or the script refuses):
 # IOS_SIM_BOOT_SECONDS (300), IOS_SIM_SMOKE_SECONDS (180, the app's run),
 # IOS_SIM_LIST_SECONDS (60, each "simctl list"), IOS_SIM_CREATE_SECONDS
-# (120).
+# (120), IOS_SIM_RUN_SECONDS (3600, each start of "run").
 #
 # Rules: every wait is bounded; the app is watched by its PID; nothing is
 # killed but a PID this script started, and the app only through "simctl
@@ -91,7 +124,13 @@ export LC_ALL=C
 repo=$(cd "$(dirname "$0")/.." && pwd -P) || exit 1
 self=$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0") || exit 1
 die() { echo "ios-sim: $*" >&2; exit 1; }
-usage() { echo "usage: scripts/ios-sim.sh smoke --out DIR | selftest" >&2; exit 2; }
+usage()
+{
+	echo "usage: scripts/ios-sim.sh smoke --out DIR" >&2
+	echo "       scripts/ios-sim.sh run --out DIR [--data DIR | --no-data] [--launch \"ARGS\"]... [--shot SECONDS]" >&2
+	echo "       scripts/ios-sim.sh selftest" >&2
+	exit 2
+}
 uuid_re='[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}'
 
 # bounded <seconds> <log> [-e <err>] <command>...: runs it, kills it (our
@@ -185,9 +224,15 @@ print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-27-2": dev
 	esac ;;
 create)
 	u=$(printf 'AAAAAAAA-0000-0000-0000-%012d' $$)
+	# the UDID this create hands out is this run's: the case checks every
+	# mutating call against it
 	case $sc in
-	ghost) echo "BBBBBBBB-0000-0000-0000-000000000000"; exit 0 ;;
-	reuse) echo "11111111-1111-1111-1111-111111111111"; exit 0 ;;
+	ghost) u=BBBBBBBB-0000-0000-0000-000000000000 ;;
+	reuse) u=11111111-1111-1111-1111-111111111111 ;;
+	esac
+	echo "$u" > "$st/created"
+	case $sc in
+	ghost|reuse) echo "$u"; exit 0 ;;
 	esac
 	printf '%s %s\n' "$u" "$2" >> "$st/devices"
 	if [ "$sc" = extra ]; then
@@ -199,7 +244,8 @@ create)
 		exec sleep 30
 	fi
 	echo "$u" ;;
-bootstatus|install|terminate|shutdown) ;;
+terminate) [ -f "$st/app.pid" ] && kill "$(cat "$st/app.pid")" 2>/dev/null; echo "$*" >> "$st/terminates"; exit 0 ;;
+bootstatus|install|shutdown) ;;
 io)
 		case $4 in
 		*/app.png)
@@ -211,7 +257,8 @@ io)
 		esac ;;
 launch)
 	# launch --console-pty <udid> <bundle id> <args>...
-	c=$st/container/Library/YamagiQ2/baseq2
+	printf '%s\n' "$*" >> "$st/launches"
+	c=$st/container/Documents/baseq2
 	mkdir -p "$c/scrnshot"
 	skip="ref_metal: the device floor (apple5) is not checked in the simulator"
 		drawable=12x7
@@ -239,13 +286,16 @@ launch)
 	} > "$c/qconsole.log"
 	python3 -I "$(dirname "$0")/fakepix.py" tga "$c/scrnshot/q2_0000.tga" "$sc"
 	[ "$sc" = launchterm ] && trap "" TERM
-	# an app that stays at the console: appstays, and containerhang (the frame wait must end at its limit, not on the app's end)
+	# an app that stays at the console: appstays, and containerhang (the frame wait must end at its limit, not on the app's end);
+	# the launch client is the app (--console-pty), so a terminate ends it
 	if [ "$sc" = appstays ] || [ "$sc" = containerhang ]; then
 		echo "Metal API Validation Enabled"
+		echo $$ > "$st/app.pid"
 		exec sleep 30
 	fi
 	sleep 1 &
 	p=$!
+	echo $p > "$st/app.pid"
 	echo "$4: $p"
 	echo "Metal API Validation Enabled"
 	wait "$p"
@@ -253,13 +303,14 @@ launch)
 	[ "$sc" = launchterm ] && { echo $$ > "$st/hang.pid"; exec sleep 60; }
 	exit 0 ;;
 get_app_container)
+	[ "$sc" = nocontainer ] && { echo "fake xcrun: no such container" >&2; exit 1; }
 	# containerhang: the first call hangs
 	if [ "$sc" = containerhang ] && [ ! -f "$st/hung" ]; then
 		: > "$st/hung"
 		echo $$ > "$st/hang.pid"
 		exec sleep 30
 	fi
-	echo "$st/container" ;;
+	mkdir -p "$st/container"; echo "$st/container" ;;
 delete)
 	[ "$sc" = leftover ] || drop "$2"
 	[ "$sc" = vanish ] && drop 22222222-2222-2222-2222-222222222222
@@ -275,6 +326,7 @@ r=
 for a; do case $a in IOS_ROOT=*) r=${a#IOS_ROOT=} ;; esac; done
 [ -n "$r" ] || { echo "fake make: no IOS_ROOT" >&2; exit 2; }
 mkdir -p "$r/Quake2.app" || exit 1
+printf '%s\n' "$*" > "$r/make.args"
 printf '#!/bin/sh\nexit 0\n' > "$r/Quake2.app/quake2" && chmod +x "$r/Quake2.app/quake2" || exit 1
 printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
 	'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
@@ -356,7 +408,7 @@ EOF
 	# <name> <scenario> <ok|fail> <text the output must hold> <max seconds> [VAR=value]...
 	st_case()
 	{
-		local name=$1 sc=$2 want=$3 text=$4 max=$5 d rc=0 t0 why=
+		local name=$1 sc=$2 want=$3 text=$4 max=$5 d rc=0 t0 why= other=
 		shift 5
 		ncase=$((ncase + 1))
 		d=$sroot/$name
@@ -364,9 +416,10 @@ EOF
 		printf '%s\n' "11111111-1111-1111-1111-111111111111 Owner iPhone" \
 			"22222222-2222-2222-2222-222222222222 Owner iPad" > "${d:?}/state/devices"
 		t0=$(date +%s)
+		cmd=${ST_CMD:-smoke --out @D@/out}; cmd=${cmd//@D@/$d}
 		bounded 60 "${d:?}/run.log" env PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
 			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=2 IOS_SIM_CREATE_SECONDS=2 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10 "$@" \
-			bash "$self" smoke --out "$d/out" || rc=$?
+			bash "$self" $cmd || rc=$?
 		t0=$(( $(date +%s) - t0 ))
 		if [ "$rc" = 124 ]; then
 			why="the smoke outlived 60 s"
@@ -378,6 +431,8 @@ EOF
 			why="its output does not hold \"$text\""
 		elif [ "$t0" -gt "$max" ]; then
 			why="it took $t0 s, more than $max s"
+		elif other=$(awk '$1 == "simctl" && ($2 == "shutdown" || $2 == "delete" || $2 == "erase" || $2 == "uninstall" || $2 == "terminate") && $3 != u { print $2 " " $3 }' u="$(cat "${d:?}/state/created" 2>/dev/null)" "${d:?}/state/calls" 2>/dev/null) && [ -n "$other" ]; then
+			why="a mutating simctl call names a device that is not this run's: $other"
 		elif [ "$sc" != leftover ] && grep '^AAAAAAAA-' "${d:?}/state/devices" >/dev/null; then
 			why="this run's device is left in the fake's device list"
 		elif ! grep '^11111111-' "${d:?}/state/devices" >/dev/null \
@@ -399,12 +454,107 @@ EOF
 			echo "ios-sim: selftest: ok $name"
 		fi
 	}
+	# st_has <case dir name> <file|nofile|grep|nogrep> <path under the case dir> <text> <why>:
+	# a check on what a case left behind
+	st_has()
+	{
+		local name=$1 kind=$2 f=$sroot/$1/$3 text=${4:-} why=
+		ncase=$((ncase + 1))
+		case $kind in
+		file) [ -f "$f" ] || why="$3 is missing" ;;
+		nofile) [ ! -e "$f" ] || why="$3 exists" ;;
+		grep) grep -F -e "$text" "$f" >/dev/null 2>&1 || why="$3 does not hold \"$text\"" ;;
+		nogrep) ! grep -F -e "$text" "$f" >/dev/null 2>&1 || why="$3 holds \"$text\"" ;;
+		esac
+		if [ -n "$why" ]; then
+			echo "ios-sim: selftest: FAIL $name: $why"
+			nfail=$((nfail + 1))
+		else
+			echo "ios-sim: selftest: ok $name $kind $3"
+		fi
+	}
+	mkdata()
+	{
+		mkdir -p "$sroot/$1/baseq2/players/male" "$sroot/$1/baseq2/video" "$sroot/$1/baseq2/music" "$sroot/$1/baseq2/maps" "$sroot/$1/baseq2/other"
+		printf 'pak' > "$sroot/$1/baseq2/pak0.pak"
+		printf 'pak' > "$sroot/$1/baseq2/pak1.pak"
+		printf 'x' > "$sroot/$1/baseq2/players/male/tris.md2"
+		printf 'x' > "$sroot/$1/baseq2/video/idlog.cin"
+		printf 'x' > "$sroot/$1/baseq2/music/02.ogg"
+		printf 'x' > "$sroot/$1/baseq2/maps/stray.bsp"
+		printf 'x' > "$sroot/$1/baseq2/other/stray.txt"
+		printf 'x' > "$sroot/$1/baseq2/stray.cfg"
+		printf 'x' > "$sroot/$1/stray.pak"
+	}
 	st_case extra-device-meanwhile extra ok "smoke ok" 30
+	# the smoke gives no write-directory option: the engine finds Documents
+	st_has extra-device-meanwhile nogrep state/launches -cfgdir
+	st_has extra-device-meanwhile nogrep state/launches -portable
+	st_has extra-device-meanwhile grep out/build/make.args IOS_BUNDLE_DATA=
+	# run without --data: the synthetic data in the bundle, one start
+	ST_CMD="run --out @D@/out" st_case run-synthetic extra ok "run ok, 1 start(s)" 30
+	st_has run-synthetic grep out/build/make.args IOS_BUNDLE_DATA=
+	st_has run-synthetic file out/engine.1.log
+	st_has run-synthetic file out/documents.1.list
+	st_has run-synthetic nogrep state/launches -cfgdir
+	# run --data: the paks and the three folders land in Documents/baseq2
+	mkdir -p "$sroot/run-data" && mkdata run-data-src
+	ST_CMD="run --out @D@/out --data $sroot/run-data-src" st_case run-data extra ok "run ok, 1 start(s)" 30
+	st_has run-data nogrep out/build/make.args IOS_BUNDLE_DATA=
+	st_has run-data file state/container/Documents/baseq2/pak0.pak
+	st_has run-data file state/container/Documents/baseq2/pak1.pak
+	st_has run-data file state/container/Documents/baseq2/players/male/tris.md2
+	st_has run-data file state/container/Documents/baseq2/video/idlog.cin
+	st_has run-data file state/container/Documents/baseq2/music/02.ogg
+	st_has run-data nofile state/container/Documents/baseq2/stray.cfg
+	st_has run-data nofile state/container/Documents/baseq2/maps
+	st_has run-data nofile state/container/Documents/baseq2/other
+	st_has run-data nofile state/container/Documents/stray.pak
+	st_has run-data nofile state/container/Documents/baseq2/baseq2
+	st_has run-data grep out/documents.1.list "pak0.pak"
+	# the data is in no other place of the case: not in the build, the bundle
+	if [ -n "$(find "$sroot/run-data/out/build" -name '*.pak' 2>/dev/null)" ]; then
+		ncase=$((ncase + 1)); nfail=$((nfail + 1)); echo "ios-sim: selftest: FAIL run-data: a pak in the build tree"
+	fi
+	# run --no-data: no data in the bundle, the engine alone
+	ST_CMD="run --out @D@/out --no-data --shot 0" st_case run-no-data extra ok "run ok, 1 start(s)" 30
+	st_has run-no-data nogrep out/build/make.args IOS_BUNDLE_DATA=
+	st_has run-no-data file out/screen.1.png
+	st_has run-no-data file out/documents.1.list
+	st_has run-no-data grep state/terminates terminate
+	# --data refused before a device is made
+	mkdir -p "$sroot/run-data-no-baseq2/src"
+	ST_CMD="run --out @D@/out --data @D@/src" st_case run-data-no-baseq2 extra fail "holds no baseq2/ directory" 10
+	st_has run-data-no-baseq2 nofile state/calls
+	mkdir -p "$sroot/run-data-no-pak/src/baseq2" && printf x > "$sroot/run-data-no-pak/src/baseq2/readme.txt"
+	ST_CMD="run --out @D@/out --data @D@/src" st_case run-data-no-pak extra fail "holds no .pak file" 10
+	st_has run-data-no-pak nofile state/calls
+	# a container that cannot be found: a failure, and the device is deleted
+	mkdata run-no-container/src
+	ST_CMD="run --out @D@/out --data $sroot/run-no-container/src" st_case run-no-container nocontainer fail "simctl get_app_container failed" 30
+	# an app that outlives the bound is terminated and fails
+	ST_CMD="run --out @D@/out" st_case run-app-stays appstays fail "did not quit within 2 s (IOS_SIM_RUN_SECONDS); terminated it" 30 IOS_SIM_RUN_SECONDS=2
+	st_has run-app-stays grep state/terminates terminate
+	# each --launch is a start, in order, with its own log and listing
+	ST_CMD="run --out @D@/out --launch +map_base1 --launch +set_a_1" st_case run-two-launches extra ok "run ok, 2 start(s)" 30
+	st_has run-two-launches file out/engine.1.log
+	st_has run-two-launches file out/engine.2.log
+	st_has run-two-launches file out/documents.2.list
+	st_has run-two-launches grep state/launches "+map_base1"
+	st_has run-two-launches grep state/launches "+set_a_1"
+	# the usage: no --out, both data options, a limit that is not digits
+	ST_CMD="run" st_case run-no-out extra fail "usage: scripts/ios-sim.sh" 5
+	ST_CMD="run --out @D@/out --data /x --no-data" st_case run-data-and-no-data extra fail "usage: scripts/ios-sim.sh" 5
+	ST_CMD="run --out @D@/out --no-data --data /x" st_case run-no-data-and-data extra fail "usage: scripts/ios-sim.sh" 5
+	ST_CMD="run --out @D@/out --shot 3s" st_case run-shot-not-digits extra fail "--shot must be a number of seconds" 5
+	ST_CMD="run --out @D@/out" st_case run-limit-not-digits extra fail "IOS_SIM_RUN_SECONDS must be" 5 IOS_SIM_RUN_SECONDS=1h
 	st_case list-empty empty fail "simctl list devices: no device list" 30
 	st_case list-fails listfail fail "simctl list devices failed" 30
 	st_case list-hangs hang fail "timed out after 2 s: xcrun simctl list devices" 10
-	st_case device-from-before-gone vanish fail "gone after the run: 22222222-2222-2222-2222-222222222222" 30
+	st_case device-from-before-gone vanish ok "not a failure): 22222222-2222-2222-2222-222222222222" 30
+	ST_CMD="run --out @D@/out" st_case run-device-from-before-gone vanish ok "not a failure): 22222222-2222-2222-2222-222222222222" 30
 	st_case own-device-left leftover fail "is still listed after its delete" 30
+	ST_CMD="run --out @D@/out" st_case run-own-device-left leftover fail "is still listed after its delete" 30
 	st_case create-times-out createhang fail "deleting AAAAAAAA-0000-0000-0000-" 30
 	st_case created-device-not-listed ghost fail "is not in the device list taken after simctl create" 30
 	st_case created-device-listed-before reuse fail "was already listed before simctl create" 30
@@ -444,8 +594,31 @@ EOF
 if [ $# -eq 1 ] && [ "$1" = selftest ]; then
 	selftest
 fi
-[ $# -eq 3 ] && [ "$1" = smoke ] && [ "$2" = --out ] && [ -n "$3" ] || usage
-out=$3
+mode=${1:-}
+[ $# -ge 1 ] && shift
+out=
+data=
+nodata=0
+shot=
+launches=()
+case $mode in
+smoke)
+	[ $# -eq 2 ] && [ "$1" = --out ] || usage
+	out=$2 ;;
+run)
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--out) [ $# -ge 2 ] && [ -z "$out" ] || usage; out=$2; shift 2 ;;
+		--data) [ $# -ge 2 ] && [ -z "$data" ] && [ "$nodata" = 0 ] || usage; data=$2; shift 2 ;;
+		--no-data) [ -z "$data" ] && [ "$nodata" = 0 ] || usage; nodata=1; shift ;;
+		--launch) [ $# -ge 2 ] || usage; launches+=("$2"); shift 2 ;;
+		--shot) [ $# -ge 2 ] && [ -z "$shot" ] || usage; shot=$2; shift 2 ;;
+		*) usage ;;
+		esac
+	done ;;
+*) usage ;;
+esac
+[ -n "$out" ] || usage
 
 digits() # <name> <value>
 {
@@ -457,10 +630,24 @@ boot_s=${IOS_SIM_BOOT_SECONDS-300}
 smoke_s=${IOS_SIM_SMOKE_SECONDS-180}
 list_s=${IOS_SIM_LIST_SECONDS-60}
 create_s=${IOS_SIM_CREATE_SECONDS-120}
+run_s=${IOS_SIM_RUN_SECONDS-3600}
 digits IOS_SIM_BOOT_SECONDS "$boot_s"
 digits IOS_SIM_SMOKE_SECONDS "$smoke_s"
 digits IOS_SIM_LIST_SECONDS "$list_s"
 digits IOS_SIM_CREATE_SECONDS "$create_s"
+digits IOS_SIM_RUN_SECONDS "$run_s"
+[ -z "$shot" ] || digits "--shot" "$shot"
+
+# the owner's data: checked before anything is built or created
+if [ -n "$data" ]; then
+	[ -d "$data/baseq2" ] || die "--data $data holds no baseq2/ directory"
+	data=$(cd "$data" && pwd -P) || die "cannot enter --data"
+	npak=0
+	for f in "$data"/baseq2/*.pak; do
+		[ -f "$f" ] && npak=$((npak + 1))
+	done
+	[ "$npak" -gt 0 ] || die "--data $data/baseq2 holds no .pak file"
+fi
 digits IOS_SIM_SETTLE_SECONDS "${IOS_SIM_SETTLE_SECONDS-3}"
 
 for tool in xcrun python3 make plutil; do
@@ -547,19 +734,24 @@ lost_device()
 
 # ---- the data and the build --------------------------------------------
 
-python3 -I "$repo/scripts/ios/smokepak.py" --out "${tmp:?}/data" > "${tmp:?}/smokepak.out" 2>&1 \
-	|| { cat "${tmp:?}/smokepak.out" >&2; die "smokepak.py failed"; }
-# the run's commands (TASK147): about 30 frames to the console, the frame written, then at least
-# 900 frames of 16 ms ("wait", about 15 s) at the console, in which the simulator's screenshot of it is
-# taken, and the app quits through its own quit path
-{
-	for _ in $(seq 30); do echo wait; done
-	echo "screenshot tga"
-	for _ in $(seq 900); do echo wait; done
-	echo quit
-} > "${tmp:?}/data/baseq2/smoke.cfg" || die "cannot write smoke.cfg"
 build=$out/build
-makeargs=(-C "$repo" -j"${IOS_SIM_JOBS:-3}" QUIET=1 ios IOS_SDK=iphonesimulator IOS_ROOT="$build" IOS_BUNDLE_DATA="$tmp/data")
+makeargs=(-C "$repo" -j"${IOS_SIM_JOBS:-3}" QUIET=1 ios IOS_SDK=iphonesimulator IOS_ROOT="$build")
+# the bundle's data: the synthetic paks (smoke, run without --data); with
+# --data or --no-data the bundle holds none
+if [ -z "$data" ] && [ "$nodata" = 0 ]; then
+	python3 -I "$repo/scripts/ios/smokepak.py" --out "${tmp:?}/data" > "${tmp:?}/smokepak.out" 2>&1 \
+		|| { cat "${tmp:?}/smokepak.out" >&2; die "smokepak.py failed"; }
+	# the smoke's commands (TASK147): about 30 frames to the console, the frame written, then at least
+	# 900 frames of 16 ms ("wait", about 15 s) at the console, in which the simulator's screenshot of it is
+	# taken, and the app quits through its own quit path. Only smoke runs it (+exec smoke.cfg)
+	{
+		for _ in $(seq 30); do echo wait; done
+		echo "screenshot tga"
+		for _ in $(seq 900); do echo wait; done
+		echo quit
+	} > "${tmp:?}/data/baseq2/smoke.cfg" || die "cannot write smoke.cfg"
+	makeargs+=(IOS_BUNDLE_DATA="$tmp/data")
+fi
 echo "ios-sim: make ios (into $build)"
 if ! (unset MAKEFLAGS GNUMAKEFLAGS MFLAGS; make "${makeargs[@]}") > "$out/build.log" 2>&1; then
 	tail -n 20 "$out/build.log" >&2
@@ -619,10 +811,102 @@ bounded 180 "${tmp:?}/install.out" xcrun simctl install "$udid" "$app" || { cat 
 
 # ---- the run ---------------------------------------------------------------
 
-# The write directory: the default ~/.local/share/YamagiQ2 is not made
-# in a fresh app container (Sys_Mkdir makes one level), Library/ is there.
+# data_container: the app's data container into $container (fail closed)
+data_container()
+{
+	bounded 60 "${tmp:?}/container.out" xcrun simctl get_app_container "$udid" "$bid" data || die "simctl get_app_container failed"
+	container=$(tail -n 1 "${tmp:?}/container.out")
+	[ -d "$container" ] || die "no data container: $container"
+}
+
+# launch_app <limit seconds> <what the limit is> <shot seconds or empty>
+# <n> <engine argument>...: one start of the app for run, the engine's output
+# in $out/console.<n>.log; waits for the app to end (smoke has its own
+# bounded frame wait and quit handling, TASK147)
+launch_app()
+{
+	local limit=$1 what=$2 shotat=$3 n=$4 log t w=0
+	shift 4
+	log=$out/console.$n.log
+	SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "$@" > "$log" 2>&1 &
+	lpid=$!
+	# the launch client lives as long as the app (--console-pty) and
+	# its pid line may come only when the app ends: watch the client
+	apid=$lpid
+	echo "ios-sim: app $bid pid $apid"
+	t=0
+	while kill -0 "$apid" 2>/dev/null; do
+		if [ -n "$shotat" ] && [ "$t" -ge "$shotat" ]; then
+			bounded 60 "${tmp:?}/shot.out" xcrun simctl io "$udid" screenshot "$out/screen.$n.png" || die "simctl io screenshot failed"
+			bounded 30 "${tmp:?}/term.out" xcrun simctl terminate "$udid" "$bid" || true
+			break
+		fi
+		if [ "$t" -ge "$limit" ]; then
+			bounded 30 "${tmp:?}/term.out" xcrun simctl terminate "$udid" "$bid" || true
+			die "the app did not quit within $limit s ($what); terminated it"
+		fi
+		sleep 1
+		t=$((t + 1))
+	done
+	while kill -0 "$lpid" 2>/dev/null && [ "$w" -lt 10 ]; do sleep 1; w=$((w + 1)); done
+	if kill -0 "$lpid" 2>/dev/null; then
+		echo "ios-sim: the launch client did not exit after the app; stopping it" >&2
+		stop_pid "$lpid" || true
+	else
+		wait "$lpid" 2>/dev/null
+	fi
+	lpid=
+}
+
+# the owner's data goes into Documents/baseq2 of the app's data container,
+# where a person puts it on a device, and nowhere else
+if [ -n "$data" ]; then
+	data_container
+	docs=$container/Documents/baseq2
+	mkdir -p "$docs" || die "cannot make $docs"
+	for f in "$data"/baseq2/*.pak; do
+		[ -f "$f" ] || continue
+		cp "$f" "$docs/" || die "cannot copy $(basename "$f") into $docs"
+	done
+	for d in players video music; do
+		[ -d "$data/baseq2/$d" ] || continue
+		cp -R "$data/baseq2/$d" "$docs/" || die "cannot copy $d/ into $docs"
+	done
+fi
+
+if [ "$mode" = run ]; then
+	[ "${#launches[@]}" -gt 0 ] || launches=("")
+	n=0
+	for l in "${launches[@]}"; do
+		n=$((n + 1))
+		# no write-directory option: the engine finds Documents by itself
+		# shellcheck disable=SC2086
+		launch_app "$run_s" "IOS_SIM_RUN_SECONDS" "$shot" "$n" +set vid_renderer metal +set logfile 2 $l
+		data_container
+		docs=$container/Documents/baseq2
+		[ -d "$docs" ] || die "no Documents/baseq2 in the data container after start $n"
+		( cd "$docs" && find . -type f | sort | while read -r f; do printf '%s %s\n' "$(wc -c < "$f" | tr -d ' ')" "$f"; done ) > "$out/documents.$n.list" || die "cannot list $docs"
+		[ -f "$docs/qconsole.log" ] || die "the engine wrote no qconsole.log in Documents/baseq2 after start $n"
+		cp "$docs/qconsole.log" "$out/engine.$n.log"
+		if [ -d "$docs/scrnshot" ]; then
+			mkdir -p "$out/frames.$n" && cp "$docs/scrnshot/"* "$out/frames.$n/" 2>/dev/null
+		fi
+	done
+	bounded 60 "${tmp:?}/shutdown.out" xcrun simctl shutdown "$udid" || true
+	bounded 60 "${tmp:?}/delete.out" xcrun simctl delete "$udid" || die "could not delete the device $udid"
+	udid=
+	list_devices "$out/devices.after" || die "no device list after the run"
+	udids "$out/devices.after" > "${tmp:?}/udids.after"
+	gone=$(comm -23 "${tmp:?}/udids.before" "${tmp:?}/udids.after" | tr '\n' ' ')
+	[ -z "$gone" ] || echo "ios-sim: warning: devices listed before the run are gone after it (not this run's, not a failure): $gone" >&2
+	grep -F -x -e "$run_udid" "${tmp:?}/udids.after" >/dev/null && die "this run's device $run_udid is still listed after its delete"
+	echo "ios-sim: run ok, $n start(s) (artifacts in $out)"
+	exit 0
+fi
+
+# The engine finds Documents/baseq2 by itself: no write-directory option.
 # r_mode 4 and vid_fullscreen 1 are what the real data's default.cfg sets: the screen is its own size whatever they say (TASK147)
-args=(-cfgdir Library/YamagiQ2 +set vid_renderer metal +set logfile 2 +set metal_stats 1 +set r_mode 4 +set vid_fullscreen 1 +exec smoke.cfg)
+args=(+set vid_renderer metal +set logfile 2 +set metal_stats 1 +set r_mode 4 +set vid_fullscreen 1 +exec smoke.cfg)
 SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "${args[@]}" > "$out/console.log" 2>&1 &
 lpid=$!
 # TASK147: the app stays at the console for smoke.cfg's frames, then quits by itself (the launch
@@ -712,7 +996,7 @@ bad() { echo "ios-sim: smoke: $*"; fail=1; }
 has() { grep -F -e "$1" "$out/engine.log" >/dev/null; }
 
 gone=$(comm -23 "${tmp:?}/udids.before" "${tmp:?}/udids.after" | tr '\n' ' ')
-[ -z "$gone" ] || bad "devices listed before the run are gone after the run: $gone"
+[ -z "$gone" ] || echo "ios-sim: warning: devices listed before the run are gone after it (not this run's, not a failure): $gone" >&2
 grep -F -x -e "$run_udid" "${tmp:?}/udids.after" >/dev/null && bad "this run's device $run_udid is still listed after its delete"
 
 has "Using the linked-in renderer: ref_metal (linked in)" || bad "engine.log does not show the linked-in ref_metal"

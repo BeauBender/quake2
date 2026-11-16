@@ -51,6 +51,7 @@
 #ifdef __APPLE__
 #include <mach/clock.h>
 #include <mach/mach.h>
+#include <TargetConditionals.h>
 #endif
 
 #include "../../common/header/common.h"
@@ -679,6 +680,141 @@ Sys_IsFile(const char *path)
 	return false;
 }
 
+/*
+ * Composes the home directory of a sandboxed app: <home>/Documents/. On
+ * iOS that is the only folder the Files app shows and the user can put
+ * files into. It takes no platform condition, so the unit tests run it
+ * on macOS. Returns false, with out empty, for a NULL or empty home or
+ * a result that does not fit.
+ */
+qboolean
+Sys_SandboxHomeDir(const char *home, char *out, size_t len)
+{
+	int n;
+
+	if (out == NULL || len == 0)
+	{
+		return false;
+	}
+
+	out[0] = '\0';
+
+	if (home == NULL || home[0] == '\0')
+	{
+		return false;
+	}
+
+	n = snprintf(out, len, "%s/Documents/", home);
+
+	if (n < 0 || (size_t)n >= len)
+	{
+		out[0] = '\0';
+		return false;
+	}
+
+	return true;
+}
+
+/*
+ * True when the home directory is the app's Documents folder. Fixed at
+ * compile time for iOS, tvOS and visionOS; a variable only so that the
+ * unit tests can switch it.
+ */
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+qboolean sys_sandbox_home = true;
+#else
+qboolean sys_sandbox_home = false;
+#endif
+
+/*
+ * Looks in dir for a pak whose name differs from a numbered pak
+ * ("pak0.pak") only in case, like "PAK0.PAK". The engine opens numbered
+ * paks as pak%d.pak and a device volume is case sensitive. Copies the
+ * first such name into out and returns true; a correct name does not
+ * count.
+ */
+qboolean
+Sys_PakCaseMismatch(const char *dir, char *out, size_t len)
+{
+	struct dirent *file;
+	DIR *directory;
+	qboolean found = false;
+
+	if (dir == NULL || out == NULL || len == 0)
+	{
+		return false;
+	}
+
+	out[0] = '\0';
+	directory = opendir(dir);
+
+	if (directory == NULL)
+	{
+		return false;
+	}
+
+	while ((file = readdir(directory)) != NULL)
+	{
+		const char *n = file->d_name;
+		size_t l = strlen(n);
+		size_t i;
+
+		/* "pak" + one or two digits + ".pak" */
+		if (l < 8 || l > 9 || Q_strncasecmp(n, "pak", 3) != 0 ||
+			Q_strcasecmp(n + l - 4, ".pak") != 0)
+		{
+			continue;
+		}
+
+		for (i = 3; i < l - 4; i++)
+		{
+			if (n[i] < '0' || n[i] > '9')
+			{
+				break;
+			}
+		}
+
+		if (i != l - 4)
+		{
+			continue;
+		}
+
+		/* The digits are as they are; only "pak" and ".pak" may differ. */
+		if (strncmp(n, "pak", 3) != 0 || strcmp(n + l - 4, ".pak") != 0)
+		{
+			Q_strlcpy(out, n, len);
+			found = true;
+			break;
+		}
+	}
+
+	closedir(directory);
+	return found;
+}
+
+/*
+ * Builds the text shown when the game data is missing: where to put it
+ * and which file. dir is the data directory, the baseq2 folder of the
+ * home directory. When it holds a pak named in the wrong case the text
+ * says to rename it.
+ */
+void
+Sys_MissingDataMessage(const char *dir, char *out, size_t len)
+{
+	char wrong[MAX_OSPATH];
+
+	Com_sprintf(out, len,
+		"Quake II needs its game data. Copy pak0.pak from the baseq2 "
+		"folder of Quake II into Files > On My iPhone (or iPad) > "
+		"Quake II > baseq2, then start the game again.");
+
+	if (Sys_PakCaseMismatch(dir, wrong, sizeof(wrong)))
+	{
+		Q_strlcat(out, va(" The file %s must be renamed with lower case "
+			"letters, for example pak0.pak.", wrong), len);
+	}
+}
+
 char *
 Sys_GetHomeDir()
 {
@@ -691,6 +827,18 @@ Sys_GetHomeDir()
 		if (!home) {
 			// uh-oh
 			return NULL;
+		}
+
+		if (sys_sandbox_home)
+		{
+			// the app's Documents, not XDG, ~/.yq2 or -cfgdir
+			if (!Sys_SandboxHomeDir(home, dir, sizeof(dir)))
+			{
+				return NULL;
+			}
+
+			Sys_Mkdir(dir);
+			return dir;
 		}
 
 #ifndef __HAIKU__
