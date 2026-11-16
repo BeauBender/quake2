@@ -479,6 +479,59 @@ rm_rtw_shade_sky(constant rm_rtw_view &v, constant rm_rtw_texs &texs, float3 d)
 }
 
 /*
+ * FIX81: rm_rtw_trace's choice for a reflection ray's hit past a hidden
+ * model, made as the kernel makes it for the first hit: met 0 for none, b
+ * the hit's instance's first map triangle, prim and dist its primitive and
+ * distance along r3 from o. Out: kind (0 nothing met, 1 the sky brush, 2 a
+ * face), q the pixel the screen shows it at; the choice, mtl_rtw_choose's.
+ */
+static uint
+rm_rtw_ss_at(constant rm_rtw_view &v, depth2d<float, access::read> depth, texture2d<uint, access::read> mat,
+		device const uchar *tmat, uint ntris, float3 o, float3 r3, bool met, uint b, uint prim, float dist,
+		uint w, uint h, thread int &kind, thread uint2 &q)
+{
+	uint qm = MTL_GB_MAT_NONE;
+	int on = 0;
+	float off = -1.0f, hd = 0.0f;
+	float4 c;
+
+	kind = met ? ((rm_rtw_mat(b, prim, tmat, ntris) == MTL_GB_MAT_SKY) ? 1 : 2) : 0;
+	c = (kind == 2) ? (v.mvp * float4(o + r3 * dist, 1.0f)) : (v.mvp * float4(r3, 0.0f));
+
+	if (c.w > 0.0f)
+	{
+		const float2 nd = c.xy / c.w;
+		const float2 qp = float2(v.vp.x + (nd.x * 0.5f + 0.5f) * v.vp.z, v.vp.y + (0.5f - nd.y * 0.5f) * v.vp.w);
+
+		if ((qp.x >= v.vp.x) && (qp.x < v.vp.x + v.vp.z) && (qp.y >= v.vp.y) && (qp.y < v.vp.y + v.vp.w) &&
+			(qp.x >= 0.0f) && (qp.y >= 0.0f) && (qp.x < float(w)) && (qp.y < float(h)))
+		{
+			q = uint2(qp);
+			on = 1;
+		}
+	}
+
+	if (on)
+	{
+		qm = mat.read(q).r;
+
+		if (kind == 2)
+		{
+			const float qd = depth.read(q);
+
+			hd = distance(o + r3 * dist, v.eye.xyz);
+
+			if (qd < 1.0f)
+			{
+				off = fabs(distance(rm_rtw_unproject(v, float2(q) + 0.5f, qd), v.eye.xyz) - hd);
+			}
+		}
+	}
+
+	return mtl_rtw_choose(kind, on, qm, off, hd);
+}
+
+/*
  * r_rt_water_hits 0: TASK58's kernel (its frames and its cost are
  * TASK58's but where a ray met a hidden model): every pixel of the
  * target, a hit's colour the picture's where the screen shows it, else
@@ -631,83 +684,78 @@ rm_rtw_trace(depth2d<float, access::read> depth [[texture(0)]],
 			isect.assume_geometry_type(geometry_type::triangle);
 			hit = isect.intersect(ray(o, r3, 0.0f, MTL_RTW_FAR), ias, MTL_RTW_MASK);
 
+			if (hit.type != intersection_type::none)
+			{
+				kind = (rm_rtw_mat(inst[2 * hit.instance_id], hit.primitive_id, tmat, ntris) == MTL_GB_MAT_SKY) ? 1 : 2;
+			}
+
+			/* where the screen shows it: the hit, or for the sky the direction from the eye (the box is around it) */
+			c = (kind == 2) ? (v.mvp * float4(o + r3 * hit.distance, 1.0f)) : (v.mvp * float4(r3, 0.0f));
+
+			if (c.w > 0.0f)
+			{
+				const float2 nd = c.xy / c.w;
+				const float2 qp = float2(v.vp.x + (nd.x * 0.5f + 0.5f) * v.vp.z, v.vp.y + (0.5f - nd.y * 0.5f) * v.vp.w);
+
+				if ((qp.x >= v.vp.x) && (qp.x < v.vp.x + v.vp.z) && (qp.y >= v.vp.y) && (qp.y < v.vp.y + v.vp.w) &&
+					(qp.x >= 0.0f) && (qp.y >= 0.0f) && (qp.x < float(w)) && (qp.y < float(h)))
+				{
+					q = uint2(qp);
+					on = 1;
+				}
+			}
+
+			if (on)
+			{
+				qm = mat.read(q).r;
+
+				if (kind == 2)
+				{
+					const float qd = depth.read(q);
+
+					hd = distance(o + r3 * hit.distance, v.eye.xyz);
+
+					if (qd < 1.0f)
+					{
+						off = fabs(distance(rm_rtw_unproject(v, float2(q) + 0.5f, qd), v.eye.xyz) - hd);
+					}
+				}
+			}
+
+			from = mtl_rtw_choose(kind, on, qm, off, hd);
+
 			/*
 			 * FIX81: but an alias model the picture does not show (off the
-			 * screen or hidden) does not: the ray goes on past it
+			 * screen or hidden) does not stop it: the ray goes on past it
 			 * (mtl_rtw_ss_next, r_rt_water_hits 1's rule), after
 			 * MTL_RTW_LAYERS model faces with the map's instances alone
 			 * (MTL_RTW_MASK_MAP), so it ends where it would end without the
 			 * models and a hidden model never leaves its outline as a hole
-			 * in the reflection. A ray whose first hit is anything else is
-			 * cast once, as TASK58's.
+			 * in the reflection. The first hit's choice above is TASK58's
+			 * code as it was, and this block runs only past a hidden model,
+			 * so every other ray is cast once and gives TASK58's colour bit
+			 * for bit (the compiler's arithmetic included).
 			 */
-			uint qmask = MTL_RTW_MASK;
-			int map = 0;
-
-			for (int layer = 0; ; layer++)
 			{
-				int step;
-				uint b = 0xffffffffu;
+				uint b = (hit.type != intersection_type::none) ? inst[2 * hit.instance_id] : 0u;
+				uint qmask = MTL_RTW_MASK;
+				int map = 0;
+				int step = mtl_rtw_ss_next(kind, b == 0xffffffffu, from, 0, map);
 
-				kind = on = 0;
-				qm = MTL_GB_MAT_NONE;
-				off = -1.0f;
-				hd = 0.0f;
-
-				if (hit.type != intersection_type::none)
+				for (int layer = 1; step != MTL_RTW_NEXT_STOP; layer++)
 				{
-					b = inst[2 * hit.instance_id];
-					kind = (rm_rtw_mat(b, hit.primitive_id, tmat, ntris) == MTL_GB_MAT_SKY) ? 1 : 2;
-				}
-
-				/* where the screen shows it: the hit, or for the sky the direction from the eye (the box is around it) */
-				c = (kind == 2) ? (v.mvp * float4(o + r3 * hit.distance, 1.0f)) : (v.mvp * float4(r3, 0.0f));
-
-				if (c.w > 0.0f)
-				{
-					const float2 nd = c.xy / c.w;
-					const float2 qp = float2(v.vp.x + (nd.x * 0.5f + 0.5f) * v.vp.z, v.vp.y + (0.5f - nd.y * 0.5f) * v.vp.w);
-
-					if ((qp.x >= v.vp.x) && (qp.x < v.vp.x + v.vp.z) && (qp.y >= v.vp.y) && (qp.y < v.vp.y + v.vp.w) &&
-						(qp.x >= 0.0f) && (qp.y >= 0.0f) && (qp.x < float(w)) && (qp.y < float(h)))
+					if (step == MTL_RTW_NEXT_MAP)
 					{
-						q = uint2(qp);
-						on = 1;
+						qmask = MTL_RTW_MASK_MAP;
+						map = 1;
 					}
+
+					hit = isect.intersect(ray(o, r3, hit.distance + 0.01f, MTL_RTW_FAR), ias, qmask);
+					b = (hit.type != intersection_type::none) ? inst[2 * hit.instance_id] : 0u;
+					from = rm_rtw_ss_at(v, depth, mat, tmat, ntris, o, r3, hit.type != intersection_type::none, b,
+						hit.primitive_id, hit.distance, w, h, kind, q);
+					step = mtl_rtw_ss_next(kind, b == 0xffffffffu, from, layer, map);
 				}
-
-				if (on)
-				{
-					qm = mat.read(q).r;
-
-					if (kind == 2)
-					{
-						const float qd = depth.read(q);
-
-						hd = distance(o + r3 * hit.distance, v.eye.xyz);
-
-						if (qd < 1.0f)
-						{
-							off = fabs(distance(rm_rtw_unproject(v, float2(q) + 0.5f, qd), v.eye.xyz) - hd);
-						}
-					}
-				}
-
-				from = mtl_rtw_choose(kind, on, qm, off, hd);
-				step = mtl_rtw_ss_next(kind, b == 0xffffffffu, from, layer, map);
-
-				if (step == MTL_RTW_NEXT_STOP)
-				{
-					break;
-				}
-
-				if (step == MTL_RTW_NEXT_MAP)
-				{
-					qmask = MTL_RTW_MASK_MAP;
-					map = 1;
-				}
-
-				hit = isect.intersect(ray(o, r3, hit.distance + 0.01f, MTL_RTW_FAR), ias, qmask);
 			}
 
 			if (from != MTL_RTW_MISS)
