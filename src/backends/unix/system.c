@@ -819,15 +819,28 @@ char *
 Sys_GetHomeDir()
 {
 	static char dir[MAX_OSPATH];
+	/* what dir was built from: a different HOME or the other mode
+	   builds it again (only the unit tests change them) */
+	static char dirhome[MAX_OSPATH];
+	static qboolean dirsandbox;
+	const char *envhome = getenv("HOME");
+
+	if (dir[0] && (envhome == NULL || dirsandbox != sys_sandbox_home || strcmp(dirhome, envhome) != 0))
+	{
+		dir[0] = '\0';
+	}
 
 	if (!dir[0])
 	{
-		const char* home = getenv("HOME");
+		const char* home = envhome;
 
 		if (!home) {
 			// uh-oh
 			return NULL;
 		}
+
+		Q_strlcpy(dirhome, home, sizeof(dirhome));
+		dirsandbox = sys_sandbox_home;
 
 		if (sys_sandbox_home)
 		{

@@ -402,6 +402,15 @@ sandbox_child(void *arg)
 	snprintf(path, sizeof(path), "%s/sandbox/Documents/baseq2", t_tmpdir());
 	T_EQ_STR(FS_Gamedir(), path);
 
+	/* Nothing is written but under the test's own tree. */
+	snprintf(path, sizeof(path), "%s/", t_tmpdir());
+	T_CHECK(strncmp(FS_Gamedir(), path, strlen(path)) == 0);
+
+	if (strncmp(FS_Gamedir(), path, strlen(path)) != 0)
+	{
+		return;
+	}
+
 	/* What the engine writes lands next to the paks. */
 	snprintf(path, sizeof(path), "%s/config.cfg", FS_Gamedir());
 	FS_CreatePath(path);
@@ -422,11 +431,31 @@ TEST(fs_sandbox_documents)
 	static const pakentry_t pak0[] = {
 		{ "pics/colormap.pcx", "colormap" },
 	};
-	char out[1024], path[MAX_OSPATH];
+	char out[1024], path[MAX_OSPATH], oldhome[MAX_OSPATH];
+	const char *env;
 	struct stat sb;
 	int status;
 
 	write_pak("sandbox/Documents/baseq2/pak0.pak", pak0, 1);
+
+	/* An earlier caller has filled Sys_GetHomeDir's cache with another
+	   home: the child must not see it. */
+	env = getenv("HOME");
+	snprintf(oldhome, sizeof(oldhome), "%s", env ? env : "");
+	snprintf(path, sizeof(path), "%s/prefill", t_tmpdir());
+	mkdir(path, 0755);
+	setenv("HOME", path, 1);
+	sys_sandbox_home = true;
+	T_CHECK(Sys_GetHomeDir() != NULL);
+	sys_sandbox_home = false;
+	if (env)
+	{
+		setenv("HOME", oldhome, 1);
+	}
+	else
+	{
+		unsetenv("HOME");
+	}
 
 	status = t_expect_exit(sandbox_child, NULL, out, sizeof(out));
 	T_EQ_INT(status, 0);
@@ -439,6 +468,57 @@ TEST(fs_sandbox_documents)
 
 	/* The parent process never left the macOS rules. */
 	T_CHECK(!sys_sandbox_home);
+}
+
+static void
+plain_home_child(void *arg)
+{
+	char home[MAX_OSPATH], docs[MAX_OSPATH];
+	const char *dir;
+	struct stat sb;
+
+	(void)arg;
+	snprintf(home, sizeof(home), "%s/plainhome", t_tmpdir());
+	mkdir(home, 0755);
+	snprintf(docs, sizeof(docs), "%s/.local", home);
+	mkdir(docs, 0755);
+	snprintf(docs, sizeof(docs), "%s/.local/share", home);
+	mkdir(docs, 0755);
+	setenv("HOME", home, 1);
+	unsetenv("XDG_DATA_HOME");
+	sys_sandbox_home = false;
+
+	/* The macOS rules: under HOME, never Documents. */
+	dir = Sys_GetHomeDir();
+	T_CHECK(dir != NULL);
+
+	if (dir == NULL)
+	{
+		return;
+	}
+
+	snprintf(docs, sizeof(docs), "%s/", home);
+	T_CHECK(strncmp(dir, docs, strlen(docs)) == 0);
+	T_CHECK(strstr(dir + strlen(home), "Documents") == NULL);
+	T_CHECK(dir[strlen(dir) - 1] == '/');
+	T_CHECK(stat(dir, &sb) == 0 && S_ISDIR(sb.st_mode));
+	printf("plain=%s\n", dir);
+}
+
+/*
+ * The non-sandbox branch of Sys_GetHomeDir (the macOS rules): the home
+ * directory is under HOME and is not Documents.
+ */
+TEST(fs_plain_home_dir)
+{
+	char out[1024], want[MAX_OSPATH];
+	int status;
+
+	status = t_expect_exit(plain_home_child, NULL, out, sizeof(out));
+	T_EQ_INT(status, 0);
+	snprintf(want, sizeof(want), "plain=%s/plainhome/", t_tmpdir());
+	T_CHECK(strstr(out, want) != NULL);
+	T_CHECK(strstr(out, "/Documents") == NULL);
 }
 
 TEST(fs_missing_data_message)
@@ -457,6 +537,12 @@ TEST(fs_missing_data_message)
 	T_CHECK(strstr(out, "renamed") == NULL);
 	T_CHECK(!Sys_PakCaseMismatch(dir, wrong, sizeof(wrong)));
 	T_CHECK(!Sys_PakCaseMismatch("/nonexistent/t_dir", wrong, sizeof(wrong)));
+
+	/* No home directory (VID_CheckGameData's fallback): the plain message. */
+	T_CHECK(!Sys_PakCaseMismatch(NULL, wrong, sizeof(wrong)));
+	Sys_MissingDataMessage(NULL, out, sizeof(out));
+	T_CHECK(strstr(out, "pak0.pak") != NULL);
+	T_CHECK(strstr(out, "renamed") == NULL);
 
 	/* A pak in the wrong case and no correct one. */
 	snprintf(dir, sizeof(dir), "%s/msg_upper", t_tmpdir());
