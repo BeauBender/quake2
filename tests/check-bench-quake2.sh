@@ -4,33 +4,47 @@
 # (scripts/bench/cases/*.case with adapter=quake2) parse and validate, and
 # a case whose requires the host lacks is refused with its reason.
 #
-# Hermetic: no engine, no game data, no GPU. A temporary directory holds the
-# lock state, the store, a stand-in game data directory, stand-ins for
-# ioreg, pgrep and system_profiler on PATH, a capability file in place of
-# the system probe (BENCH_Q2_CAPS) and a stand-in engine, a shell script. It
-# covers:
+# Hermetic: no engine, no game data, no GPU, no real build. A temporary
+# directory holds the lock state, the store, a stand-in game data
+# directory, stand-ins for ioreg, pgrep, system_profiler, make, id and
+# sysctl's kern.hv_vmm_present on PATH, a capability file in place of the
+# system probe (BENCH_Q2_CAPS), a stand-in engine (a shell script) and a
+# scratch git repository to build from. It covers:
 #   - every quake2 case loads (bench.sh case), its settings and requires
-#     validate, its targets build its renderer, its scenario exists, and a
-#     ray-traced or MetalFX case requires the capability;
+#     validate, its targets build its renderer, its scenario exists, a
+#     ray-traced or MetalFX case requires the capability, and a case that
+#     runs the temporal scaler is refused on a device with the spatial one
+#     only;
 #   - the settings refusals: an unknown word, a bad value, a word given
 #     twice, a missing required word, a cvar the adapter sets itself or one
 #     that picks a directory, a value with "..", a wall too short;
 #   - the preflight: with every capability it prints its pre.* lines; it
 #     refuses a missing capability (physical-gpu, raytracing, metalfx,
-#     display-hz>=N, an unknown one) with its reason, a locked screen,
-#     another quake2 running, the validation layer and missing game data;
-#     through bench.sh baseline put the refusal exits 3 before any build;
+#     metalfx-temporal, display-hz>=N, an unknown one) with its reason, a
+#     VM or a failing sysctl whatever the capability file says, a
+#     display-hz requirement from a file, a locked screen, another quake2
+#     running, an ioreg or pgrep that fails, the validation layer and
+#     missing game data; through bench.sh baseline put the refusal exits 3
+#     before any build;
 #   - the run against the stand-in engine: the argument list in its order
 #     (the scenario's set lines, then the adapter's, then the case's
 #     cvars, then the seed's trace in the run's scratch directory, then the
 #     demo), TERM after seconds=, the saved configuration removed before
 #     the run, the scratch directory removed after it, a wrong renderer, a
-#     missing engine support line and a failing exit refused;
+#     missing engine support line (ray tracing, the temporal scaler), a
+#     failing pgrep and a failing exit refused;
+#   - the build against the stand-in make: the export and its marker in the
+#     build cache, tree.tar removed, a cached export reused, a partial one
+#     made again, make's arguments (-C, -j, the case's flags, the targets)
+#     with the caller's build variables cleared, release/ copied over the
+#     old one, the commit's own scenario; refused, before make: a target
+#     starting with "-", a cache inside a repository, one writable by its
+#     group or others, one another user owns;
 #   - the metrics of a synthetic log against hand-computed values, and the
 #     engine's own format strings in src/ still being the ones parsed;
 #   - the inputs paths name the case's pin scenario;
-#   - one mutant: the preflight with its requires check dropped must fail
-#     the refusal test.
+#   - two mutants: the preflight with its requires check dropped must fail
+#     the refusal test, and adapter_build returning at once the build test.
 #
 # Usage: tests/check-bench-quake2.sh
 set -eu
@@ -81,8 +95,21 @@ real_sysctl=$(command -v sysctl 2> /dev/null || echo /usr/sbin/sysctl)
 	printf 'exec "%s" "$@"\n' "$real_sysctl"
 } > "${T:?}/bin/sysctl"
 chmod +x "${T:?}/bin/sysctl"
-printf '#!/bin/sh\necho "make is not run by this check" >&2\nexit 99\n' > "${T:?}/bin/make"
-chmod +x "${T:?}/bin/ioreg" "${T:?}/bin/pgrep" "${T:?}/bin/system_profiler" "${T:?}/bin/make"
+# make refuses unless MAKE_LOG is set; then it logs its arguments (one a
+# line) and its environment (MAKE_LOG.env), and "builds" release/quake2 in
+# the -C directory, which must hold a Makefile.
+{
+	printf '#!/bin/sh\n'
+	printf 'if [ -z "${MAKE_LOG:-}" ]; then echo "make is not run by this check" >&2; exit 99; fi\n'
+	printf 'printf "%%s\\n" "$@" >> "$MAKE_LOG"\nenv > "$MAKE_LOG.env"\nd=\n'
+	printf 'while [ $# -gt 0 ]; do [ "$1" != -C ] || d=$2; shift; done\n'
+	printf '[ -f "$d/Makefile" ] || { echo "make: no Makefile in -C" >&2; exit 2; }\n'
+	printf 'mkdir -p "$d/release" && echo built > "$d/release/quake2"\n'
+} > "${T:?}/bin/make"
+# id -u is STUB_UID when it is set
+real_id=$(command -v id 2> /dev/null || echo /usr/bin/id)
+printf '#!/bin/sh\nif [ "$*" = -u ] && [ -n "${STUB_UID:-}" ]; then echo "$STUB_UID"; exit 0; fi\nexec "%s" "$@"\n' "$real_id" > "${T:?}/bin/id"
+chmod +x "${T:?}/bin/ioreg" "${T:?}/bin/pgrep" "${T:?}/bin/system_profiler" "${T:?}/bin/make" "${T:?}/bin/id"
 PATH=${T:?}/bin:$PATH
 export PATH
 printf 'physical-gpu=yes\nraytracing=yes\nmetalfx=yes\nmetalfx-temporal=yes\ndisplay-hz=60\n' > "${T:?}/caps-all"
@@ -99,18 +126,19 @@ BENCH_Q2_BUILDS=${T:?}/builds
 export BENCH_Q2_BASEDIR BENCH_Q2_BUILDS
 
 # q2h <case> <function> [args...]: runs the function in a subshell with the
-# bench core and the quake2 adapter sourced and the case loaded.
+# bench core and the quake2 adapter sourced (from Q2H_ROOT, else the real
+# scripts/bench) and the case loaded.
 q2h() {
 	_hc=$1
 	shift
 	(
-		BENCH_ROOT=$REAL
-		. "$REAL/core/common.sh"
-		. "$REAL/core/case.sh"
-		. "$REAL/core/inputs.sh"
-		. "$REAL/core/stats.sh"
-		. "$REAL/core/measure.sh"
-		. "$REAL/adapters/quake2.sh"
+		BENCH_ROOT=${Q2H_ROOT:-$REAL}
+		. "$BENCH_ROOT/core/common.sh"
+		. "$BENCH_ROOT/core/case.sh"
+		. "$BENCH_ROOT/core/inputs.sh"
+		. "$BENCH_ROOT/core/stats.sh"
+		. "$BENCH_ROOT/core/measure.sh"
+		. "$BENCH_ROOT/adapters/quake2.sh"
 		bench_case_load "$_hc"
 		_hst=0
 		"$@" || _hst=$?
@@ -450,7 +478,101 @@ for p in Makefile src third_party scripts/pins/scenarios/rt-shadows.cfg; do
 	grep -qx "$p" "${T:?}/paths" || bad "the inputs paths of rt-shadows-gpu-1920x1080 do not name $p"
 done
 
-# ---- one mutant ---------------------------------------------------------------
+# ---- the build, against a stand-in make -------------------------------------------
+
+# A scratch repository with one commit (a Makefile and the world pin
+# scenario), then a change to the scenario in its work tree that the build
+# must not see. Git's hooks and signing are off for the commit.
+G=${T:?}/repo
+mkdir -p "$G/scripts/pins/scenarios"
+printf 'all:\n' > "$G/Makefile"
+printf 'set cl_lights 1\n' > "$G/scripts/pins/scenarios/world.cfg"
+git -C "$G" init -q > /dev/null 2>&1
+git -C "$G" add Makefile scripts/pins/scenarios/world.cfg
+git -C "$G" -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=bench -c user.email=bench@example.invalid \
+	commit -q -m scratch > /dev/null
+GC=$(git -C "$G" rev-parse HEAD)
+printf 'set cl_lights 0\n' > "$G/scripts/pins/scenarios/world.cfg"
+{
+	printf 'adapter=quake2\ntargets=client game ref_gl1\nbuild_flags=WITH_METAL_SHIM=yes\nruns=1\nmetric=fps\nabs_tol=1\nrel_tol=0\n'
+	printf 'settings=%s scenario=world\n' "$ok_set"
+} > "${T:?}/bld.case"
+# qb <inputs id> <build dir> <targets...>: adapter_build of GC from the
+# scratch repository, make logging into T/make.log, with Q2H_ROOT and the
+# BLD_ENV words (NAME=value) in the environment.
+BLD_ENV=
+qb() {
+	_qi=$1
+	shift
+	# shellcheck disable=SC2086 # BLD_ENV is words
+	(cd "$G" && with_env BENCH_INPUTS="$_qi" MAKE_LOG="${T:?}/make.log" ${BLD_ENV:-} -- q2h "${T:?}/bld.case" adapter_build "$GC" "$@")
+}
+# build_test <bench root>: says the first fault; 1 when there is one.
+build_test() {
+	Q2H_ROOT=$1
+	export Q2H_ROOT
+	E=${T:?}/builds/i-0123456789ab
+	rm -rf "${T:?}/builds" "${T:?}/bd1" "${T:?}/bd2" "${T:?}/make.log" "${T:?}/make.log.env"
+	BLD_ENV=
+	mkdir -p "${T:?}/bd1" "${T:?}/bd2/release"
+	echo old > "${T:?}/bd2/release/stale"
+	# a caller whose environment would change the build
+	BLD_ENV="CFLAGS=-DPOLLUTED CPPFLAGS=-DPOLLUTED LDFLAGS=-lpolluted CC=polluted-cc DEBUG=1 ASAN=1 UBSAN=1 WITH_XDG=no WITH_METAL_SHIM=no MAKEFLAGS=DEBUG=1 BENCH_Q2_JOBS=3"
+	qb i-0123456789ab "${T:?}/bd1" client game ref_gl1 2> "${T:?}/bld.err" || { echo "the build failed: $(cat "${T:?}/bld.err")"; return 1; }
+	[ -f "$E/exported" ] && [ -f "$E/tree/Makefile" ] || { echo "no export with its exported marker in the build cache"; return 1; }
+	[ ! -e "$E/tree.tar" ] || { echo "the export's tree.tar was left behind"; return 1; }
+	grep -qx "commit=$GC" "$E/exported" || { echo "the exported marker does not name the commit"; return 1; }
+	[ "$(cat "${T:?}/bd1/release/quake2" 2> /dev/null)" = built ] || { echo "release/ was not copied into the build directory"; return 1; }
+	[ "$(cat "${T:?}/bd1/scenario.cfg" 2> /dev/null)" = 'set cl_lights 1' ] || { echo "the scenario is not the commit's own"; return 1; }
+	tr '\n' ' ' < "${T:?}/make.log" > "${T:?}/make.args"
+	[ "$(cat "${T:?}/make.args")" = "-C $E/tree -j3 WITH_METAL_SHIM=yes client game ref_gl1 " ] ||
+		{ echo "make's arguments: $(cat "${T:?}/make.args")"; return 1; }
+	for _bv in CFLAGS CPPFLAGS LDFLAGS CC DEBUG ASAN UBSAN WITH_XDG WITH_METAL_SHIM MAKEFLAGS; do
+		! grep -q "^$_bv=" "${T:?}/make.log.env" || { echo "make saw the caller's $_bv"; return 1; }
+	done
+	# a second build of the same inputs reuses the export, replaces release/
+	BLD_ENV=
+	echo keep > "$E/tree/sentinel"
+	: > "${T:?}/make.log"
+	qb i-0123456789ab "${T:?}/bd2" client 2> "${T:?}/bld.err" || { echo "a cached build failed: $(cat "${T:?}/bld.err")"; return 1; }
+	[ -f "$E/tree/sentinel" ] || { echo "a cached export was exported again"; return 1; }
+	[ ! -e "${T:?}/bd2/release/stale" ] && [ -f "${T:?}/bd2/release/quake2" ] || { echo "release/ was not replaced"; return 1; }
+	# an export without its marker (an interrupted one) is made again
+	mkdir -p "${T:?}/builds/i-00000000000b/tree"
+	echo stale > "${T:?}/builds/i-00000000000b/tree/partial"
+	qb i-00000000000b "${T:?}/bd2" client 2> "${T:?}/bld.err" || { echo "the build over a partial export failed: $(cat "${T:?}/bld.err")"; return 1; }
+	[ ! -e "${T:?}/builds/i-00000000000b/tree/partial" ] && [ -f "${T:?}/builds/i-00000000000b/exported" ] ||
+		{ echo "a partial export was kept"; return 1; }
+	# refusals, none of which runs make
+	: > "${T:?}/make.log"
+	! qb i-0123456789ab "${T:?}/bd2" -k 2> "${T:?}/bld.err" || { echo "a target starting with - was accepted"; return 1; }
+	BLD_ENV="BENCH_Q2_BUILDS=$G/.bench-x"
+	! qb i-0123456789ab "${T:?}/bd2" client 2> "${T:?}/bld.err" ||
+		{ echo "a build cache inside the repository was accepted"; return 1; }
+	[ ! -e "$G/.bench-x" ] || { echo "a build cache was made inside the repository"; return 1; }
+	(umask 077 && mkdir -p "${T:?}/shared")
+	chmod 770 "${T:?}/shared"
+	BLD_ENV="BENCH_Q2_BUILDS=${T:?}/shared"
+	! qb i-0123456789ab "${T:?}/bd2" client 2> "${T:?}/bld.err" ||
+		{ echo "a group-writable build cache was accepted"; return 1; }
+	grep -q 'writable by its group or by other users' "${T:?}/bld.err" || { echo "a group-writable cache is refused without its reason: $(cat "${T:?}/bld.err")"; return 1; }
+	chmod 707 "${T:?}/shared"
+	! qb i-0123456789ab "${T:?}/bd2" client 2> /dev/null ||
+		{ echo "a build cache writable by others was accepted"; return 1; }
+	chmod 700 "${T:?}/shared"
+	BLD_ENV="BENCH_Q2_BUILDS=${T:?}/shared STUB_UID=4242424"
+	! qb i-0123456789ab "${T:?}/bd2" client 2> "${T:?}/bld.err" ||
+		{ echo "a build cache owned by another user was accepted"; return 1; }
+	grep -q 'not owned by this user' "${T:?}/bld.err" || { echo "another user's cache is refused without its reason: $(cat "${T:?}/bld.err")"; return 1; }
+	[ ! -s "${T:?}/make.log" ] || { echo "make ran for a refused build: $(tr '\n' ' ' < "${T:?}/make.log")"; return 1; }
+	BLD_ENV="BENCH_Q2_BUILDS=${T:?}/shared"
+	qb i-0123456789ab "${T:?}/bd2" client 2> "${T:?}/bld.err" ||
+		{ echo "a private build cache was refused: $(cat "${T:?}/bld.err")"; return 1; }
+}
+build_test "$REAL" > "${T:?}/build.why" || bad "the build: $(cat "${T:?}/build.why")"
+unset Q2H_ROOT
+
+# ---- the mutants ----------------------------------------------------------------
 
 M=${T:?}/mutant
 mkdir -p "$M"
@@ -461,6 +583,13 @@ if cmp -s "$REAL/adapters/quake2.sh" "$M/adapters/quake2.sh"; then
 elif e2e_refusal "$M" > /dev/null 2>&1; then
 	bad "the mutant (the requires check dropped) passed the refusal test"
 fi
+sed 's/^adapter_build() {$/adapter_build() { return 0/' "$REAL/adapters/quake2.sh" > "$M/adapters/quake2.sh"
+if cmp -s "$REAL/adapters/quake2.sh" "$M/adapters/quake2.sh"; then
+	bad "the build mutant did not apply"
+elif build_test "$M" > /dev/null 2>&1; then
+	bad "the mutant (adapter_build returning at once) passed the build test"
+fi
+unset Q2H_ROOT
 
 if [ "$fails" -ne 0 ]; then
 	printf '%s: %d failures\n' "$me" "$fails" >&2

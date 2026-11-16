@@ -12,8 +12,11 @@
 #   BENCH_Q2_BASEDIR  the directory that holds baseq2/: the owner's game
 #                     data, read only, never committed. Default: PINS_BASEDIR
 #   BENCH_Q2_BUILDS   the build cache: one export and build per inputs id,
-#                     outside any repository. Default:
-#                     <cache home>/<repository>-bench-builds
+#                     outside any repository, owned by this user and
+#                     writable by no one else; never pruned (see
+#                     doc/100_renderpins.md). make runs with the caller's
+#                     build variables cleared (Q2_BUILD_ENV, every WITH_*).
+#                     Default: <cache home>/<repository>-bench-builds
 #   BENCH_Q2_JOBS     make -j for a build. Default: hw.ncpu, else 4
 #   BENCH_Q2_LOGS     a directory, outside any repository, that keeps a copy
 #                     of every run's engine log (text only: no frame, no
@@ -433,9 +436,41 @@ adapter_preflight() {
 	printf 'pre.renderer=%s\n' "$(q2_word renderer)"
 }
 
-# q2_builds: the build cache directory, made, and outside any repository.
-# Run it in $(...): the outside-repository guard exits on a refusal, and
-# the caller returns on any failure.
+# q2_private_dir <dir> <what>: <dir> (symbolic links followed) is a
+# directory owned by this user and writable by no group and no other user,
+# so no one else can plant an export or a Makefile in it. The message names
+# <what>, never the path.
+q2_private_dir() {
+	_qo_w=$2
+	_qo_l=$(ls -ldLn "$1" 2> /dev/null) || _qo_l=
+	_qo_u=$(id -u 2> /dev/null) || _qo_u=
+	set -f
+	# shellcheck disable=SC2086 # the fields of one ls line; globbing is off
+	set -- $_qo_l
+	set +f
+	case ${1:-}.${3:-} in
+	d*.?*) ;;
+	*)
+		q2_say "cannot read the owner and mode of $_qo_w"
+		return 1
+		;;
+	esac
+	if [ -z "$_qo_u" ] || [ "$3" != "$_qo_u" ]; then
+		q2_say "$_qo_w is not owned by this user; point it at a directory of your own"
+		return 1
+	fi
+	case $1 in
+	?????w* | ????????w*)
+		q2_say "$_qo_w is writable by its group or by other users; make it private (chmod go-w) or point it elsewhere"
+		return 1
+		;;
+	esac
+}
+
+# q2_builds: the build cache directory, made, outside any repository, owned
+# by this user and writable by no one else (q2_private_dir). Run it in
+# $(...): the outside-repository guard exits on a refusal, and the caller
+# returns on any failure.
 q2_builds() {
 	if [ -n "${BENCH_Q2_BUILDS:-}" ]; then
 		_qu=$BENCH_Q2_BUILDS
@@ -447,12 +482,23 @@ q2_builds() {
 		_qu=$_qu/$(bench_repo_name)-bench-builds
 	fi
 	bench_outside_repo "$_qu" "the build cache (BENCH_Q2_BUILDS)"
-	mkdir -p "$_qu" || {
+	(umask 077 && mkdir -p "$_qu") || {
 		q2_say "cannot make the build cache"
 		return 1
 	}
+	q2_private_dir "$_qu" "the build cache (BENCH_Q2_BUILDS)" || return 1
 	printf '%s\n' "$_qu"
 }
+
+# The caller's variables that change what make builds, cleared for every
+# build (with every WITH_*), so a cached build depends on the commit, the
+# case's targets and build_flags (passed on make's command line) and the
+# host, never on who ran it: the compiler and its flags, the Makefile's own
+# switches, and make's flags from a parent make.
+Q2_BUILD_ENV='CC CFLAGS CPPFLAGS LDFLAGS LDLIBS INCLUDE DEBUG ASAN UBSAN COVERAGE WERR
+METAL_SHADERS NO_SDL_GYRO PKG_CONFIG STATIC_MODULES STATIC_RENDERER STATIC_ROOT
+YQ2_ARCH YQ2_OSTYPE MINGW_CHOST SOURCE_DATE_EPOCH
+MAKEFLAGS MFLAGS GNUMAKEFLAGS MAKEFILES MAKELEVEL MAKEOVERRIDES'
 
 adapter_build() {
 	_qb_c=$1
@@ -504,10 +550,17 @@ adapter_build() {
 	_qb_j=${BENCH_Q2_JOBS:-$(sysctl -n hw.ncpu 2> /dev/null || echo 4)}
 	bench_is_uint "$_qb_j" || _qb_j=4
 	q2_say "make -j$_qb_j $_qb_f $* (build cache $BENCH_INPUTS)"
-	_qb_st=0
+	# env -u for each of Q2_BUILD_ENV and every WITH_* of the environment
+	# (names only, [A-Z0-9_]; a stray line of a multi-line value at worst
+	# names a variable that is not set)
+	_qb_u=
 	set -f
-	# shellcheck disable=SC2086 # the flags are checked words; globbing is off
-	bench_bounded 3600 make -C "$_qb_e/tree" -j"$_qb_j" $_qb_f "$@" > "$_qb_e/build.log" 2>&1 || _qb_st=$?
+	for _qb_v in $Q2_BUILD_ENV $(env | sed -n 's/^\(WITH_[A-Za-z0-9_]*\)=.*/\1/p'); do
+		_qb_u="$_qb_u -u $_qb_v"
+	done
+	_qb_st=0
+	# shellcheck disable=SC2086 # the names and flags are checked words; globbing is off
+	bench_bounded 3600 env $_qb_u make -C "$_qb_e/tree" -j"$_qb_j" $_qb_f "$@" > "$_qb_e/build.log" 2>&1 || _qb_st=$?
 	set +f
 	if [ "$_qb_st" -ne 0 ]; then
 		tail -n 20 "$_qb_e/build.log" >&2
