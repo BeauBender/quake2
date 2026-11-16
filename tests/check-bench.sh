@@ -270,13 +270,21 @@ t_lock_tokens() {
 	start sh "$R/bench.sh" lock run holder-h -- sleep 30 > "${E:?}/h.out" 2>&1
 	_h=$BG
 	wait_held 5 holder-h || bad "tokens: the holder never showed in lock status"
+	# The three intruders wait at the same time.
+	_ips=
 	for _tok in forged:t-1-1-forged "stale:$_stale" "empty:"; do
 		_kind=${_tok%%:*}
+		start env BENCH_LOCK_TOKEN="${_tok#*:}" BENCH_LOCK_WAIT=1 sh "$R/bench.sh" lock run intruder -- echo ran > "${E:?}/int.$_kind.out" 2> "${E:?}/int.$_kind.err"
+		_ips="$_ips $_kind:$BG"
+	done
+	for _ip in $_ips; do
+		_kind=${_ip%%:*}
+		wait_gone 10 "${_ip#*:}" || bad "tokens: the $_kind-token waiter did not give up"
 		_st=0
-		_out=$(env BENCH_LOCK_TOKEN="${_tok#*:}" BENCH_LOCK_WAIT=1 sh "$R/bench.sh" lock run intruder -- echo ran 2> "${E:?}/err") || _st=$?
+		wait "${_ip#*:}" || _st=$?
 		[ "$_st" -eq 75 ] || bad "tokens: a $_kind token: wanted exit 75, got $_st"
-		[ -z "$_out" ] || bad "tokens: a $_kind token ran its command under someone else's lock"
-		grep -q 'still held by holder-h (pid ' "${E:?}/err" || bad "tokens: the $_kind-token waiter did not name the holder"
+		[ ! -s "${E:?}/int.$_kind.out" ] || bad "tokens: a $_kind token ran its command under someone else's lock"
+		grep -q 'still held by holder-h (pid ' "${E:?}/int.$_kind.err" || bad "tokens: the $_kind-token waiter did not name the holder"
 	done
 	# Release on a signal: TERM to the holder stops its command and frees the lock.
 	_c=$(sed -n 's/^child=//p' "${E:?}/state/lock/holder")
@@ -836,11 +844,8 @@ metric=ms n=3 median=11 p90=12 min=10 max=12"
 	# Reads take only r-*.run files of set-<number> directories: not a
 	# temporary file, another .run name, a staging directory or another set
 	# name, each of which would change the runs or the statistics.
-	printf 'metric.ms=999\n' > "${_d:?}/set-1/.tmp.r-zzq.run"
-	printf 'metric.ms=999\n' > "${_d:?}/set-1/zzq.run"
-	mkdir "${_d:?}/.tmp.999" "${_d:?}/set-x" "${_d:?}/set-"
-	for _p in .tmp.999 set-x set-; do
-		printf 'metric.ms=999\n' > "${_d:?}/$_p/r-zzq-1.run"
+	for _p in set-1/.tmp.r-zzq.run set-1/zzq.run .tmp.999/r-zzq-1.run set-x/r-zzq-1.run set-/r-zzq-1.run; do
+		mkdir -p "${_d:?}/${_p%/*}" && printf 'metric.ms=999\n' > "${_d:?}/$_p" || bad "store: cannot plant $_p"
 	done
 	B baseline get null-sleep "$cA" > "${E:?}/get" || true
 	grep -qx 'metric=ms n=3 median=11 p90=12 min=10 max=12' "${E:?}/get" && grep -q 'runs=3$' "${E:?}/get" || bad "store: a read took a file that is not a run of the live set: $(tr '\n' ' ' < "${E:?}/get")"
@@ -903,7 +908,7 @@ metric=ms n=3 median=11 p90=12 min=10 max=12"
 	B baseline get null-sleep "$cA" | grep -x 'metric=ms n=3 median=20 p90=20 min=20 max=20' > /dev/null || bad "store: --replace did not store the new runs"
 	[ "$(ls "${_d:?}/set-1" | grep -c '^r-.*\.run$')" -eq 3 ] || bad "store: set-1 does not keep the three superseded runs"
 	[ "$(ls "${_d:?}/set-2" | grep -c '^r-.*\.run$')" -eq 3 ] || bad "store: set-2 does not hold the three new runs"
-	cp -R "${_d:?}/set-1" "${_d:?}/set-9"
+	cp -R "${_d:?}/set-1" "${_d:?}/set-9" || bad "store: cannot copy set-1 to set-9"
 	env BENCH_NULL_VALUES=30 sh "$R/bench.sh" baseline put --replace null-sleep "$cA" > /dev/null || bad "store: put --replace after set-9 failed"
 	[ -d "${_d:?}/set-10" ] || bad "store: the set after set-9 is not set-10"
 	B baseline get null-sleep "$cA" | grep -x 'metric=ms n=3 median=30 p90=30 min=30 max=30' > /dev/null || bad "store: the live set is not the highest number (set-10)"
