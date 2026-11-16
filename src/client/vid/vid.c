@@ -1014,7 +1014,11 @@ VID_CheckGameData(void)
 	Com_sprintf(dir, sizeof(dir), "%sbaseq2", Sys_GetHomeDir());
 	Sys_MissingDataMessage(dir, text, sizeof(text));
 	Com_Printf("%s\n", text);
-	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Quake II", text, NULL);
+	if (!SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Quake II", text, NULL))
+	{
+		Com_Printf("The alert failed: %s\n", SDL_GetError());
+	}
+
 	Sys_Quit();
 }
 #endif
@@ -1039,16 +1043,17 @@ VID_Init(void)
 	Cmd_AddCommand("vid_listmodes", VID_ListModes_f);
 	Cmd_AddCommand("r_listmodes", VID_ListModes_f); // more consistent with r_mode
 
-#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
-	VID_CheckGameData();
-#endif
-
 	// Initializes the video backend. This is NOT the renderer
 	// itself, just the client side support stuff!
 	if (!GLimp_Init())
 	{
 		Com_Error(ERR_FATAL, "Couldn't initialize the graphics subsystem!\n");
 	}
+
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+	// The alert needs the video subsystem; the renderer is not loaded yet.
+	VID_CheckGameData();
+#endif
 
 	// Load the renderer and get things going.
 	VID_CheckChanges();

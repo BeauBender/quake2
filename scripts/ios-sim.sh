@@ -654,15 +654,21 @@ launch_app()
 	SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "$@" > "$log" 2>&1 &
 	lpid=$!
 	apid=
-	t=0
-	while [ "$t" -lt 60 ]; do
-		apid=$(sed -n "s/^$bid: \([0-9][0-9]*\).*/\1/p" "$log" | head -n 1)
-		[ -n "$apid" ] && break
-		kill -0 "$lpid" 2>/dev/null || break
-		sleep 1
-		t=$((t + 1))
-	done
-	[ -n "$apid" ] || { tail -n 5 "$log" >&2; die "the app did not start (log: $log)"; }
+	if [ "$mode" = run ]; then
+		# the launch client lives as long as the app (--console-pty) and
+		# its pid line may come only when the app ends: watch the client
+		apid=$lpid
+	else
+		t=0
+		while [ "$t" -lt 60 ]; do
+			apid=$(sed -n "s/^$bid: \([0-9][0-9]*\).*/\1/p" "$log" | head -n 1)
+			[ -n "$apid" ] && break
+			kill -0 "$lpid" 2>/dev/null || break
+			sleep 1
+			t=$((t + 1))
+		done
+		[ -n "$apid" ] || { tail -n 5 "$log" >&2; die "the app did not start (log: $log)"; }
+	fi
 	echo "ios-sim: app $bid pid $apid"
 	t=0
 	while kill -0 "$apid" 2>/dev/null; do
