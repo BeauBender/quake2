@@ -379,6 +379,41 @@ TEST(fs_sandbox_home_dir)
 	T_CHECK(!Sys_SandboxHomeDir("/c/x", tight, 15));
 }
 
+/*
+ * Fills Sys_GetHomeDir's cache in this process, as an earlier caller
+ * would, with the home <tmp>/<name> in the given mode, and puts HOME
+ * and the mode back.
+ */
+static void
+fill_home_cache(const char *name, qboolean sandbox)
+{
+	char path[MAX_OSPATH], oldhome[MAX_OSPATH];
+	const char *env = getenv("HOME");
+
+	snprintf(oldhome, sizeof(oldhome), "%s", env ? env : "");
+	snprintf(path, sizeof(path), "%s/%s", t_tmpdir(), name);
+	mkdir(path, 0755);
+	snprintf(path, sizeof(path), "%s/%s/.local", t_tmpdir(), name);
+	mkdir(path, 0755);
+	snprintf(path, sizeof(path), "%s/%s/.local/share", t_tmpdir(), name);
+	mkdir(path, 0755);
+	snprintf(path, sizeof(path), "%s/%s", t_tmpdir(), name);
+	setenv("HOME", path, 1);
+	unsetenv("XDG_DATA_HOME");
+	sys_sandbox_home = sandbox;
+	T_CHECK(Sys_GetHomeDir() != NULL);
+	sys_sandbox_home = false;
+
+	if (env)
+	{
+		setenv("HOME", oldhome, 1);
+	}
+	else
+	{
+		unsetenv("HOME");
+	}
+}
+
 static void
 sandbox_child(void *arg)
 {
@@ -431,31 +466,15 @@ TEST(fs_sandbox_documents)
 	static const pakentry_t pak0[] = {
 		{ "pics/colormap.pcx", "colormap" },
 	};
-	char out[1024], path[MAX_OSPATH], oldhome[MAX_OSPATH];
-	const char *env;
+	char out[1024], path[MAX_OSPATH];
 	struct stat sb;
 	int status;
 
 	write_pak("sandbox/Documents/baseq2/pak0.pak", pak0, 1);
 
 	/* An earlier caller has filled Sys_GetHomeDir's cache with another
-	   home: the child must not see it. */
-	env = getenv("HOME");
-	snprintf(oldhome, sizeof(oldhome), "%s", env ? env : "");
-	snprintf(path, sizeof(path), "%s/prefill", t_tmpdir());
-	mkdir(path, 0755);
-	setenv("HOME", path, 1);
-	sys_sandbox_home = true;
-	T_CHECK(Sys_GetHomeDir() != NULL);
-	sys_sandbox_home = false;
-	if (env)
-	{
-		setenv("HOME", oldhome, 1);
-	}
-	else
-	{
-		unsetenv("HOME");
-	}
+	   home in the same mode: the child must not see it. */
+	fill_home_cache("prefill", true);
 
 	status = t_expect_exit(sandbox_child, NULL, out, sizeof(out));
 	T_EQ_INT(status, 0);
@@ -514,6 +533,8 @@ TEST(fs_plain_home_dir)
 	char out[1024], want[MAX_OSPATH];
 	int status;
 
+	/* The cache holds the same home in the sandbox mode: the child must not see it. */
+	fill_home_cache("plainhome", true);
 	status = t_expect_exit(plain_home_child, NULL, out, sizeof(out));
 	T_EQ_INT(status, 0);
 	snprintf(want, sizeof(want), "plain=%s/plainhome/", t_tmpdir());
