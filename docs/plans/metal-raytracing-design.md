@@ -1023,18 +1023,25 @@ is the decision, and nothing is recorded in `docs/decisions/`.
 
 ### The water reflections' measured cost (RT6: TASK58, TASK158)
 
-The reflections have no time budget of their own; their share of section 8's total by its
-proportions is the 0.88 ms of one closest-hit ray a pixel at 1080p (of 5.14 ms, so 0.68 to 1.20 ms
-of the halved 4 to 7 ms), trace only. Measured on the M6 over `water.dm2` (about 41 % of the
-pixels water), GPU time of the pass ([TASK58](../runbook/TASK58.md),
-[TASK158](../runbook/TASK158.md)):
+Measured, `r_rt_water_hits 1` costs more than `0` and does not meet the reflections' share. At
+1920 x 1080 with the frame rate held to the display, the pass takes **4.66 ms** against TASK58's
+3.40 ms with water in view, and **2.06 ms** against 1.33 ms in a view with no water at all; not held,
+1.20 against 0.99 ms. So a frame without water costs more with the setting on, not close to nothing.
+GPU time of the pass, measured on the M6 over `water.dm2` (about 41 % of the pixels water)
+([TASK58](../runbook/TASK58.md), [TASK158](../runbook/TASK158.md)):
 
-| Output | `r_rt_water_hits 0` (TASK58), held / not held | `r_rt_water_hits 1` (TASK158), held / not held | `1` by its stages, held / not held |
-|---|---|---|---|
-| 1920 x 1080 | 3.40 / 0.99 ms | 4.66 / 1.20 ms | 3.42 / 0.94 ms |
-| 5120 x 2880 | 9.44 / 6.78 ms | 12.24 / 18.76 ms | 9.82 / 6.46 ms |
-| 5120 x 2880, `r_metalfx 2` (the pass at 1080p) | 3.46 / 0.99 ms | 3.82 / 3.66 ms | 3.37 / 0.95 ms |
-| 1920 x 1080, a view with no water | 1.33 ms held | 2.06 ms held | 0.75 ms held |
+| Output | `r_rt_water_hits 0` (TASK58), held / not held | `r_rt_water_hits 1` (TASK158), held / not held |
+|---|---|---|
+| 1920 x 1080 | 3.40 / 0.99 ms | 4.66 / 1.20 ms |
+| 5120 x 2880 | 9.44 / 6.78 ms | 12.24 / 18.76 ms |
+| 5120 x 2880, `r_metalfx 2` (the pass at 1080p) | 3.46 / 0.99 ms | 3.82 / 3.66 ms |
+| 1920 x 1080, a view with no water | 1.33 ms held | 2.06 ms held |
+
+The share: the reflections have no time budget of their own; their share of section 8's total by
+its proportions is the 0.88 ms of one closest-hit ray a pixel at 1080p (of 5.14 ms, so 0.68 to
+1.20 ms of the halved 4 to 7 ms), trace only. Against it: held, `0` is about four times it and `1`
+about five; not held, at the GPU's full clock, `0` is near the bound and `1` at the top of the 0.68
+to 1.20 ms range.
 
 `r_rt_water_hits` (TASK158's rework) picks the hit shading; `0`, the default, is TASK58's pass, its
 kernel verbatim, with frames byte-identical to main's and the same cost (the first column, within
@@ -1043,17 +1050,22 @@ face's texture and lightmap, the dynamic lights the lightmaps left out, the sky 
 water pixels without a reflection fall from 2.35 % (over the pool) and 8.38 % (under it) to 0, and it
 traces only the pixels a raster of the map's water marks (about 40 % of them here). Its cost is three
 passes in a row: the raster of the water, the compaction and the trace, whose spans add to the whole
-span within 0.01 ms. The second column is that sum; the raster's span in it (the start of its vertex
-stage to the end of its fragment stage) is mostly waiting: its vertex stage takes 0.01 to 0.03 ms and its
-fragment stage 0.03 to 0.8 ms, but between them the fragment stage waits for the work ahead of it in
-the frame, 1.2 ms at 1080p held and 12 ms (p90 22) at 5120 x 2880 not held, the run-to-run spread
+span within 0.01 ms; the second column is that sum. The raster's span in it (the start of its vertex
+stage to the end of its fragment stage) is mostly waiting: its vertex stage takes 0.01 to 0.03 ms and
+its fragment stage 0.03 to 0.8 ms, but between them the fragment stage waits for the work ahead of it
+in the frame, 1.2 ms at 1080p held and 12 ms (p90 22) at 5120 x 2880 not held, the run-to-run spread
 TASK158's first pass saw. Neither the GPU's clock (held, at the lower clock, the raster's span is
-3.25 ms) nor the raster's own work explains it. The third column counts the raster by its two
-stages: on that count `1` costs what `0` does with water in view and less without it, and the
-per-pass split is in [TASK158](../runbook/TASK158.md). Against the share: not held, at the GPU's full
-clock, both are near the 0.88 ms bound at 1080p and inside 0.68 to 1.20 ms; held, both are about four
-times it. The cheaper design for `1` marks the water pixels in the G-buffer raster itself, with no pass
-of its own and no wait.
+3.25 ms) nor the raster's own work explains it.
+
+*A re-count, not a frame measurement.* Adding the raster's two stages, the compaction and the trace,
+and leaving the wait out, gives 3.42 / 0.94 ms at 1080p held / not held (9.82 / 6.46 ms at
+5120 x 2880, 3.37 / 0.95 ms with `r_metalfx 2`, 0.75 ms held in a view with no water). It shows where
+the extra time sits, not what the frame pays: the timestamps do not show whether the GPU idles in the
+wait or runs other work then, and only the frame's own GPU time settles that. The per-pass split is
+in [TASK158](../runbook/TASK158.md).
+
+The follow-up is TASK162: mark the water pixels in the G-buffer raster itself, with no pass of its
+own, no reload of the depth and no wait, so that the trace on the list is what `1` adds.
 
 ## 3. What the rasterizer must expose
 

@@ -702,7 +702,8 @@ rm_rtw_trace(depth2d<float, access::read> depth [[texture(0)]],
 /*
  * r_rt_water_hits 1 (TASK158): TASK58's kernel on the compaction's list,
  * one pixel a thread, with world-space shading of a hit the picture does
- * not show (mtl_rtw_choose_ws) and a hidden model passed.
+ * not show (mtl_rtw_choose_ws): an alias model it does not show passed
+ * over (mtl_rtw_ws_next), a hidden brush model shaded.
  */
 kernel void
 rm_rtw_trace_ws(depth2d<float, access::read> depth [[texture(0)]],
@@ -861,14 +862,15 @@ rm_rtw_trace_ws(depth2d<float, access::read> depth [[texture(0)]],
 			hit = isect.intersect(ray(o, r3, 0.0f, MTL_RTW_FAR), ias, MTL_RTW_MASK);
 
 			/*
-			 * TASK158: an alias model the picture does not show (off the screen
-			 * or hidden) is passed and the ray goes on (mtl_rtw_ws_next): after
-			 * MTL_RTW_LAYERS model faces with the map's instances alone
-			 * (MTL_RTW_MASK_MAP), so it ends where it would end without the
-			 * models. A model is shaded only as the picture shows it, so a
-			 * hidden one neither reflects nor leaves a hole in the world-space
-			 * reflection behind it. Hidden brush models (doors, plats) are map
-			 * faces and are shaded in world space.
+			 * TASK158: what is passed over is exactly this: an alias model the
+			 * picture does not show (off the screen or hidden). The ray goes on
+			 * past it (mtl_rtw_ws_next), after MTL_RTW_LAYERS model faces with
+			 * the map's instances alone (MTL_RTW_MASK_MAP), so it ends where it
+			 * would end without the models, however many it crosses. A model is
+			 * shaded only as the picture shows it, so a hidden one neither
+			 * reflects nor leaves a hole in the world-space reflection behind
+			 * it. A hidden brush model (a door, a plat) is not passed over: it
+			 * is a map face and is shaded in world space where it stands.
 			 */
 			uint qmask = MTL_RTW_MASK;
 			int map = 0;

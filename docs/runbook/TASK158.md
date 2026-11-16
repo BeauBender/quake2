@@ -10,11 +10,13 @@ and TASK58's masked comparison (*The mask* in its file).
 `r_rt_water_hits` (default `0`, TASK58's pass: frames byte-identical to main's, the same cost).
 At `1` the share of water pixels with no reflection falls from 2.35 % to 0 over the pool and from
 8.38 % to 0 under it, and every pixel outside the water is byte-identical to the effect off on the
-G-buffer path. Its cost as its passes' spans add up is over TASK58's (4.66 against 3.40 ms at 1080p
-held); counted by the stages' own work it is TASK58's (3.42 ms): the raster's span is mostly a wait
-for the work ahead of it. The sections between this line and *Rework* are the first pass's (head
-`41a21150`); *Rework* supersedes their numbers. The pins are not recorded (the owner accepts the
-look first).
+G-buffer path. Measured, its pass costs more than TASK58's: 4.66 against 3.40 ms at 1080p held with
+water in view, 2.06 against 1.33 ms held in a view with no water, 1.20 against 0.99 ms not held. A
+re-count of the stages' own work, not a frame measurement, puts it at TASK58's (3.42 ms): the
+raster's span is mostly a wait for the work ahead of it. The follow-up that removes that pass is
+TASK162. The sections between this line and *Rework* are the first pass's (head `41a21150`);
+*Rework* supersedes their numbers, and *Review round 1* its hidden-model rule. The pins are not
+recorded (the owner accepts the look first).
 
 ## What changed
 
@@ -32,9 +34,11 @@ look first).
   lookup finds the hit (exact, and cheaper: the resolve's lightmap, AO and shadowed dynamic lights).
   Else a map triangle with a texture is shaded in world space (class `MTL_RTW_LIT | MTL_RTW_WS`),
   and the sky brush or nothing met takes the sky box's texel in the ray's direction
-  (`MTL_RTW_SKY | MTL_RTW_WS`). A model (an alias model's instance) the picture does not show is
-  passed: the ray goes on behind it, at most four hits, so a hidden player neither reflects nor
-  leaves a hole in the reflection behind it.
+  (`MTL_RTW_SKY | MTL_RTW_WS`). What is passed over is exactly this: an alias model the picture
+  does not show; the ray goes on behind it, however many it crosses (*Review round 1*: the first
+  pass gave up after four faces), so a hidden player neither reflects nor leaves a hole in the
+  reflection behind it. A hidden brush model (a door, a plat) is a map face and is shaded where it
+  stands.
 - *World-space shading* (`rm_rtw_shade_face`). The hit's triangle is the instance's first triangle
   plus the primitive id, in the world's index buffer; its texture and lightmap coordinates are its
   vertices' (`rm_wvert_t.uv`, `.lmuv`) mixed by the hit's barycentrics (`mtl_rtw_bary`). Its record
@@ -227,7 +231,8 @@ its fragment stage only once the depth it loads and the passes before it are don
 is not the GPU's clock (held, at the lower clock, the same span is 3.25 ms, while each stage is
 slower held, as it should be) and not the raster's own cost (0.22 ms). The same wait, smaller, is in
 every case (1.18 ms at 1080p held, 1.30 ms in a view with no water), which is why the summed figure
-is over TASK58's. On the stages' count, `hits 1` costs what `hits 0` does with water in view (3.42
+is over TASK58's. On the stages' count (a re-count, not a frame measurement), `hits 1` costs what
+`hits 0` does with water in view (3.42
 against 3.40 ms at 1080p held, 0.94 against 0.99 not held, 9.82 against 9.44 at 5120 x 2880 held)
 and about half of it in a view without water (0.75 against 1.33 ms). Whether the GPU idles in the
 wait is not something these timestamps show; the frame's own GPU time is the measurement that
@@ -260,7 +265,8 @@ into an attachment the G-buffer pass already has, or a one-byte target bound bes
 triangle passes the depth test gives the compaction its input with no pass of its own: no reload of
 the depth, no cleared target and no wait for the frame's earlier passes, and the compaction can run
 at a quarter size or be folded into the resolve. That removes the raster's span (1.2 to 12 ms of
-waiting here) and its fixed part; the trace on the list stays. The orchestrator files it as a card.
+waiting here) and its fixed part; the trace on the list stays. It is TASK162 (marking water in the
+G-buffer raster).
 
 ## Checks
 

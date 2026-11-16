@@ -1099,8 +1099,13 @@ is.
   hidden behind something nearer) is drawn on its own, its texture and
   lightmap, with the dynamic lights but without their shadows or the
   ambient occlusion; the sky the view does not show comes from the sky
-  box; a model the view does not show is passed over, so the reflection
-  shows what lies behind it and nothing hidden is revealed. Over the
+  box. What is passed over is exactly this: a model (a player, a
+  monster, an item, a weapon) the view does not show, so the reflection
+  shows what lies behind it, however many of them the reflection
+  crosses, and neither the model nor its outline. A brush model the
+  view does not show (a door, a platform, a lift) is part of the map
+  and is drawn on its own like any other surface, so the reflection can
+  show where it stands. Over the
   pool of the test map that fills the 2 to 9 % of the water that had no
   reflection, and changes no pixel outside the water. It costs more GPU
   time: a raster of the map's water and a list of its pixels before the
@@ -1111,7 +1116,9 @@ is.
   12.24 against 9.44 ms at 5120 x 2880 held; with `r_metalfx 2`, 3.82
   against 3.46 ms held. A view without water in it costs 2.06 against
   1.33 ms at 1920 x 1080 held. At `0` the pass and its pictures are
-  those before this setting existed.
+  those before this setting existed, and `0` needs nothing `1` needs:
+  where the renderer cannot build what `1` needs, the console says so
+  once and `1` draws as `0`.
   A value of `1` or more counts as `1`, a value below `1` or not a
   finite number as `0`. In the video menu's renderer options as "water
   reflections" (greyed while `r_rt_water` is off). Saved with the
