@@ -540,6 +540,7 @@ void CL_TrapParticles (entity_t *ent);
 void M_Init (void);
 void M_Free (void);
 void M_Keydown (int key);
+qboolean M_TextFieldActive (void);
 void M_Draw (void);
 void M_Menu_Main_f (void);
 void M_ForceMenuOff (void);

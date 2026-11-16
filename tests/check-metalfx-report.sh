@@ -18,6 +18,13 @@
 #   - one run per engine binary and per scenarios folder (a directory flock; a held lock is exit 3), a
 #     config.cfg newer than a saved one is kept, a command line over the engine's argument limit costs
 #     only that option's row, pins.sh runs in a process group that SIGTERM ends;
+#   - the host lock (the real scripts/bench/bench.sh, a private BENCH_STATE, a stub pins.sh that takes it
+#     as scripts/pins.sh does): the generator holds it once for its whole run, so while another job holds
+#     it the generator waits, and no record times out on that wait, and each record and engine run passes
+#     straight through; it is off, with its one line, for the entry points' reasons; a timeout, a SIGTERM,
+#     a Ctrl-C, a second SIGTERM during the stop and a pins.sh that ignores TERM each end the run under the
+#     lock, its grandchild included, and leave the lock free (TERM first, KILL after a wait that follows
+#     BENCH_STOP_GRACE and lands before the lock shell's own KILL);
 #   - the run end to end in a tree copy with a stub scripts/pins.sh: an option's SSIM is below 1, its crop
 #     is not the native one, the crop frame is the middle one by number; nothing touches the checkout;
 #   - the run paths: an existing results folder is refused, --replace empties the old crops, frames
@@ -121,7 +128,29 @@ chmod +x "$tmp/eng-failopt" "$tmp/eng-cfg" "$tmp/eng-slow"
   echo 'for n in 60 120 180; do cp "$src" "$d/$name-$n.tga" || exit 1; done'
   echo 'echo "Metal API Validation Enabled" > "$d/engine.log"'
   echo 'echo complete > "$d/complete"'; } > "$tmp/pins-stub"
-chmod +x "$tmp/pins-stub"
+# the same stub run the way scripts/pins.sh runs itself: as the command of the real host lock
+# (scripts/bench/bench.sh lock run pins-record, the bench harness copied into the tree). Under a generator
+# that holds the lock itself, the lock passes straight through and the stub's pid is the generator's child;
+# otherwise it is the lock shell, and the run under it is in a process group of the lock's own. Under the
+# lock it writes its pid (MFX_STUB_SH), its parent's (MFX_STUB_PARENT), the holder it sees (MFX_STUB_LABEL)
+# and, with MFX_STUB_DEAF, ignores TERM, HUP and INT (so does its child); then it records as the stub above
+{ echo '#!/bin/sh'
+  echo 'if [ "${BENCH_LOCK_ENTRY:-}" != pins-record ] || [ -z "${BENCH_LOCK_TOKEN:-}" ]; then'
+  echo '    exec sh "$(dirname "$0")/bench/bench.sh" lock run pins-record -- env BENCH_LOCK_ENTRY=pins-record /bin/sh "$0" "$@"'
+  echo 'fi'
+  echo '[ -z "${MFX_STUB_SH:-}" ] || echo $$ > "$MFX_STUB_SH"'
+  echo '[ -z "${MFX_STUB_PARENT:-}" ] || echo $PPID > "$MFX_STUB_PARENT"'
+  echo '[ -z "${MFX_STUB_LABEL:-}" ] || sh "$(dirname "$0")/bench/bench.sh" lock status >> "$MFX_STUB_LABEL"'
+  echo '[ -z "${MFX_STUB_DEAF:-}" ] || trap "" TERM HUP INT'
+  sed 1d "$tmp/pins-stub"; } > "$tmp/pins-stub-locked"
+# an engine like eng-cfg that first notes its LC_ALL and the holder of the host lock it runs under (MFX_ENG_LABEL)
+{ echo '#!/bin/sh'
+  echo '[ -z "${MFX_ENG_LABEL:-}" ] || { printf "lc=%s " "${LC_ALL-unset}"; sh "$MFX_BENCH" lock status; } >> "$MFX_ENG_LABEL"'
+  sed 1d "$tmp/eng-cfg"; } > "$tmp/eng-lockseen"
+chmod +x "$tmp/pins-stub" "$tmp/pins-stub-locked" "$tmp/eng-lockseen"
+# starts python3 -I with SIGINT at its default, which a background job of this script ignores, so that a
+# Ctrl-C (SIGINT) reaches the generator as KeyboardInterrupt
+INTDFL='import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execv(sys.executable, [sys.executable, "-I"] + sys.argv[1:])'
 # a tree copy for the generator: its own scripts/pins/scenarios and a stub scripts/pins.sh, so that a run
 # writes and deletes nothing in the caller's checkout
 mktree() { # <tree> <mfx.py>
@@ -136,7 +165,7 @@ mkeng() { # dir engine-script
 }
 
 # assertions <dir holding mfx.py> <ssim.c> <scratch dir> [groups]: appends the ids of the failed ones to FAILED
-has() { case " ${GROUPS_RUN:-path plan engine cfg frames report io run ssim} " in *" $1 "*) return 0;; esac; return 1; }
+has() { case " ${GROUPS_RUN:-path plan engine cfg frames report io run lock ssim} " in *" $1 "*) return 0;; esac; return 1; }
 # the command line of a generator run on the fake engine (the caller sets PATH, MFX_TRACE)
 e2e() { # <engine> <out dir> [more arguments]
     local eng=$1 o=$2; shift 2
@@ -384,6 +413,120 @@ limit" "$out"
         if kill -0 "$cpid" 2>/dev/null; then kill -KILL "$cpid" 2>/dev/null; ko e2e-group "the child of pins.sh was left running after SIGTERM"; fi
     fi
     kill -KILL $pid 2>/dev/null
+
+    fi
+
+    # the host lock (a private BENCH_STATE, the bench harness copied into the tree): the generator takes it
+    # once for its whole run, pins.sh passes straight through, and every way out leaves the lock free
+    if has lock; then
+    export MFX_NATIVE_TGA="$tmp/a.tga" MFX_OPT_TGA="$tmp/other.tga"
+    # the seconds stop_group gives pins.sh between TERM and KILL: when pins.sh may be the lock shell of a
+    # hold of its own, the lock's grace plus 5 s (BENCH_STOP_GRACE=1: 6 s, so at most 11 s); under the
+    # generator's own hold, BENCH_STOP_GRACE alone, so that its KILL lands before the lock shell's KILL of
+    # the generator (the lock's grace, at least BENCH_STOP_GRACE + 5)
+    out=$(python3 -I "$HELP" "$d" stop-wait 2>&1); [ "$out" = "25 11 25 65 / 10 1 10 30" ] || ko e2e-lock-grace "$out"
+    lt="$w/lt"; mktree "$lt" "$d/mfx.py"; cp "$tmp/pins-stub-locked" "$lt/scripts/pins.sh"; cp -R "$root/scripts/bench" "$lt/scripts/bench"
+    # the ways out during record(), each of which ends the run under the lock, the grandchild included,
+    # and leaves the lock free:
+    #   timeout  sh_group alone (no hold of its own), so the stub pins.sh is the lock shell of its own hold:
+    #            the stop must be TERM, which the lock shell's trap passes on to its command's group (a KILL
+    #            first ends the lock shell alone), and KILL only after the lock's grace;
+    #   TERM, INT  to the generator, which is the lock shell of its own hold by then (a Ctrl-C reaches the
+    #            lock shell): its trap stops the generator, which stops pins.sh;
+    #   TERM2    two SIGTERMs to the generator's python itself, 1 s apart, with a stub that ignores TERM
+    #            (BENCH_STOP_GRACE=5): the second must not cut the stop short, so the generator is still
+    #            there 1 s later, and its KILL ends the stub;
+    #   deaf     SIGTERM to the lock shell, the stub ignoring TERM: the generator's KILL of pins.sh must
+    #            land before the lock shell's KILL of the generator, or pins.sh outlives the lock
+    for how in timeout TERM INT TERM2 deaf; do
+        st="$w/lt-state-$how"; rm -f "$w/lt-sh" "$w/lt-child" "$w/lt-parent"
+        g=1; deaf=; case $how in TERM2) g=5; deaf=1;; deaf) deaf=1;; esac
+        lenv=(env -u BENCH_LOCK_TOKEN -u BENCH_LOCK_ENTRY -u BENCH_LOCK -u BENCH_LOCK_WAIT -u BENCH_LOCK_POLL BENCH_STATE="$st"
+              BENCH_STOP_GRACE=$g MFX_STUB_SH="$w/lt-sh" MFX_STUB_CHILD="$w/lt-child" MFX_STUB_PARENT="$w/lt-parent"
+              MFX_STUB_DEAF=$deaf PINS_STORE="$w/lt-store-$how" PATH="$tmp/maketrue:$PATH")
+        if [ $how = timeout ]; then
+            "${lenv[@]}" python3 -I "$HELP" "$lt/scripts/metalfx-report" group-timeout "$lt" 5 > "$w/lt-$how.log" 2>&1 &
+        else
+            mkeng "$w/lt-eng-$how" "$tmp/eng-cfg"; mkdir -p "$w/lt-out-$how"
+            "${lenv[@]}" python3 -I -c "$INTDFL" "$lt/scripts/metalfx-report/mfx.py" run --out "$w/lt-out-$how" --basedir "$tmp/basedir" \
+                --host-name t1 --runs 1 --gpu-runs 1 --scenarios world --only fx1-s75 --timeout 20 --framediff "$tmp/framediff" \
+                --ssim "$w/ssim" --bin "$w/lt-eng-$how/quake2" > "$w/lt-$how.log" 2>&1 &
+        fi
+        pid=$!
+        n=0; while [ ! -s "$w/lt-child" ] && kill -0 $pid 2>/dev/null && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done
+        spid=$(cat "$w/lt-sh" 2>/dev/null); cpid=$(cat "$w/lt-child" 2>/dev/null); ppid=$(cat "$w/lt-parent" 2>/dev/null)
+        [ -n "$cpid" ] || ko e2e-lock "$how: the stub pins.sh did not start under the lock: $(tail -3 "$w/lt-$how.log")"
+        case $how in
+            TERM|INT) kill -$how $pid 2>/dev/null;;
+            deaf) kill -TERM $pid 2>/dev/null;;
+            TERM2)
+                [ "$ppid" != "$pid" ] || ko e2e-lock "TERM2: the generator holds no lock of its own (the stub's parent is its pid)"
+                kill -TERM "$ppid" 2>/dev/null; sleep 1; kill -TERM "$ppid" 2>/dev/null; sleep 1
+                kill -0 "$ppid" 2>/dev/null || ko e2e-lock "TERM2: a second SIGTERM cut the stop short (the generator was gone 1 s later)";;
+        esac
+        n=0; while kill -0 $pid 2>/dev/null && [ $n -lt 200 ]; do sleep 0.1; n=$((n+1)); done
+        if kill -0 $pid 2>/dev/null; then kill -KILL $pid 2>/dev/null; ko e2e-lock "$how: the generator did not end within 20 s"; fi
+        wait $pid 2>/dev/null
+        [ $how != timeout ] || want_has e2e-lock "timed out" "$(cat "$w/lt-$how.log")"
+        for q in $spid $cpid; do
+            if kill -0 "$q" 2>/dev/null; then kill -KILL "$q" 2>/dev/null; ko e2e-lock "$how: the run under the lock was left running"; fi
+        done
+        ls=$(BENCH_STATE="$st" sh "$lt/scripts/bench/bench.sh" lock status 2>&1)
+        [ "$ls" = lock=free ] || ko e2e-lock "$how: the lock is not free afterwards: $ls"
+        case $FAILED in *" e2e-lock "*) break;; esac  # one way out failed: the others would wait their bound too
+    done
+    # one hold for the whole run: while another job holds the lock, the generator waits for it before it
+    # runs anything, so a record's time limit (4 s in this copy) counts the record alone and not that wait;
+    # under the generator's hold each record and each timed engine run passes straight through (the holder
+    # they see is metalfx-report)
+    lk="$w/lk"; mktree "$lk" "$d/mfx.py"; cp "$tmp/pins-stub-locked" "$lk/scripts/pins.sh"; cp -R "$root/scripts/bench" "$lk/scripts/bench"
+    python3 -I "$HELP" mutate "$d/mfx.py" "$lk/scripts/metalfx-report/mfx.py" 'env=env, timeout=900)' 'env=env, timeout=4)' > "$w/lk-mut.log" ||
+        ko e2e-lock-wait "cannot shorten the record's limit: $(cat "$w/lk-mut.log")"
+    st="$w/lk-state"; bsh="$lk/scripts/bench/bench.sh"
+    lenv=(env -u BENCH_LOCK_TOKEN -u BENCH_LOCK_ENTRY -u BENCH_LOCK -u BENCH_STOP_GRACE BENCH_LOCK_WAIT=60 BENCH_LOCK_POLL=0.2
+          BENCH_STATE="$st" PATH="$tmp/maketrue:$PATH")
+    "${lenv[@]}" sh "$bsh" lock run gate -- sleep 10 > "$w/lk-holder.log" 2>&1 &
+    hp=$!
+    n=0; until BENCH_STATE="$st" sh "$bsh" lock status 2>/dev/null | grep -q 'label=gate'; do
+        [ $n -lt 50 ] || { ko e2e-lock-wait "the holder did not take the lock"; break; }; sleep 0.1; n=$((n+1)); done
+    mkeng "$w/lk-eng" "$tmp/eng-lockseen"; mkdir -p "$w/lk-out"
+    out=$("${lenv[@]}" LC_ALL=POSIX MFX_STUB_LABEL="$w/lk-labels" MFX_ENG_LABEL="$w/lk-eng-labels" MFX_BENCH="$bsh" python3 -I "$lk/scripts/metalfx-report/mfx.py" \
+        run --out "$w/lk-out" --basedir "$tmp/basedir" --host-name t1 --runs 1 --gpu-runs 1 --scenarios world --only fx1-s75 --timeout 20 \
+        --framediff "$tmp/framediff" --ssim "$w/ssim" --bin "$w/lk-eng/quake2" 2>&1); rc=$?
+    want_rc e2e-lock-wait 0 $rc
+    want_not e2e-lock-wait "timed out" "$out"
+    want_not e2e-lock-wait "the host lock is off" "$out"
+    labs=$(cat "$w/lk-labels" 2>/dev/null)
+    [ "$(printf '%s\n' "$labs" | grep -c 'label=metalfx-report ')" -eq 2 ] && [ "$(printf '%s\n' "$labs" | wc -l | tr -d ' ')" -eq 2 ] ||
+        ko e2e-lock-wait "the two records did not run under the generator's own hold: $labs"
+    labs=$(cat "$w/lk-eng-labels" 2>/dev/null)
+    [ -n "$labs" ] || ko e2e-lock-wait "the engine noted no holder"
+    want_not e2e-lock-wait "lock=free" "$labs"; want_not e2e-lock-wait "label=gate" "$labs"
+    # the caller's LC_ALL comes back under the hold (bench.sh sets C for its command)
+    want_has e2e-lock-wait "lc=POSIX " "$labs"; want_not e2e-lock-wait "lc=C " "$labs"
+    kill -TERM $hp 2>/dev/null; wait $hp 2>/dev/null
+    [ "$(BENCH_STATE="$st" sh "$bsh" lock status 2>&1)" = lock=free ] || ko e2e-lock-wait "the lock is not free afterwards"
+    # the lock is off, with one line on stderr that names why, as for the entry points: BENCH_LOCK=0, GitHub
+    # Actions, no bench core in the tree, no state directory (each run is then refused as out of date)
+    mkeng "$w/lo/release" "$tmp/eng-cfg"; mkdir -p "$w/lo/src" "$w/lo-out"; touch "$w/lo/Makefile"
+    for why in "BENCH_LOCK=0" "CI (GITHUB_ACTIONS=true)" "no bench core (scripts/bench/bench.sh)" "no state directory (BENCH_STATE, XDG_CACHE_HOME and HOME unset)"; do
+        t=$lk
+        case $why in
+            BENCH*) oenv=(BENCH_LOCK=0);; CI*) oenv=(CI=true GITHUB_ACTIONS=true);;
+            no\ bench*) oenv=(BENCH_LOCK=1); t=$(dirname "$(dirname "$d")");; *) oenv=(-u BENCH_STATE -u XDG_CACHE_HOME -u HOME);;
+        esac
+        out=$("${lenv[@]}" env "${oenv[@]}" PATH="$tmp/makefail:$PATH" python3 -I "$t/scripts/metalfx-report/mfx.py" run --out "$w/lo-out" --basedir "$tmp/basedir" \
+            --host-name t1 --scenarios world --only fx1-s75 --framediff "$tmp/framediff" --ssim "$w/ssim" --bin "$w/lo/release/quake2" 2>&1); rc=$?
+        want_rc e2e-lock-off 3 $rc
+        [ "$(printf '%s\n' "$out" | grep -c "^metalfx-report: the host lock is off: $why\$")" -eq 1 ] || ko e2e-lock-off "$why: $out"
+    done
+    out=$("${lenv[@]}" PATH="$tmp/makefail:$PATH" python3 -I "$lk/scripts/metalfx-report/mfx.py" run --out "$w/lo-out" --basedir "$tmp/basedir" \
+        --host-name t1 --scenarios world --only fx1-s75 --framediff "$tmp/framediff" --ssim "$w/ssim" --bin "$w/lo/release/quake2" 2>&1); rc=$?
+    want_rc e2e-lock-off 3 $rc; want_not e2e-lock-off "the host lock is off" "$out"
+
+    fi
+
+    if has run; then
     # an option over the engine's argument limit costs its own row; the others, native included, still run
     printf 'small\tr_metalfx 1\tall\tr_metalfx=1\n' >> "$d/options.tsv"
     out=$(python3 -I "$HELP" "$d" pad-scenario "$tmp/cv-present" "$d/../pins/scenarios/world.cfg" fx1-s75 small 2>&1); want_has e2e-pad "padded" "$out"
@@ -416,7 +559,7 @@ limit" "$out"
 # the real code
 FAILED=" "
 mkdir "$tmp/real-run"; mktree "$tmp/real-tree" "$SRC/mfx.py" || exit 1
-assertions "$tmp/real-tree/scripts/metalfx-report" "$SRC/ssim.c" "$tmp/real-run"
+assertions "$tmp/real-tree/scripts/metalfx-report" "$SRC/ssim.c" "$tmp/real-run" "${MFX_GROUPS:-}"  # MFX_GROUPS="lock": only these (while iterating)
 if [ "$FAILED" != " " ]; then bad "assertions failed on the real code:$FAILED"; fi
 # the scratch scenarios the generator writes into scripts/pins/scenarios are ignored by git (and the check fails without the rule)
 ign() { grep -qxF '/scripts/pins/scenarios/mfxr-*.cfg' "$1"; }
@@ -451,6 +594,7 @@ mutant() { # name covered-id file(py|c) old new [old new]...: runs in the backgr
             frames-*|stats-*) g=frames;;
             name-*|crop-*|host-*|ext-*|report-*|load-*) g=report;;
             io-*|record-*|clear-*) g=io;;
+            e2e-lock*) g=lock;;
             build-*|rdir-*|crops-*|e2e-*|run-*) g=run;;
             ssim-*) g=ssim;;
             *) g=report;;
@@ -570,7 +714,14 @@ mutant lock-fails-open run-lock-bin py 'raise Refuse("another run holds %s (%s),
 mutant quality-vs-itself e2e-quality py 'diff_frames(ctx, nat[k], fr[k])' 'diff_frames(ctx, nat[k], nat[k])'
 mutant crop-is-native e2e-crop py 'img = nimg if oid == "native" else read_tga(frames_by_index(pins[oid])[mid])' 'img = nimg'
 mutant crop-frame-first e2e-index py 'mid = nkeys[len(nkeys) // 2]' 'mid = nkeys[0]'
-mutant pins-not-in-group e2e-group py 'os.killpg(p.pid, signal.SIGKILL)' 'p.kill()'
+mutant pins-not-in-group e2e-group py 'os.killpg(p.pid, signal.SIGTERM)' 'p.terminate()' 'os.killpg(p.pid, signal.SIGKILL)' 'p.kill()'
+mutant pins-kill-first e2e-lock py 'os.killpg(p.pid, signal.SIGTERM)' 'os.killpg(p.pid, signal.SIGKILL)'
+mutant stop-wait-unfloored e2e-lock-grace py 'return max(2 * g, g + 5) + 5' 'return 2 * g + 5'
+mutant stop-unheld e2e-lock py 'held = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)' 'held = signal.pthread_sigmask(signal.SIG_BLOCK, [])'
+mutant stop-wait-outlives-lock e2e-lock py 'if LOCK_HELD:' 'if False:'
+mutant lock-self-off e2e-lock-wait py 'os.execv("/bin/sh", cmd)' 'off = "mutant"'
+mutant lock-lc-all-lost e2e-lock-wait py 'lc = ["LC_ALL=" + e["LC_ALL"]] if "LC_ALL" in e else ["-u", "LC_ALL"]' 'lc = []'
+mutant lock-off-silent e2e-lock-off py 'print("metalfx-report: the host lock is off: " + off, file=sys.stderr)' 'pass'
 mutant pins-no-group e2e-group py 'rc, out = sh_group([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)' 'rc, out = sh([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)'
 
 wait
