@@ -129,7 +129,11 @@ while [ $# -gt 0 ]; do
 	esac
 done
 [ "$(head -n 1 "$in" 2>/dev/null)" = FAKE-CMS ] || { echo "security: failed to decode message" >&2; exit 1; }
+# the decoded profile holds the team's certificates: only its owner reads its directory
+[ "$(stat -f %Lp "$(dirname "$out")")" = 700 ] || { echo "fake security: $(dirname "$out") is readable by others" >&2; exit 1; }
 tail -n +2 "$in" > "$out"
+[ "$FAKE_SCENARIO" = cmsfail ] && { echo "security: the signer is not trusted" >&2; exit 1; }
+exit 0
 EOF
 	cat > "${sroot:?}/bin/codesign" <<'EOF'
 #!/bin/bash
@@ -194,10 +198,22 @@ EOF
 	mkprofile "$p/otherteam" "OTHERTEAM.$id" "$team"
 	mkprofile "$p/noappid" - "$team"
 	mkprofile "$p/noteam" "$team.$id" -
+	mkprofile "$p/appidchars" "$team.$id;x" "$team"
+	mkprofile "$p/teamchars" "SELF.TEAM.$id" SELF.TEAM
 	printf '%s\n' "not a CMS message" > "$p/garbage"
 	printf '%s\n' FAKE-CMS "not a property list" > "$p/notplist"
 	mkapp "$sroot/device.app" iPhoneOS "$id"
 	mkapp "$sroot/sim.app" iPhoneSimulator "$id"
+	mkapp "$sroot/nobid.app" iPhoneOS ""
+	mkapp "$sroot/noexe.app" iPhoneOS "$id"
+	rm -f "${sroot:?}/noexe.app/quake2"
+	mkapp "$sroot/noplist.app" iPhoneOS "$id"
+	rm -f "${sroot:?}/noplist.app/Info.plist"
+	# a bundle signed but with no profile (ad hoc), and one with a profile but no signature
+	mkapp "$sroot/adhoc.app" iPhoneOS "$id"
+	mkdir -p "$sroot/adhoc.app/_CodeSignature" && : > "$sroot/adhoc.app/_CodeSignature/CodeResources" || die "cannot make adhoc.app"
+	mkapp "$sroot/profiled.app" iPhoneOS "$id"
+	cp "$p/good" "$sroot/profiled.app/embedded.mobileprovision" || die "cannot make profiled.app"
 	cp -R "$sroot/device.app" "$sroot/signed.app" || die "cannot copy the bundle"
 	cp "$p/good" "$sroot/signed.app/embedded.mobileprovision" && mkdir -p "$sroot/signed.app/_CodeSignature" \
 		&& : > "$sroot/signed.app/_CodeSignature/CodeResources" || die "cannot make the signed bundle"
@@ -243,9 +259,9 @@ EOF
 			why="it printed the identity, the team or the certificate"
 		elif [ -n "$(ls -A "${d:?}/tmp")" ]; then
 			why="it left its scratch files: $(ls -A "${d:?}/tmp" | head -n 3 | tr '\n' ' ')"
-		elif [ "$want" != 0 ] && [ -z "$sc" ] && grep -E -q '^(codesign|xcrun)\|' "${d:?}/state/calls"; then
+		elif [ "$want" != 0 ] && [ "$sc" = "${sc#sign}" ] && [ "$sc" = "${sc#verify}" ] && [ "$sc" = "${sc#dev}" ] && grep -E -q '^(codesign|xcrun)\|' "${d:?}/state/calls"; then
 			why="it refused, but ran $(grep -E -o '^(codesign|xcrun)\|[^|]*' "${d:?}/state/calls" | head -n 1)"
-		elif [ "$want" != 0 ] && [ -z "$sc" ] && [ "$app" = device.app ] && [ -e "${d:?}/Quake2.app/embedded.mobileprovision" ]; then
+		elif [ "$want" != 0 ] && [ "$sc" = "${sc#sign}" ] && [ "$sc" = "${sc#verify}" ] && [ "$app" = device.app ] && [ -e "${d:?}/Quake2.app/embedded.mobileprovision" ]; then
 			why="it refused, but embedded the profile"
 		fi
 		if [ -z "$why" ] && [ "$rc" = 0 ] && [ -n "${dt_expect:-}" ]; then
@@ -279,6 +295,9 @@ EOF
 	dt_case sign-profile-missing 1 "is not a file" "" device.app -- sign --identity "$who" --profile @P@/missing
 	dt_case sign-profile-undecodable 1 "cannot be decoded" "" device.app -- sign --identity "$who" --profile @P@/garbage
 	dt_case sign-profile-not-plist 1 "cannot be decoded" "" device.app -- sign --identity "$who" --profile @P@/notplist
+	dt_case sign-profile-cms-fails 1 "cannot be decoded" cmsfail device.app -- sign --identity "$who" --profile @P@/good
+	dt_case sign-profile-appid-chars 1 "has no application identifier" "" device.app -- sign --identity "$who" --profile @P@/appidchars
+	dt_case sign-profile-team-chars 1 "has no team identifier" "" device.app -- sign --identity "$who" --profile @P@/teamchars
 	dt_case sign-profile-no-appid 1 "has no application identifier" "" device.app -- sign --identity "$who" --profile @P@/noappid
 	dt_case sign-profile-no-team 1 "has no team identifier" "" device.app -- sign --identity "$who" --profile @P@/noteam
 	dt_case sign-profile-other-team 1 "does not start with its team identifier" "" device.app -- sign --identity "$who" --profile @P@/otherteam
@@ -286,6 +305,9 @@ EOF
 	dt_case sign-profile-wildcard 1 "is for *, not the app's org.yquake2.quake2" "" device.app -- sign --identity "$who" --profile @P@/wildcard
 	# sign: the app must be the device's bundle, of IOS_BUNDLE_ID when set
 	dt_case sign-no-app 1 "is not an app bundle" "" - -- sign --identity "$who" --profile @P@/good
+	dt_case sign-app-no-executable 1 "is not an app bundle" "" noexe.app -- sign --identity "$who" --profile @P@/good
+	dt_case sign-app-no-info-plist 1 "is not an app bundle" "" noplist.app -- sign --identity "$who" --profile @P@/good
+	dt_case sign-app-no-bundle-id 1 "has no CFBundleIdentifier" "" nobid.app -- sign --identity "$who" --profile @P@/good
 	dt_case sign-simulator-app 1 "is built for iPhoneSimulator, not iPhoneOS" "" sim.app -- sign --identity "$who" --profile @P@/good
 	dt_case sign-bundle-id-not-ios-bundle-id 1 "is org.yquake2.quake2, not IOS_BUNDLE_ID org.example.other" "" device.app IOS_BUNDLE_ID=org.example.other -- sign --identity "$who" --profile @P@/good
 	dt_case sign-limit-not-digits 1 "IOS_DEVICE_SIGN_SECONDS must be" "" device.app IOS_DEVICE_SIGN_SECONDS=5m -- sign --identity "$who" --profile @P@/good
@@ -312,6 +334,8 @@ codesign|--verify|--strict|@APP@|"
 	dt_case install-device-option 2 "usage: scripts/ios-device.sh install" "" signed.app -- install --device -x
 	dt_case install-device-space 2 "usage: scripts/ios-device.sh install" "" signed.app -- install --device "a b"
 	dt_case install-unsigned 1 "is not signed" "" device.app -- install --device 00000000-SELFTEST
+	dt_case install-signed-ad-hoc 1 "is not signed" "" adhoc.app -- install --device 00000000-SELFTEST
+	dt_case install-profile-not-signed 1 "is not signed" "" profiled.app -- install --device 00000000-SELFTEST
 	dt_case install-limit-not-digits 1 "IOS_DEVICE_INSTALL_SECONDS must be" "" signed.app IOS_DEVICE_INSTALL_SECONDS=-1 -- install --device 00000000-SELFTEST
 	dt_expect="xcrun|devicectl|device|install|app|--device|00000000-SELFTEST|@APP@|"
 	dt_case install-ok 0 "ios-device: installed" "" signed.app -- install --device 00000000-SELFTEST
@@ -387,7 +411,7 @@ if [ "$mode" = sign ]; then
 fi
 
 # the app: a bundle with its Info.plist and executable
-[ -d "$app" ] && [ -f "$app/Info.plist" ] && [ -f "$app/quake2" ] || die "$app is not an app bundle (make ios IOS_SDK=iphoneos)"
+[ -f "$app/Info.plist" ] && [ -f "$app/quake2" ] || die "$app is not an app bundle (make ios IOS_SDK=iphoneos)"
 bid=$(plutil -extract CFBundleIdentifier raw -o - "$app/Info.plist" 2>/dev/null) || bid=
 case $bid in
 ''|*[!A-Za-z0-9.-]*) die "$app/Info.plist has no CFBundleIdentifier of letters, digits, dots and hyphens" ;;
@@ -425,9 +449,7 @@ if [ "$mode" = sign ]; then
 		die "the profile $profile is for ${appid#"$team".}, not the app's $bid"
 	fi
 	ent=$tmp/entitlements.plist
-	if ! plutil -extract Entitlements xml1 -o "$ent" "$dec" > /dev/null 2>&1 || ! plutil -lint -s "$ent" > /dev/null 2>&1; then
-		die "the profile's entitlements cannot be read"
-	fi
+	plutil -extract Entitlements xml1 -o "$ent" "$dec" > /dev/null 2>&1 || die "the profile's entitlements cannot be written to $ent"
 	cp "$profile" "$app/embedded.mobileprovision" || die "cannot copy the profile into $app"
 	if ! bounded "$sign_s" "${tmp:?}/codesign.out" codesign --force --sign "$identity" --entitlements "$ent" --timestamp=none "$app"; then
 		head -n 5 "${tmp:?}/codesign.out" >&2
