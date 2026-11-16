@@ -2,6 +2,7 @@
 # scripts/ios-sim.sh -- the iOS simulator app on a throwaway device (TASK146).
 #
 #   scripts/ios-sim.sh smoke --out DIR
+#   scripts/ios-sim.sh selftest
 #
 # smoke: writes the synthetic data (scripts/ios/smokepak.py, no id Software
 # content) to a scratch directory, builds "make ios IOS_BUNDLE_DATA=<it>"
@@ -13,33 +14,264 @@
 # "+quit". It then copies the engine's own log (qconsole.log, logfile 2)
 # and frame from the app's data container to DIR/engine.log and
 # DIR/q2_0000.tga and decides from those, from the simulator's own
-# screenshot (its screen size) and from the device list:
-#   - the linked-in ref_metal, the Metal device and family lines, a
-#     Drawable size of the screen in pixels (landscape) and "Wrote
-#     q2_0000.tga" are in engine.log;
+# screenshot (its screen size) and from the device lists:
+#   - the linked-in ref_metal, the Metal device and family lines (with
+#     no family from apple5 on, ref_metal's line that the simulator does
+#     not check that floor), a Drawable size of the screen in pixels
+#     (landscape) and "Wrote q2_0000.tga" are in engine.log;
 #   - the frame is that size and not one colour;
 #   - Metal's validation layer was on (its line in the app's own output,
 #     DIR/console.log), no validation message, and 0 failed command
 #     buffers in ref_metal's metal_stats line;
-#   - "simctl list devices" lists the same devices before and after.
+#   - the device lists (DIR/devices.{before,created,after}.json, each
+#     "simctl list devices -j"): every device listed before the run is
+#     listed after it, and this run's device is in the list taken after
+#     "simctl create", not in the one before and not in the one after.
+#     Devices that others create or delete meanwhile (Xcode Previews) are
+#     not this run's. A list that fails, cannot be read or names no
+#     device is a failure.
 # A "run" subcommand (the app for a person to look at, optionally with the
 # owner's data in the local bundle) is left to a later card.
+#
+# selftest: runs "smoke" against a fake xcrun and a fake make (no
+# simulator, no build, seconds) and checks its rules: a hung "simctl
+# list" is timed out, a failed or empty device list fails, another device
+# appearing meanwhile passes, a device from before that disappears fails,
+# this run's device left behind fails, the device of a create that timed
+# out is deleted, and a limit that is not digits is refused.
+# tests/check-ios.sh runs it.
+#
+# Limits, in seconds (digits only, or the script refuses):
+# IOS_SIM_BOOT_SECONDS (300), IOS_SIM_SMOKE_SECONDS (180, the app's run),
+# IOS_SIM_LIST_SECONDS (60, each "simctl list"), IOS_SIM_CREATE_SECONDS
+# (120).
 #
 # Rules: every wait is bounded; the app is watched by its PID; nothing is
 # killed but a PID this script started, and the app only through "simctl
 # terminate" on this script's device; no other device is touched (the
 # trap shuts down and deletes this one by its UDID); DIR must be outside
 # the checkout, and the build goes to DIR/build, never to release/ or
-# debug/. A failed build, install or launch is a failure, not a skip.
+# debug/. A failed build, list, create, install or launch is a failure,
+# not a skip.
 set -u
+set -o pipefail
 export LC_ALL=C
 
 repo=$(cd "$(dirname "$0")/.." && pwd -P) || exit 1
+self=$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0") || exit 1
 die() { echo "ios-sim: $*" >&2; exit 1; }
-usage() { echo "usage: scripts/ios-sim.sh smoke --out DIR" >&2; exit 2; }
+usage() { echo "usage: scripts/ios-sim.sh smoke --out DIR | selftest" >&2; exit 2; }
+uuid_re='[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}'
 
+# bounded <seconds> <log> [-e <err>] <command>...: runs it, kills it (our
+# PID) past the bound; its output goes to <log>, its errors there too or
+# to <err>
+bounded()
+{
+	local limit=$1 log=$2 err=$2 pid t=0 w status=0
+	shift 2
+	if [ "${1:-}" = -e ]; then
+		err=$2
+		shift 2
+	fi
+	case $limit in
+	''|*[!0-9]*) echo "ios-sim: bounded: not a number of seconds: $limit" >&2; return 2 ;;
+	esac
+	if [ "$err" = "$log" ]; then
+		"$@" > "$log" 2>&1 &
+	else
+		"$@" > "$log" 2> "$err" &
+	fi
+	pid=$!
+	while kill -0 "$pid" 2>/dev/null; do
+		if [ "$t" -ge $((limit * 5)) ]; then
+			kill "$pid" 2>/dev/null
+			w=0; while kill -0 "$pid" 2>/dev/null && [ "$w" -lt 5 ]; do sleep 1; w=$((w + 1)); done
+			kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+			wait "$pid" 2>/dev/null
+			echo "ios-sim: timed out after $limit s: $*" >&2
+			return 124
+		fi
+		sleep 0.2
+		t=$((t + 1))
+	done
+	wait "$pid" || status=$?
+	return $status
+}
+
+# ---- selftest: the smoke against a fake xcrun and make -------------------
+
+selftest()
+{
+	sroot=$(mktemp -d "${TMPDIR:-/tmp}/ios-sim-selftest.XXXXXX") || die "no scratch directory"
+	trap 'rm -rf "${sroot:?}"' EXIT
+	mkdir -p "${sroot:?}/bin" || die "cannot create $sroot/bin"
+	cat > "${sroot:?}/bin/xcrun" <<'EOF'
+#!/bin/bash
+# the fake xcrun of "scripts/ios-sim.sh selftest": simctl on the device
+# list in $FAKE_STATE/devices ("<udid> <name>" lines), FAKE_SCENARIO
+st=${FAKE_STATE:?}
+sc=${FAKE_SCENARIO:-extra}
+printf '%s\n' "$*" >> "$st/calls"
+[ "${1:-}" = simctl ] || { echo "fake xcrun: simctl only" >&2; exit 1; }
+shift
+drop() { awk -v u="$1" '$1 != u' "$st/devices" > "$st/devices.new" && mv "$st/devices.new" "$st/devices"; }
+case ${1:-} in
+list)
+	case ${2:-} in
+	devices)
+		case $sc in
+		hang) echo $$ > "$st/hang.pid"; exec sleep 30 ;;
+		empty) exit 0 ;;
+		listfail) echo "fake xcrun: CoreSimulatorService is not running" >&2; exit 1 ;;
+		esac
+		python3 -I -c 'import json, sys
+devs = []
+for l in open(sys.argv[1]):
+    u, n = l.rstrip("\n").split(" ", 1)
+    devs.append({"udid": u, "name": n, "state": "Shutdown"})
+print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-27-2": devs}}))' "$st/devices" ;;
+	devicetypes) echo '{"devicetypes": [{"name": "iPhone 17", "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}' ;;
+	runtimes) echo '{"runtimes": [{"isAvailable": true, "platform": "iOS", "version": "27.2", "name": "iOS 27.2", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-2", "supportedDeviceTypes": [{"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}]}' ;;
+	*) exit 1 ;;
+	esac ;;
+create)
+	u=$(printf 'AAAAAAAA-0000-0000-0000-%012d' $$)
+	printf '%s %s\n' "$u" "$2" >> "$st/devices"
+	if [ "$sc" = extra ]; then
+		printf '%s\n' "33333333-3333-3333-3333-333333333333 Previews kept" \
+			"44444444-4444-4444-4444-444444444444 Previews gone" >> "$st/devices"
+	fi
+	if [ "$sc" = createhang ]; then
+		echo $$ > "$st/hang.pid"
+		exec sleep 30
+	fi
+	echo "$u" ;;
+bootstatus|install|terminate|shutdown) ;;
+io)
+	# io <udid> screenshot <png>: the head of a 16x8 PNG
+	printf '\211PNG\r\n\032\n\000\000\000\015IHDR\000\000\000\020\000\000\000\010' > "$4" ;;
+launch)
+	# launch --console-pty <udid> <bundle id> <args>...
+	c=$st/container/Library/YamagiQ2/baseq2
+	mkdir -p "$c/scrnshot"
+	printf '%s\n' "Using the linked-in renderer: ref_metal (linked in)" "Metal device: Fake GPU" \
+		"Metal supportsFamily (apple5 to apple9): none" \
+		"ref_metal: the device floor (apple5) is not checked in the simulator" \
+		"Drawable size: 16x8" "Wrote q2_0000.tga" \
+		"ref_metal: metal_stats: 30 frames, 0 without a drawable, 0 skipped, 0 failed command buffers, " > "$c/qconsole.log"
+	python3 -I -c 'import sys
+open(sys.argv[1], "wb").write(bytes([0, 0, 2] + [0] * 9 + [16, 0, 8, 0, 24, 0]) + bytes(range(256)) + bytes(range(128)))' "$c/scrnshot/q2_0000.tga"
+	sleep 1 &
+	p=$!
+	echo "$4: $p"
+	echo "Metal API Validation Enabled"
+	wait "$p" ;;
+get_app_container) echo "$st/container" ;;
+delete)
+	[ "$sc" = leftover ] || drop "$2"
+	[ "$sc" = vanish ] && drop 22222222-2222-2222-2222-222222222222
+	[ "$sc" = extra ] && drop 44444444-4444-4444-4444-444444444444
+	exit 0 ;;
+*) exit 1 ;;
+esac
+EOF
+	cat > "${sroot:?}/bin/make" <<'EOF'
+#!/bin/bash
+# the fake make of "scripts/ios-sim.sh selftest": an app with an Info.plist
+r=
+for a; do case $a in IOS_ROOT=*) r=${a#IOS_ROOT=} ;; esac; done
+[ -n "$r" ] || { echo "fake make: no IOS_ROOT" >&2; exit 2; }
+mkdir -p "$r/Quake2.app" || exit 1
+printf '#!/bin/sh\nexit 0\n' > "$r/Quake2.app/quake2" && chmod +x "$r/Quake2.app/quake2" || exit 1
+printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+	'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+	'<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.example.selftest</string></dict></plist>' \
+	> "$r/Quake2.app/Info.plist"
+EOF
+	chmod +x "${sroot:?}/bin/xcrun" "${sroot:?}/bin/make" || die "cannot make the fakes executable"
+
+	nfail=0
+	ncase=0
+	# <name> <scenario> <ok|fail> <text the output must hold> <max seconds> [VAR=value]...
+	st_case()
+	{
+		local name=$1 sc=$2 want=$3 text=$4 max=$5 d rc=0 t0 why=
+		shift 5
+		ncase=$((ncase + 1))
+		d=$sroot/$name
+		mkdir -p "${d:?}/state" || die "cannot create $d"
+		printf '%s\n' "11111111-1111-1111-1111-111111111111 Owner iPhone" \
+			"22222222-2222-2222-2222-222222222222 Owner iPad" > "${d:?}/state/devices"
+		t0=$(date +%s)
+		bounded 60 "${d:?}/run.log" env PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
+			IOS_SIM_LIST_SECONDS=2 IOS_SIM_CREATE_SECONDS=2 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10 "$@" \
+			bash "$self" smoke --out "$d/out" || rc=$?
+		t0=$(( $(date +%s) - t0 ))
+		if [ "$rc" = 124 ]; then
+			why="the smoke outlived 60 s"
+		elif [ "$want" = ok ] && [ "$rc" != 0 ]; then
+			why="the smoke failed ($rc)"
+		elif [ "$want" = fail ] && [ "$rc" = 0 ]; then
+			why="the smoke passed"
+		elif ! grep -F -e "$text" "${d:?}/run.log" >/dev/null; then
+			why="its output does not hold \"$text\""
+		elif [ "$t0" -gt "$max" ]; then
+			why="it took $t0 s, more than $max s"
+		elif [ "$sc" != leftover ] && grep '^AAAAAAAA-' "${d:?}/state/devices" >/dev/null; then
+			why="this run's device is left in the fake's device list"
+		fi
+		if [ -f "${d:?}/state/hang.pid" ] && kill -0 "$(cat "${d:?}/state/hang.pid")" 2>/dev/null; then
+			kill "$(cat "${d:?}/state/hang.pid")" 2>/dev/null
+			why="${why:+$why; }the hung simctl call was left running"
+		fi
+		if [ -n "$why" ]; then
+			echo "ios-sim: selftest: FAIL $name: $why"
+			tail -n 4 "${d:?}/run.log" | sed 's/^/    /'
+			nfail=$((nfail + 1))
+		else
+			echo "ios-sim: selftest: ok $name"
+		fi
+	}
+	st_case extra-device-meanwhile extra ok "smoke ok" 30
+	st_case list-empty empty fail "simctl list devices: no device list" 30
+	st_case list-fails listfail fail "simctl list devices failed" 30
+	st_case list-hangs hang fail "timed out after 2 s: xcrun simctl list devices" 10
+	st_case device-from-before-gone vanish fail "gone after the run: 22222222-2222-2222-2222-222222222222" 30
+	st_case own-device-left leftover fail "is still listed after its delete" 30
+	st_case create-times-out createhang fail "deleting AAAAAAAA-0000-0000-0000-" 30
+	st_case smoke-limit-not-digits extra fail "IOS_SIM_SMOKE_SECONDS must be" 5 IOS_SIM_SMOKE_SECONDS=3m
+	st_case boot-limit-not-digits extra fail "IOS_SIM_BOOT_SECONDS must be" 5 IOS_SIM_BOOT_SECONDS=1e3
+	st_case list-limit-not-digits extra fail "IOS_SIM_LIST_SECONDS must be" 5 IOS_SIM_LIST_SECONDS=-1
+	st_case create-limit-not-digits extra fail "IOS_SIM_CREATE_SECONDS must be" 5 "IOS_SIM_CREATE_SECONDS= 9"
+	if [ "$nfail" -ne 0 ]; then
+		echo "ios-sim: selftest: $nfail of $ncase cases failed"
+		exit 1
+	fi
+	echo "ios-sim: selftest: ok ($ncase cases)"
+	exit 0
+}
+
+if [ $# -eq 1 ] && [ "$1" = selftest ]; then
+	selftest
+fi
 [ $# -eq 3 ] && [ "$1" = smoke ] && [ "$2" = --out ] && [ -n "$3" ] || usage
 out=$3
+
+digits() # <name> <value>
+{
+	case $2 in
+	''|*[!0-9]*) die "$1 must be a number of seconds, digits only, not \"$2\"" ;;
+	esac
+}
+boot_s=${IOS_SIM_BOOT_SECONDS-300}
+smoke_s=${IOS_SIM_SMOKE_SECONDS-180}
+list_s=${IOS_SIM_LIST_SECONDS-60}
+create_s=${IOS_SIM_CREATE_SECONDS-120}
+digits IOS_SIM_BOOT_SECONDS "$boot_s"
+digits IOS_SIM_SMOKE_SECONDS "$smoke_s"
+digits IOS_SIM_LIST_SECONDS "$list_s"
+digits IOS_SIM_CREATE_SECONDS "$create_s"
 
 for tool in xcrun python3 make plutil; do
 	command -v "$tool" >/dev/null 2>&1 || die "$tool not found: a missing tool is a failure"
@@ -70,37 +302,52 @@ cleanup()
 trap cleanup EXIT
 trap 'exit 1' INT TERM
 
-# bounded <seconds> <log> <command>...: runs it, kills it (our PID) past the bound
-bounded()
+# list_devices <file>: "simctl list devices -j" into <file>.json (bounded,
+# its status checked), then the default device set's devices, one
+# "<udid> <name>" per line, sorted, into <file>; a list that cannot be
+# read or names no device is an error
+list_devices()
 {
-	local limit=$1 log=$2 pid t=0 w status=0
-	shift 2
-	"$@" > "$log" 2>&1 &
-	pid=$!
-	while kill -0 "$pid" 2>/dev/null; do
-		if [ "$t" -ge "$limit" ]; then
-			kill "$pid" 2>/dev/null
-			w=0; while kill -0 "$pid" 2>/dev/null && [ "$w" -lt 5 ]; do sleep 1; w=$((w + 1)); done
-			kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
-			wait "$pid" 2>/dev/null
-			echo "ios-sim: timed out after $limit s: $*" >&2
-			return 124
-		fi
-		sleep 1
-		t=$((t + 1))
-	done
-	wait "$pid" || status=$?
-	return $status
-}
-
-# the default device set's devices, one "<udid> <name>" per line
-devices()
-{
-	xcrun simctl list devices -j | python3 -I -c '
+	local f=$1 rc=0
+	bounded "$list_s" "$f.json" -e "$f.err" xcrun simctl list devices -j || rc=$?
+	if [ "$rc" -ne 0 ]; then
+		echo "ios-sim: simctl list devices failed ($rc): $(head -n 2 "$f.err" 2>/dev/null | tr '\n' ' ')" >&2
+		return 1
+	fi
+	if ! python3 -I - "$f.json" > "$f" 2> "$f.err" <<'EOF'
 import json, sys
-for rt, devs in json.load(sys.stdin)["devices"].items():
-    for d in devs:
-        print(d["udid"], d["name"])' | sort
+try:
+    lists = json.load(open(sys.argv[1]))["devices"]
+    lines = sorted(d["udid"] + " " + d["name"] for devs in lists.values() for d in devs)
+except (ValueError, KeyError, TypeError, AttributeError) as e:
+    sys.exit("unreadable JSON: %s" % e)
+if not lines:
+    sys.exit("it names no device")
+print("\n".join(lines))
+EOF
+	then
+		echo "ios-sim: simctl list devices: no device list ($(tail -n 1 "$f.err" 2>/dev/null))" >&2
+		return 1
+	fi
+}
+udids() { cut -d ' ' -f 1 "$1" | sort -u; }
+
+# lost_device <name>: a create that failed (or timed out) may still have
+# made the device: delete every listed device of that name by its UDID
+lost_device()
+{
+	local u
+	if ! list_devices "${tmp:?}/devices.lost"; then
+		echo "ios-sim: cannot list the devices to find $1; delete it by hand if it exists" >&2
+		return 1
+	fi
+	awk -v n="$1" '{ u = $1; sub(/^[^ ]+ /, ""); if ($0 == n) print u }' "${tmp:?}/devices.lost" > "${tmp:?}/lost"
+	while read -r u; do
+		printf '%s\n' "$u" | grep -E -x "$uuid_re" >/dev/null || continue
+		echo "ios-sim: deleting $u ($1), made by the create that failed" >&2
+		bounded 60 "${tmp:?}/lost-shutdown.out" xcrun simctl shutdown "$u" || true
+		bounded 60 "${tmp:?}/lost-delete.out" xcrun simctl delete "$u" || echo "ios-sim: could not delete the device $u ($1)" >&2
+	done < "${tmp:?}/lost"
 }
 
 # ---- the data and the build --------------------------------------------
@@ -120,9 +367,9 @@ bid=$(plutil -extract CFBundleIdentifier raw -o - "$app/Info.plist" 2>/dev/null)
 
 # ---- the device ----------------------------------------------------------
 
-devices > "$out/devices.before" || die "simctl list devices failed"
-xcrun simctl list devicetypes -j > "${tmp:?}/types.json" || die "simctl list devicetypes failed"
-xcrun simctl list runtimes -j > "${tmp:?}/runtimes.json" || die "simctl list runtimes failed"
+list_devices "$out/devices.before" || die "no device list before the run"
+bounded "$list_s" "${tmp:?}/types.json" -e "${tmp:?}/types.err" xcrun simctl list devicetypes -j || die "simctl list devicetypes failed"
+bounded "$list_s" "${tmp:?}/runtimes.json" -e "${tmp:?}/runtimes.err" xcrun simctl list runtimes -j || die "simctl list runtimes failed"
 pick=$(python3 -I - "${tmp:?}/types.json" "${tmp:?}/runtimes.json" "${IOS_SIM_TYPE:-iPhone 17}" "${IOS_SIM_RUNTIME:-}" <<'EOF'
 import json, sys
 types = json.load(open(sys.argv[1]))["devicetypes"]
@@ -145,11 +392,21 @@ EOF
 ) || die "no device for the run"
 read -r type_id rt_id rt_name <<< "$pick"
 name="yq2-ios-sim-$$"
-bounded 120 "${tmp:?}/create.out" xcrun simctl create "$name" "$type_id" "$rt_id" || { cat "${tmp:?}/create.out" >&2; die "simctl create failed"; }
+if ! bounded "$create_s" "${tmp:?}/create.out" xcrun simctl create "$name" "$type_id" "$rt_id"; then
+	cat "${tmp:?}/create.out" >&2
+	lost_device "$name"
+	die "simctl create failed"
+fi
 udid=$(tail -n 1 "${tmp:?}/create.out")
-printf '%s\n' "$udid" | grep -E -x '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}' >/dev/null || { udid=; die "simctl create gave no UDID"; }
+printf '%s\n' "$udid" | grep -E -x "$uuid_re" >/dev/null || { udid=; lost_device "$name"; die "simctl create gave no UDID"; }
+run_udid=$udid
 echo "ios-sim: device $udid ($type_id, $rt_name)"
-bounded "${IOS_SIM_BOOT_SECONDS:-300}" "$out/boot.log" xcrun simctl bootstatus "$udid" -b || die "the device did not boot (log: $out/boot.log)"
+list_devices "$out/devices.created" || die "no device list after simctl create"
+udids "$out/devices.before" > "${tmp:?}/udids.before"
+udids "$out/devices.created" > "${tmp:?}/udids.created"
+grep -F -x -e "$run_udid" "${tmp:?}/udids.created" >/dev/null || die "this run's device $run_udid is not in the device list taken after simctl create"
+grep -F -x -e "$run_udid" "${tmp:?}/udids.before" >/dev/null && die "this run's device $run_udid was already listed before simctl create"
+bounded "$boot_s" "$out/boot.log" xcrun simctl bootstatus "$udid" -b || die "the device did not boot (log: $out/boot.log)"
 bounded 60 "${tmp:?}/shot.out" xcrun simctl io "$udid" screenshot "$out/screen.png" || die "simctl io screenshot failed"
 bounded 180 "${tmp:?}/install.out" xcrun simctl install "$udid" "$app" || { cat "${tmp:?}/install.out" >&2; die "simctl install failed"; }
 
@@ -160,7 +417,6 @@ bounded 180 "${tmp:?}/install.out" xcrun simctl install "$udid" "$app" || { cat 
 args=(-cfgdir Library/YamagiQ2 +set vid_renderer metal +set logfile 2 +set metal_stats 1)
 for _ in $(seq 30); do args+=(+wait); done
 args+=(+screenshot tga +quit)
-limit=${IOS_SIM_SMOKE_SECONDS:-180}
 SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "${args[@]}" > "$out/console.log" 2>&1 &
 lpid=$!
 apid=
@@ -176,9 +432,9 @@ done
 echo "ios-sim: app $bid pid $apid"
 t=0
 while kill -0 "$apid" 2>/dev/null; do
-	if [ "$t" -ge "$limit" ]; then
+	if [ "$t" -ge "$smoke_s" ]; then
 		bounded 30 "${tmp:?}/term.out" xcrun simctl terminate "$udid" "$bid" || true
-		die "the app did not quit within $limit s; terminated it"
+		die "the app did not quit within $smoke_s s; terminated it"
 	fi
 	sleep 1
 	t=$((t + 1))
@@ -205,7 +461,8 @@ cleanup_device()
 	udid=
 }
 cleanup_device
-devices > "$out/devices.after" || die "simctl list devices failed"
+list_devices "$out/devices.after" || die "no device list after the run"
+udids "$out/devices.after" > "${tmp:?}/udids.after"
 
 # ---- the smoke's decisions, from the artifacts --------------------------
 
@@ -213,13 +470,19 @@ fail=0
 bad() { echo "ios-sim: smoke: $*"; fail=1; }
 has() { grep -F -e "$1" "$out/engine.log" >/dev/null; }
 
+gone=$(comm -23 "${tmp:?}/udids.before" "${tmp:?}/udids.after" | tr '\n' ' ')
+[ -z "$gone" ] || bad "devices listed before the run are gone after the run: $gone"
+grep -F -x -e "$run_udid" "${tmp:?}/udids.after" >/dev/null && bad "this run's device $run_udid is still listed after its delete"
+
 has "Using the linked-in renderer: ref_metal (linked in)" || bad "engine.log does not show the linked-in ref_metal"
 dev=$(grep -E '^Metal device: ' "$out/engine.log" | head -n 1)
 fam=$(grep -E '^Metal supportsFamily ' "$out/engine.log" | head -n 1)
 [ -n "$dev" ] || bad "engine.log has no Metal device line"
 [ -n "$fam" ] || bad "engine.log has no Metal supportsFamily line"
 case $fam in
-*": none") bad "the simulator's Metal device supports no Apple GPU family from apple5 on, and ref_metal refuses it (its floor): the run stops at renderer init" ;;
+*": none")
+	has "is not checked in the simulator" \
+		|| bad "the Metal device supports no Apple GPU family from apple5 on, and ref_metal refused it (its floor): the run stops at renderer init" ;;
 esac
 grep -E '^Wrote q2_0000\.tga$' "$out/engine.log" >/dev/null || bad "engine.log does not show Wrote q2_0000.tga"
 size=$(sed -n 's/^Drawable size: \([0-9]*x[0-9]*\)$/\1/p' "$out/engine.log" | tail -n 1)
@@ -267,8 +530,8 @@ case $stats in
 "") bad "engine.log has no metal_stats line" ;;
 *) bad "failed command buffers: $stats" ;;
 esac
-cmp -s "$out/devices.before" "$out/devices.after" || bad "simctl list devices differs before and after the run"
 
-printf '%s\n' "ios-sim: ${dev:-no Metal device}" "ios-sim: ${fam:-no family line}" "ios-sim: drawable ${size:-?}, screen ${screen:-?}, frame ${frame:-?}"
+printf '%s\n' "ios-sim: ${dev:-no Metal device}" "ios-sim: ${fam:-no family line}" "ios-sim: drawable ${size:-?}, screen ${screen:-?}, frame ${frame:-?}" \
+	"ios-sim: devices before $(grep -c . "${tmp:?}/udids.before"), after create $(grep -c . "${tmp:?}/udids.created"), after $(grep -c . "${tmp:?}/udids.after")"
 [ "$fail" -eq 0 ] || exit 1
 echo "ios-sim: smoke ok (artifacts in $out)"
