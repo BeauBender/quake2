@@ -1,6 +1,6 @@
 # Frame rates on a physical GPU (TASK97)
 
-Every earlier frame time in this runbook comes from the build VM, whose
+Every earlier frame time in the [card files](README.md) comes from the build VM, whose
 OpenGL is a software renderer and whose Metal device is paravirtualised.
 These come from a bare-metal Apple Silicon Mac, taken with `timedemo` over
 the stock `demo1.dm2` (689 frames a run). Nothing here is a pin: no frame
