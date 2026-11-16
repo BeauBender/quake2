@@ -96,14 +96,34 @@ mkfake eng-nofps yes 0 no
   echo '[ -z "${MFX_TRACE:-}" ] || echo START >> "$MFX_TRACE"'
   echo 'if [ -f "$d/baseq2/config.cfg" ]; then cat "$d/baseq2/config.cfg"; [ -z "${MFX_TRACE:-}" ] || sed "s/^/seen: /" "$d/baseq2/config.cfg" >> "$MFX_TRACE"; fi'
   echo 'echo "Metal API Validation Enabled"'
-  echo "cat '$tmp/cv-present'"
-  echo 'echo "689 frames, 6.0 seconds: 114.9 fps"'
   echo 'mkdir -p "$d/baseq2"; : > "$d/baseq2/config.cfg.n"'
   echo 'while [ $# -gt 0 ]; do if [ "$1" = +set ]; then echo "set $2 \"$3\"" >> "$d/baseq2/config.cfg.n"; shift 3; else shift; fi; done'
+  # the cvarlist reports each cvar at the value the arguments set, as the engine does
+  echo "awk 'NR==FNR { v[\$2] = \$3; next } { n = substr(\$0, 6); sub(/ .*/, \"\", n); if (n in v && substr(\$0, 5, 1) == \" \") \$0 = substr(\$0, 1, 5) n \" \" v[n]; print }' \"\$d/baseq2/config.cfg.n\" '$tmp/cv-present'"
+  echo 'echo "689 frames, 6.0 seconds: 114.9 fps"'
+  echo 'echo "ref_metal: gpu_ms 1.250 frame"'
   echo 'mv "$d/baseq2/config.cfg.n" "$d/baseq2/config.cfg"'
   echo 'exit 0'; } > "$tmp/eng-cfg"
 printf '#!/bin/sh\nexec sleep 60\n' > "$tmp/eng-slow"
 chmod +x "$tmp/eng-failopt" "$tmp/eng-cfg" "$tmp/eng-slow"
+# a stub scripts/pins.sh for a tree copy: what a complete record writes (the status, an engine.log with the
+# validation line) and three frames, 60, 120 and 180, that differ between the native record and an option
+{ echo '#!/bin/sh'
+  echo '[ "$1" = record ] || exit 2'
+  echo 'name=$3; d="$PINS_STORE/$name/metal/stub1"; mkdir -p "$d" || exit 1'
+  echo 'if [ -n "${MFX_STUB_CHILD:-}" ]; then sleep 300 & echo $! > "$MFX_STUB_CHILD"; wait; fi'
+  echo 'case $name in *-native) src=$MFX_NATIVE_TGA;; *) src=$MFX_OPT_TGA;; esac'
+  echo 'for n in 60 120 180; do cp "$src" "$d/$name-$n.tga" || exit 1; done'
+  echo 'echo "Metal API Validation Enabled" > "$d/engine.log"'
+  echo 'echo complete > "$d/complete"'; } > "$tmp/pins-stub"
+chmod +x "$tmp/pins-stub"
+# a tree copy for the generator: its own scripts/pins/scenarios and a stub scripts/pins.sh, so that a run
+# writes and deletes nothing in the caller's checkout
+mktree() { # <tree> <mfx.py>
+    mkdir -p "$1/scripts/metalfx-report" "$1/scripts/pins" || return 1
+    cp "$SRC/options.tsv" "$1/scripts/metalfx-report/"; cp "$2" "$1/scripts/metalfx-report/mfx.py"
+    cp -R "$root/scripts/pins/scenarios" "$1/scripts/pins/scenarios"; cp "$tmp/pins-stub" "$1/scripts/pins.sh"
+}
 # an engine in a place: <dir>/quake2 with the owner's config.cfg beside it
 mkeng() { # dir engine-script
     mkdir -p "$1/baseq2"; cp "$2" "$1/quake2"; chmod +x "$1/quake2"
@@ -115,7 +135,7 @@ has() { case " ${GROUPS_RUN:-path plan engine cfg frames report io run ssim} " i
 # the command line of a generator run on the fake engine (the caller sets PATH, MFX_TRACE)
 e2e() { # <engine> <out dir> [more arguments]
     local eng=$1 o=$2; shift 2
-    python3 -I "$d/mfx.py" run --out "$o" --basedir "$tmp/basedir" --host-name t1 --runs 1 --gpu-runs 1 --scenarios world \
+    ${EXEC:-} python3 -I "$d/mfx.py" run --out "$o" --basedir "$tmp/basedir" --host-name t1 --runs 1 --gpu-runs 1 --scenarios world \
         --only fx1-s75 --timeout 20 --framediff "$tmp/framediff" --ssim "$w/ssim" --bin "$eng" "$@"
 }
 assertions() {
@@ -271,8 +291,10 @@ limit" "$out"
 
     fi
 
-    # the run: --bin, the freshness check, the commit, an existing results folder, --replace, a signal
+    # the run: --bin, the freshness check, the commit, an existing results folder, --replace, the quality and
+    # the crops (through the stub pins.sh of the tree copy), the locks, a signal
     if has run; then
+    export MFX_NATIVE_TGA="$tmp/a.tga" MFX_OPT_TGA="$tmp/other.tga"
     mkeng "$w/ft/release" "$tmp/eng-cfg"; mkdir -p "$w/ft/src"; touch "$w/ft/Makefile"
     git -C "$w/ft" init -q && git -C "$w/ft" -c user.name=t -c user.email=t@t commit -q --allow-empty -m x || ko build-commit "fixture"
     want=$(git -C "$w/ft" rev-parse --short=8 HEAD)
@@ -280,7 +302,7 @@ limit" "$out"
     out=$(PATH="$tmp/makefail:$PATH" e2e "$w/ft/release/quake2" "$w/oa" 2>&1); want_rc build-stale 3 $?
     want_has build-stale "out of date" "$out"
     mkdir -p "$w/oa" "$w/ob"
-    out=$(PATH="$tmp/maketrue:$PATH" MFX_TRACE="$w/trace1" e2e "$w/ft/release/quake2" "$w/oa" 2>&1); want_rc e2e-run 1 $?
+    out=$(PATH="$tmp/maketrue:$PATH" MFX_TRACE="$w/trace1" e2e "$w/ft/release/quake2" "$w/oa" 2>&1); want_rc e2e-run 0 $?
     want_has e2e-run "results: " "$out"
     rd=$(ls -d "$w"/oa/metalfx-t1-* 2>/dev/null | head -1); [ -n "$rd" ] || { ko e2e-run "no results folder"; rd="$w/none"; }
     [ "$(cat "$w/ft/release/baseq2/config.cfg")" = 'set owner_cvar "7"' ] && [ ! -e "$w/ft/release/baseq2/config.cfg.mfx-saved" ] || ko e2e-restored "the owner's config.cfg was not put back"
@@ -288,34 +310,85 @@ limit" "$out"
     want_has build-commit "build	checked" "$(cat "$rd/meta.tsv" 2>/dev/null)"
     [ -s "$w/trace1" ] || ko e2e-leak "the fake engine left no trace"
     want_not e2e-leak "seen:" "$(cat "$w/trace1" 2>/dev/null)"
+    # the quality and the crops of an option, from the records the stub wrote (frames 60, 120, 180)
+    out=$(python3 -I "$HELP" "$d" check-run "$rd" fx1-s75 world 2>&1)
+    want_has e2e-status "status ok" "$out"
+    want_has e2e-quality "ssim_less_than_one yes" "$out"
+    want_has e2e-crop "crop_differs yes" "$out"
+    want_has e2e-index "index frame 120 " "$out"
     # the same day again: refused, then replaced, with the earlier crops gone
     out=$(PATH="$tmp/maketrue:$PATH" e2e "$w/ft/release/quake2" "$w/oa" 2>&1); want_rc rdir-exists 3 $?
     want_has rdir-exists "pass --replace" "$out"
     mkdir -p "$rd/crops"; printf 'old\n' > "$rd/crops/old__x.png"
-    out=$(PATH="$tmp/maketrue:$PATH" MFX_TRACE="$w/trace2" e2e "$w/ft/release/quake2" "$w/oa" --replace 2>&1); want_rc crops-stale 1 $?
+    out=$(PATH="$tmp/maketrue:$PATH" MFX_TRACE="$w/trace2" e2e "$w/ft/release/quake2" "$w/oa" --replace 2>&1); want_rc crops-stale 0 $?
     [ ! -e "$rd/crops/old__x.png" ] || ko crops-stale "the earlier run's crop is still there"
     want_not e2e-leak "seen:" "$(cat "$w/trace2" 2>/dev/null)"
     [ "$(cat "$w/ft/release/baseq2/config.cfg")" = 'set owner_cvar "7"' ] || ko e2e-restored "config.cfg after the second run"
     # a binary that is not in a build tree is not checked, its commit is unknown, and it says so
-    out=$(PATH="$tmp/makefail:$PATH" e2e "$w/loose/quake2" "$w/ob" 2>&1); want_rc build-unknown 1 $?
+    out=$(PATH="$tmp/makefail:$PATH" e2e "$w/loose/quake2" "$w/ob" 2>&1); want_rc build-unknown 0 $?
     want_has build-unknown "not checked for freshness" "$out"
     rl=$(ls -d "$w"/ob/metalfx-t1-* 2>/dev/null | head -1)
     want_has build-unknown "commit	unknown" "$(cat "$rl/meta.tsv" 2>/dev/null)"
     want_has build-unknown "build	not checked" "$(cat "$rl/meta.tsv" 2>/dev/null)"
-    # SIGTERM during an engine run: the owner's config.cfg is put back
-    mkeng "$w/slow" "$tmp/eng-slow"; mkdir -p "$w/oc"
+    # the caller's checkout is not touched: the run's scratch scenarios were in the tree copy, and
+    # a file of that name in the checkout (here: the real one) is still there
+    [ -f "$root/scripts/pins.sh" ] || ko e2e-tree "no pins.sh in the checkout"
+    case $d in "$root"/*) ko e2e-tree "the end-to-end run is not in a tree copy";; esac
+    # one run per binary and per scenarios folder: while a run holds the binary, another is refused, and
+    # after SIGTERM to the first the owner's config.cfg is back
+    mkeng "$w/slow" "$tmp/eng-slow"; mkdir -p "$w/oc" "$w/od" "$w/oe"
     printf 'set owner_cvar "7"\n' > "$w/slow/baseq2/config.cfg"
-    # started directly, not through the function, so that $pid is the generator itself
+    # started directly, not through a function, so that $pid is the generator itself
     PATH="$tmp/maketrue:$PATH" python3 -I "$d/mfx.py" run --out "$w/oc" --basedir "$tmp/basedir" --host-name t1 --runs 1 --gpu-runs 1 \
         --scenarios world --only fx1-s75 --timeout 20 --framediff "$tmp/framediff" --ssim "$w/ssim" --bin "$w/slow/quake2" > "$w/slow.log" 2>&1 &
     pid=$!
     n=0; while [ ! -e "$w/slow/baseq2/config.cfg.mfx-saved" ] && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done
     sleep 1
+    # a second run on the same binary (own results folder), and one on another binary of the same checkout
+    for which in bin scen; do
+        if [ $which = bin ]; then eng="$w/slow/quake2"; o="$w/od"; else eng="$w/loose/quake2"; o="$w/oe"; fi
+        ( PATH="$tmp/maketrue:$PATH" EXEC=exec e2e "$eng" "$o" --timeout 3 > "$w/lock-$which.log" 2>&1 ) &
+        p2=$!
+        n=0; while kill -0 $p2 2>/dev/null && [ $n -lt 40 ]; do sleep 0.1; n=$((n+1)); done
+        if kill -0 $p2 2>/dev/null; then kill -TERM $p2 2>/dev/null; n=0; while kill -0 $p2 2>/dev/null && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done; kill -KILL $p2 2>/dev/null; fi
+        wait $p2 2>/dev/null; rc2=$?
+        want_rc "run-lock-$which" 3 $rc2
+        want_has "run-lock-$which" "another run holds" "$(cat "$w/lock-$which.log")"
+    done
+    want_has run-lock-bin "the engine binary directory" "$(cat "$w/lock-bin.log")"
+    want_has run-lock-scen "the scenarios folder" "$(cat "$w/lock-scen.log")"
+    [ -e "$w/slow/baseq2/config.cfg.mfx-saved" ] || ko run-lock-bin "the first run's saved config is gone while it runs"
     kill -TERM $pid 2>/dev/null
     n=0; while kill -0 $pid 2>/dev/null && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done
     if kill -0 $pid 2>/dev/null; then kill -KILL $pid 2>/dev/null; ko e2e-sigterm "the run did not end on SIGTERM"; fi
     wait $pid 2>/dev/null
     [ "$(cat "$w/slow/baseq2/config.cfg" 2>/dev/null)" = 'set owner_cvar "7"' ] && [ ! -e "$w/slow/baseq2/config.cfg.mfx-saved" ] || ko e2e-sigterm "the owner's config.cfg was not put back"
+    # a SIGTERM during record() ends the engine pins.sh started: the stub's long-lived child is gone
+    mkeng "$w/nt" "$tmp/eng-cfg"; mkdir -p "$w/of"
+    PATH="$tmp/maketrue:$PATH" MFX_STUB_CHILD="$w/childpid" python3 -I "$d/mfx.py" run --out "$w/of" --basedir "$tmp/basedir" --host-name t1 --runs 1 --gpu-runs 1 \
+        --scenarios world --only fx1-s75 --timeout 20 --framediff "$tmp/framediff" --ssim "$w/ssim" --bin "$w/nt/quake2" > "$w/nt.log" 2>&1 &
+    pid=$!
+    n=0; while [ ! -s "$w/childpid" ] && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done
+    cpid=$(cat "$w/childpid" 2>/dev/null)
+    if [ -z "$cpid" ]; then ko e2e-group "the stub pins.sh did not start"; else
+        kill -TERM $pid 2>/dev/null
+        n=0; while kill -0 $pid 2>/dev/null && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done
+        wait $pid 2>/dev/null
+        sleep 1
+        if kill -0 "$cpid" 2>/dev/null; then kill -KILL "$cpid" 2>/dev/null; ko e2e-group "the child of pins.sh was left running after SIGTERM"; fi
+    fi
+    kill -KILL $pid 2>/dev/null
+    # an option over the engine's argument limit costs its own row; the others, native included, still run
+    printf 'small\tr_metalfx 1\tall\tr_metalfx=1\n' >> "$d/options.tsv"
+    out=$(python3 -I "$HELP" "$d" pad-scenario "$tmp/cv-present" "$d/../pins/scenarios/world.cfg" fx1-s75 small 2>&1); want_has e2e-pad "padded" "$out"
+    mkeng "$w/lim" "$tmp/eng-cfg"; mkdir -p "$w/og"
+    out=$(PATH="$tmp/maketrue:$PATH" e2e "$w/lim/quake2" "$w/og" --only small,fx1-s75 2>&1); want_rc e2e-limit 0 $?
+    rq=$(ls -d "$w"/og/metalfx-t1-* 2>/dev/null | head -1)
+    want_has e2e-limit "fx1-s75	world	arguments:" "$(cat "$rq/skipped.tsv" 2>/dev/null)"
+    res=$(cut -f1-3 "$rq/results.tsv" 2>/dev/null)
+    want_has e2e-limit "native	world	ok" "$res"; want_has e2e-limit "small	world	ok" "$res"; want_not e2e-limit "fx1-s75	world" "$res"
+    out=$(python3 -I "$HELP" "$d" check-run "$rq" small world 2>&1)
+    want_has e2e-quality "ssim_less_than_one yes" "$out"
 
     fi
 
@@ -336,7 +409,8 @@ limit" "$out"
 
 # the real code
 FAILED=" "
-mkdir "$tmp/real-run"; assertions "$SRC" "$SRC/ssim.c" "$tmp/real-run"
+mkdir "$tmp/real-run"; mktree "$tmp/real-tree" "$SRC/mfx.py" || exit 1
+assertions "$tmp/real-tree/scripts/metalfx-report" "$SRC/ssim.c" "$tmp/real-run"
 if [ "$FAILED" != " " ]; then bad "assertions failed on the real code:$FAILED"; fi
 # the scratch scenarios the generator writes into scripts/pins/scenarios are ignored by git (and the check fails without the rule)
 ign() { grep -qxF '/scripts/pins/scenarios/mfxr-*.cfg' "$1"; }
@@ -354,11 +428,10 @@ mutant() { # name covered-id file(py|c) old new [old new]...: runs in the backgr
         # the mutant lives in a tree of its own (scripts/metalfx-report, scripts/pins/scenarios), so that
         # the generator's root is the mutant's and no two mutants share a scenarios folder
         mdir="$tmp/mut-$name"; sub="$mdir/scripts/metalfx-report"; ssrc="$SRC/ssim.c"
-        mkdir -p "$sub" "$mdir/w" "$mdir/scripts/pins"; cp "$SRC/options.tsv" "$sub/"; cp -R "$root/scripts/pins/scenarios" "$mdir/scripts/pins/scenarios"
+        mkdir -p "$mdir/w"; mktree "$mdir" "$SRC/mfx.py"
         if [ "$kind" = py ]; then
             python3 -I "$HELP" mutate "$SRC/mfx.py" "$sub/mfx.py" "$@" > "$mdir/log" || { echo "bad	mutant $name: $(cat "$mdir/log")" > "$tmp/res-$name"; exit 0; }
         else
-            cp "$SRC/mfx.py" "$sub/mfx.py"
             python3 -I "$HELP" mutate "$SRC/ssim.c" "$mdir/ssim.c" "$@" > "$mdir/log" || { echo "bad	mutant $name: $(cat "$mdir/log")" > "$tmp/res-$name"; exit 0; }
             ssrc="$mdir/ssim.c"
         fi
@@ -371,7 +444,7 @@ mutant() { # name covered-id file(py|c) old new [old new]...: runs in the backgr
             frames-*|stats-*) g=frames;;
             name-*|crop-*|host-*|ext-*|report-*|load-*) g=report;;
             io-*|record-*|clear-*) g=io;;
-            build-*|rdir-*|crops-*|e2e-*) g=run;;
+            build-*|rdir-*|crops-*|e2e-*|run-*) g=run;;
             ssim-*) g=ssim;;
             *) g=report;;
         esac
@@ -419,7 +492,9 @@ mutant external-emitted ext-none py 'raise Refuse("the report would refer outsid
 mutant report-in-tree report-path py 'outp = check_out_path(os.path.abspath(out_html), file=True)' 'outp = os.path.abspath(out_html)'
 mutant defaults-unemitted cfg-defaults py 'for k, v in sorted(ctx.defaults.items()):' 'for k, v in []:'
 mutant defaults-after cfg-defaults py 'for k, v in sorted(ctx.defaults.items()):' 'for k, v in []:' 'for k, v in scenario_sets + extra_sets:' 'for k, v in scenario_sets + extra_sets + sorted(ctx.defaults.items()):'
-mutant defaults-no-gating cfg-defaults py 'names = set(c for c in base_cv if c.startswith(GATING_PREFIXES))' 'names = set()'
+mutant defaults-no-gating cfg-defaults py 'names = set(c for c in base_cv if c.startswith(GATING_PREFIXES) and c in archived)' 'names = set()'
+mutant defaults-not-only-archived cfg-defaults py 'names = set(c for c in base_cv if c.startswith(GATING_PREFIXES) and c in archived)' 'names = set(c for c in base_cv if c.startswith(GATING_PREFIXES))'
+mutant archived-any-flag cfg-defaults py "ARCHIVED_RE = re.compile(r'^\\*[ U]" "ARCHIVED_RE = re.compile(r'^[ *][ U]"
 mutant defaults-noset cfg-defaults py 'if c in base_cv and c not in noset and c not in RENDERER_REPORTED' 'if c in base_cv and c not in RENDERER_REPORTED'
 mutant defaults-modes cfg-defaults py 'if c in base_cv and c not in noset and c not in RENDERER_REPORTED' 'if c in base_cv and c not in noset'
 mutant args-unbounded cfg-limit py 'if len(a) > MAX_ENGINE_ARGS:' 'if False:'
@@ -473,6 +548,21 @@ mutant ssim-no-covariance ssim-one c 's = ((2 * ma * mb + c1) * (2 * cov + c2))'
 mutant ssim-always-one ssim-less c 'sum += s;' 'sum += 1.0;'
 mutant ssim-size-ignored ssim-mismatch c 'size mismatch %dx%d vs %dx%d\n", a.w, a.h, b.w, b.h); return 3;' 'size mismatch %dx%d vs %dx%d\n", a.w, a.h, b.w, b.h); return 0;'
 mutant ssim-missing-ok ssim-missing c 'if (!read_luma(argv[1], &a) || !read_luma(argv[2], &b)) return 3;' 'if (!read_luma(argv[1], &a) || !read_luma(argv[2], &b)) return 0;'
+
+mutant fit-over-kept cfg-argfit py 'dropped.append((oid, "arguments: %s" % e))' 'kept.append((oid, sets))'
+mutant fit-no-stats cfg-argfit py 'engine_args(ctx, sc_sets, sets + [("metal_stats", "1")], ["+demomap", ctx.demo])' 'engine_args(ctx, sc_sets, sets, ["+demomap", ctx.demo])'
+mutant fit-unused e2e-limit py 'opts, over = fit_options(ctx, sc_sets, opts)' 'over = []'
+mutant newer-config-deleted cfg-both py 'os.rename(self.path, newer)' 'os.unlink(self.path)'
+mutant newer-config-overwritten cfg-both py 'os.rename(self.path, newer)' 'pass'
+mutant lock-bin-off run-lock-bin py 'fds.append(take_lock(bindir, "the engine binary directory"))' 'pass'
+mutant lock-scen-off run-lock-scen py 'fds.append(take_lock(ctx.pins_scen_dir, "the scenarios folder of this checkout"))' 'pass'
+mutant lock-blocking run-lock-bin py 'fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)' 'fcntl.flock(fd, fcntl.LOCK_EX)'
+mutant lock-fails-open run-lock-bin py 'raise Refuse("another run holds %s (%s), or it cannot be locked (%s): one run per %s at a time" % (what, path, e, what))' 'return -1'
+mutant quality-vs-itself e2e-quality py 'diff_frames(ctx, nat[k], fr[k])' 'diff_frames(ctx, nat[k], nat[k])'
+mutant crop-is-native e2e-crop py 'img = nimg if oid == "native" else read_tga(frames_by_index(pins[oid])[mid])' 'img = nimg'
+mutant crop-frame-first e2e-index py 'mid = nkeys[len(nkeys) // 2]' 'mid = nkeys[0]'
+mutant pins-not-in-group e2e-group py 'os.killpg(p.pid, signal.SIGKILL)' 'p.kill()'
+mutant pins-no-group e2e-group py 'rc, out = sh_group([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)' 'rc, out = sh([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)'
 
 wait
 for r in "$tmp"/res-*; do

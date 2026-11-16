@@ -212,6 +212,46 @@ def main(argv):
         with open(os.path.join(d, "config.cfg")) as f:
             print("recovered" if f.read() == "owner\n" else "lost")
         return 0
+    if cmd == "check-run":
+        # check-run RDIR OPTION SCENARIO: what an end-to-end run wrote for the option's quality and crops
+        rd, op, sc = a
+        rows = dict(((r["option"], r["scenario"]), r) for r in m.read_tsv(os.path.join(rd, "results.tsv"), m.RESULT_COLS))
+        r = rows.get((op, sc))
+        if r is None:
+            print("no row")
+            return 0
+        print("status " + r["status"])
+        print("ssim_less_than_one " + ("yes" if r["ssim_mean"] and float(r["ssim_mean"]) < 1 else "no"))
+        with open(os.path.join(rd, "crops", "%s__%s.png" % (sc, op)), "rb") as f:
+            x = f.read()
+        with open(os.path.join(rd, "crops", "%s__native.png" % sc), "rb") as f:
+            n = f.read()
+        print("crop_differs " + ("yes" if x != n else "no"))
+        with open(os.path.join(rd, "crops", "%s.txt" % sc)) as f:
+            print("index " + " ".join(f.read().split()))
+        return 0
+    if cmd == "pad-scenario":
+        # pad-scenario CVLIST SCENARIO.cfg OPTION_BIG OPTION_SMALL: add `set` lines to the scenario until the
+        # widest (GPU) engine run of OPTION_SMALL fits the argument limit and that of OPTION_BIG does not
+        text = open(a[0]).read()
+        opts = m.load_options(os.path.join(argv[0], "options.tsv"))
+        by = dict((o["id"], o) for o in opts)
+        sc = os.path.basename(a[1])[:-4]
+        base = open(a[1]).read()
+        for n in range(0, 60):
+            body = base + "".join("set mfxpad%d 1\n" % i for i in range(n))
+            with open(a[1], "w") as f:
+                f.write(body)
+            c = ctx_for(m, "/bin/true")
+            c.defaults = m.default_cvars(m.parse_cvarlist(text), m.parse_noset(text), opts,
+                                         {sc: m.scenario_cvars(a[1])}, m.parse_archived(text))
+            kept, dropped = m.fit_options(c, m.parse_scenario(a[1]),
+                                          [("native", [("r_metalfx", "0")]), (a[3], by[a[3]]["set"]), (a[2], by[a[2]]["set"])])
+            if [k for k, _ in kept] == ["native", a[3]]:
+                print("padded %d" % n)
+                return 0
+        print("no padding fits")
+        return 1
     if cmd == "frames":
         # frames DIR_A DIR_B: frame pairing by number across records of different scenario names
         da, db = a
@@ -245,7 +285,7 @@ def main(argv):
             seen["bin"] = env.get("PINS_BIN", "<unset>")
             seen["there"] = [f for f in os.listdir(a[0]) if f.startswith("mfxr-")]
             return 1, "stub"
-        m.sh = fake_sh
+        m.sh_group = fake_sh
         c = ctx_for(m, a[1])
         c.scen_dir = c.pins_scen_dir = a[0]
         c.scratch_cfgs, c.store, c.basedir, c.every, c.seed = [], a[0], "/b", 60, 1
