@@ -17,3 +17,4 @@
 .claude/signing.local
 /evidence/
 .claude/memory
+/scripts/pins/scenarios/mfxr-*.cfg

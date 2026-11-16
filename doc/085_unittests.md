@@ -132,3 +132,77 @@ The total must not fall below the floor recorded in
 `scripts/coverage-floor`. When it rises by a whole percent the script
 prints the new value; raise the floor in the same change so that it only
 ever goes up.
+
+## Benchmarks and the host lock
+
+`scripts/bench/bench.sh` is the one entry point of the bench harness: a
+host-wide lock so that only one heavy job (a build, a gate, an engine
+run) runs at a time, and a per-host store of measured baselines, so that
+an unchanged build is measured once and reused. The design and the rules
+are in `docs/plans/bench-harness.md`. It is `sh` and `awk` only, and
+needs no engine for its own self-test, `tests/check-bench.sh` (in the
+gate).
+
+```sh
+scripts/bench/bench.sh lock run build -- make -j8 ref_metal
+scripts/bench/bench.sh lock status
+scripts/bench/bench.sh host
+scripts/bench/bench.sh inputs --list HEAD null-sleep
+scripts/bench/bench.sh baseline put null-sleep HEAD
+scripts/bench/bench.sh baseline get null-sleep HEAD
+scripts/bench/bench.sh drift null-sleep HEAD
+scripts/bench/bench.sh compare null-sleep --before HEAD~1 --after HEAD
+```
+
+- `lock run <label> -- <command>` runs the command while holding the
+  lock. A second caller waits in the foreground, at most
+  `BENCH_LOCK_WAIT` seconds (default 3600), then exits 75 and names the
+  holder; `lock status` shows the holder. The lock is released however
+  the command ends, and a lock whose holder process is gone is taken
+  over, with a logged line. The command runs in its own process group:
+  on Ctrl-C, TERM or HUP, or when an adapter's run passes its wall time,
+  the whole group gets TERM, then KILL after a grace
+  (`BENCH_STOP_GRACE`, default 10 s; the lock gives its command twice
+  that, and at least that plus 5 s), and only then is the lock free.
+  What the command leaves running in its group when it exits is stopped
+  the same way after 1 to 2 s. The lock reaches the process group only,
+  not a process that moves itself into another group or session.
+  Being in the background of the terminal, the command gets `/dev/null`
+  as standard input when that is a terminal, and a command that uses the
+  terminal (reads it, sets it with `stty`, or writes to it under
+  `stty tostop`) is stopped by it: `lock run` then says so, ends the
+  command and exits 74 with the lock free, so run anything that prompts
+  without the lock. A command run under the lock gets `BENCH_LOCK_TOKEN`, so a
+  `bench.sh` it starts runs straight through instead of waiting for
+  itself.
+- `host` prints the host token (`h-` and 12 hex digits) and the class
+  line (CPU, GPU, OS version, physical or VM). Both come from system facts
+  only and hold no host name, user name or home path, so they may be
+  quoted in public files. Results with different tokens are never
+  compared.
+- `inputs <commit> [<case>]` prints the build-inputs id (`i-` and 12 hex
+  digits) of the git trees the build compiles, plus the case's build
+  flags. The case's adapter names those paths (the `null` adapter: a
+  make layout of `Makefile`, `src/`, `third_party/` and any top-level
+  `*.make`); without a case the whole tree is hashed. `--list` shows what
+  it hashed and with which tool (`shasum`, else `cksum`; a tool that fails
+  is an error). With the adapter's paths, a documentation-only commit
+  keeps the inputs, and so the baseline.
+- `baseline put <case> <commit>` measures the case's runs through its
+  adapter and stores them as one set, made live by a single rename, so a
+  failed store leaves the old baseline as it was; `baseline get` prints
+  them. `drift` measures one run and checks it against the stored ones;
+  outside the tolerance it measures the baseline again, as the next set,
+  and keeps the old set beside it.
+  `compare` prints the median, p90, minimum and maximum of each side and,
+  when the case states an acceptance, a `verdict=pass` or `verdict=fail`
+  line (exit 1 on fail).
+
+A case is `scripts/bench/cases/<name>.case`, plain `key=value` lines (the
+keys are listed in `scripts/bench/core/case.sh`); its adapter,
+`scripts/bench/adapters/<name>.sh`, knows how to build, run and read one
+game. A case name is at most 58 characters, since `bench.<case>` is its
+lock label. The `null-sleep` case and the `null` adapter measure nothing: they
+exist for the self-test. The lock state lives in `BENCH_STATE` (default
+`~/.cache/bench-state`) and the store in `BENCH_STORE` (default
+`~/.cache/<repository>-bench`), both outside the repository.
