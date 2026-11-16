@@ -151,6 +151,10 @@ VidRules_Cvar(viditem_t item, const char *renderer)
 			return metal ? "r_metalfx_interp" : NULL;
 		case VIDITEM_DENOISER:
 			return metal ? "r_rt_denoiser" : NULL;
+		case VIDITEM_AO_SCALE:
+			return metal ? "r_rt_ao_scale" : NULL;
+		case VIDITEM_AO_RAYS:
+			return metal ? "r_rt_ao_rays" : NULL;
 		default:
 			return NULL;
 	}
@@ -257,6 +261,19 @@ VidRules_Item(viditem_t item, const char *renderer, int modemask, int scaler)
 			}
 			return (vidrule_t){ 0, "needs ray tracing" };
 
+		case VIDITEM_AO_SCALE:
+		case VIDITEM_AO_RAYS:
+			if (ref != VIDREF_METAL)
+			{
+				return (vidrule_t){ 0, "Metal renderer only" };
+			}
+			/* scaler: whether r_rt_ao is on */
+			if (!scaler)
+			{
+				return (vidrule_t){ 0, "needs r_rt_ao 1" };
+			}
+			return (vidrule_t){ 1, "applies on apply" };
+
 		default:
 			return (vidrule_t){ 0, "unknown item" };
 	}
@@ -331,4 +348,55 @@ VidRules_DenoiserIndex(float value)
 	}
 
 	return (value >= 2.0f) ? 2 : 1;
+}
+
+/* full, 1/2 and 1/3 of the view, the divisors 1 to 3 of rm_rtao_div */
+static const float ao_scale_values[] = { 1.0f, 0.5f, 1.0f / 3.0f };
+
+int
+VidRules_NumAOScales(void)
+{
+	return ARRSIZE(ao_scale_values);
+}
+
+float
+VidRules_AOScaleValue(int index)
+{
+	if (index < 0 || index >= ARRSIZE(ao_scale_values))
+	{
+		return 0.5f;
+	}
+	return ao_scale_values[index];
+}
+
+int
+VidRules_AOScaleIndex(float value)
+{
+	float d;
+
+	if (!(value > 0.0f) || !(value < 1e30f))
+	{
+		return 1;
+	}
+
+	/* the nearest divisor to 1 / value, an exact half going down */
+	d = 1.0f / value;
+
+	if (d < 1.5f)
+	{
+		return 0;
+	}
+
+	return (d <= 2.5f) ? 1 : 2;
+}
+
+int
+VidRules_AORaysIndex(float value)
+{
+	if (!(value == value))
+	{
+		return 1;
+	}
+
+	return (value < 1.5f) ? 0 : 1;
 }

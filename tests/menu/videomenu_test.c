@@ -562,7 +562,8 @@ test_greyed_items_cannot_be_changed(void)
 {
 	static const char *const names[] = {
 		"color intensity", "min. light level", "overbrights", "color light", "bloom",
-		"dynamic light", "MetalFX scaler", "MetalFX scale", "frame generation", "denoiser"
+		"dynamic light", "MetalFX scaler", "MetalFX scale", "frame generation", "denoiser",
+		"AO trace size", "AO rays"
 	};
 	static const char *const renderers[] = { "soft", "gl3", "gl1", "metal" };
 

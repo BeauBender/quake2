@@ -862,10 +862,11 @@ choose how a view is drawn, on any Metal GPU, and leave the picture as it
 is.
 
 * **r_rt_ao**: When set to `1`, the Metal renderer darkens the world's
-  creases and corners with ray-traced ambient occlusion: from each pixel
-  of the world two rays look for nearby surfaces in the half-space in
-  front of it, and the nearer what they meet, the less of the lightmap's
-  light the pixel keeps, never less than `r_rt_ao_min` of it. Only the
+  creases and corners with ray-traced ambient occlusion: from the pixels
+  of the world (one in four with the default `r_rt_ao_scale`) two rays
+  (`r_rt_ao_rays`) look for nearby surfaces in the half-space in front of
+  it, and the nearer what they meet, the less of the lightmap's light the
+  pixel keeps, never less than `r_rt_ao_min` of it. Only the
   lightmap's light is darkened; the dynamic lights' added by
   `r_rt_shadows` are not (with `r_rt_shadows 0` the dynamic lights are
   part of the lightmap and are darkened with it), and models, water and
@@ -892,6 +893,27 @@ is.
   more the nearer it is. A value below `1` counts as `1`, one above `8192`
   as `8192`, one that is not a finite number as `128`. Saved with the
   configuration; applies from the next frame.
+
+* **r_rt_ao_rays**: How many rays each traced pixel of `r_rt_ao` sends:
+  `2` (the default) or `1`, which costs less and makes the darkening
+  grainier. A value below `1.5` counts as `1`, one above as `2`, one that
+  is not a finite number as `2`. In the video menu's renderer options as
+  "AO rays", greyed on other renderers and while `r_rt_ao` is `0`. Saved
+  with the configuration; applies from the next frame.
+
+* **r_rt_ao_scale**: The share of the 3D view's width and height that
+  `r_rt_ao` traces its rays at: `1` traces every pixel, `0.5` (the
+  default) one pixel of each 2 x 2 block, a quarter of the rays, and
+  `0.33` one of each 3 x 3 block. Below `1` each world pixel takes the
+  darkening of the traced pixels next to it that lie on its own surface,
+  so an edge between two surfaces stays sharp, and the darkening is a
+  little softer than at `1`. It is a share of the size the view is drawn
+  at, so with a MetalFX scaler (`r_metalfx`) it applies to the scaler's
+  input. A value is taken as the nearest of the three (`1` for `0.67` and
+  above, `0.33` below `0.4`); `0`, a negative value or one that is not a
+  finite number counts as `0.5`. In the video menu's renderer options as
+  "AO trace size", greyed on other renderers and while `r_rt_ao` is `0`.
+  Saved with the configuration; applies from the next frame.
 
 * **r_rt_ao_seed**: A development setting of the Metal renderer's
   `r_rt_ao`: with `0` (the default) the rays' blue-noise pattern moves on
@@ -1023,9 +1045,10 @@ is.
   pixels it ran on, those with a dynamic light in range, those that traced
   a ray and those shadowed, the rays and the pass's GPU time; with
   `r_rt_ao` on a line for the occlusion pass: the pixels it ran on, the
-  world pixels that traced, those darkened and those darkened to
+  world pixels that took a darkening, those darkened and those darkened to
   `r_rt_ao_min`, the pixels facing up (floors) and of them those darkened,
-  the rays, those that met a surface and the pass's GPU time. Nothing is
+  the rays (at the size `r_rt_ao_scale` traces at), those that met a
+  surface and the pass's GPU time. Nothing is
   drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next

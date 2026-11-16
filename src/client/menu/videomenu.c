@@ -69,6 +69,8 @@ static menulist_s s_mfx_scaler_list;
 static menulist_s s_mfx_scale_list;
 static menulist_s s_mfx_interp_list;
 static menulist_s s_denoiser_list;
+static menulist_s s_ao_scale_list;
+static menulist_s s_ao_rays_list;
 static menulist_s s_fs_box;
 static menulist_s s_vsync_list;
 static menulist_s s_af_list;
@@ -501,6 +503,19 @@ ApplyChanges(void *unused)
 	{
 		Cvar_SetValue("r_vsync", s_vsync_list.curvalue);
 		restart = true;
+	}
+
+	/* The ray-traced AO's trace size and rays (TASK157): read from the next frame */
+	if (!(s_ao_scale_list.generic.flags & QMF_GRAYED) &&
+		VidRules_AOScaleIndex(Cvar_VariableValue("r_rt_ao_scale")) != s_ao_scale_list.curvalue)
+	{
+		Cvar_SetValue("r_rt_ao_scale", VidRules_AOScaleValue(s_ao_scale_list.curvalue));
+	}
+
+	if (!(s_ao_rays_list.generic.flags & QMF_GRAYED) &&
+		VidRules_AORaysIndex(Cvar_VariableValue("r_rt_ao_rays")) != s_ao_rays_list.curvalue)
+	{
+		Cvar_SetValue("r_rt_ao_rays", s_ao_rays_list.curvalue + 1);
 	}
 
 	ApplyList(&s_colorlight_list, VIDITEM_COLORLIGHT);
@@ -1132,6 +1147,43 @@ VID_MenuInit(void)
 		}
 	}
 
+	/* The ray-traced AO's trace size and rays (TASK157): greyed on other
+	   renderers and while r_rt_ao is off, read without creating them. */
+	{
+		static const char *ao_scale_names[] = { "full", "1/2", "1/3", NULL };
+		static const char *ao_rays_names[] = { "1", "2", NULL };
+		static const char *ao_na_names[] = { "n/a", NULL };
+		const int ao_on = (Cvar_VariableValue("r_rt_ao") != 0);
+
+		s_ao_scale_list.generic.type = MTYPE_SPINCONTROL;
+		s_ao_scale_list.generic.name = "AO trace size";
+		s_ao_scale_list.generic.x = 0;
+		s_ao_scale_list.generic.y = (sy += 10);
+		s_ao_scale_list.itemnames = ao_scale_names;
+		s_ao_scale_list.curvalue = VidRules_AOScaleIndex(Cvar_VariableValue("r_rt_ao_scale"));
+
+		s_ao_rays_list.generic.type = MTYPE_SPINCONTROL;
+		s_ao_rays_list.generic.name = "AO rays";
+		s_ao_rays_list.generic.x = 0;
+		s_ao_rays_list.generic.y = (sy += 10);
+		s_ao_rays_list.itemnames = ao_rays_names;
+		s_ao_rays_list.curvalue = VidRules_AORaysIndex(Cvar_VariableValue("r_rt_ao_rays"));
+
+		SetRule(&s_ao_scale_list.generic, VIDITEM_AO_SCALE, ao_on);
+		SetRule(&s_ao_rays_list.generic, VIDITEM_AO_RAYS, ao_on);
+
+		if (s_ao_scale_list.generic.flags & QMF_GRAYED)
+		{
+			s_ao_scale_list.itemnames = ao_na_names;
+			s_ao_scale_list.curvalue = 0;
+		}
+		if (s_ao_rays_list.generic.flags & QMF_GRAYED)
+		{
+			s_ao_rays_list.itemnames = ao_na_names;
+			s_ao_rays_list.curvalue = 0;
+		}
+	}
+
 	/* The renderer's own settings are a page of their own, with
 	   every item in it always shown. */
 	s_ropts_action.generic.type = MTYPE_ACTION;
@@ -1194,6 +1246,8 @@ VID_MenuInit(void)
 	Menu_AddItem(&s_ropts_menu, (void *)&s_mfx_scale_list);
 	Menu_AddItem(&s_ropts_menu, (void *)&s_mfx_interp_list);
 	Menu_AddItem(&s_ropts_menu, (void *)&s_denoiser_list);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_ao_scale_list);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_ao_rays_list);
 	Menu_AddItem(&s_ropts_menu, (void *)&s_ropts_apply_action);
 
 	Menu_SetStatusBar(&s_ropts_menu, "Esc: back to the video menu");
