@@ -199,15 +199,26 @@ NOSET_RE = re.compile(r'^[ *][ U][ S]- ([A-Za-z0-9_]+) "')
 RENDERER_REPORTED = ("r_metalfx_modes",)  # written by the renderer, not a setting
 
 
-def default_cvars(base_cv, noset, options, scenarios):
-    """cvar -> its default, for every cvar an option or a scenario sets and every gating cvar
-    the base probe (nothing set, no config.cfg) reported: each engine run sets them first, so no run
-    starts from the value an earlier run left. Only a cvar the engine reports and lets be set."""
-    names = set(c for c in base_cv if c.startswith(GATING_PREFIXES))
+ARCHIVED_RE = re.compile(r'^\*[ U][ S][ L-] ([A-Za-z0-9_]+) "')
+
+
+def parse_archived(text):
+    """The names of the cvars the engine's cvarlist marks as archived: a '*' in the first column
+    (Cvar_List_f, src/common/cvar.c, prints it for a cvar with CVAR_ARCHIVE)."""
+    return set(m.group(1) for m in (ARCHIVED_RE.match(l.rstrip("\r")) for l in text.splitlines()) if m)
+
+
+def default_cvars(base_cv, noset, options, scenarios, archived):
+    """cvar -> its default, set first by every engine run: the cvars an option sets, those a scenario
+    sets that gate a feature, and the gating cvars the probe's cvarlist marks as archived (the only
+    ones config.cfg could carry from a run to the next). Every other cvar starts at its default in a
+    new engine process, and each +set costs three of the engine's 128 arguments. Only a cvar the
+    engine reports and lets be set."""
+    names = set(c for c in base_cv if c.startswith(GATING_PREFIXES) and c in archived)
     for o in options:
         names.update(k for k, _ in o["set"])
     for s in scenarios.values():
-        names.update(c for c in s if c.startswith(GATING_PREFIXES))  # the others: the engine's argument limit, and config.cfg is cleared anyway
+        names.update(c for c in s if c.startswith(GATING_PREFIXES))
     return dict((c, base_cv[c]) for c in sorted(names) if c in base_cv and c not in noset and c not in RENDERER_REPORTED
                 and CVAR_RE.match(c) and VALUE_RE.match(base_cv[c]))
 
@@ -497,6 +508,27 @@ def sh(cmd, cwd=None, env=None, timeout=None):
     return p.returncode, p.stdout
 
 
+def sh_group(cmd, cwd=None, env=None, timeout=None):
+    """Like sh(), with the command in a process group of its own, which is ended (SIGKILL) on any
+    way out: a SIGTERM/SIGHUP (SystemExit from the handler), Ctrl-C or the timeout. A command that
+    starts the engine (scripts/pins.sh) leaves nothing running."""
+    p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         universal_newlines=True, start_new_session=True)
+    try:
+        out, _ = p.communicate(timeout=timeout)
+    except BaseException:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            p.communicate()
+        except Exception:
+            pass
+        raise
+    return p.returncode, out
+
+
 def load1():
     rc, out = sh(["uptime"])
     m = LOAD_RE.search(out)
@@ -612,6 +644,20 @@ def check_validation(text):
             raise RuntimeError("a validation message: " + line.strip()[:200])
 
 
+def fit_options(ctx, sc_sets, opts):
+    """(kept, dropped): the (id, sets) of opts whose widest engine run (the GPU one, which adds
+    metal_stats) fits the engine's argument limit, and (id, reason) for those that do not. One
+    option over the limit costs only its own row."""
+    kept, dropped = [], []
+    for oid, sets in opts:
+        try:
+            engine_args(ctx, sc_sets, sets + [("metal_stats", "1")], ["+demomap", ctx.demo])
+            kept.append((oid, sets))
+        except RuntimeError as e:
+            dropped.append((oid, "arguments: %s" % e))
+    return kept, dropped
+
+
 def probe(ctx, sets, log):
     """One engine run that loads a map, waits a few frames and asks the engine for
     its own cvar list. Returns the parsed list and the engine's text."""
@@ -716,7 +762,7 @@ def record(ctx, scen_name, base_sets, sets, tag):
                 "PINS_HEIGHT": str(ctx.height), "PINS_EVERY": str(ctx.every), "PINS_SEED": str(ctx.seed),
                 "PINS_TIMEOUT": "600", "MTL_DEBUG_LAYER": "1", "PINS_BIN": ctx.bin})
     try:
-        rc, out = sh([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)
+        rc, out = sh_group([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)
     finally:
         try:
             os.remove(cfg)
@@ -969,7 +1015,7 @@ def _run(a, ctx, rdir, work, host, date, errors):
     if a.only:
         keep = set(a.only.split(","))
         options = [o for o in options if o["id"] in keep]
-    ctx.defaults = default_cvars(base_cv, parse_noset(text), load_options(os.path.join(HERE, "options.tsv")), scen)
+    ctx.defaults = default_cvars(base_cv, parse_noset(text), load_options(os.path.join(HERE, "options.tsv")), scen, parse_archived(text))
     rows, skipped = plan(options, base_cv, scen)
 
     # the read-back: an option runs only when the engine reports each value as asked
@@ -983,6 +1029,13 @@ def _run(a, ctx, rdir, work, host, date, errors):
         sc_sets = parse_scenario(os.path.join(ctx.scen_dir, sc + ".cfg"))
         opts = [("native", [("r_metalfx", "0")])] + [(o, ok_opts[o]["set"]) for o in
                 [r[0] for r in rows if r[1] == sc]]
+        opts, over = fit_options(ctx, sc_sets, opts)
+        for oid, why in over:
+            skipped.append((oid, sc, why.replace("\t", " ").replace("\n", " ")[:300]))
+        if not opts or opts[0][0] != "native":
+            errors.append("%s: the native run does not fit the engine's argument limit" % sc)
+            results[("native", sc)] = {"error": "the native run does not fit the engine's argument limit"}
+            continue
         row = {oid: {"fps": [], "load": [], "gpu": [], "scaler": [], "in": "", "out": ""} for oid, _ in opts}
         try:
             for rnd in range(a.runs):  # alternated: native and every option in each round

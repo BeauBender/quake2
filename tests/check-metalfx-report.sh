@@ -66,7 +66,7 @@ cvl() { printf '%s\n' '*    r_metalfx "0"' "     r_metalfx_modes \"$1\"" '*    r
 { cvl 3; echo 'ref_metal: warning r_rt_denoiser "1"'; echo 'Unknown command "r_rt_denoiser"'; echo '5 cvars'; } > "$tmp/cv-absent"
 { cvl 31; echo '*    r_validation "0"'; echo '     r_rt_denoiser "0"'; echo '     r_rt_shadows "0"'; echo '12 cvars'; } > "$tmp/cv-present"
 { cvl 1099511627779; echo '12 cvars'; } > "$tmp/cv-big"
-{ cvl 31; echo '     r_rt_other "5"'; echo '   - r_rt_fixed "1"'; echo '     r_rt_shadows "0"'; echo '     r_rt_denoiser "0"'; } > "$tmp/cv-defaults"
+{ cvl 31; echo '     r_rt_other "5"'; echo '*    r_rt_arch "2"'; echo '   - r_rt_fixed "1"'; echo '     r_rt_shadows "0"'; echo '     r_rt_denoiser "0"'; } > "$tmp/cv-defaults"
 printf 'bound\tbound\tstd\tr_metalfx=40\n' > "$tmp/opts-bound"
 "$tmp/framediff" --gen "$tmp/a.tga" 64 48 1 || exit 1
 "$tmp/framediff" --gen "$tmp/other.tga" 64 48 7 || exit 1
@@ -182,11 +182,14 @@ assertions() {
     if has cfg; then
     out=$(python3 -I "$HELP" "$d" defaults "$tmp/cv-defaults" 2>&1); want_has cfg-defaults "ok" "$out"; want_not cfg-defaults "leak" "$out"; want_has cfg-limit "
 limit" "$out"
+    want_has cfg-argfit "kept native,small dropped wide,edge" "$out"
     mkeng "$w/cfgbin" "$tmp/eng-cfg"; mkdir -p "$w/cfglogs"
     out=$(python3 -I "$HELP" "$d" cfg-run "$w/cfgbin/quake2" "$w/cfglogs" 2>&1)
     want_has cfg-clear "second run clean" "$out"
     want_has cfg-restored "restored" "$out"; want_not cfg-restored "not restored" "$out"
     out=$(python3 -I "$HELP" "$d" cfg-recover "$w/cfgrec" 2>&1); want_has cfg-recover "recovered" "$out"
+    out=$(python3 -I "$HELP" "$d" cfg-both "$w/cfgboth" 2>&1)
+    want_has cfg-both "config.cfg 'owner" "$out"; want_has cfg-both "kept 'played since" "$out"; want_has cfg-both "files 2" "$out"
 
     fi
 

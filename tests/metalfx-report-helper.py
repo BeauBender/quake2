@@ -126,15 +126,15 @@ def main(argv):
         cv = m.parse_cvarlist(text)
         opts = [{"id": "x", "set": [("r_metalfx", "1"), ("r_metalfx_interp", "1")]}, {"id": "y", "set": [("r_rt_denoiser", "1")]}]
         c = ctx_for(m, "/bin/true")
-        c.defaults = m.default_cvars(cv, m.parse_noset(text), opts, {"rt": {"r_rt_shadows", "timedemo"}})
+        c.defaults = m.default_cvars(cv, m.parse_noset(text), opts, {"rt": {"r_rt_shadows", "timedemo"}}, m.parse_archived(text))
         args = m.engine_args(c, [("r_rt_shadows", "1")], [("r_rt_denoiser", "1")], [])
         final = {}
         for i in range(len(args) - 2):
             if args[i] == "+set":
                 final[args[i + 1]] = args[i + 2]
-        want = {"r_metalfx": "0", "r_metalfx_interp": "0", "r_rt_shadows": "1", "r_rt_denoiser": "1", "r_rt_other": "5"}
+        want = {"r_metalfx": "0", "r_metalfx_interp": "0", "r_rt_shadows": "1", "r_rt_denoiser": "1", "r_rt_arch": "2"}
         bad = [k for k in want if final.get(k) != want[k]]
-        bad += [k for k in ("r_rt_fixed", "r_metalfx_modes", "timedemo") if k in final]
+        bad += [k for k in ("r_rt_fixed", "r_metalfx_modes", "timedemo", "r_rt_other") if k in final]
         print("ok" if not bad else "leak: " + " ".join(bad))
         c.defaults = dict(("r_rt_x%d" % i, "0") for i in range(60))
         try:
@@ -142,6 +142,42 @@ def main(argv):
             print("no limit")
         except RuntimeError:
             print("limit")
+        # one option over the limit costs its own row only: native and the others are kept
+        c.defaults = dict(("r_rt_x%d" % i, "0") for i in range(25))
+        opts = [("native", [("r_metalfx", "0")]), ("small", [("r_metalfx", "1")]),
+                ("wide", [("r_wide%d" % i, "1") for i in range(12)])]
+        for k in range(1, 40):  # the widest option that still fits without metal_stats: the GPU run adds it
+            sets = [("r_wide%d" % i, "1") for i in range(k)]
+            try:
+                m.engine_args(c, [], sets, ["+demomap", c.demo])
+            except RuntimeError:
+                break
+            edge = sets
+        try:
+            m.engine_args(c, [], edge + [("metal_stats", "1")], ["+demomap", c.demo])
+            print("edge fits")
+        except RuntimeError:
+            opts.append(("edge", edge))
+        kept, dropped = m.fit_options(c, [], opts)
+        print("kept " + ",".join(k for k, _ in kept) + " dropped " + ",".join(k for k, _ in dropped))
+        return 0
+    if cmd == "cfg-both":
+        # cfg-both BINDIR: config.cfg and config.cfg.mfx-saved both exist at hold(): neither is deleted
+        d = os.path.join(a[0], "baseq2")
+        os.makedirs(d, exist_ok=True)
+        for n, t in (("config.cfg.mfx-saved", "owner\n"), ("config.cfg", "played since\n")):
+            with open(os.path.join(d, n), "w") as f:
+                f.write(t)
+        g = m.CfgGuard(os.path.join(a[0], "quake2"))
+        g.hold()
+        g.restore()
+        texts = {}
+        for n in os.listdir(d):
+            with open(os.path.join(d, n)) as f:
+                texts[n] = f.read()
+        print("config.cfg " + repr(texts.get("config.cfg")))
+        print("kept %s" % repr(texts.get(os.path.basename(g.kept)) if g.kept else None))
+        print("files %d" % len(texts))
         return 0
     if cmd == "cfg-run":
         # cfg-run ENGINE LOGDIR: two engine runs through the guard; the second must not see the first
