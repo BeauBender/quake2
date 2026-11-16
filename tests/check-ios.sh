@@ -1,0 +1,449 @@
+#!/bin/sh
+# Invariant: the iOS mode of the Makefile (TASK146: "make ios", "make
+# ios_objects") builds the engine for the iOS simulator, with the game
+# and ref_metal linked in (STATIC_MODULES=1, TASK20), and leaves the
+# macOS build as it was.
+#
+# Every decision here is taken from the build's artifacts (LC_BUILD_VERSION
+# in otool -l, nm, otool -L, codesign --verify, plutil), never from a line
+# make or the engine prints.
+#
+# Default (the gate): in a scratch copy of the tree (Makefile,
+# third_party/sdl3.make, stuff/ios/, src/; third_party/SDL3 linked, not
+# copied) "make ios_objects IOS_SDK=iphonesimulator METAL_SHADERS=no"
+# compiles the client, game and ref_metal objects for the simulator and
+# writes the Info.plist (no SDL, no link). Then:
+#   (a) every object the build was to write exists, and every object in
+#       the iOS tree has LC_BUILD_VERSION platform 7 (IOSSIMULATOR) and
+#       minos 17.0;
+#   (b) the combined game and renderer objects define only their entry
+#       point (_GetGameAPI, _GetRefAPI);
+#   (c) no object references an AppKit class (nm -u against the class
+#       list of the macOS SDK's AppKit.tbd; Cocoa is AppKit's umbrella);
+#   (d) the Info.plist passes plutil -lint, names quake2 as its
+#       CFBundleExecutable, iPhoneSimulator and 17.0, and holds no
+#       template key;
+#   (e) "make -n -B VERBOSE=1 client ref_metal" without the iOS mode
+#       prints no -target, iPhone or ios token (assert_macos_cmds);
+#   (f) the objects of ios_objects are compiled with the commands ios
+#       links them from (make -n of both goals).
+# --full (CI's macOS job, and by hand): additionally "make ios" (the
+# vendored SDL3 for the simulator, the link, the bundle, the ad hoc
+# signature; METAL_SHADERS from the environment, default yes) and:
+#   (g) the executable has platform 7 and defines _GetGameAPI and
+#       _GetRefAPI;
+#   (h) otool -L names no game or renderer library and no AppKit, Cocoa,
+#       Carbon or IOKit;
+#   (i) codesign --verify --strict passes on the bundle;
+#   (j) the bundle's Info.plist passes (d), and the bundle holds
+#       ref_metal.metallib (METAL_SHADERS=yes) and no .pak and no
+#       baseq2/, as no IOS_BUNDLE_DATA was given.
+# Each assertion first runs on scratch mutants that it must refuse,
+# naming the cause, and on a good sample it must accept, so an assertion
+# that passes everything fails here.
+#
+# Build time, measured here (6 cores, -j3): the default about 8 s; --full
+# about 25 s more, most of it the 231 vendored SDL3 sources, which the
+# default does not compile. So the gate runs the default, and CI's macOS
+# job runs --full.
+#
+# Without the iOS simulator SDK (another OS, or Xcode without its iOS
+# platform) the check prints one "skipped" line and exits 0. With the
+# SDK a missing tool or a failed build is a failure, never a skip.
+#
+# IOS_CHECK_MAKE_ARGS adds make arguments, to run the check against a
+# deliberately broken build.
+#
+# Usage: tests/check-ios.sh [--full]
+set -eu
+cd "$(dirname "$0")/.."
+export LC_ALL=C
+unset MAKEFLAGS GNUMAKEFLAGS MFLAGS
+
+full=0
+case "${1:-}" in
+"") ;;
+--full) full=1 ;;
+*) echo "usage: tests/check-ios.sh [--full]" >&2; exit 2 ;;
+esac
+
+if [ "$(uname -s)" != Darwin ]; then
+	echo "check-ios: skipped: the iOS mode builds on macOS only (docs/decisions/0008)"
+	exit 0
+fi
+sdk=
+if command -v xcrun >/dev/null 2>&1; then
+	sdk=$(xcrun --sdk iphonesimulator --show-sdk-path 2>/dev/null) || sdk=
+fi
+if [ -z "$sdk" ] || [ ! -f "$sdk/SDKSettings.plist" ]; then
+	echo "check-ios: skipped: no iOS simulator SDK (xcrun --sdk iphonesimulator --show-sdk-path)"
+	exit 0
+fi
+
+fail=0
+bad() { echo "check-ios: $*"; fail=1; }
+
+tools="make nm otool plutil awk sort comm find grep sed"
+[ "$full" = 1 ] && tools="$tools codesign"
+for tool in $tools; do
+	if ! command -v "$tool" >/dev/null 2>&1; then
+		echo "check-ios: $tool not found: a missing tool is a failure"
+		exit 1
+	fi
+done
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/check-ios.XXXXXX")
+trap 'rm -rf "${tmp:?}"' EXIT
+jobs=${CHECK_JOBS:-4}
+extra=${IOS_CHECK_MAKE_ARGS:-}
+minos=17.0
+target=arm64-apple-ios$minos-simulator
+
+# ---- the assertions; each prints its cause and returns 1 ----------------
+
+# "<platform> <minos>" of LC_BUILD_VERSION, empty without one
+platform_of()
+{
+	otool -l "$1" 2>/dev/null | awk '$1 == "cmd" { c = $2 } c == "LC_BUILD_VERSION" && $1 == "platform" { p = $2 }
+		c == "LC_BUILD_VERSION" && $1 == "minos" { print p, $2; exit }'
+}
+
+# every file named in <list> is built for the simulator at the minimum version
+assert_platform() # <list file>
+{
+	rc=0
+	while read -r f; do
+		got=$(platform_of "$f")
+		if [ -z "$got" ]; then
+			echo "$f has no LC_BUILD_VERSION, so no platform 7 (IOSSIMULATOR)"
+			rc=1
+		elif [ "$got" != "7 $minos" ]; then
+			echo "$f is built for platform ${got%% *} minos ${got#* }, not platform 7 (IOSSIMULATOR) minos $minos"
+			rc=1
+		fi
+	done < "$1"
+	return $rc
+}
+
+# the object's only global definition is its entry point
+assert_exports() # <object> <entry point>
+{
+	got=$(nm -g -U "$1" | awk 'NF == 3 { print $3 }' | sort)
+	if [ "$got" != "$2" ]; then
+		echo "$1 defines $(printf '%s\n' "$got" | grep -c .) globals, not only $2: $(printf '%s\n' "$got" | head -n 6 | tr '\n' ' ')"
+		return 1
+	fi
+}
+
+# no object in <list> references a class of <AppKit class list>
+assert_no_appkit() # <list file> <class list>
+{
+	rc=0
+	while read -r f; do
+		nm -u "$f" | sed -n 's/^_OBJC_CLASS_\$_//p' | sort -u > "${tmp:?}/used"
+		hit=$(comm -12 "${tmp:?}/used" "$2" | tr '\n' ' ')
+		if [ -n "$hit" ]; then
+			echo "$f references AppKit classes: $hit"
+			rc=1
+		fi
+	done < "$1"
+	return $rc
+}
+
+assert_plist() # <Info.plist>
+{
+	if ! plutil -lint -s "$1" > "${tmp:?}/lint" 2>&1; then
+		echo "$1 fails plutil -lint: $(head -n 1 "${tmp:?}/lint")"
+		return 1
+	fi
+	rc=0
+	exe=$(plutil -extract CFBundleExecutable raw -o - "$1" 2>/dev/null) || exe="(none)"
+	[ "$exe" = quake2 ] || { echo "$1: CFBundleExecutable is $exe, not quake2"; rc=1; }
+	plat=$(plutil -extract CFBundleSupportedPlatforms.0 raw -o - "$1" 2>/dev/null) || plat="(none)"
+	[ "$plat" = iPhoneSimulator ] || { echo "$1: CFBundleSupportedPlatforms is $plat, not iPhoneSimulator"; rc=1; }
+	min=$(plutil -extract MinimumOSVersion raw -o - "$1" 2>/dev/null) || min="(none)"
+	[ "$min" = "$minos" ] || { echo "$1: MinimumOSVersion is $min, not $minos"; rc=1; }
+	id=$(plutil -extract CFBundleIdentifier raw -o - "$1" 2>/dev/null) || id=
+	[ -n "$id" ] || { echo "$1: no CFBundleIdentifier"; rc=1; }
+	if grep -E '@[A-Z_]+@' "$1" >/dev/null; then
+		echo "$1 holds a template key: $(grep -E -o '@[A-Z_]+@' "$1" | sort -u | tr '\n' ' ')"
+		rc=1
+	fi
+	return $rc
+}
+
+# the commands of a macOS build name no iOS target or SDK: no word that
+# is -target or ios, or holds iPhone (the SDKs, iPhoneSimulator.sdk, the
+# iOS build root) or apple-ios. Not a path through an ios/ directory:
+# the vendored SDL3's source list is multi-platform (main/ios/, hidapi/ios/).
+assert_macos_cmds() # <make -n output>
+{
+	hit=$(tr -s ' \t' '\n\n' < "$1" | grep -E -e '^-target$' -e '^[iI][oO][sS]$' -e '[iI][pP][hH][oO][nN][eE]' -e 'apple-ios' \
+		| sort -u | head -n 5 | tr '\n' ' ') || true
+	if [ -n "$hit" ]; then
+		echo "$1: the macOS build's commands carry iOS tokens: $hit"
+		return 1
+	fi
+}
+
+# the compile command of every object of ios_objects is the one of ios
+assert_same_compiles() # <make -n ios_objects> <make -n ios>
+{
+	grep -E ' -c .* -o [^ ]*/obj-metal/[^ ]+\.o( |$)|/obj-metal/[^ ]+\.o$' "$1" | sort -u > "${tmp:?}/c.objects"
+	grep -E ' -c .* -o [^ ]*/obj-metal/[^ ]+\.o( |$)|/obj-metal/[^ ]+\.o$' "$2" | sort -u > "${tmp:?}/c.ios"
+	n=$(grep -c . "${tmp:?}/c.objects") || n=0
+	if [ "$n" -lt 1 ]; then
+		echo "$1 holds no compile command of an iOS object"
+		return 1
+	fi
+	only=$(comm -23 "${tmp:?}/c.objects" "${tmp:?}/c.ios" | head -n 2 | cut -c 1-300)
+	if [ -n "$only" ]; then
+		echo "ios_objects compiles an object with another command than ios: $only"
+		return 1
+	fi
+}
+
+# otool -L output: no module library, no macOS-only framework
+assert_libs() # <otool -L output>
+{
+	hit=$(grep -E -o '(game|ref_[a-z0-9_]+)\.(dylib|so)|/(AppKit|Cocoa|Carbon|IOKit)\.framework/' "$1" | sort -u | tr '\n' ' ') || true
+	if [ -n "$hit" ]; then
+		echo "the executable links $hit"
+		return 1
+	fi
+}
+
+assert_entry_points() # <executable>
+{
+	rc=0
+	for sym in _GetGameAPI _GetRefAPI; do
+		if ! nm -g -U "$1" | awk -v s="$sym" 'NF == 3 && $3 == s { f = 1 } END { exit !f }'; then
+			echo "$sym is not defined in $1"
+			rc=1
+		fi
+	done
+	return $rc
+}
+
+assert_signed() # <bundle>
+{
+	if ! codesign --verify --strict "$1" > "${tmp:?}/sig" 2>&1; then
+		echo "$1 fails codesign --verify --strict: $(head -n 2 "${tmp:?}/sig" | tr '\n' ' ')"
+		return 1
+	fi
+}
+
+assert_no_data() # <bundle>
+{
+	hit=$(cd "$1" && find . \( -iname '*.pak' -o -name baseq2 \) | sort | head -n 5 | tr '\n' ' ')
+	if [ -n "$hit" ]; then
+		echo "$1 holds game data although no IOS_BUNDLE_DATA was given: $hit"
+		return 1
+	fi
+}
+
+# ---- the assertions on scratch mutants -----------------------------------
+
+mutants=0
+refused() # <name> <text its cause must hold> <assertion> <args>...
+{
+	name=$1
+	want=$2
+	shift 2
+	mutants=$((mutants + 1))
+	if "$@" > "${tmp:?}/mut.out" 2>&1; then
+		bad "mutant $name passed $1"
+	elif ! grep -F -e "$want" "${tmp:?}/mut.out" >/dev/null; then
+		bad "mutant $name was refused by $1 without naming its cause ($want): $(head -n 1 "${tmp:?}/mut.out")"
+	fi
+}
+accepted() # <name> <assertion> <args>...
+{
+	name=$1
+	shift
+	if ! "$@" > "${tmp:?}/mut.out" 2>&1; then
+		bad "the good sample $name was refused by $1: $(head -n 1 "${tmp:?}/mut.out")"
+	fi
+}
+
+m=$tmp/mut
+mkdir -p "${m:?}/good.app" "${m:?}/data.app/baseq2" "${m:?}/signed.app"
+cc_ios() { xcrun -sdk iphonesimulator clang -target "$target" -isysroot "$sdk" "$@"; }
+
+printf 'int GetRefAPI(void) { return 1; }\nint rm_helper(void) { return 2; }\n' > "${m:?}/two.c"
+printf 'extern char OBJC_CLASS_$_NSWindow;\nvoid *w(void) { return &OBJC_CLASS_$_NSWindow; }\n' > "${m:?}/appkit.c"
+printf 'extern char OBJC_CLASS_$_NSString;\nvoid *s(void) { return &OBJC_CLASS_$_NSString; }\n' > "${m:?}/foundation.c"
+printf 'int main(void) { return 0; }\n' > "${m:?}/main.c"
+if ! cc_ios -c "${m:?}/two.c" -o "${m:?}/two.o" > "${m:?}/cc.out" 2>&1 \
+	|| ! cc_ios -c "${m:?}/appkit.c" -o "${m:?}/appkit.o" >> "${m:?}/cc.out" 2>&1 \
+	|| ! cc_ios -c "${m:?}/foundation.c" -o "${m:?}/foundation.o" >> "${m:?}/cc.out" 2>&1 \
+	|| ! cc_ios "${m:?}/main.c" -o "${m:?}/signed.app/quake2" >> "${m:?}/cc.out" 2>&1 \
+	|| ! xcrun -sdk macosx clang -target arm64-apple-macos13.0 -c "${m:?}/two.c" -o "${m:?}/macos.o" >> "${m:?}/cc.out" 2>&1 \
+	|| ! xcrun -sdk iphonesimulator ld -r -arch arm64 -exported_symbol _GetRefAPI "${m:?}/two.o" -o "${m:?}/one.o" >> "${m:?}/cc.out" 2>&1; then
+	tail -n 5 "${m:?}/cc.out"
+	echo "check-ios: the mutants could not be compiled for the simulator"
+	exit 1
+fi
+
+# (a)
+printf '%s\n' "${m:?}/two.o" "${m:?}/macos.o" > "${m:?}/mixed.list"
+printf '%s\n' "${m:?}/two.o" "${m:?}/one.o" > "${m:?}/ios.list"
+refused "macOS object in the iOS tree" "macos.o is built for platform 1 " assert_platform "${m:?}/mixed.list"
+accepted "simulator objects" assert_platform "${m:?}/ios.list"
+# (b)
+refused "renderer exporting a helper" "not only _GetRefAPI" assert_exports "${m:?}/two.o" _GetRefAPI
+accepted "renderer exporting its entry point" assert_exports "${m:?}/one.o" _GetRefAPI
+# (c)
+mac_sdk=$(xcrun --sdk macosx --show-sdk-path 2>/dev/null) || mac_sdk=
+tbd=$mac_sdk/System/Library/Frameworks/AppKit.framework/AppKit.tbd
+appkit=$tmp/appkit.classes
+if [ -n "$mac_sdk" ] && [ -f "$tbd" ]; then
+	awk '/objc-classes:/ { f = 1; sub(/.*objc-classes:/, "") }
+		f { l = $0; gsub(/[][,'"'"']/, " ", l); n = split(l, w, " "); for (i = 1; i <= n; i++) print w[i]; if ($0 ~ /\]/) f = 0 }' \
+		"$tbd" | sort -u > "${appkit:?}"
+fi
+if [ ! -s "$appkit" ] || ! grep -x NSWindow "$appkit" >/dev/null; then
+	echo "check-ios: no AppKit class list (NSWindow) from the macOS SDK's AppKit.tbd ($tbd)"
+	exit 1
+fi
+printf '%s\n' "${m:?}/appkit.o" > "${m:?}/appkit.list"
+printf '%s\n' "${m:?}/foundation.o" > "${m:?}/foundation.list"
+refused "object referencing NSWindow" "references AppKit classes: NSWindow" assert_no_appkit "${m:?}/appkit.list" "$appkit"
+accepted "object referencing NSString" assert_no_appkit "${m:?}/foundation.list" "$appkit"
+# (d), on the template filled in here as the Makefile does
+sed -e 's/@BUNDLE_ID@/org.example.check/g' -e 's/@VERSION@/1.0/g' -e "s/@PLATFORM@/iPhoneSimulator/g" \
+	-e "s/@MIN_OS@/$minos/g" stuff/ios/Info.plist.in > "${m:?}/good.app/Info.plist"
+cp "${m:?}/good.app/Info.plist" "${m:?}/noexe.plist"
+plutil -remove CFBundleExecutable "${m:?}/noexe.plist"
+refused "Info.plist without CFBundleExecutable" "CFBundleExecutable is (none)" assert_plist "${m:?}/noexe.plist"
+refused "Info.plist template unfilled" "template key: @BUNDLE_ID@" assert_plist stuff/ios/Info.plist.in
+accepted "Info.plist filled in" assert_plist "${m:?}/good.app/Info.plist"
+# (e)
+printf '%s\n' "cc -c -O2 -target $target -isysroot $sdk src/x.c -o build/x.o" > "${m:?}/ioscmds.txt"
+printf '%s\n' "cc -c -O2 -arch arm64 src/x.c -o build/release/x.o" \
+	"cc -c third_party/SDL3/src/main/ios/x.m -o build/release/sdl3/main/ios/x.o" > "${m:?}/maccmds.txt"
+refused "iOS target in a macOS command" "-target" assert_macos_cmds "${m:?}/ioscmds.txt"
+printf '%s\n' "xcrun -sdk iphonesimulator metal -c x.metal -o x.air" > "${m:?}/iosmetal.txt"
+refused "iOS SDK in a macOS shader command" "iphonesimulator" assert_macos_cmds "${m:?}/iosmetal.txt"
+accepted "macOS command" assert_macos_cmds "${m:?}/maccmds.txt"
+# (f)
+printf '%s\n' "cc -c -O2 -DUSE_XDG -o build/ios/obj-metal/client/a.o a.c" > "${m:?}/ios.n"
+printf '%s\n' "cc -c -O2 -o build/ios/obj-metal/client/a.o a.c" > "${m:?}/objects.n"
+refused "ios_objects compiling without a flag of ios" "another command than ios" assert_same_compiles "${m:?}/objects.n" "${m:?}/ios.n"
+accepted "ios_objects compiling as ios" assert_same_compiles "${m:?}/ios.n" "${m:?}/ios.n"
+# (g)
+refused "executable without the entry points" "_GetRefAPI is not defined" assert_entry_points "${m:?}/signed.app/quake2"
+# (h)
+printf '%s\n' "x:" "	/System/Library/Frameworks/AppKit.framework/AppKit (compatibility version 45.0.0)" > "${m:?}/appkit.L"
+printf '%s\n' "x:" "	@rpath/ref_metal.dylib (compatibility version 0.0.0)" > "${m:?}/ref.L"
+printf '%s\n' "x:" "	/System/Library/Frameworks/UIKit.framework/UIKit (compatibility version 1.0.0)" > "${m:?}/uikit.L"
+refused "executable linking AppKit" "/AppKit.framework/" assert_libs "${m:?}/appkit.L"
+refused "executable linking ref_metal.dylib" "ref_metal.dylib" assert_libs "${m:?}/ref.L"
+accepted "executable linking UIKit" assert_libs "${m:?}/uikit.L"
+# (i): a bundle signed as the Makefile signs it, then changed
+cp "${m:?}/good.app/Info.plist" "${m:?}/signed.app/Info.plist"
+if ! codesign --force --sign - --timestamp=none "${m:?}/signed.app" > "${m:?}/sign.out" 2>&1; then
+	head -n 3 "${m:?}/sign.out"
+	echo "check-ios: codesign cannot sign a bundle ad hoc"
+	exit 1
+fi
+accepted "bundle signed ad hoc" assert_signed "${m:?}/signed.app"
+plutil -replace CFBundleName -string changed "${m:?}/signed.app/Info.plist"
+refused "bundle changed after signing" "fails codesign --verify --strict" assert_signed "${m:?}/signed.app"
+# (j)
+: > "${m:?}/data.app/baseq2/smoke.pak"
+refused "bundle with a .pak but no IOS_BUNDLE_DATA" "smoke.pak" assert_no_data "${m:?}/data.app"
+accepted "bundle without data" assert_no_data "${m:?}/good.app"
+
+# ---- the build -----------------------------------------------------------
+
+tree=$tmp/tree
+mkdir -p "${tree:?}/third_party" "${tree:?}/stuff"
+cp -R Makefile src "${tree:?}/"
+cp -R stuff/ios "${tree:?}/stuff/"
+cp third_party/sdl3.make "${tree:?}/third_party/"
+ln -s "$PWD/third_party/SDL3" "${tree:?}/third_party/SDL3"
+root=$tree/build/ios-iphonesimulator/release
+mk() { make -C "${tree:?}" "$@"; }
+
+# what the build is to write, and the commands ios would compile it with
+# shellcheck disable=SC2086 # extra is a word list
+if ! mk -n -B VERBOSE=1 ios_objects IOS_SDK=iphonesimulator METAL_SHADERS=no $extra > "${tmp:?}/objects.n" 2>&1 \
+	|| ! mk -n -B VERBOSE=1 ios IOS_SDK=iphonesimulator METAL_SHADERS=no $extra > "${tmp:?}/ios.n" 2>&1; then
+	tail -n 5 "${tmp:?}/objects.n" "${tmp:?}/ios.n" 2>/dev/null || true
+	echo "check-ios: the iOS mode cannot be evaluated (make -n ios_objects, make -n ios)"
+	exit 1
+fi
+grep -E -o ' -o [^ ]+\.o( |$)' "${tmp:?}/objects.n" | awk '{ print $2 }' | sort -u > "${tmp:?}/expected"
+
+start=$(date +%s)
+goal=ios_objects
+[ "$full" = 1 ] && goal=ios
+ms=no
+[ "$full" = 1 ] && ms=${METAL_SHADERS:-yes}
+# shellcheck disable=SC2086 # extra is a word list
+if ! mk -j"$jobs" QUIET=1 $goal IOS_SDK=iphonesimulator METAL_SHADERS="$ms" $extra > "${tmp:?}/build.log" 2>&1; then
+	tail -n 30 "${tmp:?}/build.log"
+	echo "check-ios: the build failed (make $goal IOS_SDK=iphonesimulator METAL_SHADERS=$ms $extra)"
+	exit 1
+fi
+elapsed=$(( $(date +%s) - start ))
+
+# (a)
+nexp=$(grep -c . "${tmp:?}/expected") || nexp=0
+if [ "$nexp" -lt 100 ]; then
+	bad "make -n ios_objects names $nexp objects, not the client, game and ref_metal"
+fi
+while read -r o; do
+	[ -s "$tree/$o" ] || bad "the build did not write $o"
+done < "${tmp:?}/expected"
+# every object in the tree, SDL's too under --full
+(cd "${tree:?}" && find build -name '*.o' | sort) > "${tmp:?}/objects.rel"
+sed "s|^|$tree/|" "${tmp:?}/objects.rel" > "${tmp:?}/objects"
+nobj=$(grep -c . "${tmp:?}/objects") || nobj=0
+out=$(assert_platform "${tmp:?}/objects") || bad "$out"
+# (b)
+out=$(assert_exports "$root/obj-metal/static/game.o" _GetGameAPI) || bad "$out"
+out=$(assert_exports "$root/obj-metal/static/ref_metal.o" _GetRefAPI) || bad "$out"
+# (c)
+out=$(assert_no_appkit "${tmp:?}/objects" "$appkit") || bad "$out"
+# (d)
+out=$(assert_plist "$root/Info.plist") || bad "$out"
+# (e)
+if ! mk -n -B VERBOSE=1 client ref_metal > "${tmp:?}/macos.n" 2>&1; then
+	tail -n 5 "${tmp:?}/macos.n"
+	bad "make -n client ref_metal failed"
+fi
+out=$(assert_macos_cmds "${tmp:?}/macos.n") || bad "$out"
+# (f)
+out=$(assert_same_compiles "${tmp:?}/objects.n" "${tmp:?}/ios.n") || bad "$out"
+
+if [ "$full" = 1 ]; then
+	app=$root/Quake2.app
+	exe=$app/quake2
+	if [ ! -x "$exe" ]; then
+		echo "check-ios: $exe was not produced"
+		exit 1
+	fi
+	# (g)
+	printf '%s\n' "$exe" > "${tmp:?}/exe.list"
+	out=$(assert_platform "${tmp:?}/exe.list") || bad "$out"
+	out=$(assert_entry_points "$exe") || bad "$out"
+	# (h)
+	otool -L "$exe" > "${tmp:?}/libs" || bad "otool -L failed on $exe"
+	out=$(assert_libs "${tmp:?}/libs") || bad "$out"
+	# (i)
+	out=$(assert_signed "$app") || bad "$out"
+	# (j)
+	out=$(assert_plist "$app/Info.plist") || bad "$out"
+	out=$(assert_no_data "$app") || bad "$out"
+	if [ "$ms" = yes ] && [ ! -s "$app/ref_metal.metallib" ]; then
+		bad "$app holds no ref_metal.metallib although METAL_SHADERS=yes"
+	fi
+fi
+
+echo "check-ios: build $elapsed s ($goal)"
+if [ "$fail" -ne 0 ]; then
+	exit 1
+fi
+echo "check-ios: ok ($mutants mutants refused; $nobj objects for the simulator; $goal)"
