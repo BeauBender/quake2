@@ -1,15 +1,18 @@
 # TASK132: `soft`'s window, opaque and not opaque
 
-Status: measured. Every capture was redone after the first set (which may have
+Status: measured. No layer difference is shown at `sw_partialrefresh 0`; at
+`sw_partialrefresh 1` the same-state spread is too wide to say either way. Every capture was redone after the first set (which may have
 overlapped use of the display) and the three cases below are each three runs per
 layer state.
 
 FIX52 (#239) made `soft`'s `CAMetalLayer` not opaque when display sync is off
-and did not compare the picture on screen; its method is in the section "The
-60 fps cap at 1920x1080 windowed (FIX52)" of
-[the shared runbook](../plans/metal-port-harness.md), and FIX53's capture
-method is in its section "The opaque layer of `ref_metal` and the shim (FIX53)".
-This file records the comparison FIX52 left open.
+and did not compare the picture on screen; its method is in
+[FIX52's runbook file](FIX52.md), and FIX53's capture method is in
+[FIX53's runbook file](FIX53.md). This file records the comparison FIX52 left
+open. The per-capture settings are encoded only in the capture file names
+(`v0p0` is `r_vsync 0` with `sw_partialrefresh 0`, `o0` is not opaque, `o1` is
+opaque, the last number is the run); `settings.txt` in the artifacts folder
+maps each file name to its settings.
 
 ## Method
 
@@ -44,9 +47,9 @@ listed first).
 
 | Case | Same, opaque | Same, not opaque | Layer, same index | Layer, all nine |
 |---|---|---|---|---|
-| `r_vsync 0`, `sw_partialrefresh 0` | 1051, 1083, 1060 (33 to 38) | 962, 1098, 1126 (26 to 30) | 1007, 1016, 1148 | 893 to 1148 (26 to 38) |
-| `r_vsync 1`, `sw_partialrefresh 0` | 949, 806, 1067 (34 to 41) | 1139, 1030, 1040 (30 to 42) | 913, 1113, 893 | 893 to 1139 (31 to 42) |
-| `r_vsync 0`, `sw_partialrefresh 1` | 121,371, 107,453, 106,560 (54 to 78) | 98,164, 84,855, 71,801 (52 to 67) | 90,280, 121,500, 106,556 | 60,438 to 121,500 (55 to 73) |
+| `r_vsync 0`, `sw_partialrefresh 0` | 1051, 1083, 1060 (33 to 38) | 962, 1098, 1126 (26 to 30) | 1007, 1016, 1148 | 1007 to 1148 (25 to 38) |
+| `r_vsync 1`, `sw_partialrefresh 0` | 949, 806, 1067 (34 to 41) | 1139, 1030, 1040 (30 to 42) | 913, 1113, 893 | 815 to 1147 (31 to 42) |
+| `r_vsync 0`, `sw_partialrefresh 1` | 121,371, 107,453, 106,560 (54 to 78) | 98,164, 84,855, 71,801 (52 to 67) | 90,280, 121,500, 106,556 | 28,136 to 121,500 (55 to 74) |
 
 Negative control (`r_vsync 0`, `sw_partialrefresh 0`, texture drawn blended at
 alpha 200): 511,875 pixels against the opaque run and 511,873 against the not
@@ -55,11 +58,12 @@ title bar); two control runs differ by 1,059 pixels, the same as the others.
 
 Reading:
 
-- No difference due to the layer is seen in any case. For `sw_partialrefresh 0`,
-  with either `r_vsync`, opaque against not opaque differs by as many pixels as
-  two runs of one state (about 0.2 percent, 800 to 1150), and every one of those
-  pixels lies in a box of about 110 by 100 pixels at the left edge of the view
-  (x 0 to 112, y 244 to 342) in all 24 pairings, so outside that box the picture
+- No difference due to the layer is shown at `sw_partialrefresh 0`. With either
+  `r_vsync`, opaque against not opaque differs by as many pixels as two runs of
+  one state (about 0.2 percent: 1007 to 1148 at `r_vsync 0`, 815 to 1147 at
+  `r_vsync 1`), and every one of those pixels lies in a box of about 110 by 100
+  pixels at the left edge of the view (x 0 to 112, y 244 to 339) in all 30
+  pairings (15 per case: 6 same-state and 9 layer), so outside that box the picture
   is identical across layer states and runs. The box is the same one in the
   control pair of runs, so it is a property of the demo frame, not of the layer.
   It was not traced further: the runs are not deterministic at that spot
@@ -71,9 +75,11 @@ Reading:
 - With `sw_partialrefresh 1` the same-state spread is 71,801 to 121,371 pixels
   (the streaming texture is only partly rewritten each frame, so what is on
   screen depends on how many frames came before and on the timing of the
-  presents), and the layer pairings, 60,438 to 121,500, fall within it. The
-  capture cannot separate a layer difference from that spread in this case;
-  it also shows that with partial refresh the picture on screen is not the same
+  presents), and the nine layer pairings, 28,136 to 121,500 (the largest
+  difference 55 to 74), are spread over a range wider than that. The spread is
+  too wide for the capture to separate a layer effect at `sw_partialrefresh 1`,
+  so no layer difference is shown there, and none is ruled out; the capture
+  also shows that with partial refresh the picture on screen is not the same
   from run to run at frame 300, which is FIX54's (#252) ground and not changed
   here.
 - The control writes alpha below 1 into the frame and differs in 511,875
