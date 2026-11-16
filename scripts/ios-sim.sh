@@ -38,7 +38,9 @@
 # list" is timed out, a failed or empty device list fails, another device
 # appearing meanwhile passes, a device from before that disappears fails,
 # this run's device left behind fails, the device of a create that timed
-# out is deleted, and a limit that is not digits is refused.
+# out is deleted, a create whose UDID is not listed after it, or was
+# listed before it, fails (and leaves that device alone), ref_metal's
+# floor refusal fails, and a limit that is not digits is refused.
 # tests/check-ios.sh runs it.
 #
 # Limits, in seconds (digits only, or the script refuses):
@@ -137,6 +139,10 @@ print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-27-2": dev
 	esac ;;
 create)
 	u=$(printf 'AAAAAAAA-0000-0000-0000-%012d' $$)
+	case $sc in
+	ghost) echo "BBBBBBBB-0000-0000-0000-000000000000"; exit 0 ;;
+	reuse) echo "11111111-1111-1111-1111-111111111111"; exit 0 ;;
+	esac
 	printf '%s %s\n' "$u" "$2" >> "$st/devices"
 	if [ "$sc" = extra ]; then
 		printf '%s\n' "33333333-3333-3333-3333-333333333333 Previews kept" \
@@ -155,9 +161,10 @@ launch)
 	# launch --console-pty <udid> <bundle id> <args>...
 	c=$st/container/Library/YamagiQ2/baseq2
 	mkdir -p "$c/scrnshot"
+	skip="ref_metal: the device floor (apple5) is not checked in the simulator"
+	[ "$sc" = floorrefused ] && skip="ref_metal: the Metal device supports no Apple GPU family from apple5 on; ref_metal needs one"
 	printf '%s\n' "Using the linked-in renderer: ref_metal (linked in)" "Metal device: Fake GPU" \
-		"Metal supportsFamily (apple5 to apple9): none" \
-		"ref_metal: the device floor (apple5) is not checked in the simulator" \
+		"Metal supportsFamily (apple5 to apple9): none" "$skip" \
 		"Drawable size: 16x8" "Wrote q2_0000.tga" \
 		"ref_metal: metal_stats: 30 frames, 0 without a drawable, 0 skipped, 0 failed command buffers, " > "$c/qconsole.log"
 	python3 -I -c 'import sys
@@ -220,6 +227,9 @@ EOF
 			why="it took $t0 s, more than $max s"
 		elif [ "$sc" != leftover ] && grep '^AAAAAAAA-' "${d:?}/state/devices" >/dev/null; then
 			why="this run's device is left in the fake's device list"
+		elif ! grep '^11111111-' "${d:?}/state/devices" >/dev/null \
+			|| { [ "$sc" != vanish ] && ! grep '^22222222-' "${d:?}/state/devices" >/dev/null; }; then
+			why="an owner's device was deleted"
 		fi
 		if [ -f "${d:?}/state/hang.pid" ] && kill -0 "$(cat "${d:?}/state/hang.pid")" 2>/dev/null; then
 			kill "$(cat "${d:?}/state/hang.pid")" 2>/dev/null
@@ -240,6 +250,9 @@ EOF
 	st_case device-from-before-gone vanish fail "gone after the run: 22222222-2222-2222-2222-222222222222" 30
 	st_case own-device-left leftover fail "is still listed after its delete" 30
 	st_case create-times-out createhang fail "deleting AAAAAAAA-0000-0000-0000-" 30
+	st_case created-device-not-listed ghost fail "is not in the device list taken after simctl create" 30
+	st_case created-device-listed-before reuse fail "was already listed before simctl create" 30
+	st_case family-refused floorrefused fail "ref_metal refused it (its floor)" 30
 	st_case smoke-limit-not-digits extra fail "IOS_SIM_SMOKE_SECONDS must be" 5 IOS_SIM_SMOKE_SECONDS=3m
 	st_case boot-limit-not-digits extra fail "IOS_SIM_BOOT_SECONDS must be" 5 IOS_SIM_BOOT_SECONDS=1e3
 	st_case list-limit-not-digits extra fail "IOS_SIM_LIST_SECONDS must be" 5 IOS_SIM_LIST_SECONDS=-1
@@ -401,11 +414,14 @@ udid=$(tail -n 1 "${tmp:?}/create.out")
 printf '%s\n' "$udid" | grep -E -x "$uuid_re" >/dev/null || { udid=; lost_device "$name"; die "simctl create gave no UDID"; }
 run_udid=$udid
 echo "ios-sim: device $udid ($type_id, $rt_name)"
-list_devices "$out/devices.created" || die "no device list after simctl create"
 udids "$out/devices.before" > "${tmp:?}/udids.before"
+if grep -F -x -e "$run_udid" "${tmp:?}/udids.before" >/dev/null; then
+	udid=
+	die "the device $run_udid that simctl create gave was already listed before simctl create: not this run's, left alone"
+fi
+list_devices "$out/devices.created" || die "no device list after simctl create"
 udids "$out/devices.created" > "${tmp:?}/udids.created"
 grep -F -x -e "$run_udid" "${tmp:?}/udids.created" >/dev/null || die "this run's device $run_udid is not in the device list taken after simctl create"
-grep -F -x -e "$run_udid" "${tmp:?}/udids.before" >/dev/null && die "this run's device $run_udid was already listed before simctl create"
 bounded "$boot_s" "$out/boot.log" xcrun simctl bootstatus "$udid" -b || die "the device did not boot (log: $out/boot.log)"
 bounded 60 "${tmp:?}/shot.out" xcrun simctl io "$udid" screenshot "$out/screen.png" || die "simctl io screenshot failed"
 bounded 180 "${tmp:?}/install.out" xcrun simctl install "$udid" "$app" || { cat "${tmp:?}/install.out" >&2; die "simctl install failed"; }

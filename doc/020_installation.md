@@ -386,9 +386,11 @@ and deletes again, and checks from the engine's own log and frame that
 `ref_metal` reached the console. It writes the build and the logs to
 DIR, which must be outside the checkout; the app's write directory is
 *Library/YamagiQ2/* in its data container (`-cfgdir`). The simulator's
-Metal device may report no Apple GPU family from apple5 on, which
-`ref_metal` requires; the run then stops at renderer initialisation with
-the line that says so.
+Metal device reports no Apple GPU family; in the simulator only,
+`ref_metal` does not check its apple5 floor and logs a line that says
+so, while a device build still refuses a GPU below it.
+`scripts/ios-sim.sh selftest` checks the smoke's own rules (bounded
+`simctl` calls, the device lists) against a fake `xcrun`.
 
 `tests/check-ios.sh`, part of the gate, compiles the objects for the
 simulator and checks their platform, exports and AppKit references;
