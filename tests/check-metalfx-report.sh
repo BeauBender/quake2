@@ -263,7 +263,7 @@ assertions() {
     out=$(python3 -I "$HELP" "$d" record-env "$w/rs" /opt/other/quake2 2>&1)
     want_has record-bin "PINS_BIN /opt/other/quake2" "$out"
     want_has record-scratch "scratch ['mfxr-world-t.cfg'] left []" "$out"
-    mkdir -p "$w/cs"; out=$(python3 -I "$HELP" "$d" clear-scratch "$w/cs" 2>&1); want_has clear-scratch "left keep.cfg" "$out"
+    mkdir -p "$w/cs"; out=$(python3 -I "$HELP" "$d" clear-scratch "$w/cs" 2>&1); [ "$out" = "left keep.cfg" ] || ko clear-scratch "$out"
 
     fi
 
@@ -409,7 +409,7 @@ mutant base64-scanned ext-b64 py 'doc = re.sub(r'"'"'(src="data:image/png;base64
 mutant scenario-gated-by-any-cvar plan-present py 'if c not in cvars and c.startswith(GATING_PREFIXES))' 'if c not in cvars)'
 mutant second-host-hidden host-both py 'cells, _ = host_cell(h, sc, oid)' 'cells, _ = host_cell(hosts[0], sc, oid)'
 mutant range-collapsed host-range py 't = ("%.*f" % (nd, lo)) if lo == hi else' 't = ("%.*f" % (nd, lo)) if True else'
-mutant other-host-images host-images py 'png = os.path.join(rdir, "crops", "%s__%s.png" % (sc, oid))' 'png = os.path.join(others[-1] if others else rdir, "crops", "%s__%s.png" % (sc, oid))'
+mutant other-host-images host-images py 'png = read_crop(rdir, sc, oid)' 'png = read_crop(others[-1] if others else rdir, sc, oid)'
 mutant external-allowed ext-refuse py 'raise Refuse("the report would refer outside itself: %r" % ext[:3])' 'pass'
 mutant external-emitted ext-none py 'raise Refuse("the report would refer outside itself: %r" % ext[:3])' 'pass' 'p.append("</main></body></html>\n")' 'p.append("<link rel=stylesheet href=x.css></main></body></html>\n")'
 mutant report-in-tree report-path py 'outp = check_out_path(os.path.abspath(out_html), file=True)' 'outp = os.path.abspath(out_html)'
