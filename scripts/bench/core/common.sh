@@ -192,25 +192,34 @@ bench_nap() {
 BENCH_BOUNDED_PID=
 
 # bench_bounded <seconds> <command...>: runs the command, standard input
-# from /dev/null, and stops it with TERM when it outlives <seconds>.
-# Returns its status, or 124 when it was stopped. For adapters.
+# from /dev/null, and stops it with TERM once it has run more than
+# <seconds> (whole seconds by the clock, so between <seconds> and one more).
+# Returns its status, or 124 when it was stopped. For adapters. The poll
+# backs off from 0.02 s to 1 s, so a short command costs little.
 bench_bounded() {
 	_bb_s=$1
 	shift
 	bench_is_uint "$_bb_s" || bench_die 2 "a wall time is whole seconds"
+	_bb_end=$(($(date +%s) + _bb_s))
 	"$@" < /dev/null &
 	BENCH_BOUNDED_PID=$!
-	_bb_n=0
+	_bb_nap=0.02
 	while bench_pid_running "$BENCH_BOUNDED_PID"; do
-		if [ "$_bb_n" -ge $((_bb_s * 5)) ]; then
+		if [ "$(date +%s)" -gt "$_bb_end" ]; then
 			kill -TERM "$BENCH_BOUNDED_PID" 2> /dev/null || true
 			wait "$BENCH_BOUNDED_PID" 2> /dev/null || true
 			BENCH_BOUNDED_PID=
 			bench_note "stopped a command that outlived its wall time of $_bb_s s"
 			return 124
 		fi
-		bench_nap 0.2
-		_bb_n=$((_bb_n + 1))
+		bench_nap "$_bb_nap"
+		case $_bb_nap in
+		0.02) _bb_nap=0.05 ;;
+		0.05) _bb_nap=0.1 ;;
+		0.1) _bb_nap=0.2 ;;
+		0.2) _bb_nap=0.5 ;;
+		*) _bb_nap=1 ;;
+		esac
 	done
 	_bb_st=0
 	wait "$BENCH_BOUNDED_PID" || _bb_st=$?

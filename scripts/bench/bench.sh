@@ -153,15 +153,19 @@ cmd_baseline_put() {
 		shift
 	fi
 	[ "$#" -eq 2 ] || usage
-	setup "$1" "$2"
-	if [ "$(bench_store_count "$DIR")" -gt 0 ] && [ -z "$_bp_replace" ]; then
-		bench_note "a baseline exists for the case $BENCH_CASE_NAME at $BENCH_INPUTS ($(bench_store_count "$DIR") runs); check it with drift, or replace it with baseline put --replace"
-		exit 1
-	fi
+	# The case and the commit are checked before the wait for the lock; the
+	# rest, the existing baseline included, under it.
+	bench_case_load "$1"
+	bench_commit "$2"
 	if [ -n "$_bp_replace" ]; then
 		need_lock "bench.$BENCH_CASE_NAME" baseline put --replace "$1" "$BENCH_COMMIT"
 	else
 		need_lock "bench.$BENCH_CASE_NAME" baseline put "$1" "$BENCH_COMMIT"
+	fi
+	setup "$1" "$2"
+	if [ "$(bench_store_count "$DIR")" -gt 0 ] && [ -z "$_bp_replace" ]; then
+		bench_note "a baseline exists for the case $BENCH_CASE_NAME at $BENCH_INPUTS ($(bench_store_count "$DIR") runs); check it with drift, or replace it with baseline put --replace"
+		exit 1
 	fi
 	bench_adapter_load
 	bench_prepare
@@ -173,12 +177,14 @@ cmd_baseline_put() {
 
 cmd_drift() {
 	[ "$#" -eq 2 ] || usage
+	bench_case_load "$1"
+	bench_commit "$2"
+	need_lock "bench.$BENCH_CASE_NAME" drift "$1" "$BENCH_COMMIT"
 	setup "$1" "$2"
 	if [ "$(bench_store_count "$DIR")" -eq 0 ]; then
 		bench_note "no baseline for the case $BENCH_CASE_NAME at $BENCH_INPUTS; measure one with baseline put"
 		exit 1
 	fi
-	need_lock "bench.$BENCH_CASE_NAME" drift "$1" "$BENCH_COMMIT"
 	bench_adapter_load
 	bench_prepare
 	_dr_w=$(bench_case_get warmup)
