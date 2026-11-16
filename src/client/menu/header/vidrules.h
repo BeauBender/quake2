@@ -48,6 +48,7 @@ typedef enum
 	VIDITEM_MFX_SCALE,
 	VIDITEM_MFX_INTERP,
 	VIDITEM_DENOISER,
+	VIDITEM_RTW_HITS,   /* TASK158: the water reflections' hit shading, r_rt_water_hits */
 	VIDITEM_COUNT
 } viditem_t;
 
@@ -95,7 +96,9 @@ vidrule_t VidRules_Screen(vidplat_t plat, vidscr_t item);
 
 vidref_t VidRules_Renderer(const char *name);
 
-/* enabled and the reason or note of an item; an unknown item is greyed */
+/* enabled and the reason or note of an item; an unknown item is greyed.
+   scaler is the MetalFX scaler's index for the MetalFX items, and for
+   VIDITEM_RTW_HITS whether r_rt_water is on (VidRules_WaterOn). */
 vidrule_t VidRules_Item(viditem_t item, const char *renderer, int modemask, int scaler);
 
 /* the cvar an item sets under this renderer, NULL when it sets none */
@@ -122,5 +125,11 @@ int VidRules_ScaleIndex(float value);
 int VidRules_ModeMask(float value);
 int VidRules_ScalerIndex(float value);
 int VidRules_DenoiserIndex(float value);
+
+/* TASK158: r_rt_water as the renderer reads it, 1 when finite and not 0;
+   r_rt_water_hits as its index, 1 (world space) from 1 up, 0 (screen space)
+   below 1 or not finite. */
+int VidRules_WaterOn(float value);
+int VidRules_WaterHitsIndex(float value);
 
 #endif

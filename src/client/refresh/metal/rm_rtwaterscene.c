@@ -19,7 +19,8 @@
  *
  * The engine side of ref_metal's ray-traced water reflections (RT6,
  * TASK58; header/rm_rtwater.h, header/rm_rtwaterscene.h): the r_rt_water
- * cvars (r_rt_water, r_rt_water_normal, r_rt_water_reflect) and the
+ * cvars (r_rt_water, r_rt_water_normal, r_rt_water_reflect, TASK158's
+ * r_rt_water_hits) and the
  * development view r_rt_water_show, the frame's decision (rm_rtw_on: with
  * it the view takes the G-buffer path), the view handed to the back end
  * before the raster, and the pass's r_rt_stats 2 line. With r_rt_water 0
@@ -40,6 +41,7 @@ static cvar_t *r_rt_water;
 static cvar_t *r_rt_water_normal;
 static cvar_t *r_rt_water_reflect;
 static cvar_t *r_rt_water_show;
+static cvar_t *r_rt_water_hits;   /* TASK158: 0 TASK58's screen-space hits, 1 world space (rm_rtw_hits) */
 static cvar_t *r_rt_stats_ref;
 
 static int rtw_device;      /* rmb_caps_t.raytracing */
@@ -193,6 +195,7 @@ RM_RTW_Init(const rmb_caps_t *caps)
 	r_rt_water_normal = ri.Cvar_Get("r_rt_water_normal", "0.08", CVAR_ARCHIVE);
 	r_rt_water_reflect = ri.Cvar_Get("r_rt_water_reflect", "0.5", CVAR_ARCHIVE);
 	r_rt_water_show = ri.Cvar_Get("r_rt_water_show", "0", 0);
+	r_rt_water_hits = ri.Cvar_Get("r_rt_water_hits", "0", CVAR_ARCHIVE);   /* TASK158 */
 	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
 	rtw_device = caps->raytracing != 0;
 	rtw_opened = rtw_refused = rtw_active = rtw_viewed = 0;
@@ -298,7 +301,7 @@ void
 RM_RTW_View(const rm_view_t *view)
 {
 	rm_rtw_view_t v;
-	int w, h;
+	int w, h, ws;
 
 	rtw_viewed = 0;
 
@@ -316,16 +319,23 @@ RM_RTW_View(const rm_view_t *view)
 	/* everything the trace needs that can fail, before the raster: the view's inverse and the outputs */
 	RM_GB_TargetSize(&w, &h);
 
+	ws = r_rt_water_hits && rm_rtw_hits(r_rt_water_hits->value);
+
 	if (!rm_rtw_view(view->proj, view->world, &view->vp, r_newrefdef.vieworg, gl_znear->value, r_newrefdef.time,
 			rm_rtw_amp(r_rt_water_normal->value), rm_rtw_reflect(r_rt_water_reflect->value),
 			(unsigned)rm_rtw_show(r_rt_water_show->value), &v) ||
-		!rmb_rtw_prepare((unsigned long)w, (unsigned long)h))
+		!rmb_rtw_prepare((unsigned long)w, (unsigned long)h, ws))
 	{
 		rmb_rtw_set_view(NULL);
 		return;
 	}
 
-	RM_RTW_Shading(view, &v);
+	/* TASK158: the world-space shading's per-frame work only on its path; TASK58's has none */
+	if (ws)
+	{
+		RM_RTW_Shading(view, &v);
+	}
+
 	rmb_rtw_set_view(&v);
 	rtw_viewed = 1;
 }

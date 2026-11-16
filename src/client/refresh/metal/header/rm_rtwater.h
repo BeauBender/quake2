@@ -86,6 +86,16 @@ float rm_rtw_reflect(float v);
 int rm_rtw_show(float v);
 
 /*
+ * TASK158: r_rt_water_hits, how a reflection's hit is shaded: 0 (the
+ * default) TASK58's screen-space path, the kernel over every pixel and a
+ * hit's colour the picture's or none; 1 this card's world-space path, the
+ * candidates' raster, the compaction and the trace over its list, a hit
+ * the picture does not show shaded in world space. 1 from 1 up; 0 below
+ * 1 and for a value that is not finite.
+ */
+int rm_rtw_hits(float v);
+
+/*
  * The stock turbulence table as the kernel takes it (MTL_RTW_TURB_SIZE
  * floats): gl1's r_turbsin as its RI_Init halves it (rm_turb_sin), over
  * its largest magnitude, so -1 to 1. 1 with out filled; 0 when the table
@@ -198,6 +208,18 @@ typedef struct
 	unsigned long skybox;   /* TASK158: the sky box's texel, in world space */
 	unsigned long miss;     /* with none */
 	double ms;              /* the pass's GPU time; below 0 when not measured */
+
+	/*
+	 * TASK158: 1 when the frame took the world-space path (r_rt_water_hits
+	 * 1): then ms is the sum of its three passes' spans, each below 0 when
+	 * not measured: the candidates' raster (the start of its vertex stage
+	 * to the end of its fragment stage), the compaction (its encoder, with
+	 * the arguments) and the trace (its encoder); span_ms is the whole,
+	 * the raster's start to the trace's end, which is below the sum where
+	 * the spans overlap.
+	 */
+	int ws;
+	double raster_ms, compact_ms, trace_ms, span_ms;
 } rm_rtw_stats_t;
 
 /* the r_rt_stats 2 line of a frame's pass, without a newline: 1 when it fits in len; 0 with buf empty otherwise */
@@ -215,9 +237,12 @@ void rmb_rtw_close(void);
  * Before the G-buffer raster: the kernel's outputs at the render size w x
  * h (the reflection and class, RGBA8Unorm; the translucent water's
  * distance, R32Float). 1 when the view can trace; 0 when the pass is not
- * open or they cannot be made.
+ * open or they cannot be made. ws (TASK158, rm_rtw_hits): 1 the
+ * world-space path, which also makes the compaction's list and the
+ * reflection target a render target of the candidates' raster; 0
+ * TASK58's path, whose outputs are TASK58's and which has no list.
  */
-int rmb_rtw_prepare(unsigned long w, unsigned long h);
+int rmb_rtw_prepare(unsigned long w, unsigned long h, int ws);
 
 /* the view the next G-buffer view traces with (copied); NULL turns the pass off for that view */
 void rmb_rtw_set_view(const rm_rtw_view_t *v);

@@ -79,6 +79,12 @@ rm_rtw_show(float v)
 }
 
 int
+rm_rtw_hits(float v)
+{
+	return isfinite(v) && (v >= 1);
+}
+
+int
 rm_rtw_turb_table(float *out)
 {
 	float m = 0;
@@ -302,10 +308,24 @@ rm_rtw_shade_build(const rm_surfrec_t *recs, long nrecs, unsigned long nindices,
 	return (at == nindices) ? (long)tri : -1;
 }
 
+/* a time of the stats line: three decimals, "-" when not measured (below 0 or not finite) */
+static void
+rm_rtw_ms(double v, char *out, size_t len)
+{
+	if (isfinite(v) && (v >= 0))
+	{
+		snprintf(out, len, "%.3f", v);
+	}
+	else
+	{
+		snprintf(out, len, "-");
+	}
+}
+
 int
 rm_rtw_stats_format(const rm_rtw_stats_t *s, char *buf, size_t len)
 {
-	char ms[32];
+	char ms[32], split[160], t[4][32];
 	int n;
 
 	if (!len)
@@ -313,18 +333,24 @@ rm_rtw_stats_format(const rm_rtw_stats_t *s, char *buf, size_t len)
 		return 0;
 	}
 
-	if (s->ms >= 0)
+	rm_rtw_ms(s->ms, ms, sizeof(ms));
+	split[0] = 0;
+
+	/* TASK158: the world-space path's three passes and their whole span */
+	if (s->ws)
 	{
-		snprintf(ms, sizeof(ms), "%.3f", s->ms);
-	}
-	else
-	{
-		snprintf(ms, sizeof(ms), "-");
+		rm_rtw_ms(s->raster_ms, t[0], sizeof(t[0]));
+		rm_rtw_ms(s->compact_ms, t[1], sizeof(t[1]));
+		rm_rtw_ms(s->trace_ms, t[2], sizeof(t[2]));
+		rm_rtw_ms(s->span_ms, t[3], sizeof(t[3]));
+		snprintf(split, sizeof(split), ", world space: raster %s, compaction %s, trace %s, span %s ms", t[0], t[1],
+				t[2], t[3]);
 	}
 
 	n = snprintf(buf, len, "ref_metal: rt water: frame %lu: %lu pixels, %lu listed, %lu opaque water, "
-			"%lu translucent water, %lu eye rays, %lu lit, %lu world, %lu sky, %lu sky box, %lu none, %s ms", s->frame,
-			s->pixels, s->listed, s->opaque, s->trans, s->eye, s->lit, s->world, s->sky, s->skybox, s->miss, ms);
+			"%lu translucent water, %lu eye rays, %lu lit, %lu world, %lu sky, %lu sky box, %lu none, %s ms%s",
+			s->frame, s->pixels, s->listed, s->opaque, s->trans, s->eye, s->lit, s->world, s->sky, s->skybox, s->miss,
+			ms, split);
 
 	if ((n < 0) || ((size_t)n >= len))
 	{

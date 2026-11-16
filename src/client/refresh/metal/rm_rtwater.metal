@@ -476,8 +476,236 @@ rm_rtw_shade_sky(constant rm_rtw_view &v, constant rm_rtw_texs &texs, float3 d)
 	return texs.t[MTL_RTW_TEX_SKY + uint(k.face)].sample(rm_rtw_csmp, float2(k.s, k.t), level(0.0f)).rgb;
 }
 
+/*
+ * r_rt_water_hits 0: TASK58's kernel, exactly as TASK58 built it (its
+ * frames and its cost are TASK58's): every pixel of the target, a hit's
+ * colour the picture's where the screen shows it, else none
+ * (mtl_rtw_choose). r_rt_water_hits 1 is rm_rtw_trace_ws below.
+ */
 kernel void
 rm_rtw_trace(depth2d<float, access::read> depth [[texture(0)]],
+		texture2d<float, access::read> normal [[texture(1)]],
+		texture2d<uint, access::read> mat [[texture(2)]],
+		texture2d<float, access::read> lit [[texture(3)]],
+		texture2d<float, access::write> refl [[texture(4)]],
+		texture2d<float, access::write> wdist [[texture(5)]],
+		constant rm_rtw_view &v [[buffer(0)]],
+		constant float *turb [[buffer(1)]],
+		instance_acceleration_structure ias [[buffer(2)]],
+		device const uint *inst [[buffer(3)]],
+		device const uchar *tmat [[buffer(4)]],
+		constant uint &ntris [[buffer(5)]],
+		device atomic_uint *counts [[buffer(6)]],
+		device const float4 *verts [[buffer(7)]],
+		device const uint *idx [[buffer(8)]],
+		constant rm_rtw_geom &g [[buffer(9)]],
+		uint2 px [[thread_position_in_grid]])
+{
+	const uint w = refl.get_width(), h = refl.get_height();
+	const bool inside = (px.x < w) && (px.y < h);
+	const float2 pc = float2(px) + 0.5f;
+	const bool in_view = inside && (pc.x >= v.vp.x) && (pc.x < v.vp.x + v.vp.z) && (pc.y >= v.vp.y) &&
+		(pc.y < v.vp.y + v.vp.w);
+	uint m = MTL_GB_MAT_NONE, water = 0, trans = 0, eyes = 0, from = MTL_RTW_MISS;
+	float3 p = float3(0.0f), n = float3(0.0f), rc = float3(0.0f);
+	float wd = 0.0f;
+
+	if (in_view)
+	{
+		const float d = depth.read(px);
+
+		m = mat.read(px).r;
+
+		if (mtl_rtw_is_water(m))
+		{
+			const float4 nn = normal.read(px);
+
+			if ((d < 1.0f) && (nn.a > 0.5f))
+			{
+				n = normalize(nn.xyz * 2.0f - 1.0f);
+				p = rm_rtw_unproject(v, pc, d);
+				water = 1;
+			}
+		}
+		else
+		{
+			/* translucent water in front of the raster's surface: a ray from the eye through the pixel */
+			const bool surf = (d < 1.0f) && (m != MTL_GB_MAT_NONE) && (m != MTL_GB_MAT_SKY);
+			const float3 dv = rm_rtw_unproject(v, pc, surf ? d : 0.5f) - v.eye.xyz;
+			const float dl = length(dv);
+			const float lim = mtl_rtw_eye_max(surf ? dl : 0.0f);
+
+			if ((dl > 0.0f) && (lim > 0.0f))
+			{
+				const float3 dir = dv / dl;
+				intersector<triangle_data, instancing, world_space_data> isect;
+				ray r(v.eye.xyz, dir, 0.0f, lim);
+
+				isect.assume_geometry_type(geometry_type::triangle);
+				eyes = 1;
+
+				for (int layer = 0; layer < MTL_RTW_LAYERS; layer++)
+				{
+					intersection_result<triangle_data, instancing, world_space_data> hit = isect.intersect(r, ias, MTL_RTW_MASK);
+					uint b;
+					int step;
+
+					if (hit.type == intersection_type::none)
+					{
+						break;
+					}
+
+					b = inst[2 * hit.instance_id];
+					step = mtl_rtw_eye_step(rm_rtw_mat(b, hit.primitive_id, tmat, ntris));
+
+					if (step == MTL_RTW_EYE_STOP)
+					{
+						break;
+					}
+
+					if (step == MTL_RTW_EYE_WATER)
+					{
+						float3 tn;
+
+						if (rm_rtw_tri_normal(verts, idx, g, b + hit.primitive_id, hit.object_to_world_transform, tn))
+						{
+							n = tn;
+							p = v.eye.xyz + dir * hit.distance;
+							wd = hit.distance;
+							water = 1;
+							trans = 1;
+						}
+
+						break;
+					}
+
+					r.min_distance = hit.distance + 0.01f;
+
+					if (!(r.min_distance < r.max_distance))
+					{
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	if (water)
+	{
+		const float3 dv = p - v.eye.xyz;
+		const float dist = length(dv);
+
+		if (dist > 0.0f)
+		{
+			const float3 dir = dv / dist;
+			intersector<triangle_data, instancing> isect;
+			intersection_result<triangle_data, instancing> hit;
+			mtl_rtw_v3_t nf, rd;
+			mtl_rtw_axes_t ax;
+			float3 o, r3;
+			float4 c;
+			uint qm = MTL_GB_MAT_NONE;
+			int kind = 0, on = 0;
+			float off = -1.0f, hd = 0.0f;
+			uint2 q = uint2(0);
+
+			/* the flat normal facing the eye, tilted by the stock warp's phase at the point (s and t swapped, as gl1's) */
+			if (dot(n, dir) > 0.0f)
+			{
+				n = -n;
+			}
+
+			nf = rm_rtw_v(n);
+			ax = mtl_rtw_axes(nf);
+			rd = mtl_rtw_reflect(rm_rtw_v(dir), mtl_rtw_normal(nf, ax,
+					turb[mtl_rtw_warp_index(dot(p, rm_rtw_f3(ax.t)), v.time)],
+					turb[mtl_rtw_warp_index(dot(p, rm_rtw_f3(ax.s)), v.time)], v.amp), nf);
+			r3 = rm_rtw_f3(rd);
+			o = p + n * mtl_rtao_bias(dist, v.bias_k);
+
+			/* one bounce: every face stops the ray, the water and translucent faces too (design section 1) */
+			isect.assume_geometry_type(geometry_type::triangle);
+			hit = isect.intersect(ray(o, r3, 0.0f, MTL_RTW_FAR), ias, MTL_RTW_MASK);
+
+			if (hit.type != intersection_type::none)
+			{
+				kind = (rm_rtw_mat(inst[2 * hit.instance_id], hit.primitive_id, tmat, ntris) == MTL_GB_MAT_SKY) ? 1 : 2;
+			}
+
+			/* where the screen shows it: the hit, or for the sky the direction from the eye (the box is around it) */
+			c = (kind == 2) ? (v.mvp * float4(o + r3 * hit.distance, 1.0f)) : (v.mvp * float4(r3, 0.0f));
+
+			if (c.w > 0.0f)
+			{
+				const float2 nd = c.xy / c.w;
+				const float2 qp = float2(v.vp.x + (nd.x * 0.5f + 0.5f) * v.vp.z, v.vp.y + (0.5f - nd.y * 0.5f) * v.vp.w);
+
+				if ((qp.x >= v.vp.x) && (qp.x < v.vp.x + v.vp.z) && (qp.y >= v.vp.y) && (qp.y < v.vp.y + v.vp.w) &&
+					(qp.x >= 0.0f) && (qp.y >= 0.0f) && (qp.x < float(w)) && (qp.y < float(h)))
+				{
+					q = uint2(qp);
+					on = 1;
+				}
+			}
+
+			if (on)
+			{
+				qm = mat.read(q).r;
+
+				if (kind == 2)
+				{
+					const float qd = depth.read(q);
+
+					hd = distance(o + r3 * hit.distance, v.eye.xyz);
+
+					if (qd < 1.0f)
+					{
+						off = fabs(distance(rm_rtw_unproject(v, float2(q) + 0.5f, qd), v.eye.xyz) - hd);
+					}
+				}
+			}
+
+			from = mtl_rtw_choose(kind, on, qm, off, hd);
+
+			if (from != MTL_RTW_MISS)
+			{
+				rc = lit.read(q).rgb;
+			}
+		}
+	}
+
+	if (inside)
+	{
+		refl.write(float4(rc, float(mtl_rtw_class(water != 0, trans != 0, from)) / 255.0f), px);
+		wdist.write(float4(trans ? wd : 0.0f, 0.0f, 0.0f, 0.0f), px);
+	}
+
+	/* the frame's counts, one atomic per SIMD group and count */
+	{
+		const uint c_op = simd_sum((water && !trans) ? 1u : 0u), c_tr = simd_sum(trans);
+		const uint c_ey = simd_sum(eyes), c_li = simd_sum((water && (from == MTL_RTW_LIT)) ? 1u : 0u);
+		const uint c_sk = simd_sum((water && (from == MTL_RTW_SKY)) ? 1u : 0u);
+		const uint c_mi = simd_sum((water && (from == MTL_RTW_MISS)) ? 1u : 0u);
+
+		if (simd_is_first())
+		{
+			atomic_fetch_add_explicit(&counts[RM_RTW_C_OPAQUE], c_op, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTW_C_TRANS], c_tr, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTW_C_EYE], c_ey, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTW_C_LIT], c_li, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTW_C_SKY], c_sk, memory_order_relaxed);
+			atomic_fetch_add_explicit(&counts[RM_RTW_C_MISS], c_mi, memory_order_relaxed);
+		}
+	}
+}
+
+/*
+ * r_rt_water_hits 1 (TASK158): TASK58's kernel on the compaction's list,
+ * one pixel a thread, with world-space shading of a hit the picture does
+ * not show (mtl_rtw_choose_ws) and a hidden model passed.
+ */
+kernel void
+rm_rtw_trace_ws(depth2d<float, access::read> depth [[texture(0)]],
 		texture2d<float, access::read> normal [[texture(1)]],
 		texture2d<uint, access::read> mat [[texture(2)]],
 		texture2d<float, access::read> lit [[texture(3)]],

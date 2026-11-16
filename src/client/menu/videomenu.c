@@ -74,6 +74,7 @@ static menulist_s s_mfx_scaler_list;
 static menulist_s s_mfx_scale_list;
 static menulist_s s_mfx_interp_list;
 static menulist_s s_denoiser_list;
+static menulist_s s_rtw_hits_list;   /* TASK158: r_rt_water_hits */
 static menulist_s s_fs_box;
 static menulist_s s_vsync_list;
 static menulist_s s_af_list;
@@ -561,6 +562,13 @@ ApplyChanges(void *unused)
 		{
 			Cvar_SetValue("r_metalfx", s_mfx_scaler_list.curvalue);
 		}
+	}
+
+	/* the water reflections' hit shading (TASK158): its index, written when it changed */
+	if (!(s_rtw_hits_list.generic.flags & QMF_GRAYED) &&
+		(VidRules_WaterHitsIndex(Cvar_VariableValue("r_rt_water_hits")) != s_rtw_hits_list.curvalue))
+	{
+		Cvar_SetValue("r_rt_water_hits", s_rtw_hits_list.curvalue);
 	}
 
 	if (!(s_mfx_scale_list.generic.flags & QMF_GRAYED) &&
@@ -1128,9 +1136,12 @@ VID_MenuInit(void)
 		static char scaler_text[4][40];
 		static const char *scaler_names[5];
 		static const char *denoiser_names[] = { "off", "bilateral", "MetalFX", NULL };
+		static const char *hits_names[] = { "screen space", "world space", NULL };
 		static const char *na_names[] = { "n/a", NULL };
 		/* read without creating it: the ray-tracing code owns it */
 		const float dn = Cvar_VariableValue("r_rt_denoiser");
+		const float hits = Cvar_VariableValue("r_rt_water_hits");
+		const int water = VidRules_WaterOn(Cvar_VariableValue("r_rt_water"));
 
 		for (int i = 0; i < 4; i++)
 		{
@@ -1177,10 +1188,18 @@ VID_MenuInit(void)
 		s_denoiser_list.itemnames = denoiser_names;
 		s_denoiser_list.curvalue = VidRules_DenoiserIndex(dn);
 
+		s_rtw_hits_list.generic.type = MTYPE_SPINCONTROL;
+		s_rtw_hits_list.generic.name = "water reflections";
+		s_rtw_hits_list.generic.x = 0;
+		s_rtw_hits_list.generic.y = (sy += 10);
+		s_rtw_hits_list.itemnames = hits_names;
+		s_rtw_hits_list.curvalue = VidRules_WaterHitsIndex(hits);
+
 		SetRule(&s_mfx_scaler_list.generic, VIDITEM_MFX_SCALER, s_mfx_scaler_list.curvalue);
 		ScaleItemUpdate(s_mfx_scaler_list.curvalue);
 		SetRule(&s_mfx_interp_list.generic, VIDITEM_MFX_INTERP, s_mfx_scaler_list.curvalue);
 		SetRule(&s_denoiser_list.generic, VIDITEM_DENOISER, s_mfx_scaler_list.curvalue);
+		SetRule(&s_rtw_hits_list.generic, VIDITEM_RTW_HITS, water);
 
 		/* A greyed list shows that it has no value here. */
 		if (s_mfx_scaler_list.generic.flags & QMF_GRAYED)
@@ -1198,6 +1217,11 @@ VID_MenuInit(void)
 		{
 			s_denoiser_list.itemnames = na_names;
 			s_denoiser_list.curvalue = 0;
+		}
+		if (s_rtw_hits_list.generic.flags & QMF_GRAYED)
+		{
+			s_rtw_hits_list.itemnames = na_names;
+			s_rtw_hits_list.curvalue = 0;
 		}
 	}
 
@@ -1267,6 +1291,7 @@ VID_MenuInit(void)
 	Menu_AddItem(&s_ropts_menu, (void *)&s_mfx_scale_list);
 	Menu_AddItem(&s_ropts_menu, (void *)&s_mfx_interp_list);
 	Menu_AddItem(&s_ropts_menu, (void *)&s_denoiser_list);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_rtw_hits_list);
 	Menu_AddItem(&s_ropts_menu, (void *)&s_ropts_apply_action);
 
 	Menu_SetStatusBar(&s_ropts_menu, "Esc: back to the video menu");
