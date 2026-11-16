@@ -202,6 +202,10 @@ gate_cleanup() {
 gate_run_checks() {
 	_gserial=$1 _gfirst=$2
 	shift 2
+	# scripts/test.sh starts this in a process group of its own, which is
+	# not the terminal's foreground group: with `stty tostop` a write to the
+	# terminal would stop it (SIGTTOU) and hang the gate
+	trap '' TTOU
 	_gparent=${GATE_PARENT:-}
 	unset GATE_PARENT
 	_gj=$(gate_jobs)

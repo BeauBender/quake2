@@ -53,8 +53,9 @@ gate_serial=""
 # that a long one does not start late and set the gate's wall time
 # (GATE_JOBS=1 ignores it). Wall times one at a time on the 6-core build VM
 # (2026-11-15, load 3 to 5): metalfx-report 269 s, pins 148 s, bench 107 s,
-# identity-env 46 s, ref-metal 35 s; every other check 23 s or less.
-gate_first="check-metalfx-report.sh check-pins.sh check-bench.sh check-identity-env.sh check-ref-metal.sh"
+# gate-parallel about 180 s (its own self-test, 2026-11-16), identity-env
+# 46 s, ref-metal 35 s; every other check 23 s or less.
+gate_first="check-metalfx-report.sh check-gate-parallel.sh check-pins.sh check-bench.sh check-identity-env.sh check-ref-metal.sh"
 # The scheduler runs in the background so that a SIGHUP, SIGINT or SIGTERM
 # to this script is acted on at once (a trap waits for a command in the
 # foreground to end): gate_stop passes it on as SIGTERM, which ends the
