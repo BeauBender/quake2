@@ -246,6 +246,7 @@ q2_caps() {
 # each, and says each one the host lacks, with what it has.
 q2_check_requires() {
 	_qq_bad=0
+	_qq_caps=$1
 	set -f
 	# shellcheck disable=SC2046 # the requirements are words; globbing is off
 	set -- $(bench_case_get requires)
@@ -358,10 +359,10 @@ adapter_inputs_paths() {
 adapter_preflight() {
 	_qp_bad=0
 	q2_check_settings || _qp_bad=1
-	_qq_caps=${BENCH_TMP:?}/quake2-caps.lines
-	q2_caps > "$_qq_caps" || return 1
-	printf 'pre.caps=%s\n' "$(bench_file_kv "$_qq_caps" caps)"
-	q2_check_requires || _qp_bad=1
+	_qp_caps=${BENCH_TMP:?}/quake2-caps.lines
+	q2_caps > "$_qp_caps" || return 1
+	printf 'pre.caps=%s\n' "$(bench_file_kv "$_qp_caps" caps)"
+	q2_check_requires "$_qp_caps" || _qp_bad=1
 	if [ -n "${MTL_DEBUG_LAYER:-}" ] && [ "$MTL_DEBUG_LAYER" != 0 ]; then
 		q2_say "MTL_DEBUG_LAYER is set: a timing is made without the Metal validation layer"
 		_qp_bad=1
@@ -374,15 +375,23 @@ adapter_preflight() {
 }
 
 # q2_builds: the build cache directory, made, and outside any repository.
+# Run it in $(...): the outside-repository guard exits on a refusal, and
+# the caller returns on any failure.
 q2_builds() {
 	if [ -n "${BENCH_Q2_BUILDS:-}" ]; then
 		_qu=$BENCH_Q2_BUILDS
 	else
-		_qu=$(bench_cache_home) || bench_die 2 "no cache home for the build cache (set BENCH_Q2_BUILDS)"
+		_qu=$(bench_cache_home) || {
+			q2_say "no cache home for the build cache (set BENCH_Q2_BUILDS)"
+			return 1
+		}
 		_qu=$_qu/$(bench_repo_name)-bench-builds
 	fi
 	bench_outside_repo "$_qu" "the build cache (BENCH_Q2_BUILDS)"
-	mkdir -p "$_qu" || bench_die 2 "cannot make the build cache"
+	mkdir -p "$_qu" || {
+		q2_say "cannot make the build cache"
+		return 1
+	}
 	printf '%s\n' "$_qu"
 }
 
@@ -403,24 +412,25 @@ adapter_build() {
 		esac
 	done
 	_qb_f=$(bench_case_get build_flags)
+	set -f
 	for _qb_w in $_qb_f; do
 		printf '%s\n' "$_qb_w" | grep -E -q '^[A-Z][A-Z0-9_]*=[A-Za-z0-9_.-]*$' || {
+			set +f
 			q2_say "a build flag is NAME=value: $_qb_w"
 			return 1
 		}
 	done
-	case $BENCH_INPUTS in
-	i-[0-9a-f]*) ;;
-	*)
+	set +f
+	printf '%s\n' "$BENCH_INPUTS" | grep -E -q '^i-[0-9a-f]{12}$' || {
 		q2_say "no inputs id for the build"
 		return 1
-		;;
-	esac
-	_qb_cache=$(q2_builds)
+	}
+	_qb_cache=$(q2_builds) || return 1
+	[ -n "$_qb_cache" ] || return 1
 	_qb_e=$_qb_cache/$BENCH_INPUTS
 	if [ ! -f "$_qb_e/exported" ]; then
 		rm -rf "${_qb_e:?}"
-		mkdir -p "$_qb_e/tree"
+		mkdir -p "$_qb_e/tree" || return 1
 		git archive --format=tar "$_qb_c" > "$_qb_e/tree.tar" || {
 			q2_say "git archive failed"
 			return 1
