@@ -252,6 +252,12 @@ is before composition), so the card measures a synthetic test card on a P3
 display. One card, about 150 lines plus the measurement. After N10.
 Priority 7: very cheap; the measurement decides the default.
 
+Built by TASK121 ([its runbook](../runbook/TASK121.md)): `metal_colorspace`
+0 (untagged, the default) or 1 (sRGB). Measured on the bare-metal host's
+display, a Studio Display, the screen values at 0 and 1 are identical in
+every run: the system already reads the untagged layer as sRGB. The
+default stays 0.
+
 ### P8. MSAA in `ref_metal` (parked)
 
 Parked by the owner. Until then the video menu's "multisampling" item
