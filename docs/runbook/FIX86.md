@@ -103,5 +103,9 @@ failing there:
 
 ## The host run
 
-Not run in this lane: the screen stayed locked for the whole wait. The
-four scenarios are left to be run with the command above.
+Not run: the screen was locked from the start of round 1 and for the 20
+minutes the rework waited (one check a minute). The four scenarios
+(`rt-ao`, `rt-ao-entities`, `rt-water`, `rt-water-entities`, `--runs 5
+--gpu-runs 3`) are left to be run with the command above, each pair as a
+chunk of its own, with the effect cvars read back and the ray-traced rows
+compared with native.
