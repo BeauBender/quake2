@@ -46,4 +46,7 @@ card, the gate, coverage and pins tests fail, each with "not one call of
 bench.sh".
 
 The whole check, mutants included, ran in 21 s on the bare-metal host;
-`tests/check-bench.sh` in 83 s; `make test` passed (163 tests).
+`tests/check-bench.sh` in 83 s; `make test` passed (163 tests). The full
+gate passed under its own hold (a temporary `BENCH_STATE`, label `gate`
+while it ran; the pin selftest passed straight through), with a load of
+2.3 before and 2.8 after.
