@@ -27,6 +27,14 @@
 #include <assert.h>
 #include <errno.h>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+#include <SDL3/SDL.h>
+#endif
+
 #include "../../client/header/client.h"
 #include "../../client/header/keyboard.h"
 #include "header/refrecord.h"
@@ -986,6 +994,31 @@ VID_CheckChanges(void)
 	}
 }
 
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+/*
+ * Without the game data there is nothing to render: tell the user where
+ * to put it, with an alert, and quit cleanly instead of failing in the
+ * renderer with "Couldn't load pics/colormap.pcx".
+ */
+static void
+VID_CheckGameData(void)
+{
+	char dir[MAX_OSPATH];
+	char text[1024];
+
+	if (FS_LoadFile("pics/colormap.pcx", NULL) >= 0)
+	{
+		return;
+	}
+
+	Com_sprintf(dir, sizeof(dir), "%sbaseq2", Sys_GetHomeDir());
+	Sys_MissingDataMessage(dir, text, sizeof(text));
+	Com_Printf("%s\n", text);
+	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "Quake II", text, NULL);
+	Sys_Quit();
+}
+#endif
+
 /*
  * Initializes the video stuff.
  */
@@ -1005,6 +1038,10 @@ VID_Init(void)
 	Cmd_AddCommand("vid_restart", VID_Restart_f);
 	Cmd_AddCommand("vid_listmodes", VID_ListModes_f);
 	Cmd_AddCommand("r_listmodes", VID_ListModes_f); // more consistent with r_mode
+
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+	VID_CheckGameData();
+#endif
 
 	// Initializes the video backend. This is NOT the renderer
 	// itself, just the client side support stuff!
