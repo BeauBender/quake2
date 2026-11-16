@@ -903,6 +903,88 @@ test_present_region(void)
 }
 
 /*
+ * TASK147: the present into the safe rectangle of an iOS drawable. The
+ * frame is the rectangle's size; its bottom-left corner lands on the
+ * rectangle's own, and the insets are measured from the drawable's edges.
+ */
+static void
+test_present_region_inset(void)
+{
+	rm_present_t p;
+	rm_inset_t phone = { 177, 0, 177, 63 };   /* a landscape iPhone: the corners and the home indicator */
+	rm_inset_t left = { 177, 0, 0, 63 };      /* the sensor housing on one side */
+	rm_inset_t right = { 0, 0, 177, 63 };     /* and on the other */
+	rm_inset_t none = { 0, 0, 0, 0 };
+	rm_inset_t top = { 0, 20, 0, 0 };
+
+	/* 2556 by 1179, the safe rectangle 2202 by 1116 at x 177 and the top row */
+	CHECK(rm_present_region_in(2202, 1116, 2556, 1179, &phone, &p));
+	CHECK(p.w == 2202 && p.h == 1116 && p.dst_x == 177 && p.dst_y == 0 && p.src_y == 0);
+
+	/* the housing on the other side: the mirrored origin, the same size */
+	CHECK(rm_present_region_in(2379, 1116, 2556, 1179, &left, &p));
+	CHECK(p.w == 2379 && p.h == 1116 && p.dst_x == 177 && p.dst_y == 0);
+	CHECK(rm_present_region_in(2379, 1116, 2556, 1179, &right, &p));
+	CHECK(p.w == 2379 && p.h == 1116 && p.dst_x == 0 && p.dst_y == 0);
+
+	/* a top inset moves the frame down */
+	CHECK(rm_present_region_in(640, 480, 640, 500, &top, &p));
+	CHECK(p.w == 640 && p.h == 480 && p.dst_x == 0 && p.dst_y == 20);
+
+	/* a smaller frame sits at the safe rectangle's bottom-left corner */
+	CHECK(rm_present_region_in(800, 600, 2556, 1179, &phone, &p));
+	CHECK(p.w == 800 && p.h == 600 && p.dst_x == 177 && p.dst_y == 516 && p.src_y == 0);
+
+	/* a larger frame gives its bottom-left part, clipped to the rectangle */
+	CHECK(rm_present_region_in(3000, 1300, 2556, 1179, &phone, &p));
+	CHECK(p.w == 2202 && p.h == 1116 && p.dst_x == 177 && p.dst_y == 0 && p.src_y == 184);
+
+	/* an inset that leaves nothing, or is negative, is refused with *out zeroed */
+	{
+		rm_inset_t wide = { 1300, 0, 1256, 0 };   /* 2556: no width left */
+		rm_inset_t tall = { 0, 600, 0, 579 };     /* 1179: no height left */
+		rm_inset_t over = { 3000, 0, 0, 0 };
+		rm_inset_t neg = { -1, 0, 0, 0 };
+		rm_inset_t negb = { 0, 0, 0, -5 };
+
+		memset(&p, 0x55, sizeof(p));
+		CHECK(!rm_present_region_in(2202, 1116, 2556, 1179, &wide, &p) && p.w == 0 && p.h == 0 && p.dst_x == 0);
+		CHECK(!rm_present_region_in(2202, 1116, 2556, 1179, &tall, &p) && p.w == 0 && p.h == 0);
+		CHECK(!rm_present_region_in(2202, 1116, 2556, 1179, &over, &p) && p.w == 0);
+		CHECK(!rm_present_region_in(2202, 1116, 2556, 1179, &neg, &p) && p.w == 0);
+		CHECK(!rm_present_region_in(2202, 1116, 2556, 1179, &negb, &p) && p.w == 0);
+		CHECK(!rm_present_region_in(2202, 1116, 2556, 1179, NULL, &p) && p.w == 0);
+	}
+
+	/* no inset is today's result, case for case */
+	{
+		rm_present_t q;
+		static const int c[][4] = { { 640, 480, 640, 480 }, { 640, 480, 960, 540 }, { 1024, 768, 800, 600 },
+			{ 800, 480, 640, 480 }, { 640, 600, 640, 480 }, { 0, 480, 640, 480 }, { 640, 480, 640, -1 } };
+		int i;
+
+		for (i = 0; i < 7; i++)
+		{
+			int a = rm_present_region(c[i][0], c[i][1], c[i][2], c[i][3], &p);
+			int b = rm_present_region_in(c[i][0], c[i][1], c[i][2], c[i][3], &none, &q);
+
+			CHECK(a == b && p.w == q.w && p.h == q.h && p.src_y == q.src_y && p.dst_y == q.dst_y && p.dst_x == 0 && q.dst_x == 0);
+		}
+	}
+}
+
+/* TASK147: where the layer always presents in step with the display, r_vsync has no effect. */
+static void
+test_display_sync(void)
+{
+	CHECK(rm_display_sync(0, 1) == 1);
+	CHECK(rm_display_sync(0, 0) == 0);
+	CHECK(rm_display_sync(0, 5) == 1);
+	CHECK(rm_display_sync(1, 0) == 1);
+	CHECK(rm_display_sync(1, 1) == 1);
+}
+
+/*
  * With len 0 the formatters write nothing: not the byte of a one byte
  * heap block (which must stay as it was), and, given the middle byte of
  * a three byte block, neither that byte nor the one before it (where a
@@ -8199,6 +8281,8 @@ main(void)
 	test_frame_size();
 	test_frame_remake();
 	test_present_region();
+	test_present_region_inset();
+	test_display_sync();
 	test_upload_bytes();
 	test_raw8();
 	test_fan();

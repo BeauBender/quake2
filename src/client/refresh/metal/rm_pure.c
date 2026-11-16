@@ -303,21 +303,52 @@ rm_frame_remake(const rm_frame_held_t *held, int w, int h, int dw, int dh)
 }
 
 int
-rm_present_region(int tw, int th, int dw, int dh, rm_present_t *out)
+rm_present_region_in(int tw, int th, int dw, int dh, const rm_inset_t *in, rm_present_t *out)
 {
+	long sw, sh;
+
 	memset(out, 0, sizeof(*out));
 
-	if ((tw <= 0) || (th <= 0) || (dw <= 0) || (dh <= 0))
+	if ((tw <= 0) || (th <= 0) || (dw <= 0) || (dh <= 0) || !in)
 	{
 		return 0;
 	}
 
-	out->w = (tw < dw) ? tw : dw;
-	out->h = (th < dh) ? th : dh;
-	/* the bottom rows of both: GL's origin is the framebuffer's bottom-left corner */
+	if ((in->left < 0) || (in->top < 0) || (in->right < 0) || (in->bottom < 0))
+	{
+		return 0;
+	}
+
+	/* the safe rectangle, each side measured from the drawable's edge; the sums in long, so they cannot wrap */
+	sw = (long)dw - in->left - in->right;
+	sh = (long)dh - in->top - in->bottom;
+
+	if ((sw <= 0) || (sh <= 0))
+	{
+		return 0;
+	}
+
+	out->w = (tw < sw) ? tw : (int)sw;
+	out->h = (th < sh) ? th : (int)sh;
+	/* the bottom rows of both: GL's origin is the framebuffer's bottom-left corner, here the rectangle's */
 	out->src_y = th - out->h;
-	out->dst_y = dh - out->h;
+	out->dst_x = in->left;
+	out->dst_y = in->top + (int)sh - out->h;
 	return 1;
+}
+
+int
+rm_present_region(int tw, int th, int dw, int dh, rm_present_t *out)
+{
+	static const rm_inset_t none = { 0, 0, 0, 0 };
+
+	return rm_present_region_in(tw, th, dw, dh, &none, out);
+}
+
+int
+rm_display_sync(int always, int wanted)
+{
+	return (always || wanted) ? 1 : 0;
 }
 
 int

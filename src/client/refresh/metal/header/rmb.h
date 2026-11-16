@@ -207,12 +207,23 @@ typedef struct
  */
 unsigned rm_frame_remake(const rm_frame_held_t *held, int w, int h, int dw, int dh);
 
-/* The rows of a present blit (rm_present_region); the columns start at 0 on both sides. */
+/*
+ * The rows and the column of a present blit (rm_present_region): the
+ * columns start at 0 in the frame; in the drawable at dst_x, the safe
+ * rectangle's left edge (0 without an inset).
+ */
 typedef struct
 {
 	int src_y, dst_y;   /* the first row read from the frame, written in the drawable */
+	int dst_x;
 	int w, h;
 } rm_present_t;
+
+/* The pixels of the drawable outside its safe rectangle (iOS: the corners, the sensor housing, the home indicator), per side. */
+typedef struct
+{
+	int left, top, right, bottom;
+} rm_inset_t;
 
 /*
  * The blit of a tw by th frame to a dw by dh drawable, at gl1's place: GL
@@ -223,6 +234,22 @@ typedef struct
  * 1 with *out set when the overlap is not empty, 0 with it zeroed.
  */
 int rm_present_region(int tw, int th, int dw, int dh, rm_present_t *out);
+
+/*
+ * The same into the safe rectangle of the drawable (TASK147): the frame's
+ * bottom-left corner on the rectangle's, which is the drawable less the
+ * insets, and only the overlap with the rectangle copied. 0 with *out
+ * zeroed when an inset is negative, is missing, or leaves no width or no
+ * height. rm_present_region is this with no inset.
+ */
+int rm_present_region_in(int tw, int th, int dw, int dh, const rm_inset_t *in, rm_present_t *out);
+
+/*
+ * Whether the layer presents in step with the display: always where the
+ * platform has no other way (iOS, TASK147: r_vsync has no effect there),
+ * else as r_vsync (wanted) says. 1 or 0.
+ */
+int rm_display_sync(int always, int wanted);
 
 /* ---- images, the 2D draws (rm_pure.c) ------------------------------------------- */
 
