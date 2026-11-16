@@ -2569,8 +2569,6 @@ ConsoleFunc(void *unused)
 static void
 Options_MenuInit(void)
 {
-	extern qboolean show_gamepad;
-
 	static const char *ogg_shuffle_items[] =
 	{
 		"default",
@@ -2706,15 +2704,17 @@ Options_MenuInit(void)
 	s_options_crosshair_color_box.generic.callback = CrosshairColorFunc;
 	s_options_crosshair_color_box.itemnames = crosshair_color_names;
 
+	/*
+	 * Always offered: the page also holds the touch controls (TASK151), which
+	 * must be reachable without a gamepad, and greyed with the reason on a
+	 * machine with no touch screen, never hidden.
+	 */
 	y += 10;
-	if (show_gamepad)
-	{
-		s_options_customize_joy_action.generic.type = MTYPE_ACTION;
-		s_options_customize_joy_action.generic.x = 0;
-		s_options_customize_joy_action.generic.y = (y += 10);
-		s_options_customize_joy_action.generic.name = "customize gamepad";
-		s_options_customize_joy_action.generic.callback = CustomizeJoyFunc;
-	}
+	s_options_customize_joy_action.generic.type = MTYPE_ACTION;
+	s_options_customize_joy_action.generic.x = 0;
+	s_options_customize_joy_action.generic.y = (y += 10);
+	s_options_customize_joy_action.generic.name = "customize gamepad";
+	s_options_customize_joy_action.generic.callback = CustomizeJoyFunc;
 
 	s_options_customize_options_action.generic.type = MTYPE_ACTION;
 	s_options_customize_options_action.generic.x = 0;
@@ -2749,10 +2749,7 @@ Options_MenuInit(void)
 	Menu_AddItem(&s_options_menu, (void *)&s_options_crosshair_box);
 	Menu_AddItem(&s_options_menu, (void *)&s_options_crosshair_color_box);
 
-	if (show_gamepad)
-	{
-		Menu_AddItem(&s_options_menu, (void *)&s_options_customize_joy_action);
-	}
+	Menu_AddItem(&s_options_menu, (void *)&s_options_customize_joy_action);
 	Menu_AddItem(&s_options_menu, (void *)&s_options_customize_options_action);
 	Menu_AddItem(&s_options_menu, (void *)&s_options_defaults_action);
 	Menu_AddItem(&s_options_menu, (void *)&s_options_console_action);

@@ -1221,24 +1221,66 @@ TEST(touch_the_keyboard_is_wanted_in_the_console_a_message_or_a_menu_text_field)
 
 TEST(touch_text_input_follows_the_want_and_is_asked_again_when_the_system_hid_it)
 {
+	int asks = 0;
+
 	/* nothing asked yet */
-	T_EQ_INT(Touch_TextInput(0, -1, 0), 0);
-	T_EQ_INT(Touch_TextInput(1, -1, 0), 1);
-	T_EQ_INT(Touch_TextInput(1, -1, 1), 1);
+	T_EQ_INT(Touch_TextInput(0, -1, 0, &asks), 0);
+	T_EQ_INT(Touch_TextInput(1, -1, 0, &asks), 1);
+	T_EQ_INT(Touch_TextInput(1, -1, 1, &asks), 1);
 
 	/* a change */
-	T_EQ_INT(Touch_TextInput(1, 0, 0), 1);
-	T_EQ_INT(Touch_TextInput(0, 1, 1), 0);
+	T_EQ_INT(Touch_TextInput(1, 0, 0, &asks), 1);
+	T_EQ_INT(Touch_TextInput(0, 1, 1, &asks), 0);
 
 	/* no change, and the system agrees */
-	T_EQ_INT(Touch_TextInput(1, 1, 1), -1);
-	T_EQ_INT(Touch_TextInput(0, 0, 0), -1);
+	T_EQ_INT(Touch_TextInput(1, 1, 1, &asks), -1);
+	T_EQ_INT(Touch_TextInput(0, 0, 0, &asks), -1);
 
 	/* wanted, asked, but the system stopped it (the iPad hide key): again */
-	T_EQ_INT(Touch_TextInput(1, 1, 0), 1);
+	asks = 0;
+	T_EQ_INT(Touch_TextInput(1, 1, 0, &asks), 1);
+	T_EQ_INT(asks, 1);
 
 	/* not wanted: a system that keeps it on is left alone, it is not ours to stop every frame */
-	T_EQ_INT(Touch_TextInput(0, 0, 1), -1);
+	T_EQ_INT(Touch_TextInput(0, 0, 1, &asks), -1);
+}
+
+TEST(touch_text_input_is_asked_again_only_a_few_times_in_a_row)
+{
+	int asks = 0, i;
+
+	/* a start that keeps failing, or a keyboard that is never shown */
+	for (i = 0; i < TOUCH_TEXT_ASKS; i++)
+	{
+		T_EQ_INT(Touch_TextInput(1, 1, 0, &asks), 1);
+	}
+
+	T_EQ_INT(asks, TOUCH_TEXT_ASKS);
+
+	for (i = 0; i < 10; i++)
+	{
+		T_EQ_INT(Touch_TextInput(1, 1, 0, &asks), -1);
+	}
+
+	T_EQ_INT(asks, TOUCH_TEXT_ASKS);
+
+	/* the system agrees once: the next hide is asked again, from the start */
+	T_EQ_INT(Touch_TextInput(1, 1, 1, &asks), -1);
+	T_EQ_INT(asks, 0);
+	T_EQ_INT(Touch_TextInput(1, 1, 0, &asks), 1);
+
+	/* a change of want starts a new count */
+	asks = TOUCH_TEXT_ASKS;
+	T_EQ_INT(Touch_TextInput(0, 1, 0, &asks), 0);
+	T_EQ_INT(asks, 0);
+	asks = TOUCH_TEXT_ASKS;
+	T_EQ_INT(Touch_TextInput(1, 0, 0, &asks), 1);
+	T_EQ_INT(asks, 0);
+
+	/* not wanted: the count is not kept */
+	asks = 2;
+	T_EQ_INT(Touch_TextInput(0, 0, 0, &asks), -1);
+	T_EQ_INT(asks, 0);
 }
 
 TEST(touch_is_not_supported_off_ios)

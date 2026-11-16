@@ -186,9 +186,12 @@ int Touch_WantText(int console_or_message, int menu_open, int menu_field);
  * What to do with text input: want is whether it is wanted, applied what
  * was last asked of the system (-1 nothing yet), active what the system
  * says now. 1 start it, 0 stop it, -1 leave it. A keyboard the system
- * hid while it is wanted is started again.
+ * hid while it is wanted is started again, at most TOUCH_TEXT_ASKS times
+ * in a row (asks counts them, the caller keeps it between frames, a
+ * change or a system that agrees sets it back to 0).
  */
-int Touch_TextInput(int want, int applied, int active);
+#define TOUCH_TEXT_ASKS 3
+int Touch_TextInput(int want, int applied, int active, int *asks);
 
 /* The default gamepad bindings of iOS: entry i, or 0 past the end. */
 int Touch_DefaultBind(int i, const char **key, const char **cmd);

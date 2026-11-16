@@ -1091,7 +1091,8 @@ IN_TouchOverlay(touch_draw_t *list, int max, float *pixels_per_point)
 	SDL_Window *win = SDL_GetKeyboardFocus();
 	int w, h, count = 0;
 
-	if (!touch_joy || !in_touch->value || !viddef.width)
+	/* in_touch is read at start: the overlay follows what is attached */
+	if (!touch_joy || !viddef.width)
 	{
 		return 0;
 	}
@@ -1686,10 +1687,10 @@ IN_Update(void)
 		// in a chat message or in a menu's text field (TASK150).
 		// The system can stop text input itself (the hide key of an iPad):
 		// then it is started again, and said.
-		static int typing = -1;
+		static int typing = -1, asks;
 		const int want = Touch_WantText(cls.key_dest == key_console || cls.key_dest == key_message,
 				cls.key_dest == key_menu, cls.key_dest == key_menu && M_TextFieldActive());
-		const int act = Touch_TextInput(want, typing, GLimp_TextInputActive());
+		const int act = Touch_TextInput(want, typing, GLimp_TextInputActive(), &asks);
 
 		if (act >= 0)
 		{

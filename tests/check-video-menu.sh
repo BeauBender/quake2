@@ -103,6 +103,15 @@ run_bounded()
 	fi
 }
 
+# The controls menu offers "customize gamepad" with or without a gamepad: the
+# page holds the touch controls, which must be reachable (iOS) or shown greyed
+# with the reason (everywhere else), never hidden. menu.c is not linked by the
+# host test, so the rule is held here: no gamepad flag in menu.c.
+if grep -n 'show_gamepad' src/client/menu/menu.c; then
+	echo "check-video-menu: menu.c gates the controller page on a gamepad again (the touch controls would be hidden)"
+	exit 1
+fi
+
 # the desktop build first, then iOS, each under the bound
 run_bounded "${tmp:?}/videomenu_test"
 run_bounded "${tmp:?}/videomenu_test_ios"

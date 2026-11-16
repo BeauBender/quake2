@@ -203,7 +203,9 @@ static qboolean text_input_wanted;
  * plain text, no capital for the first letter of a word or a sentence,
  * no autocorrect and no prediction (a command, a path or the value
  * typed after "password" must arrive as it was typed), one line. If the
- * properties cannot be made the system's defaults apply, and it is said.
+ * properties cannot be made nothing is started, never the system's
+ * defaults (they turn autocorrect back on): the keyboard stays off, it is
+ * said once, and the input code asks again a few times (Touch_TextInput).
  */
 static void
 StartTextInput(SDL_Window *win)
@@ -228,8 +230,13 @@ StartTextInput(SDL_Window *win)
 
 	if (!ok)
 	{
-		Com_Printf("Text input with autocorrect off failed (%s), using the defaults.\n", SDL_GetError());
-		SDL_StartTextInput(win);
+		static qboolean said;
+
+		if (!said)
+		{
+			said = true;
+			Com_Printf("Text input with autocorrect off failed (%s), the keyboard stays off.\n", SDL_GetError());
+		}
 	}
 }
 
@@ -257,11 +264,16 @@ GLimp_TextInput(qboolean on)
 	}
 }
 
-/* iOS only: whether text input runs now; the system can stop it on its own (the hide key of an iPad). */
+/*
+ * iOS only: whether text input runs now and its keyboard is up. The hide
+ * key of an iPad only hides the keyboard and leaves SDL's text input
+ * active, so both are asked. With no window there is nothing to ask: the
+ * want is kept and applied when the window is made.
+ */
 qboolean
 GLimp_TextInputActive(void)
 {
-	return window && SDL_TextInputActive(window);
+	return !window || (SDL_TextInputActive(window) && SDL_ScreenKeyboardShown(window));
 }
 #endif
 

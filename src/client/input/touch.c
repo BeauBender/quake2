@@ -202,11 +202,11 @@ Touch_Down(touch_t *t, uint64_t id, float x, float y)
 	/* a finger down again without a lift starts fresh */
 	Touch_Up(t, id);
 
-	if (!Usable(x, y))
-	{
-		return;
-	}
-
+	/*
+	 * No check of the position here: Inside() is false for a NaN and for
+	 * an infinity (every comparison with a NaN is false, and an infinite x
+	 * is not below the zone's edge), so such a finger finds no zone.
+	 */
 	if (t->menu)
 	{
 		/* the console button, then the pad: the zones after the game's */
@@ -299,7 +299,13 @@ ToAxis(float v)
 {
 	int a;
 
-	/* the range is symmetric, 32767 each way; v is finite, the positions are */
+	/*
+	 * The range is symmetric, 32767 each way. v is clamped to it first. v
+	 * is not always finite: a very small layout can overflow to an
+	 * infinity, and inf / inf is a NaN. A NaN passes both comparisons, so
+	 * the result is whatever lroundf gives, and the clamp of the integer
+	 * below keeps it in the range either way.
+	 */
 	if (v > 1.0f)
 	{
 		v = 1.0f;
@@ -598,7 +604,7 @@ Touch_LabelScale(const char *label, float w_px, int max_scale)
 int
 Touch_Supported(void)
 {
-#if defined(__APPLE__) && TARGET_OS_IPHONE
+#if defined(__APPLE__) && TARGET_OS_IPHONE && !TARGET_OS_MACCATALYST
 	return 1;
 #else
 	return 0;
@@ -618,18 +624,32 @@ Touch_WantText(int console_or_message, int menu_open, int menu_field)
 }
 
 int
-Touch_TextInput(int want, int applied, int active)
+Touch_TextInput(int want, int applied, int active, int *asks)
 {
 	want = want != 0;
 
 	if (want != applied)
 	{
+		*asks = 0;
 		return want;
 	}
 
-	/* asked for, and the system stopped it on its own: ask again */
-	if (want && !active)
+	if (!want || active)
 	{
+		/* the system agrees: the next stop is a new one */
+		*asks = 0;
+		return -1;
+	}
+
+	/*
+	 * Asked for, and the system stopped it on its own (the hide key of an
+	 * iPad), or never started it: ask again, but only a few times in a row,
+	 * so a start that keeps failing, or a keyboard that is never shown
+	 * (a hardware one), is not asked for on every frame.
+	 */
+	if (*asks < TOUCH_TEXT_ASKS)
+	{
+		(*asks)++;
 		return 1;
 	}
 

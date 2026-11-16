@@ -1339,15 +1339,19 @@ is added to the frame: in the game a ring for each stick (where a finger
 is down, the ring is under it with a knob) and the buttons; in a menu,
 the console or a chat message a d-pad, OK and Back (the d-pad buttons,
 `BTN_SOUTH` and `BTN_EAST` of the virtual gamepad) and the console
-button. A button that is held is filled. Nothing is drawn when `in_touch`
-is `0`, or a physical gamepad is in use.
+button. A button that is held is filled. Nothing is drawn when the touch
+controls are not attached (`in_touch` was `0` at start, so changing it
+in the game changes the overlay and the touch pad only after a restart),
+or a physical gamepad is in use.
 
 * **in_touch**: Turns the touch controls on. Default `1` on iOS and `0`
   elsewhere. Read at start. On iOS touches are never mouse clicks while
   it is on. Where there is no touch screen (everywhere but iOS) it does
   nothing: a `1` is said once in the console and the controls stay off.
   The "touch controls" item of the controller page shows it, greyed with
-  "no touch screen" there.
+  "no touch screen" there. That page is reached by "customize gamepad" of
+  the controls menu, which is always offered, with or without a gamepad,
+  so that touch controls turned off can be turned on again.
 
 * **in_touch_scale**: Size of the buttons and the stick radius, from
   `0.5` to `2`; a value outside is held to the range. Default `1`. The
@@ -1368,7 +1372,10 @@ is the menu key. Other platforms bind none of them. The on-screen
 keyboard of iOS shows only while the console, a chat message or a
 menu's text field takes text. It is plain text: no autocorrect, no
 prediction and no capital for the first letter. If the system hides it
-(the hide key of an iPad) while text is still wanted, it is shown again.
+(the hide key of an iPad) while text is still wanted, it is shown again,
+a few times in a row at most, so a keyboard that cannot be shown (a
+hardware keyboard) is not asked for on every frame. If the system's
+text input cannot be set up as plain text, the keyboard stays off.
 
 
 ## cvar operations
