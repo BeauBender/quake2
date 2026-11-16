@@ -83,6 +83,8 @@ static int rtw_open;
 static id<MTLComputePipelineState> trace_pipe;   /* TASK58's kernel over every pixel (r_rt_water_hits 0) */
 static id<MTLComputePipelineState> trace_ws_pipe, compact_pipe, args_pipe;   /* TASK158's, over the list */
 static int made_ws;                     /* the outputs were made for the world-space path (rmb_rtw_prepare) */
+static int ws_ok;                       /* the world-space path's pipelines and bindings were built (rmb_rtw_ws_ok) */
+static char ws_err[192];                /* why not */
 static id<MTLRenderPipelineState> blend_pipe, show_pipe, trans_pipe, cand_pipe;
 static id<MTLDepthStencilState> cand_depth;
 static id<MTLTexture> t_refl;           /* the reflection and the class, RGBA8Unorm at the render size */
@@ -237,6 +239,85 @@ rmb_rtw_white(int array)
 	return t;
 }
 
+/* TASK158: releases the world-space path's pipelines and bindings (TASK58's path needs none of them) */
+static void
+rmb_rtw_close_ws(void)
+{
+	RMB_RTW_SET(trace_ws_pipe, nil);
+	RMB_RTW_SET(compact_pipe, nil);
+	RMB_RTW_SET(args_pipe, nil);
+	RMB_RTW_SET(cand_pipe, nil);
+	RMB_RTW_SET(cand_depth, nil);
+	RMB_RTW_SET(tex_enc, nil);
+	RMB_RTW_SET(tex_ab, nil);
+	RMB_RTW_SET(white2d, nil);
+	RMB_RTW_SET(white_arr, nil);
+	tex_len = 0;
+	ws_ok = 0;
+}
+
+/*
+ * TASK158: the world-space path's pipelines and bindings from its three
+ * kernels (r_rt_water_hits 1): 1, or 0 with err set and none of them
+ * kept, the pass left open for TASK58's path.
+ */
+static int
+rmb_rtw_open_ws(id<MTLFunction> kw, id<MTLFunction> kc, id<MTLFunction> ka, char *err, size_t errlen)
+{
+	MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new];
+	NSError *e = nil;
+
+	if (!kw || !kc || !ka)
+	{
+		snprintf(err, errlen, "the shader library has no rm_rtw_trace_ws, rm_rtw_compact or rm_rtw_args");
+		return 0;
+	}
+
+	dd.depthCompareFunction = MTLCompareFunctionLessEqual;
+	dd.depthWriteEnabled = NO;
+
+	RMB_RTW_SET(trace_ws_pipe, [rmb_device newComputePipelineStateWithFunction:kw error:&e]);
+	RMB_RTW_SET(compact_pipe, trace_ws_pipe ? [rmb_device newComputePipelineStateWithFunction:kc error:&e] : nil);
+	RMB_RTW_SET(args_pipe, compact_pipe ? [rmb_device newComputePipelineStateWithFunction:ka error:&e] : nil);
+	RMB_RTW_SET(cand_pipe, args_pipe ? rmb_rtw_cand_pipe(&e) : nil);
+	RMB_RTW_SET(cand_depth, [rmb_device newDepthStencilStateWithDescriptor:dd]);
+	RMB_RTW_SET(tex_enc, [kw newArgumentEncoderWithBufferIndex:12]);
+	RMB_RTW_SET(white2d, rmb_rtw_white(0));
+	RMB_RTW_SET(white_arr, rmb_rtw_white(1));
+
+	if (tex_enc)
+	{
+		const NSUInteger a = tex_enc.alignment ? tex_enc.alignment : 256;
+
+		tex_len = (tex_enc.encodedLength + a - 1) / a * a;
+		RMB_RTW_SET(tex_ab, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * tex_len
+				options:MTLResourceStorageModeShared]);
+	}
+
+	if (!trace_ws_pipe || !compact_pipe || !args_pipe || !cand_pipe || !cand_depth || !tex_enc || !tex_ab || !white2d ||
+		!white_arr)
+	{
+		snprintf(err, errlen, "cannot build the world-space hits' pipelines%s%s", e ? ": " : "",
+				e ? e.localizedDescription.UTF8String : "");
+		rmb_rtw_close_ws();
+		return 0;
+	}
+
+	return 1;
+}
+
+int
+rmb_rtw_ws_ok(char *err, size_t errlen)
+{
+	if (rtw_open && ws_ok)
+	{
+		return 1;
+	}
+
+	snprintf(err, errlen, "%s", !rtw_open ? "the pass is not open" : ws_err);
+	return 0;
+}
+
 int
 rmb_rtw_open(char *err, size_t errlen)
 {
@@ -265,50 +346,33 @@ rmb_rtw_open(char *err, size_t errlen)
 		id<MTLFunction> kw = [rmb_library() newFunctionWithName:@"rm_rtw_trace_ws"];
 		id<MTLFunction> kc = [rmb_library() newFunctionWithName:@"rm_rtw_compact"];
 		id<MTLFunction> ka = [rmb_library() newFunctionWithName:@"rm_rtw_args"];
-		MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new];
 		id<MTLCounterSet> ts = nil;
 
-		if (!k || !kw || !kc || !ka)
+		/* TASK58's path (r_rt_water_hits 0) needs its kernel, the blend, the show view, the translucent draw and the counts */
+		if (!k)
 		{
-			snprintf(err, errlen, "the shader library has no rm_rtw_trace, rm_rtw_trace_ws, rm_rtw_compact or rm_rtw_args");
+			snprintf(err, errlen, "the shader library has no rm_rtw_trace");
 			return 0;
 		}
 
-		dd.depthCompareFunction = MTLCompareFunctionLessEqual;
-		dd.depthWriteEnabled = NO;
-
 		RMB_RTW_SET(trace_pipe, [rmb_device newComputePipelineStateWithFunction:k error:&e]);
-		RMB_RTW_SET(trace_ws_pipe, trace_pipe ? [rmb_device newComputePipelineStateWithFunction:kw error:&e] : nil);
-		RMB_RTW_SET(compact_pipe, trace_ws_pipe ? [rmb_device newComputePipelineStateWithFunction:kc error:&e] : nil);
-		RMB_RTW_SET(args_pipe, compact_pipe ? [rmb_device newComputePipelineStateWithFunction:ka error:&e] : nil);
-		RMB_RTW_SET(blend_pipe, args_pipe ? rmb_rtw_fullscreen(@"rm_fragment_rtw_blend", 1, &e) : nil);
+		RMB_RTW_SET(blend_pipe, trace_pipe ? rmb_rtw_fullscreen(@"rm_fragment_rtw_blend", 1, &e) : nil);
 		RMB_RTW_SET(show_pipe, blend_pipe ? rmb_rtw_fullscreen(@"rm_fragment_rtw_show", 0, &e) : nil);
 		RMB_RTW_SET(trans_pipe, show_pipe ? rmb_rtw_trans_pipe(&e) : nil);
-		RMB_RTW_SET(cand_pipe, trans_pipe ? rmb_rtw_cand_pipe(&e) : nil);
-		RMB_RTW_SET(cand_depth, [rmb_device newDepthStencilStateWithDescriptor:dd]);
 		RMB_RTW_SET(counts, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * RMB_RTW_SLOT * sizeof(uint32_t)
 				options:MTLResourceStorageModeShared]);
-		RMB_RTW_SET(tex_enc, [kw newArgumentEncoderWithBufferIndex:12]);
-		RMB_RTW_SET(white2d, rmb_rtw_white(0));
-		RMB_RTW_SET(white_arr, rmb_rtw_white(1));
 
-		if (tex_enc)
-		{
-			const NSUInteger a = tex_enc.alignment ? tex_enc.alignment : 256;
-
-			tex_len = (tex_enc.encodedLength + a - 1) / a * a;
-			RMB_RTW_SET(tex_ab, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * tex_len
-					options:MTLResourceStorageModeShared]);
-		}
-
-		if (!trace_pipe || !trace_ws_pipe || !compact_pipe || !args_pipe || !blend_pipe || !show_pipe || !trans_pipe || !cand_pipe ||
-			!cand_depth || !counts || !tex_enc || !tex_ab || !white2d || !white_arr)
+		if (!trace_pipe || !blend_pipe || !show_pipe || !trans_pipe || !counts)
 		{
 			snprintf(err, errlen, "cannot build the water pipelines%s%s", e ? ": " : "",
 					e ? e.localizedDescription.UTF8String : "");
 			rmb_rtw_close();
 			return 0;
 		}
+
+		/* TASK158: the world-space path's; without them only r_rt_water_hits 1 is refused (rm_rtw_path) */
+		ws_err[0] = 0;
+		ws_ok = rmb_rtw_open_ws(kw, kc, ka, ws_err, sizeof(ws_err));
 
 		/* the passes' GPU time, where the device samples timestamps at the encoders' boundaries */
 		for (id<MTLCounterSet> cs in rmb_device.counterSets)
@@ -350,30 +414,21 @@ rmb_rtw_close(void)
 	@autoreleasepool
 	{
 		RMB_RTW_SET(trace_pipe, nil);
-		RMB_RTW_SET(trace_ws_pipe, nil);
-		RMB_RTW_SET(compact_pipe, nil);
-		RMB_RTW_SET(args_pipe, nil);
 		RMB_RTW_SET(blend_pipe, nil);
 		RMB_RTW_SET(show_pipe, nil);
 		RMB_RTW_SET(trans_pipe, nil);
-		RMB_RTW_SET(cand_pipe, nil);
-		RMB_RTW_SET(cand_depth, nil);
 		RMB_RTW_SET(t_refl, nil);
 		RMB_RTW_SET(t_wdist, nil);
 		RMB_RTW_SET(list, nil);
 		RMB_RTW_SET(counts, nil);
 		RMB_RTW_SET(samples, nil);
-		RMB_RTW_SET(tex_enc, nil);
-		RMB_RTW_SET(tex_ab, nil);
-		RMB_RTW_SET(white2d, nil);
-		RMB_RTW_SET(white_arr, nil);
 		RMB_RTW_SET(shade, nil);
+		rmb_rtw_close_ws();
 	}
 
 	rtw_open = 0;
 	made_ws = 0;
 	list_cap = shade_n = 0;
-	tex_len = 0;
 	view_set = traced = forward = shown = 0;
 	tex_n = lm_tid = sky_set = nlights = 0;
 	ndone = 0;
@@ -384,7 +439,7 @@ rmb_rtw_prepare(unsigned long w, unsigned long h, int ws)
 {
 	ws = ws != 0;
 
-	if (!rtw_open || !trace_pipe || !counts || (w < 1) || (h < 1) || (w > 0xffffUL) || (h > 0xffffUL))
+	if (!rtw_open || !trace_pipe || !counts || (ws && !ws_ok) || (w < 1) || (h < 1) || (w > 0xffffUL) || (h > 0xffffUL))
 	{
 		return 0;
 	}

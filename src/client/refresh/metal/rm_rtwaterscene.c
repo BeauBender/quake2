@@ -49,6 +49,7 @@ static int rtw_opened;      /* rmb_rtw_open succeeded */
 static int rtw_refused;     /* it failed in this context: not tried again */
 static int rtw_active;      /* this frame traces the reflections */
 static int rtw_viewed;      /* RM_RTW_View handed this frame's view to the back end */
+static int rtw_ws_told;     /* TASK158: r_rt_water_hits 1's refusal was printed for this pass (rm_rtw_path) */
 
 /* TASK158: the world-space shading's records, built once a map (and again after the pass reopens) */
 static const model_t *rtw_shade_world;   /* the world they were built for, NULL for none */
@@ -198,7 +199,7 @@ RM_RTW_Init(const rmb_caps_t *caps)
 	r_rt_water_hits = ri.Cvar_Get("r_rt_water_hits", "0", CVAR_ARCHIVE);   /* TASK158 */
 	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
 	rtw_device = caps->raytracing != 0;
-	rtw_opened = rtw_refused = rtw_active = rtw_viewed = 0;
+	rtw_opened = rtw_refused = rtw_active = rtw_viewed = rtw_ws_told = 0;
 }
 
 void
@@ -243,6 +244,7 @@ RM_RTW_Frame(const refdef_t *fd, int scene_ready)
 
 			rtw_opened = rmb_rtw_open(err, sizeof(err));
 			rtw_shade_world = NULL;   /* TASK158: the records go with the pass: built again for it */
+			rtw_ws_told = 0;          /* and r_rt_water_hits 1's refusal is said again */
 
 			if (!rtw_opened)
 			{
@@ -301,7 +303,8 @@ void
 RM_RTW_View(const rm_view_t *view)
 {
 	rm_rtw_view_t v;
-	int w, h, ws;
+	char err[192];
+	int w, h, ws, say;
 
 	rtw_viewed = 0;
 
@@ -319,7 +322,13 @@ RM_RTW_View(const rm_view_t *view)
 	/* everything the trace needs that can fail, before the raster: the view's inverse and the outputs */
 	RM_GB_TargetSize(&w, &h);
 
-	ws = r_rt_water_hits && rm_rtw_hits(r_rt_water_hits->value);
+	/* TASK158: setting 1 where the pass built its resources; else TASK58's path, which needs none of them */
+	ws = rm_rtw_path(r_rt_water_hits ? r_rt_water_hits->value : 0, rmb_rtw_ws_ok(err, sizeof(err)), &rtw_ws_told, &say);
+
+	if (say)
+	{
+		R_Printf(PRINT_ALL, "ref_metal: rt water: %s; r_rt_water_hits 1 refused, its hits shaded as 0's\n", err);
+	}
 
 	if (!rm_rtw_view(view->proj, view->world, &view->vp, r_newrefdef.vieworg, gl_znear->value, r_newrefdef.time,
 			rm_rtw_amp(r_rt_water_normal->value), rm_rtw_reflect(r_rt_water_reflect->value),

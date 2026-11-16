@@ -238,8 +238,17 @@ int rm_rtw_stats_format(const rm_rtw_stats_t *s, char *buf, size_t len);
 
 /* ---- rmb_rtwater.m: the Metal back end ------------------------------------------------- */
 
-/* the kernel's, the blend's, the translucent draw's and the development view's pipelines: 1, or 0 with err set */
+/*
+ * The kernel's, the blend's, the translucent draw's and the development
+ * view's pipelines: 1, or 0 with err set. TASK158: the world-space path's
+ * (its kernels, the candidates' raster, the texture table, the white
+ * textures) are built too, but the pass opens without them: then only
+ * rmb_rtw_ws_ok says 0, and r_rt_water_hits 1 draws as 0 (rm_rtw_path).
+ */
 int rmb_rtw_open(char *err, size_t errlen);
+
+/* TASK158: 1 when the pass is open with the world-space path's resources; 0 with err set to why not */
+int rmb_rtw_ws_ok(char *err, size_t errlen);
 
 /* releases the pipelines, the outputs and the counters */
 void rmb_rtw_close(void);

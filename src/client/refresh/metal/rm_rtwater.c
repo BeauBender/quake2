@@ -87,10 +87,25 @@ rm_rtw_hits(float v)
 int
 rm_rtw_path(float hits, int ws_ok, int *told, int *say)
 {
-	(void)ws_ok;
-	(void)told;
 	*say = 0;
-	return rm_rtw_hits(hits);
+
+	if (!rm_rtw_hits(hits))
+	{
+		return 0;
+	}
+
+	if (ws_ok)
+	{
+		return 1;
+	}
+
+	if (!*told)
+	{
+		*told = 1;
+		*say = 1;
+	}
+
+	return 0;
 }
 
 int
