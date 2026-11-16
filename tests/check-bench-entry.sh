@@ -1,0 +1,402 @@
+#!/bin/sh
+# Invariant: every heavy entry point takes the bench host lock itself
+# (docs/plans/bench-harness.md, "The host lock"), so no caller can forget
+# it: scripts/test.sh as "gate", scripts/coverage.sh as "coverage" and
+# scripts/pins.sh as "pins-<command>" for record, compare, replay,
+# footprint, where, make-demo, selftest and evidence.
+#
+# Hermetic: each test copies the entry points into a throwaway tree under
+# mktemp -d, beside a stub scripts/bench/bench.sh that logs its call and
+# runs the command with a stand-in token (once: a call that already has a
+# token is a second hold, logged and refused), and with stubs of make, cc
+# and gcov on PATH that log the token they ran under. No build, no engine,
+# no game data. It covers:
+#   - t_gate: the gate's checks and both of its makes run under one call
+#     of "lock run gate", made before any of them, and see no
+#     BENCH_LOCK_ENTRY; a forged BENCH_LOCK_ENTRY without a token still
+#     takes the lock;
+#   - t_coverage: the instrumented make runs under "lock run coverage";
+#   - t_pins: each locked command makes one call with its label and its
+#     whole command line, before the command runs, and the run under it
+#     reaches the command; a dry run and the usage text make none;
+#   - t_off: BENCH_LOCK=0, CI=true and a tree without bench.sh make no
+#     call, for each of the three, and the heavy part still runs;
+#   - t_nested, with the real bench core and a temporary BENCH_STATE: the
+#     gate holds the lock once, as "gate", while the pin selftest it runs
+#     passes straight through (no wait, no second hold); a gate under an
+#     outer holder (a host's own wrapper) passes straight through as well;
+#     a gate that finds the lock held by another job waits, gives up with
+#     75 and runs nothing; the caller's LC_ALL, set or unset, reaches the
+#     heavy part, though bench.sh sets it to C.
+# Then one mutant per lock call (each removing it from a copy of its entry
+# point) and two that break the pass-through of the run under the lock;
+# each must fail the test that targets it.
+#
+# Usage: tests/check-bench-entry.sh [<test>...]   (named tests only, no mutants)
+set -eu
+cd "$(dirname "$0")/.."
+export LC_ALL=C
+me=check-bench-entry
+ROOT=$(pwd -P)
+REAL=$ROOT/scripts
+SRC=$REAL
+
+# Nothing from the caller's environment: no bench setting (the token of the
+# gate's own hold would let every lock call here pass through), no CI flag,
+# no pin setting and no git setting.
+for _v in $(env | sed -n 's/^\(BENCH_[A-Za-z0-9_]*\)=.*/\1/p; s/^\(PINS_[A-Za-z0-9_]*\)=.*/\1/p; s/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p'); do
+	unset "$_v"
+done
+unset CI CC LOG XDG_CACHE_HOME 2> /dev/null || true
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/checkbenchentry.XXXXXX")
+tmp=$(cd "${tmp:?}" && pwd -P)
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+TMPDIR=${tmp:?}
+export TMPDIR
+: > "${tmp:?}/pids"
+
+pid_running() {
+	case $1 in
+	'' | 0 | *[!0-9]*) return 1 ;;
+	esac
+	_s=$(ps -o stat= -p "$1" 2> /dev/null) || return 1
+	case $_s in
+	'' | Z*) return 1 ;;
+	esac
+	return 0
+}
+
+cleanup() {
+	# Stop any process this check started that still runs; nothing else.
+	while read -r _p; do
+		if pid_running "$_p"; then kill -TERM "$_p" 2> /dev/null || true; fi
+	done < "${tmp:?}/pids"
+	rm -rf "${tmp:?}"
+	[ "${_ok:-}" = 1 ] || exit 1
+}
+trap cleanup EXIT
+
+MUTANT=
+fails=0
+bad() {
+	echo "$me: $*"
+	fails=$((fails + 1))
+	if [ -n "$MUTANT" ]; then exit 1; fi
+}
+# wait_gone <seconds> <pid>
+wait_gone() {
+	_n=0
+	while pid_running "$2"; do
+		[ "$_n" -lt $(($1 * 10)) ] || return 1
+		sleep 0.1
+		_n=$((_n + 1))
+	done
+	return 0
+}
+# reap <pid>: ends a process this check started (TERM, which a lock
+# shell's trap turns into a stop of its command; KILL after 30 s).
+reap() {
+	kill -TERM "$1" 2> /dev/null || true
+	wait_gone 30 "$1" || kill -KILL "$1" 2> /dev/null || true
+}
+# run <seconds> <command...>: runs it with its output in ${T}/out and its
+# status in ST; past <seconds> it is reaped and ST is 124.
+run() {
+	_rs=$1
+	shift
+	"$@" > "${T:?}/out" 2>&1 &
+	_rp=$!
+	echo "$_rp" >> "${tmp:?}/pids"
+	if ! wait_gone "$_rs" "$_rp"; then
+		reap "$_rp"
+		wait "$_rp" 2> /dev/null || true
+		ST=124
+		return 0
+	fi
+	ST=0
+	wait "$_rp" || ST=$?
+}
+
+# ---- The stubs. --------------------------------------------------------
+mkdir -p "${tmp:?}/mk" "${tmp:?}/cov"
+cat > "${tmp:?}/stub-bench.sh" << 'EOF'
+#!/bin/sh
+# A stand-in for scripts/bench/bench.sh: logs the call, then runs the
+# command with a stand-in token, once.
+printf 'bench %s token=%s\n' "$*" "${BENCH_LOCK_TOKEN:-none}" >> "$LOG"
+[ -z "${BENCH_LOCK_TOKEN:-}" ] || exit 99
+[ "$#" -ge 5 ] && [ "$1" = lock ] && [ "$2" = run ] && [ "$4" = -- ] || exit 98
+shift 4
+BENCH_LOCK_TOKEN=stub
+export BENCH_LOCK_TOKEN
+exec "$@"
+EOF
+cat > "${tmp:?}/mk/make" << 'EOF'
+#!/bin/sh
+printf 'make %s token=%s entry=%s lc=%s\n' "$*" "${BENCH_LOCK_TOKEN:-none}" "${BENCH_LOCK_ENTRY-unset}" "${LC_ALL-unset}" >> "$LOG"
+EOF
+cat > "${tmp:?}/check-a.sh" << 'EOF'
+#!/bin/sh
+printf 'check token=%s entry=%s\n' "${BENCH_LOCK_TOKEN:-none}" "${BENCH_LOCK_ENTRY-unset}" >> "$LOG"
+EOF
+# A compiler that coverage.sh takes for gcc, and its gcov: the run goes
+# through the instrumented make and then fails for want of coverage data.
+printf '#!/bin/sh\necho "gcc version 0 (stub)"\n' > "${tmp:?}/cov/cc"
+printf '#!/bin/sh\nexit 0\n' > "${tmp:?}/cov/gcov"
+chmod +x "${tmp:?}/mk/make" "${tmp:?}/cov/cc" "${tmp:?}/cov/gcov" "${tmp:?}/check-a.sh" "${tmp:?}/stub-bench.sh"
+# GATEPATH: the stub make; COVPATH: the stub compiler too.
+GATEPATH=${tmp:?}/mk:$PATH
+COVPATH=${tmp:?}/cov:$GATEPATH
+
+# mktree <name> [nobench|real]: a throwaway tree T holding the entry points
+# from SRC, a coverage floor and one gate check; beside the stub bench.sh,
+# none (nobench) or the real bench harness (real). LOG is its call log.
+mktree() {
+	T=${tmp:?}/$1
+	rm -rf "${T:?}"
+	mkdir -p "${T:?}/scripts/pins" "${T:?}/tests"
+	cp "$SRC/test.sh" "$SRC/coverage.sh" "$SRC/pins.sh" "${T:?}/scripts/"
+	printf 'gcov 0\nllvm-cov 0\n' > "${T:?}/scripts/coverage-floor"
+	cp "${tmp:?}/check-a.sh" "${T:?}/tests/check-a.sh"
+	case ${2:-stub} in
+	stub)
+		mkdir -p "${T:?}/scripts/bench"
+		cp "${tmp:?}/stub-bench.sh" "${T:?}/scripts/bench/bench.sh"
+		;;
+	real) cp -R "$REAL/bench" "${T:?}/scripts/bench" ;;
+	esac
+	LOG=${T:?}/log
+	: > "$LOG"
+	export LOG
+}
+# lines <pattern>: the number of lines of LOG that match the grep pattern.
+lines() {
+	grep -c -- "$1" "${LOG:?}" || true
+}
+# say: the log and the output, one line, for a failure message.
+say() {
+	printf 'log: %s out: %s' "$(tr '\n' '|' < "${LOG:?}")" "$(sed -n '1,4p' "${T:?}/out" | tr '\n' '|')"
+}
+
+# gate_ok <token>: the gate ran its check and both makes, each under
+# <token> (none: no lock), none of them with BENCH_LOCK_ENTRY.
+gate_ok() {
+	[ "$(lines "^check token=$1 entry=unset\$")" -eq 1 ] || return 1
+	[ "$(lines "^make -B -j[0-9]* server game token=$1 entry=unset ")" -eq 1 ] || return 1
+	[ "$(lines "^make -B -j[0-9]* UPDATE_PINS= TEST_ARGS= test token=$1 entry=unset ")" -eq 1 ] || return 1
+	[ "$(lines '^make ')" -eq 2 ]
+}
+
+t_gate() {
+	mktree gate
+	run 60 env PATH="$GATEPATH" sh "${T:?}/scripts/test.sh"
+	[ "$ST" -eq 0 ] || bad "gate: exited $ST; $(say)"
+	[ "$(lines '^bench ')" -eq 1 ] || bad "gate: not one call of bench.sh; $(say)"
+	case $(sed -n 1p "${LOG:?}") in
+	"bench lock run gate -- env LC_ALL=C BENCH_LOCK_ENTRY=gate sh "*"/scripts/test.sh token=none") ;;
+	*) bad "gate: the lock is not taken first, as gate, by the gate itself; $(say)" ;;
+	esac
+	gate_ok stub || bad "gate: the checks and the makes did not all run under the lock; $(say)"
+	# A BENCH_LOCK_ENTRY without a token is no hold: the gate takes the lock.
+	mktree gate-forged
+	run 60 env PATH="$GATEPATH" BENCH_LOCK_ENTRY=gate sh "${T:?}/scripts/test.sh"
+	[ "$ST" -eq 0 ] && [ "$(lines '^bench lock run gate ')" -eq 1 ] && gate_ok stub ||
+		bad "gate: BENCH_LOCK_ENTRY=gate without a token skipped the lock; $(say)"
+	[ "$fails" -eq 0 ]
+}
+
+t_coverage() {
+	mktree coverage
+	run 60 env PATH="$COVPATH" sh "${T:?}/scripts/coverage.sh"
+	grep -q 'coverage: no coverage data was produced' "${T:?}/out" || bad "coverage: the run did not get past the instrumented make (status $ST); $(say)"
+	[ "$(lines '^bench ')" -eq 1 ] || bad "coverage: not one call of bench.sh; $(say)"
+	case $(sed -n 1p "${LOG:?}") in
+	"bench lock run coverage -- env LC_ALL=C BENCH_LOCK_ENTRY=coverage sh "*"/scripts/coverage.sh token=none") ;;
+	*) bad "coverage: the lock is not taken first, as coverage; $(say)" ;;
+	esac
+	[ "$(lines '^make -B -j[0-9]* COVERAGE=1 CC=cc UPDATE_PINS= TEST_ARGS= test token=stub entry=unset ')" -eq 1 ] ||
+		bad "coverage: the instrumented make did not run under the lock; $(say)"
+	[ "$fails" -eq 0 ]
+}
+
+# pins_locked <label> <message> <args...>: pins.sh <args> makes one call of
+# bench.sh, as <label>, with its whole command line, and the run under it
+# reaches the command (which refuses the bad name it was given, <message>).
+pins_locked() {
+	_pl=$1
+	_pm=$2
+	shift 2
+	mktree "pins-$_pl"
+	run 60 /bin/bash "${T:?}/scripts/pins.sh" "$@"
+	[ "$(lines '^bench ')" -eq 1 ] || { bad "pins $*: not one call of bench.sh; $(say)"; return 0; }
+	case $(sed -n 1p "${LOG:?}") in
+	"bench lock run $_pl -- env BENCH_LOCK_ENTRY=$_pl /bin/bash "*"/scripts/pins.sh $* token=none") ;;
+	*) bad "pins $*: the lock is not taken as $_pl with the whole command line; $(say)" ;;
+	esac
+	[ "$ST" -eq 1 ] && grep -q "^pins: $_pm" "${T:?}/out" || bad "pins $*: the run under the lock did not reach the command (status $ST); $(say)"
+}
+
+t_pins() {
+	PINS_STORE=${tmp:?}/pins-store
+	export PINS_STORE
+	pins_locked pins-record 'renderer must match' record 'BAD!' world
+	pins_locked pins-compare 'renderer must match' compare 'BAD!' world
+	pins_locked pins-replay 'renderer must match' replay 'BAD!' world
+	pins_locked pins-footprint 'scenario must match' footprint 'BAD!' --off a --on b
+	pins_locked pins-where 'scenario must match' where 'BAD!' --off a --on b --out c
+	pins_locked pins-make-demo 'demo must match' make-demo 'BAD!'
+	pins_locked pins-selftest 'cannot build framediff' selftest no-such-case
+	pins_locked pins-evidence 'renderer must match' evidence 'BAD!' world
+	# A dry run builds and runs nothing, and the usage text is no command.
+	mktree pins-dry
+	run 60 env PINS_DRYRUN=1 /bin/bash "${T:?}/scripts/pins.sh" record 'BAD!' world
+	[ "$(lines '^bench ')" -eq 0 ] && grep -q '^pins: renderer must match' "${T:?}/out" || bad "pins: a dry run took the lock; $(say)"
+	: > "${LOG:?}"
+	run 60 /bin/bash "${T:?}/scripts/pins.sh"
+	[ "$ST" -ne 0 ] && [ "$(lines '^bench ')" -eq 0 ] || bad "pins: the usage text took the lock (status $ST); $(say)"
+	unset PINS_STORE
+	[ "$fails" -eq 0 ]
+}
+
+t_off() {
+	PINS_STORE=${tmp:?}/pins-store
+	export PINS_STORE
+	for _o in BENCH_LOCK=0 CI=true nobench; do
+		case $_o in
+		nobench) _env=X_UNUSED=1 _kind=nobench ;;
+		*) _env=$_o _kind=stub ;;
+		esac
+		mktree "off-gate-$_kind" "$_kind"
+		run 60 env PATH="$GATEPATH" "$_env" sh "${T:?}/scripts/test.sh"
+		[ "$ST" -eq 0 ] && [ "$(lines '^bench ')" -eq 0 ] && gate_ok none ||
+			bad "off ($_o): the gate took the lock, or did not run its heavy part (status $ST); $(say)"
+		mktree "off-coverage-$_kind" "$_kind"
+		run 60 env PATH="$COVPATH" "$_env" sh "${T:?}/scripts/coverage.sh"
+		[ "$(lines '^bench ')" -eq 0 ] && [ "$(lines '^make .* COVERAGE=1 .* token=none ')" -eq 1 ] ||
+			bad "off ($_o): coverage took the lock, or did not run its make (status $ST); $(say)"
+		mktree "off-pins-$_kind" "$_kind"
+		run 60 env "$_env" /bin/bash "${T:?}/scripts/pins.sh" record 'BAD!' world
+		[ "$(lines '^bench ')" -eq 0 ] && grep -q '^pins: renderer must match' "${T:?}/out" ||
+			bad "off ($_o): pins.sh record took the lock, or did not run (status $ST); $(say)"
+	done
+	unset PINS_STORE
+	[ "$fails" -eq 0 ]
+}
+
+t_nested() {
+	mktree nested real
+	cat > "${T:?}/tests/check-a.sh" << 'EOF'
+#!/bin/sh
+printf 'check token=%s entry=%s lc=%s\n' "${BENCH_LOCK_TOKEN:+set}" "${BENCH_LOCK_ENTRY-unset}" "${LC_ALL-unset}" >> "$LOG"
+sh scripts/bench/bench.sh lock status >> "$LOG"
+st=0
+/bin/bash scripts/pins.sh selftest no-such-case >> "$LOG" 2>&1 || st=$?
+printf 'pins status=%s\n' "$st" >> "$LOG"
+EOF
+	BENCH_STATE=${T:?}/state
+	BENCH_LOCK_POLL=0.1
+	BENCH_LOCK_WAIT=5
+	export BENCH_STATE BENCH_LOCK_POLL BENCH_LOCK_WAIT
+	_b=${T:?}/scripts/bench/bench.sh
+	# The gate alone, LC_ALL unset: one hold, as gate; the selftest passes
+	# straight through it.
+	run 120 env -u LC_ALL PATH="$GATEPATH" sh "${T:?}/scripts/test.sh"
+	[ "$ST" -eq 0 ] || bad "nested: the gate exited $ST; $(say)"
+	grep -qx 'check token=set entry=unset lc=unset' "${LOG:?}" || bad "nested: the check did not run under the lock with the caller's LC_ALL (unset); $(say)"
+	grep -q '^lock=held label=gate .*alive=yes' "${LOG:?}" || bad "nested: the gate does not hold the lock while its checks run; $(say)"
+	grep -qx 'pins status=1' "${LOG:?}" && grep -q '^pins: cannot build framediff' "${LOG:?}" ||
+		bad "nested: the pin selftest under the gate did not pass straight through to its command; $(say)"
+	grep -q 'waiting for the lock' "${LOG:?}" "${T:?}/out" && bad "nested: a call under the gate waited for the lock; $(say)"
+	[ "$(lines '^make .* token=t-')" -eq 2 ] || bad "nested: the makes did not run under the lock; $(say)"
+	[ "$(sh "$_b" lock status)" = lock=free ] || bad "nested: the lock is not free after the gate"
+	# Under an outer holder, LC_ALL=POSIX: the gate passes straight through.
+	: > "${LOG:?}"
+	run 120 env LC_ALL=POSIX PATH="$GATEPATH" sh "$_b" lock run host -- sh "${T:?}/scripts/test.sh"
+	[ "$ST" -eq 0 ] || bad "nested: the gate under an outer holder exited $ST; $(say)"
+	grep -qx 'check token=set entry=unset lc=POSIX' "${LOG:?}" || bad "nested: the check did not get the caller's LC_ALL (POSIX); $(say)"
+	grep -q '^lock=held label=host .*alive=yes' "${LOG:?}" || bad "nested: under an outer holder the gate took a hold of its own; $(say)"
+	grep -qx 'pins status=1' "${LOG:?}" || bad "nested: the pin selftest under an outer holder failed; $(say)"
+	# The lock held by another job: the gate waits, gives up with 75 and
+	# runs nothing.
+	: > "${LOG:?}"
+	sh "$_b" lock run other -- sleep 60 > /dev/null 2>&1 &
+	_hp=$!
+	echo "$_hp" >> "${tmp:?}/pids"
+	_n=0
+	until sh "$_b" lock status | grep -q '^lock=held label=other .*child=[0-9]'; do
+		[ "$_n" -lt 100 ] || break
+		sleep 0.1
+		_n=$((_n + 1))
+	done
+	run 60 env BENCH_LOCK_WAIT=1 PATH="$GATEPATH" sh "${T:?}/scripts/test.sh"
+	[ "$ST" -eq 75 ] || bad "nested: a gate that found the lock held exited $ST, not 75; $(say)"
+	grep -q 'held by other' "${T:?}/out" || bad "nested: the gate did not name the holder; $(say)"
+	[ ! -s "${LOG:?}" ] || bad "nested: a gate without the lock ran its checks or makes; $(say)"
+	reap "$_hp"
+	wait "$_hp" 2> /dev/null || true
+	unset BENCH_STATE BENCH_LOCK_POLL BENCH_LOCK_WAIT
+	[ "$fails" -eq 0 ]
+}
+
+# ---- The real entry points. ---------------------------------------------
+all="t_gate t_coverage t_pins t_off t_nested"
+only=
+if [ "$#" -gt 0 ]; then
+	all=$*
+	only=1
+fi
+failed=
+for _t in $all; do
+	if ! (cd "$ROOT" && "$_t"); then
+		failed="$failed $_t"
+	fi
+done
+if [ -n "$failed" ]; then
+	echo "$me: failed:$failed"
+	exit 1
+fi
+if [ -n "$only" ]; then
+	_ok=1
+	echo "$me: ok ($all; no mutants)"
+	exit 0
+fi
+
+# ---- Mutants: each must fail the test that targets it. -----------------
+# lit <file> <old> <new>: replaces the first occurrence of <old> on each
+# line, as fixed text; fails when there is none.
+lit() {
+	awk -v o="$2" -v n="$3" '{ p = index($0, o); if (p) { $0 = substr($0, 1, p - 1) n substr($0, p + length(o)); c++ } print } END { exit !c }' "$1" > "$1.new" &&
+		mv "$1.new" "$1"
+}
+# mutant <name> <file under scripts> <old> <new> <test>
+mutant() {
+	_m=${tmp:?}/mutant.$1
+	rm -rf "${_m:?}"
+	mkdir -p "${_m:?}"
+	cp "$REAL/test.sh" "$REAL/coverage.sh" "$REAL/pins.sh" "${_m:?}/"
+	lit "${_m:?}/$2" "$3" "$4" || { echo "$me: mutant $1 does not apply to $2"; return 1; }
+	if (SRC=$_m MUTANT=1 && cd "$ROOT" && "$5") > "${tmp:?}/mutant.$1.out" 2>&1; then
+		echo "$me: mutant $1 passed $5; the test does not catch it"
+		return 1
+	fi
+	echo "$me: mutant $1: caught by $5 ($(sed -n 1p "${tmp:?}/mutant.$1.out" | sed "s/^$me: //" | cut -c1-120))"
+}
+mfail=0
+mutant gate-no-lock test.sh 'exec sh scripts/bench/bench.sh lock run gate -- env "$@"' ':' t_gate || mfail=1
+mutant coverage-no-lock coverage.sh 'exec sh scripts/bench/bench.sh lock run coverage -- env "$@"' ':' t_coverage || mfail=1
+for _c in record replay make-demo; do
+	mutant "pins-$_c-no-lock" pins.sh '[ -n "${PINS_DRYRUN:-}" ] || lock_self pins-'"$_c"' "$@"; ' '' t_pins || mfail=1
+done
+for _c in compare footprint where selftest evidence; do
+	mutant "pins-$_c-no-lock" pins.sh 'lock_self pins-'"$_c"' "$@"; ' '' t_pins || mfail=1
+done
+# The run under the lock must go on, not take the lock again; and a
+# BENCH_LOCK_ENTRY without a token is no hold.
+mutant gate-relocks test.sh '[ "$lock_entry" != gate ]' 'true' t_gate || mfail=1
+mutant gate-entry-no-token test.sh ' || [ -z "${BENCH_LOCK_TOKEN:-}" ]' '' t_gate || mfail=1
+mutant pins-relocks pins.sh 'if [ "$entry" = "$label" ] && [ -n "${BENCH_LOCK_TOKEN:-}" ]; then return 0; fi' ':' t_pins || mfail=1
+[ "$mfail" -eq 0 ] || exit 1
+
+_ok=1
+echo "$me: ok"
