@@ -26,14 +26,21 @@
 #   wiring    scripts/test.sh runs the scheduler on tests/check-*.sh before
 #             its builds, and stops when it fails;
 #   interrupt SIGINT to the scheduler, two checks running (one of which
-#             ignores SIGTERM) and two waiting: it ends within 20 s with
-#             status 130, what the running checks started (a sleep, by its
+#             ignores SIGTERM, the other has a SIGTERM trap of 5 s, which
+#             finishes) and two waiting: it ends within 30 s with status
+#             130, what the running checks started (a sleep, by its
 #             recorded pid) is gone, and no other check starts;
 #   interrupt1  SIGTERM, then SIGHUP, at GATE_JOBS=1, one check running and
 #             one waiting: the same, with status 143 or 129;
 #   testsh    SIGTERM, SIGHUP and SIGINT to scripts/test.sh itself, run on a
 #             copy of the gate's layout with fake checks: the same, with
-#             test.sh's status 143, 129 or 130.
+#             test.sh's status 143, 129 or 130;
+#   kgrp      SIGKILL to test.sh's process group there: test.sh's status
+#             137, and what the running check started is gone within 10 s;
+#   sigs      a check run by test.sh there gets SIGINT, SIGQUIT, SIGHUP,
+#             SIGTERM and SIGTSTP as one started directly does (as
+#             origin/main's test.sh ran each check), SIGINT delivered;
+#   leave     what a passing check leaves running is gone after the run.
 # Then each case is shown failing against at least one mutant of the
 # scheduler (or of scripts/test.sh, for wiring and testsh). Every run of the
 # scheduler is bounded in time here; one that outlives its bound fails its
@@ -59,7 +66,7 @@ gp_exit() {
 }
 trap gp_exit EXIT
 trap 'exit 1' HUP INT TERM
-unset GATE_JOBS GP_PATH GP_TD GP_NCPU GP_BOUND GP_FIRST WIRING
+unset GATE_JOBS GATE_PARENT GP_PATH GP_TD GP_NCPU GP_BOUND GP_FIRST WIRING
 export LC_ALL=C
 
 fail=0
@@ -72,9 +79,12 @@ say() { [ "$quiet" = 1 ] || echo "$me: $*"; }
 # $GP_SPEC/<name>: "<lines> <delay> <status> <mode> <hold>"; mode term or
 # kill makes it die from that signal after its lines; mode hold runs, after
 # its lines, "sleep <hold>" in the foreground, holdterm the same ignoring
-# SIGTERM (and so does that sleep). The sleep logs "sleep <name> <its pid>
-# <the check's pid> <the scheduler's pid>" before it starts.
-mkdir "${tmp:?}/bin" "${tmp:?}/shim"
+# SIGTERM (and so does that sleep), holdtrap the same with a SIGTERM trap
+# that takes 5 s and then logs "cleaned <name>"; mode leave starts that
+# sleep in the background and exits. The sleep logs "sleep <name> <its pid>
+# <the check's pid> <the scheduler's pid>". Mode probe logs how SIGINT,
+# SIGQUIT, SIGHUP, SIGTERM and SIGTSTP reach the check.
+mkdir "${tmp:?}/bin" "${tmp:?}/shim" "${tmp:?}/make"
 cat > "${tmp:?}/fake" << 'EOF'
 #!/bin/sh
 n=${0##*/}
@@ -89,10 +99,45 @@ while [ "$i" -le "$lines" ]; do
 	i=$((i + 1))
 done
 echo "$n to stderr" >&2
+# probe <signal>: logs "sig <name> <signal> delivered" when a shell this
+# check starts dies from <signal> sent to itself, "ignored" when it goes on
+probe() {
+	if sh -c 'ulimit -c 0; kill -s "$1" $$; exit 0' sh "$1" 2> /dev/null; then _pr=ignored; else _pr=delivered; fi
+	printf 'sig %s %s %s\n' "$n" "$1" "$_pr" >> "$GP_EVENTS"
+}
 case $mode in
-hold | holdterm)
-	[ "$mode" = hold ] || trap '' TERM
+hold | holdterm | holdtrap)
+	[ "$mode" != holdterm ] || trap '' TERM
+	[ "$mode" != holdtrap ] || trap 'sleep 5; printf "cleaned %s\n" "$n" >> "$GP_EVENTS"; exit 1' TERM
 	sh -c 'printf "sleep %s %s %s %s\n" "$1" "$$" "$2" "$3" >> "$GP_EVENTS"; exec sleep "$4"' sh "$n" "$$" "$PPID" "$hold"
+	;;
+leave)
+	sleep "$hold" > /dev/null 2>&1 &
+	printf 'sleep %s %s %s %s\n' "$n" "$!" "$$" "$PPID" >> "$GP_EVENTS"
+	;;
+probe)
+	# no loop around these: a shell in a loop may take a child's death from
+	# SIGINT as its own
+	probe INT
+	probe QUIT
+	probe HUP
+	probe TERM
+	# SIGTSTP to this check itself (a shell resets it in what it starts): a
+	# helper sees it stopped (delivered; it then sends SIGCONT) or sees the
+	# mark this check leaves once the kill has returned (ignored)
+	_pm=$GP_EVENTS.cont.$$
+	sh -c 'i=0
+		while [ "$i" -lt 50 ]; do
+			case $(ps -o stat= -p "$1") in *T*) r=delivered; break ;; esac
+			[ ! -e "$3" ] || { r=ignored; break; }
+			sleep 0.2
+			i=$((i + 1))
+		done
+		printf "sig %s TSTP %s\n" "$2" "${r:-unknown}" >> "$GP_EVENTS"
+		kill -s CONT "$1"' sh "$$" "$n" "$_pm" &
+	kill -s TSTP $$
+	: > "$_pm"
+	wait
 	;;
 esac
 printf 'end %s\n' "$n" >> "$GP_EVENTS"
@@ -108,7 +153,9 @@ printf '%s\n' '#!/bin/sh' 'case $* in *.log) echo "cat: cannot read" >&2; exit 1
 mkdir "${tmp:?}/cpu"
 printf '%s\n' '#!/bin/sh' '[ "$GP_NCPU" != fail ] || exit 1' 'printf "%s\n" "$GP_NCPU"' > "${tmp:?}/cpu/sysctl"
 printf '%s\n' '#!/bin/sh' 'exit 1' > "${tmp:?}/cpu/nproc"
-chmod +x "${tmp:?}/fake" "${tmp:?}/shim/cat" "${tmp:?}/cpu/sysctl" "${tmp:?}/cpu/nproc"
+# make that only logs it ran, for test.sh on a copy of the gate's layout
+printf '%s\n' '#!/bin/sh' 'printf "make %s\n" "$*" >> "$GP_EVENTS"' > "${tmp:?}/make/make"
+chmod +x "${tmp:?}/fake" "${tmp:?}/shim/cat" "${tmp:?}/cpu/sysctl" "${tmp:?}/cpu/nproc" "${tmp:?}/make/make"
 
 # newcase: a fresh case directory (called as d=$(newcase), so it keeps no count)
 newcase() {
@@ -414,17 +461,19 @@ c_guard() {
 	done
 }
 
-# wiring <test.sh>: the scheduler starts on tests/check-*.sh, alone on its
-# line, in the background (so that test.sh's traps act at once; testsh
-# shows they do), and the next lines wait for it, nothing more ("|| ..."
-# would ignore its status); all of that before the first make, and the
-# script stops on a failure (set -e)
+# wiring <test.sh>: the scheduler starts on tests/check-*.sh, told test.sh's
+# pid, alone on its line, in the background (so that test.sh's traps act at
+# once; testsh shows they do), and the next lines record its pid, turn job
+# control off again and wait for it, nothing more ("|| ..." would ignore its
+# status); all of that before the first make, and the script stops on a
+# failure (set -e). Job control on for the start: sigs shows it.
 c_wiring() {
 	_wf=${WIRING:-$top/scripts/test.sh}
-	_wl=$(grep -n '^scripts/gate-checks\.sh "\$gate_serial" "\$gate_first" tests/check-\*\.sh &$' "$_wf" | cut -d: -f1)
+	_wl=$(grep -n '^GATE_PARENT=\$\$ scripts/gate-checks\.sh "\$gate_serial" "\$gate_first" tests/check-\*\.sh &$' "$_wf" | cut -d: -f1)
 	_wm=$(grep -n '^make -B' "$_wf" | head -n 1 | cut -d: -f1)
 	[ -n "$_wl" ] && [ "$(printf '%s\n' "$_wl" | wc -l)" -eq 1 ] || { say "wiring: test.sh does not start the scheduler on tests/check-*.sh exactly once"; return 1; }
-	[ "$(sed -n "$((_wl + 1))p" "$_wf")" = 'gate_sched=$!' ] && [ "$(sed -n "$((_wl + 2))p" "$_wf")" = 'wait "$gate_sched"' ] ||
+	[ "$(sed -n "$((_wl + 1))p" "$_wf")" = 'gate_sched=$!' ] && [ "$(sed -n "$((_wl + 2))p" "$_wf")" = 'set +m' ] &&
+		[ "$(sed -n "$((_wl + 3))p" "$_wf")" = 'wait "$gate_sched"' ] ||
 		{ say "wiring: test.sh does not wait for the scheduler, and for its status, right after starting it"; return 1; }
 	[ -n "$_wm" ] && [ "$_wl" -lt "$_wm" ] || { say "wiring: the scheduler does not run before the builds"; return 1; }
 	grep -qx 'set -eu' "$_wf" || { say "wiring: test.sh does not stop on a failure"; return 1; }
@@ -448,14 +497,34 @@ dead() {
 	case $(ps -o stat= -p "$1" 2> /dev/null) in *Z*) return 0 ;; esac
 	return 1
 }
-# signalled <dir> <case> <signal> <status> <starts> <held>: once <held> held
-# checks of the run _lp (from launch) have logged their sleep (60 s at
-# most), _lp gets <signal>. Then it must end within 20 s with <status>;
-# right after (2 s at most, for the kernel), every logged sleep must be gone,
-# by its pid; and the checks that started must be exactly <starts>. What a
-# broken run left running is killed by the pids it logged.
+# lwait <seconds>: waits for the run _lp (from launch), at most <seconds>;
+# its status, or 124 once it outlives them (it is then killed)
+lwait() {
+	_wn=0
+	while kill -0 "$_lp" 2> /dev/null; do
+		if [ "$_wn" -ge $(($1 * 5)) ]; then
+			kill -s KILL "$_lp" 2> /dev/null || :
+			wait "$_lp" 2> /dev/null || :
+			_lp=
+			return 124
+		fi
+		sleep 0.2
+		_wn=$((_wn + 1))
+	done
+	_ws=0
+	wait "$_lp" || _ws=$?
+	_lp=
+	return "$_ws"
+}
+# signalled <dir> <case> <signal> <status> <starts> <held> [group [<gone>]]:
+# once <held> held checks of the run _lp (from launch) have logged their
+# sleep (60 s at most), _lp gets <signal> (with "group", its whole process
+# group does). Then it must end within 30 s with <status>; right after
+# (<gone> s at most, 2 by default, for the kernel), every logged sleep must
+# be gone, by its pid; and the checks that started must be exactly <starts>.
+# What a broken run left running is killed by the pids it logged.
 signalled() {
-	_sd=$1 _sc=$2 _sg=$3 _sw=$4 _ss=$5 _sh=$6 _sbad=0
+	_sd=$1 _sc=$2 _sg=$3 _sw=$4 _ss=$5 _sh=$6 _sto=${7:-} _sgb=${8:-2} _sbad=0
 	_sn=0
 	while [ "$(grep -c '^sleep ' "$_sd/events")" -lt "$_sh" ]; do
 		if [ "$_sn" -ge 300 ] || ! kill -0 "$_lp" 2> /dev/null; then
@@ -466,14 +535,18 @@ signalled() {
 		sleep 0.2
 		_sn=$((_sn + 1))
 	done
-	kill -s "$_sg" "$_lp" 2> /dev/null || :
+	if [ "$_sto" = group ]; then
+		kill -s "$_sg" -- "-$_lp" 2> /dev/null || :
+	else
+		kill -s "$_sg" "$_lp" 2> /dev/null || :
+	fi
 	_sn=0
-	while kill -0 "$_lp" 2> /dev/null && [ "$_sn" -lt 100 ]; do
+	while kill -0 "$_lp" 2> /dev/null && [ "$_sn" -lt 150 ]; do
 		sleep 0.2
 		_sn=$((_sn + 1))
 	done
 	if kill -0 "$_lp" 2> /dev/null; then
-		say "$_sc: the run did not end within 20 s of SIG$_sg"
+		say "$_sc: the run did not end within 30 s of SIG$_sg"
 		_sbad=1
 		kill -s KILL "$_lp" 2> /dev/null || :
 	fi
@@ -486,7 +559,7 @@ signalled() {
 		for _sp in $(awk '$1 == "sleep" { print $3 }' "$_sd/events"); do
 			dead "$_sp" || _sl="$_sl $_sp"
 		done
-		[ -n "$_sl" ] && [ "$_sn" -lt 10 ] || break
+		[ -n "$_sl" ] && [ "$_sn" -lt $((_sgb * 5)) ] || break
 		sleep 0.2
 		_sn=$((_sn + 1))
 	done
@@ -506,22 +579,24 @@ signalled() {
 	return "$_sbad"
 }
 
-# interrupt: SIGINT to the scheduler with two checks running, a and b (b
-# ignores SIGTERM: only the SIGKILL after the grace ends it), c and d waiting
+# interrupt: SIGINT to the scheduler with two checks running, a and b, c
+# and d waiting. b ignores SIGTERM: only the SIGKILL after the grace ends
+# it. a's SIGTERM trap takes 5 s: the grace (10 s) lets it finish.
 c_interrupt() {
 	d=$(newcase)
-	spec "$d" a 1 0 0 hold 30
+	spec "$d" a 1 0 0 holdtrap 30
 	spec "$d" b 1 0 0 holdterm 30
 	spec "$d" c 1 0 0
 	spec "$d" d 1 0 0
 	launch "$d" env GATE_JOBS=2 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" \
 		sh "$SCHED" "" "" "$d/check-a.sh" "$d/check-b.sh" "$d/check-c.sh" "$d/check-d.sh"
-	signalled "$d" interrupt INT 130 "start a start b " 2
+	signalled "$d" interrupt INT 130 "start a start b " 2 || return 1
+	grep -qx 'cleaned a' "$d/events" || { say "interrupt: a check's SIGTERM trap of 5 s was cut short"; return 1; }
 }
 
 # interrupt1: SIGTERM, then SIGHUP, to the scheduler at GATE_JOBS=1, a
 # running and b waiting. The held sleep is 10 s: a scheduler that goes on
-# after the signal starts b once it has ended, well inside the 20 s.
+# after the signal starts b once it has ended, well inside the 30 s.
 c_interrupt1() {
 	for _ig in TERM:143 HUP:129; do
 		d=$(newcase)
@@ -533,29 +608,97 @@ c_interrupt1() {
 	done
 }
 
+# gtree <dir> <test.sh> <spec>...: a copy of the gate's layout in <dir>/tree:
+# that test.sh, the scheduler under test, and as tests/check-*.sh a
+# check-a.sh as <spec> says (see spec), followed by a quick fake for each
+# check that test.sh's two lists name, and check-z.sh. No Makefile is
+# copied: no build can run in that tree.
+gtree() {
+	_gtd=$1 _gtf=$2
+	shift 2
+	mkdir "${_gtd:?}/tree" "${_gtd:?}/tree/scripts" "${_gtd:?}/tree/tests"
+	cp "$_gtf" "$_gtd/tree/scripts/test.sh"
+	cp "$SCHED" "$_gtd/tree/scripts/gate-checks.sh"
+	chmod +x "$_gtd/tree/scripts/test.sh" "$_gtd/tree/scripts/gate-checks.sh"
+	spec "$_gtd" a "$@"
+	for _tn in $(sed -n -e 's/^gate_first="\(.*\)"$/\1/p' -e 's/^gate_serial="\(.*\)"$/\1/p' "$_gtf") check-z.sh; do
+		_tn=${_tn#check-}
+		spec "$_gtd" "${_tn%.sh}" 1 0 0
+	done
+	mv "$_gtd"/check-*.sh "$_gtd/tree/tests/"
+}
+
 # testsh: SIGTERM, SIGHUP and SIGINT to scripts/test.sh (or $WIRING) itself,
-# run on a copy of the gate's layout in a scratch tree: test.sh, the
-# scheduler under test, and as tests/check-*.sh a held check-a.sh (10 s, as
-# in interrupt1) followed by a quick fake for each check that test.sh's two
-# lists name, and check-z.sh; GATE_JOBS=1, so check-a.sh runs first and
-# alone. No Makefile is copied: no build can run in that tree.
+# run on a copy of the gate's layout (gtree) with a held check-a.sh (10 s,
+# as in interrupt1); GATE_JOBS=1, so check-a.sh runs first and alone
 c_testsh() {
 	_tf=${WIRING:-$top/scripts/test.sh}
 	for _tg in TERM:143 HUP:129 INT:130; do
 		d=$(newcase)
-		mkdir "${d:?}/tree" "${d:?}/tree/scripts" "${d:?}/tree/tests"
-		cp "$_tf" "$d/tree/scripts/test.sh"
-		cp "$SCHED" "$d/tree/scripts/gate-checks.sh"
-		chmod +x "$d/tree/scripts/test.sh" "$d/tree/scripts/gate-checks.sh"
-		spec "$d" a 1 0 0 hold 10
-		for _tn in $(sed -n -e 's/^gate_first="\(.*\)"$/\1/p' -e 's/^gate_serial="\(.*\)"$/\1/p' "$_tf") check-z.sh; do
-			_tn=${_tn#check-}
-			spec "$d" "${_tn%.sh}" 1 0 0
-		done
-		mv "$d"/check-*.sh "$d/tree/tests/"
+		gtree "$d" "$_tf" 1 0 0 hold 10
 		launch "$d" env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" sh "$d/tree/scripts/test.sh"
 		signalled "$d" testsh "${_tg%:*}" "${_tg#*:}" "start a " 1 || return 1
 	done
+}
+
+# kgrp: SIGKILL to the process group of scripts/test.sh (or $WIRING), on a
+# copy of the gate's layout, while check-a.sh holds a 30 s sleep: test.sh
+# dies with status 137 (nothing can trap SIGKILL), and its scheduler, in a
+# group of its own, sees within one poll that the test.sh that started it is
+# gone and ends every check: the sleep is gone within 10 s, nothing else starts
+c_kgrp() {
+	_tf=${WIRING:-$top/scripts/test.sh}
+	d=$(newcase)
+	gtree "$d" "$_tf" 1 0 0 hold 30
+	launch "$d" env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" sh "$d/tree/scripts/test.sh"
+	signalled "$d" kgrp KILL 137 "start a " 1 group 10
+}
+
+# sigs: a probe check-a.sh run through scripts/test.sh (or $WIRING), on a
+# copy of the gate's layout, gets SIGINT, SIGQUIT, SIGHUP, SIGTERM and
+# SIGTSTP as it does when it is started directly from here, as
+# origin/main's test.sh ran each check (in its own foreground, no trap set),
+# and SIGINT is delivered to it
+c_sigs() {
+	_tf=${WIRING:-$top/scripts/test.sh}
+	dc=$(newcase)
+	spec "$dc" a 1 0 0 probe
+	launch "$dc" env GP_EVENTS="$dc/events" GP_SPEC="$dc/spec" "$dc/check-a.sh"
+	rc=0
+	lwait 30 || rc=$?
+	_sgw=$(grep '^sig ' "$dc/events" || :)
+	[ "$rc" -eq 0 ] && [ "$(printf '%s\n' "$_sgw" | grep -cE ' (delivered|ignored)$')" -eq 5 ] ||
+		{ say "sigs: the probe run directly gave status $rc and: $_sgw"; return 1; }
+	d=$(newcase)
+	gtree "$d" "$_tf" 1 0 0 probe
+	launch "$d" env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" PATH="$tmp/make:$PATH" \
+		sh "$d/tree/scripts/test.sh"
+	rc=0
+	lwait 90 || rc=$?
+	[ "$rc" -eq 0 ] && grep -q '^make ' "$d/events" || { say "sigs: test.sh on the probe gave status $rc"; return 1; }
+	_sgt=$(grep '^sig ' "$d/events" || :)
+	[ "$_sgt" = "$_sgw" ] || { say "sigs: a check run by test.sh got: $_sgt; run directly: $_sgw" | tr '\n' ' '; echo; return 1; }
+	printf '%s\n' "$_sgt" | grep -qx 'sig a INT delivered' || { say "sigs: SIGINT is not delivered to a check run by test.sh"; return 1; }
+}
+
+# leave: a check that leaves a sleep running in the background (its output
+# elsewhere) and exits 0 passes, and the sleep is gone once the run has
+# ended: the scheduler ends a check's process group when the check ends
+c_leave() {
+	d=$(newcase)
+	spec "$d" a 1 0 0 leave 30
+	spec "$d" b 1 0 0
+	rc=0
+	run "$d" 2 "" a b || rc=$?
+	_lv=$(awk '$1 == "sleep" { print $3 }' "$d/events")
+	[ -n "$_lv" ] || { say "leave: the check did not log its sleep"; return 1; }
+	_ln=0
+	while ! dead "$_lv" && [ "$_ln" -lt 10 ]; do
+		sleep 0.2
+		_ln=$((_ln + 1))
+	done
+	dead "$_lv" || { say "leave: what a passing check left running outlived the run (pid $_lv)"; kill -s KILL "$_lv" 2> /dev/null || :; return 1; }
+	[ "$rc" -eq 0 ] && [ "$(status "$d" a)" = ok ] || { say "leave: status $rc, want 0, and check-a.sh passed"; return 1; }
 }
 
 # lit <file> <old> <new>: the file with its one occurrence of <old>
@@ -567,7 +710,7 @@ lit() {
 		END { exit c != 1 }' "$1"
 }
 
-cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh"
+cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs leave"
 for c in $cases; do
 	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; fi
 done
@@ -619,7 +762,10 @@ mutant no-scratch errors '_gd=$(mktemp -d "${TMPDIR:-/tmp}/gate.XXXXXX") ||' '_g
 mutant guard-off guard 'if [ "$_gnext" -le "$_gn" ]; then' 'if false; then'
 mutant group-kill-dropped interrupt 'kill -s "$_gks" -- "-$_gkg"' 'kill -s "$_gks" -- "$_gkg"'
 mutant no-process-group interrupt '	set -m' '	:'
-mutant no-kill-after-grace interrupt '		gate_kill KILL $_gcg' '		:'
+mutant no-kill-after-grace interrupt '	gate_kill KILL "$@"' '	:'
+mutant grace-3s interrupt 'gate_grace=10' 'gate_grace=3'
+mutant no-parent-check kgrp 'if [ -n "$_gparent" ] && ! gate_parent "$_gparent"; then' 'if false; then'
+mutant no-end-at-exit leave '			gate_end "$_grpid"' '			:'
 mutant int-passes interrupt "trap 'exit 130' INT" "trap 'exit 0' INT"
 mutant term-goes-on interrupt1 "trap 'exit 143' TERM" "trap ':' TERM"
 mutant term-passes interrupt1 "trap 'exit 143' TERM" "trap 'exit 0' TERM"
@@ -638,6 +784,8 @@ wmut wiring-subset wiring 'scripts/gate-checks.sh "$gate_serial" "$gate_first" t
 wmut wiring-no-errexit wiring 'set -eu' 'set -u'
 wmut stop-not-passed testsh '		kill -s TERM "$gate_sched" 2> /dev/null || :' '		:'
 wmut stop-passes testsh "trap 'gate_stop 143' TERM" "trap 'gate_stop 0' TERM"
+wmut no-own-group sigs 'set -m' ':'
+wmut no-parent-pid kgrp 'GATE_PARENT=$$ scripts/gate-checks.sh' 'scripts/gate-checks.sh'
 
 if [ "$fail" -ne 0 ]; then
 	echo "$me: FAILED"
