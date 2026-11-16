@@ -553,6 +553,86 @@ it, so records of the old and the new demo never share an id. The run
 also reads and rewrites `config.cfg` in the write directory, as any
 portable start without the pin arguments does.
 
+## Timings with bench.sh
+
+Frame rates and GPU times are not judged from pins. They are measured
+with the bench harness, `scripts/bench/bench.sh` (its commands, the
+host lock and the store are in
+[Unit Tests, Pins And Coverage](085_unittests.md#benchmarks-and-the-host-lock),
+its design in `docs/plans/bench-harness.md`), through the quake2
+adapter, `scripts/bench/adapters/quake2.sh`, and the cases in
+`scripts/bench/cases/`. A case exports a commit, builds it, plays a demo
+with every setting fixed and reads the numbers the engine prints; a
+baseline is measured once per build and reused. It needs the same game
+data as a pin, and every quake2 case needs a bare-metal Mac. This page
+holds the quake2 part because it shares the pins' game data, scenarios
+and rules for what is never committed.
+
+```sh
+export BENCH_Q2_BASEDIR=/path/to/quake2     # holds baseq2/, as PINS_BASEDIR
+scripts/bench/bench.sh case rt-ao-gpu-1920x1080
+scripts/bench/bench.sh baseline put rt-ao-gpu-1920x1080 HEAD
+scripts/bench/bench.sh drift rt-ao-gpu-1920x1080 HEAD
+scripts/bench/bench.sh compare rt-ao-gpu-1920x1080 --before HEAD~1 --after HEAD
+```
+
+| Variable | Meaning |
+|---|---|
+| `BENCH_Q2_BASEDIR` | the directory that holds `baseq2/`; default `PINS_BASEDIR` |
+| `BENCH_Q2_BUILDS` | the build cache, one export and build per inputs id, outside any repository, owned by you and writable by no one else; default `<cache home>/<repository>-bench-builds` (below) |
+| `BENCH_Q2_JOBS` | `make -j` of a build; default the number of CPUs |
+| `BENCH_Q2_LOGS` | a directory, outside any repository, that keeps each run's engine log (text only); default unset |
+| `BENCH_Q2_CAPS` | a file of capability lines (`physical-gpu=yes`, `raytracing=no`, `metalfx=yes`, `metalfx-temporal=yes`, `display-hz=60`) read in place of the system probe; `physical-gpu` is still checked against `kern.hv_vmm_present`, and a `display-hz` requirement is refused with a file |
+
+Before a measurement the adapter checks the case's settings and its
+`requires`: `physical-gpu`, `raytracing`, `metalfx` and `display-hz>=N`,
+read from the system by a small probe built with the host's `cc`
+(`scripts/bench/adapters/quake2-caps.m`, which asks Metal and the
+display what `ref_metal` asks). A case that runs the temporal scaler
+(`r_metalfx 2`) needs the temporal scaler's support as well as
+`metalfx`, since the engine would quietly fall back to the spatial one.
+A capability the host lacks refuses the case with its reason (`bench.sh`
+exits 3), so the build VM refuses every quake2 case rather than measure
+something else. It also refuses a run while `MTL_DEBUG_LAYER` is set,
+while the screen is locked or while another `quake2` runs, and when
+`ioreg` or `pgrep` fails, so it cannot tell; it never stops a process it
+did not start. Each run starts without a saved `config.cfg`, plays with
+sound off, is sent TERM `seconds=` after launch and must show the case's
+renderer and, for a ray-traced or MetalFX case, the engine's own support
+line (for a temporal case, the temporal scaler's).
+
+The build cache is `$XDG_CACHE_HOME/<repository>-bench-builds`, else
+`~/.cache/<repository>-bench-builds`, where `<repository>` is the name
+of the repository's directory (`quake2` for a clone of that name), or
+`BENCH_Q2_BUILDS`. It holds one directory per inputs id (`bench.sh
+inputs <commit> <case>` prints it): `tree/`, an export of the commit,
+about 40 MB before the build (three quarters of it `third_party/`),
+then its objects and `release/`; `exported`, the marker of a finished
+export; and `build.log`. Builds run with the caller's build variables
+cleared (`CC`, `CFLAGS`, `LDFLAGS`, `DEBUG`, `ASAN`, every `WITH_*` and
+the rest of `Q2_BUILD_ENV` in the adapter), so an entry does not depend
+on who ran it; a case's `build_flags` are part of its inputs id. Nothing
+prunes it. Remove an entry, or the whole directory, with `rm -rf` while
+no bench run is in progress (`bench.sh lock status`); the next run of
+that inputs id exports and builds it again.
+
+| Cases | From | Metric | Settings |
+|---|---|---|---|
+| `present-<renderer>-<size>-vsync<0 or 1>`: 12, `metal` and `gl1-metal`, 640x480 and 1920x1080 windowed, 5120x2880 `vid_fullscreen 1` | FIX51 | `fps`, the timedemo's rendered rate; also `presented` and `no_drawable` over the run | stock settings, a timedemo of `demo1.dm2`, `metal_stats 1` |
+| `rt-shadows-gpu-<size>[-entities]`: 4 | TASK131 | `rts_ms`, the shadow pass's GPU time, median of the frames numbered past 100 | scenario `rt-shadows` or `rt-shadows-entities`, `pins_seed 1`, timedemo, `r_rt_stats 2` |
+| `rt-ao-gpu-<size>[-entities]`: 4 | TASK57 | `rtao_ms`, the AO pass's GPU time, past the first 100 lines | scenario `rt-ao` or `rt-ao-entities`, `pins_seed 1`, timedemo, `r_rt_stats 2` |
+| `metalfx-scaler-<size>-<spatial or temporal>-<scale>`: 12, 1920x1080 windowed and 5120x2880 fullscreen, scales 0.75, 0.5 and 0.34 | TASK111 | `scaler_ms`, the scaler pass's GPU time per view, past the first 60 lines | scenario `world`, the engine's own pace, display sync off, `vid_maxfps 300`, `metal_stats 2` |
+
+The ray-traced cases' 5120x2880 is a 2560x1440 window with
+`vid_highdpiaware 1`, as in TASK131. A case is one measurement, so each
+cell has its own file. The scaler cases run with display sync off: at
+60 frames a second on a quiet host the GPU clocks down between frames
+and the pass reads about twice its time, varying between runs. The
+engine prints no time per frame, so a rate over a window of seconds
+(FIX51's presented frames a second) is not measured; the totals over a
+run are. The reproductions of each family against its card are in
+`docs/runbook/TASK154.md`.
+
 ## Other commands
 
 * `scripts/pins.sh list`: how many frames each record in the store holds,

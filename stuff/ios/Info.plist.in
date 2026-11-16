@@ -12,6 +12,8 @@
 	<string>@BUNDLE_ID@</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<key>CFBundleName</key>
 	<string>Quake II</string>
 	<key>CFBundlePackageType</key>

@@ -380,10 +380,14 @@ into the bundle, for a local build only) are described at the top of the
 Makefile. `make ios_objects` builds the objects alone.
 
 `scripts/ios-sim.sh smoke --out DIR` builds the app with a synthetic pak
-(*scripts/ios/smokepak.py*: a palette and a console font made from
-formulas, no id Software data), runs it on a simulator device it creates
-and deletes again, and checks from the engine's own log and frame that
-`ref_metal` reached the console. It writes the build and the logs to
+(*scripts/ios/smokepak.py*: a palette, a console font whose glyphs are
+transparent and a console background, made from formulas, no id
+Software data), runs it on a simulator device it creates and deletes
+again, and checks from the engine's own log and frame that `ref_metal`
+reached the console, that the simulator's screenshot of the screen's
+safe area is that frame pixel for pixel (so a stretched, cropped or
+shifted picture fails), and that the app quit through its own quit
+path. It writes the build and the logs to
 DIR, which must be outside the checkout; the app's data and write
 directory is *Documents/* in its data container (see below). The simulator's
 Metal device reports no Apple GPU family; in the simulator only,
