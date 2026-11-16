@@ -86,7 +86,7 @@ rebuild): the frames of these runs hold about 0.15 ms of raster each
 the GPU never does the milliseconds-long work after which section 8 saw
 the level change. This is consistent with section 8's hypothesis that the
 level follows the load, and was not tested further. Commands and runs:
-the runbook, "Acceleration structures in `ref_metal` (TASK53, RT1)".
+the card file [`docs/runbook/TASK53.md`](../runbook/TASK53.md), "Acceleration structures in `ref_metal` (TASK53, RT1)".
 
 ## 2. The three effects, as compute passes
 
@@ -123,7 +123,7 @@ Total budget at 1080p with everything on: about 5 rays per pixel
 *Assumed* on apple7 compute RT: 8 to 14 ms; TASK25's render-stage path on
 apple9 is expected to halve it. RT1 measures.
 
-Measured for the dlight shadows (RT3, TASK55; the runbook, "Ray-traced shadows from dynamic
+Measured for the dlight shadows (RT3, TASK55; the card file [`docs/runbook/TASK55.md`](../runbook/TASK55.md), "Ray-traced shadows from dynamic
 lights in `ref_metal`"). The pass as built:
 
 - one ray from the eye to find the pixel's surface, cast wherever a light reaches its plane (on
@@ -484,7 +484,7 @@ keeps the decision open (the end of this subsection).
 compute-dispatch ray queries, the synthetic closed scene, the later level
 of a process, trace only) with its table, row and column, or computed
 from those numbers by model R below, with the computation shown and the
-number marked as modelled. The runbook's TASK97 section
+number marked as modelled. The TASK97 card file
 (`docs/runbook/TASK97.md`, "Frame rates on a physical GPU
 (TASK97)") gives no cost used here: its numbers are `timedemo` frame
 rates, not GPU times; none is at a native size; the three renderers that
@@ -1206,7 +1206,7 @@ origin (`rm_fx_input_viewport`), not `r_rt_gbuffer_scale`'s, and the scaler writ
 frame's rectangle in place of the stretch. The jitter of the temporal modes is the Halton
 (2, 3) pair minus 0.5 from index 1, a cycle of 32, started again on each reset
 (`rm_fx_jitter`). The reset events are those of section 2, with the client's teleport
-distance, 256 units on an axis, as the cut threshold (`RM_FX_CUT_DIST`). See the runbook file
+distance, 256 units on an axis, as the cut threshold (`RM_FX_CUT_DIST`). See the card file
 [MetalFX scalers for the 3D view](../runbook/TASK111.md).
 
 **Previous-frame transforms.** `rm_gb_hist_t` (`header/rm_gbuf.h`;
@@ -1849,8 +1849,8 @@ The display's pixel size is 5120 x 2880; its desktop size in points is
 2560 x 1440 (section 8, "Display"). Every capture is a fresh engine with
 `vid_fullscreen 1` at a mode the display lists, `r_mode -1` with
 `r_customwidth` and `r_customheight` at the request, the route TASK108
-(#259) found for the native size (its re-measurement of the runbook's
-TASK97 section (`docs/runbook/TASK97.md`), on TASK108's branch). Each of the 28 logs holds, once
+(#259) found for the native size (its re-measurement of the
+TASK97 card file (`docs/runbook/TASK97.md`), on TASK108's branch). Each of the 28 logs holds, once
 each, the three lines for its size, for example at the native size:
 
 ```
