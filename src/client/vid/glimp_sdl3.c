@@ -194,6 +194,35 @@ GLimp_ScreenEvent(void)
 }
 #endif
 
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+/* The client wants typed text now (the on-screen keyboard), applied to every window made. */
+static qboolean text_input_wanted;
+
+/*
+ * iOS only: text input, and with it the on-screen keyboard, on or off.
+ * Called by the input code when it changes, never every frame.
+ */
+void
+GLimp_TextInput(qboolean on)
+{
+	text_input_wanted = on;
+
+	if (!window)
+	{
+		return;
+	}
+
+	if (on)
+	{
+		SDL_StartTextInput(window);
+	}
+	else
+	{
+		SDL_StopTextInput(window);
+	}
+}
+#endif
+
 static qboolean
 CreateSDLWindow(SDL_WindowFlags flags, int fullscreen, int w, int h)
 {
@@ -232,8 +261,16 @@ CreateSDLWindow(SDL_WindowFlags flags, int fullscreen, int w, int h)
 	{
 		DisableCloseAnimation(window);
 
-		/* enable text input */
+		/* enable text input; on iOS the on-screen keyboard follows the
+		   client's need to type instead (GLimp_TextInput, TASK150) */
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+		if (text_input_wanted)
+		{
+			SDL_StartTextInput(window);
+		}
+#else
 		SDL_StartTextInput(window);
+#endif
 
 		/* save current display as default */
 		SDL_DisplayID current = SDL_GetDisplayForWindow(window);
