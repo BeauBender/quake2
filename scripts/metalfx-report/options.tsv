@@ -1,0 +1,15 @@
+# id	label	scenarios	set (cvar=value, space separated)
+fx1-s75	r_metalfx 1 (spatial) at scale 0.75	all	r_metalfx=1 r_metalfx_scale=0.75
+fx1-s50	r_metalfx 1 (spatial) at scale 0.50	all	r_metalfx=1 r_metalfx_scale=0.50
+fx1-s34	r_metalfx 1 (spatial) at scale 0.34	all	r_metalfx=1 r_metalfx_scale=0.34
+fx2-s75	r_metalfx 2 (temporal) at scale 0.75	all	r_metalfx=2 r_metalfx_scale=0.75
+fx2-s50	r_metalfx 2 (temporal) at scale 0.50	all	r_metalfx=2 r_metalfx_scale=0.50
+fx2-s34	r_metalfx 2 (temporal) at scale 0.34	all	r_metalfx=2 r_metalfx_scale=0.34
+fx3-s75	r_metalfx 3 (temporal denoised) at scale 0.75	all	r_metalfx=3 r_metalfx_scale=0.75
+fx3-s50	r_metalfx 3 (temporal denoised) at scale 0.50	all	r_metalfx=3 r_metalfx_scale=0.50
+fx3-s34	r_metalfx 3 (temporal denoised) at scale 0.34	all	r_metalfx=3 r_metalfx_scale=0.34
+fx1-s50-interp	r_metalfx 1 (spatial) at 0.5 with frame generation	all	r_metalfx=1 r_metalfx_scale=0.5 r_metalfx_interp=1
+fx2-s50-interp	r_metalfx 2 (temporal) at 0.5 with frame generation	all	r_metalfx=2 r_metalfx_scale=0.5 r_metalfx_interp=1
+fx3-s50-interp	r_metalfx 3 (temporal denoised) at 0.5 with frame generation	all	r_metalfx=3 r_metalfx_scale=0.5 r_metalfx_interp=1
+den1	r_rt_denoiser 1, no scaler	rt	r_rt_denoiser=1
+fx3-s50-den1	r_metalfx 3 at 0.5 with r_rt_denoiser 1	rt	r_metalfx=3 r_metalfx_scale=0.5 r_rt_denoiser=1

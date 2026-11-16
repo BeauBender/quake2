@@ -313,6 +313,7 @@ render-stage ray queries and the performance numbers.
 - [TASK98](../runbook/TASK98.md): Screenshot and capture readback on a physical GPU
 - [TASK108](../runbook/TASK108.md): Re-measurement
 - [TASK111](../runbook/TASK111.md): MetalFX scalers for the 3D view in `ref_metal`
+- [TASK114](../runbook/TASK114.md): A local HTML report comparing the MetalFX options on each Mac
 - [TASK118](../runbook/TASK118.md): HighDPI windows on the bare-metal host
 - [TASK119](../runbook/TASK119.md): Crisp 2D in `ref_metal`
 - [TASK120](../runbook/TASK120.md): Bicubic lightmaps in `ref_metal`
