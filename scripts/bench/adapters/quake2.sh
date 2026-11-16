@@ -15,6 +15,9 @@
 #                     outside any repository. Default:
 #                     <cache home>/<repository>-bench-builds
 #   BENCH_Q2_JOBS     make -j for a build. Default: hw.ncpu, else 4
+#   BENCH_Q2_LOGS     a directory, outside any repository, that keeps a copy
+#                     of every run's engine log (text only: no frame, no
+#                     trace). Default: unset, the logs go with the run
 #   BENCH_Q2_CAPS     a file of capability lines (physical-gpu=yes,
 #                     raytracing=no, metalfx=yes, display-hz=60) read in place
 #                     of the system probe, for the self-test and for a host
@@ -56,8 +59,10 @@
 #                                the run's scratch directory and removed
 #                                after the run; no frame is captured
 #     skip=<n>                   per-frame stat lines skipped at the start of
-#                                a run, for each kind of line: the counting
-#                                window, in frames (0)
+#                                a run, for each kind of line (0)
+#     after_frame=<n>            only the r_rt_stats 2 lines of frames
+#                                numbered above n (their "frame <f>:"), for a
+#                                pass that does not run on every frame (0)
 #     cvar.<name>=<value>        one more +set; not one the adapter sets, nor
 #                                one that picks a directory or the game
 #
@@ -73,13 +78,13 @@
 #                                (metal_stats 2), past skip lines
 #   rts_ms, rts_ms_p90, rts_ms_n, rts_traced_ms, rts_traced_ms_n
 #                                the shadow pass's GPU time per frame
-#                                (r_rt_stats 2) past skip lines; _traced only
+#                                (r_rt_stats 2) in the window; _traced only
 #                                the frames that traced a ray
 #   rtao_ms, rtao_ms_p90, rtao_ms_n
 #                                the AO pass's GPU time per frame
 # The engine prints no time per frame, so the counting window is in frames
-# (skip), and a rate over a window of seconds, as FIX51's probe counted, is
-# not available.
+# (skip, after_frame), and a rate over a window of seconds, as FIX51's probe
+# counted, is not available.
 #
 # Every value handed to the engine holds only A-Z a-z 0-9 _ . / - (the
 # engine re-joins its command line unquoted), as scripts/pins.sh requires.
@@ -165,7 +170,7 @@ q2_check_settings() {
 		pace) case $_qs_v in timedemo | own) ;; *) _qs_ok=0 ;; esac ;;
 		seconds) q2_uint_in "$_qs_v" 1 3600 || _qs_ok=0 ;;
 		maxfps) q2_uint_in "$_qs_v" 1 100000 || _qs_ok=0 ;;
-		skip) q2_uint_in "$_qs_v" 0 1000000 || _qs_ok=0 ;;
+		skip | after_frame) q2_uint_in "$_qs_v" 0 1000000 || _qs_ok=0 ;;
 		seed) printf '%s\n' "$_qs_v" | grep -E -q '^(0|[1-9][0-9]{0,8})$' || _qs_ok=0 ;;
 		demo) printf '%s\n' "$_qs_v" | grep -E -q '^[A-Za-z0-9_][A-Za-z0-9_.-]*\.dm2$' && q2_safe "$_qs_v" || _qs_ok=0 ;;
 		scenario) printf '%s\n' "$_qs_v" | grep -E -q '^[a-z0-9_][a-z0-9_-]*$' || _qs_ok=0 ;;
@@ -518,10 +523,11 @@ q2_scenario_args() {
 # reports each capability the case requires; says what is missing.
 q2_check_log() {
 	_ql_r=$(q2_word renderer)
-	_ql_lib=$(sed -n 's/^Loading library: //p' "$1" | sed -n '$p')
+	# the last renderer library loaded (the game module is loaded the same way)
+	_ql_lib=$(sed -n 's/.*Loading library: \(ref_[A-Za-z0-9_]*\).*/\1/p' "$1" | sed -n '$p')
 	case $_ql_r.$_ql_lib in
-	metal.*ref_metal*) ;;
-	gl1-metal.*ref_gl1*)
+	metal.ref_metal) ;;
+	gl1-metal.ref_gl1)
 		grep -m1 '^GL_RENDERER: ' "$1" | grep -q '(gl1-metal)' || {
 			q2_say "the engine did not load the Metal shim build of ref_gl1 (build it with WITH_METAL_SHIM=yes)"
 			return 1
@@ -620,6 +626,13 @@ adapter_run() {
 	bench_bounded "$(bench_case_wall)" sh -c "$Q2_RUNNER" quake2-run "$(q2_word seconds)" "$_qr_bin" "$@" \
 		> "${_qr_log:?}" 2>&1 || _qr_st=$?
 	rm -rf "${_qr_run:?}"
+	if [ -n "${BENCH_Q2_LOGS:-}" ]; then
+		_qr_keep=$(
+			bench_outside_repo "$BENCH_Q2_LOGS" "the log directory (BENCH_Q2_LOGS)"
+			mkdir -p "$BENCH_Q2_LOGS" && printf '%s\n' "$BENCH_Q2_LOGS"
+		) || return 1
+		cp "$_qr_log" "$_qr_keep/$BENCH_CASE_NAME-$(date -u +%Y%m%dT%H%M%SZ)-$BENCH_RUN_KIND-$BENCH_RUN_INDEX.log" || return 1
+	fi
 	if [ "$_qr_st" -ne 0 ]; then
 		tail -n 5 "$_qr_log" >&2
 		q2_say "the engine exited with status $_qr_st"
@@ -634,30 +647,46 @@ adapter_metrics() {
 	_qm_d=${BENCH_TMP:?}/quake2-metrics
 	rm -rf "${_qm_d:?}"
 	mkdir -p "$_qm_d"
-	awk -v skip="${_qm_skip:-0}" -v d="$_qm_d" '
+	# A line is found by its prefix anywhere on a log line: the engine's
+	# console text does not always end in a newline before the next print,
+	# and the shim writes to standard error, unbuffered, between them.
+	_qm_after=$(q2_word after_frame)
+	awk -v skip="${_qm_skip:-0}" -v after="${_qm_after:-0}" -v d="$_qm_d" '
 		function num(s) { return s ~ /^[0-9]+(\.[0-9]+)?$/ }
-		/^[0-9]+ frames, [0-9.]+ seconds: [0-9.]+ fps$/ && !td {
-			td = 1; tdf = $1; tds = $3; tdfps = $5
+		function from(p,  i) { i = index($0, p); return i ? substr($0, i) : "" }
+		!td && match($0, /(^|[^0-9.])[0-9]+ frames, [0-9]+(\.[0-9]+)? seconds: [0-9]+(\.[0-9]+)? fps$/) {
+			s = substr($0, RSTART, RLENGTH)
+			sub(/^[^0-9]/, "", s)
+			split(s, f, " ")
+			td = 1; tdf = f[1]; tds = f[3]; tdfps = f[5]
 		}
-		/^ref_metal: metal_stats: [0-9]+ frames, [0-9]+ without a drawable, [0-9]+ skipped, [0-9]+ failed command buffers/ {
-			st = 1; fr = $3; nd = $5; sk = $9; fl = $11
+		{ s = from("ref_metal: metal_stats: ") }
+		s ~ /^ref_metal: metal_stats: [0-9]+ frames, [0-9]+ without a drawable, [0-9]+ skipped, [0-9]+ failed command buffers/ {
+			split(s, f, " ")
+			st = 1; fr = f[3]; nd = f[5]; sk = f[9]; fl = f[11]
 		}
-		/^mgl: [0-9]+ frames, [0-9]+ without a drawable, [0-9]+ skipped/ {
-			st = 1; fr = $2; nd = $4; sk = $8
+		s ~ /^ref_metal: metal_stats: metalfx / {
+			if (++fx > skip + 0 && match(s, /, scaler [0-9]+(\.[0-9]+)? ms$/))
+				print substr(s, RSTART + 9, RLENGTH - 12) > (d "/scaler_ms")
 		}
-		/^mgl: [0-9]+ command buffers failed/ { fl = $2 }
-		/^ref_metal: metal_stats: metalfx / {
-			if (++fx > skip + 0 && match($0, /, scaler [0-9]+(\.[0-9]+)? ms$/))
-				print substr($0, RSTART + 9, RLENGTH - 12) > (d "/scaler_ms")
+		{ s = from("mgl: ") }
+		s ~ /^mgl: [0-9]+ frames, [0-9]+ without a drawable, [0-9]+ skipped/ {
+			split(s, f, " ")
+			st = 1; fr = f[2]; nd = f[4]; sk = f[8]
 		}
-		/^ref_metal: rt shadows: frame [0-9]+: / {
-			if (++rs > skip + 0 && NF == 18 && num($17)) {
-				print $17 > (d "/rts_ms")
-				if ($11 + 0 > 0) print $17 > (d "/rts_traced_ms")
+		s ~ /^mgl: [0-9]+ command buffers failed/ { split(s, f, " "); fl = f[2] }
+		{ s = from("ref_metal: rt shadows: frame ") }
+		s ~ /^ref_metal: rt shadows: frame [0-9]+: / {
+			n = split(s, f, " ")
+			if (++rs > skip + 0 && f[5] + 0 > after + 0 && n == 18 && num(f[17])) {
+				print f[17] > (d "/rts_ms")
+				if (f[11] + 0 > 0) print f[17] > (d "/rts_traced_ms")
 			}
 		}
-		/^ref_metal: rt ao: frame [0-9]+: / {
-			if (++ra > skip + 0 && num($(NF - 1))) print $(NF - 1) > (d "/rtao_ms")
+		{ s = from("ref_metal: rt ao: frame ") }
+		s ~ /^ref_metal: rt ao: frame [0-9]+: / {
+			n = split(s, f, " ")
+			if (++ra > skip + 0 && f[5] + 0 > after + 0 && n == 25 && num(f[24])) print f[24] > (d "/rtao_ms")
 		}
 		END {
 			if (td && num(tdf) && num(tds) && num(tdfps))

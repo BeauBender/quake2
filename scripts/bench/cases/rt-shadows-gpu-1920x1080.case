@@ -1,11 +1,12 @@
 # TASK131: the shadow pass's GPU time per frame, from the timestamps of the
 # r_rt_stats 2 line, over a seeded timedemo of demo1.dm2 whole with the
-# rt-shadows pin scenario (no entities), 1920x1080 windowed, the frames past the
-# first 100 (the warm frames); display sync on, as the pin runs had it.
+# rt-shadows pin scenario (no entities), 1920x1080 windowed,
+# the frames numbered past 100 (the pass prints a line only on a frame it runs);
+# display sync on, as the pin runs had it.
 adapter=quake2
 description=TASK131 shadow pass GPU time: rt-shadows, 1920x1080, seeded, demo1.dm2, past frame 100
 targets=client game ref_metal
-settings=renderer=metal size=1920x1080 hidpi=0 vsync=1 scenario=rt-shadows seed=1 pace=timedemo seconds=22 skip=100 cvar.r_rt_stats=2
+settings=renderer=metal size=1920x1080 hidpi=0 vsync=1 scenario=rt-shadows seed=1 pace=timedemo seconds=22 after_frame=100 cvar.r_rt_stats=2
 requires=physical-gpu raytracing
 runs=3
 warmup=1
