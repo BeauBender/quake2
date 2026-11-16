@@ -46,7 +46,9 @@ turns the lock off.
 
 The run under the lock is in a process group of the lock's own, so a
 KILL to the caller's group ends the lock shell alone and leaves the run,
-and its engine, going with the lock held. Stop an entry point with TERM,
+and its engine, going with the lock held. The gate is the exception (see
+the merge with FIX72, below): its run under the lock sees its lock shell
+go within a second and stops itself. Stop an entry point with TERM,
 INT or HUP and send KILL only after the lock's grace (twice
 `BENCH_STOP_GRACE`, at least `BENCH_STOP_GRACE` + 5 s). The MetalFX
 report generator (`scripts/metalfx-report/mfx.py`), the one caller in the
@@ -72,12 +74,14 @@ off reason takes no lock and says so in its one line; `CI=true` alone,
 leave the lock on. The caller's `LC_ALL`, unset or set, comes back under
 the real lock for the gate and for coverage. Every pid the check waits for
 leaves its cleanup list, which must be empty after the tests.
-Twenty-four mutants, each caught: the lock call removed from the gate,
+Twenty-nine mutants, each caught: the lock call removed from the gate,
 from coverage and from each of the eight pins commands, the run under the
 lock taking the lock again (the gate, `pins.sh`), a `BENCH_LOCK_ENTRY`
 without a token taken as a hold, an unset `LC_ALL` not given back (the
-gate, coverage), and, for each of the three scripts, no state directory
-taking the lock, `CI=true` alone turning it off and a silent lock-off.
+gate, coverage), `GATE_PARENT` naming the lock shell, the four of the
+merge with FIX72 (below), and, for each of the three scripts, no state
+directory taking the lock, `CI=true` alone turning it off and a silent
+lock-off.
 Against the entry points before this card, the gate, coverage and pins
 tests fail, each with "not one call of bench.sh"; against those of the
 first review round, the off-reason tests fail (no line, and with no state
@@ -133,3 +137,67 @@ passed (163 tests). The full gate passed in 707 s under its own hold (a
 temporary `BENCH_STATE`, empty again afterwards; no lock-off line, and the
 pin selftest passed straight through), with a load of 2.9 before and 2.2
 after.
+
+## The merge with FIX72's parallel gate
+
+The delta review of the merge with FIX72 found a Blocker: with the lock
+on, a KILL to the gate's process group reached the lock shell alone. The
+run of `test.sh` under the lock leads a group of its own, and FIX72's
+`GATE_PARENT` names that run, so the scheduler and every check ran on,
+the lock stayed held (`alive=yes`), and both `make -B` builds ran after
+the caller had seen 137. FIX72's own KILL test passed because its trees
+have no bench core, so the lock is off there.
+
+The fix is in `scripts/test.sh` alone; `scripts/gate-checks.sh` and its
+`GATE_PARENT` contract are unchanged. The run under the lock (the
+`BENCH_LOCK_ENTRY=gate` marker with a token) starts a watcher, a small
+`sh -c` in a process group of its own with no terminal and no output,
+that polls every 0.5 s. Once `ps` shows that the run's parent is no
+longer the lock shell (the run was given to another parent) while the run
+is still the watcher's own parent, it sends TERM, once, to the run's
+process group. Before the makes the run's trap stops the gate as on any
+TERM (`gate_stop`: the scheduler and every check end, the scheduler's
+10 s grace included), with the line `test.sh: the lock shell (pid N) is
+gone; ending every check`; during a make, the make ends with the run.
+
+The watcher cannot leak. It leads its own group, so it is in no check's
+group (the scheduler starts each check as a group leader), not the
+scheduler's and not the run's: a stop of any of those neither reaches it
+nor waits on it. The run stops it on every way out: `gate_stop`, and an
+EXIT trap, which the shell runs on a normal exit, on an error under
+`set -e` and on a signal the run does not trap; each sends TERM to the
+watcher's group (the watcher and its `sleep`) and waits for it, and the
+watcher ends on it with status 0. It never ends on its own while the run
+lives, so its pid stays taken until the run has stopped it. Only a KILL
+of the run itself skips the EXIT trap; the watcher then sees its own
+parent change and exits within one poll. It signals nothing but the run's
+group, and only once `ps` has shown both facts; a `ps` that fails answers
+nothing, and it asks again at the next poll.
+
+The review's second point: on a TERM or INT to the lock shell, the lock
+gives the run twice `BENCH_STOP_GRACE`, at least `BENCH_STOP_GRACE` + 5 s,
+before it KILLs the run and frees the lock, and with a grace of 4 or
+less that was shorter than the scheduler's 10 s, so a check that ignores
+TERM ran on after the lock was free. The gate now gives its lock shell a
+`BENCH_STOP_GRACE` of at least 10 (a lock grace of 20 s), and the run
+under it the caller's value back, as it does `LC_ALL`.
+
+`tests/check-bench-entry.sh` has two new tests with the real bench core.
+`t_kgrp` KILLs the gate's process group while a check sleeps: the check
+and the scheduler must be gone within seconds, no make may run, the
+lock must be free or stale (`alive=no`), and the gate must say why it
+stopped; then it KILLs the group during the first make (a slow stub
+`make`), which must end, with the second make never run. `t_grace` sends
+TERM to the lock shell with `BENCH_STOP_GRACE=1` and a check that
+ignores TERM: once the lock shell has exited, the check and the
+scheduler must be gone and the lock free, and the check must have seen
+`BENCH_STOP_GRACE=1`. `t_nested` now also finds the watcher among the
+run's children: one, the leader of its own group, gone once the gate has
+returned. Four new mutants are caught: no watcher (`t_kgrp`, the check
+outlives the KILL), a watcher that sends TERM to the run alone and not
+its group (`t_kgrp`, the make outlives it), the lock shell's grace not
+raised and the caller's not given back (`t_grace`). Against the
+`test.sh` of the merge (`58461f7f`), all three tests fail: in `t_kgrp`
+the check, the scheduler and the make outlive the KILL and no reason is
+given, in `t_grace` the check and the scheduler outlive the lock shell,
+and in `t_nested` there is no watcher.
