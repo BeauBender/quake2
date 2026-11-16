@@ -231,6 +231,20 @@ void rmb_rtw_view_end(void);
 /* 1 when this view's trace was dispatched and its r_rt_water_show view drawn (rmb_rtw_blend), until the view ends */
 int rmb_rtw_shown(void);
 
+/* TASK158: the map's triangles' shading records (rm_rtw_shade_build), n of them, copied; NULL or 0 releases them */
+void rmb_rtw_set_shade(const unsigned *rec, unsigned long n);
+
+/*
+ * TASK158: this frame's texture table: the back end's texture ids of the
+ * world's images, n in the order of rm_rtw_tex_slots (at most
+ * MTL_RTW_TEX_WORLD), the lightmap array's, and the sky box's six in face
+ * order (NULL for none). An id without a texture is shaded white.
+ */
+void rmb_rtw_set_textures(const int *tids, int n, int lmtex, const int *sky);
+
+/* TASK158: the dynamic lights the lightmaps left out, 8 floats each (origin, intensity, colour, 0), at most MTL_RTS_MAX_LIGHTS */
+void rmb_rtw_set_lights(const float *l, int n);
+
 #ifdef __OBJC__
 /*
  * rmb_gbuf.m's hooks. rmb_rtw_trace, after the resolve (the lit result in

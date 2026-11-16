@@ -43,6 +43,7 @@
 #include <stdatomic.h>
 #include <time.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "header/rm_rt.h"
@@ -120,6 +121,7 @@ static id<MTLBuffer> map_trans; /* the world's per-triangle transmission (RT3, r
 static unsigned long map_ntris;
 static int map_vbuf, map_ibuf;     /* the retained buffers the map's structures were built from (RT6, rmb_rt_bind_geometry) */
 static unsigned long map_water;   /* the map's water triangles (RT6, rmb_rt_map_water) */
+static id<MTLBuffer> map_wlist;   /* their triangle ids, uint32 (TASK158, rmb_rt_bind_water_raster) */
 
 /* the last frame's scene for a ray query (RT3): its structures, the instances' first triangles, its frame */
 static NSArray<id<MTLAccelerationStructure>> *scene_structs;
@@ -254,6 +256,7 @@ rmb_rt_free_map(void)
 
 	RMB_RT_SET(map_mat, nil);
 	RMB_RT_SET(map_trans, nil);
+	RMB_RT_SET(map_wlist, nil);
 	map_ntris = 0;
 	map_vbuf = map_ibuf = 0;
 	map_water = 0;
@@ -474,6 +477,32 @@ rmb_rt_build_map(int vbuf, int ibuf, const rmb_rt_range_t *ranges, int nranges, 
 	for (unsigned long t = 0; t < ntris_all; t++)
 	{
 		map_water += (mat[t] == RM_RT_MAT_WATER) ? 1 : 0;
+	}
+
+	/* TASK158: the water triangles' ids, which the reflections' candidates raster draws; none, no raster */
+	if (map_water && (ntris_all <= 0xffffffffUL))
+	{
+		uint32_t *ids = malloc(map_water * sizeof(uint32_t));
+		unsigned long k = 0;
+
+		if (ids)
+		{
+			for (unsigned long t = 0; t < ntris_all; t++)
+			{
+				if (mat[t] == RM_RT_MAT_WATER)
+				{
+					ids[k++] = (uint32_t)t;
+				}
+			}
+
+			@autoreleasepool
+			{
+				RMB_RT_SET(map_wlist, [rmb_device newBufferWithBytes:ids length:k * sizeof(uint32_t)
+						options:MTLResourceStorageModeShared]);
+			}
+
+			free(ids);
+		}
 	}
 
 	for (i = 1; i < nranges; i++)
@@ -1216,6 +1245,36 @@ unsigned long
 rmb_rt_map_water(void)
 {
 	return (rt_open && map_ntris) ? map_water : 0;
+}
+
+/*
+ * TASK158: the water triangles for a raster of them (rmb_rtwater.m's
+ * candidates pass): their ids, the world's index and vertex buffers and
+ * the counts rmb_rt_bind_geometry gives, as vertex buffers. The number of
+ * triangles to draw, 0 when the map has none or its buffers are gone.
+ */
+unsigned long
+rmb_rt_bind_water_raster(id<MTLRenderCommandEncoder> enc, int list_at, int idx_at, int vert_at, int geom_at)
+{
+	id<MTLBuffer> vb = map_vbuf ? rmb_static_buffer(map_vbuf) : nil, ib = map_ibuf ? rmb_static_buffer(map_ibuf) : nil;
+	uint32_t g[4];
+
+	if (!rt_open || !enc || !map_ntris || !map_water || !map_wlist || !vb || !ib ||
+		(vb.length / RM_WVERT_STRIDE > 0xffffffffUL) || (ib.length / 12 > 0xffffffffUL) ||
+		(map_wlist.length / sizeof(uint32_t) < map_water) || (map_water > 0xffffffffUL / 3))
+	{
+		return 0;
+	}
+
+	g[0] = (uint32_t)(vb.length / RM_WVERT_STRIDE);
+	g[1] = (uint32_t)(ib.length / 12);
+	g[2] = RM_WVERT_STRIDE / 16;
+	g[3] = (uint32_t)map_water;
+	[enc setVertexBuffer:map_wlist offset:0 atIndex:(NSUInteger)list_at];
+	[enc setVertexBuffer:ib offset:0 atIndex:(NSUInteger)idx_at];
+	[enc setVertexBuffer:vb offset:0 atIndex:(NSUInteger)vert_at];
+	[enc setVertexBytes:g length:sizeof(g) atIndex:(NSUInteger)geom_at];
+	return map_water;
 }
 
 double
