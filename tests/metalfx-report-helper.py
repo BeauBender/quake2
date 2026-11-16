@@ -132,10 +132,16 @@ def main(argv):
         for i in range(len(args) - 2):
             if args[i] == "+set":
                 final[args[i + 1]] = args[i + 2]
-        want = {"r_metalfx": "0", "r_metalfx_interp": "0", "r_rt_shadows": "1", "r_rt_denoiser": "1", "r_rt_other": "5", "timedemo": "0"}
+        want = {"r_metalfx": "0", "r_metalfx_interp": "0", "r_rt_shadows": "1", "r_rt_denoiser": "1", "r_rt_other": "5"}
         bad = [k for k in want if final.get(k) != want[k]]
-        bad += [k for k in ("r_rt_fixed", "r_metalfx_modes") if k in final]
+        bad += [k for k in ("r_rt_fixed", "r_metalfx_modes", "timedemo") if k in final]
         print("ok" if not bad else "leak: " + " ".join(bad))
+        c.defaults = dict(("r_rt_x%d" % i, "0") for i in range(60))
+        try:
+            m.engine_args(c, [], [], [])
+            print("no limit")
+        except RuntimeError:
+            print("limit")
         return 0
     if cmd == "cfg-run":
         # cfg-run ENGINE LOGDIR: two engine runs through the guard; the second must not see the first

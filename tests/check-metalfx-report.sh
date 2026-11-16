@@ -180,7 +180,8 @@ assertions() {
 
     # a run starts from the engine's defaults: config.cfg set aside, cleared, put back
     if has cfg; then
-    out=$(python3 -I "$HELP" "$d" defaults "$tmp/cv-defaults" 2>&1); want_has cfg-defaults "ok" "$out"; want_not cfg-defaults "leak" "$out"
+    out=$(python3 -I "$HELP" "$d" defaults "$tmp/cv-defaults" 2>&1); want_has cfg-defaults "ok" "$out"; want_not cfg-defaults "leak" "$out"; want_has cfg-limit "
+limit" "$out"
     mkeng "$w/cfgbin" "$tmp/eng-cfg"; mkdir -p "$w/cfglogs"
     out=$(python3 -I "$HELP" "$d" cfg-run "$w/cfgbin/quake2" "$w/cfglogs" 2>&1)
     want_has cfg-clear "second run clean" "$out"
@@ -418,6 +419,7 @@ mutant defaults-after cfg-defaults py 'for k, v in sorted(ctx.defaults.items()):
 mutant defaults-no-gating cfg-defaults py 'names = set(c for c in base_cv if c.startswith(GATING_PREFIXES))' 'names = set()'
 mutant defaults-noset cfg-defaults py 'if c in base_cv and c not in noset and c not in RENDERER_REPORTED' 'if c in base_cv and c not in RENDERER_REPORTED'
 mutant defaults-modes cfg-defaults py 'if c in base_cv and c not in noset and c not in RENDERER_REPORTED' 'if c in base_cv and c not in noset'
+mutant args-unbounded cfg-limit py 'if len(a) > MAX_ENGINE_ARGS:' 'if False:'
 mutant cfg-not-cleared cfg-clear py 'ctx.cfg.clear()  # the run starts' 'pass  # the run starts'
 mutant owner-not-set-aside cfg-restored py 'os.rename(self.path, self.saved)' 'pass'
 mutant restore-noop cfg-restored py 'if not self.held:

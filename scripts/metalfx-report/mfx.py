@@ -46,6 +46,7 @@ VALUE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 PATH_OK_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
 LOAD_QUIET = 8.0  # a 1-minute load above this at a run start marks its timings "measured under load"
 GATING_PREFIXES = ("r_rt_", "r_metalfx")  # the cvars whose absence stops a scenario from running
+MAX_ENGINE_ARGS = 120  # the engine refuses more than 128 (argproc.c MAX_NUM_ARGVS); the executable is not counted here
 MAX_MODE = 30  # r_metalfx_modes is a bit set, one bit per mode
 
 
@@ -205,7 +206,7 @@ def default_cvars(base_cv, noset, options, scenarios):
     for o in options:
         names.update(k for k, _ in o["set"])
     for s in scenarios.values():
-        names.update(s)
+        names.update(c for c in s if c.startswith(GATING_PREFIXES))  # the others: the engine's argument limit, and config.cfg is cleared anyway
     return dict((c, base_cv[c]) for c in sorted(names) if c in base_cv and c not in noset and c not in RENDERER_REPORTED
                 and CVAR_RE.match(c) and VALUE_RE.match(base_cv[c]))
 
@@ -501,7 +502,10 @@ def engine_args(ctx, scenario_sets, extra_sets, tail):
     a += ["+set", "vid_renderer", "metal", "+set", "vid_fullscreen", "0", "+set", "r_mode", "-1",
           "+set", "r_customwidth", str(ctx.width), "+set", "r_customheight", str(ctx.height),
           "+set", "s_initsound", "0", "+set", "vid_highdpiaware", "0", "+set", "r_vsync", "0"]
-    return a + tail
+    a += tail
+    if len(a) > MAX_ENGINE_ARGS:
+        raise RuntimeError("the engine command line would have %d arguments (the limit is %d)" % (len(a), MAX_ENGINE_ARGS))
+    return a
 
 
 def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=True):
