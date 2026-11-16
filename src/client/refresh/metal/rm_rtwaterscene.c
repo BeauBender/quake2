@@ -44,6 +44,7 @@ static int rtw_device;      /* rmb_caps_t.raytracing */
 static int rtw_opened;      /* rmb_rtw_open succeeded */
 static int rtw_refused;     /* it failed in this context: not tried again */
 static int rtw_active;      /* this frame traces the reflections */
+static int rtw_viewed;      /* RM_RTW_View handed this frame's view to the back end */
 
 void
 RM_RTW_Init(const rmb_caps_t *caps)
@@ -54,7 +55,7 @@ RM_RTW_Init(const rmb_caps_t *caps)
 	r_rt_water_show = ri.Cvar_Get("r_rt_water_show", "0", 0);
 	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
 	rtw_device = caps->raytracing != 0;
-	rtw_opened = rtw_refused = rtw_active = 0;
+	rtw_opened = rtw_refused = rtw_active = rtw_viewed = 0;
 }
 
 void
@@ -65,7 +66,7 @@ RM_RTW_Shutdown(void)
 		rmb_rtw_close();
 	}
 
-	rtw_opened = rtw_active = 0;
+	rtw_opened = rtw_active = rtw_viewed = 0;
 }
 
 int
@@ -80,7 +81,14 @@ RM_RTW_Frame(const refdef_t *fd, int scene_ready)
 	rm_rtw_stats_t st[RMB_FRAMES_IN_FLIGHT];
 	int i, n;
 
-	rtw_active = 0;
+	/*
+	 * No view survives from an earlier frame: only RM_RTW_View, before
+	 * this frame's raster, hands the back end one (as RT5's, TASK57's
+	 * review), so a G-buffer view that does not trace the reflections
+	 * never reads a stale one.
+	 */
+	rtw_active = rtw_viewed = 0;
+	rmb_rtw_set_view(NULL);
 
 	if (r_rt_water && scene_ready && rm_rtw_on(r_rt_water->value, rtw_device, rmb_rt_map_water()) && fd &&
 		!(fd->rdflags & RDF_NOWORLDMODEL))
@@ -131,10 +139,11 @@ RM_RTW_Active(void)
 	return rtw_active;
 }
 
+/* only a view that was handed over is traced and shown: without one the forward pass draws as without the reflections */
 int
 RM_RTW_ShowOnly(void)
 {
-	return rtw_active && r_rt_water_show && rm_rtw_show(r_rt_water_show->value);
+	return rtw_active && rtw_viewed && r_rt_water_show && rm_rtw_show(r_rt_water_show->value);
 }
 
 void
@@ -142,6 +151,8 @@ RM_RTW_View(const rm_view_t *view)
 {
 	rm_rtw_view_t v;
 	int w, h;
+
+	rtw_viewed = 0;
 
 	if (!rtw_active)
 	{
@@ -161,4 +172,5 @@ RM_RTW_View(const rm_view_t *view)
 	}
 
 	rmb_rtw_set_view(&v);
+	rtw_viewed = 1;
 }

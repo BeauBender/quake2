@@ -656,20 +656,35 @@ test_instances(void)
 	for (i = 0; i < n; i++)
 	{
 		const int gun = (out[i].ent == 1), self = (out[i].ent == 2);
-		const unsigned m = mtl_rtao_inst_mask(mtl_rts_inst_mask(0), out[i].noao);
-		const unsigned mc = mtl_rtao_inst_mask(mtl_rts_inst_mask(1), out[i].noao);
+		unsigned carry;
 
-		CHECK(((m & MTL_RTW_MASK) != 0) == !(gun || self));
-		CHECK(((mc & MTL_RTW_MASK) != 0) == !(gun || self));
+		/* rmb_rt_frame's mask: the shadows', with the AO bit, with the reflections' bit */
+		for (carry = 0; carry < 2; carry++)
+		{
+			const unsigned ao = mtl_rtao_inst_mask(mtl_rts_inst_mask(carry), out[i].noao);
+			const unsigned m = mtl_rtw_inst_mask(ao, out[i].noao);
+
+			CHECK(((m & MTL_RTW_MASK) != 0) == !(gun || self));
+
+			/* the other rays' bits as before: the shadow rays' and the AO rays' queries meet what they met */
+			CHECK((m & ~MTL_RTW_MASK) == ao);
+			CHECK((m & (MTL_RTS_MASK_OTHER | MTL_RTS_MASK_CARRIER)) == mtl_rts_inst_mask(carry));
+			CHECK(((m & MTL_RTAO_MASK) != 0) == !(gun || self));
+			CHECK(((m & 0xffu) != 0) == ((ao & 0xffu) != 0));
+		}
 	}
 
 	/* the world (ent -1), the brush entity and the other model are met */
-	CHECK((out[0].ent == -1) && ((mtl_rtao_inst_mask(mtl_rts_inst_mask(0), out[0].noao) & MTL_RTW_MASK) != 0));
+	CHECK((out[0].ent == -1) &&
+		((mtl_rtw_inst_mask(mtl_rtao_inst_mask(mtl_rts_inst_mask(0), out[0].noao), out[0].noao) & MTL_RTW_MASK) != 0));
 
 	/* without it the gun is no instance at all */
 	n = rm_rt_instances(e, 4, 1, 0, 0, out, 8, &ex);
 	CHECK((n == 4) && (ex.weapon == 1));
-	CHECK(MTL_RTW_MASK == MTL_RTAO_MASK);
+
+	/* the reflections' bit is one bit of the eight, its own: not the AO rays' nor the shadow rays' */
+	CHECK((MTL_RTW_MASK != 0) && ((MTL_RTW_MASK & (MTL_RTW_MASK - 1)) == 0) && (MTL_RTW_MASK <= 0x80u));
+	CHECK((MTL_RTW_MASK & (MTL_RTAO_MASK | MTL_RTS_MASK_OTHER | MTL_RTS_MASK_CARRIER)) == 0);
 }
 
 static void

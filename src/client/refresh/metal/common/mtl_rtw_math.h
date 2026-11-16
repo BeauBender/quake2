@@ -40,12 +40,23 @@
 #endif
 
 /*
- * The instances a reflection ray (and the eye ray that looks for
- * translucent water) tests: every one but the view weapon and the
- * viewer's own model (rm_rt_inst_t.noao), the same set as an AO ray's, so
- * the bit is shared and no instance's mask changes with the reflections.
+ * The instance mask bit of what a reflection ray (and the eye ray that
+ * looks for translucent water) tests: rmb_rt_frame sets it on every
+ * instance but the view weapon and the viewer's own model
+ * (rm_rt_inst_t.noao), the same set as the AO rays' bit, but a bit of its
+ * own beside TASK55's two and TASK57's MTL_RTAO_MASK, so each effect's
+ * rays can be given their own set. Every instance carries a shadow bit, so
+ * the shadow rays' queries (0xff, 0x01, 0x02) and the AO rays' (0x04) meet
+ * what they met before.
  */
-#define MTL_RTW_MASK MTL_RTAO_MASK
+#define MTL_RTW_MASK 0x08u
+
+/* an instance's mask with the reflections' bit: mask its shadows' and AO's, norefl 1 for what reflection rays pass */
+static inline unsigned
+mtl_rtw_inst_mask(unsigned mask, unsigned norefl)
+{
+	return norefl ? mask : (mask | MTL_RTW_MASK);
+}
 
 /* the map's material id of an alias model's triangle (an instance with no map triangle) */
 #define MTL_RTW_MAT_ALIAS 0xffu

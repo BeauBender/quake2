@@ -49,6 +49,8 @@
 #include "common/mtl_shader_math.h"
 #include "common/mtl_rts_math.h"
 #include "common/mtl_rtao_math.h"
+#include "common/mtl_gbuf_math.h"
+#include "common/mtl_rtw_math.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_rt.m is written for ARC: compile it with -fobjc-arc"
@@ -855,9 +857,11 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 				/*
 				 * A model that carries a light has its own mask: the shadow rays of
 				 * that light test it apart and pass it. Every instance but the view
-				 * weapon and the viewer's own model also has the AO rays' bit (RT5).
+				 * weapon and the viewer's own model also has the AO rays' bit (RT5)
+				 * and the reflection rays' (RT6, TASK58), each its own.
 				 */
-				desc[j].mask = mtl_rtao_inst_mask(mtl_rts_inst_mask(carry), inst[i].noao);
+				desc[j].mask = mtl_rtw_inst_mask(mtl_rtao_inst_mask(mtl_rts_inst_mask(carry), inst[i].noao),
+					inst[i].noao);
 			}
 
 			j++;

@@ -167,7 +167,8 @@ typedef struct
 	int ent;                /* the entity's index in the refdef, -1 for the world */
 	/* RT3 (TASK55): the lights the instance carries (rm_rts_carried, bit i light i), set by RM_RT_Frame; 0 here */
 	unsigned carry;
-	/* RT5 (TASK57): 1 for the view weapon and the viewer's own model, which AO rays pass (mtl_rtao_inst_mask) */
+	/* RT5 (TASK57): 1 for the view weapon and the viewer's own model, which AO rays pass (mtl_rtao_inst_mask),
+	   and RT6's reflection rays too (mtl_rtw_inst_mask) */
 	unsigned noao;
 	/* the object-to-world transform, column-major 4 by 3: three basis columns, then the translation (MTLPackedFloat4x3) */
 	float xform[12];
@@ -326,8 +327,9 @@ void rmb_rt_model_free(int mid);
  * it completed). With shadows (RT3's r_rt_shadows on) the frame also keeps
  * its scene for rmb_rt_bind_scene (each instance's first triangle and the
  * lights it carries, in the frame ring; each instance's mask is
- * mtl_rts_inst_mask's, with the AO rays' bit, mtl_rtao_inst_mask); RT5's
- * AO (r_rt_ao) asks for the same with shadows 1; without, nothing beyond
+ * mtl_rts_inst_mask's, with the AO rays' bit, mtl_rtao_inst_mask, and the
+ * reflection rays' bit, mtl_rtw_inst_mask); RT5's AO (r_rt_ao) and RT6's
+ * reflections (r_rt_water) ask for the same with shadows 1; without, nothing beyond
  * TASK53's structures is taken. 1 with
  * s filled; 0 when nothing was encoded (no frame, a structure missing).
  */
