@@ -6,11 +6,15 @@ the shared runbook's method for the GPU time
 ([the shadows' proofs](../plans/metal-port-harness.md#ray-traced-shadows-from-dynamic-lights-in-ref_metal-task55-rt3))
 and TASK58's masked comparison (*The mask* in its file).
 
-**Status.** World-space hit shading works: the share of water pixels with no reflection falls
-from 2.35 % to 0 over the pool and from 8.48 % to 0 under it, and every pixel outside the water
-is byte-identical to the effect off on the G-buffer path. **The cost goal is not met**: the pass
-as measured costs more than TASK58's, not less (*Cost*), and the card's 0.88 ms share at 1080p
-is not reached. The pins are not recorded (the owner accepts the look first).
+**Status (after the rework, *Rework* below).** World-space hit shading is a setting,
+`r_rt_water_hits` (default `0`, TASK58's pass: frames byte-identical to main's, the same cost).
+At `1` the share of water pixels with no reflection falls from 2.35 % to 0 over the pool and from
+8.38 % to 0 under it, and every pixel outside the water is byte-identical to the effect off on the
+G-buffer path. Its cost as its passes' spans add up is over TASK58's (4.66 against 3.40 ms at 1080p
+held); counted by the stages' own work it is TASK58's (3.42 ms): the raster's span is mostly a wait
+for the work ahead of it. The sections between this line and *Rework* are the first pass's (head
+`41a21150`); *Rework* supersedes their numbers. The pins are not recorded (the owner accepts the
+look first).
 
 ## What changed
 
@@ -52,7 +56,8 @@ is not reached. The pins are not recorded (the owner accepts the look first).
   (the water ids and their raster binding) is in the card's list.
 
 `r_rt_water_show 2` shows the new classes (yellow a face in world space, cyan the sky box), and
-the `r_rt_stats 2` line adds the listed pixels, `world` and `sky box`. No new cvar.
+the `r_rt_stats 2` line adds the listed pixels, `world` and `sky box`. The rework makes the path a
+setting, `r_rt_water_hits` (*Rework*).
 
 ## The host test
 
@@ -128,7 +133,142 @@ itself (no separate pass, no depth reload) or the compaction into a quarter-size
 next step. Against the share: 0.88 ms at 1080p (section 8, trace only) is not met by either build;
 not held the head is 1.21 ms, held 4.61 ms.
 
+## Rework
+
+The first pass met the image goal and missed the cost goal (above). The rework makes the world-space
+path a setting and splits its cost. Source commit measured: `c6cdd3ec` (the branch's last source
+commit; the commits after it are documents), against main `a0eabe11` (its `ref_metal` built from an
+export in scratch and loaded by this branch's client, whose only change from main's is the video
+menu).
+
+### The setting
+
+- `r_rt_water_hits` (archived, default `0`; `rm_rtw_hits`: `1` from 1 up, `0` below 1 or not
+  finite), read each view by `RM_RTW_View`:
+  - `0`: TASK58's pass. Its kernel `rm_rtw_trace` is TASK58's source verbatim (the first pass's
+    kernel is now `rm_rtw_trace_ws`); one compute encoder over every pixel (`rmb_rtw_trace_ss`); the
+    outputs made as TASK58 made them (the reflection target not a render target, no list); none of
+    the world-space shading's per-frame work (`RM_RTW_Shading`, the shading records, the texture
+    table, the lights) runs. The new objects are made once, when the pass opens: the teardown
+    counts `rt 59/59` against main's `49/49` (the world-space pipelines, the depth state, the
+    argument encoder and buffer, two 1 x 1 textures, and the map's water ids).
+  - `1`: this card's path (`rmb_rtw_trace_ws`): the candidates' raster, then the compaction and the
+    arguments in one compute encoder and the trace in another, so each is timed on its own.
+  - A change remakes the outputs (`rmb_rtw_prepare(w, h, ws)`) from the next frame.
+- Video menu, renderer options: "water reflections" after "denoiser", `screen space` / `world
+  space`, always shown, greyed with "Metal renderer only" under another renderer and "needs
+  r_rt_water 1" while `r_rt_water` is off (`VIDITEM_RTW_HITS`, `VidRules_WaterOn`,
+  `VidRules_WaterHitsIndex`); apply writes it only when moved. Tests: `tests/unit/test_vidrules.c`
+  (`vidrules_water_hits_needs_metal_and_the_water`) and `tests/menu/videomenu_test.c`
+  (`test_water_hits_item`, and the item in the greyed-item check).
+- The `r_rt_stats 2` line at `1`: `..., <sum> ms, world space: raster <a> (vertex <v>, fragment
+  <f>), compaction <b>, trace <c>, span <d> ms`, from eight timestamps a frame slot (the raster's
+  start of vertex, end of vertex, start of fragment and end of fragment; each compute encoder's
+  start and end). At `0`, TASK58's two (its one encoder).
+- Host test (`tests/metal/rm_rtwater_test.c`, 325 checks): `rm_rtw_hits` and the split line, red
+  first (the missing function and fields).
+
+### Method
+
+Every engine run went through `tools/heavy.sh` (the timing lock), after checking that the screen was
+unlocked and that no other `quake2` ran; the one-minute load was 1.3 to 3.6 over the batches (each
+run's before and after in `<artifacts>/TASK158/rework/logs/runs.txt`). The demo: `scripts/pins.sh
+make-demo water` made 144 messages, over the script's range as on the first pass, used as made beside
+both builds. `PINS_SEED=1`. A scratch copy of the harness holds one scenario a case: `rt-water.cfg`
+plus `r_rt_water_hits`, `r_rt_stats 2`, `r_metalfx` and, not held, `r_vsync 0`. Cost: no validation
+layer, `PINS_EVERY=100000`, each run's lines past its first 20 (117 held, 116 not held); three runs a
+case for the branch at each setting, alternated in rounds, and one for main beside them in the first
+round. 5120 x 2880 is `PINS_HIDPI=1` at 2560 x 1440. Quality: `MTL_DEBUG_LAYER=1`, each log holding
+the validation banner and no other validation line. Everything is in `<artifacts>/TASK158/rework/`
+(`logs/cost-report.txt`); the same batch on `6f15df82`, before the two stage timestamps were added,
+is in `store-6f15df82/` and agrees within 0.3 ms on every median.
+
+### Cost, both settings
+
+GPU time of the pass in ms, median of the three runs' lines (the run medians), and p10 / p90:
+
+| Output | Sync | Main | `hits 0` | `hits 1` | `hits 1` p10 / p90 |
+|---|---|---|---|---|---|
+| 1920 x 1080 | held | 3.39 | 3.40 (3.40, 3.40, 3.40) | 4.66 (4.67, 4.66, 4.66) | 4.55 / 4.89 |
+| 1920 x 1080 | not held | 0.98 | 0.99 (0.98, 0.99, 0.98) | 1.20 (1.21, 1.20, 1.20) | 1.11 / 3.55 |
+| 5120 x 2880 | held | 9.32 | 9.44 (9.49, 9.51, 9.28) | 12.24 (12.13, 12.03, 12.32) | 11.90 / 12.84 |
+| 5120 x 2880 | not held | 6.80 | 6.78 (6.78, 6.78, 6.77) | 18.76 (18.53, 18.31, 19.10) | 8.47 / 28.53 |
+| 5120 x 2880, `r_metalfx 2` | held | 3.44 | 3.46 (3.42, 3.47, 3.47) | 3.82 (3.79, 3.83, 3.82) | 3.64 / 4.05 |
+| 5120 x 2880, `r_metalfx 2` | not held | 0.99 | 0.99 (0.99, 0.99, 0.99) | 3.66 (3.66, 3.73, 3.56) | 1.15 / 4.07 |
+| No water in view (`demo1.dm2`, 639 frames), 1920 x 1080 | held | 1.33 | 1.33 | 2.06 | 1.96 / 2.16 |
+
+`hits 0` is main within 0.12 ms on every case, p10 to p90 overlapping: the setting costs nothing at `0`.
+
+### The split of `hits 1`
+
+Medians over the three runs, ms:
+
+| Output | Sync | Raster's span | Its vertex stage | Its fragment stage | Compaction | Trace | Whole span | By the stages |
+|---|---|---|---|---|---|---|---|---|
+| 1920 x 1080 | held | 1.49 | 0.03 | 0.28 | 0.53 | 2.58 | 4.66 | 3.42 |
+| 1920 x 1080 | not held | 0.23 (p90 2.64) | 0.01 | 0.03 | 0.15 | 0.75 | 1.21 | 0.94 |
+| 5120 x 2880 | held | 3.25 | 0.03 | 0.79 | 1.65 | 7.35 | 12.25 | 9.82 |
+| 5120 x 2880 | not held | 12.10 (p90 21.82) | 0.02 | 0.20 | 1.19 | 5.05 | 18.77 | 6.46 |
+| 5120 x 2880, `r_metalfx 2` | held | 0.48 | 0.02 | 0.06 | 0.32 | 2.97 | 3.82 | 3.37 |
+| 5120 x 2880, `r_metalfx 2` | not held | 2.55 | 0.01 | 0.03 | 0.16 | 0.75 | 3.67 | 0.95 |
+| No water in view, 1920 x 1080 | held | 1.57 | 0.02 | 0.25 | 0.48 | 0.00 | | 0.75 |
+
+"By the stages" adds the vertex stage, the fragment stage, the compaction and the trace (a sum of
+medians). The trace runs on 825,000 of 2,073,600 pixels (40 %) at 1080 lines and on 5,860,000 of
+14,745,600 at 5120 x 2880.
+
+**The 5120 x 2880 not-held spread** is the raster's span alone. The compaction (1.19 ms, p90 2.04)
+and the trace (5.05, p90 5.67) are as tight as held, and the three spans add to the whole span within
+0.01 ms, so they do not overlap each other. Inside the raster the vertex stage takes 0.02 ms and the
+fragment stage 0.20 ms; the 11.9 ms between them (p90 21.6) is the fragment stage waiting for the
+work ahead of it in the frame: the pass's vertex stage starts as soon as the GPU reaches the pass,
+its fragment stage only once the depth it loads and the passes before it are done. So the spread is
+*overlapping spans*: the raster's span takes in time the GPU spends on the frame's other passes. It
+is not the GPU's clock (held, at the lower clock, the same span is 3.25 ms, while each stage is
+slower held, as it should be) and not the raster's own cost (0.22 ms). The same wait, smaller, is in
+every case (1.18 ms at 1080p held, 1.30 ms in a view with no water), which is why the summed figure
+is over TASK58's. On the stages' count, `hits 1` costs what `hits 0` does with water in view (3.42
+against 3.40 ms at 1080p held, 0.94 against 0.99 not held, 9.82 against 9.44 at 5120 x 2880 held)
+and about half of it in a view without water (0.75 against 1.33 ms). Whether the GPU idles in the
+wait is not something these timestamps show; the frame's own GPU time is the measurement that
+settles what the wait costs the frame.
+
+### Image, on `c6cdd3ec`
+
+- `hits 0` against main, byte for byte (`cmp` of every frame): `rt-water` at 640 x 480 (20 frames)
+  and 1920 x 1080 (5 frames), 0 differ. Effect off (`r_rt_water 0`) at 640 x 480: 20 frames, 0
+  differ.
+- `hits 1`, TASK58's masked comparison (`framediff --mask --threshold 0`): the effect off on the
+  G-buffer path against the effect on, under the `r_rt_water_show 1` mask: 20 of 20 frames at
+  640 x 480 score 0.
+- The shares, 640 x 480, every frame's stats line under `r_rt_water_show 2` (61 lines over the
+  pool, 77 under it):
+
+| | Over the pool | Under it |
+|---|---|---|
+| Water, share of the pixels | 42.2 % | 40.4 % |
+| From the picture (both settings) | 97.65 % | 91.62 % |
+| No reflection, `hits 0` | 2.35 % | 8.38 % |
+| Shaded in world space, `hits 1` | 2.35 % | 8.38 % |
+| No reflection, `hits 1` | 0 | 0 |
+
+### Follow-up: the cheaper design
+
+Mark the water pixels in the G-buffer raster itself. The world's water already draws there (material
+3 for opaque water; translucent water is drawn over the raster's surface); writing a candidate mark
+into an attachment the G-buffer pass already has, or a one-byte target bound beside it, where a water
+triangle passes the depth test gives the compaction its input with no pass of its own: no reload of
+the depth, no cleared target and no wait for the frame's earlier passes, and the compaction can run
+at a quarter size or be folded into the resolve. That removes the raster's span (1.2 to 12 ms of
+waiting here) and its fixed part; the trace on the list stays. The orchestrator files it as a card.
+
 ## Checks
+
+The rework's, on the branch head: in the card's report (`make test`, `tests/check-ref-metal.sh`,
+`tests/check-pins.sh`, `tests/check-cvar-docs.sh`, `tests/check-video-menu.sh`,
+`tests/check-doc-links.sh`, `tests/check-no-local-identity.sh`; builds `make client`, `make -B
+ref_metal` with and without `METAL_SHADERS=no`, `make STATIC_MODULES=1 STATIC_RENDERER=metal
+client`). The first pass's:
 
 `make test`, `tests/check-ref-metal.sh` (water 312 checks), `tests/check-pins.sh`,
 `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-no-local-identity.sh`; builds

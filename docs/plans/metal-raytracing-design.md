@@ -1029,20 +1029,31 @@ of the halved 4 to 7 ms), trace only. Measured on the M6 over `water.dm2` (about
 pixels water), GPU time of the pass ([TASK58](../runbook/TASK58.md),
 [TASK158](../runbook/TASK158.md)):
 
-| Output | TASK58, held / not held | TASK158, held / not held |
-|---|---|---|
-| 1920 x 1080 | 3.40 / 0.98 ms | 4.61 / 1.21 ms |
-| 5120 x 2880 | 9.49 / 6.81 ms | 12.14 / 18.17 ms |
-| 5120 x 2880, `r_metalfx 2` (the pass at 1080p) | 3.40 / 1.21 ms | 4.07 / 3.62 ms |
+| Output | `r_rt_water_hits 0` (TASK58), held / not held | `r_rt_water_hits 1` (TASK158), held / not held | `1` by its stages, held / not held |
+|---|---|---|---|
+| 1920 x 1080 | 3.40 / 0.99 ms | 4.66 / 1.20 ms | 3.42 / 0.94 ms |
+| 5120 x 2880 | 9.44 / 6.78 ms | 12.24 / 18.76 ms | 9.82 / 6.46 ms |
+| 5120 x 2880, `r_metalfx 2` (the pass at 1080p) | 3.46 / 0.99 ms | 3.82 / 3.66 ms | 3.37 / 0.95 ms |
+| 1920 x 1080, a view with no water | 1.33 ms held | 2.06 ms held | 0.75 ms held |
 
-TASK158 shades a hit the picture does not show in world space (the face's texture and lightmap,
-the dynamic lights the lightmaps left out, the sky box's texel), so the water pixels without a
-reflection fall from 2.35 % (over the pool) and 8.48 % (under it) to 0, and it traces only the water
-pixels a raster of the map's water marks. Its fixed part is not cheap: a frame with no water costs
-2.04 ms at 1080p held against 1.33 ms for TASK58's every-pixel pass. Against the share: not held, at
-the GPU's full clock, TASK58's 0.98 ms is over the 0.88 ms bound but inside 0.68 to 1.20 ms, and
-TASK158's 1.21 ms is over both; held, both are four to five times the bound. The next step is the fixed part's
-split and a cheaper mark (in the G-buffer raster itself), not more rays.
+`r_rt_water_hits` (TASK158's rework) picks the hit shading; `0`, the default, is TASK58's pass, its
+kernel verbatim, with frames byte-identical to main's and the same cost (the first column, within
+0.12 ms of main measured beside it). `1` shades a hit the picture does not show in world space (the
+face's texture and lightmap, the dynamic lights the lightmaps left out, the sky box's texel), so the
+water pixels without a reflection fall from 2.35 % (over the pool) and 8.38 % (under it) to 0, and it
+traces only the pixels a raster of the map's water marks (about 40 % of them here). Its cost is three
+passes in a row: the raster of the water, the compaction and the trace, whose spans add to the whole
+span within 0.01 ms. The second column is that sum; the raster's span in it (the start of its vertex
+stage to the end of its fragment stage) is mostly waiting: its vertex stage takes 0.01 to 0.03 ms and its
+fragment stage 0.03 to 0.8 ms, but between them the fragment stage waits for the work ahead of it in
+the frame, 1.2 ms at 1080p held and 12 ms (p90 22) at 5120 x 2880 not held, the run-to-run spread
+TASK158's first pass saw. Neither the GPU's clock (held, at the lower clock, the raster's span is
+3.25 ms) nor the raster's own work explains it. The third column counts the raster by its two
+stages: on that count `1` costs what `0` does with water in view and less without it, and the
+per-pass split is in [TASK158](../runbook/TASK158.md). Against the share: not held, at the GPU's full
+clock, both are near the 0.88 ms bound at 1080p and inside 0.68 to 1.20 ms; held, both are about four
+times it. The cheaper design for `1` marks the water pixels in the G-buffer raster itself, with no pass
+of its own and no wait.
 
 ## 3. What the rasterizer must expose
 
