@@ -40,6 +40,13 @@ jobs:
         # dylib) against the artifact: otool, nm, strings. SDL is built by
         # the step above. The gate runs the cheaper default of this check.
         tests/check-static-modules.sh --full
+    - name: iOS simulator app
+      run: |
+        # make ios (vendored SDL3, client, game and ref_metal for the iOS
+        # simulator) against the artifact: platform, otool -L, codesign,
+        # Info.plist. No shaders: the runner has the iOS SDK but no Metal
+        # shader compiler. Prints one skipped line without the iOS SDK.
+        METAL_SHADERS=no tests/check-ios.sh --full
     - name: Unit tests
       run: |
         # tests/unit against the q2ded objects; no SDL, no game data.

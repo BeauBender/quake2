@@ -361,3 +361,38 @@ The `tests/check-static-modules.sh` check, part of the gate, builds the
 objects of the mode and checks that each module exports only its entry
 point; `tests/check-static-modules.sh --full` also links the executable and
 checks it with `otool` and `nm` (CI's macOS job runs it).
+
+### iPhone and iPad (simulator)
+
+On a Mac with Xcode and its iOS platform, `make ios` builds an app for
+the iOS simulator, *build/ios-iphonesimulator/release/Quake2.app*, from
+the Makefile's own source lists: no Xcode project. It is the build of
+the section above with `STATIC_RENDERER=metal`, compiled for
+`arm64-apple-ios17.0-simulator`: the vendored SDL3, the client, the game
+and `ref_metal` are linked into one *quake2*, so, as there, a mod's game
+library is not loaded (the `game` cvar still selects data directories).
+The bundle holds *quake2*, *Info.plist* (from *stuff/ios/Info.plist.in*),
+*ref_metal.metallib* and no game data, and is signed ad hoc. `IOS_SDK`
+(`iphonesimulator` or `iphoneos`, the latter unsigned), `IOS_MIN`
+(17.0), `IOS_BUNDLE_ID`, `IOS_ROOT` (the output, never *release/* or
+*debug/*) and `IOS_BUNDLE_DATA` (a directory whose *baseq2/* is copied
+into the bundle, for a local build only) are described at the top of the
+Makefile. `make ios_objects` builds the objects alone.
+
+`scripts/ios-sim.sh smoke --out DIR` builds the app with a synthetic pak
+(*scripts/ios/smokepak.py*: a palette and a console font made from
+formulas, no id Software data), runs it on a simulator device it creates
+and deletes again, and checks from the engine's own log and frame that
+`ref_metal` reached the console. `scripts/ios-sim.sh run --data DIR`
+starts the app with the paks of *DIR/baseq2/* in that local bundle, for a
+person to look at in Simulator.app. Both write the build and the logs to
+DIR, which must be outside the checkout; the app's write directory is
+*Library/YamagiQ2/* in its data container (`-cfgdir`). The simulator's
+Metal device may report no Apple GPU family from apple5 on, which
+`ref_metal` requires; the run then stops at renderer initialisation with
+the line that says so.
+
+`tests/check-ios.sh`, part of the gate, compiles the objects for the
+simulator and checks their platform, exports and AppKit references;
+`--full` also builds and checks the bundle (CI's macOS job runs it). Both
+print one skipped line where there is no iOS simulator SDK.

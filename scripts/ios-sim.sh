@@ -179,7 +179,9 @@ bounded 180 "${tmp:?}/install.out" xcrun simctl install "$udid" "$app" || { cat 
 
 # ---- the run ---------------------------------------------------------------
 
-args=(+set vid_renderer metal +set logfile 2 +set metal_stats 1)
+# The write directory: the default ~/.local/share/YamagiQ2 is not made
+# in a fresh app container (Sys_Mkdir makes one level), Library/ is there.
+args=(-cfgdir Library/YamagiQ2 +set vid_renderer metal +set logfile 2 +set metal_stats 1)
 if [ "$cmd" = smoke ]; then
 	for _ in $(seq 30); do args+=(+wait); done
 	args+=(+screenshot tga +quit)
@@ -260,6 +262,9 @@ dev=$(grep -E '^Metal device: ' "$out/engine.log" | head -n 1)
 fam=$(grep -E '^Metal supportsFamily ' "$out/engine.log" | head -n 1)
 [ -n "$dev" ] || bad "engine.log has no Metal device line"
 [ -n "$fam" ] || bad "engine.log has no Metal supportsFamily line"
+case $fam in
+*": none") bad "the simulator's Metal device supports no Apple GPU family from apple5 on, and ref_metal refuses it (its floor): the run stops at renderer init" ;;
+esac
 grep -E '^Wrote q2_0000\.tga$' "$out/engine.log" >/dev/null || bad "engine.log does not show Wrote q2_0000.tga"
 size=$(sed -n 's/^Drawable size: \([0-9]*x[0-9]*\)$/\1/p' "$out/engine.log" | tail -n 1)
 [ -n "$size" ] || bad "engine.log has no Drawable size line"
