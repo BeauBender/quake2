@@ -1,0 +1,17 @@
+# TASK57: the ambient occlusion pass's GPU time per frame, from the timestamps of the
+# r_rt_stats 2 line, over a seeded timedemo of demo1.dm2 whole with the
+# rt-ao pin scenario (no entities), 2560x1440 windowed with vid_highdpiaware 1 (5120x2880 pixels on the 5K display), the frames past the
+# first 100 (the warm frames); display sync on, as the pin runs had it.
+adapter=quake2
+description=TASK57 ambient occlusion pass GPU time: rt-ao, 5120x2880, seeded, demo1.dm2, past frame 100
+targets=client game ref_metal
+settings=renderer=metal size=2560x1440 hidpi=1 vsync=1 scenario=rt-ao seed=1 pace=timedemo seconds=22 skip=100 cvar.r_rt_stats=2
+requires=physical-gpu raytracing
+runs=3
+warmup=1
+wall=60
+metric=rtao_ms
+better=lower
+abs_tol=0.05
+rel_tol=0.03
+accept=0
