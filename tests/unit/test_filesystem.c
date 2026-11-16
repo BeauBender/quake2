@@ -379,6 +379,54 @@ TEST(fs_sandbox_home_dir)
 	T_CHECK(!Sys_SandboxHomeDir("/c/x", tight, 15));
 }
 
+/*
+ * Fills Sys_GetHomeDir's cache in this process, as an earlier caller
+ * would, with the home <tmp>/<name> in the given mode, and puts HOME
+ * and the mode back.
+ */
+static void
+fill_home_cache(const char *name, qboolean sandbox)
+{
+	char path[MAX_OSPATH], oldhome[MAX_OSPATH];
+	const char *env = getenv("HOME");
+	const char *xenv = getenv("XDG_DATA_HOME");
+	char oldxdg[MAX_OSPATH];
+
+	snprintf(oldhome, sizeof(oldhome), "%s", env ? env : "");
+	snprintf(oldxdg, sizeof(oldxdg), "%s", xenv ? xenv : "");
+	Sys_ForgetHomeDir();
+	snprintf(path, sizeof(path), "%s/%s", t_tmpdir(), name);
+	mkdir(path, 0755);
+	snprintf(path, sizeof(path), "%s/%s/.local", t_tmpdir(), name);
+	mkdir(path, 0755);
+	snprintf(path, sizeof(path), "%s/%s/.local/share", t_tmpdir(), name);
+	mkdir(path, 0755);
+	snprintf(path, sizeof(path), "%s/%s", t_tmpdir(), name);
+	setenv("HOME", path, 1);
+	unsetenv("XDG_DATA_HOME");
+	sys_sandbox_home = sandbox;
+	T_CHECK(Sys_GetHomeDir() != NULL);
+	sys_sandbox_home = false;
+
+	if (env)
+	{
+		setenv("HOME", oldhome, 1);
+	}
+	else
+	{
+		unsetenv("HOME");
+	}
+
+	if (xenv)
+	{
+		setenv("XDG_DATA_HOME", oldxdg, 1);
+	}
+	else
+	{
+		unsetenv("XDG_DATA_HOME");
+	}
+}
+
 static void
 sandbox_child(void *arg)
 {
@@ -389,6 +437,7 @@ sandbox_child(void *arg)
 	(void)arg;
 	snprintf(path, sizeof(path), "%s/sandbox", t_tmpdir());
 	setenv("HOME", path, 1);
+	Sys_ForgetHomeDir();
 
 	/* Start over with the home directory in the search path. */
 	FS_ShutdownFilesystem();
@@ -401,6 +450,15 @@ sandbox_child(void *arg)
 
 	snprintf(path, sizeof(path), "%s/sandbox/Documents/baseq2", t_tmpdir());
 	T_EQ_STR(FS_Gamedir(), path);
+
+	/* Nothing is written but under the test's own tree. */
+	snprintf(path, sizeof(path), "%s/", t_tmpdir());
+	T_CHECK(strncmp(FS_Gamedir(), path, strlen(path)) == 0);
+
+	if (strncmp(FS_Gamedir(), path, strlen(path)) != 0)
+	{
+		return;
+	}
 
 	/* What the engine writes lands next to the paks. */
 	snprintf(path, sizeof(path), "%s/config.cfg", FS_Gamedir());
@@ -428,6 +486,10 @@ TEST(fs_sandbox_documents)
 
 	write_pak("sandbox/Documents/baseq2/pak0.pak", pak0, 1);
 
+	/* An earlier caller has filled Sys_GetHomeDir's cache with another
+	   home in the same mode: the child clears it (Sys_ForgetHomeDir). */
+	fill_home_cache("prefill", true);
+
 	status = t_expect_exit(sandbox_child, NULL, out, sizeof(out));
 	T_EQ_INT(status, 0);
 
@@ -439,6 +501,118 @@ TEST(fs_sandbox_documents)
 
 	/* The parent process never left the macOS rules. */
 	T_CHECK(!sys_sandbox_home);
+}
+
+static void
+plain_home_child(void *arg)
+{
+	char home[MAX_OSPATH], docs[MAX_OSPATH];
+	const char *dir;
+	struct stat sb;
+
+	(void)arg;
+	snprintf(home, sizeof(home), "%s/plainhome", t_tmpdir());
+	mkdir(home, 0755);
+	snprintf(docs, sizeof(docs), "%s/.local", home);
+	mkdir(docs, 0755);
+	snprintf(docs, sizeof(docs), "%s/.local/share", home);
+	mkdir(docs, 0755);
+	setenv("HOME", home, 1);
+	unsetenv("XDG_DATA_HOME");
+	sys_sandbox_home = false;
+	Sys_ForgetHomeDir();
+
+	/* The macOS rules: under HOME, never Documents. */
+	dir = Sys_GetHomeDir();
+	T_CHECK(dir != NULL);
+
+	if (dir == NULL)
+	{
+		return;
+	}
+
+	snprintf(docs, sizeof(docs), "%s/", home);
+	T_CHECK(strncmp(dir, docs, strlen(docs)) == 0);
+	T_CHECK(strstr(dir + strlen(home), "Documents") == NULL);
+	T_CHECK(dir[strlen(dir) - 1] == '/');
+	T_CHECK(stat(dir, &sb) == 0 && S_ISDIR(sb.st_mode));
+	printf("plain=%s\n", dir);
+}
+
+/*
+ * The non-sandbox branch of Sys_GetHomeDir (the macOS rules): the home
+ * directory is under HOME and is not Documents.
+ */
+TEST(fs_plain_home_dir)
+{
+	char out[1024], want[MAX_OSPATH];
+	int status;
+
+	/* The cache holds the same home in the sandbox mode: the child clears it. */
+	fill_home_cache("plainhome", true);
+	status = t_expect_exit(plain_home_child, NULL, out, sizeof(out));
+	T_EQ_INT(status, 0);
+	snprintf(want, sizeof(want), "plain=%s/plainhome/", t_tmpdir());
+	T_CHECK(strstr(out, want) != NULL);
+	T_CHECK(strstr(out, "/Documents") == NULL);
+}
+
+static void
+home_change_child(void *arg)
+{
+	char first[MAX_OSPATH], h[MAX_OSPATH];
+	const char *d;
+	int i;
+
+	(void)arg;
+
+	for (i = 1; i <= 2; i++)
+	{
+		snprintf(h, sizeof(h), "%s/hc%d", t_tmpdir(), i);
+		mkdir(h, 0755);
+		snprintf(h, sizeof(h), "%s/hc%d/.local", t_tmpdir(), i);
+		mkdir(h, 0755);
+		snprintf(h, sizeof(h), "%s/hc%d/.local/share", t_tmpdir(), i);
+		mkdir(h, 0755);
+	}
+
+	snprintf(h, sizeof(h), "%s/hc1", t_tmpdir());
+	setenv("HOME", h, 1);
+	unsetenv("XDG_DATA_HOME");
+	sys_sandbox_home = false;
+	Sys_ForgetHomeDir();
+	d = Sys_GetHomeDir();
+	T_CHECK(d != NULL);
+
+	if (d == NULL)
+	{
+		return;
+	}
+
+	snprintf(first, sizeof(first), "%s", d);
+
+	/* The console's "setenv HOME <dir>", which a server can send. */
+	snprintf(h, sizeof(h), "%s/hc2", t_tmpdir());
+	setenv("HOME", h, 1);
+	d = Sys_GetHomeDir();
+	T_CHECK(d != NULL && strcmp(first, d) == 0);
+
+	/* The other mode does not move it either. */
+	sys_sandbox_home = true;
+	d = Sys_GetHomeDir();
+	T_CHECK(d != NULL && strcmp(first, d) == 0);
+}
+
+/*
+ * The home directory is built once: a later change of HOME (the
+ * "setenv" console command) leaves it where it was.
+ */
+TEST(fs_home_dir_ignores_later_home)
+{
+	char out[2048];
+	int status = t_expect_exit(home_change_child, NULL, out, sizeof(out));
+
+	T_EQ_INT(status, 0);
 }
 
 TEST(fs_missing_data_message)
@@ -457,6 +631,15 @@ TEST(fs_missing_data_message)
 	T_CHECK(strstr(out, "renamed") == NULL);
 	T_CHECK(!Sys_PakCaseMismatch(dir, wrong, sizeof(wrong)));
 	T_CHECK(!Sys_PakCaseMismatch("/nonexistent/t_dir", wrong, sizeof(wrong)));
+
+	/* No home directory (VID_CheckGameData's fallback): the plain message.
+	   This cannot fail if the NULL guard in vid.c is reverted: vid.c is
+	   not linked into the suite (it needs SDL). What it holds is the
+	   message function's own NULL handling, which the guard relies on. */
+	T_CHECK(!Sys_PakCaseMismatch(NULL, wrong, sizeof(wrong)));
+	Sys_MissingDataMessage(NULL, out, sizeof(out));
+	T_CHECK(strstr(out, "pak0.pak") != NULL);
+	T_CHECK(strstr(out, "renamed") == NULL);
 
 	/* A pak in the wrong case and no correct one. */
 	snprintf(dir, sizeof(dir), "%s/msg_upper", t_tmpdir());

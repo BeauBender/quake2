@@ -885,6 +885,8 @@ qboolean Sys_SandboxHomeDir(const char *home, char *out, size_t len);
 qboolean Sys_PakCaseMismatch(const char *dir, char *out, size_t len);
 void Sys_MissingDataMessage(const char *dir, char *out, size_t len);
 extern qboolean sys_sandbox_home;
+/* Unix backend only, for tests/unit: forget the cached home directory. */
+void Sys_ForgetHomeDir(void);
 void Sys_Remove(const char *path);
 int Sys_Rename(const char *from, const char *to);
 void Sys_RemoveDir(const char *path);

@@ -429,13 +429,40 @@ on a throwaway device and deletes the device at the end. `--no-data` runs
 with no data at all, `--launch "ARGS"` (repeatable) is one start of the
 app with engine arguments, and `--shot SECONDS` takes a simulator
 screenshot and ends the app. Without either data option the synthetic
-data of the smoke is used.
+data of the smoke is used. The words of a `--launch` argument are split at
+spaces and never expanded as file patterns. A start that ended on its own
+must show the engine's quit line in its own log (*engine.N.log*), or, for
+a start with no game data, the missing-data text, which is where that start
+ends; without either the app was killed or crashed and the run fails. A
+start that `--shot` ended needs none, and an app that ended before the shot
+is reported. Without `--shot`, closing the app from the app switcher is
+reported as killed.
 
 The script touches only its own device. Every `simctl` call that changes
-something (`shutdown`, `delete`, `erase`, `uninstall`, `terminate`) names
+something (`shutdown`, `delete`, `erase`, `uninstall`, `terminate`, `boot`,
+`bootstatus -b`, `install`, `launch`) names
 the UDID of the device it created, never another. That device must be
 absent from the device list before `simctl create`, present in the list
 taken after it and gone from the list at the end; each of the three is a
 failure. Other devices come and go on a Mac (Xcode Previews creates and
 deletes its own): one that was listed before the run and is missing at the
 end is printed as a warning that names its UDID, and does not fail the run.
+
+### Playing on iPhone and iPad
+
+With the touch controls on (the default on iOS) the game is played with
+the fingers. In the game the left half of the screen is the move stick
+and the right half the look stick, both floating: the stick is where the
+finger lands, and a ring is drawn there. The buttons are in the lower
+right corner (fire, jump, use item, crouch, next weapon) and at the top
+(menu, console). In a menu, the console or a chat message the screen
+shows a d-pad at the lower left and OK and Back at the lower right
+instead: they press the d-pad and the confirm and back buttons of the
+virtual gamepad, which the menus read as they read a controller. The
+console button is there too; it raises the on-screen keyboard, which is
+shown only while text is typed. The size and the side of the controls are
+the "touch size" and "left-handed" items of the controller page of the
+controls menu. When a physical controller is connected it is used
+instead, the controls are not drawn, and they come back when it is
+disconnected. Elsewhere `in_touch` does nothing, and the three items are
+greyed.
