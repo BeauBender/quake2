@@ -84,6 +84,10 @@ qboolean GLimp_OwnScreenOnly(const char *driver, int *fullscreen, float *r_mode)
 #define GLIMP_SCREEN_INTS 6
 qboolean GLimp_ScreenChanged(const int *made, const int *now);
 
+/* Relative mouse mode requests: none to turn it on without a mouse on uikit; a failure is reported once per run of failures. */
+qboolean GLimp_RelativeMouseWanted(const char *driver, qboolean have_mouse, qboolean grab);
+qboolean GLimp_RelativeMouseReport(qboolean ok, qboolean *reported);
+
 /* iOS only (glimp_sdl3.c): the safe area or the pixel size moved; asks for a vid_restart when the screen is not the one the video was made for. */
 void GLimp_ScreenEvent(void);
 

@@ -93,6 +93,31 @@ RM_SetSky(const char *name, float rotate, vec3_t axis)
 	}
 }
 
+/*
+ * TASK158: the sky box as the water reflections shade a sky hit in world
+ * space: each face's image's back-end texture in gl1's face order
+ * (rm_sky_image_of_face, 0 for none), the rotation and its axis. 1 when
+ * every face has a texture of its own.
+ */
+int
+RM_SkyBox(int *texnums, float *rotate, float *axis)
+{
+	int i, ok = 1;
+
+	for (i = 0; i < 6; i++)
+	{
+		const int k = rm_sky_image_of_face(i);
+		const image_t *image = (k >= 0) ? sky_images[k] : NULL;
+
+		texnums[i] = (image && (image->texnum > 0)) ? image->texnum : 0;
+		ok = ok && (texnums[i] > 0);
+	}
+
+	*rotate = skyrotate;
+	VectorCopy(skyaxis, axis);
+	return ok;
+}
+
 /* from gl1_warp.c, R_ClearSkyBox */
 void
 RM_SkyClear(void)

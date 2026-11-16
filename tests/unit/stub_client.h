@@ -23,6 +23,8 @@ typedef struct
 	float last_light; /* the intensity of the last one */
 	int chars;        /* Draw_CharScaled calls */
 	int pics;         /* Draw_PicScaled calls */
+	int begins;       /* R_BeginFrame calls */
+	int ends;         /* R_EndFrame calls */
 } stub_calls_t;
 
 extern stub_calls_t stub_calls;

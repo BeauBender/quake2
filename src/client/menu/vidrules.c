@@ -178,6 +178,8 @@ VidRules_Cvar(viditem_t item, const char *renderer)
 			return metal ? "r_metalfx_interp" : NULL;
 		case VIDITEM_DENOISER:
 			return metal ? "r_rt_denoiser" : NULL;
+		case VIDITEM_RTW_HITS:
+			return metal ? "r_rt_water_hits" : NULL;
 		case VIDITEM_AO_SCALE:
 			return metal ? "r_rt_ao_scale" : NULL;
 		case VIDITEM_AO_RAYS:
@@ -288,6 +290,18 @@ VidRules_Item(viditem_t item, const char *renderer, int modemask, int scaler)
 			}
 			return (vidrule_t){ 0, "needs ray tracing" };
 
+		case VIDITEM_RTW_HITS:
+			if (ref != VIDREF_METAL)
+			{
+				return (vidrule_t){ 0, "Metal renderer only" };
+			}
+			/* scaler: whether r_rt_water is on */
+			if (!scaler)
+			{
+				return (vidrule_t){ 0, "needs r_rt_water 1" };
+			}
+			return (vidrule_t){ 1, "world space costs more GPU time" };
+
 		case VIDITEM_AO_SCALE:
 		case VIDITEM_AO_RAYS:
 			if (ref != VIDREF_METAL)
@@ -375,6 +389,20 @@ VidRules_DenoiserIndex(float value)
 	}
 
 	return (value >= 2.0f) ? 2 : 1;
+}
+
+int
+VidRules_WaterOn(float value)
+{
+	/* as rm_rtw_on: a value that is not finite is off */
+	return isfinite(value) && (value != 0.0f);
+}
+
+int
+VidRules_WaterHitsIndex(float value)
+{
+	/* as rm_rtw_hits */
+	return isfinite(value) && (value >= 1.0f);
 }
 
 /* full, 1/2 and 1/3 of the view, the divisors 1 to 3 of rm_rtao_div */

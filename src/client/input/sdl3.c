@@ -821,6 +821,62 @@ qboolean IN_NumpadIsOn()
 
 /* ------------------------------------------------------------------ */
 
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+void CL_WriteConfiguration(void);
+
+/*
+ * iOS sends the app to the background without asking and may end the
+ * process there without another call (TASK148). This watch runs on the
+ * main thread inside SDL_PumpEvents, at the time of the event, and does
+ * only what must not wait for the next IN_Update: no frame is drawn
+ * from the first event on (SCR_UpdateScreen), no key stays pressed
+ * across the suspension, and the configuration is written before the
+ * process can end. The pause, the sound and the music follow from the
+ * focus events, which stay in the queue for IN_Update.
+ */
+static bool
+IN_AppEventWatch(void *userdata, SDL_Event *event)
+{
+	static bool written;
+
+	(void)userdata;
+
+	switch (event->type)
+	{
+		case SDL_EVENT_WILL_ENTER_BACKGROUND:
+			SCR_SetSuspended(true);
+			Key_MarkAllUp();
+			Com_Printf("App: entering the background, no frames are drawn.\n");
+			break;
+
+		case SDL_EVENT_DID_ENTER_BACKGROUND:
+		case SDL_EVENT_TERMINATING:
+			SCR_SetSuspended(true);
+
+			/* UIKit's app and scene callbacks both report it: once */
+			if (!written)
+			{
+				written = true;
+				CL_WriteConfiguration();
+				Com_Printf("App: the configuration is written.\n");
+			}
+
+			break;
+
+		case SDL_EVENT_DID_ENTER_FOREGROUND:
+			written = false;
+			SCR_SetSuspended(false);
+			Com_Printf("App: back in the foreground.\n");
+			break;
+
+		default:
+			break;
+	}
+
+	return true;
+}
+#endif
+
 /*
  * Updates the input queue state. Called every
  * frame by the client and does nearly all the
@@ -2853,6 +2909,10 @@ IN_Init(void)
 {
 	Com_Printf("------- input initialization -------\n");
 
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+	SDL_AddEventWatch(IN_AppEventWatch, NULL);
+#endif
+
 	mouse_x = mouse_y = 0;
 	joystick_left_x = joystick_left_y = joystick_right_x = joystick_right_y = 0;
 	joy_active_layout = LAYOUT_NONE;
@@ -2991,6 +3051,10 @@ IN_Shutdown(void)
 	Cmd_RemoveCommand("-joyaltselector");
 	Cmd_RemoveCommand("+gyroaction");
 	Cmd_RemoveCommand("-gyroaction");
+
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+	SDL_RemoveEventWatch(IN_AppEventWatch, NULL);
+#endif
 
 	Com_Printf("Shutting down input.\n");
 

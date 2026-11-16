@@ -223,3 +223,112 @@ TEST(hud_layout_every_command)
 	   code, "mid" and "mid2". */
 	T_EQ_INT(stub_calls.chars, 3 + 4);
 }
+
+/*
+ * The app is in the background (TASK148, src/client/cl_screen.c): iOS
+ * refuses GPU work then, so SCR_UpdateScreen makes no renderer call at
+ * all while the suspended flag is set. Only the iOS input code sets it;
+ * nothing in this build does.
+ */
+
+/* A client in the game, the renderer counters cleared, one update. */
+static void
+update_once(void)
+{
+	stub_client_cvars();
+	memset(&cl, 0, sizeof(cl));
+	memset(&cls, 0, sizeof(cls));
+	memset(&viddef, 0, sizeof(viddef));
+	viddef.width = 640;
+	viddef.height = 480;
+	con.initialized = true;
+	cls.state = ca_active;
+	cl.refresh_prepped = true;
+	SCR_CenterPrint("");
+	memset(&stub_calls, 0, sizeof(stub_calls));
+	SCR_UpdateScreen();
+}
+
+/* The initial value: not suspended, the screen is drawn. */
+TEST(suspend_initial_value_draws)
+{
+	T_CHECK(!SCR_IsSuspended());
+	update_once();
+	T_EQ_INT(stub_calls.begins, 1);
+	T_EQ_INT(stub_calls.ends, 1);
+}
+
+/* Set: no renderer call; cleared: exactly the calls of the default. */
+TEST(suspend_set_draws_nothing_cleared_draws_again)
+{
+	SCR_SetSuspended(true);
+	T_CHECK(SCR_IsSuspended());
+	update_once();
+	T_EQ_INT(stub_calls.begins, 0);
+	T_EQ_INT(stub_calls.ends, 0);
+	T_EQ_INT(stub_calls.pics, 0);
+	T_EQ_INT(stub_calls.chars, 0);
+
+	SCR_SetSuspended(false);
+	T_CHECK(!SCR_IsSuspended());
+	update_once();
+	T_EQ_INT(stub_calls.begins, 1);
+	T_EQ_INT(stub_calls.ends, 1);
+}
+
+/* Twice in a row draws nothing each time suspended and one frame each time resumed. */
+TEST(suspend_twice_draws_each_time)
+{
+	int i;
+
+	update_once();
+	for (i = 0; i < 2; i++)
+	{
+		SCR_SetSuspended(true);
+		update_once();
+		T_EQ_INT(stub_calls.begins, 0);
+		SCR_SetSuspended(false);
+		update_once();
+		T_EQ_INT(stub_calls.begins, 1);
+		T_EQ_INT(stub_calls.ends, 1);
+	}
+
+	T_CHECK(!SCR_IsSuspended());
+}
+
+/* CL_Frame's renderer work: suspended asks for neither the video check nor the preparation. */
+TEST(suspend_skips_gpu_work)
+{
+	memset(&cls, 0, sizeof(cls));
+	memset(&cl, 0, sizeof(cl));
+	cls.state = ca_active;
+	cl.refresh_prepped = false;
+
+	/* not suspended: both, as before */
+	T_CHECK(SCR_VidCheckDue());
+	T_CHECK(SCR_PrepRefreshDue());
+
+	/* suspended: neither */
+	SCR_SetSuspended(true);
+	T_CHECK(!SCR_VidCheckDue());
+	T_CHECK(!SCR_PrepRefreshDue());
+
+	/* back: both again; the preparation still follows its old condition */
+	SCR_SetSuspended(false);
+	T_CHECK(SCR_VidCheckDue());
+	T_CHECK(SCR_PrepRefreshDue());
+	cl.refresh_prepped = true;
+	T_CHECK(!SCR_PrepRefreshDue());
+	cl.refresh_prepped = false;
+	cls.state = ca_connected;
+	T_CHECK(!SCR_PrepRefreshDue());
+}
+
+/* Any non-zero argument sets it, and it is a plain flag. */
+TEST(suspend_flag_is_boolean)
+{
+	SCR_SetSuspended(2);
+	T_EQ_INT(SCR_IsSuspended(), 1);
+	SCR_SetSuspended(0);
+	T_EQ_INT(SCR_IsSuspended(), 0);
+}
