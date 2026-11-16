@@ -196,7 +196,6 @@ timegraph
 timelimit
 timeout
 timescale
-vid_displayindex
 vid_rate
 viewsize
 vk_dynamic

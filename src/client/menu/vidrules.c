@@ -54,6 +54,33 @@ VidRules_Renderer(const char *name)
 	return VIDREF_UNKNOWN;
 }
 
+vidrule_t
+VidRules_Screen(vidplat_t plat, vidscr_t item)
+{
+	static const char *const ios_reason[VIDSCR_COUNT] = {
+		"the screen's own size",
+		"always the whole screen",
+		"one screen",
+		"always on",
+		"metal is linked in"
+	};
+
+	if (((int)item < 0) || ((int)item >= VIDSCR_COUNT))
+	{
+		return (vidrule_t){ 0, "unknown item" };
+	}
+
+	switch (plat)
+	{
+		case VIDPLAT_DESKTOP:
+			return (vidrule_t){ 1, NULL };
+		case VIDPLAT_IOS:
+			return (vidrule_t){ 0, ios_reason[item] };
+		default:
+			return (vidrule_t){ 0, "unknown platform" };
+	}
+}
+
 int
 VidRules_ScalerModeAvailable(int modemask, int mode)
 {

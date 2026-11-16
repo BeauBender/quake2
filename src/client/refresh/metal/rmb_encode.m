@@ -574,6 +574,25 @@ rmb_force_alpha(id<MTLCommandBuffer> cmd, id<MTLTexture> tex)
 	[enc endEncoding];
 }
 
+/* the safe rectangle's insets of the present (rmb_present_inset_set), 0 for the whole drawable */
+static rm_inset_t rmb_inset;
+
+void
+rmb_present_inset_set(const rm_inset_t *in)
+{
+	rm_inset_t v = { 0, 0, 0, 0 };
+
+	if (in)
+	{
+		v.left = (in->left > 0) ? in->left : 0;
+		v.top = (in->top > 0) ? in->top : 0;
+		v.right = (in->right > 0) ? in->right : 0;
+		v.bottom = (in->bottom > 0) ? in->bottom : 0;
+	}
+
+	rmb_inset = v;
+}
+
 /*
  * FIX51: the frame onto the drawable of a layer that is not opaque, in one
  * pass: the frame's rows of r with alpha 1 (rm_fragment_present), the rest
@@ -584,8 +603,8 @@ rmb_present_pass(id<MTLCommandBuffer> cmd, id<MTLRenderPipelineState> pso, id<MT
 {
 	MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
 	id<MTLRenderCommandEncoder> enc;
-	MTLViewport vp = { 0.0, (double)r->dst_y, (double)r->w, (double)r->h, 0.0, 1.0 };
-	int ofs[2] = { 0, r->src_y - r->dst_y };   /* the frame's pixel of a drawable pixel */
+	MTLViewport vp = { (double)r->dst_x, (double)r->dst_y, (double)r->w, (double)r->h, 0.0, 1.0 };
+	int ofs[2] = { -r->dst_x, r->src_y - r->dst_y };   /* the frame's pixel of a drawable pixel */
 	int whole = ((NSUInteger)r->w == dst.width) && ((NSUInteger)r->h == dst.height);
 
 	rp.colorAttachments[0].texture = dst;
@@ -657,7 +676,7 @@ rmb_frame_end(void)
 			id<MTLRenderPipelineState> pso = rmb_layer.opaque ? nil : rmb_present_pipe();
 			rm_present_t r;
 			/* at gl1's place: the frame's bottom-left corner on the drawable's (FIX45) */
-			int region = rm_present_region((int)color.width, (int)color.height, (int)dst.width, (int)dst.height, &r);
+			int region = rm_present_region_in((int)color.width, (int)color.height, (int)dst.width, (int)dst.height, &rmb_inset, &r);
 
 			if (region && pso)
 			{
@@ -686,7 +705,7 @@ rmb_frame_end(void)
 						sourceOrigin:MTLOriginMake(0, (NSUInteger)r.src_y, 0)
 						sourceSize:MTLSizeMake((NSUInteger)r.w, (NSUInteger)r.h, 1)
 						toTexture:dst destinationSlice:0 destinationLevel:0
-						destinationOrigin:MTLOriginMake(0, (NSUInteger)r.dst_y, 0)];
+						destinationOrigin:MTLOriginMake((NSUInteger)r.dst_x, (NSUInteger)r.dst_y, 0)];
 				[blit endEncoding];
 
 				if (!rmb_layer.opaque)

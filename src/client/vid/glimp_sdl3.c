@@ -147,6 +147,53 @@ DisableCloseAnimation(SDL_Window *w)
 #endif
 }
 
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+/* The screen the video was made for (GLimp_ScreenChanged). */
+static int made_screen[GLIMP_SCREEN_INTS];
+
+/* The window's pixel size and safe rectangle now; 0 for all of them without a window or when SDL gives none. */
+static void
+MeasureScreen(int *v)
+{
+	SDL_Rect r;
+
+	memset(v, 0, GLIMP_SCREEN_INTS * sizeof(int));
+
+	if (window && SDL_GetWindowSizeInPixels(window, &v[0], &v[1]) && SDL_GetWindowSafeArea(window, &r))
+	{
+		v[2] = r.x;
+		v[3] = r.y;
+		v[4] = r.w;
+		v[5] = r.h;
+	}
+}
+
+/*
+ * The safe area or the pixel size moved (SDL_EVENT_WINDOW_SAFE_AREA_CHANGED,
+ * SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED): the video starts again, once, and
+ * only when the screen is not the one it was made for.
+ */
+void
+GLimp_ScreenEvent(void)
+{
+	int now[GLIMP_SCREEN_INTS];
+
+	if (!initSuccessful)
+	{
+		return;
+	}
+
+	MeasureScreen(now);
+
+	if (GLimp_ScreenChanged(made_screen, now))
+	{
+		/* the next event of the same change finds it noted and does nothing */
+		memcpy(made_screen, now, sizeof(made_screen));
+		Cbuf_AddText("vid_restart\n");
+	}
+}
+#endif
+
 static qboolean
 CreateSDLWindow(SDL_WindowFlags flags, int fullscreen, int w, int h)
 {
@@ -163,6 +210,12 @@ CreateSDLWindow(SDL_WindowFlags flags, int fullscreen, int w, int h)
 	 *  * https://github.com/libsdl-org/SDL/issues/4039
 	 *  * https://github.com/libsdl-org/SDL/issues/3656 */
 	SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "1");
+
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+	/* the screen is held in landscape, either way up, and the home indicator is dimmed so that a first swipe does not leave the game */
+	SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+	SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
+#endif
 
 	SDL_PropertiesID props = SDL_CreateProperties();
 	SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, DISPLAYNAME);
@@ -556,6 +609,11 @@ Glimp_DetermineHighDPISupport(SDL_WindowFlags flags)
 		flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
 	}
 
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+	/* the screen's own pixels, whatever vid_highdpiaware says */
+	flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#endif
+
 	return flags;
 }
 
@@ -570,6 +628,20 @@ GLimp_InitGraphics(int fullscreen, int *pwidth, int *pheight)
 	int curWidth, curHeight;
 	int width = *pwidth;
 	int height = *pheight;
+
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+	/* The window is always the whole screen, at the screen's own size,
+	   whatever r_mode and vid_fullscreen say: the renderer reads both
+	   cvars (GLimp_DrawableInPixels), so they are set to match. */
+	{
+		float own_mode = 0;
+
+		if (GLimp_OwnScreenOnly("uikit", &fullscreen, &own_mode))
+		{
+			Cvar_SetValue("r_mode", own_mode);
+		}
+	}
+#endif
 
 	/* One fullscreen value per window: vid_fullscreen holds the
 	   value this window is made with, from here on. A renderer
@@ -815,6 +887,10 @@ GLimp_InitGraphics(int fullscreen, int *pwidth, int *pheight)
 	}
 
 	Com_Printf("Drawable size: %ix%i\n", viddef.width, viddef.height);
+
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+	MeasureScreen(made_screen);
+#endif
 
 	/* Set the window icon, this must be done after creating the window */
 	SetSDLIcon();
