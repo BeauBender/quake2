@@ -120,6 +120,12 @@ rmb_frame_wait_ms(void)
  * complete and counted as without a drawable. With display sync on the
  * frame waits in nextDrawable and writes the drawable itself, as before,
  * and every frame is presented.
+ *
+ * A present handed to rmb_present_order is in flight until its block
+ * there and both of its completed handlers have run (rmb_present_live).
+ * Turning display sync on and teardown wait for that, bounded, before the
+ * present state is released (rmb_present_drain, FIX69), so no handler or
+ * block runs after its state is gone.
  */
 #define RMB_PRESENTS (RMB_FRAMES_IN_FLIGHT + 1)   /* maximumDrawableCount (rmb_attach), and the open frame */
 
@@ -131,12 +137,14 @@ static int rmb_ahead_busy;              /* rmb_ahead_lock: an acquisition is on 
 static id<MTLCommandQueue> rmb_present_queue;
 static dispatch_queue_t rmb_present_order;   /* serial: commits each present once its frame has completed */
 static dispatch_group_t rmb_present_group;   /* the command buffers committed while the open frame holds a slot */
+static dispatch_group_t rmb_present_live;    /* the presents handed to rmb_present_order, until they are done (FIX69) */
 static dispatch_semaphore_t rmb_present_sem[RMB_PRESENTS];   /* 1: no frame and no present holds this slot */
 static id<MTLTexture> rmb_present_target[RMB_PRESENTS];      /* the target the slot's frame is drawn into */
 static int rmb_present_slot = -1;              /* the slot the open frame holds, or -1 */
 static id<MTLCommandBuffer> rmb_present_cmd;   /* the present of the frame that ends, committed after it */
 
 void rmb_watch(id<MTLCommandBuffer> cmd);
+static void rmb_watch_until(id<MTLCommandBuffer> cmd, dispatch_group_t done);
 
 /* With display sync off the frames are presented apart (with the present queue and its order queue made). */
 static int
@@ -208,9 +216,27 @@ rmb_present_target_drop(int i)
 }
 
 /*
- * Waits for the acquisition on the queue (bounded, as nextDrawable is) and
- * for every present slot but the open frame's (bounded, RMB_GPU_WAIT_MS
- * for them all), and drops the drawable acquired ahead and the targets.
+ * Waits, at most until, for every present handed to rmb_present_order to
+ * be done: its block there and both of its completed handlers have run
+ * (FIX69). Counts and logs a wait that ends at the bound.
+ */
+static void
+rmb_present_drain(dispatch_time_t until)
+{
+	if (!rmb_present_live || (dispatch_group_wait(rmb_present_live, until) == 0))
+	{
+		return;
+	}
+
+	rmb_counts.present_drains_late++;
+	fprintf(stderr, "ref_metal: a present is still on its way after %d ms\n", RMB_GPU_WAIT_MS);
+}
+
+/*
+ * Waits for the acquisition on the queue (bounded, as nextDrawable is),
+ * for every present to be done and every present slot but the open
+ * frame's to be free (bounded, RMB_GPU_WAIT_MS for them all), and drops
+ * the drawable acquired ahead and the targets.
  */
 static void
 rmb_ahead_drop(void)
@@ -224,6 +250,7 @@ rmb_ahead_drop(void)
 	}
 
 	(void)rmb_ahead_take();
+	rmb_present_drain(until);
 
 	for (i = 0; i < RMB_PRESENTS; i++)
 	{
@@ -421,7 +448,7 @@ void
 rmb_present_commit(void)
 {
 	dispatch_semaphore_t sem;
-	dispatch_group_t group = rmb_present_group;
+	dispatch_group_t group = rmb_present_group, live;
 	id<MTLCommandBuffer> cmd = rmb_present_cmd;
 	int slot = rmb_present_slot;
 
@@ -442,27 +469,41 @@ rmb_present_commit(void)
 		return;
 	}
 
-	rmb_watch(cmd);
+	/* in flight until the block below and both completed handlers have run (rmb_present_drain, FIX69) */
+	live = rmb_present_live;
+	dispatch_group_enter(live);   /* rmb_watch_until's handler */
+	dispatch_group_enter(live);   /* the handler below */
+	dispatch_group_enter(live);   /* the block on rmb_present_order */
+	rmb_counts.presents++;
+
+	rmb_watch_until(cmd, live);
 	[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 		(void)b;
 		dispatch_semaphore_signal(sem);
+		dispatch_group_leave(live);
 	}];
 
 	dispatch_async(rmb_present_order, ^{
 		if (!group || (dispatch_group_wait(group, rmb_deadline(RMB_GPU_WAIT_MS)) == 0))
 		{
 			[cmd commit];
-			return;
 		}
-
-		if (!rmb_present_late_reported)
+		else
 		{
-			rmb_present_late_reported = 1;
-			fprintf(stderr, "ref_metal: a frame is still on the GPU after %d ms, not presented\n",
-					RMB_GPU_WAIT_MS);
+			if (!rmb_present_late_reported)
+			{
+				rmb_present_late_reported = 1;
+				fprintf(stderr, "ref_metal: a frame is still on the GPU after %d ms, not presented\n",
+						RMB_GPU_WAIT_MS);
+			}
+
+			dispatch_semaphore_signal(sem);
+			/* never committed: neither completed handler will run */
+			dispatch_group_leave(live);
+			dispatch_group_leave(live);
 		}
 
-		dispatch_semaphore_signal(sem);
+		dispatch_group_leave(live);
 	});
 }
 
@@ -474,6 +515,13 @@ rmb_present_commit(void)
  */
 void
 rmb_watch(id<MTLCommandBuffer> cmd)
+{
+	rmb_watch_until(cmd, nil);
+}
+
+/* As rmb_watch; the handler then leaves done, which the caller entered for it, as its last step (FIX69). */
+static void
+rmb_watch_until(id<MTLCommandBuffer> cmd, dispatch_group_t done)
 {
 	/* MTL_GPU_TIME set in the environment: one line per command buffer with its GPU time (a measuring aid, TASK120) */
 	static int timing = -1;
@@ -505,17 +553,20 @@ rmb_watch(id<MTLCommandBuffer> cmd)
 					[b.label isEqualToString:@"ref_metal frame"] ? " frame" : "");
 		}
 
-		if (b.status != MTLCommandBufferStatusError)
+		if (b.status == MTLCommandBufferStatusError)
 		{
-			return;
+			n = atomic_fetch_add(&rmb_failed, 1);
+
+			if (n < RMB_FAILED_LOGGED)
+			{
+				fprintf(stderr, "ref_metal: a command buffer failed: %s\n",
+						b.error ? b.error.localizedDescription.UTF8String : "no error given");
+			}
 		}
 
-		n = atomic_fetch_add(&rmb_failed, 1);
-
-		if (n < RMB_FAILED_LOGGED)
+		if (done)
 		{
-			fprintf(stderr, "ref_metal: a command buffer failed: %s\n",
-					b.error ? b.error.localizedDescription.UTF8String : "no error given");
+			dispatch_group_leave(done);
 		}
 	}];
 }
@@ -595,6 +646,7 @@ rmb_open(rmb_caps_t *caps, char *err, size_t errlen)
 		/* the present queue and the queue that commits to it (FIX51); without them every frame writes its own drawable */
 		rmb_present_queue = [rmb_device newCommandQueue];
 		rmb_present_order = dispatch_queue_create("ref_metal present", DISPATCH_QUEUE_SERIAL);
+		rmb_present_live = dispatch_group_create();
 		rmb_present_group = nil;
 		rmb_present_slot = -1;
 
@@ -607,7 +659,7 @@ rmb_open(rmb_caps_t *caps, char *err, size_t errlen)
 		{
 			rmb_present_sem[i] = nil;
 
-			if (rmb_present_queue && rmb_present_order)
+			if (rmb_present_queue && rmb_present_order && rmb_present_live)
 			{
 				rmb_present_sem[i] = dispatch_semaphore_create(0);
 				dispatch_semaphore_signal(rmb_present_sem[i]);
@@ -726,11 +778,17 @@ void
 rmb_close(rmb_stats_t *stats, rm_ledger_t *ledger)
 {
 	__weak id<MTLCommandQueue> queue;
+	char line[128];
 	int i;
 
-	rmb_detach();
+	rmb_detach();               /* every present done, or the bound logged (rmb_present_drain) */
 	rmb_resources_close();      /* textures, staging, pipelines, samplers (rmb_resource.m) */
 	rmb_ahead_queue = nil;      /* empty: rmb_detach drained it */
+
+	if (rmb_device && rm_presents_format(&rmb_counts, line, sizeof(line)))
+	{
+		fprintf(stderr, "%s\n", line);
+	}
 
 	if (rmb_device)
 	{
@@ -749,6 +807,7 @@ rmb_close(rmb_stats_t *stats, rm_ledger_t *ledger)
 			/* a present still on it (the GPU past the bound at teardown) keeps it alive */
 			rmb_present_order = nil;
 			rmb_present_group = nil;
+			rmb_present_live = nil;     /* likewise: each present's blocks hold it until they have run */
 
 			for (i = 0; i < RMB_PRESENTS; i++)
 			{

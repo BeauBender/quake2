@@ -255,12 +255,14 @@ rmb_frame_begin(int w, int h, int dw, int dh, const float *clear_rgba)
 		held.depth = depth != nil;
 		held.cw = target ? (int)target.width : 0;
 		held.ch = target ? (int)target.height : 0;
+		held.zw = depth ? (int)depth.width : 0;
+		held.zh = depth ? (int)depth.height : 0;
 		held.lw = (int)rmb_layer.drawableSize.width;
 		held.lh = (int)rmb_layer.drawableSize.height;
 		make = rm_frame_remake(&held, w, h, dw, dh);
 
 		/* a target that failed to allocate is tried again on the next frame */
-		if (make & (RM_REMAKE_COLOR | RM_REMAKE_DEPTH))
+		if (make & RM_REMAKE_COLOR)
 		{
 			color_defined = 0;
 
@@ -272,11 +274,12 @@ rmb_frame_begin(int w, int h, int dw, int dh, const float *clear_rgba)
 		}
 
 		/*
-		 * On every frame: a present slot's target is already the frame's
-		 * size (rmb_present_take), so a new size need not remake the colour
-		 * target, and the depth target follows the frame here (FIX51).
+		 * A present slot's target is already the frame's size
+		 * (rmb_present_take), so a new size need not remake the colour
+		 * target: rm_frame_remake then names the depth target alone (FIX51,
+		 * FIX69).
 		 */
-		if (!depth || (depth.width != (NSUInteger)w) || (depth.height != (NSUInteger)h))
+		if (make & RM_REMAKE_DEPTH)
 		{
 			rmb_set_texture(&depth, rmb_new_target(MTLPixelFormatDepth32Float_Stencil8, w, h, rt));
 		}

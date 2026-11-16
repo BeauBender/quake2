@@ -886,6 +886,31 @@ test_frame_remake(void)
 }
 
 /*
+ * The teardown's line on the presents apart (FIX69): the count, and the
+ * waits for them all to be done that ended at the bound, which an engine
+ * run's log is checked for; an exact fit, one byte short, no room.
+ */
+static void
+test_presents_format(void)
+{
+	rmb_stats_t s;
+	char buf[128];
+	const char *want = "ref_metal: teardown: 4562 presents apart, 0 waits for them past the bound";
+	const char *late = "ref_metal: teardown: 7 presents apart, 1 waits for them past the bound";
+	size_t n = strlen(want);
+
+	memset(&s, 0, sizeof(s));
+	s.presents = 4562;
+	CHECK(rm_presents_format(&s, buf, n + 1) && strcmp(buf, want) == 0);
+	CHECK(!rm_presents_format(&s, buf, n) && strlen(buf) == n - 1);
+	CHECK(!rm_presents_format(&s, buf, 0));
+
+	s.presents = 7;
+	s.present_drains_late = 1;
+	CHECK(rm_presents_format(&s, buf, sizeof(buf)) && strcmp(buf, late) == 0);
+}
+
+/*
  * The present blit at gl1's place (FIX45): equal sizes copy the whole
  * frame; a smaller frame lands in the drawable's bottom-left corner; a
  * larger one gives its bottom-left part; no overlap copies nothing.
@@ -8218,6 +8243,7 @@ main(void)
 	test_ledger_restarts();
 	test_frame_size();
 	test_frame_remake();
+	test_presents_format();
 	test_present_region();
 	test_upload_bytes();
 	test_raw8();
