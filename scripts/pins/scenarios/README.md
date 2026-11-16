@@ -137,7 +137,7 @@ TASK55 adds `rt-shadows` (tags `world`, `dynamic-lights`; companion
 `rt-shadows-entities`) and `rt-shadows-entities` (tags `world`, `entities`,
 `alias-models`, `dynamic-lights`; companion `-`) here, and the cfg of each
 carries `// footprint darker 0..0.12` in its leading comment block (0.05 holds without
-entities, whose worst frame is 1.44 % darker, but not with them: see the runbook). `rt-shadows`
+entities, whose worst frame is 1.44 % darker, but not with them: see `docs/runbook/TASK55.md`). `rt-shadows`
 then has to pass the rule above: `rt-shadows-entities` declares the same band and
 sets every cvar of `rt-shadows` (the ray-tracing ones too) to the same value,
 and sets `cl_entities 1`.
@@ -185,7 +185,7 @@ Added by TASK40 (`soft`, two runs each and a third): `skywater` and
 `demo1.dm2` the sky is in frame 21 at the default `PINS_EVERY` 30; neither
 demo showed warped water on any frame looked at, so `skywater` exercises
 the sky and the water-warp settings but not a water surface on this data.
-`cinematic` was recorded with `idlog.cin`. See the runbook for the frame
+`cinematic` was recorded with `idlog.cin`. See `docs/runbook/TASK40.md` for the frame
 lists.
 
 Added by TASK70: a demo that shows water, made from the game data by a

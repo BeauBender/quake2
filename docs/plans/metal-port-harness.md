@@ -278,6 +278,8 @@ render-stage ray queries and the performance numbers.
 - [FIX42](../runbook/FIX42.md): The `screenshot` command between frames on the shim
 - [FIX52](../runbook/FIX52.md): The 60 fps cap at 1920x1080 windowed
 - [FIX53](../runbook/FIX53.md): The opaque layer of `ref_metal` and the shim
+- [FIX58](../runbook/FIX58.md): `tests/check-pre-push-hook.sh` and a temporary directory that holds the login name
+- [FIX66](../runbook/FIX66.md): CodeQL analysis skipped for documentation-only pull requests
 - [TASK21](../runbook/TASK21.md): Closing TASK21 on the build host
 - [TASK27](../runbook/TASK27.md): Closing TASK27 on the build host
 - [TASK39](../runbook/TASK39.md): Observed on the first run
@@ -313,3 +315,4 @@ render-stage ray queries and the performance numbers.
 - [TASK119](../runbook/TASK119.md): Crisp 2D in `ref_metal`
 - [TASK120](../runbook/TASK120.md): Bicubic lightmaps in `ref_metal`
 - [TASK122](../runbook/TASK122.md): Particle size cap relative to the resolution in `ref_metal`
+- [TASK132](../runbook/TASK132.md): `soft`'s window captured opaque and not opaque
