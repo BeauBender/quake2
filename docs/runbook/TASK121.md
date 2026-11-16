@@ -19,7 +19,7 @@ the layer Display P3 does change the captured values, so the capture can
 see a colour-space difference. The layer reports `kCGColorSpaceSRGB`
 already at 0: the untagged layer is treated as sRGB by this system. The
 default stays 0 (the card does not change it). Pins are unchanged at both
-values wherever the scenario is deterministic, the teardown is clean, and
+values in every scenario (the nine random ones recorded seeded), the teardown is clean, and
 the host tests hold the menu rule.
 
 ## The switch
@@ -121,31 +121,43 @@ recorded with `PINS_DEMO=idlog.cin PINS_EVERY=7`.
   `rt-water`, `skywater`, `world`, `world-fullbright`, `world-lmcubic`,
   `world-metalfx-interp`, `world-metalfx1`, `world-metalfx2`,
   `world-metalfx3`, `world-scale8` and `cinematic`.
-- **Scenarios that are not deterministic run to run, with or without the
-  change: 9** (`dlights`, `dlights-lmcubic`, `models`, `particles`,
-  `particles-cap`, `rt-ao-entities`, `rt-shadows`, `rt-shadows-entities`,
-  `rt-water-entities`). Their 0 against 1 comparison differs, but so does
-  0 against 0 and 1 against 1 of two runs of the same engine, by as much
-  (worst score / worst bad over the 23 frames; a second pair of runs,
-  `--run 13` at 0 and `--run 14` at 1, gives the last column; the 0 against
-  0 and 1 against 1 columns compare runs 11 with 13 and 12 with 14):
+- **The other 9 scenarios** (`dlights`, `dlights-lmcubic`, `models`,
+  `particles`, `particles-cap`, `rt-ao-entities`, `rt-shadows`,
+  `rt-shadows-entities`, `rt-water-entities`) are not identical from run to
+  run unless recorded with `PINS_SEED` (see `doc/100_renderpins.md`, the
+  scenario table and *Determinism*). A first pass recorded them unseeded
+  (runs 11 to 14) and 0 against 0 differed as much as 0 against 1 (worst
+  score up to 0.0123, worst bad up to 0.264), so it judged nothing. The
+  second pass recorded each with `PINS_SEED=1`, once at the default
+  (`--run 21`) and once with `metal_colorspace 1` (`--run 22`, the same
+  `PINS_BIN` wrapper), engine `b2777630` (the sources equal those of
+  `7d4d3f8e`), same compare arguments at threshold 0 and bad threshold 0.
+  The records were made with the screen locked (pin records are
+  byte-identical locked or unlocked), no other `quake2` of mine running,
+  under the timing lock; load average (1 minute) 2.9 to 4.4 around the
+  batches. Every frame, 23 of 23 in each:
 
-| Scenario | 0 vs 0 | 1 vs 1 | 0 vs 1 (runs 11, 12) | 0 vs 1 (runs 13, 14) |
-|---|---|---|---|---|
-| `dlights` | 0.0085 / 0.156 | 0.0089 / 0.162 | 0.0092 / 0.169 | 0.0082 / 0.150 |
-| `dlights-lmcubic` | 0.0093 / 0.219 | 0.0058 / 0.112 | 0.0123 / 0.264 | 0.0085 / 0.148 |
-| `particles` | 0.0104 / 0.136 | 0.0097 / 0.125 | 0.0105 / 0.130 | 0.0099 / 0.178 |
-| `particles-cap` | 0.0099 / 0.149 | 0.0113 / 0.139 | 0.0103 / 0.131 | 0.0102 / 0.129 |
-| `rt-shadows` | 0.0102 / 0.213 | 0.0093 / 0.172 | 0.0045 / 0.048 | 0.0057 / 0.109 |
-| `rt-shadows-entities` | 0.0110 / 0.213 | 0.0072 / 0.147 | 0.0085 / 0.175 | 0.0081 / 0.150 |
-| `models` | 0.00006 / 0.00007 | 0.0007 / 0.0009 | 0.0007 / 0.0009 | 0 / 0 |
-| `rt-ao-entities` | 0.0004 / 0.0004 | 0.0007 / 0.0011 | 0.00007 / 0.0001 | 0.0005 / 0.0011 |
-| `rt-water-entities` | 0.0003 / 0.0004 | 0.00008 / 0.00009 | 0.0002 / 0.0004 | 0.00001 / 0.00001 |
+| Scenario | 0 vs 1, seeded (runs 21, 22): worst score / worst bad |
+|---|---|
+| `models` | 0 / 0 |
+| `dlights` | 0 / 0 |
+| `dlights-lmcubic` | 0 / 0 |
+| `particles` | 0 / 0 |
+| `particles-cap` | 0 / 0 |
+| `rt-ao-entities` | 0 / 0 |
+| `rt-shadows` | 0 / 0 |
+| `rt-shadows-entities` | 0 / 0 |
+| `rt-water-entities` | 0 / 0 |
+| control: `models`, 0 against 0 (run 21 with a third record, run 23) | 0 / 0 |
+
+**All 24 scenarios are now score 0, bad 0 between `metal_colorspace` 0 and
+1** (the 15 above unseeded, deterministic; the 9 seeded). The unseeded
+differences of the first pass were the scenarios' own randomness, not the
+colour space.
 
 The change draws nothing and reads back before the layer's colour space
 comes into play (the readback precedes composition), so the pins at 0 and
-1 are as one would expect: identical wherever the scenario repeats
-itself.
+1 are identical in every scenario.
 
 ## Teardown
 
