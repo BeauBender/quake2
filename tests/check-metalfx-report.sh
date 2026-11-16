@@ -9,7 +9,17 @@
 #   - a second host's numbers show beside the first, as a range, and its images never do;
 #   - the HTML refers to nothing outside itself;
 #   - the structural measure is 1 on identical images and less on different ones;
-#   - a failing or silent engine run is an error.
+#   - a failing or silent engine run is an error, and an option whose probe fails is skipped;
+#   - every engine run starts from the engine's defaults: the binary's config.cfg is set aside,
+#     cleared before each run and put back after it (also after an error and on SIGTERM), and a
+#     second run is not affected by the first;
+#   - --bin: the quality records get the same binary (PINS_BIN), the freshness check and the
+#     recorded commit are those of the binary's own tree, a binary outside one is said to be unchecked;
+#   - the run paths: an existing results folder is refused, --replace empties the old crops, frames
+#     are paired by number (and ordered numerically), the stats line is read with several reset words;
+#   - names read from another host's results are plain names, a crop is read only as a plain file
+#     of the local results folder and only for a row that ran, a FIFO is not waited on, a hard link
+#     at the report path is replaced and not written through.
 # Then every assertion is run against a mutant of the line it covers and must fail.
 # Needs bash, cc, python3 (standard library) and git. Isolated from the caller's git
 # environment (GIT_*, global and system config) and home directory.
@@ -36,7 +46,8 @@ want_not() { case $3 in *"$2"*) ko "$1" "'$2' found";; esac; }
 cc -O2 -o "$tmp/framediff" "$root/scripts/pins/framediff.c" -lm || { bad "cannot build framediff"; exit 1; }
 
 # fixtures
-mkdir "$tmp/repo" "$tmp/plain" "$tmp/fakegit" "$tmp/real" "$tmp/ro" "$tmp/stubfail" "$tmp/stubtrue" "$tmp/scen" "$tmp/out"
+mkdir "$tmp/repo" "$tmp/plain" "$tmp/fakegit" "$tmp/real" "$tmp/ro" "$tmp/stubfail" "$tmp/stubtrue" "$tmp/scen" "$tmp/out" \
+    "$tmp/makefail" "$tmp/maketrue" "$tmp/basedir" "$tmp/basedir/baseq2"
 git -C "$tmp/repo" init -q || { bad "git init failed"; exit 1; }
 mkdir "$tmp/fakegit/.git"
 ln -s "$tmp/real" "$tmp/link"
@@ -44,7 +55,9 @@ mkdir "$tmp/plain/dest"; ln -s "$tmp/plain/dest" "$tmp/plain/lnk"
 chmod 555 "$tmp/ro"
 printf '#!/bin/sh\necho boom >&2\nexit 1\n' > "$tmp/stubfail/git"
 printf '#!/bin/sh\necho true\nexit 0\n' > "$tmp/stubtrue/git"
-chmod +x "$tmp/stubfail/git" "$tmp/stubtrue/git"
+printf '#!/bin/sh\nexit 1\n' > "$tmp/makefail/make"
+printf '#!/bin/sh\nexit 0\n' > "$tmp/maketrue/make"
+chmod +x "$tmp/stubfail/git" "$tmp/stubtrue/git" "$tmp/makefail/make" "$tmp/maketrue/make"
 printf 'set timedemo 1\nset r_drawworld 1\nset sw_waterwarp 1\n' > "$tmp/scen/world.cfg"
 printf 'set timedemo 1\nset r_rt_shadows 1\n' > "$tmp/scen/rt-shadows.cfg"
 # the engine's cvarlist: flags, name, "value". Mentions in other lines are not cvars.
@@ -53,6 +66,7 @@ cvl() { printf '%s\n' '*    r_metalfx "0"' "     r_metalfx_modes \"$1\"" '*    r
 { cvl 3; echo 'ref_metal: warning r_rt_denoiser "1"'; echo 'Unknown command "r_rt_denoiser"'; echo '5 cvars'; } > "$tmp/cv-absent"
 { cvl 31; echo '*    r_validation "0"'; echo '     r_rt_denoiser "0"'; echo '     r_rt_shadows "0"'; echo '12 cvars'; } > "$tmp/cv-present"
 { cvl 1099511627779; echo '12 cvars'; } > "$tmp/cv-big"
+{ cvl 31; echo '     r_rt_other "5"'; echo '   - r_rt_fixed "1"'; echo '     r_rt_shadows "0"'; echo '     r_rt_denoiser "0"'; } > "$tmp/cv-defaults"
 printf 'bound\tbound\tstd\tr_metalfx=40\n' > "$tmp/opts-bound"
 "$tmp/framediff" --gen "$tmp/a.tga" 64 48 1 || exit 1
 "$tmp/framediff" --gen "$tmp/other.tga" 64 48 7 || exit 1
@@ -72,9 +86,38 @@ mkfake eng-good yes 0 yes
 mkfake eng-fail yes 1 yes
 mkfake eng-novalid no 0 yes
 mkfake eng-nofps yes 0 no
+# a probe that fails for one option only
+{ echo '#!/bin/sh'; echo 'case "$*" in *r_metalfx_interp*) exit 1;; esac'; echo 'echo "Metal API Validation Enabled"'
+  echo "cat '$tmp/cv-present'"; echo 'exit 0'; } > "$tmp/eng-failopt"
+# an engine that reads and rewrites <its dir>/baseq2/config.cfg as the real one does (it saves the +set
+# arguments), and notes in $MFX_TRACE what config it found at each start
+{ echo '#!/bin/sh'
+  echo 'd=$(dirname "$0")'
+  echo '[ -z "${MFX_TRACE:-}" ] || echo START >> "$MFX_TRACE"'
+  echo 'if [ -f "$d/baseq2/config.cfg" ]; then cat "$d/baseq2/config.cfg"; [ -z "${MFX_TRACE:-}" ] || sed "s/^/seen: /" "$d/baseq2/config.cfg" >> "$MFX_TRACE"; fi'
+  echo 'echo "Metal API Validation Enabled"'
+  echo "cat '$tmp/cv-present'"
+  echo 'echo "689 frames, 6.0 seconds: 114.9 fps"'
+  echo 'mkdir -p "$d/baseq2"; : > "$d/baseq2/config.cfg.n"'
+  echo 'while [ $# -gt 0 ]; do if [ "$1" = +set ]; then echo "set $2 \"$3\"" >> "$d/baseq2/config.cfg.n"; shift 3; else shift; fi; done'
+  echo 'mv "$d/baseq2/config.cfg.n" "$d/baseq2/config.cfg"'
+  echo 'exit 0'; } > "$tmp/eng-cfg"
+printf '#!/bin/sh\nexec sleep 60\n' > "$tmp/eng-slow"
+chmod +x "$tmp/eng-failopt" "$tmp/eng-cfg" "$tmp/eng-slow"
+# an engine in a place: <dir>/quake2 with the owner's config.cfg beside it
+mkeng() { # dir engine-script
+    mkdir -p "$1/baseq2"; cp "$2" "$1/quake2"; chmod +x "$1/quake2"
+    printf 'set owner_cvar "7"\n' > "$1/baseq2/config.cfg"
+}
 
 # assertions <dir holding mfx.py> <ssim.c> <scratch dir> [groups]: appends the ids of the failed ones to FAILED
-has() { case " ${GROUPS_RUN:-path plan engine report ssim} " in *" $1 "*) return 0;; esac; return 1; }
+has() { case " ${GROUPS_RUN:-path plan engine cfg frames report io run ssim} " in *" $1 "*) return 0;; esac; return 1; }
+# the command line of a generator run on the fake engine (the caller sets PATH, MFX_TRACE)
+e2e() { # <engine> <out dir> [more arguments]
+    local eng=$1 o=$2; shift 2
+    python3 -I "$d/mfx.py" run --out "$o" --basedir "$tmp/basedir" --host-name t1 --runs 1 --gpu-runs 1 --scenarios world \
+        --only fx1-s75 --timeout 20 --framediff "$tmp/framediff" --ssim "$w/ssim" --bin "$eng" "$@"
+}
 assertions() {
     local d=$1 ssrc=$2 w=$3 py out rc n
     GROUPS_RUN=${4:-}
@@ -131,6 +174,27 @@ assertions() {
     out=$(python3 -I "$HELP" "$d" probe "$tmp/eng-novalid" "$w/logs" 2>&1); want_has probe-validation "error: the Metal validation layer was not enabled" "$out"
     out=$(python3 -I "$HELP" "$d" timed "$tmp/eng-good" "$w/logs" 2>&1); want_has timed-ok "ok 114.9" "$out"
     out=$(python3 -I "$HELP" "$d" timed "$tmp/eng-nofps" "$w/logs" 2>&1); want_has timed-nofps "error: no timedemo result" "$out"
+    out=$(python3 -I "$HELP" "$d" probe-opts "$tmp/eng-failopt" "$w/logs" 2>&1); want_has probe-skip "ok good skipped bad:probe failed:" "$out"
+
+    fi
+
+    # a run starts from the engine's defaults: config.cfg set aside, cleared, put back
+    if has cfg; then
+    out=$(python3 -I "$HELP" "$d" defaults "$tmp/cv-defaults" 2>&1); want_has cfg-defaults "ok" "$out"; want_not cfg-defaults "leak" "$out"
+    mkeng "$w/cfgbin" "$tmp/eng-cfg"; mkdir -p "$w/cfglogs"
+    out=$(python3 -I "$HELP" "$d" cfg-run "$w/cfgbin/quake2" "$w/cfglogs" 2>&1)
+    want_has cfg-clear "second run clean" "$out"
+    want_has cfg-restored "restored" "$out"; want_not cfg-restored "not restored" "$out"
+    out=$(python3 -I "$HELP" "$d" cfg-recover "$w/cfgrec" 2>&1); want_has cfg-recover "recovered" "$out"
+
+    fi
+
+    # frame pairing and order, the stats line
+    if has frames; then
+    out=$(python3 -I "$HELP" "$d" frames "$w/fa" "$w/fb" 2>&1)
+    want_has frames-pair "paired" "$out"; want_not frames-pair "not paired" "$out"
+    want_has frames-order "order 60 180 1200" "$out"
+    out=$(python3 -I "$HELP" "$d" stats 2>&1); want_has stats-multi "matched 3 timed 2" "$out"
 
     fi
 
@@ -161,6 +225,93 @@ assertions() {
     want_rc ext-refuse 3 $rc
     [ ! -e "$w/out/bad.html" ] || ko ext-refuse "a report with an external reference was written"
     out=$($py report --dir "$w/ha" --html "$tmp/repo/r.html" 2>&1); want_rc report-path 3 $?
+    # names and statuses read from another host are not trusted
+    python3 -I "$HELP" "$d" craft-host "$w/ha" "$w/hx1" "$tmp/secret/holiday" y || ko name-abs "craft 1"
+    python3 -I "$HELP" "$d" craft-host "$w/ha" "$w/hx2" "../../secret/holiday" y || ko name-abs "craft 2"
+    for h in hx1 hx2; do
+        out=$($py report --dir "$w/ha" --other "$w/$h" --html "$w/out/$h.html" 2>&1); want_rc name-abs 1 $?
+        want_has name-abs "not a plain name" "$out"
+        [ ! -e "$w/out/$h.html" ] || ko name-abs "a report was written from $h"
+    done
+    cp -R "$w/hb" "$w/hx3"
+    awk -F'\t' 'BEGIN { OFS = "\t" } NR > 1 { $3 = "weird" } { print }' "$w/hb/results.tsv" > "$w/hx3/results.tsv"
+    out=$($py report --dir "$w/ha" --other "$w/hx3" --html "$w/out/hx3.html" 2>&1); want_rc name-status 1 $?
+    want_has name-status "the status 'weird'" "$out"
+    out=$(python3 -I "$HELP" "$d" read-crop "$w/rc" 2>&1)
+    want_has crop-plain "b'CROP' None None None None None" "$out"
+    # a rerun that skipped fx1-s50 does not show the crop an earlier run left for it
+    python3 -I "$HELP" "$d" stale-crop "$w/ha" "$w/hs" || ko crop-status "stale-crop"
+    out=$($py report --dir "$w/hs" --html "$w/out/hs.html" 2>&1); want_rc crop-status 0 $?
+    html2=$(cat "$w/out/hs.html" 2>/dev/null)
+    want_has crop-status "not run: unsupported: rerun" "$html2"
+    b64s=$(printf 'STALE-CROP-BYTES' | base64 | tr -d '\n')
+    want_not crop-status "$b64s" "$html2"
+    want_has crop-status "$b64a" "$html2"
+
+    fi
+
+    # files a report reads or writes
+    if has io; then
+    [ -d "$w/ha" ] || python3 -I "$HELP" "$d" make-host "$w/ha" hosta 100 140 "$tmp/a.tga" || ko io-hardlink "make-host"
+    cp -R "$w/ha" "$w/hf"; rm "$w/hf/results.tsv"; mkfifo "$w/hf/results.tsv"
+    out=$(python3 -I "$HELP" "$d" read-fifo "$w/hf" 2>&1); want_has io-fifo "not a regular file" "$out"
+    printf 'tracked\n' > "$w/tracked.html"; mkdir -p "$w/hl"; ln "$w/tracked.html" "$w/hl/h.html"
+    out=$($py report --dir "$w/ha" --html "$w/hl/h.html" 2>&1); want_rc io-hardlink 0 $?
+    [ "$(cat "$w/tracked.html")" = tracked ] || ko io-hardlink "the report was written through the hard link"
+    case $(cat "$w/hl/h.html") in "<!doctype html>"*) ;; *) ko io-hardlink "no report at the linked path";; esac
+    mkdir -p "$w/rs"; printf 'set timedemo 1\n' > "$w/rs/world.cfg"
+    out=$(python3 -I "$HELP" "$d" record-env "$w/rs" /opt/other/quake2 2>&1)
+    want_has record-bin "PINS_BIN /opt/other/quake2" "$out"
+    want_has record-scratch "scratch ['mfxr-world-t.cfg'] left []" "$out"
+    mkdir -p "$w/cs"; out=$(python3 -I "$HELP" "$d" clear-scratch "$w/cs" 2>&1); want_has clear-scratch "left keep.cfg" "$out"
+
+    fi
+
+    # the run: --bin, the freshness check, the commit, an existing results folder, --replace, a signal
+    if has run; then
+    mkeng "$w/ft/release" "$tmp/eng-cfg"; mkdir -p "$w/ft/src"; touch "$w/ft/Makefile"
+    git -C "$w/ft" init -q && git -C "$w/ft" -c user.name=t -c user.email=t@t commit -q --allow-empty -m x || ko build-commit "fixture"
+    want=$(git -C "$w/ft" rev-parse --short=8 HEAD)
+    mkeng "$w/loose" "$tmp/eng-cfg"
+    out=$(PATH="$tmp/makefail:$PATH" e2e "$w/ft/release/quake2" "$w/oa" 2>&1); want_rc build-stale 3 $?
+    want_has build-stale "out of date" "$out"
+    mkdir -p "$w/oa" "$w/ob"
+    out=$(PATH="$tmp/maketrue:$PATH" MFX_TRACE="$w/trace1" e2e "$w/ft/release/quake2" "$w/oa" 2>&1); want_rc e2e-run 1 $?
+    want_has e2e-run "results: " "$out"
+    rd=$(ls -d "$w"/oa/metalfx-t1-* 2>/dev/null | head -1); [ -n "$rd" ] || { ko e2e-run "no results folder"; rd="$w/none"; }
+    [ "$(cat "$w/ft/release/baseq2/config.cfg")" = 'set owner_cvar "7"' ] && [ ! -e "$w/ft/release/baseq2/config.cfg.mfx-saved" ] || ko e2e-restored "the owner's config.cfg was not put back"
+    want_has build-commit "commit	$want" "$(cat "$rd/meta.tsv" 2>/dev/null)"
+    want_has build-commit "build	checked" "$(cat "$rd/meta.tsv" 2>/dev/null)"
+    [ -s "$w/trace1" ] || ko e2e-leak "the fake engine left no trace"
+    want_not e2e-leak "seen:" "$(cat "$w/trace1" 2>/dev/null)"
+    # the same day again: refused, then replaced, with the earlier crops gone
+    out=$(PATH="$tmp/maketrue:$PATH" e2e "$w/ft/release/quake2" "$w/oa" 2>&1); want_rc rdir-exists 3 $?
+    want_has rdir-exists "pass --replace" "$out"
+    mkdir -p "$rd/crops"; printf 'old\n' > "$rd/crops/old__x.png"
+    out=$(PATH="$tmp/maketrue:$PATH" MFX_TRACE="$w/trace2" e2e "$w/ft/release/quake2" "$w/oa" --replace 2>&1); want_rc crops-stale 1 $?
+    [ ! -e "$rd/crops/old__x.png" ] || ko crops-stale "the earlier run's crop is still there"
+    want_not e2e-leak "seen:" "$(cat "$w/trace2" 2>/dev/null)"
+    [ "$(cat "$w/ft/release/baseq2/config.cfg")" = 'set owner_cvar "7"' ] || ko e2e-restored "config.cfg after the second run"
+    # a binary that is not in a build tree is not checked, its commit is unknown, and it says so
+    out=$(PATH="$tmp/makefail:$PATH" e2e "$w/loose/quake2" "$w/ob" 2>&1); want_rc build-unknown 1 $?
+    want_has build-unknown "not checked for freshness" "$out"
+    rl=$(ls -d "$w"/ob/metalfx-t1-* 2>/dev/null | head -1)
+    want_has build-unknown "commit	unknown" "$(cat "$rl/meta.tsv" 2>/dev/null)"
+    want_has build-unknown "build	not checked" "$(cat "$rl/meta.tsv" 2>/dev/null)"
+    # SIGTERM during an engine run: the owner's config.cfg is put back
+    mkeng "$w/slow" "$tmp/eng-slow"; mkdir -p "$w/oc"
+    printf 'set owner_cvar "7"\n' > "$w/slow/baseq2/config.cfg"
+    # started directly, not through the function, so that $pid is the generator itself
+    PATH="$tmp/maketrue:$PATH" python3 -I "$d/mfx.py" run --out "$w/oc" --basedir "$tmp/basedir" --host-name t1 --runs 1 --gpu-runs 1 \
+        --scenarios world --only fx1-s75 --timeout 20 --framediff "$tmp/framediff" --ssim "$w/ssim" --bin "$w/slow/quake2" > "$w/slow.log" 2>&1 &
+    pid=$!
+    n=0; while [ ! -e "$w/slow/baseq2/config.cfg.mfx-saved" ] && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done
+    sleep 1
+    kill -TERM $pid 2>/dev/null
+    n=0; while kill -0 $pid 2>/dev/null && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done
+    if kill -0 $pid 2>/dev/null; then kill -KILL $pid 2>/dev/null; ko e2e-sigterm "the run did not end on SIGTERM"; fi
+    wait $pid 2>/dev/null
+    [ "$(cat "$w/slow/baseq2/config.cfg" 2>/dev/null)" = 'set owner_cvar "7"' ] && [ ! -e "$w/slow/baseq2/config.cfg.mfx-saved" ] || ko e2e-sigterm "the owner's config.cfg was not put back"
 
     fi
 
@@ -183,25 +334,44 @@ assertions() {
 FAILED=" "
 mkdir "$tmp/real-run"; assertions "$SRC" "$SRC/ssim.c" "$tmp/real-run"
 if [ "$FAILED" != " " ]; then bad "assertions failed on the real code:$FAILED"; fi
+# the scratch scenarios the generator writes into scripts/pins/scenarios are ignored by git (and the check fails without the rule)
+ign() { grep -qxF '/scripts/pins/scenarios/mfxr-*.cfg' "$1"; }
+ign "$root/.gitignore" || bad "no .gitignore rule for the generator's scratch scenarios"
+printf '/release/\n' > "$tmp/noign"; if ign "$tmp/noign"; then bad "the ignore check passes without the rule"; fi
+[ "${MFX_REAL_ONLY:-0}" = 0 ] || { [ "$fail" -ne 0 ] || echo "check-metalfx-report: real code ok (mutants skipped)"; exit $fail; }
 
 # mutants: one change of the line each assertion covers; the covered assertion must fail
 nm=0
 mutant() { # name covered-id file(py|c) old new [old new]...: runs in the background, result in $tmp/res-<name>
     local name=$1 id=$2 kind=$3; shift 3
     nm=$((nm+1))
+    while [ "$(jobs -r | wc -l | tr -d ' ')" -ge 8 ]; do sleep 0.2; done
     (
-        mdir="$tmp/mut-$name"; ssrc="$SRC/ssim.c"
-        mkdir "$mdir" "$mdir/w"; cp "$SRC/options.tsv" "$mdir/"
+        # the mutant lives in a tree of its own (scripts/metalfx-report, scripts/pins/scenarios), so that
+        # the generator's root is the mutant's and no two mutants share a scenarios folder
+        mdir="$tmp/mut-$name"; sub="$mdir/scripts/metalfx-report"; ssrc="$SRC/ssim.c"
+        mkdir -p "$sub" "$mdir/w" "$mdir/scripts/pins"; cp "$SRC/options.tsv" "$sub/"; cp -R "$root/scripts/pins/scenarios" "$mdir/scripts/pins/scenarios"
         if [ "$kind" = py ]; then
-            python3 -I "$HELP" mutate "$SRC/mfx.py" "$mdir/mfx.py" "$@" > "$mdir/log" || { echo "bad	mutant $name: $(cat "$mdir/log")" > "$tmp/res-$name"; exit 0; }
+            python3 -I "$HELP" mutate "$SRC/mfx.py" "$sub/mfx.py" "$@" > "$mdir/log" || { echo "bad	mutant $name: $(cat "$mdir/log")" > "$tmp/res-$name"; exit 0; }
         else
-            cp "$SRC/mfx.py" "$mdir/mfx.py"
+            cp "$SRC/mfx.py" "$sub/mfx.py"
             python3 -I "$HELP" mutate "$SRC/ssim.c" "$mdir/ssim.c" "$@" > "$mdir/log" || { echo "bad	mutant $name: $(cat "$mdir/log")" > "$tmp/res-$name"; exit 0; }
             ssrc="$mdir/ssim.c"
         fi
         FAILED=" "
-        case $id in git-*|link-*|unwritable|relative|write-link) g=path;; plan-*|accepted-*) g=plan;; probe-*|timed-*) g=engine;; ssim-*) g=ssim;; *) g=report;; esac
-        assertions "$mdir" "$ssrc" "$mdir/w" "$g" > "$mdir/out" 2>&1
+        case $id in
+            git-*|link-*|unwritable|relative|write-link) g=path;;
+            plan-*|accepted-*) g=plan;;
+            probe-*|timed-*) g=engine;;
+            cfg-*) g=cfg;;
+            frames-*|stats-*) g=frames;;
+            name-*|crop-*|host-*|ext-*|report-*|load-*) g=report;;
+            io-*|record-*|clear-*) g=io;;
+            build-*|rdir-*|crops-*|e2e-*) g=run;;
+            ssim-*) g=ssim;;
+            *) g=report;;
+        esac
+        assertions "$sub" "$ssrc" "$mdir/w" "$g" > "$mdir/out" 2>&1
         case $FAILED in
             *" $id "*) echo "ok	mutant $name killed ($id)" > "$tmp/res-$name";;
             *) echo "bad	mutant $name survived: $id did not fail (failed:$FAILED)" > "$tmp/res-$name";;
@@ -243,6 +413,57 @@ mutant other-host-images host-images py 'png = os.path.join(rdir, "crops", "%s__
 mutant external-allowed ext-refuse py 'raise Refuse("the report would refer outside itself: %r" % ext[:3])' 'pass'
 mutant external-emitted ext-none py 'raise Refuse("the report would refer outside itself: %r" % ext[:3])' 'pass' 'p.append("</main></body></html>\n")' 'p.append("<link rel=stylesheet href=x.css></main></body></html>\n")'
 mutant report-in-tree report-path py 'outp = check_out_path(os.path.abspath(out_html), file=True)' 'outp = os.path.abspath(out_html)'
+mutant defaults-unemitted cfg-defaults py 'for k, v in sorted(ctx.defaults.items()):' 'for k, v in []:'
+mutant defaults-after cfg-defaults py 'for k, v in sorted(ctx.defaults.items()):' 'for k, v in []:' 'for k, v in scenario_sets + extra_sets:' 'for k, v in scenario_sets + extra_sets + sorted(ctx.defaults.items()):'
+mutant defaults-no-gating cfg-defaults py 'names = set(c for c in base_cv if c.startswith(GATING_PREFIXES))' 'names = set()'
+mutant defaults-noset cfg-defaults py 'if c in base_cv and c not in noset and c not in RENDERER_REPORTED' 'if c in base_cv and c not in RENDERER_REPORTED'
+mutant defaults-modes cfg-defaults py 'if c in base_cv and c not in noset and c not in RENDERER_REPORTED' 'if c in base_cv and c not in noset'
+mutant cfg-not-cleared cfg-clear py 'ctx.cfg.clear()  # the run starts' 'pass  # the run starts'
+mutant owner-not-set-aside cfg-restored py 'os.rename(self.path, self.saved)' 'pass'
+mutant restore-noop cfg-restored py 'if not self.held:
+            return
+        self._remove(self.path)' 'return
+        self._remove(self.path)'
+mutant recover-off cfg-recover py 'if os.path.lexists(self.saved):  # a run that was killed' 'if False:  # a run that was killed'
+mutant pair-by-name frames-pair py 'k = f[:-4].rsplit("-", 1)[-1]' 'k = f'
+mutant order-by-string frames-order py 'return sorted(frames, key=int)' 'return sorted(frames)'
+mutant stats-one-word stats-multi py 'reset [a-z ]+, scaler' 'reset \w+, scaler'
+mutant stats-timed-only stats-multi py 'scaler (?:([0-9.]+) ms|not timed)' 'scaler ([0-9.]+) ms'
+mutant probe-failure-ends probe-skip py 'except RuntimeError as e:
+            skipped.append((oid' 'except ZeroDivisionError as e:
+            skipped.append((oid'
+mutant record-bin-unset record-bin py ', "PINS_BIN": ctx.bin})' '})'
+mutant scratch-left record-scratch py 'os.remove(cfg)' 'pass'
+mutant scratch-kept clear-scratch py 'raise Refuse("%s is in the way and is not a regular file" % p)
+            os.unlink(p)' 'raise Refuse("%s is in the way and is not a regular file" % p)
+            pass'
+mutant name-unchecked name-abs py 'if not NAME_RE.match(r["option"]) or not NAME_RE.match(r["scenario"]):' 'if False:'
+mutant status-unchecked name-status py 'if r["status"] not in ("ok", "error"):' 'if False:'
+mutant crop-name-unchecked crop-plain py 'if not NAME_RE.match(sc) or not NAME_RE.match(oid):
+        return None' 'if False:
+        return None'
+mutant crop-follows-link crop-plain py 'os.path.join(cdir, "%s__%s.png" % (sc, oid)), os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)' 'os.path.join(cdir, "%s__%s.png" % (sc, oid)), os.O_RDONLY | os.O_NONBLOCK)'
+mutant crop-dir-link crop-plain py 'if not stat.S_ISDIR(os.lstat(cdir).st_mode):' 'if False:'
+mutant crop-fifo crop-plain py 'if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None' 'if False:
+            return None'
+mutant crop-any-status crop-status py 'if not any(r["option"] == oid and r["scenario"] == sc and r["status"] == "ok" for r in local["res"]):' 'if False:'
+mutant fifo-opened io-fifo py 'if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("%s: not a regular file" % path)' 'if False:
+            raise ValueError("%s: not a regular file" % path)'
+mutant write-through-link io-hardlink py 'write_atomic(outp, doc.encode("utf-8"))' 'write_file(outp, doc.encode("utf-8"))'
+mutant stale-build-passes build-stale py 'raise Refuse("the build in %s is out of date' 'print("the build in %s is out of date'
+mutant build-unchecked build-stale py 'if ctx.tree is not None:
+        check_build(ctx.tree)' 'if False:
+        check_build(ctx.tree)'
+mutant commit-of-checkout build-commit py 'commit, dirty = engine_commit(ctx.tree)' 'commit, dirty = engine_commit(os.path.dirname(os.path.dirname(HERE)))'
+mutant unchecked-not-said build-unknown py 'ctx.build_note = "not checked: " + why' 'ctx.build_note = "checked"'
+mutant rdir-replaced-silently rdir-exists py 'if os.path.lexists(rdir) and not replace:' 'if False:'
+mutant crops-kept crops-stale py '            os.unlink(f)
+    return rdir' '            pass
+    return rdir'
+mutant config-not-restored e2e-restored py 'ctx.cfg.restore()' 'pass'
+mutant no-sigterm-handler e2e-sigterm py 'for s in (signal.SIGTERM, signal.SIGHUP):' 'for s in ():'
 mutant ssim-no-covariance ssim-one c 's = ((2 * ma * mb + c1) * (2 * cov + c2))' 's = ((2 * ma * mb + c1) * (2 * 0 + c2))'
 mutant ssim-always-one ssim-less c 'sum += s;' 'sum += 1.0;'
 mutant ssim-size-ignored ssim-mismatch c 'size mismatch %dx%d vs %dx%d\n", a.w, a.h, b.w, b.h); return 3;' 'size mismatch %dx%d vs %dx%d\n", a.w, a.h, b.w, b.h); return 0;'
