@@ -903,6 +903,218 @@ test_present_region(void)
 }
 
 /*
+ * TASK147: the present into the safe rectangle of an iOS drawable. The
+ * frame is the rectangle's size; its bottom-left corner lands on the
+ * rectangle's own, and the insets are measured from the drawable's edges.
+ */
+static void
+test_present_region_inset(void)
+{
+	rm_present_t p;
+	rm_inset_t phone = { 177, 0, 177, 63 };   /* a landscape iPhone: the corners and the home indicator */
+	rm_inset_t left = { 177, 0, 0, 63 };      /* the sensor housing on one side */
+	rm_inset_t right = { 0, 0, 177, 63 };     /* and on the other */
+	rm_inset_t none = { 0, 0, 0, 0 };
+	rm_inset_t top = { 0, 20, 0, 0 };
+
+	/* 2556 by 1179, the safe rectangle 2202 by 1116 at x 177 and the top row */
+	CHECK(rm_present_region_in(2202, 1116, 2556, 1179, &phone, &p));
+	CHECK(p.w == 2202 && p.h == 1116 && p.dst_x == 177 && p.dst_y == 0 && p.src_y == 0);
+
+	/* the housing on the other side: the mirrored origin, the same size */
+	CHECK(rm_present_region_in(2379, 1116, 2556, 1179, &left, &p));
+	CHECK(p.w == 2379 && p.h == 1116 && p.dst_x == 177 && p.dst_y == 0);
+	CHECK(rm_present_region_in(2379, 1116, 2556, 1179, &right, &p));
+	CHECK(p.w == 2379 && p.h == 1116 && p.dst_x == 0 && p.dst_y == 0);
+
+	/* a top inset moves the frame down */
+	CHECK(rm_present_region_in(640, 480, 640, 500, &top, &p));
+	CHECK(p.w == 640 && p.h == 480 && p.dst_x == 0 && p.dst_y == 20);
+
+	/* a smaller frame sits at the safe rectangle's bottom-left corner */
+	CHECK(rm_present_region_in(800, 600, 2556, 1179, &phone, &p));
+	CHECK(p.w == 800 && p.h == 600 && p.dst_x == 177 && p.dst_y == 516 && p.src_y == 0);
+
+	/* a larger frame gives its bottom-left part, clipped to the rectangle */
+	CHECK(rm_present_region_in(3000, 1300, 2556, 1179, &phone, &p));
+	CHECK(p.w == 2202 && p.h == 1116 && p.dst_x == 177 && p.dst_y == 0 && p.src_y == 184);
+
+	/* an inset that leaves nothing, or is negative, is refused with *out zeroed */
+	{
+		rm_inset_t wide = { 1300, 0, 1256, 0 };   /* 2556: no width left */
+		rm_inset_t tall = { 0, 600, 0, 579 };     /* 1179: no height left */
+		rm_inset_t over = { 3000, 0, 0, 0 };
+		rm_inset_t neg = { -1, 0, 0, 0 };
+		rm_inset_t negb = { 0, 0, 0, -5 };
+
+		memset(&p, 0x55, sizeof(p));
+		CHECK(!rm_present_region_in(2202, 1116, 2556, 1179, &wide, &p) && p.w == 0 && p.h == 0 && p.dst_x == 0);
+		CHECK(!rm_present_region_in(2202, 1116, 2556, 1179, &tall, &p) && p.w == 0 && p.h == 0);
+		CHECK(!rm_present_region_in(2202, 1116, 2556, 1179, &over, &p) && p.w == 0);
+		CHECK(!rm_present_region_in(2202, 1116, 2556, 1179, &neg, &p) && p.w == 0);
+		CHECK(!rm_present_region_in(2202, 1116, 2556, 1179, &negb, &p) && p.w == 0);
+		CHECK(!rm_present_region_in(2202, 1116, 2556, 1179, NULL, &p) && p.w == 0);
+	}
+
+	/* no inset is today's result, case for case */
+	{
+		rm_present_t q;
+		static const int c[][4] = { { 640, 480, 640, 480 }, { 640, 480, 960, 540 }, { 1024, 768, 800, 600 },
+			{ 800, 480, 640, 480 }, { 640, 600, 640, 480 }, { 0, 480, 640, 480 }, { 640, 480, 640, -1 } };
+		int i;
+
+		for (i = 0; i < 7; i++)
+		{
+			int a = rm_present_region(c[i][0], c[i][1], c[i][2], c[i][3], &p);
+			int b = rm_present_region_in(c[i][0], c[i][1], c[i][2], c[i][3], &none, &q);
+
+			CHECK(a == b && p.w == q.w && p.h == q.h && p.src_y == q.src_y && p.dst_y == q.dst_y && p.dst_x == 0 && q.dst_x == 0);
+		}
+	}
+}
+
+/* TASK147: the insets in pixels from SDL's safe rectangle in points (an iPhone 17 landscape: 852 by 393 points at 3x). */
+static void
+test_safe_insets(void)
+{
+	rm_inset_t in;
+
+	/* 59 points at each side and 21 at the bottom: 177 and 63 pixels */
+	CHECK(rm_safe_insets(59.0f, 0.0f, 734.0f, 372.0f, 3.0f, 2556, 1179, &in));
+	CHECK(in.left == 177 && in.top == 0 && in.right == 177 && in.bottom == 63);
+
+	/* the whole window: no inset */
+	CHECK(rm_safe_insets(0.0f, 0.0f, 852.0f, 393.0f, 3.0f, 2556, 1179, &in));
+	CHECK(in.left == 0 && in.top == 0 && in.right == 0 && in.bottom == 0);
+
+	/* a quarter point rounds to the nearest pixel, a density of 2 */
+	CHECK(rm_safe_insets(20.25f, 0.0f, 100.0f, 50.0f, 2.0f, 400, 200, &in));
+	CHECK(in.left == 41 && in.right == 400 - 241);
+
+	/* a rectangle past the drawable's edge is kept inside it */
+	CHECK(rm_safe_insets(0.0f, 0.0f, 900.0f, 400.0f, 3.0f, 2556, 1179, &in));
+	CHECK(in.right == 0 && in.bottom == 0);
+	/* a rectangle that starts below zero is kept inside */
+	CHECK(rm_safe_insets(-5.0f, -5.0f, 100.0f, 100.0f, 3.0f, 2556, 1179, &in));
+	CHECK(in.left == 0 && in.top == 0 && in.right == 2556 - 285 && in.bottom == 1179 - 285);
+
+	/* no width or height, a bad density or size, or a rectangle right of the drawable: refused, all 0 */
+	CHECK(!rm_safe_insets(0.0f, 0.0f, 0.0f, 400.0f, 3.0f, 2556, 1179, &in) && in.left == 0 && in.right == 0);
+	CHECK(!rm_safe_insets(0.0f, 0.0f, 852.0f, 0.0f, 3.0f, 2556, 1179, &in));
+	CHECK(!rm_safe_insets(0.0f, 0.0f, 852.0f, 393.0f, 0.0f, 2556, 1179, &in));
+	CHECK(!rm_safe_insets(0.0f, 0.0f, 852.0f, 393.0f, -1.0f, 2556, 1179, &in));
+	CHECK(!rm_safe_insets(0.0f, 0.0f, 852.0f, 393.0f, 3.0f, 0, 1179, &in));
+	CHECK(!rm_safe_insets(0.0f, 0.0f, 852.0f, 393.0f, 3.0f, 2556, -1, &in));
+	CHECK(!rm_safe_insets(0.0f / 0.0f, 0.0f, 852.0f, 393.0f, 3.0f, 2556, 1179, &in));
+	CHECK(!rm_safe_insets(900.0f, 0.0f, 50.0f, 393.0f, 3.0f, 2556, 1179, &in));
+}
+
+/*
+ * TASK147: the whole chain of an iOS frame, as RI_BeginFrame runs it:
+ * the window's pixels and its insets give the view (viddef) and the
+ * layer (rm_window_sizes), the view gives the frame (rm_frame_size),
+ * rmb_frame_begin sets the layer's drawable (rm_frame_remake) and the
+ * present copies into that drawable (rm_present_region_in). The whole
+ * frame is copied, unscaled, at the safe rectangle's place, and the
+ * drawable is the window's pixels: a layer of the view's size would be
+ * shown stretched over the window and the present would crop the frame.
+ */
+static void
+test_present_chain(void)
+{
+	static const struct
+	{
+		int pw, ph;
+		rm_inset_t in;
+	} c[] = {
+		{ 2556, 1179, { 177, 0, 177, 63 } },   /* the iPhone of test_present_region_inset */
+		{ 2622, 1206, { 186, 0, 186, 60 } },   /* the iPhone 17 simulator, measured */
+		{ 2420, 1668, { 0, 0, 0, 40 } },       /* the iPad Pro 11-inch simulator, measured */
+		{ 2622, 1206, { 0, 0, 186, 60 } },     /* the sensor housing on one side only */
+		{ 1920, 1080, { 0, 0, 0, 0 } },        /* no inset: the view is the window */
+	};
+	int i;
+
+	for (i = 0; i < (int)(sizeof(c) / sizeof(c[0])); i++)
+	{
+		rm_frame_held_t held;
+		rm_present_t p;
+		rm_sizes_t s;
+		int w, h, sw, sh;
+
+		sw = c[i].pw - c[i].in.left - c[i].in.right;
+		sh = c[i].ph - c[i].in.top - c[i].in.bottom;
+
+		CHECK(rm_window_sizes(c[i].pw, c[i].ph, &c[i].in, &s));
+		CHECK(s.vw == sw && s.vh == sh);                 /* viddef is the safe rectangle */
+		CHECK(s.lw == c[i].pw && s.lh == c[i].ph);       /* the layer is the window's pixels */
+		CHECK(rm_frame_size(s.vw, s.vh, &w, &h) && w == sw && h == sh);
+
+		/* the first frame makes everything, and sets the layer to the size it was given */
+		memset(&held, 0, sizeof(held));
+		CHECK(rm_frame_remake(&held, w, h, s.lw, s.lh) == (RM_REMAKE_COLOR | RM_REMAKE_DEPTH | RM_REMAKE_DRAWABLE));
+		held.color = held.depth = 1;
+		held.cw = w;
+		held.ch = h;
+		held.lw = s.lw;
+		held.lh = s.lh;
+		/* the next frame of the same window makes nothing again */
+		CHECK(rm_frame_remake(&held, w, h, s.lw, s.lh) == 0);
+
+		/* the present into that drawable: the whole frame at the rectangle's top-left corner */
+		CHECK(rm_present_region_in(w, h, held.lw, held.lh, &c[i].in, &p));
+		CHECK(p.w == w && p.h == h);
+		CHECK(p.dst_x == c[i].in.left && p.dst_y == c[i].in.top && p.src_y == 0);
+		CHECK(held.lw == c[i].pw && held.lh == c[i].ph);
+	}
+
+	/* insets that are negative, missing or leave nothing: no inset, the view and the layer the whole window */
+	{
+		static const rm_inset_t neg[] = { { -1, 0, 0, 0 }, { 0, -1, 0, 0 }, { 0, 0, -1, 0 }, { 0, 0, 0, -1 } };
+		rm_inset_t wide = { 1311, 0, 1311, 0 }, tall = { 0, 600, 0, 606 };
+		rm_sizes_t s;
+
+		for (i = 0; i < 4; i++)
+		{
+			memset(&s, 0x55, sizeof(s));
+			CHECK(!rm_window_sizes(2622, 1206, &neg[i], &s));
+			CHECK(s.vw == 2622 && s.vh == 1206 && s.lw == 2622 && s.lh == 1206);
+		}
+
+		CHECK(!rm_window_sizes(2622, 1206, NULL, &s) && s.vw == 2622 && s.lh == 1206);
+		CHECK(!rm_window_sizes(2622, 1206, &wide, &s) && s.vw == 2622 && s.vh == 1206 && s.lw == 2622);
+		CHECK(!rm_window_sizes(2622, 1206, &tall, &s) && s.vw == 2622 && s.vh == 1206 && s.lh == 1206);
+
+		/* one pixel left either way is a view */
+		wide.right = 1310;
+		tall.bottom = 605;
+		CHECK(rm_window_sizes(2622, 1206, &wide, &s) && s.vw == 1 && s.vh == 1206 && s.lw == 2622);
+		CHECK(rm_window_sizes(2622, 1206, &tall, &s) && s.vw == 2622 && s.vh == 1 && s.lh == 1206);
+
+		/* no window: all 0 */
+		memset(&s, 0x55, sizeof(s));
+		CHECK(!rm_window_sizes(0, 1206, &wide, &s) && s.vw == 0 && s.vh == 0 && s.lw == 0 && s.lh == 0);
+		memset(&s, 0x55, sizeof(s));
+		CHECK(!rm_window_sizes(2622, -1, &wide, &s) && s.vw == 0 && s.vh == 0 && s.lw == 0 && s.lh == 0);
+		memset(&s, 0x55, sizeof(s));
+		CHECK(!rm_window_sizes(2622, 0, &wide, &s) && s.vw == 0 && s.vh == 0 && s.lw == 0 && s.lh == 0);
+		memset(&s, 0x55, sizeof(s));
+		CHECK(!rm_window_sizes(-1, 1206, &tall, &s) && s.vw == 0 && s.vh == 0 && s.lw == 0 && s.lh == 0);
+	}
+}
+
+/* TASK147: where the layer always presents in step with the display, r_vsync has no effect. */
+static void
+test_display_sync(void)
+{
+	CHECK(rm_display_sync(0, 1) == 1);
+	CHECK(rm_display_sync(0, 0) == 0);
+	CHECK(rm_display_sync(0, 5) == 1);
+	CHECK(rm_display_sync(1, 0) == 1);
+	CHECK(rm_display_sync(1, 1) == 1);
+}
+
+/*
  * With len 0 the formatters write nothing: not the byte of a one byte
  * heap block (which must stay as it was), and, given the middle byte of
  * a three byte block, neither that byte nor the one before it (where a
@@ -8199,6 +8411,10 @@ main(void)
 	test_frame_size();
 	test_frame_remake();
 	test_present_region();
+	test_present_region_inset();
+	test_present_chain();
+	test_display_sync();
+	test_safe_insets();
 	test_upload_bytes();
 	test_raw8();
 	test_fan();

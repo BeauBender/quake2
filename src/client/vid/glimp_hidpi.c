@@ -80,3 +80,56 @@ GLimp_DrawableInPixels(qboolean highdpi, int fullscreen, float r_mode)
 
 	return (fullscreen != 2) || (r_mode == -2);
 }
+
+/*
+ * True when the screen the window sits on is not the one the video was
+ * made for (TASK147): an iOS window is always the whole screen, and what
+ * can change under it is its pixel size and the safe rectangle in
+ * points, which a rotation to the other landscape moves. The two are
+ * GLIMP_SCREEN_INTS values each: the width and height in pixels, then
+ * the safe rectangle's x, y, width and height. A missing record, or one
+ * of an empty drawable, is a change: the video is made again rather than
+ * left on a screen nobody measured.
+ */
+qboolean
+GLimp_ScreenChanged(const int *made, const int *now)
+{
+	int i;
+
+	if (!made || !now || (now[0] <= 0) || (now[1] <= 0))
+	{
+		return true;
+	}
+
+	for (i = 0; i < GLIMP_SCREEN_INTS; i++)
+	{
+		if (made[i] != now[i])
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/*
+ * The screen's own size, whatever the configuration says (TASK147). The
+ * video driver of an iPhone or iPad (uikit) has one screen the window
+ * always fills, so the mode list and the windowed or fullscreen choice do
+ * not apply: a default.cfg that sets r_mode 4 and vid_fullscreen 1 still
+ * gives the whole screen. For that driver *fullscreen becomes 2 (a
+ * fullscreen window) and *r_mode -2 (the native size), and true is
+ * returned; any other driver, or none, is left alone and gives false.
+ */
+qboolean
+GLimp_OwnScreenOnly(const char *driver, int *fullscreen, float *r_mode)
+{
+	if (!driver || !fullscreen || !r_mode || (strcmp(driver, "uikit") != 0))
+	{
+		return false;
+	}
+
+	*fullscreen = 2;
+	*r_mode = -2;
+	return true;
+}
