@@ -313,3 +313,4 @@ render-stage ray queries and the performance numbers.
 - [TASK119](../runbook/TASK119.md): Crisp 2D in `ref_metal`
 - [TASK120](../runbook/TASK120.md): Bicubic lightmaps in `ref_metal`
 - [TASK122](../runbook/TASK122.md): Particle size cap relative to the resolution in `ref_metal`
+- [TASK132](../runbook/TASK132.md): `soft`'s window captured opaque and not opaque
