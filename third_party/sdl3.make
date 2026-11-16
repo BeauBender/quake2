@@ -7,8 +7,10 @@
 # third_party/SDL3/ (provenance and hashes:
 # docs/DEPENDENCIES.md, third_party/SDL3/MANIFEST.sha256).
 #
-# Only macOS builds the vendored copy for now. Linux and
-# Windows still use the system SDL3 found by pkgconf.
+# macOS builds the vendored copy, and so does the iOS mode
+# of the top-level Makefile (make ios, IOS_MODE=1), for the
+# iOS SDK and into its own build root. Linux and Windows
+# still use the system SDL3 found by pkgconf.
 #
 # SDL's own build system is CMake, which this fork does
 # not use. The source list and settings below are taken
@@ -16,13 +18,17 @@
 # (Xcode/SDL/SDL.xcodeproj, target "SDL3", Sources phase,
 # minus the two .metal files: SDL ships their compiled
 # form as headers, SDL_shaders_metal_macos.h and
-# Metal_Blit.h). Files of that list that are for iOS,
-# tvOS or Windows compile to nothing on macOS, as they
-# do in Xcode. The configuration is the stock
-# include/build_config/SDL_build_config_macos.h, which
-# SDL_build_config.h selects when no CMake-generated
-# config is on the include path. Nothing in the vendored
-# tree is edited; settings go on the command line only.
+# Metal_Blit.h). That target is multi-platform: files of
+# the list that are for iOS, tvOS or Windows compile to
+# nothing on macOS, and those for macOS to nothing on iOS,
+# as they do in Xcode, so one list serves both. The
+# configuration is the stock
+# include/build_config/SDL_build_config_macos.h, or
+# SDL_build_config_ios.h for the iOS SDK, which
+# SDL_build_config.h selects by itself when no
+# CMake-generated config is on the include path. Nothing
+# in the vendored tree is edited; settings go on the
+# command line only.
 #
 # Header search paths, ARC for Objective-C, hidden
 # visibility (GCC_SYMBOLS_PRIVATE_EXTERN) and the
@@ -57,6 +63,17 @@ endif
 
 # Frameworks and libraries, from the Xcode project's
 # Frameworks phase and OTHER_LDFLAGS (-liconv).
+ifeq ($(IOS_MODE),1)
+# iOS: the frameworks the iOS objects reference, measured
+# by linking them (Carbon, Cocoa, ForceFeedback and IOKit
+# are macOS only).
+SDL3_LDLIBS := -liconv \
+	-framework AVFoundation -framework AudioToolbox -framework CoreBluetooth \
+	-framework CoreGraphics -framework CoreHaptics -framework CoreMedia \
+	-framework CoreMotion -framework CoreVideo -framework Foundation \
+	-framework GameController -framework Metal -framework OpenGLES \
+	-framework QuartzCore -framework UIKit
+else
 SDL3_LDLIBS := -liconv \
 	-framework AudioToolbox -framework Carbon -framework Cocoa \
 	-framework CoreAudio -framework CoreFoundation -framework CoreHaptics \
@@ -69,6 +86,7 @@ SDL3_LDLIBS := -liconv \
 # (CLANG_ENABLE_MODULES): camera (AVFoundation,
 # CoreMedia) and the Metal view.
 SDL3_LDLIBS += -framework AVFoundation -framework CoreMedia
+endif
 
 SDL3_SRCS := \
 	SDL.c \

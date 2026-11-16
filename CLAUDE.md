@@ -20,6 +20,7 @@ make config               # print the resolved WITH_* / CFLAGS configuration
 make clean                # remove objects; cleanall also removes release/ debug/
 release/quake2 +set basedir /path/to/quake2 -portable   # run against real game data
 make STATIC_MODULES=1 STATIC_RENDERER=soft client   # macOS: game + one renderer linked into one quake2, no dlopen, no code mods
+make ios                  # iOS simulator app (static, ref_metal) -> build/ios-iphonesimulator/release/Quake2.app; scripts/ios-sim.sh smoke --out DIR runs it
 ```
 
 Feature switches are `WITH_*` variables (`WITH_SYSTEMWIDE`, `WITH_XDG`, `WITH_EXECINFO`, `WITH_RPATH`; `METAL_SHADERS=no` skips the Metal shader compile on macOS). Pass them on the command line or put them in an untracked `config.mk`, which the Makefile includes. `-j` is safe.
