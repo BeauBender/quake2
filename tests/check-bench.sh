@@ -434,6 +434,15 @@ t_lock_stop() {
 	[ "$(B lock status)" = lock=free ] || bad "stop: the lock was not released after a command that left work running"
 	grep -q '^bench: stopped what the command left running' "${E:?}/left.err" || bad "stop: the work a command left running was not said"
 	_tl=$(date +%s)
+	# A command that exits and leaves one that catches TERM running in its
+	# group: after the 1 to 2 s it is given, the leftover gets the same grace
+	# floor as on a signal (at least BENCH_STOP_GRACE + 5 s, even when that
+	# is 0), so a nested bench.sh left running stops its own bounded group
+	# first. Under a lock of its own (l2), checked below with s2.
+	mkdir "${E:?}/l2"
+	printf '%s\n' 'sh "$1" "$2" "$3" & exit 0' > "${E:?}/leave.sh"
+	_t2=$(date +%s)
+	start sh -c 'st=0; env BENCH_STATE="$1/state" BENCH_STOP_GRACE=0 sh "$2/bench.sh" lock run left2 -- sh "$4" "$3" "$1/pid" "$1/log" > "$1/out" 2>&1 || st=$?; echo "$st" > "$1/st"; date +%s > "$1/end"' x "${E:?}/l2" "$R" "${E:?}/stubborn.sh" "${E:?}/leave.sh"
 	# At a terminal (a pty from script, when there is one): a command that
 	# touches it from its background process group is said and stopped.
 	if script -q /dev/null true < /dev/null > /dev/null 2>&1; then
@@ -461,6 +470,14 @@ t_lock_stop() {
 	[ "$(env BENCH_STATE="${E:?}/s2/state" sh "$R/bench.sh" lock status)" = lock=free ] || bad "stop: the stubborn command's lock was not released"
 	grep -q got-term "${E:?}/s2/log" || bad "stop: the stubborn command never got TERM"
 	if pid_running "$(cat "${E:?}/s2/pid")"; then bad "stop: the stubborn command outlived the lock"; fi
+	# The command that left one that catches TERM running, started above.
+	wait_file 20 "${E:?}/l2/end" || bad "stop: lock run did not return after a command left one that ignores TERM running"
+	_t3=$(cat "${E:?}/l2/end" 2> /dev/null || echo 0)
+	[ "$(cat "${E:?}/l2/st" 2> /dev/null)" = 0 ] || bad "stop: wanted exit 0 from a command that left one that ignores TERM running, got $(cat "${E:?}/l2/st" 2> /dev/null)"
+	[ $((_t3 - _t2)) -ge 6 ] || bad "stop: with BENCH_STOP_GRACE=0 the work a command left running was killed after $((_t3 - _t2)) s, under the 1 s it is given and the floor of 5 s"
+	[ "$(env BENCH_STATE="${E:?}/l2/state" sh "$R/bench.sh" lock status)" = lock=free ] || bad "stop: the lock was not released after a command left one that ignores TERM running"
+	grep -q got-term "${E:?}/l2/log" || bad "stop: the work a command left running never got TERM"
+	if pid_running "$(cat "${E:?}/l2/pid" 2> /dev/null)"; then bad "stop: the work a command left running, which ignores TERM, outlived the lock"; fi
 	# Commands that print nothing themselves: no job notice either.
 	grep -v '^bench: ' "${E:?}/stopped.out" "${E:?}/term.out" "${E:?}/left.err" > /dev/null && bad "stop: the lock shell printed a line that is not its own (a job notice)"
 	# By now each grandchild would have written its line.
