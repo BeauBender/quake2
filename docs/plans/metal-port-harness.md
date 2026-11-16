@@ -276,6 +276,7 @@ render-stage ray queries and the performance numbers.
 
 - [FIX41](../runbook/FIX41.md): `vid_restart` and the main thread's autorelease pool
 - [FIX42](../runbook/FIX42.md): The `screenshot` command between frames on the shim
+- [FIX51](../runbook/FIX51.md): The Metal renderers' frame loop: render ahead of the display, present when a drawable is free
 - [FIX52](../runbook/FIX52.md): The 60 fps cap at 1920x1080 windowed
 - [FIX53](../runbook/FIX53.md): The opaque layer of `ref_metal` and the shim
 - [FIX58](../runbook/FIX58.md): `tests/check-pre-push-hook.sh` and a temporary directory that holds the login name
