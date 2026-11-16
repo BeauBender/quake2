@@ -924,9 +924,19 @@ GLimp_GrabInput(qboolean grab)
 		SDL_SetWindowMouseGrab(window, grab ? true : false);
 	}
 
-	if(!SDL_SetWindowRelativeMouseMode(window, grab ? true : false))
+	if (!GLimp_RelativeMouseWanted(SDL_GetCurrentVideoDriver(), SDL_HasMouse(), grab))
 	{
-		Com_Printf("WARNING: Setting Relative Mousemode failed, reason: %s\n", SDL_GetError());
+		return;
+	}
+
+	{
+		static qboolean reported;
+		qboolean ok = SDL_SetWindowRelativeMouseMode(window, grab ? true : false);
+
+		if (GLimp_RelativeMouseReport(ok, &reported))
+		{
+			Com_Printf("WARNING: Setting Relative Mousemode failed, reason: %s\n", SDL_GetError());
+		}
 	}
 }
 

@@ -330,6 +330,11 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   else the given driver is forced, regardless if supported by SDL or the
   platform or not.
 
+  On iOS the audio session is the ambient category, whatever the
+  driver: the game follows the silent switch and mixes with the audio
+  of other apps. SDL's own default there is a playback session, which
+  does neither.
+
 * **s_underwater**: Dampen sounds if submerged. Enabled by default.
 
 * **s_bsp_soundpos**: Controls the positioning of sounds played by BSP
@@ -875,10 +880,11 @@ choose how a view is drawn, on any Metal GPU, and leave the picture as it
 is.
 
 * **r_rt_ao**: When set to `1`, the Metal renderer darkens the world's
-  creases and corners with ray-traced ambient occlusion: from each pixel
-  of the world two rays look for nearby surfaces in the half-space in
-  front of it, and the nearer what they meet, the less of the lightmap's
-  light the pixel keeps, never less than `r_rt_ao_min` of it. Only the
+  creases and corners with ray-traced ambient occlusion: from the pixels
+  of the world (one in four with the default `r_rt_ao_scale`) two rays
+  (`r_rt_ao_rays`) look for nearby surfaces in the half-space in front of
+  it, and the nearer what they meet, the less of the lightmap's light the
+  pixel keeps, never less than `r_rt_ao_min` of it. Only the
   lightmap's light is darkened; the dynamic lights' added by
   `r_rt_shadows` are not (with `r_rt_shadows 0` the dynamic lights are
   part of the lightmap and are darkened with it), and models, water and
@@ -905,6 +911,27 @@ is.
   more the nearer it is. A value below `1` counts as `1`, one above `8192`
   as `8192`, one that is not a finite number as `128`. Saved with the
   configuration; applies from the next frame.
+
+* **r_rt_ao_rays**: How many rays each traced pixel of `r_rt_ao` sends:
+  `2` (the default) or `1`, which costs less and makes the darkening
+  grainier. A value below `1.5` counts as `1`, one above as `2`, one that
+  is not a finite number as `2`. In the video menu's renderer options as
+  "AO rays", greyed on other renderers and while `r_rt_ao` is `0`. Saved
+  with the configuration; applies from the next frame.
+
+* **r_rt_ao_scale**: The share of the 3D view's width and height that
+  `r_rt_ao` traces its rays at: `1` traces every pixel, `0.5` (the
+  default) one pixel of each 2 x 2 block, a quarter of the rays, and
+  `0.33` one of each 3 x 3 block. Below `1` each world pixel takes the
+  darkening of the traced pixels next to it that lie on its own surface,
+  so an edge between two surfaces stays sharp, and the darkening is a
+  little softer than at `1`. It is a share of the size the view is drawn
+  at, so with a MetalFX scaler (`r_metalfx`) it applies to the scaler's
+  input. A value is taken as the nearest of the three (`1` for `0.67` and
+  above, `0.33` below `0.4`); `0`, a negative value or one that is not a
+  finite number counts as `0.5`. In the video menu's renderer options as
+  "AO trace size", greyed on other renderers and while `r_rt_ao` is `0`.
+  Saved with the configuration; applies from the next frame.
 
 * **r_rt_ao_seed**: A development setting of the Metal renderer's
   `r_rt_ao`: with `0` (the default) the rays' blue-noise pattern moves on
@@ -1036,13 +1063,19 @@ is.
   pixels it ran on, those with a dynamic light in range, those that traced
   a ray and those shadowed, the rays and the pass's GPU time; with
   `r_rt_ao` on a line for the occlusion pass: the pixels it ran on, the
-  world pixels that traced, those darkened and those darkened to
+  world pixels that took a darkening, those darkened and those darkened to
   `r_rt_ao_min`, the pixels facing up (floors) and of them those darkened,
-  the rays, those that met a surface and the pass's GPU time; with
-  `r_rt_water` on a line for the reflections: the pixels it ran on, those
-  of opaque and of translucent water, the rays from the eye that looked
-  for translucent water, the water pixels whose reflection came from the
-  picture, from the sky and from nowhere, and the pass's GPU time. Nothing
+  the rays (at the size `r_rt_ao_scale` traces at), those that met a
+  surface and the pass's GPU time; with
+  `r_rt_water` on a line for the reflections: the pixels of the view, those
+  it traced (every pixel, or with `r_rt_water_hits 1` the water and the
+  pixels next to it), those of opaque and of translucent water, the rays
+  from the eye that looked for translucent water, the water pixels whose
+  reflection came from the picture, from a surface drawn on its own, from
+  the sky in the picture, from the sky box and from nowhere, and the
+  pass's GPU time; with `r_rt_water_hits 1` also each of its three parts
+  (the raster of the water, the list of its pixels, the trace) and the
+  time from the first's start to the last's end. Nothing
   is drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next
@@ -1058,7 +1091,8 @@ is.
   lights and the other ray-traced effects included; where it meets the
   sky, the sky in that direction. A surface the view does not show (off
   the screen, or hidden behind something nearer) gives no reflection,
-  and the water there is drawn as before. The reflection is mixed into
+  and the water there is drawn as before; `r_rt_water_hits 1` draws it
+  instead. The reflection is mixed into
   the water's colour by `r_rt_water_reflect`; translucent water keeps
   its transparency. The rays meet the world, the doors and platforms and
   the models, but not the view weapon or the player's own model. Needs a
@@ -1086,12 +1120,45 @@ is.
   that is not a finite number as `0.5`. Saved with the configuration;
   applies from the next frame.
 
+* **r_rt_water_hits**: How `r_rt_water` shades what a reflection meets.
+  `0` (the default): from the picture alone, as described under
+  `r_rt_water`; a surface the view does not show gives no reflection.
+  `1`: a surface of the map the view does not show (off the screen, or
+  hidden behind something nearer) is drawn on its own, its texture and
+  lightmap, with the dynamic lights but without their shadows or the
+  ambient occlusion; the sky the view does not show comes from the sky
+  box. What is passed over is exactly this: a model (a player, a
+  monster, an item, a weapon) the view does not show, so the reflection
+  shows what lies behind it, however many of them the reflection
+  crosses, and neither the model nor its outline. A brush model the
+  view does not show (a door, a platform, a lift) is part of the map
+  and is drawn on its own like any other surface, so the reflection can
+  show where it stands. Over the
+  pool of the test map that fills the 2 to 9 % of the water that had no
+  reflection, and changes no pixel outside the water. It costs more GPU
+  time: a raster of the map's water and a list of its pixels before the
+  rays, which only those pixels trace. Measured on an Apple M6 over the
+  test map's pool (about 41 % of the pixels water), the pass takes
+  4.66 ms of GPU time at 1920 x 1080 against 3.40 ms at `0` with the
+  frame rate held to a 60 Hz display, and 1.20 against 0.99 ms not held;
+  12.24 against 9.44 ms at 5120 x 2880 held; with `r_metalfx 2`, 3.82
+  against 3.46 ms held. A view without water in it costs 2.06 against
+  1.33 ms at 1920 x 1080 held. At `0` the pass and its pictures are
+  those before this setting existed, and `0` needs nothing `1` needs:
+  where the renderer cannot build what `1` needs, the console says so
+  once and `1` draws as `0`.
+  A value of `1` or more counts as `1`, a value below `1` or not a
+  finite number as `0`. In the video menu's renderer options as "water
+  reflections" (greyed while `r_rt_water` is off). Saved with the
+  configuration; applies from the next frame.
+
 * **r_rt_water_show**: A development view of the Metal renderer's
   `r_rt_water`: with it on, `1` replaces the picture by a mask, black
   on every pixel of water the pass found and white elsewhere (the pixels
   that must look as without the reflections), `2` by the pass's classes:
-  black not water, green a reflection from the picture, blue from the
-  sky, red none. The view weapon, models drawn over the world, particles
+  black not water, green a reflection from the picture, yellow from a
+  surface drawn on its own and cyan from the sky box (both with
+  `r_rt_water_hits 1`), blue from the sky in the picture, red none. The view weapon, models drawn over the world, particles
   and translucent surfaces are left out of these views. `0` (the
   default) shows the picture; a value above `2` counts as `2`, one that
   is not a finite number as `0`, and a fraction is cut to the whole

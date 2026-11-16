@@ -40,6 +40,7 @@
 #include <string.h>
 
 #include "../../src/client/refresh/gl1/metal/mgl_internal.h"
+#include "../../src/client/refresh/gl1/metal/mgl_hold.h"
 
 /* GL enums the shim's subset header leaves out, which it must refuse. */
 #define TEST_GL_LIGHTING     0x0B50
@@ -1190,6 +1191,228 @@ test_ring(void)
 	r.used = 0;
 	CHECK(mgl_ring_alloc(&r, MGL_MAX_DRAW_VERTICES * sizeof(mgl_vertex_t)) == 0 &&
 		mgl_ring_alloc(&r, MGL_MAX_DRAW_INDICES * sizeof(uint16_t)) > 0);
+}
+
+/*
+ * The present slots' holds and the drop's waits for them (mgl_hold.h,
+ * FIX77), on a fake clock: a slot is free from free_at on, and a present
+ * on a hung GPU never frees its slot (TEST_NEVER) unless its wait, once
+ * ended, lets it complete end_frees later.
+ */
+#define TEST_SLOTS 4
+#define TEST_BOUND 5000   /* MGL_GPU_WAIT_MS, in the fake clock's units */
+#define TEST_NEVER UINT64_MAX
+
+typedef struct
+{
+	uint64_t now;
+	uint64_t free_at[TEST_SLOTS];
+	uint64_t end_frees[TEST_SLOTS];
+	int taken[TEST_SLOTS], given[TEST_SLOTS], ended[TEST_SLOTS];
+	int blocking_takes;   /* takes whose deadline is later than now */
+} test_drop_t;
+
+static uint64_t
+test_drop_deadline(void *ctx)
+{
+	test_drop_t *t = ctx;
+
+	return t->now + TEST_BOUND;
+}
+
+static int
+test_drop_take(void *ctx, int slot, uint64_t until)
+{
+	test_drop_t *t = ctx;
+
+	if (until > t->now)
+	{
+		t->blocking_takes++;
+	}
+
+	if ((t->free_at[slot] <= t->now) || ((until > t->now) && (t->free_at[slot] <= until)))
+	{
+		if (t->free_at[slot] > t->now)
+		{
+			t->now = t->free_at[slot];
+		}
+
+		t->free_at[slot] = TEST_NEVER;   /* held by the drop until it gives it back */
+		t->taken[slot]++;
+		return 1;
+	}
+
+	if (until > t->now)
+	{
+		t->now = until;
+	}
+
+	return 0;
+}
+
+static void
+test_drop_give(void *ctx, int slot)
+{
+	test_drop_t *t = ctx;
+
+	t->free_at[slot] = t->now;
+	t->given[slot]++;
+}
+
+static void
+test_drop_end_wait(void *ctx, int slot)
+{
+	test_drop_t *t = ctx;
+
+	t->ended[slot]++;
+
+	if ((t->free_at[slot] == TEST_NEVER) && (t->end_frees[slot] != TEST_NEVER))
+	{
+		t->free_at[slot] = t->now + t->end_frees[slot];
+	}
+}
+
+static void
+test_drop_reset(test_drop_t *t, mgl_drop_ops_t *ops, mgl_hold_t *hold, mgl_hold_t **holds)
+{
+	int i;
+
+	memset(t, 0, sizeof(*t));
+	memset(hold, 0, sizeof(*hold) * TEST_SLOTS);
+
+	for (i = 0; i < TEST_SLOTS; i++)
+	{
+		t->free_at[i] = 0;
+		t->end_frees[i] = TEST_NEVER;
+		holds[i] = &hold[i];
+	}
+
+	ops->ctx = t;
+	ops->deadline = test_drop_deadline;
+	ops->take = test_drop_take;
+	ops->give = test_drop_give;
+	ops->end_wait = test_drop_end_wait;
+}
+
+static void
+test_present_holds(void)
+{
+	mgl_hold_t old_ctx, new_ctx, hold[TEST_SLOTS], *holds[TEST_SLOTS];
+	mgl_drop_ops_t ops;
+	test_drop_t t;
+	int i, n;
+
+	/* the counts: one present, its wait ended past the bound, then both complete */
+	memset(&old_ctx, 0, sizeof(old_ctx));
+	mgl_hold_commit(&old_ctx);
+	CHECK(atomic_load(&old_ctx.holds) == 1);
+	CHECK(mgl_hold_extend(&old_ctx) == 1 && atomic_load(&old_ctx.holds) == 2);
+	CHECK(mgl_hold_extend(&old_ctx) == 0 && atomic_load(&old_ctx.holds) == 2);   /* ended once only */
+	CHECK(mgl_hold_release(&old_ctx) == 0);
+	CHECK(mgl_hold_release(&old_ctx) == 1 && atomic_load(&old_ctx.holds) == 0);
+	CHECK(mgl_hold_extend(&old_ctx) == 0 && atomic_load(&old_ctx.holds) == 0);   /* completed: left alone */
+
+	/*
+	 * A late handler from a torn-down context: the old context's present of
+	 * slot 0, its wait ended, then given up on at teardown; a new context
+	 * commits a present of its own slot 0; the old present and its signal
+	 * complete only then. They count down the old context's hold, never the
+	 * new one's, which keeps its present and can still have its wait ended.
+	 */
+	memset(&old_ctx, 0, sizeof(old_ctx));
+	memset(&new_ctx, 0, sizeof(new_ctx));
+	mgl_hold_commit(&old_ctx);
+	CHECK(mgl_hold_extend(&old_ctx) == 1);
+	mgl_hold_commit(&new_ctx);
+	CHECK(mgl_hold_release(&old_ctx) == 0);
+	CHECK(mgl_hold_release(&old_ctx) == 1);   /* the old context's slot, on its own semaphore */
+	CHECK(atomic_load(&new_ctx.holds) == 1);
+	CHECK(mgl_hold_extend(&new_ctx) == 1);
+	CHECK(mgl_hold_release(&new_ctx) == 0 && mgl_hold_release(&new_ctx) == 1);
+
+	/*
+	 * Every slot's present on a hung GPU: the first waits share one
+	 * deadline, the second ones share one more, so the drop ends two bounds
+	 * after it began, whatever the number of slots (main waited one bound,
+	 * then one more for each slot: five).
+	 */
+	test_drop_reset(&t, &ops, hold, holds);
+
+	for (i = 0; i < TEST_SLOTS; i++)
+	{
+		t.free_at[i] = TEST_NEVER;
+		mgl_hold_commit(&hold[i]);
+	}
+
+	n = mgl_drop_presents(holds, TEST_SLOTS, -1, &ops);
+	CHECK(n == TEST_SLOTS);
+	CHECK(t.now == 2 * TEST_BOUND);
+
+	for (i = 0; i < TEST_SLOTS; i++)
+	{
+		CHECK(t.ended[i] == 1 && t.given[i] == 0 && hold[i].lost == 1);
+	}
+
+	/* the second drop of teardown (mgl_release_all): no wait, no wait ended, none counted again */
+	t.blocking_takes = 0;
+	n = mgl_drop_presents(holds, TEST_SLOTS, -1, &ops);
+	CHECK(n == 0);
+	CHECK(t.now == 2 * TEST_BOUND && t.blocking_takes == 0);
+
+	for (i = 0; i < TEST_SLOTS; i++)
+	{
+		CHECK(t.ended[i] == 1 && t.given[i] == 0 && hold[i].lost == 1);
+	}
+
+	/* a slot given up on whose present has completed since is taken back at once, and waited for again after that */
+	t.free_at[1] = t.now;
+	n = mgl_drop_presents(holds, TEST_SLOTS, -1, &ops);
+	CHECK(n == 0 && t.now == 2 * TEST_BOUND && t.given[1] == 1 && hold[1].lost == 0);
+	CHECK(t.ended[0] == 1 && t.ended[2] == 1 && t.ended[3] == 1);
+
+	/*
+	 * Slot 2's present completed, a frame took the slot and committed a
+	 * present of its own, which hangs too: that one is waited for, the
+	 * presents given up on still are not.
+	 */
+	mgl_hold_commit(&hold[2]);
+	n = mgl_drop_presents(holds, TEST_SLOTS, -1, &ops);
+	CHECK(n == 1 && t.now == 4 * TEST_BOUND && t.ended[2] == 2 && hold[2].lost == 1);
+	CHECK(t.ended[0] == 1 && t.ended[3] == 1 && t.given[1] == 2);
+
+	/*
+	 * One shared second deadline: slots 0 and 2 hung, slot 1 completes 4000
+	 * after its wait is ended. Main gave each slot its own second deadline,
+	 * and ended slot 2's wait at 15000 (19000 in all); here every wait is
+	 * ended at 5000 and the drop ends at 10000.
+	 */
+	test_drop_reset(&t, &ops, hold, holds);
+	t.free_at[0] = t.free_at[1] = t.free_at[2] = TEST_NEVER;
+	t.end_frees[1] = 4000;
+	holds[3] = NULL;   /* no slot */
+	n = mgl_drop_presents(holds, TEST_SLOTS, -1, &ops);
+	CHECK(n == 2 && t.now == 2 * TEST_BOUND);
+	CHECK(t.given[0] == 0 && t.given[1] == 1 && t.given[2] == 0 && t.taken[3] == 0);
+	CHECK(hold[0].lost == 1 && hold[1].lost == 0 && hold[2].lost == 1);
+
+	/*
+	 * Slots that come back in time, and the open frame's: slot 0 free,
+	 * slot 1 at 1000, slot 2 2000 after its wait is ended, slot 3 the open
+	 * frame's, never waited for.
+	 */
+	test_drop_reset(&t, &ops, hold, holds);
+	t.free_at[1] = 1000;
+	t.free_at[2] = t.free_at[3] = TEST_NEVER;
+	t.end_frees[2] = 2000;
+	n = mgl_drop_presents(holds, TEST_SLOTS, 3, &ops);
+	CHECK(n == 0 && t.now == TEST_BOUND + 2000);
+	CHECK(t.given[0] == 1 && t.given[1] == 1 && t.given[2] == 1 && t.taken[3] == 0 && t.ended[3] == 0);
+	CHECK(t.ended[0] == 0 && t.ended[1] == 0 && t.ended[2] == 1);
+
+	/* a slot's next present clears what a drop found */
+	hold[0].lost = 1;
+	mgl_hold_commit(&hold[0]);
+	CHECK(hold[0].lost == 0 && atomic_load(&hold[0].holds) == 1);
 }
 
 /* Large enough for the largest draw the shim accepts. */
@@ -2554,6 +2777,7 @@ main(void)
 	test_texenv();
 	test_draw();
 	test_ring();
+	test_present_holds();
 
 	printf("mgl_host_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

@@ -74,6 +74,9 @@ static menulist_s s_mfx_scaler_list;
 static menulist_s s_mfx_scale_list;
 static menulist_s s_mfx_interp_list;
 static menulist_s s_denoiser_list;
+static menulist_s s_rtw_hits_list;   /* TASK158: r_rt_water_hits */
+static menulist_s s_ao_scale_list;
+static menulist_s s_ao_rays_list;
 static menulist_s s_fs_box;
 static menulist_s s_vsync_list;
 static menulist_s s_af_list;
@@ -547,6 +550,19 @@ ApplyChanges(void *unused)
 		restart = true;
 	}
 
+	/* The ray-traced AO's trace size and rays (TASK157): read from the next frame */
+	if (!(s_ao_scale_list.generic.flags & QMF_GRAYED) &&
+		VidRules_AOScaleIndex(Cvar_VariableValue("r_rt_ao_scale")) != s_ao_scale_list.curvalue)
+	{
+		Cvar_SetValue("r_rt_ao_scale", VidRules_AOScaleValue(s_ao_scale_list.curvalue));
+	}
+
+	if (!(s_ao_rays_list.generic.flags & QMF_GRAYED) &&
+		VidRules_AORaysIndex(Cvar_VariableValue("r_rt_ao_rays")) != s_ao_rays_list.curvalue)
+	{
+		Cvar_SetValue("r_rt_ao_rays", s_ao_rays_list.curvalue + 1);
+	}
+
 	ApplyList(&s_colorlight_list, VIDITEM_COLORLIGHT);
 	ApplyList(&s_bloom_list, VIDITEM_BLOOM);
 	ApplyList(&s_dynlight_list, VIDITEM_DYNLIGHT);
@@ -561,6 +577,13 @@ ApplyChanges(void *unused)
 		{
 			Cvar_SetValue("r_metalfx", s_mfx_scaler_list.curvalue);
 		}
+	}
+
+	/* the water reflections' hit shading (TASK158): its index, written when it changed */
+	if (!(s_rtw_hits_list.generic.flags & QMF_GRAYED) &&
+		(VidRules_WaterHitsIndex(Cvar_VariableValue("r_rt_water_hits")) != s_rtw_hits_list.curvalue))
+	{
+		Cvar_SetValue("r_rt_water_hits", s_rtw_hits_list.curvalue);
 	}
 
 	if (!(s_mfx_scale_list.generic.flags & QMF_GRAYED) &&
@@ -1128,9 +1151,12 @@ VID_MenuInit(void)
 		static char scaler_text[4][40];
 		static const char *scaler_names[5];
 		static const char *denoiser_names[] = { "off", "bilateral", "MetalFX", NULL };
+		static const char *hits_names[] = { "screen space", "world space", NULL };
 		static const char *na_names[] = { "n/a", NULL };
 		/* read without creating it: the ray-tracing code owns it */
 		const float dn = Cvar_VariableValue("r_rt_denoiser");
+		const float hits = Cvar_VariableValue("r_rt_water_hits");
+		const int water = VidRules_WaterOn(Cvar_VariableValue("r_rt_water"));
 
 		for (int i = 0; i < 4; i++)
 		{
@@ -1177,10 +1203,18 @@ VID_MenuInit(void)
 		s_denoiser_list.itemnames = denoiser_names;
 		s_denoiser_list.curvalue = VidRules_DenoiserIndex(dn);
 
+		s_rtw_hits_list.generic.type = MTYPE_SPINCONTROL;
+		s_rtw_hits_list.generic.name = "water reflections";
+		s_rtw_hits_list.generic.x = 0;
+		s_rtw_hits_list.generic.y = (sy += 10);
+		s_rtw_hits_list.itemnames = hits_names;
+		s_rtw_hits_list.curvalue = VidRules_WaterHitsIndex(hits);
+
 		SetRule(&s_mfx_scaler_list.generic, VIDITEM_MFX_SCALER, s_mfx_scaler_list.curvalue);
 		ScaleItemUpdate(s_mfx_scaler_list.curvalue);
 		SetRule(&s_mfx_interp_list.generic, VIDITEM_MFX_INTERP, s_mfx_scaler_list.curvalue);
 		SetRule(&s_denoiser_list.generic, VIDITEM_DENOISER, s_mfx_scaler_list.curvalue);
+		SetRule(&s_rtw_hits_list.generic, VIDITEM_RTW_HITS, water);
 
 		/* A greyed list shows that it has no value here. */
 		if (s_mfx_scaler_list.generic.flags & QMF_GRAYED)
@@ -1198,6 +1232,48 @@ VID_MenuInit(void)
 		{
 			s_denoiser_list.itemnames = na_names;
 			s_denoiser_list.curvalue = 0;
+		}
+		if (s_rtw_hits_list.generic.flags & QMF_GRAYED)
+		{
+			s_rtw_hits_list.itemnames = na_names;
+			s_rtw_hits_list.curvalue = 0;
+		}
+	}
+
+	/* The ray-traced AO's trace size and rays (TASK157): greyed on other
+	   renderers and while r_rt_ao is off, read without creating them. */
+	{
+		static const char *ao_scale_names[] = { "full", "1/2", "1/3", NULL };
+		static const char *ao_rays_names[] = { "1", "2", NULL };
+		static const char *ao_na_names[] = { "n/a", NULL };
+		const int ao_on = (Cvar_VariableValue("r_rt_ao") != 0);
+
+		s_ao_scale_list.generic.type = MTYPE_SPINCONTROL;
+		s_ao_scale_list.generic.name = "AO trace size";
+		s_ao_scale_list.generic.x = 0;
+		s_ao_scale_list.generic.y = (sy += 10);
+		s_ao_scale_list.itemnames = ao_scale_names;
+		s_ao_scale_list.curvalue = VidRules_AOScaleIndex(Cvar_VariableValue("r_rt_ao_scale"));
+
+		s_ao_rays_list.generic.type = MTYPE_SPINCONTROL;
+		s_ao_rays_list.generic.name = "AO rays";
+		s_ao_rays_list.generic.x = 0;
+		s_ao_rays_list.generic.y = (sy += 10);
+		s_ao_rays_list.itemnames = ao_rays_names;
+		s_ao_rays_list.curvalue = VidRules_AORaysIndex(Cvar_VariableValue("r_rt_ao_rays"));
+
+		SetRule(&s_ao_scale_list.generic, VIDITEM_AO_SCALE, ao_on);
+		SetRule(&s_ao_rays_list.generic, VIDITEM_AO_RAYS, ao_on);
+
+		if (s_ao_scale_list.generic.flags & QMF_GRAYED)
+		{
+			s_ao_scale_list.itemnames = ao_na_names;
+			s_ao_scale_list.curvalue = 0;
+		}
+		if (s_ao_rays_list.generic.flags & QMF_GRAYED)
+		{
+			s_ao_rays_list.itemnames = ao_na_names;
+			s_ao_rays_list.curvalue = 0;
 		}
 	}
 
@@ -1267,6 +1343,9 @@ VID_MenuInit(void)
 	Menu_AddItem(&s_ropts_menu, (void *)&s_mfx_scale_list);
 	Menu_AddItem(&s_ropts_menu, (void *)&s_mfx_interp_list);
 	Menu_AddItem(&s_ropts_menu, (void *)&s_denoiser_list);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_rtw_hits_list);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_ao_scale_list);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_ao_rays_list);
 	Menu_AddItem(&s_ropts_menu, (void *)&s_ropts_apply_action);
 
 	Menu_SetStatusBar(&s_ropts_menu, "Esc: back to the video menu");
