@@ -24,7 +24,15 @@
 #             no scratch directory fail before any check runs;
 #   guard     a scheduler that skips a check or leaves one unprinted fails;
 #   wiring    scripts/test.sh runs the scheduler on tests/check-*.sh before
-#             its builds, and stops when it fails.
+#             its builds, and stops when it fails;
+#   interrupt SIGINT to the scheduler, two checks running (one of which
+#             ignores SIGTERM) and two waiting: it ends within 20 s with
+#             status 130, what the running checks started (a sleep, by its
+#             recorded pid) is gone, and no other check starts;
+#   interrupt1  the same with SIGTERM and SIGHUP at GATE_JOBS=1;
+#   testsh    SIGTERM, SIGHUP and SIGINT to scripts/test.sh itself, run on a
+#             copy of the gate's layout with fake checks: the same, with
+#             test.sh's status 143, 129 or 130.
 # Then each case is shown failing against at least one mutant of the
 # scheduler (or of scripts/test.sh, for wiring). Every run of the scheduler
 # is bounded in time here; one that outlives its bound fails its case.
@@ -37,7 +45,17 @@ top=$(pwd -P)
 real=$top/scripts/gate-checks.sh
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gatepar.XXXXXX")
 tmp=$(cd "${tmp:?}" && pwd -P)
-trap 'rm -rf "${tmp:?}"' EXIT
+# _lp: a run started by launch and not yet reaped; on the way out it gets
+# SIGTERM, which ends it and what it started (that is what the cases test)
+_lp=
+gp_exit() {
+	if [ -n "$_lp" ]; then
+		kill -s TERM "$_lp" 2> /dev/null || :
+		wait "$_lp" 2> /dev/null || :
+	fi
+	rm -rf "${tmp:?}"
+}
+trap gp_exit EXIT
 trap 'exit 1' HUP INT TERM
 unset GATE_JOBS GP_PATH GP_TD GP_NCPU GP_BOUND GP_FIRST WIRING
 export LC_ALL=C
@@ -49,15 +67,18 @@ bad() { echo "$me: $*"; fail=1; }
 say() { [ "$quiet" = 1 ] || echo "$me: $*"; }
 
 # The fake check: its name comes from its file name, its behaviour from
-# $GP_SPEC/<name>: "<lines> <delay> <status> <mode>"; mode term or kill
-# makes it die from that signal after its lines.
+# $GP_SPEC/<name>: "<lines> <delay> <status> <mode> <hold>"; mode term or
+# kill makes it die from that signal after its lines; mode hold runs, after
+# its lines, "sleep <hold>" in the foreground, holdterm the same ignoring
+# SIGTERM (and so does that sleep). The sleep logs "sleep <name> <its pid>
+# <the check's pid> <the scheduler's pid>" before it starts.
 mkdir "${tmp:?}/bin" "${tmp:?}/shim"
 cat > "${tmp:?}/fake" << 'EOF'
 #!/bin/sh
 n=${0##*/}
 n=${n#check-}
 n=${n%.sh}
-read -r lines delay status mode < "$GP_SPEC/$n"
+read -r lines delay status mode hold < "$GP_SPEC/$n"
 printf 'start %s\n' "$n" >> "$GP_EVENTS"
 i=1
 while [ "$i" -le "$lines" ]; do
@@ -66,6 +87,12 @@ while [ "$i" -le "$lines" ]; do
 	i=$((i + 1))
 done
 echo "$n to stderr" >&2
+case $mode in
+hold | holdterm)
+	[ "$mode" = hold ] || trap '' TERM
+	sh -c 'printf "sleep %s %s %s %s\n" "$1" "$$" "$2" "$3" >> "$GP_EVENTS"; exec sleep "$4"' sh "$n" "$$" "$PPID" "$hold"
+	;;
+esac
 printf 'end %s\n' "$n" >> "$GP_EVENTS"
 case $mode in
 term) kill -TERM $$ ;;
@@ -88,9 +115,9 @@ newcase() {
 	: > "${_nd:?}/events"
 	printf '%s\n' "$_nd"
 }
-# spec <dir> <name> <lines> <delay> <status> [<mode>]: a fake check
+# spec <dir> <name> <lines> <delay> <status> [<mode> [<hold>]]: a fake check
 spec() {
-	printf '%s %s %s %s\n' "$3" "$4" "$5" "${6:-none}" > "${1:?}/spec/$2"
+	printf '%s %s %s %s %s\n' "$3" "$4" "$5" "${6:-none}" "${7:-0}" > "${1:?}/spec/$2"
 	cp "${tmp:?}/fake" "${1:?}/check-$2.sh"
 }
 # bounded <seconds> <out> <command>...: its status, or 124 once it outlives <seconds>
@@ -119,7 +146,8 @@ bounded() {
 # <dir>/norm (wall times as N). One-shot options, set just before and
 # cleared by the run (an assignment in front of a function call would
 # persist in a POSIX shell): GP_PATH goes in front of PATH, GP_TD replaces
-# TMPDIR, GP_NCPU is what the sysctl shim prints, GP_BOUND the bound in s.
+# TMPDIR, GP_NCPU is what the sysctl shim prints, GP_BOUND the bound in s
+# (90 by default: a run takes a few seconds, more on a loaded host).
 run() {
 	_rd=$1 _rj=$2 _rs=$3
 	shift 3
@@ -127,7 +155,7 @@ run() {
 		set -- "$@" "$_rd/check-$_rn.sh"
 		shift
 	done
-	_rb=${GP_BOUND:-30} _rt=${GP_TD:-$_rd/td} _rp=${GP_PATH:+$GP_PATH:}$PATH _rc=${GP_NCPU:-} _rf=${GP_FIRST:-}
+	_rb=${GP_BOUND:-90} _rt=${GP_TD:-$_rd/td} _rp=${GP_PATH:+$GP_PATH:}$PATH _rc=${GP_NCPU:-} _rf=${GP_FIRST:-}
 	GP_BOUND= GP_TD= GP_PATH= GP_NCPU= GP_FIRST=
 	_rr=0
 	if [ "$_rj" = - ]; then
@@ -309,14 +337,19 @@ c_times() {
 	spec "$d" a 2 1.2 0
 	spec "$d" b 1 0 0
 	rc=0
+	t0=$(date +%s)
 	run "$d" 2 "" a b || rc=$?
+	tw=$(($(date +%s) - t0))
 	[ "$rc" -eq 0 ] || { say "times: status $rc, want 0"; return 1; }
 	ta=$(sed -n 's/^gate: check-a\.sh: ok, \([0-9][0-9]*\) s$/\1/p' "$d/out")
 	tb=$(sed -n 's/^gate: check-b\.sh: ok, \([0-9][0-9]*\) s$/\1/p' "$d/out")
 	tt=$(sed -n 's/^gate: checks: all 2 passed in \([0-9][0-9]*\) s, 2 at a time$/\1/p' "$d/out")
 	[ -n "$ta" ] && [ -n "$tb" ] && [ -n "$tt" ] || { say "times: a wall time is missing"; return 1; }
-	[ "$ta" -ge 1 ] && [ "$ta" -le 5 ] || { say "times: a check of about 1.2 s took $ta s"; return 1; }
-	[ "$tt" -ge "$ta" ] && [ "$tt" -le 6 ] || { say "times: the total ($tt s) is not the wall time of the run"; return 1; }
+	# whole seconds: the check sleeps 1.2 s, so it takes at least 1 s; the
+	# total holds it and is held by the run's wall time measured here (no
+	# fixed upper bound: a loaded host only makes the run longer)
+	[ "$ta" -ge 1 ] || { say "times: a check of about 1.2 s took $ta s"; return 1; }
+	[ "$tt" -ge "$ta" ] && [ "$tt" -le "$tw" ] || { say "times: the total ($tt s) is not the wall time of the run ($tw s here, the check $ta s)"; return 1; }
 }
 
 c_errors() {
@@ -324,7 +357,7 @@ c_errors() {
 		d=$(newcase)
 		spec "$d" a 1 0 0
 		rc=0
-		GP_BOUND=10 ; run "$d" "$j" "" a || rc=$?
+		GP_BOUND=20 ; run "$d" "$j" "" a || rc=$?
 		[ "$rc" -eq 2 ] && has "$d" "gate: GATE_JOBS must be a positive whole number, not '$j'" ||
 			{ say "errors: GATE_JOBS='$j' gave status $rc"; return 1; }
 		[ ! -s "$d/events" ] || { say "errors: a check ran with GATE_JOBS='$j'"; return 1; }
@@ -332,24 +365,24 @@ c_errors() {
 	d=$(newcase)
 	spec "$d" a 1 0 0
 	rc=0
-	GP_BOUND=10 ; run "$d" 2 "check-a.sh check-zz.sh" a || rc=$?
+	GP_BOUND=20 ; run "$d" 2 "check-a.sh check-zz.sh" a || rc=$?
 	[ "$rc" -eq 2 ] && has "$d" "gate: check-zz.sh, named in the serial or the first list, is not one of the checks" && [ ! -s "$d/events" ] ||
 		{ say "errors: a serial name that is no check gave status $rc"; return 1; }
 	d=$(newcase)
 	spec "$d" a 1 0 0
 	rc=0
-	GP_BOUND=10 GP_FIRST="check-zy.sh"
+	GP_BOUND=20 GP_FIRST="check-zy.sh"
 	run "$d" 2 "" a || rc=$?
 	[ "$rc" -eq 2 ] && has "$d" "gate: check-zy.sh, named in the serial or the first list, is not one of the checks" && [ ! -s "$d/events" ] ||
 		{ say "errors: a first name that is no check gave status $rc"; return 1; }
 	d=$(newcase)
 	rc=0
-	GP_BOUND=10 ; run "$d" 2 "" || rc=$?
+	GP_BOUND=20 ; run "$d" 2 "" || rc=$?
 	[ "$rc" -eq 2 ] && has "$d" "gate: no checks to run" || { say "errors: no checks gave status $rc"; return 1; }
 	d=$(newcase)
 	spec "$d" a 1 0 0
 	rc=0
-	GP_BOUND=10 GP_TD=$d/no/such/dir ; run "$d" 2 "" a || rc=$?
+	GP_BOUND=20 GP_TD=$d/no/such/dir ; run "$d" 2 "" a || rc=$?
 	[ "$rc" -eq 2 ] && has "$d" "gate: cannot make a scratch directory for the logs" && [ ! -s "$d/events" ] ||
 		{ say "errors: no scratch directory gave status $rc"; return 1; }
 }
@@ -376,16 +409,148 @@ c_guard() {
 	done
 }
 
-# wiring <test.sh>: the scheduler runs on tests/check-*.sh, alone on its
-# line (no "|| ...", no "&"), before the first make, and the script stops on
-# a failure (set -e)
+# wiring <test.sh>: the scheduler starts on tests/check-*.sh, alone on its
+# line, in the background (so that test.sh's traps act at once; testsh
+# shows they do), and the next lines wait for it, nothing more ("|| ..."
+# would ignore its status); all of that before the first make, and the
+# script stops on a failure (set -e)
 c_wiring() {
 	_wf=${WIRING:-$top/scripts/test.sh}
-	_wl=$(grep -n '^scripts/gate-checks\.sh "\$gate_serial" "\$gate_first" tests/check-\*\.sh$' "$_wf" | cut -d: -f1)
+	_wl=$(grep -n '^scripts/gate-checks\.sh "\$gate_serial" "\$gate_first" tests/check-\*\.sh &$' "$_wf" | cut -d: -f1)
 	_wm=$(grep -n '^make -B' "$_wf" | head -n 1 | cut -d: -f1)
-	[ -n "$_wl" ] && [ "$(printf '%s\n' "$_wl" | wc -l)" -eq 1 ] || { say "wiring: test.sh does not run the scheduler on tests/check-*.sh exactly once"; return 1; }
+	[ -n "$_wl" ] && [ "$(printf '%s\n' "$_wl" | wc -l)" -eq 1 ] || { say "wiring: test.sh does not start the scheduler on tests/check-*.sh exactly once"; return 1; }
+	[ "$(sed -n "$((_wl + 1))p" "$_wf")" = 'gate_sched=$!' ] && [ "$(sed -n "$((_wl + 2))p" "$_wf")" = 'wait "$gate_sched"' ] ||
+		{ say "wiring: test.sh does not wait for the scheduler, and for its status, right after starting it"; return 1; }
 	[ -n "$_wm" ] && [ "$_wl" -lt "$_wm" ] || { say "wiring: the scheduler does not run before the builds"; return 1; }
 	grep -qx 'set -eu' "$_wf" || { say "wiring: test.sh does not stop on a failure"; return 1; }
+}
+
+# launch <dir> <command>...: starts <command> in the background, its output
+# in <dir>/out, its pid in _lp. Job control is on for that one command, so
+# its SIGINT is not ignored (a command started in the background without it
+# ignores SIGINT); it also leads a process group of its own.
+launch() {
+	_ld=$1
+	shift
+	set -m
+	"$@" > "$_ld/out" 2>&1 &
+	_lp=$!
+	set +m
+}
+# dead <pid>: no such process, or a zombie (it has ended, not yet reaped)
+dead() {
+	kill -0 "$1" 2> /dev/null || return 0
+	case $(ps -o stat= -p "$1" 2> /dev/null) in *Z*) return 0 ;; esac
+	return 1
+}
+# signalled <dir> <case> <signal> <status> <starts> <held>: once <held> held
+# checks of the run _lp (from launch) have logged their sleep (60 s at
+# most), _lp gets <signal>. Then it must end within 20 s with <status>;
+# right after (2 s at most, for the kernel), every logged sleep must be gone,
+# by its pid; and the checks that started must be exactly <starts>. What a
+# broken run left running is killed by the pids it logged.
+signalled() {
+	_sd=$1 _sc=$2 _sg=$3 _sw=$4 _ss=$5 _sh=$6 _sbad=0
+	_sn=0
+	while [ "$(grep -c '^sleep ' "$_sd/events")" -lt "$_sh" ]; do
+		if [ "$_sn" -ge 300 ] || ! kill -0 "$_lp" 2> /dev/null; then
+			say "$_sc: the held checks did not start"
+			_sbad=1
+			break
+		fi
+		sleep 0.2
+		_sn=$((_sn + 1))
+	done
+	kill -s "$_sg" "$_lp" 2> /dev/null || :
+	_sn=0
+	while kill -0 "$_lp" 2> /dev/null && [ "$_sn" -lt 100 ]; do
+		sleep 0.2
+		_sn=$((_sn + 1))
+	done
+	if kill -0 "$_lp" 2> /dev/null; then
+		say "$_sc: the run did not end within 20 s of SIG$_sg"
+		_sbad=1
+		kill -s KILL "$_lp" 2> /dev/null || :
+	fi
+	_sr=0
+	wait "$_lp" || _sr=$?
+	_lp=
+	_sn=0
+	while :; do
+		_sl=
+		for _sp in $(awk '$1 == "sleep" { print $3 }' "$_sd/events"); do
+			dead "$_sp" || _sl="$_sl $_sp"
+		done
+		[ -n "$_sl" ] && [ "$_sn" -lt 10 ] || break
+		sleep 0.2
+		_sn=$((_sn + 1))
+	done
+	if [ -n "$_sl" ]; then
+		say "$_sc: a process that a check started outlived the run after SIG$_sg (pid$_sl)"
+		_sbad=1
+		# the scheduler, the check, then the sleep, each only if still there
+		for _sp in $_sl; do
+			for _sq in $(awk -v p="$_sp" '$1 == "sleep" && $3 == p { print $5, $4, $3 }' "$_sd/events"); do
+				dead "$_sq" || kill -s KILL "$_sq" 2> /dev/null || :
+			done
+		done
+	fi
+	[ "$_sr" -eq "$_sw" ] || { say "$_sc: status $_sr after SIG$_sg, want $_sw"; _sbad=1; }
+	_sst=$(grep '^start ' "$_sd/events" | tr '\n' ' ')
+	[ "$_sst" = "$_ss" ] || { say "$_sc: after SIG$_sg the checks that started were: $_sst"; _sbad=1; }
+	return "$_sbad"
+}
+
+# interrupt: SIGINT to the scheduler with two checks running, a and b (b
+# ignores SIGTERM: only the SIGKILL after the grace ends it), c and d waiting
+c_interrupt() {
+	d=$(newcase)
+	spec "$d" a 1 0 0 hold 30
+	spec "$d" b 1 0 0 holdterm 30
+	spec "$d" c 1 0 0
+	spec "$d" d 1 0 0
+	launch "$d" env GATE_JOBS=2 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" \
+		sh "$SCHED" "" "" "$d/check-a.sh" "$d/check-b.sh" "$d/check-c.sh" "$d/check-d.sh"
+	signalled "$d" interrupt INT 130 "start a start b " 2
+}
+
+# interrupt1: SIGTERM, then SIGHUP, to the scheduler at GATE_JOBS=1, a
+# running and b waiting. The held sleep is 10 s: a scheduler that goes on
+# after the signal starts b once it has ended, well inside the 20 s.
+c_interrupt1() {
+	for _ig in TERM:143 HUP:129; do
+		d=$(newcase)
+		spec "$d" a 1 0 0 hold 10
+		spec "$d" b 1 0 0
+		launch "$d" env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" \
+			sh "$SCHED" "" "" "$d/check-a.sh" "$d/check-b.sh"
+		signalled "$d" interrupt1 "${_ig%:*}" "${_ig#*:}" "start a " 1 || return 1
+	done
+}
+
+# testsh: SIGTERM, SIGHUP and SIGINT to scripts/test.sh (or $WIRING) itself,
+# run on a copy of the gate's layout in a scratch tree: test.sh, the
+# scheduler under test, and as tests/check-*.sh a held check-a.sh (10 s, as
+# in interrupt1) followed by a quick fake for each check that test.sh's two
+# lists name, and check-z.sh; GATE_JOBS=1, so check-a.sh runs first and
+# alone. No Makefile is copied: no build can run in that tree.
+c_testsh() {
+	_tf=${WIRING:-$top/scripts/test.sh}
+	for _tg in TERM:143 HUP:129 INT:130; do
+		d=$(newcase)
+		mkdir "${d:?}/tree" "${d:?}/tree/scripts" "${d:?}/tree/tests"
+		cp "$_tf" "$d/tree/scripts/test.sh"
+		cp "$SCHED" "$d/tree/scripts/gate-checks.sh"
+		chmod +x "$d/tree/scripts/test.sh" "$d/tree/scripts/gate-checks.sh"
+		spec "$d" a 1 0 0 hold 10
+		for _tn in $(sed -n -e 's/^gate_first="\(.*\)"$/\1/p' -e 's/^gate_serial="\(.*\)"$/\1/p' "$_tf") check-z.sh; do
+			_tn=${_tn#check-}
+			spec "$d" "${_tn%.sh}" 1 0 0
+		done
+		mv "$d"/check-*.sh "$d/tree/tests/"
+		launch "$d" env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" sh "$d/tree/scripts/test.sh"
+		signalled "$d" testsh "${_tg%:*}" "${_tg#*:}" "start a " 1 || return 1
+	done
 }
 
 # lit <file> <old> <new>: the file with its one occurrence of <old>
@@ -397,7 +562,7 @@ lit() {
 		END { exit c != 1 }' "$1"
 }
 
-cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring"
+cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh"
 for c in $cases; do
 	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; fi
 done
@@ -436,25 +601,38 @@ mutant default-floor default '[ "$_gjn" -ge 1 ] || _gjn=1' ':'
 mutant default-garbage default 'case $_gjn in *[!0-9]*) _gjn=1 ;; esac' ':'
 mutant default-fallback default '|| nproc 2> /dev/null || echo 1)' '|| nproc 2> /dev/null || echo 4)'
 mutant check-time-zero times '"$(($(date +%s) - _grt0))"' '0'
+mutant check-time-epoch times '"$(($(date +%s) - _grt0))"' '"$(date +%s)"'
 mutant total-zero times '_gtt=$(($(date +%s) - _gt0))' '_gtt=0'
+mutant total-epoch times '_gtt=$(($(date +%s) - _gt0))' '_gtt=$(date +%s)'
 mutant jobs-zero errors 'case $_gj in *[!0-9]* | 0*)' 'case $_gj in *[!0-9]*)'
 mutant jobs-word errors 'case $_gj in *[!0-9]* | 0*)' 'case $_gj in 0*)'
 mutant serial-unknown errors 'if [ "$_gfound" = 0 ]; then' 'if false; then'
 mutant no-checks errors 'if [ $# -eq 0 ]; then' 'if false; then'
-mutant no-scratch errors '_gd=$(mktemp -d "${TMPDIR:-/tmp}/gate.XXXXXX") ||' '_gd=$(mktemp -d "${TMPDIR:-/tmp}/gate.XXXXXX" || :) ||'
+# no-scratch: mktemp's failure ignored; the path it then uses is in the
+# case's own scratch and does not exist, so every write fails there
+mutant no-scratch errors '_gd=$(mktemp -d "${TMPDIR:-/tmp}/gate.XXXXXX") ||' '_gd=$(mktemp -d "${TMPDIR:-/tmp}/gate.XXXXXX" || echo "${TMPDIR:?}/gate.none") ||'
 mutant guard-off guard 'if [ "$_gnext" -le "$_gn" ]; then' 'if false; then'
+mutant group-kill-dropped interrupt 'kill -s "$_gks" -- "-$_gkg"' 'kill -s "$_gks" -- "$_gkg"'
+mutant no-process-group interrupt '	set -m' '	:'
+mutant no-kill-after-grace interrupt '		gate_kill KILL $_gcg' '		:'
+mutant int-passes interrupt "trap 'exit 130' INT" "trap 'exit 0' INT"
+mutant term-goes-on interrupt1 "trap 'exit 143' TERM" "trap ':' TERM"
+mutant term-passes interrupt1 "trap 'exit 143' TERM" "trap 'exit 0' TERM"
+mutant hup-passes interrupt1 "trap 'exit 129' HUP" "trap 'exit 0' HUP"
 
-# wiring mutants: copies of scripts/test.sh
+# mutants of scripts/test.sh: wmut <name> <case> <old> <new>
 wmut() {
-	lit "$top/scripts/test.sh" "$2" "$3" > "$tmp/test-$1.sh" || { bad "mutant $1 does not apply to scripts/test.sh"; return 0; }
+	lit "$top/scripts/test.sh" "$3" "$4" > "$tmp/test-$1.sh" || { bad "mutant $1 does not apply to scripts/test.sh"; return 0; }
 	quiet=1 WIRING=$tmp/test-$1.sh
-	if c_wiring; then bad "mutant $1 was not caught by case wiring"; else mutants=$((mutants + 1)); fi
+	if "c_$2"; then bad "mutant $1 was not caught by case $2"; else mutants=$((mutants + 1)); fi
 	quiet=0 WIRING=
 }
-wmut wiring-dropped 'scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh' ': tests/check-*.sh'
-wmut wiring-ignored 'scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh' 'scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh || :'
-wmut wiring-subset 'scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh' 'scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-a*.sh'
-wmut wiring-no-errexit 'set -eu' 'set -u'
+wmut wiring-dropped wiring 'scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh &' ': tests/check-*.sh &'
+wmut wiring-ignored wiring 'wait "$gate_sched"' 'wait "$gate_sched" || :'
+wmut wiring-subset wiring 'scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh &' 'scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-a*.sh &'
+wmut wiring-no-errexit wiring 'set -eu' 'set -u'
+wmut stop-not-passed testsh '		kill -s TERM "$gate_sched" 2> /dev/null || :' '		:'
+wmut stop-passes testsh "trap 'gate_stop 143' TERM" "trap 'gate_stop 0' TERM"
 
 if [ "$fail" -ne 0 ]; then
 	echo "$me: FAILED"
