@@ -62,6 +62,11 @@ def main(argv):
         ok, why = m.accepted([("r_metalfx_interp", a[0])], {"r_metalfx_interp": a[1]})
         print("ok" if ok else "no: " + why)
         return 0
+    if cmd == "ext-b64":
+        ok = m.external_refs('<img src="data:image/png;base64,AAAA//bbCC+/==">')
+        bad = m.external_refs('<img src="https://x.test/a.png"><img src="data:image/gif;base64,AA">')
+        print("b64 refs %d, outside refs %d" % (len(ok), len(bad)))
+        return 0
     if cmd == "accepted-missing":
         ok, why = m.accepted([("r_rt_denoiser", "1")], {})
         print("ok" if ok else "no: " + why)

@@ -599,8 +599,17 @@ def record(ctx, scen_name, base_sets, sets, tag):
     return d
 
 
-def frames_of(d):
-    return sorted(f for f in os.listdir(d) if f.endswith(".tga"))
+def frames_by_index(d):
+    """The captured frames of a pin, by their frame number (the file name is
+    <scenario>-<number>.tga, and the scenario differs between records)."""
+    out = {}
+    for f in sorted(os.listdir(d)):
+        if f.endswith(".tga"):
+            k = f[:-4].rsplit("-", 1)[-1]
+            if not k.isdigit() or k in out:
+                raise RuntimeError("%s: cannot tell the frame number of %s" % (d, f))
+            out[k] = os.path.join(d, f)
+    return out
 
 
 def cmd_run(a):
@@ -729,34 +738,34 @@ def _run(a, ctx, rdir, work, host, date, errors):
             pins = {}
             for oid, sets in opts:
                 pins[oid] = record(ctx, sc, sc_sets, sets, oid)
-            nat = pins["native"]
-            nframes = frames_of(nat)
-            if not nframes:
+            nat = frames_by_index(pins["native"])
+            if not nat:
                 raise RuntimeError("the native record of %s holds no frames" % sc)
             for oid, sets in opts:
-                fr = frames_of(pins[oid])
-                if fr != nframes:
-                    raise RuntimeError("%s %s: the frames differ from the native record's" % (sc, oid))
-                t0 = read_tga_header(os.path.join(pins[oid], fr[0]))
+                fr = frames_by_index(pins[oid])
+                if sorted(fr) != sorted(nat):
+                    raise RuntimeError("%s %s: its frames (%d) are not the native record's (%d)" % (sc, oid, len(fr), len(nat)))
+                t0 = read_tga_header(fr[sorted(fr)[0]])
                 row[oid]["capture"] = "%dx%d" % t0
                 row[oid]["frames"] = len(fr)
                 if oid == "native":
                     continue
                 sc_l, bad_l, ss_l = [], [], []
-                for f in fr:
-                    s, b, ss, _ = diff_frames(ctx, os.path.join(nat, f), os.path.join(pins[oid], f))
+                for k in sorted(fr):
+                    s, b, ss, _ = diff_frames(ctx, nat[k], fr[k])
                     sc_l.append(s); bad_l.append(b); ss_l.append(ss)
                 row[oid]["q"] = (sum(sc_l) / len(sc_l), max(sc_l), max(bad_l), sum(ss_l) / len(ss_l), min(ss_l))
             # matched crops of the same frame
-            mid = nframes[len(nframes) // 2]
-            nimg = read_tga(os.path.join(nat, mid))
+            keys = sorted(nat)
+            mid = keys[len(keys) // 2]
+            nimg = read_tga(nat[mid])
             first = [o for o, _ in opts if o != "native"]
             ww, wh = min(nimg[0], 200), min(nimg[1], 150)
             x0 = y0 = 0
             if first:
-                x0, y0 = choose_window(nimg, read_tga(os.path.join(pins[first[0]], mid)), ww, wh)
+                x0, y0 = choose_window(nimg, read_tga(frames_by_index(pins[first[0]])[mid]), ww, wh)
             for oid, _ in opts:
-                img = nimg if oid == "native" else read_tga(os.path.join(pins[oid], mid))
+                img = nimg if oid == "native" else read_tga(frames_by_index(pins[oid])[mid])
                 write_file(os.path.join(rdir, "crops", "%s__%s.png" % (sc, oid)), crop_png(img, x0, y0, ww, wh, 2))
             write_file(os.path.join(rdir, "crops", "%s.txt" % sc),
                        ("frame\t%s\nwindow\t%d,%d,%d,%d\n" % (mid, x0, y0, ww, wh)).encode())
@@ -862,6 +871,8 @@ EXTERNAL_PATTERNS = [
 def external_refs(doc):
     """What in the document points outside it: every match of a pattern above."""
     found = []
+    # the bytes of an embedded PNG are base64 and may hold "//"; the data: prefix itself is checked below
+    doc = re.sub(r'(src="data:image/png;base64,)[A-Za-z0-9+/=]*', r"\1", doc)
     for p in EXTERNAL_PATTERNS:
         for m in re.finditer(p, doc):
             found.append(doc[m.start():m.start() + 40])

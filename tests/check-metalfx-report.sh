@@ -156,6 +156,7 @@ assertions() {
     want_not host-images "$b64b" "$html"
     if printf '%s' "$html" | grep -Eiq 'https?://|//[a-z0-9]|<link|@import|<script|(src|href)="[^d#]'; then ko ext-none "external reference in the report"; fi
     [ -n "$html" ] || ko ext-none "no report"
+    out=$(python3 -I "$HELP" "$d" ext-b64 2>&1); want_has ext-b64 "b64 refs 0, outside refs" "$out"; want_not ext-b64 "outside refs 0" "$out"
     out=$($py report --dir "$w/hc" --html "$w/out/bad.html" 2>&1); rc=$?
     want_rc ext-refuse 3 $rc
     [ ! -e "$w/out/bad.html" ] || ko ext-refuse "a report with an external reference was written"
@@ -234,6 +235,7 @@ mutant no-fps-passes timed-nofps py 'raise RuntimeError("no timedemo result (%s)
 mutant load-limit-high load-mark py 'LOAD_QUIET = 8.0 ' 'LOAD_QUIET = 800.0 '
 mutant load-always load-quiet py 'if loads and max(loads) > LOAD_QUIET:' 'if loads:'
 mutant rewrite-refused report-rewrite py 'if file and i == len(parts) - 1 and stat.S_ISREG(st.st_mode):' 'if False:'
+mutant base64-scanned ext-b64 py 'doc = re.sub(r'"'"'(src="data:image/png;base64,)[A-Za-z0-9+/=]*'"'"', r"\1", doc)' 'pass'
 mutant second-host-hidden host-both py 'cells, _ = host_cell(h, sc, oid)' 'cells, _ = host_cell(hosts[0], sc, oid)'
 mutant range-collapsed host-range py 't = ("%.*f" % (nd, lo)) if lo == hi else' 't = ("%.*f" % (nd, lo)) if True else'
 mutant other-host-images host-images py 'png = os.path.join(rdir, "crops", "%s__%s.png" % (sc, oid))' 'png = os.path.join(others[-1] if others else rdir, "crops", "%s__%s.png" % (sc, oid))'
