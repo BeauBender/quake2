@@ -163,9 +163,16 @@ scripts/bench/bench.sh compare null-sleep --before HEAD~1 --after HEAD
   on Ctrl-C, TERM or HUP, or when an adapter's run passes its wall time,
   the whole group gets TERM, then KILL after a grace
   (`BENCH_STOP_GRACE`, default 10 s; the lock gives its command twice
-  that), and only then is the lock free. Being in the background of the
-  terminal, the command gets `/dev/null` as standard input when that is
-  a terminal. A command run under the lock gets `BENCH_LOCK_TOKEN`, so a
+  that, and at least that plus 5 s), and only then is the lock free.
+  What the command leaves running in its group when it exits is stopped
+  the same way after 1 to 2 s. The lock reaches the process group only,
+  not a process that moves itself into another group or session.
+  Being in the background of the terminal, the command gets `/dev/null`
+  as standard input when that is a terminal, and a command that uses the
+  terminal (reads it, sets it with `stty`, or writes to it under
+  `stty tostop`) is stopped by it: `lock run` then says so, ends the
+  command and exits 74 with the lock free, so run anything that prompts
+  without the lock. A command run under the lock gets `BENCH_LOCK_TOKEN`, so a
   `bench.sh` it starts runs straight through instead of waiting for
   itself.
 - `host` prints the host token (`h-` and 12 hex digits) and the class
