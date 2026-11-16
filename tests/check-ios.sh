@@ -26,12 +26,24 @@
 #   (e) "make -n -B VERBOSE=1 client ref_metal" without the iOS mode
 #       prints no -target, iPhone or ios token (assert_macos_cmds);
 #   (f) the objects of ios_objects are compiled with the commands ios
-#       links them from (make -n of both goals).
+#       links them from (make -n of both goals);
+#   (k) the client's main.o defines _SDL_main and references
+#       _SDL_RunApp: main.c includes SDL_main.h, whose main runs
+#       UIApplicationMain (assert_sdl_main);
+#   (l) the simulator's rm_main.o holds ref_metal's line that the
+#       simulator does not check the apple5 floor; rm_main.o compiled
+#       with the device build's own command (make -n IOS_SDK=iphoneos)
+#       holds the floor's refusal and not that line (assert_floor);
+#   (m) make refuses an IOS_ROOT under release/ or debug/ however it is
+#       spelled, and an IOS_ROOT or IOS_BUNDLE_DATA with a make or shell
+#       metacharacter, without evaluating it (make -n ios_objects);
+#   (n) scripts/ios-sim.sh selftest: the smoke's device, list and limit
+#       rules against a fake xcrun and make (no simulator).
 # --full (by hand): additionally "make ios" (the
 # vendored SDL3 for the simulator, the link, the bundle, the ad hoc
 # signature; METAL_SHADERS from the environment, default yes) and:
-#   (g) the executable has platform 7 and defines _GetGameAPI and
-#       _GetRefAPI;
+#   (g) the executable has platform 7, defines _GetGameAPI and
+#       _GetRefAPI, and passes (k);
 #   (h) otool -L names no game or renderer library and no AppKit, Cocoa,
 #       Carbon or IOKit;
 #   (i) codesign --verify --strict passes on the bundle;
@@ -83,7 +95,7 @@ fi
 fail=0
 bad() { echo "check-ios: $*"; fail=1; }
 
-tools="make nm otool plutil awk sort comm find grep sed"
+tools="make nm otool plutil awk sort comm find grep sed strings bash python3"
 [ "$full" = 1 ] && tools="$tools codesign"
 for tool in $tools; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
@@ -225,6 +237,50 @@ assert_entry_points() # <executable>
 	return $rc
 }
 
+# main.c is SDL's on iOS: SDL_main.h renames its main SDL_main and adds
+# SDL's main, which calls SDL_RunApp (UIApplicationMain)
+assert_sdl_main() # <object or executable>
+{
+	if ! nm -g "$1" > "${tmp:?}/nm" 2>&1; then
+		echo "nm failed on $1: $(head -n 1 "${tmp:?}/nm")"
+		return 1
+	fi
+	if ! awk 'NF == 3 && $2 == "T" && $3 == "_SDL_main" { f = 1 } END { exit !f }' "${tmp:?}/nm"; then
+		echo "$1 defines no _SDL_main: main.c does not include SDL_main.h, so UIApplicationMain never runs"
+		return 1
+	fi
+	if ! awk '$NF == "_SDL_RunApp" { f = 1 } END { exit !f }' "${tmp:?}/nm"; then
+		echo "$1 has no _SDL_RunApp: its main is not SDL's, so UIApplicationMain never runs"
+		return 1
+	fi
+}
+
+# rm_main.o: the simulator's skips the apple5 floor (and says so), the
+# device's refuses a device below it
+assert_floor() # <object> sim|device
+{
+	if ! strings -a "$1" > "${tmp:?}/strings" 2>&1; then
+		echo "strings failed on $1"
+		return 1
+	fi
+	skip=0
+	grep -F 'is not checked in the simulator' "${tmp:?}/strings" >/dev/null && skip=1
+	refuse=0
+	grep -F 'supports no Apple GPU family from apple' "${tmp:?}/strings" >/dev/null && refuse=1
+	if [ "$2" = sim ] && [ "$skip" != 1 ]; then
+		echo "$1 has no line that the simulator does not check the apple5 floor: RI_Init refuses the simulator's device"
+		return 1
+	fi
+	if [ "$2" = device ] && [ "$skip" = 1 ]; then
+		echo "$1 skips the apple5 floor in the device build: the simulator's guard leaks into it"
+		return 1
+	fi
+	if [ "$2" = device ] && [ "$refuse" != 1 ]; then
+		echo "$1 has no apple5 floor refusal in the device build"
+		return 1
+	fi
+}
+
 assert_signed() # <bundle>
 {
 	if ! codesign --verify --strict "$1" > "${tmp:?}/sig" 2>&1; then
@@ -274,10 +330,24 @@ printf 'int GetRefAPI(void) { return 1; }\nint rm_helper(void) { return 2; }\n' 
 printf 'extern char OBJC_CLASS_$_NSWindow;\nvoid *w(void) { return &OBJC_CLASS_$_NSWindow; }\n' > "${m:?}/appkit.c"
 printf 'extern char OBJC_CLASS_$_NSString;\nvoid *s(void) { return &OBJC_CLASS_$_NSString; }\n' > "${m:?}/foundation.c"
 printf 'int main(void) { return 0; }\n' > "${m:?}/main.c"
+printf 'int SDL_main(int c, char **v) { (void)c; (void)v; return 0; }\n' > "${m:?}/sdlmain-only.c"
+printf '%s\n' 'int SDL_RunApp(int c, char **v, int (*f)(int, char **), void *r);' \
+	'int SDL_main(int c, char **v) { (void)c; (void)v; return 0; }' \
+	'int main(int c, char **v) { return SDL_RunApp(c, v, SDL_main, 0); }' > "${m:?}/sdlmain.c"
+printf '%s\n' 'const char *skip = "ref_metal: the device floor (apple%d) is not checked in the simulator";' \
+	'const char *refuse = "ref_metal: the Metal device supports no Apple GPU family from apple%d on";' > "${m:?}/leak.c"
+printf '%s\n' 'const char *refuse = "ref_metal: the Metal device supports no Apple GPU family from apple%d on";' > "${m:?}/floor.c"
+printf '%s\n' 'const char *skip = "ref_metal: the device floor (apple%d) is not checked in the simulator";' > "${m:?}/skip.c"
 if ! cc_ios -c "${m:?}/two.c" -o "${m:?}/two.o" > "${m:?}/cc.out" 2>&1 \
 	|| ! cc_ios -c "${m:?}/appkit.c" -o "${m:?}/appkit.o" >> "${m:?}/cc.out" 2>&1 \
 	|| ! cc_ios -c "${m:?}/foundation.c" -o "${m:?}/foundation.o" >> "${m:?}/cc.out" 2>&1 \
 	|| ! cc_ios "${m:?}/main.c" -o "${m:?}/signed.app/quake2" >> "${m:?}/cc.out" 2>&1 \
+	|| ! cc_ios -c "${m:?}/main.c" -o "${m:?}/main.o" >> "${m:?}/cc.out" 2>&1 \
+	|| ! cc_ios -c "${m:?}/sdlmain-only.c" -o "${m:?}/sdlmain-only.o" >> "${m:?}/cc.out" 2>&1 \
+	|| ! cc_ios -c "${m:?}/sdlmain.c" -o "${m:?}/sdlmain.o" >> "${m:?}/cc.out" 2>&1 \
+	|| ! cc_ios -c "${m:?}/skip.c" -o "${m:?}/skip.o" >> "${m:?}/cc.out" 2>&1 \
+	|| ! xcrun -sdk iphoneos clang -target arm64-apple-ios$minos -c "${m:?}/leak.c" -o "${m:?}/leak.o" >> "${m:?}/cc.out" 2>&1 \
+	|| ! xcrun -sdk iphoneos clang -target arm64-apple-ios$minos -c "${m:?}/floor.c" -o "${m:?}/floor.o" >> "${m:?}/cc.out" 2>&1 \
 	|| ! xcrun -sdk macosx clang -target arm64-apple-macos13.0 -c "${m:?}/two.c" -o "${m:?}/macos.o" >> "${m:?}/cc.out" 2>&1 \
 	|| ! xcrun -sdk iphonesimulator ld -r -arch arm64 -exported_symbol _GetRefAPI "${m:?}/two.o" -o "${m:?}/one.o" >> "${m:?}/cc.out" 2>&1; then
 	tail -n 5 "${m:?}/cc.out"
@@ -354,6 +424,16 @@ refused "bundle changed after signing" "fails codesign --verify --strict" assert
 : > "${m:?}/data.app/baseq2/smoke.pak"
 refused "bundle with a .pak but no IOS_BUNDLE_DATA" "smoke.pak" assert_no_data "${m:?}/data.app"
 accepted "bundle without data" assert_no_data "${m:?}/good.app"
+# (k)
+refused "main.o built from int main(void)" "defines no _SDL_main" assert_sdl_main "${m:?}/main.o"
+refused "main.o defining SDL_main without SDL's main" "has no _SDL_RunApp" assert_sdl_main "${m:?}/sdlmain-only.o"
+accepted "main.o of SDL_main.h's shape" assert_sdl_main "${m:?}/sdlmain.o"
+# (l)
+refused "simulator rm_main.o without the floor line" "does not check the apple5 floor" assert_floor "${m:?}/two.o" sim
+refused "device rm_main.o with the simulator's guard" "the simulator's guard leaks" assert_floor "${m:?}/leak.o" device
+refused "device rm_main.o without the floor refusal" "no apple5 floor refusal" assert_floor "${m:?}/two.o" device
+accepted "simulator rm_main.o" assert_floor "${m:?}/skip.o" sim
+accepted "device rm_main.o" assert_floor "${m:?}/floor.o" device
 
 # ---- the build -----------------------------------------------------------
 
@@ -365,6 +445,55 @@ cp third_party/sdl3.make "${tree:?}/third_party/"
 ln -s "$PWD/third_party/SDL3" "${tree:?}/third_party/SDL3"
 root=$tree/build/ios-iphonesimulator/release
 mk() { make -C "${tree:?}" "$@"; }
+
+# (m): each refused at parse time, naming its cause, never evaluated
+mk_refused() # <name> <text its cause must hold> <make arguments>...
+{
+	name=$1
+	want=$2
+	shift 2
+	mutants=$((mutants + 1))
+	if mk -n ios_objects IOS_SDK=iphonesimulator METAL_SHADERS=no "$@" > "${tmp:?}/mk.out" 2>&1; then
+		bad "make accepted $name: $*"
+	elif ! grep -F -e "$want" "${tmp:?}/mk.out" >/dev/null; then
+		bad "make refused $name without naming its cause ($want): $(tail -n 1 "${tmp:?}/mk.out")"
+	fi
+	if grep -x EVALUATED "${tmp:?}/mk.out" >/dev/null; then
+		bad "make evaluated $name as make text: $*"
+	fi
+}
+under="must not be release/ or debug/"
+meta="must be one path of letters"
+mk_refused "IOS_ROOT release" "$under" IOS_ROOT=release
+mk_refused "IOS_ROOT debug/x" "$under" IOS_ROOT=debug/x
+mk_refused "IOS_ROOT \$PWD/release" "$under" IOS_ROOT="$tree/release"
+mk_refused "IOS_ROOT ./build/../release" "$under" IOS_ROOT=./build/../release
+mk_refused "IOS_ROOT ./././release" "$under" IOS_ROOT=./././release
+ln -s "$tree" "${tmp:?}/tree-link"
+mk_refused "IOS_ROOT through a symlink" "$under" IOS_ROOT="$tmp/tree-link/debug/sub"
+mk_refused "IOS_ROOT with make text" "$meta" IOS_ROOT="$tmp/a\$(info EVALUATED)b"
+mk_refused "IOS_ROOT with a glob" "$meta" IOS_ROOT="$tmp/*"
+mk_refused "IOS_ROOT with [" "$meta" IOS_ROOT="$tmp/a[b]"
+mk_refused "IOS_ROOT with ;" "$meta" IOS_ROOT="$tmp/a;b"
+mk_refused "IOS_ROOT with a quote" "$meta" IOS_ROOT="$tmp/a'b"
+mk_refused "IOS_ROOT with a space" "$meta" IOS_ROOT="$tmp/a b"
+mk_refused "IOS_ROOT as an option" "$meta" IOS_ROOT=-rf
+mk_refused "IOS_BUNDLE_DATA with make text" "IOS_BUNDLE_DATA $meta" IOS_BUNDLE_DATA="$tmp/a\$(info EVALUATED)b"
+mk_refused "IOS_BUNDLE_DATA with a glob" "IOS_BUNDLE_DATA $meta" IOS_BUNDLE_DATA="$tmp/a?b"
+mk_refused "IOS_BUNDLE_DATA with a backquote" "IOS_BUNDLE_DATA $meta" IOS_BUNDLE_DATA="$tmp/a\`b"
+mk_refused "IOS_BUNDLE_DATA with a quote" "IOS_BUNDLE_DATA $meta" IOS_BUNDLE_DATA="$tmp/a'b"
+if ! mk -n ios_objects IOS_SDK=iphonesimulator METAL_SHADERS=no IOS_ROOT="$tmp/elsewhere/ios" IOS_BUNDLE_DATA="$tmp/data-ok" > "${tmp:?}/mk.out" 2>&1; then
+	bad "make refused an IOS_ROOT and IOS_BUNDLE_DATA outside the tree: $(tail -n 1 "${tmp:?}/mk.out")"
+fi
+
+# (n)
+nself=0
+if bash scripts/ios-sim.sh selftest > "${tmp:?}/selftest.log" 2>&1; then
+	nself=$(grep -c '^ios-sim: selftest: ok [a-z]' "${tmp:?}/selftest.log") || nself=0
+else
+	grep -E 'FAIL|^    |cases failed' "${tmp:?}/selftest.log" | head -n 30
+	bad "scripts/ios-sim.sh selftest failed"
+fi
 
 # what the build is to write, and the commands ios would compile it with
 # shellcheck disable=SC2086 # extra is a word list
@@ -417,6 +546,28 @@ fi
 out=$(assert_macos_cmds "${tmp:?}/macos.n") || bad "$out"
 # (f)
 out=$(assert_same_compiles "${tmp:?}/objects.n" "${tmp:?}/ios.n") || bad "$out"
+# (k)
+out=$(assert_sdl_main "$root/obj-metal/client/src/backends/unix/main.o") || bad "$out"
+# (l): the simulator's object, and the device's compiled with its own command
+out=$(assert_floor "$root/obj-metal/ref_metal/src/client/refresh/metal/rm_main.o" sim) || bad "$out"
+dev=$tree/build/ios-iphoneos-check
+# shellcheck disable=SC2086 # extra is a word list
+if ! mk -n -B VERBOSE=1 ios_objects IOS_SDK=iphoneos METAL_SHADERS=no IOS_ROOT="$dev" $extra > "${tmp:?}/device.n" 2>&1; then
+	tail -n 5 "${tmp:?}/device.n"
+	bad "make -n ios_objects IOS_SDK=iphoneos failed"
+fi
+grep -E ' -c .* -o [^ ]*/rm_main\.o src/client/refresh/metal/rm_main\.c$' "${tmp:?}/device.n" | head -n 1 > "${tmp:?}/device.cc"
+if [ ! -s "${tmp:?}/device.cc" ]; then
+	bad "make -n ios_objects IOS_SDK=iphoneos has no compile command of rm_main.c"
+else
+	mkdir -p "${dev:?}/obj-metal/ref_metal/src/client/refresh/metal"
+	if (cd "${tree:?}" && sh "${tmp:?}/device.cc") > "${tmp:?}/device.out" 2>&1; then
+		out=$(assert_floor "$dev/obj-metal/ref_metal/src/client/refresh/metal/rm_main.o" device) || bad "$out"
+	else
+		tail -n 5 "${tmp:?}/device.out"
+		bad "rm_main.c does not compile with the device build's command"
+	fi
+fi
 
 if [ "$full" = 1 ]; then
 	app=$root/Quake2.app
@@ -429,6 +580,7 @@ if [ "$full" = 1 ]; then
 	printf '%s\n' "$exe" > "${tmp:?}/exe.list"
 	out=$(assert_platform "${tmp:?}/exe.list") || bad "$out"
 	out=$(assert_entry_points "$exe") || bad "$out"
+	out=$(assert_sdl_main "$exe") || bad "$out"
 	# (h)
 	otool -L "$exe" > "${tmp:?}/libs" || bad "otool -L failed on $exe"
 	out=$(assert_libs "${tmp:?}/libs") || bad "$out"
@@ -446,4 +598,4 @@ echo "check-ios: build $elapsed s ($goal)"
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "check-ios: ok ($mutants mutants refused; $nobj objects for the simulator; $goal)"
+echo "check-ios: ok ($mutants mutants refused; $nself smoke selftest cases; $nobj objects for the simulator; $goal)"
