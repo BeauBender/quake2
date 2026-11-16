@@ -206,7 +206,7 @@ currently loads the game module and renderer with `dlopen` (`Sys_GetGameAPI`,
 `Sys_LoadLibrary`). A build mode that compiles the game and one renderer into
 the executable, with `GetGameAPI` and `GetRefAPI` resolved at link time, is
 required for every non-Mac Apple platform and removes a runtime trust
-boundary on macOS. Small: Makefile plus two loader functions.
+boundary on macOS. Small: Makefile plus two loader functions. Done (TASK20): `STATIC_MODULES=1`, the size estimate held (a Makefile block, a `static_modules` target and two `#ifdef STATIC_MODULES` seats, about 200 lines with the check).
 
 ### Phase C — iPhone and iPad (T0 for simulator, any device for testing)
 
