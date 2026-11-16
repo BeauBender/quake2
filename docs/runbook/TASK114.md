@@ -74,11 +74,29 @@ names that are plain names, a known status), and a malformed one is an error.
 
 **Reruns and the engine's own state.** Every engine run starts from the engine's defaults: the
 generator moves the binary's `baseq2/config.cfg` aside to `config.cfg.mfx-saved` for the whole
-run, removes what the previous run saved before each engine run, sets every cvar a row or scenario
-sets (and each `r_rt_*` and `r_metalfx*` cvar the probe reports) to its default first, and puts
-your file back at the end, also after an error, Ctrl-C, SIGTERM or SIGHUP. A SIGKILL or a power
-cut cannot be caught and leaves your file at `config.cfg.mfx-saved`; the next run puts it back
-before it does anything, or rename it by hand. `--replace` empties the earlier run's `crops/` and
+run, removes what the previous run saved before each engine run, sets first, to its default,
+every cvar an option sets, every gating cvar a scenario sets and each `r_rt_*` or `r_metalfx*`
+cvar the probe's `cvarlist` marks as archived (the `*` column; only an archived cvar can be
+carried by `config.cfg`, and every `+set` costs three of the engine's 128 arguments), and puts
+your file back at the end, also after an error, Ctrl-C, SIGTERM or SIGHUP. An option whose
+command line would pass the engine's argument limit fails only its own row (the reason is in
+`skipped.tsv`); the others, native included, still run.
+
+**One run per engine binary at a time.** The generator holds a non-blocking exclusive lock on
+the binary's `baseq2/` folder and on this checkout's `scripts/pins/scenarios/` folder for the
+whole run, and a run that cannot take either is refused with exit 3, naming the one it found held.
+The locks are on the folders themselves, so no lock file is made and nothing becomes untracked.
+Without this, a second run would take the first run's saved `config.cfg` for a killed run's and
+lose it.
+
+**After a kill.** A SIGKILL or a power cut cannot be caught. It leaves your file at
+`config.cfg.mfx-saved` (and the run's own `config.cfg` beside it, if the engine had written
+one). Under the lock a `config.cfg.mfx-saved` can only be a killed run's, so the next run puts it
+back before it does anything. When both files exist, neither is deleted: the newer `config.cfg`
+is kept as `config.cfg.mfx-newer` (`.1`, `.2` when that name is taken), the saved one becomes
+`config.cfg`, and the run says both names; merge what you want from the kept one by hand.
+SIGTERM, SIGHUP and Ctrl-C during a quality record also end the engine `pins.sh` started (it runs
+in a process group of its own, which is ended). `--replace` empties the earlier run's `crops/` and
 result files, and a crop is embedded only for a row that ran. The freshness check and the commit
 in `meta.tsv` are those of the tree the binary is in (`<tree>/release/quake2`, run through
 `--bin` or `PINS_BIN` too); a binary outside such a tree is not checked, is recorded with the commit

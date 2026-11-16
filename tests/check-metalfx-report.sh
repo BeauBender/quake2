@@ -15,6 +15,11 @@
 #     second run is not affected by the first;
 #   - --bin: the quality records get the same binary (PINS_BIN), the freshness check and the
 #     recorded commit are those of the binary's own tree, a binary outside one is said to be unchecked;
+#   - one run per engine binary and per scenarios folder (a directory flock; a held lock is exit 3), a
+#     config.cfg newer than a saved one is kept, a command line over the engine's argument limit costs
+#     only that option's row, pins.sh runs in a process group that SIGTERM ends;
+#   - the run end to end in a tree copy with a stub scripts/pins.sh: an option's SSIM is below 1, its crop
+#     is not the native one, the crop frame is the middle one by number; nothing touches the checkout;
 #   - the run paths: an existing results folder is refused, --replace empties the old crops, frames
 #     are paired by number (and ordered numerically), the stats line is read with several reset words;
 #   - names read from another host's results are plain names, a crop is read only as a plain file
@@ -66,7 +71,7 @@ cvl() { printf '%s\n' '*    r_metalfx "0"' "     r_metalfx_modes \"$1\"" '*    r
 { cvl 3; echo 'ref_metal: warning r_rt_denoiser "1"'; echo 'Unknown command "r_rt_denoiser"'; echo '5 cvars'; } > "$tmp/cv-absent"
 { cvl 31; echo '*    r_validation "0"'; echo '     r_rt_denoiser "0"'; echo '     r_rt_shadows "0"'; echo '12 cvars'; } > "$tmp/cv-present"
 { cvl 1099511627779; echo '12 cvars'; } > "$tmp/cv-big"
-{ cvl 31; echo '     r_rt_other "5"'; echo '*    r_rt_arch "2"'; echo '   - r_rt_fixed "1"'; echo '     r_rt_shadows "0"'; echo '     r_rt_denoiser "0"'; } > "$tmp/cv-defaults"
+{ cvl 31; echo '     r_rt_other "5"'; echo '*    r_rt_arch "2"'; echo '*    r_metalfx_modes "7"'; echo '*  - r_rt_fixed "1"'; echo '     r_rt_shadows "0"'; echo '     r_rt_denoiser "0"'; } > "$tmp/cv-defaults"
 printf 'bound\tbound\tstd\tr_metalfx=40\n' > "$tmp/opts-bound"
 "$tmp/framediff" --gen "$tmp/a.tga" 64 48 1 || exit 1
 "$tmp/framediff" --gen "$tmp/other.tga" 64 48 7 || exit 1
@@ -373,6 +378,7 @@ limit" "$out"
     if [ -z "$cpid" ]; then ko e2e-group "the stub pins.sh did not start"; else
         kill -TERM $pid 2>/dev/null
         n=0; while kill -0 $pid 2>/dev/null && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done
+        if kill -0 $pid 2>/dev/null; then kill -KILL $pid 2>/dev/null; ko e2e-group "the run did not end on SIGTERM during record"; fi
         wait $pid 2>/dev/null
         sleep 1
         if kill -0 "$cpid" 2>/dev/null; then kill -KILL "$cpid" 2>/dev/null; ko e2e-group "the child of pins.sh was left running after SIGTERM"; fi
@@ -422,6 +428,7 @@ printf '/release/\n' > "$tmp/noign"; if ign "$tmp/noign"; then bad "the ignore c
 nm=0
 mutant() { # name covered-id file(py|c) old new [old new]...: runs in the background, result in $tmp/res-<name>
     local name=$1 id=$2 kind=$3; shift 3
+    case " ${MFX_MUTANTS:-} " in "  "|*" $name "*) ;; *) return;; esac  # MFX_MUTANTS="a b": only these (while iterating)
     nm=$((nm+1))
     while [ "$(jobs -r | wc -l | tr -d ' ')" -ge 8 ]; do sleep 0.2; done
     (

@@ -451,7 +451,9 @@ class CfgGuard:
     restore() puts the owner's file back, and the generator calls it in a finally and from a
     SIGTERM/SIGHUP handler (SIGINT unwinds as KeyboardInterrupt). A SIGKILL or a power cut cannot be
     caught: it leaves the owner's file at config.cfg.mfx-saved, and the next run puts it back before
-    it does anything else (or rename it by hand)."""
+    it does anything else (or rename it by hand). That reading is only right under the run locks
+    (cmd_run): with one run per binary, a .mfx-saved is always a killed run's. When a config.cfg
+    exists beside it, that newer file is kept as config.cfg.mfx-newer, never deleted."""
 
     def __init__(self, binpath):
         self.path = os.path.join(os.path.dirname(os.path.abspath(binpath)), "baseq2", "config.cfg")
