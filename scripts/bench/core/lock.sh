@@ -62,6 +62,7 @@ BENCH_LOCK_OWNED=
 BENCH_LOCK_MINE=
 BENCH_LOCK_SINCE=
 BENCH_LOCK_CHILD=
+BENCH_LOCK_REAPED=
 BENCH_LOCK_GUARD=
 
 # bench_lock_init: resolves and makes the state directory.
@@ -128,8 +129,7 @@ bench_lock_reclaim() {
 	_lr_h=$(bench_lock_holder)
 	_lr_tok=$(bench_kv "$_lr_h" token)
 	if [ -n "$1" ]; then
-		if [ "$_lr_tok" = "$1" ] && ! bench_pid_alive "$(bench_kv "$_lr_h" pid)" &&
-			! bench_pid_alive "$(bench_kv "$_lr_h" child)"; then
+		if [ "$_lr_tok" = "$1" ] && ! bench_lock_alive "$_lr_h"; then
 			rm -f "${BENCH_LOCK_DIR:?}/holder" "${BENCH_LOCK_DIR:?}"/holder.tmp.*
 			if rmdir "${BENCH_LOCK_DIR:?}" 2> /dev/null; then _lr_st=0; fi
 		fi
@@ -194,7 +194,7 @@ bench_lock_acquire() {
 		_la_tok=$(bench_kv "$_la_h" token)
 		if [ -n "$_la_tok" ]; then
 			_la_bare=
-			if ! bench_pid_alive "$(bench_kv "$_la_h" pid)" && ! bench_pid_alive "$(bench_kv "$_la_h" child)"; then
+			if ! bench_lock_alive "$_la_h"; then
 				if bench_lock_reclaim "$_la_tok"; then continue; fi
 			fi
 		elif [ -d "${BENCH_LOCK_DIR:?}" ]; then
@@ -241,13 +241,32 @@ bench_lock_release() {
 	return 0
 }
 
-# bench_lock_stop_child: on a signal, stops the command this process runs
-# under the lock and its whole process group: TERM, up to twice
-# BENCH_STOP_GRACE for the group to go, then KILL; then reaps it.
+# bench_lock_stop_child: stops the command this process runs under the lock
+# and its whole process group: TERM, up to twice BENCH_STOP_GRACE and at
+# least BENCH_STOP_GRACE + 5 s for the group to go, then KILL; then reaps
+# it (once it is reaped, BENCH_LOCK_REAPED, the group only). The floor
+# lets a nested bench.sh stop its own bounded group, which takes up to its
+# grace, a second of clock and 2 s after its KILL, before this KILL ends it.
 bench_lock_stop_child() {
 	[ -n "${BENCH_LOCK_CHILD:-}" ] || return 0
-	bench_stop_group "$BENCH_LOCK_CHILD" $((2 * ${BENCH_STOP_GRACE:-10}))
+	_sc_g=${BENCH_STOP_GRACE:-10}
+	_sc_l=$((2 * _sc_g))
+	[ "$_sc_l" -ge $((_sc_g + 5)) ] || _sc_l=$((_sc_g + 5))
+	bench_stop_group "$BENCH_LOCK_CHILD" "$_sc_l" "${BENCH_LOCK_REAPED:-}"
 	BENCH_LOCK_CHILD=
+}
+
+# bench_lock_alive <holder text>: the holder's lock shell or its command is
+# alive, or the command's process group still has a member (the lock
+# shell was killed and the command exited, but what it started runs on).
+bench_lock_alive() {
+	_lv_c=$(bench_kv "$1" child)
+	bench_pid_alive "$(bench_kv "$1" pid)" && return 0
+	bench_pid_alive "$_lv_c" && return 0
+	case $_lv_c in
+	'' | 0 | 1 | *[!0-9]*) return 1 ;;
+	esac
+	kill -0 -- "-$_lv_c" 2> /dev/null
 }
 
 # bench_lock_run <label> -- <command...>: runs the command under the lock
@@ -276,9 +295,21 @@ bench_lock_run() {
 		bench_spawn "$@"
 	fi
 	BENCH_LOCK_CHILD=$BENCH_SPAWN_PID
+	BENCH_LOCK_REAPED=
 	bench_undefer
 	bench_lock_write "$_ru_label" "$BENCH_LOCK_CHILD" || true
-	wait "$BENCH_LOCK_CHILD" || _ru_st=$?
+	# Polled, not a plain wait: with job control off, wait never returns
+	# for a stopped child, and lock run has no wall time.
+	_ru_w=0
+	bench_watch "$BENCH_LOCK_CHILD" "" 1 || _ru_w=$?
+	if [ "$_ru_w" -eq 2 ]; then
+		bench_note "the command stopped (a stop signal, or it used the terminal, which lock run gives it only in the background); stopping it and freeing the lock"
+		bench_lock_stop_child
+		exit 74
+	fi
+	wait "$BENCH_LOCK_CHILD" 2> /dev/null || _ru_st=$?
+	BENCH_LOCK_REAPED=group
+	bench_end_group "$BENCH_LOCK_CHILD" || bench_note "stopped what the command left running in its process group"
 	BENCH_LOCK_CHILD=
 	exit "$_ru_st"
 }
@@ -298,7 +329,7 @@ bench_lock_status() {
 	_ls_p=$(bench_kv "$_ls_h" pid)
 	_ls_c=$(bench_kv "$_ls_h" child)
 	_ls_a=no
-	if bench_pid_alive "$_ls_p" || bench_pid_alive "$_ls_c"; then _ls_a=yes; fi
+	if bench_lock_alive "$_ls_h"; then _ls_a=yes; fi
 	printf 'lock=held label=%s pid=%s child=%s alive=%s since=%s\n' \
 		"$(bench_kv "$_ls_h" label)" "$_ls_p" "${_ls_c:-none}" "$_ls_a" "$(bench_kv "$_ls_h" start)"
 }

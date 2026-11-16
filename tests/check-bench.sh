@@ -405,13 +405,15 @@ t_lock_stop() {
 	grep -q '^bench: the command stopped' "${E:?}/stopped.out" || bad "stop: a stopped command was not said"
 	[ "$(B lock status)" = lock=free ] || bad "stop: a stopped command's lock was not released"
 	if pid_running "$(cat "${E:?}/gc.stop")"; then bad "stop: the stopped command's grandchild outlived the lock"; fi
-	# A command that exits and leaves work running in its group: the work
-	# is stopped before the lock is free (checked below, once it would
-	# have written its line).
+	# A command that exits and leaves work running in its group (its line
+	# due after 3 s, past the 1 to 2 s it is given): the work is stopped
+	# before the lock is free. Checked below, once it would have written.
 	_st=0
-	B lock run left -- sh -c 'sh "$1" "$2" "$3" left 2 & echo left-end >> "$3"' x "${E:?}/gc.sh" "${E:?}/gc.left" "${E:?}/log" 2> "${E:?}/left.err" || _st=$?
+	B lock run left -- sh -c 'sh "$1" "$2" "$3" left 3 & echo left-end >> "$3"' x "${E:?}/gc.sh" "${E:?}/gc.left" "${E:?}/log" 2> "${E:?}/left.err" || _st=$?
 	[ "$_st" -eq 0 ] || bad "stop: a command that left work running exited $_st"
 	[ "$(B lock status)" = lock=free ] || bad "stop: the lock was not released after a command that left work running"
+	grep -q '^bench: stopped what the command left running' "${E:?}/left.err" || bad "stop: the work a command left running was not said"
+	_tl=$(date +%s)
 	# A command that catches TERM and goes on is killed after the grace,
 	# which is at least BENCH_STOP_GRACE + 5 s even when that is 0, so a
 	# nested bench.sh stopping a group of its own finishes first.
@@ -427,8 +429,10 @@ t_lock_stop() {
 	[ "$(B lock status)" = lock=free ] || bad "stop: the stubborn command's lock was not released"
 	grep -q got-term "${E:?}/log" || bad "stop: the stubborn command never got TERM"
 	if pid_running "$(cat "${E:?}/stub.pid")"; then bad "stop: the stubborn command outlived the lock"; fi
-	grep -v '^bench: ' "${E:?}/stub.out" "${E:?}/stopped.out" "${E:?}/term.out" "${E:?}/left.err" > /dev/null && bad "stop: the lock shell printed a line that is not its own (a job notice)"
+	# Commands that print nothing themselves: no job notice either.
+	grep -v '^bench: ' "${E:?}/stopped.out" "${E:?}/term.out" "${E:?}/left.err" > /dev/null && bad "stop: the lock shell printed a line that is not its own (a job notice)"
 	# By now each grandchild would have written its line.
+	while [ "$(date +%s)" -le $((_tl + 3)) ]; do sleep 0.2; done
 	if grep -q 'late$' "${E:?}/log"; then bad "stop: something wrote after the lock was free: $(grep 'late$' "${E:?}/log" | tr '\n' ' ')"; fi
 	if pid_running "$(cat "${E:?}/gc.left" 2> /dev/null)"; then bad "stop: the work a command left running outlived the lock"; fi
 	# At a terminal (a pty from script, when there is one): a command that
@@ -492,12 +496,14 @@ t_bounded() {
 		bench_bounded 1 sh "${E:?}/gc.sh" "${E:?}/b.gc" "${E:?}/log" wall 3.5 2> /dev/null || _st=$?
 		[ "$_st" -eq 124 ] || { echo "$me: bounded: wanted 124 from a command over its wall time, got $_st"; exit 1; }
 		if pid_running "$(cat "${E:?}/b.gc" 2> /dev/null)"; then echo "$me: bounded: a grandchild outlived the wall bound"; exit 1; fi
-		# A command that exits and leaves work running in its group: the
-		# work is stopped before the bound returns (checked below, once it
-		# would have written its line).
+		# A command that exits and leaves work running in its group (its
+		# line due after 2.5 s, past the 1 to 2 s it is given): the work is
+		# stopped before the bound returns. Checked below, once it would
+		# have written.
 		_st=0
-		bench_bounded 5 sh -c 'sh "$1" "$2" "$3" bleft 1 &' x "${E:?}/gc.sh" "${E:?}/b.left" "${E:?}/log" 2> /dev/null || _st=$?
+		bench_bounded 5 sh -c 'sh "$1" "$2" "$3" bleft 2.5 &' x "${E:?}/gc.sh" "${E:?}/b.left" "${E:?}/log" 2> "${E:?}/bleft.err" || _st=$?
 		[ "$_st" -eq 0 ] || { echo "$me: bounded: a command that left work running gave $_st, not 0"; exit 1; }
+		grep -q '^bench: stopped what the command left running' "${E:?}/bleft.err" || { echo "$me: bounded: the work a command left running was not said"; exit 1; }
 		_tl=$(date +%s)
 		# A command killed by a signal gives its status, and no job notice
 		# (it names an internal path) reaches standard error.
@@ -516,7 +522,7 @@ t_bounded() {
 		_st=0
 		bench_bounded 5 sh -c 'exit 7' || _st=$?
 		[ "$_st" -eq 7 ] || { echo "$me: bounded: wanted the command's status 7, got $_st"; exit 1; }
-		while [ "$(date +%s)" -le $((_tl + 2)) ]; do sleep 0.2; done
+		while [ "$(date +%s)" -le $((_tl + 3)) ]; do sleep 0.2; done
 		if grep -q 'late$' "${E:?}/log"; then echo "$me: bounded: something wrote after the bound returned: $(grep 'late$' "${E:?}/log" | tr '\n' ' ')"; exit 1; fi
 		if pid_running "$(cat "${E:?}/b.left" 2> /dev/null)"; then echo "$me: bounded: the work a command left running outlived the bound"; exit 1; fi
 	) || bad "bounded: the wall-time bound does not stop the whole command"

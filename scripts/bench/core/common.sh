@@ -276,49 +276,115 @@ bench_undefer() {
 	fi
 }
 
-# bench_group_alive <pid>: the process group that <pid> leads still has a
-# member (bash reaps an exited child at once, so a dead leader is not one).
+# bench_group_alive <pid> [group]: the process group that <pid> leads still
+# has a member (bash reaps an exited child at once, so a dead leader is not
+# one). With "group" (the leader is reaped, so its pid may be another
+# process's), the group alone.
 bench_group_alive() {
-	kill -0 -- "-$1" 2> /dev/null || bench_pid_running "$1"
+	kill -0 -- "-$1" 2> /dev/null && return 0
+	[ "${2:-}" != group ] && bench_pid_running "$1"
 }
 
-# bench_stop_group <pid> [<grace>]: stops the command bench_spawn started as
-# <pid>, and everything in its process group: TERM (and CONT, so a stopped
-# member gets it) to the group, up to <grace> seconds (default
+# bench_signal_group <signal> <pid> [group]: the signal to the process group
+# <pid> leads; to the pid alone when there is no such group (a shell
+# without job control), unless "group" is given.
+bench_signal_group() {
+	kill -s "$1" -- "-$2" 2> /dev/null && return 0
+	[ "${3:-}" != group ] && kill -s "$1" "$2" 2> /dev/null
+	return 0
+}
+
+# bench_stop_group <pid> [<grace>] [group]: stops the command bench_spawn
+# started as <pid>, and everything in its process group: TERM (and CONT, so
+# a stopped member gets it) to the group, up to <grace> seconds (default
 # BENCH_STOP_GRACE, else 10; whole seconds by the clock, so between <grace>
-# and one more) for the group to go, then KILL to the group; then reaps the
-# leader. A shell without job control falls back to the pid alone.
+# and one more) for the group to go, then KILL to the group, and up to 2 s
+# for it to go; then reaps the leader. A shell without job control falls
+# back to the pid alone. With "group" (the leader is reaped already), the
+# group only, and no reap. Its standard error is /dev/null: the shell's
+# notice of a job killed by a signal names an internal path.
 bench_stop_group() {
 	_sg_p=$1
 	_sg_g=${2:-${BENCH_STOP_GRACE:-10}}
+	_sg_o=${3:-}
 	case $_sg_p in
 	'' | 0 | 1 | *[!0-9]*) return 0 ;;
 	esac
-	kill -s TERM -- "-$_sg_p" 2> /dev/null || kill -s TERM "$_sg_p" 2> /dev/null || true
-	kill -s CONT -- "-$_sg_p" 2> /dev/null || kill -s CONT "$_sg_p" 2> /dev/null || true
+	bench_signal_group TERM "$_sg_p" "$_sg_o"
+	bench_signal_group CONT "$_sg_p" "$_sg_o"
 	_sg_end=$(($(date +%s) + _sg_g))
-	while bench_group_alive "$_sg_p" && [ "$(date +%s)" -le "$_sg_end" ]; do
+	while bench_group_alive "$_sg_p" "$_sg_o" && [ "$(date +%s)" -le "$_sg_end" ]; do
 		bench_nap 0.1
 	done
-	if bench_group_alive "$_sg_p"; then
-		kill -s KILL -- "-$_sg_p" 2> /dev/null || kill -s KILL "$_sg_p" 2> /dev/null || true
+	if bench_group_alive "$_sg_p" "$_sg_o"; then
+		bench_signal_group KILL "$_sg_p" "$_sg_o"
 		_sg_n=0
-		while bench_group_alive "$_sg_p" && [ "$_sg_n" -lt 50 ]; do
+		while bench_group_alive "$_sg_p" "$_sg_o" && [ "$_sg_n" -lt 20 ]; do
 			bench_nap 0.1
 			_sg_n=$((_sg_n + 1))
 		done
 	fi
-	wait "$_sg_p" 2> /dev/null || true
+	[ "$_sg_o" = group ] || wait "$_sg_p" || true
+} 2> /dev/null
+
+# bench_watch <pid> <end> <cap>: polls the command bench_spawn started as
+# <pid> until it exits (0), it is stopped (2: state T, a stop signal, or
+# the terminal it touched from its background process group), or the clock
+# passes <end> (1; seconds since the epoch, empty for none). The poll backs
+# off from 0.02 s to <cap> seconds, so a short command costs little. Its
+# standard error is /dev/null (the shell's job notices).
+bench_watch() {
+	_bw_p=$1
+	_bw_end=$2
+	_bw_cap=$3
+	_bw_nap=0.02
+	while kill -0 "$_bw_p"; do
+		case $(ps -o stat= -p "$_bw_p") in
+		Z*) return 0 ;;
+		T*) return 2 ;;
+		esac
+		if [ -n "$_bw_end" ] && [ "$(date +%s)" -gt "$_bw_end" ]; then
+			return 1
+		fi
+		bench_nap "$_bw_nap"
+		case $_bw_nap in
+		0.02) _bw_nap=0.05 ;;
+		0.05) _bw_nap=0.1 ;;
+		0.1) _bw_nap=0.2 ;;
+		*) _bw_nap=$_bw_cap ;;
+		esac
+	done
+	return 0
+} 2> /dev/null
+
+# bench_end_group <pid>: after the leader <pid> exited and was reaped, gives
+# what it left running in its process group 1 s (by the clock, so 1 to 2 s)
+# to end, then stops it (bench_stop_group, the group only). Returns 1 when
+# it had to stop something. Nothing to do without job control: the command
+# then leads no group.
+bench_end_group() {
+	_eg_end=$(($(date +%s) + 1))
+	while kill -0 -- "-$1" 2> /dev/null; do
+		if [ "$(date +%s)" -gt "$_eg_end" ]; then
+			bench_stop_group "$1" "" group
+			return 1
+		fi
+		bench_nap 0.1
+	done
+	return 0
 }
 
 BENCH_BOUNDED_PID=
+BENCH_BOUNDED_REAPED=
 
 # bench_bounded <seconds> <command...>: runs the command, standard input
 # from /dev/null, in its own process group (bench_spawn), and stops the
 # group (bench_stop_group) once the command has run more than <seconds>
-# (whole seconds by the clock, so between <seconds> and one more). Returns
-# its status, or 124 when it was stopped. For adapters. The poll backs off
-# from 0.02 s to 0.5 s, so a short command costs little.
+# (whole seconds by the clock, so between <seconds> and one more), or when
+# it is stopped (bench_watch). Returns its status; 124 past the wall time,
+# 74 when it was stopped. Once the command has exited, what it left running
+# in its group is stopped too (bench_end_group) before the bound returns.
+# For adapters. The poll backs off from 0.02 s to 0.5 s.
 bench_bounded() {
 	_bb_s=$1
 	shift
@@ -326,26 +392,26 @@ bench_bounded() {
 	_bb_end=$(($(date +%s) + _bb_s))
 	bench_spawn "$@" < /dev/null
 	BENCH_BOUNDED_PID=$BENCH_SPAWN_PID
+	BENCH_BOUNDED_REAPED=
 	bench_undefer
-	_bb_nap=0.02
-	while bench_pid_running "$BENCH_BOUNDED_PID"; do
-		if [ "$(date +%s)" -gt "$_bb_end" ]; then
-			bench_stop_group "$BENCH_BOUNDED_PID"
-			BENCH_BOUNDED_PID=
-			bench_note "stopped a command that outlived its wall time of $_bb_s s"
-			return 124
+	_bb_w=0
+	bench_watch "$BENCH_BOUNDED_PID" "$_bb_end" 0.5 || _bb_w=$?
+	if [ "$_bb_w" -ne 0 ]; then
+		bench_stop_group "$BENCH_BOUNDED_PID"
+		BENCH_BOUNDED_PID=
+		if [ "$_bb_w" -eq 2 ]; then
+			bench_note "the command stopped (a stop signal, or the terminal); stopped it"
+			return 74
 		fi
-		bench_nap "$_bb_nap"
-		case $_bb_nap in
-		0.02) _bb_nap=0.05 ;;
-		0.05) _bb_nap=0.1 ;;
-		0.1) _bb_nap=0.2 ;;
-		*) _bb_nap=0.5 ;;
-		esac
-	done
+		bench_note "stopped a command that outlived its wall time of $_bb_s s"
+		return 124
+	fi
 	_bb_st=0
-	wait "$BENCH_BOUNDED_PID" || _bb_st=$?
+	wait "$BENCH_BOUNDED_PID" 2> /dev/null || _bb_st=$?
+	BENCH_BOUNDED_REAPED=group
+	bench_end_group "$BENCH_BOUNDED_PID" || bench_note "stopped what the command left running in its process group"
 	BENCH_BOUNDED_PID=
+	BENCH_BOUNDED_REAPED=
 	return "$_bb_st"
 }
 

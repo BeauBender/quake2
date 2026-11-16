@@ -70,7 +70,7 @@ bench_on_signal() {
 	fi
 	trap '' INT TERM HUP
 	bench_lock_stop_child
-	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then bench_stop_group "$BENCH_BOUNDED_PID"; fi
+	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then bench_stop_group "$BENCH_BOUNDED_PID" "" "${BENCH_BOUNDED_REAPED:-}"; fi
 	exit "$1"
 }
 
