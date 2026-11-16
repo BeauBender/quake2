@@ -16,7 +16,11 @@
 #     stored; a stopped command (a STOP to its group, and stty on a pty
 #     from script when there is one) said and ended with 74; work a
 #     command leaves running on a normal exit stopped before the lock is
-#     free, with the same grace floor when it catches TERM; no job notice on standard error; the command's own INT trap;
+#     free, with the same grace floor when it catches TERM; no line but
+#     the lock shell's own on its output (the lines found shown; the
+#     fixture's own shells silenced, and a probe that they are); the fork
+#     of the command with its standard error on /dev/null (seen with
+#     xtrace), the command with the caller's; the command's own INT trap;
 #     reclaim of a dead holder, logged, and of two waiters that reclaim at
 #     once exactly one gets the lock; a held reclaim guard, a holder whose
 #     command's group still runs, and a holder-less lock inside its grace
@@ -49,14 +53,17 @@
 #   - the core and bench.sh name no game and no project layout, and use no
 #     eval.
 # The tests that do not test the host facts use a fast stand-in for
-# system_profiler (fast_profiler). Then eleven mutants, each applied to a
+# system_profiler (fast_profiler). Then fourteen mutants, each applied to a
 # copy of scripts/bench/ and each required to fail the test it targets: the
 # lock made neither exclusively nor linked, the holder renamed over
-# another's, the command spawned without its own process group, a signal
+# another's, the command spawned without its own process group, its fork
+# left with the caller's standard error (with standard input open, and
+# closed) or a closed one not given /dev/null, a signal
 # in the spawn window dropped, or acted on at once, re-entry accepts any
 # token, the drift rule drops t, the core names a game, the reclaim guard
 # made with mkdir -p, the holder-less grace dropped, the store's
-# outside-repository check deleted.
+# outside-repository check deleted; and one to this test's own fixture, gc.sh
+# with its standard error left open.
 #
 # Usage: tests/check-bench.sh [<test>...]   (named tests only, no mutants)
 set -eu
@@ -191,9 +198,14 @@ fresh() {
 }
 # foreign <file...>: prints the lines of the files that are not the lock
 # shell's own ("bench: ..."), at most five, each cut to 200 characters and
-# shown after the name of the file it came from; fails when there is none.
+# shown after the name of the file it came from, with this check's
+# temporary directory as <tmp>; fails when there is none.
 foreign() {
-	awk -v me="$me" '!/^bench: / && n < 5 { f = FILENAME; sub(/.*\//, "", f); print me ":   " substr(f ": " $0, 1, 200); n++ } END { exit !n }' "$@"
+	awk -v me="$me" -v t="$tmp" '!/^bench: / && n < 5 {
+		f = FILENAME; sub(/.*\//, "", f); s = $0
+		while ((i = index(s, t)) > 0) s = substr(s, 1, i - 1) "<tmp>" substr(s, i + length(t))
+		print me ":   " substr(f ": " s, 1, 200); n++
+	} END { exit !n }' "$@"
 }
 # lit <file> <old> <new>: replaces the first occurrence of <old> on each
 # line, as fixed text; fails when there is none.
@@ -351,10 +363,23 @@ t_lock_tokens() {
 # its pid to $1, then "$3-late" to the log $2 after $4 seconds (1.5); and
 # <dir>/stubborn.sh, a command that catches TERM, says so in $2 and goes on
 # (its pid in $1).
+# gc.sh's shells print nothing: its first line, GC_QUIET, sends their
+# standard error to /dev/null. A shell prints a job notice ("<script>: line
+# 1: <pid> Terminated: 15 <command>") for a foreground child that a signal
+# it does not trap ends while the shell lives on, and a TERM to a process
+# group reaches its members one after the other, so under load gc.sh, or
+# its sh -c, can see its child end first (FIX83, docs/runbook/FIX83.md).
+# Its notice would land in the lock shell's output, which t_lock_stop
+# requires to hold the lock shell's own lines alone. The gc-notice mutant
+# clears GC_QUIET.
+GC_QUIET='exec 2> /dev/null'
 grandchild() {
-	cat > "${1:?}/gc.sh" << 'EOF'
+	{
+		printf '%s\n' "$GC_QUIET"
+		cat << 'EOF'
 sh -c 'echo $$ > "$1"; sleep "${4:-1.5}"; echo "$3-late" >> "$2"' gc "$@"
 EOF
+	} > "${1:?}/gc.sh"
 	cat > "${1:?}/stubborn.sh" << 'EOF'
 trap 'echo got-term >> "$2"' TERM
 echo $$ > "$1"
@@ -366,6 +391,26 @@ t_lock_stop() {
 	fresh stop
 	grandchild "${E:?}"
 	: > "${E:?}/log"
+	# The fixture prints no job notice itself, so the check at the end sees
+	# the lock shell's lines alone: its grandchild ends by TERM while gc.sh
+	# lives on (the order a TERM to the group can take under load), under
+	# the lock and into one file, as below. gc.sh then exits with 143, and
+	# its leftover sleep is stopped by the lock.
+	start sh "$R/bench.sh" lock run quiet -- sh "${E:?}/gc.sh" "${E:?}/gc.quiet" "${E:?}/log" quiet 30 > "${E:?}/quiet.out" 2>&1
+	_h=$BG
+	wait_file 5 "${E:?}/gc.quiet" || bad "stop: the quiet probe's grandchild never started"
+	kill -TERM "$(cat "${E:?}/gc.quiet")" 2> /dev/null || bad "stop: the quiet probe's grandchild is gone"
+	if ! wait_gone 15 "$_h"; then
+		bad "stop: the quiet probe's lock shell did not exit"
+		reap "$_h"
+	fi
+	_st=0
+	wait "$_h" || _st=$?
+	[ "$_st" -eq 143 ] || bad "stop: the quiet probe: wanted exit 143 from gc.sh after its grandchild's TERM, got $_st"
+	if foreign "${E:?}/quiet.out" > "${E:?}/foreign"; then
+		cat "${E:?}/foreign"
+		bad "stop: the fixture printed a line itself (a job notice), above; the check below would blame the lock shell for it"
+	fi
 	# TERM to the lock shell stops the command's whole process group before
 	# the lock is free.
 	start sh "$R/bench.sh" lock run gc -- sh "${E:?}/gc.sh" "${E:?}/gc.term" "${E:?}/log" term > "${E:?}/term.out" 2>&1
@@ -493,6 +538,36 @@ t_lock_stop() {
 	while [ "$(date +%s)" -le $((_tl + 3)) ]; do sleep 0.2; done
 	if grep -q 'late$' "${E:?}/log"; then bad "stop: something wrote after the lock was free: $(grep 'late$' "${E:?}/log" | tr '\n' ' ')"; fi
 	if pid_running "$(cat "${E:?}/gc.left" 2> /dev/null)"; then bad "stop: the work a command left running outlived the lock"; fi
+	[ "$fails" -eq 0 ]
+}
+
+# The fork of the command (bench_spawn) runs with standard error on
+# /dev/null, so nothing the forked shell says before it becomes the command
+# reaches the caller: under load, bash's "child setpgid (<pid> to <pid>):
+# Operation not permitted" (FIX83). It is seen here with xtrace, which bash
+# prints in the forked shell, for the command, on that standard error
+# before the command's own redirections; with standard input open and
+# closed (the two forms of the fork). The command itself gets the caller's
+# standard error, fds 3 and 9 closed, and /dev/null when standard error is
+# closed.
+t_spawn_stderr() {
+	fresh spawn
+	for _in in open closed; do
+		_st=0
+		if [ "$_in" = open ]; then
+			env PS4='+ ' sh -x "$R/bench.sh" lock run xt -- sh -c ': fork-probe' < /dev/null > /dev/null 2> "${E:?}/xt.$_in" || _st=$?
+		else
+			env PS4='+ ' sh -x "$R/bench.sh" lock run xt -- sh -c ': fork-probe' <&- > /dev/null 2> "${E:?}/xt.$_in" || _st=$?
+		fi
+		[ "$_st" -eq 0 ] || bad "spawn: the xtrace run (standard input $_in) exited $_st"
+		grep -q 'bench_spawn sh -c .*fork-probe' "${E:?}/xt.$_in" || bad "spawn: the xtrace run (standard input $_in) shows no call of bench_spawn, so it shows nothing"
+		if grep -q "^+* sh -c '*: fork-probe'*\$" "${E:?}/xt.$_in"; then bad "spawn: the forked shell's own lines reach the caller's standard error (standard input $_in)"; fi
+	done
+	_out=$(B lock run err -- sh -c 'echo to-stderr >&2; (: >&3) 2> /dev/null && echo fd3-open; (: >&9) 2> /dev/null && echo fd9-open' 2>&1 3< /dev/null 9> /dev/null)
+	[ "$_out" = to-stderr ] || bad "spawn: wanted the command's standard error and fds 3 and 9 closed, got: $_out"
+	_st=0
+	B lock run noerr -- sh -c 'echo ran > "$1"; echo to-stderr >&2' x "${E:?}/noerr" 2>&- || _st=$?
+	[ "$_st" -eq 0 ] && [ "$(cat "${E:?}/noerr" 2> /dev/null)" = ran ] || bad "spawn: with standard error closed, wanted the command run with /dev/null for it (status 0 and its line), got status $_st"
 	[ "$fails" -eq 0 ]
 }
 
@@ -1205,7 +1280,7 @@ t_compare() {
 }
 
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare"
+all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
@@ -1256,6 +1331,19 @@ mutant lock-not-exclusive core/lock.sh 'if mkdir "${BENCH_LOCK_DIR:?}" 2> /dev/n
 	'ln "$_lw_t" "${BENCH_LOCK_DIR:?}/holder"' 'mv -f "$_lw_t" "${BENCH_LOCK_DIR:?}/holder"' || mfail=1
 mutant holder-replaced core/lock.sh 'ln "$_lw_t" "${BENCH_LOCK_DIR:?}/holder"' 'mv -f "$_lw_t" "${BENCH_LOCK_DIR:?}/holder"' t_lock_stall || mfail=1
 mutant spawn-no-group core/common.sh '	set -m' '	set +m' t_lock_stop || mfail=1
+# The fork's standard error (FIX83): left on the caller's, in either form of
+# the fork, or a closed one not given /dev/null (the command never starts).
+mutant fork-stderr core/common.sh '{ "$@" <&3 3<&- 2>&9 9>&- & } 3<&0 9>&2 2> /dev/null' '{ "$@" <&3 3<&- & } 3<&0' t_spawn_stderr || mfail=1
+mutant fork-stderr-nostdin core/common.sh '{ "$@" < /dev/null 2>&9 9>&- & } 9>&2 2> /dev/null' '"$@" < /dev/null &' t_spawn_stderr || mfail=1
+mutant fork-stderr-closed core/common.sh '{ :; } 9>&2 2> /dev/null || exec 2> /dev/null' ':' t_spawn_stderr || mfail=1
+# The test's own fixture (FIX83): gc.sh with its standard error left open
+# prints the job notice of a grandchild that TERM ends before it.
+if (GC_QUIET=: MUTANT=1 && cd "$REAL/../.." && t_lock_stop) > "${tmp:?}/mutant.gc-notice.out" 2>&1; then
+	echo "$me: mutant gc-notice passed t_lock_stop; the test does not catch it"
+	mfail=1
+else
+	echo "$me: mutant gc-notice: caught by t_lock_stop ($(grep -v "^$me:   " "${tmp:?}/mutant.gc-notice.out" | sed -n 1p | sed "s/^$me: //"))"
+fi
 # A signal in the window between the "&" and the stored pid: dropped by
 # bench_undefer, or acted on at once (the command is left running).
 mutant defer-signal-lost core/common.sh 'bench_on_signal "$_ud_s"' ':' t_lock_defer || mfail=1
