@@ -101,6 +101,22 @@ bounded()
 	return $status
 }
 
+# stop_pid <pid>: TERM, a few seconds of grace, then KILL and reap (our
+# PID only); returns 0 if it had to be killed hard, 1 if TERM was enough
+stop_pid()
+{
+	local w=0
+	kill "$1" 2>/dev/null
+	while kill -0 "$1" 2>/dev/null && [ "$w" -lt 5 ]; do sleep 1; w=$((w + 1)); done
+	if kill -0 "$1" 2>/dev/null; then
+		kill -9 "$1" 2>/dev/null
+		wait "$1" 2>/dev/null
+		return 0
+	fi
+	wait "$1" 2>/dev/null
+	return 1
+}
+
 # ---- selftest: the smoke against a fake xcrun and make -------------------
 
 selftest()
@@ -124,6 +140,7 @@ list)
 	devices)
 		case $sc in
 		hang) echo $$ > "$st/hang.pid"; exec sleep 30 ;;
+		samename) grep -q '^55555555-' "$st/devices" || printf '%s\n' "55555555-5555-5555-5555-555555555555 yq2-ios-sim-$PPID" >> "$st/devices" ;;
 		empty) exit 0 ;;
 		listfail) echo "fake xcrun: CoreSimulatorService is not running" >&2; exit 1 ;;
 		esac
@@ -148,7 +165,7 @@ create)
 		printf '%s\n' "33333333-3333-3333-3333-333333333333 Previews kept" \
 			"44444444-4444-4444-4444-444444444444 Previews gone" >> "$st/devices"
 	fi
-	if [ "$sc" = createhang ]; then
+	if [ "$sc" = createhang ] || [ "$sc" = samename ]; then
 		echo $$ > "$st/hang.pid"
 		exec sleep 30
 	fi
@@ -169,11 +186,15 @@ launch)
 		"ref_metal: metal_stats: 30 frames, 0 without a drawable, 0 skipped, 0 failed command buffers, " > "$c/qconsole.log"
 	python3 -I -c 'import sys
 open(sys.argv[1], "wb").write(bytes([0, 0, 2] + [0] * 9 + [16, 0, 8, 0, 24, 0]) + bytes(range(256)) + bytes(range(128)))' "$c/scrnshot/q2_0000.tga"
+	[ "$sc" = launchterm ] && trap "" TERM
 	sleep 1 &
 	p=$!
 	echo "$4: $p"
 	echo "Metal API Validation Enabled"
-	wait "$p" ;;
+	wait "$p"
+	# a launch client that ignores TERM and outlives the app
+	[ "$sc" = launchterm ] && { echo $$ > "$st/hang.pid"; exec sleep 60; }
+	exit 0 ;;
 get_app_container) echo "$st/container" ;;
 delete)
 	[ "$sc" = leftover ] || drop "$2"
@@ -231,8 +252,11 @@ EOF
 			|| { [ "$sc" != vanish ] && ! grep '^22222222-' "${d:?}/state/devices" >/dev/null; }; then
 			why="an owner's device was deleted"
 		fi
+		if [ "$sc" = samename ] && ! grep '^55555555-' "${d:?}/state/devices" >/dev/null; then
+			why="${why:+$why; }a device named like this run's, listed before it, was deleted"
+		fi
 		if [ -f "${d:?}/state/hang.pid" ] && kill -0 "$(cat "${d:?}/state/hang.pid")" 2>/dev/null; then
-			kill "$(cat "${d:?}/state/hang.pid")" 2>/dev/null
+			kill -9 "$(cat "${d:?}/state/hang.pid")" 2>/dev/null
 			why="${why:+$why; }the hung simctl call was left running"
 		fi
 		if [ -n "$why" ]; then
@@ -252,6 +276,8 @@ EOF
 	st_case create-times-out createhang fail "deleting AAAAAAAA-0000-0000-0000-" 30
 	st_case created-device-not-listed ghost fail "is not in the device list taken after simctl create" 30
 	st_case created-device-listed-before reuse fail "was already listed before simctl create" 30
+	st_case lost-device-listed-before samename fail "not deleting 55555555-5555-5555-5555-555555555555" 30
+	st_case launch-ignores-term launchterm ok "the launch client did not exit after the app" 25
 	st_case family-refused floorrefused fail "ref_metal refused it (its floor)" 30
 	st_case smoke-limit-not-digits extra fail "IOS_SIM_SMOKE_SECONDS must be" 5 IOS_SIM_SMOKE_SECONDS=3m
 	st_case boot-limit-not-digits extra fail "IOS_SIM_BOOT_SECONDS must be" 5 IOS_SIM_BOOT_SECONDS=1e3
@@ -303,7 +329,7 @@ lpid=
 cleanup()
 {
 	if [ -n "$lpid" ] && kill -0 "$lpid" 2>/dev/null; then
-		kill "$lpid" 2>/dev/null
+		stop_pid "$lpid" || true
 	fi
 	if [ -n "$udid" ]; then
 		bounded 60 "${tmp:?}/shutdown.out" xcrun simctl shutdown "$udid" || true
@@ -346,7 +372,8 @@ EOF
 udids() { cut -d ' ' -f 1 "$1" | sort -u; }
 
 # lost_device <name>: a create that failed (or timed out) may still have
-# made the device: delete every listed device of that name by its UDID
+# made the device: delete every listed device of that name by its UDID,
+# except one that was already listed before the run (not ours)
 lost_device()
 {
 	local u
@@ -357,6 +384,10 @@ lost_device()
 	awk -v n="$1" '{ u = $1; sub(/^[^ ]+ /, ""); if ($0 == n) print u }' "${tmp:?}/devices.lost" > "${tmp:?}/lost"
 	while read -r u; do
 		printf '%s\n' "$u" | grep -E -x "$uuid_re" >/dev/null || continue
+		if udids "$out/devices.before" | grep -F -x -e "$u" >/dev/null; then
+			echo "ios-sim: not deleting $u ($1): it was listed before the run" >&2
+			continue
+		fi
 		echo "ios-sim: deleting $u ($1), made by the create that failed" >&2
 		bounded 60 "${tmp:?}/lost-shutdown.out" xcrun simctl shutdown "$u" || true
 		bounded 60 "${tmp:?}/lost-delete.out" xcrun simctl delete "$u" || echo "ios-sim: could not delete the device $u ($1)" >&2
@@ -456,9 +487,13 @@ while kill -0 "$apid" 2>/dev/null; do
 	t=$((t + 1))
 done
 w=0
-while kill -0 "$lpid" 2>/dev/null && [ "$w" -lt 30 ]; do sleep 1; w=$((w + 1)); done
-kill -0 "$lpid" 2>/dev/null && kill "$lpid" 2>/dev/null
-wait "$lpid" 2>/dev/null
+while kill -0 "$lpid" 2>/dev/null && [ "$w" -lt 10 ]; do sleep 1; w=$((w + 1)); done
+if kill -0 "$lpid" 2>/dev/null; then
+	echo "ios-sim: the launch client did not exit after the app; stopping it" >&2
+	stop_pid "$lpid" || true
+else
+	wait "$lpid" 2>/dev/null
+fi
 lpid=
 
 bounded 60 "${tmp:?}/container.out" xcrun simctl get_app_container "$udid" "$bid" data || die "simctl get_app_container failed"

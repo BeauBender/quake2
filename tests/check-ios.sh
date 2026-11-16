@@ -470,6 +470,12 @@ mk_refused "IOS_ROOT debug/x" "$under" IOS_ROOT=debug/x
 mk_refused "IOS_ROOT \$PWD/release" "$under" IOS_ROOT="$tree/release"
 mk_refused "IOS_ROOT ./build/../release" "$under" IOS_ROOT=./build/../release
 mk_refused "IOS_ROOT ./././release" "$under" IOS_ROOT=./././release
+# letter case: the default APFS volume ignores it, and release/ and debug/
+# do not exist in this tree
+[ ! -e "${tree:?}/release" ] && [ ! -e "${tree:?}/debug" ] || bad "the scratch tree holds a release/ or debug/"
+mk_refused "IOS_ROOT RELEASE" "$under" IOS_ROOT=RELEASE
+mk_refused "IOS_ROOT Release/sub" "$under" IOS_ROOT=Release/sub
+mk_refused "IOS_ROOT Debug" "$under" IOS_ROOT=Debug
 ln -s "$tree" "${tmp:?}/tree-link"
 mk_refused "IOS_ROOT through a symlink" "$under" IOS_ROOT="$tmp/tree-link/debug/sub"
 mk_refused "IOS_ROOT with make text" "$meta" IOS_ROOT="$tmp/a\$(info EVALUATED)b"

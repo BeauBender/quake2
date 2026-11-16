@@ -50,7 +50,7 @@
 #   into the bundle; local builds only, never game data in a commit.
 #   IOS_ROOT: the output, default build/ios-<IOS_SDK>/<debug|release>.
 #   Never release/ or debug/ or under them, however spelled (symlinks
-#   and .. resolved). IOS_ROOT and IOS_BUNDLE_DATA hold letters, digits
+#   and .. resolved, letter case ignored). IOS_ROOT and IOS_BUNDLE_DATA hold letters, digits
 #   and . _ / + @ - only: no make or shell metacharacter.
 # QUIET
 #   If defined, "===> CC ..." lines are silenced.
@@ -290,7 +290,10 @@ endif
 # the characters of IOS_PATH_RE, so a recipe can quote them as '...'.
 ifeq ($(IOS_MODE),1)
 IOS_PATH_RE := [A-Za-z0-9._/][A-Za-z0-9._/+@-]*
-ios_path_ok = $(and $(if $(findstring $$,$(value $(1))),,1),$(filter $(shell printf '%s' '$(subst ',,$($(1)))' | LC_ALL=C grep -E -x '$(IOS_PATH_RE)'),$($(1))))
+ios_path_out = $(shell printf '%s' '$(subst ',,$($(1)))' | LC_ALL=C grep -E -x '$(IOS_PATH_RE)')
+ios_path_ok = $(and $(if $(findstring $$,$(value $(1))),,1),$(call ios_path_out,$(1)),$(if $(subst $(call ios_path_out,$(1)),,$(value $(1))),,1))
+# lower case: the default APFS volume ignores case, so RELEASE is release
+ios_lc = $(shell printf '%s' '$(1)' | tr 'A-Z' 'a-z')
 ifeq ($(origin IOS_ROOT),undefined)
 ifdef DEBUG
 IOS_ROOT := $(BUILDROOT)/ios-$(IOS_SDK)/debug
@@ -310,7 +313,8 @@ endif
 ios_physical = $(if $(realpath $(1)),$(realpath $(1)),$(call ios_physical,$(or $(patsubst %/,%,$(dir $(1))),/))/$(notdir $(1)))
 IOS_ROOT_ABS := $(abspath $(call ios_physical,$(abspath $(IOS_ROOT))))
 IOS_NOT_ROOTS := $(sort $(foreach d,release debug,$(abspath $(d)) $(abspath $(call ios_physical,$(abspath $(d))))))
-ifneq ($(filter $(IOS_NOT_ROOTS) $(addsuffix /%,$(IOS_NOT_ROOTS)),$(abspath $(IOS_ROOT)) $(IOS_ROOT_ABS)),)
+IOS_NOT_ROOTS_LC := $(call ios_lc,$(IOS_NOT_ROOTS))
+ifneq ($(filter $(IOS_NOT_ROOTS_LC) $(addsuffix /%,$(IOS_NOT_ROOTS_LC)),$(call ios_lc,$(abspath $(IOS_ROOT)) $(IOS_ROOT_ABS))),)
 $(error IOS_ROOT must not be release/ or debug/ or under them, not "$(IOS_ROOT)" ($(IOS_ROOT_ABS)))
 endif
 override BUILDDIR := $(IOS_ROOT)
