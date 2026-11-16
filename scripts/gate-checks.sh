@@ -75,7 +75,7 @@ gate_start() {
 	"$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 &
 	_gsp=$!
 	set +m
-	trap '' TTOU
+	trap '' TTOU # the scheduler again, once the check has started
 	_grun="$_grun $1:$_gsp:$_gs0"
 	_gnr=$((_gnr + 1))
 }
