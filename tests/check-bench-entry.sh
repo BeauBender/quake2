@@ -634,8 +634,71 @@ EOF
 	[ "$fails" -eq 0 ]
 }
 
+# t_orphan, with the real bench core (the lock on): a KILL to the caller's
+# process group that lands after bench_spawn has forked the run but before
+# the run's shell has started leaves the run with launchd as its parent, so
+# its lock shell reads as pid 1, which never goes, and the watcher would
+# never signal. The run is started as bench_spawn starts it (the marker, a
+# token, a process group of its own) by a parent that is gone before the
+# run's shell starts. It must say so in one line and exit 143 before any
+# check, the scheduler, a make or the watcher starts. No process but
+# launchd can wait for it, so its status is read from its trace (sh -x).
+t_orphan() {
+	mktree orphan real
+	cat > "${T:?}/tests/check-a.sh" << 'EOF'
+#!/bin/sh
+echo "check-start $$" >> "$LOG"
+EOF
+	# orphan.sh <pidfile> <command...>: writes its pid, waits (up to 10 s)
+	# until its parent is gone, then becomes <command>, whose parent at start
+	# is therefore pid 1.
+	cat > "${T:?}/orphan.sh" << 'EOF'
+#!/bin/sh
+echo "$$" > "$1"
+shift
+_n=0
+until [ "$(ps -o ppid= -p "$$" | tr -d ' ')" = 1 ]; do
+	[ "$_n" -lt 100 ] || { echo "orphan: the parent is still there" >&2; exit 97; }
+	sleep 0.1
+	_n=$((_n + 1))
+done
+exec "$@"
+EOF
+	BENCH_STATE=${T:?}/state
+	export BENCH_STATE
+	# the spawning shell exits at once; the run inherits ${T}/out
+	run 30 sh -c 'set -m; sh "$1" "$2" env BENCH_LOCK_ENTRY=gate BENCH_LOCK_TOKEN=t-orphan GATE_JOBS=1 PS4="+ " PATH="$3" sh -x "$4" < /dev/null & exit 0' \
+		spawn "${T:?}/orphan.sh" "${T:?}/run.pid" "$GATEPATH" "${T:?}/scripts/test.sh"
+	[ "$ST" -eq 0 ] || bad "orphan: the spawning shell exited $ST; $(say)"
+	_n=0
+	until [ -s "${T:?}/run.pid" ]; do
+		[ "$_n" -lt 100 ] || break
+		sleep 0.1
+		_n=$((_n + 1))
+	done
+	_op=$(cat "${T:?}/run.pid" 2> /dev/null) || _op=0
+	echo "${_op:=0}" >> "${tmp:?}/pids"
+	if ! wait_gone 60 "$_op"; then
+		stray_stop "$_op" scripts/test.sh "$_op"
+		bad "orphan: the run under the lock with its parent gone still runs after 60 s; $(say)"
+	fi
+	forget "$_op"
+	if grep -q '^orphan: the parent is still there' "${T:?}/out"; then
+		bad "orphan: the run's parent was not gone before the run started; $(say)"
+	else
+		grep -qx 'test.sh: the lock shell is gone before the gate started' "${T:?}/out" ||
+			bad "orphan: the run did not say that its lock shell was gone; $(say)"
+		[ "$(sed -n '$p' "${T:?}/out")" = '+ exit 143' ] || bad "orphan: the run did not exit 143 at once; $(say)"
+		[ "$(lines '^check-start ')" -eq 0 ] || bad "orphan: a check started; $(say)"
+		[ "$(lines '^make ')" -eq 0 ] || bad "orphan: a make ran; $(say)"
+		! grep -q 'gate-checks\.sh\|gate-watch' "${T:?}/out" || bad "orphan: the scheduler or the watcher started; $(say)"
+	fi
+	unset BENCH_STATE
+	[ "$fails" -eq 0 ]
+}
+
 # ---- The real entry points. ---------------------------------------------
-all="t_gate t_coverage t_cov_lc t_pins t_off t_nested t_kgrp t_grace"
+all="t_gate t_coverage t_cov_lc t_pins t_off t_nested t_kgrp t_grace t_orphan"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
