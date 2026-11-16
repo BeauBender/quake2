@@ -548,7 +548,7 @@ test_open_plane(void)
 		mtl_mat_translate(world, -eye[0], -eye[1], -eye[2]);
 		mtl_mat_mul(m, proj, world);
 
-		if (!rm_rtao_view(proj, world, &vp, eye, znear, range, RM_RTAO_FLOOR, 1, 0, &v))
+		if (!rm_rtao_view(proj, world, &vp, eye, znear, range, RM_RTAO_FLOOR, 1, 0, 1, 2, &v))
 		{
 			CHECK(0);
 			continue;
@@ -694,17 +694,17 @@ test_view(void)
 	mtl_mat_rotate(world, 90, 0, 0, 1);
 	mtl_mat_translate(world, -eye[0], -eye[1], -eye[2]);
 
-	CHECK(rm_rtao_view(proj, world, &vp, eye, 4, 100, 0.25f, 7, 2, &v) == 1);
+	CHECK(rm_rtao_view(proj, world, &vp, eye, 4, 100, 0.25f, 7, 2, 3, 1, &v) == 1);
 	CHECK(rm_rts_view(proj, world, &vp, eye, 4, &s) == 1);
 	CHECK(memcmp(v.inv, s.inv, sizeof(v.inv)) == 0);
 	CHECK(memcmp(v.vp, s.vp, sizeof(v.vp)) == 0);
 	CHECK(memcmp(v.eye, s.eye, sizeof(v.eye)) == 0);
 	CHECK(v.bias_k == s.bias_k);
 	CHECK((v.range == 100) && (v.floor_ == 0.25f) && (v.frame == 7) && (v.show == 2));
-	CHECK((v.pad[0] == 0) && (v.pad[1] == 0) && (v.pad[2] == 0));
+	CHECK((v.div == 3) && (v.rays == 1) && (v.pad[0] == 0));
 
-	CHECK(rm_rtao_view(proj, world, &vp, eye, 0, 100, 0.25f, 7, 2, &v) == 0);
-	CHECK(rm_rtao_view(proj, world, &vp, eye, NAN, 100, 0.25f, 7, 2, &v) == 0);
+	CHECK(rm_rtao_view(proj, world, &vp, eye, 0, 100, 0.25f, 7, 2, 1, 2, &v) == 0);
+	CHECK(rm_rtao_view(proj, world, &vp, eye, NAN, 100, 0.25f, 7, 2, 1, 2, &v) == 0);
 	CHECK(sizeof(rm_rtao_view_t) == 128);
 }
 
@@ -794,6 +794,231 @@ test_stats(void)
 	CHECK(rm_rtao_stats_format(&s, buf, 0) == 0);
 }
 
+/* TASK157: r_rt_ao_scale and r_rt_ao_rays as the pass takes them, and their defaults */
+static void
+test_cvars157(void)
+{
+	CHECK(RM_RTAO_SCALE == 0.5f);
+	CHECK(RM_RTAO_NRAYS == 2);
+	CHECK(rm_rtao_div(RM_RTAO_SCALE) == 2);
+	CHECK(rm_rtao_div(1) == 1);
+	CHECK(rm_rtao_div(0.5f) == 2);
+	CHECK(rm_rtao_div(1.0f / 3.0f) == 3);
+	CHECK(rm_rtao_div(0.34f) == 3);
+	CHECK(rm_rtao_div(0.8f) == 1);           /* 1 / 0.8 = 1.25: the nearest is 1 */
+	CHECK(rm_rtao_div(0.6f) == 2);           /* 1.67: 2 */
+	CHECK(rm_rtao_div(0.41f) == 2);          /* 2.44: 2 */
+	CHECK(rm_rtao_div(0.39f) == 3);          /* 2.56: 3 */
+	CHECK(rm_rtao_div(0.1f) == MTL_RTAO_DIV_MAX);
+	CHECK(rm_rtao_div(1e-30f) == MTL_RTAO_DIV_MAX);
+	CHECK(rm_rtao_div(4) == 1);              /* above 1: every pixel */
+	CHECK(rm_rtao_div(0) == 2);              /* not above 0: the default */
+	CHECK(rm_rtao_div(-1) == 2);
+	CHECK(rm_rtao_div(NAN) == 2);
+	CHECK(rm_rtao_div(INFINITY) == 2);
+
+	CHECK(rm_rtao_rays(2) == 2);
+	CHECK(rm_rtao_rays(1) == 1);
+	CHECK(rm_rtao_rays(1.4f) == 1);
+	CHECK(rm_rtao_rays(1.6f) == 2);
+	CHECK(rm_rtao_rays(0) == 1);
+	CHECK(rm_rtao_rays(-3) == 1);
+	CHECK(rm_rtao_rays(9) == 2);
+	CHECK(rm_rtao_rays(NAN) == RM_RTAO_NRAYS);
+	CHECK(rm_rtao_rays(INFINITY) == RM_RTAO_NRAYS);
+}
+
+/*
+ * TASK157: the reduced size. Every traced pixel inside the view, one a
+ * d x d block, every full pixel between its two traced pixels (or at the
+ * view's edge on the last one), and a traced pixel takes its own AO.
+ */
+static void
+test_lo(void)
+{
+	unsigned d, full;
+	int ok = 1, edge = 1, self = 1;
+
+	CHECK(mtl_rtao_lo_off(1) == 0 && mtl_rtao_lo_off(2) == 0 && mtl_rtao_lo_off(3) == 1);
+	CHECK(mtl_rtao_lo_size(1920, 1) == 1920);
+	CHECK(mtl_rtao_lo_size(1920, 2) == 960);
+	CHECK(mtl_rtao_lo_size(1080, 2) == 540);
+	CHECK(mtl_rtao_lo_size(1081, 2) == 541);
+	CHECK(mtl_rtao_lo_size(1920, 3) == 640);
+	CHECK(mtl_rtao_lo_size(1, 3) == 1);
+	CHECK(mtl_rtao_lo_size(2, 3) == 1);
+
+	for (d = 1; d <= MTL_RTAO_DIV_MAX; d++)
+	{
+		for (full = 1; full <= 70; full++)
+		{
+			const unsigned n = mtl_rtao_lo_size(full, d);
+			unsigned x, lo;
+
+			ok &= (n >= 1) && (n <= full);
+
+			for (lo = 0; lo < n; lo++)
+			{
+				const unsigned s = mtl_rtao_lo_src(lo, d, full);
+
+				ok &= (s < full);
+				ok &= (lo == 0) || (s > mtl_rtao_lo_src(lo - 1, d, full));
+				ok &= (s / d == lo) || (s == full - 1);   /* one a block */
+			}
+
+			/* no full pixel is d or more past the last traced one */
+			ok &= (full - 1 - mtl_rtao_lo_src(n - 1, d, full) < d);
+
+			for (x = 0; x < full; x++)
+			{
+				const mtl_rtao_pair_t q = mtl_rtao_up_pair(x, d, n);
+				const unsigned s0 = mtl_rtao_lo_src(q.lo0, d, full), s1 = mtl_rtao_lo_src(q.lo1, d, full);
+
+				ok &= (q.lo0 < n) && (q.lo1 < n) && (q.f >= 0.0f) && (q.f < 1.0f);
+				ok &= (q.lo1 == q.lo0) || (q.lo1 == q.lo0 + 1);
+
+				if (q.lo1 != q.lo0)
+				{
+					/* between the two, the weight the share of the way to the second */
+					ok &= ((s0 <= x) && (x < s1)) || ((q.lo0 == 0) && (x < s0) && (q.f == 0.0f));
+
+					if (s0 <= x)
+					{
+						ok &= near(q.f, (double)(x - s0) / (double)(s1 - s0), 1e-6);
+					}
+				}
+				else
+				{
+					/* the view's edge: the nearest traced pixel alone */
+					edge &= (q.f == 0.0f) && (q.lo0 == n - 1);
+				}
+
+				if ((d == 1) || ((x >= mtl_rtao_lo_off(d)) && ((x - mtl_rtao_lo_off(d)) % d == 0)))
+				{
+					self &= (q.f == 0.0f) && (s0 == x);
+				}
+			}
+		}
+	}
+
+	CHECK(ok);
+	CHECK(edge);
+	CHECK(self);
+}
+
+/* TASK157: the upsample's surface test and mean */
+static void
+test_up(void)
+{
+	const mtl_rtao_v3_t p = mtl_rtao_v3(10, 20, 30), up = mtl_rtao_v3(0, 0, 1);
+	mtl_rtao_up_t u;
+	int i, k, ok = 1;
+
+	CHECK(near(mtl_rtao_up_tol(0), 2.0, 1e-6));
+	CHECK(near(mtl_rtao_up_tol(1000), 6.0, 1e-5));
+
+	/* on the plane, any distance along it */
+	CHECK(mtl_rtao_up_same(p, up, mtl_rtao_v3(50, -40, 30.5f), up, 2.0f) == 1);
+	/* off the plane by more than the tolerance, above or below */
+	CHECK(mtl_rtao_up_same(p, up, mtl_rtao_v3(10, 21, 33), up, 2.0f) == 0);
+	CHECK(mtl_rtao_up_same(p, up, mtl_rtao_v3(10, 21, 27), up, 2.0f) == 0);
+	/* another surface's normal: a wall at a floor's crease */
+	CHECK(mtl_rtao_up_same(p, up, mtl_rtao_v3(11, 20, 30), mtl_rtao_v3(1, 0, 0), 2.0f) == 0);
+	/* within about 26 degrees */
+	CHECK(mtl_rtao_up_same(p, up, p, mtl_rtao_v3(0.42f, 0, 0.907f), 2.0f) == 1);
+	CHECK(mtl_rtao_up_same(p, up, p, mtl_rtao_v3(0.45f, 0, 0.893f), 2.0f) == 0);
+
+	/* the mean of those on the surface */
+	for (i = 0; i < 4; i++)
+	{
+		u.ao[i] = 0.25f * (float)(i + 1);
+		u.w[i] = 0.25f;
+		u.same[i] = 1;
+		u.world[i] = 1;
+	}
+
+	CHECK(near(mtl_rtao_up_ao(u), 0.625, 1e-6));
+	u.same[3] = 0;       /* the one at 1 is another surface */
+	CHECK(near(mtl_rtao_up_ao(u), 0.5, 1e-6));
+	u.w[0] = 0;          /* a weight of 0 counts for nothing */
+	CHECK(near(mtl_rtao_up_ao(u), 0.625, 1e-6));
+	u.same[1] = u.same[2] = 0;   /* none on the surface: the world pixels' mean */
+	CHECK(near(mtl_rtao_up_ao(u), (0.5 + 0.75 + 1.0) / 3.0, 1e-6));
+	u.world[1] = u.world[2] = u.world[3] = 0;   /* no world pixel with a weight: 1 */
+	CHECK(mtl_rtao_up_ao(u) == 1.0f);
+
+	/* a traced pixel alone (weight 1, the others 0) gives its own AO bit for bit */
+	for (k = 0; k <= 255; k++)
+	{
+		for (i = 0; i < 4; i++)
+		{
+			u.ao[i] = (float)((k * 37 + i * 91) % 256) / 255.0f;
+			u.w[i] = (i == 1) ? 1.0f : 0.0f;
+			u.same[i] = u.world[i] = 1;
+		}
+
+		ok &= (mtl_rtao_up_ao(u) == u.ao[1]);
+	}
+
+	CHECK(ok);
+
+	/* always a mean of the AOs it is given: within their least and most, so the floor holds */
+	ok = 1;
+
+	for (k = 0; k < 20000; k++)
+	{
+		float lo = 1.0f, hi = 0.0f, a;
+
+		for (i = 0; i < 4; i++)
+		{
+			u.ao[i] = frand(0, 1);
+			u.w[i] = frand(-0.2f, 1);
+			u.same[i] = frand(0, 1) < 0.5f;
+			u.world[i] = frand(0, 1) < 0.8f;
+
+			if (u.world[i] && (u.w[i] > 0))
+			{
+				lo = (u.ao[i] < lo) ? u.ao[i] : lo;
+				hi = (u.ao[i] > hi) ? u.ao[i] : hi;
+			}
+		}
+
+		a = mtl_rtao_up_ao(u);
+		ok &= (a >= 0.0f) && (a <= 1.0f);
+		ok &= (hi < lo) ? (a == 1.0f) : ((a >= lo - 1e-6f) && (a <= hi + 1e-6f));
+		ok &= (mtl_rtao_factor(a, 0.4f) >= 0.4f);
+	}
+
+	CHECK(ok);
+}
+
+/* TASK157: one ray's AO, and its direction over the whole circle */
+static void
+test_one_ray(void)
+{
+	const mtl_rtao_v3_t n = mtl_rtao_v3(0, 0, 1);
+	int k, neg = 0, pos = 0, ok = 1;
+
+	CHECK(mtl_rtao_ao1(0) == 1.0f);
+	CHECK(mtl_rtao_ao1(1) == 0.0f);
+	CHECK(near(mtl_rtao_ao1(0.3f), 0.7, 1e-6));
+	CHECK(mtl_rtao_ao1(-1) == 1.0f);
+	CHECK(mtl_rtao_ao1(2) == 0.0f);
+
+	for (k = 0; k < 64; k++)
+	{
+		const float u = ((float)k + 0.5f) / 64.0f;
+		const mtl_rtao_v3_t d = mtl_rtao_dir(n, 0, 2.0f * u, 0.5f);
+
+		ok &= near(d.x * d.x + d.y * d.y + d.z * d.z, 1.0, 1e-5) && (d.z >= MTL_RTAO_MIN_COS);
+		neg += (d.y < 0);
+		pos += (d.y > 0);
+	}
+
+	CHECK(ok);
+	CHECK((neg == 32) && (pos == 32));   /* both halves of the circle */
+}
+
 int
 main(void)
 {
@@ -808,6 +1033,10 @@ main(void)
 	test_view();
 	test_instances();
 	test_stats();
+	test_cvars157();
+	test_lo();
+	test_up();
+	test_one_ray();
 
 	printf("rm_rtao_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
