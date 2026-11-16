@@ -240,6 +240,7 @@ rm_rt_instances(const rm_rt_ent_t *ents, long n, int world, int gunshadow, float
 		out[count].model = 0;
 		out[count].ent = -1;
 		out[count].carry = 0;
+		out[count].noao = 0;
 		rm_rt_transform(zero, zero, 1, out[count].xform);
 		count++;
 	}
@@ -294,6 +295,7 @@ rm_rt_instances(const rm_rt_ent_t *ents, long n, int world, int gunshadow, float
 		out[count].model = e->model;
 		out[count].ent = i;
 		out[count].carry = 0;
+		out[count].noao = (e->flags & (RM_RF_WEAPONMODEL | RM_RT_RF_VIEWERMODEL)) ? 1 : 0;
 		rm_rt_transform(e->origin, e->angles, e->kind == RM_RT_ENT_BRUSH, out[count].xform);
 		count++;
 	}
