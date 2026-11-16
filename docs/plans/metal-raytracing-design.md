@@ -200,6 +200,34 @@ time follows the rays that meet an occluder (about 0.9 ms of it). The split betw
 the noise and the copy was not measured (runbook, rework 1). `timedemo` reads the display's 60
 fps at 1080p with the effect on and off.
 
+TASK157 profiled the pass and cut it ([TASK157](../runbook/TASK157.md)). Most of the 1080p
+time TASK57 measured is the GPU's clock, not the work: the cost scenario holds the frame to the
+display's 60 Hz, the GPU idles between frames and runs the pass at a low level. With the frame
+rate not held (`r_vsync 0`, the level section 8's tables are measured at) the same pass takes
+1.11 ms at 1080p, 3.3 times less, the factor section 8 found between a process's start level and
+its later one. Where the time goes, at 1080p with the rate held (not held in brackets): the
+128-unit traversal 1.36 ms (0.43), measured as the pass with 1-unit rays; the per-pixel floor at
+the render size (the G-buffer reads, the noise, the light's copy, the rays' launches) 2.26 ms
+(0.68); the entities 0.08 ms (0.02); no denoise yet. The cuts, each a cvar
+(`doc/040_cvarlist.md`) and shown in the video menu: `r_rt_ao_scale` traces the rays at a
+reduced size, one pixel of each 2 x 2 or 3 x 3 block, and gives each world pixel the bilinear
+mean of the four traced pixels about it that lie on its own surface (the normal within about 26
+degrees, the point within 2 units plus 0.4 % of its distance of the pixel's plane); its default
+is 0.5. `r_rt_ao_rays` 1 traces one ray a pixel; `r_rt_ao_range` is kept at 128. Scale 1 is
+TASK57's pass and look, frame for frame. On the M6 at the defaults, three runs a case:
+
+- 1920 x 1080: 2.10 ms held (from 3.62), inside the AO's share of 1.4 to 2.4 ms above; 0.63 ms
+  not held (from 1.11), under the share and under section 8's 1.75 ms for two rays on every
+  pixel. `r_rt_ao_scale 1/3` takes 1.62 ms (0.48), one ray at scale 1 2.24 ms (0.67);
+- 5120 x 2880 with MetalFX (the default 1080-line input): 3.19 ms held (from 3.77), 0.69 ms not
+  held (from 1.34), against 2.13 ms for the AO at 1080 traced rows in the primary cell (the
+  options' tables below);
+- 5120 x 2880 native: 8.26 ms held (from 9.79), 4.62 ms not held (from 7.84).
+
+The frame-level floor check passes on all 247 frames of the AO records, effect off is main's
+frames byte for byte, and against the current AO the new default changes the darkened pixels
+by about 6 levels on average (8 % of them by more than 8, 0.2 % by more than 32).
+
 ### Internal resolution and upscaling with MetalFX (TASK105)
 
 This subsection describes option A (TASK105): with a ray-traced effect
