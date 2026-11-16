@@ -10,7 +10,9 @@ import importlib.util
 import os
 import shutil
 import signal
+import subprocess
 import sys
+import time
 
 
 def load(d):
@@ -357,6 +359,25 @@ def main(argv):
         with open(os.path.join(dst, "crops", "world__fx1-s50.png"), "wb") as f:
             f.write(b"STALE-CROP-BYTES")
         return 0
+    if cmd == "stop-wait":
+        # the seconds sh_group gives a stopped command between TERM and KILL, from BENCH_STOP_GRACE as the
+        # host lock reads it: unset, 1, not whole seconds, 30; then the same under the generator's own hold
+        envs = ({}, {"BENCH_STOP_GRACE": "1"}, {"BENCH_STOP_GRACE": "x"}, {"BENCH_STOP_GRACE": "30"})
+        free = " ".join(str(m.lock_stop_wait(e)) for e in envs)
+        m.LOCK_HELD = True
+        print(free + " / " + " ".join(str(m.lock_stop_wait(e)) for e in envs))
+        return 0
+    if cmd == "group-timeout":
+        # group-timeout TREE SECONDS: sh_group on TREE/scripts/pins.sh record past its timeout; the
+        # TimeoutExpired comes back once the command's group is stopped
+        t0 = time.time()
+        try:
+            m.sh_group([os.path.join(a[0], "scripts", "pins.sh"), "record", "metal", "x"], cwd=a[0], timeout=float(a[1]))
+        except subprocess.TimeoutExpired:
+            print("timed out, back after %.1f s" % (time.time() - t0))
+            return 0
+        print("no timeout")
+        return 1
     print("unknown command " + cmd)
     return 2
 
