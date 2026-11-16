@@ -66,7 +66,23 @@ scripts/metalfx-report.sh run --out <folder> --basedir <game data> --other <that
 scripts/metalfx-report.sh report --dir <this host's results folder> --other <the other's> --html <file>
 ```
 
-The second form rebuilds the page from existing results without an engine. The other host's
+The second form rebuilds the page from existing results without an engine.
+
+**Chunks of one run.** A run split so that no call holds the host lock for more than 20 minutes
+(`--scenarios a,b` per call, each call with an `--out` of its own, since one results folder is
+made per host and day) is combined by `report` with one `--dir` for each chunk, no hand merge:
+
+```sh
+scripts/metalfx-report.sh run --out <out>/c1 --basedir <game data> --host-name <host> --scenarios rt-ao,rt-ao-entities
+scripts/metalfx-report.sh run --out <out>/c2 --basedir <game data> --host-name <host> --scenarios rt-water,rt-water-entities
+scripts/metalfx-report.sh report --dir <out>/c1/metalfx-<host>-<date> --dir <out>/c2/metalfx-<host>-<date> --html <file>
+```
+
+`report` refuses (exit 3) a chunk of another host, engine commit, tree state, device, size, seed,
+run count or build check, and a row (option and scenario) that two chunks both hold; nothing is
+averaged or chosen between chunks. Chunks are split by scenario, never by `--only`, because every
+chunk runs the native row of its scenarios. The merged page has the crops of every chunk, and its
+rows are those one full run gives ([FIX86](FIX86.md)). The other host's
 numbers show beside this host's, per scenario and option, and an option that host could not run
 shows its reason; images come only from the host the report is built on. A results folder is
 validated when read (a regular file, header, column count, every number, option and scenario
@@ -77,10 +93,15 @@ generator moves the binary's `baseq2/config.cfg` aside to `config.cfg.mfx-saved`
 run, removes what the previous run saved before each engine run, sets first, to its default,
 every cvar an option sets, every gating cvar a scenario sets and each `r_rt_*` or `r_metalfx*`
 cvar the probe's `cvarlist` marks as archived (the `*` column; only an archived cvar can be
-carried by `config.cfg`, and every `+set` costs three of the engine's 128 arguments), and puts
-your file back at the end, also after an error, Ctrl-C, SIGTERM or SIGHUP. An option whose
-command line would pass the engine's argument limit fails only its own row (the reason is in
-`skipped.tsv`); the others, native included, still run.
+carried by `config.cfg`), and puts your file back at the end, also after an error, Ctrl-C,
+SIGTERM or SIGHUP. The cvars a run sets do not go on the command line (the engine stops at 128
+arguments, and a `+set` costs three of them): the generator writes them as `set name value`
+lines into `mfx-run.cfg` in the binary's `baseq2/` for that run, runs the engine with one
+`+exec mfx-run.cfg`, and removes the file with the held `config.cfg`. Only the window, renderer,
+sound and display-sync cvars stay on the command line. A name or value that cannot be one console
+token (a quote, a semicolon, a newline, a space) refuses the run, naming its cvar. `plan` prints
+the argument count of the largest engine command line of any run (a timed run, a probe or a record) and its kind;
+`run` refuses a run whose record would go over the limit. See [FIX86](FIX86.md).
 
 **One run per engine binary at a time.** The generator holds a non-blocking exclusive lock on
 the binary's `baseq2/` folder and on this checkout's `scripts/pins/scenarios/` folder for the

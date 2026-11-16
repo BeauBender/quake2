@@ -401,7 +401,8 @@ N does not wait for it.
 
 On a machine with accelerated OpenGL (TASK83, #187):
 `scripts/pins.sh compare metal <scenario> --ref gl1` at the values of the
-runbook table "Accept `gl1-metal` against `gl1` at". This is the parent
+table "Accept `gl1-metal` against `gl1` at" in
+[`docs/runbook/TASK41.md`](../runbook/TASK41.md). This is the parent
 card's criterion against `ref_gl1`, and it is pending there for the 3D
 scenarios exactly as it is for TASK21; it does not gate any card of group N.
 
@@ -417,7 +418,7 @@ The screen blend (gl1's `R_PolyBlend`: one `color` quad over the view, the
 3D pass's last draw) comes with N4, not with the effects of N9. The 3D
 scenarios set `cl_blend 0` but leave `gl_polyblend` at 1, and `cl_blend 0`
 clears only the blend's colour (`cl_view.c`), so gl1 draws the quad on
-every frame whose blend alpha is not 0. The runbook measured it on the
+every frame whose blend alpha is not 0. [`docs/runbook/TASK49.md`](../runbook/TASK49.md) measured it on the
 reference: on frames 3, 5, 8, 11 and 16 of `world` it changes 39 to 98
 percent of `gl1-metal`'s pixels (the whole screen), and it darkens the
 whole screen on the under-water frames of `skywater` from `water.dm2`.
@@ -513,7 +514,7 @@ intersection performance (RT9, RT10) only.
 5. **The reference on this host.** Departs from the card: TASK28's goal
    says every frame pin passes "against the `ref_gl1` references". On
    this host the `gl1` references come from Apple's software OpenGL
-   renderer, whose faults the runbook records (TASK49 to TASK52), so
+   renderer, whose faults the card files record (TASK49 to TASK52, `docs/runbook/`), so
    group N is accepted against `gl1-metal`, the shim on the same GPU, at
    the values of section 11. The half against `gl1` (`--ref gl1`) is
    deferred to TASK83 (#187) on a machine with accelerated OpenGL, where
@@ -2212,5 +2213,5 @@ the scaler runs at the G-buffer contract's seam, in place of the bilinear stretc
 `rmb_gbuf_view_end`. With the defaults every pin is byte-identical to the base and no
 MetalFX object is made. Frame generation (`r_metalfx_interp`) reads 0 everywhere: it is
 not built. The runs, the fallbacks on this VM, the reset events, the mutants and the
-bare-metal hosts' commands are in the runbook file
+bare-metal hosts' commands are in the card file
 [MetalFX scalers for the 3D view](../runbook/TASK111.md).
