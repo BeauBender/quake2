@@ -1627,6 +1627,7 @@ IN_Update(void)
 		{
 			typing = want;
 			GLimp_TextInput(want != 0);
+			Com_Printf("Text input %s.\n", want ? "on, the keyboard is shown" : "off, the keyboard is hidden");
 		}
 	}
 #endif
