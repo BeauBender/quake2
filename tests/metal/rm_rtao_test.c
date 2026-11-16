@@ -207,6 +207,14 @@ test_bluenoise(void)
 	}
 }
 
+static int
+cmp_float(const void *a, const void *b)
+{
+	const float x = *(const float *)a, y = *(const float *)b;
+
+	return (x < y) ? -1 : (x > y) ? 1 : 0;
+}
+
 static void
 test_noise(void)
 {
@@ -232,6 +240,56 @@ test_noise(void)
 		}
 
 		CHECK(ok);
+	}
+
+	/*
+	 * Review round 1, I1: every frame the caller can pass (0 to 65535) keeps
+	 * the tile's 4096 ranks apart, so a frame's numbers are still the tile's
+	 * permutation, each within 1e-5 of the exact rank centre plus frame
+	 * steps, wrapped. A float frame x step lost them past frame 2^11: 2048
+	 * values at frame 4096, 256 at 65535.
+	 */
+	{
+		static const unsigned frames[] = { 0, 1, 2047, 2048, 4096, 20000, 65535 };
+		static const double steps[4] = { 0.61803399, 0.75487767, 0.56984029, 0.81917251 };
+		static float u[MTL_RTAO_TILE_N];
+		unsigned fi;
+
+		for (d = 0; d < 4; d++)
+		{
+			for (fi = 0; fi < sizeof(frames) / sizeof(frames[0]); fi++)
+			{
+				const unsigned f = frames[fi];
+				unsigned r, distinct = 1;
+				double worst = 0;
+
+				for (r = 0; r < MTL_RTAO_TILE_N; r++)
+				{
+					double e = fmod((r + 0.5) / MTL_RTAO_TILE_N + (double)f * steps[d], 1.0);
+
+					u[r] = mtl_rtao_noise(r, f, d);
+					e = fabs((double)u[r] - e);
+					e = (e > 0.5) ? 1.0 - e : e;   /* on the circle */
+					worst = (e > worst) ? e : worst;
+				}
+
+				qsort(u, MTL_RTAO_TILE_N, sizeof(u[0]), cmp_float);
+
+				for (r = 1; r < MTL_RTAO_TILE_N; r++)
+				{
+					distinct += u[r] != u[r - 1];
+				}
+
+				if ((distinct != MTL_RTAO_TILE_N) || (worst > 1e-5))
+				{
+					printf("noise d %u frame %u: %u distinct of %d, %.3g off\n", d, f, distinct, MTL_RTAO_TILE_N,
+							worst);
+				}
+
+				CHECK(distinct == MTL_RTAO_TILE_N);
+				CHECK(worst <= 1e-5);
+			}
+		}
 	}
 
 	CHECK(mtl_rtao_tile_index(0, 0, 0) == 0);
