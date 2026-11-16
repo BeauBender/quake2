@@ -1017,6 +1017,21 @@ mgl_layer_frame_begin(int *tw, int *th)
 		return 0;
 	}
 
+	/*
+	 * FIX68: with display sync off at most two frames are on the GPU, not
+	 * three. Frames no drawable takes are drawn there too, and a frame that
+	 * is presented, and then its present, waited on the GPU behind them:
+	 * with the GPU full (the shim at 5120x2880), from a drawable's
+	 * acquisition to its present's end 5.7 ms where the old loop took 4.6,
+	 * and the drawables came back that much later
+	 * (docs/runbook/FIX68.md). So the frame begins only once a second slot
+	 * of the semaphore is free too, given back at once.
+	 */
+	if (mgl_present_apart() && (dispatch_semaphore_wait(mgl_frame_sem, mgl_deadline(MGL_FRAME_WAIT_MS)) == 0))
+	{
+		dispatch_semaphore_signal(mgl_frame_sem);
+	}
+
 	@autoreleasepool
 	{
 		int w = 0, h = 0;
