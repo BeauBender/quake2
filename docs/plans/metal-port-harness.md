@@ -321,3 +321,4 @@ render-stage ray queries and the performance numbers.
 - [TASK122](../runbook/TASK122.md): Particle size cap relative to the resolution in `ref_metal`
 - [TASK131](../runbook/TASK131.md): The dynamic-light shadow pass finds each pixel's surface without an eye ray
 - [TASK132](../runbook/TASK132.md): `soft`'s window captured opaque and not opaque
+- [TASK157](../runbook/TASK157.md): the AO pass within its GPU-time share
