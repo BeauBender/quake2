@@ -15,6 +15,7 @@ passed with --other and is compared by its numbers only (its crops are never rea
 """
 import argparse
 import base64
+import fcntl
 import html
 import os
 import pty
@@ -446,6 +447,7 @@ class CfgGuard:
         self.saved = self.path + ".mfx-saved"
         self.held = False
         self.recovered = False
+        self.kept = None
 
     def _remove(self, p):
         try:
@@ -457,8 +459,18 @@ class CfgGuard:
         os.unlink(p)
 
     def hold(self):
-        if os.path.lexists(self.saved):  # a run that was killed left the owner's file here
-            self._remove(self.path)
+        # cmd_run holds the run locks, so a .mfx-saved here belongs to a run that was killed
+        if os.path.lexists(self.saved):
+            if os.path.lexists(self.path):
+                # the owner played after the kill: that newer file is kept under a new name, never deleted
+                if os.path.isdir(self.path) and not os.path.islink(self.path):
+                    raise Refuse("%s is a directory" % self.path)
+                n, newer = 0, self.path + ".mfx-newer"
+                while os.path.lexists(newer):
+                    n += 1
+                    newer = "%s.mfx-newer.%d" % (self.path, n)
+                os.rename(self.path, newer)
+                self.kept = newer
             os.rename(self.saved, self.path)
             self.recovered = True
         if os.path.lexists(self.path):
@@ -831,6 +843,22 @@ def probe_options(ctx, options, rows, work):
     return ok_opts, skipped
 
 
+def take_lock(path, what):
+    """A non-blocking exclusive flock on the directory at path; returns its fd. The lock is on a
+    directory, so no lock file exists to be left in a checkout. A lock that is held, or cannot be
+    taken, is a refusal. The fd is not inherited by the engine or pins.sh."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError as e:
+        raise Refuse("cannot open %s to lock %s: %s" % (path, what, e))
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        os.close(fd)
+        raise Refuse("another run holds %s (%s), or it cannot be locked (%s): one run per %s at a time" % (what, path, e, what))
+    return fd
+
+
 def cmd_run(a):
     ctx = Ctx()
     out = check_out_path(a.out)
@@ -863,6 +891,24 @@ def cmd_run(a):
         ctx.build_note = "not checked: " + why
         print("metalfx-report: the build of %s is not checked for freshness (%s); its commit is recorded as unknown" % (ctx.bin, why),
               file=sys.stderr)
+    # one run per engine binary directory (its config.cfg is held aside) and one per checkout's scenarios
+    # folder (the scratch scenarios); held until the finally has put the config back
+    bindir = os.path.join(os.path.dirname(os.path.abspath(ctx.bin)), "baseq2")
+    try:
+        os.makedirs(bindir, exist_ok=True)
+    except OSError as e:
+        raise Refuse("cannot create %s: %s" % (bindir, e))
+    fds = []
+    try:
+        fds.append(take_lock(bindir, "the engine binary directory"))
+        fds.append(take_lock(ctx.pins_scen_dir, "the scenarios folder of this checkout"))
+        return _cmd_run_locked(a, ctx, out)
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+def _cmd_run_locked(a, ctx, out):
     clear_scratch_cfgs(ctx.pins_scen_dir)
     host = a.host
     if not re.match(r"^[a-z0-9][a-z0-9-]*$", host):
@@ -884,6 +930,8 @@ def cmd_run(a):
         ctx.cfg.hold()
         if ctx.cfg.recovered:
             print("metalfx-report: the owner's config.cfg of an earlier killed run was put back from " + ctx.cfg.saved, file=sys.stderr)
+        if ctx.cfg.kept:
+            print("metalfx-report: a newer config.cfg was there as well; it is kept as %s, and the saved one is now %s" % (ctx.cfg.kept, ctx.cfg.path), file=sys.stderr)
         return _run(a, ctx, rdir, work, host, date, errors)
     finally:
         try:
