@@ -141,6 +141,20 @@ TEST(touch_past_the_radius_is_full_deflection_never_beyond_the_range)
 	T_CHECK((double)axes[TOUCH_AXIS_LEFTX] * axes[TOUCH_AXIS_LEFTX] * 2.0 <= 32768.0 * 32768.0);
 }
 
+TEST(touch_stick_radius_is_a_thumb_sized_share_of_the_short_side)
+{
+	int s;
+
+	for (s = 0; s < NSCREENS; s++)
+	{
+		touch_layout_t l;
+		const float u = screens[s].w < screens[s].h ? screens[s].w : screens[s].h;
+
+		Touch_MakeLayout(&l, screens[s], 1.0f, 0);
+		T_CHECK(l.radius >= 0.15f * u && l.radius <= 0.2f * u);
+	}
+}
+
 TEST(touch_two_fingers_move_the_two_sticks_independently)
 {
 	int axes[TOUCH_NUM_AXES];
