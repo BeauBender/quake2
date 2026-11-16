@@ -33,15 +33,29 @@
 #     outer holder (a host's own wrapper) passes straight through as well;
 #     a gate that finds the lock held by another job waits, gives up with
 #     75 and runs nothing; the caller's LC_ALL, set or unset, reaches the
-#     heavy part, though bench.sh sets it to C.
+#     heavy part, though bench.sh sets it to C; the run under the lock has
+#     one watcher of its lock shell, which leads a process group of its own
+#     and is gone once the gate has returned;
+#   - t_kgrp, with the real bench core: a KILL to the gate's process group
+#     (it reaches the lock shell alone) while a check runs ends that check
+#     and the scheduler, runs no make and says why; one during a make ends
+#     the make, and the other never runs; the lock is free or stale after;
+#   - t_grace, with the real bench core: a TERM to the lock shell, with
+#     BENCH_STOP_GRACE=1 and a check that ignores TERM, leaves nothing the
+#     gate started running once the lock shell has exited, and the lock
+#     free; the run under the lock sees the caller's BENCH_STOP_GRACE.
 # Every pid the tests start is taken off the cleanup list once it has been
-# waited for, so the list is empty after them. Then one mutant per lock call
-# (each removing it from a copy of its entry point) and more: the run under
-# the lock taking the lock again (the gate, pins.sh), a BENCH_LOCK_ENTRY
-# without a token taken as a hold, an unset LC_ALL not restored (the gate,
-# coverage), and, for each of the three, no state directory taking the
-# lock, CI=true alone turning it off and a silent lock-off; each must fail
-# the test that targets it.
+# waited for, so the list is empty after them; what a failing t_kgrp leaves
+# running is stopped by pid, after a check of its command line. Then one
+# mutant per lock call (each removing it from a copy of its entry point)
+# and more: the run under the lock taking the lock again (the gate,
+# pins.sh), a BENCH_LOCK_ENTRY without a token taken as a hold, an unset
+# LC_ALL not restored (the gate, coverage), GATE_PARENT naming the lock
+# shell, no watcher, a watcher that stops the run alone and not its group,
+# the lock shell's BENCH_STOP_GRACE not raised and the caller's not given
+# back, and, for each of the three, no state directory taking the lock,
+# CI=true alone turning it off and a silent lock-off; each must fail the
+# test that targets it.
 #
 # Usage: tests/check-bench-entry.sh [<test>...]   (named tests only, no mutants)
 set -eu
@@ -371,6 +385,10 @@ printf 'check token=%s entry=%s lc=%s\n' "${BENCH_LOCK_TOKEN:+set}" "${BENCH_LOC
 _sp=$(ps -o ppid= -p "$PPID" | tr -d ' ')
 printf 'sched-parent=%s\n' "$(ps -o args= -p "$_sp")" >> "$LOG"
 printf 'sched-grandparent=%s\n' "$(ps -o args= -p "$(ps -o ppid= -p "$_sp" | tr -d ' ')")" >> "$LOG"
+# the children of the run under the lock beside the scheduler (pid:group),
+# and the groups of this check and of the scheduler
+printf 'kids=%s\n' "$(ps -A -o pid= -o ppid= -o pgid= | awk -v p="$_sp" -v s="$PPID" '$2 == p && $1 != s { printf "%s:%s ", $1, $3 }')" >> "$LOG"
+printf 'groups=%s:%s\n' "$(ps -o pgid= -p "$$" | tr -d ' ')" "$(ps -o pgid= -p "$PPID" | tr -d ' ')" >> "$LOG"
 sh scripts/bench/bench.sh lock status >> "$LOG"
 st=0
 /bin/bash scripts/pins.sh selftest no-such-case >> "$LOG" 2>&1 || st=$?
@@ -394,6 +412,22 @@ EOF
 	grep -qx "sched-parent=sh ${T:?}/scripts/test.sh" "${LOG:?}" &&
 		grep -q '^sched-grandparent=sh scripts/bench/bench.sh lock run gate -- env ' "${LOG:?}" ||
 		bad "nested: the scheduler was not started by the run of test.sh under the lock; $(say)"
+	# Its one other child is the watcher of its lock shell: the leader of a
+	# process group of its own (no check's, not the scheduler's), and gone
+	# once the gate has returned.
+	_wk=$(sed -n 's/^kids=//p' "${LOG:?}")
+	# shellcheck disable=SC2086 # a list of pid:group words
+	set -- $_wk
+	if [ "$#" -ne 1 ]; then
+		bad "nested: the run under the lock has not one watcher beside its scheduler ($_wk); $(say)"
+	else
+		_wp=${1%%:*}
+		case ":$(sed -n 's/^groups=//p' "${LOG:?}"):" in
+		*":${1#*:}:"*) bad "nested: the watcher shares a process group with a check or the scheduler; $(say)" ;;
+		esac
+		[ "${1#*:}" = "$_wp" ] || bad "nested: the watcher does not lead a process group of its own; $(say)"
+		! pid_running "$_wp" || bad "nested: the watcher (pid $_wp) outlived the gate"
+	fi
 	grep -qx 'pins status=1' "${LOG:?}" && grep -q '^pins: cannot build framediff' "${LOG:?}" ||
 		bad "nested: the pin selftest under the gate did not pass straight through to its command; $(say)"
 	grep -q 'waiting for the lock' "${LOG:?}" "${T:?}/out" && bad "nested: a call under the gate waited for the lock; $(say)"
@@ -473,17 +507,17 @@ lock_down() {
 	esac
 	return 1
 }
-# stray_stop <pid> <text> [group]: what a failed test left running is
-# ended, so that it does not outlive this check: TERM to <pid> (with
-# "group", to the process group it leads), only while it runs, its command
-# line holds <text> and the group is not this check's own; then up to 15 s
-# for it to go.
+# stray_stop <pid> <text> [<group>]: what a failed test left running is
+# ended, so that it does not outlive this check: TERM to <pid> (to the
+# process group <group> when given, which must be <pid>'s and not this
+# check's own), only while <pid> runs and its command line holds <text>;
+# then up to 15 s for it to go.
 stray_stop() {
 	pid_running "$1" || return 0
 	case $(ps -o args= -p "$1" 2> /dev/null) in *"$2"*) ;; *) return 0 ;; esac
-	if [ "${3:-}" = group ]; then
-		[ "$(ps -o pgid= -p "$1" | tr -d ' ')" = "$1" ] && [ "$1" != "$(ps -o pgid= -p "$$" | tr -d ' ')" ] || return 0
-		kill -TERM -- "-$1" 2> /dev/null || true
+	if [ -n "${3:-}" ]; then
+		[ "$(ps -o pgid= -p "$1" | tr -d ' ')" = "$3" ] && [ "$3" != "$(ps -o pgid= -p "$$" | tr -d ' ')" ] || return 0
+		kill -TERM -- "-$3" 2> /dev/null || true
 	else
 		kill -TERM "$1" 2> /dev/null || true
 	fi
@@ -546,7 +580,7 @@ EOF
 	_mp=$(sed -n 's/^make .* pid=\([0-9]*\) pgid=.*/\1/p' "${LOG:?}")
 	_mg=$(sed -n 's/^make .* pgid=\([0-9]*\)$/\1/p' "${LOG:?}")
 	if ! wait_gone 12 "${_mp:-0}"; then
-		stray_stop "${_mg:-0}" scripts/test.sh group
+		stray_stop "${_mp:-0}" mk-slow/make "${_mg:-0}"
 		bad "kgrp: a make outlived a KILL to the gate's process group under the lock; $(say)"
 	fi
 	_n=0
@@ -667,6 +701,14 @@ mutant gate-lc-lost test.sh 'else set -- -u LC_ALL "$@"; fi' 'fi' t_nested || mf
 # GATE_PARENT names the run of test.sh under the lock, not the lock shell
 # above it.
 mutant gate-parent-lock-shell test.sh 'GATE_PARENT=$$ ' 'GATE_PARENT=$PPID ' t_nested || mfail=1
+# The run under the lock watches its lock shell, and stops its whole process
+# group (a make too) when the lock shell is gone.
+mutant gate-no-watch test.sh 'sh -c "$gate_watch_sh" gate-watch' 'true' t_kgrp || mfail=1
+mutant gate-watch-pid-only test.sh 'kill -s TERM -- "-$PPID" 2> /dev/null' 'kill -s TERM "$PPID" 2> /dev/null' t_kgrp || mfail=1
+# The lock shell's grace covers the scheduler's, and the run under it gets
+# the caller's BENCH_STOP_GRACE back.
+mutant gate-grace-kept test.sh 'BENCH_STOP_GRACE=10' ':' t_grace || mfail=1
+mutant gate-grace-lost test.sh 'set -- BENCH_STOP_GRACE="$BENCH_STOP_GRACE" "$@"' ':' t_grace || mfail=1
 mutant coverage-lc-lost coverage.sh 'else set -- -u LC_ALL "$@"; fi' 'fi' t_cov_lc || mfail=1
 # With no state directory the lock is off; CI is GitHub Actions only; a
 # lock that is off says so.
