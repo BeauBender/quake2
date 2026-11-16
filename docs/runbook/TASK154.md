@@ -135,9 +135,73 @@ bench: the adapter refused the run in its preflight (status 1)
 and exited 3 before any build. `tests/check-bench-quake2.sh` makes the same refusal in the gate
 with a stubbed capability file and stand-ins for `ioreg` and `pgrep`.
 
-**Not measured.** The other 27 cases were validated (the check loads each, and its settings and
-requires), not run: the card's brief asked for one reproduction per family at three runs a case,
-to keep the engine time modest.
+**Every case measured.** All 32 cases have a stored baseline, on the same host class (token
+`h-e159846095d1`, an Apple M6 with a physical GPU, a 60 Hz display), each run through `bench.sh
+baseline put` inside `heavy.sh`, one lock hold a case, three runs a case after one warm-up, on
+2026-11-16 from 07:01 to 07:31 UTC (the 27 cases added after the first five). Each family used the
+commit of its reproduction above: `d7cef009` for the presents, `96b9c661` for the shadow pass,
+`27cdcf83` for the AO pass and `c9ecf7d7` for the scaler. No case failed or refused, and none
+needed a fix. (Two cases keep an older hash directory beside the one listed, the first
+batches of the shadow and scaler reproductions above.) Paths are relative to `<artifacts>`. The metric is the one the case names (`fps`,
+`rts_ms`, `rtao_ms`, `scaler_ms`); a result is cited as `<host class>, <case>, <inputs>`.
+
+| Case | Commit | Range (median) | Stored result |
+|---|---|---|---|
+| `metalfx-scaler-1920x1080-spatial-0.34` | `c9ecf7d7` | 0.718 to 0.718 ms (0.718) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-95c413d78233/metalfx-scaler-1920x1080-spatial-0.34/c-7326a4079281` |
+| `metalfx-scaler-1920x1080-spatial-0.5` | `c9ecf7d7` | 0.741 to 0.741 ms (0.741) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-95c413d78233/metalfx-scaler-1920x1080-spatial-0.5/c-83e3231051bd bench-store/h-e159846095d1/i-95c413d78233/metalfx-scaler-1920x1080-spatial-0.5/c-976a3154a66d` |
+| `metalfx-scaler-1920x1080-spatial-0.75` | `c9ecf7d7` | 0.797 to 0.797 ms (0.797) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-95c413d78233/metalfx-scaler-1920x1080-spatial-0.75/c-263f767f8a2a` |
+| `metalfx-scaler-1920x1080-temporal-0.34` | `c9ecf7d7` | 0.704 to 0.706 ms (0.704) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-95c413d78233/metalfx-scaler-1920x1080-temporal-0.34/c-b1a8640a15eb` |
+| `metalfx-scaler-1920x1080-temporal-0.5` | `c9ecf7d7` | 0.689 to 0.691 ms (0.691) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-95c413d78233/metalfx-scaler-1920x1080-temporal-0.5/c-bbd867813852` |
+| `metalfx-scaler-1920x1080-temporal-0.75` | `c9ecf7d7` | 0.787 to 0.79 ms (0.788) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-95c413d78233/metalfx-scaler-1920x1080-temporal-0.75/c-f2c10397d565` |
+| `metalfx-scaler-5120x2880-spatial-0.34` | `c9ecf7d7` | 2.96 to 3.01 ms (3.001) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-95c413d78233/metalfx-scaler-5120x2880-spatial-0.34/c-d23ee4b2dcab` |
+| `metalfx-scaler-5120x2880-spatial-0.5` | `c9ecf7d7` | 3.02 to 3.045 ms (3.044) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-95c413d78233/metalfx-scaler-5120x2880-spatial-0.5/c-9bd6cfd82b8b` |
+| `metalfx-scaler-5120x2880-spatial-0.75` | `c9ecf7d7` | 3.126 to 3.156 ms (3.139) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-95c413d78233/metalfx-scaler-5120x2880-spatial-0.75/c-fe639134c0ed` |
+| `metalfx-scaler-5120x2880-temporal-0.34` | `c9ecf7d7` | 1.898 to 1.927 ms (1.912) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-95c413d78233/metalfx-scaler-5120x2880-temporal-0.34/c-c6c6767ddca2` |
+| `metalfx-scaler-5120x2880-temporal-0.5` | `c9ecf7d7` | 2.752 to 2.758 ms (2.753) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-95c413d78233/metalfx-scaler-5120x2880-temporal-0.5/c-45d17c55ac70` |
+| `metalfx-scaler-5120x2880-temporal-0.75` | `c9ecf7d7` | 3.956 to 4.022 ms (3.986) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-95c413d78233/metalfx-scaler-5120x2880-temporal-0.75/c-0cd5c2fce5cc` |
+| `present-gl1-metal-1920x1080-vsync0` | `d7cef009` | 3645.5 to 5103.7 fps (4175.8) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-0b81d221c522/present-gl1-metal-1920x1080-vsync0/c-a6b53a2b6f59` |
+| `present-gl1-metal-1920x1080-vsync1` | `d7cef009` | 60.2 to 60.2 fps (60.2) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-0b81d221c522/present-gl1-metal-1920x1080-vsync1/c-7941888ce5d6` |
+| `present-gl1-metal-5120x2880-vsync0` | `d7cef009` | 619 to 628.6 fps (624.1) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-0b81d221c522/present-gl1-metal-5120x2880-vsync0/c-b00551d2c46c` |
+| `present-gl1-metal-5120x2880-vsync1` | `d7cef009` | 60.2 to 60.2 fps (60.2) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-0b81d221c522/present-gl1-metal-5120x2880-vsync1/c-7c84a8f65ccb` |
+| `present-gl1-metal-640x480-vsync0` | `d7cef009` | 6043.9 to 6207.2 fps (6097.3) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-0b81d221c522/present-gl1-metal-640x480-vsync0/c-f6d80ce46cf9` |
+| `present-gl1-metal-640x480-vsync1` | `d7cef009` | 60.2 to 60.2 fps (60.2) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-0b81d221c522/present-gl1-metal-640x480-vsync1/c-d5a436784b28` |
+| `present-metal-1920x1080-vsync0` | `d7cef009` | 7252.6 to 7655.6 fps (7329.8) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-3456a9224df4/present-metal-1920x1080-vsync0/c-b866b78c817b` |
+| `present-metal-1920x1080-vsync1` | `d7cef009` | 60 to 60 fps (60) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-3456a9224df4/present-metal-1920x1080-vsync1/c-6692016b2b4c` |
+| `present-metal-5120x2880-vsync0` | `d7cef009` | 1794.3 to 1837.3 fps (1813.2) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-3456a9224df4/present-metal-5120x2880-vsync0/c-dfa98b265aee` |
+| `present-metal-5120x2880-vsync1` | `d7cef009` | 60 to 60 fps (60) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-3456a9224df4/present-metal-5120x2880-vsync1/c-cad4c6597e35` |
+| `present-metal-640x480-vsync0` | `d7cef009` | 7329.8 to 8402.4 fps (7829.5) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-3456a9224df4/present-metal-640x480-vsync0/c-de4aff6a1c52` |
+| `present-metal-640x480-vsync1` | `d7cef009` | 60 to 60 fps (60) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-3456a9224df4/present-metal-640x480-vsync1/c-eb279c0a5cad` |
+| `rt-ao-gpu-1920x1080-entities` | `27cdcf83` | 3.695 to 3.702 ms (3.699) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-0160a5665bf6/rt-ao-gpu-1920x1080-entities/c-c7a4ae203cc1` |
+| `rt-ao-gpu-1920x1080` | `27cdcf83` | 3.655 to 3.66 ms (3.656) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-ae5c4fb6991c/rt-ao-gpu-1920x1080/c-bd69c7347b0b` |
+| `rt-ao-gpu-5120x2880-entities` | `27cdcf83` | 9.823 to 9.965 ms (9.908) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-0160a5665bf6/rt-ao-gpu-5120x2880-entities/c-7dd83ea53624` |
+| `rt-ao-gpu-5120x2880` | `27cdcf83` | 9.8315 to 9.9435 ms (9.8405) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-ae5c4fb6991c/rt-ao-gpu-5120x2880/c-182347510b0e` |
+| `rt-shadows-gpu-1920x1080-entities` | `96b9c661` | 1.765 to 1.777 ms (1.776) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-17fea350c5a3/rt-shadows-gpu-1920x1080-entities/c-29053b54f775` |
+| `rt-shadows-gpu-1920x1080` | `96b9c661` | 1.677 to 1.682 ms (1.682) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-8dbe10b9a0c0/rt-shadows-gpu-1920x1080/c-58bacfe95325 bench-store/h-e159846095d1/i-8dbe10b9a0c0/rt-shadows-gpu-1920x1080/c-a1e761cde258` |
+| `rt-shadows-gpu-5120x2880-entities` | `96b9c661` | 6.506 to 6.978 ms (6.924) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-17fea350c5a3/rt-shadows-gpu-5120x2880-entities/c-afcdadd3f958` |
+| `rt-shadows-gpu-5120x2880` | `96b9c661` | 6.776 to 6.849 ms (6.822) | `<artifacts>/TASK154/bench-store/h-e159846095d1/i-8dbe10b9a0c0/rt-shadows-gpu-5120x2880/c-907568ecc2ae` |
+
+Reading the numbers:
+
+- **`vsync1` presents** read 60 frames a second (the gl1 shim 60.2) at every size: with display
+  sync on the timedemo is paced by the display, so these cells record that the renderer keeps up
+  at 60 Hz (no drawable-less frames, every frame presented) and cannot show a regression in its
+  cost. The `vsync0` cells carry the cost. Their ordering is the plausible one: the rate falls
+  with the pixel count (7,830, 7,330 and 1,813 for `ref_metal`; 6,097, 4,176 and 624 for the
+  shim), and `ref_metal` is ahead of the shim at every size.
+- **5120x2880 `ref_metal` and shim presents** have many frames without a drawable (3,710 of
+  6,956 for the shim, 9,985 of 13,776 for `ref_metal`): the rendered rate there counts frames
+  the display never received. The presented count over the run is the other half
+  of the cell.
+- **Ray-traced cases.** The 5120x2880 shadow pass costs about four times the 1920x1080 one
+  (6.8 against 1.7 ms) and the AO pass about 2.7 times (9.8 against 3.7 ms). The entities scenes
+  cost a little more (shadows 1.78 and 6.92 ms, AO 3.70 and 9.91 ms). The widest spread is
+  `rt-shadows-gpu-5120x2880-entities`, 6.506 to 6.978 ms, 7 percent between runs (the median is
+  near the top of it).
+- **Scaler cases.** At 1920x1080 the cost is flat near 0.7 to 0.8 ms and falls a little with the
+  scale; at 5120x2880 the spatial scaler costs 3.0 to 3.1 ms at any scale, and the temporal
+  scaler costs more at 0.75 (3.99 ms) and less at 0.5 and 0.34 (2.75 and 1.91 ms), the shape
+  TASK111 reported (the cost falls with the scale, the temporal scaler costs more at 0.75),
+  at a different absolute level, as the MetalFX paragraph above explains.
 
 ## Checks
 
