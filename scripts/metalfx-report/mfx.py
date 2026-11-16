@@ -17,7 +17,9 @@ import argparse
 import base64
 import html
 import os
+import pty
 import re
+import select
 import shutil
 import stat
 import struct
@@ -402,22 +404,44 @@ def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=Tr
     if debug:
         env["MTL_DEBUG_LAYER"] = "1"
     env.update(extra_env or {})
-    with open(log, "wb") as f:
-        p = subprocess.Popen([ctx.bin] + args, cwd=ROOT, env=env, stdout=f, stderr=subprocess.STDOUT)
+    # The engine's console goes through a pseudo-terminal: written to a file its stdio is fully
+    # buffered and the timedemo line would appear only at exit.
+    master, slave = pty.openpty()
+    buf = bytearray()
+    status, why = None, None
+    try:
+        p = subprocess.Popen([ctx.bin] + args, cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=slave,
+                             stderr=slave, close_fds=True)
+        os.close(slave)
+        slave = -1
         t0 = time.time()
-        status, why = None, None
+        matched_at = None
         while True:
-            time.sleep(0.2)
+            r, _, _ = select.select([master], [], [], 0.2)
+            if r:
+                try:
+                    data = os.read(master, 65536)
+                except OSError:
+                    data = b""  # the engine closed its side
+                if data:
+                    buf += data
             rc = p.poll()
             if rc is not None:
                 status = rc
+                try:  # what is left in the pipe
+                    while select.select([master], [], [], 0.2)[0]:
+                        data = os.read(master, 65536)
+                        if not data:
+                            break
+                        buf += data
+                except OSError:
+                    pass
                 break
-            if until:
-                with open(log, "rb") as r:
-                    if re.search(until, r.read().decode("utf-8", "replace")):
-                        time.sleep(0.6)
-                        why = "ended"
-                        break
+            if until and matched_at is None and re.search(until, buf.decode("utf-8", "replace")):
+                matched_at = time.time()
+            if matched_at is not None and time.time() - matched_at > 0.8:
+                why = "ended"
+                break
             if time.time() - t0 > timeout:
                 why = "timeout"
                 break
@@ -428,6 +452,12 @@ def run_engine(ctx, args, log, until=None, timeout=120, extra_env=None, debug=Tr
             except subprocess.TimeoutExpired:
                 p.kill()
                 p.wait()
+    finally:
+        if slave >= 0:
+            os.close(slave)
+        os.close(master)
+        with open(log, "wb") as f:
+            f.write(bytes(buf).replace(b"\r\n", b"\n"))
     if why == "timeout":
         raise RuntimeError("engine run timed out after %ds (%s)" % (timeout, log))
     return status
