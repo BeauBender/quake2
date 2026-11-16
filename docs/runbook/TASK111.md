@@ -182,3 +182,81 @@ scaler is new to this card on real hardware: the VM could not run it.
 - *Frame generation* (`r_metalfx_interp 1`) is not built: it reads 0 with `r_metalfx_interp
   1 has no frame generation in this build, it reads 0`. Its acceptance items wait for the
   card that builds it.
+
+## The scaler's GPU time per mode and scale on the M6 (the card's T2 item)
+
+Measured at engine commit `c9ecf7d7` (`origin/main`; only this file changes after it), on the
+bare-metal Apple M6 (12-core GPU), macOS 27.2.1, release build, Metal validation layer off
+(`MTL_DEBUG_LAYER` unset: the layer's cost is not part of a timing). Logs and the analysis
+script are in `<artifacts>/TASK111/gputime/`.
+
+**Method.** One run is one engine start of `+demomap demo1.dm2` at the pace the engine sets
+(`timedemo 0`, vsync), about 14 s, ended by SIGTERM (the teardown still runs), with the
+`world` scenario's settings (`viewsize 100`, no entities, particles, lights, blend, gun or
+crosshair), `r_metalfx <m>`, `r_metalfx_scale <k>` and `metal_stats 2`. `metal_stats 2` prints
+the line on every scaled view, where 1 prints one in 60 (`RM_FX_STATS_EVERY`); both turn the
+timing on, and the figure is the same `scaler <t> ms` field. The first 60 lines of a run are
+skipped, which leaves 578 to 722 timed views per run (the `not timed` line of a first view
+is never counted). Each run took the timing lock, with no other `quake2` running and the
+screen unlocked; the runs were alternated (round 1, 2, 3 over every cell, never three in a row
+of one cell). Three runs per cell, and five for the three spatial 5K cells, whose runs split in
+two groups (below). 1080 is windowed at 1920 x 1080 with `vid_highdpiaware 0`; 5K is
+fullscreen at 5120 x 2880 with `vid_highdpiaware 1`, the display's native size.
+
+**Load.** `vm.loadavg` (1 minute) read 2.1 to 7.0 before or after a run, mostly 2.2 to 4.4:
+other lanes' builds and engine runs shared the host, so this is not an idle window. The
+timing lock only kept the engine runs apart. Read the table as a range on a busy host.
+
+The columns: the median of the three (five) run medians with the range of the run medians in
+brackets; the median of the run 90th percentiles with its range; the smallest and largest
+line of all the runs; the runs; the 1-minute load average across them. Times are in ms.
+
+| Output | `r_metalfx` | Scale | Input | Median (run range) | p90 (run range) | Min to max | Runs | Load |
+|---|---|---|---|---|---|---|---|---|
+| 1920x1080 | 1 spatial | 0.75 | 1440x810 | 0.92 (0.91 to 0.92) | 1.02 (1.02 to 1.03) | 0.79 to 1.88 | 3 | 2.2 to 3.4 |
+| 1920x1080 | 1 spatial | 0.5 | 960x540 | 0.83 (0.80 to 0.84) | 0.89 (0.88 to 0.90) | 0.72 to 1.80 | 3 | 2.5 to 3.4 |
+| 1920x1080 | 1 spatial | 0.34 | 653x368 | 0.81 (0.81 to 0.81) | 0.86 (0.86 to 0.86) | 0.71 to 1.40 | 3 | 2.2 to 5.3 |
+| 1920x1080 | 2 temporal | 0.75 | 1440x810 | 1.43 (1.42 to 1.43) | 1.50 (1.49 to 1.53) | 1.01 to 2.51 | 3 | 2.4 to 5.1 |
+| 1920x1080 | 2 temporal | 0.5 | 960x540 | 0.98 (0.98 to 0.98) | 1.05 (1.04 to 1.05) | 0.82 to 1.83 | 3 | 2.4 to 5.3 |
+| 1920x1080 | 2 temporal | 0.34 | 653x368 | 0.80 (0.79 to 0.80) | 0.84 (0.84 to 0.85) | 0.69 to 1.51 | 3 | 2.2 to 4.4 |
+| 1920x1080 | 3 (runs as 2) | 0.75 | 1440x810 | 1.41 (1.24 to 1.43) | 1.50 (1.39 to 1.52) | 1.00 to 2.15 | 3 | 2.2 to 3.8 |
+| 1920x1080 | 3 (runs as 2) | 0.5 | 960x540 | 0.97 (0.88 to 0.98) | 1.04 (0.91 to 1.04) | 0.82 to 1.77 | 3 | 2.2 to 4.0 |
+| 1920x1080 | 3 (runs as 2) | 0.34 | 653x368 | 0.78 (0.75 to 0.79) | 0.83 (0.83 to 0.84) | 0.68 to 1.46 | 3 | 2.2 to 3.8 |
+| 5120x2880 | 1 spatial | 0.75 | 3840x2160 | 5.60 (1.65 to 6.55) | 7.21 (1.70 to 7.27) | 1.64 to 7.59 | 5 | 2.2 to 4.3 |
+| 5120x2880 | 1 spatial | 0.5 | 2560x1440 | 5.08 (4.91 to 6.20) | 6.70 (5.33 to 6.92) | 1.52 to 7.29 | 5 | 2.1 to 3.4 |
+| 5120x2880 | 1 spatial | 0.34 | 1741x980 | 4.98 (4.93 to 6.06) | 6.72 (6.71 to 6.76) | 3.51 to 7.18 | 5 | 2.1 to 4.3 |
+| 5120x2880 | 2 temporal | 0.75 | 3840x2160 | 5.46 (5.30 to 5.47) | 5.82 (5.70 to 5.83) | 4.29 to 6.70 | 3 | 2.3 to 7.0 |
+| 5120x2880 | 2 temporal | 0.5 | 2560x1440 | 5.02 (4.80 to 5.04) | 5.15 (5.13 to 5.18) | 4.17 to 5.68 | 3 | 2.3 to 7.0 |
+| 5120x2880 | 2 temporal | 0.34 | 1741x980 | 4.99 (4.94 to 4.99) | 5.09 (5.04 to 5.10) | 2.26 to 5.34 | 3 | 2.2 to 6.3 |
+| 5120x2880 | 3 (runs as 2) | 0.75 | 3840x2160 | 5.43 (5.30 to 5.43) | 5.78 (5.53 to 5.81) | 4.52 to 6.57 | 3 | 2.2 to 4.8 |
+| 5120x2880 | 3 (runs as 2) | 0.5 | 2560x1440 | 4.99 (4.96 to 5.02) | 5.14 (5.14 to 5.15) | 4.16 to 5.90 | 3 | 2.2 to 5.6 |
+| 5120x2880 | 3 (runs as 2) | 0.34 | 1741x980 | 4.81 (3.60 to 4.96) | 5.04 (4.87 to 5.11) | 2.19 to 5.29 | 3 | 2.2 to 4.3 |
+
+Every run: no failed command buffer in any stats line, and no validation text (the layer was
+off). `r_metalfx 3` printed `r_metalfx 3 (temporal denoised) runs without a ray-traced effect
+as 2 (temporal)` once and reported `metalfx temporal`: no ray-traced effect exists yet, so
+the mode 3 rows are the temporal scaler again, and their differences from mode 2 are the
+noise of the run (compare `0.97` and `0.98`).
+
+**What the figures say.**
+
+- At 1920 x 1080 the pass takes 0.7 to 1.5 ms, repeatable to a few percent between runs. It
+  falls with the scale, where the input is smaller: the spatial scaler from 0.92 ms at 0.75 to
+  0.81 ms at 0.34, the temporal one from 1.43 to 0.80 ms. The temporal scaler costs more than
+  the spatial one at the larger inputs (1.43 against 0.92 ms at 0.75) and about the same at 0.34.
+- At 5120 x 2880 the pass takes about 5 ms, and the scale matters little (5.46, 5.02 and 4.99
+  ms for the temporal scaler): the cost is set by the output size, not the input. At 60 Hz a
+  frame is 16.7 ms, so the scaler is about a third of it at the native 5K size. This is the
+  number to weigh against the saving in the world draw at the smaller input.
+- The spatial 5K runs are not repeatable: they fall in two groups, run medians of 1.65 ms (one
+  run of 0.75) and 4.9 to 6.6 ms (the others), with the p90 at 6.7 to 7.3 ms. The temporal
+  runs are tight (p90 within 0.1 ms between runs). The 1.65 ms run was in a lighter-loaded
+  stretch (load 2.4), but runs of the same load gave 5 ms, so the cause is not established:
+  GPU clock changes and the other lanes' GPU work are both candidates. The upper group is the
+  figure to plan with, the 1.65 ms group is what the pass can reach when the GPU is not
+  shared or throttled.
+- The temporal 0.34 row at 5K has a smaller lower end (2.26 ms), and one mode 3 run has a
+  median of 3.60 ms: the same effect, seen less often.
+
+This item is done for the M6. The M1-family Mac still needs the same table: run the same
+script on its host (the timing there is likely to differ more than the modes do).
