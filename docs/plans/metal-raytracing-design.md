@@ -200,6 +200,34 @@ time follows the rays that meet an occluder (about 0.9 ms of it). The split betw
 the noise and the copy was not measured (runbook, rework 1). `timedemo` reads the display's 60
 fps at 1080p with the effect on and off.
 
+TASK157 profiled the pass and cut it ([TASK157](../runbook/TASK157.md)). Most of the 1080p
+time TASK57 measured is the GPU's clock, not the work: the cost scenario holds the frame to the
+display's 60 Hz, the GPU idles between frames and runs the pass at a low level. With the frame
+rate not held (`r_vsync 0`, the level section 8's tables are measured at) the same pass takes
+1.11 ms at 1080p, 3.3 times less, the factor section 8 found between a process's start level and
+its later one. Where the time goes, at 1080p with the rate held (not held in brackets): the
+128-unit traversal 1.36 ms (0.43), measured as the pass with 1-unit rays; the per-pixel floor at
+the render size (the G-buffer reads, the noise, the light's copy, the rays' launches) 2.26 ms
+(0.68); the entities 0.08 ms (0.02); no denoise yet. The cuts, each a cvar
+(`doc/040_cvarlist.md`) and shown in the video menu: `r_rt_ao_scale` traces the rays at a
+reduced size, one pixel of each 2 x 2 or 3 x 3 block, and gives each world pixel the bilinear
+mean of the four traced pixels about it that lie on its own surface (the normal within about 26
+degrees, the point within 2 units plus 0.4 % of its distance of the pixel's plane); its default
+is 0.5. `r_rt_ao_rays` 1 traces one ray a pixel; `r_rt_ao_range` is kept at 128. Scale 1 is
+TASK57's pass and look, frame for frame. On the M6 at the defaults, three runs a case:
+
+- 1920 x 1080: 2.10 ms held (from 3.62), inside the AO's share of 1.4 to 2.4 ms above; 0.63 ms
+  not held (from 1.11), under the share and under section 8's 1.75 ms for two rays on every
+  pixel. `r_rt_ao_scale 1/3` takes 1.62 ms (0.48), one ray at scale 1 2.24 ms (0.67);
+- 5120 x 2880 with MetalFX (the default 1080-line input): 3.19 ms held (from 3.77), 0.69 ms not
+  held (from 1.34), against 2.13 ms for the AO at 1080 traced rows in the primary cell (the
+  options' tables below);
+- 5120 x 2880 native: 8.26 ms held (from 9.79), 4.62 ms not held (from 7.84).
+
+The frame-level floor check passes on all 247 frames of the AO records, effect off is main's
+frames byte for byte, and against the current AO the new default changes the darkened pixels
+by about 6 levels on average (8 % of them by more than 8, 0.2 % by more than 32).
+
 ### Internal resolution and upscaling with MetalFX (TASK105)
 
 This subsection describes option A (TASK105): with a ray-traced effect
@@ -1020,6 +1048,52 @@ side-by-side report from the selectable modes of TASK111 to TASK113.
 Until then the subsection above describes A as RT11 builds it, and RT13
 builds E, so that both can be measured; neither
 is the decision, and nothing is recorded in `docs/decisions/`.
+
+### The water reflections' measured cost (RT6: TASK58, TASK158)
+
+Measured, `r_rt_water_hits 1` costs more than `0` and does not meet the reflections' share. At
+1920 x 1080 with the frame rate held to the display, the pass takes **4.66 ms** against TASK58's
+3.40 ms with water in view, and **2.06 ms** against 1.33 ms in a view with no water at all; not held,
+1.20 against 0.99 ms. So a frame without water costs more with the setting on, not close to nothing.
+GPU time of the pass, measured on the M6 over `water.dm2` (about 41 % of the pixels water)
+([TASK58](../runbook/TASK58.md), [TASK158](../runbook/TASK158.md)):
+
+| Output | `r_rt_water_hits 0` (TASK58), held / not held | `r_rt_water_hits 1` (TASK158), held / not held |
+|---|---|---|
+| 1920 x 1080 | 3.40 / 0.99 ms | 4.66 / 1.20 ms |
+| 5120 x 2880 | 9.44 / 6.78 ms | 12.24 / 18.76 ms |
+| 5120 x 2880, `r_metalfx 2` (the pass at 1080p) | 3.46 / 0.99 ms | 3.82 / 3.66 ms |
+| 1920 x 1080, a view with no water | 1.33 ms held | 2.06 ms held |
+
+The share: the reflections have no time budget of their own; their share of section 8's total by
+its proportions is the 0.88 ms of one closest-hit ray a pixel at 1080p (of 5.14 ms, so 0.68 to
+1.20 ms of the halved 4 to 7 ms), trace only. Against it: held, `0` is about four times it and `1`
+about five; not held, at the GPU's full clock, `0` is near the bound and `1` at the top of the 0.68
+to 1.20 ms range.
+
+`r_rt_water_hits` (TASK158's rework) picks the hit shading; `0`, the default, is TASK58's pass, its
+kernel verbatim, with frames byte-identical to main's and the same cost (the first column, within
+0.12 ms of main measured beside it). `1` shades a hit the picture does not show in world space (the
+face's texture and lightmap, the dynamic lights the lightmaps left out, the sky box's texel), so the
+water pixels without a reflection fall from 2.35 % (over the pool) and 8.38 % (under it) to 0, and it
+traces only the pixels a raster of the map's water marks (about 40 % of them here). Its cost is three
+passes in a row: the raster of the water, the compaction and the trace, whose spans add to the whole
+span within 0.01 ms; the second column is that sum. The raster's span in it (the start of its vertex
+stage to the end of its fragment stage) is mostly waiting: its vertex stage takes 0.01 to 0.03 ms and
+its fragment stage 0.03 to 0.8 ms, but between them the fragment stage waits for the work ahead of it
+in the frame, 1.2 ms at 1080p held and 12 ms (p90 22) at 5120 x 2880 not held, the run-to-run spread
+TASK158's first pass saw. Neither the GPU's clock (held, at the lower clock, the raster's span is
+3.25 ms) nor the raster's own work explains it.
+
+*A re-count, not a frame measurement.* Adding the raster's two stages, the compaction and the trace,
+and leaving the wait out, gives 3.42 / 0.94 ms at 1080p held / not held (9.82 / 6.46 ms at
+5120 x 2880, 3.37 / 0.95 ms with `r_metalfx 2`, 0.75 ms held in a view with no water). It shows where
+the extra time sits, not what the frame pays: the timestamps do not show whether the GPU idles in the
+wait or runs other work then, and only the frame's own GPU time settles that. The per-pass split is
+in [TASK158](../runbook/TASK158.md).
+
+The follow-up is TASK162: mark the water pixels in the G-buffer raster itself, with no pass of its
+own, no reload of the depth and no wait, so that the trace on the list is what `1` adds.
 
 ## 3. What the rasterizer must expose
 

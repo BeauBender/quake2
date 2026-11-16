@@ -297,6 +297,8 @@ which refuse a host without the capability they require).
 - [FIX58](../runbook/FIX58.md): `tests/check-pre-push-hook.sh` and a temporary directory that holds the login name
 - [FIX66](../runbook/FIX66.md): CodeQL analysis skipped for documentation-only pull requests
 - [FIX68](../runbook/FIX68.md): The shim's presented rate at 5120x2880 with display sync off
+- [FIX69](../runbook/FIX69.md): presents drained at teardown, and the shim's present wait bounded
+- [FIX77](../runbook/FIX77.md): the shim's present hold count per context, and teardown's waits under one deadline
 - [TASK21](../runbook/TASK21.md): Closing TASK21 on the build host
 - [TASK27](../runbook/TASK27.md): Closing TASK27 on the build host
 - [TASK39](../runbook/TASK39.md): Observed on the first run
@@ -339,3 +341,6 @@ which refuse a host without the capability they require).
 - [TASK132](../runbook/TASK132.md): `soft`'s window captured opaque and not opaque
 - [TASK154](../runbook/TASK154.md): The quake2 bench adapter and the first cases, each reproduced against its card
 - [TASK155](../runbook/TASK155.md): Every heavy entry point takes the bench lock itself
+- [TASK158](../runbook/TASK158.md): water reflections shaded in world space, as a setting
+- [TASK157](../runbook/TASK157.md): the AO pass within its GPU-time share
+- [FIX86](../runbook/FIX86.md): The MetalFX report's settings go through a console script, and its chunks combine

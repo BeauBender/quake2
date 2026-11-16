@@ -31,6 +31,19 @@
  *  - the frame semaphore (at most 3 frames on the GPU) is waited on for
  *    MGL_FRAME_WAIT_MS; when it times out the frame is skipped (no
  *    command buffer, clears and reads do nothing, the swap ends it);
+ *  - with display sync off the frame then waits for a second free slot
+ *    of the semaphore, bounded by MGL_FRAME_WAIT_MS too, and gives it back
+ *    at once, so at most two frames are on the GPU (FIX68). When that wait
+ *    times out the frame is not skipped: it goes on, three on the GPU, and
+ *    the frame's begin has waited up to twice MGL_FRAME_WAIT_MS. The
+ *    teardown line counts those frames and the most frames that were on
+ *    the GPU when a frame began with display sync off;
+ *  - a present apart waits on the GPU for its frame's signal of the
+ *    present slot's event; when it has not completed MGL_GPU_WAIT_MS
+ *    after its commit, a command buffer of the frame queue signals that
+ *    event (one line on stderr), so a frame whose command buffer ended in
+ *    error before its signal cannot hold the present, and its slot, for
+ *    the rest of the context (FIX69, mgl_present_bound);
  *  - nextDrawable returns nil after one second (allowsNextDrawableTimeout,
  *    for example while the window cannot be shown); the frame is then
  *    drawn into an offscreen texture of the same size, which glReadPixels
@@ -58,6 +71,7 @@
 #include <SDL3/SDL.h>
 
 #include "mgl_internal.h"
+#include "mgl_hold.h"
 
 #if !__has_feature(objc_arc)
 #error "mgl_layer.m is written for ARC: compile it with -fobjc-arc"
@@ -103,6 +117,10 @@ static id<MTLBuffer> mgl_readbuf;          /* shared, for glReadPixels */
 /* Counters, printed when the context is destroyed. */
 static unsigned long count_frames, count_no_drawable, count_skipped, count_ring_full;
 static atomic_ulong count_failed;          /* command buffers ended in error (mgl_watch) */
+static unsigned long count_present_late;   /* presents whose wait for their frame was ended at the bound (FIX69) */
+static unsigned long count_cap_late;       /* frames whose second wait with display sync off timed out (FIX68) */
+static int count_most_apart;               /* the most frames on the GPU, the new one counted, as a frame began with display sync off */
+static atomic_int mgl_on_gpu;              /* frames committed by mgl_layer_present and not yet completed */
 
 #define MGL_FRAMES_IN_FLIGHT 3
 
@@ -371,8 +389,39 @@ mgl_present_pass(id<MTLCommandBuffer> cmd, id<MTLTexture> src, id<MTLTexture> ds
  * nor is one that ends with no drawable ready (counted as without a
  * drawable). With display sync on the frame waits in nextDrawable and
  * draws into the drawable, as before, and every frame is presented.
+ *
+ * The present's wait on the GPU has a time limit (FIX69). When a present
+ * has not completed MGL_GPU_WAIT_MS after its commit (mgl_present_bound,
+ * as each frame begins), a command buffer of the frame queue signals its
+ * slot's event with the value the present waits for (mgl_present_end_wait):
+ * a frame whose command buffer ended in error before its signal would
+ * otherwise hold the present, and its slot, for the rest of the context.
+ * The slot is then held by both command buffers (mgl_hold_extend) and
+ * comes back when the last of them completes, so no later frame of the
+ * slot signals the event before that signal has run. The events stay
+ * MTLEvents: a shared event, which the CPU could signal, made the shim
+ * present 9 to 11 percent fewer frames at 5120x2880 (docs/runbook/FIX69.md).
+ *
+ * The count of a slot's holds is in an object made for each context
+ * (MGLPresentHold, mgl_hold.h) and captured by the handlers that count it
+ * down, as ref_metal's present handlers capture their rmb_present_live: a
+ * handler that completes after a teardown gave up on its slot counts down
+ * its own context's slot and signals its own context's semaphore, never
+ * the next context's (FIX77).
  */
 #define MGL_PRESENTS (MGL_FRAMES_IN_FLIGHT + 1)   /* maximumDrawableCount (mgl_layer_create), and the open frame */
+
+/* A present slot's holds and its semaphore, for one context (FIX77). */
+@interface MGLPresentHold : NSObject
+{
+@public
+	mgl_hold_t hold;
+	dispatch_semaphore_t sem;   /* the slot's mgl_present_sem */
+}
+@end
+
+@implementation MGLPresentHold
+@end
 
 static dispatch_queue_t mgl_ahead_queue;
 static os_unfair_lock mgl_ahead_lock = OS_UNFAIR_LOCK_INIT;
@@ -380,8 +429,10 @@ static id<CAMetalDrawable> mgl_ahead;   /* mgl_ahead_lock: the drawable acquired
 static int mgl_ahead_busy;              /* mgl_ahead_lock: an acquisition is on the queue */
 
 static id<MTLCommandQueue> mgl_present_queue;
-static id<MTLEvent> mgl_present_event[MGL_PRESENTS];         /* signalled only by the frame that holds the slot */
+static id<MTLEvent> mgl_present_event[MGL_PRESENTS];         /* signalled by the frame that holds the slot, or past the bound */
 static uint64_t mgl_present_value[MGL_PRESENTS];             /* the last value the slot's event was given */
+static uint64_t mgl_present_since[MGL_PRESENTS];             /* when the slot's present was committed (ns, CLOCK_UPTIME_RAW), or 0 */
+static MGLPresentHold *mgl_present_hold[MGL_PRESENTS];       /* the command buffers holding the slot after its frame (FIX77) */
 static dispatch_semaphore_t mgl_present_sem[MGL_PRESENTS];   /* 1: no frame and no present holds this slot */
 static id<MTLTexture> mgl_present_target[MGL_PRESENTS];      /* the target the slot's frame is drawn into */
 static int frame_slot = -1;                                  /* the slot the open frame holds, or -1 */
@@ -442,7 +493,81 @@ mgl_present_take(int w, int h)
 	}
 
 	frame_slot = slot;
+	mgl_present_since[slot] = 0;   /* the slot's last present has completed */
 	return mgl_present_target[slot];
+}
+
+/*
+ * A command buffer that held a slot after its frame has completed: the
+ * last of them gives the slot back (FIX69), of the context that made h
+ * (FIX77).
+ */
+static void
+mgl_present_unhold(MGLPresentHold *h)
+{
+	if (mgl_hold_release(&h->hold))
+	{
+		dispatch_semaphore_signal(h->sem);
+	}
+}
+
+/*
+ * Ends the GPU wait of slot i's present, when it has not completed: a
+ * command buffer of the frame queue signals the slot's event with the
+ * value the present waits for, and holds the slot with it (FIX69). A
+ * signal of a value the frame gave already changes nothing.
+ */
+static void
+mgl_present_end_wait(int i)
+{
+	MGLPresentHold *h = mgl_present_hold[i];
+	id<MTLEvent> ev = mgl_present_event[i];
+
+	/* holds 0: the present has completed and the slot is back (or taken again); 2: ended already */
+	if (!mgl_queue || !h || !ev || !mgl_hold_extend(&h->hold))
+	{
+		return;
+	}
+
+	@autoreleasepool
+	{
+		id<MTLCommandBuffer> cmd = [mgl_queue commandBuffer];
+
+		if (!cmd)
+		{
+			mgl_present_unhold(h);
+			return;
+		}
+
+		[cmd encodeSignalEvent:ev value:mgl_present_value[i]];
+		mgl_watch(cmd);
+		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
+			(void)b;
+			mgl_present_unhold(h);
+		}];
+		[cmd commit];
+	}
+
+	count_present_late++;
+	fprintf(stderr, "mgl: the present of slot %d has not completed after %d ms; its wait for its frame is ended\n",
+			i, MGL_GPU_WAIT_MS);
+}
+
+/* The present wait's time limit, checked as each frame begins (FIX69). */
+static void
+mgl_present_bound(void)
+{
+	uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+	int i;
+
+	for (i = 0; i < MGL_PRESENTS; i++)
+	{
+		if (mgl_present_since[i] && (now - mgl_present_since[i] >= (uint64_t)MGL_GPU_WAIT_MS * NSEC_PER_MSEC))
+		{
+			mgl_present_since[i] = 0;
+			mgl_present_end_wait(i);
+		}
+	}
 }
 
 /* Gives the open frame's present slot back, if it holds one and nothing presents it. */
@@ -507,16 +632,53 @@ mgl_ahead_take(void)
 	return d;
 }
 
+/* mgl_drop_presents' waits (mgl_hold.h) on the slots of this context. */
+static uint64_t
+mgl_drop_deadline(void *ctx)
+{
+	(void)ctx;
+	return (uint64_t)mgl_deadline(MGL_GPU_WAIT_MS);
+}
+
+static int
+mgl_drop_take(void *ctx, int i, uint64_t until)
+{
+	(void)ctx;
+	return dispatch_semaphore_wait(mgl_present_sem[i], (dispatch_time_t)until) == 0;
+}
+
+static void
+mgl_drop_give(void *ctx, int i)
+{
+	(void)ctx;
+	dispatch_semaphore_signal(mgl_present_sem[i]);
+	mgl_present_since[i] = 0;
+}
+
+static void
+mgl_drop_end_wait(void *ctx, int i)
+{
+	(void)ctx;
+	mgl_present_end_wait(i);
+}
+
 /*
  * Waits for the acquisition on the queue (bounded, as nextDrawable is) and
- * for every present slot but the open frame's (bounded, MGL_GPU_WAIT_MS
- * for them all), and drops the drawable acquired ahead and the targets.
+ * for every present slot but the open frame's, and drops the drawable
+ * acquired ahead and the targets. The waits for the slots share one
+ * deadline, MGL_GPU_WAIT_MS; the slots still held then, whose presents
+ * still wait for their frames' signals, have those waits ended (FIX69) and
+ * share one more (mgl_drop_presents, FIX77). A slot still held after that
+ * is given up on, and no later drop of the context waits for it again:
+ * teardown drops twice (mgl_layer_destroy, then mgl_release_all), and a
+ * hung GPU holds it here twice MGL_GPU_WAIT_MS at most.
  */
 static void
 mgl_ahead_drop(void)
 {
-	dispatch_time_t until = mgl_deadline(MGL_GPU_WAIT_MS);
-	int i;
+	static const mgl_drop_ops_t ops = {NULL, mgl_drop_deadline, mgl_drop_take, mgl_drop_give, mgl_drop_end_wait};
+	mgl_hold_t *holds[MGL_PRESENTS];
+	int i, lost;
 
 	if (mgl_ahead_queue)
 	{
@@ -527,19 +689,15 @@ mgl_ahead_drop(void)
 
 	for (i = 0; i < MGL_PRESENTS; i++)
 	{
-		if (!mgl_present_sem[i] || (i == frame_slot))
-		{
-			continue;
-		}
+		holds[i] = (mgl_present_sem[i] && mgl_present_hold[i]) ? &mgl_present_hold[i]->hold : NULL;
+	}
 
-		if (dispatch_semaphore_wait(mgl_present_sem[i], until) == 0)
-		{
-			dispatch_semaphore_signal(mgl_present_sem[i]);
-		}
-		else
-		{
-			fprintf(stderr, "mgl: a present is still on the GPU after %d ms\n", MGL_GPU_WAIT_MS);
-		}
+	lost = mgl_drop_presents(holds, MGL_PRESENTS, frame_slot, &ops);
+
+	if (lost)
+	{
+		fprintf(stderr, "mgl: %d present%s still on the GPU after %d ms, not waited for again\n",
+				lost, (lost == 1) ? " is" : "s are", 2 * MGL_GPU_WAIT_MS);
 	}
 
 	for (i = 0; i < MGL_PRESENTS; i++)
@@ -614,7 +772,8 @@ mgl_present_apart_begin(id<MTLCommandBuffer> frame, id<MTLTexture> src)
 static void
 mgl_present_commit(id<MTLCommandBuffer> cmd)
 {
-	dispatch_semaphore_t sem;
+	MGLPresentHold *h;
+	int slot = frame_slot;
 
 	if (!cmd)
 	{
@@ -622,15 +781,18 @@ mgl_present_commit(id<MTLCommandBuffer> cmd)
 		return;
 	}
 
-	sem = (frame_slot >= 0) ? mgl_present_sem[frame_slot] : nil;
+	h = (slot >= 0) ? mgl_present_hold[slot] : nil;
 	frame_slot = -1;
 	mgl_watch(cmd);
 
-	if (sem)
+	if (h)
 	{
+		/* the present holds the slot until it completes; the bound starts (mgl_present_bound, FIX69) */
+		mgl_hold_commit(&h->hold);
+		mgl_present_since[slot] = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
 		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 			(void)b;
-			dispatch_semaphore_signal(sem);
+			mgl_present_unhold(h);
 		}];
 	}
 
@@ -650,6 +812,8 @@ mgl_release_all(void)
 	{
 		mgl_present_event[i] = nil;
 		mgl_present_sem[i] = nil;
+		mgl_present_hold[i] = nil;   /* a handler still to come holds its own (FIX77) */
+		mgl_present_since[i] = 0;
 	}
 
 	frame_slot = -1;
@@ -775,13 +939,17 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 		{
 			mgl_present_event[i] = [mgl_device newEvent];
 			mgl_present_value[i] = 0;
-			apart = apart && (mgl_present_event[i] != nil);
+			mgl_present_since[i] = 0;
+			/* this context's own: a handler of an earlier one counts down that one's (FIX77) */
+			mgl_present_hold[i] = [[MGLPresentHold alloc] init];
+			apart = apart && (mgl_present_event[i] != nil) && (mgl_present_hold[i] != nil);
 		}
 
 		for (i = 0; (i < MGL_PRESENTS) && apart; i++)
 		{
 			mgl_present_sem[i] = dispatch_semaphore_create(0);
 			dispatch_semaphore_signal(mgl_present_sem[i]);
+			mgl_present_hold[i]->sem = mgl_present_sem[i];
 		}
 
 		/*
@@ -806,6 +974,8 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 	}
 
 	count_frames = count_no_drawable = count_skipped = count_ring_full = 0;
+	count_present_late = count_cap_late = 0;
+	count_most_apart = 0;
 	atomic_store(&count_failed, 0);
 	mgl_ready = 1;
 	return 1;
@@ -996,6 +1166,7 @@ mgl_layer_frame_begin(int *tw, int *th)
 
 	/* the uploads made since the last frame go to the GPU before it */
 	mgl_commit_uploads();
+	mgl_present_bound();   /* no present waits for its frame past the bound (FIX69) */
 
 	frame_open = 1;
 	frame_skipped = 0;
@@ -1025,11 +1196,29 @@ mgl_layer_frame_begin(int *tw, int *th)
 	 * acquisition to its present's end 5.7 ms where the old loop took 4.6,
 	 * and the drawables came back that much later
 	 * (docs/runbook/FIX68.md). So the frame begins only once a second slot
-	 * of the semaphore is free too, given back at once.
+	 * of the semaphore is free too, given back at once. When that wait
+	 * times out the frame goes on, three on the GPU; the teardown line
+	 * counts it, and the most frames on the GPU as one began (FIX69).
 	 */
-	if (mgl_present_apart() && (dispatch_semaphore_wait(mgl_frame_sem, mgl_deadline(MGL_FRAME_WAIT_MS)) == 0))
+	if (mgl_present_apart())
 	{
-		dispatch_semaphore_signal(mgl_frame_sem);
+		int n;
+
+		if (dispatch_semaphore_wait(mgl_frame_sem, mgl_deadline(MGL_FRAME_WAIT_MS)) == 0)
+		{
+			dispatch_semaphore_signal(mgl_frame_sem);
+		}
+		else
+		{
+			count_cap_late++;
+		}
+
+		n = atomic_load(&mgl_on_gpu) + 1;
+
+		if (n > count_most_apart)
+		{
+			count_most_apart = n;
+		}
 	}
 
 	@autoreleasepool
@@ -1414,8 +1603,10 @@ mgl_layer_present(void)
 			}
 
 			mgl_watch(frame_cmd);   /* first: it counts before the slot is given back */
+			atomic_fetch_add(&mgl_on_gpu, 1);
 			[frame_cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 				(void)b;
+				atomic_fetch_sub(&mgl_on_gpu, 1);   /* before the slot: a frame that takes it sees this one gone */
 				dispatch_semaphore_signal(sem);
 			}];
 			[frame_cmd commit];
@@ -1490,8 +1681,18 @@ mgl_layer_destroy(void)
 			}
 		}
 
-		fprintf(stderr, "mgl: %lu frames, %lu without a drawable, %lu skipped, %lu draws past the vertex ring\n",
-				count_frames, count_no_drawable, count_skipped, count_ring_full);
+		/*
+		 * then the presents, bounded, before the line below counts them
+		 * (FIX69). mgl_release_all drops again and waits for none: every
+		 * slot is free then, or one this drop gave up on, which it does not
+		 * wait for again (FIX77).
+		 */
+		mgl_ahead_drop();
+
+		fprintf(stderr, "mgl: %lu frames, %lu without a drawable, %lu skipped, %lu draws past the vertex ring, "
+				"%lu present waits ended; with display sync off at most %d frames on the GPU, %lu past the cap\n",
+				count_frames, count_no_drawable, count_skipped, count_ring_full, count_present_late,
+				count_most_apart, count_cap_late);
 
 		if (atomic_load(&count_failed))
 		{

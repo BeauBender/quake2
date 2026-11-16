@@ -133,3 +133,50 @@ GLimp_OwnScreenOnly(const char *driver, int *fullscreen, float *r_mode)
 	*r_mode = -2;
 	return true;
 }
+
+/*
+ * FIX76: whether to ask SDL to turn relative mouse mode on or off. An
+ * iPhone or iPad (uikit) with no mouse connected has nothing to grab: SDL
+ * refuses, so turning it on is not asked there. Turning it off is always
+ * asked (a mouse may have been taken away while it was on), and so is
+ * everything on any other driver.
+ */
+qboolean
+GLimp_RelativeMouseWanted(const char *driver, qboolean have_mouse, qboolean grab)
+{
+	if (grab && !have_mouse && driver && (strcmp(driver, "uikit") == 0))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+/*
+ * FIX76: true when the failure of a relative mouse request is to be
+ * printed: the first of a run of failures. *reported remembers that it
+ * was; a success clears it. The request is made every frame, so without
+ * this the log would take a line per frame.
+ */
+qboolean
+GLimp_RelativeMouseReport(qboolean ok, qboolean *reported)
+{
+	if (!reported)
+	{
+		return false;
+	}
+
+	if (ok)
+	{
+		*reported = false;
+		return false;
+	}
+
+	if (*reported)
+	{
+		return false;
+	}
+
+	*reported = true;
+	return true;
+}

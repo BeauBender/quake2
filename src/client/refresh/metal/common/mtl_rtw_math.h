@@ -58,6 +58,23 @@ mtl_rtw_inst_mask(unsigned mask, unsigned norefl)
 	return norefl ? mask : (mask | MTL_RTW_MASK);
 }
 
+/*
+ * TASK158: the bit of the map's instances among those reflection rays
+ * test (the world and the inline brush models: doors, plats), which alias
+ * instances do not carry. A ray of r_rt_water_hits 1 that has passed
+ * MTL_RTW_LAYERS hidden model faces is traced on with this mask alone, so
+ * it passes every alias model and meets what it would meet without them
+ * (mtl_rtw_ws_next).
+ */
+#define MTL_RTW_MASK_MAP 0x10u
+
+/* mtl_rtw_inst_mask with the map's bit: alias 1 for an alias model's instance, which never carries it */
+static inline unsigned
+mtl_rtw_inst_mask_ws(unsigned mask, unsigned norefl, unsigned alias)
+{
+	return (norefl || alias) ? mtl_rtw_inst_mask(mask, norefl) : (mtl_rtw_inst_mask(mask, norefl) | MTL_RTW_MASK_MAP);
+}
+
 /* the map's material id of an alias model's triangle (an instance with no map triangle) */
 #define MTL_RTW_MAT_ALIAS 0xffu
 
@@ -83,10 +100,31 @@ mtl_rtw_inst_mask(unsigned mask, unsigned norefl)
 #define MTL_RTW_LIT 1u      /* the lit pixel the hit is seen at */
 #define MTL_RTW_SKY 2u      /* the sky pixel in the ray's direction */
 
+/*
+ * TASK158: with MTL_RTW_LIT or MTL_RTW_SKY, the colour was shaded in world
+ * space, not read from the picture: the hit face's texture and lightmap
+ * (and the dynamic lights the lightmaps left out), or the sky box's texel
+ * in the ray's direction (mtl_rtw_choose_ws).
+ */
+#define MTL_RTW_WS 0x10u
+
 /* a pixel's class as the kernel writes it (the reflection's alpha, 8 bits): 0 not water */
 #define MTL_RTW_CLASS_WATER 0x4u   /* a water surface was found at the pixel */
 #define MTL_RTW_CLASS_TRANS 0x8u   /* in front of the raster's surface (translucent water, drawn by the forward pass) */
 #define MTL_RTW_CLASS_FROM 0x3u    /* the choice, MTL_RTW_MISS, _LIT or _SKY */
+#define MTL_RTW_CLASS_WS MTL_RTW_WS   /* the choice was shaded in world space */
+
+/*
+ * TASK158: the candidates' raster (rm_fragment_rtw_cand) writes this
+ * class byte where a water triangle lies in front of the depth; the
+ * compaction lists those pixels (and their neighbours) and the trace
+ * writes every listed pixel's class over it. It has no water bit, so a
+ * reader that met it would take the pixel as one without water.
+ */
+#define MTL_RTW_CLASS_CAND 0x80u
+
+/* TASK158: the threads of a threadgroup of the trace over the list (one pixel each) */
+#define MTL_RTW_LIST_GROUP 64u
 
 /* what an eye ray does at a face of material mat (mtl_rtw_eye_step) */
 #define MTL_RTW_EYE_WATER 0
@@ -106,10 +144,12 @@ typedef struct
 #ifdef __METAL_VERSION__
 #define MTL_RTW_FLOOR floor
 #define MTL_RTW_TRUNC trunc
+#define MTL_RTW_LOG2 log2
 #else
 #include <math.h>
 #define MTL_RTW_FLOOR floorf
 #define MTL_RTW_TRUNC truncf
+#define MTL_RTW_LOG2 log2f
 #endif
 
 static inline mtl_rtw_v3_t
@@ -361,6 +401,280 @@ mtl_rtw_choose(int hit, int on_screen, unsigned mat, float off, float dist)
 	return (off <= mtl_rtw_seen_tol(dist)) ? MTL_RTW_LIT : MTL_RTW_MISS;
 }
 
+/*
+ * TASK158: the choice with world-space shading behind the picture. The
+ * picture's colour wherever mtl_rtw_choose finds it (it is exact and
+ * cheaper: the resolve's lightmap, AO and shadowed dynamic lights); else,
+ * for a face (hit 2) that face_ok says can be shaded (a map triangle with
+ * a texture: not an alias model), the face in world space; for the sky
+ * brush or nothing met (hit 0 or 1) with sky_ok (the sky box's six
+ * images are bound), the sky box's texel in the ray's direction; else
+ * none. The world-space choices carry MTL_RTW_WS.
+ */
+static inline unsigned
+mtl_rtw_choose_ws(int hit, int on_screen, unsigned mat, float off, float dist, int face_ok, int sky_ok)
+{
+	const unsigned s = mtl_rtw_choose(hit, on_screen, mat, off, dist);
+
+	if (s != MTL_RTW_MISS)
+	{
+		return s;
+	}
+
+	if (hit == 2)
+	{
+		return face_ok ? (MTL_RTW_LIT | MTL_RTW_WS) : MTL_RTW_MISS;
+	}
+
+	return sky_ok ? (MTL_RTW_SKY | MTL_RTW_WS) : MTL_RTW_MISS;
+}
+
+/* what the reflection ray of r_rt_water_hits 1 does after a hit's choice (mtl_rtw_ws_next) */
+#define MTL_RTW_NEXT_STOP 0   /* the choice stands */
+#define MTL_RTW_NEXT_PASS 1   /* pass the model: intersect again just past it, with the same mask */
+#define MTL_RTW_NEXT_MAP 2    /* pass every model: intersect again just past it with MTL_RTW_MASK_MAP alone */
+
+/*
+ * TASK158: the reflection ray's step after the choice from (mtl_rtw_choose_ws)
+ * at its layer'th hit (0 the first) of kind hit (as mtl_rtw_choose's), alias
+ * 1 when the face is an alias model's, map 1 once the ray is traced with
+ * MTL_RTW_MASK_MAP. A model the picture does not show (off the screen or
+ * hidden) is passed: the ray goes on past it, so the reflection shows what
+ * lies behind the model and never the model's shape, as a hole or
+ * otherwise. Every other choice stands. A closed model has a front and a
+ * back face (the rays cull none), so after MTL_RTW_LAYERS model faces the
+ * ray is traced on with the map's instances alone, and ends at what it
+ * would meet without the models. Hidden brush models (doors, plats) are
+ * map faces and are shaded.
+ */
+static inline int
+mtl_rtw_ws_next(int hit, int alias, unsigned from, int layer, int map)
+{
+	if ((hit != 2) || !alias || (from != MTL_RTW_MISS) || map)
+	{
+		return MTL_RTW_NEXT_STOP;
+	}
+
+	return (layer + 1 < MTL_RTW_LAYERS) ? MTL_RTW_NEXT_PASS : MTL_RTW_NEXT_MAP;
+}
+
+/*
+ * TASK158: a map triangle's shading record, one 32-bit word a triangle of
+ * the world's index buffer (rm_rtw_shade_build): the index of its texture
+ * in the frame's table (12 bits, MTL_RTW_SHADE_NOTEX for none), its
+ * lightmap slice (8 bits, MTL_RTW_SHADE_NOLM for none) and its flags.
+ */
+#define MTL_RTW_SHADE_NOTEX 0xfffu
+#define MTL_RTW_SHADE_NOLM 0xffu
+
+/* the frame's texture table: the world's images first (at most MAX_GLTEXTURES), then the sky box's six faces */
+#define MTL_RTW_TEX_WORLD 1024u
+#define MTL_RTW_TEX_SKY MTL_RTW_TEX_WORLD
+#define MTL_RTW_TEX_COUNT (MTL_RTW_TEX_WORLD + 6u)
+
+#define MTL_RTW_SF_WARP 0x01u    /* SURF_WARP: gl1 draws it with the warp's colour, no lightmap */
+#define MTL_RTW_SF_FLOW 0x02u    /* SURF_FLOWING: its texture scrolls (rm_flow_scroll) */
+#define MTL_RTW_SF_TRANS 0x04u   /* SURF_TRANS33 or 66: drawn with the inverse intensity, no lightmap */
+#define MTL_RTW_SF_SKY 0x08u     /* SURF_SKY: never shaded as a face (the sky brush) */
+
+static inline unsigned
+mtl_rtw_shade_pack(unsigned tex, unsigned slice, unsigned flags)
+{
+	return (tex & 0xfffu) | ((slice & 0xffu) << 12) | ((flags & 0xffu) << 20);
+}
+
+static inline unsigned
+mtl_rtw_shade_tex(unsigned s)
+{
+	return s & 0xfffu;
+}
+
+static inline unsigned
+mtl_rtw_shade_slice(unsigned s)
+{
+	return (s >> 12) & 0xffu;
+}
+
+static inline unsigned
+mtl_rtw_shade_flags(unsigned s)
+{
+	return (s >> 20) & 0xffu;
+}
+
+/* 1 when a face of record s can be shaded in world space: it has a texture and is not the sky brush */
+static inline int
+mtl_rtw_shade_ok(unsigned s)
+{
+	return (mtl_rtw_shade_tex(s) < MTL_RTW_TEX_WORLD) && !(mtl_rtw_shade_flags(s) & MTL_RTW_SF_SKY);
+}
+
+/* an attribute at a triangle's hit: a at its first vertex, b and c at the others, (u, v) the hit's barycentrics */
+static inline float
+mtl_rtw_bary(float a, float b, float c, float u, float v)
+{
+	return a + (b - a) * u + (c - a) * v;
+}
+
+/*
+ * The mip level a world-space hit samples its texture at, dist units
+ * along the eye's and the reflection's paths: the footprint of a pixel
+ * there, dist x k (k = 2 / (the view's height in pixels x proj[5]), the
+ * side of a pixel one unit away), in texels of a texture at scale 1 (one
+ * texel a unit), as log2; 0 at a footprint of a texel or less or a value
+ * not finite, at most MTL_RTW_LOD_MAX.
+ */
+#define MTL_RTW_LOD_MAX 12.0f
+
+static inline float
+mtl_rtw_lod(float dist, float k)
+{
+	const float f = dist * k;
+
+	if (!(f > 1.0f))
+	{
+		return 0.0f;
+	}
+
+	return (f >= 4096.0f) ? MTL_RTW_LOD_MAX : MTL_RTW_LOG2(f);
+}
+
+/*
+ * The colour of a face shaded in world space, as the stock draw shades it
+ * (mtl_gb_resolve and the forward pass's): the texel alone with
+ * r_fullbright; a warped face, the texel times the warp's colour; a
+ * translucent one, times the inverse intensity's; any other, the texel
+ * times the light (its lightmap sample, raised by the dynamic lights the
+ * lightmaps left out; white for a face without one) with gl1's lightmap
+ * unit (env, scale). The alpha is the texel's.
+ */
+static inline mtl_rgba_t
+mtl_rtw_face_color(mtl_rgba_t albedo, mtl_rgba_t light, unsigned flags, int env, float scale, mtl_rgba_t warp,
+		mtl_rgba_t trans, int fullbright)
+{
+	if (fullbright)
+	{
+		return albedo;
+	}
+
+	if (flags & MTL_RTW_SF_WARP)
+	{
+		return mtl_world_color(warp, albedo);
+	}
+
+	if (flags & MTL_RTW_SF_TRANS)
+	{
+		return mtl_world_color(trans, albedo);
+	}
+
+	return mtl_world_lm(albedo, light, env, scale);
+}
+
+/*
+ * The sky box's face and texture coordinates in direction d (in the box's
+ * own frame: the world direction turned back by the sky's rotation), as
+ * gl1 draws the box (R_DrawSkyBox, MakeSkyVec): the face of d's largest
+ * axis (gl1's 0 to 5 of DrawSkyPolygon, the first on a tie of x with y or
+ * z, y with z), s and t from vec_to_st, mapped from -1..1 to 0..1 and
+ * held inside sky_min..sky_max (1/512 to 511/512), t turned over. 0 for a
+ * direction of no length.
+ */
+typedef struct
+{
+	int ok;
+	int face;
+	float s, t;
+} mtl_rtw_sky_t;
+
+static inline float
+mtl_rtw_sky_comp(mtl_rtw_v3_t d, int j)
+{
+	const float v = (j == 1 || j == -1) ? d.x : (j == 2 || j == -2) ? d.y : d.z;
+
+	return (j < 0) ? -v : v;
+}
+
+static inline mtl_rtw_sky_t
+mtl_rtw_sky_st(mtl_rtw_v3_t d)
+{
+	/* gl1's vec_to_st */
+	const int st[6][3] = { { -2, 3, 1 }, { 2, 3, -1 }, { 1, 3, 2 }, { -1, 3, -2 }, { -2, -1, 3 }, { -2, 1, -3 } };
+	const float ax = (d.x < 0.0f) ? -d.x : d.x, ay = (d.y < 0.0f) ? -d.y : d.y, az = (d.z < 0.0f) ? -d.z : d.z;
+	mtl_rtw_sky_t out;
+	float dv, s, t;
+	int axis;
+
+	out.ok = 0;
+	out.face = 0;
+	out.s = out.t = 0.5f;
+
+	if ((ax > ay) && (ax > az))
+	{
+		axis = (d.x < 0.0f) ? 1 : 0;
+	}
+	else if ((ay > az) && (ay > ax))
+	{
+		axis = (d.y < 0.0f) ? 3 : 2;
+	}
+	else
+	{
+		axis = (d.z < 0.0f) ? 5 : 4;
+	}
+
+	dv = mtl_rtw_sky_comp(d, st[axis][2]);
+
+	if (!(dv > 0.0f))
+	{
+		return out;
+	}
+
+	s = mtl_rtw_sky_comp(d, st[axis][0]) / dv;
+	t = mtl_rtw_sky_comp(d, st[axis][1]) / dv;
+	s = (s + 1.0f) * 0.5f;
+	t = (t + 1.0f) * 0.5f;
+	s = (s < 1.0f / 512.0f) ? 1.0f / 512.0f : (s > 511.0f / 512.0f) ? 511.0f / 512.0f : s;
+	t = (t < 1.0f / 512.0f) ? 1.0f / 512.0f : (t > 511.0f / 512.0f) ? 511.0f / 512.0f : t;
+	out.ok = 1;
+	out.face = axis;
+	out.s = s;
+	out.t = 1.0f - t;
+	return out;
+}
+
+/* a direction in the sky box's frame: d turned by the transpose of the rotation whose rows are r0, r1, r2 */
+static inline mtl_rtw_v3_t
+mtl_rtw_sky_dir(mtl_rtw_v3_t d, mtl_rtw_v3_t r0, mtl_rtw_v3_t r1, mtl_rtw_v3_t r2)
+{
+	return mtl_rtw_v3(r0.x * d.x + r1.x * d.y + r2.x * d.z, r0.y * d.x + r1.y * d.y + r2.y * d.z,
+			r0.z * d.x + r1.z * d.y + r2.z * d.z);
+}
+
+/* the threadgroups of the trace over n listed pixels, MTL_RTW_LIST_GROUP a group */
+static inline unsigned
+mtl_rtw_groups(unsigned n)
+{
+	return n / MTL_RTW_LIST_GROUP + ((n % MTL_RTW_LIST_GROUP) ? 1u : 0u);
+}
+
+/* a listed pixel, x in the low 16 bits and y in the high (a render size is at most 16384) */
+static inline unsigned
+mtl_rtw_list_pack(unsigned x, unsigned y)
+{
+	return (x & 0xffffu) | ((y & 0xffffu) << 16);
+}
+
+/*
+ * 1 when the compaction lists a pixel: opaque water the raster drew
+ * (material 3), or the candidates' raster marked it or a pixel next to it
+ * (any of the nine, so the eye ray of TASK58 is cast wherever it could
+ * meet water: the raster and the ray agree on a pixel's centre but for
+ * ties on an edge and the float error)
+ */
+static inline int
+mtl_rtw_listed(unsigned mat, unsigned marks)
+{
+	return mtl_rtw_is_water(mat) || (marks != 0u);
+}
+
 /* r_rt_water_reflect as the blend takes it: 0 to 1, 0 when not finite */
 static inline float
 mtl_rtw_weight(float k)
@@ -398,7 +712,7 @@ mtl_rtw_blend(mtl_rgba_t c, float rr, float rg, float rb, float k, unsigned from
 /*
  * The class byte of a pixel: 0 when no water was found; else water, the
  * translucent bit when the water lies in front of the raster's surface,
- * and where its reflection came from.
+ * and where its reflection came from (with MTL_RTW_WS, TASK158).
  */
 static inline unsigned
 mtl_rtw_class(int water, int trans, unsigned from)
@@ -408,7 +722,7 @@ mtl_rtw_class(int water, int trans, unsigned from)
 		return 0u;
 	}
 
-	return MTL_RTW_CLASS_WATER | (trans ? MTL_RTW_CLASS_TRANS : 0u) | (from & MTL_RTW_CLASS_FROM);
+	return MTL_RTW_CLASS_WATER | (trans ? MTL_RTW_CLASS_TRANS : 0u) | (from & (MTL_RTW_CLASS_FROM | MTL_RTW_CLASS_WS));
 }
 
 /*

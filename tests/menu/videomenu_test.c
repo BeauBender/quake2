@@ -373,6 +373,7 @@ Reset(void)
 	SetCv("r_metalfx_interp", "0");
 	SetCv("gl3_colorlight", "1");
 	SetCv("gl4_colorlight", "1");
+	SetCv("r_rt_ao", "0");
 }
 
 /* ---- scenarios ---- */
@@ -478,6 +479,45 @@ test_frame_generation_is_greyed_and_not_written(void)
 	CHECK(!strcmp(Shown("denoiser"), "n/a"), "denoiser shows %s", Shown("denoiser"));
 }
 
+/* TASK158: the water reflections' hit shading. Greyed with its reason while
+   r_rt_water is off and under another renderer (it shows "n/a", apply writes
+   nothing); with the water on it shows r_rt_water_hits as its index, and apply
+   writes the index only when the player moved it. */
+static void
+test_water_hits_item(void)
+{
+	Reset();
+	SetCv("r_rt_water_hits", "1");
+	Open("metal", "31");
+	CHECK(Greyed("water reflections"), "water reflections enabled with r_rt_water unset");
+	CHECK(!strcmp(Shown("water reflections"), "n/a"), "water reflections shows %s", Shown("water reflections"));
+	CHECK(!strcmp(Item("water reflections")->statusbar, "needs r_rt_water 1"), "reason %s",
+		Item("water reflections")->statusbar);
+	CHECK(!Slide("water reflections", 1), "water reflections slid while greyed");
+	Apply();
+	CHECK(Writes("r_rt_water_hits") == 0, "r_rt_water_hits written while greyed");
+
+	Reset();
+	SetCv("r_rt_water", "1");
+	SetCv("r_rt_water_hits", "0.5");
+	Open("metal", "31");
+	CHECK(!Greyed("water reflections"), "water reflections greyed with r_rt_water 1");
+	CHECK(!strcmp(Shown("water reflections"), "screen space"), "0.5 shows %s", Shown("water reflections"));
+	Apply();
+	CHECK(Writes("r_rt_water_hits") == 0, "an unchanged 0.5 was written");
+	CHECK(Slide("water reflections", 1), "water reflections Right");
+	CHECK(!strcmp(Shown("water reflections"), "world space"), "Right shows %s", Shown("water reflections"));
+	Apply();
+	CHECK(!strcmp(Str("r_rt_water_hits"), "1"), "r_rt_water_hits %s", Str("r_rt_water_hits"));
+
+	Reset();
+	SetCv("r_rt_water", "1");
+	Open("gl1", "31");
+	CHECK(Greyed("water reflections"), "water reflections enabled under gl1");
+	CHECK(!strcmp(Item("water reflections")->statusbar, "Metal renderer only"), "gl1 reason %s",
+		Item("water reflections")->statusbar);
+}
+
 /* r_metalfx is a cvar anyone can set: apply reads it as an index, so a value
    that is not a number or is huge neither traps nor writes. */
 static void
@@ -562,7 +602,9 @@ test_greyed_items_cannot_be_changed(void)
 {
 	static const char *const names[] = {
 		"color intensity", "min. light level", "overbrights", "color light", "bloom",
-		"dynamic light", "MetalFX scaler", "MetalFX scale", "frame generation", "denoiser"
+		"dynamic light", "MetalFX scaler", "MetalFX scale", "frame generation", "denoiser",
+		"water reflections",
+		"AO trace size", "AO rays"
 	};
 	static const char *const renderers[] = { "soft", "gl3", "gl1", "metal" };
 
@@ -673,6 +715,58 @@ test_custom_scale_is_not_a_choice(void)
 	}
 	Apply();
 	CHECK(!strcmp(Str("r_metalfx_scale"), "1"), "r_metalfx_scale %s", Str("r_metalfx_scale"));
+}
+
+/* The AO items with r_rt_ao on: the values shown, the writes on apply, and
+   no write for an item left as it was. */
+static void
+test_ao_items_apply(void)
+{
+	Reset();
+	SetCv("r_rt_ao", "1");
+	SetCv("r_rt_ao_scale", "0.5");
+	SetCv("r_rt_ao_rays", "2");
+	Open("metal", "31");
+	CHECK(!Greyed("AO trace size"), "AO trace size greyed with r_rt_ao 1");
+	CHECK(!Greyed("AO rays"), "AO rays greyed with r_rt_ao 1");
+	CHECK(!strcmp(Shown("AO trace size"), "1/2"), "scale shows %s", Shown("AO trace size"));
+	CHECK(!strcmp(Shown("AO rays"), "2"), "rays shows %s", Shown("AO rays"));
+	CHECK(Slide("AO trace size", 1), "scale Right");
+	CHECK(Slide("AO rays", -1), "rays Left");
+	Apply();
+	CHECK(!strcmp(Str("r_rt_ao_scale"), "0.333333"), "r_rt_ao_scale %s", Str("r_rt_ao_scale"));
+	CHECK(!strcmp(Str("r_rt_ao_rays"), "1"), "r_rt_ao_rays %s", Str("r_rt_ao_rays"));
+
+	/* the other way: scale to full, rays to 2 */
+	Reset();
+	SetCv("r_rt_ao", "1");
+	SetCv("r_rt_ao_scale", "0.5");
+	SetCv("r_rt_ao_rays", "1");
+	Open("metal", "31");
+	CHECK(Slide("AO trace size", -1), "scale Left");
+	CHECK(Slide("AO rays", 1), "rays Right");
+	Apply();
+	CHECK(!strcmp(Str("r_rt_ao_scale"), "1"), "r_rt_ao_scale %s", Str("r_rt_ao_scale"));
+	CHECK(!strcmp(Str("r_rt_ao_rays"), "2"), "r_rt_ao_rays %s", Str("r_rt_ao_rays"));
+
+	/* unchanged items are not written */
+	Reset();
+	SetCv("r_rt_ao", "1");
+	SetCv("r_rt_ao_scale", "0.5");
+	SetCv("r_rt_ao_rays", "2");
+	Open("metal", "31");
+	Apply();
+	CHECK(Writes("r_rt_ao_scale") == 0, "r_rt_ao_scale written without a change");
+	CHECK(Writes("r_rt_ao_rays") == 0, "r_rt_ao_rays written without a change");
+
+	/* r_rt_ao off: greyed, nothing written */
+	Reset();
+	SetCv("r_rt_ao_scale", "0.5");
+	SetCv("r_rt_ao_rays", "2");
+	Open("metal", "31");
+	CHECK(Greyed("AO trace size") && Greyed("AO rays"), "AO items enabled with r_rt_ao 0");
+	Apply();
+	CHECK(Writes("r_rt_ao_scale") == 0 && Writes("r_rt_ao_rays") == 0, "AO cvars written while greyed");
 }
 
 /*
@@ -813,11 +907,13 @@ main(void)
 	test_scale_item_follows_the_scaler();
 	test_apply_uses_the_built_renderer();
 	test_frame_generation_is_greyed_and_not_written();
+	test_water_hits_item();
 	test_apply_reads_r_metalfx_as_an_index();
 	test_status_text_fits_the_screen();
 	test_greyed_items_cannot_be_changed();
 	test_scale_survives_a_scaler_move_and_greyed_cvars_stay();
 	test_custom_scale_is_not_a_choice();
+	test_ao_items_apply();
 	test_the_banner_is_clear_of_the_items();
 
 	printf("videomenu_test: %d checks, %d failed\n", checks, failed);
