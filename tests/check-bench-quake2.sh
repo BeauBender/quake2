@@ -43,8 +43,10 @@
 #   - the metrics of a synthetic log against hand-computed values, and the
 #     engine's own format strings in src/ still being the ones parsed;
 #   - the inputs paths name the case's pin scenario;
-#   - two mutants: the preflight with its requires check dropped must fail
-#     the refusal test, and adapter_build returning at once the build test.
+#   - mutants: the preflight with its requires check dropped must fail the
+#     refusal test; adapter_build returning at once, the build cache's
+#     privacy check dropped and make run without the environment cleared
+#     must each fail the build test.
 #
 # Usage: tests/check-bench-quake2.sh
 set -eu
@@ -590,12 +592,17 @@ if cmp -s "$REAL/adapters/quake2.sh" "$M/adapters/quake2.sh"; then
 elif e2e_refusal "$M" > /dev/null 2>&1; then
 	bad "the mutant (the requires check dropped) passed the refusal test"
 fi
-sed 's/^adapter_build() {$/adapter_build() { return 0/' "$REAL/adapters/quake2.sh" > "$M/adapters/quake2.sh"
-if cmp -s "$REAL/adapters/quake2.sh" "$M/adapters/quake2.sh"; then
-	bad "the build mutant did not apply"
-elif build_test "$M" > /dev/null 2>&1; then
-	bad "the mutant (adapter_build returning at once) passed the build test"
-fi
+# the build mutants: <sed expression>|<what it drops>
+for mu in 's/^adapter_build() {$/adapter_build() { return 0/|adapter_build returning at once' \
+	's/q2_private_dir "\$_qu"/true "$_qu"/|the build cache privacy check dropped' \
+	's/bench_bounded 3600 env \$_qb_u make/bench_bounded 3600 make/|the build environment not cleared'; do
+	sed "${mu%%|*}" "$REAL/adapters/quake2.sh" > "$M/adapters/quake2.sh"
+	if cmp -s "$REAL/adapters/quake2.sh" "$M/adapters/quake2.sh"; then
+		bad "the build mutant (${mu#*|}) did not apply"
+	elif build_test "$M" > /dev/null 2>&1; then
+		bad "the mutant (${mu#*|}) passed the build test"
+	fi
+done
 unset Q2H_ROOT
 
 if [ "$fails" -ne 0 ]; then
