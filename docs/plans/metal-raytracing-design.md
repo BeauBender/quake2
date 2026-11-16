@@ -1747,7 +1747,7 @@ The display's pixel size is 5120 x 2880; its desktop size in points is
 `vid_fullscreen 1` at a mode the display lists, `r_mode -1` with
 `r_customwidth` and `r_customheight` at the request, the route TASK108
 (#259) found for the native size (its re-measurement of the runbook's
-TASK97 section, on TASK108's branch). Each of the 28 logs holds, once
+TASK97 section (`docs/runbook/TASK97.md`), on TASK108's branch). Each of the 28 logs holds, once
 each, the three lines for its size, for example at the native size:
 
 ```
@@ -1764,7 +1764,7 @@ run's requested size.
 The capture is the pin harness's (`scripts/pins.sh`): the engine
 arguments that `PINS_DRYRUN=1 scripts/pins.sh record gl1 <scenario>`
 prints, run by hand with `vid_fullscreen 1` in place of 0 and the size
-set, as TASK98 did (the runbook's TASK98 section). So each run plays
+set, as TASK98 did (`docs/runbook/TASK98.md`). So each run plays
 `demo1.dm2` from `$PINS_BASEDIR` with the scenario's lines (each sets
 `timedemo 1`), with `pins_capture 100` (a frame every 100th rendered
 frame), `pins_seed 1` (a fixed PRNG seed at each map registration, so
