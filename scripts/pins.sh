@@ -77,6 +77,11 @@
 #                 the release is an existing pre-release: nothing is checked
 #                 on the release then. It exists for the self-test's stand-in
 #                 uploader; leave it unset to publish
+#   BENCH_LOCK    0: no host lock. Otherwise record, compare, replay,
+#                 footprint, where, make-demo, selftest and evidence run
+#                 under "scripts/bench/bench.sh lock run pins-<command>"
+#                 (BENCH_STATE and the other BENCH_LOCK_* settings are
+#                 bench.sh's; a dry run, and CI=true, take no lock)
 #
 # Every path and value handed to the engine (store, PINS_BASEDIR, PINS_DEMO,
 # scenario values) may hold only A-Z a-z 0-9 _ . / - : the engine re-joins
@@ -3219,17 +3224,36 @@ cmd_selftest() {
     echo "pins selftest: ok"
 }
 
+# lock_self <label> <command> [args...]: the host lock (docs/plans/bench-harness.md,
+# "The host lock"). Unless it is off (BENCH_LOCK=0, CI=true: a runner has no
+# other lanes, or no scripts/bench/bench.sh in this tree), runs this script
+# again with <command> [args...] as one hold of "scripts/bench/bench.sh lock
+# run <label>", so no timing run on this host shares the machine with the
+# engine runs and builds below. Under a caller that holds the lock already
+# (BENCH_LOCK_TOKEN: the gate running the selftest) bench.sh passes straight
+# through. The run under the lock comes back here with BENCH_LOCK_ENTRY=<label>
+# (cleared at once) and goes on. A dry run (PINS_DRYRUN) builds and runs
+# nothing and takes no lock; neither do check-content, list and the evidence
+# encoder's commands.
+lock_self() {
+    local label=$1 entry=${BENCH_LOCK_ENTRY:-}; shift
+    unset BENCH_LOCK_ENTRY
+    if [ "$entry" = "$label" ] && [ -n "${BENCH_LOCK_TOKEN:-}" ]; then return 0; fi
+    [ "${BENCH_LOCK:-}" != 0 ] && [ "${CI:-}" != true ] && [ -f "$root/scripts/bench/bench.sh" ] || return 0
+    exec sh "$root/scripts/bench/bench.sh" lock run "$label" -- env BENCH_LOCK_ENTRY="$label" /bin/bash "$root/scripts/pins.sh" "$@"
+}
+
 case "${1:-}" in
-    record)   [ $# -ge 3 ] || die "usage: pins.sh record <renderer> <scenario> [--run N] [--replace]"; shift; cmd_record "$@";;
-    compare)  [ $# -ge 3 ] || die "usage: pins.sh compare <renderer> <scenario> [--ref r] [--ref-id d] [--run N | --cand-id d] [--threshold t] [--bad-threshold b]"; shift; cmd_compare "$@";;
-    replay)   [ $# -ge 3 ] || die "usage: pins.sh replay <renderer> <scenario> [--trace-of r] [--ref-id d] [--run N] [--replace]"; shift; cmd_replay "$@";;
-    footprint) [ $# -ge 4 ] || die "usage: pins.sh footprint <scenario> --off <dir|id> --on <dir|id> [--renderer r] [--mask-dir d] [--delta n] [--band 'metric lo..hi']... [--out dir]"; shift; cmd_footprint "$@";;
-    where)    [ $# -ge 4 ] || die "usage: pins.sh where <scenario> --off <dir|id> --on <dir|id> --out <dir> [--renderer r] [--mask-dir d] [--top N] [--delta n]"; shift; cmd_where "$@";;
+    record)   [ $# -ge 3 ] || die "usage: pins.sh record <renderer> <scenario> [--run N] [--replace]"; [ -n "${PINS_DRYRUN:-}" ] || lock_self pins-record "$@"; shift; cmd_record "$@";;
+    compare)  [ $# -ge 3 ] || die "usage: pins.sh compare <renderer> <scenario> [--ref r] [--ref-id d] [--run N | --cand-id d] [--threshold t] [--bad-threshold b]"; lock_self pins-compare "$@"; shift; cmd_compare "$@";;
+    replay)   [ $# -ge 3 ] || die "usage: pins.sh replay <renderer> <scenario> [--trace-of r] [--ref-id d] [--run N] [--replace]"; [ -n "${PINS_DRYRUN:-}" ] || lock_self pins-replay "$@"; shift; cmd_replay "$@";;
+    footprint) [ $# -ge 4 ] || die "usage: pins.sh footprint <scenario> --off <dir|id> --on <dir|id> [--renderer r] [--mask-dir d] [--delta n] [--band 'metric lo..hi']... [--out dir]"; lock_self pins-footprint "$@"; shift; cmd_footprint "$@";;
+    where)    [ $# -ge 4 ] || die "usage: pins.sh where <scenario> --off <dir|id> --on <dir|id> --out <dir> [--renderer r] [--mask-dir d] [--top N] [--delta n]"; lock_self pins-where "$@"; shift; cmd_where "$@";;
     check-content) check_content "$scen_dir/README.md" "$scen_dir" && echo "pins: content tags ok";;
-    make-demo) [ $# -ge 2 ] || die "usage: pins.sh make-demo <name> [--replace]"; shift; cmd_make_demo "$@";;
+    make-demo) [ $# -ge 2 ] || die "usage: pins.sh make-demo <name> [--replace]"; [ -n "${PINS_DRYRUN:-}" ] || lock_self pins-make-demo "$@"; shift; cmd_make_demo "$@";;
     list)     cmd_list;;
-    selftest) shift; cmd_selftest "$@";;
-    evidence) shift; cmd_evidence "$@";;
+    selftest) lock_self pins-selftest "$@"; shift; cmd_selftest "$@";;
+    evidence) lock_self pins-evidence "$@"; shift; cmd_evidence "$@";;
     evidence-publish) shift; cmd_evidence_publish "$@";;
     evidence-selftest) cmd_evidence_selftest;;
     *) usage; exit 1;;
