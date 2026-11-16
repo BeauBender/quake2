@@ -29,22 +29,39 @@
 #             ignores SIGTERM, the other has a SIGTERM trap of 5 s, which
 #             finishes) and two waiting: it ends within 30 s with status
 #             130, what the running checks started (a sleep, by its
-#             recorded pid) is gone, and no other check starts;
+#             recorded pid) is gone, and no other check starts (SIGTERM in
+#             its place, status 143, when SIGINT is ignored here: below);
 #   interrupt1  SIGTERM, then SIGHUP, at GATE_JOBS=1, one check running and
 #             one waiting: the same, with status 143 or 129;
 #   testsh    SIGTERM, SIGHUP and SIGINT to scripts/test.sh itself, run on a
 #             copy of the gate's layout with fake checks: the same, with
-#             test.sh's status 143, 129 or 130;
+#             test.sh's status 143, 129 or 130 (no SIGINT when it is
+#             ignored here);
 #   kgrp      SIGKILL to test.sh's process group there: test.sh's status
 #             137, and what the running check started is gone within 10 s;
 #   sigs      a check run by test.sh there gets SIGINT, SIGQUIT, SIGHUP,
 #             SIGTERM, SIGTSTP, SIGTTIN and SIGTTOU as one started directly does (as
-#             origin/main's test.sh ran each check), SIGINT delivered;
-#   leave     what a passing check leaves running is gone after the run.
+#             origin/main's test.sh ran each check), SIGINT delivered
+#             (not asked when SIGINT is ignored here);
+#   leave     what a passing check leaves running is gone after the run;
+#   intskip   interrupt, testsh and sigs, run by this self-test started
+#             with SIGINT ignored, each say what they skip and pass.
 # Then each case is shown failing against at least one mutant of the
 # scheduler (or of scripts/test.sh, for wiring and testsh). Every run of the
 # scheduler is bounded in time here; one that outlives its bound fails its
 # case. The bounds leave room for a loaded host: they only catch a hang.
+#
+# SIGINT: when this self-test starts with SIGINT ignored (a background job
+# started without job control has it so, as a merge gate may start the
+# gate), so does everything it starts, and no shell can undo that (POSIX:
+# a signal ignored on entry cannot be trapped or reset). It asks first, as
+# tests/check-bench.sh does, whether SIGINT reaches a command here; when it
+# does not, the parts that need it are skipped, each with a line that says
+# so: interrupt sends SIGTERM in its place, testsh sends no SIGINT, sigs
+# does not ask for SIGINT delivered, and the mutants that only SIGINT can
+# catch are counted as skipped, never as caught. Every other assertion runs.
+# GP_ONLY="<case>..." runs those cases alone, stopping at the first that
+# fails, and no mutant (intskip uses it).
 #
 # Usage: tests/check-gate-parallel.sh
 set -eu
@@ -54,6 +71,7 @@ top=$(pwd -P)
 real=$top/scripts/gate-checks.sh
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/gatepar.XXXXXX")
 tmp=$(cd "${tmp:?}" && pwd -P)
+only=${GP_ONLY:-}
 # _lp: a run started by launch and not yet reaped; on the way out it gets
 # SIGTERM, which ends it and what it started (that is what the cases test)
 _lp=
@@ -66,14 +84,19 @@ gp_exit() {
 }
 trap gp_exit EXIT
 trap 'exit 1' HUP INT TERM
-unset GATE_JOBS GATE_PARENT GP_PATH GP_TD GP_NCPU GP_BOUND GP_FIRST WIRING
+unset GATE_JOBS GATE_PARENT GP_PATH GP_TD GP_NCPU GP_BOUND GP_FIRST GP_ONLY WIRING SELF
 export LC_ALL=C
+# INT_OK: SIGINT reaches a command started here (see the top of this file)
+INT_OK=
+sh -c 'kill -INT $$; exit 0' 2> /dev/null || INT_OK=1
 
 fail=0
 quiet=0
 SCHED=$real
 bad() { echo "$me: $*"; fail=1; }
 say() { [ "$quiet" = 1 ] || echo "$me: $*"; }
+# skipint <part>: says that <part> is skipped, as SIGINT is ignored here
+skipint() { say "SIGINT is ignored where this check runs, so $1 is skipped"; }
 
 # The fake check: its name comes from its file name, its behaviour from
 # $GP_SPEC/<name>: "<lines> <delay> <status> <mode> <hold>"; mode term or
@@ -590,8 +613,11 @@ signalled() {
 
 # interrupt: SIGINT to the scheduler with two checks running, a and b, c
 # and d waiting. b ignores SIGTERM: only the SIGKILL after the grace ends
-# it. a's SIGTERM trap takes 5 s: the grace (10 s) lets it finish.
+# it. a's SIGTERM trap takes 5 s: the grace (10 s) lets it finish. SIGTERM
+# in its place when SIGINT is ignored here: the rest still holds.
 c_interrupt() {
+	_ii=INT:130
+	[ -n "$INT_OK" ] || { skipint "interrupt's SIGINT (SIGTERM is sent in its place)"; _ii=TERM:143; }
 	d=$(newcase)
 	spec "$d" a 1 0 0 holdtrap 30
 	spec "$d" b 1 0 0 holdterm 30
@@ -599,7 +625,7 @@ c_interrupt() {
 	spec "$d" d 1 0 0
 	launch "$d" env GATE_JOBS=2 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" \
 		sh "$SCHED" "" "" "$d/check-a.sh" "$d/check-b.sh" "$d/check-c.sh" "$d/check-d.sh"
-	signalled "$d" interrupt INT 130 "start a start b " 2 || return 1
+	signalled "$d" interrupt "${_ii%:*}" "${_ii#*:}" "start a start b " 2 || return 1
 	grep -qx 'cleaned a' "$d/events" || { say "interrupt: a check's SIGTERM trap of 5 s was cut short"; return 1; }
 }
 
@@ -642,7 +668,9 @@ gtree() {
 # as in interrupt1); GATE_JOBS=1, so check-a.sh runs first and alone
 c_testsh() {
 	_tf=${WIRING:-$top/scripts/test.sh}
-	for _tg in TERM:143 HUP:129 INT:130; do
+	_ts="TERM:143 HUP:129 INT:130"
+	[ -n "$INT_OK" ] || { skipint "testsh's SIGINT"; _ts="TERM:143 HUP:129"; }
+	for _tg in $_ts; do
 		d=$(newcase)
 		gtree "$d" "$_tf" 1 0 0 hold 10
 		launch "$d" env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" sh "$d/tree/scripts/test.sh"
@@ -668,7 +696,8 @@ c_kgrp() {
 # copy of the gate's layout, gets SIGINT, SIGQUIT, SIGHUP, SIGTERM and
 # SIGTSTP as it does when it is started directly from here, as
 # origin/main's test.sh ran each check (in its own foreground, no trap set),
-# and SIGINT is delivered to it
+# and SIGINT is delivered to it (when SIGINT is ignored here, both show it
+# ignored, and that last is skipped)
 c_sigs() {
 	_tf=${WIRING:-$top/scripts/test.sh}
 	dc=$(newcase)
@@ -689,7 +718,11 @@ c_sigs() {
 	_sgt=$(grep '^sig ' "$d/events" || :)
 	[ "$_sgt" = "$_sgw" ] ||
 		{ say "sigs: a check run by test.sh got: $(printf '%s\n' "$_sgt" | tr '\n' ' ')run directly: $(printf '%s\n' "$_sgw" | tr '\n' ' ')"; return 1; }
-	printf '%s\n' "$_sgt" | grep -qx 'sig a INT delivered' || { say "sigs: SIGINT is not delivered to a check run by test.sh"; return 1; }
+	if [ -n "$INT_OK" ]; then
+		printf '%s\n' "$_sgt" | grep -qx 'sig a INT delivered' || { say "sigs: SIGINT is not delivered to a check run by test.sh"; return 1; }
+	else
+		skipint "sigs' assertion that SIGINT is delivered"
+	fi
 }
 
 # leave: a check that leaves a sleep running in the background (its output
@@ -712,22 +745,60 @@ c_leave() {
 	[ "$rc" -eq 0 ] && [ "$(status "$d" a)" = ok ] || { say "leave: status $rc, want 0, and check-a.sh passed"; return 1; }
 }
 
-# lit <file> <old> <new>: the file with its one occurrence of <old>
-# replaced by <new>, both taken literally (no backslash in either: awk -v
-# reads escapes); status 1 unless exactly one
+# intskip: interrupt, testsh and sigs, run by this self-test (or $SELF)
+# alone (GP_ONLY), started with SIGINT ignored: each says what it skips,
+# none fails, and the run passes
+c_intskip() {
+	_xf=${SELF:-$top/tests/check-gate-parallel.sh}
+	d=$(newcase)
+	rc=0
+	bounded 240 "$d/out" env GP_ONLY="sigs testsh interrupt" TMPDIR="$d/td" \
+		sh -c 'trap "" INT; exec sh "$1"' sh "$_xf" || rc=$?
+	[ "$rc" -eq 0 ] || { say "intskip: the cases that need SIGINT, run with SIGINT ignored, gave status $rc:"; [ "$quiet" = 1 ] || sed 's/^/  | /' "$d/out"; return 1; }
+	for _xp in "interrupt's SIGINT (SIGTERM is sent in its place)" "testsh's SIGINT" "sigs' assertion that SIGINT is delivered"; do
+		grep -qxF "$me: SIGINT is ignored where this check runs, so $_xp is skipped" "$d/out" ||
+			{ say "intskip: no line says that $_xp is skipped"; return 1; }
+	done
+	for _xc in sigs testsh interrupt; do
+		grep -qx "  ok   $_xc" "$d/out" || { say "intskip: $_xc did not pass"; return 1; }
+	done
+}
+
+# lit <file> <old> <new> [<prefix>]: the file with its one occurrence of
+# <old> replaced by <new>, both taken literally (no backslash in either: awk
+# -v reads escapes), lines that start with <prefix> left as they are;
+# status 1 unless exactly one
 lit() {
-	awk -v o="$2" -v n="$3" '
+	awk -v o="$2" -v n="$3" -v k="${4:-}" '
+		k != "" && index($0, k) == 1 { print; next }
 		{ p = index($0, o); if (p) { c++; $0 = substr($0, 1, p - 1) n substr($0, p + length(o)) } print }
 		END { exit c != 1 }' "$1"
 }
 
-cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs leave"
+cases="one_fail two_fail signal log order serial jobs1 first bound default times errors guard wiring interrupt interrupt1 testsh kgrp sigs leave intskip"
+[ -z "$only" ] || cases=$only
 for c in $cases; do
-	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; fi
+	if "c_$c"; then echo "  ok   $c"; else echo "  FAIL $c"; fail=1; [ -z "$only" ] || break; fi
 done
+if [ -n "$only" ]; then
+	[ "$fail" -eq 0 ] || { echo "$me: FAILED"; exit 1; }
+	echo "$me: ok (cases $only alone, no mutants)"
+	exit 0
+fi
 
 # mutant <name> <case> <old> <new>: the scheduler with <old> replaced must fail <case>
 mutants=0
+# intmut <mutant|wmut> <name> <case> <old> <new>: a mutant that only SIGINT
+# can catch; when SIGINT is ignored here it is skipped, and counted so
+intskipped=0
+intmut() {
+	if [ -n "$INT_OK" ]; then
+		"$@"
+	else
+		skipint "mutant $2"
+		intskipped=$((intskipped + 1))
+	fi
+}
 mutant() {
 	lit "$real" "$3" "$4" > "$tmp/mut-$1.sh" || { bad "mutant $1 does not apply"; return 0; }
 	SCHED=$tmp/mut-$1.sh quiet=1
@@ -777,7 +848,7 @@ mutant no-kill-after-grace interrupt '	gate_kill KILL "$@"' '	:'
 mutant grace-3s interrupt 'gate_grace=10' 'gate_grace=3'
 mutant no-parent-check kgrp 'if [ -n "$_gparent" ] && ! gate_parent "$_gparent"; then' 'if false; then'
 mutant no-end-at-exit leave '			gate_end "$_grpid"' '			:'
-mutant int-passes interrupt "trap 'exit 130' INT" "trap 'exit 0' INT"
+intmut mutant int-passes interrupt "trap 'exit 130' INT" "trap 'exit 0' INT"
 mutant term-goes-on interrupt1 "trap 'exit 143' TERM" "trap ':' TERM"
 mutant term-passes interrupt1 "trap 'exit 143' TERM" "trap 'exit 0' TERM"
 mutant hup-passes interrupt1 "trap 'exit 129' HUP" "trap 'exit 0' HUP"
@@ -796,11 +867,32 @@ wmut wiring-no-errexit wiring 'set -eu' 'set -u'
 wmut stop-not-passed testsh '		kill -s TERM "$gate_sched" 2> /dev/null || :' '		:'
 wmut stop-passes testsh "trap 'gate_stop 143' TERM" "trap 'gate_stop 0' TERM"
 mutant ttou-to-checks sigs '	trap - TTOU' '	:'
-wmut no-own-group sigs 'set -m' ':'
+# (without its own group the scheduler, and every check, ignore SIGINT and
+# SIGQUIT; when this self-test already ignores both, nothing differs)
+intmut wmut no-own-group sigs 'set -m' ':'
 wmut no-parent-pid kgrp 'GATE_PARENT=$$ scripts/gate-checks.sh' 'scripts/gate-checks.sh'
+
+# mutants of this self-test, run from a copy of the scripts it tests:
+# smut <name> <case> <old> <new> (its own smut lines are left as they are)
+smut() {
+	_sm=$tmp/self-$1
+	mkdir "${_sm:?}" "${_sm:?}/tests" "${_sm:?}/scripts"
+	cp "$top/scripts/test.sh" "$top/scripts/gate-checks.sh" "$_sm/scripts/"
+	lit "$top/tests/check-gate-parallel.sh" "$3" "$4" "smut " > "$_sm/tests/check-gate-parallel.sh" ||
+		{ bad "mutant $1 does not apply to this self-test"; return 0; }
+	quiet=1 SELF=$_sm/tests/check-gate-parallel.sh
+	if "c_$2"; then bad "mutant $1 was not caught by case $2"; else mutants=$((mutants + 1)); fi
+	quiet=0 SELF=
+}
+smut no-int-probe intskip "sh -c 'kill -INT \$\$; exit 0' 2> /dev/null || INT_OK=1" 'INT_OK=1'
+smut skip-unsaid intskip 'skipint() { say' 'skipint() { :'
 
 if [ "$fail" -ne 0 ]; then
 	echo "$me: FAILED"
 	exit 1
 fi
-echo "$me: ok ($(echo $cases | wc -w | tr -d ' ') cases, $mutants mutants caught)"
+if [ "$intskipped" -eq 0 ]; then
+	echo "$me: ok ($(echo $cases | wc -w | tr -d ' ') cases, $mutants mutants caught)"
+else
+	echo "$me: ok ($(echo $cases | wc -w | tr -d ' ') cases, $mutants mutants caught, $intskipped skipped as SIGINT is ignored here)"
+fi
