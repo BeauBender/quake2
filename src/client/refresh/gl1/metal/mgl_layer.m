@@ -566,7 +566,16 @@ mgl_present_apart_begin(id<MTLCommandBuffer> frame, id<MTLTexture> src)
 	id<CAMetalDrawable> d = mgl_ahead_take();
 	id<MTLCommandBuffer> cmd = nil;
 
-	mgl_ahead_request();
+	/*
+	 * Only while display sync is off: a frame that took its slot before
+	 * display sync was turned on ends here, and a drawable acquired ahead
+	 * then would be held until display sync is off again, one of the
+	 * layer's drawables fewer for every frame in between.
+	 */
+	if (mgl_present_apart())
+	{
+		mgl_ahead_request();
+	}
 
 	if (d && ((d.texture.width != src.width) || (d.texture.height != src.height)))
 	{

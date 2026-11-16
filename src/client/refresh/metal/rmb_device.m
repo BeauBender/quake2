@@ -368,7 +368,12 @@ rmb_next_drawable(void)
 		d = nil;
 	}
 
-	rmb_ahead_request();
+	/* only while display sync is off: with it on nothing takes a drawable acquired ahead (the shim's mgl_present_apart_begin) */
+	if (rmb_apart())
+	{
+		rmb_ahead_request();
+	}
+
 	return d;
 }
 
