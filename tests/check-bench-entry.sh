@@ -176,9 +176,16 @@ mktree() {
 	T=${tmp:?}/$1
 	rm -rf "${T:?}"
 	mkdir -p "${T:?}/scripts/pins" "${T:?}/tests"
-	cp "$SRC/test.sh" "$SRC/coverage.sh" "$SRC/pins.sh" "${T:?}/scripts/"
+	cp "$SRC/test.sh" "$SRC/coverage.sh" "$SRC/pins.sh" "$SRC/gate-checks.sh" "${T:?}/scripts/"
 	printf 'gcov 0\nllvm-cov 0\n' > "${T:?}/scripts/coverage-floor"
 	cp "${tmp:?}/check-a.sh" "${T:?}/tests/check-a.sh"
+	# A quick fake for each check that the gate's two lists name: the
+	# scheduler (scripts/gate-checks.sh) refuses a list word that names no
+	# check.
+	for _n in $(sed -n -e 's/^gate_first="\(.*\)"$/\1/p' -e 's/^gate_serial="\(.*\)"$/\1/p' "$SRC/test.sh"); do
+		printf '#!/bin/sh\nexit 0\n' > "${T:?}/tests/$_n"
+		chmod +x "${T:?}/tests/$_n"
+	done
 	case ${2:-stub} in
 	stub)
 		mkdir -p "${T:?}/scripts/bench"
@@ -349,6 +356,10 @@ t_nested() {
 	cat > "${T:?}/tests/check-a.sh" << 'EOF'
 #!/bin/sh
 printf 'check token=%s entry=%s lc=%s\n' "${BENCH_LOCK_TOKEN:+set}" "${BENCH_LOCK_ENTRY-unset}" "${LC_ALL-unset}" >> "$LOG"
+# who started the scheduler (this check's parent), and who started that
+_sp=$(ps -o ppid= -p "$PPID" | tr -d ' ')
+printf 'sched-parent=%s\n' "$(ps -o args= -p "$_sp")" >> "$LOG"
+printf 'sched-grandparent=%s\n' "$(ps -o args= -p "$(ps -o ppid= -p "$_sp" | tr -d ' ')")" >> "$LOG"
 sh scripts/bench/bench.sh lock status >> "$LOG"
 st=0
 /bin/bash scripts/pins.sh selftest no-such-case >> "$LOG" 2>&1 || st=$?
@@ -365,6 +376,13 @@ EOF
 	[ "$ST" -eq 0 ] || bad "nested: the gate exited $ST; $(say)"
 	grep -qx 'check token=set entry=unset lc=unset' "${LOG:?}" || bad "nested: the check did not run under the lock with the caller's LC_ALL (unset); $(say)"
 	grep -q '^lock=held label=gate .*alive=yes' "${LOG:?}" || bad "nested: the gate does not hold the lock while its checks run; $(say)"
+	# The lock shell sits above the gate, not between the gate and its
+	# scheduler: the scheduler's parent, which GATE_PARENT must name (the
+	# scheduler ends every check at its first poll otherwise), is the run of
+	# test.sh under the lock, and that run's parent is the lock shell.
+	grep -qx "sched-parent=sh ${T:?}/scripts/test.sh" "${LOG:?}" &&
+		grep -q '^sched-grandparent=sh scripts/bench/bench.sh lock run gate -- env ' "${LOG:?}" ||
+		bad "nested: the scheduler was not started by the run of test.sh under the lock; $(say)"
 	grep -qx 'pins status=1' "${LOG:?}" && grep -q '^pins: cannot build framediff' "${LOG:?}" ||
 		bad "nested: the pin selftest under the gate did not pass straight through to its command; $(say)"
 	grep -q 'waiting for the lock' "${LOG:?}" "${T:?}/out" && bad "nested: a call under the gate waited for the lock; $(say)"
@@ -464,7 +482,7 @@ mutant() {
 	_m=${tmp:?}/mutant.$1
 	rm -rf "${_m:?}"
 	mkdir -p "${_m:?}"
-	cp "$REAL/test.sh" "$REAL/coverage.sh" "$REAL/pins.sh" "${_m:?}/"
+	cp "$REAL/test.sh" "$REAL/coverage.sh" "$REAL/pins.sh" "$REAL/gate-checks.sh" "${_m:?}/"
 	lit "${_m:?}/$2" "$3" "$4" || { echo "$me: mutant $1 does not apply to $2"; return 1; }
 	if (SRC=$_m MUTANT=1 && cd "$ROOT" && "$5") > "${tmp:?}/mutant.$1.out" 2>&1; then
 		echo "$me: mutant $1 passed $5; the test does not catch it"
@@ -488,6 +506,9 @@ mutant gate-entry-no-token test.sh ' || [ -z "${BENCH_LOCK_TOKEN:-}" ]' '' t_gat
 mutant pins-relocks pins.sh 'if [ "$entry" = "$label" ] && [ -n "${BENCH_LOCK_TOKEN:-}" ]; then return 0; fi' ':' t_pins || mfail=1
 # The caller's LC_ALL, when it is unset, comes back unset under the lock.
 mutant gate-lc-lost test.sh 'else set -- -u LC_ALL "$@"; fi' 'fi' t_nested || mfail=1
+# GATE_PARENT names the run of test.sh under the lock, not the lock shell
+# above it.
+mutant gate-parent-lock-shell test.sh 'GATE_PARENT=$$ ' 'GATE_PARENT=$PPID ' t_nested || mfail=1
 mutant coverage-lc-lost coverage.sh 'else set -- -u LC_ALL "$@"; fi' 'fi' t_cov_lc || mfail=1
 # With no state directory the lock is off; CI is GitHub Actions only; a
 # lock that is off says so.
