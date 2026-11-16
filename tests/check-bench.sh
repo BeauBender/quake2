@@ -189,6 +189,12 @@ fresh() {
 	export BENCH_STATE BENCH_STORE BENCH_LOCK_POLL BENCH_LOCK_WAIT
 	unset BENCH_LOCK_TOKEN BENCH_NULL_VALUES BENCH_NULL_REFUSE BENCH_HASH 2> /dev/null || true
 }
+# foreign <file...>: prints the lines of the files that are not the lock
+# shell's own ("bench: ..."), at most five, each cut to 200 characters and
+# shown after the name of the file it came from; fails when there is none.
+foreign() {
+	awk -v me="$me" '!/^bench: / && n < 5 { f = FILENAME; sub(/.*\//, "", f); print me ":   " substr(f ": " $0, 1, 200); n++ } END { exit !n }' "$@"
+}
 # lit <file> <old> <new>: replaces the first occurrence of <old> on each
 # line, as fixed text; fails when there is none.
 lit() {
@@ -479,7 +485,10 @@ t_lock_stop() {
 	grep -q got-term "${E:?}/l2/log" || bad "stop: the work a command left running never got TERM"
 	if pid_running "$(cat "${E:?}/l2/pid" 2> /dev/null)"; then bad "stop: the work a command left running, which ignores TERM, outlived the lock"; fi
 	# Commands that print nothing themselves: no job notice either.
-	grep -v '^bench: ' "${E:?}/stopped.out" "${E:?}/term.out" "${E:?}/left.err" > /dev/null && bad "stop: the lock shell printed a line that is not its own (a job notice)"
+	if foreign "${E:?}/stopped.out" "${E:?}/term.out" "${E:?}/left.err" > "${E:?}/foreign"; then
+		cat "${E:?}/foreign"
+		bad "stop: the lock shell printed a line that is not its own (a job notice), above"
+	fi
 	# By now each grandchild would have written its line.
 	while [ "$(date +%s)" -le $((_tl + 3)) ]; do sleep 0.2; done
 	if grep -q 'late$' "${E:?}/log"; then bad "stop: something wrote after the lock was free: $(grep 'late$' "${E:?}/log" | tr '\n' ' ')"; fi
