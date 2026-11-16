@@ -335,7 +335,10 @@ bench_stop_group() {
 # bench_watch <pid> <end> <cap>: polls the command bench_spawn started as
 # <pid> until it exits (0), it is stopped (2: state T, a stop signal, or
 # the terminal it touched from its background process group), or the clock
-# passes <end> (1; seconds since the epoch, empty for none). It polls after
+# passes <end> (1; seconds since the epoch, empty for none). Only the
+# leader's state is read, so a stop of a single member of the group, or a
+# terminal stop of a member whose leader catches or ignores SIGTTOU, is not
+# detected. It polls after
 # 0.01 s, 0.02 s, then every 0.05 s up to the 40th poll (about 2 s), so a
 # short command is seen to end at once, every 0.2 s for the next 100
 # (about 20 s), then every
@@ -368,17 +371,18 @@ bench_watch() {
 	return 0
 } 2> /dev/null
 
-# bench_end_group <pid>: after the leader <pid> exited and was reaped, gives
-# what it left running in its process group 1 s (by the clock, so 1 to 2 s)
-# to end, then stops it (bench_stop_group, the group only). Returns 1 when
-# it had to stop something. Nothing to do without job control: the command
-# then leads no group.
+# bench_end_group <pid> <grace>: after the leader <pid> exited and was
+# reaped, gives what it left running in its process group 1 s (by the
+# clock, so 1 to 2 s) to end, then stops it (bench_stop_group with the
+# caller's <grace>, the group only). Returns 1 when it had to stop
+# something. Nothing to do without job control: the command then leads no
+# group.
 bench_end_group() {
 	kill -0 -- "-$1" 2> /dev/null || return 0
 	_eg_end=$(($(date +%s) + 1))
 	while kill -0 -- "-$1" 2> /dev/null; do
 		if [ "$(date +%s)" -gt "$_eg_end" ]; then
-			bench_stop_group "$1" "" group
+			bench_stop_group "$1" "$2" group
 			return 1
 		fi
 		bench_nap 0.1
@@ -395,7 +399,8 @@ BENCH_BOUNDED_REAPED=
 # (whole seconds by the clock, so between <seconds> and one more), or when
 # it is stopped (bench_watch). Returns its status; 124 past the wall time,
 # 74 when it was stopped. Once the command has exited, what it left running
-# in its group is stopped too (bench_end_group) before the bound returns.
+# in its group is stopped too (bench_end_group, with the same
+# BENCH_STOP_GRACE) before the bound returns.
 # For adapters. The poll settles at every 0.5 s.
 bench_bounded() {
 	_bb_s=$1
@@ -421,7 +426,7 @@ bench_bounded() {
 	_bb_st=0
 	wait "$BENCH_BOUNDED_PID" 2> /dev/null || _bb_st=$?
 	BENCH_BOUNDED_REAPED=group
-	bench_end_group "$BENCH_BOUNDED_PID" || bench_note "stopped what the command left running in its process group"
+	bench_end_group "$BENCH_BOUNDED_PID" "${BENCH_STOP_GRACE:-10}" || bench_note "stopped what the command left running in its process group"
 	BENCH_BOUNDED_PID=
 	BENCH_BOUNDED_REAPED=
 	return "$_bb_st"

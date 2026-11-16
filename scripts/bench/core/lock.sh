@@ -58,12 +58,13 @@
 # bench_lock_release, which removes the lock only while the holder file
 # still carries this process's token. On INT, TERM or HUP the lock shell
 # first stops the command's whole process group (bench_stop_group: TERM,
-# then KILL after twice BENCH_STOP_GRACE and at least BENCH_STOP_GRACE +
-# 5 s, so that a nested bench.sh stopping a group of its own with that
-# grace, as bench_bounded does, finishes first). When the command exits,
-# what it left running in its group gets 1 s to end and is then stopped
-# the same way (bench_end_group) before the lock is released. So nothing
-# left in the command's process group outlives the lock.
+# then KILL after bench_lock_grace, twice BENCH_STOP_GRACE and at least
+# BENCH_STOP_GRACE + 5 s, so that a nested bench.sh stopping a group of
+# its own with that grace, as bench_bounded does, finishes first). When
+# the command exits, what it left running in its group gets 1 s to end
+# and is then stopped the same way, with the same grace (bench_end_group),
+# before the lock is released. So nothing left in the command's process
+# group outlives the lock.
 
 BENCH_STATE_DIR=
 BENCH_LOCK_DIR=
@@ -251,18 +252,26 @@ bench_lock_release() {
 	return 0
 }
 
+# bench_lock_grace: prints the seconds the lock gives the command's process
+# group between TERM and KILL, on a signal, a stop and for what the command
+# left running alike: twice BENCH_STOP_GRACE (default 10), and at least
+# BENCH_STOP_GRACE + 5. The floor lets a nested bench.sh stop its own
+# bounded group, which takes up to its grace, a second of clock and 2 s
+# after its KILL, before this KILL ends it.
+bench_lock_grace() {
+	_lg_g=${BENCH_STOP_GRACE:-10}
+	_lg_l=$((2 * _lg_g))
+	[ "$_lg_l" -ge $((_lg_g + 5)) ] || _lg_l=$((_lg_g + 5))
+	printf '%s\n' "$_lg_l"
+}
+
 # bench_lock_stop_child: stops the command this process runs under the lock
-# and its whole process group: TERM, up to twice BENCH_STOP_GRACE and at
-# least BENCH_STOP_GRACE + 5 s for the group to go, then KILL; then reaps
-# it (once it is reaped, BENCH_LOCK_REAPED, the group only). The floor
-# lets a nested bench.sh stop its own bounded group, which takes up to its
-# grace, a second of clock and 2 s after its KILL, before this KILL ends it.
+# and its whole process group: TERM, up to bench_lock_grace seconds for the
+# group to go, then KILL; then reaps it (once it is reaped,
+# BENCH_LOCK_REAPED, the group only).
 bench_lock_stop_child() {
 	[ -n "${BENCH_LOCK_CHILD:-}" ] || return 0
-	_sc_g=${BENCH_STOP_GRACE:-10}
-	_sc_l=$((2 * _sc_g))
-	[ "$_sc_l" -ge $((_sc_g + 5)) ] || _sc_l=$((_sc_g + 5))
-	bench_stop_group "$BENCH_LOCK_CHILD" "$_sc_l" "${BENCH_LOCK_REAPED:-}"
+	bench_stop_group "$BENCH_LOCK_CHILD" "$(bench_lock_grace)" "${BENCH_LOCK_REAPED:-}"
 	BENCH_LOCK_CHILD=
 }
 
@@ -298,8 +307,11 @@ bench_lock_run() {
 	[ "$_ru_st" -eq 0 ] || exit "$_ru_st"
 	BENCH_LOCK_TOKEN=$BENCH_LOCK_MINE
 	export BENCH_LOCK_TOKEN
-	# In the background, in its own process group, so a signal reaches the
-	# trap at once (wait returns) and the trap reaches the whole command.
+	# In the background, in its own process group, so the trap reaches the
+	# whole command. The lock shell polls it (bench_watch, below), so a TERM
+	# to the lock shell alone runs its trap once the current nap's sleep
+	# ends, at most 1 s later; a signal to the lock shell's process group
+	# (Ctrl-C) ends that sleep too, so its trap runs at once.
 	if [ -t 0 ]; then
 		bench_spawn "$@" < /dev/null
 	else
@@ -320,7 +332,7 @@ bench_lock_run() {
 	fi
 	wait "$BENCH_LOCK_CHILD" 2> /dev/null || _ru_st=$?
 	BENCH_LOCK_REAPED=group
-	bench_end_group "$BENCH_LOCK_CHILD" || bench_note "stopped what the command left running in its process group"
+	bench_end_group "$BENCH_LOCK_CHILD" "$(bench_lock_grace)" || bench_note "stopped what the command left running in its process group"
 	BENCH_LOCK_CHILD=
 	exit "$_ru_st"
 }
