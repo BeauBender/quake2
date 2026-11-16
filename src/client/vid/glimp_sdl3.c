@@ -40,7 +40,12 @@
 
 #include <SDL3/SDL.h>
 
-#if defined(__APPLE__) && defined(__OBJC__)
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
+/* AppKit is macOS only: iOS, tvOS and visionOS have no NSWindow */
+#if defined(__APPLE__) && defined(__OBJC__) && TARGET_OS_OSX
 #import <AppKit/NSWindow.h>
 #endif
 
@@ -129,7 +134,7 @@ ClearDisplayIndices(void)
 static void
 DisableCloseAnimation(SDL_Window *w)
 {
-#if defined(__APPLE__) && defined(__OBJC__)
+#if defined(__APPLE__) && defined(__OBJC__) && TARGET_OS_OSX
 	NSWindow *nswindow = (NSWindow *)SDL_GetPointerProperty(SDL_GetWindowProperties(w),
 			SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, NULL);
 
