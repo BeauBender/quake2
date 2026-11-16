@@ -59,6 +59,13 @@ gate_first="check-metalfx-report.sh check-pins.sh check-bench.sh check-identity-
 # to this script is acted on at once (a trap waits for a command in the
 # foreground to end): gate_stop passes it on as SIGTERM, which ends the
 # scheduler and every check it runs, waits for that, and fails the gate.
+# Job control is on for that one command, as gate-checks.sh does for each
+# check: it leads a process group of its own, and keeps SIGINT and SIGQUIT
+# as this script got them (a command started in the background without job
+# control ignores both, and so would every check). GATE_PARENT=$$ names
+# this script to it: when this script dies, by any signal (SIGKILL too,
+# which no trap sees), the scheduler sees it within one poll and ends every
+# check, as on SIGTERM.
 gate_sched=
 gate_stop() {
 	if [ -n "$gate_sched" ]; then
@@ -70,8 +77,10 @@ gate_stop() {
 trap 'gate_stop 129' HUP
 trap 'gate_stop 130' INT
 trap 'gate_stop 143' TERM
-scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh &
+set -m
+GATE_PARENT=$$ scripts/gate-checks.sh "$gate_serial" "$gate_first" tests/check-*.sh &
 gate_sched=$!
+set +m
 wait "$gate_sched"
 trap - HUP INT TERM
 

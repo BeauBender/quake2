@@ -551,7 +551,7 @@ signalled() {
 		kill -s KILL "$_lp" 2> /dev/null || :
 	fi
 	_sr=0
-	wait "$_lp" || _sr=$?
+	wait "$_lp" 2> /dev/null || _sr=$?
 	_lp=
 	_sn=0
 	while :; do

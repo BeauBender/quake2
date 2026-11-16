@@ -30,9 +30,17 @@
 #
 # A SIGHUP, SIGINT or SIGTERM to this script ends the run at once: no other
 # check starts, every running one and all it started get SIGTERM, and SIGKILL
-# 3 s later (see gate_cleanup), and the exit status is 129, 130 or 143.
+# 10 s later (see gate_end), and the exit status is 129, 130 or 143. When
+# GATE_PARENT is set (scripts/test.sh sets it to its own pid), the run ends
+# the same way, with status 1, within one poll of this script's parent no
+# longer being that process: it died, by any signal, SIGKILL included.
+# GATE_PARENT is not passed on to the checks. When a check ends, what it
+# left running is ended the same way before the check is counted done.
 set -eu
 me=gate
+# the seconds from SIGTERM to SIGKILL, so that a check's own cleanup trap
+# can finish on a loaded host
+gate_grace=10
 
 # gate_jobs: GATE_JOBS, else half the CPUs, at least 1
 gate_jobs() {
@@ -74,6 +82,13 @@ gate_start() {
 # status and wall time of each one that has, and prints what is printable
 gate_reap() {
 	while :; do
+		if [ -n "$_gparent" ] && ! gate_parent "$_gparent"; then
+			# its output may be a pipe nobody reads any more: a write
+			# there must fail, not kill this script before its cleanup
+			trap '' PIPE
+			echo "$me: the process that started this run (pid $_gparent) is gone; ending every check" >&2 || :
+			exit 1
+		fi
 		_grk= _grd=0
 		for _grp in $_grun; do
 			_grk_i=${_grp%%:*}
@@ -86,6 +101,8 @@ gate_reap() {
 			fi
 			_grst=0
 			wait "$_grpid" || _grst=$?
+			# what it left running in its group
+			gate_end "$_grpid"
 			printf '%s %s\n' "$_grst" "$(($(date +%s) - _grt0))" > "$_gd/$_grk_i.end"
 			_grd=$((_grd + 1))
 		done
@@ -148,27 +165,35 @@ gate_alive() {
 	return 1
 }
 
-# gate_cleanup: on the way out (a signal, an error), ends every check still
-# running and everything it started: TERM to each check's process group,
-# up to 3 s for them to end, then KILL to all of them; then removes the logs
+# gate_parent <pid>: this script's parent is still <pid> (ps fails: it is not)
+gate_parent() {
+	case " $(ps -o ppid= -p "$$" 2> /dev/null) " in *" $1 "*) return 0 ;; esac
+	return 1
+}
+
+# gate_end <group>...: ends those process groups, every process in them:
+# TERM, up to gate_grace s for them to end, then KILL
+gate_end() {
+	gate_kill TERM "$@"
+	_gew=0
+	while [ "$_gew" -lt $((gate_grace * 5)) ] && gate_alive "$@"; do
+		sleep 0.2 2> /dev/null || sleep 1
+		_gew=$((_gew + 1))
+	done
+	gate_kill KILL "$@"
+}
+
+# gate_cleanup: on the way out (a signal, an error, the parent gone), ends
+# every check still running and everything it started (gate_end on each
+# check's process group); then removes the logs
 gate_cleanup() {
 	_gcg=
 	for _gcp in $_grun; do
 		_gcr=${_gcp#*:}
 		_gcg="$_gcg ${_gcr%%:*}"
 	done
-	if [ -n "$_gcg" ]; then
-		# shellcheck disable=SC2086 # a list of process groups
-		gate_kill TERM $_gcg
-		_gcw=0
-		# shellcheck disable=SC2086
-		while [ "$_gcw" -lt 15 ] && gate_alive $_gcg; do
-			sleep 0.2 2> /dev/null || sleep 1
-			_gcw=$((_gcw + 1))
-		done
-		# shellcheck disable=SC2086
-		gate_kill KILL $_gcg
-	fi
+	# shellcheck disable=SC2086 # a list of process groups
+	[ -z "$_gcg" ] || gate_end $_gcg
 	rm -rf "${_gd:?}"
 }
 
@@ -177,6 +202,8 @@ gate_cleanup() {
 gate_run_checks() {
 	_gserial=$1 _gfirst=$2
 	shift 2
+	_gparent=${GATE_PARENT:-}
+	unset GATE_PARENT
 	_gj=$(gate_jobs)
 	case $_gj in *[!0-9]* | 0*)
 		echo "$me: GATE_JOBS must be a positive whole number, not '$_gj'" >&2
