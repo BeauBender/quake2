@@ -37,10 +37,12 @@ bench_is_label() {
 	[ "${#1}" -le 64 ]
 }
 
-# bench_is_uint <text>: digits only.
+# bench_is_uint <text>: decimal digits only, and no leading zero but for 0
+# itself: shell arithmetic reads 08 as a bad octal number, so every numeric
+# setting goes through this before any arithmetic, and 08, 09, 010 are refused.
 bench_is_uint() {
 	case $1 in
-	'' | *[!0-9]*) return 1 ;;
+	'' | *[!0-9]* | 0?*) return 1 ;;
 	esac
 	return 0
 }

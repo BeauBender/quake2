@@ -417,8 +417,8 @@ def main(argv):
         return 0
     if cmd == "stop-wait":
         # the seconds sh_group gives a stopped command between TERM and KILL, from BENCH_STOP_GRACE as the
-        # host lock reads it: unset, 1, not whole seconds, 30; then the same under the generator's own hold
-        envs = ({}, {"BENCH_STOP_GRACE": "1"}, {"BENCH_STOP_GRACE": "x"}, {"BENCH_STOP_GRACE": "30"})
+        # host lock reads it: unset, 1, not whole seconds, 30, 08 and 010 (a leading zero is not whole seconds); then the same under the generator's own hold
+        envs = ({}, {"BENCH_STOP_GRACE": "1"}, {"BENCH_STOP_GRACE": "x"}, {"BENCH_STOP_GRACE": "30"}, {"BENCH_STOP_GRACE": "08"}, {"BENCH_STOP_GRACE": "010"})
         free = " ".join(str(m.lock_stop_wait(e)) for e in envs)
         m.LOCK_HELD = True
         print(free + " / " + " ".join(str(m.lock_stop_wait(e)) for e in envs))
