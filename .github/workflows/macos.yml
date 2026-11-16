@@ -34,6 +34,12 @@ jobs:
       run: |
         # Public runners come with 3 CPUs.
         gmake -j3
+    - name: Static modules
+      run: |
+        # The STATIC_MODULES=1 client (game and soft renderer linked in, no
+        # dylib) against the artifact: otool, nm, strings. SDL is built by
+        # the step above. The gate runs the cheaper default of this check.
+        tests/check-static-modules.sh --full
     - name: Unit tests
       run: |
         # tests/unit against the q2ded objects; no SDL, no game data.
