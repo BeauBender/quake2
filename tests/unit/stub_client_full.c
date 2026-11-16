@@ -39,6 +39,7 @@
 
 #include "../../src/client/header/client.h"
 #include "../../src/client/sound/header/local.h"
+#include "../../src/client/input/header/input.h"
 #include "stub_client.h"
 #include "test.h"
 
@@ -138,6 +139,7 @@ void CL_ParseInventory(void) { stub_not_reachable("CL_ParseInventory"); }
 void CL_DrawInventory(void) { }
 void In_FlushQueue(void) { }
 void IN_Update(void) { }
+int IN_TouchOverlay(touch_draw_t *list, int max, float *ppp) { return 0; }
 void M_ForceMenuOff(void) { }
 void M_Draw(void) { }
 void Con_CheckResize(void) { }

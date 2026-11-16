@@ -199,6 +199,48 @@ GLimp_ScreenEvent(void)
 static qboolean text_input_wanted;
 
 /*
+ * Starts text input on a window with the properties the console needs:
+ * plain text, no capital for the first letter of a word or a sentence,
+ * no autocorrect and no prediction (a command, a path or the value
+ * typed after "password" must arrive as it was typed), one line. If the
+ * properties cannot be made nothing is started, never the system's
+ * defaults (they turn autocorrect back on): the keyboard stays off, it is
+ * said once, and the input code asks again a few times (Touch_TextInput).
+ */
+static void
+StartTextInput(SDL_Window *win)
+{
+	SDL_PropertiesID props = SDL_CreateProperties();
+	qboolean ok = false;
+
+	if (props)
+	{
+		ok = SDL_SetNumberProperty(props, SDL_PROP_TEXTINPUT_TYPE_NUMBER, SDL_TEXTINPUT_TYPE_TEXT) &&
+			SDL_SetNumberProperty(props, SDL_PROP_TEXTINPUT_CAPITALIZATION_NUMBER, SDL_CAPITALIZE_NONE) &&
+			SDL_SetBooleanProperty(props, SDL_PROP_TEXTINPUT_AUTOCORRECT_BOOLEAN, false) &&
+			SDL_SetBooleanProperty(props, SDL_PROP_TEXTINPUT_MULTILINE_BOOLEAN, false);
+
+		if (ok)
+		{
+			ok = SDL_StartTextInputWithProperties(win, props);
+		}
+
+		SDL_DestroyProperties(props);
+	}
+
+	if (!ok)
+	{
+		static qboolean said;
+
+		if (!said)
+		{
+			said = true;
+			Com_Printf("Text input with autocorrect off failed (%s), the keyboard stays off.\n", SDL_GetError());
+		}
+	}
+}
+
+/*
  * iOS only: text input, and with it the on-screen keyboard, on or off.
  * Called by the input code when it changes, never every frame.
  */
@@ -214,12 +256,24 @@ GLimp_TextInput(qboolean on)
 
 	if (on)
 	{
-		SDL_StartTextInput(window);
+		StartTextInput(window);
 	}
 	else
 	{
 		SDL_StopTextInput(window);
 	}
+}
+
+/*
+ * iOS only: whether text input runs now and its keyboard is up. The hide
+ * key of an iPad only hides the keyboard and leaves SDL's text input
+ * active, so both are asked. With no window there is nothing to ask: the
+ * want is kept and applied when the window is made.
+ */
+qboolean
+GLimp_TextInputActive(void)
+{
+	return !window || (SDL_TextInputActive(window) && SDL_ScreenKeyboardShown(window));
 }
 #endif
 
@@ -266,7 +320,7 @@ CreateSDLWindow(SDL_WindowFlags flags, int fullscreen, int w, int h)
 #if defined(__APPLE__) && TARGET_OS_IPHONE
 		if (text_input_wanted)
 		{
-			SDL_StartTextInput(window);
+			StartTextInput(window);
 		}
 #else
 		SDL_StartTextInput(window);
