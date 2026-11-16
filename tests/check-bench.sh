@@ -425,6 +425,82 @@ t_lock_reclaim() {
 	[ "$fails" -eq 0 ]
 }
 
+t_lock_guard() {
+	fresh guard
+	mkdir -p "${E:?}/state"
+	sh -c 'exit 0' &
+	_dead=$!
+	wait "$_dead" || true
+	# A dead holder's lock whose reclaim guard another waiter holds: left alone.
+	mkdir "${E:?}/state/lock" "${E:?}/state/reclaim.t-$_dead-1-guarded"
+	printf 'label=ghost\npid=%s\nchild=\nstart=2020-01-01T00:00:00Z\ntoken=t-%s-1-guarded\n' "$_dead" "$_dead" > "${E:?}/state/lock/holder"
+	_st=0
+	env BENCH_LOCK_WAIT=1 sh "$R/bench.sh" lock run g -- echo ran > "${E:?}/out" 2> /dev/null || _st=$?
+	[ "$_st" -eq 75 ] || bad "guard: a waiter reclaimed a lock whose reclaim guard another waiter holds (status $_st)"
+	[ ! -s "${E:?}/out" ] || bad "guard: the command ran past a held reclaim guard"
+	grep -q '^token=t-.*-guarded$' "${E:?}/state/lock/holder" 2> /dev/null || bad "guard: the guarded lock was removed"
+	rm -rf "${E:?}/state/lock" "${E:?}/state/reclaim.t-$_dead-1-guarded"
+	# A lock directory with no holder file, inside its grace: left alone.
+	mkdir "${E:?}/state/lock"
+	_st=0
+	env BENCH_LOCK_GRACE=5 BENCH_LOCK_WAIT=2 sh "$R/bench.sh" lock run g -- echo ran > "${E:?}/out" 2> /dev/null || _st=$?
+	[ "$_st" -eq 75 ] || bad "grace: a holder-less lock was reclaimed inside its grace (status $_st)"
+	[ -d "${E:?}/state/lock" ] || bad "grace: the holder-less lock was removed inside its grace"
+	rmdir "${E:?}/state/lock" 2> /dev/null || true
+	# BENCH_LOCK_POLL: at least 0.01 s, and cut to the wait when longer.
+	for _p in 0 0.0 0.009 -1 1e1 x; do
+		_st=0
+		env BENCH_LOCK_POLL="$_p" sh "$R/bench.sh" lock run p -- true 2> /dev/null || _st=$?
+		[ "$_st" -eq 2 ] || bad "poll: BENCH_LOCK_POLL=$_p was not refused (status $_st)"
+	done
+	env BENCH_LOCK_POLL=0.01 sh "$R/bench.sh" lock run p -- true || bad "poll: BENCH_LOCK_POLL=0.01 was refused"
+	start sh "$R/bench.sh" lock run long -- sleep 30 > /dev/null 2>&1
+	_h=$BG
+	wait_held 5 long || bad "poll: the holder never showed"
+	start env BENCH_LOCK_POLL=60 BENCH_LOCK_WAIT=1 sh "$R/bench.sh" lock run waiter -- true > /dev/null 2>&1
+	_w=$BG
+	if ! wait_gone 6 "$_w"; then
+		bad "poll: a poll of 60 s against a wait of 1 s was not cut to the wait"
+		kill -KILL "$_w" 2> /dev/null || true
+	fi
+	_st=0
+	wait "$_w" 2> /dev/null || _st=$?
+	[ "$_st" -eq 75 ] || bad "poll: the waiter with a long poll exited $_st, not 75"
+	kill -TERM "$_h"
+	wait_gone 15 "$_h" || bad "poll: the holder did not exit on TERM"
+	wait "$_h" 2> /dev/null || true
+	# A maker that stalls between its mkdir and its holder write for longer
+	# than the grace, while a waiter reclaims the directory and makes it
+	# again, backs off: the two never hold the lock at once.
+	_s=${tmp:?}/stall
+	rm -rf "${_s:?}"
+	cp -R "$R" "$_s"
+	lit "${_s:?}/core/lock.sh" 'BENCH_LOCK_SINCE=$(bench_utc)' 'BENCH_LOCK_SINCE=$(bench_utc); sleep 2.5' || bad "stall: the injected stall does not apply"
+	: > "${E:?}/slog"
+	start sh "$_s/bench.sh" lock run maker -- sh -c 'echo N-start >> "$1"; sleep 0.3; echo N-end >> "$1"' x "${E:?}/slog" > "${E:?}/maker.out" 2>&1
+	_mk=$BG
+	_k=0
+	while [ ! -d "${E:?}/state/lock" ] && [ "$_k" -lt 50 ]; do
+		sleep 0.1
+		_k=$((_k + 1))
+	done
+	start env BENCH_LOCK_GRACE=1 sh "$R/bench.sh" lock run taker -- sh -c 'echo C-start >> "$1"; sleep 3; echo C-end >> "$1"' x "${E:?}/slog" > "${E:?}/taker.out" 2>&1
+	_c=$BG
+	wait_gone 20 "$_mk" || bad "stall: the stalled maker did not finish"
+	wait_gone 20 "$_c" || bad "stall: the taker did not finish"
+	_s1=0
+	wait "$_mk" || _s1=$?
+	_s2=0
+	wait "$_c" || _s2=$?
+	[ "$_s1" -eq 0 ] && [ "$_s2" -eq 0 ] || bad "stall: the maker and the taker exited $_s1 and $_s2"
+	case $(tr '\n' ' ' < "${E:?}/slog") in
+	"C-start C-end N-start N-end " | "N-start N-end C-start C-end ") ;;
+	*) bad "stall: a stalled maker and a taker held the lock at once: $(tr '\n' ' ' < "${E:?}/slog")" ;;
+	esac
+	[ "$(B lock status)" = lock=free ] || bad "stall: the lock was left held"
+	[ "$fails" -eq 0 ]
+}
+
 t_lock_state_dir() {
 	fresh state
 	mkdir "${E:?}/home"
@@ -753,7 +829,7 @@ t_compare() {
 }
 
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_bounded t_lock_reclaim t_lock_state_dir t_host t_inputs t_case t_stats t_store t_drift t_compare"
+all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_bounded t_lock_reclaim t_lock_guard t_lock_state_dir t_host t_inputs t_case t_stats t_store t_drift t_compare"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
@@ -798,6 +874,8 @@ mutant lock-mkdir core/lock.sh 'if mkdir "${BENCH_LOCK_DIR:?}" 2> /dev/null; the
 mutant reentry-any-token core/lock.sh '[ "$(bench_kv "$(bench_lock_holder)" token)" = "$BENCH_LOCK_TOKEN" ]' '[ -n "$BENCH_LOCK_TOKEN" ]' t_lock_tokens || mfail=1
 mutant drift-no-t core/stats.sh 'lo = mn - t; hi = mx + t' 'lo = mn; hi = mx' t_drift || mfail=1
 mutant core-names-game core/common.sh '' '# the Quake II adapter' t_generic || mfail=1
+mutant reclaim-guard core/lock.sh 'if ! mkdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' 'if ! mkdir -p "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' t_lock_guard || mfail=1
+mutant bare-no-grace core/lock.sh '-ge "$_la_grace" ]; then' '-ge 0 ]; then' t_lock_guard || mfail=1
 [ "$mfail" -eq 0 ] || exit 1
 
 _ok=1
