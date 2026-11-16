@@ -651,7 +651,8 @@ c_kgrp() {
 	d=$(newcase)
 	gtree "$d" "$_tf" 1 0 0 hold 30
 	launch "$d" env GATE_JOBS=1 GP_EVENTS="$d/events" GP_SPEC="$d/spec" TMPDIR="$d/td" sh "$d/tree/scripts/test.sh"
-	signalled "$d" kgrp KILL 137 "start a " 1 group 10
+	# (2> /dev/null: the shell's own "Killed: 9" line for test.sh)
+	signalled "$d" kgrp KILL 137 "start a " 1 group 10 2> /dev/null
 }
 
 # sigs: a probe check-a.sh run through scripts/test.sh (or $WIRING), on a
@@ -677,7 +678,8 @@ c_sigs() {
 	lwait 90 || rc=$?
 	[ "$rc" -eq 0 ] && grep -q '^make ' "$d/events" || { say "sigs: test.sh on the probe gave status $rc"; return 1; }
 	_sgt=$(grep '^sig ' "$d/events" || :)
-	[ "$_sgt" = "$_sgw" ] || { say "sigs: a check run by test.sh got: $_sgt; run directly: $_sgw" | tr '\n' ' '; echo; return 1; }
+	[ "$_sgt" = "$_sgw" ] ||
+		{ say "sigs: a check run by test.sh got: $(printf '%s\n' "$_sgt" | tr '\n' ' ')run directly: $(printf '%s\n' "$_sgw" | tr '\n' ' ')"; return 1; }
 	printf '%s\n' "$_sgt" | grep -qx 'sig a INT delivered' || { say "sigs: SIGINT is not delivered to a check run by test.sh"; return 1; }
 }
 
