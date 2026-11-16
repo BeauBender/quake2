@@ -120,10 +120,12 @@ gate_unwatch() {
 if [ "$lock_entry" = gate ] && [ -n "${BENCH_LOCK_TOKEN:-}" ]; then
 	gate_lock_shell=$PPID
 	trap gate_unwatch EXIT
-	set -m
+	# job control, in its long spelling: the scheduler's short one below
+	# must stay the one line that tests/check-gate-parallel.sh mutates
+	set -o monitor
 	sh -c "$gate_watch_sh" gate-watch "$gate_lock_shell" < /dev/null > /dev/null 2>&1 &
 	gate_watch=$!
-	set +m
+	set +o monitor
 fi
 
 # A warning, not a failure: without the hooks the commit and push guards
