@@ -514,14 +514,23 @@ c_wiring() {
 # launch <dir> <command>...: starts <command> in the background, its output
 # in <dir>/out, its pid in _lp. Job control is on for that one command, so
 # its SIGINT is not ignored (a command started in the background without it
-# ignores SIGINT); it also leads a process group of its own.
+# ignores SIGINT); it also leads a process group of its own. Both sides of
+# the fork make that group (setpgid), at the same time: on a busy host the
+# child's call can lose that race, and bash then prints "child setpgid
+# (<pid> to <pid>): Operation not permitted" from the child, before its
+# redirections, although the parent's call made the group. That line goes
+# to <dir>/launch.err, out of this check's output; a run that does not lead
+# a group of its own fails this self-test, whatever its case says.
 launch() {
 	_ld=$1
 	shift
 	set -m
-	"$@" > "$_ld/out" 2>&1 &
+	{ "$@" > "$_ld/out" 2>&1 & } 2> "$_ld/launch.err"
 	_lp=$!
 	set +m
+	_lg=$(ps -o pgid= -p "$_lp" 2> /dev/null | tr -d ' ')
+	[ -z "$_lg" ] || [ "$_lg" = "$_lp" ] ||
+		bad "launch: pid $_lp is in process group $_lg, not one of its own: $(cat "$_ld/launch.err")"
 }
 # dead <pid>: no such process, or a zombie (it has ended, not yet reaped)
 dead() {
@@ -886,6 +895,7 @@ smut() {
 }
 smut no-int-probe intskip "sh -c 'kill -INT \$\$; exit 0' 2> /dev/null || INT_OK=1" 'INT_OK=1'
 smut skip-unsaid intskip 'skipint() { say' 'skipint() { :'
+smut launch-no-group intskip '{ "$@" > "$_ld/out"' '{ set +m; "$@" > "$_ld/out"'
 
 if [ "$fail" -ne 0 ]; then
 	echo "$me: FAILED"
