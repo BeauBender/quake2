@@ -1465,6 +1465,7 @@ endif
 ifeq ($(YQ2_OSTYPE), Windows)
 $(BINDIR)/yquake2.exe : $(CLIENT_OBJS) icon
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(BUILDROOT)/icon/icon.res $(CLIENT_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
 $(BINDIR)/quake2.exe : src/win-wrapper/wrapper.c icon
 	$(Q)$(CC) -Wall -mwindows $(BUILDROOT)/icon/icon.res src/win-wrapper/wrapper.c -o $@
@@ -1472,10 +1473,12 @@ else ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/quake2 : $(CLIENT_OBJS) $(SDL3_LIB)
 $(BINDIR)/quake2 : $(STATIC_LINK_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(CLIENT_OBJS) $(STATIC_LINK_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(STATIC_LDLIBS) $(SDLLDFLAGS) -o $@
 else
 $(BINDIR)/quake2 : $(CLIENT_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(CLIENT_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
 endif
 
@@ -1483,10 +1486,12 @@ endif
 ifeq ($(YQ2_OSTYPE), Windows)
 $(BINDIR)/q2ded.exe : $(SERVER_OBJS) icon
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(BUILDROOT)/icon/icon.res $(SERVER_OBJS) $(LDLIBS) -o $@
 else
 $(BINDIR)/q2ded : $(SERVER_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(SERVER_OBJS) $(LDLIBS) -o $@
 endif
 
@@ -1494,14 +1499,17 @@ endif
 ifeq ($(YQ2_OSTYPE), Windows)
 $(BINDIR)/ref_gl1.dll : $(REFGL1_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(REFGL1_OBJS) $(LDLIBS) $(DLL_SDLLDFLAGS) -o $@
 else ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/ref_gl1.dylib : $(REFGL1_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(REFGL1_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
 else
 $(BINDIR)/ref_gl1.so : $(REFGL1_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(REFGL1_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
 endif
 
@@ -1509,14 +1517,17 @@ endif
 ifeq ($(YQ2_OSTYPE), Windows)
 $(BINDIR)/ref_gl3.dll : $(REFGL3_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(REFGL3_OBJS) $(LDLIBS) $(DLL_SDLLDFLAGS) -o $@
 else ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/ref_gl3.dylib : $(REFGL3_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(REFGL3_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
 else
 $(BINDIR)/ref_gl3.so : $(REFGL3_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(REFGL3_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
 endif
 
@@ -1524,14 +1535,17 @@ endif
 ifeq ($(YQ2_OSTYPE), Windows)
 $(BINDIR)/ref_soft.dll : $(REFSOFT_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(REFSOFT_OBJS) $(LDLIBS) $(DLL_SDLLDFLAGS) -o $@
 else ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/ref_soft.dylib : $(REFSOFT_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(REFSOFT_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
 else
 $(BINDIR)/ref_soft.so : $(REFSOFT_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(REFSOFT_OBJS) $(LDLIBS) $(SDLLDFLAGS) -o $@
 endif
 
@@ -1539,6 +1553,7 @@ endif
 ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/ref_metal.dylib : $(REFMETAL_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(REFMETAL_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(SDL_DYNAMIC_LOOKUP) -o $@
 endif
 
@@ -1546,14 +1561,17 @@ endif
 ifeq ($(YQ2_OSTYPE), Windows)
 $(BINDIR)/baseq2/game.dll : $(GAME_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(GAME_OBJS) $(LDLIBS) -o $@
 else ifeq ($(YQ2_OSTYPE), Darwin)
 $(BINDIR)/baseq2/game.dylib : $(GAME_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(GAME_OBJS) $(LDLIBS) -o $@
 else
 $(BINDIR)/baseq2/game.so : $(GAME_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(GAME_OBJS) $(LDLIBS) -o $@
 endif
 
@@ -1640,6 +1658,7 @@ $(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS)) : tests/unit/test.h
 
 $(TEST_BIN) : $(TEST_OBJS)
 	@echo "===> LD $@"
+	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(TEST_COVFLAGS) $(TEST_OBJS) $(LDLIBS) -o $@
 
 endif
