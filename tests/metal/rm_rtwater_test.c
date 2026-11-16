@@ -1223,6 +1223,39 @@ test_ss_models(void)
 	f[0] = f[1] = hidden_model;
 	f[2] = hidden_wall;
 	CHECK(!(rtw_trace_ss(f, 3, &casts) & MTL_RTW_WS));
+
+	/*
+	 * The bound (FIX81 review round 1): past MTL_RTW_LAYERS (four) hidden
+	 * model faces the ray is traced against the map alone, so a model the
+	 * picture shows behind them is passed too, and the reflection shows what
+	 * lies behind it (none at 0, the wall in world space at 1). The values
+	 * are what the code gives; they pin the bound and are not a wish.
+	 */
+	f[0] = seen_model;
+	f[1] = hidden_wall;
+	CHECK(rtw_trace_ss(f, 2, &casts) == MTL_RTW_LIT);
+	CHECK(casts == 1);
+
+	for (i = 0; i < 3; i++)
+	{
+		f[i] = hidden_model;
+	}
+
+	f[3] = seen_model;
+	f[4] = hidden_wall;
+	CHECK(rtw_trace_ss(f, 5, &casts) == MTL_RTW_LIT);
+	CHECK(casts == 4);
+
+	for (i = 0; i < 4; i++)
+	{
+		f[i] = hidden_model;
+	}
+
+	f[4] = seen_model;
+	f[5] = hidden_wall;
+	CHECK(rtw_trace_ss(f, 6, &casts) == MTL_RTW_MISS);
+	CHECK(casts == MTL_RTW_LAYERS + 1);
+	CHECK(rtw_trace_ws(f, 6, 1, &casts) == (MTL_RTW_LIT | MTL_RTW_WS));
 }
 
 /* TASK158: the shading record, the barycentrics, the mip level, the list */
