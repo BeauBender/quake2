@@ -155,20 +155,25 @@ bench_repo_name() {
 	fi
 }
 
-# bench_outside_repo <dir> <what>: refuses a relative path, and a directory
-# that lies inside a git repository, tested on its nearest existing
-# ancestor (so nothing is made first), with symbolic links resolved. It
-# fails closed: refused when that directory or any ancestor of it holds a
-# .git entry, whatever git says; when git, run with no GIT_DIR,
-# GIT_WORK_TREE, GIT_CEILING_DIRECTORIES or GIT_DISCOVERY_ACROSS_FILESYSTEM
-# from the caller, finds a repository there (a work tree or a git
-# directory); and when git fails for any other reason than "not a git
-# repository" (git missing, say). The message names <what>, never the
-# path, since the path may hold a home directory.
+# bench_outside_repo <dir> <what>: refuses a relative path, a path with a
+# "." or ".." segment (past a missing directory the walk below could not
+# tell where it ends), and a directory that lies inside a git repository,
+# tested on its nearest existing ancestor (so nothing is made first), with
+# symbolic links resolved. It fails closed: refused when that directory or
+# any ancestor of it holds a .git entry, whatever git says; when git, run
+# with no GIT_DIR, GIT_WORK_TREE, GIT_CEILING_DIRECTORIES or
+# GIT_DISCOVERY_ACROSS_FILESYSTEM from the caller, finds a repository there
+# (a work tree or a git directory); and when git fails for any other reason
+# than "not a git repository". A host with no git at all is judged by the
+# .git walk alone. The message names <what>, never the path, since the
+# path may hold a home directory.
 bench_outside_repo() {
 	case $1 in
 	/*) ;;
 	*) bench_die 2 "$2 must be an absolute path" ;;
+	esac
+	case /$1/ in
+	*/./* | */../*) bench_die 2 "$2 must not have a . or .. segment" ;;
 	esac
 	_or_d=$1
 	while [ ! -d "$_or_d" ]; do
@@ -183,6 +188,7 @@ bench_outside_repo() {
 		[ -n "$_or_a" ] && [ "$_or_a" != / ] || break
 		_or_a=${_or_a%/*}
 	done
+	command -v git > /dev/null 2>&1 || return 0
 	_or_st=0
 	_or_out=$(
 		unset GIT_DIR GIT_WORK_TREE GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM

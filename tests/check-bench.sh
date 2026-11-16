@@ -123,6 +123,13 @@ wait_gone() {
 	done
 	return 0
 }
+# reap <pid>: after a failed wait, ends a process this check started (TERM,
+# which its trap turns into a stop of its command; KILL after 30 s), so the
+# wait that follows cannot hang.
+reap() {
+	kill -TERM "$1" 2> /dev/null || true
+	wait_gone 30 "$1" || kill -KILL "$1" 2> /dev/null || true
+}
 # wait_held <seconds> <label>: the lock shows <label> with its child pid.
 wait_held() {
 	_n=0
@@ -388,7 +395,10 @@ t_lock_stop() {
 	wait_file 5 "${E:?}/gc.stop" || bad "stop: the stopped command's grandchild never started"
 	_c=$(sed -n 's/^child=//p' "${E:?}/state/lock/holder")
 	kill -s STOP -- "-$_c"
-	wait_gone 10 "$_h" || bad "stop: lock run still waits on a stopped command"
+	if ! wait_gone 10 "$_h"; then
+		bad "stop: lock run still waits on a stopped command"
+		reap "$_h"
+	fi
 	_st=0
 	wait "$_h" || _st=$?
 	[ "$_st" -eq 74 ] || bad "stop: wanted exit 74 from a stopped command, got $_st"
@@ -427,7 +437,10 @@ t_lock_stop() {
 		printf '%s\n' 'st=0; sh "$1/bench.sh" lock run tty -- sh -c "stty -echo < /dev/tty; echo after-stty" > "$2/tty.out" 2>&1 || st=$?; echo "$st" > "$2/tty.st"' > "${E:?}/tty.sh"
 		start env BENCH_STOP_GRACE=0 script -q /dev/null sh "${E:?}/tty.sh" "$R" "${E:?}" < /dev/null > /dev/null 2>&1
 		_h=$BG
-		wait_gone 15 "$_h" || bad "stop: a command that touched the terminal held the lock"
+		if ! wait_gone 15 "$_h"; then
+			bad "stop: a command that touched the terminal held the lock"
+			reap "$_h"
+		fi
 		[ "$(cat "${E:?}/tty.st" 2> /dev/null)" = 74 ] || bad "stop: a command that touched the terminal: wanted 74, got $(cat "${E:?}/tty.st" 2> /dev/null)"
 		grep -q '^bench: the command stopped' "${E:?}/tty.out" || bad "stop: a command that touched the terminal was not said"
 		grep -q after-stty "${E:?}/tty.out" && bad "stop: a command that touched the terminal went on"
@@ -444,7 +457,7 @@ t_lock_defer() {
 	: > "${E:?}/log"
 	# A TERM that arrives between the "&" and the stored pid is held and
 	# acted on once the pid is stored: the command is stopped, not lost.
-	_s=${tmp:?}/defer
+	_s=${tmp:?}/defer-bench
 	rm -rf "${_s:?}"
 	cp -R "$R" "$_s"
 	lit "${_s:?}/core/common.sh" 'BENCH_SPAWN_PID=$!' 'sleep 2; BENCH_SPAWN_PID=$!' || bad "defer: the injected stall does not apply"
@@ -452,7 +465,10 @@ t_lock_defer() {
 	_h=$BG
 	wait_file 5 "${E:?}/d.gc" || bad "defer: the grandchild never started"
 	kill -TERM "$_h"
-	wait_gone 15 "$_h" || bad "defer: the lock shell did not exit on a TERM in the window"
+	if ! wait_gone 15 "$_h"; then
+		bad "defer: the lock shell did not exit on a TERM in the window"
+		reap "$_h"
+	fi
 	_st=0
 	wait "$_h" || _st=$?
 	[ "$_st" -eq 143 ] || bad "defer: wanted exit 143 on a TERM in the window, got $_st"
