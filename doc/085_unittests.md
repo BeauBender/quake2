@@ -132,3 +132,58 @@ The total must not fall below the floor recorded in
 `scripts/coverage-floor`. When it rises by a whole percent the script
 prints the new value; raise the floor in the same change so that it only
 ever goes up.
+
+## Benchmarks and the host lock
+
+`scripts/bench/bench.sh` is the one entry point of the bench harness: a
+host-wide lock so that only one heavy job (a build, a gate, an engine
+run) runs at a time, and a per-host store of measured baselines, so that
+an unchanged build is measured once and reused. The design and the rules
+are in `docs/plans/bench-harness.md`. It is `sh` and `awk` only, and
+needs no engine for its own self-test, `tests/check-bench.sh` (in the
+gate).
+
+```sh
+scripts/bench/bench.sh lock run build -- make -j8 ref_metal
+scripts/bench/bench.sh lock status
+scripts/bench/bench.sh host
+scripts/bench/bench.sh inputs --list HEAD
+scripts/bench/bench.sh baseline put null-sleep HEAD
+scripts/bench/bench.sh baseline get null-sleep HEAD
+scripts/bench/bench.sh drift null-sleep HEAD
+scripts/bench/bench.sh compare null-sleep --before HEAD~1 --after HEAD
+```
+
+- `lock run <label> -- <command>` runs the command while holding the
+  lock. A second caller waits in the foreground, at most
+  `BENCH_LOCK_WAIT` seconds (default 3600), then exits 75 and names the
+  holder; `lock status` shows the holder. The lock is released however
+  the command ends, and a lock whose holder process is gone is taken
+  over, with a logged line. A command run under the lock gets
+  `BENCH_LOCK_TOKEN`, so a `bench.sh` it starts runs straight through
+  instead of waiting for itself.
+- `host` prints the host token (`h-` and 12 hex digits) and the class
+  line (CPU, GPU, OS version, physical or VM). Both come from system facts
+  only and hold no host name, user name or home path, so they may be
+  quoted in public files. Results with different tokens are never
+  compared.
+- `inputs <commit>` prints the build-inputs id (`i-` and 12 hex digits)
+  of the git trees the build compiles (`Makefile`, `src/`, `third_party/`
+  and any top-level `*.make`), plus the case's build flags; `--list` shows
+  what it hashed and with which tool (`shasum`, else `cksum`). A
+  documentation-only commit keeps the inputs, and so the baseline.
+- `baseline put <case> <commit>` measures the case's runs through its
+  adapter and stores them; `baseline get` prints them. `drift` measures
+  one run and checks it against the stored ones; outside the tolerance it
+  measures the baseline again and keeps the old one in `superseded/`.
+  `compare` prints the median, p90, minimum and maximum of each side and,
+  when the case states an acceptance, a `verdict=pass` or `verdict=fail`
+  line (exit 1 on fail).
+
+A case is `scripts/bench/cases/<name>.case`, plain `key=value` lines (the
+keys are listed in `scripts/bench/core/case.sh`); its adapter,
+`scripts/bench/adapters/<name>.sh`, knows how to build, run and read one
+game. The `null-sleep` case and the `null` adapter measure nothing: they
+exist for the self-test. The lock state lives in `BENCH_STATE` (default
+`~/.cache/bench-state`) and the store in `BENCH_STORE` (default
+`~/.cache/<repository>-bench`), both outside the repository.
