@@ -53,6 +53,13 @@ mgl_hold_commit(mgl_hold_t *h)
 	atomic_store(&h->holds, 1);
 }
 
+/* A frame takes the slot (mgl_present_take). */
+static inline void
+mgl_hold_take(mgl_hold_t *h)
+{
+	(void)h;
+}
+
 /*
  * The present's wait is to be ended: 1 when the present still holds the
  * slot alone, and the command buffer that ends the wait now holds it too;
