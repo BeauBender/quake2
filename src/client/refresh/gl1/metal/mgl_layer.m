@@ -39,11 +39,11 @@
  *    teardown line counts those frames and the most frames that were on
  *    the GPU when a frame began with display sync off;
  *  - a present apart waits on the GPU for its frame's signal of the
- *    present slot's event; MGL_GPU_WAIT_MS after its commit the CPU
- *    signals that event itself (one line on stderr), so a frame whose
- *    command buffer ended in error before its signal cannot hold the
- *    present, and its slot, for the rest of the context (FIX69,
- *    mgl_present_bound);
+ *    present slot's event; when it has not completed MGL_GPU_WAIT_MS
+ *    after its commit, a command buffer of the frame queue signals that
+ *    event (one line on stderr), so a frame whose command buffer ended in
+ *    error before its signal cannot hold the present, and its slot, for
+ *    the rest of the context (FIX69, mgl_present_bound);
  *  - nextDrawable returns nil after one second (allowsNextDrawableTimeout,
  *    for example while the window cannot be shown); the frame is then
  *    drawn into an offscreen texture of the same size, which glReadPixels
@@ -116,7 +116,7 @@ static id<MTLBuffer> mgl_readbuf;          /* shared, for glReadPixels */
 /* Counters, printed when the context is destroyed. */
 static unsigned long count_frames, count_no_drawable, count_skipped, count_ring_full;
 static atomic_ulong count_failed;          /* command buffers ended in error (mgl_watch) */
-static unsigned long count_present_late;   /* presents whose wait for their frame the CPU ended (FIX69) */
+static unsigned long count_present_late;   /* presents whose wait for their frame was ended at the bound (FIX69) */
 static unsigned long count_cap_late;       /* frames whose second wait with display sync off timed out (FIX68) */
 static int count_most_apart;               /* the most frames on the GPU, the new one counted, as a frame began with display sync off */
 static atomic_int mgl_on_gpu;              /* frames committed by mgl_layer_present and not yet completed */
@@ -389,12 +389,17 @@ mgl_present_pass(id<MTLCommandBuffer> cmd, id<MTLTexture> src, id<MTLTexture> ds
  * drawable). With display sync on the frame waits in nextDrawable and
  * draws into the drawable, as before, and every frame is presented.
  *
- * The present's wait on the GPU has a time limit (FIX69): the events are
- * shared events, and MGL_GPU_WAIT_MS after a present was committed the
- * CPU gives its slot's event the value the present waits for, if the
- * frame has not (mgl_present_bound). The present then runs and gives the
- * slot back when it completes. Only a frame whose command buffer ended
- * before its signal, in error, leaves the value unreached that long.
+ * The present's wait on the GPU has a time limit (FIX69). When a present
+ * has not completed MGL_GPU_WAIT_MS after its commit (mgl_present_bound,
+ * as each frame begins), a command buffer of the frame queue signals its
+ * slot's event with the value the present waits for (mgl_present_end_wait):
+ * a frame whose command buffer ended in error before its signal would
+ * otherwise hold the present, and its slot, for the rest of the context.
+ * The slot is then held by both command buffers (mgl_present_holds) and
+ * comes back when the last of them completes, so no later frame of the
+ * slot signals the event before that signal has run. The events stay
+ * MTLEvents: a shared event, which the CPU could signal, made the shim
+ * present 8 to 11 percent fewer frames at 5120x2880 (docs/runbook/FIX69.md).
  */
 #define MGL_PRESENTS (MGL_FRAMES_IN_FLIGHT + 1)   /* maximumDrawableCount (mgl_layer_create), and the open frame */
 
@@ -404,9 +409,10 @@ static id<CAMetalDrawable> mgl_ahead;   /* mgl_ahead_lock: the drawable acquired
 static int mgl_ahead_busy;              /* mgl_ahead_lock: an acquisition is on the queue */
 
 static id<MTLCommandQueue> mgl_present_queue;
-static id<MTLSharedEvent> mgl_present_event[MGL_PRESENTS];   /* signalled by the frame that holds the slot, or past the bound by the CPU */
+static id<MTLEvent> mgl_present_event[MGL_PRESENTS];         /* signalled by the frame that holds the slot, or past the bound */
 static uint64_t mgl_present_value[MGL_PRESENTS];             /* the last value the slot's event was given */
 static uint64_t mgl_present_since[MGL_PRESENTS];             /* when the slot's present was committed (ns, CLOCK_UPTIME_RAW), or 0 */
+static atomic_int mgl_present_holds[MGL_PRESENTS];           /* command buffers holding the slot after its frame: 1, or 2 past the bound */
 static dispatch_semaphore_t mgl_present_sem[MGL_PRESENTS];   /* 1: no frame and no present holds this slot */
 static id<MTLTexture> mgl_present_target[MGL_PRESENTS];      /* the target the slot's frame is drawn into */
 static int frame_slot = -1;                                  /* the slot the open frame holds, or -1 */
@@ -471,21 +477,56 @@ mgl_present_take(int w, int h)
 	return mgl_present_target[slot];
 }
 
+/* A command buffer that held slot i after its frame has completed: the last of them gives the slot back (FIX69). */
+static void
+mgl_present_unhold(int i, dispatch_semaphore_t sem)
+{
+	if (atomic_fetch_sub(&mgl_present_holds[i], 1) == 1)
+	{
+		dispatch_semaphore_signal(sem);
+	}
+}
+
 /*
- * Ends the GPU wait of slot i's present for its frame's signal, if the
- * frame has not signalled: the CPU gives the event the value (FIX69).
+ * Ends the GPU wait of slot i's present, when it has not completed: a
+ * command buffer of the frame queue signals the slot's event with the
+ * value the present waits for, and holds the slot with it (FIX69). A
+ * signal of a value the frame gave already changes nothing.
  */
 static void
 mgl_present_end_wait(int i)
 {
-	if (!mgl_present_event[i] || (mgl_present_event[i].signaledValue >= mgl_present_value[i]))
+	dispatch_semaphore_t sem = mgl_present_sem[i];
+	id<MTLEvent> ev = mgl_present_event[i];
+	int one = 1;
+
+	/* holds 0: the present has completed and the slot is back (or taken again) */
+	if (!mgl_queue || !sem || !ev || !atomic_compare_exchange_strong(&mgl_present_holds[i], &one, 2))
 	{
 		return;
 	}
 
-	mgl_present_event[i].signaledValue = mgl_present_value[i];
+	@autoreleasepool
+	{
+		id<MTLCommandBuffer> cmd = [mgl_queue commandBuffer];
+
+		if (!cmd)
+		{
+			mgl_present_unhold(i, sem);
+			return;
+		}
+
+		[cmd encodeSignalEvent:ev value:mgl_present_value[i]];
+		mgl_watch(cmd);
+		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
+			(void)b;
+			mgl_present_unhold(i, sem);
+		}];
+		[cmd commit];
+	}
+
 	count_present_late++;
-	fprintf(stderr, "mgl: the present of slot %d still waited for its frame after %d ms; its wait is ended\n",
+	fprintf(stderr, "mgl: the present of slot %d has not completed after %d ms; its wait for its frame is ended\n",
 			i, MGL_GPU_WAIT_MS);
 }
 
@@ -683,6 +724,7 @@ static void
 mgl_present_commit(id<MTLCommandBuffer> cmd)
 {
 	dispatch_semaphore_t sem;
+	int slot = frame_slot;
 
 	if (!cmd)
 	{
@@ -690,21 +732,18 @@ mgl_present_commit(id<MTLCommandBuffer> cmd)
 		return;
 	}
 
-	sem = (frame_slot >= 0) ? mgl_present_sem[frame_slot] : nil;
-
-	if (frame_slot >= 0)
-	{
-		mgl_present_since[frame_slot] = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);   /* the bound starts (mgl_present_bound) */
-	}
-
+	sem = (slot >= 0) ? mgl_present_sem[slot] : nil;
 	frame_slot = -1;
 	mgl_watch(cmd);
 
 	if (sem)
 	{
+		/* the present holds the slot until it completes; the bound starts (mgl_present_bound, FIX69) */
+		atomic_store(&mgl_present_holds[slot], 1);
+		mgl_present_since[slot] = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
 		[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
 			(void)b;
-			dispatch_semaphore_signal(sem);
+			mgl_present_unhold(slot, sem);
 		}];
 	}
 
@@ -842,19 +881,16 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 		mgl_metal_layer.drawableSize = CGSizeMake(w > 0 ? w : 1, h > 0 ? h : 1);
 		mgl_ahead_queue = dispatch_queue_create("mgl drawable", DISPATCH_QUEUE_SERIAL);
 
-		/*
-		 * the present queue and an event for each slot (FIX51), shared so
-		 * the CPU can end a present's wait (FIX69); without them every
-		 * frame draws into its drawable
-		 */
+		/* the present queue and an event for each slot (FIX51); without them every frame draws into its drawable */
 		mgl_present_queue = [mgl_device newCommandQueue];
 		apart = mgl_present_queue != nil;
 
 		for (i = 0; i < MGL_PRESENTS; i++)
 		{
-			mgl_present_event[i] = [mgl_device newSharedEvent];
+			mgl_present_event[i] = [mgl_device newEvent];
 			mgl_present_value[i] = 0;
 			mgl_present_since[i] = 0;
+			atomic_store(&mgl_present_holds[i], 0);
 			apart = apart && (mgl_present_event[i] != nil);
 		}
 
