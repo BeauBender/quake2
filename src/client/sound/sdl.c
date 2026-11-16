@@ -36,10 +36,6 @@
 /* SDL includes */
 #include <SDL3/SDL.h>
 
-#if defined(__APPLE__)
-#include <TargetConditionals.h>
-#endif
-
 #include <errno.h>
 
 /* Local includes */
