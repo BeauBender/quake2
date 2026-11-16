@@ -1,6 +1,6 @@
 # Bench harness: quiet, repeatable measurements that carry across hosts and games
 
-Plan anchor for the bench cards. Status: the core (card 1, TASK153) is built; cards 2 to 4 are planned.
+Plan anchor for the bench cards. Status: the core (card 1, TASK153) and the lock in every heavy entry point (card 3, TASK155) are built; cards 2 and 4 are planned.
 
 ## Why
 
@@ -48,7 +48,19 @@ The lock is re-entrant: it exports `BENCH_LOCK_TOKEN` to its command, and a nest
 
 The measuring commands (`baseline put`, `drift`) take the lock by becoming a lock shell (`exec`) that runs the measurement under it, so a signal to them reaches the lock shell's trap with no extra process in between.
 
-Every heavy entry point takes the lock itself, so no caller can forget: `scripts/test.sh`, `scripts/pins.sh` (record and compare), `scripts/coverage.sh` (card 3) and the measuring commands of `bench.sh` (`baseline put` and `drift`, built). `make` is not wrapped. Builds started by these entry points are covered, and a bare `make` is a documented rule for agents: run it as `bench.sh lock run build -- make ...`.
+Every heavy entry point takes the lock itself, so no caller can forget (card 3, TASK155, built):
+- `scripts/test.sh` as `gate`: one hold for all of the gate, its checks and both builds;
+- `scripts/coverage.sh` as `coverage`: one hold for the instrumented build, the run and the report;
+- `scripts/pins.sh` as `pins-<command>` for `record`, `compare`, `replay`, `footprint`, `where`, `make-demo`, `selftest` and `evidence`, the commands that build (framediff) or run the engine. A dry run (`PINS_DRYRUN`) builds and runs nothing and takes no lock; neither do `list`, `check-content`, `evidence-publish` (an upload) and `evidence-selftest` (the encoder, offline);
+- the measuring commands of `bench.sh`, `baseline put` and `drift`, as `bench.<case>` (card 1).
+
+Each script runs itself again as the command of `bench.sh lock run <label>`, with `BENCH_LOCK_ENTRY=<label>`, so the run under the lock goes on instead of taking the lock again. It clears the variable at once, so nothing it starts inherits it, and a `BENCH_LOCK_ENTRY` without a `BENCH_LOCK_TOKEN` is no hold: the script takes the lock. The variable is a loop guard, not a guard against a caller who sets both, as `BENCH_LOCK=0` is not. `bench.sh` sets `LC_ALL=C` for its command; the gate and coverage give the run under the lock the caller's `LC_ALL` back, set or unset (`pins.sh` sets `C` itself). A nested call passes straight through by the token: the gate running the pin selftest, and any entry point under a host's own wrapper that holds the lock (`bench.sh lock run <label> -- <entry point>`). The state directory is `BENCH_STATE`, else the core's default, as for any other lock call.
+
+The lock is off, and the script runs as before, with `BENCH_LOCK=0`, on CI (`CI=true`) and in a tree without `scripts/bench/bench.sh`. CI does not take it: a GitHub runner runs one job at a time, with no lane beside it to keep quiet, so the lock would only add a process group and a state directory there; the workflows are unchanged, and the scripts read `CI` themselves.
+
+`tests/check-bench-entry.sh` proves it. Each entry point is copied into a throwaway tree beside a stub `bench.sh` that logs its call and runs the command with a stand-in token, and stub `make`, `cc` and `gcov` log the token they ran under. The gate's checks and both makes, coverage's instrumented make and each locked pins command run only under one call with their label, made before them; a dry run and the usage text make none; each off switch makes none and the heavy part still runs. With the real core: the gate holds the lock once, as `gate`, while the pin selftest it runs passes straight through; a gate under an outer holder passes straight through; a gate that finds the lock held by another job gives up with 75 and runs nothing; the caller's `LC_ALL` reaches the heavy part. Thirteen mutants, each required to fail: the lock call removed from the gate, from coverage and from each of the eight pins commands, the run under the lock taking it again (the gate, pins.sh), and a `BENCH_LOCK_ENTRY` without a token taken as a hold.
+
+`make` is not wrapped. Builds started by these entry points are covered, and a bare `make` is a documented rule for agents (`CLAUDE.md`): on a shared host, run it as `bench.sh lock run build -- make ...`.
 
 ### Host identity
 
@@ -127,5 +139,5 @@ Every host runs the same tool. The VM's token differs, so its numbers never mix 
 
 1. **Core** (TASK153, opus): the lock, host identity, inputs, store, statistics, drift and compare, with a hermetic self-test `tests/check-bench.sh` (no engine) and its mutants, plus this plan as `docs/plans/bench-harness.md` and the commands in `doc/085_unittests.md`.
 2. **quake2 adapter and first cases** (TASK, opus; needs 1 and a physical GPU): the adapter, the four case families, a user page, and the runbook method sections pointing at `bench.sh`. Each case is reproduced against one stored result from its card's runbook.
-3. **The lock in every heavy entry point** (TASK, sonnet; needs 1): `scripts/test.sh`, `scripts/pins.sh` and `scripts/coverage.sh` take the lock re-entrantly, and a check proves it with a mutant. The agent briefs' timing rules point at `bench.sh lock run`.
+3. **The lock in every heavy entry point** (TASK155, sonnet; needs 1; built): `scripts/test.sh`, `scripts/pins.sh` and `scripts/coverage.sh` take the lock re-entrantly, and `tests/check-bench-entry.sh` proves it with a mutant per lock call and a nested-call test. The agent rules in `CLAUDE.md` point a bare `make` at `bench.sh lock run build`.
 4. **The generic core in the shared agent tooling** (plugin candidate): measurement lanes as a first-class swarm concept, so the scheduler holds heavy work while a measurement runs, plus the core of card 1 moved there.
