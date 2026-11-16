@@ -524,7 +524,8 @@ def lock_self(argv):
     GITHUB_ACTIONS=true), with no scripts/bench/bench.sh in this tree, and with no directory for its
     state (BENCH_STATE, XDG_CACHE_HOME and HOME all unset); pins.sh, which inherits the environment and
     sits in the same tree, is then off as well. The run under the lock comes back here with
-    BENCH_LOCK_ENTRY=metalfx-report (cleared at once, so that nothing below inherits it) and goes on."""
+    BENCH_LOCK_ENTRY=metalfx-report (cleared at once, so that nothing below inherits it) and with the
+    caller's LC_ALL, set or unset, which bench.sh sets to C (so the engine runs as before), and goes on."""
     global LOCK_HELD
     e = os.environ
     entry = e.pop("BENCH_LOCK_ENTRY", "")
@@ -541,7 +542,8 @@ def lock_self(argv):
     elif not (e.get("BENCH_STATE") or e.get("XDG_CACHE_HOME") or e.get("HOME")):
         off = "no state directory (BENCH_STATE, XDG_CACHE_HOME and HOME unset)"
     else:
-        cmd = ["sh", bench, "lock", "run", LOCK_LABEL, "--", "env", "BENCH_LOCK_ENTRY=" + LOCK_LABEL,
+        lc = ["LC_ALL=" + e["LC_ALL"]] if "LC_ALL" in e else ["-u", "LC_ALL"]
+        cmd = ["sh", bench, "lock", "run", LOCK_LABEL, "--", "env"] + lc + ["BENCH_LOCK_ENTRY=" + LOCK_LABEL,
                sys.executable, "-I", os.path.abspath(__file__)] + list(argv)
         sys.stdout.flush()
         sys.stderr.flush()

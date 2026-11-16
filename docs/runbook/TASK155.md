@@ -101,7 +101,8 @@ Two findings, both in the report generator, `scripts/metalfx-report/mfx.py`:
   900 s limit, so a wait for another holder could time the record out
   before `pins.sh` had started. The generator now runs itself again as one
   hold of `bench.sh lock run metalfx-report` (table above), the way the
-  entry points do, with their off reasons and line. Each record passes
+  entry points do, with their off reasons and line, and with the caller's
+  `LC_ALL` given back as the gate does. Each record passes
   straight through, its limit counts the record alone, and the timed
   engine runs are under the same hold. Under that hold the generator is
   the lock shell's command and `pins.sh` is its own child, so the
@@ -113,7 +114,7 @@ Two findings, both in the report generator, `scripts/metalfx-report/mfx.py`:
 their own (`lock`). The new cases: a holder (`gate`) holds the lock for
 10 s while the generator runs with a record limit cut to 4 s, and the run
 must pass, with both records and every engine run seeing the holder
-`metalfx-report`. Each off reason must give its one line. A second
+`metalfx-report`, and the engine the caller's `LC_ALL`. Each off reason must give its one line. A second
 SIGTERM sent to the generator's process 1 s after the first, with a stub
 that ignores TERM (`TERM2`), must leave the generator running 1 s later
 and nothing running at the end. A SIGTERM to the lock shell with that
@@ -121,8 +122,8 @@ stub (`deaf`) must leave nothing running and the lock free. Against the
 generator of round 2, the waiting case fails (rc 1, the record timed out,
 the engine saw `label=gate`), and so do the off lines and the wait under
 the hold. The mutants `stop-unheld` (the signal hold gone),
-`stop-wait-outlives-lock` (the longer wait under the hold), `lock-self-off`
-and `lock-off-silent` are each caught.
+`stop-wait-outlives-lock` (the longer wait under the hold), `lock-self-off`,
+`lock-lc-all-lost` and `lock-off-silent` are each caught.
 
 On the bare-metal host, each run alone under the host's timing lock:
 `tests/check-bench-entry.sh`, mutants included, passed in under a

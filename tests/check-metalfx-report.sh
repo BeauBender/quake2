@@ -143,9 +143,9 @@ chmod +x "$tmp/eng-failopt" "$tmp/eng-cfg" "$tmp/eng-slow"
   echo '[ -z "${MFX_STUB_LABEL:-}" ] || sh "$(dirname "$0")/bench/bench.sh" lock status >> "$MFX_STUB_LABEL"'
   echo '[ -z "${MFX_STUB_DEAF:-}" ] || trap "" TERM HUP INT'
   sed 1d "$tmp/pins-stub"; } > "$tmp/pins-stub-locked"
-# an engine like eng-cfg that first notes the holder of the host lock it runs under (MFX_ENG_LABEL)
+# an engine like eng-cfg that first notes its LC_ALL and the holder of the host lock it runs under (MFX_ENG_LABEL)
 { echo '#!/bin/sh'
-  echo '[ -z "${MFX_ENG_LABEL:-}" ] || sh "$MFX_BENCH" lock status >> "$MFX_ENG_LABEL"'
+  echo '[ -z "${MFX_ENG_LABEL:-}" ] || { printf "lc=%s " "${LC_ALL-unset}"; sh "$MFX_BENCH" lock status; } >> "$MFX_ENG_LABEL"'
   sed 1d "$tmp/eng-cfg"; } > "$tmp/eng-lockseen"
 chmod +x "$tmp/pins-stub" "$tmp/pins-stub-locked" "$tmp/eng-lockseen"
 # starts python3 -I with SIGINT at its default, which a background job of this script ignores, so that a
@@ -490,7 +490,7 @@ limit" "$out"
     n=0; until BENCH_STATE="$st" sh "$bsh" lock status 2>/dev/null | grep -q 'label=gate'; do
         [ $n -lt 50 ] || { ko e2e-lock-wait "the holder did not take the lock"; break; }; sleep 0.1; n=$((n+1)); done
     mkeng "$w/lk-eng" "$tmp/eng-lockseen"; mkdir -p "$w/lk-out"
-    out=$("${lenv[@]}" MFX_STUB_LABEL="$w/lk-labels" MFX_ENG_LABEL="$w/lk-eng-labels" MFX_BENCH="$bsh" python3 -I "$lk/scripts/metalfx-report/mfx.py" \
+    out=$("${lenv[@]}" LC_ALL=POSIX MFX_STUB_LABEL="$w/lk-labels" MFX_ENG_LABEL="$w/lk-eng-labels" MFX_BENCH="$bsh" python3 -I "$lk/scripts/metalfx-report/mfx.py" \
         run --out "$w/lk-out" --basedir "$tmp/basedir" --host-name t1 --runs 1 --gpu-runs 1 --scenarios world --only fx1-s75 --timeout 20 \
         --framediff "$tmp/framediff" --ssim "$w/ssim" --bin "$w/lk-eng/quake2" 2>&1); rc=$?
     want_rc e2e-lock-wait 0 $rc
@@ -502,6 +502,8 @@ limit" "$out"
     labs=$(cat "$w/lk-eng-labels" 2>/dev/null)
     [ -n "$labs" ] || ko e2e-lock-wait "the engine noted no holder"
     want_not e2e-lock-wait "lock=free" "$labs"; want_not e2e-lock-wait "label=gate" "$labs"
+    # the caller's LC_ALL comes back under the hold (bench.sh sets C for its command)
+    want_has e2e-lock-wait "lc=POSIX " "$labs"; want_not e2e-lock-wait "lc=C " "$labs"
     kill -TERM $hp 2>/dev/null; wait $hp 2>/dev/null
     [ "$(BENCH_STATE="$st" sh "$bsh" lock status 2>&1)" = lock=free ] || ko e2e-lock-wait "the lock is not free afterwards"
     # the lock is off, with one line on stderr that names why, as for the entry points: BENCH_LOCK=0, GitHub
@@ -718,6 +720,7 @@ mutant stop-wait-unfloored e2e-lock-grace py 'return max(2 * g, g + 5) + 5' 'ret
 mutant stop-unheld e2e-lock py 'held = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)' 'held = signal.pthread_sigmask(signal.SIG_BLOCK, [])'
 mutant stop-wait-outlives-lock e2e-lock py 'if LOCK_HELD:' 'if False:'
 mutant lock-self-off e2e-lock-wait py 'os.execv("/bin/sh", cmd)' 'off = "mutant"'
+mutant lock-lc-all-lost e2e-lock-wait py 'lc = ["LC_ALL=" + e["LC_ALL"]] if "LC_ALL" in e else ["-u", "LC_ALL"]' 'lc = []'
 mutant lock-off-silent e2e-lock-off py 'print("metalfx-report: the host lock is off: " + off, file=sys.stderr)' 'pass'
 mutant pins-no-group e2e-group py 'rc, out = sh_group([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)' 'rc, out = sh([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)'
 
