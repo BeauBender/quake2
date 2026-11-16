@@ -815,37 +815,38 @@ Sys_MissingDataMessage(const char *dir, char *out, size_t len)
 	}
 }
 
+/* Sys_GetHomeDir builds the directory once; the environment is read
+   at that first call only. */
+static char home_dir_cache[MAX_OSPATH];
+
+/*
+ * Clears the cache so the next Sys_GetHomeDir builds the directory
+ * again. Only tests/unit calls this: the engine never does.
+ */
+void
+Sys_ForgetHomeDir(void)
+{
+	home_dir_cache[0] = '\0';
+}
+
 char *
 Sys_GetHomeDir()
 {
-	static char dir[MAX_OSPATH];
-	/* what dir was built from: a different HOME or the other mode
-	   builds it again (only the unit tests change them) */
-	static char dirhome[MAX_OSPATH];
-	static qboolean dirsandbox;
-	const char *envhome = getenv("HOME");
-
-	if (dir[0] && (envhome == NULL || dirsandbox != sys_sandbox_home || strcmp(dirhome, envhome) != 0))
-	{
-		dir[0] = '\0';
-	}
+	char *dir = home_dir_cache;
 
 	if (!dir[0])
 	{
-		const char* home = envhome;
+		const char* home = getenv("HOME");
 
 		if (!home) {
 			// uh-oh
 			return NULL;
 		}
 
-		Q_strlcpy(dirhome, home, sizeof(dirhome));
-		dirsandbox = sys_sandbox_home;
-
 		if (sys_sandbox_home)
 		{
 			// the app's Documents, not XDG, ~/.yq2 or -cfgdir
-			if (!Sys_SandboxHomeDir(home, dir, sizeof(dir)))
+			if (!Sys_SandboxHomeDir(home, dir, sizeof(home_dir_cache)))
 			{
 				return NULL;
 			}
