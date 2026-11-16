@@ -167,6 +167,8 @@ typedef struct
 	int ent;                /* the entity's index in the refdef, -1 for the world */
 	/* RT3 (TASK55): the lights the instance carries (rm_rts_carried, bit i light i), set by RM_RT_Frame; 0 here */
 	unsigned carry;
+	/* RT5 (TASK57): 1 for the view weapon and the viewer's own model, which AO rays pass (mtl_rtao_inst_mask) */
+	unsigned noao;
 	/* the object-to-world transform, column-major 4 by 3: three basis columns, then the translation (MTLPackedFloat4x3) */
 	float xform[12];
 } rm_rt_inst_t;
@@ -198,7 +200,12 @@ void rm_rt_transform(const float *origin, const float *angles, int brush, float 
  * (hand 2, rm_alias_drawn), an entity whose model has no structure
  * (nomodel), and one with a float that is not finite (bad). At most n
  * entities (rm_entity_count) and cap instances. The number of instances.
+ * An instance of the view weapon (with gunshadow) or of the viewer's own
+ * model (RF_VIEWERMODEL, which the client keeps out of the refdef in the
+ * first person) has noao 1: AO rays (RT5) pass it (RM_RT_RF_VIEWERMODEL
+ * is shared.h's RF_VIEWERMODEL, checked in rm_rtaoscene.c).
  */
+#define RM_RT_RF_VIEWERMODEL 0x2
 int rm_rt_instances(const rm_rt_ent_t *ents, long n, int world, int gunshadow, float hand, rm_rt_inst_t *out,
 		int cap, rm_rt_excl_t *excl);
 
@@ -319,7 +326,9 @@ void rmb_rt_model_free(int mid);
  * it completed). With shadows (RT3's r_rt_shadows on) the frame also keeps
  * its scene for rmb_rt_bind_scene (each instance's first triangle and the
  * lights it carries, in the frame ring; each instance's mask is
- * mtl_rts_inst_mask's); without, nothing beyond TASK53's structures is taken. 1 with
+ * mtl_rts_inst_mask's, with the AO rays' bit, mtl_rtao_inst_mask); RT5's
+ * AO (r_rt_ao) asks for the same with shadows 1; without, nothing beyond
+ * TASK53's structures is taken. 1 with
  * s filled; 0 when nothing was encoded (no frame, a structure missing).
  */
 int rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nlerps, int shadows,
@@ -355,6 +364,14 @@ double rmb_rt_gpu_ms(uint64_t ticks);
  */
 int rmb_rt_bind_scene(id<MTLComputeCommandEncoder> ce, unsigned long fno, int ias_at, int base_at, int trans_at,
 		int ntris_at);
+
+/*
+ * RT5 (TASK57): binds the map's per-triangle material ids (rm_rt_materials,
+ * one byte a triangle of the map's buffers, indexed as the scene's first
+ * triangle plus the primitive) at buffer index mat_at and their number at
+ * n_at. 0, with nothing bound, when the map has none.
+ */
+int rmb_rt_bind_materials(id<MTLComputeCommandEncoder> ce, int mat_at, int n_at);
 #endif
 
 #endif /* RM_RT_H */
