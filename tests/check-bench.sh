@@ -33,7 +33,7 @@
 # (mkdir -p), re-entry accepts any token, the drift rule drops t, the core
 # names a game.
 #
-# Usage: tests/check-bench.sh
+# Usage: tests/check-bench.sh [<test>...]   (named tests only, no mutants)
 set -eu
 cd "$(dirname "$0")/.."
 export LC_ALL=C
@@ -119,6 +119,21 @@ wait_held() {
 		_n=$((_n + 1))
 	done
 }
+# wait_file <seconds> <file>: the file exists and is not empty.
+wait_file() {
+	_n=0
+	while [ ! -s "$2" ]; do
+		[ "$_n" -lt $(($1 * 10)) ] || return 1
+		sleep 0.1
+		_n=$((_n + 1))
+	done
+	return 0
+}
+# Whether SIGINT reaches a command here: when this check itself started
+# with it ignored, so does everything it starts, and the INT tests cannot
+# run (they are skipped, and said).
+INT_OK=
+sh -c 'kill -INT $$; exit 0' 2> /dev/null || INT_OK=1
 # fresh <name>: a new directory E with its own lock state and store.
 fresh() {
 	E=${tmp:?}/$1
@@ -262,6 +277,105 @@ t_lock_tokens() {
 	_st=0
 	B lock run 'bad label' -- true 2> /dev/null || _st=$?
 	[ "$_st" -eq 2 ] || bad "tokens: a label with a space was not refused"
+	[ "$fails" -eq 0 ]
+}
+
+# grandchild <dir>: writes <dir>/gc.sh, a command whose grandchild writes
+# its pid to $1, then "$3-late" to the log $2 after $4 seconds (1.5); and
+# <dir>/stubborn.sh, a command that catches TERM, says so in $2 and goes on
+# (its pid in $1).
+grandchild() {
+	cat > "${1:?}/gc.sh" << 'EOF'
+sh -c 'echo $$ > "$1"; sleep "${4:-1.5}"; echo "$3-late" >> "$2"' gc "$@"
+EOF
+	cat > "${1:?}/stubborn.sh" << 'EOF'
+trap 'echo got-term >> "$2"' TERM
+echo $$ > "$1"
+while :; do sleep 0.1; done
+EOF
+}
+
+t_lock_stop() {
+	fresh stop
+	grandchild "${E:?}"
+	: > "${E:?}/log"
+	# TERM to the lock shell stops the command's whole process group before
+	# the lock is free.
+	start sh "$R/bench.sh" lock run gc -- sh "${E:?}/gc.sh" "${E:?}/gc.term" "${E:?}/log" term > "${E:?}/term.out" 2>&1
+	_h=$BG
+	wait_file 5 "${E:?}/gc.term" || bad "stop: the grandchild never started"
+	kill -TERM "$_h"
+	wait_gone 15 "$_h" || bad "stop: the lock shell did not exit on TERM"
+	_st=0
+	wait "$_h" || _st=$?
+	[ "$_st" -eq 143 ] || bad "stop: wanted exit 143 on TERM, got $_st"
+	[ "$(B lock status)" = lock=free ] || bad "stop: TERM did not release the lock"
+	if pid_running "$(cat "${E:?}/gc.term")"; then bad "stop: a grandchild of the command outlived the lock (TERM)"; fi
+	# Ctrl-C at a terminal: INT to the lock shell's process group.
+	if [ -n "$INT_OK" ]; then
+		set -m
+		sh "$R/bench.sh" lock run cc -- sh "${E:?}/gc.sh" "${E:?}/gc.int" "${E:?}/log" int > "${E:?}/int.out" 2>&1 &
+		_h=$!
+		set +m
+		echo "$_h" >> "${tmp:?}/pids"
+		wait_file 5 "${E:?}/gc.int" || bad "stop: the grandchild never started (INT)"
+		kill -s INT -- "-$_h"
+		wait_gone 15 "$_h" || bad "stop: the lock shell did not exit on INT to its group"
+		_st=0
+		wait "$_h" 2> /dev/null || _st=$?
+		[ "$_st" -eq 130 ] || bad "stop: wanted exit 130 on INT, got $_st"
+		[ "$(B lock status)" = lock=free ] || bad "stop: INT did not release the lock"
+		if pid_running "$(cat "${E:?}/gc.int")"; then bad "stop: a grandchild of the command outlived the lock (INT)"; fi
+		# The command's own INT trap runs: INT is not ignored under the lock.
+		_st=0
+		_out=$(B lock run trapper -- sh -c 'trap "echo handled; exit 5" INT; kill -INT $$; echo unhandled') || _st=$?
+		[ "$_st" -eq 5 ] && [ "$_out" = handled ] || bad "stop: the command's own INT trap did not run under lock run (status $_st, output $_out)"
+	else
+		echo "$me: SIGINT is ignored where this check runs, so the INT tests are skipped"
+	fi
+	# A command that catches TERM and goes on is killed after the grace.
+	start env BENCH_STOP_GRACE=1 sh "$R/bench.sh" lock run stubborn -- sh "${E:?}/stubborn.sh" "${E:?}/stub.pid" "${E:?}/log" > "${E:?}/stub.out" 2>&1
+	_h=$BG
+	wait_file 5 "${E:?}/stub.pid" || bad "stop: the stubborn command never started"
+	_t0=$(date +%s)
+	kill -TERM "$_h"
+	wait_gone 20 "$_h" || bad "stop: the lock shell did not exit after TERM to a command that ignores it"
+	_t1=$(date +%s)
+	[ $((_t1 - _t0)) -le 6 ] || bad "stop: a command that ignores TERM was stopped after $((_t1 - _t0)) s, not within twice the grace of 1 s and a margin"
+	[ "$(B lock status)" = lock=free ] || bad "stop: the stubborn command's lock was not released"
+	grep -q got-term "${E:?}/log" || bad "stop: the stubborn command never got TERM"
+	if pid_running "$(cat "${E:?}/stub.pid")"; then bad "stop: the stubborn command outlived the lock"; fi
+	# By now each grandchild would have written its line.
+	if grep -q 'late$' "${E:?}/log"; then bad "stop: something wrote after the lock was free: $(grep 'late$' "${E:?}/log" | tr '\n' ' ')"; fi
+	[ "$fails" -eq 0 ]
+}
+
+t_bounded() {
+	fresh bounded
+	grandchild "${E:?}"
+	: > "${E:?}/log"
+	(
+		BENCH_ROOT=$R
+		. "$R/core/common.sh"
+		BENCH_STOP_GRACE=1
+		# The wall bound (stops between 1 and 2.5 s) stops the command's
+		# grandchild too.
+		_st=0
+		bench_bounded 1 sh "${E:?}/gc.sh" "${E:?}/b.gc" "${E:?}/log" wall 3.5 2> /dev/null || _st=$?
+		[ "$_st" -eq 124 ] || { echo "$me: bounded: wanted 124 from a command over its wall time, got $_st"; exit 1; }
+		if pid_running "$(cat "${E:?}/b.gc" 2> /dev/null)"; then echo "$me: bounded: a grandchild outlived the wall bound"; exit 1; fi
+		# A command that ignores TERM is killed after the grace: a bound.
+		_t0=$(date +%s)
+		_st=0
+		bench_bounded 1 sh -c 'trap "" TERM; sleep 8' 2> /dev/null || _st=$?
+		_t1=$(date +%s)
+		[ "$_st" -eq 124 ] || { echo "$me: bounded: wanted 124 from a command that ignores TERM, got $_st"; exit 1; }
+		[ $((_t1 - _t0)) -le 6 ] || { echo "$me: bounded: a command that ignores TERM ran $((_t1 - _t0)) s past a wall time of 1 s"; exit 1; }
+		_st=0
+		bench_bounded 5 sh -c 'exit 7' || _st=$?
+		[ "$_st" -eq 7 ] || { echo "$me: bounded: wanted the command's status 7, got $_st"; exit 1; }
+		if grep -q 'late$' "${E:?}/log"; then echo "$me: bounded: something wrote after the wall bound"; exit 1; fi
+	) || bad "bounded: the wall-time bound does not stop the whole command"
 	[ "$fails" -eq 0 ]
 }
 
@@ -639,7 +753,12 @@ t_compare() {
 }
 
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_reclaim t_lock_state_dir t_host t_inputs t_case t_stats t_store t_drift t_compare"
+all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_bounded t_lock_reclaim t_lock_state_dir t_host t_inputs t_case t_stats t_store t_drift t_compare"
+only=
+if [ "$#" -gt 0 ]; then
+	all=$*
+	only=1
+fi
 failed=
 for _t in $all; do
 	if ! (cd "$REAL/../.." && "$_t"); then
@@ -649,6 +768,11 @@ done
 if [ -n "$failed" ]; then
 	echo "$me: failed:$failed"
 	exit 1
+fi
+if [ -n "$only" ]; then
+	_ok=1
+	echo "$me: ok ($all; no mutants)"
+	exit 0
 fi
 
 # ---- Mutants: each must fail the test that targets it. -----------------

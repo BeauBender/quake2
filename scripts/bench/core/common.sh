@@ -278,7 +278,7 @@ BENCH_BOUNDED_PID=
 # group (bench_stop_group) once the command has run more than <seconds>
 # (whole seconds by the clock, so between <seconds> and one more). Returns
 # its status, or 124 when it was stopped. For adapters. The poll backs off
-# from 0.02 s to 1 s, so a short command costs little.
+# from 0.02 s to 0.5 s, so a short command costs little.
 bench_bounded() {
 	_bb_s=$1
 	shift
@@ -300,8 +300,7 @@ bench_bounded() {
 		0.02) _bb_nap=0.05 ;;
 		0.05) _bb_nap=0.1 ;;
 		0.1) _bb_nap=0.2 ;;
-		0.2) _bb_nap=0.5 ;;
-		*) _bb_nap=1 ;;
+		*) _bb_nap=0.5 ;;
 		esac
 	done
 	_bb_st=0

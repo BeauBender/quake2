@@ -2,14 +2,24 @@
 #
 # The lock is the directory <state>/lock, made with mkdir (atomic: of two
 # callers, exactly one makes it). Its holder file, <state>/lock/holder,
-# written to a temporary name and renamed into place, carries
+# carries
 #   label=<label> pid=<lock shell> child=<command> start=<UTC> token=<token>
-# one per line. The state directory is $BENCH_STATE, else
-# $XDG_CACHE_HOME/bench-state, else $HOME/.cache/bench-state: per user, the
-# same for every repository and worktree, and refused inside a git work tree.
+# one per line. The maker writes it to a temporary name and links it into
+# place (ln, which fails when a holder file is there already, so it never
+# replaces another maker's), then checks that the lock directory is still
+# the one it made (its inode, read right after the mkdir) and still carries
+# its token; otherwise it takes its holder back out and waits like any
+# caller. So a maker that stalls between the mkdir and the write for longer
+# than the grace below, while a waiter reclaims the directory and a third
+# caller makes it again, backs off instead of holding the lock with it. The
+# holder then rewrites the file with the command's pid by a rename. The
+# state directory is $BENCH_STATE, else $XDG_CACHE_HOME/bench-state, else
+# $HOME/.cache/bench-state: per user, the same for every repository and
+# worktree, and refused inside a git work tree.
 #
 # Waiting: a caller that finds the lock held polls every BENCH_LOCK_POLL
-# seconds (default 2), in the foreground, for at most BENCH_LOCK_WAIT seconds
+# seconds (default 2; at least 0.01, and a poll longer than the whole wait
+# is cut to it), in the foreground, for at most BENCH_LOCK_WAIT seconds
 # (default 3600), then exits 75 naming the holder's label.
 #
 # Re-entry: the holder exports BENCH_LOCK_TOKEN to its command. A nested
@@ -30,9 +40,20 @@
 # SIGKILL in the middle of a reclaim leaves its guard behind and blocks that
 # one reclaim; remove the reclaim.* directory by hand.
 #
+# The command: lock run starts it in its own process group (bench_spawn),
+# so it keeps the signal dispositions of the caller (SIGINT and SIGQUIT are
+# not ignored, and its own traps run) and the lock reaches everything it
+# starts. Its standard input is the caller's, or /dev/null when that is a
+# terminal: a command in a background process group cannot read the
+# terminal. A terminal's Ctrl-C reaches the lock shell, not the command.
+#
 # Release: the EXIT, INT, TERM and HUP traps of bench.sh call
 # bench_lock_release, which removes the lock only while the holder file
-# still carries this process's token.
+# still carries this process's token. On INT, TERM or HUP the lock shell
+# first stops the command's whole process group (bench_stop_group: TERM,
+# then KILL after twice BENCH_STOP_GRACE, so that a command stopping a
+# group of its own with that grace, as bench_bounded does, finishes first),
+# so nothing the command started outlives the lock.
 
 BENCH_STATE_DIR=
 BENCH_LOCK_DIR=
@@ -69,12 +90,26 @@ bench_lock_mine() {
 	[ "$(bench_kv "$(bench_lock_holder)" token)" = "$BENCH_LOCK_TOKEN" ]
 }
 
-# bench_lock_write <label> <child>: writes the holder file, atomically.
+# bench_lock_write <label> <child> [new]: writes the holder file, whole, to
+# a temporary name, then into place: with "new" by a hard link, which fails
+# when there is a holder file already; else by a rename, which replaces
+# this process's own.
 bench_lock_write() {
-	_lw_t=$BENCH_LOCK_DIR/holder.tmp.$$
+	_lw_t=${BENCH_LOCK_DIR:?}/holder.tmp.$$
 	printf 'label=%s\npid=%s\nchild=%s\nstart=%s\ntoken=%s\n' \
 		"$1" "$$" "$2" "$BENCH_LOCK_SINCE" "$BENCH_LOCK_MINE" > "$_lw_t" 2> /dev/null || return 1
+	if [ "${3:-}" = new ]; then
+		_lw_st=0
+		ln "$_lw_t" "${BENCH_LOCK_DIR:?}/holder" 2> /dev/null || _lw_st=1
+		rm -f "$_lw_t"
+		return "$_lw_st"
+	fi
 	mv -f "$_lw_t" "${BENCH_LOCK_DIR:?}/holder" 2> /dev/null
+}
+
+# bench_dir_id <dir>: the inode of <dir>, empty when it is gone.
+bench_dir_id() {
+	ls -di "$1" 2> /dev/null | awk '{ print $1 }'
 }
 
 # bench_lock_reclaim <token>: removes the lock left by the dead holder that
@@ -124,8 +159,11 @@ bench_lock_acquire() {
 	_la_grace=${BENCH_LOCK_GRACE:-10}
 	bench_is_uint "$_la_wait" || bench_die 2 "BENCH_LOCK_WAIT is whole seconds"
 	bench_is_uint "$_la_grace" || bench_die 2 "BENCH_LOCK_GRACE is whole seconds"
-	if ! bench_is_num "$_la_poll" || [ "$_la_poll" = 0 ]; then
-		bench_die 2 "BENCH_LOCK_POLL is a positive number of seconds"
+	if ! bench_is_num "$_la_poll" || ! awk -v p="$_la_poll" 'BEGIN { exit !(p >= 0.01) }'; then
+		bench_die 2 "BENCH_LOCK_POLL is a number of seconds, at least 0.01"
+	fi
+	if [ "$_la_wait" -gt 0 ] && awk -v p="$_la_poll" -v w="$_la_wait" 'BEGIN { exit !(p > w) }'; then
+		_la_poll=$_la_wait
 	fi
 	_la_t0=$(date +%s)
 	_la_rand=$(od -An -N6 -tx1 /dev/urandom 2> /dev/null | tr -dc '0-9a-f') || _la_rand=
@@ -134,11 +172,20 @@ bench_lock_acquire() {
 	_la_bare=
 	while :; do
 		if mkdir "${BENCH_LOCK_DIR:?}" 2> /dev/null; then
+			_la_id=$(bench_dir_id "$BENCH_LOCK_DIR")
 			BENCH_LOCK_OWNED=1
 			BENCH_LOCK_SINCE=$(bench_utc)
-			if bench_lock_write "$_la_label" "" &&
-				[ "$(bench_kv "$(bench_lock_holder)" token)" = "$BENCH_LOCK_MINE" ]; then
-				return 0
+			if bench_lock_write "$_la_label" "" new; then
+				if [ -n "$_la_id" ] && [ "$(bench_dir_id "$BENCH_LOCK_DIR")" = "$_la_id" ] &&
+					[ "$(bench_kv "$(bench_lock_holder)" token)" = "$BENCH_LOCK_MINE" ]; then
+					return 0
+				fi
+				# The holder landed in a directory this process did not make
+				# (a waiter reclaimed this one during a stall, and another
+				# caller made it again): take it back out.
+				if [ "$(bench_kv "$(bench_lock_holder)" token)" = "$BENCH_LOCK_MINE" ]; then
+					rm -f "${BENCH_LOCK_DIR:?}/holder"
+				fi
 			fi
 			# A reclaimer took the directory before the holder file landed.
 			BENCH_LOCK_OWNED=
@@ -195,19 +242,11 @@ bench_lock_release() {
 }
 
 # bench_lock_stop_child: on a signal, stops the command this process runs
-# under the lock: TERM, up to 10 s for it to go, then KILL; then reaps it.
+# under the lock and its whole process group: TERM, up to twice
+# BENCH_STOP_GRACE for the group to go, then KILL; then reaps it.
 bench_lock_stop_child() {
 	[ -n "${BENCH_LOCK_CHILD:-}" ] || return 0
-	kill -TERM "$BENCH_LOCK_CHILD" 2> /dev/null || true
-	_sc_n=0
-	while bench_pid_running "$BENCH_LOCK_CHILD" && [ "$_sc_n" -lt 50 ]; do
-		bench_nap 0.2
-		_sc_n=$((_sc_n + 1))
-	done
-	if bench_pid_running "$BENCH_LOCK_CHILD"; then
-		kill -KILL "$BENCH_LOCK_CHILD" 2> /dev/null || true
-	fi
-	wait "$BENCH_LOCK_CHILD" 2> /dev/null || true
+	bench_stop_group "$BENCH_LOCK_CHILD" $((2 * ${BENCH_STOP_GRACE:-10}))
 	BENCH_LOCK_CHILD=
 }
 
@@ -229,15 +268,15 @@ bench_lock_run() {
 	[ "$_ru_st" -eq 0 ] || exit "$_ru_st"
 	BENCH_LOCK_TOKEN=$BENCH_LOCK_MINE
 	export BENCH_LOCK_TOKEN
-	# In the background so a signal reaches the trap at once (wait returns),
-	# with this shell's standard input (through fd 3), not the /dev/null an
-	# async list gets by default; /dev/null when standard input is closed.
-	if { :; } 2> /dev/null 3<&0; then
-		{ "$@" <&3 3<&- & } 3<&0
+	# In the background, in its own process group, so a signal reaches the
+	# trap at once (wait returns) and the trap reaches the whole command.
+	if [ -t 0 ]; then
+		bench_spawn "$@" < /dev/null
 	else
-		"$@" < /dev/null &
+		bench_spawn "$@"
 	fi
-	BENCH_LOCK_CHILD=$!
+	BENCH_LOCK_CHILD=$BENCH_SPAWN_PID
+	bench_undefer
 	bench_lock_write "$_ru_label" "$BENCH_LOCK_CHILD" || true
 	wait "$BENCH_LOCK_CHILD" || _ru_st=$?
 	BENCH_LOCK_CHILD=

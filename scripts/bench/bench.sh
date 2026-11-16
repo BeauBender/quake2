@@ -31,7 +31,9 @@
 #
 # Environment: BENCH_STATE (lock state directory), BENCH_STORE (result
 # store), BENCH_LOCK_WAIT (seconds, default 3600), BENCH_LOCK_POLL (seconds,
-# default 2), BENCH_LOCK_GRACE (seconds, default 10), BENCH_LOCK_TOKEN (set
+# default 2, at least 0.01), BENCH_LOCK_GRACE (seconds, default 10),
+# BENCH_STOP_GRACE (seconds a stopped command gets between TERM and KILL,
+# default 10; the lock gives its command twice that), BENCH_LOCK_TOKEN (set
 # by the lock for its command), BENCH_HASH (shasum or cksum).
 set -eu
 LC_ALL=C
@@ -57,10 +59,18 @@ bench_on_exit() {
 	exit "$_oe_st"
 }
 
+# bench_on_signal <status>: stops what this process started (the command
+# under the lock, a bounded command: each with its whole process group),
+# then exits; the EXIT trap releases the lock after that. A signal that
+# arrives while bench_spawn starts a command is kept for bench_undefer.
 bench_on_signal() {
+	if [ -n "${BENCH_DEFER:-}" ]; then
+		BENCH_DEFERRED=$1
+		return 0
+	fi
 	trap '' INT TERM HUP
 	bench_lock_stop_child
-	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then kill -TERM "$BENCH_BOUNDED_PID" 2> /dev/null || true; fi
+	if [ -n "${BENCH_BOUNDED_PID:-}" ]; then bench_stop_group "$BENCH_BOUNDED_PID"; fi
 	exit "$1"
 }
 
@@ -78,21 +88,21 @@ case ${BENCH_HASH:-shasum} in
 shasum | cksum) ;;
 *) bench_die 2 "BENCH_HASH is shasum or cksum" ;;
 esac
+bench_is_uint "${BENCH_STOP_GRACE:-10}" || bench_die 2 "BENCH_STOP_GRACE is whole seconds"
 
-# need_lock <label> <args...>: re-runs this script with <args> under the
-# lock, unless this process holds it already, and exits with its status.
+# need_lock <label> <args...>: unless this process holds the lock already,
+# becomes (exec) a lock shell that runs this script with <args> under the
+# lock, so a signal to this process reaches the lock shell's trap.
 need_lock() {
 	_nl_label=$1
 	shift
 	bench_lock_init
 	bench_lock_mine && return 0
-	_nl_st=0
-	# In the background, so a signal here stops it (bench_on_signal).
-	sh "$BENCH_SELF" lock run "$_nl_label" -- sh "$BENCH_SELF" "$@" < /dev/null &
-	BENCH_LOCK_CHILD=$!
-	wait "$BENCH_LOCK_CHILD" || _nl_st=$?
-	BENCH_LOCK_CHILD=
-	exit "$_nl_st"
+	if [ -n "${BENCH_TMP:-}" ]; then
+		rm -rf "${BENCH_TMP:?}"
+		BENCH_TMP=
+	fi
+	exec sh "$BENCH_SELF" lock run "$_nl_label" -- sh "$BENCH_SELF" "$@" < /dev/null
 }
 
 # setup <case> <commit>: loads the case, the host, the commit, its inputs
