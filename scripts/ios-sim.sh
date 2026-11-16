@@ -25,12 +25,15 @@
 #     DIR/console.log), no validation message, and 0 failed command
 #     buffers in ref_metal's metal_stats line;
 #   - the device lists (DIR/devices.{before,created,after}.json, each
-#     "simctl list devices -j"): every device listed before the run is
-#     listed after it, and this run's device is in the list taken after
-#     "simctl create", not in the one before and not in the one after.
-#     Devices that others create or delete meanwhile (Xcode Previews) are
-#     not this run's. A list that fails, cannot be read or names no
-#     device is a failure.
+#     "simctl list devices -j"): this run's device is in the list taken
+#     after "simctl create", not in the one before and not in the one
+#     after. Other devices come and go (the owner's Xcode Previews
+#     devices): one listed before the run and missing after it is a
+#     warning naming its UDID, never a failure. This script's own
+#     mutating simctl calls (shutdown, delete, erase, uninstall,
+#     terminate, and the lookup of a lost device) name only this run's
+#     UDID, never one of the others. A list that fails, cannot be read or
+#     names no device is a failure.
 #
 # run (TASK149): what smoke does up to the launch, without the scripted
 # quit and the decisions: the app on the throwaway device for a person to
@@ -58,7 +61,8 @@
 # selftest: runs "smoke" against a fake xcrun and a fake make (no
 # simulator, no build, seconds) and checks its rules: a hung "simctl
 # list" is timed out, a failed or empty device list fails, another device
-# appearing meanwhile passes, a device from before that disappears fails,
+# appearing meanwhile passes, a device from before that disappears warns and passes,
+# a mutating simctl call naming any UDID but this run's fails,
 # this run's device left behind fails, the device of a create that timed
 # out is deleted, a create whose UDID is not listed after it, or was
 # listed before it, fails (and leaves that device alone), ref_metal's
@@ -191,9 +195,15 @@ print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-27-2": dev
 	esac ;;
 create)
 	u=$(printf 'AAAAAAAA-0000-0000-0000-%012d' $$)
+	# the UDID this create hands out is this run's: the case checks every
+	# mutating call against it
 	case $sc in
-	ghost) echo "BBBBBBBB-0000-0000-0000-000000000000"; exit 0 ;;
-	reuse) echo "11111111-1111-1111-1111-111111111111"; exit 0 ;;
+	ghost) u=BBBBBBBB-0000-0000-0000-000000000000 ;;
+	reuse) u=11111111-1111-1111-1111-111111111111 ;;
+	esac
+	echo "$u" > "$st/created"
+	case $sc in
+	ghost|reuse) echo "$u"; exit 0 ;;
 	esac
 	printf '%s %s\n' "$u" "$2" >> "$st/devices"
 	if [ "$sc" = extra ]; then
@@ -265,7 +275,7 @@ EOF
 	# <name> <scenario> <ok|fail> <text the output must hold> <max seconds> [VAR=value]...
 	st_case()
 	{
-		local name=$1 sc=$2 want=$3 text=$4 max=$5 d rc=0 t0 why=
+		local name=$1 sc=$2 want=$3 text=$4 max=$5 d rc=0 t0 why= other=
 		shift 5
 		ncase=$((ncase + 1))
 		d=$sroot/$name
@@ -288,6 +298,8 @@ EOF
 			why="its output does not hold \"$text\""
 		elif [ "$t0" -gt "$max" ]; then
 			why="it took $t0 s, more than $max s"
+		elif other=$(awk '$1 == "simctl" && ($2 == "shutdown" || $2 == "delete" || $2 == "erase" || $2 == "uninstall" || $2 == "terminate") && $3 != u { print $2 " " $3 }' u="$(cat "${d:?}/state/created" 2>/dev/null)" "${d:?}/state/calls" 2>/dev/null) && [ -n "$other" ]; then
+			why="a mutating simctl call names a device that is not this run's: $other"
 		elif [ "$sc" != leftover ] && grep '^AAAAAAAA-' "${d:?}/state/devices" >/dev/null; then
 			why="this run's device is left in the fake's device list"
 		elif ! grep '^11111111-' "${d:?}/state/devices" >/dev/null \
@@ -405,8 +417,10 @@ EOF
 	st_case list-empty empty fail "simctl list devices: no device list" 30
 	st_case list-fails listfail fail "simctl list devices failed" 30
 	st_case list-hangs hang fail "timed out after 2 s: xcrun simctl list devices" 10
-	st_case device-from-before-gone vanish fail "gone after the run: 22222222-2222-2222-2222-222222222222" 30
+	st_case device-from-before-gone vanish ok "not a failure): 22222222-2222-2222-2222-222222222222" 30
+	ST_CMD="run --out @D@/out" st_case run-device-from-before-gone vanish ok "not a failure): 22222222-2222-2222-2222-222222222222" 30
 	st_case own-device-left leftover fail "is still listed after its delete" 30
+	ST_CMD="run --out @D@/out" st_case run-own-device-left leftover fail "is still listed after its delete" 30
 	st_case create-times-out createhang fail "deleting AAAAAAAA-0000-0000-0000-" 30
 	st_case created-device-not-listed ghost fail "is not in the device list taken after simctl create" 30
 	st_case created-device-listed-before reuse fail "was already listed before simctl create" 30
@@ -734,7 +748,7 @@ if [ "$mode" = run ]; then
 	list_devices "$out/devices.after" || die "no device list after the run"
 	udids "$out/devices.after" > "${tmp:?}/udids.after"
 	gone=$(comm -23 "${tmp:?}/udids.before" "${tmp:?}/udids.after" | tr '\n' ' ')
-	[ -z "$gone" ] || die "devices listed before the run are gone after the run: $gone"
+	[ -z "$gone" ] || echo "ios-sim: warning: devices listed before the run are gone after it (not this run's, not a failure): $gone" >&2
 	grep -F -x -e "$run_udid" "${tmp:?}/udids.after" >/dev/null && die "this run's device $run_udid is still listed after its delete"
 	echo "ios-sim: run ok, $n start(s) (artifacts in $out)"
 	exit 0
@@ -772,7 +786,7 @@ bad() { echo "ios-sim: smoke: $*"; fail=1; }
 has() { grep -F -e "$1" "$out/engine.log" >/dev/null; }
 
 gone=$(comm -23 "${tmp:?}/udids.before" "${tmp:?}/udids.after" | tr '\n' ' ')
-[ -z "$gone" ] || bad "devices listed before the run are gone after the run: $gone"
+[ -z "$gone" ] || echo "ios-sim: warning: devices listed before the run are gone after it (not this run's, not a failure): $gone" >&2
 grep -F -x -e "$run_udid" "${tmp:?}/udids.after" >/dev/null && bad "this run's device $run_udid is still listed after its delete"
 
 has "Using the linked-in renderer: ref_metal (linked in)" || bad "engine.log does not show the linked-in ref_metal"
