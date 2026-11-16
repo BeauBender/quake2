@@ -82,7 +82,7 @@ static int ndone;
 
 /* the view the next G-buffer view traces with; whether this one traced (for the blend, then the forward pass) */
 static rm_rtw_view_t view;
-static int view_set, traced, forward;
+static int view_set, traced, forward, shown;   /* shown: this view's r_rt_water_show view was drawn */
 
 /* Sets a strong slot to obj (nil releases it), counting both in the ledger as RM_OBJ_RT. */
 #define RMB_RTW_SET(slot, obj) \
@@ -233,7 +233,7 @@ rmb_rtw_open(char *err, size_t errlen)
 	}
 
 	ndone = 0;
-	view_set = traced = forward = 0;
+	view_set = traced = forward = shown = 0;
 	rtw_open = 1;
 	return 1;
 }
@@ -255,7 +255,7 @@ rmb_rtw_close(void)
 	}
 
 	rtw_open = 0;
-	view_set = traced = forward = 0;
+	view_set = traced = forward = shown = 0;
 	ndone = 0;
 }
 
@@ -301,7 +301,7 @@ rmb_rtw_prepare(unsigned long w, unsigned long h)
 void
 rmb_rtw_set_view(const rm_rtw_view_t *v)
 {
-	view_set = 0;
+	view_set = shown = 0;
 
 	if (!rtw_open || !v)
 	{
@@ -393,7 +393,7 @@ rmb_rtw_trace(id<MTLTexture> target, id<MTLTexture> depth, id<MTLTexture> normal
 	const NSUInteger w = depth.width, h = depth.height;
 	int slot, timed;
 
-	traced = forward = 0;
+	traced = forward = shown = 0;
 
 	if (!rtw_open || !view_set || !target || !depth || !normal || !material)
 	{
@@ -511,7 +511,14 @@ rmb_rtw_blend(id<MTLRenderCommandEncoder> enc, id<MTLTexture> material)
 	[enc setFragmentTexture:material atIndex:1];
 	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 	rmb_counts.draws++;
+	shown = (view.show != 0);
 	return 1;
+}
+
+int
+rmb_rtw_shown(void)
+{
+	return rtw_open && shown;
 }
 
 id<MTLRenderPipelineState>
@@ -536,5 +543,5 @@ rmb_rtw_bind_forward(id<MTLRenderCommandEncoder> enc)
 void
 rmb_rtw_view_end(void)
 {
-	traced = forward = 0;
+	traced = forward = shown = 0;
 }

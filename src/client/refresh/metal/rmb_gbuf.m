@@ -808,6 +808,9 @@ rmb_gbuf_view_end(const rm_viewport_t *src, const rm_viewport_t *dst)
 {
 	id<MTLTexture> color = rmb_frame_color();
 
+	/* RT6: the next forward pass's translucent draws are stock, on every path out (a pass that failed to open too) */
+	rmb_rtw_view_end();
+
 	if (pass_kind == RMB_GB_PASS_NONE)
 	{
 		return;
@@ -815,7 +818,6 @@ rmb_gbuf_view_end(const rm_viewport_t *src, const rm_viewport_t *dst)
 
 	pass_kind = RMB_GB_PASS_NONE;
 	mv_set = 0;
-	rmb_rtw_view_end();   /* RT6: the next forward pass's translucent draws are stock */
 	rmb_frame_close_pass();
 
 	/* r_rt_gbuffer_show: an attachment over the view (the G-buffer's own only on its path) */

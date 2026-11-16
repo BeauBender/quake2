@@ -159,6 +159,9 @@ int rmb_rtw_stats(rm_rtw_stats_t *s, int cap);
 /* the view ended (rmb_gbuf_view_end) or the frame did: the forward pass's translucent draws are stock again */
 void rmb_rtw_view_end(void);
 
+/* 1 when this view's trace was dispatched and its r_rt_water_show view drawn (rmb_rtw_blend), until the view ends */
+int rmb_rtw_shown(void);
+
 #ifdef __OBJC__
 /*
  * rmb_gbuf.m's hooks. rmb_rtw_trace, after the resolve (the lit result in

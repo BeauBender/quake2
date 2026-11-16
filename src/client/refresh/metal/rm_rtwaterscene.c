@@ -32,6 +32,8 @@
 #include "header/rm_rt.h"
 #include "header/rm_rtwater.h"
 #include "header/rm_rtwaterscene.h"
+#include "header/rm_rtscene.h"
+#include "header/rm_rtaoscene.h"
 #include "header/rm_gbufscene.h"
 
 static cvar_t *r_rt_water;
@@ -139,11 +141,16 @@ RM_RTW_Active(void)
 	return rtw_active;
 }
 
-/* only a view that was handed over is traced and shown: without one the forward pass draws as without the reflections */
+/*
+ * Only a view whose trace ran and whose show view was drawn leaves the
+ * forward pass out: without them (the view not handed over, or the
+ * trace's scene, materials or geometry not bound) the forward pass draws
+ * as without the reflections.
+ */
 int
 RM_RTW_ShowOnly(void)
 {
-	return rtw_active && rtw_viewed && r_rt_water_show && rm_rtw_show(r_rt_water_show->value);
+	return rtw_active && rtw_viewed && r_rt_water_show && rm_rtw_show(r_rt_water_show->value) && rmb_rtw_shown();
 }
 
 void
@@ -154,8 +161,14 @@ RM_RTW_View(const rm_view_t *view)
 
 	rtw_viewed = 0;
 
-	if (!rtw_active)
+	/*
+	 * Not with r_rt_shadows_show's or r_rt_ao_show's view on (their
+	 * RM_*_View ran first): the reflections are neither traced nor blended
+	 * over it, so each pass's show view stays its own.
+	 */
+	if (!rtw_active || RM_RTS_ShowOnly() || RM_RTAO_ShowOnly())
 	{
+		rmb_rtw_set_view(NULL);
 		return;
 	}
 
