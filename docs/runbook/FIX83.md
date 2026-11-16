@@ -154,8 +154,19 @@ name of their file, with the check's temporary directory as `<tmp>`.
 
 ## Checks
 
-Each through the host lock, on the final tree, without load:
-CHECK_RESULTS
+Each through the host lock, on `59b090af` (the code of `78ca72e1` and this
+runbook), without load, all passing:
+
+- `tests/check-bench.sh`: ok in 87 s, every mutant caught, among them
+  `fork-stderr` and `fork-stderr-nostdin` (the forked shell's lines reach
+  the caller), `fork-stderr-closed` (status 1, not 0, for a closed standard
+  error) and `gc-notice` (the fixture's own notice, in the quiet probe);
+- the same as a background job with SIGINT ignored, `(trap '' INT; exec
+  tests/check-bench.sh) & wait`: ok in 84 s (the INT tests skipped, and
+  said);
+- `tests/check-bench-entry.sh`: ok in 113 s;
+- `tests/check-gate-parallel.sh`: ok in 302 s, 22 cases, 59 mutants caught;
+- `tests/check-doc-links.sh` and `tests/check-no-local-identity.sh`: ok.
 
 ## Commits measured
 
@@ -165,4 +176,5 @@ CHECK_RESULTS
 - `a4a3a37e`: the fix, its tests and mutants, the tree of the post-fix runs;
 - `78ca72e1`: comments, and the fd probe of `t_spawn_stderr` given
   `/dev/null` for standard input (no change to `t_lock_stop` or to what
-  the core does), the tree of the checks.
+  the core does);
+- `59b090af`: this runbook over `78ca72e1`, the tree of the checks.
