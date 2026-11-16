@@ -273,7 +273,13 @@ create)
 		exec sleep 30
 	fi
 	echo "$u" ;;
-terminate) [ -f "$st/app.pid" ] && kill "$(cat "$st/app.pid")" 2>/dev/null; echo "$*" >> "$st/terminates"; exit 0 ;;
+terminate)
+	# only the process this fake started: the PID in app.pid still runs the command recorded in app.cmd
+	# (a PID that is gone may belong to anyone by now)
+	if [ -f "$st/app.pid" ] && [ -f "$st/app.cmd" ] && [ "$(ps -o command= -p "$(cat "$st/app.pid")" 2>/dev/null)" = "$(cat "$st/app.cmd")" ]; then
+		kill "$(cat "$st/app.pid")" 2>/dev/null
+	fi
+	echo "$*" >> "$st/terminates"; exit 0 ;;
 bootstatus|install|shutdown) ;;
 spawn) echo "fake log: quake2 line" ;;
 io)
@@ -327,7 +333,8 @@ launch)
 	if [ "$sc" = appstays ] || [ "$sc" = containerhang ]; then
 		echo "Metal API Validation Enabled"
 		echo $$ > "$st/app.pid"
-		exec sleep 30
+		echo "sleep 30.$$" > "$st/app.cmd"
+		exec sleep "30.$$"
 	fi
 	# a run with --background (IOS_SIM_BACKGROUND_AFTER is set) keeps the app alive through the background;
 	# bgdies is the app that ends during it
@@ -335,9 +342,10 @@ launch)
 	[ -n "${IOS_SIM_BACKGROUND_AFTER-}" ] && life=4
 	[ "$sc" = bgshot ] && life=5
 	[ "$sc" = bgdies ] && life=1
-	sleep "$life" &
+	sleep "$life.$$" &
 	p=$!
 	echo $p > "$st/app.pid"
+	echo "sleep $life.$$" > "$st/app.cmd"
 	echo "$4: $p"
 	echo "Metal API Validation Enabled"
 	wait "$p"
@@ -369,6 +377,7 @@ for a; do case $a in IOS_ROOT=*) r=${a#IOS_ROOT=} ;; esac; done
 [ -n "$r" ] || { echo "fake make: no IOS_ROOT" >&2; exit 2; }
 mkdir -p "$r/Quake2.app" || exit 1
 printf '%s\n' "$*" > "$r/make.args"
+for a; do case $a in IOS_BUNDLE_DATA=*) cp -R "${a#IOS_BUNDLE_DATA=}/." "$r/Quake2.app/" || exit 1 ;; esac; done
 printf '#!/bin/sh\nexit 0\n' > "$r/Quake2.app/quake2" && chmod +x "$r/Quake2.app/quake2" || exit 1
 printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
 	'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
@@ -459,9 +468,10 @@ EOF
 			"22222222-2222-2222-2222-222222222222 Owner iPad" > "${d:?}/state/devices"
 		t0=$(date +%s)
 		cmd=${ST_CMD:-smoke --out @D@/out}; cmd=${cmd//@D@/$d}
-		bounded 60 "${d:?}/run.log" env PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
+		# ST_CWD: the directory the script runs in; no pathname expansion of the words of the command
+		( set -f; cd "${ST_CWD:-.}" && bounded 60 "${d:?}/run.log" env PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
 			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=20 IOS_SIM_CREATE_SECONDS=20 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10 "$@" \
-			bash "$self" $cmd || rc=$?
+			bash "$self" $cmd ) || rc=$?
 		t0=$(( $(date +%s) - t0 ))
 		if [ "$rc" = 124 ]; then
 			why="the smoke outlived 60 s"
@@ -473,7 +483,7 @@ EOF
 			why="its output does not hold \"$text\""
 		elif [ "$t0" -gt "$max" ]; then
 			why="it took $t0 s, more than $max s"
-		elif other=$(awk '$1 == "simctl" && ($2 == "shutdown" || $2 == "delete" || $2 == "erase" || $2 == "uninstall" || $2 == "terminate") && $3 != u { print $2 " " $3 }' u="$(cat "${d:?}/state/created" 2>/dev/null)" "${d:?}/state/calls" 2>/dev/null) && [ -n "$other" ]; then
+		elif other=$(awk '$1 == "simctl" && ($2 == "shutdown" || $2 == "delete" || $2 == "erase" || $2 == "uninstall" || $2 == "terminate" || $2 == "boot" || $2 == "bootstatus" || $2 == "install" || $2 == "launch") { x = ($2 == "launch" && $3 ~ /^--/) ? $4 : $3; if (x != u) print $2 " " x }' u="$(cat "${d:?}/state/created" 2>/dev/null)" "${d:?}/state/calls" 2>/dev/null) && [ -n "$other" ]; then
 			why="a mutating simctl call names a device that is not this run's: $other"
 		elif [ "$sc" != leftover ] && grep '^AAAAAAAA-' "${d:?}/state/devices" >/dev/null; then
 			why="this run's device is left in the fake's device list"
@@ -613,6 +623,36 @@ EOF
 	ST_CMD="run --out @D@/out --no-data --background 1" st_case run-background-after-not-digits extra fail "IOS_SIM_BACKGROUND_AFTER must be" 5 IOS_SIM_BACKGROUND_AFTER=x
 	ST_CMD="run --out @D@/out --shot 3s" st_case run-shot-not-digits extra fail "--shot must be a number of seconds" 5
 	ST_CMD="run --out @D@/out" st_case run-limit-not-digits extra fail "IOS_SIM_RUN_SECONDS must be" 5 IOS_SIM_RUN_SECONDS=1h
+	# a --launch word is split at spaces and never matched against the files of the directory the script runs in
+	mkdir -p "$sroot/glob-cwd" && : > "$sroot/glob-cwd/+xfile"
+	ST_CWD="$sroot/glob-cwd" ST_CMD="run --out @D@/out --no-data --launch +x*" st_case run-launch-no-glob extra ok "run ok, 1 start(s)" 30
+	st_has run-launch-no-glob grep state/launches "+x*"
+	st_has run-launch-no-glob nogrep state/launches "+xfile"
+	# a start that ended on its own must show the engine's own quit path in its log, or it was killed or it crashed
+	ST_CMD="run --out @D@/out --no-data" st_case run-app-killed killed fail "does not show its own quit path" 30
+	ST_CMD="run --out @D@/out --no-data" st_case run-app-crashed crashed fail "does not show its own quit path" 30
+	ST_CMD="run --out @D@/out --no-data --launch +a --launch +b" st_case run-second-start-killed killed fail "start 1: the app ended and engine.1.log does not show" 30
+	# with --shot the script ends the app itself: no quit path is due; an app that ended before the shot is said so
+	ST_CMD="run --out @D@/out --no-data --shot 0" st_case run-shot-ends-app-no-quit-path killed ok "run ok, 1 start(s)" 30
+	st_has run-shot-ends-app-no-quit-path file out/screen.1.png
+	ST_CMD="run --out @D@/out --no-data --shot 6" st_case run-ended-before-shot extra ok "the app ended before the screenshot" 30
+	st_has run-ended-before-shot nofile out/screen.1.png
+	ST_CMD="run --out @D@/out --no-data --shot 6" st_case run-killed-before-shot killed fail "does not show its own quit path" 30
+	# the fake's terminate kills only the process it started: a PID in app.pid that now runs something else survives
+	ncase=$((ncase + 1))
+	mkdir -p "$sroot/fake-terminate-stale/state"
+	sleep 30 &
+	spid=$!
+	printf '%s\n' "$spid" > "$sroot/fake-terminate-stale/state/app.pid"
+	printf '%s\n' "sleep 31.1" > "$sroot/fake-terminate-stale/state/app.cmd"
+	FAKE_STATE="$sroot/fake-terminate-stale/state" "$sroot/bin/xcrun" simctl terminate AAAAAAAA-0000-0000-0000-000000000001 com.example
+	if kill -0 "$spid" 2>/dev/null; then
+		echo "ios-sim: selftest: ok fake-terminate-stale"
+	else
+		echo "ios-sim: selftest: FAIL fake-terminate-stale: the fake's terminate killed a PID that is not its app"
+		nfail=$((nfail + 1))
+	fi
+	kill "$spid" 2>/dev/null; wait "$spid" 2>/dev/null
 	# the runtime pick: the newest runtime that lists the device type, the general one on a tie
 	st_case runtime-tie-picks-general rttie ok "iOS 27.2)" 30
 	st_case runtime-newer-bound-picks-general rtnewer ok "iOS 27.2)" 30
@@ -916,6 +956,8 @@ bounded 180 "${tmp:?}/install.out" xcrun simctl install "$udid" "$app" || { cat 
 
 # ---- the run ---------------------------------------------------------------
 
+# Com_Quit's line in the engine's log: the app ended through its own quit path
+shutdown_line='----------- shutting down ----------'
 # data_container: the app's data container into $container (fail closed)
 data_container()
 {
@@ -932,6 +974,7 @@ launch_app()
 {
 	local limit=$1 what=$2 shotat=$3 n=$4 log t t0 w=0 shotbase=0 bgdone=0
 	shift 4
+	shot_taken=0
 	log=$out/console.$n.log
 	SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "$@" > "$log" 2>&1 &
 	lpid=$!
@@ -961,6 +1004,7 @@ launch_app()
 			if [ -n "$bg" ]; then
 				bounded 90 "$out/oslog.$n.txt" xcrun simctl spawn "$udid" log show --last 5m --predicate 'process == "quake2"' || die "simctl spawn log show failed"
 			fi
+			shot_taken=1
 			bounded 30 "${tmp:?}/term.out" xcrun simctl terminate "$udid" "$bid" || true
 			break
 		fi
@@ -972,6 +1016,10 @@ launch_app()
 		t=$((t + 1))
 	done
 	echo "ios-sim: start $n: the app ran $((SECONDS - t0)) s"
+	# the app ended on its own before the screenshot was due
+	if [ -n "$shotat" ] && [ "$shot_taken" = 0 ]; then
+		echo "ios-sim: start $n: the app ended before the screenshot (due $shotat s after the start or the return): none was taken" >&2
+	fi
 	while kill -0 "$lpid" 2>/dev/null && [ "$w" -lt 10 ]; do sleep 1; w=$((w + 1)); done
 	if kill -0 "$lpid" 2>/dev/null; then
 		echo "ios-sim: the launch client did not exit after the app; stopping it" >&2
@@ -1004,14 +1052,21 @@ if [ "$mode" = run ]; then
 	for l in "${launches[@]}"; do
 		n=$((n + 1))
 		# no write-directory option: the engine finds Documents by itself
-		# shellcheck disable=SC2086
-		launch_app "$run_s" "IOS_SIM_RUN_SECONDS" "$shot" "$n" +set vid_renderer metal +set logfile 2 $l
+		# split at spaces by read, not by an unquoted expansion: a * or ? is not a pattern here
+		words=()
+		read -r -a words <<< "$l"
+		launch_app "$run_s" "IOS_SIM_RUN_SECONDS" "$shot" "$n" +set vid_renderer metal +set logfile 2 ${words[@]+"${words[@]}"}
 		data_container
 		docs=$container/Documents/baseq2
 		[ -d "$docs" ] || die "no Documents/baseq2 in the data container after start $n"
 		( cd "$docs" && find . -type f | sort | while read -r f; do printf '%s %s\n' "$(wc -c < "$f" | tr -d ' ')" "$f"; done ) > "$out/documents.$n.list" || die "cannot list $docs"
 		[ -f "$docs/qconsole.log" ] || die "the engine wrote no qconsole.log in Documents/baseq2 after start $n"
 		cp "$docs/qconsole.log" "$out/engine.$n.log"
+		# a start the script ended itself (the shot, then terminate) has no quit path to show; one that
+		# ended on its own did, or it was killed or it crashed (decided from the engine's own log)
+		if [ "$shot_taken" = 0 ] && ! grep -F -x -e "$shutdown_line" "$out/engine.$n.log" >/dev/null; then
+			die "start $n: the app ended and engine.$n.log does not show its own quit path (\"$shutdown_line\"): it was killed or it crashed"
+		fi
 		if [ -d "$docs/scrnshot" ]; then
 			mkdir -p "$out/frames.$n" && cp "$docs/scrnshot/"* "$out/frames.$n/" 2>/dev/null
 		fi
@@ -1040,7 +1095,6 @@ lpid=$!
 # the time left
 deadline=$((SECONDS + smoke_s))
 left() { local l=$((deadline - SECONDS)); [ "$l" -ge 1 ] || l=1; echo "$l"; }
-shutdown_line='----------- shutting down ----------'
 # engine_log_has <line>: the engine's log in the app's data container holds that whole line
 engine_log_has()
 {
