@@ -28,14 +28,29 @@ cvars, then the row's own, as before.
 | before (`+set` pairs), the card's native `rt-ao` run | 131 |
 | now, any scenario, any number of cvars | 32 (31 without the name) |
 
-`plan` prints the count of the largest run and what it would be with one
-`+set` pair per cvar:
-`args<TAB>N<TAB>limit 128<TAB>with one +set pair per cvar it would be M`.
+The quality records do not go through the script: `scripts/pins.sh record`
+turns each `set` line of the scratch scenario into a `+set` pair, so a
+record's line is 42 words of `pins.sh`'s own plus three for each cvar of
+the scenario and the option. `plan` counts every engine command line a
+run will start (the timed runs, the probe and each record) and prints the
+largest, with its kind:
+`args<TAB>N<TAB>limit 128<TAB>record of <scenario> with <option><TAB>with one +set pair per cvar the timed runs would be M`.
+For the committed scenarios the largest is 105 (`rt-*`, a record) and 93
+(`world`, `models`, `particles`, `skywater`, a record). `run` refuses,
+exit 3 and before any engine run, a run in which any record would go over
+128, naming the scenario and option. A cvar the engine reads only at init,
+or one that is latched, must stay on the command line, not go in the
+script (it runs after the renderer is loaded). A run whose engine log does
+not show `execing mfx-run.cfg.` is an error and never a measured row, and
+`--bin` is made absolute before use.
 A name or value that cannot be one console token (a quote, a semicolon, a
-newline, a space, an empty value) is refused, exit 3, naming its cvar, as
+newline, a space, an empty value, a trailing newline) is refused, exit 3, naming its cvar, as
 is a scenario or option that sets one of the cvars the generator itself
 passes (`vid_renderer`, `r_mode`, the window size and so on). The check
-runs before any engine run.
+runs before any engine run, the values of the scenarios and options
+(the defaults come from the first probe, which is an engine run, and are
+checked after it). Both checks match the whole string, so a trailing
+newline is refused as well.
 
 ## Combining chunks
 
@@ -62,7 +77,18 @@ each run first against the generator as it was before this card and
 failing there:
 
 - `cfg-many`, `e2e-args`, `plan-args`: a scenario of 70 cvars runs with 32
-  arguments (the fake engine counts its own), and plan prints it.
+  arguments (the fake engine counts its own); a scenario as large as a
+  record can be (15 added cvars) runs; plan prints the largest line and its
+  kind (a record over the limit for the 70-cvar scenario).
+- `e2e-record-limit`: a scenario whose record would have 165 arguments
+  refuses the run, exit 3, naming scenario and option, with no engine run
+  (the stub `pins.sh` fails a scratch scenario over the limit, so without
+  the check the run ends in a record error instead).
+- `probe-noexec`, `timed-noexec`, `e2e-noexec`: an engine that does not
+  execute the script is an error, never a row. `e2e-relative`: a relative
+  `--bin` from another directory runs. `cfg-link`: a link at the script's
+  path is replaced, not written through. `cfg-restore-order`: the owner's
+  config is put back even when the script cannot be removed.
 - `cfg-unsafe`, `cfg-fixed`, `e2e-unsafe`: unsafe names and values refused
   with the cvar name.
 - `cfg-script-hold`, `cfg-script-restore`, `e2e-script`: the script is

@@ -100,7 +100,8 @@ lines into `mfx-run.cfg` in the binary's `baseq2/` for that run, runs the engine
 `+exec mfx-run.cfg`, and removes the file with the held `config.cfg`. Only the window, renderer,
 sound and display-sync cvars stay on the command line. A name or value that cannot be one console
 token (a quote, a semicolon, a newline, a space) refuses the run, naming its cvar. `plan` prints
-the argument count of the largest run. See [FIX86](FIX86.md).
+the argument count of the largest engine command line of any run (a timed run, a probe or a record) and its kind;
+`run` refuses a run whose record would go over the limit. See [FIX86](FIX86.md).
 
 **One run per engine binary at a time.** The generator holds a non-blocking exclusive lock on
 the binary's `baseq2/` folder and on this checkout's `scripts/pins/scenarios/` folder for the
