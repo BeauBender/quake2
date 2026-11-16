@@ -16,13 +16,14 @@ whatever the size; TASK108 (#259) then read about 120 fps at 640x480 and
 the four renderers against GPU completion, names the per-frame cost and
 removes it.
 
-## The three rounds
+## The rounds
 
 | Round | Engine commit | The present with display sync off | What it left |
 |---|---|---|---|
 | 1 | `1c2d4b12` | one present on its way at a time: the frame copied to a stage, the stage to the drawable, FIX53's alpha pass | presented fewer frames a second than before at every size |
 | 2 | `3427719d` | as many presents on their way as the layer has drawables, a stage each, the same three passes | rendered 4 to 20 times before; presented still below before: at 5120x2880 the present's GPU time (2.05 to 2.38 ms), windowed a measurement that ended inside the window server's slow phase |
 | 3 | `d7cef009` | the frame drawn into its present slot's own target; one pass writes the drawable with alpha 1 | rendered 1.8 to 22 times before; presented above before at 1920x1080 and, in `ref_metal`, at 5120x2880; the shim's 5120x2880 presents 3 to 8 percent under before; at 640x480 the window server's pace, the ranges overlapping (below) |
+| 4 | `df2acd46` | as round 3; a drawable is acquired ahead only with display sync off, and each present slot of the shim has its own event ([round 4](#round-4)) | the same rates as round 3 in the same conditions; the frames after display sync is turned on in mid-frame take all three drawables again |
 
 ## The fix (round 3)
 
@@ -120,7 +121,8 @@ Apple's page "addCompletedHandler(_:)" (MTLCommandBuffer) states:
   ledger.
 - **The shim's earlier command buffers have completed.** Every command
   buffer of a frame but its last is committed by `mgl_flush`, which waits
-  for it (`mgl_commit_wait`). Only the last one signals the event, after
+  for it (`mgl_commit_wait`). Only the last one signals the event (from
+  round 4 the present slot's own, [below](#round-4)), after
   its own prior commands (the quote above); the ones before it have
   completed before it was made. When a wait ended first (the bound,
   `MGL_GPU_WAIT_MS`), the frame is not presented and is counted without a
@@ -390,6 +392,176 @@ other window sizes and fullscreen modes, and `vid_highdpiaware 1`. In
 every run with display sync off, both loops, the drawables the window
 server reported shown (`addPresentedHandler`, a time above 0) were about
 half the frames presented; with `r_vsync 1`, all of them (60 a second).
+
+## Round 4
+
+The review panel on round 3's head with main merged (`112ffdb1`) found one
+Important and two notes, fixed in this round. The engine commit measured
+is `df2acd46`; the commits after it change only this document.
+
+- **A drawable is acquired ahead only with display sync off.** A frame
+  can take its present slot with display sync off and end after display
+  sync is on: `screenshot; r_vsync 1` in one frame (a bind, a cfg, a
+  server's `stufftext`). The screenshot's read opens a frame between
+  frames, and `r_vsync 1` takes effect at the next `RI_BeginFrame`
+  (`mgl_layer_set_sync(1)`, which drops the drawable acquired ahead). That
+  frame then ended in `mgl_present_apart_begin`, which asked for the next
+  drawable ahead although with display sync on nothing takes one: it stayed
+  held for as long as display sync stayed on, one of the layer's three
+  drawables, and the frames shared the other two. `mgl_present_apart_begin`
+  now asks only while `mgl_present_apart()`. `rmb_next_drawable` in
+  `ref_metal` had the same call; nothing reaches it with display sync on
+  (`rmb_set_vsync` runs in `RI_BeginFrame` before `rmb_frame_begin`, and
+  `rmb_read` outside a frame opens none), and it now asks only while
+  `rmb_apart()`.
+- **`ref_metal`'s depth target follows the frame's size on every frame.**
+  `rmb_frame_begin` checked the depth target's size only when
+  `rm_frame_remake` asked for a new target. With display sync off the
+  slot's colour target is already of the frame's size (`rmb_present_take`),
+  so `rm_frame_remake` asks for nothing and a new size would have kept the
+  old depth target. Nothing changes the frame size without a new attach
+  today; the check now runs on every frame.
+- **The shim's present waits for its own frame.** Round 3's present waited
+  for one `MTLEvent` whose value went up by one a present: a later frame's
+  signal of a higher value also ended an earlier present's wait, before
+  that earlier frame's command buffer had completed. Each present slot now
+  has its own event and its own value sequence (`mgl_present_event[]`,
+  `mgl_present_value[]` in `mgl_layer.m`).
+
+**Why the shim's wait is now exact.** The present of slot s waits for the
+next value v of slot s's event. Only `mgl_present_apart_begin` signals an
+event: on the command buffer of the frame that holds the slot, with that
+slot's next value, and only when that frame is presented. The slot is held
+from `mgl_present_take`, when the frame begins, until that present's
+command buffer has completed (its completed handler gives it back). So
+while the present waits, no other frame holds slot s and none can signal
+its event; every value below v was signalled by an earlier frame of the
+slot whose present has completed. Value v is reached by this frame's
+signal only, which follows that command buffer's own prior commands (the
+quote in [the order of a frame and its
+present](#the-order-of-a-frame-and-its-present)), and every earlier
+command buffer of the frame completed before it was made (`mgl_flush`,
+unchanged). The wait on the GPU still has no time limit of its own, where
+`ref_metal`'s is bounded (`RMB_GPU_WAIT_MS`); this round does not change
+that.
+
+### Round 4 measurements
+
+**Host rule.** From 18:17 on that day every heavy command on the host (a
+build, a test suite, an engine run) runs under the artifacts folder's
+`heavy.sh`, which holds the timing lock for its whole run, and a build's
+"before" numbers are measured once per commit and kept as a baseline, with
+one drift-check run of the baseline build in each later batch. The I1
+batches and the confirmation batches before 18:17 could have shared the
+host with builds of other lanes, so they were discarded and run again
+under `heavy.sh`; the numbers below are all from 18:23 on. The pins were
+recorded from 18:17 to 18:24, the first call under this lane's own lock
+and the others under `heavy.sh`.
+
+**The builds.** Exported with `git archive` and built with `make -j4`, the
+probe of round 3 (`probe.py` and `probe2.py`, never committed) in every
+rate build. Round 4's probe build adds `probe3.py`, for the shim with
+display sync on only: the time a frame waits in `nextDrawable`, whether a
+drawable acquired ahead is held at that moment, which of the layer's
+drawables the frame got (its `IOSurface`), each `mgl_layer_set_sync`, and
+each `mgl_present_apart_begin` with display sync on. `112ffdb1` (before the
+fix, the same probe) and the build without the probe took the engine and
+the game from round 4's probe build: those commits differ from it only in
+renderer sources, which is all the probe edits. Round 3's two builds of
+`d7cef009` (with the probe, and without) are its own, from 15:29.
+
+**The I1 case.** The shim at 1920x1080 windowed, `r_vsync 0`, the demo at
+its own pace (`timedemo 0`, `vid_maxfps 999`). After the map loads, 120
+`wait`s (about 2 s) and then one line, `screenshot; r_vsync 1`. Counted
+over the 5 s from `mgl_layer_set_sync(1)`, three runs each, 11 s from
+launch.
+
+| Over the 5 s after `r_vsync 1` | Before (`112ffdb1`) | After (`df2acd46`) |
+|---|---|---|
+| Frames presented | 301 to 302 of 302 to 303 | 300 to 302 of 301 to 303 |
+| Presented a second | 60.2 to 60.4 | 60.0 to 60.4 |
+| Shown a second (`addPresentedHandler`) | 59.6 to 59.8 | 59.4 to 59.6 |
+| Waited in `nextDrawable`, mean a frame | 15.79 to 16.08 ms | 15.50 to 15.97 ms |
+| Waited in `nextDrawable`, share of the 5 s | 95.7 to 97.1 percent | 93.9 to 96.1 percent |
+| Frames with a drawable held ahead | every one | none |
+| The layer's drawables the frames took | 2 | 3 |
+| Load at the runs' starts | 3.70 to 4.19 | 2.81 to 3.32 |
+
+The path ran in every run of both builds: one `mgl_present_apart_begin`
+with display sync on, at the toggle. That frame is not presented in either
+build, since its drawable acquired ahead is dropped when display sync goes
+on; every frame after it is. At 60 a second and about a millisecond of
+work a frame two drawables were still enough to present every frame, so
+the presented rates are the same. What the fix changes is the drawables:
+none is held ahead, and the frames take all three of the layer's
+drawables again rather than two. The drift-check run of `112ffdb1` in the
+after batch read 60.2 a second, 15.79 ms, two drawables, inside its
+baseline. This is the check that catches the case: the bookkeeping is in
+`mgl_layer.m`'s statics, beside Metal, where no host test reaches it.
+
+**Confirmation, `r_vsync 0`.** Own-pace runs as in round 3 (`timedemo 0`,
+`vid_maxfps 999`, 8 s from launch, counted from 1 s after the window's
+first frame to the end, all of it demo). Round 3's build of `d7cef009`
+(its probe build) was measured once per case as the baseline, three runs
+per renderer; round 4's three runs per renderer, with one drift-check run
+of round 3's build in the same batch. Rendered and presented a second:
+
+| Size | Renderer | Rendered, round 3 | Rendered, round 4 | Presented, round 3 | Presented, round 4 | Drift check of round 3 (rendered, presented) | Load (round 3; round 4) |
+|---|---|---|---|---|---|---|---|
+| 1920x1080 windowed | `ref_metal` | 995.0 to 995.2 | 995.1 to 995.2 | 394.2 to 413.6 | 404.9 to 409.6 | 995.3, 402.9 | 2.5 to 2.8; 3.1 to 3.8 |
+| 1920x1080 windowed | `gl1-metal` | 995.1 | 995.1 | 419.3 to 440.6 | 424.4 to 440.8 | 995.1, 429.1 | 2.5 to 2.9; 3.0 to 4.2 |
+| 5120x2880 `vid_fullscreen 1` | `ref_metal` | 995.2 to 995.3 | 995.1 to 995.2 | 381.4 to 412.4 | 395.6 to 415.1 | 995.2, 399.8 | 2.8 to 3.2; 3.4 to 3.7 |
+| 5120x2880 `vid_fullscreen 1` | `gl1-metal` | 753.1 to 790.8 | 790.5 to 802.6 | 384.6 to 404.2 | 386.9 to 388.6 | 797.2, 388.8 | 2.8 to 4.3; 2.6 to 3.1 |
+
+(Round 3's baselines: 1920x1080 at 18:45 to 18:47, 5120x2880 at 18:28 to
+18:29; round 4's batches 18:43 to 18:45 and 18:48 to 18:49.) Every range of
+round 4 is inside or overlaps round 3's, and every drift check presented
+inside its baseline; the shim's rendered rate at 5120x2880 is a little
+above its baseline in both the drift check (797.2) and round 4 (790.5 to
+802.6). Round 4 changes nothing on the path these runs take (display sync
+stays off, and no frame ends with it on), so the same rates are what was
+expected. The present's command buffer takes round 3's GPU time: at the
+median 0.064 (the shim) and 0.102 ms (`ref_metal`) at 1920x1080, 1.282 to
+1.285 and 0.808 to 0.833 ms at 5120x2880. No `ref_metal` frame found every
+present slot held in a counted interval; the shim at 5120x2880 22 to 27
+frames a run (its baseline 37 to 67).
+
+**The windowed baseline moved.** Round 3's 1920x1080 baseline was first
+measured at 18:26 to 18:27 and read 256.4 to 347.7 (the shim) and 230.8 to
+245.6 (`ref_metal`) presented a second; the drift-check runs at 18:43 read
+429.1 and 402.9, so the case was measured again at 18:45, alternated run
+by run with the old loop (`718e59d4`), and the baseline replaced. In that
+batch the old loop presented 339.4 to 409.2 (the shim) and 378.0 to 424.6
+(`ref_metal`), round 3's build 419.3 to 440.6 and 394.2 to 413.6. No
+windowed frame of any run found every present slot held, so the window
+server's pace of handing drawables back limits both loops here, and over
+minutes it moves them by up to a third, as at 640x480 in round 3. One of
+the batches discarded under the host rule, at 18:13, alternated the old
+loop with round 4 in a slow phase and had round 4 below it (233.7 to 297.2
+against 289.7 to 343.0). It may have shared the host with builds, so it
+is not a finding, but whether the new loop falls below the old one in the
+window server's slow phase needs a same-batch measurement in that phase.
+
+**Validation.** One run each of `ref_metal` and the shim, round 4's build
+without the probe, 1920x1080 windowed, `r_vsync 0` (the present queue
+running), timedemo, under `MTL_DEBUG_LAYER=1`, 18:50 to 18:51, load 3.44
+to 3.62: `Metal API Validation Enabled` and no validation message in
+either log. `ref_metal`: 689 frames at 1142.6 fps (the layer slows it),
+`metal_stats: 72563 frames, 69132 without a drawable, 0 skipped, 0 failed
+command buffers`, `26 pipelines, 0 created after init`; teardown `0 live
+objects (created/destroyed: device 1/1, queue 2/2, view 1/1, texture
+234/234, buffer 7/7, state 47/47, rt 0/0, metalfx 0/0), 0 unreleased, 0
+unmatched`, as in round 3. The shim: 689 frames at 950.3 fps, `mgl: 63757
+frames, 60451 without a drawable, 0 skipped`.
+
+**Pins.** The six stock scenarios and the three `r_vsync 0` copies (as in
+round 3), `metal` and `gl1-metal`, recorded with round 3's build of
+`d7cef009` without the probe (`--run 2`) and round 4's of `df2acd46`
+without the probe, each engine binary beside its own renderer modules
+(`PINS_BIN`; the two engine binaries are byte for byte equal), 18:17 to
+18:24, load 2.22 to 4.06. The eighteen pairs compared at `--threshold 0
+--bad-threshold 0`: 23 frames each, 0 failed, worst score 0, worst bad 0;
+all 414 frame files are byte for byte equal (`cmp`).
 
 ## Rounds 1 and 2, as measured then
 
