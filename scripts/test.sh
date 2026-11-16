@@ -91,6 +91,11 @@ fi
 # process; then it waits to be stopped. This run stops it on every way out
 # (gate_unwatch, from gate_stop and on EXIT) and waits for it; should this
 # run die by KILL, it sees its own parent go and exits within one poll.
+# A run whose parent at start is pid 1 lost its lock shell before its own
+# shell started (a KILL to the caller's group after bench_spawn's fork):
+# the watcher would take launchd for the lock shell and never signal, and
+# the lock may be free, so that run says so and exits before it starts
+# anything.
 gate_watch=
 gate_lock_shell=
 gate_watch_sh='trap "exit 0" TERM
@@ -119,6 +124,10 @@ gate_unwatch() {
 }
 if [ "$lock_entry" = gate ] && [ -n "${BENCH_LOCK_TOKEN:-}" ]; then
 	gate_lock_shell=$PPID
+	if [ "$gate_lock_shell" = 1 ]; then
+		echo "test.sh: the lock shell is gone before the gate started" >&2
+		exit 143
+	fi
 	trap gate_unwatch EXIT
 	# job control, in its long spelling: the scheduler's short one below
 	# must stay the one line that tests/check-gate-parallel.sh mutates

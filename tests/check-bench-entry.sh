@@ -43,7 +43,11 @@
 #   - t_grace, with the real bench core: a TERM to the lock shell, with
 #     BENCH_STOP_GRACE=1 and a check that ignores TERM, leaves nothing the
 #     gate started running once the lock shell has exited, and the lock
-#     free; the run under the lock sees the caller's BENCH_STOP_GRACE.
+#     free; the run under the lock sees the caller's BENCH_STOP_GRACE;
+#   - t_orphan, with the real bench core: a run under the lock (the marker
+#     and a token) whose parent is gone before its shell starts, so its
+#     parent at start is pid 1, says so in one line and exits 143 before
+#     any check, the scheduler, a make or the watcher starts.
 # Every pid the tests start is taken off the cleanup list once it has been
 # waited for, so the list is empty after them; what a failing t_kgrp leaves
 # running is stopped by pid, after a check of its command line. Then one
@@ -52,10 +56,11 @@
 # pins.sh), a BENCH_LOCK_ENTRY without a token taken as a hold, an unset
 # LC_ALL not restored (the gate, coverage), GATE_PARENT naming the lock
 # shell, no watcher, a watcher that stops the run alone and not its group,
-# the lock shell's BENCH_STOP_GRACE not raised and the caller's not given
-# back, and, for each of the three, no state directory taking the lock,
-# CI=true alone turning it off and a silent lock-off; each must fail the
-# test that targets it.
+# a run whose parent at start is pid 1 going on, the lock shell's
+# BENCH_STOP_GRACE not raised and the caller's not given back, and, for
+# each of the three, no state directory taking the lock, CI=true alone
+# turning it off and a silent lock-off; each must fail the test that
+# targets it.
 #
 # Usage: tests/check-bench-entry.sh [<test>...]   (named tests only, no mutants)
 set -eu
@@ -768,6 +773,9 @@ mutant gate-parent-lock-shell test.sh 'GATE_PARENT=$$ ' 'GATE_PARENT=$PPID ' t_n
 # group (a make too) when the lock shell is gone.
 mutant gate-no-watch test.sh 'sh -c "$gate_watch_sh" gate-watch' 'true' t_kgrp || mfail=1
 mutant gate-watch-pid-only test.sh 'kill -s TERM -- "-$PPID" 2> /dev/null' 'kill -s TERM "$PPID" 2> /dev/null' t_kgrp || mfail=1
+# A run whose lock shell was gone before it started (its parent is pid 1)
+# starts nothing.
+mutant gate-orphan-runs test.sh 'if [ "$gate_lock_shell" = 1 ]; then' 'if false; then' t_orphan || mfail=1
 # The lock shell's grace covers the scheduler's, and the run under it gets
 # the caller's BENCH_STOP_GRACE back.
 mutant gate-grace-kept test.sh 'BENCH_STOP_GRACE=10' ':' t_grace || mfail=1
