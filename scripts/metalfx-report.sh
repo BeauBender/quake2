@@ -3,7 +3,8 @@
 # bash 3.2; needs cc and python3 (standard library only), nothing else.
 #
 #   metalfx-report.sh run --out <dir outside every work tree> --basedir <game data> [options]
-#   metalfx-report.sh report --dir <results dir> [--other <results dir of another host>]... --html <file>
+#   metalfx-report.sh report --dir <results dir> [--dir <results dir of another chunk of the same run>]...
+#                            [--other <results dir of another host>]... --html <file>
 #   metalfx-report.sh plan|check-out ...      (see scripts/metalfx-report/mfx.py)
 #
 # run options: --host-name NAME (default: this host's short name), --size WxH (1280x720),
