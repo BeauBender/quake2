@@ -432,6 +432,7 @@ limit" "$out"
         done
         ls=$(BENCH_STATE="$st" sh "$lt/scripts/bench/bench.sh" lock status 2>&1)
         [ "$ls" = lock=free ] || ko e2e-lock "$how: the lock is not free afterwards: $ls"
+        case $FAILED in *" e2e-lock "*) break;; esac  # one way out failed: the others would wait their bound too
     done
     # an option over the engine's argument limit costs its own row; the others, native included, still run
     printf 'small\tr_metalfx 1\tall\tr_metalfx=1\n' >> "$d/options.tsv"
