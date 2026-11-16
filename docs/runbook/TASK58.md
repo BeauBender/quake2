@@ -169,7 +169,8 @@ the pool of base1, its second half under it.
    `1` (the off view on the same path) and with `r_rt_water_show 1` (the mask) and `2` (the
    classes). From these:
    - the masked comparison on every frame: `framediff OFF.tga ON.tga --mask SHOW1.tga --threshold
-     0 --bad-threshold 0`, score 0 expected (every white pixel byte-identical). The warp follows
+     0 --bad-threshold 0`, score 0 expected (every white pixel byte-identical), over every frame by
+     `<artifacts>/TASK58/tools/masked-compare.sh FRAMEDIFF OFFDIR ONDIR MASKDIR`. The warp follows
      the client clock, so a replay frame may be at another warp time than its record; the water
      pixels are outside the mask, so only a stall that moves the camera would show, and the run
      states the frames it compared and any it did not;
