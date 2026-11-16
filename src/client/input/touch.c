@@ -23,18 +23,42 @@
 #include <math.h>
 #include <string.h>
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
 #include "header/touch.h"
 
 /* Button zone to the gamepad button it presses; -1 for none. */
-static const int zone_button[TZ_COUNT] = {
+static const int zone_button[TZ_ALL] = {
 	[TZ_MOVE] = -1, [TZ_LOOK] = -1, [TZ_FIRE] = -1,
 	[TZ_JUMP] = TOUCH_BTN_SOUTH,
 	[TZ_CROUCH] = TOUCH_BTN_EAST,
 	[TZ_NEXTWEAP] = TOUCH_BTN_NORTH,
 	[TZ_USE] = TOUCH_BTN_WEST,
 	[TZ_MENU] = TOUCH_BTN_START,
-	[TZ_CONSOLE] = TOUCH_BTN_MISC1
+	[TZ_CONSOLE] = TOUCH_BTN_MISC1,
+	[TZM_UP] = TOUCH_BTN_DPAD_UP,
+	[TZM_DOWN] = TOUCH_BTN_DPAD_DOWN,
+	[TZM_LEFT] = TOUCH_BTN_DPAD_LEFT,
+	[TZM_RIGHT] = TOUCH_BTN_DPAD_RIGHT,
+	[TZM_OK] = TOUCH_BTN_SOUTH,
+	[TZM_BACK] = TOUCH_BTN_EAST
 };
+
+/* The zones of the menu mode: the pad and the console button. */
+static int
+IsMenuZone(int zone)
+{
+	return zone == TZ_CONSOLE || (zone >= TZM_UP && zone < TZ_ALL);
+}
+
+/* A coordinate the layer can use: not a NaN, not infinite. */
+static int
+Usable(float x, float y)
+{
+	return isfinite(x) && isfinite(y);
+}
 
 static int
 IsStick(int zone)
@@ -109,9 +133,22 @@ Touch_MakeLayout(touch_layout_t *l, touch_rect_t safe, float scale, int swap)
 	l->zone[TZ_MENU] = Rect(cx - top - 0.25f * top, safe.y, top, top);
 	l->zone[TZ_CONSOLE] = Rect(cx + 0.25f * top, safe.y, top, top);
 
+	/*
+	 * The menu mode: a d-pad in a cross at the bottom left, OK and Back
+	 * in the corner at the bottom right (where the game's buttons are),
+	 * the console button where it always is.
+	 */
+	l->zone[TZM_UP] = Rect(safe.x + p, bottom - 2.0f * p - b, b, b);
+	l->zone[TZM_DOWN] = Rect(safe.x + p, bottom - b, b, b);
+	l->zone[TZM_LEFT] = Rect(safe.x, bottom - p - b, b, b);
+	l->zone[TZM_RIGHT] = Rect(safe.x + 2.0f * p, bottom - p - b, b, b);
+	l->zone[TZM_OK] = Rect(right - b, bottom - p - b, b, b);
+	l->zone[TZM_BACK] = Rect(right - p - b, bottom - b, b, b);
+	l->safe = safe;
+
 	if (swap)
 	{
-		for (i = 0; i < TZ_COUNT; i++)
+		for (i = 0; i < TZ_ALL; i++)
 		{
 			l->zone[i].x = safe.x + safe.w - (l->zone[i].x - safe.x) - l->zone[i].w;
 		}
@@ -172,20 +209,38 @@ Touch_Down(touch_t *t, uint64_t id, float x, float y)
 	/* a finger down again without a lift starts fresh */
 	Touch_Up(t, id);
 
-	/* the buttons first, then the sticks */
-	for (i = TZ_FIRE; i < TZ_COUNT && zone < 0; i++)
+	if (!Usable(x, y))
 	{
-		if (Inside(t->layout.zone[i], x, y))
-		{
-			zone = i;
-		}
+		return;
 	}
 
-	for (i = TZ_MOVE; i <= TZ_LOOK && zone < 0; i++)
+	if (t->menu)
 	{
-		if (Inside(t->layout.zone[i], x, y))
+		for (i = TZ_CONSOLE; i < TZ_ALL && zone < 0; i++)
 		{
-			zone = i;
+			if (IsMenuZone(i) && Inside(t->layout.zone[i], x, y))
+			{
+				zone = i;
+			}
+		}
+	}
+	else
+	{
+		/* the buttons first, then the sticks */
+		for (i = TZ_FIRE; i < TZ_COUNT && zone < 0; i++)
+		{
+			if (Inside(t->layout.zone[i], x, y))
+			{
+				zone = i;
+			}
+		}
+
+		for (i = TZ_MOVE; i <= TZ_LOOK && zone < 0; i++)
+		{
+			if (Inside(t->layout.zone[i], x, y))
+			{
+				zone = i;
+			}
 		}
 	}
 
@@ -230,7 +285,7 @@ Touch_Motion(touch_t *t, uint64_t id, float x, float y)
 {
 	touch_finger_t *f = Find(t, id);
 
-	if (!f)
+	if (!f || !Usable(x, y))
 	{
 		return;
 	}
@@ -250,12 +305,7 @@ ToAxis(float v)
 {
 	int a;
 
-	/* the range is symmetric, 32767 each way */
-	if (!(v == v))
-	{
-		return 0;
-	}
-
+	/* the range is symmetric, 32767 each way; v is finite, the positions are */
 	if (v > 1.0f)
 	{
 		v = 1.0f;
@@ -365,61 +415,229 @@ Touch_DefaultBind(int i, const char **key, const char **cmd)
 	return 1;
 }
 
-/* TASK151 scaffolding: the overlay, the modes and the pure rules. */
 void
 Touch_SetMode(touch_t *t, int menu)
 {
-	(void)t;
-	(void)menu;
+	menu = menu != 0;
+
+	if (t->menu != menu)
+	{
+		Touch_Reset(t);
+		t->menu = menu;
+	}
 }
+
+static float
+ClampF(float v, float lo, float hi)
+{
+	if (hi < lo)
+	{
+		return lo;
+	}
+
+	return v < lo ? lo : (v > hi ? hi : v);
+}
+
+/* A held finger in a zone, or NULL. */
+static const touch_finger_t *
+HeldIn(const touch_t *t, int zone)
+{
+	int i;
+
+	for (i = 0; i < TOUCH_MAX_FINGERS; i++)
+	{
+		if (t->finger[i].active && t->finger[i].zone == zone)
+		{
+			return &t->finger[i];
+		}
+	}
+
+	return NULL;
+}
+
+static int
+AddDraw(touch_draw_t *out, int n, int max, touch_rect_t r, const char *label, int pressed, int kind)
+{
+	if (n < max)
+	{
+		out[n].r = r;
+		out[n].label = label;
+		out[n].pressed = pressed;
+		out[n].kind = kind;
+		n++;
+	}
+
+	return n;
+}
+
+/*
+ * The ring of a stick: as wide as two radii, held to what the zone
+ * can take; at rest in the middle of the zone, held where the finger
+ * went down, moved inside the safe rectangle. A held stick has a knob
+ * that follows the finger as far as the axis reads it.
+ */
+static int
+AddStick(const touch_t *t, int zone, touch_draw_t *out, int n, int max)
+{
+	const touch_layout_t *l = &t->layout;
+	const touch_rect_t z = l->zone[zone];
+	const touch_finger_t *f = HeldIn(t, zone);
+	float side = 2.0f * l->radius, x, y;
+	touch_rect_t ring;
+
+	if (side > z.w)
+	{
+		side = z.w;
+	}
+
+	if (side > z.h)
+	{
+		side = z.h;
+	}
+
+	if (f)
+	{
+		x = f->ox - side * 0.5f;
+		y = f->oy - side * 0.5f;
+	}
+	else
+	{
+		x = z.x + (z.w - side) * 0.5f;
+		y = z.y + (z.h - side) * 0.5f;
+	}
+
+	ring = Rect(ClampF(x, l->safe.x, l->safe.x + l->safe.w - side),
+			ClampF(y, l->safe.y, l->safe.y + l->safe.h - side), side, side);
+	n = AddDraw(out, n, max, ring, NULL, f != NULL, TD_RING);
+
+	if (f && l->radius > 0)
+	{
+		const float k = side * 0.35f;
+		const float reach = (side - k) * 0.5f;
+		float dx = f->x - f->ox, dy = f->y - f->oy;
+		const float len = sqrtf(dx * dx + dy * dy);
+		touch_rect_t knob;
+
+		if (len > l->radius)
+		{
+			dx *= l->radius / len;
+			dy *= l->radius / len;
+		}
+
+		dx *= reach / l->radius;
+		dy *= reach / l->radius;
+
+		knob = Rect(ClampF(ring.x + (side - k) * 0.5f + dx, l->safe.x, l->safe.x + l->safe.w - k),
+				ClampF(ring.y + (side - k) * 0.5f + dy, l->safe.y, l->safe.y + l->safe.h - k), k, k);
+		n = AddDraw(out, n, max, knob, NULL, 1, TD_KNOB);
+	}
+
+	return n;
+}
+
+typedef struct
+{
+	int zone;
+	const char *label;
+} button_def_t;
+
+static const button_def_t game_buttons[] = {
+	{ TZ_FIRE, "Fire" }, { TZ_JUMP, "Jump" }, { TZ_USE, "Use" }, { TZ_CROUCH, "Duck" },
+	{ TZ_NEXTWEAP, "Next" }, { TZ_MENU, "Menu" }, { TZ_CONSOLE, "Con" }
+};
+
+static const button_def_t menu_buttons[] = {
+	{ TZM_UP, "^" }, { TZM_DOWN, "v" }, { TZM_LEFT, "<" }, { TZM_RIGHT, ">" },
+	{ TZM_OK, "OK" }, { TZM_BACK, "Back" }, { TZ_CONSOLE, "Con" }
+};
+
+#define NUM_BUTTONS_SHOWN 7
 
 int
 Touch_Drawables(const touch_t *t, int physical, touch_draw_t *out, int max)
 {
-	(void)t;
-	(void)physical;
-	(void)out;
-	(void)max;
-	return 0;
+	const button_def_t *set = t->menu ? menu_buttons : game_buttons;
+	int i, n = 0;
+
+	if (physical || !out || max <= 0 || !(t->layout.safe.w > 0) || !(t->layout.safe.h > 0))
+	{
+		return 0;
+	}
+
+	if (!t->menu)
+	{
+		n = AddStick(t, TZ_MOVE, out, n, max);
+		n = AddStick(t, TZ_LOOK, out, n, max);
+	}
+
+	for (i = 0; i < NUM_BUTTONS_SHOWN; i++)
+	{
+		const touch_finger_t *f = HeldIn(t, set[i].zone);
+
+		n = AddDraw(out, n, max, t->layout.zone[set[i].zone], set[i].label, f != NULL && !f->off, TD_BUTTON);
+	}
+
+	return n;
 }
 
 int
 Touch_LabelScale(const char *label, float w_px, int max_scale)
 {
-	(void)label;
-	(void)w_px;
-	(void)max_scale;
-	return 0;
+	size_t len;
+	int s = 0;
+
+	if (!label || !label[0] || !(w_px > 0) || max_scale < 1)
+	{
+		return 0;
+	}
+
+	len = strlen(label);
+
+	while (s < max_scale && (float)(len * 8 * (size_t)(s + 1)) <= w_px)
+	{
+		s++;
+	}
+
+	return s;
 }
 
 int
 Touch_Supported(void)
 {
+#if defined(__APPLE__) && TARGET_OS_IPHONE
 	return 1;
+#else
+	return 0;
+#endif
 }
 
 int
 Touch_WantBind(int have_config, int bound)
 {
-	(void)have_config;
-	(void)bound;
-	return 0;
+	return !have_config && !bound;
 }
 
 int
 Touch_WantText(int console_or_message, int menu_open, int menu_field)
 {
-	(void)console_or_message;
-	(void)menu_open;
-	(void)menu_field;
-	return 0;
+	return console_or_message || (menu_open && menu_field);
 }
 
 int
 Touch_TextInput(int want, int applied, int active)
 {
-	(void)want;
-	(void)applied;
-	(void)active;
+	want = want != 0;
+
+	if (want != applied)
+	{
+		return want;
+	}
+
+	/* asked for, and the system stopped it on its own: ask again */
+	if (want && !active)
+	{
+		return 1;
+	}
+
 	return -1;
 }

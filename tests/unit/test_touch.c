@@ -742,7 +742,7 @@ TEST(touch_each_mode_ignores_the_other_modes_zones)
 	Touch_SetMode(&T, 1);
 	Touch_Down(&T, 1, cx(TZ_MOVE), cy(TZ_MOVE));
 	Touch_Down(&T, 2, cx(TZ_FIRE), cy(TZ_FIRE));
-	Touch_Down(&T, 3, cx(TZ_JUMP), cy(TZ_JUMP));
+	Touch_Down(&T, 3, cx(TZ_NEXTWEAP), cy(TZ_NEXTWEAP));
 	Touch_Down(&T, 4, cx(TZ_MENU), cy(TZ_MENU));
 	t_out(axes, &btn);
 	T_EQ_INT((int)btn, 0);
