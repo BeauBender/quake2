@@ -105,18 +105,22 @@ need_lock() {
 	exec sh "$BENCH_SELF" lock run "$_nl_label" -- sh "$BENCH_SELF" "$@" < /dev/null
 }
 
-# setup <case> <commit>: loads the case, the host, the commit, its inputs
-# and the store; sets DIR, the baseline directory.
+# setup <case> <commit>: loads the case and its adapter, the host, the
+# commit, its inputs and the store; sets DIR, the baseline directory, and
+# LIVE, its live set (empty when there is none). A reader resolves LIVE
+# once and reads only in it.
 setup() {
 	bench_case_load "$1"
+	bench_adapter_load
 	bench_commit "$2"
 	bench_host_init
 	bench_store_init
-	BENCH_INPUTS=$(bench_inputs "$BENCH_COMMIT" "$(bench_case_get build_flags)")
+	BENCH_INPUTS=$(bench_inputs "$BENCH_COMMIT" "$(bench_case_get build_flags)") || exit "$?"
 	DIR=$(bench_store_dir "$BENCH_INPUTS")
+	LIVE=$(bench_store_live "$DIR")
 }
 
-# summary <dir>: one stats line per metric of the baseline in <dir>.
+# summary <set>: one stats line per metric of the set <set>.
 summary() {
 	for _su_m in $(bench_store_metrics "$1"); do
 		printf 'metric=%s %s\n' "$_su_m" "$(bench_store_values "$_su_m" "$1" | bench_stats)"
@@ -130,30 +134,26 @@ measure_baseline() {
 	bench_measure "$(bench_case_get runs)" "${BENCH_TMP:?}/new"
 }
 
-# store_new: supersedes the baseline in DIR (if any) and stores the runs
-# measured into ${BENCH_TMP:?}/new.
+# store_new: stores the runs measured into ${BENCH_TMP:?}/new as the new
+# live set of DIR (the old one, if any, stays as the set it superseded),
+# and points LIVE at it.
 store_new() {
-	if [ "$(bench_store_count "$DIR")" -gt 0 ]; then
-		_sn_old=$(bench_store_supersede "$DIR") || bench_die 2 "cannot supersede the old baseline"
-		printf 'superseded=%s\n' "$_sn_old"
-	fi
-	_sn_k=1
-	while [ -f "${BENCH_TMP:?}/new/$_sn_k.run" ]; do
-		bench_store_write "$DIR" "${BENCH_TMP:?}/new/$_sn_k.run"
-		_sn_k=$((_sn_k + 1))
-	done
+	_sn_old=$LIVE
+	bench_store_put "$DIR" "${BENCH_TMP:?}/new"
+	if [ -n "$_sn_old" ]; then printf 'superseded=%s\n' "${_sn_old##*/}"; fi
+	LIVE=$DIR/$BENCH_STORE_SET
 }
 
 cmd_baseline_get() {
 	[ "$#" -eq 2 ] || usage
 	setup "$1" "$2"
-	_bg_n=$(bench_store_count "$DIR")
+	_bg_n=$(bench_store_count "$LIVE")
 	if [ "$_bg_n" -eq 0 ]; then
 		printf 'baseline=none case=%s inputs=%s host=%s\n' "$BENCH_CASE_NAME" "$BENCH_INPUTS" "$BENCH_HOST_TOKEN"
 		exit 1
 	fi
 	printf 'baseline=present case=%s inputs=%s host=%s runs=%d\n' "$BENCH_CASE_NAME" "$BENCH_INPUTS" "$BENCH_HOST_TOKEN" "$_bg_n"
-	summary "$DIR"
+	summary "$LIVE"
 }
 
 cmd_baseline_put() {
@@ -173,16 +173,16 @@ cmd_baseline_put() {
 		need_lock "bench.$BENCH_CASE_NAME" baseline put "$1" "$BENCH_COMMIT"
 	fi
 	setup "$1" "$2"
-	if [ "$(bench_store_count "$DIR")" -gt 0 ] && [ -z "$_bp_replace" ]; then
-		bench_note "a baseline exists for the case $BENCH_CASE_NAME at $BENCH_INPUTS ($(bench_store_count "$DIR") runs); check it with drift, or replace it with baseline put --replace"
+	_bp_n=$(bench_store_count "$LIVE")
+	if [ "$_bp_n" -gt 0 ] && [ -z "$_bp_replace" ]; then
+		bench_note "a baseline exists for the case $BENCH_CASE_NAME at $BENCH_INPUTS ($_bp_n runs); check it with drift, or replace it with baseline put --replace"
 		exit 1
 	fi
-	bench_adapter_load
 	bench_prepare
 	measure_baseline
 	store_new
-	printf 'baseline=stored case=%s inputs=%s host=%s runs=%d\n' "$BENCH_CASE_NAME" "$BENCH_INPUTS" "$BENCH_HOST_TOKEN" "$(bench_store_count "$DIR")"
-	summary "$DIR"
+	printf 'baseline=stored case=%s inputs=%s host=%s runs=%d\n' "$BENCH_CASE_NAME" "$BENCH_INPUTS" "$BENCH_HOST_TOKEN" "$(bench_store_count "$LIVE")"
+	summary "$LIVE"
 }
 
 cmd_drift() {
@@ -191,11 +191,10 @@ cmd_drift() {
 	bench_commit "$2"
 	need_lock "bench.$BENCH_CASE_NAME" drift "$1" "$BENCH_COMMIT"
 	setup "$1" "$2"
-	if [ "$(bench_store_count "$DIR")" -eq 0 ]; then
+	if [ "$(bench_store_count "$LIVE")" -eq 0 ]; then
 		bench_note "no baseline for the case $BENCH_CASE_NAME at $BENCH_INPUTS; measure one with baseline put"
 		exit 1
 	fi
-	bench_adapter_load
 	bench_prepare
 	_dr_w=$(bench_case_get warmup)
 	_dr_k=1
@@ -206,7 +205,7 @@ cmd_drift() {
 	bench_run_one run 1 "${BENCH_TMP:?}/drift.run"
 	_dr_m=$(bench_case_get metric)
 	_dr_x=$(bench_file_kv "${BENCH_TMP:?}/drift.run" "metric.$_dr_m")
-	_dr_line=$(bench_store_values "$_dr_m" "$DIR" |
+	_dr_line=$(bench_store_values "$_dr_m" "$LIVE" |
 		bench_drift_rule "$_dr_x" "$(bench_case_get abs_tol)" "$(bench_case_get rel_tol)") ||
 		bench_die 2 "the stored runs of $BENCH_CASE_NAME have no usable $_dr_m values"
 	bench_store_write "$DIR/drift" "${BENCH_TMP:?}/drift.run"
@@ -216,8 +215,8 @@ cmd_drift() {
 	esac
 	measure_baseline
 	store_new
-	printf 'baseline=replaced case=%s inputs=%s runs=%d\n' "$BENCH_CASE_NAME" "$BENCH_INPUTS" "$(bench_store_count "$DIR")"
-	summary "$DIR"
+	printf 'baseline=replaced case=%s inputs=%s runs=%d\n' "$BENCH_CASE_NAME" "$BENCH_INPUTS" "$(bench_store_count "$LIVE")"
+	summary "$LIVE"
 }
 
 cmd_compare() {
@@ -237,11 +236,11 @@ cmd_compare() {
 	setup "$_cp_case" "$_cp_before"
 	_cp_bc=$BENCH_COMMIT
 	_cp_bi=$BENCH_INPUTS
-	_cp_bd=$DIR
+	_cp_bd=$LIVE
 	bench_commit "$_cp_after"
 	_cp_ac=$BENCH_COMMIT
-	_cp_ai=$(bench_inputs "$BENCH_COMMIT" "$(bench_case_get build_flags)")
-	_cp_ad=$(bench_store_dir "$_cp_ai")
+	_cp_ai=$(bench_inputs "$BENCH_COMMIT" "$(bench_case_get build_flags)") || exit "$?"
+	_cp_ad=$(bench_store_live "$(bench_store_dir "$_cp_ai")")
 	for _cp_side in before after; do
 		if [ "$_cp_side" = before ]; then _cp_d=$_cp_bd; _cp_r=$_cp_before; else _cp_d=$_cp_ad; _cp_r=$_cp_after; fi
 		if [ "$(bench_store_count "$_cp_d")" -eq 0 ]; then
@@ -290,14 +289,16 @@ cmd_inputs() {
 	_in_flags=
 	if [ "$#" -eq 2 ]; then
 		bench_case_load "$2"
+		bench_adapter_load
 		_in_flags=$(bench_case_get build_flags)
 	fi
 	bench_commit "$1"
 	if [ -n "$_in_list" ]; then
-		bench_inputs_material "$BENCH_COMMIT" "$_in_flags"
-		printf 'hash=%s\n' "$(bench_hash_tool)"
+		_in_m=$(bench_inputs_material "$BENCH_COMMIT" "$_in_flags") || exit "$?"
+		printf '%s\nhash=%s\n' "$_in_m" "$(bench_hash_tool)"
 	fi
-	bench_inputs "$BENCH_COMMIT" "$_in_flags"
+	_in_id=$(bench_inputs "$BENCH_COMMIT" "$_in_flags") || exit "$?"
+	printf '%s\n' "$_in_id"
 }
 
 cmd_host() {

@@ -22,7 +22,7 @@ The owner's direction (2026-11-16):
 | Adapter | `scripts/bench/adapters/<game>.sh` | how to build, launch and stop one game, its preconditions, and how to read metrics from its logs |
 | Cases | `scripts/bench/cases/<name>.case` | one measurement: adapter, build targets, every setting, runs, warm-up, counting window, metrics, tolerance |
 
-`scripts/bench/bench.sh` is the only entry point. A check (`tests/check-bench.sh`) enforces that the core and `bench.sh` name no game (`quake`, `q2`, `yquake`, `ref_`, `gl1`, case-insensitive) and use no `eval`. Later the core can move into the agent tooling shared across repositories, unchanged; another game conversion then adds only an adapter and cases. The `null` adapter and the `null-sleep` case measure nothing: they exist so that the self-test drives every core path without an engine.
+`scripts/bench/bench.sh` is the only entry point. A check (`tests/check-bench.sh`) enforces that the core and `bench.sh` name no game (`quake`, `q2`, `yquake`, `ref_`, `gl1`, case-insensitive) and no project layout (`third_party`, `Makefile`; the adapter names its input paths), and use no `eval`. Later the core can move into the agent tooling shared across repositories, unchanged; another game conversion then adds only an adapter and cases. The `null` adapter and the `null-sleep` case measure nothing: they exist so that the self-test drives every core path without an engine.
 
 Language: POSIX `sh` plus `awk`, safe on bash 3.2, with no new dependency (decision 0008 platforms; CLAUDE.md "no installs"). All arithmetic and sorting run under `LC_ALL=C`. Case files are data: they are parsed line by line against a fixed key whitelist and never evaluated.
 
@@ -33,16 +33,19 @@ Exit status of `bench.sh`: 0 done; 1 a failing verdict, or no baseline where one
 ### The host lock: one heavy job at a time
 
 `bench.sh lock run <label> -- <cmd...>` runs a command under an exclusive host-wide lock:
-- the lock is a `mkdir` of `lock/` under the host state directory, `BENCH_STATE`, by default `$XDG_CACHE_HOME/bench-state` or `$HOME/.cache/bench-state`: per user, shared by every repository and worktree, and refused inside a git work tree;
-- a holder file, written to a temporary name and renamed into place, records the label, the pid of the lock shell and of its command, the start time and a token; waiters show it;
-- a label is 1 to 64 of `A-Z a-z 0-9 . _ : @ + -`, so it cannot add a line to the holder file;
-- waits are bounded and run in the foreground: a poll every `BENCH_LOCK_POLL` seconds (default 2) for at most `BENCH_LOCK_WAIT` seconds (default 3600), then exit 75 naming the holder's label;
-- the lock is released on every exit path: traps on EXIT, INT, TERM and HUP; on a signal the command is stopped first (TERM, then KILL after 10 s). The command runs in the background of the lock shell, with its standard input, so a signal reaches the trap at once;
+- the lock is a `mkdir` of `lock/` under the host state directory, `BENCH_STATE`, by default `$XDG_CACHE_HOME/bench-state` or `$HOME/.cache/bench-state`: per user, shared by every repository and worktree, and refused inside a git repository. The refusal fails closed: a `.git` entry in the directory or any ancestor refuses it whatever git says, git runs without the caller's `GIT_DIR`, `GIT_WORK_TREE`, `GIT_CEILING_DIRECTORIES` and `GIT_DISCOVERY_ACROSS_FILESYSTEM`, and a git that fails for any reason other than "not a git repository" refuses it too. The store has the same guard;
+- a holder file records the label, the pid of the lock shell and of its command, the start time and a token; waiters show it. The maker writes it to a temporary name and links it into place (`ln`, which fails when a holder file is there, so it never replaces another's), then checks that the directory is still the one it made (its inode, read right after the `mkdir`) and carries its token; otherwise it takes its holder back out and waits. So a maker that stalls between the `mkdir` and the write for longer than the grace below, while a waiter reclaims the directory and another caller makes it again, backs off instead of holding the lock with that caller;
+- a label is 1 to 64 of `A-Z a-z 0-9 . _ : @ + -`, so it cannot add a line to the holder file; a case name is at most 58 characters, so `bench.<case>` is a label;
+- waits are bounded and run in the foreground: a poll every `BENCH_LOCK_POLL` seconds (default 2; at least 0.01, and cut to the wait when longer) for at most `BENCH_LOCK_WAIT` seconds (default 3600), then exit 75 naming the holder's label;
+- the command runs in the background of the lock shell as the leader of its own process group (`set -m` around the `&`: job control in a non-interactive shell, which bash, 3.2 included and also as `sh`, and zsh have; a shell without it leaves the command in the lock shell's group, says so, and a stop then reaches only the command's pid). So it starts with the caller's signal dispositions (an asynchronous list without job control starts with SIGINT and SIGQUIT ignored), its own traps run, and a signal reaches the lock shell's trap at once. It gets the lock shell's standard input, or `/dev/null` when that is a terminal (a background process group cannot read it); a terminal's Ctrl-C reaches the lock shell, which stops the command;
+- the lock is released on every exit path: traps on EXIT, INT, TERM and HUP. On a signal the lock shell first stops the command's whole process group: TERM (and CONT) to the group, up to twice `BENCH_STOP_GRACE` seconds (default 10; twice, so a command that stops a group of its own within the grace, as `bench_bounded` does, finishes first) for it to go, then KILL to the group, and only then is the lock removed. Nothing the command started outlives the lock, a grandchild or a command that ignores TERM included. A signal that arrives between the `&` and the shell storing the pid is held until the pid is stored;
 - a lock whose holder pid and command pid are both gone (`kill -0`) is reclaimed, and the reclaim is logged on standard error and in `lock.log` in the state directory. Two waiters that see the same dead holder race for a guard directory (`reclaim.<token>`, a `mkdir` again); the winner reads the holder again and removes the lock only if it still carries that token, then every waiter goes back to the `mkdir`, so exactly one gets the lock. A lock directory left without a holder file for `BENCH_LOCK_GRACE` seconds (default 10) is reclaimed the same way.
 
 The lock is re-entrant: it exports `BENCH_LOCK_TOKEN` to its command, and a nested call passes straight through only when that variable equals the token in the holder file. An empty, stale or forged token waits like any caller.
 
 `bench.sh lock status` prints `lock=free`, or `lock=held` with the holder's label, pids, liveness and start time (never a path).
+
+The measuring commands (`baseline put`, `drift`) take the lock by becoming a lock shell (`exec`) that runs the measurement under it, so a signal to them reaches the lock shell's trap with no extra process in between.
 
 Every heavy entry point takes the lock itself, so no caller can forget: `scripts/test.sh`, `scripts/pins.sh` (record and compare), `scripts/coverage.sh` (card 3) and the measuring commands of `bench.sh` (`baseline put` and `drift`, built). `make` is not wrapped. Builds started by these entry points are covered, and a bare `make` is a documented rule for agents: run it as `bench.sh lock run build -- make ...`.
 
@@ -52,13 +55,13 @@ Every heavy entry point takes the lock itself, so no caller can forget: `scripts
 - **a token:** `h-` and 12 hex digits, a hash of the CPU model, the GPU name, memory size, OS version and build, and whether the host is a virtual machine; read with `sysctl` and `system_profiler` on macOS, with `uname` and `/proc` elsewhere, and `unknown` for a fact that cannot be read;
 - **a class line:** `<cpu>, <gpu> GPU, <os>, physical|vm`, for example `Apple M6, Apple M6 GPU, macOS 27.2.1, physical`.
 
-`bench.sh host --facts` shows the facts and the hash tool. Neither line holds a host name, user name or home path, so both may appear in public files: the values `tests/check-no-local-identity.sh` refuses are scrubbed from the facts, and a token that happens to spell one is hashed again with a salt. Results from different tokens are never compared as before and after.
+`bench.sh host --facts` shows the facts and the hash tool. Neither line holds a host name, user name or home path, so both may appear in public files: the values `tests/check-no-local-identity.sh` refuses are scrubbed from the facts, and a token that happens to spell one is hashed again with a salt. Results from different tokens are never compared as before and after. `system_profiler` runs under `bench_bounded` (30 s); one that does not answer in time is an error, not a token without the GPU.
 
-The hash is `shasum -a 256` when it is present and `cksum` otherwise (two CRC-32s over the text with different prefixes); `BENCH_HASH=shasum|cksum` forces one, and every listing that hashes says which.
+The hash is `shasum -a 256` when it is present and `cksum` otherwise (two CRC-32s over the text with different prefixes); `BENCH_HASH=shasum|cksum` forces one, and every listing that hashes says which. A tool that fails, is missing or answers with anything but a well-formed digest (64 hex digits, or two CRCs) is an error (exit 2), never an empty id.
 
 ### Build-input identity
 
-`bench.sh inputs <commit> [<case>]` hashes exactly what the measured build compiles: the `git rev-parse <commit>:<path>` ids of `Makefile`, `src/`, `third_party/` and every top-level `*.make` file, plus the build flags the case names (`build_flags`). A path the commit lacks hashes as the marker `missing`. The result is `i-` and 12 hex digits; `--list` prints the hashed text and the hash tool. A docs-only commit has the same inputs, so its baseline stays valid. A code change gets new inputs.
+`bench.sh inputs <commit> [<case>]` hashes exactly what the measured build compiles: the `git rev-parse <commit>:<path>` ids of the paths the case's adapter names (`adapter_inputs_paths <commit>`), plus the build flags the case names (`build_flags`). The core names no project layout: without a case, or with an adapter that names no path, the default is the whole tree (the commit's root tree id), so any change gives new inputs. A path the commit lacks hashes as the marker `missing`. The result is `i-` and 12 hex digits; `--list` prints the hashed text and the hash tool. The quake2 adapter (card 2) names `Makefile`, `src/`, `third_party/` and every top-level `*.make` file, as the `null` adapter already does for the self-test; with that list a docs-only commit has the same inputs, so its baseline stays valid, and a code change gets new inputs.
 
 ### Case files
 
@@ -68,9 +71,9 @@ A case is `key=value` lines; blank lines and `#` comments are ignored. The keys 
 
 The store lives outside the repository, per host:
 
-`${BENCH_STORE:-${XDG_CACHE_HOME:-$HOME/.cache}/<repo>-bench}/<host-token>/<inputs>/<case>/<case-hash>/`
+`${BENCH_STORE:-${XDG_CACHE_HOME:-$HOME/.cache}/<repo>-bench}/<host-token>/<inputs>/<case>/<case-hash>/set-<n>/`
 
-where `<repo>` is the name of the repository's main checkout (the same in every worktree). One file per run, `r-<UTC time>-<pid>-<n>.run`, in plain `key=value` lines:
+where `<repo>` is the name of the repository's main checkout (the same in every worktree). Each set is one full measurement; the baseline is the set with the highest number. One file per run, `r-<UTC time>-<pid>-<k>.run` (`k` the run's index), in plain `key=value` lines:
 - the case and its hash;
 - the commit and inputs;
 - the host token, the host class and the hash tool;
@@ -79,7 +82,7 @@ where `<repo>` is the name of the repository's main checkout (the same in every 
 - each precondition's value (`pre.<name>`);
 - each metric (`metric.<name>`).
 
-A run file is written under a `.tmp.` name in the same directory and renamed into place; readers take only `r-*.run`, so they never see a temporary file. A replaced baseline moves to `superseded/<UTC time>-<pid>/`; the single runs of drift checks are kept in `drift/`.
+A set is stored atomically: every run is written into a staging directory, `.tmp.<pid>/` beside the sets, and the set is made live by one rename to `set-<n+1>`. A reader (`baseline get` and `compare` take no lock) resolves the live set once and reads only in it, so it sees a whole set or none; a store that fails at any step removes its staging directory and leaves the old baseline live. A replaced baseline stays where it is, as the set below the live one; nothing is moved, so a reader is never left with half a set. Readers take only `set-<number>` directories and `r-*.run` files. The single runs of drift checks are kept in `drift/`, each written under a `.tmp.` name and renamed into place.
 
 Operations:
 - `bench.sh baseline get|put <case> <commit>`; `put` refuses when a baseline exists, unless given `--replace`;
@@ -88,7 +91,7 @@ Operations:
 
 All arithmetic is deterministic in `awk`. Values are sorted; the median is the middle value, or the mean of the two middle values for an even count; the p90 is the nearest rank, the value at rank `ceil(0.9 n)` (1-based), so one value is its own p90. Numbers print with at most 4 decimals.
 
-The drift rule: the run's median must lie within `[min − t, max + t]` of the stored run medians, where `t = max(abs_tol, rel_tol × |median|)` from the case file and the bounds are inclusive. Inside, the stored baseline stands. Outside, the baseline is re-measured in full and replaced, and the old one is kept as `superseded/`.
+The drift rule: the run's median must lie within `[min − t, max + t]` of the stored run medians, where `t = max(abs_tol, rel_tol × |median|)` from the case file and the bounds are inclusive. Inside, the stored baseline stands. Outside, the baseline is re-measured in full and stored as the next set; the old one is kept as the set below it.
 
 The verdict: `change` is `(after − before) / |before|` in percent of the before median of the case's `metric`; the improvement is `−change` when `better=lower` and `change` when `better=higher`; it passes when the improvement is at least `accept` (so `accept=0` means "not worse"). A failing verdict exits 1.
 
@@ -101,8 +104,9 @@ A case pins every setting. The adapter refuses a run whose preconditions fail, a
 An adapter is a sourced shell file that defines:
 - `adapter_preflight <case>`: checks preconditions and prints `pre.<name>=<value>` lines; exits non-zero to refuse. For quake2: the screen is unlocked, no other engine is running, and the case's `requires` capability is present (`physical-gpu`, `raytracing`, `metalfx`, `display-hz>=N`).
 - `adapter_build <commit> <dir> <targets...>`: builds a commit in a scratch export.
-- `adapter_run <case> <build-dir> <log>`: launches with the case's settings, stops cleanly, and is bounded by a wall time (the core's `bench_bounded` helps).
+- `adapter_run <case> <build-dir> <log>`: launches with the case's settings, stops cleanly, and is bounded by the case's wall time (`bench_case_wall`: the case's `wall`, default 600 s). The core's `bench_bounded` helps: it runs the command in its own process group and, past the wall time, sends the group TERM, then KILL after `BENCH_STOP_GRACE`, so a hung engine that only notes TERM, or a child it left, is still stopped.
 - `adapter_metrics <case> <log>`: prints `metric.<name>=<value>` lines. For quake2 that covers the timedemo line, `metal_stats` lines (scaler and pass GPU times, presented and rendered counts), `r_rt_stats 2` lines, and the counting window from N s after the first frame.
+- `adapter_inputs_paths <commit>` (optional): prints the paths of the commit the build compiles, one per line, for the inputs id; without it the inputs are the whole tree.
 
 `<case>` is the normalised case file, read with `bench_case_get <key>`. Each run sees `BENCH_RUN_KIND` (`warmup` or `run`) and `BENCH_RUN_INDEX`. The core refuses preflight or metric lines of another shape, and a run without the case's `metric`.
 

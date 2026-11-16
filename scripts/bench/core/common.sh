@@ -85,25 +85,39 @@ bench_hash_tool() {
 }
 
 # bench_hash: the hex digest of standard input (trailing newlines dropped,
-# one added back, so the same text always gives the same digest).
+# one added back, so the same text always gives the same digest). The tool
+# must answer with a well-formed digest (64 hex digits from shasum, two
+# CRCs of at most 10 digits from cksum); a tool that fails, is missing or
+# answers anything else exits 2, so no id is ever made of nothing.
 bench_hash() {
 	_bh_d=$(cat)
 	case $(bench_hash_tool) in
 	shasum)
-		printf '%s\n' "$_bh_d" | shasum -a 256 | awk '{ print $1 }'
+		_bh_x=$(printf '%s\n' "$_bh_d" | shasum -a 256 2> /dev/null) || _bh_x=
+		_bh_x=${_bh_x%% *}
+		case $_bh_x in
+		*[!0-9a-f]*) _bh_x= ;;
+		esac
+		[ "${#_bh_x}" -eq 64 ] || bench_die 2 "shasum -a 256 gave no digest (failed, missing or malformed)"
+		printf '%s\n' "$_bh_x"
 		;;
 	*)
-		_bh_a=$(printf '%s\n' "$_bh_d" | cksum | awk '{ print $1 }')
-		_bh_b=$(printf 'bench\n%s\n' "$_bh_d" | cksum | awk '{ print $1 }')
+		_bh_a=$(printf '%s\n' "$_bh_d" | cksum 2> /dev/null) || _bh_a=
+		_bh_b=$(printf 'bench\n%s\n' "$_bh_d" | cksum 2> /dev/null) || _bh_b=
+		_bh_a=${_bh_a%% *}
+		_bh_b=${_bh_b%% *}
+		if ! bench_is_uint "$_bh_a" || ! bench_is_uint "$_bh_b" || [ "${#_bh_a}" -gt 10 ] || [ "${#_bh_b}" -gt 10 ]; then
+			bench_die 2 "cksum gave no CRC (failed, missing or malformed)"
+		fi
 		printf '%08x%08x\n' "$_bh_a" "$_bh_b"
 		;;
 	esac
 }
 
 # bench_id <prefix>: "<prefix>" and the first 12 hex digits of the digest of
-# standard input.
+# standard input; exits 2 (in the shell it runs in) when there is none.
 bench_id() {
-	_bi_h=$(bench_hash)
+	_bi_h=$(bench_hash) || exit 2
 	printf '%s%s\n' "$1" "$(printf '%s\n' "$_bi_h" | cut -c1-12)"
 }
 

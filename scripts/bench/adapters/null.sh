@@ -19,6 +19,15 @@ null_setting() {
 	bench_case_get settings | tr ' ' '\n' | awk -v k="$1=" 'index($0, k) == 1 { print substr($0, length(k) + 1); exit }'
 }
 
+# adapter_inputs_paths <commit>: the layout of a make project, which the
+# self-test's throwaway repository has: Makefile, src, third_party and
+# every top-level <name>.make file of the commit, in the order git lists
+# them.
+adapter_inputs_paths() {
+	printf '%s\n' Makefile src third_party
+	git ls-tree --name-only "$1" 2> /dev/null | grep -E '^[A-Za-z0-9._-]+\.make$' || true
+}
+
 adapter_preflight() {
 	if [ -n "${BENCH_NULL_REFUSE:-}" ]; then
 		echo "null: the preflight refuses (BENCH_NULL_REFUSE is set)" >&2
@@ -42,7 +51,7 @@ adapter_run() {
 	fi
 	bench_is_num "$_nr_v" || { echo "null: not a number: a value of values=" >&2; return 1; }
 	set -- $(awk -v v="$_nr_v" 'BEGIN { print v - 1, v + 0, v + 1 }')
-	bench_bounded "$(bench_case_get wall)" sh -c 'sleep "$1"; shift; for s; do printf "sample ms=%s\n" "$s"; done' \
+	bench_bounded "$(bench_case_wall)" sh -c 'sleep "$1"; shift; for s; do printf "sample ms=%s\n" "$s"; done' \
 		null "${_nr_sleep:-0}" "$@" > "${_nr_log:?}"
 }
 

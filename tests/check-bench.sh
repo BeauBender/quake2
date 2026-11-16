@@ -9,29 +9,46 @@
 #   - the lock: two concurrent holders run one after the other; a waiter
 #     gives up with 75 naming the holder; re-entry through BENCH_LOCK_TOKEN,
 #     and a forged or stale token waits like anyone; release on EXIT, TERM
-#     and HUP (INT is ignored by a background job, so it is not driven
-#     here); reclaim of a dead holder, logged, and of two waiters that
-#     reclaim at once exactly one gets the lock; a holder-less lock after
-#     the grace period; the default state directory and its override;
+#     and HUP; the stop of the command's whole process group, before the
+#     lock is free, on TERM and on INT to the lock shell's group (Ctrl-C),
+#     a grandchild and a command that catches TERM included; the command's
+#     own INT trap; reclaim of a dead holder, logged, and of two waiters
+#     that reclaim at once exactly one gets the lock; a held reclaim guard
+#     and a holder-less lock inside its grace left alone, and that lock
+#     reclaimed after it; the BENCH_LOCK_POLL limits; a maker stalled
+#     between its mkdir and its write backs off; the default state
+#     directory and its override, and the outside-repository guard (a
+#     relative path, a git ceiling, a failing git);
+#   - the wall-time bound: it stops a grandchild, and bounds a command that
+#     ignores TERM;
 #   - the host token and class line: stable, from system facts only, and
 #     free of the identity values tests/check-no-local-identity.sh refuses
 #     (hostname -s, whoami, $HOME), with the scrub and the salt tried on
 #     synthetic values;
-#   - the inputs: equal across a documentation-only commit, changed by a
-#     src/ edit, a missing path as the "missing" marker, the case's flags,
-#     with shasum and with cksum;
+#   - the inputs: the adapter's paths (equal across a documentation-only
+#     commit, changed by a src/ edit, a missing path as the "missing"
+#     marker), the whole tree without a case, the case's flags, with shasum
+#     and with cksum, and a failing, malformed or missing digest tool as an
+#     error;
 #   - case files: the key whitelist, no evaluation of values, the hash of
-#     the normalised content;
-#   - the store layout, atomic writes (a failing rename leaves no run),
-#     reads that ignore temporary files, superseded/, a preflight refusal
-#     and the wall-time bound;
+#     the normalised content, the name cap of 58;
+#   - the store: its layout, a store inside a repository or relative
+#     refused, a set stored whole or not at all (a failed copy or rename
+#     leaves the old baseline live), reads that take only the runs of the
+#     live set, the live set by number, the runs oldest first, a preflight
+#     refusal, the wall-time bound and its default;
 #   - statistics against hand-computed values; the drift rule inside, at
 #     the edge and outside; compare's table and verdict;
-#   - the core and bench.sh name no game and use no eval.
-# Then four mutants, each applied to a copy of scripts/bench/ and each
-# required to fail the test it targets: the lock skips the exclusive mkdir
-# (mkdir -p), re-entry accepts any token, the drift rule drops t, the core
-# names a game.
+#   - the core and bench.sh name no game and no project layout, and use no
+#     eval.
+# The tests that do not test the host facts use a fast stand-in for
+# system_profiler (fast_profiler). Then nine mutants, each applied to a copy
+# of scripts/bench/ and each required to fail the test it targets: the lock
+# made neither exclusively nor linked, the holder renamed over another's,
+# the command spawned without its own process group, re-entry accepts any
+# token, the drift rule drops t, the core names a game, the reclaim guard
+# made with mkdir -p, the holder-less grace dropped, the store's
+# outside-repository check deleted.
 #
 # Usage: tests/check-bench.sh [<test>...]   (named tests only, no mutants)
 set -eu
@@ -134,6 +151,17 @@ wait_file() {
 # run (they are skipped, and said).
 INT_OK=
 sh -c 'kill -INT $$; exit 0' 2> /dev/null || INT_OK=1
+# fast_profiler: puts a system_profiler on PATH (for the rest of the test)
+# that answers at once with a fixed GPU; the real one takes a third of a
+# second on every call that reads the host facts. Only for the tests that
+# do not test the facts themselves.
+fast_profiler() {
+	mkdir -p "${E:?}/sp"
+	printf '#!/bin/sh\necho "      Chipset Model: Zzq GPU"\n' > "${E:?}/sp/system_profiler"
+	chmod +x "${E:?}/sp/system_profiler"
+	PATH=${E:?}/sp:$PATH
+	export PATH
+}
 # fresh <name>: a new directory E with its own lock state and store.
 fresh() {
 	E=${tmp:?}/$1
@@ -199,6 +227,9 @@ t_hygiene() {
 t_generic() {
 	if grep -inE 'quake|q2|yquake|ref_|gl1' "$R/bench.sh" "$R"/core/*.sh > "${tmp:?}/game.out"; then
 		bad "the core or bench.sh names a game: $(cut -d: -f1,2 "${tmp:?}/game.out" | sed "s#^$R/##" | tr '\n' ' ')"
+	fi
+	if grep -inE 'third_party|makefile' "$R/bench.sh" "$R"/core/*.sh > "${tmp:?}/layout.out"; then
+		bad "the core or bench.sh names a project layout (adapter_inputs_paths does): $(cut -d: -f1,2 "${tmp:?}/layout.out" | sed "s#^$R/##" | tr '\n' ' ')"
 	fi
 	[ "$fails" -eq 0 ]
 }
@@ -364,13 +395,14 @@ t_bounded() {
 		bench_bounded 1 sh "${E:?}/gc.sh" "${E:?}/b.gc" "${E:?}/log" wall 3.5 2> /dev/null || _st=$?
 		[ "$_st" -eq 124 ] || { echo "$me: bounded: wanted 124 from a command over its wall time, got $_st"; exit 1; }
 		if pid_running "$(cat "${E:?}/b.gc" 2> /dev/null)"; then echo "$me: bounded: a grandchild outlived the wall bound"; exit 1; fi
-		# A command that ignores TERM is killed after the grace: a bound.
+		# A command that ignores TERM is killed after the grace: a bound
+		# (a wall time of 0 stops it within 1.5 s, the grace adds 1 to 2).
 		_t0=$(date +%s)
 		_st=0
-		bench_bounded 1 sh -c 'trap "" TERM; sleep 8' 2> /dev/null || _st=$?
+		bench_bounded 0 sh -c 'trap "" TERM; sleep 8' 2> /dev/null || _st=$?
 		_t1=$(date +%s)
 		[ "$_st" -eq 124 ] || { echo "$me: bounded: wanted 124 from a command that ignores TERM, got $_st"; exit 1; }
-		[ $((_t1 - _t0)) -le 6 ] || { echo "$me: bounded: a command that ignores TERM ran $((_t1 - _t0)) s past a wall time of 1 s"; exit 1; }
+		[ $((_t1 - _t0)) -le 5 ] || { echo "$me: bounded: a command that ignores TERM ran $((_t1 - _t0)) s past a wall time of 0 s"; exit 1; }
 		_st=0
 		bench_bounded 5 sh -c 'exit 7' || _st=$?
 		[ "$_st" -eq 7 ] || { echo "$me: bounded: wanted the command's status 7, got $_st"; exit 1; }
@@ -443,7 +475,7 @@ t_lock_guard() {
 	# A lock directory with no holder file, inside its grace: left alone.
 	mkdir "${E:?}/state/lock"
 	_st=0
-	env BENCH_LOCK_GRACE=5 BENCH_LOCK_WAIT=2 sh "$R/bench.sh" lock run g -- echo ran > "${E:?}/out" 2> /dev/null || _st=$?
+	env BENCH_LOCK_GRACE=5 BENCH_LOCK_WAIT=1 sh "$R/bench.sh" lock run g -- echo ran > "${E:?}/out" 2> /dev/null || _st=$?
 	[ "$_st" -eq 75 ] || bad "grace: a holder-less lock was reclaimed inside its grace (status $_st)"
 	[ -d "${E:?}/state/lock" ] || bad "grace: the holder-less lock was removed inside its grace"
 	rmdir "${E:?}/state/lock" 2> /dev/null || true
@@ -469,9 +501,15 @@ t_lock_guard() {
 	kill -TERM "$_h"
 	wait_gone 15 "$_h" || bad "poll: the holder did not exit on TERM"
 	wait "$_h" 2> /dev/null || true
+	[ "$fails" -eq 0 ]
+}
+
+t_lock_stall() {
+	fresh stall
 	# A maker that stalls between its mkdir and its holder write for longer
 	# than the grace, while a waiter reclaims the directory and makes it
-	# again, backs off: the two never hold the lock at once.
+	# again, backs off and leaves the taker's holder file as it was: the two
+	# never hold the lock at once.
 	_s=${tmp:?}/stall
 	rm -rf "${_s:?}"
 	cp -R "$R" "$_s"
@@ -484,8 +522,18 @@ t_lock_guard() {
 		sleep 0.1
 		_k=$((_k + 1))
 	done
-	start env BENCH_LOCK_GRACE=1 sh "$R/bench.sh" lock run taker -- sh -c 'echo C-start >> "$1"; sleep 3; echo C-end >> "$1"' x "${E:?}/slog" > "${E:?}/taker.out" 2>&1
+	start env BENCH_LOCK_GRACE=1 sh "$R/bench.sh" lock run taker -- sh -c 'echo C-start >> "$1"; sleep 3.5; echo C-end >> "$1"' x "${E:?}/slog" > "${E:?}/taker.out" 2>&1
 	_c=$BG
+	_k=0
+	while ! grep -q 'waiting for the lock held by' "${E:?}/maker.out" && [ "$_k" -lt 80 ]; do
+		sleep 0.1
+		_k=$((_k + 1))
+	done
+	grep -q 'waiting for the lock held by taker ' "${E:?}/maker.out" || bad "stall: the maker that backed off does not wait for the taker: $(cat "${E:?}/maker.out")"
+	case $(B lock status) in
+	*'label=taker '*) ;;
+	*) bad "stall: the taker's holder file did not survive the stalled maker: $(B lock status)" ;;
+	esac
 	wait_gone 20 "$_mk" || bad "stall: the stalled maker did not finish"
 	wait_gone 20 "$_c" || bad "stall: the taker did not finish"
 	_s1=0
@@ -535,6 +583,7 @@ t_lock_state_dir() {
 
 t_store_guard() {
 	fresh sguard
+	fast_profiler
 	cd "${repo:?}" || exit 1
 	_st=0
 	env BENCH_STORE="${repo:?}/store" sh "$R/bench.sh" baseline put null-sleep "$cA" > /dev/null 2>&1 || _st=$?
@@ -610,32 +659,40 @@ t_host() {
 
 t_inputs() {
 	fresh inputs
+	fast_profiler
 	cd "${repo:?}" || exit 1
-	_iA=$(B inputs "$cA")
-	_iB=$(B inputs "$cB")
-	_iC=$(B inputs "$cC")
-	_iD=$(B inputs "$cD")
-	_iF=$(B inputs "$cF")
+	# The paths are the adapter's (the null adapter names a make layout).
+	_nf=${E:?}/nf.case
+	printf 'adapter=null\nruns=1\nmetric=ms\nabs_tol=0\nrel_tol=0\n' > "$_nf"
+	_iA=$(B inputs "$cA" "$_nf")
+	_iB=$(B inputs "$cB" "$_nf")
+	_iC=$(B inputs "$cC" "$_nf")
+	_iD=$(B inputs "$cD" "$_nf")
+	_iF=$(B inputs "$cF" "$_nf")
 	printf '%s\n' "$_iA" | grep -Eq '^i-[0-9a-f]{12}$' || bad "inputs: not i- and 12 hex digits"
 	[ "$_iA" = "$_iB" ] || bad "inputs: a documentation-only commit changed the inputs"
 	[ "$_iA" != "$_iC" ] || bad "inputs: a src/ edit did not change the inputs"
 	[ "$_iC" != "$_iD" ] || bad "inputs: adding third_party/ did not change the inputs"
 	[ "$_iD" != "$_iF" ] || bad "inputs: a top-level .make file did not change the inputs"
-	_l=$(B inputs --list "$cA")
+	_l=$(B inputs --list "$cA" "$_nf")
 	printf '%s\n' "$_l" | grep -qx 'path=third_party id=missing' || bad "inputs: a missing path is not the marker 'missing'"
 	printf '%s\n' "$_l" | grep -qx "path=src id=$(gitc rev-parse "$cA:src")" || bad "inputs: src is not hashed by its tree id"
 	printf '%s\n' "$_l" | grep -Eqx 'hash=(shasum|cksum)' || bad "inputs: --list does not say the hash tool"
 	[ "$(printf '%s\n' "$_l" | sed -n '$p')" = "$_iA" ] || bad "inputs: --list does not end with the id"
-	B inputs --list "$cF" | grep -x "path=extra.make id=$(gitc rev-parse "$cF:extra.make")" > /dev/null || bad "inputs: a top-level .make file is not listed"
+	B inputs --list "$cF" "$_nf" | grep -x "path=extra.make id=$(gitc rev-parse "$cF:extra.make")" > /dev/null || bad "inputs: a top-level .make file is not listed"
+	# Without a case (no adapter, so no list), the whole tree.
+	_tA=$(B inputs "$cA")
+	B inputs --list "$cA" | grep -x "tree=$(gitc rev-parse "$cA^{tree}")" > /dev/null || bad "inputs: without a case, the whole tree is not hashed"
+	[ "$_tA" != "$(B inputs "$cB")" ] || bad "inputs: without a case, a documentation-only commit kept the inputs"
 	printf 'adapter=null\nruns=1\nmetric=ms\nabs_tol=0\nrel_tol=0\nbuild_flags=X=1\n' > "${E:?}/f1.case"
 	printf 'adapter=null\nruns=1\nmetric=ms\nabs_tol=0\nrel_tol=0\nbuild_flags=X=2\n' > "${E:?}/f2.case"
 	_f1=$(B inputs "$cA" "${E:?}/f1.case")
 	[ "$_f1" != "$(B inputs "$cA" "${E:?}/f2.case")" ] || bad "inputs: the case's flags are not part of the inputs"
 	[ "$_f1" != "$_iA" ] || bad "inputs: flags and no flags gave the same inputs"
 	B inputs --list "$cA" "${E:?}/f1.case" | grep -x 'flags=X=1' > /dev/null || bad "inputs: --list does not show the flags"
-	_kA=$(env BENCH_HASH=cksum sh "$R/bench.sh" inputs "$cA")
-	_kB=$(env BENCH_HASH=cksum sh "$R/bench.sh" inputs "$cB")
-	_kC=$(env BENCH_HASH=cksum sh "$R/bench.sh" inputs "$cC")
+	_kA=$(env BENCH_HASH=cksum sh "$R/bench.sh" inputs "$cA" "$_nf")
+	_kB=$(env BENCH_HASH=cksum sh "$R/bench.sh" inputs "$cB" "$_nf")
+	_kC=$(env BENCH_HASH=cksum sh "$R/bench.sh" inputs "$cC" "$_nf")
 	printf '%s\n' "$_kA" | grep -Eq '^i-[0-9a-f]{12}$' || bad "inputs: the cksum id is not i- and 12 hex digits"
 	[ "$_kA" = "$_kB" ] && [ "$_kA" != "$_kC" ] || bad "inputs: the cksum ids do not follow the rule"
 	_st=0
@@ -644,6 +701,33 @@ t_inputs() {
 	_st=0
 	B inputs --output=x 2> /dev/null || _st=$?
 	[ "$_st" -eq 2 ] || bad "inputs: an option in place of the commit was not refused"
+	# A failing, missing or malformed digest tool is an error, never an
+	# empty id.
+	mkdir "${E:?}/fail" "${E:?}/junk" "${E:?}/nosha"
+	for _t in shasum cksum; do
+		printf '#!/bin/sh\nexit 1\n' > "${E:?}/fail/$_t"
+		printf '#!/bin/sh\necho "zz%s  -"\n' "$_t" > "${E:?}/junk/$_t"
+	done
+	chmod +x "${E:?}/fail"/* "${E:?}/junk"/*
+	for _d in fail junk; do
+		for _t in shasum cksum; do
+			for _c in host "inputs $cA $_nf" "case null-sleep"; do
+				_st=0
+				# shellcheck disable=SC2086 # the command is words
+				env PATH="${E:?}/$_d:$PATH" BENCH_HASH="$_t" sh "$R/bench.sh" $_c > "${E:?}/hash.out" 2> /dev/null || _st=$?
+				[ "$_st" -eq 2 ] || bad "inputs: $_c with a $_d $_t exited $_st, not 2: $(tr '\n' ' ' < "${E:?}/hash.out")"
+			done
+		done
+	done
+	for _d in /bin /usr/bin /usr/sbin /sbin; do
+		ln -s "$_d"/* "${E:?}/nosha/" 2> /dev/null || true
+	done
+	rm -f "${E:?}/nosha/shasum" "${E:?}/nosha/system_profiler"
+	ln -s "${E:?}/sp/system_profiler" "${E:?}/nosha/system_profiler"
+	_st=0
+	env PATH="${E:?}/nosha" BENCH_HASH=shasum sh "$R/bench.sh" host > /dev/null 2>&1 || _st=$?
+	[ "$_st" -eq 2 ] || bad "inputs: BENCH_HASH=shasum with no shasum exited $_st, not 2"
+	env PATH="${E:?}/nosha" sh "$R/bench.sh" host --facts | grep -x 'hash=cksum' > /dev/null || bad "inputs: with no shasum the hash is not cksum"
 	[ "$fails" -eq 0 ]
 }
 
@@ -710,6 +794,7 @@ t_stats() {
 # store_setup: the host token, the inputs and the case hash the tests expect.
 store_setup() {
 	cd "${repo:?}" || exit 1
+	fast_profiler
 	TOK=$(B host | sed -n 1p)
 	IA=$(B inputs "$cA" null-sleep)
 	IC=$(B inputs "$cC" null-sleep)
@@ -728,9 +813,9 @@ metric=frames n=3 median=3 p90=3 min=3 max=3
 metric=ms n=3 median=11 p90=12 min=10 max=12"
 	[ "$_out" = "$_want" ] || bad "store: put printed: $_out"
 	_d=${E:?}/home/.cache/zzqrepo-bench/$TOK/$IA/null-sleep/$CH
-	[ "$(ls "${_d:?}" | grep -c '^r-.*\.run$')" -eq 3 ] || bad "store: not three run files in <store>/<host>/<inputs>/<case>/<case-hash>/ under \$HOME/.cache/<repo>-bench"
-	ls -a "${_d:?}" | grep -q '^\.tmp\.' && bad "store: a temporary file was left"
-	for _f in "${_d:?}"/r-*.run; do
+	[ "$(ls "${_d:?}/set-1" | grep -c '^r-.*\.run$')" -eq 3 ] || bad "store: not three run files in <store>/<host>/<inputs>/<case>/<case-hash>/set-1/ under \$HOME/.cache/<repo>-bench"
+	ls -a "${_d:?}" "${_d:?}/set-1" | grep -q '^\.tmp\.' && bad "store: a temporary file or staging directory was left"
+	for _f in "${_d:?}"/set-1/r-*.run; do
 		_keys=$(sed 's/=.*//' "$_f" | tr '\n' ' ')
 		[ "$_keys" = "case case_hash commit inputs host class hash kind index start load.before load.after pre.null metric.ms metric.frames " ] ||
 			bad "store: a run file has the keys: $_keys"
@@ -748,14 +833,35 @@ metric=ms n=3 median=11 p90=12 min=10 max=12"
 	_st=0
 	B baseline put null-sleep "$cA" > /dev/null 2>&1 || _st=$?
 	[ "$_st" -eq 1 ] || bad "store: a second put without --replace was not refused"
-	# Reads ignore temporary files.
-	printf 'metric.ms=999\n' > "${_d:?}/.tmp.r-zzq.run"
+	# Reads take only r-*.run files of set-<number> directories: not a
+	# temporary file, another .run name, a staging directory or another set
+	# name, each of which would change the runs or the statistics.
+	printf 'metric.ms=999\n' > "${_d:?}/set-1/.tmp.r-zzq.run"
+	printf 'metric.ms=999\n' > "${_d:?}/set-1/zzq.run"
+	mkdir "${_d:?}/.tmp.999" "${_d:?}/set-x" "${_d:?}/set-"
+	for _p in .tmp.999 set-x set-; do
+		printf 'metric.ms=999\n' > "${_d:?}/$_p/r-zzq-1.run"
+	done
 	B baseline get null-sleep "$cA" > "${E:?}/get" || true
-	grep -qx 'metric=ms n=3 median=11 p90=12 min=10 max=12' "${E:?}/get" && grep -q 'runs=3$' "${E:?}/get" || bad "store: a temporary file was read"
-	# Writes are a rename: when it fails, no run file appears.
+	grep -qx 'metric=ms n=3 median=11 p90=12 min=10 max=12' "${E:?}/get" && grep -q 'runs=3$' "${E:?}/get" || bad "store: a read took a file that is not a run of the live set: $(tr '\n' ' ' < "${E:?}/get")"
+	rm -rf "${_d:?}/set-1/.tmp.r-zzq.run" "${_d:?}/set-1/zzq.run" "${_d:?}/.tmp.999" "${_d:?}/set-x" "${_d:?}/set-"
+	# A store is all or nothing: a failed copy of the second run, or a
+	# failed rename of the set into place, leaves the old baseline live and
+	# no staging directory.
 	mkdir "${E:?}/shim"
-	printf '#!/bin/sh\nfor a; do l=$a; done\ncase $l in *.run) exit 1 ;; esac\nexec /bin/mv "$@"\n' > "${E:?}/shim/mv"
-	chmod +x "${E:?}/shim/mv"
+	printf '#!/bin/sh\nfor a; do l=$a; done\ncase $l in *.run | */set-*) exit 1 ;; esac\nexec /bin/mv "$@"\n' > "${E:?}/shim/mv"
+	mkdir "${E:?}/cpshim"
+	printf '#!/bin/sh\nc=%s\nfor a; do l=$a; done\ncase $l in */.tmp.*.run) n=$(($(cat "$c" 2> /dev/null || echo 0) + 1)); echo "$n" > "$c"; [ "$n" -ne 2 ] || exit 1 ;; esac\nexec /bin/cp "$@"\n' "${E:?}/cpshim/count" > "${E:?}/cpshim/cp"
+	chmod +x "${E:?}/shim/mv" "${E:?}/cpshim/cp"
+	for _sh in cpshim shim; do
+		_st=0
+		env PATH="${E:?}/$_sh:$PATH" BENCH_NULL_VALUES=20 sh "$R/bench.sh" baseline put --replace null-sleep "$cA" > /dev/null 2>&1 || _st=$?
+		[ "$_st" -eq 2 ] || bad "store: a --replace whose store failed ($_sh) exited $_st, not 2"
+		B baseline get null-sleep "$cA" > "${E:?}/get" || true
+		grep -qx 'metric=ms n=3 median=11 p90=12 min=10 max=12' "${E:?}/get" && grep -q 'runs=3$' "${E:?}/get" || bad "store: a failed --replace ($_sh) did not leave the old baseline live: $(tr '\n' ' ' < "${E:?}/get")"
+		ls -a "${_d:?}" | grep -q '^\.tmp\.' && bad "store: a failed store ($_sh) left its staging directory"
+	done
+	[ "$(cat "${E:?}/cpshim/count")" -ge 2 ] || bad "store: the copy shim never failed a copy"
 	_st=0
 	env PATH="${E:?}/shim:$PATH" sh "$R/bench.sh" baseline put null-sleep "$cC" > /dev/null 2>&1 || _st=$?
 	[ "$_st" -ne 0 ] || bad "store: a put whose rename failed succeeded"
@@ -769,15 +875,48 @@ metric=ms n=3 median=11 p90=12 min=10 max=12"
 	_st=0
 	B baseline get null-sleep "$cC" > /dev/null || _st=$?
 	[ "$_st" -eq 1 ] || bad "store: a refused run was stored"
-	# The wall-time bound stops a run that outlives it.
+	# The wall-time bound stops a run that outlives it; a case without a
+	# wall gets the default (600 s).
 	sed 's/^settings=.*/settings=sleep=5 values=1/; s/^wall=.*/wall=1/; s/^warmup=.*/warmup=0/' "$R/cases/null-sleep.case" > "${E:?}/slow.case"
 	_st=0
 	env BENCH_STORE="${E:?}/slowstore" sh "$R/bench.sh" baseline put "${E:?}/slow.case" "$cA" > /dev/null 2>&1 || _st=$?
 	[ "$_st" -eq 3 ] || bad "store: a run over its wall time did not exit 3 (got $_st)"
-	# --replace keeps the old baseline in superseded/.
-	env BENCH_NULL_VALUES=20 sh "$R/bench.sh" baseline put --replace null-sleep "$cA" > /dev/null || bad "store: put --replace failed"
+	grep -v '^wall=' "$R/cases/null-sleep.case" | sed 's/^runs=.*/runs=1/; s/^warmup=.*/warmup=0/' > "${E:?}/nowall.case"
+	_st=0
+	env BENCH_STORE="${E:?}/nowallstore" sh "$R/bench.sh" baseline put "${E:?}/nowall.case" "$cA" > /dev/null 2> "${E:?}/err" || _st=$?
+	[ "$_st" -eq 0 ] || bad "store: a case without wall= failed (status $_st): $(cat "${E:?}/err")"
+	# A case name at the cap (58) measures under the lock (bench.<case> is a
+	# label of 64); one longer is refused.
+	_n58=$(awk 'BEGIN { while (n++ < 58) printf "c"; print "" }')
+	sed 's/^runs=.*/runs=1/; s/^warmup=.*/warmup=0/' "$R/cases/null-sleep.case" > "${E:?}/$_n58.case"
+	cp "${E:?}/$_n58.case" "${E:?}/${_n58}d.case"
+	_st=0
+	env BENCH_STORE="${E:?}/longstore" sh "$R/bench.sh" baseline put "${E:?}/$_n58.case" "$cA" > /dev/null 2> "${E:?}/err" || _st=$?
+	[ "$_st" -eq 0 ] || bad "store: a case name of 58 characters could not be measured (status $_st): $(cat "${E:?}/err")"
+	_st=0
+	B case "${E:?}/${_n58}d.case" > /dev/null 2>&1 || _st=$?
+	[ "$_st" -eq 2 ] || bad "store: a case name of 59 characters was not refused (status $_st)"
+	# --replace makes a new set live and keeps the old one as it was; the
+	# live set is the highest number (set-10 after set-9, not set-9).
+	env BENCH_NULL_VALUES=20 sh "$R/bench.sh" baseline put --replace null-sleep "$cA" > "${E:?}/rep" || bad "store: put --replace failed"
+	grep -qx 'superseded=set-1' "${E:?}/rep" || bad "store: --replace did not name the set it superseded"
 	B baseline get null-sleep "$cA" | grep -x 'metric=ms n=3 median=20 p90=20 min=20 max=20' > /dev/null || bad "store: --replace did not store the new runs"
-	[ "$(ls "${_d:?}/superseded"/*/ | grep -c '^r-.*\.run$')" -eq 3 ] || bad "store: superseded/ does not hold the three old runs"
+	[ "$(ls "${_d:?}/set-1" | grep -c '^r-.*\.run$')" -eq 3 ] || bad "store: set-1 does not keep the three superseded runs"
+	[ "$(ls "${_d:?}/set-2" | grep -c '^r-.*\.run$')" -eq 3 ] || bad "store: set-2 does not hold the three new runs"
+	cp -R "${_d:?}/set-1" "${_d:?}/set-9"
+	env BENCH_NULL_VALUES=30 sh "$R/bench.sh" baseline put --replace null-sleep "$cA" > /dev/null || bad "store: put --replace after set-9 failed"
+	[ -d "${_d:?}/set-10" ] || bad "store: the set after set-9 is not set-10"
+	B baseline get null-sleep "$cA" | grep -x 'metric=ms n=3 median=30 p90=30 min=30 max=30' > /dev/null || bad "store: the live set is not the highest number (set-10)"
+	# The runs of a set are listed oldest first, by number (2 before 10).
+	(
+		BENCH_ROOT=$R
+		. "$R/core/common.sh"
+		. "$R/core/store.sh"
+		mkdir "${E:?}/order"
+		for _k in 10 2 1; do : > "${E:?}/order/r-20260101T000000Z-7-$_k.run"; done
+		_o=$(bench_store_runs "${E:?}/order" | sed 's/.*-//' | tr '\n' ' ')
+		[ "$_o" = "1.run 2.run 10.run " ] || { echo "$me: store: the runs are listed as $_o"; exit 1; }
+	) || bad "store: the runs of a set are not listed oldest first"
 	[ "$fails" -eq 0 ]
 }
 
@@ -786,7 +925,7 @@ t_drift() {
 	store_setup
 	env BENCH_NULL_VALUES=10,12,11 sh "$R/bench.sh" baseline put null-sleep "$cA" > /dev/null || bad "drift: baseline put failed"
 	_d=$BENCH_STORE/$TOK/$IA/null-sleep/$CH
-	_runs=$(ls "${_d:?}" | grep '^r-')
+	_runs=$(ls "${_d:?}"/set-*)
 	# t = max(0.5, 0.02 * 11) = 0.5, so the range is [9.5, 12.5].
 	for _x in 12.3:12.3 12.5:12.5 9.5:9.5; do
 		_st=0
@@ -794,13 +933,13 @@ t_drift() {
 		[ "$_st" -eq 0 ] || bad "drift: status $_st for ${_x%%:*}"
 		[ "$_out" = "drift=inside value=${_x#*:} lo=9.5 hi=12.5 t=0.5 median=11 runs=3 metric=ms" ] || bad "drift: ${_x%%:*} gave: $_out"
 	done
-	[ "$(ls "${_d:?}" | grep '^r-')" = "$_runs" ] || bad "drift: a run inside the range changed the baseline"
+	[ "$(ls "${_d:?}"/set-*)" = "$_runs" ] || bad "drift: a run inside the range changed the baseline"
 	[ "$(ls "${_d:?}/drift" | grep -c '^r-.*\.run$')" -eq 3 ] || bad "drift: the drift runs are not kept in drift/"
 	_out=$(env BENCH_NULL_VALUES=12.51 sh "$R/bench.sh" drift null-sleep "$cA" 2> "${E:?}/err") || bad "drift: an outside run failed"
 	printf '%s\n' "$_out" | grep -qx 'drift=outside value=12.51 lo=9.5 hi=12.5 t=0.5 median=11 runs=3 metric=ms' || bad "drift: 12.51 gave: $(printf '%s\n' "$_out" | sed -n 1p)"
 	printf '%s\n' "$_out" | grep -qx "baseline=replaced case=null-sleep inputs=$IA runs=3" || bad "drift: an outside run did not replace the baseline"
 	B baseline get null-sleep "$cA" | grep -x 'metric=ms n=3 median=12.51 p90=12.51 min=12.51 max=12.51' > /dev/null || bad "drift: the new baseline is not the re-measured one"
-	[ "$(ls "${_d:?}/superseded"/*/ | grep -c '^r-.*\.run$')" -eq 3 ] || bad "drift: the old baseline is not in superseded/"
+	[ "$(ls "${_d:?}/set-1" | grep -c '^r-.*\.run$')" -eq 3 ] && [ -d "${_d:?}/set-2" ] || bad "drift: the old baseline is not kept as set-1 beside the new set-2"
 	# The relative term: t = max(0, 0.1 * 11) = 1.1, so the range is [8.9, 13.1].
 	sed 's/^abs_tol=.*/abs_tol=0/; s/^rel_tol=.*/rel_tol=0.1/' "$R/cases/null-sleep.case" > "${E:?}/rel.case"
 	env BENCH_NULL_VALUES=10,12,11 sh "$R/bench.sh" baseline put "${E:?}/rel.case" "$cA" > /dev/null || bad "drift: put of the relative case failed"
@@ -855,7 +994,7 @@ t_compare() {
 }
 
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_bounded t_lock_reclaim t_lock_guard t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare"
+all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
@@ -878,8 +1017,9 @@ if [ -n "$only" ]; then
 fi
 
 # ---- Mutants: each must fail the test that targets it. -----------------
-# mutant <name> <file under scripts/bench> <old> <new> <test>; <old> empty
-# appends <new> as a line.
+# mutant <name> <file under scripts/bench> <old> <new> <test> [<old2> <new2>];
+# <old> empty appends <new> as a line; <old2> <new2>, a second change in the
+# same file.
 mutant() {
 	_m=${tmp:?}/mutant.$1
 	rm -rf "${_m:?}"
@@ -889,6 +1029,9 @@ mutant() {
 	else
 		printf '%s\n' "$4" >> "${_m:?}/$2"
 	fi
+	if [ "$#" -ge 7 ]; then
+		lit "${_m:?}/$2" "$6" "$7" || { echo "$me: mutant $1 (second change) does not apply to $2"; return 1; }
+	fi
 	if (R=$_m MUTANT=1 && cd "$REAL/../.." && "$5") > "${tmp:?}/mutant.$1.out" 2>&1; then
 		echo "$me: mutant $1 passed $5; the test does not catch it"
 		return 1
@@ -896,7 +1039,12 @@ mutant() {
 	echo "$me: mutant $1: caught by $5 ($(sed -n 1p "${tmp:?}/mutant.$1.out" | sed "s/^$me: //"))"
 }
 mfail=0
-mutant lock-mkdir core/lock.sh 'if mkdir "${BENCH_LOCK_DIR:?}" 2> /dev/null; then' 'if mkdir -p "${BENCH_LOCK_DIR:?}" 2> /dev/null; then' t_lock_exclusion || mfail=1
+# The lock is exclusive twice over (the mkdir, and the holder linked into
+# place), so this one drops both.
+mutant lock-not-exclusive core/lock.sh 'if mkdir "${BENCH_LOCK_DIR:?}" 2> /dev/null; then' 'if mkdir -p "${BENCH_LOCK_DIR:?}" 2> /dev/null; then' t_lock_exclusion \
+	'ln "$_lw_t" "${BENCH_LOCK_DIR:?}/holder"' 'mv -f "$_lw_t" "${BENCH_LOCK_DIR:?}/holder"' || mfail=1
+mutant holder-replaced core/lock.sh 'ln "$_lw_t" "${BENCH_LOCK_DIR:?}/holder"' 'mv -f "$_lw_t" "${BENCH_LOCK_DIR:?}/holder"' t_lock_stall || mfail=1
+mutant spawn-no-group core/common.sh '	set -m' '	set +m' t_lock_stop || mfail=1
 mutant reentry-any-token core/lock.sh '[ "$(bench_kv "$(bench_lock_holder)" token)" = "$BENCH_LOCK_TOKEN" ]' '[ -n "$BENCH_LOCK_TOKEN" ]' t_lock_tokens || mfail=1
 mutant drift-no-t core/stats.sh 'lo = mn - t; hi = mx + t' 'lo = mn; hi = mx' t_drift || mfail=1
 mutant core-names-game core/common.sh '' '# the Quake II adapter' t_generic || mfail=1

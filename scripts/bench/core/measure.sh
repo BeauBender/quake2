@@ -8,6 +8,12 @@
 #   adapter_run <case> <build dir> <log> one run, bounded by the case's wall
 #                                        time (bench_bounded helps)
 #   adapter_metrics <case> <log>         prints metric.<name>=<number> lines
+# and may define
+#   adapter_inputs_paths <commit>        prints the paths of the commit the
+#                                        build compiles, one per line, for
+#                                        the inputs id (inputs.sh); without
+#                                        it, or with no path, the inputs are
+#                                        the whole tree
 # <case> is the normalised case file; bench_case_get reads it. Each run
 # sees BENCH_RUN_KIND (warmup or run) and BENCH_RUN_INDEX (from 1). The
 # caller holds the lock for the whole measurement.

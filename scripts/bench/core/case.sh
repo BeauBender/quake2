@@ -12,7 +12,8 @@
 #   abs_tol      required; the drift rule's absolute tolerance, >= 0
 #   rel_tol      required; the drift rule's relative tolerance, >= 0
 #   warmup       runs made and thrown away before the counted ones (0)
-#   wall         wall time of one run in seconds, for the adapter (600)
+#   wall         wall time of one run in seconds, for the adapter (600;
+#                bench_case_wall gives it with the default)
 #   better       lower or higher: which way the metric improves
 #   accept       the improvement of the metric's median, in percent of the
 #                before median, that compare requires (needs better; 0
@@ -38,6 +39,13 @@ bench_case_get() {
 	bench_file_kv "$BENCH_CASE_FILE" "$1"
 }
 
+# bench_case_wall: the wall time of one run, in seconds: the case's wall,
+# else 600.
+bench_case_wall() {
+	_cw=$(bench_case_get wall)
+	printf '%s\n' "${_cw:-600}"
+}
+
 # bench_case_load <case>: a case name (scripts/bench/cases/<name>.case) or
 # a path holding a "/". Validates it and sets BENCH_CASE_NAME,
 # BENCH_CASE_FILE (the normalised form) and BENCH_CASE_HASH.
@@ -51,7 +59,9 @@ bench_case_load() {
 	*.case) _cl_n=${_cl_n%.case} ;;
 	*) bench_die 2 "a case file is named <name>.case" ;;
 	esac
-	bench_is_name "$_cl_n" || bench_die 2 "a case name is 1 to 64 of A-Z a-z 0-9 . _ -"
+	if ! bench_is_name "$_cl_n" || [ "${#_cl_n}" -gt 58 ]; then
+		bench_die 2 "a case name is 1 to 58 of A-Z a-z 0-9 . _ - (bench.<case> is its lock label)"
+	fi
 	[ -f "$_cl_f" ] || bench_die 2 "no case file for the case $_cl_n"
 	bench_tmp
 	BENCH_CASE_NAME=$_cl_n
@@ -117,5 +127,5 @@ bench_case_load() {
 		bench_is_num "$_cl_a" || bench_die 2 "the case $_cl_n: accept is a number (percent)"
 		[ -n "$_cl_v" ] || bench_die 2 "the case $_cl_n: accept needs better"
 	fi
-	BENCH_CASE_HASH=$(bench_id c- < "$BENCH_CASE_FILE")
+	BENCH_CASE_HASH=$(bench_id c- < "$BENCH_CASE_FILE") || exit 2
 }
