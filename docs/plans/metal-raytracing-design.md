@@ -152,6 +152,22 @@ rays they serve. The surface ray is the first to cut: it could be traced only wh
 range, or the raster could store the surface. `timedemo` reads the display's 60 fps at 1080p with
 the effect on and off.
 
+Measured for the ambient occlusion (RT5, TASK57; `docs/runbook/TASK57.md`): two any-hit rays a
+traced world pixel (about 99 % of the pixels of `demo1.dm2`), 128 units long, passing sky, water
+and translucent triangles. On the M6, seeded `rt-ao` over `demo1.dm2`, warm frames, three runs
+each, without and with entities (`rt-ao-entities`):
+
+- 1920 x 1080: median 3.67 ms (p10 3.10 to 3.17, p90 4.60 to 4.72); with entities 4.10 ms (p10
+  3.07 to 3.22, p90 4.80 to 5.14);
+- 5120 x 2880: median 10.96 ms (p10 9.4 to 9.5, p90 11.7 to 11.9); with entities 10.97 ms (p10
+  9.35 to 9.37, p90 11.8 to 11.9).
+
+Against the budget above (about 5 rays a pixel with everything on, assumed 8 to 14 ms on apple7
+and about half that on apple9), the AO's two rays alone take 3.7 to 4.1 ms on apple9 at 1080p,
+most of the halved 4 to 7 ms, and at 5120 x 2880 two thirds of a 60 Hz frame, so on that output
+the effect needs the internal resolution of the next subsection. `timedemo` reads the display's 60 fps at 1080p
+with the effect on and off.
+
 ### Internal resolution and upscaling with MetalFX (TASK105)
 
 This subsection describes option A (TASK105): with a ray-traced effect

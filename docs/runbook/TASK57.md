@@ -8,10 +8,11 @@ holds the card's results. The method sections it uses are in the shared runbook:
 and [judging an effect's footprint](../plans/metal-port-harness.md#judging-an-effects-footprint-task133).
 
 **Status.** The pass, its cvars, its host test, the scenarios and the documentation are in
-the branch. Every check the card names passes (see *Checks*). No engine run has been made: the
-host's display was taken for other use while the card was worked, and a frame or a time taken
-then would not hold. The runs still to make are listed under *Runs to make*; their results go
-in the sections named there.
+the branch, and the engine runs are made (*Runs on the bare-metal host*, below). Effect off,
+every frame is `origin/main`'s byte for byte. Effect on, the factor never goes under
+`r_rt_ao_min`; the frame-level floor check passes 266 of 270 frames, and the four that fail
+are under by 0.2 of a level past the one-level allowance, for a cause not found
+(*The floor check*). The `rt-ao` pins are not recorded: the owner accepts the look first.
 
 ## What it does
 
@@ -126,13 +127,161 @@ On the branch head (no engine run):
 - Builds: `make client`, `make -B ref_metal` with and without `METAL_SHADERS=no`, `make
   ref_gl1 WITH_METAL_SHIM=yes`: no error, no warning in the new files.
 
-## Runs to make
+## Runs on the bare-metal host
 
-Each under the brief's rules (screen unlocked, no other `quake2`, the timing lock, the load
-before and after), `PINS_SEED=1` for every record, artifacts in `<artifacts>/TASK57/`. The
-floor check's tool is `<artifacts>/TASK57/tools/aofloor.c` (`aofloor OFF.tga ON.tga MIN`: the
-channels below `MIN x OFF - 1` level and above `OFF`; self-tested on synthetic frames scaled by
-0.5, 0.3 and 1.02).
+Host: the bare-metal host (Apple M6, apple9, `supportsRaytracing`). Engine commit measured:
+`4654bfeb` (pin ids `4654bfebcdf9-*`), an ancestor of the card's head; the commits after it
+change only the scenario cfgs' comment headers (the footprint band) and the documentation.
+Before every engine run the wrapper checked that the screen was unlocked and that no other
+`quake2` ran; every engine batch held the shared timing lock (taken with `mkdir`, released by a
+`trap`, at most about two and a half minutes a hold) and logged the one-minute load before and
+after each run: 2.3 to 5.4 (three other lanes share the host). Every record is `PINS_SEED=1`.
+The views compared within one record are replays of its trace (TASK46), with renderer cvars
+rewritten in a clone of the trace at the same length, as TASK55 did: `r_rt_ao 1` to `0` with
+`r_rt_gbuffer 0` to `1` (the *off* view, the same G-buffer path), `r_rt_ao_show` to `2` (the
+classes) or `1` (the factor), `r_rt_stats` to `2` (the stats line), `r_rt_ao_range 128` to
+`002`, `r_rt_ao_min 0.4` to `1.0`. Each record's trace replayed as it is gives the live record
+byte for byte (224 of 224 frames). Every log, frame, tool and list is in
+`<artifacts>/TASK57/` (scratch stores `store/` and `store-base/`, `logs/`, `tools/`); nothing
+derived from game data is in the repository.
+
+### Effect off
+
+Every scenario recorded on the head with `MTL_DEBUG_LAYER=1`, against records of `origin/main`
+(`718e59d4`, an export of the tree built in scratch and recorded by its own `scripts/pins.sh`
+into a scratch store, the same settings): the 14 scenarios of TASK55's Proof 1 at `demo1.dm2`
+(23 frames each; `cinematic` 12, `idlog.cin` every 7th), `dlights` at `demo2.dm2` every 7th (89),
+and `rt-shadows` and `rt-shadows-entities` at both demos. **19 records, 624 frames, every one
+byte-identical to the base.** Every log holds the validation banner and no other validation
+line, and `teardown: 0 live objects`; `rt 0/0` for the 15 records without an effect, and for
+the shadows `rt 75/75` and `54/54` (without entities, `demo1.dm2` and `demo2.dm2`), `318/318`
+and `472/472` (with them). So with `r_rt_ao 0` nothing of the pass runs, and a shadow ray's
+masks meet the same instances now that they carry the AO bit.
+
+### Effect on: the floor check
+
+`rt-ao` and `rt-ao-entities` at `demo1.dm2` (23 frames) and `demo2.dm2` every 7th (89), each
+against its off replay with `aofloor off on 0.4` (`<artifacts>/TASK57/tools/aofloor.c`: the
+channels below `0.4 x off - 1` level, the one level being the output's rounding, and above
+`off`; self-tested on frames scaled by 0.5, 0.3 and 1.02):
+
+| Record | Frames | Pass | Channels under | Brighter | Smallest on / off (off >= 16) |
+|---|---|---|---|---|---|
+| `rt-ao`, `demo1.dm2` | 23 | 23 | 0 | 0 | 0.353 |
+| `rt-ao`, `demo2.dm2` every 7th | 89 | 88 | 34 (frame 42) | 0 | 0.348 |
+| `rt-ao-entities`, `demo1.dm2` | 23 | 23 | 0 | 0 | 0.353 |
+| `rt-ao-entities`, `demo2.dm2` every 7th | 89 | 88 | 33 (frame 42) | 0 | 0.348 |
+| `rt-ao`, `demo1.dm2`, 1920 x 1080 | 23 | 22 | 37 (frame 3) | 0 | 0.368 |
+| `rt-ao-entities`, `demo1.dm2`, 1920 x 1080 | 23 | 22 | 38 (frame 3) | 0 | 0.368 |
+
+- *The factor itself never goes under the floor.* The factor view (`r_rt_ao_show 1`) of the
+  four 640 x 480 records: on all 66,697,514 world pixels (the classes view's white, blue and
+  red) of the 224 frames the smallest factor is 102/255, `r_rt_ao_min` exactly.
+- *The failing channels.* Every one is a pixel at the floor (red in the classes view, factor
+  102/255 in the factor view), and every one is one level under `round(0.4 x off)`: `off` 23
+  reading 8 (frame 42), 68 reading 26 and 73 reading 28 (frame 3, 1080p), where the check
+  allows 8.2, 26.2 and 28.2. The resolve's product (`mtl_world_lm`, float) with a factor of
+  0.4 predicts 9, 27 and 29, so something between the light the kernel writes and the frame
+  rounds once more than the check allows for. It is not the AO's own copy: with
+  `r_rt_ao_min 1.0` (factor 1 everywhere, the light through the pass's `RGBA16Unorm` target)
+  all 89 frames of `demo2.dm2` are the off view byte for byte. The cause is not found; it is
+  left open (0.2 of a level, 33 to 38 channels in 4 of 270 frames).
+
+### Effect on: unchanged pixels and the open floor
+
+- *AO 1 is the stock light.* Against the off view, on the classes view's white pixels: 0 of
+  3,764,002, 16,290,064, 3,597,160 and 15,093,412 differ (the four records, every frame).
+- *Floors that read 1* (the stats line: pixels whose normal is within 8 degrees of up, and of
+  them those occluded): 69.6 % (`rt-ao`, `demo1.dm2`), 80.4 % (`demo2.dm2`), 66.6 % and 75.6 %
+  with entities. The rest is floor within 128 units of a wall, a step or a model.
+- *A measured open floor.* The largest all-white square in the lower half of a classes view:
+  `rt-ao` `demo1.dm2` frame 3, 140 x 140 pixels at (162, 311) from the top left (19,600 pixels
+  at AO 1); `demo2.dm2` frame 40, 216 x 216 at (365, 240).
+- *No self-occlusion.* With `r_rt_ao_range 2`, where only a crease within two units can
+  occlude, 0.74 % (`rt-ao`, `demo1.dm2`), 0.82 % (`demo2.dm2`) and 0.85 % (`rt-ao-entities`,
+  `demo1.dm2`) of traced pixels are occluded, and 0.30 %, 0.33 % and 0.47 % of floor pixels,
+  against 45.4 %, 39.4 % and 47.2 % at the default 128. A pixel that occluded itself would read
+  occluded at any range.
+- *What the pass touches* (the stats line at 128): 99.3 %, 99.9 %, 97.4 % and 95.9 % of pixels
+  are traced world pixels; of them 39 to 47 % read under 1 and 1.6 to 2.0 % at the floor; 24.5
+  to 30.4 % of rays meet an occluder.
+
+### Effect on: the footprint
+
+`scripts/pins.sh footprint` (TASK133), the off replay against the record, the share of the
+picture made darker by more than 8 levels:
+
+| Record | Frames | Median | p90 | Worst (frame) | Mean |
+|---|---|---|---|---|---|
+| `rt-ao`, `demo1.dm2` | 23 | 0.024 | 0.091 | 0.230 (7) | 0.040 |
+| `rt-ao`, `demo2.dm2` every 7th | 89 | 0.016 | 0.092 | 0.385 (30) | 0.036 |
+| `rt-ao-entities`, `demo1.dm2` | 23 | 0.025 | 0.096 | 0.230 (7) | 0.044 |
+| `rt-ao-entities`, `demo2.dm2` every 7th | 89 | 0.015 | 0.091 | 0.383 (30) | 0.037 |
+
+No frame has a brighter pixel. The largest change is 83 levels (`demo1.dm2`) and 72
+(`demo2.dm2`). The players and models of the entities records change the picture by about as
+much as the world alone. Band: `// footprint darker 0..0.5` in both cfgs, 1.3 times the worst
+frame without entities and under the 50 to 70 % of the frame that TASK55's first round
+darkened; with it every frame of the four is inside the band.
+
+### Both effects on
+
+The `rt-shadows` traces (`demo1.dm2`, 23 frames; `demo2.dm2` every 7th, 89) replayed with
+`r_rt_ao 1` and `r_rt_ao_seed 1`, with the shadows off as well, and with `r_rt_shadows_show 1`
+(the mask of no light in range):
+
+- where no dynamic light is in range (5,928,483 and 24,179,352 masked pixels) the frame equals
+  the AO-only frame of the same trace byte for byte, every frame;
+- against the shadows-only frame (`aofloor shadows both 0.4`): no channel under on
+  `demo1.dm2`, 34 on `demo2.dm2` (the same 0.2-level class as above). Where a light is in
+  range 48,146 channels (5 frames, `demo1.dm2`) and 35,254 (13 frames, `demo2.dm2`) come out
+  brighter than the shadows-only frame. Not measured further: the likely cause is RT3's resolve,
+  which takes gl1's store and scales a sum past 1 down by its brightest channel
+  (`mtl_rts_light`), so a static part darkened by the AO leaves the sum less scaled.
+
+### Frames for the owner
+
+Four off/on pairs at 1920 x 1080, replays of one trace each, converted with `sips`, in
+`<artifacts>/TASK57/frames/` (`<n>-off.png`, `<n>-on.png`, and a `README.txt`), never committed.
+They are the frames of `rt-ao-entities` at `demo1.dm2` with the most occluded pixels in the
+classes view: frames 7, 8, 19 and 13, with 1,387,369, 1,376,902, 1,298,073 and 1,232,492
+pixels of 2,073,600 under 1 (84,965, 74,397, 47,482 and 7,923 at the floor).
+
+### Cost
+
+The pass's GPU time per frame, from the compute encoder's timestamps (the `r_rt_stats 2`
+line), over `demo1.dm2` whole, warm (each run's lines past its first 100: 587 frames a run),
+three runs each of `rt-ao` and `rt-ao-entities` alternated, no validation layer:
+
+| Size | Entities | Median (run medians) | p10 | p90 | Max |
+|---|---|---|---|---|---|
+| 1920 x 1080 | off | 3.673 ms (3.630 to 3.673) | 3.096 to 3.166 | 4.599 to 4.718 | 6.748 |
+| 1920 x 1080 | on | 4.102 ms (3.829 to 4.228) | 3.066 to 3.222 | 4.799 to 5.143 | 6.569 |
+| 5120 x 2880 | off | 10.955 ms (10.928 to 11.123) | 9.395 to 9.481 | 11.694 to 11.851 | 13.790 |
+| 5120 x 2880 | on | 10.965 ms (10.909 to 11.144) | 9.352 to 9.372 | 11.786 to 11.871 | 14.303 |
+
+5120 x 2880 is `PINS_HIDPI=1` at 2560 x 1440. Two rays a traced pixel. The third 5120 x 2880
+round overlapped a merge-queue build on the host that did not take the lock; its medians are
+1.5 to 2 % above the first two rounds'. The pass's targets: 2.8 MB at 640 x 480, 19.2 MB at
+1920 x 1080, 135.1 MB at 5120 x 2880.
+
+`timedemo.txt` at 1920 x 1080, `world` and `rt-ao` alternated, three rounds: 60.0, 60.0 and 60.0
+fps off, 60.0, 60.0 and 60.0 on (689 frames in 11.5 s), the display's rate.
+
+### Validation and ASAN
+
+- Validation: 26 effect-on records and replays under `MTL_DEBUG_LAYER=1` (the four records and
+  their off, classes, as-is and range-2 replays, the six of *Both effects on*, the ASAN record)
+  hold the banner and no other validation line; all 37 effect-on logs (those, the factor views
+  and the 1080p runs) end in a matched teardown, `0 live objects`, `0 unreleased, 0 unmatched`,
+  with `rt 73/73` and `52/52` (`rt-ao`, the two demos) and `316/316` and `470/470` (with
+  entities).
+- ASAN: `make ASAN=1 client game ref_metal` (both binaries link the sanitizer's runtime), one
+  `rt-ao` record at `demo1.dm2` with `MTL_DEBUG_LAYER=1`: no sanitizer line, no validation
+  line, the teardown matched (`rt 73/73`), and the 23 frames byte-identical to the release
+  build's.
+
+## The runs as planned
 
 1. **Effect off.** Every scenario recorded on the head with `MTL_DEBUG_LAYER=1`, against
    records of `origin/main` (`718e59d4`) built in scratch with the same settings: the 14
