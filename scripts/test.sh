@@ -40,6 +40,13 @@ cd "$(dirname "$0")/.."
 # The run under the lock comes back here with BENCH_LOCK_ENTRY=gate (cleared
 # at once, so nothing below inherits it) and with the caller's LC_ALL, which
 # bench.sh sets to C.
+#
+# On a TERM, INT or HUP the lock shell gives this run its grace (twice
+# BENCH_STOP_GRACE and at least BENCH_STOP_GRACE + 5 s) before it KILLs it
+# and frees the lock. Stopping the checks takes up to the scheduler's own
+# 10 s (gate_grace in scripts/gate-checks.sh), so the lock shell gets a
+# BENCH_STOP_GRACE of at least 10 (a grace of 20 s); the run under it gets
+# the caller's value back, so the checks see what the caller set.
 lock_entry=${BENCH_LOCK_ENTRY:-}
 unset BENCH_LOCK_ENTRY
 lock_off=
@@ -54,10 +61,69 @@ if [ "$lock_entry" != gate ] || [ -z "${BENCH_LOCK_TOKEN:-}" ]; then
 		lock_off="no state directory (BENCH_STATE, XDG_CACHE_HOME and HOME unset)"
 	else
 		set -- BENCH_LOCK_ENTRY=gate sh "$PWD/scripts/test.sh" "$@"
+		# (not whole seconds: bench.sh refuses it, as before)
+		case ${BENCH_STOP_GRACE:-10} in
+		*[!0-9]*) ;;
+		*)
+			if [ "${BENCH_STOP_GRACE:-10}" -lt 10 ]; then
+				set -- BENCH_STOP_GRACE="$BENCH_STOP_GRACE" "$@"
+				BENCH_STOP_GRACE=10
+				export BENCH_STOP_GRACE
+			fi
+			;;
+		esac
 		if [ -n "${LC_ALL+x}" ]; then set -- LC_ALL="$LC_ALL" "$@"; else set -- -u LC_ALL "$@"; fi
 		exec sh scripts/bench/bench.sh lock run gate -- env "$@"
 	fi
 	echo "test.sh: the host lock is off: $lock_off" >&2
+fi
+
+# Under the lock this run leads a process group of its own (bench.sh starts
+# it so), and its parent is the lock shell: the caller's own pid, which ran
+# this script first, or a host's own holder. A KILL to the caller's process
+# group reaches the lock shell alone, so a watcher (gate_watch_sh, in a
+# process group of its own) polls this run's parent every 0.5 s. Once it is
+# no longer the lock shell, it sends TERM to this run's process group (to
+# this run alone if it leads none): before the makes the trap below runs
+# gate_stop, which ends the scheduler and every check; during a make that
+# make ends with this run. The watcher signals only after ps has shown that
+# this run is still its parent and that this run's parent is another
+# process; then it waits to be stopped. This run stops it on every way out
+# (gate_unwatch, from gate_stop and on EXIT) and waits for it; should this
+# run die by KILL, it sees its own parent go and exits within one poll.
+gate_watch=
+gate_lock_shell=
+gate_watch_sh='trap "exit 0" TERM
+pp() { ps -o "$1=" -p "$2" 2> /dev/null | tr -d " "; }
+on=1
+while kill -0 "$PPID" 2> /dev/null; do
+	sleep 0.5 2> /dev/null || sleep 1
+	o=$(pp ppid $$)
+	[ -z "$o" ] || [ "$o" = "$PPID" ] || exit 0
+	[ -n "$on" ] && [ "$o" = "$PPID" ] || continue
+	l=$(pp ppid "$PPID")
+	[ -n "$l" ] && [ "$l" != "$1" ] || continue
+	on=
+	if [ "$(pp pgid "$PPID")" = "$PPID" ]; then
+		kill -s TERM -- "-$PPID" 2> /dev/null
+	else
+		kill -s TERM "$PPID" 2> /dev/null
+	fi
+done'
+gate_unwatch() {
+	if [ -n "$gate_watch" ]; then
+		kill -s TERM -- "-$gate_watch" 2> /dev/null || kill -s TERM "$gate_watch" 2> /dev/null || :
+		wait "$gate_watch" 2> /dev/null || :
+		gate_watch=
+	fi
+}
+if [ "$lock_entry" = gate ] && [ -n "${BENCH_LOCK_TOKEN:-}" ]; then
+	gate_lock_shell=$PPID
+	trap gate_unwatch EXIT
+	set -m
+	sh -c "$gate_watch_sh" gate-watch "$gate_lock_shell" < /dev/null > /dev/null 2>&1 &
+	gate_watch=$!
+	set +m
 fi
 
 # A warning, not a failure: without the hooks the commit and push guards
@@ -98,9 +164,20 @@ gate_first="check-metalfx-report.sh check-gate-parallel.sh check-pins.sh check-b
 # control ignores both, and so would every check). GATE_PARENT=$$ names
 # this script to it: when this script dies, by any signal (SIGKILL too,
 # which no trap sees), the scheduler sees it within one poll and ends every
-# check, as on SIGTERM.
+# check, as on SIGTERM. Under the lock a SIGKILL to the caller's process
+# group kills the lock shell, not this script: the watcher above sees that
+# and sends this script the SIGTERM, so the same holds there.
 gate_sched=
 gate_stop() {
+	gate_unwatch
+	if [ -n "$gate_lock_shell" ]; then
+		_gp=$(ps -o ppid= -p "$$" 2> /dev/null | tr -d ' ')
+		if [ -n "$_gp" ] && [ "$_gp" != "$gate_lock_shell" ]; then
+			# the caller's output may be a pipe nobody reads any more
+			trap '' PIPE
+			echo "test.sh: the lock shell (pid $gate_lock_shell) is gone; ending every check" >&2 || :
+		fi
+	fi
 	if [ -n "$gate_sched" ]; then
 		kill -s TERM "$gate_sched" 2> /dev/null || :
 		wait
