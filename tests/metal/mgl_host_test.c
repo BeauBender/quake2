@@ -1198,6 +1198,14 @@ test_ring(void)
  * FIX77), on a fake clock: a slot is free from free_at on, and a present
  * on a hung GPU never frees its slot (TEST_NEVER) unless its wait, once
  * ended, lets it complete end_frees later.
+ *
+ * This is the seam only (FIX84): tests/check-metal-shim.sh builds no
+ * mgl_layer.m into this test, so what mgl_layer.m does with the seam is
+ * not held here: that its handlers capture their own context's hold (the
+ * late handler below runs two mgl_hold_t, not two contexts), that
+ * mgl_present_take calls mgl_hold_take, and its waits on the semaphores.
+ * Reverting any of them leaves this test green; the fault probes of
+ * docs/runbook/FIX77.md hold them.
  */
 #define TEST_SLOTS 4
 #define TEST_BOUND 5000   /* MGL_GPU_WAIT_MS, in the fake clock's units */
