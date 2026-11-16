@@ -48,6 +48,8 @@ typedef enum
 	VIDITEM_MFX_SCALE,
 	VIDITEM_MFX_INTERP,
 	VIDITEM_DENOISER,
+	VIDITEM_AO_SCALE,
+	VIDITEM_AO_RAYS,
 	VIDITEM_COUNT
 } viditem_t;
 
@@ -95,7 +97,9 @@ vidrule_t VidRules_Screen(vidplat_t plat, vidscr_t item);
 
 vidref_t VidRules_Renderer(const char *name);
 
-/* enabled and the reason or note of an item; an unknown item is greyed */
+/* enabled and the reason or note of an item; an unknown item is greyed.
+   scaler is the MetalFX scaler's index for the MetalFX items, and for the
+   ray-traced AO's items (VIDITEM_AO_*) whether r_rt_ao is on. */
 vidrule_t VidRules_Item(viditem_t item, const char *renderer, int modemask, int scaler);
 
 /* the cvar an item sets under this renderer, NULL when it sets none */
@@ -122,5 +126,16 @@ int VidRules_ScaleIndex(float value);
 int VidRules_ModeMask(float value);
 int VidRules_ScalerIndex(float value);
 int VidRules_DenoiserIndex(float value);
+
+/* The ray-traced AO's items (TASK157), read as the renderer reads the cvars:
+   r_rt_ao_scale as index 0 (full), 1 (1/2) or 2 (1/3), the nearest to
+   1 / value (1.5 goes to 2, 2.5 to 2), the default 1/2 for 0, below 0, or
+   not finite, and the value of each index (1/2 for one out of range);
+   r_rt_ao_rays as index 0 (1 ray) or 1 (2 rays), the nearest, 2 rays when not
+   finite. */
+int VidRules_NumAOScales(void);
+float VidRules_AOScaleValue(int index);
+int VidRules_AOScaleIndex(float value);
+int VidRules_AORaysIndex(float value);
 
 #endif

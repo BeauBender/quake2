@@ -828,14 +828,16 @@ test_frame_size(void)
  * The resize decision (N10): a change of the frame's size makes both
  * targets again and nothing else; a change of the window's pixels alone
  * sets the drawable's size and makes no target (FIX45); a missing target
- * makes both.
+ * makes both; a depth target of another size than the frame's is made
+ * again with the colour target kept (FIX69: with display sync off the
+ * colour target is a present slot's, already of the frame's size).
  */
 static void
 test_frame_remake(void)
 {
 	const unsigned both = RM_REMAKE_COLOR | RM_REMAKE_DEPTH;
-	rm_frame_held_t held = { 1, 1, 640, 480, 640, 480 };
-	rm_frame_held_t none = { 0, 0, 0, 0, 0, 0 };
+	rm_frame_held_t held = { 1, 1, 640, 480, 640, 480, 640, 480 };
+	rm_frame_held_t none = { 0, 0, 0, 0, 0, 0, 0, 0 };
 
 	CHECK(rm_frame_remake(&held, 640, 480, 640, 480) == 0);
 	CHECK(rm_frame_remake(&none, 640, 480, 640, 480) == (both | RM_REMAKE_DRAWABLE));
@@ -863,6 +865,49 @@ test_frame_remake(void)
 	held.lw = 640;
 	held.lh = 479;
 	CHECK(rm_frame_remake(&held, 640, 480, 640, 480) == RM_REMAKE_DRAWABLE);
+	held.lh = 480;
+
+	/* the depth target of another size on each side, the colour target of the frame's: depth alone */
+	held.zw = 800;
+	CHECK(rm_frame_remake(&held, 640, 480, 640, 480) == RM_REMAKE_DEPTH);
+	held.zw = 640;
+	held.zh = 600;
+	CHECK(rm_frame_remake(&held, 640, 480, 640, 480) == RM_REMAKE_DEPTH);
+
+	/* a new frame size that the colour target already has (a present slot's, remade for it) */
+	held.cw = 800;
+	held.ch = 600;
+	held.zw = 640;
+	held.zh = 480;
+	CHECK(rm_frame_remake(&held, 800, 600, 800, 600) == (RM_REMAKE_DEPTH | RM_REMAKE_DRAWABLE));
+	held.zw = 800;
+	held.zh = 600;
+	CHECK(rm_frame_remake(&held, 800, 600, 640, 480) == 0);
+}
+
+/*
+ * The teardown's line on the presents apart (FIX69): the count, and the
+ * waits for them all to be done that ended at the bound, which an engine
+ * run's log is checked for; an exact fit, one byte short, no room.
+ */
+static void
+test_presents_format(void)
+{
+	rmb_stats_t s;
+	char buf[128];
+	const char *want = "ref_metal: teardown: 4562 presents apart, 0 waits for them past the bound";
+	const char *late = "ref_metal: teardown: 7 presents apart, 1 waits for them past the bound";
+	size_t n = strlen(want);
+
+	memset(&s, 0, sizeof(s));
+	s.presents = 4562;
+	CHECK(rm_presents_format(&s, buf, n + 1) && strcmp(buf, want) == 0);
+	CHECK(!rm_presents_format(&s, buf, n) && strlen(buf) == n - 1);
+	CHECK(!rm_presents_format(&s, buf, 0));
+
+	s.presents = 7;
+	s.present_drains_late = 1;
+	CHECK(rm_presents_format(&s, buf, sizeof(buf)) && strcmp(buf, late) == 0);
 }
 
 /*
@@ -1056,6 +1101,8 @@ test_present_chain(void)
 		held.color = held.depth = 1;
 		held.cw = w;
 		held.ch = h;
+		held.zw = w;
+		held.zh = h;
 		held.lw = s.lw;
 		held.lh = s.lh;
 		/* the next frame of the same window makes nothing again */
@@ -8410,6 +8457,7 @@ main(void)
 	test_ledger_restarts();
 	test_frame_size();
 	test_frame_remake();
+	test_presents_format();
 	test_present_region();
 	test_present_region_inset();
 	test_present_chain();

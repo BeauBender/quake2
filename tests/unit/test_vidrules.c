@@ -15,6 +15,7 @@
  * =======================================================================
  */
 
+#include <math.h>
 #include <string.h>
 
 #include "test.h"
@@ -398,6 +399,92 @@ TEST(vidrules_cvar_values_to_indexes)
 	T_EQ_INT(VidRules_DenoiserIndex(9.0f), 2);
 	T_EQ_INT(VidRules_DenoiserIndex(-1.0f), 0);
 	T_EQ_INT(VidRules_DenoiserIndex(0.0f / 0.0f), 0);
+}
+
+/*
+ * TASK157: the ray-traced AO's trace size and rays. Always shown; greyed
+ * on every renderer but Metal, and on Metal while r_rt_ao is off (the
+ * fourth argument is whether it is on for these two items).
+ */
+TEST(vidrules_ao_items_follow_the_renderer_and_r_rt_ao)
+{
+	static const viditem_t items[] = { VIDITEM_AO_SCALE, VIDITEM_AO_RAYS };
+
+	for (int i = 0; i < 2; i++)
+	{
+		for (int r = 1; r < NREFS; r++)
+		{
+			T_EQ_INT(on(items[i], refs[r], 31, 1), 0);
+			T_EQ_STR(why(items[i], refs[r], 31, 1), "Metal renderer only");
+		}
+
+		for (int m = 0; m <= 31; m++)
+		{
+			T_EQ_INT(on(items[i], "metal", m, 0), 0);
+			T_EQ_STR(why(items[i], "metal", m, 0), "needs r_rt_ao 1");
+			T_EQ_INT(on(items[i], "metal", m, 1), 1);
+			T_EQ_STR(why(items[i], "metal", m, 1), "applies on apply");
+		}
+	}
+
+	T_EQ_STR(VidRules_Cvar(VIDITEM_AO_SCALE, "metal"), "r_rt_ao_scale");
+	T_EQ_STR(VidRules_Cvar(VIDITEM_AO_RAYS, "metal"), "r_rt_ao_rays");
+	T_CHECK(VidRules_Cvar(VIDITEM_AO_SCALE, "gl1") == NULL);
+	T_CHECK(VidRules_Cvar(VIDITEM_AO_RAYS, "soft") == NULL);
+}
+
+/* the choices as the renderer reads the cvars (rm_rtao_div, rm_rtao_rays) */
+TEST(vidrules_ao_settings)
+{
+	/* r_rt_ao_scale: full, 1/2, 1/3 */
+	T_EQ_INT(VidRules_NumAOScales(), 3);
+	T_EQ_INT(VidRules_AOScaleIndex(1.0f), 0);
+	T_EQ_INT(VidRules_AOScaleIndex(0.8f), 0);
+	T_EQ_INT(VidRules_AOScaleIndex(4.0f), 0);
+	T_EQ_INT(VidRules_AOScaleIndex(0.5f), 1);
+	T_EQ_INT(VidRules_AOScaleIndex(0.41f), 1);
+	T_EQ_INT(VidRules_AOScaleIndex(0.39f), 2);
+	T_EQ_INT(VidRules_AOScaleIndex(1.0f / 3.0f), 2);
+	T_EQ_INT(VidRules_AOScaleIndex(0.01f), 2);
+	T_EQ_INT(VidRules_AOScaleIndex(0.0f), 1);          /* the default, 1/2 */
+	T_EQ_INT(VidRules_AOScaleIndex(-1.0f), 1);
+	T_EQ_INT(VidRules_AOScaleIndex(0.0f / 0.0f), 1);
+	T_CHECK(VidRules_AOScaleValue(0) == 1.0f);
+	T_CHECK(VidRules_AOScaleValue(1) == 0.5f);
+	T_CHECK(VidRules_AOScaleValue(2) > 0.333f && VidRules_AOScaleValue(2) < 0.334f);
+	T_CHECK(VidRules_AOScaleValue(-1) == 0.5f);
+	T_CHECK(VidRules_AOScaleValue(3) == 0.5f);
+
+	for (int i = 0; i < VidRules_NumAOScales(); i++)
+	{
+		T_EQ_INT(VidRules_AOScaleIndex(VidRules_AOScaleValue(i)), i);
+	}
+
+	/* r_rt_ao_rays: 1 or 2 */
+	T_EQ_INT(VidRules_AORaysIndex(1.0f), 0);
+	T_EQ_INT(VidRules_AORaysIndex(2.0f), 1);
+	T_EQ_INT(VidRules_AORaysIndex(1.4f), 0);
+	T_EQ_INT(VidRules_AORaysIndex(1.6f), 1);
+	T_EQ_INT(VidRules_AORaysIndex(0.0f), 0);
+	T_EQ_INT(VidRules_AORaysIndex(9.0f), 1);
+	T_EQ_INT(VidRules_AORaysIndex(0.0f / 0.0f), 1);    /* the default, 2 */
+
+	/* the values the renderer reads as not finite or huge (rm_rtao_div and
+	   rm_rtao_rays): not finite is the default, a huge finite one is read
+	   as the value it is (a divisor 1, and 2 rays) */
+	T_EQ_INT(VidRules_AOScaleIndex(-INFINITY), 1);
+	T_EQ_INT(VidRules_AOScaleIndex(INFINITY), 1);
+	T_EQ_INT(VidRules_AOScaleIndex(NAN), 1);
+	T_EQ_INT(VidRules_AOScaleIndex(1e30f), 0);
+	T_EQ_INT(VidRules_AOScaleIndex(3.0e38f), 0);
+	T_EQ_INT(VidRules_AORaysIndex(-INFINITY), 1);
+	T_EQ_INT(VidRules_AORaysIndex(INFINITY), 1);
+	T_EQ_INT(VidRules_AORaysIndex(NAN), 1);
+	T_EQ_INT(VidRules_AORaysIndex(1e30f), 1);
+
+	/* the rounding of 1 / value: 1.5 goes up to divisor 2, 2.5 down to 2 */
+	T_EQ_INT(VidRules_AOScaleIndex(1.0f / 1.5f), 1);
+	T_EQ_INT(VidRules_AOScaleIndex(1.0f / 2.5f), 1);
 }
 
 /*

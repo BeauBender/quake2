@@ -107,6 +107,8 @@ typedef struct
 	 * refused (N7)
 	 */
 	unsigned long sprite_skips, beam_skips, null_skips, bmodel_trans_skips, ent_skips;
+	unsigned long presents;              /* presents handed to the present queue, display sync off (FIX51) */
+	unsigned long present_drains_late;   /* waits for every present to be done that ended at their bound: must stay 0 (FIX69) */
 } rmb_stats_t;
 
 /* A buffer of this size holds every metal_stats line (rm_stats_format, rm_world_format, host-tested). */
@@ -150,6 +152,14 @@ int rm_ledger_format(const rm_ledger_t *l, char *buf, size_t len);
 /* The metal_stats line, without a newline. Returns 1 when it fits, 0 when truncated. */
 int rm_stats_format(const rmb_stats_t *s, const rm_ledger_t *l, char *buf, size_t len);
 
+/*
+ * The teardown's line on the presents apart (FIX69): how many there were,
+ * and how many waits for all of them to be done ended at their bound (0
+ * in a clean teardown). Without a newline; 1 when it fits, 0 when
+ * truncated.
+ */
+int rm_presents_format(const rmb_stats_t *s, char *buf, size_t len);
+
 typedef enum
 {
 	RM_LOAD_CLEAR,   /* cleared to the pass's clear colour */
@@ -190,6 +200,7 @@ typedef struct
 {
 	int color, depth;   /* 1 when the colour and the depth-stencil target exist */
 	int cw, ch;         /* the colour target's size */
+	int zw, zh;         /* the depth-stencil target's size (FIX69) */
 	int lw, lh;         /* the layer's drawableSize */
 } rm_frame_held_t;
 
@@ -200,10 +211,14 @@ typedef struct
 /*
  * What rmb_frame_begin makes again for a frame of w by h (rm_frame_size)
  * on a window of dw by dh pixels: both targets when either is missing or
- * the frame's size changed (rm_targets_rebuild), the drawable's size when
- * the window's changed, and nothing else: the frame rings, the readback
- * buffer, the textures, the pipelines and the samplers are kept through
- * a size change.
+ * the colour target is not of the frame's size (rm_targets_rebuild), the
+ * depth target alone when only it is not (with display sync off the
+ * colour target is a present slot's, made for the frame's size by
+ * rmb_present_take, FIX69), the drawable's size when the window's
+ * changed, and nothing else: the frame rings, the readback buffer, the
+ * textures, the pipelines and the samplers are kept through a size
+ * change. rmb_frame_begin follows this verdict alone; the colour target
+ * it makes again is its own, never a present slot's.
  */
 unsigned rm_frame_remake(const rm_frame_held_t *held, int w, int h, int dw, int dh);
 
