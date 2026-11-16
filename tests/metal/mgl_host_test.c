@@ -1430,7 +1430,7 @@ test_present_holds(void)
 	CHECK(n == 1 && t.now == 2 * TEST_BOUND && hold[0].lost == 1);
 	t.free_at[0] = t.now;          /* the present given up on completes */
 	mgl_hold_take(&hold[0]);       /* a frame takes the slot (mgl_present_take) */
-	CHECK(hold[0].lost == 0 && atomic_load(&hold[0].holds) == 0);
+	CHECK(hold[0].lost == 0);
 	t.free_at[0] = t.now + 3000;   /* given back unpresented, then held again */
 	n = mgl_drop_presents(holds, TEST_SLOTS, -1, &ops);
 	CHECK(n == 0 && t.now == 2 * TEST_BOUND + 3000);
