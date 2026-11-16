@@ -17,10 +17,14 @@
 #     recorded commit are those of the binary's own tree, a binary outside one is said to be unchecked;
 #   - one run per engine binary and per scenarios folder (a directory flock; a held lock is exit 3), a
 #     config.cfg newer than a saved one is kept, a command line over the engine's argument limit costs
-#     only that option's row, pins.sh runs in a process group that SIGTERM ends; under the real host lock
-#     (a stub pins.sh run by scripts/bench/bench.sh lock run, a private BENCH_STATE) a timeout, a SIGTERM
-#     and a Ctrl-C each end the run under the lock, its grandchild included, and leave the lock free (TERM
-#     first, KILL only after the lock's grace, which follows BENCH_STOP_GRACE);
+#     only that option's row, pins.sh runs in a process group that SIGTERM ends;
+#   - the host lock (the real scripts/bench/bench.sh, a private BENCH_STATE, a stub pins.sh that takes it
+#     as scripts/pins.sh does): the generator holds it once for its whole run, so while another job holds
+#     it the generator waits, and no record times out on that wait, and each record and engine run passes
+#     straight through; it is off, with its one line, for the entry points' reasons; a timeout, a SIGTERM,
+#     a Ctrl-C, a second SIGTERM during the stop and a pins.sh that ignores TERM each end the run under the
+#     lock, its grandchild included, and leave the lock free (TERM first, KILL after a wait that follows
+#     BENCH_STOP_GRACE and lands before the lock shell's own KILL);
 #   - the run end to end in a tree copy with a stub scripts/pins.sh: an option's SSIM is below 1, its crop
 #     is not the native one, the crop frame is the middle one by number; nothing touches the checkout;
 #   - the run paths: an existing results folder is refused, --replace empties the old crops, frames

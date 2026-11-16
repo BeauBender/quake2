@@ -15,6 +15,7 @@ runbook applies.
 | `scripts/test.sh` | `gate` | the whole gate: every check and both builds, one hold |
 | `scripts/coverage.sh` | `coverage` | the instrumented build, the run and the report |
 | `scripts/pins.sh record`, `compare`, `replay`, `footprint`, `where`, `make-demo`, `selftest`, `evidence` | `pins-<command>` | the command; a dry run (`PINS_DRYRUN`) takes none |
+| `scripts/metalfx-report/mfx.py run` (`scripts/metalfx-report.sh run`) | `metalfx-report` | the whole report run after its argument checks: the build check, every timed engine run and every `pins.sh record`, which passes straight through |
 
 Each one runs itself again under `scripts/bench/bench.sh lock run
 <label>`. A caller that holds the lock already passes straight through by
@@ -50,10 +51,12 @@ INT or HUP and send KILL only after the lock's grace (twice
 `BENCH_STOP_GRACE`, at least `BENCH_STOP_GRACE` + 5 s). The MetalFX
 report generator (`scripts/metalfx-report/mfx.py`), the one caller in the
 tree that stops a `pins.sh` process group, now does so: on its timeout, a
-SIGTERM or SIGHUP, or Ctrl-C it sends TERM to the group, waits up to the
-lock's grace plus 5 s (25 s at the defaults, read from `BENCH_STOP_GRACE`
-as the lock reads it), then sends KILL, with a second signal held until
-the stop is over. The repository's stop hook stops process groups too,
+SIGTERM or SIGHUP, or Ctrl-C it sends TERM to the group, waits, then
+sends KILL, with a second signal held until the stop is over. Under its
+own hold (review round 2, below) the wait is `BENCH_STOP_GRACE` (10 s at
+the default), so that its KILL lands before the lock shell's KILL of the
+generator; called without one, the lock's grace plus 5 s (25 s at the
+defaults, read from `BENCH_STOP_GRACE` as the lock reads it). The repository's stop hook stops process groups too,
 TERM first, but its checks build nothing and run no entry point.
 
 ## The checks
@@ -89,6 +92,37 @@ running and the lock free. Against the generator before this round, which
 sent KILL first, all three fail: the stub and its grandchild run on and
 the lock stays held (`lock=held label=pins-record ... alive=no`). A
 KILL-first mutant fails the case.
+
+## Review round 2
+
+Two findings, both in the report generator, `scripts/metalfx-report/mfx.py`:
+
+- Each `pins.sh record` took the lock on its own, inside the record's
+  900 s limit, so a wait for another holder could time the record out
+  before `pins.sh` had started. The generator now runs itself again as one
+  hold of `bench.sh lock run metalfx-report` (table above), the way the
+  entry points do, with their off reasons and line. Each record passes
+  straight through, its limit counts the record alone, and the timed
+  engine runs are under the same hold. Under that hold the generator is
+  the lock shell's command and `pins.sh` is its own child, so the
+  generator's stop of `pins.sh` waits `BENCH_STOP_GRACE`, which lets its
+  KILL land before the lock shell's KILL of the generator.
+- Nothing tested the hold of a second signal during the stop.
+
+`tests/check-metalfx-report.sh` now has the lock cases in a group of
+their own (`lock`). The new cases: a holder (`gate`) holds the lock for
+10 s while the generator runs with a record limit cut to 4 s, and the run
+must pass, with both records and every engine run seeing the holder
+`metalfx-report`. Each off reason must give its one line. A second
+SIGTERM sent to the generator's process 1 s after the first, with a stub
+that ignores TERM (`TERM2`), must leave the generator running 1 s later
+and nothing running at the end. A SIGTERM to the lock shell with that
+stub (`deaf`) must leave nothing running and the lock free. Against the
+generator of round 2, the waiting case fails (rc 1, the record timed out,
+the engine saw `label=gate`), and so do the off lines and the wait under
+the hold. The mutants `stop-unheld` (the signal hold gone),
+`stop-wait-outlives-lock` (the longer wait under the hold), `lock-self-off`
+and `lock-off-silent` are each caught.
 
 On the bare-metal host, each run alone under the host's timing lock:
 `tests/check-bench-entry.sh`, mutants included, passed in under a
