@@ -337,6 +337,10 @@ launch)
 			"ref_metal: metal_stats: 31 frames, 0 without a drawable, 0 skipped, 0 failed command buffers, " ;;
 		esac
 	} > "$c/qconsole.log"
+	# no game data: the engine writes only the missing-data text, shows the alert and ends (VID_CheckGameData, Sys_Quit)
+	if [ "$sc" = nodata ]; then
+		printf '%s\n' "Quake II needs its game data. Copy pak0.pak from the baseq2 folder of Quake II into Files > On My iPhone (or iPad) > Quake II > baseq2, then start the game again." > "$c/qconsole.log"
+	fi
 	python3 -I "$(dirname "$0")/fakepix.py" tga "$c/scrnshot/q2_0000.tga" "$sc"
 	[ "$sc" = launchterm ] && trap "" TERM
 	# an app that stays at the console: appstays, and containerhang (the frame wait must end at its limit, not on the app's end);
@@ -641,6 +645,8 @@ EOF
 	st_has run-launch-no-glob nogrep state/launches "+xfile"
 	# a start that ended on its own must show the engine's own quit path in its log, or it was killed or it crashed
 	ST_CMD="run --out @D@/out --no-data" st_case run-app-killed killed fail "does not show its own quit path" 30
+	# no game data: the app writes only the missing-data text and quits; that is its own quit path
+	ST_CMD="run --out @D@/out --no-data" st_case run-missing-data-quits nodata ok "run ok, 1 start(s)" 30
 	ST_CMD="run --out @D@/out --no-data" st_case run-app-crashed crashed fail "does not show its own quit path" 30
 	ST_CMD="run --out @D@/out --no-data --launch +a --launch +b" st_case run-second-start-killed killed fail "start 1: the app ended and engine.1.log does not show" 30
 	# with --shot the script ends the app itself: no quit path is due; an app that ended before the shot is said so
@@ -657,6 +663,12 @@ EOF
 	printf '%s\n' "$spid" > "$sroot/fake-terminate-stale/state/app.pid"
 	printf '%s\n' "sleep 31.1" > "$sroot/fake-terminate-stale/state/app.cmd"
 	FAKE_STATE="$sroot/fake-terminate-stale/state" "$sroot/bin/xcrun" simctl terminate AAAAAAAA-0000-0000-0000-000000000001 com.example
+	# a kill and its reap are asynchronous: give a wrongly sent signal up to 3 s to show before deciding
+	i=0
+	while kill -0 "$spid" 2>/dev/null && [ "$i" -lt 6 ]; do
+		sleep 0.5
+		i=$((i + 1))
+	done
 	if kill -0 "$spid" 2>/dev/null; then
 		echo "ios-sim: selftest: ok fake-terminate-stale"
 	else
@@ -969,6 +981,9 @@ bounded 180 "${tmp:?}/install.out" xcrun simctl install "$udid" "$app" || { cat 
 
 # Com_Quit's line in the engine's log: the app ended through its own quit path
 shutdown_line='----------- shutting down ----------'
+# a start with no game data ends through VID_CheckGameData: it prints this text, shows the alert and quits
+# (Sys_Quit, never Com_Quit), so this line is that quit path
+missing_data_line='Quake II needs its game data.'
 # data_container: the app's data container into $container (fail closed)
 data_container()
 {
@@ -1075,8 +1090,9 @@ if [ "$mode" = run ]; then
 		cp "$docs/qconsole.log" "$out/engine.$n.log"
 		# a start the script ended itself (the shot, then terminate) has no quit path to show; one that
 		# ended on its own did, or it was killed or it crashed (decided from the engine's own log)
-		if [ "$shot_taken" = 0 ] && ! grep -F -x -e "$shutdown_line" "$out/engine.$n.log" >/dev/null; then
-			die "start $n: the app ended and engine.$n.log does not show its own quit path (\"$shutdown_line\"): it was killed or it crashed"
+		if [ "$shot_taken" = 0 ] && ! grep -F -x -e "$shutdown_line" "$out/engine.$n.log" >/dev/null \
+			&& ! grep -F -e "$missing_data_line" "$out/engine.$n.log" >/dev/null; then
+			die "start $n: the app ended and engine.$n.log does not show its own quit path (\"$shutdown_line\", or the missing-data text): it was killed or it crashed"
 		fi
 		if [ -d "$docs/scrnshot" ]; then
 			mkdir -p "$out/frames.$n" && cp "$docs/scrnshot/"* "$out/frames.$n/" 2>/dev/null
