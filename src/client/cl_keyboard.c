@@ -27,7 +27,12 @@
  * =======================================================================
  */
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #include "header/client.h"
+#include "input/header/touch.h"
 
 void Key_ClearTyping(void);
 void IN_GetClipboardText(char *out, size_t n);
@@ -1064,6 +1069,42 @@ Key_Bind_f(void)
 	}
 
 	Key_SetBinding(b, cmd);
+}
+
+/*
+ * iOS only (TASK150): a fresh start, with no config.cfg yet, binds the
+ * gamepad keys that have no binding (the touch controls and a physical
+ * controller both act through them). A binding that is there, from
+ * the game's configuration files or the user's, is never replaced, and
+ * a start with a config.cfg binds nothing: what was unbound stays so.
+ * Elsewhere this does nothing.
+ */
+void
+Key_DefaultPadBinds(void)
+{
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+	const char *key, *cmd;
+	char buf[64];
+	int i;
+
+	if (FS_LoadFile("config.cfg", NULL) >= 0)
+	{
+		return;
+	}
+
+	for (i = 0; Touch_DefaultBind(i, &key, &cmd); i++)
+	{
+		int k = Key_StringToKeynum((char *)key);
+
+		if (k < 0 || k >= K_LAST || (keybindings[k] && keybindings[k][0]))
+		{
+			continue;
+		}
+
+		Q_strlcpy(buf, cmd, sizeof(buf));
+		Key_SetBinding(k, buf);
+	}
+#endif
 }
 
 /*

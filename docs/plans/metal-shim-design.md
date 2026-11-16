@@ -332,7 +332,7 @@ differs from the text above, this list is what the tree does.
   resize) there is nothing shown to read, and the read sees the open
   frame cleared to black, as before: refusing it would not help, because
   gl1's `R_ScreenShot` writes its buffer whatever `glReadPixels` did, and
-  that buffer is uninitialised. The runbook has the evidence.
+  that buffer is uninitialised. The card file [`docs/runbook/FIX42.md`](../runbook/FIX42.md) has the evidence.
 - **Readback.** `glReadPixels` validates before it reads: format
   `GL_RGB`, `GL_RGBA` or `GL_BGRA`, type `GL_UNSIGNED_BYTE`, the
   rectangle inside the target, the pack alignment; otherwise the sticky

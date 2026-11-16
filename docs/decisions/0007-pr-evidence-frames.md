@@ -71,7 +71,7 @@ holds no identity string in its bytes, not what its pixels show.
 - The release assets are served with `application/octet-stream` and
   `content-disposition: attachment`; they show inline because browsers
   read the image type from the bytes inside an `<img>` element. The
-  runbook records what was observed.
+  card files in `docs/runbook/` record what was observed.
 - The pre-release grows with every published set; old sets are deleted
   by hand when their pull requests are closed and no longer need them.
 
