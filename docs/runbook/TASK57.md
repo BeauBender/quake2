@@ -609,6 +609,7 @@ The panel found one Important (I1) and three notes. All four are fixed; the comm
   20000 and 65535 for each of the four numbers, needs 4096, and needs each within 1e-5 of the exact
   value. On `462ad801` (the float code) it fails 32 checks (2048, 1024 or 794, and 256 distinct,
   up to 0.0033 off); from `46293ee7` on it passes (220 checks, 0 failed).
+- **Cppcheck.** The NaN test in `mtl_rtao_factor` now uses `isnan` (`MTL_RTAO_ISNAN`), because Cppcheck flagged the earlier `!(ao >= 0) && !(ao < 0)` as always false; the `rt-ao` records at both demos (23 and 89 frames) are byte-identical to those of `27cdcf83`.
 - **N1.** Design section 2's measured paragraph called the AO rays any-hit rays. They are
   closest-hit, and must be: the falloff needs the nearest occluder's distance (`hit.distance`).
 - **N2.** `RM_RTAO_ShowOnly` is true only when `RM_RTAO_View` handed this frame's view to the back

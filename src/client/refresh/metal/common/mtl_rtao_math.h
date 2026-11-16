@@ -88,11 +88,13 @@ mtl_rtao_v3(float x, float y, float z)
 #define MTL_RTAO_COS cos
 #define MTL_RTAO_SIN sin
 #define MTL_RTAO_FLOOR floor
+#define MTL_RTAO_ISNAN isnan
 #else
 #include <math.h>
 #define MTL_RTAO_COS cosf
 #define MTL_RTAO_SIN sinf
 #define MTL_RTAO_FLOOR floorf
+#define MTL_RTAO_ISNAN isnan
 #endif
 
 /*
@@ -266,7 +268,7 @@ mtl_rtao_ao(float o0, float o1)
 static inline float
 mtl_rtao_factor(float ao, float floor_)
 {
-	if (!(ao >= 0.0f) && !(ao < 0.0f))
+	if (MTL_RTAO_ISNAN(ao))
 	{
 		return 1.0f;
 	}
