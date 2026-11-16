@@ -181,7 +181,7 @@ twice, with the probe and without (`make -j4 client game ref_metal`, then
 the probe; every rate is from the probe builds.
 
 **When, and the load.** The bare-metal host of the earlier rounds (below),
-on 2026-11-15 from 16:07 to 17:15. Before every run the screen was
+on 2026-11-15 from 16:07 to 17:33. Before every run the screen was
 unlocked, no other `quake2` ran and this lane held the timing lock; each
 batch took the lock when it was free and released it at its end, none held
 for more than two minutes. The one-minute load at the batches' starts and
@@ -279,15 +279,21 @@ runs above:
   786.1 to 803.1 frames a second, short of the cap, so its GPU is full;
   19 to 32 frames a run found every slot held, and a present took 1.251 to
   1.300 ms of GPU time at the median, against 0.820 to 0.830 in
-  `ref_metal`. Capping its rendering near before's rate does not bring it
-  up: with `vid_maxfps 420` (three runs, 17:14 to 17:15, load 5.44 to
-  5.94) it rendered 419.5 to 419.6 and presented 375.2 to 388.9 a second,
+  `ref_metal`. Capping its rendering near before's rate does not raise it:
+  with `vid_maxfps 420` (three runs, 17:14 to 17:15, load 5.44 to 5.94,
+  a batch that may have overlapped builds another lane ran without the
+  lock) it rendered 419.5 to 419.6 and presented 375.2 to 388.9 a second,
   no frame found every slot held, a present took 0.547 to 0.567 ms, and
-  260 to 413 of its 2812 to 2832 frames found no drawable ready. So the
-  shortfall is not the GPU time of the frames that are not presented: the
-  window server hands drawables back to the shim's new loop more slowly
-  than to the old loop, which draws each frame into its drawable. Why was
-  not found.
+  260 to 413 of its 2812 to 2832 frames found no drawable ready. Run again
+  at 17:32 to 17:33 (load 2.47 to 3.37), alternated with before under the
+  same cap: after 378.6 to 396.4 a second, before 390.1 to 402.7, the
+  ranges overlapping; after again found no slot held and no drawable ready
+  for 203 to 311 of 2835 to 2847 frames, at 0.544 to 0.556 ms a present.
+  So the shortfall is not the GPU time of the frames that are not
+  presented: with the cap the GPU has room and no frame waits for a slot,
+  yet the drawables do not come back to the new loop faster than the old
+  loop, which draws each frame into its drawable, presents. Why was not
+  found.
 - **640x480 windowed**: no frame found every slot held, and before and
   after overlap in all three own-pace batches, so the window server's
   pace of handing drawables back limits both loops there, as round 2
@@ -374,8 +380,8 @@ binary beside its own renderer modules (`PINS_BIN`), 17:06 to 17:15, load
 --bad-threshold 0`: 23 frames each, 0 failed, worst score 0, worst bad 0;
 all 414 frame files are byte for byte equal (`cmp`).
 
-**Not measured in round 3.** Why the window server hands drawables back to
-the shim's new loop more slowly at 5120x2880; whether the console
+**Not measured in round 3.** Why the shim's new loop at 5120x2880 gets
+drawables no faster than its old loop presents them; whether the console
 shortfall at 640x480 holds at a lower load; what keeps the window
 server's pace at 640x480 so variable (one run of each loop reads 238.0 to
 470.0); `ref_gl1`'s presented frames at swap interval 0 (as in round 2:
