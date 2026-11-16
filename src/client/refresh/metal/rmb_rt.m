@@ -887,10 +887,12 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 				 * A model that carries a light has its own mask: the shadow rays of
 				 * that light test it apart and pass it. Every instance but the view
 				 * weapon and the viewer's own model also has the AO rays' bit (RT5)
-				 * and the reflection rays' (RT6, TASK58), each its own.
+				 * and the reflection rays' (RT6, TASK58), each its own; of those,
+				 * the map's (the world, the inline brush models) also carry
+				 * MTL_RTW_MASK_MAP, which alias models do not (TASK158).
 				 */
-				desc[j].mask = mtl_rtw_inst_mask(mtl_rtao_inst_mask(mtl_rts_inst_mask(carry), inst[i].noao),
-					inst[i].noao);
+				desc[j].mask = mtl_rtw_inst_mask_ws(mtl_rtao_inst_mask(mtl_rts_inst_mask(carry), inst[i].noao),
+					inst[i].noao, inst[i].kind == RM_RT_INST_ALIAS);
 			}
 
 			j++;

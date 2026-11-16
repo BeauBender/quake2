@@ -861,14 +861,21 @@ rm_rtw_trace_ws(depth2d<float, access::read> depth [[texture(0)]],
 			hit = isect.intersect(ray(o, r3, 0.0f, MTL_RTW_FAR), ias, MTL_RTW_MASK);
 
 			/*
-			 * TASK158: a model the picture does not show (off the screen or
-			 * hidden) is passed and the ray goes on, at most MTL_RTW_LAYERS
-			 * hits: a model is shaded only as the picture shows it, so a hidden
-			 * one neither reflects nor leaves a hole in the world-space
-			 * reflection behind it (nothing hidden is revealed by its shape).
+			 * TASK158: an alias model the picture does not show (off the screen
+			 * or hidden) is passed and the ray goes on (mtl_rtw_ws_next): after
+			 * MTL_RTW_LAYERS model faces with the map's instances alone
+			 * (MTL_RTW_MASK_MAP), so it ends where it would end without the
+			 * models. A model is shaded only as the picture shows it, so a
+			 * hidden one neither reflects nor leaves a hole in the world-space
+			 * reflection behind it. Hidden brush models (doors, plats) are map
+			 * faces and are shaded in world space.
 			 */
+			uint qmask = MTL_RTW_MASK;
+			int map = 0;
+
 			for (int layer = 0; ; layer++)
 			{
+				int step;
 				uint b = 0xffffffffu;
 
 				kind = on = face_ok = 0;
@@ -926,13 +933,20 @@ rm_rtw_trace_ws(depth2d<float, access::read> depth [[texture(0)]],
 
 				/* the picture where it shows the hit (cheaper and exact), else world space */
 				from = mtl_rtw_choose_ws(kind, on, qm, off, hd, face_ok, v.sky != 0);
+				step = mtl_rtw_ws_next(kind, b == 0xffffffffu, from, layer, map);
 
-				if ((kind != 2) || (b != 0xffffffffu) || (from != MTL_RTW_MISS) || (layer + 1 >= MTL_RTW_LAYERS))
+				if (step == MTL_RTW_NEXT_STOP)
 				{
 					break;
 				}
 
-				hit = isect.intersect(ray(o, r3, hit.distance + 0.01f, MTL_RTW_FAR), ias, MTL_RTW_MASK);
+				if (step == MTL_RTW_NEXT_MAP)
+				{
+					qmask = MTL_RTW_MASK_MAP;
+					map = 1;
+				}
+
+				hit = isect.intersect(ray(o, r3, hit.distance + 0.01f, MTL_RTW_FAR), ias, qmask);
 			}
 
 			if ((from == MTL_RTW_LIT) || (from == MTL_RTW_SKY))

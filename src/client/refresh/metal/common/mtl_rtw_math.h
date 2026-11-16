@@ -455,7 +455,7 @@ mtl_rtw_ws_next(int hit, int alias, unsigned from, int layer, int map)
 		return MTL_RTW_NEXT_STOP;
 	}
 
-	return (layer + 1 < MTL_RTW_LAYERS) ? MTL_RTW_NEXT_PASS : MTL_RTW_NEXT_STOP;
+	return (layer + 1 < MTL_RTW_LAYERS) ? MTL_RTW_NEXT_PASS : MTL_RTW_NEXT_MAP;
 }
 
 /*
