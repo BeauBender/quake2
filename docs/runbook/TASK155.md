@@ -201,3 +201,16 @@ raised and the caller's not given back (`t_grace`). Against the
 the check, the scheduler and the make outlive the KILL and no reason is
 given, in `t_grace` the check and the scheduler outlive the lock shell,
 and in `t_nested` there is no watcher.
+
+Each run alone under the host's timing lock: `tests/check-bench-entry.sh`,
+29 mutants included, passed in under 2 min, and again as a background job
+with SIGINT ignored; `tests/check-gate-parallel.sh` passed (21 cases, 57
+mutants; with SIGINT ignored, 55 and 2 skipped), as did
+`tests/check-bench.sh`, `tests/check-doc-links.sh`,
+`tests/check-no-local-identity.sh` and `make test` (173 tests). The full
+gate, under its own hold with a temporary `BENCH_STATE` (empty again
+afterwards, no lock-off line), passed in 414 s, its 33 checks in 410 s,
+6 at a time. A first run before it failed one check, `check-bench.sh`, on
+its `t_lock_stop` assertion that the lock shell prints no job notice: a
+self-test of the bench core, which this change does not touch. It passed
+alone just before and in the second run.
