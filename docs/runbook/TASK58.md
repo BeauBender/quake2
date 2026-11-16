@@ -13,8 +13,10 @@ TASK20's static-link mode, TASK111's MetalFX scalers and FIX51).
 **Status.** The pass, its cvars, its host test, the scenarios and the documentation are in the
 branch, and the engine runs are made (*Runs on the bare-metal host*): with the effect off every
 scenario is byte-identical to `origin/main`; with it on every pixel outside the water is
-byte-identical to the effect off, alone and with the shadows and the AO on. The pins are not
-recorded: the owner accepts the look first (design section 5).
+byte-identical to the effect off on the same G-buffer path (`r_rt_gbuffer 1`), alone and with
+the shadows and the AO on, and within one level of a colour channel of the default path, the
+effect off with `r_rt_gbuffer 0` (*Review round 1*). The pins are not recorded: the owner
+accepts the look first (design section 5).
 
 **The merge.** TASK57's own files are main's (its review fixes: the noise in fixed point, the
 view cleared each frame). The shared hookups keep every card's behaviour, in the order the hit
@@ -132,7 +134,8 @@ which is the safe side.
 
 ## The host test
 
-`tests/metal/rm_rtwater_test.c`, run by `tests/check-ref-metal.sh` (193 checks):
+`tests/metal/rm_rtwater_test.c`, run by `tests/check-ref-metal.sh` (196 checks since review
+round 1):
 
 - *The material mask.* Of the 256 ids only 3 is a water pixel; the eye ray finds water at 3,
   passes 5 and alias models, stops at every other id; the map's ids are the G-buffer's numbers;
@@ -140,7 +143,8 @@ which is the safe side.
   (a pane 8 units in front, or a face behind, does not).
 - *The warp's phase.* The table is gl1's over its largest value; over 200,000 coordinates and
   times of a map and a session the float index is gl1's double one but within a float's error of
-  a table step, where it is one step off; truncation toward 0 then the two's complement mask.
+  a table step, where it is one step off; truncation toward 0 then the two's complement mask;
+  index 0 at 2^31 and beyond, where the value is taken modulo 256 before the cast.
 - *The direction.* qbsp's axes for each face; the tilted normal a unit vector within `atan(2
   amp)` of the flat one, the flat one at amplitude 0; the reflection a unit vector, at least
   `MTL_RTW_MIN_COS` above the plane, the mirror direction with the flat normal, a grazing one
@@ -228,7 +232,10 @@ trace, so they are at the same warp time.
 | `rt-water`, 1920 x 1080, every 30th | 5 | 5 | 1,241,463 to 1,272,670 of 2,073,600 | 800,930 to 832,137 |
 | `rt-water-entities`, every 30th and 7th | 25 | 25 | as `rt-water` | as `rt-water` |
 
-**Every pixel outside the water is byte-identical to the effect off, on every frame.** The
+**Every pixel outside the water is byte-identical to the effect off on the G-buffer path
+(`r_rt_gbuffer 1`), on every frame.** Against the default path (`r_rt_gbuffer 0`) up to 17 % of
+them are one level of a colour channel off, the G-buffer path's own difference (*Review round
+1*). The
 HUD's pixels over the water (about 2,000 a frame) are white in the mask, as the 2D is drawn
 over the view, and unchanged. `rt-water-entities` draws the same frames as `rt-water` on this
 camera path (no entity is in view: `rt 49/49` in both).
@@ -325,3 +332,89 @@ and 60.2 fps off, 60.1, 60.0 and 60.2 on (140 frames in 2.3 s), the display's ra
   `rt-water` record at `water.dm2` with `MTL_DEBUG_LAYER=1`: no sanitizer line, no validation
   line, the teardown matched (`rt 49/49`), and the 5 frames byte-identical to the release
   build's.
+
+## Review round 1
+
+The panel on `348b8671` found one Important (a documentation claim) and five notes. Engine
+commit measured: `55d4c61e` (pin ids `55d4c61ea8ab-*`), the code fixes below; the commits after
+it change only `doc/040_cvarlist.md` and this file. Every engine run checked that the screen was
+unlocked and that no other `quake2` ran, held the shared timing lock (`tools/heavy.sh`, one hold
+a run, at most about 25 seconds), and is `PINS_SEED=1` under `MTL_DEBUG_LAYER=1`; the one-minute
+load was 1.6 to 6.2 (other lanes share the host). No time was measured. The views compared
+within one record are replays of its trace with cvars rewritten, as in *Runs on the bare-metal
+host*. Logs, tools and lists are in `<artifacts>/TASK58/rework1/`.
+
+### The fixes
+
+- **I1, the non-water pixels.** `r_rt_water` puts the view on the G-buffer path, which
+  `r_rt_gbuffer`'s own entry gives as within one level of a colour channel of the default path,
+  and the masked comparison above was made against the effect off on that same path. Measured
+  against the default path (`r_rt_water 0` with `r_rt_gbuffer 0`, the picture a user without the
+  effect sees), on the `rt-water` traces, under the water mask, `framediff --footprint --delta 0`:
+
+  | Record | Frames | Non-water pixels a frame | Share of them differing, per frame | Largest channel change |
+  |---|---|---|---|---|
+  | every 30th | 5 | 179,683 to 183,832 | 0.1338 to 0.1662 | 1 level |
+  | every 7th | 20 | 179,113 to 183,926 | 0.1335 to 0.1667 | 1 level |
+  | 1920 x 1080, every 30th | 5 | 1,241,463 to 1,272,670 | 0.1350 to 0.1723 | 1 level |
+
+  The same pixels differ between the two off views (the default path against `r_rt_gbuffer 1`,
+  under the mask: the same counts), and against the G-buffer off view the effect changes none
+  of them (score 0 on all 30 frames, as before). So a pixel that is not water moves by at most
+  one level when the effect is switched on, and only because of the path. The `r_rt_water`
+  entry now says "as with `r_rt_gbuffer 1`: within one level of a colour channel of the picture
+  without the effect", and *Status* and the masked comparison above name the path.
+- **N1, the warp index's range guard.** It matters only at `|x|` of 2^31 and beyond, which the
+  engine's inputs do not reach (`cl.time` wraps at 2^31 ms); kept, so the shared function is
+  defined for every finite input. The host test now checks the index there for both signs of
+  the coordinate and the time (196 checks). A copy without the guard (`t = t + 0.0f;`) fails it:
+  under the sanitizers of `tests/check-ref-metal.sh` UBSan stops at the cast ("2.15946e+09 is
+  outside the range of representable values of type 'int'"), and without them the check fails
+  (`195 checks, 1 failed`; the cast gives 255 on arm64).
+- **N2, each show view its own.** With `r_rt_shadows_show` or `r_rt_ao_show` on (their views
+  are handed over first), `RM_RTW_View` hands the back end no view, so the reflections are
+  neither traced nor blended over that view. Red first: the `rt-shadows` trace at `demo2.dm2`
+  (every 7th, 89 frames, opaque water in 4 of them) replayed by the pre-fix build (an export of
+  `348b8671`), each show view with `r_rt_water 1` against `0`: `r_rt_shadows_show 1` differed in
+  1 frame (3,148 pixels, up to 127 levels), `r_rt_ao_show 1` (with `r_rt_ao 1`, `r_rt_ao_seed 1`)
+  in 4 frames (14,326 pixels, up to 128 levels). On the fix both are byte-identical with and
+  without the water on all 89 frames, and equal to the pre-fix build's view without it; on the
+  `rt-water` trace too (5 of 5).
+- **N3, show-only after a drawn view.** `RM_RTW_ShowOnly` now also needs `rmb_rtw_shown()`: the
+  back end drew this view's `r_rt_water_show` view, after a dispatched trace. A trace that cannot
+  bind its scene, materials or geometry leaves the forward pass in, so the frame is drawn as
+  without the reflections rather than as the bare resolve. Traced only; no engine run reaches
+  that failure.
+- **N4, the view ended on every path.** `rmb_gbuf_view_end` calls `rmb_rtw_view_end()` before its
+  early return for a pass that did not open, so the translucent pipeline cannot survive into a
+  second view of the frame. Traced only, as the finding.
+- **Security N1, the fragment reads bounded.** `rm_fragment_rtw_blend` discards a pixel outside
+  the reflection or the material texture before any read, and `rm_fragment_rtw_show` draws one
+  outside the reflection as a pixel without water, as `rm_fragment_rtw_trans` already checks.
+  The textures are the target's size, so no pixel takes the new branch.
+
+### Results
+
+- *Effect off.* The 28 records of *Effect off* (the 18 scenarios at `demo1.dm2`, `rt-shadows`,
+  `rt-shadows-entities`, `rt-ao` and `rt-ao-entities` at `demo1.dm2`, the same four and
+  `dlights` at `demo2.dm2` every 7th, `skywater` at `water.dm2`) against main's stored records at
+  `ddbfb6ff` (`<artifacts>/baselines/ddbfb6ff88b8/pins/`, not recorded again): **945 of 945
+  frames byte-identical**, `rt 0/0` for the 19 records without an effect, and `rt-shadows`
+  77/77 and 56/56, with entities 320/320 and 474/474, `rt-ao` 73/73 and 52/52, with entities
+  316/316 and 470/470, as main's.
+- *`rt-water`.* The five records (every 30th, every 7th, 1920 x 1080, and `rt-water-entities`
+  every 30th and 7th) against this lane's at `d89bf519`: **55 of 55 frames byte-identical**
+  (`rt 49/49`). The `rt-water` cfg's settings hash changed with its footprint band comment, so
+  those three ids differ from `d89bf519`'s (`1494551982`, `3849274443` and `1964917750` for
+  `1104553152`, `833530645` and `2175638925`); the companion's are the same. The replays of the
+  new traces are byte-identical to `d89bf519`'s too: the masks (`r_rt_water_show 1`, 30 frames),
+  the G-buffer off views (30), the classes view (`r_rt_water_show 2`, 5), and every effect on
+  (`r_rt_shadows 1`, `r_rt_ao 1`, `r_rt_ao_seed 1`, `r_rt_water 1`: 5 frames on `water.dm2`, `rt
+  65/65`, and the 89 of the `demo2.dm2` `rt-shadows` trace, `rt 71/71`).
+- *Validation.* All 58 logs of this round (33 records, 25 replays, the 4 of the pre-fix build
+  among them) hold the validation banner and no other validation line, and end in a matched
+  teardown, `0 live objects` and `0 unreleased, 0 unmatched`: with every effect on, each show
+  view with the water on (`rt 56/56` and `54/54` on `water.dm2`, `62/62` and `69/69` on
+  `demo2.dm2`) and the water's own show views.
+- *Cost.* Not measured: the bound checks add a compare or two a pixel to two full-screen draws,
+  N2 removes the pass from a frame that shows another pass's view, and N3 and N4 add a flag.

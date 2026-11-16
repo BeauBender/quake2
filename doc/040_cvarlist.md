@@ -1048,10 +1048,13 @@ is.
   and the water there is drawn as before. The reflection is mixed into
   the water's colour by `r_rt_water_reflect`; translucent water keeps
   its transparency. The rays meet the world, the doors and platforms and
-  the models, but not the view weapon or the player's own model. Every
-  pixel that is not water is drawn as without it. Needs a GPU with ray
-  tracing and draws the view through the G-buffer (see `r_rt_gbuffer`) on
-  a map with water; on a map without water it does nothing. With `0`
+  the models, but not the view weapon or the player's own model. Needs a
+  GPU with ray tracing and draws the view through the G-buffer (see
+  `r_rt_gbuffer`) on a map with water, so every pixel that is not water is
+  drawn as with `r_rt_gbuffer 1`: within one level of a colour channel of
+  the picture without the effect. On a map without water it does nothing.
+  With `r_rt_shadows_show` or `r_rt_ao_show` on, that view is shown without
+  the reflections. With `0`
   (the default) nothing is traced or allocated and the picture is as
   without ray tracing. Saved with the configuration; applies from the
   next frame.
