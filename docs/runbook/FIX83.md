@@ -198,4 +198,10 @@ follows it (see `git log`):
   fork runs with standard error on `/dev/null`, the command gets the
   caller's standard error, and the caller's fd 9 does not reach it.
 
-Checks are listed below the commit line.
+Checks follow.
+
+Checks of round 1, each through the host lock, all passing:
+
+- `tests/check-bench.sh` inside a wrapper that lists its process group after it ends: ok, nothing left in the group (a first run showed only the shutdown of a mutant's holder still in progress, gone four seconds later; the 30 s `sleep` of the old probe is gone);
+- the same as a background job with SIGINT ignored, `(trap '' INT; exec tests/check-bench.sh) & wait`: ok, no "stopped what the command left running" line from the outer lock, and nothing in the group at the end or four seconds later;
+- `tests/check-bench-entry.sh`, `tests/check-doc-links.sh`, `tests/check-no-local-identity.sh`: ok.
