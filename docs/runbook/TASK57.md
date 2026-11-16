@@ -18,7 +18,8 @@ shadows-only frame are gl1's rule for a light sum past 1 (normalise by the brigh
 channel), applied to the AO'd lightmap term; the resolve already follows it. The `rt-ao`
 pins are not recorded: the owner accepts the look first. Main's TASK131 (the shadows' surface
 attachment) is merged in and the engine results re-verified on the merge (*After merging
-TASK131*).
+TASK131*). Review round 1 made the noise exact at every frame and added three small guards
+(*Review round 1*).
 
 ## What it does
 
@@ -73,7 +74,8 @@ lightmap itself (there is no separate term), and the AO scales them with it.
   initial pattern from a fixed generator, so the tile is the same on every run and host. A
   pixel's four numbers (two rays, azimuth and elevation) are the tile at four offsets
   (`mtl_rtao_tile_index`), each moved on per frame by a constant of the R2 and R4 sequences and
-  wrapped (`mtl_rtao_noise`). With `r_rt_ao_seed` 1 or more the frame is that seed on every
+  wrapped (`mtl_rtao_noise`, in 32-bit fixed point, so every frame keeps the tile's 4096 values
+  apart). With `r_rt_ao_seed` 1 or more the frame is that seed on every
   frame, so the frames are stateless (the scenarios set 1); with `0` the noise moves on every
   frame. Without RT7's accumulation the darkening is grainy.
 - *Where it does nothing.* Models (their vertex light), water, the sky and `r_fullbright`
@@ -94,7 +96,7 @@ the pass's GPU time.
 
 ## The host test
 
-`tests/metal/rm_rtao_test.c`, run by `tests/check-ref-metal.sh` (164 checks):
+`tests/metal/rm_rtao_test.c`, run by `tests/check-ref-metal.sh` (220 checks since review round 1):
 
 - *An open plane reads AO 1.* For 400 views (eye at random, planes of every orientation facing
   it, 8 to 3,000 units away, at grazing angles too), 40 pixels each: the true point on the plane
@@ -110,6 +112,9 @@ the pass's GPU time.
 - The tile is a permutation, the same on every call, blue (no two of the first sixteenth of the
   ranks within 2.8 pixels, of the first tenth within 2; every 8 x 8 block's mean rank within 0.03
   of the middle, where white noise gives about 0.09).
+- The noise keeps the tile's 4096 ranks distinct at frames 0, 1, 2047, 2048, 4096, 20000 and
+  65535, each number within 1e-5 of the exact rank centre plus the frame's steps, wrapped
+  (*Review round 1*).
 - The directions are unit vectors, at least `MTL_RTAO_MIN_COS` above the plane, the two rays'
   azimuths opposite, the mean cosine 2/3 (cosine-weighted).
 - The instances: with `r_rt_gunshadow 1` the gun and a `RF_VIEWERMODEL` entity are instances
@@ -575,6 +580,137 @@ ok. Builds: `make client`, `make -B ref_metal` with and without `METAL_SHADERS=n
 WITH_METAL_SHIM=yes` and `make ASAN=1 client game ref_metal`: no error, and no warning in a file
 of either card (the ASAN build's eight are the `sprintf` deprecations of common, client, game and
 server files and the vendored `stb_vorbis.h`'s).
+
+## Review round 1
+
+The panel found one Important (I1) and three notes. All four are fixed; the commits are
+`462ad801` (the failing test), `46293ee7` (I1), `35ba2c7a` (N2, N3) and `27cdcf83` (N1).
+
+### The fixes
+
+- **I1, the noise past frame 2^11.** `mtl_rtao_noise` formed `fract(base + frame x step)` in one
+  float. Past frame 2^11 the float's step at `frame x step` is coarser than a rank's, 2^-12, so
+  neighbouring ranks rounded to one number: of the 4096 ranks, 2048 distinct at frame 4096, 1024
+  (794 for the fourth number) at 20000 and 256 at 65535. With `r_rt_ao_seed 0` the frame is the
+  view count, so unseeded play lost the tile's stratification after about 68 s at 60 fps. The
+  number is now formed in 32-bit fixed point: the rank's centre `rank x 2^20 + 2^19`, plus
+  `frame x step`, the step being each constant times 2^32, rounded (`mtl_rtao_dim_step`), all
+  unsigned, so the sum and the product wrap modulo 2^32, which is the wrap itself. The number is
+  the sum's top 24 bits times 2^-24. This is the exact choice of the two the card offered. Every
+  step is integer arithmetic, a 24-bit integer is exact in a float and 2^-24 is a power of two, so
+  the kernel and the host compute the same bits, with fast math or without. One shift added to
+  every rank is a bijection of the 32-bit values, and two ranks stay at least 2^20 apart, so every
+  frame keeps the 4096 numbers distinct. The other choice, `fract(base + fract(frame x step))`,
+  also keeps them apart, but its shift is a rounded float product (up to 2^-9 off at frame 65535)
+  that a fused multiply-add could round another way on the GPU. The kernel (`rm_rtao.metal`) calls
+  the same header function with the same `uint` frame and tile rank, so the shader and the host
+  agree. The comment that said a float stayed exact enough is replaced. **Test:**
+  `rm_rtao_test.c` counts the distinct values over all ranks at frames 0, 1, 2047, 2048, 4096,
+  20000 and 65535 for each of the four numbers, needs 4096, and needs each within 1e-5 of the exact
+  value. On `462ad801` (the float code) it fails 32 checks (2048, 1024 or 794, and 256 distinct,
+  up to 0.0033 off); from `46293ee7` on it passes (220 checks, 0 failed).
+- **N1.** Design section 2's measured paragraph called the AO rays any-hit rays. They are
+  closest-hit, and must be: the falloff needs the nearest occluder's distance (`hit.distance`).
+- **N2.** `RM_RTAO_ShowOnly` is true only when `RM_RTAO_View` handed this frame's view to the back
+  end (`ao_viewed`). When the view's inverse or the outputs fail nothing is traced, so the forward
+  pass is drawn as without the AO, not left out.
+- **N3.** `RM_RTAO_Frame` clears the back end's view at the start of every frame
+  (`rmb_rtao_set_view(NULL)`), so a view set and not traced cannot reach a later G-buffer view in
+  which the AO is wanted but not active.
+- *No host test for N2 and N3.* The host test links the pure part, `rm_rtao.c`. Both decisions are
+  in `rm_rtaoscene.c`, which needs the refresh's `ri`, its cvars and the back end. A test would need
+  them moved into `rm_rtao.c`, outside this round's files.
+
+### Results
+
+Engine commit measured: `27cdcf83` (pin ids `27cdcf8379c4-*`). Its `src/` is `35ba2c7a`'s; the
+commit after it changes only this file. Host: the bare-metal host (Apple M6). Every build, check
+and engine run went through the host's lock wrapper. Before each run the batch checked that the
+screen was unlocked and that no other `quake2` ran, and it logged the one-minute load: 1.9 to 3.5
+over the records and replays. Every record and replay ran under `MTL_DEBUG_LAYER=1`, seeded
+(`PINS_SEED=1`). The logs and the tools are in `<artifacts>/TASK57/rework1/`.
+
+- *Effect off.* The 23 records of *After merging TASK131* (the 18 default scenarios,
+  `dlights` at `demo2.dm2` every 7th, `rt-shadows` and `rt-shadows-entities` at both demos), against
+  the stored records of `origin/main` at `c9ecf7d7`. **716 frames, every one byte-identical.**
+  `rt 0/0` for the 19 records without an effect, `rt 77/77`, `56/56`, `320/320` and `474/474` for
+  the shadows.
+- *AO on, the floor check.* `rt-ao` and `rt-ao-entities` at `demo1.dm2` (23 frames) and `demo2.dm2`
+  every 7th (89), each against a fresh off replay of its own trace (`r_rt_ao 0`, `r_rt_gbuffer 1`),
+  with `aofloor off on 0.4` and the derived allowance. All 224 frames pass, with 0 channels under
+  and 0 brighter. The smallest on / off is 0.353 (`demo1.dm2`) and 0.348 (`demo2.dm2`), and the
+  largest `0.4 x off - on` is 1.0 and 1.2 levels, as before. The four off replays are
+  byte-identical to `e37d89bb`'s.
+- *AO on, against the lane's records at `e37d89bb`.* 74 of the 224 frames differ, in 88 pixels.
+  80 differ by one level, 1 by 2 and 7 by 3 to 9:
+
+  | Record | Frames that differ | Pixels | By 1 | By 2 | By 3 or more | Largest |
+  |---|---|---|---|---|---|---|
+  | `rt-ao`, `demo1.dm2` | 7 of 23 | 10 | 10 | 0 | 0 | 1 |
+  | `rt-ao`, `demo2.dm2` every 7th | 30 of 89 | 34 | 30 | 1 | 3 | 9 |
+  | `rt-ao-entities`, `demo1.dm2` | 7 of 23 | 9 | 9 | 0 | 0 | 1 |
+  | `rt-ao-entities`, `demo2.dm2` every 7th | 30 of 89 | 35 | 31 | 0 | 4 | 9 |
+
+  *Why.* The scenarios draw the noise at frame 1 (`r_rt_ao_seed 1`), where the old and new numbers
+  differ by at most 2^-24 (6.0e-8; the host, over every rank and number), the float sum's last
+  bit. That turns a ray by at most about 2e-7 radians. A pixel differs by one level where the
+  factor or a hit distance moved across a rounding of the 8-bit output. It differs by more where
+  one of its two rays now meets another surface: a ray that grazes an edge. The factor views
+  (`r_rt_ao_show 1`) of the two `demo2.dm2` traces, replayed on the head and on an export of the
+  start point `48628e50`, show this. Each pixel off by more than one level is a single pixel whose
+  factor changed while its eight neighbours' did not. In `rt-ao`, frame 0 (171, 30) is off by 9
+  (factor 220/255 before, 153 now), frame 2 (472, 386) by 5 (255 to 178), frame 21 (317, 336) by 2
+  (253 to 225) and frame 66 (599, 455) by 3 (255 to 128). `rt-ao-entities` has the same frames 0,
+  2 and 66, and frame 13 (454, 318) by 3 (171 to 255). The two replays' stats lines (617 frames
+  each, every rendered frame of the trace) agree. 73 frames (79 with entities) differ, by at most
+  one occluded pixel and one hit a frame. Over the run the hits are 92,849,223 before and
+  92,849,226 now, of 378,845,404 rays (94,218,973 and 94,218,966 of 363,410,208 with entities).
+- *The long unseeded run.* `base1` at 640 x 480, the game paused (the view still), `r_rt_ao 1`,
+  `r_rt_stats 2`, vsync off (about 435 frames a second), no frame captured. With `r_rt_ao_seed
+  5000` first (4,570 frames), the counts are the same on every frame but for the first three, while
+  the pause takes hold: the view is still, and one noise frame gives one count. Then `r_rt_ao_seed
+  0` for 22,439 frames, the noise's frames from at least 4,570 to at least 27,008. On every frame
+  the traced and floor-facing pixel counts are the same (the still view). The occluded count
+  changes from one frame to the next on 22,410 of 22,438 frames, and the hits on 22,397 (1,244
+  distinct occluded counts, 81,252 to 82,823). So past frame 4096 the noise moves on every frame.
+  Its spread over frames is the same in every window of noise frames: 220.8, 219.8, 219.3 and 217.5
+  pixels (standard deviation) for 4,096 to 8,192, to 16,384, to 24,576 and past it. The start
+  point's build in the same run gives the same picture (219.0 to 223.4), so a frame's total over
+  300,000 pixels does not show the tile's stratification; the host check measures that.
+- *GPU time at 1920 x 1080.* One drift run each of the stored `e37d89bb` baseline's two cases
+  (`rt-ao` and `rt-ao-entities` with `r_rt_stats 2`, never committed): 3.704 ms without entities
+  (stored run medians 3.623 to 3.664) and 3.738 ms with them (3.930 to 4.442).
+  Both are outside the stored range, so the case was measured again, alternated with an export of
+  the start point (`48628e50`, the same AO code as `e37d89bb`; stored as the host's baseline of that
+  commit). Method of *Cost* (the `r_rt_stats 2` line, `demo1.dm2` whole, 587 warm frames a run, no
+  validation layer). The load was 2.5 to 3.2 before and after each run, except during the start
+  point's third `rt-ao` run and the head's fourth after it, when another process raised it to 14.8
+  and 13.1:
+
+  | Build | Entities | Run medians | Median of runs | p10 | p90 | Max |
+  |---|---|---|---|---|---|---|
+  | start point | off | 3.689 to 3.701 | 3.701 ms | 2.992 to 3.072 | 5.385 to 5.445 | 6.718 |
+  | head | off | 3.666 to 3.704 | 3.678 ms | 3.031 to 3.082 | 5.263 to 5.353 | 7.394 |
+  | start point | on | 3.798 to 3.886 | 3.858 ms | 2.819 to 2.932 | 5.387 to 5.506 | 7.563 |
+  | head | on | 3.738 to 3.765 | 3.746 ms | 2.483 to 2.908 | 5.401 to 5.537 | 6.922 |
+
+  The head's fourth `rt-ao` run, during the load spike, read 3.746. The head is 0.02 ms and 0.11 ms
+  under the start point, inside the runs' spread (the stored entities runs spread 0.5 ms). The
+  fixed-point noise does not cost measurable time. `timedemo` reads the display's 60.0 fps.
+- *Validation with the factor view.* The two factor-view replays above (`r_rt_ao_show 1`, the AO
+  on) and every other record and replay of this round, 33 logs, hold the validation banner and no
+  other validation line. Each ends in `teardown: 0 live objects`, `0 unreleased, 0 unmatched`: `rt
+  73/73`, `52/52`, `316/316` and `470/470` for the AO records, `52/52` and `470/470` for the
+  factor views.
+
+### Checks
+
+On the round's head: `make test`: `yq2test: 163 tests, 0 failed`. `tests/check-ref-metal.sh`:
+ok (AO 220 checks and shadows 4,384, 0 failed). `tests/check-pins.sh` (`pins selftest: ok`),
+`tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-no-local-identity.sh` and
+`tests/check-runbook-index.sh`: ok. Builds: `make client`, `make -B ref_metal` with and without
+`METAL_SHADERS=no` and `make STATIC_MODULES=1 STATIC_RENDERER=metal client`: no error, and no
+warning but the vendored `stb_vorbis.h`'s in the static build.
 
 ## The runs as planned
 
