@@ -443,6 +443,17 @@ traced pixels, rays, hits and GPU time):
   that load was not recorded. The follow-up card should time the pass with the rays skipped
   (the noise and the copy alone) and at 1080p with the frame rate not held.
 
+### The head's checks and validation run
+
+- `rt-ao` at `demo1.dm2` recorded on `603a7fee` with `MTL_DEBUG_LAYER=1`: the 23 frames byte
+  for byte the round's record (`4654bfeb`); the log holds the validation banner and no other
+  validation line, and the teardown is matched (`0 live objects`, `rt 73/73`, `0 unreleased, 0
+  unmatched`).
+- `make test`: `yq2test: 163 tests, 0 failed`. `tests/check-ref-metal.sh`: ok (AO 164 checks, 0
+  failed). `tests/check-pins.sh`, `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`,
+  `tests/check-no-local-identity.sh`: ok. `make client`, `make -B ref_metal` with and without
+  `METAL_SHADERS=no`: no error, no warning.
+
 ## The runs as planned
 
 1. **Effect off.** Every scenario recorded on the head with `MTL_DEBUG_LAYER=1`, against
