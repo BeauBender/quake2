@@ -292,5 +292,12 @@ the attachment, the four pipelines with it, and the vertex and entity tables.
 
 ### Defects
 
-None found. No code changed after the runs. The checks above (no engine) were re-run on the final
-head; see the card's report.
+None found, so no code changed after the runs. The checks without the engine were run again on
+`4b963326`, the runs' documentation commit:
+
+- `make test`: 163 tests, 0 failed;
+- `tests/check-ref-metal.sh`: ok, with 12,701 checks (shadows 4,384) and 0 failed;
+- `tests/check-pins.sh`, `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh` and
+  `tests/check-no-local-identity.sh`: ok;
+- the builds of `client`, `ref_metal`, `ref_metal METAL_SHADERS=no` and
+  `ref_gl1 WITH_METAL_SHIM=yes`: exit 0.
