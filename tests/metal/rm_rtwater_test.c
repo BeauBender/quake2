@@ -241,6 +241,36 @@ test_turb(void)
 	CHECK(mtl_rtw_warp_index(0, 300.5f / MTL_RTW_TURBSCALE) == 44);
 	CHECK(mtl_rtw_warp_index(NAN, 1) == 0);
 	CHECK(mtl_rtw_warp_index(1, INFINITY) == 0);
+
+	/*
+	 * The range guard (the value taken modulo 256 before the cast): at
+	 * |x| of 2^31 and beyond, where a float's cast to int is undefined in C
+	 * (a saturating 255 or 0 on arm64, flagged by UBSan), every float is a
+	 * multiple of 256, so the index is 0. The engine's inputs stay below it
+	 * (cl.time wraps at 2^31 ms, x below about 9e7); the function is
+	 * defined for every finite input all the same. Just below 2^31 the
+	 * floats are multiples of 128, the index 128 or 0 with or without it.
+	 */
+	{
+		static const float times[] = { 5.3e7f, 6e7f, 1e8f, 1e9f, 3.0e10f, 1e15f, 1e30f };
+		int bad = 0;
+
+		for (i = 0; i < (int)(sizeof(times) / sizeof(times[0])); i++)
+		{
+			const float xp = (0.125f * 8192.0f + times[i]) * MTL_RTW_TURBSCALE;
+
+			bad += !(fabsf(xp) >= 2147483648.0f);
+			bad += mtl_rtw_warp_index(8192.0f, times[i]) != 0;
+			bad += mtl_rtw_warp_index(-8192.0f, times[i]) != 0;
+			bad += mtl_rtw_warp_index(8192.0f, -times[i]) != 0;
+			bad += mtl_rtw_warp_index(0.0f, -times[i]) != 0;
+		}
+
+		CHECK(bad == 0);
+		CHECK(mtl_rtw_warp_index(0, 2147483648.0f / MTL_RTW_TURBSCALE) == 0);
+		CHECK(mtl_rtw_warp_index(0, 2147483520.0f / MTL_RTW_TURBSCALE) ==
+			(int)fmod((double)((2147483520.0f / MTL_RTW_TURBSCALE) * MTL_RTW_TURBSCALE), 256.0));
+	}
 }
 
 /* ---- the direction ----------------------------------------------------------------------- */
