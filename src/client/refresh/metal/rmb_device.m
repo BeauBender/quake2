@@ -655,7 +655,11 @@ rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen)
 	}
 
 	rmb_detach();
+#if TARGET_OS_OSX
 	rmb_sync = vsync ? 1 : 0;
+#else
+	rmb_sync = rm_display_sync(1, vsync);   /* in step with the display always (TASK147) */
+#endif
 
 	if (!rmb_ahead_queue)
 	{
@@ -782,7 +786,11 @@ rmb_stats(rmb_stats_t *stats, rm_ledger_t *ledger)
 void
 rmb_set_vsync(int on)
 {
+#if TARGET_OS_OSX
 	rmb_sync = on ? 1 : 0;
+#else
+	rmb_sync = rm_display_sync(1, on);   /* r_vsync has no effect here (TASK147) */
+#endif
 
 	/* with display sync on every frame waits for its own drawable again */
 	if (rmb_sync)

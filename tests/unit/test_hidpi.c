@@ -165,3 +165,99 @@ TEST(hidpi_2d_scale_follows_the_size_taken)
 	viddef.width = 640;
 	viddef.height = 480;
 }
+
+/*
+ * TASK147: the screen an iOS window was made for. A rotation moves the
+ * safe rectangle (and may swap the pixel size); any one of the six
+ * numbers differing is a change, and an unmeasured screen is one.
+ */
+TEST(hidpi_screen_changed_on_any_number)
+{
+	/* an iPhone 17 landscape: 2556x1179 pixels, 852x393 points, 59 points of corner on each side, 21 below */
+	const int made[GLIMP_SCREEN_INTS] = { 2556, 1179, 59, 0, 734, 372 };
+	int now[GLIMP_SCREEN_INTS];
+	int i;
+
+	memcpy(now, made, sizeof(now));
+	T_CHECK(!GLimp_ScreenChanged(made, now));
+
+	for (i = 0; i < GLIMP_SCREEN_INTS; i++)
+	{
+		memcpy(now, made, sizeof(now));
+		now[i] += 1;
+		T_CHECK(GLimp_ScreenChanged(made, now));
+	}
+
+	/* the other landscape: the housing on the other side, the safe rectangle's x moved */
+	memcpy(now, made, sizeof(now));
+	now[2] = 0;
+	now[4] = 793;
+	T_CHECK(GLimp_ScreenChanged(made, now));
+}
+
+TEST(hidpi_screen_unmeasured_is_a_change)
+{
+	const int made[GLIMP_SCREEN_INTS] = { 2556, 1179, 59, 0, 734, 372 };
+	const int empty_w[GLIMP_SCREEN_INTS] = { 0, 1179, 59, 0, 734, 372 };
+	const int empty_h[GLIMP_SCREEN_INTS] = { 2556, 0, 59, 0, 734, 372 };
+	const int zero[GLIMP_SCREEN_INTS] = { 0, 0, 0, 0, 0, 0 };
+
+	T_CHECK(GLimp_ScreenChanged(NULL, made));
+	T_CHECK(GLimp_ScreenChanged(made, NULL));
+	T_CHECK(GLimp_ScreenChanged(NULL, NULL));
+	/* an empty drawable is a change even against itself */
+	T_CHECK(GLimp_ScreenChanged(empty_w, empty_w));
+	T_CHECK(GLimp_ScreenChanged(empty_h, empty_h));
+	T_CHECK(GLimp_ScreenChanged(zero, zero));
+}
+
+/*
+ * TASK147: with the real game data default.cfg sets r_mode 4 and
+ * vid_fullscreen 1. On the uikit driver the window is still the whole
+ * screen at its own size (fullscreen 2, r_mode -2, so the client takes
+ * the drawable's pixels); no other driver is touched.
+ */
+TEST(hidpi_ios_is_the_screen_whatever_default_cfg_says)
+{
+	int fs = 1;
+	float mode = 4;
+
+	T_CHECK(GLimp_OwnScreenOnly("uikit", &fs, &mode));
+	T_EQ_INT(fs, 2);
+	T_EQ_FLT(mode, -2);
+	T_CHECK(GLimp_DrawableInPixels(GLimp_HighDPIWanted(1, "uikit"), fs, mode));
+
+	/* any starting values give the same */
+	fs = 0;
+	mode = -1;
+	T_CHECK(GLimp_OwnScreenOnly("uikit", &fs, &mode));
+	T_EQ_INT(fs, 2);
+	T_EQ_FLT(mode, -2);
+}
+
+TEST(hidpi_other_drivers_keep_their_mode)
+{
+	static const char *const others[] = { "cocoa", "wayland", "x11", "UIKIT", "uikitx", "" };
+	int i;
+
+	for (i = 0; i < 6; i++)
+	{
+		int fs = 1;
+		float mode = 4;
+
+		T_CHECK(!GLimp_OwnScreenOnly(others[i], &fs, &mode));
+		T_EQ_INT(fs, 1);
+		T_EQ_FLT(mode, 4);
+	}
+
+	{
+		int fs = 1;
+		float mode = 4;
+
+		T_CHECK(!GLimp_OwnScreenOnly(NULL, &fs, &mode));
+		T_CHECK(!GLimp_OwnScreenOnly("uikit", NULL, &mode));
+		T_CHECK(!GLimp_OwnScreenOnly("uikit", &fs, NULL));
+		T_EQ_INT(fs, 1);
+		T_EQ_FLT(mode, 4);
+	}
+}

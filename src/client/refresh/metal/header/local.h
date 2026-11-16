@@ -31,6 +31,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 #include <string.h>
 
 #include "../../ref_shared.h"
@@ -57,6 +60,17 @@ extern qboolean IsHighDPIaware;
 int RI_PrepareForWindow(void);
 int RI_InitContext(void *win);
 void RI_GetDrawableSize(int *width, int *height);
+/*
+ * The layer's drawable and the insets of its safe rectangle, where the
+ * present puts the frame: on iOS the window's whole pixels and the
+ * rectangle (rm_sdl.c, TASK147); elsewhere the drawable's size, no inset.
+ */
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+void RI_GetLayer(int *width, int *height, rm_inset_t *in);
+#else
+#define RI_GetLayer(width, height, in) \
+	do { RI_GetDrawableSize((width), (height)); memset((in), 0, sizeof(rm_inset_t)); } while (0)
+#endif
 void RI_ShutdownContext(void);
 qboolean RI_IsVSyncActive(void);
 int RI_GetSDLVersion(void);

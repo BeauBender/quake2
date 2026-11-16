@@ -486,3 +486,57 @@ TEST(vidrules_ao_settings)
 	T_EQ_INT(VidRules_AOScaleIndex(1.0f / 1.5f), 1);
 	T_EQ_INT(VidRules_AOScaleIndex(1.0f / 2.5f), 1);
 }
+
+/*
+ * TASK147: the items of the video menu that a screen of its own does not
+ * have. On iOS the window is the whole screen at its own size: the mode,
+ * fullscreen, the display, vertical sync and the renderer are greyed with
+ * their reasons, never hidden; on the desktop every one keeps its state.
+ */
+TEST(vidrules_screen_items_on_ios_are_greyed_with_a_reason)
+{
+	static const char *const reason[VIDSCR_COUNT] = {
+		"the screen's own size",    /* mode */
+		"always the whole screen",  /* fullscreen */
+		"one screen",               /* display */
+		"always on",                /* vsync */
+		"metal is linked in"        /* renderer */
+	};
+
+	for (int i = 0; i < VIDSCR_COUNT; i++)
+	{
+		vidrule_t v = VidRules_Screen(VIDPLAT_IOS, (vidscr_t)i);
+
+		T_EQ_INT(v.enabled, 0);
+		T_REQUIRE(v.text != NULL);
+		T_CHECK(strcmp(v.text, reason[i]) == 0);
+		T_CHECK(strlen(v.text) <= 40);
+	}
+}
+
+TEST(vidrules_screen_items_on_the_desktop_keep_their_state)
+{
+	for (int i = 0; i < VIDSCR_COUNT; i++)
+	{
+		vidrule_t v = VidRules_Screen(VIDPLAT_DESKTOP, (vidscr_t)i);
+
+		T_EQ_INT(v.enabled, 1);
+		T_CHECK(v.text == NULL);
+	}
+}
+
+TEST(vidrules_screen_unknown_inputs_are_greyed)
+{
+	vidrule_t v = VidRules_Screen(VIDPLAT_IOS, VIDSCR_COUNT);
+
+	T_EQ_INT(v.enabled, 0);
+	T_REQUIRE(v.text != NULL);
+	v = VidRules_Screen(VIDPLAT_DESKTOP, VIDSCR_COUNT);
+	T_EQ_INT(v.enabled, 0);
+	T_REQUIRE(v.text != NULL);
+	v = VidRules_Screen(VIDPLAT_DESKTOP, (vidscr_t)-1);
+	T_EQ_INT(v.enabled, 0);
+	v = VidRules_Screen((vidplat_t)99, VIDSCR_MODE);
+	T_EQ_INT(v.enabled, 0);
+	T_REQUIRE(v.text != NULL);
+}

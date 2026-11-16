@@ -3,16 +3,25 @@
 # (TASK146). Python 3 standard library only (struct); run with python3 -I.
 # Called by "scripts/ios-sim.sh smoke"; not part of the build.
 #
-# Writes <out>/baseq2/smoke.pak holding the two files ref_metal needs to
-# reach the console, both made here from formulas; no id Software data is
-# read, copied or derived:
+# Writes <out>/baseq2/smoke.pak holding the files ref_metal draws the
+# console with, all made here from formulas; no id Software data is read,
+# copied or derived:
 #   pics/colormap.pcx  8-bit PCX whose 256-colour palette is a 3-3-2 RGB
 #                      cube (GetPCXPalette in R_InitImages reads it);
-#   pics/conchars.pcx  128x128 8-bit PCX of 16x16 glyph cells of 8x8, the
-#                      cell of character code c showing the bits of c, one
-#                      row per bit from bit 7 down (a bar for a set bit, a
-#                      dot for a clear one) on index 255, the transparent
-#                      index (R_FindPic("conchars") in RM_InitDraw).
+#   pics/conchars.pcx  128x128 8-bit PCX of 16x16 glyph cells of 8x8, all
+#                      index 255, the transparent index (R_FindPic("conchars")
+#                      in RM_InitDraw): the console's text is not seen
+#                      (TASK147, below);
+#   pics/conback.pcx   320x240 8-bit PCX, the console's background, which
+#                      Con_DrawConsole stretches over the whole screen: each
+#                      texel a colour of its own hash of x and y, from index
+#                      1 to 253 (not black, not transparent), so that no
+#                      two neighbours look alike.
+# TASK147: the smoke compares the simulator's screenshot with the engine's
+# frame pixel for pixel, a few seconds apart. The console's text moves on
+# every frame (the log's lines, the cursor's blink), its background does
+# not; so the frame is the background alone, and a stretched, cropped or
+# shifted present of it differs from the frame nearly everywhere.
 #
 #   smokepak.py --out DIR
 import os
@@ -20,7 +29,6 @@ import struct
 import sys
 
 TRANSPARENT = 255
-INK = 0xFE  # 3-3-2: (255, 255, 170)
 
 
 def palette():
@@ -65,15 +73,19 @@ def colormap():
 
 
 def conchars():
+    """Every glyph transparent: the text is drawn, and not seen."""
     w = h = 128
-    pix = bytearray([TRANSPARENT]) * (w * h)
-    for c in range(256):
-        cx, cy = (c % 16) * 8, (c // 16) * 8
-        for bit in range(8):
-            y = cy + bit
-            xs = range(cx + 1, cx + 7) if c & (0x80 >> bit) else (cx + 1,)
-            for x in xs:
-                pix[y * w + x] = INK
+    return pcx(w, h, bytes([TRANSPARENT]) * (w * h))
+
+
+def conback():
+    """320x240, texel (x, y) of index 1 + (a hash of x and y) % 253."""
+    w, h = 320, 240
+    pix = bytearray(w * h)
+    for y in range(h):
+        for x in range(w):
+            v = ((x * 2654435761) ^ (y * 40503) ^ ((x + y) * 97)) & 0xFFFFFFFF
+            pix[y * w + x] = 1 + (v >> 11) % 253
     return pcx(w, h, bytes(pix))
 
 
@@ -98,7 +110,8 @@ def main(argv):
     base = os.path.join(argv[2], "baseq2")
     os.makedirs(base, exist_ok=True)
     path = os.path.join(base, "smoke.pak")
-    blob = pak([("pics/colormap.pcx", colormap()), ("pics/conchars.pcx", conchars())])
+    blob = pak([("pics/colormap.pcx", colormap()), ("pics/conchars.pcx", conchars()),
+                ("pics/conback.pcx", conback())])
     with open(path + ".tmp", "wb") as f:
         f.write(blob)
     os.replace(path + ".tmp", path)

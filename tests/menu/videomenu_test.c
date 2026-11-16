@@ -782,6 +782,80 @@ test_the_banner_is_clear_of_the_items(void)
 	test_scale = 1;
 }
 
+/*
+ * TASK147: the screen's own items. Built for the desktop (the default)
+ * nothing is greyed and there is no display row; built with
+ * -DTEST_IOS=1 -DVID_PLATFORM=VIDPLAT_IOS (check-video-menu.sh builds
+ * both) the mode, fullscreen, display, vertical sync and renderer are
+ * greyed with their reasons, never hidden, cannot be changed, and apply
+ * writes none of their cvars even where the cvars say otherwise.
+ */
+static void
+test_screen_items(void)
+{
+	static const char *const names[] = { "video mode", "fullscreen", "vertical sync", "renderer" };
+	static const char *const reasons[] = { "the screen's own size", "always the whole screen", "always on", "metal is linked in" };
+	static const char *const cvars[] = { "r_mode", "vid_fullscreen", "r_vsync", "vid_renderer" };
+
+	Reset();
+	Cvar_Get("r_vsync", "1", 0);
+	SetCv("r_mode", "3");
+	SetCv("vid_fullscreen", "1");
+	SetCv("r_vsync", "1");
+	Open("metal", "15");
+
+	for (int i = 0; i < 4; i++)
+	{
+#ifdef TEST_IOS
+		CHECK(Greyed(names[i]), "%s is not greyed on iOS", names[i]);
+		CHECK(Item(names[i])->statusbar && !strcmp(Item(names[i])->statusbar, reasons[i]),
+			"%s: status \"%s\"", names[i], Item(names[i])->statusbar ? Item(names[i])->statusbar : "(none)");
+		CHECK(!Slide(names[i], 1) && !Slide(names[i], -1), "%s changed on iOS", names[i]);
+#else
+		CHECK(!Greyed(names[i]), "%s is greyed on the desktop", names[i]);
+		(void)reasons;
+#endif
+	}
+
+#ifdef TEST_IOS
+	CHECK(Greyed("display"), "display is not greyed on iOS");
+	CHECK(Item("display")->statusbar && !strcmp(Item("display")->statusbar, "one screen"), "display status");
+	CHECK(!Slide("display", 1) && !Slide("display", -1), "display changed on iOS");
+#else
+	{
+		int found = 0;
+
+		for (int i = 0; i < main_menu->nitems; i++)
+		{
+			const menucommon_s *c = main_menu->items[i];
+
+			found |= (c->name && !strcmp(c->name, "display"));
+		}
+
+		CHECK(!found, "the desktop menu has a display row");
+	}
+#endif
+
+	Apply();
+
+	for (int i = 0; i < 4; i++)
+	{
+#ifdef TEST_IOS
+		CHECK(Writes(cvars[i]) == 0, "apply wrote %s on iOS", cvars[i]);
+#else
+		(void)cvars;
+#endif
+	}
+
+#ifdef TEST_IOS
+	CHECK(!strcmp(Str("r_mode"), "3") && !strcmp(Str("vid_fullscreen"), "1"), "r_mode %s, vid_fullscreen %s",
+		Str("r_mode"), Str("vid_fullscreen"));
+#else
+	/* the desktop writes them, as before */
+	CHECK(Writes("r_mode") > 0, "apply wrote no r_mode on the desktop");
+#endif
+}
+
 int
 main(void)
 {
@@ -789,6 +863,7 @@ main(void)
 	vid_renderer = Cvar_Get("vid_renderer", "gl3", 0);
 	Cvar_Get("r_mode", "4", 0);
 
+	test_screen_items();
 	test_scale_item_follows_the_scaler();
 	test_apply_uses_the_built_renderer();
 	test_frame_generation_is_greyed_and_not_written();

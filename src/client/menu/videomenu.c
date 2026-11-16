@@ -25,6 +25,10 @@
  * =======================================================================
  */
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #include "../../client/header/client.h"
 #include "../../client/menu/header/qmenu.h"
 #include "header/qmenu.h"
@@ -54,6 +58,7 @@ static menuaction_s s_ropts_apply_action;
 
 static menulist_s s_renderer_list;
 static menulist_s s_mode_list;
+static menulist_s s_display_list;   /* in the menu on iOS only (VID_PLATFORM) */
 static menulist_s s_uiscale_list;
 static menuslider_s s_brightness_slider;
 static menuslider_s s_fov_slider;
@@ -358,6 +363,37 @@ SetRule(menucommon_s *item, viditem_t id, int scaler)
 	item->statusbar = rule.text;
 }
 
+/*
+ * The screen's own items (TASK147): where the window is the whole screen
+ * (iOS) they are greyed with their reason (vidrules.c), never hidden;
+ * where it is not, the item is left as it is.
+ */
+#ifndef VID_PLATFORM   /* the menu test builds this file for the other one too */
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+#define VID_PLATFORM VIDPLAT_IOS
+#else
+#define VID_PLATFORM VIDPLAT_DESKTOP
+#endif
+#endif
+
+static void
+SetScreenRule(menucommon_s *item, vidscr_t id, const char **names)
+{
+	const vidrule_t rule = VidRules_Screen(VID_PLATFORM, id);
+
+	if (!rule.enabled)
+	{
+		menulist_s *list = (menulist_s *)item;
+
+		item->flags |= QMF_GRAYED;
+		item->statusbar = rule.text;
+
+		/* a greyed list shows the one value it has */
+		list->itemnames = names;
+		list->curvalue = 0;
+	}
+}
+
 static int s_mfx_scaler_prev;
 
 /* The scale item's choices: the steps, and "custom" while the cvar holds
@@ -439,7 +475,8 @@ ApplyChanges(void *unused)
 	qboolean restart = false;
 
 	/* Renderer */
-	if (s_renderer_list.curvalue != Renderer_GetRenderer())
+	if (!(s_renderer_list.generic.flags & QMF_GRAYED) &&
+		s_renderer_list.curvalue != Renderer_GetRenderer())
 	{
 		// The custom renderer (the last known renderer) cannot be
 		// set, because the menu doesn't know it's cvar value. TODO:
@@ -451,9 +488,12 @@ ApplyChanges(void *unused)
 		}
 	}
 
-	/* auto mode */
-
-	if (strcmp(s_mode_list.itemnames[s_mode_list.curvalue], AUTO_MODE_NAME) == 0)
+	/* auto mode; a greyed mode list (the screen's own size) is not a setting */
+	if (s_mode_list.generic.flags & QMF_GRAYED)
+	{
+		/* nothing to write */
+	}
+	else if (strcmp(s_mode_list.itemnames[s_mode_list.curvalue], AUTO_MODE_NAME) == 0)
 	{
 		Cvar_SetValue("r_mode", -2);
 		restart = true;
@@ -486,20 +526,24 @@ ApplyChanges(void *unused)
 		Cvar_SetValue("crosshair_scale", r_hudscale->value);
 	}
 
-	/* Restarts automatically */
-	if (vid_fullscreen->value != s_fs_box.curvalue)
+	/* Restarts automatically; a greyed item is not a setting */
+	if (!(s_fs_box.generic.flags & QMF_GRAYED))
 	{
-		Cvar_SetValue("vid_fullscreen", s_fs_box.curvalue);
-		restart = true;
-	}
+		if (vid_fullscreen->value != s_fs_box.curvalue)
+		{
+			Cvar_SetValue("vid_fullscreen", s_fs_box.curvalue);
+			restart = true;
+		}
 
-	if (s_fs_box.curvalue == 2)
-	{
-		Cvar_SetValue("r_mode", -2.0f);
+		if (s_fs_box.curvalue == 2)
+		{
+			Cvar_SetValue("r_mode", -2.0f);
+		}
 	}
 
 	/* vertical sync */
-	if (r_vsync->value != s_vsync_list.curvalue)
+	if (!(s_vsync_list.generic.flags & QMF_GRAYED) &&
+		r_vsync->value != s_vsync_list.curvalue)
 	{
 		Cvar_SetValue("r_vsync", s_vsync_list.curvalue);
 		restart = true;
@@ -689,6 +733,12 @@ VID_MenuInit(void)
 		"yes",
 		NULL
 	};
+
+	/* what a greyed screen item shows (SetScreenRule) */
+	static const char *on_names[] = { "on", NULL };
+	static const char *whole_names[] = { "the whole screen", NULL };
+	static const char *native_names[] = { "native", NULL };
+	static const char *metal_names[] = { "metal", NULL };
 
 	static const char *fullscreen_names[] = {
 		"no",
@@ -962,12 +1012,31 @@ VID_MenuInit(void)
 	s_fs_box.itemnames = fullscreen_names;
 	s_fs_box.curvalue = (int)vid_fullscreen->value;
 
+	/* iOS has one screen: the display is shown greyed with its reason (the desktop menu has no such row, its display is a cvar) */
+	if (VID_PLATFORM == VIDPLAT_IOS)
+	{
+		static const char *display_names[] = { "this screen", NULL };
+
+		s_display_list.generic.type = MTYPE_SPINCONTROL;
+		s_display_list.generic.name = "display";
+		s_display_list.generic.x = 0;
+		s_display_list.generic.y = (y += 10);
+		s_display_list.itemnames = display_names;
+		s_display_list.curvalue = 0;
+		SetScreenRule(&s_display_list.generic, VIDSCR_DISPLAY, display_names);
+	}
+
 	s_vsync_list.generic.type = MTYPE_SPINCONTROL;
 	s_vsync_list.generic.name = "vertical sync";
 	s_vsync_list.generic.x = 0;
 	s_vsync_list.generic.y = (y += 10);
 	s_vsync_list.itemnames = yesno_names;
 	s_vsync_list.curvalue = (r_vsync->value != 0);
+	SetScreenRule(&s_vsync_list.generic, VIDSCR_VSYNC, on_names);
+
+	SetScreenRule(&s_fs_box.generic, VIDSCR_FULLSCREEN, whole_names);
+	SetScreenRule(&s_mode_list.generic, VIDSCR_MODE, native_names);
+	SetScreenRule(&s_renderer_list.generic, VIDSCR_RENDERER, metal_names);
 
 	s_af_list.generic.type = MTYPE_SPINCONTROL;
 	s_af_list.generic.name = "aniso filtering";
@@ -1218,6 +1287,10 @@ VID_MenuInit(void)
 	Menu_AddItem(&s_opengl_menu, (void *)&s_fov_slider);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_uiscale_list);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_fs_box);
+	if (VID_PLATFORM == VIDPLAT_IOS)
+	{
+		Menu_AddItem(&s_opengl_menu, (void *)&s_display_list);
+	}
 	Menu_AddItem(&s_opengl_menu, (void *)&s_vsync_list);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_af_list);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_msaa_list);
