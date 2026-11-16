@@ -663,8 +663,9 @@ fi
 while read -r o; do
 	[ -s "$tree/$o" ] || bad "the build did not write $o"
 done < "${tmp:?}/expected"
-# every object in the simulator's tree, SDL's too under --full
-(cd "${tree:?}" && find build/ios-iphonesimulator -name '*.o' | sort) > "${tmp:?}/objects.rel"
+# every object in the tree (the device build has not run yet, so all of
+# it is the simulator's), SDL's too under --full
+(cd "${tree:?}" && find build -name '*.o' | sort) > "${tmp:?}/objects.rel"
 sed "s|^|$tree/|" "${tmp:?}/objects.rel" > "${tmp:?}/objects"
 nobj=$(grep -c . "${tmp:?}/objects") || nobj=0
 out=$(assert_platform "${tmp:?}/objects") || bad "$out"
