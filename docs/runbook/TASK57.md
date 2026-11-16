@@ -10,9 +10,13 @@ and [judging an effect's footprint](../plans/metal-port-harness.md#judging-an-ef
 **Status.** The pass, its cvars, its host test, the scenarios and the documentation are in
 the branch, and the engine runs are made (*Runs on the bare-metal host*, below). Effect off,
 every frame is `origin/main`'s byte for byte. Effect on, the factor never goes under
-`r_rt_ao_min`; the frame-level floor check passes 266 of 270 frames, and the four that fail
-are under by 0.2 of a level past the one-level allowance, for a cause not found
-(*The floor check*). The `rt-ao` pins are not recorded: the owner accepts the look first.
+`r_rt_ao_min`, and the frame-level floor check passes all 270 frames with its allowance
+derived (*Rework 1*): the four frames the first check failed are frames where gl1's screen
+blend rounds the 8-bit frame a second time, in both views, which that check's one level did
+not allow for. With the shadows on as well, the pixels that come out brighter than the
+shadows-only frame are gl1's rule for a light sum past 1 (normalise by the brightest
+channel), applied to the AO'd lightmap term; the resolve already follows it. The `rt-ao`
+pins are not recorded: the owner accepts the look first.
 
 ## What it does
 
@@ -161,31 +165,28 @@ masks meet the same instances now that they carry the AO bit.
 ### Effect on: the floor check
 
 `rt-ao` and `rt-ao-entities` at `demo1.dm2` (23 frames) and `demo2.dm2` every 7th (89), each
-against its off replay with `aofloor off on 0.4` (`<artifacts>/TASK57/tools/aofloor.c`: the
-channels below `0.4 x off - 1` level, the one level being the output's rounding, and above
-`off`; self-tested on frames scaled by 0.5, 0.3 and 1.02):
+against its off replay with `aofloor off on 0.4` (`<artifacts>/TASK57/tools/aofloor.c`; its
+allowance as rework 1 derived it, *Rework 1*, part 1: the channels below `0.4 x off - 1.402`
+levels, two 8-bit roundings, the resolve's and the screen blend's, and the light's 16-bit
+store, and above `off`; self-tested on frames scaled by 0.5, 0.3 and 1.02). The first round
+allowed one level, and failed 4 frames (demo2 frame 42 and the 1080p frame 3, 33 to 38
+channels each); *Rework 1* has the cause.
 
-| Record | Frames | Pass | Channels under | Brighter | Smallest on / off (off >= 16) |
-|---|---|---|---|---|---|
-| `rt-ao`, `demo1.dm2` | 23 | 23 | 0 | 0 | 0.353 |
-| `rt-ao`, `demo2.dm2` every 7th | 89 | 88 | 34 (frame 42) | 0 | 0.348 |
-| `rt-ao-entities`, `demo1.dm2` | 23 | 23 | 0 | 0 | 0.353 |
-| `rt-ao-entities`, `demo2.dm2` every 7th | 89 | 88 | 33 (frame 42) | 0 | 0.348 |
-| `rt-ao`, `demo1.dm2`, 1920 x 1080 | 23 | 22 | 37 (frame 3) | 0 | 0.368 |
-| `rt-ao-entities`, `demo1.dm2`, 1920 x 1080 | 23 | 22 | 38 (frame 3) | 0 | 0.368 |
+| Record | Frames | Pass | Channels under | Brighter | Smallest on / off (off >= 16) | Largest `0.4 x off - on` |
+|---|---|---|---|---|---|---|
+| `rt-ao`, `demo1.dm2` | 23 | 23 | 0 | 0 | 0.353 | 1.0 |
+| `rt-ao`, `demo2.dm2` every 7th | 89 | 89 | 0 | 0 | 0.348 | 1.2 |
+| `rt-ao-entities`, `demo1.dm2` | 23 | 23 | 0 | 0 | 0.353 | 1.0 |
+| `rt-ao-entities`, `demo2.dm2` every 7th | 89 | 89 | 0 | 0 | 0.348 | 1.2 |
+| `rt-ao`, `demo1.dm2`, 1920 x 1080 | 23 | 23 | 0 | 0 | 0.353 | 1.2 |
+| `rt-ao-entities`, `demo1.dm2`, 1920 x 1080 | 23 | 23 | 0 | 0 | 0.353 | 1.2 |
 
 - *The factor itself never goes under the floor.* The factor view (`r_rt_ao_show 1`) of the
   four 640 x 480 records: on all 66,697,514 world pixels (the classes view's white, blue and
   red) of the 224 frames the smallest factor is 102/255, `r_rt_ao_min` exactly.
-- *The failing channels.* Every one is a pixel at the floor (red in the classes view, factor
-  102/255 in the factor view), and every one is one level under `round(0.4 x off)`: `off` 23
-  reading 8 (frame 42), 68 reading 26 and 73 reading 28 (frame 3, 1080p), where the check
-  allows 8.2, 26.2 and 28.2. The resolve's product (`mtl_world_lm`, float) with a factor of
-  0.4 predicts 9, 27 and 29, so something between the light the kernel writes and the frame
-  rounds once more than the check allows for. It is not the AO's own copy: with
-  `r_rt_ao_min 1.0` (factor 1 everywhere, the light through the pass's `RGBA16Unorm` target)
-  all 89 frames of `demo2.dm2` are the off view byte for byte. The cause is not found; it is
-  left open (0.2 of a level, 33 to 38 channels in 4 of 270 frames).
+- *The channels past one rounding.* A shortfall over 0.702 of a level (one rounding's bound) is
+  only in frames that carry a screen blend: `demo1.dm2` frames 3, 5, 8, 11 and 16 (both sizes),
+  `demo2.dm2` frames 2, 10, 23, 42, 44, 45, 47, 78, 79 and 82 (*Rework 1*).
 
 ### Effect on: unchanged pixels and the open floor
 
@@ -232,12 +233,12 @@ The `rt-shadows` traces (`demo1.dm2`, 23 frames; `demo2.dm2` every 7th, 89) repl
 
 - where no dynamic light is in range (5,928,483 and 24,179,352 masked pixels) the frame equals
   the AO-only frame of the same trace byte for byte, every frame;
-- against the shadows-only frame (`aofloor shadows both 0.4`): no channel under on
-  `demo1.dm2`, 34 on `demo2.dm2` (the same 0.2-level class as above). Where a light is in
-  range 48,146 channels (5 frames, `demo1.dm2`) and 35,254 (13 frames, `demo2.dm2`) come out
-  brighter than the shadows-only frame. Not measured further: the likely cause is RT3's resolve,
-  which takes gl1's store and scales a sum past 1 down by its brightest channel
-  (`mtl_rts_light`), so a static part darkened by the AO leaves the sum less scaled.
+- against the shadows-only frame (`aofloor shadows both 0.4`, the derived allowance): no
+  channel under on either demo (the first round's 34 on `demo2.dm2` were the screen blend's
+  second rounding). Where a light is in range 48,146 channels (5 frames, `demo1.dm2`) and
+  35,254 (12 frames, `demo2.dm2`) come out brighter than the shadows-only frame: gl1's rule for
+  a light sum past 1, which divides all three channels by the brightest, applied to the AO'd
+  lightmap term plus the dynamic lights' (*Rework 1*, part 2).
 
 ### Frames for the owner
 
@@ -283,7 +284,164 @@ fps off, 60.0, 60.0 and 60.0 on (689 frames in 11.5 s), the display's rate.
 
 ## Rework 1: the floor check's four frames, the two effects together, the cost
 
-(In progress.)
+No engine code changed in this round: the first finding was the tool's, the second is gl1's
+rule. The replays of this round ran the build of `78eb9dba` (pin ids `78eb9dba437d-*`), whose
+`src/` and `Makefile` are `4654bfeb`'s, the engine commit of the runs above. The new views are
+replays of the records' traces with one cvar rewritten, as above: `r_rt_gbuffer_show` to `1`
+(the albedo attachment as stored) and `5` (the light attachment), `r_rt_ao_show` to `1`. Every
+replay held the timing lock (load 2.0 to 3.8 before and after); the tools (`aomodel`,
+`aobright`, `aoprobe`, the corrected `aofloor`) are in `<artifacts>/TASK57/tools/`.
+
+### 1. The floor check's four frames: a second rounding the check left out
+
+**Cause: gl1's screen blend, in both views.** `R_PolyBlend` (`rm_main.c`, from `gl1_main.c`)
+draws the refdef's blend over the 3D view after the resolve, into the 8-bit frame. The
+scenarios set `cl_blend 0`, but the client clears only the blend's colour
+(`VectorClear(cl.refdef.blend)` in `cl_view.c`, three components) and keeps its alpha, so on a
+frame whose player state carries a blend (a pickup's flash, damage) `rm_polyblend` draws a
+black quad of that alpha: the frame is `rne((1 - alpha) x D)`, `D` the resolve's 8-bit pixel.
+The off and on views both have it, so each is rounded twice, and the check allowed for one
+rounding. Nothing of the AO rounds there: the pass adds only the light's 16-bit store.
+
+**Proof.** With the albedo and light attachments of the off traces (`demo2.dm2`, 89 frames;
+the 1080p `demo1.dm2`, 23), `aomodel` forms gl1's MODULATE product as the resolve does, the
+on view's light the factor times the light stored at 16 bits, rounds it to 8 bits, then
+applies a black blend of alpha `k/255` with `k` fitted per frame (0 to 160). It reproduces every
+world channel of both views of the 112 frames except the ones that something drawn after the
+resolve covers: the status bar (1,065 to 2,403 channels a frame at 640 x 480, 2,985 to 15,432 at
+1080p) and, in the 1080p frame 21, 259,000 more. (In the on views of `demo2.dm2`, read with the
+factor view, up to 67 channels a frame more are one level off: products within float error of
+a half level, which the model and the GPU multiply in another order.) The fitted alpha is 0 on
+most frames and:
+
+- `demo2.dm2`: frames 2 (63/255), 10 (81), 23 (71), 38 (5), 42 (15), 44 (51), 45 (45), 47 (45),
+  78 (81), 79 (76) and 82 (96);
+- `demo1.dm2` (1080p): frames 3 (5/255), 5 (61), 8 (51), 11 (30) and 16 (56).
+
+Two failing channels worked through (x, y from the top left; red; the factor at the floor,
+102/255 in the factor view):
+
+- `demo2.dm2` frame 42 (314, 241): albedo 96, light 63, blend 15/255. Off: the resolve
+  `96 x 63 / 255` = 23.72, stored 24; the blend `24 x 240/255` = 22.59, so 23. On: the light
+  `63 x 0.4` = 25.2, the resolve `96 x 25.2 / 255` = 9.49, stored 9; the blend `9 x 240/255` =
+  8.47, so 8. The first check wanted at least `0.4 x 23 - 1` = 8.2. Before the blend the on
+  pixel, 9, is `0.4 x 24 - 0.6`, inside one rounding.
+- 1080p frame 3 (144, 34): albedo 110, light 159, blend 5/255. Off: 68.59, stored 69, then
+  `69 x 250/255` = 67.65, so 68. On: 27.44, stored 27, then 26.47, so 26 (the check wanted 26.2).
+
+**The allowance, derived.** Let `X` be the off view's exact product in levels and `m` the
+floor. The factor is at least `m`, and the light's `RGBA16Unorm` store errs by at most half a
+step of 65,535, so the on view's product is at least `m X - e`, `e = 255 / (2 x 65535)`, 0.002
+of a level. The resolve stores both at 8 bits, `D = rne(X)` and `D' = rne(on)`; the blend
+makes `F = rne(s D + c)`, `s = 1 - alpha`, `c >= 0` its colour's part (0 here). Then
+
+    m F_off - F_on <= m (s (X + 1/2) + c + 1/2) - (s (m X - 1/2 - e) + c - 1/2)
+                    = (1 + m)(1 + s) / 2 + s e - (1 - m) c
+                   <= 1 + m + e,
+
+and without a blend (`F = D`, one rounding) at most `(1 + m) / 2 + e`. With `m` 0.4 that is
+1.402 levels with a blend and 0.702 without; the first check's one level lay between them, more
+than one rounding needs and less than two do. The clamp at 255 only lowers `F_off`. Every stage
+is monotonic in the light, so no channel can come out brighter than the off view's.
+
+**The check, corrected** (`aofloor`: the bound `1 + m + e`, and as information the channels
+past `(1 + m) / 2 + e`): all 270 frames pass, no channel under and none brighter (the table in
+*Effect on: the floor check*). The largest shortfall `0.4 x off - on` is 1.2 levels, in the
+four frames that failed before. The channels past one rounding are only in frames that carry a
+blend: those of the two fitted records are the blend frames above but `demo2.dm2` frame 38
+(alpha 5/255, no channel past it), and the 640 x 480 `demo1.dm2` records' are its frames 3, 5,
+8, 11 and 16, the 1080p record's blend frames (one trace). The self-test holds: frames scaled by
+0.5 pass, by 0.3 fail under, by 1.02 fail brighter.
+
+So the engine does not round where it need not: the blend over the 8-bit view is gl1's own
+pass (gl1 draws it over its 8-bit framebuffer), and the pass's own stages add 0.002 of a level.
+The tool's model was wrong, and its first allowance was not derived. Re-run after the
+correction: the floor check on all 270 frames (above) and against the shadows-only frames
+(part 2). No engine code changed, so the effect-off, `rt-shadows`, validation and ASAN results
+of the first round stand for this head.
+
+### 2. Shadows and AO together: gl1's normalisation of a light sum past 1
+
+**The guess holds, and the resolve already follows gl1's rule.** With both effects on,
+`rmb_gbuf_resolve` binds the AO pass's light (`lt`, a world pixel's lightmap sample `L` times
+its factor `f`) to RT3's resolve (`rmb_rts_resolve`, `rm_fragment_resolve_rts`), which adds the
+dynamic lights' term `T` and stores the sum as `R_BuildLightMap` does (`mtl_rts_light`): where
+the brightest channel passes 1, all three are divided by it. That is gl1's rule for the same
+sum: `gl1_light.c`'s store, after `R_AddDynamicLights` has added the dynamic lights to the
+lightmap's sum, rescales all the colour components by 255 over the brightest when it exceeds
+255. It is a normalisation, not a per-channel clamp and not an overbright clamp. So the AO and
+shadow resolve is `(f L + T) / max(1, brightest channel of (f L + T))`: gl1's rule, with the AO
+applied to the lightmap term before it, as the design composes them. Nothing is changed, and
+the shadows-only output is untouched.
+
+**Why it brightens.** With the brightest channel's sum past 1, every channel is divided by it.
+The factor lowers the static part of that sum, so the divisor falls (or the division goes), and
+a channel whose sum is mostly the dynamic light's keeps more of it. A per-channel clamp could
+not brighten anything: `min(1, f L + T) <= min(1, L + T)` channel by channel.
+
+**One pixel by hand** (`demo1.dm2` frame 21 of the `rt-shadows` trace, (495, 338); the
+attachments and the factor from `r_rt_gbuffer_show 1`, `5` and `r_rt_ao_show 1` replays of the
+both trace): albedo (127, 97, 70), static light `L` = (196, 133, 46)/255 = (0.769, 0.522,
+0.180), factor 155/255 = 0.608, so `f L` = (0.467, 0.317, 0.110). Shadows only (127, 78, 10),
+both (125, 81, 8).
+
+- Shadows only, red: 127, the albedo's own value, so the stored light's red is 1: the sum was
+  divided by its red, `M = 0.769 + Tr`, above 1.
+- Both, red: 125 = `127 x (0.467 + Tr)` within half a level, so `0.467 + Tr` is 0.980 to 0.988,
+  under 1: no division. So `Tr` is 0.513 to 0.521, and `M` 1.282 to 1.290.
+- Both, green: 81 puts `0.317 + Tg` at 0.830 to 0.840, `Tg` 0.513 to 0.523; then the shadows-only
+  green `(0.522 + Tg) / M` is 0.802 to 0.815, and 78 of 97 reads 0.799 to 0.809: they meet.
+- Blue: both 8 puts `Tb` at 0 to 0.012; shadows only `(0.180 + Tb) / M` is 0.140 to 0.150, and 10
+  of 70 reads 0.136 to 0.150.
+
+One term reproduces both frames, `T` = (0.517, 0.518, 0.005) (a yellow light, about 132 on
+gl1's scale): shadows only, the sum (1.286, 1.040, 0.185) divided by 1.286 is (1, 0.809, 0.144),
+times the albedo (127, 78.4, 10.1), so (127, 78, 10); both, the sum (0.984, 0.835, 0.115) is not
+divided, (125.0, 81.0, 8.0). Green rises 3 levels: the factor took 0.205 off its sum, and the
+divisor's fall from 1.286 to 1 gave it back more.
+
+**Every brightened pixel.** Of the 48,146 (`demo1.dm2`) and 35,254 (`demo2.dm2`) brighter
+channels, none is the pixel's brightest (none at its albedo's value in the shadows-only frame).
+In the frames without a screen blend every brightened pixel has a shadows-only channel at its
+albedo's value, a divided sum: 15,361 pixels of `demo1.dm2` (frames 7, 20, 21) and 30,053 of
+`demo2.dm2` (frames 5, 6, 21, 33, 34, 36, 76, 77, 83). The rest are in blend frames, whose
+`1 - alpha` hides that mark: `demo1.dm2` frames 5 and 8, `demo2.dm2` frames 23, 78 and 82 (32,785
+and 5,195 pixels). By how much: +1 level for 36,797 and 28,997 channels, +2 for 8,821 and
+5,065, 3 or more for 2,528 and 1,192.
+
+The floor still holds against the shadows-only frame: the divisor with the AO is at most the
+one without, and `f L + T >= m (L + T)`, so the light is at least `m` times the shadows-only
+light; the corrected check finds no channel under on either demo (*Both effects on*).
+
+### 3. The cost against the budget
+
+**No budget of its own.** Design section 2 gives one time figure, the total with everything
+on ("about 5 rays per pixel", assumed 8 to 14 ms at 1080p on apple7, about half that on apple9's
+render-stage path), and section 8's verdicts give the AO's row "no time budget of its own; part
+of the totals". Against that total the AO's 3.67 ms median at 1920 x 1080 is 92 % of apple9's
+4 ms and 52 % of its 7 ms; with RT3's 2.55 ms the two effects built take 6.22 ms, before the sun
+and the reflections. Against the AO's share of the total by section 8's own proportions (two AO
+rays 1.75 of 5.14 ms, 34 %, so 1.36 to 2.38 ms of 4 to 7) it is over by 1.3 to 2.3 ms, and against
+section 8's closed-scene time for the same two rays a pixel (1.75 ms) by 1.92 ms, 2.1 times.
+
+**Where the time goes**, from the cost runs' stats lines (587 warm frames a run, each with its
+traced pixels, rays, hits and GPU time):
+
+- *Not in proportion to the pixels at 1080p.* 5120 x 2880 has 7.11 times the pixels and takes
+  2.98 times the time (10.955 against 3.673 ms, medians). All the pass's work a pixel (the two
+  rays, the noise's four tile reads, the light's copy: 13 bytes read and 9 written a pixel, 45.6
+  MB a frame at 1080p) grows with the pixels, so at 1080p it is at most `10.955 / 7.11` = 1.54
+  ms; at least 2.1 ms of the 3.67 ms does not grow with the pixel count.
+- *The rays that meet something.* Within a 1080p run a frame's time follows its hits
+  (correlation 0.41 to 0.56 over a run's frames, 0.62 to 0.93 ms a million hits, 1.29 million a
+  frame on average, so about 0.9 ms); at 5120 x 2880 hardly (0.13 to 0.17, 0.05 ms a million).
+  The entities add 0.43 ms at 1080p (more instances to traverse) and nothing measurable at
+  5120 x 2880.
+- *Not measured:* the split between the rays, the noise and the copy (no run timed the pass with
+  the rays skipped), and what the 1080p part that does not scale is. A 1080p `timedemo` frame
+  is held to the display's 60 Hz, which leaves the GPU idle part of each frame; its clock at
+  that load was not recorded. The follow-up card should time the pass with the rays skipped
+  (the noise and the copy alone) and at 1080p with the frame rate not held.
 
 ## The runs as planned
 

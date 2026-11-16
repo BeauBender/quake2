@@ -162,11 +162,18 @@ each, without and with entities (`rt-ao-entities`):
 - 5120 x 2880: median 10.96 ms (p10 9.4 to 9.5, p90 11.7 to 11.9); with entities 10.97 ms (p10
   9.35 to 9.37, p90 11.8 to 11.9).
 
-Against the budget above (about 5 rays a pixel with everything on, assumed 8 to 14 ms on apple7
-and about half that on apple9), the AO's two rays alone take 3.7 to 4.1 ms on apple9 at 1080p,
-most of the halved 4 to 7 ms, and at 5120 x 2880 two thirds of a 60 Hz frame, so on that output
-the effect needs the internal resolution of the next subsection. `timedemo` reads the display's 60 fps at 1080p
-with the effect on and off.
+The AO has no time budget of its own (section 8's verdicts: part of the total). Against the
+total above (about 5 rays a pixel with everything on, assumed 8 to 14 ms on apple7 and about
+half that on apple9), the AO's two rays alone take 3.7 to 4.1 ms on apple9 at 1080p, 92 % of
+the halved range's 4 ms and 52 % of its 7 ms, and at 5120 x 2880 two thirds of a 60 Hz frame,
+so on that output the effect needs the internal resolution of the next subsection. Against the
+AO's share of the total by section 8's proportions (1.75 of 5.14 ms, so 1.4 to 2.4 ms of 4 to 7)
+the 1080p median is over by 1.3 to 2.3 ms. Where it goes: 5120 x 2880 has 7.1 times the pixels
+and takes 3.0 times the time, so at most 1.54 ms of the 1080p 3.67 ms grows with the pixels (the
+rays, the noise, the light's copy) and at least 2.1 ms does not; within a 1080p run a frame's
+time follows the rays that meet an occluder (about 0.9 ms of it). The split between the rays,
+the noise and the copy was not measured (runbook, rework 1). `timedemo` reads the display's 60
+fps at 1080p with the effect on and off.
 
 ### Internal resolution and upscaling with MetalFX (TASK105)
 
