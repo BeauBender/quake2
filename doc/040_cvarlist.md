@@ -865,7 +865,7 @@ marked `(n/a)` and skipped.
   with the configuration; applies from the next frame.
 
 The `r_rt_*` cvars belong to the Metal renderer's ray tracing, which is
-being built: `r_rt_shadows` is its first effect and `r_rt_ao` its second; with `r_rt_stats` set, the renderer
+being built: `r_rt_shadows` is its first effect, `r_rt_ao` its second and `r_rt_water` its third; with `r_rt_stats` set, the renderer
 builds acceleration structures for the world, the doors and platforms
 and every model the frame lists (not only those in view, since a model
 out of view can still cast into it), which nothing reads. On a GPU without ray
@@ -1038,11 +1038,65 @@ is.
   `r_rt_ao` on a line for the occlusion pass: the pixels it ran on, the
   world pixels that traced, those darkened and those darkened to
   `r_rt_ao_min`, the pixels facing up (floors) and of them those darkened,
-  the rays, those that met a surface and the pass's GPU time. Nothing is
-  drawn differently. The objects it makes are
+  the rays, those that met a surface and the pass's GPU time; with
+  `r_rt_water` on a line for the reflections: the pixels it ran on, those
+  of opaque and of translucent water, the rays from the eye that looked
+  for translucent water, the water pixels whose reflection came from the
+  picture, from the sky and from nowhere, and the pass's GPU time. Nothing
+  is drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next
   frame.
+
+* **r_rt_water**: When set to `1`, the Metal renderer gives water a
+  ray-traced reflection, one bounce: from each pixel of water (the
+  opaque water and the translucent water in front of the rest of the
+  view) one ray goes off the surface in the mirror direction, the flat
+  surface's direction tilted with the water's own warp (see
+  `r_rt_water_normal`), so the reflection ripples as the texture does.
+  What it meets is shown as the picture shows it, lightmaps, dynamic
+  lights and the other ray-traced effects included; where it meets the
+  sky, the sky in that direction. A surface the view does not show (off
+  the screen, or hidden behind something nearer) gives no reflection,
+  and the water there is drawn as before. The reflection is mixed into
+  the water's colour by `r_rt_water_reflect`; translucent water keeps
+  its transparency. The rays meet the world, the doors and platforms and
+  the models, but not the view weapon or the player's own model. Needs a
+  GPU with ray tracing and draws the view through the G-buffer (see
+  `r_rt_gbuffer`) on a map with water, so every pixel that is not water is
+  drawn as with `r_rt_gbuffer 1`: within one level of a colour channel of
+  the picture without the effect. On a map without water it does nothing.
+  With `r_rt_shadows_show` or `r_rt_ao_show` on, that view is shown without
+  the reflections. With `0`
+  (the default) nothing is traced or allocated and the picture is as
+  without ray tracing. Saved with the configuration; applies from the
+  next frame.
+
+* **r_rt_water_normal**: How far `r_rt_water`'s reflections ripple: the
+  water's warp tilts the surface's direction by up to this much
+  (`0.08`, the default, is about 6 degrees, `0` a still mirror). The
+  water's surface itself stays flat. A value below `0` counts as `0`, one
+  above `1` as `1`, one that is not a finite number as `0.08`. Saved with
+  the configuration; applies from the next frame.
+
+* **r_rt_water_reflect**: How much of `r_rt_water`'s reflection is mixed
+  into the water's colour, from `0` (none) to `1` (the reflection
+  alone); `0.5` by default. Translucent water keeps its transparency
+  either way. A value outside the range counts as the nearest end, one
+  that is not a finite number as `0.5`. Saved with the configuration;
+  applies from the next frame.
+
+* **r_rt_water_show**: A development view of the Metal renderer's
+  `r_rt_water`: with it on, `1` replaces the picture by a mask, black
+  on every pixel of water the pass found and white elsewhere (the pixels
+  that must look as without the reflections), `2` by the pass's classes:
+  black not water, green a reflection from the picture, blue from the
+  sky, red none. The view weapon, models drawn over the world, particles
+  and translucent surfaces are left out of these views. `0` (the
+  default) shows the picture; a value above `2` counts as `2`, one that
+  is not a finite number as `0`, and a fraction is cut to the whole
+  number below it. Cheat-protected: reset to `0` in multiplayer. Applies
+  from the next frame.
 
 
 ## Gamepad
