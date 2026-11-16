@@ -281,6 +281,10 @@ fps off, 60.0, 60.0 and 60.0 on (689 frames in 11.5 s), the display's rate.
   line, the teardown matched (`rt 73/73`), and the 23 frames byte-identical to the release
   build's.
 
+## Rework 1: the floor check's four frames, the two effects together, the cost
+
+(In progress.)
+
 ## The runs as planned
 
 1. **Effect off.** Every scenario recorded on the head with `MTL_DEBUG_LAYER=1`, against
