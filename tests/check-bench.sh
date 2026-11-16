@@ -16,7 +16,7 @@
 #     stored; a stopped command (a STOP to its group, and stty on a pty
 #     from script when there is one) said and ended with 74; work a
 #     command leaves running on a normal exit stopped before the lock is
-#     free; no job notice on standard error; the command's own INT trap;
+#     free, with the same grace floor when it catches TERM; no job notice on standard error; the command's own INT trap;
 #     reclaim of a dead holder, logged, and of two waiters that reclaim at
 #     once exactly one gets the lock; a held reclaim guard, a holder whose
 #     command's group still runs, and a holder-less lock inside its grace
@@ -26,8 +26,8 @@
 #     outside-repository guard (a relative path, a . or .. segment, a git
 #     ceiling, a failing git; a host without git uses the .git walk);
 #   - the wall-time bound: it stops a grandchild, bounds a command that
-#     ignores TERM, stops the work a command leaves running, and shows no
-#     job notice;
+#     ignores TERM, stops the work a command leaves running, ends a
+#     stopped command and its group with 74, and shows no job notice;
 #   - the host token and class line: stable, from system facts only, and
 #     free of the identity values tests/check-no-local-identity.sh refuses
 #     (hostname -s, whoami, $HOME), with the scrub and the salt tried on
@@ -554,6 +554,16 @@ t_bounded() {
 		_st=0
 		bench_bounded 5 sh -c 'exit 7' || _st=$?
 		[ "$_st" -eq 7 ] || { echo "$me: bounded: wanted the command's status 7, got $_st"; exit 1; }
+		# A command that is stopped (a STOP to its own group, once its
+		# grandchild runs) is said, stopped with its group, and gives 74
+		# well inside its wall time; nothing of it runs on.
+		_st=0
+		bench_bounded 20 sh -c 'echo $$ > "$4"; sh "$1" "$2" "$3" bstop 30 & while [ ! -s "$2" ]; do sleep 0.05; done; kill -s STOP -- "-$$"; echo bstop-went-on >> "$3"' x "${E:?}/gc.sh" "${E:?}/b.stop" "${E:?}/log" "${E:?}/b.leader" 2> "${E:?}/bstop.err" || _st=$?
+		[ "$_st" -eq 74 ] || { echo "$me: bounded: wanted 74 from a stopped command, got $_st"; exit 1; }
+		grep -q '^bench: the command stopped' "${E:?}/bstop.err" || { echo "$me: bounded: a stopped command was not said"; exit 1; }
+		if pid_running "$(cat "${E:?}/b.leader" 2> /dev/null)"; then echo "$me: bounded: a stopped command outlived the bound"; exit 1; fi
+		if pid_running "$(cat "${E:?}/b.stop" 2> /dev/null)"; then echo "$me: bounded: a stopped command's grandchild outlived the bound"; exit 1; fi
+		if grep -q bstop-went-on "${E:?}/log"; then echo "$me: bounded: a stopped command went on after the bound stopped it"; exit 1; fi
 		while [ "$(date +%s)" -le $((_tl + 3)) ]; do sleep 0.2; done
 		if grep -q 'late$' "${E:?}/log"; then echo "$me: bounded: something wrote after the bound returned: $(grep 'late$' "${E:?}/log" | tr '\n' ' ')"; exit 1; fi
 		if pid_running "$(cat "${E:?}/b.left" 2> /dev/null)"; then echo "$me: bounded: the work a command left running outlived the bound"; exit 1; fi
