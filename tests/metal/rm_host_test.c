@@ -1101,6 +1101,8 @@ test_present_chain(void)
 		held.color = held.depth = 1;
 		held.cw = w;
 		held.ch = h;
+		held.zw = w;
+		held.zh = h;
 		held.lw = s.lw;
 		held.lh = s.lh;
 		/* the next frame of the same window makes nothing again */
