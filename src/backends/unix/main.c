@@ -36,6 +36,19 @@
 
 #include "../../common/header/common.h"
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
+/*
+ * iOS, tvOS and visionOS: SDL's UIKit main() runs UIApplicationMain and
+ * calls the main() below, renamed SDL_main by this header, once the
+ * application has launched. The client only; q2ded has no SDL.
+ */
+#if !defined(DEDICATED_ONLY) && defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+#include <SDL3/SDL_main.h>
+#endif
+
 void registerHandler(void);
 void setCustomCfgDir(const char* dir);
 

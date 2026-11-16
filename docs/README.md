@@ -45,6 +45,9 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | `docs/analysis/` | Measured inventories of existing code that plans and cards cite |
 | `docs/DEPENDENCIES.md` | Every external library and vendored file, and its status |
 | `third_party/SDL3/` | SDL 3 source, byte-identical to the upstream release tarball and verified against `MANIFEST.sha256` by `scripts/check-vendored.sh`; built on macOS by `third_party/sdl3.make`. Provenance and update procedure in its `README.md` |
+| `scripts/ios-sim.sh` | The iOS simulator app on a throwaway device: `smoke` builds it with synthetic data and checks from the engine's log and frame that it reaches the console; see `doc/020_installation.md` |
+| `scripts/ios/` | `smokepak.py`, the synthetic pak of the iOS smoke run (a palette and a console font made from formulas) |
+| `stuff/ios/` | `Info.plist.in`, the iOS app bundle's template, filled in by `make ios` |
 | `scripts/pins.sh`, `scripts/pins/` | The renderer pin harness: record frames per scenario, compare renderers, make and publish pull-request evidence (`evidence.py`); user page `doc/100_renderpins.md`, procedure in `docs/plans/metal-port-harness.md` |
 | `scripts/bench/` | The bench harness: `bench.sh`, its one entry point (a host-wide lock for heavy work, the host token and build-inputs id, a per-host store of measured baselines outside the repository, drift and compare); `core/` names no game, `adapters/` and `cases/` do (the `null` ones are for the self-test `tests/check-bench.sh`); plan [`docs/plans/bench-harness.md`](plans/bench-harness.md), commands in `doc/085_unittests.md` |
 | `scripts/metalfx-report.sh`, `scripts/metalfx-report/` | A local HTML report comparing the MetalFX scalers, frame generation and the denoiser on the Mac it runs on; never committed or uploaded; procedure in `docs/runbook/TASK114.md`, self-test `tests/check-metalfx-report.sh` |

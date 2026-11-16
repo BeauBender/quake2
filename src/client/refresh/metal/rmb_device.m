@@ -38,6 +38,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+#include <TargetConditionals.h>
 
 #include <os/lock.h>
 #include <stdatomic.h>
@@ -669,7 +670,9 @@ rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen)
 		rmb_layer.maximumDrawableCount = RMB_FRAMES_IN_FLIGHT;
 		rmb_layer.framebufferOnly = NO;              /* the present blit writes it */
 		rmb_layer.allowsNextDrawableTimeout = YES;   /* nextDrawable gives up after one second */
+#if TARGET_OS_OSX /* displaySyncEnabled is macOS only (C2 settles vsync elsewhere) */
 		rmb_layer.displaySyncEnabled = rmb_sync ? YES : NO;
+#endif
 		/* an opaque layer of about 1720x700 points or more is shown once per refresh (FIX53) */
 		rmb_layer.opaque = rmb_sync ? YES : NO;
 	}
@@ -789,20 +792,24 @@ rmb_set_vsync(int on)
 
 	if (rmb_layer)
 	{
+#if TARGET_OS_OSX /* displaySyncEnabled is macOS only (C2 settles vsync elsewhere) */
 		rmb_layer.displaySyncEnabled = rmb_sync ? YES : NO;
+#endif
 		/* an opaque layer of about 1720x700 points or more is shown once per refresh (FIX53) */
 		rmb_layer.opaque = rmb_sync ? YES : NO;
 	}
 }
 
-/* What the layer has: its displaySyncEnabled, or what the next layer gets without one. */
+/* What the layer has: its displaySyncEnabled, or what the next layer gets without one (and off macOS, which has no displaySyncEnabled). */
 int
 rmb_vsync(void)
 {
+#if TARGET_OS_OSX
 	if (rmb_layer)
 	{
 		return rmb_layer.displaySyncEnabled ? 1 : 0;
 	}
+#endif
 
 	return rmb_sync;
 }

@@ -32,6 +32,8 @@
  * =======================================================================
  */
 
+#include <TargetConditionals.h>
+
 #include "header/local.h"
 #include "header/rm_rtscene.h"
 #include "header/rm_rtaoscene.h"
@@ -315,10 +317,17 @@ RI_Init(void)
 
 	if (!rm_caps_floor_ok(caps.families))
 	{
+#if defined(TARGET_OS_SIMULATOR) && TARGET_OS_SIMULATOR
+		/* the iOS, tvOS and visionOS simulators report no Apple GPU
+		   family; the floor is the device's, checked on the device */
+		R_Printf(PRINT_ALL, "ref_metal: the device floor (apple%d) is not checked in the simulator\n",
+				RMB_FAMILY_FLOOR);
+#else
 		R_Printf(PRINT_ALL, "ref_metal: the Metal device supports no Apple GPU family from apple%d on; ref_metal needs one\n",
 				RMB_FAMILY_FLOOR);
 		RM_Close();
 		return false;
+#endif
 	}
 
 	if (!R_SetMode())
