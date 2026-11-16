@@ -463,30 +463,48 @@ rm_rtao_upsample(depth2d<float, access::read> depth [[texture(0)]],
 
 			for (int i = 0; i < 4; i++)
 			{
-				const uint2 lo = uint2((i & 1) ? qx.lo1 : qx.lo0, (i & 2) ? qy.lo1 : qy.lo0);
-				const uint2 sp = uint2(mtl_rtao_lo_src(lo.x, v.div, w), mtl_rtao_lo_src(lo.y, v.div, h));
-				const float fx = (i & 1) ? qx.f : 1.0f - qx.f, fy = (i & 2) ? qy.f : 1.0f - qy.f;
-				const float ds = depth.read(sp);
-				const float4 ns = normal.read(sp);
+				u.ao[i] = ao_lo.read(uint2((i & 1) ? qx.lo1 : qx.lo0, (i & 2) ? qy.lo1 : qy.lo0)).r;
+			}
 
-				u.w[i] = fx * fy;
-				u.ao[i] = ao_lo.read(lo).r;
-				u.world[i] = (mat.read(sp).r == MTL_GB_MAT_WORLD) && (ds < 1.0f) && (ns.a > 0.5f);
-				u.same[i] = 0;
-
-				if (u.world[i])
+			/*
+			 * Four equal AOs give that AO whatever the weights: a non-world
+			 * traced pixel holds 1, so four equal below 1 are world pixels,
+			 * and four 1s give 1 either way (mtl_rtao_up_ao). Only the others
+			 * read the traced pixels' surfaces.
+			 */
+			if ((u.ao[0] == u.ao[1]) && (u.ao[0] == u.ao[2]) && (u.ao[0] == u.ao[3]))
+			{
+				ao = u.ao[0];
+			}
+			else
+			{
+				for (int i = 0; i < 4; i++)
 				{
-					const float3 nsn = normalize(ns.xyz * 2.0f - 1.0f);
-					const float3 ps = rm_rtao_position(v, sp, ds);
+					const uint2 lo = uint2((i & 1) ? qx.lo1 : qx.lo0, (i & 2) ? qy.lo1 : qy.lo0);
+					const uint2 sp = uint2(mtl_rtao_lo_src(lo.x, v.div, w), mtl_rtao_lo_src(lo.y, v.div, h));
+					const float fx = (i & 1) ? qx.f : 1.0f - qx.f, fy = (i & 2) ? qy.f : 1.0f - qy.f;
+					const float ds = depth.read(sp);
+					const float4 ns = normal.read(sp);
 
-					u.same[i] = mtl_rtao_up_same(mtl_rtao_v3(p.x, p.y, p.z), mtl_rtao_v3(n.x, n.y, n.z),
-							mtl_rtao_v3(ps.x, ps.y, ps.z), mtl_rtao_v3(nsn.x, nsn.y, nsn.z), tol);
+					u.w[i] = fx * fy;
+					u.world[i] = (mat.read(sp).r == MTL_GB_MAT_WORLD) && (ds < 1.0f) && (ns.a > 0.5f);
+					u.same[i] = 0;
+
+					if (u.world[i])
+					{
+						const float3 nsn = normalize(ns.xyz * 2.0f - 1.0f);
+						const float3 ps = rm_rtao_position(v, sp, ds);
+
+						u.same[i] = mtl_rtao_up_same(mtl_rtao_v3(p.x, p.y, p.z), mtl_rtao_v3(n.x, n.y, n.z),
+								mtl_rtao_v3(ps.x, ps.y, ps.z), mtl_rtao_v3(nsn.x, nsn.y, nsn.z), tol);
+					}
 				}
+
+				ao = mtl_rtao_up_ao(u);
 			}
 
 			traced = 1;
 			up = (n.z > 0.99f) ? 1u : 0u;
-			ao = mtl_rtao_up_ao(u);
 		}
 	}
 

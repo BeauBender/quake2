@@ -962,6 +962,30 @@ test_up(void)
 
 	CHECK(ok);
 
+	/*
+	 * The kernel's shortcut: four equal 8-bit AOs (a non-world traced pixel
+	 * holds 1, so four equal below 1 are world pixels) under bilinear
+	 * weights give that 8-bit AO whatever the surface tests say.
+	 */
+	ok = 1;
+
+	for (k = 0; k < 20000; k++)
+	{
+		const float a8 = (float)(k % 256) / 255.0f, fx = frand(0, 0.999f), fy = frand(0, 0.999f);
+
+		for (i = 0; i < 4; i++)
+		{
+			u.ao[i] = a8;
+			u.w[i] = ((i & 1) ? fx : 1.0f - fx) * ((i & 2) ? fy : 1.0f - fy);
+			u.same[i] = frand(0, 1) < 0.5f;
+			u.world[i] = (a8 < 1.0f) ? 1 : (frand(0, 1) < 0.5f);
+		}
+
+		ok &= (rintf(mtl_rtao_up_ao(u) * 255.0f) == (float)(k % 256));
+	}
+
+	CHECK(ok);
+
 	/* always a mean of the AOs it is given: within their least and most, so the floor holds */
 	ok = 1;
 
