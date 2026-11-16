@@ -181,8 +181,8 @@ void CL_TrapParticles(entity_t *ent) { }
 
 void V_AddEntity(entity_t *ent) { }
 void V_RenderView(float s) { }
-void R_BeginFrame(float s) { }
-void R_EndFrame(void) { }
+void R_BeginFrame(float s) { stub_calls.begins++; }
+void R_EndFrame(void) { stub_calls.ends++; }
 qboolean R_EndWorldRenderpass(void) { return false; }
 void R_RenderFrame(refdef_t *fd) { }
 void R_SetPalette(const unsigned char *p) { }

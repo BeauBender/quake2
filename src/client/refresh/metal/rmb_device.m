@@ -130,7 +130,9 @@ rmb_frame_wait_ms(void)
  * there and both of its completed handlers have run (rmb_present_live).
  * Turning display sync on and teardown wait for that, bounded, before the
  * present state is released (rmb_present_drain, FIX69), so no handler or
- * block runs after its state is gone.
+ * block runs after its state is gone. A drain that gives up at the bound
+ * leaves those presents to their group and starts a new one, so the next
+ * drain neither waits for them nor counts them again (FIX77).
  */
 #define RMB_PRESENTS (RMB_FRAMES_IN_FLIGHT + 1)   /* maximumDrawableCount (rmb_attach), and the open frame */
 
@@ -223,18 +225,32 @@ rmb_present_target_drop(int i)
 /*
  * Waits, at most until, for every present handed to rmb_present_order to
  * be done: its block there and both of its completed handlers have run
- * (FIX69). Counts and logs a wait that ends at the bound.
+ * (FIX69); 1 when they are. A wait that ends at the bound is counted and
+ * logged, and the presents it gave up on are left to their group, which
+ * their blocks hold: the presents after them go in a new one, so a later
+ * drain (teardown drains twice, from RI_ShutdownContext and rmb_close)
+ * neither waits for them again nor counts them again (FIX77).
  */
-static void
+static int
 rmb_present_drain(dispatch_time_t until)
 {
+	dispatch_group_t next;
+
 	if (!rmb_present_live || (dispatch_group_wait(rmb_present_live, until) == 0))
 	{
-		return;
+		return 1;
 	}
 
 	rmb_counts.present_drains_late++;
 	fprintf(stderr, "ref_metal: a present is still on its way after %d ms\n", RMB_GPU_WAIT_MS);
+	next = dispatch_group_create();
+
+	if (next)
+	{
+		rmb_present_live = next;
+	}
+
+	return 0;
 }
 
 /*
@@ -247,7 +263,7 @@ static void
 rmb_ahead_drop(void)
 {
 	dispatch_time_t until = rmb_deadline(RMB_GPU_WAIT_MS);
-	int i;
+	int i, done;
 
 	if (rmb_ahead_queue)
 	{
@@ -255,7 +271,7 @@ rmb_ahead_drop(void)
 	}
 
 	(void)rmb_ahead_take();
-	rmb_present_drain(until);
+	done = rmb_present_drain(until);
 
 	for (i = 0; i < RMB_PRESENTS; i++)
 	{
@@ -264,11 +280,16 @@ rmb_ahead_drop(void)
 			continue;
 		}
 
-		if (dispatch_semaphore_wait(rmb_present_sem[i], until) == 0)
+		/*
+		 * With every present done a slot is free, unless a present that
+		 * an earlier drain gave up on holds it: that one is not waited for
+		 * again (FIX77).
+		 */
+		if (dispatch_semaphore_wait(rmb_present_sem[i], done ? DISPATCH_TIME_NOW : until) == 0)
 		{
 			dispatch_semaphore_signal(rmb_present_sem[i]);
 		}
-		else
+		else if (!done)
 		{
 			fprintf(stderr, "ref_metal: a present is still on the GPU after %d ms\n", RMB_GPU_WAIT_MS);
 		}
