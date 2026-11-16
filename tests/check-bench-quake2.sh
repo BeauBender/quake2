@@ -230,7 +230,7 @@ cat > "$B/release/quake2" << 'EOF'
 #!/bin/sh
 for a; do printf 'arg %s\n' "$a"; done
 [ ! -f "$(dirname "$0")/baseq2/config.cfg" ] || echo "a saved configuration was read"
-echo "Loading library: ${FAKE_LIB:-ref_metal.dylib}"
+echo "Loading library: ${FAKE_LIB:-ref_metal.dylib}"; echo "Loading library: game.dylib"
 [ -n "${FAKE_NORT:-}" ] || echo "Metal supportsRaytracing: yes, supportsRaytracingFromRender: yes"
 [ -z "${FAKE_EXIT:-}" ] || exit "$FAKE_EXIT"
 trap 'echo "ref_metal: metal_stats: 10 frames, 2 without a drawable, 0 skipped, 0 failed command buffers, 0 readbacks"; exit 0' TERM
@@ -261,7 +261,7 @@ else
 	bad "a run of the stand-in engine failed: $(cat "${T:?}/run.err")"
 fi
 run_fake "${T:?}/run.case" FAKE_LIB=ref_gl1.dylib && bad "a run on another renderer was accepted"
-grep -q "ran the renderer 'ref_gl1.dylib', not metal" "${T:?}/run.err" || bad "a wrong renderer is not named: $(cat "${T:?}/run.err")"
+grep -q "ran the renderer 'ref_gl1', not metal" "${T:?}/run.err" || bad "a wrong renderer is not named: $(cat "${T:?}/run.err")"
 run_fake "${T:?}/run.case" FAKE_NORT=1 && bad "a run whose engine reports no ray tracing was accepted"
 grep -q 'reports no ray tracing' "${T:?}/run.err" || bad "the missing ray tracing line is not said: $(cat "${T:?}/run.err")"
 run_fake "${T:?}/run.case" FAKE_EXIT=3 && bad "an engine that exits 3 was accepted"
@@ -286,7 +286,7 @@ L=${T:?}/metrics.log
 	echo 'ref_metal: rt shadows: frame 6: 2073600 pixels, 7 in range, 7 traced, 3 shadowed, 28 rays, - ms'
 	echo 'ref_metal: rt ao: frame 1: 2073600 pixels, 9 traced, 1 occluded, 0 at the floor, 2 up (0 occluded), 18 rays, 1 hits, 8.000 ms'
 	echo 'ref_metal: rt ao: frame 2: 2073600 pixels, 9 traced, 1 occluded, 0 at the floor, 2 up (0 occluded), 18 rays, 1 hits, 8.000 ms'
-	echo 'ref_metal: rt ao: frame 3: 2073600 pixels, 9 traced, 1 occluded, 0 at the floor, 2 up (0 occluded), 18 rays, 1 hits, 3.600 ms'
+	echo 'Map: base2ref_metal: rt ao: frame 3: 2073600 pixels, 9 traced, 1 occluded, 0 at the floor, 2 up (0 occluded), 18 rays, 1 hits, 3.600 ms'
 	echo 'ref_metal: rt ao: frame 4: 2073600 pixels, 9 traced, 1 occluded, 0 at the floor, 2 up (0 occluded), 18 rays, 1 hits, 3.700 ms'
 	echo '689 frames, 0.1 seconds: 6890.0 fps'
 	echo '12 frames, 9.0 seconds: 1.3 fps'
@@ -317,6 +317,14 @@ metric.rtao_ms_p90=3.7
 metric.rtao_ms_n=2
 EOF
 cmp -s "${T:?}/m.want" "${T:?}/m.out" || bad "the metrics of the synthetic log: $(diff "${T:?}/m.want" "${T:?}/m.out" | tr '\n' ' ')"
+# after_frame=3: the pass lines of frames 4 to 6 only ("-" not timed); the
+# scaler's lines have no frame number and are all counted
+mkcase m3 "$ok_set after_frame=3"
+q2h "${T:?}/m3.case" adapter_metrics "${T:?}/m3.case" "$L" > "${T:?}/m3.out" 2> "${T:?}/m.err" || bad "the metrics failed: $(cat "${T:?}/m.err")"
+for l in metric.rts_ms=1.9 metric.rts_ms_n=2 metric.rts_traced_ms_n=2 metric.rtao_ms=3.7 metric.rtao_ms_n=1 metric.scaler_ms=0.95 metric.scaler_ms_n=4; do
+	grep -qx "$l" "${T:?}/m3.out" || bad "after_frame=3: no $l in $(tr '\n' ' ' < "${T:?}/m3.out")"
+done
+L=${T:?}/mgl.log
 printf 'mgl: 500 frames, 20 without a drawable, 0 skipped, 0 draws past the vertex ring\nmgl: 2 command buffers failed\n' > "$L"
 q2h "${T:?}/m.case" adapter_metrics "${T:?}/m.case" "$L" > "${T:?}/m.out" 2> /dev/null || true
 printf 'metric.frames=500\nmetric.no_drawable=20\nmetric.presented=480\nmetric.skipped=0\nmetric.failed=2\n' | cmp -s - "${T:?}/m.out" ||
