@@ -31,6 +31,10 @@
 
 #include <SDL3/SDL.h>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 static SDL_Window *window;
 static SDL_MetalView view;
 qboolean IsHighDPIaware = false;
@@ -91,6 +95,85 @@ RI_InitContext(void *win)
 	return true;
 }
 
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+/*
+ * The insets of the window's safe rectangle in pixels (TASK147), the
+ * corners, the sensor housing and the home indicator of an iPhone or iPad.
+ * All 0 when SDL has no rectangle or it leaves nothing. (Elsewhere
+ * local.h's RI_GetLayer gives no inset, and the rest of the file is as it was.)
+ */
+static void
+RI_GetSafeInsets(rm_inset_t *in)
+{
+	SDL_Rect r;
+	int pw, ph;
+
+	static int logged[6] = { -1, -1, -1, -1, -1, -1 };
+	int now[6];
+
+	memset(in, 0, sizeof(*in));
+	pw = ph = 0;
+
+	if (window && SDL_GetWindowSizeInPixels(window, &pw, &ph) && SDL_GetWindowSafeArea(window, &r))
+	{
+		rm_safe_insets((float)r.x, (float)r.y, (float)r.w, (float)r.h,
+				SDL_GetWindowPixelDensity(window), pw, ph, in);
+	}
+
+	/* once per change, for the log: the window in pixels and the insets the frame is placed by */
+	now[0] = pw;
+	now[1] = ph;
+	now[2] = in->left;
+	now[3] = in->top;
+	now[4] = in->right;
+	now[5] = in->bottom;
+
+	if (memcmp(now, logged, sizeof(now)) != 0)
+	{
+		memcpy(logged, now, sizeof(now));
+		R_Printf(PRINT_ALL, "ref_metal: safe area: window %ix%i pixels, insets left %i top %i right %i bottom %i\n",
+				pw, ph, in->left, in->top, in->right, in->bottom);
+	}
+}
+
+/*
+ * The view and the layer of the window (rm_window_sizes) with the insets
+ * the present places the frame by: no inset when the sizes refuse them.
+ */
+static void
+RI_GetWindowSizes(rm_sizes_t *s, rm_inset_t *in)
+{
+	int pw = 0, ph = 0;
+
+	RI_GetSafeInsets(in);
+
+	if (!window || !SDL_GetWindowSizeInPixels(window, &pw, &ph))
+	{
+		pw = ph = 0;
+	}
+
+	if (!rm_window_sizes(pw, ph, in, s))
+	{
+		memset(in, 0, sizeof(*in));
+	}
+}
+
+/*
+ * The layer's drawable, the window's whole pixels, and the insets of its
+ * safe rectangle, where the present puts the frame (TASK147): viddef is
+ * the rectangle (RI_GetDrawableSize), the drawable is not.
+ */
+void
+RI_GetLayer(int *width, int *height, rm_inset_t *in)
+{
+	rm_sizes_t s;
+
+	RI_GetWindowSizes(&s, in);
+	*width = s.lw;
+	*height = s.lh;
+}
+#endif
+
 void
 RI_GetDrawableSize(int *width, int *height)
 {
@@ -99,6 +182,18 @@ RI_GetDrawableSize(int *width, int *height)
 		*width = 0;
 		*height = 0;
 	}
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+	else
+	{
+		/* viddef is the safe rectangle: the HUD, the console, the menus and the 3D view lie inside it */
+		rm_inset_t in;
+		rm_sizes_t s;
+
+		RI_GetWindowSizes(&s, &in);
+		*width = s.vw;
+		*height = s.vh;
+	}
+#endif
 }
 
 void

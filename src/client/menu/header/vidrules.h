@@ -66,6 +66,33 @@ typedef struct
 	const char *text;
 } vidrule_t;
 
+/*
+ * The platform input of the screen's items (TASK147): the desktop (a
+ * window of a mode on a display, fullscreen or not, with a swap
+ * interval) or iOS (the whole screen at its own size, always in step
+ * with the display, the one renderer linked in). The menu takes it from
+ * its build; the unit tests give either.
+ */
+typedef enum
+{
+	VIDPLAT_DESKTOP,
+	VIDPLAT_IOS
+} vidplat_t;
+
+/* The items of the video menu that depend on the screen, not on the renderer. */
+typedef enum
+{
+	VIDSCR_MODE,
+	VIDSCR_FULLSCREEN,
+	VIDSCR_DISPLAY,
+	VIDSCR_VSYNC,
+	VIDSCR_RENDERER,
+	VIDSCR_COUNT
+} vidscr_t;
+
+/* enabled and the reason of a screen item; an unknown platform or item is greyed */
+vidrule_t VidRules_Screen(vidplat_t plat, vidscr_t item);
+
 vidref_t VidRules_Renderer(const char *name);
 
 /* enabled and the reason or note of an item; an unknown item is greyed */

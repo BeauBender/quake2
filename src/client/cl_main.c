@@ -749,6 +749,7 @@ cheatvar_t cheatvars[] = {
 	{"r_rt_gbuffer_show", "0"},
 	{"r_rt_shadows_show", "0"},
 	{"r_rt_ao_show", "0"},
+	{"r_rt_water_show", "0"},
 	{NULL, NULL}
 };
 
