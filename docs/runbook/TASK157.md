@@ -179,4 +179,20 @@ figures are measured at the GPU's later level, which the not-held runs match.
 
 ## Checks
 
-@@CHECKS@@
+On `2949d1d8`'s source with these documents, every one through the host's lock wrapper:
+
+- `make test`: `yq2test: 165 tests, 0 failed` (the two new menu-rule tests among them).
+- `tests/check-ref-metal.sh`: ok (AO 281 checks, 0 failed; `ref_metal` built).
+- `tests/check-pins.sh`: `pins selftest: ok`. Its first run, straight after a batch of engine
+  runs, failed five of the selftest's parts (thresholds, replace, hidpi, replay_compare,
+  demo_sum); run again alone it passed. This card changes nothing the selftest runs.
+- `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-no-local-identity.sh`
+  and `tests/check-video-menu.sh` (`videomenu_test: 2594 checks, 0 failed`): ok.
+- Builds: `make client`; `make -B ref_metal` with and without `METAL_SHADERS=no`; `make ASAN=1
+  client game ref_metal`; `make STATIC_MODULES=1 STATIC_RENDERER=metal client`: no error, and
+  no warning but the vendored `stb_vorbis.h`'s and the `sprintf` deprecations outside this
+  card's files.
+
+Every log, script, record and tool (`cost.sh`, `iq.sh`, `aocmp.c`, the stores) is in the lane's
+scratch space and `<artifacts>/TASK157/`; main's measured baseline is in
+`<artifacts>/baselines/cfec997d5c39/`. Nothing derived from game data is in the repository.
