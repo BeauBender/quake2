@@ -58,6 +58,23 @@ mtl_rtw_inst_mask(unsigned mask, unsigned norefl)
 	return norefl ? mask : (mask | MTL_RTW_MASK);
 }
 
+/*
+ * TASK158: the bit of the map's instances among those reflection rays
+ * test (the world and the inline brush models: doors, plats), which alias
+ * instances do not carry. A ray of r_rt_water_hits 1 that has passed
+ * MTL_RTW_LAYERS hidden model faces is traced on with this mask alone, so
+ * it passes every alias model and meets what it would meet without them
+ * (mtl_rtw_ws_next).
+ */
+#define MTL_RTW_MASK_MAP 0x10u
+
+/* mtl_rtw_inst_mask with the map's bit: alias 1 for an alias model's instance, which never carries it */
+static inline unsigned
+mtl_rtw_inst_mask_ws(unsigned mask, unsigned norefl, unsigned alias)
+{
+	return (norefl || alias) ? mtl_rtw_inst_mask(mask, norefl) : (mtl_rtw_inst_mask(mask, norefl) | MTL_RTW_MASK_MAP);
+}
+
 /* the map's material id of an alias model's triangle (an instance with no map triangle) */
 #define MTL_RTW_MAT_ALIAS 0xffu
 
@@ -410,6 +427,35 @@ mtl_rtw_choose_ws(int hit, int on_screen, unsigned mat, float off, float dist, i
 	}
 
 	return sky_ok ? (MTL_RTW_SKY | MTL_RTW_WS) : MTL_RTW_MISS;
+}
+
+/* what the reflection ray of r_rt_water_hits 1 does after a hit's choice (mtl_rtw_ws_next) */
+#define MTL_RTW_NEXT_STOP 0   /* the choice stands */
+#define MTL_RTW_NEXT_PASS 1   /* pass the model: intersect again just past it, with the same mask */
+#define MTL_RTW_NEXT_MAP 2    /* pass every model: intersect again just past it with MTL_RTW_MASK_MAP alone */
+
+/*
+ * TASK158: the reflection ray's step after the choice from (mtl_rtw_choose_ws)
+ * at its layer'th hit (0 the first) of kind hit (as mtl_rtw_choose's), alias
+ * 1 when the face is an alias model's, map 1 once the ray is traced with
+ * MTL_RTW_MASK_MAP. A model the picture does not show (off the screen or
+ * hidden) is passed: the ray goes on past it, so the reflection shows what
+ * lies behind the model and never the model's shape, as a hole or
+ * otherwise. Every other choice stands. A closed model has a front and a
+ * back face (the rays cull none), so after MTL_RTW_LAYERS model faces the
+ * ray is traced on with the map's instances alone, and ends at what it
+ * would meet without the models. Hidden brush models (doors, plats) are
+ * map faces and are shaded.
+ */
+static inline int
+mtl_rtw_ws_next(int hit, int alias, unsigned from, int layer, int map)
+{
+	if ((hit != 2) || !alias || (from != MTL_RTW_MISS) || map)
+	{
+		return MTL_RTW_NEXT_STOP;
+	}
+
+	return (layer + 1 < MTL_RTW_LAYERS) ? MTL_RTW_NEXT_PASS : MTL_RTW_NEXT_STOP;
 }
 
 /*
