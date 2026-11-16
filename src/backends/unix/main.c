@@ -68,7 +68,11 @@ main(int argc, char **argv)
 		// Are we portable?
 		if (strcmp(argv[i], "-portable") == 0)
 		{
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+			printf("-portable is ignored on this platform, the app bundle is read-only\n");
+#else
 			is_portable = true;
+#endif
 		}
 
 		// Inject a custom data dir.

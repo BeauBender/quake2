@@ -28,6 +28,10 @@
 	</array>
 	<key>MinimumOSVersion</key>
 	<string>@MIN_OS@</string>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>UIDeviceFamily</key>
 	<array>
 		<integer>1</integer>
