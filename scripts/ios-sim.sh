@@ -85,7 +85,9 @@
 # seconds after the start, the script waits SECONDS of wall time, and
 # launches the app again, which brings the running process back to the
 # front. --shot then counts from that return. What the app saw is in its
-# own log (engine.<n>.log), not in this script's output.
+# own log (engine.<n>.log), not in this script's output; with --background
+# the shot is always taken (0 s after the return when none is given), and
+# DIR/oslog.<n>.txt is the system's log of the app (simctl spawn log show).
 #
 # selftest: runs "smoke" against a fake xcrun and a fake make (no
 # simulator, no build, seconds) and checks its rules: a hung "simctl
@@ -254,6 +256,7 @@ create)
 	echo "$u" ;;
 terminate) [ -f "$st/app.pid" ] && kill "$(cat "$st/app.pid")" 2>/dev/null; echo "$*" >> "$st/terminates"; exit 0 ;;
 bootstatus|install|shutdown) ;;
+spawn) echo "fake log: quake2 line" ;;
 io)
 		case $4 in
 		*/app.png)
@@ -307,7 +310,7 @@ launch)
 		echo $$ > "$st/app.pid"
 		exec sleep 30
 	fi
-	sleep 1 &
+	sleep $([ "$sc" = bgshot ] && echo 5 || echo 1) &
 	p=$!
 	echo $p > "$st/app.pid"
 	echo "$4: $p"
@@ -566,9 +569,15 @@ EOF
 	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background extra ok "run ok, 1 start(s)" 30 IOS_SIM_BACKGROUND_AFTER=0
 	st_has run-background grep state/relaunches "com.apple.Preferences"
 	st_has run-background file out/screen.1.png
+	st_has run-background grep out/oslog.1.txt "fake log: quake2 line"
+	ST_CMD="run --out @D@/out --no-data --background 1" st_case run-background-default-shot extra ok "run ok, 1 start(s)" 30 IOS_SIM_BACKGROUND_AFTER=0
+	st_has run-background-default-shot file out/oslog.1.txt
 	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-order extra ok "run ok, 1 start(s)" 30 IOS_SIM_BACKGROUND_AFTER=0
 	st_has run-background-order line1 state/relaunches "com.apple.Preferences"
 	st_has run-background-order line2 state/relaunches "org.example.selftest"
+	# the shot is after the return, not before the background (the app lives 5 s here)
+	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-before-shot bgshot ok "run ok, 1 start(s)" 30 IOS_SIM_BACKGROUND_AFTER=2
+	st_has run-background-before-shot grep state/relaunches "com.apple.Preferences"
 	ST_CMD="run --out @D@/out --no-data --background 1 --shot 0" st_case run-background-fails bgfail fail "simctl launch of the other app failed" 30 IOS_SIM_BACKGROUND_AFTER=0
 	ST_CMD="run --out @D@/out --no-data" st_case run-no-background extra ok "run ok, 1 start(s)" 30
 	st_has run-no-background nofile state/relaunches
@@ -858,7 +867,7 @@ data_container()
 # bounded frame wait and quit handling, TASK147)
 launch_app()
 {
-	local limit=$1 what=$2 shotat=$3 n=$4 log t w=0 shotbase=0 bgdone=0
+	local limit=$1 what=$2 shotat=$3 n=$4 log t t0 w=0 shotbase=0 bgdone=0
 	shift 4
 	log=$out/console.$n.log
 	SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "$@" > "$log" 2>&1 &
@@ -868,6 +877,7 @@ launch_app()
 	apid=$lpid
 	echo "ios-sim: app $bid pid $apid"
 	t=0
+	t0=$SECONDS
 	while kill -0 "$apid" 2>/dev/null; do
 		if [ -n "$bg" ] && [ "$bgdone" = 0 ] && [ "$t" -ge "$bgafter" ]; then
 			# the app goes to the background as a person's Home does: another app takes the screen
@@ -877,9 +887,15 @@ launch_app()
 			bounded 30 "${tmp:?}/fg.out" xcrun simctl launch "$udid" "$bid" || die "simctl launch of the app (the return) failed"
 			bgdone=1
 			shotbase=$t
+			# the system's own log of the app (a command buffer submitted in the background is reported there)
+			[ -n "$shotat" ] || shotat=0
 		fi
-		if [ -n "$shotat" ] && [ "$t" -ge $((shotat + shotbase)) ]; then
+		# with --background the shot waits for the return
+		if [ -n "$shotat" ] && { [ -z "$bg" ] || [ "$bgdone" = 1 ]; } && [ "$t" -ge $((shotat + shotbase)) ]; then
 			bounded 60 "${tmp:?}/shot.out" xcrun simctl io "$udid" screenshot "$out/screen.$n.png" || die "simctl io screenshot failed"
+			if [ -n "$bg" ]; then
+				bounded 90 "$out/oslog.$n.txt" xcrun simctl spawn "$udid" log show --last 5m --predicate 'process == "quake2"' || die "simctl spawn log show failed"
+			fi
 			bounded 30 "${tmp:?}/term.out" xcrun simctl terminate "$udid" "$bid" || true
 			break
 		fi
@@ -890,6 +906,7 @@ launch_app()
 		sleep 1
 		t=$((t + 1))
 	done
+	echo "ios-sim: start $n: the app ran $((SECONDS - t0)) s"
 	while kill -0 "$lpid" 2>/dev/null && [ "$w" -lt 10 ]; do sleep 1; w=$((w + 1)); done
 	if kill -0 "$lpid" 2>/dev/null; then
 		echo "ios-sim: the launch client did not exit after the app; stopping it" >&2

@@ -837,6 +837,8 @@ void CL_WriteConfiguration(void);
 static bool
 IN_AppEventWatch(void *userdata, SDL_Event *event)
 {
+	static bool written;
+
 	(void)userdata;
 
 	switch (event->type)
@@ -850,11 +852,19 @@ IN_AppEventWatch(void *userdata, SDL_Event *event)
 		case SDL_EVENT_DID_ENTER_BACKGROUND:
 		case SDL_EVENT_TERMINATING:
 			SCR_SetSuspended(true);
-			CL_WriteConfiguration();
-			Com_Printf("App: the configuration is written.\n");
+
+			/* UIKit's app and scene callbacks both report it: once */
+			if (!written)
+			{
+				written = true;
+				CL_WriteConfiguration();
+				Com_Printf("App: the configuration is written.\n");
+			}
+
 			break;
 
 		case SDL_EVENT_DID_ENTER_FOREGROUND:
+			written = false;
 			SCR_SetSuspended(false);
 			Com_Printf("App: back in the foreground.\n");
 			break;
