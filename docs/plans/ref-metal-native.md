@@ -2091,7 +2091,7 @@ Deviations from gl1, each only on input gl1 cannot handle:
 - gl1 makes a new particle texture at each `gl1_particle_square` change without point parameters and
   leaves the old one to the next `R_FreeUnusedImages`; here the old one is freed at once.
 
-Measured (the runbook's N9 subsection has the commands): every scenario of section 11 passes at
+Measured ([`docs/runbook/TASK92.md`](../runbook/TASK92.md) has the commands): every scenario of section 11 passes at
 its value in one sweep (the table there); `particles` seeded passes at the tight values on all 23
 frames against two `gl1-metal` records (worst 0.000039, bad 0.000589: N7's mip residue on frame 2),
 and so do its scratch copies with `gl1_pointparameters 0` and `gl1_particle_square 1`; a control
@@ -2182,7 +2182,7 @@ Deviations from gl1, each only where gl1 cannot be copied:
   the window is drawn and read whole (gl1's `glReadPixels` outside the window reads undefined
   pixels), and only its bottom-left part is presented, as gl1's.
 
-Measured (the runbook's section "`ref_metal` on the build host" has the commands and tables):
+Measured ([`docs/runbook/TASK93.md`](../runbook/TASK93.md) has the commands and tables):
 every scenario of section 11 at its value, `particles` and `dlights` seeded, against two
 `gl1-metal` records at the base commit where there are two; a scratch `world` with `vid_gamma 1.6`
 and `gl1_intensity 3` at score 0; eight restart cycles through `metal`, `gl1` and `soft` under
@@ -2212,5 +2212,5 @@ the scaler runs at the G-buffer contract's seam, in place of the bilinear stretc
 `rmb_gbuf_view_end`. With the defaults every pin is byte-identical to the base and no
 MetalFX object is made. Frame generation (`r_metalfx_interp`) reads 0 everywhere: it is
 not built. The runs, the fallbacks on this VM, the reset events, the mutants and the
-bare-metal hosts' commands are in the runbook,
-[MetalFX scalers for the 3D view](metal-port-harness.md#metalfx-scalers-for-the-3d-view-in-ref_metal-task111).
+bare-metal hosts' commands are in the runbook file
+[MetalFX scalers for the 3D view](../runbook/TASK111.md).

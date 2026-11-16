@@ -152,6 +152,30 @@ rays they serve. The surface ray is the first to cut: it could be traced only wh
 range, or the raster could store the surface. `timedemo` reads the display's 60 fps at 1080p with
 the effect on and off.
 
+TASK131 makes the raster store the surface. While the shadows trace, the G-buffer has a surface
+attachment (section 3). Each world pixel's surface comes from it, through the map's
+vertex-to-surface table. A brush entity's model space comes from the frame's entity table. The
+lights are tested against the surface's own plane in that space before the falloff. The eye ray
+is left only where the attachment names no surface: a dynamic world draw (the flowing batches,
+material 1) and a brush model the raster cannot name. Measured on the M6 the same way, against
+the pass on `main` before it (`718e59d4`). The runs were three of each build, alternated, on the
+same warm frames ([TASK131](../runbook/TASK131.md)):
+
+- 1920 x 1080: median 1.66 ms (p10 1.35 to 1.37, p90 2.07 to 2.14), from 2.58 ms; with entities
+  1.73 ms (p10 1.35 to 1.37, p90 2.97 to 3.34), from 3.23 ms;
+- 5120 x 2880: median 7.30 ms (p10 4.6 to 5.3, p90 8.8 to 9.1), from 8.81 ms; with entities
+  7.28 ms (p10 4.2 to 4.4, p90 10.1 to 10.5), from 9.57 ms;
+- about 0.25 rays a pixel, down from 0.86 and 1.09;
+- the attachment takes 4 bytes a pixel while the shadows trace: 8.5 MB allocated at 1080p and
+  60.0 MB at 5120 x 2880.
+
+At 1080p the median is now under the 1.952 ms of 4 rays on every pixel; the p90, the frames lit
+over most of the picture, is not. What is left is mostly the pass's floor. On a frame with no
+light in range it costs 1.3 ms at 1080p and about 6 ms at 5120 x 2880, before and after alike.
+There the kernel still reads the G-buffer, tests the lights and writes its two outputs at every
+pixel; which of those costs most is not measured. That floor, not the rays, is the next thing to
+cut at the native size.
+
 ### Internal resolution and upscaling with MetalFX (TASK105)
 
 This subsection describes option A (TASK105): with a ray-traced effect
@@ -409,7 +433,7 @@ compute-dispatch ray queries, the synthetic closed scene, the later level
 of a process, trace only) with its table, row and column, or computed
 from those numbers by model R below, with the computation shown and the
 number marked as modelled. The runbook's TASK97 section
-(`docs/plans/metal-port-harness.md`, "Frame rates on a physical GPU
+(`docs/runbook/TASK97.md`, "Frame rates on a physical GPU
 (TASK97)") gives no cost used here: its numbers are `timedemo` frame
 rates, not GPU times; none is at a native size; the three renderers that
 present through a `CAMetalLayer` run at 60.0 to 60.1 fps at 1920x1080
@@ -1063,6 +1087,7 @@ rotation.
 | depth | `rmb_gbuf_depth()` | `MTLPixelFormatDepth32Float`, the render size (`rmb_gbuf_size`) | every opaque draw (raster and forward pass; on the motion path the forward pass) |
 | motion vector | `rmb_gbuf_motion()` | `MTLPixelFormatRG16Float`, the render size | the raster's draws and the forward pass's opaque draws; blended draws leave it |
 | world normal, material id, light, albedo | internal (`rmb_gbuf.m`) | `RGB10A2Unorm` (n x 0.5 + 0.5, alpha 1, 0 where none), `R8Uint`, `RGBA8Unorm`, `RGBA8Unorm` | the raster |
+| surface (TASK131) | internal (`rmb_gbuf.m`), colour attachment 5 of the raster | `R32Uint`, the render size, only while RT3's shadows trace | the raster's draws from the world's vertex buffer: `(entity << 24) \| (vertex + 1)`; 0 elsewhere |
 
 - *Frame.* The current frame's world view, rasterized with the jittered
   projection (`r_rt_jitter_x`, `r_rt_jitter_y`, pixels, +x right, +y down,
@@ -1095,6 +1120,32 @@ rotation.
   stretched. Nothing else in the 3D pass is sized in pixels: beams, flash
   blobs, the sky, shadows and the screen blend are in world or view
   units, and no draw sets a line width.
+- *Surface (TASK131).* The raster gets the surface attachment only while
+  RT3's shadows trace (`RM_RTS_Active` when the view begins,
+  `rmb_gbuf_set_surface`). Its raster pipelines are a second set, built
+  with function constant 5 (`rm_gb_surf`) at the first view that needs
+  them. With the shadows off, the raster, its five attachments and its
+  pipelines are TASK54's, and the forward and motion paths never have
+  the attachment. It is cleared to 0. A draw from the world's static
+  vertex buffer writes `mtl_rts_gb_value` (`common/mtl_rts_math.h`):
+  - the low 24 bits hold the first vertex of the triangle (Metal's
+    provoking vertex, `[[vertex_id]]`) plus one. The vertex is an index
+    of the world's vertex buffer, and its surface is found through
+    `rm_rts_vertex_map`;
+  - the top 8 bits hold the entity that draws it: 0 for the world, i + 1
+    for the refdef's brush entity i (`RM_GB_EntityMotion`), and 255 for a
+    brush model that is not one of the refdef's entities.
+
+  Every other draw writes 0: alias models, and dynamic world draws (the
+  sky, the warped and flowing batches) are not that buffer's vertices.
+  `rmb_gbuf_bind_world` passes the draw's tag at vertex buffer 4. A map
+  with more than `MTL_RTS_GB_VMAX` (2^24 - 2) vertices gets no vertex
+  table, and every pixel takes the eye ray. The attachment costs 4 bytes
+  a pixel: 8,294,400 bytes at 1920 x 1080 and 58,982,400 (56.25 MiB) at
+  5120 x 2880, by the format. The allocated size is logged as `G-buffer
+  surface attachment`. The tables it reads cost 4 bytes per world vertex
+  for the vertex table, and 3 x 8 KiB for the entity table in the frame
+  ring.
 
 *As consumed by TASK111.* The scalers take the depth and motion as above:
 `motionVectorScaleX` and `motionVectorScaleY` 1, `depthReversed` NO, auto exposure off.
@@ -1103,8 +1154,8 @@ origin (`rm_fx_input_viewport`), not `r_rt_gbuffer_scale`'s, and the scaler writ
 frame's rectangle in place of the stretch. The jitter of the temporal modes is the Halton
 (2, 3) pair minus 0.5 from index 1, a cycle of 32, started again on each reset
 (`rm_fx_jitter`). The reset events are those of section 2, with the client's teleport
-distance, 256 units on an axis, as the cut threshold (`RM_FX_CUT_DIST`). See the runbook,
-[MetalFX scalers for the 3D view](metal-port-harness.md#metalfx-scalers-for-the-3d-view-in-ref_metal-task111).
+distance, 256 units on an axis, as the cut threshold (`RM_FX_CUT_DIST`). See the runbook file
+[MetalFX scalers for the 3D view](../runbook/TASK111.md).
 
 **Previous-frame transforms.** `rm_gb_hist_t` (`header/rm_gbuf.h`;
 `rm_gbufscene.c` holds one) keeps the last world view's modelview,
@@ -1163,7 +1214,7 @@ off; the G-buffer path is taken when any effect is on or `r_rt_gbuffer` is
 set, and the forward path with depth and motion when `r_rt_motion` (or,
 later, a scaler) asks for it. Reversing it is one line in `rm_gb_path`
 (an effects-off view returning `RM_GB_PATH_GBUFFER`). The numbers and how
-they were taken are in `docs/plans/metal-port-harness.md`, TASK54.
+they were taken are in `docs/runbook/TASK54.md`.
 
 ## 4. Hardware gating
 
@@ -1747,7 +1798,7 @@ The display's pixel size is 5120 x 2880; its desktop size in points is
 `vid_fullscreen 1` at a mode the display lists, `r_mode -1` with
 `r_customwidth` and `r_customheight` at the request, the route TASK108
 (#259) found for the native size (its re-measurement of the runbook's
-TASK97 section, on TASK108's branch). Each of the 28 logs holds, once
+TASK97 section (`docs/runbook/TASK97.md`), on TASK108's branch). Each of the 28 logs holds, once
 each, the three lines for its size, for example at the native size:
 
 ```
@@ -1764,7 +1815,7 @@ run's requested size.
 The capture is the pin harness's (`scripts/pins.sh`): the engine
 arguments that `PINS_DRYRUN=1 scripts/pins.sh record gl1 <scenario>`
 prints, run by hand with `vid_fullscreen 1` in place of 0 and the size
-set, as TASK98 did (the runbook's TASK98 section). So each run plays
+set, as TASK98 did (`docs/runbook/TASK98.md`). So each run plays
 `demo1.dm2` from `$PINS_BASEDIR` with the scenario's lines (each sets
 `timedemo 1`), with `pins_capture 100` (a frame every 100th rendered
 frame), `pins_seed 1` (a fixed PRNG seed at each map registration, so

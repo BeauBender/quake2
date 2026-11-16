@@ -64,16 +64,20 @@ void *rmb_frame_ring_take(size_t n, __strong id<MTLBuffer> *buf, size_t *ofs);
 
 /* the attachments, kept across frames and made again for another size or path */
 static id<MTLTexture> t_depth, t_stencil, t_normal, t_material, t_motion, t_light, t_albedo, t_rcolor;
-static int t_w, t_h, t_path, t_scaled;
+static id<MTLTexture> t_surface;   /* TASK131: R32Uint, the raster's sixth attachment while the shadows trace */
+static int t_w, t_h, t_path, t_scaled, t_surf;
 
 /* the pipelines, made at the first view that needs them; failed once, never again in the session */
 static id<MTLRenderPipelineState> gb_pipes[RM_PIPE_3D_COUNT], mv_pipes[RM_PIPE_3D_COUNT], resolve_pipe, blit_pipe;
 static id<MTLRenderPipelineState> show_mv_pipe, show_gb_pipe;   /* r_rt_gbuffer_show's */
 static int show_what;
 static int pipes_state;   /* 0 not made, 1 made, -1 failed */
+static id<MTLRenderPipelineState> gbs_pipes[RM_PIPE_3D_COUNT];  /* the raster's with the surface attachment (TASK131) */
+static int surf_pipes_state;   /* as pipes_state, made at the first view with the attachment */
 
 /* the view */
 static int pass_kind, view_path, view_scaled, view_cleared;
+static int surf_want, view_surf;   /* the next view asks for the surface attachment; this one has it */
 static unsigned view_stencil;
 static float view_clear[4];
 static rm_gb_uniforms_t mv;
@@ -139,7 +143,8 @@ rmb_gbuf_free_textures(void)
 	rmb_gbuf_tex(&t_light, nil);
 	rmb_gbuf_tex(&t_albedo, nil);
 	rmb_gbuf_tex(&t_rcolor, nil);
-	t_w = t_h = t_path = t_scaled = 0;
+	rmb_gbuf_tex(&t_surface, nil);
+	t_w = t_h = t_path = t_scaled = t_surf = 0;
 }
 
 static size_t
@@ -148,15 +153,21 @@ rmb_gbuf_alloc(id<MTLTexture> t)
 	return t ? (size_t)t.allocatedSize : 0;
 }
 
-/* the attachments of path at w x h (and the render-size colour target when scaled); 0 when one is not made */
+/*
+ * The attachments of path at w x h (and the render-size colour target
+ * when scaled, the surface attachment when surf on the GBUFFER path); 0
+ * when one is not made.
+ */
 static int
-rmb_gbuf_textures(int path, int w, int h, int scaled)
+rmb_gbuf_textures(int path, int w, int h, int scaled, int surf)
 {
 	const MTLTextureUsage rt = MTLTextureUsageRenderTarget, rd = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
 	rm_gb_bytes_t b;
 	size_t alloc;
 
-	if ((t_w == w) && (t_h == h) && (t_path == path) && (t_scaled == scaled) && t_depth)
+	surf = surf && (path == RM_GB_PATH_GBUFFER);
+
+	if ((t_w == w) && (t_h == h) && (t_path == path) && (t_scaled == scaled) && (t_surf == surf) && t_depth)
 	{
 		return 1;
 	}
@@ -180,7 +191,12 @@ rmb_gbuf_textures(int path, int w, int h, int scaled)
 		rmb_gbuf_tex(&t_rcolor, rmb_gbuf_new(MTLPixelFormatBGRA8Unorm, w, h, rd));
 	}
 
-	if (!t_depth || !t_stencil || !t_motion || (scaled && !t_rcolor) ||
+	if (surf)
+	{
+		rmb_gbuf_tex(&t_surface, rmb_gbuf_new(MTLPixelFormatR32Uint, w, h, rd));
+	}
+
+	if (!t_depth || !t_stencil || !t_motion || (scaled && !t_rcolor) || (surf && !t_surface) ||
 		((path == RM_GB_PATH_GBUFFER) && (!t_normal || !t_material || !t_light || !t_albedo)))
 	{
 		rmb_gbuf_free_textures();
@@ -191,6 +207,14 @@ rmb_gbuf_textures(int path, int w, int h, int scaled)
 	t_h = h;
 	t_path = path;
 	t_scaled = scaled;
+	t_surf = surf;
+
+	/* the surface attachment's own line: the one below stays TASK54's measure of the off state */
+	if (surf)
+	{
+		fprintf(stderr, "ref_metal: G-buffer surface attachment %dx%d: %zu bytes by the format, %zu allocated\n",
+				w, h, (size_t)w * (size_t)h * 4, rmb_gbuf_alloc(t_surface));
+	}
 
 	/* the measure of the off state (TASK54): what the formats take and what Metal allocated */
 	rm_gb_bytes(path, w, h, scaled, &b);
@@ -205,14 +229,15 @@ rmb_gbuf_textures(int path, int w, int h, int scaled)
 /* ---- the pipelines ----------------------------------------------------------------- */
 
 static id<MTLFunction>
-rmb_gbuf_fn(NSString *name, int kind, int normals, int atest, NSError **e)
+rmb_gbuf_fn(NSString *name, int kind, int normals, int atest, int surf, NSError **e)
 {
 	MTLFunctionConstantValues *fc = [MTLFunctionConstantValues new];
-	bool n = normals != 0, a = atest != 0;
+	bool n = normals != 0, a = atest != 0, s = surf != 0;
 
 	[fc setConstantValue:&kind type:MTLDataTypeInt atIndex:2];
 	[fc setConstantValue:&n type:MTLDataTypeBool atIndex:3];
 	[fc setConstantValue:&a type:MTLDataTypeBool atIndex:4];
+	[fc setConstantValue:&s type:MTLDataTypeBool atIndex:5];
 	return [rmb_library() newFunctionWithName:name constantValues:fc error:e];
 }
 
@@ -289,9 +314,9 @@ rmb_gbuf_blend(int which, MTLRenderPipelineColorAttachmentDescriptor *c)
 	return 0;
 }
 
-/* the G-buffer raster's variant of an opaque pipeline: the world's three, an alias model's; nil for the rest */
+/* the G-buffer raster's variant of an opaque pipeline: the world's three, an alias model's; nil for the rest (surf: with the surface attachment) */
 static id<MTLRenderPipelineState>
-rmb_gbuf_new_raster(int which, NSError **e)
+rmb_gbuf_new_raster(int which, int surf, NSError **e)
 {
 	MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
 	int kind, world = 1;
@@ -315,9 +340,9 @@ rmb_gbuf_new_raster(int which, NSError **e)
 			return nil;
 	}
 
-	d.vertexFunction = world ? rmb_gbuf_fn(@"rm_vertex_world_gb", kind, 1, 0, e) :
-		rmb_gbuf_fn(@"rm_vertex_alias_gb", kind, 0, 0, e);
-	d.fragmentFunction = rmb_gbuf_fn(@"rm_fragment_gbuf", kind, world, 0, e);
+	d.vertexFunction = world ? rmb_gbuf_fn(@"rm_vertex_world_gb", kind, 1, 0, surf, e) :
+		rmb_gbuf_fn(@"rm_vertex_alias_gb", kind, 0, 0, surf, e);
+	d.fragmentFunction = rmb_gbuf_fn(@"rm_fragment_gbuf", kind, world, 0, surf, e);
 
 	if (!d.vertexFunction || !d.fragmentFunction)
 	{
@@ -329,6 +354,12 @@ rmb_gbuf_new_raster(int which, NSError **e)
 	d.colorAttachments[2].pixelFormat = MTLPixelFormatR8Uint;       /* material id */
 	d.colorAttachments[3].pixelFormat = MTLPixelFormatRG16Float;    /* motion vector */
 	d.colorAttachments[4].pixelFormat = MTLPixelFormatRGBA8Unorm;   /* light */
+
+	if (surf)
+	{
+		d.colorAttachments[5].pixelFormat = MTLPixelFormatR32Uint;   /* surface (TASK131) */
+	}
+
 	d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
 }
@@ -381,9 +412,9 @@ rmb_gbuf_new_motion(int which, NSError **e)
 				break;
 		}
 
-		d.vertexFunction = world ? rmb_gbuf_fn(@"rm_vertex_world_gb", kind, 0, 0, e) :
-			rmb_gbuf_fn(@"rm_vertex_alias_gb", kind, 0, 0, e);
-		d.fragmentFunction = rmb_gbuf_fn(@"rm_fragment_mv", kind, 0, atest, e);
+		d.vertexFunction = world ? rmb_gbuf_fn(@"rm_vertex_world_gb", kind, 0, 0, 0, e) :
+			rmb_gbuf_fn(@"rm_vertex_alias_gb", kind, 0, 0, 0, e);
+		d.fragmentFunction = rmb_gbuf_fn(@"rm_fragment_mv", kind, 0, atest, 0, e);
 	}
 
 	if (!d.vertexFunction || !d.fragmentFunction)
@@ -424,12 +455,60 @@ rmb_gbuf_free_pipes(void)
 	{
 		rmb_gbuf_state(&gb_pipes[i], nil);
 		rmb_gbuf_state(&mv_pipes[i], nil);
+		rmb_gbuf_state(&gbs_pipes[i], nil);
 	}
 
 	rmb_gbuf_state(&resolve_pipe, nil);
 	rmb_gbuf_state(&blit_pipe, nil);
 	rmb_gbuf_state(&show_mv_pipe, nil);
 	rmb_gbuf_state(&show_gb_pipe, nil);
+	surf_pipes_state = 0;
+}
+
+/*
+ * The raster's pipelines with the surface attachment (TASK131), made at
+ * the first view that asks for it; failed once, never again in the
+ * session (a view then has no attachment, and the shadows find every
+ * pixel's surface with the eye ray, as before).
+ */
+static int
+rmb_gbuf_surf_pipes(void)
+{
+	NSError *e = nil;
+	const int kinds[] = { RM_PIPE_WORLD_TEX, RM_PIPE_WORLD_LM, RM_PIPE_WORLD_TEXC, RM_PIPE_ALIAS };
+	size_t i;
+
+	if (surf_pipes_state)
+	{
+		return surf_pipes_state > 0;
+	}
+
+	@autoreleasepool
+	{
+		surf_pipes_state = -1;
+
+		for (i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
+		{
+			rmb_gbuf_state(&gbs_pipes[kinds[i]], rmb_gbuf_new_raster(kinds[i], 1, &e));
+
+			if (!gbs_pipes[kinds[i]])
+			{
+				fprintf(stderr, "ref_metal: the G-buffer's surface pipelines cannot be made: %s\n",
+						e ? e.localizedDescription.UTF8String : "a function is missing");
+
+				for (i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
+				{
+					rmb_gbuf_state(&gbs_pipes[kinds[i]], nil);
+				}
+
+				return 0;
+			}
+		}
+
+		surf_pipes_state = 1;
+	}
+
+	return 1;
 }
 
 static int
@@ -454,7 +533,7 @@ rmb_gbuf_pipes(void)
 
 		for (i = 0; i < RM_PIPE_3D_COUNT; i++)
 		{
-			rmb_gbuf_state(&gb_pipes[i], rmb_gbuf_new_raster(i, &e));
+			rmb_gbuf_state(&gb_pipes[i], rmb_gbuf_new_raster(i, 0, &e));
 			rmb_gbuf_state(&mv_pipes[i], rmb_gbuf_new_motion(i, &e));
 
 			if (!mv_pipes[i] || (!gb_pipes[i] && ((i == RM_PIPE_WORLD_TEX) || (i == RM_PIPE_WORLD_LM) ||
@@ -536,7 +615,7 @@ rmb_gbuf_att_depth(MTLRenderPassDescriptor *rp, int clear, int stencil, int sten
 	}
 }
 
-/* the raster: the five colour attachments and the depth, cleared (load 0: a split reopens it loaded) */
+/* the raster: the five colour attachments (six with the surface, TASK131) and the depth, cleared (load 0: a split reopens it loaded) */
 static int
 rmb_gbuf_open_raster(int clear)
 {
@@ -547,6 +626,12 @@ rmb_gbuf_open_raster(int clear)
 	rmb_gbuf_att(rp, 2, t_material, clear);
 	rmb_gbuf_att(rp, 3, t_motion, clear);
 	rmb_gbuf_att(rp, 4, t_light, clear);
+
+	if (view_surf)
+	{
+		rmb_gbuf_att(rp, 5, t_surface, clear);   /* 0 where no static world draw wrote */
+	}
+
 	rmb_gbuf_att_depth(rp, clear, 0, 0);
 
 	if (!rmb_frame_open_pass(rp, 1, 0, 1))
@@ -595,6 +680,8 @@ rmb_gbuf_view_begin(int path, int rw, int rh, int stencil, const float *clear_rg
 	}
 
 	view_path = path;
+	/* TASK131: the surface attachment, on the GBUFFER path while the shadows trace */
+	view_surf = (path == RM_GB_PATH_GBUFFER) && surf_want && rmb_gbuf_surf_pipes();
 	/* a MetalFX scaler (TASK111) reads the view from the render-size colour target, at any size */
 	view_scaled = ((NSUInteger)rw != color.width) || ((NSUInteger)rh != color.height) || rmb_fx_ready();
 	view_cleared = 0;
@@ -612,7 +699,7 @@ rmb_gbuf_view_begin(int path, int rw, int rh, int stencil, const float *clear_rg
 
 	@autoreleasepool
 	{
-		if (!rmb_gbuf_textures(path, rw, rh, view_scaled))
+		if (!rmb_gbuf_textures(path, rw, rh, view_scaled, view_surf))
 		{
 			return 0;
 		}
@@ -658,7 +745,7 @@ rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 		id<MTLRenderCommandEncoder> enc;
 
 		/* RT3 (TASK55): the shadow rays between the raster and the resolve, when the view asked for them */
-		rmb_rts_trace(t_depth, t_normal, t_material);
+		rmb_rts_trace(t_depth, t_normal, t_material, view_surf ? t_surface : nil);
 		rmb_gbuf_att_target(rp);
 		enc = rmb_frame_open_pass(rp, 0, 0, 0);
 
@@ -800,7 +887,7 @@ rmb_gbuf_pipe3d(int pipe)
 	switch (pass_kind)
 	{
 		case RMB_GB_PASS_RASTER:
-			return gb_pipes[pipe];
+			return view_surf ? gbs_pipes[pipe] : gb_pipes[pipe];
 		case RMB_GB_PASS_MOTION:
 			return mv_pipes[pipe];
 		case RMB_GB_PASS_OTHER:
@@ -856,6 +943,12 @@ rmb_gbuf_set_world_normals(int nbuf)
 	world_nbuf = nbuf;
 }
 
+void
+rmb_gbuf_set_surface(int on)
+{
+	surf_want = on != 0;
+}
+
 /* the motion uniforms at vertex and fragment buffer 3: the set ones, or the draw's matrix twice (no motion) */
 void
 rmb_gbuf_bind_motion(id<MTLRenderCommandEncoder> enc, const float *mvp, const rm_viewport_t *vp)
@@ -908,6 +1001,18 @@ rmb_gbuf_bind_world(id<MTLRenderCommandEncoder> enc, int dynamic, unsigned nv)
 	if (pass_kind != RMB_GB_PASS_RASTER)
 	{
 		return 1;
+	}
+
+	/*
+	 * TASK131: the surface attachment's tag at buffer 4, the draw's entity
+	 * (the motion uniforms', RM_GB_EntityMotion) for a draw from the world's
+	 * vertex buffer; 0 for a dynamic draw, whose vertices are not that buffer's.
+	 */
+	if (view_surf)
+	{
+		const uint32_t tag = dynamic ? 0u : mtl_rts_gb_tag(mv_set ? mv.ent : 0u);
+
+		[enc setVertexBytes:&tag length:sizeof(tag) atIndex:4];
 	}
 
 	if (!dynamic)
