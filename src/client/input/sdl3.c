@@ -36,6 +36,10 @@
 
 #include <SDL3/SDL.h>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #include "SDL3/SDL_gamepad.h"
 #include "SDL3/SDL_properties.h"
 #include "SDL3/SDL_stdinc.h"
@@ -1015,6 +1019,16 @@ IN_Update(void)
 				glimp_refreshRate = -1.0;
 				break;
 			}
+
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+			case SDL_EVENT_WINDOW_SAFE_AREA_CHANGED:
+			case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+			{
+				/* a rotation, or a screen of another size: the video is made again when the rectangle really moved */
+				GLimp_ScreenEvent();
+				break;
+			}
+#endif
 
 			case SDL_EVENT_WINDOW_SHOWN:
 			{
