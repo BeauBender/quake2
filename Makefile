@@ -36,6 +36,22 @@
 #   Available values:
 #   x86_64-w64-mingw32 -> indicates x86_64
 #   i686-w64-mingw32   -> indicates i386
+# IOS_SDK, IOS_MIN, IOS_BUNDLE_ID, IOS_BUNDLE_DATA, IOS_ROOT
+#   The iOS mode, selected by the goal "ios" (the app bundle) or
+#   "ios_objects" (the engine objects and the Info.plist only, for
+#   tests/check-ios.sh); macOS with Xcode only. It forces
+#   STATIC_MODULES=1 STATIC_RENDERER=metal and builds the vendored
+#   SDL3, the client, the game and ref_metal for the SDK into
+#   IOS_ROOT/Quake2.app (doc/020_installation.md).
+#   IOS_SDK: iphonesimulator (default, signed ad hoc) or iphoneos
+#   (unsigned). IOS_MIN: the minimum iOS version (17.0).
+#   IOS_BUNDLE_ID: CFBundleIdentifier (a neutral default).
+#   IOS_BUNDLE_DATA: optional, a directory whose baseq2/ is copied
+#   into the bundle; local builds only, never game data in a commit.
+#   IOS_ROOT: the output, default build/ios-<IOS_SDK>/<debug|release>.
+#   Never release/ or debug/ or under them, however spelled (symlinks
+#   and .. resolved, letter case ignored). IOS_ROOT and IOS_BUNDLE_DATA hold letters, digits
+#   and . _ / + @ - only: no make or shell metacharacter.
 # QUIET
 #   If defined, "===> CC ..." lines are silenced.
 # STATIC_MODULES
@@ -177,6 +193,58 @@ YQ2_ARCH ?= $(shell uname -m)
 endif
 endif
 
+# The iOS mode (see IOS_SDK at the top): the goal selects it, and it
+# compiles with the SDK's clang for the SDK's target. YQ2_OSTYPE stays
+# Darwin: every Darwin branch below (client objects as Objective-C, .m
+# with ARC, the game rule, the vendored SDL3) is the one iOS needs.
+ifneq ($(filter ios ios_objects,$(MAKECMDGOALS)),)
+override IOS_MODE := 1
+else
+override IOS_MODE :=
+endif
+METAL_SDK := macosx
+METALFX_LDLIBS := -weak_framework MetalFX
+ifeq ($(IOS_MODE),1)
+ifneq ($(YQ2_OSTYPE), Darwin)
+$(error make ios needs macOS with Xcode, not $(YQ2_OSTYPE))
+endif
+ifneq ($(filter-out ios ios_objects config clean cleanall,$(MAKECMDGOALS)),)
+$(error the iOS mode builds only the app: make ios (or ios_objects, config, clean), not "$(MAKECMDGOALS)")
+endif
+IOS_SDK ?= iphonesimulator
+IOS_MIN ?= 17.0
+IOS_BUNDLE_ID ?= org.yquake2.quake2
+ifeq ($(IOS_SDK), iphonesimulator)
+IOS_TARGET := arm64-apple-ios$(IOS_MIN)-simulator
+IOS_PLATFORM := iPhoneSimulator
+else ifeq ($(IOS_SDK), iphoneos)
+IOS_TARGET := arm64-apple-ios$(IOS_MIN)
+IOS_PLATFORM := iPhoneOS
+else
+$(error IOS_SDK must be iphonesimulator or iphoneos, not "$(IOS_SDK)")
+endif
+ifneq ($(shell printf '%s' '$(subst ',,$(IOS_MIN))' | LC_ALL=C grep -E -x '[0-9]+(\.[0-9]+){0,2}'),$(IOS_MIN))
+$(error IOS_MIN must be a version such as 17.0, not "$(IOS_MIN)")
+endif
+ifneq ($(shell printf '%s' '$(subst ',,$(IOS_BUNDLE_ID))' | LC_ALL=C grep -E -x '[A-Za-z0-9][A-Za-z0-9.-]*'),$(IOS_BUNDLE_ID))
+$(error IOS_BUNDLE_ID may hold letters, digits, dots and hyphens only, not "$(IOS_BUNDLE_ID)")
+endif
+IOS_SDK_PATH := $(shell xcrun --sdk $(IOS_SDK) --show-sdk-path 2>/dev/null)
+ifeq ($(wildcard $(IOS_SDK_PATH)/SDKSettings.plist),)
+$(error the $(IOS_SDK) SDK was not found (xcrun --sdk $(IOS_SDK) --show-sdk-path): Xcode with its iOS platform is needed)
+endif
+override YQ2_ARCH := arm64
+override CC := xcrun -sdk $(IOS_SDK) clang
+override LD := xcrun -sdk $(IOS_SDK) ld
+override STATIC_MODULES := 1
+override STATIC_RENDERER := metal
+override WITH_RPATH := no
+IOS_FLAGS := -target $(IOS_TARGET) -isysroot $(IOS_SDK_PATH)
+METAL_SDK := $(IOS_SDK)
+# the iOS device SDK has MetalFX, the simulator SDKs have not
+METALFX_LDLIBS := $(if $(wildcard $(IOS_SDK_PATH)/System/Library/Frameworks/MetalFX.framework),-weak_framework MetalFX)
+endif
+
 # Detect the compiler
 ifeq ($(shell $(CC) -v 2>&1 | grep -c "clang version"), 1)
 COMPILER := clang
@@ -212,6 +280,45 @@ ifdef DEBUG
 else
 	override BINDIR := $(BINROOT)release
 	override BUILDDIR := $(BUILDROOT)/release
+endif
+
+# The iOS mode writes everything under IOS_ROOT, the vendored SDL
+# objects too (third_party/sdl3.make puts them under BUILDDIR as it is
+# when included): never the copy the macOS builds share.
+# IOS_ROOT and IOS_BUNDLE_DATA are paths, not make or shell text: their
+# raw value ($(value), not expanded) holds no "$", and the value only
+# the characters of IOS_PATH_RE, so a recipe can quote them as '...'.
+ifeq ($(IOS_MODE),1)
+IOS_PATH_RE := [A-Za-z0-9._/][A-Za-z0-9._/+@-]*
+ios_path_out = $(shell printf '%s' '$(subst ',,$($(1)))' | LC_ALL=C grep -E -x '$(IOS_PATH_RE)')
+ios_path_ok = $(and $(if $(findstring $$,$(value $(1))),,1),$(call ios_path_out,$(1)),$(if $(subst $(call ios_path_out,$(1)),,$(value $(1))),,1))
+# lower case: the default APFS volume ignores case, so RELEASE is release
+ios_lc = $(shell printf '%s' '$(1)' | tr 'A-Z' 'a-z')
+ifeq ($(origin IOS_ROOT),undefined)
+ifdef DEBUG
+IOS_ROOT := $(BUILDROOT)/ios-$(IOS_SDK)/debug
+else
+IOS_ROOT := $(BUILDROOT)/ios-$(IOS_SDK)/release
+endif
+endif
+ifeq ($(call ios_path_ok,IOS_ROOT),)
+$(error IOS_ROOT must be one path of letters, digits and . _ / + @ - (no make or shell metacharacter, no leading + @ -), not "$(value IOS_ROOT)")
+endif
+ifneq ($(value IOS_BUNDLE_DATA),)
+ifeq ($(call ios_path_ok,IOS_BUNDLE_DATA),)
+$(error IOS_BUNDLE_DATA must be one path of letters, digits and . _ / + @ - (no make or shell metacharacter, no leading + @ -), not "$(value IOS_BUNDLE_DATA)")
+endif
+endif
+# the path with the symlinks of its longest existing prefix resolved
+ios_physical = $(if $(realpath $(1)),$(realpath $(1)),$(call ios_physical,$(or $(patsubst %/,%,$(dir $(1))),/))/$(notdir $(1)))
+IOS_ROOT_ABS := $(abspath $(call ios_physical,$(abspath $(IOS_ROOT))))
+IOS_NOT_ROOTS := $(sort $(foreach d,release debug,$(abspath $(d)) $(abspath $(call ios_physical,$(abspath $(d))))))
+IOS_NOT_ROOTS_LC := $(call ios_lc,$(IOS_NOT_ROOTS))
+ifneq ($(filter $(IOS_NOT_ROOTS_LC) $(addsuffix /%,$(IOS_NOT_ROOTS_LC)),$(call ios_lc,$(abspath $(IOS_ROOT)) $(IOS_ROOT_ABS))),)
+$(error IOS_ROOT must not be release/ or debug/ or under them, not "$(IOS_ROOT)" ($(IOS_ROOT_ABS)))
+endif
+override BUILDDIR := $(IOS_ROOT)
+override STATIC_ROOT := $(IOS_ROOT)
 endif
 
 # ----------
@@ -255,6 +362,11 @@ endif
 # OS X architecture.
 ifeq ($(YQ2_OSTYPE), Darwin)
 override CFLAGS += -arch $(YQ2_ARCH)
+endif
+
+# The iOS mode's target and SDK.
+ifeq ($(IOS_MODE),1)
+override CFLAGS += $(IOS_FLAGS)
 endif
 
 # ----------
@@ -395,6 +507,10 @@ ifdef UBSAN
 override LDFLAGS += -fsanitize=undefined
 endif
 
+ifeq ($(IOS_MODE),1)
+override LDFLAGS += $(IOS_FLAGS)
+endif
+
 # Required libraries.
 ifeq ($(YQ2_OSTYPE),Linux)
 LDLIBS ?= -lm -ldl -rdynamic
@@ -446,6 +562,9 @@ endif
 # other undefined symbol still fails the link.
 ifeq ($(YQ2_OSTYPE), Darwin)
 include third_party/sdl3.make
+ifeq ($(IOS_MODE),1)
+SDL3_CFLAGS += $(IOS_FLAGS)
+endif
 SDLLDFLAGS := -Wl,-force_load,$(SDL3_LIB) $(SDL3_LDLIBS)
 SDL_DYNAMIC_LOOKUP = $$(nm -u $(filter %.o,$^) | grep '^_SDL_' | sort -u | sed 's/^/-Wl,-U,/')
 else
@@ -489,7 +608,7 @@ $(error STATIC_RENDERER must be exactly one of soft, gl1 or metal, not "$(STATIC
 endif
 # Only the client is built. The recursive "make <bindir>/quake2" of the
 # client target passes the executable as its goal.
-ifneq ($(filter-out client static_modules config clean cleanall %/bin/quake2,$(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)),)
+ifneq ($(filter-out client static_modules ios ios_objects config clean cleanall %/bin/quake2,$(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)),)
 $(error STATIC_MODULES=1 builds only the client: make STATIC_MODULES=1 client (or static_modules, config, clean), not "$(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)")
 endif
 ifeq ($(WITH_METAL_SHIM)$(STATIC_RENDERER), yesgl1)
@@ -516,7 +635,7 @@ endif
 # ----------
 
 # Phony targets
-.PHONY : all client game icon server ref_gl1 ref_gl3 ref_soft ref_metal static_modules
+.PHONY : all client game icon server ref_gl1 ref_gl3 ref_soft ref_metal static_modules ios ios_objects
 
 # ----------
 
@@ -923,13 +1042,13 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 	${Q}command -v xcrun >/dev/null 2>&1 || { echo "ref_metal needs xcrun and the Xcode Metal toolchain" >&2; exit 1; }
 	${Q}xcrun -f metal >/dev/null 2>&1 || { echo "ref_metal needs the Metal compiler (xcrun metal); install the Xcode Metal toolchain" >&2; exit 1; }
 	${Q}mkdir -p $(BUILDDIR)/ref_metal $(@D)
-	${Q}xcrun -sdk macosx metal -c $< -o $(BUILDDIR)/ref_metal/rm_shaders.air
-	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_rt.metal -o $(BUILDDIR)/ref_metal/rm_rt.air
-	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_gbuf.metal -o $(BUILDDIR)/ref_metal/rm_gbuf.air
-	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_rtshadow.metal -o $(BUILDDIR)/ref_metal/rm_rtshadow.air
-	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_rtao.metal -o $(BUILDDIR)/ref_metal/rm_rtao.air
-	${Q}xcrun -sdk macosx metal -c src/client/refresh/metal/rm_rtwater.metal -o $(BUILDDIR)/ref_metal/rm_rtwater.air
-	${Q}xcrun -sdk macosx metallib $(BUILDDIR)/ref_metal/rm_shaders.air $(BUILDDIR)/ref_metal/rm_rt.air \
+	${Q}xcrun -sdk $(METAL_SDK) metal -c $< -o $(BUILDDIR)/ref_metal/rm_shaders.air
+	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rt.metal -o $(BUILDDIR)/ref_metal/rm_rt.air
+	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_gbuf.metal -o $(BUILDDIR)/ref_metal/rm_gbuf.air
+	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtshadow.metal -o $(BUILDDIR)/ref_metal/rm_rtshadow.air
+	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtao.metal -o $(BUILDDIR)/ref_metal/rm_rtao.air
+	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtwater.metal -o $(BUILDDIR)/ref_metal/rm_rtwater.air
+	${Q}xcrun -sdk $(METAL_SDK) metallib $(BUILDDIR)/ref_metal/rm_shaders.air $(BUILDDIR)/ref_metal/rm_rt.air \
 		$(BUILDDIR)/ref_metal/rm_gbuf.air $(BUILDDIR)/ref_metal/rm_rtshadow.air \
 		$(BUILDDIR)/ref_metal/rm_rtao.air $(BUILDDIR)/ref_metal/rm_rtwater.air -o $@
 
@@ -1443,7 +1562,7 @@ STATIC_REF_OBJS := $(REFGL1_OBJS)
 STATIC_LDLIBS += -framework OpenGL
 else
 STATIC_REF_OBJS := $(REFMETAL_OBJS)
-STATIC_LDLIBS += -framework Metal -framework QuartzCore -framework Foundation -weak_framework MetalFX
+STATIC_LDLIBS += -framework Metal -framework QuartzCore -framework Foundation $(METALFX_LDLIBS)
 endif
 ifeq ($(STATIC_RENDERER)$(METAL_SHADERS), metalyes)
 # ref_metal finds its shader library beside the executable (dladdr on
@@ -1470,6 +1589,67 @@ $(STATIC_REF_OBJ) : $(STATIC_REF_OBJS)
 	@echo "===> LD -r $@"
 	${Q}mkdir -p $(@D)
 	${Q}$(LD) -r -arch $(YQ2_ARCH) -exported_symbol _GetRefAPI $(STATIC_REF_OBJS) -o $@
+endif
+
+# ----------
+
+# The iOS mode (see IOS_SDK at the top): the app bundle. Its executable
+# is the client of STATIC_MODULES=1 above, linked for the SDK, and the
+# bundle holds it, the Info.plist made from stuff/ios/Info.plist.in,
+# ref_metal.metallib (METAL_SHADERS=yes; ref_metal looks for it beside
+# the executable) and, only with IOS_BUNDLE_DATA, that directory's
+# baseq2/. The simulator's bundle is signed ad hoc; the device's
+# (iphoneos) is left unsigned. ios_objects builds the engine's objects
+# and the Info.plist only, without SDL and the link: what
+# tests/check-ios.sh checks in the gate.
+ifeq ($(IOS_MODE),1)
+IOS_APP := $(IOS_ROOT)/Quake2.app
+IOS_PLIST := $(IOS_ROOT)/Info.plist
+# CFBundleVersion takes digits and dots only: 8.71 of 8.71pre
+IOS_VERSION := $(shell sed -n 's/^.define YQ2VERSION "\([0-9][0-9.]*\).*/\1/p' src/common/header/common.h)
+ifeq ($(IOS_VERSION),)
+$(error no YQ2VERSION found in src/common/header/common.h for the Info.plist)
+endif
+
+.PHONY : ios_plist
+
+ios_plist:
+	@echo "===> PLIST $(IOS_PLIST)"
+	${Q}mkdir -p '$(dir $(IOS_PLIST))'
+	${Q}sed -e 's/@BUNDLE_ID@/$(IOS_BUNDLE_ID)/g' -e 's/@VERSION@/$(IOS_VERSION)/g' \
+		-e 's/@PLATFORM@/$(IOS_PLATFORM)/g' -e 's/@MIN_OS@/$(IOS_MIN)/g' \
+		stuff/ios/Info.plist.in > '$(IOS_PLIST).tmp'
+	${Q}plutil -lint -s '$(IOS_PLIST).tmp'
+	${Q}mv '$(IOS_PLIST).tmp' '$(IOS_PLIST)'
+
+ios_objects: $(CLIENT_OBJS) $(STATIC_LINK_OBJS) ios_plist
+
+# the compile flags the executable's target gives its objects (the
+# client section above), so ios_objects compiles what ios links
+ios_objects : CFLAGS += -Wno-unused-result
+ifeq ($(WITH_EXECINFO),yes)
+ios_objects : CFLAGS += -DHAVE_EXECINFO
+endif
+ifeq ($(WITH_XDG),yes)
+ios_objects : CFLAGS += -DUSE_XDG
+endif
+
+ios: $(BINDIR)/quake2 ios_plist
+	@echo "===> APP $(IOS_APP)"
+	${Q}rm -rf '$(IOS_APP)'
+	${Q}mkdir -p '$(IOS_APP)'
+	${Q}cp '$(BINDIR)/quake2' '$(IOS_APP)/quake2'
+	${Q}cp '$(IOS_PLIST)' '$(IOS_APP)/Info.plist'
+ifeq ($(METAL_SHADERS), yes)
+	${Q}cp '$(BINDIR)/ref_metal.metallib' '$(IOS_APP)/ref_metal.metallib'
+endif
+ifneq ($(IOS_BUNDLE_DATA),)
+	${Q}test -d '$(IOS_BUNDLE_DATA)/baseq2' || { echo "IOS_BUNDLE_DATA has no baseq2 directory: $(IOS_BUNDLE_DATA)" >&2; exit 1; }
+	${Q}cp -R '$(IOS_BUNDLE_DATA)/baseq2' '$(IOS_APP)/baseq2'
+endif
+ifeq ($(IOS_SDK), iphonesimulator)
+	${Q}codesign --force --sign - --timestamp=none '$(IOS_APP)'
+endif
 endif
 
 # ----------
