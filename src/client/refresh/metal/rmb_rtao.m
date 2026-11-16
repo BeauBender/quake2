@@ -63,6 +63,7 @@ _Static_assert(sizeof(rm_rtao_view_t) == 128, "the view is rm_rtao.metal's 128 b
 
 static int ao_open;
 static id<MTLComputePipelineState> trace_pipe;
+static id<MTLComputePipelineState> one_pipe;    /* r_rt_ao_rays 1 at scale 1 (TASK157) */
 static id<MTLComputePipelineState> lo_pipe;     /* r_rt_ao_scale below 1 (TASK157): the reduced-size rays */
 static id<MTLComputePipelineState> up_pipe;     /* and their upsample to the render size */
 static id<MTLRenderPipelineState> show_pipe;
@@ -119,6 +120,7 @@ rmb_rtao_open(char *err, size_t errlen)
 	{
 		NSError *e = nil;
 		id<MTLFunction> k = [rmb_library() newFunctionWithName:@"rm_rtao_trace"];
+		id<MTLFunction> k1 = [rmb_library() newFunctionWithName:@"rm_rtao_trace1"];
 		id<MTLFunction> klo = [rmb_library() newFunctionWithName:@"rm_rtao_trace_lo"];
 		id<MTLFunction> kup = [rmb_library() newFunctionWithName:@"rm_rtao_upsample"];
 		MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
@@ -129,10 +131,10 @@ rmb_rtao_open(char *err, size_t errlen)
 		d.fragmentFunction = [rmb_library() newFunctionWithName:@"rm_fragment_rtao_show"];
 		d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
 
-		if (!k || !klo || !kup || !d.vertexFunction || !d.fragmentFunction)
+		if (!k || !k1 || !klo || !kup || !d.vertexFunction || !d.fragmentFunction)
 		{
 			free(ranks);
-			snprintf(err, errlen, "the shader library has no rm_rtao_trace, rm_rtao_trace_lo, rm_rtao_upsample or rm_fragment_rtao_show");
+			snprintf(err, errlen, "the shader library has no rm_rtao_trace, rm_rtao_trace1, rm_rtao_trace_lo, rm_rtao_upsample or rm_fragment_rtao_show");
 			return 0;
 		}
 
@@ -148,13 +150,14 @@ rmb_rtao_open(char *err, size_t errlen)
 				options:MTLResourceStorageModeShared]);
 		free(ranks);
 		RMB_RTAO_SET(trace_pipe, [rmb_device newComputePipelineStateWithFunction:k error:&e]);
-		RMB_RTAO_SET(lo_pipe, trace_pipe ? [rmb_device newComputePipelineStateWithFunction:klo error:&e] : nil);
+		RMB_RTAO_SET(one_pipe, trace_pipe ? [rmb_device newComputePipelineStateWithFunction:k1 error:&e] : nil);
+		RMB_RTAO_SET(lo_pipe, one_pipe ? [rmb_device newComputePipelineStateWithFunction:klo error:&e] : nil);
 		RMB_RTAO_SET(up_pipe, lo_pipe ? [rmb_device newComputePipelineStateWithFunction:kup error:&e] : nil);
 		RMB_RTAO_SET(show_pipe, up_pipe ? [rmb_device newRenderPipelineStateWithDescriptor:d error:&e] : nil);
 		RMB_RTAO_SET(counts, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * RMB_RTAO_COUNTS * sizeof(uint32_t)
 				options:MTLResourceStorageModeShared]);
 
-		if (!tile || !trace_pipe || !lo_pipe || !up_pipe || !show_pipe || !counts)
+		if (!tile || !trace_pipe || !one_pipe || !lo_pipe || !up_pipe || !show_pipe || !counts)
 		{
 			snprintf(err, errlen, "cannot build the AO pipelines%s%s", e ? ": " : "",
 					e ? e.localizedDescription.UTF8String : "");
@@ -201,6 +204,7 @@ rmb_rtao_close(void)
 	@autoreleasepool
 	{
 		RMB_RTAO_SET(trace_pipe, nil);
+		RMB_RTAO_SET(one_pipe, nil);
 		RMB_RTAO_SET(lo_pipe, nil);
 		RMB_RTAO_SET(up_pipe, nil);
 		RMB_RTAO_SET(show_pipe, nil);
@@ -258,7 +262,7 @@ rmb_rtao_prepare_lo(unsigned long w, unsigned long h, unsigned div)
 int
 rmb_rtao_prepare(unsigned long w, unsigned long h, unsigned div)
 {
-	if (!ao_open || !trace_pipe || !lo_pipe || !up_pipe || !counts || (w < 1) || (h < 1) || (w > 0xffffffffUL) ||
+	if (!ao_open || !trace_pipe || !one_pipe || !lo_pipe || !up_pipe || !counts || (w < 1) || (h < 1) || (w > 0xffffffffUL) ||
 		(h > 0xffffffffUL) || (div < 1) || (div > MTL_RTAO_DIV_MAX))
 	{
 		return 0;
@@ -458,8 +462,8 @@ rmb_rtao_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mater
 			return nil;
 		}
 
-		/* every pixel traced (TASK57), or the rays at the reduced size first (TASK157) */
-		[ce setComputePipelineState:(view.div > 1) ? lo_pipe : trace_pipe];
+		/* every pixel traced (TASK57's kernel, or one ray a pixel), or the rays at the reduced size first (TASK157) */
+		[ce setComputePipelineState:(view.div > 1) ? lo_pipe : (view.rays < 2) ? one_pipe : trace_pipe];
 
 		/* the scene; its transmission and count go to slots 7 and 8, which the kernel does not read */
 		if (!rmb_rt_bind_scene(ce, fno, 2, 3, 7, 8))
