@@ -9,7 +9,12 @@
 # content) to a scratch directory, builds "make ios IOS_BUNDLE_DATA=<it>"
 # with IOS_ROOT=DIR/build, creates a device of its own with "simctl create"
 # (IOS_SIM_TYPE, default "iPhone 17", on IOS_SIM_RUNTIME, default the newest
-# available iOS runtime), boots it, installs the app and launches it with
+# available iOS runtime that lists that device type; on a version tie the
+# one that lists the most types, and a runtime with no list counts as
+# general; a version or name in IOS_SIM_RUNTIME is picked the same way
+# among the runtimes it matches, a runtime that does not list the type is
+# skipped, and a candidate with no numeric version is refused by name),
+# boots it, installs the app and launches it with
 # --console-pty and Metal's validation layer (SIMCTL_CHILD_MTL_DEBUG_LAYER=1)
 # on "+set vid_renderer metal" and "+exec smoke.cfg" (written into the
 # data: about 30 frames, "screenshot tga", 900 frames at the console, then
@@ -53,7 +58,8 @@
 #     devices): one listed before the run and missing after it is a
 #     warning naming its UDID, never a failure. This script's own
 #     mutating simctl calls (shutdown, delete, erase, uninstall,
-#     terminate, and the lookup of a lost device) name only this run's
+#     terminate, boot, bootstatus -b, install, launch, and the lookup of
+#     a lost device) name only this run's
 #     UDID, never one of the others. A list that fails, cannot be read or
 #     names no device is a failure.
 #
@@ -72,9 +78,14 @@
 # Each --launch "ARGS" is one start of the app, in order, on the same
 # device and container (a setting or a save is read back by the next
 # one); ARGS are engine arguments, split at spaces. With none, one start
-# with no argument, the app until the person quits it. --shot SECONDS:
+# with no argument, the app until the person quits it. Each word of ARGS
+# is passed as it is (a * or ? matches no file). A start that ended on its
+# own must show Com_Quit's "shutting down" line in its engine log
+# (engine.<n>.log, the engine's own, not the launcher's output): without
+# it the app was killed or crashed, and the run fails. --shot SECONDS:
 # a simctl screenshot that long after each start (DIR/screen.<n>.png),
-# then simctl terminate. After each start DIR/engine.<n>.log is the
+# then simctl terminate (that start needs no quit path; an app that ended
+# before the shot says so and takes none). After each start DIR/engine.<n>.log is the
 # engine's own log (qconsole.log), DIR/documents.<n>.list the files of
 # Documents/baseq2/ with their sizes (names, never contents) and
 # DIR/frames.<n>/ its scrnshot/ files. With --data these hold the
@@ -112,7 +123,12 @@
 # fails and still deletes the device, an app that outlives
 # IOS_SIM_RUN_SECONDS is terminated and fails, each --launch is a start
 # with its own log and listing, --shot ends the app and keeps the frame,
-# --background launches the other app and the app again, in that order.
+# --background launches the other app and the app again, in that order; a
+# --launch word is not glob-expanded; a start that ended on its own with no
+# quit path in its log fails, one the shot ended does not, and an app that
+# ended before the shot says so; the runtime pick follows one rule, in the
+# default and within a version or name given; a bad version names its
+# runtime and a runtime that cannot be a candidate is skipped.
 # tests/check-ios.sh runs it.
 #
 # Limits, in seconds (digits only, or the script refuses):
@@ -240,6 +256,7 @@ print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-27-2": dev
 		rtnum) echo "{\"runtimes\": [$(printf '%s' "$g" | sed 's/27\.2/27.10/g'), $(printf '%s' "$g" | sed 's/27\.2/27.9/g; s/iOS-27-2/iOS-27-9/')]}" ;;
 		rtnone) echo "{\"runtimes\": [$(printf "$b" 27.2 27.2 27.2)]}" ;;
 		rtempty) echo '{"runtimes": []}' ;;
+		rtbadnon) echo "{\"runtimes\": [$(printf "$b" x x x), $g]}" ;;
 		rtbadver) echo '{"runtimes": [{"isAvailable": true, "platform": "iOS", "version": "x", "name": "iOS x", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-x"}]}' ;;
 		*) echo '{"runtimes": [{"isAvailable": true, "platform": "iOS", "version": "27.2", "name": "iOS 27.2", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-2", "supportedDeviceTypes": [{"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}]}' ;;
 		esac ;;
@@ -267,7 +284,13 @@ create)
 		exec sleep 30
 	fi
 	echo "$u" ;;
-terminate) [ -f "$st/app.pid" ] && kill "$(cat "$st/app.pid")" 2>/dev/null; echo "$*" >> "$st/terminates"; exit 0 ;;
+terminate)
+	# only the process this fake started: the PID in app.pid still runs the command recorded in app.cmd
+	# (a PID that is gone may belong to anyone by now)
+	if [ -f "$st/app.pid" ] && [ -f "$st/app.cmd" ] && [ "$(ps -o command= -p "$(cat "$st/app.pid")" 2>/dev/null)" = "$(cat "$st/app.cmd")" ]; then
+		kill "$(cat "$st/app.pid")" 2>/dev/null
+	fi
+	echo "$*" >> "$st/terminates"; exit 0 ;;
 bootstatus|install|shutdown) ;;
 spawn) echo "fake log: quake2 line" ;;
 io)
@@ -314,6 +337,10 @@ launch)
 			"ref_metal: metal_stats: 31 frames, 0 without a drawable, 0 skipped, 0 failed command buffers, " ;;
 		esac
 	} > "$c/qconsole.log"
+	# no game data: the engine writes only the missing-data text, shows the alert and ends (VID_CheckGameData, Sys_Quit)
+	if [ "$sc" = nodata ]; then
+		printf '%s\n' "Quake II needs its game data. Copy pak0.pak from the baseq2 folder of Quake II into Files > On My iPhone (or iPad) > Quake II > baseq2, then start the game again." > "$c/qconsole.log"
+	fi
 	python3 -I "$(dirname "$0")/fakepix.py" tga "$c/scrnshot/q2_0000.tga" "$sc"
 	[ "$sc" = launchterm ] && trap "" TERM
 	# an app that stays at the console: appstays, and containerhang (the frame wait must end at its limit, not on the app's end);
@@ -321,7 +348,8 @@ launch)
 	if [ "$sc" = appstays ] || [ "$sc" = containerhang ]; then
 		echo "Metal API Validation Enabled"
 		echo $$ > "$st/app.pid"
-		exec sleep 30
+		echo "sleep 30.$$" > "$st/app.cmd"
+		exec sleep "30.$$"
 	fi
 	# a run with --background (IOS_SIM_BACKGROUND_AFTER is set) keeps the app alive through the background;
 	# bgdies is the app that ends during it
@@ -329,9 +357,10 @@ launch)
 	[ -n "${IOS_SIM_BACKGROUND_AFTER-}" ] && life=4
 	[ "$sc" = bgshot ] && life=5
 	[ "$sc" = bgdies ] && life=1
-	sleep "$life" &
+	sleep "$life.$$" &
 	p=$!
 	echo $p > "$st/app.pid"
+	echo "sleep $life.$$" > "$st/app.cmd"
 	echo "$4: $p"
 	echo "Metal API Validation Enabled"
 	wait "$p"
@@ -363,6 +392,7 @@ for a; do case $a in IOS_ROOT=*) r=${a#IOS_ROOT=} ;; esac; done
 [ -n "$r" ] || { echo "fake make: no IOS_ROOT" >&2; exit 2; }
 mkdir -p "$r/Quake2.app" || exit 1
 printf '%s\n' "$*" > "$r/make.args"
+for a; do case $a in IOS_BUNDLE_DATA=*) cp -R "${a#IOS_BUNDLE_DATA=}/." "$r/Quake2.app/" || exit 1 ;; esac; done
 printf '#!/bin/sh\nexit 0\n' > "$r/Quake2.app/quake2" && chmod +x "$r/Quake2.app/quake2" || exit 1
 printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
 	'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
@@ -453,9 +483,10 @@ EOF
 			"22222222-2222-2222-2222-222222222222 Owner iPad" > "${d:?}/state/devices"
 		t0=$(date +%s)
 		cmd=${ST_CMD:-smoke --out @D@/out}; cmd=${cmd//@D@/$d}
-		bounded 60 "${d:?}/run.log" env PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
-			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=2 IOS_SIM_CREATE_SECONDS=2 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10 "$@" \
-			bash "$self" $cmd || rc=$?
+		# ST_CWD: the directory the script runs in; no pathname expansion of the words of the command
+		( set -f; cd "${ST_CWD:-.}" && bounded 60 "${d:?}/run.log" env PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
+			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=20 IOS_SIM_CREATE_SECONDS=20 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10 "$@" \
+			bash "$self" $cmd ) || rc=$?
 		t0=$(( $(date +%s) - t0 ))
 		if [ "$rc" = 124 ]; then
 			why="the smoke outlived 60 s"
@@ -467,7 +498,7 @@ EOF
 			why="its output does not hold \"$text\""
 		elif [ "$t0" -gt "$max" ]; then
 			why="it took $t0 s, more than $max s"
-		elif other=$(awk '$1 == "simctl" && ($2 == "shutdown" || $2 == "delete" || $2 == "erase" || $2 == "uninstall" || $2 == "terminate") && $3 != u { print $2 " " $3 }' u="$(cat "${d:?}/state/created" 2>/dev/null)" "${d:?}/state/calls" 2>/dev/null) && [ -n "$other" ]; then
+		elif other=$(awk '$1 == "simctl" && ($2 == "shutdown" || $2 == "delete" || $2 == "erase" || $2 == "uninstall" || $2 == "terminate" || $2 == "boot" || $2 == "bootstatus" || $2 == "install" || $2 == "launch") { x = ($2 == "launch" && $3 ~ /^--/) ? $4 : $3; if (x != u) print $2 " " x }' u="$(cat "${d:?}/state/created" 2>/dev/null)" "${d:?}/state/calls" 2>/dev/null) && [ -n "$other" ]; then
 			why="a mutating simctl call names a device that is not this run's: $other"
 		elif [ "$sc" != leftover ] && grep '^AAAAAAAA-' "${d:?}/state/devices" >/dev/null; then
 			why="this run's device is left in the fake's device list"
@@ -607,6 +638,44 @@ EOF
 	ST_CMD="run --out @D@/out --no-data --background 1" st_case run-background-after-not-digits extra fail "IOS_SIM_BACKGROUND_AFTER must be" 5 IOS_SIM_BACKGROUND_AFTER=x
 	ST_CMD="run --out @D@/out --shot 3s" st_case run-shot-not-digits extra fail "--shot must be a number of seconds" 5
 	ST_CMD="run --out @D@/out" st_case run-limit-not-digits extra fail "IOS_SIM_RUN_SECONDS must be" 5 IOS_SIM_RUN_SECONDS=1h
+	# a --launch word is split at spaces and never matched against the files of the directory the script runs in
+	mkdir -p "$sroot/glob-cwd" && : > "$sroot/glob-cwd/+xfile"
+	ST_CWD="$sroot/glob-cwd" ST_CMD="run --out @D@/out --no-data --launch +x*" st_case run-launch-no-glob extra ok "run ok, 1 start(s)" 30
+	st_has run-launch-no-glob grep state/launches "+x*"
+	st_has run-launch-no-glob nogrep state/launches "+xfile"
+	# a start that ended on its own must show the engine's own quit path in its log, or it was killed or it crashed
+	ST_CMD="run --out @D@/out --no-data" st_case run-app-killed killed fail "does not show its own quit path" 30
+	# no game data: the app writes only the missing-data text and quits; that is its own quit path
+	ST_CMD="run --out @D@/out --no-data" st_case run-missing-data-quits nodata ok "run ok, 1 start(s)" 30
+	ST_CMD="run --out @D@/out --no-data" st_case run-app-crashed crashed fail "does not show its own quit path" 30
+	ST_CMD="run --out @D@/out --no-data --launch +a --launch +b" st_case run-second-start-killed killed fail "start 1: the app ended and engine.1.log does not show" 30
+	# with --shot the script ends the app itself: no quit path is due; an app that ended before the shot is said so
+	ST_CMD="run --out @D@/out --no-data --shot 0" st_case run-shot-ends-app-no-quit-path killed ok "run ok, 1 start(s)" 30
+	st_has run-shot-ends-app-no-quit-path file out/screen.1.png
+	ST_CMD="run --out @D@/out --no-data --shot 6" st_case run-ended-before-shot extra ok "the app ended before the screenshot" 30
+	st_has run-ended-before-shot nofile out/screen.1.png
+	ST_CMD="run --out @D@/out --no-data --shot 6" st_case run-killed-before-shot killed fail "does not show its own quit path" 30
+	# the fake's terminate kills only the process it started: a PID in app.pid that now runs something else survives
+	ncase=$((ncase + 1))
+	mkdir -p "$sroot/fake-terminate-stale/state"
+	sleep 30 &
+	spid=$!
+	printf '%s\n' "$spid" > "$sroot/fake-terminate-stale/state/app.pid"
+	printf '%s\n' "sleep 31.1" > "$sroot/fake-terminate-stale/state/app.cmd"
+	FAKE_STATE="$sroot/fake-terminate-stale/state" "$sroot/bin/xcrun" simctl terminate AAAAAAAA-0000-0000-0000-000000000001 com.example
+	# a kill and its reap are asynchronous: give a wrongly sent signal up to 3 s to show before deciding
+	i=0
+	while kill -0 "$spid" 2>/dev/null && [ "$i" -lt 6 ]; do
+		sleep 0.5
+		i=$((i + 1))
+	done
+	if kill -0 "$spid" 2>/dev/null; then
+		echo "ios-sim: selftest: ok fake-terminate-stale"
+	else
+		echo "ios-sim: selftest: FAIL fake-terminate-stale: the fake's terminate killed a PID that is not its app"
+		nfail=$((nfail + 1))
+	fi
+	kill "$spid" 2>/dev/null; wait "$spid" 2>/dev/null
 	# the runtime pick: the newest runtime that lists the device type, the general one on a tie
 	st_case runtime-tie-picks-general rttie ok "iOS 27.2)" 30
 	st_case runtime-newer-bound-picks-general rtnewer ok "iOS 27.2)" 30
@@ -615,20 +684,24 @@ EOF
 	st_case runtime-version-numeric rtnum ok "iOS 27.10)" 30
 	st_case runtime-none-lists-type rtnone fail "iPhone 17 is not supported by any available iOS runtime; tried iOS 27.2 bound (com.apple.CoreSimulator.SimRuntime.iOS-bound-27.2)" 30
 	st_case runtime-list-empty rtempty fail "no available iOS runtime" 30
-	st_case runtime-bad-version rtbadver fail "has no numeric version" 30
+	st_case runtime-bad-version rtbadver fail "the iOS runtime iOS x (com.apple.CoreSimulator.SimRuntime.iOS-x) has no numeric version" 30
+	st_case runtime-bad-version-not-candidate-skipped rtbadnon ok "iOS 27.2)" 30
+	st_case runtime-set-version-tie-picks-general rttie ok "iOS 27.2)" 30 IOS_SIM_RUNTIME=27.2
+	st_case runtime-set-name-picks-general rttie ok "iOS 27.2)" 30 "IOS_SIM_RUNTIME=iOS 27.2"
+	st_case runtime-set-version-tie-both-list-picks-most rttielist ok "iOS 27.2)" 30 IOS_SIM_RUNTIME=27.2
 	st_case runtime-set-bound-refused rttie fail "iPhone 17 is not supported by iOS 27.2 bound" 30 IOS_SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-bound-27.2
 	st_case runtime-set-general rttie ok "iOS 27.2)" 30 IOS_SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-27-2
 	st_case list-empty empty fail "simctl list devices: no device list" 30
 	st_case list-fails listfail fail "simctl list devices failed" 30
-	st_case list-hangs hang fail "timed out after 2 s: xcrun simctl list devices" 10
+	st_case list-hangs hang fail "timed out after 2 s: xcrun simctl list devices" 10 IOS_SIM_LIST_SECONDS=2
 	st_case device-from-before-gone vanish ok "not a failure): 22222222-2222-2222-2222-222222222222" 30
 	ST_CMD="run --out @D@/out" st_case run-device-from-before-gone vanish ok "not a failure): 22222222-2222-2222-2222-222222222222" 30
 	st_case own-device-left leftover fail "is still listed after its delete" 30
 	ST_CMD="run --out @D@/out" st_case run-own-device-left leftover fail "is still listed after its delete" 30
-	st_case create-times-out createhang fail "deleting AAAAAAAA-0000-0000-0000-" 30
+	st_case create-times-out createhang fail "deleting AAAAAAAA-0000-0000-0000-" 30 IOS_SIM_CREATE_SECONDS=2
 	st_case created-device-not-listed ghost fail "is not in the device list taken after simctl create" 30
 	st_case created-device-listed-before reuse fail "was already listed before simctl create" 30
-	st_case lost-device-listed-before samename fail "not deleting 55555555-5555-5555-5555-555555555555" 30
+	st_case lost-device-listed-before samename fail "not deleting 55555555-5555-5555-5555-555555555555" 30 IOS_SIM_CREATE_SECONDS=2
 	st_case launch-ignores-term launchterm ok "the launch client did not exit after the app" 40
 	st_case family-refused floorrefused fail "ref_metal refused it (its floor)" 30
 	st_case portrait-framebuffer portrait ok "smoke ok" 30
@@ -841,6 +914,9 @@ bid=$(plutil -extract CFBundleIdentifier raw -o - "$app/Info.plist" 2>/dev/null)
 list_devices "$out/devices.before" || die "no device list before the run"
 bounded "$list_s" "${tmp:?}/types.json" -e "${tmp:?}/types.err" xcrun simctl list devicetypes -j || die "simctl list devicetypes failed"
 bounded "$list_s" "${tmp:?}/runtimes.json" -e "${tmp:?}/runtimes.err" xcrun simctl list runtimes -j || die "simctl list runtimes failed"
+# the runtime: the newest that lists the device type, on a version tie the one that lists the
+# most types (a runtime with no list counts as general); IOS_SIM_RUNTIME narrows the set, then
+# the same rule picks within it
 pick=$(python3 -I - "${tmp:?}/types.json" "${tmp:?}/runtimes.json" "${IOS_SIM_TYPE:-iPhone 17}" "${IOS_SIM_RUNTIME:-}" <<'EOF'
 import json, sys
 types = json.load(open(sys.argv[1]))["devicetypes"]
@@ -851,31 +927,30 @@ if not t:
     sys.exit("no device type " + want_type)
 ios = [r for r in runtimes if r.get("isAvailable") and r.get("platform", "") == "iOS"]
 if want_rt:
-    ios = [r for r in ios if want_rt in (r["identifier"], r["version"], r["name"])]
+    ios = [r for r in ios if want_rt in (r.get("identifier"), r.get("version"), r.get("name"))]
 if not ios:
     sys.exit("no available iOS runtime" + (" " + want_rt if want_rt else ""))
 tid = t[0]["identifier"]
-def ver(r):
-    return [int(x) for x in r["version"].split(".")]
-try:
-    for r in ios:
-        ver(r)
-except (KeyError, ValueError, AttributeError):
-    sys.exit("an iOS runtime in the list has no numeric version")
+def label(r):
+    return str(r.get("name")) + " (" + str(r.get("identifier")) + ")"
 def lists(r):
     # a runtime with no list of device types stays a candidate
     ok = [s["identifier"] for s in r.get("supportedDeviceTypes", [])]
     return not ok or tid in ok
-if want_rt:
-    rt = max(ios, key=ver)
-    if not lists(rt):
-        sys.exit(t[0]["name"] + " is not supported by " + rt["name"])
-else:
-    cand = [r for r in ios if lists(r)]
-    if not cand:
-        sys.exit(t[0]["name"] + " is not supported by any available iOS runtime; tried " + ", ".join(r["name"] + " (" + r["identifier"] + ")" for r in ios))
-    # newest first; on a version tie the runtime that lists the most device types (the general one)
-    rt = max(cand, key=lambda r: (ver(r), len(r["supportedDeviceTypes"]) if r.get("supportedDeviceTypes") else 1 << 30))
+def ver(r):
+    try:
+        return [int(x) for x in r["version"].split(".")]
+    except (KeyError, ValueError, AttributeError):
+        sys.exit("the iOS runtime " + label(r) + " has no numeric version")
+# the same rule for the default and for a version or name given: only a runtime that lists the
+# device type is a candidate (the others are skipped, whatever their version says); newest first;
+# on a version tie the runtime that lists the most device types (the general one)
+cand = [r for r in ios if lists(r)]
+if not cand:
+    if want_rt:
+        sys.exit(t[0]["name"] + " is not supported by " + ", ".join(r["name"] for r in ios))
+    sys.exit(t[0]["name"] + " is not supported by any available iOS runtime; tried " + ", ".join(label(r) for r in ios))
+rt = max(cand, key=lambda r: (ver(r), len(r["supportedDeviceTypes"]) if r.get("supportedDeviceTypes") else 1 << 30))
 print(t[0]["identifier"], rt["identifier"], rt["name"])
 EOF
 ) || die "no device for the run"
@@ -904,6 +979,11 @@ bounded 180 "${tmp:?}/install.out" xcrun simctl install "$udid" "$app" || { cat 
 
 # ---- the run ---------------------------------------------------------------
 
+# Com_Quit's line in the engine's log: the app ended through its own quit path
+shutdown_line='----------- shutting down ----------'
+# a start with no game data ends through VID_CheckGameData: it prints this text, shows the alert and quits
+# (Sys_Quit, never Com_Quit), so this line is that quit path
+missing_data_line='Quake II needs its game data.'
 # data_container: the app's data container into $container (fail closed)
 data_container()
 {
@@ -920,6 +1000,7 @@ launch_app()
 {
 	local limit=$1 what=$2 shotat=$3 n=$4 log t t0 w=0 shotbase=0 bgdone=0
 	shift 4
+	shot_taken=0
 	log=$out/console.$n.log
 	SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "$@" > "$log" 2>&1 &
 	lpid=$!
@@ -949,6 +1030,7 @@ launch_app()
 			if [ -n "$bg" ]; then
 				bounded 90 "$out/oslog.$n.txt" xcrun simctl spawn "$udid" log show --last 5m --predicate 'process == "quake2"' || die "simctl spawn log show failed"
 			fi
+			shot_taken=1
 			bounded 30 "${tmp:?}/term.out" xcrun simctl terminate "$udid" "$bid" || true
 			break
 		fi
@@ -960,6 +1042,10 @@ launch_app()
 		t=$((t + 1))
 	done
 	echo "ios-sim: start $n: the app ran $((SECONDS - t0)) s"
+	# the app ended on its own before the screenshot was due
+	if [ -n "$shotat" ] && [ "$shot_taken" = 0 ]; then
+		echo "ios-sim: start $n: the app ended before the screenshot (due $shotat s after the start or the return): none was taken" >&2
+	fi
 	while kill -0 "$lpid" 2>/dev/null && [ "$w" -lt 10 ]; do sleep 1; w=$((w + 1)); done
 	if kill -0 "$lpid" 2>/dev/null; then
 		echo "ios-sim: the launch client did not exit after the app; stopping it" >&2
@@ -992,14 +1078,22 @@ if [ "$mode" = run ]; then
 	for l in "${launches[@]}"; do
 		n=$((n + 1))
 		# no write-directory option: the engine finds Documents by itself
-		# shellcheck disable=SC2086
-		launch_app "$run_s" "IOS_SIM_RUN_SECONDS" "$shot" "$n" +set vid_renderer metal +set logfile 2 $l
+		# split at spaces by read, not by an unquoted expansion: a * or ? is not a pattern here
+		words=()
+		read -r -a words <<< "$l"
+		launch_app "$run_s" "IOS_SIM_RUN_SECONDS" "$shot" "$n" +set vid_renderer metal +set logfile 2 ${words[@]+"${words[@]}"}
 		data_container
 		docs=$container/Documents/baseq2
 		[ -d "$docs" ] || die "no Documents/baseq2 in the data container after start $n"
 		( cd "$docs" && find . -type f | sort | while read -r f; do printf '%s %s\n' "$(wc -c < "$f" | tr -d ' ')" "$f"; done ) > "$out/documents.$n.list" || die "cannot list $docs"
 		[ -f "$docs/qconsole.log" ] || die "the engine wrote no qconsole.log in Documents/baseq2 after start $n"
 		cp "$docs/qconsole.log" "$out/engine.$n.log"
+		# a start the script ended itself (the shot, then terminate) has no quit path to show; one that
+		# ended on its own did, or it was killed or it crashed (decided from the engine's own log)
+		if [ "$shot_taken" = 0 ] && ! grep -F -x -e "$shutdown_line" "$out/engine.$n.log" >/dev/null \
+			&& ! grep -F -e "$missing_data_line" "$out/engine.$n.log" >/dev/null; then
+			die "start $n: the app ended and engine.$n.log does not show its own quit path (\"$shutdown_line\", or the missing-data text): it was killed or it crashed"
+		fi
 		if [ -d "$docs/scrnshot" ]; then
 			mkdir -p "$out/frames.$n" && cp "$docs/scrnshot/"* "$out/frames.$n/" 2>/dev/null
 		fi
@@ -1028,7 +1122,6 @@ lpid=$!
 # the time left
 deadline=$((SECONDS + smoke_s))
 left() { local l=$((deadline - SECONDS)); [ "$l" -ge 1 ] || l=1; echo "$l"; }
-shutdown_line='----------- shutting down ----------'
 # engine_log_has <line>: the engine's log in the app's data container holds that whole line
 engine_log_has()
 {

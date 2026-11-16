@@ -815,10 +815,24 @@ Sys_MissingDataMessage(const char *dir, char *out, size_t len)
 	}
 }
 
+/* Sys_GetHomeDir builds the directory once; the environment is read
+   at that first call only. */
+static char home_dir_cache[MAX_OSPATH];
+
+/*
+ * Clears the cache so the next Sys_GetHomeDir builds the directory
+ * again. Only tests/unit calls this: the engine never does.
+ */
+void
+Sys_ForgetHomeDir(void)
+{
+	home_dir_cache[0] = '\0';
+}
+
 char *
 Sys_GetHomeDir()
 {
-	static char dir[MAX_OSPATH];
+	char *dir = home_dir_cache;
 
 	if (!dir[0])
 	{
@@ -832,7 +846,7 @@ Sys_GetHomeDir()
 		if (sys_sandbox_home)
 		{
 			// the app's Documents, not XDG, ~/.yq2 or -cfgdir
-			if (!Sys_SandboxHomeDir(home, dir, sizeof(dir)))
+			if (!Sys_SandboxHomeDir(home, dir, sizeof(home_dir_cache)))
 			{
 				return NULL;
 			}

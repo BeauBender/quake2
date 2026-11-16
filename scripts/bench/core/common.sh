@@ -246,17 +246,26 @@ BENCH_SPAWN_SAID=
 # without it (dash with no terminal) leaves the command in this shell's
 # group; it is said once, and the stop then reaches only the command's pid.
 # The command gets this shell's standard input (through fd 3), or /dev/null
-# when standard input is closed. It sets BENCH_DEFER: bench_on_signal (in
-# bench.sh) only notes a signal that arrives before the caller has stored
-# the pid, and the caller's bench_undefer acts on it, so no signal falls
-# between the "&" and "$!".
+# when standard input is closed, and this shell's standard error (through
+# fd 9), or /dev/null when that is closed; it does not inherit fd 9, nor
+# fd 3 when standard input is open. The fork itself runs with standard
+# error on /dev/null: the forked
+# shell sets its own process group before it becomes the command, and when
+# that setpgid fails (EPERM, seen under load on macOS while this shell's
+# setpgid makes the same group, which it does) bash says "child setpgid
+# (<pid> to <pid>): Operation not permitted" on the standard error it has
+# then, a line that names an internal path (FIX83). It sets BENCH_DEFER:
+# bench_on_signal (in bench.sh) only notes a signal that arrives before the
+# caller has stored the pid, and the caller's bench_undefer acts on it, so
+# no signal falls between the "&" and "$!".
 bench_spawn() {
 	BENCH_DEFER=1
+	{ :; } 9>&2 2> /dev/null || exec 2> /dev/null
 	set -m
 	if { :; } 2> /dev/null 3<&0; then
-		{ "$@" <&3 3<&- & } 3<&0
+		{ "$@" <&3 3<&- 2>&9 9>&- & } 3<&0 9>&2 2> /dev/null
 	else
-		"$@" < /dev/null &
+		{ "$@" < /dev/null 2>&9 9>&- & } 9>&2 2> /dev/null
 	fi
 	BENCH_SPAWN_PID=$!
 	set +m

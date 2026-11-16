@@ -1077,7 +1077,8 @@ Key_Bind_f(void)
  * controller both act through them). A binding that is there, from
  * the game's configuration files or the user's, is never replaced, and
  * a start with a config.cfg binds nothing: what was unbound stays so.
- * Elsewhere this does nothing.
+ * It runs once per start, not again when a game directory change runs
+ * the configs again. Elsewhere this does nothing.
  */
 void
 Key_DefaultPadBinds(void)
@@ -1085,18 +1086,23 @@ Key_DefaultPadBinds(void)
 #if defined(__APPLE__) && TARGET_OS_IPHONE
 	const char *key, *cmd;
 	char buf[64];
-	int i;
+	int i, have_config;
+	static qboolean done;
 
-	if (FS_LoadFile("config.cfg", NULL) >= 0)
+	/* once per start: a game directory change runs the configs again, the keys are left as they are */
+	if (done)
 	{
 		return;
 	}
+
+	done = true;
+	have_config = FS_LoadFile("config.cfg", NULL) >= 0;
 
 	for (i = 0; Touch_DefaultBind(i, &key, &cmd); i++)
 	{
 		int k = Key_StringToKeynum((char *)key);
 
-		if (k < 0 || k >= K_LAST || (keybindings[k] && keybindings[k][0]))
+		if (k < 0 || k >= K_LAST || !Touch_WantBind(have_config, keybindings[k] && keybindings[k][0]))
 		{
 			continue;
 		}
