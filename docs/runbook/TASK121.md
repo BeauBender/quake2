@@ -178,3 +178,73 @@ line, at quit with the value back at 0, reads the same.
 `tests/menu/videomenu_test.c` (`test_colorspace_item`, and the item in the
 greyed-items-cannot-change check), each written before the code. The checks
 of the card ran: see the report of the lane.
+
+## Review round 1
+
+The review panel on `ad1f68d9` found two Importants and two notes.
+
+**I1, a switch from 1 back to 0 left the layer untagged.** The first
+version set `colorspace = NULL` on 1 to 0 and at detach. A layer that
+starts at 0 reads `kCGColorSpaceSRGB` (the system tags it once the device
+and `MTLPixelFormatBGRA8Unorm` are set), so a 0 that followed a 1 was in a
+state a fresh 0 never has: no colour matching. **Fix** (`rmb_device.m`):
+when the code first tags the layer it keeps the layer's own value
+(retained, `rmb_cs_own`, possibly NULL); `rmb_cs_release` puts that value
+back on 1 to 0 and at detach, then releases the kept value and ours (and
+counts ours destroyed). A session that starts at 0 and never switches does
+not touch the layer.
+
+**The probe** (a standalone Objective-C program in a scratch directory,
+never committed, built and run through `heavy.sh`): a `CAMetalLayer`
+configured as `rmb_attach` does (device, then `MTLPixelFormatBGRA8Unorm`),
+then the 1 path and the 1 to 0 path as `rmb_cs_apply` does them, printing
+the layer's colour-space name at each step.
+
+```
+head logic
+  attach, mode 0   kCGColorSpaceSRGB
+  mode 1           kCGColorSpaceSRGB
+  1 -> 0           nil
+fixed logic
+  attach, mode 0   kCGColorSpaceSRGB
+  mode 1           kCGColorSpaceSRGB
+  1 -> 0           kCGColorSpaceSRGB
+```
+
+Red (the head's logic ends untagged), then green (the attach state is
+back).
+
+**Switch check, re-run on the fixed code** (`1122d0e6`, `ASAN=1` build of
+client, game and `ref_metal`, a console script `+exec`ed from the game
+directory: `map base1`, ten switches of `metal_colorspace` (1, 0, 1, 0, ...)
+six frames apart, then ten `vid_restart` cycles with the value at 1, then
+0 and quit; 640x480 window, the screen locked, no other `quake2` running,
+under the timing lock; not a timing run, load average (1 minute) 2.0 to
+2.6 around it). No AddressSanitizer report, and all 12 teardown lines of
+the ledger read `0 live objects, 0 unreleased, 0 unmatched`, state counter
+created equal to destroyed: 52/52 in the session that held the switches,
+48/48 in the 11 others (ten restarts and the quit).
+
+**I2, the greyed-item test could not fail.** Every renderer under the
+greyed-items check left `metal_colorspace` at 0, so apply wrote nothing
+with or without the `QMF_GRAYED` guard. `test_colorspace_item` now sets
+`metal_colorspace 1`, opens the menu under `gl1`, applies and checks that
+nothing writes it, then puts it back to 0. **Red first:** with the
+`!(s_colorspace_list.generic.flags & QMF_GRAYED) &&` guard removed from
+`videomenu.c` in a temporary edit (restored, not committed),
+`tests/check-video-menu.sh` fails on the new check and on nothing else:
+
+```
+FAIL tests/menu/videomenu_test.c:795: Writes("metal_colorspace") == 0: gl1 with 1: metal_colorspace written while greyed
+videomenu_test: 2967 checks, 1 failed
+check-video-menu: the host test videomenu_test failed
+```
+
+**N1.** `rmb_colorspace_live` had no caller and is removed.
+
+**N4, the wording.** `doc/040_cvarlist.md`, the `rmb.h` comment and the
+plan note in `docs/plans/high-resolution.md` said 0 leaves the layer
+"untagged". It does not: at 0 the layer keeps the colour space the system
+gives it, which reads `kCGColorSpaceSRGB` for this pixel format on macOS
+(the probe above). The three now say that. The sections above are kept as
+they were; read "untagged" in them as "the layer's own colour space".
