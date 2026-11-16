@@ -102,7 +102,7 @@ Run on the card's head:
 
 Host: the bare-metal Mac, `Apple M6` (apple9, hardware ray tracing). Every run below is of engine
 commit `96b9c661` (pin ids `96b9c661a702-*`), an ancestor of the card's head; the commits after it
-change only this runbook and the design document. The "before" is TASK55's pass as it is on
+change only this file and the design document. The "before" is TASK55's pass as it is on
 `main` at `718e59d4`, the card's base: main moved on while the runs were paused, so the base was
 not `origin/main` when they ran. It is an export of `718e59d4` built in scratch (pin ids
 `nogit-*`), recorded by its own `scripts/pins.sh` into scratch stores. Both builds play the same
@@ -195,7 +195,7 @@ totals of the head and of the base (TASK55's pass):
 | `rt-shadows-entities`, `demo1.dm2` | 867,132 / 867,130 | 14,795 / 14,793 | 1.71 % | 3 of 23, by 1 or 2 |
 | `rt-shadows-entities`, `demo2.dm2` | 2,370,698 / 2,370,702 | 112,933 / 112,935 | 4.76 % | 7 of 89, by 1 or 2 |
 
-These are TASK55's shares. The frames its runbook names keep their counts:
+These are TASK55's shares. The frames [TASK55's file](TASK55.md) names keep their counts:
 
 - `demo1.dm2` frame 8: 0 shadowed of 242,931 traced;
 - `demo2.dm2` frame 23: 1,006 shadowed;
