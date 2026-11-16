@@ -14,7 +14,7 @@ Step 2. File the cards: done on 2026-11-12; the ids are in the "Filed as" column
 
 Step 3. Work the queue
 1. Turn pull mode on (`/dev-loop:pull-start`) and work cards in dependency order, one pull request per card. TASK9, then TASK29, come before the harness cards, because TASK27 depends on them. Do those first.
-2. Then P1. It is the first run of the harness on real game data. Answer every item under "Not yet run" in the runbook and replace that section with what you observed. If the capture path or the quit path does not work as written, fix it inside P1.
+2. Then P1. It is the first run of the harness on real game data. Answer every item under "Not yet run" in the card file [`docs/runbook/TASK39.md`](../runbook/TASK39.md) and replace that section with what you observed. If the capture path or the quit path does not work as written, fix it inside P1.
 3. Continue in this order: P2, P3, R1 to R5, then TASK27. S1 to S6, then TASK21. TASK28. RT1 to RT8 with RTA, then TASK24. RT9 and RT10, then TASK25.
 4. A renderer card is done only when `scripts/pins.sh compare` passes for the scenarios its acceptance names. Never widen a threshold to make a pin pass. Record the threshold each pin was accepted at.
 
