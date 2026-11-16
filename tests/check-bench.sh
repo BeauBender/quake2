@@ -310,6 +310,13 @@ t_lock_tokens() {
 	B lock run failing -- sh -c 'exit 7' || _st=$?
 	[ "$_st" -eq 7 ] || bad "release: wanted the command's status 7, got $_st"
 	[ "$(B lock status)" = lock=free ] || bad "release: a failing command left the lock held"
+	# A command killed by a signal gives its status, and the lock shell
+	# prints no job notice (it names an internal path) on the caller's
+	# standard error.
+	_st=0
+	B lock run killed -- sh -c 'sleep 0.3; kill -KILL $$' 2> "${E:?}/killed.err" || _st=$?
+	[ "$_st" -eq 137 ] || bad "release: wanted status 137 from a command killed by KILL, got $_st"
+	[ ! -s "${E:?}/killed.err" ] || bad "release: the lock shell printed a job notice on standard error"
 	# The command reads the caller's standard input, not /dev/null.
 	_out=$(printf 'from-stdin\n' | B lock run reader -- cat)
 	[ "$_out" = from-stdin ] || bad "lock run: the command did not get the caller's standard input"
@@ -372,20 +379,86 @@ t_lock_stop() {
 	else
 		echo "$me: SIGINT is ignored where this check runs, so the INT tests are skipped"
 	fi
-	# A command that catches TERM and goes on is killed after the grace.
-	start env BENCH_STOP_GRACE=1 sh "$R/bench.sh" lock run stubborn -- sh "${E:?}/stubborn.sh" "${E:?}/stub.pid" "${E:?}/log" > "${E:?}/stub.out" 2>&1
+	# A command that stops (a STOP to its group here; at a terminal, one
+	# that touches it from its background process group) is said, stopped
+	# with its group, and the lock freed with 74: never a wait without end.
+	start env BENCH_STOP_GRACE=0 sh "$R/bench.sh" lock run stopped -- sh "${E:?}/gc.sh" "${E:?}/gc.stop" "${E:?}/log" stopped 30 > "${E:?}/stopped.out" 2>&1
+	_h=$BG
+	wait_held 5 stopped || bad "stop: the stopped command's holder never showed"
+	wait_file 5 "${E:?}/gc.stop" || bad "stop: the stopped command's grandchild never started"
+	_c=$(sed -n 's/^child=//p' "${E:?}/state/lock/holder")
+	kill -s STOP -- "-$_c"
+	wait_gone 10 "$_h" || bad "stop: lock run still waits on a stopped command"
+	_st=0
+	wait "$_h" || _st=$?
+	[ "$_st" -eq 74 ] || bad "stop: wanted exit 74 from a stopped command, got $_st"
+	grep -q '^bench: the command stopped' "${E:?}/stopped.out" || bad "stop: a stopped command was not said"
+	[ "$(B lock status)" = lock=free ] || bad "stop: a stopped command's lock was not released"
+	if pid_running "$(cat "${E:?}/gc.stop")"; then bad "stop: the stopped command's grandchild outlived the lock"; fi
+	# A command that exits and leaves work running in its group: the work
+	# is stopped before the lock is free (checked below, once it would
+	# have written its line).
+	_st=0
+	B lock run left -- sh -c 'sh "$1" "$2" "$3" left 2 & echo left-end >> "$3"' x "${E:?}/gc.sh" "${E:?}/gc.left" "${E:?}/log" 2> "${E:?}/left.err" || _st=$?
+	[ "$_st" -eq 0 ] || bad "stop: a command that left work running exited $_st"
+	[ "$(B lock status)" = lock=free ] || bad "stop: the lock was not released after a command that left work running"
+	# A command that catches TERM and goes on is killed after the grace,
+	# which is at least BENCH_STOP_GRACE + 5 s even when that is 0, so a
+	# nested bench.sh stopping a group of its own finishes first.
+	start env BENCH_STOP_GRACE=0 sh "$R/bench.sh" lock run stubborn -- sh "${E:?}/stubborn.sh" "${E:?}/stub.pid" "${E:?}/log" > "${E:?}/stub.out" 2>&1
 	_h=$BG
 	wait_file 5 "${E:?}/stub.pid" || bad "stop: the stubborn command never started"
 	_t0=$(date +%s)
 	kill -TERM "$_h"
 	wait_gone 20 "$_h" || bad "stop: the lock shell did not exit after TERM to a command that ignores it"
 	_t1=$(date +%s)
-	[ $((_t1 - _t0)) -le 6 ] || bad "stop: a command that ignores TERM was stopped after $((_t1 - _t0)) s, not within twice the grace of 1 s and a margin"
+	[ $((_t1 - _t0)) -ge 4 ] || bad "stop: with BENCH_STOP_GRACE=0 the lock shell killed its command after $((_t1 - _t0)) s, under its floor of 5 s"
+	[ $((_t1 - _t0)) -le 9 ] || bad "stop: a command that ignores TERM was stopped after $((_t1 - _t0)) s, not within the grace floor of 5 s and a margin"
 	[ "$(B lock status)" = lock=free ] || bad "stop: the stubborn command's lock was not released"
 	grep -q got-term "${E:?}/log" || bad "stop: the stubborn command never got TERM"
 	if pid_running "$(cat "${E:?}/stub.pid")"; then bad "stop: the stubborn command outlived the lock"; fi
+	grep -v '^bench: ' "${E:?}/stub.out" "${E:?}/stopped.out" "${E:?}/term.out" "${E:?}/left.err" > /dev/null && bad "stop: the lock shell printed a line that is not its own (a job notice)"
 	# By now each grandchild would have written its line.
 	if grep -q 'late$' "${E:?}/log"; then bad "stop: something wrote after the lock was free: $(grep 'late$' "${E:?}/log" | tr '\n' ' ')"; fi
+	if pid_running "$(cat "${E:?}/gc.left" 2> /dev/null)"; then bad "stop: the work a command left running outlived the lock"; fi
+	# At a terminal (a pty from script, when there is one): a command that
+	# touches it from its background process group is said and stopped.
+	if script -q /dev/null true < /dev/null > /dev/null 2>&1; then
+		printf '%s\n' 'st=0; sh "$1/bench.sh" lock run tty -- sh -c "stty -echo < /dev/tty; echo after-stty" > "$2/tty.out" 2>&1 || st=$?; echo "$st" > "$2/tty.st"' > "${E:?}/tty.sh"
+		start env BENCH_STOP_GRACE=0 script -q /dev/null sh "${E:?}/tty.sh" "$R" "${E:?}" < /dev/null > /dev/null 2>&1
+		_h=$BG
+		wait_gone 15 "$_h" || bad "stop: a command that touched the terminal held the lock"
+		[ "$(cat "${E:?}/tty.st" 2> /dev/null)" = 74 ] || bad "stop: a command that touched the terminal: wanted 74, got $(cat "${E:?}/tty.st" 2> /dev/null)"
+		grep -q '^bench: the command stopped' "${E:?}/tty.out" || bad "stop: a command that touched the terminal was not said"
+		grep -q after-stty "${E:?}/tty.out" && bad "stop: a command that touched the terminal went on"
+		[ "$(B lock status)" = lock=free ] || bad "stop: a command that touched the terminal left the lock held"
+	else
+		echo "$me: no working script(1) here, so the terminal test is skipped"
+	fi
+	[ "$fails" -eq 0 ]
+}
+
+t_lock_defer() {
+	fresh defer
+	grandchild "${E:?}"
+	: > "${E:?}/log"
+	# A TERM that arrives between the "&" and the stored pid is held and
+	# acted on once the pid is stored: the command is stopped, not lost.
+	_s=${tmp:?}/defer
+	rm -rf "${_s:?}"
+	cp -R "$R" "$_s"
+	lit "${_s:?}/core/common.sh" 'BENCH_SPAWN_PID=$!' 'sleep 2; BENCH_SPAWN_PID=$!' || bad "defer: the injected stall does not apply"
+	start env BENCH_STOP_GRACE=1 sh "$_s/bench.sh" lock run defer -- sh "${E:?}/gc.sh" "${E:?}/d.gc" "${E:?}/log" defer 4 > "${E:?}/defer.out" 2>&1
+	_h=$BG
+	wait_file 5 "${E:?}/d.gc" || bad "defer: the grandchild never started"
+	kill -TERM "$_h"
+	wait_gone 15 "$_h" || bad "defer: the lock shell did not exit on a TERM in the window"
+	_st=0
+	wait "$_h" || _st=$?
+	[ "$_st" -eq 143 ] || bad "defer: wanted exit 143 on a TERM in the window, got $_st"
+	[ "$(B lock status)" = lock=free ] || bad "defer: the lock was not released"
+	if pid_running "$(cat "${E:?}/d.gc")"; then bad "defer: a TERM in the window left the command's grandchild running"; fi
+	if grep -q 'defer-late$' "${E:?}/log"; then bad "defer: the command ran on after a TERM in the window"; fi
 	[ "$fails" -eq 0 ]
 }
 
@@ -403,6 +476,19 @@ t_bounded() {
 		bench_bounded 1 sh "${E:?}/gc.sh" "${E:?}/b.gc" "${E:?}/log" wall 3.5 2> /dev/null || _st=$?
 		[ "$_st" -eq 124 ] || { echo "$me: bounded: wanted 124 from a command over its wall time, got $_st"; exit 1; }
 		if pid_running "$(cat "${E:?}/b.gc" 2> /dev/null)"; then echo "$me: bounded: a grandchild outlived the wall bound"; exit 1; fi
+		# A command that exits and leaves work running in its group: the
+		# work is stopped before the bound returns (checked below, once it
+		# would have written its line).
+		_st=0
+		bench_bounded 5 sh -c 'sh "$1" "$2" "$3" bleft 1 &' x "${E:?}/gc.sh" "${E:?}/b.left" "${E:?}/log" 2> /dev/null || _st=$?
+		[ "$_st" -eq 0 ] || { echo "$me: bounded: a command that left work running gave $_st, not 0"; exit 1; }
+		_tl=$(date +%s)
+		# A command killed by a signal gives its status, and no job notice
+		# (it names an internal path) reaches standard error.
+		_st=0
+		bench_bounded 5 sh -c 'sleep 0.3; kill -KILL $$' 2> "${E:?}/killed.err" || _st=$?
+		[ "$_st" -eq 137 ] || { echo "$me: bounded: wanted 137 from a command killed by KILL, got $_st"; exit 1; }
+		[ ! -s "${E:?}/killed.err" ] || { echo "$me: bounded: a job notice reached standard error"; exit 1; }
 		# A command that ignores TERM is killed after the grace: a bound
 		# (a wall time of 0 stops it within 1.5 s, the grace adds 1 to 2).
 		_t0=$(date +%s)
@@ -414,7 +500,9 @@ t_bounded() {
 		_st=0
 		bench_bounded 5 sh -c 'exit 7' || _st=$?
 		[ "$_st" -eq 7 ] || { echo "$me: bounded: wanted the command's status 7, got $_st"; exit 1; }
-		if grep -q 'late$' "${E:?}/log"; then echo "$me: bounded: something wrote after the wall bound"; exit 1; fi
+		while [ "$(date +%s)" -le $((_tl + 2)) ]; do sleep 0.2; done
+		if grep -q 'late$' "${E:?}/log"; then echo "$me: bounded: something wrote after the bound returned: $(grep 'late$' "${E:?}/log" | tr '\n' ' ')"; exit 1; fi
+		if pid_running "$(cat "${E:?}/b.left" 2> /dev/null)"; then echo "$me: bounded: the work a command left running outlived the bound"; exit 1; fi
 	) || bad "bounded: the wall-time bound does not stop the whole command"
 	[ "$fails" -eq 0 ]
 }
@@ -480,6 +568,27 @@ t_lock_guard() {
 	[ ! -s "${E:?}/out" ] || bad "guard: the command ran past a held reclaim guard"
 	grep -q '^token=t-.*-guarded$' "${E:?}/state/lock/holder" 2> /dev/null || bad "guard: the guarded lock was removed"
 	rm -rf "${E:?}/state/lock" "${E:?}/state/reclaim.t-$_dead-1-guarded"
+	# A holder whose two pids are gone while its command's process group
+	# still has a member is alive: left alone.
+	set -m
+	sh -c 'sleep 30 & echo $! > "$1"' x "${E:?}/member" > /dev/null 2>&1 &
+	_g=$!
+	set +m
+	wait "$_g" 2> /dev/null || true
+	wait_file 5 "${E:?}/member" || bad "guard: the group member never started"
+	cat "${E:?}/member" >> "${tmp:?}/pids"
+	mkdir "${E:?}/state/lock"
+	printf 'label=ghost\npid=%s\nchild=%s\nstart=2020-01-01T00:00:00Z\ntoken=t-%s-1-group\n' "$_dead" "$_g" "$_dead" > "${E:?}/state/lock/holder"
+	_st=0
+	env BENCH_LOCK_WAIT=1 sh "$R/bench.sh" lock run g -- echo ran > "${E:?}/out" 2> /dev/null || _st=$?
+	[ "$_st" -eq 75 ] || bad "guard: a lock whose command's group still runs was reclaimed (status $_st)"
+	[ ! -s "${E:?}/out" ] || bad "guard: the command ran beside a holder's live group"
+	case $(B lock status) in
+	*' alive=yes '*) ;;
+	*) bad "guard: lock status does not call a holder with a live group alive" ;;
+	esac
+	kill -TERM -- "-$_g" 2> /dev/null || true
+	rm -rf "${E:?}/state/lock"
 	# A lock directory with no holder file, inside its grace: left alone.
 	mkdir "${E:?}/state/lock"
 	_st=0
@@ -586,6 +695,26 @@ t_lock_state_dir() {
 	_st=0
 	env PATH="${E:?}/gitshim:$PATH" sh "$R/bench.sh" lock status > /dev/null 2>&1 || _st=$?
 	[ "$_st" -eq 2 ] || bad "state: a failing git was read as 'outside any repository' (status $_st)"
+	# A . or .. segment is refused before anything is made: past a missing
+	# directory the guard cannot tell where the path ends.
+	for _p in "${E:?}/nx/../../zzqrepo/state" "${E:?}/nx/./x" "${E:?}/nx/.."; do
+		_st=0
+		env BENCH_STATE="$_p" sh "$R/bench.sh" lock status > /dev/null 2>&1 || _st=$?
+		[ "$_st" -eq 2 ] || bad "state: a state directory with a . or .. segment was not refused (status $_st)"
+	done
+	[ ! -e "${repo:?}/state" ] && [ ! -e "${E:?}/nx" ] || bad "state: a state directory with a .. segment was made"
+	# A host without git: the .git walk alone decides.
+	mkdir "${E:?}/nogit"
+	for _d in /bin /usr/bin /usr/sbin /sbin; do
+		ln -s "$_d"/* "${E:?}/nogit/" 2> /dev/null || true
+	done
+	rm -f "${E:?}/nogit/git"
+	_st=0
+	env PATH="${E:?}/nogit" sh "$R/bench.sh" lock run nogit -- true > /dev/null 2> "${E:?}/nogit.err" || _st=$?
+	[ "$_st" -eq 0 ] || bad "state: a host without git cannot take the lock (status $_st)"
+	_st=0
+	env PATH="${E:?}/nogit" BENCH_STATE="${repo:?}/src/zz/state" sh "$R/bench.sh" lock status > /dev/null 2>&1 || _st=$?
+	[ "$_st" -eq 2 ] || bad "state: without git, a state directory inside a work tree was accepted (status $_st)"
 	[ "$fails" -eq 0 ]
 }
 
@@ -601,6 +730,10 @@ t_store_guard() {
 	env BENCH_STORE=relstore sh "$R/bench.sh" baseline put null-sleep "$cA" > /dev/null 2>&1 || _st=$?
 	[ "$_st" -eq 2 ] || bad "store guard: a relative store was not refused (status $_st)"
 	[ ! -e "${repo:?}/relstore" ] || bad "store guard: the refused relative store was made"
+	_st=0
+	env BENCH_STORE="${E:?}/nx/../../zzqrepo/store" sh "$R/bench.sh" baseline put null-sleep "$cA" > /dev/null 2>&1 || _st=$?
+	[ "$_st" -eq 2 ] || bad "store guard: a store with a .. segment was not refused (status $_st)"
+	[ ! -e "${repo:?}/store" ] && [ ! -e "${E:?}/nx" ] || bad "store guard: the refused store with a .. segment was made"
 	[ "$fails" -eq 0 ]
 }
 
@@ -999,7 +1132,7 @@ t_compare() {
 }
 
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare"
+all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
@@ -1050,6 +1183,10 @@ mutant lock-not-exclusive core/lock.sh 'if mkdir "${BENCH_LOCK_DIR:?}" 2> /dev/n
 	'ln "$_lw_t" "${BENCH_LOCK_DIR:?}/holder"' 'mv -f "$_lw_t" "${BENCH_LOCK_DIR:?}/holder"' || mfail=1
 mutant holder-replaced core/lock.sh 'ln "$_lw_t" "${BENCH_LOCK_DIR:?}/holder"' 'mv -f "$_lw_t" "${BENCH_LOCK_DIR:?}/holder"' t_lock_stall || mfail=1
 mutant spawn-no-group core/common.sh '	set -m' '	set +m' t_lock_stop || mfail=1
+# A signal in the window between the "&" and the stored pid: dropped by
+# bench_undefer, or acted on at once (the command is left running).
+mutant defer-signal-lost core/common.sh 'bench_on_signal "$_ud_s"' ':' t_lock_defer || mfail=1
+mutant defer-off bench.sh 'if [ -n "${BENCH_DEFER:-}" ]; then' 'if false; then' t_lock_defer || mfail=1
 mutant reentry-any-token core/lock.sh '[ "$(bench_kv "$(bench_lock_holder)" token)" = "$BENCH_LOCK_TOKEN" ]' '[ -n "$BENCH_LOCK_TOKEN" ]' t_lock_tokens || mfail=1
 mutant drift-no-t core/stats.sh 'lo = mn - t; hi = mx + t' 'lo = mn; hi = mx' t_drift || mfail=1
 mutant core-names-game core/common.sh '' '# the Quake II adapter' t_generic || mfail=1
