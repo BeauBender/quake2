@@ -176,9 +176,10 @@ There the kernel still reads the G-buffer, tests the lights and writes its two o
 pixel; which of those costs most is not measured. That floor, not the rays, is the next thing to
 cut at the native size.
 
-Measured for the ambient occlusion (RT5, TASK57; `docs/runbook/TASK57.md`): two any-hit rays a
-traced world pixel (about 99 % of the pixels of `demo1.dm2`), 128 units long, passing sky, water
-and translucent triangles. On the M6, seeded `rt-ao` over `demo1.dm2`, warm frames, three runs
+Measured for the ambient occlusion (RT5, TASK57; `docs/runbook/TASK57.md`): two closest-hit rays
+a traced world pixel (about 99 % of the pixels of `demo1.dm2`), 128 units long, passing sky, water
+and translucent triangles. They cannot be any-hit rays: the falloff needs the nearest occluder's
+distance (`hit.distance`), which an intersection accepted first does not give. On the M6, seeded `rt-ao` over `demo1.dm2`, warm frames, three runs
 each, without and with entities (`rt-ao-entities`):
 
 - 1920 x 1080: median 3.67 ms (p10 3.10 to 3.17, p90 4.60 to 4.72); with entities 4.10 ms (p10
