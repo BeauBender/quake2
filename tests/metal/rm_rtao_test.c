@@ -889,8 +889,8 @@ test_lo(void)
 				}
 				else
 				{
-					/* the view's edge: the nearest traced pixel alone */
-					edge &= (q.f == 0.0f) && (q.lo0 == n - 1);
+					/* the view's edge (or d 1, every pixel traced): the nearest traced pixel alone */
+					edge &= (q.f == 0.0f) && (q.lo0 == ((d == 1) ? x : n - 1));
 				}
 
 				if ((d == 1) || ((x >= mtl_rtao_lo_off(d)) && ((x - mtl_rtao_lo_off(d)) % d == 0)))

@@ -63,10 +63,13 @@ _Static_assert(sizeof(rm_rtao_view_t) == 128, "the view is rm_rtao.metal's 128 b
 
 static int ao_open;
 static id<MTLComputePipelineState> trace_pipe;
+static id<MTLComputePipelineState> lo_pipe;     /* r_rt_ao_scale below 1 (TASK157): the reduced-size rays */
+static id<MTLComputePipelineState> up_pipe;     /* and their upsample to the render size */
 static id<MTLRenderPipelineState> show_pipe;
 static id<MTLBuffer> tile;              /* the blue-noise ranks, MTL_RTAO_TILE_N ushorts */
 static id<MTLTexture> t_ao;             /* the AO, R8Unorm at the render size */
 static id<MTLTexture> t_light;          /* the light the resolve reads, RGBA16Unorm at the render size */
+static id<MTLTexture> t_ao_lo;          /* the traced AO at the reduced size, R8Unorm (TASK157); nil at div 1 */
 static id<MTLBuffer> counts;            /* RMB_FRAMES_IN_FLIGHT slots of RMB_RTAO_COUNTS */
 static id<MTLCounterSampleBuffer> samples;
 
@@ -116,6 +119,8 @@ rmb_rtao_open(char *err, size_t errlen)
 	{
 		NSError *e = nil;
 		id<MTLFunction> k = [rmb_library() newFunctionWithName:@"rm_rtao_trace"];
+		id<MTLFunction> klo = [rmb_library() newFunctionWithName:@"rm_rtao_trace_lo"];
+		id<MTLFunction> kup = [rmb_library() newFunctionWithName:@"rm_rtao_upsample"];
 		MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
 		id<MTLCounterSet> ts = nil;
 		unsigned short *ranks = malloc(MTL_RTAO_TILE_N * sizeof(*ranks));
@@ -124,10 +129,10 @@ rmb_rtao_open(char *err, size_t errlen)
 		d.fragmentFunction = [rmb_library() newFunctionWithName:@"rm_fragment_rtao_show"];
 		d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
 
-		if (!k || !d.vertexFunction || !d.fragmentFunction)
+		if (!k || !klo || !kup || !d.vertexFunction || !d.fragmentFunction)
 		{
 			free(ranks);
-			snprintf(err, errlen, "the shader library has no rm_rtao_trace or rm_fragment_rtao_show");
+			snprintf(err, errlen, "the shader library has no rm_rtao_trace, rm_rtao_trace_lo, rm_rtao_upsample or rm_fragment_rtao_show");
 			return 0;
 		}
 
@@ -143,11 +148,13 @@ rmb_rtao_open(char *err, size_t errlen)
 				options:MTLResourceStorageModeShared]);
 		free(ranks);
 		RMB_RTAO_SET(trace_pipe, [rmb_device newComputePipelineStateWithFunction:k error:&e]);
-		RMB_RTAO_SET(show_pipe, trace_pipe ? [rmb_device newRenderPipelineStateWithDescriptor:d error:&e] : nil);
+		RMB_RTAO_SET(lo_pipe, trace_pipe ? [rmb_device newComputePipelineStateWithFunction:klo error:&e] : nil);
+		RMB_RTAO_SET(up_pipe, lo_pipe ? [rmb_device newComputePipelineStateWithFunction:kup error:&e] : nil);
+		RMB_RTAO_SET(show_pipe, up_pipe ? [rmb_device newRenderPipelineStateWithDescriptor:d error:&e] : nil);
 		RMB_RTAO_SET(counts, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * RMB_RTAO_COUNTS * sizeof(uint32_t)
 				options:MTLResourceStorageModeShared]);
 
-		if (!tile || !trace_pipe || !show_pipe || !counts)
+		if (!tile || !trace_pipe || !lo_pipe || !up_pipe || !show_pipe || !counts)
 		{
 			snprintf(err, errlen, "cannot build the AO pipelines%s%s", e ? ": " : "",
 					e ? e.localizedDescription.UTF8String : "");
@@ -194,10 +201,13 @@ rmb_rtao_close(void)
 	@autoreleasepool
 	{
 		RMB_RTAO_SET(trace_pipe, nil);
+		RMB_RTAO_SET(lo_pipe, nil);
+		RMB_RTAO_SET(up_pipe, nil);
 		RMB_RTAO_SET(show_pipe, nil);
 		RMB_RTAO_SET(tile, nil);
 		RMB_RTAO_SET(t_ao, nil);
 		RMB_RTAO_SET(t_light, nil);
+		RMB_RTAO_SET(t_ao_lo, nil);
 		RMB_RTAO_SET(counts, nil);
 		RMB_RTAO_SET(samples, nil);
 	}
@@ -207,10 +217,54 @@ rmb_rtao_close(void)
 	ndone = 0;
 }
 
-int
-rmb_rtao_prepare(unsigned long w, unsigned long h)
+/* the traced AO at the reduced size of div (TASK157): made again when that size changes, released at div 1 */
+static int
+rmb_rtao_prepare_lo(unsigned long w, unsigned long h, unsigned div)
 {
-	if (!ao_open || !trace_pipe || !counts || (w < 1) || (h < 1))
+	const unsigned long lw = mtl_rtao_lo_size((unsigned)w, div), lh = mtl_rtao_lo_size((unsigned)h, div);
+
+	if (div <= 1)
+	{
+		RMB_RTAO_SET(t_ao_lo, nil);
+		return 1;
+	}
+
+	if (t_ao_lo && (t_ao_lo.width == lw) && (t_ao_lo.height == lh))
+	{
+		return 1;
+	}
+
+	@autoreleasepool
+	{
+		MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Unorm
+				width:lw height:lh mipmapped:NO];
+
+		d.storageMode = MTLStorageModePrivate;
+		d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+		RMB_RTAO_SET(t_ao_lo, [rmb_device newTextureWithDescriptor:d]);
+
+		if (!t_ao_lo)
+		{
+			return 0;
+		}
+
+		fprintf(stderr, "ref_metal: rt ao traced at %lux%lu (1/%u): %lu bytes allocated\n", lw, lh, div,
+				(unsigned long)t_ao_lo.allocatedSize);
+	}
+
+	return 1;
+}
+
+int
+rmb_rtao_prepare(unsigned long w, unsigned long h, unsigned div)
+{
+	if (!ao_open || !trace_pipe || !lo_pipe || !up_pipe || !counts || (w < 1) || (h < 1) || (w > 0xffffffffUL) ||
+		(h > 0xffffffffUL) || (div < 1) || (div > MTL_RTAO_DIV_MAX))
+	{
+		return 0;
+	}
+
+	if (!rmb_rtao_prepare_lo(w, h, div))
 	{
 		return 0;
 	}
@@ -352,8 +406,14 @@ rmb_rtao_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mater
 	view_set = 0;
 	rmb_rtao_read();
 
-	/* the outputs, made by rmb_rtao_prepare before the raster at this size */
+	/* the outputs, made by rmb_rtao_prepare before the raster at this size (and the reduced one) */
 	if (!t_ao || !t_light || (t_ao.width != w) || (t_ao.height != h) || (light.width != w) || (light.height != h))
+	{
+		return nil;
+	}
+
+	if ((view.div > 1) && (!t_ao_lo || (t_ao_lo.width != mtl_rtao_lo_size((unsigned)w, view.div)) ||
+		(t_ao_lo.height != mtl_rtao_lo_size((unsigned)h, view.div))))
 	{
 		return nil;
 	}
@@ -398,7 +458,8 @@ rmb_rtao_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mater
 			return nil;
 		}
 
-		[ce setComputePipelineState:trace_pipe];
+		/* every pixel traced (TASK57), or the rays at the reduced size first (TASK157) */
+		[ce setComputePipelineState:(view.div > 1) ? lo_pipe : trace_pipe];
 
 		/* the scene; its transmission and count go to slots 7 and 8, which the kernel does not read */
 		if (!rmb_rt_bind_scene(ce, fno, 2, 3, 7, 8))
@@ -425,6 +486,21 @@ rmb_rtao_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> mater
 		[ce setBytes:&view length:sizeof(view) atIndex:0];
 		[ce setBuffer:tile offset:0 atIndex:1];
 		[ce setBuffer:counts offset:(NSUInteger)slot * RMB_RTAO_COUNTS * sizeof(uint32_t) atIndex:6];
+
+		if (view.div > 1)
+		{
+			/*
+			 * TASK157: the rays at the reduced size, then their upsample at the
+			 * render size, which reads what they wrote: a serial encoder runs
+			 * its dispatches in order.
+			 */
+			[ce setTexture:t_ao_lo atIndex:6];
+			[ce dispatchThreads:MTLSizeMake(t_ao_lo.width, t_ao_lo.height, 1)
+					threadsPerThreadgroup:MTLSizeMake(RMB_RTAO_GROUP, RMB_RTAO_GROUP, 1)];
+			[ce memoryBarrierWithScope:MTLBarrierScopeTextures];
+			[ce setComputePipelineState:up_pipe];
+		}
+
 		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTAO_GROUP, RMB_RTAO_GROUP, 1)];
 		[ce endEncoding];
 
