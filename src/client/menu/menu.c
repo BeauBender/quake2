@@ -37,6 +37,7 @@
 
 #include "../header/client.h"
 #include "../input/header/gyro.h"
+#include "../input/header/touch.h"
 #include "../sound/header/local.h"
 #include "header/qmenu.h"
 
@@ -2055,6 +2056,9 @@ static menuaction_s s_joy_stickcfg_action;
 static menuaction_s s_joy_gyro_action;
 static menuaction_s s_joy_customize_buttons_action;
 static menuaction_s s_joy_customize_alt_buttons_action;
+static menulist_s s_joy_touch_box;
+static menuslider_s s_joy_touch_scale_slider;
+static menulist_s s_joy_touch_swap_box;
 
 extern void IN_ApplyJoyPreset(void);
 extern qboolean IN_MatchJoyPreset(void);
@@ -2102,6 +2106,18 @@ static void
 ConfigGyroFunc(void *unused)
 {
 	M_Menu_Gyro_f();
+}
+
+static void
+TouchControlsFunc(void *unused)
+{
+	Cvar_SetValue("in_touch", s_joy_touch_box.curvalue);
+}
+
+static void
+TouchSwapFunc(void *unused)
+{
+	Cvar_SetValue("in_touch_swap", s_joy_touch_swap_box.curvalue);
 }
 
 static void
@@ -2285,6 +2301,52 @@ Joy_MenuInit(void)
 	s_joy_customize_alt_buttons_action.generic.name = "custom. alt buttons";
 	s_joy_customize_alt_buttons_action.generic.callback = CustomizeControllerAltButtonsFunc;
 	Menu_AddItem(&s_joy_menu, (void *)&s_joy_customize_alt_buttons_action);
+
+	/*
+	 * The touch controls (TASK151). Without a touch screen the three are
+	 * shown greyed, with the reason, never hidden.
+	 */
+	s_joy_touch_box.generic.type = MTYPE_SPINCONTROL;
+	s_joy_touch_box.generic.x = 0;
+	s_joy_touch_box.generic.y = (y += 20);
+	s_joy_touch_box.generic.name = "touch controls";
+	s_joy_touch_box.generic.callback = TouchControlsFunc;
+	s_joy_touch_box.itemnames = yesno_names;
+	s_joy_touch_box.curvalue = (Cvar_VariableValue("in_touch") != 0);
+	s_joy_touch_box.generic.statusbar = "read at start";
+	Menu_AddItem(&s_joy_menu, (void *)&s_joy_touch_box);
+
+	s_joy_touch_scale_slider.generic.type = MTYPE_SLIDER;
+	s_joy_touch_scale_slider.generic.x = 0;
+	s_joy_touch_scale_slider.generic.y = (y += 10);
+	s_joy_touch_scale_slider.generic.name = "touch size";
+	s_joy_touch_scale_slider.cvar = "in_touch_scale";
+	s_joy_touch_scale_slider.minvalue = TOUCH_SCALE_MIN;
+	s_joy_touch_scale_slider.maxvalue = TOUCH_SCALE_MAX;
+	s_joy_touch_scale_slider.slidestep = 0.1f;
+	s_joy_touch_scale_slider.printformat = "%.1f";
+	s_joy_touch_scale_slider.generic.statusbar = NULL;
+	Menu_AddItem(&s_joy_menu, (void *)&s_joy_touch_scale_slider);
+
+	s_joy_touch_swap_box.generic.type = MTYPE_SPINCONTROL;
+	s_joy_touch_swap_box.generic.x = 0;
+	s_joy_touch_swap_box.generic.y = (y += 10);
+	s_joy_touch_swap_box.generic.name = "left-handed";
+	s_joy_touch_swap_box.generic.callback = TouchSwapFunc;
+	s_joy_touch_swap_box.itemnames = yesno_names;
+	s_joy_touch_swap_box.curvalue = (Cvar_VariableValue("in_touch_swap") != 0);
+	s_joy_touch_swap_box.generic.statusbar = NULL;
+	Menu_AddItem(&s_joy_menu, (void *)&s_joy_touch_swap_box);
+
+	if (!Touch_Supported())
+	{
+		s_joy_touch_box.generic.flags |= QMF_GRAYED;
+		s_joy_touch_box.generic.statusbar = "no touch screen";
+		s_joy_touch_scale_slider.generic.flags |= QMF_GRAYED;
+		s_joy_touch_scale_slider.generic.statusbar = "no touch screen";
+		s_joy_touch_swap_box.generic.flags |= QMF_GRAYED;
+		s_joy_touch_swap_box.generic.statusbar = "no touch screen";
+	}
 
 	Menu_Center(&s_joy_menu);
 }
