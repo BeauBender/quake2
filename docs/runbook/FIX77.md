@@ -203,8 +203,15 @@ worst score 0, worst bad 0; all 414 frame files are byte for byte equal
 
 ## The checks
 
-On the fix's code, each under `heavy.sh`: see the end of this card's
-report; filled in below by the lane.
+On `cadeacc7` (the fix's code and this document), each under `heavy.sh`,
+06:40 to 06:43: `make test` (`yq2test: 173 tests, 0 failed`),
+`tests/check-metal-shim.sh` (550 checks, 0 failed, shim built),
+`tests/check-ref-metal.sh` (12824 checks, 0 failed, `ref_metal` built),
+`tests/check-pins.sh` (the selftest), `tests/check-doc-links.sh` and
+`tests/check-no-local-identity.sh`, all ok; the builds `make client`,
+`make ref_metal`, `make ref_gl1 WITH_METAL_SHIM=yes` and
+`make STATIC_MODULES=1 STATIC_RENDERER=metal client`, all without an error
+or a warning from the changed files.
 
 ## What is left
 
