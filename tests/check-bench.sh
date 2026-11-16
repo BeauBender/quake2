@@ -50,10 +50,12 @@
 #     refusal, the wall-time bound and its default;
 #   - statistics against hand-computed values; the drift rule inside, at
 #     the edge and outside; compare's table and verdict;
+#   - a leading zero (08, 010) refused by every numeric setting and case key
+#     the core reads, before anything runs;
 #   - the core and bench.sh name no game and no project layout, and use no
 #     eval.
 # The tests that do not test the host facts use a fast stand-in for
-# system_profiler (fast_profiler). Then fourteen mutants, each applied to a
+# system_profiler (fast_profiler). Then fifteen mutants, each applied to a
 # copy of scripts/bench/ and each required to fail the test it targets: the
 # lock made neither exclusively nor linked, the holder renamed over
 # another's, the command spawned without its own process group, its fork
@@ -62,7 +64,7 @@
 # in the spawn window dropped, or acted on at once, re-entry accepts any
 # token, the drift rule drops t, the core names a game, the reclaim guard
 # made with mkdir -p, the holder-less grace dropped, the store's
-# outside-repository check deleted; and one to this test's own fixture, gc.sh
+# outside-repository check deleted, the leading-zero refusal dropped; and one to this test's own fixture, gc.sh
 # with its standard error left open.
 #
 # Usage: tests/check-bench.sh [<test>...]   (named tests only, no mutants)
@@ -1380,9 +1382,7 @@ DEAF
 	env BENCH_STOP_GRACE=08 sh "$R/bench.sh" lock run deaf -- sh "${E:?}/deaf.sh" "${E:?}/deaf.pid" > "${E:?}/deaf.out" 2> "${E:?}/deaf.err" || _st=$?
 	[ "$_st" -eq 2 ] || bad "zero: BENCH_STOP_GRACE=08 with a TERM-ignoring command was not refused at start (status $_st)"
 	if [ -s "${E:?}/deaf.pid" ]; then
-		_dp=$(cat "${E:?}/deaf.pid")
 		bad "zero: the TERM-ignoring command was started under BENCH_STOP_GRACE=08"
-		kill -KILL "$_dp" 2> /dev/null || true
 	fi
 	[ "$(B lock status 2> /dev/null)" = lock=free ] || bad "zero: the lock is not free after the refusal"
 	[ "$fails" -eq 0 ]
@@ -1462,8 +1462,8 @@ mutant drift-no-t core/stats.sh 'lo = mn - t; hi = mx + t' 'lo = mn; hi = mx' t_
 mutant core-names-game core/common.sh '' '# the Quake II adapter' t_generic || mfail=1
 mutant reclaim-guard core/lock.sh 'if ! mkdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' 'if ! mkdir -p "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' t_lock_guard || mfail=1
 mutant bare-no-grace core/lock.sh '-ge "$_la_grace" ]; then' '-ge 0 ]; then' t_lock_guard || mfail=1
-# Last: it writes into the throwaway repository's work tree.
 mutant leading-zero-accepted core/common.sh "'' | *[!0-9]* | 0?*) return 1 ;;" "'' | *[!0-9]*) return 1 ;;" t_leading_zero || mfail=1
+# Last: it writes into the throwaway repository's work tree.
 mutant store-in-repo core/store.sh 'bench_outside_repo "$BENCH_STORE_ROOT" "the store (BENCH_STORE)"' ':' t_store_guard || mfail=1
 [ "$mfail" -eq 0 ] || exit 1
 

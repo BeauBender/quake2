@@ -50,6 +50,9 @@ The `lock.sh` line 263 message is the octal failure of `bench_lock_grace` itself
 `BENCH_LOCK_POLL` is a decimal checked by `bench_is_num` and used in awk only, never in shell arithmetic.
 `mfx.py`: the grace regex is `(0|[1-9][0-9]*)\Z`.
 
+Other readers share `bench_is_uint` and so refuse a leading zero too: the quake2 adapter's case settings
+`seconds`, `maxfps`, `skip` and `after_frame` (`q2_uint_in`), and `BENCH_Q2_JOBS`, which falls back to 4 jobs.
+
 No trap, signal disposition, process group or `set -m` changed.
 
 ## Tests
@@ -75,3 +78,16 @@ gives the default, under and outside the generator's own hold (`25 11 25 65 25 2
 `tests/check-bench.sh` (all mutants), `tests/check-metalfx-report.sh`, `tests/check-bench-entry.sh`,
 `tests/check-doc-links.sh`, `tests/check-no-local-identity.sh`: ok. `tests/check-runbook-index.sh` fails
 until the index line for this file is added; that is expected.
+
+## Review round 1
+
+The three-pass panel was clean. Four notes were fixed, in tests and docs only:
+
+1. `t_leading_zero` (`tests/check-bench.sh`) no longer sends `kill -KILL` to the pid in `deaf.pid`: `lock run`
+   returns after the command's group is gone, so that number could belong to another process. The test now
+   checks without signalling: the pid file stays empty and the lock is free.
+2. The header of `tests/check-bench.sh` says fifteen mutants (counted), lists the leading-zero refusal in its
+   coverage list, and `mutant leading-zero-accepted` sits above the comment that belongs to `mutant store-in-repo`.
+3. The `stop-wait` probe in `tests/metalfx-report-helper.py` uses `011` instead of `010` (11 as decimal, 9 as
+   octal; `010` equals the default and could not tell them apart). The expected line is unchanged.
+4. This file names the other readers of `bench_is_uint`.
