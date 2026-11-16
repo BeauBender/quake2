@@ -35,7 +35,7 @@
 # not written fails the check. No window server, SDL library or game data
 # is needed. The behaviour itself (window and Metal layer counts after N
 # vid_restart cycles) needs both and is a runbook procedure:
-# docs/plans/metal-port-harness.md, "vid_restart and the main thread's
+# docs/runbook/FIX41.md, "vid_restart and the main thread's
 # autorelease pool (FIX41)".
 set -eu
 cd "$(dirname "$0")/.."

@@ -49,8 +49,9 @@ static unsigned long rts_ntrans;    /* the map's triangles that pass light */
 
 /* the map's surface tables (rm_rts_surface_map, the texture axes), uploaded when the pass is open */
 static unsigned *rts_tri;
+static unsigned *rts_vert;       /* the vertex-to-surface table of the G-buffer's lookup (TASK131), NULL without */
 static float *rts_vecs;
-static unsigned long rts_ntris, rts_nsurf;
+static unsigned long rts_ntris, rts_nsurf, rts_nverts;
 static int rts_uploaded;
 static const rm_world_t *rts_tables_for;    /* the world the tables were built (or refused) for */
 
@@ -58,10 +59,12 @@ static void
 RM_RTS_FreeTables(void)
 {
 	free(rts_tri);
+	free(rts_vert);
 	free(rts_vecs);
 	rts_tri = NULL;
+	rts_vert = NULL;
 	rts_vecs = NULL;
-	rts_ntris = rts_nsurf = 0;
+	rts_ntris = rts_nsurf = rts_nverts = 0;
 	rts_uploaded = 0;
 }
 
@@ -80,7 +83,7 @@ RM_RTS_DropMap(void)
 
 	if (rts_opened)
 	{
-		rmb_rts_set_map(NULL, 0, NULL, 0);
+		rmb_rts_set_map(NULL, 0, NULL, 0, NULL, 0);
 	}
 }
 
@@ -198,6 +201,47 @@ RM_RTS_BuildTables(const model_t *wm)
 	free(r);
 	rts_ntris = ntris;
 	rts_nsurf = (unsigned long)n;
+
+	/*
+	 * TASK131: each vertex's surface, for the G-buffer's surface attachment
+	 * (a static world draw writes its vertex); without it every pixel takes
+	 * the eye ray, as before.
+	 */
+	{
+		const unsigned long nverts = w->size.verts;
+		rm_rts_vrange_t *vr = nverts ? malloc((size_t)n * sizeof(*vr)) : NULL;
+
+		rts_vert = vr ? malloc(nverts * sizeof(*rts_vert)) : NULL;
+
+		if (vr && rts_vert)
+		{
+			for (i = 0; i < n; i++)
+			{
+				const msurface_t *fa = &wm->surfaces[i];
+
+				vr[i].first_vertex = fa->first_vertex;
+				vr[i].num_vertices = fa->num_vertices;
+				vr[i].unlit = (fa->samples == NULL);
+			}
+		}
+
+		if (!vr || !rts_vert || (rm_rts_vertex_map(vr, n, nverts, rts_vert) < 0))
+		{
+			if (nverts)
+			{
+				R_Printf(PRINT_ALL, "ref_metal: rt shadows: the surfaces do not map the vertex buffer; the eye ray only\n");
+			}
+
+			free(rts_vert);
+			rts_vert = NULL;
+		}
+		else
+		{
+			rts_nverts = nverts;
+		}
+
+		free(vr);
+	}
 }
 
 void
@@ -234,7 +278,7 @@ RM_RTS_Frame(const refdef_t *fd, int scene_ready)
 
 		if (rts_opened && !rts_uploaded && rts_tri)
 		{
-			rts_uploaded = rmb_rts_set_map(rts_tri, rts_ntris, rts_vecs, rts_nsurf);
+			rts_uploaded = rmb_rts_set_map(rts_tri, rts_ntris, rts_vert, rts_nverts, rts_vecs, rts_nsurf);
 
 			if (!rts_uploaded)
 			{
@@ -306,6 +350,42 @@ RM_RTS_Moved(void)
 	return 0;
 }
 
+/*
+ * TASK131: the frame's entity table for the G-buffer's lookup: row i the
+ * world-to-object transform of the refdef's entity i when it is a brush
+ * model (whose draws the surface attachment names, RM_GB_EntityMotion),
+ * none for the others (the raster never names them).
+ */
+static void
+RM_RTS_Ents(void)
+{
+	static float rows[MTL_RTS_GB_ENTS * RM_RTS_ROW_FLOATS];
+	int i, ne = rm_entity_count(r_newrefdef.num_entities), last = 0;
+
+	if (ne > (int)MTL_RTS_GB_ENTS)
+	{
+		ne = (int)MTL_RTS_GB_ENTS;
+	}
+
+	for (i = 0; i < ne; i++)
+	{
+		const entity_t *e = &r_newrefdef.entities[i];
+		float *row = &rows[i * RM_RTS_ROW_FLOATS];
+
+		if (e->model && (e->model->type == mod_brush))
+		{
+			rm_rts_ent_rows(e->origin, e->angles, row);
+			last = i + 1;
+		}
+		else
+		{
+			memset(row, 0, RM_RTS_ROW_FLOATS * sizeof(*row));   /* not usable (row[12] 0): no draw names it */
+		}
+	}
+
+	rmb_rts_set_ents(rows, last);
+}
+
 void
 RM_RTS_View(const rm_view_t *view)
 {
@@ -364,6 +444,7 @@ RM_RTS_View(const rm_view_t *view)
 	v.show = (unsigned)rm_rts_show(r_rt_shadows_show->value);
 	v.moved = RM_RTS_Moved();
 	v.carried = RM_RT_Carried();
+	RM_RTS_Ents();
 	rmb_rts_set_view(&v, lights, n);
 
 	/* the dynamic-light term leaves the lightmaps: the resolve adds it back */

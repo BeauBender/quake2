@@ -244,7 +244,9 @@ int rm_gb_alias_extra(const unsigned short *map, long nv, int num_xyz, const flo
  * The motion uniforms of a G-buffer or motion draw (rm_gbuf.metal's
  * rm_uniforms_mv, 160 bytes): this frame's unjittered and the previous
  * frame's model-view-projection, the model's rotation for the normals,
- * half the viewport's size in pixels and the material id.
+ * half the viewport's size in pixels, the material id, and the entity
+ * the surface attachment names (TASK131, mtl_rts_gb_tag: 0 the world,
+ * i + 1 the refdef's brush entity i).
  */
 typedef struct
 {
@@ -253,7 +255,7 @@ typedef struct
 	float nrm[16];
 	float half_vp[2];
 	unsigned material;
-	unsigned pad;
+	unsigned ent;
 } rm_gb_uniforms_t;
 
 /* the lighting resolve's uniforms (rm_gbuf.metal's rm_uniforms_resolve): the world's lightmap environment */
@@ -268,7 +270,7 @@ typedef struct
 
 /* the pass of the 3D view that is open */
 #define RMB_GB_PASS_NONE 0      /* the stock 3D pass, or no pass of a G-buffer or motion view */
-#define RMB_GB_PASS_RASTER 1    /* the G-buffer raster: the six attachments */
+#define RMB_GB_PASS_RASTER 1    /* the G-buffer raster: the six attachments (seven with the surface, TASK131) */
 #define RMB_GB_PASS_MOTION 2    /* a forward pass with the motion attachment: MOTION's, and GBUFFER's after the resolve */
 #define RMB_GB_PASS_OTHER 3     /* the resolve or the copy: no 3D draw */
 
@@ -309,6 +311,15 @@ void rmb_gbuf_set_dyn_normals(const float (*n)[4], unsigned nv);
 
 /* the static buffer of the world's per-vertex normals (rm_model.c), 0 without one */
 void rmb_gbuf_set_world_normals(int nbuf);
+
+/*
+ * TASK131: whether the next GBUFFER view gets the surface attachment (an
+ * R32Uint at colour 5 of the raster, mtl_rts_gb_value: a static world
+ * draw's first vertex of the triangle plus one and its entity, 0 for any
+ * other draw), which the dynamic-light shadows read for each pixel's
+ * surface (rmb_rts_trace). Set by RM_GB_Begin while the shadows trace.
+ */
+void rmb_gbuf_set_surface(int on);
 
 /* RMB_GB_PASS_* */
 int rmb_gbuf_pass_kind(void);
