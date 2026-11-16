@@ -75,8 +75,10 @@
 
 #ifdef __METAL_VERSION__
 #define MTL_RTS_FLOOR floor
+#define MTL_RTS_SQRT sqrt
 #else
 #define MTL_RTS_FLOOR floorf
+#define MTL_RTS_SQRT sqrtf
 #endif
 
 /* a luxel's side in texture units (gl1's 16) */
@@ -460,6 +462,92 @@ mtl_rts_near(float pd, float intensity, float dist)
 	const float tol = 0.5f + dist * 0.004f;
 
 	return (pd >= -tol) && (intensity - pd >= MTL_RTS_CUTOFF - tol);
+}
+
+/*
+ * The G-buffer's surface attachment (TASK131; design section 3), an
+ * R32Uint the raster writes while the shadows are on, which gives the
+ * pass each world pixel's surface without a ray from the eye. A static
+ * world draw (the world's and the brush models' faces, from the world's
+ * vertex buffer) writes its triangle's first vertex plus one in the low
+ * 24 bits and in the top 8 the entity that draws it: 0 the world, i + 1
+ * the refdef's entity i (a brush model), MTL_RTS_GB_ENT_NONE a brush
+ * model whose entity the raster cannot name. Every other draw writes 0:
+ * an alias model, and a dynamic world draw (the warped and flowing
+ * batches), whose vertices are not the world's buffer's.
+ */
+#define MTL_RTS_GB_VMASK 0x00ffffffu
+#define MTL_RTS_GB_VMAX 0x00fffffeu     /* the most vertices a map's table holds: the last one plus one fits the 24 bits */
+#define MTL_RTS_GB_ENTS 128u            /* the entities an index names: MAX_ENTITIES of ref.h (RM_MAX_ENTITIES) */
+#define MTL_RTS_GB_ENT_NONE 0xffu
+
+/* the tag of a static world draw by entity ent (0, i + 1 or MTL_RTS_GB_ENT_NONE); the raster writes tag + vertex */
+static inline unsigned
+mtl_rts_gb_tag(unsigned ent)
+{
+	return ((ent & 0xffu) << 24) | 1u;
+}
+
+/* what the raster writes for vertex vid of a draw tagged tag (0: a draw that names no vertex) */
+static inline unsigned
+mtl_rts_gb_value(unsigned tag, unsigned vid)
+{
+	return (tag != 0u) ? tag + vid : 0u;
+}
+
+/* a pixel's value taken apart: ok when it names a vertex of the map's table (nverts) and the world or one of nents entities */
+typedef struct
+{
+	int ok;
+	unsigned vid;
+	unsigned ent;
+} mtl_rts_gb_t;
+
+static inline mtl_rts_gb_t
+mtl_rts_gb_decode(unsigned v, unsigned nverts, unsigned nents)
+{
+	mtl_rts_gb_t g;
+
+	g.vid = (v & MTL_RTS_GB_VMASK) - 1u;
+	g.ent = v >> 24;
+	g.ok = ((v & MTL_RTS_GB_VMASK) != 0u) && (g.vid < nverts) && (g.ent <= nents) &&
+		(nents <= MTL_RTS_GB_ENTS);
+	return g;
+}
+
+/* a vertex's entry of the map's vertex table (rm_rts_vertex_map) names one of its nsurf surfaces */
+static inline int
+mtl_rts_gb_surf_ok(unsigned raw, unsigned nsurf)
+{
+	return (raw & ~MTL_RTS_SURF_UNLIT) < nsurf;
+}
+
+/* a brush entity's world-to-object transform from its three rows (rm_rts_ent_rows): x' = r0 . (x, y, z, 1), ... */
+static inline mtl_rts_xform_t
+mtl_rts_xform_rows(mtl_rts_v4_t r0, mtl_rts_v4_t r1, mtl_rts_v4_t r2)
+{
+	mtl_rts_xform_t m;
+
+	m.c0 = mtl_rts_v3(r0.x, r1.x, r2.x);
+	m.c1 = mtl_rts_v3(r0.y, r1.y, r2.y);
+	m.c2 = mtl_rts_v3(r0.z, r1.z, r2.z);
+	m.c3 = mtl_rts_v3(r0.w, r1.w, r2.w);
+	return m;
+}
+
+/*
+ * The test before a known surface is lit (TASK131): mtl_rts_near against
+ * the surface's own plane (its unit normal and, in w, its distance, in its
+ * model's space: rm_rts_plane), with pm the pixel in that space and o the
+ * light's world origin, as gl1 measures it (R_AddDynamicLights).
+ */
+static inline int
+mtl_rts_near_plane(mtl_rts_v4_t plane, mtl_rts_v3_t pm, mtl_rts_v3_t o, float intensity)
+{
+	const mtl_rts_v3_t d = mtl_rts_v3(o.x - pm.x, o.y - pm.y, o.z - pm.z);
+	const float pd = o.x * plane.x + o.y * plane.y + o.z * plane.z - plane.w;
+
+	return mtl_rts_near(pd, intensity, MTL_RTS_SQRT(mtl_rts_dot(d, d)));
 }
 
 /* one light at a pixel: what it adds there (mtl_rts_add_lm, or mtl_rts_add on the base axes) and whether it is in range */
