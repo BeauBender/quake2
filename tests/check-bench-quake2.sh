@@ -70,13 +70,30 @@ mkdir -p "${T:?}/bin" "${T:?}/data/baseq2"
 	printf 'if [ -n "${STUB_PIDS:-}" ]; then printf "%%s\\n" $STUB_PIDS; exit 0; fi\nexit 1\n'
 } > "${T:?}/bin/pgrep"
 printf '#!/bin/sh\necho "      Chipset Model: Zzq GPU"\n' > "${T:?}/bin/system_profiler"
+# sysctl: kern.hv_vmm_present is STUB_VMM (0, 1, or "fail" for a sysctl
+# that fails); every other name goes to the real sysctl.
+real_sysctl=$(command -v sysctl 2> /dev/null || echo /usr/sbin/sysctl)
+{
+	printf '#!/bin/sh\n'
+	printf 'if [ "$*" = "-n kern.hv_vmm_present" ]; then\n'
+	printf '\t[ "${STUB_VMM:-0}" != fail ] || { echo "sysctl: unknown oid" >&2; exit 1; }\n'
+	printf '\techo "${STUB_VMM:-0}"\n\texit 0\nfi\n'
+	printf 'exec "%s" "$@"\n' "$real_sysctl"
+} > "${T:?}/bin/sysctl"
+chmod +x "${T:?}/bin/sysctl"
 printf '#!/bin/sh\necho "make is not run by this check" >&2\nexit 99\n' > "${T:?}/bin/make"
 chmod +x "${T:?}/bin/ioreg" "${T:?}/bin/pgrep" "${T:?}/bin/system_profiler" "${T:?}/bin/make"
 PATH=${T:?}/bin:$PATH
 export PATH
-printf 'physical-gpu=yes\nraytracing=yes\nmetalfx=yes\ndisplay-hz=60\n' > "${T:?}/caps-all"
-printf 'physical-gpu=yes\nraytracing=no\nmetalfx=yes\ndisplay-hz=60\n' > "${T:?}/caps-nort"
+printf 'physical-gpu=yes\nraytracing=yes\nmetalfx=yes\nmetalfx-temporal=yes\ndisplay-hz=60\n' > "${T:?}/caps-all"
+printf 'physical-gpu=yes\nraytracing=no\nmetalfx=yes\nmetalfx-temporal=yes\ndisplay-hz=60\n' > "${T:?}/caps-nort"
+printf 'physical-gpu=yes\nraytracing=yes\nmetalfx=yes\nmetalfx-temporal=no\ndisplay-hz=60\n' > "${T:?}/caps-spatial"
 printf 'physical-gpu=no\nraytracing=unknown\ndisplay-hz=unknown\n' > "${T:?}/caps-vm"
+printf 'physical-gpu=yes\nraytracing=yes\nmetalfx=yes\ndisplay-hz=120\n' > "${T:?}/caps-120"
+# capability lines as the system probe prints them (q2_caps), for the
+# display-hz checks, which a capabilities file cannot pass
+printf 'physical-gpu=yes\ndisplay-hz=60\ncaps=probe\n' > "${T:?}/lines-60"
+printf 'physical-gpu=yes\ndisplay-hz=unknown\ncaps=probe\n' > "${T:?}/lines-unknown"
 BENCH_Q2_BASEDIR=${T:?}/data
 BENCH_Q2_BUILDS=${T:?}/builds
 export BENCH_Q2_BASEDIR BENCH_Q2_BUILDS
@@ -115,6 +132,7 @@ mkcase() {
 # ---- every quake2 case -----------------------------------------------------
 
 n=0
+temporal=0
 for f in "$REAL"/cases/*.case; do
 	grep -q '^adapter=quake2$' "$f" || continue
 	c=$(basename "$f" .case)
@@ -138,10 +156,28 @@ for f in "$REAL"/cases/*.case; do
 	esac
 	case " $s " in *" cvar.r_rt_stats="*) case " $rq " in *" raytracing "*) ;; *) bad "$c: r_rt_stats without requires raytracing" ;; esac ;; esac
 	case " $s " in *" cvar.r_metalfx="*) case " $rq " in *" metalfx "*) ;; *) bad "$c: r_metalfx without requires metalfx" ;; esac ;; esac
+	# the temporal scaler needs its own support: refused on a device with
+	# the spatial scaler only, which a spatial case still runs on
+	case " $s " in
+	*" cvar.r_metalfx=2 "*)
+		temporal=$((temporal + 1))
+		if q2h "$f" q2_check_requires "${T:?}/caps-spatial" > "${T:?}/req.out" 2> "${T:?}/req.err"; then
+			bad "$c: runs r_metalfx 2 and is accepted on a device without the temporal scaler"
+		elif ! grep -q 'requires metalfx-temporal, and this host has no' "${T:?}/req.err"; then
+			bad "$c: refused without naming metalfx-temporal: $(cat "${T:?}/req.err")"
+		fi
+		grep -qx pre.metalfx-temporal=no "${T:?}/req.out" || bad "$c: no pre.metalfx-temporal=no line"
+		;;
+	*" cvar.r_metalfx=1 "*)
+		q2h "$f" q2_check_requires "${T:?}/caps-spatial" > /dev/null 2> "${T:?}/req.err" ||
+			bad "$c: a spatial case is refused on a device without the temporal scaler: $(cat "${T:?}/req.err")"
+		;;
+	esac
 	sc=$(printf '%s\n' "$s" | tr ' ' '\n' | sed -n 's/^scenario=//p')
 	[ -z "$sc" ] || [ -f "$ROOT/scripts/pins/scenarios/$sc.cfg" ] || bad "$c: no pin scenario $sc"
 done
 [ "$n" -ge 32 ] || bad "only $n quake2 cases (the four families have 32)"
+[ "$temporal" -ge 6 ] || bad "only $temporal cases run the temporal scaler (the MetalFX family has 6)"
 
 # ---- the settings refusals --------------------------------------------------
 
@@ -171,9 +207,9 @@ refuse_set wall "$ok_set" 'leaves less than 20 s' 24
 
 # ---- the preflight -----------------------------------------------------------
 
-mkcase all "$ok_set" 'physical-gpu raytracing metalfx display-hz>=60'
+mkcase all "$ok_set cvar.r_metalfx=2" 'physical-gpu raytracing metalfx'
 if BENCH_Q2_CAPS=${T:?}/caps-all q2h "${T:?}/all.case" adapter_preflight > "${T:?}/pre.out" 2> "${T:?}/pre.err"; then
-	for l in pre.caps=file pre.physical-gpu=yes pre.raytracing=yes pre.metalfx=yes pre.display-hz=60 \
+	for l in pre.caps=file pre.physical-gpu=yes pre.raytracing=yes pre.metalfx=yes pre.metalfx-temporal=yes \
 		pre.metal_debug_layer=off pre.basedir=ok pre.screen=unlocked pre.engines=0 pre.renderer=metal; do
 		grep -qx "$l" "${T:?}/pre.out" || bad "the preflight did not print $l"
 	done
@@ -206,8 +242,33 @@ refuse_pre() { # <label> <caps file> <requires> <reason part> [NAME=value...]
 refuse_pre raytracing "${T:?}/caps-nort" 'raytracing' 'requires raytracing, and this host has no'
 refuse_pre vm "${T:?}/caps-vm" 'physical-gpu' 'requires physical-gpu, and this host has no'
 refuse_pre metalfx "${T:?}/caps-vm" 'metalfx' 'requires metalfx, and this host has unknown'
-refuse_pre hz "${T:?}/caps-all" 'display-hz>=120' 'at least 120 Hz, and this host.s runs at 60 Hz'
-refuse_pre hz-unknown "${T:?}/caps-vm" 'display-hz>=60' 'refresh rate is unknown'
+# r_metalfx 2 needs the temporal scaler; r_metalfx 1 runs without it
+mkcase fx "$ok_set cvar.r_metalfx=2" metalfx
+if with_env BENCH_Q2_CAPS="${T:?}/caps-spatial" -- q2h "${T:?}/fx.case" adapter_preflight > /dev/null 2> "${T:?}/fx.err"; then
+	bad "preflight temporal: a case running r_metalfx 2 is accepted on a device without the temporal scaler"
+elif ! grep -q 'requires metalfx-temporal, and this host has no' "${T:?}/fx.err"; then
+	bad "preflight temporal: refused without naming metalfx-temporal: $(cat "${T:?}/fx.err")"
+fi
+mkcase fx1 "$ok_set cvar.r_metalfx=1" metalfx
+with_env BENCH_Q2_CAPS="${T:?}/caps-spatial" -- q2h "${T:?}/fx1.case" adapter_preflight > "${T:?}/fx1.out" 2> "${T:?}/fx.err" ||
+	bad "preflight spatial: refused on a device without the temporal scaler: $(cat "${T:?}/fx.err")"
+grep -q '^pre.metalfx-temporal=' "${T:?}/fx1.out" && bad "preflight spatial: printed a temporal line"
+# A capabilities file cannot make a VM pass (kern.hv_vmm_present is read
+# whatever it says), nor vouch for the display's refresh rate.
+refuse_pre vm-file "${T:?}/caps-all" 'physical-gpu' 'requires physical-gpu, and this host has no' STUB_VMM=1
+refuse_pre vmm-fails "${T:?}/caps-all" 'physical-gpu' 'requires physical-gpu, and this host has unknown' STUB_VMM=fail
+refuse_pre hz-file "${T:?}/caps-120" 'display-hz>=120' 'which a capabilities file cannot vouch for'
+refuse_pre hz-file-60 "${T:?}/caps-all" 'display-hz>=60' 'which a capabilities file cannot vouch for'
+# display-hz against the probe's lines
+mkcase hz "$ok_set" 'display-hz>=60'
+q2h "${T:?}/hz.case" q2_check_requires "${T:?}/lines-60" > "${T:?}/hz.out" 2> "${T:?}/hz.err" ||
+	bad "display-hz>=60 refused on a 60 Hz display: $(cat "${T:?}/hz.err")"
+grep -qx pre.display-hz=60 "${T:?}/hz.out" || bad "display-hz>=60: no pre.display-hz=60 line"
+q2h "${T:?}/hz.case" q2_check_requires "${T:?}/lines-unknown" > /dev/null 2> "${T:?}/hz.err" && bad "display-hz>=60 accepted at an unknown rate"
+grep -q 'refresh rate is unknown' "${T:?}/hz.err" || bad "an unknown refresh rate is not said: $(cat "${T:?}/hz.err")"
+mkcase hz "$ok_set" 'display-hz>=120'
+q2h "${T:?}/hz.case" q2_check_requires "${T:?}/lines-60" > /dev/null 2> "${T:?}/hz.err" && bad "display-hz>=120 accepted on a 60 Hz display"
+grep -q 'at least 120 Hz, and this host.s runs at 60 Hz' "${T:?}/hz.err" || bad "a slow display is not said: $(cat "${T:?}/hz.err")"
 refuse_pre unknown-cap "${T:?}/caps-all" 'teleport' 'unknown requirement teleport'
 refuse_pre locked "${T:?}/caps-all" '' 'the screen is locked' STUB_LOCKED=1
 refuse_pre engine "${T:?}/caps-all" '' 'another quake2 is running (pid 4242)' STUB_PIDS=4242
@@ -252,6 +313,7 @@ for a; do printf 'arg %s\n' "$a"; done
 [ ! -f "$(dirname "$0")/baseq2/config.cfg" ] || echo "a saved configuration was read"
 echo "Loading library: ${FAKE_LIB:-ref_metal.dylib}"; echo "Loading library: game.dylib"
 [ -n "${FAKE_NORT:-}" ] || echo "Metal supportsRaytracing: yes, supportsRaytracingFromRender: yes"
+echo "ref_metal: MetalFX supportsDevice: spatial yes, temporal ${FAKE_TEMPORAL:-yes}, temporal denoised no, frame interpolator no (r_metalfx_modes 7)"
 [ -z "${FAKE_EXIT:-}" ] || exit "$FAKE_EXIT"
 trap 'echo "ref_metal: metal_stats: 10 frames, 2 without a drawable, 0 skipped, 0 failed command buffers, 0 readbacks"; exit 0' TERM
 while :; do sleep 0.1; done
@@ -288,6 +350,14 @@ run_fake "${T:?}/run.case" FAKE_EXIT=3 && bad "an engine that exits 3 was accept
 grep -q 'exited with status 3' "${T:?}/run.err" || bad "the failing exit is not said: $(cat "${T:?}/run.err")"
 run_fake "${T:?}/run.case" STUB_PIDS=99 && bad "a run beside another quake2 was accepted"
 run_fake "${T:?}/run.case" STUB_PGREP_FAIL=3 && bad "a run whose pgrep failed was accepted"
+# a temporal case on an engine without the temporal scaler (which would
+# fall back to the spatial one) is refused; a spatial case runs there
+mkcase fxrun 'renderer=metal size=640x480 vsync=0 seconds=1 pace=own cvar.r_metalfx=2' 'metalfx'
+run_fake "${T:?}/fxrun.case" > /dev/null || bad "a temporal run on an engine with the temporal scaler failed: $(cat "${T:?}/run.err")"
+run_fake "${T:?}/fxrun.case" FAKE_TEMPORAL=no && bad "a temporal run on an engine without the temporal scaler was accepted"
+grep -q 'reports no temporal MetalFX scaler' "${T:?}/run.err" || bad "the missing temporal scaler is not said: $(cat "${T:?}/run.err")"
+mkcase fxrun 'renderer=metal size=640x480 vsync=0 seconds=1 pace=own cvar.r_metalfx=1' 'metalfx'
+run_fake "${T:?}/fxrun.case" FAKE_TEMPORAL=no || bad "a spatial run on an engine without the temporal scaler failed: $(cat "${T:?}/run.err")"
 
 # ---- the metrics --------------------------------------------------------------
 
@@ -364,7 +434,9 @@ fmt src/client/refresh/gl1/metal/mgl_layer.m '"mgl: %lu frames, %lu without a dr
 fmt src/client/refresh/gl1/metal/mgl_layer.m '"mgl: %lu command buffers failed\n"'
 fmt src/client/refresh/metal/rm_metalfx.c '"ref_metal: metal_stats: metalfx %s: input %dx%d, output %dx%d at %d,%d, reset"'
 fmt src/client/refresh/metal/rm_metalfx.c '", scaler %.3f ms"'
-fmt src/client/refresh/metal/rm_metalfx.c '"ref_metal: MetalFX supportsDevice: spatial %s, '
+fmt src/client/refresh/metal/rm_metalfx.c '"ref_metal: MetalFX supportsDevice: spatial %s, temporal %s, "'
+fmt src/client/refresh/metal/rmb_metalfx.m '[MTLFXTemporalScalerDescriptor supportsDevice:rmb_device]'
+fmt scripts/bench/adapters/quake2-caps.m '[MTLFXTemporalScalerDescriptor supportsDevice:dev]'
 fmt src/client/refresh/metal/rm_rtshadow.c '"ref_metal: rt shadows: frame %lu: %lu pixels, %lu in range, %lu traced, %lu shadowed, "'
 fmt src/client/refresh/metal/rm_rtshadow.c '"%lu rays, %s ms"'
 fmt src/client/refresh/metal/rm_rtao.c '"ref_metal: rt ao: frame %lu: %lu pixels, %lu traced, %lu occluded, %lu at the floor, "'

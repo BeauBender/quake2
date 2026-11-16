@@ -19,11 +19,17 @@
 #                     of every run's engine log (text only: no frame, no
 #                     trace). Default: unset, the logs go with the run
 #   BENCH_Q2_CAPS     a file of capability lines (physical-gpu=yes,
-#                     raytracing=no, metalfx=yes, display-hz=60) read in place
-#                     of the system probe, for the self-test and for a host
-#                     the probe cannot read. The run still checks the engine's
-#                     own support lines, so a capability claimed here that the
-#                     engine lacks fails the run, never stores a number
+#                     raytracing=no, metalfx=yes, metalfx-temporal=yes,
+#                     display-hz=60) read in place of the system probe, for
+#                     the self-test and for a host the probe cannot read.
+#                     What is still checked whatever the file says:
+#                     physical-gpu against kern.hv_vmm_present at preflight
+#                     (a VM, or a sysctl that fails, is not a physical GPU);
+#                     raytracing, metalfx and metalfx-temporal against the
+#                     engine's own support lines after each run, so one
+#                     claimed here that the engine lacks fails the run. A
+#                     display-hz requirement is refused with a file, since
+#                     nothing else reads the display
 #
 # The case keys it reads:
 #   targets      make targets, for example "client game ref_metal"
@@ -33,9 +39,12 @@
 #                display-hz>=<n>. Read from the system (quake2-caps.m, which
 #                asks Metal and the display what ref_metal asks) or
 #                BENCH_Q2_CAPS; one the host lacks refuses the case with its
-#                reason. A run then checks the engine's own lines: "Metal
-#                supportsRaytracing: yes" for raytracing, "MetalFX
-#                supportsDevice: spatial yes" for metalfx
+#                reason. metalfx in a case that runs the temporal scaler
+#                (cvar.r_metalfx=2 or more) also requires the temporal
+#                scaler's support. A run then checks the engine's own lines:
+#                "Metal supportsRaytracing: yes" for raytracing, "MetalFX
+#                supportsDevice: spatial yes" for metalfx, "temporal yes" on
+#                that line for a temporal case
 #   settings     words name=value, each at most once:
 #     renderer=metal|gl1-metal   required; gl1-metal is ref_gl1 built with
 #                                WITH_METAL_SHIM=yes, checked in the log
@@ -203,26 +212,39 @@ q2_check_settings() {
 	return "$_qs_bad"
 }
 
+# q2_physical <kern.hv_vmm_present> <gpu>: physical-gpu=yes only for 0 (no
+# hypervisor) and a GPU that answered yes; no for a VM or no GPU; unknown
+# for anything else (a sysctl that failed, an answer that is not 0 or 1).
+q2_physical() {
+	case $1.$2 in
+	0.yes) echo physical-gpu=yes ;;
+	1.* | *.no) echo physical-gpu=no ;;
+	*) echo physical-gpu=unknown ;;
+	esac
+}
+
 # q2_caps: the capability lines: BENCH_Q2_CAPS, or the system probe
-# (quake2-caps.m, built with the host's cc into the temporary directory)
-# and kern.hv_vmm_present. Prints physical-gpu, raytracing, metalfx and
-# display-hz lines (yes, no, a number or unknown) and a caps= line saying
-# which source answered. Run it in the main shell: the build and the probe
-# run under bench_bounded.
+# (quake2-caps.m, built with the host's cc into the temporary directory).
+# Prints physical-gpu, raytracing, metalfx, metalfx-temporal and display-hz
+# lines (yes, no, a number or unknown) and a caps= line saying which source
+# answered. physical-gpu is always checked against kern.hv_vmm_present,
+# whatever the file says, so a file cannot make a VM pass. Run it in the
+# main shell: the build and the probe run under bench_bounded.
 q2_caps() {
+	_qc_vm=$(sysctl -n kern.hv_vmm_present 2> /dev/null) || _qc_vm=
 	if [ -n "${BENCH_Q2_CAPS:-}" ]; then
 		[ -f "$BENCH_Q2_CAPS" ] || {
 			q2_say "BENCH_Q2_CAPS names no file"
 			return 1
 		}
-		for _qc_k in physical-gpu raytracing metalfx display-hz; do
+		q2_physical "$_qc_vm" "$(bench_file_kv "$BENCH_Q2_CAPS" physical-gpu)"
+		for _qc_k in raytracing metalfx metalfx-temporal display-hz; do
 			_qc_v=$(bench_file_kv "$BENCH_Q2_CAPS" "$_qc_k")
 			printf '%s=%s\n' "$_qc_k" "${_qc_v:-unknown}"
 		done
 		echo caps=file
 		return 0
 	fi
-	_qc_vm=$(sysctl -n kern.hv_vmm_present 2> /dev/null) || _qc_vm=
 	_qc_p=${BENCH_TMP:?}/quake2-caps
 	_qc_st=0
 	bench_bounded 120 cc -fobjc-arc -O1 -o "$_qc_p" "$BENCH_ROOT/adapters/quake2-caps.m" \
@@ -233,22 +255,29 @@ q2_caps() {
 		bench_bounded 30 "$_qc_p" > "${BENCH_TMP:?}/quake2-caps.out" 2> /dev/null || _qc_st=$?
 	fi
 	_qc_o=${BENCH_TMP:?}/quake2-caps.out
-	_qc_gpu=$(bench_file_kv "$_qc_o" gpu)
-	case $_qc_vm.$_qc_gpu in
-	0.yes) echo physical-gpu=yes ;;
-	1.* | *.no) echo physical-gpu=no ;;
-	*) echo physical-gpu=unknown ;;
-	esac
-	for _qc_k in raytracing metalfx display-hz; do
+	q2_physical "$_qc_vm" "$(bench_file_kv "$_qc_o" gpu)"
+	for _qc_k in raytracing metalfx metalfx-temporal display-hz; do
 		_qc_v=$(bench_file_kv "$_qc_o" "$_qc_k")
 		printf '%s=%s\n' "$_qc_k" "${_qc_v:-unknown}"
 	done
 	if [ "$_qc_st" -eq 0 ]; then echo caps=probe; else echo caps=sysctl; fi
 }
 
+# q2_temporal: the case's settings run a temporal MetalFX scaler
+# (cvar.r_metalfx of 2 or more: 2 is the temporal scaler, 3 the denoised
+# one, which runs as 2 until a ray-traced effect exists).
+q2_temporal() {
+	_qt_v=$(q2_word cvar.r_metalfx)
+	[ -n "$_qt_v" ] && awk -v v="$_qt_v" 'BEGIN { exit !(v + 0 >= 2) }'
+}
+
 # q2_check_requires <caps file>: every word of requires is met by the
 # capability lines in <caps file>; prints pre.<capability>=<value> for
-# each, and says each one the host lacks, with what it has.
+# each, and says each one the host lacks, with what it has. metalfx in a
+# case that runs the temporal scaler (q2_temporal) also requires
+# metalfx-temporal, since the engine would quietly fall back to the spatial
+# scaler. display-hz is refused when the lines come from a capabilities
+# file (caps=file): only the system probe reads the display.
 q2_check_requires() {
 	_qq_bad=0
 	_qq_caps=$1
@@ -265,6 +294,14 @@ q2_check_requires() {
 				q2_say "the case requires $_qq_r, and this host has ${_qq_v:-unknown}"
 				_qq_bad=1
 			fi
+			if [ "$_qq_r" = metalfx ] && q2_temporal; then
+				_qq_v=$(bench_file_kv "${_qq_caps:?}" metalfx-temporal)
+				printf 'pre.metalfx-temporal=%s\n' "${_qq_v:-unknown}"
+				if [ "$_qq_v" != yes ]; then
+					q2_say "the case runs the temporal scaler (r_metalfx $(q2_word cvar.r_metalfx)), so it requires metalfx-temporal, and this host has ${_qq_v:-unknown}"
+					_qq_bad=1
+				fi
+			fi
 			;;
 		display-hz\>=*)
 			_qq_n=${_qq_r#display-hz>=}
@@ -272,6 +309,9 @@ q2_check_requires() {
 			printf 'pre.display-hz=%s\n' "${_qq_v:-unknown}"
 			if ! q2_uint_in "$_qq_n" 1 1000; then
 				q2_say "display-hz>= takes a whole number of hertz: $_qq_r"
+				_qq_bad=1
+			elif [ "$(bench_file_kv "${_qq_caps:?}" caps)" = file ]; then
+				q2_say "the case requires a display of at least $_qq_n Hz, which a capabilities file cannot vouch for; unset BENCH_Q2_CAPS so the system probe reads the display"
 				_qq_bad=1
 			elif ! q2_uint_in "${_qq_v:-x}" 0 100000; then
 				q2_say "the case requires a display of at least $_qq_n Hz, and this host's refresh rate is ${_qq_v:-unknown}"
@@ -565,10 +605,18 @@ q2_check_log() {
 			}
 			;;
 		metalfx)
-			grep -q 'MetalFX supportsDevice: spatial yes' "$1" || {
-				q2_say "the engine reports no MetalFX scaler on this device"
-				return 1
-			}
+			if q2_temporal; then
+				# the engine sets a mode the device lacks back to one below it
+				grep -q 'MetalFX supportsDevice: spatial [a-z]*, temporal yes' "$1" || {
+					q2_say "the engine reports no temporal MetalFX scaler on this device"
+					return 1
+				}
+			else
+				grep -q 'MetalFX supportsDevice: spatial yes' "$1" || {
+					q2_say "the engine reports no MetalFX scaler on this device"
+					return 1
+				}
+			fi
 			;;
 		esac
 	done
