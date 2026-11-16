@@ -364,3 +364,62 @@ Touch_DefaultBind(int i, const char **key, const char **cmd)
 	*cmd = default_binds[i].cmd;
 	return 1;
 }
+
+/* TASK151 scaffolding: the overlay, the modes and the pure rules. */
+void
+Touch_SetMode(touch_t *t, int menu)
+{
+	(void)t;
+	(void)menu;
+}
+
+int
+Touch_Drawables(const touch_t *t, int physical, touch_draw_t *out, int max)
+{
+	(void)t;
+	(void)physical;
+	(void)out;
+	(void)max;
+	return 0;
+}
+
+int
+Touch_LabelScale(const char *label, float w_px, int max_scale)
+{
+	(void)label;
+	(void)w_px;
+	(void)max_scale;
+	return 0;
+}
+
+int
+Touch_Supported(void)
+{
+	return 1;
+}
+
+int
+Touch_WantBind(int have_config, int bound)
+{
+	(void)have_config;
+	(void)bound;
+	return 0;
+}
+
+int
+Touch_WantText(int console_or_message, int menu_open, int menu_field)
+{
+	(void)console_or_message;
+	(void)menu_open;
+	(void)menu_field;
+	return 0;
+}
+
+int
+Touch_TextInput(int want, int applied, int active)
+{
+	(void)want;
+	(void)applied;
+	(void)active;
+	return -1;
+}
