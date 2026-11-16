@@ -38,7 +38,7 @@
 #   kgrp      SIGKILL to test.sh's process group there: test.sh's status
 #             137, and what the running check started is gone within 10 s;
 #   sigs      a check run by test.sh there gets SIGINT, SIGQUIT, SIGHUP,
-#             SIGTERM and SIGTSTP as one started directly does (as
+#             SIGTERM, SIGTSTP, SIGTTIN and SIGTTOU as one started directly does (as
 #             origin/main's test.sh ran each check), SIGINT delivered;
 #   leave     what a passing check leaves running is gone after the run.
 # Then each case is shown failing against at least one mutant of the
@@ -83,7 +83,7 @@ say() { [ "$quiet" = 1 ] || echo "$me: $*"; }
 # that takes 5 s and then logs "cleaned <name>"; mode leave starts that
 # sleep in the background and exits. The sleep logs "sleep <name> <its pid>
 # <the check's pid> <the scheduler's pid>". Mode probe logs how SIGINT,
-# SIGQUIT, SIGHUP, SIGTERM and SIGTSTP reach the check.
+# SIGQUIT, SIGHUP, SIGTERM, SIGTSTP, SIGTTIN and SIGTTOU reach the check.
 mkdir "${tmp:?}/bin" "${tmp:?}/shim" "${tmp:?}/make"
 cat > "${tmp:?}/fake" << 'EOF'
 #!/bin/sh
@@ -105,6 +105,25 @@ probe() {
 	if sh -c 'ulimit -c 0; kill -s "$1" $$; exit 0' sh "$1" 2> /dev/null; then _pr=ignored; else _pr=delivered; fi
 	printf 'sig %s %s %s\n' "$n" "$1" "$_pr" >> "$GP_EVENTS"
 }
+# stopprobe <signal>: the signal goes to this check itself (a shell resets
+# it in what it starts): a helper sees it stopped (delivered; it then sends
+# SIGCONT) or sees the mark this check leaves once the kill has returned
+# (ignored)
+stopprobe() {
+	_pm=$GP_EVENTS.cont.$$.$1
+	sh -c 'i=0
+		while [ "$i" -lt 50 ]; do
+			case $(ps -o stat= -p "$1") in *T*) r=delivered; break ;; esac
+			[ ! -e "$3" ] || { r=ignored; break; }
+			sleep 0.2
+			i=$((i + 1))
+		done
+		printf "sig %s %s %s\n" "$2" "$4" "${r:-unknown}" >> "$GP_EVENTS"
+		kill -s CONT "$1"' sh "$$" "$n" "$_pm" "$1" &
+	kill -s "$1" $$
+	: > "$_pm"
+	wait
+}
 case $mode in
 hold | holdterm | holdtrap)
 	[ "$mode" != holdterm ] || trap '' TERM
@@ -122,21 +141,9 @@ probe)
 	probe QUIT
 	probe HUP
 	probe TERM
-	# SIGTSTP to this check itself (a shell resets it in what it starts): a
-	# helper sees it stopped (delivered; it then sends SIGCONT) or sees the
-	# mark this check leaves once the kill has returned (ignored)
-	_pm=$GP_EVENTS.cont.$$
-	sh -c 'i=0
-		while [ "$i" -lt 50 ]; do
-			case $(ps -o stat= -p "$1") in *T*) r=delivered; break ;; esac
-			[ ! -e "$3" ] || { r=ignored; break; }
-			sleep 0.2
-			i=$((i + 1))
-		done
-		printf "sig %s TSTP %s\n" "$2" "${r:-unknown}" >> "$GP_EVENTS"
-		kill -s CONT "$1"' sh "$$" "$n" "$_pm" &
-	kill -s TSTP $$
-	: > "$_pm"
+	stopprobe TSTP
+	stopprobe TTIN
+	stopprobe TTOU
 	wait
 	;;
 esac
@@ -351,7 +358,9 @@ c_first() {
 	GP_FIRST="check-d.sh check-c.sh check-e.sh check-d.sh"
 	run "$d" 2 "check-e.sh" a b c d e || rc=$?
 	[ "$rc" -eq 0 ] || { say "first: status $rc, want 0"; return 1; }
-	[ "$(grep '^start ' "$d/events" | tr '\n' ' ')" = "start d start c start a start b start e " ] ||
+	# checks that start together may log in either order: d and c, then a and b, as sets, then e
+	_fs=$(grep '^start ' "$d/events")
+	[ "$(printf '%s\n' "$_fs" | sed -n 1,2p | sort | tr '\n' ' ')$(printf '%s\n' "$_fs" | sed -n 3,4p | sort | tr '\n' ' ')$(printf '%s\n' "$_fs" | sed -n 5,9p | tr '\n' ' ')" = "start c start d start a start b start e " ] ||
 		{ say "first: the checks did not start in the order d c a b, then e alone: $(grep '^start ' "$d/events" | tr '\n' ' ')"; return 1; }
 	has "$d" "gate: running 5 checks, 2 at a time; first: check-d.sh check-c.sh; alone, after the others: check-e.sh" ||
 		{ say "first: the start line does not name the first and the serial checks"; return 1; }
@@ -574,7 +583,7 @@ signalled() {
 		done
 	fi
 	[ "$_sr" -eq "$_sw" ] || { say "$_sc: status $_sr after SIG$_sg, want $_sw"; _sbad=1; }
-	_sst=$(grep '^start ' "$_sd/events" | tr '\n' ' ')
+	_sst=$(grep '^start ' "$_sd/events" | sort | tr '\n' ' ')
 	[ "$_sst" = "$_ss" ] || { say "$_sc: after SIG$_sg the checks that started were: $_sst"; _sbad=1; }
 	return "$_sbad"
 }
@@ -668,7 +677,7 @@ c_sigs() {
 	rc=0
 	lwait 30 || rc=$?
 	_sgw=$(grep '^sig ' "$dc/events" || :)
-	[ "$rc" -eq 0 ] && [ "$(printf '%s\n' "$_sgw" | grep -cE ' (delivered|ignored)$')" -eq 5 ] ||
+	[ "$rc" -eq 0 ] && [ "$(printf '%s\n' "$_sgw" | grep -cE ' (delivered|ignored)$')" -eq 7 ] ||
 		{ say "sigs: the probe run directly gave status $rc and: $_sgw"; return 1; }
 	d=$(newcase)
 	gtree "$d" "$_tf" 1 0 0 probe
@@ -786,6 +795,7 @@ wmut wiring-subset wiring 'scripts/gate-checks.sh "$gate_serial" "$gate_first" t
 wmut wiring-no-errexit wiring 'set -eu' 'set -u'
 wmut stop-not-passed testsh '		kill -s TERM "$gate_sched" 2> /dev/null || :' '		:'
 wmut stop-passes testsh "trap 'gate_stop 143' TERM" "trap 'gate_stop 0' TERM"
+mutant ttou-to-checks sigs '	trap - TTOU' '	:'
 wmut no-own-group sigs 'set -m' ':'
 wmut no-parent-pid kgrp 'GATE_PARENT=$$ scripts/gate-checks.sh' 'scripts/gate-checks.sh'
 

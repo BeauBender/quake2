@@ -70,10 +70,12 @@ gate_in() {
 gate_start() {
 	_gsc=$(cat "$_gd/$1.path")
 	_gs0=$(date +%s)
+	trap - TTOU
 	set -m
 	"$_gsc" < /dev/null > "$_gd/$1.log" 2>&1 &
 	_gsp=$!
 	set +m
+	trap '' TTOU
 	_grun="$_grun $1:$_gsp:$_gs0"
 	_gnr=$((_gnr + 1))
 }
