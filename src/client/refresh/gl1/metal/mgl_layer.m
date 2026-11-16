@@ -399,7 +399,7 @@ mgl_present_pass(id<MTLCommandBuffer> cmd, id<MTLTexture> src, id<MTLTexture> ds
  * comes back when the last of them completes, so no later frame of the
  * slot signals the event before that signal has run. The events stay
  * MTLEvents: a shared event, which the CPU could signal, made the shim
- * present 8 to 11 percent fewer frames at 5120x2880 (docs/runbook/FIX69.md).
+ * present 9 to 11 percent fewer frames at 5120x2880 (docs/runbook/FIX69.md).
  */
 #define MGL_PRESENTS (MGL_FRAMES_IN_FLIGHT + 1)   /* maximumDrawableCount (mgl_layer_create), and the open frame */
 

@@ -15,10 +15,12 @@ completed and all of its handlers have run before it releases the present
 state; the shim's present wait ends `MGL_GPU_WAIT_MS` after its commit at
 the latest, and a fault run shows its slot coming back and the presents
 going on; the depth target's size is in `rm_frame_remake`'s verdict, which
-the host test holds. The presented rates of the final build are those of
-main in every measured cell, and the pins are byte for byte main's. A first
+the host test holds. The presented rates of the final build are within
+main's run-to-run spread in every measured cell (below), and the pins are
+byte for byte main's. A first
 version that made the shim's events shared events cost the shim at
-5120x2880 about an eighth of its presents and was replaced.
+5120x2880 about a tenth of its presents and was replaced. FIX68's cap
+costs nothing measurable at 1920x1080 windowed.
 
 ## The changes
 
@@ -68,8 +70,8 @@ which only the frame holding the slot signals in every frame that does not
 fail.
 
 The first version of this change made the slots' events `MTLSharedEvent`s,
-so that the CPU could set the value itself (`5536e6c7`'s parent,
-`1f45a963`). That cost the shim at 5120x2880 an eighth of its presents
+so that the CPU could set the value itself (`1f45a963`). That cost the
+shim at 5120x2880 about a tenth of its presents
 ([below](#a-shared-event-costs-the-shim-at-5120x2880)); the events are
 `MTLEvent`s again, as FIX51 made them.
 
@@ -105,9 +107,15 @@ mgl: 2009 frames, 1017 without a drawable, 0 skipped, 0 draws past the vertex ri
 | shared | `1f45a963` | this card's first version: the shim's events `MTLSharedEvent`s, signalled by the CPU past the bound |
 | exp | `3d53f722` changed in one line, never committed | main with `newSharedEvent` for the shim's events, nothing else |
 | fix | `5536e6c7` | this card's code as it stands: the shim's events `MTLEvent`s again, a late wait ended by a signal on the frame queue |
+| nocap | `3d53f722` changed in one line, never committed | main without FIX68's second wait on the frame semaphore |
+
+The engine checks below ran the fix with a check probe, and main and the
+fix with a handler probe, on top of the rate probe; none of them is
+committed.
 
 `5536e6c7` is the last commit that changes code; the commits after it
-change only this document. `ref_metal` is the same in shared and fix.
+change only this document and one number in a comment of `mgl_layer.m`
+(8 became 9, the measured shortfall below). `ref_metal` is the same in shared and fix.
 Every rate is from a build exported with `git archive`, with a probe of
 this card's (never committed) and built with `make -j8 ref_metal` and
 `make -j8 ref_gl1 WITH_METAL_SHIM=yes`, beside the engine and game of this
@@ -183,7 +191,13 @@ that much over minutes, FIX51 round 4); without it the fix reads 522.0 to
 535.7, mean 526.5. `ref_metal`'s code is the same in batch one and batch
 two; the fix sat under main in batch one and at or above it in batch two.
 
-NOCAP
+**FIX68's cap at 1920x1080 windowed.** FIX68's review asked whether its
+cap of two frames on the GPU costs anything where the GPU is not full
+(over two rounds there, the capped build 4.9 percent under by mean). Main
+against main with the second wait taken out (one line, never committed),
+the shim, five rounds alternated, 02:03 to 02:05, load 1.93 to 2.91: main
+511.1 to 561.1 presented a second, mean 528.3; without the cap 517.3 to
+536.6, mean 525.5. The cap costs nothing measurable there.
 
 A third batch for `ref_metal` alone, three rounds of each cell, 01:46 to
 01:48, load 1.81 to 3.75, settles batch one's gap: at 1920x1080 the fix
@@ -221,7 +235,27 @@ first, and by its end the presents of those frames had completed too. So
 these runs show a clean teardown with presents in flight when it began, but
 not the drain waiting; the next check makes it wait.
 
-SLOW
+**A slow present handler (`ref_metal`, main and the fix).** A handler
+probe (never committed) on main's build and on the fix's: with
+`FIX69_SLOW_HANDLER=30`, the present's completed handler that gives the
+slot back sleeps 30 ms after it has given it and then prints the time and
+its slot's semaphore; `rmb_close` prints the time and its session's four
+slot semaphores as it releases the present state, so each handler is
+matched to its session. The same restart and switch run as above, starting
+in `ref_metal`, three `ref_metal` sessions each (just before 02:03, under
+`heavy.sh`, as every run here):
+
+| Build | Handlers of the session that ended after its release | Of |
+|---|---|---|
+| main (`3d53f722`) | 1, 29.7 ms after; 1, 30.3 ms after; 0 | 98, 66, 65 |
+| fix (`5536e6c7`) | 0; 0; 0 | 98, 65, 66 |
+
+On main, `rmb_ahead_drop` waited for the slot semaphores only, which the
+handler signals before the rest of it has run, so in two of the three
+teardowns a handler was still running when the present queue, the order
+queue and the semaphores were released. With the fix every teardown waited
+until the last part of every present was done, and said so: `98 presents
+apart, 0 waits for them past the bound`, and so on.
 
 **A frame that never signals (the shim).** The check probe's
 `FIX69_SKIP_SIGNAL=300` leaves out the 300th presented frame's signal of
@@ -260,6 +294,18 @@ this card's build of `5536e6c7` (`PINS_BIN`), 01:35 to 01:38, load 2.69 to
 `ref_gl1` and the `ref_metal` present path of `3d53f722`), at `--threshold
 0 --bad-threshold 0`: 18 pairs of 23 frames each, 0 failed, worst score 0,
 worst bad 0; all 414 frame files are byte for byte equal (`cmp`).
+
+## The checks
+
+On the fix's code (`5536e6c7`), each under `heavy.sh`: `make test`
+(`yq2test: 163 tests, 0 failed`), `tests/check-metal-shim.sh` (515 checks,
+0 failed, shim built), `tests/check-ref-metal.sh` (12709 checks, 0 failed,
+`ref_metal` built), `tests/check-pins.sh` (the selftest, with the scratch
+copies deleted), `tests/check-doc-links.sh` and
+`tests/check-no-local-identity.sh`, all ok; the builds `make client`,
+`make ref_metal`, `make ref_gl1 WITH_METAL_SHIM=yes` and
+`make STATIC_MODULES=1 STATIC_RENDERER=metal client`, all without an
+error or a warning from the changed files.
 
 ## What is left
 
