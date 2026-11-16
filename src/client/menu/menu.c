@@ -30,6 +30,11 @@
  */
 
 #include <ctype.h>
+
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #include "../header/client.h"
 #include "../input/header/gyro.h"
 #include "../sound/header/local.h"
@@ -656,6 +661,13 @@ InitMainMenu(void)
 	s_quit.generic.name = "m_main_quit";
 	s_quit.generic.callback = QuitFunc;
 	s_quit.focuspic = "m_main_quit_sel";
+
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+	/* iOS has no quit: an app is closed from the app switcher. The entry
+	   stays, greyed with its reason (the quit command still works). */
+	s_quit.generic.flags |= QMF_GRAYED;
+	s_quit.generic.statusbar = "close Quake II from the app switcher";
+#endif
 
 	Menu_AddItem(&s_main, (void *)&s_plaque);
 	Menu_AddItem(&s_main, (void *)&s_logo);

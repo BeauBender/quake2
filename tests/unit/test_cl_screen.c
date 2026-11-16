@@ -223,3 +223,91 @@ TEST(hud_layout_every_command)
 	   code, "mid" and "mid2". */
 	T_EQ_INT(stub_calls.chars, 3 + 4);
 }
+
+/*
+ * The app is in the background (TASK148, src/client/cl_screen.c): iOS
+ * refuses GPU work then, so SCR_UpdateScreen makes no renderer call at
+ * all while the suspended flag is set. Only the iOS input code sets it;
+ * nothing in this build does.
+ */
+
+/* A client in the game, the renderer counters cleared, one update. */
+static void
+update_once(void)
+{
+	stub_client_cvars();
+	memset(&cl, 0, sizeof(cl));
+	memset(&cls, 0, sizeof(cls));
+	memset(&viddef, 0, sizeof(viddef));
+	viddef.width = 640;
+	viddef.height = 480;
+	con.initialized = true;
+	cls.state = ca_active;
+	cl.refresh_prepped = true;
+	SCR_CenterPrint("");
+	memset(&stub_calls, 0, sizeof(stub_calls));
+	SCR_UpdateScreen();
+}
+
+/* Without anything setting the flag (any build but iOS) the screen is drawn. */
+TEST(suspend_default_draws)
+{
+	T_CHECK(!SCR_IsSuspended());
+	update_once();
+	T_EQ_INT(stub_calls.begins, 1);
+	T_EQ_INT(stub_calls.ends, 1);
+}
+
+/* Set: no renderer call; cleared: exactly the calls of the default. */
+TEST(suspend_set_draws_nothing_cleared_draws_again)
+{
+	SCR_SetSuspended(true);
+	T_CHECK(SCR_IsSuspended());
+	update_once();
+	T_EQ_INT(stub_calls.begins, 0);
+	T_EQ_INT(stub_calls.ends, 0);
+	T_EQ_INT(stub_calls.pics, 0);
+	T_EQ_INT(stub_calls.chars, 0);
+
+	SCR_SetSuspended(false);
+	T_CHECK(!SCR_IsSuspended());
+	update_once();
+	T_EQ_INT(stub_calls.begins, 1);
+	T_EQ_INT(stub_calls.ends, 1);
+}
+
+/* Twice in a row leaves no state behind: not the pause, not the keys. */
+TEST(suspend_twice_leaves_no_state)
+{
+	int i;
+	float paused;
+	int keys;
+
+	update_once();
+	paused = cl_paused->value;
+	keys = anykeydown;
+
+	for (i = 0; i < 2; i++)
+	{
+		SCR_SetSuspended(true);
+		update_once();
+		T_EQ_INT(stub_calls.begins, 0);
+		SCR_SetSuspended(false);
+		update_once();
+		T_EQ_INT(stub_calls.begins, 1);
+		T_EQ_INT(stub_calls.ends, 1);
+	}
+
+	T_CHECK(cl_paused->value == paused);
+	T_EQ_INT(anykeydown, keys);
+	T_CHECK(!SCR_IsSuspended());
+}
+
+/* Any non-zero argument sets it, and it is a plain flag. */
+TEST(suspend_flag_is_boolean)
+{
+	SCR_SetSuspended(2);
+	T_EQ_INT(SCR_IsSuspended(), 1);
+	SCR_SetSuspended(0);
+	T_EQ_INT(SCR_IsSuspended(), 0);
+}

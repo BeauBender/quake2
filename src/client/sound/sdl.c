@@ -36,6 +36,10 @@
 /* SDL includes */
 #include <SDL3/SDL.h>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #include <errno.h>
 
 /* Local includes */
@@ -1366,6 +1370,13 @@ SDL_BackendInit(void)
 	}
 
 	Com_Printf("Starting SDL audio callback.\n");
+
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+	/* A game respects the silent switch and mixes with the audio of
+	   other apps (TASK148); SDL's own default is Playback, which does
+	   neither. It is read when the audio device is opened. */
+	SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "ambient");
+#endif
 
 	if (!SDL_WasInit(SDL_INIT_AUDIO))
 	{

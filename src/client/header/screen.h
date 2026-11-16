@@ -31,6 +31,10 @@ void	SCR_Init(void);
 
 void	SCR_UpdateScreen(void);
 
+/* The app is in the background (iOS): no frame is drawn while set. */
+void	SCR_SetSuspended(qboolean suspended);
+qboolean	SCR_IsSuspended(void);
+
 void	SCR_SizeUp(void);
 void	SCR_SizeDown(void);
 void	SCR_CenterPrint(char *str);

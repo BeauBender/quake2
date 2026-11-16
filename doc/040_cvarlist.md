@@ -330,6 +330,11 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   else the given driver is forced, regardless if supported by SDL or the
   platform or not.
 
+  On iOS the audio session is the ambient category, whatever the
+  driver: the game follows the silent switch and mixes with the audio
+  of other apps. SDL's own default there is a playback session, which
+  does neither.
+
 * **s_underwater**: Dampen sounds if submerged. Enabled by default.
 
 * **s_bsp_soundpos**: Controls the positioning of sounds played by BSP

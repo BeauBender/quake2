@@ -951,6 +951,14 @@ CL_Frame(int packetdelta, int renderdelta, int timedelta, qboolean packetframe, 
 		return;
 	}
 
+	// In the background (iOS): nothing is drawn (SCR_UpdateScreen),
+	// so sleep instead of spinning. The input below still runs, to
+	// see the return. The time of the suspension is capped below.
+	if (SCR_IsSuspended())
+	{
+		Sys_Nanosleep(50000000);
+	}
+
 	// Calculate simulation time.
 	cls.nframetime = packetdelta / 1000000.0f;
 	cls.rframetime = renderdelta / 1000000.0f;

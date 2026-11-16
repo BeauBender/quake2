@@ -1715,6 +1715,26 @@ SCR_PinsCapture(void)
 	}
 }
 
+/*
+ * The app is in the background (iOS, TASK148): the operating system
+ * refuses GPU work then, so no frame is drawn while this is set. Only
+ * the iOS input code sets it (IN_Init's app event watch); on every other
+ * system it stays false.
+ */
+static qboolean scr_suspended;
+
+void
+SCR_SetSuspended(qboolean suspended)
+{
+	scr_suspended = suspended ? true : false;
+}
+
+qboolean
+SCR_IsSuspended(void)
+{
+	return scr_suspended;
+}
+
 void
 SCR_UpdateScreen(void)
 {
@@ -1722,6 +1742,12 @@ SCR_UpdateScreen(void)
 	int i;
 	float separation[2] = {0, 0};
 	float scale = SCR_GetMenuScale();
+
+	/* in the background: no renderer call, no screenshot */
+	if (scr_suspended)
+	{
+		return;
+	}
 
 	/* if the screen is disabled (loading plaque is
 	   up, or vid mode changing) do nothing at all */
