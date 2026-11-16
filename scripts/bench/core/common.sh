@@ -247,8 +247,9 @@ BENCH_SPAWN_SAID=
 # group; it is said once, and the stop then reaches only the command's pid.
 # The command gets this shell's standard input (through fd 3), or /dev/null
 # when standard input is closed, and this shell's standard error (through
-# fd 9), or /dev/null when that is closed; it inherits neither fd 3 nor fd
-# 9. The fork itself runs with standard error on /dev/null: the forked
+# fd 9), or /dev/null when that is closed; it does not inherit fd 9, nor
+# fd 3 when standard input is open. The fork itself runs with standard
+# error on /dev/null: the forked
 # shell sets its own process group before it becomes the command, and when
 # that setpgid fails (EPERM, seen under load on macOS while this shell's
 # setpgid makes the same group, which it does) bash says "child setpgid

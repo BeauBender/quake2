@@ -548,8 +548,8 @@ t_lock_stop() {
 # prints in the forked shell, for the command, on that standard error
 # before the command's own redirections; with standard input open and
 # closed (the two forms of the fork). The command itself gets the caller's
-# standard error, fds 3 and 9 closed, and /dev/null when standard error is
-# closed.
+# standard error, fds 3 and 9 closed (standard input open), and /dev/null
+# when standard error is closed.
 t_spawn_stderr() {
 	fresh spawn
 	for _in in open closed; do
@@ -563,7 +563,7 @@ t_spawn_stderr() {
 		grep -q 'bench_spawn sh -c .*fork-probe' "${E:?}/xt.$_in" || bad "spawn: the xtrace run (standard input $_in) shows no call of bench_spawn, so it shows nothing"
 		if grep -q "^+* sh -c '*: fork-probe'*\$" "${E:?}/xt.$_in"; then bad "spawn: the forked shell's own lines reach the caller's standard error (standard input $_in)"; fi
 	done
-	_out=$(B lock run err -- sh -c 'echo to-stderr >&2; (: >&3) 2> /dev/null && echo fd3-open; (: >&9) 2> /dev/null && echo fd9-open' 2>&1 3< /dev/null 9> /dev/null)
+	_out=$(B lock run err -- sh -c 'echo to-stderr >&2; (: >&3) 2> /dev/null && echo fd3-open; (: >&9) 2> /dev/null && echo fd9-open' < /dev/null 2>&1 3< /dev/null 9> /dev/null)
 	[ "$_out" = to-stderr ] || bad "spawn: wanted the command's standard error and fds 3 and 9 closed, got: $_out"
 	_st=0
 	B lock run noerr -- sh -c 'echo ran > "$1"; echo to-stderr >&2' x "${E:?}/noerr" 2>&- || _st=$?
