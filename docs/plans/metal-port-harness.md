@@ -300,6 +300,7 @@ which refuse a host without the capability they require).
 - [FIX69](../runbook/FIX69.md): presents drained at teardown, and the shim's present wait bounded
 - [FIX77](../runbook/FIX77.md): the shim's present hold count per context, and teardown's waits under one deadline
 - [TASK21](../runbook/TASK21.md): Closing TASK21 on the build host
+- [TASK22](../runbook/TASK22.md): Closing TASK22: the simulator on the build host, the device by the owner
 - [TASK27](../runbook/TASK27.md): Closing TASK27 on the build host
 - [TASK39](../runbook/TASK39.md): Observed on the first run
 - [TASK40](../runbook/TASK40.md): Observed on sky, water and cinematics
