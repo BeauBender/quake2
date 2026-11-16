@@ -284,7 +284,8 @@ bench_undefer() {
 # process's), the group alone.
 bench_group_alive() {
 	kill -0 -- "-$1" 2> /dev/null && return 0
-	[ "${2:-}" != group ] && bench_pid_running "$1"
+	[ "${2:-}" != group ] || return 1
+	bench_pid_running "$1"
 }
 
 # bench_signal_group <signal> <pid> [group]: the signal to the process group
@@ -292,7 +293,9 @@ bench_group_alive() {
 # without job control), unless "group" is given.
 bench_signal_group() {
 	kill -s "$1" -- "-$2" 2> /dev/null && return 0
-	[ "${3:-}" != group ] && kill -s "$1" "$2" 2> /dev/null
+	if [ "${3:-}" != group ]; then
+		kill -s "$1" "$2" 2> /dev/null || true
+	fi
 	return 0
 }
 
