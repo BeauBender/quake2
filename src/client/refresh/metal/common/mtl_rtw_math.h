@@ -445,7 +445,8 @@ mtl_rtw_choose_ws(int hit, int on_screen, unsigned mat, float off, float dist, i
  * back face (the rays cull none), so after MTL_RTW_LAYERS model faces the
  * ray is traced on with the map's instances alone, and ends at what it
  * would meet without the models. Hidden brush models (doors, plats) are
- * map faces and are shaded.
+ * map faces and are shaded. r_rt_water_hits 0 takes the same step
+ * (mtl_rtw_ss_next, FIX81).
  */
 static inline int
 mtl_rtw_ws_next(int hit, int alias, unsigned from, int layer, int map)
@@ -456,6 +457,26 @@ mtl_rtw_ws_next(int hit, int alias, unsigned from, int layer, int map)
 	}
 
 	return (layer + 1 < MTL_RTW_LAYERS) ? MTL_RTW_NEXT_PASS : MTL_RTW_NEXT_MAP;
+}
+
+/*
+ * FIX81: the reflection ray's step at r_rt_water_hits 0 (rm_rtw_trace),
+ * after TASK58's choice from (mtl_rtw_choose) at its layer'th hit: the
+ * rule of r_rt_water_hits 1 (mtl_rtw_ws_next), so both settings pass over
+ * exactly the same models. Before it every face stopped the ray, so an
+ * alias model the picture does not show (behind a wall, in the PVS) ended
+ * it with no reflection, and the water showed the model's outline as a
+ * hole in front of a wall the picture shows. Now the ray goes on behind
+ * such a model and ends where it would end without it: after
+ * MTL_RTW_LAYERS of their faces with the map's instances alone
+ * (MTL_RTW_MASK_MAP), so in at most MTL_RTW_LAYERS + 1 intersections. A
+ * ray whose first hit is anything else is cast once, as before, and a map
+ * face the picture does not show (a hidden door too) still gives none.
+ */
+static inline int
+mtl_rtw_ss_next(int hit, int alias, unsigned from, int layer, int map)
+{
+	return mtl_rtw_ws_next(hit, alias, from, layer, map);
 }
 
 /*
