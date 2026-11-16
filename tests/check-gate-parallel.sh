@@ -354,12 +354,15 @@ c_times() {
 	[ "$tt" -ge "$ta" ] && [ "$tt" -le "$tw" ] || { say "times: the total ($tt s) is not the wall time of the run ($tw s here, the check $ta s)"; return 1; }
 }
 
+# errors: each run stops before any check starts, in well under a second
+# even on a loaded host; its 10 s bound is what ends the jobs-zero mutant
+# (it waits forever), so a wider one would only make the self-test longer
 c_errors() {
 	for j in 0 abc -1 " 2"; do
 		d=$(newcase)
 		spec "$d" a 1 0 0
 		rc=0
-		GP_BOUND=20 ; run "$d" "$j" "" a || rc=$?
+		GP_BOUND=10 ; run "$d" "$j" "" a || rc=$?
 		[ "$rc" -eq 2 ] && has "$d" "gate: GATE_JOBS must be a positive whole number, not '$j'" ||
 			{ say "errors: GATE_JOBS='$j' gave status $rc"; return 1; }
 		[ ! -s "$d/events" ] || { say "errors: a check ran with GATE_JOBS='$j'"; return 1; }
@@ -367,24 +370,24 @@ c_errors() {
 	d=$(newcase)
 	spec "$d" a 1 0 0
 	rc=0
-	GP_BOUND=20 ; run "$d" 2 "check-a.sh check-zz.sh" a || rc=$?
+	GP_BOUND=10 ; run "$d" 2 "check-a.sh check-zz.sh" a || rc=$?
 	[ "$rc" -eq 2 ] && has "$d" "gate: check-zz.sh, named in the serial or the first list, is not one of the checks" && [ ! -s "$d/events" ] ||
 		{ say "errors: a serial name that is no check gave status $rc"; return 1; }
 	d=$(newcase)
 	spec "$d" a 1 0 0
 	rc=0
-	GP_BOUND=20 GP_FIRST="check-zy.sh"
+	GP_BOUND=10 GP_FIRST="check-zy.sh"
 	run "$d" 2 "" a || rc=$?
 	[ "$rc" -eq 2 ] && has "$d" "gate: check-zy.sh, named in the serial or the first list, is not one of the checks" && [ ! -s "$d/events" ] ||
 		{ say "errors: a first name that is no check gave status $rc"; return 1; }
 	d=$(newcase)
 	rc=0
-	GP_BOUND=20 ; run "$d" 2 "" || rc=$?
+	GP_BOUND=10 ; run "$d" 2 "" || rc=$?
 	[ "$rc" -eq 2 ] && has "$d" "gate: no checks to run" || { say "errors: no checks gave status $rc"; return 1; }
 	d=$(newcase)
 	spec "$d" a 1 0 0
 	rc=0
-	GP_BOUND=20 GP_TD=$d/no/such/dir ; run "$d" 2 "" a || rc=$?
+	GP_BOUND=10 GP_TD=$d/no/such/dir ; run "$d" 2 "" a || rc=$?
 	[ "$rc" -eq 2 ] && has "$d" "gate: cannot make a scratch directory for the logs" && [ ! -s "$d/events" ] ||
 		{ say "errors: no scratch directory gave status $rc"; return 1; }
 }
