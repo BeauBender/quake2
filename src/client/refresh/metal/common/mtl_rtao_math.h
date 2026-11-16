@@ -31,8 +31,11 @@
 #ifndef MTL_RTAO_MATH_H
 #define MTL_RTAO_MATH_H
 
-/* the rays a pixel traces (design section 2) */
+/* the most rays a pixel traces (design section 2); r_rt_ao_rays takes 1 or 2 (TASK157) */
 #define MTL_RTAO_RAYS 2
+
+/* the largest divisor of the traced size, r_rt_ao_scale 1/3 (TASK157) */
+#define MTL_RTAO_DIV_MAX 3
 
 /* the blue-noise tile: MTL_RTAO_TILE x MTL_RTAO_TILE ranks, a power of two */
 #define MTL_RTAO_TILE 64
@@ -258,6 +261,165 @@ mtl_rtao_ao(float o0, float o1)
 	const float ao = 1.0f - 0.5f * (o0 + o1);
 
 	return (ao < 0.0f) ? 0.0f : (ao > 1.0f) ? 1.0f : ao;
+}
+
+/*
+ * One ray's AO (r_rt_ao_rays 1, TASK157): 1 - its occlusion, in [0, 1].
+ * Its direction is mtl_rtao_dir's ray 0 with the azimuth's number doubled,
+ * so the one ray's azimuth covers the whole circle.
+ */
+static inline float
+mtl_rtao_ao1(float o0)
+{
+	const float ao = 1.0f - o0;
+
+	return (ao < 0.0f) ? 0.0f : (ao > 1.0f) ? 1.0f : ao;
+}
+
+/*
+ * Tracing at a reduced size (r_rt_ao_scale, TASK157). With divisor d (1
+ * to MTL_RTAO_DIV_MAX) the rays are traced from one pixel of each d x d
+ * block of the view, the block's pixel (o, o) with o = (d - 1) / 2: for
+ * d 2 the top left, for d 3 the centre. Each full-size world pixel then
+ * takes the AO of the four traced pixels about it (mtl_rtao_up_pair),
+ * weighted by their distance and kept only where they lie on its own
+ * surface (mtl_rtao_up_same). d 1 traces every pixel, as TASK57 did.
+ */
+static inline unsigned
+mtl_rtao_lo_off(unsigned d)
+{
+	return (d > 1u) ? (d - 1u) / 2u : 0u;
+}
+
+/* the traced size of one side of full pixels: at least 1, every traced pixel inside the view */
+static inline unsigned
+mtl_rtao_lo_size(unsigned full, unsigned d)
+{
+	unsigned n;
+
+	if (d <= 1u)
+	{
+		return full;
+	}
+
+	n = (full + d - 1u - mtl_rtao_lo_off(d)) / d;
+	return (n < 1u) ? 1u : n;
+}
+
+/* the full-size pixel that traced pixel lo traces along one side of full pixels */
+static inline unsigned
+mtl_rtao_lo_src(unsigned lo, unsigned d, unsigned full)
+{
+	const unsigned s = lo * ((d < 1u) ? 1u : d) + mtl_rtao_lo_off(d);
+
+	return (full < 1u) ? 0u : (s >= full) ? full - 1u : s;
+}
+
+/*
+ * The two traced pixels about full pixel x along one side (n traced
+ * pixels, divisor d): lo0 at or before it, lo1 the next one (lo0 again
+ * at the end), and the second one's bilinear weight f in [0, 1): 0 where
+ * x is itself traced, so that pixel takes its own AO.
+ */
+typedef struct
+{
+	unsigned lo0, lo1;
+	float f;
+} mtl_rtao_pair_t;
+
+static inline mtl_rtao_pair_t
+mtl_rtao_up_pair(unsigned x, unsigned d, unsigned n)
+{
+	const unsigned o = mtl_rtao_lo_off(d);
+	mtl_rtao_pair_t r;
+	unsigned a;
+
+	if ((d <= 1u) || (n < 1u))
+	{
+		r.lo0 = r.lo1 = x;
+		r.f = 0.0f;
+		return r;
+	}
+
+	a = (x < o) ? 0u : (x - o) / d;
+
+	if (a > n - 1u)
+	{
+		a = n - 1u;
+	}
+
+	r.lo0 = a;
+	r.lo1 = (a + 1u < n) ? a + 1u : a;
+	r.f = ((r.lo1 == a) || (x <= a * d + o)) ? 0.0f : (float)(x - (a * d + o)) / (float)d;
+	return r;
+}
+
+/*
+ * 1 when a traced pixel at ps with stored normal ns lies on the surface
+ * of the full pixel at p with normal n: the normals within about 26
+ * degrees (cosine 0.9) and ps within tol units of p's plane. tol is
+ * mtl_rtao_up_tol at p's distance from the eye.
+ */
+#define MTL_RTAO_UP_COS 0.9f
+
+static inline float
+mtl_rtao_up_tol(float dist)
+{
+	return 2.0f + 0.004f * dist;
+}
+
+static inline int
+mtl_rtao_up_same(mtl_rtao_v3_t p, mtl_rtao_v3_t n, mtl_rtao_v3_t ps, mtl_rtao_v3_t ns, float tol)
+{
+	const float c = n.x * ns.x + n.y * ns.y + n.z * ns.z;
+	float h = n.x * (ps.x - p.x) + n.y * (ps.y - p.y) + n.z * (ps.z - p.z);
+
+	h = (h < 0.0f) ? -h : h;
+	return (c > MTL_RTAO_UP_COS) && (h < tol);
+}
+
+/*
+ * The four traced pixels about a full pixel: ao their AO, w their
+ * bilinear weights, same 1 where mtl_rtao_up_same holds, world 1 where
+ * the traced pixel is a world pixel that traced.
+ */
+typedef struct
+{
+	float ao[4], w[4];
+	int same[4], world[4];
+} mtl_rtao_up_t;
+
+/*
+ * A full pixel's AO from them: the weighted mean over those on the
+ * pixel's surface; where none is, over the world pixels among them; where
+ * none is either, 1. A mean of values in [0, 1], so it is in [0, 1], and
+ * the factor's floor holds.
+ */
+static inline float
+mtl_rtao_up_ao(mtl_rtao_up_t u)
+{
+	float s = 0.0f, ws = 0.0f, s2 = 0.0f, ws2 = 0.0f, r;
+	int i;
+
+	for (i = 0; i < 4; i++)
+	{
+		const float wi = (u.w[i] > 0.0f) ? u.w[i] : 0.0f;
+
+		if (u.world[i] && u.same[i])
+		{
+			s += wi * u.ao[i];
+			ws += wi;
+		}
+
+		if (u.world[i])
+		{
+			s2 += wi * u.ao[i];
+			ws2 += wi;
+		}
+	}
+
+	r = (ws > 0.0f) ? s / ws : (ws2 > 0.0f) ? s2 / ws2 : 1.0f;
+	return (r < 0.0f) ? 0.0f : (r > 1.0f) ? 1.0f : r;
 }
 
 /*

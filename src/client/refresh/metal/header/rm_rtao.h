@@ -49,6 +49,14 @@
 #define RM_RTAO_RANGE 128.0f
 #define RM_RTAO_FLOOR 0.4f
 
+/*
+ * TASK157's defaults: the rays traced at half the view's width and height
+ * (r_rt_ao_scale 0.5, RM_RTAO_DIV 2) and two of them a traced pixel
+ * (r_rt_ao_rays 2). r_rt_ao_scale 1 is TASK57's look, every pixel traced.
+ */
+#define RM_RTAO_SCALE 0.5f
+#define RM_RTAO_NRAYS 2
+
 /* the range's bounds: above the ray's start (mtl_rtao_bias), below the longest a map holds */
 #define RM_RTAO_RANGE_MIN 1.0f
 #define RM_RTAO_RANGE_MAX 8192.0f
@@ -66,6 +74,17 @@ float rm_rtao_range(float v);
 
 /* r_rt_ao_min as the pass takes it: 0 to 1; RM_RTAO_FLOOR when not finite */
 float rm_rtao_floor(float v);
+
+/*
+ * r_rt_ao_scale as the pass takes it (TASK157): the divisor of the traced
+ * size, 1 (every pixel, scale 1), 2 (half the width and height, scale 0.5)
+ * or 3 (a third, scale 1/3), the nearest to 1 / v; not finite or not above
+ * 0, the default's (2).
+ */
+int rm_rtao_div(float v);
+
+/* r_rt_ao_rays as the pass takes it (TASK157): 1 or 2 rays a traced pixel, the nearest; RM_RTAO_NRAYS when not finite */
+int rm_rtao_rays(float v);
 
 /*
  * The noise's frame: with r_rt_ao_seed 1 or more the frame is that seed
@@ -106,7 +125,9 @@ typedef struct
 	float floor_;       /* rm_rtao_floor */
 	unsigned frame;     /* rm_rtao_frame */
 	unsigned show;      /* rm_rtao_show */
-	unsigned pad[3];
+	unsigned div;       /* rm_rtao_div: 1 traces every pixel, 2 or 3 a reduced size, upsampled (TASK157) */
+	unsigned rays;      /* rm_rtao_rays: 1 or 2 (TASK157) */
+	unsigned pad[1];
 } rm_rtao_view_t;
 
 /*
@@ -117,7 +138,7 @@ typedef struct
  * znear is not above 0 (nothing is traced then).
  */
 int rm_rtao_view(const float *proj, const float *world, const rm_viewport_t *vp, const float *eye, float znear,
-		float range, float floor_, unsigned frame, unsigned show, rm_rtao_view_t *out);
+		float range, float floor_, unsigned frame, unsigned show, unsigned div, unsigned rays, rm_rtao_view_t *out);
 
 /* One frame's AO pass, for the r_rt_stats 2 line (counted on the GPU, read once the frame completed). */
 typedef struct
@@ -147,11 +168,12 @@ void rmb_rtao_close(void);
 
 /*
  * Before the G-buffer raster: the kernel's outputs at the render size w x
- * h (the AO, R8Unorm, and the light the resolve reads, RGBA16Unorm). 1
- * when the view can trace; 0 when the pass is not open or they cannot be
- * made.
+ * h (the AO, R8Unorm, and the light the resolve reads, RGBA16Unorm), and
+ * with div above 1 the traced AO at the reduced size (R8Unorm,
+ * mtl_rtao_lo_size). 1 when the view can trace; 0 when the pass is not
+ * open or they cannot be made.
  */
-int rmb_rtao_prepare(unsigned long w, unsigned long h);
+int rmb_rtao_prepare(unsigned long w, unsigned long h, unsigned div);
 
 /* the view the next G-buffer view traces with (copied); NULL turns the pass off for that view */
 void rmb_rtao_set_view(const rm_rtao_view_t *v);
