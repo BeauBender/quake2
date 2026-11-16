@@ -93,4 +93,8 @@ KILL-first mutant fails the case.
 On the bare-metal host, each run alone under the host's timing lock:
 `tests/check-bench-entry.sh`, mutants included, passed in under a
 minute, `tests/check-bench.sh` in about 2 min, and
-`tests/check-metalfx-report.sh` (89 mutants) in about 6 min.
+`tests/check-metalfx-report.sh` (89 mutants) in about 6 min; `make test`
+passed (163 tests). The full gate passed in 707 s under its own hold (a
+temporary `BENCH_STATE`, empty again afterwards; no lock-off line, and the
+pin selftest passed straight through), with a load of 2.9 before and 2.2
+after.
