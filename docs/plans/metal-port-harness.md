@@ -298,6 +298,7 @@ which refuse a host without the capability they require).
 - [FIX66](../runbook/FIX66.md): CodeQL analysis skipped for documentation-only pull requests
 - [FIX68](../runbook/FIX68.md): The shim's presented rate at 5120x2880 with display sync off
 - [FIX69](../runbook/FIX69.md): presents drained at teardown, and the shim's present wait bounded
+- [FIX77](../runbook/FIX77.md): the shim's present hold count per context, and teardown's waits under one deadline
 - [TASK21](../runbook/TASK21.md): Closing TASK21 on the build host
 - [TASK27](../runbook/TASK27.md): Closing TASK27 on the build host
 - [TASK39](../runbook/TASK39.md): Observed on the first run
