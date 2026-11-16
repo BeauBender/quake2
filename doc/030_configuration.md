@@ -175,6 +175,18 @@ The OpenGL 3.2 renderer:
 * `gl3_colorlight`: When set to `0`, the lights and lightmaps are
   colorless (greyscale-only), like in the original soft renderer.
 
+## Where the configuration and saves live on iPhone and iPad
+
+On iOS the home directory is the app's *Documents* folder, not
+*~/.local/share/YamagiQ2* or *~/.yq2*. *config.cfg*, *save/* and
+*scrnshot/* are written to *Documents/baseq2/* (or the directory of the
+active mod), next to the game data, and the Files app shows them under
+"On My iPhone" (or "On My iPad") > "Quake II". The options *-cfgdir* and
+*-portable* have no effect there; *-portable* prints a line that says so,
+because the app bundle is read-only. See [Installation](020_installation.md)
+for the game data.
+
+
 ## Retexturing Packs
 
 Portmanbeau Quake II has full support for retexturing packs. They just need

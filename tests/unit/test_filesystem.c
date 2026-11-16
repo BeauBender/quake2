@@ -24,6 +24,8 @@
  * =======================================================================
  */
 
+#include <sys/stat.h>
+
 #include "test.h"
 
 typedef struct
@@ -332,4 +334,154 @@ TEST(fs_malformed_paks)
 
 	t_pin("fs-malformed-paks", pin.data);
 	t_text_free(&pin);
+}
+
+/*
+ * The sandbox home directory (iOS: <HOME>/Documents/). The composing
+ * helper has no platform condition and runs here; the home directory
+ * the engine uses is switched with sys_sandbox_home.
+ */
+TEST(fs_sandbox_home_dir)
+{
+	char out[MAX_OSPATH];
+	char home[MAX_OSPATH];
+	char tight[MAX_OSPATH];
+	/* "/Documents/" is 11 bytes and the terminator one more */
+	size_t longest = MAX_OSPATH - 1 - 11;
+
+	T_CHECK(Sys_SandboxHomeDir("/c/x", out, sizeof(out)));
+	T_EQ_STR(out, "/c/x/Documents/");
+
+	memset(out, 'x', sizeof(out));
+	T_CHECK(!Sys_SandboxHomeDir("", out, sizeof(out)));
+	T_EQ_STR(out, "");
+	memset(out, 'x', sizeof(out));
+	T_CHECK(!Sys_SandboxHomeDir(NULL, out, sizeof(out)));
+	T_EQ_STR(out, "");
+	T_CHECK(!Sys_SandboxHomeDir("/c/x", NULL, sizeof(out)));
+	T_CHECK(!Sys_SandboxHomeDir("/c/x", out, 0));
+
+	/* The longest HOME that fits, and one byte more. */
+	memset(home, 'h', sizeof(home));
+	home[0] = '/';
+	home[longest] = '\0';
+	T_CHECK(Sys_SandboxHomeDir(home, out, sizeof(out)));
+	T_EQ_INT((int)strlen(out), MAX_OSPATH - 1);
+	T_CHECK(strcmp(out + longest, "/Documents/") == 0);
+	home[longest] = 'h';
+	home[longest + 1] = '\0';
+	memset(out, 'x', sizeof(out));
+	T_CHECK(!Sys_SandboxHomeDir(home, out, sizeof(out)));
+	T_EQ_STR(out, "");
+
+	/* The same bound for a short buffer: "/c/x/Documents/" is 15 bytes. */
+	T_CHECK(Sys_SandboxHomeDir("/c/x", tight, 16));
+	T_CHECK(!Sys_SandboxHomeDir("/c/x", tight, 15));
+}
+
+static void
+sandbox_child(void *arg)
+{
+	char path[MAX_OSPATH];
+	FILE *f;
+	void *buf;
+
+	(void)arg;
+	snprintf(path, sizeof(path), "%s/sandbox", t_tmpdir());
+	setenv("HOME", path, 1);
+
+	/* Start over with the home directory in the search path. */
+	FS_ShutdownFilesystem();
+	is_portable = false;
+	sys_sandbox_home = true;
+	FS_InitFilesystem();
+
+	T_CHECK(FS_LoadFile("pics/colormap.pcx", &buf) > 0);
+	FS_FreeFile(buf);
+
+	snprintf(path, sizeof(path), "%s/sandbox/Documents/baseq2", t_tmpdir());
+	T_EQ_STR(FS_Gamedir(), path);
+
+	/* What the engine writes lands next to the paks. */
+	snprintf(path, sizeof(path), "%s/config.cfg", FS_Gamedir());
+	FS_CreatePath(path);
+	f = Q_fopen(path, "w");
+	T_CHECK(f != NULL);
+
+	if (f)
+	{
+		fputs("seta x 1\n", f);
+		fclose(f);
+	}
+
+	printf("home=%s\n", Sys_GetHomeDir());
+}
+
+TEST(fs_sandbox_documents)
+{
+	static const pakentry_t pak0[] = {
+		{ "pics/colormap.pcx", "colormap" },
+	};
+	char out[1024], path[MAX_OSPATH];
+	struct stat sb;
+	int status;
+
+	write_pak("sandbox/Documents/baseq2/pak0.pak", pak0, 1);
+
+	status = t_expect_exit(sandbox_child, NULL, out, sizeof(out));
+	T_EQ_INT(status, 0);
+
+	snprintf(path, sizeof(path), "home=%s/sandbox/Documents/\n", t_tmpdir());
+	T_CHECK(strstr(out, path) != NULL);
+
+	snprintf(path, sizeof(path), "%s/sandbox/Documents/baseq2/config.cfg", t_tmpdir());
+	T_CHECK(stat(path, &sb) == 0 && sb.st_size == 9);
+
+	/* The parent process never left the macOS rules. */
+	T_CHECK(!sys_sandbox_home);
+}
+
+TEST(fs_missing_data_message)
+{
+	char out[2048], wrong[MAX_OSPATH], dir[MAX_OSPATH];
+	static const pakentry_t pak0[] = {
+		{ "pics/colormap.pcx", "c" },
+	};
+
+	/* Nothing in the directory, and no directory at all. */
+	snprintf(dir, sizeof(dir), "%s/msg_none", t_tmpdir());
+	t_write_file("msg_none/.keep", "", 0);
+	Sys_MissingDataMessage(dir, out, sizeof(out));
+	T_CHECK(strstr(out, "pak0.pak") != NULL);
+	T_CHECK(strstr(out, "Files > On My iPhone (or iPad) > Quake II > baseq2") != NULL);
+	T_CHECK(strstr(out, "renamed") == NULL);
+	T_CHECK(!Sys_PakCaseMismatch(dir, wrong, sizeof(wrong)));
+	T_CHECK(!Sys_PakCaseMismatch("/nonexistent/t_dir", wrong, sizeof(wrong)));
+
+	/* A pak in the wrong case and no correct one. */
+	snprintf(dir, sizeof(dir), "%s/msg_upper", t_tmpdir());
+	t_write_file("msg_upper/PAK0.PAK", "x", 1);
+	t_write_file("msg_upper/readme.txt", "x", 1);
+	T_CHECK(Sys_PakCaseMismatch(dir, wrong, sizeof(wrong)));
+	T_EQ_STR(wrong, "PAK0.PAK");
+	Sys_MissingDataMessage(dir, out, sizeof(out));
+	T_CHECK(strstr(out, "PAK0.PAK must be renamed") != NULL);
+
+	/* Mixed case and a two digit number count; a letter for a number
+	   and a longer number do not. */
+	snprintf(dir, sizeof(dir), "%s/msg_mixed", t_tmpdir());
+	t_write_file("msg_mixed/Pak12.pak", "x", 1);
+	T_CHECK(Sys_PakCaseMismatch(dir, wrong, sizeof(wrong)));
+	T_EQ_STR(wrong, "Pak12.pak");
+	snprintf(dir, sizeof(dir), "%s/msg_other", t_tmpdir());
+	t_write_file("msg_other/PAKX.PAK", "x", 1);
+	t_write_file("msg_other/PAK123.PAK", "x", 1);
+	t_write_file("msg_other/PAK.PAK", "x", 1);
+	T_CHECK(!Sys_PakCaseMismatch(dir, wrong, sizeof(wrong)));
+
+	/* A correct pak0.pak is not reported. */
+	write_pak("msg_ok/pak0.pak", pak0, 1);
+	snprintf(dir, sizeof(dir), "%s/msg_ok", t_tmpdir());
+	T_CHECK(!Sys_PakCaseMismatch(dir, wrong, sizeof(wrong)));
+	T_EQ_STR(wrong, "");
 }
