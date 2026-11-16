@@ -55,8 +55,8 @@ the ray"): 10 of 438 checks failed, the hidden-model cases ending with no reflec
 Commits measured: main `419eeda7` (TASK158's merge) and the fix's first version `979a52c9`, whose
 kernel folded the first hit into the loop. The final kernel, `03dd4163`, keeps TASK58's first-hit code
 verbatim and runs the re-trace in a block of its own (*Code shape*, below); it is built and
-host-tested but was **not run on the engine**: the screen locked before its batch started. Every run
-checked that the screen was unlocked and that no other `quake2` ran, and held the timing lock
+host-tested, and its engine runs are in *The final kernel* below (made with the screen locked). The
+first version's runs checked that the screen was unlocked and that no other `quake2` ran, and held the timing lock
 (`tools/heavy.sh`, under four minutes a hold); the one-minute load was 2.0 to 4.5. `PINS_SEED=1`.
 Both builds were copies of the worktree's `release/` (the client binary is byte-identical, so each
 build had a pin store of its own, or a `--run` of its own in one store). A scratch copy of the
@@ -110,10 +110,8 @@ choice). Main's own replay equals main's record, so this is the compiler's arith
 first hit into a loop changed how the Metal compiler (fast math) arranged the projection's
 floating point. The final kernel (`03dd4163`) keeps the first hit's choice as TASK58's source,
 line for line, and the re-trace past a hidden model is a block after it (its per-hit choice is
-`rm_rtw_ss_at`, the same steps), entered only when the step says to pass. Whether its `rt-water`
-frames are byte-identical to main's is **not measured**; the batch that measures it (the fix's
-replays of every trace above, then the cost) is ready to run as it is
-(`<artifacts>/FIX81/batch6.sh` in the lane's scratch, copied to `<artifacts>/FIX81/`).
+`rm_rtw_ss_at`, the same steps), entered only when the step says to pass. Its `rt-water`
+frames are byte-identical to main's (*The final kernel*, below).
 
 ### Cost
 
@@ -137,7 +135,7 @@ against 3.48 with `r_metalfx 2`), so the stored held baseline was not reused and
 has one run only: the held difference is within main's own spread (its p10 to p90, 3.5 to 4.8 ms).
 `water.dm2` has no alias model, so this is the loop's fixed cost (a ray that meets no hidden model
 is cast once); the re-traces add work only where hidden models are hit. The final kernel's cost is
-not measured (the screen locked).
+in *The final kernel*, below.
 
 ### Frames for the owner
 
@@ -145,6 +143,62 @@ Two before/after pairs at 1920 x 1080, the made demo's captures 2 and 3 (under t
 628 pixels filled), main's record and the first version's replay, converted with `sips`:
 `<artifacts>/FIX81/frames/<n>-before.png` and `<n>-after.png`, never committed.
 
+## The final kernel
+
+Commit `03dd4163`'s source (the branch head `f8baa052` adds only this file), built from `f8baa052`
+(`make ref_metal`, release flags, Metal shaders compiled) and copied into the fix's build. Main is
+`419eeda7` as before. **These runs were made with the screen locked** (`CGSSessionScreenIsLocked`
+set), under `tools/heavy.sh`, no other `quake2` running. Replays, the byte and masked comparisons and
+the frame captures do not depend on the screen: on this host a locked replay of main's `rt-water`
+record equalled the unlocked record in 20 of 20 frames. The one-minute load was 2.3 to 3.7 before and
+after every run. `PINS_SEED=1`; every replay is of main's stored record, `--run 2`.
+
+### The comparison against main
+
+Main's record against the final kernel's replay, any channel, the same traces as above:
+
+| Trace | Frames | Differing frames | Changed pixels |
+|---|---|---|---|
+| `rt-water` (no model), 640 x 480 | 20 | **0: byte-identical** | 0 (inside or outside the mask) |
+| `rt-water`, 1920 x 1080 | 5 | **0: byte-identical** | 0 |
+| `rt-water-entities`, 640 x 480 | 20 | **0: byte-identical** | 0 |
+| `fx-off`, 640 x 480 | 20 | **0: byte-identical** | 0 |
+| `skywater`, 640 x 480 | 20 | **0: byte-identical** | 0 |
+| `fx81.dm2`, 640 x 480 | 17 | 9 (under the water) | 1,145 inside main's no-reflection pixels, **0 outside** |
+| `fx81.dm2`, 1920 x 1080 | 4 | 2 | 728 inside, **0 outside** |
+
+That answers the open question: with TASK58's first-hit code kept verbatim, a trace that meets no
+hidden model is byte-identical to main (the first version changed 56 to 97 pixels by one level on
+the same traces). On the made demo the changes are exactly the first version's, 1,145 and 728 pixels,
+all inside the mask (main's red pixels, no reflection), none outside it: the same classes view
+transitions, red to green only. Main's own replay equals main's record on the made demo (17 of 17
+and 4 of 4 frames), so the mask holds against the record too.
+
+### Cost, screen locked
+
+The held cases (display sync on) were **not run**: they need an unlocked screen. A drift check came
+first: one run of main's build on the not-held 1920 x 1080 case, 117 lines: median 0.99 ms, p10 0.98,
+p90 1.04, inside the stored baseline's not-held range (0.99, p10 0.97, p90 1.05), so the locked GPU
+time was taken as comparable for the not-held cases. Three runs a case, the fix alternated with main
+in rounds (the same method, `water.dm2` whole, each run's lines past its first 20):
+
+| Output | Sync | Main `419eeda7`, median (p10 / p90) | The final kernel, median (run medians) | p10 / p90 |
+|---|---|---|---|---|
+| 1920 x 1080 | not held | 0.99 (0.97 / 1.15), runs 0.98, 0.98, 1.01 | 1.00 (1.00, 1.00, 1.00) | 0.99 / 1.05 |
+| 5120 x 2880, `r_metalfx 2` | not held | 1.29 (0.97 / 1.38), runs 1.26, 1.29, 1.28 | 1.01 (1.01, 1.29, 1.15) | 1.00 / 1.39 |
+
+At 1920 x 1080 the fix costs 0.01 ms more (1 %), as the first version did. The 5120 x 2880 case
+is not comparable: the drift check covered only the 1080p case, and this case alternates between
+about 1.0 and about 1.3 ms in both builds (main's stored baseline had 0.99 with p90 1.38; this
+time main's runs sat at the upper level and the fix's at both), so the medians say nothing about
+the fix there; its distributions overlap (p90 1.38 and 1.39).
+
+### Frames for the owner
+
+The two before/after pairs of the made demo (captures 2 and 3, 1920 x 1080) were regenerated from
+the final kernel's replay (`<artifacts>/FIX81/frames/<n>-before.png` and `<n>-after.png`, replaced;
+never committed, never viewed here).
+
 ## Checks
 
-On `03dd4163` (the final kernel), each through `tools/heavy.sh`: in the card's report.
+On `f8baa052`, each through `tools/heavy.sh`: `tests/check-doc-links.sh` and `tests/check-no-local-identity.sh`, in the card's report.
