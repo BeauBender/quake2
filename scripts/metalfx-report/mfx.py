@@ -510,14 +510,59 @@ def sh(cmd, cwd=None, env=None, timeout=None):
     return p.returncode, p.stdout
 
 
+LOCK_LABEL = "metalfx-report"
+LOCK_HELD = False  # set by lock_self when this process runs under its own hold of the host lock
+
+
+def lock_self(argv):
+    """The host lock (docs/plans/bench-harness.md, "The host lock"). Unless it is off, runs this script
+    again with argv as one hold of "scripts/bench/bench.sh lock run metalfx-report", so that every
+    scripts/pins.sh record and every timed engine run of the report is under the one hold: a record
+    passes straight through (BENCH_LOCK_TOKEN), its time limit counts the record alone and not a wait
+    for the lock, and no other heavy job on this host shares the machine with the timed runs. Off, with
+    one line on stderr that names why, with BENCH_LOCK=0, on GitHub Actions (CI=true and
+    GITHUB_ACTIONS=true), with no scripts/bench/bench.sh in this tree, and with no directory for its
+    state (BENCH_STATE, XDG_CACHE_HOME and HOME all unset); pins.sh, which inherits the environment and
+    sits in the same tree, is then off as well. The run under the lock comes back here with
+    BENCH_LOCK_ENTRY=metalfx-report (cleared at once, so that nothing below inherits it) and goes on."""
+    global LOCK_HELD
+    e = os.environ
+    entry = e.pop("BENCH_LOCK_ENTRY", "")
+    if entry == LOCK_LABEL and e.get("BENCH_LOCK_TOKEN"):
+        LOCK_HELD = True
+        return
+    bench = os.path.join(ROOT, "scripts", "bench", "bench.sh")
+    if e.get("BENCH_LOCK") == "0":
+        off = "BENCH_LOCK=0"
+    elif e.get("CI") == "true" and e.get("GITHUB_ACTIONS") == "true":
+        off = "CI (GITHUB_ACTIONS=true)"
+    elif not os.path.isfile(bench):
+        off = "no bench core (scripts/bench/bench.sh)"
+    elif not (e.get("BENCH_STATE") or e.get("XDG_CACHE_HOME") or e.get("HOME")):
+        off = "no state directory (BENCH_STATE, XDG_CACHE_HOME and HOME unset)"
+    else:
+        cmd = ["sh", bench, "lock", "run", LOCK_LABEL, "--", "env", "BENCH_LOCK_ENTRY=" + LOCK_LABEL,
+               sys.executable, "-I", os.path.abspath(__file__)] + list(argv)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.execv("/bin/sh", cmd)
+    print("metalfx-report: the host lock is off: " + off, file=sys.stderr)
+
+
 def lock_stop_wait(env=None):
-    """The seconds sh_group gives a stopped command between TERM and KILL: the host lock's grace
-    (scripts/bench/core/lock.sh, bench_lock_grace: twice BENCH_STOP_GRACE, default 10, and at least
-    BENCH_STOP_GRACE + 5), read from the command's environment as the lock reads it, plus 5 s for the
-    lock shell to reap its command and free the lock. A BENCH_STOP_GRACE that is not whole seconds
-    counts as the default (bench.sh refuses it and runs nothing)."""
+    """The seconds sh_group gives a stopped command between TERM and KILL, from BENCH_STOP_GRACE as the
+    host lock reads it (whole seconds, default 10; one that is not counts as the default: bench.sh
+    refuses it and runs nothing). Under this run's own hold (LOCK_HELD) pins.sh passes straight through
+    and is the command itself, and this run is the command of the lock shell, which stops it with TERM
+    and KILLs it after the lock's grace (scripts/bench/core/lock.sh, bench_lock_grace: twice
+    BENCH_STOP_GRACE, and at least BENCH_STOP_GRACE + 5): the wait is BENCH_STOP_GRACE, the grace of a
+    stopper nested in the lock, so that this run's KILL of pins.sh lands first and nothing outlives the
+    lock. Otherwise pins.sh may be the lock shell of a hold of its own: the wait is that lock's grace,
+    plus 5 s for the lock shell to reap its command and free the lock."""
     g = (os.environ if env is None else env).get("BENCH_STOP_GRACE", "")
     g = int(g) if re.match(r"[0-9]+\Z", g) else 10
+    if LOCK_HELD:
+        return g
     return max(2 * g, g + 5) + 5
 
 
@@ -556,10 +601,11 @@ def stop_group(p, wait):
 def sh_group(cmd, cwd=None, env=None, timeout=None):
     """Like sh(), with the command in a process group of its own, which is stopped (stop_group) on
     any way out: a SIGTERM/SIGHUP (SystemExit from the handler), Ctrl-C or the timeout. TERM first,
-    KILL only after the host lock's grace (lock_stop_wait): scripts/pins.sh runs itself under the lock
+    KILL only after lock_stop_wait. Under this run's own hold of the host lock, scripts/pins.sh passes
+    straight through and is the command itself. Without it, pins.sh runs itself under the lock
     (scripts/bench/bench.sh lock run), so the command's pid is the lock shell, and the run under it,
     the engine included, is in a process group of the lock's own, which only the lock shell's TERM trap
-    stops before it frees the lock. A KILL first would end the lock shell alone and leave that run
+    stops before it frees the lock: a KILL first would end the lock shell alone and leave that run
     going, the lock held. So a command that starts the engine (scripts/pins.sh) leaves nothing
     running."""
     p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -948,7 +994,7 @@ def take_lock(path, what):
     return fd
 
 
-def cmd_run(a):
+def cmd_run(a, argv=None):
     ctx = Ctx()
     out = check_out_path(a.out)
     if not PATH_OK_RE.match(a.basedir) or not os.path.isdir(os.path.join(a.basedir, "baseq2")):
@@ -970,6 +1016,10 @@ def cmd_run(a):
     for t in (ctx.bin, ctx.framediff, ctx.ssim):
         if not os.access(t, os.X_OK):
             raise Refuse("%s is not an executable" % t)
+    # what follows (the freshness check's make, the engine runs, the records) runs under one hold of the
+    # host lock; the checks above are cheap, and a refusal there does not wait for the lock
+    if argv is not None:
+        lock_self(argv)
     # the freshness check and the commit are those of the tree the binary was built in; a binary
     # that does not sit in such a tree is not checked, and says so in the report's meta
     ctx.tree, why = engine_tree(ctx.bin)
@@ -1507,7 +1557,7 @@ def main(argv):
             print(build_report(a.dir, a.other or [], a.html))
             return 0
         if a.cmd == "run":
-            return cmd_run(a)
+            return cmd_run(a, argv)
     except Refuse as e:
         print("metalfx-report: refused: %s" % e, file=sys.stderr)
         return 3

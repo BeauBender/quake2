@@ -439,7 +439,7 @@ limit" "$out"
         g=1; deaf=; case $how in TERM2) g=5; deaf=1;; deaf) deaf=1;; esac
         lenv=(env -u BENCH_LOCK_TOKEN -u BENCH_LOCK_ENTRY -u BENCH_LOCK -u BENCH_LOCK_WAIT -u BENCH_LOCK_POLL BENCH_STATE="$st"
               BENCH_STOP_GRACE=$g MFX_STUB_SH="$w/lt-sh" MFX_STUB_CHILD="$w/lt-child" MFX_STUB_PARENT="$w/lt-parent"
-              MFX_STUB_DEAF=$deaf PATH="$tmp/maketrue:$PATH")
+              MFX_STUB_DEAF=$deaf PINS_STORE="$w/lt-store-$how" PATH="$tmp/maketrue:$PATH")
         if [ $how = timeout ]; then
             "${lenv[@]}" python3 -I "$HELP" "$lt/scripts/metalfx-report" group-timeout "$lt" 5 > "$w/lt-$how.log" 2>&1 &
         else
@@ -453,7 +453,8 @@ limit" "$out"
         spid=$(cat "$w/lt-sh" 2>/dev/null); cpid=$(cat "$w/lt-child" 2>/dev/null); ppid=$(cat "$w/lt-parent" 2>/dev/null)
         [ -n "$cpid" ] || ko e2e-lock "$how: the stub pins.sh did not start under the lock: $(tail -3 "$w/lt-$how.log")"
         case $how in
-            TERM|INT|deaf) kill -$how $pid 2>/dev/null;;
+            TERM|INT) kill -$how $pid 2>/dev/null;;
+            deaf) kill -TERM $pid 2>/dev/null;;
             TERM2)
                 [ "$ppid" != "$pid" ] || ko e2e-lock "TERM2: the generator holds no lock of its own (the stub's parent is its pid)"
                 kill -TERM "$ppid" 2>/dev/null; sleep 1; kill -TERM "$ppid" 2>/dev/null; sleep 1
@@ -712,7 +713,7 @@ mutant pins-kill-first e2e-lock py 'os.killpg(p.pid, signal.SIGTERM)' 'os.killpg
 mutant stop-wait-unfloored e2e-lock-grace py 'return max(2 * g, g + 5) + 5' 'return 2 * g + 5'
 mutant stop-unheld e2e-lock py 'held = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)' 'held = signal.pthread_sigmask(signal.SIG_BLOCK, [])'
 mutant stop-wait-outlives-lock e2e-lock py 'if LOCK_HELD:' 'if False:'
-mutant lock-self-off e2e-lock-wait py 'os.execv("/bin/sh", cmd)' 'pass'
+mutant lock-self-off e2e-lock-wait py 'os.execv("/bin/sh", cmd)' 'off = "mutant"'
 mutant lock-off-silent e2e-lock-off py 'print("metalfx-report: the host lock is off: " + off, file=sys.stderr)' 'pass'
 mutant pins-no-group e2e-group py 'rc, out = sh_group([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)' 'rc, out = sh([os.path.join(ROOT, "scripts", "pins.sh"), "record", "metal", name], cwd=ROOT, env=env, timeout=900)'
 
