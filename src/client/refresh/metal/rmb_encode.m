@@ -269,11 +269,16 @@ rmb_frame_begin(int w, int h, int dw, int dh, const float *clear_rgba)
 				rmb_set_texture(&own, rmb_new_target(MTLPixelFormatBGRA8Unorm, w, h, rt | MTLTextureUsageShaderRead));
 				target = own;
 			}
+		}
 
-			if (!depth || (depth.width != (NSUInteger)w) || (depth.height != (NSUInteger)h))
-			{
-				rmb_set_texture(&depth, rmb_new_target(MTLPixelFormatDepth32Float_Stencil8, w, h, rt));
-			}
+		/*
+		 * On every frame: a present slot's target is already the frame's
+		 * size (rmb_present_take), so a new size need not remake the colour
+		 * target, and the depth target follows the frame here (FIX51).
+		 */
+		if (!depth || (depth.width != (NSUInteger)w) || (depth.height != (NSUInteger)h))
+		{
+			rmb_set_texture(&depth, rmb_new_target(MTLPixelFormatDepth32Float_Stencil8, w, h, rt));
 		}
 
 		/* another frame's contents: the first pass clears it (rm_color_load) */
