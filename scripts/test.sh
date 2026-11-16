@@ -33,17 +33,31 @@ cd "$(dirname "$0")/.."
 # timing run on this host shares the machine with the gate. Under a caller
 # that holds the lock already (BENCH_LOCK_TOKEN), bench.sh passes straight
 # through; so do the entry points the gate runs in turn (the pin selftest).
-# Off with BENCH_LOCK=0, on CI (CI=true: a runner has no other lanes) and in
-# a tree without scripts/bench/bench.sh. The run under the lock comes back
-# here with BENCH_LOCK_ENTRY=gate (cleared at once, so nothing below inherits
-# it) and with the caller's LC_ALL, which bench.sh sets to C.
+# The lock is off, with one line on stderr that names why, with
+# BENCH_LOCK=0, on GitHub Actions (CI=true and GITHUB_ACTIONS=true: a runner
+# has no other lanes), in a tree without scripts/bench/bench.sh, and with no
+# directory for its state (BENCH_STATE, XDG_CACHE_HOME and HOME all unset).
+# The run under the lock comes back here with BENCH_LOCK_ENTRY=gate (cleared
+# at once, so nothing below inherits it) and with the caller's LC_ALL, which
+# bench.sh sets to C.
 lock_entry=${BENCH_LOCK_ENTRY:-}
 unset BENCH_LOCK_ENTRY
-if { [ "$lock_entry" != gate ] || [ -z "${BENCH_LOCK_TOKEN:-}" ]; } &&
-	[ "${BENCH_LOCK:-}" != 0 ] && [ "${CI:-}" != true ] && [ -f scripts/bench/bench.sh ]; then
-	set -- BENCH_LOCK_ENTRY=gate sh "$PWD/scripts/test.sh" "$@"
-	if [ -n "${LC_ALL+x}" ]; then set -- LC_ALL="$LC_ALL" "$@"; else set -- -u LC_ALL "$@"; fi
-	exec sh scripts/bench/bench.sh lock run gate -- env "$@"
+lock_off=
+if [ "$lock_entry" != gate ] || [ -z "${BENCH_LOCK_TOKEN:-}" ]; then
+	if [ "${BENCH_LOCK:-}" = 0 ]; then
+		lock_off="BENCH_LOCK=0"
+	elif [ "${CI:-}" = true ] && [ "${GITHUB_ACTIONS:-}" = true ]; then
+		lock_off="CI (GITHUB_ACTIONS=true)"
+	elif [ ! -f scripts/bench/bench.sh ]; then
+		lock_off="no bench core (scripts/bench/bench.sh)"
+	elif [ -z "${BENCH_STATE:-}${XDG_CACHE_HOME:-}${HOME:-}" ]; then
+		lock_off="no state directory (BENCH_STATE, XDG_CACHE_HOME and HOME unset)"
+	else
+		set -- BENCH_LOCK_ENTRY=gate sh "$PWD/scripts/test.sh" "$@"
+		if [ -n "${LC_ALL+x}" ]; then set -- LC_ALL="$LC_ALL" "$@"; else set -- -u LC_ALL "$@"; fi
+		exec sh scripts/bench/bench.sh lock run gate -- env "$@"
+	fi
+	echo "test.sh: the host lock is off: $lock_off" >&2
 fi
 
 # A warning, not a failure: without the hooks the commit and push guards

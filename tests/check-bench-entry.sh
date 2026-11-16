@@ -19,8 +19,14 @@
 #   - t_pins: each locked command makes one call with its label and its
 #     whole command line, before the command runs, and the run under it
 #     reaches the command; a dry run and the usage text make none;
-#   - t_off: BENCH_LOCK=0, CI=true and a tree without bench.sh make no
-#     call, for each of the three, and the heavy part still runs;
+#   - t_cov_lc, with the real bench core: coverage's instrumented make gets
+#     the caller's LC_ALL back under the lock, unset or set;
+#   - t_off: BENCH_LOCK=0, GitHub Actions (CI=true with GITHUB_ACTIONS=true),
+#     a tree without bench.sh and no state directory (BENCH_STATE,
+#     XDG_CACHE_HOME and HOME unset) make no call, for each of the three,
+#     each says so in one line naming the reason, and the heavy part still
+#     runs; CI=true alone, GITHUB_ACTIONS=true alone, and BENCH_STATE or
+#     XDG_CACHE_HOME alone leave the lock on;
 #   - t_nested, with the real bench core and a temporary BENCH_STATE: the
 #     gate holds the lock once, as "gate", while the pin selftest it runs
 #     passes straight through (no wait, no second hold); a gate under an
@@ -28,10 +34,14 @@
 #     a gate that finds the lock held by another job waits, gives up with
 #     75 and runs nothing; the caller's LC_ALL, set or unset, reaches the
 #     heavy part, though bench.sh sets it to C.
-# Then one mutant per lock call (each removing it from a copy of its entry
-# point) and three more: the run under the lock taking the lock again (the
-# gate, pins.sh), and a BENCH_LOCK_ENTRY without a token taken as a hold;
-# each must fail the test that targets it.
+# Every pid the tests start is taken off the cleanup list once it has been
+# waited for, so the list is empty after them. Then one mutant per lock call
+# (each removing it from a copy of its entry point) and more: the run under
+# the lock taking the lock again (the gate, pins.sh), a BENCH_LOCK_ENTRY
+# without a token taken as a hold, an unset LC_ALL not restored (the gate,
+# coverage), and, for each of the three, no state directory taking the
+# lock, CI=true alone turning it off and a silent lock-off; each must fail
+# the test that targets it.
 #
 # Usage: tests/check-bench-entry.sh [<test>...]   (named tests only, no mutants)
 set -eu
@@ -48,7 +58,7 @@ SRC=$REAL
 for _v in $(env | sed -n 's/^\(BENCH_[A-Za-z0-9_]*\)=.*/\1/p; s/^\(PINS_[A-Za-z0-9_]*\)=.*/\1/p; s/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p'); do
 	unset "$_v"
 done
-unset CI CC LOG XDG_CACHE_HOME 2> /dev/null || true
+unset CI GITHUB_ACTIONS CC LOG XDG_CACHE_HOME 2> /dev/null || true
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/checkbenchentry.XXXXXX")
 tmp=$(cd "${tmp:?}" && pwd -P)
@@ -101,6 +111,13 @@ reap() {
 	kill -TERM "$1" 2> /dev/null || true
 	wait_gone 30 "$1" || kill -KILL "$1" 2> /dev/null || true
 }
+# forget <pid>: takes a pid this check has waited for off the cleanup list,
+# so that cleanup never signals a pid the system may since have given to
+# another process.
+forget() {
+	grep -vx -- "$1" "${tmp:?}/pids" > "${tmp:?}/pids.new" || true
+	mv "${tmp:?}/pids.new" "${tmp:?}/pids"
+}
 # run <seconds> <command...>: runs it with its output in ${T}/out and its
 # status in ST; past <seconds> it is reaped and ST is 124.
 run() {
@@ -112,11 +129,13 @@ run() {
 	if ! wait_gone "$_rs" "$_rp"; then
 		reap "$_rp"
 		wait "$_rp" 2> /dev/null || true
+		forget "$_rp"
 		ST=124
 		return 0
 	fi
 	ST=0
 	wait "$_rp" || ST=$?
+	forget "$_rp"
 }
 
 # ---- The stubs. --------------------------------------------------------
@@ -260,27 +279,67 @@ t_pins() {
 	[ "$fails" -eq 0 ]
 }
 
+# said <name> <reason>: the output holds one line saying the lock is off,
+# "<name>: the host lock is off: <reason>", and no other such line.
+said() {
+	[ "$(grep -c 'the host lock is off' "${T:?}/out")" -eq 1 ] &&
+		grep -qxF "$1: the host lock is off: $2" "${T:?}/out"
+}
+# off_case <tag> <stub|nobench> <reason> <env argument...>: with the env
+# arguments (options first) each entry point takes no lock, says so once on
+# stderr naming <reason>, and still runs its heavy part.
+off_case() {
+	_tag=$1 _kind=$2 _why=$3
+	shift 3
+	mktree "off-gate-$_tag" "$_kind"
+	run 60 env "$@" PATH="$GATEPATH" sh "${T:?}/scripts/test.sh"
+	[ "$ST" -eq 0 ] && [ "$(lines '^bench ')" -eq 0 ] && gate_ok none ||
+		bad "off ($_tag): the gate took the lock, or did not run its heavy part (status $ST); $(say)"
+	said test.sh "$_why" || bad "off ($_tag): the gate did not say once that the lock is off ($_why); $(say)"
+	mktree "off-coverage-$_tag" "$_kind"
+	run 60 env "$@" PATH="$COVPATH" sh "${T:?}/scripts/coverage.sh"
+	[ "$(lines '^bench ')" -eq 0 ] && [ "$(lines '^make .* COVERAGE=1 .* token=none ')" -eq 1 ] ||
+		bad "off ($_tag): coverage took the lock, or did not run its make (status $ST); $(say)"
+	said coverage.sh "$_why" || bad "off ($_tag): coverage did not say once that the lock is off ($_why); $(say)"
+	mktree "off-pins-$_tag" "$_kind"
+	run 60 env "$@" /bin/bash "${T:?}/scripts/pins.sh" record 'BAD!' world
+	[ "$(lines '^bench ')" -eq 0 ] && grep -q '^pins: renderer must match' "${T:?}/out" ||
+		bad "off ($_tag): pins.sh record took the lock, or did not run (status $ST); $(say)"
+	said pins "$_why" || bad "off ($_tag): pins.sh did not say once that the lock is off ($_why); $(say)"
+}
+# on_case <tag> <env argument...>: with the env arguments each entry point
+# still takes the lock (one call of bench.sh) and says nothing about it.
+on_case() {
+	_tag=$1
+	shift
+	mktree "on-gate-$_tag"
+	run 60 env "$@" PATH="$GATEPATH" sh "${T:?}/scripts/test.sh"
+	[ "$ST" -eq 0 ] && [ "$(lines '^bench lock run gate ')" -eq 1 ] && gate_ok stub &&
+		! grep -q 'the host lock is off' "${T:?}/out" || bad "on ($_tag): the gate did not take the lock; $(say)"
+	mktree "on-coverage-$_tag"
+	run 60 env "$@" PATH="$COVPATH" sh "${T:?}/scripts/coverage.sh"
+	[ "$(lines '^bench lock run coverage ')" -eq 1 ] && ! grep -q 'the host lock is off' "${T:?}/out" ||
+		bad "on ($_tag): coverage did not take the lock; $(say)"
+	mktree "on-pins-$_tag"
+	run 60 env "$@" /bin/bash "${T:?}/scripts/pins.sh" record 'BAD!' world
+	[ "$(lines '^bench lock run pins-record ')" -eq 1 ] && ! grep -q 'the host lock is off' "${T:?}/out" ||
+		bad "on ($_tag): pins.sh record did not take the lock; $(say)"
+}
+
 t_off() {
 	PINS_STORE=${tmp:?}/pins-store
 	export PINS_STORE
-	for _o in BENCH_LOCK=0 CI=true nobench; do
-		case $_o in
-		nobench) _env=X_UNUSED=1 _kind=nobench ;;
-		*) _env=$_o _kind=stub ;;
-		esac
-		mktree "off-gate-$_kind" "$_kind"
-		run 60 env PATH="$GATEPATH" "$_env" sh "${T:?}/scripts/test.sh"
-		[ "$ST" -eq 0 ] && [ "$(lines '^bench ')" -eq 0 ] && gate_ok none ||
-			bad "off ($_o): the gate took the lock, or did not run its heavy part (status $ST); $(say)"
-		mktree "off-coverage-$_kind" "$_kind"
-		run 60 env PATH="$COVPATH" "$_env" sh "${T:?}/scripts/coverage.sh"
-		[ "$(lines '^bench ')" -eq 0 ] && [ "$(lines '^make .* COVERAGE=1 .* token=none ')" -eq 1 ] ||
-			bad "off ($_o): coverage took the lock, or did not run its make (status $ST); $(say)"
-		mktree "off-pins-$_kind" "$_kind"
-		run 60 env "$_env" /bin/bash "${T:?}/scripts/pins.sh" record 'BAD!' world
-		[ "$(lines '^bench ')" -eq 0 ] && grep -q '^pins: renderer must match' "${T:?}/out" ||
-			bad "off ($_o): pins.sh record took the lock, or did not run (status $ST); $(say)"
-	done
+	off_case lock0 stub 'BENCH_LOCK=0' BENCH_LOCK=0
+	off_case ci stub 'CI (GITHUB_ACTIONS=true)' CI=true GITHUB_ACTIONS=true
+	off_case nobench nobench 'no bench core (scripts/bench/bench.sh)' X_UNUSED=1
+	off_case nostate stub 'no state directory (BENCH_STATE, XDG_CACHE_HOME and HOME unset)' -u HOME -u BENCH_STATE -u XDG_CACHE_HOME
+	# CI is GitHub Actions, which sets both: the generic CI=true alone, or
+	# GITHUB_ACTIONS=true alone, leaves the lock on; so does a state
+	# directory from BENCH_STATE or XDG_CACHE_HOME alone.
+	on_case ci-only CI=true
+	on_case gha-only GITHUB_ACTIONS=true
+	on_case state-only -u HOME -u XDG_CACHE_HOME BENCH_STATE=${tmp:?}/no-such-state
+	on_case xdg-only -u HOME -u BENCH_STATE XDG_CACHE_HOME=${tmp:?}/no-such-cache
 	unset PINS_STORE
 	[ "$fails" -eq 0 ]
 }
@@ -341,12 +400,32 @@ EOF
 	[ ! -s "${LOG:?}" ] || bad "nested: a gate without the lock ran its checks or makes; $(say)"
 	reap "$_hp"
 	wait "$_hp" 2> /dev/null || true
+	forget "$_hp"
 	unset BENCH_STATE BENCH_LOCK_POLL BENCH_LOCK_WAIT
 	[ "$fails" -eq 0 ]
 }
 
+# t_cov_lc, with the real bench core: coverage's instrumented make runs
+# under the lock with the caller's LC_ALL, unset or set, though bench.sh
+# sets it to C.
+t_cov_lc() {
+	mktree cov-lc real
+	BENCH_STATE=${T:?}/state
+	export BENCH_STATE
+	run 120 env -u LC_ALL PATH="$COVPATH" sh "${T:?}/scripts/coverage.sh"
+	[ "$(lines '^make .* COVERAGE=1 .* token=t-[^ ]* entry=unset lc=unset$')" -eq 1 ] ||
+		bad "cov-lc: the instrumented make did not run under the lock with the caller's LC_ALL (unset); $(say)"
+	: > "${LOG:?}"
+	run 120 env LC_ALL=POSIX PATH="$COVPATH" sh "${T:?}/scripts/coverage.sh"
+	[ "$(lines '^make .* COVERAGE=1 .* token=t-[^ ]* entry=unset lc=POSIX$')" -eq 1 ] ||
+		bad "cov-lc: the instrumented make did not run under the lock with the caller's LC_ALL (POSIX); $(say)"
+	[ "$(sh "${T:?}/scripts/bench/bench.sh" lock status)" = lock=free ] || bad "cov-lc: the lock is not free afterwards"
+	unset BENCH_STATE
+	[ "$fails" -eq 0 ]
+}
+
 # ---- The real entry points. ---------------------------------------------
-all="t_gate t_coverage t_pins t_off t_nested"
+all="t_gate t_coverage t_cov_lc t_pins t_off t_nested"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
@@ -358,6 +437,11 @@ for _t in $all; do
 		failed="$failed $_t"
 	fi
 done
+# Every test waits for what it started: the cleanup list is empty again.
+if [ -s "${tmp:?}/pids" ]; then
+	echo "$me: the cleanup list still holds pids the tests waited for: $(tr '\n' ' ' < "${tmp:?}/pids")"
+	failed="$failed cleanup-list"
+fi
 if [ -n "$failed" ]; then
 	echo "$me: failed:$failed"
 	exit 1
@@ -402,6 +486,18 @@ done
 mutant gate-relocks test.sh '[ "$lock_entry" != gate ]' 'true' t_gate || mfail=1
 mutant gate-entry-no-token test.sh ' || [ -z "${BENCH_LOCK_TOKEN:-}" ]' '' t_gate || mfail=1
 mutant pins-relocks pins.sh 'if [ "$entry" = "$label" ] && [ -n "${BENCH_LOCK_TOKEN:-}" ]; then return 0; fi' ':' t_pins || mfail=1
+# The caller's LC_ALL, when it is unset, comes back unset under the lock.
+mutant gate-lc-lost test.sh 'else set -- -u LC_ALL "$@"; fi' 'fi' t_nested || mfail=1
+mutant coverage-lc-lost coverage.sh 'else set -- -u LC_ALL "$@"; fi' 'fi' t_cov_lc || mfail=1
+# With no state directory the lock is off; CI is GitHub Actions only; a
+# lock that is off says so.
+for _f in test.sh coverage.sh pins.sh; do
+	mutant "$_f-nostate-locks" "$_f" 'elif [ -z "${BENCH_STATE:-}${XDG_CACHE_HOME:-}${HOME:-}" ]; then' 'elif false; then' t_off || mfail=1
+	mutant "$_f-ci-generic" "$_f" 'elif [ "${CI:-}" = true ] && [ "${GITHUB_ACTIONS:-}" = true ]; then' 'elif [ "${CI:-}" = true ]; then' t_off || mfail=1
+done
+mutant test.sh-off-silent test.sh 'echo "test.sh: the host lock is off: $lock_off" >&2' ':' t_off || mfail=1
+mutant coverage.sh-off-silent coverage.sh 'echo "coverage.sh: the host lock is off: $lock_off" >&2' ':' t_off || mfail=1
+mutant pins.sh-off-silent pins.sh 'echo "pins: the host lock is off: $off" >&2' ':' t_off || mfail=1
 [ "$mfail" -eq 0 ] || exit 1
 
 _ok=1

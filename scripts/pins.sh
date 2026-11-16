@@ -81,7 +81,9 @@
 #                 footprint, where, make-demo, selftest and evidence run
 #                 under "scripts/bench/bench.sh lock run pins-<command>"
 #                 (BENCH_STATE and the other BENCH_LOCK_* settings are
-#                 bench.sh's; a dry run, and CI=true, take no lock)
+#                 bench.sh's). A dry run takes no lock, nor does GitHub
+#                 Actions (CI=true with GITHUB_ACTIONS=true); when the
+#                 lock is off, one line on stderr says why
 #
 # Every path and value handed to the engine (store, PINS_BASEDIR, PINS_DEMO,
 # scenario values) may hold only A-Z a-z 0-9 _ . / - : the engine re-joins
@@ -3225,22 +3227,34 @@ cmd_selftest() {
 }
 
 # lock_self <label> <command> [args...]: the host lock (docs/plans/bench-harness.md,
-# "The host lock"). Unless it is off (BENCH_LOCK=0, CI=true: a runner has no
-# other lanes, or no scripts/bench/bench.sh in this tree), runs this script
-# again with <command> [args...] as one hold of "scripts/bench/bench.sh lock
-# run <label>", so no timing run on this host shares the machine with the
-# engine runs and builds below. Under a caller that holds the lock already
-# (BENCH_LOCK_TOKEN: the gate running the selftest) bench.sh passes straight
-# through. The run under the lock comes back here with BENCH_LOCK_ENTRY=<label>
-# (cleared at once) and goes on. A dry run (PINS_DRYRUN) builds and runs
-# nothing and takes no lock; neither do check-content, list and the evidence
-# encoder's commands.
+# "The host lock"). Unless it is off, runs this script again with <command>
+# [args...] as one hold of "scripts/bench/bench.sh lock run <label>", so no
+# timing run on this host shares the machine with the engine runs and builds
+# below. It is off, with one line on stderr that names why, with
+# BENCH_LOCK=0, on GitHub Actions (CI=true and GITHUB_ACTIONS=true: a runner
+# has no other lanes), with no scripts/bench/bench.sh in this tree, and with
+# no directory for its state (BENCH_STATE, XDG_CACHE_HOME and HOME all
+# unset). Under a caller that holds the lock already (BENCH_LOCK_TOKEN: the
+# gate running the selftest) bench.sh passes straight through. The run under
+# the lock comes back here with BENCH_LOCK_ENTRY=<label> (cleared at once)
+# and goes on. A dry run (PINS_DRYRUN) builds and runs nothing and takes no
+# lock; neither do check-content, list and the evidence encoder's commands.
 lock_self() {
-    local label=$1 entry=${BENCH_LOCK_ENTRY:-}; shift
+    local label=$1 entry=${BENCH_LOCK_ENTRY:-} off; shift
     unset BENCH_LOCK_ENTRY
     if [ "$entry" = "$label" ] && [ -n "${BENCH_LOCK_TOKEN:-}" ]; then return 0; fi
-    [ "${BENCH_LOCK:-}" != 0 ] && [ "${CI:-}" != true ] && [ -f "$root/scripts/bench/bench.sh" ] || return 0
-    exec sh "$root/scripts/bench/bench.sh" lock run "$label" -- env BENCH_LOCK_ENTRY="$label" /bin/bash "$root/scripts/pins.sh" "$@"
+    if [ "${BENCH_LOCK:-}" = 0 ]; then
+        off="BENCH_LOCK=0"
+    elif [ "${CI:-}" = true ] && [ "${GITHUB_ACTIONS:-}" = true ]; then
+        off="CI (GITHUB_ACTIONS=true)"
+    elif [ ! -f "$root/scripts/bench/bench.sh" ]; then
+        off="no bench core (scripts/bench/bench.sh)"
+    elif [ -z "${BENCH_STATE:-}${XDG_CACHE_HOME:-}${HOME:-}" ]; then
+        off="no state directory (BENCH_STATE, XDG_CACHE_HOME and HOME unset)"
+    else
+        exec sh "$root/scripts/bench/bench.sh" lock run "$label" -- env BENCH_LOCK_ENTRY="$label" /bin/bash "$root/scripts/pins.sh" "$@"
+    fi
+    echo "pins: the host lock is off: $off" >&2
 }
 
 case "${1:-}" in
