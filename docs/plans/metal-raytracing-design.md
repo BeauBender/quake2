@@ -1021,6 +1021,29 @@ Until then the subsection above describes A as RT11 builds it, and RT13
 builds E, so that both can be measured; neither
 is the decision, and nothing is recorded in `docs/decisions/`.
 
+### The water reflections' measured cost (RT6: TASK58, TASK158)
+
+The reflections have no time budget of their own; their share of section 8's total by its
+proportions is the 0.88 ms of one closest-hit ray a pixel at 1080p (of 5.14 ms, so 0.68 to 1.20 ms
+of the halved 4 to 7 ms), trace only. Measured on the M6 over `water.dm2` (about 41 % of the
+pixels water), GPU time of the pass ([TASK58](../runbook/TASK58.md),
+[TASK158](../runbook/TASK158.md)):
+
+| Output | TASK58, held / not held | TASK158, held / not held |
+|---|---|---|
+| 1920 x 1080 | 3.40 / 0.98 ms | 4.61 / 1.21 ms |
+| 5120 x 2880 | 9.49 / 6.81 ms | 12.14 / 18.17 ms |
+| 5120 x 2880, `r_metalfx 2` (the pass at 1080p) | 3.40 / 1.21 ms | 4.07 / 3.62 ms |
+
+TASK158 shades a hit the picture does not show in world space (the face's texture and lightmap,
+the dynamic lights the lightmaps left out, the sky box's texel), so the water pixels without a
+reflection fall from 2.35 % (over the pool) and 8.48 % (under it) to 0, and it traces only the water
+pixels a raster of the map's water marks. Its fixed part is not cheap: a frame with no water costs
+2.04 ms at 1080p held against 1.33 ms for TASK58's every-pixel pass. Against the share: not held, at
+the GPU's full clock, TASK58's 0.98 ms is over the 0.88 ms bound but inside 0.68 to 1.20 ms, and
+TASK158's 1.21 ms is over both; held, both are four to five times the bound. The next step is the fixed part's
+split and a cheaper mark (in the G-buffer raster itself), not more rays.
+
 ## 3. What the rasterizer must expose
 
 `ref_metal` (TASK28) renders the world and entities into a G-buffer before
