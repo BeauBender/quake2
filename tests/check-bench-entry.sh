@@ -310,11 +310,16 @@ EOF
 	grep -q 'waiting for the lock' "${LOG:?}" "${T:?}/out" && bad "nested: a call under the gate waited for the lock; $(say)"
 	[ "$(lines '^make .* token=t-')" -eq 2 ] || bad "nested: the makes did not run under the lock; $(say)"
 	[ "$(sh "$_b" lock status)" = lock=free ] || bad "nested: the lock is not free after the gate"
-	# Under an outer holder, LC_ALL=POSIX: the gate passes straight through.
+	# LC_ALL=POSIX: the run under the lock has it back.
 	: > "${LOG:?}"
-	run 120 env LC_ALL=POSIX PATH="$GATEPATH" sh "$_b" lock run host -- sh "${T:?}/scripts/test.sh"
+	run 120 env LC_ALL=POSIX PATH="$GATEPATH" sh "${T:?}/scripts/test.sh"
+	[ "$ST" -eq 0 ] && grep -qx 'check token=set entry=unset lc=POSIX' "${LOG:?}" ||
+		bad "nested: the check did not get the caller's LC_ALL (POSIX; status $ST); $(say)"
+	# Under an outer holder (a host's own wrapper): the gate passes straight
+	# through, and the selftest with it.
+	: > "${LOG:?}"
+	run 120 env PATH="$GATEPATH" sh "$_b" lock run host -- sh "${T:?}/scripts/test.sh"
 	[ "$ST" -eq 0 ] || bad "nested: the gate under an outer holder exited $ST; $(say)"
-	grep -qx 'check token=set entry=unset lc=POSIX' "${LOG:?}" || bad "nested: the check did not get the caller's LC_ALL (POSIX); $(say)"
 	grep -q '^lock=held label=host .*alive=yes' "${LOG:?}" || bad "nested: under an outer holder the gate took a hold of its own; $(say)"
 	grep -qx 'pins status=1' "${LOG:?}" || bad "nested: the pin selftest under an outer holder failed; $(say)"
 	# The lock held by another job: the gate waits, gives up with 75 and
