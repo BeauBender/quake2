@@ -73,7 +73,11 @@
 # Build time, measured here (6 cores, -j3): the default about 8 s; --full
 # about 25 s more, most of it the 231 vendored SDL3 sources, which the
 # default does not compile. So the gate runs the default, and --full is
-# run by hand (a CI step for it is left to a later card).
+# run by hand (a CI step for it is left to a later card). TASK152, with
+# other work sharing the host: the simulator's objects 7 to 16 s over
+# three runs and the device's 13 s; under --full 59 s and 54 s (one run);
+# the whole check 377 to 481 s over three runs, of which
+# scripts/ios-device.sh --selftest is about 25 s.
 #
 # Without the iOS simulator SDK (another OS, or Xcode without its iOS
 # platform) the check prints one "skipped" line and exits 0. With the
@@ -687,6 +691,7 @@ out=$(assert_floor "$root/obj-metal/ref_metal/src/client/refresh/metal/rm_main.o
 # (o): the same objects for a device (and under --full the bundle, (q))
 devroot=$tree/build/ios-iphoneos/release
 ndevobj=0
+delapsed=-
 if [ -n "$dsdk" ]; then
 	# shellcheck disable=SC2086 # extra is a word list
 	if ! mk -n -B VERBOSE=1 ios_objects IOS_SDK=iphoneos METAL_SHADERS=no $extra > "${tmp:?}/devobjects.n" 2>&1 \
@@ -696,12 +701,14 @@ if [ -n "$dsdk" ]; then
 		exit 1
 	fi
 	grep -E -o ' -o [^ ]+\.o( |$)' "${tmp:?}/devobjects.n" | awk '{ print $2 }' | sort -u > "${tmp:?}/devexpected"
+	dstart=$(date +%s)
 	# shellcheck disable=SC2086 # extra is a word list
 	if ! mk -j"$jobs" QUIET=1 $goal IOS_SDK=iphoneos METAL_SHADERS="$ms" $extra > "${tmp:?}/devbuild.log" 2>&1; then
 		tail -n 30 "${tmp:?}/devbuild.log"
 		echo "check-ios: the device build failed (make $goal IOS_SDK=iphoneos METAL_SHADERS=$ms $extra)"
 		exit 1
 	fi
+	delapsed=$(( $(date +%s) - dstart ))
 	n=$(grep -c . "${tmp:?}/devexpected") || n=0
 	[ "$n" -ge 100 ] || bad "make -n ios_objects IOS_SDK=iphoneos names $n objects, not the client, game and ref_metal"
 	while read -r o; do
@@ -762,7 +769,7 @@ if [ "$full" = 1 ]; then
 	fi
 fi
 
-echo "check-ios: build $elapsed s ($goal)"
+echo "check-ios: build $elapsed s, device $delapsed s ($goal)"
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
