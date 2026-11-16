@@ -10,8 +10,10 @@
 # (IOS_SIM_TYPE, default "iPhone 17", on IOS_SIM_RUNTIME, default the newest
 # available iOS runtime), boots it, installs the app and launches it with
 # --console-pty and Metal's validation layer (SIMCTL_CHILD_MTL_DEBUG_LAYER=1)
-# on "+set vid_renderer metal", about 30 "+wait", "+screenshot tga" and
-# "+quit". It then copies the engine's own log (qconsole.log, logfile 2)
+# on "+set vid_renderer metal", about 30 "+wait" and "+screenshot tga",
+# and leaves it at the console: once the engine's log shows the frame
+# written it takes the simulator's screenshot of the app (DIR/app.png)
+# and terminates the app (TASK147). It then copies the engine's own log (qconsole.log, logfile 2)
 # and frame from the app's data container to DIR/engine.log and
 # DIR/q2_0000.tga and decides from those, from the simulator's own
 # screenshot (its screen size) and from the device lists:
@@ -20,6 +22,12 @@
 #     not check that floor), a Drawable size of the screen in pixels
 #     (landscape) and "Wrote q2_0000.tga" are in engine.log;
 #   - the frame is that size and not one colour;
+#   - the screen's safe area (TASK147): engine.log's "safe area" line
+#     gives the window in pixels, which is the screen's size, and the
+#     insets; "Drawable size:" is the window less the insets, the frame
+#     is that size, and in DIR/app.png every pixel outside the safe
+#     rectangle is black while the rectangle holds the console (not
+#     black);
 #   - Metal's validation layer was on (its line in the app's own output,
 #     DIR/console.log), no validation message, and 0 failed command
 #     buffers in ref_metal's metal_stats line;
@@ -40,7 +48,10 @@
 # this run's device left behind fails, the device of a create that timed
 # out is deleted, a create whose UDID is not listed after it, or was
 # listed before it, fails (and leaves that device alone), ref_metal's
-# floor refusal fails, and a limit that is not digits is refused.
+# floor refusal fails, a drawable that is not the window less the insets
+# fails, a screenshot with a lit pixel outside the safe rectangle fails,
+# one with nothing inside it fails, and a limit that is not digits is
+# refused.
 # tests/check-ios.sh runs it.
 #
 # Limits, in seconds (digits only, or the script refuses):
@@ -172,20 +183,49 @@ create)
 	echo "$u" ;;
 bootstatus|install|terminate|shutdown) ;;
 io)
-	# io <udid> screenshot <png>: the head of a 16x8 PNG
-	printf '\211PNG\r\n\032\n\000\000\000\015IHDR\000\000\000\020\000\000\000\010' > "$4" ;;
+		case $4 in
+		*/app.png)
+			# the app's screenshot: 16x8, the safe rectangle (insets 2 left, 2 right, 1 bottom) lit, the rest black
+			# unless the scenario says otherwise
+			python3 -I -c 'import struct, sys, zlib
+sc = sys.argv[2]
+sw, sh = 16, 8
+def lit(x, y):
+    inside = 2 <= x < 14 and y < 7
+    return (inside and sc != "blackapp") or (sc == "litoutside" and x == 0 and y == 0)
+# "portrait": the framebuffer stays portrait with the app turned in it (clockwise)
+w, h = (sh, sw) if sc == "portrait" else (sw, sh)
+rows = []
+for y in range(h):
+    row = bytearray()
+    for x in range(w):
+        on = lit(y, sh - 1 - x) if sc == "portrait" else lit(x, y)
+        row += bytes((200, 200, 200, 255)) if on else bytes((0, 0, 0, 255))
+    rows.append(b"\0" + bytes(row))
+def chunk(t, d):
+    c = struct.pack(">I", len(d)) + t + d
+    return c + struct.pack(">I", zlib.crc32(t + d))
+open(sys.argv[1], "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b"")) ' "$4" "$sc" ;;
+		*)
+			# io <udid> screenshot <png>: the head of a 16x8 PNG
+			printf '\211PNG\r\n\032\n\000\000\000\015IHDR\000\000\000\020\000\000\000\010' > "$4" ;;
+		esac ;;
 launch)
 	# launch --console-pty <udid> <bundle id> <args>...
 	c=$st/container/Library/YamagiQ2/baseq2
 	mkdir -p "$c/scrnshot"
 	skip="ref_metal: the device floor (apple5) is not checked in the simulator"
+		drawable=12x7
+		[ "$sc" = wrongdrawable ] && drawable=16x8
+		safeline="ref_metal: safe area: window 16x8 pixels, insets left 2 top 0 right 2 bottom 1"
+		[ "$sc" = nosafeline ] && safeline="ref_metal: nothing"
 	[ "$sc" = floorrefused ] && skip="ref_metal: the Metal device supports no Apple GPU family from apple5 on; ref_metal needs one"
 	printf '%s\n' "Using the linked-in renderer: ref_metal (linked in)" "Metal device: Fake GPU" \
 		"Metal supportsFamily (apple5 to apple9): none" "$skip" \
-		"Drawable size: 16x8" "Wrote q2_0000.tga" \
+		"$safeline" "Drawable size: $drawable" "Wrote q2_0000.tga" \
 		"ref_metal: metal_stats: 30 frames, 0 without a drawable, 0 skipped, 0 failed command buffers, " > "$c/qconsole.log"
 	python3 -I -c 'import sys
-open(sys.argv[1], "wb").write(bytes([0, 0, 2] + [0] * 9 + [16, 0, 8, 0, 24, 0]) + bytes(range(256)) + bytes(range(128)))' "$c/scrnshot/q2_0000.tga"
+open(sys.argv[1], "wb").write(bytes([0, 0, 2] + [0] * 9 + [12, 0, 7, 0, 24, 0]) + bytes(range(252)))' "$c/scrnshot/q2_0000.tga"
 	[ "$sc" = launchterm ] && trap "" TERM
 	sleep 1 &
 	p=$!
@@ -233,7 +273,7 @@ EOF
 			"22222222-2222-2222-2222-222222222222 Owner iPad" > "${d:?}/state/devices"
 		t0=$(date +%s)
 		bounded 60 "${d:?}/run.log" env PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
-			IOS_SIM_LIST_SECONDS=2 IOS_SIM_CREATE_SECONDS=2 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10 "$@" \
+			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=2 IOS_SIM_CREATE_SECONDS=2 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10 "$@" \
 			bash "$self" smoke --out "$d/out" || rc=$?
 		t0=$(( $(date +%s) - t0 ))
 		if [ "$rc" = 124 ]; then
@@ -277,12 +317,18 @@ EOF
 	st_case created-device-not-listed ghost fail "is not in the device list taken after simctl create" 30
 	st_case created-device-listed-before reuse fail "was already listed before simctl create" 30
 	st_case lost-device-listed-before samename fail "not deleting 55555555-5555-5555-5555-555555555555" 30
-	st_case launch-ignores-term launchterm ok "the launch client did not exit after the app" 25
+	st_case launch-ignores-term launchterm ok "the launch client did not exit after the app" 40
 	st_case family-refused floorrefused fail "ref_metal refused it (its floor)" 30
+	st_case portrait-framebuffer portrait ok "smoke ok" 30
+	st_case drawable-not-window-less-insets wrongdrawable fail "is not the window less the insets" 30
+	st_case no-safe-area-line nosafeline fail "engine.log has no safe area line" 30
+	st_case lit-pixel-outside-safe-area litoutside fail "outside the safe rectangle" 30
+	st_case nothing-inside-safe-area blackapp fail "nothing inside the safe rectangle" 30
 	st_case smoke-limit-not-digits extra fail "IOS_SIM_SMOKE_SECONDS must be" 5 IOS_SIM_SMOKE_SECONDS=3m
 	st_case boot-limit-not-digits extra fail "IOS_SIM_BOOT_SECONDS must be" 5 IOS_SIM_BOOT_SECONDS=1e3
 	st_case list-limit-not-digits extra fail "IOS_SIM_LIST_SECONDS must be" 5 IOS_SIM_LIST_SECONDS=-1
 	st_case create-limit-not-digits extra fail "IOS_SIM_CREATE_SECONDS must be" 5 "IOS_SIM_CREATE_SECONDS= 9"
+	st_case settle-limit-not-digits extra fail "IOS_SIM_SETTLE_SECONDS must be" 5 IOS_SIM_SETTLE_SECONDS=x
 	if [ "$nfail" -ne 0 ]; then
 		echo "ios-sim: selftest: $nfail of $ncase cases failed"
 		exit 1
@@ -311,6 +357,7 @@ digits IOS_SIM_BOOT_SECONDS "$boot_s"
 digits IOS_SIM_SMOKE_SECONDS "$smoke_s"
 digits IOS_SIM_LIST_SECONDS "$list_s"
 digits IOS_SIM_CREATE_SECONDS "$create_s"
+digits IOS_SIM_SETTLE_SECONDS "${IOS_SIM_SETTLE_SECONDS-3}"
 
 for tool in xcrun python3 make plutil; do
 	command -v "$tool" >/dev/null 2>&1 || die "$tool not found: a missing tool is a failure"
@@ -461,31 +508,45 @@ bounded 180 "${tmp:?}/install.out" xcrun simctl install "$udid" "$app" || { cat 
 
 # The write directory: the default ~/.local/share/YamagiQ2 is not made
 # in a fresh app container (Sys_Mkdir makes one level), Library/ is there.
-args=(-cfgdir Library/YamagiQ2 +set vid_renderer metal +set logfile 2 +set metal_stats 1)
+# r_mode 4 and vid_fullscreen 1 are what the real data's default.cfg sets: the screen is its own size whatever they say (TASK147)
+args=(-cfgdir Library/YamagiQ2 +set vid_renderer metal +set logfile 2 +set metal_stats 1 +set r_mode 4 +set vid_fullscreen 1)
 for _ in $(seq 30); do args+=(+wait); done
-args+=(+screenshot tga +quit)
+args+=(+screenshot tga)
 SIMCTL_CHILD_MTL_DEBUG_LAYER=1 xcrun simctl launch --console-pty "$udid" "$bid" "${args[@]}" > "$out/console.log" 2>&1 &
 lpid=$!
-apid=
+# TASK147: the app stays at the console (the launch client prints the app's pid only when it ends, so
+# the app is watched through the launch client). Once the engine's log shows the frame written, the
+# simulator's own screenshot of it, then the app is terminated (this device only)
 t=0
-while [ "$t" -lt 60 ]; do
-	apid=$(sed -n "s/^$bid: \([0-9][0-9]*\).*/\1/p" "$out/console.log" | head -n 1)
-	[ -n "$apid" ] && break
+framed=
+while [ "$t" -lt "$smoke_s" ]; do
+	if xcrun simctl get_app_container "$udid" "$bid" data > "${tmp:?}/container.out" 2>/dev/null; then
+		container=$(tail -n 1 "${tmp:?}/container.out")
+		if [ -d "$container" ] && find "$container" -name qconsole.log -type f -exec grep -l -x 'Wrote q2_0000.tga' {} + 2>/dev/null | grep . >/dev/null; then
+			framed=1
+			break
+		fi
+	fi
 	kill -0 "$lpid" 2>/dev/null || break
 	sleep 1
 	t=$((t + 1))
 done
-[ -n "$apid" ] || { tail -n 5 "$out/console.log" >&2; die "the app did not start (log: $out/console.log)"; }
-echo "ios-sim: app $bid pid $apid"
+if [ -n "$framed" ]; then
+	sleep "${IOS_SIM_SETTLE_SECONDS:-3}"   # the console is drawn and presented
+	bounded 60 "${tmp:?}/appshot.out" xcrun simctl io "$udid" screenshot "$out/app.png" || die "simctl io screenshot of the app failed"
+elif kill -0 "$lpid" 2>/dev/null; then
+	bounded 30 "${tmp:?}/term.out" xcrun simctl terminate "$udid" "$bid" || true
+	die "the engine did not write its frame within $smoke_s s; terminated the app"
+fi
+bounded 30 "${tmp:?}/term.out" xcrun simctl terminate "$udid" "$bid" || true
 t=0
-while kill -0 "$apid" 2>/dev/null; do
-	if [ "$t" -ge "$smoke_s" ]; then
-		bounded 30 "${tmp:?}/term.out" xcrun simctl terminate "$udid" "$bid" || true
-		die "the app did not quit within $smoke_s s; terminated it"
-	fi
+while kill -0 "$lpid" 2>/dev/null && [ "$t" -lt 10 ]; do
 	sleep 1
 	t=$((t + 1))
 done
+apid=$(sed -n "s/^$bid: \([0-9][0-9]*\).*/\1/p" "$out/console.log" | head -n 1)
+[ -n "$apid" ] || echo "ios-sim: no pid line from the launch client (log: $out/console.log)" >&2
+echo "ios-sim: app $bid pid ${apid:-?}"
 w=0
 while kill -0 "$lpid" 2>/dev/null && [ "$w" -lt 10 ]; do sleep 1; w=$((w + 1)); done
 if kill -0 "$lpid" 2>/dev/null; then
@@ -547,7 +608,100 @@ w, h = struct.unpack(">II", b[16:24])
 print("%dx%d" % (max(w, h), min(w, h)))
 EOF
 ) || bad "the simulator's screenshot is not a PNG"
-[ -n "$size" ] && [ "$size" != "${screen:-}" ] && bad "Drawable size $size is not the screen's ${screen:-?} pixels (landscape)"
+safe=$(sed -n 's/^ref_metal: safe area: window \([0-9]*\)x\([0-9]*\) pixels, insets left \([0-9]*\) top \([0-9]*\) right \([0-9]*\) bottom \([0-9]*\)$/\1 \2 \3 \4 \5 \6/p' "$out/engine.log" | tail -n 1)
+if [ -z "$safe" ]; then
+	bad "engine.log has no safe area line"
+else
+	read -r sw sh sl st sr sb <<< "$safe"
+	[ "${sw}x${sh}" = "${screen:-}" ] || bad "the window ${sw}x${sh} is not the screen's ${screen:-?} pixels (landscape)"
+	[ -n "$size" ] && [ "$size" != "$((sw - sl - sr))x$((sh - st - sb))" ] \
+		&& bad "Drawable size $size is not the window less the insets, $((sw - sl - sr))x$((sh - st - sb))"
+	# the screenshot of the app: black outside the safe rectangle, the console inside it
+	if [ -f "$out/app.png" ]; then
+		shot=$(python3 -I - "$out/app.png" "$sw" "$sh" "$sl" "$st" "$sr" "$sb" <<'EOF'
+import struct, sys, zlib
+b = open(sys.argv[1], "rb").read()
+if b[:8] != b"\x89PNG\r\n\x1a\n":
+    sys.exit("not a PNG")
+w = h = ct = None
+idat = b""
+i = 8
+while i + 8 <= len(b):
+    n, t = struct.unpack(">I4s", b[i:i + 8])
+    d = b[i + 8:i + 8 + n]
+    if t == b"IHDR":
+        w, h, depth, ct, _, _, il = struct.unpack(">IIBBBBB", d)
+        if depth != 8 or ct not in (2, 6) or il:
+            sys.exit("not an 8-bit non-interlaced RGB or RGBA PNG")
+    elif t == b"IDAT":
+        idat += d
+    i += 12 + n
+if w is None:
+    sys.exit("no IHDR")
+sw, sh, l, t, r, bt = [int(x) for x in sys.argv[2:8]]
+# the simulator's screenshot is of the device's framebuffer: an iPad's stays portrait, with the
+# landscape app turned in it, either way up; the window's coordinates are mapped to it, each turn
+# tried, and the one that fits is reported
+if (w, h) == (sw, sh):
+    turns = [("none", lambda x, y: (x, y))]
+elif (w, h) == (sh, sw):
+    turns = [("cw", lambda x, y: (sh - 1 - y, x)), ("ccw", lambda x, y: (y, sw - 1 - x))]
+else:
+    sys.exit("the screenshot is %dx%d, not the window's %dx%d" % (w, h, sw, sh))
+bpp = 3 if ct == 2 else 4
+raw = zlib.decompress(idat)
+stride = w * bpp
+if len(raw) != h * (stride + 1):
+    sys.exit("short PNG data")
+prev = bytearray(stride)
+rows = []
+for y in range(h):
+    f = raw[y * (stride + 1)]
+    row = bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+    for x in range(stride):
+        a = row[x - bpp] if x >= bpp else 0
+        u = prev[x]
+        c = prev[x - bpp] if x >= bpp else 0
+        if f == 1:
+            row[x] = (row[x] + a) & 255
+        elif f == 2:
+            row[x] = (row[x] + u) & 255
+        elif f == 3:
+            row[x] = (row[x] + (a + u) // 2) & 255
+        elif f == 4:
+            p = a + u - c
+            pa, pb, pc = abs(p - a), abs(p - u), abs(p - c)
+            pr = a if pa <= pb and pa <= pc else (u if pb <= pc else c)
+            row[x] = (row[x] + pr) & 255
+        elif f != 0:
+            sys.exit("bad PNG filter")
+    prev = row
+    rows.append(row)
+best = None
+for name, turn in turns:
+    out_lit = in_lit = in_n = 0
+    for y in range(sh):
+        for x in range(sw):
+            px, py = turn(x, y)
+            o = py * 0 + px * bpp
+            lit = rows[py][o] or rows[py][o + 1] or rows[py][o + 2]
+            if l <= x < sw - r and t <= y < sh - bt:
+                in_n += 1
+                in_lit += 1 if lit else 0
+            elif lit:
+                out_lit += 1
+    if best is None or (out_lit == 0 and in_lit > 0 and not (best[1] == 0 and best[2] > 0)):
+        best = (out_lit, in_lit, in_n, name)
+print(*best)
+EOF
+) || bad "app.png cannot be read: $shot"
+		read -r out_lit in_lit in_n turn <<< "${shot:-0 0 0 none}"
+		[ "${out_lit:-1}" -eq 0 ] || bad "app.png has $out_lit lit pixels outside the safe rectangle"
+		[ "${in_lit:-0}" -gt 0 ] || bad "app.png has nothing inside the safe rectangle (the console is not drawn there)"
+	else
+		bad "no app.png: the app's screenshot was not taken"
+	fi
+fi
 if [ -f "$out/q2_0000.tga" ]; then
 	frame=$(python3 -I - "$out/q2_0000.tga" <<'EOF'
 import struct, sys
@@ -582,7 +736,7 @@ case $stats in
 *) bad "failed command buffers: $stats" ;;
 esac
 
-printf '%s\n' "ios-sim: ${dev:-no Metal device}" "ios-sim: ${fam:-no family line}" "ios-sim: drawable ${size:-?}, screen ${screen:-?}, frame ${frame:-?}" \
+printf '%s\n' "ios-sim: ${dev:-no Metal device}" "ios-sim: ${fam:-no family line}" "ios-sim: drawable ${size:-?}, screen ${screen:-?}, frame ${frame:-?}, safe area ${safe:-?}, app.png (turn ${turn:-?}) outside ${out_lit:-?} inside ${in_lit:-?}/${in_n:-?}" \
 	"ios-sim: devices before $(grep -c . "${tmp:?}/udids.before"), after create $(grep -c . "${tmp:?}/udids.created"), after $(grep -c . "${tmp:?}/udids.after")"
 [ "$fail" -eq 0 ] || exit 1
 echo "ios-sim: smoke ok (artifacts in $out)"

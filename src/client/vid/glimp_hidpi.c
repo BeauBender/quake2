@@ -111,3 +111,25 @@ GLimp_ScreenChanged(const int *made, const int *now)
 
 	return false;
 }
+
+/*
+ * The screen's own size, whatever the configuration says (TASK147). The
+ * video driver of an iPhone or iPad (uikit) has one screen the window
+ * always fills, so the mode list and the windowed or fullscreen choice do
+ * not apply: a default.cfg that sets r_mode 4 and vid_fullscreen 1 still
+ * gives the whole screen. For that driver *fullscreen becomes 2 (a
+ * fullscreen window) and *r_mode -2 (the native size), and true is
+ * returned; any other driver, or none, is left alone and gives false.
+ */
+qboolean
+GLimp_OwnScreenOnly(const char *driver, int *fullscreen, float *r_mode)
+{
+	if (!driver || !fullscreen || !r_mode || (strcmp(driver, "uikit") != 0))
+	{
+		return false;
+	}
+
+	*fullscreen = 2;
+	*r_mode = -2;
+	return true;
+}

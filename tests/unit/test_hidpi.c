@@ -210,3 +210,54 @@ TEST(hidpi_screen_unmeasured_is_a_change)
 	T_CHECK(GLimp_ScreenChanged(empty_h, empty_h));
 	T_CHECK(GLimp_ScreenChanged(zero, zero));
 }
+
+/*
+ * TASK147: with the real game data default.cfg sets r_mode 4 and
+ * vid_fullscreen 1. On the uikit driver the window is still the whole
+ * screen at its own size (fullscreen 2, r_mode -2, so the client takes
+ * the drawable's pixels); no other driver is touched.
+ */
+TEST(hidpi_ios_is_the_screen_whatever_default_cfg_says)
+{
+	int fs = 1;
+	float mode = 4;
+
+	T_CHECK(GLimp_OwnScreenOnly("uikit", &fs, &mode));
+	T_EQ_INT(fs, 2);
+	T_EQ_FLT(mode, -2);
+	T_CHECK(GLimp_DrawableInPixels(GLimp_HighDPIWanted(1, "uikit"), fs, mode));
+
+	/* any starting values give the same */
+	fs = 0;
+	mode = -1;
+	T_CHECK(GLimp_OwnScreenOnly("uikit", &fs, &mode));
+	T_EQ_INT(fs, 2);
+	T_EQ_FLT(mode, -2);
+}
+
+TEST(hidpi_other_drivers_keep_their_mode)
+{
+	static const char *const others[] = { "cocoa", "wayland", "x11", "UIKIT", "uikitx", "" };
+	int i;
+
+	for (i = 0; i < 6; i++)
+	{
+		int fs = 1;
+		float mode = 4;
+
+		T_CHECK(!GLimp_OwnScreenOnly(others[i], &fs, &mode));
+		T_EQ_INT(fs, 1);
+		T_EQ_FLT(mode, 4);
+	}
+
+	{
+		int fs = 1;
+		float mode = 4;
+
+		T_CHECK(!GLimp_OwnScreenOnly(NULL, &fs, &mode));
+		T_CHECK(!GLimp_OwnScreenOnly("uikit", NULL, &mode));
+		T_CHECK(!GLimp_OwnScreenOnly("uikit", &fs, NULL));
+		T_EQ_INT(fs, 1);
+		T_EQ_FLT(mode, 4);
+	}
+}

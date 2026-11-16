@@ -77,6 +77,9 @@ int GLimp_GetFrameworkVersion(void);
 qboolean GLimp_HighDPIWanted(float highdpiaware, const char *driver);
 qboolean GLimp_DrawableInPixels(qboolean highdpi, int fullscreen, float r_mode);
 
+/* uikit only: forces fullscreen 2 and r_mode -2 (the screen's own size), true when it did. */
+qboolean GLimp_OwnScreenOnly(const char *driver, int *fullscreen, float *r_mode);
+
 /* The screen a window was made for: width and height in pixels, the safe rectangle's x, y, width and height in points. */
 #define GLIMP_SCREEN_INTS 6
 qboolean GLimp_ScreenChanged(const int *made, const int *now);

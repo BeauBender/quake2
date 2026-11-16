@@ -108,12 +108,31 @@ RI_GetSafeInsets(rm_inset_t *in)
 	SDL_Rect r;
 	int pw, ph;
 
+	static int logged[6] = { -1, -1, -1, -1, -1, -1 };
+	int now[6];
+
 	memset(in, 0, sizeof(*in));
+	pw = ph = 0;
 
 	if (window && SDL_GetWindowSizeInPixels(window, &pw, &ph) && SDL_GetWindowSafeArea(window, &r))
 	{
 		rm_safe_insets((float)r.x, (float)r.y, (float)r.w, (float)r.h,
 				SDL_GetWindowPixelDensity(window), pw, ph, in);
+	}
+
+	/* once per change, for the log: the window in pixels and the insets the frame is placed by */
+	now[0] = pw;
+	now[1] = ph;
+	now[2] = in->left;
+	now[3] = in->top;
+	now[4] = in->right;
+	now[5] = in->bottom;
+
+	if (memcmp(now, logged, sizeof(now)) != 0)
+	{
+		memcpy(logged, now, sizeof(now));
+		R_Printf(PRINT_ALL, "ref_metal: safe area: window %ix%i pixels, insets left %i top %i right %i bottom %i\n",
+				pw, ph, in->left, in->top, in->right, in->bottom);
 	}
 }
 #endif

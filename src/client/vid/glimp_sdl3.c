@@ -633,8 +633,14 @@ GLimp_InitGraphics(int fullscreen, int *pwidth, int *pheight)
 	/* The window is always the whole screen, at the screen's own size,
 	   whatever r_mode and vid_fullscreen say: the renderer reads both
 	   cvars (GLimp_DrawableInPixels), so they are set to match. */
-	fullscreen = FULLSCREEN_DESKTOP;
-	Cvar_SetValue("r_mode", -2);
+	{
+		float own_mode = 0;
+
+		if (GLimp_OwnScreenOnly("uikit", &fullscreen, &own_mode))
+		{
+			Cvar_SetValue("r_mode", own_mode);
+		}
+	}
 #endif
 
 	/* One fullscreen value per window: vid_fullscreen holds the
