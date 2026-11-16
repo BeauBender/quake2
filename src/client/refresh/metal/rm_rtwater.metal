@@ -632,56 +632,80 @@ rm_rtw_trace(depth2d<float, access::read> depth [[texture(0)]],
 			isect.assume_geometry_type(geometry_type::triangle);
 			hit = isect.intersect(ray(o, r3, 0.0f, MTL_RTW_FAR), ias, MTL_RTW_MASK);
 
-			if (hit.type != intersection_type::none)
+			/*
+			 * TASK158: a model the picture does not show (off the screen or
+			 * hidden) is passed and the ray goes on, at most MTL_RTW_LAYERS
+			 * hits: a model is shaded only as the picture shows it, so a hidden
+			 * one neither reflects nor leaves a hole in the world-space
+			 * reflection behind it (nothing hidden is revealed by its shape).
+			 */
+			for (int layer = 0; ; layer++)
 			{
-				const uint b = inst[2 * hit.instance_id];
+				uint b = 0xffffffffu;
 
-				kind = (rm_rtw_mat(b, hit.primitive_id, tmat, ntris) == MTL_GB_MAT_SKY) ? 1 : 2;
+				kind = on = face_ok = 0;
+				qm = MTL_GB_MAT_NONE;
+				off = -1.0f;
+				hd = 0.0f;
 
-				/* TASK158: a map triangle with a shading record and a texture can be shaded in world space */
-				if ((kind == 2) && (b != 0xffffffffu) && (b + hit.primitive_id < nshade))
+				if (hit.type != intersection_type::none)
 				{
-					tri = b + hit.primitive_id;
-					sh = shade[tri];
-					face_ok = mtl_rtw_shade_ok(sh) && rm_rtw_tri_uv(verts, idx, g, tri, hit.triangle_barycentric_coord, uvlm);
-				}
-			}
+					b = inst[2 * hit.instance_id];
+					kind = (rm_rtw_mat(b, hit.primitive_id, tmat, ntris) == MTL_GB_MAT_SKY) ? 1 : 2;
 
-			/* where the screen shows it: the hit, or for the sky the direction from the eye (the box is around it) */
-			c = (kind == 2) ? (v.mvp * float4(o + r3 * hit.distance, 1.0f)) : (v.mvp * float4(r3, 0.0f));
-
-			if (c.w > 0.0f)
-			{
-				const float2 nd = c.xy / c.w;
-				const float2 qp = float2(v.vp.x + (nd.x * 0.5f + 0.5f) * v.vp.z, v.vp.y + (0.5f - nd.y * 0.5f) * v.vp.w);
-
-				if ((qp.x >= v.vp.x) && (qp.x < v.vp.x + v.vp.z) && (qp.y >= v.vp.y) && (qp.y < v.vp.y + v.vp.w) &&
-					(qp.x >= 0.0f) && (qp.y >= 0.0f) && (qp.x < float(w)) && (qp.y < float(h)))
-				{
-					q = uint2(qp);
-					on = 1;
-				}
-			}
-
-			if (on)
-			{
-				qm = mat.read(q).r;
-
-				if (kind == 2)
-				{
-					const float qd = depth.read(q);
-
-					hd = distance(o + r3 * hit.distance, v.eye.xyz);
-
-					if (qd < 1.0f)
+					/* a map triangle with a shading record and a texture can be shaded in world space */
+					if ((kind == 2) && (b != 0xffffffffu) && (b + hit.primitive_id < nshade))
 					{
-						off = fabs(distance(rm_rtw_unproject(v, float2(q) + 0.5f, qd), v.eye.xyz) - hd);
+						tri = b + hit.primitive_id;
+						sh = shade[tri];
+						face_ok = mtl_rtw_shade_ok(sh) &&
+							rm_rtw_tri_uv(verts, idx, g, tri, hit.triangle_barycentric_coord, uvlm);
 					}
 				}
-			}
 
-			/* the picture where it shows the hit (cheaper and exact), else world space (TASK158) */
-			from = mtl_rtw_choose_ws(kind, on, qm, off, hd, face_ok, v.sky != 0);
+				/* where the screen shows it: the hit, or for the sky the direction from the eye (the box is around it) */
+				c = (kind == 2) ? (v.mvp * float4(o + r3 * hit.distance, 1.0f)) : (v.mvp * float4(r3, 0.0f));
+
+				if (c.w > 0.0f)
+				{
+					const float2 nd = c.xy / c.w;
+					const float2 qp = float2(v.vp.x + (nd.x * 0.5f + 0.5f) * v.vp.z, v.vp.y + (0.5f - nd.y * 0.5f) * v.vp.w);
+
+					if ((qp.x >= v.vp.x) && (qp.x < v.vp.x + v.vp.z) && (qp.y >= v.vp.y) && (qp.y < v.vp.y + v.vp.w) &&
+						(qp.x >= 0.0f) && (qp.y >= 0.0f) && (qp.x < float(w)) && (qp.y < float(h)))
+					{
+						q = uint2(qp);
+						on = 1;
+					}
+				}
+
+				if (on)
+				{
+					qm = mat.read(q).r;
+
+					if (kind == 2)
+					{
+						const float qd = depth.read(q);
+
+						hd = distance(o + r3 * hit.distance, v.eye.xyz);
+
+						if (qd < 1.0f)
+						{
+							off = fabs(distance(rm_rtw_unproject(v, float2(q) + 0.5f, qd), v.eye.xyz) - hd);
+						}
+					}
+				}
+
+				/* the picture where it shows the hit (cheaper and exact), else world space */
+				from = mtl_rtw_choose_ws(kind, on, qm, off, hd, face_ok, v.sky != 0);
+
+				if ((kind != 2) || (b != 0xffffffffu) || (from != MTL_RTW_MISS) || (layer + 1 >= MTL_RTW_LAYERS))
+				{
+					break;
+				}
+
+				hit = isect.intersect(ray(o, r3, hit.distance + 0.01f, MTL_RTW_FAR), ias, MTL_RTW_MASK);
+			}
 
 			if ((from == MTL_RTW_LIT) || (from == MTL_RTW_SKY))
 			{

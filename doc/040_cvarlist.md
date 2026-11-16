@@ -1026,10 +1026,12 @@ is.
   world pixels that traced, those darkened and those darkened to
   `r_rt_ao_min`, the pixels facing up (floors) and of them those darkened,
   the rays, those that met a surface and the pass's GPU time; with
-  `r_rt_water` on a line for the reflections: the pixels it ran on, those
-  of opaque and of translucent water, the rays from the eye that looked
-  for translucent water, the water pixels whose reflection came from the
-  picture, from the sky and from nowhere, and the pass's GPU time. Nothing
+  `r_rt_water` on a line for the reflections: the pixels of the view, those
+  it traced (the water and the pixels next to it), those of opaque and of
+  translucent water, the rays from the eye that looked for translucent
+  water, the water pixels whose reflection came from the picture, from a
+  surface drawn on its own, from the sky in the picture, from the sky box
+  and from nowhere, and the pass's GPU time. Nothing
   is drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next
@@ -1043,9 +1045,14 @@ is.
   `r_rt_water_normal`), so the reflection ripples as the texture does.
   What it meets is shown as the picture shows it, lightmaps, dynamic
   lights and the other ray-traced effects included; where it meets the
-  sky, the sky in that direction. A surface the view does not show (off
-  the screen, or hidden behind something nearer) gives no reflection,
-  and the water there is drawn as before. The reflection is mixed into
+  sky, the sky in that direction. A surface of the map the view does not
+  show (off the screen, or hidden behind something nearer) is drawn on its
+  own: its texture and lightmap, with the dynamic lights but without
+  their shadows or the ambient occlusion; the sky the view does not show
+  comes from the sky box. A model the view does not show is passed over,
+  so the reflection shows what lies behind it and nothing hidden is
+  revealed. Only the water is traced: a view without water costs next to
+  nothing. The reflection is mixed into
   the water's colour by `r_rt_water_reflect`; translucent water keeps
   its transparency. The rays meet the world, the doors and platforms and
   the models, but not the view weapon or the player's own model. Needs a
@@ -1077,8 +1084,9 @@ is.
   `r_rt_water`: with it on, `1` replaces the picture by a mask, black
   on every pixel of water the pass found and white elsewhere (the pixels
   that must look as without the reflections), `2` by the pass's classes:
-  black not water, green a reflection from the picture, blue from the
-  sky, red none. The view weapon, models drawn over the world, particles
+  black not water, green a reflection from the picture, yellow from a
+  surface drawn on its own, blue from the sky in the picture, cyan from the
+  sky box, red none. The view weapon, models drawn over the world, particles
   and translucent surfaces are left out of these views. `0` (the
   default) shows the picture; a value above `2` counts as `2`, one that
   is not a finite number as `0`, and a fraction is cut to the whole
