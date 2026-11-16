@@ -32,7 +32,13 @@
  */
 
 #import <Metal/Metal.h>
+#include <TargetConditionals.h>
+
+/* the iOS, tvOS and visionOS simulator SDKs have no MetalFX: there the back end is stubs (end of file) */
+#if __has_include(<MetalFX/MetalFX.h>)
+#define RMB_HAVE_METALFX 1
 #import <MetalFX/MetalFX.h>
+#endif
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -44,6 +50,8 @@
 #if !__has_feature(objc_arc)
 #error "rmb_metalfx.m is written for ARC: compile it with -fobjc-arc"
 #endif
+
+#ifdef RMB_HAVE_METALFX
 
 extern id<MTLDevice> rmb_device;
 extern id<MTLCommandQueue> rmb_queue;
@@ -486,3 +494,77 @@ rmb_fx_upscale(id<MTLTexture> color, id<MTLTexture> depth, id<MTLTexture> motion
 
 	return 1;
 }
+
+#else /* no MetalFX in this SDK: every mode reads as unsupported, as on a Mac without MetalFX (decision 0011) */
+
+unsigned
+rmb_fx_support(void)
+{
+	return RM_FX_HAS(RM_FX_OFF);
+}
+
+float
+rmb_fx_max_ratio(int mode)
+{
+	(void)mode;
+	return RM_FX_RATIO_MAX;
+}
+
+int
+rmb_fx_prepare(int mode, const rm_fx_size_t *s, float jx, float jy, int reset)
+{
+	(void)mode;
+	(void)s;
+	(void)jx;
+	(void)jy;
+	(void)reset;
+	return 0;
+}
+
+int
+rmb_fx_ready(void)
+{
+	return 0;
+}
+
+void
+rmb_fx_unready(void)
+{
+}
+
+int
+rmb_fx_note(int *mode, rm_fx_size_t *s)
+{
+	*mode = RM_FX_OFF;
+	memset(s, 0, sizeof(*s));
+	return RM_FX_NOTE_NONE;
+}
+
+void
+rmb_fx_set_timing(int on)
+{
+	(void)on;
+}
+
+double
+rmb_fx_gpu_ms(void)
+{
+	return -1.0;
+}
+
+void
+rmb_fx_release(void)
+{
+}
+
+int
+rmb_fx_upscale(id<MTLTexture> color, id<MTLTexture> depth, id<MTLTexture> motion, id<MTLTexture> frame)
+{
+	(void)color;
+	(void)depth;
+	(void)motion;
+	(void)frame;
+	return 0;
+}
+
+#endif /* RMB_HAVE_METALFX */
