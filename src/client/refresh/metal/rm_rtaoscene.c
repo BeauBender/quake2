@@ -47,6 +47,7 @@ static int ao_device;           /* rmb_caps_t.raytracing */
 static int ao_opened;           /* rmb_rtao_open succeeded */
 static int ao_refused;          /* it failed in this context: not tried again */
 static int ao_active;           /* this frame traces the AO */
+static int ao_viewed;           /* RM_RTAO_View handed this frame's view to the back end */
 static unsigned long ao_count;  /* the views traced, the noise's frame without a seed */
 
 void
@@ -59,7 +60,7 @@ RM_RTAO_Init(const rmb_caps_t *caps)
 	r_rt_ao_show = ri.Cvar_Get("r_rt_ao_show", "0", 0);
 	r_rt_stats_ref = ri.Cvar_Get("r_rt_stats", "0", 0);
 	ao_device = caps->raytracing != 0;
-	ao_opened = ao_refused = ao_active = 0;
+	ao_opened = ao_refused = ao_active = ao_viewed = 0;
 	ao_count = 0;
 }
 
@@ -71,7 +72,7 @@ RM_RTAO_Shutdown(void)
 		rmb_rtao_close();
 	}
 
-	ao_opened = ao_active = 0;
+	ao_opened = ao_active = ao_viewed = 0;
 }
 
 int
@@ -86,7 +87,13 @@ RM_RTAO_Frame(const refdef_t *fd, int scene_ready)
 	rm_rtao_stats_t st[RMB_FRAMES_IN_FLIGHT];
 	int i, n;
 
-	ao_active = 0;
+	/*
+	 * No view survives from an earlier frame: only RM_RTAO_View, before
+	 * this frame's raster, hands the back end one (review round 1, N3),
+	 * so a G-buffer view that does not trace the AO never reads a stale one.
+	 */
+	ao_active = ao_viewed = 0;
+	rmb_rtao_set_view(NULL);
 
 	if (r_rt_ao && rm_rtao_on(r_rt_ao->value, ao_device, r_fullbright->value) && scene_ready && fd &&
 		!(fd->rdflags & RDF_NOWORLDMODEL))
@@ -137,10 +144,11 @@ RM_RTAO_Active(void)
 	return ao_active;
 }
 
+/* only a view that was handed over is traced and shown: without one the forward pass draws as without the AO (N2) */
 int
 RM_RTAO_ShowOnly(void)
 {
-	return ao_active && r_rt_ao_show && rm_rtao_show(r_rt_ao_show->value);
+	return ao_active && ao_viewed && r_rt_ao_show && rm_rtao_show(r_rt_ao_show->value);
 }
 
 void
@@ -148,6 +156,8 @@ RM_RTAO_View(const rm_view_t *view)
 {
 	rm_rtao_view_t v;
 	int w, h;
+
+	ao_viewed = 0;
 
 	if (!ao_active)
 	{
@@ -167,5 +177,6 @@ RM_RTAO_View(const rm_view_t *view)
 	}
 
 	rmb_rtao_set_view(&v);
+	ao_viewed = 1;
 	ao_count++;
 }
