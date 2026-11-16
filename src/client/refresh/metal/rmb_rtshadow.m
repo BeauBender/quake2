@@ -67,7 +67,11 @@ static id<MTLRenderPipelineState> resolve_pipe;
 static id<MTLTexture> t_out;
 static id<MTLTexture> t_term;           /* the term, RGBA16Float at the render size */
 static id<MTLBuffer> m_tri, m_vecs;     /* the map's triangle-to-surface table and surfaces' texture axes */
-static uint32_t m_n[2];                 /* their triangles and surfaces */
+static id<MTLBuffer> m_vert;            /* its vertex-to-surface table (TASK131), nil without one */
+static uint32_t m_n[4];                 /* their triangles, surfaces and vertices (rm_rtshadow.metal's rm_rts_mapn) */
+static id<MTLBuffer> m_ents;            /* RMB_FRAMES_IN_FLIGHT slots of the entity table (TASK131) */
+static float ents[MTL_RTS_GB_ENTS * RM_RTS_ROW_FLOATS];
+static int nents;
 static id<MTLBuffer> counts;            /* RMB_FRAMES_IN_FLIGHT slots of RMB_RTS_COUNTS */
 static id<MTLCounterSampleBuffer> samples;
 
@@ -136,8 +140,10 @@ rmb_rts_open(char *err, size_t errlen)
 		RMB_RTS_SET(resolve_pipe, trace_pipe ? [rmb_device newRenderPipelineStateWithDescriptor:d error:&e] : nil);
 		RMB_RTS_SET(counts, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * RMB_RTS_COUNTS * sizeof(uint32_t)
 				options:MTLResourceStorageModeShared]);
+		RMB_RTS_SET(m_ents, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * sizeof(ents)
+				options:MTLResourceStorageModeShared]);
 
-		if (!trace_pipe || !resolve_pipe || !counts)
+		if (!trace_pipe || !resolve_pipe || !counts || !m_ents)
 		{
 			snprintf(err, errlen, "cannot build the shadow pipelines%s%s", e ? ": " : "",
 					e ? e.localizedDescription.UTF8String : "");
@@ -190,6 +196,8 @@ rmb_rts_close(void)
 		RMB_RTS_SET(t_term, nil);
 		RMB_RTS_SET(m_tri, nil);
 		RMB_RTS_SET(m_vecs, nil);
+		RMB_RTS_SET(m_vert, nil);
+		RMB_RTS_SET(m_ents, nil);
 		RMB_RTS_SET(counts, nil);
 		RMB_RTS_SET(samples, nil);
 	}
@@ -198,7 +206,8 @@ rmb_rts_close(void)
 	view_set = traced = 0;
 	view_show = 0;
 	ndone = 0;
-	m_n[0] = m_n[1] = 0;
+	nents = 0;
+	m_n[0] = m_n[1] = m_n[2] = m_n[3] = 0;
 }
 
 int
@@ -241,13 +250,15 @@ rmb_rts_prepare(unsigned long w, unsigned long h)
 }
 
 int
-rmb_rts_set_map(const unsigned *tri_surf, unsigned long ntris, const float *vecs, unsigned long nsurf)
+rmb_rts_set_map(const unsigned *tri_surf, unsigned long ntris, const unsigned *vert_surf, unsigned long nverts,
+		const float *vecs, unsigned long nsurf)
 {
 	@autoreleasepool
 	{
 		RMB_RTS_SET(m_tri, nil);
 		RMB_RTS_SET(m_vecs, nil);
-		m_n[0] = m_n[1] = 0;
+		RMB_RTS_SET(m_vert, nil);
+		m_n[0] = m_n[1] = m_n[2] = m_n[3] = 0;
 
 		if (!rts_open || !tri_surf || !vecs || !ntris || !nsurf || (ntris > 0xffffffffu) || (nsurf > 0xffffffffu))
 		{
@@ -268,9 +279,36 @@ rmb_rts_set_map(const unsigned *tri_surf, unsigned long ntris, const float *vecs
 
 		m_n[0] = (uint32_t)ntris;
 		m_n[1] = (uint32_t)nsurf;
+
+		/* the G-buffer's lookup (TASK131); without its table every pixel takes the eye ray */
+		if (vert_surf && nverts && (nverts <= MTL_RTS_GB_VMAX))
+		{
+			RMB_RTS_SET(m_vert, [rmb_device newBufferWithBytes:vert_surf length:nverts * sizeof(unsigned)
+					options:MTLResourceStorageModeShared]);
+			m_n[2] = m_vert ? (uint32_t)nverts : 0;
+		}
 	}
 
 	return 1;
+}
+
+void
+rmb_rts_set_ents(const float *rows, int n)
+{
+	nents = 0;
+
+	if (!rows || (n <= 0))
+	{
+		return;
+	}
+
+	if (n > (int)MTL_RTS_GB_ENTS)
+	{
+		n = (int)MTL_RTS_GB_ENTS;
+	}
+
+	memcpy(ents, rows, (size_t)n * RM_RTS_ROW_FLOATS * sizeof(float));
+	nents = n;
 }
 
 void
@@ -366,7 +404,7 @@ rmb_rts_stats(rm_rts_stats_t *s, int cap)
 }
 
 int
-rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> material)
+rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> material, id<MTLTexture> surface)
 {
 	unsigned long fno = 0;
 	id<MTLCommandBuffer> cmd;
@@ -438,11 +476,24 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 			return 0;
 		}
 
+		/*
+		 * TASK131: the surface attachment at the same size, and the frame's
+		 * entity table in this slot of the ring (the frame that used the slot
+		 * before has completed, as for the counts). Without the attachment
+		 * the material stands in for it, of the same type, unread (gsurf 0).
+		 */
+		view.gsurf = (surface && (surface.width == w) && (surface.height == h) &&
+			(surface.pixelFormat == MTLPixelFormatR32Uint)) ? 1u : 0u;
+		view.nents = (unsigned)nents;
+		memcpy((unsigned char *)m_ents.contents + (size_t)slot * sizeof(ents), ents,
+				(size_t)nents * RM_RTS_ROW_FLOATS * sizeof(float));
+
 		[ce setTexture:depth atIndex:0];
 		[ce setTexture:normal atIndex:1];
 		[ce setTexture:material atIndex:2];
 		[ce setTexture:t_out atIndex:3];
 		[ce setTexture:t_term atIndex:4];
+		[ce setTexture:(view.gsurf ? surface : material) atIndex:5];
 		[ce setBytes:&view length:sizeof(view) atIndex:0];
 		[ce setBytes:lights length:sizeof(lights) atIndex:1];
 		[ce setBuffer:counts offset:(NSUInteger)slot * RMB_RTS_COUNTS * sizeof(uint32_t) atIndex:6];
@@ -451,6 +502,8 @@ rmb_rts_trace(id<MTLTexture> depth, id<MTLTexture> normal, id<MTLTexture> materi
 		[ce setBuffer:(m_tri ? m_tri : counts) offset:0 atIndex:7];
 		[ce setBuffer:(m_vecs ? m_vecs : counts) offset:0 atIndex:8];
 		[ce setBytes:m_n length:sizeof(m_n) atIndex:9];
+		[ce setBuffer:(m_vert ? m_vert : counts) offset:0 atIndex:10];
+		[ce setBuffer:m_ents offset:(NSUInteger)slot * sizeof(ents) atIndex:11];
 		[ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(RMB_RTS_GROUP, RMB_RTS_GROUP, 1)];
 		[ce endEncoding];
 

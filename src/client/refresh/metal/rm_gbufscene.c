@@ -45,6 +45,7 @@
 #include "common/mtl_matrix.h"
 #include "common/mtl_shader_math.h"
 #include "common/mtl_gbuf_math.h"
+#include "common/mtl_rts_math.h"
 
 static cvar_t *r_rt_gbuffer;
 static cvar_t *r_rt_motion;
@@ -198,6 +199,9 @@ RM_GB_Begin(rm_view_t *view, int stencil, const float *clear_rgba)
 
 	/* only the raster reads the world's normals: a MOTION view never makes them */
 	rmb_gbuf_set_world_normals((path == RM_GB_PATH_GBUFFER) ? RM_WorldNormals() : 0);
+
+	/* TASK131: the surface attachment, which only RT3's shadows read: the raster has it while they trace */
+	rmb_gbuf_set_surface((path == RM_GB_PATH_GBUFFER) && RM_RTS_Active());
 
 	if (!rmb_gbuf_view_begin(path, rw, rh, stencil, clear_rgba))
 	{
@@ -375,6 +379,28 @@ RM_GB_Prev(const entity_t *e)
 	return rm_gb_hist_prev(&hist, (int)i);
 }
 
+/*
+ * TASK131: the entity the surface attachment names for a brush model's
+ * draw (mtl_rts_gb_tag): its index in the refdef plus one, or
+ * MTL_RTS_GB_ENT_NONE when it is not one of the refdef's entities (the
+ * shadows then find its pixels' surface with the eye ray).
+ */
+static unsigned
+RM_GB_SurfaceEnt(const entity_t *e)
+{
+	uintptr_t base = (uintptr_t)r_newrefdef.entities, at = (uintptr_t)e;
+	const int n = rm_entity_count(r_newrefdef.num_entities);
+	long i;
+
+	if (!e || !r_newrefdef.entities || (at < base) || ((at - base) % sizeof(entity_t)))
+	{
+		return MTL_RTS_GB_ENT_NONE;
+	}
+
+	i = (long)((at - base) / sizeof(entity_t));
+	return ((i < n) && (i < (long)MTL_RTS_GB_ENTS)) ? (unsigned)i + 1 : MTL_RTS_GB_ENT_NONE;
+}
+
 void
 RM_GB_EntityMotion(const entity_t *e, const float *vm, int brush, const float *wproj)
 {
@@ -415,6 +441,7 @@ RM_GB_EntityMotion(const entity_t *e, const float *vm, int brush, const float *w
 	RM_GB_Identity(id);
 	rm_entity_matrix(u.nrm, id, zero, a);
 	u.material = brush ? MTL_GB_MAT_WORLD : MTL_GB_MAT_ALIAS;
+	u.ent = brush ? RM_GB_SurfaceEnt(e) : 0;
 	material = (int)u.material;
 	rmb_gbuf_set_motion(&u);
 }
