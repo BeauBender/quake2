@@ -9,12 +9,40 @@ on:
       - opened
       - synchronize
 concurrency:
-  # Cancel concurrent workflows for the same PR or commit hash.
-  group: ${{github.workflow}}-${{github.event_name == 'pull_request' && github.head_ref || github.sha}}
-  cancel-in-progress: true
+  # A pull request has one group, and a newer push to it cancels the run it
+  # supersedes. A push to main has a group of its own commit (github.sha),
+  # so it is never queued behind, replaced by or cancelled for another run.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      analyze: ${{ steps.diff.outputs.analyze }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+      with:
+        # The pull request checkout is a merge commit: HEAD^1 is the base.
+        fetch-depth: 2
+    - name: Is the change documentation only
+      id: diff
+      # Every push to main analyses. A pull request skips the analyses only
+      # when every changed path is Markdown under doc/ or docs/ or at the
+      # top level; anything else, or anything unexpected, analyses. The
+      # script prints counts only, never a file name.
+      run: bash .github/scripts/codeql-changes.sh
   analyze:
     name: Analyze
+    # Runs unless the changes job said false: a failed or missing decision
+    # analyses. A skipped matrix job may report under its unexpanded name
+    # (plain "Analyze"), not the names of its matrix jobs, so read the real
+    # check names from a run before making any of them required.
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.analyze != 'false' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       security-events: write
