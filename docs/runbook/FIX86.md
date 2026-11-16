@@ -103,9 +103,44 @@ failing there:
 
 ## The host run
 
-Not run: the screen was locked from the start of round 1 and for the 20
-minutes the rework waited (one check a minute). The four scenarios
-(`rt-ao`, `rt-ao-entities`, `rt-water`, `rt-water-entities`, `--runs 5
---gpu-runs 3`) are left to be run with the command above, each pair as a
-chunk of its own, with the effect cvars read back and the ray-traced rows
-compared with native.
+Run on the bare-metal host (Apple M6, family apple5) with the screen
+locked for the whole run, so every timing below was taken locked and is
+not known to be comparable with an unlocked one; the run is first of all
+the proof that the four scenarios now run. Build: commit `c212cf75`,
+clean tree, `make client game ref_metal`. `--runs 5 --gpu-runs 3`,
+1280x720, seed 1, 12 frames captured a row.
+
+| Chunk | Scenarios | Wall time | Load average (1 min) before, after |
+|---|---|---|---|
+| fix86-1 | `rt-ao`, `rt-ao-entities` | 1095 s | 3.66, 2.27 |
+| fix86-2 | `rt-water`, `rt-water-entities` | 1214 s | 2.08, 1.82 |
+
+Each chunk was one `run` under the host lock, with its own `--out`; the
+two were merged with `report --dir ... --dir ... --html` into one report
+(exit 0, no chunk refused). Checks, by numbers:
+
+- Status: every one of the four scenarios has 13 rows, all `ok`
+  (`native` and 12 options), 52 rows, `errors 0` in both chunks. The two
+  denoiser options (`den1`, `fx3-s50-den1`) are skipped for all
+  scenarios, as the engine reports no `r_rt_denoiser`.
+- Read-back: the engine's own value for each scenario's `r_rt_*` cvars
+  (and `cl_entities`), read from a console run after `exec` of the
+  scenario's file: `rt-ao` and `rt-ao-entities` `r_rt_ao 1`,
+  `r_rt_ao_range 128`, `r_rt_ao_min 0.4`, `r_rt_ao_seed 1`,
+  `r_rt_ao_show 0`; `rt-water` and `rt-water-entities` `r_rt_water 1`,
+  `r_rt_water_normal 0.08`, `r_rt_water_reflect 0.5`, `r_rt_water_show 0`;
+  `cl_entities` 0 and 1 as the files say; 20 of 20 as set. The report's
+  own read-back covers each option's `r_metalfx*` cvars (every ok row
+  passed it).
+- Differs from native: every option row differs from `native` in quality
+  (mean SSIM over the 12 option rows: `rt-ao` 0.931, `rt-ao-entities`
+  0.928, `rt-water` 0.969, `rt-water-entities` 0.968; the lowest single
+  frame 0.749, 0.751, 0.873, 0.873) and in fps (for example `rt-ao`
+  `native` 2208 fps, `fx1-s34` 3937 fps). GPU frame time is about
+  0.08 to 0.10 ms in nearly every row, `native` included, with
+  occasional rows near 0.03 ms; the difference from `native` in GPU time
+  is therefore small and not something to read from a locked run.
+- `plan`: the largest engine command line is 105 (limit 128), a record
+  of `rt-water` with `fx1-s50-interp`; the timed runs use 32.
+
+The merged report is kept outside the repository (it holds frames).
