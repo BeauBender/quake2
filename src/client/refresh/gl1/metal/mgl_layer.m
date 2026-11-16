@@ -353,7 +353,8 @@ mgl_present_pass(id<MTLCommandBuffer> cmd, id<MTLTexture> src, id<MTLTexture> ds
  * (mgl_present_target). A frame takes a free slot when it begins and is
  * drawn into the slot's target (mgl_present_take). When it ends with a
  * drawable ready, the present goes on mgl_present_queue, which waits for
- * the frame's command buffer (mgl_present_event), and writes the drawable
+ * the frame's command buffer (the slot's own event, mgl_present_event,
+ * which no other frame signals while this one holds the slot), and writes the drawable
  * from that target in one pass (mgl_present_pass): the wait for the
  * drawable holds that queue and no frame slot, and nothing copies the
  * frame first. Metal states only that an event a command buffer signals
@@ -379,8 +380,8 @@ static id<CAMetalDrawable> mgl_ahead;   /* mgl_ahead_lock: the drawable acquired
 static int mgl_ahead_busy;              /* mgl_ahead_lock: an acquisition is on the queue */
 
 static id<MTLCommandQueue> mgl_present_queue;
-static id<MTLEvent> mgl_present_event;
-static uint64_t mgl_present_value;
+static id<MTLEvent> mgl_present_event[MGL_PRESENTS];         /* signalled only by the frame that holds the slot */
+static uint64_t mgl_present_value[MGL_PRESENTS];             /* the last value the slot's event was given */
 static dispatch_semaphore_t mgl_present_sem[MGL_PRESENTS];   /* 1: no frame and no present holds this slot */
 static id<MTLTexture> mgl_present_target[MGL_PRESENTS];      /* the target the slot's frame is drawn into */
 static int frame_slot = -1;                                  /* the slot the open frame holds, or -1 */
@@ -550,7 +551,7 @@ mgl_ahead_drop(void)
 /*
  * The present of the frame drawn into src, the target of the open frame's
  * present slot, on the drawable acquired ahead, apart from the frame (see
- * above): the event goes on the frame's command buffer, which is committed
+ * above): the slot's event goes on the frame's command buffer, which is committed
  * after this, and is signalled after that buffer's own commands; every
  * earlier command buffer of the frame has completed (mgl_flush waited for
  * it, and mgl_layer_present does not call this when a wait ended first),
@@ -592,9 +593,14 @@ mgl_present_apart_begin(id<MTLCommandBuffer> frame, id<MTLTexture> src)
 		return nil;
 	}
 
-	mgl_present_value++;
-	[frame encodeSignalEvent:mgl_present_event value:mgl_present_value];
-	[cmd encodeWaitForEvent:mgl_present_event value:mgl_present_value];
+	/*
+	 * The slot's own event: only a frame that holds the slot signals it,
+	 * and the slot is held until this present has completed, so no later
+	 * frame's signal can end this wait (FIX51).
+	 */
+	mgl_present_value[frame_slot]++;
+	[frame encodeSignalEvent:mgl_present_event[frame_slot] value:mgl_present_value[frame_slot]];
+	[cmd encodeWaitForEvent:mgl_present_event[frame_slot] value:mgl_present_value[frame_slot]];
 	mgl_present_pass(cmd, src, d.texture);
 	[cmd presentDrawable:d];
 	return cmd;
@@ -639,10 +645,10 @@ mgl_release_all(void)
 	mgl_ahead_drop();       /* nothing of the layer is left on the queues */
 	mgl_ahead_queue = nil;
 	mgl_present_queue = nil;
-	mgl_present_event = nil;
 
 	for (i = 0; i < MGL_PRESENTS; i++)
 	{
+		mgl_present_event[i] = nil;
 		mgl_present_sem[i] = nil;
 	}
 
@@ -704,7 +710,7 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 	{
 		char path[1024];
 		NSError *error = nil;
-		int w = 0, h = 0, i;
+		int w = 0, h = 0, i, apart;
 
 		mgl_window = (SDL_Window *)sdl_window;
 		mgl_view = SDL_Metal_CreateView(mgl_window);
@@ -761,12 +767,18 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 		mgl_metal_layer.drawableSize = CGSizeMake(w > 0 ? w : 1, h > 0 ? h : 1);
 		mgl_ahead_queue = dispatch_queue_create("mgl drawable", DISPATCH_QUEUE_SERIAL);
 
-		/* the present queue and its event (FIX51); without them every frame draws into its drawable */
+		/* the present queue and an event for each slot (FIX51); without them every frame draws into its drawable */
 		mgl_present_queue = [mgl_device newCommandQueue];
-		mgl_present_event = [mgl_device newEvent];
-		mgl_present_value = 0;
+		apart = mgl_present_queue != nil;
 
-		for (i = 0; (i < MGL_PRESENTS) && mgl_present_queue && mgl_present_event; i++)
+		for (i = 0; i < MGL_PRESENTS; i++)
+		{
+			mgl_present_event[i] = [mgl_device newEvent];
+			mgl_present_value[i] = 0;
+			apart = apart && (mgl_present_event[i] != nil);
+		}
+
+		for (i = 0; (i < MGL_PRESENTS) && apart; i++)
 		{
 			mgl_present_sem[i] = dispatch_semaphore_create(0);
 			dispatch_semaphore_signal(mgl_present_sem[i]);
