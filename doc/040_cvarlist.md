@@ -1320,6 +1320,40 @@ is.
   - `0`: Rumble feedback,
   - `1`: Haptic feedback.
 
+### Touch controls
+
+The touch controls drive a virtual gamepad named "Touch controls" with
+the fingers, so the gamepad cvars above (sticks, deadzones, the
+bindings of the gamepad keys) apply to them as to a physical
+controller. `in_initjoy 0` also turns them off. When a physical gamepad
+is connected it is used instead, the touch controls are idle until it
+is disconnected.
+
+The layout is made inside the screen's safe area, in landscape. The left
+half is the move stick and the right half the look stick, both floating:
+the origin is where the finger lands. Buttons are in the lower right
+(fire, jump, use item, crouch, next weapon) and at the top (menu, console).
+
+* **in_touch**: Turns the touch controls on. Default `1` on iOS and `0`
+  elsewhere. Read at start. On iOS touches are never mouse clicks while
+  it is on.
+
+* **in_touch_scale**: Size of the buttons and the stick radius, from
+  `0.5` to `2`; a value outside is held to the range. Default `1`.
+
+* **in_touch_swap**: `1` mirrors the layout, the move stick on the right
+  and the buttons on the left. Default `0`.
+
+On iOS, a first start (no `config.cfg` yet) binds the gamepad keys that
+are not bound, once: `TRIG_RIGHT` to `+attack`, `BTN_SOUTH` to `+moveup`,
+`BTN_EAST` to `+movedown`, `BTN_NORTH` to `weapnext`, `BTN_WEST` to
+`invuse`, `SHOULDR_LEFT` to `weapprev`, `SHOULDR_RIGHT` to `weapnext`,
+`BTN_BACK` to `inven` and `BTN_MISC1` (the console button) to
+`toggleconsole`. A binding that is already there is kept, and `START`
+is the menu key. Other platforms bind none of them. The on-screen
+keyboard of iOS shows only while the console, a chat message or a
+menu's text field takes text.
+
 
 ## cvar operations
 
