@@ -515,7 +515,7 @@ TEST(touch_swap_mirrors_every_zone)
 
 			T_EQ_FLT(a.radius, b.radius);
 
-			for (i = 0; i < TZ_COUNT; i++)
+			for (i = 0; i < TZ_ALL; i++)
 			{
 				const float mx = screens[s].x + screens[s].w - (a.zone[i].x - screens[s].x) - a.zone[i].w;
 
@@ -1245,4 +1245,42 @@ TEST(touch_is_not_supported_off_ios)
 {
 	/* the unit suite is built for the host, never for iOS */
 	T_EQ_INT(Touch_Supported(), 0);
+}
+
+TEST(touch_a_ring_at_rest_is_centred_in_its_zone_and_held_to_the_zone)
+{
+	touch_draw_t d[TOUCH_MAX_DRAW];
+	int n, i, s, zone;
+
+	for (s = 0; s < NSCREENS; s++)
+	{
+		t_setup(screens[s], 0.5f, 0);
+		n = Touch_Drawables(&T, 0, d, TOUCH_MAX_DRAW);
+
+		for (zone = TZ_MOVE; zone <= TZ_LOOK; zone++)
+		{
+			const touch_rect_t z = T.layout.zone[zone];
+			int found = 0;
+
+			for (i = 0; i < n; i++)
+			{
+				if (d[i].kind == TD_RING && d[i].r.x >= z.x - 0.01f && d[i].r.x + d[i].r.w <= z.x + z.w + 0.01f)
+				{
+					found++;
+					T_CHECK(fabsf(d[i].r.x + d[i].r.w * 0.5f - (z.x + z.w * 0.5f)) < 0.01f);
+					T_CHECK(fabsf(d[i].r.y + d[i].r.h * 0.5f - (z.y + z.h * 0.5f)) < 0.01f);
+				}
+			}
+
+			T_EQ_INT(found, 1);
+		}
+
+		/* a zone narrower or lower than two radii holds its ring */
+		T.layout.zone[TZ_MOVE].w = 12.0f;
+		T.layout.zone[TZ_LOOK].h = 9.0f;
+		n = Touch_Drawables(&T, 0, d, TOUCH_MAX_DRAW);
+		T_REQUIRE(n >= 2 && d[0].kind == TD_RING && d[1].kind == TD_RING);
+		T_CHECK(d[0].r.w <= 12.01f && d[0].r.h <= 12.01f);
+		T_CHECK(d[1].r.w <= 9.01f && d[1].r.h <= 9.01f);
+	}
 }

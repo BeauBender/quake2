@@ -46,13 +46,6 @@ static const int zone_button[TZ_ALL] = {
 	[TZM_BACK] = TOUCH_BTN_EAST
 };
 
-/* The zones of the menu mode: the pad and the console button. */
-static int
-IsMenuZone(int zone)
-{
-	return zone == TZ_CONSOLE || (zone >= TZM_UP && zone < TZ_ALL);
-}
-
 /* A coordinate the layer can use: not a NaN, not infinite. */
 static int
 Usable(float x, float y)
@@ -216,9 +209,10 @@ Touch_Down(touch_t *t, uint64_t id, float x, float y)
 
 	if (t->menu)
 	{
+		/* the console button, then the pad: the zones after the game's */
 		for (i = TZ_CONSOLE; i < TZ_ALL && zone < 0; i++)
 		{
-			if (IsMenuZone(i) && Inside(t->layout.zone[i], x, y))
+			if (Inside(t->layout.zone[i], x, y))
 			{
 				zone = i;
 			}
@@ -527,8 +521,8 @@ AddStick(const touch_t *t, int zone, touch_draw_t *out, int n, int max)
 		dx *= reach / l->radius;
 		dy *= reach / l->radius;
 
-		knob = Rect(ClampF(ring.x + (side - k) * 0.5f + dx, l->safe.x, l->safe.x + l->safe.w - k),
-				ClampF(ring.y + (side - k) * 0.5f + dy, l->safe.y, l->safe.y + l->safe.h - k), k, k);
+		/* inside the ring, which is inside the safe rectangle */
+		knob = Rect(ring.x + (side - k) * 0.5f + dx, ring.y + (side - k) * 0.5f + dy, k, k);
 		n = AddDraw(out, n, max, knob, NULL, 1, TD_KNOB);
 	}
 
@@ -559,7 +553,7 @@ Touch_Drawables(const touch_t *t, int physical, touch_draw_t *out, int max)
 	const button_def_t *set = t->menu ? menu_buttons : game_buttons;
 	int i, n = 0;
 
-	if (physical || !out || max <= 0 || !(t->layout.safe.w > 0) || !(t->layout.safe.h > 0))
+	if (physical || !out || !(t->layout.safe.w > 0))
 	{
 		return 0;
 	}
