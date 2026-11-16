@@ -123,7 +123,7 @@ def main(argv):
                      ("uptime_end", "up 1 day, load averages: 1.10 1.00 1.00")])
         return 0
     if cmd == "defaults":
-        # a=[cvarlist file]: the defaults an engine run sets first, and the order of the +set arguments
+        # a=[cvarlist file]: the defaults a run's console script sets first, and the order of its lines
         text = open(a[0]).read()
         cv = m.parse_cvarlist(text)
         opts = [{"id": "x", "set": [("r_metalfx", "1"), ("r_metalfx_interp", "1")]}, {"id": "y", "set": [("r_rt_denoiser", "1")]}]
@@ -131,37 +131,78 @@ def main(argv):
         c.defaults = m.default_cvars(cv, m.parse_noset(text), opts, {"rt": {"r_rt_shadows", "timedemo"}}, m.parse_archived(text))
         args = m.engine_args(c, [("r_rt_shadows", "1")], [("r_rt_denoiser", "1")], [])
         final = {}
-        for i in range(len(args) - 2):
-            if args[i] == "+set":
-                final[args[i + 1]] = args[i + 2]
+        for line in m.run_cfg_text(c, [("r_rt_shadows", "1")], [("r_rt_denoiser", "1")]).split("\n"):
+            if line.startswith("set "):
+                final[line.split()[1]] = line.split()[2]
         want = {"r_metalfx": "0", "r_metalfx_interp": "0", "r_rt_shadows": "1", "r_rt_denoiser": "1", "r_rt_arch": "2"}
         bad = [k for k in want if final.get(k) != want[k]]
         bad += [k for k in ("r_rt_fixed", "r_metalfx_modes", "timedemo", "r_rt_other") if k in final]
+        bad += [k for k in final if k in args]  # a cvar of the script is not also an argument
         print("ok" if not bad else "leak: " + " ".join(bad))
-        c.defaults = dict(("r_rt_x%d" % i, "0") for i in range(60))
+        return 0
+    if cmd == "cfg-many":
+        # cfg-many BINDIR N: defaults and a scenario of N cvars in all: the engine's argument count (its own name
+        # included), the +exec, the +set pairs left on the command line, and what reaches the console script
+        d = os.path.join(a[0], "baseq2")
+        os.makedirs(d, exist_ok=True)
+        n = int(a[1])
+        c = ctx_for(m, os.path.join(a[0], "quake2"))
+        c.defaults = dict(("r_rt_x%d" % i, "0") for i in range(n // 2))
+        sc = [("r_rt_y%d" % i, "1") for i in range(n - n // 2)]
         try:
-            m.engine_args(c, [], [], [])
+            args = m.engine_args(c, sc, [("r_metalfx", "2"), ("metal_stats", "1")], ["+demomap", c.demo], write=True)
+        except RuntimeError as e:
+            print("limit: %s" % e)
+            return 0
+        sets = [args[i + 1] for i in range(len(args)) if args[i] == "+set"]
+        text = open(os.path.join(d, "mfx-run.cfg")).read()
+        full = (all(("set r_rt_x%d 0\n" % i) in text for i in range(n // 2)) and
+                all(("set r_rt_y%d 1\n" % i) in text for i in range(n - n // 2)) and
+                "set r_metalfx 2\n" in text and "set metal_stats 1\n" in text)
+        print("args %d" % (len(args) + 1))
+        print("exec %d" % args.count("+exec"))
+        print("script %s" % ("complete" if full else "short"))
+        print("pairs %s" % ("leaked" if any(k.startswith("r_rt_") for k in sets) else "fixed only"))
+        # more cvars than the engine has arguments: the same count
+        c.defaults = dict(("r_rt_x%d" % i, "0") for i in range(200))
+        print("wide %d" % (len(m.engine_args(c, sc, [], ["+demomap", c.demo])) + 1))
+        # a command line over the limit is still an error
+        try:
+            m.engine_args(c, [], [], ["+wait"] * 130)
             print("no limit")
         except RuntimeError:
             print("limit")
-        # one option over the limit costs its own row only: native and the others are kept
-        c.defaults = dict(("r_rt_x%d" % i, "0") for i in range(25))
-        opts = [("native", [("r_metalfx", "0")]), ("small", [("r_metalfx", "1")]),
-                ("wide", [("r_wide%d" % i, "1") for i in range(12)])]
-        for k in range(1, 40):  # the widest option that still fits without metal_stats: the GPU run adds it
-            sets = [("r_wide%d" % i, "1") for i in range(k)]
+        return 0
+    if cmd == "cfg-unsafe":
+        # cfg-unsafe BINDIR: a value or name that cannot be written into a console line is refused with its cvar
+        # name, and a plain one is not
+        d = os.path.join(a[0], "baseq2")
+        os.makedirs(d, exist_ok=True)
+        c = ctx_for(m, os.path.join(a[0], "quake2"))
+        for what, sc in (("quote", [("r_rt_q", 'a"b')]), ("semicolon", [("r_rt_s", "1;quit")]), ("newline", [("r_rt_n", "1\nquit")]),
+                         ("space", [("r_rt_p", "1 2")]), ("empty", [("r_rt_e", "")]), ("name", [("r_rt_q;quit", "1")]),
+                         ("fixed", [("vid_renderer", "gl1")]), ("width", [("r_customwidth", "1")]), ("plain", [("r_rt_ok", "-0.5")])):
             try:
-                m.engine_args(c, [], sets, ["+demomap", c.demo])
-            except RuntimeError:
-                break
-            edge = sets
-        try:
-            m.engine_args(c, [], edge + [("metal_stats", "1")], ["+demomap", c.demo])
-            print("edge fits")
-        except RuntimeError:
-            opts.append(("edge", edge))
-        kept, dropped = m.fit_options(c, [], opts)
-        print("kept " + ",".join(k for k, _ in kept) + " dropped " + ",".join(k for k, _ in dropped))
+                m.engine_args(c, sc, [], [], write=True)
+                print("%s accepted" % what)
+            except m.Refuse as e:
+                print("%s refused: %s" % (what, e))
+        return 0
+    if cmd == "cfg-script-gone":
+        # cfg-script-gone BINDIR: the run's console script goes when the held config is restored, and one a killed
+        # run left goes at the next hold
+        d = os.path.join(a[0], "baseq2")
+        os.makedirs(d, exist_ok=True)
+        cfg = os.path.join(d, "mfx-run.cfg")
+        with open(cfg, "w") as f:
+            f.write("set stale 1\n")
+        g = m.CfgGuard(os.path.join(a[0], "quake2"))
+        g.hold()
+        print("after hold " + ("gone" if not os.path.exists(cfg) else "left"))
+        with open(cfg, "w") as f:
+            f.write("set run 1\n")
+        g.restore()
+        print("after restore " + ("gone" if not os.path.exists(cfg) else "left"))
         return 0
     if cmd == "cfg-both":
         # cfg-both BINDIR: config.cfg and config.cfg.mfx-saved both exist at hold(): neither is deleted
@@ -232,28 +273,6 @@ def main(argv):
         with open(os.path.join(rd, "crops", "%s.txt" % sc)) as f:
             print("index " + " ".join(f.read().split()))
         return 0
-    if cmd == "pad-scenario":
-        # pad-scenario CVLIST SCENARIO.cfg OPTION_BIG OPTION_SMALL: add `set` lines to the scenario until the
-        # widest (GPU) engine run of OPTION_SMALL fits the argument limit and that of OPTION_BIG does not
-        text = open(a[0]).read()
-        opts = m.load_options(os.path.join(argv[0], "options.tsv"))
-        by = dict((o["id"], o) for o in opts)
-        sc = os.path.basename(a[1])[:-4]
-        base = open(a[1]).read()
-        for n in range(0, 60):
-            body = base + "".join("set mfxpad%d 1\n" % i for i in range(n))
-            with open(a[1], "w") as f:
-                f.write(body)
-            c = ctx_for(m, "/bin/true")
-            c.defaults = m.default_cvars(m.parse_cvarlist(text), m.parse_noset(text), opts,
-                                         {sc: m.scenario_cvars(a[1])}, m.parse_archived(text))
-            kept, dropped = m.fit_options(c, m.parse_scenario(a[1]),
-                                          [("native", [("r_metalfx", "0")]), (a[3], by[a[3]]["set"]), (a[2], by[a[2]]["set"])])
-            if [k for k, _ in kept] == ["native", a[3]]:
-                print("padded %d" % n)
-                return 0
-        print("no padding fits")
-        return 1
     if cmd == "frames":
         # frames DIR_A DIR_B: frame pairing by number across records of different scenario names
         da, db = a
