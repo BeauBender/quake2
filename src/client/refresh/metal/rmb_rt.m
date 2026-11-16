@@ -49,6 +49,8 @@
 #include "common/mtl_shader_math.h"
 #include "common/mtl_rts_math.h"
 #include "common/mtl_rtao_math.h"
+#include "common/mtl_gbuf_math.h"
+#include "common/mtl_rtw_math.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_rt.m is written for ARC: compile it with -fobjc-arc"
@@ -116,6 +118,8 @@ static id<MTLBuffer> map_mat;   /* the world's per-triangle material ids */
 static unsigned long map_first[RMB_RT_MAX_MAP];   /* each structure's first triangle of the world's index buffer */
 static id<MTLBuffer> map_trans; /* the world's per-triangle transmission (RT3, rmb_rt_set_transmit) */
 static unsigned long map_ntris;
+static int map_vbuf, map_ibuf;     /* the retained buffers the map's structures were built from (RT6, rmb_rt_bind_geometry) */
+static unsigned long map_water;   /* the map's water triangles (RT6, rmb_rt_map_water) */
 
 /* the last frame's scene for a ray query (RT3): its structures, the instances' first triangles, its frame */
 static NSArray<id<MTLAccelerationStructure>> *scene_structs;
@@ -251,6 +255,8 @@ rmb_rt_free_map(void)
 	RMB_RT_SET(map_mat, nil);
 	RMB_RT_SET(map_trans, nil);
 	map_ntris = 0;
+	map_vbuf = map_ibuf = 0;
+	map_water = 0;
 	scene_ok = 0;
 	scene_structs = nil;
 	scene_base = nil;
@@ -461,6 +467,14 @@ rmb_rt_build_map(int vbuf, int ibuf, const rmb_rt_range_t *ranges, int nranges, 
 	s->world_bytes = map_bytes[0];
 	s->material_bytes = ntris_all;
 	map_ntris = ntris_all;
+	map_vbuf = vbuf;
+	map_ibuf = ibuf;
+	map_water = 0;
+
+	for (unsigned long t = 0; t < ntris_all; t++)
+	{
+		map_water += (mat[t] == RM_RT_MAT_WATER) ? 1 : 0;
+	}
 
 	for (i = 1; i < nranges; i++)
 	{
@@ -843,9 +857,11 @@ rmb_rt_frame(const rm_rt_inst_t *inst, int n, const rmb_rt_lerp_t *lerps, int nl
 				/*
 				 * A model that carries a light has its own mask: the shadow rays of
 				 * that light test it apart and pass it. Every instance but the view
-				 * weapon and the viewer's own model also has the AO rays' bit (RT5).
+				 * weapon and the viewer's own model also has the AO rays' bit (RT5)
+				 * and the reflection rays' (RT6, TASK58), each its own.
 				 */
-				desc[j].mask = mtl_rtao_inst_mask(mtl_rts_inst_mask(carry), inst[i].noao);
+				desc[j].mask = mtl_rtw_inst_mask(mtl_rtao_inst_mask(mtl_rts_inst_mask(carry), inst[i].noao),
+					inst[i].noao);
 			}
 
 			j++;
@@ -1172,6 +1188,34 @@ rmb_rt_bind_materials(id<MTLComputeCommandEncoder> ce, int mat_at, int n_at)
 	[ce setBuffer:map_mat offset:0 atIndex:(NSUInteger)mat_at];
 	[ce setBytes:&nt length:sizeof(nt) atIndex:(NSUInteger)n_at];
 	return 1;
+}
+
+int
+rmb_rt_bind_geometry(id<MTLComputeCommandEncoder> ce, int vert_at, int idx_at, int geom_at)
+{
+	id<MTLBuffer> vb = map_vbuf ? rmb_static_buffer(map_vbuf) : nil, ib = map_ibuf ? rmb_static_buffer(map_ibuf) : nil;
+	uint32_t g[4];
+
+	if (!rt_open || !map_ntris || !vb || !ib || (vb.length / RM_WVERT_STRIDE > 0xffffffffUL) ||
+		(ib.length / 12 > 0xffffffffUL))
+	{
+		return 0;
+	}
+
+	g[0] = (uint32_t)(vb.length / RM_WVERT_STRIDE);
+	g[1] = (uint32_t)(ib.length / 12);
+	g[2] = RM_WVERT_STRIDE / 16;
+	g[3] = 0;
+	[ce setBuffer:vb offset:0 atIndex:(NSUInteger)vert_at];
+	[ce setBuffer:ib offset:0 atIndex:(NSUInteger)idx_at];
+	[ce setBytes:g length:sizeof(g) atIndex:(NSUInteger)geom_at];
+	return 1;
+}
+
+unsigned long
+rmb_rt_map_water(void)
+{
+	return (rt_open && map_ntris) ? map_water : 0;
 }
 
 double

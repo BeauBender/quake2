@@ -41,6 +41,7 @@
 #include "header/rm_gbuf.h"
 #include "header/rm_rtshadow.h"
 #include "header/rm_rtao.h"
+#include "header/rm_rtwater.h"
 #include "header/rm_metalfx.h"
 
 #if !__has_feature(objc_arc)
@@ -778,6 +779,25 @@ rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 		/* r_rt_ao_show's view over the resolve, when the frame traced the AO */
 		rmb_rtao_show(enc, t_material);
 
+		/*
+		 * RT6 (TASK58): the water reflections, last, from the resolve's lit
+		 * result; their blend over the opaque water in a pass of its own (the
+		 * translucent water takes its own in the forward pass's draw)
+		 */
+		if (rmb_rtw_trace(rmb_gbuf_target(), t_depth, t_normal, t_material))
+		{
+			MTLRenderPassDescriptor *wp = [MTLRenderPassDescriptor renderPassDescriptor];
+			id<MTLRenderCommandEncoder> we;
+
+			rmb_gbuf_att_target(wp);
+			we = rmb_frame_open_pass(wp, 0, 0, 0);
+
+			if (we)
+			{
+				rmb_rtw_blend(we, t_material);
+			}
+		}
+
 		/* the forward pass over the resolved image: its depth and motion kept, the stencil cleared as the stock pass's */
 		return rmb_gbuf_open_motion(0, 0, 1);
 	}
@@ -787,6 +807,9 @@ void
 rmb_gbuf_view_end(const rm_viewport_t *src, const rm_viewport_t *dst)
 {
 	id<MTLTexture> color = rmb_frame_color();
+
+	/* RT6: the next forward pass's translucent draws are stock, on every path out (a pass that failed to open too) */
+	rmb_rtw_view_end();
 
 	if (pass_kind == RMB_GB_PASS_NONE)
 	{
@@ -898,6 +921,12 @@ rmb_gbuf_pipe3d(int pipe)
 		case RMB_GB_PASS_RASTER:
 			return view_surf ? gbs_pipes[pipe] : gb_pipes[pipe];
 		case RMB_GB_PASS_MOTION:
+			/* RT6 (TASK58): a translucent face takes the reflection where it is the water the kernel found */
+			if ((pipe == RM_PIPE_WORLD_TEXC_BLEND) && rmb_rtw_forward_pipe())
+			{
+				return rmb_rtw_forward_pipe();
+			}
+
 			return mv_pipes[pipe];
 		case RMB_GB_PASS_OTHER:
 			return nil;
@@ -985,6 +1014,12 @@ rmb_gbuf_bind_motion(id<MTLRenderCommandEncoder> enc, const float *mvp, const rm
 	u.half_vp[1] = (float)(vp->h * 0.5);
 	[enc setVertexBytes:&u length:sizeof(u) atIndex:3];
 	[enc setFragmentBytes:&u length:sizeof(u) atIndex:3];
+
+	/* RT6 (TASK58): what rmb_rtw_forward_pipe's draws read, while the view traced */
+	if (pass_kind == RMB_GB_PASS_MOTION)
+	{
+		rmb_rtw_bind_forward(enc);
+	}
 }
 
 /* n bytes of the frame ring at vertex buffer 2, filled by the caller; 0 when the ring is full */
@@ -1109,6 +1144,7 @@ void
 rmb_gbuf_frame_reset(void)
 {
 	pass_kind = RMB_GB_PASS_NONE;
+	rmb_rtw_view_end();
 	mv_set = 0;
 	alias_x = NULL;
 	dyn_n = NULL;
