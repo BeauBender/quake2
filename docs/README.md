@@ -8,7 +8,12 @@ ships with releases; `docs/` (this directory) is for working on the code.
 - `CLAUDE.md` (also `AGENTS.md`): build commands, the gate, architecture,
   security boundaries and the working rules for agents.
 - `scripts/setup.sh`: checks the toolchain and wires the commit and push hooks.
-- `scripts/test.sh`: the gate. Every commit must pass it. It ends with `make test`, the unit-test suite.
+- `scripts/test.sh`: the gate. Every commit must pass it. It runs
+  `tests/check-*.sh` through `scripts/gate-checks.sh`, `GATE_JOBS` at a time
+  (default half the CPUs; `GATE_JOBS=1` runs them one after another), each
+  check's log printed whole in the glob's order with its wall time (self-test
+  `tests/check-gate-parallel.sh`), then builds `q2ded` and the game module and
+  ends with `make test`, the unit-test suite.
 - Platforms: only Apple platforms are built and tested; other platforms are
   unmaintained (`docs/decisions/0008-apple-platforms-only.md`). CI runs the
   macOS test build, CodeQL and Cppcheck. Both CodeQL analyses (C and
