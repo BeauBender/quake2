@@ -268,6 +268,96 @@ at a quarter size or be folded into the resolve. That removes the raster's span 
 waiting here) and its fixed part; the trace on the list stays. It is TASK162 (marking water in the
 G-buffer raster).
 
+## Review round 1
+
+The panel on `4ddddfbb` found one Important in both the correctness and the security pass, and the
+spec pass asked for the cost to lead with its measurement. Engine commit measured: `19927e61` (the
+fixes below; the commits after it are this section), against main `a0eabe11` by main's stored
+records from the rework (`<artifacts>/TASK158/rework/store/M`: main has not moved, and the records
+of a scenario are deterministic). Everything is in `<artifacts>/TASK158/rework2/`.
+
+### A hidden model never leaves a hole
+
+- *The finding.* At `r_rt_water_hits 1` the reflection ray passed hidden alias models at most four
+  faces deep and then ended with no reflection. The rays cull no triangle, so a closed model is two
+  faces and a player with its weapon four: the water showed a stock-colour hole where hidden models
+  overlapped.
+- *The fix.* The map's instances (the world and the inline brush models) carry a bit of their own,
+  `MTL_RTW_MASK_MAP` (`0x10`, set by `mtl_rtw_inst_mask_ws` in `rmb_rt_frame`); alias instances do
+  not. The loop's step is `mtl_rtw_ws_next` in `mtl_rtw_math.h`: a hidden alias model is passed with
+  the same mask for its first three faces, as before, and at the fourth the ray is traced on with
+  `MTL_RTW_MASK_MAP` alone, so it ends where it would end without the models, in at most five
+  intersections. Every other choice stands as before. TASK58's kernel `rm_rtw_trace` and every
+  other query's mask are unchanged: the bit is added, nothing else.
+- *What is passed over, exactly.* An alias model (a player, a monster, an item, a weapon) the
+  picture does not show. A hidden brush model (a door, a plat) is a map face and is shaded where it
+  stands. `doc/040_cvarlist.md`, the kernel's comments and *What changed* above say so.
+- *Host test* (`test_ws_models`): a driver of the kernel's loop over scripted faces, with an
+  intersector that honours the masks, `mtl_rtw_choose_ws` and `mtl_rtw_ws_next`. Four to nine hidden
+  model faces before a wall give `LIT|WS` (the picture's `LIT` where it shows the wall; the sky box
+  or none with no wall); any number of them before any end give what that end gives alone, in at
+  most five casts; the earlier cases (no model, a model the picture shows, one hidden model, a
+  hidden door, a hidden model in front of a shown one) are unchanged. Red first, with the step's old
+  rule: 21 of 397 checks failed, the four-face cases ending with no reflection.
+
+### Setting 0 needs nothing of setting 1
+
+- *The finding.* `rmb_rtw_open` refused the whole pass, setting 0 included, when a resource only
+  setting 1 uses could not be built.
+- *The fix.* The pass opens on what main's needs (TASK58's kernel, the blend, the show view, the
+  translucent draw, the counts). The world-space path's resources (its three kernels, the
+  candidates' raster and its depth state, the texture table's argument encoder and buffer, the two
+  white textures) are built after them (`rmb_rtw_open_ws`); if one fails, all of them are released
+  (`rmb_rtw_close_ws`) and the pass stays open, `rmb_rtw_ws_ok` saying why. `RM_RTW_View` takes the
+  path from `rm_rtw_path`: setting 1 only with them, else TASK58's path, with the line `ref_metal: rt
+  water: <why>; r_rt_water_hits 1 refused, its hits shaded as 0's` once a pass (again after the pass
+  reopens). `rmb_rtw_prepare` refuses the world-space outputs without them as a backstop.
+- *Test and trace.* The decision is host-tested (`rm_rtw_path`, in `test_cvars`: the path, the line
+  once and again after a reopen, setting 0 never asking for the resources). Red first, with the
+  head's rule (the path follows the cvar): 5 of 406 checks failed. No seam can make a pipeline fail
+  on this device, so the Metal side is traced: with any of `trace_ws_pipe`, `compact_pipe`,
+  `args_pipe`, `cand_pipe`, `cand_depth`, `tex_enc`, `tex_ab`, `white2d` or `white_arr` nil,
+  `rmb_rtw_open_ws` releases all nine and returns 0, `rmb_rtw_open` still returns 1, `rmb_rtw_ws_ok`
+  returns 0, so `rm_rtw_path` gives 0 and `RM_RTW_View` calls `rmb_rtw_prepare(w, h, 0)`, which needs
+  only `trace_pipe` and `counts`; `rmb_rtw_trace` then takes `rmb_rtw_trace_ss`, which binds none of
+  the nine. On this device all of them build: no run printed the refusal line, and the teardown
+  counts are the rework's.
+
+### The cost's headline
+
+Design section 2's water-cost subsection now leads with the measured figures (4.66 against 3.40 ms
+at 1080p held with water in view, 2.06 against 1.33 ms held without water, 1.20 against 0.99 ms not
+held, and the rest of the table), labels the stages' count a re-count and not a frame measurement,
+and names the follow-up, TASK162 (marking water in the G-buffer raster). The status paragraph at the
+top says the same.
+
+### Re-verified on the engine
+
+Every run went through `tools/heavy.sh` after checking that the screen was unlocked and no other
+`quake2` ran (one-minute load 1.6 to 2.3, `<artifacts>/TASK158/rework2/logs/runs.txt`). `PINS_SEED=1`,
+the rework's scratch harness copy and scenarios, and the demo main's stored records played (the same
+checksum, so the same record ids). Quality runs under `MTL_DEBUG_LAYER=1`: each log holds the
+validation banner and no other validation line.
+
+| Check | Result |
+|---|---|
+| `hits 0` against main, byte for byte (`cmp`), `rt-water` at 640 x 480 | 20 of 20 frames equal |
+| The same at 1920 x 1080 | 5 of 5 equal |
+| `hits 1`, masked comparison (the effect off on the G-buffer path against on, outside the `r_rt_water_show 1` mask, `framediff --mask --threshold 0`), 640 x 480 | 20 of 20 score 0 |
+| The same at 1920 x 1080 | 5 of 5 score 0 |
+| `hits 1` against the rework's head `c6cdd3ec`, 640 x 480 | 20 of 20 equal: no reflected ray of this demo crosses four hidden model faces |
+| No reflection at `hits 1` (`r_rt_water_show 2`, 640 x 480, every frame's line) | 0 over the pool (61 lines) and 0 under it (77); from the picture 97.65 / 91.62 %, in world space 2.35 / 8.38 %, as in the rework |
+| Teardown | `rt 59/59` at `0` and `61/61` at `1`, as in the rework; `0/0` with the effect off |
+| Drift check, `hits 1`, 1920 x 1080 held (one run, 117 lines) | median 4.65 ms (p10 4.55, p90 4.87) against the stored 4.66 (4.55 / 4.89): inside the range, not measured again |
+
+### Checks, this round
+
+On `19927e61`, each through `tools/heavy.sh`: `make test` (171 tests, 0 failed),
+`tests/check-ref-metal.sh` (ok; water 406 checks, 0 failed), `tests/check-pins.sh`,
+`tests/check-cvar-docs.sh`, `tests/check-video-menu.sh`, `tests/check-doc-links.sh` and
+`tests/check-no-local-identity.sh` (each ok); builds `make client`, `make -B ref_metal` with and
+without `METAL_SHADERS=no` and `make STATIC_MODULES=1 STATIC_RENDERER=metal client` (each exit 0).
+
 ## Checks
 
 The rework's, on the branch head: in the card's report (`make test`, `tests/check-ref-metal.sh`,
