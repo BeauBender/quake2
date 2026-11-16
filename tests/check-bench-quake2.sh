@@ -505,7 +505,14 @@ qb() {
 	_qi=$1
 	shift
 	# shellcheck disable=SC2086 # BLD_ENV is words
-	(cd "$G" && with_env BENCH_INPUTS="$_qi" MAKE_LOG="${T:?}/make.log" ${BLD_ENV:-} -- q2h "${T:?}/bld.case" adapter_build "$GC" "$@")
+	(cd "$G" && with_env MAKE_LOG="${T:?}/make.log" ${BLD_ENV:-} -- q2h "${T:?}/bld.case" with_inputs "$_qi" adapter_build "$GC" "$@")
+}
+# with_inputs <inputs id> <command...>: the command with BENCH_INPUTS set,
+# inside q2h (sourcing the core clears it).
+with_inputs() {
+	BENCH_INPUTS=$1
+	shift
+	"$@"
 }
 # build_test <bench root>: says the first fault; 1 when there is one.
 build_test() {
