@@ -725,6 +725,15 @@ SV_ExecuteClientMessage(client_t *cl)
 				MSG_ReadDeltaUsercmd(&net_message, &oldest, &oldcmd);
 				MSG_ReadDeltaUsercmd(&net_message, &oldcmd, &newcmd);
 
+				/* a move cut short has read past the received data:
+				   the checksum below must not cover bytes that were
+				   never received, so drop it (the loop reports the
+				   bad read) */
+				if (net_message.readcount > net_message.cursize)
+				{
+					break;
+				}
+
 				if (cl->state != cs_spawned)
 				{
 					cl->lastframe = -1;

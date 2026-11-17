@@ -347,38 +347,42 @@ static void
 SVC_RemoteCommand(void)
 {
 	int i;
+	int valid;
 	char remaining[1024];
 
-	i = Rcon_Validate();
+	/* The command is the arguments after the password. They come from
+	   the tokenized copy of the packet, never from the receive buffer
+	   itself, which is not terminated. */
+	valid = Rcon_Validate();
+	remaining[0] = 0;
 
-	if (i == 0)
+	if (valid)
 	{
-		Com_Printf("Bad rcon from %s:\n%s\n", NET_AdrToString(
-						net_from), net_message.data + 4);
-	}
-	else
-	{
-		Com_Printf("Rcon from %s:\n%s\n", NET_AdrToString(
-						net_from), net_message.data + 4);
-	}
-
-	Com_BeginRedirect(RD_PACKET, sv_outputbuf,
-			SV_OUTPUTBUF_LENGTH, SV_FlushRedirect);
-
-	if (!Rcon_Validate())
-	{
-		Com_Printf("Bad rcon_password.\n");
-	}
-	else
-	{
-		remaining[0] = 0;
-
 		for (i = 2; i < Cmd_Argc(); i++)
 		{
 			Q_strlcat(remaining, Cmd_Argv(i), sizeof(remaining));
 			Q_strlcat(remaining, " ", sizeof(remaining));
 		}
 
+		Com_Printf("Rcon from %s: %s\n", NET_AdrToString(net_from),
+				remaining);
+	}
+	else
+	{
+		/* What the sender supplied is not echoed: it starts with
+		   the password they tried. */
+		Com_Printf("Bad rcon from %s\n", NET_AdrToString(net_from));
+	}
+
+	Com_BeginRedirect(RD_PACKET, sv_outputbuf,
+			SV_OUTPUTBUF_LENGTH, SV_FlushRedirect);
+
+	if (!valid)
+	{
+		Com_Printf("Bad rcon_password.\n");
+	}
+	else
+	{
 		Cmd_ExecuteString(remaining);
 	}
 
