@@ -170,7 +170,7 @@ digits() # <name> <value>
 
 selftest()
 {
-	local nfail=0 ncase=0 nskip=0
+	local nfail=0 ncase=0
 	sroot=$(mktemp -d "${TMPDIR:-/tmp}/ios-device-selftest.XXXXXX") || die "no scratch directory"
 	trap 'rm -rf "${sroot:?}"' EXIT
 	mkdir -p "${sroot:?}/bin" || die "cannot create $sroot/bin"
@@ -218,6 +218,15 @@ case $FAKE_SCENARIO in
 signfail)
 	echo "$sid: no identity found" >&2
 	echo "${*: -1}: the identity $sid is not of team $(plutil -extract application-identifier raw -o - "$ent" 2>/dev/null | cut -d . -f 1)" >&2
+	# and the scratch file and a path in the home directory (HOME is the case's)
+	echo "$ent: the entitlements could not be applied" >&2
+	echo "the keychain $HOME/Library/Keychains/login.keychain-db is locked" >&2
+	exit 1 ;;
+# an identity given as a hash or a part of the name: codesign names the
+# certificate it resolved, FAKE_SIGNER
+signchain)
+	echo "Warning: unable to build chain to self-signed root for signer \"$FAKE_SIGNER\"" >&2
+	echo "${*: -1}: errSecInternalComponent" >&2
 	exit 1 ;;
 signhang) echo $$ > "$FAKE_STATE/hang.pid"; exec sleep 30 ;;
 signstuck) echo $$ > "$FAKE_STATE/hang.pid"; trap '' TERM; exec sleep 30 ;;
@@ -337,7 +346,7 @@ EOF
 		fi
 		t0=$SECONDS
 		bounded 60 "${d:?}/out" env -u IOS_SIGN_IDENTITY -u IOS_PROFILE -u IOS_DEVICE -u IOS_BUNDLE_ID -u IOS_APP \
-			PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" TMPDIR="$d/tmp" \
+			PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" TMPDIR="$d/tmp" HOME="$d" \
 			${appenv[@]+"${appenv[@]}"} ${envs[@]+"${envs[@]}"} bash "$script" ${args[@]+"${args[@]}"} || rc=$?
 		t0=$((SECONDS - t0))
 		if [ "$rc" = 124 ]; then
@@ -381,45 +390,26 @@ EOF
 		dt_default=
 	}
 
-	# whether INT sent to a process group started here ends it, as a
-	# terminal's Ctrl-C ends the script's: not where this shell ignored INT
-	# on entry, which no process below it can undo
-	int_ok=
-	(
-		set -m
-		sleep 30 &
-		s=$!
-		kill -INT -- "-$s" 2>/dev/null
-		n=0
-		while kill -0 "$s" 2>/dev/null && [ "$n" -lt 10 ]; do sleep 0.2; n=$((n + 1)); done
-		if kill -0 "$s" 2>/dev/null; then
-			kill -9 "$s" 2>/dev/null
-			wait "$s" 2>/dev/null
-			exit 1
-		fi
-		exit 0
-	) 2>/dev/null && int_ok=1
-
-	# dt_signal <name> <TERM|INT> <scenario> <app> -- <arguments>...: starts
-	# the script on a copy of <app> in its own process group (as a
-	# terminal's foreground job is), waits for the fake's hanging step,
-	# sends TERM to the script, or INT to its process group (Ctrl-C), and
-	# checks: it exits 1 within 10 s; the fake's recorded PID is gone; no
-	# scratch file is left; an interrupted sign leaves no profile and no
-	# signature in the bundle, an interrupted install or launch leaves the
-	# signed bundle as it was
+	# dt_signal <name> <TERM|INT|QUIT|HUP> <scenario> <app> -- <arguments>...:
+	# starts the script on a copy of <app> in its own process group (as a
+	# terminal's foreground job is), with INT and QUIT reset to their
+	# default first (perl, then exec: a shell that ignored them on entry,
+	# as a background job of one without job control does, cannot), waits
+	# for the fake's hanging step, sends INT to its process group (Ctrl-C),
+	# or the signal to the script alone, and checks: it exits 1 (129 for
+	# HUP, which the exit cleanup handles) within 10 s; the fake's recorded
+	# PID is gone; no scratch file is left; an interrupted sign leaves no
+	# profile and no signature in the bundle, an interrupted install or
+	# launch leaves the signed bundle as it was
+	command -v perl > /dev/null 2>&1 || die "perl not found: the selftest's interrupt cases need it"
 	dt_signal()
 	{
-		local name=$1 sig=$2 sc=$3 app=$4 d why= a hp rc
+		local name=$1 sig=$2 sc=$3 app=$4 d why= a hp rc want=1
 		local -a args=()
 		shift 4
 		[ "${1:-}" = -- ] && shift
 		ncase=$((ncase + 1))
-		if [ "$sig" = INT ] && [ -z "$int_ok" ]; then
-			nskip=$((nskip + 1))
-			echo "ios-device: selftest: skip $name: INT is ignored here (under a background job of a shell without job control), so no Ctrl-C can reach the script"
-			return 0
-		fi
+		[ "$sig" = HUP ] && want=129
 		d=$sroot/case/$name
 		mkdir -p "${d:?}/state" "${d:?}/tmp" || die "cannot create $d"
 		: > "${d:?}/state/calls"
@@ -429,13 +419,14 @@ EOF
 		# set -m starts it in its own process group
 		(
 			set -m
-			env -u IOS_SIGN_IDENTITY -u IOS_PROFILE -u IOS_DEVICE -u IOS_BUNDLE_ID -u IOS_APP \
-				PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" TMPDIR="$d/tmp" \
+			perl -e '$SIG{INT} = $SIG{QUIT} = "DEFAULT"; exec { $ARGV[0] } @ARGV or exit 127' \
+				env -u IOS_SIGN_IDENTITY -u IOS_PROFILE -u IOS_DEVICE -u IOS_BUNDLE_ID -u IOS_APP \
+				PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" TMPDIR="$d/tmp" HOME="$d" \
 				IOS_APP="$d/Quake2.app" bash "$self" "${args[@]}" > "$d/out" 2>&1 &
 			spid=$!
 			n=0
 			while [ ! -s "$d/state/hang.pid" ] && [ "$n" -lt 50 ]; do sleep 0.2; n=$((n + 1)); done
-			if [ "$sig" = INT ]; then kill -INT -- "-$spid"; else kill -TERM "$spid"; fi
+			if [ "$sig" = INT ]; then kill -INT -- "-$spid"; else kill -"$sig" "$spid"; fi
 			n=0
 			while kill -0 "$spid" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.2; n=$((n + 1)); done
 			if kill -0 "$spid" 2>/dev/null; then
@@ -456,8 +447,8 @@ EOF
 			kill -9 "$hp" 2>/dev/null
 		elif [ "$rc" = hung ]; then
 			why="it outlived 10 s after the $sig"
-		elif [ "$rc" != 1 ]; then
-			why="it exited $rc, not 1"
+		elif [ "$rc" != "$want" ]; then
+			why="it exited $rc, not $want"
 		elif [ -n "$(ls -A "${d:?}/tmp")" ]; then
 			why="it left its scratch files: $(ls -A "${d:?}/tmp" | head -n 3 | tr '\n' ' ')"
 		elif [ "$sc" != "${sc#sign}" ] && { [ -e "$d/Quake2.app/embedded.mobileprovision" ] || [ -e "$d/Quake2.app/_CodeSignature" ]; }; then
@@ -528,19 +519,34 @@ codesign|--verify|--strict|@APP@|"
 	# with placeholders, and the bundle is left with no profile and no
 	# signature (a bundle signed before too)
 	unsigned_after='[ ! -e Quake2.app/embedded.mobileprovision ] && [ ! -e Quake2.app/_CodeSignature ] || echo "the bundle is left with a profile or a signature"'
-	dt_after=$unsigned_after
+	# (the scratch path and the home path, raw, are caught by dt_case's
+	# check for a path in the scratch root)
+	paths_after='grep -q -F "<scratch>/entitlements.plist: the entitlements could not be applied" out || echo "the scratch path is not printed as <scratch>"
+		grep -q -F "the keychain <home>/Library/Keychains/login.keychain-db is locked" out || echo "the home path is not printed as <home>"'
+	dt_after="$unsigned_after
+		$paths_after"
 	dt_case sign-codesign-fails 1 "Quake2.app: the identity <identity> is not of team <team>" signfail device.app -- sign --identity "$who" --profile @P@/good
-	dt_after=$unsigned_after
+	dt_after="$unsigned_after
+		$paths_after"
 	dt_case sign-resign-fails 1 "<identity>: no identity found" signfail signed.app -- sign --identity "$who" --profile @P@/good
+	# an identity as a SHA-1 hash: codesign names the certificate it
+	# resolved; a line that names a signer is not printed, one fixed line is
+	dt_after="$unsigned_after"'
+		grep -q -F "Quake2.app: errSecInternalComponent" out || echo "the line after the signer'"'"'s is not printed"'
+	dt_case sign-identity-hash-signer 1 "ios-device: (a line naming the signing certificate, not printed)" signchain device.app \
+		FAKE_SIGNER="Apple Development: $who ($team)" -- sign --identity 0123456789ABCDEF0123456789ABCDEF01234567 --profile @P@/good
 	dt_after=$unsigned_after
 	dt_case sign-codesign-hangs 1 "timed out after 2 s" signhang device.app IOS_DEVICE_SIGN_SECONDS=2 -- sign --identity "$who" --profile @P@/good
 	dt_after=$unsigned_after
 	dt_case sign-verify-fails 1 "Quake2.app: a sealed resource is missing or invalid" verifyfail device.app -- sign --identity "$who" --profile @P@/good
-	# an interrupt during a step: TERM to the script, INT to its process
-	# group; a step that ignores TERM too is killed after the grace
+	# an interrupt during a step: TERM, QUIT (Ctrl-\) or HUP to the script,
+	# INT to its process group; a step that ignores TERM too is killed
+	# after the grace
 	dt_signal sign-term-hang TERM signhang device.app -- sign --identity "$who" --profile @P@/good
 	dt_signal sign-term-stuck TERM signstuck device.app -- sign --identity "$who" --profile @P@/good
 	dt_signal sign-int-hang INT signhang device.app -- sign --identity "$who" --profile @P@/good
+	dt_signal sign-quit-hang QUIT signhang device.app -- sign --identity "$who" --profile @P@/good
+	dt_signal sign-hup-hang HUP signhang device.app -- sign --identity "$who" --profile @P@/good
 	dt_signal install-int-hang INT devhang signed.app -- install --device "$dev"
 	dt_signal launch-term-hang TERM devhang signed.app -- launch --device "$dev"
 	# install and launch
@@ -574,11 +580,7 @@ codesign|--verify|--strict|@APP@|"
 		echo "ios-device: selftest: $nfail of $ncase cases failed"
 		exit 1
 	fi
-	if [ "$nskip" -ne 0 ]; then
-		echo "ios-device: selftest: ok ($ncase cases, $nskip skipped: INT is ignored here)"
-	else
-		echo "ios-device: selftest: ok ($ncase cases)"
-	fi
+	echo "ios-device: selftest: ok ($ncase cases)"
 	exit 0
 }
 
