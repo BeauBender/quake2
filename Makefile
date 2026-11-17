@@ -1600,7 +1600,8 @@ endif
 # ref_metal.metallib (METAL_SHADERS=yes; ref_metal looks for it beside
 # the executable) and, only with IOS_BUNDLE_DATA, that directory's
 # baseq2/. The simulator's bundle is signed ad hoc; the device's
-# (iphoneos) is left unsigned. ios_objects builds the engine's objects
+# (iphoneos) is left unsigned, for scripts/ios-device.sh to sign with
+# the owner's identity and profile. ios_objects builds the engine's objects
 # and the Info.plist only, without SDL and the link: what
 # tests/check-ios.sh checks in the gate.
 ifeq ($(IOS_MODE),1)

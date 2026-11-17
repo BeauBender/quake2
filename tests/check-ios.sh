@@ -33,14 +33,23 @@
 #       _SDL_RunApp: main.c includes SDL_main.h, whose main runs
 #       UIApplicationMain (assert_sdl_main);
 #   (l) the simulator's rm_main.o holds ref_metal's line that the
-#       simulator does not check the apple5 floor; rm_main.o compiled
-#       with the device build's own command (make -n IOS_SDK=iphoneos)
-#       holds the floor's refusal and not that line (assert_floor);
+#       simulator does not check the apple5 floor; the device build's
+#       rm_main.o (o) holds the floor's refusal and not that line
+#       (assert_floor);
 #   (m) make refuses an IOS_ROOT under release/ or debug/ however it is
 #       spelled, and an IOS_ROOT or IOS_BUNDLE_DATA with a make or shell
 #       metacharacter, without evaluating it (make -n ios_objects);
 #   (n) scripts/ios-sim.sh selftest: the smoke's device, list and limit
-#       rules against a fake xcrun and make (no simulator).
+#       rules against a fake xcrun and make (no simulator);
+#   (o) TASK152, with the device SDK (xcrun --sdk iphoneos): "make
+#       ios_objects IOS_SDK=iphoneos" compiles the same objects for a
+#       device: every object the build was to write exists, every object
+#       of its tree has platform 2 (IOS) and minos 17.0, the Info.plist
+#       passes (d) with iPhoneOS, (f) holds for the device's commands, and
+#       (l) is taken on its rm_main.o;
+#   (p) scripts/ios-device.sh --selftest: the signing seam's refusals and
+#       its codesign and devicectl calls against a fake security, codesign
+#       and xcrun (no keychain, no device, no real codesign).
 # --full (by hand): additionally "make ios" (the
 # vendored SDL3 for the simulator, the link, the bundle, the ad hoc
 # signature; METAL_SHADERS from the environment, default yes) and:
@@ -51,7 +60,12 @@
 #   (i) codesign --verify --strict passes on the bundle;
 #   (j) the bundle's Info.plist passes (d), and the bundle holds
 #       ref_metal.metallib (METAL_SHADERS=yes) and no .pak and no
-#       baseq2/, as no IOS_BUNDLE_DATA was given.
+#       baseq2/, as no IOS_BUNDLE_DATA was given;
+#   (q) with the device SDK, "make ios IOS_SDK=iphoneos": the device's
+#       executable passes (g) with platform 2 and (h), links MetalFX weak
+#       (otool -L), the bundle has no signature (_CodeSignature) and no
+#       embedded.mobileprovision (scripts/ios-device.sh signs it), and it
+#       passes (j) with iPhoneOS.
 # Each assertion first runs on scratch mutants that it must refuse,
 # naming the cause, and on a good sample it must accept, so an assertion
 # that passes everything fails here.
@@ -59,11 +73,19 @@
 # Build time, measured here (6 cores, -j3): the default about 8 s; --full
 # about 25 s more, most of it the 231 vendored SDL3 sources, which the
 # default does not compile. So the gate runs the default, and --full is
-# run by hand (a CI step for it is left to a later card).
+# run by hand (a CI step for it is left to a later card). TASK152, with
+# other work sharing the host: the simulator's objects 7 to 16 s over
+# three runs and the device's 13 s; under --full 59 s and 54 s (one run);
+# the whole check 377 to 481 s over three runs, of which
+# scripts/ios-device.sh --selftest was about 25 s; with its interrupt
+# cases (round 2) 32 to 35 s over 20 runs, 19 of them mutants run five at
+# a time.
 #
 # Without the iOS simulator SDK (another OS, or Xcode without its iOS
 # platform) the check prints one "skipped" line and exits 0. With the
 # SDK a missing tool or a failed build is a failure, never a skip.
+# Without the device SDK (iphoneos) the device parts, (l)'s device half,
+# (o) and (q), print one "skipped" line and the rest runs.
 #
 # IOS_CHECK_MAKE_ARGS adds make arguments, to run the check against a
 # deliberately broken build.
@@ -94,6 +116,9 @@ if [ -z "$sdk" ] || [ ! -f "$sdk/SDKSettings.plist" ]; then
 	exit 0
 fi
 
+dsdk=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null) || dsdk=
+[ -f "$dsdk/SDKSettings.plist" ] || dsdk=
+
 fail=0
 bad() { echo "check-ios: $*"; fail=1; }
 
@@ -122,17 +147,20 @@ platform_of()
 		c == "LC_BUILD_VERSION" && $1 == "minos" { print p, $2; exit }'
 }
 
-# every file named in <list> is built for the simulator at the minimum version
-assert_platform() # <list file>
+# every file named in <list> is built for the platform (7, the simulator,
+# by default; 2, a device) at the minimum version
+assert_platform() # <list file> [2]
 {
 	rc=0
+	want="7 (IOSSIMULATOR)"
+	[ "${2:-7}" = 2 ] && want="2 (IOS)"
 	while read -r f; do
 		got=$(platform_of "$f")
 		if [ -z "$got" ]; then
-			echo "$f has no LC_BUILD_VERSION, so no platform 7 (IOSSIMULATOR)"
+			echo "$f has no LC_BUILD_VERSION, so no platform $want"
 			rc=1
-		elif [ "$got" != "7 $minos" ]; then
-			echo "$f is built for platform ${got%% *} minos ${got#* }, not platform 7 (IOSSIMULATOR) minos $minos"
+		elif [ "$got" != "${want%% *} $minos" ]; then
+			echo "$f is built for platform ${got%% *} minos ${got#* }, not platform $want minos $minos"
 			rc=1
 		fi
 	done < "$1"
@@ -164,8 +192,9 @@ assert_no_appkit() # <list file> <class list>
 	return $rc
 }
 
-assert_plist() # <Info.plist>
+assert_plist() # <Info.plist> [iPhoneOS]
 {
+	wplat=${2:-iPhoneSimulator}
 	if ! plutil -lint -s "$1" > "${tmp:?}/lint" 2>&1; then
 		echo "$1 fails plutil -lint: $(head -n 1 "${tmp:?}/lint")"
 		return 1
@@ -174,7 +203,7 @@ assert_plist() # <Info.plist>
 	exe=$(plutil -extract CFBundleExecutable raw -o - "$1" 2>/dev/null) || exe="(none)"
 	[ "$exe" = quake2 ] || { echo "$1: CFBundleExecutable is $exe, not quake2"; rc=1; }
 	plat=$(plutil -extract CFBundleSupportedPlatforms.0 raw -o - "$1" 2>/dev/null) || plat="(none)"
-	[ "$plat" = iPhoneSimulator ] || { echo "$1: CFBundleSupportedPlatforms is $plat, not iPhoneSimulator"; rc=1; }
+	[ "$plat" = "$wplat" ] || { echo "$1: CFBundleSupportedPlatforms is $plat, not $wplat"; rc=1; }
 	min=$(plutil -extract MinimumOSVersion raw -o - "$1" 2>/dev/null) || min="(none)"
 	[ "$min" = "$minos" ] || { echo "$1: MinimumOSVersion is $min, not $minos"; rc=1; }
 	id=$(plutil -extract CFBundleIdentifier raw -o - "$1" 2>/dev/null) || id=
@@ -301,6 +330,31 @@ assert_signed() # <bundle>
 	fi
 }
 
+# otool -L output: MetalFX, and weak (the device's ref_metal runs on an
+# iOS without it: rmb_metalfx.m checks for its classes)
+assert_weak_metalfx() # <otool -L output>
+{
+	line=$(grep -F '/MetalFX.framework/MetalFX ' "$1") || line=
+	if [ -z "$line" ]; then
+		echo "the executable links no MetalFX"
+		return 1
+	fi
+	case $line in
+	*", weak)"*) ;;
+	*) echo "the executable links MetalFX, but not weak: $line"; return 1 ;;
+	esac
+}
+
+# the device's bundle as make leaves it: no signature, no profile
+assert_unsigned() # <bundle>
+{
+	hit=$(cd "$1" && find . \( -name _CodeSignature -o -name embedded.mobileprovision \) | sort | tr '\n' ' ')
+	if [ -n "$hit" ]; then
+		echo "$1 is not the unsigned device bundle: it holds $hit"
+		return 1
+	fi
+}
+
 assert_no_data() # <bundle>
 {
 	hit=$(cd "$1" && find . \( -iname '*.pak' -o -name baseq2 \) | sort | head -n 5 | tr '\n' ' ')
@@ -358,13 +412,22 @@ if ! cc_ios -c "${m:?}/two.c" -o "${m:?}/two.o" > "${m:?}/cc.out" 2>&1 \
 	|| ! cc_ios -c "${m:?}/sdlmain-only.c" -o "${m:?}/sdlmain-only.o" >> "${m:?}/cc.out" 2>&1 \
 	|| ! cc_ios -c "${m:?}/sdlmain.c" -o "${m:?}/sdlmain.o" >> "${m:?}/cc.out" 2>&1 \
 	|| ! cc_ios -c "${m:?}/skip.c" -o "${m:?}/skip.o" >> "${m:?}/cc.out" 2>&1 \
-	|| ! xcrun -sdk iphoneos clang -target arm64-apple-ios$minos -c "${m:?}/leak.c" -o "${m:?}/leak.o" >> "${m:?}/cc.out" 2>&1 \
-	|| ! xcrun -sdk iphoneos clang -target arm64-apple-ios$minos -c "${m:?}/floor.c" -o "${m:?}/floor.o" >> "${m:?}/cc.out" 2>&1 \
 	|| ! xcrun -sdk macosx clang -target arm64-apple-macos13.0 -c "${m:?}/two.c" -o "${m:?}/macos.o" >> "${m:?}/cc.out" 2>&1 \
 	|| ! xcrun -sdk iphonesimulator ld -r -arch arm64 -exported_symbol _GetRefAPI "${m:?}/two.o" -o "${m:?}/one.o" >> "${m:?}/cc.out" 2>&1; then
 	tail -n 5 "${m:?}/cc.out"
 	echo "check-ios: the mutants could not be compiled for the simulator"
 	exit 1
+fi
+cc_dev() { xcrun -sdk iphoneos clang -target "arm64-apple-ios$minos" -isysroot "$dsdk" "$@"; }
+if [ -n "$dsdk" ]; then
+	if ! cc_dev -c "${m:?}/leak.c" -o "${m:?}/leak.o" >> "${m:?}/cc.out" 2>&1 \
+		|| ! cc_dev -c "${m:?}/floor.c" -o "${m:?}/floor.o" >> "${m:?}/cc.out" 2>&1; then
+		tail -n 5 "${m:?}/cc.out"
+		echo "check-ios: the mutants could not be compiled for a device"
+		exit 1
+	fi
+else
+	echo "check-ios: device parts skipped: no iOS device SDK (xcrun --sdk iphoneos --show-sdk-path)"
 fi
 
 # (a)
@@ -466,10 +529,35 @@ refused "main.o defining SDL_main without SDL's main" "has no _SDL_RunApp" asser
 accepted "main.o of SDL_main.h's shape" assert_sdl_main "${m:?}/sdlmain.o"
 # (l)
 refused "simulator rm_main.o without the floor line" "does not check the apple5 floor" assert_floor "${m:?}/two.o" sim
-refused "device rm_main.o with the simulator's guard" "the simulator's guard leaks" assert_floor "${m:?}/leak.o" device
 refused "device rm_main.o without the floor refusal" "no apple5 floor refusal" assert_floor "${m:?}/two.o" device
 accepted "simulator rm_main.o" assert_floor "${m:?}/skip.o" sim
-accepted "device rm_main.o" assert_floor "${m:?}/floor.o" device
+if [ -n "$dsdk" ]; then
+	refused "device rm_main.o with the simulator's guard" "the simulator's guard leaks" assert_floor "${m:?}/leak.o" device
+	accepted "device rm_main.o" assert_floor "${m:?}/floor.o" device
+	# (o): a simulator object among the device's
+	printf '%s\n' "${m:?}/floor.o" "${m:?}/two.o" > "${m:?}/devmixed.list"
+	printf '%s\n' "${m:?}/floor.o" "${m:?}/leak.o" > "${m:?}/dev.list"
+	refused "simulator object in the device tree" "two.o is built for platform 7 minos $minos, not platform 2 (IOS)" assert_platform "${m:?}/devmixed.list" 2
+	refused "device object in the simulator tree" "floor.o is built for platform 2 minos $minos, not platform 7 (IOSSIMULATOR)" assert_platform "${m:?}/dev.list"
+	accepted "device objects" assert_platform "${m:?}/dev.list" 2
+	sed -e 's/@BUNDLE_ID@/org.example.check/g' -e 's/@VERSION@/1.0/g' -e "s/@PLATFORM@/iPhoneOS/g" \
+		-e "s/@MIN_OS@/$minos/g" stuff/ios/Info.plist.in > "${m:?}/device.plist"
+	refused "simulator Info.plist for a device" "is iPhoneSimulator, not iPhoneOS" assert_plist "${m:?}/good.app/Info.plist" iPhoneOS
+	refused "device Info.plist for the simulator" "is iPhoneOS, not iPhoneSimulator" assert_plist "${m:?}/device.plist"
+	accepted "device Info.plist" assert_plist "${m:?}/device.plist" iPhoneOS
+fi
+# (q)
+printf '%s\n' "x:" "	/System/Library/Frameworks/Metal.framework/Metal (compatibility version 1.0.0, current version 1.0.0)" > "${m:?}/nofx.L"
+printf '%s\n' "x:" "	/System/Library/Frameworks/MetalFX.framework/MetalFX (compatibility version 1.0.0, current version 1.0.0)" > "${m:?}/strongfx.L"
+printf '%s\n' "x:" "	/System/Library/Frameworks/MetalFX.framework/MetalFX (compatibility version 1.0.0, current version 1.0.0, weak)" > "${m:?}/weakfx.L"
+refused "device executable without MetalFX" "links no MetalFX" assert_weak_metalfx "${m:?}/nofx.L"
+refused "device executable linking MetalFX strong" "MetalFX, but not weak" assert_weak_metalfx "${m:?}/strongfx.L"
+accepted "device executable linking MetalFX weak" assert_weak_metalfx "${m:?}/weakfx.L"
+mkdir -p "${m:?}/profiled.app"
+: > "${m:?}/profiled.app/embedded.mobileprovision"
+refused "device bundle signed by make" "holds ./_CodeSignature" assert_unsigned "${m:?}/signed.app"
+refused "device bundle with a profile" "holds ./embedded.mobileprovision" assert_unsigned "${m:?}/profiled.app"
+accepted "unsigned device bundle" assert_unsigned "${m:?}/good.app"
 
 # ---- the build -----------------------------------------------------------
 
@@ -536,6 +624,15 @@ else
 	grep -E 'FAIL|^    |cases failed' "${tmp:?}/selftest.log" | head -n 30
 	bad "scripts/ios-sim.sh selftest failed"
 fi
+# (p)
+ndev=0
+if bash scripts/ios-device.sh --selftest > "${tmp:?}/devselftest.log" 2>&1; then
+	ndev=$(grep -c '^ios-device: selftest: ok [a-z]' "${tmp:?}/devselftest.log") || ndev=0
+	[ "$ndev" -ge 1 ] || bad "scripts/ios-device.sh --selftest passed with no case"
+else
+	grep -E 'FAIL|^    |cases failed|No such file' "${tmp:?}/devselftest.log" | head -n 30
+	bad "scripts/ios-device.sh --selftest failed"
+fi
 
 # what the build is to write, and the commands ios would compile it with
 # shellcheck disable=SC2086 # extra is a word list
@@ -568,7 +665,8 @@ fi
 while read -r o; do
 	[ -s "$tree/$o" ] || bad "the build did not write $o"
 done < "${tmp:?}/expected"
-# every object in the tree, SDL's too under --full
+# every object in the tree (the device build has not run yet, so all of
+# it is the simulator's), SDL's too under --full
 (cd "${tree:?}" && find build -name '*.o' | sort) > "${tmp:?}/objects.rel"
 sed "s|^|$tree/|" "${tmp:?}/objects.rel" > "${tmp:?}/objects"
 nobj=$(grep -c . "${tmp:?}/objects") || nobj=0
@@ -590,25 +688,41 @@ out=$(assert_macos_cmds "${tmp:?}/macos.n") || bad "$out"
 out=$(assert_same_compiles "${tmp:?}/objects.n" "${tmp:?}/ios.n") || bad "$out"
 # (k)
 out=$(assert_sdl_main "$root/obj-metal/client/src/backends/unix/main.o") || bad "$out"
-# (l): the simulator's object, and the device's compiled with its own command
+# (l): the simulator's object; the device's under (o)
 out=$(assert_floor "$root/obj-metal/ref_metal/src/client/refresh/metal/rm_main.o" sim) || bad "$out"
-dev=$tree/build/ios-iphoneos-check
-# shellcheck disable=SC2086 # extra is a word list
-if ! mk -n -B VERBOSE=1 ios_objects IOS_SDK=iphoneos METAL_SHADERS=no IOS_ROOT="$dev" $extra > "${tmp:?}/device.n" 2>&1; then
-	tail -n 5 "${tmp:?}/device.n"
-	bad "make -n ios_objects IOS_SDK=iphoneos failed"
-fi
-grep -E ' -c .* -o [^ ]*/rm_main\.o src/client/refresh/metal/rm_main\.c$' "${tmp:?}/device.n" | head -n 1 > "${tmp:?}/device.cc"
-if [ ! -s "${tmp:?}/device.cc" ]; then
-	bad "make -n ios_objects IOS_SDK=iphoneos has no compile command of rm_main.c"
-else
-	mkdir -p "${dev:?}/obj-metal/ref_metal/src/client/refresh/metal"
-	if (cd "${tree:?}" && sh "${tmp:?}/device.cc") > "${tmp:?}/device.out" 2>&1; then
-		out=$(assert_floor "$dev/obj-metal/ref_metal/src/client/refresh/metal/rm_main.o" device) || bad "$out"
-	else
-		tail -n 5 "${tmp:?}/device.out"
-		bad "rm_main.c does not compile with the device build's command"
+
+# (o): the same objects for a device (and under --full the bundle, (q))
+devroot=$tree/build/ios-iphoneos/release
+ndevobj=0
+delapsed=-
+if [ -n "$dsdk" ]; then
+	# shellcheck disable=SC2086 # extra is a word list
+	if ! mk -n -B VERBOSE=1 ios_objects IOS_SDK=iphoneos METAL_SHADERS=no $extra > "${tmp:?}/devobjects.n" 2>&1 \
+		|| ! mk -n -B VERBOSE=1 ios IOS_SDK=iphoneos METAL_SHADERS=no $extra > "${tmp:?}/devios.n" 2>&1; then
+		tail -n 5 "${tmp:?}/devobjects.n" "${tmp:?}/devios.n" 2>/dev/null || true
+		echo "check-ios: the device build cannot be evaluated (make -n ios_objects IOS_SDK=iphoneos, make -n ios IOS_SDK=iphoneos)"
+		exit 1
 	fi
+	grep -E -o ' -o [^ ]+\.o( |$)' "${tmp:?}/devobjects.n" | awk '{ print $2 }' | sort -u > "${tmp:?}/devexpected"
+	dstart=$(date +%s)
+	# shellcheck disable=SC2086 # extra is a word list
+	if ! mk -j"$jobs" QUIET=1 $goal IOS_SDK=iphoneos METAL_SHADERS="$ms" $extra > "${tmp:?}/devbuild.log" 2>&1; then
+		tail -n 30 "${tmp:?}/devbuild.log"
+		echo "check-ios: the device build failed (make $goal IOS_SDK=iphoneos METAL_SHADERS=$ms $extra)"
+		exit 1
+	fi
+	delapsed=$(( $(date +%s) - dstart ))
+	n=$(grep -c . "${tmp:?}/devexpected") || n=0
+	[ "$n" -ge 100 ] || bad "make -n ios_objects IOS_SDK=iphoneos names $n objects, not the client, game and ref_metal"
+	while read -r o; do
+		[ -s "$tree/$o" ] || bad "the device build did not write $o"
+	done < "${tmp:?}/devexpected"
+	(cd "${tree:?}" && find build/ios-iphoneos -name '*.o' | sort) | sed "s|^|$tree/|" > "${tmp:?}/devobjects"
+	ndevobj=$(grep -c . "${tmp:?}/devobjects") || ndevobj=0
+	out=$(assert_platform "${tmp:?}/devobjects" 2) || bad "$out"
+	out=$(assert_plist "$devroot/Info.plist" iPhoneOS) || bad "$out"
+	out=$(assert_same_compiles "${tmp:?}/devobjects.n" "${tmp:?}/devios.n") || bad "$out"
+	out=$(assert_floor "$devroot/obj-metal/ref_metal/src/client/refresh/metal/rm_main.o" device) || bad "$out"
 fi
 
 if [ "$full" = 1 ]; then
@@ -634,10 +748,32 @@ if [ "$full" = 1 ]; then
 	if [ "$ms" = yes ] && [ ! -s "$app/ref_metal.metallib" ]; then
 		bad "$app holds no ref_metal.metallib although METAL_SHADERS=yes"
 	fi
+	# (q)
+	if [ -n "$dsdk" ]; then
+		dapp=$devroot/Quake2.app
+		dexe=$dapp/quake2
+		if [ ! -x "$dexe" ]; then
+			echo "check-ios: $dexe was not produced"
+			exit 1
+		fi
+		printf '%s\n' "$dexe" > "${tmp:?}/dexe.list"
+		out=$(assert_platform "${tmp:?}/dexe.list" 2) || bad "$out"
+		out=$(assert_entry_points "$dexe") || bad "$out"
+		out=$(assert_sdl_main "$dexe") || bad "$out"
+		otool -L "$dexe" > "${tmp:?}/dlibs" || bad "otool -L failed on $dexe"
+		out=$(assert_libs "${tmp:?}/dlibs") || bad "$out"
+		out=$(assert_weak_metalfx "${tmp:?}/dlibs") || bad "$out"
+		out=$(assert_unsigned "$dapp") || bad "$out"
+		out=$(assert_plist "$dapp/Info.plist" iPhoneOS) || bad "$out"
+		out=$(assert_no_data "$dapp") || bad "$out"
+		if [ "$ms" = yes ] && [ ! -s "$dapp/ref_metal.metallib" ]; then
+			bad "$dapp holds no ref_metal.metallib although METAL_SHADERS=yes"
+		fi
+	fi
 fi
 
-echo "check-ios: build $elapsed s ($goal)"
+echo "check-ios: build $elapsed s, device $delapsed s ($goal)"
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "check-ios: ok ($mutants mutants refused; $nself smoke selftest cases; $nobj objects for the simulator; $goal)"
+echo "check-ios: ok ($mutants mutants refused; $nself smoke selftest cases; $ndev device selftest cases; $nobj objects for the simulator; $ndevobj for a device; $goal)"

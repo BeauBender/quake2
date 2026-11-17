@@ -42,7 +42,7 @@
 typedef struct mgl_hold_s
 {
 	atomic_int holds;   /* 0, 1 (the present), or 2 past the bound */
-	int lost;           /* the engine's thread: a drop gave up on the slot, and no later drop waits for it */
+	int lost;           /* the engine's thread: a drop gave up on the slot, and no later drop waits for it until it is taken */
 } mgl_hold_t;
 
 /* The present of the slot's frame is committed: it holds the slot. */
@@ -51,6 +51,17 @@ mgl_hold_commit(mgl_hold_t *h)
 {
 	h->lost = 0;   /* the present given up on has completed: the frame took the slot */
 	atomic_store(&h->holds, 1);
+}
+
+/*
+ * A frame takes the slot (mgl_present_take): the present a drop gave up on
+ * has completed, so the next drop waits for the slot again, whether or not
+ * the frame presents (FIX84).
+ */
+static inline void
+mgl_hold_take(mgl_hold_t *h)
+{
+	h->lost = 0;
 }
 
 /*
@@ -93,7 +104,9 @@ typedef struct mgl_drop_ops_s
  * stages of one deadline each, MGL_GPU_WAIT_MS: the slots still held at
  * the first have their presents' waits ended and share the second. A slot
  * still held then is given up on (lost): left held, and a later drop does
- * not wait for it again, it only takes it back if it is free by then. So a
+ * not wait for it again, it only takes it back if it is free by then; the
+ * mark ends when a frame takes the slot (mgl_hold_take) or presents into
+ * it (mgl_hold_commit), and a drop then waits for it again (FIX84). So a
  * hung GPU holds a drop two deadlines at most, whatever the number of
  * slots, and a second drop no longer than it takes to look. Returns the
  * number of slots given up on in this drop.
