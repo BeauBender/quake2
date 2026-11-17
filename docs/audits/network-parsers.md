@@ -786,11 +786,19 @@ Fixed by FIX30 and FIX16: the server's IP filter.
 - FIX30: `SVC_DirectConnect` calls `SV_SetConnectIP`, which removes pairs with
   the key `ip` until one removal takes nothing out, sets the engine's pair,
   and checks that `Info_ValueForKey` now returns the source address. When the
-  pair does not fit in `MAX_INFO_STRING` the connect is refused with the
-  out-of-band message "Userinfo string too long." (the pair is never silently
-  dropped). Keys compare case-sensitively in `Info_ValueForKey` and
+  pair does not fit in `MAX_INFO_STRING`, or would not be read as the
+  userinfo's `ip` (a bare key at the end, a trailing backslash, an odd token
+  count), the connect is refused with the out-of-band message "Bad userinfo
+  string." (the pair is never silently dropped). Keys compare case-sensitively in `Info_ValueForKey` and
   `Info_RemoveKey`, so `IP` is a different key that the game never reads and
-  is left in place. `SV_FilterPacket` zeroes `m[4]` before parsing, so a value
+  is left in place. `SV_FilterPacket` parses the engine's bracketed form,
+  `[a.b.c.d]:port` (it skips one leading `[` and stops at `]`, `:` or the
+  end), as well as the bare form; before this the `[` read as an empty first
+  octet and no ban matched a real client. For an IPv6 value such as
+  `[::1]:27901` the parse yields 0.0.0.0 and reads nothing past the value.
+  The game-module checks (this filter and `StringToFilter`) run in the suite,
+  in `tests/unit/test_ipfilter.c`, which includes `g_svcmds.c` whole.
+  `SV_FilterPacket` zeroes `m[4]` before parsing, so a value
   with fewer than four parts, or an empty one, reads no unwritten byte (an
   empty value is the address 0.0.0.0).
 - FIX16: `StringToFilter` refuses an octet of 128 or more digits (`num` holds

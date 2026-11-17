@@ -165,6 +165,12 @@ SV_FilterPacket(char *from)
 	i = 0;
 	p = from;
 
+	/* the engine formats an address as "[a.b.c.d]:port", or bare */
+	if (*p == '[')
+	{
+		p++;
+	}
+
 	while (*p && i < 4)
 	{
 		m[i] = 0;
@@ -175,7 +181,7 @@ SV_FilterPacket(char *from)
 			p++;
 		}
 
-		if (!*p || (*p == ':'))
+		if (!*p || (*p == ':') || (*p == ']'))
 		{
 			break;
 		}
