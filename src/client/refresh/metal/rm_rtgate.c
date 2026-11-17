@@ -247,6 +247,22 @@ rm_rtg_find(const char *name)
 	return -1;
 }
 
+const char *
+rm_rtg_effect(int k)
+{
+	int i;
+
+	for (i = 0; (k >= 0) && (i < RTG_NCVARS); i++)
+	{
+		if (rtg_cvars[i].effect && (k-- == 0))
+		{
+			return rtg_cvars[i].name;
+		}
+	}
+
+	return NULL;
+}
+
 void
 rm_rtg_state_reset(rm_rtg_state_t *s)
 {

@@ -107,6 +107,9 @@ int rm_rtg_ncvars(void);
 const char *rm_rtg_cvar(int i, int *effect);
 int rm_rtg_find(const char *name);
 
+/* The name of the k-th effect switch of the table, in its order; NULL for k below 0 or past the last. */
+const char *rm_rtg_effect(int k);
+
 /* The effect switches the step can hold (the table has fewer). */
 #define RM_RTG_MAX_EFFECTS 16
 
