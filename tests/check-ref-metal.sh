@@ -58,6 +58,19 @@
 #     function that is not found fails the check. Scratch mutants of each
 #     point (the flush removed, commented out, moved after the call; the
 #     function renamed) must fail it.
+# (e) Always: the kernels call the helpers their host test drives, by source
+#     inspection (TASK164). tests/metal/rm_rtwater_test.c drives C copies of
+#     the reflection loops (rtw_trace_ss, rtw_trace_ws) through the shared
+#     helpers of common/mtl_rtw_math.h; a kernel that stopped calling a helper
+#     would leave the test green. In rm_rtwater.metal, after comments and
+#     string literals are stripped, the body of rm_rtw_trace (its name at the
+#     start of a line up to the next "}" in column 0) must call
+#     mtl_rtw_ss_next and mtl_rtw_choose, and the body of rm_rtw_trace_ws must
+#     call mtl_rtw_ws_next and mtl_rtw_choose_ws; the check fails naming the
+#     kernel and the helper. Scratch mutants (the call renamed, commented out,
+#     moved out of the kernel into another function; the kernel renamed) must
+#     fail it. The pairs are the water's only: the shadow and AO host tests
+#     call the helpers one by one and carry no copy of a kernel loop.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -415,6 +428,53 @@ for point in "rm_main.c RI_RenderFrame rmb_pass_3d(" "rm_main.c RI_EndFrame rmb_
 	done
 done
 
+# (e) the kernels call the helpers their host tests drive. kcalls <file> <kernel> <helper>: 0 when
+# the kernel is defined in the file (its name at the start of a line, its body up to the next "}" in
+# column 0) and its body, outside comments and string literals, calls <helper>( ; 1 otherwise.
+kcalls() {
+	strip "$1" > "${tmp:?}/kcalls.code" || return 1
+	awk -v fn="$2" -v h="$3" '
+		$0 ~ "^" fn "\\(" { body = 1; found = 1 }
+		body && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { hit = 1 }
+		body && /^}/ { body = 0 }
+		END { exit (found && hit) ? 0 : 1 }' "${tmp:?}/kcalls.code"
+}
+# kcall_mutant <kind> <file> <kernel> <helper>: the file with that call broken
+kcall_mutant() {
+	case $1 in
+		renamed) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b { gsub(h "[ \t]*\\(", h "_x(") } { print }' "$2" ;;
+		commented) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b { gsub(h "[ \t]*\\(", "/* & */ 0 * (") } { print }' "$2" ;;
+		elsewhere) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b { gsub(h "[ \t]*\\(", h "_x(") } { print }
+			END { print "static int kcall_elsewhere(void) { return " h "(0); }" }' "$2" ;;
+		renamedkernel) sed "s/^$3(/$3_old(/" "$2" ;;
+	esac
+}
+kcall_mutants=0 kcall_pairs=0
+for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm_rtw_trace mtl_rtw_choose" \
+	"rm_rtwater.metal rm_rtw_trace_ws mtl_rtw_ws_next" "rm_rtwater.metal rm_rtw_trace_ws mtl_rtw_choose_ws"; do
+	# shellcheck disable=SC2086 # three words: file, kernel, helper
+	set -- $pair
+	f=$rm_dir/$1 kn=$2 hp=$3
+	if ! kcalls "$f" "$kn" "$hp"; then
+		bad "$f: the kernel $kn does not call $hp (the helper its host test drives)"
+		continue
+	fi
+	kcall_pairs=$((kcall_pairs + 1))
+	for m in renamed commented elsewhere renamedkernel; do
+		kcall_mutant "$m" "$f" "$kn" "$hp" > "${tmp:?}/kcall-mutant.metal"
+		if cmp -s "$f" "${tmp:?}/kcall-mutant.metal"; then
+			bad "the kernel-call mutant ($m) of $kn changed nothing"
+		elif kcalls "${tmp:?}/kcall-mutant.metal" "$kn" "$hp"; then
+			bad "the kernel-call check passes a mutant of $kn (the call to $hp $m)"
+		else
+			kcall_mutants=$((kcall_mutants + 1))
+		fi
+	done
+done
+
 # (b) the build, where it can be built
 skip=""
 if [ "$(uname -s)" != Darwin ]; then
@@ -487,6 +547,6 @@ else
 fi
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; $build)"
 fi
 exit $fail
