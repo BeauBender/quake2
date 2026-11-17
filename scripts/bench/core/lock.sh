@@ -251,8 +251,9 @@ bench_lock_acquire() {
 # A reader honours it only while expires is in the future and pid is alive.
 # The session is BENCH_SESSION_ID, else CLAUDE_CODE_SESSION_ID: up to 128
 # of A-Z a-z 0-9 . _ : -, else none. expires is now plus BENCH_QUIET_TTL
-# seconds (default 3600). It is written whole to a temporary name and
-# renamed into place, and removed by bench_lock_release on every exit of
+# seconds (default 3600; bench.sh checks it before the lock is taken). It
+# is written whole to a temporary file mktemp makes in the state directory
+# and renamed into place, and removed by bench_lock_release on every exit of
 # its writer (the EXIT, INT, TERM and HUP traps), and by the lock shell
 # whose hold it names.
 
@@ -287,11 +288,13 @@ bench_quiet_mark() {
 	_qm_now=$(date +%s)
 	_qm_r=$(od -An -N6 -tx1 /dev/urandom 2> /dev/null | tr -dc '0-9a-f') || _qm_r=
 	BENCH_QUIET_MINE=q-$$-$_qm_now-${_qm_r:-0}
-	_qm_t=${BENCH_STATE_DIR:?}/quiet.tmp.$$
-	if ! printf 'pid=%s\nsession=%s\nlabel=%s\nstart=%s\nexpires=%s\nhold=%s\ntoken=%s\n' \
+	# A temporary file mktemp makes (a name no other process knows ahead, so
+	# none can plant a link there), renamed into place.
+	_qm_t=$(mktemp "${BENCH_STATE_DIR:?}/quiet.tmp.XXXXXX" 2> /dev/null) || _qm_t=
+	if [ -z "$_qm_t" ] || ! printf 'pid=%s\nsession=%s\nlabel=%s\nstart=%s\nexpires=%s\nhold=%s\ntoken=%s\n' \
 		"$2" "$_qm_s" "$1" "$(bench_utc)" "$((_qm_now + _qm_ttl))" "${BENCH_LOCK_TOKEN:-none}" "$BENCH_QUIET_MINE" > "$_qm_t" 2> /dev/null ||
 		! mv -f "$_qm_t" "$_qm_f" 2> /dev/null; then
-		rm -f "$_qm_t"
+		if [ -n "$_qm_t" ]; then rm -f "$_qm_t"; fi
 		BENCH_QUIET_MINE=
 		bench_note "cannot write the quiet marker in the lock state directory"
 	fi

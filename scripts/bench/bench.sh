@@ -40,9 +40,10 @@
 # BENCH_QUIET_TTL (seconds a quiet marker lasts, default 3600),
 # BENCH_SESSION_ID (the session the marker names, else
 # CLAUDE_CODE_SESSION_ID), BENCH_GATE_POLL (seconds between the quiet
-# gate's readings, default 1), BENCH_SNAP_READER and BENCH_FREQ_PROBE
-# (stand-ins for the host's snapshot reader and the frequency probe, for
-# the self-test). A run set pre-warms, gates and records the host around
+# gate's readings, default 1, at least 0.01), BENCH_SNAP_READER and
+# BENCH_FREQ_PROBE (stand-ins for the host's snapshot reader and the
+# frequency probe, for the self-test; a run file names them as
+# snap.source=stub and freq.source=stub). A run set pre-warms, gates and records the host around
 # each run (core/snap.sh, core/measure.sh; docs/plans/bench-harness.md,
 # "Determinism"); baseline put refuses a set with a run that was not quiet.
 set -eu
@@ -100,6 +101,12 @@ shasum | cksum) ;;
 *) bench_die 2 "BENCH_HASH is shasum or cksum" ;;
 esac
 bench_is_uint "${BENCH_STOP_GRACE:-10}" || bench_die 2 "BENCH_STOP_GRACE is whole seconds"
+# The quiet marker's lifetime and the gate's poll, before the lock is taken
+# or anything runs (bench_quiet_mark and bench_gate read them later).
+bench_is_uint "${BENCH_QUIET_TTL:-3600}" || bench_die 2 "BENCH_QUIET_TTL is whole seconds"
+if ! bench_is_num "${BENCH_GATE_POLL:-1}" || ! awk -v p="${BENCH_GATE_POLL:-1}" 'BEGIN { exit !(p >= 0.01) }'; then
+	bench_die 2 "BENCH_GATE_POLL is a number of seconds, at least 0.01"
+fi
 
 # need_lock <label> <args...>: unless this process holds the lock already,
 # becomes (exec) a quiet lock shell (lock run --quiet) that runs this
@@ -121,15 +128,17 @@ need_lock() {
 	exec sh "$BENCH_SELF" lock run --quiet "$_nl_label" -- sh "$BENCH_SELF" "$@" < /dev/null
 }
 
-# not_quiet <runs dir>: says which runs of a measurement were not quiet
-# (quiet=no), and fails when there is one.
+# not_quiet <runs dir> <which>: says which runs of the <which> set of a
+# measurement were not quiet (any flag but quiet=yes). Succeeds (status 0)
+# when there is one, so "if not_quiet ...; then refuse"; fails when every
+# run is quiet.
 not_quiet() {
 	_nq_bad=
 	for _nq_f in "${1:?}"/*.run; do
 		[ -f "$_nq_f" ] || continue
 		if [ "$(bench_file_kv "$_nq_f" quiet)" != yes ]; then
 			_nq_k=${_nq_f##*/}
-			bench_note "run ${_nq_k%.run} was not quiet (quiet.reason=$(bench_file_kv "$_nq_f" quiet.reason))"
+			bench_note "the $2 set: run ${_nq_k%.run} was not quiet (quiet.reason=$(bench_file_kv "$_nq_f" quiet.reason))"
 			_nq_bad=1
 		fi
 	done
@@ -143,6 +152,17 @@ quiet_of() {
 	[ -n "$1" ] || { echo none; return 0; }
 	bench_store_runs "$1" | while IFS= read -r _qo_f; do printf '%s\n' "$(bench_file_kv "$_qo_f" quiet)"; done |
 		awk '$0 == "no" { no = 1 } $0 != "yes" && $0 != "no" { un = 1 } END { print (no ? "no" : (un ? "unknown" : "yes")) }'
+}
+
+# source_of <set or run file>: the readers of the set's runs, or of the one
+# run file: stub when a run's snap.source or freq.source is stub (a
+# stand-in of the self-test made it), unknown when a run has no such line
+# (a set stored before runs carried them), else system; "none" for no set.
+source_of() {
+	[ -n "$1" ] || { echo none; return 0; }
+	if [ -f "$1" ]; then printf '%s\n' "$1"; else bench_store_runs "$1"; fi | while IFS= read -r _so_f; do
+		printf '%s\n%s\n' "$(bench_file_kv "$_so_f" snap.source)" "$(bench_file_kv "$_so_f" freq.source)"
+	done | awk '$0 == "stub" { st = 1 } $0 != "stub" && $0 != "system" { un = 1 } END { print (st ? "stub" : (un ? "unknown" : "system")) }'
 }
 
 # setup <case> <commit>: loads the case and its adapter, the host, the
@@ -220,7 +240,7 @@ cmd_baseline_put() {
 	fi
 	bench_prepare
 	measure_baseline
-	if not_quiet "${BENCH_TMP:?}/new"; then
+	if not_quiet "${BENCH_TMP:?}/new" new; then
 		bench_note "a set with a run that was not quiet is not stored; the case $BENCH_CASE_NAME at $BENCH_INPUTS keeps the baseline it had"
 		exit 1
 	fi
@@ -254,16 +274,17 @@ cmd_drift() {
 		bench_drift_rule "$_dr_x" "$(bench_case_get abs_tol)" "$(bench_case_get rel_tol)") ||
 		bench_die 2 "the stored runs of $BENCH_CASE_NAME have no usable $_dr_m values"
 	bench_store_write "$DIR/drift" "${BENCH_TMP:?}/drift.run"
-	# The drift run's quiet flag (and its reason when it is not quiet), and
-	# the stored set's (quiet_of).
+	# The drift run's quiet flag (and its reason when it is not quiet) and
+	# readers, and the stored set's (quiet_of, source_of).
 	_dr_q=$(bench_file_kv "${BENCH_TMP:?}/drift.run" quiet)
 	[ "$_dr_q" = yes ] || _dr_q="no quiet.reason=$(bench_file_kv "${BENCH_TMP:?}/drift.run" quiet.reason)"
-	printf '%s metric=%s quiet=%s baseline.quiet=%s\n' "$_dr_line" "$_dr_m" "$_dr_q" "$(quiet_of "$LIVE")"
+	printf '%s metric=%s quiet=%s source=%s baseline.quiet=%s baseline.source=%s\n' "$_dr_line" "$_dr_m" "$_dr_q" \
+		"$(source_of "${BENCH_TMP:?}/drift.run")" "$(quiet_of "$LIVE")" "$(source_of "$LIVE")"
 	case $_dr_line in
 	drift=inside*) return 0 ;;
 	esac
 	measure_baseline
-	if not_quiet "${BENCH_TMP:?}/new"; then
+	if not_quiet "${BENCH_TMP:?}/new" re-measured; then
 		bench_note "the re-measured set has a run that was not quiet, so it is not stored; the baseline stands"
 		exit 1
 	fi
@@ -306,6 +327,7 @@ cmd_compare() {
 	printf 'after=%s inputs=%s\n' "$_cp_ac" "$_cp_ai"
 	[ "$_cp_bi" != "$_cp_ai" ] || echo "note=the two commits have the same inputs, so one baseline"
 	printf 'quiet before=%s after=%s\n' "$(quiet_of "$_cp_bd")" "$(quiet_of "$_cp_ad")"
+	printf 'source before=%s after=%s\n' "$(source_of "$_cp_bd")" "$(source_of "$_cp_ad")"
 	printf '%-16s %-6s %4s %12s %12s %12s %12s\n' metric side runs median p90 min max
 	_cp_bm=
 	_cp_am=

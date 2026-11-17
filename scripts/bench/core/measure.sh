@@ -25,9 +25,11 @@
 #
 # A run file holds, in this order: case, case_hash, commit, inputs, host,
 # class, hash, kind, index, start, load.before, load.after, quiet,
-# quiet.reason, gate.wait, every snap.before.* and snap.after.* line (the
-# snapshots just before and after the run, snap.sh), the frequencies over
-# the run (freq.*), the pre-warm's lines (prewarm.*, the same in every run
+# quiet.reason, gate.wait, snap.source (system, or stub for
+# BENCH_SNAP_READER), every snap.before.* and snap.after.* line (the
+# snapshots just before and after the run, snap.sh), freq.source (system,
+# or stub for BENCH_FREQ_PROBE), the frequencies over the run (freq.*),
+# the pre-warm's lines (prewarm.*, the same in every run
 # of a measurement), every pre.* line, every metric.* line.
 
 BENCH_BUILD_DIR=
@@ -86,6 +88,10 @@ BENCH_PREWARMED=
 # seconds it ran, the pieces, why it stopped (time, thermal, perf; none
 # without a pre-warm) and the frequencies over its last piece.
 bench_prewarm() {
+	# The probe first, at the top of the measuring path: without a pre-warm
+	# its build (cc, up to 120 s) would otherwise fall between the before
+	# snapshot and the first counted run.
+	bench_freq_init
 	[ -z "$BENCH_PREWARMED" ] || return 0
 	BENCH_PREWARMED=1
 	_pw_s=$(bench_case_uint prewarm 240)
@@ -159,9 +165,10 @@ bench_run_one() {
 		printf 'host=%s\nclass=%s\nhash=%s\n' "$BENCH_HOST_TOKEN" "$BENCH_HOST_CLASS" "$(bench_hash_tool)"
 		printf 'kind=%s\nindex=%s\nstart=%s\nload.before=%s\nload.after=%s\n' "$1" "$2" "$_ro_t" "$_ro_lb" "$(bench_load)"
 		bench_quiet_flag "${BENCH_TMP:?}/snap.before" "${BENCH_TMP:?}/snap.after"
-		printf 'gate.wait=%s\n' "$BENCH_GATE_WAITED"
+		printf 'gate.wait=%s\nsnap.source=%s\n' "$BENCH_GATE_WAITED" "$(bench_snap_source)"
 		sed 's/^/snap.before./' "${BENCH_TMP:?}/snap.before"
 		sed 's/^/snap.after./' "${BENCH_TMP:?}/snap.after"
+		printf 'freq.source=%s\n' "$(bench_freq_source)"
 		bench_freq_window "${BENCH_TMP:?}/freq.before" "${BENCH_TMP:?}/freq.after" freq
 		cat "${BENCH_TMP:?}/prewarm" "${BENCH_TMP:?}/pre" "${BENCH_TMP:?}/metrics"
 	} > "$3"

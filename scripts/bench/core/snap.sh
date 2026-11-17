@@ -16,8 +16,10 @@
 #                         when none is recorded (pmset -g therm)
 #   lowpower              low-power mode, 0 or 1 (pmset -g)
 #   top.1 ... top.5       the processes with the most CPU, "<percent>
-#                         <name>": the name only (no path, argument or pid),
-#                         scrubbed of the host's identity words
+#                         <name>": the kernel's name for it (ps ucomm, set
+#                         at exec; never the argv[0] it wrote), with no
+#                         path, argument or pid, scrubbed of the host's
+#                         identity words
 # The gate's reading is gpu.device and cpu.busy alone. BENCH_SNAP_READER
 # names an executable that prints the lines instead ("<reader> snap",
 # "<reader> gate"), for the self-test.
@@ -95,8 +97,11 @@ bench_snap_system() {
 		_sy_v=$(pmset -g 2> /dev/null | awk '$1 == "lowpowermode" && $2 ~ /^[01]$/ { print $2; exit }') || _sy_v=
 		printf 'lowpower=%s\n' "${_sy_v:-unknown}"
 		bench_identity_words "${BENCH_TMP:?}/snap.words"
-		ps -A -r -o pcpu= -o comm= 2> /dev/null | awk 'NR <= 5 {
-			p = $1; sub(/^[ \t]*[^ \t]+[ \t]+/, ""); n = $0; sub(/.*\//, "", n); gsub(/[^ -~]/, "?", n)
+		# ucomm, the kernel's name for the process, set at exec (at most 16
+		# characters): comm is the argv[0] the process wrote, which on
+		# macOS can carry arguments (exec -a).
+		ps -A -r -o pcpu= -o ucomm= 2> /dev/null | awk 'NR <= 5 {
+			p = $1; sub(/^[ \t]*[^ \t]+[ \t]+/, ""); n = $0; sub(/[ \t]+$/, "", n); sub(/.*\//, "", n); gsub(/[^ -~]/, "?", n)
 			printf "top.%d=%s %s\n", NR, p, n
 		}' | bench_scrub "${BENCH_TMP:?}/snap.words"
 	} >> "$_sy_o"
@@ -114,6 +119,17 @@ bench_snap() {
 		bench_snap_system "$1" "$2"
 	fi
 	awk '!/^[a-z][a-z0-9.]*=/ { bad = 1 } END { exit bad }' "$2" || bench_die 3 "the snapshot reader printed a line that is not <key>=<value>"
+}
+
+# bench_snap_source, bench_freq_source: which reader makes the snapshots
+# and the frequencies, for the run file's snap.source and freq.source:
+# "stub" when BENCH_SNAP_READER or BENCH_FREQ_PROBE stands in for the
+# host's, else "system".
+bench_snap_source() {
+	if [ -n "${BENCH_SNAP_READER:-}" ]; then echo stub; else echo system; fi
+}
+bench_freq_source() {
+	if [ -n "${BENCH_FREQ_PROBE:-}" ]; then echo stub; else echo system; fi
 }
 
 # bench_freq_init: the probe, once: BENCH_FREQ_PROBE, else freq.c built
@@ -162,6 +178,14 @@ bench_freq_window() {
 		printf '%s=unavailable\n%s.reason=%s\n' "$3" "$3" "$BENCH_FREQ_WHY"
 		return 0
 	fi
+	# A dump in which the probe said why it could not read the host
+	# (freq=unavailable reason=<word>) gives the window that reason, the
+	# before dump's first: the delta of such a dump would say only no-dump.
+	_fw_r=$(awk '/^freq=unavailable reason=[a-z0-9-]+$/ { sub(/^freq=unavailable reason=/, ""); print; exit }' "$1" "$2" 2> /dev/null) || _fw_r=
+	if [ -n "$_fw_r" ]; then
+		printf '%s=unavailable\n%s.reason=%s\n' "$3" "$3" "$_fw_r"
+		return 0
+	fi
 	if [ -n "$BENCH_FREQ_BIN" ]; then
 		bench_bounded 30 "$BENCH_FREQ_BIN" delta "$1" "$2" > "$_fw_o" 2> /dev/null || : > "$_fw_o"
 	fi
@@ -202,7 +226,8 @@ bench_case_uint() {
 # utilization is at most gate_gpu (default 10) and the CPU's busy percent at
 # most gate_cpu (default 25), both for gate_hold seconds in a row (default
 # 3), for at most gate_wait seconds (default 120), reading every
-# BENCH_GATE_POLL seconds (default 1). Sets BENCH_GATE_WAITED (the seconds
+# BENCH_GATE_POLL seconds (default 1; bench.sh checked it, at least 0.01),
+# or the time left when that is shorter. Sets BENCH_GATE_WAITED (the seconds
 # it waited) and BENCH_GATE_WHY: empty when the host was quiet, "gate" when
 # the wait ran out, "unread" when a reading is unknown (it stops at once).
 bench_gate() {
@@ -232,7 +257,12 @@ bench_gate() {
 			BENCH_GATE_WHY=gate
 			break
 		fi
-		bench_nap "${BENCH_GATE_POLL:-1}"
+		# Each nap at most the time left (whole seconds, at least 1 here),
+		# so the gate never waits past gate_wait and one reading.
+		_gt_nap=${BENCH_GATE_POLL:-1}
+		_gt_left=$((_gt_wait - (_gt_now - _gt_t0)))
+		if awk -v p="$_gt_nap" -v l="$_gt_left" 'BEGIN { exit !(p > l) }'; then _gt_nap=$_gt_left; fi
+		bench_nap "$_gt_nap"
 	done
 	BENCH_GATE_WAITED=$(($(date +%s) - _gt_t0))
 }

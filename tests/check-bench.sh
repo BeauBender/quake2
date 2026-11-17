@@ -72,7 +72,7 @@
 #     the gate without a pre-warm, and the readers (snap.source,
 #     freq.source) in the run file, drift and compare.
 # The tests that do not test the host facts use a fast stand-in for
-# system_profiler (fast_profiler). Then thirty mutants, each applied to a
+# system_profiler (fast_profiler). Then thirty-nine mutants, each applied to a
 # copy of scripts/bench/ and each required to fail the test it targets: the
 # lock made neither exclusively nor linked, the holder renamed over
 # another's, the command spawned without its own process group, its fork
@@ -83,11 +83,15 @@
 # made with mkdir -p, the holder-less grace dropped, the store's
 # outside-repository check deleted, the leading-zero refusal dropped; the
 # gate without its hold, its bound or its reading, GPU use in a snapshot
-# ignored, baseline put storing a not-quiet set, compare's unknown flag
-# lost, the pre-warm not run, without its thermal stop or missing from
-# drift, the snapshots or the frequencies not written, the marker not
-# written or not removed, the probe's mean not weighted, the host's reader
-# with a key of its own; and one to this test's own fixture, gc.sh with
+# ignored, baseline put or drift's re-measure storing a not-quiet set,
+# compare's unknown flag lost, the pre-warm not run, without its thermal
+# stop or missing from drift, the snapshots or the frequencies not
+# written, the marker not written or not removed, the probe's mean not
+# weighted, the host's reader with a key of its own, a top line read from
+# comm, the probe's own reason lost, BENCH_GATE_POLL or BENCH_QUIET_TTL
+# unchecked, a gate nap not cut, the probe built after the gate, the
+# snapshot's reader not named, a stub reader not printed by drift; and
+# one to this test's own fixture, gc.sh with
 # its standard error left open.
 #
 # Usage: tests/check-bench.sh [<test>...]   (named tests only, no mutants)
@@ -1919,7 +1923,8 @@ mutant gate-no-hold core/snap.sh '[ $((_gt_now - _gt_since)) -lt "$_gt_hold" ] |
 mutant gate-no-bound core/snap.sh 'if [ $((_gt_now - _gt_t0)) -ge "$_gt_wait" ]; then' 'if false; then' t_gate || mfail=1
 mutant gate-no-reading core/snap.sh "'BEGIN { exit !(g <= lg && c <= lc) }'" "'BEGIN { exit 0 }'" t_gate || mfail=1
 mutant foreign-gpu-ignored core/snap.sh "'BEGIN { exit !(g > l) }'" "'BEGIN { exit 1 }'" t_gate || mfail=1
-mutant put-not-quiet bench.sh 'if not_quiet "${BENCH_TMP:?}/new"; then' 'if false; then' t_gate || mfail=1
+mutant put-not-quiet bench.sh 'if not_quiet "${BENCH_TMP:?}/new" new; then' 'if false; then' t_gate || mfail=1
+mutant drift-not-quiet bench.sh 'if not_quiet "${BENCH_TMP:?}/new" re-measured; then' 'if false; then' t_drift_quiet || mfail=1
 mutant compare-flag-unknown bench.sh "do printf '%s" "do : '%s" t_gate || mfail=1
 mutant prewarm-not-run core/measure.sh '[ "$_pw_left" -gt 0 ] || break' 'break' t_prewarm || mfail=1
 mutant prewarm-no-thermal-stop core/measure.sh 'if [ -n "$_pw_w" ]; then' 'if false; then' t_prewarm || mfail=1
@@ -1930,6 +1935,15 @@ mutant marker-not-written core/lock.sh 'if [ -n "$_ru_quiet" ]; then bench_quiet
 mutant marker-not-removed core/lock.sh '	bench_quiet_release' '	:' t_quiet_marker || mfail=1
 mutant freq-unweighted core/freq.c 'wsum += r * y->mhz[k];' 'wsum += r;' t_freq || mfail=1
 mutant snap-key-drift core/snap.sh "'lowpower=%s" "'lowpwr=%s" t_snap_system || mfail=1
+# Review round 1 (TASK166).
+mutant top-argv core/snap.sh 'ps -A -r -o pcpu= -o ucomm=' 'ps -A -r -o pcpu= -o comm=' t_snap_argv || mfail=1
+mutant freq-reason-lost core/snap.sh 'if [ -n "$_fw_r" ]; then' 'if false; then' t_freq_reason || mfail=1
+mutant gate-poll-unchecked bench.sh 'bench_die 2 "BENCH_GATE_POLL is a number of seconds, at least 0.01"' ':' t_gate_poll || mfail=1
+mutant gate-nap-uncut core/snap.sh 'then _gt_nap=$_gt_left; fi' 'then :; fi' t_gate_poll || mfail=1
+mutant ttl-unchecked bench.sh 'bench_is_uint "${BENCH_QUIET_TTL:-3600}" ||' 'true ||' t_leading_zero || mfail=1
+mutant probe-after-gate core/measure.sh '	bench_freq_init' '	:' t_probe_first || mfail=1
+mutant snap-source-lost core/snap.sh 'if [ -n "${BENCH_SNAP_READER:-}" ]; then echo stub; else echo system; fi' 'echo system' t_store || mfail=1
+mutant source-stub-lost bench.sh '{ st = 1 }' '{ st = 0 }' t_drift || mfail=1
 # Last: it writes into the throwaway repository's work tree.
 mutant store-in-repo core/store.sh 'bench_outside_repo "$BENCH_STORE_ROOT" "the store (BENCH_STORE)"' ':' t_store_guard || mfail=1
 [ "$mfail" -eq 0 ] || exit 1
