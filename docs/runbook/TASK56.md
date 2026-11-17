@@ -189,14 +189,26 @@ a question of look for the owner (INFORM11): the frames below include the same v
 
 ### Effect on, under the threshold
 
-**Not shown on an engine run yet.** All three demos' maps are above 2 % (above). The attempt to
-make a demo standing at the start of `mine1`, `mine2` and `lab` (`pins.sh make-demo` with a
-scratch demo cfg) failed twice on the harness's own rules (the harness copy needs `src/`, and
-a demo cfg needs its `// pins: messages <low> <high>` line), and the card's budget ran out
-there. What holds without it: under 2 % `RM_RTSun_Frame` never opens the pass and never sets
-`RM_RTSun_Active`, so `RM_GB_Path` keeps the view's stock path; the host test holds the
-threshold (`rm_rtsun_sky_enough`, 1.99 % refused, 2 % taken). The remaining proof is a demo on
-such a map, its `rt-sun` and `world` records compared byte for byte.
+Shown in review round 1, on the head `1dcfb123` (pin ids `8d86591c6c00-*`; the commit after it
+changes only this file). *The survey.* One engine run (`ref_metal`, `r_rt_sun 1`) loaded each of
+the 47 maps of the game data in turn and printed its line (`<artifacts>/TASK56/r1/logs/survey.log`).
+Nine are under 2 %: `train`, `mine3`, `mine4`, `lab` and `q2dm7` at 0.00 % (no sky face),
+`mine2` 0.09 %, `city2` 0.20 %, `bunk1` 0.57 % and `fact2` 0.72 %. The lowest share above the
+threshold is `jail4`'s 2.18 %; `mine1`, tried in the first round, is 3.56 %.
+
+*The demo.* [`scripts/pins/demos/lowsky.cfg`](../../scripts/pins/demos/lowsky.cfg) records
+`lowsky.dm2` on `fact2` (sky 242,077 of 33,701,047 square units, **0.72 %**, the largest share
+under 2 %: the map has sky faces, so only the threshold keeps the pass off), standing at the
+level start and turning in place. `scripts/pins.sh make-demo lowsky` made it at 220 messages
+(range 100 to 600).
+
+*The records.* `world` and `rt-sun` from `lowsky.dm2` (`PINS_SEED=1`, `MTL_DEBUG_LAYER=1`, 640 x
+480): **7 of 7 frames byte-identical, 0 differing pixels**; the frames themselves differ from one
+another (the view turns). The `rt-sun` log holds `fact2: sky 242077 of 33701047 square units
+(0.72 %), under 2 %: the pass is skipped`, and both logs `teardown: 0 live objects` with
+`rt 0/0`: with the sun the only effect on, no ray-tracing object at all was built on the map
+(`rm_rtsun_wanted` 0, review round 1). The comparison is
+`<artifacts>/TASK56/r1/logs/lowsky-compare.txt`.
 
 ### Frames for the owner
 
@@ -229,3 +241,49 @@ on). The rest of the gap, about 0.24 ms, was not timed apart: no case of this ba
 G-buffer path and the instance structure without the pass, so how much of it they take is not
 measured here (review round 1). The demo's timedemo is short (689
 frames, 0.1 to 0.7 s), so the fps are noisy at the top; the GPU time is the steadier number.
+
+## Review round 1
+
+Three reports (correctness, security, spec) on `7ddad674`; `origin/main` (`346d3188`) merged in
+first. Each fix has its test red first (`<artifacts>/TASK56/tdd/r1-red-rtsun.log`,
+`r1-red-rtao.log`: 9 of 706 and 2 of 283 checks failed on the code as it was).
+
+- *Timing* (correctness I1, spec I1). The sentence that called the gap mostly not the sun pass
+  is gone; *Timing* now states the pass as about 70 % of the off-to-on gap and the rest as not
+  timed apart. No new timing batch was run.
+- *The layer limit* (correctness I2). `rm_rtsun_hit` asked for at most 4 intersections, so the
+  sky behind exactly 4 water or translucent faces was shadowed. The loop now runs `layer` from 0
+  to `MTL_RTSUN_LAYERS`, and `mtl_rtsun_step` (shared with the host test) shadows a fifth such
+  face. The host test mirrors the loop (`rtsun_hit`) and checks 0 to 8 faces before the sky, a
+  wall and nothing, the review's 3 (lit), 4 (lit) and 5 (shadowed), at most 5 intersections, and
+  the kernel's text for the loop it mirrors. Red: the sky behind 4 faces shadowed.
+- *Under 2 % sky* (spec I2; correctness N1, N2; security N3). `RM_RTSun_Wanted` is
+  `rm_rtsun_wanted(r_rt_sun, device, sky_ok)`, 0 under 2 %: no scene is built or kept for the sun
+  on such a map, and a pass opened on an earlier map is closed in `RM_RTSun_Frame`. The map is
+  measured on the first ask (the map load's `RM_RT_MapLoaded`), only while `r_rt_sun` is on; the
+  measure is kept through `RM_RTSun_Shutdown`, so a `RM_RT_FreeAll` does not print the map's line
+  again. Red: `rm_rtsun_wanted(1, 1, 0)` was 1. The engine proof is *Effect on, under the
+  threshold* (`fact2`, 0.72 %, 7 of 7 frames byte-identical to `world`, `rt 0/0`).
+- *NaN `r_fullbright`* (security N2). `rm_rtsun_on` and `rm_rtao_on` test `fullbright != 0`, as
+  `rm_surf.c` does, so NaN and infinity count as set. Red: both returned 1 for NaN.
+- *`rm_rtsun_number`'s comment* (correctness N4) names no stop parameter.
+- *Models* (correctness N5). `rt-sun.cfg` runs with `cl_entities 0`, so no record exercises an
+  alias model's sun shadow, and this round adds no entities companion with its masked
+  comparison: that needs the trace-rewritten replays of the first round (an off record on the
+  G-buffer path and the `r_rt_sun_show 1` mask from one trace), more than this round's budget.
+  What holds: a model's instance has no map triangle, so its material reads `0xff` and
+  `mtl_rtsun_at(0xff)` shadows (host test), the same branch as a brush entity; the mask bit is
+  TASK57's, which `rt-ao-entities` exercises. The companion stays open for the card (with the
+  look, TASK173).
+- *Floor* (INFORM11): recorded as the owner's open decision (*Status*).
+
+Left as they are: correctness N3 (a different BSP of the same name at the same address keeps the
+old share; unproven and rare), security N1 (whether RT tuning cvars belong in the cheat reset is
+the owner's call; none of the sibling effects' are), spec N3 (no reason line on a device without
+ray tracing, as RT3 and RT5).
+
+*Effect off after the merge.* Records of `origin/main` (`346d3188`, exported and built in
+scratch) against the head, `PINS_SEED=1`, `MTL_DEBUG_LAYER=1`: `world`, `rt-shadows` and `rt-ao`
+at `demo1.dm2` (23 frames each), `rt-water` at `water.dm2` (4). **4 records, 73 frames, every one
+byte-identical to main's**, every log `teardown: 0 live objects` (`rt 0/0` for `world`, `78/78`
+for `rt-shadows` and `rt-ao`, `60/60` for `rt-water`). Logs in `<artifacts>/TASK56/r1/logs/`.

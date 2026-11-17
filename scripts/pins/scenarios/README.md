@@ -216,6 +216,14 @@ from `water.dm2` is accepted at `--bad-threshold 0.03` (its
 driver checks that before it runs one, and the selftest checks every
 committed script.
 
+Added by TASK56 (review round 1): `scripts/pins.sh make-demo lowsky` runs
+`scripts/pins/demos/lowsky.cfg` and leaves `lowsky.dm2`, a demo on
+`fact2`, whose sky `ref_metal` measures at 0.72 % of the world's face
+area, under `r_rt_sun`'s 2 % threshold; the player stands at the level
+start and turns in place. `rt-sun` recorded from it with
+`PINS_DEMO=lowsky.dm2` draws `world`'s frames: on `ref_metal`, 7 of 7
+frames byte-identical with `PINS_SEED=1` (`docs/runbook/TASK56.md`).
+
 Added by TASK91 (`ref_metal` N8): `dlights`. Unseeded, two `gl1-metal`
 records differ wherever a muzzle-flash or explosion light reaches (worst
 score 0.009399 on `demo1.dm2`, 0.012701 on `demo2.dm2` at `PINS_EVERY=7`,
