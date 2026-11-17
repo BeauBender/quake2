@@ -278,8 +278,9 @@ there: `upscale_textures 2 metalfx` (or `4 metalfx`, with `force` after
 it to write every file again) scales with MetalFX's spatial scaler on
 the GPU, whichever renderer is loaded. The indices are converted with
 the palette first (skins flood-filled, index 255 taking a neighbour's
-colour), a world texture is padded with one texel of its own opposite
-edges, scaled in one pass, and cut back, so it still tiles; the alpha
+colour), a world texture is padded with four texels of its own opposite
+edges (scale2x needs one), scaled in one pass, and cut back, so it still
+tiles, as MetalFX reads more than one texel around each one; the alpha
 is then set from index 255 of the source, by nearest neighbour,
 because MetalFX does not keep it. Unlike scale2x it filters the colours
 rather than copying texels. On the machine it was measured on it wrote

@@ -57,6 +57,26 @@ already written by the other backend, and the summary line says how many were sk
 writes them all again with the backend asked for. The summary line names the backend when it is
 `metalfx` ("4x with metalfx"); a scale2x run's line is the first card's, word for word.
 
+## The seam, and the wrap border (rework round 1)
+
+The first version wrap-padded a world texture by **one** texel. MetalFX's spatial filter reads
+further than that, so every tiling texture had a seam at its tile edges. A probe on this host's GPU
+took a random 16 x 16 tile, wrap-padded it by k texels, scaled it with `CL_UpscaleMetalFXScale`,
+cropped at k times the factor and compared each crop with the k = 8 crop:
+
+- 2x, pad 1: 186 texels differ in the 4-texel edge band (all in column 0), by up to 35;
+- 4x, pad 1: 612 differ (63 of 64 in column 0), by up to 74;
+- pad 2, 3 and 4 match pad 8 exactly at both factors.
+
+The unit test of the stand-in scaler could not see it: nearest neighbour reads no neighbour. The fix
+is one constant, `UPSCALE_METALFX_BORDER` = 4 (`src/client/header/upscale.h`), so another GPU's filter has
+headroom; `CL_UpscaleWrapPadRGBABorder` wraps modulo the tile, so a border larger than a tiny
+texture is fine. The scale2x path still pads by one texel and is byte-identical. A new unit test
+(`upscale_rgba_wrapped_tile_wide_filter`) scales with a stand-in that blurs two texels each way and
+checks the cropped tile equals the centre tile of the same scale on a 3 x 3 tiling. M1-family
+hardware is not measured (slice 2); the check takes `UPSCALE_METALFX_REQUIRE=1`, which makes "no
+Metal device" and "unsupported here" fail instead of pass: the M6 should set it.
+
 ## How the metalfx path treats a tile
 
 `CL_UpscaleStepMake` loads the indices as for scale2x (the name, size and path checks are the
@@ -66,9 +86,9 @@ stand-in scaler) with `CL_UpscaleMetalFXScale` as the scaler:
 1. a skin is flood-filled first (`CL_UpscaleFloodFillSkin`), as for scale2x;
 2. the indices are converted with the 8-bit table (`CL_UpscaleToRGBA`: index 255 gets alpha 0 and a
    neighbour's colour, so no black fringe is scaled in);
-3. a world texture is wrap-padded by one texel (`CL_UpscaleWrapPadRGBA`), scaled in one pass to
-   `factor` times the padded size, and cropped by `factor` texels on each side
-   (`CL_UpscaleCropRGBA`); a sky face or a skin is scaled as it is;
+3. a world texture is wrap-padded by four texels (`UPSCALE_METALFX_BORDER`,
+   `CL_UpscaleWrapPadRGBABorder`; scale2x keeps one), scaled in one pass to `factor` times the
+   padded size, and cropped by four times `factor` texels on each side (`CL_UpscaleCropRGBA`); a sky face or a skin is scaled as it is;
 4. the alpha of the output is set from the source's index 255 by nearest neighbour
    (`CL_UpscaleMaskAlpha`), because MetalFX returns alpha 255 everywhere (both measurements
    above); a texel is opaque or transparent, as the renderers expect of an 8-bit texture;
@@ -108,7 +128,7 @@ green with the implementation, `54 tests, 0 failed`.
   its line (with a reason, an empty one, none, and a value that is no backend); RGBA pad and crop;
   the alpha mask; the whole metalfx path over a stand-in scaler that, like MetalFX, sets alpha 255
   everywhere, for a wrapped world tile and an unpadded skin at 2x and 4x (the scaler's input is the
-  padded RGBA, one pass at the factor, the output cropped back, alpha 0 exactly at the source's
+  RGBA padded by four texels, one pass at the factor, the output cropped back, alpha 0 exactly at the source's
   index 255); refusals (factor, size, no scaler, a failing scaler); the summary naming metalfx.
 - **Host (`tests/metal/upscale_metalfx_test.m`, `tests/check-upscale-metalfx.sh`, macOS only,
   with ASAN and UBSAN):** nothing scaled outside a run; the test-only switch
