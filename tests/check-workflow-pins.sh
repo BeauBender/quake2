@@ -5,9 +5,13 @@
 #
 # Every file in .github/workflows/ whose name ends in .yml or .yaml (any
 # letter case, dot-files too) is parsed by ruby's yaml (Psych over
-# libyaml, YAML.safe_load with aliases allowed), so every spelling of a key
-# and every kind of line break counts as YAML reads it. The parsed tree is
-# walked, and in every mapping at any depth:
+# libyaml), so every spelling of a key and every kind of line break counts
+# as YAML reads it. The whole file is parsed as a stream
+# (YAML.parse_stream) and must hold exactly one document: an empty file
+# and a file with a second document are refused. That document is loaded
+# by YAML.safe_load, with no object classes and aliases allowed. The
+# parsed tree is walked, and in every mapping at any depth, with each key
+# below compared in any letter case (USES and Uses are uses too):
 #   uses       is a string: <owner>/<repo>[/<path>]@<40 lowercase hex> (an
 #              action or a reusable workflow), docker://<image>, or
 #              ./<path>, a path from the repository root to a reusable
@@ -24,10 +28,10 @@
 #              mapping with an image key.
 # An <image> ends in @sha256: and 64 lowercase hex digits and holds no
 # ${{ expression. In a Docker action (runs.using is
-# docker), runs.image is docker://<image>, or a Dockerfile path from the
-# action's directory, in the repository, whose every FROM line names an
-# <image> and no ARG ($); a FROM of a build stage or of scratch is refused
-# too (stricter than needed). A wrong type or a missing value is refused.
+# docker), runs.image is docker://<image>. A Dockerfile-built local action
+# (any other runs.image, a Dockerfile path among them) is not supported and
+# is refused: a Dockerfile pulls images by more than its FROM lines, and
+# the scan does not read it. A wrong type or a missing value is refused.
 #
 # The scan fails closed: no ruby on PATH, ruby's yaml that cannot be
 # loaded, a file that cannot be read or parsed (a syntax error, a tag
@@ -138,10 +142,17 @@ def local(file, v)
   end
 end
 
+# vals(h, name): the values of the keys of the mapping h that are name in
+# any letter case; name is upper case. A key is compared by its Unicode
+# upper case, so USES, Uses and uses are one key.
+def vals(h, name)
+  h.select { |k, _| k.is_a?(String) && k.upcase == name }.values
+end
+
 def container(file, v)
   if v.is_a?(String)
     image(file, v)
-  elsif !(v.is_a?(Hash) && v.key?("image"))
+  elsif !(v.is_a?(Hash) && !vals(v, "IMAGE").empty?)
     refuse(file, v, "neither an image nor a mapping with an image")
   end
 end
@@ -154,26 +165,19 @@ def services(file, v)
   end
 end
 
+# docker(file, runs): every image of a Docker action is a pinned
+# docker://<image>. A Dockerfile can pull images by more than its FROM
+# lines, so a Dockerfile-built action is refused, not read.
 def docker(file, runs)
-  img = runs["image"]
-  if !img.is_a?(String)
-    refuse(file, img, "a Docker action with no image")
-  elsif img.start_with?("docker://")
-    refuse(file, img, "not pinned by a sha256 digest") unless pinned_image?(img)
-  else
-    dockerfile(File.join(File.dirname(file), img), img, file)
-  end
-end
-
-def dockerfile(path, img, file)
-  return refuse(file, img, "no such Dockerfile in the repository") unless File.file?(path) && inside(path)
-  File.binread(path).split(/\r\n|\r|\n/).each do |line|
-    next unless line =~ /\A\s*from\s+(.*)/i
-    base = $1.split.reject { |w| w.start_with?("--") }[0]
-    if base.to_s.include?("$")
-      refuse(path, base, "a FROM named by an ARG")
-    else
-      image(path, base)
+  imgs = vals(runs, "IMAGE")
+  refuse(file, nil, "a Docker action with no image") if imgs.empty?
+  imgs.each do |img|
+    if !img.is_a?(String)
+      refuse(file, img, "a Docker action with no image")
+    elsif !img.start_with?("docker://")
+      refuse(file, img, "a Dockerfile-built local action is not supported; use a pinned docker:// image")
+    elsif !pinned_image?(img)
+      refuse(file, img, "not pinned by a sha256 digest")
     end
   end
 end
@@ -187,11 +191,11 @@ def walk(file, node, seen, exempt)
     return
   end
   node.each do |k, v|
-    case k
-    when "uses" then uses(file, v)
-    when "image" then image(file, v) unless node.equal?(exempt)
-    when "container" then container(file, v)
-    when "services" then services(file, v)
+    case k.is_a?(String) ? k.upcase : nil
+    when "USES" then uses(file, v)
+    when "IMAGE" then image(file, v) unless exempt[node]
+    when "CONTAINER" then container(file, v)
+    when "SERVICES" then services(file, v)
     end
     walk(file, v, seen, exempt)
   end
@@ -201,10 +205,25 @@ def walk_file(file)
   real = File.realpath(file)
   return if $done[real]
   $done[real] = true
-  tree = YAML.safe_load(File.read(file, encoding: "UTF-8"), permitted_classes: [], aliases: true)
-  runs = tree["runs"] if tree.is_a?(Hash) && tree["runs"].is_a?(Hash) && tree["runs"]["using"] == "docker"
-  docker(file, runs) if runs
-  walk(file, tree, {}.compare_by_identity, runs)
+  src = File.read(file, encoding: "UTF-8")
+  # The whole file is parsed as a stream, so a second document is read
+  # too; the one document is then loaded by safe_load, which reads the
+  # first.
+  if YAML.parse_stream(src).children.length != 1
+    return refuse(file, "(the file)", "does not hold exactly one YAML document")
+  end
+  tree = YAML.safe_load(src, permitted_classes: [], aliases: true)
+  # The runs of a Docker action: docker checks their images, so the walk
+  # does not check them again.
+  exempt = {}.compare_by_identity
+  if tree.is_a?(Hash)
+    vals(tree, "RUNS").each do |runs|
+      next unless runs.is_a?(Hash) && vals(runs, "USING").include?("docker")
+      docker(file, runs)
+      exempt[runs] = true
+    end
+  end
+  walk(file, tree, {}.compare_by_identity, exempt)
 rescue StandardError, SystemStackError => e
   refuse(file, "(the file)", "cannot be read or parsed (" + e.class.name + ")")
 end
@@ -518,42 +537,54 @@ selftest()
 		act "$_dr" .github/actions/d/action.yml 'name: Fixture action' 'description: fixture' \
 			'runs:' '  using: docker' "$@"
 	}
-	dfile()
-	{
-		_df=$1
-		shift
-		printf '%s\n' "$@" > "${tmp:?}/$_df/.github/actions/d/Dockerfile"
-	}
 	dact dhub "  image: docker://debian@sha256:$dig"
 	expect accept "a Docker action, image: docker://debian@sha256:<64 hex>" dhub
 	dact dhubtag '  image: docker://debian:testing'
 	expect refuse "a Docker action, image: docker://debian:testing" dhubtag
 	dact dnone '  env:' '    X: y'
 	expect refuse "a Docker action with no image" dnone
+	dact dnull '  image:'
+	expect refuse "a Docker action, image: with no value" dnull
+	# A Dockerfile-built action is refused, whatever the Dockerfile holds.
+	dact dfpath '  image: build/Dockerfile'
+	expect refuse "a Docker action, image: build/Dockerfile (a Dockerfile path)" dfpath
 	dact dfpin '  image: Dockerfile'
-	dfile dfpin "FROM --platform=linux/amd64 debian@sha256:$dig AS build" \
-		'RUN echo "built from this repository"' \
-		"FROM debian@sha256:$dig"
-	expect accept "a Dockerfile whose every FROM is pinned" dfpin
-	dact dftag '  image: Dockerfile'
-	dfile dftag "FROM debian@sha256:$dig AS build" 'FROM debian:testing'
-	expect refuse "a Dockerfile with a second FROM unpinned" dftag
-	dact dflower '  image: Dockerfile'
-	dfile dflower 'from debian:testing'
-	expect refuse "a Dockerfile with from debian:testing (lower case)" dflower
-	dact dfarg '  image: Dockerfile'
-	dfile dfarg 'ARG REGISTRY=docker.io' "FROM \${REGISTRY}/debian@sha256:$dig"
-	expect refuse "a Dockerfile FROM named by an ARG" dfarg
-	dact dfcr '  image: Dockerfile'
-	dfile dfcr "FROM debian@sha256:$dig" 'FROM debian:testing'
-	breaks dfcr/.github/actions/d/Dockerfile '\r'
-	expect refuse "a Dockerfile with CR line ends and an unpinned FROM" dfcr
-	dact dfmissing '  image: Dockerfile'
-	expect refuse "a Docker action whose Dockerfile is missing" dfmissing
-	dact dfout '  image: Dockerfile'
-	printf '%s\n' "FROM debian@sha256:$dig" > "${tmp:?}/dfout.Dockerfile"
-	ln -s "${tmp:?}/dfout.Dockerfile" "${tmp:?}/dfout/.github/actions/d/Dockerfile"
-	expect refuse "a Dockerfile that is a symbolic link out of the repository" dfout
+	printf '%s\n' "FROM debian@sha256:$dig" > "${tmp:?}/dfpin/.github/actions/d/Dockerfile"
+	expect refuse "a Docker action, image: Dockerfile, its FROM pinned" dfpin
+	dact dfbare "  image: debian@sha256:$dig"
+	expect refuse "a Docker action, image: debian@sha256:<64 hex> (no docker://)" dfbare
+	step dupper '      - uses: ./.github/actions/d'
+	act dupper .github/actions/d/action.yml 'name: Fixture action' 'description: fixture' \
+		'RUNS:' '  USING: docker' "  IMAGE: debian@sha256:$dig"
+	expect refuse "a Docker action, RUNS: USING: docker IMAGE: debian@sha256:<64 hex>" dupper
+
+	# Every key the walk compares, in any letter case.
+	step kuses '      - USES: actions/checkout@v7'
+	expect refuse "- USES: actions/checkout@v7" kuses
+	step kusespin "      - USES: actions/checkout@$sha"
+	expect accept "- USES: actions/checkout@<40 hex>" kusespin
+	cjob kimage '    container:' '      Image: debian:testing'
+	expect refuse "container: Image: debian:testing" kimage
+	cjob kimagepin '    container:' "      Image: debian@sha256:$dig"
+	expect accept "container: Image: debian@sha256:<64 hex>" kimagepin
+	cjob kcontainer '    CONTAINER: debian:testing'
+	expect refuse "CONTAINER: debian:testing" kcontainer
+	cjob kservices '    Services:' '      redis: redis:7'
+	expect refuse "Services: redis: redis:7" kservices
+
+	# A file is one YAML document.
+	mkdir -p "${tmp:?}/multidoc/.github/workflows"
+	printf '%s\n' 'on: push' 'jobs: {}' '---' 'jobs:' '  build:' '    runs-on: macos-latest' \
+		'    steps:' '    - uses: actions/checkout@v7' > "${tmp:?}/multidoc/.github/workflows/w.yml"
+	expect refuse "jobs: {}, then ---, then an unpinned uses: (a second document)" multidoc
+	mkdir -p "${tmp:?}/nodoc/.github/workflows"
+	: > "${tmp:?}/nodoc/.github/workflows/w.yml"
+	expect refuse "an empty file (no document)" nodoc
+	step leaddoc '    - name: Check out repository code' "$pinstep"
+	{ printf '%s\n' '---'; cat "${tmp:?}/leaddoc/.github/workflows/w.yml"; } \
+		> "${tmp:?}/leaddoc/.github/workflows/w.yml.new"
+	mv "${tmp:?}/leaddoc/.github/workflows/w.yml.new" "${tmp:?}/leaddoc/.github/workflows/w.yml"
+	expect accept "a pinned file that starts with ---" leaddoc
 
 	# The directory, the file names and the files.
 	mkdir -p "${tmp:?}/nowf/.github/workflows"
