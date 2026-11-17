@@ -231,6 +231,13 @@ frame times is in the card file
 
 ### P6. A local texture upscaler on the player's machine (filed as two cards)
 
+Status (2026-11-17): built. TASK123 (scale2x), TASK124 (the backend
+argument and MetalFX spatial, [decision 0012](../decisions/0012-metalfx-in-the-client.md))
+and TASK167 (VideoToolbox's super-resolution scaler as `vt`,
+[decision 0013](../decisions/0013-videotoolbox-in-the-client.md), and the
+local comparison report, [runbook](../runbook/TASK167.md)). The M1-family
+report is the owner's.
+
 A console command makes 2x or 4x PNG versions of the world textures, skies
 and skins from the player's own paks into the user's write directory, where
 `r_retexturing` finds them; tiles are wrap-padded before scaling and cropped

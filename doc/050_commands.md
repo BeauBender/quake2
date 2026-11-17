@@ -53,14 +53,19 @@ original clients (Vanilla Quake II) commands are still in place.
 
 * **teleport <x y z>**: Teleports the player to the given coordinates.
 
-* **upscale_textures <2|4> [scale2x|metalfx] [force]**: Writes PNG
+* **upscale_textures <2|4> [scale2x|metalfx|vt] [force]**: Writes PNG
   versions, twice or four times the size, of the world textures, the
   faces of the skies and the model and player skin images of the game
   data into the write directory, where `r_retexturing 1` loads them.
   The backend is `scale2x` (the default: pixel-art edges, no new
-  colour) or, on macOS, `metalfx` (MetalFX's spatial scaler); where
-  `metalfx` is unsupported the command says why in one line and uses
-  `scale2x`. Any other backend name is refused with the usage line.
+  colour) or, on macOS, `metalfx` (MetalFX's spatial scaler) or `vt`
+  (VideoToolbox's machine-learning super-resolution scaler, macOS 26 or
+  later). `vt` needs a model that macOS downloads once from Apple: the
+  first `vt` run says so in one line before the download starts, and
+  nothing else fetches it. Where `metalfx` or `vt` is unsupported (on
+  iOS, an older macOS, or a Mac VideoToolbox does not support) the
+  command says why in one line and uses `scale2x`. Any other backend
+  name is refused with the usage line.
   Files that exist are skipped unless `force` is given, and a symlink at
   an output name is never written through; names that are not plain
   paths (letters, digits, `_`, `-`, `+`, `.` and `/`) are refused,
