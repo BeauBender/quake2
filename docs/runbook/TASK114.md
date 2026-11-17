@@ -133,8 +133,8 @@ mutant of the line it covers.
 
 ## The M6 report
 
-One run on the M6 (Apple M6, family apple5, `r_metalfx_modes` 31), engine commit c212cf75 plus the
-generator of the current main, 1280x720, 5 `timedemo` rounds and 3 GPU rounds, seed 1, run in chunks
+One run on the M6 (Apple M6, family apple5, `r_metalfx_modes` 31). The engine and the generator are
+main at 3c8fb3c1 (the report's `commit`, a clean tree, build checked), at 1280x720, 5 `timedemo` rounds and 3 GPU rounds, seed 1, run in chunks
 of one scenario (each chunk one lock hold, with a 240 s pre-warm of the same engine first).
 The report is local to that machine; it is not in any repository, issue or pull request.
 
@@ -151,8 +151,14 @@ runbook-only change). `report` refuses chunks of two commits, so the run is two 
 per commit, not one.
 
 **Skipped options (every scenario):** `den1` and `fx3-s50-den1`, because the engine reports no cvar
-`r_rt_denoiser`. Every `r_metalfx` mode 1, 2 and 3 at scales 0.75, 0.50 and 0.34, and the three
-frame-generation rows (`-interp`), ran.
+`r_rt_denoiser`. Every `r_metalfx` mode 1, 2 and 3 at scales 0.75, 0.50 and 0.34 ran, and so did the
+three `-interp` rows.
+
+**The `-interp` rows are not frame generation.** Frame generation is not built in `ref_metal` yet:
+`r_metalfx_interp` reads 0. So each `-interp` row repeats its twin without `-interp` (the same ssim,
+and fps and pass times within their ranges). The card's frame-generation measures are not measured:
+the input-to-present delay, the presented frame rate and the interpolator's GPU time. The
+generator's not-measured list says why: they need the interpolator and a present counter.
 
 **Numbers.** fps and GPU times are medians with the range of the runs in brackets (fps over 5
 rounds, GPU times over 3 per-run medians); ssim is the mean over the frames of one seeded record
@@ -296,5 +302,5 @@ had just ended) and 4 to 7% in the others.
 between chunks, never inside one.
 
 **Reading.** `r_metalfx 1` runs at about half the native fps in the two `world` scenarios and above native fps
-in the ray-traced scenarios at scales 0.34 to 0.50 (at 0.75 it is near native); modes 2 and 3 run at about 1000 to 1900 fps in every scenario run, at a higher ssim
+in the ray-traced scenarios at scales 0.34 to 0.50 (at 0.75 it is between 1 % below and 17 % above native); modes 2 and 3 run at about 900 to 1900 fps in every scenario run, at a higher ssim
 than mode 1 at the same scale.
