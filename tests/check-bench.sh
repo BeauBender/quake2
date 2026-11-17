@@ -910,7 +910,7 @@ t_lock_stall() {
 	done
 	grep -q 'waiting for the lock held by taker ' "${E:?}/maker.out" || bad "stall: the maker that backed off does not wait for the taker: $(cat "${E:?}/maker.out")"
 	case $(B lock status) in
-	*'label=taker '*) ;;
+	'lock=held label=taker '*) ;;
 	*) bad "stall: the taker's holder file did not survive the stalled maker: $(B lock status)" ;;
 	esac
 	wait_gone 20 "$_mk" || bad "stall: the stalled maker did not finish"
