@@ -28,7 +28,12 @@
 #     limits; a maker stalled between its mkdir and its write backs off;
 #     the default state directory and its override, and the
 #     outside-repository guard (a relative path, a . or .. segment, a git
-#     ceiling, a failing git; a host without git uses the .git walk);
+#     ceiling, a failing git; a host without git uses the .git walk); the
+#     queue (FIX106): a holder that releases and asks again goes behind
+#     the waiter, three waiters get the lock in arrival order against
+#     their pids and their polls, a waiter KILLed while queued is skipped,
+#     one that gives up or is TERMed leaves no ticket, a nested call under
+#     the token takes none, and lock status lists the waiters in order;
 #   - the wall-time bound: it stops a grandchild, bounds a command that
 #     ignores TERM, stops the work a command leaves running, ends a
 #     stopped command and its group with 74, and shows no job notice;
@@ -72,7 +77,7 @@
 #     the gate without a pre-warm, and the readers (snap.source,
 #     freq.source) in the run file, drift and compare.
 # The tests that do not test the host facts use a fast stand-in for
-# system_profiler (fast_profiler). Then thirty-nine mutants, each applied to a
+# system_profiler (fast_profiler). Then fifty-one mutants, each applied to a
 # copy of scripts/bench/ and each required to fail the test it targets: the
 # lock made neither exclusively nor linked, the holder renamed over
 # another's, the command spawned without its own process group, its fork
@@ -80,7 +85,9 @@
 # closed) or a closed one not given /dev/null, a signal
 # in the spawn window dropped, or acted on at once, re-entry accepts any
 # token, the drift rule drops t, the core names a game, the reclaim guard
-# made with mkdir -p, the holder-less grace dropped, the store's
+# made with mkdir -p, the holder-less grace dropped, the queue with no
+# ticket check, ordered by pid, its ticket left on give-up or a dead
+# ticket kept, the store's
 # outside-repository check deleted, the leading-zero refusal dropped; the
 # gate without its hold, its bound or its reading, GPU use in a snapshot
 # ignored, baseline put or drift's re-measure storing a not-quiet set,
@@ -2269,6 +2276,10 @@ mutant drift-no-t core/stats.sh 'lo = mn - t; hi = mx + t' 'lo = mn; hi = mx' t_
 mutant core-names-game core/common.sh '' '# the Quake II adapter' t_generic || mfail=1
 mutant reclaim-guard core/lock.sh 'if ! mkdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' 'if ! mkdir -p "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' t_lock_guard || mfail=1
 mutant bare-no-grace core/lock.sh '-ge "$_la_grace" ]; then' '-ge 0 ]; then' t_lock_guard || mfail=1
+mutant queue-no-ticket-check core/lock.sh 'if bench_lock_head "$_la_label"; then _la_head=1; fi' 'bench_lock_head "$_la_label" || true; _la_head=1' t_lock_fifo || mfail=1
+mutant queue-by-pid core/lock.sh "BENCH_LOCK_KEY=\$_lq_t.\$(printf '%010d' \"\$\$\")" "BENCH_LOCK_KEY=\$(printf '%010d' \"\$\$\").\$_lq_t" t_lock_order || mfail=1
+mutant queue-ticket-left core/lock.sh 'bench_lock_unqueue; return 75' 'return 75' t_lock_giveup 'then bench_lock_unqueue; fi' 'then :; fi' || mfail=1
+mutant queue-dead-kept core/lock.sh 'if ! bench_lock_alive "$_lh_h"; then' 'if false; then' t_lock_dead_waiter || mfail=1
 mutant leading-zero-accepted core/common.sh "'' | *[!0-9]* | 0?*) return 1 ;;" "'' | *[!0-9]*) return 1 ;;" t_leading_zero || mfail=1
 # TASK166: the quiet evidence.
 mutant gate-no-hold core/snap.sh '[ $((_gt_now - _gt_since)) -lt "$_gt_hold" ] || break' 'break' t_gate || mfail=1

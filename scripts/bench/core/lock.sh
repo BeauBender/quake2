@@ -22,6 +22,21 @@
 # is cut to it), in the foreground, for at most BENCH_LOCK_WAIT seconds
 # (default 3600), then exits 75 naming the holder's label.
 #
+# The queue (FIX106): waiters are served in arrival order. On arrival a
+# waiter makes a ticket in <state>/queue with mktemp (tmp.<pid>.XXXXXX),
+# writes pid=, label= and since= (UTC) into it, and renames it to
+# w.<time>.<pid>.<random>: the time from Time::HiRes, zero-padded to
+# 12.6 digits (whole seconds from date when perl fails), the pid to 10, so
+# the names sort by arrival. Only the waiter whose ticket sorts first among
+# the live ones tries the mkdir, and the reclaims below; every other one
+# naps. A ticket (or temporary) whose waiter is gone (bench_lock_alive on
+# its text: kill -0) is removed by whichever waiter sees it, so a waiter
+# killed while queued holds up the next one for one poll. A waiter takes
+# its ticket out the moment its mkdir succeeds, and the EXIT trap takes it
+# out on every other exit (giving up, TERM, INT, HUP); a maker that backs
+# off puts it back under its first name, so it keeps its place. A holder
+# that releases and asks again so gets a later ticket than every waiter.
+#
 # Re-entry: the holder exports BENCH_LOCK_TOKEN to its command. A nested
 # call passes straight through only when that variable equals the token in
 # the holder file; any other value (empty, stale or forged) waits like any
@@ -75,6 +90,12 @@ BENCH_LOCK_SINCE=
 BENCH_LOCK_CHILD=
 BENCH_LOCK_REAPED=
 BENCH_LOCK_GUARD=
+BENCH_LOCK_QUEUE=
+BENCH_LOCK_KEY=
+BENCH_LOCK_QSINCE=
+BENCH_LOCK_TICKET=
+BENCH_LOCK_TICKET_TMP=
+BENCH_LOCK_AHEAD=0
 
 # bench_lock_init: resolves and makes the state directory.
 bench_lock_init() {
@@ -88,6 +109,72 @@ bench_lock_init() {
 	mkdir -p "${BENCH_STATE_DIR:?}" || bench_die 2 "cannot make the lock state directory"
 	BENCH_LOCK_DIR=${BENCH_STATE_DIR:?}/lock
 	BENCH_LOCK_LOG=${BENCH_STATE_DIR:?}/lock.log
+	BENCH_LOCK_QUEUE=${BENCH_STATE_DIR:?}/queue
+}
+
+# bench_lock_enqueue <label>: puts this waiter's ticket in the queue (see
+# the top), under the name it took first (BENCH_LOCK_KEY), so a ticket put
+# back keeps its place.
+bench_lock_enqueue() {
+	if [ -z "$BENCH_LOCK_KEY" ]; then
+		_lq_t=$(perl -MTime::HiRes=time -e 'printf "%019.6f", time' 2> /dev/null) || _lq_t=
+		case $_lq_t in
+		[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+		*) _lq_t=$(printf '%012d.000000' "$(date +%s)") ;;
+		esac
+		BENCH_LOCK_KEY=$_lq_t.$(printf '%010d' "$$")
+		BENCH_LOCK_QSINCE=$(bench_utc)
+	fi
+	mkdir -p "${BENCH_LOCK_QUEUE:?}" 2> /dev/null || bench_die 2 "cannot make the lock queue in the state directory"
+	BENCH_LOCK_TICKET_TMP=$(mktemp "${BENCH_LOCK_QUEUE:?}/tmp.$$.XXXXXX" 2> /dev/null) || BENCH_LOCK_TICKET_TMP=
+	if [ -z "$BENCH_LOCK_TICKET_TMP" ] ||
+		! printf 'pid=%s\nlabel=%s\nsince=%s\n' "$$" "$1" "$BENCH_LOCK_QSINCE" > "$BENCH_LOCK_TICKET_TMP" 2> /dev/null; then
+		bench_die 2 "cannot write a ticket in the lock queue"
+	fi
+	# Named before the rename, so the EXIT trap removes it from then on.
+	BENCH_LOCK_TICKET=${BENCH_LOCK_QUEUE:?}/w.$BENCH_LOCK_KEY.${BENCH_LOCK_TICKET_TMP##*.}
+	mv -f "$BENCH_LOCK_TICKET_TMP" "$BENCH_LOCK_TICKET" 2> /dev/null || bench_die 2 "cannot write a ticket in the lock queue"
+	BENCH_LOCK_TICKET_TMP=
+}
+
+# bench_lock_unqueue: takes this process's ticket (and its temporary) out
+# of the queue.
+bench_lock_unqueue() {
+	if [ -n "$BENCH_LOCK_TICKET" ]; then rm -f "${BENCH_LOCK_TICKET:?}"; fi
+	if [ -n "$BENCH_LOCK_TICKET_TMP" ]; then rm -f "${BENCH_LOCK_TICKET_TMP:?}"; fi
+	BENCH_LOCK_TICKET=
+	BENCH_LOCK_TICKET_TMP=
+	return 0
+}
+
+# bench_lock_head <label>: this waiter's ticket comes first among the live
+# ones. Puts the ticket back when it is gone; removes every ticket and
+# temporary whose waiter is gone; counts the live tickets ahead of this
+# one (BENCH_LOCK_AHEAD). The glob sorts by name (bench.sh sets LC_ALL=C).
+bench_lock_head() {
+	if [ -z "$BENCH_LOCK_TICKET" ] || [ ! -e "$BENCH_LOCK_TICKET" ]; then bench_lock_enqueue "$1"; fi
+	BENCH_LOCK_AHEAD=0
+	_lh_mine=${BENCH_LOCK_TICKET##*/}
+	_lh_past=
+	for _lh_f in "${BENCH_LOCK_QUEUE:?}"/*; do
+		_lh_n=${_lh_f##*/}
+		case $_lh_n in
+		"$_lh_mine") _lh_past=1 ;;
+		w.*)
+			_lh_h=$(cat "$_lh_f" 2> /dev/null) || continue
+			if ! bench_lock_alive "$_lh_h"; then
+				rm -f "$_lh_f"
+			elif [ -z "$_lh_past" ]; then
+				BENCH_LOCK_AHEAD=$((BENCH_LOCK_AHEAD + 1))
+			fi
+			;;
+		tmp.*)
+			_lh_p=${_lh_n#tmp.}
+			bench_pid_alive "${_lh_p%%.*}" || rm -f "$_lh_f"
+			;;
+		esac
+	done
+	[ "$BENCH_LOCK_AHEAD" -eq 0 ]
 }
 
 # bench_lock_holder: the holder file's text, empty when there is none.
@@ -181,8 +268,19 @@ bench_lock_acquire() {
 	BENCH_LOCK_MINE=t-$$-$_la_t0-${_la_rand:-0}
 	_la_said=
 	_la_bare=
+	BENCH_LOCK_KEY=
+	bench_lock_enqueue "$_la_label"
 	while :; do
-		if mkdir "${BENCH_LOCK_DIR:?}" 2> /dev/null; then
+		_la_head=
+		if bench_lock_head "$_la_label"; then _la_head=1; fi
+		if [ -z "$_la_head" ]; then
+			# Behind an earlier waiter: nap below.
+			_la_bare=
+		elif mkdir "${BENCH_LOCK_DIR:?}" 2> /dev/null; then
+			# Out of the queue the moment the directory is made, so the next
+			# waiter comes first; a maker that backs off below puts its ticket
+			# back under its first name.
+			bench_lock_unqueue
 			_la_id=$(bench_dir_id "$BENCH_LOCK_DIR")
 			BENCH_LOCK_OWNED=1
 			BENCH_LOCK_SINCE=$(bench_utc)
@@ -200,10 +298,13 @@ bench_lock_acquire() {
 			fi
 			# A reclaimer took the directory before the holder file landed.
 			BENCH_LOCK_OWNED=
+			bench_lock_enqueue "$_la_label"
 		fi
 		_la_h=$(bench_lock_holder)
 		_la_tok=$(bench_kv "$_la_h" token)
-		if [ -n "$_la_tok" ]; then
+		if [ -z "$_la_head" ]; then
+			:
+		elif [ -n "$_la_tok" ]; then
 			_la_bare=
 			if ! bench_lock_alive "$_la_h"; then
 				if bench_lock_reclaim "$_la_tok"; then continue; fi
@@ -225,16 +326,27 @@ bench_lock_acquire() {
 		fi
 		_la_miss=0
 		if [ -n "$_la_h" ]; then
-			_la_who="$(bench_kv "$_la_h" label) (pid $(bench_kv "$_la_h" pid), since $(bench_kv "$_la_h" start))"
+			_la_who="held by $(bench_kv "$_la_h" label) (pid $(bench_kv "$_la_h" pid), since $(bench_kv "$_la_h" start))"
+		elif [ -d "${BENCH_LOCK_DIR:?}" ]; then
+			_la_who="held by a holder that has not written its holder file yet"
 		else
-			_la_who="a holder that has not written its holder file yet"
+			_la_who=free
+		fi
+		_la_q=
+		if [ "$BENCH_LOCK_AHEAD" -gt 0 ]; then
+			_la_q=", behind $BENCH_LOCK_AHEAD earlier waiter"
+			[ "$BENCH_LOCK_AHEAD" -eq 1 ] || _la_q=${_la_q}s
 		fi
 		if [ $(($(date +%s) - _la_t0)) -ge "$_la_wait" ]; then
-			bench_note "the lock is still held by $_la_who after $_la_wait s; giving up"
-			return 75
+			bench_note "the lock is still $_la_who after $_la_wait s$_la_q; giving up"
+			bench_lock_unqueue; return 75
 		fi
 		if [ -z "$_la_said" ]; then
-			bench_note "waiting for the lock held by $_la_who; at most $_la_wait s"
+			if [ "$_la_who" = free ]; then
+				bench_note "waiting for the lock$_la_q; at most $_la_wait s"
+			else
+				bench_note "waiting for the lock $_la_who$_la_q; at most $_la_wait s"
+			fi
 			_la_said=1
 		fi
 		bench_nap "$_la_poll"
@@ -312,9 +424,11 @@ bench_quiet_release() {
 	BENCH_QUIET_MINE=
 }
 
-# bench_lock_release: removes the quiet marker this process wrote, then the
-# lock if this process holds it.
+# bench_lock_release: takes this process's ticket out of the queue (a
+# waiter that gave up, or a signal while it waited), removes the quiet
+# marker this process wrote, then the lock if this process holds it.
 bench_lock_release() {
+	if [ -n "${BENCH_LOCK_TICKET:-}${BENCH_LOCK_TICKET_TMP:-}" ]; then bench_lock_unqueue; fi
 	bench_quiet_release
 	[ "${BENCH_LOCK_OWNED:-}" = 1 ] || return 0
 	BENCH_LOCK_OWNED=
@@ -421,22 +535,32 @@ bench_lock_run() {
 	exit "$_ru_st"
 }
 
-# bench_lock_status: prints "lock=free", or "lock=held" with the holder.
+# bench_lock_status: prints "lock=free", or "lock=held" with the holder;
+# then a line for each live waiter, in the order they get the lock:
+# "waiter=<n> label=<label> pid=<pid> since=<UTC>".
 bench_lock_status() {
 	bench_lock_init
 	if [ ! -d "${BENCH_LOCK_DIR:?}" ]; then
 		echo lock=free
-		return 0
+	else
+		_ls_h=$(bench_lock_holder)
+		if [ -z "$_ls_h" ]; then
+			echo "lock=held label=none holder=unwritten"
+		else
+			_ls_p=$(bench_kv "$_ls_h" pid)
+			_ls_c=$(bench_kv "$_ls_h" child)
+			_ls_a=no
+			if bench_lock_alive "$_ls_h"; then _ls_a=yes; fi
+			printf 'lock=held label=%s pid=%s child=%s alive=%s since=%s\n' \
+				"$(bench_kv "$_ls_h" label)" "$_ls_p" "${_ls_c:-none}" "$_ls_a" "$(bench_kv "$_ls_h" start)"
+		fi
 	fi
-	_ls_h=$(bench_lock_holder)
-	if [ -z "$_ls_h" ]; then
-		echo "lock=held label=none holder=unwritten"
-		return 0
-	fi
-	_ls_p=$(bench_kv "$_ls_h" pid)
-	_ls_c=$(bench_kv "$_ls_h" child)
-	_ls_a=no
-	if bench_lock_alive "$_ls_h"; then _ls_a=yes; fi
-	printf 'lock=held label=%s pid=%s child=%s alive=%s since=%s\n' \
-		"$(bench_kv "$_ls_h" label)" "$_ls_p" "${_ls_c:-none}" "$_ls_a" "$(bench_kv "$_ls_h" start)"
+	_ls_i=0
+	for _ls_f in "${BENCH_LOCK_QUEUE:?}"/w.*; do
+		_ls_q=$(cat "$_ls_f" 2> /dev/null) || continue
+		bench_lock_alive "$_ls_q" || continue
+		_ls_i=$((_ls_i + 1))
+		printf 'waiter=%s label=%s pid=%s since=%s\n' "$_ls_i" \
+			"$(bench_kv "$_ls_q" label)" "$(bench_kv "$_ls_q" pid)" "$(bench_kv "$_ls_q" since)"
+	done
 }
