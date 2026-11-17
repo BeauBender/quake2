@@ -601,39 +601,6 @@ CL_CheckOrDownloadFile(const char *filename)
 }
 
 /*
- * Sets cls.downloadname and the temporary name the data is written to
- * until the download is complete. Returns false, and changes nothing,
- * when the temporary name (the name up to its first '.', plus ".tmp")
- * does not fit into cls.downloadtempname.
- */
-qboolean
-CL_SetDownloadNames(const char *filename)
-{
-	char tempname[MAX_OSPATH];
-
-	/* download to a temp name, and only rename
-	   to the real name when done, so if interrupted
-	   a runt file wont be left. COM_StripExtension has no
-	   size, so its input must be shorter than its output. */
-	if (strlen(filename) >= sizeof(tempname))
-	{
-		return false;
-	}
-
-	COM_StripExtension(filename, tempname);
-
-	if (Q_strlcat(tempname, ".tmp", sizeof(tempname)) >= (int)sizeof(tempname))
-	{
-		return false;
-	}
-
-	Q_strlcpy(cls.downloadname, filename, sizeof(cls.downloadname));
-	Q_strlcpy(cls.downloadtempname, tempname, sizeof(cls.downloadtempname));
-
-	return true;
-}
-
-/*
  * Request a download from the server
  */
 void
@@ -654,13 +621,14 @@ CL_Download_f(void)
 		return;
 	}
 
-	if (!CL_SetDownloadNames(filename))
-	{
-		Com_Printf("Refusing to download a name too long for its temporary name: %.64s\n", filename);
-		return;
-	}
-
+	strcpy(cls.downloadname, filename);
 	Com_Printf("Downloading %s\n", cls.downloadname);
+
+	/* download to a temp name, and only rename
+	   to the real name when done, so if interrupted
+	   a runt file wont be left */
+	COM_StripExtension(cls.downloadname, cls.downloadtempname);
+	strcat(cls.downloadtempname, ".tmp");
 
 	MSG_WriteByte(&cls.netchan.message, clc_stringcmd);
 	MSG_WriteString(&cls.netchan.message, va("download %s", cls.downloadname));

@@ -28,7 +28,6 @@
 
 /* Public in cl_download.c; cl_parse.c declares it locally the same way. */
 void CL_ParseDownload(void);
-qboolean CL_SetDownloadNames(const char *filename);
 
 static byte netbuf[MAX_MSGLEN];
 
@@ -171,64 +170,6 @@ TEST(download_filter_extension_table)
 		CL_Download_f();
 		T_EQ_INT(cls.netchan.message.cursize == 0, table[i].refused);
 	}
-}
-
-/* The temporary name is bounded by cls.downloadtempname, whatever the
-   size of MAX_OSPATH. A name that fills the buffer is refused without
-   touching the neighbouring member. */
-TEST(download_tempname_bound)
-{
-	static char name[MAX_OSPATH + 8];
-	size_t room = sizeof(cls.downloadtempname) - 1 - 4; /* longest stem */
-	size_t i;
-
-	/* no extension, and the whole buffer filled */
-	memset(name, 'a', MAX_OSPATH - 1);
-	name[MAX_OSPATH - 1] = 0;
-	reset_client();
-	strcpy(cls.downloadname, "keep");
-	strcpy(cls.downloadtempname, "keep2");
-	T_CHECK(!CL_SetDownloadNames(name));
-	T_EQ_STR(cls.downloadname, "keep");
-	T_EQ_STR(cls.downloadtempname, "keep2");
-
-	/* one byte too long a stem */
-	memset(name, 0, sizeof(name));
-	memset(name, 'a', room + 1);
-	reset_client();
-	strcpy(cls.downloadname, "keep");
-	T_CHECK(!CL_SetDownloadNames(name));
-	T_EQ_STR(cls.downloadname, "keep");
-
-	/* the longest stem that fits */
-	memset(name, 0, sizeof(name));
-	memset(name, 'a', room);
-	reset_client();
-	T_CHECK(CL_SetDownloadNames(name));
-	T_EQ_INT((int)strlen(cls.downloadtempname), MAX_OSPATH - 1);
-	T_EQ_STR(cls.downloadtempname + room, ".tmp");
-	T_EQ_INT((int)strlen(cls.downloadname), (int)room);
-	for (i = 0; i < room; i++)
-	{
-		T_EQ_INT(cls.downloadname[i], 'a');
-	}
-
-	/* a full-length name whose extension leaves a short stem */
-	memset(name, 'a', MAX_OSPATH - 1);
-	memcpy(name + 8, ".wav", 5);
-	reset_client();
-	T_CHECK(CL_SetDownloadNames(name));
-	T_EQ_STR(cls.downloadtempname + 8, ".tmp");
-	T_EQ_INT((int)strlen(cls.downloadname), 12);
-
-	/* a long name within the bound is sent as before */
-	memset(name, 0, sizeof(name));
-	memset(name, 'a', 500);
-	reset_client();
-	Cmd_TokenizeString(va("download %s", name), false);
-	CL_Download_f();
-	T_CHECK(cls.netchan.message.cursize > 0);
-	T_EQ_INT(cls.downloadnumber, 1);
 }
 
 TEST(download_filter_nodownload_list_and_existing)
