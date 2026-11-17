@@ -98,6 +98,11 @@ S_IsShortSilence(const wavinfo_t* info, const void* raw_data)
 		return false;
 	}
 
+	if (info->rate <= 0)
+	{
+		return false;
+	}
+
 	/* Treat it as silence if sample count too small. */
 	if (((info->samples * 1000) / info->rate) <= S_MIN_LEN_TO_TREAT_AS_SILENCE_MS)
 	{
@@ -276,13 +281,24 @@ S_GetVolume(const byte *data, int sound_length, int width, double *sound_volume)
 	}
 }
 
-static void
+void
 S_GetStatistics(const byte *data, int sound_length, int width, int channels,
 	double sound_volume, int *begin_length, int *end_length,
 	int *attack_length, int *fade_length)
 {
 	/* attack length */
 	short sound_max = 0;
+
+	*begin_length = 0;
+	*end_length = 0;
+	*attack_length = 0;
+	*fade_length = 0;
+
+	if (sound_length <= 0)
+	{
+		return;
+	}
+
 	/* calculate max value*/
 	if (width == 2)
 	{
@@ -341,12 +357,16 @@ S_GetStatistics(const byte *data, int sound_length, int width, int channels,
 		fade_data = sound_data;
 
 		/* attack calculate */
-		do
+		/* the delay scan can end on the last sample */
+		if (sound_data < sound_end)
 		{
-			sound_sample = LittleShort(*sound_data);
-			sound_data ++;
+			do
+			{
+				sound_sample = LittleShort(*sound_data);
+				sound_data ++;
+			}
+			while (sound_data < sound_end && abs(sound_sample) < sound_max);
 		}
-		while (sound_data < sound_end && abs(sound_sample) < sound_max);
 		/* fade_data == delay_data */
 		*attack_length = (sound_data - delay_data) / channels;
 		fade_data = sound_data;
@@ -363,12 +383,16 @@ S_GetStatistics(const byte *data, int sound_length, int width, int channels,
 		sound_end = sound_data;
 
 		/* fade calculate */
-		do
+		/* a one-sample sound has nothing before the end scan's stop */
+		if (sound_data > (short *)data)
 		{
-			sound_data --;
-			sound_sample = LittleShort(*sound_data);
+			do
+			{
+				sound_data --;
+				sound_sample = LittleShort(*sound_data);
+			}
+			while (sound_data > fade_data && abs(sound_sample) < sound_max);
 		}
-		while (sound_data > fade_data && abs(sound_sample) < sound_max);
 		*fade_length = (sound_end - sound_data) / channels;
 	}
 	else if (width == 1)
@@ -394,13 +418,17 @@ S_GetStatistics(const byte *data, int sound_length, int width, int channels,
 		delay_data = sound_data;
 
 		/* attack calculate */
-		do
+		/* the delay scan can end on the last sample */
+		if (sound_data < sound_end)
 		{
-			// normilize to 16bit sound;
-			sound_sample = *sound_data << 8;
-			sound_data ++;
+			do
+			{
+				// normilize to 16bit sound;
+				sound_sample = *sound_data << 8;
+				sound_data ++;
+			}
+			while (sound_data < sound_end && abs(sound_sample) < sound_max);
 		}
-		while (sound_data < sound_end && abs(sound_sample) < sound_max);
 		/* fade_data == delay_data */
 		*attack_length = (sound_data - delay_data) / channels;
 		fade_data = sound_data;
@@ -418,13 +446,17 @@ S_GetStatistics(const byte *data, int sound_length, int width, int channels,
 		sound_end = sound_data;
 
 		/* fade calculate */
-		do
+		/* a one-sample sound has nothing before the end scan's stop */
+		if (sound_data > (byte *)data)
 		{
-			sound_data --;
-			// normilize to 16bit sound;
-			sound_sample = *sound_data << 8;
+			do
+			{
+				sound_data --;
+				// normilize to 16bit sound;
+				sound_sample = *sound_data << 8;
+			}
+			while (sound_data > fade_data && abs(sound_sample) < sound_max);
 		}
-		while (sound_data > fade_data && abs(sound_sample) < sound_max);
 		*fade_length = (sound_end - sound_data) / channels;
 	}
 }
