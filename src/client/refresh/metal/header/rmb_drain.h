@@ -21,10 +21,9 @@
  * plain C with neither SDL nor Metal, host-tested by
  * tests/metal/rm_host_test.c: how many frame slots a drain waits for
  * (rmb_drain), and what a drain of the presents waits for and marks
- * (rmb_present_drain, rmb_ahead_drop, rmb_present_commit).
- *
- * This first version keeps the behaviour before FIX84, so that the host
- * test fails against it.
+ * (rmb_present_drain, rmb_ahead_drop, rmb_present_commit). Both keep
+ * teardown to one deadline per stage: what a drain gave up on is not
+ * waited for again.
  *
  * =======================================================================
  */
@@ -36,7 +35,13 @@
 
 /* ---- the frame slots (rmb_drain) --------------------------------------------- */
 
-/* The RMB_FRAMES_IN_FLIGHT frame slots of rmb_frame_sem: lost, 0 to RMB_FRAMES_IN_FLIGHT, were given up on. */
+/*
+ * The RMB_FRAMES_IN_FLIGHT frame slots of rmb_frame_sem: lost, 0 to
+ * RMB_FRAMES_IN_FLIGHT, of them were given up on by a drain since the
+ * slots were last reset. A frame begins only with a layer
+ * (rmb_frame_begin), so until the next rmb_attach those are the slots the
+ * hung frames hold.
+ */
 typedef struct
 {
 	int lost;
@@ -49,73 +54,119 @@ rmb_frames_reset(rmb_frames_t *f)
 	f->lost = 0;
 }
 
-/* The slots a drain waits for, until the deadline; the others are taken only if free at once. */
+/*
+ * The slots a drain waits for, until the one deadline they share: those
+ * not given up on already. The others are taken back only if free at
+ * once, so the second rmb_detach of teardown does not wait for the frames
+ * the first gave up on, as the shim's mgl_release_all waits for no frame.
+ */
 static inline int
 rmb_frames_wait(const rmb_frames_t *f)
 {
-	(void)f;
-	return RMB_FRAMES_IN_FLIGHT;
+	if (f->lost <= 0)
+	{
+		return RMB_FRAMES_IN_FLIGHT;
+	}
+
+	if (f->lost >= RMB_FRAMES_IN_FLIGHT)
+	{
+		return 0;
+	}
+
+	return RMB_FRAMES_IN_FLIGHT - f->lost;
 }
 
-/* After a drain took got slots back; 1 when it gave up on a slot it waited for (logged). */
+/*
+ * After a drain took got slots back (bounded to 0 to
+ * RMB_FRAMES_IN_FLIGHT): the others are given up on. 1 when the drain
+ * gave up on a slot it waited for (it is logged); 0 when it took back
+ * every slot it waited for.
+ */
 static inline int
 rmb_frames_drained(rmb_frames_t *f, int got)
 {
-	(void)f;
-	return got < RMB_FRAMES_IN_FLIGHT;
+	int wait = rmb_frames_wait(f);
+
+	if (got < 0)
+	{
+		got = 0;
+	}
+	else if (got > RMB_FRAMES_IN_FLIGHT)
+	{
+		got = RMB_FRAMES_IN_FLIGHT;
+	}
+
+	f->lost = RMB_FRAMES_IN_FLIGHT - got;
+	return got < wait;
 }
 
 /* ---- the presents (rmb_present_drain, rmb_ahead_drop, rmb_present_commit) ---- */
 
+/*
+ * A drain of the presents is decided on the identities of two groups:
+ * live, the one the presents handed to rmb_present_order are in (NULL
+ * when there is none), and spent, the one a drain gave up on (NULL when
+ * none has). A drain that gives up marks live spent: the presents it gave
+ * up on are left to it, and a later drain of it waits for nothing. Only
+ * that group is marked: the next present starts a new one, and a drain
+ * of the new one waits the shared deadline again.
+ */
 #define RMB_DRAIN_SPENT -1   /* the group was given up on already: nothing is waited for */
 #define RMB_DRAIN_LATE 0     /* the wait ended at the bound: the group is marked spent */
 #define RMB_DRAIN_DONE 1     /* every present of the group is done, or there is no group */
 
-/* 1: the drain waits for live, at most until the deadline; 0: it waits for nothing. */
+/* 1: the drain waits for live, at most until the shared deadline; 0: it waits for nothing. */
 static inline int
 rmb_present_drain_waits(const void *live, const void *spent)
 {
-	(void)spent;
-	return live != NULL;
+	return live && (live != spent);
 }
 
 /* The drain's result; done, read only when it waits, is 1 when the wait ended with every present done. */
 static inline int
 rmb_present_drain_result(const void *live, const void *spent, int done)
 {
-	(void)spent;
-
 	if (!live)
 	{
 		return RMB_DRAIN_DONE;
 	}
 
+	if (live == spent)
+	{
+		return RMB_DRAIN_SPENT;
+	}
+
 	return done ? RMB_DRAIN_DONE : RMB_DRAIN_LATE;
 }
 
-/* 1: a present slot still held after a drain with result is waited for until the deadline; 0: only if free at once. */
+/*
+ * 1: a present slot still held after a drain with result is waited for
+ * until the shared deadline; 0: taken back only if free at once. With the
+ * new group done, a present of a group given up on earlier may still hold
+ * one: it is waited for.
+ */
 static inline int
 rmb_present_slot_waits(int result)
 {
-	return result == RMB_DRAIN_LATE;
+	return result != RMB_DRAIN_SPENT;
 }
 
-/* 1: the drain marks live spent, late being 1 when a slot it waited for was still held at the bound. */
+/*
+ * 1: the drain marks live spent: its own wait ended at the bound, or late
+ * is 1, a slot it waited for still held at the bound, so the second drain
+ * of teardown waits for none.
+ */
 static inline int
 rmb_present_drain_marks(int result, int late)
 {
-	(void)result;
-	(void)late;
-	return 0;
+	return (result == RMB_DRAIN_LATE) || (late && (result != RMB_DRAIN_SPENT));
 }
 
-/* 1: a present starts a new group (rmb_present_commit). */
+/* 1: a present starts a new group (rmb_present_commit): live was given up on and keeps only the presents it gave up on. */
 static inline int
 rmb_present_new_group(const void *live, const void *spent)
 {
-	(void)live;
-	(void)spent;
-	return 0;
+	return spent && (live == spent);
 }
 
 #endif
