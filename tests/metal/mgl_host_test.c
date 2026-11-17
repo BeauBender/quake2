@@ -1198,6 +1198,14 @@ test_ring(void)
  * FIX77), on a fake clock: a slot is free from free_at on, and a present
  * on a hung GPU never frees its slot (TEST_NEVER) unless its wait, once
  * ended, lets it complete end_frees later.
+ *
+ * This is the seam only (FIX84): tests/check-metal-shim.sh builds no
+ * mgl_layer.m into this test, so what mgl_layer.m does with the seam is
+ * not held here: that its handlers capture their own context's hold (the
+ * late handler below runs two mgl_hold_t, not two contexts), that
+ * mgl_present_take calls mgl_hold_take, and its waits on the semaphores.
+ * Reverting any of them leaves this test green; the fault probes of
+ * docs/runbook/FIX77.md hold them.
  */
 #define TEST_SLOTS 4
 #define TEST_BOUND 5000   /* MGL_GPU_WAIT_MS, in the fake clock's units */
@@ -1413,6 +1421,33 @@ test_present_holds(void)
 	hold[0].lost = 1;
 	mgl_hold_commit(&hold[0]);
 	CHECK(hold[0].lost == 0 && atomic_load(&hold[0].holds) == 1);
+
+	/*
+	 * A slot given up on, freed, taken by a frame that ends without a
+	 * present, then held again (FIX84): slot 0's present hangs past both
+	 * bounds of a drop (as mgl_layer_set_sync(1)'s), completes, and a frame
+	 * takes the slot and gives it back unpresented; the slot is then held
+	 * again, free 3000 later. The next drop waits for it with the shared
+	 * deadline and takes it back at 13000; with the mark left by the frame's
+	 * take it looked once, at 10000, and left it held.
+	 */
+	test_drop_reset(&t, &ops, hold, holds);
+	t.free_at[0] = TEST_NEVER;
+	mgl_hold_commit(&hold[0]);
+	n = mgl_drop_presents(holds, TEST_SLOTS, -1, &ops);
+	CHECK(n == 1 && t.now == 2 * TEST_BOUND && hold[0].lost == 1);
+	t.free_at[0] = t.now;          /* the present given up on completes */
+	mgl_hold_take(&hold[0]);       /* a frame takes the slot (mgl_present_take) */
+	CHECK(hold[0].lost == 0);
+	t.free_at[0] = t.now + 3000;   /* given back unpresented, then held again */
+	n = mgl_drop_presents(holds, TEST_SLOTS, -1, &ops);
+	CHECK(n == 0 && t.now == 2 * TEST_BOUND + 3000);
+	CHECK(t.given[0] == 1 && t.ended[0] == 1 && hold[0].lost == 0);
+
+	/* the take ends only the mark: a slot never given up on stays as it was */
+	memset(&old_ctx, 0, sizeof(old_ctx));
+	mgl_hold_take(&old_ctx);
+	CHECK(old_ctx.lost == 0 && atomic_load(&old_ctx.holds) == 0);
 }
 
 /* Large enough for the largest draw the shim accepts. */
