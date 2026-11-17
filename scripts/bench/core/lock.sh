@@ -31,12 +31,14 @@
 # the live ones tries the mkdir, and the reclaims below; every other one
 # naps. A ticket (or temporary) whose waiter is gone (bench_pid_running on
 # its pid: kill -0 fails, or it is a zombie, KILLed and not yet reaped) is
-# removed by whichever waiter sees it, so a waiter killed while queued
-# holds up the next one for one poll. A waiter takes
-# its ticket out the moment its mkdir succeeds, and the EXIT trap takes it
-# out on every other exit (giving up, TERM, INT, HUP); a maker that backs
-# off puts it back under its first key, so it keeps its place. A holder
-# that releases and asks again so gets a later ticket than every waiter.
+# removed by whichever waiter sees it, and so is a ticket that carries the
+# waiter's own pid but is not its own (stale: a dead waiter's pid, reused
+# by this one), so a waiter killed while queued holds up the next one for
+# one poll. A waiter takes its ticket out the moment its mkdir succeeds,
+# and the EXIT trap takes it out on every other exit (giving up, TERM,
+# INT, HUP); a maker that backs off puts it back under its first key, so
+# it keeps its place. A holder that releases and asks again so gets a
+# later ticket than every waiter.
 #
 # Re-entry: the holder exports BENCH_LOCK_TOKEN to its command. A nested
 # call passes straight through only when that variable equals the token in
@@ -151,8 +153,9 @@ bench_lock_unqueue() {
 
 # bench_lock_head <label>: this waiter's ticket comes first among the live
 # ones. Puts the ticket back when it is gone; removes every ticket and
-# temporary whose waiter is gone; counts the live tickets ahead of this
-# one (BENCH_LOCK_AHEAD). The glob sorts by name (bench.sh sets LC_ALL=C).
+# temporary whose waiter is gone, and a ticket with this process's pid
+# that is not its own; counts the live tickets ahead of this one
+# (BENCH_LOCK_AHEAD). The glob sorts by name (bench.sh sets LC_ALL=C).
 bench_lock_head() {
 	if [ -z "$BENCH_LOCK_TICKET" ] || [ ! -e "$BENCH_LOCK_TICKET" ]; then bench_lock_enqueue "$1"; fi
 	BENCH_LOCK_AHEAD=0
@@ -165,8 +168,10 @@ bench_lock_head() {
 		w.*)
 			_lh_h=$(cat "$_lh_f" 2> /dev/null) || continue
 			_lh_p=$(bench_kv "$_lh_h" pid)
-			# Gone: kill -0 fails, or a zombie (KILLed, not yet reaped).
-			if ! bench_pid_running "$_lh_p"; then
+			# Gone: kill -0 fails, or a zombie (KILLed, not yet reaped); or
+			# stale: this process's own pid on a ticket that is not its own
+			# (a dead waiter's pid, reused by this one).
+			if [ "$_lh_p" = "$$" ] || ! bench_pid_running "$_lh_p"; then
 				rm -f "$_lh_f"
 			elif [ -z "$_lh_past" ]; then
 				BENCH_LOCK_AHEAD=$((BENCH_LOCK_AHEAD + 1))
