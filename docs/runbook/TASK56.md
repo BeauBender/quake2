@@ -117,3 +117,95 @@ the lit rays and the pass's GPU time.
 Against stubs of `rm_rtsun.c` (the WIP commit) it fails 541 of its 685 checks
 (`<artifacts>/TASK56/tdd/red-against-stubs.out`); the first green run failed two: the 2 % case's
 float corners and a gate that let a not-a-number green channel through, both fixed.
+
+## Checks
+
+On the branch (no engine run): `make test` `yq2test: 278 tests, 0 failed`;
+`tests/check-ref-metal.sh` ok (sun 685 checks, 0 failed; `ref_metal` built, its scratch copy
+holding `scripts/rt/` for the table); `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`,
+`tests/check-no-local-identity.sh`, `tests/check-runbook-index.sh` ok. `make ref_metal client
+game`: no error, no warning in the new files.
+
+## Runs on the bare-metal host
+
+Host: the bare-metal host (Apple M6, `supportsRaytracing`). Engine commit measured: `bf0aa793`
+(pin ids `bf0aa793e737-*`); the commits after it change only this file. Every batch held the
+shared timing lock (`tools/heavy.sh`), checked that no other `quake2` ran and that the screen was
+unlocked before and after. Every record is `PINS_SEED=1` and under `MTL_DEBUG_LAYER=1` except the
+timing runs. The views compared within one record are replays of its trace (TASK46) with cvars
+rewritten at the same length (TASK58's `retrace.py`): `r_rt_sun 1` to `0` with `r_rt_gbuffer 0`
+to `1` (*off*, the same G-buffer path), `r_rt_sun_show` to `1` (the mask) or `2` (the classes),
+`r_rt_stats` to `2`, `r_rt_sunfloor 0.5` to `1.0`. The as-is replay gives the live record byte for
+byte (23 of 23 frames). Logs, stores and tools are in `<artifacts>/TASK56/`; nothing derived from
+game data is in the repository.
+
+The three demos' maps all run the pass: `demo1.dm2` is `base2` (sky 6.31 % of the world's face
+area), `demo2.dm2` `waste2` (9.46 %), `water.dm2` `base1` (11.71 %, its direction `60 135` from
+the table's line, the others `55 45` from `r_rt_sun_angles`).
+
+### Effect off
+
+Records of `origin/main` (`65eaffb3`, exported and built in scratch) against the head, the same
+settings: `world`, `rt-shadows` and `rt-ao` at `demo1.dm2` (23 frames each), `rt-shadows` and
+`rt-ao` at `demo2.dm2` (21 each), `rt-water` at `water.dm2` (4). **6 records, 115 frames, every one
+byte-identical to main's.** Every log holds `teardown: 0 live objects`; `rt 0/0` for `world`, and
+for the effects their usual counts (`rt-shadows` 78/78 at `demo1.dm2`). So with `r_rt_sun 0`
+nothing of the pass runs, and the other effects are as they were with the sun's hook between
+the AO and the resolve.
+
+### Effect on: the masked comparison
+
+`rt-sun` at `demo1.dm2` (23 frames), at 640 x 480 and 1920 x 1080. The mask is the
+`r_rt_sun_show 1` replay: white where the kernel added no term, black where it did (and the
+HUD's own black pixels, which the comparison then leaves out, the safe side). TASK58's
+`masked-compare.sh` (`framediff OFF ON --mask SHOW1 --threshold 0 --bad-threshold 0`) on every
+frame:
+
+| Record | Frames | Score 0 | Pixels counted a frame (no term) | Pixels left out a frame |
+|---|---|---|---|---|
+| `rt-sun`, 640 x 480 | 23 | 23 | 297,438 to 307,100 of 307,200 | 100 to 9,762 |
+| `rt-sun`, 1920 x 1080 | 23 | 23 | 2,012,875 to 2,073,036 of 2,073,600 | 564 to 60,725 |
+
+**Every pixel where the term was not added is byte-identical to the effect off on the
+G-buffer path, on every frame.** The `r_rt_stats 2` lines of the 1080p replay (687 frames): of
+1,693,683 world pixels in a typical frame, 1,306,187 are at or above the floor and 151,692 face
+away; the rays traced over the run are 715,916,943, of them 1,700,160 lit, in 37 of the 687
+frames. With the default floor `0.5` the term is rare on `base2`: its outdoor floors are lit
+above half by the map's own sky light, and the dim pixels below the floor are mostly indoors,
+where the ray meets the ceiling. That is the floor doing what the design asks (no blow-out), and
+a question of look for the owner (INFORM11): the frames below include the same views at
+`r_rt_sunfloor 1.0`.
+
+### Effect on, under the threshold
+
+PENDING.
+
+### Frames for the owner
+
+Four outdoor views of `demo1.dm2` (`base2`) at 1920 x 1080, captures 1, 8, 11 and 21 (the most
+lit capture of each quarter of the run), in `<artifacts>/TASK56/frames/`: `N-off.png` (the effect
+off on the G-buffer path), `N-on.png` (`r_rt_sun 1`, the defaults) and `N-on-floor1.png`
+(`r_rt_sunfloor 1.0`). At the defaults only capture 21 differs from off; at floor 1 all four do.
+Local only, never committed or uploaded, and not viewed by the implementer.
+
+### Timing
+
+One batch (`<artifacts>/TASK56/timing/`), `demo1.dm2` timedemo at 1920 x 1080, `r_vsync 0`, the
+head build: a 240 s pre-warm of the effect on (206 runs, no thermal or performance warning), then
+three rounds of *off* (`r_rt_sun 0`, the default path), *on* (`r_rt_sun 1`) and *on + stats*
+(`r_rt_stats 2`, for the pass's GPU time), with snapshots and `freq` dumps around every run. The
+screen was unlocked before and after the batch and at every run; the GPU's device utilization
+was 0 to 5 % before each run; the one-minute load 3.2 to 5.4 (other lanes share the host).
+
+| Case | fps (timedemo), median | Range | Pass GPU time (`r_rt_stats 2`, frames past 100), median |
+|---|---|---|---|
+| Effect off (`r_rt_sun 0`) | 7,655.6 | 7,103.1 to 8,506.2 | - |
+| Effect on (`r_rt_sun 1`) | 1,085.0 | 1,073.2 to 1,088.5 | - |
+| Effect on, `r_rt_stats 2` | 1,069.9 | 1,060.0 to 1,069.9 | 0.555 ms (0.554 to 0.557 over the runs; 0.28 to 1.74 a frame) |
+
+Frequencies over the nine runs (median MHz, share at the top state): GPU 1,604 MHz, 88.1 %
+(range 924 to 1,621 MHz); performance cores 4,733 MHz, 87.2 %; efficiency cores 1,568 MHz,
+12.4 %. The difference between off and on is mostly not the sun pass (0.55 ms of a 0.92 ms frame
+at 1,085 fps) but what any ray-traced effect costs: the G-buffer path and the per-frame instance
+structure (TASK53, TASK54), which the off case does not take. The demo's timedemo is short (689
+frames, 0.1 to 0.7 s), so the fps are noisy at the top; the GPU time is the steadier number.
