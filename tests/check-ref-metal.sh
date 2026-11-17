@@ -71,6 +71,15 @@
 #     moved out of the kernel into another function; the kernel renamed) must
 #     fail it. The pairs are the water's only: the shadow and AO host tests
 #     call the helpers one by one and carry no copy of a kernel loop.
+# (f) Only on Darwin with a Metal device (TASK164): tests/metal/rmb_cs_probe.m
+#     includes rmb_device.m and runs the renderer's own rmb_attach,
+#     rmb_colorspace_set (rmb_cs_apply, rmb_cs_release) and rmb_detach on a
+#     standalone CAMetalLayer, no window, no game data: after metal_colorspace
+#     0 -> 1 -> 0, and after 1 -> detach, the layer's colour space is the one
+#     it had at attach, and the ledger holds no state object. With no device
+#     the probe prints one skip line and passes. Scratch mutants of
+#     rmb_device.m (1 -> 0 sets NULL; 1 -> 0 leaves ours; detach leaves ours)
+#     must fail it.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -475,6 +484,70 @@ for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm
 	done
 done
 
+# (f) the colour-space probe. probe_run <dir with rmb_device.m or empty> <exe>: builds
+# tests/metal/rmb_cs_probe.m, which includes rmb_device.m (found in <dir> first, else in
+# $rm_dir) and runs the renderer's own rmb_attach, rmb_colorspace_set and rmb_detach on a
+# standalone CAMetalLayer; its output is in $tmp/probe.out, its exit status is returned (a build
+# failure is 99).
+probe_run() {
+	# shellcheck disable=SC2086 # flags is a word list
+	if ! $cc -fobjc-arc -std=gnu11 -Wall -Wextra -Werror -g -O1 -I"${1:-$rm_dir}" -I"$rm_dir" -I"$rm_dir/header" -I. \
+		'-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "$2" tests/metal/rmb_cs_probe.m "$rm_dir/rm_pure.c" \
+		"$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" src/common/shared/shared.c \
+		-framework Foundation -framework Metal -framework QuartzCore -framework CoreGraphics -lm > "${tmp:?}/probe.out" 2>&1; then
+		return 99
+	fi
+	rc=0
+	"$2" > "${tmp:?}/probe.out" 2>&1 || rc=$?
+	return $rc
+}
+probe="probe skipped"
+if [ "$(uname -s)" != Darwin ]; then
+	echo "check-ref-metal: colour-space probe skipped: not macOS"
+else
+	rc=0
+	probe_run "" "${tmp:?}/rmb_cs_probe" || rc=$?
+	if [ "$rc" = 99 ]; then
+		cat "${tmp:?}/probe.out"
+		bad "tests/metal/rmb_cs_probe.m does not compile"
+	elif [ "$rc" != 0 ]; then
+		cat "${tmp:?}/probe.out"
+		bad "tests/metal/rmb_cs_probe.m failed"
+	elif grep -q 'skipped: no Metal device' "${tmp:?}/probe.out"; then
+		echo "check-ref-metal: colour-space probe skipped: no Metal device"
+	else
+		probe=$(tail -n 1 "${tmp:?}/probe.out" | sed 's/^rmb_cs_probe: //')
+		case $probe in *", 0 failed") ;; *) bad "tests/metal/rmb_cs_probe.m printed no result line"; probe="probe skipped";; esac
+		# the mutants of rmb_device.m, each of which must fail the probe: 1 -> 0 sets NULL, 1 -> 0
+		# leaves the colour space on the layer, detach leaves it too
+		probe_mutants=0
+		for m in nulled kept detached; do
+			rm -rf "${tmp:?}/csmut"
+			mkdir "${tmp:?}/csmut"
+			case $m in
+				nulled) sed 's|rmb_layer.colorspace = rmb_cs_own;|rmb_layer.colorspace = NULL;|' "$rm_dir/rmb_device.m" ;;
+				kept) sed 's|rmb_layer.colorspace = rmb_cs_own;|(void)0;|' "$rm_dir/rmb_device.m" ;;
+				detached) sed 's|rmb_cs_release();   /\* the view|(void)0;   /* the view|' "$rm_dir/rmb_device.m" ;;
+			esac > "${tmp:?}/csmut/rmb_device.m"
+			if cmp -s "$rm_dir/rmb_device.m" "${tmp:?}/csmut/rmb_device.m"; then
+				bad "the colour-space mutant ($m) of rmb_device.m changed nothing"
+				continue
+			fi
+			rc=0
+			probe_run "${tmp:?}/csmut" "${tmp:?}/rmb_cs_mutant" || rc=$?
+			if [ "$rc" = 99 ]; then
+				cat "${tmp:?}/probe.out"
+				bad "the colour-space mutant ($m) does not compile"
+			elif [ "$rc" = 0 ]; then
+				bad "the colour-space probe passes a mutant of rmb_device.m ($m)"
+			else
+				probe_mutants=$((probe_mutants + 1))
+			fi
+		done
+		probe="$probe; $probe_mutants colour-space mutants refused"
+	fi
+fi
+
 # (b) the build, where it can be built
 skip=""
 if [ "$(uname -s)" != Darwin ]; then
@@ -547,6 +620,6 @@ else
 fi
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; $build)"
 fi
 exit $fail
