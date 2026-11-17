@@ -226,9 +226,11 @@ or a warning from the changed files.
 ## FIX84: the marks end with what they mark
 
 FIX77's review left four notes on the teardown waits; FIX84 settles them.
-Its builds: base `2da65254` (TASK121's head, which FIX84 is stacked on:
-main of FIX77 plus the colour-space restore in `rmb_detach`) and the fix
-`0299c238`.
+Its builds: base `72f6013b` (main's TASK121 commit, which FIX84 is
+stacked on: main of FIX77 plus the colour-space restore in `rmb_detach`)
+and the fix `ce6e9345`. The builds were made from commits since replayed
+onto main; these two are ancestors of the branch with the same code in
+`src/client/refresh` and `tests/metal` as the ones built.
 
 **The changes.** The shim's `lost` mark on a slot now also ends when a
 frame takes the slot (`mgl_hold_take`, called by `mgl_present_take`), not
@@ -245,16 +247,23 @@ a present given up on before, is waited for with the same deadline, and
 marks the group when it does not come back. A group that cannot be made
 leaves the present uncommitted. `ref_metal`'s frames share one deadline
 (each had a fresh one), and the slots a drain gave up on
-(`rmb_frames_lost`) are not waited for again until `rmb_attach` puts on a
+(`rmb_frames`) are not waited for again until `rmb_attach` puts on a
 new layer (a frame begins only with one, `rmb_frame_begin`): the second
 `rmb_detach` of teardown and `rmb_attach`'s own, after
 `RI_ShutdownContext`'s, take them back only if they are free at once, as
 the shim's `mgl_release_all` waits for no frame. The shim's teardown wait
-for its frames shares one deadline too.
+for its frames shares one deadline too. In both renderers the shared
+frame deadline now also gives up on a GPU that finishes frames slowly,
+more than one bound for all three, not only on one that has hung; the
+completed handler of such a frame is left to the known gap of the shim
+design's section 7 (`docs/plans/metal-shim-design.md`, "A completion
+handler after unload"). `ref_metal`'s decisions are pure inline helpers
+in `src/client/refresh/metal/header/rmb_drain.h`, which `rmb_device.m`
+calls.
 
 **The host test** (`test_present_holds`) runs the first through the seam:
 slot 0 given up on at 10000, freed, `mgl_hold_take`, given back, held
-again until 13000; the next drop must take it at 13000. `4696fc2a` holds
+again until 13000; the next drop must take it at 13000. `a41b063a` holds
 the test with `mgl_hold_take` leaving the mark: `555 checks, 3 failed`;
 the fix: `555 checks, 0 failed`. Mutants, each in a scratch copy, all
 killed: the take a no-op (3 failed), the take setting the mark (4), the
@@ -263,10 +272,37 @@ looked at once (10), a slot taken back keeping its mark (1), a commit
 keeping it (2). The test's comment now says that it holds the seam only:
 `tests/check-metal-shim.sh` builds no `mgl_layer.m` into it, so the
 handlers' capture of their context's hold, the take's call and the waits
-on the semaphores are held by the probes, not by it. The `ref_metal` items
-have no host test: `ref_metal` may not include a `gl1/` header
-(`tests/check-ref-metal.sh`), so `mgl_hold.h` cannot carry its decisions,
-and the card's files hold no `ref_metal` test; the probe below holds them.
+on the semaphores are held by the probes, not by it.
+
+**The `ref_metal` host test** (`test_frames_drain` and
+`test_present_drain` in `tests/metal/rm_host_test.c`, the second round of
+review) drives `rmb_drain.h`'s helpers; `ref_metal` may not include a
+`gl1/` header (`tests/check-ref-metal.sh`), so they are its own. A drain
+that gave up marks only its group: a drain of the same group waits for
+nothing, its slots included, and the next present starts a new group,
+whose drain waits the shared deadline, and so does a slot an older present
+holds. The second detach does not wait for the frame slots the first lost,
+and `rmb_attach`'s reset waits for all of them again. `b50d98fc` holds the
+test against helpers that keep the base's behaviour: `12888 checks, 26
+failed`; with the fix, `8733b8ab`: `12888 checks, 0 failed`. `a2b1a525`
+starts the frame test from a stale count (an uninitialised one let a
+reset made a no-op pass) and adds no group with a spent one: `12891
+checks, 0 failed`, the base's helpers `27 failed`. Mutants, each in a
+scratch copy against `a2b1a525`'s test, every one killed but two:
+the frame count's two clamps dropped (1 failed each), the count ignoring
+what is lost (5), one more slot waited for (4), the taken count's two
+clamps dropped (1 each), the lost count not kept (13) or set to what was
+taken (16), a give-up logged whenever a slot is not taken back (3) or when
+every waited slot was (4), the count read after the update (4), the reset
+a no-op (6); the present drain waiting with no group (1), ignoring the
+mark (2) or on either (3); the result's no-group branch dropped (2), its
+spent branch dropped (3), done and late swapped (4); a slot waited for
+only after a give-up (2), always (1), never (3); the mark's three operands
+each dropped (1 each), its `||` made `&&` (2), no mark at all (3); the new
+group with no mark (1), on any mark (2), on a different group (4), never
+(2). The two survivors are equivalent: the frame count's clamps moved by
+one (`lost < 0`, `lost > 3`) give the same count at the boundary. The
+calls in `rmb_device.m` are held by the build, not by the test.
 
 **The fault probe, on a VM.** This host is a virtual machine: its Metal
 device is `Apple Paravirtual device`, not the bare-metal GPU of the runs
@@ -300,8 +336,9 @@ at once on base too; the shared deadline bounds the case where the frames
 complete one by one. The first note (a slot freed and taken again) and the
 second (a group done while an older present holds a slot) are not
 reproduced by the probe: the handlers held here complete in order, so a
-newer group cannot be done while an older present is held; the host test
-holds the first, the code the second.
+newer group cannot be done while an older present is held; the host tests
+hold them (`test_present_holds` the first, `test_present_drain` the
+second).
 
 **Pins.** This host holds no `metal` reference in the owner's pin store
 for any of `world`, `hud2d`, `particles`, `models`, `dlights` and
@@ -315,4 +352,7 @@ reference has another settings hash (5 frames): not compared.
 **The checks.** `tests/check-metal-shim.sh` (`555 checks, 0 failed; shim
 built`) and `tests/check-ref-metal.sh` (`12831 checks, 0 failed`, `ref_metal
 built`); `make client game`, `make ref_metal` and `make ref_gl1
-WITH_METAL_SHIM=yes` with no warning from the changed files.
+WITH_METAL_SHIM=yes` with no warning from the changed files. The second
+round, at `a2b1a525`: `tests/check-metal-shim.sh` (`555 checks, 0 failed;
+shim built`) and `tests/check-ref-metal.sh` (`12891 checks, 0 failed`,
+`ref_metal built`).
