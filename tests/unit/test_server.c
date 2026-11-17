@@ -190,3 +190,170 @@ TEST(sv_connectionless_packets)
 	t_pin("sv-connectionless", pin.data);
 	t_text_free(&pin);
 }
+
+/*
+ * Receive-buffer bounds (FIX26, FIX33). The buffers below are filled
+ * with a known byte past the received data, so a read beyond cursize
+ * shows up in the result instead of depending on stray memory.
+ */
+
+#define BOUND_FILL 'Z'
+
+static int think_calls;
+static int disconnect_calls;
+
+static void
+fake_think(edict_t *ent, usercmd_t *cmd)
+{
+	(void)ent;
+	(void)cmd;
+	think_calls++;
+}
+
+static void
+fake_disconnect(edict_t *ent)
+{
+	(void)ent;
+	disconnect_calls++;
+}
+
+/*
+ * Runs one clc_move through SV_ExecuteClientMessage for a spawned
+ * client. The whole move is laid out in a buffer filled with BOUND_FILL
+ * and its checksum is computed over the complete body; cursize says how
+ * much of it was "received". Returns the number of ClientThink calls.
+ */
+static int
+run_move(int cursize)
+{
+	static edict_t edicts[4];
+	static client_t clients[2];
+	static game_export_t fake_ge;
+	static byte buf[MAX_MSGLEN];
+	game_export_t *saved_ge = ge;
+	client_t *saved_clients = svs.clients;
+	client_t *saved_sv_client = sv_client;
+	int i;
+
+	memset(clients, 0, sizeof(clients));
+	memset(&fake_ge, 0, sizeof(fake_ge));
+	fake_ge.edicts = edicts;
+	fake_ge.edict_size = sizeof(edicts[0]);
+	fake_ge.ClientThink = fake_think;
+	fake_ge.ClientDisconnect = fake_disconnect;
+	ge = &fake_ge;
+	svs.clients = clients;
+	clients[0].state = cs_spawned;
+	clients[0].netchan.incoming_sequence = 5;
+	clients[0].lastframe = -1;
+	SZ_Init(&clients[0].netchan.message, replybuf, sizeof(replybuf));
+	think_calls = 0;
+	disconnect_calls = 0;
+
+	/* clc_move, checksum, lastframe, three minimal delta usercmds
+	   (bits 0, msec, lightlevel): 15 bytes. */
+	memset(buf, BOUND_FILL, sizeof(buf));
+	buf[0] = clc_move;
+	memset(buf + 2, 0, 4);
+
+	for (i = 0; i < 3; i++)
+	{
+		buf[6 + i * 3] = 0;
+		buf[7 + i * 3] = 10;
+		buf[8 + i * 3] = 0;
+	}
+
+	buf[1] = COM_BlockSequenceCRCByte(buf + 2, 15 - 2,
+			clients[0].netchan.incoming_sequence);
+
+	SZ_Init(&net_message, buf, sizeof(buf));
+	net_message.cursize = cursize;
+	MSG_BeginReading(&net_message);
+	SV_ExecuteClientMessage(&clients[0]);
+
+	ge = saved_ge;
+	svs.clients = saved_clients;
+	sv_client = saved_sv_client;
+
+	return think_calls;
+}
+
+TEST(sv_clc_move_bounds)
+{
+	int n;
+
+	/* A complete move runs once and the client stays. */
+	T_EQ_INT(run_move(15), 1);
+	T_EQ_INT(disconnect_calls, 0);
+
+	/* Cut short at every length from the checksum byte on: nothing
+	   runs. The checksum would match if it covered the bytes past
+	   cursize, so passing shows it does not. */
+	for (n = 2; n < 15; n++)
+	{
+		T_EQ_INT(run_move(n), 0);
+	}
+}
+
+/* Sends "rcon ..." the way the receive path does: no terminator, the
+   rest of the buffer holds other data. */
+static void
+rcon_sends(const char *text)
+{
+	memset(inbuf, BOUND_FILL, sizeof(inbuf));
+	SZ_Init(&net_message, inbuf, sizeof(inbuf));
+	MSG_WriteLong(&net_message, -1);
+	SZ_Print(&net_message, text);
+	/* SZ_Print stores a terminator and counts it; drop it. */
+	net_message.data[net_message.cursize - 1] = BOUND_FILL;
+	net_message.cursize--;
+	memset(&net_from, 0, sizeof(net_from));
+	net_from.type = NA_LOOPBACK;
+	SV_ConnectionlessPacket();
+}
+
+TEST(sv_rcon_log_line)
+{
+	t_text_t junk = {0};
+	sizebuf_t reply;
+	netadr_t from;
+
+	Cvar_Set("rcon_password", "hunter2pw");
+	drain_replies(&junk);
+	t_text_free(&junk);
+
+	/* Correct password: names the sender and the command, not the
+	   password, and nothing from past the received data. */
+	t_console_reset();
+	rcon_sends("rcon hunter2pw echo hello");
+	T_CONSOLE_HAS("Rcon from [0.0.0.0]:0");
+	T_CONSOLE_HAS("echo hello");
+	T_CHECK(strstr(t_console(), "hunter2pw") == NULL);
+	T_CHECK(strchr(t_console(), BOUND_FILL) == NULL);
+	t_console_rearm();
+
+	/* The command ran and its output went back to the sender. */
+	memset(replybuf, 0, sizeof(replybuf));
+	SZ_Init(&reply, replybuf, sizeof(replybuf));
+	T_REQUIRE(NET_GetPacket(NS_CLIENT, &from, &reply));
+	T_CHECK(strstr((char *)reply.data + 4, "hello") != NULL);
+
+	/* Wrong password: the attempt is logged without what was supplied. */
+	t_console_reset();
+	rcon_sends("rcon hunter2px echo hello");
+	T_CONSOLE_HAS("Bad rcon from [0.0.0.0]:0");
+	T_CHECK(strstr(t_console(), "hunter2") == NULL);
+	T_CHECK(strstr(t_console(), "echo") == NULL);
+	T_CHECK(strchr(t_console(), BOUND_FILL) == NULL);
+	t_console_rearm();
+
+	/* No arguments at all, long tail of fill. */
+	t_console_reset();
+	rcon_sends("rcon");
+	T_CHECK(strchr(t_console(), BOUND_FILL) == NULL);
+	t_console_rearm();
+
+	drain_replies(&junk);
+	t_text_free(&junk);
+	Cvar_Set("rcon_password", "");
+}
