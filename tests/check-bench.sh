@@ -1217,7 +1217,7 @@ t_lock_stall_place() {
 	fresh stallp
 	qfix
 	BENCH_LOCK_WAIT=30
-	_s=${tmp:?}/stallp
+	_s=${tmp:?}/stallp.bench
 	rm -rf "${_s:?}"
 	cp -R "$R" "$_s"
 	lit "${_s:?}/core/lock.sh" 'BENCH_LOCK_SINCE=$(bench_utc)' 'BENCH_LOCK_SINCE=$(bench_utc); sleep 6' || bad "stall-place: the injected stall does not apply"
@@ -1265,13 +1265,16 @@ t_lock_ticket_back() {
 	wait_said 10 "${E:?}/w2.out" || bad "ticket back: W2 never waited"
 	_tk=$(ticket_of "$_w1") || _tk=
 	if [ -n "$_tk" ] && [ "$_tk" = "$(tickets | sed -n 1p)" ]; then
+		# The key is w.<time>.<pid>; the random part after it is new.
 		rm -f "${E:?}/state/queue/${_tk:?}"
 		_n=0
-		while [ ! -e "${E:?}/state/queue/$_tk" ] && [ "$_n" -lt 50 ]; do
+		_tk2=
+		while [ "$_n" -lt 50 ]; do
+			_tk2=$(ticket_of "$_w1") && break
 			sleep 0.1
 			_n=$((_n + 1))
 		done
-		[ -e "${E:?}/state/queue/$_tk" ] || bad "ticket back: W1 did not put its ticket back under its first name: $(tickets | tr '\n' ' ')"
+		[ "${_tk2%.*}" = "${_tk%.*}" ] || bad "ticket back: W1 did not put its ticket back under its first key: ${_tk%.*} then ${_tk2:-none}"
 	else
 		bad "ticket back: W1's ticket is not first in the queue: $(tickets | tr '\n' ' ')"
 	fi
@@ -1325,21 +1328,21 @@ t_lock_queue_fifo() {
 	mkdir -p "${E:?}/state/queue"
 	_ff=${E:?}/state/queue/w.000000000001.000000.0000000001.fifo0
 	mkfifo "${_ff:?}" || bad "fifo ticket: cannot make a FIFO"
+	# Bounded by waiting, not by a signal: a shell blocked in a read of the
+	# FIFO defers a signal until the read ends. unfifo frees both below.
 	_msg=
-	_st=0
-	perl -e 'alarm 5; exec @ARGV' sh "$R/bench.sh" lock status > "${E:?}/status" 2>&1 || _st=$?
-	[ "$_st" -eq 0 ] && [ "$(cat "${E:?}/status")" = lock=free ] ||
-		_msg="lock status read a FIFO in the queue (exit $_st): $(tr '\n' '|' < "${E:?}/status")"
-	_w=
-	if [ -z "$_msg" ]; then
-		start sh "$R/bench.sh" lock run W -- sh "$E/rec.sh" "$E/log" W > "${E:?}/w.out" 2>&1
-		_w=$BG
-		wait_gone 5 "$_w" || _msg="a waiter read a FIFO in the queue and hung"
-	fi
-	[ -p "$_ff" ] || _msg="${_msg:-the FIFO was removed, not skipped}"
+	start sh "$R/bench.sh" lock status > "${E:?}/status" 2>&1
+	_sp=$BG
+	wait_gone 5 "$_sp" || _msg="lock status read a FIFO in the queue and hung"
+	start sh "$R/bench.sh" lock run W -- sh "$E/rec.sh" "$E/log" W > "${E:?}/w.out" 2>&1
+	_w=$BG
+	wait_gone 5 "$_w" || _msg="${_msg:+$_msg; }a waiter read a FIFO in the queue and hung"
+	[ -p "$_ff" ] || _msg="${_msg:+$_msg; }the FIFO was removed, not skipped"
 	unfifo "$_ff"
-	if [ -n "$_w" ]; then finish "fifo ticket" "$_w" 0; fi
+	finish "fifo ticket" "$_sp" 0
+	finish "fifo ticket" "$_w" 0
 	[ -z "$_msg" ] || bad "fifo ticket: $_msg"
+	[ "$(cat "${E:?}/status")" = lock=free ] || bad "fifo ticket: lock status printed: $(tr '\n' '|' < "${E:?}/status")"
 	[ "$(order)" = "W " ] || bad "fifo ticket: the waiter did not run: $(order)"
 	[ "$fails" -eq 0 ]
 }
