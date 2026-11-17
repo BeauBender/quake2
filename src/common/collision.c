@@ -1336,6 +1336,128 @@ CMod_LoadNodes(const char *name, lump_t *l)
 	}
 }
 
+/*
+ * The deepest path from a root of the node graph to a leaf, counted in
+ * nodes. The deepest stock map (strike.bsp) is 79 nodes deep. Every walk
+ * of the graph (CM_PointLeafnum_r, CM_BoxLeafnums_r, CM_RecursiveHullCheck,
+ * CM_HeadnodeVisible, and the renderers' world walks) recurses or loops
+ * once per level, so this also bounds their stack.
+ */
+#define MAX_NODE_DEPTH 1024
+
+/*
+ * Checks that the node graph is a forest, so that every walk of it ends:
+ * no node or leaf is the child of two nodes (or twice of one), every node
+ * is reached from a node that is nobody's child (the world and the
+ * submodel head nodes; a node that is not lies on a cycle), and no path
+ * from such a root holds more than MAX_NODE_DEPTH nodes. The walk keeps
+ * its own stack, so a deep graph cannot exhaust the C stack. Returns NULL
+ * for a forest, else what is wrong, with the child, node or leaf number
+ * (as the lump writes a child) in *bad.
+ */
+static const char *
+CMod_CheckNodeTree(const cnode_t *nodes, int count, int nleafs, int *bad)
+{
+	/* 0: nobody's child, 1: has a parent, 2: reached from a root */
+	static byte nodemark[MAX_MAP_NODES];
+	static byte leafmark[MAX_MAP_LEAFS];
+	/* node and depth; each level holds at most one waiting node, the
+	   deepest two */
+	static int stack[MAX_NODE_DEPTH + 1][2];
+	int i, j;
+
+	*bad = count;
+
+	if ((count < 1) || (count > MAX_MAP_NODES) ||
+		(nleafs < 0) || (nleafs > MAX_MAP_LEAFS))
+	{
+		return "node or leaf count";
+	}
+
+	memset(nodemark, 0, count);
+	memset(leafmark, 0, nleafs);
+
+	for (i = 0; i < count; i++)
+	{
+		for (j = 0; j < 2; j++)
+		{
+			int child = nodes[i].children[j];
+			byte *mark;
+
+			*bad = child;
+
+			if ((child >= count) || (child < -nleafs))
+			{
+				return "child out of range";
+			}
+
+			mark = (child >= 0) ? &nodemark[child] : &leafmark[-1 - child];
+
+			if (*mark)
+			{
+				return "child with a second parent";
+			}
+
+			*mark = 1;
+		}
+	}
+
+	for (i = 0; i < count; i++)
+	{
+		int sp = 0;
+
+		if (nodemark[i])
+		{
+			continue;
+		}
+
+		stack[sp][0] = i;
+		stack[sp][1] = 1;
+		sp++;
+
+		while (sp > 0)
+		{
+			int node, depth;
+
+			sp--;
+			node = stack[sp][0];
+			depth = stack[sp][1];
+			nodemark[node] = 2;
+
+			for (j = 0; j < 2; j++)
+			{
+				int child = nodes[node].children[j];
+
+				if (child < 0)
+				{
+					continue;
+				}
+
+				if ((depth >= MAX_NODE_DEPTH) || (sp > MAX_NODE_DEPTH))
+				{
+					*bad = child;
+					return "path too deep at";
+				}
+
+				stack[sp][0] = child;
+				stack[sp][1] = depth + 1;
+				sp++;
+			}
+		}
+	}
+
+	for (i = 0; i < count; i++)
+	{
+		if (nodemark[i] != 2)
+		{
+			*bad = i;
+			return "cycle through node";
+		}
+	}
+
+	return NULL;
+}
+
 static void
 CMod_LoadBrushes(const char *name, lump_t *l)
 {
@@ -1902,6 +2024,18 @@ CM_LoadMap(const char *name, qboolean clientload, unsigned *checksum)
 	CMod_LoadSubmodels(name, &header.lumps[LUMP_MODELS]);
 	CMod_LoadNodes(name, &header.lumps[LUMP_NODES]);
 	CMod_CheckReferences(name);
+
+	{
+		int bad;
+		const char *why = CMod_CheckNodeTree(map_nodes, numnodes, numleafs, &bad);
+
+		if (why)
+		{
+			Com_Error(ERR_DROP, "%s: Map %s node graph is not a tree: %s %d",
+				__func__, name, why, bad);
+		}
+	}
+
 	CMod_LoadAreas(&header.lumps[LUMP_AREAS]);
 	CMod_LoadAreaPortals(&header.lumps[LUMP_AREAPORTALS]);
 	CMod_LoadVisibility(&header.lumps[LUMP_VISIBILITY]);
