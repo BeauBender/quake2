@@ -1098,8 +1098,10 @@ marks the pixels with water in front of its depth in the normal attachment's alp
 compaction reads the marks there and writes 0 where it lists nothing, and the world-space path keeps
 only its two compute encoders. The list is the one the separate raster gave: every frame of
 `rt-water`, `rt-water-entities` and the shadows' case at `1` is byte-identical to main's, and `0`'s
-are main's. The cost after the change is not measured yet (the runbook says why); the figures above
-are TASK158's, with the separate raster.
+are main's. The cost after the change, as the frame's own GPU time, is in
+[TASK162's runbook](../runbook/TASK162.md): setting `1` costs no more than `0` in any case measured,
+and stays within 0.12 ms of the separate raster's. The figures above are TASK158's, with the separate
+raster.
 
 ## 3. What the rasterizer must expose
 
