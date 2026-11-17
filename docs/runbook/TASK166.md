@@ -109,8 +109,8 @@ reason `gate`. The case keys, with their defaults:
 
 The CPU limit is the busy percent and not the load average: the one-minute average lags a minute
 behind and still counts the run before. The snapshots are taken while the measured workload is
-not running, so GPU use in either over `gate_gpu` is another client's (`gpu.before`,
-`gpu.after`). `baseline put` refuses to store a set that holds a `quiet=no` run (exit 1, and the
+not running, so GPU use over `gate_gpu` before the run, or after it once its reading has had
+`gate_settle` seconds to fall (round 2 below), is another client's (`gpu.before`, `gpu.after`). `baseline put` refuses to store a set that holds a `quiet=no` run (exit 1, and the
 set is not stored); `drift` and `compare` print the flag of the runs they read.
 
 ### The quiet marker
@@ -163,7 +163,9 @@ GPU's in Hz; the reader tells them apart by size.
 The GPU's device utilization (`ioreg`) during the run read 97; right after the engine exited it
 read 100, then 0 at +0.2 s and +0.5 s, 2 at +1 s and 9 at +2 s. The driver's figure lags about
 0.2 s, so the snapshot reads the CPU's one-second sample first and the GPU after it: the after
-snapshot sees the GPU past the measured workload's tail, and only another client's use counts.
+snapshot sees the GPU past the measured workload's tail. A display-synced run's figure takes
+longer to fall, so the after side is judged once it settles (round 2 below); only another
+client's use then counts.
 
 ### The re-measure of `rt-shadows-gpu-1920x1080`
 
@@ -331,10 +333,21 @@ settling, is refused; `gate_settle=0` judges at once (one reading in all, the ga
 `settle-nap-uncut`, `settle-zero-polls`, `poll-digits-unbounded`. The existing gate and drift tests
 that expected `gpu.after` from a flat `gpu.snap` now also set the settle readings (`gpu.gate`).
 
-**The host batch (not run in this round).** The M6 batch the card asks for (the committed case
-with its defaults, a store of its own, the head build and `96b9c661` alternately, three runs
-each) was not measured: the bench lock was held by other sessions' jobs for most of the round
-(the wait for a single test hold took over an hour), and what was left of the round's budget went
-to the tests. So the +9 percent between `96b9c661` and main (4.308 against 4.713 ms) stays open,
-and no settle time from the real host is recorded. The batch script is a plain loop over
-`bench.sh baseline put --replace` with the screen-lock check before and after.
+**The host check.** On 2026-11-17, 14:24 to 14:37 UTC, on the M6 with the screen unlocked
+(`CGSSessionScreenIsLocked` 0 before, between and after), the committed case
+`rt-shadows-gpu-1920x1080` was run with its defaults (`gate_gpu` 10, `gate_settle` 10), into a
+store of the card's own, by `bench.sh baseline put`. This branch's head (`779a07fb`) went first,
+then `96b9c661`. Each put has its own 240 s pre-warm, its warm-up and three counted runs, all in
+one lock hold. Both sets were **stored**: every one of the six counted runs reads `quiet=yes`,
+`quiet.reason=none`, with `gpu.after.settle` 0 s in five runs and 2 s in one. That is the case the
+first evidence step could not store at all.
+
+| Build | `rts_ms` median | range | p90 median | fps |
+|---|---|---|---|---|
+| `779a07fb` (this branch) | 2.066 | 2.000 to 2.121 | 2.712 | 60 |
+| `96b9c661` | 1.930 | 1.906 to 2.090 | 2.578 | 60 |
+
+- **The GPU in the counted runs.** It ran at 502 MHz, 0.0 % of its active time at the top state (1735 MHz), as in the earlier steps: a display-synced run holds the GPU at its floor. The two pre-warms ended at 1619 MHz (89 % top) and 553 MHz (0 % top).
+- **Load.** The one-minute average was 2.6 to 3.8 around the puts, and 8.5 at the start of the hold, from the jobs before it.
+- **The two builds.** They were not alternated: there is one put per build. Their ranges overlap (2.000 to 2.090 ms), so this check settles nothing about the earlier +9 percent (4.308 against 4.713 ms at another GPU clock), and that stays open.
+- **The level.** Both sets read about 2 ms where the evidence step read 4.3 to 4.8 ms at the same 502 MHz. That is a further sign that this case's time follows the host's state between holds, not the build. The pre-warm does not hold it either, so a display-synced case is best compared within one hold.
