@@ -2458,7 +2458,8 @@ mutant bare-no-grace core/lock.sh '-ge "$_la_grace" ]; then' '-ge 0 ]; then' t_l
 mutant queue-no-ticket-check core/lock.sh 'if bench_lock_head "$_la_label"; then _la_head=1; fi' 'bench_lock_head "$_la_label" || true; _la_head=1' t_lock_fifo || mfail=1
 mutant queue-by-pid core/lock.sh "BENCH_LOCK_KEY=\$_lq_t.\$(printf '%010d' \"\$\$\")" "BENCH_LOCK_KEY=\$(printf '%010d' \"\$\$\").\$_lq_t" t_lock_order || mfail=1
 mutant queue-ticket-left core/lock.sh 'bench_lock_unqueue; return 75' 'return 75' t_lock_giveup 'then bench_lock_unqueue; fi' 'then :; fi' || mfail=1
-mutant queue-dead-kept core/lock.sh 'if ! bench_lock_alive "$_lh_h"; then' 'if false; then' t_lock_dead_waiter || mfail=1
+mutant queue-dead-kept core/lock.sh 'if ! bench_pid_running "$_lh_p"; then' 'if false; then' t_lock_dead_waiter || mfail=1
+mutant queue-zombie-alive core/lock.sh 'if ! bench_pid_running "$_lh_p"; then' 'if ! bench_lock_alive "$_lh_h"; then' t_lock_zombie_waiter || mfail=1
 mutant leading-zero-accepted core/common.sh "'' | *[!0-9]* | 0?*) return 1 ;;" "'' | *[!0-9]*) return 1 ;;" t_leading_zero || mfail=1
 # TASK166: the quiet evidence.
 mutant gate-no-hold core/snap.sh '[ $((_gt_now - _gt_since)) -lt "$_gt_hold" ] || break' 'break' t_gate || mfail=1

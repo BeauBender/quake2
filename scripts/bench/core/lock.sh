@@ -29,9 +29,10 @@
 # 12.6 digits (whole seconds from date when perl fails), the pid to 10, so
 # the names sort by arrival. Only the waiter whose ticket sorts first among
 # the live ones tries the mkdir, and the reclaims below; every other one
-# naps. A ticket (or temporary) whose waiter is gone (bench_lock_alive on
-# its text: kill -0) is removed by whichever waiter sees it, so a waiter
-# killed while queued holds up the next one for one poll. A waiter takes
+# naps. A ticket (or temporary) whose waiter is gone (bench_pid_running on
+# its pid: kill -0 fails, or it is a zombie, KILLed and not yet reaped) is
+# removed by whichever waiter sees it, so a waiter killed while queued
+# holds up the next one for one poll. A waiter takes
 # its ticket out the moment its mkdir succeeds, and the EXIT trap takes it
 # out on every other exit (giving up, TERM, INT, HUP); a maker that backs
 # off puts it back under its first name, so it keeps its place. A holder
@@ -162,7 +163,9 @@ bench_lock_head() {
 		"$_lh_mine") _lh_past=1 ;;
 		w.*)
 			_lh_h=$(cat "$_lh_f" 2> /dev/null) || continue
-			if ! bench_lock_alive "$_lh_h"; then
+			_lh_p=$(bench_kv "$_lh_h" pid)
+			# Gone: kill -0 fails, or a zombie (KILLed, not yet reaped).
+			if ! bench_pid_running "$_lh_p"; then
 				rm -f "$_lh_f"
 			elif [ -z "$_lh_past" ]; then
 				BENCH_LOCK_AHEAD=$((BENCH_LOCK_AHEAD + 1))
@@ -170,7 +173,7 @@ bench_lock_head() {
 			;;
 		tmp.*)
 			_lh_p=${_lh_n#tmp.}
-			bench_pid_alive "${_lh_p%%.*}" || rm -f "$_lh_f"
+			bench_pid_running "${_lh_p%%.*}" || rm -f "$_lh_f"
 			;;
 		esac
 	done
@@ -558,7 +561,7 @@ bench_lock_status() {
 	_ls_i=0
 	for _ls_f in "${BENCH_LOCK_QUEUE:?}"/w.*; do
 		_ls_q=$(cat "$_ls_f" 2> /dev/null) || continue
-		bench_lock_alive "$_ls_q" || continue
+		bench_pid_running "$(bench_kv "$_ls_q" pid)" || continue
 		_ls_i=$((_ls_i + 1))
 		printf 'waiter=%s label=%s pid=%s since=%s\n' "$_ls_i" \
 			"$(bench_kv "$_ls_q" label)" "$(bench_kv "$_ls_q" pid)" "$(bench_kv "$_ls_q" since)"
