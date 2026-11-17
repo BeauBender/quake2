@@ -1,0 +1,93 @@
+name: Card close labels
+run-name: card-close-labels
+# A closed card keeps no non-terminal state label, whichever way it was
+# closed: the ship path, gh issue close from another session, or the web
+# UI. The loop's dependency check counts a card as done only when its issue
+# is closed and labelled state:done (docs/runbook/FIX108.md). Reopening is
+# left to the loop. tests/check-card-close-labels.sh checks this file.
+on:
+  issues:
+    types: [closed]
+permissions: {}
+concurrency:
+  # One run per issue at a time: a second close of the same issue waits for
+  # the first instead of racing its label edits.
+  group: ${{ github.workflow }}-${{ github.event.issue.number }}
+  cancel-in-progress: false
+jobs:
+  labels:
+    name: Labels
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+    - name: Set the terminal state label
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        # Only the issue number and the close reason come from the event.
+        # The title, body, author and labels are never expanded into the
+        # job: the labels are read back with gh api into a file, and only
+        # compared there with the fixed names of the decide function.
+        N: ${{ github.event.issue.number }}
+        REASON: ${{ github.event.issue.state_reason }}
+      shell: sh
+      run: |
+        # card-close-labels: decide begin
+        # decide REASON LABELS: print the label edits for an issue closed
+        # with REASON whose labels, one a line, are in the file LABELS. An
+        # issue with no state:* label is not a card: nothing. Closed as
+        # completed and not promoted: add state:done, then remove every
+        # non-terminal state label it has. Any other reason (not_planned,
+        # duplicate, none), or promoted: remove them and add nothing. Only
+        # the fixed names below are printed; a label read from the issue is
+        # compared, never run or printed. The add comes first so that the
+        # card reads as done even if a removal then fails.
+        decide()
+        {
+          grep -q '^state:' "$2" || return 0
+          if [ "$1" = completed ] &&
+            ! grep -Fxq state:promoted "$2" &&
+            ! grep -Fxq state:done "$2"; then
+            echo "--add-label state:done"
+          fi
+          for l in state:backlog state:staged state:in-progress state:review; do
+            if grep -Fxq "$l" "$2"; then
+              echo "--remove-label $l"
+            fi
+          done
+        }
+        # card-close-labels: decide end
+        case $N in
+        '' | *[!0-9]*)
+          echo "not an issue number" >&2
+          exit 1
+          ;;
+        esac
+        labels=$RUNNER_TEMP/labels
+        gh api --paginate "repos/$GH_REPO/issues/$N/labels" --jq '.[].name' > "$labels"
+        decide "$REASON" "$labels" > "$RUNNER_TEMP/decisions"
+        # One gh issue edit per label, so each is idempotent on its own:
+        # adding a label the issue has is a no-op, and removing one that is
+        # gone already (removed since the labels were read) is not an error.
+        while read -r flag label; do
+          case $flag in
+          --add-label)
+            gh issue edit "$N" --add-label "$label"
+            ;;
+          --remove-label)
+            if ! gh issue edit "$N" --remove-label "$label"; then
+              gh api --paginate "repos/$GH_REPO/issues/$N/labels" --jq '.[].name' > "$labels"
+              if grep -Fxq -- "$label" "$labels"; then
+                exit 1
+              fi
+            fi
+            ;;
+          *)
+            echo "unexpected decision" >&2
+            exit 1
+            ;;
+          esac
+          echo "$flag $label"
+        done < "$RUNNER_TEMP/decisions"
