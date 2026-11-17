@@ -1047,6 +1047,217 @@ test_ws_models(void)
 	CHECK(ok_casts);
 }
 
+/*
+ * FIX81: rm_rtw_trace's loop (r_rt_water_hits 0) over the faces f[0..n):
+ * TASK58's choice at each hit (mtl_rtw_choose, no world-space shading: a
+ * face the picture does not show is 50 units off at its pixel, the sky or
+ * nothing met off the screen) and mtl_rtw_ss_next's step. casts counts the
+ * intersections.
+ */
+static unsigned
+rtw_trace_ss(const rtw_face_t *f, int n, int *casts)
+{
+	unsigned mask = MTL_RTW_MASK, from = MTL_RTW_MISS;
+	int at = rtw_isect(f, n, 0, mask), map = 0, layer;
+
+	*casts = 1;
+
+	for (layer = 0; layer < 64; layer++)
+	{
+		const int kind = (at >= n) ? 0 : f[at].sky ? 1 : 2;
+		const int alias = (kind == 2) && f[at].alias;
+		const int seen = (kind != 0) && f[at].seen;
+		int step;
+
+		if (kind == 2)
+		{
+			from = mtl_rtw_choose(2, 1, MTL_GB_MAT_WORLD, seen ? 0.0f : 50.0f, 100.0f);
+		}
+		else
+		{
+			from = mtl_rtw_choose(kind, seen, seen ? MTL_GB_MAT_SKY : MTL_GB_MAT_NONE, -1.0f, 0.0f);
+		}
+
+		step = mtl_rtw_ss_next(kind, alias, from, layer, map);
+
+		if (step == MTL_RTW_NEXT_STOP)
+		{
+			return from;
+		}
+
+		if (step == MTL_RTW_NEXT_MAP)
+		{
+			mask = MTL_RTW_MASK_MAP;
+			map = 1;
+		}
+
+		at = rtw_isect(f, n, at + 1, mask);
+		(*casts)++;
+	}
+
+	*casts = -1;
+	return from;
+}
+
+/* FIX81: at the default setting a model the picture does not show is passed too, so it never leaves a hole */
+static void
+test_ss_models(void)
+{
+	static const rtw_face_t hidden_model = { 1, 0, 0 }, seen_model = { 1, 0, 1 };
+	static const rtw_face_t hidden_wall = { 0, 0, 0 }, seen_wall = { 0, 0, 1 };
+	static const rtw_face_t seen_sky = { 0, 1, 1 }, hidden_sky = { 0, 1, 0 };
+	const rtw_face_t ends[5] = { hidden_wall, seen_wall, seen_sky, hidden_sky, { 0, 0, 0 } };
+	const unsigned froms[5] = { MTL_RTW_MISS, MTL_RTW_LIT, MTL_RTW_SKY, MTL_RTW_LIT | MTL_RTW_WS, MTL_RTW_SKY | MTL_RTW_WS };
+	rtw_face_t f[16];
+	int k, i, casts, ok = 1, ok_casts = 1, same = 1;
+
+	/* the step: a hidden model is passed, after MTL_RTW_LAYERS of its faces with the map's mask alone */
+	CHECK(mtl_rtw_ss_next(2, 1, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_PASS);
+	CHECK(mtl_rtw_ss_next(2, 1, MTL_RTW_MISS, MTL_RTW_LAYERS - 2, 0) == MTL_RTW_NEXT_PASS);
+	CHECK(mtl_rtw_ss_next(2, 1, MTL_RTW_MISS, MTL_RTW_LAYERS - 1, 0) == MTL_RTW_NEXT_MAP);
+
+	/* every other choice stands: a model the picture shows, a map face (a hidden one too), the sky, nothing */
+	CHECK(mtl_rtw_ss_next(2, 1, MTL_RTW_LIT, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ss_next(2, 0, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ss_next(2, 0, MTL_RTW_LIT, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ss_next(1, 0, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ss_next(1, 0, MTL_RTW_SKY, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ss_next(0, 0, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ss_next(2, 1, MTL_RTW_MISS, 0, 1) == MTL_RTW_NEXT_STOP);
+
+	/* both settings pass over exactly the same models, at every layer */
+	for (int hit = 0; hit < 3; hit++)
+	{
+		for (int alias = 0; alias < 2; alias++)
+		{
+			for (unsigned fi = 0; fi < 5; fi++)
+			{
+				for (int layer = 0; layer < 2 * MTL_RTW_LAYERS; layer++)
+				{
+					for (int map = 0; map < 2; map++)
+					{
+						if (mtl_rtw_ss_next(hit, alias, froms[fi], layer, map) !=
+							mtl_rtw_ws_next(hit, alias, froms[fi], layer, map))
+						{
+							same = 0;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	CHECK(same);
+
+	/* what has nothing in front of it is TASK58's choice, in one cast */
+	CHECK(rtw_trace_ss(&seen_wall, 1, &casts) == MTL_RTW_LIT);
+	CHECK(casts == 1);
+	CHECK(rtw_trace_ss(&hidden_wall, 1, &casts) == MTL_RTW_MISS);
+	CHECK(casts == 1);
+	CHECK(rtw_trace_ss(&seen_model, 1, &casts) == MTL_RTW_LIT);
+	CHECK(casts == 1);
+	CHECK(rtw_trace_ss(&seen_sky, 1, &casts) == MTL_RTW_SKY);
+	CHECK(rtw_trace_ss(&hidden_sky, 1, &casts) == MTL_RTW_MISS);
+	CHECK(rtw_trace_ss(f, 0, &casts) == MTL_RTW_MISS);
+	CHECK(casts == 1);
+
+	/* a hidden door is a map face: it stops the ray (no reflection, TASK58's), the wall behind it not reached */
+	f[0] = hidden_wall;
+	f[1] = seen_wall;
+	CHECK(rtw_trace_ss(f, 2, &casts) == MTL_RTW_MISS);
+	CHECK(casts == 1);
+
+	/* the card's case: a hidden model, its two faces, in front of a wall the picture shows: the wall, no hole */
+	f[0] = f[1] = hidden_model;
+	f[2] = seen_wall;
+	CHECK(rtw_trace_ss(f, 3, &casts) == MTL_RTW_LIT);
+	CHECK(casts == 3);
+
+	/* in front of the sky the picture shows: the sky; of a hidden wall: none, as the wall alone */
+	f[2] = seen_sky;
+	CHECK(rtw_trace_ss(f, 3, &casts) == MTL_RTW_SKY);
+	f[2] = hidden_wall;
+	CHECK(rtw_trace_ss(f, 3, &casts) == MTL_RTW_MISS);
+
+	/* a hidden model in front of one the picture shows: the picture's model */
+	f[0] = f[1] = hidden_model;
+	f[2] = seen_model;
+	f[3] = hidden_wall;
+	CHECK(rtw_trace_ss(f, 4, &casts) == MTL_RTW_LIT);
+	CHECK(casts == 3);
+
+	/* any number of hidden model faces before any end: what the ray gives without the models, in at most 5 casts */
+	for (k = 0; k <= 9; k++)
+	{
+		for (unsigned e = 0; e < 5; e++)
+		{
+			const int n = (e == 4) ? k : k + 1;
+			int alone_casts;
+			unsigned with, alone;
+
+			for (i = 0; i < k; i++)
+			{
+				f[i] = hidden_model;
+			}
+
+			f[k] = ends[e];
+			with = rtw_trace_ss(f, n, &casts);
+			alone = rtw_trace_ss(&f[k], n - k, &alone_casts);
+
+			if (with != alone)
+			{
+				ok = 0;
+			}
+
+			if ((casts < 1) || (casts > MTL_RTW_LAYERS + 1) || (alone_casts != 1))
+			{
+				ok_casts = 0;
+			}
+		}
+	}
+
+	CHECK(ok);
+	CHECK(ok_casts);
+
+	/* the default path never shades in world space */
+	f[0] = f[1] = hidden_model;
+	f[2] = hidden_wall;
+	CHECK(!(rtw_trace_ss(f, 3, &casts) & MTL_RTW_WS));
+
+	/*
+	 * The bound (FIX81 review round 1): past MTL_RTW_LAYERS (four) hidden
+	 * model faces the ray is traced against the map alone, so a model the
+	 * picture shows behind them is passed too, and the reflection shows what
+	 * lies behind it (none at 0, the wall in world space at 1). The values
+	 * are what the code gives; they pin the bound and are not a wish.
+	 */
+	f[0] = seen_model;
+	f[1] = hidden_wall;
+	CHECK(rtw_trace_ss(f, 2, &casts) == MTL_RTW_LIT);
+	CHECK(casts == 1);
+
+	for (i = 0; i < 3; i++)
+	{
+		f[i] = hidden_model;
+	}
+
+	f[3] = seen_model;
+	f[4] = hidden_wall;
+	CHECK(rtw_trace_ss(f, 5, &casts) == MTL_RTW_LIT);
+	CHECK(casts == 4);
+
+	for (i = 0; i < 4; i++)
+	{
+		f[i] = hidden_model;
+	}
+
+	f[4] = seen_model;
+	f[5] = hidden_wall;
+	CHECK(rtw_trace_ss(f, 6, &casts) == MTL_RTW_MISS);
+	CHECK(casts == MTL_RTW_LAYERS + 1);
+	CHECK(rtw_trace_ws(f, 6, 1, &casts) == (MTL_RTW_LIT | MTL_RTW_WS));
+}
+
 /* TASK158: the shading record, the barycentrics, the mip level, the list */
 static void
 test_shade_record(void)
@@ -1400,6 +1611,7 @@ main(void)
 	test_stats();
 	test_choose_ws();
 	test_ws_models();
+	test_ss_models();
 	test_shade_record();
 	test_face_color();
 	test_sky();

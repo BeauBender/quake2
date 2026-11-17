@@ -60,6 +60,7 @@ cvar_t *r_lerp_list;
 cvar_t *r_2D_unfiltered;
 cvar_t *r_videos_unfiltered;
 cvar_t *r_scale8bittextures;
+cvar_t *metal_colorspace;
 cvar_t *metal_2d_sharp;
 cvar_t *r_retexturing;
 cvar_t *r_validation;
@@ -136,6 +137,9 @@ R_Register(void)
 	r_videos_unfiltered = ri.Cvar_Get("r_videos_unfiltered", "0", CVAR_ARCHIVE);
 	r_scale8bittextures = ri.Cvar_Get("r_scale8bittextures", "0", CVAR_ARCHIVE);
 	metal_2d_sharp = ri.Cvar_Get("metal_2d_sharp", "0", CVAR_ARCHIVE);
+	metal_colorspace = ri.Cvar_Get("metal_colorspace", "0", CVAR_ARCHIVE);
+	rmb_colorspace_set(rm_colorspace_mode(metal_colorspace->value));   /* applied when the layer is attached */
+	metal_colorspace->modified = false;
 	r_farsee = ri.Cvar_Get("r_farsee", "0", CVAR_LATCH | CVAR_ARCHIVE);
 	r_fullbright = ri.Cvar_Get("r_fullbright", "0", 0);
 	r_drawworld = ri.Cvar_Get("r_drawworld", "1", 0);
@@ -381,6 +385,13 @@ RI_BeginFrame(float camera_separation)
 		r_vsync->modified = false;
 		rmb_set_vsync(r_vsync->value != 0);
 		R_Printf(PRINT_DEVELOPER, "ref_metal: displaySyncEnabled %s\n", rmb_vsync() ? "on" : "off");
+	}
+
+	/* metal_colorspace (TASK121): the layer's colour space, between frames */
+	if (metal_colorspace->modified)
+	{
+		metal_colorspace->modified = false;
+		rmb_colorspace_set(rm_colorspace_mode(metal_colorspace->value));
 	}
 
 	/* gl1's RI_BeginFrame: vid_gamma takes effect in R_InitImages, so through vid_restart */

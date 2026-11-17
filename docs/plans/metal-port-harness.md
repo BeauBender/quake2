@@ -299,6 +299,8 @@ which refuse a host without the capability they require).
 - [FIX68](../runbook/FIX68.md): The shim's presented rate at 5120x2880 with display sync off
 - [FIX69](../runbook/FIX69.md): presents drained at teardown, and the shim's present wait bounded
 - [FIX77](../runbook/FIX77.md): the shim's present hold count per context, and teardown's waits under one deadline
+- [FIX81](../runbook/FIX81.md): a hidden model leaves no hole in the water reflection at the default setting
+- [FIX83](../runbook/FIX83.md): The bench lock's fork keeps bash's own setpgid message off the caller's standard error
 - [TASK21](../runbook/TASK21.md): Closing TASK21 on the build host
 - [TASK22](../runbook/TASK22.md): Closing TASK22: the simulator on the build host, the device by the owner
 - [TASK27](../runbook/TASK27.md): Closing TASK27 on the build host
@@ -337,6 +339,7 @@ which refuse a host without the capability they require).
 - [TASK118](../runbook/TASK118.md): HighDPI windows on the bare-metal host
 - [TASK119](../runbook/TASK119.md): Crisp 2D in `ref_metal`
 - [TASK120](../runbook/TASK120.md): Bicubic lightmaps in `ref_metal`
+- [TASK121](../runbook/TASK121.md): the Metal layer's colour space, `metal_colorspace`, measured on a P3 display
 - [TASK122](../runbook/TASK122.md): Particle size cap relative to the resolution in `ref_metal`
 - [TASK131](../runbook/TASK131.md): The dynamic-light shadow pass finds each pixel's surface without an eye ray
 - [TASK132](../runbook/TASK132.md): `soft`'s window captured opaque and not opaque
