@@ -80,8 +80,8 @@ void rmb_gbuf_raster_formats(MTLRenderPipelineDescriptor *d, int surf);
 #define RMB_RTW_SLOT 16         /* uint32s a frame slot of the counts buffer (rm_rtwater.metal's RM_RTW_C_*) */
 #define RMB_RTW_C_LISTED 9
 #define RMB_RTW_C_ARGS 10
-#define RMB_RTW_SAMPLES 8       /* per slot (world space): 2 and 3 the compaction's start and end, 4 and 5 the trace's;
-                                   0, 1, 6 and 7 were TASK158's separate raster's, which TASK162 removed */
+#define RMB_RTW_SAMPLES 4       /* per slot (world space): 0 and 1 the compaction's start and end, 2 and 3 the trace's
+                                   (TASK58's path writes 0 and 1); FIX98: the 4 TASK158's raster had are gone */
 
 _Static_assert(sizeof(rm_rtw_view_t) == 288, "the view is rm_rtwater.metal's 288 bytes");
 _Static_assert(RMB_RTW_C_ARGS * 4 % 4 == 0, "the indirect arguments are 4-byte aligned");
@@ -643,14 +643,14 @@ rmb_rtw_read(void)
 		s->skybox = c[7];
 		s->ws = slot_ws[k];
 		s->listed = slot_ws[k] ? c[RMB_RTW_C_LISTED] : slot_pixels[k];   /* TASK58's path traces every pixel */
-		s->ms = s->raster_ms = s->compact_ms = s->trace_ms = s->span_ms = s->vert_ms = s->frag_ms = -1;
+		s->ms = s->compact_ms = s->trace_ms = s->span_ms = -1;
 
 		/*
 		 * TASK58's path: its compute encoder. The world-space path (TASK158):
 		 * the compaction's encoder (with the arguments) and the trace's, each
 		 * on its own, and the whole span. TASK162: no raster of its own (its
-		 * marks are a draw of the G-buffer raster, timed with it), so the
-		 * raster's, its vertex stage's and its fragment stage's stay -1.
+		 * marks are a draw of the G-buffer raster, timed with it), so there
+		 * are no raster figures (FIX98).
 		 */
 		if (slot_timed[k] && samples)
 		{
@@ -665,9 +665,9 @@ rmb_rtw_read(void)
 			}
 			else
 			{
-				s->compact_ms = rmb_rtw_span(t, n, 2, 3);
-				s->trace_ms = rmb_rtw_span(t, n, 4, 5);
-				s->span_ms = rmb_rtw_span(t, n, 2, 5);
+				s->compact_ms = rmb_rtw_span(t, n, 0, 1);
+				s->trace_ms = rmb_rtw_span(t, n, 2, 3);
+				s->span_ms = rmb_rtw_span(t, n, 0, 3);
 
 				if ((s->compact_ms >= 0) && (s->trace_ms >= 0))
 				{
@@ -875,7 +875,7 @@ rmb_rtw_trace_ws(id<MTLCommandBuffer> cmd, unsigned long fno, int slot, int time
 	const NSUInteger w = depth.width, h = depth.height;
 	const uint32_t cap = (uint32_t)list_cap;
 	const uint32_t ns = (uint32_t)shade_n;
-	id<MTLComputeCommandEncoder> ce = rmb_rtw_encoder(cmd, timed, slot, 2);
+	id<MTLComputeCommandEncoder> ce = rmb_rtw_encoder(cmd, timed, slot, 0);
 
 	if (!ce)
 	{
@@ -900,7 +900,7 @@ rmb_rtw_trace_ws(id<MTLCommandBuffer> cmd, unsigned long fno, int slot, int time
 	[ce endEncoding];
 
 	/* the trace in an encoder of its own (the list and the arguments are tracked: it waits for them) */
-	ce = rmb_rtw_encoder(cmd, timed, slot, 4);
+	ce = rmb_rtw_encoder(cmd, timed, slot, 2);
 
 	if (!ce)
 	{

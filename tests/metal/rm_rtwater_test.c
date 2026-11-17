@@ -784,19 +784,16 @@ test_stats(void)
 
 	/* TASK158: r_rt_water_hits 1 adds its passes' split and the span from the raster's start to the trace's end */
 	s.ws = 1;
-	s.raster_ms = 0.25;
 	s.compact_ms = 0.125;
 	s.trace_ms = 0.5;
 	s.span_ms = 1.5;
-	s.vert_ms = 0.061;
-	s.frag_ms = 0.125;
 	CHECK(rm_rtw_stats_format(&s, buf, sizeof(buf)) == 1);
-	CHECK(strstr(buf, ", 0.875 ms, world space: raster 0.250 (vertex 0.061, fragment 0.125), compaction 0.125, trace 0.500, "
-			"span 1.500 ms") != NULL);
+	CHECK(strstr(buf, ", 0.875 ms, world space: compaction 0.125, trace 0.500, span 1.500 ms") != NULL);
+	CHECK(strstr(buf, "raster") == NULL);
 	CHECK(strlen(buf) < RM_STATS_LINE);
-	s.raster_ms = s.compact_ms = s.trace_ms = s.span_ms = s.vert_ms = s.frag_ms = -1;
+	s.compact_ms = s.trace_ms = s.span_ms = -1;
 	CHECK(rm_rtw_stats_format(&s, buf, sizeof(buf)) == 1);
-	CHECK(strstr(buf, "world space: raster - (vertex -, fragment -), compaction -, trace -, span - ms") != NULL);
+	CHECK(strstr(buf, "world space: compaction -, trace -, span - ms") != NULL);
 	s.ws = 0;
 
 	s.ms = -1;
