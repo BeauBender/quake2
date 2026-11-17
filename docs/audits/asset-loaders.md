@@ -480,7 +480,7 @@ bypassed by a wrapping width (D27).
 | `LoadWal` | `width`, `height`, `offsets[0]` | `load_image((byte*)mt + ofs, width, height, size - ofs, ...)` | `(ofs <= 0) \|\| (width <= 0) \|\| (height <= 0) \|\| (((size - ofs) / height) < width)` | ok |
 | `LoadM8` | `version` | format gate | `LittleLong(mt->version) != M8_VERSION` | ok |
 | `LoadM8` | `width[0]`, `height[0]`, `offsets[0]` | palette expand loop and `load_image` | same body check as `LoadWal` | ok |
-| `LoadM8` | each source byte | `mt->palette[value]` | `value` is a `byte`, the palette has 256 entries; `image_buffer = malloc((size - ofs) * 4)` matches the loop `i < (size - ofs)` | ok |
+| `LoadM8` | each source byte | `mt->palette[value]` | `value` is a `byte`, the palette has 256 entries; `image_buffer` is `IMGSIZE_Bytes(width, height, 4)` bytes, checked, and the loop runs over the same capped pixel count (**FIX19**) | ok |
 | `LoadM32` | `version` | format gate | `LittleLong(mt->version) != M32_VERSION` | ok |
 | `LoadM32` | `width[0]`, `height[0]`, `offsets[0]` | `load_image((byte *)mt + ofs, width, height, (size - ofs) / 4, ...)`; the renderer then walks `width * height` 4-byte pixels of the file buffer | `((size - ofs) / height) < (width * 4)`; `width * 4` is `int` and wraps for any `width` above `INT_MAX / 4`, so a hostile width with a small product passes against a small body. gl1 `R_LoadPic` → `R_Upload32` (→ `SmoothColorImage` with `r_scale8bittextures`) → `R_Upload32Native` → `R_LightScaleTexture` rewrites `width * height` pixels in place, then scans the alpha bytes and hands the buffer to `glTexImage2D`; without NPOT support `R_Upload32Soft` resamples from the same buffer. gl3 `GL3_Upload32` scans the alpha bytes over `width * height` pixels and passes the buffer to `glTexImage2D`. soft `R_LoadPic` converts only `data_size` pixels and `R_LoadPic8` allocates `R_GetImageMipsSize(width * height)` itself, so it stays in bounds (one very large allocation, `ERR_FATAL` if it fails) | **defect D27, fixed by FIX19** (gl1: heap buffer overflow write past the file buffer; gl3: heap over-read; the fix is the comparison in 64-bit arithmetic, `(long long)width * height * 4 > size - ofs`) |
 | `GetWalInfo` | `width`, `height` | `*width = LittleLong(mt->width)`, `*height = ...`, which become `realwidth`/`realheight` in `LoadHiColorImage` (`files/stb.c`) | `if (size < sizeof(miptex_t))` bounds the header read; no version test (`miptex_t` has none) and the values are not checked: zero, negative and huge pass | hardening, **fixed by FIX19** (see the verdict note below the table) |
@@ -812,34 +812,47 @@ and used where the loaders had an `int` product:
 - The cap, `IMGSIZE_MAX_PIXELS`, is 1 << 26 pixels (8192 by 8192, 256 MB at
   four bytes a pixel): the area the ImageIO decoder already accepts, so
   every image type has one limit. The largest stock picture is 640 by 480.
-  The cap is applied to the sizes of `PCX_Decode`, `R_LoadImage`,
-  `LoadHiColorImage`, the soft resize buffer, the soft 2x buffer and the
-  M32 body test; one pixel past it is refused.
+  The cap is applied to the sizes of `PCX_Decode`, `GetPCXInfo`,
+  `R_LoadImage`, `LoadHiColorImage`, the soft resize buffer, the soft 2x
+  buffer and the WAL, M8 and M32 body tests; one pixel past it is refused.
 - `PCX_Decode` refuses (no picture) a size over the cap, which also ends the
   wrap of the `int` product (D19), and a 1, 2 or 4-bit file whose
   `bytes_per_line` is under `(width * bits + 7) / 8` (D20); the exact
-  minimum is accepted. The 8-bit and 24-bit paths already sized their line
+  minimum is accepted. It also refuses a 1-bit file with more than 8
+  colour planes (stock and EGA files have 1 or 4), which bounds the decode
+  time. The 8-bit and 24-bit paths already sized their line
   buffer from `bytes_per_line` and the width and are unchanged.
 - `GetPCXInfo` leaves the sizes at 0, as for a missing file, when the file
   is shorter than the 128-byte header (D21); a file of exactly the header
-  size is read.
+  size is read. It reports the real size (`xmax - xmin + 1`, as signed
+  shorts, as `PCX_Decode` reads it) only when `IMGSIZE_Pixels` accepts it:
+  a zero, negative or over-cap size is left at 0, so no caller sees one.
 - `LoadM32` tests the body in 64 bits (D27): the body (`size - ofs`) must
   hold `width * height * 4` bytes, with the same verdict as before for every
-  width that did not wrap. WAL and M8 keep their division test, which does
-  not multiply the width.
+  width that did not wrap. `LoadWal` and `LoadM8` use the same test
+  (`IMGSIZE_BodyFits`, one byte a pixel), so they are held to the cap too.
+  The M8 colour-expansion buffer is sized by `IMGSIZE_Bytes` from the
+  capped width and height, not from the file size, with the allocation
+  checked.
 - `GetWalInfo`, `GetM8Info` and `GetM32Info` report a size only when both
   sides are positive; otherwise the caller's 0 stays, which is how
   `LoadHiColorImage` reads "no original".
 - `R_LoadImage` and `LoadHiColorImage` take the pixel count from
   `IMGSIZE_Pixels`; over the cap, no image. The soft renderer sizes its
-  resize and 2x buffers with `IMGSIZE_Bytes`. When the resize buffer cannot
+  resize and 2x buffers with `IMGSIZE_ResizeBytes` and
+  `IMGSIZE_Scale2xBytes`, which the call sites use with no branch of their
+  own (both are tested at the cap and one past it); `R_LoadImage` tests a
+  hi-res replacement with `IMGSIZE_ReplacementFits`, also tested. When the resize buffer cannot
   be had (over the cap, or `malloc` fails) it keeps the image at its own
   size, the path a failed `ResizeSTB` already took, rather than refusing it;
   an over-cap 2x buffer returns no image, as a failed allocation there did.
-- Not changed: the M8 colour-expansion buffer `(size - ofs) * 4` is an
-  `int` product bounded only by the file size (a file over 512 MB), and the
-  1-bit path's `v <<= 1` over `color_planes` is unbounded for a plane count
-  above 31; neither is in FIX19's defect list.
+- `image.c` is not included in the unit suite. Its other two gates, in
+  `R_LoadImage` (the PCX branch and the stb branch), are covered by trace,
+  not by a test: each is one call to `IMGSIZE_Pixels` with no branch of
+  its own beyond the result, and `IMGSIZE_Pixels` is tested at the cap and
+  one past it.
+- Not changed: the 1-bit path's `v <<= 1` over `color_planes` was
+  unbounded; the plane limit above ends that.
 
 ## Cards filed
 
