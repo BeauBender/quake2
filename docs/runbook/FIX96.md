@@ -134,7 +134,7 @@ it is.
 
 ## Checks
 
-Each through `tools/heavy.sh`: `tests/check-ref-metal.sh`, `tests/check-doc-links.sh`,
-`tests/check-no-local-identity.sh` (results in the lane's report). `tests/check-pins.sh` was not
-run: no scenario changed. The full `scripts/test.sh` was not run on this lane.
+Each through `tools/heavy.sh`: `tests/check-ref-metal.sh` (ok: 12891 checks, 0 failed; water 722,
+MetalFX 319; `ref_metal` built), `tests/check-doc-links.sh` (ok), `tests/check-no-local-identity.sh`
+(ok). `tests/check-pins.sh` was not run: no scenario changed. The full `scripts/test.sh` was not run on this lane.
 `tests/check-runbook-index.sh` fails on this file until its index line is added at merge.
