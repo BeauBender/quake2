@@ -234,3 +234,170 @@ TEST(cl_server_messages_and_configstring_bounds)
 	T_CONSOLE_HAS("string too long");
 	T_EQ_STR(cl.configstrings[CS_NAME + 1], "");
 }
+
+/* ---- FIX35: a frame with no old frame, and entity removal ---- */
+
+/* A frame carrying the given records as the entity list. A record is a
+   bits byte and an entity number byte. deltaframe is the server frame it
+   is coded against, -1 for none. */
+static void
+build_records(int serverframe, int deltaframe, const int *rec, int nrec)
+{
+	int i;
+
+	SZ_Init(&net_message, msgbuf, sizeof(msgbuf));
+	MSG_WriteByte(&net_message, svc_frame);
+	MSG_WriteLong(&net_message, serverframe);
+	MSG_WriteLong(&net_message, deltaframe);
+	MSG_WriteByte(&net_message, 0);
+	MSG_WriteByte(&net_message, 0);
+	MSG_WriteByte(&net_message, svc_playerinfo);
+	MSG_WriteShort(&net_message, 0);
+	MSG_WriteLong(&net_message, 0);
+	MSG_WriteByte(&net_message, svc_packetentities);
+
+	for (i = 0; i < nrec; i++)
+	{
+		MSG_WriteByte(&net_message, rec[i * 2]);
+		MSG_WriteByte(&net_message, rec[i * 2 + 1]);
+	}
+
+	MSG_WriteByte(&net_message, 0);
+	MSG_WriteByte(&net_message, 0);
+	MSG_BeginReading(&net_message);
+}
+
+static int
+frame_entity(int index)
+{
+	return cl_parse_entities[(cl.frame.parse_entities + index) &
+		(MAX_PARSE_ENTITIES - 1)].number;
+}
+
+/* A removal record in a frame that has no old frame is ignored: the frame
+   is taken, the removed entity is not in it, the later records still are. */
+TEST(cl_removal_without_old_frame_is_ignored)
+{
+	static const int rec[] = { U_REMOVE, 5, 0, 7 };
+
+	reset_client();
+	build_records(1, -1, rec, 2);
+
+	CL_ParseServerMessage();
+
+	T_CHECK(cl.frame.valid);
+	T_EQ_INT(cl.frame.num_entities, 1);
+	T_EQ_INT(frame_entity(0), 7);
+	T_EQ_INT(cls.state, ca_active);
+}
+
+/* Only removal records, no old frame: nothing is kept. */
+TEST(cl_only_removals_without_old_frame)
+{
+	static const int rec[] = { U_REMOVE, 1, U_REMOVE, 200 };
+
+	reset_client();
+	build_records(1, -1, rec, 2);
+
+	CL_ParseServerMessage();
+
+	T_CHECK(cl.frame.valid);
+	T_EQ_INT(cl.frame.num_entities, 0);
+}
+
+/* The other uses of oldframe (the unchanged run before a record, the delta
+   from the old entity, the copy of the remainder) are not entered without
+   an old frame: every record is taken from the baseline, in order. */
+TEST(cl_records_without_old_frame_come_from_baseline)
+{
+	static const int rec[] = { 0, 3, 0, 4, 0, 200 };
+
+	reset_client();
+	build_records(1, -1, rec, 3);
+
+	CL_ParseServerMessage();
+
+	T_EQ_INT(cl.frame.num_entities, 3);
+	T_EQ_INT(frame_entity(0), 3);
+	T_EQ_INT(frame_entity(2), 200);
+}
+
+/* With an old frame, a removal drops that entity and the unchanged ones
+   around it are carried over. */
+TEST(cl_removal_with_old_frame_removes_entity)
+{
+	static const int first[] = { 0, 3, 0, 4, 0, 5 };
+	static const int second[] = { U_REMOVE, 4 };
+
+	reset_client();
+	build_records(1, -1, first, 3);
+	CL_ParseServerMessage();
+	T_EQ_INT(cl.frame.num_entities, 3);
+
+	build_records(2, 1, second, 1);
+	CL_ParseServerMessage();
+
+	T_CHECK(cl.frame.valid);
+	T_EQ_INT(cl.frame.num_entities, 2);
+	T_EQ_INT(frame_entity(0), 3);
+	T_EQ_INT(frame_entity(1), 5);
+}
+
+/* ---- FIX12: the player number in svc_serverdata ---- */
+
+static void
+build_serverdata(int playernum)
+{
+	SZ_Init(&net_message, msgbuf, sizeof(msgbuf));
+	MSG_WriteByte(&net_message, svc_serverdata);
+	MSG_WriteLong(&net_message, PROTOCOL_VERSION);
+	MSG_WriteLong(&net_message, 1);
+	MSG_WriteByte(&net_message, 0);
+	MSG_WriteString(&net_message, "");
+	MSG_WriteShort(&net_message, playernum);
+	MSG_WriteString(&net_message, "level");
+	MSG_BeginReading(&net_message);
+}
+
+TEST(cl_playernum_minus_two_refused)
+{
+	reset_client();
+	build_serverdata(-2);
+	T_EXPECT_DROP(CL_ParseServerMessage());
+	T_CONSOLE_HAS("playernum");
+}
+
+TEST(cl_playernum_minus_one_is_cinematic)
+{
+	reset_client();
+	build_serverdata(-1);
+	CL_ParseServerMessage();
+	T_EQ_INT(cl.playernum, -1);
+	T_EQ_STR(t_console(), "");
+}
+
+TEST(cl_playernum_zero_joins)
+{
+	reset_client();
+	build_serverdata(0);
+	CL_ParseServerMessage();
+	T_EQ_INT(cl.playernum, 0);
+	T_CONSOLE_HAS("level");
+}
+
+TEST(cl_playernum_last_client_joins)
+{
+	reset_client();
+	build_serverdata(MAX_CLIENTS - 1);
+	CL_ParseServerMessage();
+	T_EQ_INT(cl.playernum, MAX_CLIENTS - 1);
+	T_CONSOLE_HAS("level");
+}
+
+TEST(cl_playernum_max_clients_refused)
+{
+	reset_client();
+	build_serverdata(MAX_CLIENTS);
+	T_EXPECT_DROP(CL_ParseServerMessage());
+	T_CONSOLE_HAS("playernum");
+}
