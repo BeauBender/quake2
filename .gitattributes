@@ -1,0 +1,2 @@
+# Only the runbook index is merged by union. Nothing else is.
+docs/runbook/INDEX.md merge=union
