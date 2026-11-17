@@ -44,6 +44,16 @@ jobs:
       run: |
         # tests/unit against the q2ded objects; no SDL, no game data.
         gmake -j3 test
+    - name: iOS objects
+      run: |
+        # tests/check-ios.sh in its default mode: the client, game and
+        # ref_metal objects for the iOS simulator and the device, the
+        # Info.plist, and the selftests of scripts/ios-sim.sh and
+        # scripts/ios-device.sh. No SDL, no game data, no signing, no
+        # simulator booted, no device; the script sets METAL_SHADERS=no
+        # itself. Without the iOS SDK in the runner's Xcode it prints one
+        # "skipped" line and exits 0; with it, any failure fails the step.
+        tests/check-ios.sh
     - name: Coverage
       run: |
         # Toolchain-only line coverage; fails below scripts/coverage-floor.
