@@ -1844,6 +1844,7 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(TESTDIR)/src/client/input/touch.o \
 	$(TESTDIR)/src/client/menu/vidrules.o \
 	$(TESTDIR)/src/client/sound/sound.o \
+	$(TESTDIR)/src/client/sound/wave.o \
 	$(TESTDIR)/src/client/vid/glimp_hidpi.o \
 	$(TESTDIR)/src/client/refresh/files/imgscale.o \
 	$(TESTDIR)/src/client/refresh/files/surf.o \
@@ -1874,6 +1875,9 @@ $(TEST_BIN) : $(TEST_OBJS)
 	@echo "===> LD $@"
 	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(TEST_COVFLAGS) $(TEST_OBJS) $(LDLIBS) -o $@
+
+# test_ipfilter.c includes the game's g_svcmds.c whole
+$(TESTDIR)/tests/unit/test_ipfilter.o : src/game/g_svcmds.c
 
 endif
 
