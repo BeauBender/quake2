@@ -17,6 +17,10 @@ concurrency:
 jobs:
   labels:
     name: Labels
+    # Only a close by the owner: GitHub lets an issue's author close it as
+    # completed, and a close by an outside author must not mark a card the
+    # owner labelled done.
+    if: github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -65,20 +69,26 @@ jobs:
           exit 1
           ;;
         esac
+        # The run can start after the issue was reopened (it was queued, or
+        # waited behind another close in the concurrency group): it edits
+        # only an issue that is closed now.
+        st=$(gh api "repos/$GH_REPO/issues/$N" --jq .state)
+        [ "$st" = closed ] || { echo "issue $N is $st: no edit"; exit 0; }
         labels=$RUNNER_TEMP/labels
         gh api --paginate "repos/$GH_REPO/issues/$N/labels" --jq '.[].name' > "$labels"
         decide "$REASON" "$labels" > "$RUNNER_TEMP/decisions"
         # One gh issue edit per label, so each is idempotent on its own:
         # adding a label the issue has is a no-op, and removing one that is
         # gone already (removed since the labels were read) is not an error.
+        # No gh call reads the decisions file: each has stdin /dev/null.
         while read -r flag label; do
           case $flag in
           --add-label)
-            gh issue edit "$N" --add-label "$label"
+            gh issue edit "$N" --add-label "$label" </dev/null
             ;;
           --remove-label)
-            if ! gh issue edit "$N" --remove-label "$label"; then
-              gh api --paginate "repos/$GH_REPO/issues/$N/labels" --jq '.[].name' > "$labels"
+            if ! gh issue edit "$N" --remove-label "$label" </dev/null; then
+              gh api --paginate "repos/$GH_REPO/issues/$N/labels" --jq '.[].name' </dev/null > "$labels"
               if grep -Fxq -- "$label" "$labels"; then
                 exit 1
               fi
