@@ -244,11 +244,12 @@ expand_line(const char *line, char *out, size_t outsize)
 
 TEST(cmd_macro_expand_current_line)
 {
-	char out[2048];
-	char line[2048];
+	char out[2 * MAX_STRING_CHARS + 64];
+	char line[2 * MAX_STRING_CHARS + 64];
+	char msg[96];
 	size_t i;
 
-	Cvar_Set("t_mx_quote", "\"");
+	Cvar_Set("t_mx_quote", "xx\"");
 	Cvar_Set(LONGNAME, "");
 	Cvar_Set("t_mx_short", "s");
 	Cvar_Set("t_mx_long", "LLLLLLLLLLLLLLLLLLLL");
@@ -333,21 +334,27 @@ TEST(cmd_macro_expand_current_line)
 	line[MAX_STRING_CHARS] = 0;
 	expand_line(line, out, sizeof(out));
 	T_EQ_STR(out, "");
-	T_CONSOLE_HAS("Line exceeded 1024 chars, discarded.");
+	Com_sprintf(msg, sizeof(msg), "Line exceeded %i chars, discarded.",
+			MAX_STRING_CHARS);
+	T_CONSOLE_HAS(msg);
 
-	/* "$t_mx_long" is 10 characters and adds 20: a line of 1003 grows
-	   to 1023, a line of 1004 to 1024. */
-	memset(line, 'x', 1003 - 11);
-	strcpy(line + 1003 - 11, " $t_mx_long");
-	T_EQ_INT(strlen(line), 1003);
+	/* "$t_mx_long" is 10 characters and adds 20: a line of
+	   MAX_STRING_CHARS - 21 grows to MAX_STRING_CHARS - 1, one byte
+	   longer to MAX_STRING_CHARS. */
+	memset(line, 'x', MAX_STRING_CHARS - 21 - 11);
+	strcpy(line + MAX_STRING_CHARS - 21 - 11, " $t_mx_long");
+	T_EQ_INT(strlen(line), MAX_STRING_CHARS - 21);
 	t_console_reset();
 	expand_line(line, out, sizeof(out));
 	T_CHECK(Cmd_Argc() == 2);
 	T_EQ_STR(t_console(), "");
-	strcat(line, "y");
+	memmove(line + 1, line, strlen(line) + 1);
+	line[0] = 'x';
 	expand_line(line, out, sizeof(out));
 	T_EQ_STR(out, "");
-	T_CONSOLE_HAS("Expanded line exceeded 1024 chars, discarded.");
+	Com_sprintf(msg, sizeof(msg), "Expanded line exceeded %i chars, discarded.",
+			MAX_STRING_CHARS);
+	T_CONSOLE_HAS(msg);
 }
 
 TEST(cmd_tokenize_and_buffer)
