@@ -64,6 +64,9 @@ void rmb_frame_close_pass(void);
 id<MTLTexture> rmb_frame_color(void);
 void *rmb_frame_ring_take(size_t n, __strong id<MTLBuffer> *buf, size_t *ofs);
 
+/* rmb_rtwater.m (TASK162): the water's marks, the raster's last draw at r_rt_water_hits 1 */
+int rmb_rtw_mark(id<MTLRenderCommandEncoder> enc, int surf);
+
 /* the attachments, kept across frames and made again for another size or path */
 static id<MTLTexture> t_depth, t_stencil, t_normal, t_material, t_motion, t_light, t_albedo, t_rcolor;
 static id<MTLTexture> t_surface;   /* TASK131: R32Uint, the raster's sixth attachment while the shadows trace */
@@ -79,6 +82,7 @@ static int surf_pipes_state;   /* as pipes_state, made at the first view with th
 
 /* the view */
 static int pass_kind, view_path, view_scaled, view_cleared;
+static __weak id<MTLRenderCommandEncoder> raster_enc;   /* TASK162: the raster's encoder while it is open */
 static int surf_want, view_surf;   /* the next view asks for the surface attachment; this one has it */
 static unsigned view_stencil;
 static float view_clear[4];
@@ -316,6 +320,28 @@ rmb_gbuf_blend(int which, MTLRenderPipelineColorAttachmentDescriptor *c)
 	return 0;
 }
 
+/*
+ * The G-buffer raster's attachment formats on d (surf: with the surface
+ * attachment), for its pipelines and the water's marks (rmb_rtwater.m,
+ * TASK162), which draw into the same pass.
+ */
+void
+rmb_gbuf_raster_formats(MTLRenderPipelineDescriptor *d, int surf)
+{
+	d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;   /* albedo */
+	d.colorAttachments[1].pixelFormat = MTLPixelFormatRGB10A2Unorm; /* normal */
+	d.colorAttachments[2].pixelFormat = MTLPixelFormatR8Uint;       /* material id */
+	d.colorAttachments[3].pixelFormat = MTLPixelFormatRG16Float;    /* motion vector */
+	d.colorAttachments[4].pixelFormat = MTLPixelFormatRGBA8Unorm;   /* light */
+
+	if (surf)
+	{
+		d.colorAttachments[5].pixelFormat = MTLPixelFormatR32Uint;   /* surface (TASK131) */
+	}
+
+	d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+}
+
 /* the G-buffer raster's variant of an opaque pipeline: the world's three, an alias model's; nil for the rest (surf: with the surface attachment) */
 static id<MTLRenderPipelineState>
 rmb_gbuf_new_raster(int which, int surf, NSError **e)
@@ -351,18 +377,7 @@ rmb_gbuf_new_raster(int which, int surf, NSError **e)
 		return nil;
 	}
 
-	d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;   /* albedo */
-	d.colorAttachments[1].pixelFormat = MTLPixelFormatRGB10A2Unorm; /* normal */
-	d.colorAttachments[2].pixelFormat = MTLPixelFormatR8Uint;       /* material id */
-	d.colorAttachments[3].pixelFormat = MTLPixelFormatRG16Float;    /* motion vector */
-	d.colorAttachments[4].pixelFormat = MTLPixelFormatRGBA8Unorm;   /* light */
-
-	if (surf)
-	{
-		d.colorAttachments[5].pixelFormat = MTLPixelFormatR32Uint;   /* surface (TASK131) */
-	}
-
-	d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+	rmb_gbuf_raster_formats(d, surf);
 	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
 }
 
@@ -622,6 +637,7 @@ static int
 rmb_gbuf_open_raster(int clear)
 {
 	MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+	id<MTLRenderCommandEncoder> enc;
 
 	rmb_gbuf_att(rp, 0, t_albedo, clear);
 	rmb_gbuf_att(rp, 1, t_normal, clear);
@@ -635,8 +651,10 @@ rmb_gbuf_open_raster(int clear)
 	}
 
 	rmb_gbuf_att_depth(rp, clear, 0, 0);
+	enc = rmb_frame_open_pass(rp, 1, 0, 1);
+	raster_enc = enc;
 
-	if (!rmb_frame_open_pass(rp, 1, 0, 1))
+	if (!enc)
 	{
 		return 0;
 	}
@@ -746,6 +764,13 @@ rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 		MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
 		id<MTLRenderCommandEncoder> enc;
 		id<MTLTexture> lt;
+
+		/*
+		 * RT6 (TASK162): at r_rt_water_hits 1, the raster's last draw marks
+		 * the pixels with water in front of its depth, in the normal's alpha
+		 * (its "has a normal" kept for every reader below)
+		 */
+		rmb_rtw_mark(raster_enc, view_surf);
 
 		/* RT3 (TASK55): the shadow rays between the raster and the resolve, when the view asked for them */
 		rmb_rts_trace(t_depth, t_normal, t_material, view_surf ? t_surface : nil);

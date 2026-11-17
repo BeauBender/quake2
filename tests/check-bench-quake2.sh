@@ -439,6 +439,7 @@ L=${T:?}/metrics.log
 	echo '689 frames, 0.1 seconds: 6890.0 fps'
 	echo '12 frames, 9.0 seconds: 1.3 fps'
 	echo 'ref_metal: metal_stats: 1000 frames, 400 without a drawable, 3 skipped, 1 failed command buffers, 0 readbacks'
+	echo 'ref_metal: metal_rate: 407.3 presented a second over 7.02 s from 1.00 s, 2859 presented, 120 with every present slot held, 400 without a drawable'
 } > "$L"
 mkcase m "$ok_set skip=2"
 q2h "${T:?}/m.case" adapter_metrics "${T:?}/m.case" "$L" > "${T:?}/m.out" 2> "${T:?}/m.err" || bad "the metrics failed: $(cat "${T:?}/m.err")"
@@ -451,6 +452,10 @@ metric.no_drawable=400
 metric.presented=600
 metric.skipped=3
 metric.failed=1
+metric.presented_rate=407.3
+metric.rate_window_s=7.02
+metric.rate_presented=2859
+metric.held=120
 metric.scaler_ms=0.9
 metric.scaler_ms_p90=1
 metric.scaler_ms_n=3
@@ -477,6 +482,14 @@ printf 'mgl: 500 frames, 20 without a drawable, 0 skipped, 0 draws past the vert
 q2h "${T:?}/m.case" adapter_metrics "${T:?}/m.case" "$L" > "${T:?}/m.out" 2> /dev/null || true
 printf 'metric.frames=500\nmetric.no_drawable=20\nmetric.presented=480\nmetric.skipped=0\nmetric.failed=2\n' | cmp -s - "${T:?}/m.out" ||
 	bad "the shim's totals: $(tr '\n' ' ' < "${T:?}/m.out")"
+# the shim's rate line (TASK161); a window of 0 s has no rate
+printf 'mgl: 500 frames, 20 without a drawable, 0 skipped, 0 draws past the vertex ring\nmgl: rate: 3967.0 presented a second over 7.00 s from 1.00 s, 27769 presented, 4 with every present slot held, 20 without a drawable\n' > "$L"
+q2h "${T:?}/m.case" adapter_metrics "${T:?}/m.case" "$L" > "${T:?}/m.out" 2> /dev/null || true
+printf 'metric.frames=500\nmetric.no_drawable=20\nmetric.presented=480\nmetric.skipped=0\nmetric.failed=0\nmetric.presented_rate=3967.0\nmetric.rate_window_s=7.00\nmetric.rate_presented=27769\nmetric.held=4\n' | cmp -s - "${T:?}/m.out" ||
+	bad "the shim's rate line: $(tr '\n' ' ' < "${T:?}/m.out")"
+printf 'mgl: rate: 0.0 presented a second over 0.00 s from 1.00 s, 0 presented, 0 with every present slot held, 3 without a drawable\n' > "$L"
+q2h "${T:?}/m.case" adapter_metrics "${T:?}/m.case" "$L" > "${T:?}/m.out" 2> /dev/null || true
+! grep -q 'presented_rate\|rate_window_s\|held' "${T:?}/m.out" || bad "a rate line with no window gave a rate: $(tr '\n' ' ' < "${T:?}/m.out")"
 
 # The engine still prints the lines the adapter reads.
 fmt() { # <file> <fixed text>
@@ -489,6 +502,10 @@ fmt src/client/refresh/metal/rm_pure.c '"ref_metal: metal_stats: %lu frames, %lu
 fmt src/client/refresh/metal/rm_pure.c '"%lu skipped, %lu failed command buffers, "'
 fmt src/client/refresh/gl1/metal/mgl_layer.m '"mgl: %lu frames, %lu without a drawable, %lu skipped, '
 fmt src/client/refresh/gl1/metal/mgl_layer.m '"mgl: %lu command buffers failed\n"'
+fmt src/client/refresh/metal/common/mtl_rate.h '%s %.1f presented a second over %.2f s from %.2f s, %lu presented, '
+fmt src/client/refresh/metal/common/mtl_rate.h '%lu with every present slot held, %lu without a drawable'
+fmt src/client/refresh/metal/rm_main.c '"ref_metal: metal_rate:"'
+fmt src/client/refresh/gl1/metal/mgl_layer.m '"mgl: rate:"'
 fmt src/client/refresh/metal/rm_metalfx.c '"ref_metal: metal_stats: metalfx %s: input %dx%d, output %dx%d at %d,%d, reset"'
 fmt src/client/refresh/metal/rm_metalfx.c '", scaler %.3f ms"'
 fmt src/client/refresh/metal/rm_metalfx.c '"ref_metal: MetalFX supportsDevice: spatial %s, temporal %s, "'

@@ -691,16 +691,18 @@ SCR_PlayCinematic(char *arg)
 				!strcmp(dot, ".png")))
 	{
 		cvar_t	*r_retexturing;
-		char namewe[256];
+		char namewe[MAX_OSPATH];
+		qboolean stem_ok;
 
 		Com_sprintf(name, sizeof(name), "pics/%s", arg);
 		r_retexturing = Cvar_Get("r_retexturing", "1", CVAR_ARCHIVE);
 
-		/* Remove the extension */
-		memset(namewe, 0, 256);
-		memcpy(namewe, name, strlen(name) - strlen(dot));
+		/* Remove the extension. namewe is as large as name, so the stem
+		   fits; if it ever did not, nothing is loaded and the not-found
+		   path below runs. */
+		stem_ok = SCR_StillStem(name, dot, namewe, sizeof(namewe));
 
-		if (r_retexturing->value)
+		if (stem_ok && r_retexturing->value)
 		{
 			cin.color_bits = 32;
 
@@ -720,7 +722,7 @@ SCR_PlayCinematic(char *arg)
 			}
 		}
 
-		if (!cin.pic)
+		if (stem_ok && !cin.pic)
 		{
 			cin.pic = SCR_LoadHiColor(namewe, dot + 1, &cin.width, &cin.height,
 				&palette, &cin.color_bits);

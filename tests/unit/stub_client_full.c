@@ -181,7 +181,14 @@ void CL_TrapParticles(entity_t *ent) { }
 
 /* ---- renderer ---- */
 
-void V_AddEntity(entity_t *ent) { }
+void
+V_AddEntity(entity_t *ent)
+{
+	if (stub_calls.ents++ == 0 || ent->frame < stub_calls.min_ent_frame)
+	{
+		stub_calls.min_ent_frame = ent->frame;
+	}
+}
 void V_RenderView(float s) { }
 void R_BeginFrame(float s) { stub_calls.begins++; }
 void R_EndFrame(void) { stub_calls.ends++; }

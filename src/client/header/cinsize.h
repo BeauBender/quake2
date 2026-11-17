@@ -29,5 +29,6 @@ enum
 size_t SCR_StillBytes(int width, int height, int bpp);
 int SCR_StillCheck(int width, int height, int bpp, size_t *bytes);
 int SCR_StillSizeOk(size_t bytes);
+int SCR_StillStem(const char *name, const char *dot, char *out, size_t outsize);
 
 #endif
