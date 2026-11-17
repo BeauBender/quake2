@@ -88,9 +88,10 @@ int rm_rtw_show(float v);
 /*
  * TASK158: r_rt_water_hits, how a reflection's hit is shaded: 0 (the
  * default) TASK58's screen-space path, the kernel over every pixel and a
- * hit's colour the picture's or none; 1 this card's world-space path, the
- * candidates' raster, the compaction and the trace over its list, a hit
- * the picture does not show shaded in world space. 1 from 1 up; 0 below
+ * hit's colour the picture's or none; 1 this card's world-space path,
+ * the marks the G-buffer raster's last draw makes (TASK162), the compaction
+ * over them and the trace over its list, a hit the picture does not show
+ * shaded in world space. 1 from 1 up; 0 below
  * 1 and for a value that is not finite.
  */
 int rm_rtw_hits(float v);
@@ -221,13 +222,13 @@ typedef struct
 
 	/*
 	 * TASK158: 1 when the frame took the world-space path (r_rt_water_hits
-	 * 1): then ms is the sum of its three passes' spans, each below 0 when
-	 * not measured: the candidates' raster (the start of its vertex stage
-	 * to the end of its fragment stage), the compaction (its encoder, with
-	 * the arguments) and the trace (its encoder); span_ms is the whole,
-	 * the raster's start to the trace's end, which is below the sum where
-	 * the spans overlap; vert_ms and frag_ms the raster's vertex stage (its
-	 * start to its end) and its fragment stage, apart.
+	 * 1): then ms is the sum of the compaction's and the trace's spans,
+	 * each below 0 when not measured: the compaction (its encoder, with
+	 * the arguments) and the trace (its encoder). TASK162: the water's
+	 * marks are a draw of the G-buffer raster, timed with it, so raster_ms,
+	 * vert_ms and frag_ms are not measured (always below 0, printed as -
+	 * by r_rt_stats 2); span_ms is the whole, the compaction's start to the
+	 * trace's end, which is below the sum where the spans overlap.
 	 */
 	int ws;
 	double raster_ms, compact_ms, trace_ms, span_ms, vert_ms, frag_ms;
@@ -241,7 +242,7 @@ int rm_rtw_stats_format(const rm_rtw_stats_t *s, char *buf, size_t len);
 /*
  * The kernel's, the blend's, the translucent draw's and the development
  * view's pipelines: 1, or 0 with err set. TASK158: the world-space path's
- * (its kernels, the candidates' raster, the texture table, the white
+ * (its kernels, the marks' pipelines, the texture table, the white
  * textures) are built too, but the pass opens without them: then only
  * rmb_rtw_ws_ok says 0, and r_rt_water_hits 1 draws as 0 (rm_rtw_path).
  */
@@ -258,9 +259,9 @@ void rmb_rtw_close(void);
  * h (the reflection and class, RGBA8Unorm; the translucent water's
  * distance, R32Float). 1 when the view can trace; 0 when the pass is not
  * open or they cannot be made. ws (TASK158, rm_rtw_hits): 1 the
- * world-space path, which also makes the compaction's list and the
- * reflection target a render target of the candidates' raster; 0
- * TASK58's path, whose outputs are TASK58's and which has no list.
+ * world-space path, which also makes the compaction's list (the marks are
+ * in the G-buffer's normal attachment, TASK162, so no render target is
+ * made); 0 TASK58's path, whose outputs are TASK58's and which has no list.
  */
 int rmb_rtw_prepare(unsigned long w, unsigned long h, int ws);
 

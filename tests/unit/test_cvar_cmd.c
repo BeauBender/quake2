@@ -110,18 +110,81 @@ TEST(cvar_noset)
 	Cvar_ForceSet("t_noset", "forced");
 	T_EQ_STR(v->string, "forced");
 
-	/* ...and neither does the four-argument "set", which goes through
-	   Cvar_FullSet and replaces the flags, dropping CVAR_NOSET. Pinned
-	   as current behaviour. */
+	/* ...and the four-argument "set" refuses too, one assertion per
+	   flag form: value and flags stay, the console says why. */
+	Cvar_ForceSet("t_noset", "locked");
+	t_console_reset();
+	run("set t_noset viaflags\n");
+	T_EQ_STR(v->string, "locked");
+	T_CONSOLE_HAS("t_noset is write protected.");
+
+	run("set t_noset viaflags u\n");
+	T_EQ_STR(v->string, "locked");
+	T_EQ_INT(v->flags, CVAR_NOSET);
+	T_CONSOLE_HAS("t_noset is write protected.");
+
+	run("set t_noset viaflags s\n");
+	T_EQ_STR(v->string, "locked");
+	T_EQ_INT(v->flags, CVAR_NOSET);
+	T_CONSOLE_HAS("t_noset is write protected.");
+
 	run("set t_noset viaflags a\n");
-	T_EQ_STR(v->string, "viaflags");
-	T_EQ_INT(v->flags, CVAR_ARCHIVE);
+	T_EQ_STR(v->string, "locked");
+	T_EQ_INT(v->flags, CVAR_NOSET);
+	T_CONSOLE_HAS("t_noset is write protected.");
+
+	/* Cvar_FullSet itself is the engine's own path (mapname, gamedir)
+	   and is not guarded. */
+	Cvar_FullSet("t_noset", "engine", CVAR_NOSET);
+	T_EQ_STR(v->string, "engine");
 
 	t_console_reset();
 	run("set t_noset x q\n");
 	T_CONSOLE_HAS("flags can only be 'a', 'u' or 's'");
 	run("set t_noset\n");
 	T_CONSOLE_HAS("usage: set <variable> <value> [u / s]");
+}
+
+TEST(cvar_noset_registration_order)
+{
+	cvar_t *v;
+
+	/* A value set before the cvar is registered, as +set does on the
+	   command line, survives the later NOSET registration. */
+	run("set t_pre1 fromcmdline\n");
+	v = Cvar_Get("t_pre1", "default", CVAR_NOSET);
+	T_EQ_STR(v->string, "fromcmdline");
+	T_CHECK(v->flags & CVAR_NOSET);
+
+	run("set t_pre2 fromcmdline a\n");
+	v = Cvar_Get("t_pre2", "default", CVAR_NOSET);
+	T_EQ_STR(v->string, "fromcmdline");
+	T_CHECK(v->flags & CVAR_NOSET);
+
+	/* Once registered it is protected. */
+	run("set t_pre2 later\n");
+	T_EQ_STR(v->string, "fromcmdline");
+}
+
+TEST(cvar_set_flag_forms)
+{
+	cvar_t *v = Cvar_Get("t_forms", "0", 0);
+
+	run("set t_forms one\n");
+	T_EQ_STR(v->string, "one");
+	T_EQ_INT(v->flags, 0);
+
+	run("set t_forms two u\n");
+	T_EQ_STR(v->string, "two");
+	T_EQ_INT(v->flags, CVAR_USERINFO);
+
+	run("set t_forms three s\n");
+	T_EQ_STR(v->string, "three");
+	T_EQ_INT(v->flags, CVAR_SERVERINFO);
+
+	run("set t_forms four a\n");
+	T_EQ_STR(v->string, "four");
+	T_EQ_INT(v->flags, CVAR_ARCHIVE);
 }
 
 TEST(cvar_latch)
