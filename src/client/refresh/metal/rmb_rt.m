@@ -479,7 +479,7 @@ rmb_rt_build_map(int vbuf, int ibuf, const rmb_rt_range_t *ranges, int nranges, 
 		map_water += (mat[t] == RM_RT_MAT_WATER) ? 1 : 0;
 	}
 
-	/* TASK158: the water triangles' ids, which the reflections' candidates raster draws; none, no raster */
+	/* TASK158: the water triangles' ids, which the water's marks (TASK162, rmb_rtw_mark) draw; none, no marks */
 	if (map_water && (ntris_all <= 0xffffffffUL))
 	{
 		uint32_t *ids = malloc(map_water * sizeof(uint32_t));
@@ -1250,8 +1250,8 @@ rmb_rt_map_water(void)
 }
 
 /*
- * TASK158: the water triangles for a raster of them (rmb_rtwater.m's
- * candidates pass): their ids, the world's index and vertex buffers and
+ * TASK158: the water triangles for a draw of them (rmb_rtwater.m's
+ * marks, TASK162, in the G-buffer raster): their ids, the world's index and vertex buffers and
  * the counts rmb_rt_bind_geometry gives, as vertex buffers. The number of
  * triangles to draw, 0 when the map has none or its buffers are gone.
  */
