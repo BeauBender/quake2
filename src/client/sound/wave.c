@@ -369,10 +369,20 @@ S_CacheSize(const wavinfo_t *info, int speed, int *frames, int *bytes,
 int
 S_CacheLoopStart(const wavinfo_t *info, int speed, int frames)
 {
+	int start;
+
 	if (info->loopstart == -1)
 	{
 		return -1;
 	}
 
-	return (int)(info->loopstart / ((float)info->rate / speed));
+	start = (int)(info->loopstart / ((float)info->rate / speed));
+
+	/* the mixer spins on a loop start at the end of the sound */
+	if (start > frames - 1)
+	{
+		start = frames - 1;
+	}
+
+	return start;
 }
