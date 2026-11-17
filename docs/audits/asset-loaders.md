@@ -790,18 +790,26 @@ reachability in [Where each asset can come from](#where-each-asset-can-come-from
 | D20 | PCX 1/2/4-bit path | `line[x / div]` can exceed a `bytes_per_line`-byte row when `bytes_per_line` is tiny | low | medium (static) | FIX19 |
 | D21 | `GetPCXInfo` | reads `xmax`/`ymax` without a header-size check; over-reads a short file | low | high (static) | FIX19 |
 | D22 | `R_LoadImage`/soft scale | `width * height` (and `* 4`) is `int` and can overflow for large stb dimensions; the gl renderers guard the scale product, soft and the copy length do not | medium | medium (static) | FIX19 |
-| D23 | `wave.c` chunk walk | `GetLittleLong`/`strncmp` read a few bytes past `iff_end` at a chunk boundary | low | high (static) | FIX20 |
-| D24 | `wave.c` cue `loopstart` | loop point unbounded; `SDL_Cache` turns it into a mixer `pos`/`end` past the cached sample | medium | medium (static) | FIX20 |
-| D25 | `wave.c` data chunk | the data-length word and `dataofs` are trusted without comparison to `wavlength`; four consumers read `info.samples` elements from `data + dataofs` | high | high (static) | FIX20 |
+| D23 | `wave.c` chunk walk | `GetLittleLong`/`strncmp` read a few bytes past `iff_end` at a chunk boundary | low | high (static) | FIX20 (fixed by FIX20) |
+| D24 | `wave.c` cue `loopstart` | loop point unbounded; `SDL_Cache` turns it into a mixer `pos`/`end` past the cached sample | medium | medium (static) | FIX20 (fixed by FIX20) |
+| D25 | `wave.c` data chunk | the data-length word and `dataofs` are trusted without comparison to `wavlength`; four consumers read `info.samples` elements from `data + dataofs` | high | high (static) | FIX20 (fixed by FIX20) |
 | D26 | `cl_cin.c` `SCR_PlayCinematic` | still-image name copied into `char namewe[256]` by length; `MAX_OSPATH` is 4096 on every non-Windows build (macOS included), so a server level name of up to about 1380 characters (the `svc_serverdata` message limit) overruns the stack buffer by up to about 1100 bytes | high | high (static) | FIX21 |
 | D27 | M32 `LoadM32` | `width * 4` wraps in the body-size check, so a hostile width passes against a few-byte body; gl1 then rewrites `width * height` pixels in place past the file buffer (gl3 over-reads) | high | high (static) | FIX19 |
-| D28 | `sdl.c` `SDL_Cache` (rate from `wave.c`) | `info.rate` unchecked; a low rate inflates the resampled frame count, `len * width * channels` wraps in `int` to a small allocation, and the loop writes the full count: heap overflow write not closed by the D25 clamp | high | high (static, arithmetic checked) | FIX20 |
-| D29 | `sdl.c` `SDL_Cache`, `sound.c` `S_IsShortSilence` | a zero `info.rate` reaches integer divisions (`begin_length * 1000 / info->rate` and siblings, `(info->samples * 1000) / info->rate`); on x86-64 SIGFPE, on arm64 execution continues into the resample loop with an undefined frame count (the D28 class, a write past the allocation) | high | high (static) | FIX20 |
-| D30 | `wave.c` `GetWavinfo` return paths | `info` is returned partly filled from early returns (a cue loop length with no data chunk leaves `samples` set and `dataofs` 0) and a negative data-length word gives negative `samples`; nothing validates on any path | medium | high (static) | FIX20 |
+| D28 | `sdl.c` `SDL_Cache` (rate from `wave.c`) | `info.rate` unchecked; a low rate inflates the resampled frame count, `len * width * channels` wraps in `int` to a small allocation, and the loop writes the full count: heap overflow write not closed by the D25 clamp | high | high (static, arithmetic checked) | FIX20 (fixed by FIX20) |
+| D29 | `sdl.c` `SDL_Cache`, `sound.c` `S_IsShortSilence` | a zero `info.rate` reaches integer divisions (`begin_length * 1000 / info->rate` and siblings, `(info->samples * 1000) / info->rate`); on x86-64 SIGFPE, on arm64 execution continues into the resample loop with an undefined frame count (the D28 class, a write past the allocation) | high | high (static) | FIX20 (fixed by FIX20) |
+| D30 | `wave.c` `GetWavinfo` return paths | `info` is returned partly filled from early returns (a cue loop length with no data chunk leaves `samples` set and `dataofs` 0) and a negative data-length word gives negative `samples`; nothing validates on any path | medium | high (static) | FIX20 (fixed by FIX20) |
 | D31 | MD2 `Mod_LoadMD2` section offsets | section offsets have no lower bound; a section copied over the validated header restores the unclamped `num_skins`, and the skin loop writes image pointers past `skins[MAX_MD2SKINS]` | high | high (ASAN) | FIX18 |
 
 Fixed in this branch: D2, D3 (negative side), D15 — each a one-line bound
 check in its loader, committed separately and noted in its row.
+
+Fixed by FIX20: D23, D24, D25, D28, D29, D30. `GetWavinfo` bounds every chunk
+read by `iff_end` and returns only an info that `S_WavinfoValid` accepts
+(rate 1000 to 192000 Hz, width and channels 1 or 2, a positive sample count
+whose bytes fit after `dataofs`, a loop start of -1 or below the sample
+count); `SDL_Cache` takes its frame count and byte size from `S_CacheSize`
+(64-bit, at most 128 MiB) for the allocation and the loop alike. Tests:
+`tests/unit/test_wave.c`.
 
 ## Cards filed
 

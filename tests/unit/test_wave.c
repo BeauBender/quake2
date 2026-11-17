@@ -37,6 +37,9 @@ typedef struct
 	int skipdata;     /* 1: no data chunk at all */
 	int tail;         /* bytes of a cut-short chunk header appended */
 	int cut;          /* bytes removed from the end of the file */
+	int listlen;      /* >0: a LIST chunk of this many bytes after the cue
+	                     chunk, with the data chunk placed before the cue */
+	int marklen;      /* the loop length in its "mark" entry */
 } wavspec_t;
 
 static void
@@ -72,7 +75,7 @@ stock(int bits, int channels, int rate, int frames)
 static byte *
 build(const wavspec_t *s, int *full, int *len)
 {
-	int total = 12 + 24 + (s->cue ? 36 : 0) +
+	int total = 12 + 24 + (s->cue ? 36 : 0) + s->listlen +
 			(s->skipdata ? 0 : 8 + s->databytes) + s->tail;
 	byte *buf = calloc(1, total + 8);
 	byte *p = buf;
@@ -93,26 +96,52 @@ build(const wavspec_t *s, int *full, int *len)
 	put16(p + 22, s->bits);
 	p += 24;
 
-	if (s->cue)
+	for (i = 0; i < 2; i++)
 	{
-		memcpy(p, "cue ", 4);
-		put32(p + 4, 28);
-		put32(p + 8, 1);
-		put32(p + 32, s->loopstart);
-		p += 36;
-	}
+		int j;
 
-	if (!s->skipdata)
-	{
-		memcpy(p, "data", 4);
-		put32(p + 4, s->datalen);
-
-		for (i = 0; i < s->databytes; i++)
+		if ((i == 0) == (s->listlen > 0))
 		{
-			p[8 + i] = (byte)(i * 7 + 3);
-		}
+			/* the data chunk goes first only with a LIST chunk */
+			if (!s->skipdata)
+			{
+				memcpy(p, "data", 4);
+				put32(p + 4, s->datalen);
 
-		p += 8 + s->databytes;
+				for (j = 0; j < s->databytes; j++)
+				{
+					p[8 + j] = (byte)(j * 7 + 3);
+				}
+
+				p += 8 + s->databytes;
+			}
+		}
+		else
+		{
+			if (s->cue)
+			{
+				memcpy(p, "cue ", 4);
+				put32(p + 4, 28);
+				put32(p + 8, 1);
+				put32(p + 32, s->loopstart);
+				p += 36;
+			}
+
+			if (s->listlen > 0)
+			{
+				memcpy(p, "LIST", 4);
+				put32(p + 4, s->listlen - 8);
+
+				if (s->listlen > 28)
+				{
+					/* a cut entry keeps the start of the marker */
+					memcpy(p + 28, "mark", (s->listlen - 28 < 4) ? s->listlen - 28 : 4);
+					put32(p + 24, s->marklen);
+				}
+
+				p += s->listlen;
+			}
+		}
 	}
 
 	for (i = 0; i < s->tail; i++)
@@ -473,4 +502,118 @@ TEST(wave_cachesize_refusals)
 	T_EQ_INT(frames, 44);
 	i = cinfo(192000, 2, 1, 1);
 	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes));
+}
+
+TEST(wave_list_mark_loop)
+{
+	wavspec_t s = stock(16, 1, 22050, 100);
+	wavinfo_t i;
+	int len;
+
+	s.cue = 1;
+	s.loopstart = 10;
+	s.listlen = 32;
+	s.marklen = 40;
+	i = parse(&s);
+	/* the loop end, as the mark entry says, is the sample count */
+	T_EQ_INT(i.samples, 50);
+	T_EQ_INT(i.loopstart, 10);
+
+	/* a LIST chunk one byte short of holding the mark entry: ignored */
+	s.listlen = 31;
+	i = parse(&s);
+	T_EQ_INT(i.samples, 100);
+	T_EQ_INT(i.loopstart, 10);
+
+	/* a LIST chunk cut in its header, at each length */
+	for (len = 1; len < 8; len++)
+	{
+		s.listlen = 8;
+		s.cut = 8 - len;
+		i = parse(&s);
+		T_EQ_INT(i.samples, 100);
+	}
+}
+
+TEST(wave_list_mark_overflow)
+{
+	wavspec_t s = stock(16, 1, 22050, 100);
+
+	/* a loop end past int is not wrapped into a small count */
+	s.cue = 1;
+	s.loopstart = 10;
+	s.listlen = 32;
+	s.marklen = INT_MAX;
+	T_EXPECT_DROP(parse(&s));
+	T_CONSOLE_HAS("bad loop length");
+}
+
+/* ---- S_WavinfoValid directly ---- */
+
+static wavinfo_t
+vinfo(void)
+{
+	wavinfo_t i;
+
+	memset(&i, 0, sizeof(i));
+	i.rate = 22050;
+	i.width = 2;
+	i.channels = 1;
+	i.samples = 100;
+	i.loopstart = -1;
+	i.dataofs = 44;
+	return i;
+}
+
+TEST(wave_valid_fields)
+{
+	wavinfo_t i = vinfo();
+
+	/* 44 bytes of header and 200 of data */
+	T_CHECK(S_WavinfoValid(&i, 244));
+
+	i = vinfo();
+	i.width = 0;
+	T_CHECK(!S_WavinfoValid(&i, 244));
+	i.width = 3;
+	T_CHECK(!S_WavinfoValid(&i, 244));
+	i = vinfo();
+	i.channels = 0;
+	T_CHECK(!S_WavinfoValid(&i, 244));
+	i.channels = 3;
+	T_CHECK(!S_WavinfoValid(&i, 244));
+	i = vinfo();
+	i.samples = 0;
+	T_CHECK(!S_WavinfoValid(&i, 244));
+	i.samples = -1;
+	T_CHECK(!S_WavinfoValid(&i, 244));
+	i = vinfo();
+	i.dataofs = -1;
+	T_CHECK(!S_WavinfoValid(&i, 244));
+	i = vinfo();
+	i.dataofs = 244;
+	T_CHECK(!S_WavinfoValid(&i, 244));
+	i.dataofs = 243;
+	i.samples = 1;
+	i.width = 1;
+	T_CHECK(S_WavinfoValid(&i, 244));
+	i.samples = 2;
+	T_CHECK(!S_WavinfoValid(&i, 244));
+	/* the samples times the width does not wrap */
+	i = vinfo();
+	i.samples = INT_MAX;
+	T_CHECK(!S_WavinfoValid(&i, 244));
+	i.samples = 1 << 30;
+	T_CHECK(!S_WavinfoValid(&i, INT_MAX));
+	T_CHECK(!S_WavinfoValid(&i, 0));
+}
+
+TEST(wave_cachesize_one_frame)
+{
+	wavinfo_t i = cinfo(44100, 1, 1, 1);
+	int frames = 0, bytes = 0;
+
+	T_CHECK(S_CacheSize(&i, 44100, &frames, &bytes));
+	T_EQ_INT(frames, 1);
+	T_EQ_INT(bytes, 1);
 }
