@@ -178,7 +178,22 @@ screen was unlocked, checked before and after each batch. Memory free 83 % or mo
 power mode off. The snapshots, logs and per-run numbers are in the artifacts directory, not in
 the repository.
 
-PINS
+**Pins, with no generated file present** (the harness's own write directory; this build's
+`release/quake2` and `ref_metal`, commit `50e16a5d`): each of the 25 scenarios' newest `metal`
+trace replayed (`pins.sh replay metal <scenario>`; `cinematic` with `PINS_DEMO=idlog.cin
+PINS_EVERY=7`) and compared with the trace's own record at threshold 0 and bad threshold 0.
+
+- **Score 0, bad 0 on every frame: 23 of the 25** (`cinematic`, 12 frames; `dlights`,
+  `hud2d`, `hud2d-scale8`, `hud2d-sharp`, `models`, `particles`, `particles-cap`, `rt-ao`,
+  `rt-ao-entities`, `rt-shadows`, `rt-shadows-entities`, `rt-water`, `rt-water-entities`,
+  `skywater`, `world`, `world-fullbright`, `world-metalfx-interp`, `world-metalfx1`, `-2`, `-3`
+  and `world-scale8`, 23 frames each).
+- **The two `lmcubic` scenarios differ on all 23 frames** (`world-lmcubic` against record
+  `7d4d3f8edfd8-…-r12`, `dlights-lmcubic` against `b27776306d59-…-r22` and again against the
+  wrapper-free `-r21`): worst score 0.002014 in each. The slice changes no renderer file and no
+  code a replay runs (the menu page and the command are not in any trace), so this is read as
+  drift of the cubic lightmap path on main since those records were made. That is not measured
+  here: replaying the two traces with main's build would settle it.
 
 ## Left for slice 2 (TASK167)
 
