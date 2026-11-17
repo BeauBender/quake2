@@ -5,6 +5,11 @@ Q2RTXM import, rasterizer first, hybrid RT on real hardware); verification
 through the pin harness (`docs/plans/metal-port-harness.md`, TASK27).
 Prerequisite: TASK28's native `ref_metal` passes every gl1 pin with RT off.
 
+Every effect here is a layer on the stock lightmap. Selectable
+presentations beside it, an RT-primary mode that replaces the lightmap and
+a 3dfx Glide-style retro look, are planned in
+[the presentation modes plan](presentation-modes.md) (TASK174).
+
 Every number marked *assumed* is a design assumption to be replaced by a
 measurement in the first sub-card (RT1); the engine limits are from the tree.
 
