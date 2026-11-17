@@ -883,7 +883,7 @@ lost_device()
 # ---- the data and the build --------------------------------------------
 
 build=$out/build
-makeargs=(-C "$repo" -j"${IOS_SIM_JOBS:-3}" QUIET=1 ios IOS_SDK=iphonesimulator IOS_ROOT="$build")
+makeargs=(-C "$repo" -j"${IOS_SIM_JOBS:-3}" QUIET=1 ios IOS_SDK="${IOS_SIM_SDK:-iphonesimulator}" IOS_ROOT="$build")
 # the bundle's data: the synthetic paks (smoke, run without --data); with
 # --data or --no-data the bundle holds none
 if [ -z "$data" ] && [ "$nodata" = 0 ]; then
@@ -917,15 +917,20 @@ bounded "$list_s" "${tmp:?}/runtimes.json" -e "${tmp:?}/runtimes.err" xcrun simc
 # the runtime: the newest that lists the device type, on a version tie the one that lists the
 # most types (a runtime with no list counts as general); IOS_SIM_RUNTIME narrows the set, then
 # the same rule picks within it
-pick=$(python3 -I - "${tmp:?}/types.json" "${tmp:?}/runtimes.json" "${IOS_SIM_TYPE:-iPhone 17}" "${IOS_SIM_RUNTIME:-}" <<'EOF'
+# TASK23: IOS_SIM_SDK=appletvsimulator runs the tvOS build on a tvOS runtime and an Apple TV device type
+case ${IOS_SIM_SDK:-iphonesimulator} in
+appletvsimulator) sim_platform=tvOS; sim_type_default="Apple TV 4K (4th generation)" ;;
+*) sim_platform=iOS; sim_type_default="iPhone 17" ;;
+esac
+pick=$(python3 -I - "${tmp:?}/types.json" "${tmp:?}/runtimes.json" "${IOS_SIM_TYPE:-$sim_type_default}" "${IOS_SIM_RUNTIME:-}" "$sim_platform" <<'EOF'
 import json, sys
 types = json.load(open(sys.argv[1]))["devicetypes"]
 runtimes = json.load(open(sys.argv[2]))["runtimes"]
-want_type, want_rt = sys.argv[3], sys.argv[4]
+want_type, want_rt, want_platform = sys.argv[3], sys.argv[4], sys.argv[5]
 t = [d for d in types if want_type in (d["name"], d["identifier"])]
 if not t:
     sys.exit("no device type " + want_type)
-ios = [r for r in runtimes if r.get("isAvailable") and r.get("platform", "") == "iOS"]
+ios = [r for r in runtimes if r.get("isAvailable") and r.get("platform", "") == want_platform]
 if want_rt:
     ios = [r for r in ios if want_rt in (r.get("identifier"), r.get("version"), r.get("name"))]
 if not ios:
