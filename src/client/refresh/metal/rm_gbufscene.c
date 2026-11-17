@@ -1,4 +1,4 @@
-return rm_gb_path(RM_RTS_Active() || RM_RTAO_Active() || RM_RTW_Active() || RM_RTSun_Active(),/*
+/*
  * Copyright (C) 1997-2001 Id Software, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -99,7 +99,7 @@ RM_GB_Choose(const refdef_t *fd)
 	/* a ray-traced effect on (RT3's shadows, RM_RTS_Frame; RT5's AO, RM_RTAO_Frame; RT6's water reflections,
 	   RM_RTW_Frame; RT4's sun, RM_RTSun_Frame, never on a map under 2 % sky) takes the G-buffer;
 	   a MetalFX scaler asks for the motion path (TASK111) */
-	return rm_gb_path(RM_RTS_Active() || RM_RTAO_Active() || RM_RTW_Active(), r_rt_gbuffer->value, RM_FX_WantsMotion() ? 1.0f : r_rt_motion->value,
+	return rm_gb_path(RM_RTS_Active() || RM_RTAO_Active() || RM_RTW_Active() || RM_RTSun_Active(), r_rt_gbuffer->value, RM_FX_WantsMotion() ? 1.0f : r_rt_motion->value,
 			(fd->rdflags & RDF_NOWORLDMODEL) != 0);
 }
 
