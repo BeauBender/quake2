@@ -36,7 +36,8 @@
 
 /*
  * The border, in texels, a world texture is wrap-padded with before the
- * metalfx pass. MetalFX's spatial filter reads more than one texel: a
+ * metalfx or vt pass (CL_UpscaleRGBA, shared by both; vt's is measured in
+ * docs/runbook/TASK167.md). MetalFX's spatial filter reads more than one texel: a
  * probe on the M6 GPU found a one texel border leaves a seam (up to 35
  * levels at 2x, 74 at 4x), and 2, 3 and 4 match 8 exactly. 4 leaves the
  * filters of other GPUs headroom. scale2x reads one texel and keeps 1.
@@ -176,16 +177,20 @@ int CL_UpscalePcxDecodedOk(const unsigned char *pic, int bits, int pw,
 typedef enum
 {
 	UPSCALE_SCALE2X,	/* scale2x of the indices: the default */
-	UPSCALE_METALFX		/* MetalFX's spatial scaler of the RGBA (macOS) */
+	UPSCALE_METALFX,	/* MetalFX's spatial scaler of the RGBA (macOS) */
+	UPSCALE_VT		/* VideoToolbox's super-resolution scaler of the RGBA (macOS 26, TASK167) */
 } upscale_backend_t;
 
-#define UPSCALE_USAGE "usage: upscale_textures <2|4> [scale2x|metalfx] [force]\n"
+#define UPSCALE_USAGE "usage: upscale_textures <2|4> [scale2x|metalfx|vt] [force]\n"
 
-/* "scale2x" or "metalfx"; NULL for any other value */
+/* "scale2x", "metalfx" or "vt"; NULL for any other value */
 const char *CL_UpscaleBackendName(int backend);
 
+/* 1 for a backend that scales the RGBA through CL_UpscaleRGBA (metalfx, vt) */
+int CL_UpscaleBackendRGBA(int backend);
+
 /*
- * The command's words, argv[0] its name: <2|4>, then scale2x or metalfx,
+ * The command's words, argv[0] its name: <2|4>, then a backend name,
  * then force, the last two optional and in that order. 1 with *factor,
  * *backend (UPSCALE_SCALE2X when none is given) and *force set; 0, and
  * nothing set, for any other line.
@@ -200,6 +205,50 @@ int CL_UpscaleParseArgs(int argc, const char *const *argv, int *factor,
  */
 upscale_backend_t CL_UpscaleChooseBackend(upscale_backend_t asked,
 		int supported, const char *reason, char *line, size_t linesize);
+
+/*
+ * The vt backend's support checks (TASK167), as cl_upscale_vt.m reads
+ * them before a run; no check downloads anything.
+ */
+typedef enum
+{
+	UPSCALE_VT_MODEL_DOWNLOAD,	/* the operating system has to fetch it */
+	UPSCALE_VT_MODEL_DOWNLOADING,	/* a fetch is under way */
+	UPSCALE_VT_MODEL_READY		/* on this machine */
+} upscale_vt_model_t;
+
+typedef struct
+{
+	int built;	/* cl_upscale_vt.m is built here (the macOS client) */
+	int os;		/* the OS has VTSuperResolutionScalerConfiguration */
+	int supported;	/* its isSupported */
+	int factor;	/* its supportedScaleFactors has the run's factor */
+	int config;	/* a configuration at the run's factor was made */
+	int model;	/* that configuration's model status, upscale_vt_model_t */
+} upscale_vt_facts_t;
+
+typedef enum
+{
+	UPSCALE_VT_UNSUPPORTED,	/* scale2x, with the reason */
+	UPSCALE_VT_READY,	/* the run may scale */
+	UPSCALE_VT_FETCH	/* the model is to be fetched first */
+} upscale_vt_state_t;
+
+/*
+ * What a vt run at factor does with facts, checked in the struct's
+ * order: unsupported with a one-line reason in reason ("" otherwise),
+ * ready, or fetch the model first (it is missing or being fetched).
+ */
+upscale_vt_state_t CL_UpscaleVTState(const upscale_vt_facts_t *facts,
+		int factor, char *reason, size_t size);
+
+/* said once before the model is fetched; nothing is fetched without vt */
+#define UPSCALE_SAY_VT_FETCH "upscale_textures: vt: the operating system " \
+	"will now download VideoToolbox's super-resolution model (once, from " \
+	"Apple)\n"
+
+/* the longest wait for the model's download, in seconds */
+#define UPSCALE_VT_FETCH_SECONDS 900
 
 /* CL_UpscaleWrapPad and CL_UpscaleCrop of RGBA8 texels (4 bytes each) */
 int CL_UpscaleWrapPadRGBA(const unsigned char *src, int w, int h,

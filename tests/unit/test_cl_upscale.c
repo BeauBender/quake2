@@ -1860,8 +1860,16 @@ TEST(upscale_backend_name)
 {
 	T_EQ_STR(CL_UpscaleBackendName(UPSCALE_SCALE2X), "scale2x");
 	T_EQ_STR(CL_UpscaleBackendName(UPSCALE_METALFX), "metalfx");
-	T_CHECK(CL_UpscaleBackendName(2) == NULL);
+	T_EQ_STR(CL_UpscaleBackendName(UPSCALE_VT), "vt");
+	T_CHECK(CL_UpscaleBackendName(3) == NULL);
 	T_CHECK(CL_UpscaleBackendName(-1) == NULL);
+
+	/* metalfx and vt share the RGBA path: pad, scale, crop, alpha */
+	T_EQ_INT(CL_UpscaleBackendRGBA(UPSCALE_SCALE2X), 0);
+	T_EQ_INT(CL_UpscaleBackendRGBA(UPSCALE_METALFX), 1);
+	T_EQ_INT(CL_UpscaleBackendRGBA(UPSCALE_VT), 1);
+	T_EQ_INT(CL_UpscaleBackendRGBA(3), 0);
+	T_EQ_INT(CL_UpscaleBackendRGBA(-1), 0);
 }
 
 /* CL_UpscaleParseArgs of one line: 1 with what it set, else 0 */
@@ -1906,6 +1914,10 @@ TEST(upscale_parse_args_accepts)
 		{ "upscale_textures 2 metalfx", 2, UPSCALE_METALFX, 0 },
 		{ "upscale_textures 4 metalfx", 4, UPSCALE_METALFX, 0 },
 		{ "upscale_textures 4 metalfx force", 4, UPSCALE_METALFX, 1 },
+		/* TASK167 */
+		{ "upscale_textures 2 vt", 2, UPSCALE_VT, 0 },
+		{ "upscale_textures 4 vt", 4, UPSCALE_VT, 0 },
+		{ "upscale_textures 2 vt force", 2, UPSCALE_VT, 1 },
 	};
 	size_t i;
 
@@ -1930,7 +1942,9 @@ TEST(upscale_parse_args_refuses)
 		"upscale_textures metalfx",
 		"upscale_textures metalfx 2",
 		/* a bad backend name */
-		"upscale_textures 2 vt",
+		"upscale_textures 2 VT",
+		"upscale_textures 2 vt2",
+		"upscale_textures 2 videotoolbox",
 		"upscale_textures 2 MetalFX",
 		"upscale_textures 2 metalfx2",
 		"upscale_textures 2 scale",
@@ -1942,6 +1956,9 @@ TEST(upscale_parse_args_refuses)
 		"upscale_textures 2 force force",
 		"upscale_textures 2 metalfx force extra",
 		"upscale_textures 2 metalfx forced",
+		"upscale_textures 2 vt metalfx",
+		"upscale_textures 2 force vt",
+		"upscale_textures 8 vt",
 	};
 	size_t i;
 
@@ -1959,7 +1976,113 @@ TEST(upscale_parse_args_refuses)
 
 	T_EQ_INT(CL_UpscaleParseArgs(0, NULL, NULL, NULL, NULL), 0);
 	T_EQ_STR(UPSCALE_USAGE,
-		"usage: upscale_textures <2|4> [scale2x|metalfx] [force]\n");
+		"usage: upscale_textures <2|4> [scale2x|metalfx|vt] [force]\n");
+}
+
+/* every check passes at both factors: a vt run may scale */
+static upscale_vt_facts_t
+upscale_vt_ok(void)
+{
+	upscale_vt_facts_t f;
+
+	f.built = 1;
+	f.os = 1;
+	f.supported = 1;
+	f.factor = 1;
+	f.config = 1;
+	f.model = UPSCALE_VT_MODEL_READY;
+
+	return f;
+}
+
+TEST(upscale_vt_state)
+{
+	static const struct
+	{
+		int which;	/* the fact set to 0, or -1: none */
+		const char *reason;
+	} no[] = {
+		{ 0, "not built for this platform" },
+		{ 1, "this OS has no VideoToolbox super-resolution scaler (macOS 26 or later)" },
+		{ 2, "VideoToolbox's super-resolution scaler is not supported on this device" },
+		{ 3, "VideoToolbox's super-resolution scaler has no 4x" },
+		{ 4, "VideoToolbox refused a super-resolution configuration at 4x" },
+	};
+	upscale_vt_facts_t f;
+	char reason[160];
+	size_t i;
+
+	f = upscale_vt_ok();
+	strcpy(reason, "x");
+	T_EQ_INT(CL_UpscaleVTState(&f, 2, reason, sizeof(reason)), UPSCALE_VT_READY);
+	T_EQ_STR(reason, "");
+	T_EQ_INT(CL_UpscaleVTState(&f, 4, reason, sizeof(reason)), UPSCALE_VT_READY);
+
+	/* the first check that fails gives the reason; nothing is fetched */
+	for (i = 0; i < sizeof(no) / sizeof(no[0]); i++)
+	{
+		int *fact[] = { &f.built, &f.os, &f.supported, &f.factor, &f.config };
+
+		f = upscale_vt_ok();
+		*fact[no[i].which] = 0;
+		f.model = UPSCALE_VT_MODEL_DOWNLOAD;
+		T_EQ_INT(CL_UpscaleVTState(&f, 4, reason, sizeof(reason)),
+			UPSCALE_VT_UNSUPPORTED);
+		T_EQ_STR(reason, no[i].reason);
+	}
+
+	/* a missing model, or one being fetched: fetch first */
+	f = upscale_vt_ok();
+	f.model = UPSCALE_VT_MODEL_DOWNLOAD;
+	T_EQ_INT(CL_UpscaleVTState(&f, 2, reason, sizeof(reason)), UPSCALE_VT_FETCH);
+	T_EQ_STR(reason, "");
+	f.model = UPSCALE_VT_MODEL_DOWNLOADING;
+	T_EQ_INT(CL_UpscaleVTState(&f, 2, reason, sizeof(reason)), UPSCALE_VT_FETCH);
+
+	/* a status this code does not know is unsupported, not fetched */
+	f.model = 7;
+	T_EQ_INT(CL_UpscaleVTState(&f, 2, reason, sizeof(reason)),
+		UPSCALE_VT_UNSUPPORTED);
+	T_EQ_STR(reason, "the super-resolution model's status is unknown (7)");
+
+	/* a factor that is not 2 or 4, no facts, a short buffer */
+	f = upscale_vt_ok();
+	T_EQ_INT(CL_UpscaleVTState(&f, 3, reason, sizeof(reason)),
+		UPSCALE_VT_UNSUPPORTED);
+	T_EQ_STR(reason, "VideoToolbox's super-resolution scaler has no 3x");
+	T_EQ_INT(CL_UpscaleVTState(NULL, 2, reason, sizeof(reason)),
+		UPSCALE_VT_UNSUPPORTED);
+	T_EQ_STR(reason, "not built for this platform");
+	f.supported = 0;
+	T_EQ_INT(CL_UpscaleVTState(&f, 2, reason, 8), UPSCALE_VT_UNSUPPORTED);
+	T_EQ_STR(reason, "VideoTo");
+	T_EQ_INT(CL_UpscaleVTState(&f, 2, NULL, 0), UPSCALE_VT_UNSUPPORTED);
+
+	/* the fetch line is said before any download */
+	T_EQ_STR(UPSCALE_SAY_VT_FETCH, "upscale_textures: vt: the operating "
+		"system will now download VideoToolbox's super-resolution model "
+		"(once, from Apple)\n");
+}
+
+/* the forced unsupported path, as a run prints it: one line, then scale2x */
+TEST(upscale_vt_fallback_line)
+{
+	upscale_vt_facts_t f = upscale_vt_ok();
+	char reason[160], line[256];
+
+	f.supported = 0;
+	T_EQ_INT(CL_UpscaleVTState(&f, 2, reason, sizeof(reason)),
+		UPSCALE_VT_UNSUPPORTED);
+	T_EQ_INT(CL_UpscaleChooseBackend(UPSCALE_VT, 0, reason, line,
+		sizeof(line)), UPSCALE_SCALE2X);
+	T_EQ_STR(line, "upscale_textures: vt is unsupported here (VideoToolbox's "
+		"super-resolution scaler is not supported on this device); using "
+		"scale2x\n");
+
+	strcpy(line, "x");
+	T_EQ_INT(CL_UpscaleChooseBackend(UPSCALE_VT, 1, "", line, sizeof(line)),
+		UPSCALE_VT);
+	T_EQ_STR(line, "");
 }
 
 TEST(upscale_choose_backend)
@@ -2407,4 +2530,7 @@ TEST(upscale_summary_names_metalfx)
 	CL_UpscaleSummary(&n, 2, UPSCALE_SCALE2X, "/g/baseq2", out, sizeof(out));
 	T_EQ_STR(out, "upscale_textures: 3 written, 0 skipped, 0 refused, 0 failed, "
 		"10 bytes, 2x, in /g/baseq2\n");
+	CL_UpscaleSummary(&n, 2, UPSCALE_VT, "/g/baseq2", out, sizeof(out));
+	T_EQ_STR(out, "upscale_textures: 3 written, 0 skipped, 0 refused, 0 failed, "
+		"10 bytes, 2x with vt, in /g/baseq2\n");
 }

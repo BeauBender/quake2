@@ -581,6 +581,28 @@ CL_UpscaleBackendName(int backend)
 }
 
 int
+CL_UpscaleBackendRGBA(int backend)
+{
+	(void)backend;
+	return 0;
+}
+
+upscale_vt_state_t
+CL_UpscaleVTState(const upscale_vt_facts_t *facts, int factor, char *reason,
+		size_t size)
+{
+	(void)facts;
+	(void)factor;
+
+	if (reason && (size > 0))
+	{
+		reason[0] = '\0';
+	}
+
+	return UPSCALE_VT_UNSUPPORTED;
+}
+
+int
 CL_UpscaleParseArgs(int argc, const char *const *argv, int *factor,
 		upscale_backend_t *backend, int *force)
 {
