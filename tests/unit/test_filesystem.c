@@ -510,6 +510,8 @@ TEST(fs_pak_bound_functions)
 	T_CHECK(!FS_PakDirectoryInBounds(1000, 12, 63));
 	T_CHECK(!FS_PakDirectoryInBounds(1000, 12, 65));
 	T_CHECK(!FS_PakDirectoryInBounds(1000, -1, 64));
+	/* Offset 0 is a legal value. */
+	T_CHECK(FS_PakDirectoryInBounds(64, 0, 64));
 	T_CHECK(!FS_PakDirectoryInBounds(-1, 0, 64));
 	/* Count limit, one past it, and an offset plus length that would
 	   wrap an int. */
