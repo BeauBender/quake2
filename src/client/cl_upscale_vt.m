@@ -42,6 +42,7 @@
 #import <CoreMedia/CoreMedia.h>
 #import <VideoToolbox/VideoToolbox.h>
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -345,7 +346,10 @@ CL_UpscaleVTSession(int iw, int ih)
 		return nil;
 	}
 
-	/* 32-bit BGRA, else RGBA; the copies below swap the channels as needed */
+	/*
+	 * 32-bit BGRA, else RGBA, else 64-bit half-float RGBA (the only
+	 * format this OS's scaler lists); the copies below convert
+	 */
 	for (NSNumber *n in c.frameSupportedPixelFormats)
 	{
 		if (n.unsignedIntValue == kCVPixelFormatType_32BGRA)
@@ -354,9 +358,15 @@ CL_UpscaleVTSession(int iw, int ih)
 			break;
 		}
 
-		if (n.unsignedIntValue == kCVPixelFormatType_32RGBA)
+		if ((n.unsignedIntValue == kCVPixelFormatType_32RGBA) &&
+			(format != kCVPixelFormatType_32BGRA))
 		{
 			format = kCVPixelFormatType_32RGBA;
+		}
+
+		if (!format && (n.unsignedIntValue == kCVPixelFormatType_64RGBAHalf))
+		{
+			format = kCVPixelFormatType_64RGBAHalf;
 		}
 	}
 
@@ -399,15 +409,60 @@ CL_UpscaleVTBuffer(int w, int h)
 	return b;
 }
 
+/* a byte (0 to 255) as an IEEE half-float bit pattern, and back */
+static unsigned short
+CL_UpscaleVTHalf(unsigned char v)
+{
+	unsigned m, e;
+
+	if (!v)
+	{
+		return 0;
+	}
+
+	/* v is 1 to 255: v = 1.f * 2^e, e 0 to 7, half exponent e + 15 */
+	for (e = 7; !(v >> e); e--)
+	{
+	}
+
+	m = ((unsigned)v << (10 - e)) & 0x3ff;
+
+	return (unsigned short)(((e + 15) << 10) | m);
+}
+
+static unsigned char
+CL_UpscaleVTUnhalf(unsigned short h)
+{
+	int e = (h >> 10) & 0x1f;
+	float f;
+
+	if (h & 0x8000)
+	{
+		return 0;
+	}
+
+	if (e == 0x1f)
+	{
+		return (h & 0x3ff) ? 0 : 255;
+	}
+
+	f = (e ? (1.0f + (h & 0x3ff) / 1024.0f) * ldexpf(1.0f, e - 15) :
+		(h & 0x3ff) / 1024.0f * ldexpf(1.0f, -14)) * 255.0f + 0.5f;
+
+	return (f >= 255.0f) ? 255 : (unsigned char)f;
+}
+
 /* RGBA8 rows to or from the buffer; BGRA swaps red and blue */
 static int
 CL_UpscaleVTCopy(CVPixelBufferRef b, unsigned char *rgba, int w, int h,
 		int into)
 {
+	const int half = (vt_format == kCVPixelFormatType_64RGBAHalf);
 	const int swap = (vt_format == kCVPixelFormatType_32BGRA);
+	const size_t bpp = half ? 8 : 4;
 	unsigned char *base;
 	size_t stride;
-	int x, y;
+	int x, y, c;
 
 	if (CVPixelBufferLockBaseAddress(b, into ? 0 :
 		kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess)
@@ -418,7 +473,7 @@ CL_UpscaleVTCopy(CVPixelBufferRef b, unsigned char *rgba, int w, int h,
 	base = CVPixelBufferGetBaseAddress(b);
 	stride = CVPixelBufferGetBytesPerRow(b);
 
-	if (!base || (stride < (size_t)w * 4) ||
+	if (!base || (stride < (size_t)w * bpp) ||
 		(CVPixelBufferGetWidth(b) != (size_t)w) ||
 		(CVPixelBufferGetHeight(b) != (size_t)h))
 	{
@@ -431,15 +486,36 @@ CL_UpscaleVTCopy(CVPixelBufferRef b, unsigned char *rgba, int w, int h,
 		unsigned char *row = base + (size_t)y * stride;
 		unsigned char *t = rgba + (size_t)y * w * 4;
 
-		for (x = 0; x < w; x++, row += 4, t += 4)
+		for (x = 0; x < w; x++, row += bpp, t += 4)
 		{
-			unsigned char *to = into ? row : t;
-			const unsigned char *from = into ? t : row;
+			if (half)
+			{
+				unsigned short *r = (unsigned short *)row;
 
-			to[0] = from[swap ? 2 : 0];
-			to[1] = from[1];
-			to[2] = from[swap ? 0 : 2];
-			to[3] = 255;
+				for (c = 0; c < 4; c++)
+				{
+					if (into)
+					{
+						r[c] = CL_UpscaleVTHalf(c == 3 ? 255 : t[c]);
+					}
+					else
+					{
+						t[c] = (c == 3) ? 255 : CL_UpscaleVTUnhalf(r[c]);
+					}
+				}
+
+				continue;
+			}
+
+			{
+				unsigned char *to = into ? row : t;
+				const unsigned char *from = into ? t : row;
+
+				to[0] = from[swap ? 2 : 0];
+				to[1] = from[1];
+				to[2] = from[swap ? 0 : 2];
+				to[3] = 255;
+			}
 		}
 	}
 
