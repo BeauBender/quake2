@@ -22,8 +22,10 @@ index, start, `load.before`, `load.after`, `pre.*`, `metric.*`) and adds, after 
 | `quiet` | `yes`, or `no` when the gate ran out or a snapshot shows foreign GPU use |
 | `quiet.reason` | `none`, or the reasons joined by `,`: `gate` (the gate's wait ran out), `gpu.before`, `gpu.after` (that snapshot's GPU device utilization is over `gate_gpu`) |
 | `gate.wait` | the seconds the gate waited before the run |
+| `snap.source` | `system`, or `stub` when `BENCH_SNAP_READER` made the snapshots |
 | `snap.before.<key>`, `snap.after.<key>` | the snapshot just before and just after the run (keys below) |
-| `freq.<domain>.<key>` | the frequencies over the run's window, from the probe (below), or `freq=unavailable` and `freq.reason=<word>` |
+| `freq.source` | `system`, or `stub` when `BENCH_FREQ_PROBE` made the frequencies |
+| `freq.<domain>.<key>` | the frequencies over the run's window, from the probe (below), or `freq=unavailable` and `freq.reason=<word>` (the probe's own word when a dump carries one) |
 | `prewarm.target` | the case's `prewarm`, in seconds |
 | `prewarm.seconds` | how long the pre-warm ran |
 | `prewarm.runs` | how many workload runs it made |
@@ -44,7 +46,7 @@ The snapshot keys, read without root by the core (`scripts/bench/core/snap.sh`):
 | `gpu.mem` | the GPU's in-use system memory, MB (the same) |
 | `thermal`, `perf` | the thermal and performance warning levels, `none` when none is recorded (`pmset -g therm`) |
 | `lowpower` | low-power mode, `0` or `1` (`pmset -g`) |
-| `top.1` ... `top.5` | the five processes with the most CPU, `<percent> <name>`: the name only, never a path, an argument or a pid, scrubbed of the host's identity words |
+| `top.1` ... `top.5` | the five processes with the most CPU, `<percent> <name>`: the kernel's name for it (`ps -o ucomm=`, set at exec), never a path, an argument or a pid, scrubbed of the host's identity words |
 
 A value that cannot be read is `unknown`. `BENCH_SNAP_READER` names an executable that prints
 these lines instead (`<reader> snap`, and `<reader> gate` for the gate's two), for the self-test.
@@ -72,8 +74,10 @@ freq <seconds>             dump, sleep, dump, delta
 
 A domain is the IOReport channel's name in lower case (`ecpu`, `pcpu`, ... and `gpu`). A channel
 that cannot be read, or a table that does not fit it, prints `freq=unavailable reason=<word>` and
-the probe exits 0. `BENCH_FREQ_PROBE` names an executable used in place of the built probe, for the
-self-test.
+the probe exits 0; a dump that says so gives the run file that word as `freq.reason`.
+`BENCH_FREQ_PROBE` names an executable used in place of the built probe, for the self-test. The
+probe is built at the top of the measuring path (`bench_prewarm`'s first line), before the
+pre-warm, the gate and the first snapshot, also with `prewarm=0`.
 
 ### The pre-warm
 
@@ -111,7 +115,8 @@ set is not stored); `drift` and `compare` print the flag of the runs they read.
 
 `bench.sh lock run --quiet <label> -- <command...>` writes a marker beside the lock, `quiet` in
 the lock's state directory (`BENCH_STATE`), while it holds the lock. `baseline put` and `drift`
-take their lock with it. The file is written whole to a temporary name and renamed into place,
+take their lock with it. The file is written whole to a temporary file `mktemp` makes in the
+state directory and renamed into place,
 and holds `key=value` lines:
 
 ```
@@ -176,3 +181,30 @@ scripts/bench/bench.sh compare <copy with prewarm=240> --before 96b9c661 --after
 
 Each run file then carries `freq.gpu.mhz` and `freq.gpu.top` for the cold and the warm runs, and
 `prewarm.freq.*` for the end of the pre-warm.
+
+## Review round 1
+
+The panel's three Importants and five of its notes, each fixed with a test in
+`tests/check-bench.sh` that failed first (run against a copy of the scripts before the fix) and a
+mutant it catches. No trap, signal disposition, process group or `set -m` in
+`scripts/bench/core/lock.sh` changed.
+
+| # | Finding | Change | Red first | Mutant |
+|---|---|---|---|---|
+| 1 | The probe's own reason was lost: a dump of `freq=unavailable reason=<w>` reached the run file as `no-dump` | `bench_freq_window` takes the reason from a dump that carries one (the before dump's first) | `t_freq_reason`: `the run file says: freq=unavailable freq.reason=no-dump` | `freq-reason-lost` |
+| 2 | A top line could carry arguments: `comm` is the `argv[0]` a process wrote (`exec -a`) | the reader takes `ps -o ucomm=`, the kernel's name, set at exec; the identity scrub stays | `t_snap_argv`: `top.1=0.0 zzqfake --token=zzqsecret1 zzq@example.invalid` | `top-argv` (`ucomm` back to `comm`) |
+| 3 | drift's own not-quiet guard was untested: the old mutant changed put's line and drift's | `not_quiet` names the set (`new`, `re-measured`) in its note, so each guard is a line of its own | `t_drift_quiet` passes on the old code (the guard was right); its red is the drift-only mutant | `drift-not-quiet`; `put-not-quiet` now changes put's line alone |
+| 4 | `BENCH_GATE_POLL` was unchecked and uncut | refused with 2 at the start of `bench.sh` unless a number of at least 0.01; each nap is cut to the gate's time left | `t_gate_poll`: `BENCH_GATE_POLL='x' was not refused before the command (status 0)` | `gate-poll-unchecked`, `gate-nap-uncut` |
+| 5 | `BENCH_QUIET_TTL` was checked only after the lock wait | checked at the start of `bench.sh`, beside `BENCH_STOP_GRACE` (the check in `bench_quiet_mark` stays) | `t_leading_zero`: `BENCH_QUIET_TTL=08 was not refused with 2 (status 0)` | `ttl-unchecked` |
+| 6 | The marker's temporary file had a predictable name (`quiet.tmp.<pid>`) | `mktemp` in the state directory, then `mv` into place; `lock.log` unchanged | no test: the name is random, so there is no fixed path to plant | none |
+| 7 | With `prewarm=0` the probe was built after the gate and the before snapshot | `bench_freq_init` is `bench_prewarm`'s first line, the top of the measuring path | `t_probe_first`: `the probe was built after: gate run ...\|snap run ...\|cc\|...` | `probe-after-gate` |
+| 8 | `not_quiet`'s comment said the opposite of the code | the comment now says it succeeds when a run was not quiet | no test: a comment | none |
+| 9 | A stand-in reader left no trace | run files carry `snap.source` and `freq.source` (`system`, or `stub`); `drift` prints `source=` and `baseline.source=`, `compare` a `source before= after=` line; `put` does not refuse a stub's set | `t_store`: `a run file has no line snap.source=stub`; `t_probe_first` (`freq.source=system` for a built probe) | `snap-source-lost` (by `t_store`), `source-stub-lost` (by `t_drift`) |
+
+The marker reader on the plugin side is left these two, unchanged here:
+- **pid reuse.** A marker whose writer was KILLed names a pid the system may give to another
+  process before `expires`; `kill -0` then reads it as alive. The expiry bounds it.
+- **A hold that outlives the TTL.** A measurement longer than `BENCH_QUIET_TTL` leaves a marker
+  that has expired while the lock is still held; the marker is not renewed.
+
+RESULTS-PENDING
