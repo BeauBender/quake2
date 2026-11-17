@@ -8456,8 +8456,9 @@ test_2d_sharp(void)
 static void
 test_frames_drain(void)
 {
-	rmb_frames_t f;
+	rmb_frames_t f = { RMB_FRAMES_IN_FLIGHT };   /* as a drain on a hung GPU leaves it */
 
+	CHECK(rmb_frames_wait(&f) == 0);
 	rmb_frames_reset(&f);
 	CHECK(f.lost == 0);
 	CHECK(rmb_frames_wait(&f) == RMB_FRAMES_IN_FLIGHT);
@@ -8527,7 +8528,9 @@ test_present_drain(void)
 
 	/* no group yet: done, nothing waited for, nothing marked */
 	CHECK(!rmb_present_drain_waits(NULL, NULL));
+	CHECK(!rmb_present_drain_waits(NULL, a));
 	CHECK(rmb_present_drain_result(NULL, NULL, 0) == RMB_DRAIN_DONE);
+	CHECK(rmb_present_drain_result(NULL, a, 0) == RMB_DRAIN_DONE);
 	CHECK(!rmb_present_new_group(NULL, NULL));
 
 	/* a drain of a whose presents are done: waits, marks nothing */
