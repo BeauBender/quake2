@@ -245,13 +245,14 @@ rm_rtw_in_view(constant rm_rtw_view &v, uint2 px, uint w, uint h)
 }
 
 /*
- * TASK158: the candidates' raster. Every water triangle of the map (the
- * world's and the inline models', where gl1 draws them: R_DrawAlphaSurfaces
- * uses the world's matrix) with the view's matrix, depth-tested against
- * the G-buffer's depth and not writing it, over the reflection target
- * cleared to 0: a fragment marks its pixel MTL_RTW_CLASS_CAND, where
- * water lies in front of the raster's surface. The compaction lists the
- * marked pixels and their neighbours; nothing else is traced.
+ * TASK158, TASK162: the water's marks, the G-buffer raster's last draw
+ * (rmb_rtw_mark). Every water triangle of the map (the world's and the
+ * inline models', where gl1 draws them: R_DrawAlphaSurfaces uses the
+ * world's matrix) with the view's matrix, depth-tested against the
+ * raster's depth and not writing it: a fragment marks its pixel in the
+ * normal attachment's alpha (mtl_rtw_mark_blend), where water lies in
+ * front of the raster's surface. The compaction lists the marked pixels
+ * and their neighbours; nothing else is traced.
  */
 struct rm_rtw_cand_v
 {
@@ -299,22 +300,34 @@ rm_vertex_rtw_cand(uint vid [[vertex_id]],
 	return out;
 }
 
-fragment float4
-rm_fragment_rtw_cand(rm_rtw_cand_v in [[stage_in]])
+/* the mark's alpha into the normal attachment (colour 1); rmb_rtw_mark's pipeline writes that alpha alone, blended */
+struct rm_rtw_mark_out
 {
+	float4 normal [[color(1)]];
+};
+
+fragment rm_rtw_mark_out
+rm_fragment_rtw_mark(rm_rtw_cand_v in [[stage_in]])
+{
+	rm_rtw_mark_out out;
+
 	(void)in;
-	return float4(0.0f, 0.0f, 0.0f, float(MTL_RTW_CLASS_CAND) / 255.0f);
+	out.normal = float4(0.0f, 0.0f, 0.0f, MTL_RTW_MARK_A);
+	return out;
 }
 
 /*
  * TASK158: the compaction, over every pixel of the target: a pixel of the
  * view is listed (mtl_rtw_listed) where the raster drew opaque water or
- * the candidates' raster marked it or a pixel next to it. The list's
- * length is counted once per SIMD group; the trace runs on the list alone.
+ * the G-buffer's marks (TASK162, mtl_rtw_marked) hold it or a pixel next
+ * to it. The list's length is counted once per SIMD group; the trace runs
+ * on the list alone and writes every listed pixel of the reflection
+ * target, so the compaction writes the others 0 (no water).
  */
 kernel void
 rm_rtw_compact(texture2d<uint, access::read> mat [[texture(0)]],
-		texture2d<float, access::read> refl [[texture(1)]],
+		texture2d<float, access::write> refl [[texture(1)]],
+		texture2d<float, access::read> normal [[texture(2)]],
 		constant rm_rtw_view &v [[buffer(0)]],
 		device uint *list [[buffer(1)]],
 		device atomic_uint *counts [[buffer(2)]],
@@ -325,7 +338,8 @@ rm_rtw_compact(texture2d<uint, access::read> mat [[texture(0)]],
 	bool listed = false;
 	uint base = 0, k, total;
 
-	if (rm_rtw_in_view(v, px, w, h) && (px.x < mat.get_width()) && (px.y < mat.get_height()))
+	if (rm_rtw_in_view(v, px, w, h) && (px.x < mat.get_width()) && (px.y < mat.get_height()) &&
+		(w <= normal.get_width()) && (h <= normal.get_height()))
 	{
 		uint marks = 0;
 
@@ -337,7 +351,7 @@ rm_rtw_compact(texture2d<uint, access::read> mat [[texture(0)]],
 
 				if ((qx >= 0) && (qy >= 0) && (qx < int(w)) && (qy < int(h)))
 				{
-					marks += (rm_rtw_cls(refl.read(uint2(qx, qy)).a) == MTL_RTW_CLASS_CAND) ? 1u : 0u;
+					marks += mtl_rtw_marked(normal.read(uint2(qx, qy)).a) ? 1u : 0u;
 				}
 			}
 		}
@@ -358,6 +372,11 @@ rm_rtw_compact(texture2d<uint, access::read> mat [[texture(0)]],
 	if (listed && (base + k < cap))
 	{
 		list[base + k] = mtl_rtw_list_pack(px.x, px.y);
+	}
+	else if ((px.x < w) && (px.y < h))
+	{
+		/* not traced: no water, as the cleared target of TASK158's raster read */
+		refl.write(float4(0.0f), px);
 	}
 }
 

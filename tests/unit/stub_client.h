@@ -25,6 +25,8 @@ typedef struct
 	int pics;         /* Draw_PicScaled calls */
 	int begins;       /* R_BeginFrame calls */
 	int ends;         /* R_EndFrame calls */
+	int ents;         /* V_AddEntity calls */
+	int min_ent_frame; /* the lowest frame of them */
 } stub_calls_t;
 
 extern stub_calls_t stub_calls;

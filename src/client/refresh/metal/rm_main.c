@@ -41,6 +41,8 @@
 #include "header/rm_gbufscene.h"
 #include "header/rm_fxscene.h"
 #include "common/mtl_matrix.h"
+#include "common/mtl_rate.h"
+#include <time.h>
 
 refimport_t ri;
 
@@ -52,6 +54,10 @@ cvar_t *r_norefresh;
 cvar_t *r_vsync;
 cvar_t *vid_fullscreen;
 cvar_t *metal_stats;
+static cvar_t *metal_rate_start;   /* seconds after the first frame ended at which the presented-rate window begins (TASK161) */
+static mtl_rate_t rm_rate;
+static double rm_rate_start;       /* metal_rate_start, read once in RI_Init, as the shim reads it (TASK161) */
+static unsigned long rm_rate_frames;   /* the frames count at the last sample: a frame skipped is not a sample */
 cvar_t *metal_lightmap_filter;
 cvar_t *gl_texturemode;
 cvar_t *gl_anisotropic;
@@ -123,6 +129,7 @@ R_Register(void)
 	r_vsync = ri.Cvar_Get("r_vsync", "1", CVAR_ARCHIVE);
 	vid_fullscreen = ri.Cvar_Get("vid_fullscreen", "0", CVAR_ARCHIVE);
 	metal_stats = ri.Cvar_Get("metal_stats", "0", 0);
+	metal_rate_start = ri.Cvar_Get("metal_rate_start", "1", 0);
 	metal_lightmap_filter = ri.Cvar_Get("metal_lightmap_filter", "0", CVAR_ARCHIVE);
 
 	/* gl1's, by gl1's names and defaults (gl1_main.c, R_Register) */
@@ -270,6 +277,14 @@ RM_Close(void)
 		R_Printf(PRINT_ALL, "%s\n", line);
 	}
 
+	/* the presented rate over a window (TASK161), beside the totals */
+	if (metal_stats && metal_stats->value && rm_rate.seen &&
+		mtl_rate_format("ref_metal: metal_rate:", &rm_rate, rm_rate_start, s.present_held,
+			s.no_drawable, line, sizeof(line)))
+	{
+		R_Printf(PRINT_ALL, "%s\n", line);
+	}
+
 	rm_ledger_format(&l, line, sizeof(line));
 	R_Printf(PRINT_ALL, "%s\n", line);
 }
@@ -312,6 +327,9 @@ RI_Init(void)
 	}
 
 	rm_opened = true;
+	mtl_rate_reset(&rm_rate);
+	rm_rate_start = metal_rate_start->value;
+	rm_rate_frames = 0;
 
 	/* the capability report, once per context */
 	rm_caps_family_list(caps.families, families, sizeof(families));
@@ -952,6 +970,22 @@ RI_EndFrame(void)
 	RM_Flush2D();   /* to draw buffered 2D text */
 	RM_FX_EndFrame();
 	rmb_frame_end();
+
+	/* with metal_stats on, each frame ended is a sample of the presented-rate window (TASK161) */
+	if (metal_stats && metal_stats->value)
+	{
+		unsigned long frames, no_drawable;
+
+		/* only the two counts the rate needs are read; a frame skipped did not count, and is not a sample */
+		rmb_rate_counts(&frames, &no_drawable);
+
+		if (frames != rm_rate_frames)
+		{
+			rm_rate_frames = frames;
+			mtl_rate_frame(&rm_rate, clock_gettime_nsec_np(CLOCK_UPTIME_RAW), frames - no_drawable,
+				rm_rate_start);
+		}
+	}
 }
 
 /* from gl1_image.c */
