@@ -2229,6 +2229,114 @@ TEST(upscale_rgba_wrapped_tile)
 	upscale_rgba_case(4, 1);
 }
 
+/*
+ * A stand-in for a filter that reads neighbours: nearest neighbour of a
+ * 5 by 5 box blur (two texels each way), clamped at the edges of what it
+ * is given, as MetalFX's spatial filter is at the edges of its input.
+ */
+static int
+upscale_blur_scale(void *ctx, const unsigned char *in, int iw, int ih,
+		unsigned char *out, int ow, int oh)
+{
+	int x, y, dx, dy, c;
+
+	(void)ctx;
+
+	for (y = 0; y < oh; y++)
+	{
+		for (x = 0; x < ow; x++)
+		{
+			int sx = x * iw / ow, sy = y * ih / oh;
+
+			for (c = 0; c < 4; c++)
+			{
+				int sum = 0;
+
+				for (dy = -2; dy <= 2; dy++)
+				{
+					for (dx = -2; dx <= 2; dx++)
+					{
+						int px = sx + dx, py = sy + dy;
+
+						px = (px < 0) ? 0 : (px >= iw) ? iw - 1 : px;
+						py = (py < 0) ? 0 : (py >= ih) ? ih - 1 : py;
+						sum += in[((size_t)py * iw + px) * 4 + c];
+					}
+				}
+
+				out[((size_t)y * ow + x) * 4 + c] = (unsigned char)(sum / 25);
+			}
+		}
+	}
+
+	return 1;
+}
+
+/*
+ * A scaler that reads two texels each way must see a tile as it repeats:
+ * the cropped result equals the centre tile of the same scale applied to
+ * a 3 by 3 tiling of the source. A one texel border does not give that.
+ */
+TEST(upscale_rgba_wrapped_tile_wide_filter)
+{
+	const int w = 4, h = 3;
+	unsigned char idx[4 * 3];
+	unsigned table[256];
+	int factor, i, x, y, tx, ty;
+
+	for (i = 0; i < w * h; i++)
+	{
+		idx[i] = (unsigned char)(i * 21 + 5);
+	}
+
+	upscale_test_table(table);
+
+	for (factor = 2; factor <= 4; factor += 2)
+	{
+		unsigned char *rgba = CL_UpscaleToRGBA(idx, w, h, table);
+		unsigned char *tiled = malloc((size_t)9 * w * h * 4);
+		unsigned char *big = malloc((size_t)9 * w * h * factor * factor * 4);
+		unsigned char *out;
+
+		T_REQUIRE(rgba && tiled && big);
+
+		for (y = 0; y < 3 * h; y++)
+		{
+			for (x = 0; x < 3 * w; x++)
+			{
+				memcpy(tiled + ((size_t)y * 3 * w + x) * 4,
+					rgba + (size_t)((y % h) * w + (x % w)) * 4, 4);
+			}
+		}
+
+		T_EQ_INT(upscale_blur_scale(NULL, tiled, 3 * w, 3 * h, big,
+			3 * w * factor, 3 * h * factor), 1);
+		out = CL_UpscaleRGBA(idx, w, h, factor, 1, table, upscale_blur_scale,
+			NULL);
+		T_REQUIRE(out != NULL);
+
+		for (y = 0; y < h * factor; y++)
+		{
+			for (ty = y + h * factor, x = 0; x < w * factor; x++)
+			{
+				const unsigned char *a = out + ((size_t)y * w * factor + x) * 4;
+				const unsigned char *b = big +
+					((size_t)ty * 3 * w * factor + x + w * factor) * 4;
+
+				for (tx = 0; tx < 3; tx++)
+				{
+					T_EQ_INT(a[tx], b[tx]);
+				}
+			}
+		}
+
+		free(out);
+		free(big);
+		free(tiled);
+		free(rgba);
+	}
+}
+
 TEST(upscale_rgba_skin_not_padded)
 {
 	upscale_rgba_case(2, 0);
