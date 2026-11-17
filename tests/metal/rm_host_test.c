@@ -42,6 +42,7 @@
 #include "../../src/client/refresh/metal/header/rmb.h"
 #include "../../src/client/refresh/metal/header/rmb_drain.h"
 #include "../../src/client/refresh/metal/common/mtl_matrix.h"
+#include "../../src/client/refresh/metal/common/mtl_rate.h"
 #include "../../src/client/refresh/metal/common/mtl_ring.h"
 #include "../../src/client/refresh/metal/common/mtl_shader_math.h"
 
@@ -909,6 +910,63 @@ test_presents_format(void)
 	s.presents = 7;
 	s.present_drains_late = 1;
 	CHECK(rm_presents_format(&s, buf, sizeof(buf)) && strcmp(buf, late) == 0);
+}
+
+/*
+ * The presented rate over a window (TASK161, common/mtl_rate.h): the window
+ * begins at the first frame to end at least start seconds after the first
+ * frame; the rate is the frames presented from that sample to the last one
+ * over the time between them.
+ */
+static void
+test_rate(void)
+{
+	mtl_rate_t r;
+	char buf[256];
+	const char *want = "ref_metal: metal_rate: 50.0 presented a second over 2.00 s from 1.00 s, "
+		"100 presented, 7 with every present slot held, 9 without a drawable";
+	uint64_t t;
+	unsigned long presented = 0;
+	int i;
+
+	mtl_rate_reset(&r);
+	CHECK(mtl_rate_window_s(&r) == 0.0 && mtl_rate_per_second(&r) == 0.0);
+
+	/* a frame every 10 ms from t = 5 s, one presented for every two; start 1 s */
+	for (i = 0; i <= 300; i++)
+	{
+		t = 5000000000ull + (uint64_t)i * 10000000ull;
+		presented = (unsigned long)(i / 2);
+		mtl_rate_frame(&r, t, presented, 1.0);
+
+		if (i < 100)
+		{
+			CHECK(mtl_rate_window_s(&r) == 0.0);   /* no window before the start */
+		}
+	}
+
+	CHECK(fabs(mtl_rate_window_s(&r) - 2.0) < 1e-9);
+	CHECK(fabs(mtl_rate_per_second(&r) - 50.0) < 1e-9);
+	CHECK(mtl_rate_format("ref_metal: metal_rate:", &r, 1.0, 7, 9, buf, sizeof(buf)) && strcmp(buf, want) == 0);
+	CHECK(!mtl_rate_format("ref_metal: metal_rate:", &r, 1.0, 7, 9, buf, strlen(want)) && strlen(buf) == strlen(want) - 1);
+	CHECK(!mtl_rate_format("ref_metal: metal_rate:", &r, 1.0, 7, 9, buf, 0));
+
+	/* a run shorter than the start has no window */
+	mtl_rate_reset(&r);
+	mtl_rate_frame(&r, 1000, 0, 1.0);
+	mtl_rate_frame(&r, 500000000ull, 10, 1.0);
+	CHECK(mtl_rate_window_s(&r) == 0.0 && mtl_rate_per_second(&r) == 0.0);
+	CHECK(mtl_rate_format("mgl: rate:", &r, 1.0, 0, 0, buf, sizeof(buf)) &&
+		strcmp(buf, "mgl: rate: 0.0 presented a second over 0.00 s from 1.00 s, 0 presented, "
+			"0 with every present slot held, 0 without a drawable") == 0);
+
+	/* a start of 0 begins the window at the first frame; a clock that does not move has no rate */
+	mtl_rate_reset(&r);
+	mtl_rate_frame(&r, 100, 5, 0.0);
+	mtl_rate_frame(&r, 100, 9, 0.0);
+	CHECK(mtl_rate_per_second(&r) == 0.0);
+	mtl_rate_frame(&r, 100 + 500000000ull, 15, 0.0);
+	CHECK(fabs(mtl_rate_per_second(&r) - 20.0) < 1e-9 && fabs(mtl_rate_window_s(&r) - 0.5) < 1e-9);
 }
 
 /*
@@ -8605,6 +8663,7 @@ main(void)
 	test_frame_size();
 	test_frame_remake();
 	test_presents_format();
+	test_rate();
 	test_present_region();
 	test_present_region_inset();
 	test_present_chain();
