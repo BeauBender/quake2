@@ -1097,7 +1097,15 @@ skipwhite:
 		{
 			c = *data++;
 
-			if ((c == '\"') || !c)
+			if (!c)
+			{
+				/* Unterminated: leave the cursor on the
+				   terminator, not behind it. */
+				data--;
+				goto done;
+			}
+
+			if (c == '\"')
 			{
 				goto done;
 			}
