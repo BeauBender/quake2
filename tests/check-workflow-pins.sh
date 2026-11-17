@@ -2,7 +2,41 @@
 # Invariant: every reference a workflow in .github/workflows/ pulls from
 # outside this repository is pinned to an immutable id.
 #
-# STUB: scan() below accepts everything; the real scan follows.
+# Every file in .github/workflows/ whose name ends in .yml or .yaml (any
+# letter case, dot-files too) is read line by line, in the block form
+# GitHub's workflow syntax uses. A line whose key, after the indentation
+# and any "- " list markers, is uses, image or container (bare, single- or
+# double-quoted) holds a reference, and its value must be on that line,
+# bare or quoted, with at most a "# comment" after it:
+#   uses: <owner>/<repo>[/<path>]@<ref>   an action or a reusable workflow:
+#                                         <ref> is 40 lowercase hex digits
+#   uses: ./<path>                        an action in this repository
+#   uses: docker://<image>                a Docker action: as image: below
+#   image: <image>                        a container or service image
+#   container: <image>                    the same, in the string form
+#   container:                            the mapping form: the next line
+#                                         must be a key of the mapping
+# An <image> ends in @sha256: and 64 lowercase hex digits. Anything else on
+# such a line is refused: a tag or branch, a SHA or digest of the wrong
+# length or case, no value on the key's line (a block scalar, a value on
+# the next line), a second word, an unclosed quote, an anchor or alias.
+# A uses, image or container key inside a flow mapping ({ ... }) is
+# refused whatever its value. A line that starts with # is a comment and
+# skipped. A key of these names elsewhere (an action input called image, a
+# line of a run script) is held to the same rule; that errs on refusing.
+#
+# The scan fails closed: a missing directory, a directory with no workflow
+# file, a workflow name that is not a regular file, a file awk cannot read
+# and any awk failure are refusals, never a clean result. Nothing in the
+# tree can turn it off: it reads no configuration and honours no marker
+# in the files it checks. A refusal prints the file, the line number and
+# the reference with a fixed reason, and nothing else from the file.
+#
+# The self-test runs first, every time, over fixture workflows it writes
+# into a mktemp -d directory: each case is one assertion with the verdict
+# it expects, in the forms of the workflows on main and of GitHub's
+# workflow syntax reference. A wrong verdict fails the run before the tree
+# is read, so an awk that misreads the files cannot pass the tree.
 #
 # Usage: tests/check-workflow-pins.sh               (self-test, then the tree)
 #        tests/check-workflow-pins.sh --selftest    (the self-test alone)
@@ -23,16 +57,139 @@ case $# in
 esac
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/wfpins.XXXXXX")
+trap 'chmod -R u+rwx "${tmp:?}" 2>/dev/null; rm -rf "${tmp:?}"' EXIT
+trap 'exit 1' HUP INT TERM
 # Absolute, so the fixture paths the self-test compares do not depend on
 # a relative TMPDIR.
 tmp=$(CDPATH='' cd "${tmp:?}" && pwd)
-trap 'chmod -R u+rwx "${tmp:?}" 2>/dev/null; rm -rf "${tmp:?}"' EXIT
-trap 'exit 1' HUP INT TERM
 
-# scan <dir>: STUB.
+# One pass over one file. It prints a line for each refusal and exits 1
+# when it printed one; any other non-zero status is awk's own failure.
+# \047 is a single quote.
+prog='
+function emit(ref, why)
+{
+	if (ref == "")
+		ref = "(no value)"
+	printf "%s: %s:%d: %s: %s\n", me, FILENAME, FNR, ref, why
+	bad = 1
+}
+# pinned_action(s): s ends in @ and 40 lowercase hex digits.
+function pinned_action(s,    r)
+{
+	r = ""
+	if (match(s, /@[^@]*$/))
+		r = substr(s, RSTART + 1)
+	return length(r) == 40 && r ~ /^[0-9a-f]+$/
+}
+# pinned_image(s): s ends in @sha256: and 64 lowercase hex digits.
+function pinned_image(s,    d)
+{
+	d = ""
+	if (match(s, /@sha256:[^@]*$/))
+		d = substr(s, RSTART + 8)
+	return length(d) == 64 && d ~ /^[0-9a-f]+$/
+}
+{
+	sub(/\r$/, "")
+}
+/^[ \t]*(#|$)/ {
+	next
+}
+# The line after an empty container: must be a key of its mapping.
+pend {
+	pend = 0
+	if ($0 !~ /^[ \t]*[\047"]?[A-Za-z0-9_-]+[\047"]?[ \t]*:([ \t]|$)/)
+		emit("container:", "the image is not in a mapping under the key")
+}
+/[{,][ \t]*[\047"]?(uses|image|container)[\047"]?[ \t]*:/ {
+	emit("a flow mapping", "write the reference in block form, one key on a line")
+	next
+}
+match($0, /^[ \t]*(-[ \t]+)*[\047"]?(uses|image|container)[\047"]?[ \t]*:([ \t]|$)/) {
+	key = substr($0, 1, RLENGTH)
+	gsub(/[^a-z]/, "", key)
+	rest = substr($0, RLENGTH + 1)
+	sub(/^[ \t]+/, "", rest)
+	q = substr(rest, 1, 1)
+	if (q == "\"" || q == "\047") {
+		rest = substr(rest, 2)
+		i = index(rest, q)
+		v = substr(rest, 1, i - 1)
+		tail = i ? substr(rest, i + 1) : q
+	} else {
+		v = rest
+		tail = ""
+		if (match(rest, /[ \t]/)) {
+			v = substr(rest, 1, RSTART - 1)
+			tail = substr(rest, RSTART)
+		}
+		if (v ~ /^#/)
+			v = tail = ""
+	}
+	if (tail !~ /^([ \t]+#.*)?[ \t]*$/) {
+		emit(v, "more than the reference on the line (a second word or an unclosed quote)")
+		next
+	}
+	if (key == "uses") {
+		if (v ~ /^\.\//)
+			next
+		if (v ~ /^docker:\/\//) {
+			if (!pinned_image(v))
+				emit(v, "not pinned by a sha256 digest")
+			next
+		}
+		if (!pinned_action(v))
+			emit(v, "not pinned to a 40-hex commit SHA")
+		next
+	}
+	if (key == "container" && v == "") {
+		pend = 1
+		next
+	}
+	if (!pinned_image(v))
+		emit(v, "not pinned by a sha256 digest")
+}
+END {
+	exit bad
+}
+'
+
+# scan <dir>: prints a line for each refusal in the workflow files of
+# <dir> and returns 1 when there is one, or when the scan cannot run: no
+# directory, no workflow file, a workflow name that is not a regular file,
+# or an awk that fails.
 scan()
 {
-	return 0
+	if [ ! -d "$1" ]; then
+		echo "$me: $1: no such directory; nothing was checked" >&2
+		return 1
+	fi
+	_n=0
+	_rc=0
+	for _f in "$1"/* "$1"/.*; do
+		case ${_f##*/} in
+		*.[Yy][Mm][Ll] | *.[Yy][Aa][Mm][Ll]) ;;
+		*) continue ;;
+		esac
+		_n=$((_n + 1))
+		if [ ! -f "$_f" ]; then
+			echo "$me: $_f: not a regular file; it was not checked" >&2
+			_rc=1
+			continue
+		fi
+		_s=0
+		awk -v me="$me" "$prog" "$_f" >&2 || _s=$?
+		if [ "$_s" -gt 1 ]; then
+			echo "$me: $_f: awk failed (status $_s); it was not checked" >&2
+		fi
+		[ "$_s" -eq 0 ] || _rc=1
+	done
+	if [ "$_n" -eq 0 ]; then
+		echo "$me: $1: no .yml or .yaml file; nothing was checked" >&2
+		return 1
+	fi
+	return "$_rc"
 }
 
 selftest()
@@ -146,6 +303,10 @@ selftest()
 	expect refuse "container: image: debian@sha256:<64 hex, one uppercase>" cdiguc
 	cjob cnext '    container:' '      debian:testing'
 	expect refuse "container: with the image on the next line" cnext
+	cjob ccomment '    container:  # the image is pinned below' "      image: debian@sha256:$dig"
+	expect accept "container: # a comment, the pinned mapping below" ccomment
+	cjob cnoimage '    container:' '      image:' '      env:' '        NODE_ENV: development'
+	expect refuse "container: image: with no value" cnoimage
 	cjob svc '    services:' '      nginx:' '        image: nginx' '        ports:' \
 		'          - 8080:80'
 	expect refuse "services: nginx: image: nginx" svc
