@@ -151,8 +151,10 @@ SVC_GetChallenge(void)
  * Makes the engine's "ip" pair the only one in the connecting
  * client's userinfo. Every pair the client sent under that key is
  * removed first, so the game, which reads the first one, sees the
- * source address. Returns false when the pair does not fit, in which
- * case the userinfo has no usable "ip" and the connect is refused.
+ * source address. Returns false when the pair does not fit, or would
+ * not be read as the userinfo's "ip" (a bare key at the end, a trailing
+ * backslash, an odd token count), in which case the userinfo has no
+ * usable "ip" and the connect is refused.
  */
 qboolean
 SV_SetConnectIP(char *userinfo, const char *ip)
@@ -170,7 +172,9 @@ SV_SetConnectIP(char *userinfo, const char *ip)
 
 	Info_SetValueForKey(userinfo, "ip", ip);
 
-	/* A pair that does not fit is dropped, with a message. */
+	/* A pair that does not fit is dropped, with a message, and a
+	   malformed string reads another value or none: check what the game
+	   will read. */
 	return strcmp(Info_ValueForKey(userinfo, "ip"), ip) == 0;
 }
 
@@ -213,8 +217,8 @@ SVC_DirectConnect(void)
 	if (!SV_SetConnectIP(userinfo, NET_AdrToString(net_from)))
 	{
 		Netchan_OutOfBandPrint(NS_SERVER, adr,
-				"print\nUserinfo string too long.\n");
-		Com_DPrintf("    rejected connect: no room for the ip pair\n");
+				"print\nBad userinfo string.\n");
+		Com_DPrintf("    rejected connect: the ip pair is not usable\n");
 		return;
 	}
 

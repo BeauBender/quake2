@@ -365,8 +365,6 @@ TEST(sv_rcon_log_line)
  * (SV_SetConnectIP, sv_conless.c): the game reads the first "ip" pair,
  * so the engine's must be the only one, or the connect refused.
  */
-qboolean SV_SetConnectIP(char *userinfo, const char *ip);
-
 /* Number of pairs in an info string whose key is exactly key. */
 static int
 count_pairs(const char *info, const char *key)
@@ -452,6 +450,16 @@ TEST(sv_connect_ip_pair)
 	T_EQ_STR(Info_ValueForKey(info, "ip"), "1.2.3.4");
 	T_EQ_STR(Info_ValueForKey(info, "IP"), "9.9.9.9");
 
+	/* A userinfo the game would not read the engine's pair from is
+	   refused: a bare key at the end, a trailing backslash, an odd token
+	   count. */
+	Q_strlcpy(info, "\\name\\bob\\x", sizeof(info));
+	T_CHECK(!SV_SetConnectIP(info, "1.2.3.4"));
+	Q_strlcpy(info, "\\name\\bob\\", sizeof(info));
+	T_CHECK(!SV_SetConnectIP(info, "1.2.3.4"));
+	Q_strlcpy(info, "\\name\\bob\\skin", sizeof(info));
+	T_CHECK(!SV_SetConnectIP(info, "1.2.3.4"));
+
 	/* A longer key that starts with "ip" is not an ip pair. */
 	Q_strlcpy(info, "\\ipx\\keep\\name\\bob", sizeof(info));
 	T_CHECK(SV_SetConnectIP(info, "1.2.3.4"));
@@ -483,4 +491,38 @@ TEST(sv_connect_ip_length)
 	T_CHECK(SV_SetConnectIP(info, "1.2.3.4"));
 	T_EQ_INT(count_pairs(info, "ip"), 1);
 	T_EQ_STR(Info_ValueForKey(info, "ip"), "1.2.3.4");
+}
+
+/*
+ * The refusal in SVC_DirectConnect: a connect whose userinfo cannot carry
+ * the engine's "ip" pair gets one reply, the refusal, and no client slot.
+ * Reached through the loopback, which skips the challenge check.
+ */
+TEST(sv_connect_ip_refusal_reply)
+{
+	t_text_t pin = {0};
+	t_text_t junk = {0};
+	client_t *saved_clients = svs.clients;
+	static client_t clients[2];
+	int i;
+	int used = 0;
+
+	memset(clients, 0, sizeof(clients));
+	svs.clients = clients;
+	Cvar_FullSet("maxclients", "2", CVAR_SERVERINFO | CVAR_LATCH);
+	drain_replies(&junk);
+	t_text_free(&junk);
+
+	client_sends("connect 34 1 1 \"\\name\\bob\\x\"");
+	T_EQ_INT(drain_replies(&pin), 1);
+	T_CHECK(pin.data && strstr(pin.data, "print\\nBad userinfo string.\\n") != NULL);
+	t_text_free(&pin);
+
+	for (i = 0; i < 2; i++)
+	{
+		used += clients[i].state != cs_free;
+	}
+
+	T_EQ_INT(used, 0);
+	svs.clients = saved_clients;
 }
