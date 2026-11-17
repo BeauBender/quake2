@@ -85,6 +85,16 @@
 #                                the totals at the renderer's close (metal_stats
 #                                in ref_metal, the shim's "mgl:" line);
 #                                presented is frames less no_drawable
+#   presented_rate, rate_window_s, rate_presented, held
+#                                the presented frames a second over a window
+#                                (metal_stats, TASK161: ref_metal's
+#                                "metal_rate:" line, the shim's "mgl: rate:"
+#                                line), its length, the frames presented in
+#                                it, and the frames over the run that found
+#                                every present slot held; only with a window
+#                                longer than 0 s (cvar.metal_rate_start is
+#                                where it begins, seconds after the first
+#                                frame, default 1)
 #   scaler_ms, scaler_ms_p90, scaler_ms_n
 #                                the MetalFX scaler's GPU time per timed view
 #                                (metal_stats 2), past skip lines
@@ -94,9 +104,9 @@
 #                                the frames that traced a ray
 #   rtao_ms, rtao_ms_p90, rtao_ms_n
 #                                the AO pass's GPU time per frame
-# The engine prints no time per frame, so the counting window is in frames
-# (skip, after_frame), and a rate over a window of seconds, as FIX51's probe
-# counted, is not available.
+# The engine prints no time per frame, so the counting window of the pass
+# times is in frames (skip, after_frame); the presented rate has its window
+# of seconds in the engine (metal_rate_start).
 #
 # Every value handed to the engine holds only A-Z a-z 0-9 _ . / - (the
 # engine re-joins its command line unquoted), as scripts/pins.sh requires.
@@ -790,6 +800,16 @@ adapter_metrics() {
 			st = 1; fr = f[2]; nd = f[4]; sk = f[8]
 		}
 		s ~ /^mgl: [0-9]+ command buffers failed/ { split(s, f, " "); fl = f[2] }
+		{ s = from("ref_metal: metal_rate: ") }
+		s ~ /^ref_metal: metal_rate: [0-9]+(\.[0-9]+)? presented a second over [0-9]+(\.[0-9]+)? s from [0-9]+(\.[0-9]+)? s, [0-9]+ presented, [0-9]+ with every present slot held, [0-9]+ without a drawable/ {
+			split(s, f, " ")
+			rt = 1; rr = f[3]; rw = f[8]; rp = f[13]; rh = f[15]
+		}
+		{ s = from("mgl: rate: ") }
+		s ~ /^mgl: rate: [0-9]+(\.[0-9]+)? presented a second over [0-9]+(\.[0-9]+)? s from [0-9]+(\.[0-9]+)? s, [0-9]+ presented, [0-9]+ with every present slot held, [0-9]+ without a drawable/ {
+			split(s, f, " ")
+			rt = 1; rr = f[3]; rw = f[8]; rp = f[13]; rh = f[15]
+		}
 		{ s = from("ref_metal: rt shadows: frame ") }
 		s ~ /^ref_metal: rt shadows: frame [0-9]+: / {
 			n = split(s, f, " ")
@@ -810,6 +830,8 @@ adapter_metrics() {
 				printf "metric.frames=%s\nmetric.no_drawable=%s\nmetric.presented=%d\n", fr, nd, fr - nd
 				printf "metric.skipped=%s\nmetric.failed=%d\n", sk, fl + 0
 			}
+			if (rt && num(rr) && num(rw) && rw + 0 > 0)
+				printf "metric.presented_rate=%s\nmetric.rate_window_s=%s\nmetric.rate_presented=%s\nmetric.held=%s\n", rr, rw, rp, rh
 		}' "${_qm_log:?}" || return 1
 	for _qm_n in scaler_ms rts_ms rts_traced_ms rtao_ms; do
 		[ -s "$_qm_d/$_qm_n" ] || continue

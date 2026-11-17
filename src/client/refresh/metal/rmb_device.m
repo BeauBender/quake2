@@ -351,6 +351,7 @@ rmb_present_take(int w, int h)
 
 	if (slot < 0)
 	{
+		rmb_counts.present_held++;   /* every slot held (TASK161) */
 		return nil;
 	}
 

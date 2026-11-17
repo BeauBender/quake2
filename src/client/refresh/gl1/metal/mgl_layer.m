@@ -72,6 +72,8 @@
 
 #include "mgl_internal.h"
 #include "mgl_hold.h"
+#include "../../metal/common/mtl_rate.h"
+#include <time.h>
 
 #if !__has_feature(objc_arc)
 #error "mgl_layer.m is written for ARC: compile it with -fobjc-arc"
@@ -117,6 +119,10 @@ static id<MTLBuffer> mgl_readbuf;          /* shared, for glReadPixels */
 /* Counters, printed when the context is destroyed. */
 static unsigned long count_frames, count_no_drawable, count_skipped, count_ring_full;
 static atomic_ulong count_failed;          /* command buffers ended in error (mgl_watch) */
+static unsigned long count_held;           /* frames with display sync off that found every present slot held (TASK161) */
+static mtl_rate_t rate_window;             /* the presented-rate window, kept only with rate_stats (TASK161) */
+static int rate_stats;                     /* metal_stats was on at context creation: sample, and print the rate line */
+static double rate_start;                  /* metal_rate_start, seconds */
 static unsigned long count_present_late;   /* presents whose wait for their frame was ended at the bound (FIX69) */
 static unsigned long count_cap_late;       /* frames whose second wait with display sync off timed out (FIX68) */
 static int count_most_apart;               /* the most frames on the GPU, the new one counted, as a frame began with display sync off */
@@ -467,6 +473,7 @@ mgl_present_take(int w, int h)
 
 	if (slot < 0)
 	{
+		count_held++;   /* every slot held (TASK161) */
 		return nil;
 	}
 
@@ -868,7 +875,9 @@ mgl_release_all(void)
 int
 mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t errlen)
 {
-	(void)config;   /* depth and stencil are always depth32Float_stencil8; no MSAA yet */
+	/* depth and stencil are always depth32Float_stencil8; no MSAA yet */
+	rate_stats = config->rate_stats;
+	rate_start = config->rate_start;
 
 	if (mgl_ready)
 	{
@@ -980,7 +989,8 @@ mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t
 	}
 
 	count_frames = count_no_drawable = count_skipped = count_ring_full = 0;
-	count_present_late = count_cap_late = 0;
+	count_present_late = count_cap_late = count_held = 0;
+	mtl_rate_reset(&rate_window);
 	count_most_apart = 0;
 	atomic_store(&count_failed, 0);
 	mgl_ready = 1;
@@ -1635,6 +1645,13 @@ mgl_layer_present(void)
 
 	frame_open = frame_passes = 0;
 	count_frames++;
+
+	if (rate_stats)
+	{
+		mtl_rate_frame(&rate_window, clock_gettime_nsec_np(CLOCK_UPTIME_RAW), count_frames - count_no_drawable,
+			rate_start);
+	}
+
 	return 1;
 }
 
@@ -1703,6 +1720,17 @@ mgl_layer_destroy(void)
 				"%lu present waits ended; with display sync off at most %d frames on the GPU, %lu past the cap\n",
 				count_frames, count_no_drawable, count_skipped, count_ring_full, count_present_late,
 				count_most_apart, count_cap_late);
+
+		if (rate_stats && rate_window.seen)
+		{
+			char rate_line[256];
+
+			if (mtl_rate_format("mgl: rate:", &rate_window, rate_start, count_held, count_no_drawable,
+					rate_line, sizeof(rate_line)))
+			{
+				fprintf(stderr, "%s\n", rate_line);
+			}
+		}
 
 		if (atomic_load(&count_failed))
 		{

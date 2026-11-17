@@ -762,8 +762,21 @@ has) is not drawn.
   line on every 60th scaled view and on each view whose history is
   dropped: the mode, the input and output sizes, the reasons for the drop
   and the GPU time of the scaler's pass (the pass then runs in a command
-  buffer of its own); `2` prints that line on every scaled view. Defaults
-  to `0`.
+  buffer of its own); `2` prints that line on every scaled view. With any
+  value but `0` it also prints, at shutdown, one line on the frames
+  presented a second over a window (see `metal_rate_start`), the frames
+  that found every present slot held with display sync off, and the frames
+  without a drawable; the OpenGL 1.4 renderer's Metal shim (`gl1-metal`)
+  reads this cvar once, when its context is made, for that line only.
+  Defaults to `0`.
+
+* **metal_rate_start**: The seconds after the first frame ended at which
+  the window of the presented-rate line of `metal_stats` begins, in the
+  Metal renderer and the OpenGL 1.4 renderer's Metal shim. The first
+  frame to end that long after the first frame is the window's first
+  sample and the last frame before shutdown its last. A run shorter than
+  this has no window. Read once, when the renderer starts. Does nothing
+  while `metal_stats` is `0`. Defaults to `1`.
 
 * **metal_lightmap_filter**: How the Metal renderer filters the lightmaps
   of the world. `0` (the default) is the bilinear filter every renderer
