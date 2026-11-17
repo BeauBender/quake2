@@ -20,8 +20,10 @@ scenario's. The user-facing description is in `doc/100_renderpins.md`,
   `Esc`, the console key and a key bound to `quit` do nothing. The analog
   input converges on `IN_Move`, which returns at once (and drops the gathered
   mouse movement) while the gate is closed: no mouse, stick or gyro movement
-  reaches the view or the move. A focus change, the window being shown and a
-  gamepad being removed no longer write `paused` in a pin run.
+  reaches the view or the move. A focus change and the window being shown no
+  longer write `paused` in a pin run, and a gamepad removed or a joystick
+  added, a battery report and on iOS a safe-area or pixel-size change leave
+  at once (round 1, below).
 - **Keyed on.** `IN_InputOpen()` is `!CL_PinsRun()`: `pins_capture` above 0
   or `pins_replay` given, latched from the command line by `CL_PinsLatch`
   before any config, console command or server text runs. It is not a cvar,
@@ -51,7 +53,7 @@ scenario's. The user-facing description is in `doc/100_renderpins.md`,
   it is derived from, since every scenario plays the same demo. A new demo
   gets its line from a clean record (its `timedemo.txt`). A demo with no line
   (a `make-demo` demo such as `water.dm2`, whose count changes each time it is
-  made; `demo2.dm2`), the cinematic (no timedemo line) and a record made
+  made), the cinematic (no timedemo line) and a record made
   before this card (no `demo` line) are not checked: `record` says so in one
   line on stderr, `replay` in the `frames-check` line of `replay.txt`. The guard covers them.
 
@@ -92,3 +94,63 @@ printed its count with `Com_Printf`, whose console notify lines are drawn
 on the screen: that record rendered 689 frames but differed in 22 of 23
 frames (worst 0.001911) and was set aside; the hook's count went to stderr
 afterwards.
+
+## Review round 1
+
+The panel's findings and what each became, every one with its test red
+first.
+
+- **`replay.txt` said "checked" for a record that was not** (correctness
+  I1). The `frames-check` line was written before the scenario's count was
+  looked up. `replay` now looks it up first and writes `frames-check
+  demo1.dm2 against world.cfg (689)` when the count is checked, or
+  `frames-check unchecked: world.cfg names no count for water.dm2`. Red:
+  `FAIL: a checked replay must say so with the count, got: frames-check
+  demo1.dm2 against world.cfg`.
+- **A gamepad pulled out still printed into the frames** (correctness I2,
+  N3). `SDL_EVENT_GAMEPAD_REMOVED` shut the controller down and started it
+  again, and both print; the host record above shows that a print spoils
+  the frames while the count stays right. In a pin run that case, and
+  `SDL_EVENT_JOYSTICK_ADDED`, `SDL_EVENT_JOYSTICK_BATTERY_UPDATED` and on
+  iOS `SDL_EVENT_WINDOW_SAFE_AREA_CHANGED` and
+  `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` (a `vid_restart`), now start with
+  `if (!IN_InputOpen()) break;`: no pause, no shutdown or init of the
+  gamepad, nothing printed, no restart. `sdl3.c` cannot be unit-tested, so
+  `tests/check-input-gate.sh` checks it from the source: each of those five
+  cases must begin with that gate. Red against the round-0 source: five
+  lines, for example `case SDL_EVENT_GAMEPAD_REMOVED: its first statement
+  is not the gate: if (controller && ...`. The comment of `IN_InputOpen`
+  now claims only this. What stays open in a pin run, and why no frame
+  changes: `SDL_EVENT_QUIT` quits (wanted); a focus change still releases
+  the held keys (`Key_MarkAllUp`, which calls no key handler) and mutes the
+  sound (`s_initsound 0` in a pin run); its `ogg toggle` needs music
+  playing outside a demo (`cl.attractloop` is true in a demo); a window
+  move resets the refresh rate, which a timedemo does not use.
+- **A direct key call would get past the gate** (correctness N1). The same
+  check fails on any `Key_Event(` or `Char_Event(` call in
+  `src/client/input/` outside `ingate.c`, comments and strings aside. Its
+  mutants: a direct `Key_Event(`, `Key_Event (` and `Char_Event(` added to
+  `sdl3.c`, and for each of the five cases its gate inverted, removed and
+  its label renamed; all 18 must fail it, and do.
+- **A count `[` cannot compare passed** (security N1). `rendered_frames`
+  now takes a count of 1 to 9 digits without a leading zero (what the
+  engine's `%i` prints); `99999999999999999999`, `0689` and `1234567890`
+  are no count. Red: `FAIL: a count of '99999999999999999999' frames must
+  fail, not pass`.
+- **A record with no `demo` line said nothing on stderr** (security N2).
+  Its replay now prints `pins: the record world/gl1/rec1 names no demo
+  (made before FIX48); its 794 rendered frames are not checked`. Written
+  with I1's test and fixed in the same edit, so its red was not seen on
+  its own.
+- **Loose frames lines were skipped** (security N3, correctness N2). A
+  line that looks like a frames line in any case (`// Frames`, `DEMO1.dm2`,
+  `.DM2`) and is not the lower-case form is refused; so is any frames line
+  below the first line that is not a comment. Red: `FAIL: the frames line
+  '// Frames demo1.dm2 689' must be refused`.
+- **`dlights` was never count-checked on `demo2.dm2`** (security N4).
+  `dlights.cfg` now has `// frames demo2.dm2 618`, from a seeded
+  record on the bare-metal host (`soft`, `PINS_SEED=1`,
+  `PINS_DEMO=demo2.dm2`, `PINS_EVERY=7`, the card's own pin store): `618 frames, 10.3 seconds: 60.0 fps`, 89 frames captured; a second record with the line in place completes.
+- **Files outside the card's list** (spec I1): accepted. The gate file,
+  its header and Makefile entries exist because `sdl3.c` cannot be
+  unit-tested; the cfg lines are the scenario counts the card asks for.
