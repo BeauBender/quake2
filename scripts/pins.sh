@@ -1,3 +1,5 @@
+    # a frames line that does not parse stops the record before an engine runs (FIX48)
+    cfg_frames "$scen_dir/$scenario.cfg" "${PINS_DEMO:-demo1.dm2}" > /dev/null || exit 1
 #!/bin/bash
 # scripts/pins.sh -- the renderer-API pin harness driver (TASK27; INFORM8/9).
 # bash 3.2. Records reference frames from a renderer over a scenario, compares
@@ -453,6 +455,57 @@ judge_pin() {
         reason="the frames came from the Metal shim build of ref_gl1; record them as gl1-metal"
     fi
 }
+# ---- the rendered-frame count (FIX48) ----
+# cfg_frames <cfg> <demo>: the number of frames the scenario expects the
+# engine to render when it plays <demo>, from the "// frames <demo> <count>"
+# line of its header comment; empty when it names none for <demo>. A line
+# that looks like one ("//", "frames", then a word ending in .dm2 or .cin)
+# and does not parse, or a second one for the same demo, is an error, never
+# skipped. The callers take the value with
+# "|| exit 1", so a death inside $(...) stops them as well.
+cfg_frames() {
+    local line want="" fr d c
+    while IFS= read -r line || [ -n "$line" ]; do
+        case $line in
+            ''|//*) ;;
+            *) break;;
+        esac
+        if [[ $line =~ ^[[:space:]]*//[[:space:]]*frames[[:space:]]+[^[:space:]]+\.(dm2|cin) ]]; then
+            [[ $line =~ ^//\ frames\ [A-Za-z0-9_][A-Za-z0-9_.-]*\.(dm2|cin)\ [1-9][0-9]{0,8}$ ]] && [[ $line != *..* ]] ||
+                die "$1: a frames line is '// frames <demo> <count>' with single spaces, got: $line"
+            read -r fr fr d c <<< "$line"
+            if [ "$d" = "$2" ]; then
+                [ -z "$want" ] || die "$1: two frames lines for $2"
+                want=$c
+            fi
+        fi
+    done < "$1"
+    echo "$want"
+}
+# rendered_frames <timedemo.txt>: the count of the one "<n> frames, <s>
+# seconds: <f> fps" line the engine printed when the demo ended (the
+# timedemo, cl_network.c); empty when there is not exactly one
+rendered_frames() {
+    [ -f "$1" ] || return 0
+    awk '/^[0-9]+ frames, [0-9.]+ seconds: [0-9.]+ fps$/ { n++; c = $1 } END { if (n == 1) print c }' "$1"
+}
+# judge_frames <timedemo.txt> <scenario> <demo> <what>: sets reason when the
+# rendered-frame count in <timedemo.txt> is not the one the scenario expects
+# for <demo>; <what> names the run in the reason ("the engine", "the record
+# x"). With no "// frames" line for <demo> nothing is checked, and one line
+# on stderr says so.
+judge_frames() {
+    local want got
+    want=$(cfg_frames "$scen_dir/$2.cfg" "$3") || exit 1
+    got=$(rendered_frames "$1")
+    if [ -z "$want" ]; then
+        echo "pins: $2.cfg names no rendered-frame count for $3 ('// frames $3 <count>'); the ${got:-uncounted} rendered frames are not checked" >&2
+    elif [ -z "$got" ]; then
+        reason="$4 printed no rendered-frame count (exactly one 'N frames, ... fps' line), $2.cfg expects $want for $3"
+    elif [ "$got" -ne "$want" ]; then
+        reason="$4 rendered $got frames, $2.cfg expects $want for $3 (input reached the run, or the demo paused)"
+    fi
+}
 # check_seed: PINS_SEED, when set, is 1 to 9 digits without a leading zero
 # (but 0 itself): 01 and 1 are one engine seed and would be two pin ids
 check_seed() {
@@ -502,9 +555,10 @@ cmd_record() {
     rm -rf "$out"; mkdir -p "$out"
     # the settings the pin id does not spell out, written before the engine runs
     local hd; hd=$(hidpi) || exit 1
-    echo "hidpi $hd" > "$out/settings.txt"
+    { echo "hidpi $hd"; echo "demo ${PINS_DEMO:-demo1.dm2}"; } > "$out/settings.txt"
     run_engine "$bin" "$out" "$limit"
     judge_pin "$out" "$renderer" "$limit"
+    if [ -z "$reason" ]; then judge_frames "$out/timedemo.txt" "$scenario" "${PINS_DEMO:-demo1.dm2}" "the engine"; fi
     if [ -n "$reason" ]; then
         echo "$reason" > "$out/incomplete"
         die "$reason; the pin in $out is incomplete (see $out/engine.log)"
@@ -684,6 +738,16 @@ cmd_replay() {
     [ "$th_w" -eq "${PINS_WIDTH:-640}" ] && [ "$th_h" -eq "${PINS_HEIGHT:-480}" ] ||
         die "the trace is ${th_w}x${th_h}, PINS_WIDTH x PINS_HEIGHT is ${PINS_WIDTH:-640}x${PINS_HEIGHT:-480}$pick"
     [ "$th_every" -eq "${PINS_EVERY:-30}" ] || die "the trace was captured every $th_every frames, PINS_EVERY is ${PINS_EVERY:-30}$pick"
+    # the record's rendered-frame count, judged as record judges it (FIX48), by
+    # the demo its settings.txt names; a record made before FIX48 names none
+    local reason="" rdemo
+    rdemo=$(sed -n 's/^demo \([A-Za-z0-9_][A-Za-z0-9_.-]*\)$/\1/p' "$tdir/settings.txt" 2>/dev/null | tail -n 1)
+    if [ -z "$rdemo" ]; then
+        echo "pins: the record $scenario/$from/$trace_id names no demo (made before FIX48); its rendered frames are not checked" >&2
+    else
+        judge_frames "$tdir/timedemo.txt" "$scenario" "$rdemo" "the record $scenario/$from/$trace_id"
+        [ -z "$reason" ] || die "$reason; it is not replayed"
+    fi
     # the replay's own pin: never a live record's directory, never through a link
     # the seed is part of the id, as it is of a record's: two seeds are two pins
     local rid; rid="$(engine_sha)-replay-$from-$trace_id"
@@ -1868,7 +1932,9 @@ cmd_make_demo() {
 
 # fake_engine <path> <renderer to report or "-"> <final command>: copies a.tga
 # as one frame with its manifest line into the pins_dir it is given (reporting the
-# vid_renderer it was given, or the renderer named), then runs the command
+# vid_renderer it was given, or the renderer named), prints the
+# timedemo's rendered-frame line (FAKE_FRAMES frames, default 689, none for
+# no line), then runs the command
 fake_engine() {
     printf '%s\n' '#!/bin/bash' \
         'while [ $# -gt 0 ]; do case $1 in pins_dir) d=$2;; vid_renderer) r=$2;; pins_scenario) s=$2;; esac; shift; done' \
@@ -3197,7 +3263,7 @@ st_hidpi() { # TASK118: vid_highdpiaware 0 unless PINS_HIDPI=1, which alone chan
     PINS_BASEDIR="$tmp/gd" cmd_record gl1 world >/dev/null || st_fail "record must pass" || return 1
     PINS_HIDPI=1 PINS_BASEDIR="$tmp/gd" cmd_record gl1 world >/dev/null || st_fail "record with PINS_HIDPI=1 must pass" || return 1
     d1="$PINS_STORE/world/gl1/$(PINS_HIDPI=1 run_id world 1)"
-    [ "$(cat "$PINS_STORE/world/gl1/$cid/settings.txt")" = "hidpi 0" ] && [ "$(cat "$d1/settings.txt")" = "hidpi 1" ] &&
+    grep -qx "hidpi 0" "$PINS_STORE/world/gl1/$cid/settings.txt" && grep -qx "hidpi 1" "$d1/settings.txt" &&
         [ -f "$PINS_STORE/world/gl1/$cid/complete" ] && [ -f "$d1/complete" ] ||
         st_fail "settings.txt must hold hidpi 0 and hidpi 1 in two complete pins" || return 1
     # compare finds the candidate of these settings, and refuses a value it cannot place

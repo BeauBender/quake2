@@ -66,3 +66,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK147](../runbook/TASK147.md): the iOS display is the safe rectangle; the checks on a physical host
 - [TASK162](../runbook/TASK162.md): water reflections mark their pixels in the G-buffer raster
 - [TASK161](../runbook/TASK161.md): ref_metal and the shim print presented frames a second; presented fps is the headline metric of the gl1-metal vsync0 bench cases
+- [FIX48](../runbook/FIX48.md): the pin harness keeps keyboard and mouse input out of a record, and checks the rendered-frame count

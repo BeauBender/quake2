@@ -57,6 +57,14 @@ Rules:
 - A scenario that cannot be deterministic says so in a `// nondeterministic:`
   line and is accepted at a looser threshold, recorded with the pin, or,
   like `dlights`, is recorded with `PINS_SEED` and judged only seeded.
+- A scenario's header comment ends with `// frames <demo> <count>` for each
+  demo it is recorded with whose count is fixed: the frames the engine
+  renders playing it (`timedemo.txt`), 689 for `demo1.dm2` in every
+  scenario. `record` and `replay` fail when a run rendered another number
+  (FIX48, `doc/100_renderpins.md`, *Input and the rendered-frame count*).
+  A made demo such as `water.dm2`, `demo2.dm2` and the cinematic have no
+  line and are not checked. A new scenario copies the line of the one it
+  is derived from.
 
 ## Content
 

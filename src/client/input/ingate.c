@@ -38,19 +38,25 @@
 qboolean
 IN_InputOpen(void)
 {
-	return true;
+	return !CL_PinsRun();
 }
 
 /* Key_Event, when input is open; dropped otherwise */
 void
 IN_KeyEvent(int key, qboolean down, qboolean special)
 {
-	Key_Event(key, down, special);
+	if (IN_InputOpen())
+	{
+		Key_Event(key, down, special);
+	}
 }
 
 /* Char_Event, when input is open; dropped otherwise */
 void
 IN_CharEvent(int key)
 {
-	Char_Event(key);
+	if (IN_InputOpen())
+	{
+		Char_Event(key);
+	}
 }

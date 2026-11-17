@@ -1325,7 +1325,9 @@ IN_Update(void)
 			{
 				Key_MarkAllUp();
 
-				if (windowed_pauseonfocuslost->value != 1)
+				/* a click into another window is input too: a pin run
+				   (FIX48) is never paused or unpaused by a focus change */
+				if (IN_InputOpen() && windowed_pauseonfocuslost->value != 1)
 				{
 					Cvar_SetValue("paused", 1);
 				}
@@ -1346,7 +1348,7 @@ IN_Update(void)
 			case SDL_EVENT_WINDOW_FOCUS_GAINED:
 			{
 
-				if (windowed_pauseonfocuslost->value == 2)
+				if (IN_InputOpen() && windowed_pauseonfocuslost->value == 2)
 				{
 					Cvar_SetValue("paused", 0);
 				}
@@ -1385,7 +1387,7 @@ IN_Update(void)
 
 			case SDL_EVENT_WINDOW_SHOWN:
 			{
-				if (cl_unpaused_scvis->value > 0)
+				if (IN_InputOpen() && cl_unpaused_scvis->value > 0)
 				{
 					Cvar_SetValue("paused", 0);
 				}
@@ -1535,7 +1537,11 @@ IN_Update(void)
 
 			case SDL_EVENT_GAMEPAD_REMOVED :
 				if (controller && event.gdevice.which == SDL_GetJoystickID(SDL_GetGamepadJoystick(controller))) {
-					Cvar_SetValue("paused", 1);
+					/* a pin run (FIX48) is never paused by the window system */
+					if (IN_InputOpen())
+					{
+						Cvar_SetValue("paused", 1);
+					}
 					IN_Controller_Shutdown(true);
 					IN_Controller_Init(false);
 				}
@@ -2151,6 +2157,14 @@ IN_Move(usercmd_t *cmd)
 {
 	static float old_mouse_x;
 	static float old_mouse_y;
+
+	/* a pin run (FIX48): no mouse, stick or gyro movement reaches the
+	   view or the move; what was gathered is dropped */
+	if (!IN_InputOpen())
+	{
+		mouse_x = mouse_y = 0;
+		return;
+	}
 
 	if (m_filter->value)
 	{
