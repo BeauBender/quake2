@@ -23,6 +23,15 @@ ships with releases; `docs/` (this directory) is for working on the code.
   (`.github/scripts/codeql-changes.sh`, tested by
   `tests/check-codeql-changes.sh`). Cppcheck always runs. A newer push to a
   pull request cancels the older run (`docs/runbook/FIX66.md`).
+- Card labels: `.github/workflows/card-close-labels.yml` runs when an issue
+  is closed, by any route (the ship path, `gh issue close`, the web UI). A
+  card closed as completed, and not `state:promoted`, gets `state:done`; any
+  closed card loses `state:backlog`, `state:staged`, `state:in-progress` and
+  `state:review`; an issue with no `state:*` label is left alone. It has
+  `issues: write` only, uses no action, and takes nothing from the event but
+  the issue number and close reason. `tests/check-card-close-labels.sh`
+  checks its shape and its label decision offline
+  ([FIX108](runbook/FIX108.md)).
 
 ## Source (`src/`)
 
