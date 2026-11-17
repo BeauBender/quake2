@@ -604,7 +604,7 @@ test_greyed_items_cannot_be_changed(void)
 		"color intensity", "min. light level", "overbrights", "color light", "bloom",
 		"dynamic light", "MetalFX scaler", "MetalFX scale", "frame generation", "denoiser",
 		"water reflections",
-		"AO trace size", "AO rays"
+		"AO trace size", "AO rays", "colour space"
 	};
 	static const char *const renderers[] = { "soft", "gl3", "gl1", "metal" };
 
@@ -769,6 +769,52 @@ test_ao_items_apply(void)
 	CHECK(Writes("r_rt_ao_scale") == 0 && Writes("r_rt_ao_rays") == 0, "AO cvars written while greyed");
 }
 
+/* TASK121: the colour space item: always shown, greyed with its reason off Metal, written when it changed */
+static void
+test_colorspace_item(void)
+{
+	static const char *const others[] = { "soft", "gl3", "gl1" };
+
+	for (size_t r = 0; r < sizeof(others) / sizeof(others[0]); r++)
+	{
+		Reset();
+		Open(others[r], "15");
+		CHECK(Greyed("colour space"), "%s: colour space enabled", others[r]);
+		CHECK(!strcmp(Item("colour space")->statusbar, "Metal renderer only"),
+			"%s: reason %s", others[r], Item("colour space")->statusbar);
+		Apply();
+		CHECK(Writes("metal_colorspace") == 0, "%s: metal_colorspace written while greyed", others[r]);
+	}
+
+	/* a value of 1 with a greyed item: apply must not write it (the guard is the only thing that stops it) */
+	Reset();
+	SetCv("metal_colorspace", "1");
+	Open("gl1", "15");
+	CHECK(Greyed("colour space"), "gl1 with 1: colour space enabled");
+	Apply();
+	CHECK(Writes("metal_colorspace") == 0, "gl1 with 1: metal_colorspace written while greyed");
+	SetCv("metal_colorspace", "0");
+
+	Reset();
+	Open("metal", "15");
+	CHECK(!Greyed("colour space"), "colour space greyed on Metal");
+	CHECK(!strcmp(Shown("colour space"), "untagged"), "shows %s", Shown("colour space"));
+	Apply();
+	CHECK(Writes("metal_colorspace") == 0, "written without a change");
+	CHECK(Slide("colour space", 1), "Right");
+	CHECK(!strcmp(Shown("colour space"), "sRGB"), "shows %s", Shown("colour space"));
+	Apply();
+	CHECK(!strcmp(Str("metal_colorspace"), "1"), "metal_colorspace %s", Str("metal_colorspace"));
+
+	Reset();
+	SetCv("metal_colorspace", "1");
+	Open("metal", "15");
+	CHECK(!strcmp(Shown("colour space"), "sRGB"), "shows %s", Shown("colour space"));
+	CHECK(Slide("colour space", -1), "Left");
+	Apply();
+	CHECK(!strcmp(Str("metal_colorspace"), "0"), "metal_colorspace %s", Str("metal_colorspace"));
+}
+
 /*
  * No item is drawn over the banner. Both edges are computed the way the
  * menu draws them, in the menu's own units (pixels / scale): the banner
@@ -914,6 +960,7 @@ main(void)
 	test_scale_survives_a_scaler_move_and_greyed_cvars_stay();
 	test_custom_scale_is_not_a_choice();
 	test_ao_items_apply();
+	test_colorspace_item();
 	test_the_banner_is_clear_of_the_items();
 
 	printf("videomenu_test: %d checks, %d failed\n", checks, failed);

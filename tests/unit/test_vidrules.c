@@ -193,6 +193,30 @@ TEST(vidrules_denoiser_is_always_greyed_today)
 	T_EQ_STR(why(VIDITEM_DENOISER, "metal", 31, 3), "needs ray tracing");
 }
 
+/* TASK121: the Metal layer's colour space: Metal only, then always available */
+TEST(vidrules_colorspace_is_metal_only)
+{
+	static const int masks[] = { 0, 1, 3, 7, 15, 31 };
+
+	for (int m = 0; m < 6; m++)
+	{
+		for (int s = 0; s < 4; s++)
+		{
+			for (int r = 1; r < NREFS; r++)
+			{
+				T_EQ_INT(on(VIDITEM_COLORSPACE, refs[r], masks[m], s), 0);
+				T_EQ_STR(why(VIDITEM_COLORSPACE, refs[r], masks[m], s), "Metal renderer only");
+				T_CHECK(VidRules_Cvar(VIDITEM_COLORSPACE, refs[r]) == NULL);
+			}
+
+			T_EQ_INT(on(VIDITEM_COLORSPACE, "metal", masks[m], s), 1);
+		}
+	}
+
+	T_EQ_STR(VidRules_Cvar(VIDITEM_COLORSPACE, "metal"), "metal_colorspace");
+	T_CHECK(VidRules_Cvar(VIDITEM_COLORSPACE, NULL) == NULL);
+}
+
 /*
  * TASK158: the water reflections' hit shading (r_rt_water_hits). Metal
  * only; greyed with its reason while r_rt_water is off (the scaler

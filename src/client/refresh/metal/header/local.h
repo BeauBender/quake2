@@ -82,6 +82,7 @@ extern cvar_t *r_lerp_list;
 extern cvar_t *r_2D_unfiltered;
 extern cvar_t *r_videos_unfiltered;
 extern cvar_t *r_scale8bittextures;
+extern cvar_t *metal_colorspace;
 extern cvar_t *metal_2d_sharp;
 extern cvar_t *r_retexturing;
 extern cvar_t *r_validation;

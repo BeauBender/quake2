@@ -338,6 +338,7 @@ which refuse a host without the capability they require).
 - [TASK118](../runbook/TASK118.md): HighDPI windows on the bare-metal host
 - [TASK119](../runbook/TASK119.md): Crisp 2D in `ref_metal`
 - [TASK120](../runbook/TASK120.md): Bicubic lightmaps in `ref_metal`
+- [TASK121](../runbook/TASK121.md): the Metal layer's colour space, `metal_colorspace`, measured on a P3 display
 - [TASK122](../runbook/TASK122.md): Particle size cap relative to the resolution in `ref_metal`
 - [TASK131](../runbook/TASK131.md): The dynamic-light shadow pass finds each pixel's surface without an eye ray
 - [TASK132](../runbook/TASK132.md): `soft`'s window captured opaque and not opaque
