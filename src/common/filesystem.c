@@ -762,16 +762,86 @@ FS_FreeSearchPaths(fsSearchPath_t *start, fsSearchPath_t *end)
 }
 
 /*
+ * The bounds of a pak, as pure functions of the size of the file.
+ * Each returns true when the values are acceptable.
+ */
+
+/*
+ * The directory (offset and length from the header) must lie inside
+ * the file, hold a whole number of entries and at most
+ * MAX_FILES_IN_PACK of them. Written without a sum that can wrap.
+ */
+qboolean
+FS_PakDirectoryInBounds(long long packSize, int dirofs, int dirlen)
+{
+	if ((packSize < 0) || (dirofs < 0) || (dirlen <= 0))
+	{
+		return false;
+	}
+
+	if ((dirlen % sizeof(dpackfile_t)) != 0)
+	{
+		return false;
+	}
+
+	if ((dirlen / sizeof(dpackfile_t)) > MAX_FILES_IN_PACK)
+	{
+		return false;
+	}
+
+	if (dirofs > packSize)
+	{
+		return false;
+	}
+
+	return dirlen <= packSize - dirofs;
+}
+
+/*
+ * An entry (position and length) must lie inside the pack.
+ */
+qboolean
+FS_PakEntryInBounds(long long packSize, int offset, int size)
+{
+	if ((packSize < 0) || (offset < 0) || (size < 0))
+	{
+		return false;
+	}
+
+	if (offset > packSize)
+	{
+		return false;
+	}
+
+	return size <= packSize - offset;
+}
+
+/*
+ * The name of a directory entry must hold a terminator inside its field.
+ */
+qboolean
+FS_PakNameTerminated(const char *name, size_t fieldSize)
+{
+	return memchr(name, '\0', fieldSize) != NULL;
+}
+
+/*
  * Takes an explicit (not game tree related) path to a pak file.
  *
  * Loads the header and directory, adding the files at the beginning of the
  * list so they override previous pack files.
+ *
+ * A pak whose header is cut short or whose directory is empty is a fatal
+ * error. A pak whose directory or entries do not fit the file is
+ * reported on the console, its handle closed, and NULL returned so the
+ * caller skips it.
  */
 static fsPack_t *
 FS_LoadPAK(const char *packPath)
 {
 	int i; /* Loop counter. */
 	int numFiles; /* Number of files in PAK. */
+	long long packSize; /* Size of the PAK file. */
 	FILE *handle; /* File handle. */
 	fsPackFile_t *files; /* List of files in PAK. */
 	fsPack_t *pack; /* PAK file. */
@@ -785,7 +855,13 @@ FS_LoadPAK(const char *packPath)
 		return NULL;
 	}
 
-	fread(&header, 1, sizeof(dpackheader_t), handle);
+	if (fread(&header, 1, sizeof(dpackheader_t), handle) != sizeof(dpackheader_t))
+	{
+		fclose(handle);
+		Com_Error(ERR_FATAL, "%s: '%s' is too short.",
+			__func__, packPath);
+		return NULL;
+	}
 
 	if (LittleLong(header.ident) != IDPAKHEADER)
 	{
@@ -807,10 +883,20 @@ FS_LoadPAK(const char *packPath)
 		return NULL;
 	}
 
-	if (numFiles > MAX_FILES_IN_PACK)
+	if ((fseek(handle, 0, SEEK_END) != 0) || ((packSize = ftell(handle)) < 0))
 	{
-		Com_Printf("%s: '%s' has %i > %i files\n",
-			__func__, packPath, numFiles, MAX_FILES_IN_PACK);
+		fclose(handle);
+		Com_Printf("%s: '%s' cannot be sized, skipped\n", __func__, packPath);
+		return NULL;
+	}
+
+	if (!FS_PakDirectoryInBounds(packSize, header.dirofs, header.dirlen))
+	{
+		fclose(handle);
+		Com_Printf("%s: '%s' has a bad directory (offset %i, length %i, "
+				"file size %lld), skipped\n",
+				__func__, packPath, header.dirofs, header.dirlen, packSize);
+		return NULL;
 	}
 
 	info = malloc(header.dirlen);
@@ -822,16 +908,37 @@ FS_LoadPAK(const char *packPath)
 		return NULL;
 	}
 
-	files = Z_Malloc(numFiles * sizeof(fsPackFile_t));
+	if ((fseek(handle, header.dirofs, SEEK_SET) != 0) ||
+		(fread(info, 1, header.dirlen, handle) != (size_t)header.dirlen))
+	{
+		free(info);
+		fclose(handle);
+		Com_Printf("%s: '%s' directory cannot be read, skipped\n",
+			__func__, packPath);
+		return NULL;
+	}
 
-	fseek(handle, header.dirofs, SEEK_SET);
-	fread(info, 1, header.dirlen, handle);
+	/* Check every entry before anything is kept. */
+	for (i = 0; i < numFiles; i++)
+	{
+		if (!FS_PakNameTerminated(info[i].name, sizeof(info[i].name)) ||
+			!FS_PakEntryInBounds(packSize, LittleLong(info[i].filepos),
+				LittleLong(info[i].filelen)))
+		{
+			free(info);
+			fclose(handle);
+			Com_Printf("%s: '%s' entry %i is out of bounds, skipped\n",
+				__func__, packPath, i);
+			return NULL;
+		}
+	}
+
+	files = Z_Malloc(numFiles * sizeof(fsPackFile_t));
 
 	/* Parse the directory. */
 	for (i = 0; i < numFiles; i++)
 	{
-		Q_strlcpy(files[i].name, info[i].name,
-			Q_min(sizeof(files[i].name), sizeof(files[i].name)));
+		Q_strlcpy(files[i].name, info[i].name, sizeof(info[i].name));
 		files[i].offset = LittleLong(info[i].filepos);
 		files[i].size = LittleLong(info[i].filelen);
 	}

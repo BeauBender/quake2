@@ -16,10 +16,10 @@
  *
  * Malformed paks the loader refuses end the process with
  * Com_Error(ERR_FATAL), so they run in a forked child (t_expect_exit).
- * Not covered on purpose: directory entries whose offset or size lie
- * outside the pak, and a dirofs/dirlen beyond the end of the file. The
- * loader does not check them today; that is FIX22 (#120), whose author
- * should extend this file with the refusals it adds.
+ * Directory entries whose offset or size lie outside the pak, a
+ * directory beyond the end of the file and a bad entry count are
+ * skipped with a console line; fs_pak_bounds and fs_pak_bound_functions
+ * cover them (FIX22, #120).
  *
  * =======================================================================
  */
@@ -486,6 +486,58 @@ TEST(fs_pak_bounds)
 		T_CHECK(status != 0);
 		T_CHECK(strstr(out, "is too short") != NULL);
 	}
+}
+
+/* The pure bounds the loader decides with (src/common/filesystem.c). */
+qboolean FS_PakDirectoryInBounds(long long packSize, int dirofs, int dirlen);
+qboolean FS_PakEntryInBounds(long long packSize, int offset, int size);
+qboolean FS_PakNameTerminated(const char *name, size_t fieldSize);
+
+TEST(fs_pak_bound_functions)
+{
+	char name[56];
+
+	/* Directory: ends exactly at the end, one past, one before. */
+	T_CHECK(FS_PakDirectoryInBounds(84, 20, 64));
+	T_CHECK(!FS_PakDirectoryInBounds(84, 21, 64));
+	T_CHECK(FS_PakDirectoryInBounds(85, 20, 64));
+	/* Offset at the end of the file with nothing after it, and past it. */
+	T_CHECK(!FS_PakDirectoryInBounds(84, 84, 64));
+	T_CHECK(!FS_PakDirectoryInBounds(84, 85, 64));
+	/* Length: zero, negative, not a multiple of the entry size. */
+	T_CHECK(!FS_PakDirectoryInBounds(1000, 12, 0));
+	T_CHECK(!FS_PakDirectoryInBounds(1000, 12, -64));
+	T_CHECK(!FS_PakDirectoryInBounds(1000, 12, 63));
+	T_CHECK(!FS_PakDirectoryInBounds(1000, 12, 65));
+	T_CHECK(!FS_PakDirectoryInBounds(1000, -1, 64));
+	T_CHECK(!FS_PakDirectoryInBounds(-1, 0, 64));
+	/* Count limit, one past it, and an offset plus length that would
+	   wrap an int. */
+	T_CHECK(FS_PakDirectoryInBounds(1 << 20, 12, 64 * MAX_FILES_IN_PACK));
+	T_CHECK(!FS_PakDirectoryInBounds(1 << 20, 12, 64 * (MAX_FILES_IN_PACK + 1)));
+	T_CHECK(!FS_PakDirectoryInBounds(0x7fffffffLL, 0x7fffffc0, 64 * 4097));
+	T_CHECK(!FS_PakDirectoryInBounds(0x7fffffffLL, 0x7fffffff, 64));
+
+	/* Entry: ends exactly at the end, one past, by offset and length. */
+	T_CHECK(FS_PakEntryInBounds(84, 76, 8));
+	T_CHECK(!FS_PakEntryInBounds(84, 77, 8));
+	T_CHECK(!FS_PakEntryInBounds(84, 76, 9));
+	T_CHECK(FS_PakEntryInBounds(84, 84, 0));
+	T_CHECK(!FS_PakEntryInBounds(84, 85, 0));
+	T_CHECK(FS_PakEntryInBounds(84, 0, 0));
+	T_CHECK(!FS_PakEntryInBounds(84, -1, 8));
+	T_CHECK(!FS_PakEntryInBounds(84, 76, -1));
+	T_CHECK(!FS_PakEntryInBounds(-1, 0, 0));
+	T_CHECK(!FS_PakEntryInBounds(0x7fffffffLL, 0x7fffffff, 1));
+	T_CHECK(FS_PakEntryInBounds(0x7fffffffLL, 0x7ffffffe, 1));
+
+	/* Name: terminator in the last byte, and none. */
+	memset(name, 'n', sizeof(name));
+	T_CHECK(!FS_PakNameTerminated(name, sizeof(name)));
+	name[sizeof(name) - 1] = '\0';
+	T_CHECK(FS_PakNameTerminated(name, sizeof(name)));
+	name[0] = '\0';
+	T_CHECK(FS_PakNameTerminated(name, sizeof(name)));
 }
 
 /*
