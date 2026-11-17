@@ -203,12 +203,143 @@ mutant()
 	nm=$((nm + 1))
 	if cmp -s "$wf" "$3"; then
 		bad "mutant $1 changes nothing"
-	elif mo=$(lint "$3"); then
+		return 0
+	fi
+	if [ "$2" = run-block ]; then
+		mo=$(runcases "$3") || :
+	else
+		mo=$(lint "$3") || :
+	fi
+	if [ -z "$mo" ]; then
 		bad "mutant $1 passes"
 	elif ! printf '%s\n' "$mo" | grep -q "^$2: "; then
 		bad "mutant $1 is not refused under $2: $mo"
 	fi
 }
+
+# cutrun FILE: the run block of FILE, the lines after its first "run: |"
+# key up to the first line indented no deeper than that key, with the
+# block's own indentation taken off.
+cutrun()
+{
+	awk '
+	function ind(s) { match(s, /^ */); return RLENGTH }
+	on && $0 !~ /^[ \t]*$/ && ind($0) <= key { exit }
+	on {
+		if (cut < 0 && $0 !~ /^[ \t]*$/)
+			cut = ind($0)
+		print (cut < 0 ? "" : substr($0, cut + 1))
+	}
+	!on && $0 ~ /^[ \t]*(-[ \t]+)?run[ \t]*:[ \t]*\|-?[ \t]*$/ {
+		on = 1
+		cut = -1
+		key = ind($0) + ($0 ~ /^[ \t]*-[ \t]/ ? 2 : 0)
+	}' "$1"
+}
+
+# The stub gh for the run block: it logs its arguments, and any line it
+# can read from stdin, to $GHLOG; gh api serves the labels file $GHLABELS
+# for a labels path and the issue state $GHSTATE for the issue itself; gh
+# issue edit fails as $GHFAIL says: add (the add fails), kept (a removal
+# fails and the label stays), gone (a removal fails, the label is gone).
+mkdir "${tmp:?}/bin"
+printf '%s\n' '#!/bin/sh' \
+	'printf "%s\n" "$*" >> "$GHLOG"' \
+	'if read -r x; then printf "stdin %s\n" "$x" >> "$GHLOG"; fi' \
+	'case $1 in' \
+	'api)' \
+	'	case "$*" in' \
+	'	*/labels*) cat "$GHLABELS" ;;' \
+	'	*) printf "%s\n" "$GHSTATE" ;;' \
+	'	esac' \
+	'	;;' \
+	'issue)' \
+	'	case $4:$GHFAIL in' \
+	'	--add-label:add | --remove-label:kept) exit 1 ;;' \
+	'	--remove-label:gone)' \
+	'		grep -Fxv -- "$5" "$GHLABELS" > "$GHLABELS.new" || :' \
+	'		mv "$GHLABELS.new" "$GHLABELS"' \
+	'		exit 1' \
+	'		;;' \
+	'	esac' \
+	'	;;' \
+	'esac' > "${tmp:?}/bin/gh"
+chmod +x "${tmp:?}/bin/gh"
+
+# rcase NAME STATUS EDITS STATE FAIL N REASON LABEL...: the run block, run
+# with /bin/sh -e as Actions runs it, for issue N closed with REASON, now
+# in STATE, with these labels and the stub failing as FAIL says (- for
+# never), exits STATUS, and its gh issue edit calls, joined with ';', are
+# EDITS ("none": no gh call at all). No gh call may read its stdin (the
+# decisions file). Prints one "run-block: " line per failure.
+rcase()
+{
+	nr=$((nr + 1))
+	name=$1 want=$2 wedits=$3 state=$4 fail=$5 num=$6 reason=$7
+	shift 7
+	c=${tmp:?}/case
+	rm -rf "${c:?}"
+	mkdir "${c:?}" "${c:?}/rt"
+	: > "${c:?}/labels"
+	for l in "$@"; do
+		printf '%s\n' "$l" >> "${c:?}/labels"
+	done
+	: > "${c:?}/log"
+	[ "$fail" != - ] || fail=
+	rst=0
+	PATH="${tmp:?}/bin:$PATH" GHLOG="${c:?}/log" GHLABELS="${c:?}/labels" \
+		GHSTATE="$state" GHFAIL="$fail" RUNNER_TEMP="${c:?}/rt" GH_REPO=o/r \
+		N="$num" REASON="$reason" /bin/sh -e "${tmp:?}/run.sh" \
+		< /dev/null > "${c:?}/out" 2>&1 || rst=$?
+	edits=$(grep '^issue edit' "${c:?}/log" | tr '\n' ';') || :
+	if [ "$rst" -ne "$want" ]; then
+		echo "run-block: case $name: exit status $rst, want $want: $(tr '\n' ' ' < "${c:?}/out")"
+	fi
+	if [ "$wedits" = none ]; then
+		if [ -s "${c:?}/log" ]; then
+			echo "run-block: case $name: gh was called: $(tr '\n' ';' < "${c:?}/log")"
+		fi
+	elif [ "$edits" != "$wedits" ]; then
+		echo "run-block: case $name: edits '$edits', want '$wedits'"
+	fi
+	if grep -q '^stdin ' "${c:?}/log"; then
+		echo "run-block: case $name: a gh call read its stdin"
+	fi
+}
+
+# runcases FILE: the run block of FILE passes sh -n and every case.
+runcases()
+{
+	cutrun "$1" > "${tmp:?}/run.sh"
+	if ! grep -q 'card-close-labels: decide begin' "${tmp:?}/run.sh"; then
+		echo "run-block: no run block holding decide"
+		return 0
+	fi
+	if ! e=$(/bin/sh -n "${tmp:?}/run.sh" 2>&1); then
+		echo "run-block: sh -n: $e"
+		return 0
+	fi
+	e7='issue edit 7'
+	rcase bad-number 1 none closed - '7;id' completed state:backlog
+	rcase completed 0 "$e7 --add-label state:done;$e7 --remove-label state:backlog;" \
+		closed - 7 completed state:backlog gate:auto
+	rcase completed-all 0 "$e7 --add-label state:done;$e7 --remove-label state:backlog;$e7 --remove-label state:staged;$e7 --remove-label state:in-progress;$e7 --remove-label state:review;" \
+		closed - 7 completed state:review state:in-progress state:staged state:backlog
+	rcase not-planned 0 "$e7 --remove-label state:staged;$e7 --remove-label state:review;" \
+		closed - 7 not_planned state:review state:staged
+	rcase reopened 0 '' open - 7 completed state:backlog
+	rcase remove-kept 1 "$e7 --add-label state:done;$e7 --remove-label state:backlog;" \
+		closed kept 7 completed state:backlog
+	rcase remove-gone 0 "$e7 --add-label state:done;$e7 --remove-label state:backlog;" \
+		closed gone 7 completed state:backlog
+	rcase add-fails 1 "$e7 --add-label state:done;" closed add 7 completed state:backlog
+}
+
+nr=0
+runcases "$wf" > "${tmp:?}/runcases.out" || :
+while IFS= read -r l; do
+	bad "$wf: $l"
+done < "${tmp:?}/runcases.out"
 
 # msub NAME TAG SED-EXPRESSION
 msub()
@@ -250,6 +381,42 @@ msub macos runner 's/^    runs-on: ubuntu-latest/    runs-on: macos-latest/'
 msub group concurrency 's/^\(  group:.*\)github\.event\.issue\.number/\1github.run_id/'
 msub review labels 's/state:review/state:reveiw/g'
 msub done labels 's/state:done/state:closed/g'
+# Review round 1: the same things in other valid YAML and expression
+# spellings, each refused by the allow-lists.
+st=' - name: Set the terminal state label'
+mafter uses-flow uses '^    steps:' '    - {name: x, uses: actions/checkout@v4}'
+mafter uses-quoted uses '^    steps:' '    - "uses": actions/checkout@v4'
+mafter index expr '^        N: ' "        T: \${{ github['event']['issue']['title'] }}"
+mafter index-mixed expr '^        N: ' "        T: \${{ github['event'].issue.title }}"
+mafter tojson-all expr '^        N: ' '        T: ${{ toJSON(github) }}'
+msub expr-space expr 's/\${{ github\.token }}/${{github.token}}/'
+msub expr-place expr 's/^    name: Labels/    name: ${{ github.repository }}/'
+mafter flow-run flow '^    steps:' \
+	"    - {name: y, run: \"echo \${{ github['event'].issue.body }}\"}"
+msub flow-seq flow 's/^    runs-on: ubuntu-latest/    runs-on: [ubuntu-latest]/'
+mafter plain-run run '^    steps:' \
+	"    - name: y\n      run:\n        echo \"\${{ github['event']['issue']['title'] }}\""
+mafter anchor-run run '^    steps:' \
+	'    - name: z\n      run: &s |\n        echo ${{ github.token }}'
+mafter second-run run '^    steps:' '    - name: w\n      run: |\n        true'
+mafter alias anchor '^    timeout-minutes:' '    environment: *e'
+mafter container container '^    timeout-minutes:' '    container: example/image:latest'
+mafter services container '^    timeout-minutes:' '    services:\n      db:\n        image: example/db'
+mafter quoted-run key '^    steps:' \
+	"    - name: q\n      \"run\": |\n        echo \${{ github['event'].issue.title }}"
+msub owner-missing owner '/^    if: /d'
+msub owner-always owner 's/^    if: .*/    if: always()/'
+mafter step-if if "^   $st\$" "      if: github.event.issue.title != ''"
+msub shell-bash shell 's/^      shell: sh$/      shell: bash/'
+msub no-state-read state-read '/^        st=\$(gh api /d'
+# The run block's own steps, refused by its cases.
+msub no-guard run-block '/^        case \$N in$/,/^        esac$/d'
+msub no-state-check run-block '/^        \[ "\$st" = closed \]/d'
+msub no-reread run-block '/^              gh api --paginate/d'
+msub reread-skipped run-block \
+	's/^\(              \)if grep -Fxq -- "\$label" "\$labels"; then/\1if false; then/'
+msub stdin run-block 's|--remove-label "\$label" </dev/null|--remove-label "$label"|'
+msub syntax run-block '/^              fi$/d'
 
 # The label decision, cut out of the run block with its indentation.
 awk '
@@ -272,7 +439,7 @@ decision()
 	for l in "$@"; do
 		printf '%s\n' "$l" >> "${tmp:?}/labels"
 	done
-	if got=$(cd "${tmp:?}" && /bin/sh -c '. ./decide.sh && decide "$1" labels' \
+	if got=$(cd "${tmp:?}" && /bin/sh -ec '. ./decide.sh && decide "$1" labels' \
 		decide "$reason" 2>&1); then
 		got=$(printf '%s' "$got" | tr '\n' ';')
 		[ "$got" = "$want" ] || bad "decision $name: got '$got', want '$want'"
@@ -313,4 +480,4 @@ if [ "$fails" -ne 0 ]; then
 	exit 1
 fi
 _ok=1
-echo "$me: ok (lint, $nm mutants, $nd decisions)"
+echo "$me: ok (lint, $nm mutants, $nd decisions, $nr run-block cases)"
