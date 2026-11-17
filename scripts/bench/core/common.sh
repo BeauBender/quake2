@@ -60,6 +60,13 @@ bench_is_num() {
 	printf '%s\n' "$1" | awk '{ ok = ($0 ~ /^-?[0-9]+(\.[0-9]+)?$/) } END { exit !(NR == 1 && ok) }'
 }
 
+# bench_is_dec <text>: bench_is_num of at most 12 characters, for a reading or
+# a poll interval: a longer figure (a 400-digit "utilization") is not a
+# measurement, and awk would turn it into inf or a wrapped number.
+bench_is_dec() {
+	bench_is_num "$1" && [ "${#1}" -le 12 ]
+}
+
 # bench_tmp: makes this process's temporary directory once (BENCH_TMP); the
 # EXIT trap in bench.sh removes it. Call it in the main shell, not in $(...).
 bench_tmp() {
