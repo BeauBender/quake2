@@ -44,6 +44,10 @@
 #include <TargetConditionals.h>
 #endif
 
+#if defined(__APPLE__) && defined(__OBJC__) && TARGET_OS_IPHONE
+#import <UIKit/UIKit.h>
+#endif
+
 /* AppKit is macOS only: iOS, tvOS and visionOS have no NSWindow */
 #if defined(__APPLE__) && defined(__OBJC__) && TARGET_OS_OSX
 #import <AppKit/NSWindow.h>
@@ -219,29 +223,96 @@ GLimp_ScreenEvent(void)
 
 	MeasureScreen(now);
 
-	if ((now[0] <= 0) || (now[1] <= 0) || !GLimp_ScreenChanged(made_screen, now))
-	{
-		return;
-	}
-
-	/* the next event of the same change finds it noted and does nothing */
-	memcpy(made_screen, now, sizeof(made_screen));
-	LogScreen();
-
-	if (re.GetDrawableSize)
+	/* the renderer's drawable, asked only when the screen differs from the record */
+	if ((now[0] > 0) && (now[1] > 0) && GLimp_ScreenChanged(made_screen, now) && re.GetDrawableSize)
 	{
 		re.GetDrawableSize(&w, &h);
 	}
 
-	if ((w <= 0) || (h <= 0))
+	switch (GLimp_ScreenAction(made_screen, now, w, h))
 	{
-		Cbuf_AddText("vid_restart\n");
+		case GLIMP_SCREEN_IGNORE:
+			return;
+
+		case GLIMP_SCREEN_RESTART:
+			/* the next event of the same change finds it noted and does nothing */
+			memcpy(made_screen, now, sizeof(made_screen));
+			LogScreen();
+			Cbuf_AddText("vid_restart\n");
+			return;
+
+		default:
+			memcpy(made_screen, now, sizeof(made_screen));
+			LogScreen();
+			viddef.width = w;
+			viddef.height = h;
+			Com_Printf("Drawable size: %ix%i (live)\n", viddef.width, viddef.height);
+			return;
+	}
+}
+#endif
+
+#if defined(__APPLE__) && TARGET_OS_IPHONE && defined(__OBJC__)
+/*
+ * Asks the window scene for an interface orientation (TASK172), the way a
+ * rotation of the device does: the same size change, safe-area change or
+ * insets swap reaches GLimp_ScreenEvent. bits are GLIMP_ORIENT_* values
+ * (GLimp_OrientationBits). The system answers only for orientations the
+ * app supports (Info.plist, here the two landscapes), and says so in its
+ * error otherwise; nothing here forces one.
+ */
+void
+GLimp_RequestOrientation(int bits)
+{
+	UIWindow *uiwindow;
+	UIWindowScene *scene;
+	UIInterfaceOrientationMask mask = 0;
+	UIWindowSceneGeometryPreferencesIOS *prefs;
+
+	if (!window)
+	{
 		return;
 	}
 
-	viddef.width = w;
-	viddef.height = h;
-	Com_Printf("Drawable size: %ix%i (live)\n", viddef.width, viddef.height);
+	uiwindow = (__bridge UIWindow *)SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, NULL);
+	scene = uiwindow.windowScene;
+
+	if (!scene)
+	{
+		Com_Printf("Orientation: the window has no scene.\n");
+		return;
+	}
+
+	if (bits & GLIMP_ORIENT_PORTRAIT)
+	{
+		mask |= UIInterfaceOrientationMaskPortrait;
+	}
+
+	if (bits & GLIMP_ORIENT_UPSIDEDOWN)
+	{
+		mask |= UIInterfaceOrientationMaskPortraitUpsideDown;
+	}
+
+	if (bits & GLIMP_ORIENT_LANDSCAPELEFT)
+	{
+		mask |= UIInterfaceOrientationMaskLandscapeLeft;
+	}
+
+	if (bits & GLIMP_ORIENT_LANDSCAPERIGHT)
+	{
+		mask |= UIInterfaceOrientationMaskLandscapeRight;
+	}
+
+	Com_Printf("Orientation: asking for mask %i\n", (int)mask);
+	prefs = [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:mask];
+	[scene requestGeometryUpdateWithPreferences:prefs errorHandler:^(NSError *error) {
+		/* called on the main thread, the one that prints */
+		if (SDL_IsMainThread())
+		{
+			Com_Printf("Orientation: refused (%s)\n", [[error localizedDescription] UTF8String]);
+		}
+	}];
+	[prefs release];
 }
 #endif
 

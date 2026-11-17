@@ -466,6 +466,29 @@ VID_RequestRestart(ref_restart_t rs)
 	restart_state = rs;
 }
 
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+/*
+ * iOS only (TASK172): asks the window scene for an interface orientation,
+ * the way a rotation of the device does, so a test can make the window
+ * change size or insets with no hand on the device. The system grants only
+ * orientations the app supports, so a server's stufftext of it can do no
+ * more than a person turning the device.
+ */
+static void
+VID_Orientation_f(void)
+{
+	int bits = (Cmd_Argc() == 2) ? GLimp_OrientationBits(Cmd_Argv(1)) : 0;
+
+	if (!bits)
+	{
+		Com_Printf("Usage: ios_orientation <portrait|portraitupsidedown|landscapeleft|landscaperight|landscape|all>\n");
+		return;
+	}
+
+	GLimp_RequestOrientation(bits);
+}
+#endif
+
 /*
  * Restarts the renderer.
  */
@@ -1055,6 +1078,9 @@ VID_Init(void)
 	Cmd_AddCommand("vid_restart", VID_Restart_f);
 	Cmd_AddCommand("vid_listmodes", VID_ListModes_f);
 	Cmd_AddCommand("r_listmodes", VID_ListModes_f); // more consistent with r_mode
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+	Cmd_AddCommand("ios_orientation", VID_Orientation_f);
+#endif
 
 	// Initializes the video backend. This is NOT the renderer
 	// itself, just the client side support stuff!

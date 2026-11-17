@@ -15,6 +15,16 @@ original clients (Vanilla Quake II) commands are still in place.
   between `coop`, `dm` and `sp` without having to set three cvars the
   correct way. `?` prints the current mode.
 
+* **ios_orientation <name>**: iOS only (iPhone, iPad). Asks the window
+  scene for an interface orientation, the way turning the device does, so
+  a test can change the window's size or insets with no hand on the
+  device. `name` is `portrait`, `portraitupsidedown`, `landscapeleft`,
+  `landscaperight`, `landscape` (either) or `all`. The system grants only
+  an orientation the app supports (the two landscapes), and answers
+  `Orientation: refused (...)` in the console for another; it does
+  nothing a person turning the device cannot do, so a server sending it
+  is harmless. The window then follows as it does for any size change.
+
 * **listentities <class>**: Lists the coordinates of all entities of a
   given class.  Possible classes are `ammo`, `items`, `keys`, `monsters`
   and `weapons`. Multiple classes can be given, they're separated by
