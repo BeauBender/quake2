@@ -2161,7 +2161,7 @@ upscale_rgba_case(int factor, int wrap)
 		20, 21, 22, 23,
 		30, 31, 32, 255
 	};
-	const int w = 4, h = 3, border = wrap ? 1 : 0;
+	const int w = 4, h = 3, border = wrap ? UPSCALE_METALFX_BORDER : 0;
 	upscale_fake_scaler_t fake;
 	unsigned table[256];
 	unsigned char *rgba, *want, *out;
@@ -2184,12 +2184,12 @@ upscale_rgba_case(int factor, int wrap)
 	T_EQ_INT(fake.oh, factor * (h + 2 * border));
 
 	/* the input: the RGBA of the indices, wrap-padded or as it is */
-	want = malloc((size_t)(w + 2) * (h + 2) * 4);
+	want = malloc((size_t)(w + 2 * border) * (h + 2 * border) * 4);
 	T_REQUIRE(want != NULL);
 
 	if (wrap)
 	{
-		T_EQ_INT(CL_UpscaleWrapPadRGBA(rgba, w, h, want), 1);
+		T_EQ_INT(CL_UpscaleWrapPadRGBABorder(rgba, w, h, border, want), 1);
 	}
 	else
 	{
@@ -2335,6 +2335,32 @@ TEST(upscale_rgba_wrapped_tile_wide_filter)
 		free(tiled);
 		free(rgba);
 	}
+}
+
+TEST(upscale_wrap_pad_border)
+{
+	const unsigned char src[3 * 2 * 4] = {
+		1, 0, 0, 9, 2, 0, 0, 9, 3, 0, 0, 9,
+		4, 0, 0, 9, 5, 0, 0, 9, 6, 0, 0, 9
+	};
+	unsigned char pad[(3 + 8) * (2 + 8) * 4];
+	int x, y;
+
+	/* a border larger than the tile wraps around more than once */
+	T_EQ_INT(CL_UpscaleWrapPadRGBABorder(src, 3, 2, 4, pad), 1);
+
+	for (y = 0; y < 10; y++)
+	{
+		for (x = 0; x < 11; x++)
+		{
+			int sx = ((x - 4) % 3 + 3) % 3, sy = ((y - 4) % 2 + 2) % 2;
+
+			T_EQ_INT(pad[(y * 11 + x) * 4], src[(sy * 3 + sx) * 4]);
+		}
+	}
+
+	T_EQ_INT(CL_UpscaleWrapPadRGBABorder(src, 0, 2, 4, pad), 0);
+	T_EQ_INT(CL_UpscaleWrapPadRGBABorder(src, 3, 2, -1, pad), 0);
 }
 
 TEST(upscale_rgba_skin_not_padded)

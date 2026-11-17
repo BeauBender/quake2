@@ -347,27 +347,32 @@ CL_UpscalePcxDecodedOk(const unsigned char *pic, int bits, int pw, int ph,
 
 /* ---- pixels ---- */
 
-/* CL_UpscaleWrapPad of texels of bpp bytes */
+/*
+ * CL_UpscaleWrapPad of texels of bpp bytes, with a border of k texels:
+ * (w + 2k) by (h + 2k). k may be larger than w or h.
+ */
 static int
-CL_UpscaleWrapPadTexels(const unsigned char *src, int w, int h, size_t bpp,
-		unsigned char *dst)
+CL_UpscaleWrapPadTexels(const unsigned char *src, int w, int h, int k,
+		size_t bpp, unsigned char *dst)
 {
-	int pw = w + 2, x, y;
+	int pw = w + 2 * k, x, y;
 
-	if ((w < 1) || (h < 1))
+	if ((w < 1) || (h < 1) || (k < 0))
 	{
 		return 0;
 	}
 
-	/* padded (x, y) is source ((x - 1) mod w, (y - 1) mod h) */
-	for (y = 0; y < h + 2; y++)
+	/* padded (x, y) is source ((x - k) mod w, (y - k) mod h) */
+	for (y = 0; y < h + 2 * k; y++)
 	{
-		int sy = (y + h - 1) % h;
+		int sy = ((y - k) % h + h) % h;
 
 		for (x = 0; x < pw; x++)
 		{
+			int sx = ((x - k) % w + w) % w;
+
 			memcpy(dst + ((size_t)y * pw + x) * bpp,
-				src + ((size_t)sy * w + (x + w - 1) % w) * bpp, bpp);
+				src + ((size_t)sy * w + sx) * bpp, bpp);
 		}
 	}
 
@@ -399,7 +404,7 @@ CL_UpscaleCropTexels(const unsigned char *src, int sw, int sh, int x, int y,
 int
 CL_UpscaleWrapPad(const unsigned char *src, int w, int h, unsigned char *dst)
 {
-	return CL_UpscaleWrapPadTexels(src, w, h, 1, dst);
+	return CL_UpscaleWrapPadTexels(src, w, h, 1, 1, dst);
 }
 
 int
@@ -413,7 +418,14 @@ int
 CL_UpscaleWrapPadRGBA(const unsigned char *src, int w, int h,
 		unsigned char *dst)
 {
-	return CL_UpscaleWrapPadTexels(src, w, h, 4, dst);
+	return CL_UpscaleWrapPadTexels(src, w, h, 1, 4, dst);
+}
+
+int
+CL_UpscaleWrapPadRGBABorder(const unsigned char *src, int w, int h, int k,
+		unsigned char *dst)
+{
+	return CL_UpscaleWrapPadTexels(src, w, h, k, 4, dst);
 }
 
 int
@@ -699,7 +711,7 @@ CL_UpscaleRGBA(const unsigned char *idx, int w, int h, int factor, int wrap,
 		const unsigned *table, upscale_scaler_t scale, void *ctx)
 {
 	unsigned char *rgba, *in, *out, *img;
-	int border = wrap ? 1 : 0, iw, ih, ok;
+	int border = wrap ? UPSCALE_METALFX_BORDER : 0, iw, ih, ok;
 
 	if (!idx || !table || !scale || !CL_UpscaleSizeOk(w, h) ||
 		((factor != 2) && (factor != 4)))
@@ -707,7 +719,11 @@ CL_UpscaleRGBA(const unsigned char *idx, int w, int h, int factor, int wrap,
 		return NULL;
 	}
 
-	/* w and h are at most UPSCALE_MAX_SIDE: every size below fits */
+	/*
+	 * w and h are at most UPSCALE_MAX_SIDE, border at most 4: iw and ih are
+	 * at most 1032, and every size below is a size_t product of at most
+	 * 1032 * 4 * 1032 * 4 * 4 bytes
+	 */
 	iw = w + 2 * border;
 	ih = h + 2 * border;
 
@@ -720,7 +736,7 @@ CL_UpscaleRGBA(const unsigned char *idx, int w, int h, int factor, int wrap,
 
 	in = rgba;
 
-	/* a repeating tile is scaled with one texel of its own border */
+	/* a repeating tile is scaled with its own border, see UPSCALE_METALFX_BORDER */
 	if (border)
 	{
 		in = malloc((size_t)iw * ih * 4);
@@ -731,7 +747,7 @@ CL_UpscaleRGBA(const unsigned char *idx, int w, int h, int factor, int wrap,
 			return NULL;
 		}
 
-		CL_UpscaleWrapPadRGBA(rgba, w, h, in);
+		CL_UpscaleWrapPadRGBABorder(rgba, w, h, border, in);
 	}
 
 	/* one pass: the scaler takes 2x and 4x directly */
@@ -758,7 +774,7 @@ CL_UpscaleRGBA(const unsigned char *idx, int w, int h, int factor, int wrap,
 		img = malloc((size_t)w * factor * h * factor * 4);
 
 		if (!img || !CL_UpscaleCropRGBA(out, iw * factor, ih * factor,
-			factor, factor, w * factor, h * factor, img))
+			border * factor, border * factor, w * factor, h * factor, img))
 		{
 			free(img);
 			free(out);

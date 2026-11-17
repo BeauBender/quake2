@@ -34,6 +34,15 @@
 /* The largest side of a source image; 4096 after 4x. */
 #define UPSCALE_MAX_SIDE 1024
 
+/*
+ * The border, in texels, a world texture is wrap-padded with before the
+ * metalfx pass. MetalFX's spatial filter reads more than one texel: a
+ * probe on the M6 GPU found a one texel border leaves a seam (up to 35
+ * levels at 2x, 74 at 4x), and 2, 3 and 4 match 8 exactly. 4 leaves the
+ * filters of other GPUs headroom. scale2x reads one texel and keeps 1.
+ */
+#define UPSCALE_METALFX_BORDER 4
+
 /* The most parent directories looked at for a .git entry. */
 #define UPSCALE_GIT_DEPTH 64
 
@@ -87,7 +96,8 @@ int CL_UpscaleSizeOk(long long w, long long h);
 
 /*
  * The w by h image src with one texel of its own opposite edges around
- * it, as a repeating tile has them: (w + 2) by (h + 2) into dst. 0, and
+ * it, as a repeating tile has them: (w + 2) by (h + 2) into dst. The
+ * scale2x path uses this form. 0, and
  * nothing written, when a side is below 1.
  */
 int CL_UpscaleWrapPad(const unsigned char *src, int w, int h,
@@ -194,6 +204,8 @@ upscale_backend_t CL_UpscaleChooseBackend(upscale_backend_t asked,
 /* CL_UpscaleWrapPad and CL_UpscaleCrop of RGBA8 texels (4 bytes each) */
 int CL_UpscaleWrapPadRGBA(const unsigned char *src, int w, int h,
 		unsigned char *dst);
+int CL_UpscaleWrapPadRGBABorder(const unsigned char *src, int w, int h, int k,
+		unsigned char *dst);
 int CL_UpscaleCropRGBA(const unsigned char *src, int sw, int sh, int x, int y,
 		int w, int h, unsigned char *dst);
 
@@ -212,9 +224,9 @@ typedef int (*upscale_scaler_t)(void *ctx, const unsigned char *in, int iw,
 /*
  * The indices idx (w by h) scaled factor times (2 or 4) by an RGBA
  * scaler, as the metalfx backend does it: converted with table
- * (CL_UpscaleToRGBA), wrap-padded by one texel when wrap, scaled in one
- * pass to factor times the padded size, cropped by factor texels on
- * each side when wrap, and the alpha set from the indices
+ * (CL_UpscaleToRGBA), wrap-padded by UPSCALE_METALFX_BORDER texels when wrap, scaled
+ * in one pass to factor times the padded size, cropped by border times
+ * factor texels on each side when wrap, and the alpha set from the indices
  * (CL_UpscaleMaskAlpha), whatever the scaler made of it. A new buffer
  * of w * factor by h * factor RGBA8 texels the caller frees; NULL when
  * the size or factor is refused, memory runs out or scale fails.
