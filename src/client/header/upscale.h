@@ -160,6 +160,69 @@ const unsigned char *CL_UpscalePalette(const unsigned char *data, size_t len);
 int CL_UpscalePcxDecodedOk(const unsigned char *pic, int bits, int pw,
 		int ph, int w, int h);
 
+/* ---- the backends (TASK124) ---- */
+
+/* what scales a tile */
+typedef enum
+{
+	UPSCALE_SCALE2X,	/* scale2x of the indices: the default */
+	UPSCALE_METALFX		/* MetalFX's spatial scaler of the RGBA (macOS) */
+} upscale_backend_t;
+
+#define UPSCALE_USAGE "usage: upscale_textures <2|4> [scale2x|metalfx] [force]\n"
+
+/* "scale2x" or "metalfx"; NULL for any other value */
+const char *CL_UpscaleBackendName(int backend);
+
+/*
+ * The command's words, argv[0] its name: <2|4>, then scale2x or metalfx,
+ * then force, the last two optional and in that order. 1 with *factor,
+ * *backend (UPSCALE_SCALE2X when none is given) and *force set; 0, and
+ * nothing set, for any other line.
+ */
+int CL_UpscaleParseArgs(int argc, const char *const *argv, int *factor,
+		upscale_backend_t *backend, int *force);
+
+/*
+ * The backend a run uses: asked when it is scale2x or supported is 1;
+ * else scale2x, and line is the one report line that says so, with the
+ * reason and a newline. line is "" when nothing is to be said.
+ */
+upscale_backend_t CL_UpscaleChooseBackend(upscale_backend_t asked,
+		int supported, const char *reason, char *line, size_t linesize);
+
+/* CL_UpscaleWrapPad and CL_UpscaleCrop of RGBA8 texels (4 bytes each) */
+int CL_UpscaleWrapPadRGBA(const unsigned char *src, int w, int h,
+		unsigned char *dst);
+int CL_UpscaleCropRGBA(const unsigned char *src, int sw, int sh, int x, int y,
+		int w, int h, unsigned char *dst);
+
+/*
+ * The alpha of rgba, w * factor by h * factor texels, from the source
+ * indices idx (w by h) by nearest neighbour: 0 where the index is 255
+ * (the transparent index), 255 elsewhere. The colour is not touched.
+ */
+void CL_UpscaleMaskAlpha(const unsigned char *idx, int w, int h, int factor,
+		unsigned char *rgba);
+
+/* scales the RGBA8 in (iw by ih) into out (ow by oh): 1 on success */
+typedef int (*upscale_scaler_t)(void *ctx, const unsigned char *in, int iw,
+		int ih, unsigned char *out, int ow, int oh);
+
+/*
+ * The indices idx (w by h) scaled factor times (2 or 4) by an RGBA
+ * scaler, as the metalfx backend does it: converted with table
+ * (CL_UpscaleToRGBA), wrap-padded by one texel when wrap, scaled in one
+ * pass to factor times the padded size, cropped by factor texels on
+ * each side when wrap, and the alpha set from the indices
+ * (CL_UpscaleMaskAlpha), whatever the scaler made of it. A new buffer
+ * of w * factor by h * factor RGBA8 texels the caller frees; NULL when
+ * the size or factor is refused, memory runs out or scale fails.
+ */
+unsigned char *CL_UpscaleRGBA(const unsigned char *idx, int w, int h,
+		int factor, int wrap, const unsigned *table, upscale_scaler_t scale,
+		void *ctx);
+
 /* ---- the command's decisions; cl_upscale_cmd.c does the I/O ---- */
 
 /* What is scaled: the names below dir with the extension ext. */
@@ -355,9 +418,14 @@ upscale_outcome_t CL_UpscaleWriteOut(const char *path, int force,
 void CL_UpscaleCount(upscale_count_t *n, upscale_outcome_t outcome,
 		size_t bytes);
 
-/* the summary line of a run, with its newline, into out */
+/*
+ * The summary line of a run, with its newline, into out. The backend is
+ * named when it is not scale2x ("2x with metalfx"), so a scale2x run
+ * says what it said before there were backends.
+ */
 void CL_UpscaleSummary(const upscale_count_t *n, int factor,
-		const char *dir, char *out, size_t outsize);
+		upscale_backend_t backend, const char *dir, char *out,
+		size_t outsize);
 
 /* the upscale_textures console command */
 void CL_UpscaleTextures_f(void);

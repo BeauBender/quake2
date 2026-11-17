@@ -1828,12 +1828,12 @@ TEST(upscale_summary)
 	n.refused = 2;
 	n.failed = 4;
 	n.bytes = 5000000000ULL;
-	CL_UpscaleSummary(&n, 2, "/g/baseq2", out, sizeof(out));
+	CL_UpscaleSummary(&n, 2, UPSCALE_SCALE2X, "/g/baseq2", out, sizeof(out));
 	T_EQ_STR(out, "upscale_textures: 3 written, 1 skipped, 2 refused, 4 failed, "
 		"5000000000 bytes, 2x, in /g/baseq2\n");
 
 	n.cut = 1;
-	CL_UpscaleSummary(&n, 4, "/g/baseq2", out, sizeof(out));
+	CL_UpscaleSummary(&n, 4, UPSCALE_SCALE2X, "/g/baseq2", out, sizeof(out));
 	T_EQ_STR(out, "upscale_textures: 3 written, 1 skipped, 2 refused, 4 failed, "
 		"5000000000 bytes, 4x, in /g/baseq2; a listing was cut at its limit, "
 		"not every file was looked at\n");
@@ -1841,15 +1841,436 @@ TEST(upscale_summary)
 	/* loose directories whose names are refused: their files not looked at */
 	n.cut = 0;
 	n.baddirs = 1;
-	CL_UpscaleSummary(&n, 2, "/g/baseq2", out, sizeof(out));
+	CL_UpscaleSummary(&n, 2, UPSCALE_SCALE2X, "/g/baseq2", out, sizeof(out));
 	T_EQ_STR(out, "upscale_textures: 3 written, 1 skipped, 2 refused, 4 failed, "
 		"5000000000 bytes, 2x, in /g/baseq2; 1 directory with a refused name "
 		"not looked at\n");
 	n.cut = 1;
 	n.baddirs = 2147483647;
-	CL_UpscaleSummary(&n, 2, "/g/baseq2", out, sizeof(out));
+	CL_UpscaleSummary(&n, 2, UPSCALE_SCALE2X, "/g/baseq2", out, sizeof(out));
 	T_EQ_STR(out, "upscale_textures: 3 written, 1 skipped, 2 refused, 4 failed, "
 		"5000000000 bytes, 2x, in /g/baseq2; 2147483647 directories with a "
 		"refused name not looked at; a listing was cut at its limit, not "
 		"every file was looked at\n");
+}
+
+/* ---- the backends (TASK124) ---- */
+
+TEST(upscale_backend_name)
+{
+	T_EQ_STR(CL_UpscaleBackendName(UPSCALE_SCALE2X), "scale2x");
+	T_EQ_STR(CL_UpscaleBackendName(UPSCALE_METALFX), "metalfx");
+	T_CHECK(CL_UpscaleBackendName(2) == NULL);
+	T_CHECK(CL_UpscaleBackendName(-1) == NULL);
+}
+
+/* CL_UpscaleParseArgs of one line: 1 with what it set, else 0 */
+static int
+upscale_parse(const char *line, int *factor, upscale_backend_t *backend,
+		int *force)
+{
+	const char *argv[8];
+	char buf[128];
+	char *p;
+	int argc = 0;
+
+	Q_strlcpy(buf, line, sizeof(buf));
+
+	for (p = strtok(buf, " "); p && (argc < 8); p = strtok(NULL, " "))
+	{
+		argv[argc++] = p;
+	}
+
+	*factor = -7;
+	*backend = (upscale_backend_t)-7;
+	*force = -7;
+
+	return CL_UpscaleParseArgs(argc, argv, factor, backend, force);
+}
+
+TEST(upscale_parse_args_accepts)
+{
+	static const struct
+	{
+		const char *line;
+		int factor, backend, force;
+	} ok[] = {
+		/* the first card's lines mean what they meant */
+		{ "upscale_textures 2", 2, UPSCALE_SCALE2X, 0 },
+		{ "upscale_textures 4", 4, UPSCALE_SCALE2X, 0 },
+		{ "upscale_textures 2 force", 2, UPSCALE_SCALE2X, 1 },
+		{ "upscale_textures 4 force", 4, UPSCALE_SCALE2X, 1 },
+		/* the backend argument */
+		{ "upscale_textures 2 scale2x", 2, UPSCALE_SCALE2X, 0 },
+		{ "upscale_textures 4 scale2x force", 4, UPSCALE_SCALE2X, 1 },
+		{ "upscale_textures 2 metalfx", 2, UPSCALE_METALFX, 0 },
+		{ "upscale_textures 4 metalfx", 4, UPSCALE_METALFX, 0 },
+		{ "upscale_textures 4 metalfx force", 4, UPSCALE_METALFX, 1 },
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof(ok) / sizeof(ok[0]); i++)
+	{
+		int factor, force;
+		upscale_backend_t backend;
+
+		T_EQ_INT(upscale_parse(ok[i].line, &factor, &backend, &force), 1);
+		T_EQ_INT(factor, ok[i].factor);
+		T_EQ_INT((int)backend, ok[i].backend);
+		T_EQ_INT(force, ok[i].force);
+	}
+}
+
+TEST(upscale_parse_args_refuses)
+{
+	static const char *bad[] = {
+		"upscale_textures",
+		"upscale_textures 3",
+		"upscale_textures 8 metalfx",
+		"upscale_textures metalfx",
+		"upscale_textures metalfx 2",
+		/* a bad backend name */
+		"upscale_textures 2 vt",
+		"upscale_textures 2 MetalFX",
+		"upscale_textures 2 metalfx2",
+		"upscale_textures 2 scale",
+		"upscale_textures 4 bogus force",
+		/* the order is <2|4> [backend] [force] */
+		"upscale_textures 2 force metalfx",
+		"upscale_textures 2 metalfx metalfx",
+		"upscale_textures 2 scale2x metalfx",
+		"upscale_textures 2 force force",
+		"upscale_textures 2 metalfx force extra",
+		"upscale_textures 2 metalfx forced",
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
+	{
+		int factor, force;
+		upscale_backend_t backend;
+
+		T_EQ_INT(upscale_parse(bad[i], &factor, &backend, &force), 0);
+		/* nothing set */
+		T_EQ_INT(factor, -7);
+		T_EQ_INT(force, -7);
+		T_EQ_INT((int)backend, -7);
+	}
+
+	T_EQ_INT(CL_UpscaleParseArgs(0, NULL, NULL, NULL, NULL), 0);
+	T_EQ_STR(UPSCALE_USAGE,
+		"usage: upscale_textures <2|4> [scale2x|metalfx] [force]\n");
+}
+
+TEST(upscale_choose_backend)
+{
+	char line[256];
+
+	/* scale2x is always there and says nothing */
+	strcpy(line, "x");
+	T_EQ_INT(CL_UpscaleChooseBackend(UPSCALE_SCALE2X, 0, "no device", line,
+		sizeof(line)), UPSCALE_SCALE2X);
+	T_EQ_STR(line, "");
+
+	/* a supported metalfx runs, and nothing is said */
+	strcpy(line, "x");
+	T_EQ_INT(CL_UpscaleChooseBackend(UPSCALE_METALFX, 1, NULL, line,
+		sizeof(line)), UPSCALE_METALFX);
+	T_EQ_STR(line, "");
+
+	/* an unsupported one falls back to scale2x with one line */
+	T_EQ_INT(CL_UpscaleChooseBackend(UPSCALE_METALFX, 0, "no Metal device",
+		line, sizeof(line)), UPSCALE_SCALE2X);
+	T_EQ_STR(line, "upscale_textures: metalfx is unsupported here (no Metal "
+		"device); using scale2x\n");
+	T_EQ_INT(CL_UpscaleChooseBackend(UPSCALE_METALFX, 0, "", line,
+		sizeof(line)), UPSCALE_SCALE2X);
+	T_EQ_STR(line, "upscale_textures: metalfx is unsupported here; using "
+		"scale2x\n");
+	T_EQ_INT(CL_UpscaleChooseBackend(UPSCALE_METALFX, 0, NULL, line,
+		sizeof(line)), UPSCALE_SCALE2X);
+	T_EQ_STR(line, "upscale_textures: metalfx is unsupported here; using "
+		"scale2x\n");
+
+	/* a value that is no backend is scale2x, said as unsupported */
+	T_EQ_INT(CL_UpscaleChooseBackend((upscale_backend_t)9, 1, NULL, line,
+		sizeof(line)), UPSCALE_SCALE2X);
+	T_EQ_STR(line, "upscale_textures: backend 9 is unsupported here; using "
+		"scale2x\n");
+}
+
+/* one RGBA8 texel: r = tag, g = x, b = y, a = 200 */
+static void
+upscale_rgba_texel(unsigned char *t, int tag, int x, int y)
+{
+	t[0] = (unsigned char)tag;
+	t[1] = (unsigned char)x;
+	t[2] = (unsigned char)y;
+	t[3] = 200;
+}
+
+TEST(upscale_rgba_pad_and_crop)
+{
+	unsigned char src[3 * 2 * 4], pad[5 * 4 * 4], back[3 * 2 * 4];
+	int x, y;
+
+	for (y = 0; y < 2; y++)
+	{
+		for (x = 0; x < 3; x++)
+		{
+			upscale_rgba_texel(src + (y * 3 + x) * 4, 7, x, y);
+		}
+	}
+
+	T_EQ_INT(CL_UpscaleWrapPadRGBA(src, 0, 2, pad), 0);
+	T_EQ_INT(CL_UpscaleWrapPadRGBA(src, 3, 2, pad), 1);
+
+	/* padded (x, y) is source ((x - 1) mod 3, (y - 1) mod 2), all 4 bytes */
+	for (y = 0; y < 4; y++)
+	{
+		for (x = 0; x < 5; x++)
+		{
+			const unsigned char *t = pad + (y * 5 + x) * 4;
+
+			T_EQ_INT(t[0], 7);
+			T_EQ_INT(t[1], (x + 2) % 3);
+			T_EQ_INT(t[2], (y + 1) % 2);
+			T_EQ_INT(t[3], 200);
+		}
+	}
+
+	/* the crop takes whole texels back out */
+	T_EQ_INT(CL_UpscaleCropRGBA(pad, 5, 4, 1, 1, 3, 2, back), 1);
+	T_EQ_MEM(back, src, sizeof(src));
+	T_EQ_INT(CL_UpscaleCropRGBA(pad, 5, 4, 3, 1, 3, 2, back), 0);
+	T_EQ_INT(CL_UpscaleCropRGBA(pad, 5, 4, 0, 3, 3, 2, back), 0);
+	T_EQ_INT(CL_UpscaleCropRGBA(pad, 5, 4, -1, 0, 3, 2, back), 0);
+	T_EQ_INT(CL_UpscaleCropRGBA(pad, 5, 4, 0, 0, 0, 2, back), 0);
+
+	/* the 8-bit forms are unchanged */
+	{
+		const unsigned char i8[4] = { 1, 2, 3, 4 };
+		unsigned char p8[16], c8[4];
+
+		T_EQ_INT(CL_UpscaleWrapPad(i8, 2, 2, p8), 1);
+		T_EQ_INT(p8[0], 4);
+		T_EQ_INT(p8[5], 1);
+		T_EQ_INT(p8[15], 1);
+		T_EQ_INT(CL_UpscaleCrop(p8, 4, 4, 1, 1, 2, 2, c8), 1);
+		T_EQ_MEM(c8, i8, 4);
+	}
+}
+
+TEST(upscale_mask_alpha)
+{
+	const unsigned char idx[2 * 2] = { 255, 3, 4, 255 };
+	unsigned char rgba[4 * 4 * 4];
+	int x, y;
+
+	memset(rgba, 77, sizeof(rgba));
+	CL_UpscaleMaskAlpha(idx, 2, 2, 2, rgba);
+
+	for (y = 0; y < 4; y++)
+	{
+		for (x = 0; x < 4; x++)
+		{
+			const unsigned char *t = rgba + (y * 4 + x) * 4;
+
+			T_EQ_INT(t[3], (idx[(y / 2) * 2 + x / 2] == 255) ? 0 : 255);
+			/* the colour is not touched */
+			T_EQ_INT(t[0], 77);
+			T_EQ_INT(t[1], 77);
+			T_EQ_INT(t[2], 77);
+		}
+	}
+}
+
+/* a stand-in for MetalFX: nearest neighbour, alpha 255 everywhere */
+typedef struct
+{
+	int calls, iw, ih, ow, oh, fail;
+	unsigned char in[16 * 16 * 4];
+} upscale_fake_scaler_t;
+
+static int
+upscale_fake_scale(void *ctx, const unsigned char *in, int iw, int ih,
+		unsigned char *out, int ow, int oh)
+{
+	upscale_fake_scaler_t *f = ctx;
+	int x, y;
+
+	f->calls++;
+	f->iw = iw;
+	f->ih = ih;
+	f->ow = ow;
+	f->oh = oh;
+
+	if (f->fail || ((size_t)iw * ih * 4 > sizeof(f->in)))
+	{
+		return 0;
+	}
+
+	memcpy(f->in, in, (size_t)iw * ih * 4);
+
+	for (y = 0; y < oh; y++)
+	{
+		for (x = 0; x < ow; x++)
+		{
+			const unsigned char *s = in + ((y * ih / oh) * iw + x * iw / ow) * 4;
+			unsigned char *d = out + ((size_t)y * ow + x) * 4;
+
+			d[0] = s[0];
+			d[1] = s[1];
+			d[2] = s[2];
+			d[3] = 255;
+		}
+	}
+
+	return 1;
+}
+
+/* a palette where index i is (i, 255 - i, i / 2) */
+static void
+upscale_test_table(unsigned *table)
+{
+	unsigned char pal[768];
+	int i;
+
+	for (i = 0; i < 256; i++)
+	{
+		pal[i * 3 + 0] = (unsigned char)i;
+		pal[i * 3 + 1] = (unsigned char)(255 - i);
+		pal[i * 3 + 2] = (unsigned char)(i / 2);
+	}
+
+	CL_UpscaleTable(pal, table);
+}
+
+/*
+ * The metalfx path's tile on the stand-in: the scaler sees the RGBA of
+ * the indices, wrap-padded for a world texture; the output is cropped
+ * back to factor times the source, and its alpha is the source's
+ * transparent index, though the scaler made it 255 everywhere.
+ */
+static void
+upscale_rgba_case(int factor, int wrap)
+{
+	/* 4 by 3, with the transparent index at (1, 0) and (3, 2) */
+	const unsigned char idx[4 * 3] = {
+		10, 255, 12, 13,
+		20, 21, 22, 23,
+		30, 31, 32, 255
+	};
+	const int w = 4, h = 3, border = wrap ? 1 : 0;
+	upscale_fake_scaler_t fake;
+	unsigned table[256];
+	unsigned char *rgba, *want, *out;
+	int x, y;
+
+	upscale_test_table(table);
+	memset(&fake, 0, sizeof(fake));
+
+	rgba = CL_UpscaleToRGBA(idx, w, h, table);
+	T_REQUIRE(rgba != NULL);
+	out = CL_UpscaleRGBA(idx, w, h, factor, wrap, table, upscale_fake_scale,
+		&fake);
+	T_REQUIRE(out != NULL);
+
+	/* one pass, at factor times the (padded) input */
+	T_EQ_INT(fake.calls, 1);
+	T_EQ_INT(fake.iw, w + 2 * border);
+	T_EQ_INT(fake.ih, h + 2 * border);
+	T_EQ_INT(fake.ow, factor * (w + 2 * border));
+	T_EQ_INT(fake.oh, factor * (h + 2 * border));
+
+	/* the input: the RGBA of the indices, wrap-padded or as it is */
+	want = malloc((size_t)(w + 2) * (h + 2) * 4);
+	T_REQUIRE(want != NULL);
+
+	if (wrap)
+	{
+		T_EQ_INT(CL_UpscaleWrapPadRGBA(rgba, w, h, want), 1);
+	}
+	else
+	{
+		memcpy(want, rgba, (size_t)w * h * 4);
+	}
+
+	T_EQ_MEM(fake.in, want, (size_t)fake.iw * fake.ih * 4);
+	free(want);
+
+	/* the output: cropped, so texel (x, y) is source (x / f, y / f) */
+	for (y = 0; y < h * factor; y++)
+	{
+		for (x = 0; x < w * factor; x++)
+		{
+			const unsigned char *t = out + ((size_t)y * w * factor + x) * 4;
+			const unsigned char *s = rgba + ((y / factor) * w + x / factor) * 4;
+
+			T_EQ_INT(t[0], s[0]);
+			T_EQ_INT(t[1], s[1]);
+			T_EQ_INT(t[2], s[2]);
+			/* the transparent index, not the scaler's 255 */
+			T_EQ_INT(t[3], (idx[(y / factor) * w + x / factor] == 255) ? 0 : 255);
+		}
+	}
+
+	/* the transparent texel took a neighbour's colour (R_Convert8to32) */
+	T_CHECK(rgba[1 * 4 + 3] == 0);
+	T_CHECK(rgba[1 * 4 + 0] != 255);
+
+	free(out);
+	free(rgba);
+}
+
+TEST(upscale_rgba_wrapped_tile)
+{
+	upscale_rgba_case(2, 1);
+	upscale_rgba_case(4, 1);
+}
+
+TEST(upscale_rgba_skin_not_padded)
+{
+	upscale_rgba_case(2, 0);
+	upscale_rgba_case(4, 0);
+}
+
+TEST(upscale_rgba_refuses)
+{
+	const unsigned char idx[4] = { 1, 2, 3, 255 };
+	upscale_fake_scaler_t fake;
+	unsigned table[256];
+
+	upscale_test_table(table);
+	memset(&fake, 0, sizeof(fake));
+
+	T_CHECK(CL_UpscaleRGBA(idx, 2, 2, 3, 1, table, upscale_fake_scale, &fake) == NULL);
+	T_CHECK(CL_UpscaleRGBA(idx, 2, 2, 1, 1, table, upscale_fake_scale, &fake) == NULL);
+	T_CHECK(CL_UpscaleRGBA(idx, 0, 2, 2, 1, table, upscale_fake_scale, &fake) == NULL);
+	T_CHECK(CL_UpscaleRGBA(idx, 2, UPSCALE_MAX_SIDE + 1, 2, 1, table,
+		upscale_fake_scale, &fake) == NULL);
+	T_CHECK(CL_UpscaleRGBA(NULL, 2, 2, 2, 1, table, upscale_fake_scale, &fake) == NULL);
+	T_CHECK(CL_UpscaleRGBA(idx, 2, 2, 2, 1, table, NULL, &fake) == NULL);
+	T_EQ_INT(fake.calls, 0);
+
+	/* a scaler that fails: nothing comes back */
+	fake.fail = 1;
+	T_CHECK(CL_UpscaleRGBA(idx, 2, 2, 2, 1, table, upscale_fake_scale, &fake) == NULL);
+	T_EQ_INT(fake.calls, 1);
+}
+
+TEST(upscale_summary_names_metalfx)
+{
+	upscale_count_t n;
+	char out[256];
+
+	memset(&n, 0, sizeof(n));
+	n.written = 3;
+	n.bytes = 10;
+	CL_UpscaleSummary(&n, 4, UPSCALE_METALFX, "/g/baseq2", out, sizeof(out));
+	T_EQ_STR(out, "upscale_textures: 3 written, 0 skipped, 0 refused, 0 failed, "
+		"10 bytes, 4x with metalfx, in /g/baseq2\n");
+	CL_UpscaleSummary(&n, 2, UPSCALE_SCALE2X, "/g/baseq2", out, sizeof(out));
+	T_EQ_STR(out, "upscale_textures: 3 written, 0 skipped, 0 refused, 0 failed, "
+		"10 bytes, 2x, in /g/baseq2\n");
 }

@@ -488,6 +488,64 @@ CL_UpscaleIndices(const unsigned char *src, int w, int h, int factor,
 	return img;
 }
 
+/* ---- the backends (TASK124) ---- */
+
+const char *
+CL_UpscaleBackendName(int backend)
+{
+	(void)backend;
+	return NULL;
+}
+
+int
+CL_UpscaleParseArgs(int argc, const char *const *argv, int *factor,
+		upscale_backend_t *backend, int *force)
+{
+	(void)argc; (void)argv; (void)factor; (void)backend; (void)force;
+	return 0;
+}
+
+upscale_backend_t
+CL_UpscaleChooseBackend(upscale_backend_t asked, int supported,
+		const char *reason, char *line, size_t linesize)
+{
+	(void)asked; (void)supported; (void)reason;
+	if (linesize) line[0] = '\0';
+	return UPSCALE_SCALE2X;
+}
+
+int
+CL_UpscaleWrapPadRGBA(const unsigned char *src, int w, int h,
+		unsigned char *dst)
+{
+	(void)src; (void)w; (void)h; (void)dst;
+	return 0;
+}
+
+int
+CL_UpscaleCropRGBA(const unsigned char *src, int sw, int sh, int x, int y,
+		int w, int h, unsigned char *dst)
+{
+	(void)src; (void)sw; (void)sh; (void)x; (void)y; (void)w; (void)h; (void)dst;
+	return 0;
+}
+
+void
+CL_UpscaleMaskAlpha(const unsigned char *idx, int w, int h, int factor,
+		unsigned char *rgba)
+{
+	(void)idx; (void)w; (void)h; (void)factor; (void)rgba;
+}
+
+unsigned char *
+CL_UpscaleRGBA(const unsigned char *idx, int w, int h, int factor, int wrap,
+		const unsigned *table, upscale_scaler_t scale, void *ctx)
+{
+	(void)idx; (void)w; (void)h; (void)factor; (void)wrap; (void)table;
+	(void)scale; (void)ctx;
+	return NULL;
+}
+
 /* ---- skins and the palette ---- */
 
 void
@@ -919,9 +977,11 @@ CL_UpscaleCount(upscale_count_t *n, upscale_outcome_t outcome, size_t bytes)
 }
 
 void
-CL_UpscaleSummary(const upscale_count_t *n, int factor, const char *dir,
-		char *out, size_t outsize)
+CL_UpscaleSummary(const upscale_count_t *n, int factor,
+		upscale_backend_t backend, const char *dir, char *out, size_t outsize)
 {
+	(void)backend;
+
 	char dirs[96] = "";
 
 	if (n->baddirs > 0)

@@ -398,6 +398,6 @@ CL_UpscaleTextures_f(void)
 		StrList_Free(&files);
 	}
 
-	CL_UpscaleSummary(&n, factor, FS_Gamedir(), line, sizeof(line));
+	CL_UpscaleSummary(&n, factor, UPSCALE_SCALE2X, FS_Gamedir(), line, sizeof(line));
 	Com_Printf("%s", line);
 }
