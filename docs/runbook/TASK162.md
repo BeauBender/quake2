@@ -41,3 +41,121 @@ gives 1). At `0` the raster draws what main draws, the normal attachment's alpha
 TASK58's kernel `rm_rtw_trace` runs over every pixel as on main. The mark's pipelines are the
 world-space path's resources, built in `rmb_rtw_open_ws` with the others, which setting 0 needs none
 of.
+
+## What changed
+
+- `rm_rtwater.metal`: `rm_fragment_rtw_mark` (the mark's alpha into colour 1) replaces
+  `rm_fragment_rtw_cand`; the vertex function `rm_vertex_rtw_cand` is TASK158's, unchanged.
+  `rm_rtw_compact` reads the marks from the normal attachment (texture 2) and writes the reflection
+  target (now write-only to it) 0 at every pixel it does not list.
+- `rmb_rtwater.m`: `rmb_rtw_mark(enc, surf)`, the draw on the G-buffer raster's encoder, two
+  pipelines (without and with TASK131's surface attachment) built in `rmb_rtw_open_ws` with the
+  other world-space resources, the depth state as before. `rmb_rtw_trace_ws` has no render pass; a
+  view whose raster drew no marks is not traced on the world-space path (no reflection that frame,
+  as when a trace fails). The reflection target is no longer a render target. The `r_rt_stats 2`
+  line keeps its format (`rm_rtwater.c` is outside the card): at `1` the raster's three figures print
+  `-`, the pass's sum is the compaction and the trace, and the span runs from the compaction's start
+  to the trace's end. The marks' own draw is part of the G-buffer raster and is not timed apart.
+- `rmb_gbuf.m`: `rmb_gbuf_raster_formats` (the raster's attachment formats, now shared with the
+  marks' pipelines), the raster's encoder kept while it is open, and the call of `rmb_rtw_mark` at the
+  start of `rmb_gbuf_resolve`, before the shadows and the AO read the normals. `rm_gbuf.metal`: its
+  comment on the normal's alpha.
+- `common/mtl_rtw_math.h` (outside the card's list, needed for a pure C test the kernel shares):
+  `MTL_RTW_MARK_A`, `mtl_rtw_mark_blend`, `mtl_rtw_alpha_level`, `mtl_rtw_marked`; the comments of
+  `MTL_RTW_CLASS_CAND` (now the host test's reference only) and `mtl_rtw_listed`.
+- `rm_rtwaterscene.c` needed no change: `RM_RTW_View` already prepares the outputs and the view
+  before the raster.
+
+## The host test
+
+`test_gbuf_mark` in `tests/metal/rm_rtwater_test.c`: the four alpha levels and their reading;
+every level after 0 to 4 blends, in float and in half precision: marked from the first, "has a
+normal" (`a > 0.5`) kept, and the blend's value within 0.4 of the level it stores, so a conversion
+off by up to 0.6 of a level, rounding or truncating, stores no other; and over 40 scripted frames
+(random materials, normals, a viewport, 0 to 3 water layers a pixel) the old raster's
+`MTL_RTW_CLASS_CAND` marks and the G-buffer's give the same marks and the same list through the
+compaction's loop over the nine, no marked pixel is left unlisted, and every normal reads as the
+raster wrote it. **Red first** with the helpers stubbed (the blend returning its input, nothing
+marked): 43 of 588 checks failed (`<artifacts>/TASK162/tdd/red-stubs.out`); with them, 588
+checks, 0 failed.
+
+## Runs on the bare-metal host
+
+Commits: the branch `b4256343` (the source; later commits are documents) against main `716e09a2`,
+main's `ref_metal` built from an export of it and loaded by this branch's client (byte-identical:
+the card changes only `ref_metal`). The screen was locked for every run; records and byte
+comparisons are valid locked (the brief's 2026-11-16 check). No other `quake2` ran; every batch held
+`tools/heavy.sh`; the one-minute load was 2.1 to 3.0. `PINS_SEED=1`, FIX81's `water.dm2` (the
+same file beside both builds), `MTL_DEBUG_LAYER=1` on every run: each log holds the
+validation banner and no other validation line. A scratch copy of the harness adds the cases
+(`rtw-h1`: `rt-water.cfg` with `r_rt_water_hits 1`; `-e` with `cl_entities 1`; `-cls` with
+`r_rt_water_show 2`; `-sh` with `cl_lights 1` and `r_rt_shadows 1`, so the raster has the surface
+attachment and the marks take their second pipeline; `-fx` with `r_metalfx 2`). Everything is in
+`<artifacts>/TASK162/` (`logs/compare-3.txt`).
+
+### Setting 0: byte for byte against main
+
+| Scenario | Output | Frames equal |
+|---|---|---|
+| `rt-water` | 640 x 480 | 20 of 20 |
+| `rt-water` | 1920 x 1080 | 5 of 5 |
+| `rt-water-entities` | 640 x 480 | 20 of 20 |
+| `fx-off` (`r_rt_water 0`, `r_rt_gbuffer 1`, entities) | 640 x 480 | 20 of 20 |
+| `skywater` | 640 x 480 | 20 of 20 |
+| `rt-water`, shadows on (`rtw-h0sh`) | 640 x 480 | 20 of 20 |
+| `rt-water`, `r_metalfx 2` (`rtw-h0fx`) | 5120 x 2880 | 5 of 5 |
+
+The teardown counts one more `rt` object with the effect on (60/60 against main's 59/59, 69/69
+against 68/68 with the shadows): the marks' two pipelines in place of the separate raster's one.
+
+### Setting 1: against main's setting 1
+
+TASK158's masked comparison allows changes only where the old raster and the G-buffer disagree; there
+are none. Every frame is byte-identical to main's at `1` (the classes view's too), so the masked
+comparison and the shares are main's, as TASK158 measured them (from the picture 97.65 / 91.62 %, in
+world space 2.35 / 8.38 %, none without a reflection, over and under the pool). A frame whose view drew no marks is not traced, so it would have no reflection
+and differ from main: equal frames also show the marks ran on every traced frame.
+
+| Scenario | Output | Frames equal |
+|---|---|---|
+| `rtw-h1` | 640 x 480 | 20 of 20 |
+| `rtw-h1` | 1920 x 1080 | 5 of 5 |
+| `rtw-h1` | 3840 x 2160 (`PINS_HIDPI=1`) | 5 of 5 |
+| `rtw-h1e` (entities: FIX81's pass-over loop) | 640 x 480 | 20 of 20 |
+| `rtw-h1cls` (the classes view, `r_rt_water_show 2`) | 640 x 480 | 20 of 20 |
+| `rtw-h1sh` (shadows on: the surface attachment's pipeline) | 640 x 480 | 20 of 20 |
+| `rtw-h1sh` | 1920 x 1080 | 5 of 5 |
+| `rtw-h1fx` (`r_metalfx 2`) | 5120 x 2880 | 1 of 5; see below |
+
+**`rtw-h1fx` is not deterministic on main.** Three records of main itself: the first and second are
+equal, the third differs from them on frames 1 to 4 by 1.9 to 3.3 % of the pixels, at most 7 levels,
+spread over the whole frame (frame 0 always equal). The branch's two records differ from each other
+and from each of main's by the same amounts (1.87 to 3.27 %, at most 7). So the branch's frames are
+inside main's own run-to-run spread for this case, and the spread is outside the water too: the
+temporal scaler's history, not the marks. It is a finding for a card of its own (main, `r_rt_water_hits
+1` with `r_metalfx 2`); `0` with `r_metalfx 2` was equal on its one pair of records.
+
+### Cost
+
+**Pending: the screen was locked for the whole of this card's run** (`ioreg` showed
+`CGSSessionScreenIsLocked` at every check), and a timing run needs it unlocked. Nothing was measured;
+the cases stay the card's (1920 x 1080 and 5120 x 2880, with and without `r_metalfx 2`, held and not
+held, three runs a case alternated with main, and `demo1.dm2` for a view with no water), by the owner's
+protocol (one `heavy.sh` hold a batch, a 4-minute full-load pre-warm inside it, before every run the
+load, `memory_pressure -Q`, the GPU utilization from `ioreg` and `pmset -g therm`, "frequency: not
+recorded" until TASK166 lands). The `r_rt_stats 2` sum at `1` is now the compaction and the trace; the
+marks' draw is inside the G-buffer raster, so the frame's own GPU time is the fair comparison with
+`0`. The proposal on the default waits for those numbers.
+
+## Follow-ups (outside the card's files)
+
+- `header/rm_rtwater.h` (the stats fields' and `rmb_rtw_prepare`'s comments), `rmb_rt.m` (two
+  comments) and `doc/040_cvarlist.md` (`r_rt_stats 2`'s "three parts" and `r_rt_water_hits`' cost)
+  still describe the separate raster; `rm_rtwater.c`'s stats line could drop its raster figures.
+
+## Checks
+
+On the branch, each through `tools/heavy.sh`: the water host test (588 checks, 0 failed),
+`make client ref_metal game ref_soft` (exit 0), `tests/check-ref-metal.sh`,
+`tests/check-doc-links.sh`, `tests/check-no-local-identity.sh` (results in the card's report).
+`tests/check-runbook-index.sh` fails on this file until its index line is added at merge.

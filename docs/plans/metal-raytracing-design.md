@@ -1049,7 +1049,7 @@ Until then the subsection above describes A as RT11 builds it, and RT13
 builds E, so that both can be measured; neither
 is the decision, and nothing is recorded in `docs/decisions/`.
 
-### The water reflections' measured cost (RT6: TASK58, TASK158)
+### The water reflections' measured cost (RT6: TASK58, TASK158, TASK162)
 
 Measured, `r_rt_water_hits 1` costs more than `0` and does not meet the reflections' share. At
 1920 x 1080 with the frame rate held to the display, the pass takes **4.66 ms** against TASK58's
@@ -1092,8 +1092,14 @@ the extra time sits, not what the frame pays: the timestamps do not show whether
 wait or runs other work then, and only the frame's own GPU time settles that. The per-pass split is
 in [TASK158](../runbook/TASK158.md).
 
-The follow-up is TASK162: mark the water pixels in the G-buffer raster itself, with no pass of its
-own, no reload of the depth and no wait, so that the trace on the list is what `1` adds.
+TASK162 removes that raster ([its runbook](../runbook/TASK162.md)): the G-buffer raster's last draw
+marks the pixels with water in front of its depth in the normal attachment's alpha (two bits: 1 to
+2/3 with a normal, 0 to 1/3 without, so every reader's "has a normal", above 0.5, is unchanged), the
+compaction reads the marks there and writes 0 where it lists nothing, and the world-space path keeps
+only its two compute encoders. The list is the one the separate raster gave: every frame of
+`rt-water`, `rt-water-entities` and the shadows' case at `1` is byte-identical to main's, and `0`'s
+are main's. The cost after the change is not measured yet (the runbook says why); the figures above
+are TASK158's, with the separate raster.
 
 ## 3. What the rasterizer must expose
 
