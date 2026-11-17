@@ -433,10 +433,16 @@ for point in "rm_main.c RI_RenderFrame rmb_pass_3d(" "rm_main.c RI_EndFrame rmb_
 	fi
 	for m in removed commented moved renamed; do
 		flush_mutant "$m" "$f" "$fn" "$call" > "${tmp:?}/flush-mutant.c"
+		# the renamed function is "not found" (2), the others "no flush before the call" (1)
+		case $m in renamed) want=2 ;; *) want=1 ;; esac
+		rc=0
+		flushed "${tmp:?}/flush-mutant.c" "$fn" "$call" || rc=$?
 		if cmp -s "$f" "${tmp:?}/flush-mutant.c"; then
 			bad "the flush-point mutant ($m) of $fn changed nothing"
-		elif flushed "${tmp:?}/flush-mutant.c" "$fn" "$call"; then
+		elif [ "$rc" = 0 ]; then
 			bad "the flush-point check passes a mutant of $fn (the flush $m)"
+		elif [ "$rc" != "$want" ]; then
+			bad "the flush-point check gives status $rc, not $want, for a mutant of $fn ($m)"
 		else
 			flush_mutants=$((flush_mutants + 1))
 		fi
@@ -515,7 +521,7 @@ kcall_mutant() {
 kcall_mutants=0 kcall_pairs=0
 for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm_rtw_trace mtl_rtw_choose" \
 	"rm_rtwater.metal rm_rtw_trace_ws mtl_rtw_ws_next" "rm_rtwater.metal rm_rtw_trace_ws mtl_rtw_choose_ws" \
-	"rm_rtwater.metal rm_rtw_ss_at mtl_rtw_choose"; do
+	"rm_rtwater.metal rm_rtw_ss_at mtl_rtw_choose" "rm_rtwater.metal rm_rtw_trace rm_rtw_ss_at"; do
 	# shellcheck disable=SC2086 # three words: file, kernel, helper
 	set -- $pair
 	f=$rm_dir/$1 kn=$2 hp=$3
