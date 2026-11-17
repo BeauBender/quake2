@@ -768,8 +768,10 @@ FS_FreeSearchPaths(fsSearchPath_t *start, fsSearchPath_t *end)
 
 /*
  * The directory (offset and length from the header) must lie inside
- * the file, hold a whole number of entries and at most
- * MAX_FILES_IN_PACK of them. Written without a sum that can wrap.
+ * the file and hold a whole number of entries. That bounds the entry
+ * count by the file size; a pak with more than MAX_FILES_IN_PACK entries
+ * still loads, with a warning, as before. Written without a sum that can
+ * wrap.
  */
 qboolean
 FS_PakDirectoryInBounds(long long packSize, int dirofs, int dirlen)
@@ -780,11 +782,6 @@ FS_PakDirectoryInBounds(long long packSize, int dirofs, int dirlen)
 	}
 
 	if ((dirlen % sizeof(dpackfile_t)) != 0)
-	{
-		return false;
-	}
-
-	if ((dirlen / sizeof(dpackfile_t)) > MAX_FILES_IN_PACK)
 	{
 		return false;
 	}
@@ -897,6 +894,12 @@ FS_LoadPAK(const char *packPath)
 				"file size %lld), skipped\n",
 				__func__, packPath, header.dirofs, header.dirlen, packSize);
 		return NULL;
+	}
+
+	if (numFiles > MAX_FILES_IN_PACK)
+	{
+		Com_Printf("%s: '%s' has %i > %i files\n",
+			__func__, packPath, numFiles, MAX_FILES_IN_PACK);
 	}
 
 	info = malloc(header.dirlen);

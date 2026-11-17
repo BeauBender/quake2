@@ -398,7 +398,8 @@ pak_accepted(const char *mod)
 
 /*
  * What the pak loader bounds: the directory against the size of the
- * file, the entry count, and each entry against the size of the pack.
+ * file (which bounds the entry count), and each entry against the size
+ * of the pack.
  * A pak that fails one of these is skipped with a console line and its
  * handle closed. A short header and an empty directory still end the
  * process, as before.
@@ -427,13 +428,15 @@ TEST(fs_pak_bounds)
 	write_raw_pak("data/t_pb_dir_odd/pak0.pak", 85, 20, 20, 65, "a.txt", 12, 8, 1);
 	T_CHECK(!pak_accepted("t_pb_dir_odd"));
 
-	/* The entry-count limit and one past it. */
+	/* The entry-count limit and one past it: both load, the second with
+	   the warning it always had. */
 	write_raw_pak("data/t_pb_count_max/pak0.pak", 12 + 64 * MAX_FILES_IN_PACK,
 		12, 12, 64 * MAX_FILES_IN_PACK, "f", 12, 0, MAX_FILES_IN_PACK);
 	T_CHECK(pak_accepted("t_pb_count_max"));
 	write_raw_pak("data/t_pb_count_over/pak0.pak", 12 + 64 * (MAX_FILES_IN_PACK + 1),
 		12, 12, 64 * (MAX_FILES_IN_PACK + 1), "f", 12, 0, MAX_FILES_IN_PACK + 1);
-	T_CHECK(!pak_accepted("t_pb_count_over"));
+	T_CHECK(pak_accepted("t_pb_count_over"));
+	T_CONSOLE_HAS("has 4097 > 4096 files");
 
 	/* Layout B: header, directory, 8 data bytes at the end (size 84).
 	   An entry ending exactly at the end of the pack, and one byte
@@ -513,10 +516,10 @@ TEST(fs_pak_bound_functions)
 	/* Offset 0 is a legal value. */
 	T_CHECK(FS_PakDirectoryInBounds(64, 0, 64));
 	T_CHECK(!FS_PakDirectoryInBounds(-1, 0, 64));
-	/* Count limit, one past it, and an offset plus length that would
-	   wrap an int. */
+	/* No count limit beyond the file size, and an offset plus length that
+	   would wrap an int. */
 	T_CHECK(FS_PakDirectoryInBounds(1 << 20, 12, 64 * MAX_FILES_IN_PACK));
-	T_CHECK(!FS_PakDirectoryInBounds(1 << 20, 12, 64 * (MAX_FILES_IN_PACK + 1)));
+	T_CHECK(FS_PakDirectoryInBounds(1 << 20, 12, 64 * (MAX_FILES_IN_PACK + 1)));
 	T_CHECK(!FS_PakDirectoryInBounds(0x7fffffffLL, 0x7fffffc0, 64 * 4097));
 	T_CHECK(!FS_PakDirectoryInBounds(0x7fffffffLL, 0x7fffffff, 64));
 
