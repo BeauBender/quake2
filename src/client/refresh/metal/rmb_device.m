@@ -849,9 +849,9 @@ rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen)
 /*
  * Takes every frame slot back, then returns them: no frame is on the GPU
  * after it. The slots share one deadline, RMB_GPU_WAIT_MS; those still
- * held then are given up on (rmb_frames_lost), and a later drain before
- * the next layer is attached (teardown's second rmb_detach, from
- * rmb_close, and rmb_attach's own) takes them back only if they are free
+ * held then are given up on (rmb_frames, header/rmb_drain.h), and a later
+ * drain before the next layer is attached (teardown's second rmb_detach,
+ * from rmb_close, and rmb_attach's own) takes them back only if they are free
  * at once, as the shim's mgl_release_all waits for no frame (FIX84). A
  * frame begins only with a layer (rmb_frame_begin), so until rmb_attach
  * the slots given up on are those the hung frames hold.

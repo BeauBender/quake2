@@ -302,7 +302,11 @@ each dropped (1 each), its `||` made `&&` (2), no mark at all (3); the new
 group with no mark (1), on any mark (2), on a different group (4), never
 (2). The two survivors are equivalent: the frame count's clamps moved by
 one (`lost < 0`, `lost > 3`) give the same count at the boundary. The
-calls in `rmb_device.m` are held by the build, not by the test.
+test holds the decisions, not that `rmb_device.m` makes them: with that
+file put back to its version before this card, `tests/check-ref-metal.sh`
+still passes, because the host test does not compile it. The call sites
+were traced against round 1's inline code and give the same result in
+each case.
 
 **The fault probe, on a VM.** This host is a virtual machine: its Metal
 device is `Apple Paravirtual device`, not the bare-metal GPU of the runs
