@@ -50,10 +50,12 @@
 #     refusal, the wall-time bound and its default;
 #   - statistics against hand-computed values; the drift rule inside, at
 #     the edge and outside; compare's table and verdict;
+#   - a leading zero (08, 010) refused by every numeric setting and case key
+#     the core reads, before anything runs;
 #   - the core and bench.sh name no game and no project layout, and use no
 #     eval.
 # The tests that do not test the host facts use a fast stand-in for
-# system_profiler (fast_profiler). Then fourteen mutants, each applied to a
+# system_profiler (fast_profiler). Then fifteen mutants, each applied to a
 # copy of scripts/bench/ and each required to fail the test it targets: the
 # lock made neither exclusively nor linked, the holder renamed over
 # another's, the command spawned without its own process group, its fork
@@ -62,7 +64,7 @@
 # in the spawn window dropped, or acted on at once, re-entry accepts any
 # token, the drift rule drops t, the core names a game, the reclaim guard
 # made with mkdir -p, the holder-less grace dropped, the store's
-# outside-repository check deleted; and one to this test's own fixture, gc.sh
+# outside-repository check deleted, the leading-zero refusal dropped; and one to this test's own fixture, gc.sh
 # with its standard error left open.
 #
 # Usage: tests/check-bench.sh [<test>...]   (named tests only, no mutants)
@@ -1308,8 +1310,133 @@ t_compare() {
 	[ "$fails" -eq 0 ]
 }
 
+# A numeric setting is `0` or digits that do not start with 0: shell
+# arithmetic reads 08 as a bad octal, so it is refused before any
+# arithmetic, with the status and message of any other non-number (2).
+# zcase <key> <value>: a case file E/z.case that sets the key to the value.
+zcase() {
+	{
+		printf 'adapter=null\nmetric=ms\nabs_tol=0.5\nrel_tol=0.02\n'
+		[ "$1" = runs ] || printf 'runs=3\n'
+		printf '%s=%s\n' "$1" "$2"
+	} > "${E:?}/z.case"
+}
+t_leading_zero() {
+	fresh zero
+	# the one validator, direct: 08 09 010 00 refused, 0 8 10 accepted
+	for _v in 08 09 010 00 007; do
+		( . "$R/core/common.sh" 2> /dev/null; bench_is_uint "$_v" ) && bad "zero: bench_is_uint accepts $_v"
+	done
+	for _v in 0 8 10 1000; do
+		( . "$R/core/common.sh" 2> /dev/null; bench_is_uint "$_v" ) || bad "zero: bench_is_uint refuses $_v"
+	done
+	for _v in 08 09 010; do
+		# each setting the core reads, with a command that must never run
+		for _s in BENCH_STOP_GRACE BENCH_LOCK_WAIT BENCH_LOCK_GRACE; do
+			rm -f "${E:?}/ran"
+			_st=0
+			env "$_s=$_v" sh "$R/bench.sh" lock run zero -- touch "${E:?}/ran" > "${E:?}/out" 2> "${E:?}/err" || _st=$?
+			[ "$_st" -eq 2 ] || bad "zero: $_s=$_v was not refused with 2 (status $_st)"
+			[ ! -e "${E:?}/ran" ] || bad "zero: $_s=$_v let the command run"
+			grep -q "$_s is whole seconds" "${E:?}/err" || bad "zero: $_s=$_v: the refusal does not name the setting: $(sed -n 1p "${E:?}/err")"
+		done
+		# the case keys: runs, warmup, wall
+		for _k in runs warmup wall; do
+			zcase "$_k" "$_v"
+			_st=0
+			B case "${E:?}/z.case" > /dev/null 2> "${E:?}/err" || _st=$?
+			[ "$_st" -eq 2 ] || bad "zero: the case key $_k=$_v was not refused with 2 (status $_st)"
+		done
+		# a wall time, through the bound
+		_st=0
+		( . "$R/core/common.sh" 2> /dev/null; bench_bounded "$_v" true ) > /dev/null 2>&1 || _st=$?
+		[ "$_st" -eq 2 ] || bad "zero: a wall time of $_v was not refused with 2 (status $_st)"
+	done
+	for _v in 0 8 10; do
+		for _s in BENCH_LOCK_WAIT BENCH_LOCK_GRACE BENCH_STOP_GRACE; do
+			_st=0
+			env "$_s=$_v" sh "$R/bench.sh" lock run zero -- true > /dev/null 2>&1 || _st=$?
+			[ "$_st" -eq 0 ] || bad "zero: $_s=$_v was refused (status $_st)"
+		done
+		for _k in warmup wall; do
+			zcase "$_k" "$_v"
+			_st=0
+			B case "${E:?}/z.case" > /dev/null 2> "${E:?}/err" || _st=$?
+			[ "$_st" -eq 0 ] || bad "zero: the case key $_k=$_v was refused ($(sed -n 1p "${E:?}/err"))"
+		done
+	done
+	for _v in 1 8 10; do
+		zcase runs "$_v"
+		B case "${E:?}/z.case" > /dev/null 2> "${E:?}/err" || bad "zero: the case key runs=$_v was refused"
+	done
+	# the card's case end to end: a TERM-ignoring command under BENCH_STOP_GRACE=08
+	# is refused at start and never reaches a stop; nothing is left running
+	cat > "${E:?}/deaf.sh" <<'DEAF'
+#!/bin/sh
+trap '' TERM
+echo $$ > "$1"
+sleep 20
+DEAF
+	rm -f "${E:?}/deaf.pid"
+	_st=0
+	env BENCH_STOP_GRACE=08 sh "$R/bench.sh" lock run deaf -- sh "${E:?}/deaf.sh" "${E:?}/deaf.pid" > "${E:?}/deaf.out" 2> "${E:?}/deaf.err" || _st=$?
+	[ "$_st" -eq 2 ] || bad "zero: BENCH_STOP_GRACE=08 with a TERM-ignoring command was not refused at start (status $_st)"
+	if [ -s "${E:?}/deaf.pid" ]; then
+		bad "zero: the TERM-ignoring command was started under BENCH_STOP_GRACE=08"
+	fi
+	[ "$(B lock status 2> /dev/null)" = lock=free ] || bad "zero: the lock is not free after the refusal"
+	[ "$fails" -eq 0 ]
+}
+
+# A numeric setting is also at most 9 digits (as the quake2 adapter's own cap is): a
+# longer value wraps in shell arithmetic (a grace of 7.8e18 s, or -2) or makes a test
+# fail inside its `if`, so a wait never gave up. Refused before any arithmetic, status 2.
+t_digit_cap() {
+	fresh cap
+	for _v in 1234567890 99999999999999999999; do
+		( . "$R/core/common.sh" 2> /dev/null; bench_is_uint "$_v" ) && bad "cap: bench_is_uint accepts $_v"
+		for _s in BENCH_STOP_GRACE BENCH_LOCK_WAIT BENCH_LOCK_GRACE; do
+			rm -f "${E:?}/ran"
+			_st=0
+			env "$_s=$_v" sh "$R/bench.sh" lock run cap -- touch "${E:?}/ran" > "${E:?}/out" 2> "${E:?}/err" || _st=$?
+			[ "$_st" -eq 2 ] || bad "cap: $_s=$_v was not refused with 2 (status $_st)"
+			[ ! -e "${E:?}/ran" ] || bad "cap: $_s=$_v let the command run"
+			grep -q "$_s is whole seconds" "${E:?}/err" || bad "cap: $_s=$_v: the refusal does not name the setting"
+		done
+		# runs: before the cap, a 20-digit value made its 1-to-1000 test error inside the if and pass
+		for _k in warmup wall runs; do
+			zcase "$_k" "$_v"
+			_st=0
+			B case "${E:?}/z.case" > /dev/null 2> "${E:?}/err" || _st=$?
+			[ "$_st" -eq 2 ] || bad "cap: the case key $_k=$_v was not refused with 2 (status $_st)"
+		done
+		_st=0
+		( . "$R/core/common.sh" 2> /dev/null; bench_bounded "$_v" true ) > /dev/null 2>&1 || _st=$?
+		[ "$_st" -eq 2 ] || bad "cap: a wall time of $_v was not refused with 2 (status $_st)"
+	done
+	( . "$R/core/common.sh" 2> /dev/null; bench_is_uint 999999999 ) || bad "cap: bench_is_uint refuses 999999999"
+	for _s in BENCH_STOP_GRACE BENCH_LOCK_WAIT BENCH_LOCK_GRACE; do
+		_st=0
+		env "$_s=999999999" sh "$R/bench.sh" lock run cap -- true > /dev/null 2>&1 || _st=$?
+		[ "$_st" -eq 0 ] || bad "cap: $_s=999999999 was refused (status $_st)"
+	done
+	for _k in warmup wall; do
+		zcase "$_k" 999999999
+		_st=0
+		B case "${E:?}/z.case" > /dev/null 2> "${E:?}/err" || _st=$?
+		[ "$_st" -eq 0 ] || bad "cap: the case key $_k=999999999 was refused"
+	done
+	# the cksum fallback reads CRCs of up to 10 digits: the cap is not theirs
+	mkdir -p "${E:?}/fakebin"
+	printf '#!/bin/sh\ncat > /dev/null\necho "4294967295 3"\n' > "${E:?}/fakebin/cksum"
+	chmod +x "${E:?}/fakebin/cksum"
+	_h=$(printf 'x\n' | ( PATH="${E:?}/fakebin:$PATH" BENCH_HASH=cksum; export PATH BENCH_HASH; . "$R/core/common.sh" 2> /dev/null; bench_hash ) 2> /dev/null) || _h=
+	[ "$_h" = ffffffffffffffff ] || bad "cap: a 10-digit CRC from cksum gave '$_h'"
+	[ "$fails" -eq 0 ]
+}
+
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare"
+all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_digit_cap"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
@@ -1382,6 +1509,9 @@ mutant drift-no-t core/stats.sh 'lo = mn - t; hi = mx + t' 'lo = mn; hi = mx' t_
 mutant core-names-game core/common.sh '' '# the Quake II adapter' t_generic || mfail=1
 mutant reclaim-guard core/lock.sh 'if ! mkdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' 'if ! mkdir -p "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' t_lock_guard || mfail=1
 mutant bare-no-grace core/lock.sh '-ge "$_la_grace" ]; then' '-ge 0 ]; then' t_lock_guard || mfail=1
+mutant leading-zero-accepted core/common.sh "'' | *[!0-9]* | 0?*) return 1 ;;" "'' | *[!0-9]*) return 1 ;;" t_leading_zero || mfail=1
+mutant digit-cap-dropped core/common.sh '	bench_is_uint_max "$1" 9' '	bench_is_uint_max "$1" 99' t_digit_cap || mfail=1
+mutant digit-cap-crc core/common.sh '! bench_is_uint_max "$_bh_a" 10' '! bench_is_uint_max "$_bh_a" 9' t_digit_cap || mfail=1
 # Last: it writes into the throwaway repository's work tree.
 mutant store-in-repo core/store.sh 'bench_outside_repo "$BENCH_STORE_ROOT" "the store (BENCH_STORE)"' ':' t_store_guard || mfail=1
 [ "$mfail" -eq 0 ] || exit 1
