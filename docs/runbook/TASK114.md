@@ -129,3 +129,124 @@ removed when the run ends or at the start of the next.
 It feeds synthetic results, synthetic TGAs and a fake engine, in a scratch directory with the
 caller's `GIT_*` variables and git configuration removed, and then runs every assertion against a
 mutant of the line it covers.
+
+## The M6 report
+
+One run on the M6 (Apple M6, family apple5, `r_metalfx_modes` 31), engine commit 3c8fb3c1 (clean tree, build checked),
+1280x720, 5 `timedemo` rounds and 3 GPU rounds, seed 1, run in chunks
+of one scenario (each chunk one lock hold, with a 240 s pre-warm of the same engine first).
+The report is local to that machine; it is not in any repository, issue or pull request.
+
+**Scenarios run:** `world`, `world-lmcubic`, `rt-ao`, `rt-ao-entities`, `rt-shadows`. The run was
+cut here, not finished: each chunk took 11 to 14 minutes and other lanes held the lock between
+them, so the other scenarios that the generator offers (`world-fullbright`, `world-scale8`,
+`world-metalfx1` to `3`, `world-metalfx-interp`, `models`, `particles`, `particles-cap`, `dlights`,
+`dlights-lmcubic`, `skywater`, `cinematic`, `hud2d`, `hud2d-sharp`, `hud2d-scale8`,
+`rt-shadows-entities`, `rt-water`, `rt-water-entities`) have no M6 numbers yet.
+
+**Skipped options (every scenario):** `den1` and `fx3-s50-den1`, because the engine reports no cvar
+`r_rt_denoiser`. Every `r_metalfx` mode 1, 2 and 3 at scales 0.75, 0.50 and 0.34, and the three
+frame-generation rows (`-interp`), ran.
+
+**Numbers.** fps and GPU times are medians with the range of the runs in brackets (fps over 5
+rounds, GPU times over 3 per-run medians); ssim is the mean over the frames of one seeded record
+against native size (1 is identical). "frame" is the GPU time of the whole frame, "scaler" the
+scaler pass. Frame times of 0.03 to 0.10 ms differ between runs of one option by the
+timestamp resolution of the counter, so read them as a band, not a difference.
+
+| scenario | option | fps | frame ms | scaler ms | ssim |
+|---|---|---|---|---|---|
+| rt-ao-entities | native | 1548 (1531-1614) | 0.026 (0.025-0.026) | - | native |
+| rt-ao-entities | fx1-s34 | 2452 (2443-2470) | 0.053 (0.029-0.088) | 1.106 (0.382-1.160) | 0.905164 |
+| rt-ao-entities | fx1-s50 | 2201 (2187-2259) | 0.087 (0.027-0.088) | 0.811 (0.390-1.362) | 0.919205 |
+| rt-ao-entities | fx1-s50-interp | 2252 (2237-2274) | 0.055 (0.053-0.088) | 0.791 (0.746-1.272) | 0.919205 |
+| rt-ao-entities | fx1-s75 | 1813 (1629-1862) | 0.029 (0.027-0.086) | 0.992 (0.525-1.214) | 0.921912 |
+| rt-ao-entities | fx2-s34 | 1488 (1463-1508) | 0.088 (0.029-0.089) | 0.172 (0.108-0.333) | 0.914942 |
+| rt-ao-entities | fx2-s50 | 1224 (1200-1239) | 0.087 (0.027-0.088) | 0.163 (0.144-0.172) | 0.934878 |
+| rt-ao-entities | fx2-s50-interp | 1230 (1196-1244) | 0.088 (0.027-0.089) | 0.179 (0.139-0.208) | 0.934883 |
+| rt-ao-entities | fx2-s75 | 908 (889-920) | 0.088 (0.027-0.089) | 0.280 (0.205-0.298) | 0.949315 |
+| rt-ao-entities | fx3-s34 | 1460 (1441-1491) | 0.029 (0.029-0.089) | 0.171 (0.108-0.199) | 0.914942 |
+| rt-ao-entities | fx3-s50 | 1217 (1178-1230) | 0.029 (0.028-0.089) | 0.142 (0.140-0.192) | 0.934878 |
+| rt-ao-entities | fx3-s50-interp | 1222 (1190-1233) | 0.029 (0.029-0.029) | 0.141 (0.139-0.143) | 0.934878 |
+| rt-ao-entities | fx3-s75 | 968 (929-970) | 0.088 (0.028-0.096) | 0.247 (0.212-0.248) | 0.949317 |
+| rt-ao | native | 2101 (2063-2126) | 0.026 (0.026-0.085) | - | native |
+| rt-ao | fx1-s34 | 3704 (3588-3807) | 0.101 (0.101-0.102) | 0.582 (0.430-0.583) | 0.908453 |
+| rt-ao | fx1-s50 | 3062 (3035-3132) | 0.098 (0.058-0.102) | 0.724 (0.432-0.732) | 0.922465 |
+| rt-ao | fx1-s50-interp | 3049 (3009-3190) | 0.101 (0.096-0.101) | 0.728 (0.725-0.761) | 0.922465 |
+| rt-ao | fx1-s75 | 2259 (2252-2360) | 0.096 (0.095-0.097) | 0.799 (0.632-1.081) | 0.924821 |
+| rt-ao | fx2-s34 | 1705 (1637-1714) | 0.096 (0.096-0.096) | 0.203 (0.202-0.250) | 0.918190 |
+| rt-ao | fx2-s50 | 1315 (1293-1320) | 0.095 (0.042-0.095) | 0.208 (0.207-0.248) | 0.938030 |
+| rt-ao | fx2-s50-interp | 1307 (1300-1317) | 0.095 (0.033-0.095) | 0.208 (0.194-0.209) | 0.938030 |
+| rt-ao | fx2-s75 | 976 (952-993) | 0.094 (0.094-0.094) | 0.259 (0.245-0.279) | 0.951856 |
+| rt-ao | fx3-s34 | 1685 (1625-1693) | 0.096 (0.095-0.097) | 0.323 (0.246-0.328) | 0.918190 |
+| rt-ao | fx3-s50 | 1310 (1283-1330) | 0.096 (0.096-0.096) | 0.210 (0.194-0.212) | 0.938030 |
+| rt-ao | fx3-s50-interp | 1305 (1285-1328) | 0.096 (0.096-0.097) | 0.208 (0.193-0.214) | 0.938030 |
+| rt-ao | fx3-s75 | 1049 (1016-1052) | 0.058 (0.030-0.095) | 0.260 (0.206-0.310) | 0.951856 |
+| rt-shadows | native | 3146 (2996-3411) | 0.051 (0.051-0.085) | - | native |
+| rt-shadows | fx1-s34 | 4077 (3765-4201) | 0.096 (0.057-0.097) | 0.523 (0.506-0.554) | 0.943756 |
+| rt-shadows | fx1-s50 | 3626 (3462-3937) | 0.096 (0.096-0.097) | 0.681 (0.649-0.685) | 0.967787 |
+| rt-shadows | fx1-s50-interp | 3533 (3445-3937) | 0.100 (0.097-0.101) | 0.620 (0.506-0.647) | 0.967787 |
+| rt-shadows | fx1-s75 | 3104 (2835-3205) | 0.097 (0.095-0.098) | 0.958 (0.714-0.991) | 0.979988 |
+| rt-shadows | fx2-s34 | 1776 (1744-1790) | 0.098 (0.097-0.100) | 0.325 (0.324-0.331) | 0.946759 |
+| rt-shadows | fx2-s50 | 1457 (1412-1524) | 0.094 (0.058-0.095) | 0.302 (0.301-0.391) | 0.971184 |
+| rt-shadows | fx2-s50-interp | 1460 (1441-1485) | 0.058 (0.042-0.096) | 0.300 (0.245-0.399) | 0.971184 |
+| rt-shadows | fx2-s75 | 1131 (1124-1150) | 0.029 (0.029-0.029) | 0.206 (0.203-0.246) | 0.985681 |
+| rt-shadows | fx3-s34 | 1785 (1758-1799) | 0.095 (0.089-0.098) | 0.324 (0.244-0.324) | 0.946759 |
+| rt-shadows | fx3-s50 | 1478 (1450-1518) | 0.096 (0.058-0.096) | 0.248 (0.243-0.251) | 0.971184 |
+| rt-shadows | fx3-s50-interp | 1485 (1435-1488) | 0.058 (0.058-0.097) | 0.249 (0.245-0.392) | 0.971184 |
+| rt-shadows | fx3-s75 | 1235 (1220-1244) | 0.095 (0.095-0.096) | 0.292 (0.291-0.295) | 0.985681 |
+| world-lmcubic | native | 11113 (10600-11879) | 0.089 (0.088-0.090) | - | native |
+| world-lmcubic | fx1-s34 | 6097 (5839-6207) | 0.096 (0.093-0.098) | 0.342 (0.342-0.344) | 0.947409 |
+| world-lmcubic | fx1-s50 | 5940 (5694-5991) | 0.097 (0.097-0.100) | 0.362 (0.361-0.362) | 0.969647 |
+| world-lmcubic | fx1-s50-interp | 5742 (5648-5940) | 0.098 (0.097-0.100) | 0.362 (0.361-0.363) | 0.969647 |
+| world-lmcubic | fx1-s75 | 5425 (5104-5512) | 0.100 (0.094-0.101) | 0.407 (0.406-0.410) | 0.981365 |
+| world-lmcubic | fx2-s34 | 1935 (1847-1941) | 0.092 (0.029-0.098) | 0.326 (0.143-0.328) | 0.950062 |
+| world-lmcubic | fx2-s50 | 1656 (1637-1676) | 0.091 (0.056-0.092) | 0.307 (0.243-0.375) | 0.972574 |
+| world-lmcubic | fx2-s50-interp | 1637 (1602-1668) | 0.057 (0.057-0.093) | 0.243 (0.209-0.306) | 0.972574 |
+| world-lmcubic | fx2-s75 | 1343 (1322-1348) | 0.092 (0.091-0.094) | 0.343 (0.294-0.346) | 0.986464 |
+| world-lmcubic | fx3-s34 | 1935 (1909-1974) | 0.097 (0.094-0.098) | 0.317 (0.247-0.324) | 0.950062 |
+| world-lmcubic | fx3-s50 | 1629 (1621-1668) | 0.094 (0.057-0.094) | 0.243 (0.215-0.243) | 0.972574 |
+| world-lmcubic | fx3-s50-interp | 1640 (1614-1660) | 0.057 (0.029-0.057) | 0.243 (0.157-0.243) | 0.972574 |
+| world-lmcubic | fx3-s75 | 1450 (1415-1454) | 0.094 (0.029-0.094) | 0.295 (0.198-0.346) | 0.986464 |
+| world | native | 13250 (13000-13510) | 0.088 (0.086-0.088) | - | native |
+| world | fx1-s34 | 6380 (5889-6380) | 0.096 (0.095-0.097) | 0.331 (0.331-0.331) | 0.947339 |
+| world | fx1-s50 | 6207 (5889-6264) | 0.099 (0.098-0.100) | 0.341 (0.341-0.341) | 0.969627 |
+| world | fx1-s50-interp | 5991 (5602-6097) | 0.098 (0.096-0.101) | 0.341 (0.341-0.342) | 0.969627 |
+| world | fx1-s75 | 5839 (5425-5940) | 0.096 (0.096-0.098) | 0.365 (0.365-0.365) | 0.981374 |
+| world | fx2-s34 | 1925 (1898-1969) | 0.092 (0.056-0.092) | 0.326 (0.199-0.326) | 0.949988 |
+| world | fx2-s50 | 1672 (1656-1680) | 0.092 (0.091-0.100) | 0.396 (0.390-0.396) | 0.972556 |
+| world | fx2-s50-interp | 1668 (1625-1689) | 0.057 (0.056-0.096) | 0.243 (0.242-0.302) | 0.972556 |
+| world | fx2-s75 | 1356 (1335-1406) | 0.092 (0.069-0.092) | 0.348 (0.345-0.349) | 0.986463 |
+| world | fx3-s34 | 1914 (1893-1963) | 0.099 (0.098-0.100) | 0.317 (0.295-0.325) | 0.949988 |
+| world | fx3-s50 | 1652 (1580-1680) | 0.093 (0.029-0.095) | 0.194 (0.180-0.301) | 0.972556 |
+| world | fx3-s50-interp | 1672 (1584-1701) | 0.095 (0.030-0.096) | 0.249 (0.139-0.301) | 0.972556 |
+| world | fx3-s75 | 1472 (1463-1501) | 0.057 (0.029-0.093) | 0.277 (0.218-0.292) | 0.986463 |
+
+**Frequencies** (around the timed part of each chunk, after the pre-warm; median MHz and share of
+active time at the top state):
+
+| scenario | E cluster | P cluster | GPU |
+|---|---|---|---|
+| `world` | 1335 MHz, 7.4% | 4449 MHz, 79.9% | 1035 MHz, 32.3% |
+| `world-lmcubic` | 1319 MHz, 5.7% | 4429 MHz, 78.8% | 1039 MHz, 32.9% |
+| `rt-ao` | 1353 MHz, 6.8% | 4347 MHz, 75.1% | 1096 MHz, 40.3% |
+| `rt-ao-entities` | 1355 MHz, 4.6% | 4084 MHz, 63.1% | 1144 MHz, 47.0% |
+| `rt-shadows` | 1363 MHz, 5.8% | 4189 MHz, 68.1% | 1006 MHz, 35.8% |
+
+The frequencies are weighted averages over the window, from the no-root IOReport probe; the P
+cluster's top state is 4788 MHz, the E cluster's 2940 MHz, the GPU's 1735 MHz.
+
+**Load and the host.** The one-minute load average at the snapshots was 1.42 to 3.09. Spotlight workers (`mdworker_shared`, `mds_stores`) and `mediaanalysisd` were among the top five by CPU in several
+snapshots, before and after runs (the percentages are not kept), so the host was not fully quiet; no Time Machine
+process was seen. Low-power mode was off and no thermal
+or performance warning level was recorded in any chunk. GPU utilization read 1 s after the
+pre-warm and before the timed run was 20% in the `rt-ao` chunk (the reading lags the pre-warm that
+had just ended) and 0 to 6% in the others.
+
+**Screen.** The screen was unlocked at the start and the end of every chunk (checked with
+`CGSSessionScreenIsLocked`); no chunk is void. A foreground gate and other lanes ran on the host
+between chunks, never inside one.
+
+**Reading.** `r_metalfx 1` runs at about half the native fps in the two `world` scenarios and above native fps
+in `rt-ao` and `rt-ao-entities`; modes 2 and 3 run at about 900 to 1900 fps in every scenario run, at a higher ssim
+than mode 1 at the same scale.
