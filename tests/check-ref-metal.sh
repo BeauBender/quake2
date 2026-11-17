@@ -22,7 +22,14 @@
 #     tests/metal/rm_rtwater_test.c, the pure part of the water reflections
 #     (rm_rtwater.c and common/mtl_rtw_math.h, RT6, TASK58), and
 #     tests/metal/rm_fx_test.c, the pure part of the MetalFX scalers
-#     (rm_metalfx.c, TASK111).
+#     (rm_metalfx.c, TASK111), and tests/metal/rm_rtgate_test.c, the
+#     hardware gate of ray tracing (rm_rtgate.c, RT8, TASK60). The gate's
+#     table of the r_rt_* cvars is then held to the sources: every
+#     Cvar_Get("r_rt_ name of src/client/refresh/metal's .c and .m files
+#     (a call over several lines included) must have a row, every row
+#     such a name, and an effect switch's default must be "0"; scratch
+#     mutants (an unclassified cvar on one line and over two, a row whose
+#     cvar is gone, an effect switch defaulting to 1) must fail it.
 # (b) Only on Darwin with the Metal compiler (xcrun -f metal) and the
 #     vendored SDL 3 headers: "make ref_metal" in a scratch copy of
 #     Makefile, third_party/sdl3.make and src/ (third_party/SDL3 is linked,
@@ -228,6 +235,69 @@ elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_fx_test" > "${tmp:?}/out" 2
 else
 	fx=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_fx_test: //')
 	case $fx in *", 0 failed") ;; *) bad "tests/metal/rm_fx_test.c printed no result line"; fx="";; esac
+fi
+
+# the hardware gate of ray tracing (RT8, TASK60): rm_rtgate.c alone
+rtg=""
+# shellcheck disable=SC2086 # flags is a word list
+if ! $cc $flags -o "${tmp:?}/rm_rtgate_test" tests/metal/rm_rtgate_test.c "$rm_dir/rm_rtgate.c" -lm \
+	> "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_rtgate_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtgate_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_rtgate_test.c failed"
+else
+	rtg=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtgate_test: //')
+	case $rtg in *", 0 failed") ;; *) bad "tests/metal/rm_rtgate_test.c printed no result line"; rtg="";; esac
+fi
+
+# rtg_names <dir>: name=default for each Cvar_Get("r_rt_ of the directory's .c and .m files, the
+# files joined into one line so a call over several lines is seen; a default that is not a
+# literal gives the name alone. Sorted, each pair once.
+rtg_names() {
+	cat "$1"/*.c "$1"/*.m | tr '\n\r' '  ' |
+		grep -oE 'Cvar_Get[[:space:]]*\([[:space:]]*"r_rt_[A-Za-z0-9_]*"([[:space:]]*,[[:space:]]*"[^"]*")?' |
+		sed -E 's/^Cvar_Get[[:space:]]*\([[:space:]]*"([^"]*)"([[:space:]]*,[[:space:]]*"([^"]*)")?$/\1=\3/; s/=$//; s/ /_/g' |
+		sort -u
+}
+# rtg_table <dir>: 0 when the gate's table classifies every r_rt_* cvar of the directory
+rtg_table() {
+	names=$(rtg_names "$1") || return 1
+	[ -n "$names" ] || { echo "  no Cvar_Get(\"r_rt_ in $1"; return 1; }
+	# shellcheck disable=SC2086 # names is a word list of name=default pairs
+	"${tmp:?}/rm_rtgate_test" --names $names
+}
+rtg_mutants=0
+if [ -x "${tmp:?}/rm_rtgate_test" ]; then
+	if ! rtg_table "$rm_dir" > "${tmp:?}/rtg.out" 2>&1; then
+		cat "${tmp:?}/rtg.out"
+		bad "an r_rt_* cvar of $rm_dir is not in rm_rtgate.c's table, or a row is stale (see above)"
+	fi
+	rtg_cvars=$(tail -n 1 "${tmp:?}/rtg.out" | sed 's/^rm_rtgate_test: //; s/ names,.*//')
+	mkdir "${tmp:?}/rtgmut"
+	rtg_mut=1
+	while [ "$rtg_mut" -le 4 ]; do
+		rm -f "${tmp:?}"/rtgmut/*
+		cp "$rm_dir"/*.c "$rm_dir"/*.m "${tmp:?}/rtgmut/"
+		case $rtg_mut in
+			1) printf '%s\n' 'static void f(void) { ri.Cvar_Get("r_rt_mutant", "0", CVAR_ARCHIVE); }' > "${tmp:?}/rtgmut/zz_mutant.c" ;;
+			2) printf '%s\n' 'static void f(void) { ri.Cvar_Get(' '	"r_rt_mutant", "0", 0); }' > "${tmp:?}/rtgmut/zz_mutant.c" ;;
+			3) sed 's/Cvar_Get("r_rt_water_show"/Cvar_Get("x_rt_water_show"/' "$rm_dir/rm_rtwaterscene.c" \
+				> "${tmp:?}/rtgmut/rm_rtwaterscene.c" ;;
+			4) sed 's/Cvar_Get("r_rt_ao", "0"/Cvar_Get("r_rt_ao", "1"/' "$rm_dir/rm_rtaoscene.c" > "${tmp:?}/rtgmut/rm_rtaoscene.c" ;;
+		esac
+		if cmp -s "$rm_dir/rm_rtwaterscene.c" "${tmp:?}/rtgmut/rm_rtwaterscene.c" &&
+			cmp -s "$rm_dir/rm_rtaoscene.c" "${tmp:?}/rtgmut/rm_rtaoscene.c" && [ ! -f "${tmp:?}/rtgmut/zz_mutant.c" ]; then
+			bad "the cvar-table mutant $rtg_mut changed nothing"
+		elif rtg_table "${tmp:?}/rtgmut" > "${tmp:?}/rtgmut.out" 2>&1; then
+			cat "${tmp:?}/rtgmut.out"
+			bad "the cvar-table check passes mutant $rtg_mut"
+		else
+			rtg_mutants=$((rtg_mutants + 1))
+		fi
+		rtg_mut=$((rtg_mut + 1))
+	done
 fi
 
 # strip <file>: the file with its comments and the contents of its string and
@@ -721,6 +791,6 @@ for rate_mut in 's/rm_rate_start);/metal_rate_start->value);/' 's/&rm_rate, rm_r
 done
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; $build)"
 fi
 exit $fail
