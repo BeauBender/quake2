@@ -149,12 +149,45 @@ frames, the 33rd the demo's last capture, equal to one of the base's two records
 
 ### Cost
 
-**Pending: the screen was locked for the whole of this card's run** (`ioreg` showed
-`CGSSessionScreenIsLocked` at every check), and a timing run needs it unlocked. Nothing was measured.
-The case stays the card's: not held (`r_vsync 0`) at 1920 x 1080, `water.dm2` whole, against the
-stored baseline of the base, by the owner's protocol. `water.dm2` meets no hidden brush model, so
-there the fix's step can add only the brush flag's compare; a ray that meets a hidden brush model
-costs one more cast a face, within the bound of `MTL_RTW_LAYERS + 1`.
+Measured on the owner's protocol, one `tools/heavy.sh` hold, the screen unlocked (`ioreg`
+`CGSSessionScreenIsLocked` 0 before the queue, at the batch's start, after the pre-warm, after every run
+and at the batch's end; no other `quake2` ran). The case is the frame's own GPU time, `MTL_GPU_TIME=1`'s
+`gpu_ms ... frame` line (each run's first 20 lines dropped, 115 frames a run), at `r_rt_water_hits 0`,
+not held (`r_vsync 0`), 1920 x 1080, FIX81's `water.dm2` played whole, `PINS_SEED=1`,
+`PINS_EVERY=100000`, `r_rt_stats` off, no validation layer. The builds are this branch's `193a9687` and
+main's `512c0745` (which holds TASK162, this branch's base), each a full build of its own export. After
+a 240 s full-load pre-warm (210 runs of the same case) they ran alternated, three runs a build. Records
+are in `<artifacts>/FIX92/timing/` (`logs/summary.txt`, `logs/*.engine.log`, `logs/medians.txt`,
+`snaps/`, `batch.sh`).
+
+Run medians in ms (rounds 1, 2, 3):
+
+| Build | Run medians | Median of the three | Range |
+|---|---|---|---|
+| This branch (`193a9687`) | 2.409, 2.563, 2.410 | 2.410 | 2.409 to 2.563 |
+| Main (`512c0745`) | 2.387, 2.403, 2.546 | 2.403 | 2.387 to 2.546 |
+| Branch against main | | +0.007 ms (+0.3 %) | inside both ranges |
+
+**Frequencies** (the no-root IOReport probe, `freq dump` before and after each run, `freq delta`):
+
+| Window | eacc MHz (top state %) | pacc0 MHz (top state %) | GPU MHz (top state %), active % |
+|---|---|---|---|
+| Pre-warm (210 runs, 240 s) | 1533 (10.6) | 4520 (74.9) | 892 (1.2), 40 |
+| Runs, branch (3) | 1471 to 1506 (4.6 to 11.8) | 4509 to 4545 (63 to 68) | 892 to 907 (0), 39 to 40 |
+| Runs, main (3) | 1504 to 1592 (6.8 to 9.7) | 4510 to 4788 (66 to 100) | 834 to 935 (0), 38 to 42 |
+
+The GPU never reached its top state in a run and its clock differs by up to 12 % between runs
+(834 to 935 MHz), which is as large as the spread of the run medians. Main's second run had the
+performance cluster at its top state for the whole run (4788 MHz) and `mediaanalysisd` at 119 % CPU
+in its after snapshot, so that run is the least quiet; its 2.403 ms is the middle of main's three, so
+dropping it would not change the verdict. Load average 3.75 to 4.83 over the batch (the pre-warm's
+own), GPU device utilization 0 to 4 % before each run (limit 10 %), memory free 84 %, no swap, no
+thermal or performance warning, low-power mode off. The top process in a snapshot was `mediaanalysisd`
+(68 % before the first run, 8 % before main's second); no `backupd` or `mds`.
+
+**What it shows.** At `r_rt_water_hits 0` in a view that meets no hidden brush model the fix costs
+nothing the frame shows: the branch's median is 0.007 ms from main's, with the run medians of the two
+builds interleaved inside a 0.17 ms spread.
 
 ## Checks
 
