@@ -782,7 +782,7 @@ test_stats(void)
 	CHECK(strlen(buf) < RM_STATS_LINE);
 	CHECK(strchr(buf, '\n') == NULL);
 
-	/* TASK158: r_rt_water_hits 1 adds its passes' split and the span from the raster's start to the trace's end */
+	/* TASK158: r_rt_water_hits 1 adds its passes' split and the span from the compaction's start to the trace's end */
 	s.ws = 1;
 	s.compact_ms = 0.125;
 	s.trace_ms = 0.5;

@@ -172,9 +172,14 @@ Four items, on top of FIX92's head.
    `MTL_RTW_MARK_DST_FACTOR` (source alpha). `mtl_rtw_mark_blend` evaluates them and
    `rmb_rtw_mark_pipe` sets the normal attachment's alpha factors from them (`rmb_rtw_factor` maps each
    to its `MTLBlendFactor`), so the host test checks what the GPU blends; the test also asserts the two
-   factors. `tests/check-ref-metal.sh` refuses a pipeline that sets either alpha factor from a
-   literal or drops a macro, with two mutants (a literal destination factor; the source factor spelled
-   as the enumerator): both refused ("blend factors once, 2 mutants refused" in its summary line).
+   factors. `tests/check-ref-metal.sh` reads only `rmb_rtw_mark_pipe`'s body and refuses a pipeline
+   that sets either alpha factor from a literal, drops a macro or adds a third assignment, and pins
+   `rmb_rtw_factor`'s `MTL_RTW_BF_ONE` and `MTL_RTW_BF_SRC_ALPHA` cases to `MTLBlendFactorOne` and
+   `MTLBlendFactorSourceAlpha`. Four mutants (a literal destination factor; the source factor spelled
+   as the enumerator; the mapping changed to one minus source alpha; an extra overriding assignment)
+   are all refused ("blend factors once, 4 mutants refused"), and a literal on another pipeline's
+   attachment 1 passes. `rmb_rtw_factor`'s default logs and returns Zero, and `_Static_assert`s on
+   `MTL_RTW_BF_COUNT` and on the two macros keep an unknown factor out of the build; no frame changes.
    Not red-first: the macros did not exist before; the mutants are the failing cases.
 3. **The stats.** `raster_ms`, `vert_ms` and `frag_ms` are gone from `rm_rtw_stats_t` and from the
    `r_rt_stats 2` line (`world space: compaction a, trace b, span c ms`); `doc/040_cvarlist.md`
@@ -184,9 +189,12 @@ Four items, on top of FIX92's head.
    writes 0 and 1), so the sample buffer is half the size and the world-space resolve reads 4.
    Items 3 and 4 are one commit: they are the same lines of `rmb_rtw_read`. The GPU times were not
    measured here (screen locked): the slot move is covered by the build and by `MTL_DEBUG_LAYER=1`
-   runs with no validation error, not by a timing.
+   runs with no validation error, not by a timing. The slot move is checked by trace (the indices
+   are slot x 4 + first and +1, the highest 4F - 1, below the buffer's sample count) and by the debug
+   layer only. One `r_rt_stats 2` line at `r_rt_water_hits 1` showing numbers rather than `-` needs an
+   unlocked screen and was not taken.
 
-### Pins against FIX92's head (screen locked, `MTL_DEBUG_LAYER=1`, `PINS_SEED=1`, one-minute load 3.0 to 3.6)
+### Pins against FIX92's head, re-run after round 1's assert (screen locked, `MTL_DEBUG_LAYER=1`, `PINS_SEED=1`, one-minute load 1.6 to 2.1 on the re-run)
 
 The base is FIX92's `ref_metal`, the new is this lane's, both under the same client binary
 (byte-identical). Each log holds only the validation banner, no validation error.
@@ -203,9 +211,9 @@ The base is FIX92's `ref_metal`, the new is this lane's, both under the same cli
 
 5K with `r_metalfx 2` was left out (FIX96).
 
-### Checks
+### Checks (round 1)
 
 Each through `tools/heavy.sh`: `tests/check-ref-metal.sh` (ok: water 727 checks, 0 failed; 72
-vocabulary mutants refused; blend factors once, 2 mutants refused; `ref_metal` built),
+vocabulary mutants refused; blend factors once, 4 mutants refused; `ref_metal` built),
 `tests/check-cvar-docs.sh` (ok), `tests/check-doc-links.sh` (ok), `tests/check-no-local-identity.sh`
 (ok). The full `scripts/test.sh` was not run on this lane (the brief).

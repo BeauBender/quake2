@@ -202,6 +202,29 @@ rmb_rtw_trans_pipe(NSError **e)
 	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
 }
 
+/* FIX98: the MTLBlendFactor of one of common/mtl_rtw_math.h's MTL_RTW_BF_ values */
+_Static_assert(MTL_RTW_BF_COUNT == 3, "a new MTL_RTW_BF_ value needs a case in rmb_rtw_factor");
+_Static_assert(MTL_RTW_MARK_SRC_FACTOR >= 0 && MTL_RTW_MARK_SRC_FACTOR < MTL_RTW_BF_COUNT, "the mark's source factor is not a MTL_RTW_BF_ value");
+_Static_assert(MTL_RTW_MARK_DST_FACTOR >= 0 && MTL_RTW_MARK_DST_FACTOR < MTL_RTW_BF_COUNT, "the mark's destination factor is not a MTL_RTW_BF_ value");
+
+static MTLBlendFactor
+rmb_rtw_factor(int f)
+{
+	switch (f)
+	{
+		case MTL_RTW_BF_ONE:
+			return MTLBlendFactorOne;
+		case MTL_RTW_BF_SRC_ALPHA:
+			return MTLBlendFactorSourceAlpha;
+		case MTL_RTW_BF_ZERO:
+			return MTLBlendFactorZero;
+		default:
+			/* unreachable while the _Static_assert holds; never silent */
+			NSLog(@"ref_metal: unknown water mark blend factor %d, using Zero", f);
+			return MTLBlendFactorZero;
+	}
+}
+
 /*
  * TASK162: the water's marks, a draw of the G-buffer raster (its
  * attachments, rmb_gbuf_raster_formats, with the surface attachment or
@@ -212,21 +235,6 @@ rmb_rtw_trans_pipe(NSError **e)
  * alpha), so its "has a normal" (above 0.5) is kept; every other
  * attachment is left as the raster wrote it.
  */
-/* FIX98: the MTLBlendFactor of one of common/mtl_rtw_math.h's MTL_RTW_BF_ values */
-static MTLBlendFactor
-rmb_rtw_factor(int f)
-{
-	switch (f)
-	{
-		case MTL_RTW_BF_ONE:
-			return MTLBlendFactorOne;
-		case MTL_RTW_BF_SRC_ALPHA:
-			return MTLBlendFactorSourceAlpha;
-		default:
-			return MTLBlendFactorZero;
-	}
-}
-
 static id<MTLRenderPipelineState>
 rmb_rtw_mark_pipe(int surf, NSError **e)
 {

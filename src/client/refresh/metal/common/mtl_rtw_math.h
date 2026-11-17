@@ -754,7 +754,8 @@ enum
 {
 	MTL_RTW_BF_ZERO,
 	MTL_RTW_BF_ONE,
-	MTL_RTW_BF_SRC_ALPHA
+	MTL_RTW_BF_SRC_ALPHA,
+	MTL_RTW_BF_COUNT
 };
 
 #define MTL_RTW_MARK_SRC_FACTOR MTL_RTW_BF_ONE         /* the source alpha's factor */
