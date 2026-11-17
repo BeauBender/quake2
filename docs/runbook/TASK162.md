@@ -156,6 +156,7 @@ marks' draw is inside the G-buffer raster, so the frame's own GPU time is the fa
 ## Checks
 
 On the branch, each through `tools/heavy.sh`: the water host test (588 checks, 0 failed),
-`make client ref_metal game ref_soft` (exit 0), `tests/check-ref-metal.sh`,
-`tests/check-doc-links.sh`, `tests/check-no-local-identity.sh` (results in the card's report).
+`make client ref_metal game ref_soft` (exit 0), `tests/check-ref-metal.sh` (ok: water 588 checks,
+0 failed; `ref_metal` built), `tests/check-doc-links.sh` (ok), `tests/check-no-local-identity.sh` (ok).
+The full `scripts/test.sh` was not run on this lane.
 `tests/check-runbook-index.sh` fails on this file until its index line is added at merge.
