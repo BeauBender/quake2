@@ -606,6 +606,7 @@ Cvar_Set_f(void)
 	if (c == 4)
 	{
 		int flags;
+		cvar_t *var;
 
 		if (!strcmp(Cmd_Argv(3), "a"))
 		{
@@ -622,6 +623,17 @@ Cvar_Set_f(void)
 		else
 		{
 			Com_Printf("flags can only be 'a', 'u' or 's'\n");
+			return;
+		}
+
+		var = Cvar_FindVar(firstarg);
+
+		/* Same refusal as the three argument form. A cvar that does
+		   not exist yet is created, so "+set" before registration
+		   keeps working. */
+		if (var && (var->flags & CVAR_NOSET))
+		{
+			Com_Printf("%s is write protected.\n", var->name);
 			return;
 		}
 
