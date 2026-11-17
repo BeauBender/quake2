@@ -53,17 +53,22 @@ original clients (Vanilla Quake II) commands are still in place.
 
 * **teleport <x y z>**: Teleports the player to the given coordinates.
 
-* **upscale_textures <2|4> [force]**: Writes PNG versions, twice or four
-  times the size, of the world textures, the faces of the skies and the
-  model and player skin images of the game data into the write
-  directory, scaled with scale2x, where `r_retexturing 1` loads them.
+* **upscale_textures <2|4> [scale2x|metalfx] [force]**: Writes PNG
+  versions, twice or four times the size, of the world textures, the
+  faces of the skies and the model and player skin images of the game
+  data into the write directory, where `r_retexturing 1` loads them.
+  The backend is `scale2x` (the default: pixel-art edges, no new
+  colour) or, on macOS, `metalfx` (MetalFX's spatial scaler); where
+  `metalfx` is unsupported the command says why in one line and uses
+  `scale2x`. Any other backend name is refused with the usage line.
   Files that exist are skipped unless `force` is given, and a symlink at
   an output name is never written through; names that are not plain
   paths (letters, digits, `_`, `-`, `+`, `.` and `/`) are refused,
   nothing is written inside a git work tree, and the command is refused
   while a demo plays or while connected to a remote server (a server
-  that first ends the connection itself can still start it). See
-  "Textures upscaled on your own machine" in `030_configuration.md`.
+  that first ends the connection itself can still start it). The
+  Options menu's "upscale textures" page runs it. See "Textures
+  upscaled on your own machine" in `030_configuration.md`.
 
 * **viewpos**: Show player position.
 
