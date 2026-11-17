@@ -207,4 +207,28 @@ The marker reader on the plugin side is left these two, unchanged here:
 - **A hold that outlives the TTL.** A measurement longer than `BENCH_QUIET_TTL` leaves a marker
   that has expired while the lock is still held; the marker is not renewed.
 
-RESULTS-PENDING
+Each red line above is from the new tests run against a copy of the scripts at `0a3b9c38` (the
+round's start), with `tests/check-bench.sh t_snap_argv t_freq_reason t_drift_quiet t_gate_poll
+t_probe_first t_leading_zero t_store t_drift t_compare t_gate` under `heavy.sh`: every one failed,
+`t_drift_quiet` only on the new note's text. After the fix the same tests and `t_quiet_marker`,
+`t_prewarm` and `t_snap_system` passed, and the full `tests/check-bench.sh` (every test, 39
+mutants and the fixture's own) ended `check-bench: ok`, each mutant caught by its test, the ten
+of this round:
+
+```
+mutant put-not-quiet: caught by t_gate (gate: a set with a run outside the gate was not refused (status 0))
+mutant drift-not-quiet: caught by t_drift_quiet (drift: a re-measured set that was not quiet replaced the baseline (status 0))
+mutant top-argv: caught by t_snap_argv (snap argv: the top line is not the kernel's name: top.1=0.0 zzqfake --token=zzqsecret1 zzq@example.invalid)
+mutant freq-reason-lost: caught by t_freq_reason (freq reason: the run file says: freq.source=stub freq=unavailable freq.reason=no-dump )
+mutant gate-poll-unchecked: caught by t_gate_poll (gate poll: BENCH_GATE_POLL='x' was not refused before the command (status 0))
+mutant gate-nap-uncut: caught by t_gate_poll (gate poll: a poll of 20 s was not cut to the gate's wait of 1 s)
+mutant ttl-unchecked: caught by t_leading_zero (zero: BENCH_QUIET_TTL=08 was not refused with 2 (status 0))
+mutant probe-after-gate: caught by t_probe_first (probe first: the probe was built after: gate run <token>|snap run <token>|cc|...)
+mutant snap-source-lost: caught by t_store (store: a run file has no line snap.source=stub)
+mutant source-stub-lost: caught by t_drift (drift: 12.3 gave: ... quiet=yes source=system baseline.quiet=yes baseline.source=system)
+```
+
+`t_snap_argv` starts a `sleep` of its own under `bash -c 'exec -a "<argv[0]>" sleep 30'`, points
+the reader's own `ps` columns at it with a stand-in `ps` (the reader's arguments without `-A` and
+`-r`, plus `-p <pid>`), and ends it by its pid. Nothing here ran the engine, and the
+re-measure above is still pending an unlocked screen.
