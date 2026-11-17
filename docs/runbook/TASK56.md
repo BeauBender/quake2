@@ -13,6 +13,11 @@ the frame's instance structure and the map's per-triangle material ids (TASK53),
 are in the branch. The `rt-sun` pin is not recorded: the owner accepts the look first
 (INFORM11, #101); the frames for that are local (*Frames for the owner*).
 
+**Open look decision (INFORM11).** The default `r_rt_sunfloor 0.5` is the owner's to settle,
+with the look. At 0.5 the term is rare on `base2` (37 of 687 frames, *Effect on: the masked
+comparison*), and the owner found the frames "very subtle" (2026-11-17) and is fine with a
+default close to stock. The defaults stay as they are here; visible variations are TASK173's.
+
 ## What it does
 
 With `r_rt_sun 1`, on a device with ray tracing, with the world lightmapped (`r_fullbright 0`)
@@ -32,9 +37,11 @@ depth and a normal:
 - *One ray toward the sun* from the surface moved along its normal by TASK55's `0.5 + k d^2`
   (`mtl_rtao_bias`), `MTL_RTSUN_RANGE` (16384) units long, against the frame's instance structure
   with TASK57's mask bit (`MTL_RTAO_MASK`: every instance but the view weapon and the viewer's own
-  model). The nearest face decides (`mtl_rtsun_at`): a sky triangle lights the pixel; water and
-  translucent triangles let the ray on, up to four; any other face (world, brush entity, alias
-  model), or nothing met at all, shadows it.
+  model). The nearest face decides (`mtl_rtsun_at`, `mtl_rtsun_step`): a sky triangle lights the
+  pixel; water and translucent triangles let the ray on, up to four of them
+  (`MTL_RTSUN_LAYERS`), and what is behind the fourth still decides (a fifth such face shadows
+  it), so the ray asks for at most five intersections; any other face (world,
+  brush entity, alias model), or nothing met at all, shadows it.
 - *The term.* Where the ray is lit: `sky_color x r_rt_sunscale x visibility x max(0, N.L)` added
   to the light the resolve would have read (`mtl_rtsun_light`), each channel at most 1, the alpha
   kept; every other pixel's light bit for bit. The light it adds to is RT5's `lightmap x AO` when
@@ -62,9 +69,13 @@ sin p)` (`rm_rtsun_dir`).
 
 *The sky-area skip.* Once a map, `rm_rtsun_sky_area` sums the area of the world model's
 triangles from the retained buffers (the first model's index range, the brush entities left
-out), and of those whose material id is the sky's (`rm_rt_material`, TASK53). Under 2 %
-(`rm_rtsun_sky_enough`) the pass does not open and the view keeps its path, so the map draws as
-with the effect off. The renderer prints the map's line once:
+out), and of those whose material id is the sky's (`rm_rt_material`, TASK53). It is measured
+when the sun is first asked about on the map (`RM_RTSun_Wanted`, which the map load's
+`RM_RT_MapLoaded` reads), and only while `r_rt_sun` is on. Under 2 % (`rm_rtsun_sky_enough`)
+the sun asks for no ray-tracing scene (`rm_rtsun_wanted` is 0), so with no other effect on
+nothing is built or kept for the map, a pass opened on an earlier map is closed, and the view
+keeps its path: the map draws, and costs, as with the effect off. The renderer prints the map's
+line once:
 
     ref_metal: rt sun: <map>: sky <a> of <b> square units (<p> %), the pass runs; the sun at pitch <p> yaw <y> (<source>)
 
@@ -212,7 +223,9 @@ was 0 to 5 % before each run; the one-minute load 3.2 to 5.4 (other lanes share 
 
 Frequencies over the nine runs (median MHz, share at the top state): GPU 1,604 MHz, 88.1 %
 (range 924 to 1,621 MHz); performance cores 4,733 MHz, 87.2 %; efficiency cores 1,568 MHz,
-12.4 %. The difference between off and on is mostly not the sun pass (0.55 ms of a 0.92 ms frame
-at 1,085 fps) but what any ray-traced effect costs: the G-buffer path and the per-frame instance
-structure (TASK53, TASK54), which the off case does not take. The demo's timedemo is short (689
+12.4 %. As frame times the medians are 0.131 ms off and 0.922 ms on, a gap of 0.791 ms; the
+sun pass's 0.555 ms GPU time is about 70 % of that gap (and about 60 % of the frame with the sun
+on). The rest of the gap, about 0.24 ms, was not timed apart: no case of this batch ran the
+G-buffer path and the instance structure without the pass, so how much of it they take is not
+measured here (review round 1). The demo's timedemo is short (689
 frames, 0.1 to 0.7 s), so the fps are noisy at the top; the GPU time is the steadier number.
