@@ -453,9 +453,11 @@ the check fails, or is interrupted, the profile and the signature are
 removed from the bundle again, so `install` refuses it. An identity that
 starts with a hyphen is refused (`-` is codesign's ad hoc identity).
 Nothing of the decoded profile, which holds the team's certificates, is
-printed; a failing tool's own lines are printed with the identity, the
-team and the device replaced by `<identity>`, `<team>` and `<device>`, and
-the script's messages name paths relative to the repository.
+printed; a failing tool's own lines are printed with the scratch
+directory, the home directory, the identity, the team and the device
+replaced by `<scratch>`, `<home>`, `<identity>`, `<team>` and `<device>`,
+and a line naming the signing certificate replaced by one fixed line; the
+script's messages name paths relative to the repository.
 
 `install` and `launch` take the device's identifier as `xcrun devicectl
 list devices` shows it (or `IOS_DEVICE`). `launch` passes any further

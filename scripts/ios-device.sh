@@ -50,26 +50,32 @@
 # prompt), IOS_DEVICE_INSTALL_SECONDS (300), IOS_DEVICE_LAUNCH_SECONDS
 # (120); security cms and codesign --verify have 60. A command past its
 # limit is killed (by its PID, which this script started) and fails. An
-# INT (Ctrl-C) or TERM to the script ends the running command the same way
-# (TERM, then KILL after 2 s; the command ignores INT, as every command a
-# script starts in the background does) and exits 1.
+# INT (Ctrl-C), QUIT (Ctrl-\) or TERM to the script ends the running
+# command the same way (TERM, then KILL after 2 s; the command ignores INT
+# and QUIT, as every command a script starts in the background does) and
+# exits 1; a HUP does too through the exit cleanup, and the script then
+# ends by the HUP (status 129).
 #
 # A usage error exits 2 with one usage line; a refusal or a failed step
 # exits 1. Messages name a path relative to the repository, or only its
 # last component when it is outside (never an absolute path: a refusal's
 # text may be posted to a public issue). A failed tool's first five lines
-# are printed with the identity, the team, the device, the scratch
-# directory, the app's path and the home directory replaced (fixed
-# strings, not patterns) by "<identity>", "<team>", "<device>",
-# "<scratch>", the app as messages name it, and "<home>".
+# are printed with the scratch directory, the app's path, the home
+# directory, the identity, the team and the device replaced, in that
+# order (fixed strings, not patterns), by "<scratch>", the app as messages
+# name it, "<home>", "<identity>", "<team>" and "<device>"; a line that
+# names a signer (codesign's name for the certificate it resolved, which
+# an identity given as a SHA-1 hash or a part of the name does not match)
+# is printed as one fixed line instead.
 #
 # --selftest: runs sign, install and launch against a fake security,
 # codesign and xcrun (no keychain, no device, no real codesign; seconds),
-# on scratch bundles and scratch profiles it makes itself, and sends TERM
-# to the script, and INT to its process group, during a hanging step. The
-# INT cases are skipped, and say so, where INT is ignored on entry (under
-# a background job of a shell without job control; a terminal's Ctrl-C
-# never is). tests/check-ios.sh runs it.
+# on scratch bundles and scratch profiles it makes itself, and sends TERM,
+# QUIT or HUP to the script, and INT to its process group, during a
+# hanging step. The script is started with INT and QUIT at their default
+# (through perl), so these cases run where the selftest itself was started
+# with them ignored (a background job of a shell without job control).
+# tests/check-ios.sh runs it.
 set -u
 set -o pipefail
 export LC_ALL=C
@@ -89,7 +95,7 @@ usage()
 }
 
 # the PID of the command bounded runs, while it runs: the timeout and the
-# EXIT, INT and TERM handling end it, so the script never leaves it running
+# EXIT, INT, TERM and QUIT handling end it, so the script never leaves it running
 bpid=
 
 # stop_child <grace>: ends bpid (our PID): TERM, then KILL when it outlives
@@ -141,19 +147,29 @@ shown()
 }
 
 # forward <log>: a failed tool's first five lines to stderr, with the
-# identity, the team, the device, the scratch directory, the app's path
-# and the home directory replaced (fixed strings; the real codesign and
-# devicectl repeat the identity and the device in their errors)
+# scratch directory, the app's path and the home directory replaced first
+# (so a value below cannot break their match), then the identity, the
+# team and the device (fixed strings; the real codesign and devicectl
+# repeat the identity and the device in their errors). A line that, its
+# paths replaced, names a signer is one fixed line instead: codesign names
+# there the
+# certificate it resolved, which an identity given as a hash or a part of
+# the name does not match.
 forward()
 {
 	local line n=0 ph
 	while [ "$n" -lt 5 ] && { IFS= read -r line || [ -n "$line" ]; }; do
-		if [ -n "$identity" ]; then ph='<identity>'; line=${line//"$identity"/"$ph"}; fi
-		if [ -n "$team" ]; then ph='<team>'; line=${line//"$team"/"$ph"}; fi
-		if [ -n "$device" ]; then ph='<device>'; line=${line//"$device"/"$ph"}; fi
 		ph='<scratch>'; line=${line//"$tmp"/"$ph"}
 		ph=$(shown "$app"); line=${line//"$app"/"$ph"}
 		if [ -n "${HOME-}" ] && [ "$HOME" != / ]; then ph='<home>'; line=${line//"$HOME"/"$ph"}; fi
+		case $line in
+		*[Ss][Ii][Gg][Nn][Ee][Rr]*) line='ios-device: (a line naming the signing certificate, not printed)' ;;
+		*)
+			if [ -n "$identity" ]; then ph='<identity>'; line=${line//"$identity"/"$ph"}; fi
+			if [ -n "$team" ]; then ph='<team>'; line=${line//"$team"/"$ph"}; fi
+			if [ -n "$device" ]; then ph='<device>'; line=${line//"$device"/"$ph"}; fi
+			;;
+		esac
 		printf '%s\n' "$line" >&2
 		n=$((n + 1))
 	done < "$1"
@@ -653,7 +669,8 @@ esac
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/ios-device.XXXXXX") || die "no scratch directory"
 chmod 700 "${tmp:?}" || die "cannot make the scratch directory private"
 # on any exit: the running command ended first, then a sign that did not
-# finish undone, then the scratch directory removed; INT and TERM exit 1
+# finish undone, then the scratch directory removed; INT, TERM and QUIT
+# exit 1 (bash runs no EXIT trap for an untrapped QUIT)
 unsign=
 cleanup()
 {
@@ -665,7 +682,7 @@ cleanup()
 	rm -rf "${tmp:?}"
 }
 trap cleanup EXIT
-trap 'stop_child 2; exit 1' INT TERM
+trap 'stop_child 2; exit 1' INT TERM QUIT
 
 if [ "$mode" = sign ]; then
 	plat=$(plutil -extract CFBundleSupportedPlatforms.0 raw -o - "$app/Info.plist" 2>/dev/null) || plat=
