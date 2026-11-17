@@ -17,15 +17,20 @@
  *
  * =======================================================================
  *
- * upscale_textures <2|4> [force]: writes 2x or 4x PNG versions of the
+ * upscale_textures <2|4> [scale2x|metalfx] [force]: writes 2x or 4x PNG
+ * versions of the
  * world textures (textures/ .wal), the sky faces (env/ .pcx) and the
  * model and player skins (models/ and players/ .pcx, not the players'
  * _i.pcx icons) of the player's own data into the write directory,
  * FS_Gamedir(), under the same names with .png, where r_retexturing
  * loads them at the original's size (docs/plans/high-resolution.md,
- * P6). The indices are scaled with scale2x, once per doubling, then
- * converted with the 8-bit palette as the renderers convert them; the
- * PNG is written by ImageIO (decision 0010). A file that exists is left
+ * P6). With scale2x (the default) the indices are scaled, once per
+ * doubling, then converted with the 8-bit palette as the renderers
+ * convert them; with metalfx (TASK124, decision 0012, macOS) they are
+ * converted first and scaled by MetalFX's spatial scaler in one pass
+ * (CL_UpscaleRGBA, cl_upscale_metalfx.m), and where it is unsupported
+ * the run says so in one line and uses scale2x. The PNG is written by
+ * ImageIO (decision 0010). A file that exists is left
  * alone unless force is given; a link is never written through.
  *
  * This file does the I/O only: listing, loading, scaling, and it hands
@@ -42,7 +47,50 @@
 
 #include "header/client.h"
 #include "header/upscale.h"
+#include "header/upscale_metalfx.h"
 #include "refresh/files/imgdecode.h"
+
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
+#if !(defined(__APPLE__) && TARGET_OS_OSX)
+/* cl_upscale_metalfx.m is built for macOS only (decision 0012) */
+#define UPSCALE_NO_METALFX "not built for this platform"
+
+int
+CL_UpscaleMetalFXAvailable(char *reason, size_t size)
+{
+	Q_strlcpy(reason, UPSCALE_NO_METALFX, size);
+	return 0;
+}
+
+int
+CL_UpscaleMetalFXBegin(char *reason, size_t size)
+{
+	Q_strlcpy(reason, UPSCALE_NO_METALFX, size);
+	return 0;
+}
+
+int
+CL_UpscaleMetalFXScale(void *ctx, const unsigned char *in, int iw, int ih,
+		unsigned char *out, int ow, int oh)
+{
+	(void)ctx;
+	(void)in;
+	(void)iw;
+	(void)ih;
+	(void)out;
+	(void)ow;
+	(void)oh;
+	return 0;
+}
+
+void
+CL_UpscaleMetalFXEnd(void)
+{
+}
+#endif
 
 /*
  * Every name with the extension ext in dir and the directories below
@@ -173,6 +221,7 @@ typedef struct
 	const char *name;
 	const upscale_kind_t *kind;
 	int factor;
+	upscale_backend_t backend;
 	const unsigned *table;
 	upscale_gitcache_t *git;
 } upscale_job_t;
@@ -224,17 +273,27 @@ CL_UpscaleStepMake(void *ctx, unsigned char **png, size_t *pnglen)
 		CL_UpscaleFloodFillSkin(idx, w, h, job->table);
 	}
 
-	big = CL_UpscaleIndices(idx, w, h, factor, job->kind->wrap);
-	free(idx);
-
-	/* w and h are at most UPSCALE_MAX_SIDE, so the RGBA size fits */
-	if (big)
+	if (job->backend == UPSCALE_METALFX)
 	{
-		rgba = CL_UpscaleToRGBA(big, (size_t)w * factor,
-			(size_t)h * factor, job->table);
+		/* the RGBA padded, scaled in one pass, cropped, its alpha from the indices */
+		rgba = CL_UpscaleRGBA(idx, w, h, factor, job->kind->wrap, job->table,
+			CL_UpscaleMetalFXScale, NULL);
+		free(idx);
 	}
+	else
+	{
+		big = CL_UpscaleIndices(idx, w, h, factor, job->kind->wrap);
+		free(idx);
 
-	free(big);
+		/* w and h are at most UPSCALE_MAX_SIDE, so the RGBA size fits */
+		if (big)
+		{
+			rgba = CL_UpscaleToRGBA(big, (size_t)w * factor,
+				(size_t)h * factor, job->table);
+		}
+
+		free(big);
+	}
 
 	if (!rgba || (IMGDEC_EncodePNG(rgba, (size_t)w * factor,
 		(size_t)h * factor, png, pnglen) != IMGDEC_OK))
@@ -288,8 +347,8 @@ static const upscale_steps_t upscale_steps = {
 /* scales name and writes it as its output name in the write directory */
 static upscale_outcome_t
 CL_UpscaleOne(const char *name, const upscale_kind_t *kind, int factor,
-		int force, const unsigned *table, upscale_gitcache_t *git,
-		size_t *bytes)
+		upscale_backend_t backend, int force, const unsigned *table,
+		upscale_gitcache_t *git, size_t *bytes)
 {
 	char outname[MAX_QPATH], path[MAX_OSPATH];
 	upscale_job_t job;
@@ -306,6 +365,7 @@ CL_UpscaleOne(const char *name, const upscale_kind_t *kind, int factor,
 	job.name = name;
 	job.kind = kind;
 	job.factor = factor;
+	job.backend = backend;
 	job.table = table;
 	job.git = git;
 
@@ -318,22 +378,27 @@ CL_UpscaleTextures_f(void)
 	const char *colormap = "pics/colormap.pcx";
 	const unsigned char *palette;
 	unsigned char *raw = NULL;
-	char line[MAX_OSPATH + 512];
+	char line[MAX_OSPATH + 512], reason[128];
+	const char *argv[4];
 	upscale_count_t n;
 	upscale_gitcache_t git;
+	upscale_backend_t backend;
 	unsigned table[256];
-	int factor, force, len, k;
+	int argc, factor, force, len, k, supported;
 
-	if ((Cmd_Argc() < 2) || (Cmd_Argc() > 3) ||
-		(strcmp(Cmd_Argv(1), "2") && strcmp(Cmd_Argv(1), "4")) ||
-		((Cmd_Argc() == 3) && strcmp(Cmd_Argv(2), "force")))
+	argc = Cmd_Argc();
+
+	for (k = 0; (k < argc) && (k < 4); k++)
 	{
-		Com_Printf("usage: upscale_textures <2|4> [force]\n");
-		return;
+		argv[k] = Cmd_Argv(k);
 	}
 
-	factor = atoi(Cmd_Argv(1));
-	force = (Cmd_Argc() == 3);
+	if ((argc > 4) ||
+		!CL_UpscaleParseArgs(argc, argv, &factor, &backend, &force))
+	{
+		Com_Printf("%s", UPSCALE_USAGE);
+		return;
+	}
 
 	if (!CL_UpscaleAllowed(cls.state >= ca_connected,
 		NET_IsLocalAddress(cls.netchan.remote_address), cl.attractloop))
@@ -372,6 +437,18 @@ CL_UpscaleTextures_f(void)
 	CL_UpscaleTable(palette, table);
 	FS_FreeFile(raw);
 
+	/* MetalFX's objects live for this run only; unsupported: scale2x, one line */
+	reason[0] = '\0';
+	supported = (backend == UPSCALE_METALFX) &&
+		CL_UpscaleMetalFXBegin(reason, sizeof(reason));
+	backend = CL_UpscaleChooseBackend(backend, supported, reason, line,
+		sizeof(line));
+
+	if (line[0])
+	{
+		Com_Printf("%s", line);
+	}
+
 	memset(&n, 0, sizeof(n));
 	memset(&git, 0, sizeof(git));
 
@@ -391,13 +468,18 @@ CL_UpscaleTextures_f(void)
 			if (CL_UpscaleIsSource(kind, files.data[i]))
 			{
 				CL_UpscaleCount(&n, CL_UpscaleOne(files.data[i], kind, factor,
-					force, table, &git, &bytes), bytes);
+					backend, force, table, &git, &bytes), bytes);
 			}
 		}
 
 		StrList_Free(&files);
 	}
 
-	CL_UpscaleSummary(&n, factor, UPSCALE_SCALE2X, FS_Gamedir(), line, sizeof(line));
+	if (supported)
+	{
+		CL_UpscaleMetalFXEnd();
+	}
+
+	CL_UpscaleSummary(&n, factor, backend, FS_Gamedir(), line, sizeof(line));
 	Com_Printf("%s", line);
 }

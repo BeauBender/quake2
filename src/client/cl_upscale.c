@@ -347,8 +347,10 @@ CL_UpscalePcxDecodedOk(const unsigned char *pic, int bits, int pw, int ph,
 
 /* ---- pixels ---- */
 
-int
-CL_UpscaleWrapPad(const unsigned char *src, int w, int h, unsigned char *dst)
+/* CL_UpscaleWrapPad of texels of bpp bytes */
+static int
+CL_UpscaleWrapPadTexels(const unsigned char *src, int w, int h, size_t bpp,
+		unsigned char *dst)
 {
 	int pw = w + 2, x, y;
 
@@ -364,16 +366,18 @@ CL_UpscaleWrapPad(const unsigned char *src, int w, int h, unsigned char *dst)
 
 		for (x = 0; x < pw; x++)
 		{
-			dst[y * pw + x] = src[sy * w + (x + w - 1) % w];
+			memcpy(dst + ((size_t)y * pw + x) * bpp,
+				src + ((size_t)sy * w + (x + w - 1) % w) * bpp, bpp);
 		}
 	}
 
 	return 1;
 }
 
-int
-CL_UpscaleCrop(const unsigned char *src, int sw, int sh, int x, int y,
-		int w, int h, unsigned char *dst)
+/* CL_UpscaleCrop of texels of bpp bytes */
+static int
+CL_UpscaleCropTexels(const unsigned char *src, int sw, int sh, int x, int y,
+		int w, int h, size_t bpp, unsigned char *dst)
 {
 	int row;
 
@@ -385,11 +389,38 @@ CL_UpscaleCrop(const unsigned char *src, int sw, int sh, int x, int y,
 
 	for (row = 0; row < h; row++)
 	{
-		memcpy(dst + (size_t)row * w, src + (size_t)(y + row) * sw + x,
-			(size_t)w);
+		memcpy(dst + (size_t)row * w * bpp,
+			src + ((size_t)(y + row) * sw + x) * bpp, (size_t)w * bpp);
 	}
 
 	return 1;
+}
+
+int
+CL_UpscaleWrapPad(const unsigned char *src, int w, int h, unsigned char *dst)
+{
+	return CL_UpscaleWrapPadTexels(src, w, h, 1, dst);
+}
+
+int
+CL_UpscaleCrop(const unsigned char *src, int sw, int sh, int x, int y,
+		int w, int h, unsigned char *dst)
+{
+	return CL_UpscaleCropTexels(src, sw, sh, x, y, w, h, 1, dst);
+}
+
+int
+CL_UpscaleWrapPadRGBA(const unsigned char *src, int w, int h,
+		unsigned char *dst)
+{
+	return CL_UpscaleWrapPadTexels(src, w, h, 4, dst);
+}
+
+int
+CL_UpscaleCropRGBA(const unsigned char *src, int sw, int sh, int x, int y,
+		int w, int h, unsigned char *dst)
+{
+	return CL_UpscaleCropTexels(src, sw, sh, x, y, w, h, 4, dst);
 }
 
 void
@@ -488,64 +519,6 @@ CL_UpscaleIndices(const unsigned char *src, int w, int h, int factor,
 	return img;
 }
 
-/* ---- the backends (TASK124) ---- */
-
-const char *
-CL_UpscaleBackendName(int backend)
-{
-	(void)backend;
-	return NULL;
-}
-
-int
-CL_UpscaleParseArgs(int argc, const char *const *argv, int *factor,
-		upscale_backend_t *backend, int *force)
-{
-	(void)argc; (void)argv; (void)factor; (void)backend; (void)force;
-	return 0;
-}
-
-upscale_backend_t
-CL_UpscaleChooseBackend(upscale_backend_t asked, int supported,
-		const char *reason, char *line, size_t linesize)
-{
-	(void)asked; (void)supported; (void)reason;
-	if (linesize) line[0] = '\0';
-	return UPSCALE_SCALE2X;
-}
-
-int
-CL_UpscaleWrapPadRGBA(const unsigned char *src, int w, int h,
-		unsigned char *dst)
-{
-	(void)src; (void)w; (void)h; (void)dst;
-	return 0;
-}
-
-int
-CL_UpscaleCropRGBA(const unsigned char *src, int sw, int sh, int x, int y,
-		int w, int h, unsigned char *dst)
-{
-	(void)src; (void)sw; (void)sh; (void)x; (void)y; (void)w; (void)h; (void)dst;
-	return 0;
-}
-
-void
-CL_UpscaleMaskAlpha(const unsigned char *idx, int w, int h, int factor,
-		unsigned char *rgba)
-{
-	(void)idx; (void)w; (void)h; (void)factor; (void)rgba;
-}
-
-unsigned char *
-CL_UpscaleRGBA(const unsigned char *idx, int w, int h, int factor, int wrap,
-		const unsigned *table, upscale_scaler_t scale, void *ctx)
-{
-	(void)idx; (void)w; (void)h; (void)factor; (void)wrap; (void)table;
-	(void)scale; (void)ctx;
-	return NULL;
-}
-
 /* ---- skins and the palette ---- */
 
 void
@@ -577,6 +550,228 @@ CL_UpscaleToRGBA(const unsigned char *data, size_t w, size_t h,
 {
 	/* R_Convert8to32 allocates the RGBA buffer; the caller owns it */
 	return (unsigned char *)R_Convert8to32(data, w, h, table);
+}
+
+/* ---- the backends (TASK124) ---- */
+
+const char *
+CL_UpscaleBackendName(int backend)
+{
+	switch (backend)
+	{
+		case UPSCALE_SCALE2X:
+			return "scale2x";
+		case UPSCALE_METALFX:
+			return "metalfx";
+		default:
+			return NULL;
+	}
+}
+
+int
+CL_UpscaleParseArgs(int argc, const char *const *argv, int *factor,
+		upscale_backend_t *backend, int *force)
+{
+	upscale_backend_t b = UPSCALE_SCALE2X;
+	int f, fo = 0, i = 2, k;
+
+	if (!argv || (argc < 2) || (argc > 4) || !argv[1])
+	{
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "2"))
+	{
+		f = 2;
+	}
+	else if (!strcmp(argv[1], "4"))
+	{
+		f = 4;
+	}
+	else
+	{
+		return 0;
+	}
+
+	/* the backend, when one is named */
+	for (k = UPSCALE_SCALE2X; (i < argc) && argv[i] && (k <= UPSCALE_METALFX); k++)
+	{
+		if (!strcmp(argv[i], CL_UpscaleBackendName(k)))
+		{
+			b = (upscale_backend_t)k;
+			i++;
+			break;
+		}
+	}
+
+	if ((i < argc) && argv[i] && !strcmp(argv[i], "force"))
+	{
+		fo = 1;
+		i++;
+	}
+
+	/* anything else, a bad backend name included, is refused */
+	if (i != argc)
+	{
+		return 0;
+	}
+
+	*factor = f;
+	*backend = b;
+	*force = fo;
+
+	return 1;
+}
+
+upscale_backend_t
+CL_UpscaleChooseBackend(upscale_backend_t asked, int supported,
+		const char *reason, char *line, size_t linesize)
+{
+	const char *name = CL_UpscaleBackendName(asked);
+	char what[32];
+
+	if (line && (linesize > 0))
+	{
+		line[0] = '\0';
+	}
+
+	if ((asked == UPSCALE_SCALE2X) || (name && supported))
+	{
+		return asked;
+	}
+
+	if (!line || (linesize == 0))
+	{
+		return UPSCALE_SCALE2X;
+	}
+
+	if (name)
+	{
+		snprintf(what, sizeof(what), "%s", name);
+	}
+	else
+	{
+		snprintf(what, sizeof(what), "backend %d", (int)asked);
+	}
+
+	if (reason && reason[0])
+	{
+		snprintf(line, linesize, "upscale_textures: %s is unsupported here "
+			"(%s); using scale2x\n", what, reason);
+	}
+	else
+	{
+		snprintf(line, linesize, "upscale_textures: %s is unsupported here; "
+			"using scale2x\n", what);
+	}
+
+	return UPSCALE_SCALE2X;
+}
+
+void
+CL_UpscaleMaskAlpha(const unsigned char *idx, int w, int h, int factor,
+		unsigned char *rgba)
+{
+	size_t ow;
+	int x, y;
+
+	if (!idx || !rgba || (w < 1) || (h < 1) || (factor < 1))
+	{
+		return;
+	}
+
+	ow = (size_t)w * factor;
+
+	for (y = 0; y < h * factor; y++)
+	{
+		const unsigned char *row = idx + (size_t)(y / factor) * w;
+
+		for (x = 0; x < w * factor; x++)
+		{
+			rgba[((size_t)y * ow + x) * 4 + 3] =
+				(row[x / factor] == 255) ? 0 : 255;
+		}
+	}
+}
+
+unsigned char *
+CL_UpscaleRGBA(const unsigned char *idx, int w, int h, int factor, int wrap,
+		const unsigned *table, upscale_scaler_t scale, void *ctx)
+{
+	unsigned char *rgba, *in, *out, *img;
+	int border = wrap ? 1 : 0, iw, ih, ok;
+
+	if (!idx || !table || !scale || !CL_UpscaleSizeOk(w, h) ||
+		((factor != 2) && (factor != 4)))
+	{
+		return NULL;
+	}
+
+	/* w and h are at most UPSCALE_MAX_SIDE: every size below fits */
+	iw = w + 2 * border;
+	ih = h + 2 * border;
+
+	rgba = CL_UpscaleToRGBA(idx, (size_t)w, (size_t)h, table);
+
+	if (!rgba)
+	{
+		return NULL;
+	}
+
+	in = rgba;
+
+	/* a repeating tile is scaled with one texel of its own border */
+	if (border)
+	{
+		in = malloc((size_t)iw * ih * 4);
+
+		if (!in)
+		{
+			free(rgba);
+			return NULL;
+		}
+
+		CL_UpscaleWrapPadRGBA(rgba, w, h, in);
+	}
+
+	/* one pass: the scaler takes 2x and 4x directly */
+	out = malloc((size_t)iw * factor * ih * factor * 4);
+	ok = out && scale(ctx, in, iw, ih, out, iw * factor, ih * factor);
+
+	if (in != rgba)
+	{
+		free(in);
+	}
+
+	free(rgba);
+
+	if (!ok)
+	{
+		free(out);
+		return NULL;
+	}
+
+	img = out;
+
+	if (border)
+	{
+		img = malloc((size_t)w * factor * h * factor * 4);
+
+		if (!img || !CL_UpscaleCropRGBA(out, iw * factor, ih * factor,
+			factor, factor, w * factor, h * factor, img))
+		{
+			free(img);
+			free(out);
+			return NULL;
+		}
+
+		free(out);
+	}
+
+	/* an 8-bit texel is opaque or transparent, whatever the scaler made */
+	CL_UpscaleMaskAlpha(idx, w, h, factor, img);
+
+	return img;
 }
 
 /* ---- the command's decisions ---- */
@@ -980,9 +1175,14 @@ void
 CL_UpscaleSummary(const upscale_count_t *n, int factor,
 		upscale_backend_t backend, const char *dir, char *out, size_t outsize)
 {
-	(void)backend;
+	const char *name = CL_UpscaleBackendName(backend);
+	char dirs[96] = "", by[32] = "";
 
-	char dirs[96] = "";
+	/* a scale2x run says what it said before there were backends */
+	if (backend != UPSCALE_SCALE2X)
+	{
+		snprintf(by, sizeof(by), " with %s", name ? name : "?");
+	}
 
 	if (n->baddirs > 0)
 	{
@@ -991,8 +1191,8 @@ CL_UpscaleSummary(const upscale_count_t *n, int factor,
 	}
 
 	snprintf(out, outsize, "upscale_textures: %d written, %d skipped, "
-		"%d refused, %d failed, %llu bytes, %dx, in %s%s%s\n", n->written,
-		n->skipped, n->refused, n->failed, n->bytes, factor, dir, dirs,
+		"%d refused, %d failed, %llu bytes, %dx%s, in %s%s%s\n", n->written,
+		n->skipped, n->refused, n->failed, n->bytes, factor, by, dir, dirs,
 		n->cut ? "; a listing was cut at its limit, not every file was "
 		"looked at" : "");
 }
