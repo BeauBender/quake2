@@ -169,14 +169,48 @@ MeasureScreen(int *v)
 }
 
 /*
+ * The window as the scene gives it now, for the log (TASK172): its size in
+ * points and in pixels, the density, each of the four insets of its safe
+ * area in points on its own, and the orientation of the display it is on.
+ * Nothing here asks UIScreen or the device's model.
+ */
+static void
+LogScreen(void)
+{
+	SDL_Rect r;
+	int w = 0, h = 0, pw = 0, ph = 0;
+	SDL_DisplayID d = SDL_GetDisplayForWindow(window);
+
+	if (!SDL_GetWindowSize(window, &w, &h) || !SDL_GetWindowSizeInPixels(window, &pw, &ph) ||
+		!SDL_GetWindowSafeArea(window, &r))
+	{
+		return;
+	}
+
+	Com_Printf("Screen: window %ix%i points, %ix%i pixels, density %.2f, insets left %i top %i right %i bottom %i points, "
+			"orientation %i, display %u\n", w, h, pw, ph, SDL_GetWindowPixelDensity(window),
+			r.x, r.y, w - r.x - r.w, h - r.y - r.h, (int)SDL_GetCurrentDisplayOrientation(d), (unsigned)d);
+}
+
+/*
  * The safe area or the pixel size moved (SDL_EVENT_WINDOW_SAFE_AREA_CHANGED,
- * SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED): the video starts again, once, and
- * only when the screen is not the one it was made for.
+ * SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED): a rotation, or a fold or an unfold
+ * of an iPhone Duo, which moves the window to the other display. TASK172:
+ * the video follows it live, with no vid_restart. viddef takes the
+ * renderer's new drawable, the safe rectangle in pixels (ref_metal's
+ * RI_GetDrawableSize), and the renderer takes the same size at its next
+ * frame (RI_BeginFrame), so the 3D view, the HUD, the console and the menus
+ * are laid out for the new window on the next frame; the touch overlay
+ * reads the safe area at each touch (IN_TouchSync). A window with no
+ * pixels (hidden in the middle of a fold) is left alone: nothing is drawn
+ * for it, and the change is taken when it has a size again. A renderer that
+ * gives no drawable falls back to the vid_restart of TASK147.
  */
 void
 GLimp_ScreenEvent(void)
 {
 	int now[GLIMP_SCREEN_INTS];
+	int w = 0, h = 0;
 
 	if (!initSuccessful)
 	{
@@ -185,12 +219,29 @@ GLimp_ScreenEvent(void)
 
 	MeasureScreen(now);
 
-	if (GLimp_ScreenChanged(made_screen, now))
+	if ((now[0] <= 0) || (now[1] <= 0) || !GLimp_ScreenChanged(made_screen, now))
 	{
-		/* the next event of the same change finds it noted and does nothing */
-		memcpy(made_screen, now, sizeof(made_screen));
-		Cbuf_AddText("vid_restart\n");
+		return;
 	}
+
+	/* the next event of the same change finds it noted and does nothing */
+	memcpy(made_screen, now, sizeof(made_screen));
+	LogScreen();
+
+	if (re.GetDrawableSize)
+	{
+		re.GetDrawableSize(&w, &h);
+	}
+
+	if ((w <= 0) || (h <= 0))
+	{
+		Cbuf_AddText("vid_restart\n");
+		return;
+	}
+
+	viddef.width = w;
+	viddef.height = h;
+	Com_Printf("Drawable size: %ix%i (live)\n", viddef.width, viddef.height);
 }
 #endif
 
@@ -981,6 +1032,7 @@ GLimp_InitGraphics(int fullscreen, int *pwidth, int *pheight)
 
 #if defined(__APPLE__) && TARGET_OS_IPHONE
 	MeasureScreen(made_screen);
+	LogScreen();
 #endif
 
 	/* Set the window icon, this must be done after creating the window */
