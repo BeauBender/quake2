@@ -557,6 +557,8 @@ selftest()
 	act dupper .github/actions/d/action.yml 'name: Fixture action' 'description: fixture' \
 		'RUNS:' '  USING: docker' "  IMAGE: debian@sha256:$dig"
 	expect refuse "a Docker action, RUNS: USING: docker IMAGE: debian@sha256:<64 hex>" dupper
+	dact dimage "  Image: docker://debian@sha256:$dig"
+	expect accept "a Docker action, Image: docker://debian@sha256:<64 hex>" dimage
 
 	# Every key the walk compares, in any letter case.
 	step kuses '      - USES: actions/checkout@v7'
@@ -650,6 +652,20 @@ selftest()
 	_want="$me: .github/workflows/w.yml: actions/checkout@v7: not pinned to a 40-hex commit SHA"
 	if [ "$_out" != "$_want" ]; then
 		echo "$me: selftest: the refusal of uses: actions/checkout@v7 printed something else" >&2
+		failed=1
+	fi
+	# A Dockerfile-built action is refused once, with its fixed reason, and
+	# a Docker action's image that is not a string is named as such.
+	_out=$( (scan "$tmp/dfpath") 2>&1) || :
+	_want="$me: ./.github/actions/d/action.yml: build/Dockerfile: a Dockerfile-built local action is not supported; use a pinned docker:// image"
+	if [ "$_out" != "$_want" ]; then
+		echo "$me: selftest: the refusal of image: build/Dockerfile printed something else" >&2
+		failed=1
+	fi
+	_out=$( (scan "$tmp/dnull") 2>&1) || :
+	_want="$me: ./.github/actions/d/action.yml: (not a string): a Docker action with no image"
+	if [ "$_out" != "$_want" ]; then
+		echo "$me: selftest: the refusal of a Docker action's image: with no value printed something else" >&2
 		failed=1
 	fi
 	# A reference is printed as printable ASCII, at most 200 characters.
