@@ -178,7 +178,14 @@ a question of look for the owner (INFORM11): the frames below include the same v
 
 ### Effect on, under the threshold
 
-PENDING.
+**Not shown on an engine run yet.** All three demos' maps are above 2 % (above). The attempt to
+make a demo standing at the start of `mine1`, `mine2` and `lab` (`pins.sh make-demo` with a
+scratch demo cfg) failed twice on the harness's own rules (the harness copy needs `src/`, and
+a demo cfg needs its `// pins: messages <low> <high>` line), and the card's budget ran out
+there. What holds without it: under 2 % `RM_RTSun_Frame` never opens the pass and never sets
+`RM_RTSun_Active`, so `RM_GB_Path` keeps the view's stock path; the host test holds the
+threshold (`rm_rtsun_sky_enough`, 1.99 % refused, 2 % taken). The remaining proof is a demo on
+such a map, its `rt-sun` and `world` records compared byte for byte.
 
 ### Frames for the owner
 
