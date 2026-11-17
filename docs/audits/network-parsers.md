@@ -679,7 +679,7 @@ Fix (client-side only, no protocol change): accept `client_connect` and
 `challenge` only in `ca_connecting` and only when `net_from` equals the
 resolved address of `cls.servername`.
 
-### D15: the `download` command appends `.tmp` past `cls.downloadtempname` where `MAX_OSPATH` is 256 (critical by the scale, medium confidence) [FIX29 (#130)]
+### D15: the `download` command appends `.tmp` past `cls.downloadtempname` where `MAX_OSPATH` is 256 (critical by the scale, medium confidence) [not reachable on the Apple builds (MAX_OSPATH 4096, record 0008); closed without a fix (FIX29, #130)]
 
 `CL_Download_f` (`cl_download.c`) formats `Cmd_Argv(1)` into
 `filename[MAX_OSPATH]` with `Com_sprintf` (truncating), passes it through
@@ -821,7 +821,7 @@ unfixed finding above is on one of them.
 | FIX26 | #127 | D12, D13 | low |
 | FIX27 | #128 | D14 | high |
 | FIX28 | #129 | H1, H2, H3, H4, H6, H7 | low |
-| FIX29 | #130 | D15 | critical (Windows builds only) |
+| FIX29 | #130 | D15 | not reachable on the Apple builds (MAX_OSPATH 4096, record 0008); closed without a fix |
 | FIX30 | #131 | D17 | medium |
 
 Fixed: FIX11 (D1, #136), FIX13 (D3, D4, D8, #137), FIX14 (D5), FIX15 (D6, #138), FIX27 (D14, #139).
