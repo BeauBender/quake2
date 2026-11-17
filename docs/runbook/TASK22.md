@@ -124,7 +124,10 @@ scripts/ios-device.sh launch --device DEVICE
 ```
 
 `DEVICE` is the identifier `xcrun devicectl list devices` shows. Record
-for each step: it passed, or its last line.
+for each step: it passed, or the refusal text of its last line (the words
+after `ios-device:`) and nothing else. #29 is public: leave out the
+tool's own lines above it, the identity, the team, the device's
+identifier and any path.
 
 - The first start shows the missing-data alert naming
   *On My iPhone > Quake II > baseq2* and *pak0.pak*. Copy the paks into

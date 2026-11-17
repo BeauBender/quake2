@@ -448,14 +448,21 @@ than the app's (it names both), and an app that is not the device build.
 It then writes the profile's entitlements to a private scratch file,
 copies the profile into the bundle as *embedded.mobileprovision* and signs
 the bundle with `codesign --force --sign IDENTITY --entitlements FILE`;
-the signature is checked with `codesign --verify --strict`. Nothing of the
-decoded profile, which holds the team's certificates, is printed.
+the signature is checked with `codesign --verify --strict`. If signing or
+the check fails, or is interrupted, the profile and the signature are
+removed from the bundle again, so `install` refuses it. An identity that
+starts with a hyphen is refused (`-` is codesign's ad hoc identity).
+Nothing of the decoded profile, which holds the team's certificates, is
+printed; a failing tool's own lines are printed with the identity, the
+team and the device replaced by `<identity>`, `<team>` and `<device>`, and
+the script's messages name paths relative to the repository.
 
 `install` and `launch` take the device's identifier as `xcrun devicectl
 list devices` shows it (or `IOS_DEVICE`). `launch` passes any further
 arguments to the engine, for example `scripts/ios-device.sh launch
 --device DEVICE +map base1`. Each step is bounded (`IOS_DEVICE_SIGN_SECONDS`,
-`IOS_DEVICE_INSTALL_SECONDS`, `IOS_DEVICE_LAUNCH_SECONDS`) and the
+`IOS_DEVICE_INSTALL_SECONDS`, `IOS_DEVICE_LAUNCH_SECONDS`); Ctrl-C ends
+the running `codesign` or `devicectl` before the script exits. The
 script's header describes the rest. The game data then goes into the
 app's folder as described below; the app finds it there with no option.
 

@@ -77,7 +77,9 @@
 # other work sharing the host: the simulator's objects 7 to 16 s over
 # three runs and the device's 13 s; under --full 59 s and 54 s (one run);
 # the whole check 377 to 481 s over three runs, of which
-# scripts/ios-device.sh --selftest is about 25 s.
+# scripts/ios-device.sh --selftest was about 25 s; with its interrupt
+# cases (round 2) 32 to 35 s over 20 runs, 19 of them mutants run five at
+# a time.
 #
 # Without the iOS simulator SDK (another OS, or Xcode without its iOS
 # platform) the check prints one "skipped" line and exits 0. With the
