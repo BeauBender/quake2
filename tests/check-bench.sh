@@ -36,7 +36,10 @@
 #     ticket, a nested call under the token takes none, lock status lists
 #     the waiters in order, a maker that backs off and a waiter whose
 #     ticket is removed keep their place, a stale ticket with the
-#     waiter's own pid is removed, and a FIFO in the queue is never read;
+#     waiter's own pid is removed, a FIFO or a link in the queue is never
+#     read, and (review round 2) a reader whose ps fails or prints nothing
+#     keeps a live waiter's ticket and temporary, and lock status skips a
+#     zombie;
 #   - the wall-time bound: it stops a grandchild, bounds a command that
 #     ignores TERM, stops the work a command leaves running, ends a
 #     stopped command and its group with 74, and shows no job notice;
@@ -80,7 +83,7 @@
 #     the gate without a pre-warm, and the readers (snap.source,
 #     freq.source) in the run file, drift and compare.
 # The tests that do not test the host facts use a fast stand-in for
-# system_profiler (fast_profiler). Then fifty-seven mutants, each applied to a
+# system_profiler (fast_profiler). Then sixty-four mutants, each applied to a
 # copy of scripts/bench/ and each required to fail the test it targets: the
 # lock made neither exclusively nor linked, the holder renamed over
 # another's, the command spawned without its own process group, its fork
@@ -92,7 +95,9 @@
 # ticket check, ordered by pid, its ticket left on give-up, a dead or a
 # zombie ticket kept, a ticket put back under a new key (after a back-off
 # or a removal), a ticket with its own pid kept, a FIFO read (by a waiter
-# or by lock status), the store's
+# or by lock status), a link read as a ticket (likewise), a failed or an
+# empty ps read as dead (the helper, the head check, a temporary), a
+# zombie listed by lock status, the store's
 # outside-repository check deleted, the leading-zero refusal dropped; the
 # gate without its hold, its bound or its reading, GPU use in a snapshot
 # ignored, baseline put or drift's re-measure storing a not-quiet set,
@@ -2540,11 +2545,21 @@ mutant bare-no-grace core/lock.sh '-ge "$_la_grace" ]; then' '-ge 0 ]; then' t_l
 mutant queue-no-ticket-check core/lock.sh 'if bench_lock_head "$_la_label"; then _la_head=1; fi' 'bench_lock_head "$_la_label" || true; _la_head=1' t_lock_fifo || mfail=1
 mutant queue-by-pid core/lock.sh "BENCH_LOCK_KEY=\$_lq_t.\$(printf '%010d' \"\$\$\")" "BENCH_LOCK_KEY=\$(printf '%010d' \"\$\$\").\$_lq_t" t_lock_order || mfail=1
 mutant queue-ticket-left core/lock.sh 'bench_lock_unqueue; return 75' 'return 75' t_lock_giveup 'then bench_lock_unqueue; fi' 'then :; fi' || mfail=1
-mutant queue-dead-kept core/lock.sh 'if [ "$_lh_p" = "$$" ] || ! bench_pid_running "$_lh_p"; then' 'if false; then' t_lock_dead_waiter || mfail=1
-mutant queue-zombie-alive core/lock.sh 'if [ "$_lh_p" = "$$" ] || ! bench_pid_running "$_lh_p"; then' 'if [ "$_lh_p" = "$$" ] || ! bench_lock_alive "$_lh_h"; then' t_lock_zombie_waiter || mfail=1
-mutant queue-own-pid-kept core/lock.sh 'if [ "$_lh_p" = "$$" ] || ! bench_pid_running "$_lh_p"; then' 'if ! bench_pid_running "$_lh_p"; then' t_lock_own_pid || mfail=1
+mutant queue-dead-kept core/lock.sh 'if [ "$_lh_p" = "$$" ] || ! bench_lock_waiter_running "$_lh_p"; then' 'if false; then' t_lock_dead_waiter || mfail=1
+mutant queue-zombie-alive core/lock.sh 'if [ "$_lh_p" = "$$" ] || ! bench_lock_waiter_running "$_lh_p"; then' 'if [ "$_lh_p" = "$$" ] || ! bench_lock_alive "$_lh_h"; then' t_lock_zombie_waiter || mfail=1
+mutant queue-own-pid-kept core/lock.sh 'if [ "$_lh_p" = "$$" ] || ! bench_lock_waiter_running "$_lh_p"; then' 'if ! bench_lock_waiter_running "$_lh_p"; then' t_lock_own_pid || mfail=1
 mutant queue-fifo-head core/lock.sh 'if [ ! -f "$_lh_f" ] || [ -h "$_lh_f" ]; then continue; fi' ':' t_lock_queue_fifo || mfail=1
 mutant queue-fifo-status core/lock.sh 'if [ ! -f "$_ls_f" ] || [ -h "$_ls_f" ]; then continue; fi' ':' t_lock_queue_fifo || mfail=1
+# Review round 2: a failed or empty ps reads as dead (the helper, or the
+# head check back to bench_pid_running), at the temporaries, in lock
+# status for a zombie, and a link read as a ticket.
+mutant queue-ps-fail-dead core/lock.sh '|| { bench_pid_alive "$1"; return; }' '|| return 1' t_lock_ps_fails || mfail=1
+mutant queue-ps-empty-dead core/lock.sh 'case $_wr_s in Z*) return 1 ;; esac' "case \$_wr_s in '' | Z*) return 1 ;; esac" t_lock_ps_fails || mfail=1
+mutant queue-ps-head core/lock.sh '! bench_lock_waiter_running "$_lh_p"; then' '! bench_pid_running "$_lh_p"; then' t_lock_ps_fails || mfail=1
+mutant queue-ps-tmp core/lock.sh 'bench_lock_waiter_running "${_lh_p%%.*}" || rm -f "$_lh_f"' 'bench_pid_running "${_lh_p%%.*}" || rm -f "$_lh_f"' t_lock_ps_tmp || mfail=1
+mutant queue-zombie-status core/lock.sh 'bench_lock_waiter_running "$(bench_kv "$_ls_q" pid)" || continue' 'bench_pid_alive "$(bench_kv "$_ls_q" pid)" || continue' t_lock_zombie_waiter || mfail=1
+mutant queue-link-head core/lock.sh 'if [ ! -f "$_lh_f" ] || [ -h "$_lh_f" ]; then continue; fi' 'if [ ! -f "$_lh_f" ]; then continue; fi' t_lock_queue_link || mfail=1
+mutant queue-link-status core/lock.sh 'if [ ! -f "$_ls_f" ] || [ -h "$_ls_f" ]; then continue; fi' 'if [ ! -f "$_ls_f" ]; then continue; fi' t_lock_queue_link || mfail=1
 # A maker that backs off (three tabs: the arrival's own enqueue has one), and a waiter whose ticket is gone, take a new key.
 mutant queue-backoff-new-key core/lock.sh "$(printf '\t\t\t')bench_lock_enqueue \"\$_la_label\"" "$(printf '\t\t\t')BENCH_LOCK_KEY=; bench_lock_enqueue \"\$_la_label\"" t_lock_stall_place || mfail=1
 mutant queue-back-new-key core/lock.sh 'then bench_lock_enqueue "$1"; fi' 'then BENCH_LOCK_KEY=; bench_lock_enqueue "$1"; fi' t_lock_ticket_back || mfail=1
