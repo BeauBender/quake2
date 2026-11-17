@@ -240,8 +240,11 @@ ParseWavinfo(char *name, byte *wav, int wavlength)
 	{
 		if (samples < info.samples)
 		{
-			Com_Error(ERR_DROP, "%s: Sound %s has a bad loop length",
+			/* a loop longer than the data refuses the sound */
+			Com_Printf("%s: Sound %s has a bad loop length\n",
 				__func__, name);
+			memset(&info, 0, sizeof(info));
+			return info;
 		}
 	}
 	else
