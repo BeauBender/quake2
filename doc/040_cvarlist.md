@@ -762,8 +762,22 @@ has) is not drawn.
   line on every 60th scaled view and on each view whose history is
   dropped: the mode, the input and output sizes, the reasons for the drop
   and the GPU time of the scaler's pass (the pass then runs in a command
-  buffer of its own); `2` prints that line on every scaled view. Defaults
-  to `0`.
+  buffer of its own); `2` prints that line on every scaled view. With any
+  value but `0` it also prints, at shutdown, one line on the frames
+  presented a second over a window (see `metal_rate_start`), the frames
+  that found every present slot held with display sync off, and the frames
+  without a drawable (the frames that found every slot held are among
+  these, so the two counts are not added); the OpenGL 1.4 renderer's Metal shim (`gl1-metal`)
+  reads this cvar once, when its context is made, for that line only.
+  Defaults to `0`.
+
+* **metal_rate_start**: The seconds after the first frame ended at which
+  the window of the presented-rate line of `metal_stats` begins, in the
+  Metal renderer and the OpenGL 1.4 renderer's Metal shim. The first
+  frame to end that long after the first frame is the window's first
+  sample and the last frame before shutdown its last. A run shorter than
+  this has no window. Read once, when the renderer starts. Does nothing
+  while `metal_stats` is `0`. Defaults to `1`.
 
 * **metal_lightmap_filter**: How the Metal renderer filters the lightmaps
   of the world. `0` (the default) is the bilinear filter every renderer
@@ -1083,9 +1097,12 @@ is.
   from the eye that looked for translucent water, the water pixels whose
   reflection came from the picture, from a surface drawn on its own, from
   the sky in the picture, from the sky box and from nowhere, and the
-  pass's GPU time; with `r_rt_water_hits 1` also each of its three parts
-  (the raster of the water, the list of its pixels, the trace) and the
-  time from the first's start to the last's end. Nothing
+  pass's GPU time; with `r_rt_water_hits 1` also each of its two parts
+  (the list of its pixels, the trace) and the time from the first's start
+  to the last's end, the pass's time being their sum, and `-` for the
+  raster's, vertex stage's and fragment stage's figures, which are not
+  measured: the water's marks are a draw of the G-buffer raster, timed
+  with it. Nothing
   is drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next
@@ -1159,8 +1176,12 @@ is.
   reflection. Over the
   pool of the test map that fills the 2 to 9 % of the water that had no
   reflection, and changes no pixel outside the water. It costs more GPU
-  time: a raster of the map's water and a list of its pixels before the
-  rays, which only those pixels trace. Measured on an Apple M6 over the
+  time: the water's marks, one more draw of the G-buffer raster, and a list
+  of the marked pixels before the rays, which only those pixels trace. The
+  marks are written into the alpha of the G-buffer's normal attachment, so
+  `1` finds the water pixels without a raster pass, depth reload or target
+  of its own. The figures below were measured with the separate raster
+  that setting used before, and are to be measured again. Measured on an Apple M6 over the
   test map's pool (about 41 % of the pixels water), the pass takes
   4.66 ms of GPU time at 1920 x 1080 against 3.40 ms at `0` with the
   frame rate held to a 60 Hz display, and 1.20 against 0.99 ms not held;

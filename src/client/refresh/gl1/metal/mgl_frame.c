@@ -45,6 +45,10 @@
 
 #include "mgl_internal.h"
 
+/* The renderer's import table, defined by the renderer this shim is linked into. */
+#include "../../../vid/header/ref.h"
+extern refimport_t ri;
+
 /* The SDL replacements are declared once, for gl1, in shim_sdl.h. */
 #include "shim_sdl.h"
 
@@ -162,6 +166,15 @@ mgl_CreateContext(SDL_Window *window)
 
 	mgl_state_reset();
 	mgl_textures_reset();
+
+	/* metal_stats asks for the presented-rate line; metal_rate_start is where its window begins (TASK161) */
+	{
+		cvar_t *stats = ri.Cvar_Get("metal_stats", "0", 0);
+		cvar_t *start = ri.Cvar_Get("metal_rate_start", "1", 0);
+
+		mgl_config.rate_stats = stats && (stats->value != 0.0f);
+		mgl_config.rate_start = start ? (double)start->value : 1.0;
+	}
 
 	if (!mgl_layer_create(window, &mgl_config, err, sizeof(err)))
 	{

@@ -85,9 +85,10 @@ configstrings (`cl.configstrings[CS_MODELS..]`, `CS_SOUNDS..`, `CS_IMAGES..`,
 plus the sky in `CS_SKY` and player skins). `CL_RequestNextDownload` walks
 those configstrings and, for each name, calls `CL_CheckOrDownloadFile`, whose
 only gate is `CL_DownloadFilter`. That filter rejects a name that starts with
-`.` or `/`, contains `:` or `..`, contains a library extension anywhere
-(`.dll`, `.dylib`, `.lib`, `.so`, `.a`, tested with `strstr`, so `x.so.wav`
-is refused too), matches the `cl_nodownload_list` cvar, or already exists. It
+`.` or `/`, contains `:` or `..`, ends in a library extension (`.dll`,
+`.dylib`, `.lib`, `.so`, `.a`, in any case and before any numeric version
+groups such as `libx.so.1.2`; since FIX34, `x.so.wav` is accepted), matches
+the `cl_nodownload_list` cvar, or already exists. It
 does **not** restrict the asset extension. Model configstrings are requested
 verbatim, so they can name a `.md2`, `.sp2` or `.bsp` (the map is
 `CS_MODELS + 1`); the other classes are requested under names the client
@@ -227,22 +228,39 @@ start. `fsPackFile_t` holds `name[MAX_QPATH]`, `size`, `offset`; a
 
 | Function | Field | Use | Check (quoted) or absence | Verdict |
 |---|---|---|---|---|
-| `FS_LoadPAK` | header read | `fread(&header, 1, sizeof(dpackheader_t), handle)` | return value ignored; a file shorter than 12 bytes leaves `dirofs`/`dirlen` as uninitialised stack | hardening (the ident test catches most short files; a file holding only the ident does not; carded under FIX22) |
+| `FS_LoadPAK` | header read | `fread(&header, 1, sizeof(dpackheader_t), handle)` | return value ignored; a file shorter than 12 bytes leaves `dirofs`/`dirlen` as uninitialised stack | hardening (the ident test catches most short files; a file holding only the ident does not; fixed by FIX22: a short read is `ERR_FATAL` "is too short") |
 | `FS_LoadPAK` | `ident` | format gate | `LittleLong(header.ident) != IDPAKHEADER` raises `ERR_FATAL` | ok for memory; a file named `*.pak` that is not a pack, in a search path, stops the engine at every start (see "By design / out of scope") |
 | `FS_LoadPAK` | `dirlen`, `dirofs` | `numFiles = header.dirlen / sizeof(dpackfile_t)`, `malloc(header.dirlen)`, `fseek(handle, header.dirofs, SEEK_SET)` | `(numFiles == 0) \|\| (header.dirlen < 0) \|\| (header.dirofs < 0)` | ok for sign; no upper bound against the file size (see next rows) |
-| `FS_LoadPAK` | `numFiles` | `Z_Malloc(numFiles * sizeof(fsPackFile_t))` | `numFiles > MAX_FILES_IN_PACK` only prints a message; the product is computed in `size_t` and cannot wrap on 64-bit hosts (at most 33 554 431 entries of 72 bytes, about 2.4 GB) | **defect D5** (resource exhaustion: up to 2 GB `malloc` plus 2.4 GB `calloc` from a header alone; `Z_TagMalloc` turns a failed allocation into `ERR_FATAL`) |
-| `FS_LoadPAK` | directory bytes | `fread(info, 1, header.dirlen, handle)` into `malloc`ed (not zeroed) memory | return value ignored; a directory that runs past the end of the file leaves the tail of `info` uninitialised | **defect D4** (feeds the next row) |
-| `FS_LoadPAK` | `name[56]` | `Q_strlcpy(files[i].name, info[i].name, Q_min(sizeof(files[i].name), sizeof(files[i].name)))` | the destination is bounded (the `Q_min` compares the same size twice, presumably meant to name the 56-byte source), but `Q_strlcpy` reads the source up to its NUL; a name with no NUL in the last entry, or uninitialised bytes from the short read above, reads past the end of the `info` allocation | **defect D4** (heap over-read in a loader of a downloadable file) |
-| `FS_LoadPAK` | `filepos`, `filelen` | `files[i].offset`, `files[i].size` | none; neither is compared with the pack file size, and negatives are accepted | **defect D6** (see `FS_FOpenFile` and `FS_LoadFile2` rows) |
-| `FS_FOpenFile` | `pack->files[i].offset` | `fseek(handle->file, pack->files[i].offset, SEEK_SET)` | return of `fseek` ignored; a negative offset leaves the stream at 0 and the caller reads the wrong bytes | D6 |
-| `FS_FOpenFile` | `pack->files[i].size` | returned as the file length to every loader | none | D6 |
-| `FS_LoadFile2` | size from `FS_FOpenFile` | `Z_Malloc(size + (pad < 0 ? 0 : pad))`, `FS_Read(*buffer, size, f)` | `if (size <= 0)` returns early, but only `!size` closes the handle, so a negative pak entry size leaks the open handle and `FILE *` (32 such lookups exhaust `fs_handles` and every later open fails with `ERR_DROP` "none free"); `size + 1` with `size == INT_MAX` is signed overflow; a size past the end of the pack makes `FS_Read` hit end of file twice and raise `ERR_FATAL` | D6 (crash of the engine via `ERR_FATAL`, handle leak) |
+| `FS_LoadPAK` | `numFiles` | `Z_Malloc(numFiles * sizeof(fsPackFile_t))` | `numFiles > MAX_FILES_IN_PACK` only prints a message; the product is computed in `size_t` and cannot wrap on 64-bit hosts (at most 33 554 431 entries of 72 bytes, about 2.4 GB) | **defect D5, fixed by FIX22** (resource exhaustion: up to 2 GB `malloc` plus 2.4 GB `calloc` from a header alone; `Z_TagMalloc` turns a failed allocation into `ERR_FATAL`) |
+| `FS_LoadPAK` | directory bytes | `fread(info, 1, header.dirlen, handle)` into `malloc`ed (not zeroed) memory | return value ignored; a directory that runs past the end of the file leaves the tail of `info` uninitialised | **defect D4, fixed by FIX22** (feeds the next row) |
+| `FS_LoadPAK` | `name[56]` | `Q_strlcpy(files[i].name, info[i].name, Q_min(sizeof(files[i].name), sizeof(files[i].name)))` | the destination is bounded (the `Q_min` compares the same size twice, presumably meant to name the 56-byte source), but `Q_strlcpy` reads the source up to its NUL; a name with no NUL in the last entry, or uninitialised bytes from the short read above, reads past the end of the `info` allocation | **defect D4, fixed by FIX22** (heap over-read in a loader of a downloadable file) |
+| `FS_LoadPAK` | `filepos`, `filelen` | `files[i].offset`, `files[i].size` | none; neither is compared with the pack file size, and negatives are accepted | **defect D6, fixed by FIX22** (see `FS_FOpenFile` and `FS_LoadFile2` rows) |
+| `FS_FOpenFile` | `pack->files[i].offset` | `fseek(handle->file, pack->files[i].offset, SEEK_SET)` | return of `fseek` ignored; a negative offset leaves the stream at 0 and the caller reads the wrong bytes | D6, fixed by FIX22 |
+| `FS_FOpenFile` | `pack->files[i].size` | returned as the file length to every loader | none | D6, fixed by FIX22 |
+| `FS_LoadFile2` | size from `FS_FOpenFile` | `Z_Malloc(size + (pad < 0 ? 0 : pad))`, `FS_Read(*buffer, size, f)` | `if (size <= 0)` returns early, but only `!size` closes the handle, so a negative pak entry size leaks the open handle and `FILE *` (32 such lookups exhaust `fs_handles` and every later open fails with `ERR_DROP` "none free"); `size + 1` with `size == INT_MAX` is signed overflow; a size past the end of the pack makes `FS_Read` hit end of file twice and raise `ERR_FATAL` | D6, fixed by FIX22 (every entry is bounded by the pack when it is loaded, so the negative-size return cannot be reached from a pak; `FS_LoadFile2` itself is unchanged) |
 | `FS_Read` | short read | loop on `fread` | second zero-length read raises `ERR_FATAL` | ok for memory (the error is the DoS in D6) |
 | `FS_FOpenFile` | requested name (from configstrings, models, maps) | normalised copy into `name[MAX_OSPATH]`; `rawname[input + 1]` look-ahead | `if (namelen > sizeof(name) - 1)` rejects long names; the look-ahead reads at most the terminating NUL | ok |
 | `FS_FOpenFile` | requested name | `Com_sprintf(path, sizeof(path), "%s/%s", search->path, handle->name)` then `Q_fopen` | `..` is not removed or refused, so a server-supplied model, sound or image name can read files outside the search paths | hardening (read only; the bytes are parsed as an asset and never sent back) |
 | `FS_PackQuickSearch` | pack names | binary search | `FS_SortPack` runs before the pack is searched | ok |
 | `FS_CreatePath` | path | `Sys_Mkdir` on each prefix | `if (strstr(path, "..") != NULL)` refuses | ok |
 | `FS_SetGamedir` | `game` (set from the server's serverdata) | search path and write directory | `!strcmp(dir, ".") \|\| strstr(dir, "..") \|\| strstr(dir, "/") \|\| strstr(dir, "\\")` | ok |
+
+Fixed by FIX22: `FS_LoadPAK` checks the header and directory `fread`
+results, and three pure checks bound the pak by the size of the file:
+`FS_PakDirectoryInBounds` (the directory lies inside the file and holds a
+whole number of 64-byte entries, which also bounds both allocations),
+`FS_PakEntryInBounds` (every entry's offset and size lie inside the pack)
+and `FS_PakNameTerminated` (every name has a NUL inside its 56 bytes). A
+pak that fails one is skipped with a console line and its handle closed;
+the callers already skip a NULL pak. Two changes from before: a
+directory length that is not a whole number of entries used to load
+(the count truncated) and is now skipped, and one bad entry now skips
+the whole pak. A short header, an empty directory and a wrong ident
+stay `ERR_FATAL`, as before. A pak with more than `MAX_FILES_IN_PACK`
+entries still loads with its warning. The unit tests `fs_pak_bounds`,
+`fs_malformed_paks` and `fs_pak_bound_functions`
+(`tests/unit/test_filesystem.c`) feed generated paks to the real loader
+and count open descriptors after each refusal.
 
 ## Renderer BSP
 
@@ -562,26 +580,26 @@ to `S_GetVolume`, `S_GetStatistics`, `S_IsShortSilence` and `SDL_Cache`
 
 | Function | Field | Use | Check (quoted) or absence | Verdict |
 |---|---|---|---|---|
-| `FindNextChunk` | `last_chunk + 4` | base of the next header; `strncmp(data_p, name, 4)` | `if (data_p >= iff_end)` before the length read, but `strncmp` and `GetLittleLong` then read up to 4 bytes, so with `data_p == iff_end - 1` the compare and the length read run past the buffer | **defect D23** (over-read; low, bounded to a few bytes past a `wavlength + 1` allocation) |
+| `FindNextChunk` | `last_chunk + 4` | base of the next header; `strncmp(data_p, name, 4)` | `if (data_p >= iff_end)` before the length read, but `strncmp` and `GetLittleLong` then read up to 4 bytes, so with `data_p == iff_end - 1` the compare and the length read run past the buffer | **defect D23, fixed by FIX20** (over-read; low, bounded to a few bytes past a `wavlength + 1` allocation) |
 | `FindNextChunk` | `iff_chunk_len` | `last_chunk = data_p + 8 + ((iff_chunk_len + 1) & ~1)` | `if (iff_chunk_len < 0)` stops; no upper bound, but the next loop's `data_p >= iff_end` catches an overshoot before another read | ok (given the next-iteration check) |
-| `GetWavinfo` | "RIFF"/"WAVE" | `strncmp(data_p + 8, "WAVE", 4)` | `data_p` is non-NULL, but `data_p + 8 .. + 11` is not bounded against `iff_end` | D23 |
-| `GetWavinfo` | `fmt ` body | `data_p += 8`, then `GetLittleShort`/`GetLittleLong` for `format`, `channels`, `rate`, `width` | no check that the `fmt ` chunk holds these 16 bytes inside the file | D23 |
+| `GetWavinfo` | "RIFF"/"WAVE" | `strncmp(data_p + 8, "WAVE", 4)` | `data_p` is non-NULL, but `data_p + 8 .. + 11` is not bounded against `iff_end` | D23, fixed by FIX20 |
+| `GetWavinfo` | `fmt ` body | `data_p += 8`, then `GetLittleShort`/`GetLittleLong` for `format`, `channels`, `rate`, `width` | no check that the `fmt ` chunk holds these 16 bytes inside the file | D23, fixed by FIX20 |
 | `GetWavinfo` | `format` | format gate | `if (format != 1)` | ok |
 | `GetWavinfo` | `channels` | `sc->stereo = channels - 1`, the `len * width * channels` allocation in `SDL_Cache`, divisor in `S_GetStatistics` | none in `GetWavinfo`; `S_LoadSound` (`sound.c`) refuses `info.channels < 1 \|\| info.channels > 2` before any consumer runs | ok |
-| `GetWavinfo` | `rate` (`GetLittleLong`) | `SDL_Cache`: `stepscale = (float)info->rate / sound.speed`, `len = (int)(info->samples / stepscale)`, `len = len * info->width * info->channels`, `Z_Malloc(len + sizeof(sfxcache_t))`, then the resample loop `for (i = 0; i < (int)(info->samples / stepscale); i++)` writes `sc->data[i]`; `sc->begin = begin_length * 1000 / info->rate` and three more integer divisions; `S_IsShortSilence`: `(info->samples * 1000) / info->rate` | none anywhere (only the cinematic path bounds its own `s_rate`) | **defect D28** (a low rate inflates the frame count; the `int` product wraps to a small positive allocation while the loop bound is recomputed from the un-multiplied count, a heap overflow write that the D25 clamp does not close) and **defect D29** (a zero rate reaches integer divisions by zero) |
+| `GetWavinfo` | `rate` (`GetLittleLong`) | `SDL_Cache`: `stepscale = (float)info->rate / sound.speed`, `len = (int)(info->samples / stepscale)`, `len = len * info->width * info->channels`, `Z_Malloc(len + sizeof(sfxcache_t))`, then the resample loop `for (i = 0; i < (int)(info->samples / stepscale); i++)` writes `sc->data[i]`; `sc->begin = begin_length * 1000 / info->rate` and three more integer divisions; `S_IsShortSilence`: `(info->samples * 1000) / info->rate` | none anywhere (only the cinematic path bounds its own `s_rate`) | **defect D28, fixed by FIX20** (a low rate inflates the frame count; the `int` product wraps to a small positive allocation while the loop bound is recomputed from the un-multiplied count, a heap overflow write that the D25 clamp does not close) and **defect D29, fixed by FIX20** (a zero rate reaches integer divisions by zero) |
 | `GetWavinfo` | `width = GetLittleShort() / 8` | divisor of `samples`, element size in every reader | `if (info.width <= 0)`; nothing refuses a width other than 1 or 2. `S_GetVolume` and `S_GetStatistics` skip such a width, and `SDL_Cache` takes its byte branch (`data[srcsample]`, `srcsample` below `info.samples`, which was divided by the width) and writes bytes into an allocation of `len * width * channels`, so a width of 3 or 4 decodes wrong audio but stays in bounds | hardening (carded under FIX20: refuse a width other than 1 or 2) |
-| `GetWavinfo` | `cue ` body, `LIST`/`mark` | `data_p += 32`, `GetLittleLong` for `loopstart`; `data_p += 24`, `GetLittleLong` for loop samples | the `mark` read is guarded by `((data_p - wav) + 32 <= wavlength)`, but the `cue ` `data_p += 32; GetLittleLong()` for `loopstart` is not bounded | D23 |
-| `GetWavinfo` | `loopstart` | `info.samples = loopstart + i`; `sc->loopstart` in `SDL_Cache`, used as a replay offset in `sdl.c` `S_PaintChannels` | no range check; a loopstart past the sample count makes `SDL_PaintChannelFrom*` read `sc->data` out of range during mixing | **defect D24** (the loop offset is divided by `stepscale` and used as `ch->pos`/`ch->end`; a crafted cue loop points the mixer past the cached sample) |
-| `GetWavinfo` | data chunk length | `samples = GetLittleLong() / info.width` | `data_p += 4` then the read; `samples` is never compared with `wavlength - dataofs`, so the field alone sets how many samples every consumer believes exist; a negative length word gives a negative `samples` | **defect D25**; negative values **D30** |
-| `GetWavinfo` | early returns | `return info` after "Missing data chunk" (and the earlier failures) | `info` is returned as filled so far: when a `cue `/`LIST`/`mark` sequence was found, `info.samples = info.loopstart + i` is already set and `dataofs` is still 0, and `channels` is valid, so `S_LoadSound` accepts it and every consumer reads `info.samples` elements from the start of the file buffer; nothing validates on any return path | **defect D30** |
-| `GetWavinfo` | `samples` vs `info.samples` (cue) | loop-length sanity | `if (samples < info.samples) Com_Error(...)` only when a cue set `info.samples`; otherwise `info.samples = samples` unchecked | D25 |
-| `GetWavinfo` | `dataofs = data_p - wav` | base pointer `data + info.dataofs` for all consumers | no check that `dataofs <= wavlength` | **defect D25** (feeds the over-read below) |
-| `S_GetVolume` (`sound.c`) | `info.samples` | `sound_end = sound_data + sound_length`, reads every element | none; trusts `info.samples` | **defect D25** (heap over-read) |
-| `S_GetStatistics` (`sound.c`) | `info.samples` | four scans over `[sound_data, sound_data + sound_length]` | none | **defect D25** |
-| `S_IsShortSilence` (`sound.c`) | `info.samples` | `sample_count = info.samples * info.width`, reads each | tests `info.samples > rate * S_MAX_LEN...` to skip long sounds, but the short-silence branch still reads `sample_count` bytes for a sound whose `rate` is large; the first test divides by `info->rate` unchecked (reached only for a mono sound under one of the muzzle-flash names listed in `S_IsSilencedMuzzleFlash`) | **defect D25**; the division **D29** |
-| `SDL_Cache` (`sdl.c`) | `info.samples` | resample loop reads `data[srcsample]` / `((short *)data)[srcsample]` for `srcsample` up to about `info.samples` | zero-length rejected; nothing compares `info.samples` with the data actually present | **defect D25** (heap over-read on the source) |
-| `SDL_Cache` (`sdl.c`) | `len * info->width * info->channels` | `Z_Malloc(len + sizeof(sfxcache_t))` for a loop that writes `(int)(info->samples / stepscale)` elements of `sc->width` bytes | `int` multiplication with no overflow test, and the loop bound is recomputed from the un-multiplied frame count, so the destination is not matched to the loop once the product wraps; a negative product becomes a huge `size_t` and `Z_TagMalloc` fails with `ERR_FATAL` | **defect D28** (heap overflow write; with `info.samples` consistent with the file, so D25's clamp leaves it open) |
-| `SDL_Cache` (`sdl.c`) | `info->rate == 0` | `stepscale = 0`, `(int)(info->samples / 0.0f)` (undefined conversion of infinity), then `begin_length * 1000 / info->rate` and the `end`, `fade`, `attack` lines | none | **defect D29** (integer division by zero: SIGFPE on x86-64, a silent 0 on arm64, where `SDL_Cache` then continues into the resample loop with an undefined frame count against an allocation sized from the wrapped product, the D28 class: a write past the allocation, not only a denial of service) |
+| `GetWavinfo` | `cue ` body, `LIST`/`mark` | `data_p += 32`, `GetLittleLong` for `loopstart`; `data_p += 24`, `GetLittleLong` for loop samples | the `mark` read is guarded by `((data_p - wav) + 32 <= wavlength)`, but the `cue ` `data_p += 32; GetLittleLong()` for `loopstart` is not bounded | D23, fixed by FIX20 |
+| `GetWavinfo` | `loopstart` | `info.samples = loopstart + i`; `sc->loopstart` in `SDL_Cache`, used as a replay offset in `sdl.c` `S_PaintChannels` | no range check; a loopstart past the sample count makes `SDL_PaintChannelFrom*` read `sc->data` out of range during mixing | **defect D24, fixed by FIX20** (the loop offset is divided by `stepscale` and used as `ch->pos`/`ch->end`; a crafted cue loop points the mixer past the cached sample) |
+| `GetWavinfo` | data chunk length | `samples = GetLittleLong() / info.width` | `data_p += 4` then the read; `samples` is never compared with `wavlength - dataofs`, so the field alone sets how many samples every consumer believes exist; a negative length word gives a negative `samples` | **defect D25, fixed by FIX20**; negative values **D30** |
+| `GetWavinfo` | early returns | `return info` after "Missing data chunk" (and the earlier failures) | `info` is returned as filled so far: when a `cue `/`LIST`/`mark` sequence was found, `info.samples = info.loopstart + i` is already set and `dataofs` is still 0, and `channels` is valid, so `S_LoadSound` accepts it and every consumer reads `info.samples` elements from the start of the file buffer; nothing validates on any return path | **defect D30, fixed by FIX20** |
+| `GetWavinfo` | `samples` vs `info.samples` (cue) | loop-length sanity | `if (samples < info.samples) Com_Error(...)` only when a cue set `info.samples`; otherwise `info.samples = samples` unchecked | D25, fixed by FIX20 |
+| `GetWavinfo` | `dataofs = data_p - wav` | base pointer `data + info.dataofs` for all consumers | no check that `dataofs <= wavlength` | **defect D25, fixed by FIX20** (feeds the over-read below) |
+| `S_GetVolume` (`sound.c`) | `info.samples` | `sound_end = sound_data + sound_length`, reads every element | none; trusts `info.samples` | **defect D25, fixed by FIX20** (heap over-read) |
+| `S_GetStatistics` (`sound.c`) | `info.samples` | four scans over `[sound_data, sound_data + sound_length]` | none | **defect D25, fixed by FIX20** |
+| `S_IsShortSilence` (`sound.c`) | `info.samples` | `sample_count = info.samples * info.width`, reads each | tests `info.samples > rate * S_MAX_LEN...` to skip long sounds, but the short-silence branch still reads `sample_count` bytes for a sound whose `rate` is large; the first test divides by `info->rate` unchecked (reached only for a mono sound under one of the muzzle-flash names listed in `S_IsSilencedMuzzleFlash`) | **defect D25, fixed by FIX20**; the division **D29** |
+| `SDL_Cache` (`sdl.c`) | `info.samples` | resample loop reads `data[srcsample]` / `((short *)data)[srcsample]` for `srcsample` up to about `info.samples` | zero-length rejected; nothing compares `info.samples` with the data actually present | **defect D25, fixed by FIX20** (heap over-read on the source) |
+| `SDL_Cache` (`sdl.c`) | `len * info->width * info->channels` | `Z_Malloc(len + sizeof(sfxcache_t))` for a loop that writes `(int)(info->samples / stepscale)` elements of `sc->width` bytes | `int` multiplication with no overflow test, and the loop bound is recomputed from the un-multiplied frame count, so the destination is not matched to the loop once the product wraps; a negative product becomes a huge `size_t` and `Z_TagMalloc` fails with `ERR_FATAL` | **defect D28, fixed by FIX20** (heap overflow write; with `info.samples` consistent with the file, so D25's clamp leaves it open) |
+| `SDL_Cache` (`sdl.c`) | `info->rate == 0` | `stepscale = 0`, `(int)(info->samples / 0.0f)` (undefined conversion of infinity), then `begin_length * 1000 / info->rate` and the `end`, `fade`, `attack` lines | none | **defect D29, fixed by FIX20** (integer division by zero: SIGFPE on x86-64, a silent 0 on arm64, where `SDL_Cache` then continues into the resample loop with an undefined frame count against an allocation sized from the wrapped product, the D28 class: a write past the allocation, not only a denial of service) |
 
 D25 is the substantive WAV finding: the data-chunk length word, and the
 `dataofs`, are trusted without any comparison to `wavlength`. A `.wav` named
@@ -653,7 +671,7 @@ rows are `ok`; the exception is the file-name handling.
 
 | Function | Field | Use | Check (quoted) or absence | Verdict |
 |---|---|---|---|---|
-| `SCR_PlayCinematic` | `arg` (server string), still-image branch | `memcpy(namewe, name, strlen(name) - strlen(dot))` into `char namewe[256]` | the length is `5 + offset-of-first-dot-in-arg`; `name` is `MAX_OSPATH`, which is 256 only under `_WIN32` and **4096** on every other build, macOS included (`shared.h`), so there `Com_sprintf` keeps the whole `pics/` + `arg` and any `arg` of more than about 250 characters ending in the still-image extension overruns the 256-byte stack buffer. The real bound on `arg`: `MSG_ReadString` returns from a 2048-byte static, and the whole `svc_serverdata` message fits in `net_message_buffer[MAX_MSGLEN]` (1400 bytes, shared with the netchan header and the other serverdata fields), so the copy is at most about 1380 bytes, an overrun of up to about 1100 bytes | **defect D26** (stack buffer overflow, server-triggered, on every non-Windows build; on Windows `Com_sprintf` truncates `name` to 255 and the copy stays inside; reached only for a name ending exactly `.pcx`/`.tga`/`.jpg`/`.png` because the branch uses `strcmp(dot, ...)`) |
+| `SCR_PlayCinematic` | `arg` (server string), still-image branch | `memcpy(namewe, name, strlen(name) - strlen(dot))` into `char namewe[256]` | the length is `5 + offset-of-first-dot-in-arg`; `name` is `MAX_OSPATH`, which is 256 only under `_WIN32` and **4096** on every other build, macOS included (`shared.h`), so there `Com_sprintf` keeps the whole `pics/` + `arg` and any `arg` of more than about 250 characters ending in the still-image extension overruns the 256-byte stack buffer. The real bound on `arg`: `MSG_ReadString` returns from a 2048-byte static, and the whole `svc_serverdata` message fits in `net_message_buffer[MAX_MSGLEN]` (1400 bytes, shared with the netchan header and the other serverdata fields), so the copy is at most about 1380 bytes, an overrun of up to about 1100 bytes | **defect D26, fixed by FIX21** (`namewe` is `MAX_OSPATH` and `SCR_StillStem` refuses a stem that does not fit; was a stack buffer overflow, server-triggered, on every non-Windows build; on Windows `Com_sprintf` truncates `name` to 255 and the copy stays inside; reached only for a name ending exactly `.pcx`/`.tga`/`.jpg`/`.png` because the branch uses `strcmp(dot, ...)`) |
 | `SCR_PlayCinematic` | `arg`, video branch | `Com_sprintf(name, sizeof(name), "video/%s", arg)`, `FS_FOpenFile` | `Com_sprintf` truncates to `MAX_OSPATH`; `FS_FOpenFile` applies the path rules audited in the filesystem section | ok |
 | `SCR_PlayCinematic` | `width`, `height` | `cin.width`, `cin.height`, `maxcount` in decompress, image size | `cin.width <= 0 \|\| cin.height <= 0 \|\| (long long)width * height > 16 * 1024 * 1024` | ok |
 | `SCR_PlayCinematic` | `s_rate`, `s_width`, `s_channels` | sound chunk size per frame, `S_RawSamples` | `s_rate <= 0 \|\| s_rate > 22050`, `s_width != 1 && != 2`, `s_channels != 1 && != 2` | ok |
@@ -676,8 +694,13 @@ No host harness was run (the file pulls in the client, sound and filesystem
 imports); D26 is a static trace with high confidence (`MAX_OSPATH` is 4096 in
 `shared.h` for every build except `_WIN32`, macOS included, and `namewe` is a
 fixed 256).
-The minimal fix is to size `namewe` as `MAX_OSPATH` or to copy with
-`Q_strlcpy` into a bounded buffer.
+Fixed by FIX21: `namewe` is sized `MAX_OSPATH`, as large as `name`, and the
+stem is cut by `SCR_StillStem` (`cl_cinsize.c`). The helper refuses, and
+writes nothing, when a stem does not fit its buffer; the caller then loads
+nothing and takes the not-found path. With both buffers `MAX_OSPATH` that
+cannot happen for any name a server can send. A stem longer than about 250
+characters is then cut by the bounded copies into `filename[256]` in
+`SCR_LoadHiColor`, which leaves no loadable extension, so it is not found.
 
 ## Entity strings and map-fix overrides
 
@@ -744,7 +767,7 @@ table, which is compile-time data.
 - **Unterminated fixed-size name fields** (`texinfo.texture[32]`, MD2/SP2 skin
   names, surface names) read to the next NUL. `FS_LoadFile` appends one zero
   byte past the buffer, which bounds the worst case; listed as hardening.
-- **A non-pack file named `*.pak`.** `FS_LoadPAK` raises `ERR_FATAL` ("is not a pack file") when the ident does not match, so a stray file with that extension in a search path stops the engine at every start. That is fatal by design today; FIX22 lists it as a behaviour to decide (skip it with a warning instead of `ERR_FATAL`).
+- **A non-pack file named `*.pak`.** `FS_LoadPAK` raises `ERR_FATAL` ("is not a pack file") when the ident does not match, so a stray file with that extension in a search path stops the engine at every start. That is fatal by design today; FIX22 keeps it fatal, with a short header and an empty directory, and skips (with a console line) only a pak whose directory or entries fail the bounds.
 - **Savegames** (`savegame.c`) read local files the user chose and are a
   different trust model; not an asset loader.
 - **Hardening rows with a card.** These hardening rows are folded into the
@@ -771,9 +794,9 @@ reachability in [Where each asset can come from](#where-each-asset-can-come-from
 | D1 | `collision.c` `CM_DecompressVis` | input over-read only: the input pointer is never bounded by `numvisibility`, and a `00 00` pair (zero-length run) advances the input without producing output, so the decoder walks past `map_visibility`; the output is clamped to `row` (at most 4096 of 8192 bytes) | medium | high (ASAN, READ) | FIX23 |
 | D2 | `collision.c` `CM_InitBoxHull` | box-hull leaf written past `map_leafs` when the map uses every leaf slot | high | high (ASAN) — **fixed in this branch** | fixed |
 | D3 | `collision.c` `CM_SetAreaPortalState` | `portalnum` has no lower bound and an off-by-one upper bound | medium | high (ASAN) — negative side **fixed in this branch**; off-by-one remains | FIX23 (off-by-one) |
-| D4 | `filesystem.c` `FS_LoadPAK` | directory read past EOF leaves `info` uninitialised; `Q_strlcpy` then over-reads an unterminated pack name | medium | high | FIX22 |
-| D5 | `filesystem.c` `FS_LoadPAK` | a bare header asks for a ~2 GB `malloc` plus ~2.4 GB `calloc`; failure is `ERR_FATAL` | medium | high | FIX22 |
-| D6 | `filesystem.c` `FS_FOpenFile`/`FS_LoadFile2` | pack entry `offset`/`size` never bounded by the file; negative size leaks the handle, oversize size `ERR_FATAL`s | medium | high | FIX22 |
+| D4 | `filesystem.c` `FS_LoadPAK` | directory read past EOF leaves `info` uninitialised; `Q_strlcpy` then over-reads an unterminated pack name | medium | high — **fixed by FIX22** | fixed |
+| D5 | `filesystem.c` `FS_LoadPAK` | a bare header asks for a ~2 GB `malloc` plus ~2.4 GB `calloc`; failure is `ERR_FATAL` | medium | high — **fixed by FIX22** | fixed |
+| D6 | `filesystem.c` `FS_FOpenFile`/`FS_LoadFile2` | pack entry `offset`/`size` never bounded by the file; negative size leaks the handle, oversize size `ERR_FATAL`s | medium | high — **fixed by FIX22** | fixed |
 | D7 | renderer `Mod_ForName` | 1-2 byte model file read up to 2 bytes past the `length + 1` allocation at the format switch | low | high | FIX17 |
 | D8 | renderer `Mod_ClusterPVS`/`Mod_DecompressVis` | the output is bounded only by `row`, never by the buffer: `numclusters` can give a row of up to 16384 bytes and a zero run is written whole, so the `static decompressed[8192]` overflows on write (the vis offsets are FIX3 item 3) | high | high (ASAN) | FIX17 |
 | D9 | renderer `Mod_NumberLeafs` | a node DAG (shared children, no cycle) walks a leaf 2^n times, overrunning two `int[MAX_MAP_LEAFS]` stack arrays | high | high (ASAN) | FIX17 |
@@ -790,18 +813,38 @@ reachability in [Where each asset can come from](#where-each-asset-can-come-from
 | D20 | PCX 1/2/4-bit path | `line[x / div]` can exceed a `bytes_per_line`-byte row when `bytes_per_line` is tiny | low | medium (static) | FIX19 |
 | D21 | `GetPCXInfo` | reads `xmax`/`ymax` without a header-size check; over-reads a short file | low | high (static) | FIX19 |
 | D22 | `R_LoadImage`/soft scale | `width * height` (and `* 4`) is `int` and can overflow for large stb dimensions; the gl renderers guard the scale product, soft and the copy length do not | medium | medium (static) | FIX19 |
-| D23 | `wave.c` chunk walk | `GetLittleLong`/`strncmp` read a few bytes past `iff_end` at a chunk boundary | low | high (static) | FIX20 |
-| D24 | `wave.c` cue `loopstart` | loop point unbounded; `SDL_Cache` turns it into a mixer `pos`/`end` past the cached sample | medium | medium (static) | FIX20 |
-| D25 | `wave.c` data chunk | the data-length word and `dataofs` are trusted without comparison to `wavlength`; four consumers read `info.samples` elements from `data + dataofs` | high | high (static) | FIX20 |
-| D26 | `cl_cin.c` `SCR_PlayCinematic` | still-image name copied into `char namewe[256]` by length; `MAX_OSPATH` is 4096 on every non-Windows build (macOS included), so a server level name of up to about 1380 characters (the `svc_serverdata` message limit) overruns the stack buffer by up to about 1100 bytes | high | high (static) | FIX21 |
+| D23 | `wave.c` chunk walk | `GetLittleLong`/`strncmp` read a few bytes past `iff_end` at a chunk boundary | low | high (static) | FIX20 (fixed by FIX20) |
+| D24 | `wave.c` cue `loopstart` | loop point unbounded; `SDL_Cache` turns it into a mixer `pos`/`end` past the cached sample | medium | medium (static) | FIX20 (fixed by FIX20) |
+| D25 | `wave.c` data chunk | the data-length word and `dataofs` are trusted without comparison to `wavlength`; four consumers read `info.samples` elements from `data + dataofs` | high | high (static) | FIX20 (fixed by FIX20) |
+| D26 | `cl_cin.c` `SCR_PlayCinematic` | still-image name copied into `char namewe[256]` by length; `MAX_OSPATH` is 4096 on every non-Windows build (macOS included), so a server level name of up to about 1380 characters (the `svc_serverdata` message limit) overruns the stack buffer by up to about 1100 bytes | high | high (static) — **fixed by FIX21** | fixed |
 | D27 | M32 `LoadM32` | `width * 4` wraps in the body-size check, so a hostile width passes against a few-byte body; gl1 then rewrites `width * height` pixels in place past the file buffer (gl3 over-reads) | high | high (static) | FIX19 |
-| D28 | `sdl.c` `SDL_Cache` (rate from `wave.c`) | `info.rate` unchecked; a low rate inflates the resampled frame count, `len * width * channels` wraps in `int` to a small allocation, and the loop writes the full count: heap overflow write not closed by the D25 clamp | high | high (static, arithmetic checked) | FIX20 |
-| D29 | `sdl.c` `SDL_Cache`, `sound.c` `S_IsShortSilence` | a zero `info.rate` reaches integer divisions (`begin_length * 1000 / info->rate` and siblings, `(info->samples * 1000) / info->rate`); on x86-64 SIGFPE, on arm64 execution continues into the resample loop with an undefined frame count (the D28 class, a write past the allocation) | high | high (static) | FIX20 |
-| D30 | `wave.c` `GetWavinfo` return paths | `info` is returned partly filled from early returns (a cue loop length with no data chunk leaves `samples` set and `dataofs` 0) and a negative data-length word gives negative `samples`; nothing validates on any path | medium | high (static) | FIX20 |
+| D28 | `sdl.c` `SDL_Cache` (rate from `wave.c`) | `info.rate` unchecked; a low rate inflates the resampled frame count, `len * width * channels` wraps in `int` to a small allocation, and the loop writes the full count: heap overflow write not closed by the D25 clamp | high | high (static, arithmetic checked) | FIX20 (fixed by FIX20) |
+| D29 | `sdl.c` `SDL_Cache`, `sound.c` `S_IsShortSilence` | a zero `info.rate` reaches integer divisions (`begin_length * 1000 / info->rate` and siblings, `(info->samples * 1000) / info->rate`); on x86-64 SIGFPE, on arm64 execution continues into the resample loop with an undefined frame count (the D28 class, a write past the allocation) | high | high (static) | FIX20 (fixed by FIX20) |
+| D30 | `wave.c` `GetWavinfo` return paths | `info` is returned partly filled from early returns (a cue loop length with no data chunk leaves `samples` set and `dataofs` 0) and a negative data-length word gives negative `samples`; nothing validates on any path | medium | high (static) | FIX20 (fixed by FIX20) |
 | D31 | MD2 `Mod_LoadMD2` section offsets | section offsets have no lower bound; a section copied over the validated header restores the unclamped `num_skins`, and the skin loop writes image pointers past `skins[MAX_MD2SKINS]` | high | high (ASAN) | FIX18 |
 
 Fixed in this branch: D2, D3 (negative side), D15 — each a one-line bound
 check in its loader, committed separately and noted in its row.
+
+Fixed by FIX20: D23, D24, D25, D28, D29, D30. `GetWavinfo` bounds every chunk
+read by `iff_end` and returns only an info that `S_WavinfoValid` accepts
+(rate 1000 to 192000 Hz, width and channels 1 or 2, a positive sample count
+whose bytes fit after `dataofs`, a loop start of -1 or below the sample
+count); a loop length longer than the data returns that refused info, as
+every other bad file does, and does not drop the connection. `SDL_Cache`
+takes its frame count, byte size and resample step from `S_CacheSize`
+(64-bit, at most 128 MiB) for the allocation and the loop alike, and the
+frame count is reduced until the last source index `((frames - 1) * step) >> 8`
+is below the samples, so the resample never reads one past the data. The
+scaled loop start comes from `S_CacheLoopStart`, clamped below the frame
+count, so the mixer cannot spin on a loop that starts at the end.
+`S_GetStatistics` tests each bound before it reads. Tests:
+`tests/unit/test_wave.c`.
+
+Stated deviation: the card and the audit plan bound the sample count by the
+remaining bytes divided by the frame size (width times channels). The code
+bounds `samples * width` by the remaining bytes, because `samples` counts
+every channel's samples (`datalen / width`), not frames.
 
 ## Cards filed
 

@@ -1595,6 +1595,173 @@ test_shading(void)
 	CHECK(v.scale == 1);
 }
 
+/* TASK162: x rounded to the 11 significant bits of a half, as a blend unit working in half precision would hold it */
+static float
+to_half(float x)
+{
+	int e;
+	float m;
+
+	if (!(x > 0.0f))
+	{
+		return 0.0f;
+	}
+
+	m = frexpf(x, &e);
+	return ldexpf(rintf(m * 2048.0f) / 2048.0f, e);
+}
+
+/* TASK162: what the normal attachment stores after the mark's blend over a (its level over 3), in float or in half */
+static float
+mark_store(float a, int half)
+{
+	const float s = half ? to_half(MTL_RTW_MARK_A) : MTL_RTW_MARK_A;
+	const float b = half ? to_half(s + to_half(s * to_half(a))) : mtl_rtw_mark_blend(a);
+
+	return (float)mtl_rtw_alpha_level(b) / 3.0f;
+}
+
+/*
+ * TASK162: the separate candidates' raster (TASK158) and the G-buffer's
+ * mark list the same pixels. A scripted G-buffer: each pixel's material,
+ * whether it has a normal, and how many water triangles lie in front of
+ * its depth (0 to 3, layers over layers). The old raster wrote
+ * MTL_RTW_CLASS_CAND into the cleared reflection target where any did;
+ * the new raster blends the normal's alpha once a triangle. The
+ * compaction's loop over the nine (rm_rtw_compact) then lists the same
+ * set, every reader's "has a normal" (a > 0.5) is the raster's, and no
+ * marked pixel is left out of the list (so the 0 the compaction writes at
+ * an unlisted pixel is what the old raster's clear left there).
+ */
+#define GM_W 37
+#define GM_H 23
+
+static void
+test_gbuf_mark(void)
+{
+	static const unsigned mats[6] = { MTL_GB_MAT_NONE, MTL_GB_MAT_WORLD, MTL_GB_MAT_ALIAS, MTL_GB_MAT_WATER,
+		MTL_GB_MAT_SKY, MTL_GB_MAT_TRANS };
+	static unsigned mat[GM_H][GM_W], cover[GM_H][GM_W], old_cls[GM_H][GM_W];
+	static float alpha[GM_H][GM_W];
+	static int has[GM_H][GM_W];
+	int lvl, k, half, round, x, y, same = 1, kept = 1, normals = 1, marked_listed = 1, any_mark = 0, any_list = 0;
+
+	/* the four levels: unmarked 0 and 1, marked 1/3 (no normal) and 2/3 (a normal) */
+	CHECK(fabsf(MTL_RTW_MARK_A * 3.0f - 1.0f) < 1e-6f);
+	CHECK(mtl_rtw_alpha_level(0.0f) == 0u);
+	CHECK(mtl_rtw_alpha_level(1.0f / 3.0f) == 1u);
+	CHECK(mtl_rtw_alpha_level(2.0f / 3.0f) == 2u);
+	CHECK(mtl_rtw_alpha_level(1.0f) == 3u);
+	CHECK(mtl_rtw_alpha_level(-1.0f) == 0u);
+	CHECK(mtl_rtw_alpha_level(2.0f) == 3u);
+	CHECK(mtl_rtw_alpha_level(NAN) == 0u);
+	CHECK(!mtl_rtw_marked(0.0f));
+	CHECK(!mtl_rtw_marked(1.0f));
+	CHECK(mtl_rtw_marked(1.0f / 3.0f));
+	CHECK(mtl_rtw_marked(2.0f / 3.0f));
+	CHECK(!mtl_rtw_marked(NAN));
+	CHECK(mtl_rtw_alpha_level(mtl_rtw_mark_blend(0.0f)) == 1u);
+	CHECK(mtl_rtw_alpha_level(mtl_rtw_mark_blend(1.0f)) == 2u);
+	CHECK(mtl_rtw_alpha_level(mtl_rtw_mark_blend(1.0f / 3.0f)) == 1u);
+	CHECK(mtl_rtw_alpha_level(mtl_rtw_mark_blend(2.0f / 3.0f)) == 2u);
+
+	/*
+	 * Every level, after 0 to 4 blends, in float and in half: marked from
+	 * the first blend on, the reader's "has a normal" kept, and the blend's
+	 * value at least a third of a level from a rounding boundary (so a
+	 * conversion within 0.6 of a level stores the same one)
+	 */
+	for (half = 0; half < 2; half++)
+	{
+		for (lvl = 0; lvl < 4; lvl++)
+		{
+			const float a0 = (float)lvl / 3.0f;
+			float a = a0;
+
+			for (k = 0; k < 5; k++)
+			{
+				const float s = half ? to_half(MTL_RTW_MARK_A) : MTL_RTW_MARK_A;
+				const float b = half ? to_half(s + to_half(s * to_half(a))) : mtl_rtw_mark_blend(a);
+				const float frac = b * 3.0f - floorf(b * 3.0f);
+
+				CHECK((a > 0.5f) == (a0 > 0.5f));
+				CHECK(mtl_rtw_marked(a) == ((k > 0) || (lvl == 1) || (lvl == 2)));
+				CHECK((frac <= 0.4f) || (frac >= 0.6f));
+				a = mark_store(a, half);
+			}
+		}
+	}
+
+	/* the old raster's list against the G-buffer's, over scripted frames */
+	for (round = 0; round < 40; round++)
+	{
+		const int vx = (int)frand(0.0f, 6.0f), vy = (int)frand(0.0f, 4.0f);
+		const int vw = GM_W - vx - (int)frand(0.0f, 6.0f), vh = GM_H - vy - (int)frand(0.0f, 4.0f);
+		const float density = frand(0.0f, 0.3f);
+
+		for (y = 0; y < GM_H; y++)
+		{
+			for (x = 0; x < GM_W; x++)
+			{
+				const int in = (x >= vx) && (x < vx + vw) && (y >= vy) && (y < vy + vh);
+
+				mat[y][x] = mats[(int)frand(0.0f, 5.999f)];
+				has[y][x] = frand(0.0f, 1.0f) < 0.85f;
+				/* the raster draws the water inside the view's viewport alone, as the old one did */
+				cover[y][x] = (in && (frand(0.0f, 1.0f) < density)) ? 1u + (unsigned)frand(0.0f, 2.999f) : 0u;
+				old_cls[y][x] = cover[y][x] ? MTL_RTW_CLASS_CAND : 0u;
+				alpha[y][x] = has[y][x] ? 1.0f : 0.0f;
+
+				for (k = 0; k < (int)cover[y][x]; k++)
+				{
+					alpha[y][x] = mark_store(alpha[y][x], round & 1);
+				}
+
+				normals &= (alpha[y][x] > 0.5f) == (has[y][x] != 0);
+			}
+		}
+
+		for (y = 0; y < GM_H; y++)
+		{
+			for (x = 0; x < GM_W; x++)
+			{
+				const int in = (x >= vx) && (x < vx + vw) && (y >= vy) && (y < vy + vh);
+				unsigned m_old = 0, m_new = 0;
+				int dx, dy, l_old, l_new;
+
+				for (dy = -1; dy <= 1; dy++)
+				{
+					for (dx = -1; dx <= 1; dx++)
+					{
+						const int qx = x + dx, qy = y + dy;
+
+						if ((qx >= 0) && (qy >= 0) && (qx < GM_W) && (qy < GM_H))
+						{
+							m_old += (old_cls[qy][qx] == MTL_RTW_CLASS_CAND) ? 1u : 0u;
+							m_new += mtl_rtw_marked(alpha[qy][qx]) ? 1u : 0u;
+						}
+					}
+				}
+
+				l_old = in && mtl_rtw_listed(mat[y][x], m_old);
+				l_new = in && mtl_rtw_listed(mat[y][x], m_new);
+				same &= l_old == l_new;
+				kept &= m_old == m_new;
+				marked_listed &= !mtl_rtw_marked(alpha[y][x]) || l_new;
+				any_mark |= cover[y][x] != 0;
+				any_list |= l_new && !mtl_rtw_is_water(mat[y][x]);
+			}
+		}
+	}
+
+	CHECK(same);
+	CHECK(kept);
+	CHECK(normals);
+	CHECK(marked_listed);
+	CHECK(any_mark);
+	CHECK(any_list);
+}
+
 int
 main(void)
 {
@@ -1617,6 +1784,7 @@ main(void)
 	test_sky();
 	test_shade_build();
 	test_shading();
+	test_gbuf_mark();
 
 	printf("rm_rtwater_test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
