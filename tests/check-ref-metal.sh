@@ -415,6 +415,35 @@ for point in "rm_main.c RI_RenderFrame rmb_pass_3d(" "rm_main.c RI_EndFrame rmb_
 	done
 done
 
+# (a2) FIX98: the water mark's blend factors are defined once (common/mtl_rtw_math.h:
+# MTL_RTW_MARK_SRC_FACTOR and MTL_RTW_MARK_DST_FACTOR, which the host test's
+# mtl_rtw_mark_blend evaluates), and the pipeline sets the normal attachment's alpha factors
+# from them: a literal MTLBlendFactor there is a second definition that can drift.
+blend_ok() { # <file>: 0 when both alpha factors come from the macros and none is a literal
+	strip "$1" > "${tmp:?}/blend.code"
+	[ "$(grep -cE 'colorAttachments\[1\]\.sourceAlphaBlendFactor = rmb_rtw_factor\(MTL_RTW_MARK_SRC_FACTOR\);' "${tmp:?}/blend.code")" = 1 ] &&
+	[ "$(grep -cE 'colorAttachments\[1\]\.destinationAlphaBlendFactor = rmb_rtw_factor\(MTL_RTW_MARK_DST_FACTOR\);' "${tmp:?}/blend.code")" = 1 ] &&
+	! grep -qE 'colorAttachments\[1\]\.(source|destination)AlphaBlendFactor = MTLBlendFactor' "${tmp:?}/blend.code"
+}
+blend_mutants=0
+if ! blend_ok "$rm_dir/rmb_rtwater.m"; then
+	bad "$rm_dir/rmb_rtwater.m: the water mark's alpha blend factors do not both come from MTL_RTW_MARK_SRC_FACTOR and MTL_RTW_MARK_DST_FACTOR"
+else
+	sed 's/destinationAlphaBlendFactor = rmb_rtw_factor(MTL_RTW_MARK_DST_FACTOR)/destinationAlphaBlendFactor = MTLBlendFactorSourceAlpha/' \
+		"$rm_dir/rmb_rtwater.m" > "${tmp:?}/blend-mutant1.m"
+	sed 's/sourceAlphaBlendFactor = rmb_rtw_factor(MTL_RTW_MARK_SRC_FACTOR)/sourceAlphaBlendFactor = rmb_rtw_factor(MTL_RTW_BF_ONE)/' \
+		"$rm_dir/rmb_rtwater.m" > "${tmp:?}/blend-mutant2.m"
+	for n in 1 2; do
+		if cmp -s "$rm_dir/rmb_rtwater.m" "${tmp:?}/blend-mutant$n.m"; then
+			bad "the blend-factor mutant $n changed nothing"
+		elif blend_ok "${tmp:?}/blend-mutant$n.m"; then
+			bad "the blend-factor check passes a mutant ($n)"
+		else
+			blend_mutants=$((blend_mutants + 1))
+		fi
+	done
+fi
+
 # (b) the build, where it can be built
 skip=""
 if [ "$(uname -s)" != Darwin ]; then
@@ -487,6 +516,6 @@ else
 fi
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; blend factors once, $blend_mutants mutants refused; $build)"
 fi
 exit $fail

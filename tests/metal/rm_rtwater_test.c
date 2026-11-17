@@ -1883,6 +1883,12 @@ test_gbuf_mark(void)
 
 	/* the four levels: unmarked 0 and 1, marked 1/3 (no normal) and 2/3 (a normal) */
 	CHECK(fabsf(MTL_RTW_MARK_A * 3.0f - 1.0f) < 1e-6f);
+
+	/* FIX98: the blend's factors, which the pipeline sets from the same macros: source One, destination the source's alpha */
+	CHECK(MTL_RTW_MARK_SRC_FACTOR == MTL_RTW_BF_ONE);
+	CHECK(MTL_RTW_MARK_DST_FACTOR == MTL_RTW_BF_SRC_ALPHA);
+	CHECK(fabsf(mtl_rtw_mark_blend(0.0f) - MTL_RTW_MARK_A) < 1e-6f);
+	CHECK(fabsf(mtl_rtw_mark_blend(1.0f) - 2.0f * MTL_RTW_MARK_A) < 1e-6f);
 	CHECK(mtl_rtw_alpha_level(0.0f) == 0u);
 	CHECK(mtl_rtw_alpha_level(1.0f / 3.0f) == 1u);
 	CHECK(mtl_rtw_alpha_level(2.0f / 3.0f) == 2u);

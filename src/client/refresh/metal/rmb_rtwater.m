@@ -51,6 +51,7 @@
 #include "header/rm_gbuf.h"
 #include "header/rm_rt.h"
 #include "header/rm_rtwater.h"
+#include "common/mtl_rtw_math.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_rtwater.m is written for ARC: compile it with -fobjc-arc"
@@ -211,6 +212,21 @@ rmb_rtw_trans_pipe(NSError **e)
  * alpha), so its "has a normal" (above 0.5) is kept; every other
  * attachment is left as the raster wrote it.
  */
+/* FIX98: the MTLBlendFactor of one of common/mtl_rtw_math.h's MTL_RTW_BF_ values */
+static MTLBlendFactor
+rmb_rtw_factor(int f)
+{
+	switch (f)
+	{
+		case MTL_RTW_BF_ONE:
+			return MTLBlendFactorOne;
+		case MTL_RTW_BF_SRC_ALPHA:
+			return MTLBlendFactorSourceAlpha;
+		default:
+			return MTLBlendFactorZero;
+	}
+}
+
 static id<MTLRenderPipelineState>
 rmb_rtw_mark_pipe(int surf, NSError **e)
 {
@@ -238,8 +254,8 @@ rmb_rtw_mark_pipe(int surf, NSError **e)
 	d.colorAttachments[1].sourceRGBBlendFactor = MTLBlendFactorZero;
 	d.colorAttachments[1].destinationRGBBlendFactor = MTLBlendFactorOne;
 	d.colorAttachments[1].alphaBlendOperation = MTLBlendOperationAdd;
-	d.colorAttachments[1].sourceAlphaBlendFactor = MTLBlendFactorOne;
-	d.colorAttachments[1].destinationAlphaBlendFactor = MTLBlendFactorSourceAlpha;
+	d.colorAttachments[1].sourceAlphaBlendFactor = rmb_rtw_factor(MTL_RTW_MARK_SRC_FACTOR);
+	d.colorAttachments[1].destinationAlphaBlendFactor = rmb_rtw_factor(MTL_RTW_MARK_DST_FACTOR);
 	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
 }
 
