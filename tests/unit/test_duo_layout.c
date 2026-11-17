@@ -44,7 +44,7 @@ typedef struct
 static const duo_state_t duo_states[] = {
 	/* the outer display, folded */
 	{ "outer portrait", 1398, 2034, 0, 177, 0, 102 },
-	{ "outer landscape", 2034, 1398, 177, 0, 141, 63 },
+	{ "outer landscape (measured)", 2034, 1398, 252, 0, 0, 102 },
 	/* the inner display, unfolded */
 	{ "inner portrait", 2007, 2853, 0, 141, 0, 60 },
 	{ "inner landscape", 2853, 2007, 141, 0, 96, 60 },
