@@ -185,7 +185,7 @@ FloodAreaConnections(void)
 void
 CM_SetAreaPortalState(int portalnum, qboolean open)
 {
-	if ((portalnum < 0) || (portalnum > numareaportals))
+	if ((portalnum < 0) || (portalnum >= numareaportals))
 	{
 		Com_Error(ERR_DROP, "areaportal > numareaportals");
 	}
@@ -1998,6 +1998,7 @@ CM_DecompressVis(byte *in, byte *out)
 {
 	int c;
 	byte *out_p;
+	const byte *end;
 	int row;
 
 	row = (numclusters + 7) >> 3;
@@ -2015,8 +2016,22 @@ CM_DecompressVis(byte *in, byte *out)
 		return;
 	}
 
+	/* the input ends with the visibility lump */
+	end = map_visibility + numvisibility;
+
 	do
 	{
+		if ((in >= end) || (!*in && (end - in < 2)))
+		{
+			/* the input ran out: the rest of the row is visible */
+			while (out_p - out < row)
+			{
+				*out_p++ = 0xff;
+			}
+
+			return;
+		}
+
 		if (*in)
 		{
 			*out_p++ = *in++;
