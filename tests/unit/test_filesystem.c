@@ -460,6 +460,31 @@ TEST(fs_pak_bounds)
 		"nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn", 76, 8, 1);
 	T_CHECK(!pak_accepted("t_pb_name"));
 
+	/* Every entry is checked, not only the first: two entries, the
+	   first in bounds, the last ending one byte past the pack (140). */
+	{
+		byte two[140];
+
+		memset(two, 'x', sizeof(two));
+		memcpy(two, "PACK", 4);
+		put_le32(two + 4, 12);
+		put_le32(two + 8, 128);
+		memset(two + 12, 0, 128);
+		memcpy(two + 12, "a.txt", 5);
+		put_le32(two + 12 + 56, 132);
+		put_le32(two + 12 + 60, 8);
+		memcpy(two + 76, "b.txt", 5);
+		put_le32(two + 76 + 56, 133);
+		put_le32(two + 76 + 60, 8);
+		t_write_file("data/t_pb_ent_last/pak0.pak", two, sizeof(two));
+		T_CHECK(!pak_accepted("t_pb_ent_last"));
+
+		/* the same pak with the last entry ending exactly at 140 */
+		put_le32(two + 76 + 56, 132);
+		t_write_file("data/t_pb_ent_last_ok/pak0.pak", two, sizeof(two));
+		T_CHECK(pak_accepted("t_pb_ent_last_ok"));
+	}
+
 	/* No descriptor stays open for a refused pak: the count after a
 	   switch to a mod with refused paks equals the count after a
 	   switch to a mod with none. */
