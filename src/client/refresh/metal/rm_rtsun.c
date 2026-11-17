@@ -54,6 +54,13 @@ rm_rtsun_on(float sun, int device_rt, float fullbright)
 	return 1;
 }
 
+int
+rm_rtsun_wanted(float sun, int device_rt, int sky_ok)
+{
+	(void)sky_ok;
+	return rm_rt_wanted(sun, device_rt);
+}
+
 float
 rm_rtsun_scale(float v)
 {

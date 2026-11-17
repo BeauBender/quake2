@@ -75,7 +75,20 @@ test_cvars(void)
 	CHECK(rm_rtsun_on(1, 1, 1) == 0);       /* r_fullbright: no lightmap for the floor gate */
 	CHECK(rm_rtsun_on(NAN, 1, 0) == 0);
 	CHECK(rm_rtsun_on(INFINITY, 1, 0) == 0);
-	CHECK(rm_rtsun_on(1, 1, NAN) == 1);     /* a setting that is not finite counts as 0 */
+	/* r_fullbright as rm_surf.c reads it (any value but 0, NaN among them, drops the lightmaps): no sun */
+	CHECK(rm_rtsun_on(1, 1, NAN) == 0);
+	CHECK(rm_rtsun_on(1, 1, INFINITY) == 0);
+	CHECK(rm_rtsun_on(1, 1, -1) == 0);
+
+	/* the scene the sun asks for: none on a map under 2 % sky, so nothing is built or kept for it */
+	CHECK(rm_rtsun_wanted(1, 1, 1) == 1);
+	CHECK(rm_rtsun_wanted(-1, 1, 1) == 1);
+	CHECK(rm_rtsun_wanted(1, 1, 0) == 0);
+	CHECK(rm_rtsun_wanted(1, 1, rm_rtsun_sky_enough(1.999, 100)) == 0);
+	CHECK(rm_rtsun_wanted(1, 1, rm_rtsun_sky_enough(2, 100)) == 1);
+	CHECK(rm_rtsun_wanted(0, 1, 1) == 0);
+	CHECK(rm_rtsun_wanted(1, 0, 1) == 0);
+	CHECK(rm_rtsun_wanted(NAN, 1, 1) == 0);
 
 	CHECK(rm_rtsun_scale(0.35f) == 0.35f);
 	CHECK(rm_rtsun_scale(0) == 0.0f);
@@ -509,6 +522,120 @@ test_ndotl_at(void)
 	CHECK(mtl_rtsun_at(6) == MTL_RTSUN_AT_SHADOW);
 }
 
+/*
+ * rm_rtsun_hit's loop (rm_rtsun.metal) over the faces a ray meets, the
+ * nearest first: mat[0..n) their material ids, nothing behind them. 1 lit,
+ * 0 shadowed; *casts counts the intersections it asked for.
+ */
+static int
+rtsun_hit(const unsigned *mat, int n, int *casts)
+{
+	int layer;
+
+	*casts = 0;
+
+	for (layer = 0; layer < MTL_RTSUN_LAYERS; layer++)
+	{
+		unsigned at;
+
+		(*casts)++;
+
+		if (layer >= n)
+		{
+			return 0;
+		}
+
+		at = mtl_rtsun_at(mat[layer]);
+
+		if (at != MTL_RTSUN_AT_PASS)
+		{
+			return (at == MTL_RTSUN_AT_LIT) ? 1 : 0;
+		}
+	}
+
+	return 0;
+}
+
+/* the kernel's text holds the loop rtsun_hit mirrors */
+static void
+test_layers_kernel(void)
+{
+	static char text[65536];
+	FILE *f = fopen("src/client/refresh/metal/rm_rtsun.metal", "rb");
+	size_t len;
+
+	CHECK(f != NULL);
+
+	if (!f)
+	{
+		return;
+	}
+
+	len = fread(text, 1, sizeof(text) - 1, f);
+	CHECK(!ferror(f) && (len < sizeof(text) - 1));
+	fclose(f);
+	text[len] = 0;
+
+	CHECK(strstr(text, "for (int layer = 0; layer <= MTL_RTSUN_LAYERS; layer++)") != NULL);
+	CHECK(strstr(text, "at = mtl_rtsun_step(mtl_rtsun_at(m), layer);") != NULL);
+}
+
+/* up to MTL_RTSUN_LAYERS water or translucent faces are passed, and what is behind them decides */
+static void
+test_layers(void)
+{
+	unsigned mat[16];
+	int k, i, casts, ok_sky = 1, ok_wall = 1, ok_none = 1, ok_casts = 1;
+
+	for (k = 0; k <= 8; k++)
+	{
+		for (i = 0; i < k; i++)
+		{
+			mat[i] = (i & 1) ? 5u : 3u;    /* water and translucent faces in turn */
+		}
+
+		/* the sky behind k of them: lit up to MTL_RTSUN_LAYERS, shadowed past that */
+		mat[k] = MTL_GB_MAT_SKY;
+
+		if (rtsun_hit(mat, k + 1, &casts) != ((k <= MTL_RTSUN_LAYERS) ? 1 : 0))
+		{
+			printf("FAIL the sky behind %d water or translucent faces\n", k);
+			ok_sky = 0;
+		}
+
+		ok_casts &= (casts >= 1) && (casts <= MTL_RTSUN_LAYERS + 1);
+
+		/* a wall behind them, or nothing at all: shadowed */
+		mat[k] = MTL_GB_MAT_WORLD;
+		ok_wall &= rtsun_hit(mat, k + 1, &casts) == 0;
+		ok_casts &= (casts >= 1) && (casts <= MTL_RTSUN_LAYERS + 1);
+		ok_none &= rtsun_hit(mat, k, &casts) == 0;
+		ok_casts &= (casts >= 1) && (casts <= MTL_RTSUN_LAYERS + 1);
+	}
+
+	CHECK(ok_sky);
+	CHECK(ok_wall);
+	CHECK(ok_none);
+	CHECK(ok_casts);
+
+	/* the cases the review named: 3 and 4 faces before the sky lit, 5 shadowed */
+	for (i = 0; i < 5; i++)
+	{
+		mat[i] = 5u;
+	}
+
+	mat[3] = MTL_GB_MAT_SKY;
+	CHECK(rtsun_hit(mat, 4, &casts) == 1 && casts == 4);
+	mat[3] = 5u;
+	mat[4] = MTL_GB_MAT_SKY;
+	CHECK(rtsun_hit(mat, 5, &casts) == 1 && casts == 5);
+	mat[4] = 5u;
+	mat[5] = MTL_GB_MAT_SKY;
+	CHECK(rtsun_hit(mat, 6, &casts) == 0 && casts == 5);
+
+	test_layers_kernel();
+}
+
 static int
 same(mtl_rgba_t a, mtl_rgba_t b)
 {
@@ -640,6 +767,7 @@ main(void)
 	test_sky_color();
 	test_gate();
 	test_ndotl_at();
+	test_layers();
 	test_term();
 	test_view();
 	test_stats();

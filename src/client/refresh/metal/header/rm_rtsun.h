@@ -68,6 +68,14 @@
  */
 int rm_rtsun_on(float sun, int device_rt, float fullbright);
 
+/*
+ * 1 when the sun asks for the frame's ray-tracing scene (RM_RTSun_Wanted,
+ * which RM_RT_Wanted and the scene's keep flag read): r_rt_sun is not 0
+ * on a device with ray tracing (rm_rt_wanted), and sky_ok, the map's sky
+ * at least RM_RTSUN_SKY_MIN of its faces (rm_rtsun_sky_enough).
+ */
+int rm_rtsun_wanted(float sun, int device_rt, int sky_ok);
+
 /* r_rt_sunscale as the pass takes it: 0 to RM_RTSUN_SCALE_MAX; RM_RTSUN_SCALE when not finite */
 float rm_rtsun_scale(float v);
 
