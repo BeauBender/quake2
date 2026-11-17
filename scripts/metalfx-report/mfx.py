@@ -586,7 +586,7 @@ def lock_self(argv):
 
 def lock_stop_wait(env=None):
     """The seconds sh_group gives a stopped command between TERM and KILL, from BENCH_STOP_GRACE as the
-    host lock reads it (whole seconds, default 10; one that is not counts as the default: bench.sh
+    host lock reads it (whole seconds, no leading zero, default 10; one that is not counts as the default: bench.sh
     refuses it and runs nothing). Under this run's own hold (LOCK_HELD) pins.sh passes straight through
     and is the command itself, and this run is the command of the lock shell, which stops it with TERM
     and KILLs it after the lock's grace (scripts/bench/core/lock.sh, bench_lock_grace: twice
@@ -595,7 +595,7 @@ def lock_stop_wait(env=None):
     lock. Otherwise pins.sh may be the lock shell of a hold of its own: the wait is that lock's grace,
     plus 5 s for the lock shell to reap its command and free the lock."""
     g = (os.environ if env is None else env).get("BENCH_STOP_GRACE", "")
-    g = int(g) if re.match(r"[0-9]+\Z", g) else 10
+    g = int(g) if re.match(r"(0|[1-9][0-9]*)\Z", g) else 10
     if LOCK_HELD:
         return g
     return max(2 * g, g + 5) + 5

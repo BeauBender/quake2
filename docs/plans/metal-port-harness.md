@@ -348,3 +348,4 @@ which refuse a host without the capability they require).
 - [TASK158](../runbook/TASK158.md): water reflections shaded in world space, as a setting
 - [TASK157](../runbook/TASK157.md): the AO pass within its GPU-time share
 - [FIX86](../runbook/FIX86.md): The MetalFX report's settings go through a console script, and its chunks combine
+- [FIX78](../runbook/FIX78.md): a numeric setting with a leading zero is refused before any shell arithmetic
