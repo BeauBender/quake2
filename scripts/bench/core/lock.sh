@@ -29,9 +29,11 @@
 # 12.6 digits (whole seconds from date when perl fails), the pid to 10, so
 # the names sort by arrival. Only the waiter whose ticket sorts first among
 # the live ones tries the mkdir, and the reclaims below; every other one
-# naps. A ticket (or temporary) whose waiter is gone (bench_pid_running on
-# its pid: kill -0 fails, or it is a zombie, KILLed and not yet reaped) is
-# removed by whichever waiter sees it, and so is a ticket that carries the
+# naps. A ticket (or temporary) whose waiter is gone
+# (bench_lock_waiter_running on its pid: kill -0 fails, or ps succeeds with
+# a state starting with Z, a zombie, KILLed and not yet reaped; a failed or
+# empty ps keeps it) is removed by whichever waiter sees it (and left out
+# of lock status), and so is a ticket that carries the
 # waiter's own pid but is not its own (stale: a dead waiter's pid, reused
 # by this one), so a waiter killed while queued holds up the next one for
 # one poll. A waiter takes its ticket out the moment its mkdir succeeds,
@@ -154,6 +156,20 @@ bench_lock_unqueue() {
 	return 0
 }
 
+# bench_lock_waiter_running <pid>: the waiter of a ticket or a temporary is
+# still there. Dead only when kill -0 fails, or ps succeeds with a state
+# that starts with Z (a zombie: KILLed, not yet reaped, which still answers
+# kill -0). A ps that fails (not on PATH, a fork failure, a sandbox) leaves
+# the answer to kill -0, asked again; a ps that succeeds and prints nothing
+# is no Z, so running. So a reader whose ps is broken never removes a live
+# waiter's ticket. bench_group_alive keeps bench_pid_running.
+bench_lock_waiter_running() {
+	bench_pid_alive "$1" || return 1
+	_wr_s=$(ps -o stat= -p "$1" 2> /dev/null) || { bench_pid_alive "$1"; return; }
+	case $_wr_s in Z*) return 1 ;; esac
+	return 0
+}
+
 # bench_lock_head <label>: this waiter's ticket comes first among the live
 # ones. Puts the ticket back when it is gone; removes every ticket and
 # temporary whose waiter is gone, and a ticket with this process's pid
@@ -176,7 +192,7 @@ bench_lock_head() {
 			# Gone: kill -0 fails, or a zombie (KILLed, not yet reaped); or
 			# stale: this process's own pid on a ticket that is not its own
 			# (a dead waiter's pid, reused by this one).
-			if [ "$_lh_p" = "$$" ] || ! bench_pid_running "$_lh_p"; then
+			if [ "$_lh_p" = "$$" ] || ! bench_lock_waiter_running "$_lh_p"; then
 				rm -f "$_lh_f"
 			elif [ -z "$_lh_past" ]; then
 				BENCH_LOCK_AHEAD=$((BENCH_LOCK_AHEAD + 1))
@@ -184,7 +200,7 @@ bench_lock_head() {
 			;;
 		tmp.*)
 			_lh_p=${_lh_n#tmp.}
-			bench_pid_running "${_lh_p%%.*}" || rm -f "$_lh_f"
+			bench_lock_waiter_running "${_lh_p%%.*}" || rm -f "$_lh_f"
 			;;
 		esac
 	done
@@ -573,7 +589,7 @@ bench_lock_status() {
 	for _ls_f in "${BENCH_LOCK_QUEUE:?}"/w.*; do
 		if [ ! -f "$_ls_f" ] || [ -h "$_ls_f" ]; then continue; fi
 		_ls_q=$(cat "$_ls_f" 2> /dev/null) || continue
-		bench_pid_running "$(bench_kv "$_ls_q" pid)" || continue
+		bench_lock_waiter_running "$(bench_kv "$_ls_q" pid)" || continue
 		_ls_i=$((_ls_i + 1))
 		printf 'waiter=%s label=%s pid=%s since=%s\n' "$_ls_i" \
 			"$(bench_kv "$_ls_q" label)" "$(bench_kv "$_ls_q" pid)" "$(bench_kv "$_ls_q" since)"
