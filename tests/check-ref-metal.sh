@@ -20,7 +20,9 @@
 #     tests/metal/rm_rtao_test.c, the pure part of the ambient occlusion
 #     (rm_rtao.c and common/mtl_rtao_math.h, RT5, TASK57),
 #     tests/metal/rm_rtwater_test.c, the pure part of the water reflections
-#     (rm_rtwater.c and common/mtl_rtw_math.h, RT6, TASK58), and
+#     (rm_rtwater.c and common/mtl_rtw_math.h, RT6, TASK58),
+#     tests/metal/rm_rtsun_test.c, the pure part of the sun and sky shadow
+#     (rm_rtsun.c and common/mtl_rtsun_math.h, RT4, TASK56), and
 #     tests/metal/rm_fx_test.c, the pure part of the MetalFX scalers
 #     (rm_metalfx.c, TASK111).
 # (b) Only on Darwin with the Metal compiler (xcrun -f metal) and the
@@ -213,6 +215,24 @@ elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtwater_test" > "${tmp:?}/o
 else
 	rtw=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtwater_test: //')
 	case $rtw in *", 0 failed") ;; *) bad "tests/metal/rm_rtwater_test.c printed no result line"; rtw="";; esac
+fi
+
+# the pure part of the sun and sky shadow (RT4, TASK56): rm_rtsun.c and common/mtl_rtsun_math.h, with
+# rm_rtshadow.c for the view's inverse, rm_rt.c for the material ids and rm_pure.c; it reads the
+# committed table scripts/rt/sun-angles.txt from this directory
+rtsun=""
+# shellcheck disable=SC2086 # flags is a word list
+if ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "${tmp:?}/rm_rtsun_test" tests/metal/rm_rtsun_test.c \
+	"$rm_dir/rm_rtsun.c" "$rm_dir/rm_rtshadow.c" "$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" \
+	"$rm_dir/common/mtl_ring.c" src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_rtsun_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtsun_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_rtsun_test.c failed"
+else
+	rtsun=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtsun_test: //')
+	case $rtsun in *", 0 failed") ;; *) bad "tests/metal/rm_rtsun_test.c printed no result line"; rtsun="";; esac
 fi
 
 # the pure part of the MetalFX scalers (TASK111): rm_metalfx.c alone
@@ -721,6 +741,6 @@ for rate_mut in 's/rm_rate_start);/metal_rate_start->value);/' 's/&rm_rate, rm_r
 done
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; sun ${rtsun:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; $build)"
 fi
 exit $fail
