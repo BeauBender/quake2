@@ -27,7 +27,9 @@
  *   rm_vertex_world and rm_vertex_alias place them, with this frame's
  *   unjittered and the previous frame's clip position and the normal;
  *   one fragment function writes the albedo (the texel), the normal
- *   (rgb10a2), the material id (r8uint), the motion vector (rg16float)
+ *   (rgb10a2: alpha 1 with a normal, 0 without; at r_rt_water_hits 1 the
+ *   water's marks, rm_rtwater.metal's last draw of the raster, blend it to
+ *   2/3 and 1/3, TASK162), the material id (r8uint), the motion vector (rg16float)
  *   and the light the stock product multiplies by (rgba8: the lightmap
  *   sample, the vertex colour, the warp's colour, or white), and while
  *   the shadows trace (rm_gb_surf, TASK131) the surface (r32uint: a
