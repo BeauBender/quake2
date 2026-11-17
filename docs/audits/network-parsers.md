@@ -595,7 +595,9 @@ net_message.cursize` (and drop) before computing the checksum.
 
 Fixed by FIX26 (#127) and FIX33 (#145): the log line is built from the tokenized
 copy, never from the receive buffer. A valid attempt logs the sender and the
-command without the password; a bad attempt logs the sender only.
+command without the password; a bad attempt logs the sender only. A valid
+command is still logged as sent, so a command that itself carries a secret
+(`set rcon_password ...`) puts that secret in the log.
 
 `SVC_RemoteCommand` (`sv_conless.c`) logs every rcon attempt with
 `Com_Printf("...%s\n", ..., net_message.data + 4)`, whether or not

@@ -288,10 +288,12 @@ TEST(sv_clc_move_bounds)
 
 	/* Cut short at every length from the checksum byte on: nothing
 	   runs. The checksum would match if it covered the bytes past
-	   cursize, so passing shows it does not. */
+	   cursize, so passing shows it does not. The client is dropped,
+	   as for any other read past the end. */
 	for (n = 2; n < 15; n++)
 	{
 		T_EQ_INT(run_move(n), 0);
+		T_EQ_INT(disconnect_calls, 1);
 	}
 }
 
