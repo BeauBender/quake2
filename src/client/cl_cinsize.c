@@ -16,6 +16,7 @@
  */
 
 #include <stddef.h>
+#include <string.h>
 
 #include "header/client.h"
 #include "header/cinsize.h"
@@ -104,4 +105,36 @@ SCR_StillCheck(int width, int height, int bpp, size_t *bytes)
 
 	*bytes = size;
 	return SCR_STILL_OK;
+}
+
+/*
+ * Writes the name without its extension (dot points at the extension
+ * inside name, which runs to the end of the name) to out, a buffer of
+ * outsize bytes. Refuses, and returns false with out untouched, when the
+ * extension is longer than the name or the stem and its terminator do not
+ * fit: a name that long is not a picture the client could have loaded, so
+ * it is refused rather than cut to a different name.
+ */
+int
+SCR_StillStem(const char *name, const char *dot, char *out, size_t outsize)
+{
+	size_t namelen = strlen(name);
+	size_t extlen = strlen(dot);
+	size_t stemlen;
+
+	if ((extlen > namelen) || (outsize == 0))
+	{
+		return 0;
+	}
+
+	stemlen = namelen - extlen;
+
+	if (stemlen >= outsize)
+	{
+		return 0;
+	}
+
+	memcpy(out, name, stemlen);
+	out[stemlen] = '\0';
+	return 1;
 }
