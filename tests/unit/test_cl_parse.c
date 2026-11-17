@@ -503,3 +503,26 @@ TEST(cl_time_follows_server_time_across_wrap)
 	T_CHECK(time_behind() >= 0);
 	T_CHECK(time_behind() <= 100);
 }
+
+/* The client time after a frame numbered 10 (server time 1000), from
+   the given time before it. */
+static int
+time_after_frame_ten(int before)
+{
+	reset_client();
+	cl.time = before;
+	build_numbered_frame(10);
+	CL_ParseServerMessage();
+	return cl.time;
+}
+
+/* The window edges: 1000 and 900 stay, one step outside is pulled in. */
+TEST(cl_time_clamp_edges)
+{
+	T_EQ_INT(time_after_frame_ten(1000), 1000);
+	T_EQ_INT(time_after_frame_ten(1001), 1000);
+	T_EQ_INT(time_after_frame_ten(900), 900);
+	T_EQ_INT(time_after_frame_ten(899), 900);
+	T_EQ_INT(time_after_frame_ten(950), 950);
+	T_EQ_INT(time_after_frame_ten(-5), 900);
+}

@@ -259,3 +259,23 @@ TEST(cl_add_entities_clamp_int_max_server_time)
 	check_add_entities_clamp(INT_MIN, INT_MAX);
 	check_add_entities_clamp(-1, INT_MAX);
 }
+
+/* The same window edges in CL_AddEntities, and the fraction inside it. */
+TEST(cl_add_entities_clamp_edges)
+{
+	check_add_entities_clamp(4000, 4000);
+	T_EQ_INT(cl.time, 4000);
+	T_CHECK(cl.lerpfrac == 1.0f);
+	check_add_entities_clamp(4001, 4000);
+	T_EQ_INT(cl.time, 4000);
+	T_CHECK(cl.lerpfrac == 1.0f);
+	check_add_entities_clamp(3900, 4000);
+	T_EQ_INT(cl.time, 3900);
+	T_CHECK(cl.lerpfrac < 0.001f);
+	check_add_entities_clamp(3899, 4000);
+	T_EQ_INT(cl.time, 3900);
+	T_CHECK(cl.lerpfrac == 0.0f);
+	check_add_entities_clamp(3950, 4000);
+	T_EQ_INT(cl.time, 3950);
+	T_CHECK(cl.lerpfrac > 0.49f && cl.lerpfrac < 0.51f);
+}
