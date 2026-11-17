@@ -20,7 +20,8 @@ index, start, `load.before`, `load.after`, `pre.*`, `metric.*`) and adds, after 
 | Key | Value |
 |---|---|
 | `quiet` | `yes`, or `no` when the gate ran out or a snapshot shows foreign GPU use |
-| `quiet.reason` | `none`, or the reasons joined by `,`: `gate` (the gate's wait ran out), `gpu.before`, `gpu.after` (that snapshot's GPU device utilization is over `gate_gpu`) |
+| `quiet.reason` | `none`, or the reasons joined by `,`: `gate` (the gate's wait ran out), `gpu.before`, `gpu.after` (the reading after the run did not settle to `gate_gpu` or under within `gate_settle`; round 2) |
+| `gpu.after.settle` | the whole seconds the reading after the run took to fall to `gate_gpu` or under (0: the snapshot at once was), or `unsettled` |
 | `gate.wait` | the seconds the gate waited before the run |
 | `snap.source` | `system`, or `stub` when `BENCH_SNAP_READER` made the snapshots |
 | `snap.before.<key>`, `snap.after.<key>` | the snapshot just before and just after the run (keys below) |
@@ -104,6 +105,7 @@ reason `gate`. The case keys, with their defaults:
 | `gate_cpu` | 25 | CPU busy percent over one second, at most |
 | `gate_hold` | 3 | seconds both must stay under |
 | `gate_wait` | 120 | seconds the gate waits at most |
+| `gate_settle` | 10 | seconds, after a run, its GPU reading may take to fall to `gate_gpu`; 0 judges the snapshot at once |
 
 The CPU limit is the busy percent and not the load average: the one-minute average lags a minute
 behind and still counts the run before. The snapshots are taken while the measured workload is

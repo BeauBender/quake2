@@ -1210,7 +1210,7 @@ metric=ms n=3 median=11 p90=12 min=10 max=12"
 	_d=${E:?}/home/.cache/zzqrepo-bench/$TOK/$IA/null-sleep/$CH
 	[ "$(ls "${_d:?}/set-1" | grep -c '^r-.*\.run$')" -eq 3 ] || bad "store: not three run files in <store>/<host>/<inputs>/<case>/<case-hash>/set-1/ under \$HOME/.cache/<repo>-bench"
 	ls -a "${_d:?}" "${_d:?}/set-1" | grep -q '^\.tmp\.' && bad "store: a temporary file or staging directory was left"
-	_want="case case_hash commit inputs host class hash kind index start load.before load.after quiet quiet.reason gate.wait snap.source"
+	_want="case case_hash commit inputs host class hash kind index start load.before load.after quiet quiet.reason gpu.after.settle gate.wait snap.source"
 	for _k in $SNAP_KEYS; do _want="$_want snap.before.$_k"; done
 	for _k in $SNAP_KEYS; do _want="$_want snap.after.$_k"; done
 	_want="$_want freq.source freq.gpu.mhz freq.gpu.top freq.gpu.active freq.gpu.max prewarm.target prewarm.seconds prewarm.runs prewarm.stop prewarm.freq prewarm.freq.reason pre.null metric.ms metric.frames "
@@ -1402,7 +1402,7 @@ qcase() {
 
 t_quiet_case() {
 	fresh qcase
-	for _l in prewarm=x prewarm=1.5 gate_gpu=101 gate_cpu=-1 gate_hold=x gate_wait=2.5; do
+	for _l in prewarm=x prewarm=1.5 gate_gpu=101 gate_cpu=-1 gate_hold=x gate_wait=2.5 gate_settle=2.5 gate_settle=1234567890; do
 		printf '%s\n' "$_l" | cat "$R/cases/null-sleep.case" - | grep -v "^${_l%%=*}=0\$" > "${E:?}/bad.case"
 		_st=0
 		B case "${E:?}/bad.case" > /dev/null 2>&1 || _st=$?
@@ -1448,7 +1448,9 @@ t_gate() {
 	B baseline get "${E:?}/g.case" "$cA" > /dev/null || _st=$?
 	[ "$_st" -eq 1 ] || bad "gate: a set that was not quiet was stored"
 	# Foreign GPU use in the snapshots, with the gate quiet: refused, both named.
-	printf '0\n' > "${STUB:?}/gpu.gate"
+	printf 'gate_settle=1\n' >> "${E:?}/g.case"
+	rm -f "${STUB:?}"/n.*
+	printf '0\n50\n' > "${STUB:?}/gpu.gate"
 	printf '50\n' > "${STUB:?}/gpu.snap"
 	_st=0
 	B baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err" || _st=$?
@@ -1459,6 +1461,7 @@ t_gate() {
 	B baseline put "${E:?}/g.case" "$cC" > /dev/null || bad "gate: a quiet put failed"
 	rm -f "${STUB:?}"/n.*
 	printf '0\n50\n' > "${STUB:?}/gpu.snap"
+	printf '0\n50\n' > "${STUB:?}/gpu.gate"
 	_st=0
 	_out=$(B drift "${E:?}/g.case" "$cA" 2> "${E:?}/err") || _st=$?
 	case $_out in
@@ -1472,6 +1475,60 @@ t_gate() {
 	done
 	B compare "${E:?}/g.case" --before "$cA" --after "$cC" > "${E:?}/out" || true
 	grep -qx 'quiet before=yes after=unknown' "${E:?}/out" || bad "compare: a set without flags is not unknown: $(grep quiet "${E:?}/out")"
+	[ "$fails" -eq 0 ]
+}
+
+# The "after" side of the quiet flag waits for the driver's figure to settle
+# (TASK166 round 2): a display-synced run keeps the GPU about 30 % busy, and the
+# snapshot read at once after it still shows that. The stub's gpu.snap is the
+# snapshots (before, after) and its gpu.gate the gate's reading, then the
+# settle's; the case has gate_hold=0, so the gate passes on its first reading.
+settle_put() {
+	# settle_put <before,after snapshot values> <gate readings, \n-separated> <extra case lines> [<poll>]
+	fresh settle
+	store_setup
+	qcase g 's/^runs=.*/runs=1/; s/^warmup=.*/warmup=0/'
+	printf '%s\n' "$3" >> "${E:?}/g.case"
+	printf '%s\n' "$1" > "${STUB:?}/gpu.snap"
+	printf "$2" > "${STUB:?}/gpu.gate"
+	_t0=$(date +%s)
+	_st=0
+	BENCH_GATE_POLL=${4:-0.05} B baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err" || _st=$?
+	_took=$(($(date +%s) - _t0))
+}
+t_settle() {
+	# A reading that falls from 30 to 5: quiet, with a settle time; the at-once snapshot stays the record.
+	settle_put '0
+30' '0\n30\n30\n5\n' 'gate_settle=5'
+	[ "$_st" -eq 0 ] || bad "settle: a reading that fell from 30 to 5 was refused (status $_st): $(cat "${E:?}/err")"
+	_f=$(runfile g)
+	grep -qx quiet=yes "${_f:-/dev/null}" || bad "settle: the settled run is not quiet=yes"
+	grep -qx quiet.reason=none "${_f:-/dev/null}" || bad "settle: the settled run has a reason"
+	grep -Eqx 'gpu.after.settle=[0-9]+' "${_f:-/dev/null}" || bad "settle: no settle time: $(grep settle "${_f:-/dev/null}")"
+	grep -qx snap.after.gpu.device=30 "${_f:-/dev/null}" || bad "settle: the snapshot taken at once is not the record"
+	# A reading that stays at 30: not quiet, gpu.after, unsettled; the wait is gate_settle.
+	settle_put '0
+30' '0\n30\n' 'gate_settle=2'
+	[ "$_st" -eq 1 ] && grep -q 'quiet.reason=gpu.after)' "${E:?}/err" || bad "settle: a reading that stayed at 30 was not refused with gpu.after (status $_st): $(cat "${E:?}/err")"
+	[ "$_took" -ge 2 ] || bad "settle: it did not wait out gate_settle=2 ($_took s)"
+	# An unknown reading: not quiet, at once or while settling.
+	settle_put '0
+unknown' '0\n5\n' 'gate_settle=5'
+	[ "$_st" -eq 1 ] && grep -q 'quiet.reason=gpu.after)' "${E:?}/err" || bad "settle: an unknown reading was not refused (status $_st): $(cat "${E:?}/err")"
+	[ "$_took" -le 4 ] || bad "settle: an unknown reading waited $_took s"
+	settle_put '0
+30' '0\nunknown\n5\n' 'gate_settle=5'
+	[ "$_st" -eq 1 ] && grep -q 'quiet.reason=gpu.after)' "${E:?}/err" || bad "settle: an unknown reading while settling was not refused (status $_st)"
+	[ "$_took" -le 4 ] || bad "settle: an unknown reading while settling waited $_took s"
+	# gate_settle=0: today's judgment, at once, with no further reading.
+	settle_put '0
+30' '0\n5\n' 'gate_settle=0'
+	[ "$_st" -eq 1 ] && grep -q 'quiet.reason=gpu.after)' "${E:?}/err" || bad "settle: gate_settle=0 did not judge at once (status $_st)"
+	[ "$(cat "${STUB:?}/n.gate")" -eq 1 ] || bad "settle: gate_settle=0 read the GPU $(cat "${STUB:?}/n.gate") times, the gate's alone is 1"
+	# Each wait is cut to the time left: a poll of 20 s with gate_settle=1.
+	settle_put '0
+30' '0\n30\n' 'gate_settle=1' 20
+	[ "$_st" -eq 1 ] && [ "$_took" -le 10 ] || bad "settle: a poll of 20 s was not cut to the settle time of 1 s (status $_st, $_took s)"
 	[ "$fails" -eq 0 ]
 }
 
@@ -1705,7 +1762,7 @@ t_drift_quiet() {
 # round 1).
 t_gate_poll() {
 	fresh gatepoll
-	for _v in x 0 0.001 -1 1e1 08x; do
+	for _v in x 0 0.001 -1 1e1 08x 1.2345678901234 99999999999999999999; do
 		rm -f "${E:?}/ran"
 		_st=0
 		env BENCH_GATE_POLL="$_v" sh "$R/bench.sh" lock run zzq -- touch "${E:?}/ran" > /dev/null 2> "${E:?}/err" || _st=$?
@@ -1891,7 +1948,7 @@ t_digit_cap() {
 }
 
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap"
+all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
@@ -1991,6 +2048,12 @@ mutant ttl-unchecked bench.sh 'bench_is_uint "${BENCH_QUIET_TTL:-3600}" ||' 'tru
 mutant probe-after-gate core/measure.sh '	bench_freq_init' '	:' t_probe_first || mfail=1
 mutant snap-source-lost core/snap.sh 'if [ -n "${BENCH_SNAP_READER:-}" ]; then echo stub; else echo system; fi' 'echo system' t_store || mfail=1
 mutant source-stub-lost bench.sh '{ st = 1 }' '{ st = 0 }' t_drift || mfail=1
+mutant settle-no-poll core/snap.sh 'bench_snap gate "${BENCH_TMP:?}/settle"' ': > "${BENCH_TMP:?}/settle"' t_settle || mfail=1
+mutant settle-no-bound core/snap.sh '[ "$_st_left" -gt 0 ] || return 0' ':' t_settle || mfail=1
+mutant settle-not-flagged core/snap.sh '[ "$BENCH_SETTLE" != unsettled ] ||' 'true ||' t_settle || mfail=1
+mutant settle-nap-uncut core/snap.sh 'then _st_nap=$_st_left; fi' 'then :; fi' t_settle || mfail=1
+mutant settle-zero-polls core/measure.sh '	bench_settle "${BENCH_TMP:?}/snap.after"' '	BENCH_SETTLE=0' t_settle || mfail=1
+mutant poll-digits-unbounded core/common.sh '[ "${#1}" -le 12 ]' 'true' t_gate_poll || mfail=1
 mutant digit-cap-dropped core/common.sh '	bench_is_uint_max "$1" 9' '	bench_is_uint_max "$1" 99' t_digit_cap || mfail=1
 mutant digit-cap-crc core/common.sh '! bench_is_uint_max "$_bh_a" 10' '! bench_is_uint_max "$_bh_a" 9' t_digit_cap || mfail=1
 # Last: it writes into the throwaway repository's work tree.

@@ -191,7 +191,7 @@ bench_freq_window() {
 	fi
 	awk -v p="$3" '
 		/^freq=unavailable( reason=[a-z0-9-]+)?$/ { r = $2; sub(/^reason=/, "", r); un = (r != "" ? r : "unknown"); next }
-		/^freq\.[a-z0-9_]+\.(mhz|top|active|max)=[0-9]+(\.[0-9]+)?$/ { out[++n] = p substr($0, 5); next }
+		/^freq\.[a-z0-9_]+\.(mhz|top|active|max)=[0-9]{1,9}(\.[0-9]{1,6})?$/ { out[++n] = p substr($0, 5); next }
 		{ un = "bad-line" }
 		END {
 			if (un == "" && n == 0) un = "no-reading"
@@ -243,7 +243,7 @@ bench_gate() {
 		_gt_now=$(date +%s)
 		_gt_g=$(bench_file_kv "${BENCH_TMP:?}/gate" gpu.device)
 		_gt_c=$(bench_file_kv "${BENCH_TMP:?}/gate" cpu.busy)
-		if ! bench_is_num "${_gt_g:-x}" || ! bench_is_num "${_gt_c:-x}"; then
+		if ! bench_is_dec "${_gt_g:-x}" || ! bench_is_dec "${_gt_c:-x}"; then
 			BENCH_GATE_WHY=unread
 			break
 		fi
@@ -267,23 +267,58 @@ bench_gate() {
 	BENCH_GATE_WAITED=$(($(date +%s) - _gt_t0))
 }
 
+# bench_settle <after snapshot>: the "after" side of the quiet flag. The
+# driver's GPU utilization lags and averages, so on a display-synced run
+# (the GPU about 30 % active by the workload's own doing) the snapshot read
+# at once still shows the run's use (TASK166 round 2). When that snapshot's
+# gpu.device is over gate_gpu, it reads gpu.device again every
+# BENCH_GATE_POLL seconds (the time left, when that is shorter) until it is
+# at most gate_gpu, for at most gate_settle seconds (default 10; 0 reads no
+# more). Sets BENCH_SETTLE: the whole seconds it took (0 when the snapshot
+# was already under), or "unsettled" when it never fell under in that time
+# or a reading is unknown (another client uses the GPU, or nothing says).
+bench_settle() {
+	_st_gpu=$(bench_case_uint gate_gpu 10)
+	_st_wait=$(bench_case_uint gate_settle 10)
+	_st_g=$(bench_file_kv "$1" gpu.device)
+	BENCH_SETTLE=unsettled
+	bench_is_dec "${_st_g:-x}" || return 0
+	_st_t0=$(date +%s)
+	while :; do
+		if awk -v g="$_st_g" -v l="$_st_gpu" 'BEGIN { exit !(g <= l) }'; then
+			BENCH_SETTLE=$(($(date +%s) - _st_t0))
+			return 0
+		fi
+		_st_left=$((_st_wait - ($(date +%s) - _st_t0)))
+		[ "$_st_left" -gt 0 ] || return 0
+		_st_nap=${BENCH_GATE_POLL:-1}
+		if awk -v p="$_st_nap" -v l="$_st_left" 'BEGIN { exit !(p > l) }'; then _st_nap=$_st_left; fi
+		bench_nap "$_st_nap"
+		bench_snap gate "${BENCH_TMP:?}/settle"
+		_st_g=$(bench_file_kv "${BENCH_TMP:?}/settle" gpu.device)
+		bench_is_dec "${_st_g:-x}" || return 0
+	done
+}
+
 # bench_quiet_flag <before> <after>: prints quiet=yes|no and quiet.reason
-# for a run: BENCH_GATE_WHY, then gpu.before and gpu.after when that
-# snapshot's gpu.device is over gate_gpu (the measured workload runs in
-# neither, so that use is another client's) or unknown.
+# for a run: BENCH_GATE_WHY, then gpu.before when that snapshot's
+# gpu.device is over gate_gpu (the measured workload runs in neither, so
+# that use is another client's) or unknown, and gpu.after when the reading
+# after the run did not settle under gate_gpu (bench_settle); then
+# gpu.after.settle=<seconds>|unsettled, the record of that wait. The
+# snapshot taken at once stays the record.
 bench_quiet_flag() {
 	_qf_r=$BENCH_GATE_WHY
 	_qf_l=$(bench_case_uint gate_gpu 10)
-	for _qf_s in before after; do
-		if [ "$_qf_s" = before ]; then _qf_f=$1; else _qf_f=$2; fi
-		_qf_g=$(bench_file_kv "$_qf_f" gpu.device)
-		if ! bench_is_num "${_qf_g:-x}" || awk -v g="$_qf_g" -v l="$_qf_l" 'BEGIN { exit !(g > l) }'; then
-			_qf_r=${_qf_r:+$_qf_r,}gpu.$_qf_s
-		fi
-	done
+	_qf_g=$(bench_file_kv "$1" gpu.device)
+	if ! bench_is_dec "${_qf_g:-x}" || awk -v g="$_qf_g" -v l="$_qf_l" 'BEGIN { exit !(g > l) }'; then
+		_qf_r=${_qf_r:+$_qf_r,}gpu.before
+	fi
+	[ "$BENCH_SETTLE" != unsettled ] || _qf_r=${_qf_r:+$_qf_r,}gpu.after
 	if [ -z "$_qf_r" ]; then
 		printf 'quiet=yes\nquiet.reason=none\n'
 	else
 		printf 'quiet=no\nquiet.reason=%s\n' "$_qf_r"
 	fi
+	printf 'gpu.after.settle=%s\n' "$BENCH_SETTLE"
 }

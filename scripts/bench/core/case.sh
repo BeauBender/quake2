@@ -29,12 +29,16 @@
 #   gate_cpu     device utilization and CPU busy percent at most these, 0
 #   gate_hold    to 100 (10 and 25), for gate_hold seconds in a row (3),
 #   gate_wait    waiting at most gate_wait seconds (120)
+#   gate_settle  after a run, a GPU reading over gate_gpu is read again for at
+#                most gate_settle seconds (10; 0 none) before the quiet flag
+#                blames another client: the driver's figure lags a
+#                display-synced run's own use (snap.sh)
 #
 # The normalised form is the kept lines, sorted; the case hash is "c-" and
 # 12 hex digits of its digest, so comments, blank lines, key order and
 # spacing do not change it, and any value does.
 
-BENCH_CASE_KEYS='adapter runs metric abs_tol rel_tol warmup wall better accept targets build_flags settings requires description prewarm gate_gpu gate_cpu gate_hold gate_wait'
+BENCH_CASE_KEYS='adapter runs metric abs_tol rel_tol warmup wall better accept targets build_flags settings requires description prewarm gate_gpu gate_cpu gate_hold gate_wait gate_settle'
 
 BENCH_CASE_NAME=
 BENCH_CASE_FILE=
@@ -114,7 +118,7 @@ bench_case_load() {
 	if ! bench_is_uint "$_cl_v" || [ "$_cl_v" -lt 1 ] || [ "$_cl_v" -gt 1000 ]; then
 		bench_die 2 "the case $_cl_n: runs is 1 to 1000"
 	fi
-	for _cl_k in warmup wall prewarm gate_hold gate_wait; do
+	for _cl_k in warmup wall prewarm gate_hold gate_wait gate_settle; do
 		_cl_v=$(bench_case_get "$_cl_k")
 		[ -z "$_cl_v" ] || bench_is_uint "$_cl_v" || bench_die 2 "the case $_cl_n: $_cl_k is whole"
 	done

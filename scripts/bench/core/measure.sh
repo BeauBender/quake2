@@ -155,6 +155,7 @@ bench_run_one() {
 	[ "$1" = run ] || return 0
 	bench_freq_dump "${BENCH_TMP:?}/freq.after"
 	bench_snap snap "${BENCH_TMP:?}/snap.after"
+	bench_settle "${BENCH_TMP:?}/snap.after"
 	adapter_metrics "$BENCH_CASE_FILE" "$_ro_log" > "${BENCH_TMP:?}/metrics" || _ro_st=$?
 	[ "$_ro_st" -eq 0 ] || bench_die 3 "the adapter could not read the metrics of run $2 (status $_ro_st)"
 	bench_lines_ok metric "${BENCH_TMP:?}/metrics" || bench_die 3 "run $2 printed a line that is not metric.<name>=<number>"

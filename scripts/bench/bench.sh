@@ -104,7 +104,7 @@ bench_is_uint "${BENCH_STOP_GRACE:-10}" || bench_die 2 "BENCH_STOP_GRACE is whol
 # The quiet marker's lifetime and the gate's poll, before the lock is taken
 # or anything runs (bench_quiet_mark and bench_gate read them later).
 bench_is_uint "${BENCH_QUIET_TTL:-3600}" || bench_die 2 "BENCH_QUIET_TTL is whole seconds"
-if ! bench_is_num "${BENCH_GATE_POLL:-1}" || ! awk -v p="${BENCH_GATE_POLL:-1}" 'BEGIN { exit !(p >= 0.01) }'; then
+if ! bench_is_dec "${BENCH_GATE_POLL:-1}" || ! awk -v p="${BENCH_GATE_POLL:-1}" 'BEGIN { exit !(p >= 0.01) }'; then
 	bench_die 2 "BENCH_GATE_POLL is a number of seconds, at least 0.01"
 fi
 
