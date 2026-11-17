@@ -9,24 +9,28 @@ branch at `1551a377`, which holds TASK162.
 ## Verdict
 
 **Neither a race in the hits-1 path nor the temporal scaler's own state: the engine's input differs.**
-On the frame after each capture, `refdef_t.time` differs between two live records by 1 to 5 ms:
-the differing frames follow the capture cadence and records at 1920 x 1080 and below repeat, so the
-capture at this size (the readback and a 44 MB TGA) is the stall that takes that frame past 100 ms,
-after which the timedemo clock follows the host (the caveat *Determinism* already gives for
-`skywater`; the stall itself was not timed, the screen being locked). That
-frame is never captured, so without a temporal scaler the records repeat; the temporal scaler's
-history carries it into every later frame, the captured ones included. It does not depend on
+Measured: on the frame after each capture, `refdef_t.time` differs between two live records by 1 to
+5 ms, and with the time rounded to 0.1 s in a scratch build every record repeats (below). Read, not
+measured: that the capture (the readback and a 44 MB TGA) is the stall that takes that frame past
+100 ms, after which the timedemo clock follows the host (the caveat *Determinism* already gives for
+`skywater`). The reading rests on the differing frames following the capture cadence and on the
+hits-0 records at 1920 x 1080 and 640 x 480 repeating; the stall itself was not timed (not timed, the
+screen being locked). Unexplained: in some runs the frames two before a capture differ too, which a
+capture stall does not account for. That frame is never captured, so without a temporal scaler the
+records repeat; the temporal scaler's history carries it into every later frame, the captured ones
+included. It does not depend on
 `r_rt_water_hits` (setting 0 varies the same way), nor on the water at all (`r_rt_water 0` and
 `world-metalfx2` vary too). With the time rounded to the server frame in a scratch build, five
-records repeat byte for byte.
+records repeat byte for byte (a sufficiency result: the time is enough to explain the variation,
+not proof of why it differs).
 
 ## Design note: the runs and what each decides
 
 Every run: the screen locked (frames only, no timing), `MTL_DEBUG_LAYER=1`, `PINS_SEED=1`,
 FIX81's `water.dm2`, `PINS_EVERY=30`, 2560 x 1440 with `PINS_HIDPI=1` (5120 x 2880, as TASK162),
 one `tools/heavy.sh` hold a batch, no other `quake2`. A scratch copy of the harness adds the cases as
-scenarios: `rt-water.cfg` plus `r_rt_water_hits` and `r_metalfx`. Each case is recorded five times
-(`--run 1` to `5`), and every pair of the five is compared frame by frame (the differing pixels'
+scenarios: `rt-water.cfg` plus `r_rt_water_hits` and `r_metalfx`. The four 5K cases (`h1fx2`, `h1fx0`, `h1fx1`, `h0fx2`) are recorded five times
+(`--run 1` to `5`), the other rows three times, and every pair of the five is compared frame by frame (the differing pixels'
 share and the largest level difference). Every log must hold the validation banner and no other
 validation line.
 
@@ -70,7 +74,8 @@ harness's own `compare`.
 | `h0fx2` | 640 x 480 | 3 | 5 of 5 | 0 | 0 |
 
 Every differing frame differs over the whole frame (box 0,0 to 5119,2879). The harness's `compare`
-of records 2 to 5 against record 1 at both thresholds 0: 4 of 5 frames over, worst score 4.5e-05
+of records 2 to 5 against record 1 at both thresholds 0, measured on `h1fx2`, `h0fx2`, `w0fx2` and
+`world-metalfx2` (the `r_metalfx 2` rows): 4 of 5 frames over, worst score 4.5e-05
 (`h0fx2` 4.6e-05, `world-metalfx2` 3.8e-05), bad fraction 0 on every frame. So the control varies on
 this base as the case does. TASK162's one equal pair of `h0fx2` records (main against its branch)
 was, by step 3, a pair whose frames after a capture had the same time, not a property of setting 0.
@@ -115,12 +120,17 @@ capture (`cl_pins.c`). `ref_metal` cannot make it repeat without changing the lo
 card: no source change, and the case is marked in [doc/100_renderpins.md](../../doc/100_renderpins.md)
 (*Determinism*): a live record made with a temporal scaler at a size whose capture takes the next
 frame past 100 ms is not compared byte for byte against another live record; it is judged at the
-harness's thresholds, with the run-to-run spread measured here. `replay` takes the time from the
+harness's thresholds, with the run-to-run spread measured here. Plainly: that case is not
+byte-compared, so a small real regression at 5K with a temporal scaler would pass the thresholds
+(0.02 and 0.005); the band to expect live against live is a worst score of 4.6e-05 with bad
+fraction 0. FIX102, the follow-up below, is the way back to byte comparison. The 1920 x 1080 and
+640 x 480 repeat rests on `h0fx2` (three records each); hits 1 at those sizes is covered by
+[TASK162](TASK162.md)'s comparisons. `replay` takes the time from the
 trace, but it takes no `PINS_HIDPI=1`, so it was not tried at this size. No scenario file changed: the case has no
 committed scenario (TASK162's `rtw-h1fx` was a scratch one), and a comment line in
 `world-metalfx2.cfg` would change its pin's id.
 
-**Follow-up (outside the card's files):** keep the capture's stall out of the clock during a pin
+**Follow-up, FIX102 (outside the card's files):** keep the capture's stall out of the clock during a pin
 record (`cl_main.c` or `cl_pins.c`), so a live record at any size repeats byte for byte with a
 temporal scaler; `skywater`'s `// nondeterministic:` line has the same cause.
 

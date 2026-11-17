@@ -221,20 +221,35 @@ can still differ from another live record (see `skywater` above); its
 replay matches it all the same.
 
 A temporal MetalFX scaler (`r_metalfx 2`) makes that caveat reach every
-frame. At 5120x2880 (`PINS_HIDPI=1` at 2560x1440) the capture itself
-takes the frame after it past 100 ms, so that frame's `refdef_t.time`
-differs between two live records by a few milliseconds. The frame is not
-captured, so without the scaler, or with the spatial one, the records
-repeat; the temporal scaler's history carries it into every later frame.
-Measured (FIX96) on `ref_metal`, `water.dm2`, `PINS_EVERY=30`, five
-records a case: every pair of records differs on 4 of 5 frames, by up to
-3.9 % of the pixels and 11 levels (`compare` worst score 4.6e-05, bad
-fraction 0), at `r_rt_water_hits` 0 and 1, with `r_rt_water 0`, and in
-`world-metalfx2`; at 1920x1080 and 640x480 the records repeat. Such a
-case is not compared byte for byte live against live: judge it at the
-harness's thresholds (the defaults, 0.02 and 0.005, pass it), or record
-it at a size whose records repeat. `replay` takes the time from the
-trace, but it takes no `PINS_HIDPI=1`, so it was not tried at this size.
+frame. Measured (FIX96) on `ref_metal`, `water.dm2`, `PINS_EVERY=30`, at
+5120x2880 (`PINS_HIDPI=1` at 2560x1440): `refdef_t.time` differs by 1 to
+5 ms between two live records on the frames after a capture, and
+rounding it to 0.1 s in a scratch build makes every record repeat. That
+this is the capture's stall pushing the next frame past 100 ms, after
+which the timedemo clock follows the host, is read from the capture
+cadence and from the records at smaller sizes repeating; it is not
+measured (the stall was not timed). Also unexplained: in some runs the
+frames two before a capture differ too. The frame after a capture is not
+itself captured, so without the scaler, or with the spatial one, the
+records repeat; the temporal scaler's history carries it into every
+later frame. Five records a case for the four 5K cases (`r_rt_water_hits`
+1 and 0 with `r_metalfx 2`, 1 with `r_metalfx` 0 and 1), three for the
+others. With `r_metalfx 2`, `compare` of records 2 to 5 against record 1
+differs on 4 of 5 frames (up to 3.9 % of the pixels and 11 levels; worst
+score 4.6e-05, bad fraction 0), at `r_rt_water_hits` 0 and 1, with
+`r_rt_water 0`, and in `world-metalfx2`. At 1920x1080 and 640x480 the
+records of the hits-0 case repeat (hits 1 at those sizes is covered by
+TASK162's comparisons).
+
+Such a case is therefore not compared byte for byte live against live:
+judge it at the harness's thresholds (the defaults, 0.02 and 0.005, pass
+it), or record it at a size whose records repeat. Say it plainly: a small
+real regression at 5K with a temporal scaler would pass those
+thresholds. Expect a live-against-live spread of up to a worst score of
+4.6e-05 with bad fraction 0, and read a result near that as noise. The
+way back to byte comparison is FIX102, which keeps the capture out of
+the clock. `replay` takes the time from the trace, but it takes no
+`PINS_HIDPI=1`, so it was not tried at this size.
 
 A seeded record (`PINS_SEED`, the engine's `pins_seed`) is for making
 pins, not for hosting a server: a listen server started in that process
