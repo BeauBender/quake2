@@ -165,7 +165,7 @@ area flood.
 | `CMod_LoadBrushSides` | `texinfo` (short) | `&map_surfaces[j]` | `if (j >= numtexinfo)`; negative maps to `&nullsurface` | ok |
 | `CMod_LoadNodes` | count | `map_nodes[i]` writes | `count < 1`, `count > MAX_MAP_NODES` | ok |
 | `CMod_LoadNodes` | `planenum` | `map_planes + planenum` | `planenum < 0 \|\| planenum >= numplanes` | ok |
-| `CMod_LoadNodes` | `children[2]` | node walk in every query | `(child >= 0 && child >= count) \|\| (child < 0 && (-1 - child) >= numleafs)` | ok for range; a child that points back to itself or an ancestor makes `CM_PointLeafnum_r` and `CM_BoxLeafnums_r` loop forever and `CM_RecursiveHullCheck`/`CM_HeadnodeVisible` recurse until the stack overflows: carded as FIX3 item 4 |
+| `CMod_LoadNodes` | `children[2]` | node walk in every query | `(child >= 0 && child >= count) \|\| (child < 0 && (-1 - child) >= numleafs)` | ok for range; a child that points back to itself or an ancestor makes `CM_PointLeafnum_r` and `CM_BoxLeafnums_r` loop forever and `CM_RecursiveHullCheck`/`CM_HeadnodeVisible` recurse until the stack overflows: carded as FIX3 item 4; **fixed by FIX43** (`CMod_CheckNodeTree` refuses a graph that is not a forest or is deeper than 1024 nodes) |
 | `CMod_LoadAreas` | count | `map_areas[i]` writes | `count > MAX_MAP_AREAS` | ok |
 | `CMod_LoadAreas` | `firstareaportal`, `numareaportals` | `&map_areaportals[area->firstareaportal]` and the loop bound in `FloodArea_r` | none | carded as FIX3 item 2 |
 | `CMod_LoadAreaPortals` | count | `memcpy(out, in, sizeof(dareaportal_t) * count)` into `map_areaportals[MAX_MAP_AREAPORTALS]` | `count > MAX_MAP_AREAS` (256, stricter than the 1024-entry array) | ok (the wrong constant only refuses legal maps with more than 256 portals) |
@@ -173,13 +173,13 @@ area flood.
 | `CMod_LoadVisibility` | lump length | `memcpy(map_visibility, ..., l->filelen)` | `if (l->filelen > MAX_MAP_VISIBILITY)` | ok |
 | `CMod_LoadVisibility` | `numclusters` | swapped, not used for bounds (the leaf-derived `numclusters` is) | n/a | ok |
 | `CMod_LoadVisibility` | `bitofs[c][DVIS_PVS/PHS]` | `map_visibility + bitofs` in `CM_ClusterPVS`/`PHS` | none | carded as FIX3 item 3 |
-| `CM_DecompressVis` | run bytes `in[0]`, `in[1]` | output writes and input advance | output bounded: `if ((out_p - out) + c > row)`; input is never bounded by `numvisibility`, and a `00 00` pair (zero-length run) advances the input without producing output | **defect D1** |
+| `CM_DecompressVis` | run bytes `in[0]`, `in[1]` | output writes and input advance | output bounded: `if ((out_p - out) + c > row)`; input is never bounded by `numvisibility`, and a `00 00` pair (zero-length run) advances the input without producing output | **defect D1, fixed by FIX23** (the input ends at `map_visibility + numvisibility`; the rest of the row is visible when it runs out) |
 | `CM_DecompressVis` | `row = (numclusters + 7) >> 3` | output length into `pvsrow`/`phsrow[MAX_MAP_LEAFS / 8]` | `numclusters` is at most 32768 (largest short + 1), so `row` is at most 4096 of 8192 | ok-by-construction |
 | `CMod_LoadEntityString` | lump length | `memcpy(map_entitystring, ..., numentitychars)` and the NUL after it | `l->filelen < 0`, `l->filelen >= sizeof(map_entitystring)` | ok |
 | `CMod_LoadEntityString` | `.ent` override length | `memcpy(map_entitystring, buffer, bufLen)` | `bufLen > 1 && bufLen < sizeof(map_entitystring) - 1` | ok |
 | `CMod_LoadEntityString` | map name | `strcmp(name + nameLen - 4, ".bsp")`, `memcpy(namewe, name, nameLen - 4)` | `nameLen > (MAX_QPATH - 1)` rejects long names; a name shorter than 4 would read before the string, but the server builds it as `maps/%s.bsp` | ok-by-construction |
 | `CM_InitBoxHull` | `numleafs` | `box_leaf = &map_leafs[numleafs]` and three writes through it | the room check tested nodes, brushes, leafbrushes, brushsides and planes but not leafs | **defect D2, fixed in this branch** |
-| `CM_SetAreaPortalState` | `portalnum` (from the map's `func_areaportal` `style` key, see [entity strings](#entity-strings-and-map-fix-overrides)) | `portalopen[portalnum] = open` | `if (portalnum > numareaportals)`: no lower bound; the upper test is off by one but stays inside the 1024-entry array because `numareaportals` is at most 256 | **defect D3, negative side fixed in this branch** |
+| `CM_SetAreaPortalState` | `portalnum` (from the map's `func_areaportal` `style` key, see [entity strings](#entity-strings-and-map-fix-overrides)) | `portalopen[portalnum] = open` | was `if (portalnum > numareaportals)`: no lower bound; the upper test is off by one but stays inside the 1024-entry array because `numareaportals` is at most 256; now `(portalnum < 0) \|\| (portalnum >= numareaportals)` | **defect D3, negative side fixed in this branch, upper bound fixed by FIX23** |
 | `CM_ReadPortalState` | savegame bytes | `FS_Read(portalopen, sizeof(portalopen), f)` | fixed size | ok |
 | `CM_InlineModel` | `*N` model number (configstring / entity `model` key) | `&map_cmodels[num]` | `(num < 1) \|\| (num >= numcmodels)` | ok |
 
@@ -211,7 +211,8 @@ READ of size 1 ... #0 in CM_DecompressVis collision.c:2019  #1 in CM_ClusterPVS 
 ```
 
 After the fixes, modes 1 and 2 end in `Com_Error` ("Not enough room for box
-tree", "areaportal > numareaportals"); mode 3 still overflows (filed, not fixed).
+tree", "areaportal > numareaportals"); mode 3 still overflowed then, and is
+fixed by FIX23 (see [Defects](#defects)).
 Mode 3 passes even a strict FIX3-style `bitofs < numvisibility` check if the
 lump carries a little padding after the offsets for the offset to point at, so
 D1 is distinct from FIX3 item 3.
@@ -306,8 +307,8 @@ several rows below cite FIX3.
 | `Mod_DecompressVis` | run bytes | writes into `static byte decompressed[MAX_MAP_LEAFS / 8]` (8192 bytes) | `while (out - decompressed < row)` only, no bound against the buffer; a zero run is written whole, so even a legal 8192-byte row can overshoot by 254 bytes; the input is never bounded by the lump | **defect D8** (global buffer overflow write; non-zero bytes are copied from the file verbatim) |
 | `R_MarkLeaves` (gl1, gl3) | `numleafs` | `memcpy(fatvis, vis, (numleafs + 7) / 8)` and an `int` OR loop into an 8192-byte stack array | none in the renderer; collision limits leafs to 65536, exactly the array | ok-by-construction (collision-first order) |
 | `Mod_LoadNodes` | `planenum`, `children[2]` | `planes + planenum`, child pointers | `planenum < 0 \|\| planenum >= numplanes`; a child `>= *numnodes` or a leaf `>= numleafs` is refused | ok for range |
-| `Mod_LoadNodes` | child graph | `Mod_SetParent`, `Mod_NumberLeafs` (recursive), `Mod_PointInLeaf` (loop) | a cycle recurses until the stack is gone, or loops forever | carded as FIX3 item 4 (a collision cycle check refuses the map first) |
-| `Mod_NumberLeafs` | child graph | writes `r_leaftovis[leafnum]` and `r_vistoleaf[*numvisleafs]`, two `int [MAX_MAP_LEAFS]` arrays on the stack of `Mod_LoadNodes` | none; without any cycle, nodes that share children (a DAG) are walked once per path, so a chain of nodes whose two children both name the next node reaches the last leaf exponentially often and `numvisleafs` runs past 65536 | **defect D9** (stack buffer overflow write; a depth-bound fix for FIX3 item 4 does not refuse a DAG; both arrays are unused after the walk) |
+| `Mod_LoadNodes` | child graph | `Mod_SetParent`, `Mod_NumberLeafs` (recursive), `Mod_PointInLeaf` (loop) | a cycle recurses until the stack is gone, or loops forever | carded as FIX3 item 4; **fixed by FIX43** (`Mod_CheckNodeTree` refuses the graph before `Mod_SetParent`, and the collision check refuses it first) |
+| `Mod_NumberLeafs` | child graph | writes `r_leaftovis[leafnum]` and `r_vistoleaf[*numvisleafs]`, two `int [MAX_MAP_LEAFS]` arrays on the stack of `Mod_LoadNodes` | none; without any cycle, nodes that share children (a DAG) are walked once per path, so a chain of nodes whose two children both name the next node reaches the last leaf exponentially often and `numvisleafs` runs past 65536 | **defect D9, fixed by FIX43** (stack buffer overflow write; a depth-bound fix for FIX3 item 4 does not refuse a DAG, the FIX43 check refuses a node or leaf with a second parent; both arrays are unused after the walk) |
 | `Mod_LoadNodes` | `firstface`, `numfaces` (unsigned short) | `surfaces + node->firstsurface` for `numsurfaces` entries in `R_RecursiveWorldNode` (gl1, gl3, soft), `R_MarkSurfaceLights`, `R_RecursiveLightPoint` (gl1, gl3, soft) | none against `numsurfaces` | **defect D14** (heap over-read; gl1/gl3 `R_RecursiveWorldNode` links a surface whose `visframe` matches into `image->texturechain`, a write through the stray pointer) |
 | `Mod_LoadSubmodels` | `headnode` | `nodes + firstnode` for `R_MarkLights` in `R_DrawBrushModel` (gl1, gl3) and `R_PushDlights` (soft) | `if (out->firstnode >= loadmodel->numnodes)`; no lower bound, and collision accepts a negative headnode that names a leaf | **defect D14** (a pointer before the node array, read as a node) |
 | `Mod_LoadSubmodels` | `firstface`, `numfaces` (int) | `&surfaces[firstmodelsurface]` for `nummodelsurfaces` entries in `R_DrawInlineBModel` (gl1, gl3), `R_DrawSolidClippedSubmodelPolygons` and `R_DrawSubmodelPolygons` (soft) | none | **defect D14** |
@@ -773,15 +774,15 @@ reachability in [Where each asset can come from](#where-each-asset-can-come-from
 
 | ID | Where | One line | sev | conf | Card |
 |---|---|---|---|---|---|
-| D1 | `collision.c` `CM_DecompressVis` | input over-read only: the input pointer is never bounded by `numvisibility`, and a `00 00` pair (zero-length run) advances the input without producing output, so the decoder walks past `map_visibility`; the output is clamped to `row` (at most 4096 of 8192 bytes) | medium | high (ASAN, READ) | FIX23 |
+| D1 | `collision.c` `CM_DecompressVis` | input over-read only: the input pointer is never bounded by `numvisibility`, and a `00 00` pair (zero-length run) advances the input without producing output, so the decoder walks past `map_visibility`; the output is clamped to `row` (at most 4096 of 8192 bytes) | medium | high (ASAN, READ) — **fixed by FIX23** | fixed |
 | D2 | `collision.c` `CM_InitBoxHull` | box-hull leaf written past `map_leafs` when the map uses every leaf slot | high | high (ASAN) — **fixed in this branch** | fixed |
-| D3 | `collision.c` `CM_SetAreaPortalState` | `portalnum` has no lower bound and an off-by-one upper bound | medium | high (ASAN) — negative side **fixed in this branch**; off-by-one remains | FIX23 (off-by-one) |
+| D3 | `collision.c` `CM_SetAreaPortalState` | `portalnum` has no lower bound and an off-by-one upper bound | medium | high (ASAN) — negative side **fixed in this branch**, off-by-one **fixed by FIX23** | fixed |
 | D4 | `filesystem.c` `FS_LoadPAK` | directory read past EOF leaves `info` uninitialised; `Q_strlcpy` then over-reads an unterminated pack name | medium | high | FIX22 |
 | D5 | `filesystem.c` `FS_LoadPAK` | a bare header asks for a ~2 GB `malloc` plus ~2.4 GB `calloc`; failure is `ERR_FATAL` | medium | high | FIX22 |
 | D6 | `filesystem.c` `FS_FOpenFile`/`FS_LoadFile2` | pack entry `offset`/`size` never bounded by the file; negative size leaks the handle, oversize size `ERR_FATAL`s | medium | high | FIX22 |
 | D7 | renderer `Mod_ForName` | 1-2 byte model file read up to 2 bytes past the `length + 1` allocation at the format switch | low | high | FIX17 |
 | D8 | renderer `Mod_ClusterPVS`/`Mod_DecompressVis` | the output is bounded only by `row`, never by the buffer: `numclusters` can give a row of up to 16384 bytes and a zero run is written whole, so the `static decompressed[8192]` overflows on write (the vis offsets are FIX3 item 3) | high | high (ASAN) | FIX17 |
-| D9 | renderer `Mod_NumberLeafs` | a node DAG (shared children, no cycle) walks a leaf 2^n times, overrunning two `int[MAX_MAP_LEAFS]` stack arrays | high | high (ASAN) | FIX17 |
+| D9 | renderer `Mod_NumberLeafs` | a node DAG (shared children, no cycle) walks a leaf 2^n times, overrunning two `int[MAX_MAP_LEAFS]` stack arrays | high | high (ASAN) — **fixed by FIX43** | fixed |
 | D10 | gl1/gl3 `R_SubdivideSurface` | a `SURF_WARP` face with >64 edges overruns `vec3_t verts[64]` on the stack before the vertex-count check | high | high (ASAN) | FIX17 |
 | D11 | renderer faces/edges | `numedges`/`firstedge`/surfedge/`edge.v[]` indices unbounded against `numsurfedges`/`numedges`/`numvertexes`; negative `numedges` gives a negative `Hunk_Alloc` | high | high (static) | FIX17 |
 | D12 | renderer `Mod_LoadFaces` | `lightofs` only tested for `-1`; any other value offsets `lightdata` and is read and uploaded as lightmap texels | medium | high (static) | FIX17 |
@@ -808,6 +809,29 @@ reachability in [Where each asset can come from](#where-each-asset-can-come-from
 Fixed in this branch: D2, D3 (negative side), D15 — each a one-line bound
 check in its loader, committed separately and noted in its row.
 
+Fixed by FIX23 and FIX43. D1: `CM_DecompressVis` ends its input at
+`map_visibility + numvisibility`; when the input runs out, or a zero byte
+has no count byte after it, the rest of the row is visible, as for a map
+with no visibility, so a chain of zero-length runs stops at the end of the
+lump. D3: the upper test is `>=`, so a portal number equal to
+`numareaportals` is refused like one above it, with the same `ERR_DROP`
+("areaportal > numareaportals"), which on a server ends the running map.
+FIX43: both loaders check that the node graph is a forest before anything
+walks it (`CMod_CheckNodeTree` after `CMod_CheckReferences`,
+`Mod_CheckNodeTree` before `Mod_SetParent`). Each node and leaf is marked
+when a node names it as a child, and a second parent is refused; each node
+that no node names is walked with a stack of the checker's own, and a path
+of more than 1024 nodes is refused; a node that no such root reaches lies
+on a cycle and is refused. Each refusal is an `ERR_DROP` that names the
+map. The depth bound also bounds the recursive walks that follow (traces,
+leaf lookups, `Mod_SetParent`, `Mod_NumberLeafs`, the renderers' world
+walks). Every stock map (baseq2, ctf, rogue, xatrix: 109 maps) is a forest
+whose roots are its submodel head nodes, with at most 9507 nodes and at
+most 79 levels (`strike.bsp`), and every `func_areaportal` `style` in them
+is below `numareaportals`. The forest check also closes D9. Regression
+tests: `tests/unit/test_bspgraph.c`, which feeds the same generated maps
+to `CM_LoadMap` and to the shared `Mod_LoadNodes`, compiled into the test.
+
 ## Cards filed
 
 One card per defect class, filed as GitHub Issues under the `trust-boundary`
@@ -825,4 +849,4 @@ here (no harness is committed).
 | FIX20 | #118 | D23, D24, D25, D28, D29, D30 (WAV and the SDL resampler), plus hardening: refuse a sample width other than 1 or 2 | high |
 | FIX21 | #119 | D26 (cinematic still-image name) | high |
 | FIX22 | #120 | D4, D5, D6 (pak directory), plus hardening: the unchecked header `fread` | medium |
-| FIX23 | #121 | D1 and the remaining D3 off-by-one (collision BSP), distinct from FIX3 (#44) / FIX10 (#73) | medium |
+| FIX23 | #121 | D1 and the remaining D3 off-by-one (collision BSP), distinct from FIX3 (#44) / FIX10 (#73); fixed | medium |
