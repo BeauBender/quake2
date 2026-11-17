@@ -32,8 +32,14 @@
 /*
  * True when input from the window system reaches the client: always,
  * except in a pin run (CL_PinsRun, latched from the command line by
- * CL_PinsLatch, never a cvar), where nothing a person does at the
- * keyboard, the mouse or a gamepad may change what is rendered.
+ * CL_PinsLatch, never a cvar). In a pin run the keys and characters are
+ * dropped here, IN_Move moves nothing, and the window-system events of
+ * sdl3.c that pause the game, print or restart the video (focus lost
+ * or gained, the window shown, a gamepad removed or added, a battery
+ * report, on iOS a safe-area or pixel-size change) do none of it;
+ * tests/check-input-gate.sh keeps those cases gated. Other events
+ * (SDL_EVENT_QUIT, a window moved, the sound muted on focus loss) still
+ * act; none of them changes a frame (docs/runbook/FIX48.md).
  */
 qboolean
 IN_InputOpen(void)

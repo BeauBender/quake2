@@ -1380,6 +1380,11 @@ IN_Update(void)
 			case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
 			{
 				/* a rotation, or a screen of another size: the video is made again when the rectangle really moved */
+				/* not in a pin run (FIX48): no vid_restart, the frames keep the size they were made at */
+				if (!IN_InputOpen())
+				{
+					break;
+				}
 				GLimp_ScreenEvent();
 				break;
 			}
@@ -1536,18 +1541,24 @@ IN_Update(void)
 #endif	// !NO_SDL_GYRO
 
 			case SDL_EVENT_GAMEPAD_REMOVED :
+				/* a pin run (FIX48) leaves the gamepad alone: no pause, no shutdown, no init, nothing printed */
+				if (!IN_InputOpen())
+				{
+					break;
+				}
 				if (controller && event.gdevice.which == SDL_GetJoystickID(SDL_GetGamepadJoystick(controller))) {
-					/* a pin run (FIX48) is never paused by the window system */
-					if (IN_InputOpen())
-					{
-						Cvar_SetValue("paused", 1);
-					}
+					Cvar_SetValue("paused", 1);
 					IN_Controller_Shutdown(true);
 					IN_Controller_Init(false);
 				}
 				break;
 
 			case SDL_EVENT_JOYSTICK_ADDED :
+				/* a pin run (FIX48) looks for no gamepad: no init, nothing printed */
+				if (!IN_InputOpen())
+				{
+					break;
+				}
 				// a physical device is preferred over the touch controls: look again
 				if (!controller || (touch_in_use && event.jdevice.which != touch_joy_id))
 				{
@@ -1558,7 +1569,8 @@ IN_Update(void)
 				break;
 
 			case SDL_EVENT_JOYSTICK_BATTERY_UPDATED :
-				if (!controller || event.jbattery.which != SDL_GetJoystickID(SDL_GetGamepadJoystick(controller)))
+				/* nothing is printed in a pin run (FIX48) */
+				if (!IN_InputOpen() || !controller || event.jbattery.which != SDL_GetJoystickID(SDL_GetGamepadJoystick(controller)))
 				{
 					break;
 				}
