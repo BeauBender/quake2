@@ -27,6 +27,7 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK53](../runbook/TASK53.md): Acceleration structures in `ref_metal` (RT1)
 - [TASK54](../runbook/TASK54.md): The G-buffer and the lighting resolve in `ref_metal` (RT2)
 - [TASK55](../runbook/TASK55.md): Ray-traced shadows from dynamic lights in `ref_metal` (RT3)
+- [TASK56](../runbook/TASK56.md): Ray-traced sun and sky shadow with a per-map direction table in `ref_metal` (RT4)
 - [TASK57](../runbook/TASK57.md): Ray-traced ambient occlusion in `ref_metal` (RT5)
 - [TASK58](../runbook/TASK58.md): Ray-traced water reflections in `ref_metal` (RT6)
 - [TASK70](../runbook/TASK70.md): Observed on the scripted water demo
