@@ -457,20 +457,23 @@ judge_pin() {
 # cfg_frames <cfg> <demo>: the number of frames the scenario expects the
 # engine to render when it plays <demo>, from the "// frames <demo> <count>"
 # line of its header comment; empty when it names none for <demo>. A line
-# that looks like one ("//", "frames", then a word ending in .dm2 or .cin)
-# and does not parse, or a second one for the same demo, is an error, never
-# skipped. The callers take the value with
+# that looks like one ("//", "frames", then a word ending in .dm2 or .cin,
+# in any case) and does not parse, one below the header (after the first
+# line that is not a comment), or a second one for the same demo, is an
+# error, never skipped. The callers take the value with
 # "|| exit 1", so a death inside $(...) stops them as well.
 cfg_frames() {
-    local line want="" fr d c
+    local line want="" fr d c body=0
     while IFS= read -r line || [ -n "$line" ]; do
         case $line in
             ''|//*) ;;
-            *) break;;
+            *) body=1;;
         esac
-        if [[ $line =~ ^[[:space:]]*//[[:space:]]*frames[[:space:]]+[^[:space:]]+\.(dm2|cin) ]]; then
-            [[ $line =~ ^//\ frames\ [A-Za-z0-9_][A-Za-z0-9_.-]*\.(dm2|cin)\ [1-9][0-9]{0,8}$ ]] && [[ $line != *..* ]] ||
-                die "$1: a frames line is '// frames <demo> <count>' with single spaces, got: $line"
+        if [[ $line =~ ^[[:space:]]*//[[:space:]]*[Ff][Rr][Aa][Mm][Ee][Ss][[:space:]]+[^[:space:]]+\.([Dd][Mm]2|[Cc][Ii][Nn]) ]]; then
+            [ "$body" -eq 0 ] ||
+                die "$1: a frames line belongs in the header comment, above the first line that is not a comment, got: $line"
+            [[ $line =~ ^//\ frames\ [a-z0-9_][a-z0-9_.-]*\.(dm2|cin)\ [1-9][0-9]{0,8}$ ]] && [[ $line != *..* ]] ||
+                die "$1: a frames line is '// frames <demo> <count>' in lower case with single spaces, got: $line"
             read -r fr fr d c <<< "$line"
             if [ "$d" = "$2" ]; then
                 [ -z "$want" ] || die "$1: two frames lines for $2"
@@ -482,10 +485,14 @@ cfg_frames() {
 }
 # rendered_frames <timedemo.txt>: the count of the one "<n> frames, <s>
 # seconds: <f> fps" line the engine printed when the demo ended (the
-# timedemo, cl_network.c); empty when there is not exactly one
+# timedemo, cl_network.c); empty when there is not exactly one, or when its
+# count is not what the engine's %i prints for a frame count: 1 to 9 digits
+# without a leading zero, so [ can always compare it (a 20-digit count is
+# no count, never a pass)
 rendered_frames() {
     [ -f "$1" ] || return 0
-    awk '/^[0-9]+ frames, [0-9.]+ seconds: [0-9.]+ fps$/ { n++; c = $1 } END { if (n == 1) print c }' "$1"
+    awk '/^[0-9]+ frames, [0-9.]+ seconds: [0-9.]+ fps$/ { n++; c = $1 }
+        END { if (n == 1 && c ~ /^[1-9][0-9]*$/ && length(c) <= 9) print c }' "$1"
 }
 # judge_frames <timedemo.txt> <scenario> <demo> <what>: sets reason when the
 # rendered-frame count in <timedemo.txt> is not the one the scenario expects
@@ -740,13 +747,22 @@ cmd_replay() {
     [ "$th_every" -eq "${PINS_EVERY:-30}" ] || die "the trace was captured every $th_every frames, PINS_EVERY is ${PINS_EVERY:-30}$pick"
     # the record's rendered-frame count, judged as record judges it (FIX48), by
     # the demo its settings.txt names; a record made before FIX48 names none
-    # (written into replay.txt as its frames-check line)
-    local reason="" rdemo fcheck="unchecked: the record names no demo (made before FIX48)"
+    # (written into replay.txt as its frames-check line: checked, with the
+    # count, or unchecked, with why)
+    local reason="" rdemo rwant fcheck="unchecked: the record names no demo (made before FIX48)"
     rdemo=$(sed -n 's/^demo \([A-Za-z0-9_][A-Za-z0-9_.-]*\)$/\1/p' "$tdir/settings.txt" 2>/dev/null | tail -n 1)
     if [ -n "$rdemo" ]; then
-        fcheck="$rdemo against $scenario.cfg"
+        rwant=$(cfg_frames "$scen_dir/$scenario.cfg" "$rdemo") || exit 1
+        if [ -n "$rwant" ]; then
+            fcheck="$rdemo against $scenario.cfg ($rwant)"
+        else
+            fcheck="unchecked: $scenario.cfg names no count for $rdemo"
+        fi
         judge_frames "$tdir/timedemo.txt" "$scenario" "$rdemo" "the record $scenario/$from/$trace_id"
         [ -z "$reason" ] || die "$reason; it is not replayed"
+    else
+        rwant=$(rendered_frames "$tdir/timedemo.txt")
+        echo "pins: the record $scenario/$from/$trace_id names no demo (made before FIX48); its ${rwant:-uncounted} rendered frames are not checked" >&2
     fi
     # the replay's own pin: never a live record's directory, never through a link
     # the seed is part of the id, as it is of a record's: two seeds are two pins
@@ -2481,6 +2497,11 @@ st_frame_count() { # FIX48: a run whose rendered-frame count is not the scenario
     if (PINS_BASEDIR="$tmp/gd" FAKE_FRAMES=688 cmd_record gl1 world) >/dev/null 2>&1; then st_fail "one frame short must fail too"; return 1; fi
     rep=$( (PINS_BASEDIR="$tmp/gd" FAKE_FRAMES=none cmd_record gl1 world) 2>&1 ) && { st_fail "a record with no rendered-frame count must fail when the scenario expects one"; return 1; }
     case $rep in *"printed no rendered-frame count"*"expects 689 for demo1.dm2"*) ;; *) st_fail "a missing count must be named, got: $rep"; return 1;; esac
+    # a count [ cannot compare, or one the engine's %i never prints, is no count (r1 security N1)
+    for line in 99999999999999999999 0689 1234567890; do
+        rep=$( (PINS_BASEDIR="$tmp/gd" FAKE_FRAMES=$line cmd_record gl1 world) 2>&1 ) && { st_fail "a count of '$line' frames must fail, not pass"; return 1; }
+        case $rep in *"printed no rendered-frame count"*) ;; *) st_fail "a count of '$line' frames must be no count, got: $rep"; return 1;; esac
+    done
     # two count lines are not one count
     fake_engine "$tmp/fake-twice" - 'echo "689 frames, 0.3 seconds: 2296.7 fps"; exit 0'
     if (PINS_BASEDIR="$tmp/gd" PINS_BIN="$tmp/fake-twice" cmd_record gl1 world) >/dev/null 2>&1; then st_fail "two rendered-frame counts must fail"; return 1; fi
@@ -2494,13 +2515,29 @@ st_frame_count() { # FIX48: a run whose rendered-frame count is not the scenario
     replay_no "the record world/gl1/rec1 rendered 794 frames, world.cfg expects 689 for demo1.dm2" soft world --trace-of gl1 --ref-id rec1 || return 1
     printf '%s\n\n' '689 frames, 0.4 seconds: 1722.5 fps' > "$PINS_STORE/world/gl1/rec1/timedemo.txt"
     PINS_BASEDIR="$tmp/gd" replay_ok soft world --trace-of gl1 --ref-id rec1 || return 1
+    # replay.txt says whether the count was checked, and against what (r1 I1)
+    local rp; rp="$PINS_STORE/world/soft/$(engine_sha)-replay-gl1-rec1/replay.txt"
+    grep -qx 'frames-check demo1.dm2 against world.cfg (689)' "$rp" ||
+        st_fail "a checked replay must say so with the count, got: $(grep frames-check "$rp")" || return 1
+    printf '%s\n' 'hidpi 0' 'demo water.dm2' > "$PINS_STORE/world/gl1/rec1/settings.txt"
+    PINS_BASEDIR="$tmp/gd" replay_ok soft world --trace-of gl1 --ref-id rec1 --replace || return 1
+    grep -qx 'frames-check unchecked: world.cfg names no count for water.dm2' "$rp" ||
+        st_fail "a replay of a demo world.cfg has no count for must say it was not checked, got: $(grep frames-check "$rp")" || return 1
+    # a record that names no demo: stderr gives its own count (r1 security N2)
+    printf '%s\n' 'hidpi 0' > "$PINS_STORE/world/gl1/rec1/settings.txt"
+    printf '%s\n\n' '794 frames, 0.4 seconds: 1985.0 fps' > "$PINS_STORE/world/gl1/rec1/timedemo.txt"
+    rep=$( (PINS_BASEDIR="$tmp/gd" cmd_replay soft world --trace-of gl1 --ref-id rec1 --replace) 2>&1 >/dev/null ) || { st_fail "a record that names no demo must replay: $rep"; return 1; }
+    case $rep in *"the record world/gl1/rec1 names no demo (made before FIX48); its 794 rendered frames are not checked"*) ;; *) st_fail "an unchecked record must give its count on stderr, got: $rep"; return 1;; esac
+    grep -qx 'frames-check unchecked: the record names no demo (made before FIX48)' "$rp" ||
+        st_fail "a replay of a record that names no demo must say it was not checked, got: $(grep frames-check "$rp")" || return 1
     # a scenario with no count for the demo played: nothing checks it, and stderr says so
     mkdir -p "$tmp/scen"; local scen_dir="$tmp/scen"
     grep -v '^// frames ' "$root/scripts/pins/scenarios/world.cfg" > "$tmp/scen/world.cfg"
     rep=$( (PINS_BASEDIR="$tmp/gd" FAKE_FRAMES=1234 cmd_record gl1 world --run 2) 2>&1 >/dev/null ) || { st_fail "a scenario with no frames line must record: $rep"; return 1; }
     case $rep in *"world.cfg names no rendered-frame count for demo1.dm2"*"1234 rendered frames are not checked"*) ;; *) st_fail "an unchecked count must be said on stderr, got: $rep"; return 1;; esac
     # a frames line that does not parse is an error, never skipped
-    for line in '// frames demo1.dm2' '// frames demo1.dm2 0' '// frames demo1.dm2 68x' '//frames demo1.dm2 689' '// frames  demo1.dm2 689' '// frames ../x.dm2 689'; do
+    for line in '// frames demo1.dm2' '// frames demo1.dm2 0' '// frames demo1.dm2 68x' '//frames demo1.dm2 689' '// frames  demo1.dm2 689' '// frames ../x.dm2 689' \
+            '// Frames demo1.dm2 689' '// FRAMES demo1.dm2 689' '// frames DEMO1.dm2 689' '// frames demo1.DM2 689' '// frames demo1.Cin 689'; do
         { printf '%s\n' '// a scenario' "$line"; cat "$tmp/scen/world.cfg"; } > "$tmp/scen/badx.cfg"
         rep=$( (cfg_frames "$tmp/scen/badx.cfg" demo1.dm2) 2>&1 ) && { st_fail "the frames line '$line' must be refused"; return 1; }
         case $rep in *"a frames line is '// frames <demo> <count>'"*) ;; *) st_fail "'$line' must be refused by name, got: $rep"; return 1;; esac
@@ -2508,6 +2545,12 @@ st_frame_count() { # FIX48: a run whose rendered-frame count is not the scenario
     { printf '%s\n' '// frames demo1.dm2 689' '// frames demo1.dm2 690'; cat "$tmp/scen/world.cfg"; } > "$tmp/scen/badx.cfg"
     if (cfg_frames "$tmp/scen/badx.cfg" demo1.dm2) >/dev/null 2>&1; then st_fail "two frames lines for one demo must be refused"; return 1; fi
     [ "$(cfg_frames "$tmp/scen/badx.cfg" water.dm2)" = "" ] || st_fail "a demo with no line has no count" || return 1
+    # a frames line below the header is refused, not skipped (r1 security N3, correctness N2)
+    for line in '// frames demo1.dm2 689' '  // frames demo2.dm2 100' '// Frames demo1.dm2 689'; do
+        { cat "$tmp/scen/world.cfg"; printf '%s\n' "$line"; } > "$tmp/scen/badx.cfg"
+        rep=$( (cfg_frames "$tmp/scen/badx.cfg" demo1.dm2) 2>&1 ) && { st_fail "the frames line '$line' below the header must be refused"; return 1; }
+        case $rep in *"a frames line belongs in the header comment"*) ;; *) st_fail "'$line' below the header must be refused by name, got: $rep"; return 1;; esac
+    done
     rm -f "$tmp/scen/badx.cfg" "$tmp/scen/world.cfg"
 }
 st_timeout() { # C-I2c: fake-hang exits 0 on TERM, like the engine; only the timeout flag can fail the record

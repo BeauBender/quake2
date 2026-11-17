@@ -192,7 +192,11 @@ exited 0 and logged nothing unusual, and the record held other frames
   typed character reaches the console, the menu or a key binding, so
   `Esc`, the console key and a key bound to `quit` do nothing, and the
   mouse, the sticks and the gyro do not move the view. A focus change
-  does not pause the game either. The window's close button still quits
+  does not pause the game either, and a gamepad pulled out or plugged
+  in, a low gamepad battery, or on iOS a rotation does nothing: no pause,
+  no message on the screen, no `vid_restart` (a message printed during a
+  record is drawn into its frames). `tests/check-input-gate.sh` keeps
+  these cases gated. The window's close button still quits
   the engine, so a run can be stopped. Without the pin arguments input
   reaches the game exactly as before. A replay runs no input at all.
 - **The rendered-frame count is checked.** A scenario's header comment
@@ -202,14 +206,22 @@ exited 0 and logged nothing unusual, and the record held other frames
   the renderer or the scenario's other settings, so every scenario that
   plays `demo1.dm2` has `// frames demo1.dm2 689`. `record` fails, with
   one line naming both counts, when the engine printed another count, no
-  count or more than one; the pin is left incomplete. `record` writes
+  count or more than one; the pin is left incomplete. A count is 1 to 9
+  digits without a leading zero, as the engine prints it; any other
+  number is no count. `record` writes
   `demo <PINS_DEMO>` into `settings.txt`, and `replay` checks the record
   it replays the same way before it starts an engine. A demo without a
   `// frames` line (a demo made with `make-demo`, whose count changes
-  each time it is made, or `demo2.dm2`), and the cinematic, which prints
+  each time it is made), and the cinematic, which prints
   no count, are not checked: `record` says so in one line on stderr and
   records. A record made before FIX48 has no `demo` line and is replayed
-  unchecked; the `frames-check` line of `replay.txt` says which it was.
+  unchecked, with one line on stderr that gives the record's own count.
+  The `frames-check` line of `replay.txt` says which it was: `frames-check
+  demo1.dm2 against world.cfg (689)` when the count was checked, or
+  `frames-check unchecked: ...` with the reason. A frames line is
+  written in lower case, in the header comment; one in another case
+  (`// Frames`, `DEMO1.dm2`) or below the first line that is not a
+  comment is refused before an engine runs, never skipped.
 
 A new scenario gets its count from the scenario it is derived from: all
 of them play the same demo, so it copies the `// frames demo1.dm2 689`

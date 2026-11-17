@@ -62,9 +62,10 @@ Rules:
   renders playing it (`timedemo.txt`), 689 for `demo1.dm2` in every
   scenario. `record` and `replay` fail when a run rendered another number
   (FIX48, `doc/100_renderpins.md`, *Input and the rendered-frame count*).
-  A made demo such as `water.dm2`, `demo2.dm2` and the cinematic have no
-  line and are not checked. A new scenario copies the line of the one it
-  is derived from.
+  `dlights` also has one for `demo2.dm2`. A made demo such as `water.dm2`
+  and the cinematic have no line and are not checked. The line is in
+  lower case and in the header; one in another case or below it is
+  refused. A new scenario copies the line of the one it is derived from.
 
 ## Content
 
