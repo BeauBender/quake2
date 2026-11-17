@@ -494,6 +494,12 @@ mgl_present_take(int w, int h)
 
 	frame_slot = slot;
 	mgl_present_since[slot] = 0;   /* the slot's last present has completed */
+
+	if (mgl_present_hold[slot])
+	{
+		mgl_hold_take(&mgl_present_hold[slot]->hold);   /* and a drop waits for the slot again (FIX84) */
+	}
+
 	return mgl_present_target[slot];
 }
 
@@ -1635,6 +1641,7 @@ mgl_layer_present(void)
 void
 mgl_layer_destroy(void)
 {
+	dispatch_time_t until;
 	int i;
 
 	if (!mgl_ready)
@@ -1671,11 +1678,14 @@ mgl_layer_destroy(void)
 		 * The completion handlers are code in this dylib: one that arrives after
 		 * this wait gives up, and after the engine unloads the module, would run
 		 * unmapped code. It needs a GPU hung past MGL_GPU_WAIT_MS and is not
-		 * handled yet (design section 7, notes for the next card).
+		 * handled yet (design section 7, notes for the next card). The frames
+		 * share one deadline (FIX84), and mgl_release_all waits for none.
 		 */
+		until = mgl_deadline(MGL_GPU_WAIT_MS);
+
 		for (i = 0; i < MGL_FRAMES_IN_FLIGHT; i++)
 		{
-			if (dispatch_semaphore_wait(mgl_frame_sem, mgl_deadline(MGL_GPU_WAIT_MS)) != 0)
+			if (dispatch_semaphore_wait(mgl_frame_sem, until) != 0)
 			{
 				break;
 			}

@@ -48,6 +48,7 @@
 #include <string.h>
 
 #include "header/rmb.h"
+#include "header/rmb_drain.h"
 
 #if !__has_feature(objc_arc)
 #error "rmb_device.m is written for ARC: compile it with -fobjc-arc"
@@ -76,6 +77,7 @@ void rmb_encode_release(void);
 
 static atomic_ulong rmb_failed;
 static int rmb_sync = 1;
+static rmb_frames_t rmb_frames;   /* the frame slots a drain gave up on, until rmb_attach (header/rmb_drain.h, FIX84) */
 
 dispatch_time_t
 rmb_deadline(long ms)
@@ -132,10 +134,13 @@ rmb_frame_wait_ms(void)
  * Turning display sync on and teardown wait for that, bounded, before the
  * present state is released (rmb_present_drain, FIX69), so no handler or
  * block runs after its state is gone. A drain that gives up at the bound
- * leaves those presents to their group and starts a new one, so the next
- * drain neither waits for them nor counts them again (FIX77).
+ * leaves those presents to their group and marks it, so a later drain of
+ * it neither waits for them nor counts them again (FIX77); the next present
+ * starts a new group, and a drain of that one waits again (FIX84). The
+ * decisions are header/rmb_drain.h's, on the groups' identities.
  */
 #define RMB_PRESENTS (RMB_FRAMES_IN_FLIGHT + 1)   /* maximumDrawableCount (rmb_attach), and the open frame */
+#define RMB_GROUP_ID(g) ((__bridge const void *)(g))   /* a group's identity for header/rmb_drain.h: compared, never kept */
 
 static dispatch_queue_t rmb_ahead_queue;
 static os_unfair_lock rmb_ahead_lock = OS_UNFAIR_LOCK_INIT;
@@ -146,6 +151,7 @@ static id<MTLCommandQueue> rmb_present_queue;
 static dispatch_queue_t rmb_present_order;   /* serial: commits each present once its frame has completed */
 static dispatch_group_t rmb_present_group;   /* the command buffers committed while the open frame holds a slot */
 static dispatch_group_t rmb_present_live;    /* the presents handed to rmb_present_order, until they are done (FIX69) */
+static dispatch_group_t rmb_present_spent;   /* the group a drain gave up on: not waited for again (FIX84) */
 static dispatch_semaphore_t rmb_present_sem[RMB_PRESENTS];   /* 1: no frame and no present holds this slot */
 static id<MTLTexture> rmb_present_target[RMB_PRESENTS];      /* the target the slot's frame is drawn into */
 static int rmb_present_slot = -1;              /* the slot the open frame holds, or -1 */
@@ -227,38 +233,42 @@ rmb_present_target_drop(int i)
  * Waits, at most until, for every present handed to rmb_present_order to
  * be done: its block there and both of its completed handlers have run
  * (FIX69); 1 when they are. A wait that ends at the bound is counted and
- * logged, and the presents it gave up on are left to their group, which
- * their blocks hold: the presents after them go in a new one, so a later
- * drain (teardown drains twice, from RI_ShutdownContext and rmb_close)
- * neither waits for them again nor counts them again (FIX77).
+ * logged, 0, and marks the group (rmb_present_spent): the presents it gave
+ * up on are left to it, which their blocks hold, and a later drain of it
+ * (teardown drains twice, from RI_ShutdownContext and rmb_close) neither
+ * waits for them again nor counts them again (FIX77): -1, at once. Only
+ * that group is marked: the next present starts a new one
+ * (rmb_present_commit), and a drain of the new one waits again (FIX84).
  */
 static int
 rmb_present_drain(dispatch_time_t until)
 {
-	dispatch_group_t next;
+	const void *live = RMB_GROUP_ID(rmb_present_live), *spent = RMB_GROUP_ID(rmb_present_spent);
+	int done = 1, result;
 
-	if (!rmb_present_live || (dispatch_group_wait(rmb_present_live, until) == 0))
+	if (rmb_present_drain_waits(live, spent))
 	{
-		return 1;
+		done = (dispatch_group_wait(rmb_present_live, until) == 0);
 	}
 
-	rmb_counts.present_drains_late++;
-	fprintf(stderr, "ref_metal: a present is still on its way after %d ms\n", RMB_GPU_WAIT_MS);
-	next = dispatch_group_create();
+	result = rmb_present_drain_result(live, spent, done);
 
-	if (next)
+	if (rmb_present_drain_marks(result, 0))
 	{
-		rmb_present_live = next;
+		rmb_counts.present_drains_late++;
+		fprintf(stderr, "ref_metal: a present is still on its way after %d ms\n", RMB_GPU_WAIT_MS);
+		rmb_present_spent = rmb_present_live;
 	}
 
-	return 0;
+	return result;
 }
 
 /*
  * Waits for the acquisition on the queue (bounded, as nextDrawable is),
  * for every present to be done and every present slot but the open
  * frame's to be free (bounded, RMB_GPU_WAIT_MS for them all), and drops
- * the drawable acquired ahead and the targets.
+ * the drawable acquired ahead and the targets. A drain of a group given up
+ * on waits for nothing (rmb_present_drain).
  */
 static void
 rmb_ahead_drop(void)
@@ -282,17 +292,20 @@ rmb_ahead_drop(void)
 		}
 
 		/*
-		 * With every present done a slot is free, unless a present that
-		 * an earlier drain gave up on holds it: that one is not waited for
-		 * again (FIX77).
+		 * With every present of the group done a slot is free, unless a
+		 * present of a group an earlier drain gave up on holds it: waited
+		 * for with the same deadline (FIX84). A slot still held then marks
+		 * the group as the drain's own bound does, so the second drain of
+		 * teardown waits for none (FIX77).
 		 */
-		if (dispatch_semaphore_wait(rmb_present_sem[i], done ? DISPATCH_TIME_NOW : until) == 0)
+		if (dispatch_semaphore_wait(rmb_present_sem[i], rmb_present_slot_waits(done) ? until : DISPATCH_TIME_NOW) == 0)
 		{
 			dispatch_semaphore_signal(rmb_present_sem[i]);
 		}
-		else if (!done)
+		else if (rmb_present_drain_marks(done, 1))
 		{
 			fprintf(stderr, "ref_metal: a present is still on the GPU after %d ms\n", RMB_GPU_WAIT_MS);
+			rmb_present_spent = rmb_present_live;
 		}
 	}
 
@@ -496,6 +509,20 @@ rmb_present_commit(void)
 		return;
 	}
 
+	/* the group a drain gave up on keeps only the presents it gave up on: this one starts a new one (FIX84) */
+	if (rmb_present_new_group(RMB_GROUP_ID(rmb_present_live), RMB_GROUP_ID(rmb_present_spent)))
+	{
+		live = dispatch_group_create();
+
+		if (!live)
+		{
+			dispatch_semaphore_signal(sem);   /* not presented: no drain would wait for it */
+			return;
+		}
+
+		rmb_present_live = live;
+	}
+
 	/* in flight until the block below and both completed handlers have run (rmb_present_drain, FIX69) */
 	live = rmb_present_live;
 	dispatch_group_enter(live);   /* rmb_watch_until's handler */
@@ -674,6 +701,7 @@ rmb_open(rmb_caps_t *caps, char *err, size_t errlen)
 		rmb_present_queue = [rmb_device newCommandQueue];
 		rmb_present_order = dispatch_queue_create("ref_metal present", DISPATCH_QUEUE_SERIAL);
 		rmb_present_live = dispatch_group_create();
+		rmb_present_spent = nil;
 		rmb_present_group = nil;
 		rmb_present_slot = -1;
 
@@ -714,6 +742,7 @@ rmb_open(rmb_caps_t *caps, char *err, size_t errlen)
 		/* created at 0 and raised to 3: libdispatch traps on a semaphore
 		   released below its initial value (a frame on a hung GPU at teardown) */
 		rmb_frame_sem = dispatch_semaphore_create(0);
+		rmb_frames_reset(&rmb_frames);
 
 		for (i = 0; i < RMB_FRAMES_IN_FLIGHT; i++)
 		{
@@ -786,6 +815,7 @@ rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen)
 	}
 
 	rmb_detach();
+	rmb_frames_reset(&rmb_frames);   /* frames begin on the new layer: a drain waits for every slot again (FIX84) */
 #if TARGET_OS_OSX
 	rmb_sync = vsync ? 1 : 0;
 #else
@@ -816,11 +846,21 @@ rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen)
 	return 1;
 }
 
-/* Takes every frame slot back (bounded), then returns them: no frame is on the GPU after it. */
+/*
+ * Takes every frame slot back, then returns them: no frame is on the GPU
+ * after it. The slots share one deadline, RMB_GPU_WAIT_MS; those still
+ * held then are given up on (rmb_frames, header/rmb_drain.h), and a later
+ * drain before the next layer is attached (teardown's second rmb_detach,
+ * from rmb_close, and rmb_attach's own) takes them back only if they are free
+ * at once, as the shim's mgl_release_all waits for no frame (FIX84). A
+ * frame begins only with a layer (rmb_frame_begin), so until rmb_attach
+ * the slots given up on are those the hung frames hold.
+ */
 static void
 rmb_drain(void)
 {
-	int i, got = 0;
+	dispatch_time_t until = rmb_deadline(RMB_GPU_WAIT_MS);
+	int i, got = 0, wait = rmb_frames_wait(&rmb_frames);
 
 	if (!rmb_frame_sem)
 	{
@@ -829,13 +869,17 @@ rmb_drain(void)
 
 	for (i = 0; i < RMB_FRAMES_IN_FLIGHT; i++)
 	{
-		if (dispatch_semaphore_wait(rmb_frame_sem, rmb_deadline(RMB_GPU_WAIT_MS)) != 0)
+		if (dispatch_semaphore_wait(rmb_frame_sem, (i < wait) ? until : DISPATCH_TIME_NOW) != 0)
 		{
-			fprintf(stderr, "ref_metal: the GPU still holds a frame after %d ms\n", RMB_GPU_WAIT_MS);
 			break;
 		}
 
 		got++;
+	}
+
+	if (rmb_frames_drained(&rmb_frames, got))
+	{
+		fprintf(stderr, "ref_metal: the GPU still holds a frame after %d ms\n", RMB_GPU_WAIT_MS);
 	}
 
 	for (i = 0; i < got; i++)
@@ -896,6 +940,7 @@ rmb_close(rmb_stats_t *stats, rm_ledger_t *ledger)
 			rmb_present_order = nil;
 			rmb_present_group = nil;
 			rmb_present_live = nil;     /* likewise: each present's blocks hold it until they have run */
+			rmb_present_spent = nil;
 
 			for (i = 0; i < RMB_PRESENTS; i++)
 			{

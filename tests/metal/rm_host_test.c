@@ -40,6 +40,7 @@
 
 #include "../../src/client/refresh/ref_shared.h"
 #include "../../src/client/refresh/metal/header/rmb.h"
+#include "../../src/client/refresh/metal/header/rmb_drain.h"
 #include "../../src/client/refresh/metal/common/mtl_matrix.h"
 #include "../../src/client/refresh/metal/common/mtl_ring.h"
 #include "../../src/client/refresh/metal/common/mtl_shader_math.h"
@@ -8444,6 +8445,136 @@ test_2d_sharp(void)
 	}
 }
 
+/*
+ * ref_metal's frame slots at teardown (header/rmb_drain.h, rmb_drain,
+ * FIX84). The first rmb_detach of teardown on a GPU that holds two frames
+ * takes one slot back and gives up on the other two; the second waits
+ * for the one it took back only, not for the frames the first gave up on,
+ * and logs nothing more. A frame that ended in between is taken back and
+ * no longer lost. rmb_attach's reset waits for every slot again.
+ */
+static void
+test_frames_drain(void)
+{
+	rmb_frames_t f = { RMB_FRAMES_IN_FLIGHT };   /* as a drain on a hung GPU leaves it */
+
+	CHECK(rmb_frames_wait(&f) == 0);
+	rmb_frames_reset(&f);
+	CHECK(f.lost == 0);
+	CHECK(rmb_frames_wait(&f) == RMB_FRAMES_IN_FLIGHT);
+
+	/* a GPU that is not hung: every slot taken back, nothing given up on */
+	CHECK(rmb_frames_drained(&f, RMB_FRAMES_IN_FLIGHT) == 0);
+	CHECK(f.lost == 0);
+	CHECK(rmb_frames_wait(&f) == RMB_FRAMES_IN_FLIGHT);
+
+	/* the first detach: two frames hung, one slot taken back, logged */
+	CHECK(rmb_frames_drained(&f, 1) == 1);
+	CHECK(f.lost == 2);
+
+	/* the second detach waits for the slot taken back, not the two lost, and logs nothing */
+	CHECK(rmb_frames_wait(&f) == 1);
+	CHECK(rmb_frames_drained(&f, 1) == 0);
+	CHECK(f.lost == 2);
+	CHECK(rmb_frames_wait(&f) == 1);
+
+	/* a hung frame ended meanwhile: taken back at once, no longer lost */
+	CHECK(rmb_frames_drained(&f, 2) == 0);
+	CHECK(f.lost == 1);
+	CHECK(rmb_frames_wait(&f) == 2);
+
+	/* every frame hung: the next drain waits for none and gives up on none */
+	CHECK(rmb_frames_drained(&f, 0) == 1);
+	CHECK(f.lost == RMB_FRAMES_IN_FLIGHT);
+	CHECK(rmb_frames_wait(&f) == 0);
+	CHECK(rmb_frames_drained(&f, 0) == 0);
+	CHECK(f.lost == RMB_FRAMES_IN_FLIGHT);
+
+	/* rmb_attach: frames begin on the new layer, every slot is waited for again */
+	rmb_frames_reset(&f);
+	CHECK(f.lost == 0);
+	CHECK(rmb_frames_wait(&f) == RMB_FRAMES_IN_FLIGHT);
+	CHECK(rmb_frames_drained(&f, 0) == 1);
+
+	/* out of range, bounded to 0 to RMB_FRAMES_IN_FLIGHT */
+	f.lost = -1;
+	CHECK(rmb_frames_wait(&f) == RMB_FRAMES_IN_FLIGHT);
+	f.lost = RMB_FRAMES_IN_FLIGHT + 1;
+	CHECK(rmb_frames_wait(&f) == 0);
+	rmb_frames_reset(&f);
+	CHECK(rmb_frames_drained(&f, -1) == 1);
+	CHECK(f.lost == RMB_FRAMES_IN_FLIGHT);
+	rmb_frames_reset(&f);
+	CHECK(rmb_frames_drained(&f, RMB_FRAMES_IN_FLIGHT + 1) == 0);
+	CHECK(f.lost == 0);
+}
+
+/*
+ * ref_metal's present drain at teardown (header/rmb_drain.h, FIX84), on
+ * the identities of two groups. A drain of group a that gives up marks a,
+ * and only a. A drain of a again (teardown's second, or teardown after a
+ * give-up in rmb_attach's rmb_detach with nothing presented since) waits
+ * for nothing, its slots included. The next present starts group b; a
+ * drain of b waits the shared deadline, and so does a slot a present of a
+ * still holds after b is done (before FIX84 a drain after a give-up drained
+ * a new, empty group and took its slots only if free at once). A slot
+ * still held at the bound then marks b, as b's own bound does.
+ */
+static void
+test_present_drain(void)
+{
+	int ga, gb;
+	const void *a = &ga, *b = &gb, *live = a, *spent = NULL;
+
+	/* no group yet: done, nothing waited for, nothing marked */
+	CHECK(!rmb_present_drain_waits(NULL, NULL));
+	CHECK(!rmb_present_drain_waits(NULL, a));
+	CHECK(rmb_present_drain_result(NULL, NULL, 0) == RMB_DRAIN_DONE);
+	CHECK(rmb_present_drain_result(NULL, a, 0) == RMB_DRAIN_DONE);
+	CHECK(!rmb_present_new_group(NULL, NULL));
+
+	/* a drain of a whose presents are done: waits, marks nothing */
+	CHECK(rmb_present_drain_waits(live, spent));
+	CHECK(rmb_present_drain_result(live, spent, 1) == RMB_DRAIN_DONE);
+	CHECK(rmb_present_slot_waits(RMB_DRAIN_DONE));
+	CHECK(!rmb_present_drain_marks(RMB_DRAIN_DONE, 0));
+	CHECK(!rmb_present_new_group(live, spent));
+
+	/* a drain of a that gives up at the bound marks a */
+	CHECK(rmb_present_drain_result(live, spent, 0) == RMB_DRAIN_LATE);
+	CHECK(rmb_present_drain_marks(RMB_DRAIN_LATE, 0));
+	CHECK(rmb_present_drain_marks(RMB_DRAIN_LATE, 1));
+	CHECK(rmb_present_slot_waits(RMB_DRAIN_LATE));
+	spent = live;
+
+	/* a drain of the same group does not wait again, for the group or its slots */
+	CHECK(!rmb_present_drain_waits(live, spent));
+	CHECK(rmb_present_drain_result(live, spent, 0) == RMB_DRAIN_SPENT);
+	CHECK(rmb_present_drain_result(live, spent, 1) == RMB_DRAIN_SPENT);
+	CHECK(!rmb_present_slot_waits(RMB_DRAIN_SPENT));
+	CHECK(!rmb_present_drain_marks(RMB_DRAIN_SPENT, 0));
+	CHECK(!rmb_present_drain_marks(RMB_DRAIN_SPENT, 1));
+
+	/* the next present starts b: a keeps only the presents given up on */
+	CHECK(rmb_present_new_group(live, spent));
+	live = b;
+	CHECK(!rmb_present_new_group(live, spent));
+
+	/* a drain of the new group waits the shared deadline */
+	CHECK(rmb_present_drain_waits(live, spent));
+	CHECK(rmb_present_drain_result(live, spent, 1) == RMB_DRAIN_DONE);
+	CHECK(rmb_present_drain_result(live, spent, 0) == RMB_DRAIN_LATE);
+
+	/* b done: a slot a present of a holds is waited for, and marks b if still held */
+	CHECK(rmb_present_slot_waits(RMB_DRAIN_DONE));
+	CHECK(rmb_present_drain_marks(RMB_DRAIN_DONE, 1));
+	spent = live;
+	CHECK(!rmb_present_drain_waits(live, spent));
+	CHECK(rmb_present_drain_result(live, spent, 1) == RMB_DRAIN_SPENT);
+	CHECK(rmb_present_new_group(live, spent));
+	CHECK(!rmb_present_new_group(a, spent));
+}
+
 /* metal_colorspace: 1 tags the layer sRGB; 0 and every other value leave it untagged */
 static void
 test_colorspace_mode(void)
@@ -8461,6 +8592,8 @@ int
 main(void)
 {
 	test_colorspace_mode();
+	test_frames_drain();
+	test_present_drain();
 	test_readback();
 	test_floor();
 	test_family_list();
