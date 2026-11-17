@@ -479,6 +479,13 @@ VID_Orientation_f(void)
 {
 	int bits = (Cmd_Argc() == 2) ? GLimp_OrientationBits(Cmd_Argv(1)) : 0;
 
+	if (Cmd_Argc() == 1)
+	{
+		/* no name: reports the scene's orientation and the window now */
+		GLimp_RequestOrientation(0);
+		return;
+	}
+
 	if (!bits)
 	{
 		Com_Printf("Usage: ios_orientation <portrait|portraitupsidedown|landscapeleft|landscaperight|landscape|all>\n");

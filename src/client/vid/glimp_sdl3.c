@@ -179,7 +179,7 @@ MeasureScreen(int *v)
  * Nothing here asks UIScreen or the device's model.
  */
 static void
-LogScreen(void)
+LogScreenAs(const char *what)
 {
 	SDL_Rect r;
 	int w = 0, h = 0, pw = 0, ph = 0;
@@ -191,9 +191,15 @@ LogScreen(void)
 		return;
 	}
 
-	Com_Printf("Screen: window %ix%i points, %ix%i pixels, density %.2f, insets left %i top %i right %i bottom %i points, "
-			"orientation %i, display %u\n", w, h, pw, ph, SDL_GetWindowPixelDensity(window),
+	Com_Printf("%s: window %ix%i points, %ix%i pixels, density %.2f, insets left %i top %i right %i bottom %i points, "
+			"orientation %i, display %u\n", what, w, h, pw, ph, SDL_GetWindowPixelDensity(window),
 			r.x, r.y, w - r.x - r.w, h - r.y - r.h, (int)SDL_GetCurrentDisplayOrientation(d), (unsigned)d);
+}
+
+static void
+LogScreen(void)
+{
+	LogScreenAs("Screen");
 }
 
 /*
@@ -280,6 +286,14 @@ GLimp_RequestOrientation(int bits)
 	if (!scene)
 	{
 		Com_Printf("Orientation: the window has no scene.\n");
+		return;
+	}
+
+	if (!bits)
+	{
+		/* no request: say what the scene and SDL report now (a measurement, not a change of the screen) */
+		Com_Printf("Orientation now: scene %i\n", (int)scene.effectiveGeometry.interfaceOrientation);
+		LogScreenAs("Screen now");
 		return;
 	}
 
