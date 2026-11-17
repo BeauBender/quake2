@@ -24,6 +24,8 @@ original clients (Vanilla Quake II) commands are still in place.
   `Orientation: refused (...)` in the console for another; it does
   nothing a person turning the device cannot do, so a server sending it
   is harmless. The window then follows as it does for any size change.
+  Without a name it only reports the scene's interface orientation and
+  the window's size, insets and orientation as `Screen now: ...`.
 
 * **listentities <class>**: Lists the coordinates of all entities of a
   given class.  Possible classes are `ammo`, `items`, `keys`, `monsters`

@@ -156,3 +156,85 @@ On this card's tree, each through the host lock:
   clockwise; the other turn leaves 23874 outside).
 - `tests/check-ios.sh`: `check-ios: ok (54 mutants refused; 125 smoke selftest cases; 65 device
   selftest cases; 174 objects for the simulator; 174 for a device; ios_objects)`.
+
+## Round 2: a live resize driven by orientation
+
+Round 1 could not move the window: `simctl` cannot fold the iPhone Duo and `screenConfig` power cycles
+never moved it. Round 2 drives a change that can be driven, an interface orientation, on the iPhone 17
+and the iPad Pro 11-inch (M5) simulators (iOS 27.2).
+
+### The request
+
+`ios_orientation <portrait|portraitupsidedown|landscapeleft|landscaperight|landscape|all>` (iOS only,
+`doc/050_commands.md`) calls `-[UIWindowScene requestGeometryUpdateWithPreferences:errorHandler:]` with
+`UIWindowSceneGeometryPreferencesIOS` for that mask (`GLimp_RequestOrientation`, glimp_sdl3.c). It is
+harmless from a server's stufftext: the system grants only an orientation the view controller supports
+(the two landscapes of `Info.plist`) and answers anything else with an error, which the engine prints as
+`Orientation: refused (...)`. `ios_orientation` with no name prints `Orientation now: scene N` (the
+scene's `effectiveGeometry.interfaceOrientation`: 3 landscape right, 4 landscape left) and a
+`Screen now:` line, a measurement that does not touch the screen.
+
+### What each request does (measured, `rot-iphone17/` and `rot-ipad/`)
+
+The app supports `landscapeLeft` and `landscapeRight` on both devices (the plist has one list for both
+families; the error names them). So:
+
+| request | iPhone 17 | iPad Pro 11-inch (M5) |
+| --- | --- | --- |
+| `portrait`, `portraitupsidedown` | refused, nothing moves | refused, nothing moves |
+| `landscapeleft` | scene 4 (SDL orientation 2); window 874x402 points, insets 62 / 0 / 62 / 20 unchanged | scene 4; window 1210x834 points unchanged; insets 0 / 0 / 0 / 10 (was 0 / 10 / 0 / 20) |
+| `landscaperight` | scene 3 (SDL orientation 1); size and insets unchanged | scene 3; insets 0 / 10 / 0 / 20 (was 0 / 0 / 0 / 10) |
+| `landscape`, `all` | stays where it is (both are allowed) | stays where it is |
+
+The 180 degree flip is real on both (the scene's orientation alternates 3 and 4), but on the iPhone 17 its
+insets are symmetric (62 each side), so the window's size and safe area do not change and SDL reports no
+event: the live path has nothing to follow, which is the correct behaviour, and there is no `Screen:` line.
+On the iPad the flip moves the home indicator's inset between the top and the bottom edge, so the safe
+area changes and the drawable follows (2420x1648 and 2420x1608 pixels, the window 2420x1668 less the four
+insets). No request changes the size of the window: a portrait window needs a portrait orientation in
+`Info.plist`, which this card does not change. The iPhone Duo's inner display, which does not honour the
+supported orientations, is still the owner's hand-fold step below.
+
+### The runs (Metal validation layer on, `base1`, `metal_stats 1`)
+
+15 requests per device: `landscapeleft`/`landscaperight` alternately (11), then `landscape`, `all`,
+`portrait` and `portraitupsidedown` once each. Driver: a `rot.cfg` of `ios_orientation` lines separated by
+`wait` aliases, started with `+exec`, with a scratch script that shoots a frame after each settle and
+runs `leaks` at the end (the scratch is not committed).
+
+| device | requests | refused | `Screen:` after the first | `Drawable size ... (live)` | refresher initialization | `vid_restart` | failed command buffers | validation messages | `leaks` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| iPhone 17 | 15 | 2 (portrait kinds) | 0 (no size or inset change) | 0 | 1 | 0 | 0 | 0 | 0 leaks for 0 bytes |
+| iPad Pro 11-inch (M5) | 15 | 2 | 11 | 11 | 1 | 0 | 0 | 0 | 0 leaks for 0 bytes |
+
+No crash on either (`shutting down` once). The live path ran 11 times on the iPad, where the safe area
+changed with each landscape flip (11 of the 11 flips that changed the scene's orientation). On the iPhone 17
+nothing a supported orientation does changes the window, so the proof there is that 15 requests, 11 real
+flips included, ran with no restart, no second initialization and no failure.
+
+### Frames
+
+`<artifacts>/TASK172/rotate/` (owner's data: local only, never viewed by the agent): `phone-NN-<request>.png`
+and `ipad-NN-<request>.png`, one after each request, and `hud-check.txt`. The check is TASK147's HUD
+rectangle method on every frame (every second pixel, the iPad's frame turned as its framebuffer is): no lit
+pixel outside the new safe area (0 of 30 frames), and the lit pixels' bounding box is the safe area itself
+to within a pixel (iPhone 17 (186, 0)-(2434, 1144) of a (186, 0)-(2435, 1145) rectangle; iPad (0, 0)-(2418,
+1646) or (0, 20)-(2418, 1626)), 98 to 99 percent of the rectangle lit.
+
+### N2
+
+`GLimp_ScreenEvent`'s three-way decision is `GLimp_ScreenAction(made, now, dw, dh)` in glimp_hidpi.c,
+returning `GLIMP_SCREEN_IGNORE` (an empty window, or a screen already noted), `GLIMP_SCREEN_RESTART` (changed,
+the renderer gives no drawable) or `GLIMP_SCREEN_LIVE`. Red first, against a stub that always ignored:
+```
+FAIL hidpi_screen_action_live (tests/unit/test_hidpi.c:257): check failed: GLimp_ScreenAction(made, flipped, 2436, 1146) == GLIMP_SCREEN_LIVE
+FAIL hidpi_screen_action_restart (tests/unit/test_hidpi.c:243): check failed: GLimp_ScreenAction(made, flipped, 0, 0) == GLIMP_SCREEN_RESTART
+yq2test: 15 tests, 2 failed
+```
+and green after it: `yq2test: 16 tests, 0 failed`. The stale comment on `GLimp_ScreenChanged` (an empty drawable
+restarts) now says that `GLimp_ScreenAction` is what leaves such a window alone.
+
+### Still the owner's
+
+The hand-fold steps above stand: the inner display, the portrait window and the look decision are not
+reachable from `simctl` or from an orientation request.
