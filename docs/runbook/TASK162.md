@@ -160,3 +160,52 @@ On the branch, each through `tools/heavy.sh`: the water host test (588 checks, 0
 0 failed; `ref_metal` built), `tests/check-doc-links.sh` (ok), `tests/check-no-local-identity.sh` (ok).
 The full `scripts/test.sh` was not run on this lane.
 `tests/check-runbook-index.sh` fails on this file until its index line is added at merge.
+
+## FIX98: TASK162's review notes
+
+Four items, on top of FIX92's head.
+
+1. **`raster_enc`** (`rmb_gbuf.m`): cleared right after `rmb_rtw_mark` uses it. Chosen over an
+   accessor in `rmb_encode.m`, which would add a cross-file interface for one caller; the clear is one
+   line and leaves the pointer valid only for the draw it exists for.
+2. **The blend, once.** `common/mtl_rtw_math.h` defines `MTL_RTW_MARK_SRC_FACTOR` (One) and
+   `MTL_RTW_MARK_DST_FACTOR` (source alpha). `mtl_rtw_mark_blend` evaluates them and
+   `rmb_rtw_mark_pipe` sets the normal attachment's alpha factors from them (`rmb_rtw_factor` maps each
+   to its `MTLBlendFactor`), so the host test checks what the GPU blends; the test also asserts the two
+   factors. `tests/check-ref-metal.sh` refuses a pipeline that sets either alpha factor from a
+   literal or drops a macro, with two mutants (a literal destination factor; the source factor spelled
+   as the enumerator): both refused ("blend factors once, 2 mutants refused" in its summary line).
+   Not red-first: the macros did not exist before; the mutants are the failing cases.
+3. **The stats.** `raster_ms`, `vert_ms` and `frag_ms` are gone from `rm_rtw_stats_t` and from the
+   `r_rt_stats 2` line (`world space: compaction a, trace b, span c ms`); `doc/040_cvarlist.md`
+   follows. Nothing in `scripts/` parses them (`git grep raster_ms` finds nothing left in the tree),
+   so the bench adapter cannot be affected. The host test's format cases were changed with it.
+4. **The timer slots.** `RMB_RTW_SAMPLES` is 4 (compaction 0 and 1, trace 2 and 3; TASK58's path
+   writes 0 and 1), so the sample buffer is half the size and the world-space resolve reads 4.
+   Items 3 and 4 are one commit: they are the same lines of `rmb_rtw_read`. The GPU times were not
+   measured here (screen locked): the slot move is covered by the build and by `MTL_DEBUG_LAYER=1`
+   runs with no validation error, not by a timing.
+
+### Pins against FIX92's head (screen locked, `MTL_DEBUG_LAYER=1`, `PINS_SEED=1`, one-minute load 3.0 to 3.6)
+
+The base is FIX92's `ref_metal`, the new is this lane's, both under the same client binary
+(byte-identical). Each log holds only the validation banner, no validation error.
+
+| Scenario | Output | Setting | Frames equal |
+|---|---|---|---|
+| `rt-water` | 640 x 480, every 6th | 0 | 16 of 16 |
+| `rt-water` | 1920 x 1080, every 30th | 0 | 4 of 4 |
+| `rt-water-entities` | 640 x 480 | 0 | 16 of 16 |
+| `fx-off` | 640 x 480 | 0 | 16 of 16 |
+| `skywater` | 640 x 480 | 0 | 16 of 16 |
+| `rtw-h1` | 640 x 480 | 1 | 16 of 16 |
+| `rtw-h1e` (entities) | 640 x 480 | 1 | 16 of 16 |
+
+5K with `r_metalfx 2` was left out (FIX96).
+
+### Checks
+
+Each through `tools/heavy.sh`: `tests/check-ref-metal.sh` (ok: water 727 checks, 0 failed; 72
+vocabulary mutants refused; blend factors once, 2 mutants refused; `ref_metal` built),
+`tests/check-cvar-docs.sh` (ok), `tests/check-doc-links.sh` (ok), `tests/check-no-local-identity.sh`
+(ok). The full `scripts/test.sh` was not run on this lane (the brief).
