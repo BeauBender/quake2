@@ -36,6 +36,10 @@ bench_snap_system() {
 	_sy_t=${BENCH_TMP:?}/snap.raw
 	: > "$_sy_t.top"
 	: > "$_sy_t.gpu"
+	# The CPU's one-second sample first, then the GPU: the driver's
+	# utilization lags (on the M6 it read 100 right after an engine at full
+	# load exited and 0 from 0.2 s on, TASK166), so a snapshot after a run
+	# reads the GPU past the measured workload's tail.
 	if command -v top > /dev/null 2>&1; then
 		bench_bounded 15 top -l 2 -n 0 -s 1 > "$_sy_t.top" 2> /dev/null || : > "$_sy_t.top"
 	fi

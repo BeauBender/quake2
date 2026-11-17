@@ -135,4 +135,44 @@ removes the one it wrote when it exits, and the outer lock shell removes one tha
 
 ## Evidence
 
-Pending.
+### The frequency reader on the M6
+
+`freq 5` with the host idle but for other lanes' light work (load 2.05), then `freq 10` from 4 s
+into an engine run at full load (the `rt-shadows` scenario, 1920x1080 windowed, `r_vsync 0`,
+timedemo of `demo1.dm2`: 689 frames in 1.5 s, 471.6 fps, then the console at full speed), both
+under the host lock (load 2.14 before, 3.19 after):
+
+| Domain | Idle: MHz, top %, active % | Full load: MHz, top %, active % | Top state |
+|---|---|---|---|
+| `eacc` (efficiency cluster) | 1566, 4.1, 42.2 | 1158, 8.0, 36.2 | 2940 |
+| `pacc0` (performance cluster) | 2824, 11.6, 17.1 | 4788, 100.0, 81.5 | 4788 |
+| `gpu` | 502, 0.0, 0.7 | 1735, 99.9, 100.0 | 1735 |
+
+The tables come from `voltage-states1-sram` (7 states), `voltage-states5-sram` (20) and
+`voltage-states9` (13 of the GPU's 15 active states; the two above it were never entered), found
+on the `pmgr-child` node, not on `pmgr` itself, on this chip. The CPU tables are in kHz and the
+GPU's in Hz; the reader tells them apart by size.
+
+The GPU's device utilization (`ioreg`) during the run read 97; right after the engine exited it
+read 100, then 0 at +0.2 s and +0.5 s, 2 at +1 s and 9 at +2 s. The driver's figure lags about
+0.2 s, so the snapshot reads the CPU's one-second sample first and the GPU after it: the after
+snapshot sees the GPU past the measured workload's tail, and only another client's use counts.
+
+### The re-measure of `rt-shadows-gpu-1920x1080`
+
+pending: screen locked. When this step was reached (2026-11-17, about 04:30 UTC) the screen was
+locked (`ioreg -n Root -d1` held `CGSSessionScreenIsLocked`), and a timing needs it unlocked
+(the shared runbook's [how a run works](../plans/metal-port-harness.md#how-a-run-works)). To run once
+it is unlocked, with a copy of the case that states `prewarm=240` (so it has a case hash, and a
+baseline directory, of its own and no stored set is replaced), and one that states `prewarm=0`
+for the cold run's frequencies, `BENCH_STORE` the TASK154 store:
+
+```sh
+scripts/bench/bench.sh baseline put <copy with prewarm=240> 96b9c661
+scripts/bench/bench.sh baseline put <copy with prewarm=240> <main>
+scripts/bench/bench.sh baseline put <copy with prewarm=0> <main>
+scripts/bench/bench.sh compare <copy with prewarm=240> --before 96b9c661 --after <main>
+```
+
+Each run file then carries `freq.gpu.mhz` and `freq.gpu.top` for the cold and the warm runs, and
+`prewarm.freq.*` for the end of the pre-warm.
