@@ -355,7 +355,8 @@ test_sky_area(void)
 			quad(v, 4, idx, 6, (const float (*)[3])skyq);
 			CHECK(rm_rtsun_sky_area(r, 4, v, nv, idx, 24, 0, 18, &sky, &total) == 1);
 			CHECK(near(sky / total, shares[i], 1e-6));
-			CHECK(rm_rtsun_sky_enough(sky + ((shares[i] == 0.02) ? 1e-6 : 0), total) == enough[i]);
+			/* the float corners put the 2 % case up to 1e-5 square units under: 1e-3 of a unit over it */
+			CHECK(rm_rtsun_sky_enough(sky + ((shares[i] == 0.02) ? 1e-3 : 0), total) == enough[i]);
 		}
 	}
 

@@ -27,7 +27,8 @@
 #     (rm_metalfx.c, TASK111).
 # (b) Only on Darwin with the Metal compiler (xcrun -f metal) and the
 #     vendored SDL 3 headers: "make ref_metal" in a scratch copy of
-#     Makefile, third_party/sdl3.make and src/ (third_party/SDL3 is linked,
+#     Makefile, third_party/sdl3.make, scripts/rt/ (the sun's table, TASK56)
+#     and src/ (third_party/SDL3 is linked,
 #     not copied), so release/ and build/ of this checkout are not
 #     touched; the build must write ref_metal.metallib next to the dylib,
 #     and otool -L of the dylib must list Metal and QuartzCore and no
@@ -691,6 +692,9 @@ else
 	cp -R Makefile src "${tmp:?}/tree/"
 	mkdir "${tmp:?}/tree/third_party"
 	cp third_party/sdl3.make "${tmp:?}/tree/third_party/"
+	# the sun's per-map table, which rm_rtsunscene.c builds in (TASK56)
+	mkdir "${tmp:?}/tree/scripts"
+	cp -R scripts/rt "${tmp:?}/tree/scripts/"
 	ln -s "$PWD/third_party/SDL3" "${tmp:?}/tree/third_party/SDL3"
 	jobs=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
 	[ "$jobs" -le 4 ] || jobs=4

@@ -148,6 +148,7 @@ typedef struct image_s
 	qboolean scrap;                     /* part of an atlas (rm_scrap.c), sl, tl, sh, th inside it */
 	int scrapnum;                       /* the atlas index of a scrap image, its texture looked up at each draw */
 	qboolean has_alpha;
+	float mean[3];                      /* TASK56: a sky image's mean colour as uploaded, 0 to 1 a channel (rm_rtsun_mean); 0 for the rest */
 } image_t;
 
 /* the lightmap block of gl1 (BLOCK_WIDTH, BLOCK_HEIGHT), which the lightmap coordinates are relative to */
@@ -235,6 +236,7 @@ void RM_EntitySkips(rmb_stats_t *s);
 void RM_SetSky(const char *name, float rotate, vec3_t axis);
 void RM_SkyClear(void);
 int RM_SkyBox(int *texnums, float *rotate, float *axis);   /* TASK158: the water reflections' world-space sky */
+int RM_SkyMeans(float (*means)[3], int *have);   /* TASK56: each sky face's mean colour (image_t.mean), gl1's face order; 1 when every face has one */
 int RM_AddSkySurface(const rm_world_t *w, const msurface_t *fa);
 int RM_DrawSkyBox(const rm_view_t *view);
 int RM_SubdivideSurface(model_t *loadmodel, rm_world_t *w, msurface_t *fa);

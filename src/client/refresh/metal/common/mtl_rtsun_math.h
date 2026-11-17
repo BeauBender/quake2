@@ -72,6 +72,11 @@ mtl_rtsun_gated(mtl_rgba_t l, float floor_)
 {
 	float m = l.r;
 
+	if (MTL_RTAO_ISNAN(l.r) || MTL_RTAO_ISNAN(l.g) || MTL_RTAO_ISNAN(l.b))
+	{
+		return 0;
+	}
+
 	m = (l.g > m) ? l.g : m;
 	m = (l.b > m) ? l.b : m;
 	return (m < floor_) ? 1 : 0;
