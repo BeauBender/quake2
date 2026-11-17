@@ -238,3 +238,13 @@ restarts) now says that `GLimp_ScreenAction` is what leaves such a window alone.
 
 The hand-fold steps above stand: the inner display, the portrait window and the look decision are not
 reachable from `simctl` or from an orientation request.
+
+## Round 3: ios_orientation is iOS only
+
+`ios_orientation` and `GLimp_RequestOrientation` were guarded by `TARGET_OS_IPHONE`, which is 1 on tvOS and
+visionOS too. `UIWindowSceneGeometryPreferencesIOS`, `UIInterfaceOrientationMask*` and
+`effectiveGeometry.interfaceOrientation` are unavailable on tvOS, so a tvOS build failed (`clang -fsyntax-only` of
+`glimp_sdl3.c` for `arm64-apple-tvos17.0-simulator`: `error: 'UIWindowSceneGeometryPreferencesIOS' is unavailable: not available on tvOS`).
+Both are now guarded by `TARGET_OS_IOS`, which the SDK's `TargetConditionals.h` sets to 0 on tvOS (line 243) and
+leaves at its default 0 on visionOS (line 418). The command is not registered on tvOS or visionOS. The UIKit
+import stays on `TARGET_OS_IPHONE`.

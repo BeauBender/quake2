@@ -466,9 +466,9 @@ VID_RequestRestart(ref_restart_t rs)
 	restart_state = rs;
 }
 
-#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+#if defined(TARGET_OS_IOS) && TARGET_OS_IOS
 /*
- * iOS only (TASK172): asks the window scene for an interface orientation,
+ * iOS only (TASK172; not tvOS or visionOS, where the scene geometry API is unavailable): asks the window scene for an interface orientation,
  * the way a rotation of the device does, so a test can make the window
  * change size or insets with no hand on the device. The system grants only
  * orientations the app supports, so a server's stufftext of it can do no
@@ -1085,7 +1085,7 @@ VID_Init(void)
 	Cmd_AddCommand("vid_restart", VID_Restart_f);
 	Cmd_AddCommand("vid_listmodes", VID_ListModes_f);
 	Cmd_AddCommand("r_listmodes", VID_ListModes_f); // more consistent with r_mode
-#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+#if defined(TARGET_OS_IOS) && TARGET_OS_IOS
 	Cmd_AddCommand("ios_orientation", VID_Orientation_f);
 #endif
 

@@ -15,7 +15,7 @@ original clients (Vanilla Quake II) commands are still in place.
   between `coop`, `dm` and `sp` without having to set three cvars the
   correct way. `?` prints the current mode.
 
-* **ios_orientation <name>**: iOS only (iPhone, iPad). Asks the window
+* **ios_orientation <name>**: iOS (iPhone and iPad) only; not registered on tvOS or visionOS. Asks the window
   scene for an interface orientation, the way turning the device does, so
   a test can change the window's size or insets with no hand on the
   device. `name` is `portrait`, `portraitupsidedown`, `landscapeleft`,

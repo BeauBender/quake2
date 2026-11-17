@@ -258,7 +258,7 @@ GLimp_ScreenEvent(void)
 }
 #endif
 
-#if defined(__APPLE__) && TARGET_OS_IPHONE && defined(__OBJC__)
+#if defined(__APPLE__) && TARGET_OS_IOS && defined(__OBJC__)
 /*
  * Asks the window scene for an interface orientation (TASK172), the way a
  * rotation of the device does: the same size change, safe-area change or
