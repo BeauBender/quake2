@@ -179,6 +179,6 @@ first.
   each of the three pause cases the same four (12); for `IN_Move` the same
   four (4).
 - **What stays open** (N5). The comment of `IN_InputOpen` now lists what
-  the runbook says stays open and the check does not guard: QUIT, the focus
+  this file says stays open and the check does not guard: QUIT, the focus
   `Key_MarkAllUp`, the sound mute, the `ogg toggle` condition, a window
   move, and on iOS the prints of `IN_AppEventWatch`.
