@@ -798,3 +798,27 @@ TEST(wave_stats_stock_unchanged)
 	T_EQ_INT(o[2], 5);
 	T_EQ_INT(o[3], 10);
 }
+
+TEST(wave_cache_step_zero)
+{
+	/* a rate so low against the speed that the step is zero: every frame
+	   reads the first sample, and nothing divides by the step */
+	wavinfo_t i = cinfo(1, 1, 1, 1);
+	int frames = 0, bytes = 0, step = 7;
+
+	T_CHECK(S_CacheSize(&i, 44100, &frames, &bytes, &step));
+	T_EQ_INT(step, 0);
+	T_EQ_INT(frames, 44100);
+}
+
+TEST(wave_stats_no_samples)
+{
+	int o[4] = {-1, -1, -1, -1};
+	byte none[1] = {0};
+
+	/* nothing to read: the outputs are zero and no byte is touched */
+	stats(none, 0, 2, 1, o);
+	T_EQ_INT(o[0] | o[1] | o[2] | o[3], 0);
+	stats(none, 0, 1, 1, o);
+	T_EQ_INT(o[0] | o[1] | o[2] | o[3], 0);
+}
