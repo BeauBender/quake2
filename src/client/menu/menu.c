@@ -39,6 +39,8 @@
 #include "../input/header/gyro.h"
 #include "../input/header/touch.h"
 #include "../sound/header/local.h"
+#include "../header/upscale.h"
+#include "../header/upscale_metalfx.h"
 #include "header/qmenu.h"
 
 /* Number of the frames of the spinning quake logo */
@@ -2381,6 +2383,7 @@ static menulist_s s_options_oggshuffle_box;
 static menuslider_s s_options_oggvolume_slider;
 static menulist_s s_options_oggenable_box;
 static menulist_s s_options_console_action;
+static menuaction_s s_options_upscale_action;
 
 static void
 CrosshairFunc(void *unused)
@@ -2566,6 +2569,119 @@ ConsoleFunc(void *unused)
 	}
 }
 
+/*
+ * UPSCALE TEXTURES MENU (TASK124): upscale_textures from the menu. The
+ * factor, whether files already there are written again, and one item
+ * per backend, which runs the command in the console. A backend that
+ * is not available here is shown greyed with its reason, never hidden.
+ * Opening the page makes no Metal or MetalFX object (decision 0012): it
+ * asks CL_UpscaleMetalFXAvailable, and a run finds the rest out itself.
+ */
+static menuframework_s s_upscale_menu;
+static menulist_s s_upscale_factor_list;
+static menulist_s s_upscale_force_box;
+static menuaction_s s_upscale_scale2x_action;
+static menuaction_s s_upscale_metalfx_action;
+static char s_upscale_metalfx_reason[160];
+
+static void
+UpscaleRun(upscale_backend_t backend)
+{
+	char cmd[64];
+
+	Com_sprintf(cmd, sizeof(cmd), "upscale_textures %d %s%s\n",
+		s_upscale_factor_list.curvalue ? 4 : 2,
+		CL_UpscaleBackendName(backend),
+		s_upscale_force_box.curvalue ? " force" : "");
+
+	/* the console shows the run's lines */
+	ConsoleFunc(NULL);
+	Cbuf_AddText(cmd);
+}
+
+static void
+UpscaleScale2xFunc(void *unused)
+{
+	UpscaleRun(UPSCALE_SCALE2X);
+}
+
+static void
+UpscaleMetalFXFunc(void *unused)
+{
+	UpscaleRun(UPSCALE_METALFX);
+}
+
+static void
+Upscale_MenuInit(void)
+{
+	static const char *factor_names[] = { "2x", "4x", NULL };
+	static const char *again_names[] = { "no", "yes", NULL };
+	char reason[128];
+	int y = 0;
+
+	s_upscale_menu.x = viddef.width / 2;
+	s_upscale_menu.nitems = 0;
+
+	s_upscale_factor_list.generic.type = MTYPE_SPINCONTROL;
+	s_upscale_factor_list.generic.x = 0;
+	s_upscale_factor_list.generic.y = y;
+	s_upscale_factor_list.generic.name = "factor";
+	s_upscale_factor_list.generic.statusbar = "the size of the copies";
+	s_upscale_factor_list.itemnames = factor_names;
+
+	s_upscale_force_box.generic.type = MTYPE_SPINCONTROL;
+	s_upscale_force_box.generic.x = 0;
+	s_upscale_force_box.generic.y = (y += 10);
+	s_upscale_force_box.generic.name = "write again";
+	s_upscale_force_box.generic.statusbar = "yes: files already there are written again";
+	s_upscale_force_box.itemnames = again_names;
+
+	y += 10;
+	s_upscale_scale2x_action.generic.type = MTYPE_ACTION;
+	s_upscale_scale2x_action.generic.x = 0;
+	s_upscale_scale2x_action.generic.y = (y += 10);
+	s_upscale_scale2x_action.generic.name = "scale2x";
+	s_upscale_scale2x_action.generic.callback = UpscaleScale2xFunc;
+	s_upscale_scale2x_action.generic.statusbar = "keeps pixel-art edges, adds no detail";
+
+	s_upscale_metalfx_action.generic.type = MTYPE_ACTION;
+	s_upscale_metalfx_action.generic.x = 0;
+	s_upscale_metalfx_action.generic.y = (y += 10);
+	s_upscale_metalfx_action.generic.name = "MetalFX spatial";
+	s_upscale_metalfx_action.generic.callback = UpscaleMetalFXFunc;
+
+	if (CL_UpscaleMetalFXAvailable(reason, sizeof(reason)))
+	{
+		s_upscale_metalfx_action.generic.flags &= ~QMF_GRAYED;
+		s_upscale_metalfx_action.generic.statusbar = "Apple's spatial scaler; scale2x if unsupported";
+	}
+	else
+	{
+		s_upscale_metalfx_action.generic.flags |= QMF_GRAYED;
+		Com_sprintf(s_upscale_metalfx_reason, sizeof(s_upscale_metalfx_reason),
+			"greyed: %s", reason);
+		s_upscale_metalfx_action.generic.statusbar = s_upscale_metalfx_reason;
+	}
+
+	Menu_AddItem(&s_upscale_menu, (void *)&s_upscale_factor_list);
+	Menu_AddItem(&s_upscale_menu, (void *)&s_upscale_force_box);
+	Menu_AddItem(&s_upscale_menu, (void *)&s_upscale_scale2x_action);
+	Menu_AddItem(&s_upscale_menu, (void *)&s_upscale_metalfx_action);
+
+	Menu_SetStatusBar(&s_upscale_menu, NULL);
+	Menu_Center(&s_upscale_menu);
+}
+
+static void
+UpscaleTexturesFunc(void *unused)
+{
+	Upscale_MenuInit();
+	s_upscale_menu.draw = Default_MenuDraw;
+	s_upscale_menu.key = Default_MenuKey;
+
+	M_PushMenu(&s_upscale_menu);
+}
+
 static void
 Options_MenuInit(void)
 {
@@ -2734,6 +2850,13 @@ Options_MenuInit(void)
 	s_options_console_action.generic.name = "go to console";
 	s_options_console_action.generic.callback = ConsoleFunc;
 
+	s_options_upscale_action.generic.type = MTYPE_ACTION;
+	s_options_upscale_action.generic.x = 0;
+	s_options_upscale_action.generic.y = (y += 10);
+	s_options_upscale_action.generic.name = "upscale textures";
+	s_options_upscale_action.generic.callback = UpscaleTexturesFunc;
+	s_options_upscale_action.generic.statusbar = "2x or 4x PNG copies of the textures";
+
 	ControlsSetMenuItemValues();
 
 	Menu_AddItem(&s_options_menu, (void *)&s_options_sfxvolume_slider);
@@ -2753,6 +2876,7 @@ Options_MenuInit(void)
 	Menu_AddItem(&s_options_menu, (void *)&s_options_customize_options_action);
 	Menu_AddItem(&s_options_menu, (void *)&s_options_defaults_action);
 	Menu_AddItem(&s_options_menu, (void *)&s_options_console_action);
+	Menu_AddItem(&s_options_menu, (void *)&s_options_upscale_action);
 }
 
 static void
