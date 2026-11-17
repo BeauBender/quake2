@@ -761,8 +761,9 @@ cmd_replay() {
         judge_frames "$tdir/timedemo.txt" "$scenario" "$rdemo" "the record $scenario/$from/$trace_id"
         [ -z "$reason" ] || die "$reason; it is not replayed"
     else
+        # said on stderr once the replay goes ahead, below
         rwant=$(rendered_frames "$tdir/timedemo.txt")
-        echo "pins: the record $scenario/$from/$trace_id names no demo (made before FIX48); its ${rwant:-uncounted} rendered frames are not checked" >&2
+        rwant="pins: the record $scenario/$from/$trace_id names no demo (made before FIX48); its ${rwant:-uncounted} rendered frames are not checked"
     fi
     # the replay's own pin: never a live record's directory, never through a link
     # the seed is part of the id, as it is of a record's: two seeds are two pins
@@ -800,6 +801,7 @@ cmd_replay() {
     nlive=$(frame_count "$tdir"); tbytes=$(wc -c < "$trace" | tr -d ' '); tsum=$(cksum < "$trace" | awk '{print $1}')
     is_count "$nlive" || die "the frames of the record $scenario/$from/$trace_id could not be counted (got '$nlive')"
     is_count "$tbytes" && is_count "$tsum" || die "the size and checksum of the trace could not be taken (got '$tbytes' and '$tsum')"
+    if [ -z "$rdemo" ]; then echo "$rwant" >&2; fi
     rm -rf "${out:?}"; mkdir -p "$out"
     # the replay manifest is written first, so even a failed replay is never taken for a record
     { echo "replay of $scenario/$from/$trace_id/trace.q2r"
