@@ -34,12 +34,15 @@
  * except in a pin run (CL_PinsRun, latched from the command line by
  * CL_PinsLatch, never a cvar). In a pin run the keys and characters are
  * dropped here, IN_Move moves nothing, and the window-system events of
- * sdl3.c that pause the game, print or restart the video (focus lost
- * or gained, the window shown, a gamepad removed or added, a battery
- * report, on iOS a safe-area or pixel-size change) do none of it;
- * tests/check-input-gate.sh keeps those cases gated. Other events
- * (SDL_EVENT_QUIT, a window moved, the sound muted on focus loss) still
- * act; none of them changes a frame (docs/runbook/FIX48.md).
+ * sdl3.c that pause the game, print or restart the video (the writes of
+ * "paused" on focus lost, focus gained and the window shown; a gamepad
+ * removed or added, a battery report, on iOS a safe-area or pixel-size
+ * change) do none of it. tests/check-input-gate.sh keeps exactly those
+ * gated, with the IN_Move gate and the two wrappers. It does not guard
+ * what stays open, which changes no frame (docs/runbook/FIX48.md):
+ * SDL_EVENT_QUIT, Key_MarkAllUp on a focus change, the sound muted on
+ * focus loss, the "ogg toggle" of a focus or shown event, a window
+ * moved, and on iOS the prints of IN_AppEventWatch.
  */
 qboolean
 IN_InputOpen(void)

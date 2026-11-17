@@ -154,3 +154,31 @@ first.
 - **Files outside the card's list** (spec I1): accepted. The gate file,
   its header and Makefile entries exist because `sdl3.c` cannot be
   unit-tested; the cfg lines are the scenario counts the card asks for.
+
+## Review round 2
+
+- **The check guarded five of the nine gates** (correctness I1). The
+  `IN_InputOpen` comment named the focus-lost, focus-gained and
+  window-shown pause gates and the `IN_Move` gate, and a reviewer removed
+  each with `tests/check-input-gate.sh` still green. It now requires
+  `if (IN_InputOpen() && <cvar>->value <op> <digit>)` before every write of
+  `paused` in the three window cases, and `if (!IN_InputOpen())` returning
+  as the first statement of `IN_Move` after its declarations. Red (the
+  round-1 check against a scratch `sdl3.c`): each of the four gates removed
+  printed `check-input-gate: ok (... 18 mutants refused)`.
+- **The parse could be fooled** (N1). A preprocessor line inside a gated
+  case (`#if 0` around the gate), an always-false tail
+  (`if (!IN_InputOpen() || 0 ? 0 : 0)`) and a macro alias
+  (`#define KE Key_Event`, then `KE(...)`) all passed. Now a `#` line
+  inside a case fails, a `?`, a comma or an `&&` in a leaving gate fails,
+  and any use of `Key_Event` or `Char_Event` that is not a call (or any
+  call) in `src/client/input/` but `ingate.c` fails, headers included.
+- **Mutants: 46, all refused** (was 18): 3 direct calls, 2 macro aliases;
+  for each of the five leaving cases its gate inverted, removed, its label
+  renamed, a `#if 0` put in the case, and an always-false tail (25); for
+  each of the three pause cases the same four (12); for `IN_Move` the same
+  four (4).
+- **What stays open** (N5). The comment of `IN_InputOpen` now lists what
+  the runbook says stays open and the check does not guard: QUIT, the focus
+  `Key_MarkAllUp`, the sound mute, the `ogg toggle` condition, a window
+  move, and on iOS the prints of `IN_AppEventWatch`.
