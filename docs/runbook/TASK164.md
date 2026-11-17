@@ -128,3 +128,35 @@ All in `tests/check-ref-metal.sh` and `tests/metal/rmb_cs_probe.m`; nothing unde
    build (`-Wall`, `-Werror` only under `WERR`), on purpose: the probe includes that file whole, and
    the stricter flags find an unused parameter or a sign comparison there before the real build does. A
    finding is the probe's "does not compile". The probe header now says it runs on any Darwin.
+
+### FIX99, rework round 1: the `#if` forms, the nested mutant, the probe's crash
+
+1. **`#if(` opens a level.** `deadif` pushed a level only for `#if` followed by a blank, so the `#endif`
+   of an `#if(X)` closed the level around it. It now pushes for any `#if` followed by a character that
+   cannot continue an identifier, and keeps the `ifdef` and `ifndef` alternatives. The forms it
+   evaluates are `#if 0`, `#if 1`, `#if (0)` and `#if (1)`, with optional blanks (`#if(0)` too). Every
+   other condition (`#if X`, `#if defined(X)`, `#ifdef`, `#ifndef`, `#elif`, `#if 00`, `#if false`, a
+   directive continued by a backslash) is taken as live on both branches: a dead call kept there is
+   counted, and a live call is never refused. Red first, with the old `deadif` and the new mutants
+   `deadnestedparen` (`#if 0` / `#if(X)` / `#endif` / call / `#endif`), `deadparen` (`#if (0)`) and
+   `deadparen2` (`#if(1)` / `#else` / call / `#endif`), for every pair:
+   `the kernel-call check passes a mutant of rm_rtw_trace (the call to mtl_rtw_ss_next deadparen)`
+   (the same for `deadparen2` and `deadnestedparen`; 15 lines, 5 pairs at the time). Now 60 kernel-call
+   mutants are refused (6 pairs, 10 each).
+2. **The nested mutant tests nesting.** `deadnested` now puts the call after the inner block:
+   `#if 0` / `#ifdef X` / `#endif` / call / `#endif`. Against a scratch copy of `deadif` that pushes a
+   level only for `#if 0` and `#if 1` (so the `#endif` of `#ifdef X` closes the `#if 0`), the check
+   prints, for every pair, `the kernel-call check passes a mutant of rm_rtw_trace (the call to
+   mtl_rtw_ss_next deadnested)` (and `deadnestedparen`, `deadparen`, `deadparen2`): 20 lines, and
+   `pairs=5 mutants=30 fail=1`. Against the real `deadif`, `fail=0`.
+3. **The probe no longer crashes in the `unretained` mutant.** The retain-count checks stop the probe
+   at the first failure (`_exit(1)` after one message), before any further release or retain, and the
+   check runs it with `ASAN_OPTIONS=abort_on_error=0`; the subshell and its comment are gone. The mutant
+   now ends with `rmb_cs_probe: stopped at the first wrong retain count, 48 checks` and status 1; with
+   the previous probe the shell printed `Abort trap: 6` (SIGABRT in ASAN's SEGV report at
+   `rmb_cs_release`). "Abort trap" no longer appears in the check's output.
+4. **Check (d)'s status 2 is tested** (the `renamed` flush mutant must give 2, the others 1): with
+   `exit !found ? 2` reverted to 1 the check prints `the flush-point check gives status 1, not 2, for a
+   mutant of RI_RenderFrame (renamed)` (and `RI_EndFrame`, `R_ScreenShot`).
+5. **The pair `rm_rtw_trace` / `rm_rtw_ss_at`** is added: the loop must still call the function that
+   finds the later hit. Six pairs now.
