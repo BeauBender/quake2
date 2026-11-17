@@ -130,8 +130,10 @@ test_format(void)
 	CHECK(rm_rtg_format(&g, buf, 20) == 0 && buf[0] == '\0');
 	memset(buf, 'x', sizeof(buf));
 	CHECK(rm_rtg_reset_format("r_rt_ao", &g, buf, 20) == 0 && buf[0] == '\0');
-	CHECK(rm_rtg_format(&g, buf, 0) == 0);
-	CHECK(rm_rtg_reset_format("r_rt_ao", &g, buf, 0) == 0);
+	/* no room at all: 0, and nothing written */
+	memset(buf, 'x', sizeof(buf));
+	CHECK(rm_rtg_format(&g, buf, 0) == 0 && buf[0] == 'x');
+	CHECK(rm_rtg_reset_format("r_rt_ao", &g, buf, 0) == 0 && buf[0] == 'x');
 	g = rm_rtg_decide(UPTO(7), 1, 0);
 	memset(buf, 'x', sizeof(buf));
 	CHECK(rm_rtg_format(&g, buf, 20) == 0 && buf[0] == '\0');
