@@ -51,6 +51,7 @@ BENCH_SELF=$BENCH_ROOT/bench.sh
 . "$BENCH_ROOT/core/case.sh"
 . "$BENCH_ROOT/core/store.sh"
 . "$BENCH_ROOT/core/stats.sh"
+. "$BENCH_ROOT/core/snap.sh"
 . "$BENCH_ROOT/core/measure.sh"
 
 bench_on_exit() {
@@ -93,18 +94,47 @@ esac
 bench_is_uint "${BENCH_STOP_GRACE:-10}" || bench_die 2 "BENCH_STOP_GRACE is whole seconds"
 
 # need_lock <label> <args...>: unless this process holds the lock already,
-# becomes (exec) a lock shell that runs this script with <args> under the
-# lock, so a signal to this process reaches the lock shell's trap.
+# becomes (exec) a quiet lock shell (lock run --quiet) that runs this
+# script with <args> under the lock, so a signal to this process reaches
+# the lock shell's trap. Under a hold of its own it writes the quiet
+# marker when no live one is there, and removes it when it exits.
 need_lock() {
 	_nl_label=$1
 	shift
 	bench_lock_init
-	bench_lock_mine && return 0
+	if bench_lock_mine; then
+		bench_quiet_mark "$_nl_label" "$$"
+		return 0
+	fi
 	if [ -n "${BENCH_TMP:-}" ]; then
 		rm -rf "${BENCH_TMP:?}"
 		BENCH_TMP=
 	fi
-	exec sh "$BENCH_SELF" lock run "$_nl_label" -- sh "$BENCH_SELF" "$@" < /dev/null
+	exec sh "$BENCH_SELF" lock run --quiet "$_nl_label" -- sh "$BENCH_SELF" "$@" < /dev/null
+}
+
+# not_quiet <runs dir>: says which runs of a measurement were not quiet
+# (quiet=no), and fails when there is one.
+not_quiet() {
+	_nq_bad=
+	for _nq_f in "${1:?}"/*.run; do
+		[ -f "$_nq_f" ] || continue
+		if [ "$(bench_file_kv "$_nq_f" quiet)" != yes ]; then
+			_nq_k=${_nq_f##*/}
+			bench_note "run ${_nq_k%.run} was not quiet (quiet.reason=$(bench_file_kv "$_nq_f" quiet.reason))"
+			_nq_bad=1
+		fi
+	done
+	[ -n "$_nq_bad" ]
+}
+
+# quiet_of <set>: yes when every run of the set is quiet=yes, no when one
+# is quiet=no, unknown when a run has no flag (a set stored before runs
+# carried one); "none" for no set.
+quiet_of() {
+	[ -n "$1" ] || { echo none; return 0; }
+	bench_store_runs "$1" | while IFS= read -r _qo_f; do printf '%s\n' "$(bench_file_kv "$_qo_f" quiet)"; done |
+		awk '$0 == "no" { no = 1 } $0 != "yes" && $0 != "no" { un = 1 } END { print (no ? "no" : (un ? "unknown" : "yes")) }'
 }
 
 # setup <case> <commit>: loads the case and its adapter, the host, the
@@ -182,6 +212,10 @@ cmd_baseline_put() {
 	fi
 	bench_prepare
 	measure_baseline
+	if not_quiet "${BENCH_TMP:?}/new"; then
+		bench_note "a set with a run that was not quiet is not stored; the case $BENCH_CASE_NAME at $BENCH_INPUTS keeps the baseline it had"
+		exit 1
+	fi
 	store_new
 	printf 'baseline=stored case=%s inputs=%s host=%s runs=%d\n' "$BENCH_CASE_NAME" "$BENCH_INPUTS" "$BENCH_HOST_TOKEN" "$(bench_store_count "$LIVE")"
 	summary "$LIVE"
@@ -198,6 +232,7 @@ cmd_drift() {
 		exit 1
 	fi
 	bench_prepare
+	bench_prewarm
 	_dr_w=$(bench_case_get warmup)
 	_dr_k=1
 	while [ "$_dr_k" -le "${_dr_w:-0}" ]; do
@@ -211,11 +246,19 @@ cmd_drift() {
 		bench_drift_rule "$_dr_x" "$(bench_case_get abs_tol)" "$(bench_case_get rel_tol)") ||
 		bench_die 2 "the stored runs of $BENCH_CASE_NAME have no usable $_dr_m values"
 	bench_store_write "$DIR/drift" "${BENCH_TMP:?}/drift.run"
-	printf '%s metric=%s\n' "$_dr_line" "$_dr_m"
+	# The drift run's quiet flag (and its reason when it is not quiet), and
+	# the stored set's (quiet_of).
+	_dr_q=$(bench_file_kv "${BENCH_TMP:?}/drift.run" quiet)
+	[ "$_dr_q" = yes ] || _dr_q="no quiet.reason=$(bench_file_kv "${BENCH_TMP:?}/drift.run" quiet.reason)"
+	printf '%s metric=%s quiet=%s baseline.quiet=%s\n' "$_dr_line" "$_dr_m" "$_dr_q" "$(quiet_of "$LIVE")"
 	case $_dr_line in
 	drift=inside*) return 0 ;;
 	esac
 	measure_baseline
+	if not_quiet "${BENCH_TMP:?}/new"; then
+		bench_note "the re-measured set has a run that was not quiet, so it is not stored; the baseline stands"
+		exit 1
+	fi
 	store_new
 	printf 'baseline=replaced case=%s inputs=%s runs=%d\n' "$BENCH_CASE_NAME" "$BENCH_INPUTS" "$(bench_store_count "$LIVE")"
 	summary "$LIVE"
@@ -254,6 +297,7 @@ cmd_compare() {
 	printf 'before=%s inputs=%s\n' "$_cp_bc" "$_cp_bi"
 	printf 'after=%s inputs=%s\n' "$_cp_ac" "$_cp_ai"
 	[ "$_cp_bi" != "$_cp_ai" ] || echo "note=the two commits have the same inputs, so one baseline"
+	printf 'quiet before=%s after=%s\n' "$(quiet_of "$_cp_bd")" "$(quiet_of "$_cp_ad")"
 	printf '%-16s %-6s %4s %12s %12s %12s %12s\n' metric side runs median p90 min max
 	_cp_bm=
 	_cp_am=

@@ -241,8 +241,78 @@ bench_lock_acquire() {
 	done
 }
 
-# bench_lock_release: removes the lock if this process holds it.
+# The quiet marker: <state>/quiet, written by lock run --quiet while it
+# holds the lock (and by a measuring command under a hold of its own), so
+# that the tools of other sessions on the host can hold their work while
+# something is measured. key=value lines:
+#   pid=<the writer's pid>  session=<id or none>  label=<lock label>
+#   start=<UTC>  expires=<seconds since the epoch>  hold=<the lock's token>
+#   token=<the marker's own token>
+# A reader honours it only while expires is in the future and pid is alive.
+# The session is BENCH_SESSION_ID, else CLAUDE_CODE_SESSION_ID: up to 128
+# of A-Z a-z 0-9 . _ : -, else none. expires is now plus BENCH_QUIET_TTL
+# seconds (default 3600). It is written whole to a temporary name and
+# renamed into place, and removed by bench_lock_release on every exit of
+# its writer (the EXIT, INT, TERM and HUP traps), and by the lock shell
+# whose hold it names.
+
+BENCH_QUIET_MINE=
+
+# bench_quiet_live <file>: the marker <file> is there, unexpired, and its
+# writer is alive.
+bench_quiet_live() {
+	_ql_h=$(cat "$1" 2> /dev/null) || return 1
+	_ql_e=$(bench_kv "$_ql_h" expires)
+	bench_is_uint "${_ql_e:-x}" || return 1
+	[ "$_ql_e" -gt "$(date +%s)" ] || return 1
+	bench_pid_alive "$(bench_kv "$_ql_h" pid)"
+}
+
+# bench_quiet_mark <label> <pid>: writes the marker for <pid>. The lock
+# shell that has just taken the lock writes it whatever is there; under a
+# hold of its own (a token, not this process's lock) a caller writes it
+# only when no live marker is there.
+bench_quiet_mark() {
+	_qm_f=${BENCH_STATE_DIR:?}/quiet
+	if [ "${BENCH_LOCK_OWNED:-}" != 1 ] && bench_quiet_live "$_qm_f"; then
+		return 0
+	fi
+	_qm_ttl=${BENCH_QUIET_TTL:-3600}
+	bench_is_uint "$_qm_ttl" || bench_die 2 "BENCH_QUIET_TTL is whole seconds"
+	_qm_s=${BENCH_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}
+	case $_qm_s in
+	'' | *[!A-Za-z0-9._:-]*) _qm_s=none ;;
+	esac
+	[ "${#_qm_s}" -le 128 ] || _qm_s=none
+	_qm_now=$(date +%s)
+	_qm_r=$(od -An -N6 -tx1 /dev/urandom 2> /dev/null | tr -dc '0-9a-f') || _qm_r=
+	BENCH_QUIET_MINE=q-$$-$_qm_now-${_qm_r:-0}
+	_qm_t=${BENCH_STATE_DIR:?}/quiet.tmp.$$
+	if ! printf 'pid=%s\nsession=%s\nlabel=%s\nstart=%s\nexpires=%s\nhold=%s\ntoken=%s\n' \
+		"$2" "$_qm_s" "$1" "$(bench_utc)" "$((_qm_now + _qm_ttl))" "${BENCH_LOCK_TOKEN:-none}" "$BENCH_QUIET_MINE" > "$_qm_t" 2> /dev/null ||
+		! mv -f "$_qm_t" "$_qm_f" 2> /dev/null; then
+		rm -f "$_qm_t"
+		BENCH_QUIET_MINE=
+		bench_note "cannot write the quiet marker in the lock state directory"
+	fi
+}
+
+# bench_quiet_release: removes the marker when it is the one this process
+# wrote, or, in the lock shell, one that names this process's hold.
+bench_quiet_release() {
+	[ -n "${BENCH_STATE_DIR:-}" ] || return 0
+	_qx_h=$(cat "${BENCH_STATE_DIR:?}/quiet" 2> /dev/null) || return 0
+	if { [ -n "$BENCH_QUIET_MINE" ] && [ "$(bench_kv "$_qx_h" token)" = "$BENCH_QUIET_MINE" ]; } ||
+		{ [ "${BENCH_LOCK_OWNED:-}" = 1 ] && [ "$(bench_kv "$_qx_h" hold)" = "$BENCH_LOCK_MINE" ]; }; then
+		rm -f "${BENCH_STATE_DIR:?}/quiet"
+	fi
+	BENCH_QUIET_MINE=
+}
+
+# bench_lock_release: removes the quiet marker this process wrote, then the
+# lock if this process holds it.
 bench_lock_release() {
+	bench_quiet_release
 	[ "${BENCH_LOCK_OWNED:-}" = 1 ] || return 0
 	BENCH_LOCK_OWNED=
 	if [ "$(bench_kv "$(bench_lock_holder)" token)" = "$BENCH_LOCK_MINE" ]; then
@@ -288,18 +358,28 @@ bench_lock_alive() {
 	kill -0 -- "-$_lv_c" 2> /dev/null
 }
 
-# bench_lock_run <label> -- <command...>: runs the command under the lock
-# and exits with its status (75 when the wait ran out, 74 when the command
-# stopped).
+# bench_lock_run [--quiet] <label> -- <command...>: runs the command under
+# the lock and exits with its status (75 when the wait ran out, 74 when the
+# command stopped). With --quiet the quiet marker is written once the lock
+# is held, before the command starts.
 bench_lock_run() {
+	_ru_quiet=
+	if [ "${1:-}" = --quiet ]; then
+		_ru_quiet=1
+		shift
+	fi
 	if [ "$#" -lt 3 ] || [ "$2" != -- ]; then
-		bench_die 2 "usage: bench.sh lock run <label> -- <command> [args...]"
+		bench_die 2 "usage: bench.sh lock run [--quiet] <label> -- <command> [args...]"
 	fi
 	_ru_label=$1
 	shift 2
 	bench_is_label "$_ru_label" || bench_die 2 "a lock label is 1 to 64 of A-Z a-z 0-9 . _ : @ + -"
 	bench_lock_init
 	if bench_lock_mine; then
+		# The command becomes this process, so the marker names this pid and
+		# the hold; the lock shell of that hold removes it.
+		if [ -n "$_ru_quiet" ]; then bench_quiet_mark "$_ru_label" "$$"; fi
+		BENCH_QUIET_MINE=
 		exec "$@"
 	fi
 	_ru_st=0
@@ -307,6 +387,7 @@ bench_lock_run() {
 	[ "$_ru_st" -eq 0 ] || exit "$_ru_st"
 	BENCH_LOCK_TOKEN=$BENCH_LOCK_MINE
 	export BENCH_LOCK_TOKEN
+	if [ -n "$_ru_quiet" ]; then bench_quiet_mark "$_ru_label" "$$"; fi
 	# In the background, in its own process group, so the trap reaches the
 	# whole command. The lock shell polls it (bench_watch, below), so a TERM
 	# to the lock shell alone runs its trap once the current nap's sleep

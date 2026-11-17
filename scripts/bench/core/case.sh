@@ -23,12 +23,18 @@
 #   settings     every run-time setting, for the adapter
 #   requires     capabilities the adapter checks in its preflight
 #   description  free text
+#   prewarm      seconds of the adapter's workload before the first warm-up
+#                run of a measurement (240; 0 none; measure.sh)
+#   gate_gpu     the quiet gate before each counted run (snap.sh): GPU
+#   gate_cpu     device utilization and CPU busy percent at most these, 0
+#   gate_hold    to 100 (10 and 25), for gate_hold seconds in a row (3),
+#   gate_wait    waiting at most gate_wait seconds (120)
 #
 # The normalised form is the kept lines, sorted; the case hash is "c-" and
 # 12 hex digits of its digest, so comments, blank lines, key order and
 # spacing do not change it, and any value does.
 
-BENCH_CASE_KEYS='adapter runs metric abs_tol rel_tol warmup wall better accept targets build_flags settings requires description'
+BENCH_CASE_KEYS='adapter runs metric abs_tol rel_tol warmup wall better accept targets build_flags settings requires description prewarm gate_gpu gate_cpu gate_hold gate_wait'
 
 BENCH_CASE_NAME=
 BENCH_CASE_FILE=
@@ -108,9 +114,15 @@ bench_case_load() {
 	if ! bench_is_uint "$_cl_v" || [ "$_cl_v" -lt 1 ] || [ "$_cl_v" -gt 1000 ]; then
 		bench_die 2 "the case $_cl_n: runs is 1 to 1000"
 	fi
-	for _cl_k in warmup wall; do
+	for _cl_k in warmup wall prewarm gate_hold gate_wait; do
 		_cl_v=$(bench_case_get "$_cl_k")
 		[ -z "$_cl_v" ] || bench_is_uint "$_cl_v" || bench_die 2 "the case $_cl_n: $_cl_k is whole"
+	done
+	for _cl_k in gate_gpu gate_cpu; do
+		_cl_v=$(bench_case_get "$_cl_k")
+		if [ -n "$_cl_v" ] && { ! bench_is_uint "$_cl_v" || [ "$_cl_v" -gt 100 ]; }; then
+			bench_die 2 "the case $_cl_n: $_cl_k is a whole percent, 0 to 100"
+		fi
 	done
 	for _cl_k in abs_tol rel_tol; do
 		_cl_v=$(bench_case_get "$_cl_k")

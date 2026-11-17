@@ -1190,7 +1190,7 @@ metric=ms n=3 median=11 p90=12 min=10 max=12"
 	for _f in "${_d:?}"/set-1/r-*.run; do
 		_keys=$(sed 's/=.*//' "$_f" | tr '\n' ' ')
 		[ "$_keys" = "$_want" ] || bad "store: a run file has the keys: $_keys"
-		for _l in quiet=yes quiet.reason=none gate.wait=0 snap.before.gpu.device=0 snap.after.top.5='1.0 zzqproc5' freq.gpu.mhz=1000 \
+		for _l in quiet=yes quiet.reason=none snap.before.gpu.device=0 snap.after.top.5='1.0 zzqproc5' freq.gpu.mhz=1000 \
 			prewarm.target=0 prewarm.stop=none prewarm.freq=unavailable prewarm.freq.reason=no-prewarm; do
 			grep -qx "$_l" "$_f" || bad "store: a run file has no line $_l"
 		done
@@ -1430,6 +1430,7 @@ t_gate() {
 	rm -f "${STUB:?}/gpu.snap" "${STUB:?}/gpu.gate"
 	B baseline put "${E:?}/g.case" "$cA" > /dev/null || bad "gate: a quiet put failed"
 	B baseline put "${E:?}/g.case" "$cC" > /dev/null || bad "gate: a quiet put failed"
+	rm -f "${STUB:?}"/n.*
 	printf '0\n50\n' > "${STUB:?}/gpu.snap"
 	_st=0
 	_out=$(B drift "${E:?}/g.case" "$cA" 2> "${E:?}/err") || _st=$?
