@@ -1493,7 +1493,14 @@ settle_put() {
 	printf "$2" > "${STUB:?}/gpu.gate"
 	_t0=$(date +%s)
 	_st=0
-	BENCH_GATE_POLL=${4:-0.05} B baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err" || _st=$?
+	# Bounded: a settle wait without its bound would not end.
+	BENCH_GATE_POLL=${4:-0.05}
+	export BENCH_GATE_POLL
+	start sh "$R/bench.sh" baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err"
+	if wait_gone 40 "$BG"; then wait "$BG" || _st=$?; else
+		reap "$BG"
+		_st=99
+	fi
 	_took=$(($(date +%s) - _t0))
 }
 t_settle() {

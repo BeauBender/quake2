@@ -301,3 +301,40 @@ mutant source-stub-lost: caught by t_drift (drift: 12.3 gave: ... quiet=yes sour
 the reader's own `ps` columns at it with a stand-in `ps` (the reader's arguments without `-A` and
 `-r`, plus `-p <pid>`), and ends it by its pid. Nothing here ran the engine, and the
 re-measure above ran later, with the screen unlocked.
+
+## Rework round 2: a display-synced run is judged after its reading settles
+
+Main was merged first (FIX91 bounded the harness's numbers). The case values were already whole
+numbers of at most 9 digits; the decimals TASK166 added are now bounded too: `bench_is_dec`
+(`core/common.sh`) takes a number of at most 12 characters, and `BENCH_GATE_POLL`, the gate's and
+the settle's `gpu.device` and `cpu.busy`, and the quiet flag's `gpu.device` go through it; the
+probe's frequency figures in `bench_freq_window` take at most 9 integer digits and 6 decimals.
+
+**The settle fix.** On the M6, with the committed case (`vsync=1`, `gate_gpu` 10), `baseline put`
+refused three sets in a row with `quiet.reason=gpu.after` at 29 to 30 percent: a display-synced
+run keeps the GPU about 32 percent active, and the driver's figure lags and averages, so the
+snapshot at once after the run still shows the run's own use. 14 of the 33 cases are
+display-synced. Now the side after the run is judged after the figure settles (`bench_settle`,
+`core/snap.sh`): when the snapshot at once is over `gate_gpu`, `gpu.device` is read again every
+`BENCH_GATE_POLL` seconds until it is at or under `gate_gpu`, for at most the new case key
+`gate_settle` (default 10 s, a whole number of at most 9 digits; 0 judges the snapshot at once).
+`gpu.after` is in `quiet.reason` only when it never settles in that time or a reading is
+unknown; the snapshot at once stays the record, and the run file adds `gpu.after.settle=<whole
+seconds>|unsettled`. The before side and the gate are unchanged. The workaround of case copies
+with `gate_gpu=40` (above) is history: the committed case is used as it is.
+
+Tests (`t_settle` in `tests/check-bench.sh`, with the stub reader): a reading that falls from 30
+to 5 is `quiet=yes` with a settle time and the 30 stays the record; one that stays at 30 is
+refused with `gpu.after` after the full `gate_settle`; an unknown reading, at once or while
+settling, is refused; `gate_settle=0` judges at once (one reading in all, the gate's); a poll of
+20 s is cut to `gate_settle=1`. Mutants: `settle-no-poll`, `settle-no-bound`, `settle-not-flagged`,
+`settle-nap-uncut`, `settle-zero-polls`, `poll-digits-unbounded`. The existing gate and drift tests
+that expected `gpu.after` from a flat `gpu.snap` now also set the settle readings (`gpu.gate`).
+
+**The host batch (not run in this round).** The M6 batch the card asks for (the committed case
+with its defaults, a store of its own, the head build and `96b9c661` alternately, three runs
+each) was not measured: the bench lock was held by other sessions' jobs for most of the round
+(the wait for a single test hold took over an hour), and what was left of the round's budget went
+to the tests. So the +9 percent between `96b9c661` and main (4.308 against 4.713 ms) stays open,
+and no settle time from the real host is recorded. The batch script is a plain loop over
+`bench.sh baseline put --replace` with the screen-lock check before and after.
