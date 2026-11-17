@@ -109,7 +109,8 @@ IMGSIZE_PCXRowFits(int bits_per_pixel, int width, int bytes_per_line)
  * The body of a mip-mapped texture file: `size` bytes loaded, the first
  * mip at `ofs`, `width` by `height` at `bytes_per_pixel` each. The body
  * (size - ofs) must hold width * height * bytes_per_pixel bytes. The
- * dimensions are held to the cap; the offset must be inside the file.
+ * dimensions are held to the cap. An offset past the end gives a
+ * negative body, which no size fits.
  */
 static inline int
 IMGSIZE_BodyFits(int64_t size, int64_t ofs, int width, int height,
@@ -117,8 +118,7 @@ IMGSIZE_BodyFits(int64_t size, int64_t ofs, int width, int height,
 {
 	size_t bytes;
 
-	if (ofs <= 0 || ofs > size
-		|| !IMGSIZE_Bytes(width, height, bytes_per_pixel, &bytes))
+	if (ofs <= 0 || !IMGSIZE_Bytes(width, height, bytes_per_pixel, &bytes))
 	{
 		return 0;
 	}
