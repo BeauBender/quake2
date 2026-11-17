@@ -137,21 +137,108 @@ temporal scaler's history, not the marks. It is a finding for a card of its own 
 
 ### Cost
 
-**Pending: the screen was locked for the whole of this card's run** (`ioreg` showed
-`CGSSessionScreenIsLocked` at every check), and a timing run needs it unlocked. Nothing was measured;
-the cases stay the card's (1920 x 1080 and 5120 x 2880, with and without `r_metalfx 2`, held and not
-held, three runs a case alternated with main, and `demo1.dm2` for a view with no water), by the owner's
-protocol (one `heavy.sh` hold a batch, a 4-minute full-load pre-warm inside it, before every run the
-load, `memory_pressure -Q`, the GPU utilization from `ioreg` and `pmset -g therm`, "frequency: not
-recorded" until TASK166 lands). The `r_rt_stats 2` sum at `1` is now the compaction and the trace; the
-marks' draw is inside the G-buffer raster, so the frame's own GPU time is the fair comparison with
-`0`. The proposal on the default waits for those numbers.
+Measured on the owner's protocol, with the screen unlocked. The number is **the frame's own GPU time**,
+not the `r_rt_stats 2` sum (which at `1` no longer holds the marks' draw, it is inside the G-buffer
+raster): `MTL_GPU_TIME=1`'s `gpu_ms ... frame` line, the frame's command buffer's `GPUEndTime -
+GPUStartTime` (the whole 3D view, the effects and the 2D; the MetalFX scaler's pass runs in a command
+buffer of its own and is not in it). Each run's first 20 lines are dropped (136 frame lines a run,
+687 for `demo1.dm2`). `r_rt_stats` is off, no validation layer, `PINS_EVERY=100000` (nothing read
+back), `PINS_SEED=1`. "Held" is the display's sync (the scenarios' default), "not held" is `r_vsync 0`.
+FIX81's `water.dm2` is the view with water; `demo1.dm2` (`rt-water` cfg) is the view with almost
+none. 5120 x 2880 is `PINS_HIDPI=1` at 2560 x 1440; the MetalFX cases are that size with `r_metalfx 2`.
+Three runs a case and build, alternated in rounds: this branch at `0`, this branch at `1`, main at
+`1`. Main's build is main's `ref_metal` (the export of `716e09a2`) beside the branch's client; no
+commit on main since touches `src/client/refresh/metal` (`git log 716e09a2..origin/main -- src/client/refresh/metal`
+is empty), so it stands for main today. The branch's build is `b4256343`'s; `8d17698f` changes
+comments and documents only. Everything is in `<artifacts>/TASK162/timing/` (`logs/*-summary.txt`,
+`logs/*.engine.log`, `snaps/`, `batch.sh`).
+
+Median of the three run medians in ms, with the range of the run medians:
+
+| Output | Sync | Branch, `r_rt_water_hits 0` | Branch, `1` | Main, `1` | `1` against `0` |
+|---|---|---|---|---|---|
+| 1920 x 1080 | held | 5.10 (4.91 to 5.11) | 4.73 (4.68 to 4.78) | 4.72 (4.67 to 4.82) | -0.37 ms (-7 %) |
+| 1920 x 1080 | not held | 2.23 (2.16 to 2.38) | 2.14 (1.51 to 2.18) | 2.24 (2.09 to 2.29) | -0.09 ms, inside the ranges |
+| 5120 x 2880 | held | 13.56 (13.41 to 13.68) | 13.20 (12.85 to 13.25) | 13.08 (12.96 to 13.60) | -0.36 ms (-3 %) |
+| 5120 x 2880 | not held | 10.82 (10.81 to 10.83) | 10.33 (10.01 to 10.34) | 10.43 (10.42 to 10.44) | -0.49 ms (-5 %) |
+| 5120 x 2880, `r_metalfx 2` | held | 12.58 (12.49 to 12.97) | 12.38 (11.92 to 13.56) | 12.30 (11.76 to 12.47) | -0.20 ms, inside the ranges |
+| 5120 x 2880, `r_metalfx 2` | not held | 7.80 (7.78 to 7.86) | 7.68 (7.65 to 7.71) | 7.71 (7.68 to 7.73) | -0.12 ms (-2 %) |
+| 1920 x 1080, no water (`demo1.dm2`) | held | 2.58 (2.42 to 2.88) | 1.57 (1.54 to 1.91) | 1.60 (1.53 to 1.67) | -1.01 ms (-39 %) |
+
+p10 / p90 over the pooled frames are in the logs (for example 5120 x 2880 not held: `0` 10.12 / 10.96,
+`1` 9.92 / 10.56). What the numbers say:
+
+- **Setting 1 is not dearer than setting 0 in any case, and cheaper in five.** (Ranges do not overlap in five rows; two are inside them.) The frame is 0.1 to
+  0.5 ms shorter with water in view, and 1.0 ms (39 %) shorter in a view with almost none, where `0`
+  traces every pixel and `1` lists next to none. The two rows whose gap is inside the ranges (1080p not held, MetalFX held) are "not dearer".
+- **The marks' draw costs nothing the frame shows.** This branch at `1` is within 0.12 ms of main at
+  `1` in every case, inside the run-to-run range in six of seven. The separate raster's wait (TASK158's
+  *Rework*: the raster's span, 3.25 ms of the 4.66 held at 1080p, was the pass waiting on the frame's
+  earlier passes) did not add to the frame on main either, so the frame-level gain of moving the marks
+  into the G-buffer raster is not measurable here: its gain is the stats sum's (the raster's `-` figures
+  and no reload of the depth), not the frame's. The `r_rt_stats 2` figures of TASK158 (4.66 against 3.40
+  ms at 1080p held) overstated what setting 1 costs the frame; this table replaces them as the cost.
+- **The GPU's clock moves with the load, so compare within a row.** Held at 1080p the GPU sits in its
+  lowest state (about 502 MHz, 0 % at the top state, 23 to 33 % active) for all three builds, held under
+  MetalFX at 854 MHz; not held it runs 920 to 984 MHz at 1080p, 1540 to 1665 MHz at the larger sizes
+  (77 to 94 % at the top state). Per row the three builds' medians are within 5 % of each other (largest:
+  5120 x 2880 held, `0` 1273 MHz, `1` 1215 MHz, main 1209 MHz; the lower clock at `1` makes its frame
+  longer, so its 0.36 ms advantage there is not a clock effect). The held 1080p absolute figures (4.7 to
+  5.1 ms) are at the clock floor and so are larger than the not held 2.2 ms; none of that changes the
+  comparison.
+
+**Frequencies** (the no-root IOReport probe of the bench core, `freq dump` before and after each run,
+`freq delta`; `eacc` is the efficiency cluster, `pacc0` the performance cluster):
+
+| Window | eacc MHz (top state %) | pacc0 MHz (top state %) | GPU MHz (top state %), active % |
+|---|---|---|---|
+| First pre-warm (batch A, 240 s, 202 runs, cold start to warm) | 1551 (10.3) | 4323 (70.7) | 922 (1.6), 43 |
+| Batch B pre-warm (110 runs, 5120 x 2880 not held) | 1353 (6.5) | 4480 (78.9) | 1650 (90.3), 75 |
+| Batch C pre-warm (110 runs, MetalFX not held) | 1311 (4.9) | 4303 (75.5) | 1563 (79.5), 60 |
+| Runs, 1080p held (all builds) | 1266 (3.2) | 4083 (54) | 502 (0), 33 |
+| Runs, 1080p not held | 1573 (10.0) | 4144 (59) | 957 (0), 41 |
+| Runs, `demo1.dm2` held | 1251 (2.2) | 3943 (55) | 502 (0), 23 |
+| Runs, 5120 x 2880 held | 1322 (3.1) | 4003 (52) | 1220 (5.4), 73 |
+| Runs, 5120 x 2880 not held | 1319 (4.1) | 4482 (80) | 1663 (93.5), 73 |
+| Runs, MetalFX held | 1250 (2.3) | 4080 (55) | 854 (0), 73 |
+| Runs, MetalFX not held | 1326 (3.6) | 4241 (72) | 1541 (77.3), 59 |
+
+The pre-warm windows are the cold-to-warm view (the first one is the card's first full-load window of the session); the per-run rows are a run's own window, a few seconds each, medians over nine runs.
+The performance cluster runs at 3.3 to 4.8 GHz in every window, so the CPU side is not throttled; only
+the GPU clock differs between the held and not held cases, as above.
+
+**Protocol notes.** Three batches (A: 1080p held, 1080p not held, `demo1`; B: 5120 x 2880 held and not
+held; C: the same under `r_metalfx 2`), each one `heavy.sh` hold (B and C queued behind another lane's
+hold first), each with its own 240 s pre-warm of the batch's first case at `1`, display sync off, no
+thermal or performance warning at any check (all 132 snapshots: "no warning level recorded"; the
+low-power mode off). Before and after every run: the load, `memory_pressure`, the swap, the GPU
+utilization (Device, Renderer, Tiler, in-use memory), `pmset -g therm`, the top five processes by name.
+**The screen was unlocked and checked before and after each batch (and at every run: `locked=0` in
+all 63 runs and the three pre-warms).** The one-minute load was 1.6 to 4.8 (A 1.7 to 4.8, B 1.6 to 2.8,
+C 1.8 to 2.9; the high end is the host's other work, outside a batch's own runs); the GPU's device
+utilization before a run was 0 to 7 %, under the 10 % gate, so no run was repeated. The busy
+processes in the snapshots were `mediaanalysisd` (up to 91 % of a core, in about half of the
+snapshots), `searchpartyd` (up to 88 %, seven snapshots) and a browser helper (up to 45 %); no
+`backupd`, and `mds_stores` only at 1.0 to 1.5 % in two snapshots. These ran at all three builds alike (alternated), but they are a load the
+medians carry, and are the reason for taking medians. No other `quake2` ran.
+
+**Proposal on the default.** The numbers support making `r_rt_water_hits 1` the default as far as cost
+goes: at no size, sync or MetalFX setting is the frame longer than at `0`, it is shorter by up to 0.5
+ms with water in view and by 1.0 ms without, and the branch costs what main's setting 1 cost. They
+do not settle it alone: setting 1's picture is not byte-identical to 0's (TASK158: 0.08 to 0.31 % of
+a frame's pixels differ, by at most 24 levels, where the reflection is traced in world space instead
+of from the picture), which is the owner's call on the look; every `rt-water*` pin would be
+re-recorded; and `r_metalfx 2` with `1` has the temporal-scaler non-determinism found above (its
+own card). The gaps in two of seven rows are inside the ranges of three runs on one machine (an
+M-series Mac, no AMD GPU), so "cheaper" is claimed only for the five whose ranges do not overlap
+(1080p held, 5120 x 2880 held and not held, MetalFX not held, `demo1`) and "not dearer" for the other two. Proposal: flip
+the default to `1` in a card of its own (cvar default, `doc/040_cvarlist.md`, the pins), after the
+owner accepts the look.
 
 ## Follow-ups (outside the card's files)
 
-- `header/rm_rtwater.h` (the stats fields' and `rmb_rtw_prepare`'s comments), `rmb_rt.m` (two
-  comments) and `doc/040_cvarlist.md` (`r_rt_stats 2`'s "three parts" and `r_rt_water_hits`' cost)
-  still describe the separate raster; `rm_rtwater.c`'s stats line could drop its raster figures.
+- `rm_rtwater.c`'s stats line could drop its raster figures (`header/rm_rtwater.h`, `rmb_rt.m` and
+  `doc/040_cvarlist.md` were brought up to the G-buffer marks in `8d17698f`).
 
 ## Checks
 
