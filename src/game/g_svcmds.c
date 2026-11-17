@@ -156,6 +156,12 @@ SV_FilterPacket(char *from)
 		return false;
 	}
 
+	/* a value with fewer than four parts leaves the rest at 0 */
+	for (i = 0; i < 4; i++)
+	{
+		m[i] = 0;
+	}
+
 	i = 0;
 	p = from;
 
