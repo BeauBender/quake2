@@ -456,17 +456,21 @@ kcalls() {
 }
 # deadif: stdin to stdout, the lines of dead preprocessor branches blanked (so a call there is no
 # call): the part of an "#if 0" before its "#else" (the "#else" part is live), the "#else" part of an
-# "#if 1", whatever the nesting; directive lines are blanked too, the line count is kept. An "#elif"
-# is taken as live, as its condition is not evaluated.
+# "#if 1", whatever the nesting; directive lines are blanked too, the line count is kept. The forms
+# evaluated are "#if 0", "#if 1", "#if (0)" and "#if (1)" (blanks optional, so "#if(0)" too); every
+# other condition ("#if X", "#if defined(X)", "#ifdef", "#ifndef", "#elif", "#if 00", "#if false")
+# is taken as live on both branches, so a call kept there counts (the check cannot tell it is dead),
+# and a live call is never refused for it. Every "#if" form, "#if(" included, opens a level, so each
+# "#endif" closes its own.
 deadif() {
 	awk '
 	function dead(   i) { for (i = 1; i <= depth; i++) if (off[i]) return 1; return 0 }
 	{
 		line = $0
-		if (line ~ /^[ \t]*#[ \t]*if([ \t]|$)|^[ \t]*#[ \t]*if(n?def)[ \t]/) {
+		if (line ~ /^[ \t]*#[ \t]*if([^A-Za-z0-9_]|$)|^[ \t]*#[ \t]*if(n?def)[ \t]/) {
 			depth++; kind[depth] = 2; off[depth] = 0
-			if (line ~ /^[ \t]*#[ \t]*if[ \t]+0[ \t]*$/) { kind[depth] = 0; off[depth] = 1 }
-			else if (line ~ /^[ \t]*#[ \t]*if[ \t]+1[ \t]*$/) { kind[depth] = 1 }
+			if (line ~ /^[ \t]*#[ \t]*if([ \t]+0|[ \t]*\([ \t]*0[ \t]*\))[ \t]*$/) { kind[depth] = 0; off[depth] = 1 }
+			else if (line ~ /^[ \t]*#[ \t]*if([ \t]+1|[ \t]*\([ \t]*1[ \t]*\))[ \t]*$/) { kind[depth] = 1 }
 			print ""; next
 		}
 		if (line ~ /^[ \t]*#[ \t]*else/) {
@@ -495,7 +499,13 @@ kcall_mutant() {
 		liveelse) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
 			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print; print "#else"; print; print "#endif"; next } { print }' "$2" ;;
 		deadnested) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
-			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print "#ifdef X"; print; print "#endif"; print "#endif"; next } { print }' "$2" ;;
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print "#ifdef X"; print "#endif"; print; print "#endif"; next } { print }' "$2" ;;
+		deadnestedparen) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print "#if(X)"; print "#endif"; print; print "#endif"; next } { print }' "$2" ;;
+		deadparen) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if (0)"; print; print "#else"; print "#endif"; next } { print }' "$2" ;;
+		deadparen2) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if(1)"; print "#else"; print; print "#endif"; next } { print }' "$2" ;;
 		joined) awk -v fn="$3" '
 			held != "" { if (index($0, fn "(") == 1) { print held " " $0 } else { print held; print } held = ""; next }
 			/^kernel void$/ || /^static [a-z0-9_]+$/ { held = $0; next }
@@ -519,7 +529,7 @@ for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm
 		continue
 	fi
 	kcall_pairs=$((kcall_pairs + 1))
-	for m in renamed commented elsewhere renamedkernel deadcode deadnested joined; do
+	for m in renamed commented elsewhere renamedkernel deadcode deadnested deadnestedparen deadparen deadparen2 joined; do
 		kcall_mutant "$m" "$f" "$kn" "$hp" > "${tmp:?}/kcall-mutant.metal"
 		# a mutant that takes the function away is "not found" (2), the others "no call" (1)
 		case $m in renamedkernel|joined) want=2 ;; *) want=1 ;; esac
