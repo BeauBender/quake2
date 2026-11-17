@@ -569,3 +569,58 @@ TEST(imgsize_wal_m8_body)
 	free(f);
 	Fake_Set(NULL, 0);
 }
+
+/* ---- GetPCXInfo sizes ---- */
+
+static void
+Pcx_Info(int xmin, int ymin, int xmax, int ymax, int want_w, int want_h)
+{
+	byte file[PCX_HEADER];
+	int w = 0, h = 0;
+
+	Pcx_Header(file, xmin, ymin, xmax, ymax, 8, 1, 4);
+	Fake_Set(file, PCX_HEADER);
+	GetPCXInfo("t", &w, &h);
+	T_EQ_INT(w, want_w);
+	T_EQ_INT(h, want_h);
+	Fake_Set(NULL, 0);
+}
+
+TEST(imgsize_getpcxinfo_dimensions)
+{
+	/* stock, and a window not at the origin: the real size */
+	Pcx_Info(0, 0, 319, 239, 320, 240);
+	Pcx_Info(10, 20, 329, 259, 320, 240);
+	/* the cap edge accepted, one column past it refused */
+	Pcx_Info(0, 0, 8191, 8191, 8192, 8192);
+	Pcx_Info(0, 0, 8192, 8191, 0, 0);
+	/* one pixel, zero and negative sizes: refused, sizes stay 0 */
+	Pcx_Info(0, 0, 0, 0, 1, 1);
+	Pcx_Info(0, 0, -1, 5, 0, 0);
+	Pcx_Info(0, 0, 5, -1, 0, 0);
+	Pcx_Info(0, 0, -5, 5, 0, 0);
+	Pcx_Info(0, 0, 5, -5, 0, 0);
+	Pcx_Info(10, 0, 5, 5, 0, 0);
+}
+
+/* ---- 1-bit PCX plane count ---- */
+
+TEST(imgsize_pcx_planes)
+{
+	int w, h, bpp;
+	byte *pic;
+
+	/* 8 planes is the most accepted; 9 is refused. 1 and 4 are the stock cases */
+	pic = Pcx_Run(8, 1, 1, 8, 2, 256, &w, &h, &bpp);
+	T_CHECK(pic != NULL);
+	free(pic);
+	pic = Pcx_Run(8, 1, 1, 9, 2, 256, &w, &h, &bpp);
+	T_CHECK(pic == NULL);
+	free(pic);
+	pic = Pcx_Run(8, 1, 1, 4, 2, 256, &w, &h, &bpp);
+	T_CHECK(pic != NULL);
+	free(pic);
+	pic = Pcx_Run(8, 1, 1, 1, 2, 256, &w, &h, &bpp);
+	T_CHECK(pic != NULL);
+	free(pic);
+}
