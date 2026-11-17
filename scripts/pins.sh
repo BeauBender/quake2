@@ -740,11 +740,11 @@ cmd_replay() {
     [ "$th_every" -eq "${PINS_EVERY:-30}" ] || die "the trace was captured every $th_every frames, PINS_EVERY is ${PINS_EVERY:-30}$pick"
     # the record's rendered-frame count, judged as record judges it (FIX48), by
     # the demo its settings.txt names; a record made before FIX48 names none
-    local reason="" rdemo
+    # (written into replay.txt as its frames-check line)
+    local reason="" rdemo fcheck="unchecked: the record names no demo (made before FIX48)"
     rdemo=$(sed -n 's/^demo \([A-Za-z0-9_][A-Za-z0-9_.-]*\)$/\1/p' "$tdir/settings.txt" 2>/dev/null | tail -n 1)
-    if [ -z "$rdemo" ]; then
-        echo "pins: the record $scenario/$from/$trace_id names no demo (made before FIX48); its rendered frames are not checked" >&2
-    else
+    if [ -n "$rdemo" ]; then
+        fcheck="$rdemo against $scenario.cfg"
         judge_frames "$tdir/timedemo.txt" "$scenario" "$rdemo" "the record $scenario/$from/$trace_id"
         [ -z "$reason" ] || die "$reason; it is not replayed"
     fi
@@ -790,6 +790,7 @@ cmd_replay() {
       echo "trace-bytes $tbytes"; echo "trace-cksum $tsum"
       echo "trace-frames $th_frames"; echo "record-frames $nlive"
       echo "renderer $renderer"; echo "engine $(engine_sha)"; echo "seed ${PINS_SEED:-none}"; echo "hidpi 0"
+      echo "frames-check $fcheck"
       echo "game-module $(game_module "$bin")"; } > "$out/replay.txt"
     run_engine "$bin" "$out" "$limit"
     judge_pin "$out" "$renderer" "$limit"

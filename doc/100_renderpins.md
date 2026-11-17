@@ -209,7 +209,7 @@ exited 0 and logged nothing unusual, and the record held other frames
   each time it is made, or `demo2.dm2`), and the cinematic, which prints
   no count, are not checked: `record` says so in one line on stderr and
   records. A record made before FIX48 has no `demo` line and is replayed
-  unchecked, with the same note.
+  unchecked; the `frames-check` line of `replay.txt` says which it was.
 
 A new scenario gets its count from the scenario it is derived from: all
 of them play the same demo, so it copies the `// frames demo1.dm2 689`

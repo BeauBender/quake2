@@ -52,8 +52,8 @@ scenario's. The user-facing description is in `doc/100_renderpins.md`,
   gets its line from a clean record (its `timedemo.txt`). A demo with no line
   (a `make-demo` demo such as `water.dm2`, whose count changes each time it is
   made; `demo2.dm2`), the cinematic (no timedemo line) and a record made
-  before this card (no `demo` line) are not checked, and `record` or `replay`
-  says so in one line on stderr. The guard covers them.
+  before this card (no `demo` line) are not checked: `record` says so in one
+  line on stderr, `replay` in the `frames-check` line of `replay.txt`. The guard covers them.
 
 ## Tests, red first
 
@@ -65,4 +65,30 @@ scenario's. The user-facing description is in `doc/100_renderpins.md`,
   whose `timedemo.txt` says 794, a scenario without a frames line and six
   malformed lines.
 
-RESULTS-PLACEHOLDER
+Red against the scaffolding commit (the wrappers passing everything
+through, no count check): `yq2test: 2 tests, 1 failed` (`!IN_InputOpen()`,
+`stub_keys.n == 0: got 6, want 0`, `stub_keys.chars == 0: got 1, want 0`)
+and `FAIL: a record of 9560 rendered frames where world expects 689 must
+fail`. Green after it: `yq2test: 280 tests, 0 failed`, `pins selftest: ok`.
+
+## On the bare-metal host
+
+Owner game data, a pin store of the card's own outside the repository,
+`soft` at 640x480, `PINS_SEED=1`, `world`, `demo1.dm2`. The input came from
+inside the engine: a scratch hook, never committed, at the top of
+`IN_Update` pushed an `Esc` press and release (`SDL_PushEvent`) every 60th
+call and a mouse movement on every call, and counted its presses on stderr.
+
+| Build | Injected presses | Rendered (`timedemo.txt`) | Captured | Result |
+|---|---|---|---|---|
+| this card with the hook | 14 | 689 | 23 | complete |
+| the gate opened (`IN_InputOpen` true, the old behaviour) with the hook | 26 | 1409 | 47 | incomplete: `the engine rendered 1409 frames, world.cfg expects 689 for demo1.dm2` |
+| this card, no hook | 0 | 689 | 23 | complete |
+
+`pins.sh compare soft world` of the first against the third at
+`--threshold 0 --bad-threshold 0`: `frames=23 failed=0 worst=0
+worst_bad=0`; both traces are 4382172 bytes. A first run of the hook
+printed its count with `Com_Printf`, whose console notify lines are drawn
+on the screen: that record rendered 689 frames but differed in 22 of 23
+frames (worst 0.001911) and was set aside; the hook's count went to stderr
+afterwards.
