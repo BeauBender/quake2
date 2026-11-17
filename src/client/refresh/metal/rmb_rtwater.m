@@ -19,7 +19,7 @@
  *
  * The Metal back end of ref_metal's ray-traced water reflections (RT6,
  * TASK58; header/rm_rtwater.h): the kernels', the blend's, the
- * development view's, the candidates' and the forward pass's translucent
+ * development view's, the water marks' and the forward pass's translucent
  * pipelines, the kernel's outputs and the pixel list at the render size,
  * the passes on the frame's command buffer after the lighting resolve
  * (rmb_gbuf_resolve's hook) over the frame's instance structure
@@ -33,7 +33,10 @@
  * shading's bindings: the triangles' shading records, the frame's texture
  * table (an argument buffer of the world's images and the sky box's six),
  * the lightmap array and the dynamic lights the lightmaps left out. Every
- * object is counted in the ledger as RM_OBJ_RT.
+ * object is counted in the ledger as RM_OBJ_RT. TASK162 moves the
+ * candidates' raster into the G-buffer raster (rmb_rtw_mark, its last draw:
+ * a mark in the normal attachment's alpha), so the world-space path has no
+ * render pass of its own.
  *
  * =======================================================================
  */
@@ -69,12 +72,15 @@ id<MTLCommandBuffer> rmb_frame_compute(unsigned long *frame);
 unsigned long rmb_rt_bind_water_raster(id<MTLRenderCommandEncoder> enc, int list_at, int idx_at, int vert_at,
 		int geom_at);
 
+/* rmb_gbuf.m (TASK162): the G-buffer raster's attachment formats, with the surface attachment or not */
+void rmb_gbuf_raster_formats(MTLRenderPipelineDescriptor *d, int surf);
+
 #define RMB_RTW_GROUP 8         /* the compaction's threadgroup side */
 #define RMB_RTW_SLOT 16         /* uint32s a frame slot of the counts buffer (rm_rtwater.metal's RM_RTW_C_*) */
 #define RMB_RTW_C_LISTED 9
 #define RMB_RTW_C_ARGS 10
-#define RMB_RTW_SAMPLES 8       /* per slot (world space): the raster's start and end, the compaction's, the trace's,
-                                   then the end of the raster's vertex stage and the start of its fragment stage */
+#define RMB_RTW_SAMPLES 8       /* per slot (world space): 2 and 3 the compaction's start and end, 4 and 5 the trace's;
+                                   0, 1, 6 and 7 were TASK158's raster's, which TASK162 removed */
 
 _Static_assert(sizeof(rm_rtw_view_t) == 288, "the view is rm_rtwater.metal's 288 bytes");
 _Static_assert(RMB_RTW_C_ARGS * 4 % 4 == 0, "the indirect arguments are 4-byte aligned");
@@ -85,8 +91,9 @@ static id<MTLComputePipelineState> trace_ws_pipe, compact_pipe, args_pipe;   /* 
 static int made_ws;                     /* the outputs were made for the world-space path (rmb_rtw_prepare) */
 static int ws_ok;                       /* the world-space path's pipelines and bindings were built (rmb_rtw_ws_ok) */
 static char ws_err[192];                /* why not */
-static id<MTLRenderPipelineState> blend_pipe, show_pipe, trans_pipe, cand_pipe;
-static id<MTLDepthStencilState> cand_depth;
+static id<MTLRenderPipelineState> blend_pipe, show_pipe, trans_pipe;
+static id<MTLRenderPipelineState> mark_pipe[2];   /* TASK162: the marks in the G-buffer raster, without and with its surface */
+static id<MTLDepthStencilState> mark_depth;
 static id<MTLTexture> t_refl;           /* the reflection and the class, RGBA8Unorm at the render size */
 static id<MTLTexture> t_wdist;          /* the translucent water's distance from the eye, R32Float */
 static id<MTLBuffer> list;              /* the compaction's pixels, one uint32 a pixel of the render size */
@@ -118,6 +125,7 @@ static int ndone;
 /* the view the next G-buffer view traces with; whether this one traced (for the blend, then the forward pass) */
 static rm_rtw_view_t view;
 static int view_set, traced, forward, shown;   /* shown: this view's r_rt_water_show view was drawn */
+static int marked;                      /* TASK162: this view's raster drew the water's marks (rmb_rtw_mark) */
 
 /* Sets a strong slot to obj (nil releases it), counting both in the ledger as RM_OBJ_RT. */
 #define RMB_RTW_SET(slot, obj) \
@@ -194,25 +202,44 @@ rmb_rtw_trans_pipe(NSError **e)
 }
 
 /*
- * TASK158: the candidates' raster over the reflection target (RGBA8Unorm)
- * with the G-buffer's depth (Depth32Float, as the forward pass's), tested
- * as gl1 tests (less or equal) and not written.
+ * TASK162: the water's marks, a draw of the G-buffer raster (its
+ * attachments, rmb_gbuf_raster_formats, with the surface attachment or
+ * not), depth-tested by mark_depth as gl1 tests (less or equal) and not
+ * written. Only the normal attachment's alpha is written, blended to
+ * MTL_RTW_MARK_A + MTL_RTW_MARK_A x its alpha (mtl_rtw_mark_blend: the
+ * source alpha is MTL_RTW_MARK_A, the destination's factor the source's
+ * alpha), so its "has a normal" (above 0.5) is kept; every other
+ * attachment is left as the raster wrote it.
  */
 static id<MTLRenderPipelineState>
-rmb_rtw_cand_pipe(NSError **e)
+rmb_rtw_mark_pipe(int surf, NSError **e)
 {
 	MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+	int i;
 
 	d.vertexFunction = [rmb_library() newFunctionWithName:@"rm_vertex_rtw_cand"];
-	d.fragmentFunction = [rmb_library() newFunctionWithName:@"rm_fragment_rtw_cand"];
+	d.fragmentFunction = [rmb_library() newFunctionWithName:@"rm_fragment_rtw_mark"];
 
 	if (!d.vertexFunction || !d.fragmentFunction)
 	{
 		return nil;
 	}
 
-	d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
-	d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+	rmb_gbuf_raster_formats(d, surf);
+
+	for (i = 0; i < 6; i++)
+	{
+		d.colorAttachments[i].writeMask = MTLColorWriteMaskNone;
+	}
+
+	d.colorAttachments[1].writeMask = MTLColorWriteMaskAlpha;
+	d.colorAttachments[1].blendingEnabled = YES;
+	d.colorAttachments[1].rgbBlendOperation = MTLBlendOperationAdd;
+	d.colorAttachments[1].sourceRGBBlendFactor = MTLBlendFactorZero;
+	d.colorAttachments[1].destinationRGBBlendFactor = MTLBlendFactorOne;
+	d.colorAttachments[1].alphaBlendOperation = MTLBlendOperationAdd;
+	d.colorAttachments[1].sourceAlphaBlendFactor = MTLBlendFactorOne;
+	d.colorAttachments[1].destinationAlphaBlendFactor = MTLBlendFactorSourceAlpha;
 	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
 }
 
@@ -246,8 +273,9 @@ rmb_rtw_close_ws(void)
 	RMB_RTW_SET(trace_ws_pipe, nil);
 	RMB_RTW_SET(compact_pipe, nil);
 	RMB_RTW_SET(args_pipe, nil);
-	RMB_RTW_SET(cand_pipe, nil);
-	RMB_RTW_SET(cand_depth, nil);
+	RMB_RTW_SET(mark_pipe[0], nil);
+	RMB_RTW_SET(mark_pipe[1], nil);
+	RMB_RTW_SET(mark_depth, nil);
 	RMB_RTW_SET(tex_enc, nil);
 	RMB_RTW_SET(tex_ab, nil);
 	RMB_RTW_SET(white2d, nil);
@@ -279,8 +307,9 @@ rmb_rtw_open_ws(id<MTLFunction> kw, id<MTLFunction> kc, id<MTLFunction> ka, char
 	RMB_RTW_SET(trace_ws_pipe, [rmb_device newComputePipelineStateWithFunction:kw error:&e]);
 	RMB_RTW_SET(compact_pipe, trace_ws_pipe ? [rmb_device newComputePipelineStateWithFunction:kc error:&e] : nil);
 	RMB_RTW_SET(args_pipe, compact_pipe ? [rmb_device newComputePipelineStateWithFunction:ka error:&e] : nil);
-	RMB_RTW_SET(cand_pipe, args_pipe ? rmb_rtw_cand_pipe(&e) : nil);
-	RMB_RTW_SET(cand_depth, [rmb_device newDepthStencilStateWithDescriptor:dd]);
+	RMB_RTW_SET(mark_pipe[0], args_pipe ? rmb_rtw_mark_pipe(0, &e) : nil);
+	RMB_RTW_SET(mark_pipe[1], mark_pipe[0] ? rmb_rtw_mark_pipe(1, &e) : nil);
+	RMB_RTW_SET(mark_depth, [rmb_device newDepthStencilStateWithDescriptor:dd]);
 	RMB_RTW_SET(tex_enc, [kw newArgumentEncoderWithBufferIndex:12]);
 	RMB_RTW_SET(white2d, rmb_rtw_white(0));
 	RMB_RTW_SET(white_arr, rmb_rtw_white(1));
@@ -294,8 +323,8 @@ rmb_rtw_open_ws(id<MTLFunction> kw, id<MTLFunction> kc, id<MTLFunction> ka, char
 				options:MTLResourceStorageModeShared]);
 	}
 
-	if (!trace_ws_pipe || !compact_pipe || !args_pipe || !cand_pipe || !cand_depth || !tex_enc || !tex_ab || !white2d ||
-		!white_arr)
+	if (!trace_ws_pipe || !compact_pipe || !args_pipe || !mark_pipe[0] || !mark_pipe[1] || !mark_depth || !tex_enc ||
+		!tex_ab || !white2d || !white_arr)
 	{
 		snprintf(err, errlen, "cannot build the world-space hits' pipelines%s%s", e ? ": " : "",
 				e ? e.localizedDescription.UTF8String : "");
@@ -401,7 +430,7 @@ rmb_rtw_open(char *err, size_t errlen)
 	}
 
 	ndone = 0;
-	view_set = traced = forward = shown = 0;
+	view_set = traced = forward = shown = marked = 0;
 	tex_n = lm_tid = sky_set = nlights = 0;
 	rtw_open = 1;
 	return 1;
@@ -429,7 +458,7 @@ rmb_rtw_close(void)
 	rtw_open = 0;
 	made_ws = 0;
 	list_cap = shade_n = 0;
-	view_set = traced = forward = shown = 0;
+	view_set = traced = forward = shown = marked = 0;
 	tex_n = lm_tid = sky_set = nlights = 0;
 	ndone = 0;
 }
@@ -456,9 +485,9 @@ rmb_rtw_prepare(unsigned long w, unsigned long h, int ws)
 		MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
 				width:w height:h mipmapped:NO];
 
-		/* TASK158: on the world-space path the reflection target is also the candidates' raster's colour attachment */
+		/* TASK162: on either path the kernels alone write the reflection target (the world-space compaction its 0s) */
 		d.storageMode = MTLStorageModePrivate;
-		d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite | (ws ? MTLTextureUsageRenderTarget : 0);
+		d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
 		RMB_RTW_SET(t_refl, [rmb_device newTextureWithDescriptor:d]);
 		d.pixelFormat = MTLPixelFormatR32Float;
 		d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
@@ -488,7 +517,7 @@ rmb_rtw_prepare(unsigned long w, unsigned long h, int ws)
 void
 rmb_rtw_set_view(const rm_rtw_view_t *v)
 {
-	view_set = shown = 0;
+	view_set = shown = marked = 0;
 
 	if (!rtw_open || !v)
 	{
@@ -602,8 +631,10 @@ rmb_rtw_read(void)
 
 		/*
 		 * TASK58's path: its compute encoder. The world-space path (TASK158):
-		 * the candidates' raster, the compaction's encoder (with the
-		 * arguments) and the trace's, each on its own, and the whole span.
+		 * the compaction's encoder (with the arguments) and the trace's, each
+		 * on its own, and the whole span. TASK162: no raster of its own (its
+		 * marks are a draw of the G-buffer raster, timed with it), so the
+		 * raster's, its vertex stage's and its fragment stage's stay -1.
 		 */
 		if (slot_timed[k] && samples)
 		{
@@ -618,16 +649,13 @@ rmb_rtw_read(void)
 			}
 			else
 			{
-				s->raster_ms = rmb_rtw_span(t, n, 0, 1);
 				s->compact_ms = rmb_rtw_span(t, n, 2, 3);
 				s->trace_ms = rmb_rtw_span(t, n, 4, 5);
-				s->span_ms = rmb_rtw_span(t, n, 0, 5);
-				s->vert_ms = rmb_rtw_span(t, n, 0, 6);
-				s->frag_ms = rmb_rtw_span(t, n, 7, 1);
+				s->span_ms = rmb_rtw_span(t, n, 2, 5);
 
-				if ((s->raster_ms >= 0) && (s->compact_ms >= 0) && (s->trace_ms >= 0))
+				if ((s->compact_ms >= 0) && (s->trace_ms >= 0))
 				{
-					s->ms = s->raster_ms + s->compact_ms + s->trace_ms;
+					s->ms = s->compact_ms + s->trace_ms;
 				}
 			}
 		}
@@ -657,39 +685,24 @@ rmb_rtw_stats(rm_rtw_stats_t *s, int cap)
 }
 
 /*
- * TASK158: the candidates' raster on cmd: the map's water triangles over
- * the reflection target, cleared to 0 first (so every pixel the trace
- * does not list reads as no water), against the G-buffer's depth. 1 when
- * the pass was encoded (with no triangle it only clears).
+ * TASK162: the water's marks on the G-buffer raster's encoder enc, its
+ * last draw (rmb_gbuf_resolve, before the pass ends; surf: the raster has
+ * the surface attachment): the map's water triangles with the view's
+ * matrix and viewport, as TASK158's separate raster drew them, against
+ * the raster's own depth. Only when this view's outputs were made for
+ * the world-space path; 1 when drawn (with no triangle there is nothing
+ * to draw, and every pixel reads unmarked).
  */
-static int
-rmb_rtw_cand(id<MTLCommandBuffer> cmd, id<MTLTexture> depth, int slot, int timed)
+int
+rmb_rtw_mark(id<MTLRenderCommandEncoder> enc, int surf)
 {
-	MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
-	id<MTLRenderCommandEncoder> re;
+	id<MTLRenderPipelineState> pipe = mark_pipe[surf ? 1 : 0];
 	MTLViewport vp;
 	unsigned long nw;
 
-	rp.colorAttachments[0].texture = t_refl;
-	rp.colorAttachments[0].loadAction = MTLLoadActionClear;
-	rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
-	rp.colorAttachments[0].storeAction = MTLStoreActionStore;
-	rp.depthAttachment.texture = depth;
-	rp.depthAttachment.loadAction = MTLLoadActionLoad;
-	rp.depthAttachment.storeAction = MTLStoreActionStore;
+	marked = 0;
 
-	if (timed)
-	{
-		rp.sampleBufferAttachments[0].sampleBuffer = samples;
-		rp.sampleBufferAttachments[0].startOfVertexSampleIndex = (NSUInteger)slot * RMB_RTW_SAMPLES;
-		rp.sampleBufferAttachments[0].endOfVertexSampleIndex = (NSUInteger)slot * RMB_RTW_SAMPLES + 6;
-		rp.sampleBufferAttachments[0].startOfFragmentSampleIndex = (NSUInteger)slot * RMB_RTW_SAMPLES + 7;
-		rp.sampleBufferAttachments[0].endOfFragmentSampleIndex = (NSUInteger)slot * RMB_RTW_SAMPLES + 1;
-	}
-
-	re = [cmd renderCommandEncoderWithDescriptor:rp];
-
-	if (!re)
+	if (!rtw_open || !ws_ok || !view_set || !made_ws || !enc || !pipe || !mark_depth)
 	{
 		return 0;
 	}
@@ -700,20 +713,20 @@ rmb_rtw_cand(id<MTLCommandBuffer> cmd, id<MTLTexture> depth, int slot, int timed
 	vp.height = view.vp[3];
 	vp.znear = 0.0;
 	vp.zfar = 1.0;
-	[re setRenderPipelineState:cand_pipe];
-	[re setDepthStencilState:cand_depth];
-	[re setCullMode:MTLCullModeNone];
-	[re setViewport:vp];
-	nw = rmb_rt_bind_water_raster(re, 0, 1, 2, 3);
+	[enc setRenderPipelineState:pipe];
+	[enc setDepthStencilState:mark_depth];
+	[enc setCullMode:MTLCullModeNone];
+	[enc setViewport:vp];
+	nw = rmb_rt_bind_water_raster(enc, 0, 1, 2, 3);
 
 	if (nw)
 	{
-		[re setVertexBytes:&view length:sizeof(view) atIndex:4];
-		[re drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:nw * 3];
+		[enc setVertexBytes:&view length:sizeof(view) atIndex:4];
+		[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:nw * 3];
 		rmb_counts.draws++;
 	}
 
-	[re endEncoding];
+	marked = 1;
 	return 1;
 }
 
@@ -834,9 +847,10 @@ rmb_rtw_trace_ss(id<MTLCommandBuffer> cmd, unsigned long fno, int slot, int time
 }
 
 /*
- * r_rt_water_hits 1 (TASK158): the candidates' raster, the compaction and
- * the arguments in one compute encoder, the trace over the list in
- * another; each timed on its own (RMB_RTW_SAMPLES).
+ * r_rt_water_hits 1 (TASK158): the compaction and the arguments in one
+ * compute encoder, the trace over the list in another; each timed on its
+ * own (RMB_RTW_SAMPLES). The marks the compaction reads were drawn by
+ * the G-buffer raster (TASK162, rmb_rtw_mark).
  */
 static int
 rmb_rtw_trace_ws(id<MTLCommandBuffer> cmd, unsigned long fno, int slot, int timed, id<MTLTexture> target,
@@ -845,25 +859,18 @@ rmb_rtw_trace_ws(id<MTLCommandBuffer> cmd, unsigned long fno, int slot, int time
 	const NSUInteger w = depth.width, h = depth.height;
 	const uint32_t cap = (uint32_t)list_cap;
 	const uint32_t ns = (uint32_t)shade_n;
-	id<MTLComputeCommandEncoder> ce;
-
-	/* the water triangles in front of the depth mark their pixels */
-	if (!rmb_rtw_cand(cmd, depth, slot, timed))
-	{
-		return 0;
-	}
-
-	ce = rmb_rtw_encoder(cmd, timed, slot, 2);
+	id<MTLComputeCommandEncoder> ce = rmb_rtw_encoder(cmd, timed, slot, 2);
 
 	if (!ce)
 	{
 		return 0;
 	}
 
-	/* the compaction over every pixel, then the list's threadgroups (one serial encoder: each sees the last) */
+	/* the compaction over every pixel (the 0s where it lists none), then the list's threadgroups (one serial encoder) */
 	[ce setComputePipelineState:compact_pipe];
 	[ce setTexture:material atIndex:0];
 	[ce setTexture:t_refl atIndex:1];
+	[ce setTexture:normal atIndex:2];
 	[ce setBytes:&view length:sizeof(view) atIndex:0];
 	[ce setBuffer:list offset:0 atIndex:1];
 	[ce setBuffer:counts offset:(NSUInteger)slot * RMB_RTW_SLOT * sizeof(uint32_t) atIndex:2];
@@ -926,7 +933,7 @@ rmb_rtw_trace(id<MTLTexture> target, id<MTLTexture> depth, id<MTLTexture> normal
 	/*
 	 * The outputs, made by rmb_rtw_prepare before the raster at this size
 	 * for this view's path (and on the world-space path the list, and the
-	 * depth the candidates' raster tests); the lit result at the same size.
+	 * marks the raster drew, TASK162); the lit result at the same size.
 	 */
 	if (!t_refl || !t_wdist || (t_refl.width != w) || (t_refl.height != h) || (target.width != w) ||
 		(target.height != h))
@@ -934,7 +941,7 @@ rmb_rtw_trace(id<MTLTexture> target, id<MTLTexture> depth, id<MTLTexture> normal
 		return 0;
 	}
 
-	if (ws && (!list || (list_cap != w * h) || (depth.pixelFormat != MTLPixelFormatDepth32Float)))
+	if (ws && (!list || (list_cap != w * h) || !marked || (normal.width < w) || (normal.height < h)))
 	{
 		return 0;
 	}
@@ -1031,5 +1038,5 @@ rmb_rtw_bind_forward(id<MTLRenderCommandEncoder> enc)
 void
 rmb_rtw_view_end(void)
 {
-	traced = forward = shown = 0;
+	traced = forward = shown = marked = 0;
 }

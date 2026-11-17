@@ -115,11 +115,12 @@ mtl_rtw_inst_mask_ws(unsigned mask, unsigned norefl, unsigned alias)
 #define MTL_RTW_CLASS_WS MTL_RTW_WS   /* the choice was shaded in world space */
 
 /*
- * TASK158: the candidates' raster (rm_fragment_rtw_cand) writes this
- * class byte where a water triangle lies in front of the depth; the
- * compaction lists those pixels (and their neighbours) and the trace
- * writes every listed pixel's class over it. It has no water bit, so a
- * reader that met it would take the pixel as one without water.
+ * TASK158: the class byte its separate candidates' raster wrote where a
+ * water triangle lay in front of the depth, for the compaction to list.
+ * TASK162 marks those pixels in the G-buffer instead (mtl_rtw_marked), so
+ * no pass writes it now; it stays the reference the host test compares
+ * the marks with. It has no water bit, so a reader that met it would take
+ * the pixel as one without water.
  */
 #define MTL_RTW_CLASS_CAND 0x80u
 
@@ -691,7 +692,8 @@ mtl_rtw_list_pack(unsigned x, unsigned y)
 
 /*
  * 1 when the compaction lists a pixel: opaque water the raster drew
- * (material 3), or the candidates' raster marked it or a pixel next to it
+ * (material 3), or the water's marks (TASK162, mtl_rtw_marked; TASK158's
+ * candidates' raster before) hold it or a pixel next to it
  * (any of the nine, so the eye ray of TASK58 is cast wherever it could
  * meet water: the raster and the ray agree on a pixel's centre but for
  * ties on an edge and the float error)
@@ -702,15 +704,29 @@ mtl_rtw_listed(unsigned mat, unsigned marks)
 	return mtl_rtw_is_water(mat) || (marks != 0u);
 }
 
-/* TASK162: the water mark in the G-buffer's normal attachment (red first: stubs) */
+/*
+ * TASK162: the water's mark in the G-buffer's normal attachment
+ * (RGB10A2Unorm), in place of TASK158's separate raster. The raster
+ * writes the two alpha bits 1 where the pixel has a normal and 0 where it
+ * has none, and every reader tests a > 0.5. At r_rt_water_hits 1 its last
+ * draw, the map's water triangles in front of its depth
+ * (rm_fragment_rtw_mark), blends that alpha to MTL_RTW_MARK_A +
+ * MTL_RTW_MARK_A x a (mtl_rtw_mark_blend): 1 to 2/3, 0 to 1/3, and a
+ * second layer keeps the level (4/9 stores as 1/3, 5/9 as 2/3). A pixel
+ * is marked at levels 1 and 2 (mtl_rtw_marked); it has a normal above 0.5
+ * at all four, as before. The pixels it marks are the ones the separate
+ * raster marked MTL_RTW_CLASS_CAND.
+ */
 #define MTL_RTW_MARK_A (1.0f / 3.0f)
 
+/* the mark's blend over a stored alpha a: the source alpha MTL_RTW_MARK_A, the destination's factor the source's alpha */
 static inline float
 mtl_rtw_mark_blend(float a)
 {
-	return a;
+	return MTL_RTW_MARK_A + MTL_RTW_MARK_A * a;
 }
 
+/* the two-bit level the normal attachment stores for alpha a, to the nearest (0 for NaN) */
 static inline unsigned
 mtl_rtw_alpha_level(float a)
 {
@@ -722,11 +738,13 @@ mtl_rtw_alpha_level(float a)
 	return (unsigned)(mtl_clamp01(a) * 3.0f + 0.5f);
 }
 
+/* 1 when the normal attachment's alpha a, as a read gives it (its level over 3), carries the water's mark */
 static inline int
 mtl_rtw_marked(float a)
 {
-	(void)a;
-	return 0;
+	const unsigned l = mtl_rtw_alpha_level(a);
+
+	return (l == 1u) || (l == 2u);
 }
 
 /* r_rt_water_reflect as the blend takes it: 0 to 1, 0 when not finite */
