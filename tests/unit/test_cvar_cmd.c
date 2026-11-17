@@ -314,7 +314,7 @@ TEST(cmd_macro_expand_current_line)
 
 	t_console_reset();
 	expand_line(line, out, sizeof(out));
-	T_CHECK(Cmd_Argc() == 99);
+	T_CHECK(strncmp(out, "[1][1]", 6) == 0);
 	T_EQ_STR(t_console(), "");
 	Q_strlcat(line, "$t_mx_one ", sizeof(line));
 	expand_line(line, out, sizeof(out));
