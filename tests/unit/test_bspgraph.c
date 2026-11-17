@@ -397,9 +397,9 @@ s_same_leaf_twice(void)
 
 static void s_chain_past_bound(void) { g_chain(T_DEPTH + 1); }
 
-/* Both loaders refuse the map with ERR_DROP and name it. */
+/* Both loaders refuse the map with ERR_DROP, name it and say why. */
 static void
-refused_by_both(const char *what, void (*shape)(void))
+refused_by_both(const char *what, void (*shape)(void), const char *why)
 {
 	const char *name;
 	unsigned checksum;
@@ -408,13 +408,13 @@ refused_by_both(const char *what, void (*shape)(void))
 	name = g_write(g_build());
 
 	T_EXPECT_DROP(CM_LoadMap(name, false, &checksum));
-	if (!strstr(t_console(), name) || !strstr(t_console(), "not a tree"))
+	if (!strstr(t_console(), name) || !strstr(t_console(), why))
 	{
 		t_fail(__FILE__, __LINE__, "%s: collision message: %s", what, t_console());
 	}
 
 	T_EXPECT_DROP(r_load(name));
-	if (!strstr(t_console(), name) || !strstr(t_console(), "not a tree"))
+	if (!strstr(t_console(), name) || !strstr(t_console(), why))
 	{
 		t_fail(__FILE__, __LINE__, "%s: renderer message: %s", what, t_console());
 	}
@@ -422,13 +422,32 @@ refused_by_both(const char *what, void (*shape)(void))
 	r_free();
 }
 
-TEST(bspgraph_back_to_root) { refused_by_both("back to root", s_back_to_root); }
-TEST(bspgraph_back_to_parent) { refused_by_both("back to parent", s_back_to_parent); }
-TEST(bspgraph_ring) { refused_by_both("ring", s_ring); }
-TEST(bspgraph_shared_node) { refused_by_both("shared node", s_shared_node); }
-TEST(bspgraph_shared_leaf) { refused_by_both("shared leaf", s_shared_leaf); }
-TEST(bspgraph_same_leaf_twice) { refused_by_both("same leaf twice", s_same_leaf_twice); }
-TEST(bspgraph_chain_past_bound) { refused_by_both("chain past bound", s_chain_past_bound); }
+#define CYCLE "not a tree: cycle through node 0"
+#define TWICE "not a tree: child with a second parent"
+#define DEEP "not a tree: path too deep at 1024"
+
+TEST(bspgraph_back_to_root) { refused_by_both("back to root", s_back_to_root, CYCLE); }
+TEST(bspgraph_back_to_parent) { refused_by_both("back to parent", s_back_to_parent, TWICE " 1"); }
+TEST(bspgraph_ring) { refused_by_both("ring", s_ring, "not a tree: cycle through node 3"); }
+TEST(bspgraph_shared_node) { refused_by_both("shared node", s_shared_node, TWICE " 3"); }
+TEST(bspgraph_shared_leaf) { refused_by_both("shared leaf", s_shared_leaf, TWICE " -3"); }
+TEST(bspgraph_same_leaf_twice) { refused_by_both("same leaf twice", s_same_leaf_twice, TWICE " -3"); }
+TEST(bspgraph_chain_past_bound) { refused_by_both("chain past bound", s_chain_past_bound, DEEP); }
+
+/* The collision model refuses a map without nodes first ("with no
+   nodes"); the renderer's loader must not walk an empty node array. */
+TEST(bspgraph_renderer_no_nodes)
+{
+	const char *name;
+
+	g_default();
+	g.nnodes = 0;
+	name = g_write(g_build());
+
+	T_EXPECT_DROP(r_load(name));
+	T_CONSOLE_HAS("not a tree: node or leaf count 0");
+	r_free();
+}
 
 TEST(bspgraph_chain_at_bound)
 {
