@@ -922,23 +922,22 @@ SDL_Cache(sfx_t *sfx, wavinfo_t *info, byte *data, short volume,
 		  int begin_length, int  end_length,
 		  int attack_length, int fade_length)
 {
-	float stepscale;
 	int i;
 	int frames;
 	int len;
+	int step;
 	int sample;
 	sfxcache_t *sc;
-	unsigned int samplefrac = 0;
 
-	/* the frame count and the byte size, both from the one computation */
-	if (!S_CacheSize(info, sound.speed, &frames, &len))
+	/* the frame count, the byte size and the step, all from the one
+	   computation */
+	if (!S_CacheSize(info, sound.speed, &frames, &len, &step))
 	{
 		Com_Printf("WARNING: Zero length or unusable sound encountered: %s\n",
 			sfx->name);
 		return false;
 	}
 
-	stepscale = (float)info->rate / sound.speed;
 	sc = sfx->cache = Z_Malloc(len + sizeof(sfxcache_t));
 
 	if (!sc)
@@ -956,10 +955,7 @@ SDL_Cache(sfx_t *sfx, wavinfo_t *info, byte *data, short volume,
 	sc->fade = fade_length * 1000 / info->rate;
 	sc->attack = attack_length * 1000 / info->rate;
 
-	if (sc->loopstart != -1)
-	{
-		sc->loopstart = (int)(sc->loopstart / stepscale);
-	}
+	sc->loopstart = S_CacheLoopStart(info, sound.speed, frames);
 
 	if (s_loadas8bit->value)
 	{
@@ -975,8 +971,8 @@ SDL_Cache(sfx_t *sfx, wavinfo_t *info, byte *data, short volume,
 	{
 		int srcsample;
 
-		srcsample = samplefrac >> 8;
-		samplefrac += (int)(stepscale * 256);
+		/* below the sample count, as S_CacheSize bounds the frames */
+		srcsample = (int)(((long long)i * step) >> 8);
 
 		if (info->width == 2)
 		{

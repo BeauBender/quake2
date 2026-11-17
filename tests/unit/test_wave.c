@@ -430,14 +430,14 @@ cinfo(int rate, int width, int channels, int samples)
 TEST(wave_cachesize_ordinary)
 {
 	wavinfo_t i = cinfo(22050, 2, 1, 22050);
-	int frames = 0, bytes = 0;
+	int frames = 0, bytes = 0, step = 0;
 
-	T_CHECK(S_CacheSize(&i, 44100, &frames, &bytes));
+	T_CHECK(S_CacheSize(&i, 44100, &frames, &bytes, &step));
 	T_EQ_INT(frames, 44100);
 	T_EQ_INT(bytes, 44100 * 2);
 
 	i = cinfo(44100, 1, 2, 1000);
-	T_CHECK(S_CacheSize(&i, 44100, &frames, &bytes));
+	T_CHECK(S_CacheSize(&i, 44100, &frames, &bytes, &step));
 	T_EQ_INT(frames, 1000);
 	T_EQ_INT(bytes, 2000);
 }
@@ -446,62 +446,62 @@ TEST(wave_cachesize_old_wrap)
 {
 	/* 16M samples at 1 kHz played at 48 kHz: the int product wrapped */
 	wavinfo_t i = cinfo(1000, 2, 2, 16777216);
-	int frames = 7, bytes = 7;
+	int frames = 7, bytes = 7, step = 7;
 
 	T_CHECK(old_bytes(&i, 48000) < 16777216 * 4);
-	T_CHECK(!S_CacheSize(&i, 48000, &frames, &bytes));
+	T_CHECK(!S_CacheSize(&i, 48000, &frames, &bytes, &step));
 	T_EQ_INT(frames, 7);
 	T_EQ_INT(bytes, 7);
 }
 
 TEST(wave_cachesize_limit)
 {
-	int frames = 0, bytes = 0;
+	int frames = 0, bytes = 0, step = 0;
 	wavinfo_t i = cinfo(44100, 2, 2, S_CACHE_MAX_BYTES / 4);
 
-	T_CHECK(S_CacheSize(&i, 44100, &frames, &bytes));
+	T_CHECK(S_CacheSize(&i, 44100, &frames, &bytes, &step));
 	T_EQ_INT(bytes, S_CACHE_MAX_BYTES);
 	T_EQ_INT(frames, S_CACHE_MAX_BYTES / 4);
 
 	/* the next count the float division can tell apart */
 	i.samples = S_CACHE_MAX_BYTES / 4 + 4;
-	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes));
+	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes, &step));
 	i.samples = INT_MAX;
-	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes));
+	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes, &step));
 	i.width = 1;
 	i.channels = 1;
 	i.samples = S_CACHE_MAX_BYTES;
-	T_CHECK(S_CacheSize(&i, 44100, &frames, &bytes));
+	T_CHECK(S_CacheSize(&i, 44100, &frames, &bytes, &step));
 	T_EQ_INT(bytes, S_CACHE_MAX_BYTES);
 }
 
 TEST(wave_cachesize_refusals)
 {
-	int frames = 0, bytes = 0;
+	int frames = 0, bytes = 0, step = 0;
 	wavinfo_t i = cinfo(0, 2, 1, 100);
 
-	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes));
+	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes, &step));
 	i.rate = -5;
-	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes));
+	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes, &step));
 	i.rate = 22050;
-	T_CHECK(!S_CacheSize(&i, 0, &frames, &bytes));
-	T_CHECK(!S_CacheSize(&i, -1, &frames, &bytes));
+	T_CHECK(!S_CacheSize(&i, 0, &frames, &bytes, &step));
+	T_CHECK(!S_CacheSize(&i, -1, &frames, &bytes, &step));
 	i.samples = 0;
-	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes));
+	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes, &step));
 	i.samples = -3;
-	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes));
+	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes, &step));
 	i.samples = 100;
 	i.width = 0;
-	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes));
+	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes, &step));
 	i.width = 2;
 	i.channels = 3;
-	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes));
+	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes, &step));
 	/* a rate so low against the speed that no frame is left */
 	i = cinfo(1000, 2, 1, 1);
-	T_CHECK(S_CacheSize(&i, 44100, &frames, &bytes));
+	T_CHECK(S_CacheSize(&i, 44100, &frames, &bytes, &step));
 	T_EQ_INT(frames, 44);
 	i = cinfo(192000, 2, 1, 1);
-	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes));
+	T_CHECK(!S_CacheSize(&i, 44100, &frames, &bytes, &step));
 }
 
 TEST(wave_list_mark_loop)
@@ -544,8 +544,8 @@ TEST(wave_list_mark_overflow)
 	s.loopstart = 10;
 	s.listlen = 32;
 	s.marklen = INT_MAX;
-	T_EXPECT_DROP(parse(&s));
-	T_CONSOLE_HAS("bad loop length");
+	/* the file is refused like any other bad one, no disconnect */
+	T_CHECK(!accepted(parse(&s)));
 }
 
 /* ---- S_WavinfoValid directly ---- */
@@ -611,9 +611,190 @@ TEST(wave_valid_fields)
 TEST(wave_cachesize_one_frame)
 {
 	wavinfo_t i = cinfo(44100, 1, 1, 1);
-	int frames = 0, bytes = 0;
+	int frames = 0, bytes = 0, step = 0;
 
-	T_CHECK(S_CacheSize(&i, 44100, &frames, &bytes));
+	T_CHECK(S_CacheSize(&i, 44100, &frames, &bytes, &step));
 	T_EQ_INT(frames, 1);
 	T_EQ_INT(bytes, 1);
+}
+
+/* ---- the resample bounds ---- */
+
+TEST(wave_cache_last_source_index)
+{
+	/* a very low rate into a high speed: the last frame's source index
+	   was one past the samples */
+	wavinfo_t i = cinfo(1125, 2, 1, 786433);
+	int frames = 0, bytes = 0, step = 0;
+
+	T_CHECK(S_CacheSize(&i, 48000, &frames, &bytes, &step));
+	T_CHECK(frames > 0);
+	T_CHECK((((long long)(frames - 1) * step) >> 8) < i.samples);
+	T_EQ_INT(bytes, frames * 2);
+	/* one frame fewer than the unbounded count, and no more */
+	T_EQ_INT(frames, (int)(((long long)i.samples * 256 - 1) / step + 1));
+}
+
+TEST(wave_cache_stock_sweep)
+{
+	static const int rates[] = {11025, 22050, 44100};
+	static const int speeds[] = {11025, 22050, 44100, 48000};
+	static const int counts[] = {1, 2, 3, 1000, 22087, 100003};
+	int r, sp, w, c, n, l;
+
+	for (r = 0; r < 3; r++)
+	{
+		for (sp = 0; sp < 4; sp++)
+		{
+			for (w = 1; w <= 2; w++)
+			{
+				for (c = 1; c <= 2; c++)
+				{
+					for (n = 0; n < 6; n++)
+					{
+						wavinfo_t i = cinfo(rates[r], w, c, counts[n]);
+						float stepscale = (float)rates[r] / speeds[sp];
+						int frames = 0, bytes = 0, step = 0;
+						int starts[4];
+
+						starts[0] = -1;
+						starts[1] = 0;
+						starts[2] = counts[n] / 2;
+						/* a stock loop starts well before the end */
+						starts[3] = (counts[n] >= 1000) ? counts[n] - 100 : 0;
+
+						if ((int)(counts[n] / stepscale) < 1)
+						{
+							continue;
+						}
+
+						T_CHECK(S_CacheSize(&i, speeds[sp], &frames,
+								&bytes, &step));
+						T_EQ_INT(frames, (int)(counts[n] / stepscale));
+						T_EQ_INT(bytes, old_bytes(&i, speeds[sp]));
+						T_EQ_INT(step, (int)(stepscale * 256));
+
+						for (l = 0; l < 4; l++)
+						{
+							int old = (starts[l] == -1) ? -1 :
+									(int)(starts[l] / stepscale);
+
+							i.loopstart = starts[l];
+
+							T_EQ_INT(S_CacheLoopStart(&i, speeds[sp], frames),
+									old);
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+TEST(wave_cache_loopstart_below_frames)
+{
+	wavinfo_t i = cinfo(88200, 1, 1, 11);
+	int frames = 0, bytes = 0, step = 0;
+
+	i.loopstart = 10;
+	T_CHECK(S_CacheSize(&i, 44100, &frames, &bytes, &step));
+	T_EQ_INT(frames, 5);
+	T_EQ_INT(S_CacheLoopStart(&i, 44100, frames), frames - 1);
+
+	/* 48000 Hz into 44100: the first failing count is 13 */
+	i = cinfo(48000, 1, 1, 13);
+	i.loopstart = 12;
+	T_CHECK(S_CacheSize(&i, 44100, &frames, &bytes, &step));
+	T_CHECK(S_CacheLoopStart(&i, 44100, frames) < frames);
+	T_EQ_INT(S_CacheLoopStart(&i, 44100, frames), frames - 1);
+
+	/* one below the clamp is kept as it was */
+	i.loopstart = 6;
+	T_EQ_INT(S_CacheLoopStart(&i, 44100, frames), 5);
+
+	i.loopstart = -1;
+	T_EQ_INT(S_CacheLoopStart(&i, 44100, frames), -1);
+}
+
+/* ---- S_GetStatistics reads ---- */
+
+static void
+stats(const byte *d, int n, int width, int ch, int *out)
+{
+	/* the data is an exact-size heap copy, so a stray read is an ASan hit */
+	size_t bytes = (size_t)n * width;
+	byte *copy = malloc(bytes ? bytes : 1);
+
+	memcpy(copy, d, bytes);
+	S_GetStatistics(copy, n, width, ch, 0.0, &out[0], &out[1], &out[2],
+			&out[3]);
+	free(copy);
+}
+
+TEST(wave_stats_last_sample_loud_16)
+{
+	short d[8] = {0, 0, 0, 0, 0, 0, 0, 20000};
+	int o[4] = {-1, -1, -1, -1};
+
+	stats((const byte *)d, 8, 2, 1, o);
+	T_EQ_INT(o[0], 8);
+	T_EQ_INT(o[2], 0);
+	T_CHECK(o[1] >= 0 && o[1] <= 8);
+	T_CHECK(o[3] >= 0 && o[3] <= 8);
+}
+
+TEST(wave_stats_one_sample)
+{
+	short d16 = 20000;
+	byte d8 = 200;
+	int o[4] = {-1, -1, -1, -1};
+
+	stats((const byte *)&d16, 1, 2, 1, o);
+	T_CHECK(o[0] >= 0 && o[0] <= 1);
+	T_CHECK(o[1] >= 0 && o[1] <= 1);
+	T_CHECK(o[2] >= 0 && o[2] <= 1);
+	T_CHECK(o[3] >= 0 && o[3] <= 1);
+	stats(&d8, 1, 1, 1, o);
+	T_CHECK(o[0] >= 0 && o[0] <= 1);
+	T_CHECK(o[1] >= 0 && o[1] <= 1);
+	T_CHECK(o[2] >= 0 && o[2] <= 1);
+	T_CHECK(o[3] >= 0 && o[3] <= 1);
+}
+
+TEST(wave_stats_last_sample_loud_8)
+{
+	byte d[8] = {128, 128, 128, 128, 128, 128, 128, 250};
+	int o[4] = {-1, -1, -1, -1};
+
+	stats(d, 8, 1, 1, o);
+	T_CHECK(o[0] >= 0 && o[0] <= 8);
+	T_CHECK(o[2] >= 0 && o[2] <= 8);
+}
+
+/* A stock shape: silence, a rise, a body, a decay and a tail. */
+TEST(wave_stats_stock_unchanged)
+{
+	short d16[40];
+	byte d8[40];
+	int o[4], i;
+
+	for (i = 0; i < 40; i++)
+	{
+		int v = (i < 5 || i >= 35) ? 100 : (i < 10) ? 8000 : (i < 25) ? 20000 : 8000;
+
+		d16[i] = (short)((i & 1) ? -v : v);
+		d8[i] = (byte)((i < 5 || i >= 35) ? 1 : (i < 10) ? 40 : (i < 25) ? 120 : 40);
+	}
+
+	stats((const byte *)d16, 40, 2, 1, o);
+	/* what the scans gave before the bounds were added */
+	T_EQ_INT(o[0], 6);
+	T_EQ_INT(o[1], 6);
+	T_EQ_INT(o[2], 5);
+	T_EQ_INT(o[3], 10);
+	stats(d8, 40, 1, 1, o);
+	T_EQ_INT(o[0], 6);
+	T_EQ_INT(o[1], 6);
+	T_EQ_INT(o[2], 5);
+	T_EQ_INT(o[3], 10);
 }

@@ -315,11 +315,13 @@ S_WavinfoValid(const wavinfo_t *info, int wavlength)
 }
 
 qboolean
-S_CacheSize(const wavinfo_t *info, int speed, int *frames, int *bytes)
+S_CacheSize(const wavinfo_t *info, int speed, int *frames, int *bytes,
+		int *step)
 {
 	float stepscale;
 	float count;
 	long long size;
+	int n;
 
 	if (info->rate <= 0 || speed <= 0 || info->samples <= 0 ||
 		info->width < 1 || info->width > 2 ||
@@ -344,7 +346,33 @@ S_CacheSize(const wavinfo_t *info, int speed, int *frames, int *bytes)
 		return false;
 	}
 
-	*frames = (int)count;
-	*bytes = (int)size;
+	*step = (int)(stepscale * 256);
+	n = (int)count;
+
+	/* the last frame reads source sample ((n - 1) * step) >> 8, which
+	   must be a sample of the sound: (n - 1) * step < samples * 256 */
+	if (*step > 0)
+	{
+		long long most = ((long long)info->samples * 256 - 1) / *step + 1;
+
+		if (n > most)
+		{
+			n = (int)most;
+		}
+	}
+
+	*frames = n;
+	*bytes = (int)((long long)n * info->width * info->channels);
 	return true;
+}
+
+int
+S_CacheLoopStart(const wavinfo_t *info, int speed, int frames)
+{
+	if (info->loopstart == -1)
+	{
+		return -1;
+	}
+
+	return (int)(info->loopstart / ((float)info->rate / speed));
 }

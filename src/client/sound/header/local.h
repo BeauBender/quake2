@@ -217,7 +217,23 @@ qboolean S_WavinfoValid(const wavinfo_t *info, int wavlength);
  * the caller sizes its allocation and its loop from them.
  */
 qboolean S_CacheSize(const wavinfo_t *info, int speed, int *frames,
-		int *bytes);
+		int *bytes, int *step);
+
+/*
+ * Returns the loop start of the resampled copy: -1 for no loop,
+ * otherwise the loop start scaled to the speed, below frames.
+ */
+int S_CacheLoopStart(const wavinfo_t *info, int speed, int frames);
+
+/*
+ * Measures the begin, end, attack and fade lengths of sound_length
+ * samples at data. Every read is inside the samples. Not static so
+ * the unit suite reaches it directly: its caller, S_LoadSound, needs
+ * the filesystem and a started sound system.
+ */
+void S_GetStatistics(const byte *data, int sound_length, int width,
+		int channels, double sound_volume, int *begin_length,
+		int *end_length, int *attack_length, int *fade_length);
 
 /*
  * Loads one sample into
