@@ -569,8 +569,10 @@ probe_run() {
 		return 99
 	fi
 	rc=0
-	# in a subshell: the shell's own "Abort trap" line for a crashing mutant is not output of the probe
-	( "$2" > "${tmp:?}/probe.out" 2>&1 ) 2> /dev/null || rc=$?
+	# a mutant must fail by an exit status, not a signal (the shell prints "Abort trap" for a signal and
+	# the system may write a crash report): the probe stops at its first wrong retain count, and
+	# ASAN exits instead of aborting
+	ASAN_OPTIONS=abort_on_error=0 "$2" > "${tmp:?}/probe.out" 2>&1 || rc=$?
 	return $rc
 }
 probe="probe skipped"

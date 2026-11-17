@@ -18,6 +18,8 @@
  * skips itself): clang -fobjc-arc rmb_cs_probe.m rm_pure.c -framework Metal ...
  */
 
+#include <unistd.h>
+
 #include "rmb_device.m"
 
 void rmb_encode_abandon(void) {}
@@ -34,6 +36,21 @@ static int failures, checks;
 		{ \
 			failures++; \
 			fprintf(stderr, "rmb_cs_probe: %s:%d: FAILED: %s\n", __FILE__, __LINE__, #cond); \
+		} \
+	} while (0)
+
+/* a retain count that is wrong: stop at once. Any further release or retain acts on a reference
+   the code under test has already given away (a use after release: the probe would die by a
+   signal and leave a crash report); nothing is released, and the process leaves without unwinding */
+#define CHECK_COUNT(cond) \
+	do { \
+		checks++; \
+		if (!(cond)) \
+		{ \
+			fprintf(stderr, "rmb_cs_probe: %s:%d: FAILED: %s\n", __FILE__, __LINE__, #cond); \
+			fprintf(stderr, "rmb_cs_probe: stopped at the first wrong retain count, %d checks\n", checks); \
+			fflush(stderr); \
+			_exit(1); \
 		} \
 	} while (0)
 
@@ -113,24 +130,24 @@ run(const char *name, CGColorSpaceRef initial, int counted)
 	rmb_colorspace_set(0);              /* 1 -> 0: the layer's own colour space is back */
 	CHECK(same_as(layer, at_attach));
 	CHECK(rm_ledger_kind_live(&rmb_ledger, RM_OBJ_STATE) == 0);
-	CHECK(!counted || count_of(initial) == base);   /* set and unset: no reference gained or lost */
+	CHECK_COUNT(!counted || count_of(initial) == base);   /* set and unset: no reference gained or lost */
 
 	rmb_colorspace_set(1);              /* 0 -> 1 -> detach: the layer is left as found */
 	CHECK(is_srgb(layer));
 	rmb_detach();
 	CHECK(same_as(layer, at_attach));
 	CHECK(rm_ledger_kind_live(&rmb_ledger, RM_OBJ_STATE) == 0);
-	CHECK(!counted || count_of(initial) == base);   /* set and detach */
+	CHECK_COUNT(!counted || count_of(initial) == base);   /* set and detach */
 
 	rmb_colorspace_set(1);              /* mode 1 before the attach: attach applies it */
 	CHECK(rmb_attach((__bridge void *)layer, 0, err, sizeof(err)));
 	CHECK(is_srgb(layer));
 	rmb_colorspace_set(0);
 	CHECK(same_as(layer, at_attach));
-	CHECK(!counted || count_of(initial) == base);   /* attach with it on, then off */
+	CHECK_COUNT(!counted || count_of(initial) == base);   /* attach with it on, then off */
 	rmb_detach();
 	CHECK(same_as(layer, at_attach));
-	CHECK(!counted || count_of(initial) == base);   /* and detach */
+	CHECK_COUNT(!counted || count_of(initial) == base);   /* and detach */
 	rmb_colorspace_set(0);
 	CGColorSpaceRelease(at_attach);
 }
