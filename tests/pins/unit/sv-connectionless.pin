@@ -18,28 +18,22 @@ packet "connect 33 1234 0 "\name\x"":
   reply: \xff\xff\xff\xffprint\nServer is protocol version 34.\n
 packet "rcon":
   reply: \xff\xff\xff\xffprint\nBad rcon_password.\n
-  console: Bad rcon from [0.0.0.0]:0:
-  console: rcon
+  console: Bad rcon from [0.0.0.0]:0
 packet "rcon wrong echo hi":
   reply: \xff\xff\xff\xffprint\nBad rcon_password.\n
-  console: Bad rcon from [0.0.0.0]:0:
-  console: rcon wrong echo hi
+  console: Bad rcon from [0.0.0.0]:0
 packet "rcon secretx echo hi":
   reply: \xff\xff\xff\xffprint\nBad rcon_password.\n
-  console: Bad rcon from [0.0.0.0]:0:
-  console: rcon secretx echo hi
+  console: Bad rcon from [0.0.0.0]:0
 packet "rcon secre echo hi":
   reply: \xff\xff\xff\xffprint\nBad rcon_password.\n
-  console: Bad rcon from [0.0.0.0]:0:
-  console: rcon secre echo hi
+  console: Bad rcon from [0.0.0.0]:0
 packet "rcon secret echo hi there":
   reply: \xff\xff\xff\xffprint\nhi there \n
-  console: Rcon from [0.0.0.0]:0:
-  console: rcon secret echo hi there
+  console: Rcon from [0.0.0.0]:0: echo hi there 
 packet "rcon secret set t_rcon_set 7":
   reply: \xff\xff\xff\xffprint\n
-  console: Rcon from [0.0.0.0]:0:
-  console: rcon secret set t_rcon_set 7
+  console: Rcon from [0.0.0.0]:0: set t_rcon_set 7 
 packet "nonsense with args":
   console: bad connectionless packet from [0.0.0.0]:0:
   console: nonsense with args
