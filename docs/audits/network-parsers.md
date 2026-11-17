@@ -308,7 +308,11 @@ also protects the other `num_entities` consumers (`cl_entities.c`,
 `cl_prediction.c`, which mask the ring index but iterate the inflated count);
 clamping the sound loops to `MAX_EDICTS` as well is cheap defence in depth.
 
-### D2: server `playernum` is not range-checked on the client (medium, high confidence) [FIX12 (#108)]
+### D2: server `playernum` is not range-checked on the client (medium, high confidence) [FIX12 (#108), fixed with FIX35 (#147)]
+
+Fixed by FIX12 (#108): `CL_ParseServerData` drops the connection for a
+`playernum` below `-1` or at or above `MAX_CLIENTS`; `-1` still plays the
+cinematic.
 
 `CL_ParseServerData` does `cl.playernum = MSG_ReadShort(...)` with no bound;
 only the value `-1` (cinematic or pic) is special. Every consumer found
