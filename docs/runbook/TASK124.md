@@ -54,7 +54,8 @@ reversed by reverting the slice and the new record.
 
 Measured on this host with a scratch probe outside the repository (a synthetic 66 x 66 RGBA8 tile,
 64 x 64 plus one texel of wrap-padding, made of hard-edged blocks of colour like a palette tile;
-no game data): see [the probe's results](#the-probe) below.
+no game data): the output is the same byte for byte from run to run and from process to process,
+at 2x and at 4x. The details are under [the probe](#the-probe) below.
 
 The first card keeps no cache: the output path is the only key. A file that is there is skipped
 unless `force` is given (`CL_UpscaleAction`), and the PNG does not record which backend made it.
@@ -84,7 +85,43 @@ backend choice with metalfx greyed (`QMF_GRAYED`) and a one-line reason where it
 
 ## The probe
 
-Results to follow.
+A scratch Objective-C program, kept with its output in `<artifacts>/TASK124/` and not in the
+repository. It makes the 66 x 66 tile above, scales it with `MTLFXSpatialScaler`
+(`RGBA8Unorm` in and out, `MTLFXSpatialScalerColorProcessingModePerceptual`, the output texture
+private and blitted to a shared buffer) to 132 x 132 (2x) and 264 x 264 (4x, in one pass), four
+times per factor in one process: twice with a new scaler each time and twice reusing one. It prints
+whether the outputs match byte for byte and an FNV-1a hash of the output. It ran four times, as two
+batches of two processes, each under the host lock (`heavy.sh`), with no `quake2` running.
+
+Host: Apple M6, macOS 27.2.1, SDK 27.2. `MTLFXSpatialScalerDescriptor` is present and
+`supportsDevice:` says YES.
+
+| | 2x | 4x |
+|---|---|---|
+| Outputs within a process (new scaler, new scaler, reused, reused) | the same, all four, in every process | the same, all four, in every process |
+| FNV-1a of the output, in every process | `9ca20c9fff012b71` | `02b99c758d15c5ab` |
+| Output alpha, with alpha 0 in about one input texel in seven | 255 everywhere | 255 everywhere |
+| Time per tile, first call in a process (makes the pipeline) | 4.9 to 9.9 ms | 0.6 to 1.1 ms |
+| Time per tile after that (make the textures, encode, wait, read back) | 0.26 to 0.88 ms | 0.29 to 0.89 ms |
+
+Load (`sysctl -n vm.loadavg`, one-minute figure) was 3.7 before and 1.6 after the first batch and
+1.7 before and after the second. The screen was locked: the times are a rough guide, not timing
+evidence, and this is not a timing card.
+
+What it means for the design:
+
+- **MetalFX's spatial output repeats byte for byte** on this host, between scalers, within a
+  process and between processes. A metalfx run over the same data writes the same files, so a run
+  with `force` changes nothing unless the backend or the data changed. Whether it repeats across
+  devices or OS versions is not measured (an M1-family Mac is the card's T1 host).
+- **MetalFX drops the alpha channel** (the output is opaque where the input was transparent), so
+  step 3 above (the alpha from the source's index 255, by nearest neighbour) is required, not a
+  choice.
+- **4x is one pass**: the scaler takes a 4x ratio directly, so the metalfx path need not run 2x
+  twice as scale2x does.
+- After the first call the scaler takes under a millisecond per 64 x 64 tile at either factor here.
+  The time of a whole run over the game data (with the PNG encoding and the writes) is not measured:
+  that needs the backend in the client, which waits on the place.
 
 ## Left for slice 2
 
