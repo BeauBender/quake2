@@ -17,7 +17,7 @@ This builds `build/release/test/yq2test` (or `build/debug/test/` with
 `DEBUG=1`) and runs it. The test binary links the same objects as the
 dedicated server `q2ded`, built with the same flags, plus the client
 files `cl_conback.c`, `cl_download.c`, `cl_parse.c`, `cl_network.c`, `cl_entities.c`,
-`cl_screen.c`, the texture upscaler's checks, decisions and file write `cl_upscale.c`, the sound frontend `sound/sound.c` and the window
+`cl_screen.c`, the texture upscaler's checks, decisions and file write `cl_upscale.c`, the sound frontend `sound/sound.c`, the WAV header checks `sound/wave.c` and the window
 code's SDL-free part `vid/glimp_hidpi.c`, the video menu's rules `menu/vidrules.c` (see "Client stubs" below),
 the shared renderer files `src/client/refresh/files/surf.c` and
 `src/client/refresh/files/imgscale.c` (`scale2x`, `R_FloodFillSkin` and
@@ -27,7 +27,10 @@ software renderer's SDL-free `src/client/refresh/soft/sw_view.c`; and
 `tests/unit/test_imgsize.c` includes `src/client/refresh/files/pcx.c` and
 `wal.c` whole, with a fake `ri`, and tests the pure checks in `imgsize.h`; only
 `main()` is replaced by the
-test runner. The last line says how many tests ran and how many failed; the
+test runner. `tests/unit/test_bspgraph.c` includes the renderers' shared
+BSP loader `src/client/refresh/files/models.c` whole, and the `Makefile`
+names that file as a prerequisite of the test object, since Darwin
+builds track no include dependencies. The last line says how many tests ran and how many failed; the
 exit status is 1 when a test failed and 2 when no test ran at all (a
 name filter that matches nothing, or a usage error), so a run that
 proved nothing never passes. `make clean` removes the build.
@@ -91,6 +94,7 @@ that runs longer than `t_child_timeout` seconds (10) is killed and
 reported as `T_EXIT_TIMEOUT`, so a hang cannot stall the gate. A check
 that fails inside the child fails the test. `t_pin(name, text)` compares against a pin.
 A new `test_*.c` file is picked up by the Makefile automatically.
+`tests/unit/test_ipfilter.c` includes the game module's `src/game/g_svcmds.c` whole, with a fake `gi` and `filterban`, to test the IP filter.
 
 A test that crashes (a segfault, an abort) or a run that is
 interrupted prints the name of the running test to stderr, and the
