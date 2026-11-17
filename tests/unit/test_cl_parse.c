@@ -492,7 +492,9 @@ TEST(cl_frame_number_int_max)
 	check_frame_number(INT_MAX);
 }
 
-/* A client time already near the top follows a wrapped server time. */
+/* A client time already near the top follows a wrapped server time: it
+   is 93 behind modulo 2^32, inside the window, so it is kept. A signed
+   comparison would see it far ahead and pull it to the server time. */
 TEST(cl_time_follows_server_time_across_wrap)
 {
 	reset_client();
@@ -502,6 +504,7 @@ TEST(cl_time_follows_server_time_across_wrap)
 	T_CHECK(cl.frame.servertime < 0);
 	T_CHECK(time_behind() >= 0);
 	T_CHECK(time_behind() <= 100);
+	T_EQ_INT(cl.time, INT_MAX - 40);
 }
 
 /* The client time after a frame numbered 10 (server time 1000), from

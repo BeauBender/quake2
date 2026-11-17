@@ -176,7 +176,8 @@ CL_Beams_Set(beam_t *b,
 		VectorClear(b->offset);
 	}
 
-	b->endtime = cl.time + tm;
+	/* wraps modulo 2^32 instead of overflowing */
+	b->endtime = (int)((unsigned)cl.time + (unsigned)tm);
 }
 
 static cl_sustain_t *
@@ -636,7 +637,10 @@ CL_ParseSteam(void)
 	r = MSG_ReadByte(&net_message);
 	s->color = r & 0xff;
 	s->magnitude = MSG_ReadShort(&net_message);
-	s->endtime = cl.time + MSG_ReadLong(&net_message);
+	/* a server-supplied duration: wraps modulo 2^32 instead of
+	   overflowing */
+	s->endtime = (int)((unsigned)cl.time +
+		(unsigned)MSG_ReadLong(&net_message));
 	s->think = CL_ParticleSteamEffect2;
 	s->thinkinterval = 100;
 	s->nextthink = cl.time;

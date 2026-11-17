@@ -260,6 +260,16 @@ TEST(cl_add_entities_clamp_int_max_server_time)
 	check_add_entities_clamp(-1, INT_MAX);
 }
 
+/* Across the wrap the client time is 91 behind modulo 2^32: kept, and
+   interpolated near the old frame. A signed comparison would pull it to
+   the server time with a fraction of 1. */
+TEST(cl_add_entities_lerp_across_wrap)
+{
+	check_add_entities_clamp(INT_MAX - 40, INT_MIN + 50);
+	T_EQ_INT(cl.time, INT_MAX - 40);
+	T_CHECK(cl.lerpfrac < 0.1f);
+}
+
 /* The same window edges in CL_AddEntities, and the fraction inside it. */
 TEST(cl_add_entities_clamp_edges)
 {
@@ -300,7 +310,9 @@ TEST(cl_anim_allfast_frame_at_int_max)
 	T_EQ_INT(stub_calls.min_ent_frame, 21474836);
 }
 
-/* The spinning light's angle is reduced before it is converted. */
+/* The spinning light's angle is reduced before it is converted. The stub
+   does not record angles; the old conversion is out of range for an int
+   at these times, which the sanitizer build reports. */
 TEST(cl_spinning_light_at_time_edges)
 {
 	check_anim_at_time(EF_SPINNINGLIGHTS, INT_MAX);
