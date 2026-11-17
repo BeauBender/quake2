@@ -1403,7 +1403,8 @@ t_digit_cap() {
 			[ ! -e "${E:?}/ran" ] || bad "cap: $_s=$_v let the command run"
 			grep -q "$_s is whole seconds" "${E:?}/err" || bad "cap: $_s=$_v: the refusal does not name the setting"
 		done
-		for _k in warmup wall; do
+		# runs: before the cap, a 20-digit value made its 1-to-1000 test error inside the if and pass
+		for _k in warmup wall runs; do
 			zcase "$_k" "$_v"
 			_st=0
 			B case "${E:?}/z.case" > /dev/null 2> "${E:?}/err" || _st=$?
