@@ -494,3 +494,78 @@ TEST(imgsize_info_dimensions)
 	Info_Case(M32_File((unsigned)-8, 4, 0, &len), len, GetM32Info, 0, 0);
 	Info_Case(M32_File(8, (unsigned)-4, 0, &len), len, GetM32Info, 0, 0);
 }
+
+/* ---- WAL and M8 held to the cap ---- */
+
+TEST(imgsize_wal_m8_cap)
+{
+	int len;
+	byte *f;
+	size_t cap_body = (size_t)1 << 26;
+
+	/* WAL at the cap (8192 by 8192, one byte a pixel): accepted */
+	f = Wal_File(8192, 8192, (int)cap_body, &len);
+	Fake_Set(f, len);
+	loader_calls = 0;
+	T_CHECK(LoadWal("t", it_wall, Fake_Loader) != NULL);
+	T_EQ_INT(loader_calls, 1);
+	free(f);
+
+	/* one column past it, with a body that holds it: refused */
+	f = Wal_File(8193, 8192, (int)cap_body + 8192, &len);
+	Fake_Set(f, len);
+	loader_calls = 0;
+	T_CHECK(LoadWal("t", it_wall, Fake_Loader) == NULL);
+	T_EQ_INT(loader_calls, 0);
+	free(f);
+
+	/* the same for M8 */
+	f = M8_File(8192, 8192, (int)cap_body, &len);
+	Fake_Set(f, len);
+	loader_calls = 0;
+	T_CHECK(LoadM8("t", it_wall, Fake_Loader) != NULL);
+	T_EQ_INT(loader_calls, 1);
+	free(f);
+
+	f = M8_File(8193, 8192, (int)cap_body + 8192, &len);
+	Fake_Set(f, len);
+	loader_calls = 0;
+	T_CHECK(LoadM8("t", it_wall, Fake_Loader) == NULL);
+	T_EQ_INT(loader_calls, 0);
+	free(f);
+	Fake_Set(NULL, 0);
+}
+
+TEST(imgsize_wal_m8_body)
+{
+	int len;
+	byte *f;
+
+	/* 3 by 3: 9 bytes exact accepted, 8 refused */
+	f = Wal_File(3, 3, 9, &len);
+	Fake_Set(f, len);
+	loader_calls = 0;
+	T_CHECK(LoadWal("t", it_wall, Fake_Loader) != NULL);
+	free(f);
+	f = Wal_File(3, 3, 8, &len);
+	Fake_Set(f, len);
+	T_CHECK(LoadWal("t", it_wall, Fake_Loader) == NULL);
+	free(f);
+
+	f = M8_File(3, 3, 9, &len);
+	Fake_Set(f, len);
+	T_CHECK(LoadM8("t", it_wall, Fake_Loader) != NULL);
+	free(f);
+	f = M8_File(3, 3, 8, &len);
+	Fake_Set(f, len);
+	T_CHECK(LoadM8("t", it_wall, Fake_Loader) == NULL);
+	free(f);
+
+	/* an offset past the end */
+	f = Wal_File(1, 1, 1, &len);
+	((miptex_t *)f)->offsets[0] = LittleLong(len + 1);
+	Fake_Set(f, len);
+	T_CHECK(LoadWal("t", it_wall, Fake_Loader) == NULL);
+	free(f);
+	Fake_Set(NULL, 0);
+}
