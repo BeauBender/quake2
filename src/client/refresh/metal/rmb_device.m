@@ -351,6 +351,7 @@ rmb_present_take(int w, int h)
 
 	if (slot < 0)
 	{
+		rmb_counts.present_held++;   /* every slot held (TASK161) */
 		return nil;
 	}
 
@@ -969,6 +970,13 @@ rmb_stats(rmb_stats_t *stats, rm_ledger_t *ledger)
 	*stats = rmb_counts;
 	stats->failed = atomic_load(&rmb_failed);
 	*ledger = rmb_ledger;
+}
+
+void
+rmb_rate_counts(unsigned long *frames, unsigned long *no_drawable)
+{
+	*frames = rmb_counts.frames;
+	*no_drawable = rmb_counts.no_drawable;
 }
 
 void
