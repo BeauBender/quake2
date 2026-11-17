@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "header/local.h"
+#include "../files/imgsize.h"
 
 #define	MAX_RIMAGES	1024
 static image_t		*r_whitetexture_mip = NULL;
@@ -353,6 +354,7 @@ R_LoadPic(const char *name, const byte *pic, int width, int realwidth, int heigh
 			byte* pic32 = NULL;
 			// temporary image memory size
 			int uploadwidth, uploadheight;
+			size_t resize_size = 0;
 
 			if (type == it_pic)
 			{
@@ -379,9 +381,16 @@ R_LoadPic(const char *name, const byte *pic, int width, int realwidth, int heigh
 				uploadheight = realheight;
 			}
 
-			// resize image
-			pic32 = malloc(uploadwidth * uploadheight * 4);
-			if (ResizeSTB(pic, width, height, pic32, uploadwidth, uploadheight))
+			// resize image: the buffer's size in 64 bits against the cap, and
+			// the allocation checked. Either failing keeps the image at its
+			// own size (the path below), as a failed resize does.
+			if (IMGSIZE_Bytes(uploadwidth, uploadheight, 4, &resize_size))
+			{
+				pic32 = malloc(resize_size);
+			}
+
+			if (pic32 &&
+				ResizeSTB(pic, width, height, pic32, uploadwidth, uploadheight))
 			{
 				R_Convert32To8bit(pic32, pic8, uploadwidth * uploadheight, type != it_wall);
 				image = R_LoadPic8(name, pic8,
@@ -417,9 +426,14 @@ R_LoadPic(const char *name, const byte *pic, int width, int realwidth, int heigh
 		if (r_scale8bittextures->value && type == it_pic)
 		{
 			byte *scaled = NULL;
+			size_t scaled_size = 0;
 			image_t	*image;
 
-			scaled = malloc(width * height * 4);
+			// the product in 64 bits against the cap
+			if (!IMGSIZE_Bytes(width, height, 4, &scaled_size))
+				return NULL;
+
+			scaled = malloc(scaled_size);
 			if (!scaled)
 				return NULL;
 

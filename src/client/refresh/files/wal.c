@@ -25,6 +25,7 @@
  */
 
 #include "../ref_shared.h"
+#include "imgsize.h"
 
 struct image_s *
 LoadWal(const char *origname, imagetype_t type, loadimage_t load_image)
@@ -172,8 +173,8 @@ LoadM32(const char *origname, imagetype_t type, loadimage_t load_image)
 	height = LittleLong (mt->height[0]);
 	ofs = LittleLong (mt->offsets[0]);
 
-	if ((ofs <= 0) || (width <= 0) || (height <= 0) ||
-	    (((size - ofs) / height) < (width * 4)))
+	/* the body test in 64 bits: width * 4 wraps an int */
+	if (!IMGSIZE_BodyFits(size, ofs, width, height, 4))
 	{
 		Com_Printf("%s: can't load %s, small body\n", __func__, name);
 		ri.FS_FreeFile((void *)mt);
@@ -211,8 +212,11 @@ GetWalInfo(const char *origname, int *width, int *height)
 		return;
 	}
 
-	*width = LittleLong(mt->width);
-	*height = LittleLong(mt->height);
+	if (IMGSIZE_DimsPositive(LittleLong(mt->width), LittleLong(mt->height)))
+	{
+		*width = LittleLong(mt->width);
+		*height = LittleLong(mt->height);
+	}
 
 	ri.FS_FreeFile((void *)mt);
 
@@ -241,8 +245,11 @@ GetM8Info(const char *origname, int *width, int *height)
 		return;
 	}
 
-	*width = LittleLong(mt->width[0]);
-	*height = LittleLong(mt->height[0]);
+	if (IMGSIZE_DimsPositive(LittleLong(mt->width[0]), LittleLong(mt->height[0])))
+	{
+		*width = LittleLong(mt->width[0]);
+		*height = LittleLong(mt->height[0]);
+	}
 
 	ri.FS_FreeFile((void *)mt);
 
@@ -271,8 +278,11 @@ GetM32Info(const char *origname, int *width, int *height)
 		return;
 	}
 
-	*width = LittleLong(mt->width[0]);
-	*height = LittleLong(mt->height[0]);
+	if (IMGSIZE_DimsPositive(LittleLong(mt->width[0]), LittleLong(mt->height[0])))
+	{
+		*width = LittleLong(mt->width[0]);
+		*height = LittleLong(mt->height[0]);
+	}
 
 	ri.FS_FreeFile((void *)mt);
 

@@ -34,6 +34,7 @@
 
 #include "../ref_shared.h"
 #include "imgdecode.h"
+#include "imgsize.h"
 #include "skyorder.h"
 
 // include resize implementation
@@ -441,7 +442,11 @@ LoadHiColorImage(const char *name, const char* namewe, const char *ext,
 	   || (order.try_png_later && LoadDecoded(namewe, "png", &pic, &width, &height))
 	   || LoadDecoded(namewe, "jpg", &pic, &width, &height) )
 	{
-		if (width >= realwidth && height >= realheight)
+		size_t pixels;
+
+		/* the product in 64 bits against the cap: a bigger one is refused */
+		if (width >= realwidth && height >= realheight
+			&& IMGSIZE_Pixels(width, height, &pixels))
 		{
 			if (realheight == 0 || realwidth == 0)
 			{
@@ -452,7 +457,7 @@ LoadHiColorImage(const char *name, const char* namewe, const char *ext,
 			image = load_image(name, pic,
 				width, realwidth,
 				height, realheight,
-				width * height,
+				pixels,
 				type, 32);
 		}
 	}
@@ -485,14 +490,20 @@ R_LoadImage(const char *name, const char* namewe, const char *ext, imagetype_t t
 			byte	*palette = NULL;
 			int width = 0, height = 0, bitsPerPixel = 8;
 
+			size_t pixels = 0;
+
 			LoadPCX (namewe, &pic, &palette, &width, &height, &bitsPerPixel);
 			if (!pic)
 				return NULL;
 
-			image = load_image(name, pic,
-				width, width,
-				height, height,
-				width * height, type, bitsPerPixel);
+			/* LoadPCX holds the size to the cap; the product is made in 64 bits */
+			if (IMGSIZE_Pixels(width, height, &pixels))
+			{
+				image = load_image(name, pic,
+					width, width,
+					height, height,
+					pixels, type, bitsPerPixel);
+			}
 
 			if (palette)
 			{
@@ -519,13 +530,18 @@ R_LoadImage(const char *name, const char* namewe, const char *ext, imagetype_t t
 			byte *pic = NULL;
 			int width = 0, height = 0;
 
+			size_t pixels = 0;
+
 			if (LoadDecoded(namewe, ext, &pic, &width, &height) && pic)
 			{
-				image = load_image(name, pic,
-					width, width,
-					height, height,
-					width * height,
-					type, 32);
+				if (IMGSIZE_Pixels(width, height, &pixels))
+				{
+					image = load_image(name, pic,
+						width, width,
+						height, height,
+						pixels,
+						type, 32);
+				}
 
 				free(pic);
 			}
