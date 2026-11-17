@@ -1,10 +1,11 @@
 name: Card close labels
 run-name: card-close-labels
-# A closed card keeps no non-terminal state label, whichever way it was
-# closed: the ship path, gh issue close from another session, or the web
-# UI. The loop's dependency check counts a card as done only when its issue
-# is closed and labelled state:done (docs/runbook/FIX108.md). Reopening is
-# left to the loop. tests/check-card-close-labels.sh checks this file.
+# A card the owner closes keeps no non-terminal state label, whichever way
+# it was closed: the ship path, gh issue close from another session, or the
+# web UI. The loop's dependency check counts a card as done only when its
+# issue is closed and labelled state:done (docs/runbook/FIX108.md).
+# Reopening is left to the loop. tests/check-card-close-labels.sh checks
+# this file: a state:* label added later goes into decide and into its list.
 on:
   issues:
     types: [closed]

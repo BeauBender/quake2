@@ -4,18 +4,33 @@
 # and its label decision does what docs/runbook/FIX108.md says.
 #
 # The workflow file is read with awk alone (no YAML library, no network, no
-# gh). It must have:
+# gh). The lint is an allow-list: what it cannot place is refused. It must
+# have:
 #   trigger      on: issues: types: [closed], and nothing else;
 #   top-perms    a top-level permissions: {} and no other top-level one;
 #   job-perms    every job's permissions exactly issues: write, and no
 #                permissions key anywhere else;
-#   uses         no uses: line (no action at all, not even a first-party one);
-#   event-expr   no github.event reference but github.event.issue.number and
-#                github.event.issue.state_reason (so no issue title, body,
-#                labels or user, and no toJSON(github.event));
-#   run-expr     no ${{ }} expression inside any run: block, a comment in it
-#                included (Actions expands those too): values come in
-#                through env: only;
+#   uses         no uses key in any spelling (quoted, in a flow mapping, on
+#                any line but a comment): no action at all;
+#   expr         every ${{ }} in the file, comments and run blocks included,
+#                exactly one of ${{ github.workflow }},
+#                ${{ github.event.issue.number }},
+#                ${{ github.event.issue.state_reason }}, ${{ github.token }}
+#                and ${{ github.repository }}, on an env: value line or the
+#                concurrency group line (so no github[...], no toJSON, no
+#                title, body, labels or user, nothing in a run block);
+#   run          exactly one run block, its value exactly | or |- (no plain,
+#                quoted or folded scalar, no anchor);
+#   shell        exactly one shell:, and it is sh;
+#   flow         outside the run block no flow collection but
+#                permissions: {} and types: [closed];
+#   anchor       outside the run block no anchor, alias or tag (& * !);
+#   key          outside the run block every line a comment, or a plain
+#                unquoted key and its value;
+#   container    no container: and no services: key;
+#   if, owner    no if: but the job's, which is exactly
+#                if: github.actor == github.repository_owner;
+#   state-read   the run block reads the issue state;
 #   timeout      a timeout-minutes on every job;
 #   runner       every job on ubuntu-latest (a free standard runner);
 #   concurrency  a concurrency group keyed by github.event.issue.number;
@@ -23,16 +38,27 @@
 #                state:review and state:done all named.
 # Each assertion has at least one mutant: a scratch copy of the workflow,
 # edited, that the check must refuse under that assertion's tag. A mutant
-# that leaves the file unchanged fails the check.
+# that leaves the file unchanged fails the check. A state:* label added to
+# the repository later must be added to decide and to the lint's list.
+#
+# The whole run block is cut out of the workflow (so the copy tested is
+# the copy that runs), checked with /bin/sh -n, and run with /bin/sh -e (as
+# Actions runs shell: sh) against a stub gh first on PATH, which logs its
+# arguments and serves the labels and the issue state. Cases: a number that
+# is not one (exit 1, no gh call); completed with backlog, with all four
+# non-terminal labels; not_planned; reopened since (exit 0, no edit); a
+# failed removal whose label stays (exit 1) or is gone (exit 0); a failed
+# add (exit 1). No gh call may read its stdin. Run-block mutants delete the
+# number guard, the state check, the removal re-read and its test, the
+# stdin redirect and a fi, and must each fail a case (tag run-block).
 #
 # The label decision is the decide function of the workflow's run block,
 # between the "card-close-labels: decide begin" and "end" marker lines. It
-# is cut out of the workflow (so the copy tested is the copy that runs) and
-# run with /bin/sh against a labels file per case: completed with backlog,
-# with review, with promoted and backlog, with all four non-terminal labels;
-# not_planned with backlog; duplicate and an empty reason; no state label;
-# already done; look-alike label names; label names holding shell syntax,
-# which must be compared and never run.
+# is cut out and run with /bin/sh -e against a labels file per case:
+# completed with backlog, with review, with promoted and backlog, with all
+# four non-terminal labels; not_planned with backlog; duplicate and an
+# empty reason; no state label; already done; look-alike label names; label
+# names holding shell syntax, which must be compared and never run.
 #
 # Usage: tests/check-card-close-labels.sh [workflow-file]
 set -eu
