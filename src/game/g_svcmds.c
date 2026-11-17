@@ -111,6 +111,13 @@ StringToFilter(char *s, ipfilter_t *f)
 
 		while (*s >= '0' && *s <= '9')
 		{
+			/* an octet longer than num is refused, not truncated */
+			if (j >= (int)sizeof(num) - 1)
+			{
+				gi.cprintf(NULL, PRINT_HIGH, "Bad filter address: %s\n", s);
+				return false;
+			}
+
 			num[j++] = *s++;
 		}
 
