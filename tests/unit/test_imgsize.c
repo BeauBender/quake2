@@ -624,3 +624,55 @@ TEST(imgsize_pcx_planes)
 	T_CHECK(pic != NULL);
 	free(pic);
 }
+
+/* ---- the renderer-side decisions ---- */
+
+TEST(imgsize_resize_and_scale2x_bytes)
+{
+	size_t n = 7;
+
+	/* at the cap: accepted, four bytes a pixel */
+	T_CHECK(IMGSIZE_ResizeBytes(8192, 8192, &n));
+	T_CHECK(n == ((size_t)1 << 28));
+	T_CHECK(IMGSIZE_Scale2xBytes(8192, 8192, &n));
+	T_CHECK(n == ((size_t)1 << 28));
+
+	/* one past it: refused, the output untouched */
+	n = 7;
+	T_CHECK(!IMGSIZE_ResizeBytes(8193, 8192, &n));
+	T_CHECK(!IMGSIZE_ResizeBytes(8192, 8193, &n));
+	T_CHECK(!IMGSIZE_Scale2xBytes(8193, 8192, &n));
+	T_CHECK(!IMGSIZE_Scale2xBytes(8192, 8193, &n));
+	T_CHECK(n == 7);
+
+	/* not positive, and a stock size */
+	T_CHECK(!IMGSIZE_ResizeBytes(0, 8, &n));
+	T_CHECK(!IMGSIZE_ResizeBytes(8, -1, &n));
+	T_CHECK(!IMGSIZE_Scale2xBytes(0, 8, &n));
+	T_CHECK(IMGSIZE_ResizeBytes(64, 64, &n));
+	T_EQ_INT((int)n, 64 * 64 * 4);
+	T_CHECK(IMGSIZE_Scale2xBytes(64, 64, &n));
+	T_EQ_INT((int)n, 64 * 64 * 4);
+}
+
+TEST(imgsize_replacement_fits)
+{
+	size_t n = 7;
+
+	/* a replacement the size of the original, or larger */
+	T_CHECK(IMGSIZE_ReplacementFits(64, 64, 64, 64, &n));
+	T_EQ_INT((int)n, 4096);
+	T_CHECK(IMGSIZE_ReplacementFits(128, 128, 64, 64, &n));
+	/* smaller in either side: refused */
+	n = 7;
+	T_CHECK(!IMGSIZE_ReplacementFits(63, 64, 64, 64, &n));
+	T_CHECK(!IMGSIZE_ReplacementFits(64, 63, 64, 64, &n));
+	/* an unknown original (0 by 0) accepts any in-cap size */
+	T_CHECK(IMGSIZE_ReplacementFits(8192, 8192, 0, 0, &n));
+	/* the cap, one past it, and a wrapping product */
+	T_CHECK(!IMGSIZE_ReplacementFits(8193, 8192, 0, 0, &n));
+	T_CHECK(!IMGSIZE_ReplacementFits(8192, 8193, 0, 0, &n));
+	T_CHECK(!IMGSIZE_ReplacementFits(65536, 65536, 0, 0, &n));
+	T_CHECK(!IMGSIZE_ReplacementFits(0, 0, 0, 0, &n));
+	T_CHECK(!IMGSIZE_ReplacementFits(-1, 8, -2, 0, &n));
+}

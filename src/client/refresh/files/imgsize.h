@@ -126,4 +126,39 @@ IMGSIZE_BodyFits(int64_t size, int64_t ofs, int width, int height,
 	return (size - ofs) >= (int64_t)bytes;
 }
 
+/*
+ * The soft renderer's resize buffer: `width` by `height` at four bytes a
+ * pixel, the size it will resize an image to. Returns 1 and the byte
+ * count, or 0 (over the cap, or not positive) and leaves *bytes alone.
+ */
+static inline int
+IMGSIZE_ResizeBytes(int width, int height, size_t *bytes)
+{
+	return IMGSIZE_Bytes(width, height, 4, bytes);
+}
+
+/*
+ * The soft renderer's 2x buffer for an 8-bit `width` by `height` image:
+ * the doubled picture is 4 * width * height bytes, and the source size is
+ * the one held to the cap.
+ */
+static inline int
+IMGSIZE_Scale2xBytes(int width, int height, size_t *bytes)
+{
+	return IMGSIZE_Bytes(width, height, 4, bytes);
+}
+
+/*
+ * R_LoadImage's test of a hi-res replacement: the decoded `width` by
+ * `height` is at least the original's `realwidth` by `realheight` and
+ * within the cap. Returns 1 and the pixel count, or 0.
+ */
+static inline int
+IMGSIZE_ReplacementFits(int width, int height, int realwidth, int realheight,
+	size_t *pixels)
+{
+	return width >= realwidth && height >= realheight
+		&& IMGSIZE_Pixels(width, height, pixels);
+}
+
 #endif /* SRC_CLIENT_REFRESH_FILES_IMGSIZE_H_ */

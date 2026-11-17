@@ -445,8 +445,8 @@ LoadHiColorImage(const char *name, const char* namewe, const char *ext,
 		size_t pixels;
 
 		/* the product in 64 bits against the cap: a bigger one is refused */
-		if (width >= realwidth && height >= realheight
-			&& IMGSIZE_Pixels(width, height, &pixels))
+		if (IMGSIZE_ReplacementFits(width, height, realwidth, realheight,
+			&pixels))
 		{
 			if (realheight == 0 || realwidth == 0)
 			{

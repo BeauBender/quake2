@@ -384,7 +384,7 @@ R_LoadPic(const char *name, const byte *pic, int width, int realwidth, int heigh
 			// resize image: the buffer's size in 64 bits against the cap, and
 			// the allocation checked. Either failing keeps the image at its
 			// own size (the path below), as a failed resize does.
-			if (IMGSIZE_Bytes(uploadwidth, uploadheight, 4, &resize_size))
+			if (IMGSIZE_ResizeBytes(uploadwidth, uploadheight, &resize_size))
 			{
 				pic32 = malloc(resize_size);
 			}
@@ -430,7 +430,7 @@ R_LoadPic(const char *name, const byte *pic, int width, int realwidth, int heigh
 			image_t	*image;
 
 			// the product in 64 bits against the cap
-			if (!IMGSIZE_Bytes(width, height, 4, &scaled_size))
+			if (!IMGSIZE_Scale2xBytes(width, height, &scaled_size))
 				return NULL;
 
 			scaled = malloc(scaled_size);
