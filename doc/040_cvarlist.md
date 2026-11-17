@@ -1097,9 +1097,12 @@ is.
   from the eye that looked for translucent water, the water pixels whose
   reflection came from the picture, from a surface drawn on its own, from
   the sky in the picture, from the sky box and from nowhere, and the
-  pass's GPU time; with `r_rt_water_hits 1` also each of its three parts
-  (the raster of the water, the list of its pixels, the trace) and the
-  time from the first's start to the last's end. Nothing
+  pass's GPU time; with `r_rt_water_hits 1` also each of its two parts
+  (the list of its pixels, the trace) and the time from the first's start
+  to the last's end, the pass's time being their sum, and `-` for the
+  raster's, vertex stage's and fragment stage's figures, which are not
+  measured: the water's marks are a draw of the G-buffer raster, timed
+  with it. Nothing
   is drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next
@@ -1173,8 +1176,12 @@ is.
   reflection. Over the
   pool of the test map that fills the 2 to 9 % of the water that had no
   reflection, and changes no pixel outside the water. It costs more GPU
-  time: a raster of the map's water and a list of its pixels before the
-  rays, which only those pixels trace. Measured on an Apple M6 over the
+  time: the water's marks, one more draw of the G-buffer raster, and a list
+  of the marked pixels before the rays, which only those pixels trace. The
+  marks are written into the alpha of the G-buffer's normal attachment, so
+  `1` finds the water pixels without a raster pass, depth reload or target
+  of its own. The figures below were measured with the separate raster
+  that setting used before, and are to be measured again. Measured on an Apple M6 over the
   test map's pool (about 41 % of the pixels water), the pass takes
   4.66 ms of GPU time at 1920 x 1080 against 3.40 ms at `0` with the
   frame rate held to a 60 Hz display, and 1.20 against 0.99 ms not held;
