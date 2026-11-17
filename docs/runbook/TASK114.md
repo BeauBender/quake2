@@ -130,19 +130,25 @@ It feeds synthetic results, synthetic TGAs and a fake engine, in a scratch direc
 caller's `GIT_*` variables and git configuration removed, and then runs every assertion against a
 mutant of the line it covers.
 
+
 ## The M6 report
 
-One run on the M6 (Apple M6, family apple5, `r_metalfx_modes` 31), engine commit 3c8fb3c1 (clean tree, build checked),
-1280x720, 5 `timedemo` rounds and 3 GPU rounds, seed 1, run in chunks
+One run on the M6 (Apple M6, family apple5, `r_metalfx_modes` 31), engine commit c212cf75 plus the
+generator of the current main, 1280x720, 5 `timedemo` rounds and 3 GPU rounds, seed 1, run in chunks
 of one scenario (each chunk one lock hold, with a 240 s pre-warm of the same engine first).
 The report is local to that machine; it is not in any repository, issue or pull request.
 
-**Scenarios run:** `world`, `world-lmcubic`, `rt-ao`, `rt-ao-entities`, `rt-shadows`. The run was
-cut here, not finished: each chunk took 11 to 14 minutes and other lanes held the lock between
-them, so the other scenarios that the generator offers (`world-fullbright`, `world-scale8`,
-`world-metalfx1` to `3`, `world-metalfx-interp`, `models`, `particles`, `particles-cap`, `dlights`,
-`dlights-lmcubic`, `skywater`, `cinematic`, `hud2d`, `hud2d-sharp`, `hud2d-scale8`,
-`rt-shadows-entities`, `rt-water`, `rt-water-entities`) have no M6 numbers yet.
+**Scenarios run:** `world`, `world-lmcubic`, `rt-ao`, `rt-ao-entities`, `rt-shadows`,
+`rt-shadows-entities`, `rt-water`, `rt-water-entities`. Each chunk took 11 to 14 minutes and the host
+lock was held by other lanes between them, so the rest were left out to fit the host lock:
+`models`, `particles`, `skywater`, `world-fullbright`, `world-scale8`, `world-metalfx1` to `3`,
+`world-metalfx-interp`, `particles-cap`, `dlights`, `dlights-lmcubic`, `cinematic`, `hud2d`,
+`hud2d-sharp` and `hud2d-scale8` have no M6 numbers yet.
+
+**Two pages.** The first five scenarios ran on engine commit 3c8fb3c1; the last three ran after the
+first runbook commit of this section, so their engine commit reads 8ae7a9f9 (the same binary, a
+runbook-only change). `report` refuses chunks of two commits, so the run is two local pages, one
+per commit, not one.
 
 **Skipped options (every scenario):** `den1` and `fx3-s50-den1`, because the engine reports no cvar
 `r_rt_denoiser`. Every `r_metalfx` mode 1, 2 and 3 at scales 0.75, 0.50 and 0.34, and the three
@@ -182,6 +188,19 @@ timestamp resolution of the counter, so read them as a band, not a difference.
 | rt-ao | fx3-s50 | 1310 (1283-1330) | 0.096 (0.096-0.096) | 0.210 (0.194-0.212) | 0.938030 |
 | rt-ao | fx3-s50-interp | 1305 (1285-1328) | 0.096 (0.096-0.097) | 0.208 (0.193-0.214) | 0.938030 |
 | rt-ao | fx3-s75 | 1049 (1016-1052) | 0.058 (0.030-0.095) | 0.260 (0.206-0.310) | 0.951856 |
+| rt-shadows-entities | native | 2208 (2094-2297) | 0.080 (0.025-0.084) | - | native |
+| rt-shadows-entities | fx1-s34 | 2580 (2487-2650) | 0.055 (0.054-0.088) | 0.996 (0.995-1.180) | 0.941198 |
+| rt-shadows-entities | fx1-s50 | 2435 (2368-2571) | 0.087 (0.055-0.093) | 1.138 (0.767-1.147) | 0.965817 |
+| rt-shadows-entities | fx1-s50-interp | 2506 (2435-2561) | 0.090 (0.089-0.090) | 1.232 (1.135-1.246) | 0.965817 |
+| rt-shadows-entities | fx1-s75 | 2215 (2107-2244) | 0.086 (0.029-0.087) | 1.517 (0.463-1.615) | 0.978913 |
+| rt-shadows-entities | fx2-s34 | 1633 (1588-1652) | 0.054 (0.029-0.056) | 0.207 (0.197-0.327) | 0.944213 |
+| rt-shadows-entities | fx2-s50 | 1364 (1295-1378) | 0.089 (0.088-0.096) | 0.249 (0.247-0.297) | 0.968990 |
+| rt-shadows-entities | fx2-s50-interp | 1359 (1330-1384) | 0.088 (0.027-0.090) | 0.230 (0.140-0.296) | 0.968990 |
+| rt-shadows-entities | fx2-s75 | 1038 (1022-1052) | 0.029 (0.029-0.088) | 0.202 (0.201-0.344) | 0.984230 |
+| rt-shadows-entities | fx3-s34 | 1602 (1584-1614) | 0.088 (0.088-0.090) | 0.202 (0.201-0.246) | 0.944213 |
+| rt-shadows-entities | fx3-s50 | 1381 (1354-1389) | 0.029 (0.029-0.029) | 0.139 (0.137-0.154) | 0.968990 |
+| rt-shadows-entities | fx3-s50-interp | 1348 (1269-1375) | 0.089 (0.029-0.089) | 0.213 (0.136-0.247) | 0.968990 |
+| rt-shadows-entities | fx3-s75 | 1095 (1082-1128) | 0.029 (0.029-0.092) | 0.201 (0.199-0.259) | 0.984231 |
 | rt-shadows | native | 3146 (2996-3411) | 0.051 (0.051-0.085) | - | native |
 | rt-shadows | fx1-s34 | 4077 (3765-4201) | 0.096 (0.057-0.097) | 0.523 (0.506-0.554) | 0.943756 |
 | rt-shadows | fx1-s50 | 3626 (3462-3937) | 0.096 (0.096-0.097) | 0.681 (0.649-0.685) | 0.967787 |
@@ -195,6 +214,32 @@ timestamp resolution of the counter, so read them as a band, not a difference.
 | rt-shadows | fx3-s50 | 1478 (1450-1518) | 0.096 (0.058-0.096) | 0.248 (0.243-0.251) | 0.971184 |
 | rt-shadows | fx3-s50-interp | 1485 (1435-1488) | 0.058 (0.058-0.097) | 0.249 (0.245-0.392) | 0.971184 |
 | rt-shadows | fx3-s75 | 1235 (1220-1244) | 0.095 (0.095-0.096) | 0.292 (0.291-0.295) | 0.985681 |
+| rt-water-entities | native | 1997 (1986-2015) | 0.026 (0.024-0.026) | - | native |
+| rt-water-entities | fx1-s34 | 2650 (2580-2713) | 0.055 (0.053-0.091) | 1.085 (1.024-1.086) | 0.945447 |
+| rt-water-entities | fx1-s50 | 2487 (2478-2552) | 0.030 (0.027-0.054) | 0.705 (0.654-1.093) | 0.967927 |
+| rt-water-entities | fx1-s50-interp | 2542 (2487-2610) | 0.089 (0.055-0.089) | 1.149 (0.888-1.203) | 0.967927 |
+| rt-water-entities | fx1-s75 | 2167 (2075-2304) | 0.087 (0.029-0.087) | 1.028 (0.441-1.574) | 0.980313 |
+| rt-water-entities | fx2-s34 | 1610 (1588-1621) | 0.088 (0.029-0.089) | 0.200 (0.105-0.248) | 0.948202 |
+| rt-water-entities | fx2-s50 | 1351 (1310-1359) | 0.048 (0.029-0.089) | 0.245 (0.146-0.282) | 0.970803 |
+| rt-water-entities | fx2-s50-interp | 1359 (1330-1359) | 0.029 (0.028-0.089) | 0.138 (0.137-0.206) | 0.970799 |
+| rt-water-entities | fx2-s75 | 1007 (987-1033) | 0.088 (0.029-0.088) | 0.274 (0.202-0.278) | 0.985285 |
+| rt-water-entities | fx3-s34 | 1621 (1602-1644) | 0.089 (0.029-0.089) | 0.201 (0.196-0.202) | 0.948202 |
+| rt-water-entities | fx3-s50 | 1333 (1322-1364) | 0.029 (0.027-0.096) | 0.139 (0.135-0.210) | 0.970803 |
+| rt-water-entities | fx3-s50-interp | 1333 (1322-1348) | 0.088 (0.030-0.089) | 0.210 (0.148-0.213) | 0.970803 |
+| rt-water-entities | fx3-s75 | 1058 (1024-1068) | 0.029 (0.029-0.095) | 0.206 (0.201-0.258) | 0.985286 |
+| rt-water | native | 2723 (2620-2756) | 0.051 (0.026-0.090) | - | native |
+| rt-water | fx1-s34 | 4388 (4227-4563) | 0.096 (0.094-0.096) | 0.476 (0.472-0.489) | 0.947167 |
+| rt-water | fx1-s50 | 3684 (3552-3849) | 0.096 (0.096-0.096) | 0.600 (0.575-0.617) | 0.969445 |
+| rt-water | fx1-s50-interp | 3552 (3552-3704) | 0.095 (0.095-0.095) | 0.578 (0.565-0.581) | 0.969445 |
+| rt-water | fx1-s75 | 2778 (2734-2847) | 0.095 (0.094-0.095) | 0.876 (0.869-0.877) | 0.981171 |
+| rt-water | fx2-s34 | 1697 (1652-1736) | 0.097 (0.097-0.100) | 0.325 (0.324-0.327) | 0.949870 |
+| rt-water | fx2-s50 | 1409 (1351-1418) | 0.095 (0.029-0.095) | 0.241 (0.144-0.286) | 0.972467 |
+| rt-water | fx2-s50-interp | 1384 (1362-1409) | 0.095 (0.029-0.095) | 0.242 (0.236-0.299) | 0.972467 |
+| rt-water | fx2-s75 | 1075 (1054-1111) | 0.095 (0.029-0.095) | 0.237 (0.214-0.246) | 0.986388 |
+| rt-water | fx3-s34 | 1685 (1685-1714) | 0.096 (0.058-0.096) | 0.325 (0.323-0.326) | 0.949870 |
+| rt-water | fx3-s50 | 1400 (1392-1421) | 0.095 (0.029-0.096) | 0.241 (0.133-0.298) | 0.972467 |
+| rt-water | fx3-s50-interp | 1398 (1386-1424) | 0.096 (0.058-0.096) | 0.243 (0.240-0.250) | 0.972467 |
+| rt-water | fx3-s75 | 1148 (1139-1154) | 0.029 (0.029-0.095) | 0.206 (0.204-0.260) | 0.986388 |
 | world-lmcubic | native | 11113 (10600-11879) | 0.089 (0.088-0.090) | - | native |
 | world-lmcubic | fx1-s34 | 6097 (5839-6207) | 0.096 (0.093-0.098) | 0.342 (0.342-0.344) | 0.947409 |
 | world-lmcubic | fx1-s50 | 5940 (5694-5991) | 0.097 (0.097-0.100) | 0.362 (0.361-0.362) | 0.969647 |
@@ -232,6 +277,9 @@ active time at the top state):
 | `rt-ao` | 1353 MHz, 6.8% | 4347 MHz, 75.1% | 1096 MHz, 40.3% |
 | `rt-ao-entities` | 1355 MHz, 4.6% | 4084 MHz, 63.1% | 1144 MHz, 47.0% |
 | `rt-shadows` | 1363 MHz, 5.8% | 4189 MHz, 68.1% | 1006 MHz, 35.8% |
+| `rt-shadows-entities` | 1371 MHz, 6.8% | 4319 MHz, 73.4% | 1085 MHz, 42.8% |
+| `rt-water` | 1256 MHz, 7.1% | 4001 MHz, 55.1% | 1072 MHz, 39.7% |
+| `rt-water-entities` | 1357 MHz, 6.1% | 4166 MHz, 64.5% | 1112 MHz, 45.1% |
 
 The frequencies are weighted averages over the window, from the no-root IOReport probe; the P
 cluster's top state is 4788 MHz, the E cluster's 2940 MHz, the GPU's 1735 MHz.
@@ -241,12 +289,12 @@ snapshots, before and after runs (the percentages are not kept), so the host was
 process was seen. Low-power mode was off and no thermal
 or performance warning level was recorded in any chunk. GPU utilization read 1 s after the
 pre-warm and before the timed run was 20% in the `rt-ao` chunk (the reading lags the pre-warm that
-had just ended) and 0 to 6% in the others.
+had just ended) and 4 to 7% in the others.
 
 **Screen.** The screen was unlocked at the start and the end of every chunk (checked with
 `CGSSessionScreenIsLocked`); no chunk is void. A foreground gate and other lanes ran on the host
 between chunks, never inside one.
 
 **Reading.** `r_metalfx 1` runs at about half the native fps in the two `world` scenarios and above native fps
-in `rt-ao` and `rt-ao-entities`; modes 2 and 3 run at about 900 to 1900 fps in every scenario run, at a higher ssim
+in the ray-traced scenarios at scales 0.34 to 0.50 (at 0.75 it is near native); modes 2 and 3 run at about 1000 to 1900 fps in every scenario run, at a higher ssim
 than mode 1 at the same scale.
