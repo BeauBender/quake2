@@ -53,9 +53,20 @@
 #   - a leading zero (08, 010) refused by every numeric setting and case key
 #     the core reads, before anything runs;
 #   - the core and bench.sh name no game and no project layout, and use no
-#     eval.
+#     eval;
+#   - the quiet evidence (TASK166), with stubbed readers (snapstub,
+#     freqstub; no GPU needed): every new run-file key, the gate's wait,
+#     its hold and its bound, a not-quiet set refused by baseline put
+#     (the gate ran out, GPU use in a snapshot), the flag in drift and
+#     compare (unknown for a set stored without it), the pre-warm's length,
+#     its one lock hold with the runs, its thermal stop and drift's
+#     pre-warm, the quiet marker's fields and its removal on every exit
+#     (0, another status, a stopped command, TERM and HUP to the lock
+#     shell, an outer hold, a measurement), the new case keys, the
+#     frequency probe's arithmetic and failures on synthetic dumps, and the
+#     host's own snapshot reader printing the stub's keys.
 # The tests that do not test the host facts use a fast stand-in for
-# system_profiler (fast_profiler). Then fifteen mutants, each applied to a
+# system_profiler (fast_profiler). Then thirty mutants, each applied to a
 # copy of scripts/bench/ and each required to fail the test it targets: the
 # lock made neither exclusively nor linked, the holder renamed over
 # another's, the command spawned without its own process group, its fork
@@ -64,8 +75,14 @@
 # in the spawn window dropped, or acted on at once, re-entry accepts any
 # token, the drift rule drops t, the core names a game, the reclaim guard
 # made with mkdir -p, the holder-less grace dropped, the store's
-# outside-repository check deleted, the leading-zero refusal dropped; and one to this test's own fixture, gc.sh
-# with its standard error left open.
+# outside-repository check deleted, the leading-zero refusal dropped; the
+# gate without its hold, its bound or its reading, GPU use in a snapshot
+# ignored, baseline put storing a not-quiet set, compare's unknown flag
+# lost, the pre-warm not run, without its thermal stop or missing from
+# drift, the snapshots or the frequencies not written, the marker not
+# written or not removed, the probe's mean not weighted, the host's reader
+# with a key of its own; and one to this test's own fixture, gc.sh with
+# its standard error left open.
 #
 # Usage: tests/check-bench.sh [<test>...]   (named tests only, no mutants)
 set -eu
@@ -1731,6 +1748,22 @@ mutant core-names-game core/common.sh '' '# the Quake II adapter' t_generic || m
 mutant reclaim-guard core/lock.sh 'if ! mkdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' 'if ! mkdir -p "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' t_lock_guard || mfail=1
 mutant bare-no-grace core/lock.sh '-ge "$_la_grace" ]; then' '-ge 0 ]; then' t_lock_guard || mfail=1
 mutant leading-zero-accepted core/common.sh "'' | *[!0-9]* | 0?*) return 1 ;;" "'' | *[!0-9]*) return 1 ;;" t_leading_zero || mfail=1
+# TASK166: the quiet evidence.
+mutant gate-no-hold core/snap.sh '[ $((_gt_now - _gt_since)) -lt "$_gt_hold" ] || break' 'break' t_gate || mfail=1
+mutant gate-no-bound core/snap.sh 'if [ $((_gt_now - _gt_t0)) -ge "$_gt_wait" ]; then' 'if false; then' t_gate || mfail=1
+mutant gate-no-reading core/snap.sh "'BEGIN { exit !(g <= lg && c <= lc) }'" "'BEGIN { exit 0 }'" t_gate || mfail=1
+mutant foreign-gpu-ignored core/snap.sh "'BEGIN { exit !(g > l) }'" "'BEGIN { exit 1 }'" t_gate || mfail=1
+mutant put-not-quiet bench.sh 'if not_quiet "${BENCH_TMP:?}/new"; then' 'if false; then' t_gate || mfail=1
+mutant compare-flag-unknown bench.sh "do printf '%s" "do : '%s" t_gate || mfail=1
+mutant prewarm-not-run core/measure.sh '[ "$_pw_left" -gt 0 ] || break' 'break' t_prewarm || mfail=1
+mutant prewarm-no-thermal-stop core/measure.sh 'if [ -n "$_pw_w" ]; then' 'if false; then' t_prewarm || mfail=1
+mutant drift-no-prewarm bench.sh '	bench_prewarm' '	:' t_prewarm || mfail=1
+mutant no-snapshot core/measure.sh "sed 's/^/snap.before./'" ": sed 's/^/snap.before./'" t_store || mfail=1
+mutant no-freq core/measure.sh 'bench_freq_window "${BENCH_TMP:?}/freq.before"' ': "${BENCH_TMP:?}/freq.before"' t_store || mfail=1
+mutant marker-not-written core/lock.sh 'if [ -n "$_ru_quiet" ]; then bench_quiet_mark "$_ru_label" "$$"; fi' ':' t_quiet_marker || mfail=1
+mutant marker-not-removed core/lock.sh '	bench_quiet_release' '	:' t_quiet_marker || mfail=1
+mutant freq-unweighted core/freq.c 'wsum += r * y->mhz[k];' 'wsum += r;' t_freq || mfail=1
+mutant snap-key-drift core/snap.sh "'lowpower=%s" "'lowpwr=%s" t_snap_system || mfail=1
 # Last: it writes into the throwaway repository's work tree.
 mutant store-in-repo core/store.sh 'bench_outside_repo "$BENCH_STORE_ROOT" "the store (BENCH_STORE)"' ':' t_store_guard || mfail=1
 [ "$mfail" -eq 0 ] || exit 1
