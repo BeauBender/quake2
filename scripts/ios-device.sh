@@ -545,6 +545,11 @@ codesign|--verify|--strict|@APP@|"
 	dt_after="$unsigned_after
 		$paths_after"
 	dt_case sign-resign-fails 1 "<identity>: no identity found" signfail signed.app -- sign --identity "$who" --profile @P@/good
+	# an identity that is a part of the scratch and home paths ("case"):
+	# the paths are replaced first, so it cannot break their match
+	dt_after="$unsigned_after
+		$paths_after"
+	dt_case sign-identity-in-paths 1 "<identity>: no identity found" signfail device.app -- sign --identity case --profile @P@/good
 	# an identity as a SHA-1 hash: codesign names the certificate it
 	# resolved; a line that names a signer is not printed, one fixed line is
 	dt_after="$unsigned_after"'
