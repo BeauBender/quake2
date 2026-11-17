@@ -85,9 +85,10 @@ configstrings (`cl.configstrings[CS_MODELS..]`, `CS_SOUNDS..`, `CS_IMAGES..`,
 plus the sky in `CS_SKY` and player skins). `CL_RequestNextDownload` walks
 those configstrings and, for each name, calls `CL_CheckOrDownloadFile`, whose
 only gate is `CL_DownloadFilter`. That filter rejects a name that starts with
-`.` or `/`, contains `:` or `..`, contains a library extension anywhere
-(`.dll`, `.dylib`, `.lib`, `.so`, `.a`, tested with `strstr`, so `x.so.wav`
-is refused too), matches the `cl_nodownload_list` cvar, or already exists. It
+`.` or `/`, contains `:` or `..`, ends in a library extension (`.dll`,
+`.dylib`, `.lib`, `.so`, `.a`, in any case and before any numeric version
+groups such as `libx.so.1.2`; since FIX34, `x.so.wav` is accepted), matches
+the `cl_nodownload_list` cvar, or already exists. It
 does **not** restrict the asset extension. Model configstrings are requested
 verbatim, so they can name a `.md2`, `.sp2` or `.bsp` (the map is
 `CS_MODELS + 1`); the other classes are requested under names the client

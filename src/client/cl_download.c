@@ -450,6 +450,37 @@ CL_DownloadFileName(char *dest, int destlen, char *fn)
 }
 
 /*
+ * Returns true if the name ends with the extension, ignoring case
+ * and any trailing numeric version groups (".so.1", ".so.1.2").
+ */
+static qboolean
+CL_DownloadHasExtension(const char *filename, const char *ext)
+{
+	size_t len = strlen(filename);
+	size_t extlen = strlen(ext);
+
+	/* drop trailing ".<digits>" groups */
+	for (;;)
+	{
+		size_t i = len;
+
+		while (i > 0 && filename[i - 1] >= '0' && filename[i - 1] <= '9')
+		{
+			i--;
+		}
+
+		if (i == len || i == 0 || filename[i - 1] != '.')
+		{
+			break;
+		}
+
+		len = i - 1;
+	}
+
+	return (len >= extlen) && (Q_strncasecmp(filename + len - extlen, ext, extlen) == 0);
+}
+
+/*
  * Returns true if a file is filtered and
  * should not be downloaded, false otherwise.
  */
@@ -474,9 +505,9 @@ CL_DownloadFilter(const char *filename)
 
 	for (i = 0; extensions[i]; i++)
 	{
-		if (strstr(filename, extensions[i]))
+		if (CL_DownloadHasExtension(filename, extensions[i]))
 		{
-			Com_Printf("Refusing to download a path containing '%s': %s\n", extensions[i], filename);
+			Com_Printf("Refusing to download a path ending in '%s': %s\n", extensions[i], filename);
 			return true;
 		}
 	}
