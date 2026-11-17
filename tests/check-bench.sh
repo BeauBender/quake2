@@ -64,7 +64,13 @@
 #     (0, another status, a stopped command, TERM and HUP to the lock
 #     shell, an outer hold, a measurement), the new case keys, the
 #     frequency probe's arithmetic and failures on synthetic dumps, and the
-#     host's own snapshot reader printing the stub's keys.
+#     host's own snapshot reader printing the stub's keys; and, from the
+#     review (round 1): a top line that takes the kernel's name and not an
+#     argv[0] the process rewrote, the probe's own reason in the run file,
+#     drift's own not-quiet guard, BENCH_GATE_POLL refused before anything
+#     runs and each gate nap cut to the time left, the probe built before
+#     the gate without a pre-warm, and the readers (snap.source,
+#     freq.source) in the run file, drift and compare.
 # The tests that do not test the host facts use a fast stand-in for
 # system_profiler (fast_profiler). Then thirty mutants, each applied to a
 # copy of scripts/bench/ and each required to fail the test it targets: the
@@ -1200,14 +1206,14 @@ metric=ms n=3 median=11 p90=12 min=10 max=12"
 	_d=${E:?}/home/.cache/zzqrepo-bench/$TOK/$IA/null-sleep/$CH
 	[ "$(ls "${_d:?}/set-1" | grep -c '^r-.*\.run$')" -eq 3 ] || bad "store: not three run files in <store>/<host>/<inputs>/<case>/<case-hash>/set-1/ under \$HOME/.cache/<repo>-bench"
 	ls -a "${_d:?}" "${_d:?}/set-1" | grep -q '^\.tmp\.' && bad "store: a temporary file or staging directory was left"
-	_want="case case_hash commit inputs host class hash kind index start load.before load.after quiet quiet.reason gate.wait"
+	_want="case case_hash commit inputs host class hash kind index start load.before load.after quiet quiet.reason gate.wait snap.source"
 	for _k in $SNAP_KEYS; do _want="$_want snap.before.$_k"; done
 	for _k in $SNAP_KEYS; do _want="$_want snap.after.$_k"; done
-	_want="$_want freq.gpu.mhz freq.gpu.top freq.gpu.active freq.gpu.max prewarm.target prewarm.seconds prewarm.runs prewarm.stop prewarm.freq prewarm.freq.reason pre.null metric.ms metric.frames "
+	_want="$_want freq.source freq.gpu.mhz freq.gpu.top freq.gpu.active freq.gpu.max prewarm.target prewarm.seconds prewarm.runs prewarm.stop prewarm.freq prewarm.freq.reason pre.null metric.ms metric.frames "
 	for _f in "${_d:?}"/set-1/r-*.run; do
 		_keys=$(sed 's/=.*//' "$_f" | tr '\n' ' ')
 		[ "$_keys" = "$_want" ] || bad "store: a run file has the keys: $_keys"
-		for _l in quiet=yes quiet.reason=none snap.before.gpu.device=0 snap.after.top.5='1.0 zzqproc5' freq.gpu.mhz=1000 \
+		for _l in quiet=yes quiet.reason=none snap.source=stub freq.source=stub snap.before.gpu.device=0 snap.after.top.5='1.0 zzqproc5' freq.gpu.mhz=1000 \
 			prewarm.target=0 prewarm.stop=none prewarm.freq=unavailable prewarm.freq.reason=no-prewarm; do
 			grep -qx "$_l" "$_f" || bad "store: a run file has no line $_l"
 		done
@@ -1320,12 +1326,12 @@ t_drift() {
 		_st=0
 		_out=$(env BENCH_NULL_VALUES="${_x%%:*}" sh "$R/bench.sh" drift null-sleep "$cA" 2> "${E:?}/err") || _st=$?
 		[ "$_st" -eq 0 ] || bad "drift: status $_st for ${_x%%:*}"
-		[ "$_out" = "drift=inside value=${_x#*:} lo=9.5 hi=12.5 t=0.5 median=11 runs=3 metric=ms quiet=yes baseline.quiet=yes" ] || bad "drift: ${_x%%:*} gave: $_out"
+		[ "$_out" = "drift=inside value=${_x#*:} lo=9.5 hi=12.5 t=0.5 median=11 runs=3 metric=ms quiet=yes source=stub baseline.quiet=yes baseline.source=stub" ] || bad "drift: ${_x%%:*} gave: $_out"
 	done
 	[ "$(ls "${_d:?}"/set-*)" = "$_runs" ] || bad "drift: a run inside the range changed the baseline"
 	[ "$(ls "${_d:?}/drift" | grep -c '^r-.*\.run$')" -eq 3 ] || bad "drift: the drift runs are not kept in drift/"
 	_out=$(env BENCH_NULL_VALUES=12.51 sh "$R/bench.sh" drift null-sleep "$cA" 2> "${E:?}/err") || bad "drift: an outside run failed"
-	printf '%s\n' "$_out" | grep -qx 'drift=outside value=12.51 lo=9.5 hi=12.5 t=0.5 median=11 runs=3 metric=ms quiet=yes baseline.quiet=yes' || bad "drift: 12.51 gave: $(printf '%s\n' "$_out" | sed -n 1p)"
+	printf '%s\n' "$_out" | grep -qx 'drift=outside value=12.51 lo=9.5 hi=12.5 t=0.5 median=11 runs=3 metric=ms quiet=yes source=stub baseline.quiet=yes baseline.source=stub' || bad "drift: 12.51 gave: $(printf '%s\n' "$_out" | sed -n 1p)"
 	printf '%s\n' "$_out" | grep -qx "baseline=replaced case=null-sleep inputs=$IA runs=3" || bad "drift: an outside run did not replace the baseline"
 	B baseline get null-sleep "$cA" | grep -x 'metric=ms n=3 median=12.51 p90=12.51 min=12.51 max=12.51' > /dev/null || bad "drift: the new baseline is not the re-measured one"
 	[ "$(ls "${_d:?}/set-1" | grep -c '^r-.*\.run$')" -eq 3 ] && [ -d "${_d:?}/set-2" ] || bad "drift: the old baseline is not kept as set-1 beside the new set-2"
@@ -1333,9 +1339,9 @@ t_drift() {
 	sed 's/^abs_tol=.*/abs_tol=0/; s/^rel_tol=.*/rel_tol=0.1/' "$R/cases/null-sleep.case" > "${E:?}/rel.case"
 	env BENCH_NULL_VALUES=10,12,11 sh "$R/bench.sh" baseline put "${E:?}/rel.case" "$cA" > /dev/null || bad "drift: put of the relative case failed"
 	_out=$(env BENCH_NULL_VALUES=13.1 sh "$R/bench.sh" drift "${E:?}/rel.case" "$cA")
-	[ "$_out" = 'drift=inside value=13.1 lo=8.9 hi=13.1 t=1.1 median=11 runs=3 metric=ms quiet=yes baseline.quiet=yes' ] || bad "drift: 13.1 (relative) gave: $_out"
+	[ "$_out" = 'drift=inside value=13.1 lo=8.9 hi=13.1 t=1.1 median=11 runs=3 metric=ms quiet=yes source=stub baseline.quiet=yes baseline.source=stub' ] || bad "drift: 13.1 (relative) gave: $_out"
 	_out=$(env BENCH_NULL_VALUES=8.8 sh "$R/bench.sh" drift "${E:?}/rel.case" "$cA" | sed -n 1p)
-	[ "$_out" = 'drift=outside value=8.8 lo=8.9 hi=13.1 t=1.1 median=11 runs=3 metric=ms quiet=yes baseline.quiet=yes' ] || bad "drift: 8.8 (relative) gave: $_out"
+	[ "$_out" = 'drift=outside value=8.8 lo=8.9 hi=13.1 t=1.1 median=11 runs=3 metric=ms quiet=yes source=stub baseline.quiet=yes baseline.source=stub' ] || bad "drift: 8.8 (relative) gave: $_out"
 	_st=0
 	B drift null-sleep "$cC" > /dev/null 2>&1 || _st=$?
 	[ "$_st" -eq 1 ] || bad "drift: no baseline did not exit 1"
@@ -1354,7 +1360,7 @@ t_compare() {
 	{
 		printf 'compare case=null-sleep host=%s class=%s\n' "$TOK" "$_cls"
 		printf 'before=%s inputs=%s\nafter=%s inputs=%s\n' "$cA" "$IA" "$cC" "$IC"
-		printf 'quiet before=yes after=yes\n'
+		printf 'quiet before=yes after=yes\nsource before=stub after=stub\n'
 		printf '%-16s %-6s %4s %12s %12s %12s %12s\n' metric side runs median p90 min max
 		printf '%-16s %-6s %4s %12s %12s %12s %12s\n' frames before 3 3 3 3 3
 		printf '%-16s %-6s %4s %12s %12s %12s %12s\n' frames after 3 3 3 3 3
@@ -1452,7 +1458,7 @@ t_gate() {
 	_st=0
 	_out=$(B drift "${E:?}/g.case" "$cA" 2> "${E:?}/err") || _st=$?
 	case $_out in
-	*' quiet=no quiet.reason=gpu.after baseline.quiet=yes') ;;
+	*' quiet=no quiet.reason=gpu.after source=stub baseline.quiet=yes baseline.source=stub') ;;
 	*) bad "drift: the line of a run that was not quiet is: $_out" ;;
 	esac
 	B compare "${E:?}/g.case" --before "$cA" --after "$cC" > "${E:?}/out" || true
@@ -1595,6 +1601,166 @@ t_snap_system() {
 	[ "$fails" -eq 0 ]
 }
 
+# A process cannot put an argument into a top line by rewriting its argv[0]
+# (TASK166 review round 1): the reader takes the kernel's name for it. A
+# stand-in ps points the reader's own columns at one process of this test,
+# whose argv[0] carries argument-like words (exec -a); the test ends it by
+# its own pid.
+t_snap_argv() {
+	fresh snapargv
+	if ! command -v bash > /dev/null 2>&1 || [ ! -x /bin/ps ]; then
+		echo "$me: t_snap_argv skipped: no bash for exec -a, or no /bin/ps"
+		return 0
+	fi
+	mkdir -p "${E:?}/ps"
+	cat > "${E:?}/ps/ps" << 'EOF'
+#!/bin/sh
+# The reader's arguments without -A and -r, for the one process ZZQ_PID.
+n=$#
+while [ "$n" -gt 0 ]; do
+	a=$1
+	shift
+	n=$((n - 1))
+	case $a in
+	-A | -r) ;;
+	*) set -- "$@" "$a" ;;
+	esac
+done
+exec /bin/ps -p "$ZZQ_PID" "$@"
+EOF
+	chmod +x "${E:?}/ps/ps"
+	bash -c 'exec -a "zzqfake --token=zzqsecret1 zzq@example.invalid" sleep 30' &
+	_p=$!
+	_n=0
+	until /bin/ps -p "$_p" -o comm= 2> /dev/null | grep -q zzqsecret1; do
+		[ "$_n" -lt 50 ] || break
+		sleep 0.1
+		_n=$((_n + 1))
+	done
+	/bin/ps -p "$_p" -o comm= 2> /dev/null | grep -q zzqsecret1 || bad "snap argv: the process's argv[0] was not rewritten; the test proves nothing"
+	(
+		ZZQ_PID=$_p
+		PATH=${E:?}/ps:$PATH
+		export ZZQ_PID PATH
+		BENCH_ROOT=$R
+		. "$R/core/common.sh"
+		. "$R/core/host.sh"
+		. "$R/core/snap.sh"
+		bench_tmp
+		bench_snap_system snap "${E:?}/snap"
+		rm -rf "${BENCH_TMP:?}"
+	)
+	kill "$_p" 2> /dev/null || true
+	wait "$_p" 2> /dev/null || true
+	grep -q '^top\.1=[0-9.]* sleep$' "${E:?}/snap" || bad "snap argv: the top line is not the kernel's name: $(grep '^top\.1=' "${E:?}/snap")"
+	grep '^top\.' "${E:?}/snap" | grep -q 'zzqsecret1\|--token\|zzqfake\|example' && bad "snap argv: a top line holds the rewritten argv[0]: $(grep '^top\.' "${E:?}/snap" | tr '\n' ' ')"
+	[ "$fails" -eq 0 ]
+}
+
+# A probe that cannot read the host says why in its dump, and the run file
+# carries that reason, not the delta's no-dump (TASK166 review round 1).
+t_freq_reason() {
+	fresh freqwhy
+	store_setup
+	cat > "${E:?}/whyprobe" << 'EOF'
+#!/bin/sh
+case $1 in
+dump) echo 'freq=unavailable reason=no-table-fits' ;;
+delta) echo 'freq=unavailable reason=no-dump' ;;
+*) exit 2 ;;
+esac
+EOF
+	chmod +x "${E:?}/whyprobe"
+	qcase w 's/^runs=.*/runs=1/; s/^warmup=.*/warmup=0/'
+	env BENCH_FREQ_PROBE="${E:?}/whyprobe" sh "$R/bench.sh" baseline put "${E:?}/w.case" "$cA" > /dev/null 2> "${E:?}/err" ||
+		bad "freq reason: the put failed: $(cat "${E:?}/err")"
+	_f=$(runfile w)
+	grep -qx freq=unavailable "${_f:-/dev/null}" && grep -qx freq.reason=no-table-fits "${_f:-/dev/null}" ||
+		bad "freq reason: the run file says: $(grep '^freq' "${_f:-/dev/null}" | tr '\n' ' ')"
+	[ "$fails" -eq 0 ]
+}
+
+# drift's own guard: a re-measured set that was not quiet does not replace
+# the baseline (TASK166 review round 1; put's guard is t_gate's).
+t_drift_quiet() {
+	fresh driftq
+	store_setup
+	env BENCH_NULL_VALUES=10,12,11 sh "$R/bench.sh" baseline put null-sleep "$cA" > /dev/null || bad "driftq: put failed"
+	_d=$BENCH_STORE/$TOK/$IA/null-sleep/$CH
+	echo 50 > "${STUB:?}/gpu.snap"
+	_st=0
+	env BENCH_NULL_VALUES=20 sh "$R/bench.sh" drift null-sleep "$cA" > "${E:?}/out" 2> "${E:?}/err" || _st=$?
+	rm -f "${STUB:?}/gpu.snap"
+	[ "$_st" -eq 1 ] && [ ! -d "${_d:?}/set-2" ] || bad "drift: a re-measured set that was not quiet replaced the baseline (status $_st)"
+	grep -q 'the re-measured set: run 1 was not quiet' "${E:?}/err" || bad "drift: the refusal does not name the re-measured set: $(cat "${E:?}/err")"
+	[ "$fails" -eq 0 ]
+}
+
+# BENCH_GATE_POLL is refused before anything runs unless it is a number of
+# at least 0.01 s, and a nap is cut to the gate's time left (TASK166 review
+# round 1).
+t_gate_poll() {
+	fresh gatepoll
+	for _v in x 0 0.001 -1 1e1 08x; do
+		rm -f "${E:?}/ran"
+		_st=0
+		env BENCH_GATE_POLL="$_v" sh "$R/bench.sh" lock run zzq -- touch "${E:?}/ran" > /dev/null 2> "${E:?}/err" || _st=$?
+		[ "$_st" -eq 2 ] && [ ! -e "${E:?}/ran" ] || bad "gate poll: BENCH_GATE_POLL='$_v' was not refused before the command (status $_st)"
+		grep -q 'BENCH_GATE_POLL is a number of seconds, at least 0.01' "${E:?}/err" || bad "gate poll: '$_v': the refusal does not name the setting: $(sed -n 1p "${E:?}/err")"
+	done
+	env BENCH_GATE_POLL=0.01 sh "$R/bench.sh" lock run zzq -- true || bad "gate poll: BENCH_GATE_POLL=0.01 was refused"
+	store_setup
+	qcase g 's/^runs=.*/runs=1/; s/^warmup=.*/warmup=0/'
+	printf 'gate_wait=1\n' >> "${E:?}/g.case"
+	printf '50\n' > "${STUB:?}/gpu.gate"
+	_t0=$(date +%s)
+	start env BENCH_GATE_POLL=20 sh "$R/bench.sh" baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err"
+	if wait_gone 12 "$BG"; then wait "$BG" || true; else
+		reap "$BG"
+		bad "gate poll: a poll of 20 s was not cut to the gate's wait of 1 s"
+	fi
+	_t=$(($(date +%s) - _t0))
+	[ "$_t" -le 10 ] || bad "gate poll: the gate with gate_wait=1 and a poll of 20 s took $_t s"
+	[ "$fails" -eq 0 ]
+}
+
+# The probe is built before the gate's first reading also without a
+# pre-warm (TASK166 review round 1): a build between the before snapshot
+# and the run would land in the run's window. A stand-in cc logs its call
+# beside the snapshot stub's and builds the stub probe; the run file then
+# names the built probe (freq.source=system).
+t_probe_first() {
+	fresh probefirst
+	if [ "$(uname -s)" != Darwin ]; then
+		echo "$me: t_probe_first skipped: not macOS"
+		return 0
+	fi
+	store_setup
+	mkdir -p "${E:?}/cc"
+	cat > "${E:?}/cc/cc" << 'EOF'
+#!/bin/sh
+echo cc >> "$STUB/log"
+while [ "$#" -gt 1 ]; do
+	if [ "$1" = -o ]; then cp "$ZZQ_PROBE" "$2"; fi
+	shift
+done
+EOF
+	chmod +x "${E:?}/cc/cc"
+	qcase c 's/^runs=.*/runs=1/; s/^warmup=.*/warmup=0/'
+	(
+		unset BENCH_FREQ_PROBE
+		ZZQ_PROBE=${tmp:?}/freqstub
+		PATH=${E:?}/cc:$PATH
+		export ZZQ_PROBE PATH
+		sh "$R/bench.sh" baseline put "${E:?}/c.case" "$cA" > /dev/null 2> "${E:?}/err"
+	) || bad "probe first: the put failed: $(cat "${E:?}/err")"
+	[ "$(sed -n 1p "${STUB:?}/log" 2> /dev/null)" = cc ] || bad "probe first: the probe was built after: $(tr '\n' '|' < "${STUB:?}/log")"
+	_f=$(runfile c)
+	grep -qx freq.source=system "${_f:-/dev/null}" && grep -qx snap.source=stub "${_f:-/dev/null}" && grep -qx freq.gpu.mhz=1000 "${_f:-/dev/null}" ||
+		bad "probe first: the run file does not name its readers: $(grep 'source=\|^freq' "${_f:-/dev/null}" | tr '\n' ' ')"
+	[ "$fails" -eq 0 ]
+}
+
 # A numeric setting is `0` or digits that do not start with 0: shell
 # arithmetic reads 08 as a bad octal, so it is refused before any
 # arithmetic, with the status and message of any other non-number (2).
@@ -1617,7 +1783,7 @@ t_leading_zero() {
 	done
 	for _v in 08 09 010; do
 		# each setting the core reads, with a command that must never run
-		for _s in BENCH_STOP_GRACE BENCH_LOCK_WAIT BENCH_LOCK_GRACE; do
+		for _s in BENCH_STOP_GRACE BENCH_LOCK_WAIT BENCH_LOCK_GRACE BENCH_QUIET_TTL; do
 			rm -f "${E:?}/ran"
 			_st=0
 			env "$_s=$_v" sh "$R/bench.sh" lock run zero -- touch "${E:?}/ran" > "${E:?}/out" 2> "${E:?}/err" || _st=$?
@@ -1638,7 +1804,7 @@ t_leading_zero() {
 		[ "$_st" -eq 2 ] || bad "zero: a wall time of $_v was not refused with 2 (status $_st)"
 	done
 	for _v in 0 8 10; do
-		for _s in BENCH_LOCK_WAIT BENCH_LOCK_GRACE BENCH_STOP_GRACE; do
+		for _s in BENCH_LOCK_WAIT BENCH_LOCK_GRACE BENCH_STOP_GRACE BENCH_QUIET_TTL; do
 			_st=0
 			env "$_s=$_v" sh "$R/bench.sh" lock run zero -- true > /dev/null 2>&1 || _st=$?
 			[ "$_st" -eq 0 ] || bad "zero: $_s=$_v was refused (status $_st)"
@@ -1674,7 +1840,7 @@ DEAF
 }
 
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system"
+all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
