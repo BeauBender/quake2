@@ -17,7 +17,7 @@
  *
  * =======================================================================
  *
- * upscale_textures <2|4> [scale2x|metalfx] [force]: writes 2x or 4x PNG
+ * upscale_textures <2|4> [scale2x|metalfx|vt] [force]: writes 2x or 4x PNG
  * versions of the
  * world textures (textures/ .wal), the sky faces (env/ .pcx) and the
  * model and player skins (models/ and players/ .pcx, not the players'
@@ -28,8 +28,11 @@
  * doubling, then converted with the 8-bit palette as the renderers
  * convert them; with metalfx (TASK124, decision 0012, macOS) they are
  * converted first and scaled by MetalFX's spatial scaler in one pass
- * (CL_UpscaleRGBA, cl_upscale_metalfx.m), and where it is unsupported
- * the run says so in one line and uses scale2x. The PNG is written by
+ * (CL_UpscaleRGBA, cl_upscale_metalfx.m); with vt (TASK167, macOS 26)
+ * the same RGBA path runs VideoToolbox's super-resolution scaler
+ * (cl_upscale_vt.m), whose model the operating system downloads once,
+ * on this argument only and after a line that says so. Where a backend
+ * is unsupported the run says so in one line and uses scale2x. The PNG is written by
  * ImageIO (decision 0010). A file that exists is left
  * alone unless force is given; a link is never written through.
  *
@@ -48,6 +51,7 @@
 #include "header/client.h"
 #include "header/upscale.h"
 #include "header/upscale_metalfx.h"
+#include "header/upscale_vt.h"
 #include "refresh/files/imgdecode.h"
 
 #ifdef __APPLE__
@@ -88,6 +92,55 @@ CL_UpscaleMetalFXScale(void *ctx, const unsigned char *in, int iw, int ih,
 
 void
 CL_UpscaleMetalFXEnd(void)
+{
+}
+
+/* cl_upscale_vt.m is built for macOS only (TASK167): iOS says unsupported */
+void
+CL_UpscaleVTFacts(int factor, upscale_vt_facts_t *facts)
+{
+	(void)factor;
+	memset(facts, 0, sizeof(*facts));
+}
+
+int
+CL_UpscaleVTAvailable(char *reason, size_t size)
+{
+	Q_strlcpy(reason, UPSCALE_NO_METALFX, size);
+	return 0;
+}
+
+void
+CL_UpscaleVTRefused(const char *reason)
+{
+	(void)reason;
+}
+
+int
+CL_UpscaleVTFetch(int factor, char *reason, size_t size)
+{
+	(void)factor;
+	Q_strlcpy(reason, UPSCALE_NO_METALFX, size);
+	return 0;
+}
+
+int
+CL_UpscaleVTBegin(int factor, char *reason, size_t size)
+{
+	(void)factor;
+	Q_strlcpy(reason, UPSCALE_NO_METALFX, size);
+	return 0;
+}
+
+int
+CL_UpscaleVTScale(void *ctx, const unsigned char *in, int iw, int ih,
+		unsigned char *out, int ow, int oh)
+{
+	return CL_UpscaleMetalFXScale(ctx, in, iw, ih, out, ow, oh);
+}
+
+void
+CL_UpscaleVTEnd(void)
 {
 }
 #endif
@@ -273,10 +326,11 @@ CL_UpscaleStepMake(void *ctx, unsigned char **png, size_t *pnglen)
 		CL_UpscaleFloodFillSkin(idx, w, h, job->table);
 	}
 
-	if (job->backend == UPSCALE_METALFX)
+	if (CL_UpscaleBackendRGBA(job->backend))
 	{
 		/* the RGBA padded, scaled in one pass, cropped, its alpha from the indices */
 		rgba = CL_UpscaleRGBA(idx, w, h, factor, job->kind->wrap, job->table,
+			(job->backend == UPSCALE_VT) ? CL_UpscaleVTScale :
 			CL_UpscaleMetalFXScale, NULL);
 		free(idx);
 	}
@@ -372,6 +426,42 @@ CL_UpscaleOne(const char *name, const upscale_kind_t *kind, int factor,
 	return CL_UpscaleWriteOut(path, force, &upscale_steps, &job, bytes);
 }
 
+/*
+ * The checks of a vt run at factor (CL_UpscaleVTState), the model
+ * fetched when it is missing, after one line that says so, then the
+ * run started: 1 when it may scale; else 0 with the reason, which the
+ * menu then gives too.
+ */
+static int
+CL_UpscaleVTRun(int factor, char *reason, size_t size)
+{
+	upscale_vt_facts_t facts;
+	upscale_vt_state_t state;
+	int ok, start;
+
+	CL_UpscaleVTFacts(factor, &facts);
+	state = CL_UpscaleVTState(&facts, factor, reason, size);
+
+	if (state == UPSCALE_VT_FETCH)
+	{
+		Com_Printf("%s", UPSCALE_SAY_VT_FETCH);
+		start = Sys_Milliseconds();
+		ok = CL_UpscaleVTFetch(factor, reason, size);
+		Com_Printf("upscale_textures: vt: the model %s after %d ms\n",
+			ok ? "is ready" : "is not ready", Sys_Milliseconds() - start);
+		state = ok ? UPSCALE_VT_READY : UPSCALE_VT_UNSUPPORTED;
+	}
+
+	ok = (state == UPSCALE_VT_READY) && CL_UpscaleVTBegin(factor, reason, size);
+
+	if (!ok)
+	{
+		CL_UpscaleVTRefused(reason);
+	}
+
+	return ok;
+}
+
 void
 CL_UpscaleTextures_f(void)
 {
@@ -437,10 +527,19 @@ CL_UpscaleTextures_f(void)
 	CL_UpscaleTable(palette, table);
 	FS_FreeFile(raw);
 
-	/* MetalFX's objects live for this run only; unsupported: scale2x, one line */
+	/* a backend's objects live for this run only; unsupported: scale2x, one line */
 	reason[0] = '\0';
-	supported = (backend == UPSCALE_METALFX) &&
-		CL_UpscaleMetalFXBegin(reason, sizeof(reason));
+	supported = 0;
+
+	if (backend == UPSCALE_METALFX)
+	{
+		supported = CL_UpscaleMetalFXBegin(reason, sizeof(reason));
+	}
+	else if (backend == UPSCALE_VT)
+	{
+		supported = CL_UpscaleVTRun(factor, reason, sizeof(reason));
+	}
+
 	backend = CL_UpscaleChooseBackend(backend, supported, reason, line,
 		sizeof(line));
 
@@ -475,9 +574,13 @@ CL_UpscaleTextures_f(void)
 		StrList_Free(&files);
 	}
 
-	if (supported)
+	if (supported && (backend == UPSCALE_METALFX))
 	{
 		CL_UpscaleMetalFXEnd();
+	}
+	else if (supported && (backend == UPSCALE_VT))
+	{
+		CL_UpscaleVTEnd();
 	}
 
 	CL_UpscaleSummary(&n, factor, backend, FS_Gamedir(), line, sizeof(line));

@@ -41,6 +41,7 @@
 #include "../sound/header/local.h"
 #include "../header/upscale.h"
 #include "../header/upscale_metalfx.h"
+#include "../header/upscale_vt.h"
 #include "header/qmenu.h"
 
 /* Number of the frames of the spinning quake logo */
@@ -2576,6 +2577,8 @@ ConsoleFunc(void *unused)
  * is not available here is shown greyed with its reason, never hidden.
  * Opening the page makes no Metal or MetalFX object (decision 0012): it
  * asks CL_UpscaleMetalFXAvailable, and a run finds the rest out itself.
+ * The vt item (TASK167) likewise asks CL_UpscaleVTAvailable, which makes
+ * no VideoToolbox object and fetches nothing.
  */
 static menuframework_s s_upscale_menu;
 static menulist_s s_upscale_factor_list;
@@ -2583,6 +2586,8 @@ static menulist_s s_upscale_force_box;
 static menuaction_s s_upscale_scale2x_action;
 static menuaction_s s_upscale_metalfx_action;
 static char s_upscale_metalfx_reason[160];
+static menuaction_s s_upscale_vt_action;
+static char s_upscale_vt_reason[192];
 
 static void
 UpscaleRun(upscale_backend_t backend)
@@ -2609,6 +2614,12 @@ static void
 UpscaleMetalFXFunc(void *unused)
 {
 	UpscaleRun(UPSCALE_METALFX);
+}
+
+static void
+UpscaleVTFunc(void *unused)
+{
+	UpscaleRun(UPSCALE_VT);
 }
 
 static void
@@ -2663,10 +2674,31 @@ Upscale_MenuInit(void)
 		s_upscale_metalfx_action.generic.statusbar = s_upscale_metalfx_reason;
 	}
 
+	s_upscale_vt_action.generic.type = MTYPE_ACTION;
+	s_upscale_vt_action.generic.x = 0;
+	s_upscale_vt_action.generic.y = (y += 10);
+	s_upscale_vt_action.generic.name = "VideoToolbox ML";
+	s_upscale_vt_action.generic.callback = UpscaleVTFunc;
+
+	/* greyed with its reason where it does not apply, never hidden */
+	if (CL_UpscaleVTAvailable(reason, sizeof(reason)))
+	{
+		s_upscale_vt_action.generic.flags &= ~QMF_GRAYED;
+		s_upscale_vt_action.generic.statusbar = "Apple's ML scaler; macOS fetches its model once";
+	}
+	else
+	{
+		s_upscale_vt_action.generic.flags |= QMF_GRAYED;
+		Com_sprintf(s_upscale_vt_reason, sizeof(s_upscale_vt_reason),
+			"greyed: %s", reason);
+		s_upscale_vt_action.generic.statusbar = s_upscale_vt_reason;
+	}
+
 	Menu_AddItem(&s_upscale_menu, (void *)&s_upscale_factor_list);
 	Menu_AddItem(&s_upscale_menu, (void *)&s_upscale_force_box);
 	Menu_AddItem(&s_upscale_menu, (void *)&s_upscale_scale2x_action);
 	Menu_AddItem(&s_upscale_menu, (void *)&s_upscale_metalfx_action);
+	Menu_AddItem(&s_upscale_menu, (void *)&s_upscale_vt_action);
 
 	Menu_SetStatusBar(&s_upscale_menu, NULL);
 	Menu_Center(&s_upscale_menu);

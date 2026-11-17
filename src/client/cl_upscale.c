@@ -575,6 +575,8 @@ CL_UpscaleBackendName(int backend)
 			return "scale2x";
 		case UPSCALE_METALFX:
 			return "metalfx";
+		case UPSCALE_VT:
+			return "vt";
 		default:
 			return NULL;
 	}
@@ -583,20 +585,60 @@ CL_UpscaleBackendName(int backend)
 int
 CL_UpscaleBackendRGBA(int backend)
 {
-	(void)backend;
-	return 0;
+	return (backend == UPSCALE_METALFX) || (backend == UPSCALE_VT);
 }
 
 upscale_vt_state_t
 CL_UpscaleVTState(const upscale_vt_facts_t *facts, int factor, char *reason,
 		size_t size)
 {
-	(void)facts;
-	(void)factor;
+	char none[1];
 
-	if (reason && (size > 0))
+	if (!reason || (size == 0))
 	{
-		reason[0] = '\0';
+		reason = none;
+		size = sizeof(none);
+	}
+
+	reason[0] = '\0';
+
+	if (!facts || !facts->built)
+	{
+		snprintf(reason, size, "not built for this platform");
+	}
+	else if (!facts->os)
+	{
+		snprintf(reason, size, "this OS has no VideoToolbox super-resolution "
+			"scaler (macOS 26 or later)");
+	}
+	else if (!facts->supported)
+	{
+		snprintf(reason, size, "VideoToolbox's super-resolution scaler is not "
+			"supported on this device");
+	}
+	else if (!facts->factor || ((factor != 2) && (factor != 4)))
+	{
+		snprintf(reason, size, "VideoToolbox's super-resolution scaler has no "
+			"%dx", factor);
+	}
+	else if (!facts->config)
+	{
+		snprintf(reason, size, "VideoToolbox refused a super-resolution "
+			"configuration at %dx", factor);
+	}
+	else if ((facts->model == UPSCALE_VT_MODEL_DOWNLOAD) ||
+		(facts->model == UPSCALE_VT_MODEL_DOWNLOADING))
+	{
+		return UPSCALE_VT_FETCH;
+	}
+	else if (facts->model == UPSCALE_VT_MODEL_READY)
+	{
+		return UPSCALE_VT_READY;
+	}
+	else
+	{
+		snprintf(reason, size, "the super-resolution model's status is "
+			"unknown (%d)", facts->model);
 	}
 
 	return UPSCALE_VT_UNSUPPORTED;
@@ -628,7 +670,7 @@ CL_UpscaleParseArgs(int argc, const char *const *argv, int *factor,
 	}
 
 	/* the backend, when one is named */
-	for (k = UPSCALE_SCALE2X; (i < argc) && argv[i] && (k <= UPSCALE_METALFX); k++)
+	for (k = UPSCALE_SCALE2X; (i < argc) && argv[i] && (k <= UPSCALE_VT); k++)
 	{
 		if (!strcmp(argv[i], CL_UpscaleBackendName(k)))
 		{

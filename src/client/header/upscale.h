@@ -29,6 +29,8 @@
 
 #include <stddef.h>
 
+#include "upscale_vt.h"
+
 /* after header/client.h: strlist_t, MAX_OSPATH */
 
 /* The largest side of a source image; 4096 after 4x. */
@@ -206,49 +208,7 @@ int CL_UpscaleParseArgs(int argc, const char *const *argv, int *factor,
 upscale_backend_t CL_UpscaleChooseBackend(upscale_backend_t asked,
 		int supported, const char *reason, char *line, size_t linesize);
 
-/*
- * The vt backend's support checks (TASK167), as cl_upscale_vt.m reads
- * them before a run; no check downloads anything.
- */
-typedef enum
-{
-	UPSCALE_VT_MODEL_DOWNLOAD,	/* the operating system has to fetch it */
-	UPSCALE_VT_MODEL_DOWNLOADING,	/* a fetch is under way */
-	UPSCALE_VT_MODEL_READY		/* on this machine */
-} upscale_vt_model_t;
-
-typedef struct
-{
-	int built;	/* cl_upscale_vt.m is built here (the macOS client) */
-	int os;		/* the OS has VTSuperResolutionScalerConfiguration */
-	int supported;	/* its isSupported */
-	int factor;	/* its supportedScaleFactors has the run's factor */
-	int config;	/* a configuration at the run's factor was made */
-	int model;	/* that configuration's model status, upscale_vt_model_t */
-} upscale_vt_facts_t;
-
-typedef enum
-{
-	UPSCALE_VT_UNSUPPORTED,	/* scale2x, with the reason */
-	UPSCALE_VT_READY,	/* the run may scale */
-	UPSCALE_VT_FETCH	/* the model is to be fetched first */
-} upscale_vt_state_t;
-
-/*
- * What a vt run at factor does with facts, checked in the struct's
- * order: unsupported with a one-line reason in reason ("" otherwise),
- * ready, or fetch the model first (it is missing or being fetched).
- */
-upscale_vt_state_t CL_UpscaleVTState(const upscale_vt_facts_t *facts,
-		int factor, char *reason, size_t size);
-
-/* said once before the model is fetched; nothing is fetched without vt */
-#define UPSCALE_SAY_VT_FETCH "upscale_textures: vt: the operating system " \
-	"will now download VideoToolbox's super-resolution model (once, from " \
-	"Apple)\n"
-
-/* the longest wait for the model's download, in seconds */
-#define UPSCALE_VT_FETCH_SECONDS 900
+/* the vt backend's support checks and its fetch line: upscale_vt.h */
 
 /* CL_UpscaleWrapPad and CL_UpscaleCrop of RGBA8 texels (4 bytes each) */
 int CL_UpscaleWrapPadRGBA(const unsigned char *src, int w, int h,
