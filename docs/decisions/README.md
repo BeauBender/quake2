@@ -22,3 +22,4 @@ them (record 0004); one becomes a record here when it is settled.
 | [0009](0009-no-shared-memory.md) | Agent memory is not synced through the repository: shared memory off (addendum: the tracked notes are removed, TASK103) |
 | [0010](0010-imageio-decoder.md) | ImageIO decodes PNG, JPEG and TGA on Apple platforms; the vendored `stb_image` is removed (redirects INFORM2) |
 | [0011](0011-metalfx-framework.md) | MetalFX is linked, weak, into `ref_metal` only, on Apple platforms, for the selectable scalers and frame generation |
+| [0012](0012-metalfx-in-the-client.md) | MetalFX is also linked, weak, into the macOS client, used only by `upscale_textures <2\|4> metalfx` (extends 0011) |
