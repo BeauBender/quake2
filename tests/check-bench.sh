@@ -32,8 +32,11 @@
 #     queue (FIX106): a holder that releases and asks again goes behind
 #     the waiter, three waiters get the lock in arrival order against
 #     their pids and their polls, a waiter KILLed while queued is skipped,
-#     one that gives up or is TERMed leaves no ticket, a nested call under
-#     the token takes none, and lock status lists the waiters in order;
+#     reaped or not (a zombie), one that gives up or is TERMed leaves no
+#     ticket, a nested call under the token takes none, lock status lists
+#     the waiters in order, a maker that backs off and a waiter whose
+#     ticket is removed keep their place, a stale ticket with the
+#     waiter's own pid is removed, and a FIFO in the queue is never read;
 #   - the wall-time bound: it stops a grandchild, bounds a command that
 #     ignores TERM, stops the work a command leaves running, ends a
 #     stopped command and its group with 74, and shows no job notice;
@@ -77,7 +80,7 @@
 #     the gate without a pre-warm, and the readers (snap.source,
 #     freq.source) in the run file, drift and compare.
 # The tests that do not test the host facts use a fast stand-in for
-# system_profiler (fast_profiler). Then fifty-one mutants, each applied to a
+# system_profiler (fast_profiler). Then fifty-seven mutants, each applied to a
 # copy of scripts/bench/ and each required to fail the test it targets: the
 # lock made neither exclusively nor linked, the holder renamed over
 # another's, the command spawned without its own process group, its fork
@@ -86,8 +89,10 @@
 # in the spawn window dropped, or acted on at once, re-entry accepts any
 # token, the drift rule drops t, the core names a game, the reclaim guard
 # made with mkdir -p, the holder-less grace dropped, the queue with no
-# ticket check, ordered by pid, its ticket left on give-up or a dead
-# ticket kept, the store's
+# ticket check, ordered by pid, its ticket left on give-up, a dead or a
+# zombie ticket kept, a ticket put back under a new key (after a back-off
+# or a removal), a ticket with its own pid kept, a FIFO read (by a waiter
+# or by lock status), the store's
 # outside-repository check deleted, the leading-zero refusal dropped; the
 # gate without its hold, its bound or its reading, GPU use in a snapshot
 # ignored, baseline put or drift's re-measure storing a not-quiet set,
