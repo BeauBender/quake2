@@ -43,8 +43,9 @@
 #   STATIC_MODULES=1 STATIC_RENDERER=metal and builds the vendored
 #   SDL3, the client, the game and ref_metal for the SDK into
 #   IOS_ROOT/Quake2.app (doc/020_installation.md).
-#   IOS_SDK: iphonesimulator (default, signed ad hoc) or iphoneos
-#   (unsigned). IOS_MIN: the minimum iOS version (17.0).
+#   IOS_SDK: iphonesimulator (default, signed ad hoc), iphoneos
+#   (unsigned) or appletvsimulator (tvOS, TASK23, signed ad hoc).
+#   IOS_MIN: the minimum iOS or tvOS version (17.0).
 #   IOS_BUNDLE_ID: CFBundleIdentifier (a neutral default).
 #   IOS_BUNDLE_DATA: optional, a directory whose baseq2/ is copied
 #   into the bundle; local builds only, never game data in a commit.
@@ -220,9 +221,17 @@ IOS_PLATFORM := iPhoneSimulator
 else ifeq ($(IOS_SDK), iphoneos)
 IOS_TARGET := arm64-apple-ios$(IOS_MIN)
 IOS_PLATFORM := iPhoneOS
+else ifeq ($(IOS_SDK), appletvsimulator)
+# tvOS (TASK23): the same code and bundle as the iOS simulator's, for
+# the Apple TV simulator; its own Info.plist (an Apple TV has one
+# orientation, no touch and no status bar)
+IOS_TARGET := arm64-apple-tvos$(IOS_MIN)-simulator
+IOS_PLATFORM := AppleTVSimulator
+IOS_PLIST_IN := stuff/ios/Info-tvos.plist.in
 else
-$(error IOS_SDK must be iphonesimulator or iphoneos, not "$(IOS_SDK)")
+$(error IOS_SDK must be iphonesimulator, iphoneos or appletvsimulator, not "$(IOS_SDK)")
 endif
+IOS_PLIST_IN ?= stuff/ios/Info.plist.in
 ifneq ($(shell printf '%s' '$(subst ',,$(IOS_MIN))' | LC_ALL=C grep -E -x '[0-9]+(\.[0-9]+){0,2}'),$(IOS_MIN))
 $(error IOS_MIN must be a version such as 17.0, not "$(IOS_MIN)")
 endif
@@ -1638,7 +1647,7 @@ ios_plist:
 	${Q}mkdir -p '$(dir $(IOS_PLIST))'
 	${Q}sed -e 's/@BUNDLE_ID@/$(IOS_BUNDLE_ID)/g' -e 's/@VERSION@/$(IOS_VERSION)/g' \
 		-e 's/@PLATFORM@/$(IOS_PLATFORM)/g' -e 's/@MIN_OS@/$(IOS_MIN)/g' \
-		stuff/ios/Info.plist.in > '$(IOS_PLIST).tmp'
+		$(IOS_PLIST_IN) > '$(IOS_PLIST).tmp'
 	${Q}plutil -lint -s '$(IOS_PLIST).tmp'
 	${Q}mv '$(IOS_PLIST).tmp' '$(IOS_PLIST)'
 
@@ -1667,7 +1676,7 @@ ifneq ($(IOS_BUNDLE_DATA),)
 	${Q}test -d '$(IOS_BUNDLE_DATA)/baseq2' || { echo "IOS_BUNDLE_DATA has no baseq2 directory: $(IOS_BUNDLE_DATA)" >&2; exit 1; }
 	${Q}cp -R '$(IOS_BUNDLE_DATA)/baseq2' '$(IOS_APP)/baseq2'
 endif
-ifeq ($(IOS_SDK), iphonesimulator)
+ifneq ($(filter iphonesimulator appletvsimulator,$(IOS_SDK)),)
 	${Q}codesign --force --sign - --timestamp=none '$(IOS_APP)'
 endif
 endif
