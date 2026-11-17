@@ -457,6 +457,15 @@ CL_ParsePacketEntities(frame_t *oldframe, frame_t *newframe)
 				Com_Printf("   remove: %i\n", newnum);
 			}
 
+			/* a frame that is not delta coded has no old
+			   entities, so there is nothing to remove */
+			if (!oldframe)
+			{
+				Com_Error(ERR_DROP, "%s: removal without an old frame",
+					__func__);
+				return;
+			}
+
 			if (oldnum != newnum)
 			{
 				Com_Printf("U_REMOVE: oldnum != newnum: %d %d\n", oldnum, newnum);
@@ -945,6 +954,12 @@ CL_ParseServerData(void)
 
 	/* parse player entity number */
 	cl.playernum = MSG_ReadShort(&net_message);
+
+	if (cl.playernum < -1 || cl.playernum >= MAX_CLIENTS)
+	{
+		Com_Error(ERR_DROP, "%s: bad playernum %d", __func__, cl.playernum);
+		return;
+	}
 
 	/* get the full level name */
 	str = MSG_ReadString(&net_message);

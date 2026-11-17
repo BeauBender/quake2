@@ -1,0 +1,67 @@
+# Card results index
+
+One line per card file in this directory, in no required order: git merges this file by union (`.gitattributes`), so two cards that each add a line never conflict, and the stamp compares it as a multiset of lines. `tests/check-runbook-index.sh` checks it. See [README](README.md).
+
+- [FIX41](../runbook/FIX41.md): `vid_restart` and the main thread's autorelease pool
+- [FIX42](../runbook/FIX42.md): The `screenshot` command between frames on the shim
+- [FIX51](../runbook/FIX51.md): The Metal renderers' frame loop: render ahead of the display, present when a drawable is free
+- [FIX52](../runbook/FIX52.md): The 60 fps cap at 1920x1080 windowed
+- [FIX53](../runbook/FIX53.md): The opaque layer of `ref_metal` and the shim
+- [FIX58](../runbook/FIX58.md): `tests/check-pre-push-hook.sh` and a temporary directory that holds the login name
+- [FIX66](../runbook/FIX66.md): CodeQL analysis skipped for documentation-only pull requests
+- [FIX68](../runbook/FIX68.md): The shim's presented rate at 5120x2880 with display sync off
+- [FIX69](../runbook/FIX69.md): presents drained at teardown, and the shim's present wait bounded
+- [FIX77](../runbook/FIX77.md): the shim's present hold count per context, and teardown's waits under one deadline
+- [FIX81](../runbook/FIX81.md): a hidden model leaves no hole in the water reflection at the default setting
+- [FIX83](../runbook/FIX83.md): The bench lock's fork keeps bash's own setpgid message off the caller's standard error
+- [TASK21](../runbook/TASK21.md): Closing TASK21 on the build host
+- [TASK22](../runbook/TASK22.md): Closing TASK22: the simulator on the build host, the device by the owner
+- [TASK27](../runbook/TASK27.md): Closing TASK27 on the build host
+- [TASK39](../runbook/TASK39.md): Observed on the first run
+- [TASK40](../runbook/TASK40.md): Observed on sky, water and cinematics
+- [TASK41](../runbook/TASK41.md): `gl1` references and the `soft` against `gl1` thresholds (card P3)
+- [TASK49](../runbook/TASK49.md): The `world` scenario against the software renderer
+- [TASK50](../runbook/TASK50.md): Sky, water and translucent surfaces against the software renderer
+- [TASK51](../runbook/TASK51.md): The `models` scenario against the software renderer
+- [TASK52](../runbook/TASK52.md): Particles against the software renderer
+- [TASK53](../runbook/TASK53.md): Acceleration structures in `ref_metal` (RT1)
+- [TASK54](../runbook/TASK54.md): The G-buffer and the lighting resolve in `ref_metal` (RT2)
+- [TASK55](../runbook/TASK55.md): Ray-traced shadows from dynamic lights in `ref_metal` (RT3)
+- [TASK57](../runbook/TASK57.md): Ray-traced ambient occlusion in `ref_metal` (RT5)
+- [TASK58](../runbook/TASK58.md): Ray-traced water reflections in `ref_metal` (RT6)
+- [TASK70](../runbook/TASK70.md): Observed on the scripted water demo
+- [TASK73](../runbook/TASK73.md): Evidence on pull requests: the synthetic test and the first real run
+- [TASK80](../runbook/TASK80.md): `gl1` on the build host
+- [TASK82](../runbook/TASK82.md): The screen flash and `hud2d`
+- [TASK83](../runbook/TASK83.md): `gl1` references from an accelerated OpenGL
+- [TASK84](../runbook/TASK84.md): The `ref_metal` skeleton (N1)
+- [TASK85](../runbook/TASK85.md): Images, 2D and the cinematic in `ref_metal` (N2)
+- [TASK86](../runbook/TASK86.md): Pics, characters and the HUD in `ref_metal` (N3)
+- [TASK87](../runbook/TASK87.md): The world without lightmaps in `ref_metal` (N4)
+- [TASK88](../runbook/TASK88.md): Lightmaps in `ref_metal` (N5)
+- [TASK89](../runbook/TASK89.md): Sky, water, translucent and flowing surfaces in `ref_metal` (N6)
+- [TASK90](../runbook/TASK90.md): Brush entities, alias models and the view weapon in `ref_metal` (N7)
+- [TASK91](../runbook/TASK91.md): Sprites, beams, shadows, dynamic lights and flash blobs in `ref_metal` (N8)
+- [TASK92](../runbook/TASK92.md): Particles, the parity sweep and frame time in `ref_metal` (N9)
+- [TASK93](../runbook/TASK93.md): `ref_metal` on the build host (N10)
+- [TASK97](../runbook/TASK97.md): Frame rates on a physical GPU
+- [TASK98](../runbook/TASK98.md): Screenshot and capture readback on a physical GPU
+- [TASK108](../runbook/TASK108.md): Re-measurement
+- [TASK111](../runbook/TASK111.md): MetalFX scalers for the 3D view in `ref_metal`
+- [TASK114](../runbook/TASK114.md): A local HTML report comparing the MetalFX options on each Mac
+- [TASK118](../runbook/TASK118.md): HighDPI windows on the bare-metal host
+- [TASK119](../runbook/TASK119.md): Crisp 2D in `ref_metal`
+- [TASK120](../runbook/TASK120.md): Bicubic lightmaps in `ref_metal`
+- [TASK121](../runbook/TASK121.md): the Metal layer's colour space, `metal_colorspace`, measured on a P3 display
+- [TASK122](../runbook/TASK122.md): Particle size cap relative to the resolution in `ref_metal`
+- [TASK131](../runbook/TASK131.md): The dynamic-light shadow pass finds each pixel's surface without an eye ray
+- [TASK132](../runbook/TASK132.md): `soft`'s window captured opaque and not opaque
+- [TASK154](../runbook/TASK154.md): The quake2 bench adapter and the first cases, each reproduced against its card
+- [TASK155](../runbook/TASK155.md): Every heavy entry point takes the bench lock itself
+- [TASK158](../runbook/TASK158.md): water reflections shaded in world space, as a setting
+- [TASK157](../runbook/TASK157.md): the AO pass within its GPU-time share
+- [FIX86](../runbook/FIX86.md): The MetalFX report's settings go through a console script, and its chunks combine
+- [FIX78](../runbook/FIX78.md): a numeric setting with a leading zero is refused before any shell arithmetic
+- [TASK164](../runbook/TASK164.md): the ref_metal host tests check the kernels' own calls, and the colour-space path has a probe
+- [TASK147](../runbook/TASK147.md): the iOS display is the safe rectangle; the checks on a physical host
+- [TASK162](../runbook/TASK162.md): water reflections mark their pixels in the G-buffer raster

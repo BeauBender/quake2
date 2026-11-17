@@ -1,0 +1,18 @@
+# Pin "com-parse-cursor", produced by test com_parse_cursor_pin (tests/unit/test_shared.c).
+# Generated from real engine output by `make test UPDATE_PINS=1`
+# (build/<release|debug>/test/yq2test --update-pins). Do not edit by
+# hand: a change to the body below is a behaviour change and its commit
+# says why. The body starts after the separator line.
+# ---
+input 0: [a]@1 [b]@3 [c]@6 []@-1
+input 1: [lead]@6 [trail]@12 []@-1
+input 2: [q one]@7 [two]@11 []@14 [three]@20 []@-1
+input 3: [x"y"z]@5 []@-1
+input 4: [a]@1 [b]@8 []@-1
+input 5: [tok]@14 []@-1
+input 6: [a]@3 [b]@6 []@-1
+input 7: [a]@1 [b]@3 [c]@6 []@-1
+input 8: [one]@3 [two]@7 []@-1
+input 9: [a // not a comment]@20 [b]@22 []@-1
+input 10: [{]@1 [k]@5 [v]@9 [}]@11 []@-1
+input 11: []@2 []@-1
