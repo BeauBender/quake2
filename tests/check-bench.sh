@@ -1194,14 +1194,18 @@ t_lock_zombie_waiter() {
 	_zp=$BG
 	wait_said 10 "${E:?}/z.out" || bad "zombie waiter: Z never waited"
 	_z=$(cat "${E:?}/z.pid" 2> /dev/null) || _z=
-	start sh "$R/bench.sh" lock run W -- sh "$E/rec.sh" "$E/log" W > "${E:?}/w.out" 2>&1
-	_w=$BG
-	wait_said 10 "${E:?}/w.out" || bad "zombie waiter: W never waited"
-	[ -n "$_z" ] && [ "$(ticket_of "$_z")" = "$(tickets | sed -n 1p)" ] ||
-		bad "zombie waiter: Z's ticket is not first in the queue: $(tickets | tr '\n' ' ')"
+	[ -n "$_z" ] && [ -n "$(ticket_of "$_z")" ] || bad "zombie waiter: Z showed no ticket: $(tickets | tr '\n' ' ')"
 	kill -KILL "$_z" 2> /dev/null || true
 	wait_gone 5 "$_z" || bad "zombie waiter: Z did not die"
 	kill -0 "$_z" 2> /dev/null || bad "zombie waiter: Z was reaped at once, so this tests no zombie"
+	# Review round 2: lock status skips the zombie's ticket too. No waiter
+	# polls yet, so the ticket is still there for it to read.
+	[ -n "$(ticket_of "$_z")" ] || bad "zombie waiter: Z's ticket went before lock status read it, so this tests nothing"
+	B lock status > "${E:?}/zstatus" 2>&1
+	! grep -q " pid=$_z " "${E:?}/zstatus" || bad "zombie waiter: lock status lists the zombie as a waiter: $(tr '\n' '|' < "${E:?}/zstatus")"
+	start sh "$R/bench.sh" lock run W -- sh "$E/rec.sh" "$E/log" W > "${E:?}/w.out" 2>&1
+	_w=$BG
+	wait_said 10 "${E:?}/w.out" || bad "zombie waiter: W never waited"
 	: > "${E:?}/release"
 	finish "zombie waiter" "$_w" 0
 	: > "${E:?}/reap"
@@ -1349,6 +1353,79 @@ t_lock_queue_fifo() {
 	[ -z "$_msg" ] || bad "fifo ticket: $_msg"
 	[ "$(cat "${E:?}/status")" = lock=free ] || bad "fifo ticket: lock status printed: $(tr '\n' '|' < "${E:?}/status")"
 	[ "$(order)" = "W " ] || bad "fifo ticket: the waiter did not run: $(order)"
+	[ "$fails" -eq 0 ]
+}
+
+# ---- FIX106 review round 2: a failing ps never makes a live waiter dead. --
+# psshim <status>: $E/shim/ps, a ps that prints nothing and exits <status>
+# (put on one caller's PATH: not on PATH, a fork failure, a sandbox).
+psshim() {
+	mkdir -p "${E:?}/shim"
+	printf '#!/bin/sh\nexit %s\n' "$1" > "${E:?}/shim/ps"
+	chmod +x "${E:?}/shim/ps"
+}
+
+# W1 queues first and naps (a poll of 3 s); W2, whose ps exits 1 (then, in
+# a second round, exits 0 and prints nothing), polls every 0.1 s. W2 must
+# keep W1's ticket and wait behind it, not remove it and go first.
+t_lock_ps_fails() {
+	for _pst in 1 0; do
+		fresh "psfails$_pst"
+		qfix
+		psshim "$_pst"
+		holder H
+		start env BENCH_LOCK_POLL=3 sh "$R/bench.sh" lock run W1 -- sh "$E/rec.sh" "$E/log" W1 > "${E:?}/w1.out" 2>&1
+		_w1=$BG
+		wait_said 10 "${E:?}/w1.out" || bad "ps exits $_pst: W1 never waited"
+		start env PATH="$E/shim:$PATH" sh "$R/bench.sh" lock run W2 -- sh "$E/rec.sh" "$E/log" W2 > "${E:?}/w2.out" 2>&1
+		_w2=$BG
+		wait_said 10 "${E:?}/w2.out" || bad "ps exits $_pst: W2 never waited"
+		: > "${E:?}/release"
+		finish "ps exits $_pst" "$_w1" 0
+		finish "ps exits $_pst" "$_w2" 0
+		finish "ps exits $_pst" "$HOLDER" 0
+		[ "$(order)" = "H W1 W2 " ] || bad "ps exits $_pst: a waiter whose ps failed or said nothing went before a live one: $(order)"
+		serial || bad "ps exits $_pst: two commands held the lock at once: $(tr '\n' ' ' < "${E:?}/log")"
+		[ -z "$(tickets)" ] || bad "ps exits $_pst: tickets left behind: $(tickets | tr '\n' ' ')"
+	done
+	[ "$fails" -eq 0 ]
+}
+
+# A live enqueuer's temporary (tmp.<pid>.*, between its write and its
+# rename) survives a reader whose ps fails: the pid is this test's shell.
+t_lock_ps_tmp() {
+	fresh pstmp
+	qfix
+	psshim 1
+	mkdir -p "${E:?}/state/queue"
+	_tt=${E:?}/state/queue/tmp.$$.live00
+	printf 'pid=%s\n' "$$" > "${_tt:?}"
+	start env PATH="$E/shim:$PATH" sh "$R/bench.sh" lock run W -- sh "$E/rec.sh" "$E/log" W > "${E:?}/w.out" 2>&1
+	finish "ps tmp" "$BG" 0
+	[ "$(order)" = "W " ] || bad "ps tmp: the waiter did not run: $(order) $(sed -n '$p' "${E:?}/w.out")"
+	[ -f "$_tt" ] || bad "ps tmp: a reader whose ps fails removed a live enqueuer's temporary"
+	rm -f "${_tt:?}"
+	[ "$fails" -eq 0 ]
+}
+
+# A ticket name that is a symbolic link to a regular file (here one naming
+# this test's live shell) is never read: lock status and a waiter skip it
+# and leave it in place.
+t_lock_queue_link() {
+	fresh qlink
+	qfix
+	mkdir -p "${E:?}/state/queue"
+	printf 'pid=%s\nlabel=link\nsince=2000-01-01T00:00:00Z\n' "$$" > "${E:?}/target"
+	_lk=${E:?}/state/queue/w.000000000001.000000.0000000001.link0
+	ln -s "${E:?}/target" "${_lk:?}" || bad "link ticket: cannot make a link"
+	B lock status > "${E:?}/status" 2>&1
+	[ "$(cat "${E:?}/status")" = lock=free ] || bad "link ticket: lock status read a link in the queue: $(tr '\n' '|' < "${E:?}/status")"
+	start env BENCH_LOCK_WAIT=3 sh "$R/bench.sh" lock run W -- sh "$E/rec.sh" "$E/log" W > "${E:?}/w.out" 2>&1
+	finish "link ticket" "$BG" 0
+	[ "$(order)" = "W " ] || bad "link ticket: a waiter read a link in the queue and waited behind it: $(order) $(sed -n '$p' "${E:?}/w.out")"
+	[ -h "$_lk" ] && [ "$(cat "${E:?}/target")" = "$(printf 'pid=%s\nlabel=link\nsince=2000-01-01T00:00:00Z' "$$")" ] ||
+		bad "link ticket: the link or its target was changed, not skipped"
+	rm -f "${_lk:?}"
 	[ "$fails" -eq 0 ]
 }
 
@@ -2387,7 +2464,7 @@ t_digit_cap() {
 }
 
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle"
+all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_zombie_waiter t_lock_stall_place t_lock_ticket_back t_lock_own_pid t_lock_queue_fifo t_lock_ps_fails t_lock_ps_tmp t_lock_queue_link t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
