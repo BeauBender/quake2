@@ -34,6 +34,9 @@
 #                     display-hz requirement is refused with a file, since
 #                     nothing else reads the display
 #
+# Its pre-warm workload (adapter_prewarm, for the core's prewarm=) is the
+# case's own run with vsync=0 and seconds= cut to the time left.
+#
 # The case keys it reads:
 #   targets      make targets, for example "client game ref_metal"
 #   build_flags  make variables, NAME=value words, for example

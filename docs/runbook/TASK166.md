@@ -115,11 +115,12 @@ take their lock with it. The file is written whole to a temporary name and renam
 and holds `key=value` lines:
 
 ```
-pid=<the lock shell's pid>
+pid=<the writer's pid: the lock shell, or a measurement under an outer hold>
 session=<BENCH_SESSION_ID, else CLAUDE_CODE_SESSION_ID, else none>
 label=<the lock label>
 start=<UTC, ISO 8601>
 expires=<seconds since the epoch>
+hold=<the lock's token>
 token=<the marker's own token>
 ```
 
@@ -127,10 +128,10 @@ A session id is up to 128 of `A-Z a-z 0-9 . _ : -`, else `none`. `expires` is th
 `BENCH_QUIET_TTL` seconds (default 3600). A reader honours the marker only while `expires` is in
 the future and `pid` is alive (`kill -0`), and holds the tool calls of every session but
 `session`. The lock shell removes the marker on every exit (the EXIT, INT, TERM and HUP traps
-that free the lock), only while it still carries its token; a KILL leaves it, and the pid and the
-expiry then end it. Under an outer hold (the lock passed through by its token) a `--quiet` call
-writes the marker only when no live one is there, naming the outer lock shell's pid, and the
-measuring command removes the marker it wrote when it exits.
+that free the lock), only while it still carries its token or names its hold; a KILL leaves it,
+and the pid and the expiry then end it. Under an outer hold (the lock passed through by its token)
+a `--quiet` call or a measurement writes the marker only when no live one is there; a measurement
+removes the one it wrote when it exits, and the outer lock shell removes one that names its hold.
 
 ## Evidence
 

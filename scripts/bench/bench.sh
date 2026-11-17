@@ -9,7 +9,7 @@
 # game (tests/check-bench.sh checks it), adapters and cases do.
 #
 # Usage:
-#   bench.sh lock run <label> -- <command> [args...]
+#   bench.sh lock run [--quiet] <label> -- <command> [args...]
 #   bench.sh lock status
 #   bench.sh host [--facts]
 #   bench.sh inputs [--list] <commit> [<case>]
@@ -36,7 +36,15 @@
 # BENCH_STOP_GRACE (seconds a stopped command gets between TERM and KILL,
 # default 10; the lock gives its command twice that, and at least that
 # plus 5), BENCH_LOCK_TOKEN (set
-# by the lock for its command), BENCH_HASH (shasum or cksum).
+# by the lock for its command), BENCH_HASH (shasum or cksum),
+# BENCH_QUIET_TTL (seconds a quiet marker lasts, default 3600),
+# BENCH_SESSION_ID (the session the marker names, else
+# CLAUDE_CODE_SESSION_ID), BENCH_GATE_POLL (seconds between the quiet
+# gate's readings, default 1), BENCH_SNAP_READER and BENCH_FREQ_PROBE
+# (stand-ins for the host's snapshot reader and the frequency probe, for
+# the self-test). A run set pre-warms, gates and records the host around
+# each run (core/snap.sh, core/measure.sh; docs/plans/bench-harness.md,
+# "Determinism"); baseline put refuses a set with a run that was not quiet.
 set -eu
 LC_ALL=C
 export LC_ALL
