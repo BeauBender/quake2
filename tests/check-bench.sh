@@ -1212,7 +1212,7 @@ t_lock_zombie_waiter() {
 # A maker that backs off keeps its place: N makes the lock and stalls 6 s
 # before its holder write; C (a grace of 1 s) reclaims the bare directory
 # and holds; W queues behind C; then N backs off and puts its ticket back
-# under its first name, which sorts before W's.
+# under its first key, which sorts before W's.
 t_lock_stall_place() {
 	fresh stallp
 	qfix
@@ -1252,7 +1252,7 @@ t_lock_stall_place() {
 }
 
 # A waiter whose ticket is gone (removed by hand) puts it back under its
-# first name and keeps its place ahead of a later waiter.
+# first key and keeps its place ahead of a later waiter.
 t_lock_ticket_back() {
 	fresh tback
 	qfix
@@ -2460,6 +2460,9 @@ mutant queue-by-pid core/lock.sh "BENCH_LOCK_KEY=\$_lq_t.\$(printf '%010d' \"\$\
 mutant queue-ticket-left core/lock.sh 'bench_lock_unqueue; return 75' 'return 75' t_lock_giveup 'then bench_lock_unqueue; fi' 'then :; fi' || mfail=1
 mutant queue-dead-kept core/lock.sh 'if ! bench_pid_running "$_lh_p"; then' 'if false; then' t_lock_dead_waiter || mfail=1
 mutant queue-zombie-alive core/lock.sh 'if ! bench_pid_running "$_lh_p"; then' 'if ! bench_lock_alive "$_lh_h"; then' t_lock_zombie_waiter || mfail=1
+# A maker that backs off (three tabs: the arrival's own enqueue has one), and a waiter whose ticket is gone, take a new key.
+mutant queue-backoff-new-key core/lock.sh "$(printf '\t\t\t')bench_lock_enqueue \"\$_la_label\"" "$(printf '\t\t\t')BENCH_LOCK_KEY=; bench_lock_enqueue \"\$_la_label\"" t_lock_stall_place || mfail=1
+mutant queue-back-new-key core/lock.sh 'then bench_lock_enqueue "$1"; fi' 'then BENCH_LOCK_KEY=; bench_lock_enqueue "$1"; fi' t_lock_ticket_back || mfail=1
 mutant leading-zero-accepted core/common.sh "'' | *[!0-9]* | 0?*) return 1 ;;" "'' | *[!0-9]*) return 1 ;;" t_leading_zero || mfail=1
 # TASK166: the quiet evidence.
 mutant gate-no-hold core/snap.sh '[ $((_gt_now - _gt_since)) -lt "$_gt_hold" ] || break' 'break' t_gate || mfail=1

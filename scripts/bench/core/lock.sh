@@ -35,7 +35,7 @@
 # holds up the next one for one poll. A waiter takes
 # its ticket out the moment its mkdir succeeds, and the EXIT trap takes it
 # out on every other exit (giving up, TERM, INT, HUP); a maker that backs
-# off puts it back under its first name, so it keeps its place. A holder
+# off puts it back under its first key, so it keeps its place. A holder
 # that releases and asks again so gets a later ticket than every waiter.
 #
 # Re-entry: the holder exports BENCH_LOCK_TOKEN to its command. A nested
@@ -114,8 +114,9 @@ bench_lock_init() {
 }
 
 # bench_lock_enqueue <label>: puts this waiter's ticket in the queue (see
-# the top), under the name it took first (BENCH_LOCK_KEY), so a ticket put
-# back keeps its place.
+# the top), under the key it took first (BENCH_LOCK_KEY: the time and the
+# pid; the random part after it is new), so a ticket put back keeps its
+# place.
 bench_lock_enqueue() {
 	if [ -z "$BENCH_LOCK_KEY" ]; then
 		_lq_t=$(perl -MTime::HiRes=time -e 'printf "%019.6f", time' 2> /dev/null) || _lq_t=
@@ -282,7 +283,7 @@ bench_lock_acquire() {
 		elif mkdir "${BENCH_LOCK_DIR:?}" 2> /dev/null; then
 			# Out of the queue the moment the directory is made, so the next
 			# waiter comes first; a maker that backs off below puts its ticket
-			# back under its first name.
+			# back under its first key.
 			bench_lock_unqueue
 			_la_id=$(bench_dir_id "$BENCH_LOCK_DIR")
 			BENCH_LOCK_OWNED=1
