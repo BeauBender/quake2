@@ -128,7 +128,32 @@ CL_AllocEntity(int entnum)
 
 int CL_MaxClients(void) { return 1; }
 int CL_PinsCapture(void) { return 0; }
-qboolean CL_PinsRun(void) { return false; }
+/* a pin run, for the input gate's test (test_ingate.c); false otherwise */
+int stub_pins_run;
+qboolean CL_PinsRun(void) { return stub_pins_run ? true : false; }
+
+/* What reaches the client's key and character entry points (test_ingate.c). */
+stub_keys_t stub_keys;
+
+void
+Key_Event(int key, qboolean down, qboolean special)
+{
+	if (stub_keys.n < STUB_MAX_KEYS)
+	{
+		stub_keys.key[stub_keys.n] = key;
+		stub_keys.down[stub_keys.n] = down;
+	}
+
+	(void)special;
+	stub_keys.n++;
+}
+
+void
+Char_Event(int key)
+{
+	stub_keys.chars++;
+	stub_keys.last_char = key;
+}
 void CL_ClearState(void) { }
 void CL_Stop_f(void) { }
 void CL_WriteConfiguration(void) { }
