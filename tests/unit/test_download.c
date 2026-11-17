@@ -162,6 +162,9 @@ TEST(download_filter_extension_table)
 		{"x", false},
 		{"so", false},
 		{"dll", false},
+		/* only digit groups: the version scan stops at the start */
+		{"123", false},
+		{"1.2", false},
 		/* the other rules, byte for byte as before */
 		{".x.wav", true},
 		{"/x.wav", true},
@@ -176,7 +179,13 @@ TEST(download_filter_extension_table)
 		reset_client();
 		Cmd_TokenizeString(va("download %s", table[i].name), false);
 		CL_Download_f();
-		T_EQ_INT(cls.netchan.message.cursize == 0, table[i].refused);
+
+		if ((cls.netchan.message.cursize == 0) != table[i].refused)
+		{
+			t_fail(__FILE__, __LINE__, "%s: refused %d, want %d",
+				table[i].name, cls.netchan.message.cursize == 0,
+				(int)table[i].refused);
+		}
 	}
 }
 
