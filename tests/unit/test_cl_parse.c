@@ -274,35 +274,29 @@ frame_entity(int index)
 		(MAX_PARSE_ENTITIES - 1)].number;
 }
 
-/* A removal record in a frame that has no old frame is ignored: the frame
-   is taken, the removed entity is not in it, the later records still are. */
-TEST(cl_removal_without_old_frame_is_ignored)
+/* A removal record in a frame that has no old frame drops the connection,
+   whether it comes after other records or first. */
+TEST(cl_removal_without_old_frame_refused)
 {
-	static const int rec[] = { U_REMOVE, 5, 0, 7 };
+	static const int rec[] = { 0, 3, U_REMOVE, 5, 0, 7 };
 
 	reset_client();
-	build_records(1, -1, rec, 2);
+	build_records(1, -1, rec, 3);
 
-	CL_ParseServerMessage();
-
-	T_CHECK(cl.frame.valid);
-	T_EQ_INT(cl.frame.num_entities, 1);
-	T_EQ_INT(frame_entity(0), 7);
-	T_EQ_INT(cls.state, ca_active);
+	T_EXPECT_DROP(CL_ParseServerMessage());
+	T_CONSOLE_HAS("removal without an old frame");
+	T_CHECK(cls.state != ca_active);
 }
 
-/* Only removal records, no old frame: nothing is kept. */
-TEST(cl_only_removals_without_old_frame)
+TEST(cl_leading_removal_without_old_frame_refused)
 {
-	static const int rec[] = { U_REMOVE, 1, U_REMOVE, 200 };
+	static const int rec[] = { U_REMOVE, 1 };
 
 	reset_client();
-	build_records(1, -1, rec, 2);
+	build_records(1, -1, rec, 1);
 
-	CL_ParseServerMessage();
-
-	T_CHECK(cl.frame.valid);
-	T_EQ_INT(cl.frame.num_entities, 0);
+	T_EXPECT_DROP(CL_ParseServerMessage());
+	T_CONSOLE_HAS("removal without an old frame");
 }
 
 /* The other uses of oldframe (the unchanged run before a record, the delta
