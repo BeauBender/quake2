@@ -412,6 +412,27 @@ Mod_NumberLeafs(mleaf_t *leafs, mnode_t *node, int *r_leaftovis, int *r_vistolea
  * with the child, node or leaf number (as the lump writes a child) in
  * *bad.
  */
+/*
+ * The renderers' walks tell a leaf from a node by its contents, so a
+ * leaf whose contents read as CONTENTS_NODE would be walked as a node.
+ * Returns the first such leaf, or -1.
+ */
+static int
+Mod_LeafReadsAsNode(const mleaf_t *leafs, int numleafs)
+{
+	int i;
+
+	for (i = 0; i < numleafs; i++)
+	{
+		if (leafs[i].contents == CONTENTS_NODE)
+		{
+			return i;
+		}
+	}
+
+	return -1;
+}
+
 static const char *
 Mod_CheckNodeTree(const dnode_t *in, int count, int numleafs, int *bad)
 {
@@ -604,6 +625,14 @@ Mod_LoadNodes(const char *name, cplane_t *planes, int numplanes, mleaf_t *leafs,
 	{
 		Com_Error(ERR_DROP, "%s: node graph of %s is not a tree: %s %d",
 				__func__, name, why, bad);
+	}
+
+	bad = Mod_LeafReadsAsNode(leafs, numleafs);
+
+	if (bad >= 0)
+	{
+		Com_Error(ERR_DROP, "%s: leaf %d of %s has the node contents",
+				__func__, bad, name);
 	}
 
 	Mod_SetParent(*nodes, NULL); /* sets nodes and leafs */

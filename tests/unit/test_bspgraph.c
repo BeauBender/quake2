@@ -449,6 +449,30 @@ TEST(bspgraph_renderer_no_nodes)
 	r_free();
 }
 
+/* The renderers' walks tell a leaf from a node by its contents: a leaf
+   whose contents read as CONTENTS_NODE is refused before any walk, and
+   a leaf with other contents loads. */
+TEST(bspgraph_renderer_leaf_node_contents)
+{
+	const char *name;
+
+	g_default();
+	g.leafs[2].contents = CONTENTS_NODE;
+	name = g_write(g_build());
+
+	T_EXPECT_DROP(r_load(name));
+	T_CONSOLE_HAS("leaf 2 of");
+	T_CONSOLE_HAS("has the node contents");
+	r_free();
+
+	g_default();
+	g.leafs[2].contents = CONTENTS_NODE - 1;
+	name = g_write(g_build());
+	r_load(name);
+	T_CHECK(r_leafs[2].parent != NULL);
+	r_free();
+}
+
 TEST(bspgraph_chain_at_bound)
 {
 	const char *name;

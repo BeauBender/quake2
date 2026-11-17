@@ -828,7 +828,12 @@ leaf lookups, `Mod_SetParent`, `Mod_NumberLeafs`, the renderers' world
 walks). Every stock map (baseq2, ctf, rogue, xatrix: 109 maps) is a forest
 whose roots are its submodel head nodes, with at most 9507 nodes and at
 most 79 levels (`strike.bsp`), and every `func_areaportal` `style` in them
-is below `numareaportals`. The forest check also closes D9. Regression
+is below `numareaportals`. The forest check also closes D9. The
+renderers' walks tell a leaf from a node by its `contents`, which a leaf
+takes from the file, so `Mod_LoadNodes` also refuses any leaf whose
+contents read as `CONTENTS_NODE` (-1) before `Mod_SetParent`; the
+collision model's walks use the sign of the child index and need no such
+check. Regression
 tests: `tests/unit/test_bspgraph.c`, which feeds the same generated maps
 to `CM_LoadMap` and to the shared `Mod_LoadNodes`, compiled into the test.
 
