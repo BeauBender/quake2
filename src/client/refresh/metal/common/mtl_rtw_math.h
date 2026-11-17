@@ -702,6 +702,33 @@ mtl_rtw_listed(unsigned mat, unsigned marks)
 	return mtl_rtw_is_water(mat) || (marks != 0u);
 }
 
+/* TASK162: the water mark in the G-buffer's normal attachment (red first: stubs) */
+#define MTL_RTW_MARK_A (1.0f / 3.0f)
+
+static inline float
+mtl_rtw_mark_blend(float a)
+{
+	return a;
+}
+
+static inline unsigned
+mtl_rtw_alpha_level(float a)
+{
+	if (!(a > 0.0f))
+	{
+		return 0u;
+	}
+
+	return (unsigned)(mtl_clamp01(a) * 3.0f + 0.5f);
+}
+
+static inline int
+mtl_rtw_marked(float a)
+{
+	(void)a;
+	return 0;
+}
+
 /* r_rt_water_reflect as the blend takes it: 0 to 1, 0 when not finite */
 static inline float
 mtl_rtw_weight(float k)
