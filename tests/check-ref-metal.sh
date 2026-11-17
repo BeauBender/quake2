@@ -400,7 +400,7 @@ flushed() {
 		body && /^}/ { body = 0 }
 		body && !fl && $0 ~ /^[ \t]*RM_Flush2D\(\);/ { fl = NR }
 		body && !at && index($0, call) { at = NR }
-		END { exit (found && fl && at && fl < at) ? 0 : 1 }' "${tmp:?}/flush.code"
+		END { exit !found ? 2 : (fl && at && fl < at) ? 0 : 1 }' "${tmp:?}/flush.code"
 }
 # flush_mutant <kind> <file> <function> <call>: the file with that flush point broken
 flush_mutant() {
@@ -421,7 +421,12 @@ for point in "rm_main.c RI_RenderFrame rmb_pass_3d(" "rm_main.c RI_EndFrame rmb_
 	# shellcheck disable=SC2086 # three words: file, function, call
 	set -- $point
 	f=$rm_dir/$1 fn=$2 call=$3
-	if ! flushed "$f" "$fn" "$call"; then
+	rc=0
+	flushed "$f" "$fn" "$call" || rc=$?
+	if [ "$rc" = 2 ]; then
+		bad "function $fn not found in $f"
+		continue
+	elif [ "$rc" != 0 ]; then
 		bad "$f: $fn does not call RM_Flush2D() before $call (gl1's R_ApplyGLBuffer)"
 		continue
 	fi
@@ -486,6 +491,8 @@ kcall_mutant() {
 		renamedkernel) sed "s/^$3(/$3_old(/" "$2" ;;
 		deadcode) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
 			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print; print "#else"; print "#endif"; next } { print }' "$2" ;;
+		liveelse) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print; print "#else"; print; print "#endif"; next } { print }' "$2" ;;
 		deadnested) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
 			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print "#ifdef X"; print; print "#endif"; print "#endif"; next } { print }' "$2" ;;
 		joined) awk -v fn="$3" '
@@ -496,25 +503,42 @@ kcall_mutant() {
 }
 kcall_mutants=0 kcall_pairs=0
 for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm_rtw_trace mtl_rtw_choose" \
-	"rm_rtwater.metal rm_rtw_trace_ws mtl_rtw_ws_next" "rm_rtwater.metal rm_rtw_trace_ws mtl_rtw_choose_ws"; do
+	"rm_rtwater.metal rm_rtw_trace_ws mtl_rtw_ws_next" "rm_rtwater.metal rm_rtw_trace_ws mtl_rtw_choose_ws" \
+	"rm_rtwater.metal rm_rtw_ss_at mtl_rtw_choose"; do
 	# shellcheck disable=SC2086 # three words: file, kernel, helper
 	set -- $pair
 	f=$rm_dir/$1 kn=$2 hp=$3
-	if ! kcalls "$f" "$kn" "$hp"; then
+	rc=0
+	kcalls "$f" "$kn" "$hp" || rc=$?
+	if [ "$rc" = 2 ]; then
+		bad "kernel $kn not found in $f"
+		continue
+	elif [ "$rc" != 0 ]; then
 		bad "$f: the kernel $kn does not call $hp (the helper its host test drives)"
 		continue
 	fi
 	kcall_pairs=$((kcall_pairs + 1))
-	for m in renamed commented elsewhere renamedkernel deadcode deadnested; do
+	for m in renamed commented elsewhere renamedkernel deadcode deadnested joined; do
 		kcall_mutant "$m" "$f" "$kn" "$hp" > "${tmp:?}/kcall-mutant.metal"
+		# a mutant that takes the function away is "not found" (2), the others "no call" (1)
+		case $m in renamedkernel|joined) want=2 ;; *) want=1 ;; esac
+		rc=0
+		kcalls "${tmp:?}/kcall-mutant.metal" "$kn" "$hp" || rc=$?
 		if cmp -s "$f" "${tmp:?}/kcall-mutant.metal"; then
 			bad "the kernel-call mutant ($m) of $kn changed nothing"
-		elif kcalls "${tmp:?}/kcall-mutant.metal" "$kn" "$hp"; then
+		elif [ "$rc" = 0 ]; then
 			bad "the kernel-call check passes a mutant of $kn (the call to $hp $m)"
+		elif [ "$rc" != "$want" ]; then
+			bad "the kernel-call check gives status $rc, not $want, for a mutant of $kn ($m)"
 		else
 			kcall_mutants=$((kcall_mutants + 1))
 		fi
 	done
+	# the "#else" part of an "#if 0" is live: the call repeated there is still a call
+	kcall_mutant liveelse "$f" "$kn" "$hp" > "${tmp:?}/kcall-live.metal"
+	if cmp -s "$f" "${tmp:?}/kcall-live.metal" || ! kcalls "${tmp:?}/kcall-live.metal" "$kn" "$hp"; then
+		bad "the kernel-call check refuses a call kept in the #else part of an #if 0 ($kn, $hp)"
+	fi
 done
 
 # (f) the colour-space probe. probe_run <dir with rmb_device.m or empty> <exe>: builds
