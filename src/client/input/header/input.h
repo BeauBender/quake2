@@ -28,6 +28,7 @@
 #define GEN_INPUT_H
 
 #include "../../../common/header/shared.h"
+#include "touch.h"
 
 /*
  * Saves the time of the last input event.
@@ -58,6 +59,13 @@ void IN_Update(void);
  * Removes all pending events from SDLs queue.
  */
 void In_FlushQueue(void);
+
+/*
+ * The touch overlay (TASK151): what to draw now, at most max entries, and
+ * the pixels one point of the window is. 0 when the touch controls are
+ * off or a physical gamepad is in use.
+ */
+int IN_TouchOverlay(touch_draw_t *list, int max, float *pixels_per_point);
 
 /* Clipboard get/set */
 

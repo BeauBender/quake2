@@ -252,6 +252,13 @@ is before composition), so the card measures a synthetic test card on a P3
 display. One card, about 150 lines plus the measurement. After N10.
 Priority 7: very cheap; the measurement decides the default.
 
+Built by TASK121 ([its runbook](../runbook/TASK121.md)): `metal_colorspace`
+0 (the layer's own colour space, the default) or 1 (sRGB). Measured on the
+bare-metal host's display, a Studio Display, the screen values at 0 and 1
+are identical in every run: at 0 the layer already reads
+`kCGColorSpaceSRGB`, the system's own tag. The
+default stays 0.
+
 ### P8. MSAA in `ref_metal` (parked)
 
 Parked by the owner. Until then the video menu's "multisampling" item
@@ -425,7 +432,7 @@ The port queue finishes first: N9 (TASK92, #203), then N10 (TASK93, #204).
 ## 8. Not measured
 
 - The GPU cost of every proposal: no renderer ran for this plan.
-- Whether the untagged layer visibly oversaturates colours on a P3 display
+- Whether the system-tagged layer visibly oversaturates colours on a P3 display
   (P7), how well the upscalers treat 64x64 tiles (P6, P15), whether ImageIO
   reads TGA on iOS and tvOS (P2), frame pacing above 60 Hz (P12), and the
   frame order of the 4 reordered MD5 animations (P3, checked through the

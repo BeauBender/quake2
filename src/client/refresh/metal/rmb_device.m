@@ -38,6 +38,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+#include <CoreGraphics/CGColorSpace.h>
 #include <TargetConditionals.h>
 
 #include <os/lock.h>
@@ -63,6 +64,11 @@ CAMetalLayer *rmb_layer;
 dispatch_semaphore_t rmb_frame_sem;
 rm_ledger_t rmb_ledger;
 rmb_stats_t rmb_counts;
+
+/* metal_colorspace (TASK121): the mode asked for, and the object while it is on the layer */
+static int rmb_cs_mode;
+static CGColorSpaceRef rmb_cs;
+static CGColorSpaceRef rmb_cs_own;   /* the layer's own colour space, kept while ours is on it (may be NULL) */
 
 /* rmb_encode.m */
 void rmb_encode_abandon(void);
@@ -718,6 +724,58 @@ rmb_open(rmb_caps_t *caps, char *err, size_t errlen)
 	return 1;
 }
 
+/* Puts the layer's own colour space back, then releases ours and the kept one; the object is counted. */
+static void
+rmb_cs_release(void)
+{
+	if (rmb_layer)
+	{
+		rmb_layer.colorspace = rmb_cs_own;   /* as found, not untagged */
+	}
+
+	if (rmb_cs_own)
+	{
+		CGColorSpaceRelease(rmb_cs_own);
+		rmb_cs_own = NULL;
+	}
+
+	CGColorSpaceRelease(rmb_cs);
+	rmb_cs = NULL;
+	rm_ledger_destroy(&rmb_ledger, RM_OBJ_STATE);
+}
+
+/* Puts the colour space asked for on the layer, or takes it off; the object is counted. */
+static void
+rmb_cs_apply(void)
+{
+	if (rmb_layer && rmb_cs_mode && !rmb_cs)
+	{
+		rmb_cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+		if (rmb_cs)
+		{
+			rm_ledger_create(&rmb_ledger, RM_OBJ_STATE);
+			rmb_cs_own = rmb_layer.colorspace;
+			if (rmb_cs_own)
+			{
+				CGColorSpaceRetain(rmb_cs_own);
+			}
+
+			rmb_layer.colorspace = rmb_cs;
+		}
+	}
+	else if (rmb_cs && (!rmb_layer || !rmb_cs_mode))
+	{
+		rmb_cs_release();
+	}
+}
+
+void
+rmb_colorspace_set(int mode)
+{
+	rmb_cs_mode = mode ? 1 : 0;
+	rmb_cs_apply();
+}
+
 int
 rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen)
 {
@@ -752,6 +810,7 @@ rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen)
 #endif
 		/* an opaque layer of about 1720x700 points or more is shown once per refresh (FIX53) */
 		rmb_layer.opaque = rmb_sync ? YES : NO;
+		rmb_cs_apply();
 	}
 
 	return 1;
@@ -793,6 +852,10 @@ rmb_detach(void)
 		rmb_encode_abandon();   /* commits an open frame, presenting nothing */
 		rmb_drain();
 		rmb_ahead_drop();       /* nothing of this layer is left on the queue */
+		if (rmb_cs)
+		{
+			rmb_cs_release();   /* the view's layer is left as found */
+		}
 		rmb_layer = nil;        /* the SDL Metal view owns it */
 	}
 

@@ -26,6 +26,7 @@
  */
 
 #include "header/client.h"
+#include "input/header/input.h"
 
 static float scr_con_current; /* aproaches scr_conlines at scr_conspeed */
 static float scr_conlines; /* 0.0 to 1.0 lines of console to display */
@@ -1753,6 +1754,81 @@ SCR_PrepRefreshDue(void)
 	return !scr_suspended && !cl.refresh_prepped && cls.state == ca_active;
 }
 
+/*
+ * The touch overlay (TASK151), after the HUD, the menus and the console:
+ * a 2 pixel outline for a button or a ring (with a dark one around it so
+ * that it shows on a bright wall), a filled square for a button held and
+ * for a knob, and the label in the menu's character size where it fits.
+ * Only the 2D calls the renderers have. Nothing is drawn unless the
+ * touch controls are on and no physical gamepad is in use.
+ */
+static void
+SCR_TouchOutline(int x, int y, int w, int h, int color)
+{
+	Draw_Fill(x, y, w, 2, color);
+	Draw_Fill(x, y + h - 2, w, 2, color);
+	Draw_Fill(x, y + 2, 2, h - 4, color);
+	Draw_Fill(x + w - 2, y + 2, 2, h - 4, color);
+}
+
+static void
+SCR_DrawTouch(void)
+{
+	touch_draw_t list[TOUCH_MAX_DRAW];
+	float ppp = 1.0f;
+	int i, n;
+
+	if (!scr_initialized)
+	{
+		return;
+	}
+
+	n = IN_TouchOverlay(list, TOUCH_MAX_DRAW, &ppp);
+
+	for (i = 0; i < n; i++)
+	{
+		const int x = (int)(list[i].r.x * ppp), y = (int)(list[i].r.y * ppp);
+		const int w = (int)(list[i].r.w * ppp), h = (int)(list[i].r.h * ppp);
+
+		if (w < 6 || h < 6)
+		{
+			continue;
+		}
+
+		if (list[i].kind == TD_KNOB)
+		{
+			Draw_Fill(x - 2, y - 2, w + 4, h + 4, 0);
+			Draw_Fill(x, y, w, h, 15);
+			continue;
+		}
+
+		if (list[i].pressed && list[i].kind == TD_BUTTON)
+		{
+			Draw_Fill(x, y, w, h, 8);
+		}
+
+		/* the dark outline just outside, the light one on the edge */
+		if (x >= 2 && y >= 2)
+		{
+			SCR_TouchOutline(x - 2, y - 2, w + 4, h + 4, 0);
+		}
+
+		SCR_TouchOutline(x, y, w, h, 15);
+
+		if (list[i].label)
+		{
+			const int s = Touch_LabelScale(list[i].label, (float)w, (int)SCR_GetMenuScale());
+
+			if (s > 0)
+			{
+				const int len = (int)strlen(list[i].label);
+
+				DrawStringScaled(x + (w - len * 8 * s) / 2, y + (h - 8 * s) / 2, list[i].label, (float)s);
+			}
+		}
+	}
+}
+
 void
 SCR_UpdateScreen(void)
 {
@@ -1905,6 +1981,8 @@ SCR_UpdateScreen(void)
 			SCR_DrawLoading();
 		}
 	}
+
+	SCR_DrawTouch();
 
 	SCR_Framecounter();
 	SCR_PinsCapture();

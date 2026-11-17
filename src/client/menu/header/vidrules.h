@@ -51,6 +51,7 @@ typedef enum
 	VIDITEM_RTW_HITS,   /* TASK158: the water reflections' hit shading, r_rt_water_hits */
 	VIDITEM_AO_SCALE,
 	VIDITEM_AO_RAYS,
+	VIDITEM_COLORSPACE, /* TASK121: the Metal layer's colour space, metal_colorspace */
 	VIDITEM_COUNT
 } viditem_t;
 

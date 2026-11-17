@@ -791,6 +791,16 @@ has) is not drawn.
   Other renderers do not have it. Saved with the configuration; applies
   from the next frame.
 
+* **metal_colorspace**: The colour space the Metal renderer tags its
+  layer with. `0` (the default) leaves the layer's own colour space, as
+  before: the system gives it `kCGColorSpaceSRGB` for this pixel format
+  on macOS, and setting `1` and then `0` again restores that value. `1` tags the layer `kCGColorSpaceSRGB`, so the system
+  converts the game's sRGB-era colours to the display's profile. Only `0`
+  and `1` are values: any other value is `0`. Other renderers do not have
+  it. Saved with the configuration; applies from the next frame. The
+  readback of the frame (screenshots, the pins) is taken before the
+  layer's colour space comes into it and does not change.
+
 * **metal_particle_cap**: How the Metal renderer limits the size of a
   particle point (`gl1_particle_max_size`, 40 pixels by default). `0`
   (the default) is the limit every renderer uses, and draws what it drew
@@ -1089,10 +1099,17 @@ is.
   `r_rt_water_normal`), so the reflection ripples as the texture does.
   What it meets is shown as the picture shows it, lightmaps, dynamic
   lights and the other ray-traced effects included; where it meets the
-  sky, the sky in that direction. A surface the view does not show (off
-  the screen, or hidden behind something nearer) gives no reflection,
-  and the water there is drawn as before; `r_rt_water_hits 1` draws it
-  instead. The reflection is mixed into
+  sky, the sky in that direction. A surface of the map the view does not
+  show (off the screen, or hidden behind something nearer, a door or a
+  platform included) gives no reflection, and the water there is drawn
+  as before; `r_rt_water_hits 1` draws it instead. A model (a player, a
+  monster, an item, a weapon) the view does not show is passed over: the
+  reflection shows what lies behind it, as without the model, so it
+  does not show the model's outline. This works per face, and up to four
+  hidden model faces: past four (one hidden player with its weapon is
+  four) the ray is traced against the map alone, so a model the view
+  shows behind them is passed too, and the reflection there shows what
+  lies behind it (at `0`, none). The reflection is mixed into
   the water's colour by `r_rt_water_reflect`; translucent water keeps
   its transparency. The rays meet the world, the doors and platforms and
   the models, but not the view weapon or the player's own model. Needs a
@@ -1122,18 +1139,24 @@ is.
 
 * **r_rt_water_hits**: How `r_rt_water` shades what a reflection meets.
   `0` (the default): from the picture alone, as described under
-  `r_rt_water`; a surface the view does not show gives no reflection.
+  `r_rt_water`; a surface of the map the view does not show gives no
+  reflection.
   `1`: a surface of the map the view does not show (off the screen, or
   hidden behind something nearer) is drawn on its own, its texture and
   lightmap, with the dynamic lights but without their shadows or the
   ambient occlusion; the sky the view does not show comes from the sky
-  box. What is passed over is exactly this: a model (a player, a
-  monster, an item, a weapon) the view does not show, so the reflection
-  shows what lies behind it, however many of them the reflection
-  crosses, and neither the model nor its outline. A brush model the
-  view does not show (a door, a platform, a lift) is part of the map
-  and is drawn on its own like any other surface, so the reflection can
-  show where it stands. Over the
+  box. At both settings what is passed over is exactly this: a model (a
+  player, a monster, an item, a weapon) the view does not show, so the
+  reflection shows what lies behind it, and neither the model nor its
+  outline. This works per face (a shown model's unseen far side is
+  passed too) and up to four hidden model faces: past four the ray is
+  traced against the map alone, so a model the view shows behind them is
+  passed too, and the reflection there shows what lies behind it (at
+  `0`, none). A brush
+  model the view does not show (a door, a platform, a lift) is part of
+  the map: at `1` it is drawn on its own like any other surface, so the
+  reflection can show where it stands, and at `0` it gives no
+  reflection. Over the
   pool of the test map that fills the 2 to 9 % of the water that had no
   reflection, and changes no pixel outside the water. It costs more GPU
   time: a raster of the map's water and a list of its pixels before the
@@ -1144,7 +1167,8 @@ is.
   12.24 against 9.44 ms at 5120 x 2880 held; with `r_metalfx 2`, 3.82
   against 3.46 ms held. A view without water in it costs 2.06 against
   1.33 ms at 1920 x 1080 held. At `0` the pass and its pictures are
-  those before this setting existed, and `0` needs nothing `1` needs:
+  those before this setting existed but for the hidden models it passes
+  over, and `0` needs nothing `1` needs:
   where the renderer cannot build what `1` needs, the console says so
   once and `1` draws as `0`.
   A value of `1` or more counts as `1`, a value below `1` or not a
@@ -1334,25 +1358,48 @@ half is the move stick and the right half the look stick, both floating:
 the origin is where the finger lands. Buttons are in the lower right
 (fire, jump, use item, crouch, next weapon) and at the top (menu, console).
 
+The controls are drawn with outlines inside the safe area, nothing else
+is added to the frame: in the game a ring for each stick (where a finger
+is down, the ring is under it with a knob) and the buttons; in a menu,
+the console or a chat message a d-pad, OK and Back (the d-pad buttons,
+`BTN_SOUTH` and `BTN_EAST` of the virtual gamepad) and the console
+button. A button that is held is filled. Nothing is drawn when the touch
+controls are not attached (`in_touch` was `0` at start, so changing it
+in the game changes the overlay and the touch pad only after a restart),
+or a physical gamepad is in use.
+
 * **in_touch**: Turns the touch controls on. Default `1` on iOS and `0`
   elsewhere. Read at start. On iOS touches are never mouse clicks while
-  it is on.
+  it is on. Where there is no touch screen (everywhere but iOS) it does
+  nothing: a `1` is said once in the console and the controls stay off.
+  The "touch controls" item of the controller page shows it, greyed with
+  "no touch screen" there. That page is reached by "customize gamepad" of
+  the controls menu, which is always offered, with or without a gamepad,
+  so that touch controls turned off can be turned on again.
 
 * **in_touch_scale**: Size of the buttons and the stick radius, from
-  `0.5` to `2`; a value outside is held to the range. Default `1`.
+  `0.5` to `2`; a value outside is held to the range. Default `1`. The
+  "touch size" item of the controller page.
 
 * **in_touch_swap**: `1` mirrors the layout, the move stick on the right
-  and the buttons on the left. Default `0`.
+  and the buttons on the left. Default `0`. The "left-handed" item of
+  the controller page.
 
 On iOS, a first start (no `config.cfg` yet) binds the gamepad keys that
-are not bound, once: `TRIG_RIGHT` to `+attack`, `BTN_SOUTH` to `+moveup`,
+are not bound, once per start (a change of the game directory does not
+bind again): `TRIG_RIGHT` to `+attack`, `BTN_SOUTH` to `+moveup`,
 `BTN_EAST` to `+movedown`, `BTN_NORTH` to `weapnext`, `BTN_WEST` to
 `invuse`, `SHOULDR_LEFT` to `weapprev`, `SHOULDR_RIGHT` to `weapnext`,
 `BTN_BACK` to `inven` and `BTN_MISC1` (the console button) to
 `toggleconsole`. A binding that is already there is kept, and `START`
 is the menu key. Other platforms bind none of them. The on-screen
 keyboard of iOS shows only while the console, a chat message or a
-menu's text field takes text.
+menu's text field takes text. It is plain text: no autocorrect, no
+prediction and no capital for the first letter. If the system hides it
+(the hide key of an iPad) while text is still wanted, it is shown again,
+a few times in a row at most, so a keyboard that cannot be shown (a
+hardware keyboard) is not asked for on every frame. If the system's
+text input cannot be set up as plain text, the keyboard stays off.
 
 
 ## cvar operations
