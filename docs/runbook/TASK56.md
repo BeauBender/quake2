@@ -137,6 +137,11 @@ holding `scripts/rt/` for the table); `tests/check-cvar-docs.sh`, `tests/check-d
 `tests/check-no-local-identity.sh`, `tests/check-runbook-index.sh` ok. `make ref_metal client
 game`: no error, no warning in the new files.
 
+After review round 1 (head `f44efee6`, `origin/main` `346d3188` merged): `make test`
+`yq2test: 327 tests, 0 failed`; `tests/check-ref-metal.sh` ok (sun 711 checks, 0 failed; AO 283,
+0 failed; `ref_metal` built); `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`,
+`tests/check-no-local-identity.sh`, `tests/check-runbook-index.sh` and `scripts/pins.sh selftest` ok.
+
 ## Runs on the bare-metal host
 
 Host: the bare-metal host (Apple M6, `supportsRaytracing`). Engine commit measured: `bf0aa793`
