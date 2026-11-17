@@ -634,6 +634,34 @@ engine prints no time per frame, so a rate over a window of seconds
 run are. The reproductions of each family against its card are in
 `docs/runbook/TASK154.md`.
 
+Every measurement first warms the host up: the case's own run with
+display sync off, again and again, for the case's `prewarm` seconds
+(240 unless the case says otherwise; `prewarm=0` skips it), in the same
+hold of the lock as the measured runs. A run started from idle measures
+a GPU that has clocked down: the unchanged binary of
+`rt-shadows-gpu-1920x1080` read 2.79 ms cold and 1.67 ms after a
+4-minute pre-warm (`docs/runbook/TASK166.md`). A thermal or performance
+warning stops the pre-warm early, and the set says so. Before each
+counted run `bench.sh` waits, at most `gate_wait` seconds (120), until
+the GPU is at most `gate_gpu` percent busy (10) and the CPU at most
+`gate_cpu` percent (25) for `gate_hold` seconds (3). Each run file
+records the host just before and after the run (load, CPU and memory
+use, swap, the GPU's use and memory, thermal warnings, low-power mode,
+the five busiest processes by the name the kernel gave each at exec,
+never what a process wrote into its own arguments) and the CPU
+clusters' and the GPU's frequencies over the run, read without root,
+with which reader made each (`snap.source` and `freq.source`: `system`,
+or `stub` when a stand-in of the self-test did). A run that started when
+the wait ran out, or with another program using the GPU, is
+`quiet=no`; `baseline put` stores no set with such a run, and `drift`
+and `compare` print the flag and the readers. `BENCH_GATE_POLL` (the
+seconds between the gate's readings, 1, at least 0.01) and
+`BENCH_QUIET_TTL` (the seconds the quiet marker below lasts, 3600) are
+checked before the lock is taken. While it measures, `bench.sh` keeps a
+quiet marker beside its lock (`bench.sh lock run --quiet`), which the
+agent tooling reads to hold other sessions' work. The fields are listed
+in `docs/plans/bench-harness.md` ("Determinism").
+
 ## Other commands
 
 * `scripts/pins.sh list`: how many frames each record in the store holds,

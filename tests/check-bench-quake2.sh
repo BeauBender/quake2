@@ -139,6 +139,7 @@ q2h() {
 		. "$BENCH_ROOT/core/case.sh"
 		. "$BENCH_ROOT/core/inputs.sh"
 		. "$BENCH_ROOT/core/stats.sh"
+		. "$BENCH_ROOT/core/snap.sh"
 		. "$BENCH_ROOT/core/measure.sh"
 		. "$BENCH_ROOT/adapters/quake2.sh"
 		bench_case_load "$_hc"
@@ -389,6 +390,32 @@ grep -q 'reports no temporal MetalFX scaler' "${T:?}/run.err" || bad "the missin
 mkcase fxrun 'renderer=metal size=640x480 vsync=0 seconds=1 pace=own cvar.r_metalfx=1' 'metalfx'
 run_fake "${T:?}/fxrun.case" FAKE_TEMPORAL=no || bad "a spatial run on an engine without the temporal scaler failed: $(cat "${T:?}/run.err")"
 
+# ---- the pre-warm's piece (TASK166) -------------------------------------------
+
+# prewarm_test <bench root>: a piece is the case's own run with display
+# sync off and seconds= cut to the time left; with more time left than
+# seconds=, it keeps seconds=.
+prewarm_test() {
+	Q2H_ROOT=$1
+	export Q2H_ROOT
+	mkcase pw 'renderer=metal size=640x480 vsync=1 seconds=9 pace=own'
+	_pt0=$(date +%s)
+	: > "$B/release/baseq2/config.cfg"
+	with_env BENCH_RUN_KIND=prewarm BENCH_RUN_INDEX=1 BENCH_Q2_CAPS="${T:?}/caps-all" -- \
+		q2h "${T:?}/pw.case" adapter_prewarm "${T:?}/pw.case" "$B" "${T:?}/pw.log" 1 2> "${T:?}/pw.err" ||
+		{ echo "a piece failed: $(cat "${T:?}/pw.err")"; return 1; }
+	[ $(($(date +%s) - _pt0)) -le 7 ] || { echo "a piece with 1 s left ran $(($(date +%s) - _pt0)) s"; return 1; }
+	grep -q '^bench: quake2: TERM after 1 s$' "${T:?}/pw.log" || { echo "a piece with 1 s left did not get TERM after 1 s"; return 1; }
+	sed -n 's/^arg //p' "${T:?}/pw.log" | tr '\n' ' ' | grep -q ' +set r_vsync 0 ' || { echo "a piece kept display sync on"; return 1; }
+	mkcase pw 'renderer=metal size=640x480 vsync=0 seconds=1 pace=own'
+	with_env BENCH_RUN_KIND=prewarm BENCH_RUN_INDEX=2 BENCH_Q2_CAPS="${T:?}/caps-all" -- \
+		q2h "${T:?}/pw.case" adapter_prewarm "${T:?}/pw.case" "$B" "${T:?}/pw.log" 100 2> "${T:?}/pw.err" ||
+		{ echo "a piece failed: $(cat "${T:?}/pw.err")"; return 1; }
+	grep -q '^bench: quake2: TERM after 1 s$' "${T:?}/pw.log" || { echo "a piece with 100 s left did not keep seconds=1"; return 1; }
+}
+prewarm_test "$REAL" > "${T:?}/pw.why" || bad "the pre-warm: $(cat "${T:?}/pw.why")"
+unset Q2H_ROOT
+
 # ---- the metrics --------------------------------------------------------------
 
 L=${T:?}/metrics.log
@@ -618,6 +645,19 @@ for mu in 's/^adapter_build() {$/adapter_build() { return 0/|adapter_build retur
 		bad "the build mutant (${mu#*|}) did not apply"
 	elif build_test "$M" > /dev/null 2>&1; then
 		bad "the mutant (${mu#*|}) passed the build test"
+	fi
+done
+# the pre-warm mutants (TASK166): display sync left as the case has it, and
+# seconds= not cut to the time left
+for mu in 's/w\[i\] = "vsync=0"/w[i] = w[i]/|display sync kept' \
+	's/ _qw_s=\$4$/ :/|seconds= not cut'; do
+	sed "${mu%%|*}" "$REAL/adapters/quake2.sh" > "$M/adapters/quake2.sh"
+	if cmp -s "$REAL/adapters/quake2.sh" "$M/adapters/quake2.sh"; then
+		bad "the pre-warm mutant (${mu#*|}) did not apply"
+	elif prewarm_test "$M" > /dev/null 2>&1; then
+		bad "the mutant (${mu#*|}) passed the pre-warm test"
+	else
+		echo "$me: mutant (${mu#*|}): caught by the pre-warm test"
 	fi
 done
 unset Q2H_ROOT
