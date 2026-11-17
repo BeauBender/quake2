@@ -691,14 +691,18 @@ SCR_PlayCinematic(char *arg)
 				!strcmp(dot, ".png")))
 	{
 		cvar_t	*r_retexturing;
-		char namewe[256];
+		char namewe[MAX_OSPATH];
 
 		Com_sprintf(name, sizeof(name), "pics/%s", arg);
 		r_retexturing = Cvar_Get("r_retexturing", "1", CVAR_ARCHIVE);
 
-		/* Remove the extension */
-		memset(namewe, 0, 256);
-		memcpy(namewe, name, strlen(name) - strlen(dot));
+		/* Remove the extension. A name that does not fit is refused and
+		   takes the path of a picture that did not load. */
+		if (!SCR_StillStem(name, dot, namewe, sizeof(namewe)))
+		{
+			namewe[0] = '\0';
+			r_retexturing->value = r_retexturing->value;
+		}
 
 		if (r_retexturing->value)
 		{
