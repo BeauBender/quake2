@@ -479,7 +479,7 @@ limit" "$out"
     # hold of its own, the lock's grace plus 5 s (BENCH_STOP_GRACE=1: 6 s, so at most 11 s); under the
     # generator's own hold, BENCH_STOP_GRACE alone, so that its KILL lands before the lock shell's KILL of
     # the generator (the lock's grace, at least BENCH_STOP_GRACE + 5)
-    out=$(python3 -I "$HELP" "$d" stop-wait 2>&1); [ "$out" = "25 11 25 65 25 25 / 10 1 10 30 10 10" ] || ko e2e-lock-grace "$out"
+    out=$(python3 -I "$HELP" "$d" stop-wait 2>&1); [ "$out" = "25 11 25 65 25 25 2000000003 25 25 / 10 1 10 30 10 10 999999999 10 10" ] || ko e2e-lock-grace "$out"
     lt="$w/lt"; mktree "$lt" "$d/mfx.py"; cp "$tmp/pins-stub-locked" "$lt/scripts/pins.sh"; cp -R "$root/scripts/bench" "$lt/scripts/bench"
     # the ways out during record(), each of which ends the run under the lock, the grandchild included,
     # and leaves the lock free:
@@ -866,7 +866,8 @@ mutant pins-not-in-group e2e-group py 'os.killpg(p.pid, signal.SIGTERM)' 'p.term
 mutant pins-kill-first e2e-lock py 'os.killpg(p.pid, signal.SIGTERM)' 'os.killpg(p.pid, signal.SIGKILL)'
 mutant stop-wait-unfloored e2e-lock-grace py 'return max(2 * g, g + 5) + 5' 'return 2 * g + 5'
 mutant stop-unheld e2e-lock py 'held = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)' 'held = signal.pthread_sigmask(signal.SIG_BLOCK, [])'
-mutant stop-wait-leading-zero e2e-lock-grace py 're.match(r"(0|[1-9][0-9]*)\Z", g)' 're.match(r"[0-9]+\Z", g)'
+mutant stop-wait-leading-zero e2e-lock-grace py 're.match(r"(0|[1-9][0-9]{0,8})\Z", g)' 're.match(r"[0-9]{1,9}\Z", g)'
+mutant stop-wait-cap9 e2e-lock-grace py 're.match(r"(0|[1-9][0-9]{0,8})\Z", g)' 're.match(r"(0|[1-9][0-9]*)\Z", g)'
 mutant stop-wait-outlives-lock e2e-lock py 'if LOCK_HELD:' 'if False:'
 mutant lock-self-off e2e-lock-wait py 'os.execv("/bin/sh", cmd)' 'off = "mutant"'
 mutant lock-lc-all-lost e2e-lock-wait py 'lc = ["LC_ALL=" + e["LC_ALL"]] if "LC_ALL" in e else ["-u", "LC_ALL"]' 'lc = []'

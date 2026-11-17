@@ -37,14 +37,21 @@ bench_is_label() {
 	[ "${#1}" -le 64 ]
 }
 
-# bench_is_uint <text>: decimal digits only, and no leading zero but for 0
-# itself: shell arithmetic reads 08 as a bad octal number, so every numeric
-# setting goes through this before any arithmetic, and 08, 09, 010 are refused.
+# bench_is_uint <text>: decimal digits only, no leading zero but for 0
+# itself, and at most 9 digits. Shell arithmetic reads 08 as a bad octal number
+# and wraps a 20-digit one, so every numeric setting goes through this before
+# any arithmetic, and 08, 09, 010 and 10 digits or more are refused.
 bench_is_uint() {
+	bench_is_uint_max "$1" 9
+}
+
+# bench_is_uint_max <text> <digits>: bench_is_uint with its own length cap
+# (the cksum fallback of bench_hash reads CRCs of up to 10 digits).
+bench_is_uint_max() {
 	case $1 in
 	'' | *[!0-9]* | 0?*) return 1 ;;
 	esac
-	return 0
+	[ "${#1}" -le "$2" ]
 }
 
 # bench_is_num <text>: a decimal number: an optional minus, digits, an
@@ -108,7 +115,7 @@ bench_hash() {
 		_bh_b=$(printf 'bench\n%s\n' "$_bh_d" | cksum 2> /dev/null) || _bh_b=
 		_bh_a=${_bh_a%% *}
 		_bh_b=${_bh_b%% *}
-		if ! bench_is_uint "$_bh_a" || ! bench_is_uint "$_bh_b" || [ "${#_bh_a}" -gt 10 ] || [ "${#_bh_b}" -gt 10 ]; then
+		if ! bench_is_uint_max "$_bh_a" 10 || ! bench_is_uint_max "$_bh_b" 10; then
 			bench_die 2 "cksum gave no CRC (failed, missing or malformed)"
 		fi
 		printf '%08x%08x\n' "$_bh_a" "$_bh_b"
