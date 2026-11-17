@@ -56,6 +56,8 @@ cvar_t *vid_fullscreen;
 cvar_t *metal_stats;
 static cvar_t *metal_rate_start;   /* seconds after the first frame ended at which the presented-rate window begins (TASK161) */
 static mtl_rate_t rm_rate;
+static double rm_rate_start;       /* metal_rate_start, read once in RI_Init, as the shim reads it (TASK161) */
+static unsigned long rm_rate_frames;   /* the frames count at the last sample: a frame skipped is not a sample */
 cvar_t *metal_lightmap_filter;
 cvar_t *gl_texturemode;
 cvar_t *gl_anisotropic;
@@ -277,7 +279,7 @@ RM_Close(void)
 
 	/* the presented rate over a window (TASK161), beside the totals */
 	if (metal_stats && metal_stats->value && rm_rate.seen &&
-		mtl_rate_format("ref_metal: metal_rate:", &rm_rate, metal_rate_start->value, s.present_held,
+		mtl_rate_format("ref_metal: metal_rate:", &rm_rate, rm_rate_start, s.present_held,
 			s.no_drawable, line, sizeof(line)))
 	{
 		R_Printf(PRINT_ALL, "%s\n", line);
@@ -326,6 +328,8 @@ RI_Init(void)
 
 	rm_opened = true;
 	mtl_rate_reset(&rm_rate);
+	rm_rate_start = metal_rate_start->value;
+	rm_rate_frames = 0;
 
 	/* the capability report, once per context */
 	rm_caps_family_list(caps.families, families, sizeof(families));
@@ -970,12 +974,17 @@ RI_EndFrame(void)
 	/* with metal_stats on, each frame ended is a sample of the presented-rate window (TASK161) */
 	if (metal_stats && metal_stats->value)
 	{
-		rmb_stats_t s;
-		rm_ledger_t l;
+		unsigned long frames, no_drawable;
 
-		rmb_stats(&s, &l);
-		mtl_rate_frame(&rm_rate, clock_gettime_nsec_np(CLOCK_UPTIME_RAW), s.frames - s.no_drawable,
-			metal_rate_start->value);
+		/* only the two counts the rate needs are read; a frame skipped did not count, and is not a sample */
+		rmb_rate_counts(&frames, &no_drawable);
+
+		if (frames != rm_rate_frames)
+		{
+			rm_rate_frames = frames;
+			mtl_rate_frame(&rm_rate, clock_gettime_nsec_np(CLOCK_UPTIME_RAW), frames - no_drawable,
+				rm_rate_start);
+		}
 	}
 }
 

@@ -766,7 +766,8 @@ has) is not drawn.
   value but `0` it also prints, at shutdown, one line on the frames
   presented a second over a window (see `metal_rate_start`), the frames
   that found every present slot held with display sync off, and the frames
-  without a drawable; the OpenGL 1.4 renderer's Metal shim (`gl1-metal`)
+  without a drawable (the frames that found every slot held are among
+  these, so the two counts are not added); the OpenGL 1.4 renderer's Metal shim (`gl1-metal`)
   reads this cvar once, when its context is made, for that line only.
   Defaults to `0`.
 

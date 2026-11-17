@@ -973,6 +973,13 @@ rmb_stats(rmb_stats_t *stats, rm_ledger_t *ledger)
 }
 
 void
+rmb_rate_counts(unsigned long *frames, unsigned long *no_drawable)
+{
+	*frames = rmb_counts.frames;
+	*no_drawable = rmb_counts.no_drawable;
+}
+
+void
 rmb_set_vsync(int on)
 {
 #if TARGET_OS_OSX

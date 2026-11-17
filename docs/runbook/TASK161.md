@@ -23,8 +23,10 @@ mgl: rate: <r> presented a second over <s> s from <w> s, <p> presented, <h> with
 `<r>` is the presented frames a second over the window, `<s>` the window's
 length in seconds, `<w>` the seconds after the first frame at which it
 began, `<p>` the frames presented in it. `<h>` and `<n>` count over the
-whole run, like the totals line. With the cvar `0`, nothing is read, kept
-or printed; no frame changes. The shim does not read `metal_stats` today
+whole run, like the totals line. With the cvar `0`, no clock is read, no sample is taken and no rate line is
+printed; what still runs is the two held counters (`rmb_counts.present_held`,
+`count_held`), the window's reset and the two `Cvar_Get` calls, none of which
+waits, presents or draws, so no frame changes. The shim does not read `metal_stats` today
 (its `mgl:` totals line is always printed); it reads it once, when its
 context is made, for this line only.
 
@@ -33,7 +35,8 @@ context is made, for this line only.
 window's first sample: the first frame that ends at least that long after
 the first frame ended begins the window, and the last frame ended before
 the close ends it. A run shorter than the start has no window and prints
-`0.0` over `0.00 s`. It is read once at the renderer's start.
+`0.0` over `0.00 s`. It is read once at the renderer's start (`RI_Init`, and the shim's context
+creation), so a later `set` does not move the window or its `<w>` field.
 
 **What is counted.** Presented is `frames - no_drawable`, as the adapter
 already derives it; the window holds the difference between the two counts
@@ -48,7 +51,12 @@ at its last and its first sample, over the time between them.
   made) is not counted here.
 - *No drawable* (`<n>`): the counter the totals line already prints
   (`no_drawable`): `rmb_counts.no_drawable` in ref_metal, `count_no_drawable`
-  in the shim. It includes the held frames.
+  in the shim. It includes the held frames: `<h>` is a subset of `<n>`, so the two
+  columns are not added.
+- *A frame skipped* (a begin refused, nothing drawn or presented) counts in
+  neither total and is not a sample, in both renderers: ref_metal takes a
+  sample only when its frames count moved, the shim returns before its own,
+  so both windows end on the last frame really ended.
 
 The arithmetic (the window, the rate, the line's text) is one header-only
 file shared by both renderers, `src/client/refresh/metal/common/mtl_rate.h`,

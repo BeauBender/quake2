@@ -1630,6 +1630,9 @@ int rmb_vsync(void);
 /* The counters so far. */
 void rmb_stats(rmb_stats_t *stats, rm_ledger_t *ledger);
 
+/* Only the frames ended and the frames among them without a drawable: the presented-rate sample (TASK161). */
+void rmb_rate_counts(unsigned long *frames, unsigned long *no_drawable);
+
 /*
  * Takes a frame slot and a command buffer, sizes the targets to w by h
  * (the mode's size, rm_frame_size) and the layer's drawable to dw by dh

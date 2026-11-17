@@ -876,14 +876,15 @@ int
 mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t errlen)
 {
 	/* depth and stencil are always depth32Float_stencil8; no MSAA yet */
-	rate_stats = config->rate_stats;
-	rate_start = config->rate_start;
 
 	if (mgl_ready)
 	{
 		mgl_err(err, errlen, "a context exists already", NULL);
 		return 0;
 	}
+
+	rate_stats = config->rate_stats;
+	rate_start = config->rate_start;
 
 	@autoreleasepool
 	{

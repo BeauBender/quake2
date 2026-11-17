@@ -619,7 +619,27 @@ else
 	build="ref_metal built"
 fi
 
+# metal_rate_start is read once, in RI_Init (TASK161): the cvar's value is used nowhere else in
+# rm_main.c, so a per-frame read, which a mid-run set would move, cannot come back. Scratch mutants:
+# a read in RI_EndFrame, and one at close.
+rate_main=src/client/refresh/metal/rm_main.c
+rate_reads() { # <file>: how many lines of <file> read the cvar's value
+	grep -c 'metal_rate_start->value' "$1"
+}
+if [ "$(rate_reads "$rate_main")" != 1 ] || ! grep -q 'rm_rate_start = metal_rate_start->value;' "$rate_main"; then
+	bad "$rate_main reads metal_rate_start->value other than once, in RI_Init"
+fi
+rate_mutants=0
+for rate_mut in 's/rm_rate_start);/metal_rate_start->value);/' 's/&rm_rate, rm_rate_start,/\&rm_rate, metal_rate_start->value,/'; do
+	sed "$rate_mut" "$rate_main" > "${tmp:?}/rm_main_rate.c"
+	if [ "$(rate_reads "${tmp:?}/rm_main_rate.c")" = 1 ]; then
+		bad "the rate-start check passes a mutant ($rate_mut)"
+	else
+		rate_mutants=$((rate_mutants + 1))
+	fi
+done
+
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; $build)"
 fi
 exit $fail
