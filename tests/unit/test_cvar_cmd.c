@@ -217,6 +217,146 @@ t_record_f(void)
 	t_text_printf(&trace, "\n");
 }
 
+/* Tokenizes one line with macro expansion from an exactly sized heap copy
+   and prints argv, or nothing for a discarded line, into out. */
+static void
+expand_line(const char *line, char *out, size_t outsize)
+{
+	size_t n = strlen(line);
+	char *copy = malloc(n + 1);
+	int i;
+
+	memcpy(copy, line, n + 1);
+	out[0] = 0;
+	Cmd_TokenizeString(copy, true);
+
+	for (i = 0; i < Cmd_Argc(); i++)
+	{
+		Q_strlcat(out, "[", outsize);
+		Q_strlcat(out, Cmd_Argv(i), outsize);
+		Q_strlcat(out, "]", outsize);
+	}
+
+	free(copy);
+}
+
+#define LONGNAME "t_mx_very_long_macro_name_x"
+
+TEST(cmd_macro_expand_current_line)
+{
+	char out[2 * MAX_STRING_CHARS + 64];
+	char line[2 * MAX_STRING_CHARS + 64];
+	char msg[96];
+	size_t i;
+
+	Cvar_Set("t_mx_quote", "xx\"");
+	Cvar_Set(LONGNAME, "");
+	Cvar_Set("t_mx_short", "s");
+	Cvar_Set("t_mx_long", "LLLLLLLLLLLLLLLLLLLL");
+	Cvar_Set("t_mx_one", "1");
+
+	/* A long expansion leaves a quote in the static buffer, in the range
+	   that a shorter line's expansion no longer covers. The next line
+	   must not see it. */
+	t_console_reset();
+	expand_line("m $t_mx_quote", out, sizeof(out));
+	T_CONSOLE_HAS("unmatched quote");
+	t_console_reset();
+	expand_line("m $" LONGNAME, out, sizeof(out));
+	T_EQ_STR(out, "[m]");
+	T_EQ_STR(t_console(), "");
+
+	/* A macro that expands to a shorter value. */
+	expand_line("a $t_mx_short b", out, sizeof(out));
+	T_EQ_STR(out, "[a][s][b]");
+	expand_line("a $" LONGNAME " b", out, sizeof(out));
+	T_EQ_STR(out, "[a][b]");
+
+	/* A longer value. */
+	expand_line("a $t_mx_long b", out, sizeof(out));
+	T_EQ_STR(out, "[a][LLLLLLLLLLLLLLLLLLLL][b]");
+
+	/* Two macros on one line, shorter then longer and the reverse. */
+	expand_line("$" LONGNAME " $t_mx_long $t_mx_short", out, sizeof(out));
+	T_EQ_STR(out, "[LLLLLLLLLLLLLLLLLLLL][s]");
+	expand_line("$t_mx_long $" LONGNAME " $t_mx_short", out, sizeof(out));
+	T_EQ_STR(out, "[LLLLLLLLLLLLLLLLLLLL][s]");
+
+	/* A macro at the end of the line, and a bare dollar sign. */
+	expand_line("a b $" LONGNAME, out, sizeof(out));
+	T_EQ_STR(out, "[a][b]");
+	expand_line("a $", out, sizeof(out));
+	T_EQ_STR(out, "[a][$]");
+
+	/* A quote opened before a macro: no expansion inside it. An
+	   unclosed one discards the line. */
+	expand_line("a \"$t_mx_long\" $" LONGNAME " b", out, sizeof(out));
+	T_EQ_STR(out, "[a][$t_mx_long][b]");
+	t_console_reset();
+	expand_line("a $" LONGNAME " \"$t_mx_long", out, sizeof(out));
+	T_EQ_STR(out, "");
+	T_CONSOLE_HAS("unmatched quote");
+
+	/* A macro name that is an unterminated quoted token reads only up
+	   to the end of the line; the next line is unaffected. */
+	expand_line("a $\"abc", out, sizeof(out));
+	expand_line("a b", out, sizeof(out));
+	T_EQ_STR(out, "[a][b]");
+
+	/* The expansion count limit: 99 expansions pass, the 100th is
+	   refused. */
+	line[0] = 0;
+
+	for (i = 0; i < 99; i++)
+	{
+		Q_strlcat(line, "$t_mx_one ", sizeof(line));
+	}
+
+	t_console_reset();
+	expand_line(line, out, sizeof(out));
+	T_CHECK(strncmp(out, "[1][1]", 6) == 0);
+	T_EQ_STR(t_console(), "");
+	Q_strlcat(line, "$t_mx_one ", sizeof(line));
+	expand_line(line, out, sizeof(out));
+	T_EQ_STR(out, "");
+	T_CONSOLE_HAS("Macro expansion loop, discarded.");
+
+	/* The length limits: a line of MAX_STRING_CHARS - 1 passes, one of
+	   MAX_STRING_CHARS is refused; an expansion that reaches
+	   MAX_STRING_CHARS is refused, one byte less is not. */
+	memset(line, 'x', MAX_STRING_CHARS - 1);
+	line[MAX_STRING_CHARS - 1] = 0;
+	t_console_reset();
+	expand_line(line, out, sizeof(out));
+	T_CHECK(Cmd_Argc() == 1);
+	T_EQ_STR(t_console(), "");
+	line[MAX_STRING_CHARS - 1] = 'x';
+	line[MAX_STRING_CHARS] = 0;
+	expand_line(line, out, sizeof(out));
+	T_EQ_STR(out, "");
+	Com_sprintf(msg, sizeof(msg), "Line exceeded %i chars, discarded.",
+			MAX_STRING_CHARS);
+	T_CONSOLE_HAS(msg);
+
+	/* "$t_mx_long" is 10 characters and adds 20: a line of
+	   MAX_STRING_CHARS - 21 grows to MAX_STRING_CHARS - 1, one byte
+	   longer to MAX_STRING_CHARS. */
+	memset(line, 'x', MAX_STRING_CHARS - 21 - 11);
+	strcpy(line + MAX_STRING_CHARS - 21 - 11, " $t_mx_long");
+	T_EQ_INT(strlen(line), MAX_STRING_CHARS - 21);
+	t_console_reset();
+	expand_line(line, out, sizeof(out));
+	T_CHECK(Cmd_Argc() == 2);
+	T_EQ_STR(t_console(), "");
+	memmove(line + 1, line, strlen(line) + 1);
+	line[0] = 'x';
+	expand_line(line, out, sizeof(out));
+	T_EQ_STR(out, "");
+	Com_sprintf(msg, sizeof(msg), "Expanded line exceeded %i chars, discarded.",
+			MAX_STRING_CHARS);
+	T_CONSOLE_HAS(msg);
+}
+
 TEST(cmd_tokenize_and_buffer)
 {
 	trace.len = 0;
@@ -230,11 +370,6 @@ TEST(cmd_tokenize_and_buffer)
 		"t_record // comment\n"
 		"t_record \"unmatched\n");
 	T_CONSOLE_HAS("Line has unmatched quote, discarded.");
-	/* Not pinned: a macro that expands to something shorter than its
-	   name ("$t_nosuchvar" -> ""). Cmd_MacroExpandString keeps scanning
-	   up to the pre-expansion length and reads stale bytes of its static
-	   buffer, so the outcome depends on earlier lines. Reported with
-	   this harness (TASK29); extend this test when it is fixed. */
 	t_text_printf(&trace, "--- insert vs. add\n");
 	Cbuf_AddText("t_record added\n");
 	Cbuf_InsertText("t_record inserted\n");
