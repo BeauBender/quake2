@@ -719,6 +719,14 @@ $(BUILDDIR)/client/%.o : %.c
 	fi
 	${Q}mkdir -p $(@D)
 	${Q}$(CC) -arch $(YQ2_ARCH) -x objective-c -c $(CFLAGS) $(SDLCFLAGS) $(INCLUDE)  $< -o $@
+
+# Objective-C proper (cl_upscale_metalfx.m), with ARC
+$(BUILDDIR)/client/%.o : %.m
+	@if [ -z $(QUIET) ]; then\
+		echo "===> CC $<";\
+	fi
+	${Q}mkdir -p $(@D)
+	${Q}$(CC) -arch $(YQ2_ARCH) -c -fobjc-arc $(CFLAGS) $(SDLCFLAGS) $(INCLUDE) $< -o $@
 else
 $(BUILDDIR)/client/%.o: %.c
 	@if [ -z $(QUIET) ]; then\
@@ -1260,6 +1268,16 @@ CLIENT_OBJS_ += \
 	src/client/input/sdl3.o \
 	src/client/vid/glimp_sdl3.o
 
+# The metalfx backend of upscale_textures: the macOS client only, with
+# MetalFX weak-linked (decision 0012); elsewhere cl_upscale_cmd.c says
+# it is not built.
+ifeq ($(YQ2_OSTYPE)$(IOS_MODE), Darwin)
+CLIENT_OBJS_ += src/client/cl_upscale_metalfx.o
+UPSCALE_METALFX_LDLIBS := -weak_framework MetalFX
+else
+UPSCALE_METALFX_LDLIBS :=
+endif
+
 ifeq ($(YQ2_OSTYPE), Windows)
 CLIENT_OBJS_ += \
 	src/backends/windows/main.o \
@@ -1669,7 +1687,7 @@ $(BINDIR)/quake2 : $(CLIENT_OBJS) $(SDL3_LIB)
 $(BINDIR)/quake2 : $(STATIC_LINK_OBJS)
 	@echo "===> LD $@"
 	${Q}mkdir -p $(@D)
-	${Q}$(CC) $(LDFLAGS) $(CLIENT_OBJS) $(STATIC_LINK_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(STATIC_LDLIBS) $(SDLLDFLAGS) -o $@
+	${Q}$(CC) $(LDFLAGS) $(CLIENT_OBJS) $(STATIC_LINK_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(UPSCALE_METALFX_LDLIBS) $(STATIC_LDLIBS) $(SDLLDFLAGS) -o $@
 else
 $(BINDIR)/quake2 : $(CLIENT_OBJS)
 	@echo "===> LD $@"
@@ -1826,6 +1844,7 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(TESTDIR)/src/client/input/touch.o \
 	$(TESTDIR)/src/client/menu/vidrules.o \
 	$(TESTDIR)/src/client/sound/sound.o \
+	$(TESTDIR)/src/client/sound/wave.o \
 	$(TESTDIR)/src/client/vid/glimp_hidpi.o \
 	$(TESTDIR)/src/client/refresh/files/imgscale.o \
 	$(TESTDIR)/src/client/refresh/files/surf.o \
