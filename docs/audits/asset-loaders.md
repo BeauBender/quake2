@@ -653,7 +653,7 @@ rows are `ok`; the exception is the file-name handling.
 
 | Function | Field | Use | Check (quoted) or absence | Verdict |
 |---|---|---|---|---|
-| `SCR_PlayCinematic` | `arg` (server string), still-image branch | `memcpy(namewe, name, strlen(name) - strlen(dot))` into `char namewe[256]` | the length is `5 + offset-of-first-dot-in-arg`; `name` is `MAX_OSPATH`, which is 256 only under `_WIN32` and **4096** on every other build, macOS included (`shared.h`), so there `Com_sprintf` keeps the whole `pics/` + `arg` and any `arg` of more than about 250 characters ending in the still-image extension overruns the 256-byte stack buffer. The real bound on `arg`: `MSG_ReadString` returns from a 2048-byte static, and the whole `svc_serverdata` message fits in `net_message_buffer[MAX_MSGLEN]` (1400 bytes, shared with the netchan header and the other serverdata fields), so the copy is at most about 1380 bytes, an overrun of up to about 1100 bytes | **defect D26** (stack buffer overflow, server-triggered, on every non-Windows build; on Windows `Com_sprintf` truncates `name` to 255 and the copy stays inside; reached only for a name ending exactly `.pcx`/`.tga`/`.jpg`/`.png` because the branch uses `strcmp(dot, ...)`) |
+| `SCR_PlayCinematic` | `arg` (server string), still-image branch | `memcpy(namewe, name, strlen(name) - strlen(dot))` into `char namewe[256]` | the length is `5 + offset-of-first-dot-in-arg`; `name` is `MAX_OSPATH`, which is 256 only under `_WIN32` and **4096** on every other build, macOS included (`shared.h`), so there `Com_sprintf` keeps the whole `pics/` + `arg` and any `arg` of more than about 250 characters ending in the still-image extension overruns the 256-byte stack buffer. The real bound on `arg`: `MSG_ReadString` returns from a 2048-byte static, and the whole `svc_serverdata` message fits in `net_message_buffer[MAX_MSGLEN]` (1400 bytes, shared with the netchan header and the other serverdata fields), so the copy is at most about 1380 bytes, an overrun of up to about 1100 bytes | **defect D26, fixed in this branch** (FIX21: `namewe` is `MAX_OSPATH` and `SCR_StillStem` refuses a stem that does not fit; was a stack buffer overflow, server-triggered, on every non-Windows build; on Windows `Com_sprintf` truncates `name` to 255 and the copy stays inside; reached only for a name ending exactly `.pcx`/`.tga`/`.jpg`/`.png` because the branch uses `strcmp(dot, ...)`) |
 | `SCR_PlayCinematic` | `arg`, video branch | `Com_sprintf(name, sizeof(name), "video/%s", arg)`, `FS_FOpenFile` | `Com_sprintf` truncates to `MAX_OSPATH`; `FS_FOpenFile` applies the path rules audited in the filesystem section | ok |
 | `SCR_PlayCinematic` | `width`, `height` | `cin.width`, `cin.height`, `maxcount` in decompress, image size | `cin.width <= 0 \|\| cin.height <= 0 \|\| (long long)width * height > 16 * 1024 * 1024` | ok |
 | `SCR_PlayCinematic` | `s_rate`, `s_width`, `s_channels` | sound chunk size per frame, `S_RawSamples` | `s_rate <= 0 \|\| s_rate > 22050`, `s_width != 1 && != 2`, `s_channels != 1 && != 2` | ok |
@@ -676,8 +676,9 @@ No host harness was run (the file pulls in the client, sound and filesystem
 imports); D26 is a static trace with high confidence (`MAX_OSPATH` is 4096 in
 `shared.h` for every build except `_WIN32`, macOS included, and `namewe` is a
 fixed 256).
-The minimal fix is to size `namewe` as `MAX_OSPATH` or to copy with
-`Q_strlcpy` into a bounded buffer.
+Fixed by FIX21: `namewe` is sized `MAX_OSPATH` and the stem is cut by
+`SCR_StillStem` (`cl_cinsize.c`), which refuses, rather than truncates, a name
+whose stem does not fit; the caller then takes the not-found path.
 
 ## Entity strings and map-fix overrides
 
@@ -793,7 +794,7 @@ reachability in [Where each asset can come from](#where-each-asset-can-come-from
 | D23 | `wave.c` chunk walk | `GetLittleLong`/`strncmp` read a few bytes past `iff_end` at a chunk boundary | low | high (static) | FIX20 |
 | D24 | `wave.c` cue `loopstart` | loop point unbounded; `SDL_Cache` turns it into a mixer `pos`/`end` past the cached sample | medium | medium (static) | FIX20 |
 | D25 | `wave.c` data chunk | the data-length word and `dataofs` are trusted without comparison to `wavlength`; four consumers read `info.samples` elements from `data + dataofs` | high | high (static) | FIX20 |
-| D26 | `cl_cin.c` `SCR_PlayCinematic` | still-image name copied into `char namewe[256]` by length; `MAX_OSPATH` is 4096 on every non-Windows build (macOS included), so a server level name of up to about 1380 characters (the `svc_serverdata` message limit) overruns the stack buffer by up to about 1100 bytes | high | high (static) | FIX21 |
+| D26 | `cl_cin.c` `SCR_PlayCinematic` | still-image name copied into `char namewe[256]` by length; `MAX_OSPATH` is 4096 on every non-Windows build (macOS included), so a server level name of up to about 1380 characters (the `svc_serverdata` message limit) overruns the stack buffer by up to about 1100 bytes | high | high (static) — **fixed in this branch** | fixed |
 | D27 | M32 `LoadM32` | `width * 4` wraps in the body-size check, so a hostile width passes against a few-byte body; gl1 then rewrites `width * height` pixels in place past the file buffer (gl3 over-reads) | high | high (static) | FIX19 |
 | D28 | `sdl.c` `SDL_Cache` (rate from `wave.c`) | `info.rate` unchecked; a low rate inflates the resampled frame count, `len * width * channels` wraps in `int` to a small allocation, and the loop writes the full count: heap overflow write not closed by the D25 clamp | high | high (static, arithmetic checked) | FIX20 |
 | D29 | `sdl.c` `SDL_Cache`, `sound.c` `S_IsShortSilence` | a zero `info.rate` reaches integer divisions (`begin_length * 1000 / info->rate` and siblings, `(info->samples * 1000) / info->rate`); on x86-64 SIGFPE, on arm64 execution continues into the resample loop with an undefined frame count (the D28 class, a write past the allocation) | high | high (static) | FIX20 |
