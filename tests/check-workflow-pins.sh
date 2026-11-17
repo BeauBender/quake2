@@ -115,7 +115,8 @@ match($0, /^[ \t]*(-[ \t]+)*[\047"]?(uses|image|container)[\047"]?[ \t]*:([ \t]|
 	if (q == "\"" || q == "\047") {
 		rest = substr(rest, 2)
 		i = index(rest, q)
-		v = substr(rest, 1, i - 1)
+		v = i ? substr(rest, 1, i - 1) : rest
+		# An unclosed quote leaves the quote itself as the tail.
 		tail = i ? substr(rest, i + 1) : q
 	} else {
 		v = rest
@@ -157,14 +158,11 @@ END {
 
 # scan <dir>: prints a line for each refusal in the workflow files of
 # <dir> and returns 1 when there is one, or when the scan cannot run: no
-# directory, no workflow file, a workflow name that is not a regular file,
-# or an awk that fails.
+# workflow file (no directory either), a workflow name that is not a
+# regular file (awk reads a directory as an empty file and exits 0), or
+# an awk that fails.
 scan()
 {
-	if [ ! -d "$1" ]; then
-		echo "$me: $1: no such directory; nothing was checked" >&2
-		return 1
-	fi
 	_n=0
 	_rc=0
 	for _f in "$1"/* "$1"/.*; do
@@ -186,7 +184,7 @@ scan()
 		[ "$_s" -eq 0 ] || _rc=1
 	done
 	if [ "$_n" -eq 0 ]; then
-		echo "$me: $1: no .yml or .yaml file; nothing was checked" >&2
+		echo "$me: $1: no .yml or .yaml file (or no such directory); nothing was checked" >&2
 		return 1
 	fi
 	return "$_rc"
@@ -277,6 +275,12 @@ selftest()
 	step commented '    # uses: actions/checkout@v7' '    - name: Check out repository code' \
 		"      uses: actions/checkout@$sha"
 	expect accept "# uses: actions/checkout@v7 (a comment)" commented
+	step qkey "      - \"uses\": actions/checkout@v7"
+	expect refuse "- \"uses\": actions/checkout@v7 (a quoted key)" qkey
+	step crlf '    - name: Check out repository code' "      uses: actions/checkout@$sha # v7.0.1"
+	awk '{ printf "%s\r\n", $0 }' "${tmp:?}/crlf/w.yml" > "${tmp:?}/crlf/w.crlf"
+	mv "${tmp:?}/crlf/w.crlf" "${tmp:?}/crlf/w.yml"
+	expect accept "a pinned file with CRLF line ends" crlf
 
 	# Images, in the forms of codeql.yml's cppcheck job on main and of
 	# the container and services sections of the syntax reference.
@@ -290,7 +294,8 @@ selftest()
 	}
 	cjob ctag '    container:' '      image: debian:testing'
 	expect refuse "container: image: debian:testing" ctag
-	cjob cdig '    container:' "      image: debian@sha256:$dig  # debian:testing" \
+	cjob cdig '    container:' '      # The tag is in the comment.' \
+		"      image: debian@sha256:$dig  # debian:testing" \
 		'      env:' '        NODE_ENV: development'
 	expect accept "container: image: debian@sha256:<64 hex>" cdig
 	cjob cstr '    container: debian:testing'
