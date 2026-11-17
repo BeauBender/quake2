@@ -184,6 +184,8 @@ VidRules_Cvar(viditem_t item, const char *renderer)
 			return metal ? "r_rt_ao_scale" : NULL;
 		case VIDITEM_AO_RAYS:
 			return metal ? "r_rt_ao_rays" : NULL;
+		case VIDITEM_COLORSPACE:
+			return metal ? "metal_colorspace" : NULL;
 		default:
 			return NULL;
 	}
@@ -312,6 +314,13 @@ VidRules_Item(viditem_t item, const char *renderer, int modemask, int scaler)
 			if (!scaler)
 			{
 				return (vidrule_t){ 0, "needs r_rt_ao 1" };
+			}
+			return (vidrule_t){ 1, "applies on apply" };
+
+		case VIDITEM_COLORSPACE:
+			if (ref != VIDREF_METAL)
+			{
+				return (vidrule_t){ 0, "Metal renderer only" };
 			}
 			return (vidrule_t){ 1, "applies on apply" };
 

@@ -654,6 +654,12 @@ rm_scale8_plan(int enabled, int nolerp, int height, int w, int h, size_t staging
 }
 
 int
+rm_colorspace_mode(float cvar)
+{
+	return (cvar == 1.0f) ? 1 : 0;
+}
+
+int
 rm_2d_sharp(float cvar, int smp, int flat_linear)
 {
 	if ((cvar != 1.0f) || !flat_linear)

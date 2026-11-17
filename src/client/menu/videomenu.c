@@ -74,6 +74,7 @@ static menulist_s s_mfx_scaler_list;
 static menulist_s s_mfx_scale_list;
 static menulist_s s_mfx_interp_list;
 static menulist_s s_denoiser_list;
+static menulist_s s_colorspace_list;   /* TASK121: metal_colorspace */
 static menulist_s s_rtw_hits_list;   /* TASK158: r_rt_water_hits */
 static menulist_s s_ao_scale_list;
 static menulist_s s_ao_rays_list;
@@ -577,6 +578,13 @@ ApplyChanges(void *unused)
 		{
 			Cvar_SetValue("r_metalfx", s_mfx_scaler_list.curvalue);
 		}
+	}
+
+	/* the Metal layer's colour space (TASK121): read from the next frame */
+	if (!(s_colorspace_list.generic.flags & QMF_GRAYED) &&
+		(Cvar_VariableValue("metal_colorspace") == 1.0f) != (s_colorspace_list.curvalue == 1))
+	{
+		Cvar_SetValue("metal_colorspace", s_colorspace_list.curvalue);
 	}
 
 	/* the water reflections' hit shading (TASK158): its index, written when it changed */
@@ -1277,6 +1285,27 @@ VID_MenuInit(void)
 		}
 	}
 
+	/* The Metal layer's colour space (TASK121): greyed on other renderers */
+	{
+		static const char *cs_names[] = { "untagged", "sRGB", NULL };
+		static const char *cs_na_names[] = { "n/a", NULL };
+
+		s_colorspace_list.generic.type = MTYPE_SPINCONTROL;
+		s_colorspace_list.generic.name = "colour space";
+		s_colorspace_list.generic.x = 0;
+		s_colorspace_list.generic.y = (sy += 10);
+		s_colorspace_list.itemnames = cs_names;
+		s_colorspace_list.curvalue = (Cvar_VariableValue("metal_colorspace") == 1.0f);
+
+		SetRule(&s_colorspace_list.generic, VIDITEM_COLORSPACE, 0);
+
+		if (s_colorspace_list.generic.flags & QMF_GRAYED)
+		{
+			s_colorspace_list.itemnames = cs_na_names;
+			s_colorspace_list.curvalue = 0;
+		}
+	}
+
 	/* The renderer's own settings are a page of their own, with
 	   every item in it always shown. */
 	s_ropts_action.generic.type = MTYPE_ACTION;
@@ -1346,6 +1375,7 @@ VID_MenuInit(void)
 	Menu_AddItem(&s_ropts_menu, (void *)&s_rtw_hits_list);
 	Menu_AddItem(&s_ropts_menu, (void *)&s_ao_scale_list);
 	Menu_AddItem(&s_ropts_menu, (void *)&s_ao_rays_list);
+	Menu_AddItem(&s_ropts_menu, (void *)&s_colorspace_list);
 	Menu_AddItem(&s_ropts_menu, (void *)&s_ropts_apply_action);
 
 	Menu_SetStatusBar(&s_ropts_menu, "Esc: back to the video menu");
