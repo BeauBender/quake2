@@ -58,6 +58,28 @@
 #     function that is not found fails the check. Scratch mutants of each
 #     point (the flush removed, commented out, moved after the call; the
 #     function renamed) must fail it.
+# (e) Always: the kernels call the helpers their host test drives, by source
+#     inspection (TASK164). tests/metal/rm_rtwater_test.c drives C copies of
+#     the reflection loops (rtw_trace_ss, rtw_trace_ws) through the shared
+#     helpers of common/mtl_rtw_math.h; a kernel that stopped calling a helper
+#     would leave the test green. In rm_rtwater.metal, after comments and
+#     string literals are stripped, the body of rm_rtw_trace (its name at the
+#     start of a line up to the next "}" in column 0) must call
+#     mtl_rtw_ss_next and mtl_rtw_choose, and the body of rm_rtw_trace_ws must
+#     call mtl_rtw_ws_next and mtl_rtw_choose_ws; the check fails naming the
+#     kernel and the helper. Scratch mutants (the call renamed, commented out,
+#     moved out of the kernel into another function; the kernel renamed) must
+#     fail it. The pairs are the water's only: the shadow and AO host tests
+#     call the helpers one by one and carry no copy of a kernel loop.
+# (f) Only on Darwin with a Metal device (TASK164): tests/metal/rmb_cs_probe.m
+#     includes rmb_device.m and runs the renderer's own rmb_attach,
+#     rmb_colorspace_set (rmb_cs_apply, rmb_cs_release) and rmb_detach on a
+#     standalone CAMetalLayer, no window, no game data: after metal_colorspace
+#     0 -> 1 -> 0, and after 1 -> detach, the layer's colour space is the one
+#     it had at attach, and the ledger holds no state object. With no device
+#     the probe prints one skip line and passes. Scratch mutants of
+#     rmb_device.m (1 -> 0 sets NULL; 1 -> 0 leaves ours; detach leaves ours)
+#     must fail it.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -76,6 +98,7 @@ san="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-fram
 printf 'int main(void){return 0;}\n' > "${tmp:?}/probe.c"
 if $cc $san -o "${tmp:?}/probe" "${tmp:?}/probe.c" >/dev/null 2>&1 && "${tmp:?}/probe" >/dev/null 2>&1; then
 	flags="$flags $san"
+	psan=$san
 else
 	echo "check-ref-metal: $cc cannot build with ASAN and UBSAN; running without them"
 fi
@@ -378,7 +401,7 @@ flushed() {
 		body && /^}/ { body = 0 }
 		body && !fl && $0 ~ /^[ \t]*RM_Flush2D\(\);/ { fl = NR }
 		body && !at && index($0, call) { at = NR }
-		END { exit (found && fl && at && fl < at) ? 0 : 1 }' "${tmp:?}/flush.code"
+		END { exit !found ? 2 : (fl && at && fl < at) ? 0 : 1 }' "${tmp:?}/flush.code"
 }
 # flush_mutant <kind> <file> <function> <call>: the file with that flush point broken
 flush_mutant() {
@@ -399,21 +422,212 @@ for point in "rm_main.c RI_RenderFrame rmb_pass_3d(" "rm_main.c RI_EndFrame rmb_
 	# shellcheck disable=SC2086 # three words: file, function, call
 	set -- $point
 	f=$rm_dir/$1 fn=$2 call=$3
-	if ! flushed "$f" "$fn" "$call"; then
+	rc=0
+	flushed "$f" "$fn" "$call" || rc=$?
+	if [ "$rc" = 2 ]; then
+		bad "function $fn not found in $f"
+		continue
+	elif [ "$rc" != 0 ]; then
 		bad "$f: $fn does not call RM_Flush2D() before $call (gl1's R_ApplyGLBuffer)"
 		continue
 	fi
 	for m in removed commented moved renamed; do
 		flush_mutant "$m" "$f" "$fn" "$call" > "${tmp:?}/flush-mutant.c"
+		# the renamed function is "not found" (2), the others "no flush before the call" (1)
+		case $m in renamed) want=2 ;; *) want=1 ;; esac
+		rc=0
+		flushed "${tmp:?}/flush-mutant.c" "$fn" "$call" || rc=$?
 		if cmp -s "$f" "${tmp:?}/flush-mutant.c"; then
 			bad "the flush-point mutant ($m) of $fn changed nothing"
-		elif flushed "${tmp:?}/flush-mutant.c" "$fn" "$call"; then
+		elif [ "$rc" = 0 ]; then
 			bad "the flush-point check passes a mutant of $fn (the flush $m)"
+		elif [ "$rc" != "$want" ]; then
+			bad "the flush-point check gives status $rc, not $want, for a mutant of $fn ($m)"
 		else
 			flush_mutants=$((flush_mutants + 1))
 		fi
 	done
 done
+
+# (e) the kernels call the helpers their host tests drive. kcalls <file> <kernel> <helper>: 0 when
+# the kernel is defined in the file (its name at the start of a line, its body up to the next "}" in
+# column 0) and its body, outside comments and string literals, calls <helper>( ; 1 otherwise.
+kcalls() {
+	strip "$1" | deadif > "${tmp:?}/kcalls.code" || return 1
+	awk -v fn="$2" -v h="$3" '
+		$0 ~ "^" fn "\\(" { body = 1; found = 1 }
+		body && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { hit = 1 }
+		body && /^}/ { body = 0 }
+		END { exit !found ? 2 : hit ? 0 : 1 }' "${tmp:?}/kcalls.code"
+}
+# deadif: stdin to stdout, the lines of dead preprocessor branches blanked (so a call there is no
+# call): the part of an "#if 0" before its "#else" (the "#else" part is live), the "#else" part of an
+# "#if 1", whatever the nesting; directive lines are blanked too, the line count is kept. The forms
+# evaluated are "#if 0", "#if 1", "#if (0)" and "#if (1)" (blanks optional, so "#if(0)" too); every
+# other condition ("#if X", "#if defined(X)", "#ifdef", "#ifndef", "#elif", "#if 00", "#if false")
+# is taken as live on both branches, so a call kept there counts (the check cannot tell it is dead),
+# and a live call is never refused for it. Every "#if" form, "#if(" included, opens a level, so each
+# "#endif" closes its own.
+deadif() {
+	awk '
+	function dead(   i) { for (i = 1; i <= depth; i++) if (off[i]) return 1; return 0 }
+	{
+		line = $0
+		if (line ~ /^[ \t]*#[ \t]*if([^A-Za-z0-9_]|$)|^[ \t]*#[ \t]*if(n?def)[ \t]/) {
+			depth++; kind[depth] = 2; off[depth] = 0
+			if (line ~ /^[ \t]*#[ \t]*if([ \t]+0|[ \t]*\([ \t]*0[ \t]*\))[ \t]*$/) { kind[depth] = 0; off[depth] = 1 }
+			else if (line ~ /^[ \t]*#[ \t]*if([ \t]+1|[ \t]*\([ \t]*1[ \t]*\))[ \t]*$/) { kind[depth] = 1 }
+			print ""; next
+		}
+		if (line ~ /^[ \t]*#[ \t]*else/) {
+			if (depth > 0) { if (kind[depth] == 0) off[depth] = 0; else if (kind[depth] == 1) off[depth] = 1 }
+			print ""; next
+		}
+		if (line ~ /^[ \t]*#[ \t]*elif/) { if (depth > 0) off[depth] = 0; print ""; next }
+		if (line ~ /^[ \t]*#[ \t]*endif/) { if (depth > 0) depth--; print ""; next }
+		if (dead()) { print ""; next }
+		print line
+	}'
+}
+# kcall_mutant <kind> <file> <kernel> <helper>: the file with that call broken
+kcall_mutant() {
+	case $1 in
+		renamed) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b { gsub(h "[ \t]*\\(", h "_x(") } { print }' "$2" ;;
+		commented) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b { gsub(h "[ \t]*\\(", "/* & */ 0 * (") } { print }' "$2" ;;
+		elsewhere) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b { gsub(h "[ \t]*\\(", h "_x(") } { print }
+			END { print "static int kcall_elsewhere(void) { return " h "(0); }" }' "$2" ;;
+		renamedkernel) sed "s/^$3(/$3_old(/" "$2" ;;
+		deadcode) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print; print "#else"; print "#endif"; next } { print }' "$2" ;;
+		liveelse) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print; print "#else"; print; print "#endif"; next } { print }' "$2" ;;
+		deadnested) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print "#ifdef X"; print "#endif"; print; print "#endif"; next } { print }' "$2" ;;
+		deadnestedparen) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print "#if(X)"; print "#endif"; print; print "#endif"; next } { print }' "$2" ;;
+		deadparen) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if (0)"; print; print "#else"; print "#endif"; next } { print }' "$2" ;;
+		deadparen2) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if(1)"; print "#else"; print; print "#endif"; next } { print }' "$2" ;;
+		joined) awk -v fn="$3" '
+			held != "" { if (index($0, fn "(") == 1) { print held " " $0 } else { print held; print } held = ""; next }
+			/^kernel void$/ || /^static [a-z0-9_]+$/ { held = $0; next }
+			{ print }' "$2" ;;
+	esac
+}
+kcall_mutants=0 kcall_pairs=0
+for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm_rtw_trace mtl_rtw_choose" \
+	"rm_rtwater.metal rm_rtw_trace_ws mtl_rtw_ws_next" "rm_rtwater.metal rm_rtw_trace_ws mtl_rtw_choose_ws" \
+	"rm_rtwater.metal rm_rtw_ss_at mtl_rtw_choose" "rm_rtwater.metal rm_rtw_trace rm_rtw_ss_at"; do
+	# shellcheck disable=SC2086 # three words: file, kernel, helper
+	set -- $pair
+	f=$rm_dir/$1 kn=$2 hp=$3
+	rc=0
+	kcalls "$f" "$kn" "$hp" || rc=$?
+	if [ "$rc" = 2 ]; then
+		bad "kernel $kn not found in $f"
+		continue
+	elif [ "$rc" != 0 ]; then
+		bad "$f: the kernel $kn does not call $hp (the helper its host test drives)"
+		continue
+	fi
+	kcall_pairs=$((kcall_pairs + 1))
+	for m in renamed commented elsewhere renamedkernel deadcode deadnested deadnestedparen deadparen deadparen2 joined; do
+		kcall_mutant "$m" "$f" "$kn" "$hp" > "${tmp:?}/kcall-mutant.metal"
+		# a mutant that takes the function away is "not found" (2), the others "no call" (1)
+		case $m in renamedkernel|joined) want=2 ;; *) want=1 ;; esac
+		rc=0
+		kcalls "${tmp:?}/kcall-mutant.metal" "$kn" "$hp" || rc=$?
+		if cmp -s "$f" "${tmp:?}/kcall-mutant.metal"; then
+			bad "the kernel-call mutant ($m) of $kn changed nothing"
+		elif [ "$rc" = 0 ]; then
+			bad "the kernel-call check passes a mutant of $kn (the call to $hp $m)"
+		elif [ "$rc" != "$want" ]; then
+			bad "the kernel-call check gives status $rc, not $want, for a mutant of $kn ($m)"
+		else
+			kcall_mutants=$((kcall_mutants + 1))
+		fi
+	done
+	# the "#else" part of an "#if 0" is live: the call repeated there is still a call
+	kcall_mutant liveelse "$f" "$kn" "$hp" > "${tmp:?}/kcall-live.metal"
+	if cmp -s "$f" "${tmp:?}/kcall-live.metal" || ! kcalls "${tmp:?}/kcall-live.metal" "$kn" "$hp"; then
+		bad "the kernel-call check refuses a call kept in the #else part of an #if 0 ($kn, $hp)"
+	fi
+done
+
+# (f) the colour-space probe. probe_run <dir with rmb_device.m or empty> <exe>: builds
+# tests/metal/rmb_cs_probe.m, which includes rmb_device.m (found in <dir> first, else in
+# $rm_dir) and runs the renderer's own rmb_attach, rmb_colorspace_set and rmb_detach on a
+# standalone CAMetalLayer; its output is in $tmp/probe.out, its exit status is returned (a build
+# failure is 99).
+probe_run() {
+	# shellcheck disable=SC2086 # flags is a word list
+	# the sanitizers when (a) found the compiler has them, and the aliasing and overflow flags of the
+	# script's other builds; the warnings are -Wall -Wextra -Werror, stricter than rmb_device.m's real
+	# build on purpose (docs/runbook/TASK164.md, FIX99)
+	if ! $cc -fobjc-arc -std=gnu11 -Wall -Wextra -Werror -g -O1 -fno-strict-aliasing -fwrapv ${psan:-} -I"${1:-$rm_dir}" -I"$rm_dir" -I"$rm_dir/header" -I. \
+		'-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "$2" tests/metal/rmb_cs_probe.m "$rm_dir/rm_pure.c" \
+		"$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" src/common/shared/shared.c \
+		-framework Foundation -framework Metal -framework QuartzCore -framework CoreGraphics -lm > "${tmp:?}/probe.out" 2>&1; then
+		return 99
+	fi
+	rc=0
+	# a mutant must fail by an exit status, not a signal (the shell prints "Abort trap" for a signal and
+	# the system may write a crash report): the probe stops at its first wrong retain count, and
+	# ASAN exits instead of aborting
+	ASAN_OPTIONS=abort_on_error=0 "$2" > "${tmp:?}/probe.out" 2>&1 || rc=$?
+	return $rc
+}
+probe="probe skipped"
+if [ "$(uname -s)" != Darwin ]; then
+	echo "check-ref-metal: colour-space probe skipped: not macOS"
+else
+	rc=0
+	probe_run "" "${tmp:?}/rmb_cs_probe" || rc=$?
+	if [ "$rc" = 99 ]; then
+		cat "${tmp:?}/probe.out"
+		bad "tests/metal/rmb_cs_probe.m does not compile"
+	elif [ "$rc" != 0 ]; then
+		cat "${tmp:?}/probe.out"
+		bad "tests/metal/rmb_cs_probe.m failed"
+	elif grep -q 'skipped: no Metal device' "${tmp:?}/probe.out"; then
+		echo "check-ref-metal: colour-space probe skipped: no Metal device"
+	else
+		probe=$(tail -n 1 "${tmp:?}/probe.out" | sed 's/^rmb_cs_probe: //')
+		case $probe in *", 0 failed") ;; *) bad "tests/metal/rmb_cs_probe.m printed no result line"; probe="probe skipped";; esac
+		# the mutants of rmb_device.m, each of which must fail the probe: 1 -> 0 sets NULL, 1 -> 0
+		# leaves the colour space on the layer, detach leaves it too
+		probe_mutants=0
+		for m in nulled kept detached unretained; do
+			rm -rf "${tmp:?}/csmut"
+			mkdir "${tmp:?}/csmut"
+			case $m in
+				nulled) sed 's|rmb_layer.colorspace = rmb_cs_own;|rmb_layer.colorspace = NULL;|' "$rm_dir/rmb_device.m" ;;
+				kept) sed 's|rmb_layer.colorspace = rmb_cs_own;|(void)0;|' "$rm_dir/rmb_device.m" ;;
+				unretained) sed 's|CGColorSpaceRetain(rmb_cs_own);|(void)0;|' "$rm_dir/rmb_device.m" ;;
+				detached) sed 's|rmb_cs_release();   /\* the view|(void)0;   /* the view|' "$rm_dir/rmb_device.m" ;;
+			esac > "${tmp:?}/csmut/rmb_device.m"
+			if cmp -s "$rm_dir/rmb_device.m" "${tmp:?}/csmut/rmb_device.m"; then
+				bad "the colour-space mutant ($m) of rmb_device.m changed nothing"
+				continue
+			fi
+			rc=0
+			probe_run "${tmp:?}/csmut" "${tmp:?}/rmb_cs_mutant" || rc=$?
+			if [ "$rc" = 99 ]; then
+				cat "${tmp:?}/probe.out"
+				bad "the colour-space mutant ($m) does not compile"
+			elif [ "$rc" = 0 ]; then
+				bad "the colour-space probe passes a mutant of rmb_device.m ($m)"
+			else
+				probe_mutants=$((probe_mutants + 1))
+			fi
+		done
+		probe="$probe; $probe_mutants colour-space mutants refused"
+	fi
+fi
 
 # (b) the build, where it can be built
 skip=""
@@ -487,6 +701,6 @@ else
 fi
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; $build)"
 fi
 exit $fail
