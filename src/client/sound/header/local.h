@@ -189,6 +189,37 @@ extern qboolean snd_is_underwater;
 wavinfo_t GetWavinfo(char *name, byte *wav, int wavlength);
 
 /*
+ * The sample rates GetWavinfo accepts. Every stock sound is 11025,
+ * 22050 or 44100 Hz. The floor keeps the resampled copy in SDL_Cache
+ * within a factor of 48 of the file at the highest output rate, the
+ * ceiling is the highest rate of common PCM audio.
+ */
+#define S_WAV_RATE_MIN 1000
+#define S_WAV_RATE_MAX 192000
+
+/*
+ * The most bytes SDL_Cache allocates for one resampled sound.
+ */
+#define S_CACHE_MAX_BYTES (1 << 27)
+
+/*
+ * Returns true if the whole of info describes a sound of wavlength
+ * bytes: the rate in range, a width and channel count of 1 or 2, a
+ * positive sample count that fits in the bytes after dataofs, and a
+ * loop start of -1 or inside the samples.
+ */
+qboolean S_WavinfoValid(const wavinfo_t *info, int wavlength);
+
+/*
+ * Computes the frame count and the byte size of the copy of a sound
+ * resampled to speed Hz, in 64 bit, and returns false if the sound or
+ * the size is not acceptable. Both outputs come from the one value,
+ * the caller sizes its allocation and its loop from them.
+ */
+qboolean S_CacheSize(const wavinfo_t *info, int speed, int *frames,
+		int *bytes);
+
+/*
  * Loads one sample into
  * the cache
  */

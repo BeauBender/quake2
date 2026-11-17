@@ -24,6 +24,8 @@
  * =======================================================================
  */
 
+#include <limits.h>
+
 #include "../header/client.h"
 #include "header/local.h"
 
@@ -216,3 +218,83 @@ GetWavinfo(char *name, byte *wav, int wavlength)
 	return info;
 }
 
+
+qboolean
+S_WavinfoValid(const wavinfo_t *info, int wavlength)
+{
+	long long remaining;
+
+	if (info->rate < S_WAV_RATE_MIN || info->rate > S_WAV_RATE_MAX)
+	{
+		return false;
+	}
+
+	if (info->width < 1 || info->width > 2)
+	{
+		return false;
+	}
+
+	if (info->channels < 1 || info->channels > 2)
+	{
+		return false;
+	}
+
+	if (info->samples <= 0)
+	{
+		return false;
+	}
+
+	if (info->dataofs < 0 || info->dataofs >= wavlength)
+	{
+		return false;
+	}
+
+	remaining = (long long)wavlength - info->dataofs;
+
+	if ((long long)info->samples * info->width > remaining)
+	{
+		return false;
+	}
+
+	if (info->loopstart < -1 || info->loopstart >= info->samples)
+	{
+		return false;
+	}
+
+	return true;
+}
+
+qboolean
+S_CacheSize(const wavinfo_t *info, int speed, int *frames, int *bytes)
+{
+	float stepscale;
+	float count;
+	long long size;
+
+	if (info->rate <= 0 || speed <= 0 || info->samples <= 0 ||
+		info->width < 1 || info->width > 2 ||
+		info->channels < 1 || info->channels > 2)
+	{
+		return false;
+	}
+
+	stepscale = (float)info->rate / speed;
+	count = info->samples / stepscale;
+
+	/* also false for a NaN */
+	if (!(count >= 1.0f && count < (float)INT_MAX))
+	{
+		return false;
+	}
+
+	size = (long long)(int)count * info->width * info->channels;
+
+	if (size > S_CACHE_MAX_BYTES)
+	{
+		return false;
+	}
+
+	*frames = (int)count;
+	*bytes = (int)size;
+	return true;
+}

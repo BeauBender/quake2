@@ -1826,6 +1826,7 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(TESTDIR)/src/client/input/touch.o \
 	$(TESTDIR)/src/client/menu/vidrules.o \
 	$(TESTDIR)/src/client/sound/sound.o \
+	$(TESTDIR)/src/client/sound/wave.o \
 	$(TESTDIR)/src/client/vid/glimp_hidpi.o \
 	$(TESTDIR)/src/client/refresh/files/imgscale.o \
 	$(TESTDIR)/src/client/refresh/files/surf.o \
