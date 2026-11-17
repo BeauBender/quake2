@@ -1236,7 +1236,8 @@ rmb_rt_bind_geometry(id<MTLComputeCommandEncoder> ce, int vert_at, int idx_at, i
 	g[0] = (uint32_t)(vb.length / RM_WVERT_STRIDE);
 	g[1] = (uint32_t)(ib.length / 12);
 	g[2] = RM_WVERT_STRIDE / 16;
-	g[3] = 0;
+	/* FIX92: the world's instance's first word (rmb_rt_frame's ibase), which no inline model's has: mtl_rtw_brush */
+	g[3] = (map_as[0] && (map_first[0] < 0xffffffffUL)) ? (uint32_t)map_first[0] : 0xffffffffu;
 	[ce setBuffer:vb offset:0 atIndex:(NSUInteger)vert_at];
 	[ce setBuffer:ib offset:0 atIndex:(NSUInteger)idx_at];
 	[ce setBytes:g length:sizeof(g) atIndex:(NSUInteger)geom_at];

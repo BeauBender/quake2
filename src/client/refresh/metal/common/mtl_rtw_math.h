@@ -507,8 +507,7 @@ mtl_rtw_brush(unsigned b, unsigned world)
 static inline int
 mtl_rtw_ss_next(int hit, int alias, int brush, unsigned from, int layer, int map)
 {
-	(void)brush;
-	return mtl_rtw_ws_next(hit, alias, from, layer, map);
+	return mtl_rtw_ws_next(hit, alias || brush, from, layer, map);
 }
 
 /*
