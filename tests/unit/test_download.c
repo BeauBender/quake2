@@ -91,7 +91,8 @@ TEST(download_filter)
 		"lib/libfoo.dylib",
 		"thing.lib",
 		"archive.a",
-		/* ".a" is matched anywhere in the path, not only at the end. */
+		/* A library extension inside a component, or in a longer
+		   extension, does not end the name. */
 		"models/items/a.ase",
 		"sound/.au/x.wav",
 		/* Backslashes are not special to the filter. */
@@ -107,6 +108,69 @@ TEST(download_filter)
 
 	t_pin("download-filter", pin.data);
 	t_text_free(&pin);
+}
+
+/* Each name with the verdict the filter gives it: true is refused. The
+   extension check looks at the end of the name only, case-insensitively,
+   and after trailing numeric version groups. */
+TEST(download_filter_extension_table)
+{
+	static const struct
+	{
+		const char *name;
+		qboolean refused;
+	} table[] = {
+		/* library names, refused */
+		{"x.dll", true},
+		{"x.DLL", true},
+		{"x.Dll", true},
+		{"dir/x.dylib", true},
+		{"x.DyLib", true},
+		{"libx.so", true},
+		{"libx.SO", true},
+		{"libx.so.1", true},
+		{"libx.so.1.2", true},
+		{"libx.so.1.2.3", true},
+		{"libx.SO.10", true},
+		{"x.lib", true},
+		{"x.LIB", true},
+		{"x.a", true},
+		{"dir/x.A", true},
+		{"a/b/x.a", true},
+		/* the extension text inside a component, accepted */
+		{"maps/a.area.bsp", false},
+		{"x.solid.pcx", false},
+		{"textures/e1u1/a.lib_wall.wal", false},
+		{"sound/.au/x.wav", false},
+		{"models/items/a.ase", false},
+		{"a.dll_x/y.wav", false},
+		{"x.dylibs/y.wav", false},
+		{"x.so_called/y.wav", false},
+		{"x.dll.pcx", false},
+		{"x.so.bsp", false},
+		/* no extension text at all */
+		{"maps/q2dm1.bsp", false},
+		{"players/male/grunt.pcx", false},
+		/* a version group that is not numeric does not count */
+		{"libx.so.x", false},
+		{"libx.so.", false},
+		{"libx.so.1a", false},
+		/* the other rules, byte for byte as before */
+		{".x.wav", true},
+		{"/x.wav", true},
+		{"a:b.wav", true},
+		{"a/../b.wav", true},
+		{"a..b.wav", true},
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof(table) / sizeof(table[0]); i++)
+	{
+		reset_client();
+		Cmd_TokenizeString(va("download %s", table[i].name), false);
+		CL_Download_f();
+		T_EQ_INT(cls.netchan.message.cursize == 0, table[i].refused);
+	}
 }
 
 /* The temporary name is bounded by cls.downloadtempname, whatever the
