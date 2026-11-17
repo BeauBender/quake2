@@ -64,15 +64,18 @@ FindNextChunk(char *name)
 {
 	while (1)
 	{
-		data_p = last_chunk;
-		data_p += 4;
+		long long next;
 
-		if (data_p >= iff_end)
+		data_p = last_chunk;
+
+		/* the whole 8 byte chunk header must be inside the file */
+		if ((last_chunk > iff_end) || ((iff_end - last_chunk) < 8))
 		{
 			data_p = NULL;
 			return;
 		}
 
+		data_p += 4;
 		iff_chunk_len = GetLittleLong();
 
 		if (iff_chunk_len < 0)
@@ -82,7 +85,18 @@ FindNextChunk(char *name)
 		}
 
 		data_p -= 8;
-		last_chunk = data_p + 8 + ((iff_chunk_len + 1) & ~1);
+
+		/* the next header, in 64 bit; a length past the file ends the walk */
+		next = 8 + (((long long)iff_chunk_len + 1) & ~1LL);
+
+		if (next > (iff_end - data_p))
+		{
+			last_chunk = iff_end;
+		}
+		else
+		{
+			last_chunk = data_p + next;
+		}
 
 		if (!strncmp((const char *)data_p, name, 4))
 		{
@@ -98,8 +112,17 @@ FindChunk(char *name)
 	FindNextChunk(name);
 }
 
-wavinfo_t
-GetWavinfo(char *name, byte *wav, int wavlength)
+/*
+ * Returns true if n bytes from data_p are inside the file.
+ */
+static qboolean
+HasBytes(int n)
+{
+	return (data_p != NULL) && ((iff_end - data_p) >= n);
+}
+
+static wavinfo_t
+ParseWavinfo(char *name, byte *wav, int wavlength)
 {
 	wavinfo_t info;
 	int format;
@@ -118,7 +141,7 @@ GetWavinfo(char *name, byte *wav, int wavlength)
 	/* find "RIFF" chunk */
 	FindChunk("RIFF");
 
-	if (!(data_p && !strncmp((const char *)data_p + 8, "WAVE", 4)))
+	if (!(HasBytes(12) && !strncmp((const char *)data_p + 8, "WAVE", 4)))
 	{
 		Com_Printf("Missing RIFF/WAVE chunks\n");
 		return info;
@@ -129,7 +152,8 @@ GetWavinfo(char *name, byte *wav, int wavlength)
 
 	FindChunk("fmt ");
 
-	if (!data_p)
+	/* the header, then 16 bytes of format */
+	if (!HasBytes(8 + 16))
 	{
 		Com_Printf("Missing fmt chunk\n");
 		return info;
@@ -161,6 +185,13 @@ GetWavinfo(char *name, byte *wav, int wavlength)
 
 	if (data_p)
 	{
+		/* the loop start is the 4 bytes at offset 32 */
+		if (!HasBytes(36))
+		{
+			Com_Printf("Truncated cue chunk\n");
+			return info;
+		}
+
 		data_p += 32;
 		info.loopstart = GetLittleLong();
 
@@ -170,7 +201,7 @@ GetWavinfo(char *name, byte *wav, int wavlength)
 
 		if (data_p)
 		{
-			if (((data_p - wav) + 32 <= wavlength) &&
+			if (HasBytes(32) &&
 				!strncmp((const char *)data_p + 28, "mark", 4))
 			{
 				int i;
@@ -179,7 +210,12 @@ GetWavinfo(char *name, byte *wav, int wavlength)
 				   but it works with cooledit... */
 				data_p += 24;
 				i = GetLittleLong(); /* samples in loop */
-				info.samples = info.loopstart + i;
+				long long total = (long long)info.loopstart + i;
+
+				/* a total outside int is not a loop length, clamp it
+				   so the checks below refuse it */
+				info.samples = (total > INT_MAX) ? INT_MAX :
+						(total < INT_MIN) ? INT_MIN : (int)total;
 			}
 		}
 	}
@@ -214,6 +250,20 @@ GetWavinfo(char *name, byte *wav, int wavlength)
 	}
 
 	info.dataofs = (int)(data_p - wav);
+
+	return info;
+}
+
+wavinfo_t
+GetWavinfo(char *name, byte *wav, int wavlength)
+{
+	wavinfo_t info = ParseWavinfo(name, wav, wavlength);
+
+	/* nothing leaves here that a consumer cannot trust against the file */
+	if (!S_WavinfoValid(&info, wavlength))
+	{
+		memset(&info, 0, sizeof(info));
+	}
 
 	return info;
 }
