@@ -68,11 +68,6 @@ TEST(com_parse_tokens)
 		"{ \"origin\" \"-8 16 24\" \"angle\" \"90\" }");
 	pin_tokens(&pin, "comments and whitespace",
 		"  // a comment line\n\tword1 // trailing\n\n  word2\r\n//last");
-	/* Not pinned: a quoted string without its closing quote at the very
-	   end of the input. COM_Parse then returns *data_p one byte past
-	   the terminator and the next call reads beyond the string (found
-	   under ASAN while writing this test, TASK29); extend this test
-	   when that is fixed. */
 	pin_tokens(&pin, "quotes",
 		"\"\" \"a b\"c \"unterminated\nline\" end");
 	pin_tokens(&pin, "separators are not special",
@@ -82,6 +77,125 @@ TEST(com_parse_tokens)
 	pin_tokens(&pin, "empty", "");
 
 	t_pin("com-parse-tokens", pin.data);
+	t_text_free(&pin);
+}
+
+/* Parses one token from an exactly sized heap copy of input, so that a
+   cursor or a read beyond the terminator is a heap overflow under ASan.
+   Returns the cursor's offset from the start of the input, -1 for a NULL
+   cursor; the token goes to tok. */
+static long
+parse_one(const char *input, char *tok, size_t toksize)
+{
+	size_t n = strlen(input);
+	char *copy = malloc(n + 1);
+	char *p = copy;
+	long off;
+
+	memcpy(copy, input, n + 1);
+	Q_strlcpy(tok, COM_Parse(&p), toksize);
+	off = p ? (long)(p - copy) : -1;
+	free(copy);
+	return off;
+}
+
+TEST(com_parse_cursor_bounds)
+{
+	char tok[MAX_TOKEN_CHARS];
+	char *copy, *p;
+
+	/* An unterminated quoted token: the cursor stops at the terminator,
+	   it does not pass it. */
+	T_EQ_INT(parse_one("\"abc", tok, sizeof(tok)), 4);
+	T_EQ_STR(tok, "abc");
+
+	/* An empty quoted token: the closing quote is consumed. */
+	T_EQ_INT(parse_one("\"\"", tok, sizeof(tok)), 2);
+	T_EQ_STR(tok, "");
+
+	/* A quote as the last byte of the input. */
+	T_EQ_INT(parse_one("\"", tok, sizeof(tok)), 1);
+	T_EQ_STR(tok, "");
+
+	/* A quote followed by the terminator, after another token. */
+	copy = strdup("a \"");
+	p = copy;
+	T_EQ_STR(COM_Parse(&p), "a");
+	T_EQ_STR(COM_Parse(&p), "");
+	T_CHECK(p == copy + 3);
+	T_EQ_STR(COM_Parse(&p), "");
+	T_CHECK(p == NULL);
+	free(copy);
+
+	/* A comment at the end of the input ends the parse. */
+	copy = strdup("a //c");
+	p = copy;
+	T_EQ_STR(COM_Parse(&p), "a");
+	T_CHECK(p == copy + 1);
+	T_EQ_STR(COM_Parse(&p), "");
+	T_CHECK(p == NULL);
+	free(copy);
+
+	/* Only whitespace. */
+	T_EQ_INT(parse_one(" \t\n ", tok, sizeof(tok)), -1);
+	T_EQ_STR(tok, "");
+
+	/* A closing quote just before the terminator, and one before more
+	   text: the cursor is after the quote in both. */
+	T_EQ_INT(parse_one("\"ab\"", tok, sizeof(tok)), 4);
+	T_EQ_STR(tok, "ab");
+	T_EQ_INT(parse_one("\"ab\" c", tok, sizeof(tok)), 4);
+	T_EQ_STR(tok, "ab");
+}
+
+/* The tokens and the cursor offsets of well-formed input, pinned from
+   the function before the unterminated-quote change. */
+TEST(com_parse_cursor_pin)
+{
+	static const char *inputs[] = {
+		"a b  c",
+		"  lead trail  ",
+		"\"q one\" two \"\" three",
+		"x\"y\"z",
+		"a // c\nb",
+		"// only\n\n  tok",
+		"\"a\"\"b\"",
+		"a\tb\r\nc",
+		"one\x01two",
+		"\"a // not a comment\" b",
+		"{ \"k\" \"v\" }",
+		"\"\" ",
+	};
+	t_text_t pin = {0};
+	size_t i;
+
+	for (i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++)
+	{
+		size_t n = strlen(inputs[i]);
+		char *copy = malloc(n + 1);
+		char *p = copy;
+		int k;
+
+		memcpy(copy, inputs[i], n + 1);
+		t_text_printf(&pin, "input %d:", (int)i);
+
+		for (k = 0; k < 16; k++)
+		{
+			const char *tok = COM_Parse(&p);
+
+			t_text_printf(&pin, " [%s]@%ld", tok, p ? (long)(p - copy) : -1L);
+
+			if (!p)
+			{
+				break;
+			}
+		}
+
+		t_text_printf(&pin, "\n");
+		free(copy);
+	}
+
+	t_pin("com-parse-cursor", pin.data);
 	t_text_free(&pin);
 }
 
