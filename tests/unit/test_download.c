@@ -154,6 +154,14 @@ TEST(download_filter_extension_table)
 		{"libx.so.x", false},
 		{"libx.so.", false},
 		{"libx.so.1a", false},
+		{"x.dll1", false},
+		{"libx.so2", false},
+		{"x.a7", false},
+		{"x.dll_1", false},
+		/* names shorter than the extension */
+		{"x", false},
+		{"so", false},
+		{"dll", false},
 		/* the other rules, byte for byte as before */
 		{".x.wav", true},
 		{"/x.wav", true},
