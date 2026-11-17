@@ -1,5 +1,3 @@
-    # a frames line that does not parse stops the record before an engine runs (FIX48)
-    cfg_frames "$scen_dir/$scenario.cfg" "${PINS_DEMO:-demo1.dm2}" > /dev/null || exit 1
 #!/bin/bash
 # scripts/pins.sh -- the renderer-API pin harness driver (TASK27; INFORM8/9).
 # bash 3.2. Records reference frames from a renderer over a scenario, compares
@@ -536,6 +534,8 @@ cmd_record() {
     [ -f "$scen_dir/$scenario.cfg" ] || die "no scenario $scenario (see $scen_dir)"
     [ -z "${PINS_BIN:-}" ] || [ -f "$PINS_BIN" ] || die "no engine binary at $PINS_BIN (build the client, or set PINS_BIN)"
     check_store "$scenario" "$renderer"
+    # a frames line that does not parse stops the record before an engine runs (FIX48)
+    cfg_frames "$scen_dir/$scenario.cfg" "${PINS_DEMO:-demo1.dm2}" > /dev/null
     local rid; rid=$(run_id "$scenario" "$run") || exit 1
     local out; out=$(printf '%s' "$(store)/$scenario/$renderer/$rid" | tr -s /)
     check_arg "the pin store path" "$out" path
