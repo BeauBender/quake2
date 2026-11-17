@@ -110,8 +110,8 @@ def sysinfo():
     }
 
 
-def engine_run(eng, game, args, basedir, renderer, bound):
-    """One engine process: its wall time and the lines it printed."""
+def engine_run(eng, game, args, basedir, renderer, bound, log=None):
+    """One engine process: its wall time and the lines it printed (all into log)."""
     cmd = [os.path.join(eng, "quake2"), "-portable", "+set", "basedir", basedir,
            "+set", "game", game, "+set", "vid_renderer", renderer,
            "+set", "vid_fullscreen", "0", "+set", "s_initsound", "0"] + args + ["+quit"]
@@ -122,6 +122,9 @@ def engine_run(eng, game, args, basedir, renderer, bound):
     except subprocess.TimeoutExpired:
         die("an engine run outlived its %d s bound: %s" % (bound, " ".join(args)), 1)
     wall = time.monotonic() - t0
+    if log:
+        with open(log, "w") as f:
+            f.write(p.stdout + p.stderr)
     lines = [ln for ln in (p.stdout + p.stderr).splitlines()
              if ln.startswith("upscale_textures:") or "AddressSanitizer" in ln
              or "runtime error" in ln]
@@ -191,6 +194,8 @@ def run(a):
     eng = os.path.join(out, "engine")
     # a copy of the binaries: -portable writes beside it, outside the work tree
     os.makedirs(eng, exist_ok=True)
+    logs = os.path.join(out, "logs")
+    os.makedirs(logs, exist_ok=True)
     for f in os.listdir(src):
         if f == "quake2" or f.endswith((".dylib", ".so")):
             shutil.copy2(os.path.join(src, f), os.path.join(eng, f))
@@ -208,7 +213,8 @@ def run(a):
         for b in backends:
             wall, rc, got = engine_run(eng, "up-" + b,
                                        ["+upscale_textures", str(a.factor), b, "force"],
-                                       a.basedir, a.renderer, a.bound)
+                                       a.basedir, a.renderer, a.bound,
+                                       os.path.join(logs, "%s-%d.log" % (b, k + 1)))
             times.setdefault(b, []).append(wall)
             rcs.setdefault(b, []).append(rc)
             if k == 0:
