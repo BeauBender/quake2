@@ -24,6 +24,7 @@
  * =======================================================================
  */
 
+#include <dirent.h>
 #include <sys/stat.h>
 
 #include "test.h"
@@ -334,6 +335,157 @@ TEST(fs_malformed_paks)
 
 	t_pin("fs-malformed-paks", pin.data);
 	t_text_free(&pin);
+}
+
+/*
+ * Writes a pak byte for byte: size bytes of 'x', a header claiming a
+ * directory at hofs of hlen bytes, and n identical directory entries
+ * placed at dirpos. The header and the placement are independent so a
+ * test can make them disagree with the file.
+ */
+static void
+write_raw_pak(const char *relpath, int size, int dirpos, int hofs, int hlen,
+	const char *name, int fpos, int flen, int n)
+{
+	byte *buf = malloc(size);
+	int i;
+
+	memset(buf, 'x', size);
+	memcpy(buf, "PACK", 4);
+	put_le32(buf + 4, hofs);
+	put_le32(buf + 8, hlen);
+
+	for (i = 0; i < n; i++)
+	{
+		byte *d = buf + dirpos + i * 64;
+
+		memset(d, 0, 64);
+		memcpy(d, name, strlen(name) < 56 ? strlen(name) : 56);
+		put_le32(d + 56, fpos);
+		put_le32(d + 60, flen);
+	}
+
+	t_write_file(relpath, buf, size);
+	free(buf);
+}
+
+/* Number of open descriptors of this process. */
+static int
+open_fds(void)
+{
+	DIR *d = opendir("/dev/fd");
+	int n = 0;
+
+	T_REQUIRE(d != NULL);
+
+	while (readdir(d))
+	{
+		n++;
+	}
+
+	closedir(d);
+	return n;
+}
+
+/* Loads <mod>/pak0.pak; true when the pak was added. */
+static qboolean
+pak_accepted(const char *mod)
+{
+	t_console_reset();
+	FS_BuildGameSpecificSearchPath(mod);
+	return strstr(t_console(), "Added packfile") != NULL;
+}
+
+/*
+ * What the pak loader bounds: the directory against the size of the
+ * file, the entry count, and each entry against the size of the pack.
+ * A pak that fails one of these is skipped with a console line and its
+ * handle closed. A short header and an empty directory still end the
+ * process, as before.
+ */
+TEST(fs_pak_bounds)
+{
+	static const char *fatal_mods[] = { "t_pb_only_ident", "t_pb_dirlen0" };
+	char out[8192];
+	int base, i;
+	byte hdr[12];
+
+	/* Layout A: header, 8 data bytes, one directory entry at the end
+	   of the file (size 84). */
+	write_raw_pak("data/t_pb_good/pak0.pak", 84, 20, 20, 64, "a.txt", 12, 8, 1);
+	T_CHECK(pak_accepted("t_pb_good"));
+	T_EQ_STR(load("a.txt"), "xxxxxxxx");
+
+	/* The directory ends exactly at the end of the file (the good
+	   one), and one byte past it. */
+	write_raw_pak("data/t_pb_dir_past/pak0.pak", 84, 20, 21, 64, "a.txt", 12, 8, 1);
+	T_CHECK(!pak_accepted("t_pb_dir_past"));
+	T_EQ_STR(load("a.txt"), "<missing>");
+
+	/* A directory length that is not a whole number of entries, with
+	   room in the file for it. */
+	write_raw_pak("data/t_pb_dir_odd/pak0.pak", 85, 20, 20, 65, "a.txt", 12, 8, 1);
+	T_CHECK(!pak_accepted("t_pb_dir_odd"));
+
+	/* The entry-count limit and one past it. */
+	write_raw_pak("data/t_pb_count_max/pak0.pak", 12 + 64 * MAX_FILES_IN_PACK,
+		12, 12, 64 * MAX_FILES_IN_PACK, "f", 12, 0, MAX_FILES_IN_PACK);
+	T_CHECK(pak_accepted("t_pb_count_max"));
+	write_raw_pak("data/t_pb_count_over/pak0.pak", 12 + 64 * (MAX_FILES_IN_PACK + 1),
+		12, 12, 64 * (MAX_FILES_IN_PACK + 1), "f", 12, 0, MAX_FILES_IN_PACK + 1);
+	T_CHECK(!pak_accepted("t_pb_count_over"));
+
+	/* Layout B: header, directory, 8 data bytes at the end (size 84).
+	   An entry ending exactly at the end of the pack, and one byte
+	   past it, by offset and by size. */
+	write_raw_pak("data/t_pb_ent_end/pak0.pak", 84, 12, 12, 64, "a.txt", 76, 8, 1);
+	T_CHECK(pak_accepted("t_pb_ent_end"));
+	T_EQ_STR(load("a.txt"), "xxxxxxxx");
+	write_raw_pak("data/t_pb_ent_ofs/pak0.pak", 84, 12, 12, 64, "a.txt", 77, 8, 1);
+	T_CHECK(!pak_accepted("t_pb_ent_ofs"));
+	write_raw_pak("data/t_pb_ent_len/pak0.pak", 84, 12, 12, 64, "a.txt", 76, 9, 1);
+	T_CHECK(!pak_accepted("t_pb_ent_len"));
+
+	/* Negative size and negative offset. */
+	write_raw_pak("data/t_pb_ent_negsize/pak0.pak", 84, 12, 12, 64, "a.txt", 76, -1, 1);
+	T_CHECK(!pak_accepted("t_pb_ent_negsize"));
+	write_raw_pak("data/t_pb_ent_negofs/pak0.pak", 84, 12, 12, 64, "a.txt", -1, 8, 1);
+	T_CHECK(!pak_accepted("t_pb_ent_negofs"));
+
+	/* A name that fills its 56-byte field with no terminator. */
+	write_raw_pak("data/t_pb_name/pak0.pak", 84, 12, 12, 64,
+		"nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn", 76, 8, 1);
+	T_CHECK(!pak_accepted("t_pb_name"));
+
+	/* No descriptor stays open for a refused pak: the count after a
+	   switch to a mod with refused paks equals the count after a
+	   switch to a mod with none. */
+	t_write_file("data/t_pb_nopak/readme.txt", "x", 1);
+	FS_BuildGameSpecificSearchPath("t_pb_nopak");
+	base = open_fds();
+	for (i = 0; i < 40; i++)
+	{
+		FS_BuildGameSpecificSearchPath("t_pb_dir_past");
+		FS_BuildGameSpecificSearchPath("t_pb_ent_len");
+	}
+	FS_BuildGameSpecificSearchPath("t_pb_nopak");
+	T_EQ_INT(open_fds(), base);
+
+	/* A header with only the identifier, and a directory of length 0,
+	   end the process with the "too short" error. */
+	t_write_file("data/t_pb_only_ident/pak0.pak", "PACK", 4);
+	memcpy(hdr, "PACK", 4);
+	put_le32(hdr + 4, 12);
+	put_le32(hdr + 8, 0);
+	t_write_file("data/t_pb_dirlen0/pak0.pak", hdr, 12);
+
+	for (i = 0; i < 2; i++)
+	{
+		int status = t_expect_exit(switch_mod, (void *)fatal_mods[i], out, sizeof(out));
+
+		T_CHECK(status != 0);
+		T_CHECK(strstr(out, "is too short") != NULL);
+	}
 }
 
 /*
