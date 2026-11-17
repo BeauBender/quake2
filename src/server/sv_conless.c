@@ -148,6 +148,33 @@ SVC_GetChallenge(void)
 }
 
 /*
+ * Makes the engine's "ip" pair the only one in the connecting
+ * client's userinfo. Every pair the client sent under that key is
+ * removed first, so the game, which reads the first one, sees the
+ * source address. Returns false when the pair does not fit, in which
+ * case the userinfo has no usable "ip" and the connect is refused.
+ */
+qboolean
+SV_SetConnectIP(char *userinfo, const char *ip)
+{
+	size_t before;
+
+	/* Info_RemoveKey takes out one pair a call, the first: go on until
+	   a call removes nothing. */
+	do
+	{
+		before = strlen(userinfo);
+		Info_RemoveKey(userinfo, "ip");
+	}
+	while (strlen(userinfo) < before);
+
+	Info_SetValueForKey(userinfo, "ip", ip);
+
+	/* A pair that does not fit is dropped, with a message. */
+	return strcmp(Info_ValueForKey(userinfo, "ip"), ip) == 0;
+}
+
+/*
  * A connection request that did not come from the master
  */
 static void
@@ -183,7 +210,13 @@ SVC_DirectConnect(void)
 	Q_strlcpy(userinfo, Cmd_Argv(4), sizeof(userinfo));
 
 	/* force the IP key/value pair so the game can filter based on ip */
-	Info_SetValueForKey(userinfo, "ip", NET_AdrToString(net_from));
+	if (!SV_SetConnectIP(userinfo, NET_AdrToString(net_from)))
+	{
+		Netchan_OutOfBandPrint(NS_SERVER, adr,
+				"print\nUserinfo string too long.\n");
+		Com_DPrintf("    rejected connect: no room for the ip pair\n");
+		return;
+	}
 
 	/* attractloop servers are ONLY for local clients */
 	if (sv.attractloop)

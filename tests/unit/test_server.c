@@ -359,3 +359,128 @@ TEST(sv_rcon_log_line)
 	t_text_free(&junk);
 	Cvar_Set("rcon_password", "");
 }
+
+/*
+ * The engine's "ip" pair in the connecting client's userinfo
+ * (SV_SetConnectIP, sv_conless.c): the game reads the first "ip" pair,
+ * so the engine's must be the only one, or the connect refused.
+ */
+qboolean SV_SetConnectIP(char *userinfo, const char *ip);
+
+/* Number of pairs in an info string whose key is exactly key. */
+static int
+count_pairs(const char *info, const char *key)
+{
+	char copy[MAX_INFO_STRING * 2];
+	char *tok;
+	char *save = NULL;
+	int n = 0;
+	int is_key = 1;
+
+	Q_strlcpy(copy, info, sizeof(copy));
+
+	for (tok = strtok_r(copy, "\\", &save); tok; tok = strtok_r(NULL, "\\", &save))
+	{
+		if (is_key && !strcmp(tok, key))
+		{
+			n++;
+		}
+
+		is_key = !is_key;
+	}
+
+	return n;
+}
+
+/* Fills info with a "\pad\xxx" pair so the whole string is len long. */
+static void
+padded_userinfo(char *info, size_t len)
+{
+	memcpy(info, "\\pad\\", 5);
+	memset(info + 5, 'x', len - 5);
+	info[len] = '\0';
+}
+
+TEST(sv_connect_ip_pair)
+{
+	char info[MAX_INFO_STRING];
+
+	/* No ip key: exactly the source address. */
+	Q_strlcpy(info, "\\name\\bob\\skin\\male/grunt", sizeof(info));
+	T_CHECK(SV_SetConnectIP(info, "1.2.3.4"));
+	T_EQ_INT(count_pairs(info, "ip"), 1);
+	T_EQ_STR(Info_ValueForKey(info, "ip"), "1.2.3.4");
+	T_EQ_STR(Info_ValueForKey(info, "name"), "bob");
+
+	/* One forged pair: replaced. */
+	Q_strlcpy(info, "\\ip\\9.9.9.9\\name\\bob", sizeof(info));
+	T_CHECK(SV_SetConnectIP(info, "1.2.3.4"));
+	T_EQ_INT(count_pairs(info, "ip"), 1);
+	T_EQ_STR(Info_ValueForKey(info, "ip"), "1.2.3.4");
+	T_EQ_STR(Info_ValueForKey(info, "name"), "bob");
+
+	/* Two forged pairs: first and last. */
+	Q_strlcpy(info, "\\ip\\9.9.9.9\\name\\bob\\ip\\8.8.8.8", sizeof(info));
+	T_CHECK(SV_SetConnectIP(info, "1.2.3.4"));
+	T_EQ_INT(count_pairs(info, "ip"), 1);
+	T_EQ_STR(Info_ValueForKey(info, "ip"), "1.2.3.4");
+
+	/* Two forged pairs: first and middle of three. */
+	Q_strlcpy(info, "\\ip\\9.9.9.9\\ip\\7.7.7.7\\name\\bob\\ip\\8.8.8.8", sizeof(info));
+	T_CHECK(SV_SetConnectIP(info, "1.2.3.4"));
+	T_EQ_INT(count_pairs(info, "ip"), 1);
+	T_EQ_STR(Info_ValueForKey(info, "ip"), "1.2.3.4");
+
+	/* Three: the middle one is the last of several. */
+	Q_strlcpy(info, "\\name\\bob\\ip\\9.9.9.9\\ip\\7.7.7.7\\ip\\8.8.8.8\\skin\\x", sizeof(info));
+	T_CHECK(SV_SetConnectIP(info, "1.2.3.4"));
+	T_EQ_INT(count_pairs(info, "ip"), 1);
+	T_EQ_STR(Info_ValueForKey(info, "ip"), "1.2.3.4");
+	T_EQ_STR(Info_ValueForKey(info, "skin"), "x");
+
+	/* A key with no value, and one with an empty value. */
+	Q_strlcpy(info, "\\ip\\\\name\\bob\\ip", sizeof(info));
+	T_CHECK(SV_SetConnectIP(info, "1.2.3.4"));
+	T_EQ_INT(count_pairs(info, "ip"), 1);
+	T_EQ_STR(Info_ValueForKey(info, "ip"), "1.2.3.4");
+
+	/* Info_ValueForKey and Info_RemoveKey compare keys case-sensitively,
+	   so "IP" is another key: the game never reads it, and it stays. */
+	Q_strlcpy(info, "\\IP\\9.9.9.9\\name\\bob", sizeof(info));
+	T_CHECK(SV_SetConnectIP(info, "1.2.3.4"));
+	T_EQ_INT(count_pairs(info, "ip"), 1);
+	T_EQ_STR(Info_ValueForKey(info, "ip"), "1.2.3.4");
+	T_EQ_STR(Info_ValueForKey(info, "IP"), "9.9.9.9");
+
+	/* A longer key that starts with "ip" is not an ip pair. */
+	Q_strlcpy(info, "\\ipx\\keep\\name\\bob", sizeof(info));
+	T_CHECK(SV_SetConnectIP(info, "1.2.3.4"));
+	T_EQ_STR(Info_ValueForKey(info, "ipx"), "keep");
+	T_EQ_STR(Info_ValueForKey(info, "ip"), "1.2.3.4");
+}
+
+TEST(sv_connect_ip_length)
+{
+	char info[MAX_INFO_STRING];
+	size_t pair = strlen("\\ip\\1.2.3.4");
+
+	/* The engine's pair still fits: accepted, and the string is full. */
+	padded_userinfo(info, MAX_INFO_STRING - 1 - pair);
+	T_CHECK(SV_SetConnectIP(info, "1.2.3.4"));
+	T_EQ_INT((int)strlen(info), MAX_INFO_STRING - 1);
+	T_EQ_STR(Info_ValueForKey(info, "ip"), "1.2.3.4");
+	T_EQ_INT(count_pairs(info, "ip"), 1);
+
+	/* One byte longer: refused, with no ip pair left in the string. */
+	padded_userinfo(info, MAX_INFO_STRING - pair);
+	T_CHECK(!SV_SetConnectIP(info, "1.2.3.4"));
+	T_EQ_INT(count_pairs(info, "ip"), 0);
+
+	/* A forged pair is removed first, which makes the room. */
+	padded_userinfo(info, MAX_INFO_STRING - 1 - pair - 1);
+	strcat(info, "\\ip\\9");
+	T_EQ_INT((int)strlen(info), MAX_INFO_STRING - 1 - pair + 4);
+	T_CHECK(SV_SetConnectIP(info, "1.2.3.4"));
+	T_EQ_INT(count_pairs(info, "ip"), 1);
+	T_EQ_STR(Info_ValueForKey(info, "ip"), "1.2.3.4");
+}
