@@ -165,22 +165,89 @@ snapshot sees the GPU past the measured workload's tail, and only another client
 
 ### The re-measure of `rt-shadows-gpu-1920x1080`
 
-pending: screen locked. When this step was reached (2026-11-17, about 04:30 UTC) the screen was
-locked (`ioreg -n Root -d1` held `CGSSessionScreenIsLocked`), and a timing needs it unlocked
-(the shared runbook's [how a run works](../plans/metal-port-harness.md#how-a-run-works)). To run once
-it is unlocked, with a copy of the case that states `prewarm=240` (so it has a case hash, and a
-baseline directory, of its own and no stored set is replaced), and one that states `prewarm=0`
-for the cold run's frequencies, `BENCH_STORE` the TASK154 store:
+2026-11-17, 09:03 to 10:00 UTC, on this branch's own harness (pre-warm 240 s, the quiet gate, a
+snapshot and the frequency probe around every run), inside `heavy.sh` holds, three runs a set after
+one warm-up run. Host class `Apple M6, Apple M6 GPU, macOS 27.2.1, physical`, token
+`h-e159846095d1`. The store is this card's own (the TASK154 store was not written; its stored
+set was copied before `drift` ran on the copy). The screen was unlocked (`ioreg -n Root -d1`
+printed 0) before and after every batch below. No other `quake2` of anyone else was running when
+a batch started (the lock holds the others off). The case copies are the committed case with
+`prewarm=240` or `prewarm=0` added and `gate_gpu=40` (why, below); they have case hashes of their
+own, so no stored set was replaced.
 
-```sh
-scripts/bench/bench.sh baseline put <copy with prewarm=240> 96b9c661
-scripts/bench/bench.sh baseline put <copy with prewarm=240> <main>
-scripts/bench/bench.sh baseline put <copy with prewarm=0> <main>
-scripts/bench/bench.sh compare <copy with prewarm=240> --before 96b9c661 --after <main>
-```
+**The numbers** (`rts_ms`, the shadow pass's GPU time per frame over the 311 warm frames):
 
-Each run file then carries `freq.gpu.mhz` and `freq.gpu.top` for the cold and the warm runs, and
-`prewarm.freq.*` for the end of the pre-warm.
+| Set | Prewarm | Runs (ms) | Median | Quiet flags | `freq.gpu` in the run window: MHz, share at top state, active | `freq.pacc0`: MHz, share at top | Load before to after |
+|---|---|---|---|---|---|---|---|
+| `96b9c661`, warm | 240 s, ran its length | 4.266, 4.308, 4.556 | 4.308 | yes, yes, yes | 506 to 508, 0.0 %, 32 % | 3574 to 3726, 45 % to 48 % | 1.47 to 2.20 |
+| `9476feb1` (main), warm | 240 s, ran its length | 4.667, 4.713, 4.733 | 4.713 | yes, yes, yes | 510 to 512, 0.0 %, 32 % | 3644 to 3986, 47 % to 60 % | 1.85 to 3.27 |
+| `9476feb1` (main), cold | none | 4.691, 4.724, 4.756 | 4.724 | yes, yes, yes | 504 to 505, 0.0 %, 31 % | 4032 to 4122, 64 % to 69 % | 1.63 to 2.55 |
+
+- **Compare**, warm sets: `verdict=fail`, 4.308 to 4.713 ms, +9.40 percent (the case accepts 0).
+  The p90 of the pass is the same (5.252 against 5.272).
+- **Quiet flags.** All nine runs are `quiet=yes` (`quiet.reason=none`), gate waits of 4 to 6 s. The
+  snapshots before a run read GPU device utilization 0 to 8 percent and CPU busy 5 to 17 percent,
+  and the top process was the session's own tooling or `WindowServer`. After a run the GPU read 4
+  to 29 percent (the highest in a cold run and in one warm one); `mds_stores` and `searchpartyd`
+  were the top process in some after snapshots. Load average over the batches: 1.47 to 3.27, with
+  5.26 at the start of the first batch, which the gate then waited out.
+- **The pre-warm** ran its length (`prewarm.stop=time`, 10 workload runs, 242 to 243 s). Over its
+  last workload run the GPU read 815 MHz and 2.4 percent at the top state before `96b9c661` and
+  1643 MHz and 88.3 percent before main (the clock was not the same at the end of the two
+  pre-warms), the P-cluster 2447 MHz against 4638 MHz.
+
+**Cold against warm frequencies** (main, medians of three runs; the top state is 1735 MHz for the
+GPU and 4788 MHz for the P-cluster):
+
+| | GPU MHz | GPU at top state | GPU active | P-cluster MHz | P-cluster at top state |
+|---|---|---|---|---|---|
+| cold (`prewarm=0`) | 505 | 0.0 % | 31 % | 4060 | 67 % |
+| warm (`prewarm=240`) | 510 | 0.0 % | 32 % | 3673 | 49 % |
+
+**Drift against the TASK154 stored set** (run on a copy of its store, one drift run with the
+committed case and pre-warm 240): `96b9c661` read 4.811 ms against the stored 1.6226 to 1.7354
+(median 1.68): `drift=outside`. The run had `quiet=no`, `quiet.reason=gpu.after` (GPU device 30
+percent after it). Its GPU window was 504 MHz, 0.0 percent at the top state, 32 percent active.
+The re-measure that followed on the copy was also `quiet=no` on all three runs and so was not
+stored.
+
+**Verdict.**
+
+- **The move is the GPU's clock policy, not the build and not the pre-warm.** In every run of
+  this card the case's window ran the GPU at about 505 MHz and never at the top state: the case
+  has display sync on, the timedemo is held to 60 frames a second, and the GPU is active 31 to
+  32 percent of the window, so the clock stays at its floor. The pass then takes 4.3 to 4.8 ms.
+  The stored 1.68 ms of TASK154 (and the card's 1.67 ms after a pre-warm) was taken with the
+  GPU at a higher clock; nothing recorded then says which, and a rate of 1735 MHz against 505
+  MHz is a factor of 3.4 in clock against 2.8 in time (4.7 ms against 1.68 ms), the same
+  direction and size of effect as the TASK154 note on the MetalFX scaler (it repeats to the
+  microsecond when the GPU is kept busy, and takes longer when it idles between frames).
+- **Pre-warm does not make it go away.** Cold and warm main read 4.724 and 4.713 ms in the same
+  clock (505 and 510 MHz). A pre-warm of full-rate runs (display sync off) leaves the GPU at the
+  top state at its end (88 percent) but the clock is back at its floor in the counted run (it fell back during the gate wait
+  or the warm-up, which this card did not record separately), so a pre-warm does not hold it
+  up for a display-synced run.
+- **So the card's "1.67 ms after a pre-warm" is not reproduced today.** It is explained as a
+  run in which the GPU was clocked up (by a pre-warm with sync off, or by another client);
+  with sync on and a quiet host, the clock is at the floor and the pass is 4.3 to 4.8 ms.
+  Measuring the pass at the clock it will have in the game (display sync on) is what this case
+  does; a number comparable across sessions needs the case to hold the clock (display sync off
+  or a pinned workload around the window), which is a change to the case and is left to a card.
+- **The 96b9c661 to main difference** (+0.4 ms, 9 percent) is seen with the same GPU clock
+  (508 and 510 MHz) and the same frames, so it is not the clock; the runs of each build lie
+  within 0.3 ms. This card cannot say whether it is the code between the two commits or the
+  state the pre-warm left; it needs a repeat, with the builds alternated.
+
+**The quiet gate's false alarm on this case.** With the committed case (`gate_gpu` 10) `baseline
+put` refused three sets in a row (`quiet.reason=gpu.after`, GPU 29 to 30 percent right after
+the run, the top process `mds_stores`): a display-synced run is GPU-active 32 percent of its
+window, and the driver's utilization figure lags and averages, so it still reads the run's own use
+1 s after the exit. Those refusals are why the copies carry `gate_gpu=40`. The tool's flag is
+right to refuse an unknown reading; for a display-synced case the limit after a run wants a
+value of its own, or a longer wait before the after snapshot, which is a follow-up.
+
+The run files, the batch logs (screen state and load before and after) and the three refused
+attempts are under this card's artifacts folder (`TASK166/timing/`), local only.
 
 ## Review round 1
 
@@ -231,4 +298,4 @@ mutant source-stub-lost: caught by t_drift (drift: 12.3 gave: ... quiet=yes sour
 `t_snap_argv` starts a `sleep` of its own under `bash -c 'exec -a "<argv[0]>" sleep 30'`, points
 the reader's own `ps` columns at it with a stand-in `ps` (the reader's arguments without `-A` and
 `-r`, plus `-p <pid>`), and ends it by its pid. Nothing here ran the engine, and the
-re-measure above is still pending an unlocked screen.
+re-measure above ran later, with the screen unlocked.
