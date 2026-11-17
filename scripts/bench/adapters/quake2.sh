@@ -34,6 +34,9 @@
 #                     display-hz requirement is refused with a file, since
 #                     nothing else reads the display
 #
+# Its pre-warm workload (adapter_prewarm, for the core's prewarm=) is the
+# case's own run with vsync=0 and seconds= cut to the time left.
+#
 # The case keys it reads:
 #   targets      make targets, for example "client game ref_metal"
 #   build_flags  make variables, NAME=value words, for example
@@ -764,6 +767,38 @@ adapter_run() {
 		return 1
 	fi
 	q2_check_log "$_qr_log"
+}
+
+# adapter_prewarm <case> <build dir> <log> <seconds>: one piece of the
+# core's pre-warm (TASK166): the case's own run with display sync off
+# (vsync=0, so the GPU never waits for the display) and seconds= cut to
+# <seconds> when that is shorter, through adapter_run on a copy of the
+# case with those two words changed.
+adapter_prewarm() {
+	_qw_s=$(q2_word seconds)
+	bench_is_uint "$4" || {
+		q2_say "the pre-warm's length is not whole seconds"
+		return 1
+	}
+	[ "$4" -ge "${_qw_s:-0}" ] || _qw_s=$4
+	_qw_c=${BENCH_TMP:?}/quake2-prewarm.case
+	awk -v s="$_qw_s" 'index($0, "settings=") == 1 {
+		n = split(substr($0, 10), w, " ")
+		out = ""
+		for (i = 1; i <= n; i++) {
+			if (w[i] ~ /^vsync=/) w[i] = "vsync=0"
+			else if (w[i] ~ /^seconds=/) w[i] = "seconds=" s
+			out = out (i > 1 ? " " : "") w[i]
+		}
+		print "settings=" out
+		next
+	} { print }' "$1" > "$_qw_c" || return 1
+	_qw_keep=$BENCH_CASE_FILE
+	BENCH_CASE_FILE=$_qw_c
+	_qw_st=0
+	adapter_run "$_qw_c" "$2" "$3" || _qw_st=$?
+	BENCH_CASE_FILE=$_qw_keep
+	return "$_qw_st"
 }
 
 adapter_metrics() {

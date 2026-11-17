@@ -14,3 +14,7 @@ better=lower
 abs_tol=0.5
 rel_tol=0.02
 accept=5
+# No pre-warm, and a quiet gate that passes at its first quiet reading, so
+# the self-test runs fast; the TASK166 tests set their own.
+prewarm=0
+gate_hold=0
