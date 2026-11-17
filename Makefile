@@ -1877,6 +1877,9 @@ $(TEST_BIN) : $(TEST_OBJS)
 	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(TEST_COVFLAGS) $(TEST_OBJS) $(LDLIBS) -o $@
 
+# test_ipfilter.c includes the game's g_svcmds.c whole
+$(TESTDIR)/tests/unit/test_ipfilter.o : src/game/g_svcmds.c
+
 endif
 
 # ----------
