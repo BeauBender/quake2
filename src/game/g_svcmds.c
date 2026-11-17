@@ -111,6 +111,13 @@ StringToFilter(char *s, ipfilter_t *f)
 
 		while (*s >= '0' && *s <= '9')
 		{
+			/* an octet longer than num is refused, not truncated */
+			if (j >= (int)sizeof(num) - 1)
+			{
+				gi.cprintf(NULL, PRINT_HIGH, "Bad filter address: %s\n", s);
+				return false;
+			}
+
 			num[j++] = *s++;
 		}
 
@@ -149,8 +156,20 @@ SV_FilterPacket(char *from)
 		return false;
 	}
 
+	/* a value with fewer than four parts leaves the rest at 0 */
+	for (i = 0; i < 4; i++)
+	{
+		m[i] = 0;
+	}
+
 	i = 0;
 	p = from;
+
+	/* the engine formats an address as "[a.b.c.d]:port", or bare */
+	if (*p == '[')
+	{
+		p++;
+	}
 
 	while (*p && i < 4)
 	{
@@ -162,7 +181,7 @@ SV_FilterPacket(char *from)
 			p++;
 		}
 
-		if (!*p || (*p == ':'))
+		if (!*p || (*p == ':') || (*p == ']'))
 		{
 			break;
 		}

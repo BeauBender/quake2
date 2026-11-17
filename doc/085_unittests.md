@@ -89,6 +89,7 @@ that runs longer than `t_child_timeout` seconds (10) is killed and
 reported as `T_EXIT_TIMEOUT`, so a hang cannot stall the gate. A check
 that fails inside the child fails the test. `t_pin(name, text)` compares against a pin.
 A new `test_*.c` file is picked up by the Makefile automatically.
+`tests/unit/test_ipfilter.c` includes the game module's `src/game/g_svcmds.c` whole, with a fake `gi` and `filterban`, to test the IP filter.
 
 A test that crashes (a segfault, an abort) or a run that is
 interrupted prints the name of the running test to stderr, and the
