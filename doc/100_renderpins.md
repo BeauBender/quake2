@@ -220,6 +220,22 @@ A live record taken while the host stalls for more than 100 ms a frame
 can still differ from another live record (see `skywater` above); its
 replay matches it all the same.
 
+A temporal MetalFX scaler (`r_metalfx 2`) makes that caveat reach every
+frame. At 5120x2880 (`PINS_HIDPI=1` at 2560x1440) the capture itself
+takes the frame after it past 100 ms, so that frame's `refdef_t.time`
+differs between two live records by a few milliseconds. The frame is not
+captured, so without the scaler, or with the spatial one, the records
+repeat; the temporal scaler's history carries it into every later frame.
+Measured (FIX96) on `ref_metal`, `water.dm2`, `PINS_EVERY=30`, five
+records a case: every pair of records differs on 4 of 5 frames, by up to
+3.9 % of the pixels and 11 levels (`compare` worst score 4.6e-05, bad
+fraction 0), at `r_rt_water_hits` 0 and 1, with `r_rt_water 0`, and in
+`world-metalfx2`; at 1920x1080 and 640x480 the records repeat. Such a
+case is not compared byte for byte live against live: judge it at the
+harness's thresholds (the defaults, 0.02 and 0.005, pass it), or record
+it at a size whose records repeat. `replay` takes the time from the
+trace, but it takes no `PINS_HIDPI=1`, so it was not tried at this size.
+
 A seeded record (`PINS_SEED`, the engine's `pins_seed`) is for making
 pins, not for hosting a server: a listen server started in that process
 draws its spawn count from the fixed stream. `pins_record` without
