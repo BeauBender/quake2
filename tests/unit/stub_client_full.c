@@ -212,7 +212,6 @@ void OGG_Shutdown(void) { }
 void OGG_Stop(void) { }
 void OGG_PlayTrack(const char *t, qboolean c, qboolean i) { }
 void OGG_LoadAsWav(char *f, wavinfo_t *i, void **b) { }
-wavinfo_t GetWavinfo(char *n, byte *w, int l) { wavinfo_t i = {0}; return i; }
 qboolean SDL_BackendInit(void) { return false; }
 void SDL_BackendShutdown(void) { }
 qboolean SDL_Cache(sfx_t *s, wavinfo_t *i, byte *d, short v, int a, int b, int c, int e) { return false; }

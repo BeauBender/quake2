@@ -390,6 +390,8 @@ typedef struct
 	int stencil_bits;
 	int msaa_buffers;
 	int msaa_samples;
+	int rate_stats;      /* metal_stats is on: sample the presented rate and print its line at the close (TASK161) */
+	double rate_start;   /* metal_rate_start: seconds after the first frame at which the window begins */
 } mgl_config_t;
 
 int mgl_layer_create(void *sdl_window, const mgl_config_t *config, char *err, size_t errlen);

@@ -17,7 +17,7 @@ This builds `build/release/test/yq2test` (or `build/debug/test/` with
 `DEBUG=1`) and runs it. The test binary links the same objects as the
 dedicated server `q2ded`, built with the same flags, plus the client
 files `cl_conback.c`, `cl_download.c`, `cl_parse.c`, `cl_network.c`, `cl_entities.c`,
-`cl_screen.c`, the texture upscaler's checks, decisions and file write `cl_upscale.c`, the sound frontend `sound/sound.c` and the window
+`cl_screen.c`, the texture upscaler's checks, decisions and file write `cl_upscale.c`, the sound frontend `sound/sound.c`, the WAV header checks `sound/wave.c` and the window
 code's SDL-free part `vid/glimp_hidpi.c`, the video menu's rules `menu/vidrules.c` (see "Client stubs" below),
 the shared renderer files `src/client/refresh/files/surf.c` and
 `src/client/refresh/files/imgscale.c` (`scale2x`, `R_FloodFillSkin` and
