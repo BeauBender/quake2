@@ -449,6 +449,8 @@ selftest()
 	expect refuse "container: image: with no value" cnoimage
 	cjob cnokey '    container:' '      env:' '        NODE_ENV: development'
 	expect refuse "container: a mapping with no image key" cnokey
+	cjob cseq '    container: [debian:testing]'
+	expect refuse "container: a sequence" cseq
 	cjob cexpr '    container:' "      image: \${{vars.REGISTRY}}/debian@sha256:$dig"
 	expect refuse "container: image: \${{vars.REGISTRY}}/debian@sha256:<64 hex>" cexpr
 	cjob svc '    services:' '      nginx:' '        image: nginx' '        ports:' \
