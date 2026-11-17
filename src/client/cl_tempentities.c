@@ -1575,7 +1575,7 @@ CL_AddHeatBeams(void)
 
 		ent.angles[0] = -pitch;
 		ent.angles[1] = yaw + 180.0f;
-		ent.angles[2] = (float)((cl.time) % 360);
+		ent.angles[2] = (float)((unsigned)cl.time % 360u);
 		ent.frame = framenum;
 
 		while (d > 0)

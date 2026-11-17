@@ -165,3 +165,97 @@ TEST(cl_entities_one_light_per_lit_effect_bit)
 		}
 	}
 }
+
+/* ---- the client time as an index (FIX39) ---- */
+
+/* One entity that animates by the client time; the lowest frame handed
+   to the renderer must not be negative, whatever the time. */
+static void
+check_anim_at_time(unsigned effect, int time)
+{
+	frame_t frame;
+
+	stub_client_cvars();
+	memset(&cl, 0, sizeof(cl));
+	memset(&frame, 0, sizeof(frame));
+	CL_AllocEntity(ENT_NUM);
+	cl.time = time;
+
+	memset(&cl_parse_entities[0], 0, sizeof(cl_parse_entities[0]));
+	cl_parse_entities[0].number = ENT_NUM;
+	cl_parse_entities[0].modelindex = 1;
+	cl_parse_entities[0].effects = effect;
+	frame.num_entities = 1;
+
+	memset(&stub_calls, 0, sizeof(stub_calls));
+	CL_AddPacketEntities(&frame);
+	T_EQ_INT(stub_calls.ents, 1);
+	T_CHECK(stub_calls.min_ent_frame >= 0);
+}
+
+TEST(cl_anim_all_time_zero)
+{
+	check_anim_at_time(EF_ANIM_ALL, 0);
+}
+
+TEST(cl_anim_all_time_minus_one)
+{
+	check_anim_at_time(EF_ANIM_ALL, -1);
+}
+
+TEST(cl_anim_all_time_int_min)
+{
+	check_anim_at_time(EF_ANIM_ALL, INT_MIN);
+}
+
+TEST(cl_anim_all_time_int_max)
+{
+	check_anim_at_time(EF_ANIM_ALL, INT_MAX);
+}
+
+TEST(cl_anim_allfast_time_minus_one)
+{
+	check_anim_at_time(EF_ANIM_ALLFAST, -1);
+}
+
+TEST(cl_anim_allfast_time_int_min)
+{
+	check_anim_at_time(EF_ANIM_ALLFAST, INT_MIN);
+}
+
+/* The client time is clamped next to the server time at every edge. */
+static void
+check_add_entities_clamp(int time, int servertime)
+{
+	stub_client_cvars();
+	memset(&cl, 0, sizeof(cl));
+	memset(&cls, 0, sizeof(cls));
+	cls.state = ca_active;
+	cl.frame.valid = true;
+	cl.frame.servertime = servertime;
+	cl.time = time;
+	CL_AddEntities();
+	T_CHECK((int)((unsigned)servertime - (unsigned)cl.time) >= 0);
+	T_CHECK((int)((unsigned)servertime - (unsigned)cl.time) <= 100);
+}
+
+TEST(cl_add_entities_clamp_ordinary)
+{
+	check_add_entities_clamp(5000, 4000);
+	T_EQ_INT(cl.time, 4000);
+	check_add_entities_clamp(100, 4000);
+	T_EQ_INT(cl.time, 3900);
+}
+
+TEST(cl_add_entities_clamp_int_min_server_time)
+{
+	check_add_entities_clamp(INT_MAX, INT_MIN);
+	check_add_entities_clamp(0, INT_MIN);
+	check_add_entities_clamp(INT_MIN, INT_MIN + 20);
+}
+
+TEST(cl_add_entities_clamp_int_max_server_time)
+{
+	check_add_entities_clamp(INT_MIN, INT_MAX);
+	check_add_entities_clamp(-1, INT_MAX);
+}

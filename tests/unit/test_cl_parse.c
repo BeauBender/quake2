@@ -23,6 +23,8 @@
  * =======================================================================
  */
 
+#include <limits.h>
+
 #include "test.h"
 #include "../../src/client/header/client.h"
 #include "../../src/client/sound/header/local.h"
@@ -394,4 +396,110 @@ TEST(cl_playernum_max_clients_refused)
 	build_serverdata(MAX_CLIENTS);
 	T_EXPECT_DROP(CL_ParseServerMessage());
 	T_CONSOLE_HAS("playernum");
+}
+
+/* ---- the client time (FIX39) ---- */
+
+/* One frame with the given number and nothing in it. */
+static void
+build_numbered_frame(int serverframe)
+{
+	SZ_Init(&net_message, msgbuf, sizeof(msgbuf));
+	MSG_WriteByte(&net_message, svc_frame);
+	MSG_WriteLong(&net_message, serverframe);
+	MSG_WriteLong(&net_message, -1);
+	MSG_WriteByte(&net_message, 0);
+	MSG_WriteByte(&net_message, 0);
+	MSG_WriteByte(&net_message, svc_playerinfo);
+	MSG_WriteShort(&net_message, 0);
+	MSG_WriteLong(&net_message, 0);
+	MSG_WriteByte(&net_message, svc_packetentities);
+	MSG_WriteByte(&net_message, 0);
+	MSG_WriteByte(&net_message, 0);
+	MSG_BeginReading(&net_message);
+}
+
+/* The distance from the client time up to the server time. */
+static int
+time_behind(void)
+{
+	return (int)((unsigned)cl.frame.servertime - (unsigned)cl.time);
+}
+
+/* The frame is taken, its time is the wrapped product, and the client
+   time sits in the window just behind it. */
+static void
+check_frame_number(int serverframe)
+{
+	reset_client();
+	build_numbered_frame(serverframe);
+	CL_ParseServerMessage();
+	T_EQ_INT(cl.frame.serverframe, serverframe);
+	T_EQ_INT(cl.frame.servertime, (int)((unsigned)serverframe * 100u));
+	T_CHECK(cl.frame.valid);
+	T_CHECK(time_behind() >= 0);
+	T_CHECK(time_behind() <= 100);
+}
+
+static void
+check_frame_number_refused(int serverframe)
+{
+	reset_client();
+	build_numbered_frame(serverframe);
+	T_EXPECT_DROP(CL_ParseServerMessage());
+	T_CONSOLE_HAS("bad frame number");
+}
+
+TEST(cl_frame_number_zero)
+{
+	check_frame_number(0);
+	T_EQ_INT(cl.frame.servertime, 0);
+}
+
+TEST(cl_frame_number_one)
+{
+	check_frame_number(1);
+	T_EQ_INT(cl.frame.servertime, 100);
+}
+
+TEST(cl_frame_number_minus_one_refused)
+{
+	check_frame_number_refused(-1);
+}
+
+TEST(cl_frame_number_int_min_refused)
+{
+	check_frame_number_refused(INT_MIN);
+}
+
+/* The largest number whose product with 100 fits an int. */
+TEST(cl_frame_number_last_without_overflow)
+{
+	check_frame_number(INT_MAX / 100);
+	T_EQ_INT(cl.frame.servertime, (INT_MAX / 100) * 100);
+	T_EQ_INT(cl.time, cl.frame.servertime - 100);
+}
+
+/* One more wraps: the time goes through the edge and the clamp follows. */
+TEST(cl_frame_number_first_with_wrap)
+{
+	check_frame_number(INT_MAX / 100 + 1);
+	T_CHECK(cl.frame.servertime < 0);
+}
+
+TEST(cl_frame_number_int_max)
+{
+	check_frame_number(INT_MAX);
+}
+
+/* A client time already near the top follows a wrapped server time. */
+TEST(cl_time_follows_server_time_across_wrap)
+{
+	reset_client();
+	cl.time = INT_MAX - 40;
+	build_numbered_frame(INT_MAX / 100 + 1);
+	CL_ParseServerMessage();
+	T_CHECK(cl.frame.servertime < 0);
+	T_CHECK(time_behind() >= 0);
+	T_CHECK(time_behind() <= 100);
 }
