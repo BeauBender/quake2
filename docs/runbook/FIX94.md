@@ -46,3 +46,59 @@ The runs:
   `memory_pressure -Q`, the GPU's utilization, `pmset -g therm`) before
   every run; the frame rate, the busy share, `scaler_ms` and one other
   pass's GPU time per build.
+
+## The code: where `scaler_ms` is taken, before and after FIX51
+
+The same code takes the scaler's time at `8caca620` and at `95a3f955`:
+FIX51 changed nothing in `rmb_metalfx.m` or in `rmb_frame_cut`. With
+`metal_stats` on, `rmb_fx_upscale` (`rmb_metalfx.m`) calls
+`rmb_frame_cut` (`rmb_encode.m`), which commits the frame's command
+buffer so far (`rmb_commit_partial`: the G-buffer and the 3D view at the
+input size, after the uploads) and goes on in a new one. The scaler is then
+encoded alone into a command buffer of `rmb_queue` of its own, labelled
+`ref_metal metalfx`, committed at once, and its completed handler stores
+`(GPUEndTime - GPUStartTime) * 1000` in `fx_ms`. The copy of the scaler's
+output (`fx_out`, its own target) into the frame goes into the frame's
+next command buffer. `RM_FX_End` (`rm_fxscene.c`) prints the last
+stored value on every view at `metal_stats 2`; the bench adapter reads
+that line (`scripts/bench/adapters/quake2.sh`). One scaler encode a view,
+before and after: the scaler's command buffer holds the same one encoder.
+
+So `scaler_ms` is, before and after, the wall span on the GPU's clock from
+the start to the end of one command buffer, not the scaler's own GPU
+cycles: whatever else the GPU runs while that buffer is on it, from
+another queue or another process, lies inside the span.
+
+What FIX51 changed on the frame's command-buffer path, with display sync
+off (the case's `vsync=0`):
+
+- **The present left the frame's queue.** Before, the copy of the frame to
+  the drawable, FIX53's alpha pass and `presentDrawable` were in the
+  frame's last command buffer on `rmb_queue`, after the scaler's in queue
+  order; the next frame's command buffers, the next scaler's among them,
+  queued behind it. After, they are one pass (`rmb_present_pass`) in a
+  command buffer of a second queue, `rmb_present_queue`, which the serial
+  dispatch queue `rmb_present_order` commits once every command buffer of
+  the frame has completed (`rmb_present_commit`). By then the engine is
+  encoding and committing the next frame, so the present of frame N and
+  the next frame's command buffers, its scaler's among them, can be on the
+  GPU at the same time.
+- **The frame no longer waits for a drawable.** The drawable is acquired
+  ahead on a serial queue (`rmb_next_drawable`); a frame with no drawable
+  ready, or with every present slot held, is drawn and not presented. The
+  frame loop then runs at `vid_maxfps` (300 in the case) rather than at the
+  window server's pace, and only some of its frames are presented.
+- **The frame is drawn into a present slot's target**, one of
+  `RMB_PRESENTS` (4) targets in turn, not into one target of its own. The
+  scaler's inputs (the render-size colour, depth and motion) and its
+  output (`fx_out`) are not those targets: the scaler's command buffer
+  reads and writes the same textures as before.
+- **Every command buffer of a frame joins its present's dispatch group**
+  (`rmb_watch`): one more completed handler on the CPU, no GPU work.
+
+Hypothesis 3 (more work in the scaler's command buffer, or the scaler
+twice) is ruled out by the code: the scaler's command buffer holds one
+encoder, from the same call, with the same textures, once a view. The two
+changes that can move the span are the present on a second queue (work
+of another queue inside the span: hypothesis 2) and the frame pace (the
+GPU's clock: hypothesis 1); the runs below tell them apart.
