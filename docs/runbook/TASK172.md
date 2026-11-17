@@ -26,7 +26,10 @@ square); and `primary-1` ("LCD-1", screen 3) 2007x2853 pixels at 3x, 669x951 poi
 native rotation 270. Both card figures hold. It also lists a "Resizable" scene display
 (`com.apple.CoreSimulator.display.resizableScene`), powered off.
 
-What the engine logs at start, on main (before this card) and with it, the same:
+What the engine logs at start. On main (before this card) the `Real display mode: 678x466@60.00`,
+`ref_metal: safe area: window 2034x1398 pixels, insets left 252 top 0 right 0 bottom 102` and
+`Drawable size: 1782x1296` lines; with this card the same three and the new `Screen:` line, which
+gives the points, each inset and the orientation:
 
 | state | window (points) | window (pixels) | insets left / top / right / bottom (points) | orientation | view (pixels) |
 | --- | --- | --- | --- | --- | --- |
@@ -135,7 +138,21 @@ base1" --shot <s> --out <artifacts>/TASK172/<run>`, each through the host lock.
    portrait (`orientation 3` or `4`), and whether the HUD's corners clear the status bar on the right.
 4. Record the look decision (Hor+ with a vertical minimum, or another rule) here.
 
-## Checks
+## iPhone and iPad unchanged
 
-The iPhone 17 and iPad Pro 11-inch smokes (`scripts/ios-sim.sh smoke`) and `tests/check-ios.sh` on
-this card's tree: see the card's report.
+On this card's tree, each through the host lock:
+
+- `scripts/ios-sim.sh smoke` on the iPhone 17 and on the iPad Pro 11-inch (M5): `smoke ok` on both
+  (the safe rectangle pixel for pixel, at most one `vid_restart`, the quit path, no validation
+  message). Their `Screen:` lines: iPhone 17 874x402 points, 2622x1206 pixels, insets 62 / 0 / 62 /
+  20 points, orientation 1; iPad 1210x834 points, 2420x1668 pixels, insets 0 / 0 / 0 / 20 points,
+  orientation 3 (SDL's orientation of the iPad's display, whose own is portrait; the window is
+  landscape).
+- TASK147 item 2 again (`run --data <data dir> --launch "+map base1" --shot 45`, the owner's data):
+  the iPhone 17's safe rectangle 2250x1146 at insets 186 / 0 / 186 / 60 pixels and the iPad's
+  2420x1628 at 0 / 0 / 0 / 40, both TASK147's exactly; `Drawable size:` is the window less the
+  insets, one refresher initialization each, and no lit pixel outside the rectangle in the
+  screenshot (counted at every second pixel by a throwaway script, the iPad's frame turned
+  clockwise; the other turn leaves 23874 outside).
+- `tests/check-ios.sh`: `check-ios: ok (54 mutants refused; 125 smoke selftest cases; 65 device
+  selftest cases; 174 objects for the simulator; 174 for a device; ios_objects)`.
