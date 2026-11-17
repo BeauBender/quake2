@@ -1388,8 +1388,54 @@ DEAF
 	[ "$fails" -eq 0 ]
 }
 
+# A numeric setting is also at most 9 digits (as the quake2 adapter's own cap is): a
+# longer value wraps in shell arithmetic (a grace of 7.8e18 s, or -2) or makes a test
+# fail inside its `if`, so a wait never gave up. Refused before any arithmetic, status 2.
+t_digit_cap() {
+	fresh cap
+	for _v in 1234567890 99999999999999999999; do
+		( . "$R/core/common.sh" 2> /dev/null; bench_is_uint "$_v" ) && bad "cap: bench_is_uint accepts $_v"
+		for _s in BENCH_STOP_GRACE BENCH_LOCK_WAIT BENCH_LOCK_GRACE; do
+			rm -f "${E:?}/ran"
+			_st=0
+			env "$_s=$_v" sh "$R/bench.sh" lock run cap -- touch "${E:?}/ran" > "${E:?}/out" 2> "${E:?}/err" || _st=$?
+			[ "$_st" -eq 2 ] || bad "cap: $_s=$_v was not refused with 2 (status $_st)"
+			[ ! -e "${E:?}/ran" ] || bad "cap: $_s=$_v let the command run"
+			grep -q "$_s is whole seconds" "${E:?}/err" || bad "cap: $_s=$_v: the refusal does not name the setting"
+		done
+		for _k in warmup wall; do
+			zcase "$_k" "$_v"
+			_st=0
+			B case "${E:?}/z.case" > /dev/null 2> "${E:?}/err" || _st=$?
+			[ "$_st" -eq 2 ] || bad "cap: the case key $_k=$_v was not refused with 2 (status $_st)"
+		done
+		_st=0
+		( . "$R/core/common.sh" 2> /dev/null; bench_bounded "$_v" true ) > /dev/null 2>&1 || _st=$?
+		[ "$_st" -eq 2 ] || bad "cap: a wall time of $_v was not refused with 2 (status $_st)"
+	done
+	( . "$R/core/common.sh" 2> /dev/null; bench_is_uint 999999999 ) || bad "cap: bench_is_uint refuses 999999999"
+	for _s in BENCH_STOP_GRACE BENCH_LOCK_WAIT BENCH_LOCK_GRACE; do
+		_st=0
+		env "$_s=999999999" sh "$R/bench.sh" lock run cap -- true > /dev/null 2>&1 || _st=$?
+		[ "$_st" -eq 0 ] || bad "cap: $_s=999999999 was refused (status $_st)"
+	done
+	for _k in warmup wall; do
+		zcase "$_k" 999999999
+		_st=0
+		B case "${E:?}/z.case" > /dev/null 2> "${E:?}/err" || _st=$?
+		[ "$_st" -eq 0 ] || bad "cap: the case key $_k=999999999 was refused"
+	done
+	# the cksum fallback reads CRCs of up to 10 digits: the cap is not theirs
+	mkdir -p "${E:?}/fakebin"
+	printf '#!/bin/sh\ncat > /dev/null\necho "4294967295 3"\n' > "${E:?}/fakebin/cksum"
+	chmod +x "${E:?}/fakebin/cksum"
+	_h=$(printf 'x\n' | ( PATH="${E:?}/fakebin:$PATH" BENCH_HASH=cksum; export PATH BENCH_HASH; . "$R/core/common.sh" 2> /dev/null; bench_hash ) 2> /dev/null) || _h=
+	[ "$_h" = ffffffffffffffff ] || bad "cap: a 10-digit CRC from cksum gave '$_h'"
+	[ "$fails" -eq 0 ]
+}
+
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero"
+all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_digit_cap"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
@@ -1463,6 +1509,8 @@ mutant core-names-game core/common.sh '' '# the Quake II adapter' t_generic || m
 mutant reclaim-guard core/lock.sh 'if ! mkdir "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' 'if ! mkdir -p "${BENCH_LOCK_GUARD:?}" 2> /dev/null; then' t_lock_guard || mfail=1
 mutant bare-no-grace core/lock.sh '-ge "$_la_grace" ]; then' '-ge 0 ]; then' t_lock_guard || mfail=1
 mutant leading-zero-accepted core/common.sh "'' | *[!0-9]* | 0?*) return 1 ;;" "'' | *[!0-9]*) return 1 ;;" t_leading_zero || mfail=1
+mutant digit-cap-dropped core/common.sh '	bench_is_uint_max "$1" 9' '	bench_is_uint_max "$1" 99' t_digit_cap || mfail=1
+mutant digit-cap-crc core/common.sh '! bench_is_uint_max "$_bh_a" 10' '! bench_is_uint_max "$_bh_a" 9' t_digit_cap || mfail=1
 # Last: it writes into the throwaway repository's work tree.
 mutant store-in-repo core/store.sh 'bench_outside_repo "$BENCH_STORE_ROOT" "the store (BENCH_STORE)"' ':' t_store_guard || mfail=1
 [ "$mfail" -eq 0 ] || exit 1

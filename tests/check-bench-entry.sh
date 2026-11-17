@@ -639,6 +639,29 @@ EOF
 	[ "$fails" -eq 0 ]
 }
 
+# t_grace_refused, with the real bench core: a BENCH_STOP_GRACE that is not
+# whole seconds by the core's rule (08, 10 digits, 20 digits) is not raised
+# by the gate (the 9-digit cap is also bench.sh's own, so the gate's copy of
+# it changes nothing a run can see), and bench.sh refuses it: status 2,
+# the setting named, no check started. The check ends at once, so a gate
+# that did start it ends too.
+t_grace_refused() {
+	mktree gracerefused real
+	printf '#!/bin/sh\necho "start $$" >> "$LOG"\n' > "${T:?}/tests/check-a.sh"
+	BENCH_STATE=${T:?}/state
+	export BENCH_STATE
+	for _gv in 08 1234567890 99999999999999999999; do
+		: > "${LOG:?}"
+		_gs=0
+		env GATE_JOBS=1 BENCH_STOP_GRACE="$_gv" PATH="$GATEPATH" sh "${T:?}/scripts/test.sh" > "${T:?}/out" 2>&1 || _gs=$?
+		[ "$_gs" -eq 2 ] || bad "grace-refused: BENCH_STOP_GRACE=$_gv gave status $_gs, not 2; $(say)"
+		grep -q 'BENCH_STOP_GRACE is whole seconds' "${T:?}/out" || bad "grace-refused: BENCH_STOP_GRACE=$_gv: no refusal naming the setting; $(say)"
+		! grep -q '^start ' "${LOG:?}" || bad "grace-refused: a check started under BENCH_STOP_GRACE=$_gv; $(say)"
+	done
+	unset BENCH_STATE
+	[ "$fails" -eq 0 ]
+}
+
 # t_orphan, with the real bench core (the lock on): a KILL to the caller's
 # process group that lands after bench_spawn has forked the run but before
 # the run's shell has started leaves the run with launchd as its parent, so
@@ -703,7 +726,7 @@ EOF
 }
 
 # ---- The real entry points. ---------------------------------------------
-all="t_gate t_coverage t_cov_lc t_pins t_off t_nested t_kgrp t_grace t_orphan"
+all="t_gate t_coverage t_cov_lc t_pins t_off t_nested t_kgrp t_grace t_grace_refused t_orphan"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
@@ -780,6 +803,7 @@ mutant gate-orphan-runs test.sh 'if [ "$gate_lock_shell" = 1 ]; then' 'if false;
 # the caller's BENCH_STOP_GRACE back.
 mutant gate-grace-kept test.sh 'BENCH_STOP_GRACE=10' ':' t_grace || mfail=1
 mutant gate-grace-lost test.sh 'set -- BENCH_STOP_GRACE="$BENCH_STOP_GRACE" "$@"' ':' t_grace || mfail=1
+mutant gate-grace-old-rule test.sh "'' | *[!0-9]* | 0?*) ;;" '*[!0-9]*) ;;' t_grace_refused || mfail=1
 mutant coverage-lc-lost coverage.sh 'else set -- -u LC_ALL "$@"; fi' 'fi' t_cov_lc || mfail=1
 # With no state directory the lock is off; CI is GitHub Actions only; a
 # lock that is off says so.
