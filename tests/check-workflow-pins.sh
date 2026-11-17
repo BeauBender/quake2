@@ -277,7 +277,9 @@ selftest()
 	expect accept "# uses: actions/checkout@v7 (a comment)" commented
 	step qkey "      - \"uses\": actions/checkout@v7"
 	expect refuse "- \"uses\": actions/checkout@v7 (a quoted key)" qkey
-	step crlf '    - name: Check out repository code' "      uses: actions/checkout@$sha # v7.0.1"
+	step runline '    - name: Show the step' '      run: echo "uses: actions/checkout@v7"'
+	expect accept "run: echo \"uses: actions/checkout@v7\" (not a key)" runline
+	step crlf '    - name: Check out repository code' "      uses: actions/checkout@$sha"
 	awk '{ printf "%s\r\n", $0 }' "${tmp:?}/crlf/w.yml" > "${tmp:?}/crlf/w.crlf"
 	mv "${tmp:?}/crlf/w.crlf" "${tmp:?}/crlf/w.yml"
 	expect accept "a pinned file with CRLF line ends" crlf
