@@ -227,6 +227,7 @@ void SV_InitOperatorCommands(void);
 
 void SV_SendServerinfo(client_t *client);
 void SV_UserinfoChanged(client_t *cl);
+qboolean SV_SetConnectIP(char *userinfo, const char *ip);
 
 void Master_Heartbeat(void);
 void Master_Packet(void);
