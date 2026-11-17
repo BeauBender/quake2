@@ -10,7 +10,8 @@
 # bare or quoted, with at most a "# comment" after it:
 #   uses: <owner>/<repo>[/<path>]@<ref>   an action or a reusable workflow:
 #                                         <ref> is 40 lowercase hex digits
-#   uses: ./<path>                        an action in this repository
+#   uses: ./<path>  or  $/<path>          an action or a reusable workflow
+#                                         in this repository
 #   uses: docker://<image>                a Docker action: as image: below
 #   image: <image>                        a container or service image
 #   container: <image>                    the same, in the string form
@@ -133,7 +134,7 @@ match($0, /^[ \t]*(-[ \t]+)*[\047"]?(uses|image|container)[\047"]?[ \t]*:([ \t]|
 		next
 	}
 	if (key == "uses") {
-		if (v ~ /^\.\//)
+		if (v ~ /^[.$]\//)
 			next
 		if (v ~ /^docker:\/\//) {
 			if (!pinned_image(v))
@@ -262,6 +263,8 @@ selftest()
 	expect refuse "uses: actions/checkout (no ref)" noref
 	step local '    - name: Local action' '      uses: ./.github/actions/x'
 	expect accept "uses: ./.github/actions/x" local
+	step dollar '      - uses: $/.github/actions/hello-world-action'
+	expect accept "- uses: \$/.github/actions/hello-world-action" dollar
 	wf reusable w.yml '  call-workflow:' \
 		"    uses: octo-org/this-repo/.github/workflows/workflow-1.yml@$sha"
 	expect accept "uses: owner/repo/.github/workflows/x.yml@<40 hex>" reusable
