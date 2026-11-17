@@ -174,13 +174,14 @@ reap() {
 	kill -TERM "$1" 2> /dev/null || true
 	wait_gone 30 "$1" || kill -KILL "$1" 2> /dev/null || true
 }
-# wait_held <seconds> <label>: the lock shows <label> with its child pid.
+# wait_held <seconds> <label>: the lock shows <label> with its child pid
+# (the holder's line, the first: a waiter's line has a label too).
 wait_held() {
 	_n=0
 	while :; do
 		case $(B lock status 2> /dev/null) in
-		*"label=$2 "*"child=none "*) ;;
-		*"label=$2 "*) return 0 ;;
+		"lock=held label=$2 "*"child=none "*) ;;
+		"lock=held label=$2 "*) return 0 ;;
 		esac
 		[ "$_n" -lt $(($1 * 10)) ] || return 1
 		sleep 0.1
@@ -917,6 +918,246 @@ t_lock_stall() {
 	*) bad "stall: a stalled maker and a taker held the lock at once: $(tr '\n' ' ' < "${E:?}/slog")" ;;
 	esac
 	[ "$(B lock status)" = lock=free ] || bad "stall: the lock was left held"
+	[ "$fails" -eq 0 ]
+}
+
+# ---- The queue (FIX106): waiters are served in arrival order. ------------
+# qfix: the scripts the queue tests run, in E. rec.sh <log> <label> appends
+# "<label> start <time>", sleeps 0.2 s, then "<label> end <time>" (times
+# from Time::HiRes); hold.sh <file> <log> <label> does the same, holding
+# until <file> exists; late.sh <file> <command...> waits for <file>, then
+# becomes the command (exec), so the lock shell keeps late.sh's pid: one
+# spawned first and released last arrives last with the lowest pid.
+qfix() {
+	cat > "${E:?}/rec.sh" << 'EOF'
+t() { perl -MTime::HiRes=time -e 'printf "%.6f\n", time'; }
+printf '%s start %s\n' "$2" "$(t)" >> "$1"
+sleep 0.2
+printf '%s end %s\n' "$2" "$(t)" >> "$1"
+EOF
+	cat > "${E:?}/hold.sh" << 'EOF'
+t() { perl -MTime::HiRes=time -e 'printf "%.6f\n", time'; }
+printf '%s start %s\n' "$3" "$(t)" >> "$2"
+while [ ! -e "$1" ]; do sleep 0.05; done
+printf '%s end %s\n' "$3" "$(t)" >> "$2"
+EOF
+	cat > "${E:?}/late.sh" << 'EOF'
+while [ ! -e "$1" ]; do sleep 0.05; done
+shift
+exec "$@"
+EOF
+	: > "${E:?}/log"
+}
+# tickets: the names of the queue's tickets, in order, one a line.
+tickets() {
+	ls "${E:?}/state/queue" 2> /dev/null | grep '^w\.' || true
+}
+# ticket_of <pid>: the name of the ticket that carries pid=<pid>, if any.
+ticket_of() {
+	for _tk in $(tickets); do
+		if grep -qx "pid=$1" "${E:?}/state/queue/$_tk" 2> /dev/null; then
+			echo "$_tk"
+			return 0
+		fi
+	done
+	return 1
+}
+# wait_said <seconds> <file>: <file> says its caller waits for the lock.
+wait_said() {
+	_n=0
+	while ! grep -q 'waiting for the lock' "$2" 2> /dev/null; do
+		[ "$_n" -lt $(($1 * 10)) ] || return 1
+		sleep 0.1
+		_n=$((_n + 1))
+	done
+}
+# order: the labels of the log's start lines, by their times.
+order() {
+	awk '$2 == "start" { print $3, $1 }' "${E:?}/log" | sort -n | awk '{ printf "%s ", $2 }'
+}
+# serial: by time, the log runs start, end, start, end, each pair with one
+# label: no two commands held the lock at once.
+serial() {
+	awk '{ print $3, $1, $2 }' "${E:?}/log" | sort -n | awk '
+		o == "" { if ($3 != "start") b = 1; o = $2; next }
+		{ if ($3 != "end" || $2 != o) b = 1; o = "" }
+		END { exit b || o != "" }'
+}
+# holder <label>: a holder that keeps the lock until $E/release exists.
+holder() {
+	start sh "$R/bench.sh" lock run "$1" -- sh "$E/hold.sh" "$E/release" "$E/log" "$1" > "${E:?}/$1.out" 2>&1
+	HOLDER=$BG
+	wait_held 5 "$1" || bad "queue: the holder $1 never held the lock"
+}
+# finish <test> <pid> <status>: waits for <pid>, wants <status>.
+finish() {
+	wait_gone 30 "$2" || {
+		bad "$1: pid $2 did not finish"
+		reap "$2"
+	}
+	_st=0
+	wait "$2" || _st=$?
+	[ "$_st" -eq "$3" ] || bad "$1: pid $2 exited $_st, not $3"
+}
+
+t_lock_fifo() {
+	fresh fifo
+	qfix
+	# A holds; B waits, with a poll of 3 s, so it naps while A releases and
+	# asks again at once; B must get the lock before A's second call.
+	start sh -c 'sh "$1/bench.sh" lock run A1 -- sh "$2/hold.sh" "$2/release" "$2/log" A1; sh "$1/bench.sh" lock run A2 -- sh "$2/rec.sh" "$2/log" A2' x "$R" "$E" > "${E:?}/a.out" 2>&1
+	_a=$BG
+	wait_held 5 A1 || bad "fifo: A never held the lock"
+	start env BENCH_LOCK_POLL=3 sh "$R/bench.sh" lock run B -- sh "$E/rec.sh" "$E/log" B > "${E:?}/b.out" 2>&1
+	_b=$BG
+	wait_said 10 "${E:?}/b.out" || bad "fifo: B never waited"
+	: > "${E:?}/release"
+	finish fifo "$_a" 0
+	finish fifo "$_b" 0
+	[ "$(order)" = "A1 B A2 " ] || bad "fifo: a holder that released and asked again went before the waiter: $(order)"
+	serial || bad "fifo: two commands held the lock at once: $(tr '\n' ' ' < "${E:?}/log")"
+	[ -z "$(tickets)" ] || bad "fifo: tickets left behind: $(tickets | tr '\n' ' ')"
+	[ "$fails" -eq 0 ]
+}
+
+t_lock_order() {
+	fresh order
+	qfix
+	holder H
+	# C3 spawned first and C1 last, so the pids run against the arrival
+	# order; each later arrival polls faster, so would win a plain race.
+	_ps=
+	for _c in C3:0.1 C2:1 C1:2; do
+		start sh "$E/late.sh" "$E/go.${_c%%:*}" env BENCH_LOCK_POLL="${_c#*:}" sh "$R/bench.sh" lock run "${_c%%:*}" -- sh "$E/rec.sh" "$E/log" "${_c%%:*}" > "${E:?}/${_c%%:*}.out" 2>&1
+		_ps="$_ps $BG"
+	done
+	for _c in C1 C2 C3; do
+		: > "${E:?}/go.$_c"
+		wait_said 10 "${E:?}/$_c.out" || bad "order: $_c never waited"
+	done
+	: > "${E:?}/release"
+	for _p in $_ps; do finish order "$_p" 0; done
+	finish order "$HOLDER" 0
+	[ "$(order)" = "H C1 C2 C3 " ] || bad "order: three waiters did not get the lock in arrival order: $(order)"
+	serial || bad "order: two commands held the lock at once: $(tr '\n' ' ' < "${E:?}/log")"
+	[ -z "$(tickets)" ] || bad "order: tickets left behind: $(tickets | tr '\n' ' ')"
+	[ "$fails" -eq 0 ]
+}
+
+t_lock_dead_waiter() {
+	fresh deadw
+	qfix
+	holder H
+	start env BENCH_LOCK_GRACE=1 sh "$R/bench.sh" lock run W1 -- sh "$E/rec.sh" "$E/log" W1 > "${E:?}/w1.out" 2>&1
+	_w1=$BG
+	wait_said 10 "${E:?}/w1.out" || bad "dead waiter: W1 never waited"
+	start env BENCH_LOCK_GRACE=1 sh "$R/bench.sh" lock run W2 -- sh "$E/rec.sh" "$E/log" W2 > "${E:?}/w2.out" 2>&1
+	_w2=$BG
+	wait_said 10 "${E:?}/w2.out" || bad "dead waiter: W2 never waited"
+	[ "$(ticket_of "$_w1")" = "$(tickets | sed -n 1p)" ] && [ -n "$(tickets | sed -n 1p)" ] ||
+		bad "dead waiter: the first waiter's ticket is not first in the queue: $(tickets | tr '\n' ' ')"
+	kill -KILL "$_w1"
+	# Reaped: a zombie still answers kill -0.
+	wait "$_w1" 2> /dev/null || true
+	: > "${E:?}/release"
+	finish "dead waiter" "$_w2" 0
+	finish "dead waiter" "$HOLDER" 0
+	[ "$(order)" = "H W2 " ] || bad "dead waiter: the waiter behind a killed one did not get the lock: $(order)"
+	# Within one poll (0.1 s) and the grace (1 s) of the release, with 1 s
+	# for the holder's lock shell to see its command end and 1 s of slack.
+	_d=$(awk '$1 == "H" && $2 == "end" { e = $3 } $1 == "W2" && $2 == "start" { s = $3 } END { printf "%.2f", s - e }' "${E:?}/log")
+	awk -v d="$_d" 'BEGIN { exit !(d <= 3.1) }' || bad "dead waiter: the next waiter took the lock $_d s after the release"
+	[ -z "$(tickets)" ] || bad "dead waiter: the killed waiter's ticket was left behind: $(tickets | tr '\n' ' ')"
+	[ "$fails" -eq 0 ]
+}
+
+t_lock_giveup() {
+	fresh giveup
+	qfix
+	holder H
+	start env BENCH_LOCK_WAIT=1 sh "$R/bench.sh" lock run G -- echo ran > "${E:?}/g.out" 2>&1
+	_g=$BG
+	_seen=
+	_n=0
+	while [ "$_n" -lt 100 ] && pid_running "$_g"; do
+		_tk=$(ticket_of "$_g") || _tk=
+		if [ -n "$_tk" ] && grep -qx 'label=G' "${E:?}/state/queue/$_tk"; then
+			_seen=1
+			break
+		fi
+		sleep 0.02
+		_n=$((_n + 1))
+	done
+	[ -n "$_seen" ] || bad "give-up: the waiter showed no ticket (its pid= and label=) while it waited"
+	finish give-up "$_g" 75
+	grep -q 'still held by H (pid ' "${E:?}/g.out" || bad "give-up: the waiter did not name the holder: $(cat "${E:?}/g.out")"
+	[ -z "$(tickets)" ] || bad "give-up: a waiter that gave up left its ticket: $(tickets | tr '\n' ' ')"
+	start env BENCH_LOCK_WAIT=60 sh "$R/bench.sh" lock run T -- echo ran > "${E:?}/t.out" 2>&1
+	_w=$BG
+	wait_said 10 "${E:?}/t.out" || bad "give-up: the TERM waiter never waited"
+	[ -n "$(ticket_of "$_w")" ] || bad "give-up: the TERM waiter showed no ticket while it waited"
+	kill -TERM "$_w"
+	finish give-up "$_w" 143
+	[ -z "$(ls -A "${E:?}/state/queue" 2> /dev/null)" ] || bad "give-up: a waiter TERMed while it waited left a file in the queue: $(ls -A "${E:?}/state/queue" | tr '\n' ' ')"
+	! grep -q '^ran$' "${E:?}/t.out" || bad "give-up: the TERMed waiter ran its command"
+	: > "${E:?}/release"
+	finish give-up "$HOLDER" 0
+	[ "$fails" -eq 0 ]
+}
+
+t_lock_queue_reentry() {
+	fresh reentq
+	qfix
+	# The holder's command waits for $E/go, then runs a nested lock run
+	# with no wait at all, which lists the queue's tickets from inside.
+	cat > "${E:?}/nest.sh" << 'EOF'
+while [ ! -e "$1/go" ]; do sleep 0.05; done
+BENCH_LOCK_WAIT=0 sh "$2/bench.sh" lock run inner -- sh -c '{ ls "$1/state/queue" 2> /dev/null || true; } | grep "^w\." > "$1/inner.q"; echo inner-ran' x "$1" > "$1/inner.out" 2>&1
+echo "$?" > "$1/inner.st"
+EOF
+	start sh "$R/bench.sh" lock run H -- sh "$E/nest.sh" "$E" "$R" > "${E:?}/h.out" 2>&1
+	_h=$BG
+	wait_held 5 H || bad "re-entry: the holder never held the lock"
+	start sh "$R/bench.sh" lock run W -- echo w-ran > "${E:?}/w.out" 2>&1
+	_w=$BG
+	wait_said 10 "${E:?}/w.out" || bad "re-entry: the waiter never waited"
+	[ -n "$(ticket_of "$_w")" ] || bad "re-entry: the waiter showed no ticket"
+	: > "${E:?}/go"
+	wait_file 10 "${E:?}/inner.st" || bad "re-entry: the nested call never finished"
+	[ "$(cat "${E:?}/inner.st" 2> /dev/null)" = 0 ] && grep -q '^inner-ran$' "${E:?}/inner.out" ||
+		bad "re-entry: a nested call under the holder's token, behind a waiter, did not pass through: $(cat "${E:?}/inner.out")"
+	[ "$(cat "${E:?}/inner.q" 2> /dev/null)" = "$(ticket_of "$_w")" ] || bad "re-entry: the nested call took a ticket: $(tr '\n' ' ' < "${E:?}/inner.q")"
+	! grep -q 'waiting for the lock' "${E:?}/inner.out" || bad "re-entry: the nested call waited"
+	finish re-entry "$_h" 0
+	finish re-entry "$_w" 0
+	[ -z "$(tickets)" ] || bad "re-entry: tickets left behind: $(tickets | tr '\n' ' ')"
+	[ "$fails" -eq 0 ]
+}
+
+t_lock_queue_status() {
+	fresh qstatus
+	qfix
+	holder H
+	_ps=
+	for _c in S1 S2 S3; do
+		start sh "$R/bench.sh" lock run "$_c" -- true > "${E:?}/$_c.out" 2>&1
+		_ps="$_ps $BG"
+		wait_said 10 "${E:?}/$_c.out" || bad "status: $_c never waited"
+	done
+	B lock status > "${E:?}/status"
+	sed -n 1p "${E:?}/status" | grep -Eq '^lock=held label=H pid=[0-9]+ child=[0-9]+ alive=yes since=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' ||
+		bad "status: the holder's line changed: $(sed -n 1p "${E:?}/status")"
+	_i=0
+	for _p in $_ps; do
+		_i=$((_i + 1))
+		sed -n "$((_i + 1))p" "${E:?}/status" | grep -Eq "^waiter=$_i label=S$_i pid=$_p since=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\$" ||
+			bad "status: line $((_i + 1)) is not waiter $_i (S$_i, pid $_p): $(sed -n "$((_i + 1))p" "${E:?}/status")"
+	done
+	[ "$(wc -l < "${E:?}/status")" -eq 4 ] || bad "status: wanted the holder and three waiters, got: $(tr '\n' '|' < "${E:?}/status")"
+	: > "${E:?}/release"
+	for _p in $_ps; do finish status "$_p" 0; done
+	finish status "$HOLDER" 0
+	[ "$(B lock status)" = lock=free ] || bad "status: not lock=free once the queue is empty: $(B lock status)"
 	[ "$fails" -eq 0 ]
 }
 
@@ -1955,7 +2196,7 @@ t_digit_cap() {
 }
 
 # ---- The real tree. ---------------------------------------------------
-all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle"
+all="t_hygiene t_generic t_lock_exclusion t_lock_tokens t_lock_stop t_spawn_stderr t_lock_defer t_bounded t_lock_reclaim t_lock_guard t_lock_stall t_lock_fifo t_lock_order t_lock_dead_waiter t_lock_giveup t_lock_queue_reentry t_lock_queue_status t_lock_state_dir t_store_guard t_host t_inputs t_case t_stats t_store t_drift t_compare t_leading_zero t_quiet_case t_gate t_prewarm t_quiet_marker t_freq t_snap_system t_snap_argv t_freq_reason t_drift_quiet t_gate_poll t_probe_first t_digit_cap t_settle"
 only=
 if [ "$#" -gt 0 ]; then
 	all=$*
