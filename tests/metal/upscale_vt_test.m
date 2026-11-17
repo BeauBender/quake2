@@ -125,6 +125,7 @@ main(void)
 		printf("facts at 2x: os %d, isSupported %d, factor %d, config %d, model %d\n",
 			f.os, f.supported, f.factor, f.config, f.model);
 		CL_UpscaleVTFacts(4, &f);
+		/* the scaling cases need the model, judged at 4x */
 		printf("facts at 4x: os %d, isSupported %d, factor %d, config %d, model %d\n",
 			f.os, f.supported, f.factor, f.config, f.model);
 
@@ -141,6 +142,17 @@ main(void)
 
 			for (factor = 2; factor <= 4; factor += 2)
 			{
+				/* the M6 has 4x only: a factor VideoToolbox lacks is not run */
+				CL_UpscaleVTFacts(factor, &f);
+
+				if (!f.factor)
+				{
+					printf("skipped: VideoToolbox has no %dx here\n", factor);
+					check(!CL_UpscaleVTBegin(factor, reason, sizeof(reason)),
+						"a run at a factor it lacks does not start");
+					continue;
+				}
+
 				check(CL_UpscaleVTBegin(factor, reason, sizeof(reason)),
 					"a run starts");
 

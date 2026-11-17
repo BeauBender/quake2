@@ -87,7 +87,7 @@ else
 	for no in 'http://' 'https://' '<script' '<link' 'src="'; do
 		! grep -q -F "$no" "$rep" || bad "the report is not self-contained: $no"
 	done
-	[ "$(grep -c 'class="crop"' "$rep")" = 12 ] || bad "not 4 names by 3 backends of matched crops"
+	[ "$(grep -o 'class="crop"' "$rep" | wc -l | tr -d ' ')" = 12 ] || bad "not 4 names by 3 backends of matched crops"
 fi
 grep -q 'scale2x: .* to .* s (median' "${tmp:?}/run.log" || bad "the run printed no time range"
 ls "$out" | grep -q '\.html$' || bad "no html in the output"
