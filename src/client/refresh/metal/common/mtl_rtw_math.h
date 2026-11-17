@@ -450,8 +450,9 @@ mtl_rtw_choose_ws(int hit, int on_screen, unsigned mat, float off, float dist, i
  * reflection there shows what lies behind it (at 0, none). The step works
  * per face: a face of a model the view does not show at that pixel is
  * passed, so a shown model's unseen far side is passed too. Hidden brush models (doors, plats) are
- * map faces and are shaded. r_rt_water_hits 0 takes the same step
- * (mtl_rtw_ss_next, FIX81).
+ * map faces and are shaded. r_rt_water_hits 0 takes the same step for the
+ * alias models and passes hidden brush models too (mtl_rtw_ss_next, FIX81
+ * and FIX92).
  */
 static inline int
 mtl_rtw_ws_next(int hit, int alias, unsigned from, int layer, int map)
@@ -465,24 +466,48 @@ mtl_rtw_ws_next(int hit, int alias, unsigned from, int layer, int map)
 }
 
 /*
- * FIX81: the reflection ray's step at r_rt_water_hits 0 (rm_rtw_trace),
- * after TASK58's choice from (mtl_rtw_choose) at its layer'th hit: the
- * rule of r_rt_water_hits 1 (mtl_rtw_ws_next), so both settings pass over
- * exactly the same models. Before it every face stopped the ray, so an
- * alias model the picture does not show (behind a wall, in the PVS) ended
- * it with no reflection, and the water showed the model's outline as a
- * hole in front of a wall the picture shows. Now the ray goes on behind
- * such a model and ends where it would end without it: after
- * MTL_RTW_LAYERS of their faces with the map's instances alone
- * (MTL_RTW_MASK_MAP), so in at most MTL_RTW_LAYERS + 1 intersections. Past
- * that bound a model the picture shows behind them is passed too (no
- * reflection at 0, see mtl_rtw_ws_next). A
- * ray whose first hit is anything else is cast once, as before, and a map
- * face the picture does not show (a hidden door too) still gives none.
+ * FIX92: 1 when a face whose instance's first word is b (rmb_rt_frame's
+ * per-instance words: its first triangle of the world's index buffer, ~0
+ * for an alias model) is an inline brush model's (a door, a plat, a lift):
+ * not an alias model's and not the world's, whose first word is world
+ * (rmb_rt_bind_geometry's fourth word, ~0 when the world has no
+ * structure). A Metal intersection gives the instance, not its mask, so
+ * this word, not a mask bit, tells the two apart.
  */
 static inline int
-mtl_rtw_ss_next(int hit, int alias, unsigned from, int layer, int map)
+mtl_rtw_brush(unsigned b, unsigned world)
 {
+	return (b != 0xffffffffu) && (b != world);
+}
+
+/*
+ * FIX81: the reflection ray's step at r_rt_water_hits 0 (rm_rtw_trace),
+ * after TASK58's choice from (mtl_rtw_choose) at its layer'th hit: the
+ * rule of r_rt_water_hits 1 (mtl_rtw_ws_next) for the alias models, so
+ * both settings pass over exactly the same ones. Before it every face
+ * stopped the ray, so an alias model the picture does not show (behind a
+ * wall, in the PVS) ended it with no reflection, and the water showed the
+ * model's outline as a hole in front of a wall the picture shows. Now the
+ * ray goes on behind such a model and ends where it would end without it:
+ * after MTL_RTW_LAYERS of their faces with the map's instances alone
+ * (MTL_RTW_MASK_MAP), so in at most MTL_RTW_LAYERS + 1 intersections. Past
+ * that bound a model the picture shows behind them is passed too (no
+ * reflection at 0, see mtl_rtw_ws_next). A ray whose first hit is anything
+ * else is cast once, as before, and a world face the picture does not
+ * show still gives none.
+ *
+ * FIX92: brush 1 when the face is an inline brush model's (mtl_rtw_brush).
+ * At 0 a brush model the picture does not show (a door, a plat, a lift) is
+ * passed as an alias model is, and counts towards the same MTL_RTW_LAYERS
+ * faces, so the bound stays MTL_RTW_LAYERS + 1 intersections; at 1 it is
+ * shaded where it is instead (mtl_rtw_ws_next is unchanged). The last
+ * cast's mask, the map's, still holds the brush models: past the bound one
+ * the picture shows gives its reflection, a hidden one none.
+ */
+static inline int
+mtl_rtw_ss_next(int hit, int alias, int brush, unsigned from, int layer, int map)
+{
+	(void)brush;
 	return mtl_rtw_ws_next(hit, alias, from, layer, map);
 }
 
