@@ -98,6 +98,11 @@ S_IsShortSilence(const wavinfo_t* info, const void* raw_data)
 		return false;
 	}
 
+	if (info->rate <= 0)
+	{
+		return false;
+	}
+
 	/* Treat it as silence if sample count too small. */
 	if (((info->samples * 1000) / info->rate) <= S_MIN_LEN_TO_TREAT_AS_SILENCE_MS)
 	{

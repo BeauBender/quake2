@@ -924,21 +924,21 @@ SDL_Cache(sfx_t *sfx, wavinfo_t *info, byte *data, short volume,
 {
 	float stepscale;
 	int i;
+	int frames;
 	int len;
 	int sample;
 	sfxcache_t *sc;
 	unsigned int samplefrac = 0;
 
-	stepscale = (float)info->rate / sound.speed;
-	len = (int)(info->samples / stepscale);
-
-	if ((info->samples == 0) || (len == 0))
+	/* the frame count and the byte size, both from the one computation */
+	if (!S_CacheSize(info, sound.speed, &frames, &len))
 	{
-		Com_Printf("WARNING: Zero length sound encountered: %s\n", sfx->name);
+		Com_Printf("WARNING: Zero length or unusable sound encountered: %s\n",
+			sfx->name);
 		return false;
 	}
 
-	len = len * info->width * info->channels;
+	stepscale = (float)info->rate / sound.speed;
 	sc = sfx->cache = Z_Malloc(len + sizeof(sfxcache_t));
 
 	if (!sc)
@@ -948,22 +948,13 @@ SDL_Cache(sfx_t *sfx, wavinfo_t *info, byte *data, short volume,
 
 	sc->loopstart = info->loopstart;
 	sc->stereo = info->channels - 1;
-	sc->length = (int)(info->samples / stepscale);
+	sc->length = frames;
 	sc->speed = sound.speed;
 	sc->volume = volume;
 	sc->begin = begin_length * 1000 / info->rate;
 	sc->end = end_length * 1000 / info->rate;
 	sc->fade = fade_length * 1000 / info->rate;
 	sc->attack = attack_length * 1000 / info->rate;
-
-	if ((int)(info->samples / stepscale) == 0)
-	{
-		Com_Printf("%s: Invalid sound file '%s' (zero length)\n",
-			__func__, sfx->name);
-		Z_Free(sfx->cache);
-		sfx->cache = NULL;
-		return false;
-	}
 
 	if (sc->loopstart != -1)
 	{
@@ -980,7 +971,7 @@ SDL_Cache(sfx_t *sfx, wavinfo_t *info, byte *data, short volume,
 	}
 
 	/* resample / decimate to the current source rate */
-	for (i = 0; i < (int)(info->samples / stepscale); i++)
+	for (i = 0; i < frames; i++)
 	{
 		int srcsample;
 
