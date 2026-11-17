@@ -279,3 +279,31 @@ TEST(cl_add_entities_clamp_edges)
 	T_EQ_INT(cl.time, 3950);
 	T_CHECK(cl.lerpfrac > 0.49f && cl.lerpfrac < 0.51f);
 }
+
+/* The frame follows the client time as an unsigned number, so that a
+   time past 2^30 gives the large frame and not a wrapped negative one. */
+TEST(cl_anim_all_frame_past_two_pow_30)
+{
+	check_anim_at_time(EF_ANIM_ALL, 1500000000);
+	T_EQ_INT(stub_calls.min_ent_frame, 3000000);
+}
+
+TEST(cl_anim_allfast_frame_at_int_min)
+{
+	check_anim_at_time(EF_ANIM_ALLFAST, INT_MIN);
+	T_EQ_INT(stub_calls.min_ent_frame, 21474836);
+}
+
+TEST(cl_anim_allfast_frame_at_int_max)
+{
+	check_anim_at_time(EF_ANIM_ALLFAST, INT_MAX);
+	T_EQ_INT(stub_calls.min_ent_frame, 21474836);
+}
+
+/* The spinning light's angle is reduced before it is converted. */
+TEST(cl_spinning_light_at_time_edges)
+{
+	check_anim_at_time(EF_SPINNINGLIGHTS, INT_MAX);
+	check_anim_at_time(EF_SPINNINGLIGHTS, INT_MIN);
+	check_anim_at_time(EF_SPINNINGLIGHTS, -1);
+}
