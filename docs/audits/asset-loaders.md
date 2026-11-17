@@ -676,9 +676,13 @@ No host harness was run (the file pulls in the client, sound and filesystem
 imports); D26 is a static trace with high confidence (`MAX_OSPATH` is 4096 in
 `shared.h` for every build except `_WIN32`, macOS included, and `namewe` is a
 fixed 256).
-Fixed by FIX21: `namewe` is sized `MAX_OSPATH` and the stem is cut by
-`SCR_StillStem` (`cl_cinsize.c`), which refuses, rather than truncates, a name
-whose stem does not fit; the caller then takes the not-found path.
+Fixed by FIX21: `namewe` is sized `MAX_OSPATH`, as large as `name`, and the
+stem is cut by `SCR_StillStem` (`cl_cinsize.c`). The helper refuses, and
+writes nothing, when a stem does not fit its buffer; the caller then loads
+nothing and takes the not-found path. With both buffers `MAX_OSPATH` that
+cannot happen for any name a server can send. A stem longer than about 250
+characters is then cut by the bounded copies into `filename[256]` in
+`SCR_LoadHiColor`, which leaves no loadable extension, so it is not found.
 
 ## Entity strings and map-fix overrides
 

@@ -146,6 +146,24 @@ stem_guards_intact(void)
 	return 1;
 }
 
+/* Every byte of the arena, the buffer included, still holds the fill:
+   a refusal writes nothing. */
+static int
+stem_arena_untouched(void)
+{
+	size_t i;
+
+	for (i = 0; i < sizeof(stem_arena); i++)
+	{
+		if ((unsigned char)stem_arena[i] != STEM_FILL)
+		{
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
 /* A name of stemlen 'a' followed by ext, run into the STEM_BUF window. */
 static int
 stem_run(size_t stemlen, const char *ext, char *name)
@@ -186,7 +204,7 @@ TEST(cinsize_stem_equals_buffer_refused)
 	char *name = malloc(STEM_BUF + 16);
 
 	T_CHECK(!stem_run(STEM_BUF, ".pcx", name));
-	T_CHECK(stem_guards_intact());
+	T_CHECK(stem_arena_untouched());
 	free(name);
 }
 
@@ -195,7 +213,7 @@ TEST(cinsize_stem_one_over_refused)
 	char *name = malloc(STEM_BUF + 16);
 
 	T_CHECK(!stem_run(STEM_BUF + 1, ".pcx", name));
-	T_CHECK(stem_guards_intact());
+	T_CHECK(stem_arena_untouched());
 	free(name);
 }
 
@@ -206,7 +224,7 @@ TEST(cinsize_stem_ext_longer_than_name)
 
 	memset(stem_arena, STEM_FILL, sizeof(stem_arena));
 	T_CHECK(!SCR_StillStem(name, dot, stem_arena + STEM_GUARD, STEM_BUF));
-	T_CHECK(stem_guards_intact());
+	T_CHECK(stem_arena_untouched());
 }
 
 TEST(cinsize_stem_empty)
@@ -225,12 +243,14 @@ TEST(cinsize_stem_empty)
 	T_CHECK(stem_guards_intact());
 }
 
-TEST(cinsize_stem_server_length_name)
+/* A name as long as a server message allows, into the old 256-byte buffer.
+   The caller's buffer is now MAX_OSPATH and takes this name whole. */
+TEST(cinsize_stem_server_length_name_small_buffer)
 {
 	char *name = malloc(1500);
 
 	T_CHECK(!stem_run(1380, ".pcx", name));
-	T_CHECK(stem_guards_intact());
+	T_CHECK(stem_arena_untouched());
 	free(name);
 }
 
@@ -238,7 +258,11 @@ TEST(cinsize_stem_no_room)
 {
 	char out[1];
 
+	out[0] = 'x';
 	T_CHECK(!SCR_StillStem("a.pcx", ".pcx", out, 0));
+	T_CHECK(out[0] == 'x');
 	T_CHECK(!SCR_StillStem("a.pcx", ".pcx", out, 1));
+	T_CHECK(out[0] == 'x');
 	T_CHECK(SCR_StillStem(".pcx", ".pcx", out, 1));
+	T_CHECK(out[0] == '\0');
 }
