@@ -28,7 +28,7 @@
  * (rmb_rt_bind_geometry), the blend over the opaque water, the
  * translucent faces' draw of the forward pass, and the counts and GPU
  * time of each frame's passes for the r_rt_stats 2 line. TASK158 adds the
- * candidates' raster of the map's water triangles (rmb_rt_bind_water_raster),
+ * map's water triangles' draw (rmb_rt_bind_water_raster; TASK162: the marks),
  * the compaction and the indirect trace over its list, and the world-space
  * shading's bindings: the triangles' shading records, the frame's texture
  * table (an argument buffer of the world's images and the sky box's six),
@@ -80,7 +80,7 @@ void rmb_gbuf_raster_formats(MTLRenderPipelineDescriptor *d, int surf);
 #define RMB_RTW_C_LISTED 9
 #define RMB_RTW_C_ARGS 10
 #define RMB_RTW_SAMPLES 8       /* per slot (world space): 2 and 3 the compaction's start and end, 4 and 5 the trace's;
-                                   0, 1, 6 and 7 were TASK158's raster's, which TASK162 removed */
+                                   0, 1, 6 and 7 were TASK158's separate raster's, which TASK162 removed */
 
 _Static_assert(sizeof(rm_rtw_view_t) == 288, "the view is rm_rtwater.metal's 288 bytes");
 _Static_assert(RMB_RTW_C_ARGS * 4 % 4 == 0, "the indirect arguments are 4-byte aligned");
@@ -689,7 +689,7 @@ rmb_rtw_stats(rm_rtw_stats_t *s, int cap)
  * last draw (rmb_gbuf_resolve, before the pass ends; surf: the raster has
  * the surface attachment): the map's water triangles with the view's
  * matrix and viewport, as TASK158's separate raster drew them, against
- * the raster's own depth. Only when this view's outputs were made for
+ * the G-buffer raster's own depth. Only when this view's outputs were made for
  * the world-space path; 1 when drawn (with no triangle there is nothing
  * to draw, and every pixel reads unmarked).
  */
