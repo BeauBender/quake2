@@ -109,6 +109,7 @@ typedef struct
 	unsigned long sprite_skips, beam_skips, null_skips, bmodel_trans_skips, ent_skips;
 	unsigned long presents;              /* presents handed to the present queue, display sync off (FIX51) */
 	unsigned long present_drains_late;   /* waits for every present to be done that ended at their bound: must stay 0 (FIX69) */
+	unsigned long present_held;          /* frames, display sync off, that found every present slot held (TASK161) */
 } rmb_stats_t;
 
 /* A buffer of this size holds every metal_stats line (rm_stats_format, rm_world_format, host-tested). */
@@ -1628,6 +1629,9 @@ int rmb_vsync(void);
 
 /* The counters so far. */
 void rmb_stats(rmb_stats_t *stats, rm_ledger_t *ledger);
+
+/* Only the frames ended and the frames among them without a drawable: the presented-rate sample (TASK161). */
+void rmb_rate_counts(unsigned long *frames, unsigned long *no_drawable);
 
 /*
  * Takes a frame slot and a command buffer, sizes the targets to w by h
