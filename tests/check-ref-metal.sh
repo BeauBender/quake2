@@ -98,6 +98,7 @@ san="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-fram
 printf 'int main(void){return 0;}\n' > "${tmp:?}/probe.c"
 if $cc $san -o "${tmp:?}/probe" "${tmp:?}/probe.c" >/dev/null 2>&1 && "${tmp:?}/probe" >/dev/null 2>&1; then
 	flags="$flags $san"
+	psan=$san
 else
 	echo "check-ref-metal: $cc cannot build with ASAN and UBSAN; running without them"
 fi
@@ -548,14 +549,18 @@ done
 # failure is 99).
 probe_run() {
 	# shellcheck disable=SC2086 # flags is a word list
-	if ! $cc -fobjc-arc -std=gnu11 -Wall -Wextra -Werror -g -O1 -I"${1:-$rm_dir}" -I"$rm_dir" -I"$rm_dir/header" -I. \
+	# the sanitizers when (a) found the compiler has them, and the aliasing and overflow flags of the
+	# script's other builds; the warnings are -Wall -Wextra -Werror, stricter than rmb_device.m's real
+	# build on purpose (docs/runbook/TASK164.md, FIX99)
+	if ! $cc -fobjc-arc -std=gnu11 -Wall -Wextra -Werror -g -O1 -fno-strict-aliasing -fwrapv ${psan:-} -I"${1:-$rm_dir}" -I"$rm_dir" -I"$rm_dir/header" -I. \
 		'-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "$2" tests/metal/rmb_cs_probe.m "$rm_dir/rm_pure.c" \
 		"$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" src/common/shared/shared.c \
 		-framework Foundation -framework Metal -framework QuartzCore -framework CoreGraphics -lm > "${tmp:?}/probe.out" 2>&1; then
 		return 99
 	fi
 	rc=0
-	"$2" > "${tmp:?}/probe.out" 2>&1 || rc=$?
+	# in a subshell: the shell's own "Abort trap" line for a crashing mutant is not output of the probe
+	( "$2" > "${tmp:?}/probe.out" 2>&1 ) 2> /dev/null || rc=$?
 	return $rc
 }
 probe="probe skipped"
@@ -578,12 +583,13 @@ else
 		# the mutants of rmb_device.m, each of which must fail the probe: 1 -> 0 sets NULL, 1 -> 0
 		# leaves the colour space on the layer, detach leaves it too
 		probe_mutants=0
-		for m in nulled kept detached; do
+		for m in nulled kept detached unretained; do
 			rm -rf "${tmp:?}/csmut"
 			mkdir "${tmp:?}/csmut"
 			case $m in
 				nulled) sed 's|rmb_layer.colorspace = rmb_cs_own;|rmb_layer.colorspace = NULL;|' "$rm_dir/rmb_device.m" ;;
 				kept) sed 's|rmb_layer.colorspace = rmb_cs_own;|(void)0;|' "$rm_dir/rmb_device.m" ;;
+				unretained) sed 's|CGColorSpaceRetain(rmb_cs_own);|(void)0;|' "$rm_dir/rmb_device.m" ;;
 				detached) sed 's|rmb_cs_release();   /\* the view|(void)0;   /* the view|' "$rm_dir/rmb_device.m" ;;
 			esac > "${tmp:?}/csmut/rmb_device.m"
 			if cmp -s "$rm_dir/rmb_device.m" "${tmp:?}/csmut/rmb_device.m"; then

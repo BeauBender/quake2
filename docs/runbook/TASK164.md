@@ -92,3 +92,39 @@ is that of an unmerged half of a lane and says nothing about (e).
   (a new call into `rmb_encode.m` or `rmb_resource.m`) makes it fail to link and needs a stub added.
 - Not run: the full `scripts/test.sh` (the brief), and no engine run was needed.
 - `tests/check-runbook-index.sh` fails until the orchestrator adds this runbook's index line.
+
+## FIX99: review notes on the kernel-call check and the probe
+
+All in `tests/check-ref-metal.sh` and `tests/metal/rmb_cs_probe.m`; nothing under `src/` changed.
+
+1. **Dead code does not count.** `kcalls` now reads the stripped text through `deadif`, which blanks the
+   dead branches of the preprocessor, nested ones included: the part of an `#if 0` before its `#else`,
+   and the `#else` part of an `#if 1`. The `#else` part of an `#if 0` stays live (a positive check per
+   pair), and an `#elif` is taken as live, as its condition is not evaluated. Red first: with the two
+   new mutants added and the filter not yet in, the check printed, for every pair,
+   `the kernel-call check passes a mutant of rm_rtw_trace (the call to mtl_rtw_ss_next deadcode)`.
+   Mutants: each call of the body wrapped in `#if 0 ... #else #endif` (`deadcode`), and in
+   `#if 0 / #ifdef X ... #endif / #endif` (`deadnested`); both refused now, with the 16 earlier ones.
+2. **A missing kernel has its own message.** `kcalls` and `flushed` return 2 when the function is not
+   found (1 when found without the call), and the check prints
+   `kernel rm_rtw_nosuch not found in src/client/refresh/metal/rm_rtwater.metal` (the real output, with
+   a pair name that does not exist). Two mutants must give status 2, not 1: `renamedkernel` and
+   `joined` (`kernel void` and the kernel's name on one line). Check (d) reads
+   `function <name> not found in <file>` the same way.
+3. **The later-hit choice is paired.** The pair `rm_rtw_ss_at` / `mtl_rtw_choose` is added (5 pairs,
+   7 mutants each and one live-`#else` check, 35 mutants refused). The renamed-call mutant of
+   `rm_rtw_ss_at` is refused like the others.
+4. **The probe's build flags and an over-release.** The probe is built with `-fno-strict-aliasing
+   -fwrapv` and the script's ASAN and UBSAN when the compiler has them. A third run uses a colour space
+   the probe creates itself (`CGColorSpaceCreateCalibratedRGB`), and checks `CFGetRetainCount` equals
+   the count at attach after each cycle: set and unset, set and detach, attach with it on and unset,
+   detach. A named colour space (Display P3, sRGB) is cached by the system, so its count says nothing
+   and the probe does not count it; the layer's getter autoreleases, so each read sits in its own
+   autorelease pool. The 4th mutant drops `CGColorSpaceRetain(rmb_cs_own)`: it fails
+   `rmb_cs_probe.m:116` and `:123` (`!counted || count_of(initial) == base`), and then crashes
+   in ASAN at the second release, so it is refused either way. The probe is now 58 checks, 4 colour-space
+   mutants refused.
+5. **Warnings.** The probe keeps `-Wall -Wextra -Werror`, which is stricter than `rmb_device.m`'s real
+   build (`-Wall`, `-Werror` only under `WERR`), on purpose: the probe includes that file whole, and
+   the stricter flags find an unused parameter or a sign comparison there before the real build does. A
+   finding is the probe's "does not compile". The probe header now says it runs on any Darwin.
