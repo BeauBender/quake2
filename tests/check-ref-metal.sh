@@ -441,12 +441,37 @@ done
 # the kernel is defined in the file (its name at the start of a line, its body up to the next "}" in
 # column 0) and its body, outside comments and string literals, calls <helper>( ; 1 otherwise.
 kcalls() {
-	strip "$1" > "${tmp:?}/kcalls.code" || return 1
+	strip "$1" | deadif > "${tmp:?}/kcalls.code" || return 1
 	awk -v fn="$2" -v h="$3" '
 		$0 ~ "^" fn "\\(" { body = 1; found = 1 }
 		body && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { hit = 1 }
 		body && /^}/ { body = 0 }
-		END { exit (found && hit) ? 0 : 1 }' "${tmp:?}/kcalls.code"
+		END { exit !found ? 2 : hit ? 0 : 1 }' "${tmp:?}/kcalls.code"
+}
+# deadif: stdin to stdout, the lines of dead preprocessor branches blanked (so a call there is no
+# call): the part of an "#if 0" before its "#else" (the "#else" part is live), the "#else" part of an
+# "#if 1", whatever the nesting; directive lines are blanked too, the line count is kept. An "#elif"
+# is taken as live, as its condition is not evaluated.
+deadif() {
+	awk '
+	function dead(   i) { for (i = 1; i <= depth; i++) if (off[i]) return 1; return 0 }
+	{
+		line = $0
+		if (line ~ /^[ \t]*#[ \t]*if([ \t]|$)|^[ \t]*#[ \t]*if(n?def)[ \t]/) {
+			depth++; kind[depth] = 2; off[depth] = 0
+			if (line ~ /^[ \t]*#[ \t]*if[ \t]+0[ \t]*$/) { kind[depth] = 0; off[depth] = 1 }
+			else if (line ~ /^[ \t]*#[ \t]*if[ \t]+1[ \t]*$/) { kind[depth] = 1 }
+			print ""; next
+		}
+		if (line ~ /^[ \t]*#[ \t]*else/) {
+			if (depth > 0) { if (kind[depth] == 0) off[depth] = 0; else if (kind[depth] == 1) off[depth] = 1 }
+			print ""; next
+		}
+		if (line ~ /^[ \t]*#[ \t]*elif/) { if (depth > 0) off[depth] = 0; print ""; next }
+		if (line ~ /^[ \t]*#[ \t]*endif/) { if (depth > 0) depth--; print ""; next }
+		if (dead()) { print ""; next }
+		print line
+	}'
 }
 # kcall_mutant <kind> <file> <kernel> <helper>: the file with that call broken
 kcall_mutant() {
@@ -459,6 +484,14 @@ kcall_mutant() {
 			b { gsub(h "[ \t]*\\(", h "_x(") } { print }
 			END { print "static int kcall_elsewhere(void) { return " h "(0); }" }' "$2" ;;
 		renamedkernel) sed "s/^$3(/$3_old(/" "$2" ;;
+		deadcode) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print; print "#else"; print "#endif"; next } { print }' "$2" ;;
+		deadnested) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print "#ifdef X"; print; print "#endif"; print "#endif"; next } { print }' "$2" ;;
+		joined) awk -v fn="$3" '
+			held != "" { if (index($0, fn "(") == 1) { print held " " $0 } else { print held; print } held = ""; next }
+			/^kernel void$/ || /^static [a-z0-9_]+$/ { held = $0; next }
+			{ print }' "$2" ;;
 	esac
 }
 kcall_mutants=0 kcall_pairs=0
@@ -472,7 +505,7 @@ for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm
 		continue
 	fi
 	kcall_pairs=$((kcall_pairs + 1))
-	for m in renamed commented elsewhere renamedkernel; do
+	for m in renamed commented elsewhere renamedkernel deadcode deadnested; do
 		kcall_mutant "$m" "$f" "$kn" "$hp" > "${tmp:?}/kcall-mutant.metal"
 		if cmp -s "$f" "${tmp:?}/kcall-mutant.metal"; then
 			bad "the kernel-call mutant ($m) of $kn changed nothing"
