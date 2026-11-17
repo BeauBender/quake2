@@ -38,7 +38,10 @@
 # and the EXIT trap takes it out on every other exit (giving up, TERM,
 # INT, HUP); a maker that backs off puts it back under its first key, so
 # it keeps its place. A holder that releases and asks again so gets a
-# later ticket than every waiter.
+# later ticket than every waiter. Only regular files in the queue are
+# read, never a link: anything else with a ticket's name (a FIFO would
+# block whoever opens it) is skipped and left in place, by the waiters
+# and by lock status.
 #
 # Re-entry: the holder exports BENCH_LOCK_TOKEN to its command. A nested
 # call passes straight through only when that variable equals the token in
@@ -166,6 +169,8 @@ bench_lock_head() {
 		case $_lh_n in
 		"$_lh_mine") _lh_past=1 ;;
 		w.*)
+			# A regular file only, never a link: a FIFO would block the read.
+			if [ ! -f "$_lh_f" ] || [ -h "$_lh_f" ]; then continue; fi
 			_lh_h=$(cat "$_lh_f" 2> /dev/null) || continue
 			_lh_p=$(bench_kv "$_lh_h" pid)
 			# Gone: kill -0 fails, or a zombie (KILLed, not yet reaped); or
@@ -566,6 +571,7 @@ bench_lock_status() {
 	fi
 	_ls_i=0
 	for _ls_f in "${BENCH_LOCK_QUEUE:?}"/w.*; do
+		if [ ! -f "$_ls_f" ] || [ -h "$_ls_f" ]; then continue; fi
 		_ls_q=$(cat "$_ls_f" 2> /dev/null) || continue
 		bench_pid_running "$(bench_kv "$_ls_q" pid)" || continue
 		_ls_i=$((_ls_i + 1))

@@ -2461,6 +2461,8 @@ mutant queue-ticket-left core/lock.sh 'bench_lock_unqueue; return 75' 'return 75
 mutant queue-dead-kept core/lock.sh 'if [ "$_lh_p" = "$$" ] || ! bench_pid_running "$_lh_p"; then' 'if false; then' t_lock_dead_waiter || mfail=1
 mutant queue-zombie-alive core/lock.sh 'if [ "$_lh_p" = "$$" ] || ! bench_pid_running "$_lh_p"; then' 'if [ "$_lh_p" = "$$" ] || ! bench_lock_alive "$_lh_h"; then' t_lock_zombie_waiter || mfail=1
 mutant queue-own-pid-kept core/lock.sh 'if [ "$_lh_p" = "$$" ] || ! bench_pid_running "$_lh_p"; then' 'if ! bench_pid_running "$_lh_p"; then' t_lock_own_pid || mfail=1
+mutant queue-fifo-head core/lock.sh 'if [ ! -f "$_lh_f" ] || [ -h "$_lh_f" ]; then continue; fi' ':' t_lock_queue_fifo || mfail=1
+mutant queue-fifo-status core/lock.sh 'if [ ! -f "$_ls_f" ] || [ -h "$_ls_f" ]; then continue; fi' ':' t_lock_queue_fifo || mfail=1
 # A maker that backs off (three tabs: the arrival's own enqueue has one), and a waiter whose ticket is gone, take a new key.
 mutant queue-backoff-new-key core/lock.sh "$(printf '\t\t\t')bench_lock_enqueue \"\$_la_label\"" "$(printf '\t\t\t')BENCH_LOCK_KEY=; bench_lock_enqueue \"\$_la_label\"" t_lock_stall_place || mfail=1
 mutant queue-back-new-key core/lock.sh 'then bench_lock_enqueue "$1"; fi' 'then BENCH_LOCK_KEY=; bench_lock_enqueue "$1"; fi' t_lock_ticket_back || mfail=1
