@@ -37,7 +37,11 @@
 #define MTL_RTSUN_AT_PASS 1u      /* water or a translucent face: the ray goes on */
 #define MTL_RTSUN_AT_SHADOW 2u    /* any other face, an alias model among them */
 
-/* the water and translucent faces a ray passes before it counts as shadowed */
+/*
+ * The water and translucent faces a ray passes; what is behind the last of
+ * them still decides, so a ray asks for at most MTL_RTSUN_LAYERS + 1
+ * intersections (mtl_rtsun_step)
+ */
 #define MTL_RTSUN_LAYERS 4
 
 /* a sun ray's length: past any two points of a map (its coordinates are within +-4096 an axis) */
@@ -59,6 +63,19 @@ mtl_rtsun_at(unsigned mat)
 	}
 
 	return ((mat == 3u) || (mat == 5u)) ? MTL_RTSUN_AT_PASS : MTL_RTSUN_AT_SHADOW;
+}
+
+/*
+ * What a sun ray does at the face its layer-th intersection met (0 the
+ * nearest; at the face's mtl_rtsun_at): at, except that a water or
+ * translucent face past the first MTL_RTSUN_LAYERS shadows. So the sky
+ * behind MTL_RTSUN_LAYERS of them is lit, and behind one more it is not;
+ * rm_rtsun_hit's loop runs layer from 0 to MTL_RTSUN_LAYERS.
+ */
+static inline unsigned
+mtl_rtsun_step(unsigned at, int layer)
+{
+	return ((at == MTL_RTSUN_AT_PASS) && (layer >= MTL_RTSUN_LAYERS)) ? MTL_RTSUN_AT_SHADOW : at;
 }
 
 /*

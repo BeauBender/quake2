@@ -63,8 +63,10 @@
 /*
  * 1 when a frame traces the sun: r_rt_sun is not 0, the device has ray
  * tracing, and the world is lightmapped (r_fullbright 0: the floor gate
- * reads the lightmap, which r_fullbright leaves out). A value that is not
- * finite counts as 0. The map's sky is the scene's to judge (rm_rtsun_sky_enough).
+ * reads the lightmap, which r_fullbright leaves out). An r_rt_sun that is
+ * not finite counts as 0; r_fullbright counts as set at any value but 0,
+ * NaN among them, as rm_surf.c reads it. The map's sky is the scene's to
+ * judge (rm_rtsun_sky_enough, rm_rtsun_wanted).
  */
 int rm_rtsun_on(float sun, int device_rt, float fullbright);
 

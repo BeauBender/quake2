@@ -108,14 +108,8 @@ RM_RTSun_Shutdown(void)
 		rmb_rtsun_close();
 	}
 
+	/* the map's measure is kept: it holds no GPU object, and RM_RTSun_Init forgets it */
 	sun_opened = sun_active = sun_viewed = 0;
-	sun_world = NULL;
-}
-
-int
-RM_RTSun_Wanted(void)
-{
-	return r_rt_sun && rm_rt_wanted(r_rt_sun->value, sun_device);
 }
 
 /* the direction this frame: the map's line of the table, else r_rt_sun_angles, else the default */
@@ -188,6 +182,36 @@ RM_RTSun_Measure(void)
 	}
 }
 
+/* 1 when the map has at least 2 % sky; measured on the first call a map */
+static int
+RM_RTSun_SkyOk(void)
+{
+	if (!r_worldmodel || !r_worldmodel->world)
+	{
+		return 0;
+	}
+
+	if ((sun_world != r_worldmodel->world) || strcmp(sun_map, r_worldmodel->name))
+	{
+		RM_RTSun_Measure();
+	}
+
+	return sun_sky_ok;
+}
+
+/*
+ * The sun's ask for the frame's ray-tracing scene (RM_RT_Wanted, the map
+ * load's RM_RT_MapLoaded and the scene's keep flag): none on a map under
+ * 2 % sky, so nothing is built or kept for it there. The map is measured
+ * only while r_rt_sun is on, on a device with ray tracing.
+ */
+int
+RM_RTSun_Wanted(void)
+{
+	return r_rt_sun && rm_rt_wanted(r_rt_sun->value, sun_device) &&
+		rm_rtsun_wanted(r_rt_sun->value, sun_device, RM_RTSun_SkyOk());
+}
+
 void
 RM_RTSun_Frame(const refdef_t *fd, int scene_ready)
 {
@@ -198,36 +222,29 @@ RM_RTSun_Frame(const refdef_t *fd, int scene_ready)
 	sun_active = sun_viewed = 0;
 	rmb_rtsun_set_view(NULL);
 
+	/* under 2 % sky: nothing opens, the view keeps its path, the frame is the effect off's */
 	if (r_rt_sun && rm_rtsun_on(r_rt_sun->value, sun_device, r_fullbright->value) && fd &&
-		!(fd->rdflags & RDF_NOWORLDMODEL) && r_worldmodel && r_worldmodel->world)
+		!(fd->rdflags & RDF_NOWORLDMODEL) && RM_RTSun_SkyOk() && scene_ready)
 	{
-		if ((sun_world != r_worldmodel->world) || strcmp(sun_map, r_worldmodel->name))
+		if (!sun_opened && !sun_refused)
 		{
-			RM_RTSun_Measure();
-		}
+			char err[256];
 
-		/* under 2 % sky: nothing opens, the view keeps its path, the frame is the effect off's */
-		if (sun_sky_ok && scene_ready)
-		{
-			if (!sun_opened && !sun_refused)
+			sun_opened = rmb_rtsun_open(err, sizeof(err));
+
+			if (!sun_opened)
 			{
-				char err[256];
-
-				sun_opened = rmb_rtsun_open(err, sizeof(err));
-
-				if (!sun_opened)
-				{
-					sun_refused = 1;
-					R_Printf(PRINT_ALL, "ref_metal: rt sun: %s; no sun\n", err);
-				}
+				sun_refused = 1;
+				R_Printf(PRINT_ALL, "ref_metal: rt sun: %s; no sun\n", err);
 			}
-
-			sun_active = sun_opened;
 		}
+
+		sun_active = sun_opened;
 	}
-	else if (sun_opened && !RM_RTSun_Wanted())
+
+	if (sun_opened && !RM_RTSun_Wanted())
 	{
-		/* turned off: nothing kept */
+		/* turned off, or a map under 2 % sky (one opened on an earlier map): nothing kept */
 		rmb_rtsun_close();
 		sun_opened = 0;
 	}

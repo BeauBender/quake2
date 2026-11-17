@@ -85,8 +85,10 @@ rm_rtsun_position(constant rm_rtsun_view &v, uint2 px, float depth)
 /*
  * 1 when r reaches the sky, 0 when it is shadowed: the nearest face
  * decides (mtl_rtsun_at); a water or translucent face is passed, the
- * nearest first, up to MTL_RTSUN_LAYERS of them; nothing met, or more
- * layers than that, is shadowed. inst holds two words an instance
+ * nearest first, up to MTL_RTSUN_LAYERS of them, and what is behind the
+ * last still decides; nothing met, or one more such face, is shadowed
+ * (mtl_rtsun_step), so at most MTL_RTSUN_LAYERS + 1 intersections
+ * (tests/metal/rm_rtsun_test.c mirrors this loop). inst holds two words an instance
  * (rmb_rt_frame): its first triangle of the map's buffers (~0 for an
  * alias model) and the lights it carries; tmat the map's material id of
  * each of its ntris triangles.
@@ -98,7 +100,7 @@ rm_rtsun_hit(ray r, instance_acceleration_structure ias, device const uint *inst
 
 	isect.assume_geometry_type(geometry_type::triangle);
 
-	for (int layer = 0; layer < MTL_RTSUN_LAYERS; layer++)
+	for (int layer = 0; layer <= MTL_RTSUN_LAYERS; layer++)
 	{
 		intersection_result<triangle_data, instancing> hit = isect.intersect(r, ias, MTL_RTAO_MASK);
 		uint b, m = 0xffu, at;
@@ -116,7 +118,7 @@ rm_rtsun_hit(ray r, instance_acceleration_structure ias, device const uint *inst
 			m = (b + hit.primitive_id < ntris) ? (uint)tmat[b + hit.primitive_id] : (uint)MTL_GB_MAT_WORLD;
 		}
 
-		at = mtl_rtsun_at(m);
+		at = mtl_rtsun_step(mtl_rtsun_at(m), layer);
 
 		if (at != MTL_RTSUN_AT_PASS)
 		{

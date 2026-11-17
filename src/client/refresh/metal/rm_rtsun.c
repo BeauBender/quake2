@@ -45,8 +45,11 @@ rm_rtsun_on(float sun, int device_rt, float fullbright)
 		return 0;
 	}
 
-	/* r_fullbright: gl1 draws the world without its lightmaps, so the floor gate has nothing to read */
-	if (isfinite(fullbright) && (fullbright != 0))
+	/*
+	 * r_fullbright: gl1 draws the world without its lightmaps, so the floor
+	 * gate has nothing to read; any value but 0, NaN among them, as rm_surf.c reads it
+	 */
+	if (fullbright != 0)
 	{
 		return 0;
 	}
@@ -57,8 +60,7 @@ rm_rtsun_on(float sun, int device_rt, float fullbright)
 int
 rm_rtsun_wanted(float sun, int device_rt, int sky_ok)
 {
-	(void)sky_ok;
-	return rm_rt_wanted(sun, device_rt);
+	return rm_rt_wanted(sun, device_rt) && sky_ok;
 }
 
 float
@@ -92,8 +94,9 @@ rm_rtsun_blank(char c)
 /*
  * A decimal number at *p, after any blanks: an optional sign, digits, and
  * an optional '.' with digits (at least one digit in all), ending at a
- * blank, at end or at stop; no exponent, no hex, no inf or nan. 1 with
- * *v and *p past it; 0 otherwise.
+ * blank or at end; no exponent, no hex, no inf or nan, and any other
+ * character before the blank refuses it. 1 with *v and *p past it; 0
+ * otherwise.
  */
 static int
 rm_rtsun_number(const char **p, const char *end, float *v)

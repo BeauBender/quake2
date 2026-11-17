@@ -39,6 +39,7 @@
 #include "../../src/client/refresh/metal/header/rm_rtshadow.h"
 #include "../../src/client/refresh/metal/header/rm_rt.h"
 #include "../../src/client/refresh/metal/common/mtl_matrix.h"
+#include "../../src/client/refresh/metal/common/mtl_gbuf_math.h"
 
 /* src/common/shared/shared.c, linked for rm_pure.c, prints through the engine */
 void
@@ -520,6 +521,13 @@ test_ndotl_at(void)
 	CHECK(mtl_rtsun_at(2) == MTL_RTSUN_AT_SHADOW);
 	CHECK(mtl_rtsun_at(0xffu) == MTL_RTSUN_AT_SHADOW);       /* an alias model */
 	CHECK(mtl_rtsun_at(6) == MTL_RTSUN_AT_SHADOW);
+
+	/* the step: a pass past the first MTL_RTSUN_LAYERS shadows; the sky and a shadow stand */
+	CHECK(mtl_rtsun_step(MTL_RTSUN_AT_PASS, 0) == MTL_RTSUN_AT_PASS);
+	CHECK(mtl_rtsun_step(MTL_RTSUN_AT_PASS, MTL_RTSUN_LAYERS - 1) == MTL_RTSUN_AT_PASS);
+	CHECK(mtl_rtsun_step(MTL_RTSUN_AT_PASS, MTL_RTSUN_LAYERS) == MTL_RTSUN_AT_SHADOW);
+	CHECK(mtl_rtsun_step(MTL_RTSUN_AT_LIT, MTL_RTSUN_LAYERS) == MTL_RTSUN_AT_LIT);
+	CHECK(mtl_rtsun_step(MTL_RTSUN_AT_SHADOW, 0) == MTL_RTSUN_AT_SHADOW);
 }
 
 /*
@@ -534,7 +542,7 @@ rtsun_hit(const unsigned *mat, int n, int *casts)
 
 	*casts = 0;
 
-	for (layer = 0; layer < MTL_RTSUN_LAYERS; layer++)
+	for (layer = 0; layer <= MTL_RTSUN_LAYERS; layer++)
 	{
 		unsigned at;
 
@@ -545,7 +553,7 @@ rtsun_hit(const unsigned *mat, int n, int *casts)
 			return 0;
 		}
 
-		at = mtl_rtsun_at(mat[layer]);
+		at = mtl_rtsun_step(mtl_rtsun_at(mat[layer]), layer);
 
 		if (at != MTL_RTSUN_AT_PASS)
 		{

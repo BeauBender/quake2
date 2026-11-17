@@ -918,8 +918,9 @@ is.
   through. The rays' directions follow a blue-noise pattern that changes
   every frame, so without the accumulation over frames a later version
   adds the darkening is grainy. Needs a GPU with ray tracing and draws the
-  view through the G-buffer (see `r_rt_gbuffer`); with `r_fullbright 1`
-  there is no lightmap and it does nothing. With `0` (the default) nothing
+  view through the G-buffer (see `r_rt_gbuffer`); with `r_fullbright` set
+  (any value but `0`) there is no lightmap and it does nothing. With `0`
+  (the default) nothing
   is traced or allocated and the picture is as without ray tracing. Saved
   with the configuration; applies from the next frame.
 
@@ -1115,17 +1116,20 @@ is.
   new light, the sky's colour times `r_rt_sunscale` times how squarely it
   faces the sun; a ray that meets anything else first (the world, a door
   or platform, a model) or nothing at all leaves the pixel in shadow.
-  Water and translucent surfaces let the ray through; the view weapon and
+  Water and translucent surfaces let the ray through, up to four of them
+  on one ray (a fifth shadows it); the view weapon and
   the player's own model cast no sun shadow. The light is added after
   `r_rt_ao`'s darkening and replaces none of the stock light, so nothing
   is counted twice. The sky's colour is the mean of the sky box's five
   upper faces, scaled so its brightest channel is full. The sun's
   direction is the map's line of `scripts/rt/sun-angles.txt`, which the
   renderer is built with, or else `r_rt_sun_angles`. A map whose sky
-  faces are under 2 % of its face area is drawn as with the setting off
-  (the renderer prints the map's share once). Needs a GPU with ray
+  faces are under 2 % of its face area is drawn as with the setting off,
+  and nothing is traced, built or kept for the sun on it (the renderer
+  prints the map's share once). Needs a GPU with ray
   tracing and draws the view through the G-buffer (see `r_rt_gbuffer`);
-  with `r_fullbright 1` there is no lightmap and it does nothing. With `0`
+  with `r_fullbright` set (any value but `0`) there is no lightmap and it
+  does nothing. With `0`
   (the default) nothing is traced or allocated and the picture is as
   without ray tracing. Saved with the configuration; applies from the
   next frame.
