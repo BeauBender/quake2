@@ -419,21 +419,35 @@ done
 # MTL_RTW_MARK_SRC_FACTOR and MTL_RTW_MARK_DST_FACTOR, which the host test's
 # mtl_rtw_mark_blend evaluates), and the pipeline sets the normal attachment's alpha factors
 # from them: a literal MTLBlendFactor there is a second definition that can drift.
-blend_ok() { # <file>: 0 when both alpha factors come from the macros and none is a literal
-	strip "$1" > "${tmp:?}/blend.code"
+blend_ok() { # <file>: 0 when the mark pipeline's two alpha factors come from the macros, none is a literal, and the factor mapping is pinned
+	strip "$1" | awk '
+	/^rmb_rtw_mark_pipe\(/ { on = 1 }
+	on { print }
+	on && /^}/ { on = 0 }' > "${tmp:?}/blend.code"
+	strip "$1" | awk '
+	/^rmb_rtw_factor\(/ { on = 1 }
+	on { print }
+	on && /^}/ { on = 0 }' > "${tmp:?}/factor.code"
+	[ -s "${tmp:?}/blend.code" ] && [ -s "${tmp:?}/factor.code" ] &&
 	[ "$(grep -cE 'colorAttachments\[1\]\.sourceAlphaBlendFactor = rmb_rtw_factor\(MTL_RTW_MARK_SRC_FACTOR\);' "${tmp:?}/blend.code")" = 1 ] &&
 	[ "$(grep -cE 'colorAttachments\[1\]\.destinationAlphaBlendFactor = rmb_rtw_factor\(MTL_RTW_MARK_DST_FACTOR\);' "${tmp:?}/blend.code")" = 1 ] &&
-	! grep -qE 'colorAttachments\[1\]\.(source|destination)AlphaBlendFactor = MTLBlendFactor' "${tmp:?}/blend.code"
+	[ "$(grep -cE 'colorAttachments\[1\]\.(source|destination)AlphaBlendFactor =' "${tmp:?}/blend.code")" = 2 ] &&
+	[ "$(awk '/case MTL_RTW_BF_ONE:/ { getline; print }' "${tmp:?}/factor.code" | tr -d '[:space:]')" = "returnMTLBlendFactorOne;" ] &&
+	[ "$(awk '/case MTL_RTW_BF_SRC_ALPHA:/ { getline; print }' "${tmp:?}/factor.code" | tr -d '[:space:]')" = "returnMTLBlendFactorSourceAlpha;" ]
 }
 blend_mutants=0
 if ! blend_ok "$rm_dir/rmb_rtwater.m"; then
-	bad "$rm_dir/rmb_rtwater.m: the water mark's alpha blend factors do not both come from MTL_RTW_MARK_SRC_FACTOR and MTL_RTW_MARK_DST_FACTOR"
+	bad "$rm_dir/rmb_rtwater.m: the water mark's alpha blend factors do not both come from MTL_RTW_MARK_SRC_FACTOR and MTL_RTW_MARK_DST_FACTOR, or rmb_rtw_factor's mapping is not pinned"
 else
 	sed 's/destinationAlphaBlendFactor = rmb_rtw_factor(MTL_RTW_MARK_DST_FACTOR)/destinationAlphaBlendFactor = MTLBlendFactorSourceAlpha/' \
 		"$rm_dir/rmb_rtwater.m" > "${tmp:?}/blend-mutant1.m"
 	sed 's/sourceAlphaBlendFactor = rmb_rtw_factor(MTL_RTW_MARK_SRC_FACTOR)/sourceAlphaBlendFactor = rmb_rtw_factor(MTL_RTW_BF_ONE)/' \
 		"$rm_dir/rmb_rtwater.m" > "${tmp:?}/blend-mutant2.m"
-	for n in 1 2; do
+	sed 's/return MTLBlendFactorSourceAlpha;/return MTLBlendFactorOneMinusSourceAlpha;/' \
+		"$rm_dir/rmb_rtwater.m" > "${tmp:?}/blend-mutant3.m"
+	sed 's/^\(\td\.colorAttachments\[1\]\.destinationAlphaBlendFactor = rmb_rtw_factor(MTL_RTW_MARK_DST_FACTOR);\)$/\1\n\td.colorAttachments[1].destinationAlphaBlendFactor = rmb_rtw_factor(MTL_RTW_BF_ONE);/' \
+		"$rm_dir/rmb_rtwater.m" > "${tmp:?}/blend-mutant4.m"
+	for n in 1 2 3 4; do
 		if cmp -s "$rm_dir/rmb_rtwater.m" "${tmp:?}/blend-mutant$n.m"; then
 			bad "the blend-factor mutant $n changed nothing"
 		elif blend_ok "${tmp:?}/blend-mutant$n.m"; then
@@ -442,6 +456,14 @@ else
 			blend_mutants=$((blend_mutants + 1))
 		fi
 	done
+	# a literal on another pipeline's attachment 1 is not the mark's: it must pass
+	sed 's/^\(\td\.colorAttachments\[1\]\.writeMask = MTLColorWriteMaskNone;\)$/\1\n\td.colorAttachments[1].sourceAlphaBlendFactor = MTLBlendFactorOne;/' \
+		"$rm_dir/rmb_rtwater.m" > "${tmp:?}/blend-other.m"
+	if cmp -s "$rm_dir/rmb_rtwater.m" "${tmp:?}/blend-other.m"; then
+		bad "the other-pipeline blend case changed nothing"
+	elif ! blend_ok "${tmp:?}/blend-other.m"; then
+		bad "the blend-factor check refuses a literal factor on another pipeline"
+	fi
 fi
 
 # (b) the build, where it can be built
