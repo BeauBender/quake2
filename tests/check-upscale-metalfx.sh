@@ -13,6 +13,12 @@
 # The padding, crop and alpha of the tile are unit tests
 # (tests/unit/test_cl_upscale.c). Only on macOS: elsewhere the backend
 # is not built and the check says it skipped.
+#
+# UPSCALE_METALFX_REQUIRE=1 (opt in) makes "no Metal device" and
+# "unsupported here" (a device without MetalFX's spatial scaler) fail the
+# check instead of passing it: set it on a host that is known to have
+# MetalFX, the M6, so a run that quietly tested nothing is red. Without
+# it those two outcomes pass, so the gate stays green elsewhere.
 
 set -u
 
@@ -55,35 +61,28 @@ if ! $cc -fobjc-arc -std=gnu11 -Wall -Wextra -Werror -g -O1 $san \
 	exit 1
 fi
 
-# the test runs in the background and is killed once the bound has passed
-ASAN_OPTIONS=abort_on_error=0 "${tmp:?}/upscale_metalfx_test" > "${tmp:?}/run.out" 2>&1 &
-pid=$!
-(
-	n=0
-	while [ "$n" -lt "$bound" ] && kill -0 "$pid" 2>/dev/null; do
-		perl -e 'select(undef, undef, undef, 1)'
-		n=$((n + 1))
-	done
-	if kill -0 "$pid" 2>/dev/null; then
-		: > "${tmp:?}/expired"
-		kill "$pid" 2>/dev/null
-	fi
-) &
-watchdog=$!
+# The test runs under perl's alarm: SIGALRM ends the test itself once the
+# bound has passed (status 142), so there is no watchdog process and no
+# pid to signal after it was reaped.
+require=${UPSCALE_METALFX_REQUIRE:-0}
 status=0
-wait "$pid" || status=$?
-kill "$watchdog" 2>/dev/null
-wait "$watchdog" 2>/dev/null
+ASAN_OPTIONS=abort_on_error=0 perl -e 'alarm shift; exec @ARGV or exit 127' \
+	"$bound" "${tmp:?}/upscale_metalfx_test" > "${tmp:?}/run.out" 2>&1 || status=$?
 
 cat "${tmp:?}/run.out"
 
-if [ -e "${tmp:?}/expired" ]; then
-	echo "check-upscale-metalfx: the host test outlived its $bound s bound and was killed"
+if [ "$status" = 142 ]; then
+	echo "check-upscale-metalfx: the host test outlived its $bound s bound and was stopped"
 	exit 1
 fi
 
 if [ "$status" != 0 ]; then
 	echo "check-upscale-metalfx: the host test failed (exit $status)"
+	exit 1
+fi
+
+if [ "$require" = 1 ] && grep -q -e 'skipped: no Metal device' -e 'unsupported here' "${tmp:?}/run.out"; then
+	echo "check-upscale-metalfx: UPSCALE_METALFX_REQUIRE=1 and MetalFX is not usable here"
 	exit 1
 fi
 
