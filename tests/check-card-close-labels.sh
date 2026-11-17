@@ -55,9 +55,10 @@ bad()
 }
 
 # lint FILE: one "tag: reason" line per violation on stdout; status 1 if any.
+# It is an allow-list: a line it cannot place is refused.
 lint()
 {
-	awk '
+	awk -v q="'" '
 	function ind(s) { match(s, /^ */); return RLENGTH }
 	function strip(s) { sub(/(^|[ \t])#.*$/, "", s); gsub(/[ \t]/, "", s); return s }
 	function val(s) { sub(/^[^:]*:/, "", s); return strip(s) }
@@ -74,7 +75,15 @@ lint()
 	}
 	BEGIN {
 		nl = split("state:backlog state:staged state:in-progress state:review state:done", lab, " ")
+		ne = split("github.workflow github.event.issue.number github.event.issue.state_reason github.token github.repository", ex, " ")
+		for (i = 1; i <= ne; i++)
+			okexpr[" " ex[i] " "] = 1
+		uses_re = "(^|[^A-Za-z0-9_-])[\"" q "]?uses[\"" q "]?[ \t]*:"
+		quoted_re = "^[\"" q "]"
+		owner = "    if: github.actor == github.repository_owner"
+		state = "st=$(gh api \"repos/$GH_REPO/issues/$N\" --jq .state)"
 		runind = -1
+		envind = -1
 	}
 	{
 		line = $0
@@ -82,49 +91,105 @@ lint()
 		blank = (strip(line) == "")
 		inrun = 0
 		if (runind >= 0) {
-			if (blank || n > runind)
+			if (line ~ /^[ \t]*$/ || n > runind)
 				inrun = 1
 			else
 				runind = -1
 		}
+		if (!inrun && !blank && envind >= 0 && n <= envind)
+			envind = -1
+		inenv = (!inrun && !blank && envind >= 0)
+		k = ""
 
 		# Checks on every line, run blocks included.
-		s = line
-		while (match(s, /github\.event[A-Za-z0-9_.]*/)) {
-			ref = substr(s, RSTART, RLENGTH)
-			if (ref != "github.event.issue.number" && ref != "github.event.issue.state_reason")
-				fail("event-expr", "the workflow reads " ref)
-			s = substr(s, RSTART + RLENGTH)
-		}
-		if (line ~ /^[ \t]*(-[ \t]+)?uses[ \t]*:/)
-			fail("uses", "a uses: line")
+		if (line !~ /^[ \t]*#/ && line ~ uses_re)
+			fail("uses", "a uses key")
 		for (i = 1; i <= nl; i++)
 			if (named(line, lab[i]))
 				seen[lab[i]] = 1
 		if (inrun) {
-			if (index(line, "${{"))
-				fail("run-expr", "an expression inside a run block")
-			next
+			t = line
+			sub(/^[ \t]+/, "", t)
+			if (t == state)
+				state_seen = 1
+		} else if (!blank) {
+			# A structural line is a plain key and its value, nothing else.
+			s = line
+			sub(/(^|[ \t])#.*$/, "", s)
+			sub(/[ \t]+$/, "", s)
+			match(s, /^ *(-[ \t]+)?/)
+			kcol = RLENGTH
+			t = substr(s, kcol + 1)
+			f = t
+			gsub(/\$\{\{[^}]*\}\}/, "", f)
+			if (f ~ /[][{}]/ && t != "permissions: {}" && t != "types: [closed]")
+				fail("flow", "a flow collection")
+			if (f ~ /[&*!]/)
+				fail("anchor", "an anchor, alias or tag")
+			if (t !~ /^[A-Za-z0-9_-]+[ \t]*:([ \t]|$)/) {
+				fail("key", t ~ quoted_re ? "a quoted key" : "not a plain key line")
+			} else {
+				k = t
+				sub(/[ \t]*:.*$/, "", k)
+				v = t
+				sub(/^[^:]*:[ \t]*/, "", v)
+			}
+			if (n == 0)
+				top = k
+			if (k == "container" || k == "services")
+				fail("container", "a " k " key")
+			if (k == "run") {
+				if (v != "|" && v != "|-") {
+					fail("run", "a run value that is not | or |-")
+				} else {
+					runind = kcol
+					nrun++
+				}
+			}
+			if (k == "env" && v == "")
+				envind = kcol
+			if (k == "shell") {
+				nshell++
+				if (v != "sh")
+					fail("shell", "a shell that is not sh")
+			}
+			if (k == "if") {
+				if (top == "jobs" && n == 4 && line == owner)
+					ownerok[job] = 1
+				else
+					fail("if", "an if other than the owner check of a job")
+			}
 		}
-		if (blank)
+
+		# Every expression in the file, comments and run blocks included:
+		# one of the five, on an env: value line or the concurrency group.
+		isgroup = (!inrun && top == "concurrency" && n == 2 && k == "group")
+		s = line
+		while ((i = index(s, "${{")) > 0) {
+			s = substr(s, i + 3)
+			j = index(s, "}}")
+			if (!j) {
+				fail("expr", "an expression with no }} on its line")
+				break
+			}
+			e = substr(s, 1, j - 1)
+			s = substr(s, j + 2)
+			if (!(e in okexpr))
+				fail("expr", "${{" e "}} is not an allowed expression")
+			else if (!inenv && !isgroup)
+				fail("expr", "an expression outside env: and the concurrency group")
+			else if (isgroup && e == " github.event.issue.number ")
+				group_ok = 1
+		}
+		if (inrun || blank)
 			next
 
 		# The structure, outside run blocks.
-		if (line ~ /^[ \t]*(-[ \t]+)?run[ \t]*:/) {
-			v = line
-			sub(/^[ \t]*(-[ \t]+)?run[ \t]*:[ \t]*/, "", v)
-			if (v ~ /^[|>]/)
-				runind = n + (line ~ /^[ \t]*-[ \t]/ ? 2 : 0)
-			else if (index(v, "${{"))
-				fail("run-expr", "an expression inside a run line")
-		}
 		if (n == 0) {
-			top = line
-			sub(/[ \t]*:.*$/, "", top)
-			if (top == "on") {
+			if (k == "on") {
 				on_seen++
 				on_inline = val(line)
-			} else if (top == "permissions") {
+			} else if (k == "permissions") {
 				tp_seen++
 				tp_val = val(line)
 			}
@@ -134,16 +199,13 @@ lint()
 			on_body = on_body "|" strip(line)
 		else if (top == "permissions")
 			fail("top-perms", "the top-level permissions has a block")
-		else if (top == "concurrency" && line ~ /^[ \t]*group[ \t]*:/ && index(line, "github.event.issue.number"))
-			group_ok = 1
 
 		if (line ~ /^[ \t]*(-[ \t]+)?permissions[ \t]*:/ && !(top == "jobs" && n == 4))
 			fail("job-perms", "a permissions key outside a job")
 		if (top != "jobs")
 			next
 		if (n == 2) {
-			job = strip(line)
-			sub(/:.*$/, "", job)
+			job = k
 			jobs[++nj] = job
 			inperm = 0
 			next
@@ -177,7 +239,15 @@ lint()
 				endfail("timeout", "job " k ": no timeout-minutes")
 			if (runs_on[k] != "ubuntu-latest")
 				endfail("runner", "job " k ": not on ubuntu-latest")
+			if (!ownerok[k])
+				endfail("owner", "job " k ": no if: github.actor == github.repository_owner")
 		}
+		if (nrun != 1)
+			endfail("run", "not exactly one run block")
+		if (nshell != 1)
+			endfail("shell", "not exactly one shell: sh")
+		if (!state_seen)
+			endfail("state-read", "the run block does not read the issue state")
 		if (!group_ok)
 			endfail("concurrency", "no concurrency group keyed by the issue number")
 		for (i = 1; i <= nl; i++)
@@ -367,14 +437,14 @@ msub job-read job-perms 's/^      issues: write/      issues: read/'
 msub job-write-all job-perms 's/^    permissions:.*/    permissions: write-all/'
 mafter checkout uses '^    steps:' '    - uses: actions/checkout@v7'
 mafter run-uses uses '^    steps:' '    - name: x\n      uses: ./local'
-msub title event-expr 's/github\.event\.issue\.state_reason/github.event.issue.title/'
-msub body event-expr 's/github\.event\.issue\.state_reason/github.event.issue.body/'
-msub label-list event-expr 's/github\.event\.issue\.state_reason/github.event.issue.labels/'
-msub user event-expr 's/github\.event\.issue\.state_reason/github.event.issue.user.login/'
-msub tojson event-expr 's/github\.event\.issue\.state_reason/toJSON(github.event)/'
-mafter run-line run-expr '# card-close-labels: decide begin' \
+msub title expr 's/github\.event\.issue\.state_reason/github.event.issue.title/'
+msub body expr 's/github\.event\.issue\.state_reason/github.event.issue.body/'
+msub label-list expr 's/github\.event\.issue\.state_reason/github.event.issue.labels/'
+msub user expr 's/github\.event\.issue\.state_reason/github.event.issue.user.login/'
+msub tojson expr 's/github\.event\.issue\.state_reason/toJSON(github.event)/'
+mafter run-line expr '# card-close-labels: decide begin' \
 	'        echo "${{ github.event.issue.number }}"'
-mafter run-comment run-expr '# card-close-labels: decide begin' \
+mafter run-comment expr '# card-close-labels: decide begin' \
 	'        # ${{ github.token }}'
 msub no-timeout timeout '/^    timeout-minutes:/d'
 msub macos runner 's/^    runs-on: ubuntu-latest/    runs-on: macos-latest/'
