@@ -144,5 +144,45 @@ while read -r f; do
 	fi
 done < "${tmp:?}/docs"
 
+# Self-cases: this script run again with --no-selftest, in a child, under an
+# environment that must not change what it does or where it writes.
+snap()
+{
+	(CDPATH='' cd "$1" && find . -print | sort && find . -type f -exec cksum {} + | sort)
+}
+if [ "${1:-}" != --no-selftest ]; then
+	self=tests/$(basename "$0")
+	# A decoy repository with a commit and an index, named by GIT_DIR,
+	# GIT_WORK_TREE and GIT_INDEX_FILE as a git hook exports them: the check
+	# must pass and leave the decoy's refs, objects and index as they were.
+	decoy=${tmp:?}/decoy
+	git init -q --template= "$decoy"
+	printf '%s\n' decoy > "$decoy/a.txt"
+	git -C "$decoy" add a.txt
+	git -C "$decoy" commit -q -m decoy
+	snap "$decoy" > "${tmp:?}/decoy.before"
+	rc=0
+	GIT_DIR=$decoy/.git GIT_WORK_TREE=$decoy GIT_INDEX_FILE=$decoy/.git/index \
+		sh "$self" --no-selftest > "${tmp:?}/hostile.out" 2>&1 || rc=$?
+	snap "$decoy" > "${tmp:?}/decoy.after"
+	if [ "$rc" -ne 0 ] || ! cmp -s "${tmp:?}/decoy.before" "${tmp:?}/decoy.after"; then
+		echo "check-runbook-index: self-case: with GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE naming a decoy repository the check exited $rc, or changed the decoy:"
+		cat "${tmp:?}/hostile.out"
+		diff "${tmp:?}/decoy.before" "${tmp:?}/decoy.after" | head -20 || true
+		fail=1
+	fi
+	# A user-level attributes file that union-merges every path must decide
+	# neither the scratch merge nor the attribute sweep.
+	mkdir -p "${tmp:?}/xdg/git"
+	printf '%s\n' '* merge=union' > "${tmp:?}/xdg/git/attributes"
+	rc=0
+	XDG_CONFIG_HOME=${tmp:?}/xdg sh "$self" --no-selftest > "${tmp:?}/xdg.out" 2>&1 || rc=$?
+	if [ "$rc" -ne 0 ]; then
+		echo "check-runbook-index: self-case: with a user-level attributes file holding \"* merge=union\" the check exited $rc:"
+		cat "${tmp:?}/xdg.out"
+		fail=1
+	fi
+fi
+
 [ "$fail" -eq 0 ] && echo "check-runbook-index: ok"
 exit "$fail"
