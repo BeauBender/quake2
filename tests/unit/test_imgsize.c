@@ -329,13 +329,15 @@ TEST(imgsize_getpcxinfo_header)
 
 static int loader_calls;
 static int loader_w, loader_h;
+static size_t loader_size;
 
 static struct image_s *
 Fake_Loader(const char *name, byte *pic, int width, int realwidth,
 	int height, int realheight, size_t data_size, imagetype_t type, int bits)
 {
 	(void)name; (void)pic; (void)realwidth; (void)realheight;
-	(void)data_size; (void)type; (void)bits;
+	(void)type; (void)bits;
+	loader_size = data_size;
 	loader_calls++;
 	loader_w = width;
 	loader_h = height;
@@ -675,4 +677,21 @@ TEST(imgsize_replacement_fits)
 	T_CHECK(!IMGSIZE_ReplacementFits(65536, 65536, 0, 0, &n));
 	T_CHECK(!IMGSIZE_ReplacementFits(0, 0, 0, 0, &n));
 	T_CHECK(!IMGSIZE_ReplacementFits(-1, 8, -2, 0, &n));
+}
+
+TEST(imgsize_m8_expansion_from_size)
+{
+	int len;
+	byte *f;
+
+	/* a body longer than the picture: the expansion covers the picture
+	   only, and the loader is told that many pixels (under ASan a loop over
+	   the file's length would write past the buffer) */
+	f = M8_File(4, 4, 100, &len);
+	Fake_Set(f, len);
+	loader_calls = 0;
+	T_CHECK(LoadM8("t", it_wall, Fake_Loader) != NULL);
+	T_EQ_INT((int)loader_size, 16);
+	free(f);
+	Fake_Set(NULL, 0);
 }
