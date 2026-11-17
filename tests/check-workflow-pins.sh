@@ -23,7 +23,7 @@
 #   services   is a mapping whose every value is an <image> string or a
 #              mapping with an image key.
 # An <image> ends in @sha256: and 64 lowercase hex digits and holds no
-# whitespace and no ${{ expression. In a Docker action (runs.using is
+# ${{ expression. In a Docker action (runs.using is
 # docker), runs.image is docker://<image>, or a Dockerfile path from the
 # action's directory, in the repository, whose every FROM line names an
 # <image> and no ARG ($); a FROM of a build stage or of scratch is refused
@@ -83,7 +83,7 @@ rescue LoadError
   exit 3
 end
 REMOTE = %r{\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[^@]*)?@[0-9a-f]{40}\z}
-IMAGE = %r{\A[^@\s]+@sha256:[0-9a-f]{64}\z}
+IMAGE = /@sha256:[0-9a-f]{64}\z/
 ROOT = File.realpath(ARGV.shift)
 Dir.chdir(ROOT)
 $bad = false
@@ -107,11 +107,10 @@ def image(file, v)
   refuse(file, v, "not pinned by a sha256 digest") unless pinned_image?(v)
 end
 
-# inside(path): true when path exists and its physical path is in ROOT.
+# inside(path): true when the physical path of path, which exists, is in
+# ROOT.
 def inside(path)
   File.realpath(path).start_with?(ROOT + "/")
-rescue SystemCallError
-  false
 end
 
 def uses(file, v)
@@ -120,7 +119,7 @@ def uses(file, v)
   elsif v.start_with?("./")
     local(file, v)
   elsif v.start_with?("docker://")
-    refuse(file, v, "not pinned by a sha256 digest") unless pinned_image?(v[9..-1])
+    refuse(file, v, "not pinned by a sha256 digest") unless pinned_image?(v)
   elsif !REMOTE.match?(v)
     refuse(file, v, "not pinned to a 40-hex commit SHA")
   end
@@ -160,7 +159,7 @@ def docker(file, runs)
   if !img.is_a?(String)
     refuse(file, img, "a Docker action with no image")
   elsif img.start_with?("docker://")
-    refuse(file, img, "not pinned by a sha256 digest") unless pinned_image?(img[9..-1])
+    refuse(file, img, "not pinned by a sha256 digest") unless pinned_image?(img)
   else
     dockerfile(File.join(File.dirname(file), img), img, file)
   end
@@ -479,6 +478,9 @@ selftest()
 	step date '    - name: Check out repository code' "$pinstep" '      with:' \
 		'        since: 2001-12-14'
 	expect refuse "a value safe_load refuses (a date)" date
+	step recursive '    - name: Check out repository code' "$pinstep" '      with:' \
+		'        list: &a [x, *a]'
+	expect accept "a pinned file with a recursive alias (the walk ends)" recursive
 
 	# Local actions and reusable workflows in this repository.
 	step localyaml '      - uses: ./.github/actions/y'
@@ -527,7 +529,8 @@ selftest()
 	dact dnone '  env:' '    X: y'
 	expect refuse "a Docker action with no image" dnone
 	dact dfpin '  image: Dockerfile'
-	dfile dfpin "FROM --platform=linux/amd64 debian@sha256:$dig AS build" 'RUN true' \
+	dfile dfpin "FROM --platform=linux/amd64 debian@sha256:$dig AS build" \
+		'RUN echo "built from this repository"' \
 		"FROM debian@sha256:$dig"
 	expect accept "a Dockerfile whose every FROM is pinned" dfpin
 	dact dftag '  image: Dockerfile'
@@ -614,6 +617,15 @@ selftest()
 	_want="$me: .github/workflows/w.yml: actions/checkout@v7: not pinned to a 40-hex commit SHA"
 	if [ "$_out" != "$_want" ]; then
 		echo "$me: selftest: the refusal of uses: actions/checkout@v7 printed something else" >&2
+		failed=1
+	fi
+	# A reference is printed as printable ASCII, at most 200 characters.
+	_xs=$(printf '%300s' '' | tr ' ' x)
+	step long "      - uses: \"actions/checkout@v7\\t$_xs\""
+	_out=$( (scan "$tmp/long") 2>&1) || :
+	_want="$me: .github/workflows/w.yml: actions/checkout@v7?$(printf '%180s' '' | tr ' ' x): not pinned to a 40-hex commit SHA"
+	if [ "$_out" != "$_want" ]; then
+		echo "$me: selftest: a reference with a tab and 300 more characters was not printed as 200 printable ones" >&2
 		failed=1
 	fi
 
