@@ -5,8 +5,13 @@
 # isSupported says no (and the menu's check then gives that reason),
 # and where the model is on the machine scales a synthetic tile at 2x
 # and 4x to the same bytes twice, with alpha 255 everywhere, which is
-# why CL_UpscaleRGBA sets the alpha from the indices. It never fetches
-# the model: without it the scaling cases say they skipped.
+# why CL_UpscaleRGBA sets the alpha from the indices, and keeps the
+# colour of flat tiles (TASK167 round 1: a half-float copy that read
+# the bytes back near white). The menu's check greys by the factor
+# only, remembering nothing a run found. It never fetches the model:
+# without it the scaling cases say they skipped. Before building, it
+# checks that only the menu item (src/client/menu/menu.c) calls the
+# model's fetch, so no command can start a download.
 #
 # It builds tests/metal/upscale_vt_test.m with the backend file alone
 # and the test-only switch UPSCALE_VT_TEST (with ASAN and UBSAN where the
