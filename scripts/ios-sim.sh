@@ -359,7 +359,7 @@ spawn)
 		crashstatus) [ "$n" -gt 1 ] && ls=-11 ;;
 		restart) [ "$n" -gt 1 ] && lp=200 ;;
 		bootcrash) lp=200; ls=-11 ;;
-		hang2) [ "$n" -gt 1 ] && { echo $$ > "$st/hang.pid"; exec sleep 60; } ;;
+		hang2) [ "$n" -gt 1 ] && { echo $$ > "$st/hang.pid"; exec sleep 180; } ;;
 		qfail) [ "$n" -gt 1 ] && { echo "fake xcrun: the device is not booted" >&2; exit 1; } ;;
 		qfailbase) [ "$n" -eq 1 ] && { echo "fake xcrun: the device is not booted" >&2; exit 1; } ;;
 		nolabel) lab=com.apple.other ;;
@@ -561,12 +561,12 @@ EOF
 		t0=$(date +%s)
 		cmd=${ST_CMD:-smoke --out @D@/out}; cmd=${cmd//@D@/$d}
 		# ST_CWD: the directory the script runs in; no pathname expansion of the words of the command
-		( set -f; cd "${ST_CWD:-.}" && bounded 60 "${d:?}/run.log" env -u IOS_SIM_SDK -u IOS_SIM_LAUNCHER_CRASH_OK -u FAKE_LAUNCHER PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
+		( set -f; cd "${ST_CWD:-.}" && bounded "${ST_OUTER:-60}" "${d:?}/run.log" env -u IOS_SIM_SDK -u IOS_SIM_LAUNCHER_CRASH_OK -u FAKE_LAUNCHER PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
 			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=20 IOS_SIM_CREATE_SECONDS=20 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10 "$@" \
 			bash "$self" $cmd ) || rc=$?
 		t0=$(( $(date +%s) - t0 ))
 		if [ "$rc" = 124 ]; then
-			why="the smoke outlived 60 s"
+			why="the smoke outlived ${ST_OUTER:-60} s"
 		elif [ "$want" = ok ] && [ "$rc" != 0 ]; then
 			why="the smoke failed ($rc)"
 		elif [ "$want" = fail ] && [ "$rc" = 0 ]; then
@@ -836,7 +836,7 @@ EOF
 	ST_CMD="run --out @D@/out" st_case launcher-run-crash-before-run extra fail "launcher: 1 crash(es) before the run: com.apple.SpringBoard" 30 FAKE_LAUNCHER=bootcrash
 	st_case launcher-boot-fails bootfail fail "launcher: unknown (the device did not boot)" 30
 	st_has launcher-boot-fails grep state/calls "simctl delete AAAAAAAA-"
-	st_case launcher-check-hangs extra fail "timed out after 30 s: xcrun simctl spawn" 50 FAKE_LAUNCHER=hang2
+	ST_OUTER=150 st_case launcher-check-hangs extra fail "timed out after 30 s: xcrun simctl spawn" 100 FAKE_LAUNCHER=hang2
 	st_has launcher-check-hangs grep run.log "launcher: unknown (launchctl list failed in the device)"
 	# only this run's device is asked
 	st_has launcher-no-crash-iphone nogrep state/calls "spawn 11111111-"
