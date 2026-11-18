@@ -1178,6 +1178,9 @@ t_lock_giveup() {
 t_lock_queue_reentry() {
 	fresh reentq
 	qfix
+	# FIX128 review round 1: W waits 10 + 10 + 30 + 30 s at most under this
+	# case's bounds, more than fresh's 10 s; 300 s keeps those binding.
+	BENCH_LOCK_WAIT=300
 	# The holder's command waits for $E/go, then runs a nested lock run
 	# with no wait at all, which lists the queue's tickets from inside.
 	cat > "${E:?}/nest.sh" << 'EOF'
