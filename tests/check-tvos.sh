@@ -1,11 +1,17 @@
 #!/bin/sh
 # Invariant: the iOS mode of the Makefile builds the engine for the tvOS
 # simulator too (TASK23: "make ios_objects IOS_SDK=appletvsimulator"), from
-# the same objects as the iOS simulator build, and leaves the iOS build as
-# it was.
+# the same object list as the iOS simulator build, and the iPhone and iPad
+# only code is compiled out of it.
 #
 # Every decision is taken from the build's artifacts (LC_BUILD_VERSION in
-# otool -l, plutil, the commands of make -n), never from a line make prints.
+# otool -l, the code of otool -tV, plutil, the commands of make -n) or from
+# the source text of the guards, never from a line make prints.
+#   (d) the source: each iPhone and iPad only site (the touch overlay's
+#       Touch_Supported, the in_touch default, the on-screen keyboard's
+#       follow-up, the window's orientation and home-indicator hints) is
+#       inside an #if that names TARGET_OS_IOS (TARGET_OS_IPHONE is true on
+#       tvOS and visionOS too). It runs everywhere, before the skips.
 # In a scratch IOS_ROOT, with METAL_SHADERS=no (no SDL, no link):
 #   (a) every object of the tree has LC_BUILD_VERSION platform 8
 #       (TVOSSIMULATOR) and minos 17.0, and there is at least one;
@@ -13,21 +19,92 @@
 #       build (make -n ios_objects, the "-o <path>" of each compile, the
 #       build root removed): the tvOS target adds and drops no file;
 #   (c) the Info.plist passes plutil -lint, names AppleTVSimulator and
-#       17.0, UIDeviceFamily 3 (Apple TV), no template key, and none of the
-#       iPhone's UIFileSharingEnabled, orientation or status bar keys.
+#       17.0, UIDeviceFamily 3 (Apple TV) alone, no template key, and none
+#       of the iPhone's UIFileSharingEnabled, orientation or status bar keys;
+#   (e) the compiled touch.o: Touch_Supported is "mov w0, #0x0; ret", 0
+#       whatever the device.
+# It does not compare the iOS build with an earlier one; that comparison is
+# the review's before and after of make -n (docs/runbook/TASK23.md).
 # Each assertion first runs on a mutant it must refuse (an object built for
-# the iOS simulator, a different object list, an iPhone plist), so an
+# the iOS simulator, a different object list, an iPhone plist, a plist with
+# a forbidden key, two device families or another minimum OS, each site's
+# guard reverted, a Touch_Supported that returns 1 or a variable), so an
 # assertion that passes everything fails here.
 #
 # Without the tvOS simulator SDK (another OS, or Xcode without its tvOS
-# platform) the check prints one "skipped" line and exits 0. With the SDK a
-# missing tool or a failed build is a failure, never a skip.
+# platform) the build checks print one "skipped" line and exit 0 after (d).
+# With the SDK a missing tool or a failed build is a failure, never a skip.
 #
 # Usage: tests/check-tvos.sh
 set -eu
 cd "$(dirname "$0")/.."
 export LC_ALL=C
 unset MAKEFLAGS GNUMAKEFLAGS MFLAGS
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/check-tvos.XXXXXX")
+trap 'rm -rf "${tmp:?}"' EXIT
+fail=0
+bad() { echo "check-tvos: $*"; fail=1; }
+
+# ---- (d) the iPhone and iPad only sites ----------------------------------
+
+# <file>|<the definition the site is in>|<a line inside the guarded block>
+sites='src/client/input/touch.c|^Touch_Supported\(void\)|return 1;
+src/client/input/sdl3.c|^IN_Update\(void\)|The on-screen keyboard only while text is typed
+src/client/input/sdl3.c|^IN_Init\(void\)|in_touch = Cvar_Get\("in_touch", "1"
+src/client/vid/glimp_sdl3.c|^CreateSDLWindow\(|SDL_HINT_ORIENTATIONS'
+
+# guard_of <file> <start> <anchor>: "<line>:<text>" of the innermost #if
+# around the first <anchor> after <start>; "else:" when the anchor is in its
+# #else or #elif branch; nothing when the anchor or the #if is missing
+guard_of()
+{
+	awk -v s="$2" -v a="$3" '
+		!on { if ($0 ~ s) on = 1; next }
+		/^[ \t]*#[ \t]*if/ { d++; ln[d] = NR; tx[d] = $0; el[d] = 0; next }
+		/^[ \t]*#[ \t]*(else|elif)/ { if (d) el[d] = 1; next }
+		/^[ \t]*#[ \t]*endif/ { if (d) d--; next }
+		$0 ~ a { if (d && el[d]) print "else:"; else if (d) print ln[d] ":" tx[d]; exit }
+	' "$1"
+}
+
+# assert_guard <file> <start> <anchor>: that #if names TARGET_OS_IOS, not negated
+assert_guard()
+{
+	g=$(guard_of "$1" "$2" "$3")
+	case $g in
+	'') echo "$1: no #if around \"$3\" after $2"; return 1 ;;
+	else:) echo "$1: \"$3\" after $2 is in an #else branch"; return 1 ;;
+	esac
+	if ! printf '%s\n' "${g#*:}" | grep -E -q '(^|[^!_[:alnum:]])TARGET_OS_IOS([^_[:alnum:]]|$)'; then
+		echo "$1:${g%%:*}: the guard of \"$3\" does not name TARGET_OS_IOS: ${g#*:}"
+		return 1
+	fi
+}
+
+n=0
+while IFS='|' read -r f s a; do
+	n=$((n + 1))
+	if ! assert_guard "$f" "$s" "$a" > "${tmp:?}/o" 2>&1; then
+		cat "${tmp:?}/o"
+		bad "(d) site $n is not iPhone and iPad only"
+		continue
+	fi
+	# the mutant: this site's guard back to TARGET_OS_IPHONE && !TARGET_OS_TV (true on visionOS)
+	l=$(guard_of "$f" "$s" "$a")
+	sed "${l%%:*}s/TARGET_OS_IOS/TARGET_OS_IPHONE \&\& !TARGET_OS_TV/" "$f" > "${tmp:?}/mut$n.c"
+	if assert_guard "${tmp:?}/mut$n.c" "$s" "$a" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: site $n ($f, $a) with its guard reverted passed"
+	elif ! grep -q 'does not name TARGET_OS_IOS' "${tmp:?}/o"; then
+		bad "mutant: site $n was refused without naming the guard: $(cat "${tmp:?}/o")"
+	fi
+done <<EOF
+$sites
+EOF
+[ "$n" = 4 ] || bad "(d) $n sites, not 4"
+if [ "$fail" != 0 ]; then
+	exit 1
+fi
 
 if [ "$(uname -s)" != Darwin ]; then
 	echo "check-tvos: skipped: the tvOS build is macOS only (docs/decisions/0008)"
@@ -53,11 +130,7 @@ for tool in make otool plutil awk sed sort grep clang; do
 	fi
 done
 
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/check-tvos.XXXXXX")
-trap 'rm -rf "${tmp:?}"' EXIT
 jobs=${CHECK_JOBS:-4}
-fail=0
-bad() { echo "check-tvos: $*"; fail=1; }
 
 platform_of()
 {
@@ -119,6 +192,19 @@ assert_plist() # <Info.plist>
 	return $rc
 }
 
+# the code of Touch_Supported in <object> is exactly "mov w0, #0x0" and "ret"
+assert_no_touch() # <object>
+{
+	otool -tV "$1" > "${tmp:?}/dis" 2>&1 || { echo "otool -tV $1 failed"; return 1; }
+	awk '$0 == "_Touch_Supported:" { on = 1; next }
+		on && /^[^0-9a-f]/ { exit }
+		on { $1 = ""; sub(/^[ \t]+/, ""); gsub(/[ \t]+/, " "); print }' "${tmp:?}/dis" > "${tmp:?}/fn"
+	if [ "$(tr '\n' ';' < "${tmp:?}/fn")" != "mov w0, #0x0;ret;" ]; then
+		echo "$1: Touch_Supported is not a constant 0: $(tr '\n' ';' < "${tmp:?}/fn")"
+		return 1
+	fi
+}
+
 # the "-o <path>" of every compile of make -n <args>, the build root removed, sorted
 object_list() # <root> <args...>
 {
@@ -160,6 +246,44 @@ if assert_plist "${tmp:?}/iphone.plist" > "${tmp:?}/o" 2>&1; then
 elif ! grep -q 'AppleTVSimulator' "${tmp:?}/o"; then
 	bad "mutant: the iPhone plist was refused without naming the platform"
 fi
+# one change each to the good plist: an iPhone key, a second device family, another minimum OS
+for k in UIFileSharingEnabled UISupportedInterfaceOrientations UIStatusBarHidden; do
+	sed "s,<key>CFBundleExecutable</key>,<key>$k</key><true/>&," "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
+	if assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: a plist with $k passed"
+	elif ! grep -q "the iPhone's $k" "${tmp:?}/o"; then
+		bad "mutant: the plist with $k was refused without naming it"
+	fi
+done
+sed 's,<integer>3</integer>,&<integer>1</integer>,' "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
+if assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
+	bad "mutant: a plist with the Apple TV and the iPhone families passed"
+elif ! grep -q 'holds more than the Apple TV' "${tmp:?}/o"; then
+	bad "mutant: the two-family plist was refused without naming the count"
+fi
+sed 's,<string>17\.0</string>,<string>16.0</string>,' "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
+if assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
+	bad "mutant: a plist with MinimumOSVersion 16.0 passed"
+elif ! grep -q 'MinimumOSVersion is not 17.0' "${tmp:?}/o"; then
+	bad "mutant: the 16.0 plist was refused without naming the minimum OS"
+fi
+
+# Touch_Supported: a constant 0 passes, a 1 or a read of a variable does not
+printf 'int Touch_Supported(void) { return 0; }\n' > "${tmp:?}/t0.c"
+printf 'int Touch_Supported(void) { return 1; }\n' > "${tmp:?}/t1.c"
+printf 'extern int tvos_g;\nint Touch_Supported(void) { return tvos_g; }\n' > "${tmp:?}/tv.c"
+for t in t0 t1 tv; do
+	xcrun --sdk appletvsimulator clang -O2 -target arm64-apple-tvos17.0-simulator -c "${tmp:?}/$t.c" -o "${tmp:?}/$t.o"
+done
+assert_no_touch "${tmp:?}/t0.o" > "${tmp:?}/o" 2>&1 || bad "a constant-0 Touch_Supported was refused: $(cat "${tmp:?}/o")"
+for t in t1 tv; do
+	if assert_no_touch "${tmp:?}/$t.o" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: a Touch_Supported that is not 0 ($t.c) passed"
+	fi
+done
+if assert_no_touch "${tmp:?}/m_tv.o" > "${tmp:?}/o" 2>&1; then
+	bad "mutant: an object without Touch_Supported passed"
+fi
 
 # ---- the build ----------------------------------------------------------
 
@@ -173,6 +297,12 @@ find "$root" -name '*.o' | sort > "${tmp:?}/objs"
 assert_platform "${tmp:?}/objs" > "${tmp:?}/o" 2>&1 || { head -n 5 "${tmp:?}/o"; bad "(a) the tvOS objects have the wrong platform"; }
 [ -f "$root/Info.plist" ] || bad "(c) no Info.plist was written"
 assert_plist "$root/Info.plist" > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(c) the tvOS Info.plist is wrong"; }
+grep '/touch\.o$' "${tmp:?}/objs" > "${tmp:?}/touch" || :
+if [ "$(grep -c . "${tmp:?}/touch")" != 1 ]; then
+	bad "(e) the build has $(grep -c . "${tmp:?}/touch") touch.o, not 1"
+else
+	assert_no_touch "$(cat "${tmp:?}/touch")" > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the touch overlay is compiled into the tvOS build"; }
+fi
 
 object_list /r IOS_SDK=appletvsimulator > "${tmp:?}/list_tv"
 object_list /r IOS_SDK=iphonesimulator > "${tmp:?}/list_ios"
