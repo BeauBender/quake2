@@ -751,6 +751,7 @@ cheatvar_t cheatvars[] = {
 	{"r_rt_ao_show", "0"},
 	{"r_rt_sun_show", "0"},
 	{"r_rt_water_show", "0"},
+	{"r_rt_flatlight", "0"},
 	{NULL, NULL}
 };
 

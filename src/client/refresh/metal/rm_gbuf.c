@@ -236,6 +236,17 @@ rm_gb_show(float v)
 	return (v < (float)RM_GB_SHOW_MAX) ? (int)v : RM_GB_SHOW_MAX;
 }
 
+float
+rm_gb_flatlight(float v)
+{
+	if (!isfinite(v) || !(v > 0.0f))
+	{
+		return 0.0f;
+	}
+
+	return (v < 1.0f) ? v : 1.0f;
+}
+
 void
 rm_gb_hist_reset(rm_gb_hist_t *h)
 {

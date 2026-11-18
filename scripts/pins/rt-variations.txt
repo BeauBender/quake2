@@ -1,0 +1,48 @@
+# scripts/pins/rt-variations.txt -- the ray-tracing variation presets and views of
+# scripts/rt-variations.sh (TASK173). Each line is one entry, its fields split by "|":
+#
+#   preset <name> | <caption> | <cvar> <value> [<cvar> <value>]...
+#   view   <name> | <base scenario> <demo> <every> | <capture>
+#
+# A preset is the cvars set on top of a view's base scenario (scripts/pins/scenarios/<base>.cfg);
+# "off" sets none, so its frames are the base scenario's own. A view is a base scenario, the demo
+# it plays (PINS_DEMO) and its capture cadence (PINS_EVERY), and the capture its contact sheet,
+# clip and full-size frames show: a capture number, or "auto:<preset>", the capture in which that
+# preset differs most from "off" (the mean difference of scripts/pins/framediff.c). Views of the same
+# base, demo and cadence share their records. Names match [a-z0-9][a-z0-9-]*; a caption holds only
+# letters, digits, spaces and . , : ; ( ) + - = / _ '; a cvar is an r_rt_* or r_fullbright one,
+# a value a number. The presets run in the order of this file.
+#
+# Every preset that turns on r_rt_ao fixes its noise (r_rt_ao_seed 1), so two runs draw the same
+# frames; the records run with PINS_SEED (default 1) for the dynamic lights' radii.
+
+preset off | off: stock lightmaps, no ray tracing |
+preset shadows | dlight shadows, defaults | r_rt_shadows 1
+preset shadows-x | dlight shadows, baked light flat at 0.15 | r_rt_shadows 1 r_rt_flatlight 0.15
+preset sun | sun, defaults: floor 0.5, scale 0.35 | r_rt_sun 1 r_rt_sunfloor 0.5 r_rt_sunscale 0.35
+preset sun-x | sun exaggerated: floor 1, scale 1 | r_rt_sun 1 r_rt_sunfloor 1 r_rt_sunscale 1
+preset ao | AO, defaults: range 128, min 0.4 | r_rt_ao 1 r_rt_ao_range 128 r_rt_ao_min 0.4 r_rt_ao_seed 1
+preset ao-x | AO exaggerated: range 512, min 0, every pixel | r_rt_ao 1 r_rt_ao_range 512 r_rt_ao_min 0 r_rt_ao_scale 1 r_rt_ao_seed 1
+preset water | water reflections, defaults: reflect 0.5 | r_rt_water 1 r_rt_water_reflect 0.5 r_rt_water_normal 0.08
+preset water-x | water exaggerated: mirror, ripple 0.3, hits 1 | r_rt_water 1 r_rt_water_reflect 1 r_rt_water_normal 0.3 r_rt_water_hits 1
+preset all | all four, defaults | r_rt_shadows 1 r_rt_sun 1 r_rt_sunfloor 0.5 r_rt_sunscale 0.35 r_rt_ao 1 r_rt_ao_range 128 r_rt_ao_min 0.4 r_rt_ao_seed 1 r_rt_water 1 r_rt_water_reflect 0.5 r_rt_water_normal 0.08
+preset all-x | all four exaggerated | r_rt_shadows 1 r_rt_sun 1 r_rt_sunfloor 1 r_rt_sunscale 1 r_rt_ao 1 r_rt_ao_range 512 r_rt_ao_min 0 r_rt_ao_scale 1 r_rt_ao_seed 1 r_rt_water 1 r_rt_water_reflect 1 r_rt_water_normal 0.3 r_rt_water_hits 1
+preset shadows-show1 | debug: r_rt_shadows_show 1, lights in range | r_rt_shadows 1 r_rt_shadows_show 1
+preset shadows-show2 | debug: r_rt_shadows_show 2, shadow classes | r_rt_shadows 1 r_rt_shadows_show 2
+preset sun-show1 | debug: r_rt_sun_show 1, sun mask | r_rt_sun 1 r_rt_sun_show 1
+preset sun-show2 | debug: r_rt_sun_show 2, sun classes | r_rt_sun 1 r_rt_sun_show 2
+preset ao-show1 | debug: r_rt_ao_show 1, light kept | r_rt_ao 1 r_rt_ao_seed 1 r_rt_ao_show 1
+preset ao-show2 | debug: r_rt_ao_show 2, AO classes | r_rt_ao 1 r_rt_ao_seed 1 r_rt_ao_show 2
+preset water-show1 | debug: r_rt_water_show 1, water mask | r_rt_water 1 r_rt_water_show 1
+preset water-show2 | debug: r_rt_water_show 2, water classes | r_rt_water 1 r_rt_water_show 2
+preset sunfloor-025 | sun floor sweep: floor 0.25 | r_rt_sun 1 r_rt_sunscale 0.35 r_rt_sunfloor 0.25
+preset sunfloor-050 | sun floor sweep: floor 0.5 | r_rt_sun 1 r_rt_sunscale 0.35 r_rt_sunfloor 0.5
+preset sunfloor-075 | sun floor sweep: floor 0.75 | r_rt_sun 1 r_rt_sunscale 0.35 r_rt_sunfloor 0.75
+preset sunfloor-100 | sun floor sweep: floor 1.0 | r_rt_sun 1 r_rt_sunscale 0.35 r_rt_sunfloor 1
+preset flat | flat light 0.4 alone, no ray-traced term | r_rt_gbuffer 1 r_rt_flatlight 0.4
+preset preview | preview: no traced bounce light, looks harsh; the real lightmap-free mode is TASK174's RT-primary | r_rt_flatlight 0.4 r_rt_shadows 1 r_rt_sun 1 r_rt_sunfloor 0.5 r_rt_sunscale 0.35 r_rt_ao 1 r_rt_ao_range 128 r_rt_ao_min 0.4 r_rt_ao_seed 1 r_rt_water 1 r_rt_water_reflect 0.5 r_rt_water_normal 0.08
+
+view outdoor | dlights demo1.dm2 30 | auto:sun-x
+view dlights | dlights demo1.dm2 30 | auto:shadows
+view indoor | dlights lowsky.dm2 30 | auto:ao-x
+view water | skywater water.dm2 30 | auto:water-x

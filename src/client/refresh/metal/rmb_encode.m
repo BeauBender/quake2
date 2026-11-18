@@ -76,6 +76,7 @@ int rmb_gbuf_reopen(void);
 id<MTLRenderPipelineState> rmb_gbuf_pipe3d(int pipe);
 void rmb_gbuf_bind_motion(id<MTLRenderCommandEncoder> enc, const float *mvp, const rm_viewport_t *vp);
 int rmb_gbuf_bind_world(id<MTLRenderCommandEncoder> enc, int dynamic, unsigned nv);
+float rmb_gbuf_flatlight(void);
 int rmb_gbuf_bind_alias(id<MTLRenderCommandEncoder> enc, int pipe, const rm_avert_t *v, unsigned nv);
 void rmb_gbuf_frame_reset(void);
 void rmb_gbuf_release(void);
@@ -1052,13 +1053,14 @@ rmb_draw_world(int vbuf, const unsigned *idx, unsigned long count, int tex, int 
 	return 1;
 }
 
-/* rm_shaders.metal's rm_uniforms_lm: gl1's lightmap unit and the slice */
+/* rm_shaders.metal's rm_uniforms_lm: gl1's lightmap unit and the slice; flat only rm_gbuf.metal's raster reads */
 typedef struct
 {
 	int env;
 	float scale;
 	unsigned slice;
 	unsigned filter;
+	float flat;             /* TASK173: rmb_gbuf_flatlight, 0 the lightmap sample */
 } rmb_uniforms_lm_t;
 
 int
@@ -1106,6 +1108,7 @@ rmb_draw_world_lm(int vbuf, const unsigned *idx, unsigned long count, const rmb_
 		u.scale = d->scale;
 		u.slice = (unsigned)d->slice;
 		u.filter = (unsigned)(d->filter == 1);
+		u.flat = rmb_gbuf_flatlight();
 
 		memcpy((unsigned char *)frame_ring.contents + iat, idx, (size_t)count * sizeof(idx[0]));
 		[frame_enc setVertexBuffer:vb offset:0 atIndex:0];
@@ -1192,6 +1195,7 @@ rmb_draw_world_dyn(const rm_wvert_t *v, unsigned nv, const unsigned *idx, unsign
 			u.env = d->lm.env;
 			u.scale = d->lm.scale;
 			u.slice = (unsigned)d->lm.slice;
+			u.flat = rmb_gbuf_flatlight();
 			[frame_enc setFragmentTexture:lmt atIndex:1];
 			[frame_enc setFragmentSamplerState:ls atIndex:1];
 			[frame_enc setFragmentBytes:&u length:sizeof(u) atIndex:1];
