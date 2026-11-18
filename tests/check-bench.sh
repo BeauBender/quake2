@@ -893,6 +893,13 @@ t_lock_guard() {
 	[ "$fails" -eq 0 ]
 }
 
+# stall <copy>: the copy's maker stalls between its mkdir and its holder
+# write until $E/unstall exists (60 s at most), not for a fixed time that
+# a loaded host can outlast before the taker has reclaimed (FIX128).
+stall() {
+	lit "${1:?}/core/lock.sh" 'BENCH_LOCK_SINCE=$(bench_utc)' "BENCH_LOCK_SINCE=\$(bench_utc); _fx_k=0; while [ ! -e '${E:?}/unstall' ] && [ \"\$_fx_k\" -lt 1200 ]; do sleep 0.05; _fx_k=\$((_fx_k + 1)); done"
+}
+
 t_lock_stall() {
 	fresh stall
 	# A maker that stalls between its mkdir and its holder write for longer
@@ -902,7 +909,7 @@ t_lock_stall() {
 	_s=${tmp:?}/stall
 	rm -rf "${_s:?}"
 	cp -R "$R" "$_s"
-	lit "${_s:?}/core/lock.sh" 'BENCH_LOCK_SINCE=$(bench_utc)' 'BENCH_LOCK_SINCE=$(bench_utc); sleep 2.5' || bad "stall: the injected stall does not apply"
+	stall "$_s" || bad "stall: the injected stall does not apply"
 	: > "${E:?}/slog"
 	start sh "$_s/bench.sh" lock run maker -- sh -c 'echo N-start >> "$1"; sleep 0.3; echo N-end >> "$1"' x "${E:?}/slog" > "${E:?}/maker.out" 2>&1
 	_mk=$BG
@@ -911,10 +918,12 @@ t_lock_stall() {
 		sleep 0.1
 		_k=$((_k + 1))
 	done
-	start env BENCH_LOCK_GRACE=1 sh "$R/bench.sh" lock run taker -- sh -c 'echo C-start >> "$1"; sleep 3.5; echo C-end >> "$1"' x "${E:?}/slog" > "${E:?}/taker.out" 2>&1
+	start env BENCH_LOCK_GRACE=1 sh "$R/bench.sh" lock run taker -- sh -c 'echo C-start >> "$1"; while [ ! -e "$2" ]; do sleep 0.05; done; echo C-end >> "$1"' x "${E:?}/slog" "${E:?}/release" > "${E:?}/taker.out" 2>&1
 	_c=$BG
+	wait_held 30 taker || bad "stall: the taker never reclaimed the stalled maker's lock"
+	: > "${E:?}/unstall"
 	_k=0
-	while ! grep -q 'waiting for the lock held by' "${E:?}/maker.out" && [ "$_k" -lt 80 ]; do
+	while ! grep -q 'waiting for the lock held by' "${E:?}/maker.out" && [ "$_k" -lt 300 ]; do
 		sleep 0.1
 		_k=$((_k + 1))
 	done
@@ -923,6 +932,7 @@ t_lock_stall() {
 	'lock=held label=taker '*) ;;
 	*) bad "stall: the taker's holder file did not survive the stalled maker: $(B lock status)" ;;
 	esac
+	: > "${E:?}/release"
 	wait_gone 20 "$_mk" || bad "stall: the stalled maker did not finish"
 	wait_gone 20 "$_c" || bad "stall: the taker did not finish"
 	_s1=0
@@ -1088,24 +1098,42 @@ t_lock_dead_waiter() {
 	[ "$fails" -eq 0 ]
 }
 
+# clockshim: $E/clock/date, a date whose +%s stands still until $E/tick
+# exists and then reads an hour on; every other form is the real date.
+clockshim() {
+	mkdir -p "${E:?}/clock"
+	_cs_t=$(date +%s)
+	printf '#!/bin/sh\nif [ "$#" -eq 1 ] && [ "$1" = +%%s ]; then\n\tif [ -e "%s/tick" ]; then echo %s; else echo %s; fi\n\texit 0\nfi\nexec %s "$@"\n' "$E" "$((_cs_t + 3600))" "$_cs_t" "$(command -v date)" > "${E:?}/clock/date"
+	chmod +x "${E:?}/clock/date"
+}
+
 t_lock_giveup() {
 	fresh giveup
 	qfix
+	clockshim
 	holder H
-	start env BENCH_LOCK_WAIT=1 sh "$R/bench.sh" lock run G -- echo ran > "${E:?}/g.out" 2>&1
+	# FIX128: G's clock stands still until $E/tick, so G cannot give up
+	# before this test has seen its ticket, however slow the host. On the
+	# real clock a second boundary just after its enqueue (load makes one
+	# likelier) let G give up within milliseconds. The bound, 300 polls (at
+	# least 30 s), is only for a waiter that never queues; the other cases
+	# give a waiter 10 s to say it waits.
+	start env PATH="$E/clock:$PATH" BENCH_LOCK_WAIT=1 sh "$R/bench.sh" lock run G -- echo ran > "${E:?}/g.out" 2>&1
 	_g=$BG
 	_seen=
 	_n=0
-	while [ "$_n" -lt 100 ] && pid_running "$_g"; do
+	while [ "$_n" -lt 300 ] && pid_running "$_g"; do
 		_tk=$(ticket_of "$_g") || _tk=
-		if [ -n "$_tk" ] && grep -qx 'label=G' "${E:?}/state/queue/$_tk"; then
+		if [ -n "$_tk" ] && grep -qx 'label=G' "${E:?}/state/queue/$_tk" 2> /dev/null; then
 			_seen=1
 			break
 		fi
-		sleep 0.02
+		sleep 0.1
 		_n=$((_n + 1))
 	done
 	[ -n "$_seen" ] || bad "give-up: the waiter showed no ticket (its pid= and label=) while it waited"
+	pid_running "$_g" || bad "give-up: the waiter gave up while its clock stood still"
+	: > "${E:?}/tick"
 	finish give-up "$_g" 75
 	grep -q 'still held by H (pid ' "${E:?}/g.out" || bad "give-up: the waiter did not name the holder: $(cat "${E:?}/g.out")"
 	[ -z "$(tickets)" ] || bad "give-up: a waiter that gave up left its ticket: $(tickets | tr '\n' ' ')"
@@ -1234,7 +1262,7 @@ t_lock_stall_place() {
 	_s=${tmp:?}/stallp.bench
 	rm -rf "${_s:?}"
 	cp -R "$R" "$_s"
-	lit "${_s:?}/core/lock.sh" 'BENCH_LOCK_SINCE=$(bench_utc)' 'BENCH_LOCK_SINCE=$(bench_utc); sleep 6' || bad "stall-place: the injected stall does not apply"
+	stall "$_s" || bad "stall-place: the injected stall does not apply"
 	start sh "$_s/bench.sh" lock run N -- sh "$E/rec.sh" "$E/log" N > "${E:?}/n.out" 2>&1
 	_mk=$BG
 	_k=0
@@ -1244,13 +1272,14 @@ t_lock_stall_place() {
 	done
 	start env BENCH_LOCK_GRACE=1 sh "$R/bench.sh" lock run C -- sh "$E/hold.sh" "$E/release" "$E/log" C > "${E:?}/c.out" 2>&1
 	_c=$BG
-	wait_held 5 C || bad "stall-place: the taker never held the lock"
+	wait_held 30 C || bad "stall-place: the taker never held the lock"
 	start sh "$R/bench.sh" lock run W -- sh "$E/rec.sh" "$E/log" W > "${E:?}/w.out" 2>&1
 	_w=$BG
 	wait_said 10 "${E:?}/w.out" || bad "stall-place: W never waited"
 	! grep -q 'waiting for the lock' "${E:?}/n.out" || bad "stall-place: N backed off before W queued, so this tests nothing: $(cat "${E:?}/n.out")"
+	: > "${E:?}/unstall"
 	_k=0
-	while ! grep -q 'waiting for the lock held by C ' "${E:?}/n.out" && [ "$_k" -lt 100 ]; do
+	while ! grep -q 'waiting for the lock held by C ' "${E:?}/n.out" && [ "$_k" -lt 300 ]; do
 		sleep 0.1
 		_k=$((_k + 1))
 	done
