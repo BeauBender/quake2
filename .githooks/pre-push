@@ -44,7 +44,8 @@
 #               the user name is a whole word. The blobs go to it under
 #               placeholder names in a temporary index, the paths as the text
 #               of one more blob per ref, kept in a temporary object
-#               directory; nothing is written to the repository. One run of
+#               directory given to git as an alternate; nothing is written to
+#               the repository. One run of
 #               the check (a few seconds, for its self-test) covers the whole
 #               push, and only a push that adds a blob or a path runs it.
 #   your own    in the author and committer lines only, the user name is not
@@ -339,17 +340,20 @@ collect() {
 
 # filescan: runs the gate check on everything collect gathered and reports
 # each ref with a match, once. The check runs with GIT_DIR this repository,
-# GIT_INDEX_FILE the temporary index and the temporary object directory in
-# front of this repository's objects; it reads the host name, user name and
-# home path itself, as this hook does. Refuses (exits) unless it ends with
-# its own verdict: clean, or matches this hook can place.
+# GIT_INDEX_FILE the temporary index and the temporary object directory as
+# an alternate of this repository's objects; it reads the host name, user
+# name and home path itself, as this hook does. Its scan takes a blob it
+# cannot read as clean, so the alternate's path must survive the colon-split
+# list git reads it from. Refuses (exits) unless the check ends with its own
+# verdict: clean, or matches this hook can place.
 filescan() {
 	_check=$(dirname "$0")/../tests/check-no-local-identity.sh
 	[ -f "$_check" ] || die "refused: tests/check-no-local-identity.sh, which scans the files, is missing"
 	_gd=$(git rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$_gd" ] ||
 		die "refused: cannot find this repository for the file scan"
-	_od=$(git rev-parse --path-format=absolute --git-path objects 2>/dev/null) && [ -n "$_od" ] ||
-		die "refused: cannot find this repository's objects for the file scan"
+	case $td in
+	*:* | *'"'*) die "refused: the temporary directory's path holds a colon or a quote, which the file scan cannot pass to git; set TMPDIR to another directory" ;;
+	esac
 	awk '{ printf "100644 %s 0\t%s\n", $4, $1 }' "$td/table" > "$td/info" || die "refused: cannot write a temporary file"
 	GIT_INDEX_FILE=$td/index git update-index --index-info < "$td/info" 2>/dev/null ||
 		die "refused: cannot build the index of the file scan"
@@ -358,9 +362,8 @@ filescan() {
 		unset GIT_WORK_TREE
 		GIT_DIR=$_gd
 		GIT_INDEX_FILE=$td/index
-		GIT_OBJECT_DIRECTORY=$td/objects
-		GIT_ALTERNATE_OBJECT_DIRECTORIES=$_od${GIT_ALTERNATE_OBJECT_DIRECTORIES:+:$GIT_ALTERNATE_OBJECT_DIRECTORIES}
-		export GIT_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+		GIT_ALTERNATE_OBJECT_DIRECTORIES=$td/objects${GIT_ALTERNATE_OBJECT_DIRECTORIES:+:$GIT_ALTERNATE_OBJECT_DIRECTORIES}
+		export GIT_DIR GIT_INDEX_FILE GIT_ALTERNATE_OBJECT_DIRECTORIES
 		exec sh "$_check"
 	) > "$td/check" 2>&1 < /dev/null || _st=$?
 	_head="check-no-local-identity: tracked files contain this machine's identity (values not shown); remove them:"

@@ -607,6 +607,17 @@ gone=$(TR=$(GIT_INDEX_FILE=$tmp/tree.idx w write-tree) mk "$m1" zzqm62)
 rm -f "$tmp/w/.git/objects/$(printf '%s' "$_gone" | cut -c1-2)/$(printf '%s' "$_gone" | cut -c3-)"
 printf 'refs/heads/zzqgone %s refs/heads/zzqgone %s\n' "$gone" "$zero" > "$tmp/in"
 closed "a blob that cannot be read" 'cannot list the new objects of ref number 1'
+# A blob whose file is there but corrupt: git rev-list lists it, git cat-file
+# cannot read it.
+_bad=$(printf 'zzq corrupt\n' | w hash-object -w --stdin)
+rm -f "$tmp/tree.idx"
+GIT_INDEX_FILE=$tmp/tree.idx w update-index --add --cacheinfo "100644,$_bad,zzq-corrupt.txt"
+corrupt=$(TR=$(GIT_INDEX_FILE=$tmp/tree.idx w write-tree) mk "$m1" zzqm63)
+_of="$tmp/w/.git/objects/$(printf '%s' "$_bad" | cut -c1-2)/$(printf '%s' "$_bad" | cut -c3-)"
+chmod u+w "$_of"
+printf 'zzq not a zlib stream\n' > "$_of"
+printf 'refs/heads/zzqcorrupt %s refs/heads/zzqcorrupt %s\n' "$corrupt" "$zero" > "$tmp/in"
+closed "a blob whose object is corrupt" 'cannot read an object of ref number 1'
 # The gate check beside the hook is missing, fails, ends without its verdict,
 # or reports a match the hook cannot place: refused. The commit is clean.
 fileok=$(TR=$(tree scripts/ok.sh "echo zzq clean") mk "$m1" zzqm61)
@@ -633,6 +644,16 @@ _rc=0
 (cd "$tmp/w" && sh "$tmp/alt/.githooks/pre-push" origin x) < "$tmp/in" > "$tmp/out" 2>&1 || _rc=$?
 { [ "$_rc" -eq 0 ] && [ ! -s "$tmp/out" ]; } || { note "a push that adds no file ran the file scan"; redact < "$tmp/out"; }
 leaks "a push that adds no file"
+# A temporary directory whose path holds a colon cannot be named in git's
+# colon-split list of alternates (the paths blob would go unread): refused.
+mkdir "$tmp/hooktmp/zzq:x"
+printf 'refs/heads/zzqok %s refs/heads/zzqok %s\n' "$fileok" "$zero" > "$tmp/in"
+_rc=0
+(cd "$tmp/w" && TMPDIR="$tmp/hooktmp/zzq:x" sh "$hook" origin x) < "$tmp/in" > "$tmp/out" 2>&1 || _rc=$?
+{ [ "$_rc" -ne 0 ] && grep -q "^pre-push: refused: the temporary directory's path holds a colon" "$tmp/out"; } ||
+	{ note "a temporary directory with a colon: not refused"; redact < "$tmp/out"; }
+leaks "a temporary directory with a colon"
+rmdir "$tmp/hooktmp/zzq:x"
 printf 'refs/heads/zzqmain %s refs/heads/zzqmain %s\n' "$m2" "$m1" > "$tmp/in"
 shim hostname ''
 closed "host name unreadable" "cannot read this machine's host name"
