@@ -189,7 +189,11 @@ uuid_re='[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}'
 
 # bounded <seconds> <log> [-e <err>] <command>...: runs it, kills it (our
 # PID) past the bound; its output goes to <log>, its errors there too or
-# to <err>
+# to <err>. The child's PID is in bounded_pid while it runs, so the trap's
+# cleanup stops it by that PID when a signal ends the script mid-call
+# (FIX131): an async child of a non-interactive bash has SIGINT ignored,
+# and nothing else signals it
+bounded_pid=
 bounded()
 {
 	local limit=$1 log=$2 err=$2 pid t=0 w status=0
@@ -207,12 +211,14 @@ bounded()
 		"$@" > "$log" 2> "$err" &
 	fi
 	pid=$!
+	bounded_pid=$pid
 	while kill -0 "$pid" 2>/dev/null; do
 		if [ "$t" -ge $((limit * 5)) ]; then
 			kill "$pid" 2>/dev/null
 			w=0; while kill -0 "$pid" 2>/dev/null && [ "$w" -lt 5 ]; do sleep 1; w=$((w + 1)); done
 			kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
 			wait "$pid" 2>/dev/null
+			bounded_pid=
 			echo "ios-sim: timed out after $limit s: $*" >&2
 			return 124
 		fi
@@ -220,6 +226,7 @@ bounded()
 		t=$((t + 1))
 	done
 	wait "$pid" || status=$?
+	bounded_pid=
 	return $status
 }
 
@@ -1038,6 +1045,11 @@ udid=
 lpid=
 cleanup()
 {
+	# a bounded call a signal cut short: its child, by its own PID, before cleanup's own bounded calls
+	if [ -n "$bounded_pid" ] && kill -0 "$bounded_pid" 2>/dev/null; then
+		stop_pid "$bounded_pid" || true
+	fi
+	bounded_pid=
 	if [ -n "$lpid" ] && kill -0 "$lpid" 2>/dev/null; then
 		stop_pid "$lpid" || true
 	fi
@@ -1051,7 +1063,7 @@ cleanup()
 	rm -rf "${tmp:?}"
 }
 trap cleanup EXIT
-trap 'exit 1' INT TERM
+trap 'exit 1' INT TERM HUP
 
 # list_devices <file>: "simctl list devices -j" into <file>.json (bounded,
 # its status checked), then the default device set's devices, one
