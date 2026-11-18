@@ -899,7 +899,7 @@ marked `(n/a)` and skipped.
   with the configuration; applies from the next frame.
 
 The `r_rt_*` cvars belong to the Metal renderer's ray tracing, which is
-being built: `r_rt_shadows` is its first effect, `r_rt_ao` its second and `r_rt_water` its third; with `r_rt_stats` set, the renderer
+being built: `r_rt_shadows` is its first effect, `r_rt_ao` its second, `r_rt_water` its third and `r_rt_sun` its fourth; with `r_rt_stats` set, the renderer
 builds acceleration structures for the world, the doors and platforms
 and every model the frame lists (not only those in view, since a model
 out of view can still cast into it), which nothing reads. On a GPU without ray
@@ -923,8 +923,9 @@ is.
   through. The rays' directions follow a blue-noise pattern that changes
   every frame, so without the accumulation over frames a later version
   adds the darkening is grainy. Needs a GPU with ray tracing and draws the
-  view through the G-buffer (see `r_rt_gbuffer`); with `r_fullbright 1`
-  there is no lightmap and it does nothing. With `0` (the default) nothing
+  view through the G-buffer (see `r_rt_gbuffer`); with `r_fullbright` set
+  (any value but `0`) there is no lightmap and it does nothing. With `0`
+  (the default) nothing
   is traced or allocated and the picture is as without ray tracing. Saved
   with the configuration; applies from the next frame.
 
@@ -1112,6 +1113,65 @@ is.
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next
   frame.
+
+* **r_rt_sun**: When set to `1`, the Metal renderer lights the world's
+  dim outdoor surfaces with a ray-traced sun: from each pixel of the
+  world whose lightmap is below `r_rt_sunfloor` and which faces the sun,
+  one ray goes toward the sun, and a pixel whose ray reaches the sky gets
+  new light, the sky's colour times `r_rt_sunscale` times how squarely it
+  faces the sun; a ray that meets anything else first (the world, a door
+  or platform, a model) or nothing at all leaves the pixel in shadow.
+  Water and translucent surfaces let the ray through, up to four of them
+  on one ray (a fifth shadows it); the view weapon and
+  the player's own model cast no sun shadow. The light is added after
+  `r_rt_ao`'s darkening and replaces none of the stock light, so nothing
+  is counted twice. The sky's colour is the mean of the sky box's five
+  upper faces, scaled so its brightest channel is full. The sun's
+  direction is the map's line of `scripts/rt/sun-angles.txt`, which the
+  renderer is built with, or else `r_rt_sun_angles`. A map whose sky
+  faces are under 2 % of its face area is drawn as with the setting off,
+  and nothing is traced, built or kept for the sun on it (the renderer
+  prints the map's share once). Needs a GPU with ray
+  tracing and draws the view through the G-buffer (see `r_rt_gbuffer`);
+  with `r_fullbright` set (any value but `0`) there is no lightmap and it
+  does nothing. With `0`
+  (the default) nothing is traced or allocated and the picture is as
+  without ray tracing. Saved with the configuration; applies from the
+  next frame.
+
+* **r_rt_sun_angles**: The direction of `r_rt_sun`'s sun on a map that
+  `scripts/rt/sun-angles.txt` does not list, as `pitch yaw` in degrees:
+  the pitch its height above the horizon, `0` to `90`, the yaw its compass
+  angle counter-clockwise from the map's x axis, `0` up to `360` (`55 45`
+  by default). A value that is not two such numbers counts as `55 45`
+  (the renderer says so once). Saved with the configuration; applies from
+  the next frame.
+
+* **r_rt_sun_show**: A development view of the Metal renderer's
+  `r_rt_sun`: with it on, `1` replaces the 3D view by a mask, black where
+  the sun's light was added and white everywhere else, `2` by the pass's
+  classes: white lit, red in shadow, blue facing away from the sun, grey
+  with a lightmap at or above `r_rt_sunfloor`, black not a world pixel.
+  The view weapon, models drawn over the world, particles and translucent
+  surfaces are left out of these views. `0` (the default) shows the
+  picture; a value above `2` counts as `2`, one that is not a finite
+  number as `0`, and a fraction is cut to the whole number below it.
+  Cheat-protected: reset to `0` in multiplayer. Applies from the next
+  frame.
+
+* **r_rt_sunfloor**: The lightmap level under which `r_rt_sun` adds its
+  light, from `0` to `1` in the lightmap's brightest channel: `0.5` (the
+  default) lights the surfaces whose lightmap is below half, so bright
+  indoor lighting is not blown out; `0` adds nothing, `1` lights almost
+  every pixel the sun reaches. A value outside the range counts as the
+  nearest end, one that is not a finite number as `0.5`. Saved with the
+  configuration; applies from the next frame.
+
+* **r_rt_sunscale**: How strong `r_rt_sun`'s light is: the share of the
+  sky's colour a pixel facing the sun squarely gets, `0.35` by default. A
+  value below `0` counts as `0`, one above `4` as `4`, one that is not a
+  finite number as `0.35`. Saved with the configuration; applies from the
+  next frame.
 
 * **r_rt_water**: When set to `1`, the Metal renderer gives water a
   ray-traced reflection, one bounce: from each pixel of water (the

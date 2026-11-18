@@ -1,0 +1,32 @@
+# The sun's direction per map for ref_metal's ray-traced sun and sky
+# shadow (r_rt_sun, RT4, TASK56; docs/plans/metal-raytracing-design.md,
+# section 2). Quake II maps have no sun entity, so the direction is
+# configuration, not asset data: this file holds directions only.
+#
+# Format, one map a line:
+#
+#     <map> <pitch> <yaw>
+#
+# - <map> is the map's bare name, as `map` takes it: base1 for
+#   maps/base1.bsp. Letters, digits, '_' and '-', at most 63 characters;
+#   compared without case. A map is named once.
+# - <pitch> is the sun's height above the horizon in degrees, 0 to 90
+#   (90 straight overhead).
+# - <yaw> is its compass angle in degrees, counter-clockwise from the
+#   map's +x axis as an entity's yaw, 0 up to but not including 360.
+# - Both are decimal numbers ("55", "37.5"); fields are separated by
+#   blanks or tabs.
+# - '#' starts a comment to the end of the line; blank lines are skipped.
+#
+# A map named here takes its line's direction; every other map takes
+# r_rt_sun_angles (default "55 45"). A line that breaks a rule is left out
+# and reported once, at the renderer's start (the first bad line's number
+# and how many there were); the good lines still count. The renderer is
+# built with this file in it (ref_metal's Makefile rule), so a change
+# takes a rebuild. tests/metal/rm_rtsun_test.c parses it and fails on a
+# bad line.
+#
+# The directions below are a first set, to be tuned when the owner judges
+# the look (INFORM11).
+
+base1	60	135

@@ -37,6 +37,7 @@
 #include "header/local.h"
 #include "header/rm_rtscene.h"
 #include "header/rm_rtaoscene.h"
+#include "header/rm_rtsunscene.h"
 #include "header/rm_rtwaterscene.h"
 #include "header/rm_gbufscene.h"
 #include "header/rm_fxscene.h"
@@ -917,6 +918,7 @@ R_RenderViewGB(refdef_t *fd, int stencil)
 	/* RT3: the view and lights of the shadow rays, traced at the resolve; with them the dynamic lights leave the lightmaps */
 	RM_RTS_View(&r_view);
 	RM_RTAO_View(&r_view);   /* RT5: the view of the AO rays, traced at the resolve */
+	RM_RTSun_View(&r_view);  /* RT4: the view of the sun rays, traced at the resolve after the AO */
 	RM_RTW_View(&r_view);    /* RT6: the view of the reflections, traced after the resolve */
 	R_MarkLeaves();
 	R_DrawWorld(&r_view);
@@ -924,8 +926,8 @@ R_RenderViewGB(refdef_t *fd, int stencil)
 	RM_GB_Resolve();
 	r_dlight_term = true;   /* nothing after the resolve is resolved: a lightmap built from here keeps gl1's term */
 
-	/* r_rt_shadows_show, r_rt_ao_show and r_rt_water_show draw their pass's view alone, the forward pass left out */
-	if (!RM_RTS_ShowOnly() && !RM_RTAO_ShowOnly() && !RM_RTW_ShowOnly())
+	/* r_rt_shadows_show, r_rt_ao_show, r_rt_sun_show and r_rt_water_show draw their pass's view alone, the forward pass left out */
+	if (!RM_RTS_ShowOnly() && !RM_RTAO_ShowOnly() && !RM_RTSun_ShowOnly() && !RM_RTW_ShowOnly())
 	{
 		R_DrawEntitiesSplit(0);
 		R_RenderDlights(&r_view);
@@ -955,6 +957,9 @@ RI_RenderFrame(refdef_t *fd)
 
 	/* whether it traces RT5's ambient occlusion */
 	RM_RTAO_Frame(fd, RM_RT_SceneReady());
+
+	/* whether it traces RT4's sun and sky shadow (never on a map under 2 % sky) */
+	RM_RTSun_Frame(fd, RM_RT_SceneReady());
 
 	/* whether it traces RT6's water reflections */
 	RM_RTW_Frame(fd, RM_RT_SceneReady());

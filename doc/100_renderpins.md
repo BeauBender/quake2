@@ -94,6 +94,7 @@ scenario plays `PINS_DEMO`, so all of them follow the same camera path.
 | `world-scale8` | `world` with `r_scale8bittextures 1`: the 8-bit world textures scaled up and smoothed |
 | `world-metalfx1`, `world-metalfx2`, `world-metalfx3` | `world` with `r_metalfx` 1, 2 or 3 at `r_metalfx_scale 0.5`: the 3D view drawn at half size and upscaled by a MetalFX scaler (the others draw it as `world`). Where the GPU lacks a mode it falls back to the best one below, so on a GPU with only the spatial scaler all three draw `world-metalfx1`'s frames |
 | `world-metalfx-interp` | `world` with `r_metalfx_interp 1`; frame generation is not built yet, so it draws `world`'s frames on every GPU |
+| `rt-sun` | `world` with `r_rt_sun 1`: the Metal renderer's ray-traced sun and sky shadow, new light on the world's dim surfaces where a ray toward the sun reaches the sky (the others draw it as `world`, and so does the Metal renderer on a map whose sky is under 2 % of its face area or on a GPU without ray tracing); its pin is recorded once the owner accepts the look (TASK56) |
 | `particles-cap` | `particles` with `metal_particle_cap 1`: the particle size limit of the Metal renderer scaled by `height / 480` (the others draw it as `particles`); recorded with `PINS_SEED` like `particles` |
 | `models` | the world plus entities: models, sprites, beams, the view weapon |
 | `particles` | everything, including particles, dynamic lights and the screen blend |

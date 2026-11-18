@@ -35,6 +35,7 @@
 #include "header/rm_rtscene.h"
 #include "header/rm_rtshadow.h"
 #include "header/rm_rtaoscene.h"
+#include "header/rm_rtsunscene.h"
 #include "header/rm_rtwaterscene.h"
 
 #define RT_MAX_AMODELS 512   /* rm_model.c's MAX_MOD_KNOWN */
@@ -89,6 +90,7 @@ RM_RT_Init(const rmb_caps_t *caps)
 	rt_scene_ready = 0;
 	RM_RTS_Init(caps);   /* r_rt_shadows (RT3, TASK55) */
 	RM_RTAO_Init(caps);  /* r_rt_ao (RT5, TASK57) */
+	RM_RTSun_Init(caps); /* r_rt_sun (RT4, TASK56) */
 	RM_RTW_Init(caps);   /* r_rt_water (RT6, TASK58) */
 }
 
@@ -120,6 +122,7 @@ RM_RT_FreeAll(void)
 	RM_RT_Summary();
 	RM_RTS_Shutdown();   /* the shadows' objects first: they use the structures */
 	RM_RTAO_Shutdown();  /* and the AO's (RT5) */
+	RM_RTSun_Shutdown(); /* and the sun's (RT4) */
 	RM_RTW_Shutdown();   /* and the water's (RT6) */
 
 	if (rt_opened)
@@ -194,7 +197,7 @@ static int
 RM_RT_Wanted(void)
 {
 	return (r_rt_stats && rm_rt_wanted(r_rt_stats->value, rt_device)) || RM_RTS_Wanted() || RM_RTAO_Wanted() ||
-		RM_RTW_Wanted();
+		RM_RTW_Wanted() || RM_RTSun_Wanted();
 }
 
 int
@@ -564,8 +567,9 @@ RM_RT_Frame(const refdef_t *fd)
 	fs.excl = excl;
 	fs.alias_ms = fs.ias_ms = -1;
 
-	/* the frame's scene kept for the ray queries of RT3's shadows, RT5's AO and RT6's reflections */
-	if (!rmb_rt_frame(inst, n, lerps, nl, RM_RTS_Wanted() || RM_RTAO_Wanted() || RM_RTW_Wanted(), &fs))
+	/* the frame's scene kept for the ray queries of RT3's shadows, RT4's sun, RT5's AO and RT6's reflections */
+	if (!rmb_rt_frame(inst, n, lerps, nl, RM_RTS_Wanted() || RM_RTAO_Wanted() || RM_RTW_Wanted() || RM_RTSun_Wanted(),
+			&fs))
 	{
 		return;
 	}
