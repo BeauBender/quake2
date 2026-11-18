@@ -15,7 +15,9 @@ original clients (Vanilla Quake II) commands are still in place.
   `-DYQ2_INPUT_PROBE`, TASK23); a release has no such command. Drives
   input without hands, since a simulator cannot press a controller
   button: `pad` attaches an SDL virtual gamepad, which the engine finds
-  as any controller; `button <name> <0|1>` presses or releases one of its
+  as any controller plugged in after the start (it is refused in the
+  start's first frames, where a new device is taken as one that was
+  already there); `button <name> <0|1>` presses or releases one of its
   buttons and `axis <name> <value>` moves one of its axes (SDL's names:
   `a`, `b`, `start`, `dpup`, `leftx`, `righttrigger`, ...); `key <name>
   <0|1>` pushes the key event of a scancode (`Up`, `Down`, `Left`,

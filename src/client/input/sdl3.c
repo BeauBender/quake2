@@ -3292,6 +3292,8 @@ IN_MatchJoyPreset(void)
  * hands, since simctl cannot press a controller button.
  *   in_probe pad                  attaches an SDL virtual gamepad, which
  *                                 the engine finds as any controller
+ *                                 plugged in after the start (refused
+ *                                 while first_init is set)
  *   in_probe button <name> <0|1>  presses or releases its button (SDL's
  *                                 names: a, b, x, y, start, dpup, ...)
  *   in_probe axis <name> <value>  moves its axis (leftx, righty, ...)
@@ -3312,6 +3314,16 @@ IN_Probe_f(void)
 	{
 		SDL_VirtualJoystickDesc desc;
 		SDL_JoystickID id;
+
+		/* a device added in the start's first updates is taken as one that
+		   was there at start (IN_Controller_Init opened those): when the
+		   countdown runs out with first_init still set, nothing is opened.
+		   A pad is attached after it, as a person plugs one in. */
+		if (first_init)
+		{
+			Com_Printf("in_probe: pad not attached: the start's controller countdown is not over, try again later\n");
+			return;
+		}
 
 		if (!probe_joy)
 		{

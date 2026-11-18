@@ -6530,10 +6530,16 @@ static void
 Walk_Key(int key)
 {
 	/* a popup (the server search's) ends with time, and no time passes
-	   inside the walk: it is closed as the time running out closes it */
+	   inside the walk, which runs from the command line before the first
+	   frame, at the engine's first millisecond (cls.realtime 1). It is
+	   taken away as the time running out takes it away. Menu_ClosePopup
+	   cannot be used here: it sets the end to cls.realtime - 1, which is 0
+	   at that time, and an end of 0 means a popup without an end, so every
+	   key after it would only close it again (Default_MenuKey). A person
+	   never presses a key at cls.realtime 1: keys come in frames. */
 	if (Menu_PopupActive(&m_popup))
 	{
-		Menu_ClosePopup(&m_popup);
+		m_popup.string = NULL;
 	}
 
 	walk_presses++;
@@ -6748,6 +6754,7 @@ M_Probe_f(void)
 	}
 
 	walk_nseen = walk_fail = walk_presses = 0;
+	Com_Printf("menu_probe: walk at cls.realtime %d\n", cls.realtime);
 	M_ForceMenuOff();
 	M_Menu_Main_f();
 	Walk_Screen(1);
