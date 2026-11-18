@@ -3286,6 +3286,150 @@ IN_MatchJoyPreset(void)
 }
 #undef EQF
 
+#ifdef YQ2_INPUT_PROBE
+/*
+ * Test builds only (TASK23, built with -DYQ2_INPUT_PROBE): input without
+ * hands, since simctl cannot press a controller button.
+ *   in_probe pad                  attaches an SDL virtual gamepad, which
+ *                                 the engine finds as any controller
+ *                                 plugged in after the start (refused
+ *                                 while first_init is set)
+ *   in_probe button <name> <0|1>  presses or releases its button (SDL's
+ *                                 names: a, b, x, y, start, dpup, ...)
+ *   in_probe axis <name> <value>  moves its axis (leftx, righty, ...)
+ *   in_probe key <name> <0|1>     pushes the key event of a scancode (Up,
+ *                                 Down, Left, Right, Return, Escape: the
+ *                                 Siri Remote as keys)
+ *   in_probe pads                 lists the joysticks SDL has, and which
+ *                                 one is the engine's gamepad
+ *   in_probe state                prints where input goes, the player's
+ *                                 origin, view angles and gun frame
+ */
+static SDL_Joystick *probe_joy;
+
+static void
+IN_Probe_f(void)
+{
+	const char *what = Cmd_Argv(1);
+
+	if (!strcmp(what, "pad"))
+	{
+		SDL_VirtualJoystickDesc desc;
+		SDL_JoystickID id;
+
+		/* a device added in the start's first updates is taken as one that
+		   was there at start (IN_Controller_Init opened those): when the
+		   countdown runs out with first_init still set, nothing is opened.
+		   A pad is attached after it, as a person plugs one in. */
+		if (first_init)
+		{
+			Com_Printf("in_probe: pad not attached: the start's controller countdown is not over, try again later\n");
+			return;
+		}
+
+		if (!probe_joy)
+		{
+			if (!SDL_WasInit(SDL_INIT_GAMEPAD) && !SDL_Init(SDL_INIT_GAMEPAD))
+			{
+				Com_Printf("in_probe: no gamepad subsystem: %s\n", SDL_GetError());
+				return;
+			}
+
+			SDL_INIT_INTERFACE(&desc);
+			desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+			desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+			desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+			desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1;
+			desc.button_mask = (1u << SDL_GAMEPAD_BUTTON_COUNT) - 1;
+			desc.name = "in_probe pad";
+			id = SDL_AttachVirtualJoystick(&desc);
+			probe_joy = id ? SDL_OpenJoystick(id) : NULL;
+		}
+
+		Com_Printf("in_probe: pad %s\n", probe_joy ? "attached" : SDL_GetError());
+	}
+	else if (!strcmp(what, "button") || !strcmp(what, "axis"))
+	{
+		int b = what[0] == 'b';
+		int v = (int)strtol(Cmd_Argv(3), NULL, 10);
+		int i = b ? (int)SDL_GetGamepadButtonFromString(Cmd_Argv(2))
+			: (int)SDL_GetGamepadAxisFromString(Cmd_Argv(2));
+
+		if (!probe_joy || i < 0)
+		{
+			Com_Printf("in_probe: no pad, or no %s '%s'\n", what, Cmd_Argv(2));
+			return;
+		}
+
+		if (b)
+		{
+			int k = (i == SDL_GAMEPAD_BUTTON_START) ? K_ESCAPE : K_JOY_FIRST_BTN + i;
+
+			SDL_SetJoystickVirtualButton(probe_joy, i, v != 0);
+			Com_Printf("in_probe: button %s %s, key %s, bound to \"%s\"\n", Cmd_Argv(2),
+					v ? "down" : "up", Key_KeynumToString(k), keybindings[k] ? keybindings[k] : "");
+		}
+		else
+		{
+			SDL_SetJoystickVirtualAxis(probe_joy, i, (Sint16)v);
+			Com_Printf("in_probe: axis %s %d\n", Cmd_Argv(2), v);
+		}
+	}
+	else if (!strcmp(what, "key"))
+	{
+		SDL_Event ev;
+		SDL_Scancode sc = SDL_GetScancodeFromName(Cmd_Argv(2));
+		int down = strtol(Cmd_Argv(3), NULL, 10) != 0;
+
+		if (sc == SDL_SCANCODE_UNKNOWN)
+		{
+			Com_Printf("in_probe: no scancode '%s'\n", Cmd_Argv(2));
+			return;
+		}
+
+		SDL_zero(ev);
+		ev.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+		ev.key.timestamp = SDL_GetTicksNS();
+		ev.key.scancode = sc;
+		ev.key.key = SDL_GetKeyFromScancode(sc, SDL_KMOD_NONE, false);
+		ev.key.down = down;
+		SDL_PushEvent(&ev);
+		Com_Printf("in_probe: key %s %s\n", Cmd_Argv(2), down ? "down" : "up");
+	}
+	else if (!strcmp(what, "pads"))
+	{
+		int i, n = 0;
+		SDL_JoystickID *ids = SDL_GetJoysticks(&n);
+		SDL_JoystickID used = controller ? SDL_GetJoystickID(SDL_GetGamepadJoystick(controller)) : 0;
+		SDL_JoystickID mine = probe_joy ? SDL_GetJoystickID(probe_joy) : 0;
+
+		Com_Printf("in_probe: %d joysticks\n", ids ? n : 0);
+
+		for (i = 0; ids && i < n; i++)
+		{
+			const char *name = SDL_GetJoystickNameForID(ids[i]);
+
+			Com_Printf("in_probe: joystick %d, id %u, '%s', gamepad %d, virtual %d%s%s\n", i + 1,
+					(unsigned)ids[i], name ? name : "", SDL_IsGamepad(ids[i]), SDL_IsJoystickVirtual(ids[i]),
+					ids[i] == used ? ", the engine's gamepad" : "", ids[i] == mine ? ", the probe's pad" : "");
+		}
+
+		SDL_free(ids);
+	}
+	else if (!strcmp(what, "state"))
+	{
+		Com_Printf("in_probe: key_dest %d, origin %d %d %d, angles %.0f %.0f, gunframe %d\n",
+				cls.key_dest, cl.frame.playerstate.pmove.origin[0] / 8,
+				cl.frame.playerstate.pmove.origin[1] / 8, cl.frame.playerstate.pmove.origin[2] / 8,
+				cl.viewangles[PITCH], cl.viewangles[YAW], cl.frame.playerstate.gunframe);
+	}
+	else
+	{
+		Com_Printf("Usage: in_probe pad|pads|button <name> <0|1>|axis <name> <value>|key <name> <0|1>|state\n");
+	}
+}
+#endif
+
 /*
  * Initializes the backend
  */
@@ -3296,6 +3440,22 @@ IN_Init(void)
 
 #if defined(__APPLE__) && TARGET_OS_IPHONE
 	SDL_AddEventWatch(IN_AppEventWatch, NULL);
+#endif
+
+#if defined(__APPLE__) && TARGET_OS_TV
+	/*
+	 * The Siri Remote as keys, not as a gamepad (TASK23). As a gamepad
+	 * SDL maps its Menu button to the west face button and Play/Pause to
+	 * the east one, so Menu would not go back. As keys its presses are
+	 * the arrows, Return (select), Escape (Menu: the game menu, and back
+	 * in it) and Pause (Play/Pause). A controller is still a gamepad.
+	 * Before any SDL_Init of the gamepad: SDL reads it as a device is added.
+	 */
+	SDL_SetHint(SDL_HINT_TV_REMOTE_AS_JOYSTICK, "0");
+#endif
+
+#ifdef YQ2_INPUT_PROBE
+	Cmd_AddCommand("in_probe", IN_Probe_f);
 #endif
 
 	mouse_x = mouse_y = 0;

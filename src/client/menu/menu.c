@@ -4500,6 +4500,14 @@ JoinServer_MenuInit(void)
 	s_joinserver_address_book_action.generic.y = 0;
 	s_joinserver_address_book_action.generic.callback = AddressBookFunc;
 
+#if defined(__APPLE__) && TARGET_OS_TV
+	/* tvOS has no keyboard to type a server address with (TASK23): the
+	   entry stays, greyed with its reason; a server found on the local
+	   network is still joined from the list below it */
+	s_joinserver_address_book_action.generic.flags |= QMF_GRAYED;
+	s_joinserver_address_book_action.generic.statusbar = "typing an address needs a keyboard, which tvOS does not have";
+#endif
+
 	s_joinserver_search_action.generic.type = MTYPE_ACTION;
 	s_joinserver_search_action.generic.name = "refresh server list";
 	s_joinserver_search_action.generic.flags = QMF_LEFT_JUSTIFY;
@@ -6501,12 +6509,397 @@ M_Menu_Quit_f(void)
 	M_PushMenu(&s_quit_menu);
 }
 
+#ifdef YQ2_INPUT_PROBE
+/*
+ * Test builds only (TASK23, built with -DYQ2_INPUT_PROBE). "menu_probe
+ * state" prints where the menu is; "menu_probe walk" visits every screen
+ * reachable from the main menu with only the six inputs of the Siri Remote
+ * (up, down, left, right, select and back: K_UPARROW, K_DOWNARROW,
+ * K_LEFTARROW, K_RIGHTARROW, K_ENTER, K_ESCAPE, through M_Keydown as a key
+ * press reaches it). On each screen it requires every selectable item to
+ * be reached with down and with up, select on every action item (a screen
+ * it opens is walked the same way), and back to leave every screen it
+ * opened. On the four binding screens select must enter bind mode and
+ * back must leave it, binding nothing; any other greyed item must do
+ * nothing on select. Select changes settings and queues commands (a new game, a
+ * connect): the walk drops what was queued and ends the run with quit.
+ */
+extern sizebuf_t cmd_text; /* src/common/cmdparser.c: what select queued */
+
+static menuframework_s *walk_seen[128];
+static int walk_nseen, walk_fail, walk_presses, walk_bound;
+static int walk_path[MAX_MENU_DEPTH];
+
+static void
+Walk_Key(int key)
+{
+	/* a popup (the server search's) ends with time, and no time passes
+	   inside the walk, which runs from the command line before the first
+	   frame, at the engine's first millisecond (cls.realtime 1). It is
+	   taken away as the time running out takes it away. Menu_ClosePopup
+	   cannot be used here: it sets the end to cls.realtime - 1, which is 0
+	   at that time, and an end of 0 means a popup without an end, so every
+	   key after it would only close it again (Default_MenuKey). A person
+	   never presses a key at cls.realtime 1: keys come in frames. */
+	if (Menu_PopupActive(&m_popup))
+	{
+		m_popup.string = NULL;
+	}
+
+	walk_presses++;
+	M_Keydown(key);
+}
+
+static const char *
+Walk_Name(const menuframework_s *m)
+{
+	if (m->banner)
+	{
+		return m->banner;
+	}
+
+	if (m->nitems > 0 && ((const menucommon_s *)m->items[0])->name)
+	{
+		return ((const menucommon_s *)m->items[0])->name;
+	}
+
+	return "(unnamed)";
+}
+
+static qboolean
+Walk_Selectable(const menuframework_s *m, int i)
+{
+	const menucommon_s *it = (const menucommon_s *)m->items[i];
+
+	return it->type != MTYPE_SEPARATOR && !(it->flags & QMF_INACTIVE);
+}
+
+/* a hash of every key's binding, to see one change */
+static unsigned
+Walk_Bindings(void)
+{
+	unsigned h = 2166136261u;
+	const char *s;
+	int k;
+
+	for (k = 0; k < K_LAST; k++)
+	{
+		for (s = keybindings[k] ? keybindings[k] : ""; *s; s++)
+		{
+			h = (h ^ (unsigned char)*s) * 16777619u;
+		}
+
+		h = (h ^ 0xff) * 16777619u;
+	}
+
+	return h;
+}
+
+/* one of the four key and controller binding screens, by its key function */
+static qboolean
+Walk_BindingScreen(const menuframework_s *m)
+{
+	return m->key == Keys_MenuKey || m->key == MultiplayerKeys_MenuKey ||
+		m->key == ControllerButtons_MenuKey || m->key == ControllerAltButtons_MenuKey;
+}
+
+/* the screen at <depth> is on top, as it was */
+static qboolean
+Walk_On(const menuframework_s *m, int depth)
+{
+	return m_menudepth == depth && m_layers[depth - 1] == m;
+}
+
+/* down until the cursor is on item <i>; false when it is never reached */
+static qboolean
+Walk_GoTo(menuframework_s *m, int depth, int i)
+{
+	int k;
+
+	for (k = 0; k <= m->nitems && m->cursor != i && Walk_On(m, depth); k++)
+	{
+		Walk_Key(K_DOWNARROW);
+	}
+
+	return Walk_On(m, depth) && m->cursor == i;
+}
+
+/* the main menu, then select along walk_path to <depth>; false when the path is gone */
+static qboolean
+Walk_Reopen(int depth)
+{
+	int l;
+
+	M_ForceMenuOff();
+	M_Menu_Main_f();
+
+	for (l = 1; l < depth; l++)
+	{
+		if (!Walk_GoTo(m_layers[l - 1], l, walk_path[l - 1]))
+		{
+			return false;
+		}
+
+		Walk_Key(K_ENTER);
+
+		if (m_menudepth != l + 1)
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static void
+Walk_Screen(int depth)
+{
+	menuframework_s *m = m_layers[depth - 1];
+	qboolean seen[64];
+	int i, k, n;
+
+	Com_Printf("menu_probe: screen %d '%s' at depth %d, %d items\n",
+			walk_nseen, Walk_Name(m), depth, m->nitems);
+
+	if (walk_nseen < (int)(sizeof(walk_seen) / sizeof(walk_seen[0])))
+	{
+		walk_seen[walk_nseen++] = m;
+	}
+
+	/* every selectable item is reached with down, and with up */
+	for (k = 0; k < 2 && m->nitems > 0; k++)
+	{
+		memset(seen, 0, sizeof(seen));
+
+		for (i = 0; i <= m->nitems && Walk_On(m, depth); i++)
+		{
+			if (m->cursor >= 0 && m->cursor < m->nitems)
+			{
+				seen[m->cursor] = true;
+			}
+
+			Walk_Key(k ? K_UPARROW : K_DOWNARROW);
+		}
+
+		if (!Walk_On(m, depth))
+		{
+			Com_Printf("menu_probe: FAIL: %s on '%s' left the screen\n", k ? "up" : "down", Walk_Name(m));
+			walk_fail++;
+
+			if (!Walk_Reopen(depth))
+			{
+				return;
+			}
+		}
+
+		for (i = 0; i < m->nitems; i++)
+		{
+			if (Walk_Selectable(m, i) && !seen[i])
+			{
+				Com_Printf("menu_probe: FAIL: item %d '%s' of '%s' is not reached with %s\n", i,
+						((menucommon_s *)m->items[i])->name ? ((menucommon_s *)m->items[i])->name : "",
+						Walk_Name(m), k ? "up" : "down");
+				walk_fail++;
+			}
+		}
+	}
+
+	/* select on every action item; a screen it opens is walked, then left with back */
+	for (i = 0; i < m->nitems; i++)
+	{
+		menucommon_s *it = (menucommon_s *)m->items[i];
+		menuframework_s *child;
+		const char *statusbar = NULL;
+		unsigned binds = 0;
+		qboolean binding, grayed;
+		int cursor = -1, queued = 0;
+
+		if (!Walk_Selectable(m, i) || (it->type != MTYPE_ACTION && it->type != MTYPE_BITMAP))
+		{
+			continue;
+		}
+
+		if (!Walk_GoTo(m, depth, i))
+		{
+			Com_Printf("menu_probe: FAIL: item %d of '%s' is not reached\n", i, Walk_Name(m));
+			walk_fail++;
+			continue;
+		}
+
+		/* an item of a binding screen is a binding item whatever its
+		   flags: those screens set QMF_GRAYED on every item (upstream's
+		   dark label), and their handlers do not read it */
+		binding = Walk_BindingScreen(m);
+
+		if (binding)
+		{
+			grayed = false;
+		}
+		else if (it->flags & QMF_GRAYED)
+		{
+			/* greyed, never hidden: reached, shown with its reason, and
+			   select does nothing on it (Menu_SelectItem) */
+			Com_Printf("menu_probe: item %d '%s' of '%s' is greyed: %s\n", i, it->name ? it->name : "",
+					Walk_Name(m), it->statusbar ? it->statusbar : "(no reason)");
+			grayed = true;
+			cursor = m->cursor;
+			statusbar = m->statusbar;
+			binds = Walk_Bindings();
+			queued = cmd_text.cursize;
+		}
+		else
+		{
+			grayed = false;
+		}
+
+		Walk_Key(K_ENTER);
+
+		/* select on a greyed item changes nothing: the screen, the cursor,
+		   the status bar, bind mode, a binding and the command buffer
+		   are as they were */
+		if (grayed && (!Walk_On(m, depth) || menukeyitem_bind || m->cursor != cursor ||
+				m->statusbar != statusbar || Walk_Bindings() != binds || cmd_text.cursize != queued))
+		{
+			Com_Printf("menu_probe: FAIL: greyed item %d '%s' of '%s' did something on select:%s%s%s%s%s%s\n",
+					i, it->name ? it->name : "", Walk_Name(m),
+					!Walk_On(m, depth) ? " left the screen" : "", menukeyitem_bind ? " bind mode" : "",
+					m->cursor != cursor ? " cursor" : "", m->statusbar != statusbar ? " status bar" : "",
+					Walk_Bindings() != binds ? " a binding" : "", cmd_text.cursize != queued ? " queued" : "");
+			walk_fail++;
+		}
+
+		if (binding)
+		{
+			/* select on a binding item enters bind mode (an item with two
+			   keys bound is cleared first, by design), and back leaves it
+			   binding nothing: no binding changes and nothing is queued */
+			if (!Walk_On(m, depth) || !menukeyitem_bind)
+			{
+				Com_Printf("menu_probe: FAIL: binding item %d '%s' of '%s' did not enter bind mode on select\n",
+						i, it->name ? it->name : "", Walk_Name(m));
+				walk_fail++;
+			}
+			else
+			{
+				binds = Walk_Bindings();
+				queued = cmd_text.cursize;
+				Walk_Key(K_ESCAPE);
+
+				if (!Walk_On(m, depth) || menukeyitem_bind || Walk_Bindings() != binds ||
+						cmd_text.cursize != queued)
+				{
+					Com_Printf("menu_probe: FAIL: binding item %d '%s' of '%s': back did not cancel bind mode:%s%s%s%s\n",
+							i, it->name ? it->name : "", Walk_Name(m),
+							!Walk_On(m, depth) ? " left the screen" : "", menukeyitem_bind ? " bind mode" : "",
+							Walk_Bindings() != binds ? " a binding" : "", cmd_text.cursize != queued ? " queued" : "");
+					walk_fail++;
+				}
+				else
+				{
+					walk_bound++;
+				}
+			}
+		}
+
+		if (menukeyitem_bind)
+		{
+			/* bind mode still on: back cancels it */
+			Walk_Key(K_ESCAPE);
+		}
+
+		if (m_menudepth == depth + 1 && m_layers[depth - 1] == m)
+		{
+			child = m_layers[depth];
+			walk_path[depth - 1] = i;
+
+			for (n = 0; n < walk_nseen && walk_seen[n] != child; n++)
+			{
+			}
+
+			if (n == walk_nseen)
+			{
+				Walk_Screen(depth + 1);
+			}
+
+			if (m_menudepth == depth + 1 && m_layers[depth] == child)
+			{
+				Walk_Key(K_ESCAPE);
+			}
+
+			if (!Walk_On(m, depth))
+			{
+				Com_Printf("menu_probe: FAIL: '%s' is not left with back\n", Walk_Name(child));
+				walk_fail++;
+			}
+		}
+
+		if (!Walk_On(m, depth) && !Walk_Reopen(depth))
+		{
+			Com_Printf("menu_probe: FAIL: '%s' cannot be reached again\n", Walk_Name(m));
+			walk_fail++;
+			return;
+		}
+	}
+}
+
+static void
+M_Probe_f(void)
+{
+	menuframework_s *m = M_GetActiveMenu();
+
+	if (!strcmp(Cmd_Argv(1), "state"))
+	{
+		const menucommon_s *it = m ? (const menucommon_s *)Menu_ItemAtCursor(m) : NULL;
+
+		Com_Printf("menu_probe: key_dest %d, depth %d, screen '%s', cursor %d '%s'%s\n",
+				cls.key_dest, m_menudepth, m ? Walk_Name(m) : "", m ? m->cursor : -1,
+				it && it->name ? it->name : "", it && (it->flags & QMF_GRAYED) ? " (greyed)" : "");
+		return;
+	}
+
+	if (strcmp(Cmd_Argv(1), "walk"))
+	{
+		Com_Printf("Usage: menu_probe state|walk\n");
+		return;
+	}
+
+	walk_nseen = walk_fail = walk_presses = walk_bound = 0;
+	Com_Printf("menu_probe: walk at cls.realtime %d\n", cls.realtime);
+	M_ForceMenuOff();
+	M_Menu_Main_f();
+	Walk_Screen(1);
+
+	if (Walk_On(m_layers[0], 1))
+	{
+		Walk_Key(K_ESCAPE);
+	}
+
+	if (m_menudepth != 0)
+	{
+		Com_Printf("menu_probe: FAIL: the main menu is not left with back\n");
+		walk_fail++;
+	}
+
+	Com_Printf("menu_probe: %d binding items entered bind mode on select and left it with back\n", walk_bound);
+	Com_Printf("menu_probe: walk %s: %d screens, %d key presses, %d failures\n",
+			walk_fail ? "FAIL" : "ok", walk_nseen, walk_presses, walk_fail);
+
+	/* drop what the selects queued (a map, a connect), then end the run */
+	Cbuf_CopyToDefer();
+	Cbuf_AddText("quit\n");
+}
+#endif
+
 void
 M_Init(void)
 {
 	char cursorname[MAX_QPATH];
 	int w = 0;
 	int h = 0;
+
+#ifdef YQ2_INPUT_PROBE
+	Cmd_AddCommand("menu_probe", M_Probe_f);
+#endif
 
 	Cmd_AddCommand("playermodels", ListModels_f);
 
