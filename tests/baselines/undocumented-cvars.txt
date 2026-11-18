@@ -137,7 +137,6 @@ r_norefresh
 r_novis
 r_palettedtexture
 r_palettedtextures
-r_rt_denoiser
 r_speeds
 r_validation
 rcon_address

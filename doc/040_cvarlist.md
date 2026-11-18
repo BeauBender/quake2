@@ -977,6 +977,13 @@ is.
   cut to the whole number below it. Cheat-protected: reset to `0` in
   multiplayer. Applies from the next frame.
 
+* **r_rt_denoiser**: The denoiser item of the Metal renderer's video
+  menu reads this cvar; no code creates it yet (the ray-tracing denoiser,
+  TASK113, will). Until then it does not exist unless set by hand, and
+  the menu shows `off`. The menu reads it as `off` below `1`,
+  `bilateral` from `1` and `MetalFX` from `2`; a value that is not a
+  finite number counts as `0`.
+
 * **r_rt_gbuffer**: A development switch of the Metal renderer. When
   set to anything but `0`, a view with the world is drawn through the
   G-buffer the ray-traced effects will build on: the world and the opaque
@@ -1549,3 +1556,25 @@ them given the engine behaves exactly as before.
   directly. Must be 1 to 9 digits without a leading zero (`0` itself
   is accepted). Refused without `pins_record` or
   `pins_replay`. Default: not given.
+
+## Environment variables
+
+These are read from the process environment, not from the console, and
+are not cvars. They belong to the Metal renderers.
+
+* **MTL_GPU_TIME**: When set (to anything, even empty) before the
+  Metal renderer starts, it prints one line to standard error for each
+  command buffer it commits, `ref_metal: gpu_ms <ms>`, the buffer's GPU
+  time in milliseconds, with ` frame` appended for the frame's last
+  buffer; the frame's drawing is then committed on its own, so its time
+  leaves out the wait for a drawable. A measuring aid. Read once.
+
+* **MGL_READBACK_DUMP**: Read once by the OpenGL 1.4 renderer when it
+  runs on the Metal layer. Set to an absolute path of `A-Z`, `a-z`,
+  `0-9`, `_`, `.`, `/` and `-` without `..`, it writes every
+  `glReadPixels` read the renderer makes into that directory as
+  `mgl-readback-<n>.raw` plus a line each in `mgl-readback.txt` (position,
+  size, format, type, pack alignment, byte count), at most 1000 reads per
+  run. The directory must exist and `mgl-readback.txt` must not (nor be a
+  link) before the run, or nothing is written. Any other value is refused
+  with one line on standard error. Unset or empty: nothing is written.
