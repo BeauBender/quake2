@@ -65,7 +65,10 @@ test_on(void)
 	CHECK(rm_rtao_on(1, 1, 1) == 0);        /* r_fullbright: no lightmap term to scale */
 	CHECK(rm_rtao_on(NAN, 1, 0) == 0);
 	CHECK(rm_rtao_on(INFINITY, 1, 0) == 0);
-	CHECK(rm_rtao_on(1, 1, NAN) == 1);      /* a setting that is not finite counts as 0 */
+	/* r_fullbright as rm_surf.c reads it (any value but 0, NaN among them, drops the lightmaps): no term */
+	CHECK(rm_rtao_on(1, 1, NAN) == 0);
+	CHECK(rm_rtao_on(1, 1, INFINITY) == 0);
+	CHECK(rm_rtao_on(1, 1, -1) == 0);
 }
 
 static void

@@ -64,8 +64,9 @@
 /*
  * 1 when a frame traces the AO: r_rt_ao is not 0, the device has ray
  * tracing, and the world is lightmapped (r_fullbright 0: with it gl1
- * draws no lightmap term, so the AO has none to scale). A value that is
- * not finite counts as 0.
+ * draws no lightmap term, so the AO has none to scale). An r_rt_ao that
+ * is not finite counts as 0; r_fullbright counts as set at any value but
+ * 0, NaN among them, as rm_surf.c reads it.
  */
 int rm_rtao_on(float ao, int device_rt, float fullbright);
 

@@ -13,7 +13,10 @@
 # one that lists the most types, and a runtime with no list counts as
 # general; a version or name in IOS_SIM_RUNTIME is picked the same way
 # among the runtimes it matches, a runtime that does not list the type is
-# skipped, and a candidate with no numeric version is refused by name),
+# skipped, and a candidate with no numeric version is refused by name;
+# IOS_SIM_SDK=appletvsimulator, TASK23, builds for the Apple TV simulator
+# and picks among the tvOS runtimes, the default type "Apple TV 4K (4th
+# generation)"; any IOS_SIM_SDK but iphonesimulator or that is refused),
 # boots it, installs the app and launches it with
 # --console-pty and Metal's validation layer (SIMCTL_CHILD_MTL_DEBUG_LAYER=1)
 # on "+set vid_renderer metal" and "+exec smoke.cfg" (written into the
@@ -249,7 +252,13 @@ for l in open(sys.argv[1]):
     u, n = l.rstrip("\n").split(" ", 1)
     devs.append({"udid": u, "name": n, "state": "Shutdown"})
 print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-27-2": devs}}))' "$st/devices" ;;
-	devicetypes) echo '{"devicetypes": [{"name": "iPhone 17", "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}' ;;
+	devicetypes)
+		i='{"name": "iPhone 17", "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}'
+		tv='{"name": "Apple TV 4K (4th generation)", "identifier": "com.apple.CoreSimulator.SimDeviceType.Apple-TV-4K-4th-generation"}'
+		case $sc in
+		tvos|tvtypes) echo "{\"devicetypes\": [$i, $tv]}" ;;
+		*) echo "{\"devicetypes\": [$i]}" ;;
+		esac ;;
 	runtimes)
 		g='{"isAvailable": true, "platform": "iOS", "version": "27.2", "name": "iOS 27.2", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-2", "supportedDeviceTypes": [{"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}, {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Pro"}]}'
 		b='{"isAvailable": true, "platform": "iOS", "version": "%s", "name": "iOS %s bound", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-bound-%s", "supportedDeviceTypes": [{"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone19-4"}]}'
@@ -263,6 +272,9 @@ print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-27-2": dev
 		rtempty) echo '{"runtimes": []}' ;;
 		rtbadnon) echo "{\"runtimes\": [$(printf "$b" x x x), $g]}" ;;
 		rtbadver) echo '{"runtimes": [{"isAvailable": true, "platform": "iOS", "version": "x", "name": "iOS x", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-x"}]}' ;;
+		# the Apple TV runtime next to the iOS one (TASK23); tvtypes: the Apple TV type, only iOS runtimes
+		tvos) echo "{\"runtimes\": [$g, {\"isAvailable\": true, \"platform\": \"tvOS\", \"version\": \"27.2\", \"name\": \"tvOS 27.2\", \"identifier\": \"com.apple.CoreSimulator.SimRuntime.tvOS-27-2\", \"supportedDeviceTypes\": [{\"identifier\": \"com.apple.CoreSimulator.SimDeviceType.Apple-TV-4K-4th-generation\"}]}]}" ;;
+		tvtypes) echo "{\"runtimes\": [$g]}" ;;
 		*) echo '{"runtimes": [{"isAvailable": true, "platform": "iOS", "version": "27.2", "name": "iOS 27.2", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-2", "supportedDeviceTypes": [{"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}]}' ;;
 		esac ;;
 	*) exit 1 ;;
@@ -696,6 +708,20 @@ EOF
 	st_case runtime-set-version-tie-both-list-picks-most rttielist ok "iOS 27.2)" 30 IOS_SIM_RUNTIME=27.2
 	st_case runtime-set-bound-refused rttie fail "iPhone 17 is not supported by iOS 27.2 bound" 30 IOS_SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-bound-27.2
 	st_case runtime-set-general rttie ok "iOS 27.2)" 30 IOS_SIM_RUNTIME=com.apple.CoreSimulator.SimRuntime.iOS-27-2
+	# the Apple TV build (TASK23): IOS_SIM_SDK=appletvsimulator builds for that SDK and picks the
+	# tvOS runtime and the Apple TV type; unset, the same lists give the iPhone on iOS
+	st_case tvos-picks-tvos-runtime tvos ok "(com.apple.CoreSimulator.SimDeviceType.Apple-TV-4K-4th-generation, tvOS 27.2)" 30 IOS_SIM_SDK=appletvsimulator
+	st_has tvos-picks-tvos-runtime grep state/calls "com.apple.CoreSimulator.SimRuntime.tvOS-27-2"
+	st_has tvos-picks-tvos-runtime grep out/build/make.args " IOS_SDK=appletvsimulator "
+	st_case tvos-lists-default-is-iphone tvos ok "(com.apple.CoreSimulator.SimDeviceType.iPhone-17, iOS 27.2)" 30
+	st_has tvos-lists-default-is-iphone grep out/build/make.args " IOS_SDK=iphonesimulator "
+	st_case tvos-without-tvos-runtime tvtypes fail "no available iOS runtime" 30 IOS_SIM_SDK=appletvsimulator
+	st_case sdk-iphoneos-refused extra fail "IOS_SIM_SDK must be iphonesimulator (the default) or appletvsimulator" 5 IOS_SIM_SDK=iphoneos
+	st_has sdk-iphoneos-refused line1 run.log "IOS_SIM_SDK must be"
+	st_has sdk-iphoneos-refused nofile out/build/make.args
+	st_case sdk-shell-text-refused extra fail "IOS_SIM_SDK must be iphonesimulator (the default) or appletvsimulator" 5 'IOS_SIM_SDK=$(touch sdk-ran)'
+	st_has sdk-shell-text-refused line1 run.log "IOS_SIM_SDK must be"
+	st_has sdk-shell-text-refused nofile out/build/make.args
 	st_case list-empty empty fail "simctl list devices: no device list" 30
 	st_case list-fails listfail fail "simctl list devices failed" 30
 	st_case list-hangs hang fail "timed out after 2 s: xcrun simctl list devices" 10 IOS_SIM_LIST_SECONDS=2
@@ -790,6 +816,13 @@ digits IOS_SIM_RUN_SECONDS "$run_s"
 [ -z "$bg" ] || digits "--background" "$bg"
 bgafter=${IOS_SIM_BACKGROUND_AFTER-15}
 digits IOS_SIM_BACKGROUND_AFTER "$bgafter"
+# the SDK of the build (TASK23): the iOS simulator's, or the Apple TV simulator's; nothing else
+# reaches make or the runtime pick
+case ${IOS_SIM_SDK:-} in
+''|iphonesimulator) ;;
+appletvsimulator) ;;
+*) die "IOS_SIM_SDK must be iphonesimulator (the default) or appletvsimulator" ;;
+esac
 
 # the owner's data: checked before anything is built or created
 if [ -n "$data" ]; then
@@ -888,7 +921,7 @@ lost_device()
 # ---- the data and the build --------------------------------------------
 
 build=$out/build
-makeargs=(-C "$repo" -j"${IOS_SIM_JOBS:-3}" QUIET=1 ios IOS_SDK=iphonesimulator IOS_ROOT="$build")
+makeargs=(-C "$repo" -j"${IOS_SIM_JOBS:-3}" QUIET=1 ios IOS_SDK="${IOS_SIM_SDK:-iphonesimulator}" IOS_ROOT="$build")
 # the bundle's data: the synthetic paks (smoke, run without --data); with
 # --data or --no-data the bundle holds none
 if [ -z "$data" ] && [ "$nodata" = 0 ]; then
@@ -922,15 +955,20 @@ bounded "$list_s" "${tmp:?}/runtimes.json" -e "${tmp:?}/runtimes.err" xcrun simc
 # the runtime: the newest that lists the device type, on a version tie the one that lists the
 # most types (a runtime with no list counts as general); IOS_SIM_RUNTIME narrows the set, then
 # the same rule picks within it
-pick=$(python3 -I - "${tmp:?}/types.json" "${tmp:?}/runtimes.json" "${IOS_SIM_TYPE:-iPhone 17}" "${IOS_SIM_RUNTIME:-}" <<'EOF'
+# TASK23: IOS_SIM_SDK=appletvsimulator runs the tvOS build on a tvOS runtime and an Apple TV device type
+case ${IOS_SIM_SDK:-iphonesimulator} in
+appletvsimulator) sim_platform=tvOS; sim_type_default="Apple TV 4K (4th generation)" ;;
+*) sim_platform=iOS; sim_type_default="iPhone 17" ;;
+esac
+pick=$(python3 -I - "${tmp:?}/types.json" "${tmp:?}/runtimes.json" "${IOS_SIM_TYPE:-$sim_type_default}" "${IOS_SIM_RUNTIME:-}" "$sim_platform" <<'EOF'
 import json, sys
 types = json.load(open(sys.argv[1]))["devicetypes"]
 runtimes = json.load(open(sys.argv[2]))["runtimes"]
-want_type, want_rt = sys.argv[3], sys.argv[4]
+want_type, want_rt, want_platform = sys.argv[3], sys.argv[4], sys.argv[5]
 t = [d for d in types if want_type in (d["name"], d["identifier"])]
 if not t:
     sys.exit("no device type " + want_type)
-ios = [r for r in runtimes if r.get("isAvailable") and r.get("platform", "") == "iOS"]
+ios = [r for r in runtimes if r.get("isAvailable") and r.get("platform", "") == want_platform]
 if want_rt:
     ios = [r for r in ios if want_rt in (r.get("identifier"), r.get("version"), r.get("name"))]
 if not ios:

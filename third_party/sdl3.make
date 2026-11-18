@@ -73,6 +73,11 @@ SDL3_LDLIBS := -liconv \
 	-framework CoreMotion -framework CoreVideo -framework Foundation \
 	-framework GameController -framework Metal -framework OpenGLES \
 	-framework QuartzCore -framework UIKit
+ifeq ($(IOS_SDK),appletvsimulator)
+# tvOS (TASK23): the tvOS SDK has no CoreMotion (SDL's use of it is for
+# iOS only)
+SDL3_LDLIBS := $(subst -framework CoreMotion,,$(SDL3_LDLIBS))
+endif
 else
 SDL3_LDLIBS := -liconv \
 	-framework AudioToolbox -framework Carbon -framework Cocoa \

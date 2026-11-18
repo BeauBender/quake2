@@ -94,6 +94,7 @@ scenario plays `PINS_DEMO`, so all of them follow the same camera path.
 | `world-scale8` | `world` with `r_scale8bittextures 1`: the 8-bit world textures scaled up and smoothed |
 | `world-metalfx1`, `world-metalfx2`, `world-metalfx3` | `world` with `r_metalfx` 1, 2 or 3 at `r_metalfx_scale 0.5`: the 3D view drawn at half size and upscaled by a MetalFX scaler (the others draw it as `world`). Where the GPU lacks a mode it falls back to the best one below, so on a GPU with only the spatial scaler all three draw `world-metalfx1`'s frames |
 | `world-metalfx-interp` | `world` with `r_metalfx_interp 1`; frame generation is not built yet, so it draws `world`'s frames on every GPU |
+| `rt-sun` | `world` with `r_rt_sun 1`: the Metal renderer's ray-traced sun and sky shadow, new light on the world's dim surfaces where a ray toward the sun reaches the sky (the others draw it as `world`, and so does the Metal renderer on a map whose sky is under 2 % of its face area or on a GPU without ray tracing); its pin is recorded once the owner accepts the look (TASK56) |
 | `particles-cap` | `particles` with `metal_particle_cap 1`: the particle size limit of the Metal renderer scaled by `height / 480` (the others draw it as `particles`); recorded with `PINS_SEED` like `particles` |
 | `models` | the world plus entities: models, sprites, beams, the view weapon |
 | `particles` | everything, including particles, dynamic lights and the screen blend |
@@ -337,8 +338,14 @@ GPU), recorded with `MTL_DEBUG_LAYER=1` (Metal's validation layer) at
 `particles` seeded only. The values and the last sweep of every scenario
 are in `docs/plans/ref-metal-native.md` (section 11) and
 the card files in `docs/runbook/`, listed in `docs/plans/metal-port-harness.md`. At start it prints the Metal device,
-the Apple GPU families it supports and whether it supports ray tracing;
-it refuses a device older than the apple5 family. At each shutdown it
+the Apple GPU families it supports and whether it supports ray tracing,
+then the ray-tracing path it takes (`ref_metal: ray tracing: ...`, TASK60).
+On a GPU without ray tracing, such as the build VM, the effect cvars the
+`rt-*` scenarios set (`r_rt_ao`, `r_rt_shadows`, `r_rt_water`) read 0 with
+a line each, so each `rt-*` scenario draws the frames of the same scenario
+with its effects off, byte for byte on the VM
+([`docs/runbook/TASK60.md`](../docs/runbook/TASK60.md)); its pin there
+says nothing about the effect. It refuses a device older than the apple5 family. At each shutdown it
 prints its Metal objects created and destroyed, by kind, which must read
 `0 live objects`. Its frames have the size the mode asks for, as `gl1`'s
 do, also in fullscreen when the window has another size.

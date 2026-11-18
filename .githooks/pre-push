@@ -2,16 +2,22 @@
 # Push-time guard, wired by scripts/setup.sh (core.hooksPath=.githooks).
 #
 # This repository is public. Nothing that identifies the working machine may
-# leave it: not in a ref name, not in a commit or tag. The identifying values
-# are the output of `hostname -s`, the output of `whoami` and the path in
-# $HOME. They are read at run time and compared case-insensitively (ASCII);
+# leave it: not in a ref name, not in a commit or tag, not in a file or file
+# name a pushed commit adds, whatever the ref is called. The identifying values
+# are the output of `/bin/hostname -s`, the output of `/usr/bin/id -un` and
+# the path in $HOME. The two tools are run by absolute path, never looked up
+# on PATH: the identity shim (.claude/rules/no-machine-names.md) puts a
+# `hostname` that prints the machine token and a `whoami` that prints `agent`
+# first on PATH for every call that writes a marker, and a PATH lookup would
+# compare against those instead of the real names (see real_names). They are
+# read at run time and compared case-insensitively (ASCII);
 # a value shorter than three characters is not compared (it would match
 # ordinary text). None of them is written anywhere in the repository, and
 # this hook never prints one, nor any text that carries one (a ref name, a
 # file name, an author field): it says THAT something matched, which field
 # (ref name, message, author or committer field, merged tag, tag, blob) and
 # which kind of value (host, user, home), by position in the push and by
-# commit id.
+# commit id (or blob id, for a file).
 #
 # Rules
 #   ref names   a match anywhere in the local or the remote ref name refuses the
@@ -28,7 +34,26 @@
 #               base64 and a short name would match them by chance. The host
 #               name and the home path match as substrings, the user name as a
 #               whole word (so a short, common user name does not trip on
-#               ordinary prose).
+#               ordinary prose). Every ref is scanned alike: no ref name or
+#               prefix is exempt.
+#   files       the blobs the remote lacks (git rev-list --objects <sha> --not
+#               <remote sha> --remotes=<remote>: what is reachable from the
+#               pushed commit and from no commit the remote is known to have,
+#               the walk git itself makes to choose what to send; a blob in
+#               the tree of a published parent is not scanned again) and
+#               the paths the new commits add or change, every directory
+#               name included, one with nothing below it too (git diff-tree
+#               -r -t -c --root, deletions left out: deleting a file
+#               publishes nothing) are scanned by
+#               tests/check-no-local-identity.sh, the gate's check, so its
+#               rules hold there: binary files (a NUL byte) are not scanned,
+#               the user name is a whole word. The blobs go to it under
+#               placeholder names in a temporary index, the paths as the text
+#               of one more blob per ref, kept in a temporary object
+#               directory given to git as an alternate; nothing is written to
+#               the repository. One run of
+#               the check (a few seconds, for its self-test) covers the whole
+#               push, and only a push that adds a blob or a path runs it.
 #   your own    in the author and committer lines only, the user name is not
 #   name        compared when it is a whole word of this checkout's
 #               `user.name` or of the part of `user.email` before the @: that
@@ -51,14 +76,34 @@
 #               (commits already on any remote-tracking ref of the remote
 #               count as published, so fetch the remote first). More than the
 #               cap is refused (the rest cannot be scanned): push in steps.
-#   errors      fail closed: if the host or user name cannot be read, or git
+#   replace     git's replacement objects (refs/replace/) are not used
+#   objects     (GIT_NO_REPLACE_OBJECTS=1, for this hook and the file scan it
+#               runs): a local replacement changes what a scan reads, not
+#               what the push sends, so the scan reads what is sent.
+#   errors      fail closed: if the host or user name cannot be read (the
+#               tool is missing, fails or prints nothing), or git
 #               cannot list or read an object (for example the remote sha is
-#               not known locally: fetch first), the push is refused. A retry
-#               is cheap; a published identity cannot be taken back.
+#               not known locally: fetch first), or the file scan is missing,
+#               cannot run, ends without its verdict or reports a match this
+#               hook cannot place, the push is refused. A retry is cheap; a
+#               published identity cannot be taken back.
 #
-# Test-only environment (used by tests/check-pre-push-hook.sh):
-#   YQ2_IDENTITY_TEST_EXTRA_WORD   one more word to look for. It is only ever
-#                                  added to the real words, never replaces them.
+# Test-only environment (used by tests/check-pre-push-hook.sh). None of it
+# can take a real name out of the check: a word is only ever added to the
+# real ones, and a broken tool only ever makes the hook refuse.
+#   YQ2_IDENTITY_TEST_HOST         one more host name and one more user name to
+#   YQ2_IDENTITY_TEST_USER         look for, under the rules of their kind
+#                                  (the owner-handle and own-author rules are
+#                                  judged for each user name on its own). The
+#                                  file scan looks for them too.
+#   YQ2_IDENTITY_TEST_EXTRA_WORD   one more word to look for, as a substring.
+#                                  The file scan, which is the gate check's,
+#                                  does not look for it.
+#   YQ2_IDENTITY_TEST_TOOL         host-missing, host-empty, user-missing or
+#                                  user-empty: run a path that cannot exist,
+#                                  or one that prints nothing, in place of that
+#                                  tool (see real_names). Any other value is
+#                                  ignored.
 #   YQ2_IDENTITY_TEST_SCAN_CAP     a lower SCAN_CAP; a value above the default,
 #                                  with a leading zero or not a plain number
 #                                  is ignored.
@@ -68,6 +113,8 @@
 # with --no-verify is against the rules in CLAUDE.md.
 
 export LC_ALL=C
+# Scan what the push sends (see "replace objects" in Rules).
+export GIT_NO_REPLACE_OBJECTS=1
 remote=${1:-}
 SCAN_CAP=1000
 TAG_DEPTH=10
@@ -123,45 +170,75 @@ home_is() {
 }
 # ---- end of owner_is. ------------------------------------------------------
 
-# YQ2_W: lines of "<kind> <value>"; kind is host, user, home or test. Handed to
-# awk through the environment, so no value is ever on a command line.
-YQ2_W=
-add_word() { # $1 = kind, $2 = value
-	[ "${#2}" -ge 3 ] || return 0
-	YQ2_W="$YQ2_W$1 $2$nl"
+# ---- real_names: the same text in tests/check-no-local-identity.sh and in
+# .githooks/pre-push (tests/check-pre-push-hook.sh compares them). ----------
+# real_names: sets yq2_host to the output of `/bin/hostname -s` and yq2_user
+# to that of `/usr/bin/id -un`, each empty when its tool is missing, fails or
+# prints nothing (the caller then refuses). The tools are run by absolute
+# path, never looked up on PATH: the identity shim
+# (.claude/rules/no-machine-names.md) puts a `hostname` that prints the
+# machine token and a `whoami` that prints `agent` first on PATH for every
+# call that writes a marker, so a PATH lookup would compare a marker against
+# its own pseudonym, and refuse it, and would compare nothing against the
+# real names. `/bin/hostname -s` is the program `hostname -s` ran without the
+# shim, so the host name compared is the same one; `id -un` is the POSIX
+# spelling of `whoami`. Test-only: YQ2_IDENTITY_TEST_TOOL=host-missing,
+# host-empty, user-missing or user-empty runs, in place of that tool, a path
+# that cannot exist (below /dev/null) or /usr/bin/true, which prints nothing;
+# any other value is ignored. Either way that name comes out empty, so the
+# seam can only make the caller refuse.
+real_names() {
+	_ht=/bin/hostname
+	_ut=/usr/bin/id
+	case ${YQ2_IDENTITY_TEST_TOOL:-} in
+	host-missing) _ht=/dev/null/hostname ;;
+	host-empty) _ht=/usr/bin/true ;;
+	user-missing) _ut=/dev/null/id ;;
+	user-empty) _ut=/usr/bin/true ;;
+	esac
+	yq2_host=$("$_ht" -s 2>/dev/null) || yq2_host=
+	yq2_user=$("$_ut" -un 2>/dev/null) || yq2_user=
 }
+# ---- end of real_names. ----------------------------------------------------
 
-h=$(hostname -s 2>/dev/null) || h=
-u=$(whoami 2>/dev/null) || u=
-[ -n "$h" ] || die "refused: cannot read this machine's host name, so the identity check cannot run"
-[ -n "$u" ] || die "refused: cannot read the local user name, so the identity check cannot run"
+real_names
+h=$yq2_host
+u=$yq2_user
+[ -n "$h" ] || die "refused: cannot read this machine's host name (/bin/hostname -s), so the identity check cannot run"
+[ -n "$u" ] || die "refused: cannot read the local user name (/usr/bin/id -un), so the identity check cannot run"
+
+# YQ2_W: lines of "<kind> <flags> <value>"; kind is host, user, home or test.
+# The two flag digits matter for a user name only: the first is 1 when the
+# name is a word of the author identity this checkout publishes (see "your
+# own name" in Rules), the second when it is the public owner handle of this
+# repository's GitHub address and the last component of $HOME (see home_is;
+# it is then compared only where it is not a whole word, see "owner handle").
+# Each user name is judged on its own, so a test word cannot change how the
+# real one is compared. Handed to awk through the environment, so no value
+# is ever on a command line.
+YQ2_W=
+add_word() { # $1 = kind, $2 = value, [$3 = flags]
+	[ "${#2}" -ge 3 ] || return 0
+	YQ2_W="$YQ2_W$1 ${3:-00} $2$nl"
+}
+_me="$(git config user.name 2>/dev/null)$nl$(git config user.email 2>/dev/null | sed 's/@.*//')"
+add_user() { # $1 = value
+	_pub=0
+	_skip=0
+	if printf '%s\n' "$_me" | grep -qiwF -e "$1"; then _pub=1; fi
+	if owner_is . "$1" && home_is "${HOME:-}" "$1"; then _skip=1; fi
+	add_word user "$1" "$_pub$_skip"
+}
 add_word host "$h"
-add_word user "$u"
+[ -z "${YQ2_IDENTITY_TEST_HOST:-}" ] || add_word host "$YQ2_IDENTITY_TEST_HOST"
+add_user "$u"
+[ -z "${YQ2_IDENTITY_TEST_USER:-}" ] || add_user "$YQ2_IDENTITY_TEST_USER"
 case ${HOME:-} in
 '' | /) ;;
 *) add_word home "$HOME" ;;
 esac
-if [ -n "${YQ2_IDENTITY_TEST_EXTRA_WORD:-}" ]; then
-	add_word test "$YQ2_IDENTITY_TEST_EXTRA_WORD"
-fi
+[ -z "${YQ2_IDENTITY_TEST_EXTRA_WORD:-}" ] || add_word test "$YQ2_IDENTITY_TEST_EXTRA_WORD"
 export YQ2_W
-
-# Is the user name a word of the author identity this checkout publishes?
-YQ2_UPUB=0
-_me="$(git config user.name 2>/dev/null)$nl$(git config user.email 2>/dev/null | sed 's/@.*//')"
-if printf '%s\n' "$_me" | grep -qiwF -e "$u"; then
-	YQ2_UPUB=1
-fi
-export YQ2_UPUB
-
-# Is the user name the public owner handle of this repository's GitHub
-# address, and is it the last component of $HOME (see home_is)? Then it is
-# compared only where it is not a whole word (see Rules).
-YQ2_USKIP=0
-if owner_is . "$u" && home_is "${HOME:-}" "$u"; then
-	YQ2_USKIP=1
-fi
-export YQ2_USKIP
 
 # scan <mode>: reads text on stdin (mode name, commit, tag or blob) and prints
 # "<field> <kind>" for the first match, nothing if none. Fields: local and
@@ -178,10 +255,10 @@ scan() {
 			sp = index(raw[i], " ")
 			nw++
 			kind[nw] = substr(raw[i], 1, sp - 1)
-			word[nw] = tolower(substr(raw[i], sp + 1))
+			upub[nw] = substr(raw[i], sp + 1, 1)
+			uskip[nw] = substr(raw[i], sp + 2, 1)
+			word[nw] = tolower(substr(raw[i], sp + 4))
 		}
-		upub = ENVIRON["YQ2_UPUB"]
-		uskip = ENVIRON["YQ2_USKIP"]
 		inhdr = (mode == "commit")
 		field = (mode == "commit") ? "header" : mode
 		insig = 0
@@ -214,10 +291,10 @@ scan() {
 	function check(text, f,    i, s) {
 		s = tolower(text)
 		for (i = 1; i <= nw; i++) {
-			if (kind[i] == "user" && uskip == 1) {
+			if (kind[i] == "user" && uskip[i] == "1") {
 				if (mode == "name" && partword(s, word[i])) { print f " " kind[i]; exit 0 }
 			} else if (kind[i] == "user" && mode != "name") {
-				if (f == "author" && upub == 1) continue
+				if (f == "author" && upub[i] == "1") continue
 				if (wholeword(s, word[i])) { print f " " kind[i]; exit 0 }
 			} else if (index(s, word[i]) > 0) {
 				print f " " kind[i]; exit 0
@@ -273,11 +350,115 @@ describe() {
 	esac
 }
 
-objf=$(mktemp "${TMPDIR:-/tmp}/pre-push.XXXXXX") || die "refused: cannot create a temporary file"
-objt=$objf.txt
+# ---- Files: what the pushed commits add (see "files" in Rules). -----------
+# collect <n> <commit> <remote sha>: adds the blobs the remote lacks below
+# <commit>, and the paths the commits in $commits add or change, to
+# $td/table, one line "<placeholder> <n> blob|paths <id>" each. The
+# placeholders are made of punctuation only (a code per number, from
+# !#%,=@~^]}), so no placeholder can hold a value, and are unique: "<ref
+# code>+<blob code>" for a blob, "<ref code>-" for the paths. Refuses (exits)
+# when git cannot list or read what is needed.
+collect() {
+	if [ "$3" = "$zero" ]; then
+		git rev-list --objects --no-object-names "$2" --not --remotes="$remote" > "$td/objs" 2>/dev/null
+	else
+		git rev-list --objects --no-object-names "$2" --not "$3" --remotes="$remote" > "$td/objs" 2>/dev/null
+	fi || die "refused: cannot list the new objects of ref number $1"
+	git cat-file --batch-check='%(objecttype) %(objectname)' < "$td/objs" > "$td/types" 2>/dev/null ||
+		die "refused: cannot read the new objects of ref number $1"
+	# One "<type> <id>" line per object; git prints "<id> missing" for one it
+	# cannot find.
+	_st=0
+	grep -qvE '^(commit|tree|blob|tag) [0-9a-f]+$' "$td/types" || _st=$?
+	[ "$_st" -eq 1 ] || die "refused: cannot read an object of ref number $1"
+	sed -n 's/^blob //p' "$td/types" > "$td/blobs" || die "refused: cannot list the new blobs of ref number $1"
+	printf '%s\n' "$commits" > "$td/commits" || die "refused: cannot write a temporary file"
+	git diff-tree --stdin -r -t -c --root -z --name-only --no-commit-id --diff-filter=d < "$td/commits" > "$td/paths.z" 2>/dev/null ||
+		die "refused: cannot list the paths of ref number $1"
+	tr '\000' '\n' < "$td/paths.z" > "$td/paths" || die "refused: cannot list the paths of ref number $1"
+	_pid=
+	if [ -s "$td/paths" ]; then
+		_pid=$(GIT_OBJECT_DIRECTORY=$td/objects git hash-object -w --stdin < "$td/paths" 2>/dev/null) ||
+			die "refused: cannot hold the paths of ref number $1 for the file scan"
+	fi
+	YQ2_N=$1 YQ2_PATHS=$_pid awk '
+	function code(k,    s, i) {
+		k = k ""; s = ""
+		for (i = 1; i <= length(k); i++) s = s substr("!#%,=@~^]}", substr(k, i, 1) + 1, 1)
+		return s
+	}
+	BEGIN { n = ENVIRON["YQ2_N"]; if (ENVIRON["YQ2_PATHS"] != "") print code(n) "-", n, "paths", ENVIRON["YQ2_PATHS"] }
+	{ print code(n) "+" code(NR), n, "blob", $0 }
+	' "$td/blobs" >> "$td/table" || die "refused: cannot write a temporary file"
+}
+
+# filescan: runs the gate check on everything collect gathered and reports
+# each ref with a match, once. The check runs with GIT_DIR this repository,
+# GIT_INDEX_FILE the temporary index and the temporary object directory as
+# an alternate of this repository's objects; it reads the host name, user
+# name and home path itself, as this hook does. Its scan takes a blob it
+# cannot read as clean, so the alternate's path must survive the colon-split
+# list git reads it from. Refuses (exits) unless the check ends with its own
+# verdict: clean, or matches this hook can place.
+filescan() {
+	_check=$(dirname "$0")/../tests/check-no-local-identity.sh
+	[ -f "$_check" ] || die "refused: tests/check-no-local-identity.sh, which scans the files, is missing"
+	_gd=$(git rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$_gd" ] ||
+		die "refused: cannot find this repository for the file scan"
+	case $td in
+	*:* | *'"'*) die "refused: the temporary directory's path holds a colon or a quote, which the file scan cannot pass to git; set TMPDIR to another directory" ;;
+	esac
+	awk '{ printf "100644 %s 0\t%s\n", $4, $1 }' "$td/table" > "$td/info" || die "refused: cannot write a temporary file"
+	GIT_INDEX_FILE=$td/index git update-index --index-info < "$td/info" 2>/dev/null ||
+		die "refused: cannot build the index of the file scan"
+	_st=0
+	(
+		unset GIT_WORK_TREE
+		GIT_DIR=$_gd
+		GIT_INDEX_FILE=$td/index
+		GIT_ALTERNATE_OBJECT_DIRECTORIES=$td/objects${GIT_ALTERNATE_OBJECT_DIRECTORIES:+:$GIT_ALTERNATE_OBJECT_DIRECTORIES}
+		export GIT_DIR GIT_INDEX_FILE GIT_ALTERNATE_OBJECT_DIRECTORIES
+		exec sh "$_check"
+	) > "$td/check" 2>&1 < /dev/null || _st=$?
+	_head="check-no-local-identity: tracked files contain this machine's identity (values not shown); remove them:"
+	if [ "$_st" -eq 0 ]; then
+		grep -qx 'check-no-local-identity: ok' "$td/check" ||
+			die "refused: the file scan (tests/check-no-local-identity.sh) could not run"
+		return 0
+	fi
+	grep -qxF "$_head" "$td/check" || die "refused: the file scan (tests/check-no-local-identity.sh) could not run"
+	# The check lists "  <path>:<line> (<kind>)" per match (and counts for file
+	# names, which here are placeholders): one line "<n> <what> <kind> <id>"
+	# for the first match of each ref, "?" for a match not in the table.
+	awk '
+	NR == FNR { ref[$1] = $2; what[$1] = $3; id[$1] = $4; next }
+	/^  / {
+		l = substr($0, 3)
+		if (!match(l, /:[0-9]+ \((host|user|home)\)$/)) { print "?"; next }
+		p = substr(l, 1, RSTART - 1)
+		k = substr(l, RSTART); sub(/^:[0-9]+ \(/, "", k); sub(/\)$/, "", k)
+		if (!(p in ref)) { print "?"; next }
+		if (!(ref[p] in done)) { done[ref[p]] = 1; print ref[p], what[p], k, id[p] }
+	}
+	' "$td/table" "$td/check" > "$td/hits" || die "refused: cannot read the result of the file scan"
+	[ -s "$td/hits" ] && ! grep -qx '?' "$td/hits" ||
+		die "refused: the file scan reported a match this hook cannot place"
+	while read -r _n _what _kind _id; do
+		case $_what in
+		blob) report "$_n" "a file a pushed commit adds (blob $(printf '%.10s' "$_id")) contains this machine's $_kind identity; remove it before pushing" ;;
+		*) report "$_n" "a file name a pushed commit adds contains this machine's $_kind identity; rename the file before pushing" ;;
+		esac
+	done < "$td/hits"
+}
+
+td=$(mktemp -d "${TMPDIR:-/tmp}/pre-push.XXXXXX") || die "refused: cannot create a temporary directory"
+objf=$td/obj
+objt=$td/obj.txt
 # A shell error must still refuse; bash 3.2 loses the status in an EXIT
 # trap, so only the normal end of the script may exit 0.
-trap 'rm -f "$objf" "$objt"; [ "${_ok:-}" = 1 ] || exit 1' EXIT
+trap 'rm -rf "${td:?}"; [ "${_ok:-}" = 1 ] || exit 1' EXIT
+mkdir "$td/objects" || die "refused: cannot create a temporary directory"
+: > "$td/table" || die "refused: cannot create a temporary file"
 fail=0
 n=0
 while read -r lref lsha rref rsha || [ -n "${lref:-}" ]; do
@@ -292,19 +473,6 @@ while read -r lref lsha rref rsha || [ -n "${lref:-}" ]; do
 	local*) report "$n" "the local ref name contains this machine's ${hit#* } identity; rename the branch"; continue ;;
 	*) report "$n" "the remote ref name contains this machine's ${hit#* } identity; push to another name"; continue ;;
 	esac
-
-	# ---- Tooling branches: the one exemption. ------------------------------
-	# The loop's tooling pushes refs/heads/claim/<ID> and
-	# refs/heads/gate-clear/<ID> branches whose commit messages carry the
-	# machine identity, and the loop cannot work without them. Only the object
-	# scan below is skipped, and only for these prefixes; the ref names above
-	# are always checked. Commits pushed here count as published for every
-	# other ref afterwards. Delete this block when the tooling offers a
-	# pseudonymous identity (see docs/decisions/0005-push-identity-hook.md).
-	case $rref in
-	refs/heads/claim/* | refs/heads/gate-clear/*) continue ;;
-	esac
-	# -------------------------------------------------------------------------
 
 	# Annotated tags, a tag of a tag included: each tag object is published.
 	obj=$lsha
@@ -361,7 +529,10 @@ while read -r lref lsha rref rsha || [ -n "${lref:-}" ]; do
 			break
 		fi
 	done
+	# No new commit, nothing new below it: the remote has every object.
+	[ -n "$hit" ] || [ -z "$commits" ] || collect "$n" "$obj" "$rsha"
 done
+[ ! -s "$td/table" ] || filescan
 
 _ok=1
 exit "$fail"

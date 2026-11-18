@@ -604,7 +604,7 @@ Touch_LabelScale(const char *label, float w_px, int max_scale)
 int
 Touch_Supported(void)
 {
-#if defined(__APPLE__) && TARGET_OS_IPHONE && !TARGET_OS_MACCATALYST
+#if defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_MACCATALYST
 	return 1;
 #else
 	return 0;
