@@ -5,9 +5,13 @@
 # (scripts/test.sh runs tests/check-*.sh only): it loads every core for as
 # long as it runs, so run it through the host's lock.
 #
-# Usage: tests/bench-load.sh [-n RUNS] [-k PER_CORE] [-- COMMAND [ARGS...]]
+# Usage: tests/bench-load.sh [-n RUNS] [-k PER_CORE] [-p NICE] [-- COMMAND [ARGS...]]
 #   -n RUNS      runs of the command (default 3)
 #   -k PER_CORE  busy loops per core (default 1)
+#   -p NICE      runs the command at that niceness (default 0); a busy loop
+#                outlasts the scheduler's boost for short processes, so on
+#                macOS busy loops alone barely slow the self-test, and -p 20
+#                gives it the share a starved host would
 #   COMMAND      what each run runs (default: sh tests/check-bench.sh); for
 #                example `-- sh tests/check-bench.sh t_settle`
 #   --selftest   shows that no busy loop outlives the harness (below)
@@ -95,15 +99,17 @@ fi
 
 runs=3
 per=1
+prio=0
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 	-n) runs=${2:-}; shift 2 || exit 2 ;;
 	-k) per=${2:-}; shift 2 || exit 2 ;;
+	-p) prio=${2:-}; shift 2 || exit 2 ;;
 	--) shift; break ;;
-	*) echo "usage: $me [-n RUNS] [-k PER_CORE] [-- COMMAND [ARGS...]] | --selftest" >&2; exit 2 ;;
+	*) echo "usage: $me [-n RUNS] [-k PER_CORE] [-p NICE] [-- COMMAND [ARGS...]] | --selftest" >&2; exit 2 ;;
 	esac
 done
-case "$runs$per" in *[!0-9]*|'') echo "$me: -n and -k take a whole number" >&2; exit 2 ;; esac
+case "$runs$per$prio" in *[!0-9]*|'') echo "$me: -n, -k and -p take a whole number" >&2; exit 2 ;; esac
 [ "$#" -gt 0 ] || set -- sh "$root/tests/check-bench.sh"
 
 cores=$(sysctl -n hw.ncpu 2> /dev/null || getconf _NPROCESSORS_ONLN 2> /dev/null || echo 1)
@@ -134,7 +140,7 @@ while [ "$i" -lt $((cores * per)) ]; do
 done
 [ -z "${BENCH_LOAD_PIDS:-}" ] || echo $burners > "$BENCH_LOAD_PIDS"
 load() { sysctl -n vm.loadavg 2> /dev/null | awk '{ print $2 }'; }
-echo "$me: $((cores * per)) busy loops on $cores cores, $runs runs of: $*"
+echo "$me: $((cores * per)) busy loops on $cores cores, $runs runs at nice $prio of: $*"
 
 passed=0
 streak=0
@@ -142,7 +148,7 @@ best=0
 n=1
 while [ "$n" -le "$runs" ]; do
 	t0=$(date +%s)
-	"$@" > "${logs:?}/run.$n" 2>&1 < /dev/null &
+	nice -n "$prio" "$@" > "${logs:?}/run.$n" 2>&1 < /dev/null &
 	run=$!
 	s=0
 	wait "$run" || s=$?
