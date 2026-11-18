@@ -70,6 +70,7 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK162](../runbook/TASK162.md): water reflections mark their pixels in the G-buffer raster
 - [TASK161](../runbook/TASK161.md): ref_metal and the shim print presented frames a second; presented fps is the headline metric of the gl1-metal vsync0 bench cases
 - [TASK23](../runbook/TASK23.md): the tvOS simulator build boots to the main menu and loads base1; the guarded iOS APIs and the game-data options on tvOS
+- [TASK175](../runbook/TASK175.md): the visionOS simulator build boots to the main menu and loads base1 in a window; the iOS-only code on visionOS and the notes for slice 2
 - [TASK172](../runbook/TASK172.md): the iPhone Duo: a live fold and unfold, any aspect, asymmetric safe areas
 - [FIX48](../runbook/FIX48.md): the pin harness keeps keyboard and mouse input out of a record, and checks the rendered-frame count
 - [FIX111](../runbook/FIX111.md): the gate-nap-uncut mutant is caught on every run, whatever the load
