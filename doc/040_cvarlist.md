@@ -302,6 +302,16 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 
 * **nextserver**: Used for looping the introduction demos.
 
+* **adr0**, **adr1**, **adr2**, **adr3**, **adr4**, **adr5**, **adr6**,
+  **adr7**, **adr8**, **adr9**, **adr10**, **adr11**, **adr12**,
+  **adr13**, **adr14**, **adr15**: The sixteen entries of the server
+  address book in the multiplayer menu. Archived; the empty string
+  when an entry is unused.
+
+* **gl_drawflat**, **gl_saturatelighting**: Names in the client's
+  table of cheat-protected cvars that no renderer reads here. In
+  multiplayer the client creates them with the value `0`.
+
 
 ## Audio
 
@@ -701,6 +711,13 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   Object is used to implement a warping underwater-effect (like the
   software renderer has). Set to `0` to disable this, in case you don't
   like the effect or it's too slow on your machine.
+
+* **gl4_intensity**, **gl4_overbrightbits**, **vk_intensity**,
+  **vk_overbrightbits**: The colour intensity and overbright bits of
+  the OpenGL 4 and Vulkan renderers of upstream Yamagi Quake II. This
+  fork builds neither renderer, so nothing creates them; the video
+  menu names them for those renderers, with the meaning of
+  `gl3_intensity` and `gl3_overbrightbits`.
 
 
 ## Graphics (Software only)
