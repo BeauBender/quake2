@@ -255,6 +255,12 @@ unset ZZQ_FAIL
 mv "$tmp/st/tests/check-no-local-identity.sh" "$tmp/st-ident"
 attempt "the identity check is missing" "check-no-local-identity.sh" "$tmp/st" scripts/zzq-f3.sh "echo zzq clean"
 mv "$tmp/st-ident" "$tmp/st/tests/check-no-local-identity.sh"
+# grep fails while the hook scans the staged diff (a shim fails the hook's
+# own call, grep -aqE, and passes every other one on).
+printf '#!/bin/sh\n[ "$1" != -aqE ] || exit 2\nexec %s "$@"\n' "$(command -v grep)" > "$tmp/bin/grep"
+chmod +x "$tmp/bin/grep"
+attempt "grep fails on the staged diff" "pre-commit: cannot scan the staged diff" "$tmp/st" scripts/zzq-f4.sh "echo zzq clean"
+rm -f "$tmp/bin/grep"
 
 # ---- Credentials: one sample per token family. -----------------------------
 while IFS="$(printf '\t')" read -r _label _s; do
