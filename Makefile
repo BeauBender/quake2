@@ -1883,6 +1883,9 @@ $(TESTDIR)/%.o: %.c
 $(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS)) : tests/unit/test.h
 $(TESTDIR)/tests/unit/test_bspgraph.o : src/client/refresh/files/models.c
 
+# test_imgsize.c includes these whole, and Darwin has no .d tracking
+$(TESTDIR)/tests/unit/test_imgsize.o: src/client/refresh/files/pcx.c src/client/refresh/files/wal.c src/client/refresh/files/imgsize.h
+
 $(TEST_BIN) : $(TEST_OBJS)
 	@echo "===> LD $@"
 	${Q}mkdir -p $(@D)
