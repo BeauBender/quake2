@@ -20,22 +20,36 @@ MetalFX spatial). Owner's approval: the card's comment of 2026-11-17, recorded a
   `CL_UpscaleVTFacts` reads, in this order: built here; the OS has the class (macOS 26); its
   `isSupported`; `supportedScaleFactors` has the run's factor; a configuration at the factor is
   made; the model's status. Unsupported: one line, `upscale_textures: vt is unsupported here
-  (<reason>); using scale2x`, and the run goes on with scale2x. A missing model: the run prints
-  `UPSCALE_SAY_VT_FETCH` ("the operating system will now download VideoToolbox's
-  super-resolution model (once, from Apple)") before asking for it, waits at most 900 s, and says
-  how long it took. Nothing else fetches the model: not the menu, not the checks, not the tests.
-- **The menu:** Options, "upscale textures" gains "VideoToolbox ML", greyed with "greyed:
-  <reason>" where it is unsupported (`CL_UpscaleVTAvailable`: the class and `isSupported`, and the
-  reason a run of this process found), never hidden. Opening the page makes no VideoToolbox
-  object.
+  (<reason>); using scale2x`, and the run goes on with scale2x. A missing model (or one still
+  downloading): the run refuses in one line, `upscale_textures: vt: VideoToolbox's
+  super-resolution model is not on this machine: fetch it from the menu (Options, upscale
+  textures, VideoToolbox ML); nothing written`, and fetches nothing.
+- **Who fetches the model (decision 0013):** only a press of the menu item, a key press that
+  stuffed text (`svc_stufftext`) cannot make. The press prints `UPSCALE_SAY_VT_FETCH` ("the
+  operating system will now download VideoToolbox's super-resolution model (once, from
+  Apple)") and starts the download (`CL_UpscaleVTFetchStart`), which runs on its own: the main
+  thread never waits, so window events and quit keep working. Its state lives on a serial
+  dispatch queue, with a generation per fetch; the 900 s bound is applied when the menu polls
+  (`CL_UpscaleVTFetchState`), and a completion of a fetch given up on is ignored.
+  `tests/check-upscale-vt.sh` fails if any file but `menu.c` calls the fetch.
+- **The menu:** Options, "upscale textures" gains "VideoToolbox ML", never hidden. Each frame
+  it asks `CL_UpscaleVTAvailable` at the selected factor (the class, `isSupported` and the
+  class's `supportedScaleFactors`; no object is made) and the fetch's state, and
+  `CL_UpscaleVTItem` (`cl_upscale.c`, unit-tested) gives the item: greyed with "greyed:
+  <reason>" at a factor that does not apply, greyed while the model downloads, pressable when
+  the download is done, failed or timed out (the reason shown, "press to try again"). Nothing a
+  run or a fetch found is remembered, so a refusal at 2x greys nothing at 4x.
 - **The report generator:** `scripts/upscale-report.sh` (`scripts/upscale-report/report.py`). It
   copies the engine into its output directory, runs `upscale_textures <f> <backend> force` for
   each backend, alternated, `--runs` times, with a start-up-only run in each round, and writes one
   self-contained HTML file: the time per backend as a range (process, and command = process less
   the median start-up), the lines each backend's first run printed, and matched crops (the centre
   96 x 96 output texels of the same names from every backend, at 2x zoom). It refuses an output
-  inside a git work tree or with `..`. The report holds images of the player's data: local only,
-  never committed, uploaded or attached.
+  inside a git work tree or with `..`, a link it finds in the output (the engine copy, a log,
+  the report), and a `--names` entry that is not a plain relative path. It never fetches vt's
+  model: when the engine's vt run says the model is missing, it stops with a line that says to
+  fetch it from the client's menu and writes no report. The report holds images of the
+  player's data: local only, never committed, uploaded or attached.
 
 ## Tests
 
@@ -51,16 +65,23 @@ implementation: `yq2test: 58 tests, 0 failed`.
   `CL_UpscaleChooseBackend`, give `upscale_textures: vt is unsupported here (VideoToolbox's
   super-resolution scaler is not supported on this device); using scale2x`; the summary names vt.
 - **Host (`tests/metal/upscale_vt_test.m`, `tests/check-upscale-vt.sh`, macOS, ASAN and UBSAN):**
-  nothing scaled outside a run; the test switch `UPSCALE_VT_TEST` makes `isSupported` read NO and
-  the menu's check then gives the reason; with the model on the machine (never fetched by the
-  test), a 24 x 24 and a 72 x 72 tile at each factor VideoToolbox has, the same bytes twice with
-  another size between, alpha 255; a wrong output size refused; nothing scaled after the run.
-  `UPSCALE_VT_REQUIRE=1` makes a skipped case fail.
-- **Generator (`tests/check-upscale-report.sh`, offline):** a fake engine, no data, no network.
+  nothing scaled outside a run; the test switch `UPSCALE_VT_TEST` makes `isSupported` read NO, and
+  the menu's check then gives the reason and no download starts; with the model on the machine
+  (never fetched by the test), a 24 x 24 and a 72 x 72 tile at each factor VideoToolbox has, the
+  same bytes twice with another size between, alpha 255; **flat tiles keep their colour** (black,
+  grey 32, 128 and 200, white, and two colours: each channel's mean out within 12 levels of the
+  colour in); a wrong output size refused; nothing scaled after the run; a factor it lacks is
+  greyed, and after the runs the menu's check at each factor is the class's list (nothing
+  remembered); the fetch's state is idle at the end. `UPSCALE_VT_REQUIRE=1` makes a skipped case
+  fail. The script also fails if a file other than `menu.c` calls the model's fetch.
+- **Generator (`tests/check-upscale-report.sh`, offline):** a fake engine, no data, no network;
+  also a link planted in an existing output (the engine copy, a log) refused with its target
+  untouched, `--names` entries with `..` or a leading separator refused, and a vt run without
+  its model stopping the report with a line that says so.
 
 ## Evidence on this host
 
-M6, macOS 27.2.1, 2026-11-17. Output is in `~/Developer/no-git/quake2-artifacts/TASK167/` (local only).
+M6, macOS 27.2.1, 2026-11-17. Output is in a local artifacts folder, never committed.
 
 - **Support checks:** OS has the class 1; `isSupported` 1; `supportedScaleFactors` has 4x only;
   a configuration at 4x is made; model status 2 (ready) when the runs below started. At the first
@@ -88,8 +109,7 @@ M6, macOS 27.2.1, 2026-11-17. Output is in `~/Developer/no-git/quake2-artifacts/
   | metalfx | 10.31 to 10.70 s | 10.69 s | 2432 | 547438118 |
   | vt | 88.86 to 91.11 s | 89.01 s | 2432 | 184337862 |
 
-  The three outputs have the same names. The report is
-  `~/Developer/no-git/quake2-artifacts/TASK167/report-4x/upscale-report-4x.html` (8.1 MB, local
-  only: it holds images of the player's data).
+  The three outputs have the same names. The report is in a local artifacts folder, never
+  committed (8.1 MB: it holds images of the player's data).
 - **Host test:** `tests/check-upscale-vt.sh` with `UPSCALE_VT_REQUIRE=1`: 13 passed, 0 failed (the
   2x case reports "skipped: VideoToolbox has no 2x here").
