@@ -31,7 +31,8 @@
  * (CL_UpscaleRGBA, cl_upscale_metalfx.m); with vt (TASK167, macOS 26)
  * the same RGBA path runs VideoToolbox's super-resolution scaler
  * (cl_upscale_vt.m), whose model the operating system downloads once,
- * on this argument only and after a line that says so. Where a backend
+ * started from the menu item only (a run without it refuses and writes
+ * nothing; decision 0013). Where a backend
  * is unsupported the run says so in one line and uses scale2x. The PNG is written by
  * ImageIO (decision 0010). A file that exists is left
  * alone unless force is given; a link is never written through.
@@ -104,24 +105,26 @@ CL_UpscaleVTFacts(int factor, upscale_vt_facts_t *facts)
 }
 
 int
-CL_UpscaleVTAvailable(char *reason, size_t size)
-{
-	Q_strlcpy(reason, UPSCALE_NO_METALFX, size);
-	return 0;
-}
-
-void
-CL_UpscaleVTRefused(const char *reason)
-{
-	(void)reason;
-}
-
-int
-CL_UpscaleVTFetch(int factor, char *reason, size_t size)
+CL_UpscaleVTAvailable(int factor, char *reason, size_t size)
 {
 	(void)factor;
 	Q_strlcpy(reason, UPSCALE_NO_METALFX, size);
 	return 0;
+}
+
+int
+CL_UpscaleVTFetchStart(int factor, char *reason, size_t size)
+{
+	(void)factor;
+	Q_strlcpy(reason, UPSCALE_NO_METALFX, size);
+	return 0;
+}
+
+upscale_vt_fetch_t
+CL_UpscaleVTFetchState(char *reason, size_t size)
+{
+	Q_strlcpy(reason, "", size);
+	return UPSCALE_VT_FETCH_IDLE;
 }
 
 int
@@ -427,39 +430,28 @@ CL_UpscaleOne(const char *name, const upscale_kind_t *kind, int factor,
 }
 
 /*
- * The checks of a vt run at factor (CL_UpscaleVTState), the model
- * fetched when it is missing, after one line that says so, then the
- * run started: 1 when it may scale; else 0 with the reason, which the
- * menu then gives too.
+ * The checks of a vt run at factor (CL_UpscaleVTState), then the run
+ * started: 1 when it may scale; 0 with the reason, for scale2x; -1 with
+ * the reason when the model is missing or being downloaded, and the run
+ * writes nothing. A run never fetches the model: only the menu item
+ * does (decision 0013), so no command, stuffed text among them, starts
+ * a download. Nothing a run finds is remembered.
  */
 static int
 CL_UpscaleVTRun(int factor, char *reason, size_t size)
 {
 	upscale_vt_facts_t facts;
 	upscale_vt_state_t state;
-	int ok, start;
 
 	CL_UpscaleVTFacts(factor, &facts);
 	state = CL_UpscaleVTState(&facts, factor, reason, size);
 
 	if (state == UPSCALE_VT_FETCH)
 	{
-		Com_Printf("%s", UPSCALE_SAY_VT_FETCH);
-		start = Sys_Milliseconds();
-		ok = CL_UpscaleVTFetch(factor, reason, size);
-		Com_Printf("upscale_textures: vt: the model %s after %d ms\n",
-			ok ? "is ready" : "is not ready", Sys_Milliseconds() - start);
-		state = ok ? UPSCALE_VT_READY : UPSCALE_VT_UNSUPPORTED;
+		return -1;
 	}
 
-	ok = (state == UPSCALE_VT_READY) && CL_UpscaleVTBegin(factor, reason, size);
-
-	if (!ok)
-	{
-		CL_UpscaleVTRefused(reason);
-	}
-
-	return ok;
+	return (state == UPSCALE_VT_READY) && CL_UpscaleVTBegin(factor, reason, size);
 }
 
 void
@@ -468,7 +460,7 @@ CL_UpscaleTextures_f(void)
 	const char *colormap = "pics/colormap.pcx";
 	const unsigned char *palette;
 	unsigned char *raw = NULL;
-	char line[MAX_OSPATH + 512], reason[128];
+	char line[MAX_OSPATH + 512], reason[192];
 	const char *argv[4];
 	upscale_count_t n;
 	upscale_gitcache_t git;
@@ -538,6 +530,12 @@ CL_UpscaleTextures_f(void)
 	else if (backend == UPSCALE_VT)
 	{
 		supported = CL_UpscaleVTRun(factor, reason, sizeof(reason));
+
+		if (supported < 0)
+		{
+			Com_Printf("upscale_textures: vt: %s; nothing written\n", reason);
+			return;
+		}
 	}
 
 	backend = CL_UpscaleChooseBackend(backend, supported, reason, line,

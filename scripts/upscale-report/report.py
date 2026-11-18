@@ -7,7 +7,10 @@ lines each run printed (a fallback to scale2x among them), and matched crops
 of a fixed list of textures, the same region from every backend. The report
 holds images made from the player's game data: it stays on this machine and
 is never committed, uploaded or attached (docs/plans/high-resolution.md,
-section 6). The command refuses an output inside a git work tree.
+section 6). The command refuses an output inside a git work tree, and
+never writes through a link it finds in the output. It never fetches vt's
+model: the engine fetches it only from the client's menu, and a vt run
+without it stops the report with a line that says so.
 
   report.py check-out DIR
   report.py run --out DIR --basedir DATA [--engine-dir DIR] [--factor 2|4]
@@ -83,6 +86,27 @@ def check_out(out):
     return os.path.realpath(out) if os.path.exists(out) else os.path.abspath(out)
 
 
+def no_link(path):
+    """Refuse a destination that is there as a link: nothing is written through one."""
+    if os.path.islink(path):
+        die("refusing to write through a link: " + path)
+    return path
+
+
+def check_name(n):
+    """A --names entry: a relative path of plain parts (no '..', '.', leading separator or backslash)."""
+    parts = n.split("/")
+    if (not n or "\\" in n or "\0" in n or n.startswith("/")
+            or any(x in ("", ".", "..") for x in parts)):
+        die("refusing a name that is not a plain relative path: " + n)
+    return n
+
+
+# a vt run whose model is not on this machine says this and writes nothing
+VT_NO_MODEL = "upscale_textures: vt: "
+VT_NOTHING = "; nothing written"
+
+
 def png_size(data):
     if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
         return None
@@ -123,7 +147,7 @@ def engine_run(eng, game, args, basedir, renderer, bound, log=None):
         die("an engine run outlived its %d s bound: %s" % (bound, " ".join(args)), 1)
     wall = time.monotonic() - t0
     if log:
-        with open(log, "w") as f:
+        with open(no_link(log), "w") as f:
             f.write(p.stdout + p.stderr)
     lines = [ln for ln in (p.stdout + p.stderr).splitlines()
              if ln.startswith("upscale_textures:") or "AddressSanitizer" in ln
@@ -190,15 +214,16 @@ def run(a):
         die("no quake2 in " + src)
     if not os.path.isdir(a.basedir):
         die("no game data directory: " + a.basedir)
+    want = [check_name(n) for n in a.names.split(",")] if a.names else list(NAMES)
     os.makedirs(out, exist_ok=True)
-    eng = os.path.join(out, "engine")
+    eng = no_link(os.path.join(out, "engine"))
     # a copy of the binaries: -portable writes beside it, outside the work tree
     os.makedirs(eng, exist_ok=True)
-    logs = os.path.join(out, "logs")
+    logs = no_link(os.path.join(out, "logs"))
     os.makedirs(logs, exist_ok=True)
     for f in os.listdir(src):
         if f == "quake2" or f.endswith((".dylib", ".so")):
-            shutil.copy2(os.path.join(src, f), os.path.join(eng, f))
+            shutil.copy2(os.path.join(src, f), no_link(os.path.join(eng, f)))
     if git_tree(eng):
         die("the engine copy is inside a git work tree: " + eng)
 
@@ -215,6 +240,11 @@ def run(a):
                                        ["+upscale_textures", str(a.factor), b, "force"],
                                        a.basedir, a.renderer, a.bound,
                                        os.path.join(logs, "%s-%d.log" % (b, k + 1)))
+            if b == "vt" and any(ln.startswith(VT_NO_MODEL) and ln.endswith(VT_NOTHING)
+                                 for ln in got):
+                die("vt: VideoToolbox's model is not on this machine. The report never "
+                    "fetches it: fetch it once from the client's menu (Options, upscale "
+                    "textures, VideoToolbox ML), or leave vt out of --backends", 1)
             times.setdefault(b, []).append(wall)
             rcs.setdefault(b, []).append(rc)
             if k == 0:
@@ -223,7 +253,7 @@ def run(a):
     info["load_end"] = load()
 
     written = [listing(os.path.join(eng, "up-" + b)) for b in backends]
-    names = pick_names(a.names.split(",") if a.names else NAMES, written)
+    names = pick_names(want, written)
 
     def rng(v):
         return "%.3f to %.3f s (median %.3f)" % (min(v), max(v), statistics.median(v))
@@ -264,7 +294,7 @@ Load average (1 min): %.2f at the start, %.2f at the end.</p>
 """ % (a.factor, html.escape(info["model"]), html.escape(info["chip"]), html.escape(info["os"]),
        html.escape(a.renderer), a.runs, info["load_start"], info["load_end"], "".join(rows),
        said, head, "".join(figs))
-    path = os.path.join(out, "upscale-report-%dx.html" % a.factor)
+    path = no_link(os.path.join(out, "upscale-report-%dx.html" % a.factor))
     with open(path, "w") as f:
         f.write(doc)
     print("upscale-report: load %.2f at the start, %.2f at the end" % (info["load_start"], info["load_end"]))

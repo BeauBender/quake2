@@ -56,13 +56,14 @@ typedef enum
 {
 	UPSCALE_VT_UNSUPPORTED,	/* scale2x, with the reason */
 	UPSCALE_VT_READY,	/* the run may scale */
-	UPSCALE_VT_FETCH	/* the model is to be fetched first */
+	UPSCALE_VT_FETCH	/* the model is missing: a run refuses, the menu may fetch it */
 } upscale_vt_state_t;
 
 /*
  * What a vt run at factor does with facts, checked in the struct's
  * order: unsupported with a one-line reason in reason ("" otherwise),
- * ready, or fetch the model first (it is missing or being fetched).
+ * ready, or the model is missing or being fetched (the reason is then
+ * UPSCALE_VT_NO_MODEL or UPSCALE_VT_FETCHING, the refusal a run prints).
  * In cl_upscale.c.
  */
 upscale_vt_state_t CL_UpscaleVTState(const upscale_vt_facts_t *facts,
@@ -75,23 +76,50 @@ upscale_vt_state_t CL_UpscaleVTState(const upscale_vt_facts_t *facts,
 void CL_UpscaleVTFacts(int factor, upscale_vt_facts_t *facts);
 
 /*
- * 1 when the backend may be offered: it is built, the OS has the class,
- * isSupported says yes, and no run of this process has found it
- * unsupported. Else 0 and a one-line reason. Makes no object: the menu
- * asks it.
+ * 1 when the backend may be offered at factor: it is built, the OS has
+ * the class, isSupported says yes and supportedScaleFactors has factor.
+ * Else 0 and a one-line reason. Nothing a run found is remembered, so a
+ * refusal at one factor greys nothing at another. Makes no object: the
+ * menu asks it each frame.
  */
-int CL_UpscaleVTAvailable(char *reason, size_t size);
+int CL_UpscaleVTAvailable(int factor, char *reason, size_t size);
 
-/* a run found the backend unsupported: the menu gives this reason */
-void CL_UpscaleVTRefused(const char *reason);
+/* the model's download, which only the menu item starts */
+typedef enum
+{
+	UPSCALE_VT_FETCH_IDLE,		/* none started by this process */
+	UPSCALE_VT_FETCH_RUNNING,	/* the operating system is downloading it */
+	UPSCALE_VT_FETCH_DONE,		/* the download finished */
+	UPSCALE_VT_FETCH_FAILED		/* it failed or outlived its bound: the reason */
+} upscale_vt_fetch_t;
 
 /*
  * Asks the operating system to download the model of a configuration
- * at factor, and waits at most UPSCALE_VT_FETCH_SECONDS: 1 when the
- * model is ready after, else 0 and a one-line reason. Called only by a
- * vt run, after UPSCALE_SAY_VT_FETCH is printed.
+ * at factor and returns at once: 1 when the download was started (or
+ * is running already), else 0 and a one-line reason. Only the menu
+ * item calls it (a key press, which stuffed text cannot make), after
+ * UPSCALE_SAY_VT_FETCH is printed; tests/check-upscale-vt.sh keeps it
+ * so. A run never fetches: it refuses with UPSCALE_VT_NO_MODEL.
  */
-int CL_UpscaleVTFetch(int factor, char *reason, size_t size);
+int CL_UpscaleVTFetchStart(int factor, char *reason, size_t size);
+
+/*
+ * The download's state, and for UPSCALE_VT_FETCH_FAILED its reason. A
+ * download running longer than UPSCALE_VT_FETCH_SECONDS is given up on
+ * here (FAILED; a late completion is ignored). Makes no object: the
+ * menu asks it each frame. A failure is not remembered beyond the next
+ * start: a press tries again.
+ */
+upscale_vt_fetch_t CL_UpscaleVTFetchState(char *reason, size_t size);
+
+/*
+ * What the menu's vt item shows: 1 when it may be pressed, else 0
+ * (greyed); its status-bar line into status. available and why are
+ * CL_UpscaleVTAvailable's at the selected factor, fetch and fetchwhy
+ * CL_UpscaleVTFetchState's. In cl_upscale.c.
+ */
+int CL_UpscaleVTItem(int available, const char *why, upscale_vt_fetch_t fetch,
+		const char *fetchwhy, char *status, size_t size);
 
 /* Starts a run at factor (2 or 4): 1, or 0 and a one-line reason. */
 int CL_UpscaleVTBegin(int factor, char *reason, size_t size);
@@ -109,7 +137,14 @@ int CL_UpscaleVTScale(void *ctx, const unsigned char *in, int iw, int ih,
 /* Ends the run: every object CL_UpscaleVTBegin and Scale made is let go. */
 void CL_UpscaleVTEnd(void);
 
-/* said once before the model is fetched; nothing is fetched without vt */
+/* a vt run's refusal when the model is missing, or being downloaded */
+#define UPSCALE_VT_NO_MODEL "VideoToolbox's super-resolution model is not on " \
+	"this machine: fetch it from the menu (Options, upscale textures, " \
+	"VideoToolbox ML)"
+#define UPSCALE_VT_FETCHING "VideoToolbox's super-resolution model is being " \
+	"downloaded: run again when the menu says it is ready"
+
+/* said once, by the menu item, before the model is fetched */
 #define UPSCALE_SAY_VT_FETCH "upscale_textures: vt: the operating system " \
 	"will now download VideoToolbox's super-resolution model (once, from " \
 	"Apple)\n"

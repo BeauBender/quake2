@@ -21,17 +21,20 @@
  * machine-learning super-resolution scaler (a VTFrameProcessor session
  * with a VTSuperResolutionScalerConfiguration of the image input type).
  * macOS 26 and later; VideoToolbox is weak-linked and every call is
- * behind @available, so on an older macOS the backend reads as
- * unsupported and the client still runs.
+ * behind @available, so a build with a lower deployment target reads
+ * the backend as unsupported on an older macOS and still runs (the
+ * Makefile sets none: a default build's minimum is the build host's).
  *
  * The scaler needs a model the operating system downloads once. Nothing
- * here downloads it except CL_UpscaleVTFetch, which only a vt run calls,
- * after the run has said so (UPSCALE_SAY_VT_FETCH).
+ * here downloads it except CL_UpscaleVTFetchStart, which only the menu
+ * item calls (a key press, which stuffed text cannot make), after the
+ * menu has said so (UPSCALE_SAY_VT_FETCH); the download runs on its own
+ * and the menu shows its state. A vt run with the model missing refuses.
  *
  * Objects are made only between CL_UpscaleVTBegin and CL_UpscaleVTEnd;
  * CL_UpscaleVTFacts makes one configuration to read the model's status
- * and keeps nothing, and CL_UpscaleVTAvailable, which the menu asks,
- * makes none. The padding, the crop and the alpha are cl_upscale.c's
+ * and keeps nothing, and CL_UpscaleVTAvailable and
+ * CL_UpscaleVTFetchState, which the menu asks each frame, make none. The padding, the crop and the alpha are cl_upscale.c's
  * (CL_UpscaleRGBA), shared with metalfx.
  *
  * =======================================================================
@@ -43,8 +46,10 @@
 #import <VideoToolbox/VideoToolbox.h>
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "header/upscale_vt.h"
 
@@ -60,9 +65,6 @@ static id vt_processor;
 static int vt_iw, vt_ih;
 static OSType vt_format;
 static long long vt_frames;
-/* why a run of this process found the backend unsupported; "" if none did */
-static char vt_unsupported[160];
-
 #ifdef UPSCALE_VT_TEST
 /* the host test's switch: the checks say isSupported is NO */
 int upscale_vt_test_unsupported;
@@ -175,9 +177,9 @@ CL_UpscaleVTFacts(int factor, upscale_vt_facts_t *facts)
 }
 
 int
-CL_UpscaleVTAvailable(char *reason, size_t size)
+CL_UpscaleVTAvailable(int factor, char *reason, size_t size)
 {
-	int os;
+	int os, ok = 1;
 
 	CL_UpscaleVTSay(reason, size, "");
 
@@ -189,26 +191,57 @@ CL_UpscaleVTAvailable(char *reason, size_t size)
 		return 0;
 	}
 
-	if (vt_unsupported[0])
+	if (@available(macOS 26.0, *))
 	{
-		CL_UpscaleVTSay(reason, size, vt_unsupported);
-		return 0;
+		/* a class property: no object is made; the menu asks it each frame */
+		@autoreleasepool
+		{
+			ok = [VTSuperResolutionScalerConfiguration.supportedScaleFactors
+				containsObject:@(factor)] ? 1 : 0;
+		}
 	}
 
-	return 1;
+	if (!ok && reason && (size > 0))
+	{
+		snprintf(reason, size, "VideoToolbox's super-resolution scaler has no %dx",
+			factor);
+	}
+
+	return ok;
 }
 
-void
-CL_UpscaleVTRefused(const char *reason)
+/*
+ * The model's download, which only the menu item starts. It runs on its
+ * own: the main thread never waits for it. Its state is read and written
+ * on vt_fetch_queue only; the completion handler posts there, and the
+ * handler of a fetch the bound gave up on (an older generation) is
+ * ignored.
+ */
+static dispatch_queue_t vt_fetch_queue;
+static upscale_vt_fetch_t vt_fetch_state;
+static unsigned vt_fetch_gen;
+static uint64_t vt_fetch_start;
+static char vt_fetch_why[160];
+/* the configuration whose model is being fetched, kept until it is done */
+static id vt_fetch_config;
+
+static dispatch_queue_t
+CL_UpscaleVTFetchQueue(void)
 {
-	snprintf(vt_unsupported, sizeof(vt_unsupported), "%s",
-		(reason && reason[0]) ? reason : "unsupported");
+	static dispatch_once_t once;
+
+	dispatch_once(&once, ^{
+		vt_fetch_queue = dispatch_queue_create("yq2.upscale.vt.fetch",
+			DISPATCH_QUEUE_SERIAL);
+	});
+
+	return vt_fetch_queue;
 }
 
 int
-CL_UpscaleVTFetch(int factor, char *reason, size_t size)
+CL_UpscaleVTFetchStart(int factor, char *reason, size_t size)
 {
-	int ok = 0, os;
+	int os, ok = 0;
 
 	CL_UpscaleVTSay(reason, size, "");
 
@@ -222,10 +255,22 @@ CL_UpscaleVTFetch(int factor, char *reason, size_t size)
 	{
 		@autoreleasepool
 		{
-			VTSuperResolutionScalerConfiguration *c =
-				CL_UpscaleVTConfig(VT_PROBE_SIDE, VT_PROBE_SIDE, factor);
-			dispatch_semaphore_t done = dispatch_semaphore_create(0);
-			__block NSString *failed = nil;
+			dispatch_queue_t q = CL_UpscaleVTFetchQueue();
+			VTSuperResolutionScalerConfiguration *c;
+			__block int running = 0;
+			__block unsigned gen = 0;
+			unsigned mine;
+
+			dispatch_sync(q, ^{
+				running = (vt_fetch_state == UPSCALE_VT_FETCH_RUNNING);
+			});
+
+			if (running)
+			{
+				return 1;
+			}
+
+			c = CL_UpscaleVTConfig(VT_PROBE_SIDE, VT_PROBE_SIDE, factor);
 
 			if (!c)
 			{
@@ -234,46 +279,75 @@ CL_UpscaleVTFetch(int factor, char *reason, size_t size)
 				return 0;
 			}
 
-			if (c.configurationModelStatus !=
-				VTSuperResolutionScalerConfigurationModelStatusReady)
-			{
-				[c downloadConfigurationModelWithCompletionHandler:^(NSError *e) {
-					if (e)
+			dispatch_sync(q, ^{
+				gen = ++vt_fetch_gen;
+				vt_fetch_state = UPSCALE_VT_FETCH_RUNNING;
+				vt_fetch_why[0] = '\0';
+				vt_fetch_start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+				vt_fetch_config = c;
+			});
+			mine = gen;
+
+			[c downloadConfigurationModelWithCompletionHandler:^(NSError *e) {
+				NSString *why = e ? [e.localizedDescription copy] : nil;
+
+				dispatch_async(q, ^{
+					if (mine != vt_fetch_gen)
 					{
-						failed = [e.localizedDescription copy];
+						return;
 					}
 
-					dispatch_semaphore_signal(done);
-				}];
+					vt_fetch_config = nil;
+					vt_fetch_state = why ? UPSCALE_VT_FETCH_FAILED :
+						UPSCALE_VT_FETCH_DONE;
 
-				if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW,
-					(int64_t)UPSCALE_VT_FETCH_SECONDS * NSEC_PER_SEC)) != 0)
-				{
-					snprintf(reason, size, "the model's download did not finish "
-						"in %d s", UPSCALE_VT_FETCH_SECONDS);
-					return 0;
-				}
+					if (why)
+					{
+						snprintf(vt_fetch_why, sizeof(vt_fetch_why),
+							"the model's download failed: %s",
+							why.UTF8String ? why.UTF8String : "?");
+					}
+				});
+			}];
 
-				if (failed)
-				{
-					snprintf(reason, size, "the model's download failed: %s",
-						failed.UTF8String ? failed.UTF8String : "?");
-					return 0;
-				}
-			}
-
-			ok = (c.configurationModelStatus ==
-				VTSuperResolutionScalerConfigurationModelStatusReady);
-
-			if (!ok)
-			{
-				CL_UpscaleVTSay(reason, size,
-					"the model is not ready after its download");
-			}
+			ok = 1;
 		}
 	}
 
 	return ok;
+}
+
+upscale_vt_fetch_t
+CL_UpscaleVTFetchState(char *reason, size_t size)
+{
+	__block upscale_vt_fetch_t state = UPSCALE_VT_FETCH_IDLE;
+
+	CL_UpscaleVTSay(reason, size, "");
+
+	if (@available(macOS 26.0, *))
+	{
+		dispatch_sync(CL_UpscaleVTFetchQueue(), ^{
+			const uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+
+			/* the bound: a fetch that has not finished is given up on */
+			if ((vt_fetch_state == UPSCALE_VT_FETCH_RUNNING) &&
+				(now - vt_fetch_start >
+				 (uint64_t)UPSCALE_VT_FETCH_SECONDS * NSEC_PER_SEC))
+			{
+				vt_fetch_gen++;
+				vt_fetch_config = nil;
+				vt_fetch_state = UPSCALE_VT_FETCH_FAILED;
+				snprintf(vt_fetch_why, sizeof(vt_fetch_why),
+					"the model's download did not finish in %d s",
+					UPSCALE_VT_FETCH_SECONDS);
+			}
+
+			state = vt_fetch_state;
+			CL_UpscaleVTSay(reason, size, vt_fetch_why);
+		});
+	}
+
+	return state;
 }
 
 void
@@ -409,25 +483,20 @@ CL_UpscaleVTBuffer(int w, int h)
 	return b;
 }
 
-/* a byte (0 to 255) as an IEEE half-float bit pattern, and back */
+/*
+ * A byte (0 to 255) as the IEEE half-float bit pattern of v / 255 (the
+ * scaler's colours run from 0 to 1), and back. The compiler's _Float16
+ * does the rounding.
+ */
 static unsigned short
 CL_UpscaleVTHalf(unsigned char v)
 {
-	unsigned m, e;
+	const _Float16 f = (_Float16)(v / 255.0f);
+	unsigned short h;
 
-	if (!v)
-	{
-		return 0;
-	}
+	memcpy(&h, &f, sizeof(h));
 
-	/* v is 1 to 255: v = 1.f * 2^e, e 0 to 7, half exponent e + 15 */
-	for (e = 7; !(v >> e); e--)
-	{
-	}
-
-	m = ((unsigned)v << (10 - e)) & 0x3ff;
-
-	return (unsigned short)(((e + 15) << 10) | m);
+	return h;
 }
 
 static unsigned char

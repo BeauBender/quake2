@@ -160,11 +160,13 @@ main(void)
 		CL_UpscaleVTFacts(2, &f);
 		check(f.built && !f.supported && !f.config,
 			"the switch: the facts say isSupported is NO");
-		check(!CL_UpscaleVTAvailable(reason, sizeof(reason)) && strlen(reason) > 0,
+		check(!CL_UpscaleVTAvailable(4, reason, sizeof(reason)) && strlen(reason) > 0,
 			"the switch: the menu's check gives a reason");
 		printf("reason: %s\n", reason);
 		check(!CL_UpscaleVTBegin(2, reason, sizeof(reason)),
 			"the switch: a run does not start");
+		check(!CL_UpscaleVTFetchStart(4, reason, sizeof(reason)) && strlen(reason) > 0,
+			"the switch: no download starts");
 		upscale_vt_test_unsupported = 0;
 
 		CL_UpscaleVTFacts(2, &f);
@@ -200,6 +202,8 @@ main(void)
 					printf("skipped: VideoToolbox has no %dx here\n", factor);
 					check(!CL_UpscaleVTBegin(factor, reason, sizeof(reason)),
 						"a run at a factor it lacks does not start");
+					check(!CL_UpscaleVTAvailable(factor, reason, sizeof(reason)) &&
+						strstr(reason, "has no"), "the menu greys a factor it lacks");
 					continue;
 				}
 
@@ -241,9 +245,30 @@ main(void)
 			}
 		}
 
-		CL_UpscaleVTRefused("a long reason that a run found");
-		check(!CL_UpscaleVTAvailable(reason, 12) && !strcmp(reason, "a long reas"),
-			"a refused run's reason, cut to the menu's buffer");
+		/*
+		 * nothing a run found is remembered: after the runs above (the
+		 * M6 refuses 2x), the menu's check at each factor is the class's
+		 * list, so a refusal at one factor greys nothing at another
+		 */
+		{
+			int factor;
+
+			for (factor = 2; factor <= 4; factor += 2)
+			{
+				char what[96];
+
+				CL_UpscaleVTFacts(factor, &f);
+				snprintf(what, sizeof(what), "after the runs, the menu's check "
+					"at %dx is the class's list (%d)", factor, f.factor);
+				check(CL_UpscaleVTAvailable(factor, reason, sizeof(reason)) ==
+					(f.supported && f.factor), what);
+			}
+		}
+
+		check(!CL_UpscaleVTAvailable(3, reason, 12) && (strlen(reason) == 11),
+			"a reason cut to the menu's buffer");
+		check((CL_UpscaleVTFetchState(reason, sizeof(reason)) == UPSCALE_VT_FETCH_IDLE) &&
+			!reason[0], "nothing was fetched: the test never starts a download");
 	}
 
 	printf("%d passed, %d failed\n", passed, failed);

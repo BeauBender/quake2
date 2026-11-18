@@ -629,6 +629,9 @@ CL_UpscaleVTState(const upscale_vt_facts_t *facts, int factor, char *reason,
 	else if ((facts->model == UPSCALE_VT_MODEL_DOWNLOAD) ||
 		(facts->model == UPSCALE_VT_MODEL_DOWNLOADING))
 	{
+		/* a run refuses with this; only the menu item fetches (decision 0013) */
+		snprintf(reason, size, "%s", (facts->model == UPSCALE_VT_MODEL_DOWNLOAD) ?
+			UPSCALE_VT_NO_MODEL : UPSCALE_VT_FETCHING);
 		return UPSCALE_VT_FETCH;
 	}
 	else if (facts->model == UPSCALE_VT_MODEL_READY)
@@ -642,6 +645,48 @@ CL_UpscaleVTState(const upscale_vt_facts_t *facts, int factor, char *reason,
 	}
 
 	return UPSCALE_VT_UNSUPPORTED;
+}
+
+int
+CL_UpscaleVTItem(int available, const char *why, upscale_vt_fetch_t fetch,
+		const char *fetchwhy, char *status, size_t size)
+{
+	char none[1];
+	int ok = 1;
+
+	if (!status || (size == 0))
+	{
+		status = none;
+		size = sizeof(none);
+	}
+
+	if (!available)
+	{
+		snprintf(status, size, "greyed: %s", (why && why[0]) ? why : "unsupported");
+		ok = 0;
+	}
+	else if (fetch == UPSCALE_VT_FETCH_RUNNING)
+	{
+		snprintf(status, size, "greyed: macOS is downloading the model; "
+			"it can be pressed once that is done");
+		ok = 0;
+	}
+	else if (fetch == UPSCALE_VT_FETCH_FAILED)
+	{
+		snprintf(status, size, "%s; press to try again",
+			(fetchwhy && fetchwhy[0]) ? fetchwhy : "the model's download failed");
+	}
+	else if (fetch == UPSCALE_VT_FETCH_DONE)
+	{
+		snprintf(status, size, "Apple's ML scaler; its model is downloaded");
+	}
+	else
+	{
+		snprintf(status, size, "Apple's ML scaler; the first press has macOS "
+			"download its model");
+	}
+
+	return ok;
 }
 
 int
