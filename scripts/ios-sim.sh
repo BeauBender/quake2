@@ -142,6 +142,20 @@
 # IOS_SIM_LIST_SECONDS (60, each "simctl list"), IOS_SIM_CREATE_SECONDS
 # (120), IOS_SIM_RUN_SECONDS (3600, each start of "run").
 #
+# The launcher (TASK180, both modes, every SDK): before the device is deleted
+# the script prints one line about the device's launcher process (SpringBoard
+# on iOS, PineBoard on tvOS, SurfBoard on visionOS), read from the device's own launchd
+# ("simctl spawn <udid> launchctl list", this run's UDID only): a baseline
+# after the boot against the same read at the end.
+#   launcher: no crash
+#   launcher: <n> crash(es): <process>, pid <old> -> <new>, last exit status <s>, seen at <time>
+#   launcher: unknown (<reason>)
+# A crash, and an unknown (the device cannot be queried, the baseline could
+# not be read, the launcher is not listed or not running at the start), fail
+# the run, as bad as a missing frame: an unknown is never a pass.
+# IOS_SIM_LAUNCHER_CRASH_OK=1 reports the line and lets both pass. The count
+# is 1: launchd keeps the last exit only. A run that stops early prints the
+# line too, and the device is shut down and deleted on every path.
 # IOS_SIM_DISPLAY (TASK172): the display each "simctl io screenshot" takes,
 # passed as --display. A device with two integrated displays (the iPhone
 # Duo: "primary", the outer, and "primary-1", the inner) has no default one
@@ -332,6 +346,7 @@ spawn)
 		n=$(cat "$st/lcalls" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$st/lcalls"
 		lab=com.apple.SpringBoard
 		[ "${IOS_SIM_SDK:-}" = appletvsimulator ] && lab=com.apple.PineBoard
+		[ "${IOS_SIM_SDK:-}" = xrsimulator ] && lab=com.apple.SurfBoard
 		lp=100; ls=0
 		case ${FAKE_LAUNCHER:-ok} in
 		crash) [ "$n" -gt 1 ] && { lp=200; ls=-11; } ;;
@@ -778,7 +793,7 @@ EOF
 	ST_CMD="run --out @D@/out" st_case run-device-from-before-gone vanish ok "not a failure): 22222222-2222-2222-2222-222222222222" 30
 	# the launcher of the device (TASK180): one line before the device is deleted, from the device's own
 	# launchd (simctl spawn on this run's UDID), for each SDK: no crash, a crash, a query that fails
-	for sdk in iphonesimulator:extra:SpringBoard appletvsimulator:tvos:PineBoard xrsimulator:xros:SpringBoard; do
+	for sdk in iphonesimulator:extra:SpringBoard appletvsimulator:tvos:PineBoard xrsimulator:xros:SurfBoard; do
 		l_sdk=${sdk%%:*}; l_rest=${sdk#*:}; l_sc=${l_rest%%:*}; l_lab=${l_rest#*:}; l_n=${l_sdk%simulator}
 		st_case launcher-no-crash-$l_n "$l_sc" ok "launcher: no crash" 30 IOS_SIM_SDK="$l_sdk"
 		st_case launcher-crash-$l_n "$l_sc" fail "launcher: 1 crash(es): com.apple.$l_lab, pid 100 -> 200, last exit status -11" 30 IOS_SIM_SDK="$l_sdk" FAKE_LAUNCHER=crash
@@ -1085,7 +1100,7 @@ EOF
 ) || die "no device for the run"
 read -r type_id rt_id rt_name <<< "$pick"
 # TASK180: did the launcher of this run's device crash or restart while the run was in progress?
-# The launcher is SpringBoard on iOS and visionOS and PineBoard on tvOS (the label launchd of the
+# The launcher is SpringBoard on iOS, PineBoard on tvOS and SurfBoard on visionOS (the label launchd of the
 # device knows it by, found from "simctl spawn <udid> launchctl list" on a throwaway device of each
 # platform, docs/runbook/TASK180.md). The device's own launchd keeps, per job, its pid and the last
 # exit status: a baseline taken once the device has booted and the same read before the device is
@@ -1094,6 +1109,7 @@ read -r type_id rt_id rt_name <<< "$pick"
 # run's UDID, bounded; nothing on the host is read. Any read that fails is "unknown", never a pass.
 case ${IOS_SIM_SDK:-iphonesimulator} in
 appletvsimulator) launcher_label=com.apple.PineBoard ;;
+xrsimulator) launcher_label=com.apple.SurfBoard ;;
 *) launcher_label=com.apple.SpringBoard ;;
 esac
 launcher_booted=

@@ -394,7 +394,22 @@ Metal device reports no Apple GPU family; in the simulator only,
 `ref_metal` does not check its apple5 floor and logs a line that says
 so, while a device build still refuses a GPU below it.
 `scripts/ios-sim.sh selftest` checks the smoke's own rules (bounded
-`simctl` calls, the device lists) against a fake `xcrun`.
+`simctl` calls, the device lists, the launcher line) against a fake `xcrun`.
+
+Before it deletes its device, every run of `ios-sim.sh` (`smoke` and
+`run`) prints one line about the device's launcher process, SpringBoard
+(the home screen), read from the device's own launchd and from nothing on
+the host: `launcher: no crash` (the launcher kept its process and its last
+exit status since the device booted), `launcher: 1 crash(es): ...` (it
+exited meanwhile, with the process, the old and new pid, the last exit
+status, -11 being a SIGSEGV, and the time it was seen), or `launcher:
+unknown (...)` (the device could not be asked, or its launcher was not
+listed or not running at the start). A crash fails the run, and so does
+an unknown: it is never a pass. `IOS_SIM_LAUNCHER_CRASH_OK=1` prints the
+line and lets the run pass anyway (the count is 1: launchd keeps the last
+exit only). This tells a run apart from the error dialogs about the
+launcher that the simulator shows after many runs
+(*docs/runbook/TASK180.md*).
 
 `tests/check-ios.sh`, part of the gate, compiles the objects for the
 simulator and checks their platform, exports and AppKit references;
@@ -414,7 +429,10 @@ menu's focus and where the game data lives are not done yet
 (*docs/runbook/TASK23.md*).
 `IOS_SIM_SDK=appletvsimulator scripts/ios-sim.sh run --out DIR --data DATA`
 runs it on an Apple TV simulator device (DIR outside the checkout, as for
-the smoke); `tests/check-tvos.sh` builds its objects in the gate.
+the smoke); `tests/check-tvos.sh` builds its objects in the gate. The
+launcher line (above) is about PineBoard there, the Apple TV's launcher:
+`launcher: no crash`, a crash or `unknown`, with the same effect on the
+run.
 
 ### Apple Vision Pro (simulator)
 
@@ -429,7 +447,9 @@ done yet (*docs/runbook/TASK175.md*).
 `IOS_SIM_SDK=xrsimulator scripts/ios-sim.sh run --out DIR --data DATA`
 runs it on an Apple Vision Pro simulator device (DIR outside the
 checkout, as for the smoke); `tests/check-visionos.sh` builds its objects
-in the gate.
+in the gate. The launcher line (above) is about SurfBoard there, the
+visionOS launcher: `launcher: no crash`, a crash or
+`unknown`, with the same effect on the run.
 
 ### Running on an iPhone or iPad
 
