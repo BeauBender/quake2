@@ -902,10 +902,10 @@ stall() {
 
 t_lock_stall() {
 	fresh stall
-	# FIX128 review round 1: fresh's 10 s wait is shorter than this case's
-	# own bounds (the maker's is 5 + 30 + 30 + 20 s at most), so it would
-	# end first; 120 s leaves the stated polls the binding bounds.
-	BENCH_LOCK_WAIT=120
+	# FIX128 review round 1: under this case's own bounds the maker waits
+	# 5 + 30 + 30 + 20 s at most, more than fresh's 10 s; 300 s keeps the
+	# stated polls the binding bounds.
+	BENCH_LOCK_WAIT=300
 	# A maker that stalls between its mkdir and its holder write for longer
 	# than the grace, while a waiter reclaims the directory and makes it
 	# again, backs off and leaves the taker's holder file as it was: the two
@@ -1085,8 +1085,8 @@ t_lock_dead_waiter() {
 	fresh deadw
 	qfix
 	# FIX128 review round 1: W2 waits 10 + 30 s at most under this case's
-	# bounds, more than fresh's 10 s; 120 s keeps those bounds binding.
-	BENCH_LOCK_WAIT=120
+	# bounds, more than fresh's 10 s; 300 s keeps those bounds binding.
+	BENCH_LOCK_WAIT=300
 	holder H
 	start env BENCH_LOCK_GRACE=1 sh "$R/bench.sh" lock run W1 -- sh "$E/rec.sh" "$E/log" W1 > "${E:?}/w1.out" 2>&1
 	_w1=$BG
@@ -1211,8 +1211,8 @@ t_lock_queue_status() {
 	fresh qstatus
 	qfix
 	# FIX128 review round 1: S3 waits 10 + 3 * 30 s at most under this
-	# case's bounds, more than fresh's 10 s; 120 s keeps those binding.
-	BENCH_LOCK_WAIT=120
+	# case's bounds, more than fresh's 10 s; 300 s keeps those binding.
+	BENCH_LOCK_WAIT=300
 	holder H
 	_ps=
 	for _c in S1 S2 S3; do
@@ -1244,9 +1244,9 @@ t_lock_zombie_waiter() {
 	fresh zombiew
 	qfix
 	# FIX128 review round 1: Z must still wait after wait_said's 10 s and
-	# W waits 10 + 30 s at most, more than fresh's 10 s; 120 s keeps this
+	# W waits 10 + 30 s at most, more than fresh's 10 s; 300 s keeps this
 	# case's own bounds binding.
-	BENCH_LOCK_WAIT=120
+	BENCH_LOCK_WAIT=300
 	holder H
 	start perl -e '
 		my $d = shift;
@@ -1293,9 +1293,11 @@ t_lock_zombie_waiter() {
 t_lock_stall_place() {
 	fresh stallp
 	qfix
-	# FIX128 review round 1: N waits 5 + 30 + 10 + 30 + 30 s at most under
-	# this case's bounds, more than the 30 s it had; 120 s keeps them binding.
-	BENCH_LOCK_WAIT=120
+	# FIX128 review round 1: under this case's bounds N waits at most
+	# 5 + 30 + 10 + 30 + 30 + 30 s (the stall's poll, wait_held, wait_said,
+	# the poll for its wait, finish C, its own finish) and W 130 s, more
+	# than the 30 s they had; 300 s keeps those bounds binding.
+	BENCH_LOCK_WAIT=300
 	_s=${tmp:?}/stallp.bench
 	rm -rf "${_s:?}"
 	cp -R "$R" "$_s"
@@ -1337,8 +1339,8 @@ t_lock_ticket_back() {
 	fresh tback
 	qfix
 	# FIX128 review round 1: W2 waits 10 + 5 + 30 + 30 s at most under this
-	# case's bounds, more than fresh's 10 s; 120 s keeps those binding.
-	BENCH_LOCK_WAIT=120
+	# case's bounds, more than fresh's 10 s; 300 s keeps those binding.
+	BENCH_LOCK_WAIT=300
 	holder H
 	start sh "$R/bench.sh" lock run W1 -- sh "$E/rec.sh" "$E/log" W1 > "${E:?}/w1.out" 2>&1
 	_w1=$BG
@@ -1380,7 +1382,7 @@ t_lock_own_pid() {
 	holder H
 	# FIX128 review round 1: W waits 10 + 30 s at most under this case's
 	# bounds (wait_said, then finish); its old 5 s could end first.
-	start sh "$E/late.sh" "$E/go" env BENCH_LOCK_WAIT=120 sh "$R/bench.sh" lock run W -- sh "$E/rec.sh" "$E/log" W > "${E:?}/w.out" 2>&1
+	start sh "$E/late.sh" "$E/go" env BENCH_LOCK_WAIT=300 sh "$R/bench.sh" lock run W -- sh "$E/rec.sh" "$E/log" W > "${E:?}/w.out" 2>&1
 	_w=$BG
 	mkdir -p "${E:?}/state/queue"
 	_sk=${E:?}/state/queue/w.000000000001.000000.$(printf '%010d' "$_w").stale0
