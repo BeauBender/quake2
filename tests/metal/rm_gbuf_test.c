@@ -250,6 +250,22 @@ test_show(void)
 	CHECK(rm_gb_show(0.5f) == 0);
 	CHECK(rm_gb_show(NAN) == 0);
 	CHECK(rm_gb_show(INFINITY) == 0);
+}
+
+/* r_rt_flatlight (TASK173): 0 off, else the level 0 to 1 every lightmap sample is replaced by */
+static void
+test_flatlight(void)
+{
+	CHECK(rm_gb_flatlight(0) == 0.0f);
+	CHECK(rm_gb_flatlight(0.4f) == 0.4f);
+	CHECK(rm_gb_flatlight(1) == 1.0f);
+	CHECK(rm_gb_flatlight(1.5f) == 1.0f);
+	CHECK(rm_gb_flatlight(FLT_MAX) == 1.0f);
+	CHECK(rm_gb_flatlight(-0.5f) == 0.0f);
+	CHECK(rm_gb_flatlight(-FLT_MAX) == 0.0f);
+	CHECK(rm_gb_flatlight(NAN) == 0.0f);
+	CHECK(rm_gb_flatlight(INFINITY) == 0.0f);
+	CHECK(rm_gb_flatlight(-INFINITY) == 0.0f);
 	CHECK(rm_gb_show(-INFINITY) == 0);
 }
 
@@ -707,6 +723,7 @@ main(void)
 	test_render_rect();
 	test_jitter();
 	test_show();
+	test_flatlight();
 	test_entity_split();
 	test_pixel_scale();
 	test_motion();
