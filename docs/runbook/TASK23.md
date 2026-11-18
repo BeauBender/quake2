@@ -187,6 +187,30 @@ Measured on commit `eba0025f`, Apple TV 4K (4th generation), tvOS 27.2 simulator
 - The mutant (the credits screen's back removed, `M_Credits_Key`) is caught: `FAIL: '(unnamed)' is not left with
   back` (the credits screen has no banner), 34 failures against 33.
 
+#### Round 2: the two causes
+
+The join server screen did not trap the cursor, and the greyed address book was not the cause: a greyed item is
+reached by up and down on purpose (`Menu_AdjustCursor` in `qmenu.c` skips only separators and `QMF_INACTIVE`), so
+that its reason shows in the status bar; select does nothing on it (`Menu_SelectItem`). The walk swallowed its own
+keys. It runs from the command line, before the first frame, when `cls.realtime` is still the value `CL_InitLocal`
+took, the clock's first millisecond: `Sys_Milliseconds` starts at 1. `JoinServer_MenuInit` calls
+`SearchLocalGames`, which starts a popup with a 2 second end (`Menu_StartPopup`). The walk closed it before each key
+with `Menu_ClosePopup`, `(pup)->endtime = cls.realtime - 1` (`qmenu.h`), which is 0 at that time, and
+`Menu_PopupActive` reads an end of 0 or less as a popup without an end. So every key then reached
+`Default_MenuKey` with the popup still open, and its first lines only closed it again and returned: down, up and
+back were all swallowed on that screen, and the cursor stayed on its first item, the address book. A person never
+hits it, on tvOS or macOS: keys arrive in frames, and each frame sets `cls.realtime` to the milliseconds since the
+start (`CL_Frame`), far past 1, so a close leaves an end in the past. The walk now takes a popup away by clearing its
+text (`Walk_Key`), and prints the time it runs at; `menu.c` and `qmenu.c` are otherwise unchanged.
+
+The virtual gamepad was attached by the first line of the probe's script, which runs inside the engine's start,
+before any frame. `IN_Update` counts down the start's first 30 updates with `first_init` set (`sdl3.c`,
+`updates_countdown`, `REASON_CONTROLLERINIT`); a device added in that window restarts the count, and when it runs out
+with `first_init` set, nothing is opened, since the devices present at the start were already opened by
+`IN_Controller_Init` in `IN_Init`. The pad was taken as one of those. A person who plugs a controller in after the
+start gets it opened 100 updates later. `in_probe pad` now refuses while `first_init` is set, and the probe attaches
+the pad after the map has loaded, as a person plugs one in.
+
 ### check-tvos
 
 `tests/check-tvos.sh` (e) now also pins `sdl3.o` (no `SDL_RETURN_KEY_HIDES_IME`, no need of `_Touch_TextInput`,
