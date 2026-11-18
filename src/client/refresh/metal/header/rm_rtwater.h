@@ -225,13 +225,13 @@ typedef struct
 	 * 1): then ms is the sum of the compaction's and the trace's spans,
 	 * each below 0 when not measured: the compaction (its encoder, with
 	 * the arguments) and the trace (its encoder). TASK162: the water's
-	 * marks are a draw of the G-buffer raster, timed with it, so raster_ms,
-	 * vert_ms and frag_ms are not measured (always below 0, printed as -
-	 * by r_rt_stats 2); span_ms is the whole, the compaction's start to the
-	 * trace's end, which is below the sum where the spans overlap.
+	 * marks are a draw of the G-buffer raster, timed with it, so the stats
+	 * carry no raster's figures (FIX98); span_ms is the whole, the
+	 * compaction's start to the trace's end, which is below the sum where
+	 * the spans overlap.
 	 */
 	int ws;
-	double raster_ms, compact_ms, trace_ms, span_ms, vert_ms, frag_ms;
+	double compact_ms, trace_ms, span_ms;
 } rm_rtw_stats_t;
 
 /* the r_rt_stats 2 line of a frame's pass, without a newline: 1 when it fits in len; 0 with buf empty otherwise */

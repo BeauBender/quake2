@@ -349,7 +349,7 @@ rm_rtw_ms(double v, char *out, size_t len)
 int
 rm_rtw_stats_format(const rm_rtw_stats_t *s, char *buf, size_t len)
 {
-	char ms[32], split[200], t[6][32];
+	char ms[32], split[200], t[4][32];
 	int n;
 
 	if (!len)
@@ -360,17 +360,13 @@ rm_rtw_stats_format(const rm_rtw_stats_t *s, char *buf, size_t len)
 	rm_rtw_ms(s->ms, ms, sizeof(ms));
 	split[0] = 0;
 
-	/* TASK158: the world-space path's three passes and their whole span */
+	/* TASK158: the world-space path's two passes and their whole span (FIX98: no raster's figures, TASK162 removed that pass) */
 	if (s->ws)
 	{
-		rm_rtw_ms(s->raster_ms, t[0], sizeof(t[0]));
-		rm_rtw_ms(s->compact_ms, t[1], sizeof(t[1]));
-		rm_rtw_ms(s->trace_ms, t[2], sizeof(t[2]));
-		rm_rtw_ms(s->span_ms, t[3], sizeof(t[3]));
-		rm_rtw_ms(s->vert_ms, t[4], sizeof(t[4]));
-		rm_rtw_ms(s->frag_ms, t[5], sizeof(t[5]));
-		snprintf(split, sizeof(split), ", world space: raster %s (vertex %s, fragment %s), compaction %s, trace %s, "
-				"span %s ms", t[0], t[4], t[5], t[1], t[2], t[3]);
+		rm_rtw_ms(s->compact_ms, t[0], sizeof(t[0]));
+		rm_rtw_ms(s->trace_ms, t[1], sizeof(t[1]));
+		rm_rtw_ms(s->span_ms, t[2], sizeof(t[2]));
+		snprintf(split, sizeof(split), ", world space: compaction %s, trace %s, span %s ms", t[0], t[1], t[2]);
 	}
 
 	n = snprintf(buf, len, "ref_metal: rt water: frame %lu: %lu pixels, %lu listed, %lu opaque water, "
