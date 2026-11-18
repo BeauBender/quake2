@@ -18,14 +18,19 @@ This builds `build/release/test/yq2test` (or `build/debug/test/` with
 dedicated server `q2ded`, built with the same flags, plus the client
 files `cl_conback.c`, `cl_download.c`, `cl_parse.c`, `cl_network.c`, `cl_entities.c`,
 `cl_screen.c`, the texture upscaler's checks, decisions and file write `cl_upscale.c`, the sound frontend `sound/sound.c`, the WAV header checks `sound/wave.c` and the window
-code's SDL-free part `vid/glimp_hidpi.c`, the video menu's rules `menu/vidrules.c` (see "Client stubs" below),
+code's SDL-free part `vid/glimp_hidpi.c`, the video menu's rules `menu/vidrules.c`, the input gate `input/ingate.c` (FIX48, tested in `tests/unit/test_ingate.c`) (see "Client stubs" below),
 the shared renderer files `src/client/refresh/files/surf.c` and
 `src/client/refresh/files/imgscale.c` (`scale2x`, `R_FloodFillSkin` and
 `R_Convert8to32`, shared by the client and every renderer and tested in
 `tests/unit/test_imgscale.c`), and the
-software renderer's SDL-free `src/client/refresh/soft/sw_view.c`; only
+software renderer's SDL-free `src/client/refresh/soft/sw_view.c`; and
+`tests/unit/test_imgsize.c` includes `src/client/refresh/files/pcx.c` and
+`wal.c` whole, with a fake `ri`, and tests the pure checks in `imgsize.h`; only
 `main()` is replaced by the
-test runner. The last line says how many tests ran and how many failed; the
+test runner. `tests/unit/test_bspgraph.c` includes the renderers' shared
+BSP loader `src/client/refresh/files/models.c` whole, and the `Makefile`
+names that file as a prerequisite of the test object, since Darwin
+builds track no include dependencies. The last line says how many tests ran and how many failed; the
 exit status is 1 when a test failed and 2 when no test ran at all (a
 name filter that matches nothing, or a usage error), so a run that
 proved nothing never passes. `make clean` removes the build.
@@ -105,7 +110,7 @@ state `cl_download.c` reads, and `tests/unit/stub_client_full.c` defines
 empty functions and the cvar pointers for the rest. A few stubs count
 what they were asked to draw (`V_AddLight`, `Draw_CharScaled`,
 `Draw_PicScaled`) so a test can see what the HUD or a light would have
-done; they are in `tests/unit/stub_client.h`, with `stub_client_cvars()`,
+done, `Key_Event` and `Char_Event` record the keys and characters that reach them, and `CL_PinsRun` returns `stub_pins_run` (false unless a test sets it, as `test_ingate.c` does to stand in for a pin run); they are in `tests/unit/stub_client.h`, with `stub_client_cvars()`,
 which a test calls first to give the cvars a value. A test sets up
 `cls`, `cl` and `net_message` itself and reaches static functions
 through the public ones (`CL_ParseServerMessage`, `CL_ReadPackets`,

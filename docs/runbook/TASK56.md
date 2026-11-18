@@ -292,3 +292,5 @@ scratch) against the head, `PINS_SEED=1`, `MTL_DEBUG_LAYER=1`: `world`, `rt-shad
 at `demo1.dm2` (23 frames each), `rt-water` at `water.dm2` (4). **4 records, 73 frames, every one
 byte-identical to main's**, every log `teardown: 0 live objects` (`rt 0/0` for `world`, `78/78`
 for `rt-shadows` and `rt-ao`, `60/60` for `rt-water`). Logs in `<artifacts>/TASK56/r1/logs/`.
+
+*Round 2.* The gate failed in `tests/check-ios.sh`: its scratch tree copied `Makefile`, `src`, `stuff/ios` and `sdl3.make` but not `scripts/rt/sun-angles.txt`, which `rm_rtsunscene.o` depends on and `.incbin`s from the top directory, so make had no rule for it. The check now copies the table into the tree; the Makefile rule and the embedded bytes are unchanged. A tvOS (`appletvsimulator`) build run from the same kind of scratch tree needs the same copy.

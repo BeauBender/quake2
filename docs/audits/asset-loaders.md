@@ -166,7 +166,7 @@ area flood.
 | `CMod_LoadBrushSides` | `texinfo` (short) | `&map_surfaces[j]` | `if (j >= numtexinfo)`; negative maps to `&nullsurface` | ok |
 | `CMod_LoadNodes` | count | `map_nodes[i]` writes | `count < 1`, `count > MAX_MAP_NODES` | ok |
 | `CMod_LoadNodes` | `planenum` | `map_planes + planenum` | `planenum < 0 \|\| planenum >= numplanes` | ok |
-| `CMod_LoadNodes` | `children[2]` | node walk in every query | `(child >= 0 && child >= count) \|\| (child < 0 && (-1 - child) >= numleafs)` | ok for range; a child that points back to itself or an ancestor makes `CM_PointLeafnum_r` and `CM_BoxLeafnums_r` loop forever and `CM_RecursiveHullCheck`/`CM_HeadnodeVisible` recurse until the stack overflows: carded as FIX3 item 4 |
+| `CMod_LoadNodes` | `children[2]` | node walk in every query | `(child >= 0 && child >= count) \|\| (child < 0 && (-1 - child) >= numleafs)` | ok for range; a child that points back to itself or an ancestor makes `CM_PointLeafnum_r` and `CM_BoxLeafnums_r` loop forever and `CM_RecursiveHullCheck`/`CM_HeadnodeVisible` recurse until the stack overflows: carded as FIX3 item 4; **fixed by FIX43** (`CMod_CheckNodeTree` refuses a graph that is not a forest or is deeper than 1024 nodes) |
 | `CMod_LoadAreas` | count | `map_areas[i]` writes | `count > MAX_MAP_AREAS` | ok |
 | `CMod_LoadAreas` | `firstareaportal`, `numareaportals` | `&map_areaportals[area->firstareaportal]` and the loop bound in `FloodArea_r` | none | carded as FIX3 item 2 |
 | `CMod_LoadAreaPortals` | count | `memcpy(out, in, sizeof(dareaportal_t) * count)` into `map_areaportals[MAX_MAP_AREAPORTALS]` | `count > MAX_MAP_AREAS` (256, stricter than the 1024-entry array) | ok (the wrong constant only refuses legal maps with more than 256 portals) |
@@ -174,13 +174,13 @@ area flood.
 | `CMod_LoadVisibility` | lump length | `memcpy(map_visibility, ..., l->filelen)` | `if (l->filelen > MAX_MAP_VISIBILITY)` | ok |
 | `CMod_LoadVisibility` | `numclusters` | swapped, not used for bounds (the leaf-derived `numclusters` is) | n/a | ok |
 | `CMod_LoadVisibility` | `bitofs[c][DVIS_PVS/PHS]` | `map_visibility + bitofs` in `CM_ClusterPVS`/`PHS` | none | carded as FIX3 item 3 |
-| `CM_DecompressVis` | run bytes `in[0]`, `in[1]` | output writes and input advance | output bounded: `if ((out_p - out) + c > row)`; input is never bounded by `numvisibility`, and a `00 00` pair (zero-length run) advances the input without producing output | **defect D1** |
+| `CM_DecompressVis` | run bytes `in[0]`, `in[1]` | output writes and input advance | output bounded: `if ((out_p - out) + c > row)`; input is never bounded by `numvisibility`, and a `00 00` pair (zero-length run) advances the input without producing output | **defect D1, fixed by FIX23** (the input ends at `map_visibility + numvisibility`; the rest of the row is visible when it runs out) |
 | `CM_DecompressVis` | `row = (numclusters + 7) >> 3` | output length into `pvsrow`/`phsrow[MAX_MAP_LEAFS / 8]` | `numclusters` is at most 32768 (largest short + 1), so `row` is at most 4096 of 8192 | ok-by-construction |
 | `CMod_LoadEntityString` | lump length | `memcpy(map_entitystring, ..., numentitychars)` and the NUL after it | `l->filelen < 0`, `l->filelen >= sizeof(map_entitystring)` | ok |
 | `CMod_LoadEntityString` | `.ent` override length | `memcpy(map_entitystring, buffer, bufLen)` | `bufLen > 1 && bufLen < sizeof(map_entitystring) - 1` | ok |
 | `CMod_LoadEntityString` | map name | `strcmp(name + nameLen - 4, ".bsp")`, `memcpy(namewe, name, nameLen - 4)` | `nameLen > (MAX_QPATH - 1)` rejects long names; a name shorter than 4 would read before the string, but the server builds it as `maps/%s.bsp` | ok-by-construction |
 | `CM_InitBoxHull` | `numleafs` | `box_leaf = &map_leafs[numleafs]` and three writes through it | the room check tested nodes, brushes, leafbrushes, brushsides and planes but not leafs | **defect D2, fixed in this branch** |
-| `CM_SetAreaPortalState` | `portalnum` (from the map's `func_areaportal` `style` key, see [entity strings](#entity-strings-and-map-fix-overrides)) | `portalopen[portalnum] = open` | `if (portalnum > numareaportals)`: no lower bound; the upper test is off by one but stays inside the 1024-entry array because `numareaportals` is at most 256 | **defect D3, negative side fixed in this branch** |
+| `CM_SetAreaPortalState` | `portalnum` (from the map's `func_areaportal` `style` key, see [entity strings](#entity-strings-and-map-fix-overrides)) | `portalopen[portalnum] = open` | was `if (portalnum > numareaportals)`: no lower bound; the upper test is off by one but stays inside the 1024-entry array because `numareaportals` is at most 256; now `(portalnum < 0) \|\| (portalnum >= numareaportals)` | **defect D3, negative side fixed in this branch, upper bound fixed by FIX23** |
 | `CM_ReadPortalState` | savegame bytes | `FS_Read(portalopen, sizeof(portalopen), f)` | fixed size | ok |
 | `CM_InlineModel` | `*N` model number (configstring / entity `model` key) | `&map_cmodels[num]` | `(num < 1) \|\| (num >= numcmodels)` | ok |
 
@@ -212,7 +212,8 @@ READ of size 1 ... #0 in CM_DecompressVis collision.c:2019  #1 in CM_ClusterPVS 
 ```
 
 After the fixes, modes 1 and 2 end in `Com_Error` ("Not enough room for box
-tree", "areaportal > numareaportals"); mode 3 still overflows (filed, not fixed).
+tree", "areaportal > numareaportals"); mode 3 still overflowed then, and is
+fixed by FIX23 (see [Defects](#defects)).
 Mode 3 passes even a strict FIX3-style `bitofs < numvisibility` check if the
 lump carries a little padding after the offsets for the offset to point at, so
 D1 is distinct from FIX3 item 3.
@@ -324,8 +325,8 @@ several rows below cite FIX3.
 | `Mod_DecompressVis` | run bytes | writes into `static byte decompressed[MAX_MAP_LEAFS / 8]` (8192 bytes) | `while (out - decompressed < row)` only, no bound against the buffer; a zero run is written whole, so even a legal 8192-byte row can overshoot by 254 bytes; the input is never bounded by the lump | **defect D8** (global buffer overflow write; non-zero bytes are copied from the file verbatim) |
 | `R_MarkLeaves` (gl1, gl3) | `numleafs` | `memcpy(fatvis, vis, (numleafs + 7) / 8)` and an `int` OR loop into an 8192-byte stack array | none in the renderer; collision limits leafs to 65536, exactly the array | ok-by-construction (collision-first order) |
 | `Mod_LoadNodes` | `planenum`, `children[2]` | `planes + planenum`, child pointers | `planenum < 0 \|\| planenum >= numplanes`; a child `>= *numnodes` or a leaf `>= numleafs` is refused | ok for range |
-| `Mod_LoadNodes` | child graph | `Mod_SetParent`, `Mod_NumberLeafs` (recursive), `Mod_PointInLeaf` (loop) | a cycle recurses until the stack is gone, or loops forever | carded as FIX3 item 4 (a collision cycle check refuses the map first) |
-| `Mod_NumberLeafs` | child graph | writes `r_leaftovis[leafnum]` and `r_vistoleaf[*numvisleafs]`, two `int [MAX_MAP_LEAFS]` arrays on the stack of `Mod_LoadNodes` | none; without any cycle, nodes that share children (a DAG) are walked once per path, so a chain of nodes whose two children both name the next node reaches the last leaf exponentially often and `numvisleafs` runs past 65536 | **defect D9** (stack buffer overflow write; a depth-bound fix for FIX3 item 4 does not refuse a DAG; both arrays are unused after the walk) |
+| `Mod_LoadNodes` | child graph | `Mod_SetParent`, `Mod_NumberLeafs` (recursive), `Mod_PointInLeaf` (loop) | a cycle recurses until the stack is gone, or loops forever | carded as FIX3 item 4; **fixed by FIX43** (`Mod_CheckNodeTree` refuses the graph before `Mod_SetParent`, and the collision check refuses it first) |
+| `Mod_NumberLeafs` | child graph | writes `r_leaftovis[leafnum]` and `r_vistoleaf[*numvisleafs]`, two `int [MAX_MAP_LEAFS]` arrays on the stack of `Mod_LoadNodes` | none; without any cycle, nodes that share children (a DAG) are walked once per path, so a chain of nodes whose two children both name the next node reaches the last leaf exponentially often and `numvisleafs` runs past 65536 | **defect D9, fixed by FIX43** (stack buffer overflow write; a depth-bound fix for FIX3 item 4 does not refuse a DAG, the FIX43 check refuses a node or leaf with a second parent; both arrays are unused after the walk) |
 | `Mod_LoadNodes` | `firstface`, `numfaces` (unsigned short) | `surfaces + node->firstsurface` for `numsurfaces` entries in `R_RecursiveWorldNode` (gl1, gl3, soft), `R_MarkSurfaceLights`, `R_RecursiveLightPoint` (gl1, gl3, soft) | none against `numsurfaces` | **defect D14** (heap over-read; gl1/gl3 `R_RecursiveWorldNode` links a surface whose `visframe` matches into `image->texturechain`, a write through the stray pointer) |
 | `Mod_LoadSubmodels` | `headnode` | `nodes + firstnode` for `R_MarkLights` in `R_DrawBrushModel` (gl1, gl3) and `R_PushDlights` (soft) | `if (out->firstnode >= loadmodel->numnodes)`; no lower bound, and collision accepts a negative headnode that names a leaf | **defect D14** (a pointer before the node array, read as a node) |
 | `Mod_LoadSubmodels` | `firstface`, `numfaces` (int) | `&surfaces[firstmodelsurface]` for `nummodelsurfaces` entries in `R_DrawInlineBModel` (gl1, gl3), `R_DrawSolidClippedSubmodelPolygons` and `R_DrawSubmodelPolygons` (soft) | none | **defect D14** |
@@ -476,14 +477,14 @@ it through `PCX_RLE_Decode`, which bounds both ends of every run.
 | `PCX_Decode` | file length | header read | `if (len < sizeof(pcx_t))` | ok |
 | `PCX_Decode` | `manufacturer`, `version`, `encoding` | format gate | explicit equality tests | ok |
 | `PCX_Decode` | `xmax-xmin`, `ymax-ymin`, `bytes_per_line`, `color_planes`, `bits_per_pixel` | dimensions, loop bounds | each tested `<= 0` and rejected with "Bad pcx file" | ok |
-| `PCX_Decode` | `full_size = (h+1)*(w+1)` (`*4` for 24/32-bit) | `out = malloc(full_size)`, then every row written at `pix += (pcx_width + 1)` (`* 4`) | `int`, no overflow test; each dimension is a difference of two file-supplied shorts, so `pcx_width + 1` and `pcx_height + 1` can be large, and the product (with or without the `* 4`) can wrap to a small value. The row writes do not depend on the RLE input: the 8-bit path `memcpy(pix, line, pcx_width + 1)` and the 24/32-bit plane loop write a full row whether or not `PCX_RLE_Decode` stopped at the end of the input, so the header dimensions alone decide it | **defect D19** (heap buffer overflow write, ASAN-confirmed in the 8-bit and the 24-bit mode, see below) |
+| `PCX_Decode` | `full_size = (h+1)*(w+1)` (`*4` for 24/32-bit) | `out = malloc(full_size)`, then every row written at `pix += (pcx_width + 1)` (`* 4`) | `int`, no overflow test; each dimension is a difference of two file-supplied shorts, so `pcx_width + 1` and `pcx_height + 1` can be large, and the product (with or without the `* 4`) can wrap to a small value. The row writes do not depend on the RLE input: the 8-bit path `memcpy(pix, line, pcx_width + 1)` and the 24/32-bit plane loop write a full row whether or not `PCX_RLE_Decode` stopped at the end of the input, so the header dimensions alone decide it | **defect D19, fixed by FIX19** (heap buffer overflow write, ASAN-confirmed in the 8-bit and the 24-bit mode, see below) |
 | `PCX_RLE_Decode` | run byte, data byte | writes `pix[x++]`, reads `*raw++` | `if (raw >= raw_max)` before each read, `if (pix_max <= (pix + x))` before each write; both set `image_issues` and stop | ok |
 | `PCX_Decode` (24/32-bit) | `line[x + bytes_per_line * j]` | plane assembly into `pix[4*x+j]` | `line` is `malloc(Q_max(bytes_per_line, pcx_width+1) * color_planes)`, and the inner index stays below that; `bytes_per_line <= pcx_width` only sets `image_issues` | ok |
 | `PCX_Decode` (8-bit palette) | palette at `pcx + len - 768`, marker at `pcx + len - 769` | `memcpy(*palette, ..., 768)` | guarded by `if (len > 768)`; else `image_issues` | ok |
-| `PCX_Decode` (1/2/4-bit) | `line[i * bytes_per_line + (x >> 3)]`, `line[x / div]` | bit unpack | `line` is `bytes_per_line * color_planes` (or `bytes_per_line`); `x <= pcx_width` and `bytes_per_line > 0` keep the index inside, since `x/div <= pcx_width` is only safe when `bytes_per_line > pcx_width/div` — a tiny `bytes_per_line` with a large width reads `line[x/div]` past the 1-byte row | **defect D20** (heap over-read of the decode line buffer; low severity, read only, bounded by `pcx_width`) |
+| `PCX_Decode` (1/2/4-bit) | `line[i * bytes_per_line + (x >> 3)]`, `line[x / div]` | bit unpack | `line` is `bytes_per_line * color_planes` (or `bytes_per_line`); `x <= pcx_width` and `bytes_per_line > 0` keep the index inside, since `x/div <= pcx_width` is only safe when `bytes_per_line > pcx_width/div` — a tiny `bytes_per_line` with a large width reads `line[x/div]` past the 1-byte row | **defect D20, fixed by FIX19** (heap over-read of the decode line buffer; low severity, read only, bounded by `pcx_width`) |
 | `PCX_Decode` | trailing-data check | `if (data - (byte *)pcx > len)` frees and nulls | after the fact | ok |
 | `fixQuitScreen` | fixed offsets into a 320x240 buffer | `memcpy` of 11 rows | reached only when `LoadPCX` confirms `width == 320 && height == 240` and the block checksum matches `pics/quit.pcx` | ok-by-construction |
-| `GetPCXInfo` | `xmax`, `ymax` | `*width = xmax + 1`, `*height = ymax + 1` | no header-size check before the read (`FS_LoadFile` returned the bytes, but a file shorter than `pcx_t` is read past its end) | **defect D21** (over-read of up to `sizeof(pcx_t)` bytes; the values seed `realwidth`/`realheight` in `LoadHiColorImage`, which only gates whether a hi-res replacement is used) |
+| `GetPCXInfo` | `xmax`, `ymax` | `*width = xmax + 1`, `*height = ymax + 1` | no header-size check before the read (`FS_LoadFile` returned the bytes, but a file shorter than `pcx_t` is read past its end) | **defect D21, fixed by FIX19** (over-read of up to `sizeof(pcx_t)` bytes; the values seed `realwidth`/`realheight` in `LoadHiColorImage`, which only gates whether a hi-res replacement is used) |
 
 ### WAL / M8 / M32 (`files/wal.c`)
 
@@ -498,12 +499,12 @@ bypassed by a wrapping width (D27).
 | `LoadWal` | `width`, `height`, `offsets[0]` | `load_image((byte*)mt + ofs, width, height, size - ofs, ...)` | `(ofs <= 0) \|\| (width <= 0) \|\| (height <= 0) \|\| (((size - ofs) / height) < width)` | ok |
 | `LoadM8` | `version` | format gate | `LittleLong(mt->version) != M8_VERSION` | ok |
 | `LoadM8` | `width[0]`, `height[0]`, `offsets[0]` | palette expand loop and `load_image` | same body check as `LoadWal` | ok |
-| `LoadM8` | each source byte | `mt->palette[value]` | `value` is a `byte`, the palette has 256 entries; `image_buffer = malloc((size - ofs) * 4)` matches the loop `i < (size - ofs)` | ok |
+| `LoadM8` | each source byte | `mt->palette[value]` | `value` is a `byte`, the palette has 256 entries; `image_buffer` is `IMGSIZE_Bytes(width, height, 4)` bytes, checked, and the loop runs over the same capped pixel count (**FIX19**) | ok |
 | `LoadM32` | `version` | format gate | `LittleLong(mt->version) != M32_VERSION` | ok |
-| `LoadM32` | `width[0]`, `height[0]`, `offsets[0]` | `load_image((byte *)mt + ofs, width, height, (size - ofs) / 4, ...)`; the renderer then walks `width * height` 4-byte pixels of the file buffer | `((size - ofs) / height) < (width * 4)`; `width * 4` is `int` and wraps for any `width` above `INT_MAX / 4`, so a hostile width with a small product passes against a small body. gl1 `R_LoadPic` → `R_Upload32` (→ `SmoothColorImage` with `r_scale8bittextures`) → `R_Upload32Native` → `R_LightScaleTexture` rewrites `width * height` pixels in place, then scans the alpha bytes and hands the buffer to `glTexImage2D`; without NPOT support `R_Upload32Soft` resamples from the same buffer. gl3 `GL3_Upload32` scans the alpha bytes over `width * height` pixels and passes the buffer to `glTexImage2D`. soft `R_LoadPic` converts only `data_size` pixels and `R_LoadPic8` allocates `R_GetImageMipsSize(width * height)` itself, so it stays in bounds (one very large allocation, `ERR_FATAL` if it fails) | **defect D27** (gl1: heap buffer overflow write past the file buffer; gl3: heap over-read; the fix is the comparison in 64-bit arithmetic, `(long long)width * height * 4 > size - ofs`) |
-| `GetWalInfo` | `width`, `height` | `*width = LittleLong(mt->width)`, `*height = ...`, which become `realwidth`/`realheight` in `LoadHiColorImage` (`files/stb.c`) | `if (size < sizeof(miptex_t))` bounds the header read; no version test (`miptex_t` has none) and the values are not checked: zero, negative and huge pass | hardening (see the verdict note below the table) |
-| `GetM8Info` | `width[0]`, `height[0]` | as `GetWalInfo` | `size < sizeof(m8tex_t) \|\| LittleLong(mt->version) != M8_VERSION`; values not checked | hardening |
-| `GetM32Info` | `width[0]`, `height[0]` | as `GetWalInfo` | `size < sizeof(m32tex_t) \|\| LittleLong(mt->version) != M32_VERSION`; values not checked | hardening |
+| `LoadM32` | `width[0]`, `height[0]`, `offsets[0]` | `load_image((byte *)mt + ofs, width, height, (size - ofs) / 4, ...)`; the renderer then walks `width * height` 4-byte pixels of the file buffer | `((size - ofs) / height) < (width * 4)`; `width * 4` is `int` and wraps for any `width` above `INT_MAX / 4`, so a hostile width with a small product passes against a small body. gl1 `R_LoadPic` → `R_Upload32` (→ `SmoothColorImage` with `r_scale8bittextures`) → `R_Upload32Native` → `R_LightScaleTexture` rewrites `width * height` pixels in place, then scans the alpha bytes and hands the buffer to `glTexImage2D`; without NPOT support `R_Upload32Soft` resamples from the same buffer. gl3 `GL3_Upload32` scans the alpha bytes over `width * height` pixels and passes the buffer to `glTexImage2D`. soft `R_LoadPic` converts only `data_size` pixels and `R_LoadPic8` allocates `R_GetImageMipsSize(width * height)` itself, so it stays in bounds (one very large allocation, `ERR_FATAL` if it fails) | **defect D27, fixed by FIX19** (gl1: heap buffer overflow write past the file buffer; gl3: heap over-read; the fix is the comparison in 64-bit arithmetic, `(long long)width * height * 4 > size - ofs`) |
+| `GetWalInfo` | `width`, `height` | `*width = LittleLong(mt->width)`, `*height = ...`, which become `realwidth`/`realheight` in `LoadHiColorImage` (`files/stb.c`) | `if (size < sizeof(miptex_t))` bounds the header read; no version test (`miptex_t` has none) and the values are not checked: zero, negative and huge pass | hardening, **fixed by FIX19** (see the verdict note below the table) |
+| `GetM8Info` | `width[0]`, `height[0]` | as `GetWalInfo` | `size < sizeof(m8tex_t) \|\| LittleLong(mt->version) != M8_VERSION`; values not checked | hardening, **fixed by FIX19** |
+| `GetM32Info` | `width[0]`, `height[0]` | as `GetWalInfo` | `size < sizeof(m32tex_t) \|\| LittleLong(mt->version) != M32_VERSION`; values not checked | hardening, **fixed by FIX19** |
 
 The three `Get*Info` functions read only the header they size-check, so they
 are memory-safe themselves. Their results matter only when a TGA, PNG or JPG
@@ -523,14 +524,14 @@ dimensions in the three functions).
 | Function | Field | Use | Check (quoted) or absence | Verdict |
 |---|---|---|---|---|
 | `LoadSTB` | `rawsize`, returned `w`, `h` | `stbi_load_from_memory`, then `*width = w`, `*height = h` | stb validates its own input and dimensions; the repo trusts the returned `w`/`h` | out of scope (stb internal), but the dimensions flow into the next rows |
-| `R_LoadImage`, `LoadHiColorImage` | `width * height` | passed as `size` to `load_image` | `int`; stb caps a dimension at `1 << 24` by default, so two large images multiply past `INT_MAX` | **defect D22** (the product is used as a copy length and mip base; the fix is a 64-bit guard like `R_Convert8to32` already has) |
+| `R_LoadImage`, `LoadHiColorImage` | `width * height` | passed as `size` to `load_image` | `int`; stb caps a dimension at `1 << 24` by default, so two large images multiply past `INT_MAX` | **defect D22, fixed by FIX19** (the product is used as a copy length and mip base; the fix is a 64-bit guard like `R_Convert8to32` already has) |
 | `LoadHiColorImage` | `width >= realwidth && height >= realheight` | gate on using the replacement | compares the stb result with the PCX/WAL/M8/M32 real size | ok |
 | `R_Convert8to32` (gl1, gl3) | `width`, `height` | `malloc(width * height * sizeof(unsigned))` | `if (height == 0 \|\| width > INT_MAX / sizeof(*trans) / height)` raises `ERR_DROP` | ok |
 | `scale2x`, `scale3x` (`files/stb.c`) | `width`, `height` | reads `src[width*y + x]`, writes `dst` up to `(width*height) << 2` / `* 9` | no internal bound; callers size the destination and guard the product (next rows) | ok by caller |
 | `gl1_image.c`, `gl3_image.c` scale path | `width`, `height`, `scale` | `malloc(width * height * scale * scale)` then `scale2x`/`scale3x` | `if (height == 0 \|\| scale == 0 \|\| width > INT_MAX / height / scale / scale)` raises `ERR_DROP` | ok |
-| `sw_image.c` `R_LoadPic8` scale path | `width * height * 4` | `malloc` then `scale2x` | no overflow guard on `width * height * 4` here (the gl renderers added one; soft did not) | **defect D22** (same class) |
+| `sw_image.c` `R_LoadPic8` scale path | `width * height * 4` | `malloc` then `scale2x` | no overflow guard on `width * height * 4` here (the gl renderers added one; soft did not) | **defect D22, fixed by FIX19** (same class) |
 | `sw_image.c` `R_LoadPic8` | `size`, `data_size` | `full_size = R_GetImageMipsSize(size)`, `malloc(full_size)`, `memcpy(pixels[0], pic, data_size)` | `data_size > full_size` is clamped to `full_size`; `size` and `data_size` both come from the loader as `width * height`-class values and agree | ok |
-| `sw_image.c` resize path | `uploadwidth * uploadheight * 4` | `malloc(pic32)`, `ResizeSTB` | dimensions are `realwidth`/`realheight` or halved copies of the loader size; no overflow guard, same `int` product class | hardening (carded under FIX19 with D22: the same 64-bit guard) |
+| `sw_image.c` resize path | `uploadwidth * uploadheight * 4` | `malloc(pic32)`, `ResizeSTB` | dimensions are `realwidth`/`realheight` or halved copies of the loader size; no overflow guard, same `int` product class | hardening, **fixed by FIX19** (the same 64-bit guard, and the allocation checked) |
 
 Severity note: D19 is high. The wrapped `full_size` is a small allocation, not
 an enormous one, so nothing fails first: the header dimensions alone
@@ -791,15 +792,15 @@ reachability in [Where each asset can come from](#where-each-asset-can-come-from
 
 | ID | Where | One line | sev | conf | Card |
 |---|---|---|---|---|---|
-| D1 | `collision.c` `CM_DecompressVis` | input over-read only: the input pointer is never bounded by `numvisibility`, and a `00 00` pair (zero-length run) advances the input without producing output, so the decoder walks past `map_visibility`; the output is clamped to `row` (at most 4096 of 8192 bytes) | medium | high (ASAN, READ) | FIX23 |
+| D1 | `collision.c` `CM_DecompressVis` | input over-read only: the input pointer is never bounded by `numvisibility`, and a `00 00` pair (zero-length run) advances the input without producing output, so the decoder walks past `map_visibility`; the output is clamped to `row` (at most 4096 of 8192 bytes) | medium | high (ASAN, READ) — **fixed by FIX23** | fixed |
 | D2 | `collision.c` `CM_InitBoxHull` | box-hull leaf written past `map_leafs` when the map uses every leaf slot | high | high (ASAN) — **fixed in this branch** | fixed |
-| D3 | `collision.c` `CM_SetAreaPortalState` | `portalnum` has no lower bound and an off-by-one upper bound | medium | high (ASAN) — negative side **fixed in this branch**; off-by-one remains | FIX23 (off-by-one) |
+| D3 | `collision.c` `CM_SetAreaPortalState` | `portalnum` has no lower bound and an off-by-one upper bound | medium | high (ASAN) — negative side **fixed in this branch**, off-by-one **fixed by FIX23** | fixed |
 | D4 | `filesystem.c` `FS_LoadPAK` | directory read past EOF leaves `info` uninitialised; `Q_strlcpy` then over-reads an unterminated pack name | medium | high — **fixed by FIX22** | fixed |
 | D5 | `filesystem.c` `FS_LoadPAK` | a bare header asks for a ~2 GB `malloc` plus ~2.4 GB `calloc`; failure is `ERR_FATAL` | medium | high — **fixed by FIX22** | fixed |
 | D6 | `filesystem.c` `FS_FOpenFile`/`FS_LoadFile2` | pack entry `offset`/`size` never bounded by the file; negative size leaks the handle, oversize size `ERR_FATAL`s | medium | high — **fixed by FIX22** | fixed |
 | D7 | renderer `Mod_ForName` | 1-2 byte model file read up to 2 bytes past the `length + 1` allocation at the format switch | low | high | FIX17 |
 | D8 | renderer `Mod_ClusterPVS`/`Mod_DecompressVis` | the output is bounded only by `row`, never by the buffer: `numclusters` can give a row of up to 16384 bytes and a zero run is written whole, so the `static decompressed[8192]` overflows on write (the vis offsets are FIX3 item 3) | high | high (ASAN) | FIX17 |
-| D9 | renderer `Mod_NumberLeafs` | a node DAG (shared children, no cycle) walks a leaf 2^n times, overrunning two `int[MAX_MAP_LEAFS]` stack arrays | high | high (ASAN) | FIX17 |
+| D9 | renderer `Mod_NumberLeafs` | a node DAG (shared children, no cycle) walks a leaf 2^n times, overrunning two `int[MAX_MAP_LEAFS]` stack arrays | high | high (ASAN) — **fixed by FIX43** | fixed |
 | D10 | gl1/gl3 `R_SubdivideSurface` | a `SURF_WARP` face with >64 edges overruns `vec3_t verts[64]` on the stack before the vertex-count check | high | high (ASAN) | FIX17 |
 | D11 | renderer faces/edges | `numedges`/`firstedge`/surfedge/`edge.v[]` indices unbounded against `numsurfedges`/`numedges`/`numvertexes`; negative `numedges` gives a negative `Hunk_Alloc` | high | high (static) | FIX17 |
 | D12 | renderer `Mod_LoadFaces` | `lightofs` only tested for `-1`; any other value offsets `lightdata` and is read and uploaded as lightmap texels | medium | high (static) | FIX17 |
@@ -809,15 +810,15 @@ reachability in [Where each asset can come from](#where-each-asset-can-come-from
 | D16 | MD2 `lightnormalindex` | a vertex normal index 162..255 reads up to ~1 KB past the 162-row `r_avertexnormals` table | low | high (static) | FIX18 |
 | D17 | MD2 soft skin path | `skinwidth`/`skinheight` unchecked (div, scale); `st` coords never bounded by the skin size, over-reading texels in the rasterizer | medium | medium (static) | FIX18 |
 | D18 | SP2 `Mod_LoadSP2` | no length check (reads/writes past a short file); `numframes` zero divides, negative indexes `skins[]`/`frames[]` out of range | high | high (ASAN for the over-read) | FIX18 |
-| D19 | PCX `PCX_Decode` | `full_size = (h+1)*(w+1)[*4]` is `int` with no overflow test; header dimensions alone can wrap it to a small `malloc`, and every row write then lands past it regardless of the RLE input | high | high (ASAN, 8-bit and 24-bit) | FIX19 |
-| D20 | PCX 1/2/4-bit path | `line[x / div]` can exceed a `bytes_per_line`-byte row when `bytes_per_line` is tiny | low | medium (static) | FIX19 |
-| D21 | `GetPCXInfo` | reads `xmax`/`ymax` without a header-size check; over-reads a short file | low | high (static) | FIX19 |
-| D22 | `R_LoadImage`/soft scale | `width * height` (and `* 4`) is `int` and can overflow for large stb dimensions; the gl renderers guard the scale product, soft and the copy length do not | medium | medium (static) | FIX19 |
+| D19 | PCX `PCX_Decode` | `full_size = (h+1)*(w+1)[*4]` is `int` with no overflow test; header dimensions alone can wrap it to a small `malloc`, and every row write then lands past it regardless of the RLE input | high | high (ASAN, 8-bit and 24-bit) | FIX19 (**fixed by FIX19**) |
+| D20 | PCX 1/2/4-bit path | `line[x / div]` can exceed a `bytes_per_line`-byte row when `bytes_per_line` is tiny | low | medium (static) | FIX19 (**fixed by FIX19**) |
+| D21 | `GetPCXInfo` | reads `xmax`/`ymax` without a header-size check; over-reads a short file | low | high (static) | FIX19 (**fixed by FIX19**) |
+| D22 | `R_LoadImage`/soft scale | `width * height` (and `* 4`) is `int` and can overflow for large stb dimensions; the gl renderers guard the scale product, soft and the copy length do not | medium | medium (static) | FIX19 (**fixed by FIX19**) |
 | D23 | `wave.c` chunk walk | `GetLittleLong`/`strncmp` read a few bytes past `iff_end` at a chunk boundary | low | high (static) | FIX20 (fixed by FIX20) |
 | D24 | `wave.c` cue `loopstart` | loop point unbounded; `SDL_Cache` turns it into a mixer `pos`/`end` past the cached sample | medium | medium (static) | FIX20 (fixed by FIX20) |
 | D25 | `wave.c` data chunk | the data-length word and `dataofs` are trusted without comparison to `wavlength`; four consumers read `info.samples` elements from `data + dataofs` | high | high (static) | FIX20 (fixed by FIX20) |
 | D26 | `cl_cin.c` `SCR_PlayCinematic` | still-image name copied into `char namewe[256]` by length; `MAX_OSPATH` is 4096 on every non-Windows build (macOS included), so a server level name of up to about 1380 characters (the `svc_serverdata` message limit) overruns the stack buffer by up to about 1100 bytes | high | high (static) — **fixed by FIX21** | fixed |
-| D27 | M32 `LoadM32` | `width * 4` wraps in the body-size check, so a hostile width passes against a few-byte body; gl1 then rewrites `width * height` pixels in place past the file buffer (gl3 over-reads) | high | high (static) | FIX19 |
+| D27 | M32 `LoadM32` | `width * 4` wraps in the body-size check, so a hostile width passes against a few-byte body; gl1 then rewrites `width * height` pixels in place past the file buffer (gl3 over-reads) | high | high (static) | FIX19 (**fixed by FIX19**) |
 | D28 | `sdl.c` `SDL_Cache` (rate from `wave.c`) | `info.rate` unchecked; a low rate inflates the resampled frame count, `len * width * channels` wraps in `int` to a small allocation, and the loop writes the full count: heap overflow write not closed by the D25 clamp | high | high (static, arithmetic checked) | FIX20 (fixed by FIX20) |
 | D29 | `sdl.c` `SDL_Cache`, `sound.c` `S_IsShortSilence` | a zero `info.rate` reaches integer divisions (`begin_length * 1000 / info->rate` and siblings, `(info->samples * 1000) / info->rate`); on x86-64 SIGFPE, on arm64 execution continues into the resample loop with an undefined frame count (the D28 class, a write past the allocation) | high | high (static) | FIX20 (fixed by FIX20) |
 | D30 | `wave.c` `GetWavinfo` return paths | `info` is returned partly filled from early returns (a cue loop length with no data chunk leaves `samples` set and `dataofs` 0) and a negative data-length word gives negative `samples`; nothing validates on any path | medium | high (static) | FIX20 (fixed by FIX20) |
@@ -846,6 +847,85 @@ remaining bytes divided by the frame size (width times channels). The code
 bounds `samples * width` by the remaining bytes, because `samples` counts
 every channel's samples (`datalen / width`), not frames.
 
+Fixed by FIX23 and FIX43. D1: `CM_DecompressVis` ends its input at
+`map_visibility + numvisibility`; when the input runs out, or a zero byte
+has no count byte after it, the rest of the row is visible, as for a map
+with no visibility, so a chain of zero-length runs stops at the end of the
+lump. D3: the upper test is `>=`, so a portal number equal to
+`numareaportals` is refused like one above it, with the same `ERR_DROP`
+("areaportal > numareaportals"), which on a server ends the running map.
+FIX43: both loaders check that the node graph is a forest before anything
+walks it (`CMod_CheckNodeTree` after `CMod_CheckReferences`,
+`Mod_CheckNodeTree` before `Mod_SetParent`). Each node and leaf is marked
+when a node names it as a child, and a second parent is refused; each node
+that no node names is walked with a stack of the checker's own, and a path
+of more than 1024 nodes is refused; a node that no such root reaches lies
+on a cycle and is refused. Each refusal is an `ERR_DROP` that names the
+map. The depth bound also bounds the recursive walks that follow (traces,
+leaf lookups, `Mod_SetParent`, `Mod_NumberLeafs`, the renderers' world
+walks). Every stock map (baseq2, ctf, rogue, xatrix: 109 maps) is a forest
+whose roots are its submodel head nodes, with at most 9507 nodes and at
+most 79 levels (`strike.bsp`), and every `func_areaportal` `style` in them
+is below `numareaportals`. The forest check also closes D9. The
+renderers' walks tell a leaf from a node by its `contents`, which a leaf
+takes from the file, so `Mod_LoadNodes` also refuses any leaf whose
+contents read as `CONTENTS_NODE` (-1) before `Mod_SetParent`; the
+collision model's walks use the sign of the child index and need no such
+check. Regression
+tests: `tests/unit/test_bspgraph.c`, which feeds the same generated maps
+to `CM_LoadMap` and to the shared `Mod_LoadNodes`, compiled into the test.
+
+Fixed by FIX19: D19, D20, D21, D22 and D27, with FIX65's two items and the
+non-positive dimensions of `GetWalInfo`, `GetM8Info` and `GetM32Info`. Each
+size decision is a pure function in `src/client/refresh/files/imgsize.h`
+(reached by `tests/unit/test_imgsize.c`), computed in 64 bits against a cap
+and used where the loaders had an `int` product:
+
+- The cap, `IMGSIZE_MAX_PIXELS`, is 1 << 26 pixels (8192 by 8192, 256 MB at
+  four bytes a pixel): the area the ImageIO decoder already accepts, so
+  every image type has one limit. The largest stock picture is 640 by 480.
+  The cap is applied to the sizes of `PCX_Decode`, `GetPCXInfo`,
+  `R_LoadImage`, `LoadHiColorImage`, the soft resize buffer, the soft 2x
+  buffer and the WAL, M8 and M32 body tests; one pixel past it is refused.
+- `PCX_Decode` refuses (no picture) a size over the cap, which also ends the
+  wrap of the `int` product (D19), and a 1, 2 or 4-bit file whose
+  `bytes_per_line` is under `(width * bits + 7) / 8` (D20); the exact
+  minimum is accepted. It also refuses a 1-bit file with more than 8
+  colour planes (stock and EGA files have 1 or 4), which bounds the decode
+  time. The 8-bit and 24-bit paths already sized their line
+  buffer from `bytes_per_line` and the width and are unchanged.
+- `GetPCXInfo` leaves the sizes at 0, as for a missing file, when the file
+  is shorter than the 128-byte header (D21); a file of exactly the header
+  size is read. It reports the real size (`xmax - xmin + 1`, as signed
+  shorts, as `PCX_Decode` reads it) only when `IMGSIZE_Pixels` accepts it:
+  a zero, negative or over-cap size is left at 0, so no caller sees one.
+- `LoadM32` tests the body in 64 bits (D27): the body (`size - ofs`) must
+  hold `width * height * 4` bytes, with the same verdict as before for every
+  width that did not wrap. `LoadWal` and `LoadM8` use the same test
+  (`IMGSIZE_BodyFits`, one byte a pixel), so they are held to the cap too.
+  The M8 colour-expansion buffer is sized by `IMGSIZE_Bytes` from the
+  capped width and height, not from the file size, with the allocation
+  checked.
+- `GetWalInfo`, `GetM8Info` and `GetM32Info` report a size only when both
+  sides are positive; otherwise the caller's 0 stays, which is how
+  `LoadHiColorImage` reads "no original".
+- `R_LoadImage` and `LoadHiColorImage` take the pixel count from
+  `IMGSIZE_Pixels`; over the cap, no image. The soft renderer sizes its
+  resize and 2x buffers with `IMGSIZE_ResizeBytes` and
+  `IMGSIZE_Scale2xBytes`, which the call sites use with no branch of their
+  own (both are tested at the cap and one past it); `R_LoadImage` tests a
+  hi-res replacement with `IMGSIZE_ReplacementFits`, also tested. When the resize buffer cannot
+  be had (over the cap, or `malloc` fails) it keeps the image at its own
+  size, the path a failed `ResizeSTB` already took, rather than refusing it;
+  an over-cap 2x buffer returns no image, as a failed allocation there did.
+- `image.c` is not included in the unit suite. Its other two gates, in
+  `R_LoadImage` (the PCX branch and the stb branch), are covered by trace,
+  not by a test: each is one call to `IMGSIZE_Pixels` with no branch of
+  its own beyond the result, and `IMGSIZE_Pixels` is tested at the cap and
+  one past it.
+- Not changed: the 1-bit path's `v <<= 1` over `color_planes` was
+  unbounded; the plane limit above ends that.
+
 ## Cards filed
 
 One card per defect class, filed as GitHub Issues under the `trust-boundary`
@@ -863,4 +943,4 @@ here (no harness is committed).
 | FIX20 | #118 | D23, D24, D25, D28, D29, D30 (WAV and the SDL resampler), plus hardening: refuse a sample width other than 1 or 2 | high |
 | FIX21 | #119 | D26 (cinematic still-image name) | high |
 | FIX22 | #120 | D4, D5, D6 (pak directory), plus hardening: the unchecked header `fread` | medium |
-| FIX23 | #121 | D1 and the remaining D3 off-by-one (collision BSP), distinct from FIX3 (#44) / FIX10 (#73) | medium |
+| FIX23 | #121 | D1 and the remaining D3 off-by-one (collision BSP), distinct from FIX3 (#44) / FIX10 (#73); fixed | medium |

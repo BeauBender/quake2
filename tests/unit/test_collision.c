@@ -18,9 +18,10 @@
  *
  * Not covered on purpose, because the loader does not check them yet
  * and a test would corrupt memory: leaf cluster/area values below -1,
- * the box-hull planes past a maximal leaf count, visibility offsets at
- * the end of the lump, negative area portal numbers. Those are FIX3
- * (#44) and FIX23 (#121); their authors should add the refusals here.
+ * the box-hull planes past a maximal leaf count, visibility offsets
+ * past the end of the lump. Those are FIX3 (#44). The visibility input
+ * bound, the area portal bound and the node graph check (FIX23, FIX43)
+ * are in test_bspgraph.c.
  *
  * =======================================================================
  */

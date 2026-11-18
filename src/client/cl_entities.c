@@ -27,6 +27,10 @@
 #include <math.h>
 #include "header/client.h"
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
 /* skip lerping the first server frames after client receives it
  * avoids lerping toggled lasers
  * and fixes lerp-spamming with xatrix monster lasers
@@ -733,6 +737,37 @@ AdaptFov(float fov, float w, float h)
 }
 
 /*
+ * TASK172: the horizontal field of view of a w x h view. Hor+ (AdaptFov)
+ * keeps the vertical view of a 4:3 screen at fov and widens the
+ * horizontal one with the aspect, so a view narrower than 4:3 (a
+ * near-square or portrait window, as the inner display of a foldable
+ * gives) loses the sides of the 4:3 view. With vertical_minimum the
+ * horizontal view is never narrower than fov: the whole 4:3 view stays
+ * in the picture and the extra height shows more above and below it
+ * (the vertical view, CalcFov's, is then at least 4:3's). At 4:3 and
+ * wider both give AdaptFov's value, so no wide screen changes.
+ */
+float
+CL_AspectFov(float fov, float w, float h, qboolean vertical_minimum)
+{
+	float x = AdaptFov(fov, w, h);
+
+	if (vertical_minimum && (x < fov))
+	{
+		return fov;
+	}
+
+	return x;
+}
+
+/* the vertical minimum is the iOS rule (TASK172): an iPhone Duo's inner display may be portrait */
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+#define CL_FOV_VERTICAL_MINIMUM true
+#else
+#define CL_FOV_VERTICAL_MINIMUM false
+#endif
+
+/*
  * Sets cl.refdef view values
  */
 void
@@ -840,7 +875,7 @@ CL_CalcViewValues(void)
 	ifov = ops->fov + lerp * (ps->fov - ops->fov);
 	if (horplus->value)
 	{
-		cl.refdef.fov_x = AdaptFov(ifov, cl.refdef.width, cl.refdef.height);
+		cl.refdef.fov_x = CL_AspectFov(ifov, cl.refdef.width, cl.refdef.height, CL_FOV_VERTICAL_MINIMUM);
 	}
 	else
 	{
