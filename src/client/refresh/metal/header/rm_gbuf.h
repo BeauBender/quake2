@@ -146,6 +146,14 @@ int rm_gb_entity_split(int flags, int kind, float shadows);
 int rm_gb_show(float v);
 
 /*
+ * The flat light of v (r_rt_flatlight, TASK173, a preview and debug
+ * setting): 0, off, for 0, a negative value or one that is not finite;
+ * else v, at most 1, the level the G-buffer raster writes in place of
+ * every lightmap sample (rmb_gbuf_set_flatlight).
+ */
+float rm_gb_flatlight(float v);
+
+/*
  * The state of an entity the previous frame is matched on, from its
  * entity_t (rm_gbufscene.c): its model, where it is and was, its angles,
  * its two frames and lerp, and its flags.
@@ -320,6 +328,16 @@ void rmb_gbuf_set_world_normals(int nbuf);
  * surface (rmb_rts_trace). Set by RM_GB_Begin while the shadows trace.
  */
 void rmb_gbuf_set_surface(int on);
+
+/*
+ * TASK173: the flat light (rm_gb_flatlight) the raster of the next views
+ * writes in place of every lightmap sample, 0 for the sample itself; set
+ * by RM_GB_Begin. rmb_gbuf_flatlight is the level a lightmapped draw
+ * hands its fragment function: the set level while the raster is
+ * encoded, 0 in any other pass, so no forward or motion draw changes.
+ */
+void rmb_gbuf_set_flatlight(float level);
+float rmb_gbuf_flatlight(void);
 
 /* RMB_GB_PASS_* */
 int rmb_gbuf_pass_kind(void);

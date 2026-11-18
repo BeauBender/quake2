@@ -57,6 +57,7 @@ static cvar_t *r_rt_jitter_x;
 static cvar_t *r_rt_jitter_y;
 static cvar_t *r_rt_gbuffer_show;
 static cvar_t *r_rt_motion_test;
+static cvar_t *r_rt_flatlight;
 
 static rm_gb_hist_t hist;
 
@@ -77,6 +78,7 @@ RM_GB_Init(void)
 	r_rt_jitter_y = ri.Cvar_Get("r_rt_jitter_y", "0", 0);
 	r_rt_gbuffer_show = ri.Cvar_Get("r_rt_gbuffer_show", "0", 0);
 	r_rt_motion_test = ri.Cvar_Get("r_rt_motion_test", "0", 0);
+	r_rt_flatlight = ri.Cvar_Get("r_rt_flatlight", "0", 0);
 	RM_GB_Reset();
 }
 
@@ -206,6 +208,9 @@ RM_GB_Begin(rm_view_t *view, int stencil, const float *clear_rgba)
 
 	/* TASK131: the surface attachment, which only RT3's shadows read: the raster has it while they trace */
 	rmb_gbuf_set_surface((path == RM_GB_PATH_GBUFFER) && RM_RTS_Active());
+
+	/* TASK173: r_rt_flatlight, the preview's flat light in place of the lightmap; only the raster writes it */
+	rmb_gbuf_set_flatlight((path == RM_GB_PATH_GBUFFER) ? rm_gb_flatlight(r_rt_flatlight->value) : 0.0f);
 
 	if (!rmb_gbuf_view_begin(path, rw, rh, stencil, clear_rgba))
 	{

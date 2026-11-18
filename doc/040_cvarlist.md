@@ -978,6 +978,20 @@ is.
   cut to the whole number below it. Cheat-protected: reset to `0` in
   multiplayer. Applies from the next frame.
 
+* **r_rt_flatlight**: A preview and debug setting of the Metal renderer
+  (TASK173): with a level from `0` to `1`, every lightmap sample of the
+  world is replaced by that uniform grey, while every ray-traced term
+  (`r_rt_shadows`, `r_rt_sun`, `r_rt_ao`, `r_rt_water`) still runs on it,
+  so a frame shows what the traced terms add without the baked light
+  that masks them. It is a preview, not a presentation: there is no
+  traced bounce light, so the picture looks harsh (the lightmap-free
+  mode is TASK174's). It applies only where the world is drawn through
+  the G-buffer (an `r_rt_*` effect on, or `r_rt_gbuffer 1`); the sun adds
+  its light only where the level is below `r_rt_sunfloor`. `0` (the
+  default) draws the lightmap; a negative value or one that is not a
+  finite number counts as `0`, one above `1` as `1`. Cheat-protected:
+  reset to `0` in multiplayer. Applies from the next frame.
+
 * **r_rt_gbuffer**: A development switch of the Metal renderer. When
   set to anything but `0`, a view with the world is drawn through the
   G-buffer the ray-traced effects will build on: the world and the opaque

@@ -85,6 +85,7 @@ static int surf_pipes_state;   /* as pipes_state, made at the first view with th
 static int pass_kind, view_path, view_scaled, view_cleared;
 static __weak id<MTLRenderCommandEncoder> raster_enc;   /* TASK162: the raster's encoder while it is open */
 static int surf_want, view_surf;   /* the next view asks for the surface attachment; this one has it */
+static float flat_level;           /* TASK173: r_rt_flatlight's level for the raster, 0 off */
 static unsigned view_stencil;
 static float view_clear[4];
 static rm_gb_uniforms_t mv;
@@ -1021,6 +1022,18 @@ void
 rmb_gbuf_set_surface(int on)
 {
 	surf_want = on != 0;
+}
+
+void
+rmb_gbuf_set_flatlight(float level)
+{
+	flat_level = level;
+}
+
+float
+rmb_gbuf_flatlight(void)
+{
+	return (pass_kind == RMB_GB_PASS_RASTER) ? flat_level : 0.0f;
 }
 
 /* the motion uniforms at vertex and fragment buffer 3: the set ones, or the draw's matrix twice (no motion) */
