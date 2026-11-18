@@ -49,7 +49,8 @@ a restart; the page's status line says each change shows on the next frame.
 registered with the menu's `Cvar_Get(cvar, def, flags)` and moved as the menu moves it (a switch to 1,
 a slider one step right), written with `Cvar_WriteVariables`, the table emptied, the file run through
 the command buffer and each row registered again: every value matches. The mutant that registers
-`r_rt_sunfloor` with flags `0` instead of `CVAR_ARCHIVE` fails it (commit `eb769966`):
+`r_rt_sunfloor` with flags `0` instead of `CVAR_ARCHIVE` fails it (at `f752959f` and again at
+`bc95e68d`, where the whole suite passed just before, 384 tests, 0 failed):
 
 ```
 FAIL vidrules_rt_controls_persist (tests/unit/test_vidrules.c:716): check failed: c->flags & CVAR_ARCHIVE
