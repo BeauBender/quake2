@@ -177,6 +177,58 @@ only those renderer cvars, never the player's name, the server address
 book or any other client or server setting. `scripts/pins.sh replay`
 drives it (see *Replaying a trace* below).
 
+### Input and the rendered-frame count
+
+A record is made in a normal window, often on a desktop in use. Before
+FIX48 a key pressed in it opened the menu, which pauses the local server
+playing the demo while the client keeps rendering: the engine still
+exited 0 and logged nothing unusual, and the record held other frames
+(TASK83 saw 9560, 794 and 1064 rendered frames where `demo1.dm2` renders
+689). Two things now keep such a record out of the store:
+
+- **Input is ignored in a pin run.** While the command line holds a pin
+  run (`pins_capture` or `pins_replay`, the latch of *The pin arguments*,
+  never a cvar), no key, mouse button, wheel step, gamepad button or
+  typed character reaches the console, the menu or a key binding, so
+  `Esc`, the console key and a key bound to `quit` do nothing, and the
+  mouse, the sticks and the gyro do not move the view. A focus change
+  does not pause the game either, and a gamepad pulled out or plugged
+  in, a low gamepad battery, or on iOS a rotation does nothing: no pause,
+  no message on the screen, no `vid_restart` (a message printed during a
+  record is drawn into its frames). `tests/check-input-gate.sh` keeps
+  these cases gated. The window's close button still quits
+  the engine, so a run can be stopped. Without the pin arguments input
+  reaches the game exactly as before. A replay runs no input at all.
+- **The rendered-frame count is checked.** A scenario's header comment
+  holds `// frames <demo> <count>`: the number of frames the engine
+  renders when it plays that demo, as printed by the timedemo
+  (`timedemo.txt`, the line `689 frames, ... fps`). It does not depend on
+  the renderer or the scenario's other settings, so every scenario that
+  plays `demo1.dm2` has `// frames demo1.dm2 689`. `record` fails, with
+  one line naming both counts, when the engine printed another count, no
+  count or more than one; the pin is left incomplete. A count is 1 to 9
+  digits without a leading zero, as the engine prints it; any other
+  number is no count. `record` writes
+  `demo <PINS_DEMO>` into `settings.txt`, and `replay` checks the record
+  it replays the same way before it starts an engine. A demo without a
+  `// frames` line (a demo made with `make-demo`, whose count changes
+  each time it is made), and the cinematic, which prints
+  no count, are not checked: `record` says so in one line on stderr and
+  records. A record made before FIX48 has no `demo` line and is replayed
+  unchecked, with one line on stderr that gives the record's own count.
+  The `frames-check` line of `replay.txt` says which it was: `frames-check
+  demo1.dm2 against world.cfg (689)` when the count was checked, or
+  `frames-check unchecked: ...` with the reason. A frames line is
+  written in lower case, in the header comment; one in another case
+  (`// Frames`, `DEMO1.dm2`) or below the first line that is not a
+  comment is refused before an engine runs, never skipped.
+
+A new scenario gets its count from the scenario it is derived from: all
+of them play the same demo, so it copies the `// frames demo1.dm2 689`
+line. A new demo gets its line from a clean record of it: record any
+scenario with it, read the count from `timedemo.txt` in the pin, and add
+`// frames <demo> <count>` to each scenario that plays it.
+
 ### Determinism
 
 A renderer replaying its own trace draws exactly the frames it drew
@@ -632,6 +684,34 @@ engine prints no time per frame, so a rate over a window of seconds
 (FIX51's presented frames a second) is not measured; the totals over a
 run are. The reproductions of each family against its card are in
 `docs/runbook/TASK154.md`.
+
+Every measurement first warms the host up: the case's own run with
+display sync off, again and again, for the case's `prewarm` seconds
+(240 unless the case says otherwise; `prewarm=0` skips it), in the same
+hold of the lock as the measured runs. A run started from idle measures
+a GPU that has clocked down: the unchanged binary of
+`rt-shadows-gpu-1920x1080` read 2.79 ms cold and 1.67 ms after a
+4-minute pre-warm (`docs/runbook/TASK166.md`). A thermal or performance
+warning stops the pre-warm early, and the set says so. Before each
+counted run `bench.sh` waits, at most `gate_wait` seconds (120), until
+the GPU is at most `gate_gpu` percent busy (10) and the CPU at most
+`gate_cpu` percent (25) for `gate_hold` seconds (3). Each run file
+records the host just before and after the run (load, CPU and memory
+use, swap, the GPU's use and memory, thermal warnings, low-power mode,
+the five busiest processes by the name the kernel gave each at exec,
+never what a process wrote into its own arguments) and the CPU
+clusters' and the GPU's frequencies over the run, read without root,
+with which reader made each (`snap.source` and `freq.source`: `system`,
+or `stub` when a stand-in of the self-test did). A run that started when
+the wait ran out, or with another program using the GPU, is
+`quiet=no`; `baseline put` stores no set with such a run, and `drift`
+and `compare` print the flag and the readers. `BENCH_GATE_POLL` (the
+seconds between the gate's readings, 1, at least 0.01) and
+`BENCH_QUIET_TTL` (the seconds the quiet marker below lasts, 3600) are
+checked before the lock is taken. While it measures, `bench.sh` keeps a
+quiet marker beside its lock (`bench.sh lock run --quiet`), which the
+agent tooling reads to hold other sessions' work. The fields are listed
+in `docs/plans/bench-harness.md` ("Determinism").
 
 ## Other commands
 

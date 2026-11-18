@@ -24,6 +24,8 @@
  * =======================================================================
  */
 
+#include <limits.h>
+
 #include "../header/client.h"
 #include "header/local.h"
 
@@ -62,15 +64,18 @@ FindNextChunk(char *name)
 {
 	while (1)
 	{
-		data_p = last_chunk;
-		data_p += 4;
+		long long next;
 
-		if (data_p >= iff_end)
+		data_p = last_chunk;
+
+		/* the whole 8 byte chunk header must be inside the file */
+		if ((last_chunk > iff_end) || ((iff_end - last_chunk) < 8))
 		{
 			data_p = NULL;
 			return;
 		}
 
+		data_p += 4;
 		iff_chunk_len = GetLittleLong();
 
 		if (iff_chunk_len < 0)
@@ -80,7 +85,18 @@ FindNextChunk(char *name)
 		}
 
 		data_p -= 8;
-		last_chunk = data_p + 8 + ((iff_chunk_len + 1) & ~1);
+
+		/* the next header, in 64 bit; a length past the file ends the walk */
+		next = 8 + (((long long)iff_chunk_len + 1) & ~1LL);
+
+		if (next > (iff_end - data_p))
+		{
+			last_chunk = iff_end;
+		}
+		else
+		{
+			last_chunk = data_p + next;
+		}
 
 		if (!strncmp((const char *)data_p, name, 4))
 		{
@@ -96,8 +112,17 @@ FindChunk(char *name)
 	FindNextChunk(name);
 }
 
-wavinfo_t
-GetWavinfo(char *name, byte *wav, int wavlength)
+/*
+ * Returns true if n bytes from data_p are inside the file.
+ */
+static qboolean
+HasBytes(int n)
+{
+	return (data_p != NULL) && ((iff_end - data_p) >= n);
+}
+
+static wavinfo_t
+ParseWavinfo(char *name, byte *wav, int wavlength)
 {
 	wavinfo_t info;
 	int format;
@@ -116,7 +141,7 @@ GetWavinfo(char *name, byte *wav, int wavlength)
 	/* find "RIFF" chunk */
 	FindChunk("RIFF");
 
-	if (!(data_p && !strncmp((const char *)data_p + 8, "WAVE", 4)))
+	if (!(HasBytes(12) && !strncmp((const char *)data_p + 8, "WAVE", 4)))
 	{
 		Com_Printf("Missing RIFF/WAVE chunks\n");
 		return info;
@@ -127,7 +152,8 @@ GetWavinfo(char *name, byte *wav, int wavlength)
 
 	FindChunk("fmt ");
 
-	if (!data_p)
+	/* the header, then 16 bytes of format */
+	if (!HasBytes(8 + 16))
 	{
 		Com_Printf("Missing fmt chunk\n");
 		return info;
@@ -159,6 +185,13 @@ GetWavinfo(char *name, byte *wav, int wavlength)
 
 	if (data_p)
 	{
+		/* the loop start is the 4 bytes at offset 32 */
+		if (!HasBytes(36))
+		{
+			Com_Printf("Truncated cue chunk\n");
+			return info;
+		}
+
 		data_p += 32;
 		info.loopstart = GetLittleLong();
 
@@ -168,7 +201,7 @@ GetWavinfo(char *name, byte *wav, int wavlength)
 
 		if (data_p)
 		{
-			if (((data_p - wav) + 32 <= wavlength) &&
+			if (HasBytes(32) &&
 				!strncmp((const char *)data_p + 28, "mark", 4))
 			{
 				int i;
@@ -177,7 +210,12 @@ GetWavinfo(char *name, byte *wav, int wavlength)
 				   but it works with cooledit... */
 				data_p += 24;
 				i = GetLittleLong(); /* samples in loop */
-				info.samples = info.loopstart + i;
+				long long total = (long long)info.loopstart + i;
+
+				/* a total outside int is not a loop length, clamp it
+				   so the checks below refuse it */
+				info.samples = (total > INT_MAX) ? INT_MAX :
+						(total < INT_MIN) ? INT_MIN : (int)total;
 			}
 		}
 	}
@@ -202,8 +240,11 @@ GetWavinfo(char *name, byte *wav, int wavlength)
 	{
 		if (samples < info.samples)
 		{
-			Com_Error(ERR_DROP, "%s: Sound %s has a bad loop length",
+			/* a loop longer than the data refuses the sound */
+			Com_Printf("%s: Sound %s has a bad loop length\n",
 				__func__, name);
+			memset(&info, 0, sizeof(info));
+			return info;
 		}
 	}
 	else
@@ -216,3 +257,135 @@ GetWavinfo(char *name, byte *wav, int wavlength)
 	return info;
 }
 
+wavinfo_t
+GetWavinfo(char *name, byte *wav, int wavlength)
+{
+	wavinfo_t info = ParseWavinfo(name, wav, wavlength);
+
+	/* nothing leaves here that a consumer cannot trust against the file */
+	if (!S_WavinfoValid(&info, wavlength))
+	{
+		memset(&info, 0, sizeof(info));
+	}
+
+	return info;
+}
+
+
+qboolean
+S_WavinfoValid(const wavinfo_t *info, int wavlength)
+{
+	long long remaining;
+
+	if (info->rate < S_WAV_RATE_MIN || info->rate > S_WAV_RATE_MAX)
+	{
+		return false;
+	}
+
+	if (info->width < 1 || info->width > 2)
+	{
+		return false;
+	}
+
+	if (info->channels < 1 || info->channels > 2)
+	{
+		return false;
+	}
+
+	if (info->samples <= 0)
+	{
+		return false;
+	}
+
+	if (info->dataofs < 0 || info->dataofs >= wavlength)
+	{
+		return false;
+	}
+
+	remaining = (long long)wavlength - info->dataofs;
+
+	if ((long long)info->samples * info->width > remaining)
+	{
+		return false;
+	}
+
+	if (info->loopstart < -1 || info->loopstart >= info->samples)
+	{
+		return false;
+	}
+
+	return true;
+}
+
+qboolean
+S_CacheSize(const wavinfo_t *info, int speed, int *frames, int *bytes,
+		int *step)
+{
+	float stepscale;
+	float count;
+	long long size;
+	int n;
+
+	if (info->rate <= 0 || speed <= 0 || info->samples <= 0 ||
+		info->width < 1 || info->width > 2 ||
+		info->channels < 1 || info->channels > 2)
+	{
+		return false;
+	}
+
+	stepscale = (float)info->rate / speed;
+	count = info->samples / stepscale;
+
+	/* also false for a NaN */
+	if (!(count >= 1.0f && count < (float)INT_MAX))
+	{
+		return false;
+	}
+
+	size = (long long)(int)count * info->width * info->channels;
+
+	if (size > S_CACHE_MAX_BYTES)
+	{
+		return false;
+	}
+
+	*step = (int)(stepscale * 256);
+	n = (int)count;
+
+	/* the last frame reads source sample ((n - 1) * step) >> 8, which
+	   must be a sample of the sound: (n - 1) * step < samples * 256 */
+	if (*step > 0)
+	{
+		long long most = ((long long)info->samples * 256 - 1) / *step + 1;
+
+		if (n > most)
+		{
+			n = (int)most;
+		}
+	}
+
+	*frames = n;
+	*bytes = (int)((long long)n * info->width * info->channels);
+	return true;
+}
+
+int
+S_CacheLoopStart(const wavinfo_t *info, int speed, int frames)
+{
+	int start;
+
+	if (info->loopstart == -1)
+	{
+		return -1;
+	}
+
+	start = (int)(info->loopstart / ((float)info->rate / speed));
+
+	/* the mixer spins on a loop start at the end of the sound */
+	if (start > frames - 1)
+	{
+		start = frames - 1;
+	}
+
+	return start;
+}

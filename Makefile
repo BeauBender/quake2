@@ -719,6 +719,14 @@ $(BUILDDIR)/client/%.o : %.c
 	fi
 	${Q}mkdir -p $(@D)
 	${Q}$(CC) -arch $(YQ2_ARCH) -x objective-c -c $(CFLAGS) $(SDLCFLAGS) $(INCLUDE)  $< -o $@
+
+# Objective-C proper (cl_upscale_metalfx.m), with ARC
+$(BUILDDIR)/client/%.o : %.m
+	@if [ -z $(QUIET) ]; then\
+		echo "===> CC $<";\
+	fi
+	${Q}mkdir -p $(@D)
+	${Q}$(CC) -arch $(YQ2_ARCH) -c -fobjc-arc $(CFLAGS) $(SDLCFLAGS) $(INCLUDE) $< -o $@
 else
 $(BUILDDIR)/client/%.o: %.c
 	@if [ -z $(QUIET) ]; then\
@@ -1213,6 +1221,7 @@ CLIENT_OBJS_ := \
 	src/client/cl_upscale_cmd.o \
 	src/client/cl_view.o \
 	src/client/input/gyro.o \
+	src/client/input/ingate.o \
 	src/client/input/touch.o \
 	src/client/menu/menu.o \
 	src/client/menu/qmenu.o \
@@ -1259,6 +1268,16 @@ CLIENT_OBJS_ := \
 CLIENT_OBJS_ += \
 	src/client/input/sdl3.o \
 	src/client/vid/glimp_sdl3.o
+
+# The metalfx backend of upscale_textures: the macOS client only, with
+# MetalFX weak-linked (decision 0012); elsewhere cl_upscale_cmd.c says
+# it is not built.
+ifeq ($(YQ2_OSTYPE)$(IOS_MODE), Darwin)
+CLIENT_OBJS_ += src/client/cl_upscale_metalfx.o
+UPSCALE_METALFX_LDLIBS := -weak_framework MetalFX
+else
+UPSCALE_METALFX_LDLIBS :=
+endif
 
 ifeq ($(YQ2_OSTYPE), Windows)
 CLIENT_OBJS_ += \
@@ -1669,7 +1688,7 @@ $(BINDIR)/quake2 : $(CLIENT_OBJS) $(SDL3_LIB)
 $(BINDIR)/quake2 : $(STATIC_LINK_OBJS)
 	@echo "===> LD $@"
 	${Q}mkdir -p $(@D)
-	${Q}$(CC) $(LDFLAGS) $(CLIENT_OBJS) $(STATIC_LINK_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(STATIC_LDLIBS) $(SDLLDFLAGS) -o $@
+	${Q}$(CC) $(LDFLAGS) $(CLIENT_OBJS) $(STATIC_LINK_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(UPSCALE_METALFX_LDLIBS) $(STATIC_LDLIBS) $(SDLLDFLAGS) -o $@
 else
 $(BINDIR)/quake2 : $(CLIENT_OBJS)
 	@echo "===> LD $@"
@@ -1775,8 +1794,9 @@ endif
 # The unit-test suite (tests/unit, see doc/085_unittests.md). The test
 # binary links the dedicated server's own objects (SERVER_OBJS_ below,
 # built with q2ded's flags into a tree of their own) except the unix
-# main.c; tests/unit/main.c supplies main(). Ten client objects
-# (cl_conback, cl_download, cl_entities, cl_network, cl_parse, cl_screen,
+# main.c; tests/unit/main.c supplies main(). The client objects
+# (cl_cinsize, cl_conback, cl_download, cl_entities, cl_network, cl_parse,
+# cl_screen, the input gate input/ingate.c, the touch layer input/touch.c,
 # the upscaler's checks and pixel arithmetic cl_upscale, the sound
 # frontend sound.c, the window code's SDL-free part vid/glimp_hidpi.c and
 # the video menu's rules menu/vidrules.c)
@@ -1823,9 +1843,11 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(TESTDIR)/src/client/cl_parse.o \
 	$(TESTDIR)/src/client/cl_screen.o \
 	$(TESTDIR)/src/client/cl_upscale.o \
+	$(TESTDIR)/src/client/input/ingate.o \
 	$(TESTDIR)/src/client/input/touch.o \
 	$(TESTDIR)/src/client/menu/vidrules.o \
 	$(TESTDIR)/src/client/sound/sound.o \
+	$(TESTDIR)/src/client/sound/wave.o \
 	$(TESTDIR)/src/client/vid/glimp_hidpi.o \
 	$(TESTDIR)/src/client/refresh/files/imgscale.o \
 	$(TESTDIR)/src/client/refresh/files/surf.o \
@@ -1851,11 +1873,18 @@ $(TESTDIR)/%.o: %.c
 	${Q}$(CC) -c $(CFLAGS) $(TEST_CFLAGS) $(INCLUDE) -o $@ $<
 
 $(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS)) : tests/unit/test.h
+$(TESTDIR)/tests/unit/test_bspgraph.o : src/client/refresh/files/models.c
+
+# test_imgsize.c includes these whole, and Darwin has no .d tracking
+$(TESTDIR)/tests/unit/test_imgsize.o: src/client/refresh/files/pcx.c src/client/refresh/files/wal.c src/client/refresh/files/imgsize.h
 
 $(TEST_BIN) : $(TEST_OBJS)
 	@echo "===> LD $@"
 	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(TEST_COVFLAGS) $(TEST_OBJS) $(LDLIBS) -o $@
+
+# test_ipfilter.c includes the game's g_svcmds.c whole
+$(TESTDIR)/tests/unit/test_ipfilter.o : src/game/g_svcmds.c
 
 endif
 

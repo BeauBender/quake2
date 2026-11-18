@@ -273,6 +273,32 @@ World textures are scaled as repeating tiles, so they still tile
 without a visible seam; skins and skies keep their own edges. No new
 colour is made: the result is sharper pixel art, not new detail.
 
+That is the default backend, `scale2x`. On macOS a second one is
+there: `upscale_textures 2 metalfx` (or `4 metalfx`, with `force` after
+it to write every file again) scales with MetalFX's spatial scaler on
+the GPU, whichever renderer is loaded. The indices are converted with
+the palette first (skins flood-filled, index 255 taking a neighbour's
+colour), a world texture is padded with four texels of its own opposite
+edges (scale2x needs one), scaled in one pass, and cut back, so it still
+tiles, as MetalFX reads more than one texel around each one; the alpha
+is then set from index 255 of the source, by nearest neighbour,
+because MetalFX does not keep it. Unlike scale2x it filters the colours
+rather than copying texels. On the machine it was measured on it wrote
+the same bytes for the same tile every time. Where it is unsupported (not
+macOS, a macOS without MetalFX, no Metal device, or a device MetalFX
+does not support) the command says why in one line and uses `scale2x`.
+The output names are the same for both backends and a PNG does not
+record which one made it, so a run with the other backend skips the
+files already there unless `force` is given; the summary line names
+the backend when it is `metalfx`.
+
+The Options menu's "upscale textures" page runs the command: the
+factor, whether files already there are written again, and one item
+per backend. `MetalFX spatial` is greyed, with its reason, where it is
+not available; the menu finds that out without making a Metal or
+MetalFX object, so on a machine where a run then finds it unsupported,
+the item is greyed with that run's reason afterwards.
+
 * A file that exists is left alone; `upscale_textures 2 force` writes
   every file again. A link, or anything else that is not a regular
   file, at an output name is never written through: it is left alone,

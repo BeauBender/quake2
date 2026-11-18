@@ -50,7 +50,9 @@ CL_RunLightStyles(void)
 	int i;
 	clightstyle_t *ls;
 
-	ofs = cl.time / 100;
+	/* As an unsigned number: never negative, so the index below
+	   cannot be. */
+	ofs = (int)((unsigned)cl.time / 100u);
 
 	if (ofs == lastofs)
 	{

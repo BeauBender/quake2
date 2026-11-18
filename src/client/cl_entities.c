@@ -27,6 +27,10 @@
 #include <math.h>
 #include "header/client.h"
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
 /* skip lerping the first server frames after client receives it
  * avoids lerping toggled lasers
  * and fixes lerp-spamming with xatrix monster lasers
@@ -55,11 +59,15 @@ CL_AddPacketEntities(frame_t *frame)
 		game = Cvar_Get("game",  "", CVAR_LATCH | CVAR_SERVERINFO);
 	}
 
-	/* bonus items rotate at a fixed rate */
-	autorotate = anglemod(cl.time * 0.1f);
+	/* bonus items rotate at a fixed rate; the time is reduced to one
+	   turn first, so that the angle stays in the range of an int */
+	autorotate = anglemod((float)((unsigned)cl.time % 3600u) * 0.1f);
+
+	/* The index and frame values below are taken from the time as an
+	   unsigned number: never negative, never an overflow. */
 
 	/* brush models can auto animate their frames */
-	autoanim = 2 * cl.time / 1000;
+	autoanim = (int)((2u * (unsigned)cl.time) / 1000u);
 
 	for (pnum = 0; pnum < frame->num_entities; pnum++)
 	{
@@ -94,7 +102,7 @@ CL_AddPacketEntities(frame_t *frame)
 
 		else if (effects & EF_ANIM_ALLFAST)
 		{
-			ent.frame = cl.time / 100;
+			ent.frame = (int)((unsigned)cl.time / 100u);
 		}
 
 		else
@@ -266,7 +274,7 @@ CL_AddPacketEntities(frame_t *frame)
 		else if (effects & EF_SPINNINGLIGHTS)
 		{
 			ent.angles[0] = 0;
-			ent.angles[1] = anglemod(cl.time / 2) + s1->angles[1];
+			ent.angles[1] = anglemod((float)((unsigned)cl.time / 2u % 360u)) + s1->angles[1];
 			ent.angles[2] = 180;
 			{
 				vec3_t forward;
@@ -729,6 +737,37 @@ AdaptFov(float fov, float w, float h)
 }
 
 /*
+ * TASK172: the horizontal field of view of a w x h view. Hor+ (AdaptFov)
+ * keeps the vertical view of a 4:3 screen at fov and widens the
+ * horizontal one with the aspect, so a view narrower than 4:3 (a
+ * near-square or portrait window, as the inner display of a foldable
+ * gives) loses the sides of the 4:3 view. With vertical_minimum the
+ * horizontal view is never narrower than fov: the whole 4:3 view stays
+ * in the picture and the extra height shows more above and below it
+ * (the vertical view, CalcFov's, is then at least 4:3's). At 4:3 and
+ * wider both give AdaptFov's value, so no wide screen changes.
+ */
+float
+CL_AspectFov(float fov, float w, float h, qboolean vertical_minimum)
+{
+	float x = AdaptFov(fov, w, h);
+
+	if (vertical_minimum && (x < fov))
+	{
+		return fov;
+	}
+
+	return x;
+}
+
+/* the vertical minimum is the iOS rule (TASK172): an iPhone Duo's inner display may be portrait */
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+#define CL_FOV_VERTICAL_MINIMUM true
+#else
+#define CL_FOV_VERTICAL_MINIMUM false
+#endif
+
+/*
  * Sets cl.refdef view values
  */
 void
@@ -836,7 +875,7 @@ CL_CalcViewValues(void)
 	ifov = ops->fov + lerp * (ps->fov - ops->fov);
 	if (horplus->value)
 	{
-		cl.refdef.fov_x = AdaptFov(ifov, cl.refdef.width, cl.refdef.height);
+		cl.refdef.fov_x = CL_AspectFov(ifov, cl.refdef.width, cl.refdef.height, CL_FOV_VERTICAL_MINIMUM);
 	}
 	else
 	{
@@ -859,34 +898,39 @@ CL_CalcViewValues(void)
 void
 CL_AddEntities(void)
 {
+	int behind;
+
 	if (cls.state != ca_active)
 	{
 		return;
 	}
 
-	if (cl.time > cl.frame.servertime)
+	/* The distance is taken modulo 2^32, as in CL_ParseFrame. */
+	behind = (int)((unsigned)cl.frame.servertime - (unsigned)cl.time);
+
+	if (behind < 0)
 	{
 		if (cl_showclamp->value)
 		{
-			Com_Printf("high clamp %i\n", cl.time - cl.frame.servertime);
+			Com_Printf("high clamp %i\n", (int)(0u - (unsigned)behind));
 		}
 
 		cl.time = cl.frame.servertime;
 		cl.lerpfrac = 1.0;
 	}
-	else if (cl.time < cl.frame.servertime - 100)
+	else if (behind > 100)
 	{
 		if (cl_showclamp->value)
 		{
-			Com_Printf("low clamp %i\n", cl.frame.servertime - 100 - cl.time);
+			Com_Printf("low clamp %i\n", behind - 100);
 		}
 
-		cl.time = cl.frame.servertime - 100;
+		cl.time = (int)((unsigned)cl.frame.servertime - 100u);
 		cl.lerpfrac = 0;
 	}
 	else
 	{
-		cl.lerpfrac = 1.0 - (cl.frame.servertime - cl.time) * 0.01f;
+		cl.lerpfrac = 1.0 - behind * 0.01f;
 	}
 
 	if (cl_timedemo->value)

@@ -922,23 +922,22 @@ SDL_Cache(sfx_t *sfx, wavinfo_t *info, byte *data, short volume,
 		  int begin_length, int  end_length,
 		  int attack_length, int fade_length)
 {
-	float stepscale;
 	int i;
+	int frames;
 	int len;
+	int step;
 	int sample;
 	sfxcache_t *sc;
-	unsigned int samplefrac = 0;
 
-	stepscale = (float)info->rate / sound.speed;
-	len = (int)(info->samples / stepscale);
-
-	if ((info->samples == 0) || (len == 0))
+	/* the frame count, the byte size and the step, all from the one
+	   computation */
+	if (!S_CacheSize(info, sound.speed, &frames, &len, &step))
 	{
-		Com_Printf("WARNING: Zero length sound encountered: %s\n", sfx->name);
+		Com_Printf("WARNING: Zero length or unusable sound encountered: %s\n",
+			sfx->name);
 		return false;
 	}
 
-	len = len * info->width * info->channels;
 	sc = sfx->cache = Z_Malloc(len + sizeof(sfxcache_t));
 
 	if (!sc)
@@ -948,7 +947,7 @@ SDL_Cache(sfx_t *sfx, wavinfo_t *info, byte *data, short volume,
 
 	sc->loopstart = info->loopstart;
 	sc->stereo = info->channels - 1;
-	sc->length = (int)(info->samples / stepscale);
+	sc->length = frames;
 	sc->speed = sound.speed;
 	sc->volume = volume;
 	sc->begin = begin_length * 1000 / info->rate;
@@ -956,19 +955,7 @@ SDL_Cache(sfx_t *sfx, wavinfo_t *info, byte *data, short volume,
 	sc->fade = fade_length * 1000 / info->rate;
 	sc->attack = attack_length * 1000 / info->rate;
 
-	if ((int)(info->samples / stepscale) == 0)
-	{
-		Com_Printf("%s: Invalid sound file '%s' (zero length)\n",
-			__func__, sfx->name);
-		Z_Free(sfx->cache);
-		sfx->cache = NULL;
-		return false;
-	}
-
-	if (sc->loopstart != -1)
-	{
-		sc->loopstart = (int)(sc->loopstart / stepscale);
-	}
+	sc->loopstart = S_CacheLoopStart(info, sound.speed, frames);
 
 	if (s_loadas8bit->value)
 	{
@@ -980,12 +967,12 @@ SDL_Cache(sfx_t *sfx, wavinfo_t *info, byte *data, short volume,
 	}
 
 	/* resample / decimate to the current source rate */
-	for (i = 0; i < (int)(info->samples / stepscale); i++)
+	for (i = 0; i < frames; i++)
 	{
 		int srcsample;
 
-		srcsample = samplefrac >> 8;
-		samplefrac += (int)(stepscale * 256);
+		/* below the sample count, as S_CacheSize bounds the frames */
+		srcsample = (int)(((long long)i * step) >> 8);
 
 		if (info->width == 2)
 		{

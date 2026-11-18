@@ -128,7 +128,32 @@ CL_AllocEntity(int entnum)
 
 int CL_MaxClients(void) { return 1; }
 int CL_PinsCapture(void) { return 0; }
-qboolean CL_PinsRun(void) { return false; }
+/* a pin run, for the input gate's test (test_ingate.c); false otherwise */
+int stub_pins_run;
+qboolean CL_PinsRun(void) { return stub_pins_run ? true : false; }
+
+/* What reaches the client's key and character entry points (test_ingate.c). */
+stub_keys_t stub_keys;
+
+void
+Key_Event(int key, qboolean down, qboolean special)
+{
+	if (stub_keys.n < STUB_MAX_KEYS)
+	{
+		stub_keys.key[stub_keys.n] = key;
+		stub_keys.down[stub_keys.n] = down;
+	}
+
+	(void)special;
+	stub_keys.n++;
+}
+
+void
+Char_Event(int key)
+{
+	stub_keys.chars++;
+	stub_keys.last_char = key;
+}
 void CL_ClearState(void) { }
 void CL_Stop_f(void) { }
 void CL_WriteConfiguration(void) { }
@@ -181,7 +206,14 @@ void CL_TrapParticles(entity_t *ent) { }
 
 /* ---- renderer ---- */
 
-void V_AddEntity(entity_t *ent) { }
+void
+V_AddEntity(entity_t *ent)
+{
+	if (stub_calls.ents++ == 0 || ent->frame < stub_calls.min_ent_frame)
+	{
+		stub_calls.min_ent_frame = ent->frame;
+	}
+}
 void V_RenderView(float s) { }
 void R_BeginFrame(float s) { stub_calls.begins++; }
 void R_EndFrame(void) { stub_calls.ends++; }
@@ -205,7 +237,6 @@ void OGG_Shutdown(void) { }
 void OGG_Stop(void) { }
 void OGG_PlayTrack(const char *t, qboolean c, qboolean i) { }
 void OGG_LoadAsWav(char *f, wavinfo_t *i, void **b) { }
-wavinfo_t GetWavinfo(char *n, byte *w, int l) { wavinfo_t i = {0}; return i; }
 qboolean SDL_BackendInit(void) { return false; }
 void SDL_BackendShutdown(void) { }
 qboolean SDL_Cache(sfx_t *s, wavinfo_t *i, byte *d, short v, int a, int b, int c, int e) { return false; }

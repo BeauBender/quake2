@@ -15,6 +15,18 @@ original clients (Vanilla Quake II) commands are still in place.
   between `coop`, `dm` and `sp` without having to set three cvars the
   correct way. `?` prints the current mode.
 
+* **ios_orientation <name>**: iOS (iPhone and iPad) only; not registered on tvOS or visionOS. Asks the window
+  scene for an interface orientation, the way turning the device does, so
+  a test can change the window's size or insets with no hand on the
+  device. `name` is `portrait`, `portraitupsidedown`, `landscapeleft`,
+  `landscaperight`, `landscape` (either) or `all`. The system grants only
+  an orientation the app supports (the two landscapes), and answers
+  `Orientation: refused (...)` in the console for another; it does
+  nothing a person turning the device cannot do, so a server sending it
+  is harmless. The window then follows as it does for any size change.
+  Without a name it only reports the scene's interface orientation and
+  the window's size, insets and orientation as `Screen now: ...`.
+
 * **listentities <class>**: Lists the coordinates of all entities of a
   given class.  Possible classes are `ammo`, `items`, `keys`, `monsters`
   and `weapons`. Multiple classes can be given, they're separated by
@@ -53,17 +65,22 @@ original clients (Vanilla Quake II) commands are still in place.
 
 * **teleport <x y z>**: Teleports the player to the given coordinates.
 
-* **upscale_textures <2|4> [force]**: Writes PNG versions, twice or four
-  times the size, of the world textures, the faces of the skies and the
-  model and player skin images of the game data into the write
-  directory, scaled with scale2x, where `r_retexturing 1` loads them.
+* **upscale_textures <2|4> [scale2x|metalfx] [force]**: Writes PNG
+  versions, twice or four times the size, of the world textures, the
+  faces of the skies and the model and player skin images of the game
+  data into the write directory, where `r_retexturing 1` loads them.
+  The backend is `scale2x` (the default: pixel-art edges, no new
+  colour) or, on macOS, `metalfx` (MetalFX's spatial scaler); where
+  `metalfx` is unsupported the command says why in one line and uses
+  `scale2x`. Any other backend name is refused with the usage line.
   Files that exist are skipped unless `force` is given, and a symlink at
   an output name is never written through; names that are not plain
   paths (letters, digits, `_`, `-`, `+`, `.` and `/`) are refused,
   nothing is written inside a git work tree, and the command is refused
   while a demo plays or while connected to a remote server (a server
-  that first ends the connection itself can still start it). See
-  "Textures upscaled on your own machine" in `030_configuration.md`.
+  that first ends the connection itself can still start it). The
+  Options menu's "upscale textures" page runs it. See "Textures
+  upscaled on your own machine" in `030_configuration.md`.
 
 * **viewpos**: Show player position.
 

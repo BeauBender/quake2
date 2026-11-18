@@ -25,9 +25,28 @@ typedef struct
 	int pics;         /* Draw_PicScaled calls */
 	int begins;       /* R_BeginFrame calls */
 	int ends;         /* R_EndFrame calls */
+	int ents;         /* V_AddEntity calls */
+	int min_ent_frame; /* the lowest frame of them */
 } stub_calls_t;
 
 extern stub_calls_t stub_calls;
+
+/* The calls of Key_Event and Char_Event, in order (test_ingate.c). */
+#define STUB_MAX_KEYS 16
+
+typedef struct
+{
+	int n;                    /* Key_Event calls */
+	int key[STUB_MAX_KEYS];   /* their keys */
+	int down[STUB_MAX_KEYS];  /* and down flags */
+	int chars;                /* Char_Event calls */
+	int last_char;            /* the last character */
+} stub_keys_t;
+
+extern stub_keys_t stub_keys;
+
+/* What the CL_PinsRun stub returns: false but in the input gate's test. */
+extern int stub_pins_run;
 
 /* Creates the cvar pointers cl_*.c read without checking for NULL. */
 void stub_client_cvars(void);
