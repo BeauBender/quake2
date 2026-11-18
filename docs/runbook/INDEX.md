@@ -82,3 +82,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [FIX96](../runbook/FIX96.md): at r_rt_water_hits 1 with r_metalfx 2 at 5120x2880, why main's own pin records differ run to run
 - [TASK175](../runbook/TASK175.md): the visionOS simulator build boots to the main menu and loads base1 in a window; the iOS-only code on visionOS and the notes for slice 2
 - [FIX128](../runbook/FIX128.md): check-bench's lock give-up and stall cases wait for a state, not a time, so a loaded host no longer turns them red
+- [TASK194](../runbook/TASK194.md): Video options > Ray tracing on the ray-tracing Mac: each effect on and off live, each slider moved, the values read back after a restart
