@@ -24,6 +24,21 @@ set -u
 
 cd "$(dirname "$0")/.." || exit 1
 
+# The model's download starts from the menu item only (decision 0013): no
+# file but menu.c calls a fetch, so no command, stuffed text among them,
+# can start one. Definitions (the name at the start of a line) and the
+# header's declarations are not calls.
+calls=$(grep -rn -E 'CL_UpscaleVTFetch(Start)?[[:space:]]*\(' src |
+	grep -v -E '^[^:]+:[0-9]+:CL_UpscaleVTFetch' |
+	grep -v -E '^src/client/header/upscale_vt\.h:' |
+	grep -v -E '^src/client/menu/menu\.c:')
+
+if [ -n "$calls" ]; then
+	printf '%s\n' "$calls"
+	echo "check-upscale-vt: the model's download is started outside the menu item"
+	exit 1
+fi
+
 if [ "$(uname -s)" != Darwin ]; then
 	echo "check-upscale-vt: skipped: not macOS"
 	exit 0

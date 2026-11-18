@@ -11,6 +11,12 @@
 # - an output inside a git work tree (a fresh repository, and this
 #   checkout itself) is refused and nothing is made there, as is a path
 #   with "..", a bad factor and a backend that does not exist;
+# - a link planted in an existing output (the engine copy, a log) is
+#   refused, not written through, and a --names entry with ".." or a
+#   leading separator is refused;
+# - when the engine says vt's model is not on this machine (it fetches it
+#   only from the client's menu), the generator stops with a line that
+#   says so and writes no report;
 # - the generator has no network or git code (it never uploads or
 #   commits anything).
 
@@ -55,6 +61,10 @@ done
 [ -n "$up" ] || exit 0
 d=$(cd "$(dirname "$0")" && pwd -P)
 by=" with $b"
+if [ "$b" = vt ] && [ -n "${FAKE_VT_NO_MODEL:-}" ]; then
+	echo "upscale_textures: vt: VideoToolbox's super-resolution model is not on this machine: fetch it from the menu (Options, upscale textures, VideoToolbox ML); nothing written"
+	exit 0
+fi
 if [ "$b" = vt ]; then
 	echo "upscale_textures: vt is unsupported here (the self-test's fallback); using scale2x"
 	by=
@@ -114,7 +124,37 @@ for args in "--factor 3" "--backends scale2x,bogus" "--runs 0"; do
 	fi
 done
 
-# 3. no network or git code in the generator
+# 3. a link planted in an existing output is refused, never written through
+printf 'victim\n' > "${tmp:?}/victim"
+mkdir -p "${tmp:?}/o3/engine" "${tmp:?}/o4/logs" || exit 1
+ln -s "${tmp:?}/victim" "${tmp:?}/o3/engine/quake2"
+ln -s "${tmp:?}/victim" "${tmp:?}/o4/logs/scale2x-1.log"
+for o in o3 o4; do
+	if sh "$gen" run --out "${tmp:?}/$o" --basedir "${tmp:?}/data" --engine-dir "${tmp:?}/eng" \
+		--runs 1 --backends scale2x --bound 60 > "${tmp:?}/link.log" 2>&1; then
+		bad "a link in the output was written through ($o)"
+	fi
+	grep -q 'through a link' "${tmp:?}/link.log" || bad "no refusal line for the link in $o"
+done
+[ "$(cat "${tmp:?}/victim")" = victim ] || bad "the link's target was written"
+
+for n in "../../victim.png" "/etc/x.png" "textures/../../x.png"; do
+	if sh "$gen" run --out "${tmp:?}/o5" --basedir "${tmp:?}/data" --engine-dir "${tmp:?}/eng" \
+		--runs 1 --backends scale2x --names "$n" --bound 60 > "${tmp:?}/names.log" 2>&1; then
+		bad "a --names entry was not refused: $n"
+	fi
+	grep -q 'refusing a name' "${tmp:?}/names.log" || bad "no refusal line for the name $n"
+done
+
+# 4. vt's model not on this machine: a clear line, no report
+if FAKE_VT_NO_MODEL=1 sh "$gen" run --out "${tmp:?}/o6" --basedir "${tmp:?}/data" \
+	--engine-dir "${tmp:?}/eng" --runs 1 --backends scale2x,vt --bound 60 > "${tmp:?}/vt.log" 2>&1; then
+	bad "a vt run without the model was not refused"
+fi
+grep -q "vt: VideoToolbox's model is not on this machine" "${tmp:?}/vt.log" || bad "no line that vt's model is missing"
+! ls "${tmp:?}/o6" 2>/dev/null | grep -q '\.html$' || bad "a report was written without vt's model"
+
+# 5. no network or git code in the generator
 if grep -n -E 'urllib|http\.client|socket|requests|"git"|curl|scp|(^|[^a-z])gh ' \
 	"$root/scripts/upscale-report/report.py" "$gen"; then
 	bad "the generator has network or git code"
@@ -124,4 +164,4 @@ if [ "$fail" != 0 ]; then
 	exit 1
 fi
 
-echo "check-upscale-report: OK (a fake run of 3 backends, the refusals, no network or git code)"
+echo "check-upscale-report: OK (a fake run of 3 backends, the refusals, links and names refused, vt without its model, no network or git code)"

@@ -2031,13 +2031,21 @@ TEST(upscale_vt_state)
 		T_EQ_STR(reason, no[i].reason);
 	}
 
-	/* a missing model, or one being fetched: fetch first */
+	/*
+	 * a missing model, or one being fetched: the command refuses with a
+	 * line that sends the player to the menu, the one place that fetches
+	 * it (stuffed text cannot press a menu item, decision 0013)
+	 */
 	f = upscale_vt_ok();
 	f.model = UPSCALE_VT_MODEL_DOWNLOAD;
 	T_EQ_INT(CL_UpscaleVTState(&f, 2, reason, sizeof(reason)), UPSCALE_VT_FETCH);
-	T_EQ_STR(reason, "");
+	T_EQ_STR(reason, "VideoToolbox's super-resolution model is not on this "
+		"machine: fetch it from the menu (Options, upscale textures, "
+		"VideoToolbox ML)");
 	f.model = UPSCALE_VT_MODEL_DOWNLOADING;
 	T_EQ_INT(CL_UpscaleVTState(&f, 2, reason, sizeof(reason)), UPSCALE_VT_FETCH);
+	T_EQ_STR(reason, "VideoToolbox's super-resolution model is being "
+		"downloaded: run again when the menu says it is ready");
 
 	/* a status this code does not know is unsupported, not fetched */
 	f.model = 7;
