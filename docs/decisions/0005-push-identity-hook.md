@@ -245,14 +245,54 @@ also missed fine-grained GitHub tokens. So, superseding the section
   (four runs each).
 - The `refs/heads/claim/*` and `refs/heads/gate-clear/*` exemption is
   removed: the tooling now offers the pseudonymous identity this record
-  waited for. The identity shim writes those commits as root commits on the
-  empty tree whose message names an opaque machine token. Before the
-  removal, the commits that the 92 current tooling refs add over every other
-  published ref (88 commits) were scanned without printing a value: 0
-  host-name, 0 user-name and 0 home-path matches, and the new hook passes
-  all 92 refs. A tooling ref is scanned like any other ref, so a commit that
-  holds a value is refused at its first push, under any name, and is not
-  published for a later push to skip.
+  waited for, the identity shim of `.claude/rules/no-machine-names.md`. The
+  tooling writes a claim (`claim-card.sh claim`) and a gate clearance
+  (`kanban.sh gate-clear`) as a commit on the tree of
+  `refs/remotes/origin/main`, with that commit as its parent, so it adds no
+  blob and changes no path; the messages are `claim <ID> by <holder> at <UTC
+  time> (lease 6h) [nonce:<16 hex digits>]`, the holder
+  `<token>/agent/<session>`, and `gate-clear <ID> by <host>/<user> at <UTC
+  time>`, which under the shim reads `<token>/agent`. A release deletes the
+  claim ref, or, where the delete is refused, writes a tombstone `released
+  <ID> by ...` as a root commit on the empty tree. Before the removal, the
+  commits that the 92 current tooling refs add over every other published
+  ref (88 commits) were scanned without printing a value: 0 host-name, 0
+  user-name and 0 home-path matches, and the new hook passes all 92 refs. A
+  tooling ref is scanned like any other ref, so a commit that holds a value
+  is refused at its first push, under any name, and is not published for a
+  later push to skip.
+- The host name and the user name are read from `/bin/hostname -s` and
+  `/usr/bin/id -un`, by absolute path, in the push hook and in
+  `tests/check-no-local-identity.sh` alike (one block of text, `real_names`,
+  that `tests/check-pre-push-hook.sh` compares between the two), never by a
+  `PATH` lookup. The shim is first on `PATH` for every call that writes a
+  marker, and its `hostname` prints the token and its `whoami` prints
+  `agent`: a hook that looked them up on `PATH` compared each marker against
+  its own pseudonym, so it refused every claim, heartbeat, release, adoption
+  and gate clearance made under the shim, and it compared nothing against the
+  real names, so a marker that named the real machine passed. `/bin/hostname
+  -s` is the program `hostname -s` ran without the shim (on the machine this
+  was written on it also equals `scutil --get LocalHostName`), and `id -un`
+  is the POSIX spelling of `whoami`. A tool that is missing, fails or prints
+  nothing refuses the push, and now also fails the gate check (it used to
+  warn and check the other name only), so the commit hook refuses too.
+- Both hooks export `GIT_NO_REPLACE_OBJECTS=1`, which the checks they run
+  inherit: a local `refs/replace/` entry changes what a scan reads but not
+  what a push sends or a commit records, so the scans read the real objects.
+- The commit hook's secret pattern also gains `sk-ant-` followed by 20 or
+  more of `[A-Za-z0-9_-]`, `AIza` followed by 35 of `[0-9A-Za-z_-]`, `glpat-`
+  followed by 20 or more of `[A-Za-z0-9_-]` and `sk_live_` followed by 24 or
+  more of `[A-Za-z0-9]`.
+- The self-tests no longer serve synthetic names through `hostname` and
+  `whoami` shims on `PATH`, which the hooks no longer read. The hook and the
+  gate check take test-only words instead: `YQ2_IDENTITY_TEST_HOST` and
+  `YQ2_IDENTITY_TEST_USER` add one host and one user name to the real ones,
+  under the rules of their kind (the owner-handle and own-author rules are
+  judged for each user name on its own, so a test word cannot change how the
+  real one is compared), and `YQ2_IDENTITY_TEST_TOOL` (`host-missing`,
+  `host-empty`, `user-missing`, `user-empty`) runs a path that cannot exist,
+  or `/usr/bin/true`, in place of one tool. None of them can take a real
+  name out of a check: they add a word or make the check refuse.
 - Known limits, unchanged in kind: a binary file is not scanned (the gate
   check's rule); `YQ2_IDENTITY_TEST_EXTRA_WORD` is not looked for in files,
   since the gate check has no test word; the gate check takes an index blob
@@ -274,9 +314,18 @@ also missed fine-grained GitHub tokens. So, superseding the section
   refused, none published), file contents, symbolic link targets, file and
   directory names, an intermediate commit, a merge, a deletion, a blob the
   remote has, two refs in one push, a 50-commit push and the fail-closed
-  paths of the file scan.
+  paths of the file scan. Both run with the identity shim first on `PATH`
+  throughout: markers in the tooling's shape and token form, a release and a
+  file holding `agent` and the token pass; a marker naming the real host, or
+  the real user as a path component (built at run time from the absolute
+  tools and never printed), a staged file naming either, a commit or a
+  staged token replaced locally by a clean twin, and each broken tool are
+  refused; and one synthetic sample per new token family is refused while
+  one a character short is not.
 
 Reversal of this addendum: put the identity check back under the path
 filter in `.githooks/pre-commit`, delete `collect`, `filescan` and their
 calls from `.githooks/pre-push`, restore the exemption block, and delete
-`tests/check-pre-commit-hook.sh`.
+`tests/check-pre-commit-hook.sh`. Reading the names by absolute path is not
+reversed on its own: with the shim on `PATH`, a `PATH` lookup refuses every
+marker again.
