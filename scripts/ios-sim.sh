@@ -16,7 +16,10 @@
 # skipped, and a candidate with no numeric version is refused by name;
 # IOS_SIM_SDK=appletvsimulator, TASK23, builds for the Apple TV simulator
 # and picks among the tvOS runtimes, the default type "Apple TV 4K (4th
-# generation)"; any IOS_SIM_SDK but iphonesimulator or that is refused),
+# generation)"; IOS_SIM_SDK=xrsimulator, TASK175, builds for the Apple
+# Vision Pro simulator and picks among the visionOS (xrOS) runtimes, the
+# default type "Apple Vision Pro"; any IOS_SIM_SDK but iphonesimulator or
+# those is refused),
 # boots it, installs the app and launches it with
 # --console-pty and Metal's validation layer (SIMCTL_CHILD_MTL_DEBUG_LAYER=1)
 # on "+set vid_renderer metal" and "+exec smoke.cfg" (written into the
@@ -255,8 +258,12 @@ print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-27-2": dev
 	devicetypes)
 		i='{"name": "iPhone 17", "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}'
 		tv='{"name": "Apple TV 4K (4th generation)", "identifier": "com.apple.CoreSimulator.SimDeviceType.Apple-TV-4K-4th-generation"}'
+		# simctl's two Apple Vision Pro types (TASK175): the name is matched whole, so the default
+		# "Apple Vision Pro" is the 4K one, which the visionOS runtime lists, not the 2732x2048 one first
+		xr='{"name": "Apple Vision Pro (at 2732x2048)", "identifier": "com.apple.CoreSimulator.SimDeviceType.Apple-Vision-Pro"}, {"name": "Apple Vision Pro", "identifier": "com.apple.CoreSimulator.SimDeviceType.Apple-Vision-Pro-4K"}'
 		case $sc in
 		tvos|tvtypes) echo "{\"devicetypes\": [$i, $tv]}" ;;
+		xros|xrtypes) echo "{\"devicetypes\": [$i, $xr]}" ;;
 		*) echo "{\"devicetypes\": [$i]}" ;;
 		esac ;;
 	runtimes)
@@ -275,6 +282,10 @@ print(json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-27-2": dev
 		# the Apple TV runtime next to the iOS one (TASK23); tvtypes: the Apple TV type, only iOS runtimes
 		tvos) echo "{\"runtimes\": [$g, {\"isAvailable\": true, \"platform\": \"tvOS\", \"version\": \"27.2\", \"name\": \"tvOS 27.2\", \"identifier\": \"com.apple.CoreSimulator.SimRuntime.tvOS-27-2\", \"supportedDeviceTypes\": [{\"identifier\": \"com.apple.CoreSimulator.SimDeviceType.Apple-TV-4K-4th-generation\"}]}]}" ;;
 		tvtypes) echo "{\"runtimes\": [$g]}" ;;
+		# the visionOS runtime next to the iOS one (TASK175; its platform is "xrOS"); xrtypes: the
+		# Apple Vision Pro type, only iOS runtimes
+		xros) echo "{\"runtimes\": [$g, {\"isAvailable\": true, \"platform\": \"xrOS\", \"version\": \"27.2\", \"name\": \"visionOS 27.2\", \"identifier\": \"com.apple.CoreSimulator.SimRuntime.xrOS-27-2\", \"supportedDeviceTypes\": [{\"identifier\": \"com.apple.CoreSimulator.SimDeviceType.Apple-Vision-Pro-4K\"}]}]}" ;;
+		xrtypes) echo "{\"runtimes\": [$g]}" ;;
 		*) echo '{"runtimes": [{"isAvailable": true, "platform": "iOS", "version": "27.2", "name": "iOS 27.2", "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-2", "supportedDeviceTypes": [{"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}]}' ;;
 		esac ;;
 	*) exit 1 ;;
@@ -716,10 +727,22 @@ EOF
 	st_case tvos-lists-default-is-iphone tvos ok "(com.apple.CoreSimulator.SimDeviceType.iPhone-17, iOS 27.2)" 30
 	st_has tvos-lists-default-is-iphone grep out/build/make.args " IOS_SDK=iphonesimulator "
 	st_case tvos-without-tvos-runtime tvtypes fail "no available iOS runtime" 30 IOS_SIM_SDK=appletvsimulator
-	st_case sdk-iphoneos-refused extra fail "IOS_SIM_SDK must be iphonesimulator (the default) or appletvsimulator" 5 IOS_SIM_SDK=iphoneos
+	# the Apple Vision Pro build (TASK175): IOS_SIM_SDK=xrsimulator builds for that SDK and picks
+	# the visionOS (xrOS) runtime and the Apple Vision Pro type; unset, the same lists give the
+	# iPhone on iOS; the tvOS build on them finds no Apple TV type
+	st_case xros-picks-xros-runtime xros ok "(com.apple.CoreSimulator.SimDeviceType.Apple-Vision-Pro-4K, visionOS 27.2)" 30 IOS_SIM_SDK=xrsimulator
+	st_has xros-picks-xros-runtime grep state/calls "com.apple.CoreSimulator.SimRuntime.xrOS-27-2"
+	st_has xros-picks-xros-runtime grep out/build/make.args " IOS_SDK=xrsimulator "
+	st_case xros-lists-default-is-iphone xros ok "(com.apple.CoreSimulator.SimDeviceType.iPhone-17, iOS 27.2)" 30
+	st_has xros-lists-default-is-iphone grep out/build/make.args " IOS_SDK=iphonesimulator "
+	st_case xros-lists-tvos-no-type xros fail "no device type Apple TV 4K (4th generation)" 30 IOS_SIM_SDK=appletvsimulator
+	st_case xros-without-xros-runtime xrtypes fail "no available iOS runtime" 30 IOS_SIM_SDK=xrsimulator
+	st_case sdk-iphoneos-refused extra fail "IOS_SIM_SDK must be iphonesimulator (the default), appletvsimulator or xrsimulator" 5 IOS_SIM_SDK=iphoneos
 	st_has sdk-iphoneos-refused line1 run.log "IOS_SIM_SDK must be"
 	st_has sdk-iphoneos-refused nofile out/build/make.args
-	st_case sdk-shell-text-refused extra fail "IOS_SIM_SDK must be iphonesimulator (the default) or appletvsimulator" 5 'IOS_SIM_SDK=$(touch sdk-ran)'
+	st_case sdk-xros-refused extra fail "IOS_SIM_SDK must be iphonesimulator (the default), appletvsimulator or xrsimulator" 5 IOS_SIM_SDK=xros
+	st_has sdk-xros-refused nofile out/build/make.args
+	st_case sdk-shell-text-refused extra fail "IOS_SIM_SDK must be iphonesimulator (the default), appletvsimulator or xrsimulator" 5 'IOS_SIM_SDK=$(touch sdk-ran)'
 	st_has sdk-shell-text-refused line1 run.log "IOS_SIM_SDK must be"
 	st_has sdk-shell-text-refused nofile out/build/make.args
 	st_case list-empty empty fail "simctl list devices: no device list" 30
@@ -821,7 +844,8 @@ digits IOS_SIM_BACKGROUND_AFTER "$bgafter"
 case ${IOS_SIM_SDK:-} in
 ''|iphonesimulator) ;;
 appletvsimulator) ;;
-*) die "IOS_SIM_SDK must be iphonesimulator (the default) or appletvsimulator" ;;
+xrsimulator) ;;
+*) die "IOS_SIM_SDK must be iphonesimulator (the default), appletvsimulator or xrsimulator" ;;
 esac
 
 # the owner's data: checked before anything is built or created
@@ -958,6 +982,8 @@ bounded "$list_s" "${tmp:?}/runtimes.json" -e "${tmp:?}/runtimes.err" xcrun simc
 # TASK23: IOS_SIM_SDK=appletvsimulator runs the tvOS build on a tvOS runtime and an Apple TV device type
 case ${IOS_SIM_SDK:-iphonesimulator} in
 appletvsimulator) sim_platform=tvOS; sim_type_default="Apple TV 4K (4th generation)" ;;
+# TASK175: IOS_SIM_SDK=xrsimulator, a visionOS runtime (simctl's platform "xrOS") and the Apple Vision Pro type
+xrsimulator) sim_platform=xrOS; sim_type_default="Apple Vision Pro" ;;
 *) sim_platform=iOS; sim_type_default="iPhone 17" ;;
 esac
 pick=$(python3 -I - "${tmp:?}/types.json" "${tmp:?}/runtimes.json" "${IOS_SIM_TYPE:-$sim_type_default}" "${IOS_SIM_RUNTIME:-}" "$sim_platform" <<'EOF'
