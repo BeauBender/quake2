@@ -23,7 +23,8 @@
 #   getenv                                 reads an environment switch
 # (with or without the ri. and gi. prefix). A commented-out call is read
 # like a live one. A Cvar_Get or Cmd_AddCommand whose first argument is not
-# a string literal fails unless tests/baselines/nonliteral-calls.txt lists
+# a string literal (the literal, then a comma or a parenthesis: "a" SUFFIX is
+# not one) fails unless tests/baselines/nonliteral-calls.txt lists
 # the file, the call and the argument. A Set call with a name taken from a
 # variable is not checked: the engine itself makes about fifty of them, on
 # cvars that exist, and no reading of the source can tell the ones that
@@ -33,9 +34,11 @@
 # where the names the call walks come from, and the check reads that
 # table's string literals as cvar names, so a walk cannot add an
 # undocumented name: path:Symbol is an array (the first literal of each
-# {row} is a name) or a function (every literal in its body is) defined at
-# column 0 of path; fmt:pattern:low:high is pattern with %d from low to
-# high. An entry whose call is not in src fails (a stale entry would
+# {row} is a name; every literal of a flat array of strings is) or a function
+# (every literal in its body is) defined at column 0 of path;
+# fmt:pattern:low:high is pattern with %d from low to high, a bound being an
+# integer or MACRO or MACRO-n, the macro one plain-integer #define under src
+# (else the check fails). An entry whose call is not in src fails (a stale entry would
 # pre-approve a future walk); a table that gives no name fails.
 #
 # Environment switches: every getenv("NAME") literal under src/ must be one
@@ -180,6 +183,33 @@ function section(hdr, A,   k, n) {
 	close("sort")
 	fail = 1
 }
+# A fmt: range bound: an integer, or MACRO or MACRO-n, MACRO being a plain
+# integer in the one #define of it under src/. Fails closed (returns "" and
+# files a problem) when the macro is not found, is defined twice, or is not a
+# plain integer.
+function bound(b, where,   m, off, cmd, line, v, nd) {
+	if (b ~ /^[0-9]+$/) return b + 0
+	if (b !~ /^[A-Za-z_][A-Za-z0-9_]*(-[0-9]+)?$/) {
+		badallow[where ": " b " is not a range bound"] = 1
+		return ""
+	}
+	m = b; off = 0
+	if (match(b, /-[0-9]+$/)) { off = substr(b, RSTART + 1) + 0; m = substr(b, 1, RSTART - 1) }
+	cmd = "grep -rhE \"^[ \\t]*#[ \\t]*define[ \\t]+" m "([ \\t]|$)\" src"
+	nd = 0; v = ""
+	while ((cmd | getline line) > 0) {
+		nd++
+		sub(/^[ \t]*#[ \t]*define[ \t]+[A-Za-z0-9_]+[ \t]*/, "", line)
+		sub(/[ \t]*(\/\*.*)?(\/\/.*)?$/, "", line)
+		v = line
+	}
+	close(cmd)
+	if (nd == 0) { tblprob[where ": no #define of " m " under src"] = 1; return "" }
+	if (nd > 1) { tblprob[where ": " m " is defined more than once under src"] = 1; return "" }
+	if (v !~ /^[0-9]+$/) { tblprob[where ": " m " is not a plain integer (the #define says \"" v "\")"] = 1; return "" }
+	if (off > v + 0) { tblprob[where ": " b " is below zero"] = 1; return "" }
+	return v - off
+}
 # the names of the table sym defined at column 0 of path, into out
 function tablenames(path, sym, out,   line, on, isarr, body, r, n, lit, flat) {
 	on = 0; isarr = 0; body = ""; n = 0
@@ -256,9 +286,11 @@ BEGIN {
 		aline[key] = P[1] "|" P[2] "|" P[3]
 		tbl = P[4]
 		n = 0
-		if (tbl ~ /^fmt:[^:]*:[0-9]+:[0-9]+$/) {
+		if (tbl ~ /^fmt:[^:]*:[^:]+:[^:]+$/) {
 			split(tbl, T, ":")
-			for (i = T[3]; i <= T[4]; i++) {
+			lo = bound(T[3], aline[key]); hi = bound(T[4], aline[key])
+			if (lo == "" || hi == "") continue
+			for (i = lo; i <= hi; i++) {
 				if (P[2] == "Cmd_AddCommand") cm[sprintf(T[2], i)] = 1
 				else cv[sprintf(T[2], i)] = 1
 			}

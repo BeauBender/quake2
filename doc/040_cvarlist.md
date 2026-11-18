@@ -303,8 +303,7 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 * **nextserver**: Used for looping the introduction demos.
 
 * **adr0**, **adr1**, **adr2**, **adr3**, **adr4**, **adr5**, **adr6**,
-  **adr7**, **adr8**, **adr9**, **adr10**, **adr11**, **adr12**,
-  **adr13**, **adr14**, **adr15**: The sixteen entries of the server
+  **adr7**, **adr8**: The nine entries of the server
   address book in the multiplayer menu. Archived; the empty string
   when an entry is unused.
 
