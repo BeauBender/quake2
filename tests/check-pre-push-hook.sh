@@ -13,11 +13,17 @@
 # ref on stdin, as githooks(5) gives the form) directly, many refs per run,
 # and checks the line the hook prints for each ref by its number.
 #
-# The identity is synthetic: `hostname` and `whoami` are shims on PATH and
-# HOME is a made-up path, so the hook really reads them at run time and no
-# real value is ever used as a fixture. Every name and message is built from
-# the prefix "zzq". The output of each run is checked for the synthetic
-# values and for this machine's real ones (read here, never printed). A
+# The identity is synthetic: the hook's test-only YQ2_IDENTITY_TEST_HOST and
+# YQ2_IDENTITY_TEST_USER add a made-up host and user name to the real ones,
+# and HOME is a made-up path, so the hook really reads them at run time.
+# Every name and message is built from the prefix "zzq". The identity shim is
+# first on PATH throughout, as it is for every marker writer: its `hostname`
+# prints a machine token and its `whoami` prints `agent`. The hook reads the
+# real names by absolute path, so the shim changes nothing: markers in the
+# token form pass, and a marker naming this machine's real host or user name
+# (built here at run time from /bin/hostname and /usr/bin/id, never printed,
+# kept in a throwaway repository) is refused. The output of each run is
+# checked for the synthetic values and for this machine's real ones. A
 # failing case shows a redacted copy of the output.
 #
 # The test is immune to the caller's git environment and configuration:
@@ -35,9 +41,13 @@ export LC_ALL=C
 hook=$(pwd)/.githooks/pre-push
 [ -x "$hook" ] || { echo "check-pre-push-hook: .githooks/pre-push is missing or not executable"; exit 1; }
 
-# Read before HOME and PATH are replaced; only ever compared, never printed.
-real_words="$(hostname -s 2>/dev/null || true)
-$(whoami 2>/dev/null || true)
+# Read by absolute path, as the hook reads them (a shim on the caller's PATH
+# cannot stand in), and before HOME is replaced; only ever compared or put in
+# a throwaway repository, never printed.
+real_host=$(/bin/hostname -s 2>/dev/null || true)
+real_user=$(/usr/bin/id -un 2>/dev/null || true)
+real_words="$real_host
+$real_user
 ${HOME:-}"
 
 # ---- Isolation from the caller. -------------------------------------------
@@ -75,12 +85,15 @@ shim() { # $1 = command, $2 = what it prints ("" = fails)
 	fi
 	chmod +x "$tmp/bin/$1"
 }
-shim hostname Zzq-Synthetic-Box
-shim whoami "$login"
+# The identity shim (.claude/rules/no-machine-names.md), first on PATH.
+tok=m-0a1b2c3d4e5f
+shim hostname "$tok"
+shim whoami agent
 PATH="$tmp/bin:$PATH"
 HOME=$synhome
 mkdir "$tmp/hooktmp"
 export PATH HOME YQ2_IDENTITY_TEST_EXTRA_WORD=zzqextra TMPDIR="$tmp/hooktmp"
+export YQ2_IDENTITY_TEST_HOST=Zzq-Synthetic-Box YQ2_IDENTITY_TEST_USER="$login"
 
 fails=0
 note() { echo "check-pre-push-hook: FAIL: $*"; fails=$((fails + 1)); }
@@ -185,8 +198,9 @@ rpush() { # $1 = label, $2 = want (ok|refused); rest = push args
 	esac
 	leaks "$_label"
 }
-# The tooling branches as the identity shim writes them: a root commit on the
-# empty tree whose message names an opaque machine token.
+# Tooling branches whose commit is a root commit on the empty tree (the shape
+# of a release tombstone; claims and gate-clears have the shape tested under
+# "The identity shim on PATH" below) and whose message names a machine token.
 claim=$(mk - "claimed ZZQ1 by m-0123456789ab/agent/zzq at 2026-01-01T00:00:00Z")
 gclear=$(mk - "gate-clear ZZQ2 by m-0123456789ab/agent/zzq at 2026-01-01T00:00:00Z")
 rpush "real push of a normal branch" ok origin zzqmain
@@ -207,6 +221,60 @@ rpush "real push of that commit to gate-clear/" "$FB" origin "$filebad:refs/head
 [ -z "$(w for-each-ref refs/remotes/origin/claim/ZZQX refs/remotes/origin/gate-clear/ZZQX)" ] ||
 	note "a refused push recorded a tooling branch as published"
 rpush "real push of that commit to a normal branch, after the tooling pushes" "$FB" origin "$filebad:refs/heads/zzqf2"
+
+# ---- The identity shim on PATH: the real names still decide. --------------
+# The shim is on PATH (above), as for every marker writer. The markers have
+# the shape the tooling writes: a commit on the tree of
+# refs/remotes/origin/main with it as parent, the message of claim-card.sh
+# claim ("claim <ID> by <holder> at <UTC time> (lease 6h) [nonce:<16 hex>]",
+# the holder "<token>/agent/<session>") or of kanban.sh gate-clear
+# ("gate-clear <ID> by <host>/<user> at <UTC time>", under the shim
+# "<token>/agent"); a release deletes the claim ref. One real push per case.
+trunk=$(TR=$(tree README.md "zzq trunk" src/zzq.c "/* zzq */") mk "$m1" zzqtrunk)
+rpush "real push of main" ok origin "$trunk:refs/heads/main"
+[ "$(w rev-parse -q --verify refs/remotes/origin/main || true)" = "$trunk" ] ||
+	note "the real push of main did not record it as published"
+marker() { # $1 = message
+	TR="refs/remotes/origin/main^{tree}" mk "$(w rev-parse refs/remotes/origin/main)" "$1"
+}
+sess=0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d
+when=2026-11-17T00:00:00Z
+nonce=0123456789abcdef
+rpush "the shim on PATH: a claim marker in the token form" ok origin \
+	"$(marker "claim ZZQ9 by $tok/agent/$sess at $when (lease 6h) [nonce:$nonce]"):refs/heads/claim/ZZQ9"
+rpush "the shim on PATH: a gate-clear marker in the token form" ok origin \
+	"$(marker "gate-clear ZZQ9 by $tok/agent at $when"):refs/heads/gate-clear/ZZQ9"
+rpush "the shim on PATH: a release (the claim ref deleted)" ok origin :refs/heads/claim/ZZQ9
+[ -z "$(git --git-dir="$tmp/remote.git" for-each-ref refs/heads/claim/ZZQ9)" ] ||
+	note "the shim on PATH: the release left the claim ref on the remote"
+if [ "${#real_host}" -ge 3 ]; then
+	_c=$(marker "claim ZZQ9 by $real_host/agent/$sess at $when (lease 6h) [nonce:$nonce]")
+	rpush "the shim on PATH: a claim marker naming the real host" \
+		"the message of commit $(printf '%.10s' "$_c") contains this machine's host identity" origin "$_c:refs/heads/claim/ZZQ9"
+else
+	echo "check-pre-push-hook: not run: the real-host marker case (the hook does not compare a host name shorter than three characters)"
+fi
+if [ "${#real_user}" -ge 3 ] && [ "$real_user" != agent ]; then
+	_c=$(marker "claim ZZQ9 by $tok/$real_user/$sess at $when (lease 6h) [nonce:$nonce]")
+	rpush "the shim on PATH: a claim marker naming the real user as a path component" \
+		"the message of commit $(printf '%.10s' "$_c") contains this machine's user identity" origin "$_c:refs/heads/claim/ZZQ9"
+	rpush "the shim on PATH: a file holding the word agent and the token, on a normal branch" ok origin \
+		"$(TR=$(tree README.md "zzq trunk" src/zzq.c "/* zzq */" scripts/zzq-agent.txt "run by agent on $tok") mk "$trunk" zzqm70):refs/heads/zzqagent"
+else
+	echo "check-pre-push-hook: not run: the real-user marker and agent-file cases (the user name is shorter than three characters, which the hook does not compare, or is agent itself)"
+fi
+[ -z "$(git --git-dir="$tmp/remote.git" for-each-ref refs/heads/claim/ZZQ9)" ] ||
+	note "the shim on PATH: a refused marker reached the remote"
+# A commit replaced locally by a clean twin (refs/replace/): the scan reads
+# what the push sends, the commit itself, and refuses its file.
+_rx=$(TR=$(tree README.md "zzq trunk" src/zzq.c "/* zzq */" scripts/zzq-r.sh "cd $synhome/src") mk "$trunk" zzqm71)
+_ry=$(TR=$(tree README.md "zzq trunk" src/zzq.c "/* zzq */" scripts/zzq-r.sh "cd /zzq/src") mk "$trunk" zzqm71)
+_rb=$(w rev-parse "$_rx^{tree}:scripts/zzq-r.sh")
+w replace "$_rx" "$_ry"
+rpush "a commit replaced locally by a clean twin (git replace)" \
+	"a file a pushed commit adds (blob $(printf '%.10s' "$_rb")) contains this machine's home identity" \
+	origin "$_rx:refs/heads/zzqreplaced"
+w replace -d "$_rx" > /dev/null
 
 # ---- Direct runs: a batch of refs, one expectation each. ------------------
 # case_ <want> <local ref> <local sha> <remote ref> <remote sha>; want is "ok"
@@ -490,6 +558,11 @@ sed -n '/^# ---- owner_is: the same/,/^# ---- end of owner_is/p' "$hook" > "$tmp
 sed -n '/^# ---- owner_is: the same/,/^# ---- end of owner_is/p' tests/check-no-local-identity.sh > "$tmp/owner.check"
 { [ -s "$tmp/owner.hook" ] && cmp -s "$tmp/owner.hook" "$tmp/owner.check"; } ||
 	note "owner_is differs between the hook and tests/check-no-local-identity.sh"
+# The two read the names the same way, by the same text.
+sed -n '/^# ---- real_names: the same/,/^# ---- end of real_names/p' "$hook" > "$tmp/names.hook"
+sed -n '/^# ---- real_names: the same/,/^# ---- end of real_names/p' tests/check-no-local-identity.sh > "$tmp/names.check"
+{ [ -s "$tmp/names.hook" ] && cmp -s "$tmp/names.hook" "$tmp/names.check"; } ||
+	note "real_names differs between the hook and tests/check-no-local-identity.sh"
 Hm="this machine's home identity"
 owner_cases() {
 	case_ ok refs/heads/zzqw1 "$(mk "$m1" "zzqm30 note for $login")" refs/heads/zzqw1 "$zero"
@@ -515,6 +588,12 @@ owner_cases
 shells="dash bash sh"
 run "the user name is the owner handle" HOME="/zzqhome/$login"
 shells=sh
+# Each user name is judged on its own: the test user name being the owner
+# handle does not take the real one out of the check.
+if [ "${#real_user}" -ge 3 ]; then
+	case_ "$M" refs/heads/zzqw8 "$(mk "$m1" "zzqm36 note for $real_user")" refs/heads/zzqw8 "$zero"
+	run "the owner handle skips only its own name: the real user name is still refused" HOME="/zzqhome/$login"
+fi
 # Skipped only when the last component of HOME is the user name: with HOME
 # unset, with another last component or ending in /, the user name is checked.
 for _h in unset /zzqhome/zzqx "/zzqhome/$login/"; do
@@ -635,11 +714,15 @@ closed "the file scan reports a match it cannot place" 'a match this hook cannot
 stub "echo \"check-no-local-identity: tracked files contain this machine's identity (values not shown); remove them:\"; exit 1"
 closed "the file scan reports no match it can place" 'a match this hook cannot place' "$tmp/alt/.githooks/pre-push"
 # A push that adds no blob and no path runs no file scan (the failing stub
-# would refuse it): a commit the remote has, under a new name, and a tooling
-# commit on the empty tree.
+# would refuse it): a commit the remote has, under a new name, a tooling
+# commit on the empty tree, and claim and gate-clear markers on main's tree
+# with main as parent (they change no path).
 stub 'echo zzq stub; exit 2'
 printf 'refs/heads/zzqpub2 %s refs/heads/zzqpub2 %s\nrefs/heads/zzqc %s refs/heads/claim/ZZQ9 %s\n' \
 	"$pub" "$zero" "$(mk - "claimed ZZQ9 by m-0123456789ab/agent/zzq")" "$zero" > "$tmp/in"
+printf 'refs/heads/zzqc %s refs/heads/claim/ZZQ8 %s\nrefs/heads/zzqc %s refs/heads/gate-clear/ZZQ8 %s\n' \
+	"$(marker "claim ZZQ8 by $tok/agent/$sess at $when (lease 6h) [nonce:$nonce]")" "$zero" \
+	"$(marker "gate-clear ZZQ8 by $tok/agent at $when")" "$zero" >> "$tmp/in"
 _rc=0
 (cd "$tmp/w" && sh "$tmp/alt/.githooks/pre-push" origin x) < "$tmp/in" > "$tmp/out" 2>&1 || _rc=$?
 { [ "$_rc" -eq 0 ] && [ ! -s "$tmp/out" ]; } || { note "a push that adds no file ran the file scan"; redact < "$tmp/out"; }
@@ -654,22 +737,35 @@ _rc=0
 	{ note "a temporary directory with a colon: not refused"; redact < "$tmp/out"; }
 leaks "a temporary directory with a colon"
 rmdir "$tmp/hooktmp/zzq:x"
+# The real names' tools missing or printing nothing (the test-only
+# YQ2_IDENTITY_TEST_TOOL puts a path below /dev/null, or /usr/bin/true, in
+# place of one): refused, one case each.
 printf 'refs/heads/zzqmain %s refs/heads/zzqmain %s\n' "$m2" "$m1" > "$tmp/in"
+export YQ2_IDENTITY_TEST_TOOL
+for YQ2_IDENTITY_TEST_TOOL in host-missing host-empty; do
+	closed "the host-name tool: $YQ2_IDENTITY_TEST_TOOL" "cannot read this machine's host name"
+done
+for YQ2_IDENTITY_TEST_TOOL in user-missing user-empty; do
+	closed "the user-name tool: $YQ2_IDENTITY_TEST_TOOL" "cannot read the local user name"
+done
+unset YQ2_IDENTITY_TEST_TOOL
+case_ ok refs/heads/zzqmain "$m2" refs/heads/zzqmain "$m1"
+run "an unknown YQ2_IDENTITY_TEST_TOOL value is ignored" YQ2_IDENTITY_TEST_TOOL=zzq-none
+# A `hostname` and a `whoami` on PATH that fail, or print a blank, are not
+# read at all (the round-1 hook refused here).
 shim hostname ''
-closed "host name unreadable" "cannot read this machine's host name"
-shim hostname ' '
-closed "host name empty" "cannot read this machine's host name"
-shim hostname Zzq-Synthetic-Box
 shim whoami ''
-closed "user name unreadable" "cannot read the local user name"
-shim whoami "$login"
+case_ ok refs/heads/zzqmain "$m2" refs/heads/zzqmain "$m1"
+run "a failing hostname and whoami on PATH are not read"
+shim hostname ' '
+shim whoami ' '
+case_ ok refs/heads/zzqmain "$m2" refs/heads/zzqmain "$m1"
+run "a hostname and whoami on PATH printing a blank are not read"
+shim hostname "$tok"
+shim whoami agent
 # Words shorter than three characters, and HOME=/, are not compared.
-shim hostname zz
-shim whoami zz
 case_ ok refs/heads/zzqs "$(mk "$m1" "zz zzq zz/")" refs/heads/zzqs "$zero"
-run "short words" HOME=/ YQ2_IDENTITY_TEST_EXTRA_WORD=
-shim hostname Zzq-Synthetic-Box
-shim whoami "$login"
+run "short words" HOME=/ YQ2_IDENTITY_TEST_EXTRA_WORD= YQ2_IDENTITY_TEST_HOST=zz YQ2_IDENTITY_TEST_USER=zz
 
 # The hook removes its temporary files, refused or not.
 [ -z "$(ls -A "$tmp/hooktmp")" ] || note "the hook left temporary files behind"
