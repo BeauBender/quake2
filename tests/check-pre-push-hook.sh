@@ -388,11 +388,11 @@ case_ "$M" refs/heads/claim/ZZQ6 "$bad" refs/heads/zzqc6 "$zero"
 case_ ok "(delete)" "$zero" "refs/heads/zzqt/$syn" "$m1"
 # tags: each level of a tag of a tag, a tag on a blob or a tree
 tbad=$(tag "$m1" commit zzqt1 "tagged on $syn")
-tok=$(tag "$m1" commit zzqt2 zzqclean)
+tagok=$(tag "$m1" commit zzqt2 zzqclean)
 case_ "$T $(printf '%.10s' "$tbad")" refs/tags/zzqt1 "$tbad" refs/tags/zzqt1 "$zero"
-case_ ok refs/tags/zzqt2 "$tok" refs/tags/zzqt2 "$zero"
+case_ ok refs/tags/zzqt2 "$tagok" refs/tags/zzqt2 "$zero"
 case_ "$T $(printf '%.10s' "$tbad")" refs/tags/zzqt3 "$(tag "$tbad" tag zzqt3 zzqouter)" refs/tags/zzqt3 "$zero"
-case_ ok refs/tags/zzqt4 "$(tag "$tok" tag zzqt4 zzqouter)" refs/tags/zzqt4 "$zero"
+case_ ok refs/tags/zzqt4 "$(tag "$tagok" tag zzqt4 zzqouter)" refs/tags/zzqt4 "$zero"
 case_ "$T" refs/tags/zzqt5 "$(tag "$m1" commit "zzq$syn" zzqclean)" refs/tags/zzqt5 "$zero"
 case_ "$T" refs/tags/zzqt6 "$(tag "$m1" commit zzqt6 "$login was here")" refs/tags/zzqt6 "$zero"
 tbad7=$(tag "$(mk "$m1" "zzqm18 $syn")" commit zzqt7 zzqclean)
@@ -646,7 +646,7 @@ w config --unset-all remote.origin.url
 w config remote.origin.url "$tmp/remote.git"
 
 # Tag chains: TAG_DEPTH (10) levels are followed, one more is refused.
-t=$tok
+t=$tagok
 i=1
 while [ "$i" -le 10 ]; do
 	t=$(tag "$t" tag "zzqd$i" zzqclean)
