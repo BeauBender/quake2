@@ -96,6 +96,52 @@ scale(int side, int factor, int *alpha)
 	return h;
 }
 
+/*
+ * A flat 72 x 72 tile of one colour scaled at the run's factor: 1 when
+ * the mean of each colour channel out is within 12 levels of the colour
+ * in (a scaler that keeps colours keeps a flat tile flat), the means in
+ * mean; 0 when the scale fails or a channel moves.
+ */
+static int
+flat(const unsigned char rgb[3], int factor, int mean[3])
+{
+	const int s = 72, o = s * factor;
+	unsigned char *in = malloc((size_t)s * s * 4);
+	unsigned char *out = malloc((size_t)o * o * 4);
+	long long sum[3] = { 0, 0, 0 };
+	size_t i;
+	int c, ok;
+
+	for (i = 0; i < (size_t)s * s; i++)
+	{
+		in[i * 4] = rgb[0];
+		in[i * 4 + 1] = rgb[1];
+		in[i * 4 + 2] = rgb[2];
+		in[i * 4 + 3] = 255;
+	}
+
+	ok = CL_UpscaleVTScale(NULL, in, s, s, out, o, o);
+
+	for (i = 0; ok && (i < (size_t)o * o); i++)
+	{
+		for (c = 0; c < 3; c++)
+		{
+			sum[c] += out[i * 4 + c];
+		}
+	}
+
+	for (c = 0; c < 3; c++)
+	{
+		mean[c] = ok ? (int)(sum[c] / ((long long)o * o)) : -1;
+		ok = ok && (abs(mean[c] - rgb[c]) <= 12);
+	}
+
+	free(in);
+	free(out);
+
+	return ok;
+}
+
 int
 main(void)
 {
@@ -138,6 +184,10 @@ main(void)
 		else
 		{
 			static const int sides[] = { 24, 72 };
+			static const unsigned char levels[][3] = {
+				{ 0, 0, 0 }, { 32, 32, 32 }, { 128, 128, 128 }, { 200, 200, 200 },
+				{ 255, 255, 255 }, { 200, 64, 32 }, { 16, 128, 240 }
+			};
 			int factor, k, a1, a2;
 
 			for (factor = 2; factor <= 4; factor += 2)
@@ -168,6 +218,19 @@ main(void)
 						sides[k], sides[k], factor, h1);
 					check(h1 && (h1 == h2), what);
 					check(a1 && a2, "alpha 255 everywhere");
+				}
+
+				/* greys from black to white, and colours: each channel survives */
+				for (k = 0; k < (int)(sizeof(levels) / sizeof(levels[0])); k++)
+				{
+					int m[3];
+					char what[128];
+					const int ok = flat(levels[k], factor, m);
+
+					snprintf(what, sizeof(what), "a flat (%d, %d, %d) tile at %dx comes "
+						"back near itself: (%d, %d, %d)", levels[k][0], levels[k][1],
+						levels[k][2], factor, m[0], m[1], m[2]);
+					check(ok, what);
 				}
 
 				check(!CL_UpscaleVTScale(NULL, in, 8, 8, out, 8 * factor + 1, 8 * factor),
