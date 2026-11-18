@@ -49,10 +49,11 @@ bad() { echo "check-tvos: $*"; fail=1; }
 # ---- (d) the iPhone and iPad only sites ----------------------------------
 
 # <file>|<the definition the site is in>|<a line inside the guarded block>
-sites='src/client/input/touch.c|^Touch_Supported\(void\)|return 1;
-src/client/input/sdl3.c|^IN_Update\(void\)|The on-screen keyboard only while text is typed
-src/client/input/sdl3.c|^IN_Init\(void\)|in_touch = Cvar_Get\("in_touch", "1"
-src/client/vid/glimp_sdl3.c|^CreateSDLWindow\(|SDL_HINT_ORIENTATIONS'
+# (awk EREs; awk -v takes a backslash as an escape, so brackets, not \( )
+sites='src/client/input/touch.c|^Touch_Supported[(]void[)]|return 1;
+src/client/input/sdl3.c|^IN_Update[(]void[)]|The on-screen keyboard only while text is typed
+src/client/input/sdl3.c|^IN_Init[(]void[)]|in_touch = Cvar_Get[(]"in_touch", "1"
+src/client/vid/glimp_sdl3.c|^CreateSDLWindow[(]|SDL_HINT_ORIENTATIONS'
 
 # guard_of <file> <start> <anchor>: "<line>:<text>" of the innermost #if
 # around the first <anchor> after <start>; "else:" when the anchor is in its
@@ -76,7 +77,8 @@ assert_guard()
 	'') echo "$1: no #if around \"$3\" after $2"; return 1 ;;
 	else:) echo "$1: \"$3\" after $2 is in an #else branch"; return 1 ;;
 	esac
-	if ! printf '%s\n' "${g#*:}" | grep -E -q '(^|[^!_[:alnum:]])TARGET_OS_IOS([^_[:alnum:]]|$)'; then
+	# a comment on the #if line does not count
+	if ! printf '%s\n' "${g#*:}" | sed -e 's,/\*.*\*/,,g' -e 's,//.*,,' | grep -E -q '(^|[^!_[:alnum:]])TARGET_OS_IOS([^_[:alnum:]]|$)'; then
 		echo "$1:${g%%:*}: the guard of \"$3\" does not name TARGET_OS_IOS: ${g#*:}"
 		return 1
 	fi
