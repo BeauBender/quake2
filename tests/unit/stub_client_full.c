@@ -127,7 +127,9 @@ CL_AllocEntity(int entnum)
 }
 
 int CL_MaxClients(void) { return 1; }
-int CL_PinsCapture(void) { return 0; }
+/* the pin capture interval, for the clock's test (test_cl_entities.c); 0 otherwise */
+int stub_pins_capture;
+int CL_PinsCapture(void) { return stub_pins_capture; }
 /* a pin run, for the input gate's test (test_ingate.c); false otherwise */
 int stub_pins_run;
 qboolean CL_PinsRun(void) { return stub_pins_run ? true : false; }

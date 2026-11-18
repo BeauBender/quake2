@@ -48,6 +48,9 @@ extern stub_keys_t stub_keys;
 /* What the CL_PinsRun stub returns: false but in the input gate's test. */
 extern int stub_pins_run;
 
+/* What the CL_PinsCapture stub returns: 0 but in the clock's test. */
+extern int stub_pins_capture;
+
 /* Creates the cvar pointers cl_*.c read without checking for NULL. */
 void stub_client_cvars(void);
 
