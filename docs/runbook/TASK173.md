@@ -126,3 +126,44 @@ each under the lock: `make test` `yq2test: 327 tests, 0 failed`; `scripts/pins.s
 `tests/check-ref-metal.sh` ok (13001 checks, 0 failed; G-buffer 177 checks, 0 failed);
 `tests/check-cvar-docs.sh`, `tests/check-doc-links.sh`, `tests/check-no-local-identity.sh` and
 `tests/check-runbook-index.sh` ok. The full gate (`scripts/test.sh`) is the parent's.
+
+## Review round 1
+
+No Blocker; the default path was confirmed unchanged by trace. Fixed, in the tool only (no engine
+source changes this round but the unit test's order):
+
+- *The output path* (security I1). `rtvar.py` checked `--out` with `mfx.py check-out` in a
+  child process and then used its output stripped, so `--out "<dir>/out "` (absent, accepted)
+  became `<dir>/out`, which could be a link, and `--replace` removed a folder behind it. Now the
+  check runs in-process (`mfx.check_out_path`) and its return value is the path used; an `--out`
+  with whitespace or a control character is refused first (the pin directory is read back from
+  pins.sh's output as one word); the argument parser takes no abbreviation, so `--ou` cannot
+  stand in for the `--out` the shell wrapper checked (N4); `store` is a reserved view name, so
+  `--replace` never removes the pin store (N3); and every check runs before the first removal.
+- *The index* (correctness I1): the selftest parses it: `off` is exactly 0, `a` and `b` are
+  above 0 on every view, and an auto view's capture line names the capture where its preset differs
+  most from `off`, worked out from the frames' pixels, not from framediff.
+- *A failing later group* (correctness I2): a stub that fails the second group's records; the
+  first group's views keep `sheet.png`, `clip.png` and `full/`, the failing view's folder is
+  absent, and the index of the views written before the failure is written, with a `stopped:`
+  line (N2).
+- *Notes*: each record runs in a process group of its own (`mfx.sh_group`, stopped whole on a
+  timeout or a signal). Its timeout still counts from the start of pins.sh, the host-lock wait
+  included: pins.sh takes the lock itself, and the helper has one timeout for the whole command, so
+  this side cannot start it when the lock is taken. The scratch scenario is created with
+  `O_EXCL | O_NOFOLLOW`. The selftest's runs get no `GIT_*` variable and no user or system git
+  config (`mfx.git_env`), and its failure lines name the scratch folder `<tmp>`; the tool's own
+  messages name paths relative to `<out>`.
+
+*Mutants*, each run against the selftest in a scratch copy of the scripts, each refused:
+
+| Mutant (the line it changes in `rtvar.py`) | Refused by |
+| --- | --- |
+| no whitespace refusal in `out_path` | the trailing-space `--out` next to a link (`<out> ` is created) |
+| `out_path` as at `1cb414e7`: no whitespace refusal, the checked path stripped | the same case (the folder behind the link is removed) |
+| the `run` parser without `allow_abbrev=False` | the abbreviated `--ou` (the folder it names loses `v1`) |
+| `store` not reserved in `parse` | the parser refusal and the `view store` run (the pin store is removed) |
+| `d = 0.0` for the index's diff | the index check (`a` and `b` at 0) |
+| `min` for `max` in the auto capture | the auto view's frame and the index's capture line |
+| `if False:` for the group change (`if k != key:`) | the failing later group (no view is kept) |
+| no partial index (`if False:` for `if done:`) | the failing later group (no `index-v1-v2.txt`) |
