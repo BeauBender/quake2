@@ -60,9 +60,13 @@ original clients (Vanilla Quake II) commands are still in place.
   The backend is `scale2x` (the default: pixel-art edges, no new
   colour) or, on macOS, `metalfx` (MetalFX's spatial scaler) or `vt`
   (VideoToolbox's machine-learning super-resolution scaler, macOS 26 or
-  later). `vt` needs a model that macOS downloads once from Apple: the
-  first `vt` run says so in one line before the fetch starts, and
-  nothing else fetches it. Where `metalfx` or `vt` is unsupported (on
+  later). `vt` needs a model that macOS downloads once from Apple. Only
+  the menu item fetches it (Options, "upscale textures", "VideoToolbox
+  ML"; a key press, which a server's stuffed commands cannot make): a
+  first press says so in one line and starts the download, which runs
+  while the game stays responsive, the item greyed until it is done.
+  The command with the model missing refuses in one line, says to fetch
+  it from the menu, and writes nothing (decision 0013). Where `metalfx` or `vt` is unsupported (on
   iOS, an older macOS, or a Mac VideoToolbox does not support) the
   command says why in one line and uses `scale2x`. Any other backend
   name is refused with the usage line.
