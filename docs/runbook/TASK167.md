@@ -31,7 +31,15 @@ MetalFX spatial). Owner's approval: the card's comment of 2026-11-17, recorded a
   thread never waits, so window events and quit keep working. Its state lives on a serial
   dispatch queue, with a generation per fetch; the 900 s bound is applied when the menu polls
   (`CL_UpscaleVTFetchState`), and a completion of a fetch given up on is ignored.
-  `tests/check-upscale-vt.sh` fails if any file but `menu.c` calls the fetch.
+  `tests/check-upscale-vt.sh`'s fetch guard fails if the bare name `CL_UpscaleVTFetchStart`
+  appears under `src` outside `menu.c` and three exact lines (the header's declaration, the
+  definition in `cl_upscale_vt.m`, the stub in `cl_upscale_cmd.c`), if `downloadConfigurationModel`
+  is not under `src` exactly once inside that definition's body, or if grep, awk or wc fails. It
+  runs itself on eight mutants first and fails unless each is refused: a function pointer, a macro
+  alias, a call at column 0, a call split across lines, a second definition line, a raw download
+  call in another file, the download moved out of the fetch, and an unreadable file (a grep error,
+  which the round 1 guard read as "no call"). It matches names, so it does not prove what `menu.c`
+  does with the name, nor anything about code outside `src`.
 - **The menu:** Options, "upscale textures" gains "VideoToolbox ML", never hidden. Each frame
   it asks `CL_UpscaleVTAvailable` at the selected factor (the class, `isSupported` and the
   class's `supportedScaleFactors`; no object is made) and the fetch's state, and
@@ -63,25 +71,44 @@ implementation: `yq2test: 58 tests, 0 failed`.
   missing or downloading model (fetch), an unknown status, a factor that is not 2 or 4, no facts,
   a short buffer; **the forced fallback**: the facts with `isSupported` NO, through
   `CL_UpscaleChooseBackend`, give `upscale_textures: vt is unsupported here (VideoToolbox's
-  super-resolution scaler is not supported on this device); using scale2x`; the summary names vt.
+  super-resolution scaler is not supported on this device); using scale2x`; the summary names vt;
+  the vt item's line in each state (greyed with a reason, idle, downloading, downloaded, failed
+  with and without a reason). **`tests/unit/test_upscale_half.c`:** the half-float conversion
+  (`src/client/header/upscale_half.h`, shared with the backend) without the model: all 256 bytes
+  come back exactly and in order, the bit patterns of 0, 51, 128 and 255, and what a decode does
+  with a negative, above 1, infinity and NaN.
 - **Host (`tests/metal/upscale_vt_test.m`, `tests/check-upscale-vt.sh`, macOS, ASAN and UBSAN):**
   nothing scaled outside a run; the test switch `UPSCALE_VT_TEST` makes `isSupported` read NO, and
   the menu's check then gives the reason and no download starts; with the model on the machine
   (never fetched by the test), a 24 x 24 and a 72 x 72 tile at each factor VideoToolbox has, the
   same bytes twice with another size between, alpha 255; **flat tiles keep their colour** (black,
-  grey 32, 128 and 200, white, and two colours: each channel's mean out within 12 levels of the
+  grey 32, 128 and 200, white, and two colours: each channel's mean out within 4 levels of the
   colour in); a wrong output size refused; nothing scaled after the run; a factor it lacks is
   greyed, and after the runs the menu's check at each factor is the class's list (nothing
   remembered); the fetch's state is idle at the end. `UPSCALE_VT_REQUIRE=1` makes a skipped case
-  fail. The script also fails if a file other than `menu.c` calls the model's fetch.
+  fail. The script also runs the fetch guard and its eight mutants (above).
 - **Generator (`tests/check-upscale-report.sh`, offline):** a fake engine, no data, no network;
   also a link planted in an existing output (the engine copy, a log) refused with its target
-  untouched, `--names` entries with `..` or a leading separator refused, and a vt run without
+  untouched, a link at the open itself refused by `O_NOFOLLOW` (the generator's `open_out` and
+  `copy_out` called with no check before them), `--names` entries with `..` or a leading separator refused, and a vt run without
   its model stopping the report with a line that says so.
 
 ## Evidence on this host
 
 M6, macOS 27.2.1, 2026-11-17. Output is in a local artifacts folder, never committed.
+
+**What was measured:** the colour, border, ASAN and timed runs below ("round 1's runs") built
+commit `87434ba2`, an ancestor of the head; `src`, `scripts` and the Makefile are the same from
+there through `bf8e3527`, where they were written up. After it, `git diff --stat 87434ba2 HEAD --
+src scripts Makefile` shows two kinds of change. From main: FIX19's image size checks
+(`src/client/refresh/files/{image.c,imgsize.h,pcx.c,wal.c}`, `src/client/refresh/soft/sw_image.c`),
+FIX106's host lock (`scripts/bench/core/lock.sh`) and a Makefile line for FIX19's unit test. From
+review round 2: the fetch's check and claim in one block (fetch only, no run reaches it), the
+half-float conversion moved unchanged into `src/client/header/upscale_half.h`, the vt item's idle
+line in `cl_upscale.c`, the generator's `O_NOFOLLOW` opens, and a Makefile line for the new unit
+test. The real-data runs were not repeated: the copy path's code is the same text in a header.
+The colour check that reaches it, the host test's flat tiles (now within 4 levels), was re-run at
+the head (see "Review round 2").
 
 - **Support checks:** OS has the class 1; `isSupported` 1; `supportedScaleFactors` has 4x only;
   a configuration at 4x is made; model status 2 (ready) when the runs below started. At the first

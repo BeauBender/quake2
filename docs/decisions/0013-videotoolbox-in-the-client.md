@@ -42,8 +42,16 @@ owner's call.
    model" meanwhile, and pressable again when it is done, failed, or
    outlived its 900 s bound (a failure is shown, never remembered as
    unsupported). The support checks, the menu's per-frame check and the
-   gate's host test never fetch it; `tests/check-upscale-vt.sh` fails if
-   a file other than the menu calls the fetch. The report generator
+   gate's host test never fetch it. `tests/check-upscale-vt.sh` fails if
+   the name `CL_UpscaleVTFetchStart` appears anywhere under `src` but
+   `menu.c` and its three exact lines (the declaration, the definition
+   and the stub), if `downloadConfigurationModel` appears under `src`
+   other than once inside that definition's body, or if a tool it runs
+   fails; it shows each refusal on a mutant it builds (a pointer, a
+   macro alias, a call at column 0 or split across lines, a raw or
+   moved download, an unreadable file). It reads names, not meaning: a
+   call reached through `menu.c` itself, or through code outside `src`,
+   is not something it proves absent. The report generator
    never fetches it either: without the model its `vt` run stops with a
    line that says so.
 4. The approval covered running `vt` on the M6 for testing, which made
