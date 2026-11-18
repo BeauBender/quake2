@@ -32,7 +32,9 @@ for check in "$memcheck" "$idcheck"; do
 	out=$("$check" 2>&1) || { printf '%s\n' "$out"; fail=1; }
 done
 
-staged=$(git diff --cached --name-only --diff-filter=ACMR)
+# A change of type alone (T: a symbolic link replaced by a file) adds content
+# too, so it is scanned like an addition.
+staged=$(git diff --cached --name-only --diff-filter=ACMRT)
 [ -n "$staged" ] || exit "$fail"
 
 bad=$(echo "$staged" | grep -E '\.(pak|pk3|dll|dylib|so|o)$|^(release|debug|build)/' || true)
