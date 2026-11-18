@@ -61,7 +61,7 @@ original clients (Vanilla Quake II) commands are still in place.
   colour) or, on macOS, `metalfx` (MetalFX's spatial scaler) or `vt`
   (VideoToolbox's machine-learning super-resolution scaler, macOS 26 or
   later). `vt` needs a model that macOS downloads once from Apple: the
-  first `vt` run says so in one line before the download starts, and
+  first `vt` run says so in one line before the fetch starts, and
   nothing else fetches it. Where `metalfx` or `vt` is unsupported (on
   iOS, an older macOS, or a Mac VideoToolbox does not support) the
   command says why in one line and uses `scale2x`. Any other backend

@@ -60,4 +60,36 @@ implementation: `yq2test: 58 tests, 0 failed`.
 
 ## Evidence on this host
 
-Pending: the M6 runs (ASAN at 2x and 4x, the timed report at 4x) have not run yet; see the lane report.
+M6, macOS 27.2.1, 2026-11-17. Output is in `~/Developer/no-git/quake2-artifacts/TASK167/` (local only).
+
+- **Support checks:** OS has the class 1; `isSupported` 1; `supportedScaleFactors` has 4x only;
+  a configuration at 4x is made; model status 2 (ready) when the runs below started. At the first
+  run the status was 0 (download required, measured by the parent); the model was on the machine
+  by the time of the logged runs, so no run of this lane logged the fetch line, its size or its
+  time. The runs that would show it are the first `vt` run on a host without the model.
+- **2x:** `upscale_textures 2 vt` falls back, as decided: "vt is unsupported here (VideoToolbox's
+  super-resolution scaler has no 2x); using scale2x", 2432 written, 0 failed. A 4x-then-halve path
+  is a possible later option; it is not built.
+- **What the first real run showed, and the fix:** at 4x every tile failed (2432 failed, 0 written),
+  because the scaler lists one pixel format only, `64RGBAHalf` ('RGhA'), and the code took only
+  32BGRA or 32RGBA. The session and the buffers now take half-float RGBA when neither 8-bit
+  format is listed (the bytes are converted to and from half floats in the copies). Nothing else
+  needed a change: the smallest tile (24 x 24) through 288 x 195 were accepted, and the 4-texel
+  border was enough.
+- **ASAN (debug build, 4x, one run):** 2432 written, 0 skipped, 2 refused names, 0 failed, 184337862
+  bytes, 129 s; no AddressSanitizer or runtime-error lines. At 2x (the fallback to scale2x):
+  2432 written, 0 failed, 3 s.
+- **Timed report (release, 4x, 3 runs per backend in one hold, alternated; load average 2.85 at
+  the start, 2.09 at the end; start-up alone 0.15 to 0.39 s, median 0.16):**
+
+  | backend | time range | median | written | bytes |
+  | --- | --- | --- | --- | --- |
+  | scale2x | 3.88 to 4.22 s | 4.21 s | 2432 | 99604894 |
+  | metalfx | 10.31 to 10.70 s | 10.69 s | 2432 | 547438118 |
+  | vt | 88.86 to 91.11 s | 89.01 s | 2432 | 184337862 |
+
+  The three outputs have the same names. The report is
+  `~/Developer/no-git/quake2-artifacts/TASK167/report-4x/upscale-report-4x.html` (8.1 MB, local
+  only: it holds images of the player's data).
+- **Host test:** `tests/check-upscale-vt.sh` with `UPSCALE_VT_REQUIRE=1`: 13 passed, 0 failed (the
+  2x case reports "skipped: VideoToolbox has no 2x here").
