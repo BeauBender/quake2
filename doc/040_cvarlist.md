@@ -902,8 +902,24 @@ The `r_rt_*` cvars belong to the Metal renderer's ray tracing, which is
 being built: `r_rt_shadows` is its first effect, `r_rt_ao` its second, `r_rt_water` its third and `r_rt_sun` its fourth; with `r_rt_stats` set, the renderer
 builds acceleration structures for the world, the doors and platforms
 and every model the frame lists (not only those in view, since a model
-out of view can still cast into it), which nothing reads. On a GPU without ray
-tracing they do nothing (the renderer says so once). The development
+out of view can still cast into it), which nothing reads. At start-up and
+at each `vid_restart` the renderer decides, from what the GPU reports,
+which ray-tracing path it takes, and says so in one line: the compute path
+(`ref_metal: ray tracing: compute path (apple7, supportsRaytracing)`) from
+the apple6 family on with `supportsRaytracing`; from apple9 on with
+`supportsRaytracingFromRender` as well the render-stage path is available
+but not yet built, so the compute path runs there too (`ref_metal: ray
+tracing: compute path (apple9, supportsRaytracing; render-stage available,
+not yet built)`); or none, with the reason (`ref_metal: ray tracing: none (apple5: no supportsRaytracing); the
+ray-tracing effects read 0` on the build VM). With none, the effect
+switches `r_rt_ao`, `r_rt_shadows`, `r_rt_sun` and `r_rt_water` read `0`, even when the
+configuration or the command line set them, and one set at the console
+reads `0` again before the next frame is drawn, with one line naming it
+(`ref_metal: r_rt_ao reads 0: no ray tracing on this device (no
+supportsRaytracing)`), so the configuration saves `0`; the picture is the
+one with every effect off. The other `r_rt_*` cvars are settings and keep
+their values; with no ray tracing they do nothing (`r_rt_stats` says so
+once). The development
 switches `r_rt_gbuffer` and `r_rt_motion` and the settings beside them
 choose how a view is drawn, on any Metal GPU, and leave the picture as it
 is.
