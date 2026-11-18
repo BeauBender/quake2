@@ -466,3 +466,93 @@ VidRules_AORaysIndex(float value)
 
 	return (value < 1.5f) ? 0 : 1;
 }
+
+/*
+ * The ray-tracing screen's controls (TASK194). The defaults are ref_metal's
+ * (the scenes' Cvar_Get); the sliders cover the ranges doc/040_cvarlist.md
+ * gives, r_rt_ao_range only its useful part (the cvar takes 1 to 8192).
+ * r_rt_ao_scale takes three sizes (full, 1/2, 1/3): the slider's 0.25 is
+ * read as 1/3 and its 0.75 as full.
+ */
+#define RT_SWITCH(label, cvar) { label, cvar, "0", CVAR_ARCHIVE, -1, 0, 0, 0, NULL }
+#define RT_SLIDER(label, cvar, def, effect, min, max, step, fmt) \
+	{ label, cvar, def, CVAR_ARCHIVE, effect, min, max, step, fmt }
+
+enum { RT_SHADOWS, RT_SUN, RT_AO, RT_WATER, RT_GUNSHADOW };
+
+static const vidrt_control_t rt_controls[] = {
+	RT_SWITCH("shadows", "r_rt_shadows"),
+	RT_SWITCH("sun", "r_rt_sun"),
+	RT_SWITCH("ambient occlusion", "r_rt_ao"),
+	RT_SWITCH("water reflections", "r_rt_water"),
+	RT_SWITCH("gun shadow", "r_rt_gunshadow"),
+	RT_SLIDER("sun floor", "r_rt_sunfloor", "0.5", RT_SUN, 0.0f, 1.0f, 0.05f, "%.2f"),
+	RT_SLIDER("sun scale", "r_rt_sunscale", "0.35", RT_SUN, 0.0f, 4.0f, 0.05f, "%.2f"),
+	RT_SLIDER("AO range", "r_rt_ao_range", "128", RT_AO, 16.0f, 1024.0f, 16.0f, "%.0f"),
+	RT_SLIDER("AO minimum", "r_rt_ao_min", "0.4", RT_AO, 0.0f, 1.0f, 0.05f, "%.2f"),
+	RT_SLIDER("AO scale", "r_rt_ao_scale", "0.5", RT_AO, 0.25f, 1.0f, 0.25f, "%.2f"),
+	RT_SLIDER("water reflect", "r_rt_water_reflect", "0.5", RT_WATER, 0.0f, 1.0f, 0.05f, "%.2f"),
+	RT_SLIDER("water ripple", "r_rt_water_normal", "0.08", RT_WATER, 0.0f, 1.0f, 0.02f, "%.2f"),
+};
+
+int
+VidRules_RTNum(void)
+{
+	return ARRSIZE(rt_controls);
+}
+
+const vidrt_control_t *
+VidRules_RTControl(int i)
+{
+	if (i < 0 || i >= ARRSIZE(rt_controls))
+	{
+		return NULL;
+	}
+	return &rt_controls[i];
+}
+
+vidrule_t
+VidRules_RTEntry(const char *renderer)
+{
+	if (VidRules_Renderer(renderer) != VIDREF_METAL)
+	{
+		return (vidrule_t){ 0, "needs the Metal renderer" };
+	}
+	return (vidrule_t){ 1, "shadows, sun, AO, water; applies live" };
+}
+
+vidrule_t
+VidRules_RTItem(int i, const char *renderer, int available, int effect_on)
+{
+	/* the switches' labels, for "turn on <effect> first" */
+	static const char *const turn_on[] = {
+		"turn on shadows first",
+		"turn on sun first",
+		"turn on ambient occlusion first",
+		"turn on water reflections first",
+		"turn on gun shadow first"
+	};
+	const vidrt_control_t *c = VidRules_RTControl(i);
+
+	if (!c && i != -1)
+	{
+		return (vidrule_t){ 0, "unknown item" };
+	}
+	if (VidRules_Renderer(renderer) != VIDREF_METAL)
+	{
+		return (vidrule_t){ 0, "needs the Metal renderer" };
+	}
+	if (!available)
+	{
+		return (vidrule_t){ 0, "ray tracing is not available on this device" };
+	}
+	if (!c)
+	{
+		return (vidrule_t){ 1, "every setting here back to its default" };
+	}
+	if (c->effect >= 0 && !effect_on)
+	{
+		return (vidrule_t){ 0, (c->effect < ARRSIZE(turn_on)) ? turn_on[c->effect] : "turn on its effect first" };
+	}
+	return (vidrule_t){ 1, "applies from the next frame" };
+}
