@@ -1166,12 +1166,15 @@ EOF
 	start sh "$R/bench.sh" lock run W -- echo w-ran > "${E:?}/w.out" 2>&1
 	_w=$BG
 	wait_said 10 "${E:?}/w.out" || bad "re-entry: the waiter never waited"
-	[ -n "$(ticket_of "$_w")" ] || bad "re-entry: the waiter showed no ticket"
+	# FIX128: W's ticket is read here, while H holds: once the nested call
+	# ends, H releases, W takes the lock and its ticket goes.
+	_wt=$(ticket_of "$_w") || _wt=
+	[ -n "$_wt" ] || bad "re-entry: the waiter showed no ticket"
 	: > "${E:?}/go"
 	wait_file 10 "${E:?}/inner.st" || bad "re-entry: the nested call never finished"
 	[ "$(cat "${E:?}/inner.st" 2> /dev/null)" = 0 ] && grep -q '^inner-ran$' "${E:?}/inner.out" ||
 		bad "re-entry: a nested call under the holder's token, behind a waiter, did not pass through: $(cat "${E:?}/inner.out")"
-	[ "$(cat "${E:?}/inner.q" 2> /dev/null)" = "$(ticket_of "$_w")" ] || bad "re-entry: the nested call took a ticket: $(tr '\n' ' ' < "${E:?}/inner.q")"
+	[ "$(cat "${E:?}/inner.q" 2> /dev/null)" = "$_wt" ] || bad "re-entry: the nested call took a ticket: $(tr '\n' ' ' < "${E:?}/inner.q")"
 	! grep -q 'waiting for the lock' "${E:?}/inner.out" || bad "re-entry: the nested call waited"
 	finish re-entry "$_h" 0
 	finish re-entry "$_w" 0
