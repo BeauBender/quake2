@@ -211,9 +211,9 @@ also missed fine-grained GitHub tokens. So, superseding the section
   beside the memory check, whatever paths are staged; it reads the index
   being committed. The other invariants keep their path filter, so a commit
   under `scripts/` runs these two checks and no other. Measured at this
-  repository's size, a commit touching only `scripts/` takes
-  4.2 to 4.8 s in the hook against 1.5 to 1.6 s before (three runs each);
-  the difference is the check's own self-test and scan.
+  repository's size, a commit touching only `scripts/` takes 4.2 to 4.8 s
+  in the hook against 1.5 to 1.6 s before (three runs each); the difference
+  is the check's own self-test and scan.
 - The secret pattern gains `github_pat_` followed by 22 or more of
   `[A-Za-z0-9_]`. The staged diff is read once into a file, as text and
   without colour, external diff or textconv, so a git error, a committed
@@ -233,14 +233,16 @@ also missed fine-grained GitHub tokens. So, superseding the section
   binary files (a NUL byte) not scanned. The hook hands the blobs to the
   check under placeholder names made of punctuation (no name can hold a
   value) in a temporary index, and the paths as the text of one more blob
-  per ref in a temporary object directory that has the repository's objects
-  as its alternate; nothing is written to the repository. One run of the
-  check covers the whole push, and a push that adds no blob and no path runs
-  none. A missing check, a check that fails or ends without its verdict, a
-  match the hook cannot place, and an object git cannot list or read refuse
-  the push; the commit cap is unchanged. Measured, a push of
-  50 commits adding 200 files to a scratch bare remote takes 3.3 to 3.8 s in
-  the hook against 0.8 to 0.9 s before (four runs each).
+  per ref in a temporary object directory given to git as an alternate of
+  the repository's objects; nothing is written to the repository. One run
+  of the check covers the whole push, and a push that adds no blob and no
+  path runs none. A missing check, a check that fails or ends without its
+  verdict, a match the hook cannot place, an object git cannot list or read
+  (a corrupt one included), and a temporary path that git's colon-separated
+  list of alternates cannot carry refuse the push; the commit cap is
+  unchanged. Measured, a push of 50 commits adding 200 files to a scratch
+  bare remote takes 3.3 to 3.8 s in the hook against 0.8 to 0.9 s before
+  (four runs each).
 - The `refs/heads/claim/*` and `refs/heads/gate-clear/*` exemption is
   removed: the tooling now offers the pseudonymous identity this record
   waited for. The identity shim writes those commits as root commits on the
@@ -253,11 +255,14 @@ also missed fine-grained GitHub tokens. So, superseding the section
   published for a later push to skip.
 - Known limits, unchanged in kind: a binary file is not scanned (the gate
   check's rule); `YQ2_IDENTITY_TEST_EXTRA_WORD` is not looked for in files,
-  since the gate check has no test word; the hooks run the checks in the
-  working tree, so a working-tree change to a check or a hook changes what
-  runs, and `tests/check-pre-commit-hook.sh` and
-  `tests/check-pre-push-hook.sh` in the gate refuse a hook that no longer
-  refuses.
+  since the gate check has no test word; the gate check takes an index blob
+  it cannot read as clean (`git grep` reports the error and exits 1), so
+  the push hook hands it only blobs git has listed and read, and the commit
+  hook's own read of the staged diff refuses a staged blob git cannot read;
+  the hooks run the checks in the working tree, so a working-tree change to
+  a check or a hook changes what runs, and `tests/check-pre-commit-hook.sh`
+  and `tests/check-pre-push-hook.sh` in the gate refuse a hook that no
+  longer refuses.
 - `tests/check-pre-commit-hook.sh` (in the gate) proves the commit hook with
   real `git commit` runs in throwaway repositories: the identity word under
   each formerly skipped path, which checks run for which paths, one
