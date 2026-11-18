@@ -93,6 +93,7 @@ struct rm_uniforms_lm
 	float scale;
 	uint slice;
 	uint filter;
+	float flat;   /* TASK173: r_rt_flatlight, the raster's light in place of the lightmap sample; 0 the sample */
 };
 
 struct rm_uniforms_mv
@@ -268,7 +269,8 @@ rm_fragment_gbuf(rm_varying_gb in [[stage_in]],
 
 	if (rm_gb_lm)
 	{
-		light = rm_gb_lm_sample(lm, lsmp, in.lmuv, l.slice, in.lmrect, l.filter);
+		light = (l.flat > 0.0f) ? float4(l.flat, l.flat, l.flat, 1.0f) :
+			rm_gb_lm_sample(lm, lsmp, in.lmuv, l.slice, in.lmrect, l.filter);
 	}
 	else if (rm_gb_kind == 2)
 	{

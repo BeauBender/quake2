@@ -72,11 +72,13 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK162](../runbook/TASK162.md): water reflections mark their pixels in the G-buffer raster
 - [FIX92](../runbook/FIX92.md): at r_rt_water_hits 0, a hidden door, plat or lift leaves no hole in the water reflection
 - [TASK161](../runbook/TASK161.md): ref_metal and the shim print presented frames a second; presented fps is the headline metric of the gl1-metal vsync0 bench cases
+- [TASK173](../runbook/TASK173.md): The harness captures ray-tracing variations side by side: presets, contact sheets, difference clips and the lightmaps-off preview
 - [TASK23](../runbook/TASK23.md): the tvOS simulator build boots to the main menu and loads base1; the guarded iOS APIs and the game-data options on tvOS
 - [TASK60](../runbook/TASK60.md): ref_metal decides its ray-tracing path at start-up; on the VM every effect cvar reads 0 and every pin is unchanged
 - [TASK172](../runbook/TASK172.md): the iPhone Duo: a live fold and unfold, any aspect, asymmetric safe areas
 - [FIX48](../runbook/FIX48.md): the pin harness keeps keyboard and mouse input out of a record, and checks the rendered-frame count
 - [FIX111](../runbook/FIX111.md): the gate-nap-uncut mutant is caught on every run, whatever the load
 - [FIX108](../runbook/FIX108.md): closing a card by any route leaves it with a terminal state label
+- [FIX96](../runbook/FIX96.md): at r_rt_water_hits 1 with r_metalfx 2 at 5120x2880, why main's own pin records differ run to run
 - [TASK175](../runbook/TASK175.md): the visionOS simulator build boots to the main menu and loads base1 in a window; the iOS-only code on visionOS and the notes for slice 2
 - [TASK180](../runbook/TASK180.md): ios-sim.sh prints whether the launcher (SpringBoard, PineBoard, SurfBoard) of its own device crashed during the run, read from the device's launchd; a crash or an unknown fails the run

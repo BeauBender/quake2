@@ -1022,6 +1022,22 @@ is.
   `bilateral` from `1` and `MetalFX` from `2`; a value that is not a
   finite number counts as `0`.
 
+* **r_rt_flatlight**: A preview and debug setting of the Metal renderer
+  (TASK173): with a level from `0` to `1`, every lightmap sample of the
+  world is replaced by that uniform grey, while every ray-traced term
+  (`r_rt_shadows`, `r_rt_sun`, `r_rt_ao`, `r_rt_water`) still runs on it,
+  so a frame shows what the traced terms add without the baked light
+  that masks them. It is a preview, not a presentation: there is no
+  traced bounce light, so the picture looks harsh (the lightmap-free
+  mode is TASK174's). It applies only where the world is drawn through
+  the G-buffer (an `r_rt_*` effect on, or `r_rt_gbuffer 1`); the sun adds
+  its light only where the level is below `r_rt_sunfloor`. `0` (the
+  default) draws the lightmap; a negative value or one that is not a
+  finite number counts as `0`, one above `1` as `1`. Cheat-protected:
+  reset to `0` in multiplayer. Applies from the next frame. It is a setting
+  of the raster path, not a ray-tracing effect, so a device without ray
+  tracing leaves it as set.
+
 * **r_rt_gbuffer**: A development switch of the Metal renderer. When
   set to anything but `0`, a view with the world is drawn through the
   G-buffer the ray-traced effects will build on: the world and the opaque
@@ -1144,10 +1160,9 @@ is.
   the sky in the picture, from the sky box and from nowhere, and the
   pass's GPU time; with `r_rt_water_hits 1` also each of its two parts
   (the list of its pixels, the trace) and the time from the first's start
-  to the last's end, the pass's time being their sum, and `-` for the
-  raster's, vertex stage's and fragment stage's figures, which are not
-  measured: the water's marks are a draw of the G-buffer raster, timed
-  with it. Nothing
+  to the last's end, the pass's time being their sum (the water's marks
+  are a draw of the G-buffer raster, timed with it, so there are no
+  raster figures). Nothing
   is drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next
