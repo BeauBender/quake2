@@ -11,6 +11,33 @@ original clients (Vanilla Quake II) commands are still in place.
   your inventory or you do not have enough ammo to use it.
   By quickly tapping the bound key, you can navigate the list faster.
 
+* **in_probe <what> [args]**: Only in a test build (compiled with
+  `-DYQ2_INPUT_PROBE`, TASK23); a release has no such command. Drives
+  input without hands, since a simulator cannot press a controller
+  button: `pad` attaches an SDL virtual gamepad, which the engine finds
+  as any controller plugged in after the start (it is refused in the
+  start's first frames, where a new device is taken as one that was
+  already there); `pads` lists the joysticks and which one the engine
+  uses; `button <name> <0|1>` presses or releases one of its
+  buttons and `axis <name> <value>` moves one of its axes (SDL's names:
+  `a`, `b`, `start`, `dpup`, `leftx`, `righttrigger`, ...); `key <name>
+  <0|1>` pushes the key event of a scancode (`Up`, `Down`, `Left`,
+  `Right`, `Return`, `Escape`: the Siri Remote as keys); `state` prints
+  where input goes, the player's origin, view angles and gun frame.
+
+* **menu_probe state|walk**: Only in a test build (compiled with
+  `-DYQ2_INPUT_PROBE`, TASK23); a release has no such command. `state`
+  prints the menu's depth, screen and the item under the cursor. `walk`
+  visits every screen reachable from the main menu with only up, down,
+  left, right, select and back, fails a screen whose selectable items are
+  not all reached with down and with up or that back does not leave,
+  fails a binding item (on the four key and controller binding screens)
+  where select does not enter bind mode or back does not leave it binding
+  nothing, and any other greyed item that select changes, prints how many
+  binding items passed, then `menu_probe: walk ok` or `walk FAIL` with the
+  counts, drops the
+  commands the selects queued and quits.
+
 * **gamemode <mode>**: Provides a convenient way to switch the game mode
   between `coop`, `dm` and `sp` without having to set three cvars the
   correct way. `?` prints the current mode.

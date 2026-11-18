@@ -105,6 +105,162 @@ bundle. `UIFileSharingEnabled` and `Documents` as a place a person puts paks do 
 The simulator does have a writable `Documents`, which is why this slice can copy the paks there with `simctl`; a
 device will not. This is the decision slice 2 must take with the owner.
 
+## Slice 2: controller and Siri Remote input, a focus-safe menu
+
+Not in this slice: the game-data path (the options above stay the owner's decision; how data is found is
+unchanged) and visionOS input (TASK175 slice 2).
+
+### The bindings
+
+No new binding was needed. `Key_DefaultPadBinds` (`src/client/cl_keyboard.c`, TASK150) already runs on every
+`TARGET_OS_IPHONE` target, tvOS included, with the table of `Touch_DefaultBind` (`src/client/input/touch.c`):
+on a fresh start (no `config.cfg`) each gamepad key that has no binding gets one, and nothing is replaced.
+
+| Input | Key | Action |
+|---|---|---|
+| left stick | (axes) | move (`joy_layout` 0) |
+| right stick | (axes) | turn and look |
+| right trigger | `TRIG_RIGHT` | `+attack` |
+| A / cross | `BTN_SOUTH` | `+moveup` (jump) |
+| B / circle | `BTN_EAST` | `+movedown` (crouch) |
+| Y / triangle, right shoulder | `BTN_NORTH`, `SHOULDR_RIGHT` | `weapnext` |
+| left shoulder | `SHOULDR_LEFT` | `weapprev` |
+| X / square | `BTN_WEST` | `invuse` |
+| view (back) | `BTN_BACK` | `inven` |
+| share (misc) | `BTN_MISC1` | `toggleconsole` |
+| menu (start) | `K_ESCAPE` (in `IN_Update`) | the game menu |
+
+In the menus the d-pad and the left stick are the arrows, A selects and B goes back (`Key_GetMenuKey`). macOS
+and a player with a config are untouched: the function is empty outside `TARGET_OS_IPHONE`, and a start with a
+`config.cfg` binds nothing (`Touch_WantBind`, unit-tested in `tests/unit/test_touch.c`).
+
+### The Siri Remote
+
+SDL 3 offers both (`third_party/SDL3/src/joystick/apple/SDL_mfijoystick.m`, `SDL_uikitview.m`). With
+`SDL_HINT_TV_REMOTE_AS_JOYSTICK` on, its default, the remote is a gamepad: the touch surface is two axes and its
+buttons are A (the click), X (Play/Pause) and the pause button (Menu), which SDL's generated mapping
+(`SDL_gamepad.c`, `a:b0,b:b1,x:b2`) makes south, east and west. Menu would then be the west face button, which
+the menu does not read and the game binds to `invuse`, and Play/Pause would be back. While the remote is open as
+a gamepad SDL also drops its key presses. So on tvOS `IN_Init` sets the hint to `0` (`TARGET_OS_TV` only, before
+any gamepad init): the remote is keys, the presses `scancodeFromPress` maps. A click on the up, down, left or right
+edge gives `K_UPARROW`/`K_DOWNARROW`/`K_LEFTARROW`/`K_RIGHTARROW`, the middle click gives `K_ENTER` (select),
+Menu gives `K_ESCAPE` (back in a menu, the game menu during play) and Play/Pause gives `K_PAUSE`. A controller is
+still a gamepad. `tests/check-tvos.sh` (e) pins the hint in the tvOS `sdl3.o` (the iOS simulator's object lacks
+it). Swipes on the touch surface do not move the menu: tvOS sends them as gestures, not presses.
+
+### Text on tvOS
+
+The address book (typing a server address) is greyed on tvOS with its reason, "typing an address needs a
+keyboard, which tvOS does not have" (`TARGET_OS_TV`, `src/client/menu/menu.c`); a server found on the local
+network is still joined from the list. The player name and the server's host name are fields with a default
+that need no typing. The console still opens from `BTN_MISC1` but takes no text on tvOS (slice 1's note).
+
+### Input without hands, and the menu walk
+
+`simctl` cannot press a button, so a test build (`CFLAGS=... -DYQ2_INPUT_PROBE`; a release has neither command)
+adds `in_probe` (`src/client/input/sdl3.c`: an SDL virtual gamepad, its buttons and axes, and pushed key events,
+the remote as keys) and `menu_probe` (`src/client/menu/menu.c`: `state`, and `walk`, which visits every screen
+reachable from the main menu with only the six inputs through `M_Keydown`, requires every selectable item to be
+reached with down and with up and back to leave every screen it opened, then drops the commands the selects
+queued and quits). The engine takes at most 50 command-line words, so the probe's script was a `probe.cfg` in a
+scratch `pak9.pak` next to links to the paks, never committed.
+
+Measured on commit `eba0025f`, Apple TV 4K (4th generation), tvOS 27.2 simulator, `ref_metal`:
+
+- The simulator has no game controller and no remote as a gamepad: "0 joysticks were found." at start.
+- The remote as keys works end to end: during play `in_probe key Escape` opened the main menu (key_dest 3,
+  depth 1); Down, Down, Up moved the cursor game, multiplayer, options, multiplayer; Return opened the
+  multiplayer screen (depth 2); Down moved in it; Escape went back to the main menu (depth 1); Down and Return
+  opened the options screen, whose frame the engine wrote (`q2_0000.tga`, kept in the local artifacts folder).
+- The virtual gamepad did not reach the engine: "in_probe: pad attached", but no "Trying joystick" line followed,
+  so its sticks did not move or turn the player and its start button did not open the menu. It was attached at
+  the first frame, while `first_init` still ignores SDL_EVENT_JOYSTICK_ADDED; attaching it after the map loads
+  is the next try. The binding of each pressed key was printed from the live table: `BTN_SOUTH` `+moveup`,
+  `BTN_EAST` `+movedown`, `BTN_NORTH` `weapnext`, start as `ESCAPE`. The table itself is unit-tested
+  (`tests/unit/test_touch.c`).
+- The walk does not pass yet: `menu_probe: walk FAIL: 6 screens, 291 key presses, 33 failures`. Main, game, load
+  game, credits and multiplayer pass; on the join server screen down and up never reach the items after the greyed
+  address book (refresh and the eight server slots) and back does not leave it, so the walk cannot rebuild its path
+  and the main menu's options, video and quit entries are not visited. Not found yet: whether the screen
+  swallows the keys only inside one command (the server search draws a timed popup and pings at open) or a
+  person sees it too.
+- The mutant (the credits screen's back removed, `M_Credits_Key`) is caught: `FAIL: '(unnamed)' is not left with
+  back` (the credits screen has no banner), 34 failures against 33.
+
+#### Round 2: the two causes
+
+The join server screen did not trap the cursor, and the greyed address book was not the cause: a greyed item is
+reached by up and down on purpose (`Menu_AdjustCursor` in `qmenu.c` skips only separators and `QMF_INACTIVE`), so
+that its reason shows in the status bar; select does nothing on it (`Menu_SelectItem`). The walk swallowed its own
+keys. It runs from the command line, before the first frame, when `cls.realtime` is still the value `CL_InitLocal`
+took, the clock's first millisecond: `Sys_Milliseconds` starts at 1. `JoinServer_MenuInit` calls
+`SearchLocalGames`, which starts a popup with a 2 second end (`Menu_StartPopup`). The walk closed it before each key
+with `Menu_ClosePopup`, `(pup)->endtime = cls.realtime - 1` (`qmenu.h`), which is 0 at that time, and
+`Menu_PopupActive` reads an end of 0 or less as a popup without an end. So every key then reached
+`Default_MenuKey` with the popup still open, and its first lines only closed it again and returned: down, up and
+back were all swallowed on that screen, and the cursor stayed on its first item, the address book. A person never
+hits it, on tvOS or macOS: keys arrive in frames, and each frame sets `cls.realtime` to the milliseconds since the
+start (`CL_Frame`), far past 1, so a close leaves an end in the past. The walk now takes a popup away by clearing its
+text (`Walk_Key`), and prints the time it runs at; `menu.c` and `qmenu.c` are otherwise unchanged.
+
+The virtual gamepad was attached by the first line of the probe's script, which runs inside the engine's start,
+before any frame. `IN_Update` counts down the start's first 30 updates with `first_init` set (`sdl3.c`,
+`updates_countdown`, `REASON_CONTROLLERINIT`); a device added in that window restarts the count, and when it runs out
+with `first_init` set, nothing is opened, since the devices present at the start were already opened by
+`IN_Controller_Init` in `IN_Init`. The pad was taken as one of those. A person who plugs a controller in after the
+start gets it opened 100 updates later. `in_probe pad` now refuses while `first_init` is set, and the probe attaches
+the pad after the map has loaded, as a person plugs one in.
+
+#### Round 2: measured
+
+Commit `0c0c3290`, the same simulator and data (links to the paks and a scratch `pak9.pak` with the probe's
+script, never committed):
+
+- The walk passes: `menu_probe: walk at cls.realtime 1`, then `menu_probe: walk ok: 20 screens, 891 key presses, 0
+  failures` (a walk that did not yet check what a greyed item's select changes; re-measured in slice 2a review rounds
+  1 and 2, below; round 1's 818 key presses on `3d42a997` were with rebinding wrongly blocked). The screens, by banner or first item as the walk prints them: `m_main_plaque`, `m_banner_game`,
+  `m_banner_load_game`, the credits (`(unnamed)`), `m_banner_multiplayer`, `m_banner_join_server`,
+  `m_banner_start_server`, `falling damage`, `name`, `Download Options`, `score`, `m_banner_options`, `look
+  sensitivity`, `layout`, `attack`, `next weapon`, `attack`, `factor` and `m_banner_video` twice. On join server down and up
+  reach the address book (greyed), refresh and the eight slots, and back leaves it. Quit has no screen on tvOS: the
+  entry is greyed on every `TARGET_OS_IPHONE` target since TASK150 ("close Quake II from the app switcher"), so the
+  walk reaches it with down and up and select does nothing on it; the main menu is then left with back.
+- The walk's mutants fail it. The credits screen's back removed: `FAIL: '(unnamed)' is not left with back`, `walk
+  FAIL: 20 screens, 890 key presses, 1 failures`. `Walk_Key` closing the popup with `Menu_ClosePopup` again (round
+  1's walk): the 33 failures of round 1, `walk FAIL: 6 screens, 289 key presses, 33 failures`, at `cls.realtime 1`.
+- The pad (commit `29e876d5`, `in_probe pads` lists the joysticks): attached before the first frame it is refused
+  (`pad not attached: the start's controller countdown is not over`); attached after the map, the engine looks again
+  ("- Gamepad init attempt -", "2 joysticks were found."). The second joystick is not the probe's: from about the
+  first second the simulator has a joystick of its own, `'Gamepad', gamepad 1, virtual 0`, which appears inside the
+  start's countdown and so is not opened then. `IN_Controller_Init` opens the first gamepad from `in_initjoy`, which
+  is that one ("Trying joystick 1, 'Gamepad'"), so with `in_initjoy` 1 the probe's sticks and start move nothing.
+  With `+set in_initjoy 2` the engine opens the probe's pad ("Trying joystick 2, 'in_probe pad'", "Enabled as
+  Gamepad."), and then the left stick moves the player (origin 128 -320 24 to -63 -126 24), the right stick turns it
+  (yaw 0 to -155), and start opens the game menu (key_dest 3, depth 1, `m_main_plaque`) and closes it again (key_dest
+  0). The right trigger is not shown firing: the gun frame stays 19 (the blaster's idle pause) 3 and 23 waits after
+  the trigger is pressed and 10 after it is let go. Not found yet whether the press reaches `+attack`. What the simulator's own
+  `'Gamepad'` is, and whether a real Apple TV has one, is not known either.
+- The walk prints each greyed item with its reason. On join server the address book has its reason. The items of
+  the four key binding screens (`score`, `attack`, `next weapon`, `attack`) carry `QMF_GRAYED` on every platform, as
+  upstream Yamagi sets it: the label draws dark and the binding handlers never read the flag, so it is not a disabled
+  state. Since slice 2a review round 2 the walk takes them as binding items, by their screen's key function, and
+  requires select to enter bind mode on each (below).
+- The default macOS and iOS simulator objects of both files are byte-identical to main's, on `0c0c3290` and again on
+  `cc9de5bd`: `menu.o` (164544 and
+  164528 bytes) and `sdl3.o` (56872 and 58824 bytes). Both probes are inside `#ifdef YQ2_INPUT_PROBE`, and no menu code
+  outside it changed.
+
+### check-tvos
+
+`tests/check-tvos.sh` (e) now also pins `sdl3.o` (no `SDL_RETURN_KEY_HIDES_IME`, no need of `_Touch_TextInput`,
+and `SDL_TV_REMOTE_AS_JOYSTICK` held) and `glimp_sdl3.o` (no `SDL_ORIENTATIONS`, no
+`SDL_IOS_HIDE_HOME_INDICATOR`), with the iOS simulator's object of each file as the positive control (it holds,
+needs or lacks the opposite), and synthetic objects as the mutants of each assertion. (d) takes only a bare true
+test: a chain of `&&` of names, `!names` and `defined()`s with `TARGET_OS_IOS` alone among them; seven more
+mutants per site (`== 0`, `!= 1`, `- 1`, `0 == ( )`, `||`, `?:`, `!( )` around the chain) are refused, and the
+name in double parentheses still passes. A tree with the remote's hint removed fails (e): the tvOS `sdl3.o` does not
+hold the name, and `sdl3.c` has no line setting it to "0" (slice 2a review round 1 split the two checks, below).
+
 ## Review round 1
 
 The panel found no Blocker. Four Importants and the Notes, each fixed:
@@ -125,3 +281,74 @@ The panel found no Blocker. Four Importants and the Notes, each fixed:
   says what it checks (the comparison with the base is the review's `make -n` before and after), and its
   forbidden-key loop, device-family count and minimum OS line each have a mutant; the measured facts name their
   commit; the slice 2 list has the five items above.
+
+## Slice 2a: review round 1
+
+The panel found no Blocker. Two Importants and four Notes, each fixed:
+
+- Important 1 (its premise was wrong, and review round 2 undid the change, below): a greyed item could still act.
+  The finding read every item of the four key binding screens (the key, multiplayer key, controller button and
+  controller alt button screens) as greyed on the iPhone-family targets since TASK150. In fact `QMF_GRAYED` is set
+  on those items unconditionally, on every platform, as upstream does, and is not a disabled state. Their key handlers (`Keys_MenuKey`, `MultiplayerKeys_MenuKey`, `ControllerButtons_MenuKey`,
+  `ControllerAltButtons_MenuKey`) called the binding function on select without reading the flag: it cleared a
+  second binding and entered bind mode, and clear (backspace, delete, a controller's north button) removed the
+  binding, which is upstream's rebinding, working as designed. Round 1 added `M_BindingGrayed`
+  (`src/client/menu/menu.c`), which refused select and clear on a binding item carrying the flag; since every
+  binding item carries it, that blocked rebinding from the menus on every platform, macOS included. Round 2 removed
+  it. No other handler acts on a greyed item: the other greyed items (quit, the address book, the touch settings,
+  the two upscale actions) reach only `Menu_SelectItem` and `Menu_SlideItem`, which read the flag.
+- The walk now fails a greyed item whose select changes anything: the screen, the cursor, the status bar, bind mode,
+  a key's binding (a hash of every binding) or the command buffer. Measured with the same simulator, data and probe
+  script as round 2 (Apple TV 4K (4th generation), tvOS 27.2 simulator, `ref_metal`, `in_initjoy` 1):
+  - the walk alone (`490ddb3b`, the menu as on main; round 2 found these 71 to be rebinding working as designed): `walk FAIL: 20 screens, 889 key presses, 71 failures`, every
+    one on the four screens (`score` 7, `next weapon` 20, and 44 on the two screens whose first item is `attack`;
+    each `bind mode status bar`, and 7 of them also `a binding`, items with two keys bound);
+  - round 1's change (`3d42a997`, undone in round 2): `walk ok: 20 screens, 818 key presses, 0 failures` (fewer presses: no back is needed to
+    leave bind mode);
+  - the mutant that puts the old select path back (`M_BindingGrayed` without `K_ENTER`): `walk FAIL: 20 screens, 889
+    key presses, 71 failures`, the same 71.
+- Important 2: `tests/check-tvos.sh` (e) pins the address book's reason in the tvOS `menu.o`, with the iOS
+  simulator's `menu.o`, which must lack it, as the positive control. The check also compiles, for the iOS
+  simulator, a `menu.c` whose guard is widened to `#ifdef TARGET_OS_TV` (true on every Apple target), and the
+  control must refuse it. A tree with that widening fails the check: `(e) the positive control failed: the pin on
+  "typing an address needs a keyboard, which tvOS does not have" would pass whatever the tvOS build holds`. Round
+  1's binding change had no platform guard and so no pin; round 2 removed it.
+- Notes: the Apple TV section of `doc/020_installation.md` says what the simulator showed (the sticks, start, the
+  remote in the menus) and that the other bindings are the default table, unit-tested but not shown (the trigger is
+  TASK182); the remote hint's pin says it checks the name, and (e) now also requires `sdl3.c`'s one line naming
+  the hint to set it to "0"; the walk's numbers are re-measured above; this section.
+
+## Slice 2a: review round 2
+
+One Blocker, found by two passes on their own: round 1's Important 1 rested on a false premise. `QMF_GRAYED` on the
+items of the four binding screens is set unconditionally, on every platform, as upstream Yamagi sets it (the label
+draws dark; the binding handlers never read it). So round 1's `M_BindingGrayed` blocked select and clear on every
+binding item everywhere, and rebinding from the menus was gone on macOS too.
+
+- `M_BindingGrayed`, its comment and its four call sites are removed (`ba73994c`). `Keys_MenuKey`,
+  `MultiplayerKeys_MenuKey`, `ControllerButtons_MenuKey` and `ControllerAltButtons_MenuKey` are main's again: the
+  only hunks of `menu.c` against main are the tvOS address book, the probe and its `Cmd_AddCommand`. The default
+  `menu.o` (no `YQ2_INPUT_PROBE`) built from `ba73994c` and from main (`8e7ce3f6`), each at the same path, is
+  byte-identical to main's: 164544 bytes for macOS and 164528 bytes for the iOS simulator.
+- The walk (`e1f0327e`) takes an item of a binding screen as a binding item by the screen's key function, whatever
+  its flags. Select on one must enter bind mode (`menukeyitem_bind`), and back must then leave bind mode with no
+  binding changed and nothing queued (Escape is not bound). It does not require the bindings to be unchanged after
+  select: upstream clears an item that already has two keys bound. Every other greyed item keeps round 1's check
+  that select changes nothing. The walk prints how many binding items passed.
+- Measured with the same simulator, data and probe script (Apple TV 4K (4th generation), tvOS 27.2 simulator,
+  `ref_metal`, `in_initjoy` 1), at `ba73994c`: `71 binding items entered bind mode on select and left it with
+  back`, then `walk ok: 20 screens, 889 key presses, 0 failures`. The greyed items it prints are the address book,
+  quit and the two upscale actions (`MetalFX spatial`, `VideoToolbox ML`), each with its reason.
+- Each mutant fails the walk:
+  - (a) round 1's `M_BindingGrayed` put back (`e1f0327e`, the walk before the removal): `0 binding items entered
+    bind mode`, `walk FAIL: 20 screens, 818 key presses, 71 failures`, each `binding item ... did not enter bind
+    mode on select`;
+  - (b) `Menu_SelectItem`'s `QMF_GRAYED` check removed: `walk FAIL: 22 screens, 915 key presses, 4 failures`, the
+    address book, quit and the two upscale actions each `did something on select: left the screen` (the upscale
+    actions also `queued`);
+  - (c) the walk's binding detection keyed on `QMF_GRAYED`: `walk FAIL: 20 screens, 889 key presses, 4 failures`,
+    the same four items each `did not enter bind mode on select`.
+- `doc/020_installation.md`'s Apple TV section no longer says the binding screens are greyed: it says what the walk
+  shows, bind mode on every binding item and back leaving it. `doc/050_commands.md` says what the walk checks on a
+  binding item. The lines above that called the binding items greyed on the iPhone-family targets, or dated that
+  from TASK150, are corrected.
