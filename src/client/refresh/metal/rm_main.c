@@ -128,6 +128,8 @@ static rm_rtg_t rm_rtg;
 static rm_rtg_state_t rm_rtg_state;
 static cvar_t *rm_rtg_effects[RM_RTG_MAX_EFFECTS];
 static int rm_rtg_neffects;
+/* whether the gate has a path, for the menu's ray-tracing screen (TASK194); read only */
+static cvar_t *r_rt_available;
 
 /* gl1's clear colour for r_clear 1 */
 static const float rm_clear_color[4] = { 1.0f, 0.0f, 0.5f, 0.5f };
@@ -328,6 +330,13 @@ RM_RTG_Frame(void)
 	char line[256];
 	int k;
 
+	/* r_rt_available is the renderer's: a value written to it is put back */
+	if (r_rt_available && r_rt_available->modified)
+	{
+		ri.Cvar_Set("r_rt_available", rm_rtg_traces(&rm_rtg) ? "1" : "0");
+		r_rt_available->modified = false;
+	}
+
 	for (k = 0; k < rm_rtg_neffects; k++)
 	{
 		v[k] = rm_rtg_effects[k]->value;
@@ -360,6 +369,8 @@ RM_RTG_Init(void)
 	}
 
 	rm_rtg_neffects = k;
+	r_rt_available = ri.Cvar_Get("r_rt_available", "0", 0);
+	r_rt_available->modified = true;   /* set by the frame step below */
 	rm_rtg_state_reset(&rm_rtg_state);
 	RM_RTG_Frame();
 }

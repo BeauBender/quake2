@@ -6570,18 +6570,20 @@ M_Draw(void)
 	/* repaint everything next frame */
 	SCR_DirtyScreen();
 
-	/* dim everything behind it down */
+	menu = M_GetActiveMenu();
+
+	/* dim everything behind it down, but for a page that previews the
+	   3D view behind it (TASK194's ray-tracing screen) */
 	if (cl.cinematictime > 0)
 	{
 		Draw_Fill(0, 0, viddef.width, viddef.height, 0);
 	}
 
-	else
+	else if (!(menu && menu->keepview))
 	{
 		Draw_FadeScreen();
 	}
 
-	menu = M_GetActiveMenu();
 	if (menu && menu->draw)
 	{
 		menu->draw(menu);

@@ -31,6 +31,22 @@ Portmanbeau Quake II ships with 3 renderers:
   colored lighting. The software renderer may show some rendering errors
   on widescreen resolutions.
 
+### Ray tracing with the Metal renderer
+
+On a Mac or an Apple device whose GPU traces rays, the Metal renderer
+(`vid_renderer metal`) can add ray-traced effects, all off by default so
+the stock look is kept. Video options > Ray tracing turns each one on or
+off (shadows of the dynamic lights, sun, ambient occlusion, water
+reflections, gun shadow) and tunes them with sliders (sun floor and
+scale, AO range, minimum and scale, water reflect and ripple). A change
+shows on the next frame, with no `vid_restart`, and the 3D view behind
+the screen is not dimmed, so the effect can be judged while it is
+changed. Every value is saved with the configuration. The entry is
+greyed under other renderers, every item on a device without ray
+tracing, and a slider while its effect is off, each with its reason on
+the status bar. The cvars are described in `040_cvarlist.md`, under
+`r_rt_`.
+
 
 ## Choosing a Sound System
 
