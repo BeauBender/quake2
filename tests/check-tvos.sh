@@ -27,11 +27,16 @@
 #       whatever the device; nm -u of every imgdecode.o lists
 #       _kCGImageSourceAllowableTypes (ImageIO reads only the file's type);
 #       sdl3.o holds no SDL_RETURN_KEY_HIDES_IME, does not need
-#       _Touch_TextInput and holds SDL_TV_REMOTE_AS_JOYSTICK (the Siri
-#       Remote as keys); glimp_sdl3.o holds neither SDL_ORIENTATIONS nor
-#       SDL_IOS_HIDE_HOME_INDICATOR. The iOS simulator's object of each
+#       _Touch_TextInput and holds the name SDL_TV_REMOTE_AS_JOYSTICK, which
+#       sdl3.c's one line naming it sets to "0" (the Siri Remote as keys);
+#       glimp_sdl3.o holds neither SDL_ORIENTATIONS nor
+#       SDL_IOS_HIDE_HOME_INDICATOR; menu.o holds the address book's tvOS
+#       reason (greyed, TASK23 slice 2a). The iOS simulator's object of each
 #       of those files is the positive control: it holds what tvOS lacks,
-#       needs what tvOS does not, and lacks the remote's hint.
+#       needs what tvOS does not, and lacks the remote's hint and the
+#       address book's reason. A menu.c whose address book guard is widened
+#       to "#ifdef TARGET_OS_TV" (true on every Apple target) is compiled
+#       for the iOS simulator as the mutant that control must refuse.
 #   (d) also takes only a bare true test: a chain of && of names, !names
 #       and defined()s with TARGET_OS_IOS alone among them (TASK23 slice 2).
 # It does not compare the iOS build with an earlier one; that comparison is
@@ -596,9 +601,44 @@ pin()
 }
 pin lacks sdl3.o src/client/input/sdl3.c SDL_RETURN_KEY_HIDES_IME "the iPhone's in_touch default and keyboard hint are compiled into the tvOS build"
 pin no_need sdl3.o src/client/input/sdl3.c _Touch_TextInput "the on-screen keyboard's follow-up is compiled into the tvOS build"
-pin holds sdl3.o src/client/input/sdl3.c SDL_TV_REMOTE_AS_JOYSTICK "the Siri Remote is not set to keys in the tvOS build"
+pin holds sdl3.o src/client/input/sdl3.c SDL_TV_REMOTE_AS_JOYSTICK "the tvOS sdl3.o does not hold the name SDL_TV_REMOTE_AS_JOYSTICK: the Siri Remote's hint is not compiled in"
+# the value the object cannot show: the one line of sdl3.c naming the hint sets it to "0" (keys)
+n=$(grep -c 'SDL_HINT_TV_REMOTE_AS_JOYSTICK' src/client/input/sdl3.c) || :
+if [ "$n" != 1 ] || ! grep -F -q 'SDL_SetHint(SDL_HINT_TV_REMOTE_AS_JOYSTICK, "0");' src/client/input/sdl3.c; then
+	bad "(e) sdl3.c does not set SDL_HINT_TV_REMOTE_AS_JOYSTICK to \"0\" on the one line naming it ($n lines name it): the Siri Remote is not set to keys"
+fi
 pin lacks glimp_sdl3.o src/client/vid/glimp_sdl3.c SDL_ORIENTATIONS "the orientation hint is compiled into the tvOS build"
 pin lacks glimp_sdl3.o src/client/vid/glimp_sdl3.c SDL_IOS_HIDE_HOME_INDICATOR "the home indicator hint is compiled into the tvOS build"
+reason="typing an address needs a keyboard, which tvOS does not have"
+pin holds menu.o src/client/menu/menu.c "$reason" "the address book is not greyed with its reason in the tvOS build"
+# the mutant of that pin's control: the address book's guard widened to
+# "#ifdef TARGET_OS_TV", true on every Apple target (the name is always
+# defined, 0 or 1), greys it for macOS and iOS players; compiled for the iOS
+# simulator with the command pin just ran ($tmp/cmd), it must be refused
+guard='#if defined(__APPLE__) && TARGET_OS_TV'
+n=$(grep -c -x -F -e "$guard" src/client/menu/menu.c) || :
+if [ "$n" != 1 ]; then
+	bad "(e) menu.c has $n lines '$guard', not the address book's one: the mutant has no site"
+else
+	mkdir -p "${tmp:?}/mut"
+	awk -v g="$guard" '$0 == g { $0 = "#ifdef TARGET_OS_TV" } { print }' src/client/menu/menu.c > "${tmp:?}/mut/menu.c"
+	awk -v s=src/client/menu/menu.c -v m="${tmp:?}/mut/menu.c" -v o="${tmp:?}/mut/menu.o" '{
+		for (i = 2; i <= NF; i++) {
+			if ($i == s) $i = m
+			else if ($(i - 1) == "-o") $i = o
+			else if ($(i - 1) == "-MF") $i = o ".d"
+		}
+		print $0 " -Isrc/client/menu"
+	}' "${tmp:?}/cmd" > "${tmp:?}/mut/cmd"
+	if ! grep -F -q -e "${tmp:?}/mut/menu.c" "${tmp:?}/mut/cmd"; then
+		bad "(e) the mutant's compile does not name the mutated menu.c"
+	elif ! sh "${tmp:?}/mut/cmd" > "${tmp:?}/mut/cc.log" 2>&1; then
+		tail -n 5 "${tmp:?}/mut/cc.log"
+		bad "(e) the widened-guard mutant of menu.c does not compile for the iOS simulator"
+	elif assert_lacks "${tmp:?}/mut/menu.o" "$reason" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: the address book's guard widened to #ifdef TARGET_OS_TV passed (e)'s control"
+	fi
+fi
 
 object_list /r IOS_SDK=appletvsimulator > "${tmp:?}/list_tv"
 object_list /r IOS_SDK=iphonesimulator > "${tmp:?}/list_ios"
