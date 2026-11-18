@@ -44,8 +44,10 @@
 #   SDL3, the client, the game and ref_metal for the SDK into
 #   IOS_ROOT/Quake2.app (doc/020_installation.md).
 #   IOS_SDK: iphonesimulator (default, signed ad hoc), iphoneos
-#   (unsigned) or appletvsimulator (tvOS, TASK23, signed ad hoc).
-#   IOS_MIN: the minimum iOS or tvOS version (17.0).
+#   (unsigned), appletvsimulator (tvOS, TASK23, signed ad hoc) or
+#   xrsimulator (visionOS, TASK175, signed ad hoc).
+#   IOS_MIN: the minimum iOS or tvOS version (17.0), or visionOS
+#   version (1.0, the visionOS of the iOS 17 year).
 #   IOS_BUNDLE_ID: CFBundleIdentifier (a neutral default).
 #   IOS_BUNDLE_DATA: optional, a directory whose baseq2/ is copied
 #   into the bundle; local builds only, never game data in a commit.
@@ -213,6 +215,9 @@ ifneq ($(filter-out ios ios_objects config clean cleanall,$(MAKECMDGOALS)),)
 $(error the iOS mode builds only the app: make ios (or ios_objects, config, clean), not "$(MAKECMDGOALS)")
 endif
 IOS_SDK ?= iphonesimulator
+ifeq ($(IOS_SDK), xrsimulator)
+IOS_MIN ?= 1.0
+endif
 IOS_MIN ?= 17.0
 IOS_BUNDLE_ID ?= org.yquake2.quake2
 ifeq ($(IOS_SDK), iphonesimulator)
@@ -230,8 +235,15 @@ else ifeq ($(IOS_SDK), appletvsimulator)
 IOS_TARGET := arm64-apple-tvos$(IOS_MIN)-simulator
 IOS_PLATFORM := AppleTVSimulator
 IOS_PLIST_IN := stuff/ios/Info-tvos.plist.in
+else ifeq ($(IOS_SDK), xrsimulator)
+# visionOS (TASK175): the same code and bundle as the iOS simulator's,
+# for the Apple Vision Pro simulator, in a window; its own Info.plist
+# (the Apple Vision family, no orientations and no status bar)
+IOS_TARGET := arm64-apple-xros$(IOS_MIN)-simulator
+IOS_PLATFORM := XRSimulator
+IOS_PLIST_IN := stuff/ios/Info-visionos.plist.in
 else
-$(error IOS_SDK must be iphonesimulator, iphoneos or appletvsimulator, not "$(IOS_SDK)")
+$(error IOS_SDK must be iphonesimulator, iphoneos, appletvsimulator or xrsimulator, not "$(IOS_SDK)")
 endif
 ifneq ($(shell printf '%s' '$(subst ',,$(IOS_MIN))' | LC_ALL=C grep -E -x '[0-9]+(\.[0-9]+){0,2}'),$(IOS_MIN))
 $(error IOS_MIN must be a version such as 17.0, not "$(IOS_MIN)")
@@ -1678,7 +1690,7 @@ ifneq ($(IOS_BUNDLE_DATA),)
 	${Q}test -d '$(IOS_BUNDLE_DATA)/baseq2' || { echo "IOS_BUNDLE_DATA has no baseq2 directory: $(IOS_BUNDLE_DATA)" >&2; exit 1; }
 	${Q}cp -R '$(IOS_BUNDLE_DATA)/baseq2' '$(IOS_APP)/baseq2'
 endif
-ifneq ($(filter iphonesimulator appletvsimulator,$(IOS_SDK)),)
+ifneq ($(filter iphonesimulator appletvsimulator xrsimulator,$(IOS_SDK)),)
 	${Q}codesign --force --sign - --timestamp=none '$(IOS_APP)'
 endif
 endif
