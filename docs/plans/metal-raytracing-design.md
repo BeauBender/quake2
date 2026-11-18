@@ -5,6 +5,11 @@ Q2RTXM import, rasterizer first, hybrid RT on real hardware); verification
 through the pin harness (`docs/plans/metal-port-harness.md`, TASK27).
 Prerequisite: TASK28's native `ref_metal` passes every gl1 pin with RT off.
 
+Every effect here is a layer on the stock lightmap. Selectable
+presentations beside it, an RT-primary mode that replaces the lightmap and
+a 3dfx Glide-style retro look, are planned in
+[the presentation modes plan](presentation-modes.md) (TASK174).
+
 Every number marked *assumed* is a design assumption to be replaced by a
 measurement in the first sub-card (RT1); the engine limits are from the tree.
 
@@ -1388,7 +1393,7 @@ green, pins as stated.
 | RT1 | Measure and build: world and alias triangle extraction, PAS per map and per model, IAS per frame, counts and memory logged by `r_rt_stats 1`; no visual change | all gl1 pins unchanged; `r_rt_stats` prints triangle and byte counts for base1 and the three demo maps, recorded in this document |
 | RT2 | G-buffer refactor in `ref_metal` (section 3) and the lighting-resolve shader that reproduces the stock product; `framediff --mask` | all gl1 pins unchanged at the accepted threshold (this is the risky card: byte-identical RT-off is the goal, 0.005 the cap) |
 | RT3 | Dlight shadows, replacing `R_AddDynamicLights` when on | RT off: pins unchanged; double-count invariant holds; `rt-shadows` scenario recorded after owner acceptance; fps at 1080p on apple7 stated |
-| RT4 | Sun/sky shadow with the direction table and the sky-area skip | same shape as RT3 with `rt-sun`; maps under the sky-area threshold render byte-identical to RT off |
+| RT4 | Sun/sky shadow with the direction table and the sky-area skip | same shape as RT3 with `rt-sun`; maps under the sky-area threshold render byte-identical to RT off. As built (TASK56): `r_rt_sun`, one ray a dim lightmapped world pixel facing the sun, after the AO; the sky colour is the mean of the sky box's upper faces at full brightness; the visibility is held in an 8-bit class; the table is built into the renderer; `docs/runbook/TASK56.md` |
 | RT5 | Ambient occlusion with blue noise and the lightmap-only multiply | same shape with `rt-ao`; AO never drops a pixel below `r_rt_ao_min × lightmap` |
 | RT6 | Water reflections, one bounce, warp-perturbed normal | same shape with `rt-water`; non-water pixels byte-identical to RT off |
 | RT7 | Temporal accumulation and denoiser (depends RT3 to RT5) | pins unchanged (pins run with temporal off); fps with everything on ≥ 60 at 1080p on apple7, number recorded |

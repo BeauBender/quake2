@@ -94,6 +94,7 @@ scenario plays `PINS_DEMO`, so all of them follow the same camera path.
 | `world-scale8` | `world` with `r_scale8bittextures 1`: the 8-bit world textures scaled up and smoothed |
 | `world-metalfx1`, `world-metalfx2`, `world-metalfx3` | `world` with `r_metalfx` 1, 2 or 3 at `r_metalfx_scale 0.5`: the 3D view drawn at half size and upscaled by a MetalFX scaler (the others draw it as `world`). Where the GPU lacks a mode it falls back to the best one below, so on a GPU with only the spatial scaler all three draw `world-metalfx1`'s frames |
 | `world-metalfx-interp` | `world` with `r_metalfx_interp 1`; frame generation is not built yet, so it draws `world`'s frames on every GPU |
+| `rt-sun` | `world` with `r_rt_sun 1`: the Metal renderer's ray-traced sun and sky shadow, new light on the world's dim surfaces where a ray toward the sun reaches the sky (the others draw it as `world`, and so does the Metal renderer on a map whose sky is under 2 % of its face area or on a GPU without ray tracing); its pin is recorded once the owner accepts the look (TASK56) |
 | `particles-cap` | `particles` with `metal_particle_cap 1`: the particle size limit of the Metal renderer scaled by `height / 480` (the others draw it as `particles`); recorded with `PINS_SEED` like `particles` |
 | `models` | the world plus entities: models, sprites, beams, the view weapon |
 | `particles` | everything, including particles, dynamic lights and the screen blend |
@@ -176,6 +177,58 @@ display mode are never changed, and nothing is saved. The trace stores
 only those renderer cvars, never the player's name, the server address
 book or any other client or server setting. `scripts/pins.sh replay`
 drives it (see *Replaying a trace* below).
+
+### Input and the rendered-frame count
+
+A record is made in a normal window, often on a desktop in use. Before
+FIX48 a key pressed in it opened the menu, which pauses the local server
+playing the demo while the client keeps rendering: the engine still
+exited 0 and logged nothing unusual, and the record held other frames
+(TASK83 saw 9560, 794 and 1064 rendered frames where `demo1.dm2` renders
+689). Two things now keep such a record out of the store:
+
+- **Input is ignored in a pin run.** While the command line holds a pin
+  run (`pins_capture` or `pins_replay`, the latch of *The pin arguments*,
+  never a cvar), no key, mouse button, wheel step, gamepad button or
+  typed character reaches the console, the menu or a key binding, so
+  `Esc`, the console key and a key bound to `quit` do nothing, and the
+  mouse, the sticks and the gyro do not move the view. A focus change
+  does not pause the game either, and a gamepad pulled out or plugged
+  in, a low gamepad battery, or on iOS a rotation does nothing: no pause,
+  no message on the screen, no `vid_restart` (a message printed during a
+  record is drawn into its frames). `tests/check-input-gate.sh` keeps
+  these cases gated. The window's close button still quits
+  the engine, so a run can be stopped. Without the pin arguments input
+  reaches the game exactly as before. A replay runs no input at all.
+- **The rendered-frame count is checked.** A scenario's header comment
+  holds `// frames <demo> <count>`: the number of frames the engine
+  renders when it plays that demo, as printed by the timedemo
+  (`timedemo.txt`, the line `689 frames, ... fps`). It does not depend on
+  the renderer or the scenario's other settings, so every scenario that
+  plays `demo1.dm2` has `// frames demo1.dm2 689`. `record` fails, with
+  one line naming both counts, when the engine printed another count, no
+  count or more than one; the pin is left incomplete. A count is 1 to 9
+  digits without a leading zero, as the engine prints it; any other
+  number is no count. `record` writes
+  `demo <PINS_DEMO>` into `settings.txt`, and `replay` checks the record
+  it replays the same way before it starts an engine. A demo without a
+  `// frames` line (a demo made with `make-demo`, whose count changes
+  each time it is made), and the cinematic, which prints
+  no count, are not checked: `record` says so in one line on stderr and
+  records. A record made before FIX48 has no `demo` line and is replayed
+  unchecked, with one line on stderr that gives the record's own count.
+  The `frames-check` line of `replay.txt` says which it was: `frames-check
+  demo1.dm2 against world.cfg (689)` when the count was checked, or
+  `frames-check unchecked: ...` with the reason. A frames line is
+  written in lower case, in the header comment; one in another case
+  (`// Frames`, `DEMO1.dm2`) or below the first line that is not a
+  comment is refused before an engine runs, never skipped.
+
+A new scenario gets its count from the scenario it is derived from: all
+of them play the same demo, so it copies the `// frames demo1.dm2 689`
+line. A new demo gets its line from a clean record of it: record any
+scenario with it, read the count from `timedemo.txt` in the pin, and add
+`// frames <demo> <count>` to each scenario that plays it.
 
 ### Determinism
 
@@ -285,8 +338,14 @@ GPU), recorded with `MTL_DEBUG_LAYER=1` (Metal's validation layer) at
 `particles` seeded only. The values and the last sweep of every scenario
 are in `docs/plans/ref-metal-native.md` (section 11) and
 the card files in `docs/runbook/`, listed in `docs/plans/metal-port-harness.md`. At start it prints the Metal device,
-the Apple GPU families it supports and whether it supports ray tracing;
-it refuses a device older than the apple5 family. At each shutdown it
+the Apple GPU families it supports and whether it supports ray tracing,
+then the ray-tracing path it takes (`ref_metal: ray tracing: ...`, TASK60).
+On a GPU without ray tracing, such as the build VM, the effect cvars the
+`rt-*` scenarios set (`r_rt_ao`, `r_rt_shadows`, `r_rt_water`) read 0 with
+a line each, so each `rt-*` scenario draws the frames of the same scenario
+with its effects off, byte for byte on the VM
+([`docs/runbook/TASK60.md`](../docs/runbook/TASK60.md)); its pin there
+says nothing about the effect. It refuses a device older than the apple5 family. At each shutdown it
 prints its Metal objects created and destroyed, by kind, which must read
 `0 live objects`. Its frames have the size the mode asks for, as `gl1`'s
 do, also in fullscreen when the window has another size.

@@ -565,6 +565,9 @@ tree=$tmp/tree
 mkdir -p "${tree:?}/third_party" "${tree:?}/stuff"
 cp -R Makefile src "${tree:?}/"
 cp -R stuff/ios "${tree:?}/stuff/"
+# rm_rtsunscene.c .incbin's the sun table by a path from the top directory (TASK56)
+mkdir -p "${tree:?}/scripts/rt"
+cp scripts/rt/sun-angles.txt "${tree:?}/scripts/rt/"
 cp third_party/sdl3.make "${tree:?}/third_party/"
 ln -s "$PWD/third_party/SDL3" "${tree:?}/third_party/SDL3"
 root=$tree/build/ios-iphonesimulator/release
