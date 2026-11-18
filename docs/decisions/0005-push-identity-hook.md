@@ -217,17 +217,19 @@ also missed fine-grained GitHub tokens. So, superseding the section
 - The secret pattern gains `github_pat_` followed by 22 or more of
   `[A-Za-z0-9_]`. The staged diff is read once into a file, as text and
   without colour, external diff or textconv, so a git error, a committed
-  `.gitattributes` (`-diff`, `binary`, a `diff=` driver) or a local diff
-  setting no longer takes a file out of the scan; a diff that cannot be read
+  `.gitattributes` (`-diff`, `binary`, a `diff=` driver), a local diff
+  setting or a change of type alone (a symbolic link replaced by a file) no
+  longer takes a file out of the scan; a diff that cannot be read
   and a `grep` error refuse the commit.
 - The push hook scans the files the pushed commits add, under every ref
   name. For each ref, the blobs the remote lacks (`git rev-list --objects
   <tip> --not <remote sha> --remotes=<remote>`, the walk git itself makes to
-  choose what to send: a blob in the tree of a commit the remote is known to
-  have is already published and is not scanned again) and the paths its new
-  commits add or change (`git diff-tree -r -c --root`, deletions left out,
-  since deleting a file publishes nothing; for a merge, the paths that
-  differ from every parent) are scanned by `tests/check-no-local-identity.sh`
+  choose what to send: a blob in the tree of a published parent is not
+  scanned again) and the paths its new commits add or change, every
+  directory name included, one with no file below it too (`git diff-tree -r
+  -t -c --root`, deletions left out, since deleting a file publishes
+  nothing; for a merge, the paths that differ from every parent) are
+  scanned by `tests/check-no-local-identity.sh`
   itself, so there is one matcher, the gate's: the host name and home path
   as substrings, the user name as a whole word, the owner-handle rule above,
   binary files (a NUL byte) not scanned. The hook hands the blobs to the
@@ -310,12 +312,13 @@ also missed fine-grained GitHub tokens. So, superseding the section
   real `git commit` runs in throwaway repositories: the identity word under
   each formerly skipped path, which checks run for which paths, one
   synthetic sample per token family (built at run time, so no token-shaped
-  string is in the tree), the `.gitattributes` and local diff settings
-  above, and every fail-closed path. `tests/check-pre-push-hook.sh` adds
+  string is in the tree), the `.gitattributes` and local diff settings and
+  the change of type above, and every fail-closed path. `tests/check-pre-push-hook.sh` adds
   real pushes of a commit that adds a file holding the word to a normal
   branch, `claim/` and `gate-clear/` and then a normal branch again (all
   refused, none published), file contents, symbolic link targets, file and
-  directory names, an intermediate commit, a merge, a deletion, a blob the
+  directory names (a directory with no file below it included, alone and in
+  a merge), an intermediate commit, a merge, a deletion, a blob the
   remote has, two refs in one push, a 50-commit push and the fail-closed
   paths of the file scan. Both run with the identity shim first on `PATH`
   throughout: markers in the tooling's shape and token form, a release and a
