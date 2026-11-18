@@ -214,39 +214,50 @@ fi
 # printed. The check copied there scans that repository. The login is the
 # real one, read by absolute path like the check reads it ($login, above).
 case $login in
-'' | ?? | *[!A-Za-z0-9-]*)
-	echo "$me: not run: the owner-handle host tests (the login is not a GitHub handle)"
+'' | ? | ?? | *[!A-Za-z0-9-]*)
+	# the check skips a word shorter than 3 characters, so such a login is not tested
+	echo "$me: not run: the owner-handle host tests (the login is not a GitHub handle of 3 or more characters)"
 	;;
 *)
-	ofx=$tmp/ownerhost
-	if ! (
-		unset $(git rev-parse --local-env-vars)
-		GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 HOME=$tmp XDG_CONFIG_HOME=$tmp/noxdg
-		export GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM HOME XDG_CONFIG_HOME
-		git init -q --template= "$ofx" &&
-			mkdir -p "$ofx/tests" &&
-			cp tests/check-no-local-identity.sh "$ofx/tests/" &&
-			printf 'maintained by %s\n' "$login" > "$ofx/README.md" &&
-			git -C "$ofx" add README.md tests/check-no-local-identity.sh &&
-			git -C "$ofx" remote add origin "https://github.com/$login/quake2.git"
-	); then
-		echo "$me: FAIL: cannot build the owner-handle host fixture"
-		fails=1
+	# The fixture's one tracked file holds the login alone; a host name found
+	# in it would be a hit too, so then the fixture cannot judge the user-name
+	# rule and is not run.
+	fhost=$(/bin/hostname -s 2>/dev/null || true)
+	if [ -n "$fhost" ] && printf '%s' "$login" | grep -qiF -e "$fhost"; then
+		echo "$me: not run: the owner-handle host tests (the host name is part of the login)"
+		login=
 	fi
-	chk=$ofx/tests/check-no-local-identity.sh
-	names "zzqno""host" "zzqno""body"
-	shim hostname zzq-synthetic-box
-	shim whoami zzq-synthetic-box
-	gate "owner-handle login: a hostname on PATH is not read" 0 "check-no-local-identity: ok"
-	rm -f "$tmp/bin/hostname" "$tmp/bin/whoami"
-	gate "owner-handle login, home ending in it: the login's word test is skipped" 0 "the user-name word test is skipped" "$hhome"
-	gate "owner-handle login, home elsewhere: the login is word-tested" 1 "tracked files contain this machine's identity" "/zzqno""home"
-	gate "owner-handle login, another word with the home ending in it: the login is word-tested" 1 "tracked files contain this machine's identity" "/zzqno""home/zzqno""body"
-	if grep -q "skipped" "$tmp/out"; then
-		echo "$me: FAIL: owner-handle login, another word with the home ending in it: the skip note was printed"
-		fails=1
+	if [ -n "$login" ]; then
+		ofx=$tmp/ownerhost
+		if ! (
+			unset $(git rev-parse --local-env-vars)
+			GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 HOME=$tmp XDG_CONFIG_HOME=$tmp/noxdg
+			export GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM HOME XDG_CONFIG_HOME
+			git init -q --template= "$ofx" &&
+				mkdir -p "$ofx/tests" &&
+				cp tests/check-no-local-identity.sh "$ofx/tests/" &&
+				printf '%s\n' "$login" > "$ofx/README.md" &&
+				git -C "$ofx" add README.md tests/check-no-local-identity.sh &&
+				git -C "$ofx" remote add origin "https://github.com/$login/quake2.git"
+		); then
+			echo "$me: FAIL: cannot build the owner-handle host fixture"
+			fails=1
+		fi
+		chk=$ofx/tests/check-no-local-identity.sh
+		names "zzqno""host" "zzqno""body"
+		shim hostname zzq-synthetic-box
+		shim whoami zzq-synthetic-box
+		gate "owner-handle login: a hostname on PATH is not read" 0 "check-no-local-identity: ok"
+		rm -f "$tmp/bin/hostname" "$tmp/bin/whoami"
+		gate "owner-handle login, home ending in it: the login's word test is skipped" 0 "the user-name word test is skipped" "$hhome"
+		gate "owner-handle login, home elsewhere: the login is word-tested" 1 "tracked files contain this machine's identity" "/zzqno""home"
+		gate "owner-handle login, another word with the home ending in it: the login is word-tested" 1 "tracked files contain this machine's identity" "/zzqno""home/zzqno""body"
+		if grep -q "skipped" "$tmp/out"; then
+			echo "$me: FAIL: owner-handle login, another word with the home ending in it: the skip note was printed"
+			fails=1
+		fi
+		chk=
 	fi
-	chk=
 	;;
 esac
 
