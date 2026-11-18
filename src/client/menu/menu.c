@@ -4500,6 +4500,14 @@ JoinServer_MenuInit(void)
 	s_joinserver_address_book_action.generic.y = 0;
 	s_joinserver_address_book_action.generic.callback = AddressBookFunc;
 
+#if defined(__APPLE__) && TARGET_OS_TV
+	/* tvOS has no keyboard to type a server address with (TASK23): the
+	   entry stays, greyed with its reason; a server found on the local
+	   network is still joined from the list below it */
+	s_joinserver_address_book_action.generic.flags |= QMF_GRAYED;
+	s_joinserver_address_book_action.generic.statusbar = "typing an address needs a keyboard, which tvOS does not have";
+#endif
+
 	s_joinserver_search_action.generic.type = MTYPE_ACTION;
 	s_joinserver_search_action.generic.name = "refresh server list";
 	s_joinserver_search_action.generic.flags = QMF_LEFT_JUSTIFY;
@@ -6501,12 +6509,272 @@ M_Menu_Quit_f(void)
 	M_PushMenu(&s_quit_menu);
 }
 
+#ifdef YQ2_INPUT_PROBE
+/*
+ * Test builds only (TASK23, built with -DYQ2_INPUT_PROBE). "menu_probe
+ * state" prints where the menu is; "menu_probe walk" visits every screen
+ * reachable from the main menu with only the six inputs of the Siri Remote
+ * (up, down, left, right, select and back: K_UPARROW, K_DOWNARROW,
+ * K_LEFTARROW, K_RIGHTARROW, K_ENTER, K_ESCAPE, through M_Keydown as a key
+ * press reaches it). On each screen it requires every selectable item to
+ * be reached with down and with up, select on every action item (a screen
+ * it opens is walked the same way), and back to leave every screen it
+ * opened. Select changes settings and queues commands (a new game, a
+ * connect): the walk drops what was queued and ends the run with quit.
+ */
+static menuframework_s *walk_seen[128];
+static int walk_nseen, walk_fail, walk_presses;
+static int walk_path[MAX_MENU_DEPTH];
+
+static void
+Walk_Key(int key)
+{
+	walk_presses++;
+	M_Keydown(key);
+}
+
+static const char *
+Walk_Name(const menuframework_s *m)
+{
+	if (m->banner)
+	{
+		return m->banner;
+	}
+
+	if (m->nitems > 0 && ((const menucommon_s *)m->items[0])->name)
+	{
+		return ((const menucommon_s *)m->items[0])->name;
+	}
+
+	return "(unnamed)";
+}
+
+static qboolean
+Walk_Selectable(const menuframework_s *m, int i)
+{
+	const menucommon_s *it = (const menucommon_s *)m->items[i];
+
+	return it->type != MTYPE_SEPARATOR && !(it->flags & QMF_INACTIVE);
+}
+
+/* the screen at <depth> is on top, as it was */
+static qboolean
+Walk_On(const menuframework_s *m, int depth)
+{
+	return m_menudepth == depth && m_layers[depth - 1] == m;
+}
+
+/* down until the cursor is on item <i>; false when it is never reached */
+static qboolean
+Walk_GoTo(menuframework_s *m, int depth, int i)
+{
+	int k;
+
+	for (k = 0; k <= m->nitems && m->cursor != i && Walk_On(m, depth); k++)
+	{
+		Walk_Key(K_DOWNARROW);
+	}
+
+	return Walk_On(m, depth) && m->cursor == i;
+}
+
+/* the main menu, then select along walk_path to <depth>; false when the path is gone */
+static qboolean
+Walk_Reopen(int depth)
+{
+	int l;
+
+	M_ForceMenuOff();
+	M_Menu_Main_f();
+
+	for (l = 1; l < depth; l++)
+	{
+		if (!Walk_GoTo(m_layers[l - 1], l, walk_path[l - 1]))
+		{
+			return false;
+		}
+
+		Walk_Key(K_ENTER);
+
+		if (m_menudepth != l + 1)
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static void
+Walk_Screen(int depth)
+{
+	menuframework_s *m = m_layers[depth - 1];
+	qboolean seen[64];
+	int i, k, n;
+
+	Com_Printf("menu_probe: screen %d '%s' at depth %d, %d items\n",
+			walk_nseen, Walk_Name(m), depth, m->nitems);
+
+	if (walk_nseen < (int)(sizeof(walk_seen) / sizeof(walk_seen[0])))
+	{
+		walk_seen[walk_nseen++] = m;
+	}
+
+	/* every selectable item is reached with down, and with up */
+	for (k = 0; k < 2 && m->nitems > 0; k++)
+	{
+		memset(seen, 0, sizeof(seen));
+
+		for (i = 0; i <= m->nitems && Walk_On(m, depth); i++)
+		{
+			if (m->cursor >= 0 && m->cursor < m->nitems)
+			{
+				seen[m->cursor] = true;
+			}
+
+			Walk_Key(k ? K_UPARROW : K_DOWNARROW);
+		}
+
+		if (!Walk_On(m, depth))
+		{
+			Com_Printf("menu_probe: FAIL: %s on '%s' left the screen\n", k ? "up" : "down", Walk_Name(m));
+			walk_fail++;
+
+			if (!Walk_Reopen(depth))
+			{
+				return;
+			}
+		}
+
+		for (i = 0; i < m->nitems; i++)
+		{
+			if (Walk_Selectable(m, i) && !seen[i])
+			{
+				Com_Printf("menu_probe: FAIL: item %d '%s' of '%s' is not reached with %s\n", i,
+						((menucommon_s *)m->items[i])->name ? ((menucommon_s *)m->items[i])->name : "",
+						Walk_Name(m), k ? "up" : "down");
+				walk_fail++;
+			}
+		}
+	}
+
+	/* select on every action item; a screen it opens is walked, then left with back */
+	for (i = 0; i < m->nitems; i++)
+	{
+		menucommon_s *it = (menucommon_s *)m->items[i];
+		menuframework_s *child;
+
+		if (!Walk_Selectable(m, i) || (it->type != MTYPE_ACTION && it->type != MTYPE_BITMAP))
+		{
+			continue;
+		}
+
+		if (!Walk_GoTo(m, depth, i))
+		{
+			Com_Printf("menu_probe: FAIL: item %d of '%s' is not reached\n", i, Walk_Name(m));
+			walk_fail++;
+			continue;
+		}
+
+		Walk_Key(K_ENTER);
+
+		if (menukeyitem_bind)
+		{
+			/* a key binding screen waits for a key: back cancels it */
+			Walk_Key(K_ESCAPE);
+		}
+
+		if (m_menudepth == depth + 1 && m_layers[depth - 1] == m)
+		{
+			child = m_layers[depth];
+			walk_path[depth - 1] = i;
+
+			for (n = 0; n < walk_nseen && walk_seen[n] != child; n++)
+			{
+			}
+
+			if (n == walk_nseen)
+			{
+				Walk_Screen(depth + 1);
+			}
+
+			if (m_menudepth == depth + 1 && m_layers[depth] == child)
+			{
+				Walk_Key(K_ESCAPE);
+			}
+
+			if (!Walk_On(m, depth))
+			{
+				Com_Printf("menu_probe: FAIL: '%s' is not left with back\n", Walk_Name(child));
+				walk_fail++;
+			}
+		}
+
+		if (!Walk_On(m, depth) && !Walk_Reopen(depth))
+		{
+			Com_Printf("menu_probe: FAIL: '%s' cannot be reached again\n", Walk_Name(m));
+			walk_fail++;
+			return;
+		}
+	}
+}
+
+static void
+M_Probe_f(void)
+{
+	menuframework_s *m = M_GetActiveMenu();
+
+	if (!strcmp(Cmd_Argv(1), "state"))
+	{
+		const menucommon_s *it = m ? (const menucommon_s *)Menu_ItemAtCursor(m) : NULL;
+
+		Com_Printf("menu_probe: key_dest %d, depth %d, screen '%s', cursor %d '%s'%s\n",
+				cls.key_dest, m_menudepth, m ? Walk_Name(m) : "", m ? m->cursor : -1,
+				it && it->name ? it->name : "", it && (it->flags & QMF_GRAYED) ? " (greyed)" : "");
+		return;
+	}
+
+	if (strcmp(Cmd_Argv(1), "walk"))
+	{
+		Com_Printf("Usage: menu_probe state|walk\n");
+		return;
+	}
+
+	walk_nseen = walk_fail = walk_presses = 0;
+	M_ForceMenuOff();
+	M_Menu_Main_f();
+	Walk_Screen(1);
+
+	if (Walk_On(m_layers[0], 1))
+	{
+		Walk_Key(K_ESCAPE);
+	}
+
+	if (m_menudepth != 0)
+	{
+		Com_Printf("menu_probe: FAIL: the main menu is not left with back\n");
+		walk_fail++;
+	}
+
+	Com_Printf("menu_probe: walk %s: %d screens, %d key presses, %d failures\n",
+			walk_fail ? "FAIL" : "ok", walk_nseen, walk_presses, walk_fail);
+
+	/* drop what the selects queued (a map, a connect), then end the run */
+	Cbuf_CopyToDefer();
+	Cbuf_AddText("quit\n");
+}
+#endif
+
 void
 M_Init(void)
 {
 	char cursorname[MAX_QPATH];
 	int w = 0;
 	int h = 0;
+
+#ifdef YQ2_INPUT_PROBE
+	Cmd_AddCommand("menu_probe", M_Probe_f);
+#endif
 
 	Cmd_AddCommand("playermodels", ListModels_f);
 
