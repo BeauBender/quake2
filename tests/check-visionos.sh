@@ -20,19 +20,30 @@
 #       TARGET_OS_VISION 1, TARGET_OS_IPHONE 1, TARGET_OS_IOS 0, so the
 #       iPhone and iPad only sites, whose #if names TARGET_OS_IOS
 #       (tests/check-tvos.sh (d) holds that for each), are compiled out;
-#   (e) the compiled objects of three of those sites: Touch_Supported in
-#       touch.o is "mov w0, #0x0; ret", glimp_sdl3.o holds no orientation
-#       hint ("LandscapeLeft LandscapeRight") and vid.o no ios_orientation
-#       command (the UIWindowSceneGeometryPreferencesIOS request, which
-#       visionOS does not have).
+#   (e) the compiled objects of those sites: Touch_Supported in touch.o is
+#       "mov w0, #0x0; ret"; sdl3.o holds no SDL_RETURN_KEY_HIDES_IME
+#       (the in_touch default's keyboard hint) and nm -u lists no
+#       _Touch_TextInput (the on-screen keyboard's follow-up); glimp_sdl3.o
+#       holds neither hint name, SDL_ORIENTATIONS nor
+#       SDL_IOS_HIDE_HOME_INDICATOR (the name, whatever the value); vid.o
+#       holds no ios_orientation command (the
+#       UIWindowSceneGeometryPreferencesIOS request, which visionOS does
+#       not have); and nm -u of every imgdecode.o lists
+#       _kCGImageSourceAllowableTypes (ImageIO reads only the file's type).
+#       Each string or symbol is the positive control's too: the iOS
+#       simulator's object of the same file, compiled with the command
+#       make -n gives for it, must hold it, so a rename fails the check
+#       instead of passing it.
 # It does not compare the iOS build with an earlier one; that comparison is
 # the review's before and after of make -n (docs/runbook/TASK175.md).
 # Each assertion first runs on a mutant it must refuse (an object built for
 # the iOS or the tvOS simulator, a different object list, an iPhone or an
-# Apple TV plist, a plist with a forbidden key, two device families or
-# another minimum OS, the iOS simulator's target, a Touch_Supported that
-# returns 1 or a variable, an object that holds the orientation hint or the
-# command), so an assertion that passes everything fails here.
+# Apple TV plist, a plist with a forbidden key, also spelled with an XML
+# character reference, two device families or another minimum OS, the iOS
+# simulator's target, a Touch_Supported that returns 1 or a variable, an
+# object that holds a pinned string or needs a pinned symbol, one that lacks
+# the symbol it must need, an unreadable object), so an assertion that
+# passes everything fails here. A tool's error (grep, nm) refuses.
 #
 # The helpers are copied from tests/check-tvos.sh with the platform, the
 # minimum OS and the device family changed, rather than shared with it:
@@ -66,7 +77,7 @@ trap 'rm -rf "${tmp:?}"' EXIT
 fail=0
 bad() { echo "check-visionos: $*"; fail=1; }
 
-for tool in make otool plutil awk sed sort grep cmp diff clang; do
+for tool in make otool nm plutil awk sed sort grep cmp diff clang; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		echo "check-visionos: $tool not found: a missing tool is a failure"
 		exit 1
@@ -131,8 +142,12 @@ assert_plist() # <Info.plist>
 		echo "$1 holds a template key"
 		rc=1
 	fi
+	# plutil decides, not the text: a key spelled with a character reference
+	# (<key>UIFile&#83;haringEnabled</key>) is the same key. The file passed
+	# -lint above, so a failed -extract is a missing key; xml1, not raw,
+	# extracts a value of any type
 	for k in UIFileSharingEnabled UISupportedInterfaceOrientations UIStatusBarHidden; do
-		if grep -q "<key>$k</key>" "$1"; then
+		if plutil -extract "$k" xml1 -o - "$1" >/dev/null 2>&1; then
 			echo "$1 holds the iPhone's $k"
 			rc=1
 		fi
@@ -164,23 +179,89 @@ assert_no_touch() # <object>
 	fi
 }
 
+# bytes_have <object> <text>: 0 the bytes hold <text>, 1 they do not, 2 the
+# object is missing or unreadable (said); grep's own status decides, so a
+# read error is never "does not hold"
+bytes_have()
+{
+	[ -f "$1" ] || { echo "$1 is missing"; return 2; }
+	brc=0
+	grep -a -F -q -e "$2" "$1" 2>/dev/null || brc=$?
+	case $brc in
+	0|1) return $brc ;;
+	*) echo "$1: cannot read (grep status $brc)"; return 2 ;;
+	esac
+}
+
+# needs <object> <symbol>: 0 nm -u lists <symbol>, 1 it does not, 2 nm failed (said)
+needs()
+{
+	[ -f "$1" ] || { echo "$1 is missing"; return 2; }
+	nm -u "$1" > "${tmp:?}/nm" 2>/dev/null || { echo "$1: cannot read (nm -u failed)"; return 2; }
+	nrc=0
+	grep -x -F -q -e "$2" "${tmp:?}/nm" || nrc=$?
+	case $nrc in
+	0|1) return $nrc ;;
+	*) echo "${tmp:?}/nm: cannot read (grep status $nrc)"; return 2 ;;
+	esac
+}
+
 # <object> exists and its bytes do not hold <text>
 assert_lacks() # <object> <text>
 {
-	[ -f "$1" ] || { echo "$1 is missing"; return 1; }
-	if grep -a -F -q -e "$2" "$1"; then
-		echo "$1 holds \"$2\""
-		return 1
-	fi
+	arc=0
+	bytes_have "$1" "$2" || arc=$?
+	case $arc in
+	0) echo "$1 holds \"$2\""; return 1 ;;
+	1) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# <object> exists and its bytes hold <text> (a pin's positive control)
+assert_holds() # <object> <text>
+{
+	arc=0
+	bytes_have "$1" "$2" || arc=$?
+	case $arc in
+	0) return 0 ;;
+	1) echo "$1 does not hold \"$2\""; return 1 ;;
+	*) return 1 ;;
+	esac
+}
+
+# nm -u <object> does not list <symbol>
+assert_no_need() # <object> <symbol>
+{
+	arc=0
+	needs "$1" "$2" || arc=$?
+	case $arc in
+	0) echo "$1 needs $2 (nm -u)"; return 1 ;;
+	1) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# nm -u <object> lists <symbol>
+assert_need() # <object> <symbol>
+{
+	arc=0
+	needs "$1" "$2" || arc=$?
+	case $arc in
+	0) return 0 ;;
+	1) echo "$1 does not need $2 (nm -u)"; return 1 ;;
+	*) return 1 ;;
+	esac
 }
 
 # the "-o <path>" of every compile of make -n <args>, the build root removed, sorted
+# (list_root, not root: the build below keeps its own root)
 object_list() # <root> <args...>
 {
-	root=$1
+	list_root=$1
 	shift
-	make -n -B "$@" ios_objects IOS_ROOT="$root" METAL_SHADERS=no 2>/dev/null |
-		awk '{ for (i = 1; i < NF; i++) if ($i == "-o") print $(i + 1) }' | sed "s,^$root/,," | sort
+	make -n -B "$@" ios_objects IOS_ROOT="$list_root" METAL_SHADERS=no 2>/dev/null |
+		awk '{ for (i = 1; i < NF; i++) if ($i == "-o") print $(i + 1) }' | sed "s,^$list_root/,," | sort
 }
 
 # ---- mutants: each must be refused, naming its cause --------------------
@@ -236,6 +317,15 @@ for mk in UIFileSharingEnabled UISupportedInterfaceOrientations UIStatusBarHidde
 		bad "mutant: the plist with $mk was refused without naming it"
 	fi
 done
+# the same key with an XML character reference (&#83; is S): plutil reads UIFileSharingEnabled
+sed 's,<key>CFBundleExecutable</key>,<key>UIFile\&#83;haringEnabled</key><true/>&,' "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
+if ! grep -q 'UIFile&#83;haringEnabled' "${tmp:?}/m.plist" || ! plutil -lint -s "${tmp:?}/m.plist" >/dev/null 2>&1; then
+	bad "mutant: the character-reference plist was not made or does not lint"
+elif assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
+	bad "mutant: a plist with UIFile&#83;haringEnabled passed"
+elif ! grep -q "the iPhone's UIFileSharingEnabled" "${tmp:?}/o"; then
+	bad "mutant: the character-reference plist was refused without naming the key"
+fi
 sed 's,<integer>7</integer>,&<integer>1</integer>,' "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
 if assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
 	bad "mutant: a plist with the Apple Vision and the iPhone families passed"
@@ -273,18 +363,63 @@ if assert_no_touch "${tmp:?}/m_xr.o" > "${tmp:?}/o" 2>&1; then
 	bad "mutant: an object without Touch_Supported passed"
 fi
 
-# an object that holds the orientation hint or the command is refused, a missing one too
-printf 'const char *h = "LandscapeLeft LandscapeRight";\nconst char *c = "ios_orientation";\n' > "${tmp:?}/s.c"
+# the pinned strings and symbols of (e)
+pin_texts='SDL_RETURN_KEY_HIDES_IME
+SDL_ORIENTATIONS
+SDL_IOS_HIDE_HOME_INDICATOR
+ios_orientation'
+# an object that holds a pinned string is refused, and one without it fails the positive control
+printf 'const char *a = "SDL_RETURN_KEY_HIDES_IME";\nconst char *b = "SDL_ORIENTATIONS";\nconst char *c = "SDL_IOS_HIDE_HOME_INDICATOR";\nconst char *d = "ios_orientation";\n' > "${tmp:?}/s.c"
 xcrun --sdk xrsimulator clang -target "$xr_target" -c "${tmp:?}/s.c" -o "${tmp:?}/s.o"
-for text in "LandscapeLeft LandscapeRight" ios_orientation; do
+while read -r text; do
 	if assert_lacks "${tmp:?}/s.o" "$text" > "${tmp:?}/o" 2>&1; then
 		bad "mutant: an object holding \"$text\" passed"
+	elif ! grep -q "holds \"$text\"" "${tmp:?}/o"; then
+		bad "mutant: the object holding \"$text\" was refused without naming it"
 	fi
 	assert_lacks "${tmp:?}/m_xr.o" "$text" > "${tmp:?}/o" 2>&1 || bad "an object without \"$text\" was refused: $(cat "${tmp:?}/o")"
-done
-if assert_lacks "${tmp:?}/absent.o" ios_orientation > "${tmp:?}/o" 2>&1; then
-	bad "mutant: a missing object passed"
+	assert_holds "${tmp:?}/s.o" "$text" > "${tmp:?}/o" 2>&1 || bad "an object holding \"$text\" failed the positive control: $(cat "${tmp:?}/o")"
+	if assert_holds "${tmp:?}/m_xr.o" "$text" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: an object without \"$text\" (a renamed string) passed the positive control"
+	fi
+done <<EOF
+$pin_texts
+EOF
+# an object that needs _Touch_TextInput is refused, one that does not need
+# _kCGImageSourceAllowableTypes too (ImageIO not restricted)
+printf 'extern int Touch_TextInput(int, int, int, int *);\nextern const void *kCGImageSourceAllowableTypes;\nint xros_u(void) { return Touch_TextInput(0, 0, 0, 0); }\nconst void *xros_v(void) { return kCGImageSourceAllowableTypes; }\n' > "${tmp:?}/u.c"
+xcrun --sdk xrsimulator clang -target "$xr_target" -c "${tmp:?}/u.c" -o "${tmp:?}/u.o"
+if assert_no_need "${tmp:?}/u.o" _Touch_TextInput > "${tmp:?}/o" 2>&1; then
+	bad "mutant: an object that needs _Touch_TextInput passed"
+elif ! grep -q 'needs _Touch_TextInput' "${tmp:?}/o"; then
+	bad "mutant: the object that needs _Touch_TextInput was refused without naming it"
 fi
+assert_no_need "${tmp:?}/m_xr.o" _Touch_TextInput > "${tmp:?}/o" 2>&1 || bad "an object without _Touch_TextInput was refused: $(cat "${tmp:?}/o")"
+for sym in _Touch_TextInput _kCGImageSourceAllowableTypes; do
+	assert_need "${tmp:?}/u.o" "$sym" > "${tmp:?}/o" 2>&1 || bad "an object that needs $sym was refused: $(cat "${tmp:?}/o")"
+	if assert_need "${tmp:?}/m_xr.o" "$sym" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: an object that does not need $sym passed"
+	elif ! grep -q "does not need $sym" "${tmp:?}/o"; then
+		bad "mutant: the object without $sym was refused without naming it"
+	fi
+done
+# a missing or an unreadable object is refused by every assertion, never taken as "lacks"
+cp "${tmp:?}/m_xr.o" "${tmp:?}/unreadable.o"
+chmod 000 "${tmp:?}/unreadable.o"
+for obj in absent unreadable; do
+	if [ "$obj" = unreadable ] && [ -r "${tmp:?}/unreadable.o" ]; then
+		echo "check-visionos: note: running as a user who reads a mode 000 file (root): the unreadable-object mutant is not run"
+		continue
+	fi
+	for a in assert_lacks assert_holds assert_no_need assert_need; do
+		if "$a" "${tmp:?}/$obj.o" ios_orientation > "${tmp:?}/o" 2>&1; then
+			bad "mutant: $a passed an $obj object"
+		elif ! grep -E -q 'is missing|cannot read' "${tmp:?}/o"; then
+			bad "mutant: $a refused an $obj object without saying it cannot be read: $(cat "${tmp:?}/o")"
+		fi
+	done
+done
+chmod 600 "${tmp:?}/unreadable.o"
 
 if [ "$fail" != 0 ]; then
 	exit 1
@@ -317,12 +452,63 @@ one_object()
 if one_object touch.o; then
 	assert_no_touch "$(cat "${tmp:?}/one")" > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the touch overlay is compiled into the visionOS build"; }
 fi
-if one_object glimp_sdl3.o; then
-	assert_lacks "$(cat "${tmp:?}/one")" "LandscapeLeft LandscapeRight" > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the orientation hint is compiled into the visionOS build"; }
-fi
-if one_object vid.o; then
-	assert_lacks "$(cat "${tmp:?}/one")" ios_orientation > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the ios_orientation command is compiled into the visionOS build"; }
-fi
+
+# the positive controls: the iOS simulator's object of each pinned file,
+# compiled with the command make -n gives for it (its -o path, in $tmp/ios)
+ios_root="${tmp:?}/ios"
+make -n -B ios_objects IOS_SDK=iphonesimulator IOS_ROOT="$ios_root" METAL_SHADERS=no > "${tmp:?}/ios.n" 2>/dev/null || bad "(e) make -n ios_objects for the iOS simulator failed"
+# ios_object <source>: that object's path is in $tmp/ios_one
+ios_object()
+{
+	awk -v s="$1" '$NF == s && / -c / { print; exit }' "${tmp:?}/ios.n" > "${tmp:?}/cmd"
+	awk '{ for (i = 1; i < NF; i++) if ($i == "-o") print $(i + 1) }' "${tmp:?}/cmd" > "${tmp:?}/ios_one"
+	if [ "$(grep -c . "${tmp:?}/ios_one")" != 1 ]; then
+		bad "(e) make -n names no compile of $1 for the iOS simulator"
+		return 1
+	fi
+	case $(cat "${tmp:?}/ios_one") in
+	"$ios_root"/*) ;;
+	*) bad "(e) the iOS simulator's $1 is not built under the scratch root"; return 1 ;;
+	esac
+	mkdir -p "$(dirname "$(cat "${tmp:?}/ios_one")")"
+	if ! sh "${tmp:?}/cmd" > "${tmp:?}/cc.log" 2>&1; then
+		tail -n 5 "${tmp:?}/cc.log"
+		bad "(e) $1 does not compile for the iOS simulator"
+		return 1
+	fi
+}
+
+# pin <lacks|need|no_need> <object name> <source> <text or symbol> <what>:
+# every visionOS object called <name> (one at least) and the iOS
+# simulator's object of <source>, the control: lacks (iOS: holds), no_need
+# (iOS: needs), need (iOS: needs too)
+pin()
+{
+	awk -v n="/$2" 'substr($0, length($0) - length(n) + 1) == n' "${tmp:?}/objs" > "${tmp:?}/named"
+	# (pin is called bare under set -e: every path returns 0, bad records the failure)
+	if [ ! -s "${tmp:?}/named" ]; then
+		bad "(e) the build has no $2"
+		return 0
+	fi
+	while read -r obj; do
+		case $1 in
+		lacks) assert_lacks "$obj" "$4" ;;
+		no_need) assert_no_need "$obj" "$4" ;;
+		need) assert_need "$obj" "$4" ;;
+		esac > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) $5"; }
+	done < "${tmp:?}/named"
+	ios_object "$3" || return 0
+	case $1 in
+	lacks) assert_holds "$(cat "${tmp:?}/ios_one")" "$4" ;;
+	*) assert_need "$(cat "${tmp:?}/ios_one")" "$4" ;;
+	esac > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the positive control failed: the pin on \"$4\" would pass whatever the visionOS build holds"; }
+}
+pin lacks sdl3.o src/client/input/sdl3.c SDL_RETURN_KEY_HIDES_IME "the iPhone's in_touch default and keyboard hint are compiled into the visionOS build"
+pin no_need sdl3.o src/client/input/sdl3.c _Touch_TextInput "the on-screen keyboard's follow-up is compiled into the visionOS build"
+pin lacks glimp_sdl3.o src/client/vid/glimp_sdl3.c SDL_ORIENTATIONS "the orientation hint is compiled into the visionOS build"
+pin lacks glimp_sdl3.o src/client/vid/glimp_sdl3.c SDL_IOS_HIDE_HOME_INDICATOR "the home indicator hint is compiled into the visionOS build"
+pin lacks vid.o src/client/vid/vid.c ios_orientation "the ios_orientation command is compiled into the visionOS build"
+pin need imgdecode.o src/client/refresh/files/imgdecode.c _kCGImageSourceAllowableTypes "the image decoder does not restrict ImageIO to the file's type"
 
 object_list /r IOS_SDK=xrsimulator > "${tmp:?}/list_xr"
 object_list /r IOS_SDK=iphonesimulator > "${tmp:?}/list_ios"
