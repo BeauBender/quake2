@@ -1144,10 +1144,9 @@ is.
   the sky in the picture, from the sky box and from nowhere, and the
   pass's GPU time; with `r_rt_water_hits 1` also each of its two parts
   (the list of its pixels, the trace) and the time from the first's start
-  to the last's end, the pass's time being their sum, and `-` for the
-  raster's, vertex stage's and fragment stage's figures, which are not
-  measured: the water's marks are a draw of the G-buffer raster, timed
-  with it. Nothing
+  to the last's end, the pass's time being their sum (the water's marks
+  are a draw of the G-buffer raster, timed with it, so there are no
+  raster figures). Nothing
   is drawn differently. The objects it makes are
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next

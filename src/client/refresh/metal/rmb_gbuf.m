@@ -772,6 +772,7 @@ rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 		 * (its "has a normal" kept for every reader below)
 		 */
 		rmb_rtw_mark(raster_enc, view_surf);
+		raster_enc = nil;   /* FIX98: the mark was its only user; nothing may encode on it after the pass ends */
 
 		/* RT3 (TASK55): the shadow rays between the raster and the resolve, when the view asked for them */
 		rmb_rts_trace(t_depth, t_normal, t_material, view_surf ? t_surface : nil);
