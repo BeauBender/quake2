@@ -87,9 +87,10 @@ GLimp_DrawableInPixels(qboolean highdpi, int fullscreen, float r_mode)
  * can change under it is its pixel size and the safe rectangle in
  * points, which a rotation to the other landscape moves. The two are
  * GLIMP_SCREEN_INTS values each: the width and height in pixels, then
- * the safe rectangle's x, y, width and height. A missing record, or one
- * of an empty drawable, is a change: the video is made again rather than
- * left on a screen nobody measured.
+ * the safe rectangle's x, y, width and height. A missing record is a
+ * change: the video is made again rather than left on a screen nobody
+ * measured. A measurement with an empty drawable, or none, also reads as
+ * a change here; GLimp_ScreenAction is what leaves such a window alone.
  */
 qboolean
 GLimp_ScreenChanged(const int *made, const int *now)
@@ -110,6 +111,70 @@ GLimp_ScreenChanged(const int *made, const int *now)
 	}
 
 	return false;
+}
+
+/*
+ * TASK172: an orientation name (any case) as GLIMP_ORIENT_* bits; 0 for a
+ * name that is none of them. The ios_orientation command takes it.
+ */
+int
+GLimp_OrientationBits(const char *name)
+{
+	static const struct
+	{
+		const char *name;
+		int bits;
+	} names[] = {
+		{ "portrait", GLIMP_ORIENT_PORTRAIT },
+		{ "portraitupsidedown", GLIMP_ORIENT_UPSIDEDOWN },
+		{ "landscapeleft", GLIMP_ORIENT_LANDSCAPELEFT },
+		{ "landscaperight", GLIMP_ORIENT_LANDSCAPERIGHT },
+		{ "landscape", GLIMP_ORIENT_LANDSCAPELEFT | GLIMP_ORIENT_LANDSCAPERIGHT },
+		{ "all", GLIMP_ORIENT_PORTRAIT | GLIMP_ORIENT_UPSIDEDOWN | GLIMP_ORIENT_LANDSCAPELEFT | GLIMP_ORIENT_LANDSCAPERIGHT }
+	};
+	size_t i;
+
+	if (!name)
+	{
+		return 0;
+	}
+
+	for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+	{
+		if (Q_stricmp(name, names[i].name) == 0)
+		{
+			return names[i].bits;
+		}
+	}
+
+	return 0;
+}
+
+/*
+ * What GLimp_ScreenEvent does when SDL says the safe area or the pixel
+ * size moved (TASK172). made is the record of the screen the video follows,
+ * now the screen as measured, dw and dh the drawable the renderer gives
+ * (0 when it gives none). IGNORE: the window has no pixels (hidden in the
+ * middle of a change, taken when it has a size again), or it is the screen
+ * already noted (the next event of the same change). RESTART: the screen
+ * changed and the renderer gives no drawable, so only a vid_restart can
+ * follow it (TASK147). LIVE: the screen changed and the renderer's drawable
+ * is the new size, which viddef takes with no restart.
+ */
+int
+GLimp_ScreenAction(const int *made, const int *now, int dw, int dh)
+{
+	if (!now || (now[0] <= 0) || (now[1] <= 0) || !GLimp_ScreenChanged(made, now))
+	{
+		return GLIMP_SCREEN_IGNORE;
+	}
+
+	if ((dw <= 0) || (dh <= 0))
+	{
+		return GLIMP_SCREEN_RESTART;
+	}
+
+	return GLIMP_SCREEN_LIVE;
 }
 
 /*

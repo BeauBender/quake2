@@ -1231,6 +1231,7 @@ CLIENT_OBJS_ := \
 	src/client/cl_upscale_cmd.o \
 	src/client/cl_view.o \
 	src/client/input/gyro.o \
+	src/client/input/ingate.o \
 	src/client/input/touch.o \
 	src/client/menu/menu.o \
 	src/client/menu/qmenu.o \
@@ -1803,8 +1804,9 @@ endif
 # The unit-test suite (tests/unit, see doc/085_unittests.md). The test
 # binary links the dedicated server's own objects (SERVER_OBJS_ below,
 # built with q2ded's flags into a tree of their own) except the unix
-# main.c; tests/unit/main.c supplies main(). Ten client objects
-# (cl_conback, cl_download, cl_entities, cl_network, cl_parse, cl_screen,
+# main.c; tests/unit/main.c supplies main(). The client objects
+# (cl_cinsize, cl_conback, cl_download, cl_entities, cl_network, cl_parse,
+# cl_screen, the input gate input/ingate.c, the touch layer input/touch.c,
 # the upscaler's checks and pixel arithmetic cl_upscale, the sound
 # frontend sound.c, the window code's SDL-free part vid/glimp_hidpi.c and
 # the video menu's rules menu/vidrules.c)
@@ -1851,6 +1853,7 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(TESTDIR)/src/client/cl_parse.o \
 	$(TESTDIR)/src/client/cl_screen.o \
 	$(TESTDIR)/src/client/cl_upscale.o \
+	$(TESTDIR)/src/client/input/ingate.o \
 	$(TESTDIR)/src/client/input/touch.o \
 	$(TESTDIR)/src/client/menu/vidrules.o \
 	$(TESTDIR)/src/client/sound/sound.o \
