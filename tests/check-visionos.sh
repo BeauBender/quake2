@@ -1,0 +1,335 @@
+#!/bin/sh
+# Invariant: the iOS mode of the Makefile builds the engine for the Apple
+# Vision Pro simulator too (TASK175: "make ios_objects IOS_SDK=xrsimulator"),
+# from the same object list as the iOS simulator build, and the iPhone and
+# iPad only code is compiled out of it.
+#
+# Every decision is taken from the build's artifacts (LC_BUILD_VERSION in
+# otool -l, the code of otool -tV, the bytes of an object, plutil, the
+# preprocessor's output, the commands of make -n), never from a line make
+# prints. In a scratch IOS_ROOT, with METAL_SHADERS=no (no SDL, no link):
+#   (a) every object of the tree has LC_BUILD_VERSION platform 12
+#       (XROSSIMULATOR) and minos 1.0, and there is at least one;
+#   (b) the visionOS build compiles the same object list as the iOS
+#       simulator build (make -n ios_objects, the "-o <path>" of each
+#       compile, the build root removed): the target adds and drops no file;
+#   (c) the Info.plist passes plutil -lint, names XRSimulator and 1.0,
+#       UIDeviceFamily 7 (Apple Vision) alone, no template key, and none of
+#       the iPhone's UIFileSharingEnabled, orientation or status bar keys;
+#   (d) the build's target, preprocessed with the SDK's TargetConditionals.h:
+#       TARGET_OS_VISION 1, TARGET_OS_IPHONE 1, TARGET_OS_IOS 0, so the
+#       iPhone and iPad only sites, whose #if names TARGET_OS_IOS
+#       (tests/check-tvos.sh (d) holds that for each), are compiled out;
+#   (e) the compiled objects of three of those sites: Touch_Supported in
+#       touch.o is "mov w0, #0x0; ret", glimp_sdl3.o holds no orientation
+#       hint ("LandscapeLeft LandscapeRight") and vid.o no ios_orientation
+#       command (the UIWindowSceneGeometryPreferencesIOS request, which
+#       visionOS does not have).
+# It does not compare the iOS build with an earlier one; that comparison is
+# the review's before and after of make -n (docs/runbook/TASK175.md).
+# Each assertion first runs on a mutant it must refuse (an object built for
+# the iOS or the tvOS simulator, a different object list, an iPhone or an
+# Apple TV plist, a plist with a forbidden key, two device families or
+# another minimum OS, the iOS simulator's target, a Touch_Supported that
+# returns 1 or a variable, an object that holds the orientation hint or the
+# command), so an assertion that passes everything fails here.
+#
+# The helpers are copied from tests/check-tvos.sh with the platform, the
+# minimum OS and the device family changed, rather than shared with it:
+# a shared file would change what check-tvos.sh runs.
+#
+# Without the visionOS simulator SDK (another OS, or Xcode without its
+# visionOS platform) it prints one "skipped" line and exits 0.
+# With the SDK a missing tool or a failed build is a failure, never a skip.
+#
+# Usage: tests/check-visionos.sh
+set -eu
+cd "$(dirname "$0")/.."
+export LC_ALL=C
+unset MAKEFLAGS GNUMAKEFLAGS MFLAGS
+
+if [ "$(uname -s)" != Darwin ]; then
+	echo "check-visionos: skipped: the visionOS build is macOS only (docs/decisions/0008)"
+	exit 0
+fi
+sdk=
+if command -v xcrun >/dev/null 2>&1; then
+	sdk=$(xcrun --sdk xrsimulator --show-sdk-path 2>/dev/null) || sdk=
+fi
+if [ -z "$sdk" ] || [ ! -f "$sdk/SDKSettings.plist" ]; then
+	echo "check-visionos: skipped: no visionOS simulator SDK (xcrun --sdk xrsimulator --show-sdk-path)"
+	exit 0
+fi
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/check-visionos.XXXXXX")
+trap 'rm -rf "${tmp:?}"' EXIT
+fail=0
+bad() { echo "check-visionos: $*"; fail=1; }
+
+for tool in make otool plutil awk sed sort grep cmp diff clang; do
+	if ! command -v "$tool" >/dev/null 2>&1; then
+		echo "check-visionos: $tool not found: a missing tool is a failure"
+		exit 1
+	fi
+done
+if ! xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1; then
+	echo "check-visionos: the iOS simulator SDK is missing (the object-list comparison needs it): a failure"
+	exit 1
+fi
+
+jobs=${CHECK_JOBS:-4}
+xr_target=arm64-apple-xros1.0-simulator
+
+platform_of()
+{
+	otool -l "$1" 2>/dev/null | awk '$1 == "cmd" { c = $2 } c == "LC_BUILD_VERSION" && $1 == "platform" { p = $2 }
+		c == "LC_BUILD_VERSION" && $1 == "minos" { print p, $2; exit }'
+}
+
+# every file named in <list> is platform 12 at 1.0; the list is not empty
+assert_platform() # <list file>
+{
+	rc=0
+	n=0
+	while read -r f; do
+		n=$((n + 1))
+		got=$(platform_of "$f")
+		if [ "$got" != "12 1.0" ]; then
+			echo "$f is built for platform/minos '${got:-none}', not 12 (XROSSIMULATOR) 1.0"
+			rc=1
+		fi
+	done < "$1"
+	if [ "$n" = 0 ]; then
+		echo "no object was built"
+		rc=1
+	fi
+	return $rc
+}
+
+# two object lists (files of "-o" paths relative to their root) are equal
+assert_same_list() # <a> <b>
+{
+	if ! cmp -s "$1" "$2"; then
+		echo "the object lists differ: $(diff "$1" "$2" | grep -c '^[<>]') lines, first: $(diff "$1" "$2" | grep '^[<>]' | head -n 2 | tr '\n' ' ')"
+		return 1
+	fi
+}
+
+assert_plist() # <Info.plist>
+{
+	if ! plutil -lint -s "$1" >/dev/null 2>&1; then
+		echo "$1 fails plutil -lint"
+		return 1
+	fi
+	rc=0
+	[ "$(plutil -extract CFBundleExecutable raw -o - "$1" 2>/dev/null)" = quake2 ] || { echo "$1: CFBundleExecutable is not quake2"; rc=1; }
+	[ "$(plutil -extract CFBundleSupportedPlatforms.0 raw -o - "$1" 2>/dev/null)" = XRSimulator ] || { echo "$1: the platform is not XRSimulator"; rc=1; }
+	[ "$(plutil -extract MinimumOSVersion raw -o - "$1" 2>/dev/null)" = 1.0 ] || { echo "$1: MinimumOSVersion is not 1.0"; rc=1; }
+	[ "$(plutil -extract UIDeviceFamily.0 raw -o - "$1" 2>/dev/null)" = 7 ] || { echo "$1: UIDeviceFamily is not 7"; rc=1; }
+	[ "$(plutil -extract UIDeviceFamily raw -o - "$1" 2>/dev/null)" = 1 ] || { echo "$1: UIDeviceFamily holds more than the Apple Vision"; rc=1; }
+	if grep -q '@[A-Z_]*@' "$1"; then
+		echo "$1 holds a template key"
+		rc=1
+	fi
+	for k in UIFileSharingEnabled UISupportedInterfaceOrientations UIStatusBarHidden; do
+		if grep -q "<key>$k</key>" "$1"; then
+			echo "$1 holds the iPhone's $k"
+			rc=1
+		fi
+	done
+	return $rc
+}
+
+# the target's TargetConditionals: visionOS, not iPhone and iPad (TARGET_OS_IOS 0)
+assert_conditionals() # <clang target> <sdk>
+{
+	printf '#include <TargetConditionals.h>\nvision=TARGET_OS_VISION iphone=TARGET_OS_IPHONE ios=TARGET_OS_IOS\n' > "${tmp:?}/tc.c"
+	got=$(xcrun --sdk "$2" clang -target "$1" -E -P "${tmp:?}/tc.c" 2>/dev/null | grep '^vision=') || got=
+	if [ "$got" != "vision=1 iphone=1 ios=0" ]; then
+		echo "the target $1 gives '${got:-nothing}', not vision=1 iphone=1 ios=0"
+		return 1
+	fi
+}
+
+# the code of Touch_Supported in <object> is exactly "mov w0, #0x0" and "ret"
+assert_no_touch() # <object>
+{
+	otool -tV "$1" > "${tmp:?}/dis" 2>&1 || { echo "otool -tV $1 failed"; return 1; }
+	awk '$0 == "_Touch_Supported:" { on = 1; next }
+		on && /^[^0-9a-f]/ { exit }
+		on { $1 = ""; sub(/^[ \t]+/, ""); gsub(/[ \t]+/, " "); print }' "${tmp:?}/dis" > "${tmp:?}/fn"
+	if [ "$(tr '\n' ';' < "${tmp:?}/fn")" != "mov w0, #0x0;ret;" ]; then
+		echo "$1: Touch_Supported is not a constant 0: $(tr '\n' ';' < "${tmp:?}/fn")"
+		return 1
+	fi
+}
+
+# <object> exists and its bytes do not hold <text>
+assert_lacks() # <object> <text>
+{
+	[ -f "$1" ] || { echo "$1 is missing"; return 1; }
+	if grep -a -F -q -e "$2" "$1"; then
+		echo "$1 holds \"$2\""
+		return 1
+	fi
+}
+
+# the "-o <path>" of every compile of make -n <args>, the build root removed, sorted
+object_list() # <root> <args...>
+{
+	root=$1
+	shift
+	make -n -B "$@" ios_objects IOS_ROOT="$root" METAL_SHADERS=no 2>/dev/null |
+		awk '{ for (i = 1; i < NF; i++) if ($i == "-o") print $(i + 1) }' | sed "s,^$root/,," | sort
+}
+
+# ---- mutants: each must be refused, naming its cause --------------------
+
+printf 'int xros_mutant;\n' > "${tmp:?}/m.c"
+xcrun --sdk iphonesimulator clang -target arm64-apple-ios17.0-simulator -c "${tmp:?}/m.c" -o "${tmp:?}/m_ios.o"
+# no header: the tvOS object needs no tvOS SDK
+xcrun --sdk iphonesimulator clang -Wno-incompatible-sysroot -target arm64-apple-tvos17.0-simulator -c "${tmp:?}/m.c" -o "${tmp:?}/m_tv.o"
+xcrun --sdk xrsimulator clang -target "$xr_target" -c "${tmp:?}/m.c" -o "${tmp:?}/m_xr.o"
+for m in ios tv; do
+	printf '%s\n' "${tmp:?}/m_$m.o" > "${tmp:?}/l_bad"
+	if assert_platform "${tmp:?}/l_bad" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: an object built for the $m simulator passed the platform check"
+	elif ! grep -q 'not 12 (XROSSIMULATOR)' "${tmp:?}/o"; then
+		bad "mutant: the $m object was refused without naming the platform"
+	fi
+done
+printf '%s\n' "${tmp:?}/m_xr.o" > "${tmp:?}/l_good"
+: > "${tmp:?}/l_empty"
+assert_platform "${tmp:?}/l_good" > "${tmp:?}/o" 2>&1 || bad "a visionOS object was refused: $(cat "${tmp:?}/o")"
+if assert_platform "${tmp:?}/l_empty" > "${tmp:?}/o" 2>&1; then
+	bad "mutant: an empty object list passed"
+fi
+
+printf 'a.o\nb.o\n' > "${tmp:?}/la"
+printf 'a.o\n' > "${tmp:?}/lb"
+if assert_same_list "${tmp:?}/la" "${tmp:?}/lb" > "${tmp:?}/o" 2>&1; then
+	bad "mutant: a dropped object passed the list comparison"
+fi
+
+sed -e 's/@BUNDLE_ID@/x.y/' -e 's/@VERSION@/1/' -e 's/@PLATFORM@/XRSimulator/' -e 's/@MIN_OS@/1.0/' stuff/ios/Info-visionos.plist.in > "${tmp:?}/good.plist"
+assert_plist "${tmp:?}/good.plist" > "${tmp:?}/o" 2>&1 || bad "the visionOS template was refused: $(cat "${tmp:?}/o")"
+sed -e 's/@BUNDLE_ID@/x.y/' -e 's/@VERSION@/1/' -e 's/@PLATFORM@/iPhoneSimulator/' -e 's/@MIN_OS@/17.0/' stuff/ios/Info.plist.in > "${tmp:?}/iphone.plist"
+if assert_plist "${tmp:?}/iphone.plist" > "${tmp:?}/o" 2>&1; then
+	bad "mutant: the iPhone's Info.plist passed the visionOS plist check"
+elif ! grep -q 'XRSimulator' "${tmp:?}/o"; then
+	bad "mutant: the iPhone plist was refused without naming the platform"
+fi
+# the Apple TV's template with the visionOS platform and version: only its device family is wrong
+sed -e 's/@BUNDLE_ID@/x.y/' -e 's/@VERSION@/1/' -e 's/@PLATFORM@/XRSimulator/' -e 's/@MIN_OS@/1.0/' stuff/ios/Info-tvos.plist.in > "${tmp:?}/tv.plist"
+if assert_plist "${tmp:?}/tv.plist" > "${tmp:?}/o" 2>&1; then
+	bad "mutant: the Apple TV's Info.plist passed the visionOS plist check"
+elif ! grep -q 'UIDeviceFamily is not 7' "${tmp:?}/o"; then
+	bad "mutant: the Apple TV plist was refused without naming the device family"
+fi
+# one change each to the good plist: an iPhone key, a second device family, another minimum OS
+# (mk, not k: assert_plist's own loop sets k, sh has no local)
+for mk in UIFileSharingEnabled UISupportedInterfaceOrientations UIStatusBarHidden; do
+	sed "s,<key>CFBundleExecutable</key>,<key>$mk</key><true/>&," "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
+	if assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: a plist with $mk passed"
+	elif ! grep -q "the iPhone's $mk" "${tmp:?}/o"; then
+		bad "mutant: the plist with $mk was refused without naming it"
+	fi
+done
+sed 's,<integer>7</integer>,&<integer>1</integer>,' "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
+if assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
+	bad "mutant: a plist with the Apple Vision and the iPhone families passed"
+elif ! grep -q 'holds more than the Apple Vision' "${tmp:?}/o"; then
+	bad "mutant: the two-family plist was refused without naming the count"
+fi
+sed 's,<string>1\.0</string>,<string>17.0</string>,' "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
+if assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
+	bad "mutant: a plist with MinimumOSVersion 17.0 passed"
+elif ! grep -q 'MinimumOSVersion is not 1.0' "${tmp:?}/o"; then
+	bad "mutant: the 17.0 plist was refused without naming the minimum OS"
+fi
+
+# the conditionals: the iOS simulator's target (TARGET_OS_IOS 1) is refused
+if assert_conditionals arm64-apple-ios17.0-simulator iphonesimulator > "${tmp:?}/o" 2>&1; then
+	bad "mutant: the iOS simulator's target passed the visionOS conditionals"
+elif ! grep -q 'not vision=1 iphone=1 ios=0' "${tmp:?}/o"; then
+	bad "mutant: the iOS target was refused without naming the conditionals"
+fi
+
+# Touch_Supported: a constant 0 passes, a 1 or a read of a variable does not
+printf 'int Touch_Supported(void) { return 0; }\n' > "${tmp:?}/t0.c"
+printf 'int Touch_Supported(void) { return 1; }\n' > "${tmp:?}/t1.c"
+printf 'extern int xros_g;\nint Touch_Supported(void) { return xros_g; }\n' > "${tmp:?}/tv.c"
+for t in t0 t1 tv; do
+	xcrun --sdk xrsimulator clang -O2 -target "$xr_target" -c "${tmp:?}/$t.c" -o "${tmp:?}/$t.o"
+done
+assert_no_touch "${tmp:?}/t0.o" > "${tmp:?}/o" 2>&1 || bad "a constant-0 Touch_Supported was refused: $(cat "${tmp:?}/o")"
+for t in t1 tv; do
+	if assert_no_touch "${tmp:?}/$t.o" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: a Touch_Supported that is not 0 ($t.c) passed"
+	fi
+done
+if assert_no_touch "${tmp:?}/m_xr.o" > "${tmp:?}/o" 2>&1; then
+	bad "mutant: an object without Touch_Supported passed"
+fi
+
+# an object that holds the orientation hint or the command is refused, a missing one too
+printf 'const char *h = "LandscapeLeft LandscapeRight";\nconst char *c = "ios_orientation";\n' > "${tmp:?}/s.c"
+xcrun --sdk xrsimulator clang -target "$xr_target" -c "${tmp:?}/s.c" -o "${tmp:?}/s.o"
+for text in "LandscapeLeft LandscapeRight" ios_orientation; do
+	if assert_lacks "${tmp:?}/s.o" "$text" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: an object holding \"$text\" passed"
+	fi
+	assert_lacks "${tmp:?}/m_xr.o" "$text" > "${tmp:?}/o" 2>&1 || bad "an object without \"$text\" was refused: $(cat "${tmp:?}/o")"
+done
+if assert_lacks "${tmp:?}/absent.o" ios_orientation > "${tmp:?}/o" 2>&1; then
+	bad "mutant: a missing object passed"
+fi
+
+if [ "$fail" != 0 ]; then
+	exit 1
+fi
+
+# ---- the build ----------------------------------------------------------
+
+assert_conditionals "$xr_target" xrsimulator > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(d) the visionOS target is not outside TARGET_OS_IOS"; }
+
+root="${tmp:?}/xr"
+if ! make -j"$jobs" ios_objects IOS_SDK=xrsimulator IOS_ROOT="$root" METAL_SHADERS=no > "${tmp:?}/build.log" 2>&1; then
+	tail -n 20 "${tmp:?}/build.log"
+	bad "make ios_objects IOS_SDK=xrsimulator failed"
+	exit 1
+fi
+find "$root" -name '*.o' | sort > "${tmp:?}/objs"
+assert_platform "${tmp:?}/objs" > "${tmp:?}/o" 2>&1 || { head -n 5 "${tmp:?}/o"; bad "(a) the visionOS objects have the wrong platform"; }
+[ -f "$root/Info.plist" ] || bad "(c) no Info.plist was written"
+assert_plist "$root/Info.plist" > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(c) the visionOS Info.plist is wrong"; }
+
+# one_object <name>: the build has exactly one object called <name>; its path is in $tmp/one
+one_object()
+{
+	awk -v n="/$1" 'substr($0, length($0) - length(n) + 1) == n' "${tmp:?}/objs" > "${tmp:?}/one"
+	if [ "$(grep -c . "${tmp:?}/one")" != 1 ]; then
+		bad "(e) the build has $(grep -c . "${tmp:?}/one") $1, not 1"
+		return 1
+	fi
+}
+if one_object touch.o; then
+	assert_no_touch "$(cat "${tmp:?}/one")" > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the touch overlay is compiled into the visionOS build"; }
+fi
+if one_object glimp_sdl3.o; then
+	assert_lacks "$(cat "${tmp:?}/one")" "LandscapeLeft LandscapeRight" > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the orientation hint is compiled into the visionOS build"; }
+fi
+if one_object vid.o; then
+	assert_lacks "$(cat "${tmp:?}/one")" ios_orientation > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the ios_orientation command is compiled into the visionOS build"; }
+fi
+
+object_list /r IOS_SDK=xrsimulator > "${tmp:?}/list_xr"
+object_list /r IOS_SDK=iphonesimulator > "${tmp:?}/list_ios"
+assert_same_list "${tmp:?}/list_ios" "${tmp:?}/list_xr" > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(b) the visionOS object list is not the iOS simulator's"; }
+[ -s "${tmp:?}/list_xr" ] || bad "(b) make -n listed no object"
+
+if [ "$fail" != 0 ]; then
+	exit 1
+fi
+echo "check-visionos: ok ($(grep -c . "${tmp:?}/objs") objects for the visionOS simulator, platform 12, the iOS simulator's list)"
