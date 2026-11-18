@@ -24,8 +24,21 @@
 #       17.0, UIDeviceFamily 3 (Apple TV) alone, no template key, and none
 #       of the iPhone's UIFileSharingEnabled, orientation or status bar keys;
 #   (e) the compiled touch.o: Touch_Supported is "mov w0, #0x0; ret", 0
-#       whatever the device; and nm -u of every imgdecode.o lists
-#       _kCGImageSourceAllowableTypes (ImageIO reads only the file's type).
+#       whatever the device; nm -u of every imgdecode.o lists
+#       _kCGImageSourceAllowableTypes (ImageIO reads only the file's type);
+#       sdl3.o holds no SDL_RETURN_KEY_HIDES_IME, does not need
+#       _Touch_TextInput and holds the name SDL_TV_REMOTE_AS_JOYSTICK, which
+#       sdl3.c's one line naming it sets to "0" (the Siri Remote as keys);
+#       glimp_sdl3.o holds neither SDL_ORIENTATIONS nor
+#       SDL_IOS_HIDE_HOME_INDICATOR; menu.o holds the address book's tvOS
+#       reason (greyed, TASK23 slice 2a). The iOS simulator's object of each
+#       of those files is the positive control: it holds what tvOS lacks,
+#       needs what tvOS does not, and lacks the remote's hint and the
+#       address book's reason. A menu.c whose address book guard is widened
+#       to "#ifdef TARGET_OS_TV" (true on every Apple target) is compiled
+#       for the iOS simulator as the mutant that control must refuse.
+#   (d) also takes only a bare true test: a chain of && of names, !names
+#       and defined()s with TARGET_OS_IOS alone among them (TASK23 slice 2).
 # It does not compare the iOS build with an earlier one; that comparison is
 # the review's before and after of make -n (docs/runbook/TASK23.md).
 # Each assertion first runs on a mutant it must refuse (an object built for
@@ -101,6 +114,30 @@ assert_guard()
 		echo "$1:${g%%:*}: the guard of \"$3\" does not name TARGET_OS_IOS: ${g#*:}"
 		return 1
 	fi
+	# a bare true test only (TASK23 slice 2): the condition is a chain of
+	# && whose terms are each a name, !name or defined(name), in any
+	# parentheses, and one of them is TARGET_OS_IOS alone. Such a chain is 0
+	# whenever TARGET_OS_IOS is; "TARGET_OS_IOS == 0", "!= 1", "- 1", an ||,
+	# a ?: or a !( ) around the chain is refused
+	if ! printf '%s\n' "$gx" | awk '{
+		c = $0
+		sub(/^[ \t]*#[ \t]*if[ \t]*/, "", c)
+		gsub(/defined[ \t]*[(][ \t]*[_[:alnum:]]+[ \t]*[)]/, "D", c)
+		gsub(/defined[ \t]+[_[:alnum:]]+/, "D", c)
+		n = split(c, t, /&&/)
+		bare = 0
+		for (i = 1; i <= n; i++) {
+			x = t[i]
+			gsub(/^[ \t(]+/, "", x)
+			gsub(/[ \t)]+$/, "", x)
+			if (x !~ /^!?[_[:alpha:]][_[:alnum:]]*$/) exit 1
+			if (x == "TARGET_OS_IOS") bare = 1
+		}
+		exit !bare
+	}'; then
+		echo "$1:${g%%:*}: the guard of \"$3\" is not a bare true test of TARGET_OS_IOS: ${g#*:}"
+		return 1
+	fi
 }
 
 n=0
@@ -121,7 +158,7 @@ while IFS='|' read -r f s a; do
 	fi
 	# the guards that are true on visionOS or tvOS too: defined(), #ifdef, a ! before the name
 	# (<sed expression on the guard's line>|<the refusal's words>)
-	while IFS='|' read -r ex why; do
+	while IFS=@ read -r ex why; do
 		sed "${l%%:*}$ex" "$f" > "${tmp:?}/mut$n.c"
 		if cmp -s "$f" "${tmp:?}/mut$n.c"; then
 			bad "mutant: the guard of site $n is not changed by $ex"
@@ -131,13 +168,24 @@ while IFS='|' read -r f s a; do
 			bad "mutant: site $n with $ex was refused without saying it $why: $(cat "${tmp:?}/o")"
 		fi
 	done <<MUT
-s/TARGET_OS_IOS/defined(TARGET_OS_IOS)/|does not name TARGET_OS_IOS
-s/TARGET_OS_IOS/defined TARGET_OS_IOS/|does not name TARGET_OS_IOS
-s/.*/#ifdef TARGET_OS_IOS/|is an #ifdef or #ifndef
-s/.*/#  ifdef TARGET_OS_IOS \/* iPhone *\//|is an #ifdef or #ifndef
-s/TARGET_OS_IOS/!TARGET_OS_IOS/|negates TARGET_OS_IOS
-s/TARGET_OS_IOS/! (TARGET_OS_IOS)/|negates TARGET_OS_IOS
+s/TARGET_OS_IOS/defined(TARGET_OS_IOS)/@does not name TARGET_OS_IOS
+s/TARGET_OS_IOS/defined TARGET_OS_IOS/@does not name TARGET_OS_IOS
+s/.*/#ifdef TARGET_OS_IOS/@is an #ifdef or #ifndef
+s/.*/#  ifdef TARGET_OS_IOS \/* iPhone *\//@is an #ifdef or #ifndef
+s/TARGET_OS_IOS/!TARGET_OS_IOS/@negates TARGET_OS_IOS
+s/TARGET_OS_IOS/! (TARGET_OS_IOS)/@negates TARGET_OS_IOS
+s/TARGET_OS_IOS/TARGET_OS_IOS == 0/@is not a bare true test
+s/TARGET_OS_IOS/TARGET_OS_IOS != 1/@is not a bare true test
+s/TARGET_OS_IOS/TARGET_OS_IOS - 1/@is not a bare true test
+s/TARGET_OS_IOS/0 == (TARGET_OS_IOS)/@is not a bare true test
+s/TARGET_OS_IOS/(TARGET_OS_IOS || 1)/@is not a bare true test
+s/TARGET_OS_IOS/(TARGET_OS_IOS ? 0 : 1)/@is not a bare true test
+s/^#[ \t]*if[ \t]*\(.*\)$/#if !(\1)/@is not a bare true test
 MUT
+	# the positive control of the bare-test rule: parentheses around the name still pass
+	sed "${l%%:*}s/TARGET_OS_IOS/((TARGET_OS_IOS))/" "$f" > "${tmp:?}/mut$n.c"
+	assert_guard "${tmp:?}/mut$n.c" "$s" "$a" > "${tmp:?}/o" 2>&1 ||
+		bad "site $n with its guard in parentheses was refused: $(cat "${tmp:?}/o")"
 done <<EOF
 $sites
 EOF
@@ -263,6 +311,55 @@ assert_need() # <object> <symbol>
 	esac
 }
 
+# bytes_have <object> <text>: 0 the bytes hold <text>, 1 they do not, 2 the
+# object is missing or unreadable (said); grep's own status decides
+bytes_have()
+{
+	[ -f "$1" ] || { echo "$1 is missing"; return 2; }
+	brc=0
+	grep -a -F -q -e "$2" "$1" 2>/dev/null || brc=$?
+	case $brc in
+	0|1) return $brc ;;
+	*) echo "$1: cannot read (grep status $brc)"; return 2 ;;
+	esac
+}
+
+# assert_lacks / assert_holds <object> <text>: the bytes do not hold, or hold, <text>
+assert_lacks()
+{
+	arc=0
+	bytes_have "$1" "$2" || arc=$?
+	case $arc in
+	0) echo "$1 holds \"$2\""; return 1 ;;
+	1) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+assert_holds()
+{
+	arc=0
+	bytes_have "$1" "$2" || arc=$?
+	case $arc in
+	0) return 0 ;;
+	1) echo "$1 does not hold \"$2\""; return 1 ;;
+	*) return 1 ;;
+	esac
+}
+
+# assert_no_need <object> <symbol>: nm -u does not list <symbol>
+assert_no_need()
+{
+	[ -f "$1" ] || { echo "$1 is missing"; return 1; }
+	nm -u "$1" > "${tmp:?}/nm" 2>/dev/null || { echo "$1: cannot read (nm -u failed)"; return 1; }
+	nrc=0
+	grep -x -F -q -e "$2" "${tmp:?}/nm" || nrc=$?
+	case $nrc in
+	0) echo "$1 needs $2 (nm -u)"; return 1 ;;
+	1) return 0 ;;
+	*) echo "${tmp:?}/nm: cannot read (grep status $nrc)"; return 1 ;;
+	esac
+}
+
 # the "-o <path>" of every compile of make -n <args>, the build root removed, sorted
 # (list_root, not root: the build below keeps its own root)
 object_list() # <root> <args...>
@@ -378,6 +475,48 @@ for obj in absent unreadable; do
 	fi
 done
 chmod 600 "${tmp:?}/unreadable.o"
+
+# the pinned strings of (e) (TASK23 slice 2, as check-visionos pins them):
+# an object holding one is refused by assert_lacks and passes assert_holds,
+# one without it the other way round; an unreadable or missing one is
+# refused by both
+printf 'const char *a = "SDL_RETURN_KEY_HIDES_IME";\nconst char *b = "SDL_ORIENTATIONS";\nconst char *c = "SDL_IOS_HIDE_HOME_INDICATOR";\nconst char *d = "SDL_TV_REMOTE_AS_JOYSTICK";\n' > "${tmp:?}/s.c"
+xcrun --sdk appletvsimulator clang -target arm64-apple-tvos17.0-simulator -c "${tmp:?}/s.c" -o "${tmp:?}/s.o"
+for text in SDL_RETURN_KEY_HIDES_IME SDL_ORIENTATIONS SDL_IOS_HIDE_HOME_INDICATOR SDL_TV_REMOTE_AS_JOYSTICK; do
+	if assert_lacks "${tmp:?}/s.o" "$text" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: an object holding \"$text\" passed"
+	elif ! grep -q "holds \"$text\"" "${tmp:?}/o"; then
+		bad "mutant: the object holding \"$text\" was refused without naming it"
+	fi
+	assert_lacks "${tmp:?}/m_tv.o" "$text" > "${tmp:?}/o" 2>&1 || bad "an object without \"$text\" was refused: $(cat "${tmp:?}/o")"
+	assert_holds "${tmp:?}/s.o" "$text" > "${tmp:?}/o" 2>&1 || bad "an object holding \"$text\" was refused by assert_holds: $(cat "${tmp:?}/o")"
+	if assert_holds "${tmp:?}/m_tv.o" "$text" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: an object without \"$text\" passed assert_holds"
+	fi
+done
+# _Touch_TextInput: an object that needs it is refused, one that does not passes
+printf 'extern int Touch_TextInput(int, int, int, int *);\nint tvos_t(void) { return Touch_TextInput(0, 0, 0, 0); }\n' > "${tmp:?}/ti.c"
+xcrun --sdk appletvsimulator clang -target arm64-apple-tvos17.0-simulator -c "${tmp:?}/ti.c" -o "${tmp:?}/ti.o"
+if assert_no_need "${tmp:?}/ti.o" _Touch_TextInput > "${tmp:?}/o" 2>&1; then
+	bad "mutant: an object that needs _Touch_TextInput passed"
+elif ! grep -q 'needs _Touch_TextInput' "${tmp:?}/o"; then
+	bad "mutant: the object that needs _Touch_TextInput was refused without naming it"
+fi
+assert_no_need "${tmp:?}/m_tv.o" _Touch_TextInput > "${tmp:?}/o" 2>&1 || bad "an object without _Touch_TextInput was refused: $(cat "${tmp:?}/o")"
+chmod 000 "${tmp:?}/unreadable.o"
+for obj in absent unreadable; do
+	if [ "$obj" = unreadable ] && [ -r "${tmp:?}/unreadable.o" ]; then
+		continue
+	fi
+	for a in assert_lacks assert_holds assert_no_need; do
+		if "$a" "${tmp:?}/$obj.o" SDL_ORIENTATIONS > "${tmp:?}/o" 2>&1; then
+			bad "mutant: $a passed an $obj object"
+		elif ! grep -E -q 'is missing|cannot read' "${tmp:?}/o"; then
+			bad "mutant: $a refused an $obj object without saying it cannot be read: $(cat "${tmp:?}/o")"
+		fi
+	done
+done
+chmod 600 "${tmp:?}/unreadable.o"
 if [ "$fail" != 0 ]; then
 	exit 1
 fi
@@ -407,6 +546,99 @@ fi
 while read -r obj; do
 	assert_need "$obj" _kCGImageSourceAllowableTypes > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the image decoder does not restrict ImageIO to the file's type"; }
 done < "${tmp:?}/imgdecode"
+
+# the positive controls: the iOS simulator's object of each pinned file,
+# compiled with the command make -n gives for it, under the scratch root
+ios_root="${tmp:?}/ios"
+make -n -B ios_objects IOS_SDK=iphonesimulator IOS_ROOT="$ios_root" METAL_SHADERS=no > "${tmp:?}/ios.n" 2>/dev/null || bad "(e) make -n ios_objects for the iOS simulator failed"
+# ios_object <source>: the path of that object is in $tmp/ios_one
+ios_object()
+{
+	awk -v s="$1" '/ -c / { for (i = 1; i <= NF; i++) if ($i == s) { print; exit } }' "${tmp:?}/ios.n" > "${tmp:?}/cmd"
+	awk '{ for (i = 1; i < NF; i++) if ($i == "-o") print $(i + 1) }' "${tmp:?}/cmd" > "${tmp:?}/ios_one"
+	if [ "$(grep -c . "${tmp:?}/ios_one")" != 1 ]; then
+		bad "(e) make -n names no compile of $1 for the iOS simulator"
+		return 1
+	fi
+	awk '{ for (i = 1; i < NF; i++) if ($i == "-o" || $i == "-MF") print $(i + 1) }' "${tmp:?}/cmd" > "${tmp:?}/ios_out"
+	while read -r out; do
+		case $out in
+		"$ios_root"/*) mkdir -p "$(dirname "$out")" ;;
+		*) bad "(e) the iOS simulator's compile of $1 writes $out, outside the scratch root"; return 1 ;;
+		esac
+	done < "${tmp:?}/ios_out"
+	if ! sh "${tmp:?}/cmd" > "${tmp:?}/cc.log" 2>&1; then
+		tail -n 5 "${tmp:?}/cc.log"
+		bad "(e) $1 does not compile for the iOS simulator"
+		return 1
+	fi
+}
+
+# pin <lacks|holds|no_need> <object name> <source> <text or symbol> <what>:
+# every tvOS object called <name> (one at least), and the iOS simulator's
+# object of <source> as the control: lacks (iOS: holds), holds (iOS:
+# lacks), no_need (iOS: needs). Every path returns 0; bad records it
+pin()
+{
+	awk -v n="/$2" 'substr($0, length($0) - length(n) + 1) == n' "${tmp:?}/objs" > "${tmp:?}/named"
+	if [ ! -s "${tmp:?}/named" ]; then
+		bad "(e) the build has no $2"
+		return 0
+	fi
+	while read -r obj; do
+		case $1 in
+		lacks) assert_lacks "$obj" "$4" ;;
+		holds) assert_holds "$obj" "$4" ;;
+		no_need) assert_no_need "$obj" "$4" ;;
+		esac > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) $5"; }
+	done < "${tmp:?}/named"
+	ios_object "$3" || return 0
+	case $1 in
+	lacks) assert_holds "$(cat "${tmp:?}/ios_one")" "$4" ;;
+	holds) assert_lacks "$(cat "${tmp:?}/ios_one")" "$4" ;;
+	no_need) assert_need "$(cat "${tmp:?}/ios_one")" "$4" ;;
+	esac > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the positive control failed: the pin on \"$4\" would pass whatever the tvOS build holds"; }
+}
+pin lacks sdl3.o src/client/input/sdl3.c SDL_RETURN_KEY_HIDES_IME "the iPhone's in_touch default and keyboard hint are compiled into the tvOS build"
+pin no_need sdl3.o src/client/input/sdl3.c _Touch_TextInput "the on-screen keyboard's follow-up is compiled into the tvOS build"
+pin holds sdl3.o src/client/input/sdl3.c SDL_TV_REMOTE_AS_JOYSTICK "the tvOS sdl3.o does not hold the name SDL_TV_REMOTE_AS_JOYSTICK: the Siri Remote's hint is not compiled in"
+# the value the object cannot show: the one line of sdl3.c naming the hint sets it to "0" (keys)
+n=$(grep -c 'SDL_HINT_TV_REMOTE_AS_JOYSTICK' src/client/input/sdl3.c) || :
+if [ "$n" != 1 ] || ! grep -F -q 'SDL_SetHint(SDL_HINT_TV_REMOTE_AS_JOYSTICK, "0");' src/client/input/sdl3.c; then
+	bad "(e) sdl3.c does not set SDL_HINT_TV_REMOTE_AS_JOYSTICK to \"0\" on the one line naming it ($n lines name it): the Siri Remote is not set to keys"
+fi
+pin lacks glimp_sdl3.o src/client/vid/glimp_sdl3.c SDL_ORIENTATIONS "the orientation hint is compiled into the tvOS build"
+pin lacks glimp_sdl3.o src/client/vid/glimp_sdl3.c SDL_IOS_HIDE_HOME_INDICATOR "the home indicator hint is compiled into the tvOS build"
+reason="typing an address needs a keyboard, which tvOS does not have"
+pin holds menu.o src/client/menu/menu.c "$reason" "the address book is not greyed with its reason in the tvOS build"
+# the mutant of that pin's control: the address book's guard widened to
+# "#ifdef TARGET_OS_TV", true on every Apple target (the name is always
+# defined, 0 or 1), greys it for macOS and iOS players; compiled for the iOS
+# simulator with the command pin just ran ($tmp/cmd), it must be refused
+guard='#if defined(__APPLE__) && TARGET_OS_TV'
+n=$(grep -c -x -F -e "$guard" src/client/menu/menu.c) || :
+if [ "$n" != 1 ]; then
+	bad "(e) menu.c has $n lines '$guard', not the address book's one: the mutant has no site"
+else
+	mkdir -p "${tmp:?}/mut"
+	awk -v g="$guard" '$0 == g { $0 = "#ifdef TARGET_OS_TV" } { print }' src/client/menu/menu.c > "${tmp:?}/mut/menu.c"
+	awk -v s=src/client/menu/menu.c -v m="${tmp:?}/mut/menu.c" -v o="${tmp:?}/mut/menu.o" '{
+		for (i = 2; i <= NF; i++) {
+			if ($i == s) $i = m
+			else if ($(i - 1) == "-o") $i = o
+			else if ($(i - 1) == "-MF") $i = o ".d"
+		}
+		print $0 " -Isrc/client/menu"
+	}' "${tmp:?}/cmd" > "${tmp:?}/mut/cmd"
+	if ! grep -F -q -e "${tmp:?}/mut/menu.c" "${tmp:?}/mut/cmd"; then
+		bad "(e) the mutant's compile does not name the mutated menu.c"
+	elif ! sh "${tmp:?}/mut/cmd" > "${tmp:?}/mut/cc.log" 2>&1; then
+		tail -n 5 "${tmp:?}/mut/cc.log"
+		bad "(e) the widened-guard mutant of menu.c does not compile for the iOS simulator"
+	elif assert_lacks "${tmp:?}/mut/menu.o" "$reason" > "${tmp:?}/o" 2>&1; then
+		bad "mutant: the address book's guard widened to #ifdef TARGET_OS_TV passed (e)'s control"
+	fi
+fi
 
 object_list /r IOS_SDK=appletvsimulator > "${tmp:?}/list_tv"
 object_list /r IOS_SDK=iphonesimulator > "${tmp:?}/list_ios"
