@@ -196,3 +196,30 @@ first, against the code as it was at `b1675181`:
   when vt's model is missing (red: the self-test's new cases failed); the reason buffers are
   written only through the NULL-checked helper; decision 0013 and the DEPENDENCIES row say the
   weak link allows a lower deployment target, which the Makefile does not set.
+
+## Review round 2
+
+The panel confirmed round 1's fixes and found three Importants and some Notes; each fix below
+was shown against a mutant of the line it covers.
+
+- **I1, the fetch guard failed open:** it matched only `CL_UpscaleVTFetch[Start](` with the name
+  not at the start of a line, so a function pointer, a macro alias, a call at column 0 or split
+  across lines, a raw `downloadConfigurationModelWithCompletionHandler:` call and a grep error all
+  passed it. Fixed: the guard ("What the slice adds" above, decision 0013) flags the bare name outside an
+  exact allow-list, requires one download inside the fetch's body, fails on a tool error, and
+  runs eight mutants first: each refused (seven with exit 1, the unreadable file with exit 2, a tool error).
+- **I2, the evidence named no commit:** "What was measured" above names `87434ba2` and what
+  changed after it.
+- **Correctness I2, the idle line:** "the first press has macOS download its model" was false
+  where the model is there (a press runs at once). It now reads "Apple's ML scaler; a press first
+  has macOS download its model if it is missing", true in both cases; the unit test pins every
+  state's line. Mutant (the old wording): `upscale_vt_item` failed on the line.
+- **Notes fixed:** the fetch checks "running" and claims it in one `dispatch_sync` block; the
+  generator opens every file it writes with `O_NOFOLLOW` and copies through that descriptor
+  (mutant, the flag removed: the planted links were written through and the new case failed);
+  the half-float conversion is a pure C header the unit suite round-trips over all 256 bytes
+  without the model (mutant, the old encode that stored `v` as `v`: 254 of the 256 bytes did not
+  come back, the first at 1); the host test's flat-tile bound is 4 levels, not 12. At the head on
+  this M6, `tests/check-upscale-vt.sh` with `UPSCALE_VT_REQUIRE=1` passed 25, failed 0, and the
+  flat tiles at 4x came back (0, 0, 0), (32, 31, 31), (128, 128, 128), (200, 199, 200), (254,
+  254, 254), (199, 63, 32) and (16, 128, 240): at most 1 level out.
