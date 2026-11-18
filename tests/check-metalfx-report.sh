@@ -542,7 +542,7 @@ limit" "$out"
           BENCH_STATE="$st" PATH="$tmp/maketrue:$PATH")
     "${lenv[@]}" sh "$bsh" lock run gate -- sleep 10 > "$w/lk-holder.log" 2>&1 &
     hp=$!
-    n=0; until BENCH_STATE="$st" sh "$bsh" lock status 2>/dev/null | grep -q 'label=gate'; do
+    n=0; until BENCH_STATE="$st" sh "$bsh" lock status 2>/dev/null | grep -q '^lock=held label=gate '; do
         [ $n -lt 50 ] || { ko e2e-lock-wait "the holder did not take the lock"; break; }; sleep 0.1; n=$((n+1)); done
     mkeng "$w/lk-eng" "$tmp/eng-lockseen"; mkdir -p "$w/lk-out"
     out=$("${lenv[@]}" LC_ALL=POSIX MFX_STUB_LABEL="$w/lk-labels" MFX_ENG_LABEL="$w/lk-eng-labels" MFX_BENCH="$bsh" python3 -I "$lk/scripts/metalfx-report/mfx.py" \
