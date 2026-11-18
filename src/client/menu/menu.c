@@ -6529,6 +6529,13 @@ static int walk_path[MAX_MENU_DEPTH];
 static void
 Walk_Key(int key)
 {
+	/* a popup (the server search's) ends with time, and no time passes
+	   inside the walk: it is closed as the time running out closes it */
+	if (Menu_PopupActive(&m_popup))
+	{
+		Menu_ClosePopup(&m_popup);
+	}
+
 	walk_presses++;
 	M_Keydown(key);
 }

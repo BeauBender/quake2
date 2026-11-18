@@ -105,6 +105,58 @@ bundle. `UIFileSharingEnabled` and `Documents` as a place a person puts paks do 
 The simulator does have a writable `Documents`, which is why this slice can copy the paks there with `simctl`; a
 device will not. This is the decision slice 2 must take with the owner.
 
+## Slice 2: controller and Siri Remote input, a focus-safe menu
+
+Not in this slice: the game-data path (the options above stay the owner's decision; how data is found is
+unchanged) and visionOS input (TASK175 slice 2).
+
+### The bindings
+
+No new binding was needed. `Key_DefaultPadBinds` (`src/client/cl_keyboard.c`, TASK150) already runs on every
+`TARGET_OS_IPHONE` target, tvOS included, with the table of `Touch_DefaultBind` (`src/client/input/touch.c`):
+on a fresh start (no `config.cfg`) each gamepad key that has no binding gets one, and nothing is replaced.
+
+| Input | Key | Action |
+|---|---|---|
+| left stick | (axes) | move (`joy_layout` 0) |
+| right stick | (axes) | turn and look |
+| right trigger | `TRIG_RIGHT` | `+attack` |
+| A / cross | `BTN_SOUTH` | `+moveup` (jump) |
+| B / circle | `BTN_EAST` | `+movedown` (crouch) |
+| Y / triangle, right shoulder | `BTN_NORTH`, `SHOULDR_RIGHT` | `weapnext` |
+| left shoulder | `SHOULDR_LEFT` | `weapprev` |
+| X / square | `BTN_WEST` | `invuse` |
+| view (back) | `BTN_BACK` | `inven` |
+| share (misc) | `BTN_MISC1` | `toggleconsole` |
+| menu (start) | `K_ESCAPE` (in `IN_Update`) | the game menu |
+
+In the menus the d-pad and the left stick are the arrows, A selects and B goes back (`Key_GetMenuKey`). macOS
+and a player with a config are untouched: the function is empty outside `TARGET_OS_IPHONE`, and a start with a
+`config.cfg` binds nothing (`Touch_WantBind`, unit-tested in `tests/unit/test_touch.c`).
+
+### The Siri Remote
+
+SDL 3 offers both (`third_party/SDL3/src/joystick/apple/SDL_mfijoystick.m`, `SDL_uikitview.m`). With
+`SDL_HINT_TV_REMOTE_AS_JOYSTICK` on, its default, the remote is a gamepad: the touch surface is two axes and its
+buttons are A (the click), X (Play/Pause) and the pause button (Menu), which SDL's generated mapping
+(`SDL_gamepad.c`, `a:b0,b:b1,x:b2`) makes south, east and west. Menu would then be the west face button, which
+the menu does not read and the game binds to `invuse`, and Play/Pause would be back. While the remote is open as
+a gamepad SDL also drops its key presses. So on tvOS `IN_Init` sets the hint to `0` (`TARGET_OS_TV` only, before
+any gamepad init): the remote is keys, the presses `scancodeFromPress` maps. A click on the up, down, left or right
+edge gives `K_UPARROW`/`K_DOWNARROW`/`K_LEFTARROW`/`K_RIGHTARROW`, the middle click gives `K_ENTER` (select),
+Menu gives `K_ESCAPE` (back in a menu, the game menu during play) and Play/Pause gives `K_PAUSE`. A controller is
+still a gamepad. `tests/check-tvos.sh` (e) pins the hint in the tvOS `sdl3.o` (the iOS simulator's object lacks
+it). Swipes on the touch surface do not move the menu: tvOS sends them as gestures, not presses.
+
+### Text on tvOS
+
+The address book (typing a server address) is greyed on tvOS with its reason, "typing an address needs a
+keyboard, which tvOS does not have" (`TARGET_OS_TV`, `src/client/menu/menu.c`); a server found on the local
+network is still joined from the list. The player name and the server's host name are fields with a default
+that need no typing. The console still opens from `BTN_MISC1` but takes no text on tvOS (slice 1's note).
+
+@@EVIDENCE@@
+
 ## Review round 1
 
 The panel found no Blocker. Four Importants and the Notes, each fixed:

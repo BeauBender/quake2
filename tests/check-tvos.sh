@@ -153,7 +153,7 @@ while IFS='|' read -r f s a; do
 	fi
 	# the guards that are true on visionOS or tvOS too: defined(), #ifdef, a ! before the name
 	# (<sed expression on the guard's line>|<the refusal's words>)
-	while IFS='|' read -r ex why; do
+	while IFS=@ read -r ex why; do
 		sed "${l%%:*}$ex" "$f" > "${tmp:?}/mut$n.c"
 		if cmp -s "$f" "${tmp:?}/mut$n.c"; then
 			bad "mutant: the guard of site $n is not changed by $ex"
@@ -163,19 +163,19 @@ while IFS='|' read -r f s a; do
 			bad "mutant: site $n with $ex was refused without saying it $why: $(cat "${tmp:?}/o")"
 		fi
 	done <<MUT
-s/TARGET_OS_IOS/defined(TARGET_OS_IOS)/|does not name TARGET_OS_IOS
-s/TARGET_OS_IOS/defined TARGET_OS_IOS/|does not name TARGET_OS_IOS
-s/.*/#ifdef TARGET_OS_IOS/|is an #ifdef or #ifndef
-s/.*/#  ifdef TARGET_OS_IOS \/* iPhone *\//|is an #ifdef or #ifndef
-s/TARGET_OS_IOS/!TARGET_OS_IOS/|negates TARGET_OS_IOS
-s/TARGET_OS_IOS/! (TARGET_OS_IOS)/|negates TARGET_OS_IOS
-s/TARGET_OS_IOS/TARGET_OS_IOS == 0/|is not a bare true test
-s/TARGET_OS_IOS/TARGET_OS_IOS != 1/|is not a bare true test
-s/TARGET_OS_IOS/TARGET_OS_IOS - 1/|is not a bare true test
-s/TARGET_OS_IOS/0 == (TARGET_OS_IOS)/|is not a bare true test
-s/TARGET_OS_IOS/(TARGET_OS_IOS || 1)/|is not a bare true test
-s/TARGET_OS_IOS/(TARGET_OS_IOS ? 0 : 1)/|is not a bare true test
-s/^#[ \t]*if[ \t]*\(.*\)$/#if !(\1)/|is not a bare true test
+s/TARGET_OS_IOS/defined(TARGET_OS_IOS)/@does not name TARGET_OS_IOS
+s/TARGET_OS_IOS/defined TARGET_OS_IOS/@does not name TARGET_OS_IOS
+s/.*/#ifdef TARGET_OS_IOS/@is an #ifdef or #ifndef
+s/.*/#  ifdef TARGET_OS_IOS \/* iPhone *\//@is an #ifdef or #ifndef
+s/TARGET_OS_IOS/!TARGET_OS_IOS/@negates TARGET_OS_IOS
+s/TARGET_OS_IOS/! (TARGET_OS_IOS)/@negates TARGET_OS_IOS
+s/TARGET_OS_IOS/TARGET_OS_IOS == 0/@is not a bare true test
+s/TARGET_OS_IOS/TARGET_OS_IOS != 1/@is not a bare true test
+s/TARGET_OS_IOS/TARGET_OS_IOS - 1/@is not a bare true test
+s/TARGET_OS_IOS/0 == (TARGET_OS_IOS)/@is not a bare true test
+s/TARGET_OS_IOS/(TARGET_OS_IOS || 1)/@is not a bare true test
+s/TARGET_OS_IOS/(TARGET_OS_IOS ? 0 : 1)/@is not a bare true test
+s/^#[ \t]*if[ \t]*\(.*\)$/#if !(\1)/@is not a bare true test
 MUT
 	# the positive control of the bare-test rule: parentheses around the name still pass
 	sed "${l%%:*}s/TARGET_OS_IOS/((TARGET_OS_IOS))/" "$f" > "${tmp:?}/mut$n.c"
