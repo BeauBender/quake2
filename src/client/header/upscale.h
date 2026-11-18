@@ -29,6 +29,8 @@
 
 #include <stddef.h>
 
+#include "upscale_vt.h"
+
 /* after header/client.h: strlist_t, MAX_OSPATH */
 
 /* The largest side of a source image; 4096 after 4x. */
@@ -36,7 +38,8 @@
 
 /*
  * The border, in texels, a world texture is wrap-padded with before the
- * metalfx pass. MetalFX's spatial filter reads more than one texel: a
+ * metalfx or vt pass (CL_UpscaleRGBA, shared by both; vt's is measured in
+ * docs/runbook/TASK167.md). MetalFX's spatial filter reads more than one texel: a
  * probe on the M6 GPU found a one texel border leaves a seam (up to 35
  * levels at 2x, 74 at 4x), and 2, 3 and 4 match 8 exactly. 4 leaves the
  * filters of other GPUs headroom. scale2x reads one texel and keeps 1.
@@ -176,16 +179,20 @@ int CL_UpscalePcxDecodedOk(const unsigned char *pic, int bits, int pw,
 typedef enum
 {
 	UPSCALE_SCALE2X,	/* scale2x of the indices: the default */
-	UPSCALE_METALFX		/* MetalFX's spatial scaler of the RGBA (macOS) */
+	UPSCALE_METALFX,	/* MetalFX's spatial scaler of the RGBA (macOS) */
+	UPSCALE_VT		/* VideoToolbox's super-resolution scaler of the RGBA (macOS 26, TASK167) */
 } upscale_backend_t;
 
-#define UPSCALE_USAGE "usage: upscale_textures <2|4> [scale2x|metalfx] [force]\n"
+#define UPSCALE_USAGE "usage: upscale_textures <2|4> [scale2x|metalfx|vt] [force]\n"
 
-/* "scale2x" or "metalfx"; NULL for any other value */
+/* "scale2x", "metalfx" or "vt"; NULL for any other value */
 const char *CL_UpscaleBackendName(int backend);
 
+/* 1 for a backend that scales the RGBA through CL_UpscaleRGBA (metalfx, vt) */
+int CL_UpscaleBackendRGBA(int backend);
+
 /*
- * The command's words, argv[0] its name: <2|4>, then scale2x or metalfx,
+ * The command's words, argv[0] its name: <2|4>, then a backend name,
  * then force, the last two optional and in that order. 1 with *factor,
  * *backend (UPSCALE_SCALE2X when none is given) and *force set; 0, and
  * nothing set, for any other line.
@@ -200,6 +207,8 @@ int CL_UpscaleParseArgs(int argc, const char *const *argv, int *factor,
  */
 upscale_backend_t CL_UpscaleChooseBackend(upscale_backend_t asked,
 		int supported, const char *reason, char *line, size_t linesize);
+
+/* the vt backend's support checks and its fetch line: upscale_vt.h */
 
 /* CL_UpscaleWrapPad and CL_UpscaleCrop of RGBA8 texels (4 bytes each) */
 int CL_UpscaleWrapPadRGBA(const unsigned char *src, int w, int h,

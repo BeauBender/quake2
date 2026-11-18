@@ -68,9 +68,13 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK166](../runbook/TASK166.md): every bench run carries its quiet evidence, and the flag waits for the GPU reading after a run to settle
 - [FIX106](../runbook/FIX106.md): the host lock serves waiters in arrival order
 - [TASK124](../runbook/TASK124.md): upscale_textures takes a backend: scale2x, or MetalFX's spatial scaler on macOS (decision 0012)
+- [TASK167](../runbook/TASK167.md): upscale_textures gains VideoToolbox's super-resolution backend (decision 0013), and a local report compares the backends
 - [TASK162](../runbook/TASK162.md): water reflections mark their pixels in the G-buffer raster
+- [FIX92](../runbook/FIX92.md): at r_rt_water_hits 0, a hidden door, plat or lift leaves no hole in the water reflection
 - [TASK161](../runbook/TASK161.md): ref_metal and the shim print presented frames a second; presented fps is the headline metric of the gl1-metal vsync0 bench cases
 - [TASK173](../runbook/TASK173.md): The harness captures ray-tracing variations side by side: presets, contact sheets, difference clips and the lightmaps-off preview
+- [TASK23](../runbook/TASK23.md): the tvOS simulator build boots to the main menu and loads base1; the guarded iOS APIs and the game-data options on tvOS
+- [TASK60](../runbook/TASK60.md): ref_metal decides its ray-tracing path at start-up; on the VM every effect cvar reads 0 and every pin is unchanged
 - [TASK172](../runbook/TASK172.md): the iPhone Duo: a live fold and unfold, any aspect, asymmetric safe areas
 - [FIX48](../runbook/FIX48.md): the pin harness keeps keyboard and mouse input out of a record, and checks the rendered-frame count
 - [FIX111](../runbook/FIX111.md): the gate-nap-uncut mutant is caught on every run, whatever the load

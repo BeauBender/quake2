@@ -302,6 +302,15 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 
 * **nextserver**: Used for looping the introduction demos.
 
+* **adr0**, **adr1**, **adr2**, **adr3**, **adr4**, **adr5**, **adr6**,
+  **adr7**, **adr8**: The nine entries of the server
+  address book in the multiplayer menu. Archived; the empty string
+  when an entry is unused.
+
+* **gl_drawflat**, **gl_saturatelighting**: Names in the client's
+  table of cheat-protected cvars that no renderer reads here. In
+  multiplayer the client creates them with the value `0`.
+
 
 ## Audio
 
@@ -707,6 +716,13 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   software renderer has). Set to `0` to disable this, in case you don't
   like the effect or it's too slow on your machine.
 
+* **gl4_intensity**, **gl4_overbrightbits**, **vk_intensity**,
+  **vk_overbrightbits**: The colour intensity and overbright bits of
+  the OpenGL 4 and Vulkan renderers of upstream Yamagi Quake II. This
+  fork builds neither renderer, so nothing creates them; the video
+  menu names them for those renderers, with the meaning of
+  `gl3_intensity` and `gl3_overbrightbits`.
+
 
 ## Graphics (Software only)
 
@@ -902,8 +918,24 @@ The `r_rt_*` cvars belong to the Metal renderer's ray tracing, which is
 being built: `r_rt_shadows` is its first effect, `r_rt_ao` its second, `r_rt_water` its third and `r_rt_sun` its fourth; with `r_rt_stats` set, the renderer
 builds acceleration structures for the world, the doors and platforms
 and every model the frame lists (not only those in view, since a model
-out of view can still cast into it), which nothing reads. On a GPU without ray
-tracing they do nothing (the renderer says so once). The development
+out of view can still cast into it), which nothing reads. At start-up and
+at each `vid_restart` the renderer decides, from what the GPU reports,
+which ray-tracing path it takes, and says so in one line: the compute path
+(`ref_metal: ray tracing: compute path (apple7, supportsRaytracing)`) from
+the apple6 family on with `supportsRaytracing`; from apple9 on with
+`supportsRaytracingFromRender` as well the render-stage path is available
+but not yet built, so the compute path runs there too (`ref_metal: ray
+tracing: compute path (apple9, supportsRaytracing; render-stage available,
+not yet built)`); or none, with the reason (`ref_metal: ray tracing: none (apple5: no supportsRaytracing); the
+ray-tracing effects read 0` on the build VM). With none, the effect
+switches `r_rt_ao`, `r_rt_shadows`, `r_rt_sun` and `r_rt_water` read `0`, even when the
+configuration or the command line set them, and one set at the console
+reads `0` again before the next frame is drawn, with one line naming it
+(`ref_metal: r_rt_ao reads 0: no ray tracing on this device (no
+supportsRaytracing)`), so the configuration saves `0`; the picture is the
+one with every effect off. The other `r_rt_*` cvars are settings and keep
+their values; with no ray tracing they do nothing (`r_rt_stats` says so
+once). The development
 switches `r_rt_gbuffer` and `r_rt_motion` and the settings beside them
 choose how a view is drawn, on any Metal GPU, and leave the picture as it
 is.
@@ -982,6 +1014,13 @@ is.
   counts as `2`, one that is not a finite number as `0`, and a fraction is
   cut to the whole number below it. Cheat-protected: reset to `0` in
   multiplayer. Applies from the next frame.
+
+* **r_rt_denoiser**: The denoiser item of the Metal renderer's video
+  menu reads this cvar; no code creates it yet (the ray-tracing denoiser,
+  TASK113, will). Until then it does not exist unless set by hand, and
+  the menu shows `off`. The menu reads it as `off` below `1`,
+  `bilateral` from `1` and `MetalFX` from `2`; a value that is not a
+  finite number counts as `0`.
 
 * **r_rt_flatlight**: A preview and debug setting of the Metal renderer
   (TASK173): with a level from `0` to `1`, every lightmap sample of the
@@ -1195,17 +1234,19 @@ is.
   `r_rt_water_normal`), so the reflection ripples as the texture does.
   What it meets is shown as the picture shows it, lightmaps, dynamic
   lights and the other ray-traced effects included; where it meets the
-  sky, the sky in that direction. A surface of the map the view does not
-  show (off the screen, or hidden behind something nearer, a door or a
-  platform included) gives no reflection, and the water there is drawn
-  as before; `r_rt_water_hits 1` draws it instead. A model (a player, a
-  monster, an item, a weapon) the view does not show is passed over: the
-  reflection shows what lies behind it, as without the model, so it
-  does not show the model's outline. This works per face, and up to four
-  hidden model faces: past four (one hidden player with its weapon is
-  four) the ray is traced against the map alone, so a model the view
-  shows behind them is passed too, and the reflection there shows what
-  lies behind it (at `0`, none). The reflection is mixed into
+  sky, the sky in that direction. A surface of the world the view does
+  not show (off the screen, or hidden behind something nearer) gives no
+  reflection, and the water there is drawn as before; `r_rt_water_hits
+  1` draws it instead. A model (a player, a monster, an item, a weapon),
+  and at `r_rt_water_hits 0` also a door, a platform or a lift, that the
+  view does not show is passed over: the reflection shows what lies
+  behind it, as without it, so it does not show its outline. This works
+  per face, and up to four hidden faces: past four (one hidden player
+  with its weapon is four, a closed door two) the ray is traced against
+  the map alone, so a model the view shows behind them is passed too,
+  and the reflection there shows what lies behind it (at `0`, none),
+  while a door or a platform there is met (at `0`, none where the view
+  does not show it). The reflection is mixed into
   the water's colour by `r_rt_water_reflect`; translucent water keeps
   its transparency. The rays meet the world, the doors and platforms and
   the models, but not the view weapon or the player's own model. Needs a
@@ -1235,14 +1276,14 @@ is.
 
 * **r_rt_water_hits**: How `r_rt_water` shades what a reflection meets.
   `0` (the default): from the picture alone, as described under
-  `r_rt_water`; a surface of the map the view does not show gives no
+  `r_rt_water`; a surface of the world the view does not show gives no
   reflection.
   `1`: a surface of the map the view does not show (off the screen, or
   hidden behind something nearer) is drawn on its own, its texture and
   lightmap, with the dynamic lights but without their shadows or the
   ambient occlusion; the sky the view does not show comes from the sky
-  box. At both settings what is passed over is exactly this: a model (a
-  player, a monster, an item, a weapon) the view does not show, so the
+  box. At both settings a model (a
+  player, a monster, an item, a weapon) the view does not show is passed over, so the
   reflection shows what lies behind it, and neither the model nor its
   outline. This works per face (a shown model's unseen far side is
   passed too) and up to four hidden model faces: past four the ray is
@@ -1251,8 +1292,9 @@ is.
   `0`, none). A brush
   model the view does not show (a door, a platform, a lift) is part of
   the map: at `1` it is drawn on its own like any other surface, so the
-  reflection can show where it stands, and at `0` it gives no
-  reflection. Over the
+  reflection can show where it stands; at `0` it is passed over as a
+  model is, within the same four faces (a closed door is two), so it
+  leaves no hole in its outline either. Over the
   pool of the test map that fills the 2 to 9 % of the water that had no
   reflection, and changes no pixel outside the water. It costs more GPU
   time: the water's marks, one more draw of the G-buffer raster, and a list
@@ -1628,3 +1670,25 @@ them given the engine behaves exactly as before.
   directly. Must be 1 to 9 digits without a leading zero (`0` itself
   is accepted). Refused without `pins_record` or
   `pins_replay`. Default: not given.
+
+## Environment variables
+
+These are read from the process environment, not from the console, and
+are not cvars. They belong to the Metal renderers.
+
+* **MTL_GPU_TIME**: When set (to anything, even empty) before the
+  Metal renderer starts, it prints one line to standard error for each
+  command buffer it commits, `ref_metal: gpu_ms <ms>`, the buffer's GPU
+  time in milliseconds, with ` frame` appended for the frame's last
+  buffer; the frame's drawing is then committed on its own, so its time
+  leaves out the wait for a drawable. A measuring aid. Read once.
+
+* **MGL_READBACK_DUMP**: Read once by the OpenGL 1.4 renderer when it
+  runs on the Metal layer. Set to an absolute path of `A-Z`, `a-z`,
+  `0-9`, `_`, `.`, `/` and `-` without `..`, it writes every
+  `glReadPixels` read the renderer makes into that directory as
+  `mgl-readback-<n>.raw` plus a line each in `mgl-readback.txt` (position,
+  size, format, type, pack alignment, byte count), at most 1000 reads per
+  run. The directory must exist and `mgl-readback.txt` must not (nor be a
+  link) before the run, or nothing is written. Any other value is refused
+  with one line on standard error. Unset or empty: nothing is written.
