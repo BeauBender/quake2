@@ -454,6 +454,28 @@ RI_BeginFrame(float camera_separation)
 	 * on the shim (the reference), which clears its first pass of a
 	 * frame to black (TASK87: the cracks of the world show it).
 	 */
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+	/*
+	 * TASK172: the window follows the screen (a rotation, a fold or an
+	 * unfold of an iPhone Duo) with no vid_restart. The frame is the safe
+	 * rectangle of the window now, the size the client's viddef took
+	 * from RI_GetDrawableSize too (GLimp_ScreenEvent), and
+	 * rmb_frame_begin remakes the targets and the drawable for it. A
+	 * window with no pixels keeps the last size.
+	 */
+	{
+		int sw, sh;
+
+		RI_GetDrawableSize(&sw, &sh);
+
+		if ((sw > 0) && (sh > 0) && ((sw != vid.width) || (sh != vid.height)))
+		{
+			vid.width = sw;
+			vid.height = sh;
+		}
+	}
+#endif
+
 	/* the mode's size, as gl1 draws and reads it; the window's pixels for the drawable (FIX45) */
 	rm_frame_size(vid.width, vid.height, &w, &h);
 	{
