@@ -416,6 +416,21 @@ menu's focus and where the game data lives are not done yet
 runs it on an Apple TV simulator device (DIR outside the checkout, as for
 the smoke); `tests/check-tvos.sh` builds its objects in the gate.
 
+### Apple Vision Pro (simulator)
+
+`make ios IOS_SDK=xrsimulator` builds the same app for the Apple Vision Pro
+simulator (`arm64-apple-xros1.0-simulator`, Xcode's visionOS platform
+needed), with its own *Info.plist* (*stuff/ios/Info-visionos.plist.in*,
+the Apple Vision device family). It runs in a window, on `ref_metal`
+(visionOS has no OpenGL), and is the iPhone build with the touch overlay,
+the on-screen keyboard and the iPhone's window hints left out. Controller
+and look-and-pinch input, resizing and where the game data lives are not
+done yet (*docs/runbook/TASK175.md*).
+`IOS_SIM_SDK=xrsimulator scripts/ios-sim.sh run --out DIR --data DATA`
+runs it on an Apple Vision Pro simulator device (DIR outside the
+checkout, as for the smoke); `tests/check-visionos.sh` builds its objects
+in the gate.
+
 ### Running on an iPhone or iPad
 
 A device runs only an app signed by the owner's Apple developer team, so
