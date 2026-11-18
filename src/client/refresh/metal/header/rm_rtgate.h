@@ -98,8 +98,8 @@ int rm_rtg_reset_format(const char *name, const rm_rtg_t *g, char *buf, size_t l
  * The table of the r_rt_* cvars (rm_rtgate.c gives the reason of each
  * row): every name a Cvar_Get of src/client/refresh/metal creates, each an
  * effect switch (1: forced to 0 without ray tracing; its default is "0")
- * or a setting (0: left as it is). tests/check-ref-metal.sh fails when a
- * Cvar_Get("r_rt_ name is not in it, and when a row names no such cvar.
+ * or a setting (0: left as it is). tests/check-ref-metal.sh fails when an
+ * r_rt_ name created there is not in it, and when a row names no such cvar.
  * rm_rtg_ncvars counts the rows; rm_rtg_cvar gives row i's name and
  * whether it is an effect, NULL for i out of 0 to ncvars - 1;
  * rm_rtg_find the row of a name, -1 for none.

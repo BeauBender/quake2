@@ -7,6 +7,7 @@ basedir
 bob_pitch
 bob_roll
 bob_up
+capturelimit
 cddir
 cfg_unbindall
 cheats
@@ -57,6 +58,7 @@ freelook
 fs_debug
 g_select_empty
 gamedate
+gamedir
 gamename
 gender
 gender_auto
@@ -72,8 +74,6 @@ gl1_texturesolidmode
 gl3_libgl
 gl3_show_draw_stats
 gl4_colorlight
-gl4_intensity
-gl4_overbrightbits
 gl_drawbuffer
 gl_farsee
 gl_finish
@@ -109,6 +109,7 @@ m_side
 m_up
 m_yaw
 map_noareas
+mapname
 maxentities
 maxspectators
 modder
@@ -137,7 +138,6 @@ r_norefresh
 r_novis
 r_palettedtexture
 r_palettedtextures
-r_rt_denoiser
 r_speeds
 r_validation
 rcon_address
@@ -199,7 +199,5 @@ timescale
 vid_rate
 viewsize
 vk_dynamic
-vk_intensity
-vk_overbrightbits
 windowed_mouse
 zombietime

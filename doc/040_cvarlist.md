@@ -302,6 +302,15 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 
 * **nextserver**: Used for looping the introduction demos.
 
+* **adr0**, **adr1**, **adr2**, **adr3**, **adr4**, **adr5**, **adr6**,
+  **adr7**, **adr8**: The nine entries of the server
+  address book in the multiplayer menu. Archived; the empty string
+  when an entry is unused.
+
+* **gl_drawflat**, **gl_saturatelighting**: Names in the client's
+  table of cheat-protected cvars that no renderer reads here. In
+  multiplayer the client creates them with the value `0`.
+
 
 ## Audio
 
@@ -707,6 +716,13 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   software renderer has). Set to `0` to disable this, in case you don't
   like the effect or it's too slow on your machine.
 
+* **gl4_intensity**, **gl4_overbrightbits**, **vk_intensity**,
+  **vk_overbrightbits**: The colour intensity and overbright bits of
+  the OpenGL 4 and Vulkan renderers of upstream Yamagi Quake II. This
+  fork builds neither renderer, so nothing creates them; the video
+  menu names them for those renderers, with the meaning of
+  `gl3_intensity` and `gl3_overbrightbits`.
+
 
 ## Graphics (Software only)
 
@@ -998,6 +1014,13 @@ is.
   counts as `2`, one that is not a finite number as `0`, and a fraction is
   cut to the whole number below it. Cheat-protected: reset to `0` in
   multiplayer. Applies from the next frame.
+
+* **r_rt_denoiser**: The denoiser item of the Metal renderer's video
+  menu reads this cvar; no code creates it yet (the ray-tracing denoiser,
+  TASK113, will). Until then it does not exist unless set by hand, and
+  the menu shows `off`. The menu reads it as `off` below `1`,
+  `bilateral` from `1` and `MetalFX` from `2`; a value that is not a
+  finite number counts as `0`.
 
 * **r_rt_gbuffer**: A development switch of the Metal renderer. When
   set to anything but `0`, a view with the world is drawn through the
@@ -1630,3 +1653,25 @@ them given the engine behaves exactly as before.
   directly. Must be 1 to 9 digits without a leading zero (`0` itself
   is accepted). Refused without `pins_record` or
   `pins_replay`. Default: not given.
+
+## Environment variables
+
+These are read from the process environment, not from the console, and
+are not cvars. They belong to the Metal renderers.
+
+* **MTL_GPU_TIME**: When set (to anything, even empty) before the
+  Metal renderer starts, it prints one line to standard error for each
+  command buffer it commits, `ref_metal: gpu_ms <ms>`, the buffer's GPU
+  time in milliseconds, with ` frame` appended for the frame's last
+  buffer; the frame's drawing is then committed on its own, so its time
+  leaves out the wait for a drawable. A measuring aid. Read once.
+
+* **MGL_READBACK_DUMP**: Read once by the OpenGL 1.4 renderer when it
+  runs on the Metal layer. Set to an absolute path of `A-Z`, `a-z`,
+  `0-9`, `_`, `.`, `/` and `-` without `..`, it writes every
+  `glReadPixels` read the renderer makes into that directory as
+  `mgl-readback-<n>.raw` plus a line each in `mgl-readback.txt` (position,
+  size, format, type, pack alignment, byte count), at most 1000 reads per
+  run. The directory must exist and `mgl-readback.txt` must not (nor be a
+  link) before the run, or nothing is written. Any other value is refused
+  with one line on standard error. Unset or empty: nothing is written.
