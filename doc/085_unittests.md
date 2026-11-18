@@ -25,7 +25,10 @@ the shared renderer files `src/client/refresh/files/surf.c` and
 `tests/unit/test_imgscale.c`), and the
 software renderer's SDL-free `src/client/refresh/soft/sw_view.c`; only
 `main()` is replaced by the
-test runner. The last line says how many tests ran and how many failed; the
+test runner. `tests/unit/test_bspgraph.c` includes the renderers' shared
+BSP loader `src/client/refresh/files/models.c` whole, and the `Makefile`
+names that file as a prerequisite of the test object, since Darwin
+builds track no include dependencies. The last line says how many tests ran and how many failed; the
 exit status is 1 when a test failed and 2 when no test ran at all (a
 name filter that matches nothing, or a usage error), so a run that
 proved nothing never passes. `make clean` removes the build.
