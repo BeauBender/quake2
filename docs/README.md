@@ -60,6 +60,7 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | `docs/decisions/` | Decision records: what was decided, why, and what it costs |
 | `docs/audits/` | Audit write-ups: the [small vendored files](audits/small-vendored.md), the [asset-loader malformed-input audit](audits/asset-loaders.md) and the [network message parser audit](audits/network-parsers.md) |
 | `docs/analysis/` | Measured inventories of existing code that plans and cards cite |
+| `docs/reviews/` | Architecture reviews over a window of merges (`/dev-loop:arch-review`), one file per review; each finding has a stable `AR-##` id that its card cites |
 | `docs/DEPENDENCIES.md` | Every external library and vendored file, and its status |
 | `third_party/SDL3/` | SDL 3 source, byte-identical to the upstream release tarball and verified against `MANIFEST.sha256` by `scripts/check-vendored.sh`; built on macOS by `third_party/sdl3.make`. Provenance and update procedure in its `README.md` |
 | `scripts/ios-sim.sh` | The iOS simulator app on a throwaway device: `smoke` builds it with synthetic data and checks from the engine's log and frame that it reaches the console; see `doc/020_installation.md` |
