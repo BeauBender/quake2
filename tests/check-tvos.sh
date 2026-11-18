@@ -249,12 +249,13 @@ elif ! grep -q 'AppleTVSimulator' "${tmp:?}/o"; then
 	bad "mutant: the iPhone plist was refused without naming the platform"
 fi
 # one change each to the good plist: an iPhone key, a second device family, another minimum OS
-for k in UIFileSharingEnabled UISupportedInterfaceOrientations UIStatusBarHidden; do
-	sed "s,<key>CFBundleExecutable</key>,<key>$k</key><true/>&," "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
+# (mk, not k: assert_plist's own loop sets k, sh has no local)
+for mk in UIFileSharingEnabled UISupportedInterfaceOrientations UIStatusBarHidden; do
+	sed "s,<key>CFBundleExecutable</key>,<key>$mk</key><true/>&," "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
 	if assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
-		bad "mutant: a plist with $k passed"
-	elif ! grep -q "the iPhone's $k" "${tmp:?}/o"; then
-		bad "mutant: the plist with $k was refused without naming it"
+		bad "mutant: a plist with $mk passed"
+	elif ! grep -q "the iPhone's $mk" "${tmp:?}/o"; then
+		bad "mutant: the plist with $mk was refused without naming it"
 	fi
 done
 sed 's,<integer>3</integer>,&<integer>1</integer>,' "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
