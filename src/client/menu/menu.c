@@ -6553,13 +6553,15 @@ M_Menu_Quit_f(void)
  * press reaches it). On each screen it requires every selectable item to
  * be reached with down and with up, select on every action item (a screen
  * it opens is walked the same way), and back to leave every screen it
- * opened. Select changes settings and queues commands (a new game, a
+ * opened. On the four binding screens select must enter bind mode and
+ * back must leave it, binding nothing; any other greyed item must do
+ * nothing on select. Select changes settings and queues commands (a new game, a
  * connect): the walk drops what was queued and ends the run with quit.
  */
 extern sizebuf_t cmd_text; /* src/common/cmdparser.c: what select queued */
 
 static menuframework_s *walk_seen[128];
-static int walk_nseen, walk_fail, walk_presses;
+static int walk_nseen, walk_fail, walk_presses, walk_bound;
 static int walk_path[MAX_MENU_DEPTH];
 
 static void
@@ -6625,6 +6627,14 @@ Walk_Bindings(void)
 	}
 
 	return h;
+}
+
+/* one of the four key and controller binding screens, by its key function */
+static qboolean
+Walk_BindingScreen(const menuframework_s *m)
+{
+	return m->key == Keys_MenuKey || m->key == MultiplayerKeys_MenuKey ||
+		m->key == ControllerButtons_MenuKey || m->key == ControllerAltButtons_MenuKey;
 }
 
 /* the screen at <depth> is on top, as it was */
@@ -6735,7 +6745,7 @@ Walk_Screen(int depth)
 		menuframework_s *child;
 		const char *statusbar = NULL;
 		unsigned binds = 0;
-		qboolean grayed;
+		qboolean binding, grayed;
 		int cursor = -1, queued = 0;
 
 		if (!Walk_Selectable(m, i) || (it->type != MTYPE_ACTION && it->type != MTYPE_BITMAP))
@@ -6750,7 +6760,16 @@ Walk_Screen(int depth)
 			continue;
 		}
 
-		if (it->flags & QMF_GRAYED)
+		/* an item of a binding screen is a binding item whatever its
+		   flags: those screens set QMF_GRAYED on every item (upstream's
+		   dark label), and their handlers do not read it */
+		binding = Walk_BindingScreen(m);
+
+		if (binding)
+		{
+			grayed = false;
+		}
+		else if (it->flags & QMF_GRAYED)
 		{
 			/* greyed, never hidden: reached, shown with its reason, and
 			   select does nothing on it (Menu_SelectItem) */
@@ -6783,9 +6802,42 @@ Walk_Screen(int depth)
 			walk_fail++;
 		}
 
+		if (binding)
+		{
+			/* select on a binding item enters bind mode (an item with two
+			   keys bound is cleared first, by design), and back leaves it
+			   binding nothing: no binding changes and nothing is queued */
+			if (!Walk_On(m, depth) || !menukeyitem_bind)
+			{
+				Com_Printf("menu_probe: FAIL: binding item %d '%s' of '%s' did not enter bind mode on select\n",
+						i, it->name ? it->name : "", Walk_Name(m));
+				walk_fail++;
+			}
+			else
+			{
+				binds = Walk_Bindings();
+				queued = cmd_text.cursize;
+				Walk_Key(K_ESCAPE);
+
+				if (!Walk_On(m, depth) || menukeyitem_bind || Walk_Bindings() != binds ||
+						cmd_text.cursize != queued)
+				{
+					Com_Printf("menu_probe: FAIL: binding item %d '%s' of '%s': back did not cancel bind mode:%s%s%s%s\n",
+							i, it->name ? it->name : "", Walk_Name(m),
+							!Walk_On(m, depth) ? " left the screen" : "", menukeyitem_bind ? " bind mode" : "",
+							Walk_Bindings() != binds ? " a binding" : "", cmd_text.cursize != queued ? " queued" : "");
+					walk_fail++;
+				}
+				else
+				{
+					walk_bound++;
+				}
+			}
+		}
+
 		if (menukeyitem_bind)
 		{
-			/* a key binding screen waits for a key: back cancels it */
+			/* bind mode still on: back cancels it */
 			Walk_Key(K_ESCAPE);
 		}
 
@@ -6845,7 +6897,7 @@ M_Probe_f(void)
 		return;
 	}
 
-	walk_nseen = walk_fail = walk_presses = 0;
+	walk_nseen = walk_fail = walk_presses = walk_bound = 0;
 	Com_Printf("menu_probe: walk at cls.realtime %d\n", cls.realtime);
 	M_ForceMenuOff();
 	M_Menu_Main_f();
@@ -6862,6 +6914,7 @@ M_Probe_f(void)
 		walk_fail++;
 	}
 
+	Com_Printf("menu_probe: %d binding items entered bind mode on select and left it with back\n", walk_bound);
 	Com_Printf("menu_probe: walk %s: %d screens, %d key presses, %d failures\n",
 			walk_fail ? "FAIL" : "ok", walk_nseen, walk_presses, walk_fail);
 
