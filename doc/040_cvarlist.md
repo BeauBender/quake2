@@ -960,12 +960,14 @@ is.
   (the default) nothing
   is traced or allocated and the picture is as without ray tracing. Saved
   with the configuration; applies from the next frame.
+  Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_ao_min**: The least of its lightmap's light a pixel keeps under
   `r_rt_ao`, from `0` to `1`: `0.4` (the default) keeps at least 40 % of
   it, `1` turns the darkening off. A value outside the range counts as
   the nearest end, one that is not a finite number as `0.4`. Saved with
   the configuration; applies from the next frame.
+  Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_ao_range**: How far, in world units, the rays of `r_rt_ao` look
   for surfaces (`128` by default, about the height of two players): a
@@ -973,6 +975,7 @@ is.
   more the nearer it is. A value below `1` counts as `1`, one above `8192`
   as `8192`, one that is not a finite number as `128`. Saved with the
   configuration; applies from the next frame.
+  Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_ao_rays**: How many rays each traced pixel of `r_rt_ao` sends:
   `2` (the default) or `1`, which costs less and makes the darkening
@@ -992,8 +995,10 @@ is.
   input. A value is taken as the nearest of the three (`1` for `0.67` and
   above, `0.33` below `0.4`); `0`, a negative value or one that is not a
   finite number counts as `0.5`. In the video menu's renderer options as
-  "AO trace size", greyed on other renderers and while `r_rt_ao` is `0`.
+  "AO trace size" and on the Ray tracing screen as "AO scale", a choice
+  of full, 1/2 or 1/3 (the three sizes the renderer tells apart), greyed on other renderers and while `r_rt_ao` is `0`.
   Saved with the configuration; applies from the next frame.
+  Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_ao_seed**: A development setting of the Metal renderer's
   `r_rt_ao`: with `0` (the default) the rays' blue-noise pattern moves on
@@ -1014,6 +1019,17 @@ is.
   counts as `2`, one that is not a finite number as `0`, and a fraction is
   cut to the whole number below it. Cheat-protected: reset to `0` in
   multiplayer. Applies from the next frame.
+
+* **r_rt_available**: A status, set by the Metal renderer when it
+  starts: `1` where the device traces rays (its start-up line
+  `ref_metal: ray tracing:` names a path), `0` where it does not. The
+  video menu's Video options > Ray tracing screen reads it to grey every
+  item, with "ray tracing is not available on this device", where it is
+  `0`. The renderer puts the value back every frame, so a value written
+  to it lasts to the next frame only (it is not read only in the sense of
+  the cvar flag). Under other renderers nothing sets it: it keeps its
+  last value, and the menu ignores it because the renderer is checked
+  first. Not saved with the configuration.
 
 * **r_rt_denoiser**: The denoiser item of the Metal renderer's video
   menu reads this cvar; no code creates it yet (the ray-tracing denoiser,
@@ -1077,6 +1093,7 @@ is.
   player's eye it would shadow most of the view. It is not part of the
   scene either way when `hand` is `2` (the weapon is not drawn). Saved
   with the configuration.
+  Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_jitter_x**, **r_rt_jitter_y**: A development setting of the
   Metal renderer: with `r_rt_gbuffer` or `r_rt_motion` on, the 3D view is
@@ -1117,6 +1134,7 @@ is.
   the lightmaps and it does nothing. With `0` (the default) nothing is
   traced or allocated and the picture is as without ray tracing. Saved
   with the configuration; applies from the next frame.
+  Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_shadows_show**: A development view of the Metal renderer's
   ray-traced shadows: with `r_rt_shadows` on, `1` replaces the 3D view by
@@ -1192,6 +1210,7 @@ is.
   (the default) nothing is traced or allocated and the picture is as
   without ray tracing. Saved with the configuration; applies from the
   next frame.
+  Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_sun_angles**: The direction of `r_rt_sun`'s sun on a map that
   `scripts/rt/sun-angles.txt` does not list, as `pitch yaw` in degrees:
@@ -1220,12 +1239,14 @@ is.
   every pixel the sun reaches. A value outside the range counts as the
   nearest end, one that is not a finite number as `0.5`. Saved with the
   configuration; applies from the next frame.
+  Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_sunscale**: How strong `r_rt_sun`'s light is: the share of the
   sky's colour a pixel facing the sun squarely gets, `0.35` by default. A
   value below `0` counts as `0`, one above `4` as `4`, one that is not a
   finite number as `0.35`. Saved with the configuration; applies from the
   next frame.
+  Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_water**: When set to `1`, the Metal renderer gives water a
   ray-traced reflection, one bounce: from each pixel of water (the
@@ -1260,6 +1281,7 @@ is.
   (the default) nothing is traced or allocated and the picture is as
   without ray tracing. Saved with the configuration; applies from the
   next frame.
+  Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_water_normal**: How far `r_rt_water`'s reflections ripple: the
   water's warp tilts the surface's direction by up to this much
@@ -1267,6 +1289,7 @@ is.
   water's surface itself stays flat. A value below `0` counts as `0`, one
   above `1` as `1`, one that is not a finite number as `0.08`. Saved with
   the configuration; applies from the next frame.
+  Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_water_reflect**: How much of `r_rt_water`'s reflection is mixed
   into the water's colour, from `0` (none) to `1` (the reflection
@@ -1274,6 +1297,7 @@ is.
   either way. A value outside the range counts as the nearest end, one
   that is not a finite number as `0.5`. Saved with the configuration;
   applies from the next frame.
+  Can be set from Video options > Ray tracing (TASK194), live.
 
 * **r_rt_water_hits**: How `r_rt_water` shades what a reflection meets.
   `0` (the default): from the picture alone, as described under

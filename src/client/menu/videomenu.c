@@ -687,6 +687,200 @@ OpenRendererOptions(void *unused)
 	M_PushMenu(&s_ropts_menu);
 }
 
+/*
+ * The ray-tracing screen (TASK194): a switch for each pass and a slider for
+ * each of its settings, rows of vidrules.c's table. Every change is written
+ * to its cvar at once, so the renderer applies it from the next frame; the
+ * screen keeps the 3D view behind it undimmed (keepview) and its items on
+ * the left. Every item is always shown: greyed with its reason off metal,
+ * on a device without ray tracing (r_rt_available, which ref_metal sets at
+ * start), and for a slider while its effect is off.
+ */
+#define RT_MAX_ROWS 16
+
+static menuframework_s s_rt_menu;
+static menuaction_s s_rt_action;   /* the entry in the video menu */
+static menulist_s s_rt_switches[RT_MAX_ROWS];
+static menuslider_s s_rt_sliders[RT_MAX_ROWS];
+static menuaction_s s_rt_defaults_action;
+static menucommon_s *s_rt_items[RT_MAX_ROWS];
+static int s_rt_rows;
+
+static void
+RTSetRule(menucommon_s *item, vidrule_t rule)
+{
+	if (rule.enabled)
+	{
+		item->flags &= ~QMF_GRAYED;
+	}
+	else
+	{
+		item->flags |= QMF_GRAYED;
+	}
+
+	item->statusbar = rule.text;
+}
+
+/* each row's greying, from the cvars as they are now */
+static void
+RTMenu_Rules(void)
+{
+	const int available = (Cvar_VariableValue("r_rt_available") != 0);
+
+	for (int i = 0; i < s_rt_rows; i++)
+	{
+		const vidrt_control_t *c = VidRules_RTControl(i);
+		const vidrt_control_t *e = VidRules_RTControl(c->effect);
+		const int on = !e || (Cvar_VariableValue(e->cvar) != 0);
+
+		RTSetRule(s_rt_items[i], VidRules_RTItem(i, s_built_renderer, available, on));
+	}
+
+	RTSetRule(&s_rt_defaults_action.generic, VidRules_RTItem(-1, s_built_renderer, available, 1));
+}
+
+static void
+RTSwitchChanged(void *self)
+{
+	menulist_s *l = (menulist_s *)self;
+	const vidrt_control_t *c = VidRules_RTControl(l->generic.localdata[0]);
+
+	if (c)
+	{
+		Cvar_SetValue(c->cvar, (float)l->curvalue);
+	}
+
+	RTMenu_Rules();
+}
+
+static void
+RTChoiceChanged(void *self)
+{
+	menulist_s *l = (menulist_s *)self;
+	const vidrt_control_t *c = VidRules_RTControl(l->generic.localdata[0]);
+
+	if (c)
+	{
+		/* the only choice row is r_rt_ao_scale: full, 1/2, 1/3 */
+		Cvar_SetValue(c->cvar, VidRules_AOScaleValue(l->curvalue));
+	}
+}
+
+/* each switch and choice shows its cvar; a slider reads its own as it draws */
+static void
+RTMenu_Values(void)
+{
+	for (int i = 0; i < s_rt_rows; i++)
+	{
+		const vidrt_control_t *c = VidRules_RTControl(i);
+
+		if (c->choices)
+		{
+			((menulist_s *)s_rt_items[i])->curvalue = VidRules_AOScaleIndex(Cvar_VariableValue(c->cvar));
+		}
+		else if (c->effect < 0)
+		{
+			((menulist_s *)s_rt_items[i])->curvalue = (Cvar_VariableValue(c->cvar) != 0);
+		}
+	}
+}
+
+static void
+RTResetDefaults(void *unused)
+{
+	for (int i = 0; i < s_rt_rows; i++)
+	{
+		const vidrt_control_t *c = VidRules_RTControl(i);
+
+		Cvar_Set(c->cvar, c->def);
+	}
+
+	RTMenu_Values();
+	RTMenu_Rules();
+}
+
+static void
+RTMenu_Init(void)
+{
+	static const char *onoff[] = { "off", "on", NULL };
+	int y = 0, nsw = 0, nsl = 0;
+
+	memset(&s_rt_menu, 0, sizeof(s_rt_menu));
+	s_rt_menu.banner = "m_banner_video";
+	s_rt_menu.keepview = 1;
+	s_rt_rows = 0;
+
+	for (int i = 0; (i < VidRules_RTNum()) && (i < RT_MAX_ROWS); i++)
+	{
+		const vidrt_control_t *c = VidRules_RTControl(i);
+		menucommon_s *g;
+
+		/* the menu registers each one saved with the configuration, as the renderer does */
+		Cvar_Get(c->cvar, c->def, c->flags);
+
+		if (c->effect < 0 || c->choices)
+		{
+			menulist_s *l = &s_rt_switches[nsw++];
+
+			memset(l, 0, sizeof(*l));
+			l->generic.type = MTYPE_SPINCONTROL;
+			l->generic.callback = c->choices ? RTChoiceChanged : RTSwitchChanged;
+			l->itemnames = c->choices ? c->choices : onoff;
+			g = &l->generic;
+		}
+		else
+		{
+			menuslider_s *s = &s_rt_sliders[nsl++];
+
+			memset(s, 0, sizeof(*s));
+			s->generic.type = MTYPE_SLIDER;
+			s->cvar = (char *)c->cvar;
+			s->minvalue = c->min;
+			s->maxvalue = c->max;
+			s->slidestep = c->step;
+			s->printformat = (char *)c->format;
+			g = &s->generic;
+			if (i > 0 && VidRules_RTControl(i - 1)->effect < 0)
+			{
+				y += 10;   /* a gap between the switches and the sliders */
+			}
+		}
+
+		g->name = c->label;
+		g->x = 0;
+		g->y = (y += 10);
+		g->localdata[0] = i;
+		s_rt_items[s_rt_rows++] = g;
+		Menu_AddItem(&s_rt_menu, (void *)g);
+	}
+
+	memset(&s_rt_defaults_action, 0, sizeof(s_rt_defaults_action));
+	s_rt_defaults_action.generic.type = MTYPE_ACTION;
+	s_rt_defaults_action.generic.name = "reset to defaults";
+	s_rt_defaults_action.generic.x = 0;
+	s_rt_defaults_action.generic.y = (y += 20);
+	s_rt_defaults_action.generic.callback = RTResetDefaults;
+	Menu_AddItem(&s_rt_menu, (void *)&s_rt_defaults_action);
+
+	RTMenu_Values();
+	RTMenu_Rules();
+
+	Menu_SetStatusBar(&s_rt_menu, "Esc: back; each change shows on the next frame");
+	Menu_Center(&s_rt_menu);
+	/* the items on the left, the view to their right left clear to judge */
+	s_rt_menu.x = (int)(viddef.width * 0.30f);
+}
+
+static void
+OpenRTOptions(void *unused)
+{
+	RTMenu_Init();
+	s_rt_menu.draw = Default_MenuDraw;
+	s_rt_menu.key = Default_MenuKey;
+
+	M_PushMenu(&s_rt_menu);
+}
+
 void
 VID_MenuInit(void)
 {
@@ -1315,6 +1509,14 @@ VID_MenuInit(void)
 	s_ropts_action.generic.callback = OpenRendererOptions;
 	s_ropts_action.generic.statusbar = "lighting, MetalFX; greyed: n/a here";
 
+	/* The ray-tracing screen (TASK194): greyed unless the renderer is metal. */
+	s_rt_action.generic.type = MTYPE_ACTION;
+	s_rt_action.generic.name = "ray tracing...";
+	s_rt_action.generic.x = 0;
+	s_rt_action.generic.y = (y += 10);
+	s_rt_action.generic.callback = OpenRTOptions;
+	RTSetRule(&s_rt_action.generic, VidRules_RTEntry(s_built_renderer));
+
 	s_defaults_action.generic.type = MTYPE_ACTION;
 	s_defaults_action.generic.name = "reset to default";
 	s_defaults_action.generic.x = 0;
@@ -1349,6 +1551,7 @@ VID_MenuInit(void)
 	Menu_AddItem(&s_opengl_menu, (void *)&s_msaa_list);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_filter_list);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_ropts_action);
+	Menu_AddItem(&s_opengl_menu, (void *)&s_rt_action);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_defaults_action);
 	Menu_AddItem(&s_opengl_menu, (void *)&s_apply_action);
 
