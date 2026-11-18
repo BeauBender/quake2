@@ -161,8 +161,8 @@ rm_rtg_reset_format(const char *name, const rm_rtg_t *g, char *buf, size_t len)
  * cannot run: it is forced to 0 there, so it reads what the picture shows.
  * A setting (0) is left as it is: it tunes or views an effect and does
  * nothing while the effect is off, or it chooses a raster path that every
- * Metal GPU runs. TASK56 adds r_rt_sun (an effect) here when it merges;
- * RT11's r_rt_scale is a setting (it reads 1 there, which RT11 does).
+ * Metal GPU runs. RT11's r_rt_scale, when it lands, is a setting (it reads
+ * 1 there, which RT11 does).
  */
 typedef struct
 {
@@ -201,6 +201,14 @@ static const rtg_cvar_t rtg_cvars[] = {
 	{ "r_rt_shadows_show", 0 },
 	/* the structures' report: draws nothing, and without ray tracing builds nothing and says so once */
 	{ "r_rt_stats", 0 },
+	/* RT4's sun and sky shadow (TASK56): a ray each pixel toward the sun */
+	{ "r_rt_sun", 1 },
+	/* the sun's direction, development view, floor and strength: read only while r_rt_sun runs
+	   (RM_RTSun_Show needs sun_active) */
+	{ "r_rt_sun_angles", 0 },
+	{ "r_rt_sun_show", 0 },
+	{ "r_rt_sunfloor", 0 },
+	{ "r_rt_sunscale", 0 },
 	/* RT6's water reflections (TASK58): a ray each water pixel */
 	{ "r_rt_water", 1 },
 	/* the reflections' hit shading, tilt, blend and development view: read only while r_rt_water runs */

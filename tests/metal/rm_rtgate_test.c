@@ -200,15 +200,16 @@ test_table(void)
 	CHECK(sorted);   /* sorted and so no name twice */
 	CHECK(neffects <= RM_RTG_MAX_EFFECTS);
 
-	/* the effect switches: the three passes that trace rays (rm_rtgate.c gives each row's reason) */
+	/* the effect switches: the four passes that trace rays (rm_rtgate.c gives each row's reason) */
 	effects(buf, sizeof(buf));
-	CHECK(!strcmp(buf, "r_rt_ao r_rt_shadows r_rt_water"));
+	CHECK(!strcmp(buf, "r_rt_ao r_rt_shadows r_rt_sun r_rt_water"));
 
 	/* the same switches one by one, as the glue takes them; none before the first or past the last */
 	CHECK(rm_rtg_effect(0) && !strcmp(rm_rtg_effect(0), "r_rt_ao"));
 	CHECK(rm_rtg_effect(1) && !strcmp(rm_rtg_effect(1), "r_rt_shadows"));
-	CHECK(rm_rtg_effect(2) && !strcmp(rm_rtg_effect(2), "r_rt_water"));
-	CHECK(rm_rtg_effect(3) == NULL);
+	CHECK(rm_rtg_effect(2) && !strcmp(rm_rtg_effect(2), "r_rt_sun"));
+	CHECK(rm_rtg_effect(3) && !strcmp(rm_rtg_effect(3), "r_rt_water"));
+	CHECK(rm_rtg_effect(4) == NULL);
 	CHECK(rm_rtg_effect(-1) == NULL);
 	CHECK(rm_rtg_effect(1000) == NULL);
 
@@ -222,6 +223,10 @@ test_table(void)
 	rm_rtg_cvar(rm_rtg_find("r_rt_ao_show"), &e);
 	CHECK(e == 0);
 	rm_rtg_cvar(rm_rtg_find("r_rt_shadows_show"), &e);
+	CHECK(e == 0);
+	rm_rtg_cvar(rm_rtg_find("r_rt_sun_show"), &e);
+	CHECK(e == 0);
+	rm_rtg_cvar(rm_rtg_find("r_rt_sun_angles"), &e);
 	CHECK(e == 0);
 }
 

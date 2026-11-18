@@ -46,9 +46,11 @@ and fails on a name without a row, a row without a name, and an effect switch wh
 |---|---|---|
 | `r_rt_ao` | effect | RT5's ambient occlusion pass: its rays are what it draws |
 | `r_rt_shadows` | effect | RT3's dynamic-light shadows: a ray each light and pixel |
+| `r_rt_sun` | effect | RT4's sun and sky shadow (TASK56, merged after this card was measured): a ray each pixel toward the sun |
 | `r_rt_water` | effect | RT6's water reflections: a ray each water pixel |
 | `r_rt_ao_min`, `_range`, `_rays`, `_scale`, `_seed` | setting | read only while `r_rt_ao` runs |
-| `r_rt_ao_show`, `r_rt_shadows_show`, `r_rt_water_show` | setting | development views drawn only while their pass runs |
+| `r_rt_ao_show`, `r_rt_shadows_show`, `r_rt_sun_show`, `r_rt_water_show` | setting | development views drawn only while their pass runs |
+| `r_rt_sun_angles`, `r_rt_sunfloor`, `r_rt_sunscale` | setting | read only while `r_rt_sun` runs |
 | `r_rt_water_hits`, `_normal`, `_reflect` | setting | read only while `r_rt_water` runs |
 | `r_rt_gbuffer`, `r_rt_motion` | setting | RT2's raster paths, which every Metal GPU runs (TASK54 built and pinned them on this VM); no ray traced, the picture the same within one level |
 | `r_rt_gbuffer_scale`, `_show`, `r_rt_jitter_x`, `_y`, `r_rt_motion_test` | setting | the raster path's size, views, jitter and motion check |

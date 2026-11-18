@@ -1040,11 +1040,13 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/rm_gbuf.metal \
 		src/client/refresh/metal/rm_rtshadow.metal \
 		src/client/refresh/metal/rm_rtao.metal \
+		src/client/refresh/metal/rm_rtsun.metal \
 		src/client/refresh/metal/rm_rtwater.metal \
 		src/client/refresh/metal/common/mtl_shader_math.h \
 		src/client/refresh/metal/common/mtl_gbuf_math.h \
 		src/client/refresh/metal/common/mtl_rts_math.h \
 		src/client/refresh/metal/common/mtl_rtao_math.h \
+		src/client/refresh/metal/common/mtl_rtsun_math.h \
 		src/client/refresh/metal/common/mtl_rtw_math.h
 	@echo "===> METAL $<"
 	${Q}command -v xcrun >/dev/null 2>&1 || { echo "ref_metal needs xcrun and the Xcode Metal toolchain" >&2; exit 1; }
@@ -1055,10 +1057,11 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_gbuf.metal -o $(BUILDDIR)/ref_metal/rm_gbuf.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtshadow.metal -o $(BUILDDIR)/ref_metal/rm_rtshadow.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtao.metal -o $(BUILDDIR)/ref_metal/rm_rtao.air
+	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtsun.metal -o $(BUILDDIR)/ref_metal/rm_rtsun.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtwater.metal -o $(BUILDDIR)/ref_metal/rm_rtwater.air
 	${Q}xcrun -sdk $(METAL_SDK) metallib $(BUILDDIR)/ref_metal/rm_shaders.air $(BUILDDIR)/ref_metal/rm_rt.air \
 		$(BUILDDIR)/ref_metal/rm_gbuf.air $(BUILDDIR)/ref_metal/rm_rtshadow.air \
-		$(BUILDDIR)/ref_metal/rm_rtao.air $(BUILDDIR)/ref_metal/rm_rtwater.air -o $@
+		$(BUILDDIR)/ref_metal/rm_rtao.air $(BUILDDIR)/ref_metal/rm_rtsun.air $(BUILDDIR)/ref_metal/rm_rtwater.air -o $@
 
 # Header dependencies: the Darwin CFLAGS carry no -MMD (see above), but
 # the Apple clang this target needs writes them for C and Objective-C
@@ -1221,6 +1224,7 @@ CLIENT_OBJS_ := \
 	src/client/cl_upscale_cmd.o \
 	src/client/cl_view.o \
 	src/client/input/gyro.o \
+	src/client/input/ingate.o \
 	src/client/input/touch.o \
 	src/client/menu/menu.o \
 	src/client/menu/qmenu.o \
@@ -1435,6 +1439,8 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_rtshadowscene.o \
 	src/client/refresh/metal/rm_rtao.o \
 	src/client/refresh/metal/rm_rtaoscene.o \
+	src/client/refresh/metal/rm_rtsun.o \
+	src/client/refresh/metal/rm_rtsunscene.o \
 	src/client/refresh/metal/rm_rtwater.o \
 	src/client/refresh/metal/rm_rtwaterscene.o \
 	src/client/refresh/metal/rm_scrap.o \
@@ -1449,6 +1455,7 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rmb_rt.o \
 	src/client/refresh/metal/rmb_rtshadow.o \
 	src/client/refresh/metal/rmb_rtao.o \
+	src/client/refresh/metal/rmb_rtsun.o \
 	src/client/refresh/metal/rmb_rtwater.o \
 	src/client/refresh/metal/common/mtl_matrix.o \
 	src/client/refresh/metal/common/mtl_ring.o \
@@ -1535,6 +1542,11 @@ REFGL3_OBJS = $(patsubst %,$(BUILDDIR)/ref_gl3/%,$(REFGL3_OBJS_))
 REFGL3_OBJS += $(patsubst %,$(BUILDDIR)/ref_gl3/%,$(REFGL3_OBJS_GLADE_))
 REFSOFT_OBJS = $(patsubst %,$(BUILDDIR)/ref_soft/%,$(REFSOFT_OBJS_))
 REFMETAL_OBJS = $(patsubst %,$(BUILDDIR)/ref_metal/%,$(REFMETAL_OBJS_))
+
+# rm_rtsunscene.c builds in the sun's per-map table (.incbin, a path from the
+# top directory, where the compiler runs), so the table is its prerequisite (TASK56).
+$(BUILDDIR)/ref_metal/src/client/refresh/metal/rm_rtsunscene.o: scripts/rt/sun-angles.txt
+
 SERVER_OBJS = $(patsubst %,$(BUILDDIR)/server/%,$(SERVER_OBJS_))
 GAME_OBJS = $(patsubst %,$(BUILDDIR)/baseq2/%,$(GAME_OBJS_))
 
@@ -1794,8 +1806,9 @@ endif
 # The unit-test suite (tests/unit, see doc/085_unittests.md). The test
 # binary links the dedicated server's own objects (SERVER_OBJS_ below,
 # built with q2ded's flags into a tree of their own) except the unix
-# main.c; tests/unit/main.c supplies main(). Ten client objects
-# (cl_conback, cl_download, cl_entities, cl_network, cl_parse, cl_screen,
+# main.c; tests/unit/main.c supplies main(). The client objects
+# (cl_cinsize, cl_conback, cl_download, cl_entities, cl_network, cl_parse,
+# cl_screen, the input gate input/ingate.c, the touch layer input/touch.c,
 # the upscaler's checks and pixel arithmetic cl_upscale, the sound
 # frontend sound.c, the window code's SDL-free part vid/glimp_hidpi.c and
 # the video menu's rules menu/vidrules.c)
@@ -1842,6 +1855,7 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(TESTDIR)/src/client/cl_parse.o \
 	$(TESTDIR)/src/client/cl_screen.o \
 	$(TESTDIR)/src/client/cl_upscale.o \
+	$(TESTDIR)/src/client/input/ingate.o \
 	$(TESTDIR)/src/client/input/touch.o \
 	$(TESTDIR)/src/client/menu/vidrules.o \
 	$(TESTDIR)/src/client/sound/sound.o \
@@ -1872,6 +1886,9 @@ $(TESTDIR)/%.o: %.c
 
 $(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS)) : tests/unit/test.h
 $(TESTDIR)/tests/unit/test_bspgraph.o : src/client/refresh/files/models.c
+
+# test_imgsize.c includes these whole, and Darwin has no .d tracking
+$(TESTDIR)/tests/unit/test_imgsize.o: src/client/refresh/files/pcx.c src/client/refresh/files/wal.c src/client/refresh/files/imgsize.h
 
 $(TEST_BIN) : $(TEST_OBJS)
 	@echo "===> LD $@"

@@ -1077,6 +1077,42 @@ test_present_region_inset(void)
 	}
 }
 
+/*
+ * TASK172: the iPhone Duo's two displays (the device type's sizes: outer
+ * 1398x2034 pixels, inner 2007x2853, at 3x), portrait and landscape, with
+ * insets that differ on each side (the inner display's status bar is at
+ * its right edge): each inset is taken on its own, and the view is the
+ * window less the four of them, the layer the whole window.
+ */
+static void
+test_duo_viewports(void)
+{
+	static const struct
+	{
+		float x, y, w, h;         /* the safe rectangle in points */
+		int pw, ph;               /* the window in pixels */
+		int l, t, r, b, vw, vh;   /* the insets and the view in pixels */
+	} c[] = {
+		{ 0, 59, 466, 585, 1398, 2034, 0, 177, 0, 102, 1398, 1755 },     /* outer, portrait */
+		{ 84, 0, 594, 432, 2034, 1398, 252, 0, 0, 102, 1782, 1296 },    /* outer, landscape, as the simulator gives it */
+		{ 0, 47, 669, 884, 2007, 2853, 0, 141, 0, 60, 2007, 2652 },      /* inner, portrait */
+		{ 47, 0, 872, 649, 2853, 2007, 141, 0, 96, 60, 2616, 1947 },     /* inner, landscape, status bar right */
+		{ 4.33f, 47, 645.67f, 884, 2007, 2853, 13, 141, 57, 60, 1937, 2652 }, /* every side its own */
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof(c) / sizeof(c[0]); i++)
+	{
+		rm_inset_t in;
+		rm_sizes_t s;
+
+		CHECK(rm_safe_insets(c[i].x, c[i].y, c[i].w, c[i].h, 3.0f, c[i].pw, c[i].ph, &in));
+		CHECK(in.left == c[i].l && in.top == c[i].t && in.right == c[i].r && in.bottom == c[i].b);
+		CHECK(rm_window_sizes(c[i].pw, c[i].ph, &in, &s));
+		CHECK(s.vw == c[i].vw && s.vh == c[i].vh && s.lw == c[i].pw && s.lh == c[i].ph);
+	}
+}
+
 /* TASK147: the insets in pixels from SDL's safe rectangle in points (an iPhone 17 landscape: 852 by 393 points at 3x). */
 static void
 test_safe_insets(void)
@@ -8669,6 +8705,7 @@ main(void)
 	test_present_chain();
 	test_display_sync();
 	test_safe_insets();
+	test_duo_viewports();
 	test_upload_bytes();
 	test_raw8();
 	test_fan();

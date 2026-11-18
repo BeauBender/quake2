@@ -14,17 +14,20 @@ concurrency:
   # so it is never queued behind, replaced by or cancelled for another run.
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# No token permission unless a job names it.
+permissions: {}
 jobs:
   changes:
     name: Changes
     runs-on: ubuntu-latest
     permissions:
+      # actions/checkout reads the repository; the script reads only git.
       contents: read
     outputs:
       analyze: ${{ steps.diff.outputs.analyze }}
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         # The pull request checkout is a merge commit: HEAD^1 is the base.
         fetch-depth: 2
@@ -45,9 +48,11 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.analyze != 'false' }}
     runs-on: ${{ matrix.runner }}
     permissions:
+      # analyze uploads its SARIF to code scanning; actions/checkout reads
+      # the repository. The repository is public and the analysis names no
+      # private CodeQL pack, so neither actions: read nor packages: read
+      # is needed.
       security-events: write
-      packages: read
-      actions: read
       contents: read
 
     strategy:
@@ -62,9 +67,9 @@ jobs:
           runner: macos-latest
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v4.38.0
+      uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
       with:
         languages: ${{ matrix.language }}
         build-mode: ${{ matrix.build-mode }}
@@ -83,16 +88,18 @@ jobs:
         make -j4 client server game ref_gl1 ref_gl3 ref_soft ref_metal METAL_SHADERS=no
         make -j4 ref_gl1 WITH_METAL_SHIM=yes METAL_SHADERS=no
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v4.38.0
+      uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
       with:
         category: "/language:${{ matrix.language }}"
   cppcheck:
     name: Cppcheck
     runs-on: ubuntu-latest
     container:
-      image: debian:testing
+      image: debian@sha256:2d46f43b677a047cfab870549eea0d83d0a9bea2f55b3f481efc901043916c2a # debian:testing
     permissions:
-      actions: read
+      # actions/checkout reads the repository; upload-sarif uploads to
+      # code scanning. The repository is public, so actions: read is not
+      # needed.
       contents: read
       security-events: write
     steps:
@@ -101,7 +108,7 @@ jobs:
         apt update
         apt install -y cppcheck
     - name: Check out repository code
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Run Cppcheck
       run: |
         cppcheck -j 4 --enable=all --output-format=sarif \
@@ -109,6 +116,6 @@ jobs:
           --suppress=missingIncludeSystem \
           -DYQ2OSTYPE=\"Linux\" src
     - name: Upload SARIF to GitHub Code Scanning
-      uses: github/codeql-action/upload-sarif@v4.38.0
+      uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
       with:
         sarif_file: cppcheck_results.sarif
