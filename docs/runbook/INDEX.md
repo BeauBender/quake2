@@ -70,5 +70,7 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK167](../runbook/TASK167.md): upscale_textures gains VideoToolbox's super-resolution backend (decision 0013), and a local report compares the backends
 - [TASK162](../runbook/TASK162.md): water reflections mark their pixels in the G-buffer raster
 - [TASK161](../runbook/TASK161.md): ref_metal and the shim print presented frames a second; presented fps is the headline metric of the gl1-metal vsync0 bench cases
+- [TASK172](../runbook/TASK172.md): the iPhone Duo: a live fold and unfold, any aspect, asymmetric safe areas
+- [FIX48](../runbook/FIX48.md): the pin harness keeps keyboard and mouse input out of a record, and checks the rendered-frame count
 - [FIX111](../runbook/FIX111.md): the gate-nap-uncut mutant is caught on every run, whatever the load
 - [FIX108](../runbook/FIX108.md): closing a card by any route leaves it with a terminal state label
