@@ -250,6 +250,7 @@ test_show(void)
 	CHECK(rm_gb_show(0.5f) == 0);
 	CHECK(rm_gb_show(NAN) == 0);
 	CHECK(rm_gb_show(INFINITY) == 0);
+	CHECK(rm_gb_show(-INFINITY) == 0);
 }
 
 /* r_rt_flatlight (TASK173): 0 off, else the level 0 to 1 every lightmap sample is replaced by */
@@ -266,7 +267,6 @@ test_flatlight(void)
 	CHECK(rm_gb_flatlight(NAN) == 0.0f);
 	CHECK(rm_gb_flatlight(INFINITY) == 0.0f);
 	CHECK(rm_gb_flatlight(-INFINITY) == 0.0f);
-	CHECK(rm_gb_show(-INFINITY) == 0);
 }
 
 static void
