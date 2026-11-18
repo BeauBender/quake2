@@ -294,7 +294,7 @@ CreateSDLWindow(SDL_WindowFlags flags, int fullscreen, int w, int h)
 	 *  * https://github.com/libsdl-org/SDL/issues/3656 */
 	SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "1");
 
-#if defined(__APPLE__) && TARGET_OS_IPHONE && !TARGET_OS_TV
+#if defined(__APPLE__) && TARGET_OS_IOS
 	/* the screen is held in landscape, either way up, and the home indicator is dimmed so that a first swipe does not leave the game */
 	SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
 	SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");

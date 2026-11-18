@@ -1681,7 +1681,7 @@ IN_Update(void)
 		IN_TouchSend();
 	}
 
-#if defined(__APPLE__) && TARGET_OS_IPHONE && !TARGET_OS_TV
+#if defined(__APPLE__) && TARGET_OS_IOS
 	{
 		// The on-screen keyboard only while text is typed: in the console,
 		// in a chat message or in a menu's text field (TASK150).
@@ -3339,7 +3339,7 @@ IN_Init(void)
 
 	s_muteonfocusloss = Cvar_Get("s_muteonfocusloss", "1", CVAR_ARCHIVE);
 
-#if defined(__APPLE__) && TARGET_OS_IPHONE && !TARGET_OS_TV
+#if defined(__APPLE__) && TARGET_OS_IOS
 	in_touch = Cvar_Get("in_touch", "1", CVAR_ARCHIVE);
 	// the keyboard stays up across Enter in the console
 	SDL_SetHint(SDL_HINT_RETURN_KEY_HIDES_IME, "0");
