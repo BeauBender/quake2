@@ -78,3 +78,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [FIX48](../runbook/FIX48.md): the pin harness keeps keyboard and mouse input out of a record, and checks the rendered-frame count
 - [FIX111](../runbook/FIX111.md): the gate-nap-uncut mutant is caught on every run, whatever the load
 - [FIX108](../runbook/FIX108.md): closing a card by any route leaves it with a terminal state label
+- [FIX96](../runbook/FIX96.md): at r_rt_water_hits 1 with r_metalfx 2 at 5120x2880, why main's own pin records differ run to run
