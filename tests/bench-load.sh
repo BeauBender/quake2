@@ -57,9 +57,11 @@ if [ "${1:-}" = --selftest ]; then
 	fails=0
 	h_sh=$0
 	nap() { perl -e 'select undef, undef, undef, $ARGV[0]' "$1"; }
-	dfl() { perl -e '$SIG{INT} = $SIG{TERM} = "DEFAULT"; exec @ARGV or exit 127' "$@"; }
+	# The harness is started by perl itself, never through a shell function:
+	# a function in the background is a subshell, and $! would name it.
+	dfl='$SIG{INT} = $SIG{TERM} = "DEFAULT"; exec @ARGV or exit 127'
 	INT_OK=
-	dfl sh -c 'kill -INT $$; exit 0' 2> /dev/null || INT_OK=1
+	perl -e "$dfl" sh -c 'kill -INT $$; exit 0' 2> /dev/null || INT_OK=1
 	# gone <seconds> <pids...>: waits until no pid is alive, prints the live ones.
 	gone() {
 		_g=$(($1 * 20)); shift
@@ -76,10 +78,10 @@ if [ "${1:-}" = --selftest ]; then
 		rm -f "${st:?}/pids" "${st:?}/pids.start" "${st:?}/out"
 		pf=$st/pids
 		case "$2" in
-		fail) BENCH_LOAD_PIDS=$st/pids dfl sh "$h_sh" -n 2 -k 1 -- sh -c 'sleep 1; exit 3' > "${st:?}/out" 2>&1 & ;;
+		fail) BENCH_LOAD_PIDS=$st/pids perl -e "$dfl" sh "$h_sh" -n 2 -k 1 -- sh -c 'sleep 1; exit 3' > "${st:?}/out" 2>&1 & ;;
 		start) pf=$st/pids.start
-			BENCH_LOAD_PIDS=$st/pids BENCH_LOAD_START_NAP=0.3 dfl sh "$h_sh" -n 1 -k 3 -- perl -e 'select undef, undef, undef, 120' > "${st:?}/out" 2>&1 & ;;
-		*) BENCH_LOAD_PIDS=$st/pids dfl sh "$h_sh" -n 1 -k 1 -- perl -e 'select undef, undef, undef, 120' > "${st:?}/out" 2>&1 & ;;
+			BENCH_LOAD_PIDS=$st/pids BENCH_LOAD_START_NAP=0.3 perl -e "$dfl" sh "$h_sh" -n 1 -k 3 -- perl -e 'select undef, undef, undef, 120' > "${st:?}/out" 2>&1 & ;;
+		*) BENCH_LOAD_PIDS=$st/pids perl -e "$dfl" sh "$h_sh" -n 1 -k 1 -- perl -e 'select undef, undef, undef, 120' > "${st:?}/out" 2>&1 & ;;
 		esac
 		h=$!
 		i=0
@@ -92,8 +94,8 @@ if [ "${1:-}" = --selftest ]; then
 		fi
 		for p in $pids; do
 			case "$(ps -o command= -p "$p" 2> /dev/null)" in
-			yes|*'kill -0'*) ;;
-			*) echo "$me: selftest $1: pid $p is not a busy loop"; fails=1 ;;
+			yes|*'kill -0'*" $h") ;;
+			*) echo "$me: selftest $1: pid $p is not a busy loop of the harness (pid $h)"; fails=1 ;;
 			esac
 		done
 		case "$2" in
@@ -153,7 +155,7 @@ if [ "${1:-}" = --selftest ]; then
 	grep -q 'run 1 of 2: fail (exit 3' "${st:?}/out" || { echo "$me: selftest failed-run: no failing run line: $(tr '\n' '|' < "${st:?}/out")"; fails=1; }
 	# The measured command gets INT: check-bench's own probe, run as the
 	# command, dies of it, so the run fails with 130.
-	dfl sh "$0" -n 1 -k 0 -- sh -c 'kill -INT $$; exit 0' > "${st:?}/out" 2>&1
+	perl -e "$dfl" sh "$0" -n 1 -k 0 -- sh -c 'kill -INT $$; exit 0' > "${st:?}/out" 2>&1
 	if grep -q 'run 1 of 1: fail (exit 130' "${st:?}/out"; then
 		echo "$me: selftest run-int: ok (the measured command got INT)"
 	elif [ -z "$INT_OK" ]; then
