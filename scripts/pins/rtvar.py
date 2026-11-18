@@ -293,16 +293,19 @@ def cmd_run(a):
     a.store = os.path.join(a.out, "store")
     os.makedirs(a.store, exist_ok=True)
     pins = {}
-    for key, pr, scen in records:
-        cfg = os.path.join(SCEN_DIR, scen + ".cfg")
-        with open(cfg, "w") as f:
-            f.write(scenario_body(os.path.join(SCEN_DIR, key[0] + ".cfg"), pr[2]))
-        try:
-            pins[(key, pr[0])] = record(a, key, scen)
-        finally:
-            os.remove(cfg)
     index = ["rt-variations: seed %s, %dx%d, presets file %s" % (a.seed, a.w, a.h, os.path.basename(a.file))]
+    # one group at a time: its records, then its views, so a later group's failure keeps the earlier views
     for key, (gname, vs) in groups.items():
+        for k, pr, scen in records:
+            if k != key:
+                continue
+            cfg = os.path.join(SCEN_DIR, scen + ".cfg")
+            with open(cfg, "w") as f:
+                f.write(scenario_body(os.path.join(SCEN_DIR, key[0] + ".cfg"), pr[2]))
+            try:
+                pins[(key, pr[0])] = record(a, key, scen)
+            finally:
+                os.remove(cfg)
         chosen = [pr for k, pr, _ in records if k == key]
         off = frames(pins[(key, "off")])
         for v in vs:
@@ -525,7 +528,7 @@ def cmd_selftest(a):
 
         def png(path):
             with open(path, "rb") as f:
-                return ev.decode_png(f.read())
+                return ev.decode_png(f.read())[0]
 
         if not fails:
             # v1 auto:a takes capture 2 (the stub's difference grows with the capture), v2 names capture 1
