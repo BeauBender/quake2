@@ -94,7 +94,13 @@ Measured on this VM (`Apple Paravirtual device`), 640 x 480, every 30th frame, `
 the branch point), exported and built in scratch and recorded through `PINS_BIN`. Every engine log
 holds the validation layer's banner (`Metal API Validation Enabled`, which shows its messages reach the
 log grepped) and no other validation line, and `teardown: 0 live objects` with `rt 0/0`: no
-ray-tracing object was made, so no ray-tracing pass ran. The start-up lines of every head run:
+ray-tracing object was made, so no ray-tracing pass ran.
+
+These runs predate the merge of main at `40aa1e90`, which brought TASK56's sun and sky shadow
+(`git diff --stat a3d4ff98 40aa1e90 -- src Makefile`: 34 files, among them `rm_rtsunscene.c` and its
+back end). The merge classes `r_rt_sun` as an effect, so the gate forces it to 0 here as it does the
+other three; the host test and the table check cover that row. The `rt-sun` scenario was not
+recorded on this VM by this card. The start-up lines of every head run:
 
 ```
 Metal device: Apple Paravirtual device
