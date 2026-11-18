@@ -29,7 +29,8 @@
 # breaks one tool (see real_names), which can only make the check fail.
 #
 # The real scan reads the index git hands it, so from a pre-commit hook it
-# sees the blobs being committed, whatever the working tree holds. The self-test runs first, in a subshell
+# sees the blobs being committed, whatever the working tree holds. The names
+# are read first (an unreadable one fails at once); the self-test runs next, in a subshell
 # with every GIT_* variable unset and no global or system configuration, on a
 # throwaway repository under mktemp -d with synthetic names.
 #
