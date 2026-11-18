@@ -730,7 +730,7 @@ $(BUILDDIR)/client/%.o : %.c
 	${Q}mkdir -p $(@D)
 	${Q}$(CC) -arch $(YQ2_ARCH) -x objective-c -c $(CFLAGS) $(SDLCFLAGS) $(INCLUDE)  $< -o $@
 
-# Objective-C proper (cl_upscale_metalfx.m), with ARC
+# Objective-C proper (cl_upscale_metalfx.m, cl_upscale_vt.m), with ARC
 $(BUILDDIR)/client/%.o : %.m
 	@if [ -z $(QUIET) ]; then\
 		echo "===> CC $<";\
@@ -1284,10 +1284,12 @@ CLIENT_OBJS_ += \
 
 # The metalfx backend of upscale_textures: the macOS client only, with
 # MetalFX weak-linked (decision 0012); elsewhere cl_upscale_cmd.c says
-# it is not built.
+# it is not built. The vt backend (TASK167) likewise, with VideoToolbox
+# weak-linked (macOS 26's super-resolution scaler; CoreMedia and
+# CoreVideo come with SDL3).
 ifeq ($(YQ2_OSTYPE)$(IOS_MODE), Darwin)
-CLIENT_OBJS_ += src/client/cl_upscale_metalfx.o
-UPSCALE_METALFX_LDLIBS := -weak_framework MetalFX
+CLIENT_OBJS_ += src/client/cl_upscale_metalfx.o src/client/cl_upscale_vt.o
+UPSCALE_METALFX_LDLIBS := -weak_framework MetalFX -weak_framework VideoToolbox
 else
 UPSCALE_METALFX_LDLIBS :=
 endif
@@ -1899,6 +1901,7 @@ $(TESTDIR)/tests/unit/test_bspgraph.o : src/client/refresh/files/models.c
 
 # test_imgsize.c includes these whole, and Darwin has no .d tracking
 $(TESTDIR)/tests/unit/test_imgsize.o: src/client/refresh/files/pcx.c src/client/refresh/files/wal.c src/client/refresh/files/imgsize.h
+$(TESTDIR)/tests/unit/test_upscale_half.o: src/client/header/upscale_half.h
 
 $(TEST_BIN) : $(TEST_OBJS)
 	@echo "===> LD $@"
