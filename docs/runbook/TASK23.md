@@ -155,7 +155,48 @@ keyboard, which tvOS does not have" (`TARGET_OS_TV`, `src/client/menu/menu.c`); 
 network is still joined from the list. The player name and the server's host name are fields with a default
 that need no typing. The console still opens from `BTN_MISC1` but takes no text on tvOS (slice 1's note).
 
-@@EVIDENCE@@
+### Input without hands, and the menu walk
+
+`simctl` cannot press a button, so a test build (`CFLAGS=... -DYQ2_INPUT_PROBE`; a release has neither command)
+adds `in_probe` (`src/client/input/sdl3.c`: an SDL virtual gamepad, its buttons and axes, and pushed key events,
+the remote as keys) and `menu_probe` (`src/client/menu/menu.c`: `state`, and `walk`, which visits every screen
+reachable from the main menu with only the six inputs through `M_Keydown`, requires every selectable item to be
+reached with down and with up and back to leave every screen it opened, then drops the commands the selects
+queued and quits). The engine takes at most 50 command-line words, so the probe's script was a `probe.cfg` in a
+scratch `pak9.pak` next to links to the paks, never committed.
+
+Measured on commit `eba0025f`, Apple TV 4K (4th generation), tvOS 27.2 simulator, `ref_metal`:
+
+- The simulator has no game controller and no remote as a gamepad: "0 joysticks were found." at start.
+- The remote as keys works end to end: during play `in_probe key Escape` opened the main menu (key_dest 3,
+  depth 1); Down, Down, Up moved the cursor game, multiplayer, options, multiplayer; Return opened the
+  multiplayer screen (depth 2); Down moved in it; Escape went back to the main menu (depth 1); Down and Return
+  opened the options screen, whose frame the engine wrote (`q2_0000.tga`, kept in the local artifacts folder).
+- The virtual gamepad did not reach the engine: "in_probe: pad attached", but no "Trying joystick" line followed,
+  so its sticks did not move or turn the player and its start button did not open the menu. It was attached at
+  the first frame, while `first_init` still ignores SDL_EVENT_JOYSTICK_ADDED; attaching it after the map loads
+  is the next try. The binding of each pressed key was printed from the live table: `BTN_SOUTH` `+moveup`,
+  `BTN_EAST` `+movedown`, `BTN_NORTH` `weapnext`, start as `ESCAPE`. The table itself is unit-tested
+  (`tests/unit/test_touch.c`).
+- The walk does not pass yet: `menu_probe: walk FAIL: 6 screens, 291 key presses, 33 failures`. Main, game, load
+  game, credits and multiplayer pass; on the join server screen down and up never reach the items after the greyed
+  address book (refresh and the eight server slots) and back does not leave it, so the walk cannot rebuild its path
+  and the main menu's options, video and quit entries are not visited. Not found yet: whether the screen
+  swallows the keys only inside one command (the server search draws a timed popup and pings at open) or a
+  person sees it too.
+- The mutant (the credits screen's back removed, `M_Credits_Key`) is caught: `FAIL: '(unnamed)' is not left with
+  back` (the credits screen has no banner), 34 failures against 33.
+
+### check-tvos
+
+`tests/check-tvos.sh` (e) now also pins `sdl3.o` (no `SDL_RETURN_KEY_HIDES_IME`, no need of `_Touch_TextInput`,
+and `SDL_TV_REMOTE_AS_JOYSTICK` held) and `glimp_sdl3.o` (no `SDL_ORIENTATIONS`, no
+`SDL_IOS_HIDE_HOME_INDICATOR`), with the iOS simulator's object of each file as the positive control (it holds,
+needs or lacks the opposite), and synthetic objects as the mutants of each assertion. (d) takes only a bare true
+test: a chain of `&&` of names, `!names` and `defined()`s with `TARGET_OS_IOS` alone among them; seven more
+mutants per site (`== 0`, `!= 1`, `- 1`, `0 == ( )`, `||`, `?:`, `!( )` around the chain) are refused, and the
+name in double parentheses still passes. A tree with the remote's hint removed fails with "(e) the Siri Remote is
+not set to keys in the tvOS build".
 
 ## Review round 1
 
