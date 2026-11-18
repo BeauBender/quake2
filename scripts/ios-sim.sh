@@ -345,7 +345,7 @@ spawn)
 	# (the same pid, a new status), qfail (the check cannot query), qfailbase (the baseline cannot),
 	# nolabel (the launcher is not listed), garbage (a line that cannot be read), norun (not running
 	# at the baseline), bootcrash (the baseline already reads a new pid and status -11: it crashed
-	# during the boot), hang2 (the check hangs)
+	# during the boot), hang1 (the baseline hangs), hang2 (the check hangs)
 	if [ "${3:-}" = launchctl ] && [ "${4:-}" = list ]; then
 		[ "${2:-}" = "$(cat "$st/created" 2>/dev/null)" ] || { echo "fake xcrun: not the device this run created" >&2; exit 1; }
 		n=$(cat "$st/lcalls" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$st/lcalls"
@@ -359,6 +359,7 @@ spawn)
 		crashstatus) [ "$n" -gt 1 ] && ls=-11 ;;
 		restart) [ "$n" -gt 1 ] && lp=200 ;;
 		bootcrash) lp=200; ls=-11 ;;
+		hang1) [ "$n" -eq 1 ] && { echo $$ > "$st/hang.pid"; exec sleep 180; } ;;
 		hang2) [ "$n" -gt 1 ] && { echo $$ > "$st/hang.pid"; exec sleep 180; } ;;
 		qfail) [ "$n" -gt 1 ] && { echo "fake xcrun: the device is not booted" >&2; exit 1; } ;;
 		qfailbase) [ "$n" -eq 1 ] && { echo "fake xcrun: the device is not booted" >&2; exit 1; } ;;
@@ -594,6 +595,72 @@ EOF
 			echo "ios-sim: selftest: FAIL $name: $why"
 			tail -n 4 "${d:?}/run.log" | sed 's/^/    /'
 			nfail=$((nfail + 1))
+		else
+			echo "ios-sim: selftest: ok $name"
+		fi
+	}
+	# st_signal <name> <TERM|HUP|INT> (FIX131): the smoke, its first launcher read hung (FAKE_LAUNCHER=hang1),
+	# is sent the signal during that bounded read; it must exit, not 0, its device must be deleted, and the
+	# read's child must be gone 3 s after it exited. A non-interactive bash starts its async children with
+	# SIGINT ignored (docs/runbook/FIX131.md), so for INT the script is started through python3 with SIGINT
+	# reset to the default first, as a terminal's foreground job has it; the case is skipped, with its
+	# reason, only when that reset did not take, and fails when INT was deliverable but never sent.
+	st_signal()
+	{
+		local name=$1 sig=$2 d spid hp w rc=0 why= sent= intdisp=default
+		local dfl='import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+open(sys.argv[1], "w").write("default\n" if signal.getsignal(signal.SIGINT) == signal.SIG_DFL else "ignored\n")
+os.execvp(sys.argv[2], sys.argv[2:])'
+		ncase=$((ncase + 1))
+		d=$sroot/$name
+		mkdir -p "${d:?}/state" || die "cannot create $d"
+		printf '%s\n' "11111111-1111-1111-1111-111111111111 Owner iPhone" \
+			"22222222-2222-2222-2222-222222222222 Owner iPad" > "${d:?}/state/devices"
+		set -- env -u IOS_SIM_SDK -u IOS_SIM_LAUNCHER_CRASH_OK PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO=extra FAKE_LAUNCHER=hang1 \
+			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=20 IOS_SIM_CREATE_SECONDS=20 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10
+		if [ "$sig" = INT ]; then
+			"$@" python3 -I -c "$dfl" "${d:?}/intdisp" bash "$self" smoke --out "${d:?}/out" > "${d:?}/run.log" 2>&1 &
+		else
+			"$@" bash "$self" smoke --out "${d:?}/out" > "${d:?}/run.log" 2>&1 &
+		fi
+		spid=$!
+		w=0; while [ ! -s "${d:?}/state/hang.pid" ] && kill -0 "$spid" 2>/dev/null && [ "$w" -lt 300 ]; do sleep 0.1; w=$((w + 1)); done
+		hp=$(cat "${d:?}/state/hang.pid" 2>/dev/null)
+		[ "$sig" != INT ] || intdisp=$(cat "${d:?}/intdisp" 2>/dev/null)
+		if [ -z "$hp" ]; then
+			why="the first launcher read did not start within 30 s"
+		elif [ "$intdisp" != default ]; then
+			:
+		else
+			kill -s "$sig" "$spid" 2>/dev/null && sent=1
+			w=0; while kill -0 "$spid" 2>/dev/null && [ "$w" -lt 200 ]; do sleep 0.1; w=$((w + 1)); done
+		fi
+		if kill -0 "$spid" 2>/dev/null; then
+			[ -n "$why" ] || [ "$intdisp" != default ] || why="the script did not exit within 20 s of $sig"
+			kill -9 "$spid" 2>/dev/null
+		fi
+		wait "$spid" 2>/dev/null || rc=$?
+		sleep 3
+		if [ -n "$hp" ] && kill -0 "$hp" 2>/dev/null; then
+			kill -9 "$hp" 2>/dev/null
+			[ "$intdisp" != default ] || why="${why:+$why; }the bounded launcher read (pid $hp) still ran 3 s after the script exited on $sig"
+		fi
+		if [ -z "$why" ] && [ "$intdisp" = default ]; then
+			if [ -z "$sent" ]; then
+				why="$sig was deliverable but was not sent"
+			elif [ "$rc" = 0 ]; then
+				why="the script exited 0 on $sig"
+			elif grep '^AAAAAAAA-' "${d:?}/state/devices" >/dev/null; then
+				why="this run's device is left in the fake's device list"
+			fi
+		fi
+		if [ -n "$why" ]; then
+			echo "ios-sim: selftest: FAIL $name: $why"
+			tail -n 4 "${d:?}/run.log" | sed 's/^/    /'
+			nfail=$((nfail + 1))
+		elif [ "$intdisp" != default ]; then
+			echo "ios-sim: selftest: skip $name: SIGINT could not be reset to the default for the script (${intdisp:-no reading}), so INT cannot reach it"
 		else
 			echo "ios-sim: selftest: ok $name"
 		fi
@@ -838,6 +905,10 @@ EOF
 	st_has launcher-boot-fails grep state/calls "simctl delete AAAAAAAA-"
 	ST_OUTER=150 st_case launcher-check-hangs extra fail "timed out after 30 s: xcrun simctl spawn" 100 FAKE_LAUNCHER=hang2
 	st_has launcher-check-hangs grep run.log "launcher: unknown (launchctl list failed in the device)"
+	# a signal during a bounded call stops that call's child too (FIX131)
+	st_signal launcher-term-stops-read TERM
+	st_signal launcher-hup-stops-read HUP
+	st_signal launcher-int-stops-read INT
 	# only this run's device is asked
 	st_has launcher-no-crash-iphone nogrep state/calls "spawn 11111111-"
 	st_has launcher-no-crash-iphone grep state/calls "simctl spawn AAAAAAAA-"
