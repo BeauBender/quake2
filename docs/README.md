@@ -55,7 +55,7 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | Path | What it is |
 |---|---|
 | `doc/` | User documentation, numbered in reading order; cvars in `040_cvarlist.md`, commands in `050_commands.md` |
-| `docs/plans/` | Plan anchors for multi-card work; cards cite them |
+| `docs/plans/` | Plan anchors for multi-card work; cards cite them. The presentation modes of `ref_metal` (stock, enhanced, retro, RT-primary): [`docs/plans/presentation-modes.md`](plans/presentation-modes.md) |
 | `docs/runbook/` | What each card measured, one file per card (`<CARD>.md`). A card writes its results there and adds only its one line to [`docs/runbook/INDEX.md`](runbook/INDEX.md), which is merged by union; the shared runbook, `docs/plans/metal-port-harness.md`, keeps the method; see its [README](runbook/README.md) |
 | `docs/decisions/` | Decision records: what was decided, why, and what it costs |
 | `docs/audits/` | Audit write-ups: the [small vendored files](audits/small-vendored.md), the [asset-loader malformed-input audit](audits/asset-loaders.md) and the [network message parser audit](audits/network-parsers.md) |
