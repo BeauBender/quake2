@@ -211,6 +211,42 @@ with `first_init` set, nothing is opened, since the devices present at the start
 start gets it opened 100 updates later. `in_probe pad` now refuses while `first_init` is set, and the probe attaches
 the pad after the map has loaded, as a person plugs one in.
 
+#### Round 2: measured
+
+Commit `0c0c3290`, the same simulator and data (links to the paks and a scratch `pak9.pak` with the probe's
+script, never committed):
+
+- The walk passes: `menu_probe: walk at cls.realtime 1`, then `menu_probe: walk ok: 20 screens, 891 key presses, 0
+  failures`. The screens, by banner or first item as the walk prints them: `m_main_plaque`, `m_banner_game`,
+  `m_banner_load_game`, the credits (`(unnamed)`), `m_banner_multiplayer`, `m_banner_join_server`,
+  `m_banner_start_server`, `falling damage`, `name`, `Download Options`, `score`, `m_banner_options`, `look
+  sensitivity`, `layout`, `attack`, `next weapon`, `attack`, `factor` and `m_banner_video` twice. On join server down and up
+  reach the address book (greyed), refresh and the eight slots, and back leaves it. Quit has no screen on tvOS: the
+  entry is greyed on every `TARGET_OS_IPHONE` target since TASK150 ("close Quake II from the app switcher"), so the
+  walk reaches it with down and up and select does nothing on it; the main menu is then left with back.
+- The walk's mutants fail it. The credits screen's back removed: `FAIL: '(unnamed)' is not left with back`, `walk
+  FAIL: 20 screens, 890 key presses, 1 failures`. `Walk_Key` closing the popup with `Menu_ClosePopup` again (round
+  1's walk): the 33 failures of round 1, `walk FAIL: 6 screens, 289 key presses, 33 failures`, at `cls.realtime 1`.
+- The pad (commit `29e876d5`, `in_probe pads` lists the joysticks): attached before the first frame it is refused
+  (`pad not attached: the start's controller countdown is not over`); attached after the map, the engine looks again
+  ("- Gamepad init attempt -", "2 joysticks were found."). The second joystick is not the probe's: from about the
+  first second the simulator has a joystick of its own, `'Gamepad', gamepad 1, virtual 0`, which appears inside the
+  start's countdown and so is not opened then. `IN_Controller_Init` opens the first gamepad from `in_initjoy`, which
+  is that one ("Trying joystick 1, 'Gamepad'"), so with `in_initjoy` 1 the probe's sticks and start move nothing.
+  With `+set in_initjoy 2` the engine opens the probe's pad ("Trying joystick 2, 'in_probe pad'", "Enabled as
+  Gamepad."), and then the left stick moves the player (origin 128 -320 24 to -63 -126 24), the right stick turns it
+  (yaw 0 to -155), and start opens the game menu (key_dest 3, depth 1, `m_main_plaque`) and closes it again (key_dest
+  0). The right trigger is not shown firing: the gun frame stays 19 (the blaster's idle pause) 3 and 23 waits after
+  the trigger is pressed and 10 after it is let go. Not found yet whether the press reaches `+attack`. What the simulator's own
+  `'Gamepad'` is, and whether a real Apple TV has one, is not known either.
+- The walk prints each greyed item with its reason. On join server the address book has its reason; the items of
+  the four key binding screens (`score`, `attack`, `next weapon`, `attack`) are greyed with no reason of their own
+  on tvOS (an item's status bar is empty). This is TASK150's state, not changed here.
+- The default macOS and iOS simulator objects of both files are byte-identical to main's, on `0c0c3290` and again on
+  `cc9de5bd`: `menu.o` (164544 and
+  164528 bytes) and `sdl3.o` (56872 and 58824 bytes). Both probes are inside `#ifdef YQ2_INPUT_PROBE`, and no menu code
+  outside it changed.
+
 ### check-tvos
 
 `tests/check-tvos.sh` (e) now also pins `sdl3.o` (no `SDL_RETURN_KEY_HIDES_IME`, no need of `_Touch_TextInput`,
