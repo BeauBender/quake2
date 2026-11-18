@@ -893,6 +893,30 @@ CL_CalcViewValues(void)
 }
 
 /*
+ * The client clock's step for one frame (CL_Frame), in milliseconds,
+ * from the host's time since the last client frame in microseconds.
+ * In a timedemo every frame brings the next server frame, and the low
+ * clamp in CL_AddEntities puts the time one server frame behind it;
+ * only a step of a server frame or more, a stall of the host, escapes
+ * the clamp and lets the host's time into the frame. In a pin record
+ * that stall is the capture of a large frame, so there the step is cut
+ * just below a server frame and every frame's time comes from the demo
+ * alone (FIX102). Anywhere else the step is the host's time.
+ */
+int
+CL_ClockStep(int timedelta)
+{
+	int step = timedelta / 1000;
+
+	if (cl_timedemo->value && (CL_PinsCapture() > 0) && (step > 99))
+	{
+		return 99;
+	}
+
+	return step;
+}
+
+/*
  * Emits all entities, particles, and lights to the refresh
  */
 void
