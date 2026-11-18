@@ -276,10 +276,30 @@ attempt "a committed .gitattributes" ok "$tmp/st" .gitattributes "*.txt -diff
 *.dat binary"
 attempt "a staged token in a file marked -diff" "$S" "$tmp/st" scripts/zzq-tok2.txt "token = $_s"
 attempt "a staged token in a file marked binary" "$S" "$tmp/st" scripts/zzq-tok.dat "token = $_s"
-# The staged diff cannot be read: refused, not taken as clean.
+# Nor does local diff configuration: colour, an external diff, or a textconv
+# driver that a committed .gitattributes names.
+printf '#!/bin/sh\nexit 0\n' > "$tmp/bin/zzq-nodiff"
+chmod +x "$tmp/bin/zzq-nodiff"
+git -C "$tmp/st" config color.diff always
+attempt "a staged token, color.diff=always" "$S" "$tmp/st" scripts/zzq-tok3.txt "token = $_s"
+git -C "$tmp/st" config --unset color.diff
+git -C "$tmp/st" config diff.external "$tmp/bin/zzq-nodiff"
+attempt "a staged token, an external diff" "$S" "$tmp/st" scripts/zzq-tok4.txt "token = $_s"
+git -C "$tmp/st" config --unset diff.external
+attempt "a committed .gitattributes naming a diff driver" ok "$tmp/st" .gitattributes "*.txt -diff
+*.dat binary
+*.tc diff=zzq"
+git -C "$tmp/st" config diff.zzq.textconv "$tmp/bin/zzq-nodiff"
+attempt "a staged token, a textconv driver" "$S" "$tmp/st" scripts/zzq-tok.tc "token = $_s"
+git -C "$tmp/st" config --unset diff.zzq.textconv
+# The staged diff cannot be read: refused, not taken as clean. The blob's
+# file is there but corrupt, so git would still write the tree and make the
+# commit; only the hook's refusal stops it.
 _id=$(printf 'zzq gone\n' | git -C "$tmp/st" hash-object -w --stdin)
 git -C "$tmp/st" update-index --add --cacheinfo "100644,$_id,scripts/zzq-gone.txt"
-rm -f "$tmp/st/.git/objects/$(printf '%s' "$_id" | cut -c1-2)/$(printf '%s' "$_id" | cut -c3-)"
+_of="$tmp/st/.git/objects/$(printf '%s' "$_id" | cut -c1-2)/$(printf '%s' "$_id" | cut -c3-)"
+chmod u+w "$_of"
+printf 'zzq not a zlib stream\n' > "$_of"
 _rc=0
 (cd "$tmp/st" && git commit -q -m "zzq unreadable") > "$tmp/out" 2>&1 || _rc=$?
 { [ "$_rc" -ne 0 ] && grep -qF "pre-commit: cannot read the staged diff" "$tmp/out"; } ||
