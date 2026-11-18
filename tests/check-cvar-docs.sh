@@ -423,18 +423,55 @@ verify_upstream() {
 # base". Each case copies it, changes it and runs this script on the copy,
 # asserting the verdict and the text the output must carry.
 
+# isolate_git: no configuration, template, attribute file or repository
+# variable of the caller (a hook runs a check with GIT_DIR set) reaches git.
+isolate_git() {
+	export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_TERMINAL_PROMPT=0 GIT_ATTR_NOSYSTEM=1
+	export HOME=$st/home XDG_CONFIG_HOME=$st/xdg
+	for v in $(git rev-parse --local-env-vars); do
+		unset "$v"
+	done
+}
+
 selftest() {
 	st=$(mktemp -d "${TMPDIR:-/tmp}/cvardocs-self.XXXXXX")
 	trap 'rm -rf "${st:?}"' EXIT
 	: > "$st/.cvardocs-selftest"
 	mkdir -p "$st/home" "$st/xdg"
-	export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_TERMINAL_PROMPT=0 GIT_ATTR_NOSYSTEM=1
-	export HOME=$st/home XDG_CONFIG_HOME=$st/xdg
-	# no repository variable of the caller (a hook's GIT_DIR, say) reaches
-	# the fixture's git
-	for v in $(git rev-parse --local-env-vars); do
-		unset "$v"
-	done
+	# The probe: a caller whose environment is hostile (a decoy repository
+	# in GIT_DIR, a global, system and XDG configuration that sign every
+	# commit and run a hook, a template directory with a hook). After
+	# isolate_git a fresh repository with no template commits cleanly and
+	# runs nothing. Then the fixture is built in the isolated environment.
+	h=$st/hostile
+	mkdir -p "$h/hooks" "$h/tmpl/hooks" "$h/xdg/git" "$h/decoy"
+	printf '#!/bin/sh\n: > "%s/ran"\nexit 1\n' "$h" > "$h/hooks/pre-commit"
+	cp "$h/hooks/pre-commit" "$h/hooks/post-commit"
+	cp "$h/hooks/pre-commit" "$h/tmpl/hooks/pre-commit"
+	chmod +x "$h/hooks/pre-commit" "$h/hooks/post-commit" "$h/tmpl/hooks/pre-commit"
+	printf '[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = /usr/bin/false\n[core]\n\thooksPath = %s/hooks\n[init]\n\ttemplateDir = %s/tmpl\n' "$h" "$h" > "$h/gitconfig"
+	cp "$h/gitconfig" "$h/xdg/git/config"
+	cp "$h/gitconfig" "$h/.gitconfig"
+	git -C "$h/decoy" init -q --template= . || die "self-test: cannot make the decoy repository"
+	probe_ok=1
+	(
+		export HOME=$h XDG_CONFIG_HOME=$h/xdg GIT_CONFIG_GLOBAL=$h/gitconfig GIT_CONFIG_SYSTEM=$h/gitconfig
+		export GIT_DIR=$h/decoy/.git GIT_WORK_TREE=$h/decoy GIT_INDEX_FILE=$h/decoy/.git/index
+		isolate_git
+		mkdir "$st/probe" && cd "$st/probe" || exit 1
+		git init -q . || exit 1
+		[ "$(git rev-parse --git-dir)" = .git ] || exit 1
+		: > f
+		git add f || exit 1
+		git -c user.name=st -c user.email=st@invalid commit -q -m probe || exit 1
+		[ ! -e "$h/ran" ] || exit 1
+	) || probe_ok=0
+	if [ "$probe_ok" -eq 1 ]; then
+		echo "  ok   git-isolation-under-a-hostile-environment: accepted"
+	else
+		die "self-test case git-isolation-under-a-hostile-environment: git read the caller's environment (a hook ran, a signature was asked for, or the repository was the decoy)"
+	fi
+	isolate_git
 	fx=$st/fx
 	mkdir -p "$fx/src/client/menu" "$fx/src/common" "$fx/src/client/refresh" "$fx/doc" "$fx/tests/baselines"
 	cat > "$fx/src/client/menu/vidrules.c" <<'EOF'
@@ -597,7 +634,9 @@ EOF
 	s_set_value() { printf 'void f(void) { Cvar_SetValue("zz_set", 1); }\n' > src/common/s.c; }
 	s_set_force() { printf 'void f(void) { Cvar_ForceSet("zz_set", "1"); }\n' > src/common/s.c; }
 	s_set_full() { printf 'void f(void) { Cvar_FullSet("zz_set", "1", 0); }\n' > src/common/s.c; }
-	s_set_gi() { printf 'void f(void) { gi.cvar_set("zz_set", "1"); gi.cvar_forceset("zz_set2", "1"); }\n' > src/common/s.c; }
+	s_set_gi() { printf 'void f(void) { gi.cvar_set("zz_gset", "1"); }\n' > src/common/s.c; }
+	s_set_giforce() { printf 'void f(void) { gi.cvar_forceset("zz_gforce", "1"); }\n' > src/common/s.c; }
+	s_set_gisetvalue() { printf 'void f(void) { gi.cvar_setvalue("zz_gval", 1); }\n' > src/common/s.c; }
 	s_set_nl() { printf 'void f(void)\n{\n\tri.Cvar_Set(\n\t\t"zz_set", "1");\n}\n' > src/common/s.c; }
 
 	echo "check-cvar-docs: self-test"
@@ -634,8 +673,9 @@ EOF
 	case_run set-value-undocumented refused zz_set s_set_value
 	case_run forceset-undocumented refused zz_set s_set_force
 	case_run fullset-undocumented refused zz_set s_set_full
-	case_run gi.cvar_set-undocumented refused zz_set s_set_gi
-	case_run gi.cvar_forceset-undocumented refused zz_set2 s_set_gi
+	case_run gi.cvar_set-undocumented refused zz_gset s_set_gi
+	case_run gi.cvar_forceset-undocumented refused zz_gforce s_set_giforce
+	case_run gi.cvar_setvalue-undocumented refused zz_gval s_set_gisetvalue
 	case_run baselined-cvar-not-upstream refused "undocumented-cvars.txt:1: zz_fork" s_fork_base
 	case_run baselined-command-not-upstream refused "undocumented-commands.txt:1: zz_forkcmd" s_fork_base_cmd
 	case_run baselined-fork-cvar-named-like-an-upstream-string refused "undocumented-cvars.txt:2: a_bullets" s_bullets
