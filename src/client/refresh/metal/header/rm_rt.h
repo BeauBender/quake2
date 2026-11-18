@@ -384,7 +384,10 @@ int rmb_rt_bind_materials(id<MTLComputeCommandEncoder> ce, int mat_at, int n_at)
  * vert_at, the uint32 index buffer (three a triangle, indexed as the
  * scene's first triangle plus the primitive) at idx_at, and at geom_at
  * four uint32s: their vertices, their triangles, the stride in float4s
- * and 0. 0, with nothing bound, when the map has none.
+ * and the world's first triangle, the first word rmb_rt_frame gives the
+ * world's instance (~0 when the world has no structure; FIX92: the water's
+ * reflection rays tell an inline brush model's face from the world's by
+ * it). 0, with nothing bound, when the map has none.
  */
 int rmb_rt_bind_geometry(id<MTLComputeCommandEncoder> ce, int vert_at, int idx_at, int geom_at);
 #endif

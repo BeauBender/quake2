@@ -1220,17 +1220,19 @@ is.
   `r_rt_water_normal`), so the reflection ripples as the texture does.
   What it meets is shown as the picture shows it, lightmaps, dynamic
   lights and the other ray-traced effects included; where it meets the
-  sky, the sky in that direction. A surface of the map the view does not
-  show (off the screen, or hidden behind something nearer, a door or a
-  platform included) gives no reflection, and the water there is drawn
-  as before; `r_rt_water_hits 1` draws it instead. A model (a player, a
-  monster, an item, a weapon) the view does not show is passed over: the
-  reflection shows what lies behind it, as without the model, so it
-  does not show the model's outline. This works per face, and up to four
-  hidden model faces: past four (one hidden player with its weapon is
-  four) the ray is traced against the map alone, so a model the view
-  shows behind them is passed too, and the reflection there shows what
-  lies behind it (at `0`, none). The reflection is mixed into
+  sky, the sky in that direction. A surface of the world the view does
+  not show (off the screen, or hidden behind something nearer) gives no
+  reflection, and the water there is drawn as before; `r_rt_water_hits
+  1` draws it instead. A model (a player, a monster, an item, a weapon),
+  and at `r_rt_water_hits 0` also a door, a platform or a lift, that the
+  view does not show is passed over: the reflection shows what lies
+  behind it, as without it, so it does not show its outline. This works
+  per face, and up to four hidden faces: past four (one hidden player
+  with its weapon is four, a closed door two) the ray is traced against
+  the map alone, so a model the view shows behind them is passed too,
+  and the reflection there shows what lies behind it (at `0`, none),
+  while a door or a platform there is met (at `0`, none where the view
+  does not show it). The reflection is mixed into
   the water's colour by `r_rt_water_reflect`; translucent water keeps
   its transparency. The rays meet the world, the doors and platforms and
   the models, but not the view weapon or the player's own model. Needs a
@@ -1260,14 +1262,14 @@ is.
 
 * **r_rt_water_hits**: How `r_rt_water` shades what a reflection meets.
   `0` (the default): from the picture alone, as described under
-  `r_rt_water`; a surface of the map the view does not show gives no
+  `r_rt_water`; a surface of the world the view does not show gives no
   reflection.
   `1`: a surface of the map the view does not show (off the screen, or
   hidden behind something nearer) is drawn on its own, its texture and
   lightmap, with the dynamic lights but without their shadows or the
   ambient occlusion; the sky the view does not show comes from the sky
-  box. At both settings what is passed over is exactly this: a model (a
-  player, a monster, an item, a weapon) the view does not show, so the
+  box. At both settings a model (a
+  player, a monster, an item, a weapon) the view does not show is passed over, so the
   reflection shows what lies behind it, and neither the model nor its
   outline. This works per face (a shown model's unseen far side is
   passed too) and up to four hidden model faces: past four the ray is
@@ -1276,8 +1278,9 @@ is.
   `0`, none). A brush
   model the view does not show (a door, a platform, a lift) is part of
   the map: at `1` it is drawn on its own like any other surface, so the
-  reflection can show where it stands, and at `0` it gives no
-  reflection. Over the
+  reflection can show where it stands; at `0` it is passed over as a
+  model is, within the same four faces (a closed door is two), so it
+  leaves no hole in its outline either. Over the
   pool of the test map that fills the 2 to 9 % of the water that had no
   reflection, and changes no pixel outside the water. It costs more GPU
   time: the water's marks, one more draw of the G-buffer raster, and a list

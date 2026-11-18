@@ -34,9 +34,10 @@
  *   the point moved off the water (mtl_rtao_bias), against the frame's
  *   instance structure with MTL_RTW_MASK (all but the view weapon and the
  *   viewer's own model); every face it meets stops it but an alias model
- *   the picture does not show, which it passes (mtl_rtw_ss_next, FIX81:
- *   no hole in the model's outline, within the bound of MTL_RTW_LAYERS
- *   faces, see the pass-over block). Its colour is the
+ *   or an inline brush model (a door, a plat, a lift: mtl_rtw_brush) the
+ *   picture does not show, which it passes (mtl_rtw_ss_next, FIX81 and
+ *   FIX92: no hole in the model's outline, within the bound of
+ *   MTL_RTW_LAYERS faces, see the pass-over block). Its colour is the
  *   lit pixel (the resolve's) where the screen shows the hit, the sky
  *   pixel in its direction for the sky brush or nothing met, else none
  *   (mtl_rtw_choose). Out: the reflection and the pixel's class
@@ -105,13 +106,18 @@ struct rm_rtw_light
 constexpr sampler rm_rtw_smp(filter::linear, mip_filter::linear, address::repeat);
 constexpr sampler rm_rtw_csmp(filter::linear, address::clamp_to_edge);
 
-/* the map's buffers (rmb_rt_bind_geometry): vertices, triangles of the index buffer, the vertex stride in float4s */
+/*
+ * the map's buffers (rmb_rt_bind_geometry): vertices, triangles of the
+ * index buffer, the vertex stride in float4s, and the world's instance's
+ * first word (its first triangle, ~0 with no world structure: FIX92,
+ * mtl_rtw_brush)
+ */
 struct rm_rtw_geom
 {
 	uint nverts;
 	uint ntris;
 	uint stride4;
-	uint pad;
+	uint world;
 };
 
 /* rm_gbuf.metal's rm_fs_varying (rm_vertex_fullscreen's output) */
@@ -556,7 +562,8 @@ rm_rtw_ss_at(constant rm_rtw_view &v, depth2d<float, access::read> depth, textur
  * TASK58's but where a ray met a hidden model): every pixel of the
  * target, a hit's colour the picture's where the screen shows it, else
  * none (mtl_rtw_choose); an alias model the picture does not show passed
- * over as at 1 (mtl_rtw_ss_next, FIX81). r_rt_water_hits 1 is
+ * over as at 1 (mtl_rtw_ss_next, FIX81), and an inline brush model it does
+ * not show too (FIX92; at 1 that is shaded). r_rt_water_hits 1 is
  * rm_rtw_trace_ws below.
  */
 kernel void
@@ -763,12 +770,20 @@ rm_rtw_trace(depth2d<float, access::read> depth [[texture(0)]],
 			 * code as it was, and this block runs only past a hidden model,
 			 * so every other ray is cast once and gives TASK58's colour bit
 			 * for bit (the compiler's arithmetic included).
+			 *
+			 * FIX92: an inline brush model (a door, a plat, a lift) the
+			 * picture does not show is passed the same way: its instance's
+			 * first word is neither an alias model's (~0) nor the world's
+			 * (g.world, mtl_rtw_brush), and its faces count towards the same
+			 * MTL_RTW_LAYERS. The last cast's mask, the map's, still holds
+			 * the brush models, so past the bound one is met. A world face
+			 * the picture does not show still stops the ray with none.
 			 */
 			{
 				uint b = (hit.type != intersection_type::none) ? inst[2 * hit.instance_id] : 0u;
 				uint qmask = MTL_RTW_MASK;
 				int map = 0;
-				int step = mtl_rtw_ss_next(kind, b == 0xffffffffu, from, 0, map);
+				int step = mtl_rtw_ss_next(kind, b == 0xffffffffu, mtl_rtw_brush(b, g.world), from, 0, map);
 
 				for (int layer = 1; step != MTL_RTW_NEXT_STOP; layer++)
 				{
@@ -782,7 +797,7 @@ rm_rtw_trace(depth2d<float, access::read> depth [[texture(0)]],
 					b = (hit.type != intersection_type::none) ? inst[2 * hit.instance_id] : 0u;
 					from = rm_rtw_ss_at(v, depth, mat, tmat, ntris, o, r3, hit.type != intersection_type::none, b,
 						hit.primitive_id, hit.distance, w, h, kind, q);
-					step = mtl_rtw_ss_next(kind, b == 0xffffffffu, from, layer, map);
+					step = mtl_rtw_ss_next(kind, b == 0xffffffffu, mtl_rtw_brush(b, g.world), from, layer, map);
 				}
 			}
 
