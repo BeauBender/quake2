@@ -328,7 +328,7 @@ def cmd_run(a):
         run_groups(a, groups, records, pins, index, done)
     except BaseException:
         if done:  # the index of the views that were written before the failure
-            write_index(a, done, index + ["stopped: a later view group failed; its views were not written"])
+            write_index(a, done, index + ["stopped: the run failed after these views; the rest were not written"])
         raise
     write_index(a, done, index)
     return 0
@@ -441,6 +441,26 @@ CARD_PRESETS = ["off", "shadows", "shadows-x", "sun", "sun-x", "ao", "ao-x", "wa
                 "water-show2", "sunfloor-025", "sunfloor-050", "sunfloor-075", "sunfloor-100", "preview"]
 
 
+def read_index(path):
+    """{view: (its capture line, {preset: diff})} of an index file."""
+    out, cur = {}, None
+    with open(path) as f:
+        for line in f.read().splitlines():
+            m = re.match(r"^view ([a-z0-9-]+): \S+ \S+ every [0-9]+, (capture .*)$", line)
+            if m:
+                cur = out.setdefault(m.group(1), (m.group(2), {}))
+                continue
+            m = re.match(r"^  [0-9]{2} (\S+) +diff ([0-9.]+)  ", line)
+            if m and cur:
+                cur[1][m.group(1)] = float(m.group(2))
+    return out
+
+
+def pixdiff(x, y):
+    """The summed absolute difference of two TGA frames' pixels."""
+    return sum(abs(p - q) for p, q in zip(ev.read_tga(x)[2], ev.read_tga(y)[2]))
+
+
 def cmd_selftest(a):
     import tempfile
     fails = []
@@ -459,6 +479,14 @@ def cmd_selftest(a):
             fails.append("parse must refuse " + what)
         except Bad:
             pass
+
+    def keep(d):  # a folder holding a file that must survive
+        os.makedirs(d)
+        with open(os.path.join(d, "keep"), "w") as f:
+            f.write("keep\n")
+
+    def kept(d):
+        return os.path.isfile(os.path.join(d, "keep"))
 
     tmp = os.path.realpath(tempfile.mkdtemp(prefix="rtvar."))
     try:
@@ -501,6 +529,7 @@ def cmd_selftest(a):
         refused(good + "view w | world demo1.dm2 30 | auto:nope\n", "an auto capture of no preset")
         refused(good + "view w | world demo1.dm2 30 | auto:off\n", "auto:off")
         refused(good + "frob x | x | x\n", "an unknown entry")
+        refused(good + "view store | world demo1.dm2 30 | 1\n", "a view named store (the pin store)")
 
         # the tree copy, the stub engine and the game-data stand-in
         tree = os.path.join(tmp, "tree")
@@ -526,7 +555,8 @@ def cmd_selftest(a):
             os.chmod(p, 0o755)
             return p
 
-        env = dict(os.environ, PINS_BIN=stub("quake2"), PINS_BASEDIR=os.path.join(tmp, "gd"), BENCH_LOCK="0")
+        # the caller's git hook variables and git config never reach a run (mfx.git_env)
+        env = dict(mfx.git_env(), PINS_BIN=stub("quake2"), PINS_BASEDIR=os.path.join(tmp, "gd"), BENCH_LOCK="0")
         for k in ("PINS_SEED", "PINS_STORE", "PINS_DEMO", "PINS_EVERY", "PINS_WIDTH", "PINS_HEIGHT", "MTL_DEBUG_LAYER"):
             env.pop(k, None)
         tool = os.path.join(tree, "scripts", "rt-variations.sh")
@@ -587,8 +617,24 @@ def cmd_selftest(a):
                 clip = f.read()
             i = clip.find(b"acTL")
             ok(i > 0 and int.from_bytes(clip[i + 4:i + 8], "big") == 3, "v1: the clip is off, then each preset")
+            # the index: off differs from itself by exactly 0, each other preset (the stub's pair, a and
+            # b) by more on every view, and an auto view names the capture where its preset differs most
+            # from off, worked out here from the frames themselves, not from framediff
             idx = [f for f in os.listdir(out) if f.startswith("index-")]
-            ok(len(idx) == 1, "one index file")
+            ok(idx == ["index-v1-v2-v3.txt"], "one index file, named after the views: %s" % idx)
+            got = read_index(os.path.join(out, idx[0])) if idx else {}
+            ok(sorted(got) == ["v1", "v2", "v3"], "the index names every view: %s" % sorted(got))
+            for v, scen, auto in (("v1", "v1", "a"), ("v2", "v1", None), ("v3", "v3", "b")):
+                why, diffs = got.get(v, ("", {}))
+                ok(diffs.get("off") == 0.0, "%s: off's diff is exactly 0: %s" % (v, diffs.get("off")))
+                ok(all(diffs.get(n, 0.0) > 0.0 for n in ("a", "b")), "%s: a and b differ from off: %s" % (v, diffs))
+                if auto:
+                    o, x = frames(pin(SCRATCH + scen + "-off")), frames(pin(SCRATCH + scen + "-" + auto))
+                    best = max(sorted(o), key=lambda c: (pixdiff(o[c], x[c]), -c))
+                    ok(best == 2 and why == "capture %d, where %s differs most from off" % (best, auto),
+                       "%s: the capture where %s differs most (%d): %r" % (v, auto, best, why))
+                else:
+                    ok(why == "capture 1, named", "%s: the named capture: %r" % (v, why))
         # an existing view is refused without --replace, replaced with it; a complete record is used again
         n = len(calls())
         rc, text = run(["--out", out])
@@ -599,10 +645,53 @@ def cmd_selftest(a):
            "a complete record is used again: " + text[-300:])
         rc, text = run(["--out", out, "--views", "v3", "--presets", "b", "--replace"])
         ok(rc == 0 and len(calls()) == n + 2, "--replace records off and b again: " + text[-300:])
+        n = len(calls())
+        # a view named store is refused, and --replace never reaches the pin store
+        sfile = os.path.join(tmp, "s.txt")
+        with open(sfile, "w") as f:
+            f.write(TEST_FILE + "view store | world demo1.dm2 30 | 1\n")
+        before = sorted(os.listdir(st))
+        rc, text = run(["--file", sfile, "--out", out, "--views", "store", "--replace"])
+        ok(rc != 0 and os.path.isdir(st) and sorted(os.listdir(st)) == before and len(calls()) == n,
+           "a view named store is refused before anything is removed: " + text[-300:])
+        # a trailing space next to a link: <P>/out is a link to a folder holding v1, <P>/out<space> is
+        # absent; the run is refused, nothing behind the link is removed and nothing is created
+        lp, behind = os.path.join(tmp, "lp"), os.path.join(tmp, "behind")
+        keep(os.path.join(behind, "v1"))
+        os.makedirs(lp)
+        os.symlink(behind, os.path.join(lp, "out"))
+        rc, text = run(["--out", os.path.join(lp, "out") + " ", "--replace"])
+        ok(rc != 0 and kept(os.path.join(behind, "v1")) and os.listdir(lp) == ["out"] and len(calls()) == n,
+           "an --out with a trailing space next to a link is refused before anything is removed: " + text[-300:])
+        # an abbreviated --ou after the --out rt-variations.sh checked does not stand in for it
+        victim, good_out = os.path.join(tmp, "victim"), os.path.join(tmp, "o-abbrev")
+        keep(os.path.join(victim, "v1"))
+        rc, text = run(["--out", good_out, "--ou", victim, "--replace"])
+        ok(rc != 0 and kept(os.path.join(victim, "v1")) and not os.path.lexists(good_out) and len(calls()) == n,
+           "an abbreviated --ou is refused before anything is removed: " + text[-300:])
+        # a later view group's failing record keeps the earlier groups' views and their index
+        late = os.path.join(tmp, "o-late")
+        rc, text = run(["--out", late], dict(env, PINS_BIN=stub("late", 'case $s in %sv3-*) exit 1;; esac' % SCRATCH)))
+        ok(rc != 0, "a run whose later group fails must fail: " + text[-300:])
+        for v in ("v1", "v2"):
+            vd = os.path.join(late, v)
+            full = sorted(os.listdir(os.path.join(vd, "full"))) if os.path.isdir(os.path.join(vd, "full")) else []
+            ok(os.path.isfile(os.path.join(vd, "sheet.png")) and os.path.isfile(os.path.join(vd, "clip.png")) and
+               full == ["00-off.png", "01-a.png", "02-b.png"], "%s is kept after a later group failed: %s" % (v, full))
+        ok(not os.path.lexists(os.path.join(late, "v3")), "the failing view's folder is absent")
+        idx = sorted(f for f in os.listdir(late) if f.startswith("index-")) if os.path.isdir(late) else []
+        got, stopped = {}, False
+        if idx == ["index-v1-v2.txt"]:
+            got = read_index(os.path.join(late, idx[0]))
+            with open(os.path.join(late, idx[0])) as f:
+                stopped = "\nstopped: " in f.read()
+        ok(idx == ["index-v1-v2.txt"] and sorted(got) == ["v1", "v2"] and stopped,
+           "the index of the views written before the failure: %s %s" % (idx, sorted(got)))
         # the output path: refused inside a git work tree, relative, and nothing runs
         repo = os.path.join(tmp, "repo")
         os.makedirs(repo)
-        g = subprocess.run(["git", "init", "-q", repo], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        g = subprocess.run(["git", "init", "-q", repo], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           env=mfx.git_env())
         ok(g.returncode == 0, "git init")
         n = len(calls())
         for bad, what in ((os.path.join(repo, "x"), "inside a git work tree"), ("rel/out", "relative"),
@@ -618,7 +707,9 @@ def cmd_selftest(a):
                "%s: no scratch scenario is left behind" % name)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    for f in fails:
+    for f in fails:  # no local path in the output: the scratch folder is named <tmp>
+        for t in (tmp, os.path.realpath(tempfile.gettempdir()), tempfile.gettempdir()):
+            f = f.replace(t, "<tmp>")
         print("  FAIL: " + f)
     print("rt-variations selftest: %d failed" % len(fails))
     return 1 if fails else 0

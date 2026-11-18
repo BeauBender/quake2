@@ -70,7 +70,10 @@ most), `water` (base `skywater`, `water.dm2` on `base1`; where `water-x` differs
 ## Runs on the bare-metal host
 
 Host: the bare-metal host (Apple M6, ray tracing). Engine commit measured: `4a6227a7` (pin ids
-`4a6227a7e22e-*`; the commits after it change no source). Every build and run held the shared
+`4a6227a7e22e-*`). The commits after it change no engine source, but they do change the tool's:
+`1cb414e7` made `scripts/pins/rtvar.py` record and write one view group at a time, so that a later
+group's failure keeps the earlier views, and review round 1 (below) changed it again. The 75-record
+run predates both, so it ran the tool as it was at `4a6227a7`. Every build and run held the shared
 timing lock (`tools/heavy.sh`); every record is `PINS_SEED=1`, 640 x 480, under
 `MTL_DEBUG_LAYER=1`, and its log holds no validation message (the tool refuses one). A record
 takes about 10 s; the whole run, 75 records and the images of four views, about 15 minutes.
