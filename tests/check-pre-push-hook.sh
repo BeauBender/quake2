@@ -171,6 +171,18 @@ tree() {
 	done
 	GIT_INDEX_FILE=$tmp/tree.idx w write-tree
 }
+# dtree <dir>[/<dir>] [<tree>]: the entries of <tree> (none by default) and
+# an empty directory at that path, one or two levels deep.
+dtree() {
+	_d=$empty
+	case $1 in
+	*/*) _d=$(printf '040000 tree %s\t%s\n' "$empty" "${1#*/}" | w mktree) ;;
+	esac
+	{
+		[ -z "${2:-}" ] || w ls-tree "$2"
+		printf '040000 tree %s\t%s\n' "$_d" "${1%%/*}"
+	} | w mktree
+}
 # raw <text>: a commit object written as is.
 raw() { printf '%s' "$1" | w hash-object -t commit -w --stdin; }
 # tag <object> <type> <name> <message>: an annotated tag object.
@@ -509,6 +521,15 @@ ma=$(TR=$(tree a.txt "zzq a") mk "$m1" zzqm55)
 mb=$(TR=$(tree b.txt "zzq b") mk "$m1" zzqm56)
 case_ "$FN" refs/heads/zzqf16 "$(TR=$(tree a.txt "zzq a" b.txt "zzq b" "zzq-$syn.txt" "zzq clean") mk "$ma" zzqm57 -p "$mb")" refs/heads/zzqf16 "$zero"
 case_ ok refs/heads/zzqf17 "$(TR=$(tree a.txt "zzq a" b.txt "zzq b") mk "$ma" zzqm58 -p "$mb")" refs/heads/zzqf17 "$zero"
+# a directory with nothing below it (git mktree; git fsck --strict accepts
+# it): its name is a path the commit adds, at the top or nested, also in a
+# merge
+_ab=$(tree a.txt "zzq a" b.txt "zzq b")
+case_ "$FN $H" refs/heads/zzqf21 "$(TR=$(dtree "zzq-$syn") mk "$m1" zzqm64)" refs/heads/zzqf21 "$zero"
+case_ "$FN $H" refs/heads/zzqf22 "$(TR=$(dtree "build-cache/$syn") mk "$m1" zzqm65)" refs/heads/zzqf22 "$zero"
+case_ "$FN $H" refs/heads/zzqf23 "$(TR=$(dtree "zzq-$syn" "$_ab") mk "$ma" zzqm66 -p "$mb")" refs/heads/zzqf23 "$zero"
+case_ "$FN $H" refs/heads/zzqf24 "$(TR=$(dtree "build-cache/$syn" "$_ab") mk "$ma" zzqm67 -p "$mb")" refs/heads/zzqf24 "$zero"
+case_ ok refs/heads/zzqf25 "$(TR=$(dtree build-cache/zzq-clean) mk "$m1" zzqm68)" refs/heads/zzqf25 "$zero"
 # a binary file is not scanned (the gate check's rule)
 _bin=$(printf 'zzq\000 on %s\n' "$syn" | w hash-object -w --stdin)
 rm -f "$tmp/tree.idx"

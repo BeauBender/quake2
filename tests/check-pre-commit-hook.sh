@@ -357,6 +357,14 @@ attempt "a committed .gitattributes naming a diff driver" ok "$tmp/st" .gitattri
 git -C "$tmp/st" config diff.zzq.textconv "$tmp/bin/zzq-nodiff"
 attempt "a staged token, a textconv driver" "$S" "$tmp/st" scripts/zzq-tok.tc "token = $_s"
 git -C "$tmp/st" config --unset diff.zzq.textconv
+# Nor does a change of type alone: a tracked symbolic link replaced by a file
+# holding a token.
+ln -s zzq-target "$tmp/st/scripts/zzq-link"
+git -C "$tmp/st" add -- scripts/zzq-link
+(cd "$tmp/st" && git commit -q -m "zzq a symbolic link") > "$tmp/out" 2>&1 ||
+	{ note "a symbolic link: wanted the commit made"; redact < "$tmp/out"; }
+rm "$tmp/st/scripts/zzq-link"
+attempt "a symbolic link replaced by a file holding a token" "$S" "$tmp/st" scripts/zzq-link "token = $_s"
 # The staged diff cannot be read: refused, not taken as clean. The blob's
 # file is there but corrupt, so git would still write the tree and make the
 # commit; only the hook's refusal stops it.
