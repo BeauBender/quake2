@@ -427,9 +427,33 @@ for a device (`IOS_SDK=iphoneos`, below), and they run
 simulator (`arm64-apple-tvos17.0-simulator`, Xcode's tvOS platform needed),
 with its own *Info.plist* (*stuff/ios/Info-tvos.plist.in*). It is the
 iPhone build with the touch overlay, the on-screen keyboard and the
-iPhone's window hints left out; controller and Siri Remote input, the
-menu's focus and where the game data lives are not done yet
-(*docs/runbook/TASK23.md*).
+iPhone's window hints left out. Where the game data lives on a device is
+not decided yet (*docs/runbook/TASK23.md*).
+
+To play, pair a controller (an MFi, Xbox or PlayStation one) with the
+Apple TV. Shown in the simulator, with a test build's virtual controller:
+the left stick moves, the right stick turns and the menu button (options,
+start) opens and closes the game menu; the Siri Remote drives the menus
+(below). A fresh start also binds the rest of the controller from the
+default table, which is unit-tested but not yet shown working in the
+simulator (the right trigger firing among them): the right trigger to
+attack, A (cross) to jump, B (circle) to crouch, Y (triangle) and the right
+shoulder to the next weapon, the left shoulder to the previous one, X
+(square) to use the selected item and the view button to the inventory.
+A binding that is already there, and every binding once a `config.cfg`
+exists, is kept. In the menus the d-pad or the left stick moves, A selects
+and B goes back. On the key and controller binding screens select waits
+for the new key, as on every platform: in the tvOS simulator the walk of
+the menus enters bind mode on every binding item, and back (Escape)
+leaves it without binding anything.
+
+The Siri Remote drives the menus as keys: a click on the up, down, left
+or right edge of its touch surface (the ring on the second generation)
+moves, a click in the middle selects, and the Back (Menu) button goes
+back, or opens the game menu during play. Every menu screen works with
+those six; the address book (typing a server address) is greyed with its
+reason, since tvOS has no keyboard to type it with, and a server found
+on the local network is still joined from the list.
 `IOS_SIM_SDK=appletvsimulator scripts/ios-sim.sh run --out DIR --data DATA`
 runs it on an Apple TV simulator device (DIR outside the checkout, as for
 the smoke); `tests/check-tvos.sh` builds its objects in the gate. The
