@@ -13,11 +13,14 @@
 # signs with a program that fails, forces colour, and the author identity
 # holds the self-tests' synthetic host name. Both must pass and the index
 # copy must be byte-identical afterwards. Last, the real part of the gate
-# check is run with `hostname` and `whoami` shims (synthetic names), to show
-# that a hit fails without printing the value, that unreadable names fail
-# closed, that a user name equal to origin's GitHub owner is skipped with a
-# note that does not print it, and that another user name is not skipped even
-# when the home ends in it. Nothing in the repository is written.
+# check is run with synthetic names added to the real ones (its test-only
+# YQ2_IDENTITY_TEST_HOST and YQ2_IDENTITY_TEST_USER), to show that a hit
+# fails without printing the value, that a `hostname` on PATH is not read
+# (the check runs /bin/hostname and /usr/bin/id by absolute path), that an
+# unreadable name fails closed (YQ2_IDENTITY_TEST_TOOL), that a user name
+# equal to origin's GitHub owner is skipped with a note that does not print
+# it, and that another user name is not skipped even when the home ends in
+# it. Nothing in the repository is written.
 #
 # Usage: tests/check-identity-env.sh
 set -eu
@@ -64,7 +67,7 @@ printf '*\n' > "$tmp/excludes"
 # if a check let it fall back to them. The home directory ends in the user
 # name, as a real one does (the owner-handle skip of the gate check needs
 # that; see home_is there).
-hhome=$tmp/home/$(whoami 2>/dev/null || true)
+hhome=$tmp/home/$(/usr/bin/id -un 2>/dev/null || true)
 mkdir -p "$hhome" "$tmp/xdg/git"
 cp "$tmp/hostile.gitconfig" "$hhome/.gitconfig"
 cp "$tmp/hostile.gitconfig" "$tmp/xdg/git/config"
@@ -74,8 +77,8 @@ cp "$tmp/hostile.gitconfig" "$tmp/xdg/git/config"
 redact() {
 	YQ2_P="$tmp
 $top
-$gitdir" YQ2_R="$(hostname -s 2>/dev/null || true)
-$(whoami 2>/dev/null || true)
+$gitdir" YQ2_R="$(/bin/hostname -s 2>/dev/null || true)
+$(/usr/bin/id -un 2>/dev/null || true)
 ${HOME:-}" awk '
 	BEGIN { np = split(ENVIRON["YQ2_P"], p, "\n"); nr = split(ENVIRON["YQ2_R"], r, "\n") }
 	{
@@ -110,9 +113,9 @@ for check in tests/check-no-local-identity.sh tests/check-pre-push-hook.sh; do
 		cp "$tmp/index.orig" "$tmp/index"
 	fi
 done
-# The real part of the gate check, with `hostname` and `whoami` shims: a hit
-# fails and is reported without the value; unreadable names fail closed
-# (both) or warn (one).
+# The real part of the gate check, with synthetic names added to the real
+# ones: a hit fails and is reported without the value; a `hostname` on PATH
+# is not read; an unreadable name fails closed.
 mkdir "$tmp/bin"
 shim() { # $1 = command, $2 = what it prints ("" = fails)
 	if [ -n "$2" ]; then
@@ -135,19 +138,29 @@ gate() { # $1 = label, $2 = wanted status, $3 = text the output must hold, [$4 =
 		fails=1
 	fi
 }
+names() { # $1 = host name, $2 = user name: added to the real ones
+	YQ2_IDENTITY_TEST_HOST=$1
+	YQ2_IDENTITY_TEST_USER=$2
+	export YQ2_IDENTITY_TEST_HOST YQ2_IDENTITY_TEST_USER
+}
 # The self-tests of these checks hold the synthetic host name, so it is a hit.
 # The other two values are split in this file so the tree does not hold them.
-shim hostname zzq-synthetic-box
-shim whoami "zzqno""body"
+names zzq-synthetic-box "zzqno""body"
 gate "a host name found in tracked files" 1 "tracked files contain this machine's identity"
-shim hostname ''
-gate "host name unreadable" 0 "warning: cannot read the host or user name"
-shim whoami ''
-gate "host and user name unreadable" 1 "cannot read the host name or the user name"
+# The same name from a `hostname` (and a `whoami`) on PATH is not read.
+names "zzqno""host" "zzqno""body"
+shim hostname zzq-synthetic-box
+shim whoami zzq-synthetic-box
+gate "a host name from a hostname on PATH is not read" 0 "check-no-local-identity: ok"
+rm -f "$tmp/bin/hostname" "$tmp/bin/whoami"
+YQ2_IDENTITY_TEST_TOOL=host-missing
+export YQ2_IDENTITY_TEST_TOOL
+gate "host name unreadable" 1 "cannot read this machine's host name"
+YQ2_IDENTITY_TEST_TOOL=user-empty
+gate "user name unreadable" 1 "cannot read the local user name"
+unset YQ2_IDENTITY_TEST_TOOL
 # A user name that is not origin's owner, with a home ending in it: nothing is
 # skipped, so no note (the note needs owner_is as well as home_is).
-shim hostname "zzqno""host"
-shim whoami "zzqno""body"
 gate "a user name that is not the owner, home ending in it" 0 "check-no-local-identity: ok" "/zzqno""home/zzqno""body"
 if grep -q "skipped" "$tmp/out"; then
 	echo "$me: FAIL: a user name that is not the owner, home ending in it: the skip note was printed"
@@ -159,8 +172,7 @@ fi
 # are not run, and a line says so.
 owner=$(git remote get-url origin 2>/dev/null | sed -nE 's#^.*github\.com[:/]([A-Za-z0-9-]+)/[^/]+$#\1#p') || owner=
 if [ -n "$owner" ]; then
-	shim hostname "zzqno""host"
-	shim whoami "$owner"
+	names "zzqno""host" "$owner"
 	gate "the user name is the owner handle" 0 "the user-name word test is skipped" "/zzqno""home/$owner"
 	if grep -qiF -e "$owner" "$tmp/out"; then
 		echo "$me: FAIL: the user name is the owner handle: the output printed the user name"

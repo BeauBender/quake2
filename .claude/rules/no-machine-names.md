@@ -31,8 +31,9 @@ on or the account it runs under.
   until the tooling writes the token itself.
 
   Never put the shim on `PATH` for `scripts/test.sh`, `merge-gate.sh` or a
-  merge. `tests/check-no-local-identity.sh` reads the real names, and the shim
-  would blind it.
+  merge. They write no marker, so they need no shim; the shim could not blind
+  `tests/check-no-local-identity.sh` there anyway, since it reads the real
+  names by absolute path (`/bin/hostname -s`, `/usr/bin/id -un`).
 - **Known gap.** The loop's readers still compare a holder against the real
   names, for example the Stop hook's list of held claims. So they report the
   agent's own token claims as another agent's. Go by the token, not by that
