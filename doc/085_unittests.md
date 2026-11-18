@@ -23,7 +23,9 @@ the shared renderer files `src/client/refresh/files/surf.c` and
 `src/client/refresh/files/imgscale.c` (`scale2x`, `R_FloodFillSkin` and
 `R_Convert8to32`, shared by the client and every renderer and tested in
 `tests/unit/test_imgscale.c`), and the
-software renderer's SDL-free `src/client/refresh/soft/sw_view.c`; only
+software renderer's SDL-free `src/client/refresh/soft/sw_view.c`; and
+`tests/unit/test_imgsize.c` includes `src/client/refresh/files/pcx.c` and
+`wal.c` whole, with a fake `ri`, and tests the pure checks in `imgsize.h`; only
 `main()` is replaced by the
 test runner. `tests/unit/test_bspgraph.c` includes the renderers' shared
 BSP loader `src/client/refresh/files/models.c` whole, and the `Makefile`
