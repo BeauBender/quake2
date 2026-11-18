@@ -24,13 +24,19 @@
 # alone. The identity check runs its own self-test, a few seconds, on every
 # commit; the stand-ins keep the cases that do not need it fast.
 #
-# The identity is synthetic: `hostname` and `whoami` are shims on PATH and
-# HOME is a made-up path, so the identity check really reads them at run
-# time; the names are in none of the copied files. The credential samples
-# are built at run time from pieces, so this file holds no string of a
-# token's shape. The output of every case is checked for the synthetic
-# values, the samples and this machine's real values (read here, only ever
-# compared, never printed).
+# The identity is synthetic: the identity check's test-only
+# YQ2_IDENTITY_TEST_HOST and YQ2_IDENTITY_TEST_USER add a made-up host and
+# user name to the real ones, and HOME is a made-up path, so the check really
+# reads them at run time; the names are in none of the copied files. The
+# identity shim is first on PATH throughout, as it is for every marker
+# writer (its `hostname` prints a machine token, its `whoami` prints
+# `agent`): the check reads the real names by absolute path, so a staged file
+# naming this machine's real host or user name (built at run time from
+# /bin/hostname and /usr/bin/id, kept in a throwaway repository, never
+# printed) is refused, and one holding the token and `agent` is not. The
+# credential samples are built at run time from pieces, so this file holds
+# no string of a token's shape. The output of every case is checked for the
+# synthetic values, the samples and this machine's real values.
 #
 # Isolation from the caller: every GIT_* variable is unset (a pre-commit hook
 # exports GIT_INDEX_FILE), repositories are made with `git init --template=`,
@@ -47,9 +53,13 @@ top=$(pwd)
 hook=$top/.githooks/pre-commit
 [ -f "$hook" ] || { echo "$me: .githooks/pre-commit is missing"; exit 1; }
 
-# Read before HOME and PATH are replaced; only ever compared, never printed.
-real_words="$(hostname -s 2>/dev/null || true)
-$(whoami 2>/dev/null || true)
+# Read by absolute path, as the check reads them (a shim on the caller's PATH
+# cannot stand in), and before HOME is replaced; only ever compared or put in
+# a throwaway repository, never printed.
+real_host=$(/bin/hostname -s 2>/dev/null || true)
+real_user=$(/usr/bin/id -un 2>/dev/null || true)
+real_words="$real_host
+$real_user
 ${HOME:-}"
 
 # ---- Isolation from the caller. -------------------------------------------
@@ -82,8 +92,13 @@ shim() { # $1 = command, $2 = what it prints ("" = fails)
 	fi
 	chmod +x "$tmp/bin/$1"
 }
-shim hostname Zzqpc-Synthetic-Host
-shim whoami "$login"
+# The identity shim (.claude/rules/no-machine-names.md), first on PATH.
+tok=m-0a1b2c3d4e5f
+shim hostname "$tok"
+shim whoami agent
+YQ2_IDENTITY_TEST_HOST=Zzqpc-Synthetic-Host
+YQ2_IDENTITY_TEST_USER=$login
+export YQ2_IDENTITY_TEST_HOST YQ2_IDENTITY_TEST_USER
 PATH="$tmp/bin:$PATH"
 HOME=$synhome
 XDG_CONFIG_HOME=$tmp/xdg
@@ -121,6 +136,10 @@ sample "fine-grained token" 'git' 'hub_' 'pat_' "$(rep 82 "$up${lo}_$dg")"
 for _c in b a p r s; do
 	sample "xox${_c}- token" 'xo' 'x' "$_c" '-' "$(rep 12 "$up$lo$dg-")"
 done
+sample "Anthropic API key" 'sk' '-an' 't-' "$(rep 40 "$up${lo}_$dg-")"
+sample "Google API key" 'AI' 'za' "$(rep 35 "$dg$up${lo}_-")"
+sample "GitLab token" 'gl' 'pat' '-' "$(rep 20 "$up${lo}_$dg-")"
+sample "Stripe live key" 'sk' '_li' 've_' "$(rep 24 "$up$lo$dg")"
 
 # redact < file: the tmp path becomes TMP; a line that holds a synthetic or
 # real value or a sample is replaced whole.
@@ -194,18 +213,26 @@ for _w in "$syn" "$login" "$synhome"; do
 	fi
 done
 
-# attempt <label> <want> <repo> <file> <content>: stages <file> holding
-# <content> and runs git commit. <want> is "ok" or the text that one line of
-# the output must hold. A refused commit's file is unstaged and removed.
+# attempt <label> <want> <repo> <file> <content> [replace]: stages <file>
+# holding <content> and runs git commit. <want> is "ok" or the text that one
+# line of the output must hold. With "replace", the staged blob is first
+# replaced locally (git replace) by a clean twin, and the replacement is
+# removed after the commit. A refused commit's file is unstaged and removed.
 attempt() {
 	_label=$1; _want=$2; _r=$3; _f=$4
 	mkdir -p "$(dirname "$_r/$_f")"
 	printf '%s\n' "$5" > "$_r/$_f"
 	git -C "$_r" add -- "$_f"
+	_rb=
+	if [ "${6:-}" = replace ]; then
+		_rb=$(git -C "$_r" rev-parse ":$_f")
+		git -C "$_r" replace "$_rb" "$(printf 'zzq clean twin\n' | git -C "$_r" hash-object -w --stdin)"
+	fi
 	_before=$(git -C "$_r" rev-parse HEAD)
 	: > "$ZZQ_RAN"
 	_rc=0
 	(cd "$_r" && git commit -q -m "zzq $_label") > "$tmp/out" 2>&1 || _rc=$?
+	[ -z "$_rb" ] || git -C "$_r" replace -d "$_rb" > /dev/null
 	_after=$(git -C "$_r" rev-parse HEAD)
 	_f0=$fails
 	if [ "$_want" = ok ]; then
@@ -235,6 +262,29 @@ attempt "identity word under .githooks/" "$I" "$tmp/id" .githooks/zzq-note "buil
 attempt "identity word under third_party/" "$I" "$tmp/id" third_party/zzq/x.h "/* built on $syn */"
 attempt "identity word under scripts/pins/scenarios/" "$I" "$tmp/id" scripts/pins/scenarios/zzq.cfg "// built on $syn"
 attempt "a clean change under scripts/, the real identity check" ok "$tmp/id" scripts/zzq-clean.sh "echo zzq clean"
+
+# ---- The identity shim on PATH: the real names still decide. --------------
+if [ "${#real_host}" -ge 3 ]; then
+	attempt "the shim on PATH: a staged file naming the real host" "$I" "$tmp/id" scripts/zzq-rh.sh "echo built on $real_host"
+else
+	echo "$me: not run: the real-host case (the check does not compare a host name shorter than three characters)"
+fi
+if [ "${#real_user}" -ge 3 ] && [ "$real_user" != agent ]; then
+	attempt "the shim on PATH: a staged file naming the real user as a path component" "$I" "$tmp/id" scripts/zzq-ru.sh "cd /srv/$real_user/zzq"
+	attempt "the shim on PATH: a staged file holding the token and agent" ok "$tmp/id" scripts/zzq-agent.sh "echo run by agent on $tok"
+else
+	echo "$me: not run: the real-user and agent cases (the user name is shorter than three characters, which the check does not compare, or is agent itself)"
+fi
+# The real names' tools missing or printing nothing (the check's test-only
+# YQ2_IDENTITY_TEST_TOOL): the commit is refused, one case each.
+export YQ2_IDENTITY_TEST_TOOL
+for YQ2_IDENTITY_TEST_TOOL in host-missing host-empty; do
+	attempt "the host-name tool: $YQ2_IDENTITY_TEST_TOOL" "cannot read this machine's host name" "$tmp/id" scripts/zzq-t.sh "echo zzq clean"
+done
+for YQ2_IDENTITY_TEST_TOOL in user-missing user-empty; do
+	attempt "the user-name tool: $YQ2_IDENTITY_TEST_TOOL" "cannot read the local user name" "$tmp/id" scripts/zzq-t.sh "echo zzq clean"
+done
+unset YQ2_IDENTITY_TEST_TOOL
 
 # ---- Which checks run: every commit runs the identity and memory checks, the
 # rest only for the paths they cover (stand-ins). ---------------------------
@@ -269,6 +319,15 @@ done < "$tmp/samples"
 # The fine-grained family needs 22 characters after the prefix.
 _s=$(printf '%s' 'git' 'hub_' 'pat_' "$(rep 21 "$up$lo$dg")")
 attempt "21 characters after the fine-grained prefix" ok "$tmp/st" scripts/zzq-tok.txt "token = $_s"
+# ... and the four families added with it, one character short of each.
+_s=$(printf '%s' 'sk' '-an' 't-' "$(rep 19 "$up$lo$dg")")
+attempt "19 characters after the Anthropic prefix" ok "$tmp/st" scripts/zzq-tok.txt "token = $_s"
+_s=$(printf '%s' 'AI' 'za' "$(rep 34 "$dg$up$lo")")
+attempt "34 characters after the Google prefix" ok "$tmp/st" scripts/zzq-tok.txt "token = $_s"
+_s=$(printf '%s' 'gl' 'pat' '-' "$(rep 19 "$up$lo$dg")")
+attempt "19 characters after the GitLab prefix" ok "$tmp/st" scripts/zzq-tok.txt "token = $_s"
+_s=$(printf '%s' 'sk' '_li' 've_' "$(rep 23 "$up$lo$dg")")
+attempt "23 characters after the Stripe prefix" ok "$tmp/st" scripts/zzq-tok.txt "token = $_s"
 # A committed .gitattributes that marks the file binary or without a diff
 # does not take it out of the secret scan.
 _s=$(awk -F '\t' '$1 == "ghp_ token" { print $2 }' "$tmp/samples")
@@ -292,6 +351,8 @@ attempt "a committed .gitattributes naming a diff driver" ok "$tmp/st" .gitattri
 git -C "$tmp/st" config diff.zzq.textconv "$tmp/bin/zzq-nodiff"
 attempt "a staged token, a textconv driver" "$S" "$tmp/st" scripts/zzq-tok.tc "token = $_s"
 git -C "$tmp/st" config --unset diff.zzq.textconv
+# Nor does a local replacement of the staged blob (refs/replace/).
+attempt "a staged token replaced locally by a clean twin" "$S" "$tmp/st" scripts/zzq-tok5.txt "token = $_s" replace
 # The staged diff cannot be read: refused, not taken as clean. The blob's
 # file is there but corrupt, so git would still write the tree and make the
 # commit; only the hook's refusal stops it.

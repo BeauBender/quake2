@@ -212,6 +212,19 @@ scan_repo() {
 	return "$_hits"
 }
 
+# ---- The real names, read first: an unreadable one fails at once. ---------
+real_names
+host=$yq2_host
+user=$yq2_user
+if [ -z "$host" ]; then
+	echo "$me: cannot read this machine's host name (/bin/hostname -s); refusing rather than checking less"
+	exit 1
+fi
+if [ -z "$user" ]; then
+	echo "$me: cannot read the local user name (/usr/bin/id -un); refusing rather than checking less"
+	exit 1
+fi
+
 # ---- Self-test: a synthetic identity in a throwaway repository. ----------
 (
 	for _v in $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p'); do
@@ -427,18 +440,7 @@ nl.txt"
 )
 
 # ---- The real check on this tree. -----------------------------------------
-real_names
-host=$yq2_host
-user=$yq2_user
 home=${HOME:-}
-if [ -z "$host" ]; then
-	echo "$me: cannot read this machine's host name (/bin/hostname -s); refusing rather than checking less"
-	exit 1
-fi
-if [ -z "$user" ]; then
-	echo "$me: cannot read the local user name (/usr/bin/id -un); refusing rather than checking less"
-	exit 1
-fi
 thost=${YQ2_IDENTITY_TEST_HOST:-}
 tuser=${YQ2_IDENTITY_TEST_USER:-}
 for _u in "$user" "$tuser"; do
