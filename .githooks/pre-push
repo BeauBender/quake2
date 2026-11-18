@@ -40,10 +40,11 @@
 #               <remote sha> --remotes=<remote>: what is reachable from the
 #               pushed commit and from no commit the remote is known to have,
 #               the walk git itself makes to choose what to send; a blob in
-#               the tree of such a commit is already published and not
-#               scanned again) and the paths the new commits add or change
-#               (git diff-tree -r -c --root, deletions left out: deleting a
-#               file publishes nothing) are scanned by
+#               the tree of a published parent is not scanned again) and
+#               the paths the new commits add or change, every directory
+#               name included, one with nothing below it too (git diff-tree
+#               -r -t -c --root, deletions left out: deleting a file
+#               publishes nothing) are scanned by
 #               tests/check-no-local-identity.sh, the gate's check, so its
 #               rules hold there: binary files (a NUL byte) are not scanned,
 #               the user name is a whole word. The blobs go to it under
@@ -372,7 +373,7 @@ collect() {
 	[ "$_st" -eq 1 ] || die "refused: cannot read an object of ref number $1"
 	sed -n 's/^blob //p' "$td/types" > "$td/blobs" || die "refused: cannot list the new blobs of ref number $1"
 	printf '%s\n' "$commits" > "$td/commits" || die "refused: cannot write a temporary file"
-	git diff-tree --stdin -r -c --root -z --name-only --no-commit-id --diff-filter=d < "$td/commits" > "$td/paths.z" 2>/dev/null ||
+	git diff-tree --stdin -r -t -c --root -z --name-only --no-commit-id --diff-filter=d < "$td/commits" > "$td/paths.z" 2>/dev/null ||
 		die "refused: cannot list the paths of ref number $1"
 	tr '\000' '\n' < "$td/paths.z" > "$td/paths" || die "refused: cannot list the paths of ref number $1"
 	_pid=
