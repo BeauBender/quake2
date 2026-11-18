@@ -43,8 +43,11 @@ rm_rtao_on(float ao, int device_rt, float fullbright)
 		return 0;
 	}
 
-	/* r_fullbright: gl1 draws the world without its lightmaps, so there is no term to scale */
-	if (isfinite(fullbright) && (fullbright != 0))
+	/*
+	 * r_fullbright: gl1 draws the world without its lightmaps, so there is
+	 * no term to scale; any value but 0, NaN among them, as rm_surf.c reads it
+	 */
+	if (fullbright != 0)
 	{
 		return 0;
 	}

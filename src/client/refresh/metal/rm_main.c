@@ -37,9 +37,11 @@
 #include "header/local.h"
 #include "header/rm_rtscene.h"
 #include "header/rm_rtaoscene.h"
+#include "header/rm_rtsunscene.h"
 #include "header/rm_rtwaterscene.h"
 #include "header/rm_gbufscene.h"
 #include "header/rm_fxscene.h"
+#include "header/rm_rtgate.h"
 #include "common/mtl_matrix.h"
 #include "common/mtl_rate.h"
 #include <time.h>
@@ -114,6 +116,18 @@ static rm_view_t r_view;
 
 static qboolean rm_opened;
 static int rm_prev_mode = 4;
+
+/*
+ * The hardware gate of ray tracing (RT8, TASK60; header/rm_rtgate.h): the
+ * device's path, decided in RI_Init, and the effect switches of the table,
+ * which RM_RTG_Frame puts back to 0 before each frame on a device without
+ * ray tracing. The decisions are rm_rtgate.c's (host-tested); this glue
+ * reads the cvars and sets them.
+ */
+static rm_rtg_t rm_rtg;
+static rm_rtg_state_t rm_rtg_state;
+static cvar_t *rm_rtg_effects[RM_RTG_MAX_EFFECTS];
+static int rm_rtg_neffects;
 
 /* gl1's clear colour for r_clear 1 */
 static const float rm_clear_color[4] = { 1.0f, 0.0f, 0.5f, 0.5f };
@@ -301,11 +315,60 @@ RM_ClearTextureModeFlags(void)
 	r_videos_unfiltered->modified = false;
 }
 
+/*
+ * The gate's step before a frame draws (and once at RI_Init): the effect
+ * switches it lists are named in a line, then set to 0. Without ray
+ * tracing a switch set at the console reads 0 again before the next frame.
+ */
+static void
+RM_RTG_Frame(void)
+{
+	float v[RM_RTG_MAX_EFFECTS];
+	rm_rtg_out_t o;
+	char line[256];
+	int k;
+
+	for (k = 0; k < rm_rtg_neffects; k++)
+	{
+		v[k] = rm_rtg_effects[k]->value;
+	}
+
+	rm_rtg_step(rm_rtg.path, v, rm_rtg_neffects, &rm_rtg_state, &o);
+
+	for (k = 0; k < o.nsay; k++)
+	{
+		rm_rtg_reset_format(rm_rtg_effects[o.say[k]]->name, &rm_rtg, line, sizeof(line));
+		R_Printf(PRINT_ALL, "%s\n", line);
+	}
+
+	for (k = 0; k < o.nreset; k++)
+	{
+		ri.Cvar_Set(rm_rtg_effects[o.reset[k]]->name, "0");
+	}
+}
+
+/* the table's effect switches, which the scenes' Init created; each reads 0 from here on where the path is none */
+static void
+RM_RTG_Init(void)
+{
+	const char *name;
+	int k;
+
+	for (k = 0; (k < RM_RTG_MAX_EFFECTS) && ((name = rm_rtg_effect(k)) != NULL); k++)
+	{
+		rm_rtg_effects[k] = ri.Cvar_Get(name, "0", 0);   /* an effect switch defaults to 0 (rm_rtgate_test --names) */
+	}
+
+	rm_rtg_neffects = k;
+	rm_rtg_state_reset(&rm_rtg_state);
+	RM_RTG_Frame();
+}
+
 static qboolean
 RI_Init(void)
 {
-	rmb_caps_t caps;
-	char err[256], families[64];
+	rmb_caps_t caps, rtcaps;
+	char err[256], families[64], line[256];
 
 	R_Printf(PRINT_ALL, "Refresh: " REF_VERSION "\n");
 	R_Printf(PRINT_ALL, "Client: " YQ2VERSION "\n\n");
@@ -338,6 +401,11 @@ RI_Init(void)
 	R_Printf(PRINT_ALL, "Metal supportsRaytracing: %s, supportsRaytracingFromRender: %s\n",
 			caps.raytracing ? "yes" : "no", caps.raytracing_render ? "yes" : "no");
 
+	/* the ray-tracing path (RT8, TASK60): one line, at start-up and at vid_restart */
+	rm_rtg = rm_rtg_decide(caps.families, caps.raytracing, caps.raytracing_render);
+	rm_rtg_format(&rm_rtg, line, sizeof(line));
+	R_Printf(PRINT_ALL, "%s\n", line);
+
 	if (!rm_caps_floor_ok(caps.families))
 	{
 #if defined(TARGET_OS_SIMULATOR) && TARGET_OS_SIMULATOR
@@ -368,9 +436,12 @@ RI_Init(void)
 	Mod_Init();
 	R_InitBuiltinTextures();
 	RM_InitDraw();
-	RM_RT_Init(&caps);   /* the r_rt_* cvars (TASK53); builds nothing */
+	rtcaps = caps;
+	rtcaps.raytracing = rm_rtg_traces(&rm_rtg);   /* the scenes trace only where the gate has a path (TASK60) */
+	RM_RT_Init(&rtcaps); /* the r_rt_* cvars (TASK53); builds nothing */
 	RM_GB_Init();        /* the G-buffer's development cvars (TASK54) */
 	RM_FX_Init(&caps);   /* the MetalFX cvars and what the device supports (TASK111); makes no scaler */
+	RM_RTG_Init();       /* the effect switches read 0 where there is no ray tracing (TASK60) */
 
 	ri.Vid_MenuInit();
 	return true;
@@ -396,6 +467,9 @@ RI_BeginFrame(float camera_separation)
 	int w = 0, h = 0, dw = 0, dh = 0;
 
 	(void)camera_separation;   /* no stereo in ref_metal */
+
+	/* without ray tracing an effect switch set since the last frame reads 0 before this one (TASK60) */
+	RM_RTG_Frame();
 
 	/* the layer's displaySyncEnabled, read back by IsVSyncActive (gl1 sets the swap interval) */
 	if (r_vsync->modified)
@@ -917,6 +991,7 @@ R_RenderViewGB(refdef_t *fd, int stencil)
 	/* RT3: the view and lights of the shadow rays, traced at the resolve; with them the dynamic lights leave the lightmaps */
 	RM_RTS_View(&r_view);
 	RM_RTAO_View(&r_view);   /* RT5: the view of the AO rays, traced at the resolve */
+	RM_RTSun_View(&r_view);  /* RT4: the view of the sun rays, traced at the resolve after the AO */
 	RM_RTW_View(&r_view);    /* RT6: the view of the reflections, traced after the resolve */
 	R_MarkLeaves();
 	R_DrawWorld(&r_view);
@@ -924,8 +999,8 @@ R_RenderViewGB(refdef_t *fd, int stencil)
 	RM_GB_Resolve();
 	r_dlight_term = true;   /* nothing after the resolve is resolved: a lightmap built from here keeps gl1's term */
 
-	/* r_rt_shadows_show, r_rt_ao_show and r_rt_water_show draw their pass's view alone, the forward pass left out */
-	if (!RM_RTS_ShowOnly() && !RM_RTAO_ShowOnly() && !RM_RTW_ShowOnly())
+	/* r_rt_shadows_show, r_rt_ao_show, r_rt_sun_show and r_rt_water_show draw their pass's view alone, the forward pass left out */
+	if (!RM_RTS_ShowOnly() && !RM_RTAO_ShowOnly() && !RM_RTSun_ShowOnly() && !RM_RTW_ShowOnly())
 	{
 		R_DrawEntitiesSplit(0);
 		R_RenderDlights(&r_view);
@@ -955,6 +1030,9 @@ RI_RenderFrame(refdef_t *fd)
 
 	/* whether it traces RT5's ambient occlusion */
 	RM_RTAO_Frame(fd, RM_RT_SceneReady());
+
+	/* whether it traces RT4's sun and sky shadow (never on a map under 2 % sky) */
+	RM_RTSun_Frame(fd, RM_RT_SceneReady());
 
 	/* whether it traces RT6's water reflections */
 	RM_RTW_Frame(fd, RM_RT_SceneReady());
