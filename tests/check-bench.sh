@@ -1098,19 +1098,31 @@ t_lock_dead_waiter() {
 	[ "$fails" -eq 0 ]
 }
 
-# clockshim: $E/clock/date, a date whose +%s stands still until $E/tick
-# exists and then reads an hour on; every other form is the real date.
+# clockshim <seconds>: $E/clock/date, a date whose +%s stands still until
+# $E/tick exists and then reads <seconds> on; every other form runs the
+# real date, /bin/date when there is one, so a date on the caller's PATH
+# cannot stand in for it. The shim quotes that path.
 clockshim() {
 	mkdir -p "${E:?}/clock"
-	_cs_t=$(date +%s)
-	printf '#!/bin/sh\nif [ "$#" -eq 1 ] && [ "$1" = +%%s ]; then\n\tif [ -e "%s/tick" ]; then echo %s; else echo %s; fi\n\texit 0\nfi\nexec %s "$@"\n' "$E" "$((_cs_t + 3600))" "$_cs_t" "$(command -v date)" > "${E:?}/clock/date"
+	_cs_d=/bin/date
+	[ -x "$_cs_d" ] || _cs_d=$(command -v date) || _cs_d=
+	case $_cs_d in
+	*"'"*) bad "clockshim: the real date's path has a quote in it: $_cs_d"; return 1 ;;
+	/*) ;;
+	*) bad "clockshim: no real date: $_cs_d"; return 1 ;;
+	esac
+	_cs_t=$("$_cs_d" +%s)
+	printf '#!/bin/sh\nif [ "$#" -eq 1 ] && [ "$1" = +%%s ]; then\n\tif [ -e "%s/tick" ]; then echo %s; else echo %s; fi\n\texit 0\nfi\nexec '\''%s'\'' "$@"\n' "$E" "$((_cs_t + ${1:?}))" "$_cs_t" "$_cs_d" > "${E:?}/clock/date"
 	chmod +x "${E:?}/clock/date"
 }
 
 t_lock_giveup() {
 	fresh giveup
 	qfix
-	clockshim
+	# G's wait is 1 s, and the tick moves its clock on by exactly 1 s: a
+	# give-up that ignores BENCH_LOCK_WAIT, or that wants more than it
+	# (-gt for -ge), never comes.
+	clockshim 1
 	holder H
 	# FIX128: G's clock stands still until $E/tick, so G cannot give up
 	# before this test has seen its ticket, however slow the host. On the
