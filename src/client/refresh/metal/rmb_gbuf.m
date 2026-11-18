@@ -41,6 +41,7 @@
 #include "header/rm_gbuf.h"
 #include "header/rm_rtshadow.h"
 #include "header/rm_rtao.h"
+#include "header/rm_rtsun.h"
 #include "header/rm_rtwater.h"
 #include "header/rm_metalfx.h"
 
@@ -763,7 +764,7 @@ rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 	{
 		MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
 		id<MTLRenderCommandEncoder> enc;
-		id<MTLTexture> lt;
+		id<MTLTexture> lt, sl;
 
 		/*
 		 * RT6 (TASK162): at r_rt_water_hits 1, the raster's last draw marks
@@ -778,6 +779,13 @@ rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 		/* RT5 (TASK57): the AO rays; the resolve then reads lightmap x AO in place of the light attachment */
 		lt = rmb_rtao_trace(t_depth, t_normal, t_material, t_light);
 		lt = lt ? lt : t_light;
+
+		/*
+		 * RT4 (TASK56): the sun's term added to that light, after the AO (which
+		 * scales the lightmap term only); its floor gate reads the raster's lightmap
+		 */
+		sl = rmb_rtsun_trace(t_depth, t_normal, t_material, t_light, lt);
+		lt = sl ? sl : lt;
 		rmb_gbuf_att_target(rp);
 		enc = rmb_frame_open_pass(rp, 0, 0, 0);
 
@@ -803,6 +811,9 @@ rmb_gbuf_resolve(const rm_gb_resolve_t *r)
 
 		/* r_rt_ao_show's view over the resolve, when the frame traced the AO */
 		rmb_rtao_show(enc, t_material);
+
+		/* r_rt_sun_show's view over the resolve, when the frame traced the sun */
+		rmb_rtsun_show(enc);
 
 		/*
 		 * RT6 (TASK58): the water reflections, last, from the resolve's lit
