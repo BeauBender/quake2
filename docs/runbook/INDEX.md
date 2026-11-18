@@ -27,6 +27,7 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK53](../runbook/TASK53.md): Acceleration structures in `ref_metal` (RT1)
 - [TASK54](../runbook/TASK54.md): The G-buffer and the lighting resolve in `ref_metal` (RT2)
 - [TASK55](../runbook/TASK55.md): Ray-traced shadows from dynamic lights in `ref_metal` (RT3)
+- [TASK56](../runbook/TASK56.md): Ray-traced sun and sky shadow with a per-map direction table in `ref_metal` (RT4)
 - [TASK57](../runbook/TASK57.md): Ray-traced ambient occlusion in `ref_metal` (RT5)
 - [TASK58](../runbook/TASK58.md): Ray-traced water reflections in `ref_metal` (RT6)
 - [TASK70](../runbook/TASK70.md): Observed on the scripted water demo
@@ -70,6 +71,7 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK162](../runbook/TASK162.md): water reflections mark their pixels in the G-buffer raster
 - [TASK161](../runbook/TASK161.md): ref_metal and the shim print presented frames a second; presented fps is the headline metric of the gl1-metal vsync0 bench cases
 - [TASK23](../runbook/TASK23.md): the tvOS simulator build boots to the main menu and loads base1; the guarded iOS APIs and the game-data options on tvOS
+- [TASK60](../runbook/TASK60.md): ref_metal decides its ray-tracing path at start-up; on the VM every effect cvar reads 0 and every pin is unchanged
 - [TASK172](../runbook/TASK172.md): the iPhone Duo: a live fold and unfold, any aspect, asymmetric safe areas
 - [FIX48](../runbook/FIX48.md): the pin harness keeps keyboard and mouse input out of a record, and checks the rendered-frame count
 - [FIX111](../runbook/FIX111.md): the gate-nap-uncut mutant is caught on every run, whatever the load
