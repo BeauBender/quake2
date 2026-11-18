@@ -556,3 +556,71 @@ VidRules_RTItem(int i, const char *renderer, int available, int effect_on)
 	}
 	return (vidrule_t){ 1, "applies from the next frame" };
 }
+
+/* TASK183: the names in the order of r_presentation's values, never renumbered */
+static const char *const pres_names[VIDPRES_COUNT + 1] = { "Stock", "Enhanced", "Retro", "Ray traced", NULL };
+
+static const vidrt_control_t pres_control = {
+	"r_presentation", "presentation", "0", CVAR_ARCHIVE, -1, 0, 0, 0, NULL, pres_names
+};
+
+const vidrt_control_t *
+VidRules_Presentation(void)
+{
+	return &pres_control;
+}
+
+int
+VidRules_PresentationIndex(float value)
+{
+	if (!isfinite(value) || value < 0.0f || value >= (float)VIDPRES_COUNT)
+	{
+		return VIDPRES_STOCK;
+	}
+	return (int)value;
+}
+
+vidrule_t
+VidRules_PresentationMode(int mode, const char *renderer, int available)
+{
+	if (mode < -1 || mode >= VIDPRES_COUNT)
+	{
+		return (vidrule_t){ 0, "unknown mode" };
+	}
+	if (VidRules_Renderer(renderer) != VIDREF_METAL)
+	{
+		return (vidrule_t){ 0, "ref_metal only" };
+	}
+	if (mode == -1)
+	{
+		return (vidrule_t){ 1, "the look; applies at apply (vid_restart)" };
+	}
+	if (mode == VIDPRES_RETRO)
+	{
+		return (vidrule_t){ 0, "awaiting review" };
+	}
+	if ((mode == VIDPRES_ENHANCED || mode == VIDPRES_RTPRIMARY) && !available)
+	{
+		return (vidrule_t){ 0, "needs ray tracing" };
+	}
+	if (mode == VIDPRES_RTPRIMARY)
+	{
+		return (vidrule_t){ 0, "awaiting review" };
+	}
+	if (mode == VIDPRES_ENHANCED)
+	{
+		return (vidrule_t){ 1, "stock lighting with the ray-traced effects on" };
+	}
+	return (vidrule_t){ 1, "the original look; your own settings" };
+}
+
+const char *
+VidRules_RTStatus(const char *renderer, int available, float presentation)
+{
+	if (VidRules_PresentationIndex(presentation) == VIDPRES_ENHANCED &&
+		VidRules_PresentationMode(VIDPRES_ENHANCED, renderer, available).enabled)
+	{
+		return "Enhanced overrides the switches; your own values shown";
+	}
+	return "Esc: back; each change shows on the next frame";
+}

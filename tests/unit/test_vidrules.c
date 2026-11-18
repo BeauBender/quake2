@@ -766,3 +766,132 @@ TEST(vidrules_rt_controls_persist)
 	free_cvars(cvar_vars);
 	cvar_vars = saved;
 }
+
+/* TASK183: every mode is shown, each greyed with its reason where it does not apply */
+TEST(vidrules_presentation_modes)
+{
+	const vidrt_control_t *p = VidRules_Presentation();
+	static const char *const names[VIDPRES_COUNT] = { "Stock", "Enhanced", "Retro", "Ray traced" };
+
+	T_REQUIRE(p != NULL);
+	T_EQ_STR(p->cvar, "r_presentation");
+	T_EQ_STR(p->def, "0");
+	T_CHECK(p->flags & CVAR_ARCHIVE);
+	for (int m = 0; m < VIDPRES_COUNT; m++)
+	{
+		T_REQUIRE(p->choices[m] != NULL);
+		T_EQ_STR(p->choices[m], names[m]);
+	}
+	T_CHECK(p->choices[VIDPRES_COUNT] == NULL);
+
+	for (int avail = 0; avail < 2; avail++)
+	{
+		/* stock always; the item itself on Metal */
+		T_CHECK(VidRules_PresentationMode(VIDPRES_STOCK, "metal", avail).enabled);
+		T_CHECK(VidRules_PresentationMode(-1, "metal", avail).enabled);
+		/* the later slices' modes wait for the owner's review, whatever the device */
+		T_CHECK(!VidRules_PresentationMode(VIDPRES_RETRO, "metal", avail).enabled);
+		T_EQ_STR(VidRules_PresentationMode(VIDPRES_RETRO, "metal", avail).text, "awaiting review");
+		T_CHECK(!VidRules_PresentationMode(VIDPRES_RTPRIMARY, "metal", avail).enabled);
+
+		/* off Metal every mode but stock, and the item, are greyed with the one reason */
+		for (int r = 1; r < NREFS; r++)
+		{
+			T_CHECK(!VidRules_PresentationMode(-1, refs[r], avail).enabled);
+			T_EQ_STR(VidRules_PresentationMode(-1, refs[r], avail).text, "ref_metal only");
+			for (int m = 0; m < VIDPRES_COUNT; m++)
+			{
+				T_CHECK(!VidRules_PresentationMode(m, refs[r], avail).enabled);
+				T_EQ_STR(VidRules_PresentationMode(m, refs[r], avail).text, "ref_metal only");
+			}
+		}
+	}
+
+	/* enhanced traces rays: live where the device does, greyed where it does not */
+	T_CHECK(VidRules_PresentationMode(VIDPRES_ENHANCED, "metal", 1).enabled);
+	T_CHECK(!VidRules_PresentationMode(VIDPRES_ENHANCED, "metal", 0).enabled);
+	T_EQ_STR(VidRules_PresentationMode(VIDPRES_ENHANCED, "metal", 0).text, "needs ray tracing");
+	T_EQ_STR(VidRules_PresentationMode(VIDPRES_RTPRIMARY, "metal", 0).text, "needs ray tracing");
+	T_EQ_STR(VidRules_PresentationMode(VIDPRES_RTPRIMARY, "metal", 1).text, "awaiting review");
+
+	/* every greyed rule has a reason, and an unknown mode is greyed */
+	for (int m = -1; m <= VIDPRES_COUNT; m++)
+	{
+		for (int r = 0; r < NREFS; r++)
+		{
+			vidrule_t v = VidRules_PresentationMode(m, refs[r], 1);
+
+			T_CHECK(v.enabled || (v.text && v.text[0]));
+		}
+	}
+	T_CHECK(!VidRules_PresentationMode(VIDPRES_COUNT, "metal", 1).enabled);
+	T_CHECK(!VidRules_PresentationMode(-2, "metal", 1).enabled);
+
+	T_EQ_INT(VidRules_PresentationIndex(0), 0);
+	T_EQ_INT(VidRules_PresentationIndex(1), 1);
+	T_EQ_INT(VidRules_PresentationIndex(1.9f), 1);
+	T_EQ_INT(VidRules_PresentationIndex(3), 3);
+	T_EQ_INT(VidRules_PresentationIndex(4), 0);
+	T_EQ_INT(VidRules_PresentationIndex(-1), 0);
+	T_EQ_INT(VidRules_PresentationIndex(NAN), 0);
+	T_EQ_INT(VidRules_PresentationIndex(INFINITY), 0);
+}
+
+/* TASK183: under a mode that decides the switches, the ray-tracing screen says so */
+TEST(vidrules_rt_status_names_the_presentation)
+{
+	const char *stock = VidRules_RTStatus("metal", 1, 0);
+	const char *enh = VidRules_RTStatus("metal", 1, 1);
+
+	T_REQUIRE(stock && enh);
+	T_CHECK(strstr(stock, "Enhanced") == NULL);
+	T_CHECK(strstr(enh, "Enhanced") != NULL && strstr(enh, "overrides") != NULL);
+	/* where enhanced does not run, it overrides nothing */
+	T_CHECK(strstr(VidRules_RTStatus("metal", 0, 1), "overrides") == NULL);
+	T_CHECK(strstr(VidRules_RTStatus("gl1", 1, 1), "overrides") == NULL);
+	T_CHECK(strstr(VidRules_RTStatus("metal", 1, 2), "overrides") == NULL);
+	T_CHECK(strstr(VidRules_RTStatus("metal", 1, NAN), "overrides") == NULL);
+}
+
+/* TASK183: r_presentation survives a restart, written and read back as config.cfg is */
+TEST(vidrules_presentation_persists)
+{
+	cvar_t *const saved = cvar_vars;
+	const vidrt_control_t *p = VidRules_Presentation();
+	char path[MAX_OSPATH], *text = NULL;
+	FILE *f;
+	long len;
+
+	snprintf(path, sizeof(path), "%s/pres-config.cfg", t_tmpdir());
+	remove(path);
+
+	cvar_vars = NULL;   /* a fresh table: this start */
+	Cvar_Get(p->cvar, p->def, p->flags);
+	Cvar_Get("r_rt_ao", "0", CVAR_ARCHIVE);
+	Cvar_SetValue("r_rt_ao", 0);        /* the user's own switch, off */
+	Cvar_SetValue(p->cvar, VIDPRES_ENHANCED);   /* the menu's Apply */
+	Cvar_WriteVariables(path);
+	free_cvars(cvar_vars);
+	cvar_vars = NULL;   /* a fresh table: the next start */
+
+	f = fopen(path, "rb");
+	T_REQUIRE(f != NULL);
+	fseek(f, 0, SEEK_END);
+	len = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	text = calloc(1, len + 2);
+	if (text && (len >= 0) && (fread(text, 1, len, f) == (size_t)len))
+	{
+		Cbuf_AddText(text);
+		Cbuf_Execute();
+	}
+	fclose(f);
+	free(text);
+
+	T_EQ_STR(Cvar_Get(p->cvar, p->def, p->flags)->string, "1");
+	/* the mode wrote no other cvar: the user's switch reads back as the user left it */
+	T_EQ_STR(Cvar_Get("r_rt_ao", "0", CVAR_ARCHIVE)->string, "0");
+
+	free_cvars(cvar_vars);
+	cvar_vars = saved;
+}

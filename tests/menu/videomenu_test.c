@@ -1078,6 +1078,78 @@ test_ray_tracing_screen(void)
 	}
 }
 
+/* TASK183: the "presentation" item: every mode shown, a mode that does not
+   apply carrying its reason and never written; a mode writes no other cvar */
+static void
+test_presentation_item(void)
+{
+	static const char *const rt[] = { "r_rt_shadows", "r_rt_sun", "r_rt_ao", "r_rt_water" };
+	menulist_s *l;
+	int before[4];
+
+	/* 1: Metal with ray tracing: Stock, Enhanced, and the later slices' modes with their reason */
+	SetCv("r_presentation", "0");
+	SetCv("r_rt_available", "1");
+	Open("metal", "7");
+	menu = main_menu;
+	CHECK(!Greyed("presentation"), "presentation greyed under Metal");
+	l = List("presentation");
+	CHECK(NumChoices(l) == 4, "presentation has %d choices", NumChoices(l));
+	CHECK(!strcmp(l->itemnames[0], "Stock") && !strcmp(l->itemnames[1], "Enhanced") &&
+		!strcmp(l->itemnames[2], "Retro (awaiting review)") &&
+		!strcmp(l->itemnames[3], "Ray traced (awaiting review)"), "presentation names %s, %s, %s, %s",
+		l->itemnames[0], l->itemnames[1], l->itemnames[2], l->itemnames[3]);
+	CHECK(l->curvalue == 0, "presentation shows %d at r_presentation 0", l->curvalue);
+
+	/* 2: Enhanced, applied: r_presentation 1 and no r_rt_* written */
+	for (int i = 0; i < 4; i++)
+	{
+		before[i] = Writes(rt[i]);
+	}
+	Slide("presentation", 1);
+	Apply();
+	CHECK(!strcmp(Str("r_presentation"), "1"), "r_presentation %s after Enhanced", Str("r_presentation"));
+	for (int i = 0; i < 4; i++)
+	{
+		CHECK(Writes(rt[i]) == before[i], "Enhanced wrote %s", rt[i]);
+	}
+
+	/* 3: the screen under Enhanced says it overrides the switches */
+	SetCv("r_presentation", "1");
+	OpenRT("1");
+	CHECK(rt_menu->statusbar && strstr(rt_menu->statusbar, "overrides"), "the screen under Enhanced says %s",
+		rt_menu->statusbar ? rt_menu->statusbar : "(none)");
+
+	/* 4: Retro is shown, its reason on the status bar, and Apply writes nothing */
+	SetCv("r_presentation", "0");
+	Open("metal", "7");
+	menu = main_menu;
+	Slide("presentation", 1);
+	Slide("presentation", 1);
+	CHECK(Item("presentation")->statusbar && !strcmp(Item("presentation")->statusbar, "awaiting review"),
+		"Retro's status %s", Item("presentation")->statusbar);
+	Apply();
+	CHECK(!strcmp(Str("r_presentation"), "0"), "Apply wrote r_presentation %s for Retro", Str("r_presentation"));
+
+	/* 5: no ray tracing on the device: Enhanced carries its reason, and is not written */
+	SetCv("r_rt_available", "0");
+	Open("metal", "7");
+	menu = main_menu;
+	l = List("presentation");
+	CHECK(!strcmp(l->itemnames[1], "Enhanced (needs ray tracing)"), "Enhanced without RT is %s", l->itemnames[1]);
+	Slide("presentation", 1);
+	Apply();
+	CHECK(!strcmp(Str("r_presentation"), "0"), "Apply wrote r_presentation %s without RT", Str("r_presentation"));
+
+	/* 6: off Metal the item is shown, greyed with its reason */
+	Open("soft", "7");
+	menu = main_menu;
+	CHECK(Greyed("presentation"), "presentation live off Metal");
+	CHECK(Item("presentation")->statusbar && !strcmp(Item("presentation")->statusbar, "ref_metal only"),
+		"presentation off Metal says %s", Item("presentation")->statusbar);
+	SetCv("r_rt_available", "1");
+}
+
 int
 main(void)
 {
@@ -1100,6 +1172,7 @@ main(void)
 	test_the_banner_is_clear_of_the_items();
 	test_ray_tracing_entry_is_always_present();
 	test_ray_tracing_screen();
+	test_presentation_item();
 
 	printf("videomenu_test: %d checks, %d failed\n", checks, failed);
 

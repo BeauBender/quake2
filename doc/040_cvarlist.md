@@ -914,6 +914,25 @@ marked `(n/a)` and skipped.
   negative value or one that is not a finite number counts as `0`. Saved
   with the configuration; applies from the next frame.
 
+* **r_presentation**: The Metal renderer's presentation, the look of the
+  whole picture, as one number; the video menu's "presentation" item,
+  whose Apply runs a `vid_restart`. `0` (the default) is *Stock*: the
+  renderer as it is, each `r_rt_*` effect switch doing what it is set to.
+  `1` is *Enhanced*: the stock lighting with the ray-traced effects on,
+  `r_rt_shadows`, `r_rt_sun`, `r_rt_ao` and `r_rt_water` read as `1`
+  while every other setting (`r_rt_ao_scale`, `vid_gamma` and the rest)
+  keeps its own value. A presentation is an overlay: it writes no other
+  cvar, so the configuration keeps your own `r_rt_*` values, and `0`
+  brings them back. `2` (*Retro*) and `3` (*Ray traced*) are reserved for
+  later work and are greyed in the menu "awaiting review"; the values
+  are never renumbered. Read at start-up and at `vid_restart`, which say
+  which presentation runs in one line (`ref_metal: presentation: stock
+  (r_presentation 0)`); a value the device cannot run, Enhanced without
+  ray tracing or one not in this build, runs stock and says why
+  (`ref_metal: presentation: stock; r_presentation 1 (enhanced) reads 0:
+  no ray tracing on this device`), and the cvar keeps its value. Other
+  renderers ignore it. Saved with the configuration.
+
 The `r_rt_*` cvars belong to the Metal renderer's ray tracing, which is
 being built: `r_rt_shadows` is its first effect, `r_rt_ao` its second, `r_rt_water` its third and `r_rt_sun` its fourth; with `r_rt_stats` set, the renderer
 builds acceleration structures for the world, the doors and platforms
