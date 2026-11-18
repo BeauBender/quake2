@@ -94,22 +94,78 @@ M6, macOS 27.2.1, 2026-11-17. Output is in a local artifacts folder, never commi
 - **What the first real run showed, and the fix:** at 4x every tile failed (2432 failed, 0 written),
   because the scaler lists one pixel format only, `64RGBAHalf` ('RGhA'), and the code took only
   32BGRA or 32RGBA. The session and the buffers now take half-float RGBA when neither 8-bit
-  format is listed (the bytes are converted to and from half floats in the copies). Nothing else
-  needed a change: the smallest tile (24 x 24) through 288 x 195 were accepted, and the 4-texel
-  border was enough.
-- **ASAN (debug build, 4x, one run):** 2432 written, 0 skipped, 2 refused names, 0 failed, 184337862
-  bytes, 129 s; no AddressSanitizer or runtime-error lines. At 2x (the fallback to scale2x):
-  2432 written, 0 failed, 3 s.
-- **Timed report (release, 4x, 3 runs per backend in one hold, alternated; load average 2.85 at
-  the start, 2.09 at the end; start-up alone 0.15 to 0.39 s, median 0.16):**
+  format is listed (the bytes are converted to and from half floats in the copies, as v / 255:
+  see "Review round 1" for the first version, which read colours back near white). The smallest
+  tile (24 x 24) through 288 x 195 are accepted.
+- **The 4-texel border (round 1's runs):** the step across a world texture's wrap edge, divided by
+  the mean step between neighbouring texels inside, over six e1u1 textures at 4x (ceil1_1,
+  exitdr01_1, exitdr01_2, flat1_1, floor1_3, ggrat4_2): vt 0.16 to 2.01, metalfx 0.01 to 2.24,
+  scale2x 0.00 to 7.89 (scale2x doubles the source's own edge, so its figure is the source's).
+  vt's is below scale2x's on every texture except ceil1_1 (0.16 against 0.00, a step a sixth of
+  an interior one), and at most 0.30 above metalfx's on any: no seam beyond the source's own edge,
+  so the border metalfx needs (TASK124) is enough for vt too.
+- **Colours (round 1's runs, mean RGB of the opaque texels at 4x):**
+
+  | texture | scale2x | metalfx | vt |
+  | --- | --- | --- | --- |
+  | textures/e1u1/floor1_3 | 39.3, 28.6, 19.3 | 39.1, 28.5, 19.4 | 39.5, 28.4, 19.5 |
+  | textures/e1u1/metal1_1 | 33.6, 29.7, 26.5 | 33.4, 29.6, 26.4 | 33.5, 29.4, 26.5 |
+  | textures/e1u1/wndow1_2 | 63.7, 62.2, 62.3 | 62.8, 61.1, 61.1 | 62.8, 61.1, 61.4 |
+  | env/unit1_ft | 96.5, 42.6, 14.6 | 96.4, 42.6, 14.6 | 96.9, 42.6, 14.5 |
+  | models/monsters/soldier/skin | 22.2, 18.3, 14.5 | 22.5, 18.6, 14.7 | 22.4, 18.4, 14.3 |
+
+  vt is within 1 level of scale2x on every channel. The host test's flat tiles at 4x: (32, 32,
+  32) came back (32, 31, 31), (128, 128, 128) as itself, (200, 64, 32) as (199, 63, 32).
+- **ASAN (debug build, round 1, one run each):** at 4x, 2432 written, 0 skipped, 2 refused names,
+  0 failed, 516772162 bytes, 131 s; at 2x (the fallback to scale2x), 2432 written, 0 failed,
+  50227150 bytes, 3 s. No AddressSanitizer or runtime-error lines in either.
+- **Timed report (release, round 1, 4x, 3 runs per backend in one hold, alternated; load average
+  4.10 at the start, 2.54 at the end; start-up alone 0.155 to 0.530 s, median 0.165):**
 
   | backend | time range | median | written | bytes |
   | --- | --- | --- | --- | --- |
-  | scale2x | 3.88 to 4.22 s | 4.21 s | 2432 | 99604894 |
-  | metalfx | 10.31 to 10.70 s | 10.69 s | 2432 | 547438118 |
-  | vt | 88.86 to 91.11 s | 89.01 s | 2432 | 184337862 |
+  | scale2x | 3.78 to 4.31 s | 4.23 s | 2432 | 99604894 |
+  | metalfx | 10.40 to 10.93 s | 10.76 s | 2432 | 547438118 |
+  | vt | 96.72 to 97.71 s | 96.91 s | 2432 | 516772162 |
 
   The three outputs have the same names. The report is in a local artifacts folder, never
-  committed (8.1 MB: it holds images of the player's data).
-- **Host test:** `tests/check-upscale-vt.sh` with `UPSCALE_VT_REQUIRE=1`: 13 passed, 0 failed (the
-  2x case reports "skipped: VideoToolbox has no 2x here").
+  committed (10.7 MB: it holds images of the player's data). The first round's figures (vt 88.86
+  to 91.11 s, 184337862 bytes) measured the near-white output and are replaced by these.
+- **Host test:** `tests/check-upscale-vt.sh` with `UPSCALE_VT_REQUIRE=1`: 25 passed, 0 failed (the
+  2x cases report "skipped: VideoToolbox has no 2x here", and the menu's check greys 2x).
+
+## Known gap, not fixed here
+
+`CL_UpscaleAllowed` lets a command through while the client is disconnected, and a server can
+make it so: an `svc_stufftext` of `disconnect` followed by the command runs the command after the
+drop, from the command buffer, with the client disconnected. This predates TASK167 and reaches
+every backend (scale2x and metalfx write files the player did not ask for). Since round 1 it no
+longer reaches vt's model download, which only the menu item starts. Left for its own card.
+
+## Review round 1
+
+The panel (correctness, security, spec) found one Blocker and three Importants; each was red
+first, against the code as it was at `b1675181`:
+
+- **B1, colours:** the half-float copy encoded a byte as its own value (128 as 128.0) and decoded
+  0..1 times 255, so every vt texture came out near white. Red: the host test's flat tiles at 4x
+  came back (254, ...) for grey 32, 128 and 200 and both colours. Fixed by encoding v / 255
+  (`_Float16`); the host test now checks flat greys and colours at each factor the scaler has.
+- **Correctness I1, greying:** one refused run greyed the item for every factor for the rest of
+  the process (a "no 2x" refusal on this M6, whose menu default is 2x, or a fetch that failed).
+  Red: after the 2x refusal, the menu's check with 4x selected said greyed. Fixed: nothing a run
+  or a fetch finds is remembered; the item is greyed by the selected factor
+  (`CL_UpscaleVTAvailable(factor, ...)`, `CL_UpscaleVTItem`, unit- and host-tested).
+- **Security I1, who fetches:** a server could start the model's download and a main-thread wait
+  of up to 900 s with `disconnect` then `upscale_textures 4 vt` (see the known gap above). Red:
+  `tests/check-upscale-vt.sh`'s new guard found the fetch called from `cl_upscale_cmd.c`, and the
+  unit test's refusal line was empty. Fixed: only the menu item fetches, on its own thread of
+  work, the item greyed while it runs; the command refuses without the model and writes nothing
+  (decision 0013, doc/050).
+- **Spec I1:** this runbook named a local path; it now says "a local artifacts folder, never
+  committed".
+- **Notes fixed:** the generator refuses a link in its output (the engine copy, the logs, the
+  report) and a `--names` entry with `..` or a leading separator, and stops with a clear line
+  when vt's model is missing (red: the self-test's new cases failed); the reason buffers are
+  written only through the NULL-checked helper; decision 0013 and the DEPENDENCIES row say the
+  weak link allows a lower deployment target, which the Makefile does not set.
