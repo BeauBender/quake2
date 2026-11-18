@@ -177,6 +177,58 @@ only those renderer cvars, never the player's name, the server address
 book or any other client or server setting. `scripts/pins.sh replay`
 drives it (see *Replaying a trace* below).
 
+### Input and the rendered-frame count
+
+A record is made in a normal window, often on a desktop in use. Before
+FIX48 a key pressed in it opened the menu, which pauses the local server
+playing the demo while the client keeps rendering: the engine still
+exited 0 and logged nothing unusual, and the record held other frames
+(TASK83 saw 9560, 794 and 1064 rendered frames where `demo1.dm2` renders
+689). Two things now keep such a record out of the store:
+
+- **Input is ignored in a pin run.** While the command line holds a pin
+  run (`pins_capture` or `pins_replay`, the latch of *The pin arguments*,
+  never a cvar), no key, mouse button, wheel step, gamepad button or
+  typed character reaches the console, the menu or a key binding, so
+  `Esc`, the console key and a key bound to `quit` do nothing, and the
+  mouse, the sticks and the gyro do not move the view. A focus change
+  does not pause the game either, and a gamepad pulled out or plugged
+  in, a low gamepad battery, or on iOS a rotation does nothing: no pause,
+  no message on the screen, no `vid_restart` (a message printed during a
+  record is drawn into its frames). `tests/check-input-gate.sh` keeps
+  these cases gated. The window's close button still quits
+  the engine, so a run can be stopped. Without the pin arguments input
+  reaches the game exactly as before. A replay runs no input at all.
+- **The rendered-frame count is checked.** A scenario's header comment
+  holds `// frames <demo> <count>`: the number of frames the engine
+  renders when it plays that demo, as printed by the timedemo
+  (`timedemo.txt`, the line `689 frames, ... fps`). It does not depend on
+  the renderer or the scenario's other settings, so every scenario that
+  plays `demo1.dm2` has `// frames demo1.dm2 689`. `record` fails, with
+  one line naming both counts, when the engine printed another count, no
+  count or more than one; the pin is left incomplete. A count is 1 to 9
+  digits without a leading zero, as the engine prints it; any other
+  number is no count. `record` writes
+  `demo <PINS_DEMO>` into `settings.txt`, and `replay` checks the record
+  it replays the same way before it starts an engine. A demo without a
+  `// frames` line (a demo made with `make-demo`, whose count changes
+  each time it is made), and the cinematic, which prints
+  no count, are not checked: `record` says so in one line on stderr and
+  records. A record made before FIX48 has no `demo` line and is replayed
+  unchecked, with one line on stderr that gives the record's own count.
+  The `frames-check` line of `replay.txt` says which it was: `frames-check
+  demo1.dm2 against world.cfg (689)` when the count was checked, or
+  `frames-check unchecked: ...` with the reason. A frames line is
+  written in lower case, in the header comment; one in another case
+  (`// Frames`, `DEMO1.dm2`) or below the first line that is not a
+  comment is refused before an engine runs, never skipped.
+
+A new scenario gets its count from the scenario it is derived from: all
+of them play the same demo, so it copies the `// frames demo1.dm2 689`
+line. A new demo gets its line from a clean record of it: record any
+scenario with it, read the count from `timedemo.txt` in the pin, and add
+`// frames <demo> <count>` to each scenario that plays it.
+
 ### Determinism
 
 A renderer replaying its own trace draws exactly the frames it drew
