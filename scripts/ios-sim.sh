@@ -912,6 +912,10 @@ os.execvp(sys.argv[2], sys.argv[2:])'
 	st_has launcher-boot-fails grep state/calls "simctl delete AAAAAAAA-"
 	ST_OUTER=150 st_case launcher-check-hangs extra fail "timed out after 30 s: xcrun simctl spawn" 100 FAKE_LAUNCHER=hang2
 	st_has launcher-check-hangs grep run.log "launcher: unknown (launchctl list failed in the device)"
+	# the first read (the baseline) has its own hang case (FIX131), so a split of the call site keeps its bound
+	ST_OUTER=150 st_case launcher-baseline-hangs extra fail "timed out after 30 s: xcrun simctl spawn" 100 FAKE_LAUNCHER=hang1
+	st_has launcher-baseline-hangs grep run.log "launcher: unknown (launchctl list failed in the device)"
+	st_has launcher-baseline-hangs line1 state/lcalls 1
 	# a signal during a bounded call stops that call's child too (FIX131)
 	st_signal launcher-term-stops-read TERM
 	st_signal launcher-hup-stops-read HUP
