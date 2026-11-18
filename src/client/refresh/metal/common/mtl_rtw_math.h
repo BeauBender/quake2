@@ -743,11 +743,37 @@ mtl_rtw_listed(unsigned mat, unsigned marks)
  */
 #define MTL_RTW_MARK_A (1.0f / 3.0f)
 
-/* the mark's blend over a stored alpha a: the source alpha MTL_RTW_MARK_A, the destination's factor the source's alpha */
+/*
+ * FIX98: the mark's blend factors, defined once. The pipeline (rmb_rtwater.m,
+ * rmb_rtw_mark_pipe) sets the normal attachment's alpha factors from these
+ * (rmb_rtw_factor maps each to its MTLBlendFactor), and mtl_rtw_mark_blend
+ * evaluates them, so the host test checks what the GPU blends.
+ * tests/check-ref-metal.sh refuses a pipeline that sets a factor itself.
+ */
+enum
+{
+	MTL_RTW_BF_ZERO,
+	MTL_RTW_BF_ONE,
+	MTL_RTW_BF_SRC_ALPHA,
+	MTL_RTW_BF_COUNT
+};
+
+#define MTL_RTW_MARK_SRC_FACTOR MTL_RTW_BF_ONE         /* the source alpha's factor */
+#define MTL_RTW_MARK_DST_FACTOR MTL_RTW_BF_SRC_ALPHA   /* the destination alpha's factor */
+
+/* a factor's value for a source alpha s */
+static inline float
+mtl_rtw_bf_value(int f, float s)
+{
+	return (f == MTL_RTW_BF_ONE) ? 1.0f : ((f == MTL_RTW_BF_SRC_ALPHA) ? s : 0.0f);
+}
+
+/* the mark's blend over a stored alpha a: the source alpha MTL_RTW_MARK_A and the destination a, each times its factor */
 static inline float
 mtl_rtw_mark_blend(float a)
 {
-	return MTL_RTW_MARK_A + MTL_RTW_MARK_A * a;
+	return MTL_RTW_MARK_A * mtl_rtw_bf_value(MTL_RTW_MARK_SRC_FACTOR, MTL_RTW_MARK_A)
+			+ a * mtl_rtw_bf_value(MTL_RTW_MARK_DST_FACTOR, MTL_RTW_MARK_A);
 }
 
 /* the two-bit level the normal attachment stores for alpha a, to the nearest (0 for NaN) */
