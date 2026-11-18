@@ -25,13 +25,15 @@ device flag, so a device the gate refuses builds nothing even with `r_rt_stats` 
 | apple6, apple7 (M1), apple8 with `supportsRaytracing` | compute | `ref_metal: ray tracing: compute path (apple7, supportsRaytracing)` |
 | apple8 with both flags (edge: render-stage is apple9's) | compute | as above, `apple8` |
 | apple9 with `supportsRaytracing` only (edge) | compute | as above, `apple9` |
-| apple9 with both (M3 and later) | render-stage | `ref_metal: ray tracing: render-stage path (apple9, supportsRaytracingFromRender)` |
+| apple9 with both (M3 and later) | render-stage (runs compute) | `ref_metal: ray tracing: compute path (apple9, supportsRaytracing; render-stage available, not yet built)` |
 | apple9 with `supportsRaytracingFromRender` only (edge) | none | `... none (apple9: no supportsRaytracing) ...`: no structures to trace |
 | no Apple family (the simulators; edge) | none | `ref_metal: ray tracing: none (no Apple GPU family reported); the ray-tracing effects read 0` |
 
 The reason is checked in this order: no family, no `supportsRaytracing`, a family below apple6.
 Render-stage names what the device can take; the render-stage code is TASK25's, so until it lands the
-compute passes are what runs there.
+compute passes are what runs there, and the line names the path in use, compute, adding that
+render-stage is available and not yet built. `rm_rtg_decide` keeps its three-way answer for TASK25;
+only `rm_rtg_format`'s wording of it changes then.
 
 ## The r_rt_* cvars: effect switches and settings
 

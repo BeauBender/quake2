@@ -118,9 +118,12 @@ rm_rtg_format(const rm_rtg_t *g, char *buf, size_t len)
 		return 0;
 	}
 
+	/* the decision stays three-way for TASK25, whose render-stage code is not built yet: until it
+	   lands the scenes run the compute passes there too, so the line names that path */
 	if (g->path == RM_RTG_RENDER)
 	{
-		return rtg_put(snprintf(buf, len, "ref_metal: ray tracing: render-stage path (apple%d, supportsRaytracingFromRender)",
+		return rtg_put(snprintf(buf, len,
+				"ref_metal: ray tracing: compute path (apple%d, supportsRaytracing; render-stage available, not yet built)",
 				g->family), buf, len);
 	}
 

@@ -79,10 +79,11 @@ const char *rm_rtg_why_text(int why);
 /*
  * The report line, printed at start-up and at vid_restart:
  *   ref_metal: ray tracing: compute path (apple7, supportsRaytracing)
- *   ref_metal: ray tracing: render-stage path (apple9, supportsRaytracingFromRender)
+ *   ref_metal: ray tracing: compute path (apple9, supportsRaytracing; render-stage available, not yet built)
  *   ref_metal: ray tracing: none (apple5: <reason>); the ray-tracing effects read 0
  *   ref_metal: ray tracing: none (<reason>); the ray-tracing effects read 0
- * the last for no family. 1 when it fits, else 0 and buf empty (len 0: 0).
+ * the second for RM_RTG_RENDER, whose code (TASK25) is not built yet, so the compute passes run
+ * there; the last for no family. 1 when it fits, else 0 and buf empty (len 0: 0).
  */
 int rm_rtg_format(const rm_rtg_t *g, char *buf, size_t len);
 

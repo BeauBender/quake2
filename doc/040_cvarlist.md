@@ -901,9 +901,11 @@ out of view can still cast into it), which nothing reads. At start-up and
 at each `vid_restart` the renderer decides, from what the GPU reports,
 which ray-tracing path it takes, and says so in one line: the compute path
 (`ref_metal: ray tracing: compute path (apple7, supportsRaytracing)`) from
-the apple6 family on with `supportsRaytracing`, the render-stage path from
-apple9 on with `supportsRaytracingFromRender` as well, or none, with the
-reason (`ref_metal: ray tracing: none (apple5: no supportsRaytracing); the
+the apple6 family on with `supportsRaytracing`; from apple9 on with
+`supportsRaytracingFromRender` as well the render-stage path is available
+but not yet built, so the compute path runs there too (`ref_metal: ray
+tracing: compute path (apple9, supportsRaytracing; render-stage available,
+not yet built)`); or none, with the reason (`ref_metal: ray tracing: none (apple5: no supportsRaytracing); the
 ray-tracing effects read 0` on the build VM). With none, the effect
 switches `r_rt_ao`, `r_rt_shadows` and `r_rt_water` read `0`, even when the
 configuration or the command line set them, and one set at the console

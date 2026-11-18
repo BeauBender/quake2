@@ -111,7 +111,11 @@ test_format(void)
 		"ref_metal: ray tracing: none (apple5: supportsRaytracing below apple6); the ray-tracing effects read 0"));
 	CHECK(fmt_is(0, 1, 1, "ref_metal: ray tracing: none (no Apple GPU family reported); the ray-tracing effects read 0"));
 	CHECK(fmt_is(UPTO(7), 1, 0, "ref_metal: ray tracing: compute path (apple7, supportsRaytracing)"));
-	CHECK(fmt_is(UPTO(9), 1, 1, "ref_metal: ray tracing: render-stage path (apple9, supportsRaytracingFromRender)"));
+	/* apple9 with both flags: the gate's answer is render-stage, but its code (TASK25) is not built,
+	   so the line names the path that runs, compute, and that render-stage is available */
+	CHECK(fmt_is(UPTO(9), 1, 1,
+		"ref_metal: ray tracing: compute path (apple9, supportsRaytracing; render-stage available, not yet built)"));
+	CHECK(fmt_is(UPTO(9), 1, 0, "ref_metal: ray tracing: compute path (apple9, supportsRaytracing)"));
 
 	CHECK(!strcmp(rm_rtg_why_text(RM_RTG_WHY_OK), ""));
 	CHECK(!strcmp(rm_rtg_why_text(99), ""));
