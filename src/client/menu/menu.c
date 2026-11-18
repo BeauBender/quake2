@@ -985,20 +985,6 @@ DrawKeyBindingFunc(void *self)
 	}
 }
 
-/*
- * A greyed binding item (every item of the key and controller binding
- * screens on the iPhone-family targets, TASK150) only shows its binding:
- * select (bind mode, which first clears a second binding) and clear do
- * nothing on it, on every platform, as Menu_SelectItem does for any other
- * greyed item. <key> is a menu key (Key_GetMenuKey).
- */
-static qboolean
-M_BindingGrayed(const menuaction_s *item, int key)
-{
-	return item && (item->generic.flags & QMF_GRAYED) &&
-		(key == K_ENTER || key == K_DEL || key == K_BACKSPACE);
-}
-
 static void
 KeyBindingFunc(void *self)
 {
@@ -1066,11 +1052,6 @@ Keys_MenuKey(menuframework_s *m, int key)
 	}
 
 	key = Key_GetMenuKey(key);
-
-	if (M_BindingGrayed(item, key))
-	{
-		return NULL;
-	}
 	switch (key)
 	{
 	case K_ENTER:
@@ -1217,11 +1198,6 @@ MultiplayerKeys_MenuKey(menuframework_s *m, int key)
 	}
 
 	key = Key_GetMenuKey(key);
-
-	if (M_BindingGrayed(item, key))
-	{
-		return NULL;
-	}
 	switch (key)
 	{
 	case K_ENTER:
@@ -1413,11 +1389,6 @@ ControllerButtons_MenuKey(menuframework_s *m, int key)
 	}
 
 	key = Key_GetMenuKey(key);
-
-	if (M_BindingGrayed(item, key))
-	{
-		return NULL;
-	}
 	switch (key)
 	{
 		case K_ENTER:
@@ -1586,11 +1557,6 @@ ControllerAltButtons_MenuKey(menuframework_s *m, int key)
 	}
 
 	key = Key_GetMenuKey(key);
-
-	if (M_BindingGrayed(item, key))
-	{
-		return NULL;
-	}
 	switch (key)
 	{
 		case K_ENTER:
