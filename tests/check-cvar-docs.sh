@@ -119,7 +119,7 @@ BEGIN { RS = "\001" }
 		sub(/^ /, "", t)
 		if (substr(t, 1, 1) == "\"") {
 			q = index(substr(t, 2), "\"")
-			if (q > 0) {
+			if (q > 0 && substr(t, q + 2) ~ /^ *[,)]/) {
 				print kind "\t" FILENAME "\t" callee "\tL\t" substr(t, 2, q - 1)
 				continue
 			}
@@ -181,7 +181,7 @@ function section(hdr, A,   k, n) {
 	fail = 1
 }
 # the names of the table sym defined at column 0 of path, into out
-function tablenames(path, sym, out,   line, on, isarr, body, r, n, lit) {
+function tablenames(path, sym, out,   line, on, isarr, body, r, n, lit, flat) {
 	on = 0; isarr = 0; body = ""; n = 0
 	while ((r = getline line < path) > 0) {
 		if (!on) {
@@ -201,10 +201,14 @@ function tablenames(path, sym, out,   line, on, isarr, body, r, n, lit) {
 	if (!on) return 0
 	gsub(/[ \t\r\n]+/, " ", body)
 	if (isarr) {
-		while (match(body, /\{ ?"[^"]*"/)) {
+		# the initialiser'"'"'s own { is dropped; with no { left the array is
+		# flat and every literal is a name, else the first literal of each row
+		if (match(body, /= ?\{/)) body = substr(body, RSTART + RLENGTH)
+		flat = (body !~ /\{/)
+		while (match(body, flat ? "\"[^\"]*\"" : "\\{ ?\"[^\"]*\"")) {
 			lit = substr(body, RSTART, RLENGTH)
 			body = substr(body, RSTART + RLENGTH)
-			sub(/^\{ ?"/, "", lit); sub(/"$/, "", lit)
+			sub(/^\{ ?"/, "", lit); sub(/^"/, "", lit); sub(/"$/, "", lit)
 			out[++n] = lit
 		}
 	} else {
