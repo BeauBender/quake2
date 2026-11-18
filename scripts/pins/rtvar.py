@@ -13,9 +13,11 @@
 #                  [--size WxH] [--bin PATH] [--replace] [--clip-ms N]
 #   rtvar.py selftest                                 no engine, no game data
 #
-# run refuses an --out inside a git work tree (scripts/metalfx-report/mfx.py check-out), and so
-# does pins.sh for the store, which is <out>/store. A complete record of the same pin id already in
-# the store is used again unless --replace is given, so a run can be split by --views.
+# run refuses an --out inside a git work tree (scripts/metalfx-report/mfx.py check_out_path, called
+# here in-process, and the path it returns is the one used), and so does pins.sh for the store,
+# which is <out>/store (so no view may be named store). A complete record of the same pin id already
+# in the store is used again unless --replace is given, so a run can be split by --views. Every check
+# runs before anything is removed or created.
 import os
 import re
 import shutil
@@ -23,10 +25,12 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-import evidence as ev  # noqa: E402
-
 ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, HERE)
+sys.path.insert(1, os.path.join(ROOT, "scripts", "metalfx-report"))
+import evidence as ev  # noqa: E402
+import mfx  # noqa: E402  (check_out_path, sh_group, git_env)
+
 PINS = os.path.join(ROOT, "scripts", "pins.sh")
 MFX = os.path.join(ROOT, "scripts", "metalfx-report", "mfx.py")
 SCEN_DIR = os.path.join(HERE, "scenarios")
@@ -40,6 +44,9 @@ CAPTION_RE = re.compile(r"^[A-Za-z0-9 .,:;()+=/_'-]+$")
 DEMO_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*\.dm2$")
 VALIDATION_ON = "Metal API Validation Enabled"
 CVARLIST_RE = re.compile(r'^[ *][ U][ S][ L-] ([A-Za-z0-9_]+) "(.*)"$')
+RESERVED_VIEWS = ("store",)  # <out>/store is the pin store: a view folder there would be removed by --replace
+OUT_BAD_RE = re.compile(r"[\s\x00-\x1f\x7f]")  # pins.sh's pin directory is read back as one word
+RECORD_TIMEOUT = 1200  # seconds for one record, the host-lock wait included (pins.sh takes the lock itself)
 
 # the glyphs the captions use beyond evidence.py's font
 ev.FONT[","] = "000000000C0408"
@@ -86,6 +93,8 @@ def parse(path):
                 raise Bad("%s: %s sets a cvar twice" % (where, name))
             presets.append((name, caption, sets))
         elif kind == "view":
+            if name in RESERVED_VIEWS:
+                raise Bad("%s: the view name %s is reserved: <out>/%s is the pin store" % (where, name, name))
             base = fields[1].split()
             if len(base) != 3 or not BASE_RE.match(base[0]) or not DEMO_RE.match(base[1]) or \
                     not re.match(r"^[1-9][0-9]{0,3}$", base[2]):
@@ -168,40 +177,43 @@ def pins_env(a, key):
     return env
 
 
-def check_validation(log):
+def check_validation(log, label):
     with open(log, errors="replace") as f:
         text = f.read()
     if VALIDATION_ON not in text:
-        raise Bad("%s: the Metal validation layer was not enabled" % log)
+        raise Bad("%s: the Metal validation layer was not enabled" % label)
     for line in text.splitlines():
         if CVARLIST_RE.match(line):
             continue
         if "validation" in line.lower() and VALIDATION_ON.lower() not in line.lower():
-            raise Bad("%s: a validation message: %s" % (log, line.strip()[:200]))
+            raise Bad("%s: a validation message: %s" % (label, line.strip()[:200]))
 
 
 def record(a, key, scen):
-    """The pin directory of one record, recorded now or found complete in the store."""
+    """The pin directory of one record, recorded now or found complete in the store. Each pins.sh
+    runs in a process group of its own (mfx.sh_group), stopped whole on a timeout or a signal: the
+    engine under it included, not only the lock shell. The timeout counts from the start of pins.sh,
+    the host-lock wait included: pins.sh takes the lock itself, so this side cannot tell when it is
+    taken."""
     env = pins_env(a, key)
     dry = dict(env, PINS_DRYRUN="1")
-    p = subprocess.run([PINS, "record", "metal", scen], env=dry, stdout=subprocess.PIPE,
-                       stderr=subprocess.STDOUT, universal_newlines=True, timeout=120)
-    m = re.search(r"\+set pins_dir (\S+)", p.stdout)
-    if p.returncode != 0 or not m:
-        raise Bad("pins.sh record %s (dry run) failed: %s" % (scen, p.stdout.strip()[-300:]))
+    rc, out = mfx.sh_group([PINS, "record", "metal", scen], env=dry, timeout=120)
+    m = re.search(r"\+set pins_dir (\S+)", out)
+    if rc != 0 or not m:
+        raise Bad("pins.sh record %s (dry run) failed: %s" % (scen, out.strip()[-300:]))
     d = m.group(1)
+    rel = os.path.relpath(d, a.out)
     if os.path.isfile(os.path.join(d, "complete")) and not a.replace:
-        print("rt-variations: %s: using the complete record %s" % (scen, os.path.relpath(d, a.out)))
+        print("rt-variations: %s: using the complete record %s" % (scen, rel))
     else:
         cmd = [PINS, "record", "metal", scen] + (["--replace"] if a.replace else [])
-        p = subprocess.run(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                           universal_newlines=True, timeout=1200)
-        if p.returncode != 0:
-            raise Bad("pins.sh record %s failed: %s" % (scen, p.stdout.strip()[-400:]))
-        print("rt-variations: %s: %s" % (scen, p.stdout.strip().splitlines()[0] if p.stdout.strip() else "recorded"))
+        rc, out = mfx.sh_group(cmd, env=env, timeout=RECORD_TIMEOUT)
+        if rc != 0:
+            raise Bad("pins.sh record %s failed: %s" % (scen, out.strip()[-400:]))
+        print("rt-variations: %s: %s" % (scen, out.strip().splitlines()[0] if out.strip() else "recorded"))
     if not os.path.isfile(os.path.join(d, "complete")):
-        raise Bad("%s: the record is not complete" % d)
-    check_validation(os.path.join(d, "engine.log"))
+        raise Bad("%s: the record is not complete" % rel)
+    check_validation(os.path.join(d, "engine.log"), rel)
     return d
 
 
@@ -267,12 +279,24 @@ def write(path, data):
         f.write(data)
 
 
+def out_path(path):
+    """The output folder a run writes to: the very path mfx.check_out_path checked and returned
+    (no whitespace trimmed, no second spelling), after a refusal of any whitespace or control
+    character in it."""
+    if OUT_BAD_RE.search(path):
+        raise Bad("the output path must hold no whitespace or control character")
+    try:
+        return mfx.check_out_path(path)
+    except mfx.Refuse as e:
+        raise Bad("the output path is refused: %s" % e)
+
+
+def write_index(a, names, lines):
+    write(os.path.join(a.out, "index-%s.txt" % "-".join(names)), ("\n".join(lines) + "\n").encode())
+
+
 def cmd_run(a):
-    p = subprocess.run([sys.executable, "-I", MFX, "check-out", a.out], stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE, universal_newlines=True)
-    if p.returncode != 0:
-        raise Bad("the output path is refused: %s" % p.stderr.strip())
-    a.out = p.stdout.strip()
+    a.out = out_path(a.out)
     m = re.match(r"^([1-9][0-9]{1,4})x([1-9][0-9]{1,4})$", a.size)
     if not m:
         raise Bad("--size is <width>x<height>")
@@ -282,27 +306,46 @@ def cmd_run(a):
     presets, views = parse(a.file)
     groups, records = plan(presets, views, a.views, a.presets)
     sel = [v for _, (_, vs) in groups.items() for v in vs]
+    a.store = os.path.join(a.out, "store")
+    if os.path.lexists(a.store) and (os.path.islink(a.store) or not os.path.isdir(a.store)):
+        raise Bad("<out>/store is not a directory")
+    gone = []  # every check first, then the removals
     for v in sel:
         vd = os.path.join(a.out, v[0])
         if os.path.lexists(vd):
             if not a.replace:
-                raise Bad("%s exists; pass --replace" % vd)
+                raise Bad("<out>/%s exists; pass --replace" % v[0])
             if os.path.islink(vd) or not os.path.isdir(vd):
-                raise Bad("%s is not a directory" % vd)
-            shutil.rmtree(vd)
-    a.store = os.path.join(a.out, "store")
+                raise Bad("<out>/%s is not a directory" % v[0])
+            gone.append(vd)
+    for vd in gone:
+        shutil.rmtree(vd)
     os.makedirs(a.store, exist_ok=True)
     pins = {}
     index = ["rt-variations: seed %s, %dx%d, presets file %s" % (a.seed, a.w, a.h, os.path.basename(a.file))]
-    # one group at a time: its records, then its views, so a later group's failure keeps the earlier views
+    done = []
+    try:
+        run_groups(a, groups, records, pins, index, done)
+    except BaseException:
+        if done:  # the index of the views that were written before the failure
+            write_index(a, done, index + ["stopped: a later view group failed; its views were not written"])
+        raise
+    write_index(a, done, index)
+    return 0
+
+
+def run_groups(a, groups, records, pins, index, done):
+    """One group at a time: its records, then its views, so a later group's failure keeps the
+    earlier views. A view's index lines join index, and its name done, once the view is written."""
     for key, (gname, vs) in groups.items():
         for k, pr, scen in records:
             if k != key:
                 continue
             cfg = os.path.join(SCEN_DIR, scen + ".cfg")
-            with open(cfg, "w") as f:
-                f.write(scenario_body(os.path.join(SCEN_DIR, key[0] + ".cfg"), pr[2]))
+            fd = os.open(cfg, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
             try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(scenario_body(os.path.join(SCEN_DIR, key[0] + ".cfg"), pr[2]))
                 pins[(key, pr[0])] = record(a, key, scen)
             finally:
                 os.remove(cfg)
@@ -327,20 +370,20 @@ def cmd_run(a):
             scale = 2 if a.w >= 600 else 1
             f = max(1, (a.w + 639) // 640)
             panels, clip = [], []
-            index.append("view %s: %s %s every %d, %s" % (v[0], key[0], key[1], key[2], why))
+            lines = ["view %s: %s %s every %d, %s" % (v[0], key[0], key[1], key[2], why)]
             for i, pr in enumerate(chosen):
                 img = ev.read_tga(frames(pins[(key, pr[0])])[cap])
                 write(os.path.join(vd, "full", "%02d-%s.png" % (i, pr[0])), ev.encode_png(img))
                 panels.append(captioned(ev.downscale(img, f), pr[0], pr[1], 1 if f > 1 else scale))
                 clip.append(captioned(img, pr[0], pr[1], scale))
                 d = score(a.framediff, off[cap], frames(pins[(key, pr[0])])[cap])
-                index.append("  %02d %-14s diff %.6f  %s  [%s]  %s" % (i, pr[0], d, pr[1],
+                lines.append("  %02d %-14s diff %.6f  %s  [%s]  %s" % (i, pr[0], d, pr[1],
                              " ".join("%s %s" % kv for kv in pr[2]), os.path.relpath(pins[(key, pr[0])], a.out)))
             write(os.path.join(vd, "sheet.png"), ev.encode_png(sheet(panels)))
             write(os.path.join(vd, "clip.png"), ev.encode_apng(clip, a.clip_ms))
-            print("rt-variations: %s: %s/sheet.png, %s/clip.png, %d frames in %s/full" % (v[0], vd, vd, len(chosen), vd))
-    write(os.path.join(a.out, "index-%s.txt" % "-".join(v[0] for v in sel)), ("\n".join(index) + "\n").encode())
-    return 0
+            index.extend(lines)
+            done.append(v[0])
+            print("rt-variations: %s: <out>/%s/sheet.png, clip.png, %d frames in full/" % (v[0], v[0], len(chosen)))
 
 
 def cmd_plan(a):
@@ -583,10 +626,11 @@ def cmd_selftest(a):
 
 def main(argv):
     import argparse
-    ap = argparse.ArgumentParser(prog="rtvar.py")
+    # no abbreviation: --ou must not stand in for --out past rt-variations.sh's exact --out match
+    ap = argparse.ArgumentParser(prog="rtvar.py", allow_abbrev=False)
     sub = ap.add_subparsers(dest="cmd")
     for c in ("check", "plan", "run"):
-        s = sub.add_parser(c)
+        s = sub.add_parser(c, allow_abbrev=False)
         s.add_argument("--file", default=DEFAULT_FILE)
         if c != "check":
             s.add_argument("--views")
@@ -599,7 +643,7 @@ def main(argv):
             s.add_argument("--bin")
             s.add_argument("--replace", action="store_true")
             s.add_argument("--clip-ms", type=int, default=1000)
-    sub.add_parser("selftest")
+    sub.add_parser("selftest", allow_abbrev=False)
     a = ap.parse_args(argv)
     if not a.cmd:
         ap.print_help()
