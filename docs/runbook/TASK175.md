@@ -35,18 +35,26 @@ simulator build (STATIC_MODULES=1, `ref_metal` linked in, the vendored SDL3 buil
   `xcrun` has a visionOS runtime and both Apple Vision Pro types next to the iOS ones.
 - `tests/check-visionos.sh` (in the gate): the objects build for platform 12 (XROSSIMULATOR) at minos 1.0; the
   object list equals the iOS simulator's; the plist is the Apple Vision's; the build's target preprocesses to
-  `TARGET_OS_VISION` 1, `TARGET_OS_IPHONE` 1, `TARGET_OS_IOS` 0; and the compiled objects of three of the iPhone
-  and iPad only sites show them out (`Touch_Supported` in `touch.o` is `mov w0, #0x0; ret`, `glimp_sdl3.o` holds
-  no orientation hint, `vid.o` no `ios_orientation` command). It first refuses a mutant of each. Without the
-  visionOS SDK it prints one skip line. Its helpers are copied from `tests/check-tvos.sh` with the platform, the
-  minimum OS and the device family changed, not shared with it: a shared file would change what `check-tvos.sh`
-  runs.
+  `TARGET_OS_VISION` 1, `TARGET_OS_IPHONE` 1, `TARGET_OS_IOS` 0; and the compiled objects of the iPhone and iPad
+  only sites show them out: `Touch_Supported` in `touch.o` is `mov w0, #0x0; ret`; `sdl3.o` holds no
+  `SDL_RETURN_KEY_HIDES_IME` (the `in_touch` default's block) and `nm -u` lists no `_Touch_TextInput` (the
+  on-screen keyboard follow-up); `glimp_sdl3.o` holds neither hint name, `SDL_ORIENTATIONS` nor
+  `SDL_IOS_HIDE_HOME_INDICATOR`, whatever the value; `vid.o` holds no `ios_orientation` command. And `nm -u` of
+  every `imgdecode.o` lists `_kCGImageSourceAllowableTypes` (see the version checks below). Every pinned string or
+  symbol has a positive control: the iOS simulator's object of the same file, compiled with the command `make -n`
+  gives for it, must hold it, so a renamed string fails the check instead of passing it. A `grep` or `nm` error,
+  or a missing or unreadable object, refuses; the plist's forbidden keys are decided by `plutil -extract`, not by
+  the text. It first refuses a mutant of each. Without the visionOS SDK it prints one skip line. Its helpers are
+  copied from `tests/check-tvos.sh` with the platform, the minimum OS and the device family changed, not shared
+  with it: a shared file would change what `check-tvos.sh` runs.
 
 ### The iOS-only code on visionOS
 
-No guard is added or changed. `TARGET_OS_IPHONE` is 1 on visionOS and `TARGET_OS_IOS` 0, so the four iPhone and
-iPad only sites, whose `#if` names `TARGET_OS_IOS` since TASK23 (`tests/check-tvos.sh` (d) holds that for each),
-are compiled out, which is right on visionOS too:
+No `TARGET_OS_*` guard is added or changed (one OS version check is, below). `TARGET_OS_IPHONE` is 1 on visionOS
+and `TARGET_OS_IOS` 0, so the four iPhone and iPad only sites, whose `#if` reads `TARGET_OS_IOS`'s value since
+TASK23, are compiled out, which is right on visionOS too. `tests/check-tvos.sh` (d) holds that for each, and from
+review round 1 it refuses a guard that is true on visionOS although it names the macro: `defined(TARGET_OS_IOS)`
+alone, `#ifdef TARGET_OS_IOS` (the macro is defined, to 0, on tvOS and visionOS) and a `!` before the name.
 
 - `Touch_Supported` (src/client/input/touch.c): visionOS has no touch screen; the overlay stays off.
 - `in_touch` defaults to 0 and the on-screen keyboard follow-up in `IN_Update` (src/client/input/sdl3.c) is off:
@@ -66,6 +74,33 @@ that do run on visionOS are right there, and the run below shows them: the windo
 the sandboxed home (`sys_sandbox_home`), the app event watch (background and resume), the SDL main wrapper, the
 `ambient` audio category, the quit entry greyed, and the vertical FOV minimum.
 
+### The OS version checks on visionOS
+
+The visionOS SDK has its own version macros: `__VISION_OS_VERSION_MAX_ALLOWED` (`__VISIONOS_27_2` in the 27.2
+SDK), while it sets `__IPHONE_OS_VERSION_MAX_ALLOWED` to `__IPHONE_17_0` whatever its release (`clang -E -dM` for
+`arm64-apple-xros1.0-simulator`). And `__builtin_available` and `@available` on visionOS read only a `visionOS`
+spec: a probe built for `arm64-apple-xros1.0-simulator` at `-O2` folds `__builtin_available(macOS 13.0, *)`,
+`(iOS 99.0, *)` and `(macOS 13.0, iOS 16.0, tvOS 27.1, *)` to true (a tail call, no version check), and only
+`(visionOS 27.0, *)` calls `___isPlatformVersionAtLeast`. Every check in `src` (review round 1), with the branch
+visionOS takes; "in the build" is the visionOS simulator's `make -n -B ios_objects`:
+
+| Site | Check | In the visionOS build | Branch on visionOS | Intended |
+|---|---|---|---|---|
+| src/client/refresh/files/imgdecode.c, `IMGDEC_HAVE_ALLOWABLE_TYPES` | `#if` of `__MAC_OS_X`/`__IPHONE_OS`/`__TV_OS`/`__WATCH_OS_VERSION_MAX_ALLOWED >= 270000` | yes (2 objects) | was compiled out (`__IPHONE_17_0`) | **no: fixed**, the `#if` also reads `__VISION_OS_VERSION_MAX_ALLOWED >= 270000` |
+| src/client/refresh/files/imgdecode.c, the per-source `kCGImageSourceAllowableTypes` | `__builtin_available(macOS 27.0, iOS 27.0, tvOS 27.0, watchOS 27.0, *)` | yes | would be true from visionOS 1.0 (`*`), on a system without the key | **no: fixed**, `visionOS 27.0` added (the visionOS of the 27.0 systems), a run-time check |
+| src/client/refresh/metal/rmb_metalfx.m (6 sites) | `@available(macOS 13.0, iOS 16.0, tvOS 27.1, *)` (4), `(macOS 26.0, iOS 26.0, tvOS 27.1, *)` (2) | yes, but none of the six | compiled out: the visionOS simulator SDK has no MetalFX, so `RMB_HAVE_METALFX` is unset and every mode reads as unsupported (0 `@available` after the preprocessor, as for the iOS and tvOS simulators) | yes (decision 0011) |
+| src/client/refresh/metal/rmb_device.m:738 | `@available(macOS 14.0, *)` (`supportsRaytracingFromRender`) | yes | true, as on iOS and tvOS | yes; `-Wunguarded-availability` gives no warning |
+| src/client/refresh/metal/rmb_rt.m:343, 1007, 1078 | `@available(macOS 13.0, *)` (`vertexFormat`, `MTLAccelerationStructurePassDescriptor`) | yes | true, as on iOS and tvOS | yes; no warning |
+| src/client/cl_upscale_metalfx.m:77, 155, 232 | `@available(macOS 13.0, *)` | no (the macOS client only) | not compiled | n/a |
+| src/client/refresh/gl1/metal/mgl_layer.m:208 | `@available(macOS 14.0, *)` | no (the macOS `ref_gl1` shim) | not compiled | n/a |
+
+So two checks were wrong on visionOS, both in imgdecode.c, and both are fixed. `clang -fsyntax-only
+-Wunguarded-availability` of imgdecode.c, with each build's own command, gives no diagnostic but the driver's
+unused `-c` for macOS, the iOS, tvOS and visionOS simulators and the iPhone. `nm -u imgdecode.o` lists
+`_kCGImageSourceAllowableTypes` on all five now; before the fix the visionOS object did not. The object is
+byte-identical before and after the fix on the four others. `rmb_metalfx.m`'s checks would need a `visionOS` spec
+on a visionOS device SDK that has MetalFX; only the simulator is built.
+
 ## The run
 
 ```sh
@@ -84,7 +119,8 @@ script builds into `--out`/build, creates a throwaway Apple Vision Pro device, c
 Host: Xcode 27.2 (27B52), SDK xrsimulator 27.2, visionOS 27.2 simulator runtime (24N120,
 `com.apple.CoreSimulator.SimRuntime.xrOS-27-2`), device type Apple Vision Pro
 (`com.apple.CoreSimulator.SimDeviceType.Apple-Vision-Pro-4K`). Measured on the tree of commit `a58aa978`; what came
-after it is this runbook and its index line (`git diff --stat a58aa978 HEAD` names only `docs/`).
+after it is this runbook and its index line, and review round 1: the two checks, and imgdecode.c, which changes
+the visionOS objects only (the run was not repeated for it; the round needed no simulator run).
 
 What the logs showed (`engine.<n>.log` is the engine's own log, `console.<n>.log` the app's output):
 
@@ -125,3 +161,37 @@ starts).
   SDL's 1280x720 points. `VID_PLATFORM` (src/client/menu/videomenu.c) is the iOS one, with the iOS display list.
 - `scripts/ios-sim.sh`: `run --background` launches `com.apple.Preferences`, which may not exist on visionOS; its
   SDK-not-found and runtime-pick errors still say "iOS".
+- The run's two app-output lines: SDL's `You need UIApplicationSupportsIndirectInputEvents in your Info.plist for
+  mouse support` (the pointer input above) and UIKit's `Unbalanced calls to begin/end appearance transitions for
+  <SDL_uikitviewcontroller>` (twice, as the map starts).
+- A visionOS device build: its SDK may have MetalFX, and `rmb_metalfx.m`'s `@available` checks name no visionOS
+  version (see the version checks above).
+
+## Review round 1
+
+No Blocker; two Importants and five Notes, all fixed on this branch.
+
+- I1, `tests/check-visionos.sh` let three iPhone-only sites back in: the reviewer's mutant (`TARGET_OS_IOS` made
+  `defined(TARGET_OS_IOS)` at the `in_touch` default, the keyboard follow-up and the hint site, and the hint value
+  reworded) passed both checks. Now (e) pins `sdl3.o` (no `SDL_RETURN_KEY_HIDES_IME`, `nm -u` no
+  `_Touch_TextInput`) and `glimp_sdl3.o` (neither hint name), each with a positive control on the iOS simulator's
+  object, and `tests/check-tvos.sh` (d) refuses `defined(TARGET_OS_IOS)` alone, `#ifdef` and a `!` before the name
+  (TASK23's open note). The reviewer's mutant, applied to a copy of the tree, now fails both: check-visionos names
+  the four sites, check-tvos (d) sites 2 to 4.
+- I2, the image decoder: see the version checks above. Both checks pin `nm -u imgdecode.o` to
+  `_kCGImageSourceAllowableTypes`; with the old imgdecode.c in the copy, check-visionos fails on both objects.
+- N1: `grep` and `nm` errors, and a missing or unreadable object, refuse (a mode 000 object is a mutant). N2: the
+  plist's forbidden keys are decided by `plutil -extract <key> xml1`, so `<key>UIFile&#83;haringEnabled</key>` is
+  refused (a mutant; it passes `plutil -lint`). N3: `object_list` sets `list_root`, not the build's `root`. N4: the
+  run's two app-output lines stay listed for slice 2. N5: this section.
+
+The mutants each check now runs first, besides slice 1's: in check-visionos, an object holding each of the four
+pinned strings, one needing `_Touch_TextInput`, one not needing `_kCGImageSourceAllowableTypes`, an object without
+a pinned string or symbol for each positive control, a missing and an unreadable object for each of the four
+assertions, the character-reference plist; in check-tvos, for each of the four sites `defined(TARGET_OS_IOS)`,
+`defined TARGET_OS_IOS`, `#ifdef TARGET_OS_IOS` (two spellings), `!TARGET_OS_IOS` and `! (TARGET_OS_IOS)`, an
+object not needing the ImageIO key, a missing and an unreadable one, and the character-reference plist.
+
+The `make -n -B` of `ios_objects` for the iOS simulator, the iPhone, the tvOS and the visionOS simulators, and of
+the default macOS goal, is identical before (`5bcecc78`) and after this round, and so are their object lists
+(175 objects each for the four SDKs, 477 for macOS): the round changes no build.
