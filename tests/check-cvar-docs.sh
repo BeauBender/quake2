@@ -639,6 +639,37 @@ EOF
 	s_set_gisetvalue() { printf 'void f(void) { gi.cvar_setvalue("zz_gval", 1); }\n' > src/common/s.c; }
 	s_set_nl() { printf 'void f(void)\n{\n\tri.Cvar_Set(\n\t\t"zz_set", "1");\n}\n' > src/common/s.c; }
 
+	s_flat_arr() {
+		mkdir -p src/client/refresh
+		printf 'static const char *rt_gate_cvars[] = {"zz_rt_a", "zz_rt_b", "zz_rt_c"};\nvoid f(void) { for (i = 0; i < 3; i++) ri.Cvar_Get(rt_gate_cvars[i], "0", 0); }\n' > src/client/refresh/rt.c
+		printf 'src/client/refresh/rt.c|Cvar_Get|rt_gate_cvars[i]|src/client/refresh/rt.c:rt_gate_cvars|the gate walks its table\n' >> tests/baselines/nonliteral-calls.txt
+	}
+	s_flat_arr_lines() {
+		mkdir -p src/client/refresh
+		printf 'static const char *rt_gate_cvars[] = {\n\t"zz_rt_a",\n\t"zz_rt_b",\n\t"zz_rt_c"\n};\nvoid f(void) { for (i = 0; i < 3; i++) ri.Cvar_Get(rt_gate_cvars[i], "0", 0); }\n' > src/client/refresh/rt.c
+		printf 'src/client/refresh/rt.c|Cvar_Get|rt_gate_cvars[i]|src/client/refresh/rt.c:rt_gate_cvars|the gate walks its table\n' >> tests/baselines/nonliteral-calls.txt
+	}
+	s_flat_arr_late() { s_flat_arr; printf 'zz_rt_a zz_rt_b\n' >> doc/040_cvarlist.md; }
+	s_flat_arr_lines_first() { s_flat_arr_lines; printf 'zz_rt_a\n' >> doc/040_cvarlist.md; }
+	s_flat_arr_doc() { s_flat_arr; printf 'zz_rt_a zz_rt_b zz_rt_c\n' >> doc/040_cvarlist.md; }
+	s_flat_arr_lines_doc() { s_flat_arr_lines; printf 'zz_rt_a zz_rt_b zz_rt_c\n' >> doc/040_cvarlist.md; }
+	s_prefix_macro() { printf 'void f(void) { x = Cvar_Get("zz_" SUFFIX, "0", 0); }\n' > src/common/v.c; printf 'zz_ is a word here\n' >> doc/040_cvarlist.md; }
+	s_prefix_two() { printf 'void f(void) { x = Cvar_Get("zz_a" "zz_b", "0", 0); }\n' > src/common/v.c; printf 'zz_a zz_b\n' >> doc/040_cvarlist.md; }
+	s_prefix_cmd() { printf 'void f(void) { Cmd_AddCommand("zz_" "c", f); }\n' > src/common/v.c; printf 'zz_ zz_c\n' >> doc/050_commands.md; }
+	s_blank_comma() { printf 'void f(void) { Cvar_Get("zz_doc" , "0", 0); }\n' > src/common/d.c; printf 'zz_doc is documented\n' >> doc/040_cvarlist.md; }
+	s_plus_cmd() { printf 'void f(void) { Cmd_AddCommand("+zz_cmd", f); }\n' > src/common/v.c; }
+	s_plus_cmd_doc() { s_plus_cmd; printf 'The +zz_cmd command.\n' >> doc/050_commands.md; }
+	s_adr_walk() {
+		mkdir -p src/client/header src/client/menu
+		printf '#define NUM_ADDRESSBOOK_ENTRIES 9\n' > src/client/header/client.h
+		printf 'void f(void) { Com_sprintf(buffer, sizeof(buffer), "adr%%d", i); Cvar_Get(buffer, "", 0); }\n' > src/client/menu/ab.c
+		printf 'src/client/menu/ab.c|Cvar_Get|buffer|fmt:adr%%d:0:NUM_ADDRESSBOOK_ENTRIES-1|the address book\n' >> tests/baselines/nonliteral-calls.txt
+	}
+	s_adr_doc() { s_adr_walk; printf 'adr0 adr1 adr2 adr3 adr4 adr5 adr6 adr7 adr8\n' >> doc/040_cvarlist.md; }
+	s_adr_undoc() { s_adr_walk; printf 'adr0 adr1 adr2 adr3 adr4 adr5 adr6 adr7\n' >> doc/040_cvarlist.md; }
+	s_adr_nomacro() { s_adr_doc; rm src/client/header/client.h; }
+	s_adr_notint() { s_adr_doc; printf '#define NUM_ADDRESSBOOK_ENTRIES (4 + 5)\n' > src/client/header/client.h; }
+
 	echo "check-cvar-docs: self-test"
 	case_run control accepted "$OK" s_none
 	case_run m-file refused zz_m s_m
@@ -660,6 +691,20 @@ EOF
 	case_run rm_main-walk-without-an-entry refused "rm_main.c: Cvar_Get(name" s_rm_walk_nolist
 	case_run rm_main-walk-with-an-entry-undocumented-name refused zz_rm_undoc s_rm_walk_listed
 	case_run rm_main-walk-with-an-entry-documented-name accepted "$OK" s_rm_walk_listed_doc
+	case_run flat-array-later-element-undocumented-one-line refused zz_rt_c s_flat_arr_late
+	case_run flat-array-later-element-undocumented-per-line refused zz_rt_b s_flat_arr_lines_first
+	case_run flat-array-all-documented-one-line accepted "$OK" s_flat_arr_doc
+	case_run flat-array-all-documented-per-line accepted "$OK" s_flat_arr_lines_doc
+	case_run literal-prefix-then-macro-is-not-a-literal refused 'v.c: Cvar_Get("zz_" SUFFIX' s_prefix_macro
+	case_run two-adjacent-literals-are-not-a-literal refused 'v.c: Cvar_Get("zz_a" "zz_b"' s_prefix_two
+	case_run command-literal-prefix-is-not-a-literal refused 'v.c: Cmd_AddCommand("zz_" "c"' s_prefix_cmd
+	case_run literal-then-blank-then-comma-documented accepted "$OK" s_blank_comma
+	case_run command-with-plus-undocumented refused +zz_cmd s_plus_cmd
+	case_run command-with-plus-documented accepted "$OK" s_plus_cmd_doc
+	case_run fmt-macro-bound-documented-adr8 accepted "$OK" s_adr_doc
+	case_run fmt-macro-bound-undocumented-adr8 refused adr8 s_adr_undoc
+	case_run fmt-macro-missing refused "no #define of NUM_ADDRESSBOOK_ENTRIES" s_adr_nomacro
+	case_run fmt-macro-not-an-integer refused "NUM_ADDRESSBOOK_ENTRIES is not a plain integer" s_adr_notint
 	case_run cmd-m-file refused zz_cmd s_cmd_m
 	case_run cmd-name-on-next-line refused zz_cmd s_cmd_nl
 	case_run cmd-variable-arg refused "src/common/v.c: Cmd_AddCommand(cmdname" s_cmd_var
