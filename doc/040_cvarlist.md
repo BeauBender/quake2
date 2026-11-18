@@ -302,6 +302,15 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 
 * **nextserver**: Used for looping the introduction demos.
 
+* **adr0**, **adr1**, **adr2**, **adr3**, **adr4**, **adr5**, **adr6**,
+  **adr7**, **adr8**: The nine entries of the server
+  address book in the multiplayer menu. Archived; the empty string
+  when an entry is unused.
+
+* **gl_drawflat**, **gl_saturatelighting**: Names in the client's
+  table of cheat-protected cvars that no renderer reads here. In
+  multiplayer the client creates them with the value `0`.
+
 
 ## Audio
 
@@ -707,6 +716,13 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
   software renderer has). Set to `0` to disable this, in case you don't
   like the effect or it's too slow on your machine.
 
+* **gl4_intensity**, **gl4_overbrightbits**, **vk_intensity**,
+  **vk_overbrightbits**: The colour intensity and overbright bits of
+  the OpenGL 4 and Vulkan renderers of upstream Yamagi Quake II. This
+  fork builds neither renderer, so nothing creates them; the video
+  menu names them for those renderers, with the meaning of
+  `gl3_intensity` and `gl3_overbrightbits`.
+
 
 ## Graphics (Software only)
 
@@ -899,11 +915,27 @@ marked `(n/a)` and skipped.
   with the configuration; applies from the next frame.
 
 The `r_rt_*` cvars belong to the Metal renderer's ray tracing, which is
-being built: `r_rt_shadows` is its first effect, `r_rt_ao` its second and `r_rt_water` its third; with `r_rt_stats` set, the renderer
+being built: `r_rt_shadows` is its first effect, `r_rt_ao` its second, `r_rt_water` its third and `r_rt_sun` its fourth; with `r_rt_stats` set, the renderer
 builds acceleration structures for the world, the doors and platforms
 and every model the frame lists (not only those in view, since a model
-out of view can still cast into it), which nothing reads. On a GPU without ray
-tracing they do nothing (the renderer says so once). The development
+out of view can still cast into it), which nothing reads. At start-up and
+at each `vid_restart` the renderer decides, from what the GPU reports,
+which ray-tracing path it takes, and says so in one line: the compute path
+(`ref_metal: ray tracing: compute path (apple7, supportsRaytracing)`) from
+the apple6 family on with `supportsRaytracing`; from apple9 on with
+`supportsRaytracingFromRender` as well the render-stage path is available
+but not yet built, so the compute path runs there too (`ref_metal: ray
+tracing: compute path (apple9, supportsRaytracing; render-stage available,
+not yet built)`); or none, with the reason (`ref_metal: ray tracing: none (apple5: no supportsRaytracing); the
+ray-tracing effects read 0` on the build VM). With none, the effect
+switches `r_rt_ao`, `r_rt_shadows`, `r_rt_sun` and `r_rt_water` read `0`, even when the
+configuration or the command line set them, and one set at the console
+reads `0` again before the next frame is drawn, with one line naming it
+(`ref_metal: r_rt_ao reads 0: no ray tracing on this device (no
+supportsRaytracing)`), so the configuration saves `0`; the picture is the
+one with every effect off. The other `r_rt_*` cvars are settings and keep
+their values; with no ray tracing they do nothing (`r_rt_stats` says so
+once). The development
 switches `r_rt_gbuffer` and `r_rt_motion` and the settings beside them
 choose how a view is drawn, on any Metal GPU, and leave the picture as it
 is.
@@ -923,8 +955,9 @@ is.
   through. The rays' directions follow a blue-noise pattern that changes
   every frame, so without the accumulation over frames a later version
   adds the darkening is grainy. Needs a GPU with ray tracing and draws the
-  view through the G-buffer (see `r_rt_gbuffer`); with `r_fullbright 1`
-  there is no lightmap and it does nothing. With `0` (the default) nothing
+  view through the G-buffer (see `r_rt_gbuffer`); with `r_fullbright` set
+  (any value but `0`) there is no lightmap and it does nothing. With `0`
+  (the default) nothing
   is traced or allocated and the picture is as without ray tracing. Saved
   with the configuration; applies from the next frame.
 
@@ -981,6 +1014,13 @@ is.
   counts as `2`, one that is not a finite number as `0`, and a fraction is
   cut to the whole number below it. Cheat-protected: reset to `0` in
   multiplayer. Applies from the next frame.
+
+* **r_rt_denoiser**: The denoiser item of the Metal renderer's video
+  menu reads this cvar; no code creates it yet (the ray-tracing denoiser,
+  TASK113, will). Until then it does not exist unless set by hand, and
+  the menu shows `off`. The menu reads it as `off` below `1`,
+  `bilateral` from `1` and `MetalFX` from `2`; a value that is not a
+  finite number counts as `0`.
 
 * **r_rt_gbuffer**: A development switch of the Metal renderer. When
   set to anything but `0`, a view with the world is drawn through the
@@ -1112,6 +1152,65 @@ is.
   counted as `rt` in the teardown line. With `0` (the default) nothing is
   built and nothing is allocated for ray tracing. Applies from the next
   frame.
+
+* **r_rt_sun**: When set to `1`, the Metal renderer lights the world's
+  dim outdoor surfaces with a ray-traced sun: from each pixel of the
+  world whose lightmap is below `r_rt_sunfloor` and which faces the sun,
+  one ray goes toward the sun, and a pixel whose ray reaches the sky gets
+  new light, the sky's colour times `r_rt_sunscale` times how squarely it
+  faces the sun; a ray that meets anything else first (the world, a door
+  or platform, a model) or nothing at all leaves the pixel in shadow.
+  Water and translucent surfaces let the ray through, up to four of them
+  on one ray (a fifth shadows it); the view weapon and
+  the player's own model cast no sun shadow. The light is added after
+  `r_rt_ao`'s darkening and replaces none of the stock light, so nothing
+  is counted twice. The sky's colour is the mean of the sky box's five
+  upper faces, scaled so its brightest channel is full. The sun's
+  direction is the map's line of `scripts/rt/sun-angles.txt`, which the
+  renderer is built with, or else `r_rt_sun_angles`. A map whose sky
+  faces are under 2 % of its face area is drawn as with the setting off,
+  and nothing is traced, built or kept for the sun on it (the renderer
+  prints the map's share once). Needs a GPU with ray
+  tracing and draws the view through the G-buffer (see `r_rt_gbuffer`);
+  with `r_fullbright` set (any value but `0`) there is no lightmap and it
+  does nothing. With `0`
+  (the default) nothing is traced or allocated and the picture is as
+  without ray tracing. Saved with the configuration; applies from the
+  next frame.
+
+* **r_rt_sun_angles**: The direction of `r_rt_sun`'s sun on a map that
+  `scripts/rt/sun-angles.txt` does not list, as `pitch yaw` in degrees:
+  the pitch its height above the horizon, `0` to `90`, the yaw its compass
+  angle counter-clockwise from the map's x axis, `0` up to `360` (`55 45`
+  by default). A value that is not two such numbers counts as `55 45`
+  (the renderer says so once). Saved with the configuration; applies from
+  the next frame.
+
+* **r_rt_sun_show**: A development view of the Metal renderer's
+  `r_rt_sun`: with it on, `1` replaces the 3D view by a mask, black where
+  the sun's light was added and white everywhere else, `2` by the pass's
+  classes: white lit, red in shadow, blue facing away from the sun, grey
+  with a lightmap at or above `r_rt_sunfloor`, black not a world pixel.
+  The view weapon, models drawn over the world, particles and translucent
+  surfaces are left out of these views. `0` (the default) shows the
+  picture; a value above `2` counts as `2`, one that is not a finite
+  number as `0`, and a fraction is cut to the whole number below it.
+  Cheat-protected: reset to `0` in multiplayer. Applies from the next
+  frame.
+
+* **r_rt_sunfloor**: The lightmap level under which `r_rt_sun` adds its
+  light, from `0` to `1` in the lightmap's brightest channel: `0.5` (the
+  default) lights the surfaces whose lightmap is below half, so bright
+  indoor lighting is not blown out; `0` adds nothing, `1` lights almost
+  every pixel the sun reaches. A value outside the range counts as the
+  nearest end, one that is not a finite number as `0.5`. Saved with the
+  configuration; applies from the next frame.
+
+* **r_rt_sunscale**: How strong `r_rt_sun`'s light is: the share of the
+  sky's colour a pixel facing the sun squarely gets, `0.35` by default. A
+  value below `0` counts as `0`, one above `4` as `4`, one that is not a
+  finite number as `0.35`. Saved with the configuration; applies from the
+  next frame.
 
 * **r_rt_water**: When set to `1`, the Metal renderer gives water a
   ray-traced reflection, one bounce: from each pixel of water (the
@@ -1557,3 +1656,25 @@ them given the engine behaves exactly as before.
   directly. Must be 1 to 9 digits without a leading zero (`0` itself
   is accepted). Refused without `pins_record` or
   `pins_replay`. Default: not given.
+
+## Environment variables
+
+These are read from the process environment, not from the console, and
+are not cvars. They belong to the Metal renderers.
+
+* **MTL_GPU_TIME**: When set (to anything, even empty) before the
+  Metal renderer starts, it prints one line to standard error for each
+  command buffer it commits, `ref_metal: gpu_ms <ms>`, the buffer's GPU
+  time in milliseconds, with ` frame` appended for the frame's last
+  buffer; the frame's drawing is then committed on its own, so its time
+  leaves out the wait for a drawable. A measuring aid. Read once.
+
+* **MGL_READBACK_DUMP**: Read once by the OpenGL 1.4 renderer when it
+  runs on the Metal layer. Set to an absolute path of `A-Z`, `a-z`,
+  `0-9`, `_`, `.`, `/` and `-` without `..`, it writes every
+  `glReadPixels` read the renderer makes into that directory as
+  `mgl-readback-<n>.raw` plus a line each in `mgl-readback.txt` (position,
+  size, format, type, pack alignment, byte count), at most 1000 reads per
+  run. The directory must exist and `mgl-readback.txt` must not (nor be a
+  link) before the run, or nothing is written. Any other value is refused
+  with one line on standard error. Unset or empty: nothing is written.

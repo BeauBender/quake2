@@ -1,0 +1,13 @@
+# Calls whose first argument is not a string literal:
+#   path|callee|first argument|table|reason
+# The table names where the names the call walks come from, and the check
+# reads its string literals as cvar names (they must be documented): path:Symbol
+# is an array (the first literal of each row) or a function (every literal in
+# its body) at column 0 of path; fmt:pattern:low:high is pattern with %d from
+# low to high, a bound being an integer or a macro (MACRO or MACRO-1) that is
+# one plain-integer #define under src. A line without a table or a reason is refused, and so is a line
+# whose call is not in src: a walk is listed in the change that adds it.
+src/client/cl_main.c|Cvar_Get|cheatvars[numcheatvars].name|src/client/cl_main.c:cheatvars|walks the cheatvars table
+src/client/menu/menu.c|Cvar_Get|buffer|fmt:adr%d:0:NUM_ADDRESSBOOK_ENTRIES-1|the address book entries adr0 to the last one, built with Com_sprintf
+src/client/menu/videomenu.c|Cvar_Get|cv|src/client/menu/vidrules.c:VidRules_Cvar|the name VidRules_Cvar returns for a video item
+src/client/refresh/metal/rm_main.c|Cvar_Get|name|src/client/refresh/metal/rm_rtgate.c:rtg_cvars|the ray-tracing gate (TASK60) creates its effect switches from its table of every r_rt_* cvar
