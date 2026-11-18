@@ -126,8 +126,15 @@ shim() { # $1 = command, $2 = what it prints ("" = fails)
 	chmod +x "$tmp/bin/$1"
 }
 gate() { # $1 = label, $2 = wanted status, $3 = text the output must hold, [$4 = HOME]
+	# $chk: the check to run, tests/check-no-local-identity.sh unless the
+	# owner-handle host fixture below names its copy. That copy runs with the
+	# git environment unset, so it scans its own repository.
 	rc=0
-	PATH="$tmp/bin:$PATH" HOME="${4:-/zzqno""home}" tests/check-no-local-identity.sh > "$tmp/out" 2>&1 || rc=$?
+	if [ -n "${chk:-}" ]; then
+		( unset $(git rev-parse --local-env-vars); PATH="$tmp/bin:$PATH" HOME="${4:-/zzqno""home}" "$chk" ) > "$tmp/out" 2>&1 || rc=$?
+	else
+		PATH="$tmp/bin:$PATH" HOME="${4:-/zzqno""home}" tests/check-no-local-identity.sh > "$tmp/out" 2>&1 || rc=$?
+	fi
 	if [ "$rc" -ne "$2" ] || ! grep -q "$3" "$tmp/out"; then
 		echo "$me: FAIL: $1: status $rc, wanted $2 and \"$3\"; its output:"
 		redact < "$tmp/out"
@@ -187,6 +194,49 @@ if [ -n "$owner" ]; then
 else
 	echo "$me: not run: the owner-handle note tests (origin names no GitHub owner)"
 fi
+
+# A host whose login is origin's GitHub owner handle (the M6 host's case), made
+# on any host: a scratch repository whose origin names the login as its owner
+# and whose one tracked file holds it, both built at run time and never
+# printed. The check copied there scans that repository. The login is the
+# real one, read by absolute path like the check reads it.
+login=$(/usr/bin/id -un 2>/dev/null || true)
+case $login in
+'' | ?? | *[!A-Za-z0-9-]*)
+	echo "$me: not run: the owner-handle host tests (the login is not a GitHub handle)"
+	;;
+*)
+	ofx=$tmp/ownerhost
+	if ! (
+		unset $(git rev-parse --local-env-vars)
+		GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 HOME=$tmp XDG_CONFIG_HOME=$tmp/noxdg
+		export GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM HOME XDG_CONFIG_HOME
+		git init -q --template= "$ofx" &&
+			mkdir -p "$ofx/tests" &&
+			cp tests/check-no-local-identity.sh "$ofx/tests/" &&
+			printf 'maintained by %s\n' "$login" > "$ofx/README.md" &&
+			git -C "$ofx" add README.md tests/check-no-local-identity.sh &&
+			git -C "$ofx" remote add origin "https://github.com/$login/quake2.git"
+	); then
+		echo "$me: FAIL: cannot build the owner-handle host fixture"
+		fails=1
+	fi
+	chk=$ofx/tests/check-no-local-identity.sh
+	names "zzqno""host" "zzqno""body"
+	shim hostname zzq-synthetic-box
+	shim whoami zzq-synthetic-box
+	gate "owner-handle login: a hostname on PATH is not read" 0 "check-no-local-identity: ok"
+	rm -f "$tmp/bin/hostname" "$tmp/bin/whoami"
+	gate "owner-handle login, home ending in it: the login's word test is skipped" 0 "the user-name word test is skipped" "$hhome"
+	gate "owner-handle login, home elsewhere: the login is word-tested" 1 "tracked files contain this machine's identity" "/zzqno""home"
+	gate "owner-handle login, another word with the home ending in it: the login is word-tested" 1 "tracked files contain this machine's identity" "/zzqno""home/zzqno""body"
+	if grep -q "skipped" "$tmp/out"; then
+		echo "$me: FAIL: owner-handle login, another word with the home ending in it: the skip note was printed"
+		fails=1
+	fi
+	chk=
+	;;
+esac
 
 [ "$fails" -eq 0 ] || exit 1
 _ok=1
