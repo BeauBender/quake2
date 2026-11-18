@@ -63,7 +63,7 @@ original clients (Vanilla Quake II) commands are still in place.
   later). `vt` needs a model that macOS downloads once from Apple. Only
   the menu item fetches it (Options, "upscale textures", "VideoToolbox
   ML"; a key press, which a server's stuffed commands cannot make): a
-  first press says so in one line and starts the download, which runs
+  first press says so in one line and starts the fetch, which runs
   while the game stays responsive, the item greyed until it is done.
   The command with the model missing refuses in one line, says to fetch
   it from the menu, and writes nothing (decision 0013). Where `metalfx` or `vt` is unsupported (on
