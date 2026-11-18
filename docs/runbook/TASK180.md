@@ -13,7 +13,7 @@ every SDK) now prints one line about the launcher of the device it created, befo
 | `launcher: 1 crash(es) before the run: <process>, pid <n>, last exit status <s>, seen at <time>` | the baseline already reads a last exit status other than 0 | the run fails |
 | `launcher: unknown (<reason>)` | the device could not be asked, or its launcher was not listed or not running at the baseline | the run fails: unknown is never a pass |
 
-`IOS_SIM_LAUNCHER_CRASH_OK=1` (that exact value) keeps the line and lets both of the last two pass. The count is 1
+`IOS_SIM_LAUNCHER_CRASH_OK=1` (that exact value) keeps the line and lets every failing line (both crash lines and unknown) pass. The count is 1
 because launchd keeps only the last exit; the job's `runs` counter would give the exact number (see the end).
 A run that stops early on another failure prints the line too (the exit trap does), and the device is shut down and
 deleted on every path, a crash included.
@@ -108,5 +108,5 @@ listed (the three `head-` and `unbounded-` rows are the round 1 fixes taken out 
 | garbage-accepted (an unreadable line is read) | launcher-unknown-garbage |
 | not-running-accepted | launcher-unknown-not-running |
 
-The move of `launcher_done` after the print (note 1) is a signal race that the selftest cannot drive, so it has no
+The move of `launcher_done` after the print (item 3 of the round list) is a signal race that the selftest cannot drive, so it has no
 mutant.

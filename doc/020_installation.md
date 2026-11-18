@@ -402,10 +402,13 @@ Before it deletes its device, every run of `ios-sim.sh` (`smoke` and
 the host: `launcher: no crash` (the launcher kept its process and its last
 exit status since the device booted), `launcher: 1 crash(es): ...` (it
 exited meanwhile, with the process, the old and new pid, the last exit
-status, -11 being a SIGSEGV, and the time it was seen), or `launcher:
-unknown (...)` (the device could not be asked, or its launcher was not
-listed or not running at the start). A crash fails the run, and so does
-an unknown: it is never a pass. `IOS_SIM_LAUNCHER_CRASH_OK=1` prints the
+status, -11 being a SIGSEGV, and the time it was seen), `launcher: 1
+crash(es) before the run: <label>, pid <n>, last exit status <s>, seen at
+<time>` (the first read already showed a last exit status other than 0,
+so it crashed during the boot), or `launcher: unknown (...)` (the device
+did not boot, or could not be asked, or its launcher was not listed or
+not running at the start). A crash fails the run, and so does an
+unknown: it is never a pass. `IOS_SIM_LAUNCHER_CRASH_OK=1` prints the
 line and lets the run pass anyway (the count is 1: launchd keeps the last
 exit only). This tells a run apart from the error dialogs about the
 launcher that the simulator shows after many runs

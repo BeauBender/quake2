@@ -156,7 +156,7 @@
 # not boot, cannot be queried, the baseline could
 # not be read, the launcher is not listed or not running at the start), fail
 # the run, as bad as a missing frame: an unknown is never a pass.
-# IOS_SIM_LAUNCHER_CRASH_OK=1 reports the line and lets both pass. The count
+# IOS_SIM_LAUNCHER_CRASH_OK=1 reports the line and lets every failing line pass. The count
 # is 1: launchd keeps the last exit only. A run that stops early prints the
 # line too, and the device is shut down and deleted on every path.
 # IOS_SIM_DISPLAY (TASK172): the display each "simctl io screenshot" takes,
