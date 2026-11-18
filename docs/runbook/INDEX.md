@@ -65,6 +65,9 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK164](../runbook/TASK164.md): the ref_metal host tests check the kernels' own calls, and the colour-space path has a probe
 - [TASK147](../runbook/TASK147.md): the iOS display is the safe rectangle; the checks on a physical host
 - [TASK166](../runbook/TASK166.md): every bench run carries its quiet evidence, and the flag waits for the GPU reading after a run to settle
+- [FIX106](../runbook/FIX106.md): the host lock serves waiters in arrival order
 - [TASK124](../runbook/TASK124.md): upscale_textures takes a backend: scale2x, or MetalFX's spatial scaler on macOS (decision 0012)
 - [TASK162](../runbook/TASK162.md): water reflections mark their pixels in the G-buffer raster
 - [TASK161](../runbook/TASK161.md): ref_metal and the shim print presented frames a second; presented fps is the headline metric of the gl1-metal vsync0 bench cases
+- [FIX111](../runbook/FIX111.md): the gate-nap-uncut mutant is caught on every run, whatever the load
+- [FIX108](../runbook/FIX108.md): closing a card by any route leaves it with a terminal state label
