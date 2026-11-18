@@ -908,7 +908,7 @@ CL_ClockStep(int timedelta)
 {
 	int step = timedelta / 1000;
 
-	if (cl_timedemo->value && (CL_PinsCapture() > 0) && (step > 99))
+	if (cl_timedemo->value && CL_PinsRun() && (step > 99))
 	{
 		return 99;
 	}

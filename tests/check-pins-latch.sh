@@ -116,7 +116,8 @@ expect_run 1 +set pins_dir /s +set pins_replay /t/../trace.q2r
 for g in 'src/common/frame.c:if (!CL_PinsRun())' \
 	'src/client/cl_main.c:if ((cls.state == ca_uninitialized) || CL_PinsRun())' \
 	'src/common/clientserver.c:if ((code == ERR_DROP) && CL_PinsRun())' \
-	'src/client/vid/vid.c:if (CL_PinsRun())'; do
+	'src/client/vid/vid.c:if (CL_PinsRun())' \
+	'src/client/cl_entities.c:if (cl_timedemo->value && CL_PinsRun()'; do
 	f=${g%%:*}
 	grep -qF "${g#*:}" "$f" || bad "$f: the pin-run guard does not test CL_PinsRun()"
 done

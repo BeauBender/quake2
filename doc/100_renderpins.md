@@ -271,7 +271,8 @@ in which `gl1` could not create an OpenGL context was an environment
 condition of that host at the time, not a property of the engine.
 A live record taken while the host stalls for more than 100 ms a frame
 could differ from another live record (see `skywater` above) before
-FIX102, which keeps such a stall out of a pin record's clock (below);
+FIX102, which keeps such a stall out of a pin record's clock (below,
+except for the frames with no new server frame, which it leaves);
 its replay matches it all the same.
 
 A temporal MetalFX scaler (`r_metalfx 2`) makes that caveat reach every
@@ -296,7 +297,9 @@ records of the hits-0 case repeat (hits 1 at those sizes is covered by
 TASK162's comparisons).
 
 FIX102 measured the stall (the frame after a 5K capture takes 67 to
-103 ms, the first capture 170 to 221 ms; at 1920x1080 under 40 ms) and
+103 ms, the first capture 170 to 221 ms; at 1920x1080 the frames after
+the first capture take under 40 ms, the first capture itself 83.5 to
+89 ms) and
 keeps it out of the clock: in a pin record's timedemo the client clock's
 step is cut below a server frame (`CL_ClockStep`), so every frame that
 plays a demo frame gets its time from the demo alone. With it, five 5K

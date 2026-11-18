@@ -334,10 +334,10 @@ clock_step(int timedemo, int capture, int timedelta)
 
 	stub_client_cvars();
 	cl_timedemo->value = (float)timedemo;
-	stub_pins_capture = capture;
+	stub_pins_run = capture ? 1 : 0;
 	step = CL_ClockStep(timedelta);
 	cl_timedemo->value = 0;
-	stub_pins_capture = 0;
+	stub_pins_run = 0;
 	return step;
 }
 
@@ -381,11 +381,11 @@ pin_record_time_after(int timedelta)
 	cl.time = 3900;
 	cl.frame.servertime = 4100;
 	cl_timedemo->value = 1;
-	stub_pins_capture = 30;
+	stub_pins_run = 1;
 	cl.time += CL_ClockStep(timedelta);
 	CL_AddEntities();
 	cl_timedemo->value = 0;
-	stub_pins_capture = 0;
+	stub_pins_run = 0;
 	return cl.time;
 }
 
