@@ -472,7 +472,8 @@ while read -r lref lsha rref rsha || [ -n "${lref:-}" ]; do
 			break
 		fi
 	done
-	[ -n "$hit" ] || collect "$n" "$obj" "$rsha"
+	# No new commit, nothing new below it: the remote has every object.
+	[ -n "$hit" ] || [ -z "$commits" ] || collect "$n" "$obj" "$rsha"
 done
 [ ! -s "$td/table" ] || filescan
 

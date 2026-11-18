@@ -623,6 +623,16 @@ stub "echo \"check-no-local-identity: tracked files contain this machine's ident
 closed "the file scan reports a match it cannot place" 'a match this hook cannot place' "$tmp/alt/.githooks/pre-push"
 stub "echo \"check-no-local-identity: tracked files contain this machine's identity (values not shown); remove them:\"; exit 1"
 closed "the file scan reports no match it can place" 'a match this hook cannot place' "$tmp/alt/.githooks/pre-push"
+# A push that adds no blob and no path runs no file scan (the failing stub
+# would refuse it): a commit the remote has, under a new name, and a tooling
+# commit on the empty tree.
+stub 'echo zzq stub; exit 2'
+printf 'refs/heads/zzqpub2 %s refs/heads/zzqpub2 %s\nrefs/heads/zzqc %s refs/heads/claim/ZZQ9 %s\n' \
+	"$pub" "$zero" "$(mk - "claimed ZZQ9 by m-0123456789ab/agent/zzq")" "$zero" > "$tmp/in"
+_rc=0
+(cd "$tmp/w" && sh "$tmp/alt/.githooks/pre-push" origin x) < "$tmp/in" > "$tmp/out" 2>&1 || _rc=$?
+{ [ "$_rc" -eq 0 ] && [ ! -s "$tmp/out" ]; } || { note "a push that adds no file ran the file scan"; redact < "$tmp/out"; }
+leaks "a push that adds no file"
 printf 'refs/heads/zzqmain %s refs/heads/zzqmain %s\n' "$m2" "$m1" > "$tmp/in"
 shim hostname ''
 closed "host name unreadable" "cannot read this machine's host name"

@@ -192,3 +192,86 @@ machine, so:
 
 Delete the hook, the three checks and the warning in `scripts/test.sh`.
 Nothing else depends on them. Record 0003 stands on its own.
+
+## Addendum 2026-11-17: every commit, every pushed file, no tooling exemption (FIX114, #492)
+
+The architecture review of 2026-11-17 (findings AR-07, AR-08 and AR-11)
+found three routes around this guard: the commit hook ran the identity check
+only for the paths of its invariant filter, so a commit touching only
+`scripts/`, `stuff/`, `.githooks/` or `third_party/` skipped it; the push
+hook scanned no file a pushed commit adds, and a branch push comes before
+the gate; and the tooling exemption above let a commit be published under a
+`claim/` or `gate-clear/` ref and then skipped as published when a pull
+request branch or `main` pushed it later. The commit hook's secret pattern
+also missed fine-grained GitHub tokens. So, superseding the section
+"Tooling branches" and, for file contents and file names, the first item of
+"Not scanned" in the known limits:
+
+- The commit hook runs `tests/check-no-local-identity.sh` on every commit,
+  beside the memory check, whatever paths are staged; it reads the index
+  being committed. The other invariants keep their path filter, so a commit
+  under `scripts/` runs these two checks and no other. Measured at this
+  repository's size, a commit touching only `scripts/` takes
+  4.2 to 4.8 s in the hook against 1.5 to 1.6 s before (three runs each);
+  the difference is the check's own self-test and scan.
+- The secret pattern gains `github_pat_` followed by 22 or more of
+  `[A-Za-z0-9_]`. The staged diff is read once into a file, as text and
+  without colour, external diff or textconv, so a git error, a committed
+  `.gitattributes` (`-diff`, `binary`, a `diff=` driver) or a local diff
+  setting no longer takes a file out of the scan; a diff that cannot be read
+  and a `grep` error refuse the commit.
+- The push hook scans the files the pushed commits add, under every ref
+  name. For each ref, the blobs the remote lacks (`git rev-list --objects
+  <tip> --not <remote sha> --remotes=<remote>`, the walk git itself makes to
+  choose what to send: a blob in the tree of a commit the remote is known to
+  have is already published and is not scanned again) and the paths its new
+  commits add or change (`git diff-tree -r -c --root`, deletions left out,
+  since deleting a file publishes nothing; for a merge, the paths that
+  differ from every parent) are scanned by `tests/check-no-local-identity.sh`
+  itself, so there is one matcher, the gate's: the host name and home path
+  as substrings, the user name as a whole word, the owner-handle rule above,
+  binary files (a NUL byte) not scanned. The hook hands the blobs to the
+  check under placeholder names made of punctuation (no name can hold a
+  value) in a temporary index, and the paths as the text of one more blob
+  per ref in a temporary object directory that has the repository's objects
+  as its alternate; nothing is written to the repository. One run of the
+  check covers the whole push, and a push that adds no blob and no path runs
+  none. A missing check, a check that fails or ends without its verdict, a
+  match the hook cannot place, and an object git cannot list or read refuse
+  the push; the commit cap is unchanged. Measured, a push of
+  50 commits adding 200 files to a scratch bare remote takes 3.3 to 3.8 s in
+  the hook against 0.8 to 0.9 s before (four runs each).
+- The `refs/heads/claim/*` and `refs/heads/gate-clear/*` exemption is
+  removed: the tooling now offers the pseudonymous identity this record
+  waited for. The identity shim writes those commits as root commits on the
+  empty tree whose message names an opaque machine token. Before the
+  removal, the commits that the 92 current tooling refs add over every other
+  published ref (88 commits) were scanned without printing a value: 0
+  host-name, 0 user-name and 0 home-path matches, and the new hook passes
+  all 92 refs. A tooling ref is scanned like any other ref, so a commit that
+  holds a value is refused at its first push, under any name, and is not
+  published for a later push to skip.
+- Known limits, unchanged in kind: a binary file is not scanned (the gate
+  check's rule); `YQ2_IDENTITY_TEST_EXTRA_WORD` is not looked for in files,
+  since the gate check has no test word; the hooks run the checks in the
+  working tree, so a working-tree change to a check or a hook changes what
+  runs, and `tests/check-pre-commit-hook.sh` and
+  `tests/check-pre-push-hook.sh` in the gate refuse a hook that no longer
+  refuses.
+- `tests/check-pre-commit-hook.sh` (in the gate) proves the commit hook with
+  real `git commit` runs in throwaway repositories: the identity word under
+  each formerly skipped path, which checks run for which paths, one
+  synthetic sample per token family (built at run time, so no token-shaped
+  string is in the tree), the `.gitattributes` and local diff settings
+  above, and every fail-closed path. `tests/check-pre-push-hook.sh` adds
+  real pushes of a commit that adds a file holding the word to a normal
+  branch, `claim/` and `gate-clear/` and then a normal branch again (all
+  refused, none published), file contents, symbolic link targets, file and
+  directory names, an intermediate commit, a merge, a deletion, a blob the
+  remote has, two refs in one push, a 50-commit push and the fail-closed
+  paths of the file scan.
+
+Reversal of this addendum: put the identity check back under the path
+filter in `.githooks/pre-commit`, delete `collect`, `filescan` and their
+calls from `.githooks/pre-push`, restore the exemption block, and delete
+`tests/check-pre-commit-hook.sh`.
