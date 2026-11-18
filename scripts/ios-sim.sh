@@ -320,7 +320,33 @@ terminate)
 	fi
 	echo "$*" >> "$st/terminates"; exit 0 ;;
 bootstatus|install|shutdown) ;;
-spawn) echo "fake log: quake2 line" ;;
+spawn)
+	# simctl spawn <udid> launchctl list (TASK180): the device's launchd, "PID Status Label" per job, of
+	# this run's device only; FAKE_LAUNCHER picks the outcome: the first call is the baseline, later
+	# ones are the check: crash (a new pid, last exit status -11), crashdead (no pid, -11), crashstatus
+	# (the same pid, a new status), qfail (the check cannot query), qfailbase (the baseline cannot),
+	# nolabel (the launcher is not listed), garbage (a line that cannot be read), norun (not running
+	# at the baseline)
+	if [ "${3:-}" = launchctl ] && [ "${4:-}" = list ]; then
+		[ "${2:-}" = "$(cat "$st/created" 2>/dev/null)" ] || { echo "fake xcrun: not the device this run created" >&2; exit 1; }
+		n=$(cat "$st/lcalls" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$st/lcalls"
+		lab=com.apple.SpringBoard
+		[ "${IOS_SIM_SDK:-}" = appletvsimulator ] && lab=com.apple.PineBoard
+		lp=100; ls=0
+		case ${FAKE_LAUNCHER:-ok} in
+		crash) [ "$n" -gt 1 ] && { lp=200; ls=-11; } ;;
+		crashdead) [ "$n" -gt 1 ] && { lp=-; ls=-11; } ;;
+		crashstatus) [ "$n" -gt 1 ] && ls=-11 ;;
+		qfail) [ "$n" -gt 1 ] && { echo "fake xcrun: the device is not booted" >&2; exit 1; } ;;
+		qfailbase) [ "$n" -eq 1 ] && { echo "fake xcrun: the device is not booted" >&2; exit 1; } ;;
+		nolabel) lab=com.apple.other ;;
+		garbage) lp=x ;;
+		norun) [ "$n" -eq 1 ] && lp=- ;;
+		esac
+		printf 'PID\tStatus\tLabel\n-\t0\tcom.apple.Board.other\n%s\t%s\t%s\n' "$lp" "$ls" "$lab"
+		exit 0
+	fi
+	echo "fake log: quake2 line" ;;
 io)
 		case $4 in
 		*/app.png)
@@ -512,7 +538,7 @@ EOF
 		t0=$(date +%s)
 		cmd=${ST_CMD:-smoke --out @D@/out}; cmd=${cmd//@D@/$d}
 		# ST_CWD: the directory the script runs in; no pathname expansion of the words of the command
-		( set -f; cd "${ST_CWD:-.}" && bounded 60 "${d:?}/run.log" env PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
+		( set -f; cd "${ST_CWD:-.}" && bounded 60 "${d:?}/run.log" env -u IOS_SIM_SDK -u IOS_SIM_LAUNCHER_CRASH_OK -u FAKE_LAUNCHER PATH="$sroot/bin:$PATH" FAKE_STATE="$d/state" FAKE_SCENARIO="$sc" \
 			IOS_SIM_SETTLE_SECONDS=0 IOS_SIM_LIST_SECONDS=20 IOS_SIM_CREATE_SECONDS=20 IOS_SIM_BOOT_SECONDS=10 IOS_SIM_SMOKE_SECONDS=10 "$@" \
 			bash "$self" $cmd ) || rc=$?
 		t0=$(( $(date +%s) - t0 ))
@@ -750,6 +776,38 @@ EOF
 	st_case list-hangs hang fail "timed out after 2 s: xcrun simctl list devices" 10 IOS_SIM_LIST_SECONDS=2
 	st_case device-from-before-gone vanish ok "not a failure): 22222222-2222-2222-2222-222222222222" 30
 	ST_CMD="run --out @D@/out" st_case run-device-from-before-gone vanish ok "not a failure): 22222222-2222-2222-2222-222222222222" 30
+	# the launcher of the device (TASK180): one line before the device is deleted, from the device's own
+	# launchd (simctl spawn on this run's UDID), for each SDK: no crash, a crash, a query that fails
+	for sdk in iphonesimulator:extra:SpringBoard appletvsimulator:tvos:PineBoard xrsimulator:xros:SpringBoard; do
+		l_sdk=${sdk%%:*}; l_rest=${sdk#*:}; l_sc=${l_rest%%:*}; l_lab=${l_rest#*:}; l_n=${l_sdk%simulator}
+		st_case launcher-no-crash-$l_n "$l_sc" ok "launcher: no crash" 30 IOS_SIM_SDK="$l_sdk"
+		st_case launcher-crash-$l_n "$l_sc" fail "launcher: 1 crash(es): com.apple.$l_lab, pid 100 -> 200, last exit status -11" 30 IOS_SIM_SDK="$l_sdk" FAKE_LAUNCHER=crash
+		st_has launcher-crash-$l_n grep state/calls "simctl delete AAAAAAAA-"
+		st_case launcher-unknown-$l_n "$l_sc" fail "launcher: unknown (launchctl list failed in the device)" 30 IOS_SIM_SDK="$l_sdk" FAKE_LAUNCHER=qfail
+	done
+	# the same in run, and the device is shut down and deleted after a crash, on each path
+	ST_CMD="run --out @D@/out" st_case launcher-run-no-crash extra ok "launcher: no crash" 30
+	ST_CMD="run --out @D@/out" st_case launcher-run-crash extra fail "launcher: 1 crash(es): com.apple.SpringBoard" 30 FAKE_LAUNCHER=crash
+	st_has launcher-run-crash grep state/calls "simctl shutdown AAAAAAAA-"
+	st_has launcher-run-crash grep state/calls "simctl delete AAAAAAAA-"
+	st_has launcher-run-crash nogrep out/devices.after.json "AAAAAAAA-"
+	ST_CMD="run --out @D@/out" st_case launcher-run-unknown extra fail "launcher: unknown (the device's launchd lists no com.apple.SpringBoard)" 30 FAKE_LAUNCHER=nolabel
+	# a crash by its other signs: no pid, or the same pid with a new status
+	st_case launcher-crash-no-pid extra fail "pid 100 -> -, last exit status -11" 30 FAKE_LAUNCHER=crashdead
+	st_case launcher-crash-new-status extra fail "launcher: 1 crash(es)" 30 FAKE_LAUNCHER=crashstatus
+	# the baseline that cannot be read, a line that cannot be read, a launcher not running at the start
+	st_case launcher-unknown-baseline extra fail "launcher: unknown (launchctl list failed in the device)" 30 FAKE_LAUNCHER=qfailbase
+	st_case launcher-unknown-garbage extra fail "launcher: unknown (the device's launchd line for com.apple.SpringBoard cannot be read)" 30 FAKE_LAUNCHER=garbage
+	st_case launcher-unknown-not-running extra fail "launcher: unknown (com.apple.SpringBoard was not running at the start)" 30 FAKE_LAUNCHER=norun
+	# IOS_SIM_LAUNCHER_CRASH_OK=1 lets a crash pass (the line stays), and an unknown too; nothing else does
+	st_case launcher-crash-ok extra ok "launcher: 1 crash(es)" 30 FAKE_LAUNCHER=crash IOS_SIM_LAUNCHER_CRASH_OK=1
+	st_case launcher-unknown-ok extra ok "launcher: unknown (" 30 FAKE_LAUNCHER=qfail IOS_SIM_LAUNCHER_CRASH_OK=1
+	st_case launcher-crash-ok-not-one extra fail "launcher: 1 crash(es)" 30 FAKE_LAUNCHER=crash IOS_SIM_LAUNCHER_CRASH_OK=yes
+	# a run that dies on another failure after the boot still says what its launcher did and deletes its device
+	st_case launcher-line-on-early-failure nocontainer fail "launcher: no crash" 30
+	# only this run's device is asked
+	st_has launcher-no-crash-iphone nogrep state/calls "spawn 11111111-"
+	st_has launcher-no-crash-iphone grep state/calls "simctl spawn AAAAAAAA-"
 	st_case own-device-left leftover fail "is still listed after its delete" 30
 	ST_CMD="run --out @D@/out" st_case run-own-device-left leftover fail "is still listed after its delete" 30
 	st_case create-times-out createhang fail "deleting AAAAAAAA-0000-0000-0000-" 30 IOS_SIM_CREATE_SECONDS=2
@@ -880,6 +938,8 @@ cleanup()
 		stop_pid "$lpid" || true
 	fi
 	if [ -n "$udid" ]; then
+		# a run that stopped early still says what its launcher did (its exit status is already a failure)
+		[ -z "$launcher_booted" ] || launcher_report || true
 		bounded 60 "${tmp:?}/shutdown.out" xcrun simctl shutdown "$udid" || true
 		bounded 60 "${tmp:?}/delete.out" xcrun simctl delete "$udid" || echo "ios-sim: could not delete the device $udid" >&2
 		udid=
@@ -1024,6 +1084,77 @@ print(t[0]["identifier"], rt["identifier"], rt["name"])
 EOF
 ) || die "no device for the run"
 read -r type_id rt_id rt_name <<< "$pick"
+# TASK180: did the launcher of this run's device crash or restart while the run was in progress?
+# The launcher is SpringBoard on iOS and visionOS and PineBoard on tvOS (the label launchd of the
+# device knows it by, found from "simctl spawn <udid> launchctl list" on a throwaway device of each
+# platform, docs/runbook/TASK180.md). The device's own launchd keeps, per job, its pid and the last
+# exit status: a baseline taken once the device has booted and the same read before the device is
+# deleted differ if the launcher exited in between (a new pid, or a last exit status that is not
+# the baseline's: -11 is a SIGSEGV), whatever the engine's log says. One "simctl spawn" on this
+# run's UDID, bounded; nothing on the host is read. Any read that fails is "unknown", never a pass.
+case ${IOS_SIM_SDK:-iphonesimulator} in
+appletvsimulator) launcher_label=com.apple.PineBoard ;;
+*) launcher_label=com.apple.SpringBoard ;;
+esac
+launcher_booted=
+launcher_base=
+launcher_base_why=
+launcher_done=
+launcher_bad=0
+# launcher_state: "<pid> <last exit status>" of the launcher into launcher_cur, or launcher_why
+launcher_state()
+{
+	launcher_cur=
+	launcher_why=
+	bounded 30 "${tmp:?}/launchctl.out" xcrun simctl spawn "$udid" launchctl list || { launcher_why="launchctl list failed in the device"; return 1; }
+	launcher_cur=$(awk -v l="$launcher_label" '$3 == l { print $1, $2; exit }' "${tmp:?}/launchctl.out")
+	[ -n "$launcher_cur" ] || { launcher_why="the device's launchd lists no $launcher_label"; return 1; }
+	printf '%s\n' "$launcher_cur" | grep -E -x '([0-9]+|-) -?[0-9]+' >/dev/null || { launcher_why="the device's launchd line for $launcher_label cannot be read"; launcher_cur=; return 1; }
+	return 0
+}
+# launcher_baseline: once the device has booted
+launcher_baseline()
+{
+	launcher_booted=1
+	if launcher_state; then
+		launcher_base=$launcher_cur
+		case $launcher_base in
+		-\ *) launcher_base=; launcher_base_why="$launcher_label was not running at the start" ;;
+		esac
+	else
+		launcher_base_why=$launcher_why
+	fi
+}
+# launcher_report: the one line, before the device is deleted (once); launcher_bad=1 when it
+# decides against the run: a crash, or unknown, unless IOS_SIM_LAUNCHER_CRASH_OK=1
+launcher_report()
+{
+	local bp bs cp cs line
+	[ -z "$launcher_done" ] || return 0
+	launcher_done=1
+	if [ -z "$launcher_base" ]; then
+		line="launcher: unknown (${launcher_base_why:-no baseline})"
+		launcher_bad=1
+	elif ! launcher_state; then
+		line="launcher: unknown ($launcher_why)"
+		launcher_bad=1
+	else
+		read -r bp bs <<< "$launcher_base"
+		read -r cp cs <<< "$launcher_cur"
+		if [ "$cp" = "$bp" ] && [ "$cs" = "$bs" ]; then
+			line="launcher: no crash"
+		else
+			line="launcher: 1 crash(es): $launcher_label, pid $bp -> $cp, last exit status $cs, seen at $(date -u +%H:%M:%SZ)"
+			launcher_bad=1
+		fi
+	fi
+	echo "ios-sim: $line"
+	if [ "${IOS_SIM_LAUNCHER_CRASH_OK-}" = 1 ] && [ "$launcher_bad" = 1 ]; then
+		echo "ios-sim: IOS_SIM_LAUNCHER_CRASH_OK=1: the launcher line does not fail the run"
+		launcher_bad=0
+	fi
+	return 0
+}
 name="yq2-ios-sim-$$"
 if ! bounded "$create_s" "${tmp:?}/create.out" xcrun simctl create "$name" "$type_id" "$rt_id"; then
 	cat "${tmp:?}/create.out" >&2
@@ -1043,6 +1174,7 @@ list_devices "$out/devices.created" || die "no device list after simctl create"
 udids "$out/devices.created" > "${tmp:?}/udids.created"
 grep -F -x -e "$run_udid" "${tmp:?}/udids.created" >/dev/null || die "this run's device $run_udid is not in the device list taken after simctl create"
 bounded "$boot_s" "$out/boot.log" xcrun simctl bootstatus "$udid" -b || die "the device did not boot (log: $out/boot.log)"
+launcher_baseline
 bounded 60 "${tmp:?}/shot.out" xcrun simctl io "$udid" screenshot ${IOS_SIM_DISPLAY:+"--display=$IOS_SIM_DISPLAY"} "$out/screen.png" || die "simctl io screenshot failed"
 bounded 180 "${tmp:?}/install.out" xcrun simctl install "$udid" "$app" || { cat "${tmp:?}/install.out" >&2; die "simctl install failed"; }
 
@@ -1167,6 +1299,7 @@ if [ "$mode" = run ]; then
 			mkdir -p "$out/frames.$n" && cp "$docs/scrnshot/"* "$out/frames.$n/" 2>/dev/null
 		fi
 	done
+	launcher_report
 	bounded 60 "${tmp:?}/shutdown.out" xcrun simctl shutdown "$udid" || true
 	bounded 60 "${tmp:?}/delete.out" xcrun simctl delete "$udid" || die "could not delete the device $udid"
 	udid=
@@ -1175,6 +1308,7 @@ if [ "$mode" = run ]; then
 	gone=$(comm -23 "${tmp:?}/udids.before" "${tmp:?}/udids.after" | tr '\n' ' ')
 	[ -z "$gone" ] || echo "ios-sim: warning: devices listed before the run are gone after it (not this run's, not a failure): $gone" >&2
 	grep -F -x -e "$run_udid" "${tmp:?}/udids.after" >/dev/null && die "this run's device $run_udid is still listed after its delete"
+	[ "$launcher_bad" = 0 ] || die "the launcher line above fails the run (IOS_SIM_LAUNCHER_CRASH_OK=1 accepts it)"
 	echo "ios-sim: run ok, $n start(s) (artifacts in $out)"
 	exit 0
 fi
@@ -1255,6 +1389,7 @@ tga=$(find "$container" -name 'q2_0000.tga' -type f | head -n 1)
 
 cleanup_device()
 {
+	launcher_report
 	bounded 60 "${tmp:?}/shutdown.out" xcrun simctl shutdown "$udid" || true
 	bounded 60 "${tmp:?}/delete.out" xcrun simctl delete "$udid" || die "could not delete the device $udid"
 	udid=
@@ -1272,6 +1407,7 @@ has() { grep -F -e "$1" "$out/engine.log" >/dev/null; }
 gone=$(comm -23 "${tmp:?}/udids.before" "${tmp:?}/udids.after" | tr '\n' ' ')
 [ -z "$gone" ] || echo "ios-sim: warning: devices listed before the run are gone after it (not this run's, not a failure): $gone" >&2
 grep -F -x -e "$run_udid" "${tmp:?}/udids.after" >/dev/null && bad "this run's device $run_udid is still listed after its delete"
+[ "$launcher_bad" = 0 ] || bad "the launcher line above fails the run (IOS_SIM_LAUNCHER_CRASH_OK=1 accepts it)"
 
 has "Using the linked-in renderer: ref_metal (linked in)" || bad "engine.log does not show the linked-in ref_metal"
 dev=$(grep -E '^Metal device: ' "$out/engine.log" | head -n 1)
