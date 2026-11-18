@@ -876,6 +876,54 @@ frame numbers) with no game content, to try the publishing path.
 refusal with a stand-in uploader; it runs in `scripts/test.sh` as
 `tests/check-evidence.sh` and is skipped when `python3` is missing.
 
+## Ray-tracing variations for a look review
+
+The ray-traced effects of `ref_metal` layer conservatively on the stock lightmap, so their
+default frames barely differ from ray tracing off. `scripts/rt-variations.sh` (TASK173) records
+the same views under a set of named presets and lays them side by side, so the effects can be
+judged by eye:
+
+```sh
+PINS_BASEDIR=/path/to/quake2 scripts/rt-variations.sh run --out /path/outside/every/repo
+scripts/rt-variations.sh plan --views water     # the records a run would make
+scripts/rt-variations.sh selftest               # offline, no engine, no game data
+```
+
+The presets and views are in `scripts/pins/rt-variations.txt`, one line each. A preset is a list
+of `r_rt_*` cvars set on top of a view's base scenario: `off`; each effect alone (dynamic-light
+shadows, sun, ambient occlusion, water reflections) at its defaults and exaggerated; `all` and
+`all-x`; each `r_rt_*_show` debug view; the sun at `r_rt_sunfloor` 0.25, 0.5, 0.75 and 1.0; and
+`preview`, every effect on over a flat light in place of the lightmap (`r_rt_flatlight`, see
+`doc/040_cvarlist.md`), with `flat`, the flat light alone, beside it. The preview has no traced
+bounce light and looks harsh: it shows what the traced terms add without the baked light that
+masks them, and is not a presentation (the lightmap-free mode is TASK174's). A view is a base
+scenario, a demo and a capture cadence, and the capture it shows: a number, or `auto:<preset>`,
+the capture in which that preset differs most from `off`. Views of one base, demo and cadence
+share their records.
+
+`run` records each view's base under each preset with `scripts/pins.sh record metal`, from a
+scratch scenario `scripts/pins/scenarios/rtvar-<view>-<preset>.cfg` (the base's lines, then the
+preset's; git-ignored and removed after its record), with `PINS_SEED` (`--seed`, default `1`)
+and the Metal validation layer on; a record whose log holds a validation message fails the run.
+The records go to the pin store `<out>/store`, and a complete record already there is used again
+unless `--replace` is given, so a run can be split with `--views`. It then writes per view, in
+`<out>/<view>/`:
+
+- `sheet.png`, the contact sheet: every preset's frame of the view's capture, four to a row,
+  each under its name and caption;
+- `clip.png`, the difference clip, an animated PNG: `off`, then each preset, a second each
+  (`--clip-ms`);
+- `full/<NN>-<preset>.png`, the full-size frames;
+
+and `<out>/index-<views>.txt`, the capture each view shows, and per preset its cvars, its mean
+difference from `off` and its record. The `off` preset sets no cvar, so the tool changes no frame:
+its frames are the base scenario's own. The output holds frames made from game data, so `--out`
+is refused inside any git work tree (with `scripts/metalfx-report/mfx.py check-out`) before
+anything is built or run; keep it in a local artifacts folder, never committed or uploaded. The
+selftest runs the real `pins.sh record` with the harness's stub engine in a copy of the scripts;
+it runs in `scripts/test.sh` as `tests/check-rt-variations.sh`. The procedure and the first run
+are in [`docs/runbook/TASK173.md`](../docs/runbook/TASK173.md).
+
 ## The pin arguments
 
 `record` passes four arguments to the engine, `pins_dir`,

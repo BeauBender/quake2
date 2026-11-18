@@ -181,6 +181,9 @@ static const rtg_cvar_t rtg_cvars[] = {
 	{ "r_rt_ao_seed", 0 },
 	/* the AO's development view: drawn only while the AO pass runs (RM_RTAO_Show) */
 	{ "r_rt_ao_show", 0 },
+	/* TASK173's preview grey: it replaces a lightmap sample on the G-buffer raster path, which every
+	   Metal GPU runs, and traces nothing itself; left alone, it does nothing where the path is off */
+	{ "r_rt_flatlight", 0 },
 	/* RT2's G-buffer (TASK54): a raster path every Metal GPU runs, built and pinned on the VM; the
 	   picture the same within one level, and no ray traced */
 	{ "r_rt_gbuffer", 0 },
