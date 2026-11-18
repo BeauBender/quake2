@@ -25,6 +25,7 @@
  */
 
 #include "../ref_shared.h"
+#include "imgsize.h"
 
 // Fix Jennell Jaquays' name in the Quitscreen
 // this is 98x11 pixels, each value an index
@@ -173,7 +174,7 @@ PCX_Decode(const char *name, const byte *raw, int len, byte **pic, byte **palett
 	int *width, int *height, int *bitsPerPixel)
 {
 	const pcx_t *pcx;
-	int full_size;
+	size_t full_size, pixels;
 	int pcx_width, pcx_height, bytes_per_line;
 	qboolean image_issues = false;
 	byte *out, *pix;
@@ -215,7 +216,36 @@ PCX_Decode(const char *name, const byte *raw, int len, byte **pic, byte **palett
 		return;
 	}
 
-	full_size = (pcx_height + 1) * (pcx_width + 1);
+	/* the size in 64 bits against the cap, before any allocation */
+	if (!IMGSIZE_Pixels(pcx_width + 1, pcx_height + 1, &pixels))
+	{
+		Com_Printf("%s: %s has a bad size: %i x %i\n", __func__, name,
+			pcx_width + 1, pcx_height + 1);
+		return;
+	}
+
+	/* the 1-bit path folds one bit per plane into a byte: stock and EGA
+	   files have 1 or 4 planes, and the plane count bounds the decode time */
+	if (pcx->bits_per_pixel == 1 && pcx->color_planes > 8)
+	{
+		Com_Printf("%s: %s has %i planes of 1 bit\n", __func__, name,
+			pcx->color_planes);
+		return;
+	}
+
+	/* a packed row is read up to the byte its width reaches */
+	if ((pcx->bits_per_pixel == 1 ||
+		(pcx->color_planes == 1 &&
+		(pcx->bits_per_pixel == 2 || pcx->bits_per_pixel == 4))) &&
+		!IMGSIZE_PCXRowFits(pcx->bits_per_pixel, pcx_width + 1, bytes_per_line))
+	{
+		Com_Printf("%s: %s has %i bytes a line for %i pixels of %i bits\n",
+			__func__, name, bytes_per_line, pcx_width + 1,
+			pcx->bits_per_pixel);
+		return;
+	}
+
+	full_size = pixels;
 	if ((pcx->color_planes == 3 || pcx->color_planes == 4) &&
 		pcx->bits_per_pixel == 8)
 	{
@@ -501,20 +531,37 @@ GetPCXInfo(const char *origname, int *width, int *height)
 	pcx_t *pcx;
 	byte *raw;
 	char filename[256];
+	int len, pcx_width, pcx_height;
+	size_t pixels;
 
 	FixFileExt(origname, "pcx", filename, sizeof(filename));
 
-	ri.FS_LoadFile(filename, (void **)&raw);
+	len = ri.FS_LoadFile(filename, (void **)&raw);
 
 	if (!raw)
 	{
 		return;
 	}
 
+	/* the sizes are in the header: a shorter file has none */
+	if (len < (int)offsetof(pcx_t, data))
+	{
+		ri.FS_FreeFile(raw);
+		return;
+	}
+
 	pcx = (pcx_t *)raw;
 
-	*width = pcx->xmax + 1;
-	*height = pcx->ymax + 1;
+	/* the real size, as PCX_Decode reads it (the fields are signed
+	   shorts there): a non-positive or over-cap one is none */
+	pcx_width = LittleShort(pcx->xmax) - LittleShort(pcx->xmin) + 1;
+	pcx_height = LittleShort(pcx->ymax) - LittleShort(pcx->ymin) + 1;
+
+	if (IMGSIZE_Pixels(pcx_width, pcx_height, &pixels))
+	{
+		*width = pcx_width;
+		*height = pcx_height;
+	}
 
 	ri.FS_FreeFile(raw);
 
