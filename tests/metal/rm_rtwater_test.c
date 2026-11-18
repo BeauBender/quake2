@@ -47,6 +47,19 @@
 #include "../../src/client/refresh/metal/header/rm_rt.h"
 #include "../../src/client/refresh/metal/common/mtl_matrix.h"
 
+/*
+ * FIX92's mutants, built by hand for its runbook (cc -DRTW_MUTANT=1 or 2):
+ * 1 drops the brush flag (mtl_rtw_brush finds no inline model), 2 drops it
+ * from the step (FIX81's rule, only alias models passed). Each must fail
+ * this test.
+ */
+#if defined(RTW_MUTANT) && (RTW_MUTANT == 1)
+#define mtl_rtw_brush(b, world) ((void)(b), (void)(world), 0)
+#elif defined(RTW_MUTANT) && (RTW_MUTANT == 2)
+#define mtl_rtw_ss_next(hit, alias, brush, from, layer, map) \
+	((void)(brush), mtl_rtw_ws_next((hit), (alias), (from), (layer), (map)))
+#endif
+
 /* src/common/shared/shared.c, linked for rm_pure.c, prints through the engine */
 void
 Com_Printf(const char *msg, ...)
@@ -839,13 +852,31 @@ test_choose_ws(void)
 
 /*
  * TASK158: a face along a scripted reflection ray, nearest first: an
- * alias model's or the map's (the world's, or an inline brush model's),
- * the sky brush or not, and whether the picture shows it at its point.
+ * alias model's or the map's (the world's, or an inline brush model's:
+ * FIX92's model, 0 the world, 1 to 3 an inline model), the sky brush or
+ * not, and whether the picture shows it at its point.
  */
 typedef struct
 {
-	int alias, sky, seen;
+	int alias, sky, seen, model;
 } rtw_face_t;
+
+/* FIX92: the world's instance's first word, as rmb_rt_bind_geometry gives it to the kernel */
+static unsigned rtw_world;
+
+/* FIX92: the first word rmb_rt_frame gives a face's instance: ~0 an alias model's, else its first triangle */
+static unsigned
+rtw_face_word(const rtw_face_t *f)
+{
+	static const unsigned first[4] = { 0u, 40u, 900u, 7u };
+
+	if (f->alias)
+	{
+		return 0xffffffffu;
+	}
+
+	return f->model ? first[f->model & 3] : rtw_world;
+}
 
 /* an instance's mask as rmb_rt_frame gives it (no light carried, not the gun nor the viewer's model) */
 static unsigned
@@ -924,10 +955,10 @@ rtw_trace_ws(const rtw_face_t *f, int n, int sky_ok, int *casts)
 static void
 test_ws_models(void)
 {
-	static const rtw_face_t hidden_model = { 1, 0, 0 }, seen_model = { 1, 0, 1 };
-	static const rtw_face_t hidden_wall = { 0, 0, 0 }, seen_wall = { 0, 0, 1 };
-	static const rtw_face_t seen_sky = { 0, 1, 1 }, hidden_sky = { 0, 1, 0 };
-	const rtw_face_t ends[5] = { hidden_wall, seen_wall, seen_sky, hidden_sky, { 0, 0, 0 } };
+	static const rtw_face_t hidden_model = { 1, 0, 0, 0 }, seen_model = { 1, 0, 1, 0 };
+	static const rtw_face_t hidden_wall = { 0, 0, 0, 0 }, seen_wall = { 0, 0, 1, 0 };
+	static const rtw_face_t seen_sky = { 0, 1, 1, 0 }, hidden_sky = { 0, 1, 0, 0 };
+	const rtw_face_t ends[5] = { hidden_wall, seen_wall, seen_sky, hidden_sky, { 0, 0, 0, 0 } };
 	rtw_face_t f[16];
 	int k, i, casts, ok = 1, ok_casts = 1;
 
@@ -975,11 +1006,22 @@ test_ws_models(void)
 	CHECK(rtw_trace_ws(&hidden_model, 1, 1, &casts) == (MTL_RTW_SKY | MTL_RTW_WS));
 	CHECK(rtw_trace_ws(&hidden_model, 1, 0, &casts) == MTL_RTW_MISS);
 
-	/* a hidden door is a map face: shaded where it is, the wall behind it not reached */
+	/* a hidden door is a map face: shaded where it is, the wall behind it not reached (FIX92 leaves 1 so) */
 	f[0] = hidden_wall;
 	f[1] = seen_wall;
 	CHECK(rtw_trace_ws(f, 2, 1, &casts) == (MTL_RTW_LIT | MTL_RTW_WS));
 	CHECK(casts == 1);
+
+	for (int model = 1; model <= 3; model++)
+	{
+		const rtw_face_t door = { 0, 0, 0, model };
+
+		f[0] = f[1] = door;
+		f[2] = seen_wall;
+		CHECK(rtw_trace_ws(f, 3, 1, &casts) == (MTL_RTW_LIT | MTL_RTW_WS));
+		CHECK(casts == 1);
+		CHECK(rtw_trace_ws(f, 3, 0, &casts) == (MTL_RTW_LIT | MTL_RTW_WS));
+	}
 
 	/* a hidden model, its two faces, in front of a hidden wall: the wall in world space */
 	f[0] = f[1] = hidden_model;
@@ -1052,7 +1094,8 @@ test_ws_models(void)
  * TASK58's choice at each hit (mtl_rtw_choose, no world-space shading: a
  * face the picture does not show is 50 units off at its pixel, the sky or
  * nothing met off the screen) and mtl_rtw_ss_next's step. casts counts the
- * intersections.
+ * intersections. FIX92: the alias and brush flags from the hit instance's
+ * first word, as the kernel reads them (0 when nothing is met).
  */
 static unsigned
 rtw_trace_ss(const rtw_face_t *f, int n, int *casts)
@@ -1065,7 +1108,9 @@ rtw_trace_ss(const rtw_face_t *f, int n, int *casts)
 	for (layer = 0; layer < 64; layer++)
 	{
 		const int kind = (at >= n) ? 0 : f[at].sky ? 1 : 2;
-		const int alias = (kind == 2) && f[at].alias;
+		const unsigned b = (at >= n) ? 0u : rtw_face_word(&f[at]);
+		const int alias = b == 0xffffffffu;
+		const int brush = mtl_rtw_brush(b, rtw_world);
 		const int seen = (kind != 0) && f[at].seen;
 		int step;
 
@@ -1078,7 +1123,7 @@ rtw_trace_ss(const rtw_face_t *f, int n, int *casts)
 			from = mtl_rtw_choose(kind, seen, seen ? MTL_GB_MAT_SKY : MTL_GB_MAT_NONE, -1.0f, 0.0f);
 		}
 
-		step = mtl_rtw_ss_next(kind, alias, from, layer, map);
+		step = mtl_rtw_ss_next(kind, alias, brush, from, layer, map);
 
 		if (step == MTL_RTW_NEXT_STOP)
 		{
@@ -1103,29 +1148,44 @@ rtw_trace_ss(const rtw_face_t *f, int n, int *casts)
 static void
 test_ss_models(void)
 {
-	static const rtw_face_t hidden_model = { 1, 0, 0 }, seen_model = { 1, 0, 1 };
-	static const rtw_face_t hidden_wall = { 0, 0, 0 }, seen_wall = { 0, 0, 1 };
-	static const rtw_face_t seen_sky = { 0, 1, 1 }, hidden_sky = { 0, 1, 0 };
-	const rtw_face_t ends[5] = { hidden_wall, seen_wall, seen_sky, hidden_sky, { 0, 0, 0 } };
+	static const rtw_face_t hidden_model = { 1, 0, 0, 0 }, seen_model = { 1, 0, 1, 0 };
+	static const rtw_face_t hidden_wall = { 0, 0, 0, 0 }, seen_wall = { 0, 0, 1, 0 };
+	static const rtw_face_t seen_sky = { 0, 1, 1, 0 }, hidden_sky = { 0, 1, 0, 0 };
+	const rtw_face_t ends[5] = { hidden_wall, seen_wall, seen_sky, hidden_sky, { 0, 0, 0, 0 } };
 	const unsigned froms[5] = { MTL_RTW_MISS, MTL_RTW_LIT, MTL_RTW_SKY, MTL_RTW_LIT | MTL_RTW_WS, MTL_RTW_SKY | MTL_RTW_WS };
 	rtw_face_t f[16];
 	int k, i, casts, ok = 1, ok_casts = 1, same = 1;
 
+	rtw_world = 0u;
+
 	/* the step: a hidden model is passed, after MTL_RTW_LAYERS of its faces with the map's mask alone */
-	CHECK(mtl_rtw_ss_next(2, 1, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_PASS);
-	CHECK(mtl_rtw_ss_next(2, 1, MTL_RTW_MISS, MTL_RTW_LAYERS - 2, 0) == MTL_RTW_NEXT_PASS);
-	CHECK(mtl_rtw_ss_next(2, 1, MTL_RTW_MISS, MTL_RTW_LAYERS - 1, 0) == MTL_RTW_NEXT_MAP);
+	CHECK(mtl_rtw_ss_next(2, 1, 0, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_PASS);
+	CHECK(mtl_rtw_ss_next(2, 1, 0, MTL_RTW_MISS, MTL_RTW_LAYERS - 2, 0) == MTL_RTW_NEXT_PASS);
+	CHECK(mtl_rtw_ss_next(2, 1, 0, MTL_RTW_MISS, MTL_RTW_LAYERS - 1, 0) == MTL_RTW_NEXT_MAP);
 
-	/* every other choice stands: a model the picture shows, a map face (a hidden one too), the sky, nothing */
-	CHECK(mtl_rtw_ss_next(2, 1, MTL_RTW_LIT, 0, 0) == MTL_RTW_NEXT_STOP);
-	CHECK(mtl_rtw_ss_next(2, 0, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_STOP);
-	CHECK(mtl_rtw_ss_next(2, 0, MTL_RTW_LIT, 0, 0) == MTL_RTW_NEXT_STOP);
-	CHECK(mtl_rtw_ss_next(1, 0, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_STOP);
-	CHECK(mtl_rtw_ss_next(1, 0, MTL_RTW_SKY, 0, 0) == MTL_RTW_NEXT_STOP);
-	CHECK(mtl_rtw_ss_next(0, 0, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_STOP);
-	CHECK(mtl_rtw_ss_next(2, 1, MTL_RTW_MISS, 0, 1) == MTL_RTW_NEXT_STOP);
+	/* FIX92: so is a hidden inline brush model (a door, a plat, a lift), counted towards the same bound */
+	CHECK(mtl_rtw_ss_next(2, 0, 1, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_PASS);
+	CHECK(mtl_rtw_ss_next(2, 0, 1, MTL_RTW_MISS, MTL_RTW_LAYERS - 2, 0) == MTL_RTW_NEXT_PASS);
+	CHECK(mtl_rtw_ss_next(2, 0, 1, MTL_RTW_MISS, MTL_RTW_LAYERS - 1, 0) == MTL_RTW_NEXT_MAP);
 
-	/* both settings pass over exactly the same models, at every layer */
+	/* every other choice stands: a model the picture shows, a world face (a hidden one too), the sky, nothing */
+	CHECK(mtl_rtw_ss_next(2, 1, 0, MTL_RTW_LIT, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ss_next(2, 0, 1, MTL_RTW_LIT, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ss_next(2, 0, 0, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ss_next(2, 0, 0, MTL_RTW_LIT, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ss_next(1, 0, 0, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ss_next(1, 0, 1, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ss_next(1, 0, 0, MTL_RTW_SKY, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ss_next(0, 0, 0, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ss_next(0, 0, 1, MTL_RTW_MISS, 0, 0) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ss_next(2, 1, 0, MTL_RTW_MISS, 0, 1) == MTL_RTW_NEXT_STOP);
+	CHECK(mtl_rtw_ss_next(2, 0, 1, MTL_RTW_MISS, 0, 1) == MTL_RTW_NEXT_STOP);
+
+	/*
+	 * Both settings pass over exactly the same alias models, at every
+	 * layer; FIX92: at 0 a brush model's face is passed as an alias model's
+	 * is, at 1 (mtl_rtw_ws_next, unchanged) it is a map face.
+	 */
 	for (int hit = 0; hit < 3; hit++)
 	{
 		for (int alias = 0; alias < 2; alias++)
@@ -1136,8 +1196,14 @@ test_ss_models(void)
 				{
 					for (int map = 0; map < 2; map++)
 					{
-						if (mtl_rtw_ss_next(hit, alias, froms[fi], layer, map) !=
+						if (mtl_rtw_ss_next(hit, alias, 0, froms[fi], layer, map) !=
 							mtl_rtw_ws_next(hit, alias, froms[fi], layer, map))
+						{
+							same = 0;
+						}
+
+						if (mtl_rtw_ss_next(hit, alias, 1, froms[fi], layer, map) !=
+							mtl_rtw_ws_next(hit, 1, froms[fi], layer, map))
 						{
 							same = 0;
 						}
@@ -1148,6 +1214,18 @@ test_ss_models(void)
 	}
 
 	CHECK(same);
+
+	/* FIX92: the brush flag from the instance's first word: not an alias model's (~0), not the world's */
+	CHECK(!mtl_rtw_brush(0xffffffffu, 0u));
+	CHECK(!mtl_rtw_brush(0u, 0u));
+	CHECK(mtl_rtw_brush(1u, 0u));
+	CHECK(mtl_rtw_brush(40u, 0u));
+	CHECK(!mtl_rtw_brush(500u, 500u));
+	CHECK(mtl_rtw_brush(0u, 500u));
+	CHECK(mtl_rtw_brush(900u, 500u));
+	CHECK(!mtl_rtw_brush(0xffffffffu, 500u));
+	CHECK(mtl_rtw_brush(0u, 0xffffffffu));
+	CHECK(!mtl_rtw_brush(0xffffffffu, 0xffffffffu));
 
 	/* what has nothing in front of it is TASK58's choice, in one cast */
 	CHECK(rtw_trace_ss(&seen_wall, 1, &casts) == MTL_RTW_LIT);
@@ -1161,11 +1239,70 @@ test_ss_models(void)
 	CHECK(rtw_trace_ss(f, 0, &casts) == MTL_RTW_MISS);
 	CHECK(casts == 1);
 
-	/* a hidden door is a map face: it stops the ray (no reflection, TASK58's), the wall behind it not reached */
+	/* a hidden world face stops the ray (no reflection, TASK58's), the wall behind it not reached */
 	f[0] = hidden_wall;
 	f[1] = seen_wall;
 	CHECK(rtw_trace_ss(f, 2, &casts) == MTL_RTW_MISS);
 	CHECK(casts == 1);
+
+	/*
+	 * FIX92: a hidden door is passed, so the wall behind it gives the
+	 * reflection, not a hole in the door's outline: one face, or its two
+	 * (the rays cull none). So are a plat and a lift (inline models of
+	 * their own), with the world's first triangle 0 or not.
+	 */
+	for (unsigned wi = 0; wi < 2; wi++)
+	{
+		rtw_world = wi ? 500u : 0u;
+
+		for (int model = 1; model <= 3; model++)
+		{
+			const rtw_face_t door = { 0, 0, 0, model }, seen_door = { 0, 0, 1, model };
+
+			f[0] = door;
+			f[1] = seen_wall;
+			CHECK(rtw_trace_ss(f, 2, &casts) == MTL_RTW_LIT);
+			CHECK(casts == 2);
+
+			f[0] = f[1] = door;
+			f[2] = seen_wall;
+			CHECK(rtw_trace_ss(f, 3, &casts) == MTL_RTW_LIT);
+			CHECK(casts == 3);
+
+			/* in front of the sky the picture shows: the sky; of a hidden wall: none, as the wall alone */
+			f[2] = seen_sky;
+			CHECK(rtw_trace_ss(f, 3, &casts) == MTL_RTW_SKY);
+			f[2] = hidden_wall;
+			CHECK(rtw_trace_ss(f, 3, &casts) == MTL_RTW_MISS);
+			CHECK(rtw_trace_ss(f, 2, &casts) == MTL_RTW_MISS);
+			CHECK(casts == 3);
+
+			/* a door the picture shows still stops the ray: its reflection, in one cast */
+			f[0] = seen_door;
+			f[1] = seen_wall;
+			CHECK(rtw_trace_ss(f, 2, &casts) == MTL_RTW_LIT);
+			CHECK(casts == 1);
+			f[1] = hidden_wall;
+			CHECK(rtw_trace_ss(f, 2, &casts) == MTL_RTW_LIT);
+			CHECK(casts == 1);
+
+			/* a hidden door in front of one the picture shows (a plat over a lift): the shown one */
+			f[0] = f[1] = door;
+			f[2] = (rtw_face_t){ 0, 0, 1, 1 + model % 3 };
+			f[3] = hidden_wall;
+			CHECK(rtw_trace_ss(f, 4, &casts) == MTL_RTW_LIT);
+			CHECK(casts == 3);
+
+			/* a hidden model behind a hidden door, before the wall: the wall */
+			f[0] = f[1] = door;
+			f[2] = f[3] = hidden_model;
+			f[4] = seen_wall;
+			CHECK(rtw_trace_ss(f, 5, &casts) == MTL_RTW_LIT);
+			CHECK(casts == MTL_RTW_LAYERS + 1);
+		}
+	}
+
+	rtw_world = 0u;
 
 	/* the card's case: a hidden model, its two faces, in front of a wall the picture shows: the wall, no hole */
 	f[0] = f[1] = hidden_model;
@@ -1256,6 +1393,104 @@ test_ss_models(void)
 	CHECK(rtw_trace_ss(f, 6, &casts) == MTL_RTW_MISS);
 	CHECK(casts == MTL_RTW_LAYERS + 1);
 	CHECK(rtw_trace_ws(f, 6, 1, &casts) == (MTL_RTW_LIT | MTL_RTW_WS));
+
+	/*
+	 * FIX92: the bound with brush models. Hidden doors, plats and lifts
+	 * count towards the same four faces, so a stack of them is passed in at
+	 * most MTL_RTW_LAYERS + 1 casts. The last cast's mask (the map's) still
+	 * holds the brush models, so one past the fourth face is met: shown,
+	 * its reflection (as behind four hidden alias faces before FIX92);
+	 * hidden, none. At 1 the first hidden door is shaded where it is.
+	 */
+	{
+		const rtw_face_t door = { 0, 0, 0, 1 }, plat = { 0, 0, 0, 2 }, lift = { 0, 0, 0, 3 };
+		const rtw_face_t seen_lift = { 0, 0, 1, 3 };
+		const rtw_face_t kinds[4] = { hidden_model, door, plat, lift };
+		int mixed = 1, mixed_casts = 1;
+
+		/* a hidden door and a hidden plat (four faces) before a wall the picture shows: the wall, in five casts */
+		f[0] = f[1] = door;
+		f[2] = f[3] = plat;
+		f[4] = seen_wall;
+		CHECK(rtw_trace_ss(f, 5, &casts) == MTL_RTW_LIT);
+		CHECK(casts == MTL_RTW_LAYERS + 1);
+
+		/* and a hidden lift past the bound: the last cast meets it, no reflection */
+		f[4] = f[5] = lift;
+		f[6] = seen_wall;
+		CHECK(rtw_trace_ss(f, 7, &casts) == MTL_RTW_MISS);
+		CHECK(casts == MTL_RTW_LAYERS + 1);
+
+		/* at 1 the first hidden door is a map face, shaded where it is */
+		CHECK(rtw_trace_ws(f, 7, 1, &casts) == (MTL_RTW_LIT | MTL_RTW_WS));
+		CHECK(casts == 1);
+
+		/* a lift the picture shows past the bound: its reflection, behind four hidden alias faces too */
+		f[4] = seen_lift;
+		f[5] = hidden_wall;
+		CHECK(rtw_trace_ss(f, 6, &casts) == MTL_RTW_LIT);
+		CHECK(casts == MTL_RTW_LAYERS + 1);
+
+		for (i = 0; i < 4; i++)
+		{
+			f[i] = hidden_model;
+		}
+
+		CHECK(rtw_trace_ss(f, 6, &casts) == MTL_RTW_LIT);
+		CHECK(casts == MTL_RTW_LAYERS + 1);
+
+		/* every mix of up to MTL_RTW_LAYERS hidden faces (alias, door, plat, lift) before any end: the end alone, k + 1 casts */
+		for (unsigned wi = 0; wi < 2; wi++)
+		{
+			rtw_world = wi ? 500u : 0u;
+
+			for (k = 0; k <= MTL_RTW_LAYERS; k++)
+			{
+				int combos = 1;
+
+				for (i = 0; i < k; i++)
+				{
+					combos *= 4;
+				}
+
+				for (int c = 0; c < combos; c++)
+				{
+					int code = c;
+
+					for (i = 0; i < k; i++)
+					{
+						f[i] = kinds[code % 4];
+						code /= 4;
+					}
+
+					for (unsigned e = 0; e < 5; e++)
+					{
+						const int n = (e == 4) ? k : k + 1;
+						int alone_casts;
+						unsigned with, alone;
+
+						f[k] = ends[e];
+						with = rtw_trace_ss(f, n, &casts);
+						alone = rtw_trace_ss(&f[k], n - k, &alone_casts);
+
+						if (with != alone)
+						{
+							mixed = 0;
+						}
+
+						if ((casts != k + 1) || (alone_casts != 1))
+						{
+							mixed_casts = 0;
+						}
+					}
+				}
+			}
+		}
+
+		rtw_world = 0u;
+		CHECK(mixed);
+		CHECK(mixed_casts);
+	}
 }
 
 /* TASK158: the shading record, the barycentrics, the mip level, the list */
