@@ -84,6 +84,27 @@ qboolean GLimp_OwnScreenOnly(const char *driver, int *fullscreen, float *r_mode)
 #define GLIMP_SCREEN_INTS 6
 qboolean GLimp_ScreenChanged(const int *made, const int *now);
 
+/* What GLimp_ScreenEvent does with the screen as measured now: nothing, a vid_restart, or the live resize (TASK172). */
+#define GLIMP_SCREEN_IGNORE 0
+#define GLIMP_SCREEN_RESTART 1
+#define GLIMP_SCREEN_LIVE 2
+int GLimp_ScreenAction(const int *made, const int *now, int dw, int dh);
+
+/*
+ * TASK172: the interface orientations a test can ask the window scene for
+ * (the ios_orientation command): GLimp_OrientationBits() turns a name
+ * (portrait, portraitupsidedown, landscapeleft, landscaperight, landscape,
+ * all) into these bits, 0 for any other string.
+ */
+#define GLIMP_ORIENT_PORTRAIT 1
+#define GLIMP_ORIENT_UPSIDEDOWN 2
+#define GLIMP_ORIENT_LANDSCAPELEFT 4
+#define GLIMP_ORIENT_LANDSCAPERIGHT 8
+int GLimp_OrientationBits(const char *name);
+
+/* iOS only (glimp_sdl3.c): asks the window scene for the orientations in bits; the system grants only those the app supports. */
+void GLimp_RequestOrientation(int bits);
+
 /* Relative mouse mode requests: none to turn it on without a mouse on uikit; a failure is reported once per run of failures. */
 qboolean GLimp_RelativeMouseWanted(const char *driver, qboolean have_mouse, qboolean grab);
 qboolean GLimp_RelativeMouseReport(qboolean ok, qboolean *reported);

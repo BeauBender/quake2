@@ -118,6 +118,26 @@ RM_SkyBox(int *texnums, float *rotate, float *axis)
 	return ok;
 }
 
+/* TASK56 (RT4): the sky faces' mean colours in RM_SetSky's order (rt, bk, lf, ft, up, dn), for sky_color */
+int
+RM_SkyMeans(float (*means)[3], int *have)
+{
+	int i, ok = 1;
+
+	for (i = 0; i < 6; i++)
+	{
+		const image_t *image = sky_images[i];
+
+		have[i] = image && (image != r_notexture) && (image->texnum > 0) && (image->type == it_sky);
+		means[i][0] = have[i] ? image->mean[0] : 0;
+		means[i][1] = have[i] ? image->mean[1] : 0;
+		means[i][2] = have[i] ? image->mean[2] : 0;
+		ok = ok && have[i];
+	}
+
+	return ok;
+}
+
 /* from gl1_warp.c, R_ClearSkyBox */
 void
 RM_SkyClear(void)
