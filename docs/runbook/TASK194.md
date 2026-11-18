@@ -120,3 +120,22 @@ r_rt_water_normal "0.1"`, `set r_rt_water_reflect "0.55"`). The second start, wi
 
 and the four passes allocated at the map's first frames (`rt ao`, `rt sun`, `rt water`, `rt shadows
 2560x1440: 59506688 bytes allocated`), teardown `rt 124/124`.
+
+## The menu walk with the screen (TASK23 slice 2a)
+
+The walk (`menu_probe walk`, a build with `-DYQ2_INPUT_PROBE`, see TASK23.md) visits every screen. Measured on
+the merge of main (`053a872d`) into this branch, `c95c017e`, in the macOS client built from clean with the
+probe (`make DEBUG=1`, so the release objects stay without it), with `+menu_probe walk` on the command line and
+the licensed data read-only (`-datadir`, `-portable`):
+
+- `vid_renderer metal`: `menu_probe: screen 22 'm_banner_video' at depth 3, 13 items` is the ray-tracing screen
+  (the video menu is screen 20, renderer options screen 21), then `walk ok: 24 screens, 971 key presses, 0
+  failures`. The entry is live; the only greyed item of the walk is VideoToolbox ML's 2x.
+- `vid_renderer soft`: `menu_probe: item 11 'ray tracing...' of 'm_banner_video' is greyed: needs the Metal
+  renderer`, then `walk ok: 23 screens, 929 key presses, 0 failures`. 23 screens is the count without the new one.
+- The mutant that drops the entry from the video menu's item list (`Menu_AddItem(&s_opengl_menu, &s_rt_action)`
+  deleted) leaves the walk green at 23 screens, so the walk alone does not guard the entry. The check that does:
+  `test_ray_tracing_entry_is_always_present` in `tests/menu/videomenu_test.c` (commit `2d92d757`), the entry live
+  under Metal, greyed with "needs the Metal renderer" under soft. On the mutant `tests/check-video-menu.sh` prints
+  `FAIL: no menu item named "ray tracing..."` and `check-video-menu: the host test videomenu_test failed`; on the
+  branch, `videomenu_test: 3035 checks, 0 failed`.
