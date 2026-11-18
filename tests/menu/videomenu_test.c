@@ -942,6 +942,24 @@ test_screen_items(void)
 #endif
 }
 
+/* TASK194: the "ray tracing..." entry is in the video menu under every
+   renderer, never hidden: greyed with its reason off Metal, live on Metal. */
+static void
+test_ray_tracing_entry_is_always_present(void)
+{
+	Open("metal", "7");
+	CHECK(main_menu != NULL, "the video menu did not open");
+	menu = main_menu;
+	CHECK(!Greyed("ray tracing..."), "the ray tracing entry is greyed under Metal");
+
+	Open("soft", "7");
+	menu = main_menu;
+	CHECK(Greyed("ray tracing..."), "the ray tracing entry is not greyed off Metal");
+	CHECK(Item("ray tracing...")->statusbar &&
+		strstr(Item("ray tracing...")->statusbar, "needs the Metal renderer"),
+		"the ray tracing entry has no reason off Metal");
+}
+
 int
 main(void)
 {
@@ -962,6 +980,7 @@ main(void)
 	test_ao_items_apply();
 	test_colorspace_item();
 	test_the_banner_is_clear_of_the_items();
+	test_ray_tracing_entry_is_always_present();
 
 	printf("videomenu_test: %d checks, %d failed\n", checks, failed);
 
