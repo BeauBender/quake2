@@ -337,7 +337,7 @@ bootstatus|install|shutdown) ;;
 spawn)
 	# simctl spawn <udid> launchctl list (TASK180): the device's launchd, "PID Status Label" per job, of
 	# this run's device only; FAKE_LAUNCHER picks the outcome: the first call is the baseline, later
-	# ones are the check: crash (a new pid, last exit status -11), crashdead (no pid, -11), crashstatus
+	# ones are the check: crash (a new pid, last exit status -11), restart (a new pid, status 0), crashdead (no pid, -11), crashstatus
 	# (the same pid, a new status), qfail (the check cannot query), qfailbase (the baseline cannot),
 	# nolabel (the launcher is not listed), garbage (a line that cannot be read), norun (not running
 	# at the baseline)
@@ -352,6 +352,7 @@ spawn)
 		crash) [ "$n" -gt 1 ] && { lp=200; ls=-11; } ;;
 		crashdead) [ "$n" -gt 1 ] && { lp=-; ls=-11; } ;;
 		crashstatus) [ "$n" -gt 1 ] && ls=-11 ;;
+		restart) [ "$n" -gt 1 ] && lp=200 ;;
 		qfail) [ "$n" -gt 1 ] && { echo "fake xcrun: the device is not booted" >&2; exit 1; } ;;
 		qfailbase) [ "$n" -eq 1 ] && { echo "fake xcrun: the device is not booted" >&2; exit 1; } ;;
 		nolabel) lab=com.apple.other ;;
@@ -809,6 +810,7 @@ EOF
 	ST_CMD="run --out @D@/out" st_case launcher-run-unknown extra fail "launcher: unknown (the device's launchd lists no com.apple.SpringBoard)" 30 FAKE_LAUNCHER=nolabel
 	# a crash by its other signs: no pid, or the same pid with a new status
 	st_case launcher-crash-no-pid extra fail "pid 100 -> -, last exit status -11" 30 FAKE_LAUNCHER=crashdead
+	st_case launcher-crash-new-pid-clean-exit extra fail "pid 100 -> 200, last exit status 0" 30 FAKE_LAUNCHER=restart
 	st_case launcher-crash-new-status extra fail "launcher: 1 crash(es)" 30 FAKE_LAUNCHER=crashstatus
 	# the baseline that cannot be read, a line that cannot be read, a launcher not running at the start
 	st_case launcher-unknown-baseline extra fail "launcher: unknown (launchctl list failed in the device)" 30 FAKE_LAUNCHER=qfailbase
