@@ -68,3 +68,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK124](../runbook/TASK124.md): upscale_textures takes a backend: scale2x, or MetalFX's spatial scaler on macOS (decision 0012)
 - [TASK162](../runbook/TASK162.md): water reflections mark their pixels in the G-buffer raster
 - [TASK161](../runbook/TASK161.md): ref_metal and the shim print presented frames a second; presented fps is the headline metric of the gl1-metal vsync0 bench cases
+- [TASK23](../runbook/TASK23.md): the tvOS simulator build boots to the main menu and loads base1; the guarded iOS APIs and the game-data options on tvOS
