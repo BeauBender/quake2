@@ -19,7 +19,8 @@
 # scratch directory removed at exit.
 #
 # Each busy loop is a shell that spins while the harness's pid is alive
-# (`while kill -0 <harness>; do :; done`), so none outlives the harness
+# (`while kill -0 <harness>`, with a round of arithmetic between two
+# checks), so none outlives the harness
 # however it ends, SIGKILL included. Its pid is recorded at start and
 # written to $BENCH_LOAD_PIDS when that is set ($BENCH_LOAD_PIDS.start gets
 # each pid as it is recorded). The EXIT trap kills those pids and no other,
@@ -163,7 +164,7 @@ if [ "${1:-}" = --selftest ]; then
 	else
 		echo "$me: selftest run-int: the measured command has INT ignored: $(tr '\n' '|' < "${st:?}/out")"; fails=1
 	fi
-	mutant plain-yes "sh -c 'while kill -0 \"\$1\" 2> /dev/null; do :; done' sh \"\$\$\"" 'yes' sigkill KILL 'outlived the harness'
+	mutant plain-yes 'sh -c "$spin" sh "$$"' 'yes' sigkill KILL 'outlived the harness'
 	if [ -n "$INT_OK" ]; then
 		mutant int-ignored "trap 'exit 130' INT" "trap '' INT" ctrl-c INT 'did not exit in 30 s'
 	else
@@ -230,11 +231,17 @@ if [ -z "$logs" ]; then
 fi
 mkdir -p "${logs:?}" || exit 1
 
+# A busy loop: spins while the harness's pid ($1) is alive. The kill -0
+# comes once per 10000 rounds of arithmetic: 24 loops that called it back
+# to back (`do :; done`) left a 12-core host at a load average near 4, not
+# 24 (FIX126). The rounds take well under a second, so a loop still ends
+# within one once the harness is gone.
+spin='while kill -0 "$1" 2> /dev/null; do i=0; while [ "$i" -lt 10000 ]; do i=$((i + 1)); done; done'
 [ -z "${BENCH_LOAD_PIDS:-}" ] || : > "$BENCH_LOAD_PIDS.start"
 i=0
 while [ "$i" -lt $((cores * per)) ]; do
 	flag_traps
-	sh -c 'while kill -0 "$1" 2> /dev/null; do :; done' sh "$$" < /dev/null > /dev/null 2>&1 &
+	sh -c "$spin" sh "$$" < /dev/null > /dev/null 2>&1 &
 	burners="$burners $!"
 	exit_traps
 	[ -z "$stop" ] || exit "$stop"
