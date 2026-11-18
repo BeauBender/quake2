@@ -20,7 +20,9 @@
 # unreadable name fails closed (YQ2_IDENTITY_TEST_TOOL), that a user name
 # equal to origin's GitHub owner is skipped with a note that does not print
 # it, and that another user name is not skipped even when the home ends in
-# it. Nothing in the repository is written.
+# it. The same cases run again in a scratch repository whose origin names
+# this host's login as its owner, so a host whose login is the owner handle
+# (the M6 host) is tested on every host. Nothing in the repository is written.
 #
 # Usage: tests/check-identity-env.sh
 set -eu
@@ -126,8 +128,19 @@ shim() { # $1 = command, $2 = what it prints ("" = fails)
 	chmod +x "$tmp/bin/$1"
 }
 gate() { # $1 = label, $2 = wanted status, $3 = text the output must hold, [$4 = HOME]
+	# HOME defaults to one ending in the real login, as a real run has: the
+	# check's owner-handle skip of the real user name needs that (home_is), so
+	# on a host whose login is origin's owner handle any other HOME makes the
+	# real name a hit in the tree, whatever the case tests.
+	# $chk: the check to run, tests/check-no-local-identity.sh unless the
+	# owner-handle host fixture below names its copy. That copy runs with the
+	# git environment unset, so it scans its own repository.
 	rc=0
-	PATH="$tmp/bin:$PATH" HOME="${4:-/zzqno""home}" tests/check-no-local-identity.sh > "$tmp/out" 2>&1 || rc=$?
+	if [ -n "${chk:-}" ]; then
+		( unset $(git rev-parse --local-env-vars); PATH="$tmp/bin:$PATH" HOME="${4:-$hhome}" "$chk" ) > "$tmp/out" 2>&1 || rc=$?
+	else
+		PATH="$tmp/bin:$PATH" HOME="${4:-$hhome}" tests/check-no-local-identity.sh > "$tmp/out" 2>&1 || rc=$?
+	fi
 	if [ "$rc" -ne "$2" ] || ! grep -q "$3" "$tmp/out"; then
 		echo "$me: FAIL: $1: status $rc, wanted $2 and \"$3\"; its output:"
 		redact < "$tmp/out"
@@ -160,8 +173,16 @@ YQ2_IDENTITY_TEST_TOOL=user-empty
 gate "user name unreadable" 1 "cannot read the local user name"
 unset YQ2_IDENTITY_TEST_TOOL
 # A user name that is not origin's owner, with a home ending in it: nothing is
-# skipped, so no note (the note needs owner_is as well as home_is).
-gate "a user name that is not the owner, home ending in it" 0 "check-no-local-identity: ok" "/zzqno""home/zzqno""body"
+# skipped, so no note (the note needs owner_is as well as home_is). That home
+# does not end in the real login, so where the login is origin's owner handle
+# the real name is word-tested, and the tree holds it: the run reports hits.
+owner=$(git remote get-url origin 2>/dev/null | sed -nE 's#^.*github\.com[:/]([A-Za-z0-9-]+)/[^/]+$#\1#p') || owner=
+login=$(/usr/bin/id -un 2>/dev/null || true)
+if [ -n "$owner" ] && [ "$(printf '%s' "$login" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$owner" | tr 'A-Z' 'a-z')" ]; then
+	gate "a user name that is not the owner, home ending in it (the login is the owner)" 1 "tracked files contain this machine's identity" "/zzqno""home/zzqno""body"
+else
+	gate "a user name that is not the owner, home ending in it" 0 "check-no-local-identity: ok" "/zzqno""home/zzqno""body"
+fi
 if grep -q "skipped" "$tmp/out"; then
 	echo "$me: FAIL: a user name that is not the owner, home ending in it: the skip note was printed"
 	fails=1
@@ -170,7 +191,6 @@ fi
 # component of the home path: the user-name word test is skipped and a note
 # says so, without the value. When origin names no GitHub owner these tests
 # are not run, and a line says so.
-owner=$(git remote get-url origin 2>/dev/null | sed -nE 's#^.*github\.com[:/]([A-Za-z0-9-]+)/[^/]+$#\1#p') || owner=
 if [ -n "$owner" ]; then
 	names "zzqno""host" "$owner"
 	gate "the user name is the owner handle" 0 "the user-name word test is skipped" "/zzqno""home/$owner"
@@ -179,7 +199,7 @@ if [ -n "$owner" ]; then
 		fails=1
 	fi
 	# A home path that does not end in the user name: nothing is skipped.
-	gate "the owner handle, home elsewhere" 1 "tracked files contain this machine's identity"
+	gate "the owner handle, home elsewhere" 1 "tracked files contain this machine's identity" "/zzqno""home"
 	if grep -q "skipped" "$tmp/out"; then
 		echo "$me: FAIL: the owner handle, home elsewhere: the skip note was printed"
 		fails=1
@@ -187,6 +207,59 @@ if [ -n "$owner" ]; then
 else
 	echo "$me: not run: the owner-handle note tests (origin names no GitHub owner)"
 fi
+
+# A host whose login is origin's GitHub owner handle (the M6 host's case), made
+# on any host: a scratch repository whose origin names the login as its owner
+# and whose one tracked file holds it, both built at run time and never
+# printed. The check copied there scans that repository. The login is the
+# real one, read by absolute path like the check reads it ($login, above).
+case $login in
+'' | ? | ?? | *[!A-Za-z0-9-]*)
+	# the check skips a word shorter than 3 characters, so such a login is not tested
+	echo "$me: not run: the owner-handle host tests (the login is not a GitHub handle of 3 or more characters)"
+	;;
+*)
+	# The fixture's one tracked file holds the login alone; a host name found
+	# in it would be a hit too, so then the fixture cannot judge the user-name
+	# rule and is not run.
+	fhost=$(/bin/hostname -s 2>/dev/null || true)
+	if [ -n "$fhost" ] && printf '%s' "$login" | grep -qiF -e "$fhost"; then
+		echo "$me: not run: the owner-handle host tests (the host name is part of the login)"
+		login=
+	fi
+	if [ -n "$login" ]; then
+		ofx=$tmp/ownerhost
+		if ! (
+			unset $(git rev-parse --local-env-vars)
+			GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 HOME=$tmp XDG_CONFIG_HOME=$tmp/noxdg
+			export GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM HOME XDG_CONFIG_HOME
+			git init -q --template= "$ofx" &&
+				mkdir -p "$ofx/tests" &&
+				cp tests/check-no-local-identity.sh "$ofx/tests/" &&
+				printf '%s\n' "$login" > "$ofx/README.md" &&
+				git -C "$ofx" add README.md tests/check-no-local-identity.sh &&
+				git -C "$ofx" remote add origin "https://github.com/$login/quake2.git"
+		); then
+			echo "$me: FAIL: cannot build the owner-handle host fixture"
+			fails=1
+		fi
+		chk=$ofx/tests/check-no-local-identity.sh
+		names "zzqno""host" "zzqno""body"
+		shim hostname zzq-synthetic-box
+		shim whoami zzq-synthetic-box
+		gate "owner-handle login: a hostname on PATH is not read" 0 "check-no-local-identity: ok"
+		rm -f "$tmp/bin/hostname" "$tmp/bin/whoami"
+		gate "owner-handle login, home ending in it: the login's word test is skipped" 0 "the user-name word test is skipped" "$hhome"
+		gate "owner-handle login, home elsewhere: the login is word-tested" 1 "tracked files contain this machine's identity" "/zzqno""home"
+		gate "owner-handle login, another word with the home ending in it: the login is word-tested" 1 "tracked files contain this machine's identity" "/zzqno""home/zzqno""body"
+		if grep -q "skipped" "$tmp/out"; then
+			echo "$me: FAIL: owner-handle login, another word with the home ending in it: the skip note was printed"
+			fails=1
+		fi
+		chk=
+	fi
+	;;
+esac
 
 [ "$fails" -eq 0 ] || exit 1
 _ok=1
