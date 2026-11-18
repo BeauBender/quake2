@@ -2144,6 +2144,7 @@ unknown' '0\n5\n' 'gate_settle=60'
 30' '0\n30\n' 'gate_settle=4' 20
 	[ "$_st" -eq 1 ] || bad "settle: a reading that stayed at 30 with a poll of 20 s was not refused (status $_st)"
 	awk '$1 > 4 { exit 1 }' "${E:?}/naps" || bad "settle: a poll of 20 s was not cut to the settle time of 4 s (naps: $(tr '\n' ' ' < "${E:?}/naps"))"
+	grep -Eqx '[1-4]' "${E:?}/naps" || bad "settle: the poll of 20 s took no nap"
 	[ "$fails" -eq 0 ]
 }
 
@@ -2699,6 +2700,7 @@ mutant settle-no-bound core/snap.sh '[ "$_st_left" -gt 0 ] || return 0' ':' t_se
 mutant settle-not-flagged core/snap.sh '[ "$BENCH_SETTLE" != unsettled ] ||' 'true ||' t_settle || mfail=1
 mutant settle-nap-uncut core/snap.sh 'then _st_nap=$_st_left; fi' 'then :; fi' t_settle || mfail=1
 mutant settle-zero-polls core/measure.sh '	bench_settle "${BENCH_TMP:?}/snap.after"' '	BENCH_SETTLE=0' t_settle || mfail=1
+mutant settle-no-nap core/snap.sh '		bench_nap "$_st_nap"' '		:' t_settle || mfail=1
 mutant poll-digits-unbounded core/common.sh '[ "${#1}" -le 12 ]' 'true' t_gate_poll || mfail=1
 mutant digit-cap-dropped core/common.sh '	bench_is_uint_max "$1" 9' '	bench_is_uint_max "$1" 99' t_digit_cap || mfail=1
 mutant digit-cap-crc core/common.sh '! bench_is_uint_max "$_bh_a" 10' '! bench_is_uint_max "$_bh_a" 9' t_digit_cap || mfail=1
