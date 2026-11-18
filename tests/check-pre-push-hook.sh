@@ -1,13 +1,17 @@
 #!/bin/sh
 # Invariant: .githooks/pre-push refuses a push that would publish the working
-# machine's identity, and lets an ordinary push through.
+# machine's identity, in a ref name, a commit, a tag, or a file or file name
+# a pushed commit adds, under any ref name, and lets an ordinary push through.
 #
 # Self-test with no network, in a throwaway directory under mktemp -d: a bare
 # repository is the remote and a clone carries a copy of the hook as its
-# pre-push hook. Three real `git push` runs prove the wiring (git's stdin, a
-# refusal stops the push, pushed refs become published); every other case
-# feeds the hook its stdin directly, many refs per run, and checks the line
-# the hook prints for each ref by its number.
+# pre-push hook, with a copy of tests/check-no-local-identity.sh beside it as
+# the hook expects. Real `git push` runs prove the wiring (git's stdin and
+# arguments, a refusal stops the push, pushed refs become published); every
+# other case feeds the hook what git gives it (the remote name and URL as
+# arguments, one "<local ref> <local sha> <remote ref> <remote sha>" line per
+# ref on stdin, as githooks(5) gives the form) directly, many refs per run,
+# and checks the line the hook prints for each ref by its number.
 #
 # The identity is synthetic: `hostname` and `whoami` are shims on PATH and
 # HOME is a made-up path, so the hook really reads them at run time and no
@@ -18,7 +22,10 @@
 #
 # The test is immune to the caller's git environment and configuration:
 # every GIT_* variable is unset (a pre-commit hook exports GIT_INDEX_FILE),
-# global and system configuration are not read, templates are empty.
+# global and system configuration and attributes are not read
+# (GIT_CONFIG_GLOBAL=/dev/null, GIT_CONFIG_NOSYSTEM, GIT_ATTR_NOSYSTEM),
+# repositories are made with `git init --template=`, and HOME and
+# XDG_CONFIG_HOME point where nothing is.
 #
 # Usage: tests/check-pre-push-hook.sh
 set -eu
@@ -53,8 +60,8 @@ done | grep -q x && {
 	echo "check-pre-push-hook: the temporary directory's path holds an identity value; this check needs a /tmp path without one"
 	exit 1
 }
-mkdir "$tmp/tpl" "$tmp/bin" "$tmp/hooks"
-export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_TEMPLATE_DIR="$tmp/tpl"
+mkdir "$tmp/tpl" "$tmp/bin" "$tmp/hooks" "$tmp/tests"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1 GIT_TEMPLATE_DIR="$tmp/tpl"
 export XDG_CONFIG_HOME="$tmp/xdg"
 
 syn=zzq-synthetic-box
@@ -109,9 +116,10 @@ leaks() {
 	return 0
 }
 
-git init -q --bare "$tmp/remote.git"
-git init -q "$tmp/w"
+git init -q --template= --bare "$tmp/remote.git"
+git init -q --template= "$tmp/w"
 cp "$hook" "$tmp/hooks/pre-push"
+cp tests/check-no-local-identity.sh "$tmp/tests/"
 w() { git -C "$tmp/w" "$@"; }
 w config core.hooksPath "$tmp/hooks"
 w config user.name zzqa
@@ -121,14 +129,34 @@ w config tag.gpgsign false
 w remote add origin "$tmp/remote.git"
 empty=$(w hash-object -t tree -w /dev/null)
 
-# mk <parent|-> <message>: a commit; AN, AE, CN set author and committer.
+# mk <parent|-> <message> [-p <parent>...]: a commit; AN, AE, CN set author
+# and committer, TR the tree (the empty tree by default).
 mk() {
-	if [ "$1" = - ]; then set -- "$2"; else set -- "$2" -p "$1"; fi
-	_m=$1; shift
+	_p=$1; _m=$2; shift 2
+	if [ "$_p" != - ]; then set -- -p "$_p" "$@"; fi
 	GIT_AUTHOR_NAME=${AN:-zzqa} GIT_AUTHOR_EMAIL=${AE:-zzqa@zzqmail.zzq} \
 		GIT_COMMITTER_NAME=${CN:-zzqa} GIT_COMMITTER_EMAIL=zzqa@zzqmail.zzq \
 		GIT_AUTHOR_DATE='1700000000 +0000' GIT_COMMITTER_DATE='1700000000 +0000' \
-		w commit-tree "$empty" "$@" -m "$_m"
+		w commit-tree "${TR:-$empty}" "$@" -m "$_m"
+}
+# tree <path> <content> [<path> <content>...]: a tree holding those files
+# (paths may have directories); content "link:<target>" makes a symbolic link.
+tree() {
+	rm -f "$tmp/tree.idx"
+	while [ "$#" -ge 2 ]; do
+		case $2 in
+		link:*)
+			_b=$(printf '%s' "${2#link:}" | w hash-object -w --stdin)
+			GIT_INDEX_FILE=$tmp/tree.idx w update-index --add --cacheinfo "120000,$_b,$1"
+			;;
+		*)
+			_b=$(printf '%s\n' "$2" | w hash-object -w --stdin)
+			GIT_INDEX_FILE=$tmp/tree.idx w update-index --add --cacheinfo "100644,$_b,$1"
+			;;
+		esac
+		shift 2
+	done
+	GIT_INDEX_FILE=$tmp/tree.idx w write-tree
 }
 # raw <text>: a commit object written as is.
 raw() { printf '%s' "$1" | w hash-object -t commit -w --stdin; }
@@ -157,8 +185,10 @@ rpush() { # $1 = label, $2 = want (ok|refused); rest = push args
 	esac
 	leaks "$_label"
 }
-claim=$(mk "$m1" "zzqm12 claimed by $syn")
-gclear=$(mk "$m1" "zzq gate-clear by $syn/$login")
+# The tooling branches as the identity shim writes them: a root commit on the
+# empty tree whose message names an opaque machine token.
+claim=$(mk - "claimed ZZQ1 by m-0123456789ab/agent/zzq at 2026-01-01T00:00:00Z")
+gclear=$(mk - "gate-clear ZZQ2 by m-0123456789ab/agent/zzq at 2026-01-01T00:00:00Z")
 rpush "real push of a normal branch" ok origin zzqmain
 rpush "real push of a leaking ref name" "the remote ref name contains this machine's host identity" \
 	origin "zzqx:refs/heads/zzqt/$syn"
@@ -166,6 +196,17 @@ rpush "real push of several refs, tooling branches among them" ok origin \
 	"$claim:refs/heads/claim/ZZQ1" "$gclear:refs/heads/gate-clear/ZZQ2" "$m1:refs/heads/zzqbehind"
 [ "$(w rev-parse -q --verify refs/remotes/origin/claim/ZZQ1 || true)" = "$claim" ] ||
 	note "the real push did not record the claim branch as published"
+# A file a pushed commit adds: refused under every ref name, the tooling
+# prefixes included, and a refused push publishes nothing, so a later push of
+# the same commit to another ref is scanned and refused too.
+filebad=$(TR=$(tree scripts/x.sh "echo built on $syn") mk "$m1" zzqm40)
+FB="a file a pushed commit adds (blob"
+rpush "real push of a commit adding a file that holds the word" "$FB" origin "$filebad:refs/heads/zzqf1"
+rpush "real push of that commit to claim/" "$FB" origin "$filebad:refs/heads/claim/ZZQX"
+rpush "real push of that commit to gate-clear/" "$FB" origin "$filebad:refs/heads/gate-clear/ZZQX"
+[ -z "$(w for-each-ref refs/remotes/origin/claim/ZZQX refs/remotes/origin/gate-clear/ZZQX)" ] ||
+	note "a refused push recorded a tooling branch as published"
+rpush "real push of that commit to a normal branch, after the tooling pushes" "$FB" origin "$filebad:refs/heads/zzqf2"
 
 # ---- Direct runs: a batch of refs, one expectation each. ------------------
 # case_ <want> <local ref> <local sha> <remote ref> <remote sha>; want is "ok"
@@ -242,16 +283,21 @@ bad=$(mk "$m1" "zzqm13 on $syn")
 case_ "$M $(printf '%.10s' "$bad")" refs/heads/zzqn9 "$(mk "$bad" zzqm14)" refs/heads/zzqn9 "$zero"
 case_ "$M" refs/heads/zzqn10 "$(mk "$bad" "zzqm15 on $syn")" refs/heads/zzqn10 "$zero"
 # what the remote already has is not scanned: its tip, and tracking refs
+# (here a commit published before this hook, as old history is)
+pub=$(mk "$m1" "zzqm12 published on $syn")
+w update-ref refs/remotes/origin/zzqpub "$pub"
 case_ ok refs/heads/zzqn11 "$(mk "$bad" zzqm16)" refs/heads/zzqn11 "$bad"
-case_ ok refs/heads/zzqnew "$(mk "$claim" zzqm17)" refs/heads/zzqnew "$zero"
-case_ ok refs/heads/zzqbehind "$claim" refs/heads/zzqbehind "$m1"
+case_ ok refs/heads/zzqnew "$(mk "$pub" zzqm17)" refs/heads/zzqnew "$zero"
+case_ ok refs/heads/zzqbehind "$pub" refs/heads/zzqbehind "$m1"
 # ... but only what THIS remote has: another remote's tracking refs do not count
 other=$(mk "$m1" "zzqm27 on $syn")
 w update-ref refs/remotes/zzqother/zzqx "$other"
 case_ "$M $(printf '%.10s' "$other")" refs/heads/zzqo "$(mk "$other" zzqm28)" refs/heads/zzqo "$zero"
-# tooling branches: object scan exempt, names never
-case_ ok refs/heads/zzqc "$bad" refs/heads/claim/ZZQ3 "$zero"
-case_ ok refs/heads/zzqc "$bad" refs/heads/gate-clear/ZZQ4 "$zero"
+# tooling branches: scanned like any other ref
+case_ "$M" refs/heads/zzqc "$bad" refs/heads/claim/ZZQ3 "$zero"
+case_ "$M" refs/heads/zzqc "$bad" refs/heads/gate-clear/ZZQ4 "$zero"
+case_ ok refs/heads/zzqc "$(mk - "claimed ZZQ3 by m-0123456789ab/agent/zzq")" refs/heads/claim/ZZQ3 "$zero"
+case_ ok refs/heads/zzqc "$(mk - "gate-clear ZZQ4 by m-0123456789ab/agent/zzq")" refs/heads/gate-clear/ZZQ4 "$zero"
 case_ "the remote ref name contains $H" refs/heads/zzqc "$bad" "refs/heads/claim/$syn" "$zero"
 case_ "the remote ref name contains $H" refs/heads/zzqc "$bad" "refs/heads/gate-clear/$syn" "$zero"
 case_ "$M" refs/heads/zzqc "$bad" refs/heads/claims/ZZQ5 "$zero"
@@ -354,12 +400,74 @@ case_ "the local ref name contains $H" "refs/heads/zzql-$syn" "$m1" refs/heads/z
 case_ "$M" refs/heads/zzqn2 "$(mk "$m1" "zzqm9 note for $login")" refs/heads/zzqn2 "$zero"
 case_ ok refs/heads/zzqn5 "$(mk "$m1" "zzqm10 x${login}x and ${login}2 and zz${login} and ${login}_a")" refs/heads/zzqn5 "$zero"
 case_ "$T" refs/tags/zzqt3 "$(tag "$tbad" tag zzqt3 zzqouter)" refs/tags/zzqt3 "$zero"
-case_ ok refs/heads/zzqc "$bad" refs/heads/gate-clear/ZZQ4 "$zero"
+case_ "$M" refs/heads/zzqc "$bad" refs/heads/gate-clear/ZZQ4 "$zero"
+case_ "$FB" refs/heads/zzqf3 "$filebad" refs/heads/zzqf3 "$zero"
 echo >> "$tmp/in" # an empty line is skipped and does not count as a ref
 case_ "the remote ref name contains $H" refs/heads/zzqx "$m1" "refs/heads/zzqlast-$syn" "$zero"
 shells="dash bash"
 run "other shells"
 shells=sh
+
+# ---- Files the pushed commits add. -----------------------------------------
+# The blobs the remote lacks go to tests/check-no-local-identity.sh, so its
+# rules hold: the host name and home path as substrings, the user name as a
+# whole word, binary files (a NUL byte) not scanned.
+FN="a file name a pushed commit adds contains"
+case_ "$FB $(printf '%.10s' "$(w rev-parse "$filebad:scripts/x.sh")")) contains $H" refs/heads/zzqf4 "$filebad" refs/heads/zzqf4 "$zero"
+case_ "$FB" refs/heads/zzqf5 "$(TR=$(tree stuff/x.c "/* for $login */") mk "$m1" zzqm42)" refs/heads/zzqf5 "$zero"
+case_ "$FB" refs/heads/zzqf6 "$(TR=$(tree doc/x.md "see /ZZQHOME/zzqX/file") mk "$m1" zzqm43)" refs/heads/zzqf6 "$zero"
+case_ ok refs/heads/zzqf7 "$(TR=$(tree scripts/x.sh "x${login}x and ${login}2 and zz$login") mk "$m1" zzqm44)" refs/heads/zzqf7 "$zero"
+case_ "$FB" refs/heads/zzqf8 "$(TR=$(tree third_party/x "link:/srv/$syn/x") mk "$m1" zzqm45)" refs/heads/zzqf8 "$zero"
+# every new commit counts, not only the tip: a file added, then removed
+mid=$(TR=$(tree scripts/x.sh "built on $syn, then removed") mk "$m1" zzqm46)
+case_ "$FB" refs/heads/zzqf9 "$(mk "$mid" zzqm47)" refs/heads/zzqf9 "$zero"
+# file names, a directory's included
+case_ "$FN $H" refs/heads/zzqf10 "$(TR=$(tree "scripts/zzq-$syn/x.sh" "echo clean") mk "$m1" zzqm48)" refs/heads/zzqf10 "$zero"
+case_ "$FN" refs/heads/zzqf11 "$(TR=$(tree "zzq-$login.txt" "zzq clean") mk "$m1" zzqm49)" refs/heads/zzqf11 "$zero"
+case_ ok refs/heads/zzqf12 "$(TR=$(tree "zzq-${login}x.txt" "zzq clean") mk "$m1" zzqm50)" refs/heads/zzqf12 "$zero"
+# a published commit (as old history is) whose tree holds a file with the word
+pubf=$(TR=$(tree clean.txt "zzq clean words" "notes/zzq-$syn.txt" "built on $syn") mk "$m1" zzqm51)
+w update-ref refs/remotes/origin/zzqpubf "$pubf"
+# a blob the remote has is not scanned again: the remote's commit pubf has it
+# in its tree, so `git rev-list --objects <tip> --not <remote sha>
+# --remotes=origin` does not list it
+case_ ok refs/heads/zzqf13 "$(TR=$(tree clean.txt "zzq clean words" "notes/zzq-$syn.txt" "built on $syn" notes/copy.txt "built on $syn") mk "$pubf" zzqm52)" refs/heads/zzqf13 "$zero"
+# ... but a new name for it is a new path
+case_ "$FN" refs/heads/zzqf14 "$(TR=$(tree clean.txt "zzq clean words" "notes/zzq-$syn.txt" "built on $syn" "zzq-$syn-2.txt" "zzq clean words") mk "$pubf" zzqm53)" refs/heads/zzqf14 "$zero"
+# a commit that only deletes that file publishes nothing: accepted
+case_ ok refs/heads/zzqf15 "$(TR=$(tree clean.txt "zzq clean words") mk "$pubf" zzqm54)" refs/heads/zzqf15 "$zero"
+# a merge whose result holds a path neither parent has
+ma=$(TR=$(tree a.txt "zzq a") mk "$m1" zzqm55)
+mb=$(TR=$(tree b.txt "zzq b") mk "$m1" zzqm56)
+case_ "$FN" refs/heads/zzqf16 "$(TR=$(tree a.txt "zzq a" b.txt "zzq b" "zzq-$syn.txt" "zzq clean") mk "$ma" zzqm57 -p "$mb")" refs/heads/zzqf16 "$zero"
+case_ ok refs/heads/zzqf17 "$(TR=$(tree a.txt "zzq a" b.txt "zzq b") mk "$ma" zzqm58 -p "$mb")" refs/heads/zzqf17 "$zero"
+# a binary file is not scanned (the gate check's rule)
+_bin=$(printf 'zzq\000 on %s\n' "$syn" | w hash-object -w --stdin)
+rm -f "$tmp/tree.idx"
+GIT_INDEX_FILE=$tmp/tree.idx w update-index --add --cacheinfo "100644,$_bin,zzq.bin"
+case_ ok refs/heads/zzqf18 "$(TR=$(GIT_INDEX_FILE=$tmp/tree.idx w write-tree) mk "$m1" zzqm59)" refs/heads/zzqf18 "$zero"
+# two refs in one push, each judged on its own files
+case_ ok refs/heads/zzqf19 "$(TR=$(tree scripts/y.sh "echo zzq clean") mk "$m1" zzqm60)" refs/heads/zzqf19 "$zero"
+case_ "$FB" refs/heads/zzqf20 "$filebad" refs/heads/zzqf20 "$zero"
+run "files"
+
+# A clean push of 50 commits that add 200 files.
+{
+	i=1
+	while [ "$i" -le 50 ]; do
+		printf 'commit refs/heads/zzqmany\ncommitter zzqa <zzqa@zzqmail.zzq> %d +0000\ndata 8\nzzq%05d\n' "$((1700000000 + i))" "$i"
+		[ "$i" -ne 1 ] || printf 'from %s\n' "$m1"
+		j=1
+		while [ "$j" -le 4 ]; do
+			printf 'M 100644 inline scripts/zzqmany/f%02d-%d.sh\ndata <<ZZQEND\n#!/bin/sh\necho zzq clean file %d of commit %d\nZZQEND\n' "$i" "$j" "$j" "$i"
+			j=$((j + 1))
+		done
+		i=$((i + 1))
+	done
+} | w fast-import --quiet
+[ "$(w ls-tree -r --name-only zzqmany | wc -l)" -eq 200 ] || note "the 50-commit push does not add 200 files"
+case_ ok refs/heads/zzqmany "$(w rev-parse zzqmany)" refs/heads/zzqmany "$zero"
+run "a clean push of 50 commits adding 200 files"
 
 # The user name in one's own configured author identity is already public.
 mine=$(AN="Zzqa $login Zzqb" AE="$login@zzqmail.zzq" mk "$m1" zzqm24)
@@ -397,6 +505,10 @@ owner_cases() {
 	_hm=$(mk "$m1" "zzqm32 see /zzqhome/$login/file")
 	case_ "$M $(printf '%.10s' "$_hm") contains $Hm" refs/heads/zzqw4 "$_hm" refs/heads/zzqw4 "$zero"
 	case_ "the remote ref name contains $H" refs/heads/zzqx "$m1" "refs/heads/$login/$syn" "$zero"
+	# in files: the user name as a word is skipped, the home path is not
+	case_ ok refs/heads/zzqw6 "$(TR=$(tree "scripts/$login.sh" "echo by $login") mk "$m1" zzqm34)" refs/heads/zzqw6 "$zero"
+	case_ "$FB $(printf '%.10s' "$(printf 'see /zzqhome/%s/file\n' "$login" | w hash-object --stdin)")) contains $Hm" \
+		refs/heads/zzqw7 "$(TR=$(tree scripts/x.sh "see /zzqhome/$login/file") mk "$m1" zzqm35)" refs/heads/zzqw7 "$zero"
 }
 w remote set-url origin "https://github.com/Zzq${login#zzq}/zzqrepo.git"
 owner_cases
@@ -473,9 +585,9 @@ case_ "more than 1000 commits to scan" refs/heads/zzqbig "$big" refs/heads/zzqbi
 run "a cap above the default is ignored" YQ2_IDENTITY_TEST_SCAN_CAP=999999
 
 # ---- Fail closed. ----------------------------------------------------------
-closed() { # $1 = label, $2 = text the refusal must hold; stdin of the hook in $tmp/in
+closed() { # $1 = label, $2 = text the refusal must hold, [$3 = hook]; stdin of the hook in $tmp/in
 	_rc=0
-	(cd "$tmp/w" && sh "$hook" origin x) < "$tmp/in" > "$tmp/out" 2>&1 || _rc=$?
+	(cd "$tmp/w" && sh "${3:-$hook}" origin x) < "$tmp/in" > "$tmp/out" 2>&1 || _rc=$?
 	{ [ "$_rc" -ne 0 ] && grep -q "^pre-push: refused: .*$2" "$tmp/out"; } || { note "$1: not refused"; redact < "$tmp/out"; }
 	leaks "$1"
 }
@@ -487,6 +599,30 @@ printf 'refs/tags/zzqdg %s refs/tags/zzqdg %s\n' "$dangling" "$zero" > "$tmp/in"
 closed "tag on a missing object" 'cannot read object'
 printf 'refs/heads/zzqmiss 3333333333333333333333333333333333333333 refs/heads/zzqmiss %s\n' "$zero" > "$tmp/in"
 closed "unknown local object" 'cannot read object'
+# A blob a pushed commit adds that git cannot read.
+_gone=$(printf 'zzq gone\n' | w hash-object -w --stdin)
+rm -f "$tmp/tree.idx"
+GIT_INDEX_FILE=$tmp/tree.idx w update-index --add --cacheinfo "100644,$_gone,zzq-gone.txt"
+gone=$(TR=$(GIT_INDEX_FILE=$tmp/tree.idx w write-tree) mk "$m1" zzqm62)
+rm -f "$tmp/w/.git/objects/$(printf '%s' "$_gone" | cut -c1-2)/$(printf '%s' "$_gone" | cut -c3-)"
+printf 'refs/heads/zzqgone %s refs/heads/zzqgone %s\n' "$gone" "$zero" > "$tmp/in"
+closed "a blob that cannot be read" 'cannot list the new objects of ref number 1'
+# The gate check beside the hook is missing, fails, ends without its verdict,
+# or reports a match the hook cannot place: refused. The commit is clean.
+fileok=$(TR=$(tree scripts/ok.sh "echo zzq clean") mk "$m1" zzqm61)
+printf 'refs/heads/zzqok %s refs/heads/zzqok %s\n' "$fileok" "$zero" > "$tmp/in"
+mkdir -p "$tmp/alt/.githooks" "$tmp/alt/tests"
+cp "$hook" "$tmp/alt/.githooks/pre-push"
+closed "the file scan is missing" 'tests/check-no-local-identity.sh, which scans the files, is missing' "$tmp/alt/.githooks/pre-push"
+stub() { printf '#!/bin/sh\n%s\n' "$1" > "$tmp/alt/tests/check-no-local-identity.sh"; }
+stub 'echo zzq stub; exit 2'
+closed "the file scan fails" 'the file scan (tests/check-no-local-identity.sh) could not run' "$tmp/alt/.githooks/pre-push"
+stub 'exit 0'
+closed "the file scan ends without its verdict" 'the file scan (tests/check-no-local-identity.sh) could not run' "$tmp/alt/.githooks/pre-push"
+stub "echo \"check-no-local-identity: tracked files contain this machine's identity (values not shown); remove them:\"; echo '  zzq:1 (host)'; exit 1"
+closed "the file scan reports a match it cannot place" 'a match this hook cannot place' "$tmp/alt/.githooks/pre-push"
+stub "echo \"check-no-local-identity: tracked files contain this machine's identity (values not shown); remove them:\"; exit 1"
+closed "the file scan reports no match it can place" 'a match this hook cannot place' "$tmp/alt/.githooks/pre-push"
 printf 'refs/heads/zzqmain %s refs/heads/zzqmain %s\n' "$m2" "$m1" > "$tmp/in"
 shim hostname ''
 closed "host name unreadable" "cannot read this machine's host name"
