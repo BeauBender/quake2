@@ -424,9 +424,10 @@ shoulder to the next weapon, the left shoulder to the previous one, X
 (square) to use the selected item and the view button to the inventory.
 A binding that is already there, and every binding once a `config.cfg`
 exists, is kept. In the menus the d-pad or the left stick moves, A selects
-and B goes back. The key and controller binding screens are greyed on
-Apple TV, as on iPhone and iPad: they show each binding, and select or
-clear does nothing on them.
+and B goes back. On the key and controller binding screens select waits
+for the new key, as on every platform: in the tvOS simulator the walk of
+the menus enters bind mode on every binding item, and back (Escape)
+leaves it without binding anything.
 
 The Siri Remote drives the menus as keys: a click on the up, down, left
 or right edge of its touch surface (the ring on the second generation)

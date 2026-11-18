@@ -217,8 +217,8 @@ Commit `0c0c3290`, the same simulator and data (links to the paks and a scratch 
 script, never committed):
 
 - The walk passes: `menu_probe: walk at cls.realtime 1`, then `menu_probe: walk ok: 20 screens, 891 key presses, 0
-  failures` (a walk that did not yet check what a greyed item's select changes; re-measured in slice 2a review round 1,
-  below: 20 screens, 818 key presses, on `3d42a997`). The screens, by banner or first item as the walk prints them: `m_main_plaque`, `m_banner_game`,
+  failures` (a walk that did not yet check what a greyed item's select changes; re-measured in slice 2a review rounds
+  1 and 2, below; round 1's 818 key presses on `3d42a997` were with rebinding wrongly blocked). The screens, by banner or first item as the walk prints them: `m_main_plaque`, `m_banner_game`,
   `m_banner_load_game`, the credits (`(unnamed)`), `m_banner_multiplayer`, `m_banner_join_server`,
   `m_banner_start_server`, `falling damage`, `name`, `Download Options`, `score`, `m_banner_options`, `look
   sensitivity`, `layout`, `attack`, `next weapon`, `attack`, `factor` and `m_banner_video` twice. On join server down and up
@@ -240,10 +240,11 @@ script, never committed):
   0). The right trigger is not shown firing: the gun frame stays 19 (the blaster's idle pause) 3 and 23 waits after
   the trigger is pressed and 10 after it is let go. Not found yet whether the press reaches `+attack`. What the simulator's own
   `'Gamepad'` is, and whether a real Apple TV has one, is not known either.
-- The walk prints each greyed item with its reason. On join server the address book has its reason; the items of
-  the four key binding screens (`score`, `attack`, `next weapon`, `attack`) are greyed with no reason of their own
-  on tvOS (an item's status bar is empty). This is TASK150's state, not changed here; that select on them still acted
-  was found in slice 2a review round 1 and fixed (below).
+- The walk prints each greyed item with its reason. On join server the address book has its reason. The items of
+  the four key binding screens (`score`, `attack`, `next weapon`, `attack`) carry `QMF_GRAYED` on every platform, as
+  upstream Yamagi sets it: the label draws dark and the binding handlers never read the flag, so it is not a disabled
+  state. Since slice 2a review round 2 the walk takes them as binding items, by their screen's key function, and
+  requires select to enter bind mode on each (below).
 - The default macOS and iOS simulator objects of both files are byte-identical to main's, on `0c0c3290` and again on
   `cc9de5bd`: `menu.o` (164544 and
   164528 bytes) and `sdl3.o` (56872 and 58824 bytes). Both probes are inside `#ifdef YQ2_INPUT_PROBE`, and no menu code
@@ -285,24 +286,24 @@ The panel found no Blocker. Four Importants and the Notes, each fixed:
 
 The panel found no Blocker. Two Importants and four Notes, each fixed:
 
-- Important 1: a greyed item could still act. Every item of the four key binding screens (the key, multiplayer key,
-  controller button and controller alt button screens) is greyed on the iPhone-family targets since TASK150, but
-  their key handlers (`Keys_MenuKey`, `MultiplayerKeys_MenuKey`, `ControllerButtons_MenuKey`,
+- Important 1 (its premise was wrong, and review round 2 undid the change, below): a greyed item could still act.
+  The finding read every item of the four key binding screens (the key, multiplayer key, controller button and
+  controller alt button screens) as greyed on the iPhone-family targets since TASK150. In fact `QMF_GRAYED` is set
+  on those items unconditionally, on every platform, as upstream does, and is not a disabled state. Their key handlers (`Keys_MenuKey`, `MultiplayerKeys_MenuKey`, `ControllerButtons_MenuKey`,
   `ControllerAltButtons_MenuKey`) called the binding function on select without reading the flag: it cleared a
   second binding and entered bind mode, and clear (backspace, delete, a controller's north button) removed the
-  binding. `M_BindingGrayed` (`src/client/menu/menu.c`) now refuses select and clear on a greyed binding item, on
-  every platform, as `Menu_SelectItem` does for any other greyed item. No other handler acts on a greyed item:
-  the other greyed items (quit, the address book, the touch settings, the two upscale actions) reach only
-  `Menu_SelectItem` and `Menu_SlideItem`, which read the flag. What a player sees change: on iPhone, iPad and Apple
-  TV, select on a binding no longer shows "press a key or button for this action" and waits, and clear no longer
-  removes the binding; the screens still show every binding. macOS is unchanged: nothing there is greyed.
+  binding, which is upstream's rebinding, working as designed. Round 1 added `M_BindingGrayed`
+  (`src/client/menu/menu.c`), which refused select and clear on a binding item carrying the flag; since every
+  binding item carries it, that blocked rebinding from the menus on every platform, macOS included. Round 2 removed
+  it. No other handler acts on a greyed item: the other greyed items (quit, the address book, the touch settings,
+  the two upscale actions) reach only `Menu_SelectItem` and `Menu_SlideItem`, which read the flag.
 - The walk now fails a greyed item whose select changes anything: the screen, the cursor, the status bar, bind mode,
   a key's binding (a hash of every binding) or the command buffer. Measured with the same simulator, data and probe
   script as round 2 (Apple TV 4K (4th generation), tvOS 27.2 simulator, `ref_metal`, `in_initjoy` 1):
-  - the walk alone (`490ddb3b`, the menu not fixed): `walk FAIL: 20 screens, 889 key presses, 71 failures`, every
+  - the walk alone (`490ddb3b`, the menu as on main; round 2 found these 71 to be rebinding working as designed): `walk FAIL: 20 screens, 889 key presses, 71 failures`, every
     one on the four screens (`score` 7, `next weapon` 20, and 44 on the two screens whose first item is `attack`;
     each `bind mode status bar`, and 7 of them also `a binding`, items with two keys bound);
-  - the fix (`3d42a997`): `walk ok: 20 screens, 818 key presses, 0 failures` (fewer presses: no back is needed to
+  - round 1's change (`3d42a997`, undone in round 2): `walk ok: 20 screens, 818 key presses, 0 failures` (fewer presses: no back is needed to
     leave bind mode);
   - the mutant that puts the old select path back (`M_BindingGrayed` without `K_ENTER`): `walk FAIL: 20 screens, 889
     key presses, 71 failures`, the same 71.
@@ -310,9 +311,44 @@ The panel found no Blocker. Two Importants and four Notes, each fixed:
   simulator's `menu.o`, which must lack it, as the positive control. The check also compiles, for the iOS
   simulator, a `menu.c` whose guard is widened to `#ifdef TARGET_OS_TV` (true on every Apple target), and the
   control must refuse it. A tree with that widening fails the check: `(e) the positive control failed: the pin on
-  "typing an address needs a keyboard, which tvOS does not have" would pass whatever the tvOS build holds`. The
-  binding fix has no platform guard, so it needs no pin.
+  "typing an address needs a keyboard, which tvOS does not have" would pass whatever the tvOS build holds`. Round
+  1's binding change had no platform guard and so no pin; round 2 removed it.
 - Notes: the Apple TV section of `doc/020_installation.md` says what the simulator showed (the sticks, start, the
   remote in the menus) and that the other bindings are the default table, unit-tested but not shown (the trigger is
   TASK182); the remote hint's pin says it checks the name, and (e) now also requires `sdl3.c`'s one line naming
   the hint to set it to "0"; the walk's numbers are re-measured above; this section.
+
+## Slice 2a: review round 2
+
+One Blocker, found by two passes on their own: round 1's Important 1 rested on a false premise. `QMF_GRAYED` on the
+items of the four binding screens is set unconditionally, on every platform, as upstream Yamagi sets it (the label
+draws dark; the binding handlers never read it). So round 1's `M_BindingGrayed` blocked select and clear on every
+binding item everywhere, and rebinding from the menus was gone on macOS too.
+
+- `M_BindingGrayed`, its comment and its four call sites are removed (`ba73994c`). `Keys_MenuKey`,
+  `MultiplayerKeys_MenuKey`, `ControllerButtons_MenuKey` and `ControllerAltButtons_MenuKey` are main's again: the
+  only hunks of `menu.c` against main are the tvOS address book, the probe and its `Cmd_AddCommand`. The default
+  `menu.o` (no `YQ2_INPUT_PROBE`) built from `ba73994c` and from main (`8e7ce3f6`), each at the same path, is
+  byte-identical to main's: 164544 bytes for macOS and 164528 bytes for the iOS simulator.
+- The walk (`e1f0327e`) takes an item of a binding screen as a binding item by the screen's key function, whatever
+  its flags. Select on one must enter bind mode (`menukeyitem_bind`), and back must then leave bind mode with no
+  binding changed and nothing queued (Escape is not bound). It does not require the bindings to be unchanged after
+  select: upstream clears an item that already has two keys bound. Every other greyed item keeps round 1's check
+  that select changes nothing. The walk prints how many binding items passed.
+- Measured with the same simulator, data and probe script (Apple TV 4K (4th generation), tvOS 27.2 simulator,
+  `ref_metal`, `in_initjoy` 1), at `ba73994c`: `71 binding items entered bind mode on select and left it with
+  back`, then `walk ok: 20 screens, 889 key presses, 0 failures`. The greyed items it prints are the address book,
+  quit and the two upscale actions (`MetalFX spatial`, `VideoToolbox ML`), each with its reason.
+- Each mutant fails the walk:
+  - (a) round 1's `M_BindingGrayed` put back (`e1f0327e`, the walk before the removal): `0 binding items entered
+    bind mode`, `walk FAIL: 20 screens, 818 key presses, 71 failures`, each `binding item ... did not enter bind
+    mode on select`;
+  - (b) `Menu_SelectItem`'s `QMF_GRAYED` check removed: `walk FAIL: 22 screens, 915 key presses, 4 failures`, the
+    address book, quit and the two upscale actions each `did something on select: left the screen` (the upscale
+    actions also `queued`);
+  - (c) the walk's binding detection keyed on `QMF_GRAYED`: `walk FAIL: 20 screens, 889 key presses, 4 failures`,
+    the same four items each `did not enter bind mode on select`.
+- `doc/020_installation.md`'s Apple TV section no longer says the binding screens are greyed: it says what the walk
+  shows, bind mode on every binding item and back leaving it. `doc/050_commands.md` says what the walk checks on a
+  binding item. The lines above that called the binding items greyed on the iPhone-family targets, or dated that
+  from TASK150, are corrected.

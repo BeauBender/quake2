@@ -31,7 +31,11 @@ original clients (Vanilla Quake II) commands are still in place.
   visits every screen reachable from the main menu with only up, down,
   left, right, select and back, fails a screen whose selectable items are
   not all reached with down and with up or that back does not leave,
-  prints `menu_probe: walk ok` or `walk FAIL` with the counts, drops the
+  fails a binding item (on the four key and controller binding screens)
+  where select does not enter bind mode or back does not leave it binding
+  nothing, and any other greyed item that select changes, prints how many
+  binding items passed, then `menu_probe: walk ok` or `walk FAIL` with the
+  counts, drops the
   commands the selects queued and quits.
 
 * **gamemode <mode>**: Provides a convenient way to switch the game mode
