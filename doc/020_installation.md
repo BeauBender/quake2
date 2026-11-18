@@ -409,9 +409,26 @@ for a device (`IOS_SDK=iphoneos`, below), and they run
 simulator (`arm64-apple-tvos17.0-simulator`, Xcode's tvOS platform needed),
 with its own *Info.plist* (*stuff/ios/Info-tvos.plist.in*). It is the
 iPhone build with the touch overlay, the on-screen keyboard and the
-iPhone's window hints left out; controller and Siri Remote input, the
-menu's focus and where the game data lives are not done yet
-(*docs/runbook/TASK23.md*).
+iPhone's window hints left out. Where the game data lives on a device is
+not decided yet (*docs/runbook/TASK23.md*).
+
+To play, pair a controller (an MFi, Xbox or PlayStation one) with the
+Apple TV. A fresh start binds it: the left stick moves, the right stick
+turns, the right trigger fires, A (cross) jumps, B (circle) crouches, Y
+(triangle) and the right shoulder pick the next weapon, the left shoulder
+the previous one, X (square) uses the selected item and the view button
+opens the inventory; the menu button (options, start) opens the game
+menu. A binding that is already there, and every binding once a
+`config.cfg` exists, is kept. In the menus the d-pad or the left stick
+moves, A selects and B goes back.
+
+The Siri Remote drives the menus as keys: a click on the up, down, left
+or right edge of its touch surface (the ring on the second generation)
+moves, a click in the middle selects, and the Back (Menu) button goes
+back, or opens the game menu during play. Every menu screen works with
+those six; the address book (typing a server address) is greyed with its
+reason, since tvOS has no keyboard to type it with, and a server found
+on the local network is still joined from the list.
 `IOS_SIM_SDK=appletvsimulator scripts/ios-sim.sh run --out DIR --data DATA`
 runs it on an Apple TV simulator device (DIR outside the checkout, as for
 the smoke); `tests/check-tvos.sh` builds its objects in the gate.
