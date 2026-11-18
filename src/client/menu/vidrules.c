@@ -474,25 +474,22 @@ VidRules_AORaysIndex(float value)
  * r_rt_ao_scale takes three sizes (full, 1/2, 1/3): the slider's 0.25 is
  * read as 1/3 and its 0.75 as full.
  */
-#define RT_SWITCH(label, cvar) { label, cvar, "0", CVAR_ARCHIVE, -1, 0, 0, 0, NULL }
-#define RT_SLIDER(label, cvar, def, effect, min, max, step, fmt) \
-	{ label, cvar, def, CVAR_ARCHIVE, effect, min, max, step, fmt }
-
 enum { RT_SHADOWS, RT_SUN, RT_AO, RT_WATER, RT_GUNSHADOW };
 
+/* the cvar first in each row: tests/check-cvar-docs.sh reads it as the row's name */
 static const vidrt_control_t rt_controls[] = {
-	RT_SWITCH("shadows", "r_rt_shadows"),
-	RT_SWITCH("sun", "r_rt_sun"),
-	RT_SWITCH("ambient occlusion", "r_rt_ao"),
-	RT_SWITCH("water reflections", "r_rt_water"),
-	RT_SWITCH("gun shadow", "r_rt_gunshadow"),
-	RT_SLIDER("sun floor", "r_rt_sunfloor", "0.5", RT_SUN, 0.0f, 1.0f, 0.05f, "%.2f"),
-	RT_SLIDER("sun scale", "r_rt_sunscale", "0.35", RT_SUN, 0.0f, 4.0f, 0.05f, "%.2f"),
-	RT_SLIDER("AO range", "r_rt_ao_range", "128", RT_AO, 16.0f, 1024.0f, 16.0f, "%.0f"),
-	RT_SLIDER("AO minimum", "r_rt_ao_min", "0.4", RT_AO, 0.0f, 1.0f, 0.05f, "%.2f"),
-	RT_SLIDER("AO scale", "r_rt_ao_scale", "0.5", RT_AO, 0.25f, 1.0f, 0.25f, "%.2f"),
-	RT_SLIDER("water reflect", "r_rt_water_reflect", "0.5", RT_WATER, 0.0f, 1.0f, 0.05f, "%.2f"),
-	RT_SLIDER("water ripple", "r_rt_water_normal", "0.08", RT_WATER, 0.0f, 1.0f, 0.02f, "%.2f"),
+	{ "r_rt_shadows", "shadows", "0", CVAR_ARCHIVE, -1, 0, 0, 0, NULL },
+	{ "r_rt_sun", "sun", "0", CVAR_ARCHIVE, -1, 0, 0, 0, NULL },
+	{ "r_rt_ao", "ambient occlusion", "0", CVAR_ARCHIVE, -1, 0, 0, 0, NULL },
+	{ "r_rt_water", "water reflections", "0", CVAR_ARCHIVE, -1, 0, 0, 0, NULL },
+	{ "r_rt_gunshadow", "gun shadow", "0", CVAR_ARCHIVE, -1, 0, 0, 0, NULL },
+	{ "r_rt_sunfloor", "sun floor", "0.5", CVAR_ARCHIVE, RT_SUN, 0.0f, 1.0f, 0.05f, "%.2f" },
+	{ "r_rt_sunscale", "sun scale", "0.35", CVAR_ARCHIVE, RT_SUN, 0.0f, 4.0f, 0.05f, "%.2f" },
+	{ "r_rt_ao_range", "AO range", "128", CVAR_ARCHIVE, RT_AO, 16.0f, 1024.0f, 16.0f, "%.0f" },
+	{ "r_rt_ao_min", "AO minimum", "0.4", CVAR_ARCHIVE, RT_AO, 0.0f, 1.0f, 0.05f, "%.2f" },
+	{ "r_rt_ao_scale", "AO scale", "0.5", CVAR_ARCHIVE, RT_AO, 0.25f, 1.0f, 0.25f, "%.2f" },
+	{ "r_rt_water_reflect", "water reflect", "0.5", CVAR_ARCHIVE, RT_WATER, 0.0f, 1.0f, 0.05f, "%.2f" },
+	{ "r_rt_water_normal", "water ripple", "0.08", CVAR_ARCHIVE, RT_WATER, 0.0f, 1.0f, 0.02f, "%.2f" },
 };
 
 int

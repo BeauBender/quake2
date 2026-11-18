@@ -10,4 +10,5 @@
 src/client/cl_main.c|Cvar_Get|cheatvars[numcheatvars].name|src/client/cl_main.c:cheatvars|walks the cheatvars table
 src/client/menu/menu.c|Cvar_Get|buffer|fmt:adr%d:0:NUM_ADDRESSBOOK_ENTRIES-1|the address book entries adr0 to the last one, built with Com_sprintf
 src/client/menu/videomenu.c|Cvar_Get|cv|src/client/menu/vidrules.c:VidRules_Cvar|the name VidRules_Cvar returns for a video item
+src/client/menu/videomenu.c|Cvar_Get|c->cvar|src/client/menu/vidrules.c:rt_controls|the ray-tracing screen (TASK194) registers each control of its table, archived
 src/client/refresh/metal/rm_main.c|Cvar_Get|name|src/client/refresh/metal/rm_rtgate.c:rtg_cvars|the ray-tracing gate (TASK60) creates its effect switches from its table of every r_rt_* cvar

@@ -158,8 +158,8 @@ int VidRules_AORaysIndex(float value);
  */
 typedef struct
 {
-	const char *label;
 	const char *cvar;
+	const char *label;
 	const char *def;
 	int flags;
 	int effect;         /* -1 for a switch, else the row of its switch */
