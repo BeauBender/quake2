@@ -61,6 +61,16 @@ void IN_Update(void);
 void In_FlushQueue(void);
 
 /*
+ * The input gate (FIX48, ingate.c): false in a pin run, where every
+ * key, button, character and analog movement the window system delivers
+ * is dropped; true otherwise. IN_KeyEvent and IN_CharEvent pass an event
+ * to Key_Event and Char_Event only while it is true.
+ */
+qboolean IN_InputOpen(void);
+void IN_KeyEvent(int key, qboolean down, qboolean special);
+void IN_CharEvent(int key);
+
+/*
  * The touch overlay (TASK151): what to draw now, at most max entries, and
  * the pixels one point of the window is. 0 when the touch controls are
  * off or a physical gamepad is in use.
