@@ -174,3 +174,5 @@ source changes this round but the unit test's order):
 | `min` for `max` in the auto capture | the auto view's frame and the index's capture line |
 | `if False:` for the group change (`if k != key:`) | the failing later group (no view is kept) |
 | no partial index (`if False:` for `if done:`) | the failing later group (no `index-v1-v2.txt`) |
+
+Review round 4: TASK60's ray-tracing gate classifies `r_rt_flatlight` as a setting (`rm_rtgate.c`): it is a raster-path preview that traces no ray, so a device without ray tracing leaves it as set.

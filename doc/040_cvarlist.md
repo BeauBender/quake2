@@ -1034,7 +1034,9 @@ is.
   its light only where the level is below `r_rt_sunfloor`. `0` (the
   default) draws the lightmap; a negative value or one that is not a
   finite number counts as `0`, one above `1` as `1`. Cheat-protected:
-  reset to `0` in multiplayer. Applies from the next frame.
+  reset to `0` in multiplayer. Applies from the next frame. It is a setting
+  of the raster path, not a ray-tracing effect, so a device without ray
+  tracing leaves it as set.
 
 * **r_rt_gbuffer**: A development switch of the Metal renderer. When
   set to anything but `0`, a view with the world is drawn through the
