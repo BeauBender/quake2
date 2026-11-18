@@ -1881,6 +1881,7 @@ $(TESTDIR)/%.o: %.c
 	${Q}$(CC) -c $(CFLAGS) $(TEST_CFLAGS) $(INCLUDE) -o $@ $<
 
 $(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS)) : tests/unit/test.h
+$(TESTDIR)/tests/unit/test_bspgraph.o : src/client/refresh/files/models.c
 
 $(TEST_BIN) : $(TEST_OBJS)
 	@echo "===> LD $@"
