@@ -149,8 +149,11 @@
 # after the boot against the same read at the end.
 #   launcher: no crash
 #   launcher: <n> crash(es): <process>, pid <old> -> <new>, last exit status <s>, seen at <time>
+#   launcher: 1 crash(es) before the run: <process>, pid <n>, last exit status <s>, seen at <time>
 #   launcher: unknown (<reason>)
-# A crash, and an unknown (the device cannot be queried, the baseline could
+# A crash (a device this run created boots with last exit status 0, so any
+# other baseline is a crash before the run), and an unknown (the device did
+# not boot, cannot be queried, the baseline could
 # not be read, the launcher is not listed or not running at the start), fail
 # the run, as bad as a missing frame: an unknown is never a pass.
 # IOS_SIM_LAUNCHER_CRASH_OK=1 reports the line and lets both pass. The count
@@ -333,14 +336,16 @@ terminate)
 		kill "$(cat "$st/app.pid")" 2>/dev/null
 	fi
 	echo "$*" >> "$st/terminates"; exit 0 ;;
-bootstatus|install|shutdown) ;;
+bootstatus) [ "$sc" = bootfail ] && exit 1; true ;;
+install|shutdown) ;;
 spawn)
 	# simctl spawn <udid> launchctl list (TASK180): the device's launchd, "PID Status Label" per job, of
 	# this run's device only; FAKE_LAUNCHER picks the outcome: the first call is the baseline, later
 	# ones are the check: crash (a new pid, last exit status -11), restart (a new pid, status 0), crashdead (no pid, -11), crashstatus
 	# (the same pid, a new status), qfail (the check cannot query), qfailbase (the baseline cannot),
 	# nolabel (the launcher is not listed), garbage (a line that cannot be read), norun (not running
-	# at the baseline)
+	# at the baseline), bootcrash (the baseline already reads a new pid and status -11: it crashed
+	# during the boot), hang2 (the check hangs)
 	if [ "${3:-}" = launchctl ] && [ "${4:-}" = list ]; then
 		[ "${2:-}" = "$(cat "$st/created" 2>/dev/null)" ] || { echo "fake xcrun: not the device this run created" >&2; exit 1; }
 		n=$(cat "$st/lcalls" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$st/lcalls"
@@ -353,6 +358,8 @@ spawn)
 		crashdead) [ "$n" -gt 1 ] && { lp=-; ls=-11; } ;;
 		crashstatus) [ "$n" -gt 1 ] && ls=-11 ;;
 		restart) [ "$n" -gt 1 ] && lp=200 ;;
+		bootcrash) lp=200; ls=-11 ;;
+		hang2) [ "$n" -gt 1 ] && { echo $$ > "$st/hang.pid"; exec sleep 60; } ;;
 		qfail) [ "$n" -gt 1 ] && { echo "fake xcrun: the device is not booted" >&2; exit 1; } ;;
 		qfailbase) [ "$n" -eq 1 ] && { echo "fake xcrun: the device is not booted" >&2; exit 1; } ;;
 		nolabel) lab=com.apple.other ;;
@@ -822,6 +829,15 @@ EOF
 	st_case launcher-crash-ok-not-one extra fail "launcher: 1 crash(es)" 30 FAKE_LAUNCHER=crash IOS_SIM_LAUNCHER_CRASH_OK=yes
 	# a run that dies on another failure after the boot still says what its launcher did and deletes its device
 	st_case launcher-line-on-early-failure nocontainer fail "launcher: no crash" 30
+	# a launcher that crashed during the boot: the baseline already reads a new pid and status -11; a boot that fails
+	# still prints the line; a check that hangs is killed at its 30 s bound (the generic check below finds a
+	# hung call left running) and is an unknown
+	st_case launcher-crash-before-run extra fail "launcher: 1 crash(es) before the run: com.apple.SpringBoard, pid 200, last exit status -11" 30 FAKE_LAUNCHER=bootcrash
+	ST_CMD="run --out @D@/out" st_case launcher-run-crash-before-run extra fail "launcher: 1 crash(es) before the run: com.apple.SpringBoard" 30 FAKE_LAUNCHER=bootcrash
+	st_case launcher-boot-fails bootfail fail "launcher: unknown (the device did not boot)" 30
+	st_has launcher-boot-fails grep state/calls "simctl delete AAAAAAAA-"
+	st_case launcher-check-hangs extra fail "timed out after 30 s: xcrun simctl spawn" 50 FAKE_LAUNCHER=hang2
+	st_has launcher-check-hangs grep run.log "launcher: unknown (launchctl list failed in the device)"
 	# only this run's device is asked
 	st_has launcher-no-crash-iphone nogrep state/calls "spawn 11111111-"
 	st_has launcher-no-crash-iphone grep state/calls "simctl spawn AAAAAAAA-"
@@ -1118,6 +1134,7 @@ launcher_booted=
 launcher_base=
 launcher_base_why=
 launcher_done=
+launcher_early=
 launcher_bad=0
 # launcher_state: "<pid> <last exit status>" of the launcher into launcher_cur, or launcher_why
 launcher_state()
@@ -1137,7 +1154,13 @@ launcher_baseline()
 	if launcher_state; then
 		launcher_base=$launcher_cur
 		case $launcher_base in
-		-\ *) launcher_base=; launcher_base_why="$launcher_label was not running at the start" ;;
+		# a device created by this run boots with its launcher's last exit status 0 (observed on iOS, tvOS
+		# and visionOS, docs/runbook/TASK180.md): any other status is an exit before the baseline
+		*\ 0) ;;
+		*) launcher_early=1 ;;
+		esac
+		case $launcher_base in
+		-\ 0) launcher_base=; launcher_base_why="$launcher_label was not running at the start" ;;
 		esac
 	else
 		launcher_base_why=$launcher_why
@@ -1149,8 +1172,11 @@ launcher_report()
 {
 	local bp bs cp cs line
 	[ -z "$launcher_done" ] || return 0
-	launcher_done=1
-	if [ -z "$launcher_base" ]; then
+	if [ -n "$launcher_early" ]; then
+		read -r bp bs <<< "$launcher_base"
+		line="launcher: 1 crash(es) before the run: $launcher_label, pid $bp, last exit status $bs, seen at $(date -u +%H:%M:%SZ)"
+		launcher_bad=1
+	elif [ -z "$launcher_base" ]; then
 		line="launcher: unknown (${launcher_base_why:-no baseline})"
 		launcher_bad=1
 	elif ! launcher_state; then
@@ -1167,6 +1193,7 @@ launcher_report()
 		fi
 	fi
 	echo "ios-sim: $line"
+	launcher_done=1
 	if [ "${IOS_SIM_LAUNCHER_CRASH_OK-}" = 1 ] && [ "$launcher_bad" = 1 ]; then
 		echo "ios-sim: IOS_SIM_LAUNCHER_CRASH_OK=1: the launcher line does not fail the run"
 		launcher_bad=0
@@ -1191,6 +1218,8 @@ fi
 list_devices "$out/devices.created" || die "no device list after simctl create"
 udids "$out/devices.created" > "${tmp:?}/udids.created"
 grep -F -x -e "$run_udid" "${tmp:?}/udids.created" >/dev/null || die "this run's device $run_udid is not in the device list taken after simctl create"
+launcher_booted=1
+launcher_base_why="the device did not boot"
 bounded "$boot_s" "$out/boot.log" xcrun simctl bootstatus "$udid" -b || die "the device did not boot (log: $out/boot.log)"
 launcher_baseline
 bounded 60 "${tmp:?}/shot.out" xcrun simctl io "$udid" screenshot ${IOS_SIM_DISPLAY:+"--display=$IOS_SIM_DISPLAY"} "$out/screen.png" || die "simctl io screenshot failed"
