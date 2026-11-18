@@ -12,8 +12,8 @@ original clients (Vanilla Quake II) commands are still in place.
   By quickly tapping the bound key, you can navigate the list faster.
 
 * **in_probe <what> [args]**: Only in a test build (compiled with
-  `-DYQ2_INPUT_PROBE`, TASK23); a release has no such command. Drives the
-  input path without hands, since a simulator cannot press a controller
+  `-DYQ2_INPUT_PROBE`, TASK23); a release has no such command. Drives
+  input without hands, since a simulator cannot press a controller
   button: `pad` attaches an SDL virtual gamepad, which the engine finds
   as any controller; `button <name> <0|1>` presses or releases one of its
   buttons and `axis <name> <value>` moves one of its axes (SDL's names:
