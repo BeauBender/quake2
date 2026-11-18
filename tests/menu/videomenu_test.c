@@ -960,6 +960,124 @@ test_ray_tracing_entry_is_always_present(void)
 		"the ray tracing entry has no reason off Metal");
 }
 
+/* ---- TASK194: the ray-tracing screen itself ---- */
+
+static menuframework_s *rt_menu;
+
+static menucommon_s *
+RTItem(const char *name)
+{
+	for (int i = 0; i < rt_menu->nitems; i++)
+	{
+		const menucommon_s *c = rt_menu->items[i];
+
+		if (c->name && !strcmp(c->name, name))
+		{
+			rt_menu->cursor = i;
+
+			return rt_menu->items[i];
+		}
+	}
+
+	printf("FAIL: no ray tracing item named \"%s\"\n", name);
+	failed++;
+	exit(1);
+}
+
+static int
+RTGreyed(const char *name)
+{
+	return (RTItem(name)->flags & QMF_GRAYED) != 0;
+}
+
+/* Opens the video menu under metal and its ray tracing screen. */
+static void
+OpenRT(const char *avail)
+{
+	/* earlier cases leave values behind: a fresh start is every default */
+	for (int i = 0; i < VidRules_RTNum(); i++)
+	{
+		SetCv(VidRules_RTControl(i)->cvar, VidRules_RTControl(i)->def);
+	}
+	SetCv("r_rt_available", avail);
+	Open("metal", "7");
+	menu = main_menu;
+	Cursor("ray tracing...");
+	Menu_SelectItem(menu);
+	rt_menu = menu;
+}
+
+static void
+test_ray_tracing_screen(void)
+{
+	static const char *const sw[] = { "shadows", "sun", "ambient occlusion", "water reflections", "gun shadow" };
+	static const char *const sl[] = { "sun floor", "sun scale", "AO range", "AO minimum", "AO scale",
+		"water reflect", "water ripple" };
+
+	/* 1: the screen has its 13 items; the sliders wait for their effects */
+	OpenRT("1");
+	CHECK(rt_menu != main_menu && rt_menu->nitems == 13, "the screen has %d items", rt_menu->nitems);
+	for (size_t i = 0; i < sizeof(sw) / sizeof(sw[0]); i++)
+	{
+		CHECK(!RTGreyed(sw[i]), "%s greyed", sw[i]);
+	}
+	for (size_t i = 0; i < sizeof(sl) / sizeof(sl[0]); i++)
+	{
+		CHECK(RTGreyed(sl[i]), "%s live with its effect off", sl[i]);
+	}
+	CHECK(RTItem("sun floor")->statusbar && !strcmp(RTItem("sun floor")->statusbar, "turn on sun first"),
+		"sun floor says %s", RTItem("sun floor")->statusbar);
+	CHECK(!RTGreyed("reset to defaults"), "reset to defaults greyed");
+
+	/* 2: Right on sun writes 1 and frees sun floor */
+	RTItem("sun");
+	Menu_SlideItem(rt_menu, 1);
+	CHECK(!strcmp(Str("r_rt_sun"), "1"), "r_rt_sun %s", Str("r_rt_sun"));
+	CHECK(!RTGreyed("sun floor"), "sun floor still greyed after sun on");
+
+	/* 3: Right on sun floor is one step, 0.5 to 0.55 */
+	RTItem("sun floor");
+	Menu_SlideItem(rt_menu, 1);
+	CHECK(fabsf(Cvar_VariableValue("r_rt_sunfloor") - 0.55f) < 0.001f, "r_rt_sunfloor %s", Str("r_rt_sunfloor"));
+
+	/* AO scale is a three-choice list: full, 1/2, 1/3 */
+	RTItem("ambient occlusion");
+	Menu_SlideItem(rt_menu, 1);
+	CHECK(!RTGreyed("AO scale"), "AO scale greyed with AO on");
+	{
+		menulist_s *l = (menulist_s *)RTItem("AO scale");
+
+		CHECK(NumChoices(l) == 3 && !strcmp(l->itemnames[l->curvalue], "1/2"), "AO scale shows %s",
+			l->itemnames[l->curvalue]);
+		Menu_SlideItem(rt_menu, -1);
+		CHECK(Cvar_VariableValue("r_rt_ao_scale") == 1.0f, "r_rt_ao_scale %s", Str("r_rt_ao_scale"));
+	}
+
+	/* 4: reset to defaults, every row's cvar back */
+	RTItem("reset to defaults");
+	Menu_SelectItem(rt_menu);
+	for (int i = 0; i < VidRules_RTNum(); i++)
+	{
+		const vidrt_control_t *c = VidRules_RTControl(i);
+
+		CHECK(!strcmp(Str(c->cvar), c->def), "%s is %s after reset, not %s", c->cvar, Str(c->cvar), c->def);
+	}
+	CHECK(RTGreyed("sun floor"), "sun floor live after the reset turned sun off");
+
+	/* 5: no ray tracing on the device, every item greyed with the reason */
+	OpenRT("0");
+	CHECK(rt_menu->nitems == 13, "unavailable screen has %d items", rt_menu->nitems);
+	for (int i = 0; i < rt_menu->nitems; i++)
+	{
+		const menucommon_s *c = rt_menu->items[i];
+
+		CHECK((c->flags & QMF_GRAYED) && c->statusbar &&
+			!strcmp(c->statusbar, "ray tracing is not available on this device"),
+			"item %d %s: greyed %d, %s", i, c->name ? c->name : "?", (c->flags & QMF_GRAYED) != 0,
+			c->statusbar ? c->statusbar : "(none)");
+	}
+}
+
 int
 main(void)
 {
@@ -981,6 +1099,7 @@ main(void)
 	test_colorspace_item();
 	test_the_banner_is_clear_of_the_items();
 	test_ray_tracing_entry_is_always_present();
+	test_ray_tracing_screen();
 
 	printf("videomenu_test: %d checks, %d failed\n", checks, failed);
 

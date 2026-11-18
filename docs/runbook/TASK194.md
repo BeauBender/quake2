@@ -20,7 +20,7 @@ Rows, in order, from `rt_controls` in `src/client/menu/vidrules.c`:
 | sun scale | `r_rt_sunscale` | slider, needs sun | 0 to 4, 0.05 |
 | AO range | `r_rt_ao_range` | slider, needs AO | 16 to 1024, 16 (the cvar takes 1 to 8192) |
 | AO minimum | `r_rt_ao_min` | slider, needs AO | 0 to 1, 0.05 |
-| AO scale | `r_rt_ao_scale` | slider, needs AO | 0.25 to 1, 0.25 (read as 1/3, 1/2, full, full) |
+| AO scale | `r_rt_ao_scale` | choice, needs AO | full, 1/2, 1/3 (the sizes `rm_rtao_div` tells apart) |
 | water reflect | `r_rt_water_reflect` | slider, needs water | 0 to 1, 0.05 |
 | water ripple | `r_rt_water_normal` | slider, needs water | 0 to 1, 0.02 |
 | reset to defaults | (every row) | action | the renderer's defaults |
@@ -139,3 +139,9 @@ the licensed data read-only (`-datadir`, `-portable`):
   under Metal, greyed with "needs the Metal renderer" under soft. On the mutant `tests/check-video-menu.sh` prints
   `FAIL: no menu item named "ray tracing..."` and `check-video-menu: the host test videomenu_test failed`; on the
   branch, `videomenu_test: 3035 checks, 0 failed`.
+
+## Decision: r_rt_flatlight stays out of the menu
+
+`r_rt_flatlight` (TASK173) is not on the screen and is not archived. It is a preview and debug setting, the raster's
+flat light in place of the lightmap for judging the effects in a capture, not an effect a player turns on; archiving
+it would carry a preview look into every later start.

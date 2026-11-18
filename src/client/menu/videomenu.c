@@ -753,7 +753,20 @@ RTSwitchChanged(void *self)
 	RTMenu_Rules();
 }
 
-/* each switch shows its cvar; a slider reads its own as it draws */
+static void
+RTChoiceChanged(void *self)
+{
+	menulist_s *l = (menulist_s *)self;
+	const vidrt_control_t *c = VidRules_RTControl(l->generic.localdata[0]);
+
+	if (c)
+	{
+		/* the only choice row is r_rt_ao_scale: full, 1/2, 1/3 */
+		Cvar_SetValue(c->cvar, VidRules_AOScaleValue(l->curvalue));
+	}
+}
+
+/* each switch and choice shows its cvar; a slider reads its own as it draws */
 static void
 RTMenu_Values(void)
 {
@@ -761,7 +774,11 @@ RTMenu_Values(void)
 	{
 		const vidrt_control_t *c = VidRules_RTControl(i);
 
-		if (c->effect < 0)
+		if (c->choices)
+		{
+			((menulist_s *)s_rt_items[i])->curvalue = VidRules_AOScaleIndex(Cvar_VariableValue(c->cvar));
+		}
+		else if (c->effect < 0)
 		{
 			((menulist_s *)s_rt_items[i])->curvalue = (Cvar_VariableValue(c->cvar) != 0);
 		}
@@ -801,14 +818,14 @@ RTMenu_Init(void)
 		/* the menu registers each one saved with the configuration, as the renderer does */
 		Cvar_Get(c->cvar, c->def, c->flags);
 
-		if (c->effect < 0)
+		if (c->effect < 0 || c->choices)
 		{
 			menulist_s *l = &s_rt_switches[nsw++];
 
 			memset(l, 0, sizeof(*l));
 			l->generic.type = MTYPE_SPINCONTROL;
-			l->generic.callback = RTSwitchChanged;
-			l->itemnames = onoff;
+			l->generic.callback = c->choices ? RTChoiceChanged : RTSwitchChanged;
+			l->itemnames = c->choices ? c->choices : onoff;
 			g = &l->generic;
 		}
 		else

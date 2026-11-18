@@ -471,10 +471,13 @@ VidRules_AORaysIndex(float value)
  * The ray-tracing screen's controls (TASK194). The defaults are ref_metal's
  * (the scenes' Cvar_Get); the sliders cover the ranges doc/040_cvarlist.md
  * gives, r_rt_ao_range only its useful part (the cvar takes 1 to 8192).
- * r_rt_ao_scale takes three sizes (full, 1/2, 1/3): the slider's 0.25 is
- * read as 1/3 and its 0.75 as full.
+ * r_rt_ao_scale takes three sizes the renderer tells apart (full, 1/2,
+ * 1/3), so it is a choice row (VidRules_AOScaleIndex and Value map it),
+ * not a slider; its min, max and step are only the range of the cvar.
  */
 enum { RT_SHADOWS, RT_SUN, RT_AO, RT_WATER, RT_GUNSHADOW };
+
+static const char *const rt_ao_scale_names[] = { "full", "1/2", "1/3", NULL };
 
 /* the cvar first in each row: tests/check-cvar-docs.sh reads it as the row's name */
 static const vidrt_control_t rt_controls[] = {
@@ -487,7 +490,7 @@ static const vidrt_control_t rt_controls[] = {
 	{ "r_rt_sunscale", "sun scale", "0.35", CVAR_ARCHIVE, RT_SUN, 0.0f, 4.0f, 0.05f, "%.2f" },
 	{ "r_rt_ao_range", "AO range", "128", CVAR_ARCHIVE, RT_AO, 16.0f, 1024.0f, 16.0f, "%.0f" },
 	{ "r_rt_ao_min", "AO minimum", "0.4", CVAR_ARCHIVE, RT_AO, 0.0f, 1.0f, 0.05f, "%.2f" },
-	{ "r_rt_ao_scale", "AO scale", "0.5", CVAR_ARCHIVE, RT_AO, 0.25f, 1.0f, 0.25f, "%.2f" },
+	{ "r_rt_ao_scale", "AO scale", "0.5", CVAR_ARCHIVE, RT_AO, 0.25f, 1.0f, 0.25f, "%.2f", rt_ao_scale_names },
 	{ "r_rt_water_reflect", "water reflect", "0.5", CVAR_ARCHIVE, RT_WATER, 0.0f, 1.0f, 0.05f, "%.2f" },
 	{ "r_rt_water_normal", "water ripple", "0.08", CVAR_ARCHIVE, RT_WATER, 0.0f, 1.0f, 0.02f, "%.2f" },
 };

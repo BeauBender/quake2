@@ -38,7 +38,8 @@ On a Mac or an Apple device whose GPU traces rays, the Metal renderer
 the stock look is kept. Video options > Ray tracing turns each one on or
 off (shadows of the dynamic lights, sun, ambient occlusion, water
 reflections, gun shadow) and tunes them with sliders (sun floor and
-scale, AO range, minimum and scale, water reflect and ripple). A change
+scale, AO range and minimum, water reflect and ripple, and AO scale as
+a choice of full, 1/2 or 1/3). A change
 shows on the next frame, with no `vid_restart`, and the 3D view behind
 the screen is not dimmed, so the effect can be judged while it is
 changed. Every value is saved with the configuration. The entry is

@@ -995,7 +995,8 @@ is.
   input. A value is taken as the nearest of the three (`1` for `0.67` and
   above, `0.33` below `0.4`); `0`, a negative value or one that is not a
   finite number counts as `0.5`. In the video menu's renderer options as
-  "AO trace size", greyed on other renderers and while `r_rt_ao` is `0`.
+  "AO trace size" and on the Ray tracing screen as "AO scale", a choice
+  of full, 1/2 or 1/3 (the three sizes the renderer tells apart), greyed on other renderers and while `r_rt_ao` is `0`.
   Saved with the configuration; applies from the next frame.
   Can be set from Video options > Ray tracing (TASK194), live.
 
@@ -1019,13 +1020,16 @@ is.
   cut to the whole number below it. Cheat-protected: reset to `0` in
   multiplayer. Applies from the next frame.
 
-* **r_rt_available**: Read only, set by the Metal renderer when it
+* **r_rt_available**: A status, set by the Metal renderer when it
   starts: `1` where the device traces rays (its start-up line
   `ref_metal: ray tracing:` names a path), `0` where it does not. The
   video menu's Video options > Ray tracing screen reads it to grey every
   item, with "ray tracing is not available on this device", where it is
-  `0`. A value written to it is put back from the next frame; under other
-  renderers it is not set. Not saved with the configuration.
+  `0`. The renderer puts the value back every frame, so a value written
+  to it lasts to the next frame only (it is not read only in the sense of
+  the cvar flag). Under other renderers nothing sets it: it keeps its
+  last value, and the menu ignores it because the renderer is checked
+  first. Not saved with the configuration.
 
 * **r_rt_denoiser**: The denoiser item of the Metal renderer's video
   menu reads this cvar; no code creates it yet (the ray-tracing denoiser,

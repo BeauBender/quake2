@@ -165,6 +165,7 @@ typedef struct
 	int effect;         /* -1 for a switch, else the row of its switch */
 	float min, max, step;   /* a slider's range and step; 0 for a switch */
 	const char *format;     /* a slider's value as printed */
+	const char *const *choices;   /* NULL, or the names of a choice row's steps (a spin control, not a slider) */
 } vidrt_control_t;
 
 int VidRules_RTNum(void);
