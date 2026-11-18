@@ -318,3 +318,129 @@ rm_rtg_step(int path, const float *v, int n, rm_rtg_state_t *s, rm_rtg_out_t *ou
 
 	return out->nreset;
 }
+
+/*
+ * The presentation modes (TASK183). Enhanced is the stock lighting model
+ * with the ray-traced layers on at their defaults (the plan's section
+ * 2.2): each effect switch below reads 1 under it, and every other
+ * setting (the AO's size, the sun's angles, r_metalfx, ...) stays the
+ * user's. Retro and RT-primary are later slices and decide nothing here.
+ */
+static const char *const pres_enhanced[] = { "r_rt_shadows", "r_rt_sun", "r_rt_ao", "r_rt_water" };
+
+#define PRES_NENHANCED ((int)(sizeof(pres_enhanced) / sizeof(pres_enhanced[0])))
+
+int
+rm_pres_decide(float requested, int path, int *why)
+{
+	int w = RM_PRES_WHY_OK, mode = RM_PRES_STOCK;
+
+	/* a value that is not a number compares false here and is no mode */
+	if (!((requested >= 0.0f) && (requested < 4.0f)))
+	{
+		w = RM_PRES_WHY_NOTBUILT;
+	}
+	else if ((int)requested == RM_PRES_ENHANCED)
+	{
+		if (path == RM_RTG_NONE)
+		{
+			w = RM_PRES_WHY_NORT;
+		}
+		else
+		{
+			mode = RM_PRES_ENHANCED;
+		}
+	}
+	else if ((int)requested != RM_PRES_STOCK)
+	{
+		w = RM_PRES_WHY_NOTBUILT;
+	}
+
+	if (why)
+	{
+		*why = w;
+	}
+
+	return mode;
+}
+
+float
+rm_pres_value(int mode, const char *name, float user)
+{
+	int i;
+
+	if ((mode != RM_PRES_ENHANCED) || !name)
+	{
+		return user;
+	}
+
+	for (i = 0; i < PRES_NENHANCED; i++)
+	{
+		if (!strcmp(pres_enhanced[i], name))
+		{
+			return 1.0f;
+		}
+	}
+
+	return user;
+}
+
+const char *
+rm_pres_name(int mode)
+{
+	switch (mode)
+	{
+		case RM_PRES_STOCK:
+			return "stock";
+		case RM_PRES_ENHANCED:
+			return "enhanced";
+		case RM_PRES_RETRO:
+			return "retro";
+		case RM_PRES_RTPRIMARY:
+			return "ray traced";
+		default:
+			return "";
+	}
+}
+
+int
+rm_pres_format(float requested, int mode, int why, char *buf, size_t len)
+{
+	const int r = ((requested >= 0.0f) && (requested < 1e9f)) ? (int)requested : -1;
+	const char *rname = (r >= 0) ? rm_pres_name(r) : "";
+	char req[48];
+
+	if (len == 0)
+	{
+		return 0;
+	}
+
+	if (why == RM_PRES_WHY_OK)
+	{
+		if (mode == RM_PRES_ENHANCED)
+		{
+			return rtg_put(snprintf(buf, len,
+					"ref_metal: presentation: enhanced (r_presentation %d): r_rt_shadows, r_rt_sun, r_rt_ao and r_rt_water read 1, the user's values kept",
+					mode), buf, len);
+		}
+
+		return rtg_put(snprintf(buf, len, "ref_metal: presentation: %s (r_presentation %d)", rm_pres_name(mode), mode),
+				buf, len);
+	}
+
+	if (r < 0)
+	{
+		snprintf(req, sizeof(req), "%g", requested);
+	}
+	else if (rname[0])
+	{
+		snprintf(req, sizeof(req), "%d (%s)", r, rname);
+	}
+	else
+	{
+		snprintf(req, sizeof(req), "%d", r);
+	}
+
+	return rtg_put(snprintf(buf, len, "ref_metal: presentation: %s; r_presentation %s reads 0: %s", rm_pres_name(mode),
+			req, (why == RM_PRES_WHY_NORT) ? "no ray tracing on this device" : "not in this build"), buf, len);
+}
