@@ -2,9 +2,12 @@
 # Invariant: no tracked text file carries the working machine's identity.
 #
 # The repository is public. The words looked for are read at run time and
-# never written anywhere: the output of `hostname -s` (substring), the output
-# of `whoami` (whole word or path component only, so a short common user name
-# does not flag ordinary prose) and the path in $HOME (substring). All are
+# never written anywhere: the output of `/bin/hostname -s` (substring), the
+# output of `/usr/bin/id -un` (whole word or path component only, so a short
+# common user name does not flag ordinary prose) and the path in $HOME
+# (substring). The two tools are run by absolute path, never looked up on
+# PATH, so the identity shim's `hostname` and `whoami` cannot stand in for
+# them (see real_names). All are
 # fixed strings compared case-insensitively; a word shorter than three
 # characters is skipped. The content scanned is the staged content (the
 # index blobs), not the working tree: regular files through `git grep
@@ -16,8 +19,14 @@
 # File contents are reported as file:line and the kind of value, file names
 # only as a count; a file whose own name holds a value is reported as
 # "<withheld file name>:line". Nothing printed carries the matched text. If
-# the host name and the user name are both unreadable the check fails (the
-# push hook also fails closed); if only one is, it warns.
+# the host name or the user name cannot be read (the tool is missing, fails
+# or prints nothing) the check fails, as the push hook does.
+#
+# Test-only environment (the hooks' self-tests): YQ2_IDENTITY_TEST_HOST and
+# YQ2_IDENTITY_TEST_USER name one more host name and user name to look for,
+# under the same rules (the owner-handle skip is judged for each user name on
+# its own); they are only ever added to the real names. YQ2_IDENTITY_TEST_TOOL
+# breaks one tool (see real_names), which can only make the check fail.
 #
 # The real scan reads the index git hands it, so from a pre-commit hook it
 # sees the blobs being committed, whatever the working tree holds. The self-test runs first, in a subshell
@@ -94,17 +103,48 @@ home_is() {
 }
 # ---- end of owner_is. ------------------------------------------------------
 
-# scan_repo <dir> <host> <user> <home>: prints "path:line (kind)" for each hit
-# in the staged text files and link targets of the repository at <dir>, and
-# "N tracked file name(s) (kind)" for file names; never the matched text. Returns 1 if any
-# hit, 2 if <dir> is not a repository or a git or grep call fails (said on
-# stderr). The user-name word test is skipped when owner_is <dir> <user> and
-# home_is <home> <user>; the user name is then still withheld from the file
-# names printed.
+# ---- real_names: the same text in tests/check-no-local-identity.sh and in
+# .githooks/pre-push (tests/check-pre-push-hook.sh compares them). ----------
+# real_names: sets yq2_host to the output of `/bin/hostname -s` and yq2_user
+# to that of `/usr/bin/id -un`, each empty when its tool is missing, fails or
+# prints nothing (the caller then refuses). The tools are run by absolute
+# path, never looked up on PATH: the identity shim
+# (.claude/rules/no-machine-names.md) puts a `hostname` that prints the
+# machine token and a `whoami` that prints `agent` first on PATH for every
+# call that writes a marker, so a PATH lookup would compare a marker against
+# its own pseudonym, and refuse it, and would compare nothing against the
+# real names. `/bin/hostname -s` is the program `hostname -s` ran without the
+# shim, so the host name compared is the same one; `id -un` is the POSIX
+# spelling of `whoami`. Test-only: YQ2_IDENTITY_TEST_TOOL=host-missing,
+# host-empty, user-missing or user-empty runs, in place of that tool, a path
+# that cannot exist (below /dev/null) or /usr/bin/true, which prints nothing;
+# any other value is ignored. Either way that name comes out empty, so the
+# seam can only make the caller refuse.
+real_names() {
+	_ht=/bin/hostname
+	_ut=/usr/bin/id
+	case ${YQ2_IDENTITY_TEST_TOOL:-} in
+	host-missing) _ht=/dev/null/hostname ;;
+	host-empty) _ht=/usr/bin/true ;;
+	user-missing) _ut=/dev/null/id ;;
+	user-empty) _ut=/usr/bin/true ;;
+	esac
+	yq2_host=$("$_ht" -s 2>/dev/null) || yq2_host=
+	yq2_user=$("$_ut" -un 2>/dev/null) || yq2_user=
+}
+# ---- end of real_names. ----------------------------------------------------
+
+# scan_repo <dir> <host> <user> <home> [<host> <user>]: prints "path:line
+# (kind)" for each hit in the staged text files and link targets of the
+# repository at <dir>, and "N tracked file name(s) (kind)" for file names;
+# never the matched text. Returns 1 if any hit, 2 if <dir> is not a repository
+# or a git or grep call fails (said on stderr). The optional second host and
+# user name (the test-only words) are looked for under the same rules. The
+# word test of a user name is skipped when owner_is <dir> <user> and home_is
+# <home> <user>, for each user name on its own; that name is then still
+# withheld from the file names printed, as every word is.
 scan_repo() {
 	_hits=0
-	_skipu=0
-	if owner_is "$1" "$3" && home_is "$4" "$3"; then _skipu=1; fi
 	: > "$tmp/hits"
 	: > "$tmp/words"
 	# One listing gives the names and the symbolic links (mode 120000):
@@ -113,14 +153,14 @@ scan_repo() {
 	tr '\000' '\n' < "$tmp/ls.z" > "$tmp/ls"
 	sed 's/^[0-7]* [0-9a-f]* [0-3]	//' "$tmp/ls" > "$tmp/names"
 	sed -n "s/^120000 \([0-9a-f]*\) [0-3]	/\1$us/p" "$tmp/ls" > "$tmp/links"
-	for _spec in "host:-iF:$2" "user:-iwF:$3" "home:-iF:$4"; do
+	for _spec in "host:-iF:$2" "user:-iwF:$3" "home:-iF:$4" "host:-iF:${5:-}" "user:-iwF:${6:-}"; do
 		_kind=${_spec%%:*}
 		_rest=${_spec#*:}
 		_mode=${_rest%%:*}
 		_word=${_rest#*:}
 		[ "${#_word}" -ge 3 ] || continue
 		printf '%s\n' "$_word" >> "$tmp/words"
-		if [ "$_kind" = user ] && [ "$_skipu" = 1 ]; then continue; fi
+		if [ "$_kind" = user ] && owner_is "$1" "$_word" && home_is "$4" "$_word"; then continue; fi
 		# -z ends the path and the line number with NUL, so a colon in a path
 		# cannot shift the fields; awk keeps the first two fields only. -a:
 		# git's own binary test honours .gitattributes, so it is not used.
@@ -222,6 +262,8 @@ scan_repo() {
 	1 tracked file name(s) (user)
 	EOF
 	expect 1 "every kind of hit, nothing else" "$tmp/want" "$syn" zzquser /home/zzqhome
+	# The second host and user name (the test-only words): the same rules.
+	expect 1 "the second host and user name, under the same rules" "$tmp/want" zzqnone zzqnone /home/zzqhome "$syn" zzquser
 	cat > "$tmp/want" <<-EOF
 	notes:v2.txt:2 (home)
 	sub.txt:1 (home)
@@ -349,6 +391,10 @@ nl.txt"
 	expect 1 "no origin: the user name is checked" "$tmp/want" "$syn" zzquser /home/zzquser
 	git -C "$r" remote add origin https://github.com/ZzqUser/zzqrepo.git
 	expect 0 "the user name is the owner handle: skipped" "$tmp/none" "$syn" zzquser /home/zzquser
+	# Each user name is judged on its own: a second one that is the owner
+	# handle skips only itself.
+	expect 0 "the second user name is the owner handle: skipped" "$tmp/none" "$syn" zzqnone /home/zzquser '' zzquser
+	expect 1 "the second user name is the owner handle: the first is checked" "$tmp/want" "$syn" zzqrepo /home/zzquser '' zzquser
 	# Skipped only when the last component of the home is the user name.
 	expect 1 "the owner handle, home unset: checked" "$tmp/want" "$syn" zzquser ''
 	expect 1 "the owner handle, home elsewhere: checked" "$tmp/want" "$syn" zzquser /home/zzqhome
@@ -381,21 +427,27 @@ nl.txt"
 )
 
 # ---- The real check on this tree. -----------------------------------------
-host=$(hostname -s 2>/dev/null || true)
-user=$(whoami 2>/dev/null || true)
+real_names
+host=$yq2_host
+user=$yq2_user
 home=${HOME:-}
-if [ -z "$host" ] && [ -z "$user" ]; then
-	echo "$me: cannot read the host name or the user name; nothing to check against"
+if [ -z "$host" ]; then
+	echo "$me: cannot read this machine's host name (/bin/hostname -s); refusing rather than checking less"
 	exit 1
 fi
-if [ -z "$host" ] || [ -z "$user" ]; then
-	echo "$me: warning: cannot read the host or user name; that word is not checked"
+if [ -z "$user" ]; then
+	echo "$me: cannot read the local user name (/usr/bin/id -un); refusing rather than checking less"
+	exit 1
 fi
-if [ "${#user}" -ge 3 ] && owner_is . "$user" && home_is "$home" "$user"; then
-	echo "$me: note: the user name is the owner handle of this repository's GitHub address (remote origin), which is public, and the last component of the home path; the user-name word test is skipped, the host name and home path are still checked"
-fi
+thost=${YQ2_IDENTITY_TEST_HOST:-}
+tuser=${YQ2_IDENTITY_TEST_USER:-}
+for _u in "$user" "$tuser"; do
+	if [ "${#_u}" -ge 3 ] && owner_is . "$_u" && home_is "$home" "$_u"; then
+		echo "$me: note: the user name is the owner handle of this repository's GitHub address (remote origin), which is public, and the last component of the home path; the user-name word test is skipped, the host name and home path are still checked"
+	fi
+done
 real_st=0
-scan_repo . "$host" "$user" "$home" > "$tmp/real" 2> "$tmp/realerr" || real_st=$?
+scan_repo . "$host" "$user" "$home" "$thost" "$tuser" > "$tmp/real" 2> "$tmp/realerr" || real_st=$?
 case $real_st in
 0) _ok=1; echo "$me: ok" ;;
 1)

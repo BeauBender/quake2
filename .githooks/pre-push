@@ -4,8 +4,13 @@
 # This repository is public. Nothing that identifies the working machine may
 # leave it: not in a ref name, not in a commit or tag, not in a file or file
 # name a pushed commit adds, whatever the ref is called. The identifying values
-# are the output of `hostname -s`, the output of `whoami` and the path in
-# $HOME. They are read at run time and compared case-insensitively (ASCII);
+# are the output of `/bin/hostname -s`, the output of `/usr/bin/id -un` and
+# the path in $HOME. The two tools are run by absolute path, never looked up
+# on PATH: the identity shim (.claude/rules/no-machine-names.md) puts a
+# `hostname` that prints the machine token and a `whoami` that prints `agent`
+# first on PATH for every call that writes a marker, and a PATH lookup would
+# compare against those instead of the real names (see real_names). They are
+# read at run time and compared case-insensitively (ASCII);
 # a value shorter than three characters is not compared (it would match
 # ordinary text). None of them is written anywhere in the repository, and
 # this hook never prints one, nor any text that carries one (a ref name, a
@@ -70,18 +75,34 @@
 #               (commits already on any remote-tracking ref of the remote
 #               count as published, so fetch the remote first). More than the
 #               cap is refused (the rest cannot be scanned): push in steps.
-#   errors      fail closed: if the host or user name cannot be read, or git
+#   replace     git's replacement objects (refs/replace/) are not used
+#   objects     (GIT_NO_REPLACE_OBJECTS=1, for this hook and the file scan it
+#               runs): a local replacement changes what a scan reads, not
+#               what the push sends, so the scan reads what is sent.
+#   errors      fail closed: if the host or user name cannot be read (the
+#               tool is missing, fails or prints nothing), or git
 #               cannot list or read an object (for example the remote sha is
 #               not known locally: fetch first), or the file scan is missing,
 #               cannot run, ends without its verdict or reports a match this
 #               hook cannot place, the push is refused. A retry is cheap; a
 #               published identity cannot be taken back.
 #
-# Test-only environment (used by tests/check-pre-push-hook.sh):
-#   YQ2_IDENTITY_TEST_EXTRA_WORD   one more word to look for. It is only ever
-#                                  added to the real words, never replaces them.
+# Test-only environment (used by tests/check-pre-push-hook.sh). None of it
+# can take a real name out of the check: a word is only ever added to the
+# real ones, and a broken tool only ever makes the hook refuse.
+#   YQ2_IDENTITY_TEST_HOST         one more host name and one more user name to
+#   YQ2_IDENTITY_TEST_USER         look for, under the rules of their kind
+#                                  (the owner-handle and own-author rules are
+#                                  judged for each user name on its own). The
+#                                  file scan looks for them too.
+#   YQ2_IDENTITY_TEST_EXTRA_WORD   one more word to look for, as a substring.
 #                                  The file scan, which is the gate check's,
 #                                  does not look for it.
+#   YQ2_IDENTITY_TEST_TOOL         host-missing, host-empty, user-missing or
+#                                  user-empty: run a path that cannot exist,
+#                                  or one that prints nothing, in place of that
+#                                  tool (see real_names). Any other value is
+#                                  ignored.
 #   YQ2_IDENTITY_TEST_SCAN_CAP     a lower SCAN_CAP; a value above the default,
 #                                  with a leading zero or not a plain number
 #                                  is ignored.
@@ -91,6 +112,8 @@
 # with --no-verify is against the rules in CLAUDE.md.
 
 export LC_ALL=C
+# Scan what the push sends (see "replace objects" in Rules).
+export GIT_NO_REPLACE_OBJECTS=1
 remote=${1:-}
 SCAN_CAP=1000
 TAG_DEPTH=10
@@ -146,45 +169,75 @@ home_is() {
 }
 # ---- end of owner_is. ------------------------------------------------------
 
-# YQ2_W: lines of "<kind> <value>"; kind is host, user, home or test. Handed to
-# awk through the environment, so no value is ever on a command line.
-YQ2_W=
-add_word() { # $1 = kind, $2 = value
-	[ "${#2}" -ge 3 ] || return 0
-	YQ2_W="$YQ2_W$1 $2$nl"
+# ---- real_names: the same text in tests/check-no-local-identity.sh and in
+# .githooks/pre-push (tests/check-pre-push-hook.sh compares them). ----------
+# real_names: sets yq2_host to the output of `/bin/hostname -s` and yq2_user
+# to that of `/usr/bin/id -un`, each empty when its tool is missing, fails or
+# prints nothing (the caller then refuses). The tools are run by absolute
+# path, never looked up on PATH: the identity shim
+# (.claude/rules/no-machine-names.md) puts a `hostname` that prints the
+# machine token and a `whoami` that prints `agent` first on PATH for every
+# call that writes a marker, so a PATH lookup would compare a marker against
+# its own pseudonym, and refuse it, and would compare nothing against the
+# real names. `/bin/hostname -s` is the program `hostname -s` ran without the
+# shim, so the host name compared is the same one; `id -un` is the POSIX
+# spelling of `whoami`. Test-only: YQ2_IDENTITY_TEST_TOOL=host-missing,
+# host-empty, user-missing or user-empty runs, in place of that tool, a path
+# that cannot exist (below /dev/null) or /usr/bin/true, which prints nothing;
+# any other value is ignored. Either way that name comes out empty, so the
+# seam can only make the caller refuse.
+real_names() {
+	_ht=/bin/hostname
+	_ut=/usr/bin/id
+	case ${YQ2_IDENTITY_TEST_TOOL:-} in
+	host-missing) _ht=/dev/null/hostname ;;
+	host-empty) _ht=/usr/bin/true ;;
+	user-missing) _ut=/dev/null/id ;;
+	user-empty) _ut=/usr/bin/true ;;
+	esac
+	yq2_host=$("$_ht" -s 2>/dev/null) || yq2_host=
+	yq2_user=$("$_ut" -un 2>/dev/null) || yq2_user=
 }
+# ---- end of real_names. ----------------------------------------------------
 
-h=$(hostname -s 2>/dev/null) || h=
-u=$(whoami 2>/dev/null) || u=
-[ -n "$h" ] || die "refused: cannot read this machine's host name, so the identity check cannot run"
-[ -n "$u" ] || die "refused: cannot read the local user name, so the identity check cannot run"
+real_names
+h=$yq2_host
+u=$yq2_user
+[ -n "$h" ] || die "refused: cannot read this machine's host name (/bin/hostname -s), so the identity check cannot run"
+[ -n "$u" ] || die "refused: cannot read the local user name (/usr/bin/id -un), so the identity check cannot run"
+
+# YQ2_W: lines of "<kind> <flags> <value>"; kind is host, user, home or test.
+# The two flag digits matter for a user name only: the first is 1 when the
+# name is a word of the author identity this checkout publishes (see "your
+# own name" in Rules), the second when it is the public owner handle of this
+# repository's GitHub address and the last component of $HOME (see home_is;
+# it is then compared only where it is not a whole word, see "owner handle").
+# Each user name is judged on its own, so a test word cannot change how the
+# real one is compared. Handed to awk through the environment, so no value
+# is ever on a command line.
+YQ2_W=
+add_word() { # $1 = kind, $2 = value, [$3 = flags]
+	[ "${#2}" -ge 3 ] || return 0
+	YQ2_W="$YQ2_W$1 ${3:-00} $2$nl"
+}
+_me="$(git config user.name 2>/dev/null)$nl$(git config user.email 2>/dev/null | sed 's/@.*//')"
+add_user() { # $1 = value
+	_pub=0
+	_skip=0
+	if printf '%s\n' "$_me" | grep -qiwF -e "$1"; then _pub=1; fi
+	if owner_is . "$1" && home_is "${HOME:-}" "$1"; then _skip=1; fi
+	add_word user "$1" "$_pub$_skip"
+}
 add_word host "$h"
-add_word user "$u"
+[ -z "${YQ2_IDENTITY_TEST_HOST:-}" ] || add_word host "$YQ2_IDENTITY_TEST_HOST"
+add_user "$u"
+[ -z "${YQ2_IDENTITY_TEST_USER:-}" ] || add_user "$YQ2_IDENTITY_TEST_USER"
 case ${HOME:-} in
 '' | /) ;;
 *) add_word home "$HOME" ;;
 esac
-if [ -n "${YQ2_IDENTITY_TEST_EXTRA_WORD:-}" ]; then
-	add_word test "$YQ2_IDENTITY_TEST_EXTRA_WORD"
-fi
+[ -z "${YQ2_IDENTITY_TEST_EXTRA_WORD:-}" ] || add_word test "$YQ2_IDENTITY_TEST_EXTRA_WORD"
 export YQ2_W
-
-# Is the user name a word of the author identity this checkout publishes?
-YQ2_UPUB=0
-_me="$(git config user.name 2>/dev/null)$nl$(git config user.email 2>/dev/null | sed 's/@.*//')"
-if printf '%s\n' "$_me" | grep -qiwF -e "$u"; then
-	YQ2_UPUB=1
-fi
-export YQ2_UPUB
-
-# Is the user name the public owner handle of this repository's GitHub
-# address, and is it the last component of $HOME (see home_is)? Then it is
-# compared only where it is not a whole word (see Rules).
-YQ2_USKIP=0
-if owner_is . "$u" && home_is "${HOME:-}" "$u"; then
-	YQ2_USKIP=1
-fi
-export YQ2_USKIP
 
 # scan <mode>: reads text on stdin (mode name, commit, tag or blob) and prints
 # "<field> <kind>" for the first match, nothing if none. Fields: local and
@@ -201,10 +254,10 @@ scan() {
 			sp = index(raw[i], " ")
 			nw++
 			kind[nw] = substr(raw[i], 1, sp - 1)
-			word[nw] = tolower(substr(raw[i], sp + 1))
+			upub[nw] = substr(raw[i], sp + 1, 1)
+			uskip[nw] = substr(raw[i], sp + 2, 1)
+			word[nw] = tolower(substr(raw[i], sp + 4))
 		}
-		upub = ENVIRON["YQ2_UPUB"]
-		uskip = ENVIRON["YQ2_USKIP"]
 		inhdr = (mode == "commit")
 		field = (mode == "commit") ? "header" : mode
 		insig = 0
@@ -237,10 +290,10 @@ scan() {
 	function check(text, f,    i, s) {
 		s = tolower(text)
 		for (i = 1; i <= nw; i++) {
-			if (kind[i] == "user" && uskip == 1) {
+			if (kind[i] == "user" && uskip[i] == "1") {
 				if (mode == "name" && partword(s, word[i])) { print f " " kind[i]; exit 0 }
 			} else if (kind[i] == "user" && mode != "name") {
-				if (f == "author" && upub == 1) continue
+				if (f == "author" && upub[i] == "1") continue
 				if (wholeword(s, word[i])) { print f " " kind[i]; exit 0 }
 			} else if (index(s, word[i]) > 0) {
 				print f " " kind[i]; exit 0
