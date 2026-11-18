@@ -270,8 +270,9 @@ each. An earlier run
 in which `gl1` could not create an OpenGL context was an environment
 condition of that host at the time, not a property of the engine.
 A live record taken while the host stalls for more than 100 ms a frame
-can still differ from another live record (see `skywater` above); its
-replay matches it all the same.
+could differ from another live record (see `skywater` above) before
+FIX102, which keeps such a stall out of a pin record's clock (below);
+its replay matches it all the same.
 
 A temporal MetalFX scaler (`r_metalfx 2`) makes that caveat reach every
 frame. Measured (FIX96) on `ref_metal`, `water.dm2`, `PINS_EVERY=30`, at
@@ -294,15 +295,18 @@ score 4.6e-05, bad fraction 0), at `r_rt_water_hits` 0 and 1, with
 records of the hits-0 case repeat (hits 1 at those sizes is covered by
 TASK162's comparisons).
 
-Such a case is therefore not compared byte for byte live against live:
-judge it at the harness's thresholds (the defaults, 0.02 and 0.005, pass
-it), or record it at a size whose records repeat. Say it plainly: a small
-real regression at 5K with a temporal scaler would pass those
-thresholds. Expect a live-against-live spread of up to a worst score of
-4.6e-05 with bad fraction 0, and read a result near that as noise. The
-way back to byte comparison is FIX102, which keeps the capture out of
-the clock. `replay` takes the time from the trace, but it takes no
-`PINS_HIDPI=1`, so it was not tried at this size.
+FIX102 measured the stall (the frame after a 5K capture takes 67 to
+103 ms, the first capture 170 to 221 ms; at 1920x1080 under 40 ms) and
+keeps it out of the clock: in a pin record's timedemo the client clock's
+step is cut below a server frame (`CL_ClockStep`), so every frame that
+plays a demo frame gets its time from the demo alone. With it, five 5K
+records with `r_metalfx 2` repeat byte for byte at `r_rt_water_hits` 1
+and 0, and are compared byte for byte like any other record. Only the
+frames before the first capture and after the demo's end, which bring no
+new server frame, still follow the host; a scenario that captures the
+last frame (`PINS_EVERY=1`) can still differ there. Records made before
+FIX102 at 5K with a temporal scaler spread up to a worst score of
+4.6e-05 with bad fraction 0 live against live.
 
 A seeded record (`PINS_SEED`, the engine's `pins_seed`) is for making
 pins, not for hosting a server: a listen server started in that process
