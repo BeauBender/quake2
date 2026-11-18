@@ -264,13 +264,15 @@ attempt "identity word under scripts/pins/scenarios/" "$I" "$tmp/id" scripts/pin
 attempt "a clean change under scripts/, the real identity check" ok "$tmp/id" scripts/zzq-clean.sh "echo zzq clean"
 
 # ---- The identity shim on PATH: the real names still decide. --------------
+# The refusal must name the staged file and the kind of value, so a hit
+# elsewhere in the tree cannot stand in for it.
 if [ "${#real_host}" -ge 3 ]; then
-	attempt "the shim on PATH: a staged file naming the real host" "$I" "$tmp/id" scripts/zzq-rh.sh "echo built on $real_host"
+	attempt "the shim on PATH: a staged file naming the real host" "  scripts/zzq-rh.sh:1 (host)" "$tmp/id" scripts/zzq-rh.sh "echo built on $real_host"
 else
 	echo "$me: not run: the real-host case (the check does not compare a host name shorter than three characters)"
 fi
 if [ "${#real_user}" -ge 3 ] && [ "$real_user" != agent ]; then
-	attempt "the shim on PATH: a staged file naming the real user as a path component" "$I" "$tmp/id" scripts/zzq-ru.sh "cd /srv/$real_user/zzq"
+	attempt "the shim on PATH: a staged file naming the real user as a path component" "  scripts/zzq-ru.sh:1 (user)" "$tmp/id" scripts/zzq-ru.sh "cd /srv/$real_user/zzq"
 	attempt "the shim on PATH: a staged file holding the token and agent" ok "$tmp/id" scripts/zzq-agent.sh "echo run by agent on $tok"
 else
 	echo "$me: not run: the real-user and agent cases (the user name is shorter than three characters, which the check does not compare, or is agent itself)"
@@ -279,12 +281,16 @@ fi
 # YQ2_IDENTITY_TEST_TOOL): the commit is refused, one case each.
 export YQ2_IDENTITY_TEST_TOOL
 for YQ2_IDENTITY_TEST_TOOL in host-missing host-empty; do
-	attempt "the host-name tool: $YQ2_IDENTITY_TEST_TOOL" "cannot read this machine's host name" "$tmp/id" scripts/zzq-t.sh "echo zzq clean"
+	attempt "the host-name tool: $YQ2_IDENTITY_TEST_TOOL" "cannot read this machine's host name" "$tmp/id" "scripts/zzq-t-$YQ2_IDENTITY_TEST_TOOL.sh" "echo zzq clean"
 done
 for YQ2_IDENTITY_TEST_TOOL in user-missing user-empty; do
-	attempt "the user-name tool: $YQ2_IDENTITY_TEST_TOOL" "cannot read the local user name" "$tmp/id" scripts/zzq-t.sh "echo zzq clean"
+	attempt "the user-name tool: $YQ2_IDENTITY_TEST_TOOL" "cannot read the local user name" "$tmp/id" "scripts/zzq-t-$YQ2_IDENTITY_TEST_TOOL.sh" "echo zzq clean"
 done
 unset YQ2_IDENTITY_TEST_TOOL
+# A staged file replaced locally by a clean twin (refs/replace/): `git grep
+# --cached`, which the check uses, reads the replacement unless the hook
+# turns replacements off, and the commit records the real blob.
+attempt "a staged file replaced locally by a clean twin" "  scripts/zzq-rp.sh:1 (host)" "$tmp/id" scripts/zzq-rp.sh "echo built on $syn" replace
 
 # ---- Which checks run: every commit runs the identity and memory checks, the
 # rest only for the paths they cover (stand-ins). ---------------------------
@@ -351,8 +357,6 @@ attempt "a committed .gitattributes naming a diff driver" ok "$tmp/st" .gitattri
 git -C "$tmp/st" config diff.zzq.textconv "$tmp/bin/zzq-nodiff"
 attempt "a staged token, a textconv driver" "$S" "$tmp/st" scripts/zzq-tok.tc "token = $_s"
 git -C "$tmp/st" config --unset diff.zzq.textconv
-# Nor does a local replacement of the staged blob (refs/replace/).
-attempt "a staged token replaced locally by a clean twin" "$S" "$tmp/st" scripts/zzq-tok5.txt "token = $_s" replace
 # The staged diff cannot be read: refused, not taken as clean. The blob's
 # file is there but corrupt, so git would still write the tree and make the
 # commit; only the hook's refusal stops it.

@@ -279,6 +279,9 @@ also missed fine-grained GitHub tokens. So, superseding the section
 - Both hooks export `GIT_NO_REPLACE_OBJECTS=1`, which the checks they run
   inherit: a local `refs/replace/` entry changes what a scan reads but not
   what a push sends or a commit records, so the scans read the real objects.
+  (With git 2.54, `git cat-file`, `git rev-list --objects`, `git diff-tree`
+  and `git grep --cached` read a replacement; `git diff --cached`, which the
+  secret scan reads, did not.)
 - The commit hook's secret pattern also gains `sk-ant-` followed by 20 or
   more of `[A-Za-z0-9_-]`, `AIza` followed by 35 of `[0-9A-Za-z_-]`, `glpat-`
   followed by 20 or more of `[A-Za-z0-9_-]` and `sk_live_` followed by 24 or
@@ -318,8 +321,8 @@ also missed fine-grained GitHub tokens. So, superseding the section
   throughout: markers in the tooling's shape and token form, a release and a
   file holding `agent` and the token pass; a marker naming the real host, or
   the real user as a path component (built at run time from the absolute
-  tools and never printed), a staged file naming either, a commit or a
-  staged token replaced locally by a clean twin, and each broken tool are
+  tools and never printed), a staged file naming either, a pushed commit or
+  a staged file replaced locally by a clean twin, and each broken tool are
   refused; and one synthetic sample per new token family is refused while
   one a character short is not.
 
