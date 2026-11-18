@@ -893,8 +893,19 @@ t_lock_guard() {
 	[ "$fails" -eq 0 ]
 }
 
+# stall <copy>: the copy's maker stalls between its mkdir and its holder
+# write until $E/unstall exists (60 s at most), not for a fixed time that
+# a loaded host can outlast before the taker has reclaimed (FIX128).
+stall() {
+	lit "${1:?}/core/lock.sh" 'BENCH_LOCK_SINCE=$(bench_utc)' "BENCH_LOCK_SINCE=\$(bench_utc); _fx_k=0; while [ ! -e '${E:?}/unstall' ] && [ \"\$_fx_k\" -lt 1200 ]; do sleep 0.05; _fx_k=\$((_fx_k + 1)); done"
+}
+
 t_lock_stall() {
 	fresh stall
+	# FIX128 review round 1: under this case's own bounds the maker waits
+	# 5 + 30 + 30 + 20 s at most, more than fresh's 10 s; 300 s keeps the
+	# stated polls the binding bounds.
+	BENCH_LOCK_WAIT=300
 	# A maker that stalls between its mkdir and its holder write for longer
 	# than the grace, while a waiter reclaims the directory and makes it
 	# again, backs off and leaves the taker's holder file as it was: the two
@@ -902,7 +913,7 @@ t_lock_stall() {
 	_s=${tmp:?}/stall
 	rm -rf "${_s:?}"
 	cp -R "$R" "$_s"
-	lit "${_s:?}/core/lock.sh" 'BENCH_LOCK_SINCE=$(bench_utc)' 'BENCH_LOCK_SINCE=$(bench_utc); sleep 2.5' || bad "stall: the injected stall does not apply"
+	stall "$_s" || bad "stall: the injected stall does not apply"
 	: > "${E:?}/slog"
 	start sh "$_s/bench.sh" lock run maker -- sh -c 'echo N-start >> "$1"; sleep 0.3; echo N-end >> "$1"' x "${E:?}/slog" > "${E:?}/maker.out" 2>&1
 	_mk=$BG
@@ -911,10 +922,12 @@ t_lock_stall() {
 		sleep 0.1
 		_k=$((_k + 1))
 	done
-	start env BENCH_LOCK_GRACE=1 sh "$R/bench.sh" lock run taker -- sh -c 'echo C-start >> "$1"; sleep 3.5; echo C-end >> "$1"' x "${E:?}/slog" > "${E:?}/taker.out" 2>&1
+	start env BENCH_LOCK_GRACE=1 sh "$R/bench.sh" lock run taker -- sh -c 'echo C-start >> "$1"; k=0; while [ ! -e "$2" ] && [ "$k" -lt 2400 ]; do sleep 0.05; k=$((k + 1)); done; echo C-end >> "$1"' x "${E:?}/slog" "${E:?}/release" > "${E:?}/taker.out" 2>&1
 	_c=$BG
+	wait_held 30 taker || bad "stall: the taker never reclaimed the stalled maker's lock"
+	: > "${E:?}/unstall"
 	_k=0
-	while ! grep -q 'waiting for the lock held by' "${E:?}/maker.out" && [ "$_k" -lt 80 ]; do
+	while ! grep -q 'waiting for the lock held by' "${E:?}/maker.out" && [ "$_k" -lt 300 ]; do
 		sleep 0.1
 		_k=$((_k + 1))
 	done
@@ -923,8 +936,15 @@ t_lock_stall() {
 	'lock=held label=taker '*) ;;
 	*) bad "stall: the taker's holder file did not survive the stalled maker: $(B lock status)" ;;
 	esac
-	wait_gone 20 "$_mk" || bad "stall: the stalled maker did not finish"
-	wait_gone 20 "$_c" || bad "stall: the taker did not finish"
+	: > "${E:?}/release"
+	wait_gone 20 "$_mk" || {
+		bad "stall: the stalled maker did not finish"
+		reap "$_mk"
+	}
+	wait_gone 20 "$_c" || {
+		bad "stall: the taker did not finish"
+		reap "$_c"
+	}
 	_s1=0
 	wait "$_mk" || _s1=$?
 	_s2=0
@@ -1064,6 +1084,9 @@ t_lock_order() {
 t_lock_dead_waiter() {
 	fresh deadw
 	qfix
+	# FIX128 review round 1: W2 waits 10 + 30 s at most under this case's
+	# bounds, more than fresh's 10 s; 300 s keeps those bounds binding.
+	BENCH_LOCK_WAIT=300
 	holder H
 	start env BENCH_LOCK_GRACE=1 sh "$R/bench.sh" lock run W1 -- sh "$E/rec.sh" "$E/log" W1 > "${E:?}/w1.out" 2>&1
 	_w1=$BG
@@ -1088,24 +1111,54 @@ t_lock_dead_waiter() {
 	[ "$fails" -eq 0 ]
 }
 
+# clockshim <seconds>: $E/clock/date, a date whose +%s stands still until
+# $E/tick exists and then reads <seconds> on; every other form runs the
+# real date, /bin/date when there is one, so a date on the caller's PATH
+# cannot stand in for it. The shim quotes that path.
+clockshim() {
+	mkdir -p "${E:?}/clock"
+	_cs_d=/bin/date
+	[ -x "$_cs_d" ] || _cs_d=$(command -v date) || _cs_d=
+	case $_cs_d in
+	*"'"*) bad "clockshim: the real date's path has a quote in it: $_cs_d"; return 1 ;;
+	/*) ;;
+	*) bad "clockshim: no real date: $_cs_d"; return 1 ;;
+	esac
+	_cs_t=$("$_cs_d" +%s)
+	printf '#!/bin/sh\nif [ "$#" -eq 1 ] && [ "$1" = +%%s ]; then\n\tif [ -e "%s/tick" ]; then echo %s; else echo %s; fi\n\texit 0\nfi\nexec '\''%s'\'' "$@"\n' "$E" "$((_cs_t + ${1:?}))" "$_cs_t" "$_cs_d" > "${E:?}/clock/date"
+	chmod +x "${E:?}/clock/date"
+}
+
 t_lock_giveup() {
 	fresh giveup
 	qfix
+	# G's wait is 1 s, and the tick moves its clock on by exactly 1 s: a
+	# give-up that ignores BENCH_LOCK_WAIT, or that wants more than it
+	# (-gt for -ge), never comes.
+	clockshim 1
 	holder H
-	start env BENCH_LOCK_WAIT=1 sh "$R/bench.sh" lock run G -- echo ran > "${E:?}/g.out" 2>&1
+	# FIX128: G's clock stands still until $E/tick, so G cannot give up
+	# before this test has seen its ticket, however slow the host. On the
+	# real clock a second boundary just after its enqueue (load makes one
+	# likelier) let G give up within milliseconds. The bound, 300 polls (at
+	# least 30 s), is only for a waiter that never queues; the other cases
+	# give a waiter 10 s to say it waits.
+	start env PATH="$E/clock:$PATH" BENCH_LOCK_WAIT=1 sh "$R/bench.sh" lock run G -- echo ran > "${E:?}/g.out" 2>&1
 	_g=$BG
 	_seen=
 	_n=0
-	while [ "$_n" -lt 100 ] && pid_running "$_g"; do
+	while [ "$_n" -lt 300 ] && pid_running "$_g"; do
 		_tk=$(ticket_of "$_g") || _tk=
-		if [ -n "$_tk" ] && grep -qx 'label=G' "${E:?}/state/queue/$_tk"; then
+		if [ -n "$_tk" ] && grep -qx 'label=G' "${E:?}/state/queue/$_tk" 2> /dev/null; then
 			_seen=1
 			break
 		fi
-		sleep 0.02
+		sleep 0.1
 		_n=$((_n + 1))
 	done
 	[ -n "$_seen" ] || bad "give-up: the waiter showed no ticket (its pid= and label=) while it waited"
+	pid_running "$_g" || bad "give-up: the waiter gave up while its clock stood still"
+	: > "${E:?}/tick"
 	finish give-up "$_g" 75
 	grep -q 'still held by H (pid ' "${E:?}/g.out" || bad "give-up: the waiter did not name the holder: $(cat "${E:?}/g.out")"
 	[ -z "$(tickets)" ] || bad "give-up: a waiter that gave up left its ticket: $(tickets | tr '\n' ' ')"
@@ -1125,6 +1178,9 @@ t_lock_giveup() {
 t_lock_queue_reentry() {
 	fresh reentq
 	qfix
+	# FIX128 review round 1: W waits 10 + 10 + 30 + 30 s at most under this
+	# case's bounds, more than fresh's 10 s; 300 s keeps those binding.
+	BENCH_LOCK_WAIT=300
 	# The holder's command waits for $E/go, then runs a nested lock run
 	# with no wait at all, which lists the queue's tickets from inside.
 	cat > "${E:?}/nest.sh" << 'EOF'
@@ -1138,12 +1194,15 @@ EOF
 	start sh "$R/bench.sh" lock run W -- echo w-ran > "${E:?}/w.out" 2>&1
 	_w=$BG
 	wait_said 10 "${E:?}/w.out" || bad "re-entry: the waiter never waited"
-	[ -n "$(ticket_of "$_w")" ] || bad "re-entry: the waiter showed no ticket"
+	# FIX128: W's ticket is read here, while H holds: once the nested call
+	# ends, H releases, W takes the lock and its ticket goes.
+	_wt=$(ticket_of "$_w") || _wt=
+	[ -n "$_wt" ] || bad "re-entry: the waiter showed no ticket"
 	: > "${E:?}/go"
 	wait_file 10 "${E:?}/inner.st" || bad "re-entry: the nested call never finished"
 	[ "$(cat "${E:?}/inner.st" 2> /dev/null)" = 0 ] && grep -q '^inner-ran$' "${E:?}/inner.out" ||
 		bad "re-entry: a nested call under the holder's token, behind a waiter, did not pass through: $(cat "${E:?}/inner.out")"
-	[ "$(cat "${E:?}/inner.q" 2> /dev/null)" = "$(ticket_of "$_w")" ] || bad "re-entry: the nested call took a ticket: $(tr '\n' ' ' < "${E:?}/inner.q")"
+	[ "$(cat "${E:?}/inner.q" 2> /dev/null)" = "$_wt" ] || bad "re-entry: the nested call took a ticket: $(tr '\n' ' ' < "${E:?}/inner.q")"
 	! grep -q 'waiting for the lock' "${E:?}/inner.out" || bad "re-entry: the nested call waited"
 	finish re-entry "$_h" 0
 	finish re-entry "$_w" 0
@@ -1154,6 +1213,9 @@ EOF
 t_lock_queue_status() {
 	fresh qstatus
 	qfix
+	# FIX128 review round 1: S3 waits 10 + 3 * 30 s at most under this
+	# case's bounds, more than fresh's 10 s; 300 s keeps those binding.
+	BENCH_LOCK_WAIT=300
 	holder H
 	_ps=
 	for _c in S1 S2 S3; do
@@ -1184,6 +1246,10 @@ t_lock_queue_status() {
 t_lock_zombie_waiter() {
 	fresh zombiew
 	qfix
+	# FIX128 review round 1: Z must still wait after wait_said's 10 s and
+	# W waits 10 + 30 s at most, more than fresh's 10 s; 300 s keeps this
+	# case's own bounds binding.
+	BENCH_LOCK_WAIT=300
 	holder H
 	start perl -e '
 		my $d = shift;
@@ -1223,18 +1289,22 @@ t_lock_zombie_waiter() {
 	[ "$fails" -eq 0 ]
 }
 
-# A maker that backs off keeps its place: N makes the lock and stalls 6 s
-# before its holder write; C (a grace of 1 s) reclaims the bare directory
+# A maker that backs off keeps its place: N makes the lock and stalls
+# before its holder write until $E/unstall; C (a grace of 1 s) reclaims the bare directory
 # and holds; W queues behind C; then N backs off and puts its ticket back
 # under its first key, which sorts before W's.
 t_lock_stall_place() {
 	fresh stallp
 	qfix
-	BENCH_LOCK_WAIT=30
+	# FIX128 review round 1: under this case's bounds N waits at most
+	# 5 + 30 + 10 + 30 + 30 + 30 s (the stall's poll, wait_held, wait_said,
+	# the poll for its wait, finish C, its own finish) and W 130 s, more
+	# than the 30 s they had; 300 s keeps those bounds binding.
+	BENCH_LOCK_WAIT=300
 	_s=${tmp:?}/stallp.bench
 	rm -rf "${_s:?}"
 	cp -R "$R" "$_s"
-	lit "${_s:?}/core/lock.sh" 'BENCH_LOCK_SINCE=$(bench_utc)' 'BENCH_LOCK_SINCE=$(bench_utc); sleep 6' || bad "stall-place: the injected stall does not apply"
+	stall "$_s" || bad "stall-place: the injected stall does not apply"
 	start sh "$_s/bench.sh" lock run N -- sh "$E/rec.sh" "$E/log" N > "${E:?}/n.out" 2>&1
 	_mk=$BG
 	_k=0
@@ -1244,13 +1314,14 @@ t_lock_stall_place() {
 	done
 	start env BENCH_LOCK_GRACE=1 sh "$R/bench.sh" lock run C -- sh "$E/hold.sh" "$E/release" "$E/log" C > "${E:?}/c.out" 2>&1
 	_c=$BG
-	wait_held 5 C || bad "stall-place: the taker never held the lock"
+	wait_held 30 C || bad "stall-place: the taker never held the lock"
 	start sh "$R/bench.sh" lock run W -- sh "$E/rec.sh" "$E/log" W > "${E:?}/w.out" 2>&1
 	_w=$BG
 	wait_said 10 "${E:?}/w.out" || bad "stall-place: W never waited"
 	! grep -q 'waiting for the lock' "${E:?}/n.out" || bad "stall-place: N backed off before W queued, so this tests nothing: $(cat "${E:?}/n.out")"
+	: > "${E:?}/unstall"
 	_k=0
-	while ! grep -q 'waiting for the lock held by C ' "${E:?}/n.out" && [ "$_k" -lt 100 ]; do
+	while ! grep -q 'waiting for the lock held by C ' "${E:?}/n.out" && [ "$_k" -lt 300 ]; do
 		sleep 0.1
 		_k=$((_k + 1))
 	done
@@ -1270,6 +1341,9 @@ t_lock_stall_place() {
 t_lock_ticket_back() {
 	fresh tback
 	qfix
+	# FIX128 review round 1: W2 waits 10 + 5 + 30 + 30 s at most under this
+	# case's bounds, more than fresh's 10 s; 300 s keeps those binding.
+	BENCH_LOCK_WAIT=300
 	holder H
 	start sh "$R/bench.sh" lock run W1 -- sh "$E/rec.sh" "$E/log" W1 > "${E:?}/w1.out" 2>&1
 	_w1=$BG
@@ -1309,7 +1383,9 @@ t_lock_own_pid() {
 	fresh ownpid
 	qfix
 	holder H
-	start sh "$E/late.sh" "$E/go" env BENCH_LOCK_WAIT=5 sh "$R/bench.sh" lock run W -- sh "$E/rec.sh" "$E/log" W > "${E:?}/w.out" 2>&1
+	# FIX128 review round 1: W waits 10 + 30 s at most under this case's
+	# bounds (wait_said, then finish); its old 5 s could end first.
+	start sh "$E/late.sh" "$E/go" env BENCH_LOCK_WAIT=300 sh "$R/bench.sh" lock run W -- sh "$E/rec.sh" "$E/log" W > "${E:?}/w.out" 2>&1
 	_w=$BG
 	mkdir -p "${E:?}/state/queue"
 	_sk=${E:?}/state/queue/w.000000000001.000000.$(printf '%010d' "$_w").stale0
