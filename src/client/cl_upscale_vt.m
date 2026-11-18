@@ -26,7 +26,7 @@
  * Makefile sets none: a default build's minimum is the build host's).
  *
  * The scaler needs a model the operating system downloads once. Nothing
- * here downloads it except CL_UpscaleVTFetchStart, which only the menu
+ * here downloads it except the fetch further down, which only the menu
  * item calls (a key press, which stuffed text cannot make), after the
  * menu has said so (UPSCALE_SAY_VT_FETCH); the download runs on its own
  * and the menu shows its state. A vt run with the model missing refuses.
