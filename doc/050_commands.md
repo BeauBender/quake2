@@ -17,7 +17,8 @@ original clients (Vanilla Quake II) commands are still in place.
   button: `pad` attaches an SDL virtual gamepad, which the engine finds
   as any controller plugged in after the start (it is refused in the
   start's first frames, where a new device is taken as one that was
-  already there); `button <name> <0|1>` presses or releases one of its
+  already there); `pads` lists the joysticks and which one the engine
+  uses; `button <name> <0|1>` presses or releases one of its
   buttons and `axis <name> <value>` moves one of its axes (SDL's names:
   `a`, `b`, `start`, `dpup`, `leftx`, `righttrigger`, ...); `key <name>
   <0|1>` pushes the key event of a scancode (`Up`, `Down`, `Left`,

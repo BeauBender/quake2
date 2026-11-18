@@ -3300,6 +3300,8 @@ IN_MatchJoyPreset(void)
  *   in_probe key <name> <0|1>     pushes the key event of a scancode (Up,
  *                                 Down, Left, Right, Return, Escape: the
  *                                 Siri Remote as keys)
+ *   in_probe pads                 lists the joysticks SDL has, and which
+ *                                 one is the engine's gamepad
  *   in_probe state                prints where input goes, the player's
  *                                 origin, view angles and gun frame
  */
@@ -3394,6 +3396,26 @@ IN_Probe_f(void)
 		SDL_PushEvent(&ev);
 		Com_Printf("in_probe: key %s %s\n", Cmd_Argv(2), down ? "down" : "up");
 	}
+	else if (!strcmp(what, "pads"))
+	{
+		int i, n = 0;
+		SDL_JoystickID *ids = SDL_GetJoysticks(&n);
+		SDL_JoystickID used = controller ? SDL_GetJoystickID(SDL_GetGamepadJoystick(controller)) : 0;
+		SDL_JoystickID mine = probe_joy ? SDL_GetJoystickID(probe_joy) : 0;
+
+		Com_Printf("in_probe: %d joysticks\n", ids ? n : 0);
+
+		for (i = 0; ids && i < n; i++)
+		{
+			const char *name = SDL_GetJoystickNameForID(ids[i]);
+
+			Com_Printf("in_probe: joystick %d, id %u, '%s', gamepad %d, virtual %d%s%s\n", i + 1,
+					(unsigned)ids[i], name ? name : "", SDL_IsGamepad(ids[i]), SDL_IsJoystickVirtual(ids[i]),
+					ids[i] == used ? ", the engine's gamepad" : "", ids[i] == mine ? ", the probe's pad" : "");
+		}
+
+		SDL_free(ids);
+	}
 	else if (!strcmp(what, "state"))
 	{
 		Com_Printf("in_probe: key_dest %d, origin %d %d %d, angles %.0f %.0f, gunframe %d\n",
@@ -3403,7 +3425,7 @@ IN_Probe_f(void)
 	}
 	else
 	{
-		Com_Printf("Usage: in_probe pad|button <name> <0|1>|axis <name> <value>|key <name> <0|1>|state\n");
+		Com_Printf("Usage: in_probe pad|pads|button <name> <0|1>|axis <name> <value>|key <name> <0|1>|state\n");
 	}
 }
 #endif
