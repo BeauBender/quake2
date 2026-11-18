@@ -379,18 +379,6 @@ The bundle holds *quake2*, *Info.plist* (from *stuff/ios/Info.plist.in*),
 into the bundle, for a local build only) are described at the top of the
 Makefile. `make ios_objects` builds the objects alone.
 
-### Apple TV (simulator)
-
-`make ios IOS_SDK=appletvsimulator` builds the same app for the Apple TV
-simulator (`arm64-apple-tvos17.0-simulator`, Xcode's tvOS platform needed),
-with its own *Info.plist* (*stuff/ios/Info-tvos.plist.in*). It is the
-iPhone build with the touch overlay and the iOS-only window hints left
-out; controller and Siri Remote input, the menu's focus and where the game
-data lives are not done yet (*docs/runbook/TASK23.md*).
-`IOS_SIM_SDK=appletvsimulator scripts/ios-sim.sh run --data DIR ...` runs
-it on an Apple TV simulator device; `tests/check-tvos.sh` builds its
-objects in the gate.
-
 `scripts/ios-sim.sh smoke --out DIR` builds the app with a synthetic pak
 (*scripts/ios/smokepak.py*: a palette, a console font whose glyphs are
 transparent and a console background, made from formulas, no id
@@ -414,6 +402,19 @@ simulator and checks their platform, exports and AppKit references;
 where there is no iOS simulator SDK. With the device SDK they do the same
 for a device (`IOS_SDK=iphoneos`, below), and they run
 `scripts/ios-device.sh --selftest`.
+
+### Apple TV (simulator)
+
+`make ios IOS_SDK=appletvsimulator` builds the same app for the Apple TV
+simulator (`arm64-apple-tvos17.0-simulator`, Xcode's tvOS platform needed),
+with its own *Info.plist* (*stuff/ios/Info-tvos.plist.in*). It is the
+iPhone build with the touch overlay, the on-screen keyboard and the
+iPhone's window hints left out; controller and Siri Remote input, the
+menu's focus and where the game data lives are not done yet
+(*docs/runbook/TASK23.md*).
+`IOS_SIM_SDK=appletvsimulator scripts/ios-sim.sh run --out DIR --data DATA`
+runs it on an Apple TV simulator device (DIR outside the checkout, as for
+the smoke); `tests/check-tvos.sh` builds its objects in the gate.
 
 ### Running on an iPhone or iPad
 
