@@ -2046,10 +2046,10 @@ unknown' '0\n5\n' 'gate_settle=5'
 30' '0\n5\n' 'gate_settle=0'
 	[ "$_st" -eq 1 ] && grep -q 'quiet.reason=gpu.after)' "${E:?}/err" || bad "settle: gate_settle=0 did not judge at once (status $_st)"
 	[ "$(cat "${STUB:?}/n.gate")" -eq 1 ] || bad "settle: gate_settle=0 read the GPU $(cat "${STUB:?}/n.gate") times, the gate's alone is 1"
-	# Each wait is cut to the time left: a poll of 20 s with gate_settle=1.
+	# Each wait is cut to the time left: a poll of 20 s with gate_settle=4.
 	settle_put '0
-30' '0\n30\n' 'gate_settle=1' 20
-	[ "$_st" -eq 1 ] && [ "$_took" -le 10 ] || bad "settle: a poll of 20 s was not cut to the settle time of 1 s (status $_st, $_took s)"
+30' '0\n30\n' 'gate_settle=4' 20
+	[ "$_st" -eq 1 ] && [ "$_took" -le 10 ] || bad "settle: a poll of 20 s was not cut to the settle time of 4 s (status $_st, $_took s)"
 	[ "$fails" -eq 0 ]
 }
 
@@ -2293,16 +2293,26 @@ t_gate_poll() {
 	env BENCH_GATE_POLL=0.01 sh "$R/bench.sh" lock run zzq -- true || bad "gate poll: BENCH_GATE_POLL=0.01 was refused"
 	store_setup
 	qcase g 's/^runs=.*/runs=1/; s/^warmup=.*/warmup=0/'
-	printf 'gate_wait=1\n' >> "${E:?}/g.case"
+	# gate_wait=4 and a stub that stays busy: the gate always naps (FIX111).
+	# With a wait of 1 s the gate broke before its first nap whenever its
+	# first snapshot crossed a whole-second boundary, and the uncut nap never
+	# ran. A busy reading and 4 s leave no boundary that skips the nap: the
+	# uncut nap is 20 s, the cut ones total 4 s. High-resolution time.
+	printf 'gate_wait=4\n' >> "${E:?}/g.case"
 	printf '50\n' > "${STUB:?}/gpu.gate"
-	_t0=$(date +%s)
+	_t0=$(perl -MTime::HiRes=time -e 'printf "%.3f", time')
 	start env BENCH_GATE_POLL=20 sh "$R/bench.sh" baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err"
 	if wait_gone 12 "$BG"; then wait "$BG" || true; else
 		reap "$BG"
-		bad "gate poll: a poll of 20 s was not cut to the gate's wait of 1 s"
+		bad "gate poll: a poll of 20 s was not cut to the gate's wait of 4 s"
 	fi
-	_t=$(($(date +%s) - _t0))
-	[ "$_t" -le 10 ] || bad "gate poll: the gate with gate_wait=1 and a poll of 20 s took $_t s"
+	_t=$(perl -MTime::HiRes=time -e 'printf "%.3f", time - $ARGV[0]' "$_t0")
+	case $_t in '' | *[!0-9.]*) bad "gate poll: no elapsed time ($_t)" ;; esac
+	# 4 s of wait plus 6 s for the readings and the put on a loaded host: under
+	# the 12 s wall bound, well under the 20 s uncut nap.
+	perl -e 'exit !($ARGV[0] < 4 + 6)' "$_t" || bad "gate poll: the gate with gate_wait=4 took $_t s, over its wait and one reading"
+	# The gate really napped: at least 2 readings, and it timed out on its wait.
+	[ "$(cat "${STUB:?}/n.gate")" -ge 2 ] && grep -q 'quiet.reason=gate' "${E:?}/err" || bad "gate poll: the gate did not nap and time out"
 	[ "$fails" -eq 0 ]
 }
 
