@@ -322,6 +322,8 @@ EOF
 	s_cmt_block() { printf '/* Cvar_Get("zz_c", "0", 0); */\n' > src/common/c.c; }
 	s_cmt_line() { printf '// Cvar_Get("zz_c", "0", 0);\n' > src/common/c.c; }
 	s_no_base() { :; }
+	s_odd() { printf 'void f(void) { Cvar_Get("zz odd", "0", 0); }\n' > src/common/o.c; }
+	s_proto() { printf 'cvar_t *Cvar_Get(const char *var_name, const char *value, int flags);\nvoid Cmd_AddCommand(const char *cmd_name, xcommand_t function);\n' > src/common/p.h; }
 	s_no_baseline() { rm -f tests/baselines/undocumented-cvars.txt; }
 	s_no_allow() { rm -f tests/baselines/nonliteral-calls.txt; }
 
@@ -351,18 +353,21 @@ EOF
 	case_run literal-documented-one-line accepted "check-cvar-docs: ok" s_literal_doc
 	case_run commented-out-block-counts refused zz_c s_cmt_block
 	case_run commented-out-line-counts refused zz_c s_cmt_line
+	case_run name-with-a-space refused "is not a name the check can read" s_odd
+	case_run prototypes-are-not-calls accepted "check-cvar-docs: ok" s_proto
 	CASE_BASE=0000000000000000000000000000000000000000 case_run base-commit-missing refused "upstream base commit" s_no_base
 	case_run baseline-unreadable refused "cannot read tests/baselines/undocumented-cvars.txt" s_no_baseline
 	case_run allow-list-unreadable refused "cannot read tests/baselines/nonliteral-calls.txt" s_no_allow
-	# git failing is not "no match": a git that exits 3 stops the check.
+	# git failing is not "no match": a git that finds the commit and then
+	# exits 3 on the search stops the check.
 	mkdir -p "$st/fakebin"
-	printf '#!/bin/sh\nexit 3\n' > "$st/fakebin/git"
+	printf '#!/bin/sh\ncase "$1" in cat-file) exit 0 ;; esac\nexit 3\n' > "$st/fakebin/git"
 	chmod +x "$st/fakebin/git"
 	n=$((n + 1))
 	cp -R "$fx" "$st/c$n"
 	rc=0
 	out=$(PATH="$st/fakebin:$PATH" CVARDOCS_ROOT=$st/c$n CVARDOCS_BASE=$sha sh "$here/check-cvar-docs.sh" 2>&1) || rc=$?
-	if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -qF "upstream base commit"; then
+	if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -qF "git grep at"; then
 		echo "  ok   git-fails: refused"
 	else
 		echo "check-cvar-docs: self-test case git-fails: expected refused, got exit $rc: $out"
