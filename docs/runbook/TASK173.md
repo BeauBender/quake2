@@ -154,6 +154,13 @@ source changes this round but the unit test's order):
   `O_EXCL | O_NOFOLLOW`. The selftest's runs get no `GIT_*` variable and no user or system git
   config (`mfx.git_env`), and its failure lines name the scratch folder `<tmp>`; the tool's own
   messages name paths relative to `<out>`.
+- *Merge with FIX48* (merge-confirmation review): `pins.sh record` now needs the engine to print one
+  `N frames, S seconds: F fps` line equal to the scenario's `// frames <demo> <count>` header. The
+  selftest's stub prints that line, with N read from the scratch scenario for the demo it was given;
+  a scenario with no header for the demo gets no line, which pins.sh accepts as unchecked (it says so
+  on stderr). A stub that prints no line, and one that prints a wrong count, are each refused (the
+  "printed no rendered-frame count" and "rendered 5 frames" reasons). A scratch scenario left by a
+  killed run is named in one line, relative to the checkout, and a selftest case covers it.
 
 *Mutants*, each run against the selftest in a scratch copy of the scripts, each refused:
 

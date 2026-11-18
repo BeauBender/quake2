@@ -209,7 +209,8 @@ def record(a, key, scen):
         cmd = [PINS, "record", "metal", scen] + (["--replace"] if a.replace else [])
         rc, out = mfx.sh_group(cmd, env=env, timeout=RECORD_TIMEOUT)
         if rc != 0:
-            raise Bad("pins.sh record %s failed: %s" % (scen, out.strip()[-400:]))
+            out = out.strip()  # the reason leads, the path after it: keep both ends of a long message
+            raise Bad("pins.sh record %s failed: %s" % (scen, out if len(out) <= 700 else out[:350] + " ... " + out[-350:]))
         print("rt-variations: %s: %s" % (scen, out.strip().splitlines()[0] if out.strip() else "recorded"))
     if not os.path.isfile(os.path.join(d, "complete")):
         raise Bad("%s: the record is not complete" % rel)
@@ -342,7 +343,11 @@ def run_groups(a, groups, records, pins, index, done):
             if k != key:
                 continue
             cfg = os.path.join(SCEN_DIR, scen + ".cfg")
-            fd = os.open(cfg, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            try:
+                fd = os.open(cfg, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            except FileExistsError:
+                raise Bad("%s is left from an earlier run that was killed; remove it and run again"
+                          % os.path.relpath(cfg, ROOT))
             try:
                 with os.fdopen(fd, "w") as f:
                     f.write(scenario_body(os.path.join(SCEN_DIR, key[0] + ".cfg"), pr[2]))
@@ -413,7 +418,8 @@ def cmd_check(a):
 STUB = r'''#!/bin/bash
 rt=""; d=""; s=""; r=""
 echo "$*" >> "%(log)s"
-while [ $# -gt 0 ]; do case $1 in pins_dir) d=$2;; pins_scenario) s=$2;; vid_renderer) r=$2;; r_rt_*) rt="$rt $1=$2";; esac; shift; done
+m=""
+while [ $# -gt 0 ]; do case $1 in +demomap) m=$2;; pins_dir) d=$2;; pins_scenario) s=$2;; vid_renderer) r=$2;; r_rt_*) rt="$rt $1=$2";; esac; shift; done
 [ "${MTL_DEBUG_LAYER:-}" = 1 ] && echo "Metal API Validation Enabled"
 %(extra)s
 h=0; [ -z "$rt" ] || h=$(( $(printf '%%s' "$rt" | cksum | cut -d' ' -f1) %% 50 + 1 ))
@@ -424,8 +430,15 @@ for c in 0 1 2; do
       head -c 9216 /dev/zero | tr '\000' "\\$(printf %%03o "$v")"; } > "$d/$f"
     echo "$f $r 64x48" >> "$d/manifest.txt"
 done
+%(frames)s
 exit 0
 '''
+
+# The timedemo line pins.sh checks (FIX48): the "// frames <demo> <count>" header of the scenario
+# the stub runs, printed as pins.sh's own fake engine prints it. A scenario with no header for the
+# demo gets no line: pins.sh then checks nothing and says so on stderr.
+STUB_FRAMES = '''n=$(sed -n "s|^// frames $m \\([0-9][0-9]*\\)$|\\1|p" "%(scen)s/$s.cfg" 2>/dev/null)
+[ -z "$n" ] || printf '%%s frames, 0.3 seconds: 2296.7 fps\\n\\n' "$n"'''
 
 TEST_FILE = """# a test presets file
 preset off | off |
@@ -548,10 +561,11 @@ def cmd_selftest(a):
         os.makedirs(os.path.join(tmp, "gd", "baseq2"))
         log = os.path.join(tmp, "calls.log")
 
-        def stub(name, extra=""):
+        def stub(name, extra="", frames=None):
             p = os.path.join(tmp, name)
+            fr = (STUB_FRAMES if frames is None else frames) % {"scen": os.path.join(tree, "scripts", "pins", "scenarios")}
             with open(p, "w") as f:
-                f.write(STUB % {"log": log, "extra": extra})
+                f.write(STUB % {"log": log, "extra": extra, "frames": fr})
             os.chmod(p, 0o755)
             return p
 
@@ -699,6 +713,19 @@ def cmd_selftest(a):
             rc, text = run(["--out", bad])
             ok(rc != 0 and len(calls()) == n and not os.path.exists(os.path.join(repo, "x")),
                "an output path %s is refused before anything runs: %s" % (what, text[-200:]))
+        # the timedemo line pins.sh checks: a stub that prints none, or a wrong count, is refused
+        for name, fr, why in (("nolines", "true", "printed no rendered-frame count"),
+                              ("wrongn", "printf '5 frames, 0.3 seconds: 2296.7 fps\\n\\n'", "rendered 5 frames")):
+            rc, text = run(["--out", os.path.join(tmp, "o-" + name)], dict(env, PINS_BIN=stub(name, "", fr)))
+            ok(rc != 0 and why in text and "incomplete" in text, "the %s stub is refused (%s): %s" % (name, why, text[-300:]))
+        # a scratch scenario an earlier run left is named, relative to the checkout, in one line
+        left = os.path.join(tree, "scripts", "pins", "scenarios", SCRATCH + "v1-off.cfg")
+        with open(left, "w") as f:
+            f.write("// left\n")
+        rc, text = run(["--out", os.path.join(tmp, "o-left")])
+        os.remove(left)
+        ok(rc != 0 and "File exists" not in text and "earlier run" in text and tmp not in text and
+           "scripts/pins/scenarios/" + SCRATCH + "v1-off.cfg is left" in text, "a left scratch scenario is named: " + text[-300:])
         # a failing engine and a validation message fail the run, and no scratch scenario is left
         for name, extra in (("fail", "exit 1"), ("valid", 'echo "-[MTLDebugDevice validation error] boom"')):
             rc, text = run(["--out", os.path.join(tmp, "o-" + name)], dict(env, PINS_BIN=stub(name, extra)))
