@@ -52,6 +52,8 @@
 #include <time.h>
 
 #include "header/upscale_vt.h"
+/* CL_UpscaleVTHalf and CL_UpscaleVTUnhalf, the half-float copies' bytes */
+#include "header/upscale_half.h"
 
 /* the tile size the support checks make their configuration at */
 #define VT_PROBE_SIDE 64
@@ -261,15 +263,6 @@ CL_UpscaleVTFetchStart(int factor, char *reason, size_t size)
 			__block unsigned gen = 0;
 			unsigned mine;
 
-			dispatch_sync(q, ^{
-				running = (vt_fetch_state == UPSCALE_VT_FETCH_RUNNING);
-			});
-
-			if (running)
-			{
-				return 1;
-			}
-
 			c = CL_UpscaleVTConfig(VT_PROBE_SIDE, VT_PROBE_SIDE, factor);
 
 			if (!c)
@@ -279,13 +272,25 @@ CL_UpscaleVTFetchStart(int factor, char *reason, size_t size)
 				return 0;
 			}
 
+			/* one block checks and claims, so two presses start one fetch */
 			dispatch_sync(q, ^{
-				gen = ++vt_fetch_gen;
-				vt_fetch_state = UPSCALE_VT_FETCH_RUNNING;
-				vt_fetch_why[0] = '\0';
-				vt_fetch_start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-				vt_fetch_config = c;
+				running = (vt_fetch_state == UPSCALE_VT_FETCH_RUNNING);
+
+				if (!running)
+				{
+					gen = ++vt_fetch_gen;
+					vt_fetch_state = UPSCALE_VT_FETCH_RUNNING;
+					vt_fetch_why[0] = '\0';
+					vt_fetch_start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+					vt_fetch_config = c;
+				}
 			});
+
+			if (running)
+			{
+				return 1;
+			}
+
 			mine = gen;
 
 			[c downloadConfigurationModelWithCompletionHandler:^(NSError *e) {
@@ -481,44 +486,6 @@ CL_UpscaleVTBuffer(int w, int h)
 	}
 
 	return b;
-}
-
-/*
- * A byte (0 to 255) as the IEEE half-float bit pattern of v / 255 (the
- * scaler's colours run from 0 to 1), and back. The compiler's _Float16
- * does the rounding.
- */
-static unsigned short
-CL_UpscaleVTHalf(unsigned char v)
-{
-	const _Float16 f = (_Float16)(v / 255.0f);
-	unsigned short h;
-
-	memcpy(&h, &f, sizeof(h));
-
-	return h;
-}
-
-static unsigned char
-CL_UpscaleVTUnhalf(unsigned short h)
-{
-	int e = (h >> 10) & 0x1f;
-	float f;
-
-	if (h & 0x8000)
-	{
-		return 0;
-	}
-
-	if (e == 0x1f)
-	{
-		return (h & 0x3ff) ? 0 : 255;
-	}
-
-	f = (e ? (1.0f + (h & 0x3ff) / 1024.0f) * ldexpf(1.0f, e - 15) :
-		(h & 0x3ff) / 1024.0f * ldexpf(1.0f, -14)) * 255.0f + 0.5f;
-
-	return (f >= 255.0f) ? 255 : (unsigned char)f;
 }
 
 /* RGBA8 rows to or from the buffer; BGRA swaps red and blue */

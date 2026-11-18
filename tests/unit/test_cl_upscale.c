@@ -2107,7 +2107,12 @@ TEST(upscale_vt_item)
 		UPSCALE_VT_FETCH_IDLE, "", s, sizeof(s)), 0);
 	T_EQ_STR(s, "greyed: VideoToolbox's super-resolution scaler has no 2x");
 	T_EQ_INT(CL_UpscaleVTItem(1, "", UPSCALE_VT_FETCH_IDLE, "", s, sizeof(s)), 1);
-	T_EQ_STR(s, "Apple's ML scaler; the first press has macOS download its model");
+	/*
+	 * idle: true where the model is there (the M6: a press runs) and
+	 * where it is not (a press fetches it first)
+	 */
+	T_EQ_STR(s, "Apple's ML scaler; a press first has macOS download its model "
+		"if it is missing");
 
 	T_EQ_INT(CL_UpscaleVTItem(1, "", UPSCALE_VT_FETCH_RUNNING, "", s, sizeof(s)), 0);
 	T_EQ_STR(s, "greyed: macOS is downloading the model; it can be pressed once that is done");
@@ -2119,6 +2124,8 @@ TEST(upscale_vt_item)
 		"the model's download did not finish in 900 s", s, sizeof(s)), 1);
 	T_EQ_STR(s, "the model's download did not finish in 900 s; press to try again");
 	T_EQ_INT(CL_UpscaleVTItem(1, "", UPSCALE_VT_FETCH_FAILED, NULL, s, sizeof(s)), 1);
+	T_EQ_STR(s, "the model's download failed; press to try again");
+	T_EQ_INT(CL_UpscaleVTItem(1, "", UPSCALE_VT_FETCH_FAILED, "", s, sizeof(s)), 1);
 	T_EQ_STR(s, "the model's download failed; press to try again");
 
 	/* unsupported wins over a fetch; no reason; a short or no buffer */

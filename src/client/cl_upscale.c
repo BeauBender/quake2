@@ -682,8 +682,9 @@ CL_UpscaleVTItem(int available, const char *why, upscale_vt_fetch_t fetch,
 	}
 	else
 	{
-		snprintf(status, size, "Apple's ML scaler; the first press has macOS "
-			"download its model");
+		/* true with the model there (a press runs) and without (it fetches) */
+		snprintf(status, size, "Apple's ML scaler; a press first has macOS "
+			"download its model if it is missing");
 	}
 
 	return ok;

@@ -98,7 +98,7 @@ scale(int side, int factor, int *alpha)
 
 /*
  * A flat 72 x 72 tile of one colour scaled at the run's factor: 1 when
- * the mean of each colour channel out is within 12 levels of the colour
+ * the mean of each colour channel out is within 4 levels of the colour
  * in (a scaler that keeps colours keeps a flat tile flat), the means in
  * mean; 0 when the scale fails or a channel moves.
  */
@@ -137,7 +137,7 @@ flat(const unsigned char rgb[3], int factor, int mean[3])
 
 	for (c = 0; c < 3; c++)
 	{
-		ok = ok && (abs(mean[c] - rgb[c]) <= 12);
+		ok = ok && (abs(mean[c] - rgb[c]) <= 4);
 	}
 
 	free(in);
