@@ -539,6 +539,8 @@ done
 #            RM_RTG_Frame(); (RM_RTG_Init calls it too, so a removal still links)
 #   rtinit   RI_Init calls RM_RT_Init(&rtcaps); before ri.Vid_MenuInit(
 #   rtginit  RI_Init calls RM_RTG_Init(); after its RM_RT_Init( and before ri.Vid_MenuInit(
+#   rtflag   RI_Init sets rtcaps.raytracing = rm_rtg_traces(&rm_rtg); after its rm_rtg_decide( and before
+#            RM_RT_Init(&rtcaps); (without it rtcaps is a copy of caps and the scenes skip the gate)
 #   rawcaps  no *_Init( of the file takes the raw &caps, other than RM_FX_Init: the MetalFX scalers
 #            trace nothing and RM_FX_Init reads only caps.families; every scene that traces takes
 #            rtcaps, whose raytracing is the gate's answer
@@ -564,6 +566,8 @@ seated() {
 			first = 1
 			if ($0 ~ /^[ \t]*RM_RTG_Frame\(\);[ \t]*$/) frame = 1
 		}
+		ri && !dec && /rm_rtg_decide[ \t]*\(/ { dec = NR }
+		ri && !asg && /^[ \t]*rtcaps[.]raytracing[ \t]*=[ \t]*rm_rtg_traces[ \t]*\([ \t]*&[ \t]*rm_rtg[ \t]*\)[ \t]*;/ { asg = NR }
 		ri && !rt && /^[ \t]*RM_RT_Init\(&rtcaps\);/ { rt = NR }
 		ri && !rta && /^[ \t]*RM_RT_Init\(/ { rta = NR }
 		ri && rta && !rtg && /^[ \t]*RM_RTG_Init\(\);/ { rtg = NR }
@@ -574,6 +578,7 @@ seated() {
 			if (!frame) out = out " frame"
 			if (!rt || !menu || rt > menu) out = out " rtinit"
 			if (!rtg || !menu || rtg > menu) out = out " rtginit"
+			if (!asg || !dec || !rt || asg < dec || asg > rt) out = out " rtflag"
 			if (raw) out = out " rawcaps"
 			if (out != "") { print substr(out, 2); exit 1 }
 			exit 0
@@ -593,6 +598,12 @@ seat_mutant() {
 		rtglate) awk '/^RI_Init\(/ { b = 1 } b && /^}/ { b = 0 }
 			b && held == "" && !done && /^[ \t]*RM_RTG_Init\(\);/ { held = $0; done = 1; next }
 			{ print } b && held != "" && index($0, "ri.Vid_MenuInit(") { print held; held = "" }' "$2" ;;
+		noflag) awk '/^RI_Init\(/ { b = 1 } b && /^}/ { b = 0 }
+			b && /^[ \t]*rtcaps[.]raytracing[ \t]*=/ { next } { print }' "$2" ;;
+		flaglate) awk '/^RI_Init\(/ { b = 1 } b && /^}/ { b = 0 }
+			b && held == "" && !done && /^[ \t]*rtcaps[.]raytracing[ \t]*=/ { held = $0; done = 1; next }
+			{ print } b && held != "" && /^[ \t]*RM_RT_Init\(&rtcaps\);/ { print held; held = "" }' "$2" ;;
+		flagraw) sed 's/^\([[:space:]]*rtcaps[.]raytracing[[:space:]]*=[[:space:]]*\)rm_rtg_traces([^;]*);/\1caps.raytracing;/' "$2" ;;
 		rawother) awk '{ print } /^[ \t]*RM_FX_Init\(&caps\);/ { print "\tRM_SUN_Init(&caps);" }' "$2" ;;
 		renamedframe) sed 's/^RI_BeginFrame(/RI_BeginFrame_old(/' "$2" ;;
 		renamedinit) sed 's/^RI_Init(/RI_Init_old(/' "$2" ;;
@@ -605,14 +616,15 @@ seated "$seat_main" > "${tmp:?}/seat.out" || rc=$?
 if [ "$rc" = 2 ]; then
 	bad "RI_Init or RI_BeginFrame not found in $seat_main"
 elif [ "$rc" != 0 ]; then
-	bad "$seat_main: the ray-tracing gate's call seats are broken ($(cat "${tmp:?}/seat.out"); frame: RM_RTG_Frame(); first in RI_BeginFrame, rtinit: RM_RT_Init(&rtcaps); in RI_Init, rtginit: RM_RTG_Init(); after it, rawcaps: an *_Init(&caps) other than RM_FX_Init)"
+	bad "$seat_main: the ray-tracing gate's call seats are broken ($(cat "${tmp:?}/seat.out"); frame: RM_RTG_Frame(); first in RI_BeginFrame, rtinit: RM_RT_Init(&rtcaps); in RI_Init, rtginit: RM_RTG_Init(); after it, rtflag: rtcaps.raytracing = rm_rtg_traces(&rm_rtg); between rm_rtg_decide and RM_RT_Init, rawcaps: an *_Init(&caps) other than RM_FX_Init)"
 else
-	for m in noframe framelate rawrt nortg rtglate rawother renamedframe renamedinit; do
+	for m in noframe framelate rawrt nortg rtglate noflag flaglate flagraw rawother renamedframe renamedinit; do
 		# a renamed function is "not found" (2), the others name the rules they break (1)
 		case $m in
 			noframe|framelate) want=frame ;;
-			rawrt) want="rtinit rawcaps" ;;
+			rawrt) want="rtinit rtflag rawcaps" ;;
 			nortg|rtglate) want=rtginit ;;
+			noflag|flaglate|flagraw) want=rtflag ;;
 			rawother) want=rawcaps ;;
 			*) want="" ;;
 		esac
@@ -906,6 +918,6 @@ for rate_mut in 's/rm_rate_start);/metal_rate_start->value);/' 's/&rm_rate, rm_r
 done
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; 4 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; 5 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; $build)"
 fi
 exit $fail

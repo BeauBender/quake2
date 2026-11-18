@@ -70,7 +70,8 @@ listed to 0. The line is `ref_metal: <cvar> reads 0: no ray tracing on this devi
 Neither seat is seen by the build: `RM_RTG_Init` calls `RM_RTG_Frame` too, and `&caps` for `&rtcaps`
 compiles. Part (g) of `tests/check-ref-metal.sh` holds them in `rm_main.c` by source inspection,
 comments and strings stripped, as part (d) holds the flush points: `RI_BeginFrame`'s first statement
-after its declarations (and `(void)camera_separation;`) is `RM_RTG_Frame();`; `RI_Init` calls
+after its declarations (and `(void)camera_separation;`) is `RM_RTG_Frame();`; `RI_Init` sets
+`rtcaps.raytracing = rm_rtg_traces(&rm_rtg);` after `rm_rtg_decide(` and before `RM_RT_Init(&rtcaps);`, calls
 `RM_RT_Init(&rtcaps);` and after it `RM_RTG_Init();`, both before `ri.Vid_MenuInit()`; and no `*_Init(`
 of the file takes the raw `&caps` but `RM_FX_Init`, which reads only the families.
 
@@ -139,10 +140,11 @@ guards, the table's two kinds of row, the line format), 38 killed by the host te
 UBSAN and 3 equivalent (a negative `n` that the `size_t` cast already refuses in the line check, a
 negative `k` that never counts down to 0 in `rm_rtg_effect`, a negative `n` for which the step's loop
 runs no turn); and 4 of the table check (an unclassified cvar on one line and over two lines, a row
-whose cvar is gone, an effect switch defaulting to 1), each refused. The seat check refuses 8, each
+whose cvar is gone, an effect switch defaulting to 1), each refused. The seat check refuses 11, each
 naming the rule it breaks: the frame call deleted, and moved below the next statement (`frame`);
-`&caps` for `&rtcaps` (`rtinit rawcaps`); `RM_RTG_Init();` deleted, and moved after
-`ri.Vid_MenuInit()` (`rtginit`); an added `RM_SUN_Init(&caps);` (`rawcaps`); and `RI_BeginFrame` or
+`&caps` for `&rtcaps` (`rtinit rtflag rawcaps`, the unseated `RM_RT_Init(&rtcaps);` also unseats the flag's bound); `RM_RTG_Init();` deleted, and moved after
+`ri.Vid_MenuInit()` (`rtginit`); the `rtcaps.raytracing = rm_rtg_traces(&rm_rtg);` line deleted, moved
+after `RM_RT_Init(&rtcaps);`, and its right side replaced with `caps.raytracing` (`rtflag`); an added `RM_SUN_Init(&caps);` (`rawcaps`); and `RI_BeginFrame` or
 `RI_Init` renamed (not found). The report line's render-stage wording was mutated 4 ways (the branch
 dropped, its suffix dropped, the line naming the render-stage path again, the branch taken by every
 traced path), each killed by the host test. The logs, lists and tools are in
