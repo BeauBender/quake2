@@ -2073,6 +2073,9 @@ t_gate() {
 # snapshot read at once after it still shows that. The stub's gpu.snap is the
 # snapshots (before, after) and its gpu.gate the gate's reading, then the
 # settle's; the case has gate_hold=0, so the gate passes on its first reading.
+# The put runs with a sleep on PATH that records each nap's length in $E/naps
+# and then naps (FIX126), so a case can read the naps the settle took
+# instead of timing the put on a host that may be loaded.
 settle_put() {
 	# settle_put <before,after snapshot values> <gate readings, \n-separated> <extra case lines> [<poll>]
 	fresh settle
@@ -2081,12 +2084,18 @@ settle_put() {
 	printf '%s\n' "$3" >> "${E:?}/g.case"
 	printf '%s\n' "$1" > "${STUB:?}/gpu.snap"
 	printf "$2" > "${STUB:?}/gpu.gate"
+	mkdir -p "${E:?}/napbin"
+	_sl=/bin/sleep
+	[ -x "$_sl" ] || _sl=$(command -v sleep)
+	printf '#!/bin/sh\nprintf "%%s\\n" "$1" >> "%s"\nexec "%s" "$@"\n' "${E:?}/naps" "$_sl" > "${E:?}/napbin/sleep"
+	chmod +x "${E:?}/napbin/sleep"
+	: > "${E:?}/naps"
 	_t0=$(date +%s)
 	_st=0
 	# Bounded: a settle wait without its bound would not end.
 	BENCH_GATE_POLL=${4:-0.05}
 	export BENCH_GATE_POLL
-	start sh "$R/bench.sh" baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err"
+	start env PATH="${E:?}/napbin:$PATH" sh "$R/bench.sh" baseline put "${E:?}/g.case" "$cA" > /dev/null 2> "${E:?}/err"
 	if wait_gone 40 "$BG"; then wait "$BG" || _st=$?; else
 		reap "$BG"
 		_st=99
@@ -2094,9 +2103,17 @@ settle_put() {
 	_took=$(($(date +%s) - _t0))
 }
 t_settle() {
+	# No check here bounds the time a put takes (FIX126): a loaded host can
+	# take seconds between two of the settle's readings, and a gate run once
+	# took 5 s over an unknown reading that ends the settle at once. A
+	# reading that falls, or an unknown one, ends the settle long before a
+	# gate_settle of 60 s, and the put's own bound (40 s, settle_put) reaps
+	# a settle that does not end. The count of readings (n.gate) and the naps
+	# taken ($E/naps) say what the settle did. The one wall-clock check left
+	# is a lower bound (it waited out gate_settle=2), which load only lengthens.
 	# A reading that falls from 30 to 5: quiet, with a settle time; the at-once snapshot stays the record.
 	settle_put '0
-30' '0\n30\n30\n5\n' 'gate_settle=5'
+30' '0\n30\n30\n5\n' 'gate_settle=60'
 	[ "$_st" -eq 0 ] || bad "settle: a reading that fell from 30 to 5 was refused (status $_st): $(cat "${E:?}/err")"
 	_f=$(runfile g)
 	grep -qx quiet=yes "${_f:-/dev/null}" || bad "settle: the settled run is not quiet=yes"
@@ -2110,22 +2127,24 @@ t_settle() {
 	[ "$_took" -ge 2 ] || bad "settle: it did not wait out gate_settle=2 ($_took s)"
 	# An unknown reading: not quiet, at once or while settling.
 	settle_put '0
-unknown' '0\n5\n' 'gate_settle=5'
+unknown' '0\n5\n' 'gate_settle=60'
 	[ "$_st" -eq 1 ] && grep -q 'quiet.reason=gpu.after)' "${E:?}/err" || bad "settle: an unknown reading was not refused (status $_st): $(cat "${E:?}/err")"
-	[ "$_took" -le 4 ] || bad "settle: an unknown reading waited $_took s"
+	[ "$(cat "${STUB:?}/n.gate")" -eq 1 ] || bad "settle: an unknown reading read the GPU $(cat "${STUB:?}/n.gate") times, the gate's alone is 1"
 	settle_put '0
-30' '0\nunknown\n5\n' 'gate_settle=5'
+30' '0\nunknown\n5\n' 'gate_settle=60'
 	[ "$_st" -eq 1 ] && grep -q 'quiet.reason=gpu.after)' "${E:?}/err" || bad "settle: an unknown reading while settling was not refused (status $_st)"
-	[ "$_took" -le 4 ] || bad "settle: an unknown reading while settling waited $_took s"
+	[ "$(cat "${STUB:?}/n.gate")" -eq 2 ] || bad "settle: an unknown reading while settling did not end it: $(cat "${STUB:?}/n.gate") readings, the gate's and the unknown one are 2"
 	# gate_settle=0: today's judgment, at once, with no further reading.
 	settle_put '0
 30' '0\n5\n' 'gate_settle=0'
 	[ "$_st" -eq 1 ] && grep -q 'quiet.reason=gpu.after)' "${E:?}/err" || bad "settle: gate_settle=0 did not judge at once (status $_st)"
 	[ "$(cat "${STUB:?}/n.gate")" -eq 1 ] || bad "settle: gate_settle=0 read the GPU $(cat "${STUB:?}/n.gate") times, the gate's alone is 1"
-	# Each wait is cut to the time left: a poll of 20 s with gate_settle=4.
+	# Each wait is cut to the time left: a poll of 20 s with gate_settle=4 naps at most 4 s.
 	settle_put '0
 30' '0\n30\n' 'gate_settle=4' 20
-	[ "$_st" -eq 1 ] && [ "$_took" -le 10 ] || bad "settle: a poll of 20 s was not cut to the settle time of 4 s (status $_st, $_took s)"
+	[ "$_st" -eq 1 ] || bad "settle: a reading that stayed at 30 with a poll of 20 s was not refused (status $_st)"
+	awk '$1 > 4 { exit 1 }' "${E:?}/naps" || bad "settle: a poll of 20 s was not cut to the settle time of 4 s (naps: $(tr '\n' ' ' < "${E:?}/naps"))"
+	grep -Eqx '[1-4]' "${E:?}/naps" || bad "settle: the poll of 20 s took no nap"
 	[ "$fails" -eq 0 ]
 }
 
@@ -2681,6 +2700,7 @@ mutant settle-no-bound core/snap.sh '[ "$_st_left" -gt 0 ] || return 0' ':' t_se
 mutant settle-not-flagged core/snap.sh '[ "$BENCH_SETTLE" != unsettled ] ||' 'true ||' t_settle || mfail=1
 mutant settle-nap-uncut core/snap.sh 'then _st_nap=$_st_left; fi' 'then :; fi' t_settle || mfail=1
 mutant settle-zero-polls core/measure.sh '	bench_settle "${BENCH_TMP:?}/snap.after"' '	BENCH_SETTLE=0' t_settle || mfail=1
+mutant settle-no-nap core/snap.sh '		bench_nap "$_st_nap"' '		:' t_settle || mfail=1
 mutant poll-digits-unbounded core/common.sh '[ "${#1}" -le 12 ]' 'true' t_gate_poll || mfail=1
 mutant digit-cap-dropped core/common.sh '	bench_is_uint_max "$1" 9' '	bench_is_uint_max "$1" 99' t_digit_cap || mfail=1
 mutant digit-cap-crc core/common.sh '! bench_is_uint_max "$_bh_a" 10' '! bench_is_uint_max "$_bh_a" 9' t_digit_cap || mfail=1
