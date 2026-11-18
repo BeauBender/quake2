@@ -105,8 +105,8 @@ before the loop's test (D12), that is the bug to look for.
 | `crc.c` `COM_BlockSequenceCRCByte` `memcpy(chkb,base,length)` | `length` from caller | copy into `chkb[64]` | `length > 60` clamped to 60 before copy; `sequence < 0` → `Sys_Error` | ok |
 | `cmdparser.c` `Cmd_TokenizeString` / `Cmd_Argv` | tokenized peer string | `cmd_argv[]`, count | `cmd_argc < MAX_STRING_TOKENS` on fill; `Cmd_Argv((unsigned)arg >= cmd_argc)` returns `""` | ok |
 | `shared.c` `COM_Parse` `com_token[len]` | token chars | index into `com_token[MAX_TOKEN_CHARS]` | `len < MAX_TOKEN_CHARS` guards each write; `len == MAX_TOKEN_CHARS` reset to 0 — see Hardening H1 (over-long token emptied, not truncated) | ok (hardening H1) |
-| `shared.c` `Info_ValueForKey` | key/value scan | `Q_strlcpy` into `value[2][MAX_INFO_VALUE]` | `vlen` clamped to `MAX_INFO_VALUE`; `Q_strlcpy` truncates; in bounds. Returns the **first** pair with the key, which the engine-set `ip` key relies on → Defect D17 | defect (D17) |
-| `shared.c` `Info_SetValueForKey` / `Info_RemoveKey` | key/value | builds into `s` | `Info_ValidateKeyValue` bounds key/value < MAX_INFO_KEY/VALUE; `Q_strlcpy_ascii` with `MAX_INFO_STRING - slen` and overflow check; in bounds. `Info_RemoveKey` removes only the **first** matching pair, the new pair is appended at the end, and a pair that does not fit is dropped ("Info string length exceeded"), so setting a key does not make it unique or present → Defect D17 | defect (D17) |
+| `shared.c` `Info_ValueForKey` | key/value scan | `Q_strlcpy` into `value[2][MAX_INFO_VALUE]` | `vlen` clamped to `MAX_INFO_VALUE`; `Q_strlcpy` truncates; in bounds. Returns the **first** pair with the key, which the engine-set `ip` key relies on → Defect D17, fixed by FIX30 (#131) | fixed (D17) |
+| `shared.c` `Info_SetValueForKey` / `Info_RemoveKey` | key/value | builds into `s` | `Info_ValidateKeyValue` bounds key/value < MAX_INFO_KEY/VALUE; `Q_strlcpy_ascii` with `MAX_INFO_STRING - slen` and overflow check; in bounds. `Info_RemoveKey` removes only the **first** matching pair, the new pair is appended at the end, and a pair that does not fit is dropped ("Info string length exceeded"), so setting a key does not make it unique or present → Defect D17, fixed by FIX30 (#131) | fixed (D17) |
 | `backends/unix/network.c` `NET_GetPacket` `recvfrom(..., maxsize, ...)` | datagram | `cursize = ret` | `ret == maxsize` → "Oversize packet" dropped; buffer is `MAX_MSGLEN` | ok |
 | `backends/unix/network.c` `NET_GetLoopPacket` `memcpy(data, loop->msgs[i].data, datalen)` | loopback | `cursize` | local loopback, length set by `NET_SendLoopPacket` from engine | ok |
 
@@ -128,7 +128,7 @@ before the loop's test (D12), that is the bug to look for.
 | `cl_parse.c` `CL_ParsePlayerstate` `state->stats[i]` | long `statbits`, shorts | `stats[i]`, `i` in `0..MAX_STATS` loop | `i < MAX_STATS` | ok |
 | `cl_parse.c` `CL_ParsePlayerstate` other fields (`pm_type`, origin, velocity, `pm_time`, `pm_flags`, gravity, `delta_angles`, view and kick angles, `gunframe`, gun offset and angles, blend, `fov`, `rdflags`) | byte/char/short/angle reads | stored as values in `player_state_t` | not used as indices (`gunindex` is covered in the entity rows) | ok |
 | `cl_parse.c` `CL_ParseFrame` `serverframe`, `surpressCount`, `svc_playerinfo`/`svc_packetentities` bytes | `MSG_ReadLong`, `MSG_ReadByte` | `cl.frames[serverframe & UPDATE_MASK]`; command bytes compared | masked; a wrong command byte → `ERR_DROP` | ok |
-| `cl_parse.c` `CL_ParseFrame` `cl.frame.servertime = serverframe * 100` | `MSG_ReadLong` (no sign or range test) | `cl.time` is clamped into `servertime - 100 .. servertime` (here and in `CL_AddEntities`), so a negative frame number gives a negative client time; from it: the frame of an `EF_ANIM_ALL` (`2 * cl.time / 1000`) or `EF_ANIM_ALLFAST` (`cl.time / 100`) entity in `CL_AddPacketEntities`, and `refdef.time`, from which every renderer derives the world entity's animation frame (`(int)(r_newrefdef.time * 2)` in `gl1_surf.c`, `gl3_surf.c`, `sw_main.c`, `sw_bsp.c`); both reach `R_TextureAnimation` and the entity frame reaches the sprite functions (D11, D16) | was a path to D11 and D16, now: the frame sinks treat a negative frame as 0 (`CL_AddPacketEntities` after the whole frame selection, `R_TextureAnimation`, the three sprite functions). Open, on FIX39 (#157): the light-style step in `cl_lights.c` `CL_RunLightStyles` (`map[ofs % length]` with `ofs = cl.time / 100`) is negative for a negative client time, an out-of-bounds read of nearby client memory shown as a light value; and the product overflows `int` for a frame number outside about ±21474836 (and `2 * cl.time` for a client time past 2^30 ms), undefined behaviour that the bounds above make harmless for the frame sinks but do not remove | open (FIX39); frame sinks bounded by FIX25 |
+| `cl_parse.c` `CL_ParseFrame` `cl.frame.servertime = serverframe * 100` | `MSG_ReadLong` (no sign or range test) | `cl.time` is clamped into `servertime - 100 .. servertime` (here and in `CL_AddEntities`), so a negative frame number gives a negative client time; from it: the frame of an `EF_ANIM_ALL` (`2 * cl.time / 1000`) or `EF_ANIM_ALLFAST` (`cl.time / 100`) entity in `CL_AddPacketEntities`, and `refdef.time`, from which every renderer derives the world entity's animation frame (`(int)(r_newrefdef.time * 2)` in `gl1_surf.c`, `gl3_surf.c`, `sw_main.c`, `sw_bsp.c`); both reach `R_TextureAnimation` and the entity frame reaches the sprite functions (D11, D16) | was a path to D11 and D16, now: the frame sinks treat a negative frame as 0 (`CL_AddPacketEntities` after the whole frame selection, `R_TextureAnimation`, the three sprite functions). Closed by FIX39 (#157): a negative frame number is refused with `ERR_DROP` ("bad frame number"); `servertime` is `serverframe * 100` taken modulo 2^32 (unsigned), and the clamp of the client time into `servertime - 100 .. servertime` takes its distance modulo 2^32 as well (`CL_ParseFrame`, `CL_AddEntities`), so a stock server that runs past 24 days keeps its clients; the light-style step (`CL_RunLightStyles`), the entity frame values and animation (`CL_AddPacketEntities`), the heat beam roll angle (`cl_tempentities.c`) and the `anglemod` arguments take the time as an unsigned number, so no index from it is negative or out of range for any time; that unsigned arithmetic at each reader is the guard, not the refusal, since a positive frame number past 21474836 also gives a negative time; the beam and steam end times add a server-supplied duration modulo 2^32. Left to FIX104 (#452): signed time comparisons after the 2^31 ms wrap, the `CL_FlyEffect` count (negative after the clamp, so its loop runs zero times), the sound drift offset and the float explosion start | ok (FIX39); frame sinks also bounded by FIX25 |
 | `cl_parse.c` `CL_ParseFrame` `cl.frame.deltaframe` | `MSG_ReadLong` | `cl.frames[deltaframe & UPDATE_MASK]` | masked; validity checks | ok |
 | `cl_parse.c` `CL_ParseFrame` areabits `len` | `MSG_ReadByte` | `MSG_ReadData` into `areabits[MAX_MAP_AREAS/8]` | `len > sizeof(areabits)` → `Com_Error(ERR_DROP)` (fixed in TASK2/#9) | ok (already carded/fixed) |
 | `cl_parse.c` `CL_ParseServerData` `cl.playernum` | `MSG_ReadShort` | `cl.playernum+1` used as entity number across client | **no range check at read** → Defect D2 | defect (D2) |
@@ -214,7 +214,7 @@ before the loop's test (D12), that is the bug to look for.
 | `sv_user.c` `SV_BeginDownload_f` `name` | `Cmd_Argv(1)` | `FS_LoadFile(name)`, path | denylist `..`, `\`, `:`, leading `.`/`/`, must contain `/` | ok (see By design: denylist, not the client allowlist) |
 | `sv_user.c` `SV_BeginDownload_f` `offset` | `Cmd_Argv(2)`→`strtol` | `downloadcount = offset`; then `SV_NextDownload_f` reads `download + downloadcount - r` | clamp only on the `>` side: `if (offset > downloadsize) downloadcount = downloadsize`; negative `offset` refused since FIX15 (#138), was Defect D6 | ok (fixed by FIX15) |
 | `sv_conless.c` `SVC_DirectConnect` `version`/`qport`/`challenge` | `Cmd_Argv`→`strtol` | compared / stored | version and challenge checked; qport stored | ok |
-| `sv_conless.c` `SVC_DirectConnect` userinfo, `Info_SetValueForKey(userinfo, "ip", NET_AdrToString(net_from))` | `Cmd_Argv(4)` | `Q_strlcpy` into `userinfo[MAX_INFO_STRING]`; engine forces the `ip` key; passed to `ge->ClientConnect` | copy truncates, in bounds; **nothing makes the engine's `ip` pair the only one, or present** → Defect D17 | defect (D17) |
+| `sv_conless.c` `SVC_DirectConnect` userinfo, `Info_SetValueForKey(userinfo, "ip", NET_AdrToString(net_from))` | `Cmd_Argv(4)` | `Q_strlcpy` into `userinfo[MAX_INFO_STRING]`; engine forces the `ip` key; passed to `ge->ClientConnect` | copy truncates, in bounds; **nothing makes the engine's `ip` pair the only one, or present** → Defect D17, fixed by FIX30 (#131) | fixed (D17) |
 | `sv_conless.c` `SVC_Info` `version` | `Cmd_Argv(1)`→`strtol` | compared; `Com_sprintf(string, 64, ...)` | **bug-adjacent**: wrong-version branch calls `Com_sprintf(string, sizeof(string), "%s: wrong version\n", hostname->string, sizeof(string))` — extra arg, benign; Hardening H6 | ok (hardening H6) |
 | `sv_conless.c` `SVC_RemoteCommand` `net_message.data + 4` | raw packet tail | `Com_Printf("%s", ...)` before the password check | **nothing NUL-terminates the receive buffer**; the print can run past `net_message_buffer` → Defect D13 | defect (D13) |
 | `sv_conless.c` `SVC_RemoteCommand` args | `Cmd_Argv(i)` | `Q_strlcat` into `remaining[1024]`; `Cmd_ExecuteString` | `Q_strlcat` bounded; gated on `Rcon_Validate` password | ok (rcon by design) |
@@ -225,8 +225,8 @@ before the loop's test (D12), that is the bug to look for.
 | `sv_conless.c` `SVC_GetChallenge` | command name only | `svs.challenges[MAX_CHALLENGES]`, keyed by address | loop bounded by `MAX_CHALLENGES`; oldest entry reused; value from `Sys_GetRandomBytes` (FIX4/#46) | ok |
 | `sv_conless.c` `Rcon_Validate` `Cmd_Argv(1)` | tokenized | `strcmp` with `rcon_password` | empty password disables rcon; timing see By design | ok |
 | `sv_main.c` `SV_UserinfoChanged` `Info_ValueForKey(userinfo,"rate")` | userinfo value | `strtol` → clamped 100..15000 | clamped | ok |
-| game `g_svcmds.c` `StringToFilter` `num[j++]` | `gi.argv(2)` of `sv addip` / `sv removeip` (server console or rcon; a token of up to 1023 characters) | write into `char num[128]` | **`j` unbounded** while the input is digits → Defect D7 | defect (D7) |
-| game `client.c` `ClientConnect` → `g_svcmds.c` `SV_FilterPacket(Info_ValueForKey(userinfo, "ip"))` `m[i]` | userinfo `ip`: the first `ip` pair, which need not be the one the engine set from `net_from` | octet bytes `m[4]`, then `*(unsigned *)m` against the filter list | `i < 4` loop bound keeps the writes in bounds; does not call `StringToFilter`; **the value can be peer-chosen or absent**, and with fewer than four dotted parts (or none) some of `m[]` is never written before it is read → Defect D17 | defect (D17) |
+| game `g_svcmds.c` `StringToFilter` `num[j++]` | `gi.argv(2)` of `sv addip` / `sv removeip` (server console or rcon; a token of up to 1023 characters) | write into `char num[128]` | **`j` unbounded** while the input is digits → Defect D7, fixed by FIX16 (#112) | fixed (D7) |
+| game `client.c` `ClientConnect` → `g_svcmds.c` `SV_FilterPacket(Info_ValueForKey(userinfo, "ip"))` `m[i]` | userinfo `ip`: the first `ip` pair, which need not be the one the engine set from `net_from` | octet bytes `m[4]`, then `*(unsigned *)m` against the filter list | `i < 4` loop bound keeps the writes in bounds; does not call `StringToFilter`; **the value can be peer-chosen or absent**, and with fewer than four dotted parts (or none) some of `m[]` is never written before it is read → Defect D17, fixed by FIX30 (#131) | fixed (D17) |
 | game `client.c` `ClientUserinfoChanged` skin → `configstring(CS_PLAYERSKINS+playernum, va("%s\\%s", name, s))` | userinfo | configstring | `playernum = ent - g_edicts - 1`, engine-assigned; name/skin validated by `Info_Validate` | ok |
 
 ## By design (noted, no card)
@@ -308,7 +308,11 @@ also protects the other `num_entities` consumers (`cl_entities.c`,
 `cl_prediction.c`, which mask the ring index but iterate the inflated count);
 clamping the sound loops to `MAX_EDICTS` as well is cheap defence in depth.
 
-### D2: server `playernum` is not range-checked on the client (medium, high confidence) [FIX12 (#108)]
+### D2: server `playernum` is not range-checked on the client (medium, high confidence) [FIX12 (#108), fixed with FIX35 (#147)]
+
+Fixed by FIX12 (#108): `CL_ParseServerData` drops the connection for a
+`playernum` below `-1` or at or above `MAX_CLIENTS`; `-1` still plays the
+cinematic.
 
 `CL_ParseServerData` does `cl.playernum = MSG_ReadShort(...)` with no bound;
 only the value `-1` (cinematic or pic) is special. Every consumer found
@@ -419,6 +423,8 @@ client-side `svc_download` chunk size) and FIX1/#40 (download names and the
 savedir); neither touched the server-side negative offset.
 
 ### D7: `StringToFilter` in the game module overflows `num[128]` (medium, high confidence) [FIX16 (#112)]
+
+Fixed by FIX16 (#112): see "Fixed by FIX30 and FIX16" below.
 
 `StringToFilter` (`src/game/g_svcmds.c`) copies the decimal digits of each
 octet into `char num[128]` with `num[j++] = *s++` and no bound on `j`. Its only
@@ -569,7 +575,10 @@ crash). Same class as D10 (a server entity field reaching a renderer with a
 one-sided assumption). Fix: treat a negative frame as 0, either in
 `R_TextureAnimation` or where `ent.frame` is set.
 
-### D12: a truncated `clc_move` makes the command checksum read past `net_message_buffer` (low, high confidence) [FIX26 (#127)]
+### D12: a truncated `clc_move` makes the command checksum read past `net_message_buffer` (low, high confidence) [fixed by FIX26 (#127)]
+
+Fixed by FIX26 (#127): a `clc_move` whose reads ran past `cursize` leaves the case
+before the checksum, so the checksum never covers bytes that were not received.
 
 In `SV_ExecuteClientMessage` (`sv_user.c`) the `clc_move` case records
 `checksumIndex = net_message.readcount`, reads the checksum byte, a long and
@@ -588,7 +597,13 @@ is returned. Reachable by any spawned client. Severity low (read of adjacent
 static memory, result only compared). Fix: test `net_message.readcount >
 net_message.cursize` (and drop) before computing the checksum.
 
-### D13: `SVC_RemoteCommand` prints the raw packet with `%s` before the password check, and nothing NUL-terminates it (low, high confidence) [FIX26 (#127)]
+### D13: `SVC_RemoteCommand` prints the raw packet with `%s` before the password check, and nothing NUL-terminates it (low, high confidence) [fixed by FIX26 (#127), FIX33 (#145)]
+
+Fixed by FIX26 (#127) and FIX33 (#145): the log line is built from the tokenized
+copy, never from the receive buffer. A valid attempt logs the sender and the
+command without the password; a bad attempt logs the sender only. A valid
+command is still logged as sent, so a command that itself carries a secret
+(`set rcon_password ...`) puts that secret in the log.
 
 `SVC_RemoteCommand` (`sv_conless.c`) logs every rcon attempt with
 `Com_Printf("...%s\n", ..., net_message.data + 4)`, whether or not
@@ -666,7 +681,7 @@ Fix (client-side only, no protocol change): accept `client_connect` and
 `challenge` only in `ca_connecting` and only when `net_from` equals the
 resolved address of `cls.servername`.
 
-### D15: the `download` command appends `.tmp` past `cls.downloadtempname` where `MAX_OSPATH` is 256 (critical by the scale, medium confidence) [FIX29 (#130)]
+### D15: the `download` command appends `.tmp` past `cls.downloadtempname` where `MAX_OSPATH` is 256 (critical by the scale, medium confidence) [not reachable on the Apple builds (MAX_OSPATH 4096, record 0008); closed without a fix (FIX29, #130)]
 
 `CL_Download_f` (`cl_download.c`) formats `Cmd_Argv(1)` into
 `filename[MAX_OSPATH]` with `Com_sprintf` (truncating), passes it through
@@ -734,6 +749,8 @@ frame as 0 before the remainder in the three sprite functions, or where
 
 ### D17: the engine-set userinfo `ip` key is neither unique nor guaranteed present when the game filters on it (medium, high confidence) [FIX30 (#131)]
 
+Fixed by FIX30 (#131): see "Fixed by FIX30 and FIX16" below.
+
 Site: `SVC_DirectConnect` (`sv_conless.c`) copies the connecting peer's
 userinfo and then forces the `ip` key with `Info_SetValueForKey(userinfo,
 "ip", NET_AdrToString(net_from))`, so that the game can filter on the source
@@ -763,6 +780,33 @@ closest row is an unvalidated peer value that seeds state the game relies on.
 Confidence high (static trace). Fix: in `SVC_DirectConnect`, remove every
 `ip` pair before setting the engine's and refuse the connect when it cannot be
 stored; initialise `m[]` in `SV_FilterPacket`.
+
+Fixed by FIX30 and FIX16: the server's IP filter.
+
+- FIX30: `SVC_DirectConnect` calls `SV_SetConnectIP`, which removes pairs with
+  the key `ip` until one removal takes nothing out, sets the engine's pair,
+  and checks that `Info_ValueForKey` now returns the source address. When the
+  pair does not fit in `MAX_INFO_STRING`, or would not be read as the
+  userinfo's `ip` (a bare key at the end, a trailing backslash, an odd token
+  count), the connect is refused with the out-of-band message "Bad userinfo
+  string." (the pair is never silently dropped). Keys compare case-sensitively in `Info_ValueForKey` and
+  `Info_RemoveKey`, so `IP` is a different key that the game never reads and
+  is left in place. `SV_FilterPacket` parses the engine's bracketed form,
+  `[a.b.c.d]:port` (it skips one leading `[` and stops at `]`, `:` or the
+  end), as well as the bare form; before this the `[` read as an empty first
+  octet and no ban matched a real client. For an IPv6 value such as
+  `[::1]:27901` the parse yields 0.0.0.0 and reads nothing past the value.
+  The game-module checks (this filter and `StringToFilter`) run in the suite,
+  in `tests/unit/test_ipfilter.c`, which includes `g_svcmds.c` whole.
+  `SV_FilterPacket` zeroes `m[4]` before parsing, so a value
+  with fewer than four parts, or an empty one, reads no unwritten byte (an
+  empty value is the address 0.0.0.0).
+- FIX16: `StringToFilter` refuses an octet of 128 or more digits (`num` holds
+  127) through its existing failure path: the operator sees "Bad filter
+  address: <rest of the argument>" and the address is not added (`sv addip`
+  stores a never-matching entry as before, `sv removeip` removes nothing).
+  An octet of up to 127 digits is accepted as before. Every valid address
+  gives the filter values it gave before.
 
 ## Hardening (low severity)
 
@@ -808,12 +852,14 @@ unfixed finding above is on one of them.
 | FIX26 | #127 | D12, D13 | low |
 | FIX27 | #128 | D14 | high |
 | FIX28 | #129 | H1, H2, H3, H4, H6, H7 | low |
-| FIX29 | #130 | D15 | critical (Windows builds only) |
+| FIX29 | #130 | D15 | not reachable on the Apple builds (MAX_OSPATH 4096, record 0008); closed without a fix |
 | FIX30 | #131 | D17 | medium |
 
 Fixed: FIX11 (D1, #136), FIX13 (D3, D4, D8, #137), FIX14 (D5), FIX15 (D6, #138), FIX27 (D14, #139).
 
 Fixed: FIX25 (D9, D10, D11, D16).
+
+Fixed: FIX16 (D7), FIX30 (D17).
 
 D9, D10, D11 and D16 share a card because they are one class (a server-supplied
 entity or effect field reaching an array index or loop count with a check on

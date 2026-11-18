@@ -148,6 +148,37 @@ SVC_GetChallenge(void)
 }
 
 /*
+ * Makes the engine's "ip" pair the only one in the connecting
+ * client's userinfo. Every pair the client sent under that key is
+ * removed first, so the game, which reads the first one, sees the
+ * source address. Returns false when the pair does not fit, or would
+ * not be read as the userinfo's "ip" (a bare key at the end, a trailing
+ * backslash, an odd token count), in which case the userinfo has no
+ * usable "ip" and the connect is refused.
+ */
+qboolean
+SV_SetConnectIP(char *userinfo, const char *ip)
+{
+	size_t before;
+
+	/* Info_RemoveKey takes out one pair a call, the first: go on until
+	   a call removes nothing. */
+	do
+	{
+		before = strlen(userinfo);
+		Info_RemoveKey(userinfo, "ip");
+	}
+	while (strlen(userinfo) < before);
+
+	Info_SetValueForKey(userinfo, "ip", ip);
+
+	/* A pair that does not fit is dropped, with a message, and a
+	   malformed string reads another value or none: check what the game
+	   will read. */
+	return strcmp(Info_ValueForKey(userinfo, "ip"), ip) == 0;
+}
+
+/*
  * A connection request that did not come from the master
  */
 static void
@@ -183,7 +214,13 @@ SVC_DirectConnect(void)
 	Q_strlcpy(userinfo, Cmd_Argv(4), sizeof(userinfo));
 
 	/* force the IP key/value pair so the game can filter based on ip */
-	Info_SetValueForKey(userinfo, "ip", NET_AdrToString(net_from));
+	if (!SV_SetConnectIP(userinfo, NET_AdrToString(net_from)))
+	{
+		Netchan_OutOfBandPrint(NS_SERVER, adr,
+				"print\nBad userinfo string.\n");
+		Com_DPrintf("    rejected connect: the ip pair is not usable\n");
+		return;
+	}
 
 	/* attractloop servers are ONLY for local clients */
 	if (sv.attractloop)
@@ -347,38 +384,42 @@ static void
 SVC_RemoteCommand(void)
 {
 	int i;
+	int valid;
 	char remaining[1024];
 
-	i = Rcon_Validate();
+	/* The command is the arguments after the password. They come from
+	   the tokenized copy of the packet, never from the receive buffer
+	   itself, which is not terminated. */
+	valid = Rcon_Validate();
+	remaining[0] = 0;
 
-	if (i == 0)
+	if (valid)
 	{
-		Com_Printf("Bad rcon from %s:\n%s\n", NET_AdrToString(
-						net_from), net_message.data + 4);
-	}
-	else
-	{
-		Com_Printf("Rcon from %s:\n%s\n", NET_AdrToString(
-						net_from), net_message.data + 4);
-	}
-
-	Com_BeginRedirect(RD_PACKET, sv_outputbuf,
-			SV_OUTPUTBUF_LENGTH, SV_FlushRedirect);
-
-	if (!Rcon_Validate())
-	{
-		Com_Printf("Bad rcon_password.\n");
-	}
-	else
-	{
-		remaining[0] = 0;
-
 		for (i = 2; i < Cmd_Argc(); i++)
 		{
 			Q_strlcat(remaining, Cmd_Argv(i), sizeof(remaining));
 			Q_strlcat(remaining, " ", sizeof(remaining));
 		}
 
+		Com_Printf("Rcon from %s: %s\n", NET_AdrToString(net_from),
+				remaining);
+	}
+	else
+	{
+		/* What the sender supplied is not echoed: it starts with
+		   the password they tried. */
+		Com_Printf("Bad rcon from %s\n", NET_AdrToString(net_from));
+	}
+
+	Com_BeginRedirect(RD_PACKET, sv_outputbuf,
+			SV_OUTPUTBUF_LENGTH, SV_FlushRedirect);
+
+	if (!valid)
+	{
+		Com_Printf("Bad rcon_password.\n");
+	}
+	else
+	{
 		Cmd_ExecuteString(remaining);
 	}
 

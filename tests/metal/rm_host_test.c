@@ -42,6 +42,7 @@
 #include "../../src/client/refresh/metal/header/rmb.h"
 #include "../../src/client/refresh/metal/header/rmb_drain.h"
 #include "../../src/client/refresh/metal/common/mtl_matrix.h"
+#include "../../src/client/refresh/metal/common/mtl_rate.h"
 #include "../../src/client/refresh/metal/common/mtl_ring.h"
 #include "../../src/client/refresh/metal/common/mtl_shader_math.h"
 
@@ -912,6 +913,63 @@ test_presents_format(void)
 }
 
 /*
+ * The presented rate over a window (TASK161, common/mtl_rate.h): the window
+ * begins at the first frame to end at least start seconds after the first
+ * frame; the rate is the frames presented from that sample to the last one
+ * over the time between them.
+ */
+static void
+test_rate(void)
+{
+	mtl_rate_t r;
+	char buf[256];
+	const char *want = "ref_metal: metal_rate: 50.0 presented a second over 2.00 s from 1.00 s, "
+		"100 presented, 7 with every present slot held, 9 without a drawable";
+	uint64_t t;
+	unsigned long presented = 0;
+	int i;
+
+	mtl_rate_reset(&r);
+	CHECK(mtl_rate_window_s(&r) == 0.0 && mtl_rate_per_second(&r) == 0.0);
+
+	/* a frame every 10 ms from t = 5 s, one presented for every two; start 1 s */
+	for (i = 0; i <= 300; i++)
+	{
+		t = 5000000000ull + (uint64_t)i * 10000000ull;
+		presented = (unsigned long)(i / 2);
+		mtl_rate_frame(&r, t, presented, 1.0);
+
+		if (i < 100)
+		{
+			CHECK(mtl_rate_window_s(&r) == 0.0);   /* no window before the start */
+		}
+	}
+
+	CHECK(fabs(mtl_rate_window_s(&r) - 2.0) < 1e-9);
+	CHECK(fabs(mtl_rate_per_second(&r) - 50.0) < 1e-9);
+	CHECK(mtl_rate_format("ref_metal: metal_rate:", &r, 1.0, 7, 9, buf, sizeof(buf)) && strcmp(buf, want) == 0);
+	CHECK(!mtl_rate_format("ref_metal: metal_rate:", &r, 1.0, 7, 9, buf, strlen(want)) && strlen(buf) == strlen(want) - 1);
+	CHECK(!mtl_rate_format("ref_metal: metal_rate:", &r, 1.0, 7, 9, buf, 0));
+
+	/* a run shorter than the start has no window */
+	mtl_rate_reset(&r);
+	mtl_rate_frame(&r, 1000, 0, 1.0);
+	mtl_rate_frame(&r, 500000000ull, 10, 1.0);
+	CHECK(mtl_rate_window_s(&r) == 0.0 && mtl_rate_per_second(&r) == 0.0);
+	CHECK(mtl_rate_format("mgl: rate:", &r, 1.0, 0, 0, buf, sizeof(buf)) &&
+		strcmp(buf, "mgl: rate: 0.0 presented a second over 0.00 s from 1.00 s, 0 presented, "
+			"0 with every present slot held, 0 without a drawable") == 0);
+
+	/* a start of 0 begins the window at the first frame; a clock that does not move has no rate */
+	mtl_rate_reset(&r);
+	mtl_rate_frame(&r, 100, 5, 0.0);
+	mtl_rate_frame(&r, 100, 9, 0.0);
+	CHECK(mtl_rate_per_second(&r) == 0.0);
+	mtl_rate_frame(&r, 100 + 500000000ull, 15, 0.0);
+	CHECK(fabs(mtl_rate_per_second(&r) - 20.0) < 1e-9 && fabs(mtl_rate_window_s(&r) - 0.5) < 1e-9);
+}
+
+/*
  * The present blit at gl1's place (FIX45): equal sizes copy the whole
  * frame; a smaller frame lands in the drawable's bottom-left corner; a
  * larger one gives its bottom-left part; no overlap copies nothing.
@@ -1016,6 +1074,42 @@ test_present_region_inset(void)
 
 			CHECK(a == b && p.w == q.w && p.h == q.h && p.src_y == q.src_y && p.dst_y == q.dst_y && p.dst_x == 0 && q.dst_x == 0);
 		}
+	}
+}
+
+/*
+ * TASK172: the iPhone Duo's two displays (the device type's sizes: outer
+ * 1398x2034 pixels, inner 2007x2853, at 3x), portrait and landscape, with
+ * insets that differ on each side (the inner display's status bar is at
+ * its right edge): each inset is taken on its own, and the view is the
+ * window less the four of them, the layer the whole window.
+ */
+static void
+test_duo_viewports(void)
+{
+	static const struct
+	{
+		float x, y, w, h;         /* the safe rectangle in points */
+		int pw, ph;               /* the window in pixels */
+		int l, t, r, b, vw, vh;   /* the insets and the view in pixels */
+	} c[] = {
+		{ 0, 59, 466, 585, 1398, 2034, 0, 177, 0, 102, 1398, 1755 },     /* outer, portrait */
+		{ 84, 0, 594, 432, 2034, 1398, 252, 0, 0, 102, 1782, 1296 },    /* outer, landscape, as the simulator gives it */
+		{ 0, 47, 669, 884, 2007, 2853, 0, 141, 0, 60, 2007, 2652 },      /* inner, portrait */
+		{ 47, 0, 872, 649, 2853, 2007, 141, 0, 96, 60, 2616, 1947 },     /* inner, landscape, status bar right */
+		{ 4.33f, 47, 645.67f, 884, 2007, 2853, 13, 141, 57, 60, 1937, 2652 }, /* every side its own */
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof(c) / sizeof(c[0]); i++)
+	{
+		rm_inset_t in;
+		rm_sizes_t s;
+
+		CHECK(rm_safe_insets(c[i].x, c[i].y, c[i].w, c[i].h, 3.0f, c[i].pw, c[i].ph, &in));
+		CHECK(in.left == c[i].l && in.top == c[i].t && in.right == c[i].r && in.bottom == c[i].b);
+		CHECK(rm_window_sizes(c[i].pw, c[i].ph, &in, &s));
+		CHECK(s.vw == c[i].vw && s.vh == c[i].vh && s.lw == c[i].pw && s.lh == c[i].ph);
 	}
 }
 
@@ -8605,11 +8699,13 @@ main(void)
 	test_frame_size();
 	test_frame_remake();
 	test_presents_format();
+	test_rate();
 	test_present_region();
 	test_present_region_inset();
 	test_present_chain();
 	test_display_sync();
 	test_safe_insets();
+	test_duo_viewports();
 	test_upload_bytes();
 	test_raw8();
 	test_fan();

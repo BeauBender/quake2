@@ -61,9 +61,12 @@ if [ "$lock_entry" != gate ] || [ -z "${BENCH_LOCK_TOKEN:-}" ]; then
 		lock_off="no state directory (BENCH_STATE, XDG_CACHE_HOME and HOME unset)"
 	else
 		set -- BENCH_LOCK_ENTRY=gate sh "$PWD/scripts/test.sh" "$@"
-		# (not whole seconds: bench.sh refuses it, as before)
+		# A value that is not whole seconds by the core's rule (bench_is_uint:
+		# digits, no leading zero but 0, at most 9) is left alone: it is not
+		# raised and bench.sh refuses it at once (status 2, nothing runs).
 		case ${BENCH_STOP_GRACE:-10} in
-		*[!0-9]*) ;;
+		'' | *[!0-9]* | 0?*) ;;
+		??????????*) ;;
 		*)
 			if [ "${BENCH_STOP_GRACE:-10}" -lt 10 ]; then
 				set -- BENCH_STOP_GRACE="$BENCH_STOP_GRACE" "$@"

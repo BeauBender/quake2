@@ -403,6 +403,19 @@ where there is no iOS simulator SDK. With the device SDK they do the same
 for a device (`IOS_SDK=iphoneos`, below), and they run
 `scripts/ios-device.sh --selftest`.
 
+### Apple TV (simulator)
+
+`make ios IOS_SDK=appletvsimulator` builds the same app for the Apple TV
+simulator (`arm64-apple-tvos17.0-simulator`, Xcode's tvOS platform needed),
+with its own *Info.plist* (*stuff/ios/Info-tvos.plist.in*). It is the
+iPhone build with the touch overlay, the on-screen keyboard and the
+iPhone's window hints left out; controller and Siri Remote input, the
+menu's focus and where the game data lives are not done yet
+(*docs/runbook/TASK23.md*).
+`IOS_SIM_SDK=appletvsimulator scripts/ios-sim.sh run --out DIR --data DATA`
+runs it on an Apple TV simulator device (DIR outside the checkout, as for
+the smoke); `tests/check-tvos.sh` builds its objects in the gate.
+
 ### Running on an iPhone or iPad
 
 A device runs only an app signed by the owner's Apple developer team, so

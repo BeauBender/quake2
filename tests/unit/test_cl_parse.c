@@ -23,6 +23,8 @@
  * =======================================================================
  */
 
+#include <limits.h>
+
 #include "test.h"
 #include "../../src/client/header/client.h"
 #include "../../src/client/sound/header/local.h"
@@ -233,4 +235,297 @@ TEST(cl_server_messages_and_configstring_bounds)
 	send_configstring(CS_NAME + 1, longtext);
 	T_CONSOLE_HAS("string too long");
 	T_EQ_STR(cl.configstrings[CS_NAME + 1], "");
+}
+
+/* ---- FIX35: a frame with no old frame, and entity removal ---- */
+
+/* A frame carrying the given records as the entity list. A record is a
+   bits byte and an entity number byte. deltaframe is the server frame it
+   is coded against, -1 for none. */
+static void
+build_records(int serverframe, int deltaframe, const int *rec, int nrec)
+{
+	int i;
+
+	SZ_Init(&net_message, msgbuf, sizeof(msgbuf));
+	MSG_WriteByte(&net_message, svc_frame);
+	MSG_WriteLong(&net_message, serverframe);
+	MSG_WriteLong(&net_message, deltaframe);
+	MSG_WriteByte(&net_message, 0);
+	MSG_WriteByte(&net_message, 0);
+	MSG_WriteByte(&net_message, svc_playerinfo);
+	MSG_WriteShort(&net_message, 0);
+	MSG_WriteLong(&net_message, 0);
+	MSG_WriteByte(&net_message, svc_packetentities);
+
+	for (i = 0; i < nrec; i++)
+	{
+		MSG_WriteByte(&net_message, rec[i * 2]);
+		MSG_WriteByte(&net_message, rec[i * 2 + 1]);
+	}
+
+	MSG_WriteByte(&net_message, 0);
+	MSG_WriteByte(&net_message, 0);
+	MSG_BeginReading(&net_message);
+}
+
+static int
+frame_entity(int index)
+{
+	return cl_parse_entities[(cl.frame.parse_entities + index) &
+		(MAX_PARSE_ENTITIES - 1)].number;
+}
+
+/* A removal record in a frame that has no old frame drops the connection,
+   whether it comes after other records or first. */
+TEST(cl_removal_without_old_frame_refused)
+{
+	static const int rec[] = { 0, 3, U_REMOVE, 5, 0, 7 };
+
+	reset_client();
+	build_records(1, -1, rec, 3);
+
+	T_EXPECT_DROP(CL_ParseServerMessage());
+	T_CONSOLE_HAS("removal without an old frame");
+	T_CHECK(cls.state != ca_active);
+}
+
+TEST(cl_leading_removal_without_old_frame_refused)
+{
+	static const int rec[] = { U_REMOVE, 1 };
+
+	reset_client();
+	build_records(1, -1, rec, 1);
+
+	T_EXPECT_DROP(CL_ParseServerMessage());
+	T_CONSOLE_HAS("removal without an old frame");
+}
+
+/* The other uses of oldframe (the unchanged run before a record, the delta
+   from the old entity, the copy of the remainder) are not entered without
+   an old frame: every record is taken from the baseline, in order. */
+TEST(cl_records_without_old_frame_come_from_baseline)
+{
+	static const int rec[] = { 0, 3, 0, 4, 0, 200 };
+
+	reset_client();
+	build_records(1, -1, rec, 3);
+
+	CL_ParseServerMessage();
+
+	T_EQ_INT(cl.frame.num_entities, 3);
+	T_EQ_INT(frame_entity(0), 3);
+	T_EQ_INT(frame_entity(2), 200);
+}
+
+/* With an old frame, a removal drops that entity and the unchanged ones
+   around it are carried over. */
+TEST(cl_removal_with_old_frame_removes_entity)
+{
+	static const int first[] = { 0, 3, 0, 4, 0, 5 };
+	static const int second[] = { U_REMOVE, 4 };
+
+	reset_client();
+	build_records(1, -1, first, 3);
+	CL_ParseServerMessage();
+	T_EQ_INT(cl.frame.num_entities, 3);
+
+	build_records(2, 1, second, 1);
+	CL_ParseServerMessage();
+
+	T_CHECK(cl.frame.valid);
+	T_EQ_INT(cl.frame.num_entities, 2);
+	T_EQ_INT(frame_entity(0), 3);
+	T_EQ_INT(frame_entity(1), 5);
+}
+
+/* ---- FIX12: the player number in svc_serverdata ---- */
+
+static void
+build_serverdata(int playernum)
+{
+	SZ_Init(&net_message, msgbuf, sizeof(msgbuf));
+	MSG_WriteByte(&net_message, svc_serverdata);
+	MSG_WriteLong(&net_message, PROTOCOL_VERSION);
+	MSG_WriteLong(&net_message, 1);
+	MSG_WriteByte(&net_message, 0);
+	MSG_WriteString(&net_message, "");
+	MSG_WriteShort(&net_message, playernum);
+	MSG_WriteString(&net_message, "level");
+	MSG_BeginReading(&net_message);
+}
+
+TEST(cl_playernum_minus_two_refused)
+{
+	reset_client();
+	build_serverdata(-2);
+	T_EXPECT_DROP(CL_ParseServerMessage());
+	T_CONSOLE_HAS("playernum");
+}
+
+TEST(cl_playernum_minus_one_is_cinematic)
+{
+	reset_client();
+	build_serverdata(-1);
+	CL_ParseServerMessage();
+	T_EQ_INT(cl.playernum, -1);
+	T_EQ_STR(t_console(), "");
+}
+
+TEST(cl_playernum_zero_joins)
+{
+	reset_client();
+	build_serverdata(0);
+	CL_ParseServerMessage();
+	T_EQ_INT(cl.playernum, 0);
+	T_CONSOLE_HAS("level");
+}
+
+TEST(cl_playernum_last_client_joins)
+{
+	reset_client();
+	build_serverdata(MAX_CLIENTS - 1);
+	CL_ParseServerMessage();
+	T_EQ_INT(cl.playernum, MAX_CLIENTS - 1);
+	T_CONSOLE_HAS("level");
+}
+
+TEST(cl_playernum_max_clients_refused)
+{
+	reset_client();
+	build_serverdata(MAX_CLIENTS);
+	T_EXPECT_DROP(CL_ParseServerMessage());
+	T_CONSOLE_HAS("playernum");
+}
+
+/* ---- the client time (FIX39) ---- */
+
+/* One frame with the given number and nothing in it. */
+static void
+build_numbered_frame(int serverframe)
+{
+	SZ_Init(&net_message, msgbuf, sizeof(msgbuf));
+	MSG_WriteByte(&net_message, svc_frame);
+	MSG_WriteLong(&net_message, serverframe);
+	MSG_WriteLong(&net_message, -1);
+	MSG_WriteByte(&net_message, 0);
+	MSG_WriteByte(&net_message, 0);
+	MSG_WriteByte(&net_message, svc_playerinfo);
+	MSG_WriteShort(&net_message, 0);
+	MSG_WriteLong(&net_message, 0);
+	MSG_WriteByte(&net_message, svc_packetentities);
+	MSG_WriteByte(&net_message, 0);
+	MSG_WriteByte(&net_message, 0);
+	MSG_BeginReading(&net_message);
+}
+
+/* The distance from the client time up to the server time. */
+static int
+time_behind(void)
+{
+	return (int)((unsigned)cl.frame.servertime - (unsigned)cl.time);
+}
+
+/* The frame is taken, its time is the wrapped product, and the client
+   time sits in the window just behind it. */
+static void
+check_frame_number(int serverframe)
+{
+	reset_client();
+	build_numbered_frame(serverframe);
+	CL_ParseServerMessage();
+	T_EQ_INT(cl.frame.serverframe, serverframe);
+	T_EQ_INT(cl.frame.servertime, (int)((unsigned)serverframe * 100u));
+	T_CHECK(cl.frame.valid);
+	T_CHECK(time_behind() >= 0);
+	T_CHECK(time_behind() <= 100);
+}
+
+static void
+check_frame_number_refused(int serverframe)
+{
+	reset_client();
+	build_numbered_frame(serverframe);
+	T_EXPECT_DROP(CL_ParseServerMessage());
+	T_CONSOLE_HAS("bad frame number");
+}
+
+TEST(cl_frame_number_zero)
+{
+	check_frame_number(0);
+	T_EQ_INT(cl.frame.servertime, 0);
+}
+
+TEST(cl_frame_number_one)
+{
+	check_frame_number(1);
+	T_EQ_INT(cl.frame.servertime, 100);
+}
+
+TEST(cl_frame_number_minus_one_refused)
+{
+	check_frame_number_refused(-1);
+}
+
+TEST(cl_frame_number_int_min_refused)
+{
+	check_frame_number_refused(INT_MIN);
+}
+
+/* The largest number whose product with 100 fits an int. */
+TEST(cl_frame_number_last_without_overflow)
+{
+	check_frame_number(INT_MAX / 100);
+	T_EQ_INT(cl.frame.servertime, (INT_MAX / 100) * 100);
+	T_EQ_INT(cl.time, cl.frame.servertime - 100);
+}
+
+/* One more wraps: the time goes through the edge and the clamp follows. */
+TEST(cl_frame_number_first_with_wrap)
+{
+	check_frame_number(INT_MAX / 100 + 1);
+	T_CHECK(cl.frame.servertime < 0);
+}
+
+TEST(cl_frame_number_int_max)
+{
+	check_frame_number(INT_MAX);
+}
+
+/* A client time already near the top follows a wrapped server time: it
+   is 93 behind modulo 2^32, inside the window, so it is kept. A signed
+   comparison would see it far ahead and pull it to the server time. */
+TEST(cl_time_follows_server_time_across_wrap)
+{
+	reset_client();
+	cl.time = INT_MAX - 40;
+	build_numbered_frame(INT_MAX / 100 + 1);
+	CL_ParseServerMessage();
+	T_CHECK(cl.frame.servertime < 0);
+	T_CHECK(time_behind() >= 0);
+	T_CHECK(time_behind() <= 100);
+	T_EQ_INT(cl.time, INT_MAX - 40);
+}
+
+/* The client time after a frame numbered 10 (server time 1000), from
+   the given time before it. */
+static int
+time_after_frame_ten(int before)
+{
+	reset_client();
+	cl.time = before;
+	build_numbered_frame(10);
+	CL_ParseServerMessage();
+	return cl.time;
+}
+
+/* The window edges: 1000 and 900 stay, one step outside is pulled in. */
+TEST(cl_time_clamp_edges)
+{
+	T_EQ_INT(time_after_frame_ten(1000), 1000);
+	T_EQ_INT(time_after_frame_ten(1001), 1000);
+	T_EQ_INT(time_after_frame_ten(900), 900);
+	T_EQ_INT(time_after_frame_ten(899), 900);
+	T_EQ_INT(time_after_frame_ten(950), 950);
+	T_EQ_INT(time_after_frame_ten(-5), 900);
 }

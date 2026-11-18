@@ -1,23 +1,40 @@
 #!/bin/sh
 # Commit-time checks, wired by scripts/setup.sh (core.hooksPath=.githooks).
-# Fast and offline: conflict markers, game data or build output staged by
-# mistake, obvious secrets, agent memory or an embedded repository in the
-# index (on every commit), and the other repo invariants when the commit
-# touches what they cover. The full gate (scripts/test.sh) still runs
-# before a PR.
+# Offline: conflict markers, game data or build output staged by mistake,
+# obvious secrets, agent memory or an embedded repository in the index, and
+# the working machine's identity in a tracked file (these two on every
+# commit, whatever it touches), and the other repo invariants when the commit
+# touches what they cover. The full gate (scripts/test.sh) still runs before
+# a PR. tests/check-pre-commit-hook.sh is the self-test.
+#
+# Fails closed: a check that cannot run, or a staged diff that cannot be
+# read, refuses the commit. The diff is read as text whatever .gitattributes
+# says, without colour, external diff or textconv, so no committed file or
+# configuration takes a file out of the secret scan. Git's replacement
+# objects (refs/replace/) are not used, here or in the checks it runs: a
+# local replacement changes what a scan reads, not what is committed.
 #
 # Usage: runs from git; bypassing it with --no-verify is against the rules
 # in CLAUDE.md.
 set -eu
+export GIT_NO_REPLACE_OBJECTS=1
 cd "$(git rev-parse --show-toplevel)"
 
 fail=0
-# Fast, and what it guards (a gitlink, a memory path, the .gitignore rule)
-# can arrive under any path or with a deletion, so it runs on every commit.
+# What these two guard can arrive under any path: a gitlink, a memory path
+# or the .gitignore rule, also with a deletion (the memory check); the host
+# name, user name or home path in any staged text file or file name (the
+# identity check, which reads the index being committed). So they run on
+# every commit. Each runs once; its output is shown only when it fails.
 memcheck=tests/check-no-tracked-memory.sh
-"$memcheck" >/dev/null || { "$memcheck" || true; fail=1; }
+idcheck=tests/check-no-local-identity.sh
+for check in "$memcheck" "$idcheck"; do
+	out=$("$check" 2>&1) || { printf '%s\n' "$out"; fail=1; }
+done
 
-staged=$(git diff --cached --name-only --diff-filter=ACMR)
+# A change of type alone (T: a symbolic link replaced by a file) adds content
+# too, so it is scanned like an addition.
+staged=$(git diff --cached --name-only --diff-filter=ACMRT)
 [ -n "$staged" ] || exit "$fail"
 
 bad=$(echo "$staged" | grep -E '\.(pak|pk3|dll|dylib|so|o)$|^(release|debug|build)/' || true)
@@ -26,21 +43,43 @@ if [ -n "$bad" ]; then
 	fail=1
 fi
 
-if git diff --cached -U0 | grep -nE '^\+(<<<<<<<|>>>>>>>)( |$)' >/dev/null; then
+# The staged diff, in a file: a pipe would hide a git error.
+diff=$(mktemp "${TMPDIR:-/tmp}/pre-commit.XXXXXX")
+# A shell error must still refuse; bash 3.2 loses the status in an EXIT
+# trap, so only the normal end of the script may exit 0.
+trap 'rm -f "$diff"; [ "${_ok:-}" = 1 ] || exit 1' EXIT
+if ! git diff --cached -U0 --text --no-color --no-ext-diff --no-textconv > "$diff"; then
+	echo "pre-commit: cannot read the staged diff"
+	exit 1
+fi
+
+# hit <pattern>: true when a line of the staged diff matches; a grep error
+# refuses the commit.
+hit() {
+	_st=0
+	grep -aqE "$1" "$diff" || _st=$?
+	case $_st in
+	0 | 1) return "$_st" ;;
+	*) echo "pre-commit: cannot scan the staged diff"; exit 1 ;;
+	esac
+}
+
+if hit '^\+(<<<<<<<|>>>>>>>)( |$)'; then
 	echo "pre-commit: conflict markers in the staged diff"
 	fail=1
 fi
 
-if git diff --cached -U0 | grep -nE '^\+.*(-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36}|xox[baprs]-[A-Za-z0-9-]{10,})' >/dev/null; then
+if hit '^\+.*(-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-ant-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|glpat-[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9]{24,})'; then
 	echo "pre-commit: the staged diff looks like it contains a secret"
 	fail=1
 fi
 
 if echo "$staged" | grep -qE '^(src|doc|docs|tests)/|\.md$|^(Makefile|\.github/)|^\.claude/|^\.gitignore$'; then
 	for check in tests/check-*.sh; do
-		[ "$check" != "$memcheck" ] || continue
+		[ "$check" != "$memcheck" ] && [ "$check" != "$idcheck" ] || continue
 		"$check" >/dev/null || { "$check" || true; fail=1; }
 	done
 fi
 
+_ok=1
 exit "$fail"

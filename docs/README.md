@@ -23,6 +23,18 @@ ships with releases; `docs/` (this directory) is for working on the code.
   (`.github/scripts/codeql-changes.sh`, tested by
   `tests/check-codeql-changes.sh`). Cppcheck always runs. A newer push to a
   pull request cancels the older run (`docs/runbook/FIX66.md`).
+- Card labels: `.github/workflows/card-close-labels.yml` runs when the owner
+  closes an issue, by any route (the ship path, `gh issue close`, the web
+  UI), and edits it only if it is still closed when the run starts. A card
+  closed as completed, and not `state:promoted`, gets `state:done`; any
+  closed card loses `state:backlog`, `state:staged`, `state:in-progress` and
+  `state:review`; an issue with no `state:*` label is left alone. It has
+  `issues: write` only, uses no action, and takes nothing from the event but
+  the issue number and close reason. A close made with another workflow's
+  `GITHUB_TOKEN` starts no workflow, so it is not covered.
+  `tests/check-card-close-labels.sh` checks its shape with an allow-list
+  lint and runs its whole run block against a stub `gh`, offline
+  ([FIX108](runbook/FIX108.md)).
 
 ## Source (`src/`)
 
@@ -43,11 +55,12 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | Path | What it is |
 |---|---|
 | `doc/` | User documentation, numbered in reading order; cvars in `040_cvarlist.md`, commands in `050_commands.md` |
-| `docs/plans/` | Plan anchors for multi-card work; cards cite them |
-| `docs/runbook/` | What each card measured, one file per card (`<CARD>.md`). A card writes its results there and adds only its one index line to the `## Card results` section of the shared runbook, `docs/plans/metal-port-harness.md`, which keeps the method; see its [README](runbook/README.md) |
+| `docs/plans/` | Plan anchors for multi-card work; cards cite them. The presentation modes of `ref_metal` (stock, enhanced, retro, RT-primary): [`docs/plans/presentation-modes.md`](plans/presentation-modes.md) |
+| `docs/runbook/` | What each card measured, one file per card (`<CARD>.md`). A card writes its results there and adds only its one line to [`docs/runbook/INDEX.md`](runbook/INDEX.md), which is merged by union; the shared runbook, `docs/plans/metal-port-harness.md`, keeps the method; see its [README](runbook/README.md) |
 | `docs/decisions/` | Decision records: what was decided, why, and what it costs |
 | `docs/audits/` | Audit write-ups: the [small vendored files](audits/small-vendored.md), the [asset-loader malformed-input audit](audits/asset-loaders.md) and the [network message parser audit](audits/network-parsers.md) |
 | `docs/analysis/` | Measured inventories of existing code that plans and cards cite |
+| `docs/reviews/` | Architecture reviews over a window of merges (`/dev-loop:arch-review`), one file per review; each finding has a stable `AR-##` id that its card cites |
 | `docs/DEPENDENCIES.md` | Every external library and vendored file, and its status |
 | `third_party/SDL3/` | SDL 3 source, byte-identical to the upstream release tarball and verified against `MANIFEST.sha256` by `scripts/check-vendored.sh`; built on macOS by `third_party/sdl3.make`. Provenance and update procedure in its `README.md` |
 | `scripts/ios-sim.sh` | The iOS simulator app on a throwaway device: `smoke` builds it with synthetic data and checks from the engine's log and frame that it reaches the console; see `doc/020_installation.md` |
@@ -62,6 +75,6 @@ ships with releases; `docs/` (this directory) is for working on the code.
 | `scripts/coverage.sh`, `scripts/coverage-floor` | Line coverage of the suite with the compiler's own tools, and the floor it must not drop below |
 | `stuff/` | Maintainer tools: savegame table generators (`fngen/`, `mmgen/`), map entity fixes (`mapfixes/`), icons, the Dockerfile and the uncrustify style file (`misc/`) |
 | `.claude/` | Agent configuration: settings and hooks, path-scoped rules (`rules/`), skills (`skills/`), and `memory/`, a leftover location from older checkouts that is ignored and never committed (`tests/check-no-tracked-memory.sh` keeps it out of the index); agent memory lives outside the tree, see `CLAUDE.md` and [decision 0009](decisions/0009-no-shared-memory.md) |
-| `.githooks/` | The commit hook and the push hook (refuses a ref name or commit message carrying the working machine's host name, user name or home path), wired by `scripts/setup.sh`; see [decision 0005](decisions/0005-push-identity-hook.md) |
+| `.githooks/` | The commit hook (runs the identity and memory checks on every commit, refuses staged secrets) and the push hook (refuses a ref name, commit, tag, or a file or file name a pushed commit adds that carries the working machine's host name, user name or home path, under any ref name), wired by `scripts/setup.sh`; self-tests `tests/check-pre-commit-hook.sh` and `tests/check-pre-push-hook.sh`; see [decision 0005](decisions/0005-push-identity-hook.md) |
 | `.github/` | CI workflows, the scripts they run (`scripts/`), the PR template, the `main` branch ruleset |
 | `CHANGELOG` | Upstream release notes, updated per release |

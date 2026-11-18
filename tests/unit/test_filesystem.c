@@ -16,14 +16,15 @@
  *
  * Malformed paks the loader refuses end the process with
  * Com_Error(ERR_FATAL), so they run in a forked child (t_expect_exit).
- * Not covered on purpose: directory entries whose offset or size lie
- * outside the pak, and a dirofs/dirlen beyond the end of the file. The
- * loader does not check them today; that is FIX22 (#120), whose author
- * should extend this file with the refusals it adds.
+ * Directory entries whose offset or size lie outside the pak, a
+ * directory beyond the end of the file and a bad entry count are
+ * skipped with a console line; fs_pak_bounds and fs_pak_bound_functions
+ * cover them (FIX22, #120).
  *
  * =======================================================================
  */
 
+#include <dirent.h>
 #include <sys/stat.h>
 
 #include "test.h"
@@ -334,6 +335,239 @@ TEST(fs_malformed_paks)
 
 	t_pin("fs-malformed-paks", pin.data);
 	t_text_free(&pin);
+}
+
+/*
+ * Writes a pak byte for byte: size bytes of 'x', a header claiming a
+ * directory at hofs of hlen bytes, and n identical directory entries
+ * placed at dirpos. The header and the placement are independent so a
+ * test can make them disagree with the file.
+ */
+static void
+write_raw_pak(const char *relpath, int size, int dirpos, int hofs, int hlen,
+	const char *name, int fpos, int flen, int n)
+{
+	byte *buf = malloc(size);
+	int i;
+
+	memset(buf, 'x', size);
+	memcpy(buf, "PACK", 4);
+	put_le32(buf + 4, hofs);
+	put_le32(buf + 8, hlen);
+
+	for (i = 0; i < n; i++)
+	{
+		byte *d = buf + dirpos + i * 64;
+
+		memset(d, 0, 64);
+		memcpy(d, name, strlen(name) < 56 ? strlen(name) : 56);
+		put_le32(d + 56, fpos);
+		put_le32(d + 60, flen);
+	}
+
+	t_write_file(relpath, buf, size);
+	free(buf);
+}
+
+/* Number of open descriptors of this process. */
+static int
+open_fds(void)
+{
+	DIR *d = opendir("/dev/fd");
+	int n = 0;
+
+	T_REQUIRE(d != NULL);
+
+	while (readdir(d))
+	{
+		n++;
+	}
+
+	closedir(d);
+	return n;
+}
+
+/* Loads <mod>/pak0.pak; true when the pak was added. */
+static qboolean
+pak_accepted(const char *mod)
+{
+	t_console_reset();
+	FS_BuildGameSpecificSearchPath(mod);
+	return strstr(t_console(), "Added packfile") != NULL;
+}
+
+/*
+ * What the pak loader bounds: the directory against the size of the
+ * file (which bounds the entry count), and each entry against the size
+ * of the pack.
+ * A pak that fails one of these is skipped with a console line and its
+ * handle closed. A short header and an empty directory still end the
+ * process, as before.
+ */
+TEST(fs_pak_bounds)
+{
+	static const char *fatal_mods[] = { "t_pb_only_ident", "t_pb_dirlen0" };
+	char out[8192];
+	int base, i;
+	byte hdr[12];
+
+	/* Layout A: header, 8 data bytes, one directory entry at the end
+	   of the file (size 84). */
+	write_raw_pak("data/t_pb_good/pak0.pak", 84, 20, 20, 64, "a.txt", 12, 8, 1);
+	T_CHECK(pak_accepted("t_pb_good"));
+	T_EQ_STR(load("a.txt"), "xxxxxxxx");
+
+	/* The directory ends exactly at the end of the file (the good
+	   one), and one byte past it. */
+	write_raw_pak("data/t_pb_dir_past/pak0.pak", 84, 20, 21, 64, "a.txt", 12, 8, 1);
+	T_CHECK(!pak_accepted("t_pb_dir_past"));
+	T_EQ_STR(load("a.txt"), "<missing>");
+
+	/* A directory length that is not a whole number of entries, with
+	   room in the file for it. */
+	write_raw_pak("data/t_pb_dir_odd/pak0.pak", 85, 20, 20, 65, "a.txt", 12, 8, 1);
+	T_CHECK(!pak_accepted("t_pb_dir_odd"));
+
+	/* The entry-count limit and one past it: both load, the second with
+	   the warning it always had. */
+	write_raw_pak("data/t_pb_count_max/pak0.pak", 12 + 64 * MAX_FILES_IN_PACK,
+		12, 12, 64 * MAX_FILES_IN_PACK, "f", 12, 0, MAX_FILES_IN_PACK);
+	T_CHECK(pak_accepted("t_pb_count_max"));
+	write_raw_pak("data/t_pb_count_over/pak0.pak", 12 + 64 * (MAX_FILES_IN_PACK + 1),
+		12, 12, 64 * (MAX_FILES_IN_PACK + 1), "f", 12, 0, MAX_FILES_IN_PACK + 1);
+	T_CHECK(pak_accepted("t_pb_count_over"));
+	T_CONSOLE_HAS("has 4097 > 4096 files");
+
+	/* Layout B: header, directory, 8 data bytes at the end (size 84).
+	   An entry ending exactly at the end of the pack, and one byte
+	   past it, by offset and by size. */
+	write_raw_pak("data/t_pb_ent_end/pak0.pak", 84, 12, 12, 64, "a.txt", 76, 8, 1);
+	T_CHECK(pak_accepted("t_pb_ent_end"));
+	T_EQ_STR(load("a.txt"), "xxxxxxxx");
+	write_raw_pak("data/t_pb_ent_ofs/pak0.pak", 84, 12, 12, 64, "a.txt", 77, 8, 1);
+	T_CHECK(!pak_accepted("t_pb_ent_ofs"));
+	write_raw_pak("data/t_pb_ent_len/pak0.pak", 84, 12, 12, 64, "a.txt", 76, 9, 1);
+	T_CHECK(!pak_accepted("t_pb_ent_len"));
+
+	/* Negative size and negative offset. */
+	write_raw_pak("data/t_pb_ent_negsize/pak0.pak", 84, 12, 12, 64, "a.txt", 76, -1, 1);
+	T_CHECK(!pak_accepted("t_pb_ent_negsize"));
+	write_raw_pak("data/t_pb_ent_negofs/pak0.pak", 84, 12, 12, 64, "a.txt", -1, 8, 1);
+	T_CHECK(!pak_accepted("t_pb_ent_negofs"));
+
+	/* A name that fills its 56-byte field with no terminator. */
+	write_raw_pak("data/t_pb_name/pak0.pak", 84, 12, 12, 64,
+		"nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn", 76, 8, 1);
+	T_CHECK(!pak_accepted("t_pb_name"));
+
+	/* Every entry is checked, not only the first: two entries, the
+	   first in bounds, the last ending one byte past the pack (140). */
+	{
+		byte two[140];
+
+		memset(two, 'x', sizeof(two));
+		memcpy(two, "PACK", 4);
+		put_le32(two + 4, 12);
+		put_le32(two + 8, 128);
+		memset(two + 12, 0, 128);
+		memcpy(two + 12, "a.txt", 5);
+		put_le32(two + 12 + 56, 132);
+		put_le32(two + 12 + 60, 8);
+		memcpy(two + 76, "b.txt", 5);
+		put_le32(two + 76 + 56, 133);
+		put_le32(two + 76 + 60, 8);
+		t_write_file("data/t_pb_ent_last/pak0.pak", two, sizeof(two));
+		T_CHECK(!pak_accepted("t_pb_ent_last"));
+
+		/* the same pak with the last entry ending exactly at 140 */
+		put_le32(two + 76 + 56, 132);
+		t_write_file("data/t_pb_ent_last_ok/pak0.pak", two, sizeof(two));
+		T_CHECK(pak_accepted("t_pb_ent_last_ok"));
+	}
+
+	/* No descriptor stays open for a refused pak: the count after a
+	   switch to a mod with refused paks equals the count after a
+	   switch to a mod with none. */
+	t_write_file("data/t_pb_nopak/readme.txt", "x", 1);
+	FS_BuildGameSpecificSearchPath("t_pb_nopak");
+	base = open_fds();
+	for (i = 0; i < 40; i++)
+	{
+		FS_BuildGameSpecificSearchPath("t_pb_dir_past");
+		FS_BuildGameSpecificSearchPath("t_pb_ent_len");
+	}
+	FS_BuildGameSpecificSearchPath("t_pb_nopak");
+	T_EQ_INT(open_fds(), base);
+
+	/* A header with only the identifier, and a directory of length 0,
+	   end the process with the "too short" error. */
+	t_write_file("data/t_pb_only_ident/pak0.pak", "PACK", 4);
+	memcpy(hdr, "PACK", 4);
+	put_le32(hdr + 4, 12);
+	put_le32(hdr + 8, 0);
+	t_write_file("data/t_pb_dirlen0/pak0.pak", hdr, 12);
+
+	for (i = 0; i < 2; i++)
+	{
+		int status = t_expect_exit(switch_mod, (void *)fatal_mods[i], out, sizeof(out));
+
+		T_CHECK(status != 0);
+		T_CHECK(strstr(out, "is too short") != NULL);
+	}
+}
+
+/* The pure bounds the loader decides with (src/common/filesystem.c). */
+qboolean FS_PakDirectoryInBounds(long long packSize, int dirofs, int dirlen);
+qboolean FS_PakEntryInBounds(long long packSize, int offset, int size);
+qboolean FS_PakNameTerminated(const char *name, size_t fieldSize);
+
+TEST(fs_pak_bound_functions)
+{
+	char name[56];
+
+	/* Directory: ends exactly at the end, one past, one before. */
+	T_CHECK(FS_PakDirectoryInBounds(84, 20, 64));
+	T_CHECK(!FS_PakDirectoryInBounds(84, 21, 64));
+	T_CHECK(FS_PakDirectoryInBounds(85, 20, 64));
+	/* Offset at the end of the file with nothing after it, and past it. */
+	T_CHECK(!FS_PakDirectoryInBounds(84, 84, 64));
+	T_CHECK(!FS_PakDirectoryInBounds(84, 85, 64));
+	/* Length: zero, negative, not a multiple of the entry size. */
+	T_CHECK(!FS_PakDirectoryInBounds(1000, 12, 0));
+	T_CHECK(!FS_PakDirectoryInBounds(1000, 12, -64));
+	T_CHECK(!FS_PakDirectoryInBounds(1000, 12, 63));
+	T_CHECK(!FS_PakDirectoryInBounds(1000, 12, 65));
+	T_CHECK(!FS_PakDirectoryInBounds(1000, -1, 64));
+	/* Offset 0 is a legal value. */
+	T_CHECK(FS_PakDirectoryInBounds(64, 0, 64));
+	T_CHECK(!FS_PakDirectoryInBounds(-1, 0, 64));
+	/* No count limit beyond the file size, and an offset plus length that
+	   would wrap an int. */
+	T_CHECK(FS_PakDirectoryInBounds(1 << 20, 12, 64 * MAX_FILES_IN_PACK));
+	T_CHECK(FS_PakDirectoryInBounds(1 << 20, 12, 64 * (MAX_FILES_IN_PACK + 1)));
+	T_CHECK(!FS_PakDirectoryInBounds(0x7fffffffLL, 0x7fffffc0, 64 * 4097));
+	T_CHECK(!FS_PakDirectoryInBounds(0x7fffffffLL, 0x7fffffff, 64));
+
+	/* Entry: ends exactly at the end, one past, by offset and length. */
+	T_CHECK(FS_PakEntryInBounds(84, 76, 8));
+	T_CHECK(!FS_PakEntryInBounds(84, 77, 8));
+	T_CHECK(!FS_PakEntryInBounds(84, 76, 9));
+	T_CHECK(FS_PakEntryInBounds(84, 84, 0));
+	T_CHECK(!FS_PakEntryInBounds(84, 85, 0));
+	T_CHECK(FS_PakEntryInBounds(84, 0, 0));
+	T_CHECK(!FS_PakEntryInBounds(84, -1, 8));
+	T_CHECK(!FS_PakEntryInBounds(84, 76, -1));
+	T_CHECK(!FS_PakEntryInBounds(-1, 0, 0));
+	T_CHECK(!FS_PakEntryInBounds(0x7fffffffLL, 0x7fffffff, 1));
+	T_CHECK(FS_PakEntryInBounds(0x7fffffffLL, 0x7ffffffe, 1));
+
+	/* Name: terminator in the last byte, and none. */
+	memset(name, 'n', sizeof(name));
+	T_CHECK(!FS_PakNameTerminated(name, sizeof(name)));
+	name[sizeof(name) - 1] = '\0';
+	T_CHECK(FS_PakNameTerminated(name, sizeof(name)));
+	name[0] = '\0';
+	T_CHECK(FS_PakNameTerminated(name, sizeof(name)));
 }
 
 /*

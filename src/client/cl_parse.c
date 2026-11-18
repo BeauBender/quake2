@@ -457,6 +457,15 @@ CL_ParsePacketEntities(frame_t *oldframe, frame_t *newframe)
 				Com_Printf("   remove: %i\n", newnum);
 			}
 
+			/* a frame that is not delta coded has no old
+			   entities, so there is nothing to remove */
+			if (!oldframe)
+			{
+				Com_Error(ERR_DROP, "%s: removal without an old frame",
+					__func__);
+				return;
+			}
+
 			if (oldnum != newnum)
 			{
 				Com_Printf("U_REMOVE: oldnum != newnum: %d %d\n", oldnum, newnum);
@@ -754,7 +763,18 @@ CL_ParseFrame(void)
 
 	cl.frame.serverframe = MSG_ReadLong(&net_message);
 	cl.frame.deltaframe = MSG_ReadLong(&net_message);
-	cl.frame.servertime = cl.frame.serverframe * 100;
+
+	/* A stock server counts frames up from 0. A negative number
+	   would give a negative client time. */
+	if (cl.frame.serverframe < 0)
+	{
+		Com_Error(ERR_DROP, "CL_ParseFrame: bad frame number %i",
+				cl.frame.serverframe);
+	}
+
+	/* Wraps modulo 2^32 where the product leaves an int (after
+	   about 24 days of server time) instead of overflowing. */
+	cl.frame.servertime = (int)((unsigned)cl.frame.serverframe * 100u);
 
 	/* BIG HACK to let old demos continue to work */
 	if (cls.serverProtocol != 26)
@@ -806,14 +826,20 @@ CL_ParseFrame(void)
 	}
 
 	/* clamp time */
-	if (cl.time > cl.frame.servertime)
 	{
-		cl.time = cl.frame.servertime;
-	}
+		/* The distance is taken modulo 2^32, so that the clamp
+		   keeps working across the wrap of the server time. */
+		int behind = (int)((unsigned)cl.frame.servertime - (unsigned)cl.time);
 
-	else if (cl.time < cl.frame.servertime - 100)
-	{
-		cl.time = cl.frame.servertime - 100;
+		if (behind < 0)
+		{
+			cl.time = cl.frame.servertime;
+		}
+
+		else if (behind > 100)
+		{
+			cl.time = (int)((unsigned)cl.frame.servertime - 100u);
+		}
 	}
 
 	/* read areabits */
@@ -945,6 +971,12 @@ CL_ParseServerData(void)
 
 	/* parse player entity number */
 	cl.playernum = MSG_ReadShort(&net_message);
+
+	if (cl.playernum < -1 || cl.playernum >= MAX_CLIENTS)
+	{
+		Com_Error(ERR_DROP, "%s: bad playernum %d", __func__, cl.playernum);
+		return;
+	}
 
 	/* get the full level name */
 	str = MSG_ReadString(&net_message);

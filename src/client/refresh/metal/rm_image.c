@@ -34,6 +34,7 @@
  */
 
 #include "header/local.h"
+#include "header/rm_rtsun.h"
 
 image_t gltextures[MAX_GLTEXTURES];
 int numgltextures;
@@ -224,6 +225,16 @@ R_Upload32(image_t *image, unsigned *data, int width, int height, qboolean mipma
 	}
 
 	R_LightScaleTexture(data, width, height, !mipmap);
+
+	/* TASK56 (RT4): a sky face's mean colour as it is drawn, sky_color of the ray-traced sun */
+	if (image->type == it_sky)
+	{
+		rm_rtsun_mean((const unsigned char *)data, c, image->mean);
+	}
+	else
+	{
+		image->mean[0] = image->mean[1] = image->mean[2] = 0;
+	}
 
 	for (i = 0; i < c; i++)
 	{

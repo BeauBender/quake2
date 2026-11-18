@@ -43,8 +43,9 @@
 #   STATIC_MODULES=1 STATIC_RENDERER=metal and builds the vendored
 #   SDL3, the client, the game and ref_metal for the SDK into
 #   IOS_ROOT/Quake2.app (doc/020_installation.md).
-#   IOS_SDK: iphonesimulator (default, signed ad hoc) or iphoneos
-#   (unsigned). IOS_MIN: the minimum iOS version (17.0).
+#   IOS_SDK: iphonesimulator (default, signed ad hoc), iphoneos
+#   (unsigned) or appletvsimulator (tvOS, TASK23, signed ad hoc).
+#   IOS_MIN: the minimum iOS or tvOS version (17.0).
 #   IOS_BUNDLE_ID: CFBundleIdentifier (a neutral default).
 #   IOS_BUNDLE_DATA: optional, a directory whose baseq2/ is copied
 #   into the bundle; local builds only, never game data in a commit.
@@ -217,11 +218,20 @@ IOS_BUNDLE_ID ?= org.yquake2.quake2
 ifeq ($(IOS_SDK), iphonesimulator)
 IOS_TARGET := arm64-apple-ios$(IOS_MIN)-simulator
 IOS_PLATFORM := iPhoneSimulator
+IOS_PLIST_IN := stuff/ios/Info.plist.in
 else ifeq ($(IOS_SDK), iphoneos)
 IOS_TARGET := arm64-apple-ios$(IOS_MIN)
 IOS_PLATFORM := iPhoneOS
+IOS_PLIST_IN := stuff/ios/Info.plist.in
+else ifeq ($(IOS_SDK), appletvsimulator)
+# tvOS (TASK23): the same code and bundle as the iOS simulator's, for
+# the Apple TV simulator; its own Info.plist (an Apple TV has one
+# orientation, no touch and no status bar)
+IOS_TARGET := arm64-apple-tvos$(IOS_MIN)-simulator
+IOS_PLATFORM := AppleTVSimulator
+IOS_PLIST_IN := stuff/ios/Info-tvos.plist.in
 else
-$(error IOS_SDK must be iphonesimulator or iphoneos, not "$(IOS_SDK)")
+$(error IOS_SDK must be iphonesimulator, iphoneos or appletvsimulator, not "$(IOS_SDK)")
 endif
 ifneq ($(shell printf '%s' '$(subst ',,$(IOS_MIN))' | LC_ALL=C grep -E -x '[0-9]+(\.[0-9]+){0,2}'),$(IOS_MIN))
 $(error IOS_MIN must be a version such as 17.0, not "$(IOS_MIN)")
@@ -719,6 +729,14 @@ $(BUILDDIR)/client/%.o : %.c
 	fi
 	${Q}mkdir -p $(@D)
 	${Q}$(CC) -arch $(YQ2_ARCH) -x objective-c -c $(CFLAGS) $(SDLCFLAGS) $(INCLUDE)  $< -o $@
+
+# Objective-C proper (cl_upscale_metalfx.m, cl_upscale_vt.m), with ARC
+$(BUILDDIR)/client/%.o : %.m
+	@if [ -z $(QUIET) ]; then\
+		echo "===> CC $<";\
+	fi
+	${Q}mkdir -p $(@D)
+	${Q}$(CC) -arch $(YQ2_ARCH) -c -fobjc-arc $(CFLAGS) $(SDLCFLAGS) $(INCLUDE) $< -o $@
 else
 $(BUILDDIR)/client/%.o: %.c
 	@if [ -z $(QUIET) ]; then\
@@ -1032,11 +1050,13 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/rm_gbuf.metal \
 		src/client/refresh/metal/rm_rtshadow.metal \
 		src/client/refresh/metal/rm_rtao.metal \
+		src/client/refresh/metal/rm_rtsun.metal \
 		src/client/refresh/metal/rm_rtwater.metal \
 		src/client/refresh/metal/common/mtl_shader_math.h \
 		src/client/refresh/metal/common/mtl_gbuf_math.h \
 		src/client/refresh/metal/common/mtl_rts_math.h \
 		src/client/refresh/metal/common/mtl_rtao_math.h \
+		src/client/refresh/metal/common/mtl_rtsun_math.h \
 		src/client/refresh/metal/common/mtl_rtw_math.h
 	@echo "===> METAL $<"
 	${Q}command -v xcrun >/dev/null 2>&1 || { echo "ref_metal needs xcrun and the Xcode Metal toolchain" >&2; exit 1; }
@@ -1047,10 +1067,11 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_gbuf.metal -o $(BUILDDIR)/ref_metal/rm_gbuf.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtshadow.metal -o $(BUILDDIR)/ref_metal/rm_rtshadow.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtao.metal -o $(BUILDDIR)/ref_metal/rm_rtao.air
+	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtsun.metal -o $(BUILDDIR)/ref_metal/rm_rtsun.air
 	${Q}xcrun -sdk $(METAL_SDK) metal -c src/client/refresh/metal/rm_rtwater.metal -o $(BUILDDIR)/ref_metal/rm_rtwater.air
 	${Q}xcrun -sdk $(METAL_SDK) metallib $(BUILDDIR)/ref_metal/rm_shaders.air $(BUILDDIR)/ref_metal/rm_rt.air \
 		$(BUILDDIR)/ref_metal/rm_gbuf.air $(BUILDDIR)/ref_metal/rm_rtshadow.air \
-		$(BUILDDIR)/ref_metal/rm_rtao.air $(BUILDDIR)/ref_metal/rm_rtwater.air -o $@
+		$(BUILDDIR)/ref_metal/rm_rtao.air $(BUILDDIR)/ref_metal/rm_rtsun.air $(BUILDDIR)/ref_metal/rm_rtwater.air -o $@
 
 # Header dependencies: the Darwin CFLAGS carry no -MMD (see above), but
 # the Apple clang this target needs writes them for C and Objective-C
@@ -1213,6 +1234,7 @@ CLIENT_OBJS_ := \
 	src/client/cl_upscale_cmd.o \
 	src/client/cl_view.o \
 	src/client/input/gyro.o \
+	src/client/input/ingate.o \
 	src/client/input/touch.o \
 	src/client/menu/menu.o \
 	src/client/menu/qmenu.o \
@@ -1259,6 +1281,18 @@ CLIENT_OBJS_ := \
 CLIENT_OBJS_ += \
 	src/client/input/sdl3.o \
 	src/client/vid/glimp_sdl3.o
+
+# The metalfx backend of upscale_textures: the macOS client only, with
+# MetalFX weak-linked (decision 0012); elsewhere cl_upscale_cmd.c says
+# it is not built. The vt backend (TASK167) likewise, with VideoToolbox
+# weak-linked (macOS 26's super-resolution scaler; CoreMedia and
+# CoreVideo come with SDL3).
+ifeq ($(YQ2_OSTYPE)$(IOS_MODE), Darwin)
+CLIENT_OBJS_ += src/client/cl_upscale_metalfx.o src/client/cl_upscale_vt.o
+UPSCALE_METALFX_LDLIBS := -weak_framework MetalFX -weak_framework VideoToolbox
+else
+UPSCALE_METALFX_LDLIBS :=
+endif
 
 ifeq ($(YQ2_OSTYPE), Windows)
 CLIENT_OBJS_ += \
@@ -1411,11 +1445,14 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rm_model.o \
 	src/client/refresh/metal/rm_pure.o \
 	src/client/refresh/metal/rm_rt.o \
+	src/client/refresh/metal/rm_rtgate.o \
 	src/client/refresh/metal/rm_rtscene.o \
 	src/client/refresh/metal/rm_rtshadow.o \
 	src/client/refresh/metal/rm_rtshadowscene.o \
 	src/client/refresh/metal/rm_rtao.o \
 	src/client/refresh/metal/rm_rtaoscene.o \
+	src/client/refresh/metal/rm_rtsun.o \
+	src/client/refresh/metal/rm_rtsunscene.o \
 	src/client/refresh/metal/rm_rtwater.o \
 	src/client/refresh/metal/rm_rtwaterscene.o \
 	src/client/refresh/metal/rm_scrap.o \
@@ -1430,6 +1467,7 @@ REFMETAL_OBJS_ := \
 	src/client/refresh/metal/rmb_rt.o \
 	src/client/refresh/metal/rmb_rtshadow.o \
 	src/client/refresh/metal/rmb_rtao.o \
+	src/client/refresh/metal/rmb_rtsun.o \
 	src/client/refresh/metal/rmb_rtwater.o \
 	src/client/refresh/metal/common/mtl_matrix.o \
 	src/client/refresh/metal/common/mtl_ring.o \
@@ -1516,6 +1554,11 @@ REFGL3_OBJS = $(patsubst %,$(BUILDDIR)/ref_gl3/%,$(REFGL3_OBJS_))
 REFGL3_OBJS += $(patsubst %,$(BUILDDIR)/ref_gl3/%,$(REFGL3_OBJS_GLADE_))
 REFSOFT_OBJS = $(patsubst %,$(BUILDDIR)/ref_soft/%,$(REFSOFT_OBJS_))
 REFMETAL_OBJS = $(patsubst %,$(BUILDDIR)/ref_metal/%,$(REFMETAL_OBJS_))
+
+# rm_rtsunscene.c builds in the sun's per-map table (.incbin, a path from the
+# top directory, where the compiler runs), so the table is its prerequisite (TASK56).
+$(BUILDDIR)/ref_metal/src/client/refresh/metal/rm_rtsunscene.o: scripts/rt/sun-angles.txt
+
 SERVER_OBJS = $(patsubst %,$(BUILDDIR)/server/%,$(SERVER_OBJS_))
 GAME_OBJS = $(patsubst %,$(BUILDDIR)/baseq2/%,$(GAME_OBJS_))
 
@@ -1620,7 +1663,7 @@ ios_plist:
 	${Q}mkdir -p '$(dir $(IOS_PLIST))'
 	${Q}sed -e 's/@BUNDLE_ID@/$(IOS_BUNDLE_ID)/g' -e 's/@VERSION@/$(IOS_VERSION)/g' \
 		-e 's/@PLATFORM@/$(IOS_PLATFORM)/g' -e 's/@MIN_OS@/$(IOS_MIN)/g' \
-		stuff/ios/Info.plist.in > '$(IOS_PLIST).tmp'
+		'$(IOS_PLIST_IN)' > '$(IOS_PLIST).tmp'
 	${Q}plutil -lint -s '$(IOS_PLIST).tmp'
 	${Q}mv '$(IOS_PLIST).tmp' '$(IOS_PLIST)'
 
@@ -1649,7 +1692,7 @@ ifneq ($(IOS_BUNDLE_DATA),)
 	${Q}test -d '$(IOS_BUNDLE_DATA)/baseq2' || { echo "IOS_BUNDLE_DATA has no baseq2 directory: $(IOS_BUNDLE_DATA)" >&2; exit 1; }
 	${Q}cp -R '$(IOS_BUNDLE_DATA)/baseq2' '$(IOS_APP)/baseq2'
 endif
-ifeq ($(IOS_SDK), iphonesimulator)
+ifneq ($(filter iphonesimulator appletvsimulator,$(IOS_SDK)),)
 	${Q}codesign --force --sign - --timestamp=none '$(IOS_APP)'
 endif
 endif
@@ -1669,7 +1712,7 @@ $(BINDIR)/quake2 : $(CLIENT_OBJS) $(SDL3_LIB)
 $(BINDIR)/quake2 : $(STATIC_LINK_OBJS)
 	@echo "===> LD $@"
 	${Q}mkdir -p $(@D)
-	${Q}$(CC) $(LDFLAGS) $(CLIENT_OBJS) $(STATIC_LINK_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(STATIC_LDLIBS) $(SDLLDFLAGS) -o $@
+	${Q}$(CC) $(LDFLAGS) $(CLIENT_OBJS) $(STATIC_LINK_OBJS) $(LDLIBS) $(IMGDECODE_LDLIBS) $(UPSCALE_METALFX_LDLIBS) $(STATIC_LDLIBS) $(SDLLDFLAGS) -o $@
 else
 $(BINDIR)/quake2 : $(CLIENT_OBJS)
 	@echo "===> LD $@"
@@ -1775,8 +1818,9 @@ endif
 # The unit-test suite (tests/unit, see doc/085_unittests.md). The test
 # binary links the dedicated server's own objects (SERVER_OBJS_ below,
 # built with q2ded's flags into a tree of their own) except the unix
-# main.c; tests/unit/main.c supplies main(). Ten client objects
-# (cl_conback, cl_download, cl_entities, cl_network, cl_parse, cl_screen,
+# main.c; tests/unit/main.c supplies main(). The client objects
+# (cl_cinsize, cl_conback, cl_download, cl_entities, cl_network, cl_parse,
+# cl_screen, the input gate input/ingate.c, the touch layer input/touch.c,
 # the upscaler's checks and pixel arithmetic cl_upscale, the sound
 # frontend sound.c, the window code's SDL-free part vid/glimp_hidpi.c and
 # the video menu's rules menu/vidrules.c)
@@ -1823,9 +1867,11 @@ TEST_OBJS = $(patsubst %,$(TESTDIR)/%,$(filter-out src/backends/unix/main.o,$(SE
 	$(TESTDIR)/src/client/cl_parse.o \
 	$(TESTDIR)/src/client/cl_screen.o \
 	$(TESTDIR)/src/client/cl_upscale.o \
+	$(TESTDIR)/src/client/input/ingate.o \
 	$(TESTDIR)/src/client/input/touch.o \
 	$(TESTDIR)/src/client/menu/vidrules.o \
 	$(TESTDIR)/src/client/sound/sound.o \
+	$(TESTDIR)/src/client/sound/wave.o \
 	$(TESTDIR)/src/client/vid/glimp_hidpi.o \
 	$(TESTDIR)/src/client/refresh/files/imgscale.o \
 	$(TESTDIR)/src/client/refresh/files/surf.o \
@@ -1851,11 +1897,19 @@ $(TESTDIR)/%.o: %.c
 	${Q}$(CC) -c $(CFLAGS) $(TEST_CFLAGS) $(INCLUDE) -o $@ $<
 
 $(patsubst %.c,$(TESTDIR)/%.o,$(TEST_SRCS)) : tests/unit/test.h
+$(TESTDIR)/tests/unit/test_bspgraph.o : src/client/refresh/files/models.c
+
+# test_imgsize.c includes these whole, and Darwin has no .d tracking
+$(TESTDIR)/tests/unit/test_imgsize.o: src/client/refresh/files/pcx.c src/client/refresh/files/wal.c src/client/refresh/files/imgsize.h
+$(TESTDIR)/tests/unit/test_upscale_half.o: src/client/header/upscale_half.h
 
 $(TEST_BIN) : $(TEST_OBJS)
 	@echo "===> LD $@"
 	${Q}mkdir -p $(@D)
 	${Q}$(CC) $(LDFLAGS) $(TEST_COVFLAGS) $(TEST_OBJS) $(LDLIBS) -o $@
+
+# test_ipfilter.c includes the game's g_svcmds.c whole
+$(TESTDIR)/tests/unit/test_ipfilter.o : src/game/g_svcmds.c
 
 endif
 

@@ -523,7 +523,7 @@ Cmd_Args(void)
 static char *
 Cmd_MacroExpandString(char *text)
 {
-	size_t len;
+	size_t len, cur;
 	int i, count;
 	qboolean inquote;
 	char *scan;
@@ -536,6 +536,7 @@ Cmd_MacroExpandString(char *text)
 	scan = text;
 
 	len = strlen(scan);
+	cur = len;
 
 	if (len >= MAX_STRING_CHARS)
 	{
@@ -545,7 +546,7 @@ Cmd_MacroExpandString(char *text)
 
 	count = 0;
 
-	for (i = 0; i < len; i++)
+	for (i = 0; i < cur; i++)
 	{
 		size_t j;
 
@@ -591,6 +592,7 @@ Cmd_MacroExpandString(char *text)
 
 		Q_strlcpy(expanded, temporary, sizeof(expanded));
 		scan = expanded;
+		cur = strlen(expanded);
 		i--;
 
 		if (++count == 100)

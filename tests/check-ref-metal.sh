@@ -20,12 +20,22 @@
 #     tests/metal/rm_rtao_test.c, the pure part of the ambient occlusion
 #     (rm_rtao.c and common/mtl_rtao_math.h, RT5, TASK57),
 #     tests/metal/rm_rtwater_test.c, the pure part of the water reflections
-#     (rm_rtwater.c and common/mtl_rtw_math.h, RT6, TASK58), and
+#     (rm_rtwater.c and common/mtl_rtw_math.h, RT6, TASK58),
+#     tests/metal/rm_rtsun_test.c, the pure part of the sun and sky shadow
+#     (rm_rtsun.c and common/mtl_rtsun_math.h, RT4, TASK56), and
 #     tests/metal/rm_fx_test.c, the pure part of the MetalFX scalers
-#     (rm_metalfx.c, TASK111).
+#     (rm_metalfx.c, TASK111), and tests/metal/rm_rtgate_test.c, the
+#     hardware gate of ray tracing (rm_rtgate.c, RT8, TASK60). The gate's
+#     table of the r_rt_* cvars is then held to the sources: every
+#     Cvar_Get("r_rt_ name of src/client/refresh/metal's .c and .m files
+#     (a call over several lines included) must have a row, every row
+#     such a name, and an effect switch's default must be "0"; scratch
+#     mutants (an unclassified cvar on one line and over two, a row whose
+#     cvar is gone, an effect switch defaulting to 1) must fail it.
 # (b) Only on Darwin with the Metal compiler (xcrun -f metal) and the
 #     vendored SDL 3 headers: "make ref_metal" in a scratch copy of
-#     Makefile, third_party/sdl3.make and src/ (third_party/SDL3 is linked,
+#     Makefile, third_party/sdl3.make, scripts/rt/ (the sun's table, TASK56)
+#     and src/ (third_party/SDL3 is linked,
 #     not copied), so release/ and build/ of this checkout are not
 #     touched; the build must write ref_metal.metallib next to the dylib,
 #     and otool -L of the dylib must list Metal and QuartzCore and no
@@ -58,6 +68,40 @@
 #     function that is not found fails the check. Scratch mutants of each
 #     point (the flush removed, commented out, moved after the call; the
 #     function renamed) must fail it.
+# (e) Always: the kernels call the helpers their host test drives, by source
+#     inspection (TASK164). tests/metal/rm_rtwater_test.c drives C copies of
+#     the reflection loops (rtw_trace_ss, rtw_trace_ws) through the shared
+#     helpers of common/mtl_rtw_math.h; a kernel that stopped calling a helper
+#     would leave the test green. In rm_rtwater.metal, after comments and
+#     string literals are stripped, the body of rm_rtw_trace (its name at the
+#     start of a line up to the next "}" in column 0) must call
+#     mtl_rtw_ss_next and mtl_rtw_choose, and the body of rm_rtw_trace_ws must
+#     call mtl_rtw_ws_next and mtl_rtw_choose_ws; the check fails naming the
+#     kernel and the helper. Scratch mutants (the call renamed, commented out,
+#     moved out of the kernel into another function; the kernel renamed) must
+#     fail it. The pairs are the water's only: the shadow and AO host tests
+#     call the helpers one by one and carry no copy of a kernel loop.
+# (f) Only on Darwin with a Metal device (TASK164): tests/metal/rmb_cs_probe.m
+#     includes rmb_device.m and runs the renderer's own rmb_attach,
+#     rmb_colorspace_set (rmb_cs_apply, rmb_cs_release) and rmb_detach on a
+#     standalone CAMetalLayer, no window, no game data: after metal_colorspace
+#     0 -> 1 -> 0, and after 1 -> detach, the layer's colour space is the one
+#     it had at attach, and the ledger holds no state object. With no device
+#     the probe prints one skip line and passes. Scratch mutants of
+#     rmb_device.m (1 -> 0 sets NULL; 1 -> 0 leaves ours; detach leaves ours)
+#     must fail it.
+# (g) Always: the call seats of the ray-tracing gate (TASK60), by source
+#     inspection, as for the flush points. In rm_main.c, comments and string
+#     literals stripped: RI_BeginFrame's first statement after its
+#     declarations (and a "(void)<parameter>;") is RM_RTG_Frame(); RI_Init
+#     calls RM_RT_Init(&rtcaps); and after it RM_RTG_Init();, both before
+#     ri.Vid_MenuInit(); and no *_Init( of the file takes the raw &caps but
+#     RM_FX_Init, which reads only the families. RM_RTG_Init calls
+#     RM_RTG_Frame too, so a dropped frame call still builds, and &caps for
+#     &rtcaps would build as well. Scratch mutants (the frame call deleted,
+#     moved below another statement; &caps for &rtcaps; RM_RTG_Init deleted,
+#     moved after ri.Vid_MenuInit; another *_Init(&caps); either function
+#     renamed) must fail it, each naming the rule it breaks.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -76,6 +120,7 @@ san="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-fram
 printf 'int main(void){return 0;}\n' > "${tmp:?}/probe.c"
 if $cc $san -o "${tmp:?}/probe" "${tmp:?}/probe.c" >/dev/null 2>&1 && "${tmp:?}/probe" >/dev/null 2>&1; then
 	flags="$flags $san"
+	psan=$san
 else
 	echo "check-ref-metal: $cc cannot build with ASAN and UBSAN; running without them"
 fi
@@ -192,6 +237,24 @@ else
 	case $rtw in *", 0 failed") ;; *) bad "tests/metal/rm_rtwater_test.c printed no result line"; rtw="";; esac
 fi
 
+# the pure part of the sun and sky shadow (RT4, TASK56): rm_rtsun.c and common/mtl_rtsun_math.h, with
+# rm_rtshadow.c for the view's inverse, rm_rt.c for the material ids and rm_pure.c; it reads the
+# committed table scripts/rt/sun-angles.txt from this directory
+rtsun=""
+# shellcheck disable=SC2086 # flags is a word list
+if ! $cc $flags '-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "${tmp:?}/rm_rtsun_test" tests/metal/rm_rtsun_test.c \
+	"$rm_dir/rm_rtsun.c" "$rm_dir/rm_rtshadow.c" "$rm_dir/rm_rt.c" "$rm_dir/rm_pure.c" "$rm_dir/common/mtl_matrix.c" \
+	"$rm_dir/common/mtl_ring.c" src/common/shared/shared.c -lm > "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_rtsun_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtsun_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_rtsun_test.c failed"
+else
+	rtsun=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtsun_test: //')
+	case $rtsun in *", 0 failed") ;; *) bad "tests/metal/rm_rtsun_test.c printed no result line"; rtsun="";; esac
+fi
+
 # the pure part of the MetalFX scalers (TASK111): rm_metalfx.c alone
 fx=""
 # shellcheck disable=SC2086 # flags is a word list
@@ -205,6 +268,69 @@ elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_fx_test" > "${tmp:?}/out" 2
 else
 	fx=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_fx_test: //')
 	case $fx in *", 0 failed") ;; *) bad "tests/metal/rm_fx_test.c printed no result line"; fx="";; esac
+fi
+
+# the hardware gate of ray tracing (RT8, TASK60): rm_rtgate.c alone
+rtg=""
+# shellcheck disable=SC2086 # flags is a word list
+if ! $cc $flags -o "${tmp:?}/rm_rtgate_test" tests/metal/rm_rtgate_test.c "$rm_dir/rm_rtgate.c" -lm \
+	> "${tmp:?}/cc.out" 2>&1; then
+	cat "${tmp:?}/cc.out"
+	bad "tests/metal/rm_rtgate_test.c does not compile"
+elif ! UBSAN_OPTIONS=print_stacktrace=1 "${tmp:?}/rm_rtgate_test" > "${tmp:?}/out" 2>&1; then
+	cat "${tmp:?}/out"
+	bad "tests/metal/rm_rtgate_test.c failed"
+else
+	rtg=$(tail -n 1 "${tmp:?}/out" | sed 's/^rm_rtgate_test: //')
+	case $rtg in *", 0 failed") ;; *) bad "tests/metal/rm_rtgate_test.c printed no result line"; rtg="";; esac
+fi
+
+# rtg_names <dir>: name=default for each Cvar_Get("r_rt_ of the directory's .c and .m files, the
+# files joined into one line so a call over several lines is seen; a default that is not a
+# literal gives the name alone. Sorted, each pair once.
+rtg_names() {
+	cat "$1"/*.c "$1"/*.m | tr '\n\r' '  ' |
+		grep -oE 'Cvar_Get[[:space:]]*\([[:space:]]*"r_rt_[A-Za-z0-9_]*"([[:space:]]*,[[:space:]]*"[^"]*")?' |
+		sed -E 's/^Cvar_Get[[:space:]]*\([[:space:]]*"([^"]*)"([[:space:]]*,[[:space:]]*"([^"]*)")?$/\1=\3/; s/=$//; s/ /_/g' |
+		sort -u
+}
+# rtg_table <dir>: 0 when the gate's table classifies every r_rt_* cvar of the directory
+rtg_table() {
+	names=$(rtg_names "$1") || return 1
+	[ -n "$names" ] || { echo "  no Cvar_Get(\"r_rt_ in $1"; return 1; }
+	# shellcheck disable=SC2086 # names is a word list of name=default pairs
+	"${tmp:?}/rm_rtgate_test" --names $names
+}
+rtg_mutants=0
+if [ -x "${tmp:?}/rm_rtgate_test" ]; then
+	if ! rtg_table "$rm_dir" > "${tmp:?}/rtg.out" 2>&1; then
+		cat "${tmp:?}/rtg.out"
+		bad "an r_rt_* cvar of $rm_dir is not in rm_rtgate.c's table, or a row is stale (see above)"
+	fi
+	rtg_cvars=$(tail -n 1 "${tmp:?}/rtg.out" | sed 's/^rm_rtgate_test: //; s/ names,.*//')
+	mkdir "${tmp:?}/rtgmut"
+	rtg_mut=1
+	while [ "$rtg_mut" -le 4 ]; do
+		rm -f "${tmp:?}"/rtgmut/*
+		cp "$rm_dir"/*.c "$rm_dir"/*.m "${tmp:?}/rtgmut/"
+		case $rtg_mut in
+			1) printf '%s\n' 'static void f(void) { ri.Cvar_Get("r_rt_mutant", "0", CVAR_ARCHIVE); }' > "${tmp:?}/rtgmut/zz_mutant.c" ;;
+			2) printf '%s\n' 'static void f(void) { ri.Cvar_Get(' '	"r_rt_mutant", "0", 0); }' > "${tmp:?}/rtgmut/zz_mutant.c" ;;
+			3) sed 's/Cvar_Get("r_rt_water_show"/Cvar_Get("x_rt_water_show"/' "$rm_dir/rm_rtwaterscene.c" \
+				> "${tmp:?}/rtgmut/rm_rtwaterscene.c" ;;
+			4) sed 's/Cvar_Get("r_rt_ao", "0"/Cvar_Get("r_rt_ao", "1"/' "$rm_dir/rm_rtaoscene.c" > "${tmp:?}/rtgmut/rm_rtaoscene.c" ;;
+		esac
+		if cmp -s "$rm_dir/rm_rtwaterscene.c" "${tmp:?}/rtgmut/rm_rtwaterscene.c" &&
+			cmp -s "$rm_dir/rm_rtaoscene.c" "${tmp:?}/rtgmut/rm_rtaoscene.c" && [ ! -f "${tmp:?}/rtgmut/zz_mutant.c" ]; then
+			bad "the cvar-table mutant $rtg_mut changed nothing"
+		elif rtg_table "${tmp:?}/rtgmut" > "${tmp:?}/rtgmut.out" 2>&1; then
+			cat "${tmp:?}/rtgmut.out"
+			bad "the cvar-table check passes mutant $rtg_mut"
+		else
+			rtg_mutants=$((rtg_mutants + 1))
+		fi
+		rtg_mut=$((rtg_mut + 1))
+	done
 fi
 
 # strip <file>: the file with its comments and the contents of its string and
@@ -378,7 +504,7 @@ flushed() {
 		body && /^}/ { body = 0 }
 		body && !fl && $0 ~ /^[ \t]*RM_Flush2D\(\);/ { fl = NR }
 		body && !at && index($0, call) { at = NR }
-		END { exit (found && fl && at && fl < at) ? 0 : 1 }' "${tmp:?}/flush.code"
+		END { exit !found ? 2 : (fl && at && fl < at) ? 0 : 1 }' "${tmp:?}/flush.code"
 }
 # flush_mutant <kind> <file> <function> <call>: the file with that flush point broken
 flush_mutant() {
@@ -399,21 +525,327 @@ for point in "rm_main.c RI_RenderFrame rmb_pass_3d(" "rm_main.c RI_EndFrame rmb_
 	# shellcheck disable=SC2086 # three words: file, function, call
 	set -- $point
 	f=$rm_dir/$1 fn=$2 call=$3
-	if ! flushed "$f" "$fn" "$call"; then
+	rc=0
+	flushed "$f" "$fn" "$call" || rc=$?
+	if [ "$rc" = 2 ]; then
+		bad "function $fn not found in $f"
+		continue
+	elif [ "$rc" != 0 ]; then
 		bad "$f: $fn does not call RM_Flush2D() before $call (gl1's R_ApplyGLBuffer)"
 		continue
 	fi
 	for m in removed commented moved renamed; do
 		flush_mutant "$m" "$f" "$fn" "$call" > "${tmp:?}/flush-mutant.c"
+		# the renamed function is "not found" (2), the others "no flush before the call" (1)
+		case $m in renamed) want=2 ;; *) want=1 ;; esac
+		rc=0
+		flushed "${tmp:?}/flush-mutant.c" "$fn" "$call" || rc=$?
 		if cmp -s "$f" "${tmp:?}/flush-mutant.c"; then
 			bad "the flush-point mutant ($m) of $fn changed nothing"
-		elif flushed "${tmp:?}/flush-mutant.c" "$fn" "$call"; then
+		elif [ "$rc" = 0 ]; then
 			bad "the flush-point check passes a mutant of $fn (the flush $m)"
+		elif [ "$rc" != "$want" ]; then
+			bad "the flush-point check gives status $rc, not $want, for a mutant of $fn ($m)"
 		else
 			flush_mutants=$((flush_mutants + 1))
 		fi
 	done
 done
+
+# (g) the ray-tracing gate's call seats in rm_main.c (TASK60). seated <file>: after comments and
+# string literals are stripped, prints the broken rules, one word each, and returns 1 if any; 2 when
+# RI_Init or RI_BeginFrame is not defined in the file (its name at the start of a line, its body up
+# to the next "}" in column 0); 0 otherwise. The rules:
+#   frame    RI_BeginFrame's first statement, after its declarations and a "(void)<name>;", is
+#            RM_RTG_Frame(); (RM_RTG_Init calls it too, so a removal still links)
+#   rtinit   RI_Init calls RM_RT_Init(&rtcaps); before ri.Vid_MenuInit(
+#   rtginit  RI_Init calls RM_RTG_Init(); after its RM_RT_Init( and before ri.Vid_MenuInit(
+#   rtflag   RI_Init sets rtcaps.raytracing = rm_rtg_traces(&rm_rtg); after its rm_rtg_decide( and before
+#            RM_RT_Init(&rtcaps); (without it rtcaps is a copy of caps and the scenes skip the gate)
+#   rawcaps  no *_Init( of the file takes the raw &caps, other than RM_FX_Init: the MetalFX scalers
+#            trace nothing and RM_FX_Init reads only caps.families; every scene that traces takes
+#            rtcaps, whose raytracing is the gate's answer
+seated() {
+	strip "$1" > "${tmp:?}/seat.code" || return 1
+	awk '
+		{
+			line = $0
+			while (match(line, /[A-Za-z_][A-Za-z0-9_]*_Init[ \t]*\([ \t]*&[ \t]*caps[ \t]*[,)]/)) {
+				name = substr(line, RSTART, RLENGTH); sub(/[ \t]*\(.*/, "", name)
+				if (name != "RM_FX_Init") raw = 1
+				line = substr(line, RSTART + RLENGTH)
+			}
+		}
+		/^RI_BeginFrame\(/ { bf = 1; bfound = 1; next }
+		/^RI_Init\(/ { ri = 1; ifound = 1; next }
+		(bf || ri) && /^}/ { bf = 0; ri = 0 }
+		bf && !first {
+			if ($0 ~ /^[ \t]*$/ || $0 ~ /^[ \t]*[{][ \t]*$/) next
+			if ($0 ~ /^[ \t]*\(void\)[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*;[ \t]*$/) next
+			if ($0 !~ /^[ \t]*(return|goto|else|case|do)[^A-Za-z0-9_]/ &&
+				$0 ~ /^[ \t]*([A-Za-z_][A-Za-z0-9_]*[ \t]+)+[*]*[A-Za-z_][A-Za-z0-9_]*[ \t]*(=|;|,|\[)/) next
+			first = 1
+			if ($0 ~ /^[ \t]*RM_RTG_Frame\(\);[ \t]*$/) frame = 1
+		}
+		ri && !dec && /rm_rtg_decide[ \t]*\(/ { dec = NR }
+		ri && !asg && /^[ \t]*rtcaps[.]raytracing[ \t]*=[ \t]*rm_rtg_traces[ \t]*\([ \t]*&[ \t]*rm_rtg[ \t]*\)[ \t]*;/ { asg = NR }
+		ri && !rt && /^[ \t]*RM_RT_Init\(&rtcaps\);/ { rt = NR }
+		ri && !rta && /^[ \t]*RM_RT_Init\(/ { rta = NR }
+		ri && rta && !rtg && /^[ \t]*RM_RTG_Init\(\);/ { rtg = NR }
+		ri && !menu && index($0, "ri.Vid_MenuInit(") { menu = NR }
+		END {
+			if (!bfound || !ifound) exit 2
+			out = ""
+			if (!frame) out = out " frame"
+			if (!rt || !menu || rt > menu) out = out " rtinit"
+			if (!rtg || !menu || rtg > menu) out = out " rtginit"
+			if (!asg || !dec || !rt || asg < dec || asg > rt) out = out " rtflag"
+			if (raw) out = out " rawcaps"
+			if (out != "") { print substr(out, 2); exit 1 }
+			exit 0
+		}' "${tmp:?}/seat.code"
+}
+# seat_mutant <kind> <file>: the file with one seat broken
+seat_mutant() {
+	case $1 in
+		noframe) awk '/^RI_BeginFrame\(/ { b = 1 } b && /^}/ { b = 0 }
+			b && /^[ \t]*RM_RTG_Frame\(\);/ { next } { print }' "$2" ;;
+		framelate) awk '/^RI_BeginFrame\(/ { b = 1 } b && /^}/ { b = 0 }
+			b && held == "" && !done && /^[ \t]*RM_RTG_Frame\(\);/ { held = $0; done = 1; next }
+			{ print } b && held != "" && /;[ \t]*$/ { print held; held = "" }' "$2" ;;
+		rawrt) sed 's/RM_RT_Init(&rtcaps);/RM_RT_Init(\&caps);/' "$2" ;;
+		nortg) awk '/^RI_Init\(/ { b = 1 } b && /^}/ { b = 0 }
+			b && /^[ \t]*RM_RTG_Init\(\);/ { next } { print }' "$2" ;;
+		rtglate) awk '/^RI_Init\(/ { b = 1 } b && /^}/ { b = 0 }
+			b && held == "" && !done && /^[ \t]*RM_RTG_Init\(\);/ { held = $0; done = 1; next }
+			{ print } b && held != "" && index($0, "ri.Vid_MenuInit(") { print held; held = "" }' "$2" ;;
+		noflag) awk '/^RI_Init\(/ { b = 1 } b && /^}/ { b = 0 }
+			b && /^[ \t]*rtcaps[.]raytracing[ \t]*=/ { next } { print }' "$2" ;;
+		flaglate) awk '/^RI_Init\(/ { b = 1 } b && /^}/ { b = 0 }
+			b && held == "" && !done && /^[ \t]*rtcaps[.]raytracing[ \t]*=/ { held = $0; done = 1; next }
+			{ print } b && held != "" && /^[ \t]*RM_RT_Init\(&rtcaps\);/ { print held; held = "" }' "$2" ;;
+		flagraw) sed 's/^\([[:space:]]*rtcaps[.]raytracing[[:space:]]*=[[:space:]]*\)rm_rtg_traces([^;]*);/\1caps.raytracing;/' "$2" ;;
+		rawother) awk '{ print } /^[ \t]*RM_FX_Init\(&caps\);/ { print "\tRM_SUN_Init(&caps);" }' "$2" ;;
+		renamedframe) sed 's/^RI_BeginFrame(/RI_BeginFrame_old(/' "$2" ;;
+		renamedinit) sed 's/^RI_Init(/RI_Init_old(/' "$2" ;;
+	esac
+}
+seat_main=$rm_dir/rm_main.c
+seat_mutants=0
+rc=0
+seated "$seat_main" > "${tmp:?}/seat.out" || rc=$?
+if [ "$rc" = 2 ]; then
+	bad "RI_Init or RI_BeginFrame not found in $seat_main"
+elif [ "$rc" != 0 ]; then
+	bad "$seat_main: the ray-tracing gate's call seats are broken ($(cat "${tmp:?}/seat.out"); frame: RM_RTG_Frame(); first in RI_BeginFrame, rtinit: RM_RT_Init(&rtcaps); in RI_Init, rtginit: RM_RTG_Init(); after it, rtflag: rtcaps.raytracing = rm_rtg_traces(&rm_rtg); between rm_rtg_decide and RM_RT_Init, rawcaps: an *_Init(&caps) other than RM_FX_Init)"
+else
+	for m in noframe framelate rawrt nortg rtglate noflag flaglate flagraw rawother renamedframe renamedinit; do
+		# a renamed function is "not found" (2), the others name the rules they break (1)
+		case $m in
+			noframe|framelate) want=frame ;;
+			rawrt) want="rtinit rtflag rawcaps" ;;
+			nortg|rtglate) want=rtginit ;;
+			noflag|flaglate|flagraw) want=rtflag ;;
+			rawother) want=rawcaps ;;
+			*) want="" ;;
+		esac
+		seat_mutant "$m" "$seat_main" > "${tmp:?}/seat-mutant.c"
+		rc=0
+		seated "${tmp:?}/seat-mutant.c" > "${tmp:?}/seat.out" || rc=$?
+		got=$(cat "${tmp:?}/seat.out")
+		if cmp -s "$seat_main" "${tmp:?}/seat-mutant.c"; then
+			bad "the seat mutant ($m) of $seat_main changed nothing"
+		elif [ "$rc" = 0 ]; then
+			bad "the seat check passes a mutant of $seat_main ($m)"
+		elif [ -z "$want" ] && [ "$rc" != 2 ]; then
+			bad "the seat check gives status $rc, not 2, for a mutant of $seat_main ($m)"
+		elif [ -n "$want" ] && { [ "$rc" != 1 ] || [ "$got" != "$want" ]; }; then
+			bad "the seat check names \"$got\" (status $rc), not \"$want\", for a mutant of $seat_main ($m)"
+		else
+			seat_mutants=$((seat_mutants + 1))
+		fi
+	done
+fi
+
+# (e) the kernels call the helpers their host tests drive. kcalls <file> <kernel> <helper>: 0 when
+# the kernel is defined in the file (its name at the start of a line, its body up to the next "}" in
+# column 0) and its body, outside comments and string literals, calls <helper>( ; 1 otherwise.
+kcalls() {
+	strip "$1" | deadif > "${tmp:?}/kcalls.code" || return 1
+	awk -v fn="$2" -v h="$3" '
+		$0 ~ "^" fn "\\(" { body = 1; found = 1 }
+		body && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { hit = 1 }
+		body && /^}/ { body = 0 }
+		END { exit !found ? 2 : hit ? 0 : 1 }' "${tmp:?}/kcalls.code"
+}
+# deadif: stdin to stdout, the lines of dead preprocessor branches blanked (so a call there is no
+# call): the part of an "#if 0" before its "#else" (the "#else" part is live), the "#else" part of an
+# "#if 1", whatever the nesting; directive lines are blanked too, the line count is kept. The forms
+# evaluated are "#if 0", "#if 1", "#if (0)" and "#if (1)" (blanks optional, so "#if(0)" too); every
+# other condition ("#if X", "#if defined(X)", "#ifdef", "#ifndef", "#elif", "#if 00", "#if false")
+# is taken as live on both branches, so a call kept there counts (the check cannot tell it is dead),
+# and a live call is never refused for it. Every "#if" form, "#if(" included, opens a level, so each
+# "#endif" closes its own.
+deadif() {
+	awk '
+	function dead(   i) { for (i = 1; i <= depth; i++) if (off[i]) return 1; return 0 }
+	{
+		line = $0
+		if (line ~ /^[ \t]*#[ \t]*if([^A-Za-z0-9_]|$)|^[ \t]*#[ \t]*if(n?def)[ \t]/) {
+			depth++; kind[depth] = 2; off[depth] = 0
+			if (line ~ /^[ \t]*#[ \t]*if([ \t]+0|[ \t]*\([ \t]*0[ \t]*\))[ \t]*$/) { kind[depth] = 0; off[depth] = 1 }
+			else if (line ~ /^[ \t]*#[ \t]*if([ \t]+1|[ \t]*\([ \t]*1[ \t]*\))[ \t]*$/) { kind[depth] = 1 }
+			print ""; next
+		}
+		if (line ~ /^[ \t]*#[ \t]*else/) {
+			if (depth > 0) { if (kind[depth] == 0) off[depth] = 0; else if (kind[depth] == 1) off[depth] = 1 }
+			print ""; next
+		}
+		if (line ~ /^[ \t]*#[ \t]*elif/) { if (depth > 0) off[depth] = 0; print ""; next }
+		if (line ~ /^[ \t]*#[ \t]*endif/) { if (depth > 0) depth--; print ""; next }
+		if (dead()) { print ""; next }
+		print line
+	}'
+}
+# kcall_mutant <kind> <file> <kernel> <helper>: the file with that call broken
+kcall_mutant() {
+	case $1 in
+		renamed) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b { gsub(h "[ \t]*\\(", h "_x(") } { print }' "$2" ;;
+		commented) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b { gsub(h "[ \t]*\\(", "/* & */ 0 * (") } { print }' "$2" ;;
+		elsewhere) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b { gsub(h "[ \t]*\\(", h "_x(") } { print }
+			END { print "static int kcall_elsewhere(void) { return " h "(0); }" }' "$2" ;;
+		renamedkernel) sed "s/^$3(/$3_old(/" "$2" ;;
+		deadcode) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print; print "#else"; print "#endif"; next } { print }' "$2" ;;
+		liveelse) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print; print "#else"; print; print "#endif"; next } { print }' "$2" ;;
+		deadnested) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print "#ifdef X"; print "#endif"; print; print "#endif"; next } { print }' "$2" ;;
+		deadnestedparen) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if 0"; print "#if(X)"; print "#endif"; print; print "#endif"; next } { print }' "$2" ;;
+		deadparen) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if (0)"; print; print "#else"; print "#endif"; next } { print }' "$2" ;;
+		deadparen2) awk -v fn="$3" -v h="$4" '$0 ~ "^" fn "\\(" { b = 1 } b && /^}/ { b = 0 }
+			b && $0 ~ "(^|[^A-Za-z0-9_])" h "[ \t]*\\(" { print "#if(1)"; print "#else"; print; print "#endif"; next } { print }' "$2" ;;
+		joined) awk -v fn="$3" '
+			held != "" { if (index($0, fn "(") == 1) { print held " " $0 } else { print held; print } held = ""; next }
+			/^kernel void$/ || /^static [a-z0-9_]+$/ { held = $0; next }
+			{ print }' "$2" ;;
+	esac
+}
+kcall_mutants=0 kcall_pairs=0
+for pair in "rm_rtwater.metal rm_rtw_trace mtl_rtw_ss_next" "rm_rtwater.metal rm_rtw_trace mtl_rtw_choose" \
+	"rm_rtwater.metal rm_rtw_trace_ws mtl_rtw_ws_next" "rm_rtwater.metal rm_rtw_trace_ws mtl_rtw_choose_ws" \
+	"rm_rtwater.metal rm_rtw_ss_at mtl_rtw_choose" "rm_rtwater.metal rm_rtw_trace rm_rtw_ss_at"; do
+	# shellcheck disable=SC2086 # three words: file, kernel, helper
+	set -- $pair
+	f=$rm_dir/$1 kn=$2 hp=$3
+	rc=0
+	kcalls "$f" "$kn" "$hp" || rc=$?
+	if [ "$rc" = 2 ]; then
+		bad "kernel $kn not found in $f"
+		continue
+	elif [ "$rc" != 0 ]; then
+		bad "$f: the kernel $kn does not call $hp (the helper its host test drives)"
+		continue
+	fi
+	kcall_pairs=$((kcall_pairs + 1))
+	for m in renamed commented elsewhere renamedkernel deadcode deadnested deadnestedparen deadparen deadparen2 joined; do
+		kcall_mutant "$m" "$f" "$kn" "$hp" > "${tmp:?}/kcall-mutant.metal"
+		# a mutant that takes the function away is "not found" (2), the others "no call" (1)
+		case $m in renamedkernel|joined) want=2 ;; *) want=1 ;; esac
+		rc=0
+		kcalls "${tmp:?}/kcall-mutant.metal" "$kn" "$hp" || rc=$?
+		if cmp -s "$f" "${tmp:?}/kcall-mutant.metal"; then
+			bad "the kernel-call mutant ($m) of $kn changed nothing"
+		elif [ "$rc" = 0 ]; then
+			bad "the kernel-call check passes a mutant of $kn (the call to $hp $m)"
+		elif [ "$rc" != "$want" ]; then
+			bad "the kernel-call check gives status $rc, not $want, for a mutant of $kn ($m)"
+		else
+			kcall_mutants=$((kcall_mutants + 1))
+		fi
+	done
+	# the "#else" part of an "#if 0" is live: the call repeated there is still a call
+	kcall_mutant liveelse "$f" "$kn" "$hp" > "${tmp:?}/kcall-live.metal"
+	if cmp -s "$f" "${tmp:?}/kcall-live.metal" || ! kcalls "${tmp:?}/kcall-live.metal" "$kn" "$hp"; then
+		bad "the kernel-call check refuses a call kept in the #else part of an #if 0 ($kn, $hp)"
+	fi
+done
+
+# (f) the colour-space probe. probe_run <dir with rmb_device.m or empty> <exe>: builds
+# tests/metal/rmb_cs_probe.m, which includes rmb_device.m (found in <dir> first, else in
+# $rm_dir) and runs the renderer's own rmb_attach, rmb_colorspace_set and rmb_detach on a
+# standalone CAMetalLayer; its output is in $tmp/probe.out, its exit status is returned (a build
+# failure is 99).
+probe_run() {
+	# shellcheck disable=SC2086 # flags is a word list
+	# the sanitizers when (a) found the compiler has them, and the aliasing and overflow flags of the
+	# script's other builds; the warnings are -Wall -Wextra -Werror, stricter than rmb_device.m's real
+	# build on purpose (docs/runbook/TASK164.md, FIX99)
+	if ! $cc -fobjc-arc -std=gnu11 -Wall -Wextra -Werror -g -O1 -fno-strict-aliasing -fwrapv ${psan:-} -I"${1:-$rm_dir}" -I"$rm_dir" -I"$rm_dir/header" -I. \
+		'-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "$2" tests/metal/rmb_cs_probe.m "$rm_dir/rm_pure.c" \
+		"$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" src/common/shared/shared.c \
+		-framework Foundation -framework Metal -framework QuartzCore -framework CoreGraphics -lm > "${tmp:?}/probe.out" 2>&1; then
+		return 99
+	fi
+	rc=0
+	# a mutant must fail by an exit status, not a signal (the shell prints "Abort trap" for a signal and
+	# the system may write a crash report): the probe stops at its first wrong retain count, and
+	# ASAN exits instead of aborting
+	ASAN_OPTIONS=abort_on_error=0 "$2" > "${tmp:?}/probe.out" 2>&1 || rc=$?
+	return $rc
+}
+probe="probe skipped"
+if [ "$(uname -s)" != Darwin ]; then
+	echo "check-ref-metal: colour-space probe skipped: not macOS"
+else
+	rc=0
+	probe_run "" "${tmp:?}/rmb_cs_probe" || rc=$?
+	if [ "$rc" = 99 ]; then
+		cat "${tmp:?}/probe.out"
+		bad "tests/metal/rmb_cs_probe.m does not compile"
+	elif [ "$rc" != 0 ]; then
+		cat "${tmp:?}/probe.out"
+		bad "tests/metal/rmb_cs_probe.m failed"
+	elif grep -q 'skipped: no Metal device' "${tmp:?}/probe.out"; then
+		echo "check-ref-metal: colour-space probe skipped: no Metal device"
+	else
+		probe=$(tail -n 1 "${tmp:?}/probe.out" | sed 's/^rmb_cs_probe: //')
+		case $probe in *", 0 failed") ;; *) bad "tests/metal/rmb_cs_probe.m printed no result line"; probe="probe skipped";; esac
+		# the mutants of rmb_device.m, each of which must fail the probe: 1 -> 0 sets NULL, 1 -> 0
+		# leaves the colour space on the layer, detach leaves it too
+		probe_mutants=0
+		for m in nulled kept detached unretained; do
+			rm -rf "${tmp:?}/csmut"
+			mkdir "${tmp:?}/csmut"
+			case $m in
+				nulled) sed 's|rmb_layer.colorspace = rmb_cs_own;|rmb_layer.colorspace = NULL;|' "$rm_dir/rmb_device.m" ;;
+				kept) sed 's|rmb_layer.colorspace = rmb_cs_own;|(void)0;|' "$rm_dir/rmb_device.m" ;;
+				unretained) sed 's|CGColorSpaceRetain(rmb_cs_own);|(void)0;|' "$rm_dir/rmb_device.m" ;;
+				detached) sed 's|rmb_cs_release();   /\* the view|(void)0;   /* the view|' "$rm_dir/rmb_device.m" ;;
+			esac > "${tmp:?}/csmut/rmb_device.m"
+			if cmp -s "$rm_dir/rmb_device.m" "${tmp:?}/csmut/rmb_device.m"; then
+				bad "the colour-space mutant ($m) of rmb_device.m changed nothing"
+				continue
+			fi
+			rc=0
+			probe_run "${tmp:?}/csmut" "${tmp:?}/rmb_cs_mutant" || rc=$?
+			if [ "$rc" = 99 ]; then
+				cat "${tmp:?}/probe.out"
+				bad "the colour-space mutant ($m) does not compile"
+			elif [ "$rc" = 0 ]; then
+				bad "the colour-space probe passes a mutant of rmb_device.m ($m)"
+			else
+				probe_mutants=$((probe_mutants + 1))
+			fi
+		done
+		probe="$probe; $probe_mutants colour-space mutants refused"
+	fi
+fi
 
 # (b) the build, where it can be built
 skip=""
@@ -457,6 +889,9 @@ else
 	cp -R Makefile src "${tmp:?}/tree/"
 	mkdir "${tmp:?}/tree/third_party"
 	cp third_party/sdl3.make "${tmp:?}/tree/third_party/"
+	# the sun's per-map table, which rm_rtsunscene.c builds in (TASK56)
+	mkdir "${tmp:?}/tree/scripts"
+	cp -R scripts/rt "${tmp:?}/tree/scripts/"
 	ln -s "$PWD/third_party/SDL3" "${tmp:?}/tree/third_party/SDL3"
 	jobs=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
 	[ "$jobs" -le 4 ] || jobs=4
@@ -486,7 +921,27 @@ else
 	build="ref_metal built"
 fi
 
+# metal_rate_start is read once, in RI_Init (TASK161): the cvar's value is used nowhere else in
+# rm_main.c, so a per-frame read, which a mid-run set would move, cannot come back. Scratch mutants:
+# a read in RI_EndFrame, and one at close.
+rate_main=src/client/refresh/metal/rm_main.c
+rate_reads() { # <file>: how many lines of <file> read the cvar's value
+	grep -c 'metal_rate_start->value' "$1"
+}
+if [ "$(rate_reads "$rate_main")" != 1 ] || ! grep -q 'rm_rate_start = metal_rate_start->value;' "$rate_main"; then
+	bad "$rate_main reads metal_rate_start->value other than once, in RI_Init"
+fi
+rate_mutants=0
+for rate_mut in 's/rm_rate_start);/metal_rate_start->value);/' 's/&rm_rate, rm_rate_start,/\&rm_rate, metal_rate_start->value,/'; do
+	sed "$rate_mut" "$rate_main" > "${tmp:?}/rm_main_rate.c"
+	if [ "$(rate_reads "${tmp:?}/rm_main_rate.c")" = 1 ]; then
+		bad "the rate-start check passes a mutant ($rate_mut)"
+	else
+		rate_mutants=$((rate_mutants + 1))
+	fi
+done
+
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; sun ${rtsun:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; 5 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; $build)"
 fi
 exit $fail

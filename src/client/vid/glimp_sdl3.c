@@ -44,6 +44,10 @@
 #include <TargetConditionals.h>
 #endif
 
+#if defined(__APPLE__) && defined(__OBJC__) && TARGET_OS_IPHONE
+#import <UIKit/UIKit.h>
+#endif
+
 /* AppKit is macOS only: iOS, tvOS and visionOS have no NSWindow */
 #if defined(__APPLE__) && defined(__OBJC__) && TARGET_OS_OSX
 #import <AppKit/NSWindow.h>
@@ -169,14 +173,54 @@ MeasureScreen(int *v)
 }
 
 /*
+ * The window as the scene gives it now, for the log (TASK172): its size in
+ * points and in pixels, the density, each of the four insets of its safe
+ * area in points on its own, and the orientation of the display it is on.
+ * Nothing here asks UIScreen or the device's model.
+ */
+static void
+LogScreenAs(const char *what)
+{
+	SDL_Rect r;
+	int w = 0, h = 0, pw = 0, ph = 0;
+	SDL_DisplayID d = SDL_GetDisplayForWindow(window);
+
+	if (!SDL_GetWindowSize(window, &w, &h) || !SDL_GetWindowSizeInPixels(window, &pw, &ph) ||
+		!SDL_GetWindowSafeArea(window, &r))
+	{
+		return;
+	}
+
+	Com_Printf("%s: window %ix%i points, %ix%i pixels, density %.2f, insets left %i top %i right %i bottom %i points, "
+			"orientation %i, display %u\n", what, w, h, pw, ph, SDL_GetWindowPixelDensity(window),
+			r.x, r.y, w - r.x - r.w, h - r.y - r.h, (int)SDL_GetCurrentDisplayOrientation(d), (unsigned)d);
+}
+
+static void
+LogScreen(void)
+{
+	LogScreenAs("Screen");
+}
+
+/*
  * The safe area or the pixel size moved (SDL_EVENT_WINDOW_SAFE_AREA_CHANGED,
- * SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED): the video starts again, once, and
- * only when the screen is not the one it was made for.
+ * SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED): a rotation, or a fold or an unfold
+ * of an iPhone Duo, which moves the window to the other display. TASK172:
+ * the video follows it live, with no vid_restart. viddef takes the
+ * renderer's new drawable, the safe rectangle in pixels (ref_metal's
+ * RI_GetDrawableSize), and the renderer takes the same size at its next
+ * frame (RI_BeginFrame), so the 3D view, the HUD, the console and the menus
+ * are laid out for the new window on the next frame; the touch overlay
+ * reads the safe area at each touch (IN_TouchSync). A window with no
+ * pixels (hidden in the middle of a fold) is left alone: nothing is drawn
+ * for it, and the change is taken when it has a size again. A renderer that
+ * gives no drawable falls back to the vid_restart of TASK147.
  */
 void
 GLimp_ScreenEvent(void)
 {
 	int now[GLIMP_SCREEN_INTS];
+	int w = 0, h = 0;
 
 	if (!initSuccessful)
 	{
@@ -185,12 +229,104 @@ GLimp_ScreenEvent(void)
 
 	MeasureScreen(now);
 
-	if (GLimp_ScreenChanged(made_screen, now))
+	/* the renderer's drawable, asked only when the screen differs from the record */
+	if ((now[0] > 0) && (now[1] > 0) && GLimp_ScreenChanged(made_screen, now) && re.GetDrawableSize)
 	{
-		/* the next event of the same change finds it noted and does nothing */
-		memcpy(made_screen, now, sizeof(made_screen));
-		Cbuf_AddText("vid_restart\n");
+		re.GetDrawableSize(&w, &h);
 	}
+
+	switch (GLimp_ScreenAction(made_screen, now, w, h))
+	{
+		case GLIMP_SCREEN_IGNORE:
+			return;
+
+		case GLIMP_SCREEN_RESTART:
+			/* the next event of the same change finds it noted and does nothing */
+			memcpy(made_screen, now, sizeof(made_screen));
+			LogScreen();
+			Cbuf_AddText("vid_restart\n");
+			return;
+
+		default:
+			memcpy(made_screen, now, sizeof(made_screen));
+			LogScreen();
+			viddef.width = w;
+			viddef.height = h;
+			Com_Printf("Drawable size: %ix%i (live)\n", viddef.width, viddef.height);
+			return;
+	}
+}
+#endif
+
+#if defined(__APPLE__) && TARGET_OS_IOS && defined(__OBJC__)
+/*
+ * Asks the window scene for an interface orientation (TASK172), the way a
+ * rotation of the device does: the same size change, safe-area change or
+ * insets swap reaches GLimp_ScreenEvent. bits are GLIMP_ORIENT_* values
+ * (GLimp_OrientationBits). The system answers only for orientations the
+ * app supports (Info.plist, here the two landscapes), and says so in its
+ * error otherwise; nothing here forces one.
+ */
+void
+GLimp_RequestOrientation(int bits)
+{
+	UIWindow *uiwindow;
+	UIWindowScene *scene;
+	UIInterfaceOrientationMask mask = 0;
+	UIWindowSceneGeometryPreferencesIOS *prefs;
+
+	if (!window)
+	{
+		return;
+	}
+
+	uiwindow = (__bridge UIWindow *)SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, NULL);
+	scene = uiwindow.windowScene;
+
+	if (!scene)
+	{
+		Com_Printf("Orientation: the window has no scene.\n");
+		return;
+	}
+
+	if (!bits)
+	{
+		/* no request: say what the scene and SDL report now (a measurement, not a change of the screen) */
+		Com_Printf("Orientation now: scene %i\n", (int)scene.effectiveGeometry.interfaceOrientation);
+		LogScreenAs("Screen now");
+		return;
+	}
+
+	if (bits & GLIMP_ORIENT_PORTRAIT)
+	{
+		mask |= UIInterfaceOrientationMaskPortrait;
+	}
+
+	if (bits & GLIMP_ORIENT_UPSIDEDOWN)
+	{
+		mask |= UIInterfaceOrientationMaskPortraitUpsideDown;
+	}
+
+	if (bits & GLIMP_ORIENT_LANDSCAPELEFT)
+	{
+		mask |= UIInterfaceOrientationMaskLandscapeLeft;
+	}
+
+	if (bits & GLIMP_ORIENT_LANDSCAPERIGHT)
+	{
+		mask |= UIInterfaceOrientationMaskLandscapeRight;
+	}
+
+	Com_Printf("Orientation: asking for mask %i\n", (int)mask);
+	prefs = [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:mask];
+	[scene requestGeometryUpdateWithPreferences:prefs errorHandler:^(NSError *error) {
+		/* called on the main thread, the one that prints */
+		if (SDL_IsMainThread())
+		{
+			Com_Printf("Orientation: refused (%s)\n", [[error localizedDescription] UTF8String]);
+		}
+	}];
+	[prefs release];
 }
 #endif
 
@@ -294,7 +430,7 @@ CreateSDLWindow(SDL_WindowFlags flags, int fullscreen, int w, int h)
 	 *  * https://github.com/libsdl-org/SDL/issues/3656 */
 	SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "1");
 
-#if defined(__APPLE__) && TARGET_OS_IPHONE
+#if defined(__APPLE__) && TARGET_OS_IOS
 	/* the screen is held in landscape, either way up, and the home indicator is dimmed so that a first swipe does not leave the game */
 	SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
 	SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
@@ -981,6 +1117,7 @@ GLimp_InitGraphics(int fullscreen, int *pwidth, int *pheight)
 
 #if defined(__APPLE__) && TARGET_OS_IPHONE
 	MeasureScreen(made_screen);
+	LogScreen();
 #endif
 
 	/* Set the window icon, this must be done after creating the window */
