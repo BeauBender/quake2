@@ -12,8 +12,9 @@
 #   checkout itself) is refused and nothing is made there, as is a path
 #   with "..", a bad factor and a backend that does not exist;
 # - a link planted in an existing output (the engine copy, a log) is
-#   refused, not written through, and a --names entry with ".." or a
-#   leading separator is refused;
+#   refused, not written through, and so is one there at the open itself
+#   (O_NOFOLLOW: open_out and copy_out called with no check before them);
+#   a --names entry with ".." or a leading separator is refused;
 # - when the engine says vt's model is not on this machine (it fetches it
 #   only from the client's menu), the generator stops with a line that
 #   says so and writes no report;
@@ -137,6 +138,30 @@ for o in o3 o4; do
 	grep -q 'through a link' "${tmp:?}/link.log" || bad "no refusal line for the link in $o"
 done
 [ "$(cat "${tmp:?}/victim")" = victim ] || bad "the link's target was written"
+
+# 3b. the open itself refuses a link (O_NOFOLLOW): the generator's
+# open_out and copy_out, called with no check before them, as for a link
+# made between a check and the open
+ln -s "${tmp:?}/victim" "${tmp:?}/late.log"
+ln -s "${tmp:?}/victim" "${tmp:?}/late.bin"
+printf 'source\n' > "${tmp:?}/late.src"
+for how in open copy; do
+	if python3 -I -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import report
+if sys.argv[2] == "open":
+    with report.open_out(sys.argv[3]) as f:
+        f.write("written\n")
+else:
+    report.copy_out(sys.argv[4], sys.argv[3])
+' "$root/scripts/upscale-report" "$how" "${tmp:?}/late.$([ "$how" = open ] && echo log || echo bin)" \
+		"${tmp:?}/late.src" > "${tmp:?}/late.out" 2>&1; then
+		bad "${how}_out wrote through a link"
+	fi
+	grep -q 'through a link' "${tmp:?}/late.out" || bad "no refusal line from ${how}_out"
+done
+[ "$(cat "${tmp:?}/victim")" = victim ] || bad "a link's target was written at the open"
 
 for n in "../../victim.png" "/etc/x.png" "textures/../../x.png"; do
 	if sh "$gen" run --out "${tmp:?}/o5" --basedir "${tmp:?}/data" --engine-dir "${tmp:?}/eng" \

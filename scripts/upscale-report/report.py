@@ -87,10 +87,30 @@ def check_out(out):
 
 
 def no_link(path):
-    """Refuse a destination that is there as a link: nothing is written through one."""
+    """Refuse a directory that is there as a link: nothing is written through one."""
     if os.path.islink(path):
         die("refusing to write through a link: " + path)
     return path
+
+
+def open_out(path, mode="w"):
+    """Open a file to write with O_NOFOLLOW: a link there at the open, even one made
+    after any earlier check, is refused (ELOOP), never written through."""
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+    except OSError as e:
+        if os.path.islink(path):
+            die("refusing to write through a link: " + path)
+        die("cannot write %s: %s" % (path, e.strerror))
+    return os.fdopen(fd, mode)
+
+
+def copy_out(src, dst):
+    """Copy src to dst through open_out's descriptor, keeping src's mode."""
+    mode = os.stat(src).st_mode & 0o7777
+    with open(src, "rb") as i, open_out(dst, "wb") as o:
+        shutil.copyfileobj(i, o)
+        os.fchmod(o.fileno(), mode)
 
 
 def check_name(n):
@@ -147,7 +167,7 @@ def engine_run(eng, game, args, basedir, renderer, bound, log=None):
         die("an engine run outlived its %d s bound: %s" % (bound, " ".join(args)), 1)
     wall = time.monotonic() - t0
     if log:
-        with open(no_link(log), "w") as f:
+        with open_out(log) as f:
             f.write(p.stdout + p.stderr)
     lines = [ln for ln in (p.stdout + p.stderr).splitlines()
              if ln.startswith("upscale_textures:") or "AddressSanitizer" in ln
@@ -223,7 +243,7 @@ def run(a):
     os.makedirs(logs, exist_ok=True)
     for f in os.listdir(src):
         if f == "quake2" or f.endswith((".dylib", ".so")):
-            shutil.copy2(os.path.join(src, f), no_link(os.path.join(eng, f)))
+            copy_out(os.path.join(src, f), os.path.join(eng, f))
     if git_tree(eng):
         die("the engine copy is inside a git work tree: " + eng)
 
@@ -294,8 +314,8 @@ Load average (1 min): %.2f at the start, %.2f at the end.</p>
 """ % (a.factor, html.escape(info["model"]), html.escape(info["chip"]), html.escape(info["os"]),
        html.escape(a.renderer), a.runs, info["load_start"], info["load_end"], "".join(rows),
        said, head, "".join(figs))
-    path = no_link(os.path.join(out, "upscale-report-%dx.html" % a.factor))
-    with open(path, "w") as f:
+    path = os.path.join(out, "upscale-report-%dx.html" % a.factor)
+    with open_out(path) as f:
         f.write(doc)
     print("upscale-report: load %.2f at the start, %.2f at the end" % (info["load_start"], info["load_end"]))
     for b in ["start-up"] + backends:
