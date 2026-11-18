@@ -6522,6 +6522,8 @@ M_Menu_Quit_f(void)
  * opened. Select changes settings and queues commands (a new game, a
  * connect): the walk drops what was queued and ends the run with quit.
  */
+extern sizebuf_t cmd_text; /* src/common/cmdparser.c: what select queued */
+
 static menuframework_s *walk_seen[128];
 static int walk_nseen, walk_fail, walk_presses;
 static int walk_path[MAX_MENU_DEPTH];
@@ -6568,6 +6570,27 @@ Walk_Selectable(const menuframework_s *m, int i)
 	const menucommon_s *it = (const menucommon_s *)m->items[i];
 
 	return it->type != MTYPE_SEPARATOR && !(it->flags & QMF_INACTIVE);
+}
+
+/* a hash of every key's binding, to see one change */
+static unsigned
+Walk_Bindings(void)
+{
+	unsigned h = 2166136261u;
+	const char *s;
+	int k;
+
+	for (k = 0; k < K_LAST; k++)
+	{
+		for (s = keybindings[k] ? keybindings[k] : ""; *s; s++)
+		{
+			h = (h ^ (unsigned char)*s) * 16777619u;
+		}
+
+		h = (h ^ 0xff) * 16777619u;
+	}
+
+	return h;
 }
 
 /* the screen at <depth> is on top, as it was */
@@ -6676,6 +6699,10 @@ Walk_Screen(int depth)
 	{
 		menucommon_s *it = (menucommon_s *)m->items[i];
 		menuframework_s *child;
+		const char *statusbar = NULL;
+		unsigned binds = 0;
+		qboolean grayed;
+		int cursor = -1, queued = 0;
 
 		if (!Walk_Selectable(m, i) || (it->type != MTYPE_ACTION && it->type != MTYPE_BITMAP))
 		{
@@ -6695,13 +6722,30 @@ Walk_Screen(int depth)
 			   select does nothing on it (Menu_SelectItem) */
 			Com_Printf("menu_probe: item %d '%s' of '%s' is greyed: %s\n", i, it->name ? it->name : "",
 					Walk_Name(m), it->statusbar ? it->statusbar : "(no reason)");
+			grayed = true;
+			cursor = m->cursor;
+			statusbar = m->statusbar;
+			binds = Walk_Bindings();
+			queued = cmd_text.cursize;
+		}
+		else
+		{
+			grayed = false;
 		}
 
 		Walk_Key(K_ENTER);
 
-		if ((it->flags & QMF_GRAYED) && !Walk_On(m, depth))
+		/* select on a greyed item changes nothing: the screen, the cursor,
+		   the status bar, bind mode, a binding and the command buffer
+		   are as they were */
+		if (grayed && (!Walk_On(m, depth) || menukeyitem_bind || m->cursor != cursor ||
+				m->statusbar != statusbar || Walk_Bindings() != binds || cmd_text.cursize != queued))
 		{
-			Com_Printf("menu_probe: FAIL: greyed item %d of '%s' did something on select\n", i, Walk_Name(m));
+			Com_Printf("menu_probe: FAIL: greyed item %d '%s' of '%s' did something on select:%s%s%s%s%s%s\n",
+					i, it->name ? it->name : "", Walk_Name(m),
+					!Walk_On(m, depth) ? " left the screen" : "", menukeyitem_bind ? " bind mode" : "",
+					m->cursor != cursor ? " cursor" : "", m->statusbar != statusbar ? " status bar" : "",
+					Walk_Bindings() != binds ? " a binding" : "", cmd_text.cursize != queued ? " queued" : "");
 			walk_fail++;
 		}
 
