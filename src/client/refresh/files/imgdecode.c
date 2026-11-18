@@ -68,14 +68,17 @@
 /*
  * kCGImageSourceAllowableTypes, the per-source list of the formats
  * ImageIO may read, is declared from the 27.0 SDKs on and works from the
- * 27.0 systems on (checked again at run time). The process-wide
+ * 27.0 systems on (checked again at run time). visionOS has its own
+ * version macro: its SDK sets __IPHONE_OS_VERSION_MAX_ALLOWED to
+ * __IPHONE_17_0 whatever its release (TASK175). The process-wide
  * CGImageSourceSetAllowableTypes is not used: it would also restrict the
  * image decoding of AppKit and SDL in the client, for the process's life.
  */
 #if (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000) || \
 	(defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 270000) || \
 	(defined(__TV_OS_VERSION_MAX_ALLOWED) && __TV_OS_VERSION_MAX_ALLOWED >= 270000) || \
-	(defined(__WATCH_OS_VERSION_MAX_ALLOWED) && __WATCH_OS_VERSION_MAX_ALLOWED >= 270000)
+	(defined(__WATCH_OS_VERSION_MAX_ALLOWED) && __WATCH_OS_VERSION_MAX_ALLOWED >= 270000) || \
+	(defined(__VISION_OS_VERSION_MAX_ALLOWED) && __VISION_OS_VERSION_MAX_ALLOWED >= 270000)
 #define IMGDEC_HAVE_ALLOWABLE_TYPES 1
 #endif
 #endif
@@ -539,7 +542,7 @@ IMGDEC_DecodeImageIO(const unsigned char *data, size_t size, imgdec_type_t want,
 
 #ifdef IMGDEC_HAVE_ALLOWABLE_TYPES
 	/* ImageIO itself reads no format but the extension's; the type check stays */
-	if (__builtin_available(macOS 27.0, iOS 27.0, tvOS 27.0, watchOS 27.0, *))
+	if (__builtin_available(macOS 27.0, iOS 27.0, tvOS 27.0, watchOS 27.0, visionOS 27.0, *))
 	{
 		const void *one = IMGDEC_Identifier(want);
 

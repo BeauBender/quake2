@@ -10,8 +10,10 @@
 #   (d) the source: each iPhone and iPad only site (the touch overlay's
 #       Touch_Supported, the in_touch default, the on-screen keyboard's
 #       follow-up, the window's orientation and home-indicator hints) is
-#       inside an #if that names TARGET_OS_IOS (TARGET_OS_IPHONE is true on
-#       tvOS and visionOS too). It runs everywhere, before the skips.
+#       inside an #if that uses TARGET_OS_IOS's value (TARGET_OS_IPHONE is
+#       true on tvOS and visionOS too): not an #ifdef, not defined() alone
+#       and not negated, since the macro is defined, to 0, there too. It
+#       runs everywhere, before the skips.
 # In a scratch IOS_ROOT, with METAL_SHADERS=no (no SDL, no link):
 #   (a) every object of the tree has LC_BUILD_VERSION platform 8
 #       (TVOSSIMULATOR) and minos 17.0, and there is at least one;
@@ -22,14 +24,17 @@
 #       17.0, UIDeviceFamily 3 (Apple TV) alone, no template key, and none
 #       of the iPhone's UIFileSharingEnabled, orientation or status bar keys;
 #   (e) the compiled touch.o: Touch_Supported is "mov w0, #0x0; ret", 0
-#       whatever the device.
+#       whatever the device; and nm -u of every imgdecode.o lists
+#       _kCGImageSourceAllowableTypes (ImageIO reads only the file's type).
 # It does not compare the iOS build with an earlier one; that comparison is
 # the review's before and after of make -n (docs/runbook/TASK23.md).
 # Each assertion first runs on a mutant it must refuse (an object built for
 # the iOS simulator, a different object list, an iPhone plist, a plist with
-# a forbidden key, two device families or another minimum OS, each site's
-# guard reverted, a Touch_Supported that returns 1 or a variable), so an
-# assertion that passes everything fails here.
+# a forbidden key, also spelled with an XML character reference, two device
+# families or another minimum OS, each site's guard reverted, made an
+# #ifdef, a defined() or negated, a Touch_Supported that returns 1 or a
+# variable, an object that does not need the symbol, an unreadable one), so
+# an assertion that passes everything fails here. A tool's error refuses.
 #
 # Without the tvOS simulator SDK (another OS, or Xcode without its tvOS
 # platform) the build checks print one "skipped" line and exit 0 after (d).
@@ -69,7 +74,10 @@ guard_of()
 	' "$1"
 }
 
-# assert_guard <file> <start> <anchor>: that #if names TARGET_OS_IOS, not negated
+# assert_guard <file> <start> <anchor>: that guard is an #if that takes
+# TARGET_OS_IOS's value, not negated. Refused: an #ifdef or #ifndef, and
+# defined(TARGET_OS_IOS) alone (both are true on tvOS and visionOS too,
+# where the macro is defined to 0), a ! before the name.
 assert_guard()
 {
 	g=$(guard_of "$1" "$2" "$3")
@@ -78,7 +86,18 @@ assert_guard()
 	else:) echo "$1: \"$3\" after $2 is in an #else branch"; return 1 ;;
 	esac
 	# a comment on the #if line does not count
-	if ! printf '%s\n' "${g#*:}" | sed -e 's,/\*.*\*/,,g' -e 's,//.*,,' | grep -E -q '(^|[^!_[:alnum:]])TARGET_OS_IOS([^_[:alnum:]]|$)'; then
+	gx=$(printf '%s\n' "${g#*:}" | sed -e 's,/\*.*\*/,,g' -e 's,//.*,,')
+	if printf '%s\n' "$gx" | grep -E -q '^[ \t]*#[ \t]*ifn?def'; then
+		echo "$1:${g%%:*}: the guard of \"$3\" is an #ifdef or #ifndef, which does not read the value: ${g#*:}"
+		return 1
+	fi
+	if printf '%s\n' "$gx" | grep -E -q '![ \t(]*TARGET_OS_IOS([^_[:alnum:]]|$)'; then
+		echo "$1:${g%%:*}: the guard of \"$3\" negates TARGET_OS_IOS: ${g#*:}"
+		return 1
+	fi
+	# defined(TARGET_OS_IOS) and defined TARGET_OS_IOS do not count: only a use of the value does
+	if ! printf '%s\n' "$gx" | sed -E -e 's/defined[ \t]*[(][ \t]*[_[:alnum:]]+[ \t]*[)]//g' -e 's/defined[ \t]+[_[:alnum:]]+//g' |
+		grep -E -q '(^|[^_[:alnum:]])TARGET_OS_IOS([^_[:alnum:]]|$)'; then
 		echo "$1:${g%%:*}: the guard of \"$3\" does not name TARGET_OS_IOS: ${g#*:}"
 		return 1
 	fi
@@ -100,6 +119,25 @@ while IFS='|' read -r f s a; do
 	elif ! grep -q 'does not name TARGET_OS_IOS' "${tmp:?}/o"; then
 		bad "mutant: site $n was refused without naming the guard: $(cat "${tmp:?}/o")"
 	fi
+	# the guards that are true on visionOS or tvOS too: defined(), #ifdef, a ! before the name
+	# (<sed expression on the guard's line>|<the refusal's words>)
+	while IFS='|' read -r ex why; do
+		sed "${l%%:*}$ex" "$f" > "${tmp:?}/mut$n.c"
+		if cmp -s "$f" "${tmp:?}/mut$n.c"; then
+			bad "mutant: the guard of site $n is not changed by $ex"
+		elif assert_guard "${tmp:?}/mut$n.c" "$s" "$a" > "${tmp:?}/o" 2>&1; then
+			bad "mutant: site $n ($f, $a) with its guard changed by $ex passed"
+		elif ! grep -q "$why" "${tmp:?}/o"; then
+			bad "mutant: site $n with $ex was refused without saying it $why: $(cat "${tmp:?}/o")"
+		fi
+	done <<MUT
+s/TARGET_OS_IOS/defined(TARGET_OS_IOS)/|does not name TARGET_OS_IOS
+s/TARGET_OS_IOS/defined TARGET_OS_IOS/|does not name TARGET_OS_IOS
+s/.*/#ifdef TARGET_OS_IOS/|is an #ifdef or #ifndef
+s/.*/#  ifdef TARGET_OS_IOS \/* iPhone *\//|is an #ifdef or #ifndef
+s/TARGET_OS_IOS/!TARGET_OS_IOS/|negates TARGET_OS_IOS
+s/TARGET_OS_IOS/! (TARGET_OS_IOS)/|negates TARGET_OS_IOS
+MUT
 done <<EOF
 $sites
 EOF
@@ -125,7 +163,7 @@ if ! xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1; then
 	exit 0
 fi
 
-for tool in make otool plutil awk sed sort grep clang; do
+for tool in make otool nm plutil awk sed sort grep cmp clang; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		echo "check-tvos: $tool not found: a missing tool is a failure"
 		exit 1
@@ -185,8 +223,12 @@ assert_plist() # <Info.plist>
 		echo "$1 holds a template key"
 		rc=1
 	fi
+	# plutil decides, not the text: a key spelled with a character reference
+	# (<key>UIFile&#83;haringEnabled</key>) is the same key. The file passed
+	# -lint above, so a failed -extract is a missing key; xml1, not raw,
+	# extracts a value of any type
 	for k in UIFileSharingEnabled UISupportedInterfaceOrientations UIStatusBarHidden; do
-		if grep -q "<key>$k</key>" "$1"; then
+		if plutil -extract "$k" xml1 -o - "$1" >/dev/null 2>&1; then
 			echo "$1 holds the iPhone's $k"
 			rc=1
 		fi
@@ -207,13 +249,28 @@ assert_no_touch() # <object>
 	fi
 }
 
+# nm -u <object> lists <symbol>; a missing object or an nm or grep error refuses
+assert_need() # <object> <symbol>
+{
+	[ -f "$1" ] || { echo "$1 is missing"; return 1; }
+	nm -u "$1" > "${tmp:?}/nm" 2>/dev/null || { echo "$1: cannot read (nm -u failed)"; return 1; }
+	nrc=0
+	grep -x -F -q -e "$2" "${tmp:?}/nm" || nrc=$?
+	case $nrc in
+	0) return 0 ;;
+	1) echo "$1 does not need $2 (nm -u)"; return 1 ;;
+	*) echo "${tmp:?}/nm: cannot read (grep status $nrc)"; return 1 ;;
+	esac
+}
+
 # the "-o <path>" of every compile of make -n <args>, the build root removed, sorted
+# (list_root, not root: the build below keeps its own root)
 object_list() # <root> <args...>
 {
-	root=$1
+	list_root=$1
 	shift
-	make -n -B "$@" ios_objects IOS_ROOT="$root" METAL_SHADERS=no 2>/dev/null |
-		awk '{ for (i = 1; i < NF; i++) if ($i == "-o") print $(i + 1) }' | sed "s,^$root/,," | sort
+	make -n -B "$@" ios_objects IOS_ROOT="$list_root" METAL_SHADERS=no 2>/dev/null |
+		awk '{ for (i = 1; i < NF; i++) if ($i == "-o") print $(i + 1) }' | sed "s,^$list_root/,," | sort
 }
 
 # ---- mutants: each must be refused, naming its cause --------------------
@@ -258,6 +315,15 @@ for mk in UIFileSharingEnabled UISupportedInterfaceOrientations UIStatusBarHidde
 		bad "mutant: the plist with $mk was refused without naming it"
 	fi
 done
+# the same key with an XML character reference (&#83; is S): plutil reads UIFileSharingEnabled
+sed 's,<key>CFBundleExecutable</key>,<key>UIFile\&#83;haringEnabled</key><true/>&,' "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
+if ! grep -q 'UIFile&#83;haringEnabled' "${tmp:?}/m.plist" || ! plutil -lint -s "${tmp:?}/m.plist" >/dev/null 2>&1; then
+	bad "mutant: the character-reference plist was not made or does not lint"
+elif assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
+	bad "mutant: a plist with UIFile&#83;haringEnabled passed"
+elif ! grep -q "the iPhone's UIFileSharingEnabled" "${tmp:?}/o"; then
+	bad "mutant: the character-reference plist was refused without naming the key"
+fi
 sed 's,<integer>3</integer>,&<integer>1</integer>,' "${tmp:?}/good.plist" > "${tmp:?}/m.plist"
 if assert_plist "${tmp:?}/m.plist" > "${tmp:?}/o" 2>&1; then
 	bad "mutant: a plist with the Apple TV and the iPhone families passed"
@@ -288,6 +354,34 @@ if assert_no_touch "${tmp:?}/m_tv.o" > "${tmp:?}/o" 2>&1; then
 	bad "mutant: an object without Touch_Supported passed"
 fi
 
+# _kCGImageSourceAllowableTypes: an object that needs it passes, one that
+# does not (ImageIO not restricted), a missing or an unreadable one do not
+printf 'extern const void *kCGImageSourceAllowableTypes;\nconst void *tvos_v(void) { return kCGImageSourceAllowableTypes; }\n' > "${tmp:?}/u.c"
+xcrun --sdk appletvsimulator clang -target arm64-apple-tvos17.0-simulator -c "${tmp:?}/u.c" -o "${tmp:?}/u.o"
+assert_need "${tmp:?}/u.o" _kCGImageSourceAllowableTypes > "${tmp:?}/o" 2>&1 || bad "an object that needs _kCGImageSourceAllowableTypes was refused: $(cat "${tmp:?}/o")"
+if assert_need "${tmp:?}/m_tv.o" _kCGImageSourceAllowableTypes > "${tmp:?}/o" 2>&1; then
+	bad "mutant: an object that does not need _kCGImageSourceAllowableTypes passed"
+elif ! grep -q 'does not need _kCGImageSourceAllowableTypes' "${tmp:?}/o"; then
+	bad "mutant: the object without the symbol was refused without naming it"
+fi
+cp "${tmp:?}/u.o" "${tmp:?}/unreadable.o"
+chmod 000 "${tmp:?}/unreadable.o"
+for obj in absent unreadable; do
+	if [ "$obj" = unreadable ] && [ -r "${tmp:?}/unreadable.o" ]; then
+		echo "check-tvos: note: running as a user who reads a mode 000 file (root): the unreadable-object mutant is not run"
+		continue
+	fi
+	if assert_need "${tmp:?}/$obj.o" _kCGImageSourceAllowableTypes > "${tmp:?}/o" 2>&1; then
+		bad "mutant: an $obj object passed the symbol check"
+	elif ! grep -E -q 'is missing|cannot read' "${tmp:?}/o"; then
+		bad "mutant: an $obj object was refused without saying it cannot be read: $(cat "${tmp:?}/o")"
+	fi
+done
+chmod 600 "${tmp:?}/unreadable.o"
+if [ "$fail" != 0 ]; then
+	exit 1
+fi
+
 # ---- the build ----------------------------------------------------------
 
 root="${tmp:?}/tv"
@@ -306,6 +400,13 @@ if [ "$(grep -c . "${tmp:?}/touch")" != 1 ]; then
 else
 	assert_no_touch "$(cat "${tmp:?}/touch")" > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the touch overlay is compiled into the tvOS build"; }
 fi
+grep '/imgdecode\.o$' "${tmp:?}/objs" > "${tmp:?}/imgdecode" || :
+if [ ! -s "${tmp:?}/imgdecode" ]; then
+	bad "(e) the build has no imgdecode.o"
+fi
+while read -r obj; do
+	assert_need "$obj" _kCGImageSourceAllowableTypes > "${tmp:?}/o" 2>&1 || { cat "${tmp:?}/o"; bad "(e) the image decoder does not restrict ImageIO to the file's type"; }
+done < "${tmp:?}/imgdecode"
 
 object_list /r IOS_SDK=appletvsimulator > "${tmp:?}/list_tv"
 object_list /r IOS_SDK=iphonesimulator > "${tmp:?}/list_ios"
