@@ -457,20 +457,25 @@ fi
 # compiled with the command make -n gives for it (its -o path, in $tmp/ios)
 ios_root="${tmp:?}/ios"
 make -n -B ios_objects IOS_SDK=iphonesimulator IOS_ROOT="$ios_root" METAL_SHADERS=no > "${tmp:?}/ios.n" 2>/dev/null || bad "(e) make -n ios_objects for the iOS simulator failed"
-# ios_object <source>: that object's path is in $tmp/ios_one
+# ios_object <source>: that object's path is in $tmp/ios_one. The first
+# compile (a line with -c) that names <source> as a word, wherever the
+# word is: the client's rule puts it before -o, ref_metal's after
 ios_object()
 {
-	awk -v s="$1" '$NF == s && / -c / { print; exit }' "${tmp:?}/ios.n" > "${tmp:?}/cmd"
+	awk -v s="$1" '/ -c / { for (i = 1; i <= NF; i++) if ($i == s) { print; exit } }' "${tmp:?}/ios.n" > "${tmp:?}/cmd"
 	awk '{ for (i = 1; i < NF; i++) if ($i == "-o") print $(i + 1) }' "${tmp:?}/cmd" > "${tmp:?}/ios_one"
 	if [ "$(grep -c . "${tmp:?}/ios_one")" != 1 ]; then
 		bad "(e) make -n names no compile of $1 for the iOS simulator"
 		return 1
 	fi
-	case $(cat "${tmp:?}/ios_one") in
-	"$ios_root"/*) ;;
-	*) bad "(e) the iOS simulator's $1 is not built under the scratch root"; return 1 ;;
-	esac
-	mkdir -p "$(dirname "$(cat "${tmp:?}/ios_one")")"
+	# every file it writes (-o, and -MF where the rule has it) is under the scratch root
+	awk '{ for (i = 1; i < NF; i++) if ($i == "-o" || $i == "-MF") print $(i + 1) }' "${tmp:?}/cmd" > "${tmp:?}/ios_out"
+	while read -r out; do
+		case $out in
+		"$ios_root"/*) mkdir -p "$(dirname "$out")" ;;
+		*) bad "(e) the iOS simulator's compile of $1 writes $out, outside the scratch root"; return 1 ;;
+		esac
+	done < "${tmp:?}/ios_out"
 	if ! sh "${tmp:?}/cmd" > "${tmp:?}/cc.log" 2>&1; then
 		tail -n 5 "${tmp:?}/cc.log"
 		bad "(e) $1 does not compile for the iOS simulator"
