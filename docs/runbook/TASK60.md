@@ -157,3 +157,61 @@ after `RM_RT_Init(&rtcaps);`, and its right side replaced with `caps.raytracing`
 dropped, its suffix dropped, the line naming the render-stage path again, the branch taken by every
 traced path), each killed by the host test. The logs, lists and tools are in
 `<artifacts>/TASK60/`; nothing derived from game data is in the repository.
+
+## Ray-tracing Mac (TASK181)
+
+Card: TASK181 (#517), the ray-tracing half of RT8. Built from `main` at `8e7ce3f6` (release build of
+`client`, `ref_metal` and `game`), run with `+set vid_renderer metal +set r_mode -1 +set r_customwidth 1280
++set r_customheight 720 +set vid_fullscreen 0 -datadir <datadir> -portable`, `+map base1`, three
+`+wait 120` and `+quit`. No code changed: the line and the path are right on the device.
+
+### (a) Defaults
+
+The device's three start-up lines and the report line, as the engine printed them:
+
+```
+Metal device: Apple M6
+Metal supportsFamily (apple5 to apple9): apple5 apple6 apple7 apple8 apple9
+Metal supportsRaytracing: yes, supportsRaytracingFromRender: yes
+ref_metal: ray tracing: compute path (apple9, supportsRaytracing; render-stage available, not yet built)
+```
+
+The teardown line of this run shows that no ray-tracing pass ran with the effects at their default 0:
+`ref_metal: teardown: 0 live objects (created/destroyed: device 1/1, queue 2/2, view 1/1, texture 203/203, buffer 7/7, state 47/47, rt 0/0, metalfx 0/0), 0 unreleased, 0 unmatched`.
+
+### (b) The three effects on, and `vid_restart`
+
+`+set r_rt_ao 1 +set r_rt_shadows 1 +set r_rt_water 1`, the map loaded, then each cvar typed at the
+console, then `vid_restart`, three more waits, each cvar typed again, `+quit`. Before the restart:
+
+```
+"r_rt_ao" is "1"
+"r_rt_shadows" is "1"
+"r_rt_water" is "1"
+```
+
+After the restart the same three lines read `"1"` again. The report line printed again after the
+restart, identical to (a), with the same three device lines before it. No `reads 0` line appears in
+the log of the run.
+
+Pass evidence, from the same log: the start-up allocations of the passes (printed again after the
+restart), the scene build for the map, the ray-tracing timing line, and a teardown line with ray-tracing
+objects created and destroyed, where (a) had `rt 0/0`:
+
+```
+ref_metal: rt ao traced at 1280x720 (1/2): 1048576 bytes allocated
+ref_metal: rt ao 2560x1440: 33947648 bytes allocated
+ref_metal: rt water 2560x1440: 30670848 bytes allocated
+ref_metal: rt: maps/base1.bsp: world 20495 triangles (world 19561, sky 608, water 326, alpha 0), 1921280 bytes; 34 inline models, 1272 triangles (world 1228, sky 0, water 0, alpha 44), 131456 bytes; materials 21767 b...
+ref_metal: rt: maps/base1.bsp: 5 frames; gpu ms over 4 frames: alias lerp and refit min 0.283, median 0.546, p95 0.741, max 0.741; instance rebuild min 0.240, median 0.346, p95 0.431, max 0.431; busiest frame 7 alias instances, 1586 alias triangles
+ref_metal: teardown: 0 live objects (created/destroyed: device 1/1, queue 2/2, view 1/1, texture 211/211, buffer 8/8, state 71/71, rt 100/100, metalfx 0/0), 0 unreleased, 0 unmatched
+```
+
+The teardown of the pass before the restart reads `rt 100/100` too (its line is interleaved with the
+next start-up's allocation lines in the captured stream).
+
+### (c) Forced off
+
+TASK60 provides no cvar or environment variable that forces the gate off on a device that supports ray
+tracing, and the card's family cap is not built, so no such run was made. The none path stays covered by
+the host test and by the VM section above.
