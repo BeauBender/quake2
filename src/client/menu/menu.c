@@ -6689,7 +6689,21 @@ Walk_Screen(int depth)
 			continue;
 		}
 
+		if (it->flags & QMF_GRAYED)
+		{
+			/* greyed, never hidden: reached, shown with its reason, and
+			   select does nothing on it (Menu_SelectItem) */
+			Com_Printf("menu_probe: item %d '%s' of '%s' is greyed: %s\n", i, it->name ? it->name : "",
+					Walk_Name(m), it->statusbar ? it->statusbar : "(no reason)");
+		}
+
 		Walk_Key(K_ENTER);
+
+		if ((it->flags & QMF_GRAYED) && !Walk_On(m, depth))
+		{
+			Com_Printf("menu_probe: FAIL: greyed item %d of '%s' did something on select\n", i, Walk_Name(m));
+			walk_fail++;
+		}
 
 		if (menukeyitem_bind)
 		{
