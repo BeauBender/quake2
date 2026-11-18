@@ -87,6 +87,18 @@
 #     the probe prints one skip line and passes. Scratch mutants of
 #     rmb_device.m (1 -> 0 sets NULL; 1 -> 0 leaves ours; detach leaves ours)
 #     must fail it.
+# (g) Always: the call seats of the ray-tracing gate (TASK60), by source
+#     inspection, as for the flush points. In rm_main.c, comments and string
+#     literals stripped: RI_BeginFrame's first statement after its
+#     declarations (and a "(void)<parameter>;") is RM_RTG_Frame(); RI_Init
+#     calls RM_RT_Init(&rtcaps); and after it RM_RTG_Init();, both before
+#     ri.Vid_MenuInit(); and no *_Init( of the file takes the raw &caps but
+#     RM_FX_Init, which reads only the families. RM_RTG_Init calls
+#     RM_RTG_Frame too, so a dropped frame call still builds, and &caps for
+#     &rtcaps would build as well. Scratch mutants (the frame call deleted,
+#     moved below another statement; &caps for &rtcaps; RM_RTG_Init deleted,
+#     moved after ri.Vid_MenuInit; another *_Init(&caps); either function
+#     renamed) must fail it, each naming the rule it breaks.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -519,6 +531,109 @@ for point in "rm_main.c RI_RenderFrame rmb_pass_3d(" "rm_main.c RI_EndFrame rmb_
 	done
 done
 
+# (g) the ray-tracing gate's call seats in rm_main.c (TASK60). seated <file>: after comments and
+# string literals are stripped, prints the broken rules, one word each, and returns 1 if any; 2 when
+# RI_Init or RI_BeginFrame is not defined in the file (its name at the start of a line, its body up
+# to the next "}" in column 0); 0 otherwise. The rules:
+#   frame    RI_BeginFrame's first statement, after its declarations and a "(void)<name>;", is
+#            RM_RTG_Frame(); (RM_RTG_Init calls it too, so a removal still links)
+#   rtinit   RI_Init calls RM_RT_Init(&rtcaps); before ri.Vid_MenuInit(
+#   rtginit  RI_Init calls RM_RTG_Init(); after its RM_RT_Init( and before ri.Vid_MenuInit(
+#   rawcaps  no *_Init( of the file takes the raw &caps, other than RM_FX_Init: the MetalFX scalers
+#            trace nothing and RM_FX_Init reads only caps.families; every scene that traces takes
+#            rtcaps, whose raytracing is the gate's answer
+seated() {
+	strip "$1" > "${tmp:?}/seat.code" || return 1
+	awk '
+		{
+			line = $0
+			while (match(line, /[A-Za-z_][A-Za-z0-9_]*_Init[ \t]*\([ \t]*&[ \t]*caps[ \t]*[,)]/)) {
+				name = substr(line, RSTART, RLENGTH); sub(/[ \t]*\(.*/, "", name)
+				if (name != "RM_FX_Init") raw = 1
+				line = substr(line, RSTART + RLENGTH)
+			}
+		}
+		/^RI_BeginFrame\(/ { bf = 1; bfound = 1; next }
+		/^RI_Init\(/ { ri = 1; ifound = 1; next }
+		(bf || ri) && /^}/ { bf = 0; ri = 0 }
+		bf && !first {
+			if ($0 ~ /^[ \t]*$/ || $0 ~ /^[ \t]*[{][ \t]*$/) next
+			if ($0 ~ /^[ \t]*\(void\)[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*;[ \t]*$/) next
+			if ($0 !~ /^[ \t]*(return|goto|else|case|do)[^A-Za-z0-9_]/ &&
+				$0 ~ /^[ \t]*([A-Za-z_][A-Za-z0-9_]*[ \t]+)+[*]*[A-Za-z_][A-Za-z0-9_]*[ \t]*(=|;|,|\[)/) next
+			first = 1
+			if ($0 ~ /^[ \t]*RM_RTG_Frame\(\);[ \t]*$/) frame = 1
+		}
+		ri && !rt && /^[ \t]*RM_RT_Init\(&rtcaps\);/ { rt = NR }
+		ri && !rta && /^[ \t]*RM_RT_Init\(/ { rta = NR }
+		ri && rta && !rtg && /^[ \t]*RM_RTG_Init\(\);/ { rtg = NR }
+		ri && !menu && index($0, "ri.Vid_MenuInit(") { menu = NR }
+		END {
+			if (!bfound || !ifound) exit 2
+			out = ""
+			if (!frame) out = out " frame"
+			if (!rt || !menu || rt > menu) out = out " rtinit"
+			if (!rtg || !menu || rtg > menu) out = out " rtginit"
+			if (raw) out = out " rawcaps"
+			if (out != "") { print substr(out, 2); exit 1 }
+			exit 0
+		}' "${tmp:?}/seat.code"
+}
+# seat_mutant <kind> <file>: the file with one seat broken
+seat_mutant() {
+	case $1 in
+		noframe) awk '/^RI_BeginFrame\(/ { b = 1 } b && /^}/ { b = 0 }
+			b && /^[ \t]*RM_RTG_Frame\(\);/ { next } { print }' "$2" ;;
+		framelate) awk '/^RI_BeginFrame\(/ { b = 1 } b && /^}/ { b = 0 }
+			b && held == "" && !done && /^[ \t]*RM_RTG_Frame\(\);/ { held = $0; done = 1; next }
+			{ print } b && held != "" && /;[ \t]*$/ { print held; held = "" }' "$2" ;;
+		rawrt) sed 's/RM_RT_Init(&rtcaps);/RM_RT_Init(\&caps);/' "$2" ;;
+		nortg) awk '/^RI_Init\(/ { b = 1 } b && /^}/ { b = 0 }
+			b && /^[ \t]*RM_RTG_Init\(\);/ { next } { print }' "$2" ;;
+		rtglate) awk '/^RI_Init\(/ { b = 1 } b && /^}/ { b = 0 }
+			b && held == "" && !done && /^[ \t]*RM_RTG_Init\(\);/ { held = $0; done = 1; next }
+			{ print } b && held != "" && index($0, "ri.Vid_MenuInit(") { print held; held = "" }' "$2" ;;
+		rawother) awk '{ print } /^[ \t]*RM_FX_Init\(&caps\);/ { print "\tRM_SUN_Init(&caps);" }' "$2" ;;
+		renamedframe) sed 's/^RI_BeginFrame(/RI_BeginFrame_old(/' "$2" ;;
+		renamedinit) sed 's/^RI_Init(/RI_Init_old(/' "$2" ;;
+	esac
+}
+seat_main=$rm_dir/rm_main.c
+seat_mutants=0
+rc=0
+seated "$seat_main" > "${tmp:?}/seat.out" || rc=$?
+if [ "$rc" = 2 ]; then
+	bad "RI_Init or RI_BeginFrame not found in $seat_main"
+elif [ "$rc" != 0 ]; then
+	bad "$seat_main: the ray-tracing gate's call seats are broken ($(cat "${tmp:?}/seat.out"); frame: RM_RTG_Frame(); first in RI_BeginFrame, rtinit: RM_RT_Init(&rtcaps); in RI_Init, rtginit: RM_RTG_Init(); after it, rawcaps: an *_Init(&caps) other than RM_FX_Init)"
+else
+	for m in noframe framelate rawrt nortg rtglate rawother renamedframe renamedinit; do
+		# a renamed function is "not found" (2), the others name the rules they break (1)
+		case $m in
+			noframe|framelate) want=frame ;;
+			rawrt) want="rtinit rawcaps" ;;
+			nortg|rtglate) want=rtginit ;;
+			rawother) want=rawcaps ;;
+			*) want="" ;;
+		esac
+		seat_mutant "$m" "$seat_main" > "${tmp:?}/seat-mutant.c"
+		rc=0
+		seated "${tmp:?}/seat-mutant.c" > "${tmp:?}/seat.out" || rc=$?
+		got=$(cat "${tmp:?}/seat.out")
+		if cmp -s "$seat_main" "${tmp:?}/seat-mutant.c"; then
+			bad "the seat mutant ($m) of $seat_main changed nothing"
+		elif [ "$rc" = 0 ]; then
+			bad "the seat check passes a mutant of $seat_main ($m)"
+		elif [ -z "$want" ] && [ "$rc" != 2 ]; then
+			bad "the seat check gives status $rc, not 2, for a mutant of $seat_main ($m)"
+		elif [ -n "$want" ] && { [ "$rc" != 1 ] || [ "$got" != "$want" ]; }; then
+			bad "the seat check names \"$got\" (status $rc), not \"$want\", for a mutant of $seat_main ($m)"
+		else
+			seat_mutants=$((seat_mutants + 1))
+		fi
+	done
+fi
+
 # (e) the kernels call the helpers their host tests drive. kcalls <file> <kernel> <helper>: 0 when
 # the kernel is defined in the file (its name at the start of a line, its body up to the next "}" in
 # column 0) and its body, outside comments and string literals, calls <helper>( ; 1 otherwise.
@@ -791,6 +906,6 @@ for rate_mut in 's/rm_rate_start);/metal_rate_start->value);/' 's/&rm_rate, rm_r
 done
 
 if [ "$fail" = 0 ]; then
-	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; $build)"
+	echo "check-ref-metal: ok (${host:-host test}; ray tracing ${rt:-host test}; G-buffer ${gb:-host test}; shadows ${rts:-host test}; AO ${ao:-host test}; water ${rtw:-host test}; MetalFX ${fx:-host test}; ray-tracing gate ${rtg:-host test}, ${rtg_cvars:-no} r_rt_* cvars classified, $rtg_mutants table mutants refused; $mutants vocabulary mutants refused; 3 flush points, $flush_mutants flush mutants refused; 4 gate-seat rules, $seat_mutants seat mutants refused; $kcall_pairs kernel calls, $kcall_mutants kernel-call mutants refused; colour space ${probe}; metal_rate_start read once, $rate_mutants mutants refused; $build)"
 fi
 exit $fail
