@@ -133,6 +133,10 @@ flat(const unsigned char rgb[3], int factor, int mean[3])
 	for (c = 0; c < 3; c++)
 	{
 		mean[c] = ok ? (int)(sum[c] / ((long long)o * o)) : -1;
+	}
+
+	for (c = 0; c < 3; c++)
+	{
 		ok = ok && (abs(mean[c] - rgb[c]) <= 12);
 	}
 
