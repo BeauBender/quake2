@@ -217,7 +217,8 @@ Commit `0c0c3290`, the same simulator and data (links to the paks and a scratch 
 script, never committed):
 
 - The walk passes: `menu_probe: walk at cls.realtime 1`, then `menu_probe: walk ok: 20 screens, 891 key presses, 0
-  failures`. The screens, by banner or first item as the walk prints them: `m_main_plaque`, `m_banner_game`,
+  failures` (a walk that did not yet check what a greyed item's select changes; re-measured in slice 2a review round 1,
+  below: 20 screens, 818 key presses, on `3d42a997`). The screens, by banner or first item as the walk prints them: `m_main_plaque`, `m_banner_game`,
   `m_banner_load_game`, the credits (`(unnamed)`), `m_banner_multiplayer`, `m_banner_join_server`,
   `m_banner_start_server`, `falling damage`, `name`, `Download Options`, `score`, `m_banner_options`, `look
   sensitivity`, `layout`, `attack`, `next weapon`, `attack`, `factor` and `m_banner_video` twice. On join server down and up
@@ -241,7 +242,8 @@ script, never committed):
   `'Gamepad'` is, and whether a real Apple TV has one, is not known either.
 - The walk prints each greyed item with its reason. On join server the address book has its reason; the items of
   the four key binding screens (`score`, `attack`, `next weapon`, `attack`) are greyed with no reason of their own
-  on tvOS (an item's status bar is empty). This is TASK150's state, not changed here.
+  on tvOS (an item's status bar is empty). This is TASK150's state, not changed here; that select on them still acted
+  was found in slice 2a review round 1 and fixed (below).
 - The default macOS and iOS simulator objects of both files are byte-identical to main's, on `0c0c3290` and again on
   `cc9de5bd`: `menu.o` (164544 and
   164528 bytes) and `sdl3.o` (56872 and 58824 bytes). Both probes are inside `#ifdef YQ2_INPUT_PROBE`, and no menu code
@@ -255,8 +257,8 @@ and `SDL_TV_REMOTE_AS_JOYSTICK` held) and `glimp_sdl3.o` (no `SDL_ORIENTATIONS`,
 needs or lacks the opposite), and synthetic objects as the mutants of each assertion. (d) takes only a bare true
 test: a chain of `&&` of names, `!names` and `defined()`s with `TARGET_OS_IOS` alone among them; seven more
 mutants per site (`== 0`, `!= 1`, `- 1`, `0 == ( )`, `||`, `?:`, `!( )` around the chain) are refused, and the
-name in double parentheses still passes. A tree with the remote's hint removed fails with "(e) the Siri Remote is
-not set to keys in the tvOS build".
+name in double parentheses still passes. A tree with the remote's hint removed fails (e): the tvOS `sdl3.o` does not
+hold the name, and `sdl3.c` has no line setting it to "0" (slice 2a review round 1 split the two checks, below).
 
 ## Review round 1
 
@@ -278,3 +280,39 @@ The panel found no Blocker. Four Importants and the Notes, each fixed:
   says what it checks (the comparison with the base is the review's `make -n` before and after), and its
   forbidden-key loop, device-family count and minimum OS line each have a mutant; the measured facts name their
   commit; the slice 2 list has the five items above.
+
+## Slice 2a: review round 1
+
+The panel found no Blocker. Two Importants and four Notes, each fixed:
+
+- Important 1: a greyed item could still act. Every item of the four key binding screens (the key, multiplayer key,
+  controller button and controller alt button screens) is greyed on the iPhone-family targets since TASK150, but
+  their key handlers (`Keys_MenuKey`, `MultiplayerKeys_MenuKey`, `ControllerButtons_MenuKey`,
+  `ControllerAltButtons_MenuKey`) called the binding function on select without reading the flag: it cleared a
+  second binding and entered bind mode, and clear (backspace, delete, a controller's north button) removed the
+  binding. `M_BindingGrayed` (`src/client/menu/menu.c`) now refuses select and clear on a greyed binding item, on
+  every platform, as `Menu_SelectItem` does for any other greyed item. No other handler acts on a greyed item:
+  the other greyed items (quit, the address book, the touch settings, the two upscale actions) reach only
+  `Menu_SelectItem` and `Menu_SlideItem`, which read the flag. What a player sees change: on iPhone, iPad and Apple
+  TV, select on a binding no longer shows "press a key or button for this action" and waits, and clear no longer
+  removes the binding; the screens still show every binding. macOS is unchanged: nothing there is greyed.
+- The walk now fails a greyed item whose select changes anything: the screen, the cursor, the status bar, bind mode,
+  a key's binding (a hash of every binding) or the command buffer. Measured with the same simulator, data and probe
+  script as round 2 (Apple TV 4K (4th generation), tvOS 27.2 simulator, `ref_metal`, `in_initjoy` 1):
+  - the walk alone (`490ddb3b`, the menu not fixed): `walk FAIL: 20 screens, 889 key presses, 71 failures`, every
+    one on the four screens (`score` 7, `next weapon` 20, and 44 on the two screens whose first item is `attack`;
+    each `bind mode status bar`, and 7 of them also `a binding`, items with two keys bound);
+  - the fix (`3d42a997`): `walk ok: 20 screens, 818 key presses, 0 failures` (fewer presses: no back is needed to
+    leave bind mode);
+  - the mutant that puts the old select path back (`M_BindingGrayed` without `K_ENTER`): `walk FAIL: 20 screens, 889
+    key presses, 71 failures`, the same 71.
+- Important 2: `tests/check-tvos.sh` (e) pins the address book's reason in the tvOS `menu.o`, with the iOS
+  simulator's `menu.o`, which must lack it, as the positive control. The check also compiles, for the iOS
+  simulator, a `menu.c` whose guard is widened to `#ifdef TARGET_OS_TV` (true on every Apple target), and the
+  control must refuse it. A tree with that widening fails the check: `(e) the positive control failed: the pin on
+  "typing an address needs a keyboard, which tvOS does not have" would pass whatever the tvOS build holds`. The
+  binding fix has no platform guard, so it needs no pin.
+- Notes: the Apple TV section of `doc/020_installation.md` says what the simulator showed (the sticks, start, the
+  remote in the menus) and that the other bindings are the default table, unit-tested but not shown (the trigger is
+  TASK182); the remote hint's pin says it checks the name, and (e) now also requires `sdl3.c`'s one line naming
+  the hint to set it to "0"; the walk's numbers are re-measured above; this section.

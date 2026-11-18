@@ -413,14 +413,20 @@ iPhone's window hints left out. Where the game data lives on a device is
 not decided yet (*docs/runbook/TASK23.md*).
 
 To play, pair a controller (an MFi, Xbox or PlayStation one) with the
-Apple TV. A fresh start binds it: the left stick moves, the right stick
-turns, the right trigger fires, A (cross) jumps, B (circle) crouches, Y
-(triangle) and the right shoulder pick the next weapon, the left shoulder
-the previous one, X (square) uses the selected item and the view button
-opens the inventory; the menu button (options, start) opens the game
-menu. A binding that is already there, and every binding once a
-`config.cfg` exists, is kept. In the menus the d-pad or the left stick
-moves, A selects and B goes back.
+Apple TV. Shown in the simulator, with a test build's virtual controller:
+the left stick moves, the right stick turns and the menu button (options,
+start) opens and closes the game menu; the Siri Remote drives the menus
+(below). A fresh start also binds the rest of the controller from the
+default table, which is unit-tested but not yet shown working in the
+simulator (the right trigger firing among them): the right trigger to
+attack, A (cross) to jump, B (circle) to crouch, Y (triangle) and the right
+shoulder to the next weapon, the left shoulder to the previous one, X
+(square) to use the selected item and the view button to the inventory.
+A binding that is already there, and every binding once a `config.cfg`
+exists, is kept. In the menus the d-pad or the left stick moves, A selects
+and B goes back. The key and controller binding screens are greyed on
+Apple TV, as on iPhone and iPad: they show each binding, and select or
+clear does nothing on them.
 
 The Siri Remote drives the menus as keys: a click on the up, down, left
 or right edge of its touch surface (the ring on the second generation)
