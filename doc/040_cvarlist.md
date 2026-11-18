@@ -414,6 +414,11 @@ it's `+set busywait 0` (setting the `busywait` cvar) and `-portable`
 * **horplus**: If set to 1 (the default) the horplus algorithm is used
   to calculate an optimal horizontal and vertical field of view,
   independent of the window or screen aspect ratio or resolution.
+  On iPhone and iPad the horizontal field of view is never narrower
+  than `fov`: a view narrower than 4:3 (a portrait or near-square
+  window, as the inner display of a foldable iPhone gives) keeps the
+  whole 4:3 view and shows more above and below it. At 4:3 and wider
+  it is the same as elsewhere.
 
 * **r_consolescale** / **r_hudscale** / **r_menuscale** and
   **crosshair_scale**: Scale the console, the HUD, the menu and the

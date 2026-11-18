@@ -136,6 +136,11 @@
 # IOS_SIM_LIST_SECONDS (60, each "simctl list"), IOS_SIM_CREATE_SECONDS
 # (120), IOS_SIM_RUN_SECONDS (3600, each start of "run").
 #
+# IOS_SIM_DISPLAY (TASK172): the display each "simctl io screenshot" takes,
+# passed as --display. A device with two integrated displays (the iPhone
+# Duo: "primary", the outer, and "primary-1", the inner) has no default one
+# and simctl refuses a screenshot without it. Unset, no --display is given.
+#
 # Rules: every wait is bounded; the app is watched by its PID; nothing is
 # killed but a PID this script started, and the app only through "simctl
 # terminate" on this script's device; no other device is touched (the
@@ -974,7 +979,7 @@ list_devices "$out/devices.created" || die "no device list after simctl create"
 udids "$out/devices.created" > "${tmp:?}/udids.created"
 grep -F -x -e "$run_udid" "${tmp:?}/udids.created" >/dev/null || die "this run's device $run_udid is not in the device list taken after simctl create"
 bounded "$boot_s" "$out/boot.log" xcrun simctl bootstatus "$udid" -b || die "the device did not boot (log: $out/boot.log)"
-bounded 60 "${tmp:?}/shot.out" xcrun simctl io "$udid" screenshot "$out/screen.png" || die "simctl io screenshot failed"
+bounded 60 "${tmp:?}/shot.out" xcrun simctl io "$udid" screenshot ${IOS_SIM_DISPLAY:+"--display=$IOS_SIM_DISPLAY"} "$out/screen.png" || die "simctl io screenshot failed"
 bounded 180 "${tmp:?}/install.out" xcrun simctl install "$udid" "$app" || { cat "${tmp:?}/install.out" >&2; die "simctl install failed"; }
 
 # ---- the run ---------------------------------------------------------------
@@ -1026,7 +1031,7 @@ launch_app()
 		fi
 		# with --background the shot waits for the return
 		if [ -n "$shotat" ] && { [ -z "$bg" ] || [ "$bgdone" = 1 ]; } && [ "$t" -ge $((shotat + shotbase)) ]; then
-			bounded 60 "${tmp:?}/shot.out" xcrun simctl io "$udid" screenshot "$out/screen.$n.png" || die "simctl io screenshot failed"
+			bounded 60 "${tmp:?}/shot.out" xcrun simctl io "$udid" screenshot ${IOS_SIM_DISPLAY:+"--display=$IOS_SIM_DISPLAY"} "$out/screen.$n.png" || die "simctl io screenshot failed"
 			if [ -n "$bg" ]; then
 				bounded 90 "$out/oslog.$n.txt" xcrun simctl spawn "$udid" log show --last 5m --predicate 'process == "quake2"' || die "simctl spawn log show failed"
 			fi
@@ -1142,7 +1147,7 @@ while [ "$SECONDS" -lt "$deadline" ]; do
 done
 if [ -n "$framed" ]; then
 	sleep "${IOS_SIM_SETTLE_SECONDS:-3}"   # the console is drawn and presented
-	bounded 60 "${tmp:?}/appshot.out" xcrun simctl io "$udid" screenshot "$out/app.png" || die "simctl io screenshot of the app failed"
+	bounded 60 "${tmp:?}/appshot.out" xcrun simctl io "$udid" screenshot ${IOS_SIM_DISPLAY:+"--display=$IOS_SIM_DISPLAY"} "$out/app.png" || die "simctl io screenshot of the app failed"
 	# the app quits by itself (smoke.cfg's quit): its shutdown line, or its end
 	while kill -0 "$lpid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
 		if engine_log_has "$shutdown_line"; then

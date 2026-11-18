@@ -212,6 +212,67 @@ TEST(hidpi_screen_unmeasured_is_a_change)
 }
 
 /*
+ * TASK172 round 2: what the window code does when the screen's pixel size
+ * or safe rectangle moved (GLimp_ScreenAction): nothing for an empty
+ * window or a screen already noted, a vid_restart when the renderer gives
+ * no drawable, and the live resize otherwise.
+ */
+TEST(hidpi_orientation_names)
+{
+	T_CHECK(GLimp_OrientationBits("portrait") == GLIMP_ORIENT_PORTRAIT);
+	T_CHECK(GLimp_OrientationBits("PortraitUpsideDown") == GLIMP_ORIENT_UPSIDEDOWN);
+	T_CHECK(GLimp_OrientationBits("landscapeleft") == GLIMP_ORIENT_LANDSCAPELEFT);
+	T_CHECK(GLimp_OrientationBits("landscaperight") == GLIMP_ORIENT_LANDSCAPERIGHT);
+	T_CHECK(GLimp_OrientationBits("landscape") == (GLIMP_ORIENT_LANDSCAPELEFT | GLIMP_ORIENT_LANDSCAPERIGHT));
+	T_CHECK(GLimp_OrientationBits("all") == 15);
+	T_CHECK(GLimp_OrientationBits("") == 0);
+	T_CHECK(GLimp_OrientationBits("land") == 0);
+	T_CHECK(GLimp_OrientationBits(NULL) == 0);
+}
+
+TEST(hidpi_screen_action_ignore)
+{
+	const int made[GLIMP_SCREEN_INTS] = { 2622, 1206, 62, 0, 750, 382 };
+	const int empty_w[GLIMP_SCREEN_INTS] = { 0, 1206, 62, 0, 750, 382 };
+	const int empty_h[GLIMP_SCREEN_INTS] = { 2622, 0, 62, 0, 750, 382 };
+
+	/* the same screen again: the second event of one change, with or without a drawable */
+	T_CHECK(GLimp_ScreenAction(made, made, 2250, 1146) == GLIMP_SCREEN_IGNORE);
+	T_CHECK(GLimp_ScreenAction(made, made, 0, 0) == GLIMP_SCREEN_IGNORE);
+	/* a window with no pixels is left alone, even against a record that differs */
+	T_CHECK(GLimp_ScreenAction(made, empty_w, 2250, 1146) == GLIMP_SCREEN_IGNORE);
+	T_CHECK(GLimp_ScreenAction(made, empty_h, 2250, 1146) == GLIMP_SCREEN_IGNORE);
+	T_CHECK(GLimp_ScreenAction(empty_w, empty_w, 2250, 1146) == GLIMP_SCREEN_IGNORE);
+	T_CHECK(GLimp_ScreenAction(made, NULL, 2250, 1146) == GLIMP_SCREEN_IGNORE);
+}
+
+TEST(hidpi_screen_action_restart)
+{
+	const int made[GLIMP_SCREEN_INTS] = { 2622, 1206, 62, 0, 750, 382 };
+	/* the other landscape: the same size, the insets swapped */
+	const int flipped[GLIMP_SCREEN_INTS] = { 2622, 1206, 0, 0, 812, 382 };
+
+	/* changed, and the renderer gives no drawable: vid_restart */
+	T_CHECK(GLimp_ScreenAction(made, flipped, 0, 0) == GLIMP_SCREEN_RESTART);
+	T_CHECK(GLimp_ScreenAction(made, flipped, 2250, 0) == GLIMP_SCREEN_RESTART);
+	T_CHECK(GLimp_ScreenAction(made, flipped, 0, 1146) == GLIMP_SCREEN_RESTART);
+	T_CHECK(GLimp_ScreenAction(made, flipped, -1, -1) == GLIMP_SCREEN_RESTART);
+	/* nothing noted yet: a change too */
+	T_CHECK(GLimp_ScreenAction(NULL, flipped, 0, 0) == GLIMP_SCREEN_RESTART);
+}
+
+TEST(hidpi_screen_action_live)
+{
+	const int made[GLIMP_SCREEN_INTS] = { 2622, 1206, 62, 0, 750, 382 };
+	const int flipped[GLIMP_SCREEN_INTS] = { 2622, 1206, 0, 0, 812, 382 };
+	const int bigger[GLIMP_SCREEN_INTS] = { 2420, 1668, 0, 0, 1210, 814 };
+
+	T_CHECK(GLimp_ScreenAction(made, flipped, 2436, 1146) == GLIMP_SCREEN_LIVE);
+	T_CHECK(GLimp_ScreenAction(made, bigger, 2420, 1628) == GLIMP_SCREEN_LIVE);
+	T_CHECK(GLimp_ScreenAction(NULL, bigger, 2420, 1628) == GLIMP_SCREEN_LIVE);
+}
+
+/*
  * TASK147: with the real game data default.cfg sets r_mode 4 and
  * vid_fullscreen 1. On the uikit driver the window is still the whole
  * screen at its own size (fullscreen 2, r_mode -2, so the client takes
