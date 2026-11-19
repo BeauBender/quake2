@@ -1,8 +1,8 @@
-# Retro post-process (TASK184, PM2) — WIP
+# Retro post-process (TASK184, PM2)
 
-Card: TASK184 (#531). **Work in progress**: the pass, its settings, the host tests, the scenarios and
-the timing are done; the base-against-branch pin comparison and the full gate are not yet run (see
-*What is left*).
+Card: TASK184 (#531). The pass, its settings, the host tests, the scenarios, the timing, the
+base-against-branch pin comparison and the gate are done. Plan call P8 is not in this slice (see
+*Left for PM3 or a follow-up*).
 
 `r_presentation 2` (*Retro*) now runs on every device, ray tracing or not. After the 3D view (the
 world, the models and the blend) one full-screen fragment pass rewrites the view's rectangle: each
@@ -85,13 +85,49 @@ So the pass takes about 0.5 to 0.8 ms at 1080p and 1.4 to 2.1 ms at 5K, and 1.0 
 under 0.5 ms at 5K (section 5.3). The copy is part of it; framebuffer fetch with the filter off, and
 one quantize a pixel ahead of the filter, are the obvious ways down. Not done in this slice.
 
-## What is left
+## Pins at `r_presentation 0`
 
-- The base-against-branch comparison at `r_presentation 0` of every committed scenario (seeded,
-  `PINS_SEED=1`, which needs the trace; the first attempt ran with `PINS_TRACE=0`, which `record`
-  refuses with a seed, so nothing was compared). The water scenarios also need `make-demo water`,
-  which needs `ref_soft` built beside the binary.
-- `scripts/test.sh` and the named checks: `check-pins`, `check-cvar-docs`, `check-video-menu`,
-  `check-doc-links`, `check-runbook-index`, `check-no-local-identity`, `make test`.
-- The retro overlay of plan call P8 (the `r_rt_*` effects and `r_metalfx` off under Retro) is not
-  in this slice: `rm_pres_value` leaves every cvar the user's under Retro.
+Every committed scenario except the Retro ones (`retro`, `retro-filter`, which only the branch has) and
+`cinematic`, recorded on Metal (apple9, this Mac, screen locked; frames render byte-identically) by the
+base build (main at `1c91ecbc`) and by the branch build (source of `5ec24f05` on that main), both
+seeded (`PINS_SEED=1`, with the trace), 640 x 480, and compared by the hash of the frames' hashes. The
+water scenarios replay `water.dm2`, which `make-demo water` generates; two `make-demo` runs gave two
+different files, so the branch's file was copied over the base's and both builds replayed that one.
+No frame was looked at, no stored reference was replaced.
+
+| scenario | frames | base | branch |
+| --- | --- | --- | --- |
+| `dlights-lmcubic` | 23 | `47b37c137` | identical |
+| `dlights` | 23 | `ac67e8f5c` | identical |
+| `hud2d-scale8` | 23 | `32724f15c` | identical |
+| `hud2d-sharp` | 23 | `f9ffe0290` | identical |
+| `hud2d` | 23 | `f9ffe0290` | identical |
+| `models` | 23 | `552ee3cb1` | identical |
+| `particles-cap` | 23 | `75b26afba` | identical |
+| `particles` | 23 | `75b26afba` | identical |
+| `rt-ao-entities` | 23 | `f1a43c248` | identical |
+| `rt-ao` | 23 | `53c06d8a4` | identical |
+| `rt-shadows-entities` | 23 | `6cd65dd54` | identical |
+| `rt-shadows` | 23 | `bb85d7a96` | identical |
+| `rt-sun` | 23 | `374691775` | identical |
+| `rt-water-entities` (`water.dm2`) | 4 | `60b1e91c2` | identical |
+| `rt-water` (`water.dm2`) | 4 | `60b1e91c2` | identical |
+| `skywater` (`water.dm2`) | 4 | `bd6e66d3c` | identical |
+| `world-fullbright` | 23 | `6e92dc9a2` | identical |
+| `world-lmcubic` | 23 | `1a8ff9d43` | identical |
+| `world-metalfx-interp` | 23 | `b15b40cf1` | identical |
+| `world-metalfx1` | 23 | `8bb165628` | identical |
+| `world-metalfx2` | 23 | `15df2f0d4` | identical |
+| `world-metalfx3` | 23 | `15df2f0d4` | identical |
+| `world-scale8` | 23 | `b611e9347` | identical |
+| `world` | 23 | `b15b40cf1` | identical |
+
+24 of 24 byte-identical: with `r_presentation 0` the branch changes no pixel. The Retro records and the
+timing above were taken at branch commit `29308331` (the source is the same as `5ec24f05`'s).
+
+## Left for PM3 or a follow-up
+
+- The retro overlay of plan call P8 (the `r_rt_*` effects and `r_metalfx` off under Retro) is not in
+  this slice: `rm_pres_value` leaves every cvar the user's under Retro. Not implemented here.
+- The pass's cost at 5K (above the plan's estimate): framebuffer fetch with the filter off, and one
+  quantize a pixel ahead of the filter.
