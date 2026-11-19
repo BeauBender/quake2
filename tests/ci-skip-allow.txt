@@ -12,3 +12,4 @@ check-gate-parallel.sh|skipped as SIGINT is ignored here)|the ok line's count of
 check-checkout-current.sh|selftest: case: skipped, the scratch volume is case-sensitive|the case-folding case needs a case-insensitive volume; a case-sensitive one cannot show it, and the rest of the self-test runs
 check-no-local-identity.sh|the user-name word test is skipped, the host name and home path are still checked|intended on a host whose user name is the public owner handle; the host name and home path are still checked
 check-bench-quake2.sh|3 skipped, 1 failed command buffers|fixture text of a stand-in engine log (the metal_stats line), not a skip
+check-metalfx-report.sh|real code ok (mutants skipped)|MFX_REAL_ONLY=1 is an opt-in run of the real code alone (the mutants are left out on request), and the line prints only when that run passed; the default run has the mutants

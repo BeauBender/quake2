@@ -91,36 +91,73 @@ list_names() {
 
 # skips <file> <allow-list>: "<line>: <text>" for every skip line with no
 # guard and no allow-list entry; "allow: ..." for an entry of this file that
-# matches no skip line; "0: ..." when the file cannot be read
+# matches no skip line or more than one line; "0: ..." when the file cannot
+# be read
 skips() {
 	awk -v name="${1##*/}" '
-		function endseg(t, w, out) {
+		# ev <type> <text> <op>: one event of the file: "c" a command, "k" a
+		# keyword (if then else elif fi do done case esac), "{" or "}"; <op>
+		# is the separator before it
+		function ev(type, txt, op) {
+			ne++
+			ET[ne] = type
+			EX[ne] = txt
+			EO[ne] = op
+			EL[ne] = cl
+		}
+		# a literal failure: exit or return 1 to 9, or fail*= a non-zero number
+		function isfail(t) {
+			return t ~ /^(exit|return)[ \t]+[1-9]([ \t\n;)]|$)/ || t ~ /^fail[A-Za-z0-9_]*=["\047]?[1-9][0-9]*["\047]?([ \t\n]|$)/
+		}
+		function word(t) {
+			sub(/[ \t\n].*/, "", t)
+			return t
+		}
+		function endseg(term, t, w, out, op, sf, kw) {
 			t = cur
 			cur = ""
 			out = !rd && !pipe
 			rd = 0
 			pipe = 0
+			op = pop
+			pop = term
+			sf = 0
 			sub(/\$$/, "", t)
 			for (;;) {
 				sub(/^[ \t\n]+/, "", t)
-				if (t ~ /^fail[A-Za-z]*=/ || t ~ /^(exit|return)[ \t]+([1-9]|\$)/)
-					F[cl] = 1
+				if (isfail(t))
+					sf = 1
 				if (t ~ /^(exit|return)[ \t]+0/)
 					X[cl] = 1
-				if (match(t, /^(then|else|elif|do|if|while|until|!)([ \t\n]|$)/))
+				if (match(t, /^(then|else|elif|do|if|while|until|!)([ \t\n]|$)/)) {
+					kw = word(t)
+					if (kw != "!" && kw != "while" && kw != "until")
+						ev("k", kw, op)
 					t = substr(t, RLENGTH + 1)
-				else if (match(t, /^[0-9]*[<>]+&?[0-9-]*[ \t]+/))
+				} else if (match(t, /^[0-9]*[<>]+&?[0-9-]*[ \t]+/))
 					t = substr(t, RLENGTH + 1)
 				else if (match(t, /^[A-Za-z_][A-Za-z0-9_]*=[^ \t\n]*[ \t]+/))
 					t = substr(t, RLENGTH + 1)
 				else
 					break
 			}
-			w = t
-			sub(/[ \t\n].*/, "", w)
+			# a failure counts unless a && or || makes it conditional
+			if (sf && op != "&&" && op != "||")
+				F[cl] = 1
+			if (t ~ /^(fi|done|esac)([ \t\n;]|$)/) {
+				ev("k", word(t), op)
+				return
+			}
+			if (t ~ /^case[ \t]/)
+				ev("k", "case", op)
+			if (t == "" && !sf)
+				return
+			ev("c", t == "" ? "fail" : t, op)
+			EF[ne] = sf
+			w = word(t)
 			if (w == "[" || w == "[[" || w == "test") {
 				if (t ~ /\$\{?[A-Z][A-Z0-9_]*_REQUIRE/)
-					G[cl] = 1
+					EG[ne] = 1
 				return
 			}
 			if (out && (w == "echo" || w == "printf" || (w in H))) {
@@ -130,6 +167,32 @@ skips() {
 				if (tolower(t) ~ /skip/)
 					S[cl] = 1
 			}
+		}
+		# fails <event> <with-functions>: the branch that starts at <event>
+		# (up to the else, elif, fi or } that ends it) fails unconditionally:
+		# a literal failure, or with <with-functions> a call to a function of
+		# FF, on its own level and not behind a && or ||
+		function fails(s, usefn, e, d) {
+			d = 0
+			for (e = s; e <= ne; e++) {
+				if (ET[e] == "{" || (ET[e] == "k" && (EX[e] == "if" || EX[e] == "case" || EX[e] == "do"))) {
+					d++
+					continue
+				}
+				if (ET[e] == "}" || (ET[e] == "k" && (EX[e] == "fi" || EX[e] == "esac" || EX[e] == "done"))) {
+					if (!d)
+						return 0
+					d--
+					continue
+				}
+				if (ET[e] == "k" && !d && (EX[e] == "else" || EX[e] == "elif"))
+					return 0
+				if (ET[e] != "c" || d || ((EO[e] == "&&" || EO[e] == "||") && e != s))
+					continue
+				if (EF[e] || (usefn && (word(EX[e]) in FF)))
+					return 1
+			}
+			return 0
 		}
 		function isclose(s) {
 			return s ~ /^[ \t]*(fi|done|esac|\}|;;)([ \t;)]|$)/ || s ~ /;;[ \t]*$/
@@ -172,6 +235,7 @@ skips() {
 			q = ""
 			hd = ""
 			cur = ""
+			pop = "n"
 			cl = 0
 			for (i = 1; i <= nl; i++) {
 				s = L[i]
@@ -186,11 +250,6 @@ skips() {
 				lq[i] = q
 				cont = 0
 				hp = ""
-				if (q == "" && match(s, /<<-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*/)) {
-					hp = substr(s, RSTART, RLENGTH)
-					hdt = (hp ~ /^<<-/)
-					sub(/^<<-?[ \t]*["\047]?/, "", hp)
-				}
 				for (k = 1; k <= length(s); k++) {
 					c = substr(s, k, 1)
 					if (q == "" && cur ~ /^[ \t\n]*$/ && c !~ /[ \t]/)
@@ -231,10 +290,27 @@ skips() {
 						k += j - 1
 						continue
 					}
-					if (c == ">" && substr(s, k + 1, 1) != "&")
-						rd = 1
+					# a here-document, outside quotes and comments: its body
+					# starts on the next line
+					if (c == "<" && substr(s, k + 1, 1) == "<" && substr(s, k + 2, 1) != "<") {
+						r = substr(s, k + 2)
+						if (hp == "" && match(r, /^-?[ \t]*["\047\\]?[A-Za-z_][A-Za-z0-9_]*/)) {
+							hp = substr(r, 1, RLENGTH)
+							hdt = (hp ~ /^-/)
+							sub(/^-?[ \t]*["\047\\]?/, "", hp)
+						}
+						cur = cur "<<"
+						k++
+						continue
+					}
+					if (c == ">" && substr(s, k + 1, 1) != "&") {
+						r = substr(s, k + 1)
+						sub(/^>?[ \t]*/, "", r)
+						if (r !~ /^\/dev\/(stdout|stderr|tty)([ \t;|&)]|$)/)
+							rd = 1
+					}
 					if ((c == "|" || c == "&") && substr(s, k + 1, 1) == c) {
-						endseg()
+						endseg(c c)
 						k++
 						continue
 					}
@@ -245,13 +321,16 @@ skips() {
 						continue
 					}
 					if (index(";|&(){}", c)) {
-						endseg()
+						o = pop
+						endseg(c)
+						if (c == "{" || c == "}")
+							ev(c, "", o)
 						continue
 					}
 					cur = cur c
 				}
 				if (q == "" && !cont)
-					endseg()
+					endseg("n")
 				else
 					cur = cur "\n"
 				if (hp != "")
@@ -259,6 +338,41 @@ skips() {
 			}
 			if (q != "")
 				print "0: a quote opened here is never closed, so the skip lines cannot be read"
+			if (hd != "")
+				print "0: a here-document (<<" hd ") is never closed, so the skip lines cannot be read"
+			# the functions that fail: name() { ... } with a literal failure
+			# on the level of its body
+			for (e = 2; e <= ne; e++)
+				if (ET[e] == "{" && EO[e] == ")" && ET[e - 1] == "c" && EX[e - 1] ~ /^[A-Za-z_][A-Za-z0-9_]*$/ && fails(e + 1, 0))
+					FF[EX[e - 1]] = 1
+			# the guards: a [ or test that reads a <NAME>_REQUIRE variable and
+			# gates a branch that fails (after || or &&, or the then of an if)
+			for (e = 1; e <= ne; e++) {
+				if (!(e in EG))
+					continue
+				ok = 0
+				if (e < ne && (EO[e + 1] == "||" || EO[e + 1] == "&&")) {
+					if (ET[e + 1] == "c")
+						ok = EF[e + 1] || (word(EX[e + 1]) in FF)
+					else if (ET[e + 1] == "{")
+						ok = fails(e + 2, 1)
+				} else if (e > 1 && ET[e - 1] == "k" && (EX[e - 1] == "if" || EX[e - 1] == "elif")) {
+					for (t = e + 1; t <= ne && !(ET[t] == "k" && EX[t] == "then"); t++)
+						;
+					if (t <= ne)
+						ok = fails(t + 1, 1)
+				}
+				if (ok)
+					G[EL[e]] = 1
+			}
+			for (k = 1; k <= na; k++) {
+				nm = 0
+				for (i = 1; i <= nl; i++)
+					if (index(L[i], ap[k]))
+						nm++
+				if (nm > 1)
+					print "allow: the entry \"" ap[k] "\" matches " nm " lines (an entry matches exactly one)"
+			}
 			for (i = 1; i <= nl; i++) {
 				if ((i in F) || (!(i in X) && ((i + 1) in F) && !isopen(L[i + 1]) && !isclose(L[i + 1])))
 					continue
@@ -293,6 +407,7 @@ skips() {
 		}
 	' "$2" "$1"
 }
+
 
 # jobs_ok <workflow>: the invariants job is there, unconditional, deep and
 # requires iOS where scripts/ci-checks.sh runs
