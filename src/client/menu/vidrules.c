@@ -521,17 +521,18 @@ VidRules_RTEntry(const char *renderer)
 	return (vidrule_t){ 1, "shadows, sun, AO, water; applies live" };
 }
 
+/* the switches' labels, for "turn on <effect> first" */
+static const char *const turn_on[] = {
+	"turn on shadows first",
+	"turn on sun first",
+	"turn on ambient occlusion first",
+	"turn on water reflections first",
+	"turn on gun shadow first"
+};
+
 vidrule_t
 VidRules_RTItem(int i, const char *renderer, int available, int effect_on)
 {
-	/* the switches' labels, for "turn on <effect> first" */
-	static const char *const turn_on[] = {
-		"turn on shadows first",
-		"turn on sun first",
-		"turn on ambient occlusion first",
-		"turn on water reflections first",
-		"turn on gun shadow first"
-	};
 	const vidrt_control_t *c = VidRules_RTControl(i);
 
 	if (!c && i != -1)
@@ -663,4 +664,224 @@ VidRules_RTStatus(const char *renderer, int available, float presentation)
 		return "Enhanced overrides the switches; your own values shown";
 	}
 	return "Esc: back; each change shows on the next frame";
+}
+
+/*
+ * The tuning screen (TASK195). The defaults are ref_metal's (the scenes'
+ * Cvar_Get); the debug view's row names r_rt_shadows_show, the first of
+ * the views VidRules_DebugView lists.
+ */
+static const char *const tune_rays_names[] = { "1 ray", "2 rays", NULL };
+static const char *const tune_hits_names[] = { "picture only", "map surfaces", NULL };
+static const char *const tune_fx_names[] = { "none", "spatial", "temporal", "denoised", NULL };
+static const char *const tune_debug_names[] = { "none", "shadows", "sun", "AO", "water", "G-buffer", NULL };
+static const char *const tune_debug_cvars[] = {
+	NULL, "r_rt_shadows_show", "r_rt_sun_show", "r_rt_ao_show", "r_rt_water_show", "r_rt_gbuffer_show"
+};
+
+/* the cvar first in each row: tests/check-cvar-docs.sh reads it as the row's name */
+static const vidrt_control_t rt_tune[] = {
+	{ "r_rt_sun_angles", "sun elevation", "55 45", CVAR_ARCHIVE, RT_SUN, 0.0f, 90.0f, 5.0f, "%.0f", NULL, 1, 0 },
+	{ "r_rt_sun_angles", "sun azimuth", "55 45", CVAR_ARCHIVE, RT_SUN, 0.0f, 355.0f, 5.0f, "%.0f", NULL, 2, 0 },
+	{ "r_rt_ao_rays", "AO rays", "2", CVAR_ARCHIVE, RT_AO, 1.0f, 2.0f, 1.0f, NULL, tune_rays_names, 0, 0 },
+	{ "r_rt_water_hits", "water hits", "0", CVAR_ARCHIVE, RT_WATER, 0.0f, 1.0f, 1.0f, NULL, tune_hits_names, 0, 0 },
+	{ "r_rt_flatlight", "flat light", "0", 0, -1, 0.0f, 1.0f, 0.05f, "%.2f", NULL, 0, 0 },
+	{ "r_metalfx", "scaler", "0", CVAR_ARCHIVE, -1, 0.0f, 3.0f, 1.0f, NULL, tune_fx_names, 0, 0 },
+	{ "r_rt_shadows_show", "debug view", "0", 0, -1, 0.0f, 5.0f, 1.0f, NULL, tune_debug_names, VIDTUNE_PART_DEBUG, 0 },
+	{ "r_presentation", "presentation", "0", CVAR_ARCHIVE, -1, 0.0f, 3.0f, 1.0f, NULL, pres_names, 0, 1 },
+};
+
+int
+VidRules_TuneNum(void)
+{
+	return ARRSIZE(rt_tune);
+}
+
+const vidrt_control_t *
+VidRules_TuneControl(int i)
+{
+	if (i < 0 || i >= ARRSIZE(rt_tune))
+	{
+		return NULL;
+	}
+	return &rt_tune[i];
+}
+
+vidrule_t
+VidRules_TuneItem(int i, const char *renderer, int available, int effect_on)
+{
+	const vidrt_control_t *c = VidRules_TuneControl(i);
+
+	if (!c)
+	{
+		return (vidrule_t){ 0, "unknown item" };
+	}
+	if (VidRules_Renderer(renderer) != VIDREF_METAL)
+	{
+		return (vidrule_t){ 0, "needs the Metal renderer" };
+	}
+	/* the scaler and the presentation need no ray tracing of their own */
+	if (!strcmp(c->cvar, "r_metalfx"))
+	{
+		return (vidrule_t){ 1, "the scaler; denoised needs a traced effect; next frame" };
+	}
+	if (c->restart)
+	{
+		return (vidrule_t){ 1, "the look; shows after apply (restart)" };
+	}
+	if (!available)
+	{
+		return (vidrule_t){ 0, "ray tracing is not available on this device" };
+	}
+	if (c->effect >= 0 && !effect_on)
+	{
+		return (vidrule_t){ 0, (c->effect < ARRSIZE(turn_on)) ? turn_on[c->effect] : "turn on its effect first" };
+	}
+	if (c->part == VIDTUNE_PART_DEBUG)
+	{
+		return (vidrule_t){ 1, "one view at a time, shown while its effect is on" };
+	}
+	if (!strcmp(c->cvar, "r_rt_flatlight"))
+	{
+		return (vidrule_t){ 1, "grey for the lightmaps; G-buffer path only" };
+	}
+	return (vidrule_t){ 1, "applies from the next frame" };
+}
+
+vidrule_t
+VidRules_TuneRestart(const char *renderer, int changed)
+{
+	if (VidRules_Renderer(renderer) != VIDREF_METAL)
+	{
+		return (vidrule_t){ 0, "needs the Metal renderer" };
+	}
+	if (!changed)
+	{
+		return (vidrule_t){ 0, "nothing here waits for a restart" };
+	}
+	return (vidrule_t){ 1, "presentation changed: Enter runs vid_restart" };
+}
+
+int
+VidRules_NumDebugViews(void)
+{
+	return ARRSIZE(tune_debug_cvars);
+}
+
+const char *
+VidRules_DebugView(int v)
+{
+	if (v <= 0 || v >= ARRSIZE(tune_debug_cvars))
+	{
+		return NULL;
+	}
+	return tune_debug_cvars[v];
+}
+
+/* row i of the preset's cvars: the ray-tracing screen's rows, then the tuning rows that are values */
+static const vidrt_control_t *
+PresetRow(int i)
+{
+	int k = i - VidRules_RTNum();
+
+	if (i < 0)
+	{
+		return NULL;
+	}
+	if (k < 0)
+	{
+		return VidRules_RTControl(i);
+	}
+	for (int j = 0; j < ARRSIZE(rt_tune); j++)
+	{
+		if (rt_tune[j].part == 2 || rt_tune[j].part == VIDTUNE_PART_DEBUG || rt_tune[j].restart)
+		{
+			continue;
+		}
+		if (k-- == 0)
+		{
+			return &rt_tune[j];
+		}
+	}
+	return NULL;
+}
+
+int
+VidRules_PresetNum(void)
+{
+	int n = 0;
+
+	while (PresetRow(n))
+	{
+		n++;
+	}
+	return n;
+}
+
+const char *
+VidRules_PresetCvar(int i, const char **def)
+{
+	const vidrt_control_t *c = PresetRow(i);
+
+	if (!c)
+	{
+		return NULL;
+	}
+	if (def)
+	{
+		*def = c->def;
+	}
+	return c->cvar;
+}
+
+int
+VidRules_IsPresetCvar(const char *name)
+{
+	for (int i = 0; name && PresetRow(i); i++)
+	{
+		if (!strcmp(PresetRow(i)->cvar, name))
+		{
+			return 1;
+		}
+	}
+	return 0;
+}
+
+const char *
+VidRules_PresetNameError(const char *name)
+{
+	size_t len;
+
+	if (!name || !name[0])
+	{
+		return "the name is empty";
+	}
+	len = strlen(name);
+	if (len > VIDPRESET_MAXNAME)
+	{
+		return "the name is longer than 32 characters";
+	}
+	if (strstr(name, ".."))
+	{
+		return "the name holds \"..\"";
+	}
+	if (strchr(name, '/') || strchr(name, '\\'))
+	{
+		return "the name holds a slash";
+	}
+	if (name[0] == '.')
+	{
+		return "the name starts with a dot";
+	}
+	for (size_t i = 0; i < len; i++)
+	{
+		const char ch = name[i];
+
+		if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
+				ch == '_' || ch == '-'))
+		{
+			return "only letters, digits, '_' and '-'";
+		}
+	}
+	return NULL;
 }

@@ -166,6 +166,8 @@ typedef struct
 	float min, max, step;   /* a slider's range and step; 0 for a switch */
 	const char *format;     /* a slider's value as printed */
 	const char *const *choices;   /* NULL, or the names of a choice row's steps (a spin control, not a slider) */
+	int part;           /* TASK195: 0 the whole value, 1 or 2 its first or second word, 3 the debug view */
+	int restart;        /* TASK195: 1 when a change shows only after vid_restart */
 } vidrt_control_t;
 
 int VidRules_RTNum(void);
@@ -233,5 +235,46 @@ vidrule_t VidRules_RTRow(int i, const char *renderer, int available, float prese
  * mode that decides the switches it says the mode overrides them.
  */
 const char *VidRules_RTStatus(const char *renderer, int available, float presentation);
+
+/*
+ * The tuning screen (TASK195), reached from the ray-tracing screen: every
+ * r_rt_* setting that changes the look and is not on that screen, the
+ * scaler (r_metalfx, whose mode 3 is the denoised one), the debug view
+ * and the presentation. A row with part 1 or 2 is one word of a pair
+ * (r_rt_sun_angles: pitch, yaw) as a choice of min to max by step; part 3
+ * is the debug view, one *_show cvar at 1 at a time (VidRules_DebugView);
+ * a row with restart applies only after vid_restart. A choice row's step
+ * i is the value min + i * step. Every row is always shown:
+ * VidRules_TuneItem greys it with its reason (effect_on as for
+ * VidRules_RTItem). VidRules_TuneRestart is the "apply (restart)" action:
+ * live only after a row with restart changed.
+ */
+#define VIDTUNE_PART_DEBUG 3
+
+int VidRules_TuneNum(void);
+const vidrt_control_t *VidRules_TuneControl(int i);
+vidrule_t VidRules_TuneItem(int i, const char *renderer, int available, int effect_on);
+vidrule_t VidRules_TuneRestart(const char *renderer, int changed);
+/* the cvar of debug view v (1 to VidRules_NumDebugViews() - 1), NULL for 0 (none) or out of range */
+int VidRules_NumDebugViews(void);
+const char *VidRules_DebugView(int v);
+
+/*
+ * The tuning cvars a preset holds and the A/B toggle swaps (TASK195):
+ * every row of the ray-tracing screen and every tuning row that is not
+ * the debug view or a restart, each cvar once, with its default.
+ */
+int VidRules_PresetNum(void);
+const char *VidRules_PresetCvar(int i, const char **def);
+/* 1 when name is one of them */
+int VidRules_IsPresetCvar(const char *name);
+
+/*
+ * A preset's name (rt_preset): NULL when it may name a file, else why
+ * not. Refused: empty, longer than VIDPRESET_MAXNAME, "..", '/', '\', a
+ * leading '.', and any character outside [A-Za-z0-9_-].
+ */
+#define VIDPRESET_MAXNAME 32
+const char *VidRules_PresetNameError(const char *name);
 
 #endif
