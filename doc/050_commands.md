@@ -38,6 +38,13 @@ original clients (Vanilla Quake II) commands are still in place.
   counts, drops the
   commands the selects queued and quits.
 
+* **metal_hdr_info**: The Metal renderer only. Prints the state of its
+  layer for `r_hdr`: the pixel format (`BGRA8Unorm`, or `RGBA16Float`
+  under `r_hdr 1`), the colour space's name (`none` when the layer has
+  none), whether extended dynamic range is on, and the display's headroom
+  now and its potential, which read `unavailable` until the renderer
+  reads them. It only reads; it changes nothing.
+
 * **gamemode <mode>**: Provides a convenient way to switch the game mode
   between `coop`, `dm` and `sp` without having to set three cvars the
   correct way. `?` prints the current mode.

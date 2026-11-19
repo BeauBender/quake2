@@ -148,6 +148,57 @@ RM_Effect(const cvar_t *cv)
 	return rm_pres_value(rm_presentation, cv->name, cv->value);
 }
 
+/*
+ * r_hdr (TASK196, HD2; docs/plans/hdr-output.md): the float16 frame
+ * target, drawn as stock and decoded to extended linear sRGB at the
+ * present. Live: read each frame, applied between frames. -1 until the
+ * first frame applies it.
+ */
+static cvar_t *r_hdr;
+static int rm_hdr_applied = -1;
+
+/* metal_hdr_info: the layer's format, colour space and EDR property, and the headroom (read only) */
+static void
+R_HdrInfo_f(void)
+{
+	char line[256];
+
+	if (rmb_hdr_info(line, sizeof(line)))
+	{
+		R_Printf(PRINT_ALL, "%s\n", line);
+	}
+}
+
+/* r_hdr and the presentation (Retro runs the stock formats) into the layer, between frames */
+static void
+R_HdrFrame(void)
+{
+	const int active = rm_hdr_active(rm_hdr_mode(r_hdr->value), rm_presentation == RM_PRES_RETRO);
+
+	if (active == rm_hdr_applied)
+	{
+		return;
+	}
+
+	rmb_hdr_set(active);
+
+	/* said on a change only: a stock run prints nothing */
+	if (active)
+	{
+		R_Printf(PRINT_ALL, "ref_metal: hdr: on (r_hdr 1): the frame in float16, shown at SDR until the tone map\n");
+	}
+	else if (rm_hdr_applied > 0)
+	{
+		R_Printf(PRINT_ALL, "ref_metal: hdr: off\n");
+	}
+	else if (rm_hdr_mode(r_hdr->value))
+	{
+		R_Printf(PRINT_ALL, "ref_metal: hdr: off: Retro is a 16-bit SDR look\n");
+	}
+
+	rm_hdr_applied = active;
+}
+
 /* gl1's clear colour for r_clear 1 */
 static const float rm_clear_color[4] = { 1.0f, 0.0f, 0.5f, 0.5f };
 
@@ -183,6 +234,7 @@ R_Register(void)
 	metal_colorspace = ri.Cvar_Get("metal_colorspace", "0", CVAR_ARCHIVE);
 	rmb_colorspace_set(rm_colorspace_mode(metal_colorspace->value));   /* applied when the layer is attached */
 	metal_colorspace->modified = false;
+	r_hdr = ri.Cvar_Get("r_hdr", "0", CVAR_ARCHIVE);
 	r_farsee = ri.Cvar_Get("r_farsee", "0", CVAR_LATCH | CVAR_ARCHIVE);
 	r_fullbright = ri.Cvar_Get("r_fullbright", "0", 0);
 	r_drawworld = ri.Cvar_Get("r_drawworld", "1", 0);
@@ -219,6 +271,7 @@ R_Register(void)
 	ri.Cmd_AddCommand("screenshot", R_ScreenShot);
 	ri.Cmd_AddCommand("imagelist", R_ImageList_f);
 	ri.Cmd_AddCommand("modellist", Mod_Modellist_f);
+	ri.Cmd_AddCommand("metal_hdr_info", R_HdrInfo_f);
 }
 
 /* from gl1_main.c */
@@ -494,6 +547,7 @@ RI_Shutdown(void)
 	ri.Cmd_RemoveCommand("screenshot");
 	ri.Cmd_RemoveCommand("imagelist");
 	ri.Cmd_RemoveCommand("modellist");
+	ri.Cmd_RemoveCommand("metal_hdr_info");
 	Mod_FreeAll();
 	RM_ShutdownDraw();
 	R_ShutdownImages();
@@ -525,6 +579,9 @@ RI_BeginFrame(float camera_separation)
 		metal_colorspace->modified = false;
 		rmb_colorspace_set(rm_colorspace_mode(metal_colorspace->value));
 	}
+
+	/* r_hdr (TASK196): the layer and, at this frame, the colour targets and pipelines */
+	R_HdrFrame();
 
 	/* gl1's RI_BeginFrame: vid_gamma takes effect in R_InitImages, so through vid_restart */
 	if (vid_gamma->modified)

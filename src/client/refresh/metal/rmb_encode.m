@@ -108,6 +108,7 @@ static id<MTLTexture> own;       /* the frame's own colour target, private */
 static id<MTLTexture> depth;     /* depth32Float_stencil8, private */
 static id<MTLTexture> retro_src; /* TASK184: the copy of the frame the Retro pass reads, made at its first use */
 static id<MTLBuffer> readbuf;    /* shared, for rmb_read */
+static id<MTLTexture> hdr_read;  /* TASK196: rmb_read's 8-bit copy of a float16 frame, made at its first use */
 static int color_defined;        /* a pass has written color since it was made */
 
 /* the open frame */
@@ -241,11 +242,21 @@ rmb_frame_begin(int w, int h, int dw, int dh, const float *clear_rgba)
 	@autoreleasepool
 	{
 		MTLTextureUsage rt = MTLTextureUsageRenderTarget;
+		/* the colour targets' format: RGBA16Float on r_hdr's float16 path (TASK196), BGRA8Unorm otherwise */
+		const MTLPixelFormat fmt = (MTLPixelFormat)rm_hdr_format(rmb_hdr_on());
 		/* with display sync off the frame is drawn into a present slot's target, which its present reads (FIX51) */
 		id<MTLTexture> slot = rmb_present_take(w, h);
-		id<MTLTexture> target = slot ? slot : own;
+		id<MTLTexture> target;
 		rm_frame_held_t held;
 		unsigned make;
+
+		/* a format change drops the own target, which is then made again as a missing one is */
+		if (own && (own.pixelFormat != fmt))
+		{
+			rmb_set_texture(&own, nil);
+		}
+
+		target = slot ? slot : own;
 
 		/* without the window's pixels the drawable is the frame's size */
 		if ((dw <= 0) || (dh <= 0))
@@ -271,7 +282,7 @@ rmb_frame_begin(int w, int h, int dw, int dh, const float *clear_rgba)
 
 			if (!slot)
 			{
-				rmb_set_texture(&own, rmb_new_target(MTLPixelFormatBGRA8Unorm, w, h, rt | MTLTextureUsageShaderRead));
+				rmb_set_texture(&own, rmb_new_target(fmt, w, h, rt | MTLTextureUsageShaderRead));
 				target = own;
 			}
 		}
@@ -498,7 +509,7 @@ rmb_retro_pass(int x, int y, int w, int h, int filter, int curve)
 			return 0;
 		}
 
-		[enc setRenderPipelineState:pso];
+		[enc setRenderPipelineState:rmb_fmt_pipe(pso)];
 		[enc setViewport:vp];
 		[enc setScissorRect:sc];
 		[enc setFragmentTexture:retro_src atIndex:0];
@@ -533,10 +544,25 @@ rmb_read(unsigned char *bgra, size_t len)
 		NSUInteger w = color.width, h = color.height, row = w * 4, need = row * h;
 		id<MTLCommandBuffer> cmd;
 		id<MTLBlitCommandEncoder> blit;
+		/* r_hdr's float16 path (TASK196): its SDR fallback, made by rm_fragment_hdr_read into an 8-bit copy */
+		const int hdr = color.pixelFormat != MTLPixelFormatBGRA8Unorm;
+		id<MTLRenderPipelineState> hdr_pso = hdr ? rmb_hdr_read_pipe() : nil;
+		id<MTLTexture> src = color;
 
-		if (len < need)
+		if ((len < need) || (hdr && !hdr_pso))
 		{
 			return 0;
+		}
+
+		if (hdr && (!hdr_read || (hdr_read.width != w) || (hdr_read.height != h)))
+		{
+			rmb_set_texture(&hdr_read, rmb_new_target(MTLPixelFormatBGRA8Unorm, (int)w, (int)h,
+					MTLTextureUsageRenderTarget));
+
+			if (!hdr_read)
+			{
+				return 0;
+			}
 		}
 
 		/* inside a frame: what was drawn so far (the first pass opens in rmb_frame_begin) */
@@ -572,8 +598,24 @@ rmb_read(unsigned char *bgra, size_t len)
 			rm_ledger_create(&rmb_ledger, RM_OBJ_BUFFER);
 		}
 
+		if (hdr)
+		{
+			MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+			id<MTLRenderCommandEncoder> enc;
+
+			rp.colorAttachments[0].texture = hdr_read;
+			rp.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+			rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+			enc = [cmd renderCommandEncoderWithDescriptor:rp];
+			[enc setRenderPipelineState:hdr_pso];
+			[enc setFragmentTexture:color atIndex:0];
+			[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+			[enc endEncoding];
+			src = hdr_read;
+		}
+
 		blit = [cmd blitCommandEncoder];
-		[blit copyFromTexture:color
+		[blit copyFromTexture:src
 				sourceSlice:0
 				sourceLevel:0
 				sourceOrigin:MTLOriginMake(0, 0, 0)
@@ -660,7 +702,7 @@ rmb_force_alpha(id<MTLCommandBuffer> cmd, id<MTLTexture> tex)
 	rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
 	rp.colorAttachments[0].storeAction = MTLStoreActionStore;
 	enc = [cmd renderCommandEncoderWithDescriptor:rp];
-	[enc setRenderPipelineState:pso];
+	[enc setRenderPipelineState:rmb_fmt_pipe(pso)];
 	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 	[enc endEncoding];
 }
@@ -703,7 +745,7 @@ rmb_present_pass(id<MTLCommandBuffer> cmd, id<MTLRenderPipelineState> pso, id<MT
 	rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
 	rp.colorAttachments[0].storeAction = MTLStoreActionStore;
 	enc = [cmd renderCommandEncoderWithDescriptor:rp];
-	[enc setRenderPipelineState:pso];
+	[enc setRenderPipelineState:rmb_fmt_pipe(pso)];
 	[enc setViewport:vp];
 	[enc setFragmentTexture:color atIndex:0];
 	[enc setFragmentBytes:ofs length:sizeof(ofs) atIndex:0];
@@ -764,10 +806,18 @@ rmb_frame_end(void)
 			id<MTLTexture> dst = drawable.texture;
 			/* the frame's command buffer, or with display sync off the present queue's, which reads color (FIX51) */
 			id<MTLCommandBuffer> pcmd = rmb_present_begin(frame_cmd);
-			id<MTLRenderPipelineState> pso = rmb_layer.opaque ? nil : rmb_present_pipe();
+			/* r_hdr's float16 path (TASK196): always the pass, which decodes the frame to linear light once */
+			const int hdr = rmb_hdr_on();
+			id<MTLRenderPipelineState> pso = hdr ? rmb_present_hdr_pipe() : rmb_layer.opaque ? nil : rmb_present_pipe();
 			rm_present_t r;
 			/* at gl1's place: the frame's bottom-left corner on the drawable's (FIX45) */
 			int region = rm_present_region_in((int)color.width, (int)color.height, (int)dst.width, (int)dst.height, &rmb_inset, &r);
+
+			/* a drawable or a frame of the other format (r_hdr switched while it was held) is not presented */
+			if ((dst.pixelFormat != color.pixelFormat) || (hdr && !pso))
+			{
+				region = 0;
+			}
 
 			if (region && pso)
 			{
@@ -805,7 +855,10 @@ rmb_frame_end(void)
 				}
 			}
 
-			[pcmd presentDrawable:drawable];
+			if (dst.pixelFormat == color.pixelFormat)
+			{
+				[pcmd presentDrawable:drawable];
+			}
 		}
 		else
 		{
@@ -901,6 +954,7 @@ rmb_encode_release(void)
 		rmb_set_texture(&own, nil);
 		rmb_set_texture(&depth, nil);
 		rmb_set_texture(&retro_src, nil);
+		rmb_set_texture(&hdr_read, nil);
 		rmb_gbuf_release();
 		rmb_fx_release();
 
@@ -1002,7 +1056,7 @@ rmb_draw_2d_idx(int pipe, int tex, int smp, int sharp, const rmb_vert2d_t *v, in
 		memcpy((unsigned char *)frame_ring.contents + vat, v, vbytes);
 		memcpy((unsigned char *)frame_ring.contents + iat, idx, (size_t)count * sizeof(idx[0]));
 
-		[frame_enc setRenderPipelineState:ps];
+		[frame_enc setRenderPipelineState:rmb_fmt_pipe(ps)];
 		[frame_enc setViewport:(MTLViewport){ 0, 0, (double)color.width, (double)color.height, 0, 1 }];
 		[frame_enc setVertexBuffer:frame_ring offset:(NSUInteger)vat atIndex:0];
 		[frame_enc setVertexBytes:mvp length:16 * sizeof(float) atIndex:1];
@@ -1082,7 +1136,7 @@ rmb_draw_3d_state(int pipe, int ds, const float *mvp, const float *rgba, const r
 	memcpy(u.mvp, mvp, sizeof(u.mvp));
 	memcpy(u.color, rgba, sizeof(u.color));
 
-	[frame_enc setRenderPipelineState:ps];
+	[frame_enc setRenderPipelineState:rmb_fmt_pipe(ps)];
 	[frame_enc setDepthStencilState:dss];
 	[frame_enc setFrontFacingWinding:MTLWindingCounterClockwise];
 	[frame_enc setCullMode:(cull == RMB_CULL_BACK) ? MTLCullModeBack : (cull ? MTLCullModeFront : MTLCullModeNone)];

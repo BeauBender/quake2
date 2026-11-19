@@ -1613,6 +1613,40 @@ int rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen);
  */
 void rmb_colorspace_set(int mode);
 
+/*
+ * r_hdr (TASK196, HD2): the float16 path on (1) or off, applied to the
+ * layer between frames and at rmb_attach; the frame's colour targets,
+ * the present slots and the pipelines follow at the next frame. While
+ * it is on metal_colorspace leaves the layer's colour space alone.
+ */
+void rmb_hdr_set(int active);
+
+/* the float16 path is in force on the layer (the colour targets are RM_FMT_RGBA16F) */
+int rmb_hdr_on(void);
+
+/* metal_hdr_info's line (rm_hdr_info_format), from the layer's state now; 1 when it fits */
+int rmb_hdr_info(char *buf, size_t len);
+
+#ifdef __OBJC__
+#import <Metal/Metal.h>
+
+/*
+ * The pipeline to draw with into a colour target of the format in force:
+ * ps itself on the stock path; on the float16 path its variant with every
+ * BGRA8Unorm colour attachment made RGBA16Float, built at its first use
+ * from the descriptor rmb_new_render_pipe kept (rmb_resource.m). nil when
+ * the variant cannot be built (said once).
+ */
+id<MTLRenderPipelineState> rmb_fmt_pipe(id<MTLRenderPipelineState> ps);
+
+/* newRenderPipelineStateWithDescriptor:error:, keeping a copy of d for rmb_fmt_pipe when it draws into BGRA8Unorm */
+id<MTLRenderPipelineState> rmb_new_render_pipe(MTLRenderPipelineDescriptor *d, NSError **e);
+
+/* the float16 path's present (rm_fragment_present_hdr) and SDR readback (rm_fragment_hdr_read), built at first use */
+id<MTLRenderPipelineState> rmb_present_hdr_pipe(void);
+id<MTLRenderPipelineState> rmb_hdr_read_pipe(void);
+#endif
+
 /* Waits (bounded) for the frames on the GPU and releases the layer and the targets. */
 void rmb_detach(void);
 

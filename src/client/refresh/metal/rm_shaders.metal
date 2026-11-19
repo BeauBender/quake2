@@ -35,6 +35,7 @@ using namespace metal;
 
 #include "common/mtl_shader_math.h"
 #include "common/mtl_retro_math.h"
+#include "common/mtl_hdr_math.h"
 
 constant int rm_texenv [[function_constant(0)]];       /* rm_texenv_t */
 constant bool rm_alpha_test [[function_constant(1)]];
@@ -412,6 +413,34 @@ rm_fragment_present(float4 pos [[position]], texture2d<float, access::read> fram
 		constant int2 &ofs [[buffer(0)]])
 {
 	return float4(frame.read(uint2(int2(pos.xy) + ofs)).rgb, 1.0f);
+}
+
+/*
+ * TASK196 (HD2): the present under r_hdr 1, always this pass. The frame
+ * target (RGBA16Float) holds the stock, sRGB-encoded values; each pixel
+ * is decoded to linear light once (common/mtl_hdr_math.h, extended past
+ * 1.0) for the RGBA16Float drawable in extended linear sRGB, alpha 1.
+ */
+fragment float4
+rm_fragment_present_hdr(float4 pos [[position]], texture2d<float, access::read> frame [[texture(0)]],
+		constant int2 &ofs [[buffer(0)]])
+{
+	float3 c = frame.read(uint2(int2(pos.xy) + ofs)).rgb;
+
+	return float4(mtl_hdr_linear(c.r), mtl_hdr_linear(c.g), mtl_hdr_linear(c.b), 1.0f);
+}
+
+/*
+ * TASK196 (HD2): the SDR fallback rmb_read takes of the RGBA16Float frame
+ * target, a plain clamp of each channel to [0, 1], which the BGRA8Unorm
+ * target it writes rounds to bytes.
+ */
+fragment float4
+rm_fragment_hdr_read(float4 pos [[position]], texture2d<float, access::read> frame [[texture(0)]])
+{
+	float4 c = frame.read(uint2(pos.xy));
+
+	return float4(mtl_hdr_clamp(c.r), mtl_hdr_clamp(c.g), mtl_hdr_clamp(c.b), mtl_hdr_clamp(c.a));
 }
 
 /*

@@ -137,7 +137,7 @@ rmb_rts_open(char *err, size_t errlen)
 		}
 
 		RMB_RTS_SET(trace_pipe, [rmb_device newComputePipelineStateWithFunction:k error:&e]);
-		RMB_RTS_SET(resolve_pipe, trace_pipe ? [rmb_device newRenderPipelineStateWithDescriptor:d error:&e] : nil);
+		RMB_RTS_SET(resolve_pipe, trace_pipe ? rmb_new_render_pipe(d, &e) : nil);
 		RMB_RTS_SET(counts, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * RMB_RTS_COUNTS * sizeof(uint32_t)
 				options:MTLResourceStorageModeShared]);
 		RMB_RTS_SET(m_ents, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * sizeof(ents)
@@ -541,7 +541,7 @@ rmb_rts_resolve(id<MTLRenderCommandEncoder> enc, const void *resolve, size_t res
 		return 0;
 	}
 
-	[enc setRenderPipelineState:resolve_pipe];
+	[enc setRenderPipelineState:rmb_fmt_pipe(resolve_pipe)];
 	[enc setFragmentBytes:resolve length:resolve_len atIndex:0];
 	[enc setFragmentTexture:albedo atIndex:0];
 	[enc setFragmentTexture:light atIndex:1];

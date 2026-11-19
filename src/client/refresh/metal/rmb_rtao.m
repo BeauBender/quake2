@@ -153,7 +153,7 @@ rmb_rtao_open(char *err, size_t errlen)
 		RMB_RTAO_SET(one_pipe, trace_pipe ? [rmb_device newComputePipelineStateWithFunction:k1 error:&e] : nil);
 		RMB_RTAO_SET(lo_pipe, one_pipe ? [rmb_device newComputePipelineStateWithFunction:klo error:&e] : nil);
 		RMB_RTAO_SET(up_pipe, lo_pipe ? [rmb_device newComputePipelineStateWithFunction:kup error:&e] : nil);
-		RMB_RTAO_SET(show_pipe, up_pipe ? [rmb_device newRenderPipelineStateWithDescriptor:d error:&e] : nil);
+		RMB_RTAO_SET(show_pipe, up_pipe ? rmb_new_render_pipe(d, &e) : nil);
 		RMB_RTAO_SET(counts, [rmb_device newBufferWithLength:RMB_FRAMES_IN_FLIGHT * RMB_RTAO_COUNTS * sizeof(uint32_t)
 				options:MTLResourceStorageModeShared]);
 
@@ -534,7 +534,7 @@ rmb_rtao_show(id<MTLRenderCommandEncoder> enc, id<MTLTexture> material)
 		return 0;
 	}
 
-	[enc setRenderPipelineState:show_pipe];
+	[enc setRenderPipelineState:rmb_fmt_pipe(show_pipe)];
 	[enc setFragmentBytes:&view length:sizeof(view) atIndex:0];
 	[enc setFragmentTexture:t_ao atIndex:0];
 	[enc setFragmentTexture:material atIndex:1];

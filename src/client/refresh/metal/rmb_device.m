@@ -70,6 +70,13 @@ rmb_stats_t rmb_counts;
 static int rmb_cs_mode;
 static CGColorSpaceRef rmb_cs;
 static CGColorSpaceRef rmb_cs_own;   /* the layer's own colour space, kept while ours is on it (may be NULL) */
+/*
+ * r_hdr (TASK196, HD2): the float16 path asked for, whether the layer is
+ * set for it (RGBA16Float, extended linear sRGB, EDR), and that colour
+ * space while it is on the layer
+ */
+static int rmb_hdr_want, rmb_hdr_layer;
+static CGColorSpaceRef rmb_hdr_cs;
 
 /* rmb_encode.m */
 void rmb_encode_abandon(void);
@@ -355,9 +362,9 @@ rmb_present_take(int w, int h)
 		return nil;
 	}
 
-	/* a new size: no target of the old one is drawn into again */
-	if (rmb_present_target[slot] && ((rmb_present_target[slot].width != (NSUInteger)w) ||
-			(rmb_present_target[slot].height != (NSUInteger)h)))
+	/* a new size or colour format (r_hdr, TASK196): no target of the old one is drawn into again */
+	if (rmb_present_target[slot] && !rm_hdr_slot_keep((int)rmb_present_target[slot].pixelFormat,
+			(int)rmb_present_target[slot].width, (int)rmb_present_target[slot].height, rm_hdr_format(rmb_hdr_on()), w, h))
 	{
 		for (i = 0; i < RMB_PRESENTS; i++)
 		{
@@ -370,7 +377,7 @@ rmb_present_take(int w, int h)
 		@autoreleasepool
 		{
 			/* as rmb_encode.m's own target */
-			d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+			d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:(MTLPixelFormat)rm_hdr_format(rmb_hdr_on())
 					width:(NSUInteger)w height:(NSUInteger)h mipmapped:NO];
 			d.storageMode = MTLStorageModePrivate;
 			d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
@@ -432,7 +439,9 @@ rmb_next_drawable(void)
 	d = rmb_ahead_take();
 	want = rmb_layer.drawableSize;
 
-	if (d && ((d.texture.width != (NSUInteger)want.width) || (d.texture.height != (NSUInteger)want.height)))
+	/* nor of the layer's pixel format (r_hdr switched after it was acquired, TASK196) */
+	if (d && ((d.texture.width != (NSUInteger)want.width) || (d.texture.height != (NSUInteger)want.height) ||
+			(d.texture.pixelFormat != rmb_layer.pixelFormat)))
 	{
 		d = nil;
 	}
@@ -758,12 +767,13 @@ rmb_open(rmb_caps_t *caps, char *err, size_t errlen)
 static void
 rmb_cs_release(void)
 {
-	if (rmb_layer)
+	/* under r_hdr the layer keeps the extended space, and the one it was found with stays kept (TASK196) */
+	if (rmb_layer && !rmb_hdr_layer)
 	{
 		rmb_layer.colorspace = rmb_cs_own;   /* as found, not untagged */
 	}
 
-	if (rmb_cs_own)
+	if (rmb_cs_own && !rmb_hdr_layer)
 	{
 		CGColorSpaceRelease(rmb_cs_own);
 		rmb_cs_own = NULL;
@@ -784,13 +794,18 @@ rmb_cs_apply(void)
 		if (rmb_cs)
 		{
 			rm_ledger_create(&rmb_ledger, RM_OBJ_STATE);
-			rmb_cs_own = rmb_layer.colorspace;
-			if (rmb_cs_own)
-			{
-				CGColorSpaceRetain(rmb_cs_own);
-			}
 
-			rmb_layer.colorspace = rmb_cs;
+			/* under r_hdr the one found is kept already, and the layer keeps the extended space (TASK196) */
+			if (!rmb_hdr_layer)
+			{
+				rmb_cs_own = rmb_layer.colorspace;
+				if (rmb_cs_own)
+				{
+					CGColorSpaceRetain(rmb_cs_own);
+				}
+
+				rmb_layer.colorspace = rmb_cs;
+			}
 		}
 	}
 	else if (rmb_cs && (!rmb_layer || !rmb_cs_mode))
@@ -804,6 +819,134 @@ rmb_colorspace_set(int mode)
 {
 	rmb_cs_mode = mode ? 1 : 0;
 	rmb_cs_apply();
+}
+
+/*
+ * r_hdr (TASK196, HD2; docs/plans/hdr-output.md, section 2.2): the layer
+ * set for the float16 path, RGBA16Float in extended linear sRGB with
+ * wantsExtendedDynamicRangeContent, or back to the stock BGRA8Unorm with
+ * the colour space metal_colorspace gives it: ours, or the one the layer
+ * was found with, which is kept here when metal_colorspace 0 has not kept
+ * it. Between frames; the frame's targets follow at the next frame.
+ */
+static void
+rmb_hdr_apply(void)
+{
+	if (!rmb_layer || (rmb_hdr_want == rmb_hdr_layer))
+	{
+		return;
+	}
+
+	if (rmb_hdr_want)
+	{
+		CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
+
+		if (!cs)
+		{
+			return;
+		}
+
+		rm_ledger_create(&rmb_ledger, RM_OBJ_STATE);
+		rmb_hdr_cs = cs;
+
+		/* metal_colorspace 0: the layer's colour space as found, put back when r_hdr goes to 0 */
+		if (!rmb_cs)
+		{
+			rmb_cs_own = rmb_layer.colorspace;
+			if (rmb_cs_own)
+			{
+				CGColorSpaceRetain(rmb_cs_own);
+			}
+		}
+
+		rmb_layer.pixelFormat = MTLPixelFormatRGBA16Float;
+		rmb_layer.colorspace = rmb_hdr_cs;
+#if TARGET_OS_OSX
+		rmb_layer.wantsExtendedDynamicRangeContent = YES;
+#else
+		if (@available(iOS 16.0, tvOS 16.0, *))
+		{
+			rmb_layer.wantsExtendedDynamicRangeContent = YES;
+		}
+#endif
+		rmb_hdr_layer = 1;
+		return;
+	}
+
+	rmb_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+#if TARGET_OS_OSX
+	rmb_layer.wantsExtendedDynamicRangeContent = NO;
+#else
+	if (@available(iOS 16.0, tvOS 16.0, *))
+	{
+		rmb_layer.wantsExtendedDynamicRangeContent = NO;
+	}
+#endif
+	rmb_layer.colorspace = rmb_cs ? rmb_cs : rmb_cs_own;
+
+	if (!rmb_cs && rmb_cs_own)
+	{
+		CGColorSpaceRelease(rmb_cs_own);
+	}
+
+	if (!rmb_cs)
+	{
+		rmb_cs_own = NULL;
+	}
+
+	CGColorSpaceRelease(rmb_hdr_cs);
+	rmb_hdr_cs = NULL;
+	rm_ledger_destroy(&rmb_ledger, RM_OBJ_STATE);
+	rmb_hdr_layer = 0;
+}
+
+void
+rmb_hdr_set(int active)
+{
+	rmb_hdr_want = active ? 1 : 0;
+	rmb_hdr_apply();
+}
+
+int
+rmb_hdr_on(void)
+{
+	return rmb_hdr_layer;
+}
+
+/* metal_hdr_info's line: the layer's state as it is now, and the headroom, which this slice does not read (HD1) */
+int
+rmb_hdr_info(char *buf, size_t len)
+{
+	char name[96] = "";
+	int edr = 0, fmt = 0;
+
+	if (rmb_layer)
+	{
+		CGColorSpaceRef cs = rmb_layer.colorspace;
+		CFStringRef n = cs ? CGColorSpaceCopyName(cs) : NULL;
+
+		if (n)
+		{
+			CFStringGetCString(n, name, sizeof(name), kCFStringEncodingUTF8);
+			CFRelease(n);
+		}
+		else if (cs)
+		{
+			snprintf(name, sizeof(name), "unnamed");
+		}
+
+		fmt = (int)rmb_layer.pixelFormat;
+#if TARGET_OS_OSX
+		edr = rmb_layer.wantsExtendedDynamicRangeContent ? 1 : 0;
+#else
+		if (@available(iOS 16.0, tvOS 16.0, *))
+		{
+			edr = rmb_layer.wantsExtendedDynamicRangeContent ? 1 : 0;
+		}
+#endif
+	}
+
+	return rm_hdr_info_format(fmt, name, edr, -1.0f, -1.0f, buf, len);
 }
 
 int
@@ -842,6 +985,7 @@ rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen)
 		/* an opaque layer of about 1720x700 points or more is shown once per refresh (FIX53) */
 		rmb_layer.opaque = rmb_sync ? YES : NO;
 		rmb_cs_apply();
+		rmb_hdr_apply();   /* r_hdr (TASK196) */
 	}
 
 	return 1;
@@ -897,6 +1041,15 @@ rmb_detach(void)
 		rmb_encode_abandon();   /* commits an open frame, presenting nothing */
 		rmb_drain();
 		rmb_ahead_drop();       /* nothing of this layer is left on the queue */
+		if (rmb_hdr_layer)
+		{
+			const int want = rmb_hdr_want;
+
+			/* the stock format and the colour space as found (TASK196); asked for again at the next attach */
+			rmb_hdr_want = 0;
+			rmb_hdr_apply();
+			rmb_hdr_want = want;
+		}
 		if (rmb_cs)
 		{
 			rmb_cs_release();   /* the view's layer is left as found */
