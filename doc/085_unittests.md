@@ -119,7 +119,9 @@ UBSAN=1 test` after a change to this code: the bounds tests rely on the
 sanitizers to report an out-of-bounds access. The test objects are built
 with `-fno-sanitize-recover=undefined` in that build, so a report of
 undefined behaviour ends the run with a failure; the shipped binaries
-keep the default and only print it.
+keep the default and only print it. The gate and CI run that build on
+every run, in a scratch copy of the tree, through
+`tests/check-unit-sanitizers.sh`.
 
 ## Coverage
 

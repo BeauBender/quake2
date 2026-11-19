@@ -28,10 +28,10 @@
 # - LeakSanitizer is off (detect_leaks=0): it is not supported by the ASan
 #   runtime on macOS on Apple silicon (an explicit detect_leaks=1 is
 #   refused there with "detect_leaks is not supported on this platform"
-#   and the run aborts), and the runner frees neither the hunks nor the
-#   buffers its fixtures and the engine's one-shot loaders keep for the
-#   life of the process, so on a platform that has it, it would report the
-#   harness, not a loader. Nothing else is relaxed.
+#   and the run aborts, status 134, on macOS 27.2 arm64), so detect_leaks=0
+#   is what that runtime does anyway, written out so a platform that has
+#   LSan runs the same check. Whether the suite is leak-free there is not
+#   known and is not what this check is for. Nothing else is relaxed.
 # - A run that exits 0 but whose output still holds a sanitizer report
 #   ("runtime error:", "ERROR: AddressSanitizer",
 #   "SUMMARY: UndefinedBehaviorSanitizer") fails too.
