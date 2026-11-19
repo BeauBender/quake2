@@ -191,12 +191,13 @@ printf 'static void\nMod_LoadFaces(model_t *m, byte *b, lump_t *l)\n{\n}\n' > "$
 expect_refused "a fifth loader" "${tmp:?}/fifth"
 
 # mutate file in a copy at dir: the Mod_CheckNodes line of its condition
-# replaced by the lines of the awk program's "repl" (\n separated), and
-# "before" printed ahead of the condition's first line when set
+# replaced by the lines of repl, and before printed ahead of the
+# condition's first line when it is not empty
 mutate() { # dir file repl before
-	awk -v repl="$3" -v before="$4" '
-		index($0, "!Mod_CheckLumps(mod_base, header, modfilelen, why, sizeof(why)) ||") && before != "" { print before }
-		index($0, "!Mod_CheckNodes(mod_base, header, why, sizeof(why)) ||") { print repl; next }
+	# through the environment: awk -v refuses a value with a newline
+	REPL=$3 BEFORE=$4 awk '
+		index($0, "!Mod_CheckLumps(mod_base, header, modfilelen, why, sizeof(why)) ||") && ENVIRON["BEFORE"] != "" { print ENVIRON["BEFORE"] }
+		index($0, "!Mod_CheckNodes(mod_base, header, why, sizeof(why)) ||") { print ENVIRON["REPL"]; next }
 		{ print }' "$root/$2" > "$1/$2"
 	cmp -s "$root/$2" "$1/$2" &&
 		{ echo "check-bsp-loader: selftest: the mutant of $2 changed nothing"; exit 1; }
