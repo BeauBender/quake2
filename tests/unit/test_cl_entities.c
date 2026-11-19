@@ -319,3 +319,80 @@ TEST(cl_spinning_light_at_time_edges)
 	check_anim_at_time(EF_SPINNINGLIGHTS, INT_MIN);
 	check_anim_at_time(EF_SPINNINGLIGHTS, -1);
 }
+
+/*
+ * The client clock's step (CL_ClockStep, FIX102). In a pin record's
+ * timedemo a host stall of a server frame or more (the capture of a large
+ * frame) is cut below a server frame, so the low clamp in CL_AddEntities
+ * still puts the time one server frame behind the server's, as on every
+ * other frame. Anywhere else the step is the host's time, as before.
+ */
+static int
+clock_step(int timedemo, int capture, int timedelta)
+{
+	int step;
+
+	stub_client_cvars();
+	cl_timedemo->value = (float)timedemo;
+	stub_pins_run = capture ? 1 : 0;
+	step = CL_ClockStep(timedelta);
+	cl_timedemo->value = 0;
+	stub_pins_run = 0;
+	return step;
+}
+
+TEST(cl_clock_step_outside_a_pin_record)
+{
+	/* no record: the host's time, stall or not, timedemo or not */
+	T_EQ_INT(clock_step(0, 0, 16999), 16);
+	T_EQ_INT(clock_step(0, 0, 250000), 250);
+	T_EQ_INT(clock_step(1, 0, 250000), 250);
+	/* a capture without timedemo: the host's time too */
+	T_EQ_INT(clock_step(0, 30, 250000), 250);
+	T_EQ_INT(clock_step(0, 30, 5000001), 5000);
+}
+
+TEST(cl_clock_step_pin_record_below_a_server_frame)
+{
+	T_EQ_INT(clock_step(1, 30, 0), 0);
+	T_EQ_INT(clock_step(1, 30, 16999), 16);
+	T_EQ_INT(clock_step(1, 30, 99999), 99);
+}
+
+TEST(cl_clock_step_pin_record_stall)
+{
+	T_EQ_INT(clock_step(1, 30, 100000), 99);
+	T_EQ_INT(clock_step(1, 1, 104999), 99);
+	T_EQ_INT(clock_step(1, 30, 500000), 99);
+}
+
+/* A stalled frame of a pin record gets the time of a frame that did not
+   stall: one server frame behind the server, whatever the stall. */
+static int
+pin_record_time_after(int timedelta)
+{
+	stub_client_cvars();
+	memset(&cl, 0, sizeof(cl));
+	memset(&cls, 0, sizeof(cls));
+	cls.state = ca_active;
+	cl.frame.valid = true;
+	/* the frame before was clamped one server frame behind 4000; the
+	   next server frame has come, then this frame's step */
+	cl.time = 3900;
+	cl.frame.servertime = 4100;
+	cl_timedemo->value = 1;
+	stub_pins_run = 1;
+	cl.time += CL_ClockStep(timedelta);
+	CL_AddEntities();
+	cl_timedemo->value = 0;
+	stub_pins_run = 0;
+	return cl.time;
+}
+
+TEST(cl_clock_pin_record_stall_keeps_trace_time)
+{
+	T_EQ_INT(pin_record_time_after(16000), 4000);
+	T_EQ_INT(pin_record_time_after(101000), 4000);
+	T_EQ_INT(pin_record_time_after(105000), 4000);
+	T_EQ_INT(pin_record_time_after(450000), 4000);
+}

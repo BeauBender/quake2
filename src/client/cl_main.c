@@ -965,7 +965,7 @@ CL_Frame(int packetdelta, int renderdelta, int timedelta, qboolean packetframe, 
 	cls.nframetime = packetdelta / 1000000.0f;
 	cls.rframetime = renderdelta / 1000000.0f;
 	cls.realtime = curtime;
-	cl.time += timedelta / 1000;
+	cl.time += CL_ClockStep(timedelta);
 
 	// Don't extrapolate too far ahead.
 	if (cls.nframetime > 0.5f)
