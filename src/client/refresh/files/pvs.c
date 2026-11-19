@@ -96,6 +96,32 @@ Mod_DecompressVis(const byte *in, int inlen, int row)
 	return decompressed;
 }
 
+/*
+===================
+Mod_ClusterPVSRow
+
+The PVS row of cluster in vis (vislen bytes), or novis for a map without
+visibility and for a cluster outside [0, numclusters): the cluster is a
+leaf's, from the map, and Mod_CheckVis put only the first numclusters
+offsets inside the lump (ref_metal's Mod_ClusterPVS guards the same way).
+===================
+*/
+const byte *
+Mod_ClusterPVSRow(const dvis_t *vis, int vislen, int cluster, const byte *novis)
+{
+	int ofs;
+
+	if (!vis || (cluster < 0) || (cluster >= vis->numclusters))
+	{
+		return novis;
+	}
+
+	ofs = vis->bitofs[cluster][DVIS_PVS];
+
+	return Mod_DecompressVis((const byte *)vis + ofs, vislen - ofs,
+		(vis->numclusters + 7) >> 3);
+}
+
 float
 Mod_RadiusFromBounds(const vec3_t mins, const vec3_t maxs)
 {

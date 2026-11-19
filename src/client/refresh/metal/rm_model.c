@@ -1077,7 +1077,8 @@ Mod_LoadBrushModel(model_t *mod, void *buffer, int modfilelen)
 	if (!Mod_CheckLumps(mod_base, header, modfilelen, why, sizeof(why)) ||
 		!Mod_CheckVis(mod_base, header, why, sizeof(why)) ||
 		!Mod_CheckNodes(mod_base, header, why, sizeof(why)) ||
-		!Mod_CheckFaceEdges(mod_base, header, why, sizeof(why)))
+		!Mod_CheckFaceEdges(mod_base, header, why, sizeof(why)) ||
+		!Mod_CheckLeafs(mod_base, header, why, sizeof(why)))
 	{
 		RM_Refuse(mod, "%s", why);
 	}
