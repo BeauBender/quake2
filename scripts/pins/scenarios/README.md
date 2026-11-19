@@ -136,6 +136,8 @@ companion when a card judges them. For `hud2d*` and `cinematic`, which draw no
 | `world-metalfx2` | world | `models` |
 | `world-metalfx3` | world | `models` |
 | `world-metalfx-interp` | world | `models` |
+| `retro` | world | `models` |
+| `retro-filter` | world | `models` |
 | `dlights` | world,dynamic-lights | `particles` |
 | `dlights-lmcubic` | world,dynamic-lights | `particles` |
 | `models` | world,entities,alias-models | `-` |
