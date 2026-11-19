@@ -40,6 +40,7 @@ check-static-modules.sh
 check-stop-invariants.sh
 check-title-fit.sh
 check-tvos.sh
+check-unit-sanitizers.sh
 check-upscale-metalfx.sh
 check-upscale-report.sh
 check-upscale-vt.sh
