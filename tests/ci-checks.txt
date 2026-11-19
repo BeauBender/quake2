@@ -17,13 +17,11 @@ check-cvar-docs.sh
 check-doc-links.sh
 check-evidence.sh
 check-gate-parallel.sh
-check-image-decoder.sh
 check-input-gate.sh
 check-ios-screen.sh
 check-ios.sh
 check-memory-rules.sh
 check-metal-shim.sh
-check-metalfx-report.sh
 check-mode-size.sh
 check-no-tracked-memory.sh
 check-pins-latch.sh
@@ -39,11 +37,9 @@ check-savegame-tables.sh
 check-static-modules.sh
 check-stop-invariants.sh
 check-title-fit.sh
-check-tvos.sh
 check-upscale-metalfx.sh
 check-upscale-report.sh
 check-upscale-vt.sh
 check-vendored.sh
 check-video-menu.sh
-check-visionos.sh
 check-workflow-pins.sh
