@@ -171,6 +171,8 @@ typedef struct
 } rtg_cvar_t;
 
 static const rtg_cvar_t rtg_cvars[] = {
+	/* TASK195's A/B side: an overlay of the tuning settings' values, which turns on no pass itself */
+	{ "r_rt_ab", 0 },
 	/* RT5's ambient occlusion pass (TASK57): its rays are what it draws */
 	{ "r_rt_ao", 1 },
 	/* the AO's floor, ray length, rays, trace size and noise step: read only while r_rt_ao runs */
