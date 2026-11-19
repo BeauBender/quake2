@@ -1861,6 +1861,30 @@ int rm_hdr_fx_mode(int active, int mode);
 int rm_hdr_info_format(int fmt, const char *cs, int edr, float now, float potential, char *buf, size_t len);
 
 /*
+ * TASK196 (HD3): the report line printed on a live change of r_hdr or
+ * r_hdr_peak (without a newline): "off"; "on, shown at SDR" with the
+ * reason when the headroom now is unavailable or not above 1.0; else
+ * "on" with the peak in force (mtl_hdr_peak of cvar and now), the cvar
+ * and the headroom now and its potential. 1 when it fits; 0, with buf
+ * empty, when it does not.
+ */
+int rm_hdr_report(int active, float cvar, float now, float potential, char *buf, size_t len);
+
+/* metal_hdr_info's second line: the peak in force, r_hdr_peak and the headroom now; as rm_hdr_report */
+int rm_hdr_peak_line(float cvar, float now, char *buf, size_t len);
+
+/* a float16 (IEEE 754 binary16) from its bits, the subnormals, infinities and NaN included */
+float rm_hdr_half(unsigned short h);
+
+/*
+ * metal_hdr_probe's line: the pixel (x, y) of the drawable, its format
+ * (RM_FMT_RGBA16F: px is 8 bytes, four little-endian float16; RM_FMT_BGRA8:
+ * 4 bytes, b g r a; any other: not read) and its four values, and whether
+ * a colour component is above SDR white (1.0). As rm_hdr_report.
+ */
+int rm_hdr_probe_format(int fmt, int x, int y, const unsigned char *px, char *buf, size_t len);
+
+/*
  * Loads ref_metal.metallib from dir and builds the 2D pipeline table and
  * the samplers. 0 with err filled on failure.
  */
