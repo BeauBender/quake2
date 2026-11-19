@@ -863,8 +863,8 @@ rmb_hdr_apply(void)
 		rmb_layer.colorspace = rmb_hdr_cs;
 #if TARGET_OS_OSX
 		rmb_layer.wantsExtendedDynamicRangeContent = YES;
-#else
-		if (@available(iOS 16.0, tvOS 16.0, *))
+#elif !TARGET_OS_TV /* not on tvOS (the plan, section 3) */
+		if (@available(iOS 16.0, *))
 		{
 			rmb_layer.wantsExtendedDynamicRangeContent = YES;
 		}
@@ -876,8 +876,8 @@ rmb_hdr_apply(void)
 	rmb_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
 #if TARGET_OS_OSX
 	rmb_layer.wantsExtendedDynamicRangeContent = NO;
-#else
-	if (@available(iOS 16.0, tvOS 16.0, *))
+#elif !TARGET_OS_TV /* not on tvOS (the plan, section 3) */
+	if (@available(iOS 16.0, *))
 	{
 		rmb_layer.wantsExtendedDynamicRangeContent = NO;
 	}
@@ -938,8 +938,8 @@ rmb_hdr_info(char *buf, size_t len)
 		fmt = (int)rmb_layer.pixelFormat;
 #if TARGET_OS_OSX
 		edr = rmb_layer.wantsExtendedDynamicRangeContent ? 1 : 0;
-#else
-		if (@available(iOS 16.0, tvOS 16.0, *))
+#elif !TARGET_OS_TV /* not on tvOS (the plan, section 3) */
+		if (@available(iOS 16.0, *))
 		{
 			edr = rmb_layer.wantsExtendedDynamicRangeContent ? 1 : 0;
 		}
