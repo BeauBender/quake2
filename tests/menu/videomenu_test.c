@@ -148,7 +148,8 @@ Writes(const char *n)
 	return i < 0 ? 0 : writes[i];
 }
 
-void Cbuf_AddText(const char *t) { (void)t; }
+static int restarts;	/* the vid_restart commands queued */
+void Cbuf_AddText(const char *t) { if (t && strstr(t, "vid_restart")) { restarts++; } }
 void Com_Printf(const char *f, ...) { (void)f; }
 
 void
@@ -1078,6 +1079,48 @@ test_ray_tracing_screen(void)
 	}
 }
 
+/* TASK183: the ray-tracing screen under a presentation: Enhanced runs the
+   effects, so their switches are greyed "set by the presentation" showing on
+   and their tuning rows stay live; r_rt_ao is never written. Mode 0 is as before. */
+static void
+test_rt_screen_under_presentation(void)
+{
+	/* Enhanced with the user's r_rt_ao 0 */
+	SetCv("r_presentation", "1");
+	OpenRT("1");
+	{
+		const char *const sw[] = { "shadows", "sun", "ambient occlusion", "water reflections" };
+		menulist_s *l = (menulist_s *)RTItem("ambient occlusion");
+		int w = Writes("r_rt_ao");
+
+		CHECK(RTGreyed("ambient occlusion") && RTItem("ambient occlusion")->statusbar &&
+			!strcmp(RTItem("ambient occlusion")->statusbar, "set by the presentation"),
+			"AO switch under Enhanced: greyed %d, %s", RTGreyed("ambient occlusion"),
+			RTItem("ambient occlusion")->statusbar ? RTItem("ambient occlusion")->statusbar : "(none)");
+		CHECK(l->curvalue == 1, "AO switch shows %d under Enhanced", l->curvalue);
+		for (int i = 0; i < 4; i++)
+		{
+			CHECK(RTGreyed(sw[i]) && ((menulist_s *)RTItem(sw[i]))->curvalue == 1, "%s under Enhanced", sw[i]);
+		}
+		CHECK(!RTGreyed("gun shadow"), "gun shadow greyed under Enhanced");
+		CHECK(!RTGreyed("AO range") && !RTGreyed("AO minimum") && !RTGreyed("AO scale"),
+			"AO tuning greyed under Enhanced");
+		CHECK(!RTGreyed("sun floor") && !RTGreyed("water reflect"), "sun or water tuning greyed under Enhanced");
+		RTItem("AO range");
+		Menu_SlideItem(rt_menu, 1);
+		CHECK(Cvar_VariableValue("r_rt_ao_range") > 128.0f, "r_rt_ao_range %s", Str("r_rt_ao_range"));
+		CHECK(Writes("r_rt_ao") == w && !strcmp(Str("r_rt_ao"), "0"), "r_rt_ao written under Enhanced: %s", Str("r_rt_ao"));
+	}
+
+	/* the same at mode 0: the switch is live and off, its tuning rows wait for it */
+	SetCv("r_presentation", "0");
+	OpenRT("1");
+	CHECK(!RTGreyed("ambient occlusion") && ((menulist_s *)RTItem("ambient occlusion"))->curvalue == 0,
+		"AO switch at mode 0 not live and off");
+	CHECK(RTGreyed("AO range") && !strcmp(RTItem("AO range")->statusbar, "turn on ambient occlusion first"),
+		"AO range at mode 0 says %s", RTItem("AO range")->statusbar);
+}
+
 /* TASK183: the "presentation" item: every mode shown, a mode that does not
    apply carrying its reason and never written; a mode writes no other cvar */
 static void
@@ -1106,8 +1149,10 @@ test_presentation_item(void)
 	{
 		before[i] = Writes(rt[i]);
 	}
+	restarts = 0;
 	Slide("presentation", 1);
 	Apply();
+	CHECK(restarts == 1, "Apply to Enhanced queued %d vid_restart", restarts);
 	CHECK(!strcmp(Str("r_presentation"), "1"), "r_presentation %s after Enhanced", Str("r_presentation"));
 	for (int i = 0; i < 4; i++)
 	{
@@ -1173,6 +1218,7 @@ main(void)
 	test_ray_tracing_entry_is_always_present();
 	test_ray_tracing_screen();
 	test_presentation_item();
+	test_rt_screen_under_presentation();
 
 	printf("videomenu_test: %d checks, %d failed\n", checks, failed);
 

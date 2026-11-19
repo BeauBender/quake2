@@ -557,6 +557,46 @@ VidRules_RTItem(int i, const char *renderer, int available, int effect_on)
 	return (vidrule_t){ 1, "applies from the next frame" };
 }
 
+/*
+ * TASK183: the switches the presentation in use decides. Enhanced reads
+ * rows 0 to 3 (shadows, sun, ambient occlusion, water) as on, as the
+ * renderer's RM_Effect does; the rows are the first four of rt_controls.
+ */
+int
+VidRules_RTOverridden(int i, const char *renderer, int available, float presentation)
+{
+	const vidrt_control_t *c = VidRules_RTControl(i);
+
+	return c && (c->effect < 0) && (i < 4) &&
+		(VidRules_PresentationIndex(presentation) == VIDPRES_ENHANCED) &&
+		VidRules_PresentationMode(VIDPRES_ENHANCED, renderer, available).enabled;
+}
+
+/* the value of a switch as the renderer runs it: 1 when the mode decides it, else the cvar's */
+int
+VidRules_RTEffective(int i, const char *renderer, int available, float presentation, float user)
+{
+	return VidRules_RTOverridden(i, renderer, available, presentation) || (user != 0.0f);
+}
+
+vidrule_t
+VidRules_RTRow(int i, const char *renderer, int available, float presentation, float effect_user)
+{
+	const vidrt_control_t *c = VidRules_RTControl(i);
+	int on = 1;
+
+	if (c && c->effect >= 0)
+	{
+		on = VidRules_RTEffective(c->effect, renderer, available, presentation, effect_user);
+	}
+	if (VidRules_Renderer(renderer) == VIDREF_METAL && available &&
+		VidRules_RTOverridden(i, renderer, available, presentation))
+	{
+		return (vidrule_t){ 0, "set by the presentation" };
+	}
+	return VidRules_RTItem(i, renderer, available, on);
+}
+
 /* TASK183: the names in the order of r_presentation's values, never renumbered */
 static const char *const pres_names[VIDPRES_COUNT + 1] = { "Stock", "Enhanced", "Retro", "Ray traced", NULL };
 

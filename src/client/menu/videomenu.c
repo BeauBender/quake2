@@ -738,14 +738,15 @@ static void
 RTMenu_Rules(void)
 {
 	const int available = (Cvar_VariableValue("r_rt_available") != 0);
+	const float pres = Cvar_VariableValue("r_presentation");
 
 	for (int i = 0; i < s_rt_rows; i++)
 	{
 		const vidrt_control_t *c = VidRules_RTControl(i);
 		const vidrt_control_t *e = VidRules_RTControl(c->effect);
-		const int on = !e || (Cvar_VariableValue(e->cvar) != 0);
 
-		RTSetRule(s_rt_items[i], VidRules_RTItem(i, s_built_renderer, available, on));
+		RTSetRule(s_rt_items[i], VidRules_RTRow(i, s_built_renderer, available, pres,
+				e ? Cvar_VariableValue(e->cvar) : 0.0f));
 	}
 
 	RTSetRule(&s_rt_defaults_action.generic, VidRules_RTItem(-1, s_built_renderer, available, 1));
@@ -792,7 +793,9 @@ RTMenu_Values(void)
 		}
 		else if (c->effect < 0)
 		{
-			((menulist_s *)s_rt_items[i])->curvalue = (Cvar_VariableValue(c->cvar) != 0);
+			((menulist_s *)s_rt_items[i])->curvalue = VidRules_RTEffective(i, s_built_renderer,
+				(Cvar_VariableValue("r_rt_available") != 0), Cvar_VariableValue("r_presentation"),
+				Cvar_VariableValue(c->cvar));
 		}
 	}
 }

@@ -214,6 +214,20 @@ int VidRules_PresentationIndex(float value);
 vidrule_t VidRules_PresentationMode(int mode, const char *renderer, int available);
 
 /*
+ * The ray-tracing screen's switches under the presentation in use (the
+ * plan's section 2.3). VidRules_RTOverridden: whether the mode decides
+ * switch i (Enhanced: shadows, sun, ambient occlusion, water).
+ * VidRules_RTEffective: the switch as the renderer runs it, 1 when the
+ * mode decides it, else user (the cvar's value) not 0. VidRules_RTRow is
+ * VidRules_RTItem under the mode: a switch the mode decides is greyed
+ * "set by the presentation", a slider is live while its effect is on as
+ * run, effect_user being the cvar of its switch. Mode 0 is VidRules_RTItem.
+ */
+int VidRules_RTOverridden(int i, const char *renderer, int available, float presentation);
+int VidRules_RTEffective(int i, const char *renderer, int available, float presentation, float user);
+vidrule_t VidRules_RTRow(int i, const char *renderer, int available, float presentation, float effect_user);
+
+/*
  * The ray-tracing screen's status bar under the presentation mode in use
  * (r_presentation): the screen shows the user's own values, and under a
  * mode that decides the switches it says the mode overrides them.
