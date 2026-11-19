@@ -73,6 +73,8 @@ typedef struct
 	int nverts;
 	int vis[8];		/* a small visibility lump, written when nvis is set */
 	int nvis;
+	texinfo_t texinfos[3];	/* the texinfo lump when ntexinfo is set, else one texinfo */
+	int ntexinfo;
 } gmap_t;
 
 static gmap_t g;
@@ -180,7 +182,14 @@ g_build(void)
 	LUMP(LUMP_ENTITIES, ents, (int)sizeof(ents));
 	LUMP(LUMP_PLANES, planes, (int)sizeof(planes));
 	LUMP(LUMP_NODES, g.nodes, g.nnodes * (int)sizeof(dnode_t));
-	LUMP(LUMP_TEXINFO, &tex, (int)sizeof(tex));
+	if (g.ntexinfo)
+	{
+		LUMP(LUMP_TEXINFO, g.texinfos, g.ntexinfo * (int)sizeof(texinfo_t));
+	}
+	else
+	{
+		LUMP(LUMP_TEXINFO, &tex, (int)sizeof(tex));
+	}
 	LUMP(LUMP_LEAFS, g.leafs, g.nleafs * (int)sizeof(dleaf_t));
 	LUMP(LUMP_LEAFBRUSHES, &leafbrush, (int)sizeof(leafbrush));
 	LUMP(LUMP_MODELS, g.models, g.nmodels * (int)sizeof(dmodel_t));
@@ -761,4 +770,150 @@ TEST(bspcheck_face_edges_past_surfedges)
 	c_default();
 	g.edges[3].v[0] = 3;	/* vertex 3 of 3 */
 	C_REFUSED(g_build(), 3, "face 0 has an edge past the 3 vertices");
+}
+
+/*
+ * dnode_t.firstface and numfaces are unsigned short on disk: a map with
+ * more than 32768 faces has nodes whose faces start at 32768 or beyond,
+ * and Mod_LoadNodes reads them unsigned. The face lump is sized for
+ * 0x8001 faces after the built lumps; node 1 holds the last of them.
+ */
+TEST(bspcheck_node_faces_past_32k)
+{
+	dheader_t *h;
+	int len, ofs;
+
+	c_default();
+	g.nodes[1].firstface = 0x8000;
+	g.nodes[1].numfaces = 1;
+	len = g_build();
+	h = (dheader_t *)gbuf;
+	ofs = (len + 3) & ~3;
+	h->lumps[LUMP_FACES].fileofs = ofs;
+	h->lumps[LUMP_FACES].filelen = 0x8001 * (int)sizeof(dface_t);
+	len = ofs + h->lumps[LUMP_FACES].filelen;
+	T_REQUIRE(len <= MAX_MAP_VISIBILITY + 0x40000);
+
+	c_why[0] = '\0';
+	T_EQ_INT(Mod_CheckLumps(gbuf, h, len, c_why, sizeof(c_why)), true);
+	T_EQ_INT(Mod_CheckNodes(gbuf, h, c_why, sizeof(c_why)), true);
+	T_EQ_STR(c_why, "");
+
+	/* one past the lump is still refused */
+	((dnode_t *)(gbuf + h->lumps[LUMP_NODES].fileofs))[1].firstface = 0x8001;
+	T_EQ_INT(Mod_CheckNodes(gbuf, h, c_why, sizeof(c_why)), false);
+	T_CHECK(strstr(c_why, "node 1 has surfaces 32769 to 32770 of 32769") != NULL);
+}
+
+/* n texinfos and their nexts (0 or less ends a chain, as Mod_LoadTexinfo reads it) */
+static void
+c_texinfos(int n, int next0, int next1, int next2)
+{
+	int i;
+
+	c_default();
+	g.ntexinfo = n;
+
+	for (i = 0; i < n; i++)
+	{
+		Q_strlcpy(g.texinfos[i].texture, "e1u1/floor1_1", sizeof(g.texinfos[i].texture));
+	}
+
+	g.texinfos[0].nexttexinfo = next0;
+	g.texinfos[1].nexttexinfo = next1;
+	g.texinfos[2].nexttexinfo = next2;
+}
+
+TEST(bspcheck_texinfo_chains)
+{
+	/* a stock animation, 1 -> 2 -> 1, and texinfo 0 not animated */
+	c_texinfos(3, -1, 2, 1);
+	T_EQ_INT(c_check(g_build()), 4);
+
+	/* texinfo 0 runs into the 2-cycle 1 -> 2 -> 1 and never comes back */
+	c_texinfos(3, 1, 2, 1);
+	C_REFUSED(g_build(), 0, "a texinfo animation chain leaves the lump or never ends");
+
+	/* a next of 3 in a lump of 3 */
+	c_texinfos(3, -1, 3, -1);
+	C_REFUSED(g_build(), 0, "a texinfo animation chain leaves the lump or never ends");
+
+	/* a 32-byte name with no NUL */
+	c_texinfos(3, -1, -1, -1);
+	memset(g.texinfos[2].texture, 'a', sizeof(g.texinfos[2].texture));
+	C_REFUSED(g_build(), 0, "texinfo 2 has an unterminated texture name");
+}
+
+/*
+ * A header whose lumps are all empty at the end of the header, but lump,
+ * filelen bytes of zeros there; the caller frees it.
+ */
+static byte *
+c_flat(int lump, int filelen, int *len)
+{
+	byte *buf = calloc(1, sizeof(dheader_t) + (size_t)filelen);
+	dheader_t *h = (dheader_t *)buf;
+	int i;
+
+	T_REQUIRE(buf != NULL);
+
+	h->ident = IDBSPHEADER;
+	h->version = BSPVERSION;
+
+	for (i = 0; i < HEADER_LUMPS; i++)
+	{
+		h->lumps[i].fileofs = (int)sizeof(dheader_t);
+	}
+
+	h->lumps[lump].filelen = filelen;
+	*len = (int)sizeof(dheader_t) + filelen;
+	return buf;
+}
+
+TEST(bspcheck_lump_limits)
+{
+	byte *buf;
+	int len;
+
+	/* the lighting at its limit passes, one byte over it is refused */
+	buf = c_flat(LUMP_LIGHTING, MAX_MAP_LIGHTING, &len);
+	T_EQ_INT(Mod_CheckLumps(buf, (dheader_t *)buf, len, c_why, sizeof(c_why)), true);
+	free(buf);
+
+	buf = c_flat(LUMP_LIGHTING, MAX_MAP_LIGHTING + 1, &len);
+	T_EQ_INT(Mod_CheckLumps(buf, (dheader_t *)buf, len, c_why, sizeof(c_why)), false);
+	T_EQ_STR(c_why, "2097153 bytes of lighting, more than 2097152");
+	free(buf);
+
+	/* the edges at their limit pass, one over it is refused */
+	buf = c_flat(LUMP_EDGES, MAX_MAP_EDGES * (int)sizeof(dedge_t), &len);
+	T_EQ_INT(Mod_CheckLumps(buf, (dheader_t *)buf, len, c_why, sizeof(c_why)), true);
+	free(buf);
+
+	buf = c_flat(LUMP_EDGES, (MAX_MAP_EDGES + 1) * (int)sizeof(dedge_t), &len);
+	T_EQ_INT(Mod_CheckLumps(buf, (dheader_t *)buf, len, c_why, sizeof(c_why)), false);
+	T_EQ_STR(c_why, "128001 edges, more than 128000");
+	free(buf);
+}
+
+/*
+ * More clusters than MAX_MAP_LEAFS, in a visibility lump with room for
+ * all their offsets (each 0, inside the lump): only the leaf bound
+ * refuses it.
+ */
+TEST(bspcheck_vis_clusters_past_leafs)
+{
+	byte *buf;
+	int len;
+
+	buf = c_flat(LUMP_VISIBILITY, 4 + 8 * MAX_MAP_LEAFS, &len);
+	*(int *)(buf + sizeof(dheader_t)) = MAX_MAP_LEAFS;
+	T_EQ_INT(Mod_CheckVis(buf, (dheader_t *)buf, c_why, sizeof(c_why)), true);
+	free(buf);
+
+	buf = c_flat(LUMP_VISIBILITY, 4 + 8 * (MAX_MAP_LEAFS + 1), &len);
+	*(int *)(buf + sizeof(dheader_t)) = MAX_MAP_LEAFS + 1;
+	T_EQ_INT(Mod_CheckVis(buf, (dheader_t *)buf, c_why, sizeof(c_why)), false);
+	T_EQ_STR(c_why, "visibility of 65537 clusters in 524300 bytes");
+	free(buf);
 }
