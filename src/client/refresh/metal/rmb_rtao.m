@@ -534,7 +534,11 @@ rmb_rtao_show(id<MTLRenderCommandEncoder> enc, id<MTLTexture> material)
 		return 0;
 	}
 
-	[enc setRenderPipelineState:rmb_fmt_pipe(show_pipe)];
+	if (!rmb_fmt_bind(enc, show_pipe))
+	{
+		return 0;
+	}
+
 	[enc setFragmentBytes:&view length:sizeof(view) atIndex:0];
 	[enc setFragmentTexture:t_ao atIndex:0];
 	[enc setFragmentTexture:material atIndex:1];

@@ -438,7 +438,11 @@ rmb_rtsun_show(id<MTLRenderCommandEncoder> enc)
 		return 0;
 	}
 
-	[enc setRenderPipelineState:rmb_fmt_pipe(show_pipe)];
+	if (!rmb_fmt_bind(enc, show_pipe))
+	{
+		return 0;
+	}
+
 	[enc setFragmentBytes:&view length:sizeof(view) atIndex:0];
 	[enc setFragmentTexture:t_class atIndex:0];
 	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];

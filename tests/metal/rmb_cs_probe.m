@@ -5,9 +5,11 @@
  * host test covers rmb_*.m, and the 1 -> 0 bug of TASK121 lived here.
  *
  * The renderer's own code is under test, not a copy: this file includes
- * rmb_device.m whole (its two functions are static) and defines the three
- * symbols that file calls elsewhere (rmb_encode_abandon, rmb_encode_release,
- * rmb_resources_close) as empty stubs; rm_pure.c supplies the ledger (and
+ * rmb_device.m whole (its two functions are static) and rmb_resource.m
+ * (FIX133: rmb_fmt_pipe and rmb_fmt_bind, with its test seam fmt_refuse),
+ * and defines the symbols those files call elsewhere (rmb_encode_abandon,
+ * rmb_encode_release, rmb_encode_split, rmb_frame_serial) as empty stubs;
+ * rm_pure.c supplies the ledger (and
  * is linked with what the other host tests link it with). A
  * standalone CAMetalLayer is set up as rmb_attach does (rmb_attach itself
  * runs on it), no window and no game data. With no Metal device the probe
@@ -21,10 +23,12 @@
 #include <unistd.h>
 
 #include "rmb_device.m"
+#include "rmb_resource.m"
 
 void rmb_encode_abandon(void) {}
 void rmb_encode_release(void) {}
-void rmb_resources_close(void) {}
+void rmb_encode_split(void) {}
+unsigned long rmb_frame_serial;
 void Com_Printf(const char *fmt, ...) { (void)fmt; }   /* shared.c's, for the files linked with it */
 
 static int failures, checks;
@@ -96,6 +100,121 @@ count_of(CGColorSpaceRef cs)
 	return cs ? (long)CFGetRetainCount(cs) : 0;
 }
 
+/*
+ * FIX133: a command buffer and a render encoder that count what is asked of
+ * them (presentDrawable:, setRenderPipelineState:), and the pipeline they
+ * are given; no GPU work
+ */
+@interface probe_mock : NSObject
+@property (nonatomic) int presents, binds;
+@property (nonatomic, strong) id bound;
+@end
+
+@implementation probe_mock
+- (void)presentDrawable:(id)drawable
+{
+	(void)drawable;
+	self.presents++;
+}
+- (void)setRenderPipelineState:(id)ps
+{
+	self.bound = ps;
+	self.binds++;
+}
+@end
+
+/*
+ * FIX133: with the float16 path on, a pipeline whose RGBA16Float variant is
+ * not built (fmt_refuse) is never handed back or bound (rmb_fmt_pipe nil,
+ * rmb_fmt_bind 0 and no bind), that frame presents nothing, and HDR is off
+ * at the next rmb_hdr_set until the next renderer start (rmb_resources_close,
+ * then rmb_attach), which tries it again; an attach alone keeps it off. ps stands
+ * for a stock pipeline: an object with the descriptor rmb_new_render_pipe
+ * would have kept for it.
+ */
+static void
+hdr_fail_case(CAMetalLayer *layer, int mode)
+{
+	char err[128];
+	probe_mock *ps_obj = [probe_mock new], *enc = [probe_mock new], *cmd = [probe_mock new];
+	id<MTLRenderPipelineState> ps = (id<MTLRenderPipelineState>)(id)ps_obj;
+	id<MTLRenderCommandEncoder> e = (id<MTLRenderCommandEncoder>)(id)enc;
+	id<MTLCommandBuffer> c = (id<MTLCommandBuffer>)(id)cmd;
+	id<CAMetalDrawable> drawable = (id<CAMetalDrawable>)(id)[probe_mock new];
+	MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+
+	fprintf(stderr, "rmb_cs_probe: a float16 variant that is not built, metal_colorspace %d\n", mode);
+	d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+	rmb_colorspace_set(mode);
+	CHECK(rmb_attach((__bridge void *)layer, 0, err, sizeof(err)));
+	CHECK(!rmb_hdr_failed());
+
+	if (!fmt_descs)
+	{
+		fmt_descs = [NSMapTable weakToStrongObjectsMapTable];
+	}
+
+	[fmt_descs setObject:d forKey:ps_obj];
+	CHECK(rmb_fmt_pipe(ps) == ps);                 /* the stock path: ps itself */
+	CHECK(rmb_fmt_bind(e, ps) && (enc.bound == ps_obj));
+	CHECK(rmb_present_written(c, drawable, rmb_present_region(1, 1, 0, 0)) && (cmd.presents == 1));
+
+	rmb_hdr_set(1);
+	CHECK(rmb_hdr_on());
+	fmt_refuse = 1;
+	enc.binds = 0;
+	CHECK(rmb_fmt_pipe(ps) == nil);                /* gap 1: never the BGRA8Unorm ps */
+	CHECK(rmb_hdr_failed() && rmb_hdr_on());       /* off from the next rmb_hdr_set, between frames */
+	CHECK(!rmb_fmt_bind(e, ps) && (enc.binds == 0));   /* asked again in that frame: nothing bound */
+	fmt_refuse = 0;
+
+	/* gap 2: that frame and a float16 frame without its present pipeline present nothing */
+	CHECK(rmb_present_region(1, 1, 1, 1) == 0);
+	CHECK(!rmb_present_written(c, drawable, rmb_present_region(1, 1, 1, 1)) && (cmd.presents == 1));
+	rmb_hdr_dead = 0;
+	CHECK(rmb_present_region(1, 1, 1, 0) == 0);
+	CHECK(!rmb_present_written(c, drawable, rmb_present_region(1, 1, 1, 0)) && (cmd.presents == 1));
+	CHECK(rmb_present_region(1, 0, 0, 1) == 0);    /* the other format */
+	CHECK(rmb_present_region(1, 1, 1, 1) == 1);
+	rmb_hdr_fail();
+
+	rmb_hdr_set(1);
+	CHECK(!rmb_hdr_on());
+	CHECK(!mode || is_srgb(layer));
+	rmb_hdr_set(1);
+	CHECK(!rmb_hdr_on());                          /* off until the next renderer start */
+
+	/*
+	 * gap 3: a detach and an attach without rmb_resources_close keep the failure with the caches
+	 * that remember it (ps's NSNull): r_hdr 1 stays off, and no draw meets a nil pipeline while on
+	 */
+	rmb_detach();
+	CHECK(rmb_attach((__bridge void *)layer, 0, err, sizeof(err)));
+	CHECK(rmb_hdr_failed());
+	rmb_hdr_set(1);
+	CHECK(!rmb_hdr_on());
+	CHECK((rmb_fmt_pipe(ps) != nil) || !rmb_hdr_on());
+	CHECK(layer.pixelFormat == MTLPixelFormatBGRA8Unorm);
+
+	/* the close and the next open (vid_restart): the flag and the caches reset together, the path is tried again */
+	rmb_detach();
+	rmb_resources_close();
+	CHECK(!rmb_hdr_failed() && ([fmt_variants objectForKey:ps_obj] == nil));
+	CHECK(rmb_attach((__bridge void *)layer, 0, err, sizeof(err)));
+	rmb_hdr_set(1);
+	CHECK(rmb_hdr_on());
+	CHECK(layer.pixelFormat == MTLPixelFormatRGBA16Float);
+	fmt_descs = [NSMapTable weakToStrongObjectsMapTable];
+	[fmt_descs setObject:d forKey:ps_obj];
+	fmt_refuse = 1;
+	CHECK((rmb_fmt_pipe(ps) == nil) && rmb_hdr_failed());   /* built again, not the cached failure */
+	fmt_refuse = 0;
+	rmb_hdr_set(0);
+	rmb_detach();
+	rmb_resources_close();
+	rmb_colorspace_set(0);
+}
+
 /* one layer: <initial> is the colour space the layer holds at attach (NULL: as created);
    <counted>: initial is the probe's own, and its retain count is checked around each cycle */
 static void
@@ -153,7 +272,6 @@ run(const char *name, CGColorSpaceRef initial, int counted)
 	/* r_hdr (TASK196) 0 -> 1 -> 0 with metal_colorspace 0 and 1: the colour space is back as it was */
 	for (int mode = 0; mode < 2; mode++)
 	{
-		rmb_hdr_dead = 0;               /* the probe includes rmb_device.m: a failed session is cleared for each case */
 		rmb_colorspace_set(mode);
 		CHECK(rmb_attach((__bridge void *)layer, 0, err, sizeof(err)));
 		CHECK(!rmb_hdr_on());
@@ -164,22 +282,37 @@ run(const char *name, CGColorSpaceRef initial, int counted)
 		CHECK(!rmb_hdr_on());
 		CHECK(layer.pixelFormat == MTLPixelFormatBGRA8Unorm);
 		CHECK(mode ? is_srgb(layer) : same_as(layer, at_attach));
-		if (mode)
-		{
-			/* the failure path (rmb_hdr_fail) switches off at the next rmb_hdr_set, as a live r_hdr 0 does, and stays off */
-			rmb_hdr_set(1);
-			rmb_hdr_fail();
-			CHECK(rmb_hdr_failed() && rmb_hdr_on());
-			rmb_hdr_set(1);
-			CHECK(!rmb_hdr_on());
-			CHECK(is_srgb(layer));
-			rmb_hdr_set(1);
-			CHECK(!rmb_hdr_on());
-		}
+		/* the failure path (rmb_hdr_fail) switches off at the next rmb_hdr_set, as a live r_hdr 0 does, and stays off */
+		rmb_hdr_set(1);
+		rmb_hdr_fail();
+		CHECK(rmb_hdr_failed() && rmb_hdr_on());
+		rmb_hdr_set(1);
+		CHECK(!rmb_hdr_on());
+		CHECK(mode ? is_srgb(layer) : same_as(layer, at_attach));
+		rmb_hdr_set(1);
+		CHECK(!rmb_hdr_on());
 
 		rmb_detach();
 		CHECK(same_as(layer, at_attach));
 		rmb_colorspace_set(0);
+
+		/* FIX133: the failure outlasts an attach; it is off until the next renderer start (rmb_resources_close) */
+		CHECK(rmb_attach((__bridge void *)layer, 0, err, sizeof(err)));
+		CHECK(rmb_hdr_failed());
+		rmb_hdr_set(1);
+		CHECK(!rmb_hdr_on());
+		rmb_detach();
+		rmb_resources_close();
+		CHECK(!rmb_hdr_failed());
+		CHECK(rmb_attach((__bridge void *)layer, 0, err, sizeof(err)));
+		rmb_hdr_set(1);
+		CHECK(rmb_hdr_on());
+		rmb_hdr_set(0);
+		rmb_detach();
+		CHECK(same_as(layer, at_attach));
+
+		hdr_fail_case(layer, mode);
+		CHECK(same_as(layer, at_attach));
 	}
 
 	CGColorSpaceRelease(at_attach);
