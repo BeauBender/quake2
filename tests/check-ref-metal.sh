@@ -285,6 +285,36 @@ else
 	case $rtg in *", 0 failed") ;; *) bad "tests/metal/rm_rtgate_test.c printed no result line"; rtg="";; esac
 fi
 
+# the preset to table script (TASK195, slice 2): the rows it prints for a fixture preset, compiled
+# into rm_rtgate.c as the enhanced overlay, must make rm_pres_value return the preset's values; a
+# fixture with a line that is no "set" and one with a name outside the tuning cvars must be refused
+pt=scripts/rt/preset-to-table.sh
+ptfix=tests/fixtures/rt-preset
+if ! "$pt" "$ptfix/good.cfg" --as enhanced > "${tmp:?}/pt.h" 2> "${tmp:?}/pt.err"; then
+	cat "${tmp:?}/pt.err"
+	bad "$pt refused $ptfix/good.cfg"
+elif ! "$pt" "$ptfix/good.cfg" > "${tmp:?}/pt.def" 2>&1 || ! grep -q '^r_rt_ao_range: 128 -> 256$' "${tmp:?}/pt.def"; then
+	bad "$pt --as defaults did not list r_rt_ao_range: 128 -> 256 for $ptfix/good.cfg"
+else
+	ptvals=$(sed -n 's/^set \([A-Za-z0-9_]*\) "\([0-9.]*\)"$/\1=\2/p' "$ptfix/good.cfg")
+	# shellcheck disable=SC2086 # flags is a word list; ptvals is name=value pairs without blanks
+	if ! $cc $flags -include "${tmp:?}/pt.h" -o "${tmp:?}/rm_pres_table_test" tests/metal/rm_pres_table_test.c \
+		"$rm_dir/rm_rtgate.c" -lm > "${tmp:?}/cc.out" 2>&1; then
+		cat "${tmp:?}/cc.out"
+		bad "tests/metal/rm_pres_table_test.c does not compile with the rows of $pt"
+	elif ! "${tmp:?}/rm_pres_table_test" $ptvals > "${tmp:?}/out" 2>&1; then
+		cat "${tmp:?}/out"
+		bad "rm_pres_value does not return the preset's values under the rows of $pt"
+	fi
+fi
+for ptbad in badline badname; do
+	if "$pt" "$ptfix/$ptbad.cfg" > "${tmp:?}/pt.out" 2>&1; then
+		bad "$pt accepted $ptfix/$ptbad.cfg"
+	elif ! grep -q "$ptbad.cfg:2: refused" "${tmp:?}/pt.out"; then
+		bad "$pt refused $ptfix/$ptbad.cfg without naming its line"
+	fi
+done
+
 # rtg_names <dir>: name=default for each Cvar_Get("r_rt_ of the directory's .c and .m files, the
 # files joined into one line so a call over several lines is seen; a default that is not a
 # literal gives the name alone. Sorted, each pair once.
