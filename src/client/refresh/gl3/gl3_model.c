@@ -72,8 +72,10 @@ GL3_Mod_ClusterPVS(int cluster, const gl3model_t *model)
 		return mod_novis;
 	}
 
+	/* Mod_CheckVis put the offset inside the lump */
 	return Mod_DecompressVis((byte *)model->vis +
 			model->vis->bitofs[cluster][DVIS_PVS],
+			model->vislen - model->vis->bitofs[cluster][DVIS_PVS],
 			(model->vis->numclusters + 7) >> 3);
 }
 
@@ -596,6 +598,7 @@ Mod_LoadBrushModel(gl3model_t *mod, void *buffer, int modfilelen)
 	Mod_LoadFaces(mod, mod_base, &header->lumps[LUMP_FACES]);
 	Mod_LoadMarksurfaces(mod, mod_base, &header->lumps[LUMP_LEAFFACES]);
 	Mod_LoadVisibility(&mod->vis, mod_base, &header->lumps[LUMP_VISIBILITY]);
+	mod->vislen = header->lumps[LUMP_VISIBILITY].filelen;
 	Mod_LoadLeafs(mod, mod_base, &header->lumps[LUMP_LEAFS]);
 	Mod_LoadNodes(mod->name, mod->planes, mod->numplanes, mod->leafs,
 		mod->numleafs, &mod->nodes, &mod->numnodes, mod_base,

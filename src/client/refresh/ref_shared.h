@@ -99,7 +99,7 @@ extern void SmoothColorImage(unsigned *dst, size_t size, size_t rstep);
 extern void scale3x(const byte *src, byte *dst, int width, int height);
 
 extern float Mod_RadiusFromBounds(const vec3_t mins, const vec3_t maxs);
-extern const byte* Mod_DecompressVis(const byte *in, int row);
+extern const byte* Mod_DecompressVis(const byte *in, int inlen, int row);
 
 /* Shared models struct */
 

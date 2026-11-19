@@ -38,8 +38,7 @@
 static const byte *
 t_decode(const byte *in, int inlen, int row)
 {
-	(void)inlen; /* RED: the decoder takes no length yet */
-	return Mod_DecompressVis(in, row);
+	return Mod_DecompressVis(in, inlen, row);
 }
 
 /* Decodes lump (len bytes) into row bytes from both buffers, both must
