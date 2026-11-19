@@ -47,7 +47,7 @@ t_decode(const byte *in, int inlen, int row)
 static void
 t_check_row(const byte *lump, int len, int row, const byte *want)
 {
-	static byte canaried[MAX_MAP_LEAFS / 8 + T_CANARY_LEN];
+	static byte canaried[MAX_MAP_LEAFS / 8 + 1 + T_CANARY_LEN];
 	byte *exact;
 	const byte *got;
 
