@@ -322,6 +322,20 @@ fi
 	git -C "$r" update-index --add --cacheinfo "120000,$_id,dangling-link"
 	rm -f "$r/.git/objects/$(printf '%s' "$_id" | cut -c1-2)/$(printf '%s' "$_id" | cut -c3-)"
 	expect 2 "an unreadable link blob" "$tmp/none" "$syn" zzquser /home/zzqhome
+	# A regular file's blob missing or corrupt: git grep says so on stderr
+	# and, for a missing one, exits 1 as for no match. Refused either way; the
+	# same index with the blob readable again is accepted.
+	rm -f "$r/.git/index"
+	_id=$(printf 'zzq gone\n' | git -C "$r" hash-object -w --stdin)
+	_of="$r/.git/objects/$(printf '%s' "$_id" | cut -c1-2)/$(printf '%s' "$_id" | cut -c3-)"
+	git -C "$r" update-index --add --cacheinfo "100644,$_id,zzq-gone.txt"
+	rm -f "$_of"
+	expect 2 "a missing index blob" "$tmp/none" "$syn" zzquser /home/zzqhome
+	printf 'zzq not a zlib stream\n' > "$_of"
+	expect 2 "a corrupt index blob" "$tmp/none" "$syn" zzquser /home/zzqhome
+	rm -f "$_of"
+	printf 'zzq gone\n' | git -C "$r" hash-object -w --stdin > /dev/null
+	expect 0 "the same index, the blob readable again" "$tmp/none" "$syn" zzquser /home/zzqhome
 	rm -f "$r/.git/index"
 	printf 'built on %s\n' "$syn" > "$r/zzq
 nl.txt"
