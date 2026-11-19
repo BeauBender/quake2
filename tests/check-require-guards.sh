@@ -172,7 +172,7 @@ run() {
 	esac
 	n=$((n + 1))
 	mkdir "${tmp:?}/t.$n"
-	_st=0
+	_rs=0
 	(
 		PATH=$_path
 		TMPDIR=${tmp:?}/t.$n
@@ -181,9 +181,9 @@ run() {
 			export "$_var=1"
 		fi
 		exec perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' "$wall" "$_tree/tests/$_chk" "$@"
-	) > "$_log" 2>&1 < /dev/null || _st=$?
+	) > "$_log" 2>&1 < /dev/null || _rs=$?
 	rm -rf "${tmp:?}/t.$n"
-	return "$_st"
+	return "$_rs"
 }
 
 # ---- The real checks. ---------------------------------------------------
