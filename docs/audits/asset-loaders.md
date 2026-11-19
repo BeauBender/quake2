@@ -305,9 +305,19 @@ cluster count and every PVS and PHS offset inside the lump),
 the map's leafs, each node's faces inside the face lump and in one node only)
 and `Mod_CheckFaceEdges` (each face's surfedges inside their lump, each
 surfedge an edge, each edge's vertices inside the vertex lump).
-`tests/check-bsp-loader.sh` refuses a loader that drops one. The rows below
+`tests/check-bsp-loader.sh` refuses a loader that drops one, calls one only
+in a comment or under `#if 0`, or discards its result. The rows below
 describe the loaders as audited; where a row says a renderer is safe only
 because of the call order, the shared check now holds by itself.
+
+Change note (FIX118): gl1, gl3 and soft now refuse, with `Com_Error(ERR_DROP)`
+naming the map, maps they loaded before: a lump whose offset is not 4-aligned,
+and a node, plane, vertex, edge, surfedge, leaf-face, texinfo or lighting count
+over its `MAX_MAP_*` limit (as well as the out-of-range offsets, chains, faces
+and edges above, which they read past before). ref_metal already refused all of
+them, through its own `RM_Check*` functions, which these shared checks replace.
+Every map in the stock paks, the two mission packs' and CTF's passes all four
+checks (`docs/runbook/FIX118.md`).
 
 | Function | Field | Use | Check (quoted) or absence | Verdict |
 |---|---|---|---|---|
