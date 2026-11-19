@@ -148,6 +148,17 @@ fi
 
 gate_t0=$(date +%s)
 
+# The build host's gate requires the Metal builds (FIX115): on macOS with
+# the Metal compiler (xcrun -f metal, the test both checks use),
+# tests/check-ref-metal.sh and tests/check-metal-shim.sh fail rather than
+# skip their builds. A host without it still runs them, each saying that its
+# build is skipped. A value already in the environment is kept.
+if [ "$(uname -s)" = Darwin ] && command -v xcrun > /dev/null 2>&1 && xcrun -f metal > /dev/null 2>&1; then
+	CHECK_REF_METAL_REQUIRE=${CHECK_REF_METAL_REQUIRE:-1}
+	CHECK_METAL_SHIM_REQUIRE=${CHECK_METAL_SHIM_REQUIRE:-1}
+	export CHECK_REF_METAL_REQUIRE CHECK_METAL_SHIM_REQUIRE
+fi
+
 # The checks run through scripts/gate-checks.sh (FIX72): GATE_JOBS at a
 # time (default half the CPUs, at least 1; GATE_JOBS=1 runs them one after
 # another in the glob's order, as before), each into a log of its own that

@@ -44,6 +44,7 @@ fail=0
 bad() { echo "check-autorelease-pool: $*"; fail=1; }
 
 if [ "$(uname -s)" != Darwin ]; then
+	[ "${CHECK_AUTORELEASE_POOL_REQUIRE:-0}" != 1 ] || { echo "check-autorelease-pool: CHECK_AUTORELEASE_POOL_REQUIRE=1 and this is not macOS"; exit 1; }
 	echo "check-autorelease-pool: skipped: not macOS"
 	exit 0
 fi
