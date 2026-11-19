@@ -3,7 +3,7 @@
 # check, or a line that only names a skip. tests/check-ci-parity.sh refuses
 # any other skip line that no guard reading a <NAME>_REQUIRE variable in the
 # same branch turns into a failure, and refuses an entry here that matches
-# no skip line.
+# no skip line or more than one line of its check.
 #
 # One entry per line: <check>|<fixed text of the skip line>|<reason>
 check-bench.sh|SIGINT is ignored where this check runs, so the INT tests are skipped|SIGINT is ignored by the caller (the merge gate starts the gate so); skipping the INT tests is the intended behaviour there

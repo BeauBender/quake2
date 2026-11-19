@@ -15,32 +15,59 @@
 #     anywhere is refused. A line of tests/ci-checks.txt is one name, with no
 #     blank and no ":" in it; scripts/ci-checks.sh --list prints the names it
 #     reads, and they must be the names read here.
-# (b) A job of .github/workflows/macos.yml runs scripts/ci-checks.sh, and
-#     every job that does has no job-level if: or continue-on-error:, checks
-#     out the full history (fetch-depth: 0 on each of its actions/checkout
-#     steps; tests/check-cvar-docs.sh reads the upstream base commit and
-#     fails on a shallow clone), and runs it in a step that has neither key
-#     either and gets CHECK_IOS_REQUIRE: 1 from its own env: or the job's.
-# (c) Every skip line of a tests/check-*.sh is paired with a guard that turns
-#     the skip into a failure, or is allowed by tests/ci-skip-allow.txt with
-#     a reason. A skip line is a command line, not a comment and not in a
-#     here-document, that prints text holding "skip" in any case through
-#     echo, printf or a function of the file that prints its arguments,
-#     whatever redirection comes first (>&2 echo), to the terminal (not into
-#     a file or a pipe), and is not a failure (no exit or return with a
-#     non-zero status, and no fail*= assignment, on that line or the next).
+# (b) .github/workflows/macos.yml, parsed by ruby's yaml as
+#     tests/check-workflow-pins.sh parses it (so every quoting of a key
+#     counts as YAML reads it), has exactly one step whose run, stripped, is
+#     scripts/ci-checks.sh and nothing else (no "|| true", no env prefix, no
+#     comment); a run that names it with anything else is refused. Neither
+#     that step nor its job has an if or a continue-on-error key. Every
+#     actions/checkout step of the job has fetch-depth 0 (tests/check-cvar-
+#     docs.sh reads the upstream base commit and fails on a shallow clone)
+#     and persist-credentials false. CHECK_IOS_REQUIRE is 1 in the step's
+#     env, or, when the step does not set it, in the job's. No ruby on PATH,
+#     a ruby that cannot load yaml, or a file it cannot parse is a failure,
+#     here and in CI alike.
+# (c) A lint of the shape of the skips: every skip line of a
+#     tests/check-*.sh has a guard of the right shape before it, or is
+#     allowed by tests/ci-skip-allow.txt with a reason. It reads the shell
+#     with a small reader of its own (quotes, comments, here-documents,
+#     separators), not a shell parser, so it checks how a guard is written,
+#     not that it works. That a skip fails under its <NAME>_REQUIRE=1 is
+#     shown only by a forced-skip run: the check run with the tool it needs
+#     missing and the variable set (docs/runbook/FIX115.md).
+#     A skip line is a command line, not a comment and not in a here-document
+#     (a <<WORD outside quotes and comments; one never closed is refused, as
+#     is a quote never closed), that prints text holding "skip" in any case
+#     through echo, printf or a function of the file that prints its
+#     arguments, whatever redirection comes first (>&2 echo), to the terminal
+#     (not into a file or a pipe; >/dev/stderr, >/dev/tty and >&N are the
+#     terminal), and is not a failure. A failure, on that line or the next,
+#     is an exit or return with a literal status 1 to 9, or a fail*=
+#     assignment of a literal non-zero number, not behind a && or ||; so not
+#     exit $var, fail=0, fails=0 or [ ... ] || exit 1.
 #     The guard is a [ or test command that reads a <NAME>_REQUIRE variable
-#     as an expansion (${X_REQUIRE or $X_REQUIRE) on that line or above it
-#     in the same branch (up to the if, else, case arm or { that opens it,
-#     never past a closed one, at most 15 lines); the name inside a string
-#     does not count. An allow-list entry that matches no skip line is
-#     refused, as is a quote the reader cannot close.
+#     as an expansion (${X_REQUIRE or $X_REQUIRE; the name inside a string
+#     does not count), on that line or above it in the same branch (up to the
+#     if, else, case arm or { that opens it, never past a closed one, at most
+#     15 lines), and that gates a branch that fails: the command after its
+#     || or &&, the { } group there, or the then branch of its if, holds on
+#     its own level a failure as above or a call to a function of the file
+#     whose body holds one. So a guard that only prints (|| echo required), a
+#     bare exit, an inverted guard (= 1 ] && <skip>, a skip in the then
+#     branch) and a helper that only counts (check-bench's bad, whose test
+#     fails by its status) are refused. An allow-list entry must match
+#     exactly one line of its check: none (stale) or two or more is refused.
+#     What the lint does not see: a message held in a variable (msg=skipped;
+#     echo "$msg"), text printed by cat from a here-document, a skip piped to
+#     another command, a helper that prints through another helper, and a
+#     guard that names a variable CI never sets.
 #
 # Then a self-test on scratch copies of those files (never the real tree):
-# the copy passes, a guarded skip passes, and each mutant is refused (see
-# the list below).
+# the copy passes, a guarded skip and a single-line allow-list entry pass,
+# and each mutant is refused (see the list below).
 #
-# Needs only sh, awk, sed, grep and cp. Usage: tests/check-ci-parity.sh
+# Needs sh, awk, sed, grep, cp and ruby (its yaml).
+# Usage: tests/check-ci-parity.sh
 set -eu
 unset RUBYOPT RUBYLIB
 me=check-ci-parity
