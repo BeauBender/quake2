@@ -138,16 +138,9 @@ static cvar_t *r_rt_available;
  */
 static cvar_t *r_presentation;
 static int rm_presentation = RM_PRES_STOCK;
-/*
- * Retro's post-process (TASK184, PM2; the plan's section 5.1): its output
- * filter and its gamma curve, read each frame; the rectangle of the 3D
- * view RI_RenderFrame drew, which RI_EndWorldRenderpass finishes before
- * the 2D layer (retro_due).
- */
+/* Retro's post-process (TASK184, PM2; the plan's section 5.1): its output filter and its gamma curve */
 static cvar_t *r_retro_filter;
 static cvar_t *r_retro_gamma;
-static int retro_due;
-static rm_viewport_t retro_rect;
 
 float
 RM_Effect(const cvar_t *cv)
@@ -1059,6 +1052,25 @@ R_RenderViewGB(refdef_t *fd, int stencil)
 	RM_GB_End();
 }
 
+/*
+ * TASK184 (PM2): under Retro, the post-process over the rectangle of the
+ * view fd just drawn, after the world, the models and the blend and
+ * before the 2D layer, whose first draw opens a pass of its own
+ * (rmb_draw_2d). Stock never calls it.
+ */
+static void
+R_RetroFinish(const refdef_t *fd)
+{
+	const float curve = r_retro_gamma->value;
+	rm_viewport_t vp;
+	int tw = 0, th = 0;
+
+	rmb_target_size(&tw, &th);
+	rm_view_rect(fd->x, fd->y, fd->width, fd->height, vid.width, vid.height, th, &vp);
+	rmb_retro_pass((int)vp.x, (int)vp.y, (int)vp.w, (int)vp.h, r_retro_filter->value != 0,
+			((curve >= 0.0f) && (curve < (float)MTL_RETRO_CURVES)) ? (int)curve : 0);
+}
+
 static void
 RI_RenderFrame(refdef_t *fd)
 {
@@ -1067,16 +1079,6 @@ RI_RenderFrame(refdef_t *fd)
 	if (r_norefresh->value)
 	{
 		return;
-	}
-
-	/* Retro finishes this view's rectangle at the end of the 3D pass (TASK184); stock never sets it */
-	if (rm_presentation == RM_PRES_RETRO)
-	{
-		int tw = 0, th = 0;
-
-		rmb_target_size(&tw, &th);
-		rm_view_rect(fd->x, fd->y, fd->width, fd->height, vid.width, vid.height, th, &retro_rect);
-		retro_due = 1;
 	}
 
 	/* the acceleration structures of the view, before the raster (design section 3, step 1; TASK53) */
@@ -1106,28 +1108,23 @@ RI_RenderFrame(refdef_t *fd)
 	{
 		R_RenderViewGB(fd, (gl_shadows->value && gl1_stencilshadow->value) ? 1 : 0);
 		R_SetLightLevel(NULL);
-		return;
+	}
+	else
+	{
+		rmb_pass_3d((gl_shadows->value && gl1_stencilshadow->value) ? 1 : 0);
+		R_RenderView(fd);
+		R_SetLightLevel(NULL);
 	}
 
-	rmb_pass_3d((gl_shadows->value && gl1_stencilshadow->value) ? 1 : 0);
-	R_RenderView(fd);
-	R_SetLightLevel(NULL);
+	if (rm_presentation == RM_PRES_RETRO)
+	{
+		R_RetroFinish(fd);
+	}
 }
 
 static qboolean
 RI_EndWorldRenderpass(void)
 {
-	/* TASK184: Retro's post-process over the 3D view, after the world and models, before the 2D layer */
-	if (retro_due)
-	{
-		const float curve = r_retro_gamma->value;
-
-		retro_due = 0;
-		rmb_retro_pass((int)retro_rect.x, (int)retro_rect.y, (int)retro_rect.w, (int)retro_rect.h,
-				r_retro_filter->value != 0,
-				((curve >= 0.0f) && (curve < (float)MTL_RETRO_CURVES)) ? (int)curve : 0);
-	}
-
 	rmb_pass_2d();
 	return true;
 }
