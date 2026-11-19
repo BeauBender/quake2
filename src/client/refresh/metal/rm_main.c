@@ -130,6 +130,19 @@ static cvar_t *rm_rtg_effects[RM_RTG_MAX_EFFECTS];
 static int rm_rtg_neffects;
 /* whether the gate has a path, for the menu's ray-tracing screen (TASK194); read only */
 static cvar_t *r_rt_available;
+/*
+ * The presentation mode (TASK183, docs/plans/presentation-modes.md):
+ * r_presentation read at RI_Init (start-up and vid_restart) into the mode
+ * this device runs. The mode is an overlay (RM_Effect): it writes no cvar.
+ */
+static cvar_t *r_presentation;
+static int rm_presentation = RM_PRES_STOCK;
+
+float
+RM_Effect(const cvar_t *cv)
+{
+	return rm_pres_value(rm_presentation, cv->name, cv->value);
+}
 
 /* gl1's clear colour for r_clear 1 */
 static const float rm_clear_color[4] = { 1.0f, 0.0f, 0.5f, 0.5f };
@@ -146,6 +159,7 @@ R_Register(void)
 	vid_fullscreen = ri.Cvar_Get("vid_fullscreen", "0", CVAR_ARCHIVE);
 	metal_stats = ri.Cvar_Get("metal_stats", "0", 0);
 	metal_rate_start = ri.Cvar_Get("metal_rate_start", "1", 0);
+	r_presentation = ri.Cvar_Get("r_presentation", "0", CVAR_ARCHIVE);
 	metal_lightmap_filter = ri.Cvar_Get("metal_lightmap_filter", "0", CVAR_ARCHIVE);
 
 	/* gl1's, by gl1's names and defaults (gl1_main.c, R_Register) */
@@ -416,6 +430,15 @@ RI_Init(void)
 	rm_rtg = rm_rtg_decide(caps.families, caps.raytracing, caps.raytracing_render);
 	rm_rtg_format(&rm_rtg, line, sizeof(line));
 	R_Printf(PRINT_ALL, "%s\n", line);
+
+	/* the presentation mode (TASK183): one line beside the gate's, the mode in use */
+	{
+		int why;
+
+		rm_presentation = rm_pres_decide(r_presentation->value, rm_rtg.path, &why);
+		rm_pres_format(r_presentation->value, rm_presentation, why, line, sizeof(line));
+		R_Printf(PRINT_ALL, "%s\n", line);
+	}
 
 	if (!rm_caps_floor_ok(caps.families))
 	{

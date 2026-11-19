@@ -185,4 +185,53 @@ vidrule_t VidRules_RTEntry(const char *renderer);
  */
 vidrule_t VidRules_RTItem(int i, const char *renderer, int available, int effect_on);
 
+/*
+ * The presentation item of the video menu (TASK183,
+ * docs/plans/presentation-modes.md): r_presentation, one archived
+ * integer whose values are never renumbered. VidRules_Presentation is the
+ * menu's row: cvar, label, default, flags and the names of the modes
+ * (Stock, Enhanced, Retro, Ray traced), in the order of their values.
+ */
+#define VIDPRES_STOCK 0
+#define VIDPRES_ENHANCED 1
+#define VIDPRES_RETRO 2
+#define VIDPRES_RTPRIMARY 3
+#define VIDPRES_COUNT 4
+
+const vidrt_control_t *VidRules_Presentation(void);
+
+/* r_presentation as the menu's index: a fraction truncated, 0 (stock) for one that is no mode or not finite */
+int VidRules_PresentationIndex(float value);
+
+/*
+ * Whether mode can be chosen, and the reason when not; mode -1 is the
+ * item itself. Every mode is shown; one that does not apply is greyed
+ * with its reason: off Metal "ref_metal only"; Retro and Ray traced
+ * "awaiting review" (the owner has not accepted their frames); Enhanced
+ * and Ray traced "needs ray tracing" where the device has none
+ * (available, r_rt_available 0). An unknown mode is greyed.
+ */
+vidrule_t VidRules_PresentationMode(int mode, const char *renderer, int available);
+
+/*
+ * The ray-tracing screen's switches under the presentation in use (the
+ * plan's section 2.3). VidRules_RTOverridden: whether the mode decides
+ * switch i (Enhanced: shadows, sun, ambient occlusion, water).
+ * VidRules_RTEffective: the switch as the renderer runs it, 1 when the
+ * mode decides it, else user (the cvar's value) not 0. VidRules_RTRow is
+ * VidRules_RTItem under the mode: a switch the mode decides is greyed
+ * "set by the presentation", a slider is live while its effect is on as
+ * run, effect_user being the cvar of its switch. Mode 0 is VidRules_RTItem.
+ */
+int VidRules_RTOverridden(int i, const char *renderer, int available, float presentation);
+int VidRules_RTEffective(int i, const char *renderer, int available, float presentation, float user);
+vidrule_t VidRules_RTRow(int i, const char *renderer, int available, float presentation, float effect_user);
+
+/*
+ * The ray-tracing screen's status bar under the presentation mode in use
+ * (r_presentation): the screen shows the user's own values, and under a
+ * mode that decides the switches it says the mode overrides them.
+ */
+const char *VidRules_RTStatus(const char *renderer, int available, float presentation);
+
 #endif

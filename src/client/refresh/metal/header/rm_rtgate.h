@@ -144,4 +144,47 @@ void rm_rtg_state_reset(rm_rtg_state_t *s);
  */
 int rm_rtg_step(int path, const float *v, int n, rm_rtg_state_t *s, rm_rtg_out_t *out);
 
+/*
+ * The presentation modes (TASK183, docs/plans/presentation-modes.md),
+ * selected by the archived integer r_presentation at start-up and at
+ * vid_restart. A mode is an overlay: rm_pres_value gives the value the
+ * renderer uses for a cvar in place of the user's, and no cvar is
+ * written, so the user's own values come back when the mode is 0 again.
+ * The values are never renumbered (config.cfg stores them).
+ */
+#define RM_PRES_STOCK 0
+#define RM_PRES_ENHANCED 1
+#define RM_PRES_RETRO 2
+#define RM_PRES_RTPRIMARY 3
+
+#define RM_PRES_WHY_OK 0
+#define RM_PRES_WHY_NORT 1      /* the mode needs ray tracing; the path is none */
+#define RM_PRES_WHY_NOTBUILT 2  /* a mode of a later slice, or a value that is no mode */
+
+/*
+ * The mode the renderer runs for the requested value (r_presentation, a
+ * fraction truncated) on a device whose gate gave path: the value itself
+ * when this build has the mode and the device runs it, else stock, with
+ * the reason in *why (which may be NULL).
+ */
+int rm_pres_decide(float requested, int path, int *why);
+
+/*
+ * The value the renderer uses for the cvar name whose user value is user:
+ * the mode's own value for a cvar the mode decides, else user. Stock
+ * decides none. Enhanced turns on r_rt_shadows, r_rt_sun, r_rt_ao and
+ * r_rt_water (1), and leaves every other setting the user's.
+ */
+float rm_pres_value(int mode, const char *name, float user);
+
+/* the mode's name in the menu and the report lines; "" for none */
+const char *rm_pres_name(int mode);
+
+/*
+ * The report line at start-up and at vid_restart: the mode in use, and,
+ * when it is not the one requested, the value requested and why. 1 when
+ * it fits in buf, else 0 with buf empty.
+ */
+int rm_pres_format(float requested, int mode, int why, char *buf, size_t len);
+
 #endif
