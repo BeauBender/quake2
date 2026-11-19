@@ -819,7 +819,7 @@ probe_run() {
 	if ! $cc -fobjc-arc -std=gnu11 -Wall -Wextra -Werror -g -O1 -fno-strict-aliasing -fwrapv ${psan:-} -I"${1:-$rm_dir}" -I"$rm_dir" -I"$rm_dir/header" -I. \
 		'-DYQ2OSTYPE="host"' '-DYQ2ARCH="host"' -o "$2" tests/metal/rmb_cs_probe.m "$rm_dir/rm_pure.c" "$rm_dir/rm_metalfx.c" \
 		"$rm_dir/common/mtl_matrix.c" "$rm_dir/common/mtl_ring.c" src/common/shared/shared.c \
-		-framework Foundation -framework Metal -framework QuartzCore -framework CoreGraphics -lm > "${tmp:?}/probe.out" 2>&1; then
+		-framework Foundation -framework Metal -framework QuartzCore -framework CoreGraphics -weak_framework MetalFX -lm > "${tmp:?}/probe.out" 2>&1; then
 		return 99
 	fi
 	rc=0
