@@ -571,7 +571,10 @@ int rm_range_ok(long first, long count, long total);
 /*
  * A leaf's cluster and area: the cluster -1 or below numclusters when the
  * map has visibility (R_MarkLeaves indexes the PVS row by it), the area
- * inside the client's areabits (R_AreaVisible).
+ * inside the client's areabits (R_AreaVisible). The cluster half is a second
+ * line of defence behind Mod_CheckLeafs, which runs first in rm_model.c;
+ * without vis it accepts what Mod_CheckLeafs already refused, so the area
+ * bound is the only part unique to this check.
  */
 int rm_leaf_ok(long cluster, long area, long numclusters, int has_vis);
 

@@ -70,7 +70,7 @@ typedef struct
 	const byte *vistail;	/* the last bytes of the visibility lump */
 	int nvistail;
 	/* the face lumps (FIX118), written when nfaces is set */
-	dface_t faces[2];
+	dface_t faces[3];
 	int nfaces;
 	int surfedges[8];
 	int nsurfedges;
@@ -1360,12 +1360,27 @@ TEST(bspcheck_node_faces_once)
 	g.nodes[1].numfaces = 2;
 	C_REFUSED(g_build(), 2, "node 1 has surfaces 0 to 2 of 2");
 
-	/* only the last face of node 2's range is taken already */
+	/* the first face of node 2's one-face range is taken already */
 	g.nodes[1].firstface = 1;
 	g.nodes[1].numfaces = 1;
 	g.nodes[2].firstface = 1;
 	g.nodes[2].numfaces = 1;
 	C_REFUSED(g_build(), 2, "node 2 has surfaces 1 to 2 of 2");
+
+	/* only the LAST face of node 2's two-face range is taken already */
+	g.nfaces = 3;
+	g.faces[2] = g.faces[1];
+	g.nodes[1].firstface = 2;
+	g.nodes[1].numfaces = 1;
+	g.nodes[2].firstface = 1;
+	g.nodes[2].numfaces = 2;
+	C_REFUSED(g_build(), 2, "node 2 has surfaces 1 to 3 of 3");
+
+	g.nfaces = 2;
+	g.nodes[1].firstface = 1;
+	g.nodes[1].numfaces = 1;
+	g.nodes[2].firstface = 1;
+	g.nodes[2].numfaces = 1;
 
 	/* a range that starts inside and ends past the lump */
 	g.nodes[1].numfaces = 0;
