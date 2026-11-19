@@ -2075,25 +2075,13 @@ test_world_sizes(void)
 	CHECK(!rm_world_bytes(&s, 100 * 48 - 1, &vb, &ib, &sb) && rm_world_bytes(&s, 100 * 48, &vb, &ib, &sb) && sb == 4800);
 }
 
-/* The BSP index checks: ranges, lumps, a face's edges, a surfedge, a leaf. */
+/* The BSP index checks ref_metal keeps of its own: a range, a leaf's area, a leaf's contents. The lump, face, visibility, node and cluster checks are the shared Mod_Check* ones, tested in tests/unit/test_bspgraph.c. */
 static void
 test_bsp_bounds(void)
 {
 	CHECK(rm_range_ok(0, 0, 0) && rm_range_ok(2, 3, 5) && !rm_range_ok(2, 4, 5));
 	CHECK(!rm_range_ok(-1, 1, 5) && !rm_range_ok(1, -1, 5) && !rm_range_ok(0x7fffffffffffffffL, 1, 5));
 	CHECK(!rm_range_ok(1, 0x7fffffffffffffffL, 0x7fffffffffffffffL));
-
-	CHECK(rm_lump_ok(160, 40, 200) && !rm_lump_ok(160, 41, 200) && !rm_lump_ok(-4, 4, 200));
-	CHECK(!rm_lump_ok(4, -4, 200) && !rm_lump_ok(0x7fffffff, 0x7fffffff, 200));
-	/* a lump's records are read as int and float fields: its offset is a multiple of 4 */
-	CHECK(!rm_lump_ok(161, 4, 200) && !rm_lump_ok(162, 0, 200) && !rm_lump_ok(3, 1, 200) && rm_lump_ok(196, 4, 200));
-
-	CHECK(rm_face_edges_ok(0, 3, 3) && rm_face_edges_ok(7, 5, 12) && !rm_face_edges_ok(8, 5, 12));
-	CHECK(!rm_face_edges_ok(0, 2, 12) && !rm_face_edges_ok(-1, 3, 12) && !rm_face_edges_ok(0, -3, 12));
-	CHECK(!rm_face_edges_ok(0x7fffffff, 0x7fff, 12));
-
-	CHECK(rm_surfedge_ok(0, 1) && rm_surfedge_ok(9, 10) && rm_surfedge_ok(-9, 10));
-	CHECK(!rm_surfedge_ok(10, 10) && !rm_surfedge_ok(-10, 10) && !rm_surfedge_ok(-2147483647L - 1, 10));
 
 	CHECK(rm_leaf_ok(-1, 0, 4, 1) && rm_leaf_ok(3, 255, 4, 1) && !rm_leaf_ok(4, 0, 4, 1));
 	CHECK(!rm_leaf_ok(-2, 0, 4, 1) && !rm_leaf_ok(0, 256, 4, 1) && !rm_leaf_ok(0, -1, 4, 1));
@@ -2102,32 +2090,9 @@ test_bsp_bounds(void)
 	/* a leaf's contents may be anything but CONTENTS_NODE, the mark of a node */
 	CHECK(rm_leaf_contents_ok(0) && rm_leaf_contents_ok(1) && rm_leaf_contents_ok(-2) && rm_leaf_contents_ok(0x7fffffff));
 	CHECK(!rm_leaf_contents_ok(-1));
-
-	/* the world has a node, and model 0 starts at one of them */
-	CHECK(rm_world_head_ok(1, 1, 0) && rm_world_head_ok(5, 3, 4));
-	CHECK(!rm_world_head_ok(0, 1, 0) && !rm_world_head_ok(0, 1, -1) && !rm_world_head_ok(2, 0, 0));
-	CHECK(!rm_world_head_ok(2, 1, -1) && !rm_world_head_ok(2, 1, 2) && !rm_world_head_ok(-1, 1, 0));
 }
 
-/* nexttexinfo chains: in range, and each one ends or returns to its start (Mod_LoadTexinfo's count loop). */
-static void
-test_texinfo_chains(void)
-{
-	const int plain[3] = { 0, 0, -1 };
-	const int ring[4] = { 1, 2, 0, 0 };     /* 0 -> 1 -> 2 -> end (0 is the end) */
-	const int cycle[4] = { 0, 2, 3, 1 };    /* 1 -> 2 -> 3 -> 1 */
-	const int lasso[4] = { 1, 2, 3, 2 };    /* 0 -> 1 -> 2 -> 3 -> 2: never back to 0, never ends */
-	const int out[3] = { 0, 3, 0 };
-	const int neg[3] = { -7, 0, 0 };
-
-	CHECK(rm_texinfo_chains_ok(plain, 3) && rm_texinfo_chains_ok(ring, 4) && rm_texinfo_chains_ok(cycle, 4));
-	CHECK(rm_texinfo_chains_ok(neg, 3) && rm_texinfo_chains_ok(plain, 0));
-	CHECK(!rm_texinfo_chains_ok(lasso, 4));
-	CHECK(!rm_texinfo_chains_ok(out, 3));
-	CHECK(!rm_texinfo_chains_ok(plain, -1));
-}
-
-/* The visibility header and the bounded decompression of a PVS row. */
+/* The bounded decompression of a PVS row. */
 static void
 test_vis(void)
 {
@@ -2135,10 +2100,6 @@ test_vis(void)
 	const unsigned char want[5] = { 0x81, 0, 0, 0, 0x7e };
 	const unsigned char longrun[] = { 0x01, 0x00, 0xff };     /* a run of 255 zeros in a row of 4 */
 	unsigned char out[8];
-
-	CHECK(rm_vis_header_ok(0, 4) && rm_vis_header_ok(2, 20) && !rm_vis_header_ok(2, 19));
-	CHECK(!rm_vis_header_ok(-1, 100) && !rm_vis_header_ok(RM_MAX_MAP_LEAFS + 1, 0x7fffffff));
-	CHECK(!rm_vis_header_ok(0x7fffffffffffffffL / 4, 0x7fffffffffffffffL) && !rm_vis_header_ok(0, 3));
 
 	memset(out, 0xee, sizeof(out));
 	CHECK(rm_decompress_vis(row, sizeof(row), 5, out, sizeof(out)) && memcmp(out, want, 5) == 0 && out[5] == 0xee);
@@ -2167,60 +2128,6 @@ test_vis(void)
 	/* a row longer than the output writes nothing */
 	memset(out, 0xee, sizeof(out));
 	CHECK(!rm_decompress_vis(row, sizeof(row), 9, out, sizeof(out)) && out[0] == 0xee && out[7] == 0xee);
-}
-
-/* Each surface in at most one node: a second claim, or a range outside the table, marks nothing. */
-static void
-test_mark_once(void)
-{
-	unsigned char owner[6];
-
-	memset(owner, 0, sizeof(owner));
-	CHECK(rm_mark_once(owner, 6, 0, 2) && rm_mark_once(owner, 6, 4, 2) && rm_mark_once(owner, 6, 2, 0));
-	CHECK(owner[0] && owner[1] && !owner[2] && !owner[3] && owner[4] && owner[5]);
-	CHECK(!rm_mark_once(owner, 6, 1, 2) && !owner[2]);
-	CHECK(!rm_mark_once(owner, 6, 3, 4) && !owner[3]);
-	CHECK(!rm_mark_once(owner, 6, -1, 1) && rm_mark_once(owner, 6, 2, 2));
-
-	/* only the last surface of the range is taken already */
-	memset(owner, 0, sizeof(owner));
-	CHECK(rm_mark_once(owner, 6, 4, 1) && !rm_mark_once(owner, 6, 3, 2) && !owner[3]);
-}
-
-/*
- * The node lump is a tree from node 0 before it is linked: a node named by
- * two parents, twice by one, a cycle back to node 0 or through another
- * node, and a child outside the nodes or the leafs are refused.
- */
-static void
-test_node_tree(void)
-{
-	unsigned char seen[4];
-	const int tree[8] = { 1, 2, -1, -2, 3, -3, -4, -1 };      /* 0 -> 1, 2; 2 -> 3; leaves 0 to 3 */
-	const int leaves[2] = { -1, -1 };                          /* one node, a leaf twice */
-	const int shared[8] = { 1, 2, 3, -1, 3, -2, -3, -4 };      /* 3 is a child of 1 and of 2 */
-	const int twice[4] = { 1, 1, -1, -2 };                     /* 1 is both children of 0 */
-	const int to_root[4] = { 1, -1, 0, -2 };                   /* 0 -> 1 -> 0 */
-	const int loop[6] = { 1, -1, 2, -2, 1, -3 };               /* 0 -> 1 -> 2 -> 1 */
-	const int self[4] = { 1, -1, 1, -2 };                      /* 1 -> 1 */
-	const int far_node[4] = { 2, -1, -1, -1 };
-	const int far_leaf[4] = { 1, -5, -1, -1 };
-	const int least[4] = { 1, -2147483647 - 1, -1, -1 };
-	const int last_root[4] = { 1, -1, -1, 0 };                 /* the last slot names the root */
-	const int last_again[4] = { 1, -1, -1, 1 };                /* the last slot names node 1 again */
-
-	CHECK(rm_node_tree_ok(tree, 4, 4, seen) && rm_node_tree_ok(leaves, 1, 1, seen));
-	CHECK(!rm_node_tree_ok(shared, 4, 4, seen));
-	CHECK(!rm_node_tree_ok(twice, 2, 2, seen));
-	CHECK(!rm_node_tree_ok(to_root, 2, 2, seen));
-	CHECK(!rm_node_tree_ok(loop, 3, 3, seen) && !rm_node_tree_ok(self, 2, 2, seen));
-	memset(seen, 0, sizeof(seen));   /* a child at the node count, not seen before */
-	CHECK(!rm_node_tree_ok(far_node, 2, 4, seen) && !rm_node_tree_ok(far_leaf, 2, 4, seen));
-	CHECK(rm_node_tree_ok(far_leaf, 2, 5, seen) && !rm_node_tree_ok(least, 2, 4, seen));
-	CHECK(!rm_node_tree_ok(tree, 0, 4, seen) && !rm_node_tree_ok(tree, 4, 3, seen));
-	CHECK(!rm_node_tree_ok(last_root, 2, 2, seen) && !rm_node_tree_ok(last_again, 2, 2, seen));
-	/* the scratch is cleared on each call: the same valid tree passes twice */
-	CHECK(rm_node_tree_ok(tree, 4, 4, seen) && rm_node_tree_ok(tree, 4, 4, seen));
 }
 
 /*
@@ -8840,11 +8747,8 @@ main(void)
 	test_world_fan();
 	test_world_sizes();
 	test_bsp_bounds();
-	test_texinfo_chains();
 	test_vis();
-	test_mark_once();
 	test_slot_state();
-	test_node_tree();
 	test_view_rect();
 	test_view_matrix();
 	test_projection();
