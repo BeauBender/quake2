@@ -6852,9 +6852,10 @@ M_Probe_f(void)
 	{
 		const menucommon_s *it = m ? (const menucommon_s *)Menu_ItemAtCursor(m) : NULL;
 
-		Com_Printf("menu_probe: key_dest %d, depth %d, screen '%s', cursor %d '%s'%s\n",
+		Com_Printf("menu_probe: key_dest %d, depth %d, screen '%s', cursor %d '%s'%s%s\n",
 				cls.key_dest, m_menudepth, m ? Walk_Name(m) : "", m ? m->cursor : -1,
-				it && it->name ? it->name : "", it && (it->flags & QMF_GRAYED) ? " (greyed)" : "");
+				it && it->name ? it->name : "", it && (it->flags & QMF_GRAYED) ? " (greyed)" : "",
+				menukeyitem_bind ? ", bind mode" : "");
 		return;
 	}
 
