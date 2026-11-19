@@ -376,3 +376,75 @@ doc checks again (see the lane's report). The gate (`scripts/test.sh`) is the pa
 - The 5K cost of `r_hdr 1` (the plan's section 6 estimate, measured), with the timing protocol.
 - `metal_hdr_probe` reading a value above 1.0 from the drawable on an EDR display, on an explosion
   core with `r_hdr_peak` above 1.0, and `metal_hdr_info` showing a headroom above 1.0.
+
+## HD3, rework round 2
+
+Review of `ac990ba8` found one Important and several notes; the fixes, each its own commit.
+
+- `56f5f135` (I1): `metal_hdr_probe -5 10` cancelled the probe (a negative coordinate is the
+  internal cancel of `rmb_hdr_probe_ask`) while `R_HdrProbe_f` still armed the wait, so sixty frames
+  later it printed a false "no drawable was presented"; an argument past `INT_MAX` wrapped negative
+  through `(int)strtol` and did the same. The parse is now `rm_hdr_probe_args` (`rm_pure.c`): each
+  coordinate a whole decimal number held to [0, `INT_MAX`], so a console ask never cancels (the probe
+  then holds it to the drawable, as doc/050 says); anything else prints the usage line and arms
+  nothing. Cancel stays the timeout's. Red: the host test against a stub with the old parse failed
+  10 checks (negative, huge, past `long`, non-numeric, empty, trailing junk, a fraction, a missing
+  argument).
+- `5778227f`: the probe's generation and state are one atomic word (`rm_probe_word` in `rmb.h`:
+  state in the low 2 bits, a 30-bit wrapping generation above), and every change is a
+  compare-and-swap of the whole word. The completion handler expects the word its own copy wrote,
+  which a re-ask always moves on, so the old load-then-swap race (a re-ask and a new copy between a
+  stale handler's load and its swap) cannot mark the new probe read. The host test checks the word's
+  arithmetic, that the stale handler's expected word differs from the new copy's, and the wrap.
+  `rmb_encode_release` now drops `probe_buf` and sets the word idle in the next generation (not to 0,
+  so a completion still in flight from before the release matches no later probe).
+- `506ee3b8`: doc/040's `r_hdr` and `r_hdr_peak` said a live change prints the peak in force; with
+  the headroom unavailable or not above white the line is `on, shown at SDR` with the reason and no
+  peak (`rm_hdr_report`). The docs now say so.
+- `2eaa1f4a`: the tone map maps each pixel once a frame. `R_HdrToneMap` runs after each view, and the
+  player model of the menu (`RDF_NOWORLDMODEL`, `menu.c`) is a second view over the world. The trace:
+  that view's draws start with `R_ClearNoWorld` (`R_RenderViewDraw`), a quad of 0.3 grey at alpha 1
+  over all of clip space with no depth test, in `r_view.vp`, which `R_SetupGL` takes from
+  `rm_view_rect` of the same `fd` rectangle, vid size and target height that `R_HdrToneMap` maps; an
+  `RDF_NOWORLDMODEL` view is always the forward path (`rm_gb_path`), and MetalFX is off under
+  `r_hdr 1`. So every pixel of that rectangle is repainted, opaque, before the model view's map, and
+  what the world's map wrote there is gone: inside the rectangle a pixel is mapped once (by the model
+  view), outside it once (by the world's). The code is unchanged; `R_HdrToneMap` says why, and the
+  host test walks that order on a strip of pixels at a peak of 4, with a check that the shoulder
+  applied twice is not applied once (so a view that did not repaint would show). Retro has the same
+  shape (`R_RetroFinish` after each view, at the same seat) and the same answer: the model view's
+  rectangle is repainted before its Retro pass, so no pixel is quantized twice; Retro is unchanged.
+
+Left as notes for later: fast-math NaN handling in the shaders, and the report line's `%.2f`.
+
+### Re-run
+
+One hold, branch at `2eaa1f4a`, the game module built first, `PINS_SEED=1`, 640 x 480, a scratch
+store, each record's hash the hash of its frames' hashes (`shasum` of the frames, then of that list):
+
+| scenario | frames | branch | main (the tables above) |
+| --- | --- | --- | --- |
+| `world` | 23 | `b15b40cf1604` | identical |
+| `retro` | 23 | `1c33e27aa3ff` | identical |
+| `models` | 23 | `552ee3cb16b8` | identical |
+| `hud2d` | 23 | `f9ffe0290d69` | identical |
+| `hdr` | 23 | `11b7dcc7968c` | identical (HD2's and HD3's) |
+
+The probe, the screen locked (the drawable is 1280 wide at 640 x 480 points), first at `r_hdr 0`
+and then at `r_hdr 1`:
+
+```
+ref_metal: hdr: probe (0, 10) of the drawable, BGRA8Unorm: r 0.1333 g 0.0941 b 0.0588 a 1.0000, at or below SDR white
+ref_metal: hdr: probe (1279, 5) of the drawable, BGRA8Unorm: r 0.1333 g 0.1059 b 0.0824 a 1.0000, at or below SDR white
+usage: metal_hdr_probe <x> <y>: one pixel of the drawable, from its top left (whole numbers, held to the drawable's size)
+ref_metal: hdr: on, shown at SDR: the display's headroom is unavailable
+ref_metal: hdr: probe (0, 10) of the drawable, RGBA16Float: r 0.0156 g 0.0093 b 0.0047 a 1.0000, at or below SDR white
+ref_metal: hdr: probe (1279, 5) of the drawable, RGBA16Float: r 0.0157 g 0.0110 b 0.0072 a 1.0000, at or below SDR white
+ref_metal: hdr: off
+```
+
+`metal_hdr_probe -5 10` read pixel (0, 10), `metal_hdr_probe 99999999999 5` the last column, and
+`metal_hdr_probe abc 5` printed the usage line; the timeout line was not printed. Checks:
+`check-ref-metal: ok (13197 checks, 0 failed; ...)`, `check-tvos: ok`, `check-ios: ok`,
+`check-cvar-docs: ok`, `make test`: 406 tests, 0 failed; the doc checks on the tree with this
+section are in the lane's report. The gate (`scripts/test.sh`) is the parent's.
