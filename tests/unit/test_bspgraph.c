@@ -1353,7 +1353,7 @@ TEST(slot_reclaim_missing_file_clears_name)
  * A skin refusal in the alias loader (FIX140): find_image raises
  * Com_Error between Hunk_Begin and the return, so the hunk is in
  * Mod_LoadMD2's local only. The reclaim frees it through Mod_LoadHunk, with
- * the real hunk.o. mincore on the hunk's mapping tells whether it is still
+ * the real hunk.o. mprotect on the hunk's mapping tells whether it is still
  * mapped.
  */
 static void *t_skin_hunk;
@@ -1370,10 +1370,10 @@ t_find_image_refuses(const char *name, imagetype_t type)
 static int
 t_mapped(void *hunk)
 {
-	unsigned char vec[16];
 	void *base = (byte *)hunk - sizeof(size_t);
 
-	return mincore(base, 1, (void *)vec) == 0;
+	/* ENOMEM when the page is unmapped; the same protection changes nothing */
+	return mprotect(base, (size_t)getpagesize(), PROT_READ | PROT_WRITE) == 0;
 }
 
 static void
