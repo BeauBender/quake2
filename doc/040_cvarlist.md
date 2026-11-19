@@ -931,7 +931,10 @@ marked `(n/a)` and skipped.
   ray tracing or one not in this build, runs stock and says why
   (`ref_metal: presentation: stock; r_presentation 1 (enhanced) reads 0:
   no ray tracing on this device`), and the cvar keeps its value. Other
-  renderers ignore it. Saved with the configuration.
+  renderers ignore it. The video menu and the Ray tracing screen show the
+  cvar's value, so after a console `set` without a `vid_restart` they can
+  differ from the mode that runs until the restart. Saved with the
+  configuration.
 
 The `r_rt_*` cvars belong to the Metal renderer's ray tracing, which is
 being built: `r_rt_shadows` is its first effect, `r_rt_ao` its second, `r_rt_water` its third and `r_rt_sun` its fourth; with `r_rt_stats` set, the renderer
