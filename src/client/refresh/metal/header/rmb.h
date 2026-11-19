@@ -1638,6 +1638,35 @@ int rmb_hdr_on(void);
 /* metal_hdr_info's line (rm_hdr_info_format), from the layer's state now; 1 when it fits */
 int rmb_hdr_info(char *buf, size_t len);
 
+/*
+ * TASK196 (HD3): the display's headroom now and its potential, each below
+ * 0 when it is unavailable (no reading yet: HD1 reads them).
+ */
+void rmb_hdr_headroom(float *now, float *potential);
+
+/* the peak in force (mtl_hdr_peak; below 1.0 is 1.0) for the tone map and the present, from the next pass that uses it */
+void rmb_hdr_peak_set(float peak);
+
+/*
+ * The tone map (rm_fragment_tonemap, common/mtl_hdr_math.h) over the
+ * rectangle (x, y, w, h) of the float16 frame target, in pixels from its
+ * top left, in place at the Retro pass's seat (rmb_retro_pass): the end of
+ * the 3D view, before the 2D layer. 0, the frame untouched, off the
+ * float16 path, outside a frame, for an empty rectangle or when the
+ * pipeline did not build (rmb_hdr_fail).
+ */
+int rmb_tonemap_pass(int x, int y, int w, int h);
+
+/*
+ * metal_hdr_probe: asks for the pixel (x, y) of the next drawable that is
+ * presented (held to its size), read after the present wrote it; a
+ * negative x or y cancels. rmb_hdr_probe_take gives it once read: 1 with
+ * the drawable's pixel format (fmt), the pixel read and its 8 bytes (an
+ * RGBA16Float pixel; the first 4 of a BGRA8Unorm one), 0 while there is none.
+ */
+void rmb_hdr_probe_ask(int x, int y);
+int rmb_hdr_probe_take(int *fmt, int *x, int *y, unsigned char px[8]);
+
 #ifdef __OBJC__
 #import <Metal/Metal.h>
 
@@ -1659,6 +1688,9 @@ id<MTLRenderPipelineState> rmb_new_render_pipe(MTLRenderPipelineDescriptor *d, N
 /* the float16 path's present (rm_fragment_present_hdr) and SDR readback (rm_fragment_hdr_read), built at first use */
 id<MTLRenderPipelineState> rmb_present_hdr_pipe(void);
 id<MTLRenderPipelineState> rmb_hdr_read_pipe(void);
+
+/* the tone map's pipeline (rm_fragment_tonemap into RGBA16Float, HD3), built at first use */
+id<MTLRenderPipelineState> rmb_tonemap_pipe(void);
 #endif
 
 /* Waits (bounded) for the frames on the GPU and releases the layer and the targets. */

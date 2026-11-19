@@ -45,6 +45,7 @@
 #include "common/mtl_matrix.h"
 #include "common/mtl_rate.h"
 #include "common/mtl_retro_math.h"
+#include "common/mtl_hdr_math.h"
 #include <time.h>
 
 refimport_t ri;
@@ -179,23 +180,82 @@ RM_Effect(const cvar_t *cv)
 }
 
 /*
- * r_hdr (TASK196, HD2; docs/plans/hdr-output.md): the float16 frame
- * target, drawn as stock and decoded to extended linear sRGB at the
- * present. Live: read each frame, applied between frames. -1 until the
- * first frame applies it.
+ * r_hdr (TASK196, HD2 and HD3; docs/plans/hdr-output.md): the float16
+ * frame target, drawn as stock, tone-mapped to the peak in force at the
+ * end of the 3D view and decoded to extended linear sRGB at the present.
+ * Live: read each frame, applied between frames. -1 until the first
+ * frame applies it. r_hdr_peak: the peak, held to the display's headroom
+ * each frame (mtl_hdr_peak).
  */
-static cvar_t *r_hdr;
+static cvar_t *r_hdr, *r_hdr_peak;
 static int rm_hdr_applied = -1;
 
-/* metal_hdr_info: the layer's format, colour space and EDR property, and the headroom (read only) */
+/* metal_hdr_probe: frames since the ask, 0 when none is pending (a drawable is read within RM_HDR_PROBE_FRAMES) */
+#define RM_HDR_PROBE_FRAMES 60
+static int rm_hdr_probe_wait;
+
+/* metal_hdr_info: the layer's format, colour space and EDR property, the headroom and the peak in force (read only) */
 static void
 R_HdrInfo_f(void)
 {
 	char line[256];
+	float now, potential;
 
 	if (rmb_hdr_info(line, sizeof(line)))
 	{
 		R_Printf(PRINT_ALL, "%s\n", line);
+	}
+
+	rmb_hdr_headroom(&now, &potential);
+
+	if (rm_hdr_peak_line(r_hdr_peak->value, now, line, sizeof(line)))
+	{
+		R_Printf(PRINT_ALL, "%s\n", line);
+	}
+}
+
+/* metal_hdr_probe <x> <y>: one pixel of the next drawable presented, printed when it is read */
+static void
+R_HdrProbe_f(void)
+{
+	if (ri.Cmd_Argc() != 3)
+	{
+		R_Printf(PRINT_ALL, "usage: metal_hdr_probe <x> <y>: one pixel of the drawable, from its top left\n");
+		return;
+	}
+
+	rmb_hdr_probe_ask((int)strtol(ri.Cmd_Argv(1), NULL, 10), (int)strtol(ri.Cmd_Argv(2), NULL, 10));
+	rm_hdr_probe_wait = 1;
+}
+
+/* the probe's answer, once its drawable is read, or that none was presented to read */
+static void
+R_HdrProbeFrame(void)
+{
+	unsigned char px[8];
+	char line[256];
+	int fmt, x, y;
+
+	if (!rm_hdr_probe_wait)
+	{
+		return;
+	}
+
+	if (rmb_hdr_probe_take(&fmt, &x, &y, px))
+	{
+		rm_hdr_probe_wait = 0;
+
+		if (rm_hdr_probe_format(fmt, x, y, px, line, sizeof(line)))
+		{
+			R_Printf(PRINT_ALL, "%s\n", line);
+		}
+	}
+	else if (++rm_hdr_probe_wait > RM_HDR_PROBE_FRAMES)
+	{
+		rm_hdr_probe_wait = 0;
+		rmb_hdr_probe_ask(-1, -1);
+		R_Printf(PRINT_ALL, "ref_metal: hdr: probe: no drawable was presented in %d frames "
+				"(the display may be off or asleep, or the window hidden); nothing read\n", RM_HDR_PROBE_FRAMES);
 	}
 }
 
@@ -208,7 +268,18 @@ R_HdrFrame(void)
 	const int retro = asked && (rm_presentation == RM_PRES_RETRO);
 	const int active = rm_hdr_active(asked, rm_presentation == RM_PRES_RETRO) && !rmb_hdr_failed();
 	const int live = rm_hdr_applied >= 0;
+	/* r_hdr_peak's change, taken every frame, so a value set before the first frame is not reported */
+	const int peak_changed = r_hdr_peak->modified;
+	float now, potential;
+	char line[256];
 	static int retro_said;
+
+	r_hdr_peak->modified = false;
+	R_HdrProbeFrame();
+
+	/* the peak in force this frame: r_hdr_peak held to [1, 16] and to the headroom now */
+	rmb_hdr_headroom(&now, &potential);
+	rmb_hdr_peak_set(mtl_hdr_peak(r_hdr_peak->value, now));
 
 	/*
 	 * said on a live change only: neither a stock run nor a start with
@@ -232,22 +303,21 @@ R_HdrFrame(void)
 
 	if (active == rm_hdr_applied)
 	{
+		/* the report again on a live r_hdr_peak change while the float16 path is on */
+		if (active && live && peak_changed && rm_hdr_report(1, r_hdr_peak->value, now, potential, line, sizeof(line)))
+		{
+			R_Printf(PRINT_ALL, "%s\n", line);
+		}
+
 		return;
 	}
 
 	rmb_hdr_set(active);
 
-	if (!live)
+	/* on a live change only, and "off" only from on (a Retro hold says its own line above) */
+	if (live && (active || (rm_hdr_applied > 0)) && rm_hdr_report(active, r_hdr_peak->value, now, potential, line, sizeof(line)))
 	{
-		/* nothing */
-	}
-	else if (active)
-	{
-		R_Printf(PRINT_ALL, "ref_metal: hdr: on (r_hdr 1): the frame in float16, shown at SDR until the tone map\n");
-	}
-	else if (rm_hdr_applied > 0)
-	{
-		R_Printf(PRINT_ALL, "ref_metal: hdr: off\n");
+		R_Printf(PRINT_ALL, "%s\n", line);
 	}
 
 	rm_hdr_applied = active;
@@ -291,6 +361,7 @@ R_Register(void)
 	rmb_colorspace_set(rm_colorspace_mode(metal_colorspace->value));   /* applied when the layer is attached */
 	metal_colorspace->modified = false;
 	r_hdr = ri.Cvar_Get("r_hdr", "0", CVAR_ARCHIVE);
+	r_hdr_peak = ri.Cvar_Get("r_hdr_peak", "4", CVAR_ARCHIVE);
 	r_farsee = ri.Cvar_Get("r_farsee", "0", CVAR_LATCH | CVAR_ARCHIVE);
 	r_fullbright = ri.Cvar_Get("r_fullbright", "0", 0);
 	r_drawworld = ri.Cvar_Get("r_drawworld", "1", 0);
@@ -328,6 +399,7 @@ R_Register(void)
 	ri.Cmd_AddCommand("imagelist", R_ImageList_f);
 	ri.Cmd_AddCommand("modellist", Mod_Modellist_f);
 	ri.Cmd_AddCommand("metal_hdr_info", R_HdrInfo_f);
+	ri.Cmd_AddCommand("metal_hdr_probe", R_HdrProbe_f);
 }
 
 /* from gl1_main.c */
@@ -604,6 +676,7 @@ RI_Shutdown(void)
 	ri.Cmd_RemoveCommand("imagelist");
 	ri.Cmd_RemoveCommand("modellist");
 	ri.Cmd_RemoveCommand("metal_hdr_info");
+	ri.Cmd_RemoveCommand("metal_hdr_probe");
 	Mod_FreeAll();
 	RM_ShutdownDraw();
 	R_ShutdownImages();
@@ -1196,6 +1269,23 @@ R_RetroFinish(const refdef_t *fd)
 			((curve >= 0.0f) && (curve < (float)MTL_RETRO_CURVES)) ? (int)curve : 0);
 }
 
+/*
+ * TASK196 (HD3): under r_hdr 1, the tone map over the rectangle of the
+ * view fd just drawn, at the Retro pass's seat (R_RetroFinish): after the
+ * view and its scaling, before the 2D layer, so the HUD and the console
+ * stay at SDR white. Retro and the float16 path never run together.
+ */
+static void
+R_HdrToneMap(const refdef_t *fd)
+{
+	rm_viewport_t vp;
+	int tw = 0, th = 0;
+
+	rmb_target_size(&tw, &th);
+	rm_view_rect(fd->x, fd->y, fd->width, fd->height, vid.width, vid.height, th, &vp);
+	rmb_tonemap_pass((int)vp.x, (int)vp.y, (int)vp.w, (int)vp.h);
+}
+
 static void
 RI_RenderFrame(refdef_t *fd)
 {
@@ -1244,6 +1334,10 @@ RI_RenderFrame(refdef_t *fd)
 	if (rm_presentation == RM_PRES_RETRO)
 	{
 		R_RetroFinish(fd);
+	}
+	else if (rmb_hdr_on())
+	{
+		R_HdrToneMap(fd);
 	}
 }
 
