@@ -1675,12 +1675,21 @@ int rmb_hdr_probe_take(int *fmt, int *x, int *y, unsigned char px[8]);
  * ps itself on the stock path; on the float16 path its variant with every
  * BGRA8Unorm colour attachment made RGBA16Float, built at its first use
  * from the descriptor rmb_new_render_pipe kept (rmb_resource.m). When the
- * variant cannot be built it says so once, turns the float16 path off for
- * the session (rmb_hdr_fail) and returns ps, never nil: that frame's draw
- * is not presented (the frame and the drawable differ in format), and the
- * next frame is stock.
+ * variant cannot be built it says so once, turns the float16 path off
+ * (rmb_hdr_fail) and returns nil, never ps (a BGRA8Unorm pipeline is never
+ * bound to an RGBA16Float target, FIX133), for every later ask of that
+ * frame too: the draw is skipped, that frame is not presented, and the
+ * next frame is stock. nil for a nil ps.
  */
 id<MTLRenderPipelineState> rmb_fmt_pipe(id<MTLRenderPipelineState> ps);
+
+/*
+ * rmb_fmt_pipe(ps) bound to enc: 1, or 0 with nothing bound (no enc, no
+ * ps, or its float16 variant was not built), when the caller skips the
+ * draw. Every draw of a rmb_new_render_pipe pipeline binds it through here
+ * (tests/check-ref-metal.sh).
+ */
+int rmb_fmt_bind(id<MTLRenderCommandEncoder> enc, id<MTLRenderPipelineState> ps);
 
 /* newRenderPipelineStateWithDescriptor:error:, keeping a copy of d for rmb_fmt_pipe when it draws into BGRA8Unorm */
 id<MTLRenderPipelineState> rmb_new_render_pipe(MTLRenderPipelineDescriptor *d, NSError **e);

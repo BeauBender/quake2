@@ -516,7 +516,12 @@ rmb_post_pass(id<MTLRenderPipelineState> (*pipe)(void), int x, int y, int w, int
 			return 0;
 		}
 
-		[enc setRenderPipelineState:rmb_fmt_pipe(pso)];
+		if (!rmb_fmt_bind(enc, pso))
+		{
+			[enc endEncoding];
+			return 0;
+		}
+
 		[enc setViewport:vp];
 		[enc setScissorRect:sc];
 		[enc setFragmentTexture:retro_src atIndex:0];
@@ -863,8 +868,12 @@ rmb_force_alpha(id<MTLCommandBuffer> cmd, id<MTLTexture> tex)
 	rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
 	rp.colorAttachments[0].storeAction = MTLStoreActionStore;
 	enc = [cmd renderCommandEncoderWithDescriptor:rp];
-	[enc setRenderPipelineState:rmb_fmt_pipe(pso)];
-	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+
+	if (rmb_fmt_bind(enc, pso))
+	{
+		[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+	}
+
 	[enc endEncoding];
 }
 
@@ -906,7 +915,13 @@ rmb_present_pass(id<MTLCommandBuffer> cmd, id<MTLRenderPipelineState> pso, id<MT
 	rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
 	rp.colorAttachments[0].storeAction = MTLStoreActionStore;
 	enc = [cmd renderCommandEncoderWithDescriptor:rp];
-	[enc setRenderPipelineState:rmb_fmt_pipe(pso)];
+
+	if (!rmb_fmt_bind(enc, pso))
+	{
+		[enc endEncoding];
+		return;
+	}
+
 	[enc setViewport:vp];
 	[enc setFragmentTexture:color atIndex:0];
 	[enc setFragmentBytes:ofs length:sizeof(ofs) atIndex:0];
@@ -1236,7 +1251,12 @@ rmb_draw_2d_idx(int pipe, int tex, int smp, int sharp, const rmb_vert2d_t *v, in
 		memcpy((unsigned char *)frame_ring.contents + vat, v, vbytes);
 		memcpy((unsigned char *)frame_ring.contents + iat, idx, (size_t)count * sizeof(idx[0]));
 
-		[frame_enc setRenderPipelineState:rmb_fmt_pipe(ps)];
+		if (!rmb_fmt_bind(frame_enc, ps))
+		{
+			rmb_counts.draw_skips++;
+			return 0;
+		}
+
 		[frame_enc setViewport:(MTLViewport){ 0, 0, (double)color.width, (double)color.height, 0, 1 }];
 		[frame_enc setVertexBuffer:frame_ring offset:(NSUInteger)vat atIndex:0];
 		[frame_enc setVertexBytes:mvp length:16 * sizeof(float) atIndex:1];
@@ -1316,7 +1336,11 @@ rmb_draw_3d_state(int pipe, int ds, const float *mvp, const float *rgba, const r
 	memcpy(u.mvp, mvp, sizeof(u.mvp));
 	memcpy(u.color, rgba, sizeof(u.color));
 
-	[frame_enc setRenderPipelineState:rmb_fmt_pipe(ps)];
+	if (!rmb_fmt_bind(frame_enc, ps))
+	{
+		return 0;
+	}
+
 	[frame_enc setDepthStencilState:dss];
 	[frame_enc setFrontFacingWinding:MTLWindingCounterClockwise];
 	[frame_enc setCullMode:(cull == RMB_CULL_BACK) ? MTLCullModeBack : (cull ? MTLCullModeFront : MTLCullModeNone)];
