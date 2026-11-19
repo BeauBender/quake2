@@ -88,6 +88,7 @@ if [ "$require" = 1 ] && grep -q -e 'skipped: no Metal device' -e 'unsupported h
 fi
 
 if grep -q 'skipped: no Metal device' "${tmp:?}/run.out"; then
+	[ "${UPSCALE_METALFX_REQUIRE:-0}" != 1 ] || { echo "check-upscale-metalfx: UPSCALE_METALFX_REQUIRE=1 and there is no Metal device"; exit 1; }
 	echo "check-upscale-metalfx: skipped: no Metal device"
 	exit 0
 fi

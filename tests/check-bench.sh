@@ -618,6 +618,7 @@ t_lock_stop() {
 		grep -q after-stty "${E:?}/tty.out" && bad "stop: a command that touched the terminal went on"
 		[ "$(B lock status)" = lock=free ] || bad "stop: a command that touched the terminal left the lock held"
 	else
+		[ "${CHECK_BENCH_TTY_REQUIRE:-0}" != 1 ] || bad "stop: CHECK_BENCH_TTY_REQUIRE=1 and there is no working script(1) for the terminal test"
 		echo "$me: no working script(1) here, so the terminal test is skipped"
 	fi
 	# The command that catches TERM, started above: killed after the floor.
