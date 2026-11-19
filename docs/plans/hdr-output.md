@@ -32,8 +32,15 @@ What stays stock:
   byte-identical, which each slice proves with the full base-against-branch
   pin comparison.
 - With `r_hdr 1`, every value at or below SDR white is shown as it is
-  today (the tone map is the identity up to 1.0, section 2.3). Only what is
-  clipped today, the part of a pixel above white, becomes visible.
+  today, within one 8-bit step where blends stack (the tone map is the
+  identity up to 1.0, section 2.3). Translucent surfaces blend
+  (`SourceAlpha`/`OneMinusSourceAlpha`, for example `rmb_resource.m` and
+  `rmb_rtwater.m`): a `BGRA8Unorm` target rounds each blend to 8 bits,
+  float16 keeps about 11 bits and rounds once at readback, so a pixel under
+  one translucent layer can differ by one step (a reviewer's model: about 1
+  pixel in 50 after one layer, 1 in 8 after two). Only what is clipped
+  today, the part of a pixel above white, becomes visible beyond that.
+  `r_hdr 0` stays byte-identical; only `r_hdr 1` is affected.
 - No change to the renderer API (`API_VERSION` in
   [`ref.h`](../../src/client/vid/header/ref.h)), the protocol or the
   savegame format.
@@ -56,8 +63,10 @@ What stays stock:
   [its runbook](../runbook/TASK121.md) found the layer already reads sRGB on
   the bare-metal host's display).
 - The stock shading is display-referred 8-bit arithmetic that matches gl1:
-  `mtl_world_color` on bytes, every fragment output saturated. Nothing in
-  the stock path exceeds 1.0.
+  `mtl_world_color` on bytes. Fragment outputs are saturated, or, for the
+  world (`rm_fragment_world` returns `tex.sample` unsaturated), come from
+  8-bit unorm textures, so they stay at or below 1.0. Nothing in the stock
+  path exceeds 1.0.
 - `vid_gamma` is not a pass: `R_InitImages`
   ([`rm_image.c`](../../src/client/refresh/metal/rm_image.c)) bakes
   `gammatable` into textures, lightmaps, the palette, particles and flashes
@@ -70,7 +79,16 @@ What stays stock:
   [`rmb_gbuf.m`](../../src/client/refresh/metal/rmb_gbuf.m)).
 - The ray-tracing terms are written to the G-buffer's `t_light`
   (`RGBA8Unorm`) and resolved into `t_rcolor` (`BGRA8Unorm`), so any
-  radiance above 1.0 is clipped there today.
+  radiance above 1.0 is clipped there today. `t_rcolor` is also the scaled
+  3D view's own target: `rmb_gbuf.m` returns `view_scaled ? t_rcolor :
+  rmb_frame_color()` as every 3D pass's attachment, and `view_scaled` is set
+  whenever the render size differs from the output or MetalFX is ready. It
+  is made `BGRA8Unorm` and is MetalFX's input, whose formats
+  (`RMB_FX_COLOR`, `rmb_metalfx.m`) are `BGRA8Unorm`.
+- With display sync off, the frame is drawn into a present slot's target
+  (taken by `rmb_present_take`, `rmb_encode.m`): `RMB_PRESENTS` = 4 slots
+  (`rmb_device.m`, `header/rmb.h`), made `BGRA8Unorm` and dropped only on a
+  size change.
 - TASK184 (branch `task184`, not on main) runs the Retro pass at the end of
   `RI_RenderFrame`, on the view's rectangle of the frame target, before the
   2D draws: RGB565 with a dither, an optional box filter and `r_retro_gamma`.
@@ -81,12 +99,16 @@ What stays stock:
 
 Under `r_hdr 1`:
 
-- the frame target becomes `MTLPixelFormatRGBA16Float`, and every pipeline
-  that draws into it is made for that format (made on first use, as the
+- the frame target, and the four present-slot targets used with display sync
+  off, become `MTLPixelFormatRGBA16Float`; the slots are dropped on a
+  format change as they are on a size change, so a live switch back to 0 is
+  byte-identical. Every pipeline that draws into them is made for that format (made on first use, as the
   Retro and MetalFX pipelines are, so a stock run builds nothing more);
 - the layer gets `pixelFormat` `RGBA16Float`, `colorspace`
   `kCGColorSpaceExtendedLinearSRGB` and `wantsExtendedDynamicRangeContent`
-  YES. Apple: with that property set, "all rendered content is clamped to
+  YES. Switching `r_hdr` back to 0 restores the layer's original colour
+  space through `rmb_cs_own` (`rmb_device.m`), including the
+  `metal_colorspace 0` "as found" case. Apple: with that property set, "all rendered content is clamped to
   the screen's maximumExtendedDynamicRangeColorComponentValue value rather
   than 1.0"
   ([CAMetalLayer](https://developer.apple.com/documentation/quartzcore/cametallayer/wantsextendeddynamicrangecontent);
@@ -130,7 +152,10 @@ values above white only where they exist:
 2. **The ray-tracing terms**: the sun, the bounce and RT-primary's direct
    light (presentation-modes section 4) are radiance that is clipped in
    `t_light` and `t_rcolor` today. Under `r_hdr 1` those two become
-   `RGBA16Float` (slice HD6).
+   `RGBA16Float`: `t_rcolor` in HD2, because it is the scaled view's target
+   (section 2.1), and `t_light` in HD6. Until HD4, HD2 turns MetalFX off
+   under `r_hdr 1` with the existing `rmb_fx_note`, since its formats are
+   `BGRA8Unorm`.
 3. **Emissive surfaces** (`SURF_LIGHT` faces, the sky, lava): a gain above
    white would be a new look under the stock presentation. Not in this
    plan's slices unless the owner asks (section 8).
@@ -156,7 +181,9 @@ The call (H3): identity up to 1.0, and above it
 force, applied to the largest of the three linear components and the
 pixel scaled by `f(m) / m`, so hue is kept. The curve has slope 1 at white
 (no visible knee), is monotonic, and never reaches `P`. Every SDR pixel is
-untouched, which is the stock rule. The arithmetic goes in a shared header
+untouched, which is the stock rule. At `P = 1` the formula divides by zero
+(and Metal's fast math does not guarantee inf semantics), so the shared
+header special-cases `P <= 1` as a clamp. The arithmetic goes in a shared header
 under `src/client/refresh/metal/common/`, as `mtl_retro_math.h` does for
 Retro, so the host test checks the shader's numbers.
 
@@ -196,7 +223,8 @@ SDR.
 
 ```
 3D view (internal size, RGBA16Float, stock encoded values, additive sums unclamped)
-  -> RT resolve into t_rcolor (RGBA16Float under r_hdr 1, HD6)
+  -> the scaled view's t_rcolor (RGBA16Float under r_hdr 1, HD2; MetalFX off until HD4)
+  -> RT terms in t_light (RGBA16Float, HD6)
   -> MetalFX upscale (float16 in and out, HD4)
   -> tone map to [0, P] (the Retro seat; HD3)
   -> 2D layer (saturated)
@@ -291,7 +319,9 @@ The menu:
   (shown at SDR, as above).
 - Greying, with the reasons in section 3, plus "Retro is a 16-bit SDR look"
   under `r_presentation 2`. "HDR peak" is greyed with "HDR is off" while
-  `r_hdr` is 0.
+  `r_hdr` is 0, and also on a display without headroom, with the same
+reason as `r_hdr` ("this display reports no extended range"), since there
+is no peak to set.
 
 ## 5. Verification
 
@@ -300,13 +330,18 @@ The menu:
   with a locked screen.
 - **The pins at `r_hdr 1`**: the harness reads 8-bit frames (`rmb_read` in `rmb_encode.m`
   copies `w * 4` bytes a row, and the frames are TGA). Under `r_hdr 1` the
-  readback converts the float16 target to what an SDR display shows (the
-  tone map with `P = 1`, then the encoded value rounded to a byte) in one
+  readback converts the float16 target to what an SDR display shows (HD2: a
+  plain clamp to 1.0 and encode, since the tone map comes in HD3; from HD3
+  the tone map with `P = 1`, which is the same clamp, then the encoded value
+  rounded to a byte) in one
   compute or fragment pass into a scratch `BGRA8Unorm` texture, and reads
   that. So the recorded HDR scenario is the SDR fallback, and it differs
   from stock only where additive effects or RT terms exceeded white (where
   the stock path clipped the sum, the fallback clips after the tone map at
-  1.0). An `hdr` scenario under `scripts/pins/scenarios/` records it. Runs
+  1.0), and by up to one 8-bit step where translucent blends stack (float16
+  blends round once, section 1). So the `hdr` scenario is its own pin, not
+  a stock-equals-except-highlights comparison. An `hdr` scenario under
+  `scripts/pins/scenarios/` records it. Runs
   on the VM (no headroom needed: section 3) and with a locked screen.
 - **The measured pixel above 1.0**: `metal_hdr_probe` on a pixel in an
   explosion core or a sunlit surface prints a value above 1.0, and
@@ -339,14 +374,20 @@ and the three drawables (`maximumDrawableCount`, `RMB_FRAMES_IN_FLIGHT`
 in `rmb_device.m`, taken as 3); `BGRA8Unorm` is 4 bytes a pixel,
 `RGBA16Float` 8. Bandwidth counts one store of the target per pass that
 draws into it (Apple's GPUs blend in tile memory, so overdraw adds no
-DRAM traffic), one read by the present, one write of the drawable, and the
-tone-map pass's read and write: 5 full-frame touches under `r_hdr 1`
+DRAM traffic; the 2D pass's store counts as one), one read by the present,
+one write of the drawable, and the tone-map pass's read and write: 5
+full-frame touches under `r_hdr 1`
 against 3 today. At 60 frames a second.
 
 | Size | Pixels | Target + 3 drawables, 8-bit | Same, float16 | Per frame, 8-bit (3 touches) | Per frame, float16 (5 touches) | At 60 Hz, 8-bit | At 60 Hz, float16 |
 |---|---|---|---|---|---|---|---|
 | 1920x1080 | 2.07 M | 33 MB | 66 MB | 25 MB | 83 MB | 1.5 GB/s | 5.0 GB/s |
 | 5120x2880 | 14.7 M | 236 MB | 472 MB | 177 MB | 590 MB | 10.6 GB/s | 35.4 GB/s |
+
+With display sync off the frame is drawn into one of 4 present-slot
+targets, so the footprint is those 4 targets plus the 3 drawables instead
+of the one target: at 1920x1080 that is 7 x 8.3 MB = 58 MB in 8-bit and 116
+MB in float16, at 5120x2880 413 MB and 825 MB (the slots are made on use).
 
 The tone map runs at the output size (section 2.6); if HD4 moves it
 before MetalFX, it runs at the internal size and costs less. For scale, the M1's
@@ -365,7 +406,7 @@ section 7: VM, M6, device. Sizes: S under about 300 changed lines, M about
 | Id | Title | depends_on | Tier | Size |
 |---|---|---|---|---|
 | HD1 | The headroom readings (macOS, iOS) and `metal_hdr_info`; the M6 display's readings in the runbook, display awake and asleep; no visual change | | VM (build), M6 with the display on | S |
-| HD2 | `r_hdr`: the float16 frame target and its pipelines, the layer's format, extended linear sRGB colour space and EDR property, the linearizing present, the live switch, the SDR-fallback readback; `r_hdr 0` byte-identical; `doc/040` | HD1 | VM (pins, both values) and M6 (layer state) | M |
+| HD2 | `r_hdr`: the float16 frame target, the present-slot targets and `t_rcolor` (dropped and remade on a format change), MetalFX off under `r_hdr 1` with `rmb_fx_note` until HD4, their pipelines, the layer's format, extended linear sRGB colour space and EDR property, the linearizing present, the live switch, the SDR-fallback readback (a plain clamp and encode); `r_hdr 0` byte-identical; `doc/040` | HD1 | VM (pins, both values) and M6 (layer state) | M |
 | HD3 | The tone map (shared header, host test) at the Retro seat, `r_hdr_peak` clamped to the headroom, the report line, `metal_hdr_probe`, the `hdr` scenario; the first owner frames; the 5K cost measured | HD2, TASK184 | VM (test, pins), M6 with the display on (probe, frames, timing) | M |
 | HD4 | MetalFX and the denoiser under `r_hdr 1`: float16 formats, the spatial `hdr` mode, the temporal scaler's acceptance of `RGBA16Float` recorded, the fallback note if refused | HD3 | M6 | S |
 | HD5 | The menu: Video options items, the Tuning screen items and A/B, preset keys, every greying reason, Retro's override; the menu walk | HD3, TASK195 | VM (walk) and M6 with the display on (a real EDR display ungreys) | M |
@@ -399,7 +440,9 @@ is one function in a shared header.
 **H4. `r_hdr` switches live.**
 Context: the card asks for live or a stated restart. The call: live, by
 remaking the target and the pipelines that draw into it on the next frame,
-as MetalFX remakes its scaler. If HD2 finds a frame that cannot be remade
+as MetalFX remakes its scaler. Switching back to 0 restores the layer's
+original colour space through `rmb_cs_own`, including the `metal_colorspace
+0` "as found" case. If HD2 finds a frame that cannot be remade
 mid-run, the cvar says "takes effect at vid_restart" and the menu offers
 one. Reverse: either way the stored value is the same.
 
