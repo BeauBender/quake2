@@ -100,6 +100,8 @@ unsigned long rmb_frame_serial = 1;
 id<MTLTexture> rmb_present_take(int w, int h);
 id<MTLRenderPipelineState> rmb_present_pipe(void);
 id<CAMetalDrawable> rmb_next_drawable(void);
+int rmb_present_region(int region, int same_format, int hdr, int have_pso);
+int rmb_present_written(id<MTLCommandBuffer> cmd, id<CAMetalDrawable> drawable, int region);
 id<MTLCommandBuffer> rmb_present_begin(id<MTLCommandBuffer> frame);
 void rmb_present_commit(void);
 
@@ -996,11 +998,11 @@ rmb_frame_end(void)
 			/* at gl1's place: the frame's bottom-left corner on the drawable's (FIX45) */
 			int region = rm_present_region_in((int)color.width, (int)color.height, (int)dst.width, (int)dst.height, &rmb_inset, &r);
 
-			/* a drawable or a frame of the other format (r_hdr switched while it was held) is not presented */
-			if ((dst.pixelFormat != color.pixelFormat) || (hdr && !pso))
-			{
-				region = 0;
-			}
+			/*
+			 * a drawable or a frame of the other format (r_hdr switched while it was held) is not presented,
+			 * nor a float16 frame without its present pipeline or with a draw skipped (rmb_fmt_bind, FIX133)
+			 */
+			region = rmb_present_region(region, dst.pixelFormat == color.pixelFormat, hdr, pso != nil);
 
 			if (region && pso)
 			{
@@ -1038,16 +1040,14 @@ rmb_frame_end(void)
 				}
 			}
 
-			if (dst.pixelFormat == color.pixelFormat)
+			/* metal_hdr_probe (TASK196): the pixel as presented, after the present wrote it */
+			if (region)
 			{
-				/* metal_hdr_probe (TASK196): the pixel as presented, after the present wrote it */
-				if (region)
-				{
-					rmb_hdr_probe_copy(pcmd, dst);
-				}
-
-				[pcmd presentDrawable:drawable];
+				rmb_hdr_probe_copy(pcmd, dst);
 			}
+
+			/* a drawable nothing wrote is not presented (FIX133) */
+			rmb_present_written(pcmd, drawable, region);
 		}
 		else
 		{
