@@ -725,7 +725,7 @@ TEST(cmvis_clusters_past_lump)
 		((dheader_t *)gbuf)->lumps[LUMP_VISIBILITY].filelen = 2;
 		name = g_write(len);
 		T_EXPECT_DROP(CM_LoadMap(name, false, &checksum));
-		T_CONSOLE_HAS("visibility of 2 bytes");
+		T_CONSOLE_HAS("has 2 bytes of visibility");
 	}
 }
 
