@@ -1917,6 +1917,50 @@ float rm_hdr_half(unsigned short h);
 int rm_hdr_probe_format(int fmt, int x, int y, const unsigned char *px, char *buf, size_t len);
 
 /*
+ * metal_hdr_probe's two arguments: 1 with x and y each a whole decimal
+ * number held to [0, INT_MAX] (a negative one is 0, a huge one INT_MAX,
+ * which the probe then holds to the drawable's size); 0, x and y left
+ * as they are, when either is missing or not a whole number.
+ */
+int rm_hdr_probe_args(const char *xs, const char *ys, int *x, int *y);
+
+/*
+ * The probe's generation and state in one word (rmb_encode.m keeps it in
+ * one atomic and compares and swaps the whole word), so a completion
+ * from before a re-ask never matches the new probe's word: state in the
+ * low 2 bits, generation (30 bits, wrapping) above.
+ */
+#define RM_PROBE_IDLE 0      /* nothing asked */
+#define RM_PROBE_ASKED 1     /* asked, waiting for a present */
+#define RM_PROBE_COPYING 2   /* its copy on the GPU */
+#define RM_PROBE_READ 3      /* the copy's command buffer completed */
+
+static inline unsigned
+rm_probe_word(unsigned gen, int state)
+{
+	return ((gen & 0x3fffffffu) << 2) | ((unsigned)state & 3u);
+}
+
+static inline unsigned
+rm_probe_gen(unsigned w)
+{
+	return w >> 2;
+}
+
+static inline int
+rm_probe_state(unsigned w)
+{
+	return (int)(w & 3u);
+}
+
+/* a new ask (arm) or a cancel: the next generation, asked or idle */
+static inline unsigned
+rm_probe_ask_word(unsigned w, int arm)
+{
+	return rm_probe_word(rm_probe_gen(w) + 1u, arm ? RM_PROBE_ASKED : RM_PROBE_IDLE);
+}
+
+/*
  * Loads ref_metal.metallib from dir and builds the 2D pipeline table and
  * the samplers. 0 with err filled on failure.
  */

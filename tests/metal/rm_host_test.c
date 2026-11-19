@@ -8983,6 +8983,45 @@ test_hdr_tonemap(void)
 		CHECK(!strcmp(line, "ref_metal: hdr: probe (1, 2) of the drawable, pixel format 552: not read"));
 		CHECK(!rm_hdr_probe_format(RM_FMT_RGBA16F, 10, 20, h, small, sizeof(small)) && small[0] == '\0');
 	}
+	{
+		/* metal_hdr_probe's arguments: each held to [0, INT_MAX], so a negative or huge one never cancels */
+		int x = -7, y = -7;
+
+		CHECK(rm_hdr_probe_args("12", "34", &x, &y) && x == 12 && y == 34);
+		CHECK(rm_hdr_probe_args("-5", "10", &x, &y) && x == 0 && y == 10);
+		CHECK(rm_hdr_probe_args("10", "-2147483649", &x, &y) && x == 10 && y == 0);
+		CHECK(rm_hdr_probe_args("99999999999", "5", &x, &y) && x == INT_MAX && y == 5);
+		CHECK(rm_hdr_probe_args("2147483648", "2147483647", &x, &y) && x == INT_MAX && y == INT_MAX);
+		CHECK(rm_hdr_probe_args("999999999999999999999999", "0", &x, &y) && x == INT_MAX && y == 0);
+		CHECK(rm_hdr_probe_args("-999999999999999999999999", "0", &x, &y) && x == 0 && y == 0);
+		x = y = -7;
+		CHECK(!rm_hdr_probe_args("abc", "5", &x, &y) && x == -7 && y == -7);
+		CHECK(!rm_hdr_probe_args("5", "", &x, &y) && x == -7 && y == -7);
+		CHECK(!rm_hdr_probe_args("5x", "5", &x, &y) && x == -7 && y == -7);
+		CHECK(!rm_hdr_probe_args("5", "1.5", &x, &y) && x == -7 && y == -7);
+		CHECK(!rm_hdr_probe_args(NULL, "5", &x, &y) && x == -7 && y == -7);
+	}
+	{
+		/*
+		 * the probe's generation and state in one word: a re-ask and a new
+		 * copy between a copy and its completion leave a word the stale
+		 * completion's compare-and-swap does not match
+		 */
+		const unsigned w0 = rm_probe_word(5, RM_PROBE_IDLE);
+		const unsigned asked = rm_probe_ask_word(w0, 1);
+		const unsigned stale = rm_probe_word(rm_probe_gen(asked), RM_PROBE_COPYING);
+		const unsigned again = rm_probe_ask_word(stale, 1);
+		const unsigned fresh = rm_probe_word(rm_probe_gen(again), RM_PROBE_COPYING);
+		const unsigned wrap = rm_probe_word(0x3fffffffu, RM_PROBE_COPYING);
+
+		CHECK(rm_probe_state(asked) == RM_PROBE_ASKED && rm_probe_gen(asked) == 6);
+		CHECK(rm_probe_state(rm_probe_ask_word(w0, 0)) == RM_PROBE_IDLE && rm_probe_gen(rm_probe_ask_word(w0, 0)) == 6);
+		CHECK(rm_probe_state(stale) == RM_PROBE_COPYING && rm_probe_state(fresh) == RM_PROBE_COPYING);
+		CHECK(fresh != stale);   /* the stale handler's expected value: its swap to READ fails */
+		CHECK(rm_probe_state(rm_probe_word(rm_probe_gen(stale), RM_PROBE_READ)) == RM_PROBE_READ
+				&& rm_probe_gen(rm_probe_word(rm_probe_gen(stale), RM_PROBE_READ)) == rm_probe_gen(stale));
+		CHECK(rm_probe_gen(rm_probe_ask_word(wrap, 1)) == 0 && rm_probe_ask_word(wrap, 1) != wrap);
+	}
 }
 
 int

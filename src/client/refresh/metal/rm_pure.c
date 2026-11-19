@@ -31,6 +31,7 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 
@@ -862,6 +863,15 @@ rm_hdr_probe_format(int fmt, int x, int y, const unsigned char *px, char *buf, s
 	return rm_hdr_line(buf, len, "ref_metal: hdr: probe (%d, %d) of the drawable, %s: r %.4f g %.4f b %.4f a %.4f, %s",
 			x, y, rm_hdr_fmt_name(fmt, tmp, sizeof(tmp)), (double)v[0], (double)v[1], (double)v[2], (double)v[3],
 			((v[0] > 1.0f) || (v[1] > 1.0f) || (v[2] > 1.0f)) ? "above SDR white" : "at or below SDR white");
+}
+
+/* RED STUB: the old parse ((int)strtol, unclamped) */
+int
+rm_hdr_probe_args(const char *xs, const char *ys, int *x, int *y)
+{
+	*x = xs ? (int)strtol(xs, NULL, 10) : 0;
+	*y = ys ? (int)strtol(ys, NULL, 10) : 0;
+	return 1;
 }
 
 int
