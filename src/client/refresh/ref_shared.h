@@ -99,7 +99,9 @@ extern void SmoothColorImage(unsigned *dst, size_t size, size_t rstep);
 extern void scale3x(const byte *src, byte *dst, int width, int height);
 
 extern float Mod_RadiusFromBounds(const vec3_t mins, const vec3_t maxs);
-extern const byte* Mod_DecompressVis(const byte *in, int row);
+extern const byte* Mod_DecompressVis(const byte *in, int inlen, int row);
+extern const byte *Mod_ClusterPVSRow(const dvis_t *vis, int vislen, int cluster,
+	const byte *novis);
 
 /* Shared models struct */
 
@@ -222,6 +224,8 @@ extern qboolean Mod_CheckVis(const byte *mod_base, const dheader_t *header,
 extern qboolean Mod_CheckNodes(const byte *mod_base, const dheader_t *header,
 	char *why, size_t whysize);
 extern qboolean Mod_CheckFaceEdges(const byte *mod_base, const dheader_t *header,
+	char *why, size_t whysize);
+extern qboolean Mod_CheckLeafs(const byte *mod_base, const dheader_t *header,
 	char *why, size_t whysize);
 extern mleaf_t *Mod_PointInLeaf(const vec3_t p, mnode_t *node);
 

@@ -147,6 +147,7 @@ typedef struct model_s
 	msurface_t **marksurfaces;
 
 	dvis_t *vis;
+	int vislen; /* bytes of vis, for the bounded PVS */
 
 	byte *lightdata;
 

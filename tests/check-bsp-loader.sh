@@ -2,11 +2,11 @@
 # Invariant: every renderer's BSP loader runs the shared checks (FIX118).
 #
 # The four renderers (gl1, gl3, soft, metal) each fork Mod_LoadBrushModel.
-# The lump, visibility, node and face-edge checks live once, in
+# The lump, visibility, node, face-edge and leaf checks live once, in
 # src/client/refresh/files/models.c (Mod_CheckLumps, Mod_CheckVis,
-# Mod_CheckNodes, Mod_CheckFaceEdges), so a hostile map is refused the same
-# way by all four. This fails when
-# - a Mod_LoadBrushModel body does not call all four checks, or calls one
+# Mod_CheckNodes, Mod_CheckFaceEdges, and FIX134's Mod_CheckLeafs), so a
+# hostile map is refused the same way by all four. This fails when
+# - a Mod_LoadBrushModel body does not call all five checks, or calls one
 #   after its first lump read (a Mod_Load* or Mod_CalcLumpHunkSize call),
 #   or discards a check's result (a call that is not !Mod_Check...(), such
 #   as (void)Mod_CheckNodes(...) or a bare statement);
@@ -29,7 +29,7 @@ root=${1:-$here}
 
 loaders="src/client/refresh/gl1/gl1_model.c src/client/refresh/gl3/gl3_model.c
 src/client/refresh/soft/sw_model.c src/client/refresh/metal/rm_model.c"
-checks="Mod_CheckLumps Mod_CheckVis Mod_CheckNodes Mod_CheckFaceEdges"
+checks="Mod_CheckLumps Mod_CheckVis Mod_CheckNodes Mod_CheckFaceEdges Mod_CheckLeafs"
 shared=src/client/refresh/files/models.c
 
 # stdin to stdout with only the code the compiler sees: /* */ comments
