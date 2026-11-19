@@ -96,6 +96,7 @@ One line per card file in this directory, in no required order: git merges this 
 - [FIX118](../runbook/FIX118.md): the shared BSP checks of all four renderers: the round-2 red and green runs, the mutants, and every stock map passing
 - [FIX137](../runbook/FIX137.md): the collision model bounds a leaf's cluster and every visibility offset: the red and green runs, every stock map loading with the same PVS and PHS rows, and the live server check
 - [FIX134](../runbook/FIX134.md): the PVS decompressor of gl1, gl3 and soft stops at the visibility lump and its row: the red and green runs and every stock row decoding as before
+- [FIX139](../runbook/FIX139.md): check-metalfx-report failed on the CI runner because the runner sets CI and GITHUB_ACTIONS, which turn the generator's host lock off: the lock cases now unset both, not a timing fix
 - [FIX136](../runbook/FIX136.md): a committed check that forces every skip CI or the gate requires and wants a failure, with mutants of the guards
 - [FIX138](../runbook/FIX138.md): the image decoder's type restriction on an SDK before 27.0: the type check tested and pinned on both kinds of SDK, and why check-image-decoder stays local-only
 - [FIX135](../runbook/FIX135.md): a refused model load leaves no named empty slot: the deferred-cleanup design, and `Hunk_Begin` recording its reservation so an unfinished hunk frees

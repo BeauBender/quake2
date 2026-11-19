@@ -22,6 +22,7 @@ check-ios-screen.sh
 check-ios.sh
 check-memory-rules.sh
 check-metal-shim.sh
+check-metalfx-report.sh
 check-mode-size.sh
 check-no-tracked-memory.sh
 check-pins-latch.sh
