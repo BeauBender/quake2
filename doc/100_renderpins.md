@@ -98,6 +98,7 @@ scenario plays `PINS_DEMO`, so all of them follow the same camera path.
 | `particles-cap` | `particles` with `metal_particle_cap 1`: the particle size limit of the Metal renderer scaled by `height / 480` (the others draw it as `particles`); recorded with `PINS_SEED` like `particles` |
 | `retro` | `world` with `r_presentation 2`: the Metal renderer's Retro post-process, the 3D view in RGB565 with the 4 x 4 ordered dither, no filter and no curve (the others draw it as `world`); judged against the Metal renderer itself once the owner accepts the look (TASK184) |
 | `retro-filter` | `retro` with `r_retro_filter 1`: the 2 x 2 box output filter over the dithered pixels (TASK184) |
+| `hdr` | `world` with `r_hdr 1`: the Metal renderer's float16 frame, read back as its SDR fallback (clamped to white, in 8 bits); its own reference, not compared with `world` (the others draw it as `world`) (TASK196) |
 | `models` | the world plus entities: models, sprites, beams, the view weapon |
 | `particles` | everything, including particles, dynamic lights and the screen blend |
 | `hud2d` | 2D only: status bar, crosshair, console text; the OpenGL renderers draw no screen blend there (`gl_polyblend 0`), the software renderer still darkens the screen on a pickup |

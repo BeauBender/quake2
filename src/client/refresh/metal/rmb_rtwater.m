@@ -168,7 +168,7 @@ rmb_rtw_fullscreen(NSString *fs, int blend, NSError **e)
 		d.colorAttachments[0].writeMask = MTLColorWriteMaskRed | MTLColorWriteMaskGreen | MTLColorWriteMaskBlue;
 	}
 
-	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
+	return rmb_new_render_pipe(d, e);
 }
 
 /*
@@ -199,7 +199,7 @@ rmb_rtw_trans_pipe(NSError **e)
 	d.colorAttachments[1].writeMask = MTLColorWriteMaskNone;
 	d.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 	d.stencilAttachmentPixelFormat = MTLPixelFormatStencil8;
-	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
+	return rmb_new_render_pipe(d, e);
 }
 
 /* FIX98: the MTLBlendFactor of one of common/mtl_rtw_math.h's MTL_RTW_BF_ values */
@@ -264,7 +264,7 @@ rmb_rtw_mark_pipe(int surf, NSError **e)
 	d.colorAttachments[1].alphaBlendOperation = MTLBlendOperationAdd;
 	d.colorAttachments[1].sourceAlphaBlendFactor = rmb_rtw_factor(MTL_RTW_MARK_SRC_FACTOR);
 	d.colorAttachments[1].destinationAlphaBlendFactor = rmb_rtw_factor(MTL_RTW_MARK_DST_FACTOR);
-	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
+	return rmb_new_render_pipe(d, e);
 }
 
 /* a 1 x 1 white texture, 2D or a 2D array of one slice: what the table holds where an image is missing */
@@ -737,7 +737,7 @@ rmb_rtw_mark(id<MTLRenderCommandEncoder> enc, int surf)
 	vp.height = view.vp[3];
 	vp.znear = 0.0;
 	vp.zfar = 1.0;
-	[enc setRenderPipelineState:pipe];
+	[enc setRenderPipelineState:rmb_fmt_pipe(pipe)];
 	[enc setDepthStencilState:mark_depth];
 	[enc setCullMode:MTLCullModeNone];
 	[enc setViewport:vp];
@@ -1024,7 +1024,7 @@ rmb_rtw_blend(id<MTLRenderCommandEncoder> enc, id<MTLTexture> material)
 		return 0;
 	}
 
-	[enc setRenderPipelineState:view.show ? show_pipe : blend_pipe];
+	[enc setRenderPipelineState:rmb_fmt_pipe(view.show ? show_pipe : blend_pipe)];
 	[enc setFragmentBytes:&view length:sizeof(view) atIndex:0];
 	[enc setFragmentTexture:t_refl atIndex:0];
 	[enc setFragmentTexture:material atIndex:1];

@@ -1613,6 +1613,54 @@ int rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen);
  */
 void rmb_colorspace_set(int mode);
 
+/*
+ * r_hdr (TASK196, HD2): the float16 path on (1) or off, applied to the
+ * layer between frames and at rmb_attach; the frame's colour targets,
+ * the present slots and the pipelines follow at the next frame. While
+ * it is on metal_colorspace leaves the layer's colour space alone.
+ */
+void rmb_hdr_set(int active);
+
+/*
+ * A pipeline of the float16 path could not be built (rmb_fmt_pipe, the
+ * present's): r_hdr is off for the session, said once on stderr by the
+ * caller. It takes effect through the next rmb_hdr_set, between frames,
+ * the way a live r_hdr 0 does; the frame that failed is not presented.
+ */
+void rmb_hdr_fail(void);
+
+/* rmb_hdr_fail was called: rmb_hdr_set(1) then leaves the path off */
+int rmb_hdr_failed(void);
+
+/* the float16 path is in force on the layer (the colour targets are RM_FMT_RGBA16F) */
+int rmb_hdr_on(void);
+
+/* metal_hdr_info's line (rm_hdr_info_format), from the layer's state now; 1 when it fits */
+int rmb_hdr_info(char *buf, size_t len);
+
+#ifdef __OBJC__
+#import <Metal/Metal.h>
+
+/*
+ * The pipeline to draw with into a colour target of the format in force:
+ * ps itself on the stock path; on the float16 path its variant with every
+ * BGRA8Unorm colour attachment made RGBA16Float, built at its first use
+ * from the descriptor rmb_new_render_pipe kept (rmb_resource.m). When the
+ * variant cannot be built it says so once, turns the float16 path off for
+ * the session (rmb_hdr_fail) and returns ps, never nil: that frame's draw
+ * is not presented (the frame and the drawable differ in format), and the
+ * next frame is stock.
+ */
+id<MTLRenderPipelineState> rmb_fmt_pipe(id<MTLRenderPipelineState> ps);
+
+/* newRenderPipelineStateWithDescriptor:error:, keeping a copy of d for rmb_fmt_pipe when it draws into BGRA8Unorm */
+id<MTLRenderPipelineState> rmb_new_render_pipe(MTLRenderPipelineDescriptor *d, NSError **e);
+
+/* the float16 path's present (rm_fragment_present_hdr) and SDR readback (rm_fragment_hdr_read), built at first use */
+id<MTLRenderPipelineState> rmb_present_hdr_pipe(void);
+id<MTLRenderPipelineState> rmb_hdr_read_pipe(void);
+#endif
+
 /* Waits (bounded) for the frames on the GPU and releases the layer and the targets. */
 void rmb_detach(void);
 
@@ -1778,6 +1826,39 @@ int rm_2d_sharp(float cvar, int smp, int flat_linear);
  * is not finite included.
  */
 int rm_colorspace_mode(float cvar);
+
+/*
+ * r_hdr (TASK196, HD2; docs/plans/hdr-output.md): 1 when the cvar is
+ * exactly 1; 0 for every other value, a value that is not finite included.
+ */
+int rm_hdr_mode(float cvar);
+
+/* the float16 path is taken: r_hdr's mode on, and not under Retro, a 16-bit SDR look (the plan's H5) */
+int rm_hdr_active(int mode, int retro);
+
+/* the colour targets' pixel format: RM_FMT_RGBA16F on the float16 path, RM_FMT_BGRA8 (stock) otherwise */
+#define RM_FMT_BGRA8 80     /* MTLPixelFormatBGRA8Unorm */
+#define RM_FMT_RGBA16F 115  /* MTLPixelFormatRGBA16Float */
+int rm_hdr_format(int active);
+
+/*
+ * A present slot's target (FIX51) is kept for the next frame only at the
+ * frame's size and the colour format in force: a size or a format change
+ * drops every slot, so a live switch back to r_hdr 0 draws into BGRA8 again.
+ */
+int rm_hdr_slot_keep(int fmt, int w, int h, int want_fmt, int want_w, int want_h);
+
+/* the MetalFX mode the view runs: off (RM_FX_OFF) on the float16 path until HD4, the asked one otherwise */
+int rm_hdr_fx_mode(int active, int mode);
+
+/*
+ * metal_hdr_info's line (without a newline): the layer's pixel format
+ * (fmt, an RM_FMT_* or another MTLPixelFormat by number), its colour
+ * space's name (cs, NULL for none), the EDR property, and the display's
+ * headroom now and its potential, each "unavailable" when below 0 or not
+ * finite. 1 when it fits; 0, with buf empty, when it does not.
+ */
+int rm_hdr_info_format(int fmt, const char *cs, int edr, float now, float potential, char *buf, size_t len);
 
 /*
  * Loads ref_metal.metallib from dir and builds the 2D pipeline table and

@@ -97,6 +97,152 @@ static mtl_ring_t staging_ring;
 static id<MTLCommandBuffer> upload_cmd;
 static id<MTLBlitCommandEncoder> upload_blit;
 
+/*
+ * r_hdr (TASK196, HD2): every pipeline that draws into a BGRA8Unorm
+ * colour target keeps its descriptor (rmb_new_render_pipe), so its
+ * RGBA16Float variant is built at its first use on the float16 path
+ * (rmb_fmt_pipe), and a stock run builds nothing more. Both maps hold
+ * the pipeline weakly; rmb_resources_close empties them.
+ */
+static NSMapTable *fmt_descs;      /* pipeline -> a copy of its descriptor */
+static NSMapTable *fmt_variants;   /* pipeline -> its RGBA16Float variant, NSNull when it was not built */
+static id<MTLRenderPipelineState> present_hdr_pipe, hdr_read_pipe;
+static int present_hdr_tried, hdr_read_tried;
+
+#define RMB_COLOR_ATTACHMENTS 8
+
+id<MTLRenderPipelineState>
+rmb_new_render_pipe(MTLRenderPipelineDescriptor *d, NSError **e)
+{
+	id<MTLRenderPipelineState> ps = [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
+	int i;
+
+	for (i = 0; ps && (i < RMB_COLOR_ATTACHMENTS); i++)
+	{
+		if (d.colorAttachments[i].pixelFormat == MTLPixelFormatBGRA8Unorm)
+		{
+			if (!fmt_descs)
+			{
+				fmt_descs = [NSMapTable weakToStrongObjectsMapTable];
+			}
+
+			[fmt_descs setObject:[d copy] forKey:ps];
+			break;
+		}
+	}
+
+	return ps;
+}
+
+id<MTLRenderPipelineState>
+rmb_fmt_pipe(id<MTLRenderPipelineState> ps)
+{
+	static int told;
+	MTLRenderPipelineDescriptor *d;
+	id v;
+	NSError *e = nil;
+	int i;
+
+	if (!ps || !rmb_hdr_on())
+	{
+		return ps;
+	}
+
+	v = [fmt_variants objectForKey:ps];
+
+	if (v)
+	{
+		return (v == [NSNull null]) ? ps : v;
+	}
+
+	d = [[fmt_descs objectForKey:ps] copy];
+
+	if (!d)
+	{
+		return ps;   /* it draws into no BGRA8Unorm target */
+	}
+
+	for (i = 0; i < RMB_COLOR_ATTACHMENTS; i++)
+	{
+		if (d.colorAttachments[i].pixelFormat == MTLPixelFormatBGRA8Unorm)
+		{
+			d.colorAttachments[i].pixelFormat = MTLPixelFormatRGBA16Float;
+		}
+	}
+
+	v = [rmb_device newRenderPipelineStateWithDescriptor:d error:&e];
+
+	if (!fmt_variants)
+	{
+		fmt_variants = [NSMapTable weakToStrongObjectsMapTable];
+	}
+
+	[fmt_variants setObject:(v ? v : [NSNull null]) forKey:ps];
+
+	if (v)
+	{
+		rmb_counts.pipelines++;
+		return v;
+	}
+
+	if (!told)
+	{
+		told = 1;
+		fprintf(stderr, "ref_metal: hdr: a pipeline's RGBA16Float variant was not built%s%s; r_hdr is off\n",
+				e ? ": " : "", e ? e.localizedDescription.UTF8String : "");
+	}
+
+	rmb_hdr_fail();
+	return ps;
+}
+
+/* rm_vertex_alpha's triangle with fragment fs into format, tried once until the pipelines are released */
+static id<MTLRenderPipelineState>
+rmb_hdr_simple_pipe(__strong id<MTLRenderPipelineState> *slot, int *tried, NSString *fs, MTLPixelFormat format)
+{
+	if (!*slot && !*tried && library && rmb_device)
+	{
+		MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+		NSError *e = nil;
+
+		*tried = 1;
+		d.vertexFunction = [library newFunctionWithName:@"rm_vertex_alpha"];
+		d.fragmentFunction = [library newFunctionWithName:fs];
+		d.colorAttachments[0].pixelFormat = format;
+
+		if (d.vertexFunction && d.fragmentFunction)
+		{
+			*slot = [rmb_device newRenderPipelineStateWithDescriptor:d error:&e];
+		}
+
+		if (*slot)
+		{
+			rmb_counts.pipelines++;
+		}
+		else
+		{
+			fprintf(stderr, "ref_metal: hdr: the %s pipeline was not built%s%s; r_hdr is off\n", fs.UTF8String,
+					e ? ": " : "", e ? e.localizedDescription.UTF8String : "");
+			rmb_hdr_fail();
+		}
+	}
+
+	return *slot;
+}
+
+id<MTLRenderPipelineState>
+rmb_present_hdr_pipe(void)
+{
+	return rmb_hdr_simple_pipe(&present_hdr_pipe, &present_hdr_tried, @"rm_fragment_present_hdr",
+			MTLPixelFormatRGBA16Float);
+}
+
+id<MTLRenderPipelineState>
+rmb_hdr_read_pipe(void)
+{
+	return rmb_hdr_simple_pipe(&hdr_read_pipe, &hdr_read_tried, @"rm_fragment_hdr_read", MTLPixelFormatBGRA8Unorm);
+}
+
 static void
 rmb_err(char *err, size_t errlen, NSString *what, NSError *e)
 {
@@ -120,7 +266,7 @@ rmb_new_pipe_alpha(NSError **e)
 
 	d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
 	d.colorAttachments[0].writeMask = MTLColorWriteMaskAlpha;
-	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
+	return rmb_new_render_pipe(d, e);
 }
 
 /*
@@ -142,7 +288,7 @@ rmb_new_pipe_present(NSError **e)
 	}
 
 	d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
-	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
+	return rmb_new_render_pipe(d, e);
 }
 
 static id<MTLRenderPipelineState>
@@ -178,7 +324,7 @@ rmb_new_pipe_2d(rm_texenv_t env, int alpha_test, int blend, NSError **e)
 		d.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
 	}
 
-	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
+	return rmb_new_render_pipe(d, e);
 }
 
 /*
@@ -268,7 +414,7 @@ rmb_new_pipe_3d(rm_pipe3d_t which, NSError **e)
 		d.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
 	}
 
-	return [rmb_device newRenderPipelineStateWithDescriptor:d error:e];
+	return rmb_new_render_pipe(d, e);
 }
 
 /*
@@ -515,6 +661,11 @@ rmb_resources_close(void)
 		RMB_SET_STATE(present_pipe, nil);
 		RMB_SET_STATE(retro_pipe, nil);
 		retro_tried = 0;
+		fmt_descs = nil;
+		fmt_variants = nil;
+		present_hdr_pipe = nil;
+		hdr_read_pipe = nil;
+		present_hdr_tried = hdr_read_tried = 0;
 
 		for (i = 0; i < RMB_DS_COUNT; i++)
 		{
@@ -939,7 +1090,7 @@ rmb_retro_pipe(void)
 
 		if (d.vertexFunction && d.fragmentFunction)
 		{
-			RMB_SET_STATE(retro_pipe, [rmb_device newRenderPipelineStateWithDescriptor:d error:&e]);
+			RMB_SET_STATE(retro_pipe, rmb_new_render_pipe(d, &e));
 		}
 
 		if (retro_pipe)

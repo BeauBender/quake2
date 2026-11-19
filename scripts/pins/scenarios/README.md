@@ -34,6 +34,7 @@ derived from game data, so the files are committed (INFORM9).
 | `world-metalfx-interp` | `world` with `r_metalfx_interp 1`: frame generation is not built yet, so the cvar reads 0 with a line and the frames are `world`'s, pixel for pixel (TASK111) |
 | `retro` | `world` with `r_presentation 2`: `ref_metal`'s Retro post-process, the 3D view quantized to RGB565 with the 4 x 4 ordered dither, no filter and no curve (`r_retro_filter 0`, `r_retro_gamma 0`); other renderers ignore the cvars and draw it as `world`; judged against `ref_metal` itself once the owner accepts the look (TASK184, PM4) |
 | `retro-filter` | `retro` with `r_retro_filter 1`: the 2 x 2 box output filter over the dithered pixels (TASK184) |
+| `hdr` | `world` with `r_hdr 1`: `ref_metal`'s float16 frame target, read back as its SDR fallback (each channel clamped to white, in 8 bits); its own reference, not compared with `world`, since float16 blends round once where 8-bit ones round at each layer; other renderers ignore the cvar and draw it as `world` (TASK196, HD2) |
 | `models` | world plus entities: alias models, sprites, beams, view weapon |
 | `particles` | everything, including particles, dynamic lights, screen blend |
 | `hud2d` | 2D only: status bar, crosshair, console text; the GL renderers' screen blend off (`gl_polyblend 0`, TASK82) |
@@ -138,6 +139,7 @@ companion when a card judges them. For `hud2d*` and `cinematic`, which draw no
 | `world-metalfx-interp` | world | `models` |
 | `retro` | world | `models` |
 | `retro-filter` | world | `models` |
+| `hdr` | world | `models` |
 | `dlights` | world,dynamic-lights | `particles` |
 | `dlights-lmcubic` | world,dynamic-lights | `particles` |
 | `models` | world,entities,alias-models | `-` |

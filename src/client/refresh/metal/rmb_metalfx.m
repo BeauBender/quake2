@@ -293,7 +293,28 @@ rmb_fx_make(int mode, const rm_fx_size_t *s)
 int
 rmb_fx_prepare(int mode, const rm_fx_size_t *s, float jx, float jy, int reset)
 {
+	static int hdr_told;
+
 	fx_ready = 0;
+
+	/* r_hdr's float16 path (TASK196): the scalers take BGRA8Unorm, so none runs until HD4; told once */
+	if (rm_hdr_fx_mode(rmb_hdr_on(), mode) != mode)
+	{
+		if (fx_mode)
+		{
+			rmb_fx_free();
+		}
+
+		if (!hdr_told)
+		{
+			hdr_told = 1;
+			rmb_fx_tell(RM_FX_NOTE_HDR, mode, s);
+		}
+
+		return 0;
+	}
+
+	hdr_told = 0;
 
 	if ((mode != RM_FX_SPATIAL) && (mode != RM_FX_TEMPORAL))
 	{

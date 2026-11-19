@@ -149,6 +149,39 @@ run(const char *name, CGColorSpaceRef initial, int counted)
 	CHECK(same_as(layer, at_attach));
 	CHECK_COUNT(!counted || count_of(initial) == base);   /* and detach */
 	rmb_colorspace_set(0);
+
+	/* r_hdr (TASK196) 0 -> 1 -> 0 with metal_colorspace 0 and 1: the colour space is back as it was */
+	for (int mode = 0; mode < 2; mode++)
+	{
+		rmb_hdr_dead = 0;               /* the probe includes rmb_device.m: a failed session is cleared for each case */
+		rmb_colorspace_set(mode);
+		CHECK(rmb_attach((__bridge void *)layer, 0, err, sizeof(err)));
+		CHECK(!rmb_hdr_on());
+		rmb_hdr_set(1);
+		CHECK(rmb_hdr_on());
+		CHECK(layer.pixelFormat == MTLPixelFormatRGBA16Float);
+		rmb_hdr_set(0);
+		CHECK(!rmb_hdr_on());
+		CHECK(layer.pixelFormat == MTLPixelFormatBGRA8Unorm);
+		CHECK(mode ? is_srgb(layer) : same_as(layer, at_attach));
+		if (mode)
+		{
+			/* the failure path (rmb_hdr_fail) switches off at the next rmb_hdr_set, as a live r_hdr 0 does, and stays off */
+			rmb_hdr_set(1);
+			rmb_hdr_fail();
+			CHECK(rmb_hdr_failed() && rmb_hdr_on());
+			rmb_hdr_set(1);
+			CHECK(!rmb_hdr_on());
+			CHECK(is_srgb(layer));
+			rmb_hdr_set(1);
+			CHECK(!rmb_hdr_on());
+		}
+
+		rmb_detach();
+		CHECK(same_as(layer, at_attach));
+		rmb_colorspace_set(0);
+	}
+
 	CGColorSpaceRelease(at_attach);
 }
 
