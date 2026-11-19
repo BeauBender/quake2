@@ -575,32 +575,42 @@ rmb_tonemap_pass(int x, int y, int w, int h)
 /*
  * metal_hdr_probe (TASK196, HD3): one pixel of the drawable, read after
  * the present has written it and before it is presented, into probe_buf.
- * probe_state: 0 idle, 1 asked, 2 its copy on the GPU, 3 read (the
- * command buffer completed). A new ask or a cancel from the main thread
- * moves probe_gen on, so a late completion is a no-op.
+ * probe_word holds the probe's generation and state together
+ * (rm_probe_word: RM_PROBE_IDLE, _ASKED, _COPYING, _READ once the copy's
+ * command buffer completed), and every change is a compare-and-swap of
+ * the whole word. A new ask or a cancel from the main thread moves the
+ * generation on, so a completion from before it, whose expected word
+ * names the old generation, swaps nothing: a re-ask and a new copy
+ * between a copy and its completion leave the new probe's word unmatched.
  */
 static id<MTLBuffer> probe_buf;
 static int probe_x, probe_y, probe_fmt;
-static atomic_int probe_state, probe_gen;
+static atomic_uint probe_word;
 
 void
 rmb_hdr_probe_ask(int x, int y)
 {
-	atomic_store(&probe_state, 0);
-	atomic_fetch_add(&probe_gen, 1);
+	const int arm = (x >= 0) && (y >= 0);
+	unsigned w = atomic_load(&probe_word);
 
-	if ((x >= 0) && (y >= 0))
+	if (arm)
 	{
 		probe_x = x;
 		probe_y = y;
-		atomic_store(&probe_state, 1);
+	}
+
+	/* the next generation; a completion that swapped in between is overwritten, as a re-ask must */
+	while (!atomic_compare_exchange_weak(&probe_word, &w, rm_probe_ask_word(w, arm)))
+	{
 	}
 }
 
 int
 rmb_hdr_probe_take(int *fmt, int *x, int *y, unsigned char px[8])
 {
-	if ((atomic_load(&probe_state) != 3) || !probe_buf)
+	unsigned w = atomic_load(&probe_word);
+
+	if ((rm_probe_state(w) != RM_PROBE_READ) || !probe_buf)
 	{
 		return 0;
 	}
@@ -609,7 +619,9 @@ rmb_hdr_probe_take(int *fmt, int *x, int *y, unsigned char px[8])
 	*x = probe_x;
 	*y = probe_y;
 	memcpy(px, probe_buf.contents, 8);
-	atomic_store(&probe_state, 0);
+
+	/* idle in the same generation (only the main thread leaves RM_PROBE_READ, so this matches) */
+	atomic_compare_exchange_strong(&probe_word, &w, rm_probe_word(rm_probe_gen(w), RM_PROBE_IDLE));
 	return 1;
 }
 
@@ -619,9 +631,10 @@ rmb_hdr_probe_copy(id<MTLCommandBuffer> cmd, id<MTLTexture> dst)
 {
 	const int f16 = (dst.pixelFormat == MTLPixelFormatRGBA16Float);
 	const NSUInteger bpp = f16 ? 8 : 4;
-	const int gen = atomic_load(&probe_gen);
+	unsigned w = atomic_load(&probe_word);
+	unsigned token;
 
-	if ((atomic_load(&probe_state) != 1) || !dst.width || !dst.height)
+	if ((rm_probe_state(w) != RM_PROBE_ASKED) || !dst.width || !dst.height)
 	{
 		return;
 	}
@@ -634,6 +647,14 @@ rmb_hdr_probe_copy(id<MTLCommandBuffer> cmd, id<MTLTexture> dst)
 		{
 			return;
 		}
+	}
+
+	/* this generation's copy: the word its completion expects */
+	token = rm_probe_word(rm_probe_gen(w), RM_PROBE_COPYING);
+
+	if (!atomic_compare_exchange_strong(&probe_word, &w, token))
+	{
+		return;
 	}
 
 	probe_x = ((NSUInteger)probe_x < dst.width) ? probe_x : (int)dst.width - 1;
@@ -651,16 +672,13 @@ rmb_hdr_probe_copy(id<MTLCommandBuffer> cmd, id<MTLTexture> dst)
 		[blit endEncoding];
 	}
 
-	atomic_store(&probe_state, 2);
 	[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
-		int want = 2;
+		unsigned want = token;
 
 		(void)b;
 
-		if (atomic_load(&probe_gen) == gen)
-		{
-			atomic_compare_exchange_strong(&probe_state, &want, 3);
-		}
+		/* RM_PROBE_READ only while the word is still this generation's copy */
+		atomic_compare_exchange_strong(&probe_word, &want, rm_probe_word(rm_probe_gen(token), RM_PROBE_READ));
 	}];
 }
 
@@ -1111,6 +1129,12 @@ rmb_encode_release(void)
 		rmb_set_texture(&depth, nil);
 		rmb_set_texture(&retro_src, nil);
 		rmb_set_texture(&hdr_read, nil);
+
+		/* metal_hdr_probe: its buffer, and the word idle in the next generation, so no completion still in flight matches a later probe */
+		probe_buf = nil;
+		probe_x = probe_y = probe_fmt = 0;
+		atomic_store(&probe_word, rm_probe_ask_word(atomic_load(&probe_word), 0));
+
 		rmb_gbuf_release();
 		rmb_fx_release();
 
