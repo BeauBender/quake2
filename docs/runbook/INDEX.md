@@ -89,3 +89,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [FIX131](../runbook/FIX131.md): ios-sim.sh stops a bounded call's child by its PID when TERM, HUP or INT ends the script mid-call, and its selftest hangs the first launcher read too
 - [FIX102](../runbook/FIX102.md): a pin record's capture stall stays out of the timedemo clock, so 5K records with a temporal scaler repeat byte for byte
 - [TASK184](../runbook/TASK184.md): the Retro post-process (RGB565 with the 4 x 4 dither, the box filter, the gamma curve): the tests and mutants, the retro records and the GPU time at 1080p and 5K (WIP: the pin comparison and the gate are left)
+- [FIX124](../runbook/FIX124.md): the identity check refuses an index blob it cannot read, and scans binary blobs as bytes (FIX125 too)
