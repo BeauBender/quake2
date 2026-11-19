@@ -41,12 +41,14 @@
  */
 static void *mod_loadslot;
 static void *mod_loadbuf;
+static void *mod_loadhunk;
 
 void
 Mod_LoadBegin(void *slot, void *buf)
 {
 	mod_loadslot = slot;
 	mod_loadbuf = buf;
+	mod_loadhunk = NULL;
 }
 
 void
@@ -54,6 +56,20 @@ Mod_LoadEnd(void)
 {
 	mod_loadslot = NULL;
 	mod_loadbuf = NULL;
+	mod_loadhunk = NULL;
+}
+
+/*
+ * The alias and sprite loaders hold their hunk in a local until they
+ * return it, and the skin lookups between Hunk_Begin and the return can
+ * Com_Error (FIX140). They record it here for those calls (NULL after), so
+ * Mod_ReclaimUnfinished frees it. The slot's extradata is still NULL then,
+ * so the hunk is not freed twice.
+ */
+void
+Mod_LoadHunk(void *hunk)
+{
+	mod_loadhunk = hunk;
 }
 
 /* the unfinished load's slot (NULL when none) and, in *buf, its file buffer */
@@ -78,12 +94,23 @@ void
 Mod_ReclaimUnfinished(void (*mod_free)(void *slot), void (*free_file)(void *buf))
 {
 	void *buf;
+	void *hunk = mod_loadhunk;
 	void *slot = Mod_LoadAbandon(&buf);
 
 	if (slot)
 	{
+		if (hunk)
+		{
+			Hunk_Free(hunk);
+		}
+
 		mod_free(slot);
-		free_file(buf);
+
+		/* NULL while the file was still being read */
+		if (buf)
+		{
+			free_file(buf);
+		}
 	}
 }
 
@@ -289,7 +316,8 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 			__func__, mod_name, poutcmd[pheader->num_glcmds-1]);
 	}
 
-	// register all skins
+	// register all skins; a refusal in find_image frees the hunk (FIX140)
+	Mod_LoadHunk(extradata);
 	memcpy ((char *)pheader + pheader->ofs_skins, (char *)pinmodel + pheader->ofs_skins,
 		pheader->num_skins*MAX_SKINNAME);
 	for (i=0 ; i<pheader->num_skins ; i++)
@@ -297,6 +325,8 @@ Mod_LoadMD2 (const char *mod_name, const void *buffer, int modfilelen,
 		skins[i] = find_image((char *)pheader + pheader->ofs_skins + i*MAX_SKINNAME,
 			it_skin);
 	}
+
+	Mod_LoadHunk(NULL);
 
 	*type = mod_alias;
 
@@ -359,6 +389,8 @@ Mod_LoadSP2 (const char *mod_name, const void *buffer, int modfilelen,
 	}
 
 	/* byte swap everything */
+	Mod_LoadHunk(extradata);
+
 	for (i = 0; i < sprout->numframes; i++)
 	{
 		sprout->frames[i].width = LittleLong(sprin->frames[i].width);
@@ -369,6 +401,8 @@ Mod_LoadSP2 (const char *mod_name, const void *buffer, int modfilelen,
 
 		skins[i] = find_image((char *)sprout->frames[i].name, it_sprite);
 	}
+
+	Mod_LoadHunk(NULL);
 
 	*type = mod_sprite;
 

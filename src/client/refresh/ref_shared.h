@@ -231,6 +231,7 @@ extern qboolean Mod_CheckLeafs(const byte *mod_base, const dheader_t *header,
 /* The model load in progress (FIX135), see files/models.c */
 extern void Mod_LoadBegin(void *slot, void *buf);
 extern void Mod_LoadEnd(void);
+extern void Mod_LoadHunk(void *hunk);
 extern void *Mod_LoadAbandon(void **buf);
 extern void Mod_ReclaimUnfinished(void (*mod_free)(void *slot),
 	void (*free_file)(void *buf));
