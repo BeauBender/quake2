@@ -9,9 +9,14 @@
 #
 # Fails closed: a name in the list that is not an executable
 # tests/check-*.sh, or an empty list, is an error (status 2); otherwise the
-# status is that of scripts/gate-checks.sh.
+# status is that of scripts/gate-checks.sh. A line of tests/ci-checks.txt is
+# read as tests/check-ci-parity.sh reads it: a "#" starts a comment, the
+# blanks (space, tab) around the name are dropped, a blank line is skipped,
+# and the rest is one name, with no blank and no ":" in it; a carriage return
+# anywhere is refused. --list prints the names and runs nothing, for that
+# check to compare.
 #
-# Usage: scripts/ci-checks.sh
+# Usage: scripts/ci-checks.sh [--list]
 set -eu
 me=ci-checks
 
@@ -19,15 +24,27 @@ me=ci-checks
 # build in a check into success
 unset MAKEFLAGS GNUMAKEFLAGS MFLAGS
 
+list=
+case ${1-} in
+	--list) list=1 ;;
+	"") ;;
+	*) echo "$me: usage: scripts/ci-checks.sh [--list]" >&2; exit 2 ;;
+esac
+cr=$(printf '\r')
+
 cd "$(dirname "$0")/.."
 
 set --
 while IFS= read -r line || [ -n "$line" ]; do
-	line=${line%%#*}
-	n=$(printf '%s' "$line" | tr -d ' \t')
+	case $line in
+		*"$cr"*) echo "$me: a line of tests/ci-checks.txt holds a carriage return" >&2; exit 2 ;;
+	esac
+	n=${line%%#*}
+	while :; do case $n in [" 	"]*) n=${n#?} ;; *) break ;; esac; done
+	while :; do case $n in *[" 	"]) n=${n%?} ;; *) break ;; esac; done
 	[ -n "$n" ] || continue
 	case $n in
-		*/* | .*) echo "$me: '$n' in tests/ci-checks.txt is not a tests/check-*.sh name" >&2; exit 2 ;;
+		*[" 	:"]* | */* | .*) echo "$me: '$n' in tests/ci-checks.txt is not a tests/check-*.sh name" >&2; exit 2 ;;
 		check-*.sh) ;;
 		*) echo "$me: '$n' in tests/ci-checks.txt is not a tests/check-*.sh name" >&2; exit 2 ;;
 	esac
@@ -40,5 +57,9 @@ done < tests/ci-checks.txt
 if [ $# -eq 0 ]; then
 	echo "$me: tests/ci-checks.txt names no check" >&2
 	exit 2
+fi
+if [ -n "$list" ]; then
+	for t; do printf '%s\n' "${t#tests/}"; done
+	exit 0
 fi
 exec scripts/gate-checks.sh "" "" "$@"

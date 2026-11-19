@@ -102,6 +102,8 @@ jobs:
         # The full history: tests/check-cvar-docs.sh reads the upstream base
         # commit and fails on a shallow clone (FIX117).
         fetch-depth: 0
+        # The checks need no token after the checkout.
+        persist-credentials: false
     - name: Invariants
       env:
         # Public runners come with 3 CPUs.
@@ -110,12 +112,16 @@ jobs:
         # is macOS with Xcode: the iOS simulator and device SDKs (the iOS
         # objects of tests/check-ios.sh were built here before FIX115),
         # python3 (in tests/check-ios.sh's tool list), cc, bash and /bin/ps.
+        # The full history (fetch-depth: 0 above) holds the upstream commit
+        # that tests/check-cvar-docs-selftest.sh compares against.
         # Not set: the tvOS and visionOS SDKs, a Metal compiler and a Metal
-        # device, leaks(1) and the VideoToolbox model are not shown here.
+        # device, leaks(1), the VideoToolbox model and a working script(1)
+        # pty (CHECK_BENCH_TTY_REQUIRE) are not shown here.
         CHECK_IOS_REQUIRE: 1
         CHECK_EVIDENCE_REQUIRE: 1
         CHECK_AUTORELEASE_POOL_REQUIRE: 1
         CHECK_STATIC_MODULES_REQUIRE: 1
         CHECK_BENCH_REQUIRE: 1
+        CHECK_CVAR_DOCS_SELFTEST_REQUIRE: 1
       run: |
         scripts/ci-checks.sh
