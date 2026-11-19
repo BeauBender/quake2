@@ -84,3 +84,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK180](../runbook/TASK180.md): ios-sim.sh prints whether the launcher (SpringBoard, PineBoard, SurfBoard) of its own device crashed during the run, read from the device's launchd; a crash or an unknown fails the run
 - [FIX128](../runbook/FIX128.md): check-bench's lock give-up and stall cases wait for a state, not a time, so a loaded host no longer turns them red
 - [FIX126](../runbook/FIX126.md): t_settle reads the readings and naps the settle took, not the put's wall time, so a starved host no longer turns it red
+- [FIX131](../runbook/FIX131.md): ios-sim.sh stops a bounded call's child by its PID when TERM, HUP or INT ends the script mid-call, and its selftest hangs the first launcher read too
