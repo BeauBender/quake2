@@ -181,6 +181,8 @@ static const rtg_cvar_t rtg_cvars[] = {
 	{ "r_rt_ao_seed", 0 },
 	/* the AO's development view: drawn only while the AO pass runs (RM_RTAO_Show) */
 	{ "r_rt_ao_show", 0 },
+	/* TASK194's read-only report of the gate's path for the menu: the renderer sets it, it traces nothing */
+	{ "r_rt_available", 0 },
 	/* TASK173's preview grey: it replaces a lightmap sample on the G-buffer raster path, which every
 	   Metal GPU runs, and traces nothing itself; left alone, it does nothing where the path is off */
 	{ "r_rt_flatlight", 0 },

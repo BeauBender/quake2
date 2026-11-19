@@ -16,8 +16,11 @@
  */
 
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "../../src/common/header/common.h"
 #include "test.h"
 #include "../../src/client/menu/header/vidrules.h"
 
@@ -605,4 +608,161 @@ TEST(vidrules_screen_unknown_inputs_are_greyed)
 	v = VidRules_Screen((vidplat_t)99, VIDSCR_MODE);
 	T_EQ_INT(v.enabled, 0);
 	T_REQUIRE(v.text != NULL);
+}
+
+/* The ray-tracing screen (TASK194): its rows, their greying and reasons. */
+TEST(vidrules_rt_screen_rules)
+{
+	const int n = VidRules_RTNum();
+	int switches = 0;
+
+	T_EQ_INT(n, 12);
+	T_CHECK(VidRules_RTControl(-1) == NULL);
+	T_CHECK(VidRules_RTControl(n) == NULL);
+
+	T_CHECK(VidRules_RTEntry("metal").enabled);
+	T_CHECK(!VidRules_RTEntry("gl1").enabled);
+	T_EQ_STR(VidRules_RTEntry("gl3").text, "needs the Metal renderer");
+	T_CHECK(!VidRules_RTEntry(NULL).enabled);
+
+	for (int i = -1; i < n; i++)
+	{
+		const vidrt_control_t *c = VidRules_RTControl(i);
+
+		/* every row greyed, with the reason, off metal and without ray tracing */
+		T_EQ_STR(VidRules_RTItem(i, "soft", 1, 1).text, "needs the Metal renderer");
+		T_CHECK(!VidRules_RTItem(i, "metal", 0, 1).enabled);
+		T_EQ_STR(VidRules_RTItem(i, "metal", 0, 1).text, "ray tracing is not available on this device");
+		T_CHECK(VidRules_RTItem(i, "metal", 1, 1).enabled);
+
+		if (!c)
+		{
+			continue;
+		}
+
+		T_CHECK(c->cvar && !strncmp(c->cvar, "r_rt_", 5));
+		T_CHECK(c->label && c->def);
+
+		if (c->effect < 0)
+		{
+			switches++;
+			T_EQ_STR(c->def, "0");
+			T_CHECK(VidRules_RTItem(i, "metal", 1, 0).enabled);   /* a switch is never greyed for itself */
+		}
+		else
+		{
+			const vidrt_control_t *e = VidRules_RTControl(c->effect);
+			char want[64];
+
+			T_REQUIRE(e != NULL && e->effect == -1);
+			T_CHECK(c->min < c->max && c->step > 0 && c->format);
+			T_CHECK(atof(c->def) >= c->min && atof(c->def) <= c->max);
+			T_CHECK(!VidRules_RTItem(i, "metal", 1, 0).enabled);
+			snprintf(want, sizeof(want), "turn on %s first", e->label);
+			T_EQ_STR(VidRules_RTItem(i, "metal", 1, 0).text, want);
+		}
+	}
+
+	T_EQ_INT(switches, 5);
+	T_CHECK(!VidRules_RTItem(n, "metal", 1, 1).enabled);
+}
+
+static void
+free_cvars(cvar_t *var)
+{
+	while (var)
+	{
+		cvar_t *next = var->next;
+
+		Z_Free(var->name);
+		Z_Free(var->string);
+		Z_Free(var->default_string);
+		if (var->latched_string)
+		{
+			Z_Free(var->latched_string);
+		}
+		Z_Free(var);
+		var = next;
+	}
+}
+
+/*
+ * Every control's cvar survives a restart (TASK194): registered and set as
+ * the menu does, written as the engine writes config.cfg
+ * (Cvar_WriteVariables), and read back on a fresh cvar table as the engine
+ * reads it (the file's lines through the command buffer, then the menu's
+ * and the renderer's Cvar_Get). A row without CVAR_ARCHIVE is not written
+ * and reads back its default.
+ */
+TEST(vidrules_rt_controls_persist)
+{
+	cvar_t *const saved = cvar_vars;
+	char path[MAX_OSPATH], want[32][64], *text = NULL;
+	const int n = VidRules_RTNum();
+	FILE *f;
+	long len;
+
+	T_REQUIRE(n <= 32);
+	snprintf(path, sizeof(path), "%s/rt-config.cfg", t_tmpdir());
+	remove(path);
+
+	cvar_vars = NULL;   /* a fresh table: this start */
+
+	for (int i = 0; i < n; i++)
+	{
+		const vidrt_control_t *c = VidRules_RTControl(i);
+		cvar_t *v = Cvar_Get(c->cvar, c->def, c->flags);
+
+		T_CHECK(c->flags & CVAR_ARCHIVE);
+
+		if (c->effect < 0)
+		{
+			Cvar_SetValue(c->cvar, 1);   /* the switch's callback */
+		}
+		else
+		{
+			float x = v->value + c->step;   /* one step right, as Slider_DoSlide */
+
+			Cvar_SetValue(c->cvar, (x > c->max) ? c->max : x);
+		}
+
+		snprintf(want[i], sizeof(want[i]), "%s", v->string);
+		T_CHECK(strcmp(want[i], c->def) != 0);
+	}
+
+	Cvar_WriteVariables(path);
+	free_cvars(cvar_vars);
+	cvar_vars = NULL;   /* a fresh table: the next start */
+
+	f = fopen(path, "rb");
+	T_CHECK(f != NULL);
+	if (f)
+	{
+		fseek(f, 0, SEEK_END);
+		len = ftell(f);
+		fseek(f, 0, SEEK_SET);
+		text = calloc(1, len + 2);
+		if (text && (len >= 0) && (fread(text, 1, len, f) == (size_t)len))
+		{
+			Cbuf_AddText(text);
+			Cbuf_Execute();
+		}
+		fclose(f);
+		free(text);
+	}
+
+	for (int i = 0; i < n; i++)
+	{
+		const vidrt_control_t *c = VidRules_RTControl(i);
+		cvar_t *v = Cvar_Get(c->cvar, c->def, c->flags);
+
+		T_CHECK(v != NULL);
+		if (v)
+		{
+			T_EQ_STR(v->string, want[i]);
+		}
+	}
+
+	free_cvars(cvar_vars);
+	cvar_vars = saved;
 }

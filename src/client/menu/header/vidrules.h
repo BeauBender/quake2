@@ -148,4 +148,41 @@ float VidRules_AOScaleValue(int index);
 int VidRules_AOScaleIndex(float value);
 int VidRules_AORaysIndex(float value);
 
+/*
+ * The ray-tracing screen (TASK194): its controls, one row each, in the
+ * order the screen shows them. A switch (effect -1) turns a pass on or
+ * off; a slider tunes one and needs the switch at row effect on. flags is
+ * what the menu registers the cvar with: CVAR_ARCHIVE, so a value set
+ * here is saved with the configuration (tests/unit/test_vidrules.c
+ * proves the round trip). def is the renderer's own default.
+ */
+typedef struct
+{
+	const char *cvar;
+	const char *label;
+	const char *def;
+	int flags;
+	int effect;         /* -1 for a switch, else the row of its switch */
+	float min, max, step;   /* a slider's range and step; 0 for a switch */
+	const char *format;     /* a slider's value as printed */
+	const char *const *choices;   /* NULL, or the names of a choice row's steps (a spin control, not a slider) */
+} vidrt_control_t;
+
+int VidRules_RTNum(void);
+/* row i, NULL out of range */
+const vidrt_control_t *VidRules_RTControl(int i);
+
+/* The "ray tracing" entry of the video menu: greyed unless the renderer is metal. */
+vidrule_t VidRules_RTEntry(const char *renderer);
+
+/*
+ * Row i of the screen, and its "reset to defaults" for i == -1:
+ * available is whether the device traces rays (r_rt_available, which
+ * ref_metal sets at start), effect_on whether the row's switch is on
+ * (ignored for a switch and the reset). Greyed with the reason when the
+ * renderer is not metal, when the device has no ray tracing, and for a
+ * slider while its effect is off.
+ */
+vidrule_t VidRules_RTItem(int i, const char *renderer, int available, int effect_on);
+
 #endif
