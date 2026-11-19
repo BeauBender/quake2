@@ -491,7 +491,7 @@ shells=sh
 # ---- Files the pushed commits add. -----------------------------------------
 # The blobs the remote lacks go to tests/check-no-local-identity.sh, so its
 # rules hold: the host name and home path as substrings, the user name as a
-# whole word, binary files (a NUL byte) not scanned.
+# whole word, binary files (a NUL byte) scanned as bytes.
 FN="a file name a pushed commit adds contains"
 case_ "$FB $(printf '%.10s' "$(w rev-parse "$filebad:scripts/x.sh")")) contains $H" refs/heads/zzqf4 "$filebad" refs/heads/zzqf4 "$zero"
 case_ "$FB" refs/heads/zzqf5 "$(TR=$(tree stuff/x.c "/* for $login */") mk "$m1" zzqm42)" refs/heads/zzqf5 "$zero"
@@ -530,11 +530,19 @@ case_ "$FN $H" refs/heads/zzqf22 "$(TR=$(dtree "build-cache/$syn") mk "$m1" zzqm
 case_ "$FN $H" refs/heads/zzqf23 "$(TR=$(dtree "zzq-$syn" "$_ab") mk "$ma" zzqm66 -p "$mb")" refs/heads/zzqf23 "$zero"
 case_ "$FN $H" refs/heads/zzqf24 "$(TR=$(dtree "build-cache/$syn" "$_ab") mk "$ma" zzqm67 -p "$mb")" refs/heads/zzqf24 "$zero"
 case_ ok refs/heads/zzqf25 "$(TR=$(dtree build-cache/zzq-clean) mk "$m1" zzqm68)" refs/heads/zzqf25 "$zero"
-# a binary file is not scanned (the gate check's rule)
+# a binary file (a NUL byte) is scanned as bytes (the gate check's rule):
+# the host name, the home path after a leading NUL, and a clean binary
+binfile() { # $1 = blob id: a tree holding it as zzq.bin
+	rm -f "$tmp/tree.idx"
+	GIT_INDEX_FILE=$tmp/tree.idx w update-index --add --cacheinfo "100644,$1,zzq.bin"
+	GIT_INDEX_FILE=$tmp/tree.idx w write-tree
+}
 _bin=$(printf 'zzq\000 on %s\n' "$syn" | w hash-object -w --stdin)
-rm -f "$tmp/tree.idx"
-GIT_INDEX_FILE=$tmp/tree.idx w update-index --add --cacheinfo "100644,$_bin,zzq.bin"
-case_ ok refs/heads/zzqf18 "$(TR=$(GIT_INDEX_FILE=$tmp/tree.idx w write-tree) mk "$m1" zzqm59)" refs/heads/zzqf18 "$zero"
+case_ "$FB $(printf '%.10s' "$_bin")) contains $H" refs/heads/zzqf18 "$(TR=$(binfile "$_bin") mk "$m1" zzqm59)" refs/heads/zzqf18 "$zero"
+_bin=$(printf '\000built in %s/src\n' "$synhome" | w hash-object -w --stdin)
+case_ "$FB $(printf '%.10s' "$_bin")) contains this machine's home identity" refs/heads/zzqf26 "$(TR=$(binfile "$_bin") mk "$m1" zzqm72)" refs/heads/zzqf26 "$zero"
+_bin=$(printf '\000\001zzq clean x%sx \377\n' "$login" | w hash-object -w --stdin)
+case_ ok refs/heads/zzqf27 "$(TR=$(binfile "$_bin") mk "$m1" zzqm73)" refs/heads/zzqf27 "$zero"
 # two refs in one push, each judged on its own files
 case_ ok refs/heads/zzqf19 "$(TR=$(tree scripts/y.sh "echo zzq clean") mk "$m1" zzqm60)" refs/heads/zzqf19 "$zero"
 case_ "$FB" refs/heads/zzqf20 "$filebad" refs/heads/zzqf20 "$zero"

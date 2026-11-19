@@ -19,3 +19,6 @@
 .claude/memory
 /scripts/pins/scenarios/mfxr-*.cfg
 /scripts/pins/scenarios/rtvar-*.cfg
+*.a
+*.metallib
+*.dSYM/

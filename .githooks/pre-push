@@ -46,7 +46,7 @@
 #               -r -t -c --root, deletions left out: deleting a file
 #               publishes nothing) are scanned by
 #               tests/check-no-local-identity.sh, the gate's check, so its
-#               rules hold there: binary files (a NUL byte) are not scanned,
+#               rules hold there: binary files (a NUL byte) are scanned as bytes,
 #               the user name is a whole word. The blobs go to it under
 #               placeholder names in a temporary index, the paths as the text
 #               of one more blob per ref, kept in a temporary object
@@ -396,9 +396,9 @@ collect() {
 # each ref with a match, once. The check runs with GIT_DIR this repository,
 # GIT_INDEX_FILE the temporary index and the temporary object directory as
 # an alternate of this repository's objects; it reads the host name, user
-# name and home path itself, as this hook does. Its scan takes a blob it
-# cannot read as clean, so the alternate's path must survive the colon-split
-# list git reads it from. Refuses (exits) unless the check ends with its own
+# name and home path itself, as this hook does. Its scan refuses a blob it
+# cannot read, so the alternate's path must survive the colon-split list git
+# reads it from, or every new blob is refused. Refuses (exits) unless the check ends with its own
 # verdict: clean, or matches this hook can place.
 filescan() {
 	_check=$(dirname "$0")/../tests/check-no-local-identity.sh

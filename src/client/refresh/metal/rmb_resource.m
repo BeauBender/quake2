@@ -63,6 +63,8 @@ static id<MTLRenderPipelineState> pipes[RM_PIPE_2D_COUNT];
 static id<MTLRenderPipelineState> pipes3d[RM_PIPE_3D_COUNT];
 static id<MTLRenderPipelineState> alpha_pipe;   /* FIX53: alpha 1 over a target, colour masked; nil if it did not build */
 static id<MTLRenderPipelineState> present_pipe; /* FIX51: the frame onto the drawable with alpha 1; nil if it did not build */
+static id<MTLRenderPipelineState> retro_pipe;   /* TASK184: the Retro post-process, built at its first use */
+static int retro_tried;                         /* its build was tried since the pipelines were made */
 static id<MTLDepthStencilState> depth_states[RMB_DS_COUNT];
 static id<MTLBuffer> buffers[RMB_MAX_BUFFERS];      /* the static (retained) buffers, private */
 static id<MTLSamplerState> samplers[RMB_SMP_CLASSES * 2];
@@ -511,6 +513,8 @@ rmb_resources_close(void)
 
 		RMB_SET_STATE(alpha_pipe, nil);
 		RMB_SET_STATE(present_pipe, nil);
+		RMB_SET_STATE(retro_pipe, nil);
+		retro_tried = 0;
 
 		for (i = 0; i < RMB_DS_COUNT; i++)
 		{
@@ -911,6 +915,45 @@ id<MTLRenderPipelineState>
 rmb_present_pipe(void)
 {
 	return present_pipe;
+}
+
+/*
+ * TASK184 (PM2): the Retro post-process's pipeline (rm_fragment_retro over
+ * rm_vertex_alpha's triangle), for rmb_retro_pass (rmb_encode.m). Built at
+ * the first frame that runs the pass, so a stock run builds nothing more;
+ * tried once until the pipelines are released, nil (with one line) when
+ * it does not build.
+ */
+id<MTLRenderPipelineState>
+rmb_retro_pipe(void)
+{
+	if (!retro_pipe && !retro_tried && library && rmb_device)
+	{
+		MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+		NSError *e = nil;
+
+		retro_tried = 1;
+		d.vertexFunction = [library newFunctionWithName:@"rm_vertex_alpha"];
+		d.fragmentFunction = [library newFunctionWithName:@"rm_fragment_retro"];
+		d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+
+		if (d.vertexFunction && d.fragmentFunction)
+		{
+			RMB_SET_STATE(retro_pipe, [rmb_device newRenderPipelineStateWithDescriptor:d error:&e]);
+		}
+
+		if (retro_pipe)
+		{
+			rmb_counts.pipelines++;
+		}
+		else
+		{
+			fprintf(stderr, "ref_metal: the retro pass is off: its pipeline was not built%s%s\n",
+					e ? ": " : "", e ? e.localizedDescription.UTF8String : "");
+		}
+	}
+
+	return retro_pipe;
 }
 
 id<MTLSamplerState>
