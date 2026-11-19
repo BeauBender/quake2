@@ -163,3 +163,45 @@ iOS, iPadOS and visionOS); the gate was not run again in this slice.
 - HD3 to HD7 as the plan's section 7 has them; the tone map, `r_hdr_peak` and the report line are HD3.
 - The ray-tracing passes draw into `t_rcolor` through their float16 variants on this path; their
   terms stay clipped in `t_light` until HD6.
+
+## HD2, rework round 2
+
+Review of `fc5ca005` found one Important and several notes; the fixes, each its own commit.
+
+- `0513c1da` (I1): the HDR present clamped nothing, so a display with headroom showed above-white
+  pixels (the float16 target does not clamp an additive blend), against what the docs and plan H6
+  say. `rm_fragment_present_hdr` now writes `mtl_hdr_present(c)` (`common/mtl_hdr_math.h`: the clamp to
+  [0, 1], NaN to 0, then the decode), with a host test; HD3's tone map replaces the clamp.
+- `5b369c81`: a pipeline of the float16 path that cannot be built (`rmb_fmt_pipe`, the present's,
+  the readback's) calls `rmb_hdr_fail`: `r_hdr` is off for the session through the next
+  `rmb_hdr_set` (between frames), as a live `r_hdr 0` does, said once on stderr. `rmb_fmt_pipe`
+  returns the stock pipeline, never nil, as `rmb.h` now says; the frame that failed is not presented
+  (its drawable and frame differ in format), the next is stock. The Retro line
+  ("hdr: off: Retro is a 16-bit SDR look") is said once on a live `r_hdr 1` under Retro (it sat
+  behind the early return); a start under Retro stays quiet. doc/040 says `r_hdr` has no effect
+  under Retro (the cvar keeps its value). `rmb_hdr_info` checks `CFStringGetCString` ("unknown" on
+  failure).
+- The colour-space probe (`tests/metal/rmb_cs_probe.m`) runs headless and now drives `r_hdr` 0, 1,
+  0 with `metal_colorspace` 0 and 1 (format and colour space back as they were) and the failure
+  path (off at the next `rmb_hdr_set`, stays off). The fix to clear the failed state between its
+  cases is the last code commit.
+
+### Re-run
+
+Hold 1 (branch at `5b369c81`) and hold 2 (`check-ref-metal` after the probe fix), `PINS_SEED=1`,
+640 x 480, scratch stores, base = main at `878e9051`:
+
+| record | branch | base |
+| --- | --- | --- |
+| `hdr` | `11b7dcc7968c`, equal to round 1's | (no such scenario) |
+| `world` | `b15b40cf1604` | `b15b40cf1604` |
+| `rt-ao` | `53c06d8a47ad` | `53c06d8a47ad` |
+| `retro` | `1c33e27aa3ff` | `1c33e27aa3ff` |
+
+The `hdr` hash did not change: the readback reads the target, not the drawable, so the present's
+clamp is not in it. Checks: `check-ref-metal: ok (13072 checks, 0 failed; ...; colour space 118
+checks, 0 failed; ...)`, `check-tvos: ok`, `check-ios: ok`, `check-runbook-index: ok`,
+`check-cvar-docs: ok`, `check-doc-links: ok`, `check-no-local-identity: ok`, `make test`: 397 tests,
+0 failed. The first `check-ref-metal` run in hold 1 failed the new probe cases (a failed session
+stays off, and the probe's later cases saw it); fixed and passing in hold 2. The gate
+(`scripts/test.sh`) is the parent's.
