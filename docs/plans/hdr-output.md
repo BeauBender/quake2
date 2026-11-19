@@ -107,7 +107,8 @@ Under `r_hdr 1`:
 - the layer gets `pixelFormat` `RGBA16Float`, `colorspace`
   `kCGColorSpaceExtendedLinearSRGB` and `wantsExtendedDynamicRangeContent`
   YES. Switching `r_hdr` back to 0 restores the layer's original colour
-  space through `rmb_cs_own` (`rmb_device.m`), including the
+  space through `rmb_cs_own` (`rmb_device.m`). Today that is captured only
+  when `metal_colorspace` is on; HD2 adds the capture for the
   `metal_colorspace 0` "as found" case. Apple: with that property set, "all rendered content is clamped to
   the screen's maximumExtendedDynamicRangeColorComponentValue value rather
   than 1.0"
@@ -320,8 +321,8 @@ The menu:
 - Greying, with the reasons in section 3, plus "Retro is a 16-bit SDR look"
   under `r_presentation 2`. "HDR peak" is greyed with "HDR is off" while
   `r_hdr` is 0, and also on a display without headroom, with the same
-reason as `r_hdr` ("this display reports no extended range"), since there
-is no peak to set.
+  reason as `r_hdr` ("this display reports no extended range"), since there
+  is no peak to set.
 
 ## 5. Verification
 
@@ -410,7 +411,7 @@ section 7: VM, M6, device. Sizes: S under about 300 changed lines, M about
 | HD3 | The tone map (shared header, host test) at the Retro seat, `r_hdr_peak` clamped to the headroom, the report line, `metal_hdr_probe`, the `hdr` scenario; the first owner frames; the 5K cost measured | HD2, TASK184 | VM (test, pins), M6 with the display on (probe, frames, timing) | M |
 | HD4 | MetalFX and the denoiser under `r_hdr 1`: float16 formats, the spatial `hdr` mode, the temporal scaler's acceptance of `RGBA16Float` recorded, the fallback note if refused | HD3 | M6 | S |
 | HD5 | The menu: Video options items, the Tuning screen items and A/B, preset keys, every greying reason, Retro's override; the menu walk | HD3, TASK195 | VM (walk) and M6 with the display on (a real EDR display ungreys) | M |
-| HD6 | The RT terms in float16 under `r_hdr 1` (`t_light`, `t_rcolor`), so the sun and RT-primary go above white; owner frames | HD4, TASK59 | M6 with the display on | M |
+| HD6 | The RT terms in float16 under `r_hdr 1` (`t_light`; `t_rcolor` became float16 in HD2), so the sun and RT-primary go above white; owner frames | HD4, TASK59 | M6 with the display on | M |
 | HD7 | iPhone and iPad: the readings and the greying on devices, one XDR and one LCD | HD5 | device | S |
 
 Apple TV and visionOS stay greyed by HD5; a slice for each waits for the
@@ -442,7 +443,9 @@ Context: the card asks for live or a stated restart. The call: live, by
 remaking the target and the pipelines that draw into it on the next frame,
 as MetalFX remakes its scaler. Switching back to 0 restores the layer's
 original colour space through `rmb_cs_own`, including the `metal_colorspace
-0` "as found" case. If HD2 finds a frame that cannot be remade
+0` "as found" case. Today `rmb_cs_own` is captured only when `metal_colorspace`
+is on (`rmb_cs_apply`, `src/client/refresh/metal/rmb_device.m` ~787); HD2 adds
+the capture for the `metal_colorspace 0` case, so this is not existing behaviour. If HD2 finds a frame that cannot be remade
 mid-run, the cvar says "takes effect at vid_restart" and the menu offers
 one. Reverse: either way the stored value is the same.
 
