@@ -7,4 +7,3 @@ check-identity-env.sh: unverified on runner; it runs tests/check-no-local-identi
 check-image-decoder.sh: fails on the macos-latest runner (run 44549989930): one host-test check fails there, likely the same cause as check-tvos.sh and check-visionos.sh; FIX138 returns it to CI
 check-tvos.sh: fails on the macos-latest runner (run 44549989930): the runner's SDK builds imgdecode.o without kCGImageSourceAllowableTypes; FIX138 returns it to CI
 check-visionos.sh: fails on the macos-latest runner (run 44549989930): the positive control on _kCGImageSourceAllowableTypes fails on the runner's SDK, for the same reason; FIX138 returns it to CI
-check-metalfx-report.sh: fails on the macos-latest runner (run 44549989930): the e2e lock assertions fail on the slower runner (timing); FIX139 returns it to CI

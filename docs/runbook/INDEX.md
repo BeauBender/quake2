@@ -96,3 +96,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [FIX118](../runbook/FIX118.md): the shared BSP checks of all four renderers: the round-2 red and green runs, the mutants, and every stock map passing
 - [FIX137](../runbook/FIX137.md): the collision model bounds a leaf's cluster and every visibility offset: the red and green runs, every stock map loading with the same PVS and PHS rows, and the live server check
 - [FIX134](../runbook/FIX134.md): the PVS decompressor of gl1, gl3 and soft stops at the visibility lump and its row: the red and green runs and every stock row decoding as before
+- [FIX139](../runbook/FIX139.md): check-metalfx-report failed on the CI runner because the runner sets CI and GITHUB_ACTIONS, which turn the generator's host lock off: the lock cases now unset both, not a timing fix
