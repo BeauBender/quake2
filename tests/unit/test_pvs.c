@@ -124,3 +124,101 @@ TEST(pvs_no_vis)
 
 	T_EQ_MEM(t_decode(NULL, 0, sizeof(want)), want, sizeof(want));
 }
+
+/*
+ * The write bound without a sanitizer: a full row of 0x01 is decoded
+ * first, then a four-byte row whose zero run (count 255) would carry far
+ * past it. The bytes of the static buffer after the four-byte row keep
+ * the first row's 0x01.
+ */
+TEST(pvs_zero_run_stops_at_row_no_asan)
+{
+	static byte full[MAX_MAP_LEAFS / 8];
+	static const byte lump[] = { 0x01, 0x00, 0xff };
+	static const byte want[] = { 0x01, 0x00, 0x00, 0x00 };
+	const byte *got;
+	int k;
+
+	memset(full, 0x01, sizeof(full));
+	(void)t_decode(full, sizeof(full), sizeof(full));
+	got = t_decode(lump, sizeof(lump), sizeof(want));
+	T_EQ_MEM(got, want, sizeof(want));
+
+	for (k = sizeof(want); k < MAX_MAP_LEAFS / 8; k++)
+	{
+		if (got[k] != 0x01)
+		{
+			t_fail(__FILE__, __LINE__, "byte %d after the row is %02x, not 01", k, got[k]);
+			break;
+		}
+	}
+}
+
+TEST(pvs_empty_input)
+{
+	/* no byte of the lump left at the cluster's offset: all visible */
+	static const byte lump[] = { 0x01 };
+	static const byte want[] = { 0xff, 0xff, 0xff, 0xff };
+
+	T_EQ_MEM(t_decode(lump, 0, sizeof(want)), want, sizeof(want));
+}
+
+TEST(pvs_row_past_buffer)
+{
+	/* a row longer than MAX_MAP_LEAFS / 8 bytes is decoded to the
+	   buffer's end: the zero run stops there, nothing is written past it */
+	static byte lump[MAX_MAP_LEAFS / 8 + 2];
+	static byte want[MAX_MAP_LEAFS / 8];
+	const int full = MAX_MAP_LEAFS / 8;
+
+	memset(lump, 0x01, full - 1);
+	lump[full - 1] = 0x00;
+	lump[full] = 0xff;
+	lump[full + 1] = 0x00;
+	memset(want, 0x01, full - 1);
+	want[full - 1] = 0x00;
+
+	T_EQ_MEM(t_decode(lump, sizeof(lump), full + 100), want, full);
+}
+
+/*
+ * The cluster index is the map's (a leaf's signed short):
+ * Mod_ClusterPVSRow, which every renderer's ClusterPVS calls, gives the
+ * no-vis row for any cluster outside [0, numclusters) and for a map
+ * without visibility, and reads bitofs only inside the checked table.
+ */
+static const byte t_novis[4] = { 0xff, 0xff, 0xff, 0xff };
+
+TEST(pvs_cluster_out_of_range)
+{
+	/* two clusters: the count and offset pairs, then one byte of each row */
+	static int lump[1 + 2 * 2 + 1];
+	byte *rows = (byte *)&lump[5];
+	const int len = sizeof(lump);
+	const dvis_t *vis = (const dvis_t *)lump;
+	const byte *got;
+
+	lump[0] = 2;
+	lump[1] = 20;
+	lump[2] = 21;
+	lump[3] = 22;
+	lump[4] = 23;
+	rows[0] = 0x01;
+	rows[1] = 0x03;
+	rows[2] = 0x02;
+	rows[3] = 0x03;
+
+	got = Mod_ClusterPVSRow(vis, len, 0, t_novis);
+	T_CHECK(got != t_novis);
+	T_EQ_INT(got[0], 0x01);
+	got = Mod_ClusterPVSRow(vis, len, 1, t_novis);
+	T_CHECK(got != t_novis);
+	T_EQ_INT(got[0], 0x02);
+
+	T_CHECK(Mod_ClusterPVSRow(vis, len, -1, t_novis) == t_novis);
+	T_CHECK(Mod_ClusterPVSRow(vis, len, 2, t_novis) == t_novis);
+	T_CHECK(Mod_ClusterPVSRow(vis, len, -2, t_novis) == t_novis);
+	T_CHECK(Mod_ClusterPVSRow(vis, len, 32767, t_novis) == t_novis);
+	T_CHECK(Mod_ClusterPVSRow(vis, len, -32768, t_novis) == t_novis);
+	T_CHECK(Mod_ClusterPVSRow(NULL, 0, 0, t_novis) == t_novis);
+}

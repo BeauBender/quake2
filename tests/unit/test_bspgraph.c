@@ -610,14 +610,14 @@ TEST(bspgraph_areaportal_bound)
 /*
  * The shared BSP checks (FIX118) every renderer's Mod_LoadBrushModel runs
  * before it reads a lump, in its order: the lumps, the visibility, the
- * nodes, the face edges. The stock shape gets one triangle (face 0 of
+ * nodes, the face edges, the leaves. The stock shape gets one triangle (face 0 of
  * node 0) and a two-cluster visibility lump; each hostile map breaks one
  * bound and is refused by its check with the reason, the checks before
  * it passing.
  */
 static char c_why[256];
 
-/* the index of the check that refuses gbuf, or 4 when all four pass */
+/* the index of the check that refuses gbuf, or 5 when all five pass */
 static int
 c_check(int len)
 {
@@ -645,7 +645,12 @@ c_check(int len)
 		return 3;
 	}
 
-	return 4;
+	if (!Mod_CheckLeafs(gbuf, h, c_why, sizeof(c_why)))
+	{
+		return 4;
+	}
+
+	return 5;
 }
 
 static void
@@ -690,7 +695,7 @@ c_default(void)
 TEST(bspcheck_stock_shape_passes)
 {
 	c_default();
-	T_EQ_INT(c_check(g_build()), 4);
+	T_EQ_INT(c_check(g_build()), 5);
 	T_EQ_STR(c_why, "");
 }
 
@@ -828,7 +833,7 @@ TEST(bspcheck_texinfo_chains)
 {
 	/* a stock animation, 1 -> 2 -> 1, and texinfo 0 not animated */
 	c_texinfos(3, -1, 2, 1);
-	T_EQ_INT(c_check(g_build()), 4);
+	T_EQ_INT(c_check(g_build()), 5);
 
 	/* texinfo 0 runs into the 2-cycle 1 -> 2 -> 1 and never comes back */
 	c_texinfos(3, 1, 2, 1);
@@ -916,4 +921,37 @@ TEST(bspcheck_vis_clusters_past_leafs)
 	T_EQ_INT(Mod_CheckVis(buf, (dheader_t *)buf, c_why, sizeof(c_why)), false);
 	T_EQ_STR(c_why, "visibility of 65537 clusters in 524300 bytes");
 	free(buf);
+}
+
+/*
+ * A leaf's cluster (a signed short) is -1 or one of the visibility's
+ * clusters (FIX134): the renderers' ClusterPVS and R_MarkLeaves index the
+ * offset table and the row by it. The stock shape has two clusters.
+ */
+TEST(bspcheck_leaf_cluster_past_numclusters)
+{
+	c_default();
+	g.leafs[3].cluster = 2;
+	C_REFUSED(g_build(), 4, "leaf 3 has cluster 2, the visibility has 2 clusters");
+}
+
+TEST(bspcheck_leaf_cluster_below_minus_one)
+{
+	c_default();
+	g.leafs[2].cluster = -2;
+	C_REFUSED(g_build(), 4, "leaf 2 has cluster -2, the visibility has 2 clusters");
+}
+
+TEST(bspcheck_leaf_cluster_bounds_pass)
+{
+	/* the last cluster and -1 pass; without visibility no cluster is read */
+	c_default();
+	g.leafs[2].cluster = 1;
+	g.leafs[3].cluster = -1;
+	T_EQ_INT(c_check(g_build()), 5);
+
+	c_default();
+	g.nvis = 0;
+	g.leafs[3].cluster = 7;
+	T_EQ_INT(c_check(g_build()), 5);
 }
