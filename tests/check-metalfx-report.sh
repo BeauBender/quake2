@@ -496,7 +496,7 @@ limit" "$out"
     for how in timeout TERM INT TERM2 deaf; do
         st="$w/lt-state-$how"; rm -f "$w/lt-sh" "$w/lt-child" "$w/lt-parent"
         g=1; deaf=; case $how in TERM2) g=5; deaf=1;; deaf) deaf=1;; esac
-        lenv=(env -u BENCH_LOCK_TOKEN -u BENCH_LOCK_ENTRY -u BENCH_LOCK -u BENCH_LOCK_WAIT -u BENCH_LOCK_POLL BENCH_STATE="$st"
+        lenv=(env -u BENCH_LOCK_TOKEN -u BENCH_LOCK_ENTRY -u BENCH_LOCK -u BENCH_LOCK_WAIT -u BENCH_LOCK_POLL -u CI -u GITHUB_ACTIONS BENCH_STATE="$st"
               BENCH_STOP_GRACE=$g MFX_STUB_SH="$w/lt-sh" MFX_STUB_CHILD="$w/lt-child" MFX_STUB_PARENT="$w/lt-parent"
               MFX_STUB_DEAF=$deaf PINS_STORE="$w/lt-store-$how" PATH="$tmp/maketrue:$PATH")
         if [ $how = timeout ]; then
@@ -538,7 +538,7 @@ limit" "$out"
     python3 -I "$HELP" mutate "$d/mfx.py" "$lk/scripts/metalfx-report/mfx.py" 'env=env, timeout=900)' 'env=env, timeout=4)' > "$w/lk-mut.log" ||
         ko e2e-lock-wait "cannot shorten the record's limit: $(cat "$w/lk-mut.log")"
     st="$w/lk-state"; bsh="$lk/scripts/bench/bench.sh"
-    lenv=(env -u BENCH_LOCK_TOKEN -u BENCH_LOCK_ENTRY -u BENCH_LOCK -u BENCH_STOP_GRACE BENCH_LOCK_WAIT=60 BENCH_LOCK_POLL=0.2
+    lenv=(env -u BENCH_LOCK_TOKEN -u BENCH_LOCK_ENTRY -u BENCH_LOCK -u BENCH_STOP_GRACE -u CI -u GITHUB_ACTIONS BENCH_LOCK_WAIT=60 BENCH_LOCK_POLL=0.2
           BENCH_STATE="$st" PATH="$tmp/maketrue:$PATH")
     "${lenv[@]}" sh "$bsh" lock run gate -- sleep 10 > "$w/lk-holder.log" 2>&1 &
     hp=$!
