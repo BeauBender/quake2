@@ -93,3 +93,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK196](../runbook/TASK196.md): HDR output in ref_metal: HD2, r_hdr's float16 path, the r_hdr 0 pin comparison, the hdr record, the live switch and the mutants
 - [FIX124](../runbook/FIX124.md): the identity check refuses an index blob it cannot read, and scans binary blobs as bytes (FIX125 too)
 - [FIX118](../runbook/FIX118.md): the shared BSP checks of all four renderers: the round-2 red and green runs, the mutants, and every stock map passing
+- [FIX137](../runbook/FIX137.md): the collision model bounds a leaf's cluster and every visibility offset: the red and green runs, every stock map loading with the same PVS and PHS rows, and the live server check

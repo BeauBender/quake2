@@ -27,6 +27,11 @@
  *   it, and the rest of a row whose input runs out is visible.
  * - CM_SetAreaPortalState refuses a portal number equal to the portal
  *   count and above it (FIX23, D3).
+ * - The collision model bounds a leaf's cluster and every visibility
+ *   offset (FIX137, cmvis_*): a lump whose count or offsets do not fit
+ *   it and a leaf whose cluster the lump has no offsets for are refused
+ *   at load, and CM_ClusterPVS and CM_ClusterPHS answer any other
+ *   cluster outside the lump with the no-vis row.
  *
  * =======================================================================
  */
