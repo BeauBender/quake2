@@ -87,8 +87,8 @@ one quantize a pixel ahead of the filter, are the obvious ways down. Not done in
 
 ## Pins at `r_presentation 0`
 
-Every committed scenario except the Retro ones (`retro`, `retro-filter`, which only the branch has) and
-`cinematic`, recorded on Metal (apple9, this Mac, screen locked; frames render byte-identically) by the
+Every committed scenario except the Retro ones (`retro`, `retro-filter`, which only the branch has),
+recorded on Metal (apple9, this Mac, screen locked; frames render byte-identically) by the
 base build (main at `1c91ecbc`) and by the branch build (source of `5ec24f05` on that main), both
 seeded (`PINS_SEED=1`, with the trace), 640 x 480, and compared by the hash of the frames' hashes. The
 water scenarios replay `water.dm2`, which `make-demo water` generates; two `make-demo` runs gave two
@@ -121,8 +121,9 @@ No frame was looked at, no stored reference was replaced.
 | `world-metalfx3` | 23 | `15df2f0d4` | identical |
 | `world-scale8` | 23 | `b611e9347` | identical |
 | `world` | 23 | `b15b40cf1` | identical |
+| `cinematic` (`idlog.cin`, `PINS_EVERY=7`) | 12 | `83cda5a3e` | identical |
 
-24 of 24 byte-identical: with `r_presentation 0` the branch changes no pixel. The Retro records and the
+25 of 25 byte-identical: with `r_presentation 0` the branch changes no pixel. The Retro records and the
 timing above were taken at branch commit `29308331` (the source is the same as `5ec24f05`'s).
 
 ## Left for PM3 or a follow-up
