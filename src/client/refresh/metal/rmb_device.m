@@ -942,12 +942,26 @@ rmb_hdr_set(int active)
 	rmb_hdr_apply();
 }
 
-/* a pipeline of the float16 path could not be built: off until the next rmb_attach (FIX133), applied by the next rmb_hdr_set (between frames) */
+/* a pipeline of the float16 path could not be built: off until the next renderer start (vid_restart, FIX133), applied by the next rmb_hdr_set (between frames) */
 void
 rmb_hdr_fail(void)
 {
 	rmb_hdr_dead = 1;
 	rmb_hdr_want = 0;
+}
+
+/*
+ * The float16 path may be tried again (FIX133). Called only by
+ * rmb_resources_close, once it has emptied the caches that remember the
+ * failure (fmt_variants' NSNull entries, the *_tried flags of the present,
+ * readback and tone-map pipelines): the dead flag and those caches always
+ * reset together. An rmb_attach without a close keeps both, so a cached
+ * failure never meets a path that is on again.
+ */
+void
+rmb_hdr_retry(void)
+{
+	rmb_hdr_dead = 0;
 }
 
 int
@@ -1026,8 +1040,7 @@ rmb_attach(void *metal_layer, int vsync, char *err, size_t errlen)
 		return 0;
 	}
 
-	rmb_detach();
-	rmb_hdr_dead = 0;   /* a failed float16 path is off until the next renderer start, which tries it again (FIX133) */
+	rmb_detach();   /* a failed float16 path stays off: rmb_hdr_retry, at rmb_resources_close, clears it (FIX133) */
 	rmb_frames_reset(&rmb_frames);   /* frames begin on the new layer: a drain waits for every slot again (FIX84) */
 #if TARGET_OS_OSX
 	rmb_sync = vsync ? 1 : 0;

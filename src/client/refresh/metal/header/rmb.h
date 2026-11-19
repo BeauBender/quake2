@@ -1623,8 +1623,8 @@ void rmb_hdr_set(int active);
 
 /*
  * A pipeline of the float16 path could not be built (rmb_fmt_pipe, the
- * present's): r_hdr is off until the next rmb_attach (a renderer start,
- * which tries it again, FIX133), said once on stderr by the
+ * present's): r_hdr is off until the next renderer start (vid_restart),
+ * which tries it again (FIX133), said once on stderr by the
  * caller. It takes effect through the next rmb_hdr_set, between frames,
  * the way a live r_hdr 0 does; the frame that failed is not presented.
  */
@@ -1632,6 +1632,13 @@ void rmb_hdr_fail(void);
 
 /* rmb_hdr_fail was called: rmb_hdr_set(1) then leaves the path off */
 int rmb_hdr_failed(void);
+
+/*
+ * Clears rmb_hdr_fail's flag. Only rmb_resources_close calls it, after it
+ * has emptied the caches that remember the failure, so the flag and the
+ * caches reset together (FIX133); a detach and an attach keep both.
+ */
+void rmb_hdr_retry(void);
 
 /* the float16 path is in force on the layer (the colour targets are RM_FMT_RGBA16F) */
 int rmb_hdr_on(void);

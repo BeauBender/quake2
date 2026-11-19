@@ -690,6 +690,7 @@ rmb_resources_close(void)
 		hdr_read_pipe = nil;
 		tonemap_pipe = nil;
 		present_hdr_tried = hdr_read_tried = tonemap_tried = 0;
+		rmb_hdr_retry();   /* with the caches above, never apart from them (FIX133) */
 
 		for (i = 0; i < RMB_DS_COUNT; i++)
 		{
