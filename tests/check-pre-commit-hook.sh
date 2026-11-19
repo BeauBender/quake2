@@ -215,13 +215,18 @@ done
 
 # attempt <label> <want> <repo> <file> <content> [replace]: stages <file>
 # holding <content> and runs git commit. <want> is "ok" or the text that one
-# line of the output must hold. With "replace", the staged blob is first
+# line of the output must hold. With "nul", the file starts with a NUL byte
+# (git takes it as binary). With "replace", the staged blob is first
 # replaced locally (git replace) by a clean twin, and the replacement is
 # removed after the commit. A refused commit's file is unstaged and removed.
 attempt() {
 	_label=$1; _want=$2; _r=$3; _f=$4
 	mkdir -p "$(dirname "$_r/$_f")"
-	printf '%s\n' "$5" > "$_r/$_f"
+	if [ "${6:-}" = nul ]; then
+		printf '\000%s\n' "$5" > "$_r/$_f"
+	else
+		printf '%s\n' "$5" > "$_r/$_f"
+	fi
 	git -C "$_r" add -- "$_f"
 	_rb=
 	if [ "${6:-}" = replace ]; then
@@ -262,6 +267,14 @@ attempt "identity word under .githooks/" "$I" "$tmp/id" .githooks/zzq-note "buil
 attempt "identity word under third_party/" "$I" "$tmp/id" third_party/zzq/x.h "/* built on $syn */"
 attempt "identity word under scripts/pins/scenarios/" "$I" "$tmp/id" scripts/pins/scenarios/zzq.cfg "// built on $syn"
 attempt "a clean change under scripts/, the real identity check" ok "$tmp/id" scripts/zzq-clean.sh "echo zzq clean"
+# A binary file (a leading NUL byte) is scanned as bytes.
+attempt "a binary file holding the home path after a NUL byte" "  scripts/zzq-lead.bin:1 (home)" "$tmp/id" scripts/zzq-lead.bin "built in $synhome/src" nul
+attempt "a clean binary file" ok "$tmp/id" scripts/zzq-clean.bin "zzq clean x${login}x" nul
+# Build output a debug build leaves (static archives, Metal libraries, dSYM
+# bundles) holds absolute source paths: refused by its path.
+for _f in zzq/libzzq.a shaders/zzq.metallib zzq.dSYM/Contents/Info.plist; do
+	attempt "build output staged: $_f" "pre-commit: game data or build output staged:" "$tmp/st" "$_f" "zzq clean"
+done
 
 # ---- The identity shim on PATH: the real names still decide. --------------
 # The refusal must name the staged file and the kind of value, so a hit

@@ -291,6 +291,7 @@ fi
 	<withheld file name>:1 (host)
 	attr.txt:1 (host)
 	attr2.txt:1 (host)
+	blob.bin:1 (host)
 	2 tracked file name(s) (host)
 	1 tracked file name(s) (user)
 	EOF
@@ -304,6 +305,25 @@ fi
 	expect 1 "content hits alone" "$tmp/want" zzqnone zzqnone /home/zzqhome
 	expect 0 "words shorter than three characters are skipped" "$tmp/none" zz zz zz
 	expect 0 "empty words are skipped" "$tmp/none" '' '' ''
+
+	# Binary blobs (a NUL byte) are scanned as bytes: the host name and the
+	# home path as substrings, the user name as a path component, as in text.
+	r=$tmp/r6
+	git init -q "$r"
+	printf '\000\001\002zzquserful and xzzquser zzq-synthetic-bo \377\n' > "$r/clean.bin"
+	git -C "$r" add -A
+	expect 0 "a clean binary" "$tmp/none" "$syn" zzquser /home/zzqhome
+	printf '\000built in /home/zzqhome/src\n' > "$r/lead.bin"
+	printf '\177ELF\000\000\001on ZZQ-SYNTHETIC-BOX\000\n' > "$r/host.bin"
+	printf 'zzq\000\001/srv/zzquser/data\000\n' > "$r/comp.bin"
+	git -C "$r" add -A
+	cat > "$tmp/want" <<-EOF
+	lead.bin:1 (home)
+	host.bin:1 (host)
+	comp.bin:1 (user)
+	EOF
+	expect 1 "binary blobs, scanned as bytes" "$tmp/want" "$syn" zzquser /home/zzqhome
+	r=$tmp/r
 
 	# Staged content counts, not the working tree; and link targets count.
 	r=$tmp/r2
