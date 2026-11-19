@@ -43,7 +43,21 @@ original clients (Vanilla Quake II) commands are still in place.
   under `r_hdr 1`), the colour space's name (`none` when the layer has
   none), whether extended dynamic range is on, and the display's headroom
   now and its potential, which read `unavailable` until the renderer
-  reads them. It only reads; it changes nothing.
+  reads them; then, on a second line, the peak in force (`r_hdr_peak`
+  held to the headroom, `1.00` without one). It only reads; it changes
+  nothing.
+
+* **metal_hdr_probe <x> <y>**: The Metal renderer only. Reads the pixel
+  at `x`, `y` (whole numbers from the top left, held to the drawable's
+  size, so a negative one reads the first row or column and a huge one the
+  last; anything else prints the usage line) of the next
+  frame shown, after the renderer wrote it and before the system displays
+  it, and prints its four values (four 16-bit floats under `r_hdr 1`, the
+  bytes as fractions of 255 otherwise) and whether a colour component is
+  above SDR white (1.0). Under `r_hdr 1` a value above 1.0 needs a peak
+  in force above 1.0, so a display with extended range. When no frame is
+  shown within 60 frames (the display off or asleep, the window hidden)
+  it says so and reads nothing. It changes nothing.
 
 * **gamemode <mode>**: Provides a convenient way to switch the game mode
   between `coop`, `dm` and `sp` without having to set three cvars the

@@ -31,12 +31,14 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 
 #include "header/rmb.h"
 #include "common/mtl_matrix.h"
 #include "common/mtl_shader_math.h"
+#include "common/mtl_hdr_math.h"
 
 int
 rm_caps_floor_ok(unsigned families)
@@ -742,6 +744,162 @@ rm_hdr_info_format(int fmt, const char *cs, int edr, float now, float potential,
 		return 0;
 	}
 
+	return 1;
+}
+
+/* snprintf into buf, 1 when it fits; 0 with buf empty when it does not (len 0: nothing written) */
+static int
+rm_hdr_line(char *buf, size_t len, const char *fmt, ...)
+{
+	va_list ap;
+	int n;
+
+	if (len == 0)
+	{
+		return 0;
+	}
+
+	va_start(ap, fmt);
+	n = vsnprintf(buf, len, fmt, ap);
+	va_end(ap);
+
+	if ((n < 0) || ((size_t)n >= len))
+	{
+		buf[0] = '\0';
+		return 0;
+	}
+
+	return 1;
+}
+
+int
+rm_hdr_report(int active, float cvar, float now, float potential, char *buf, size_t len)
+{
+	char a[16], b[16];
+
+	if (!active)
+	{
+		return rm_hdr_line(buf, len, "ref_metal: hdr: off");
+	}
+
+	if (!(now >= 0.0f) || !isfinite(now))
+	{
+		return rm_hdr_line(buf, len, "ref_metal: hdr: on, shown at SDR: the display's headroom is unavailable");
+	}
+
+	if (!(now > 1.0f))
+	{
+		return rm_hdr_line(buf, len, "ref_metal: hdr: on, shown at SDR: this display reports no extended range");
+	}
+
+	rm_hdr_reading(now, a, sizeof(a));
+	rm_hdr_reading(potential, b, sizeof(b));
+
+	return rm_hdr_line(buf, len, "ref_metal: hdr: on (r_hdr 1), peak %.2f (r_hdr_peak %.2f, display %s now, %s potential)",
+			(double)mtl_hdr_peak(cvar, now), (double)cvar, a, b);
+}
+
+int
+rm_hdr_peak_line(float cvar, float now, char *buf, size_t len)
+{
+	char a[16];
+
+	rm_hdr_reading(now, a, sizeof(a));
+
+	return rm_hdr_line(buf, len, "ref_metal: hdr: peak %.2f in force (r_hdr_peak %.2f, headroom %s)",
+			(double)mtl_hdr_peak(cvar, now), (double)cvar, a);
+}
+
+float
+rm_hdr_half(unsigned short h)
+{
+	const int e = (h >> 10) & 0x1f;
+	const int m = h & 0x3ff;
+	float v;
+
+	if (e == 0)
+	{
+		v = ldexpf((float)m, -24);   /* zero and the subnormals */
+	}
+	else if (e == 31)
+	{
+		v = m ? NAN : INFINITY;
+	}
+	else
+	{
+		v = ldexpf((float)(m | 0x400), e - 25);
+	}
+
+	return (h & 0x8000) ? -v : v;
+}
+
+int
+rm_hdr_probe_format(int fmt, int x, int y, const unsigned char *px, char *buf, size_t len)
+{
+	char tmp[32];
+	float v[4];
+	int i;
+
+	if (fmt == RM_FMT_RGBA16F)
+	{
+		for (i = 0; i < 4; i++)
+		{
+			v[i] = rm_hdr_half((unsigned short)(px[2 * i] | (px[2 * i + 1] << 8)));
+		}
+	}
+	else if (fmt == RM_FMT_BGRA8)
+	{
+		v[0] = px[2] / 255.0f;
+		v[1] = px[1] / 255.0f;
+		v[2] = px[0] / 255.0f;
+		v[3] = px[3] / 255.0f;
+	}
+	else
+	{
+		return rm_hdr_line(buf, len, "ref_metal: hdr: probe (%d, %d) of the drawable, %s: not read", x, y,
+				rm_hdr_fmt_name(fmt, tmp, sizeof(tmp)));
+	}
+
+	return rm_hdr_line(buf, len, "ref_metal: hdr: probe (%d, %d) of the drawable, %s: r %.4f g %.4f b %.4f a %.4f, %s",
+			x, y, rm_hdr_fmt_name(fmt, tmp, sizeof(tmp)), (double)v[0], (double)v[1], (double)v[2], (double)v[3],
+			((v[0] > 1.0f) || (v[1] > 1.0f) || (v[2] > 1.0f)) ? "above SDR white" : "at or below SDR white");
+}
+
+/* one of metal_hdr_probe's coordinates: 1 with v the whole decimal number s held to [0, INT_MAX] */
+static int
+rm_hdr_probe_arg(const char *s, int *v)
+{
+	char *end;
+	long n;
+
+	if (!s || !*s)
+	{
+		return 0;
+	}
+
+	n = strtol(s, &end, 10);   /* out of range: LONG_MIN or LONG_MAX, held below as any other */
+
+	if ((end == s) || (*end != '\0'))
+	{
+		return 0;
+	}
+
+	*v = (n < 0) ? 0 : ((n > INT_MAX) ? INT_MAX : (int)n);
+	return 1;
+}
+
+int
+rm_hdr_probe_args(const char *xs, const char *ys, int *x, int *y)
+{
+	int a, b;
+
+	if (!rm_hdr_probe_arg(xs, &a) || !rm_hdr_probe_arg(ys, &b))
+	{
+		return 0;
+	}
+
+	*x = a;
+	*y = b;
 	return 1;
 }
 

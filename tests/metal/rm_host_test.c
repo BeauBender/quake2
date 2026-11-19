@@ -8786,11 +8786,307 @@ test_hdr(void)
 	CHECK(mtl_hdr_present(0.5f) == mtl_hdr_linear(0.5f));
 }
 
+/* sRGB-encoded c of linear l, in double, for the sweeps below */
+static float
+hdr_enc(double l)
+{
+	return (float)((l <= 0.0031308) ? (l * 12.92) : (1.055 * pow(l, 1.0 / 2.4) - 0.055));
+}
+
+/* the pixel's encoded channels through the tone map and the present, at the peak p: linear out */
+static void
+hdr_pixel(const float c[3], float p, float out[3])
+{
+	const float m = mtl_hdr_max(c[0], c[1], c[2]);
+	int i;
+
+	for (i = 0; i < 3; i++)
+	{
+		out[i] = mtl_hdr_show(mtl_hdr_tone(c[i], m, p), p);
+	}
+}
+
+/*
+ * TASK196 (HD3): the tone map of common/mtl_hdr_math.h (the plan's
+ * section 2.3, H3) and the peak in force (section 2.4): identity at and
+ * below white, slope 1 there, monotonic, never above the peak, hue kept,
+ * not a number and below 0 to 0, the peak held to the headroom, and at a
+ * headroom of 1.0 the whole path equal to HD2's clamp, bit for bit.
+ */
+static void
+test_hdr_tonemap(void)
+{
+	static const float cvars[] = { 1.0f, 1.5f, 2.0f, 4.0f, 8.0f, 16.0f, 40.0f, 0.0f, -3.0f };
+	static const float peaks[] = { 1.0001f, 1.25f, 2.0f, 3.2f, 4.0f, 16.0f };
+	char line[256], small[16];
+	float x, prev, c[3], o[3];
+	unsigned i, j, k;
+	int ident = 1, mono = 1, below = 1, hue = 1, clampeq = 1, bytes = 1, tone_ident = 1;
+
+	/* the peak in force: r_hdr_peak to [1, 16], then to the headroom; unavailable or no headroom is 1.0 */
+	CHECK(mtl_hdr_peak(4.0f, 3.2f) == 3.2f);
+	CHECK(mtl_hdr_peak(4.0f, 16.0f) == 4.0f);
+	CHECK(mtl_hdr_peak(40.0f, 100.0f) == 16.0f);
+	CHECK(mtl_hdr_peak(0.5f, 16.0f) == 1.0f);
+	CHECK(mtl_hdr_peak(NAN, 16.0f) == 1.0f);
+	CHECK(mtl_hdr_peak(4.0f, -1.0f) == 1.0f);
+	CHECK(mtl_hdr_peak(4.0f, NAN) == 1.0f);
+	CHECK(mtl_hdr_peak(4.0f, 1.0f) == 1.0f);
+	CHECK(mtl_hdr_peak(4.0f, 0.5f) == 1.0f);
+	CHECK(mtl_hdr_peak(INFINITY, INFINITY) == 16.0f);
+
+	/* the peak above the headroom is the headroom: the shoulder tends to it, never past */
+	CHECK(mtl_hdr_shoulder(1000.0f, mtl_hdr_peak(8.0f, 2.0f)) <= 2.0f);
+	CHECK(mtl_hdr_shoulder(1000.0f, mtl_hdr_peak(8.0f, 2.0f)) > 1.99f);
+
+	for (k = 0; k < sizeof(peaks) / sizeof(peaks[0]); k++)
+	{
+		const float p = peaks[k];
+
+		prev = -1.0f;
+
+		for (i = 0; i <= 40000; i++)
+		{
+			x = (float)i / 1000.0f;   /* 0 to 40, past every peak */
+
+			if (x <= 1.0f)
+			{
+				ident &= (mtl_hdr_shoulder(x, p) == x);
+			}
+
+			mono &= (mtl_hdr_shoulder(x, p) >= prev);
+			below &= (mtl_hdr_shoulder(x, p) <= p);
+			prev = mtl_hdr_shoulder(x, p);
+		}
+
+		below &= (mtl_hdr_shoulder(65504.0f, p) <= p) && (mtl_hdr_shoulder(INFINITY, p) <= p);
+		/* slope 1 at white: the first step above it moves as far as the step */
+		CHECK(fabsf((mtl_hdr_shoulder(1.0f + 1e-3f, p) - 1.0f) / 1e-3f - 1.0f) < 1e-3f / (p - 1.0f) + 2e-3f);
+		/* not a number and below 0 to 0 */
+		CHECK(mtl_hdr_shoulder(NAN, p) == 0.0f && mtl_hdr_shoulder(-2.0f, p) == 0.0f);
+		CHECK(mtl_hdr_tone(NAN, 2.0f, p) == 0.0f && mtl_hdr_tone(-0.5f, 2.0f, p) == 0.0f);
+		CHECK(mtl_hdr_tone(-0.5f, 0.5f, p) == 0.0f && mtl_hdr_tone(NAN, NAN, p) == 0.0f);
+		CHECK(mtl_hdr_show(NAN, p) == 0.0f && mtl_hdr_show(-1.0f, p) == 0.0f);
+		CHECK(mtl_hdr_max(NAN, -1.0f, 0.0f) == 0.0f);
+		/* the present holds the drawable to the peak even past the tone map */
+		CHECK(mtl_hdr_show(100.0f, p) == p && mtl_hdr_show(INFINITY, p) == p);
+
+		/* a pixel at or below white is untouched, bit for bit, through the tone map */
+		for (i = 0; i <= 1000; i++)
+		{
+			c[0] = (float)i / 1000.0f;
+			c[1] = c[0] * 0.5f;
+			c[2] = 1.0f - c[0];
+			tone_ident &= (mtl_hdr_tone(c[0], mtl_hdr_max(c[0], c[1], c[2]), p) == c[0])
+				&& (mtl_hdr_tone(c[1], mtl_hdr_max(c[0], c[1], c[2]), p) == c[1])
+				&& (mtl_hdr_tone(c[2], mtl_hdr_max(c[0], c[1], c[2]), p) == c[2]);
+		}
+
+		/* above white: the pixel's largest component below the peak, the ratios of its components kept */
+		for (i = 1; i <= 400; i++)
+		{
+			const double big = 1.0 + (double)i / 10.0;   /* linear 1.1 to 41 */
+
+			c[0] = hdr_enc(big);
+			c[1] = hdr_enc(big * 0.5);
+			c[2] = hdr_enc(big * 0.125);
+			hdr_pixel(c, p, o);
+			below &= (o[0] <= p) && (o[1] <= p) && (o[2] <= p);
+			hue &= (fabsf(o[1] / o[0] - 0.5f) < 2e-3f) && (fabsf(o[2] / o[0] - 0.125f) < 2e-3f);
+			hue &= fabsf(o[0] - mtl_hdr_shoulder(mtl_hdr_max(c[0], c[1], c[2]), p)) < 2e-3f * p;
+		}
+	}
+
+	CHECK(ident);
+	CHECK(mono);
+	CHECK(below);
+	CHECK(hue);
+	CHECK(tone_ident);
+
+	/*
+	 * a headroom of 1.0 (or none read) reduces the whole path to HD2's
+	 * clamp, mtl_hdr_present, bit for bit and so byte for byte, over a
+	 * sweep of the encoded value from below 0 to past float16's largest,
+	 * at every r_hdr_peak
+	 */
+	for (k = 0; k < sizeof(cvars) / sizeof(cvars[0]); k++)
+	{
+		const float headrooms[] = { 1.0f, -1.0f, NAN, 0.25f };
+
+		for (j = 0; j < 4; j++)
+		{
+			const float p = mtl_hdr_peak(cvars[k], headrooms[j]);
+
+			clampeq &= (p == 1.0f);
+
+			for (i = 0; i <= 80000; i++)
+			{
+				const float v = -1.0f + (float)i / 10000.0f;   /* -1 to 7 */
+				const float t = mtl_hdr_show(mtl_hdr_tone(v, mtl_hdr_max(v, v * 0.5f, 3.0f), p), p);
+
+				clampeq &= (t == mtl_hdr_present(v));
+				bytes &= ((unsigned)(t * 255.0f + 0.5f) == (unsigned)(mtl_hdr_present(v) * 255.0f + 0.5f));
+				/* and the in-place tone map is the readback's clamp, so the SDR fallback is HD2's */
+				clampeq &= (mtl_hdr_byte(mtl_hdr_tone(v, 2.0f, p)) == mtl_hdr_byte(v));
+			}
+
+			clampeq &= (mtl_hdr_show(mtl_hdr_tone(NAN, NAN, p), p) == mtl_hdr_present(NAN));
+			clampeq &= (mtl_hdr_show(mtl_hdr_tone(INFINITY, INFINITY, p), p) == mtl_hdr_present(INFINITY));
+			clampeq &= (mtl_hdr_show(mtl_hdr_tone(65504.0f, 65504.0f, p), p) == mtl_hdr_present(65504.0f));
+		}
+	}
+
+	CHECK(clampeq);
+	CHECK(bytes);
+
+	/* the report line: on with a peak, on at SDR with no headroom or none read, off */
+	CHECK(rm_hdr_report(1, 4.0f, 3.2f, 16.0f, line, sizeof(line)));
+	CHECK(!strcmp(line, "ref_metal: hdr: on (r_hdr 1), peak 3.20 (r_hdr_peak 4.00, display 3.20 now, 16.00 potential)"));
+	CHECK(rm_hdr_report(1, 2.0f, 3.2f, -1.0f, line, sizeof(line)));
+	CHECK(!strcmp(line, "ref_metal: hdr: on (r_hdr 1), peak 2.00 (r_hdr_peak 2.00, display 3.20 now, unavailable potential)"));
+	CHECK(rm_hdr_report(1, 4.0f, 1.0f, 1.0f, line, sizeof(line)));
+	CHECK(!strcmp(line, "ref_metal: hdr: on, shown at SDR: this display reports no extended range"));
+	CHECK(rm_hdr_report(1, 4.0f, -1.0f, -1.0f, line, sizeof(line)));
+	CHECK(!strcmp(line, "ref_metal: hdr: on, shown at SDR: the display's headroom is unavailable"));
+	CHECK(rm_hdr_report(1, 4.0f, NAN, 16.0f, line, sizeof(line)));
+	CHECK(!strcmp(line, "ref_metal: hdr: on, shown at SDR: the display's headroom is unavailable"));
+	CHECK(rm_hdr_report(0, 4.0f, 3.2f, 16.0f, line, sizeof(line)));
+	CHECK(!strcmp(line, "ref_metal: hdr: off"));
+	CHECK(!rm_hdr_report(1, 4.0f, 3.2f, 16.0f, small, sizeof(small)) && small[0] == '\0');
+	CHECK(!rm_hdr_report(1, 4.0f, 3.2f, 16.0f, small, 0));
+
+	/* metal_hdr_info's second line: the peak in force and what it is held to */
+	CHECK(rm_hdr_peak_line(4.0f, -1.0f, line, sizeof(line)));
+	CHECK(!strcmp(line, "ref_metal: hdr: peak 1.00 in force (r_hdr_peak 4.00, headroom unavailable)"));
+	CHECK(rm_hdr_peak_line(40.0f, 3.2f, line, sizeof(line)));
+	CHECK(!strcmp(line, "ref_metal: hdr: peak 3.20 in force (r_hdr_peak 40.00, headroom 3.20)"));
+	CHECK(!rm_hdr_peak_line(4.0f, 3.2f, small, sizeof(small)) && small[0] == '\0');
+
+	/* metal_hdr_probe: float16 from its bits, and its line */
+	CHECK(rm_hdr_half(0x3c00) == 1.0f);
+	CHECK(rm_hdr_half(0x4000) == 2.0f);
+	CHECK(rm_hdr_half(0xc000) == -2.0f);
+	CHECK(rm_hdr_half(0x3800) == 0.5f);
+	CHECK(rm_hdr_half(0x0000) == 0.0f);
+	CHECK(rm_hdr_half(0x7bff) == 65504.0f);
+	CHECK(rm_hdr_half(0x0001) == ldexpf(1.0f, -24));
+	CHECK(isinf(rm_hdr_half(0x7c00)) && isnan(rm_hdr_half(0x7e00)));
+	{
+		/* RGBA16Float, little-endian: r 2.0, g 1.0, b 0.5, a 1.0 */
+		const unsigned char h[8] = { 0x00, 0x40, 0x00, 0x3c, 0x00, 0x38, 0x00, 0x3c };
+		const unsigned char w[8] = { 0x00, 0x3c, 0x00, 0x38, 0x00, 0x00, 0x00, 0x3c };
+		const unsigned char b[4] = { 255, 128, 0, 255 };   /* BGRA8Unorm: b g r a */
+
+		CHECK(rm_hdr_probe_format(RM_FMT_RGBA16F, 10, 20, h, line, sizeof(line)));
+		CHECK(!strcmp(line, "ref_metal: hdr: probe (10, 20) of the drawable, RGBA16Float: "
+				"r 2.0000 g 1.0000 b 0.5000 a 1.0000, above SDR white"));
+		CHECK(rm_hdr_probe_format(RM_FMT_RGBA16F, 0, 0, w, line, sizeof(line)));
+		CHECK(!strcmp(line, "ref_metal: hdr: probe (0, 0) of the drawable, RGBA16Float: "
+				"r 1.0000 g 0.5000 b 0.0000 a 1.0000, at or below SDR white"));
+		CHECK(rm_hdr_probe_format(RM_FMT_BGRA8, 1, 2, b, line, sizeof(line)));
+		CHECK(!strcmp(line, "ref_metal: hdr: probe (1, 2) of the drawable, BGRA8Unorm: "
+				"r 0.0000 g 0.5020 b 1.0000 a 1.0000, at or below SDR white"));
+		CHECK(rm_hdr_probe_format(552, 1, 2, b, line, sizeof(line)));
+		CHECK(!strcmp(line, "ref_metal: hdr: probe (1, 2) of the drawable, pixel format 552: not read"));
+		CHECK(!rm_hdr_probe_format(RM_FMT_RGBA16F, 10, 20, h, small, sizeof(small)) && small[0] == '\0');
+	}
+	{
+		/* metal_hdr_probe's arguments: each held to [0, INT_MAX], so a negative or huge one never cancels */
+		int x = -7, y = -7;
+
+		CHECK(rm_hdr_probe_args("12", "34", &x, &y) && x == 12 && y == 34);
+		CHECK(rm_hdr_probe_args("-5", "10", &x, &y) && x == 0 && y == 10);
+		CHECK(rm_hdr_probe_args("10", "-2147483649", &x, &y) && x == 10 && y == 0);
+		CHECK(rm_hdr_probe_args("99999999999", "5", &x, &y) && x == INT_MAX && y == 5);
+		CHECK(rm_hdr_probe_args("2147483648", "2147483647", &x, &y) && x == INT_MAX && y == INT_MAX);
+		CHECK(rm_hdr_probe_args("999999999999999999999999", "0", &x, &y) && x == INT_MAX && y == 0);
+		CHECK(rm_hdr_probe_args("-999999999999999999999999", "0", &x, &y) && x == 0 && y == 0);
+		x = y = -7;
+		CHECK(!rm_hdr_probe_args("abc", "5", &x, &y) && x == -7 && y == -7);
+		CHECK(!rm_hdr_probe_args("5", "", &x, &y) && x == -7 && y == -7);
+		CHECK(!rm_hdr_probe_args("5x", "5", &x, &y) && x == -7 && y == -7);
+		CHECK(!rm_hdr_probe_args("5", "1.5", &x, &y) && x == -7 && y == -7);
+		CHECK(!rm_hdr_probe_args(NULL, "5", &x, &y) && x == -7 && y == -7);
+	}
+	{
+		/*
+		 * the probe's generation and state in one word: a re-ask and a new
+		 * copy between a copy and its completion leave a word the stale
+		 * completion's compare-and-swap does not match
+		 */
+		const unsigned w0 = rm_probe_word(5, RM_PROBE_IDLE);
+		const unsigned asked = rm_probe_ask_word(w0, 1);
+		const unsigned stale = rm_probe_word(rm_probe_gen(asked), RM_PROBE_COPYING);
+		const unsigned again = rm_probe_ask_word(stale, 1);
+		const unsigned fresh = rm_probe_word(rm_probe_gen(again), RM_PROBE_COPYING);
+		const unsigned wrap = rm_probe_word(0x3fffffffu, RM_PROBE_COPYING);
+
+		CHECK(rm_probe_state(asked) == RM_PROBE_ASKED && rm_probe_gen(asked) == 6);
+		CHECK(rm_probe_state(rm_probe_ask_word(w0, 0)) == RM_PROBE_IDLE && rm_probe_gen(rm_probe_ask_word(w0, 0)) == 6);
+		CHECK(rm_probe_state(stale) == RM_PROBE_COPYING && rm_probe_state(fresh) == RM_PROBE_COPYING);
+		CHECK(fresh != stale);   /* the stale handler's expected value: its swap to READ fails */
+		CHECK(rm_probe_state(rm_probe_word(rm_probe_gen(stale), RM_PROBE_READ)) == RM_PROBE_READ
+				&& rm_probe_gen(rm_probe_word(rm_probe_gen(stale), RM_PROBE_READ)) == rm_probe_gen(stale));
+		CHECK(rm_probe_gen(rm_probe_ask_word(wrap, 1)) == 0 && rm_probe_ask_word(wrap, 1) != wrap);
+	}
+	{
+		/*
+		 * The tone map once per pixel per frame (the runbook's HD3 rework
+		 * round 2): R_HdrToneMap maps each view's rectangle after the view.
+		 * The shoulder is not idempotent above white, so a pixel mapped by
+		 * the world view and again by the player model's view
+		 * (RDF_NOWORLDMODEL, menu.c) would roll off twice; it is not,
+		 * because that view first repaints its whole rectangle opaque
+		 * (R_ClearNoWorld, 0.3 grey over r_view.vp, the rectangle
+		 * rm_view_rect gives the tone map too). A strip of encoded grey
+		 * pixels walked through that order, at a peak of 4.
+		 */
+		const float p = 4.0f, hot = 1.6f, model = 1.4f;
+		float px[8], want[8];
+		int i;
+
+		/* the shoulder above white, twice, is not once: a second pass over a mapped pixel would show */
+		CHECK(mtl_hdr_tone(mtl_hdr_tone(hot, mtl_hdr_max(hot, hot, hot), p),
+				mtl_hdr_max(mtl_hdr_tone(hot, mtl_hdr_max(hot, hot, hot), p), 0.0f, 0.0f), p)
+				< mtl_hdr_tone(hot, mtl_hdr_max(hot, hot, hot), p) - 1e-3f);
+
+		for (i = 0; i < 8; i++)
+		{
+			px[i] = hot;   /* the world view, above white */
+		}
+
+		for (i = 0; i < 8; i++)
+		{
+			px[i] = mtl_hdr_tone(px[i], mtl_hdr_max(px[i], px[i], px[i]), p);   /* its tone map, the whole view */
+			want[i] = px[i];
+		}
+
+		for (i = 2; i < 6; i++)
+		{
+			px[i] = (i == 4) ? model : 0.3f;   /* the model view: its rectangle repainted, then the model */
+			want[i] = mtl_hdr_tone(px[i], mtl_hdr_max(px[i], px[i], px[i]), p);
+		}
+
+		for (i = 2; i < 6; i++)
+		{
+			px[i] = mtl_hdr_tone(px[i], mtl_hdr_max(px[i], px[i], px[i]), p);   /* its tone map, its rectangle */
+		}
+
+		for (i = 0; i < 8; i++)
+		{
+			CHECK(px[i] == want[i]);   /* each pixel mapped once: the world's outside, the model view's inside */
+		}
+
+		CHECK(want[2] == 0.3f && want[4] < model && want[0] < hot);
+	}
+}
+
 int
 main(void)
 {
 	test_colorspace_mode();
 	test_hdr();
+	test_hdr_tonemap();
 	test_frames_drain();
 	test_present_drain();
 	test_readback();

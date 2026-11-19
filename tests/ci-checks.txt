@@ -22,6 +22,7 @@ check-ios-screen.sh
 check-ios.sh
 check-memory-rules.sh
 check-metal-shim.sh
+check-metalfx-report.sh
 check-mode-size.sh
 check-no-tracked-memory.sh
 check-pins-latch.sh
@@ -31,6 +32,7 @@ check-pre-push-hook.sh
 check-ref-metal.sh
 check-refrecord.sh
 check-removed-deps.sh
+check-require-guards.sh
 check-rt-variations.sh
 check-runbook-index.sh
 check-savegame-tables.sh

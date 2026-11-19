@@ -927,10 +927,24 @@ rmb_hdr_on(void)
 	return rmb_hdr_layer;
 }
 
-/* metal_hdr_info's line: the layer's state as it is now, and the headroom, which this slice does not read (HD1) */
+/*
+ * The display's headroom now and its potential (the plan's section 2.4):
+ * below 0, unavailable, until HD1 reads them (NSScreen on macOS, UIScreen
+ * on iOS and iPadOS). The peak in force is then 1.0 (mtl_hdr_peak), and
+ * r_hdr 1 is shown at SDR white.
+ */
+void
+rmb_hdr_headroom(float *now, float *potential)
+{
+	*now = -1.0f;
+	*potential = -1.0f;
+}
+
+/* metal_hdr_info's line: the layer's state as it is now, and the headroom (rmb_hdr_headroom) */
 int
 rmb_hdr_info(char *buf, size_t len)
 {
+	float now, potential;
 	char name[96] = "";
 	int edr = 0, fmt = 0;
 
@@ -964,7 +978,8 @@ rmb_hdr_info(char *buf, size_t len)
 #endif
 	}
 
-	return rm_hdr_info_format(fmt, name, edr, -1.0f, -1.0f, buf, len);
+	rmb_hdr_headroom(&now, &potential);
+	return rm_hdr_info_format(fmt, name, edr, now, potential, buf, len);
 }
 
 int
