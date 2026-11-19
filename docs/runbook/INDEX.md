@@ -97,3 +97,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [FIX137](../runbook/FIX137.md): the collision model bounds a leaf's cluster and every visibility offset: the red and green runs, every stock map loading with the same PVS and PHS rows, and the live server check
 - [FIX134](../runbook/FIX134.md): the PVS decompressor of gl1, gl3 and soft stops at the visibility lump and its row: the red and green runs and every stock row decoding as before
 - [FIX136](../runbook/FIX136.md): a committed check that forces every skip CI or the gate requires and wants a failure, with mutants of the guards
+- [FIX135](../runbook/FIX135.md): a refused model load leaves no named empty slot: the deferred-cleanup design, and `Hunk_Begin` recording its reservation so an unfinished hunk frees

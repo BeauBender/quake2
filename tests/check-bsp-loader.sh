@@ -15,6 +15,9 @@
 # - the shared checks are not defined in models.c.
 # Calls in comments (one line or several) and in #if 0 regions do not count.
 #
+# It also requires gl1, gl3 and soft to use the shared load-in-progress
+# helpers of models.c (FIX135), so a refused map leaves no named empty slot.
+#
 # Then it proves itself on scratch copies: a copy with one renderer's call
 # dropped, one with a check moved after a lump read, one with a fifth
 # loader, one with a call inside a multi-line comment, one with a call under
@@ -122,6 +125,21 @@ check_tree() { # root: 0 when the tree keeps the invariant, 1 with the reasons p
 		done
 	done
 
+	# a refused map leaves no named slot (FIX135): gl1, gl3 and soft record
+	# each load and take back an unfinished one in Mod_ForName and
+	# Mod_FreeAll (ref_metal frees its own, RM_FreeUnfinished)
+	for f in src/client/refresh/gl1/gl1_model.c src/client/refresh/gl3/gl3_model.c \
+		src/client/refresh/soft/sw_model.c; do
+		[ -f "$r/$f" ] || continue
+		live=$(strip_dead < "$r/$f")
+		for u in Mod_LoadBegin Mod_LoadEnd Mod_ReclaimUnfinished; do
+			if ! printf '%s\n' "$live" | grep -qE "(^|[^A-Za-z0-9_])$u[[:space:]]*\("; then
+				echo "check-bsp-loader: $f does not use $u (a refused map would leave a named empty slot)"
+				bad=1
+			fi
+		done
+	done
+
 	# no definition of the forked loaders outside the four known files
 	extra=$(cd "$r" && grep -rlE '^Mod_Load(BrushModel|Faces|Leafs)[[:space:]]*\(' src | sort)
 	for x in $extra; do
@@ -184,6 +202,11 @@ awk '/^Mod_LoadBrushModel/ { inb = 1 }
 	inb && /the shared BSP checks/ && !done { print "\tMod_CalcLumpHunkSize(&header->lumps[0], 1, 1, 0);"; done = 1 }
 	{ print }' "$root/src/client/refresh/soft/sw_model.c" > "${tmp:?}/late/src/client/refresh/soft/sw_model.c"
 expect_refused "soft reading a lump before the checks" "${tmp:?}/late"
+
+copy "${tmp:?}/noslot"
+sed 's/Mod_ReclaimUnfinished(/Mod_Other(/' \
+	"$root/src/client/refresh/gl1/gl1_model.c" > "${tmp:?}/noslot/src/client/refresh/gl1/gl1_model.c"
+expect_refused "gl1 without Mod_ReclaimUnfinished" "${tmp:?}/noslot"
 
 copy "${tmp:?}/fifth"
 mkdir -p "${tmp:?}/fifth/src/client/refresh/vk"
