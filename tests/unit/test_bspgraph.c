@@ -608,6 +608,160 @@ TEST(bspgraph_areaportal_bound)
 }
 
 /*
+ * The collision model's visibility (FIX137): CMod_LoadVisibility refuses
+ * a lump whose cluster count does not fit it or whose PVS or PHS offset
+ * is outside it, CM_LoadMap refuses a leaf whose cluster is neither -1
+ * nor below the lump's count, and CM_ClusterPVS and CM_ClusterPHS answer
+ * a cluster outside the lump with the no-vis row (all visible). The
+ * stock shape is g_default's two clusters in a 24-byte lump: the count,
+ * the four offsets, then one byte of each row.
+ */
+static void
+v_map(void)
+{
+	g.vis[0] = 2;
+	g.vis[1] = 20;	/* cluster 0 PVS */
+	g.vis[2] = 21;	/* cluster 0 PHS */
+	g.vis[3] = 22;	/* cluster 1 PVS */
+	g.vis[4] = 23;	/* cluster 1 PHS */
+	g.vis[5] = LittleLong(0x02030201);	/* bytes 20..23: 01 02 03 02 */
+	g.nvis = 6;
+}
+
+static const char *
+v_load(void)
+{
+	return g_write(g_build());
+}
+
+TEST(cmvis_stock_shape_rows)
+{
+	unsigned checksum;
+
+	g_default();
+	v_map();
+	T_REQUIRE(CM_LoadMap(v_load(), false, &checksum) != NULL);
+	T_EQ_INT(CM_NumClusters(), 2);
+	T_EQ_INT(CM_ClusterPVS(0)[0], 0x01);
+	T_EQ_INT(CM_ClusterPHS(0)[0], 0x02);
+	T_EQ_INT(CM_ClusterPVS(1)[0], 0x03);
+	T_EQ_INT(CM_ClusterPHS(1)[0], 0x02);
+	T_EQ_INT(CM_ClusterPVS(-1)[0], 0x00);
+	T_EQ_INT(CM_ClusterPHS(-1)[0], 0x00);
+}
+
+/* a map that must be refused at load, with why in the message */
+static void
+v_refused(const char *why)
+{
+	const char *name = v_load();
+	unsigned checksum;
+
+	T_EXPECT_DROP(CM_LoadMap(name, false, &checksum));
+	if (!strstr(t_console(), name) || !strstr(t_console(), why))
+	{
+		t_fail(__FILE__, __LINE__, "message: %s", t_console());
+	}
+}
+
+TEST(cmvis_leaf_cluster_minus_two)
+{
+	g_default();
+	v_map();
+	g.leafs[3].cluster = -2;
+	v_refused("leaf 3 has cluster -2, the visibility has 2 clusters");
+}
+
+TEST(cmvis_leaf_cluster_at_count)
+{
+	g_default();
+	v_map();
+	g.leafs[3].cluster = 2;
+	v_refused("leaf 3 has cluster 2, the visibility has 2 clusters");
+}
+
+TEST(cmvis_pvs_offset_negative)
+{
+	g_default();
+	v_map();
+	g.vis[3] = -4;
+	v_refused("cluster 1 has its visibility at -4, outside 24 bytes");
+}
+
+TEST(cmvis_phs_offset_past_lump)
+{
+	g_default();
+	v_map();
+	g.vis[2] = 25;
+	v_refused("cluster 0 has its visibility at 25, outside 24 bytes");
+}
+
+TEST(cmvis_clusters_past_lump)
+{
+	g_default();
+	v_map();
+	g.vis[0] = 3;	/* three clusters' offsets do not fit in 24 bytes */
+	v_refused("visibility of 3 clusters in 24 bytes");
+
+	g_default();
+	v_map();
+	g.vis[0] = -1;
+	v_refused("visibility of -1 clusters in 24 bytes");
+
+	/* a lump of 2 bytes, too short for its count */
+	g_default();
+	v_map();
+	g.nvis = 1;
+	{
+		int len = g_build();
+		const char *name;
+		unsigned checksum;
+
+		((dheader_t *)gbuf)->lumps[LUMP_VISIBILITY].filelen = 2;
+		name = g_write(len);
+		T_EXPECT_DROP(CM_LoadMap(name, false, &checksum));
+		T_CONSOLE_HAS("visibility of 2 bytes");
+	}
+}
+
+/*
+ * Defence in depth: a cluster the lump has no offsets for (a leaf of a
+ * map without visibility may carry any cluster, and a caller may pass
+ * one) is answered with the no-vis row, reading nothing before or after
+ * the lump's table. Cluster 2's offsets would be the row bytes, and -2's
+ * the 16 bytes before map_visibility.
+ */
+TEST(cmvis_cluster_outside_lump_is_novis)
+{
+	unsigned checksum;
+
+	g_default();
+	v_map();
+	g.vis[5] = LittleLong(-1000);	/* cluster 2's PVS offset, if read */
+	T_REQUIRE(CM_LoadMap(v_load(), false, &checksum) != NULL);
+	T_EQ_INT(CM_ClusterPVS(2)[0], 0xff);
+	T_EQ_INT(CM_ClusterPHS(2)[0], 0xff);
+	T_EQ_INT(CM_ClusterPVS(-2)[0], 0xff);
+	T_EQ_INT(CM_ClusterPHS(-2)[0], 0xff);
+	T_EQ_INT(CM_ClusterPVS(0)[0], 0x18);	/* the low byte of -1000 */
+}
+
+/* Without visibility a leaf's cluster is not checked, and every row but
+   -1's is all visible, as before. */
+TEST(cmvis_no_vis_any_cluster)
+{
+	unsigned checksum;
+
+	g_default();
+	g.leafs[3].cluster = -2;
+	T_REQUIRE(CM_LoadMap(v_load(), false, &checksum) != NULL);
+	T_EQ_INT(CM_ClusterPVS(0)[0], 0xff);
+	T_EQ_INT(CM_ClusterPVS(-2)[0], 0xff);
+	T_EQ_INT(CM_ClusterPHS(-2)[0], 0xff);
+	T_EQ_INT(CM_ClusterPVS(-1)[0], 0x00);
+}
+
+/*
  * The shared BSP checks (FIX118) every renderer's Mod_LoadBrushModel runs
  * before it reads a lump, in its order: the lumps, the visibility, the
  * nodes, the face edges. The stock shape gets one triangle (face 0 of
