@@ -29,8 +29,10 @@
  *   count and above it (FIX23, D3).
  * - The collision model bounds a leaf's cluster and every visibility
  *   offset (FIX137, cmvis_*): a lump whose count or offsets do not fit
- *   it and a leaf whose cluster the lump has no offsets for are refused
- *   at load, and CM_ClusterPVS and CM_ClusterPHS answer any other
+ *   it and a leaf whose cluster is below -1 or (with visibility) one the
+ *   lump has no offsets for are refused at load, the inclusive offset
+ *   edges 0 and the lump's length load, and CM_ClusterPVS and
+ *   CM_ClusterPHS answer any other
  *   cluster outside the lump with the no-vis row.
  *
  * =======================================================================
@@ -731,8 +733,8 @@ TEST(cmvis_clusters_past_lump)
 
 /*
  * Defence in depth: a cluster the lump has no offsets for (a leaf of a
- * map without visibility may carry any cluster, and a caller may pass
- * one) is answered with the no-vis row, reading nothing before or after
+ * map without visibility may carry any cluster of 0 or more, and a
+ * caller may pass any) is answered with the no-vis row, reading nothing before or after
  * the lump's table. Cluster 2's offsets would be the row bytes, and -2's
  * the 16 bytes before map_visibility.
  */

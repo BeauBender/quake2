@@ -1820,26 +1820,24 @@ CMod_LoadVisibility(const char *name, lump_t *l)
 }
 
 /*
- * With visibility, every leaf's cluster is -1 (none) or one the lump has
- * offsets for (FIX137, as Mod_CheckLeafs has it): CMod_LoadLeafs raised
- * numclusters to cover them before the lump was read. Without visibility
- * every row but -1's is all visible, whatever the cluster.
+ * Every leaf's cluster is -1 (none) or more (FIX137, as Mod_CheckLeafs has
+ * it): the server skips only -1 when it links an entity, and indexes its
+ * PVS and PHS rows by the cluster. With visibility the cluster is also one
+ * the lump has offsets for: CMod_LoadLeafs raised numclusters to cover
+ * them before the lump was read. Without visibility every row but -1's is
+ * all visible, so a cluster of 0 or more is not bounded.
  */
 static void
 CMod_CheckLeafClusters(const char *name)
 {
 	int i;
 
-	if (!numvisibility)
-	{
-		return;
-	}
-
 	for (i = 0; i < numleafs; i++)
 	{
 		int cluster = map_leafs[i].cluster;
 
-		if ((cluster != -1) && ((cluster < 0) || (cluster >= map_vis->numclusters)))
+		if ((cluster < -1) ||
+			(numvisibility && (cluster >= map_vis->numclusters)))
 		{
 			Com_Error(ERR_DROP, "%s: Map %s leaf %d has cluster %d, the visibility has %d clusters",
 				__func__, name, i, cluster, map_vis->numclusters);
@@ -2225,7 +2223,7 @@ CM_DecompressVis(byte *in, byte *out)
 
 	do
 	{
-		if ((in < map_visibility) || (in >= end) || (!*in && (end - in < 2)))
+		if ((in >= end) || (!*in && (end - in < 2)))
 		{
 			/* the input ran out: the rest of the row is visible */
 			while (out_p - out < row)
@@ -2260,6 +2258,33 @@ CM_DecompressVis(byte *in, byte *out)
 	while (out_p - out < row);
 }
 
+/*
+ * The input of a cluster's PVS or PHS row, or NULL (the no-vis row, all
+ * visible) for a cluster the lump has no offsets for. The offset is
+ * checked before the pointer is formed (FIX137): CMod_LoadVisibility
+ * already refused one outside the lump, so this only keeps a pointer
+ * outside map_visibility from ever being made.
+ */
+static byte *
+CM_ClusterVisInput(int cluster, int which)
+{
+	int ofs;
+
+	if (!numvisibility || (cluster < 0) || (cluster >= map_vis->numclusters))
+	{
+		return NULL;
+	}
+
+	ofs = LittleLong(map_vis->bitofs[cluster][which]);
+
+	if ((ofs < 0) || (ofs > numvisibility))
+	{
+		return NULL;
+	}
+
+	return map_visibility + ofs;
+}
+
 byte *
 CM_ClusterPVS(int cluster)
 {
@@ -2267,15 +2292,9 @@ CM_ClusterPVS(int cluster)
 	{
 		memset(pvsrow, 0, (numclusters + 7) >> 3);
 	}
-	else if (!numvisibility || (cluster < 0) || (cluster >= map_vis->numclusters))
-	{
-		/* no offsets for it: the no-vis row, all visible */
-		CM_DecompressVis(NULL, pvsrow);
-	}
 	else
 	{
-		CM_DecompressVis(map_visibility +
-				LittleLong(map_vis->bitofs[cluster][DVIS_PVS]), pvsrow);
+		CM_DecompressVis(CM_ClusterVisInput(cluster, DVIS_PVS), pvsrow);
 	}
 
 	return pvsrow;
@@ -2288,15 +2307,9 @@ CM_ClusterPHS(int cluster)
 	{
 		memset(phsrow, 0, (numclusters + 7) >> 3);
 	}
-	else if (!numvisibility || (cluster < 0) || (cluster >= map_vis->numclusters))
-	{
-		/* no offsets for it: the no-vis row, all visible */
-		CM_DecompressVis(NULL, phsrow);
-	}
 	else
 	{
-		CM_DecompressVis(map_visibility +
-				LittleLong(map_vis->bitofs[cluster][DVIS_PHS]), phsrow);
+		CM_DecompressVis(CM_ClusterVisInput(cluster, DVIS_PHS), phsrow);
 	}
 
 	return phsrow;
