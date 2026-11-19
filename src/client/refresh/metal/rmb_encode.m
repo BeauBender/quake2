@@ -37,6 +37,7 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -436,8 +437,15 @@ rmb_pass_2d(void)
 	return rmb_pass(NULL, 0);
 }
 
-int
-rmb_retro_pass(int x, int y, int w, int h, int filter, int curve)
+/*
+ * The post-process seat (TASK184's Retro pass, TASK196's tone map): the
+ * open pass ends, the rectangle (clipped to the target) is copied, and
+ * one pass of the pipeline pipe() gives writes it back, with bytes at the
+ * fragment's buffer 0. 0, the frame untouched, outside a frame, for an
+ * empty rectangle or when the pipeline did not build.
+ */
+static int
+rmb_post_pass(id<MTLRenderPipelineState> (*pipe)(void), int x, int y, int w, int h, const void *bytes, size_t len)
 {
 	id<MTLRenderPipelineState> pso;
 	int tw, th;
@@ -466,7 +474,7 @@ rmb_retro_pass(int x, int y, int w, int h, int filter, int curve)
 	w = (x + w > tw) ? tw - x : w;
 	h = (y + h > th) ? th - y : h;
 
-	if ((w <= 0) || (h <= 0) || !(pso = rmb_retro_pipe()))
+	if ((w <= 0) || (h <= 0) || !(pso = pipe()))
 	{
 		return 0;
 	}
@@ -478,7 +486,6 @@ rmb_retro_pass(int x, int y, int w, int h, int filter, int curve)
 		id<MTLRenderCommandEncoder> enc;
 		MTLViewport vp = { (double)x, (double)y, (double)w, (double)h, 0.0, 1.0 };
 		MTLScissorRect sc = { (NSUInteger)x, (NSUInteger)y, (NSUInteger)w, (NSUInteger)h };
-		int p[6] = { x, y, w, h, filter ? 1 : 0, curve };
 
 		if (!retro_src || (retro_src.width != color.width) || (retro_src.height != color.height)
 			|| (retro_src.pixelFormat != color.pixelFormat))
@@ -513,12 +520,166 @@ rmb_retro_pass(int x, int y, int w, int h, int filter, int curve)
 		[enc setViewport:vp];
 		[enc setScissorRect:sc];
 		[enc setFragmentTexture:retro_src atIndex:0];
-		[enc setFragmentBytes:p length:sizeof(p) atIndex:0];
+		[enc setFragmentBytes:bytes length:len atIndex:0];
 		[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 		[enc endEncoding];
 	}
 
 	return 1;
+}
+
+int
+rmb_retro_pass(int x, int y, int w, int h, int filter, int curve)
+{
+	/* the fragment's box filter holds to the far corner of the rectangle clipped to the target */
+	const int tw = color ? (int)color.width : 0, th = color ? (int)color.height : 0;
+	const int cx = (x < 0) ? 0 : x, cy = (y < 0) ? 0 : y;
+	int cw = (x < 0) ? w + x : w, ch = (y < 0) ? h + y : h;
+	int p[6];
+
+	cw = (cx + cw > tw) ? tw - cx : cw;
+	ch = (cy + ch > th) ? th - cy : ch;
+	p[0] = cx;
+	p[1] = cy;
+	p[2] = cw;
+	p[3] = ch;
+	p[4] = filter ? 1 : 0;
+	p[5] = curve;
+
+	return rmb_post_pass(rmb_retro_pipe, x, y, w, h, p, sizeof(p));
+}
+
+/* the peak in force under r_hdr 1 (TASK196, HD3), set each frame by rmb_hdr_peak_set: the tone map's and the present's */
+static float rmb_hdr_peak = 1.0f;
+
+void
+rmb_hdr_peak_set(float peak)
+{
+	rmb_hdr_peak = (peak > 1.0f) ? peak : 1.0f;
+}
+
+int
+rmb_tonemap_pass(int x, int y, int w, int h)
+{
+	const float peak = rmb_hdr_peak;
+
+	/* the float16 path's target only: a stock frame, or one drawn before a switch, is never mapped */
+	if (!rmb_hdr_on() || !color || (color.pixelFormat != MTLPixelFormatRGBA16Float))
+	{
+		return 0;
+	}
+
+	return rmb_post_pass(rmb_tonemap_pipe, x, y, w, h, &peak, sizeof(peak));
+}
+
+/*
+ * metal_hdr_probe (TASK196, HD3): one pixel of the drawable, read after
+ * the present has written it and before it is presented, into probe_buf.
+ * probe_word holds the probe's generation and state together
+ * (rm_probe_word: RM_PROBE_IDLE, _ASKED, _COPYING, _READ once the copy's
+ * command buffer completed), and every change is a compare-and-swap of
+ * the whole word. A new ask or a cancel from the main thread moves the
+ * generation on, so a completion from before it, whose expected word
+ * names the old generation, swaps nothing: a re-ask and a new copy
+ * between a copy and its completion leave the new probe's word unmatched.
+ */
+static id<MTLBuffer> probe_buf;
+static int probe_x, probe_y, probe_fmt;
+static atomic_uint probe_word;
+
+void
+rmb_hdr_probe_ask(int x, int y)
+{
+	const int arm = (x >= 0) && (y >= 0);
+	unsigned w = atomic_load(&probe_word);
+
+	if (arm)
+	{
+		probe_x = x;
+		probe_y = y;
+	}
+
+	/* the next generation; a completion that swapped in between is overwritten, as a re-ask must */
+	while (!atomic_compare_exchange_weak(&probe_word, &w, rm_probe_ask_word(w, arm)))
+	{
+	}
+}
+
+int
+rmb_hdr_probe_take(int *fmt, int *x, int *y, unsigned char px[8])
+{
+	unsigned w = atomic_load(&probe_word);
+
+	if ((rm_probe_state(w) != RM_PROBE_READ) || !probe_buf)
+	{
+		return 0;
+	}
+
+	*fmt = probe_fmt;
+	*x = probe_x;
+	*y = probe_y;
+	memcpy(px, probe_buf.contents, 8);
+
+	/* idle in the same generation (only the main thread leaves RM_PROBE_READ, so this matches) */
+	atomic_compare_exchange_strong(&probe_word, &w, rm_probe_word(rm_probe_gen(w), RM_PROBE_IDLE));
+	return 1;
+}
+
+/* at the present, the drawable written: the asked pixel (held to the drawable) copied out by cmd */
+static void
+rmb_hdr_probe_copy(id<MTLCommandBuffer> cmd, id<MTLTexture> dst)
+{
+	const int f16 = (dst.pixelFormat == MTLPixelFormatRGBA16Float);
+	const NSUInteger bpp = f16 ? 8 : 4;
+	unsigned w = atomic_load(&probe_word);
+	unsigned word;
+
+	if ((rm_probe_state(w) != RM_PROBE_ASKED) || !dst.width || !dst.height)
+	{
+		return;
+	}
+
+	if (!probe_buf)
+	{
+		probe_buf = [rmb_device newBufferWithLength:16 options:MTLResourceStorageModeShared];
+
+		if (!probe_buf)
+		{
+			return;
+		}
+	}
+
+	/* this generation's copy: the word its completion expects */
+	word = rm_probe_word(rm_probe_gen(w), RM_PROBE_COPYING);
+
+	if (!atomic_compare_exchange_strong(&probe_word, &w, word))
+	{
+		return;
+	}
+
+	probe_x = ((NSUInteger)probe_x < dst.width) ? probe_x : (int)dst.width - 1;
+	probe_y = ((NSUInteger)probe_y < dst.height) ? probe_y : (int)dst.height - 1;
+	probe_fmt = (int)dst.pixelFormat;
+	memset(probe_buf.contents, 0, 16);
+
+	if (f16 || (dst.pixelFormat == MTLPixelFormatBGRA8Unorm))
+	{
+		id<MTLBlitCommandEncoder> blit = [cmd blitCommandEncoder];
+
+		[blit copyFromTexture:dst sourceSlice:0 sourceLevel:0
+				sourceOrigin:MTLOriginMake((NSUInteger)probe_x, (NSUInteger)probe_y, 0) sourceSize:MTLSizeMake(1, 1, 1)
+				toBuffer:probe_buf destinationOffset:0 destinationBytesPerRow:bpp destinationBytesPerImage:bpp];
+		[blit endEncoding];
+	}
+
+	[cmd addCompletedHandler:^(id<MTLCommandBuffer> b) {
+		unsigned want = word;
+
+		(void)b;
+
+		/* RM_PROBE_READ only while the word is still this generation's copy */
+		atomic_compare_exchange_strong(&probe_word, &want, rm_probe_word(rm_probe_gen(word), RM_PROBE_READ));
+	}];
 }
 
 void
@@ -749,6 +910,13 @@ rmb_present_pass(id<MTLCommandBuffer> cmd, id<MTLRenderPipelineState> pso, id<MT
 	[enc setViewport:vp];
 	[enc setFragmentTexture:color atIndex:0];
 	[enc setFragmentBytes:ofs length:sizeof(ofs) atIndex:0];
+
+	/* r_hdr's present (TASK196, HD3) holds each channel to the peak in force */
+	if (rmb_hdr_on())
+	{
+		[enc setFragmentBytes:&rmb_hdr_peak length:sizeof(rmb_hdr_peak) atIndex:1];
+	}
+
 	[enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
 	[enc endEncoding];
 }
@@ -857,6 +1025,12 @@ rmb_frame_end(void)
 
 			if (dst.pixelFormat == color.pixelFormat)
 			{
+				/* metal_hdr_probe (TASK196): the pixel as presented, after the present wrote it */
+				if (region)
+				{
+					rmb_hdr_probe_copy(pcmd, dst);
+				}
+
 				[pcmd presentDrawable:drawable];
 			}
 		}
@@ -955,6 +1129,12 @@ rmb_encode_release(void)
 		rmb_set_texture(&depth, nil);
 		rmb_set_texture(&retro_src, nil);
 		rmb_set_texture(&hdr_read, nil);
+
+		/* metal_hdr_probe: its buffer, and the word idle in the next generation, so no completion still in flight matches a later probe */
+		probe_buf = nil;
+		probe_x = probe_y = probe_fmt = 0;
+		atomic_store(&probe_word, rm_probe_ask_word(atomic_load(&probe_word), 0));
+
 		rmb_gbuf_release();
 		rmb_fx_release();
 

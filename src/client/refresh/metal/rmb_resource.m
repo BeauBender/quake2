@@ -106,8 +106,8 @@ static id<MTLBlitCommandEncoder> upload_blit;
  */
 static NSMapTable *fmt_descs;      /* pipeline -> a copy of its descriptor */
 static NSMapTable *fmt_variants;   /* pipeline -> its RGBA16Float variant, NSNull when it was not built */
-static id<MTLRenderPipelineState> present_hdr_pipe, hdr_read_pipe;
-static int present_hdr_tried, hdr_read_tried;
+static id<MTLRenderPipelineState> present_hdr_pipe, hdr_read_pipe, tonemap_pipe;
+static int present_hdr_tried, hdr_read_tried, tonemap_tried;
 
 #define RMB_COLOR_ATTACHMENTS 8
 
@@ -241,6 +241,13 @@ id<MTLRenderPipelineState>
 rmb_hdr_read_pipe(void)
 {
 	return rmb_hdr_simple_pipe(&hdr_read_pipe, &hdr_read_tried, @"rm_fragment_hdr_read", MTLPixelFormatBGRA8Unorm);
+}
+
+/* the tone map (rm_fragment_tonemap, TASK196 HD3) into the float16 target, for rmb_tonemap_pass (rmb_encode.m) */
+id<MTLRenderPipelineState>
+rmb_tonemap_pipe(void)
+{
+	return rmb_hdr_simple_pipe(&tonemap_pipe, &tonemap_tried, @"rm_fragment_tonemap", MTLPixelFormatRGBA16Float);
 }
 
 static void
@@ -665,7 +672,8 @@ rmb_resources_close(void)
 		fmt_variants = nil;
 		present_hdr_pipe = nil;
 		hdr_read_pipe = nil;
-		present_hdr_tried = hdr_read_tried = 0;
+		tonemap_pipe = nil;
+		present_hdr_tried = hdr_read_tried = tonemap_tried = 0;
 
 		for (i = 0; i < RMB_DS_COUNT; i++)
 		{

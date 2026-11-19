@@ -420,17 +420,38 @@ rm_fragment_present(float4 pos [[position]], texture2d<float, access::read> fram
  * target (RGBA16Float) holds the stock, sRGB-encoded values; each pixel
  * is decoded to linear light once (common/mtl_hdr_math.h, extended past
  * 1.0) for the RGBA16Float drawable in extended linear sRGB, alpha 1.
- * HD2 shows the frame at SDR white, so each channel is first clamped to
- * [0, 1] (mtl_hdr_present; the float16 target does not clamp an additive
- * blend, and a NaN is 0). HD3 replaces this clamp with the tone map.
+ * Each linear channel is held to [0, peak] (mtl_hdr_show; a NaN is 0),
+ * peak the one in force (min(r_hdr_peak, the display's headroom), 1.0
+ * without headroom, where this is HD2's clamp to SDR white). The tone map
+ * (rm_fragment_tonemap, HD3) rolled the 3D view off below the peak
+ * already; this holds what float16 rounding left above it.
  */
 fragment float4
 rm_fragment_present_hdr(float4 pos [[position]], texture2d<float, access::read> frame [[texture(0)]],
-		constant int2 &ofs [[buffer(0)]])
+		constant int2 &ofs [[buffer(0)]], constant float &peak [[buffer(1)]])
 {
 	float3 c = frame.read(uint2(int2(pos.xy) + ofs)).rgb;
 
-	return float4(mtl_hdr_present(c.r), mtl_hdr_present(c.g), mtl_hdr_present(c.b), 1.0f);
+	return float4(mtl_hdr_show(c.r, peak), mtl_hdr_show(c.g, peak), mtl_hdr_show(c.b, peak), 1.0f);
+}
+
+/*
+ * TASK196 (HD3): the tone map under r_hdr 1, in place over the 3D view's
+ * rectangle at the output size, at the Retro pass's seat (after the view
+ * and MetalFX, before the 2D layer; docs/plans/hdr-output.md, sections
+ * 2.3 and 2.6). src is the copy of the rectangle; each pixel's encoded
+ * channels are mapped by mtl_hdr_tone: as they are at or below white, the
+ * shoulder to the peak above it on the largest linear component (hue
+ * kept), and HD2's clamp at a peak of 1.0.
+ */
+fragment float4
+rm_fragment_tonemap(float4 pos [[position]], texture2d<float, access::read> src [[texture(0)]],
+		constant float &peak [[buffer(0)]])
+{
+	float4 c = src.read(uint2(pos.xy));
+	float m = mtl_hdr_max(c.r, c.g, c.b);
+
+	return float4(mtl_hdr_tone(c.r, m, peak), mtl_hdr_tone(c.g, m, peak), mtl_hdr_tone(c.b, m, peak), c.a);
 }
 
 /*

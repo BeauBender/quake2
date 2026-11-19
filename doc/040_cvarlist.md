@@ -873,15 +873,35 @@ marked `(n/a)` and skipped.
   extended linear sRGB with extended dynamic range on, so the parts of
   the picture the 8-bit target clipped above white (the sums of additive
   effects) are kept; everything at or below white looks as it does at
-  `0`. This version shows the frame at SDR white still (its tone map
-  comes later), turns the MetalFX scalers off with one line, and is
-  taken on a display without extended range too. Under the *Retro*
+  `0`. What is above white is rolled off to the peak in force
+  (`r_hdr_peak`, held to the display's headroom) by a tone map at the
+  end of the 3D view, before the HUD and the console, which stay at SDR
+  white; the hue of a bright pixel is kept. On a display without
+  extended range, or while the renderer has no headroom reading, the
+  peak is `1.0` and the frame is shown clamped at SDR white. This
+  version turns the MetalFX scalers off with one line. A live change
+  prints one line: `off`; or, with a headroom above SDR white, `on` with
+  the peak in force, `r_hdr_peak` and the display's headroom; or, without
+  one, `on, shown at SDR` with the reason (no headroom reading, or no
+  extended range) and no peak. Under the *Retro*
   presentation (`r_presentation 2`) it has no effect (the cvar keeps its
   value, and the console says so once when it is set). The readback of the
   frame (screenshots, the pins) is the picture clamped to white, in 8
   bits. Only `0` and `1` are values: any other value is `0`. Other
   renderers do not have it. Saved with the configuration; applies from
   the next frame. `metal_hdr_info` prints the layer's state.
+
+* **r_hdr_peak**: The peak brightness of `r_hdr 1`, as a multiple of SDR
+  white: `4` (the default) to show highlights up to four times as bright
+  as white. Held to `1` to `16` (a value outside is taken as the bound),
+  and each frame to the display's current headroom, so the peak in force
+  is never above what the display can show; with no headroom (or none
+  read) it is `1`, SDR white. A live change while `r_hdr 1` is in force
+  prints `r_hdr`'s line: the peak in force when the display has headroom
+  above SDR white, else that the frame is shown at SDR and why.
+  The Metal renderer only; no effect while `r_hdr` is `0` or under the
+  *Retro* presentation. Saved with the configuration; applies from the
+  next frame. `metal_hdr_info` prints the peak in force.
 
 * **r_metalfx**: The scaler. `0` (the default) is none. `1` is
   `MTLFXSpatialScaler`, which scales the colour of each frame on its own.
