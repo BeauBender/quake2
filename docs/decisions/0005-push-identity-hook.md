@@ -302,9 +302,9 @@ also missed fine-grained GitHub tokens. So, superseding the section
   before, the gate check skipped it); `YQ2_IDENTITY_TEST_EXTRA_WORD` is not looked for in files,
   since the gate check has no test word; the gate check refuses an index
   blob it cannot read (FIX124: `git grep` reports a missing blob on stderr
-  and exits 1, its no-match status, so the check refuses any word on
-  `git grep`'s stderr and any blob `git cat-file --batch-check` reports
-  missing), and the push hook hands it only blobs git has listed and read,
+  and exits 1, its no-match status, so the check first refuses any index
+  blob `git cat-file --batch-check` reports missing; a corrupt body makes
+  `git grep` die, which refuses too), and the push hook hands it only blobs git has listed and read,
   and the commit hook's own read of the staged diff refuses a staged blob
   git cannot read;
   the hooks run the checks in the working tree, so a working-tree change to
