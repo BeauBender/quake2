@@ -29,7 +29,8 @@
 #       holds no ios_orientation command (the
 #       UIWindowSceneGeometryPreferencesIOS request, which visionOS does
 #       not have); and nm -u of every imgdecode.o lists
-#       _kCGImageSourceAllowableTypes (ImageIO reads only the file's type).
+#       _CGImageSourceGetType, and _kCGImageSourceAllowableTypes where the
+#       SDK declares it (ImageIO reads only the file's type, FIX138).
 #       Each string or symbol is the positive control's too: the iOS
 #       simulator's object of the same file, compiled with the command
 #       make -n gives for it, must hold it, so a rename fails the check
@@ -515,7 +516,32 @@ pin no_need sdl3.o src/client/input/sdl3.c _Touch_TextInput "the on-screen keybo
 pin lacks glimp_sdl3.o src/client/vid/glimp_sdl3.c SDL_ORIENTATIONS "the orientation hint is compiled into the visionOS build"
 pin lacks glimp_sdl3.o src/client/vid/glimp_sdl3.c SDL_IOS_HIDE_HOME_INDICATOR "the home indicator hint is compiled into the visionOS build"
 pin lacks vid.o src/client/vid/vid.c ios_orientation "the ios_orientation command is compiled into the visionOS build"
-pin need imgdecode.o src/client/refresh/files/imgdecode.c _kCGImageSourceAllowableTypes "the image decoder does not restrict ImageIO to the file's type"
+# The restriction is kCGImageSourceAllowableTypes where the SDK declares
+# it (27.0 on); an older SDK (FIX138) builds without it, and the type
+# check on CGImageSourceGetType is the restriction then, as it is the
+# backstop always. Whether the SDKs declare it is asked of them (the
+# visionOS one and the iOS one of the positive control), so a decoder
+# that leaves it out on an SDK that has it still fails.
+printf '#include <ImageIO/ImageIO.h>\nconst void *xros_a(void) { return kCGImageSourceAllowableTypes; }\n' > "${tmp:?}/a.c"
+imgdec_allowable=yes
+for probe in "xrsimulator $xr_target" "iphonesimulator arm64-apple-ios17.0-simulator"; do
+	psdk=${probe%% *}
+	ptarget=${probe#* }
+	if xcrun --sdk "$psdk" clang -target "$ptarget" -Wno-unguarded-availability-new \
+		-c "${tmp:?}/a.c" -o "${tmp:?}/a.o" > "${tmp:?}/a.out" 2>&1; then
+		:
+	elif grep -q "undeclared identifier 'kCGImageSourceAllowableTypes'" "${tmp:?}/a.out"; then
+		echo "check-visionos: note: the $psdk SDK $(xcrun --sdk "$psdk" --show-sdk-version 2>/dev/null) does not declare kCGImageSourceAllowableTypes: the type check (CGImageSourceGetType) is pinned alone"
+		imgdec_allowable=no
+	else
+		cat "${tmp:?}/a.out"
+		bad "(e) the probe for kCGImageSourceAllowableTypes does not build for the $psdk SDK for another reason"
+	fi
+done
+pin need imgdecode.o src/client/refresh/files/imgdecode.c _CGImageSourceGetType "the image decoder does not check the file's type"
+if [ "$imgdec_allowable" = yes ]; then
+	pin need imgdecode.o src/client/refresh/files/imgdecode.c _kCGImageSourceAllowableTypes "the image decoder does not restrict ImageIO to the file's type"
+fi
 
 object_list /r IOS_SDK=xrsimulator > "${tmp:?}/list_xr"
 object_list /r IOS_SDK=iphonesimulator > "${tmp:?}/list_ios"

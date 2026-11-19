@@ -37,9 +37,11 @@ check-savegame-tables.sh
 check-static-modules.sh
 check-stop-invariants.sh
 check-title-fit.sh
+check-tvos.sh
 check-upscale-metalfx.sh
 check-upscale-report.sh
 check-upscale-vt.sh
 check-vendored.sh
 check-video-menu.sh
+check-visionos.sh
 check-workflow-pins.sh
