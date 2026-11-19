@@ -53,6 +53,43 @@ test_mode_of(void)
 	CHECK(rm_fx_mode_of(-INFINITY) == 0);
 }
 
+/*
+ * TASK195: r_metalfx is written back to the supported mode only when the
+ * value read is the user's own (a NaN included); an overlaid value (the
+ * presentation, the tuning harness's B side) is read as got and never
+ * written, and the value kept for the next frame equals the one it will
+ * read, so an overlay is not read again every frame.
+ */
+static void
+test_writeback(void)
+{
+	const unsigned has = RM_FX_HAS(RM_FX_OFF) | RM_FX_HAS(RM_FX_SPATIAL);
+	float read = -1.0f;
+
+	/* NaN on the A side: written back to 0 */
+	CHECK(rm_fx_writeback(NAN, rm_fx_supported(rm_fx_mode_of(NAN), has), 0, &read) == 1);
+	CHECK(read == 0.0f);
+
+	/* an unsupported mode that is the user's own: written back to the best supported */
+	CHECK(rm_fx_writeback(3.0f, rm_fx_supported(3, has), 0, &read) == 1);
+	CHECK(read == (float)RM_FX_SPATIAL);
+	CHECK(rm_fx_same(read, (float)RM_FX_SPATIAL));   /* the cvar now holds got: no re-read */
+
+	/* an unsupported mode that is overlaid: not written, and the next frame's read matches */
+	CHECK(rm_fx_writeback(3.0f, rm_fx_supported(3, has), 1, &read) == 0);
+	CHECK(rm_fx_same(read, 3.0f));
+	CHECK(rm_fx_writeback(NAN, RM_FX_OFF, 1, &read) == 0);
+	CHECK(rm_fx_same(read, NAN));
+
+	/* a supported mode: nothing to write, overlaid or not */
+	CHECK(rm_fx_writeback(1.0f, RM_FX_SPATIAL, 0, &read) == 0 && read == 1.0f);
+	CHECK(rm_fx_writeback(1.0f, RM_FX_SPATIAL, 1, &read) == 0 && read == 1.0f);
+
+	CHECK(rm_fx_same(NAN, NAN));
+	CHECK(!rm_fx_same(NAN, 0.0f) && !rm_fx_same(0.0f, NAN) && !rm_fx_same(1.0f, 2.0f));
+	CHECK(rm_fx_writeback(3.0f, RM_FX_OFF, 0, NULL) == 1);
+}
+
 /* the fallback: the best supported mode at or below the one asked */
 static void
 test_supported(void)
@@ -665,6 +702,7 @@ main(void)
 {
 	test_mode_of();
 	test_supported();
+	test_writeback();
 	test_run();
 	test_interp();
 	test_name();

@@ -64,6 +64,25 @@ rm_fx_supported(int m, unsigned has)
 }
 
 int
+rm_fx_writeback(float asked_v, int got, int overlaid, float *read)
+{
+	const int write = ((float)got != asked_v) && !overlaid;
+
+	if (read)
+	{
+		*read = write ? (float)got : asked_v;
+	}
+
+	return write;
+}
+
+int
+rm_fx_same(float a, float b)
+{
+	return (a == b) || (isnan(a) && isnan(b));
+}
+
+int
 rm_fx_run(int m, int rt_effect, unsigned has)
 {
 	m = rm_fx_supported(m, has);

@@ -43,6 +43,7 @@
 #include "../header/upscale_metalfx.h"
 #include "../header/upscale_vt.h"
 #include "header/qmenu.h"
+#include "header/vidrules.h"
 
 /* Number of the frames of the spinning quake logo */
 #define NUM_CURSOR_FRAMES 15
@@ -6902,6 +6903,7 @@ M_Init(void)
 #endif
 
 	Cmd_AddCommand("playermodels", ListModels_f);
+	RTPreset_Init();   /* rt_preset and rt_ab (TASK195) */
 
 	Cmd_AddCommand("menu_main", M_Menu_Main_f);
 	Cmd_AddCommand("menu_game", M_Menu_Game_f);

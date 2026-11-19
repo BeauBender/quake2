@@ -733,6 +733,332 @@ RTSetRule(menucommon_s *item, vidrule_t rule)
 	item->statusbar = rule.text;
 }
 
+/*
+ * The tuning screen (TASK195): vidrules.c's rt_tune rows, each written to
+ * its cvar at once (live), then the A/B toggle and the presets, which run
+ * the console commands of rtpreset.c (rt_ab, rt_preset), and "apply
+ * (restart)", live only after a row that needs vid_restart changed. As
+ * the ray-tracing screen, it keeps the view undimmed and every item shown.
+ */
+#define TUNE_MAX_ROWS 12
+#define TUNE_MAX_STEPS 80
+
+static menuframework_s s_tune_menu;
+static menuaction_s s_rt_tune_action;   /* the entry on the ray-tracing screen */
+static menulist_s s_tune_lists[TUNE_MAX_ROWS];
+static menuslider_s s_tune_sliders[TUNE_MAX_ROWS];
+static menucommon_s *s_tune_items[TUNE_MAX_ROWS];
+static char s_tune_steps[2][TUNE_MAX_STEPS][8];
+static const char *s_tune_step_names[2][TUNE_MAX_STEPS + 1];
+static menuaction_s s_tune_ab, s_tune_stock, s_tune_save, s_tune_load, s_tune_asb, s_tune_restart;
+static menufield_s s_tune_name;
+static char s_tune_ab_text[64], s_tune_status[96];
+static float s_tune_pres_open;
+static int s_tune_rows;
+
+/* the pair r_rt_sun_angles as two numbers, its default when it is not two */
+static void
+TuneReadPair(const vidrt_control_t *c, float *a, float *b)
+{
+	if (sscanf(Cvar_VariableString(c->cvar), "%f %f", a, b) != 2 &&
+		sscanf(c->def, "%f %f", a, b) != 2)
+	{
+		*a = *b = 0.0f;
+	}
+}
+
+static int
+TuneIndex(const vidrt_control_t *c, float v)
+{
+	int n = (int)((c->max - c->min) / c->step + 0.5f), i;
+
+	if (!isfinite(v))
+	{
+		v = (float)atof(c->def);
+	}
+
+	/* clamped before the cast: a float out of int's range (r_metalfx 1e30) is undefined to convert */
+	if (!(v >= c->min))
+	{
+		return 0;
+	}
+	if (v > c->max)
+	{
+		return n;
+	}
+	i = (int)((v - c->min) / c->step + 0.5f);
+	return (i < 0) ? 0 : ((i > n) ? n : i);
+}
+
+static void
+TuneMenu_Values(void)
+{
+	for (int i = 0; i < s_tune_rows; i++)
+	{
+		const vidrt_control_t *c = VidRules_TuneControl(i);
+		menulist_s *l = (menulist_s *)s_tune_items[i];
+		float a, b;
+
+		if (c->part == 1 || c->part == 2)
+		{
+			TuneReadPair(c, &a, &b);
+			l->curvalue = TuneIndex(c, (c->part == 1) ? a : b);
+		}
+		else if (c->part == VIDTUNE_PART_DEBUG)
+		{
+			l->curvalue = 0;
+			for (int v = VidRules_NumDebugViews() - 1; v > 0; v--)
+			{
+				if (Cvar_VariableValue(VidRules_DebugView(v)) != 0)
+				{
+					l->curvalue = v;
+				}
+			}
+		}
+		else if (c->choices)
+		{
+			l->curvalue = TuneIndex(c, Cvar_VariableValue(c->cvar));
+		}
+	}
+}
+
+/* the side rt_ab shows: the label r_rt_ab carries up to its '|', A when empty */
+static const char *
+TuneSide(void)
+{
+	const char *spec = Cvar_VariableString("r_rt_ab");
+	const char *bar = strchr(spec, '|');
+
+	if (!spec[0] || !bar)
+	{
+		return "A: your settings";
+	}
+	snprintf(s_tune_status, sizeof(s_tune_status), "%.*s", (int)(bar - spec), spec);
+	return s_tune_status;
+}
+
+static void
+TuneMenu_Rules(void)
+{
+	const int available = (Cvar_VariableValue("r_rt_available") != 0);
+	const float pres = Cvar_VariableValue("r_presentation");
+	const int metal = VidRules_RTEntry(s_built_renderer).enabled;
+	const char *nameerr = VidRules_PresetNameError(s_tune_name.buffer);
+	const vidrule_t norule = { 0, "needs the Metal renderer" };
+
+	for (int i = 0; i < s_tune_rows; i++)
+	{
+		const vidrt_control_t *c = VidRules_TuneControl(i);
+		const vidrt_control_t *e = VidRules_RTControl(c->effect);
+		const int on = e ? VidRules_RTEffective(c->effect, s_built_renderer, available, pres,
+				Cvar_VariableValue(e->cvar)) : 1;
+
+		RTSetRule(s_tune_items[i], VidRules_TuneItem(i, s_built_renderer, available, on));
+	}
+
+	snprintf(s_tune_ab_text, sizeof(s_tune_ab_text), "A/B: %s", TuneSide());
+	RTSetRule(&s_tune_ab.generic, metal ? (vidrule_t){ 1, "Enter flips A and B; bind a key to rt_ab" } : norule);
+	RTSetRule(&s_tune_stock.generic, metal ? (vidrule_t){ 1, "B is every setting at its default" } : norule);
+	RTSetRule(&s_tune_name.generic, (vidrule_t){ 1, "a preset's name: letters, digits, '_' and '-'" });
+	RTSetRule(&s_tune_save.generic, nameerr ? (vidrule_t){ 0, nameerr } :
+		(vidrule_t){ 1, "saves to presets/rt-<name>.cfg" });
+	RTSetRule(&s_tune_load.generic, nameerr ? (vidrule_t){ 0, nameerr } :
+		(vidrule_t){ 1, "sets every tuning value from the preset" });
+	RTSetRule(&s_tune_asb.generic, !metal ? norule : nameerr ? (vidrule_t){ 0, nameerr } :
+		(vidrule_t){ 1, "the preset as B; writes no setting" });
+	RTSetRule(&s_tune_restart.generic, VidRules_TuneRestart(s_built_renderer, pres != s_tune_pres_open));
+
+	Menu_SetStatusBar(&s_tune_menu, (pres != s_tune_pres_open) ?
+		"the presentation waits for apply (restart)" : "Esc: back; each change shows on the next frame");
+}
+
+static void
+TuneChanged(void *self)
+{
+	menulist_s *l = (menulist_s *)self;
+	const vidrt_control_t *c = VidRules_TuneControl(l->generic.localdata[0]);
+	const float v = c ? c->min + c->step * (float)l->curvalue : 0.0f;
+	char buf[32];
+	float a, b;
+
+	if (!c)
+	{
+		return;
+	}
+	if (c->part == 1 || c->part == 2)
+	{
+		TuneReadPair(c, &a, &b);
+		Com_sprintf(buf, sizeof(buf), "%g %g", (c->part == 1) ? v : a, (c->part == 2) ? v : b);
+		Cvar_Set(c->cvar, buf);
+	}
+	else if (c->part == VIDTUNE_PART_DEBUG)
+	{
+		/* one view at a time */
+		for (int i = 1; i < VidRules_NumDebugViews(); i++)
+		{
+			Cvar_SetValue(VidRules_DebugView(i), (i == l->curvalue) ? 1.0f : 0.0f);
+		}
+	}
+	else if (c->restart && !VidRules_PresentationMode(l->curvalue, s_built_renderer,
+				Cvar_VariableValue("r_rt_available") != 0).enabled)
+	{
+		/* a mode that does not apply is shown, never chosen */
+		l->curvalue = VidRules_PresentationIndex(Cvar_VariableValue(c->cvar));
+	}
+	else
+	{
+		Cvar_SetValue(c->cvar, v);
+	}
+
+	TuneMenu_Rules();
+}
+
+static void
+TuneCommand(const char *verb)
+{
+	char cmd[96];
+
+	/* the name is checked here too: it goes into a command line */
+	if (VidRules_PresetNameError(s_tune_name.buffer))
+	{
+		return;
+	}
+	Com_sprintf(cmd, sizeof(cmd), "rt_preset %s %s\n", verb, s_tune_name.buffer);
+	Cbuf_AddText(cmd);
+}
+
+static void TuneAB(void *unused) { Cbuf_AddText("rt_ab\n"); }
+static void TuneStock(void *unused) { Cbuf_AddText("rt_ab stock\n"); }
+static void TuneSave(void *unused) { TuneCommand("save"); }
+static void TuneLoad(void *unused) { TuneCommand("load"); }
+static void TuneAsB(void *unused) { TuneCommand("ab"); }
+
+static void
+TuneRestart(void *unused)
+{
+	if (!(s_tune_restart.generic.flags & QMF_GRAYED))
+	{
+		Cbuf_AddText("vid_restart\n");
+		s_tune_pres_open = Cvar_VariableValue("r_presentation");
+	}
+}
+
+static void
+TuneDraw(menuframework_s *m)
+{
+	TuneMenu_Values();   /* a load or an rt_ab from the console shows at once */
+	TuneMenu_Rules();
+	Default_MenuDraw(m);
+}
+
+static void
+TuneAddAction(menuaction_s *a, const char *name, int y, void (*fn)(void *))
+{
+	memset(a, 0, sizeof(*a));
+	a->generic.type = MTYPE_ACTION;
+	a->generic.name = name;
+	a->generic.x = 0;
+	a->generic.y = y;
+	a->generic.callback = fn;
+	Menu_AddItem(&s_tune_menu, (void *)a);
+}
+
+static void
+TuneMenu_Init(void)
+{
+	int y = 0, nl = 0, ns = 0;
+
+	memset(&s_tune_menu, 0, sizeof(s_tune_menu));
+	s_tune_menu.banner = "m_banner_video";
+	s_tune_menu.keepview = 1;
+	s_tune_rows = 0;
+	s_tune_pres_open = Cvar_VariableValue("r_presentation");
+
+	for (int i = 0; (i < VidRules_TuneNum()) && (i < TUNE_MAX_ROWS); i++)
+	{
+		const vidrt_control_t *c = VidRules_TuneControl(i);
+		menucommon_s *g;
+
+		/* registered as the renderer does: saved with the configuration where it saves them */
+		Cvar_Get(c->cvar, (c->part == VIDTUNE_PART_DEBUG) ? "0" : c->def, c->flags);
+
+		if (c->choices || c->part)
+		{
+			menulist_s *l = &s_tune_lists[nl++];
+
+			memset(l, 0, sizeof(*l));
+			l->generic.type = MTYPE_SPINCONTROL;
+			l->generic.callback = TuneChanged;
+			l->itemnames = (const char **)c->choices;
+			if (c->part == 1 || c->part == 2)
+			{
+				int k = 0;
+
+				for (float v = c->min; v <= c->max + 0.001f && k < TUNE_MAX_STEPS; v += c->step, k++)
+				{
+					snprintf(s_tune_steps[c->part - 1][k], sizeof(s_tune_steps[0][0]), c->format, v);
+					s_tune_step_names[c->part - 1][k] = s_tune_steps[c->part - 1][k];
+				}
+				s_tune_step_names[c->part - 1][k] = NULL;
+				l->itemnames = (const char **)s_tune_step_names[c->part - 1];
+			}
+			g = &l->generic;
+		}
+		else
+		{
+			menuslider_s *s = &s_tune_sliders[ns++];
+
+			memset(s, 0, sizeof(*s));
+			s->generic.type = MTYPE_SLIDER;
+			s->cvar = (char *)c->cvar;
+			s->minvalue = c->min;
+			s->maxvalue = c->max;
+			s->slidestep = c->step;
+			s->printformat = (char *)c->format;
+			g = &s->generic;
+		}
+
+		g->name = c->label;
+		g->x = 0;
+		g->y = (y += 10);
+		g->localdata[0] = i;
+		s_tune_items[s_tune_rows++] = g;
+		Menu_AddItem(&s_tune_menu, (void *)g);
+	}
+
+	TuneAddAction(&s_tune_ab, s_tune_ab_text, (y += 20), TuneAB);
+	TuneAddAction(&s_tune_stock, "B: stock", (y += 10), TuneStock);
+
+	memset(&s_tune_name, 0, sizeof(s_tune_name));
+	s_tune_name.generic.type = MTYPE_FIELD;
+	s_tune_name.generic.name = "preset name";
+	s_tune_name.generic.flags = QMF_LEFT_JUSTIFY;
+	s_tune_name.generic.x = 0;
+	s_tune_name.generic.y = (y += 20);
+	Field_InitState(&s_tune_name, "", VIDPRESET_MAXNAME, 16);
+	Menu_AddItem(&s_tune_menu, (void *)&s_tune_name);
+
+	TuneAddAction(&s_tune_save, "save preset", (y += 20), TuneSave);
+	TuneAddAction(&s_tune_load, "load preset", (y += 10), TuneLoad);
+	TuneAddAction(&s_tune_asb, "preset as B", (y += 10), TuneAsB);
+	TuneAddAction(&s_tune_restart, "apply (restart)", (y += 20), TuneRestart);
+
+	TuneMenu_Values();
+	TuneMenu_Rules();
+	Menu_Center(&s_tune_menu);
+	s_tune_menu.x = (int)(viddef.width * 0.30f);
+}
+
+static void
+OpenTuning(void *unused)
+{
+	TuneMenu_Init();
+	s_tune_menu.draw = TuneDraw;
+	s_tune_menu.key = Default_MenuKey;
+
+	M_PushMenu(&s_tune_menu);
+}
+
 /* each row's greying, from the cvars as they are now */
 static void
 RTMenu_Rules(void)
@@ -750,6 +1076,14 @@ RTMenu_Rules(void)
 	}
 
 	RTSetRule(&s_rt_defaults_action.generic, VidRules_RTItem(-1, s_built_renderer, available, 1));
+
+	/* TASK195: the tuning screen, greyed for the reasons the reset is */
+	{
+		vidrule_t r = VidRules_RTItem(-1, s_built_renderer, available, 1);
+
+		RTSetRule(&s_rt_tune_action.generic,
+			r.enabled ? (vidrule_t){ 1, "every other setting, A/B and presets, live" } : r);
+	}
 }
 
 static void
@@ -892,6 +1226,14 @@ RTMenu_Init(void)
 	s_rt_defaults_action.generic.y = (y += 20);
 	s_rt_defaults_action.generic.callback = RTResetDefaults;
 	Menu_AddItem(&s_rt_menu, (void *)&s_rt_defaults_action);
+
+	memset(&s_rt_tune_action, 0, sizeof(s_rt_tune_action));
+	s_rt_tune_action.generic.type = MTYPE_ACTION;
+	s_rt_tune_action.generic.name = "tuning...";
+	s_rt_tune_action.generic.x = 0;
+	s_rt_tune_action.generic.y = (y += 10);
+	s_rt_tune_action.generic.callback = OpenTuning;
+	Menu_AddItem(&s_rt_menu, (void *)&s_rt_tune_action);
 
 	RTMenu_Values();
 	RTMenu_Rules();
