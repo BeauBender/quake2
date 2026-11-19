@@ -1,5 +1,6 @@
 #!/bin/sh
-# Invariant: no tracked text file carries the working machine's identity.
+# Invariant: no tracked file, text or binary, carries the working machine's
+# identity.
 #
 # The repository is public. The words looked for are read at run time and
 # never written anywhere: the output of `/bin/hostname -s` (substring), the
@@ -13,9 +14,10 @@
 # index blobs), not the working tree: regular files through `git grep
 # --cached`, and the target of every tracked symbolic link (mode 120000)
 # read from its blob with `git cat-file`. Binary files (a NUL byte in the
-# index blob) are not scanned; the decision is made here, not by git, so a
-# committed .gitattributes (`-diff`, `binary`) cannot take a text file out of
-# the scan. A link target is reported as line 1 of the link. An index blob
+# index blob) are scanned like text, as bytes (`git grep -a`, lines split at
+# newlines, so the user name is still a whole word or path component), and
+# git's own binary test is not used, so a committed .gitattributes (`-diff`,
+# `binary`) cannot take a file out of the scan. A link target is reported as line 1 of the link. An index blob
 # that cannot be read (missing or corrupt) refuses: the check never reports
 # clean on what it could not read.
 # File contents are reported as file:line and the kind of value, file names
@@ -138,7 +140,7 @@ real_names() {
 # ---- end of real_names. ----------------------------------------------------
 
 # scan_repo <dir> <host> <user> <home> [<host> <user>]: prints "path:line
-# (kind)" for each hit in the staged text files and link targets of the
+# (kind)" for each hit in the staged files (text or binary) and link targets of the
 # repository at <dir>, and "N tracked file name(s) (kind)" for file names;
 # never the matched text. Returns 1 if any hit, 2 if <dir> is not a repository
 # or a git or grep call fails (said on stderr). The optional second host and
@@ -211,13 +213,12 @@ scan_repo() {
 		*) echo "$me: grep failed" >&2; return 2 ;;
 		esac
 	done
-	# Contents: skip binary index blobs; withhold a path that itself holds a
+	# Contents, binary blobs included (git grep -a reads them as bytes): each
+	# hit's path must name an index entry, so a path git printed in a form
+	# this loop cannot read back refuses; withhold a path that itself holds a
 	# value. ":0:" names the stage-0 entry, so no path is read as a stage.
 	while IFS=$us read -r _p _l _k; do
-		git -C "$1" cat-file blob ":0:$_p" > "$tmp/blob" 2>/dev/null || { echo "$me: git cat-file failed" >&2; return 2; }
-		if [ "$(tr -cd '\000' < "$tmp/blob" | wc -c)" -gt 0 ]; then
-			continue
-		fi
+		git -C "$1" cat-file -e ":0:$_p" 2>/dev/null || { echo "$me: git cat-file failed" >&2; return 2; }
 		_shown=$_p
 		_st=0
 		printf '%s\n' "$_p" | grep -qiF -f "$tmp/words" || _st=$?

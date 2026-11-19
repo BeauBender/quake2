@@ -46,7 +46,7 @@
 #               -r -t -c --root, deletions left out: deleting a file
 #               publishes nothing) are scanned by
 #               tests/check-no-local-identity.sh, the gate's check, so its
-#               rules hold there: binary files (a NUL byte) are not scanned,
+#               rules hold there: binary files (a NUL byte) are scanned as bytes,
 #               the user name is a whole word. The blobs go to it under
 #               placeholder names in a temporary index, the paths as the text
 #               of one more blob per ref, kept in a temporary object
