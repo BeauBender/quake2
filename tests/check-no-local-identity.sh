@@ -1,5 +1,6 @@
 #!/bin/sh
-# Invariant: no tracked text file carries the working machine's identity.
+# Invariant: no tracked file, text or binary, carries the working machine's
+# identity.
 #
 # The repository is public. The words looked for are read at run time and
 # never written anywhere: the output of `/bin/hostname -s` (substring), the
@@ -13,9 +14,12 @@
 # index blobs), not the working tree: regular files through `git grep
 # --cached`, and the target of every tracked symbolic link (mode 120000)
 # read from its blob with `git cat-file`. Binary files (a NUL byte in the
-# index blob) are not scanned; the decision is made here, not by git, so a
-# committed .gitattributes (`-diff`, `binary`) cannot take a text file out of
-# the scan. A link target is reported as line 1 of the link.
+# index blob) are scanned like text, as bytes (`git grep -a`, lines split at
+# newlines, so the user name is still a whole word or path component), and
+# git's own binary test is not used, so a committed .gitattributes (`-diff`,
+# `binary`) cannot take a file out of the scan. A link target is reported as line 1 of the link. An index blob
+# that cannot be read (missing or corrupt) refuses: the check never reports
+# clean on what it could not read.
 # File contents are reported as file:line and the kind of value, file names
 # only as a count; a file whose own name holds a value is reported as
 # "<withheld file name>:line". Nothing printed carries the matched text. If
@@ -136,7 +140,7 @@ real_names() {
 # ---- end of real_names. ----------------------------------------------------
 
 # scan_repo <dir> <host> <user> <home> [<host> <user>]: prints "path:line
-# (kind)" for each hit in the staged text files and link targets of the
+# (kind)" for each hit in the staged files (text or binary) and link targets of the
 # repository at <dir>, and "N tracked file name(s) (kind)" for file names;
 # never the matched text. Returns 1 if any hit, 2 if <dir> is not a repository
 # or a git or grep call fails (said on stderr). The optional second host and
@@ -154,6 +158,25 @@ scan_repo() {
 	tr '\000' '\n' < "$tmp/ls.z" > "$tmp/ls"
 	sed 's/^[0-7]* [0-9a-f]* [0-3]	//' "$tmp/ls" > "$tmp/names"
 	sed -n "s/^120000 \([0-9a-f]*\) [0-3]	/\1$us/p" "$tmp/ls" > "$tmp/links"
+	# Every blob the index names must be readable: git grep reports a missing
+	# one on stderr and exits 1, its no-match status. The ids of all entries
+	# but gitlinks (mode 160000, a commit of another repository, which git
+	# grep does not read) go to `git cat-file --batch-check`, which prints
+	# "<id> missing" for one it cannot find or whose header it cannot read;
+	# anything but a blob refuses. Stderr is not judged: git also warns there
+	# about a configured alternate object directory that does not exist,
+	# which loses no object. A blob whose header reads but whose body is
+	# corrupt makes git grep die (status 128), which refuses below.
+	sed -nE 's/^(100644|100755|120000) ([0-9a-f]+) [0-3]	.*/\2/p' "$tmp/ls" > "$tmp/ids" 2>/dev/null ||
+		{ echo "$me: cannot list the index blobs" >&2; return 2; }
+	git -C "$1" cat-file --batch-check='%(objecttype) %(objectname)' < "$tmp/ids" > "$tmp/types" 2>/dev/null ||
+		{ echo "$me: git cat-file failed" >&2; return 2; }
+	# One answer per id: a short output would hide a blob from the check.
+	[ "$(wc -l < "$tmp/types")" -eq "$(wc -l < "$tmp/ids")" ] ||
+		{ echo "$me: git cat-file answered for fewer blobs than asked" >&2; return 2; }
+	_st=0
+	grep -qvE '^blob [0-9a-f]+$' "$tmp/types" || _st=$?
+	[ "$_st" -eq 1 ] || { echo "$me: an index blob is missing or not a blob" >&2; return 2; }
 	for _spec in "host:-iF:$2" "user:-iwF:$3" "home:-iF:$4" "host:-iF:${5:-}" "user:-iwF:${6:-}"; do
 		_kind=${_spec%%:*}
 		_rest=${_spec#*:}
@@ -192,13 +215,12 @@ scan_repo() {
 		*) echo "$me: grep failed" >&2; return 2 ;;
 		esac
 	done
-	# Contents: skip binary index blobs; withhold a path that itself holds a
+	# Contents, binary blobs included (git grep -a reads them as bytes): each
+	# hit's path must name an index entry, so a path git printed in a form
+	# this loop cannot read back refuses; withhold a path that itself holds a
 	# value. ":0:" names the stage-0 entry, so no path is read as a stage.
 	while IFS=$us read -r _p _l _k; do
-		git -C "$1" cat-file blob ":0:$_p" > "$tmp/blob" 2>/dev/null || { echo "$me: git cat-file failed" >&2; return 2; }
-		if [ "$(tr -cd '\000' < "$tmp/blob" | wc -c)" -gt 0 ]; then
-			continue
-		fi
+		git -C "$1" cat-file -e ":0:$_p" 2>/dev/null || { echo "$me: git cat-file failed" >&2; return 2; }
 		_shown=$_p
 		_st=0
 		printf '%s\n' "$_p" | grep -qiF -f "$tmp/words" || _st=$?
@@ -272,6 +294,7 @@ fi
 	<withheld file name>:1 (host)
 	attr.txt:1 (host)
 	attr2.txt:1 (host)
+	blob.bin:1 (host)
 	2 tracked file name(s) (host)
 	1 tracked file name(s) (user)
 	EOF
@@ -285,6 +308,25 @@ fi
 	expect 1 "content hits alone" "$tmp/want" zzqnone zzqnone /home/zzqhome
 	expect 0 "words shorter than three characters are skipped" "$tmp/none" zz zz zz
 	expect 0 "empty words are skipped" "$tmp/none" '' '' ''
+
+	# Binary blobs (a NUL byte) are scanned as bytes: the host name and the
+	# home path as substrings, the user name as a path component, as in text.
+	r=$tmp/r6
+	git init -q "$r"
+	printf '\000\001\002zzquserful and xzzquser zzq-synthetic-bo \377\n' > "$r/clean.bin"
+	git -C "$r" add -A
+	expect 0 "a clean binary" "$tmp/none" "$syn" zzquser /home/zzqhome
+	printf '\000built in /home/zzqhome/src\n' > "$r/lead.bin"
+	printf '\177ELF\000\000\001on ZZQ-SYNTHETIC-BOX\000\n' > "$r/host.bin"
+	printf 'zzq\000\001/srv/zzquser/data\000\n' > "$r/comp.bin"
+	git -C "$r" add -A
+	cat > "$tmp/want" <<-EOF
+	lead.bin:1 (home)
+	host.bin:1 (host)
+	comp.bin:1 (user)
+	EOF
+	expect 1 "binary blobs, scanned as bytes" "$tmp/want" "$syn" zzquser /home/zzqhome
+	r=$tmp/r
 
 	# Staged content counts, not the working tree; and link targets count.
 	r=$tmp/r2
@@ -322,6 +364,31 @@ fi
 	git -C "$r" update-index --add --cacheinfo "120000,$_id,dangling-link"
 	rm -f "$r/.git/objects/$(printf '%s' "$_id" | cut -c1-2)/$(printf '%s' "$_id" | cut -c3-)"
 	expect 2 "an unreadable link blob" "$tmp/none" "$syn" zzquser /home/zzqhome
+	# A regular file's blob missing or corrupt: git grep says so on stderr
+	# and, for a missing one, exits 1 as for no match. Refused either way; the
+	# same index with the blob readable again is accepted.
+	rm -f "$r/.git/index"
+	_id=$(printf 'zzq gone\n' | git -C "$r" hash-object -w --stdin)
+	_of="$r/.git/objects/$(printf '%s' "$_id" | cut -c1-2)/$(printf '%s' "$_id" | cut -c3-)"
+	git -C "$r" update-index --add --cacheinfo "100644,$_id,zzq-gone.txt"
+	rm -f "$_of"
+	expect 2 "a missing index blob" "$tmp/none" "$syn" zzquser /home/zzqhome
+	printf 'zzq not a zlib stream\n' > "$_of"
+	expect 2 "a corrupt index blob" "$tmp/none" "$syn" zzquser /home/zzqhome
+	# A header that decodes over a zlib stream cut short: --batch-check
+	# still says "blob", so only git grep dying (status 128) can refuse it.
+	rm -f "$_of"
+	printf 'zzq gone\n' | git -C "$r" hash-object -w --stdin > /dev/null
+	_sz=$(wc -c < "$_of")
+	head -c $((_sz - 8)) "$_of" > "$tmp/cut"
+	rm -f "$_of"
+	cp "$tmp/cut" "$_of"
+	_ty=$(printf '%s\n' "$_id" | git -C "$r" cat-file --batch-check='%(objecttype)' 2>/dev/null) || _ty=
+	[ "$_ty" = blob ] || { echo "$me: self-test 'a truncated blob' is built wrong: --batch-check says '$_ty'"; exit 1; }
+	expect 2 "a truncated index blob (header reads, body does not)" "$tmp/none" "$syn" zzquser /home/zzqhome
+	rm -f "$_of"
+	printf 'zzq gone\n' | git -C "$r" hash-object -w --stdin > /dev/null
+	expect 0 "the same index, the blob readable again" "$tmp/none" "$syn" zzquser /home/zzqhome
 	rm -f "$r/.git/index"
 	printf 'built on %s\n' "$syn" > "$r/zzq
 nl.txt"

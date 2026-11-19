@@ -88,3 +88,4 @@ One line per card file in this directory, in no required order: git merges this 
 - [TASK183](../runbook/TASK183.md): the presentation setting (Stock, Enhanced, Ray traced, Retro): report lines and cvar read-backs at each mode, the mutant table, and the base-against-branch pin comparison
 - [FIX131](../runbook/FIX131.md): ios-sim.sh stops a bounded call's child by its PID when TERM, HUP or INT ends the script mid-call, and its selftest hangs the first launcher read too
 - [FIX102](../runbook/FIX102.md): a pin record's capture stall stays out of the timedemo clock, so 5K records with a temporal scaler repeat byte for byte
+- [FIX124](../runbook/FIX124.md): the identity check refuses an index blob it cannot read, and scans binary blobs as bytes (FIX125 too)
