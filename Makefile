@@ -1070,7 +1070,8 @@ $(BINDIR)/ref_metal.metallib : src/client/refresh/metal/rm_shaders.metal \
 		src/client/refresh/metal/common/mtl_rtao_math.h \
 		src/client/refresh/metal/common/mtl_rtsun_math.h \
 		src/client/refresh/metal/common/mtl_rtw_math.h \
-		src/client/refresh/metal/common/mtl_retro_math.h
+		src/client/refresh/metal/common/mtl_retro_math.h \
+		src/client/refresh/metal/common/mtl_hdr_math.h
 	@echo "===> METAL $<"
 	${Q}command -v xcrun >/dev/null 2>&1 || { echo "ref_metal needs xcrun and the Xcode Metal toolchain" >&2; exit 1; }
 	${Q}xcrun -f metal >/dev/null 2>&1 || { echo "ref_metal needs the Metal compiler (xcrun metal); install the Xcode Metal toolchain" >&2; exit 1; }

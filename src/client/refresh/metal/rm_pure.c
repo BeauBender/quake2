@@ -660,6 +660,92 @@ rm_colorspace_mode(float cvar)
 }
 
 int
+rm_hdr_mode(float cvar)
+{
+	return (cvar == 1.0f) ? 1 : 0;
+}
+
+int
+rm_hdr_active(int mode, int retro)
+{
+	return (mode && !retro) ? 1 : 0;
+}
+
+int
+rm_hdr_format(int active)
+{
+	return active ? RM_FMT_RGBA16F : RM_FMT_BGRA8;
+}
+
+int
+rm_hdr_slot_keep(int fmt, int w, int h, int want_fmt, int want_w, int want_h)
+{
+	return (fmt == want_fmt) && (w == want_w) && (h == want_h);
+}
+
+int
+rm_hdr_fx_mode(int active, int mode)
+{
+	return active ? 0 : mode;   /* RM_FX_OFF */
+}
+
+static const char *
+rm_hdr_fmt_name(int fmt, char *tmp, size_t len)
+{
+	if (fmt == RM_FMT_BGRA8)
+	{
+		return "BGRA8Unorm";
+	}
+
+	if (fmt == RM_FMT_RGBA16F)
+	{
+		return "RGBA16Float";
+	}
+
+	snprintf(tmp, len, "pixel format %d", fmt);
+	return tmp;
+}
+
+static void
+rm_hdr_reading(float v, char *buf, size_t len)
+{
+	if (!(v >= 0.0f) || !isfinite(v))
+	{
+		snprintf(buf, len, "unavailable");
+	}
+	else
+	{
+		snprintf(buf, len, "%.2f", (double)v);
+	}
+}
+
+int
+rm_hdr_info_format(int fmt, const char *cs, int edr, float now, float potential, char *buf, size_t len)
+{
+	char tmp[32], a[16], b[16];
+	int n;
+
+	if (len == 0)
+	{
+		return 0;
+	}
+
+	rm_hdr_reading(now, a, sizeof(a));
+	rm_hdr_reading(potential, b, sizeof(b));
+	n = snprintf(buf, len, "ref_metal: hdr: layer %s, colour space %s, extended dynamic range %s; "
+			"headroom %s now, %s potential", rm_hdr_fmt_name(fmt, tmp, sizeof(tmp)),
+			(cs && cs[0]) ? cs : "none", edr ? "on" : "off", a, b);
+
+	if ((n < 0) || ((size_t)n >= len))
+	{
+		buf[0] = '\0';
+		return 0;
+	}
+
+	return 1;
+}
+
+int
 rm_2d_sharp(float cvar, int smp, int flat_linear)
 {
 	if ((cvar != 1.0f) || !flat_linear)

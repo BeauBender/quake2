@@ -144,7 +144,7 @@ Ranked by finding classes retired.
 | AR-09 | Major | decision INFORM14 (#503): narrow the pre-approved git commands? Default: no change |
 | AR-10 | Major | decision INFORM15 (#504): stop the session-start fast-forward of hook and gate code? Default: no change |
 | AR-11 | Minor | carded FIX114 (#492) |
-| AR-12 | Major | carded FIX118 (#496) |
+| AR-12 | Major | carded FIX118 (#496); fixed: the four checks are `Mod_Check*` in `files/models.c`, called by all four loaders, kept so by `tests/check-bsp-loader.sh` |
 | AR-13 | Major | carded FIX122 (#501), parked |
 | AR-14 | Major | carded FIX122 (#501), parked |
 | AR-15 | Minor | carded FIX123 (#502), parked |
